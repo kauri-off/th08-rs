@@ -13,6 +13,8 @@ Deliverables (must exist): 00_overview.md, 01_archive.md, 02_bgm.md, 03_images.m
 - 01 (archive) — DONE (verified). §8 basename resolution + §9 full 317-file table added.
 - 02 (bgm) — sub-agent B working (sub/bgm/). +0x18 semantics = the open question.
 - 03 (images) — sub-agent A working (sub/anm/): ANM sprite semantics, THTX fmt 3/5, opcode table, tools/thtx2png.py.
+  Parent-side validation DONE: all 306 embedded textures convert cleanly with current sub/anm/tools/thtx2png.py
+  (work/validate_thtx.py; PNGs in work/png_all/); fmt->D3DFMT mapping now code-VERIFIED (see below).
 - 00 (overview) — sub-agent C working (sub/overview/): main loop, 60fps, 640x480, playfield, managers.
 - 04 (file index) — DONE (04_file_index.md). Uses the in-exe resource tables (§4 of that doc).
 - extract_th08.py — DONE + VERIFIED: 317/317, byte-identical to decoded/ (diff -r clean), ~45 s.
@@ -63,8 +65,18 @@ Sprite record 20B = {u32 idx; f32 x; f32 y; f32 w; f32 h}?? (ascii: (k, 8k, 0, 8
 Script id examples: ascii -27..-16, text -39..-6, etama -150..-126, enemy 0..100, eff01 -34. Script data ops: {u16 op; u16 size; payload}; observed ops 3,6,8,0x15,0x16,0x17,0x18,0x1a?,0x1e,0x20; but first script of a chunk may be a 20B {u32 sprite_id; f32,f32,f32,f32} record referencing last sprite of chunk.
 sub_465860 loads chunks (alloc 0x44B/sprite internal structs, 4B/script ptrs, 12B/chunk records); sub_465ac0 per-chunk texture: version check (`+0x28 == 3`; `+0x34 & 0xff`), name at +0x1C, '@' = skip load; error strings "animation version mismatch" etc.
 
-### THTX — VERIFIED header/size, pixel fmt partially
-Header: "THTX", u16 0, u16 fmt (3 or 5), u16 w, u16 h, u16 0, u16 2 (bytes/px). Pixels follow; blob size = 16 + w*h*2. fmt=5: dominant patterns 0x0FFF transparent background / 0xFFFF opaque white -> A = HIGH nibble (A4R4G4B4-style, LE). fmt=3 seen only in eff01; needs decision (check work/eff01_m*.png).
+### THTX — VERIFIED header/size/pixel-format mapping (code-level)
+Header: "THTX", u16 0, u16 fmt, u16 w, u16 h, u32 size (=w*h*bpp; equals bytes left in chunk − 16 for all 306 textures).
+fmt id -> D3DFORMAT table 0x4B8480 (VERIFIED): 0->0, 1->0x15 A8R8G8B8, 2->0x19 A1R5G5B5, 3->0x17 R5G6B5,
+4->0x14 R8G8B8, 5->0x1A A4R4G4B4; parallel bpp table 0x4B8498 = {4,4,2,2,3,2}. Shipped histogram: 1 x170, 3 x32, 5 x104.
+Code proof: FUN_004655e0 does IDirect3DDevice8::CreateImageSurface(w,h,DAT_004b8480[fmt]) (vtbl+0x6C), Lock (vtbl+0x24,
+pitch local_18), row-by-row memcpy of w*DAT_004b8498[fmt] bytes from +0x10, Unlock -> THTX bytes are raw D3D texel memory,
+no CPU conversion. FUN_00465510 remaps fmt for devices without 8888 support: if table[fmt]==0x15 or 0 -> fmt 5; if 0x14 -> fmt 3
+(capability-gated by FUN_00443a90; does not change file bytes). FUN_0043f2cc = linear search of descriptor table 0x4C7948 (24B records).
+- fmt1: u32 B,G,R,A memory order (LE u32 = A<<24|R<<16|G<<8|B) -> PNG RGBA.
+- fmt5: 0x0FFF transparent background / 0xFFFF opaque white; A = high nibble (A4R4G4B4).
+- fmt3: R5G6B5 (bits 15-11 R, 10-5 G, 4-0 B), NO alpha -> PNG alpha=255, colors decoded by bit replication. Settled by
+  table+code evidence; bit15-frequency test over all 32 textures (work/fmt3_bittest.py) shows content correlation, incl. all-black eff02.
 
 ## NEXT STEPS
 1. Finish ANM semantics via Ghidra (find sprite-record parse + script interpreter + draw code; name functions; confirm fields; confirm THTX pixel fmt conversion in D3D texture upload code).

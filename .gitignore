@@ -1,8 +1,8 @@
 /target
-/specs/*/extracted/
-/specs/*/decoded/
-/specs/*/ghidra/
-/specs/*/work/
-__pycache__/
 /web/dist/
 /.playwright-mcp/
+__pycache__/
+specs/**/ghidra/
+specs/**/extracted/
+specs/**/decoded/
+specs/**/work/
