@@ -1,0 +1,76 @@
+addr,kind,name,signature,confidence,note
+0x0043e660,func,FileSystem_OpenFile,,VERIFIED,load file from archive (or disk if param3!=0); returns decoded buffer
+0x0043e8f0,func,FileSystem_WriteFile,,VERIFIED,write buffer to disk file
+0x0043e390,func,Edz_DecryptFile,,VERIFIED,checks edz header & type byte; decrypts with table 004c78e0
+0x0043e1d0,func,Crypt_XorBlockReverse,,VERIFIED,fastcall(buf;size;key;step;block;limit) returns new buffer
+0x004740e0,func,Lzss_Decompress,,VERIFIED,fastcall(src;srcsize;dst;dstsize)
+0x004748c0,func,PbgArchive_Open,,VERIFIED,
+0x00474ce0,func,PbgArchive_ReadHeader,,VERIFIED,PBGZ header + file table
+0x00474fa0,func,PbgArchive_ParseTable,,VERIFIED,
+0x00474c70,func,PbgArchive_FindEntry,,VERIFIED,
+0x00474c40,func,PbgArchive_GetFileSize,,VERIFIED,
+0x00474af0,func,PbgArchive_ReadFile,,VERIFIED,
+0x004c78e0,global,g_EdzCryptTable,,VERIFIED,8 x 12 bytes: typechar+16*i+16 key step pad u32 block u32 limit
+0x004c7940,global,g_EdzMagic,,VERIFIED,edz magic stored +0x20 +0x40 +0x60
+0x018d5f68,global,g_LzssDict,,VERIFIED,0x2000 byte dictionary
+0x0045c6b0,func,Bgm_FindTrack,,VERIFIED,basename lookup in thbgm.fmt table; fallback index 0
+0x0045cc30,func,Bgm_LoadFmt,,VERIFIED,loads thbgm.fmt from archive
+0x0045cc70,func,Bgm_StreamStart,,VERIFIED,
+0x0045ce70,func,Bgm_Preload,,VERIFIED,reads +0x14 bytes of track into memory
+0x0045d0f0,func,Bgm_LoadPreloaded,,VERIFIED,
+0x004733e0,func,WaveStream_Rewind,,VERIFIED,handles loop seek (loop_start/loop_end)
+0x00473530,func,WaveStream_Read,,VERIFIED,
+0x00447d56,func,Music_Play,,VERIFIED,ext->wav if music mode 1
+0x004477b1,func,Config_Load,,VERIFIED,th08.cfg + thbgm.dat ZWAV check
+0x018bdc7c,global,g_BgmFileBaseOffset,,VERIFIED,never written (0) -> thbgm.dat used
+0x00465860,func,Anm_Preload,,VERIFIED,load .anm into slot (<25); count entries; alloc tables
+0x00465800,func,Anm_Load,,VERIFIED,preload + load all entries synchronously
+0x00465a40,func,Anm_LoadAndWait,,VERIFIED,preload then wait for loader thread
+0x00465ba0,func,Anm_PostloadStep,,VERIFIED,loads one entry per call
+0x00465ac0,func,Anm_PreloadEntryImage,,VERIFIED,non-THTX entries: read image from disk
+0x00465cc0,func,Anm_LoadEntryTexture,,VERIFIED,create texture + sprites + script ptrs
+0x004655e0,func,Anm_CreateTextureFromThtx,,VERIFIED,
+0x00465570,func,Anm_CreateTextureFromImage,,VERIFIED,D3DX from memory with colorkey
+0x004657c0,func,Anm_CreateBlankTexture,,VERIFIED,'@' entries
+0x00465510,func,Anm_RemapFormat,,VERIFIED,16-bit texture mode remap
+0x004661b0,func,Anm_StoreSprite,,VERIFIED,
+0x0045e430,func,AnmVm_SetSprite,,VERIFIED,
+0x0045ea00,func,AnmVm_Run,,VERIFIED,ANM script interpreter; opcodes -1..0x58
+0x004b8480,global,g_AnmFormatToD3D,,VERIFIED,
+0x004b8498,global,g_AnmFormatBpp,,VERIFIED,
+0x004418c0,func,WinMain,,VERIFIED,
+0x00441e70,func,Frame_Run,,VERIFIED,60Hz deadline; calc chain; draw chain w/ frameskip; present
+0x00442190,func,Timer_Now,,VERIFIED,QPC seconds or timeGetTime
+0x00442060,func,Frame_Present,,VERIFIED,present + snapshot
+0x00442240,func,Window_Create,,VERIFIED,class BASE 640x480
+0x004424c0,func,Window_InitD3D,,VERIFIED,CreateDevice; camera fov pi/6 near100 far10000
+0x0043c880,func,FuncChain_AddCalc,,VERIFIED,
+0x0043c960,func,FuncChain_AddDraw,,VERIFIED,
+0x0043ca50,func,FuncChain_RunCalc,,VERIFIED,
+0x0043cb60,func,FuncChain_RunDraw,,VERIFIED,
+0x0043ce60,func,FuncChain_NewNode,,VERIFIED,
+0x00445ea7,func,Supervisor_Register,,VERIFIED,
+0x00445453,func,Supervisor_Calc,,VERIFIED,scene switching
+0x00402780,func,AsciiManager_Register,,INFERRED,
+0x00402830,func,AsciiManager_Load,,VERIFIED,ascii.anm capture.anm
+0x00409b20,func,Stage_Register,,INFERRED,
+0x00409850,func,Stage_Load,,VERIFIED,stgNbg.anm + stageN.std
+0x00417f60,func,Gui_Register,,INFERRED,dialogue/face
+0x00414590,func,Gui_LoadFaces,,VERIFIED,
+0x00428620,func,EffectManager_Register,,INFERRED,
+0x004296a0,func,Ending_Register,,INFERRED,
+0x0042c590,func,EnemyManager_Register,,INFERRED,
+0x0042ebf0,func,EnemyManager_Load,,VERIFIED,enemy.anm stgNenm ecldata
+0x004311a0,func,BulletManager_Register,,INFERRED,
+0x00433070,func,BulletManager_Load,,VERIFIED,etama.anm
+0x00437ad0,func,Hud_Register,,INFERRED,FRScreenImplInf
+0x004390ee,func,Hud_Load,,VERIFIED,front times stgNtxt loading anm
+0x0043aa5c,func,GameManager_Register,,INFERRED,
+0x0043abd7,func,GameManager_StageStart,,INFERRED,starts std bgm slots
+0x00449254,func,MusicRoom_Register,,INFERRED,
+0x0044c230,func,Player_Register,,INFERRED,
+0x00451f90,func,Replay_Register,,INFERRED,
+0x004582a0,func,Result_Register,,INFERRED,
+0x0045b8b0,func,ScreenEffect_Register,,INFERRED,
+0x0047146d,func,MainMenu_Register,,INFERRED,
+0x00432830,func,Bullet_WallBounce,,INFERRED,tests x vs 0/384 y vs 0/448

@@ -14,7 +14,7 @@
 | 1 resume | glm | phase1-resume-glm | failed: rate limit |
 | 1 resume | deepseek | phase1-resume-deepseek | failed: rate limit (3 sub-agents) |
 | 1 resume2 | deepseek | phase1-resume2-deepseek | failed: rate limit |
-| 1 | opus 5.5 medium | phase1-opus | running |
+| 1 | opus 5.5 medium | phase1-opus | done: all 5 specs; 317/317 files byte-identical; BGM +0x18, ANM 0x40 hdr, THTX 1/3/5 correct |
 
 User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_TEMPLATE.md.
 
