@@ -21,6 +21,7 @@
 | impl 2 | opus 5.5 medium | impl2-anm-vm | done: src/anmvm.rs (all 57 opcodes in data), blend modes, title menu via title01.anm; 9 tests |
 | impl 3 | opus 5.5 medium | impl3-std | done: src/stdfile.rs, stage.rs, depth/fog/clip-space gfx; all 9 stage bgs render; 15 tests |
 | impl 4 | opus 5.5 medium | impl4-web-parity | done: web pixel-identical to native (WebGL2+WebGPU), ?stage= params via src/env.rs; seams are in texture data |
+| impl 5 | opus 5.5 medium | impl5-ecl | running (ECL VM, EnemyManager, bullet spawn interface + temp renderer) |
 
 User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_TEMPLATE.md.
 
