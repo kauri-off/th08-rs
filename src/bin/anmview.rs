@@ -1,7 +1,22 @@
-// Dumps every texture of an ANM file to PNG, with sprite rectangles outlined.
+// Dumps every texture of an ANM file to PNG, with sprite rectangles outlined; `--dis` instead prints the scripts.
 fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().collect();
     let ar = th08::archive::Archive::from_bytes(std::fs::read(&a[1])?)?;
+    if a[3] == "--dis" {
+        let (mut spr, mut scr) = (0, 0);
+        for (i, c) in th08::anm::parse(&ar.read(&a[2])?)?.iter().enumerate() {
+            println!("entry {i} {} {}x{} sprites {spr}..{} scripts {scr}..{}", c.name, c.width, c.height, spr + c.sprites.len(), scr + c.scripts.len());
+            for s in &c.sprites {
+                println!("  sprite {} ({}, {}) {}x{}", s.id, s.x, s.y, s.w, s.h);
+            }
+            for s in &c.scripts {
+                println!("script {scr} (id {})\n{}", s.id, th08::anmvm::disasm(&s.data));
+                scr += 1;
+            }
+            spr += c.sprites.len();
+        }
+        return Ok(());
+    }
     let out = std::path::Path::new(&a[3]);
     std::fs::create_dir_all(out)?;
     for (i, c) in th08::anm::parse(&ar.read(&a[2])?)?.iter().enumerate() {

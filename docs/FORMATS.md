@@ -18,5 +18,6 @@
 - Chunk header 0x40: +0 n_sprites, +4 n_scripts, +0x1C name offset, +0x28 version (=3), +0x30 THTX offset (0 = none),
   +0x34 low byte 1 = texture embedded, +0x38 next chunk offset (relative, 0 = last).
 - +0x40: n_sprites u32 offsets → {u32 id, f32 x, y, w, h} (pixels in texture). Then n_scripts × {i32 id, u32 offset}. Then name.
-- Script data: {u16 op, u16 size incl. header, payload}, sequence ends with op 0xFFFF. Opcode semantics: Phase 2.
+- Script data: {i16 op, u16 size incl. header, i16 time, u16 var mask, 4-byte args}, ends with op −1. Semantics: specs/opus/05_anm_vm.md (src/anmvm.rs).
+  Data uses 57 distinct opcodes; only draw mode 2 is ever set by scripts (op 83), owners pick the rest.
 - THTX: "THTX", u16 0, u16 fmt, u16 w, u16 h, u32 size, raw D3D texels. fmt 1 BGRA8888, 2 ARGB1555, 3 RGB565, 4 BGR888, 5 ARGB4444.

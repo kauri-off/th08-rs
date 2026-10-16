@@ -52,6 +52,7 @@ impl Ctx {
     }
 
     pub fn calc(&mut self) -> Flow {
+        self.anm.begin_frame();
         let f = task::run(self, Chain::Calc);
         self.frame += 1;
         f
@@ -59,6 +60,7 @@ impl Ctx {
 
     // SPEC-GAP: the draw runner's result is ignored (only the calc result is documented to end the program).
     pub fn draw(&mut self) {
+        self.anm.reset_render_state();
         task::run(self, Chain::Draw);
     }
 }

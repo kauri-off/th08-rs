@@ -1,5 +1,7 @@
 pub mod anm;
+pub mod anmdebug;
 pub mod anmmgr;
+pub mod anmvm;
 pub mod app;
 pub mod archive;
 pub mod assets;
@@ -7,6 +9,7 @@ pub mod audio;
 pub mod game;
 pub mod gfx;
 pub mod input;
+pub mod rng;
 pub mod supervisor;
 pub mod task;
 

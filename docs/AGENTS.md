@@ -17,7 +17,7 @@
 | 1 | opus 5.5 medium | phase1-opus | done: all 5 specs; 317/317 files byte-identical; BGM +0x18, ANM 0x40 hdr, THTX 1/3/5 correct |
 | 2 | opus 5.5 medium | phase2-opus | running (narrowed mid-run to 05 ANM VM, 06 STD, 07 ECL) |
 | impl 1 | opus 5.5 medium | impl1-engine-skeleton | done: src/task.rs, game.rs, supervisor.rs, anmmgr.rs, gfx viewport+camera; 4 tests |
-| impl 2 | opus 5.5 medium | impl2-anm-vm | running (ANM VM, sprite rendering, title via scripts) |
+| impl 2 | opus 5.5 medium | impl2-anm-vm | done: src/anmvm.rs (all 57 opcodes in data), blend modes, title menu via title01.anm; 9 tests |
 
 User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_TEMPLATE.md.
 

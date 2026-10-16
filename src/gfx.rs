@@ -183,6 +183,8 @@ impl Gfx {
         let pipe_alpha = make(wgpu::BlendState::ALPHA_BLENDING);
         let pipe_add = make(add);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
@@ -293,6 +295,20 @@ impl Gfx {
         }
         let start = self.indices.len() as u32;
         self.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        match self.batches.last_mut() {
+            Some(b) if b.tex == tex && b.blend == blend && b.clip == self.viewport => b.end += 6,
+            _ => self.batches.push(Batch { tex, blend, clip: self.viewport, start, end: start + 6 }),
+        }
+    }
+
+    // D3D vertex order: v0 top-left, v1 top-right, v2 bottom-left, v3 bottom-right; triangles (v0 v1 v2), (v1 v2 v3).
+    pub fn quad_strip(&mut self, tex: TextureId, blend: Blend, pos: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: [u8; 4]) {
+        let base = self.verts.len() as u32;
+        for i in 0..4 {
+            self.verts.push(Vertex { pos: pos[i], uv: uv[i], color });
+        }
+        let start = self.indices.len() as u32;
+        self.indices.extend([base, base + 1, base + 2, base + 1, base + 2, base + 3]);
         match self.batches.last_mut() {
             Some(b) if b.tex == tex && b.blend == blend && b.clip == self.viewport => b.end += 6,
             _ => self.batches.push(Batch { tex, blend, clip: self.viewport, start, end: start + 6 }),
@@ -448,6 +464,27 @@ fn normalize(a: Vec3) -> Vec3 {
 }
 
 impl Mat4 {
+    pub const IDENTITY: Mat4 = Mat4([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]);
+
+    pub fn scale(x: f32, y: f32, z: f32) -> Self {
+        Mat4([[x, 0.0, 0.0, 0.0], [0.0, y, 0.0, 0.0], [0.0, 0.0, z, 0.0], [0.0, 0.0, 0.0, 1.0]])
+    }
+
+    pub fn rotation_x(a: f32) -> Self {
+        let (s, c) = a.sin_cos();
+        Mat4([[1.0, 0.0, 0.0, 0.0], [0.0, c, s, 0.0], [0.0, -s, c, 0.0], [0.0, 0.0, 0.0, 1.0]])
+    }
+
+    pub fn rotation_y(a: f32) -> Self {
+        let (s, c) = a.sin_cos();
+        Mat4([[c, 0.0, -s, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [0.0, 0.0, 0.0, 1.0]])
+    }
+
+    pub fn rotation_z(a: f32) -> Self {
+        let (s, c) = a.sin_cos();
+        Mat4([[c, s, 0.0, 0.0], [-s, c, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
+    }
+
     pub fn look_at_lh(eye: Vec3, at: Vec3, up: Vec3) -> Self {
         let z = normalize(sub(at, eye));
         let x = normalize(cross(up, z));
@@ -504,6 +541,16 @@ impl Camera {
         }
     }
 
+    // Camera_Set2D: world (x, y, 0) maps to viewport pixel (x, y).
+    pub fn set_2d(vp: Rect) -> Self {
+        let fov = std::f32::consts::PI / 10.0;
+        let (cx, cy) = (vp.w / 2.0, vp.h / 2.0);
+        Self {
+            view: Mat4::look_at_lh([cx, cy, cy / (fov / 2.0).tan()], [cx, cy, 0.0], [0.0, -1.0, 0.0]),
+            proj: Mat4::perspective_fov_lh(fov, vp.w / vp.h, 1.0, 10000.0),
+        }
+    }
+
     pub fn view_proj(&self) -> Mat4 {
         self.view.mul(&self.proj)
     }
@@ -527,6 +574,15 @@ mod tests {
             let s = cam.project([x, -y, 0.0], FULLSCREEN);
             assert!((s[0] - x).abs() < 1e-3 && (s[1] - y).abs() < 1e-3, "({x},{y}) -> {s:?}");
             assert!(s[2] > 0.0 && s[2] < 1.0);
+        }
+    }
+
+    #[test]
+    fn set_2d_maps_to_viewport_pixels() {
+        let cam = Camera::set_2d(PLAYFIELD);
+        for (x, y) in [(0.0, 0.0), (192.0, 224.0), (384.0, 448.0), (10.0, 300.0)] {
+            let s = cam.project([x, y, 0.0], PLAYFIELD);
+            assert!((s[0] - x - 32.0).abs() < 1e-2 && (s[1] - y - 16.0).abs() < 1e-2, "({x},{y}) -> {s:?}");
         }
     }
 }

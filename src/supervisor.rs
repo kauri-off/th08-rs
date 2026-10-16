@@ -1,3 +1,4 @@
+use crate::anmvm::AnmVm;
 use crate::game::Ctx;
 use crate::gfx::{Blend, PLAYFIELD, Rect, TextureId};
 use crate::task::{self, Chain, Ret, Task};
@@ -21,7 +22,10 @@ impl Task<Ctx> for Supervisor {
         if chain == Chain::Calc {
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 0, "text.anm")?;
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
-            Title::register(ctx)?;
+            match std::env::var("TH08_ANM") {
+                Ok(spec) => crate::anmdebug::register(ctx, &spec)?,
+                Err(_) => Title::register(ctx)?,
+            }
         }
         Ok(())
     }
@@ -52,13 +56,18 @@ impl Task<Ctx> for Supervisor {
     }
 }
 
+// SPEC-GAP: the main menu's script set is unspecified; title01.anm scripts 0..=9 (side picture + the nine
+// main-menu items, by their positions in the data) are started, drawn in order with their own draw mode.
+const TITLE_SCRIPTS: std::ops::RangeInclusive<usize> = 0..=9;
+
 pub struct Title {
     image: Option<TextureId>,
+    vms: Vec<AnmVm>,
 }
 
 impl Title {
     pub fn register(ctx: &mut Ctx) -> Result<()> {
-        let t = task::task(Title { image: None });
+        let t = task::task(Title { image: None, vms: Vec::new() });
         task::add(ctx, Chain::Calc, 4, 0, t.clone())?;
         task::add(ctx, Chain::Draw, 3, 0, t)?;
         Ok(())
@@ -70,6 +79,13 @@ impl Task<Ctx> for Title {
         if chain == Chain::Calc {
             self.image = Some(ctx.gfx.load_image(&ctx.archive.read("title00.png")?)?);
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 20, "title01.anm")?;
+            self.vms = TITLE_SCRIPTS
+                .map(|i| {
+                    let mut vm = AnmVm::default();
+                    ctx.anm.set_script(&mut vm, 20, i);
+                    vm
+                })
+                .collect();
         }
         Ok(())
     }
@@ -83,9 +99,19 @@ impl Task<Ctx> for Title {
         }
     }
 
+    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        for vm in self.vms.iter_mut().filter(|v| v.script_index >= 0) {
+            vm.run(&mut ctx.anm);
+        }
+        Ret::Next
+    }
+
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if let Some(t) = self.image {
             ctx.gfx.image(t, 0.0, 0.0);
+        }
+        for vm in &mut self.vms {
+            ctx.anm.draw(&mut ctx.gfx, vm);
         }
         Ret::Next
     }
