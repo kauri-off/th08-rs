@@ -1,0 +1,6 @@
+/target
+/specs/*/extracted/
+/specs/*/decoded/
+/specs/*/ghidra/
+/specs/*/work/
+__pycache__/

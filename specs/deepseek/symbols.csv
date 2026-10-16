@@ -1,0 +1,32 @@
+addr,kind,name,signature,confidence,note
+0x0043e1d0,func,Lib_BlockCipherDecode,,VERIFIED,block cipher (k0 k1 blk budget); used by PBGZ+edz
+0x004740e0,func,Lib_LzssDecode,,VERIFIED,LZSS decode; ring at g_LzssRing
+0x0043e390,func,Edz_Unwrap,,VERIFIED,edz payload unwrap: cipher + drop first 4 bytes
+0x0043e660,func,File_LoadUniversal,,INFERRED,universal file loader (arg0 mode)
+0x0043eb60,func,Log_Error,,INFERRED,error reporter (system, fmt, arg)
+0x00474ce0,func,Archive_Open,,VERIFIED,PBGZ header decrypt/parse
+0x00474af0,func,Archive_LoadFile,,INFERRED,PBGZ per-file read/decompress
+0x00465860,func,Anm_Load,,VERIFIED,ANM chunk walk + allocations (0x44B sprites,4B scripts,12B chunks)
+0x00465ac0,func,Anm_LoadChunkTexture,,VERIFIED,version check, texture name load, '@' skip
+0x00466060,func,Anm_SetCurrent?,,INFERRED,called with anim id before load (sets name?)
+0x004477b1,func,Bgm_ZwavCheck,,VERIFIED,validates thbgm.dat ZWAV header
+0x00446590,func,Bgm_Init,,VERIFIED,loads bgm/thbgm.fmt, MIDI fallback path
+0x0045cc30,func,Bgm_LoadFmt,,VERIFIED,loads raw fmt blob to g_Bgm+0x1F84
+0x0045cc70,func,Bgm_StartStreaming,,INFERRED,"Streming BGM Start" path
+0x0045ce00,func,Bgm_StopTrack,,INFERRED,stops/frees per-track stream state
+0x0045ce70,func,Bgm_PreloadTrack,,VERIFIED,malloc(+0x14)+ReadFile(+0x14) at +0x10 into buffer
+0x0045d0f0,func,Bgm_LoadTrack,,VERIFIED,"Streming BGM Load no %d"; CreateEvent+thread
+0x0045e0f0,func,Bgm_PumpThreadProc,,INFERRED,MsgWaitForMultipleObjects pump
+0x0045e370,func,Bgm_FreeTrackBuffer,,VERIFIED,frees +0x1ec0 buffer
+0x0045c6b0,func,Bgm_FindTrackIndex,,VERIFIED,basename->fmt index linear search
+0x00471c40,func,Bgm_BuildStreamGraph,,INFERRED,creates player/filter objects
+0x00472aa0,func,DShow_ObjCtor,,INFERRED,constructor (vtable 0x4b96c0)
+0x00472d30,func,DShow_ObjTick,,INFERRED,large object method (pump-driven)
+0x004731f0,func,DShow_ObjInit2,,INFERRED,zero-init helper
+0x00404000,func,Unused_Placeholder,,INFERRED,delete me
+0x0040b880,func,Lib_Alloc,,VERIFIED,allocator used for track preload
+0x004a48b0,func,Lib_StrFindChar,,INFERRED,strchr-ish (find '/' or '\\')
+0x004c78e0,global,g_EdzKeys,,VERIFIED,8 x {k0,k1,blk,budget} edz key table
+0x18b8a68,global,g_Bgm,,VERIFIED,BGM object (see NOTES.md layout)
+0x18d5f68,global,g_LzssRing,,VERIFIED,LZSS 8KB ring buffer
+0x164d540,global,g_GameSystem,,INFERRED,game system/logging pointer
