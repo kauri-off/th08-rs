@@ -11,8 +11,11 @@
 ## Task log
 | phase | agent | clientRequestId | state |
 |---|---|---|---|
-| 1 resume | glm | phase1-resume-glm | running |
-| 1 resume | deepseek | phase1-resume-deepseek | running |
+| 1 resume | glm | phase1-resume-glm | failed: rate limit |
+| 1 resume | deepseek | phase1-resume-deepseek | failed: rate limit (3 sub-agents) |
+| 1 resume2 | deepseek | phase1-resume2-deepseek | failed: rate limit |
+
+User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_TEMPLATE.md.
 
 ## Observations
 - Phase 1 first pass: DeepSeek solved archive + BGM table quickly; GLM got stuck on header field mapping (Hopper).
