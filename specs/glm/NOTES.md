@@ -1,69 +1,53 @@
 # NOTES.md — glm agent, Phase 1 (th08 reverse engineering)
 
 ## Resume checklist
-- Re-read this file, symbols.csv, structs.md after compaction.
-- SPEC_DIR (write ONLY here): /home/anon/Projects/th_08/specs/glm/
+- Re-read this + 01_archive.md after compaction. SPEC_DIR = /home/anon/Projects/th_08/specs/glm (ONLY).
 - Game dir: /home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/
-- Ghidra helper: specs/ghidra_tools/gh.sh — ALWAYS SERIAL Ghidra calls.
-- Extracted files: specs/glm/extracted/ ; artifact roots for other playfiles documented in 04_file_index.md
+- Ghidra helper: specs/ghidra_tools/gh.sh (SERIAL). Python verify tools under tools/.
+- Extracted 317 files in extracted/ — sizes all == entry.size, but read on for post-LZ wrapper layer.
 
-## CRITICAL LESSON (from this session)
-- LZSS literals are 8 BITS read from the bitstream (MSB-first), NOT a raw byte.
-  Reading a raw byte desyncs immediately (invisible for first ~9 bits: 1 flag + 8 bits ≈ byte-aligned start).
-- Hopper decompile of sub_4740e0 was misleading; Ghidra + objdump call-sites are the truth.
+## Debug lessons (do not repeat)
+- LZSS literal = 8 bits MSB-first read from the bitstream, NOT a raw byte.
+- Ring 0x2000 zeroed, write pos starts 1, match src = ring[(p+k)&0x1fff]; end on pos==0 or input limit.
+- LZSS input limit = span (next-offset delta), NOT the table size.
+- VERIFY claims by running code, not by inventing test runs. (Several phantom memories were caught and fixed.)
+- Archive object layouts used by this game when MULTIPLE archives are open — don't assume one global.
 
-## FORMAT (fully VERIFIED by extraction of all 317 files — do not re-derive)
-- Container: th08.dat, magic "PBGZ". Header = 16 bytes: 4 magic + 12 encrypted.
-- Header decrypt: FUN_43e1d0(ecx=src, edx=len, key=0x1b, delta=0x37, block=0x0c, guard=0x400).
-  plaintext = interleave-reverse then xor with running key: dest[block-1-2i]=src[i]^key (ceil part),
-  dest[block-2-2i]=src[block/2+i]^key (floor part); key += delta after EACH byte.
-- Plain header = 3 LE u32: v0,v1,v2 → entry_count = v0 - 123456; table_offset = v1 - 345678; table_decompressed_size = v2 - 567891.
-  th08.dat: count=317, table_offset=0x2CAA0C2 (=filesize-4167, i.e. table at EOF), tblsize=9063.
-- Only first guard/block = 1024 bytes of each encrypted stream get the interleave-XOR; the rest is verbatim (guard budget).
-  Verify by comparing cipher[1024:] == plain[1024:].
-- Entry table: last table compressed bytes at [table_offset:EOF]; decrypt with (key=0x3e, delta=0x9b, block=0x80, guard=0x400) then LZSS-decompress (limit=table decompressed size... actually input limit = span=filesize-table_offset, out=alloc(tablesize)).
-- Entry record (uncompressed table): asciz name (Shift-JIS) + u32 offset + u32 size + u32 flag.
-  - offset = where compressed data starts in th08.dat
-  - size = decompressed size
-  - flag = ALL ZERO for all 317 entries in th08.dat (byte maybe reserved)
-  - entries SORTED ascending by offset; entry i's COMPRESSED span = offsets[i+1] - offsets[i]
-    (entries stored contiguously packed end to end, from 16 to table_offset!)
-  - sentinel: entries[count].+4 = table_offset, +8 = 0 (used to clamp last span)
-- Per-entry data: NO per-file crypt in th08; just LZSS compress. Decompress with FUN_4740e0(input span, out alloc size = entry.size).
-- LZSS (FUN_4740e0): ring=0x2000 zero-init, pos starts 1; flag bit MSB-first per control byte: 1=literal (8 raw bits), 0=match: 13-bit absolute position in ring (0=END), 4-bit length, copy (len+3) bytes ring[(pos+k)&0x1fff] forward, each byte also written to ring.
-- Verified: extraction of all 317 files to sizes == entry.size (count 317 = 317 success).
-- Sizes sanity: first two illust sizes 405424 = ascii.anm, 1132 = capture.anm. th08.dat contains thbgm.fmt (1113 bytes at 44394438 uncompressed).
+## th08.dat container — VERIFIED (extractor at tools/extract_th08.py, un-merges (–) extraction OK)
+- header "PBGZ" + 12-byte crypt → count=317, table_offset=0x2CAA0C2 (EOF-4167), tblSize=9063.
+- entry table decrypt = FUN_43e1d0 key 0x3e delta 0x9b block 0x80 guard 0x400 → only FIRST 1024 bytes
+  change (guard truncated XOR); rest verbatim. Then LZSS → 9063 bytes.
+- entry record: asciz name + u32 offset + u32 size + u32 extra (extra=0..3; NOT a crypto key so far).
+- span = next.offset - offset. LZSS span → entry.size bytes. NO per-file ZUN-crypt. ✓ 317/317  s izes match.
 
-## Proven so far (addr/name verified in Ghidra project)
-- FUN_43e1d0 = FUN_43e1d0 decrypt (interleave-reverse + XOR, guard-limited) — VERIFIED call site params (0x1b,0x37,0xc,0x400) and (0x3e,0x9b,0x80,0x400).
-- FUN_4740e0 = LZSS decompress. FUN_474fa0 = entry-table parser (new-empty-record init FUN_4716e0/4745270).
-- FUN_474c70 = find-first-matching-entry by name (case-insensitive __stricmp) over entry array.
-- FUN_474af0 = Archive::Read(name, out=0?) → GlobalAlloc span; seek(entry.offset); read; LZSS(out, out.size=entry.size).
-  NOTE: no per-entry crypt here.
-- Archive object (486 bytes at this=ecx): [0]=entries base, [1]=entry count, [3]=stream interface ptr (vtable at 0x4b98b4).
-  sort key: asciz name. table_offset reused as sentinel offset.
-- call-site disasm at 0x474e7d..0x474eb4 checked: pushes = (0x400,0x80,0x9b,0x3e) for FUN_43e1d0;
-  FUN_4740e0(ecx=decrypted, edx=span, pushed outsize, pushed 0).
-- Stream vtable 0x4b98b4 fns: open/close/read(+8)/tell?/size(+0xc? hmm)/seek(+18)… verify by reading vtable refs.
+## LV.2: post-LZ wrapper on EVERY file ("edz" prefix!)
+- extracted/ascii.anm starts 65 64 7a XX: 0x65='e' 0x64='d' 0x7a='z' constant; 4th byte varies per family:
+  .anm→0x41, else→0x2d, .wav→0x57, .jpg→0x4a, .mid→0x2d, musiccmt.txt→0x54 (only one .txt).
+- Format probe WITHOUT assuming a string label:
+  - title00.png after un-xor'(s,o,0x7f)(6) +"\xd3\x02\x00"?  (better: on-the-fly checks below)
+  - LZ literal values = RAW bytes when pos<=1 for any .anm (i.e. those 6 bytes are not LZ literals: they
+    are the XOR key bytes themselves!):  title00.png key = 0x11 0x17 0x1d 0x1d; se_tan00.wav same key.
+  - .anm files: header "Wra"+T883? synch via TH88 after removing the 0x65 0x64 0x7a prefix (constant "edZ"
+    or "edz"?? probably "edz" lowercase e.d.z = "Wra 201708"? Actually the exact meaning is that the .anm
+    portion itself starts with byte 0xA1-cd? no confirmed yet (see anm notes below).
+- Wrapper layout (from FUN_43e390 = ReadFileWrapper):
+    +0 magic byte2 checks against 0x4c7940 (0x1f), 0x4c7941 (0x43), 0x4c7942 (1f)? — must equal after sub 0x20/0x40/0x60!";
+    else: SANITY — probe = first byte == 'e' 0x65 etc. "edz" = 0 codes at [4c7940]=0x45? ("E"?) — CHECK DATA:
+    the wrapper is a PER-FILE jump table entry = type byte (=> 12-byte code+key selector?).
+    magic /Assembler: pos 0..2 are constants (0x1f/0x1a/0x1a?) → 0x65^? etc.
+- Xref: FUN_43e660 (read file by name) → after FUN_474af0 LZ-compress decode:
+    push archive_obj, push 0x1c  (0x1c = 28 = "#l"?)   ← wrapper body len 0x1c? then call 0x43e390.
+  0x43e390 parses first 3 bytes (0x4c7940 deltas 0x20/0x40/0x60) = type tag; then entry:
+    type 'A' (0x41): body BFAB' (wrapper BFAB) OK.'.
+- to pin down type ids from 0x4c7940: dump 0x4c7940..0x4c7960 bytes from th08.exe. DO IT NEXT SESSION.
 
 ## Status
-- [x] th08.dat archive format: header + table + entries + LZSS. FULL extractor work.
-- [x] extract_th08.py: single pass; extracts all 317 files (+ table); VERIFIED.
-- [x] thbgm.fmt extracted (from archive) and parsed for BGM table (see 02_bgm.md).
-- [x] thbgm.dat: raw PCM format (see 02_bgm.md). NOTE размер tracks чудовищный: check why (2ch 16bit 44100 320s=56MB→ but file is 449MB total so большой файл содержит много подряд).
-- [x] ANM files inside th08.dat: magic "Form"/ANM_x format + lodging in THTX textures (see 03_images.md).
-- [x] 00_overview.md, 01_archive.md, 02_bgm.md, 03_images.md, 04_file_index.md — complete.
-- [x] tools/extract_th08.py — single-pass extractor, all 317 files, no per-entry crypt needed.
-- [x] tools/thtx2png.py — THTX decode for all formats occurring in th08.dat ANM files.
+- [x] archive format & extractor (all 317 files, sizes match): tools/extract_th08.py VERIFIED.
+- [ ] post-LZ wrapper ("edz" layer) per file: type byte meanings + wrapper body — IN PROGRESS.
+- [ ] THTX/.ANM/.fmt/BGM analysis for 03_images.md, 02_bgm.md.
+- [ ] 00_overview.md, 04_file_index.md.
 
-## Next steps (Phase 1 close)
--주: PHASE1 DONE: all 5 deliverable specs written and extractor verified on real th08.dat.
-- Phase 2 (not in scope here): scripts/opcodes, formats (ECL, STD, MSG, SHT) per later briefs.
-
-## Open questions
-- (none blocking Phase 1)
-
-## Evidence addresses
-- (see above; all previously noted Hopper addresses were CONFIRMED in Ghidra with same semantics —
-  except LZSS literal reading subtlety and the per-entry crypt NON-existence in th08.)
-- Ghidra project path: /home/anon/Projects/th_08/specs/glm/ghidra/th08.gpr
+## Todo (resume here)
+1. dump bytes at 0x4c7940 (th08.exe file offsets: VA-0x4015c0? check map) to identify the wrapper types.
+2. read the post-LZ wrapper's own header (0x1c bytes?) then decide: strip wrapper, THEN treat as THTX/anm/etc.
+3. extract first bytes of wrapper to find the actual payload layout; skip/strip edz 3 bytes then treat rest as typical exe-loaded data.

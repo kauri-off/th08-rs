@@ -61,9 +61,10 @@ BGM object g_Bgm 0x18b8a68: +0x1e80 desc ptr table; +0x1ec0 buffer ptr; +0x1f00 
 ### ANM — VERIFIED structure (5-6 files cross-checked)
 Chunk header 0x3C: +0x00 n_spr, +0x04 n_scr, +0x08 0, +0x0C u32 (256=1.0 fixed), +0x10 u32 (256=1.0), +0x14 u32 5, +0x18 color (0/0xFF000000), +0x1C u32 name_off, +0x20 0, +0x24 0, +0x28 u32 3 (version), +0x2C u32 (10/11), +0x30 u32 thtx_off, +0x34 u32 low byte flag (1=skip external texture load), +0x38 u32 next chunk delta (0=end).
 Then: n_spr x u32 sprite offs (0=null, dense 20B records after name), n_scr x {u32 data_off; i32 id}, name string (NUL). Sprite region starts right after name; script data after sprites; THTX at +0x30.
-Sprite record 20B = {u32 idx; f32 x; f32 y; f32 w; f32 h}?? (ascii: (k, 8k, 0, 8, 8); stg1enm: (k, 48k, 0, 48, 64); text: (k, 0, 18k, 320/256, 17); enemy: (k, 32k, 0, 32, 32)).
-Script id examples: ascii -27..-16, text -39..-6, etama -150..-126, enemy 0..100, eff01 -34. Script data ops: {u16 op; u16 size; payload}; observed ops 3,6,8,0x15,0x16,0x17,0x18,0x1a?,0x1e,0x20; but first script of a chunk may be a 20B {u32 sprite_id; f32,f32,f32,f32} record referencing last sprite of chunk.
-sub_465860 loads chunks (alloc 0x44B/sprite internal structs, 4B/script ptrs, 12B/chunk records); sub_465ac0 per-chunk texture: version check (`+0x28 == 3`; `+0x34 & 0xff`), name at +0x1C, '@' = skip load; error strings "animation version mismatch" etc.
+Sprite record 20B = {u32 idx; f32 x; f32 y; f32 w; f32 h} — rect in TEXTURE PIXELS (verified: bbox = texture size for ascii/stg1enm/enemy; parent check work/validate_thtx.py era).
+Script region layout (VERIFIED all 1151 entries, work/opcodes_scan.py, 0 fail): optional 20B sprite record; then 1-2 sequences of {u16 op; u16 size(incl 4B hdr); payload size-4} each ended by {u16 0xffff; u16 0} + u32 0 pad (8B). 1003 regions 1 seq, 74 regions 2 seq (intro+loop?), 74 regions sprite-record only. 56 distinct opcodes, ALL with consistent payload sizes (see work/opcode_table.json; goes into 03_images.md §5).
+Script id examples: ascii -27..-16, text -39..-6, etama -150..-126, enemy 0..100, eff01 -34.
+sub_465860 preloads all chunks (0x44B/sprite internal structs, 4B/script ptrs, 12B/chunk records; FUN_0040b880 = alloc with "global.h" tag); FUN_00465ac0 per-chunk texture preload: version check (chunk+0x28 == 3), loads texture when `+0x34 low byte == 0` and name[0] != '@' (error strings at 0x4b8510/0x4b8554/0x4b8574).
 
 ### THTX — VERIFIED header/size/pixel-format mapping (code-level)
 Header: "THTX", u16 0, u16 fmt, u16 w, u16 h, u32 size (=w*h*bpp; equals bytes left in chunk − 16 for all 306 textures).

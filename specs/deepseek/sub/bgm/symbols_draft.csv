@@ -1,0 +1,72 @@
+addr,kind,name,signature,confidence,note
+0x004464C8,function,Game_Init_BgmStart,void,verified,calls fmt load and stream start at game init
+0x004477B1,function,Sound_Init,void,verified,copies 60B cfg; opens ./thbgm.dat; requires ZWAV/1/0x800 header
+0x00449C79,function,Opt_RamPreloadFlag,int(void),verified,(cfg_flags>>13)&1; gates Bgm_PreloadTrack
+0x0043E660,function,Archive_LoadBlob,void*(name/int/int),verified,loads bgm/thbgm.fmt and other archive members
+0x0045C190,function,Bgm_Init,void,verified,BGM subsystem init
+0x0045C4B0,function,Bgm_Close,void,verified,BGM subsystem shutdown
+0x0045C6B0,function,Bgm_FindTrackIndex,int(g_Bgm*/const char* path),verified,strips dir + strcmp vs fmt names (stride 0x34); returns 0 when not found
+0x0045C8C0,function,SE_Load,void,verified,sound-effect loader (adjacent subsystem)
+0x0045CBC0,function,RIFF_FindChunk,void,verified,chunk finder used by file-mode setup
+0x0045CC30,function,Bgm_LoadFmt,int(g_Bgm*),verified,loads bgm/thbgm.fmt; stores ptr at +0x1F84; no count or format validation
+0x0045CC70,function,Bgm_StartStream,void,verified,starts the DirectShow stream over the container
+0x0045CE00,function,Bgm_ReopenTrack,void,verified,reopen/stop of the current track
+0x0045CE70,function,Bgm_PreloadTrack,int(g_Bgm*/int slot/char* name),verified,malloc preload_bytes + ReadFile from +0x10; needs option bit13
+0x0045D0F0,function,Bgm_LoadTrack,void,verified,memory-mode graph rebuild or file-mode reuse
+0x0045D3F0,function,SE_Init,void,verified,sound-effect init
+0x0045D790,function,Bgm_QueueStateMachine,void,verified,logs Sound : Load/PreLoad/Play/Fill Buffer/Reopen/Stop/Recreate/Reset Stage
+0x0045E0F0,function,Bgm_PumpThread,void,verified,thread pumping queue and DS notifications; arg 1 = loop-enabled refill
+0x0045E1E0,function,Bgm_QueueAdd,void(int type/int index/char* name),verified,queue types 1..8: preload/play/stop/stopall/fade/pause/unpause/volume
+0x0045E2D0,function,Bgm_GetCurrentRecord,void*,verified,current fmt record
+0x0045E300,function,Bgm_GetStreamState,void,verified,stream state getter
+0x0045E370,function,Bgm_FreeTrackBuffer,void(int slot),verified,frees per-slot preload buffer
+0x004718D0,function,DS_BuildGraphFileMode,void,verified,file-mode DirectShow graph over whole blob
+0x00471C40,function,DS_BuildGraphMemoryMode,void,verified,StreamingSound Create; 16 buffers x 44100
+0x004723B0,function,DS_FillBuffer,long(void* buf/int loopflag),verified,alloc + read PCM + Receive; silence fill via rec+0x2E
+0x00472750,function,DS_Play,void(int a/int b),verified,starts playback
+0x00472D30,function,DS_HandleWaveStreamNotification,void,verified,refill on underrun; loop seek at 0x472FB0
+0x00473250,function,DS_SetupWaveFileMode,void,verified,file-mode wave setup (chunk find)
+0x00473300,function,DS_SetCurrentRecord,void(obj/g_Bgm*/rec),verified,stores rec at +0x90 then ResetFile(0)
+0x00473360,function,DS_SetupMemoryMode,void,verified,memory-mode base/cursor/size at +0x80/+0x84/+0x88
+0x004733E0,function,DS_ResetFile,void(obj/int loopflag),verified,seek start(+loop_start); remaining=length(-loop_start)
+0x00473530,function,DS_ReadPCM,void,verified,file: ReadFile clamped to obj+8; memory: memcpy clamped to size
+0x00447D56,function,BGM_PlayByName_Slot,int(int slot/char* name),verified,.mid->.wav rewrite; queue type 1 with slot
+0x00447E47,function,BGM_PlayByIndex,void(int a/int index),verified,queue type 2 with fmt index
+0x00447F21,function,BGM_PlayByName,int(char* name/int a),verified,.mid->.wav rewrite; queue type 2 index 0xFFFFFFFF
+0x00448081,function,BGM_Stop,void,verified,stop wrapper
+0x004480F8,function,BGM_Fade,void,verified,fade wrapper
+0x00406C30,function,BGM_Pause,void,verified,pause wrapper
+0x00406C50,function,BGM_UnPause,void,verified,unpause wrapper
+0x0043ABD7,function,Scene_StageStart_BGMSelect,void,verified,.std +0x290/+0x310/+0x390 by name; baked table when scene bit14 set
+0x00439BC7,function,Scene_Update_BGM,void,verified,re-selects BGM; reads both baked tables
+0x00439916,function,BakedTable_GetFlag,int(void),verified,returns +0x10 of selected 0x4C7670 entry
+0x00439961,function,BakedTable_GetType,int(void),verified,returns +0x0C of selected 0x4C7670 entry
+0x0046BBC0,function,Menu_SpellGrid,void,verified bytes/inferred role,builds 15-per-row spell-card grid; sets DAT_0164D0B4 or= 0x4001
+0x0046B174,function,SpellHist_Update,void,inferred,region around DAT_0164D0B8 reads
+0x0046E136,function,SpellHist_Write,void,inferred,writes DAT_0164D0B8
+0x00421DD0,function,Log_Printf,void(char* fmt/...),verified,emits Sound : and error trace lines
+0x0040B880,function,Mem_CallocDbg,void*(size/char* file),verified,allocator used by preload (file tag global.h)
+0x018B8A68,global,g_Bgm,engine object base,verified,BGM engine instance
+0x018BDC70,global,g_Bgm_StreamObj,ptr,verified,DirectShow stream object
+0x018BDC74,global,g_Bgm_NotifyEvent,handle,verified,buffer notification event
+0x018BDC7C,global,g_ZwavBaseOffset,int32,verified,base offset of ZWAV blob; 0 and no writer; nonzero would use th08.dat name
+0x017CE870,global,g_Config,60 bytes,verified,th08.cfg copy
+0x017CE88F,global,g_Cfg_BgmMode,byte,verified,cfg+0x1F; 1=WAV 2=MIDI
+0x017CE8A8,global,g_Cfg_OptionFlags,dword,verified,cfg+0x38; bit13 = RAM-preload mode
+0x017CE8C4,global,g_SceneBgmGate,dword,verified,non-zero gates the whole stage-BGM selection block in Scene_StageStart_BGMSelect
+0x0164D0B4,global,g_SceneFlags,dword,verified,bit14 selects baked BGM table (set with bit0 via or 0x4001)
+0x0164D0B8,global,g_SceneKeyId,int,verified,key for 0x4C7670 selection; validated vs per-stage windows 119-122/147-150/191-193/213
+0x0164D2CC,global,g_StageIndex,int,verified,0..8 = stages 1..5 / 6a / 6b / extra (index into 0x4C7240)
+0x0164D2D0,global,g_StageIndexCopy,int,verified,copy made at scene start
+0x0160F538,global,g_Difficulty,int,inferred,0..4 score-table index (difficulty of current run)
+0x004E4824,global,g_StageDataStd,ptr,verified,loaded .std buffer; BGM names at +0x290/+0x310/+0x390
+0x018B8A28,global,g_StageSelData,ptr,inferred,stage unlock structure used in stage-select loop
+0x004C7240,table,StageBgmTable,9 rows x 12B,verified,theme/boss/third triples in music-room numbering; rows = stages 1-5 then 6a and 6b then extra
+0x004C7670,table,BakedBgmByKey,18 x 20B + sentinel,verified,fields key/music_idx/name/type/flag; selects first entry with key >= g_SceneKeyId
+0x004C6C40,table,SpellListPtrByStage,ptr[9],verified,per-stage spell-id list pointer
+0x004C6C68,table,SpellCountByStage,int[9],verified,per-stage spell count
+0x004B67CC,string,s_thbgm_dat,"thbgm.dat",verified,container name
+0x004B66C4,string,s_th08_dat,"th08.dat",verified,alternate container name (dead when g_ZwavBaseOffset==0)
+0x004B5930,string,s_bgm_init_err,text,inferred,error path string used from the 0x0043ABD7 region
+0x004B6C9C,string,s_thbgm_hdr_err,text,verified,ZWAV header error string
+0x004B6CCC,string,s_cfg_err,text,verified,config load error string

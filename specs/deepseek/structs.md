@@ -124,6 +124,26 @@ Chunks tile their file exactly: sum of `+0x38` deltas == file size.
 | 0x00 | 4 | u32 | data_off | offset of the script data (from chunk start) |
 | 0x04 | 4 | i32 | id | script id (may be negative; e.g. enemy 0..100, ascii -27..-16) |
 
+### 5.5 Script region layout — VERIFIED (all 1151 script entries)
+
+A script region (from its `data_off` to the next script's offset, or to the chunk's
+THTX offset for the last script) consists of:
+
+1. optional 20-byte sprite record `{u32 sprite_number; f32 x,y,w,h}` (same layout as
+   §5.2). Present in 305 of 1151 regions; in 74 of them it is the whole region
+   (no op stream). Its u32 is always < 65536, so it can never be mistaken for an op
+   header (an op header's `size` would be 0 → invalid).
+2. one or more op sequences, concatenated. Sequence = op records
+   `{u16 op; u16 size}` where **size includes the 4-byte header** (payload = size−4
+   bytes), terminated by `{u16 0xffff; u16 0x0000}` **followed by a u32 0 pad**
+   (8 bytes total).
+   Sequence counts: 1003 regions have 1 sequence, 74 have 2 (plausibly intro+loop,
+   Phase 2), 74 have 0 (sprite-record only).
+
+Byte-exact for all 1151 regions / 113 files (work/opcodes_scan.py, 0 failures).
+Opcode list with *consistent* payload sizes: `03_images.md` §5;
+machine-readable table `work/opcode_table.json`.
+
 ## 6. THTX texture — VERIFIED (all 306 embedded textures)
 
 | off | size | type | name | meaning |

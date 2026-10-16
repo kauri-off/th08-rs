@@ -11,5 +11,12 @@
 - edz keys: M 1b/37/40/2800, T 51/e9/40/3000, A c1/51/1400/2000, J 03/19/1400/7800, E ab/cd/200/1000, W 12/34/400/2800, - 35/97/80/2800, * 99/37/400/1000.
 
 ## thbgm.dat / thbgm.fmt — source: deepseek NOTES.md
-- fmt: 52-byte entries {name[16], +0x10 offset, +0x14 preload size, +0x18 loop start? (bytes), +0x1C length (bytes), +0x20 WAVEFORMATEX}.
+- fmt: 52-byte entries {name[16], +0x10 offset, +0x14 preload size, +0x18 loop start (bytes from track start, CONFIRMED), +0x1C length = loop end, +0x20 WAVEFORMATEX}. List ends at name[0]==0.
 - PCM 44.1 kHz stereo s16. Track for title = th08_01.wav.
+
+## ANM — source: deepseek NOTES + my checks (src/anm.rs, test parses all 113 files / 306 textures)
+- Chunk header 0x40: +0 n_sprites, +4 n_scripts, +0x1C name offset, +0x28 version (=3), +0x30 THTX offset (0 = none),
+  +0x34 low byte 1 = texture embedded, +0x38 next chunk offset (relative, 0 = last).
+- +0x40: n_sprites u32 offsets → {u32 id, f32 x, y, w, h} (pixels in texture). Then n_scripts × {i32 id, u32 offset}. Then name.
+- Script data: {u16 op, u16 size incl. header, payload}, sequence ends with op 0xFFFF. Opcode semantics: Phase 2.
+- THTX: "THTX", u16 0, u16 fmt, u16 w, u16 h, u32 size, raw D3D texels. fmt 1 BGRA8888, 2 ARGB1555, 3 RGB565, 4 BGR888, 5 ARGB4444.
