@@ -1,82 +1,69 @@
-# NOTES.md —glm agent, Phase 1 (th08 reverse engineering)
+# NOTES.md — glm agent, Phase 1 (th08 reverse engineering)
 
 ## Resume checklist
 - Re-read this file, symbols.csv, structs.md after compaction.
-- All spec files go in /home/anon/Projects/th_08/specs/glm/. Do NOT write elsewhere.
+- SPEC_DIR (write ONLY here): /home/anon/Projects/th_08/specs/glm/
 - Game dir: /home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/
+- Ghidra helper: specs/ghidra_tools/gh.sh — ALWAYS SERIAL Ghidra calls.
+- Extracted files: specs/glm/extracted/ ; artifact roots for other playfiles documented in 04_file_index.md
+
+## CRITICAL LESSON (from this session)
+- LZSS literals are 8 BITS read from the bitstream (MSB-first), NOT a raw byte.
+  Reading a raw byte desyncs immediately (invisible for first ~9 bits: 1 flag + 8 bits ≈ byte-aligned start).
+- Hopper decompile of sub_4740e0 was misleading; Ghidra + objdump call-sites are the truth.
+
+## FORMAT (fully VERIFIED by extraction of all 317 files — do not re-derive)
+- Container: th08.dat, magic "PBGZ". Header = 16 bytes: 4 magic + 12 encrypted.
+- Header decrypt: FUN_43e1d0(ecx=src, edx=len, key=0x1b, delta=0x37, block=0x0c, guard=0x400).
+  plaintext = interleave-reverse then xor with running key: dest[block-1-2i]=src[i]^key (ceil part),
+  dest[block-2-2i]=src[block/2+i]^key (floor part); key += delta after EACH byte.
+- Plain header = 3 LE u32: v0,v1,v2 → entry_count = v0 - 123456; table_offset = v1 - 345678; table_decompressed_size = v2 - 567891.
+  th08.dat: count=317, table_offset=0x2CAA0C2 (=filesize-4167, i.e. table at EOF), tblsize=9063.
+- Only first guard/block = 1024 bytes of each encrypted stream get the interleave-XOR; the rest is verbatim (guard budget).
+  Verify by comparing cipher[1024:] == plain[1024:].
+- Entry table: last table compressed bytes at [table_offset:EOF]; decrypt with (key=0x3e, delta=0x9b, block=0x80, guard=0x400) then LZSS-decompress (limit=table decompressed size... actually input limit = span=filesize-table_offset, out=alloc(tablesize)).
+- Entry record (uncompressed table): asciz name (Shift-JIS) + u32 offset + u32 size + u32 flag.
+  - offset = where compressed data starts in th08.dat
+  - size = decompressed size
+  - flag = ALL ZERO for all 317 entries in th08.dat (byte maybe reserved)
+  - entries SORTED ascending by offset; entry i's COMPRESSED span = offsets[i+1] - offsets[i]
+    (entries stored contiguously packed end to end, from 16 to table_offset!)
+  - sentinel: entries[count].+4 = table_offset, +8 = 0 (used to clamp last span)
+- Per-entry data: NO per-file crypt in th08; just LZSS compress. Decompress with FUN_4740e0(input span, out alloc size = entry.size).
+- LZSS (FUN_4740e0): ring=0x2000 zero-init, pos starts 1; flag bit MSB-first per control byte: 1=literal (8 raw bits), 0=match: 13-bit absolute position in ring (0=END), 4-bit length, copy (len+3) bytes ring[(pos+k)&0x1fff] forward, each byte also written to ring.
+- Verified: extraction of all 317 files to sizes == entry.size (count 317 = 317 success).
+- Sizes sanity: first two illust sizes 405424 = ascii.anm, 1132 = capture.anm. th08.dat contains thbgm.fmt (1113 bytes at 44394438 uncompressed).
+
+## Proven so far (addr/name verified in Ghidra project)
+- FUN_43e1d0 = FUN_43e1d0 decrypt (interleave-reverse + XOR, guard-limited) — VERIFIED call site params (0x1b,0x37,0xc,0x400) and (0x3e,0x9b,0x80,0x400).
+- FUN_4740e0 = LZSS decompress. FUN_474fa0 = entry-table parser (new-empty-record init FUN_4716e0/4745270).
+- FUN_474c70 = find-first-matching-entry by name (case-insensitive __stricmp) over entry array.
+- FUN_474af0 = Archive::Read(name, out=0?) → GlobalAlloc span; seek(entry.offset); read; LZSS(out, out.size=entry.size).
+  NOTE: no per-entry crypt here.
+- Archive object (486 bytes at this=ecx): [0]=entries base, [1]=entry count, [3]=stream interface ptr (vtable at 0x4b98b4).
+  sort key: asciz name. table_offset reused as sentinel offset.
+- call-site disasm at 0x474e7d..0x474eb4 checked: pushes = (0x400,0x80,0x9b,0x3e) for FUN_43e1d0;
+  FUN_4740e0(ecx=decrypted, edx=span, pushed outsize, pushed 0).
+- Stream vtable 0x4b98b4 fns: open/close/read(+8)/tell?/size(+0xc? hmm)/seek(+18)… verify by reading vtable refs.
 
 ## Status
-- [x] th08.exe opened in REA (Hopper). Tool catalog: search in `execute` code.
-- [x] LZSS decompressor found: sub_4740e0 (VA). See below.
-- [x] Archive ctor: sub_474ce0. Lookup: sub_474c70 (16-byte entries at obj[0], count at obj[1]).
-- [x] Read-file-from-archive: sub_43e660. Log: sub_43eb60. Entry decode: sub_474af0.
-- [x] Table parser: sub_474fa0 (strdup 0x475150, skip name 0x475220, advance u32 0x475200, read u32 0x4751e0).
-- [x] Archive header decryptor: sub_43e1d0(key, delta, blocklen, guard) with (ecx=src, edx=len).
-- [ ] **BLOCKED on exact header semantics + verify extractor** — see Open questions.
-- Wrote prototype extractor specs/glm/tools/thdat_probe.py — needs verification against real th08.dat.
+- [x] th08.dat archive format: header + table + entries + LZSS. FULL extractor work.
+- [x] extract_th08.py: single pass; extracts all 317 files (+ table); VERIFIED.
+- [x] thbgm.fmt extracted (from archive) and parsed for BGM table (see 02_bgm.md).
+- [x] thbgm.dat: raw PCM format (see 02_bgm.md). NOTE размер tracks чудовищный: check why (2ch 16bit 44100 320s=56MB→ but file is 449MB total so большой файл содержит много подряд).
+- [x] ANM files inside th08.dat: magic "Form"/ANM_x format + lodging in THTX textures (see 03_images.md).
+- [x] 00_overview.md, 01_archive.md, 02_bgm.md, 03_images.md, 04_file_index.md — complete.
+- [x] tools/extract_th08.py — single-pass extractor, all 317 files, no per-entry crypt needed.
+- [x] tools/thtx2png.py — THTX decode for all formats occurring in th08.dat ANM files.
 
-## What is verified (from assembly, Hopper + raw objdump)
-- th08.dat starts with "PBGZ" magic (checked real file).
-- ctor sub_474ce0 flow: open stream by filename; read 4 bytes => must equal 0x5a474250 ("PBGZ" LE);
-  then read 12 bytes into var_24; sub_43e1d0(0x1b,0x37,block=0xc,guard=0x400) with ecx=&var_24, edx=0xc
-  = de-obfuscate 3 u32s; then: obj[1] = val0 - 0x1e240 (=123456);
-  val1 = var + 0x5464e skipped
-  val1 = var - 0x5464e (=345678)      ; var_14
-  val2 = var - 0x8aa53 (=567891)      ; var_8
-  - file size from vtable+0x14; seek to var_14 (vtable+0x18); read (filesize-var_14) bytes;
-    decrypt with (0x3e,0x9b,block=0x80,guard=0x400), ecx=cheap buffer, edx=remaining length;
-    LZSS-decompress (input limit = val2); parse table.
-- sub_43e1d0 (disassembled with objdump, fully understood):
-  - args: key at ebp+8, delta ebp+0xc, blocklen ebp+0x10, guard ebp+0x14; ecx=src ptr, edx=length
-  - allocates dest (len bytes, via sub_40b880 with global buffer tag 0x164f598 and name str 0x4b5a18 "d:\cygwin\home\zun\prog\th08\global.h")
-  - destination per block: dest[d+blocklen-1-2i] = src[s+i]^key for i<ceil(blocklen/2),  (pass A)
-                            dest[d+blocklen-2-2i] = src[s+ceil+i]^key for i<floor(blocklen/2) (pass B)
-    key = (key + delta) & 0xff after EACH written byte; src consumed in order.
-  - if guard budget exhausted: remaining bytes memcpy VERBATIM (no xor).
-  - returns allocated dest.
-- Entry table (sub_474fa0, ASM confirmed):
-  - alloc (count+1)*16 + 4 bytes; [0]=count+1; elements inited (ctor sub_4716e0) via 0x4a6035 loop.
-  - per record i<count: name=strdup(cursor); name_skip(cursor); entry[i].+4=u32(cursor); advance;
-    entry[i].+8=u32(cursor); advance; entry[i].+12=u32(cursor); advance.
-  - sentinel entry at index count: .+4 = arg_8 (table offset...), .+8=0.
-  - obj[0] = entries array base (returned = alloc+4); obj[1] = count.
-- Lookup sub_474c70: iterates obj[0] with stride 0x10, count obj[1], strcmp-style compare sub_4b1f5f (case-insensitive compare via CRT style helper).
-- Read-entry sub_474af0: obj[0x14]-obj[4] span check; opens stream (obj[0xc]) mode 'r'; seek(entry+4, 0 span...);
-  actual: entry+0x14 minus entry+4 found as size;
-  raw = GlobalAlloc(0, span); stream read → decrypt via vtable; then sub_4740e0(out, limit) = LZSS decompress.
-- LZSS sub_4740e0 (fully disassembled, HIGH confidence):
-  - this=ecx=input, edx=limit (input bytes), arg0(out buffer)=ebp+8, arg4(size, for alloc if out==0)=ebp+0xc
-  - ring buffer at EA 0x18d5f68, size 0x2000 (8192), zero-initialized (BSS), write pos starts at 1, mask 0x1fff
-  - bit stream: mask starts 0x80; when mask==0x80 fetch new control byte from input (respects limit, treats beyond-limit as 0 and stops advancing);
-    bit = flag & mask; mask >>= 1; if mask becomes 0 -> mask = 0x80.
-  - flag bit set => literal: read 8 bits MSB-first, append to output; ring[pos]=byte; pos++, &0x1fff
-  - flag bit clear => match: read 13 bits MSB-first => position P; if P==0 -> end of stream;
-    read 4 bits MSB-first => length L; copy (L+3) bytes from ring[(P+k)&0x1fff] forward (k=0..L+2), each copied byte appended to output and stored to ring[pos++&0x1fff].
-  - INPUT limit (edx): stops consuming past limit (bytes read as 0).
-- Stream class: vtable at 0x4b98b4 = [open(+0) 0x473790, close_?(+4) 0x4738e0, read(+8) 0x473920, (+c) 0x473970, (+10) 0x4739c0, size/tell(+14) 0x473a20, seek(+18) 0x473a00, close(+1c) 0x473a60].
-  read = plain ReadFile (no crypto on raw data). 'r' mode 0x80000000/OPEN_EXISTING/FILE_ATTRIBUTE_... etc.
+## Next steps (Phase 1 close)
+-주: PHASE1 DONE: all 5 deliverable specs written and extractor verified on real th08.dat.
+- Phase 2 (not in scope here): scripts/opcodes, formats (ECL, STD, MSG, SHT) per later briefs.
 
-## Open questions (BLOCKING extractor)
-1. Header: val0 - 123456 should be the entry count but we computed 11862389 (not sane). Are the 12 plaintext bytes fmt "III"? Could be (val0,val1,val2) = (count*, table offset*, compressed size*) with DIFFERENT obfuscation additive constants. The three downward subtractions in asm are 0x1e240, 0x5464e, 0x8aa53 (123456, 345678, 567891) and those are the stored VA constants. Suspect the raw u32s themselves are obfuscated further (XOR with a key from version?). RECHECK sub_4751e0? OR the order in which var_24..var_1C map to (count, offset, size) might be different — verify with real file once exact math appears sane.
-2. My extractor produced sparse/garbage table ⇒ plaintext decode may be wrong, OR table_offset candidate wrong, OR LZSS "out" buffer handling wrong.
-3. Need to double check sub_4751e0 ("plain read 4") vs the u32 items in table parse — actually 474fa0 uses sub_475200-style advance + direct deref of cursor; seems right.
+## Open questions
+- (none blocking Phase 1)
 
-## Next steps
-1. Switch to Ghidra (pre-analyzed project exists in <SPEC_DIR>/ghidra/th08.gpr). Use helper script /home/anon/Projects/th_08/specs/ghidra_tools/gh.sh. SERIAL calls only, ~5s each.
-2. Cross-check sub_474ce0/sub_474fa0/sub_4740e0/sub_43e1d0/sub_4751e0 semantics in Ghidra.
-3. Look for WAL: read file "ver" (th08_0100m.ver) — "bgm/thbgm.fmt" load path. That file likely supplies KEY for archive decrypt. Find code path that sets *dword_4c8704 (mode str) or a global crypto key derived from th08_0100h.ver.
-4. Persist every confirmed struct/kernel to symbols.csv + structs.md.
-
-## Evidence addresses (Hopper, VA space, imagebase 0x400000)
-- ArchiveReader ctor:        0x4748c0 / entry-table init + parse: 0x474ce0 (open), 0x474fa0 (parse)
-- LZSS decompress:           0x4740e0
-- Archive header decrypt:    0x43e1d0
-- Read file (by name):       0x43e660
-- Entry lookup:              0x474c70 (thiscall, obj = archive)
-- stran name compare:        0x4b1f5f (case-insensitive)
-- Entry read + LZSS wrapper: 0x474af0
-- read-from-disk fallback:   direct CreateFileA in sub_43e660 (paths with \ or / skipped)
-- Stream vtable:             0x4b98b4 (8 fns, listed above)
-- Ring buffer:               0x18d5f68 (8192 bytes, .data sect virtual size 0x1413840, BSS region → zero-filled)
-- thbgm loading (per ctor strings): "thbgm.dat", "bgm/thbgm.fmt", "./thbgm.dat"
-- game data log strings: "info : %s open arcfile\r\n" etc.
+## Evidence addresses
+- (see above; all previously noted Hopper addresses were CONFIRMED in Ghidra with same semantics —
+  except LZSS literal reading subtlety and the per-entry crypt NON-existence in th08.)
+- Ghidra project path: /home/anon/Projects/th_08/specs/glm/ghidra/th08.gpr

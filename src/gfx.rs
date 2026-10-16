@@ -66,7 +66,7 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(
 impl Gfx {
     pub async fn new(window: Arc<winit::window::Window>) -> anyhow::Result<Self> {
         let size = window.inner_size();
-        let instance = wgpu::Instance::default();
+        let instance = wgpu::util::new_instance_with_webgpu_detection(wgpu::InstanceDescriptor::new_without_display_handle()).await;
         let surface = instance.create_surface(window)?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -187,7 +187,7 @@ impl Gfx {
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
-        if w > 0 && h > 0 {
+        if w > 0 && h > 0 && (w, h) != (self.config.width, self.config.height) {
             self.config.width = w;
             self.config.height = h;
             self.surface.configure(&self.device, &self.config);

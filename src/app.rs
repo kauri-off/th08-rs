@@ -145,6 +145,8 @@ impl ApplicationHandler<UserEvent> for App {
                     r.game.update();
                     r.acc -= FRAME;
                 }
+                let size = r.window.inner_size();
+                r.gfx.resize(size.width, size.height);
                 r.game.draw(&mut r.gfx);
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.shot.is_some_and(|f| r.game.frame >= f) {

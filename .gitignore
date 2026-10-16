@@ -5,3 +5,4 @@
 /specs/*/work/
 __pycache__/
 /web/dist/
+/.playwright-mcp/
