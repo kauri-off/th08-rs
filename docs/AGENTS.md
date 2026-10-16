@@ -35,3 +35,4 @@ User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_
 - Run `phase1-opus`: claude-opus-5-5, effort medium, SPEC_DIR specs/opus (fresh Ghidra project), PHASE1_BRIEF from scratch, no sub-agents, no web.
 - 2026-10-17: GLM must NOT be launched without explicit user permission. Default dirty-room agent = Opus 5.5 only.
 - 2026-10-17: keep agent tasks small (≤3 related specs per run); big briefs hurt quality. 08–11 are queued as separate runs.
+- 2026-10-17: only ONE delegated agent at a time.

@@ -28,6 +28,15 @@ pub fn parse_fmt(data: &[u8]) -> Vec<Track> {
         .collect()
 }
 
+fn find_track<'a>(tracks: &'a [Track], name: &str) -> Option<&'a Track> {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let wav = match base.rfind('.') {
+        Some(i) => format!("{}.wav", &base[..i]),
+        None => base.to_string(),
+    };
+    tracks.iter().find(|t| t.name == wav).or(tracks.first())
+}
+
 #[derive(Default)]
 struct Music {
     samples: Vec<[f32; 2]>,
@@ -98,8 +107,9 @@ impl Audio {
         }
     }
 
+    // Accepts script names like "bgm/th08_00.mid"; unknown names fall back to track 0.
     pub fn play_bgm(&mut self, name: &str) {
-        let Some(t) = self.tracks.iter().find(|t| t.name == name).cloned() else {
+        let Some(t) = find_track(&self.tracks, name).cloned() else {
             log::warn!("no bgm {name}");
             return;
         };

@@ -55,8 +55,8 @@ struct Running {
     window: Arc<Window>,
     gfx: Gfx,
     game: Game,
-    acc: f64,
-    last: Instant,
+    deadline: f64,
+    epoch: Instant,
 }
 
 enum UserEvent {
@@ -75,7 +75,7 @@ struct App {
 async fn init(window: Arc<Window>, source: Source) -> anyhow::Result<Box<Running>> {
     let mut gfx = Gfx::new(window.clone()).await?;
     let game = Game::load(source, &mut gfx).await?;
-    Ok(Box::new(Running { window, gfx, game, acc: 0.0, last: Instant::now() }))
+    Ok(Box::new(Running { window, gfx, game, deadline: 0.0, epoch: Instant::now() }))
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -113,7 +113,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Ready(mut r) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 r.game.start();
-                r.last = Instant::now();
+                r.epoch = Instant::now();
                 r.window.request_redraw();
                 self.run = Some(r);
             }
@@ -138,13 +138,18 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let now = Instant::now();
-                r.acc = (r.acc + (now - r.last).as_secs_f64()).min(FRAME * 4.0);
-                r.last = now;
-                while r.acc >= FRAME {
-                    r.game.update();
-                    r.acc -= FRAME;
+                // Original timing: one logic step per 1/60 s deadline; late frames are dropped, not caught up.
+                let now = r.epoch.elapsed().as_secs_f64();
+                if now <= r.deadline {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    std::thread::sleep(std::time::Duration::from_secs_f64((r.deadline - now).min(0.001)));
+                    r.window.request_redraw();
+                    return;
                 }
+                while r.deadline < now {
+                    r.deadline += FRAME;
+                }
+                r.game.update();
                 let size = r.window.inner_size();
                 r.gfx.resize(size.width, size.height);
                 r.game.draw(&mut r.gfx);
