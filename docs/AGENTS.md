@@ -14,6 +14,7 @@
 | 1 resume | glm | phase1-resume-glm | failed: rate limit |
 | 1 resume | deepseek | phase1-resume-deepseek | failed: rate limit (3 sub-agents) |
 | 1 resume2 | deepseek | phase1-resume2-deepseek | failed: rate limit |
+| 1 | opus 5.5 medium | phase1-opus | running |
 
 User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_TEMPLATE.md.
 
@@ -27,3 +28,7 @@ User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_
   BGM loop_start = +0x18 relative bytes; ANM header 0x40, script entry {i32 id, u32 off}; THTX fmt 1/3/5 = BGRA8888/RGB565/ARGB4444.
 - 2026-10-17: Haiku web-searched thtk / "TH08 decompilation sources" and tried recalling formats → user called it cheating.
   Rule now in TASK_TEMPLATE.md: no web, no third-party recalled knowledge; binary + data only. (Earlier GLM/DeepSeek runs had web allowed.)
+
+## 2026-10-17: roster change
+- Haiku 5.5 test failed; DeepSeek dropped (too expensive). Active dirty-room models: **Opus 5.5** (claudeAgent, claude-opus-5-5) and GLM (rate limited for now).
+- Run `phase1-opus`: claude-opus-5-5, effort medium, SPEC_DIR specs/opus (fresh Ghidra project), PHASE1_BRIEF from scratch, no sub-agents, no web.
