@@ -11,3 +11,5 @@
 - Fixed-timestep 60 Hz logic; rendering once per display frame; at most 4 catch-up steps.
 - Dirty room = opencode agents (GLM-5.3-Flash, DeepSeek V4.1 Flash), reasoning max, run as T3 delegate_task, same brief in parallel.
 - RE tool = Ghidra headless (Hopper proved unreliable). Helpers in specs/ghidra_tools.
+- REA MCP registered for claude_code (~/.claude.json, backup .rea.backup) and opencode, both with JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+  + GHIDRA_INSTALL_DIR=/opt/ghidra. Before that REA's ghidra provider was unavailable (system default Java 17) — agents only had Hopper.
