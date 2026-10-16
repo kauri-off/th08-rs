@@ -1,8 +1,7 @@
-use crate::archive::Archive;
 use crate::assets::Source;
-use crate::audio::Audio;
-use crate::gfx::{Gfx, TextureId};
-use crate::input::Input;
+use crate::game::Ctx;
+use crate::gfx::Gfx;
+use crate::task::Flow;
 use std::sync::Arc;
 use web_time::Instant;
 use winit::application::ApplicationHandler;
@@ -13,48 +12,9 @@ use winit::window::{Window, WindowId};
 
 const FRAME: f64 = 1.0 / 60.0;
 
-pub struct Game {
-    pub archive: Archive,
-    pub audio: Audio,
-    pub input: Input,
-    pub frame: u64,
-    title: TextureId,
-}
-
-impl Game {
-    async fn load(source: Source, gfx: &mut Gfx) -> anyhow::Result<Self> {
-        let archive = Archive::from_bytes(source.read("th08.dat").await?)?;
-        let audio = Audio::new(source, &archive.read("thbgm.fmt")?);
-        let title = gfx.load_image(&archive.read("title00.png")?)?;
-        Ok(Self { archive, audio, input: Input::default(), frame: 0, title })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn start_once(&mut self) {
-        if !self.audio.is_started() {
-            self.start();
-        }
-    }
-
-    fn start(&mut self) {
-        self.audio.ensure_started();
-        self.audio.play_bgm("th08_01.wav");
-    }
-
-    fn update(&mut self) {
-        self.input.tick();
-        self.frame += 1;
-    }
-
-    fn draw(&self, gfx: &mut Gfx) {
-        gfx.image(self.title, 0.0, 0.0);
-    }
-}
-
 struct Running {
     window: Arc<Window>,
-    gfx: Gfx,
-    game: Game,
+    ctx: Ctx,
     deadline: f64,
     epoch: Instant,
 }
@@ -73,9 +33,9 @@ struct App {
 }
 
 async fn init(window: Arc<Window>, source: Source) -> anyhow::Result<Box<Running>> {
-    let mut gfx = Gfx::new(window.clone()).await?;
-    let game = Game::load(source, &mut gfx).await?;
-    Ok(Box::new(Running { window, gfx, game, deadline: 0.0, epoch: Instant::now() }))
+    let gfx = Gfx::new(window.clone()).await?;
+    let ctx = Ctx::load(source, gfx).await?;
+    Ok(Box::new(Running { window, ctx, deadline: 0.0, epoch: Instant::now() }))
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -112,7 +72,7 @@ impl ApplicationHandler<UserEvent> for App {
         match ev {
             UserEvent::Ready(mut r) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                r.game.start();
+                r.ctx.start();
                 r.epoch = Instant::now();
                 r.window.request_redraw();
                 self.run = Some(r);
@@ -129,12 +89,12 @@ impl ApplicationHandler<UserEvent> for App {
         };
         match ev {
             WindowEvent::CloseRequested => el.exit(),
-            WindowEvent::Resized(s) => r.gfx.resize(s.width, s.height),
+            WindowEvent::Resized(s) => r.ctx.gfx.resize(s.width, s.height),
             WindowEvent::KeyboardInput { event, .. } => {
                 #[cfg(target_arch = "wasm32")]
-                r.game.start_once();
+                r.ctx.start_once();
                 if let PhysicalKey::Code(k) = event.physical_key {
-                    r.game.input.key(k, event.state == ElementState::Pressed);
+                    r.ctx.input.key(k, event.state == ElementState::Pressed);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -149,17 +109,24 @@ impl ApplicationHandler<UserEvent> for App {
                 while r.deadline < now {
                     r.deadline += FRAME;
                 }
-                r.game.update();
+                match r.ctx.calc() {
+                    Flow::Continue => {}
+                    Flow::Quit => return el.exit(),
+                    Flow::Error => {
+                        log::error!("calc chain requested error exit");
+                        return el.exit();
+                    }
+                }
                 let size = r.window.inner_size();
-                r.gfx.resize(size.width, size.height);
-                r.game.draw(&mut r.gfx);
+                r.ctx.gfx.resize(size.width, size.height);
+                r.ctx.draw();
                 #[cfg(not(target_arch = "wasm32"))]
-                if self.shot.is_some_and(|f| r.game.frame >= f) {
-                    r.gfx.capture().save("/tmp/th08_shot.png").expect("save shot");
+                if self.shot.is_some_and(|f| r.ctx.frame >= f) {
+                    r.ctx.gfx.capture().save("/tmp/th08_shot.png").expect("save shot");
                     el.exit();
                     return;
                 }
-                r.gfx.present();
+                r.ctx.gfx.present();
                 r.window.request_redraw();
             }
             _ => {}

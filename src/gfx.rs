@@ -20,6 +20,23 @@ pub enum Blend {
 
 pub type TextureId = usize;
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Rect {
+    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self { x, y, w, h }
+    }
+}
+
+pub const FULLSCREEN: Rect = Rect::new(0.0, 0.0, SCREEN_W, SCREEN_H);
+pub const PLAYFIELD: Rect = Rect::new(32.0, 16.0, 384.0, 448.0);
+
 pub struct Texture {
     pub width: u32,
     pub height: u32,
@@ -29,6 +46,7 @@ pub struct Texture {
 struct Batch {
     tex: TextureId,
     blend: Blend,
+    clip: Rect,
     start: u32,
     end: u32,
 }
@@ -42,7 +60,9 @@ pub struct Gfx {
     pipe_add: wgpu::RenderPipeline,
     tex_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    textures: Vec<Texture>,
+    textures: Vec<Option<Texture>>,
+    free: Vec<TextureId>,
+    viewport: Rect,
     verts: Vec<Vertex>,
     indices: Vec<u32>,
     batches: Vec<Batch>,
@@ -177,6 +197,8 @@ impl Gfx {
             tex_layout,
             sampler,
             textures: Vec::new(),
+            free: Vec::new(),
+            viewport: FULLSCREEN,
             verts: Vec::new(),
             indices: Vec::new(),
             batches: Vec::new(),
@@ -219,8 +241,20 @@ impl Gfx {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
         });
-        self.textures.push(Texture { width, height, bind });
-        self.textures.len() - 1
+        let t = Some(Texture { width, height, bind });
+        if let Some(id) = self.free.pop() {
+            self.textures[id] = t;
+            id
+        } else {
+            self.textures.push(t);
+            self.textures.len() - 1
+        }
+    }
+
+    pub fn free_texture(&mut self, id: TextureId) {
+        if id != self.white && self.textures.get_mut(id).and_then(Option::take).is_some() {
+            self.free.push(id);
+        }
     }
 
     pub fn load_image(&mut self, bytes: &[u8]) -> anyhow::Result<TextureId> {
@@ -229,7 +263,27 @@ impl Gfx {
     }
 
     pub fn texture(&self, id: TextureId) -> &Texture {
-        &self.textures[id]
+        self.textures[id].as_ref().expect("freed texture")
+    }
+
+    // Subsequent draws are clipped to `r` (screen coords); 2D vertices stay in screen space like D3D pretransformed ones.
+    pub fn set_viewport(&mut self, r: Rect) {
+        self.viewport = r;
+    }
+
+    pub fn viewport(&self) -> Rect {
+        self.viewport
+    }
+
+    pub fn clear_viewport(&mut self, color: [u8; 4]) {
+        let r = self.viewport;
+        self.rect(r.x, r.y, r.w, r.h, color);
+    }
+
+    pub fn sprite(&mut self, tex: TextureId, blend: Blend, dst: Rect, uv: [f32; 4], color: [u8; 4]) {
+        let Rect { x, y, w, h } = dst;
+        let [u0, v0, u1, v1] = uv;
+        self.quad(tex, blend, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], [[u0, v0], [u1, v0], [u1, v1], [u0, v1]], color);
     }
 
     pub fn quad(&mut self, tex: TextureId, blend: Blend, corners: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: [u8; 4]) {
@@ -240,8 +294,8 @@ impl Gfx {
         let start = self.indices.len() as u32;
         self.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
         match self.batches.last_mut() {
-            Some(b) if b.tex == tex && b.blend == blend => b.end += 6,
-            _ => self.batches.push(Batch { tex, blend, start, end: start + 6 }),
+            Some(b) if b.tex == tex && b.blend == blend && b.clip == self.viewport => b.end += 6,
+            _ => self.batches.push(Batch { tex, blend, clip: self.viewport, start, end: start + 6 }),
         }
     }
 
@@ -251,7 +305,7 @@ impl Gfx {
     }
 
     pub fn image(&mut self, tex: TextureId, x: f32, y: f32) {
-        let t = &self.textures[tex];
+        let t = self.texture(tex);
         let (w, h) = (t.width as f32, t.height as f32);
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         self.quad(tex, Blend::Alpha, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], uv, [255; 4]);
@@ -283,13 +337,22 @@ impl Gfx {
         });
         let scale = (w / SCREEN_W).min(h / SCREEN_H);
         let (vw, vh) = (SCREEN_W * scale, SCREEN_H * scale);
-        pass.set_viewport((w - vw) / 2.0, (h - vh) / 2.0, vw, vh, 0.0, 1.0);
+        let (ox, oy) = ((w - vw) / 2.0, (h - vh) / 2.0);
+        pass.set_viewport(ox, oy, vw, vh, 0.0, 1.0);
         if let Some((vb, ib)) = &buffers {
             pass.set_vertex_buffer(0, vb.slice(..));
             pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
             for b in &self.batches {
+                let x0 = (ox + b.clip.x * scale).round().clamp(0.0, w) as u32;
+                let y0 = (oy + b.clip.y * scale).round().clamp(0.0, h) as u32;
+                let x1 = (ox + (b.clip.x + b.clip.w) * scale).round().clamp(0.0, w) as u32;
+                let y1 = (oy + (b.clip.y + b.clip.h) * scale).round().clamp(0.0, h) as u32;
+                if x1 <= x0 || y1 <= y0 {
+                    continue;
+                }
+                pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
                 pass.set_pipeline(if b.blend == Blend::Add { &self.pipe_add } else { &self.pipe_alpha });
-                pass.set_bind_group(0, &self.textures[b.tex].bind, &[]);
+                pass.set_bind_group(0, &self.texture(b.tex).bind, &[]);
                 pass.draw_indexed(b.start..b.end, 0, 0..1);
             }
         }
@@ -354,8 +417,116 @@ impl Gfx {
     }
 
     fn clear_batches(&mut self) {
+        self.viewport = FULLSCREEN;
         self.verts.clear();
         self.indices.clear();
         self.batches.clear();
+    }
+}
+
+pub type Vec3 = [f32; 3];
+
+// Row-vector convention (p' = p * M, as D3D); the same memory read as WGSL column-major gives M^T, so `m * v` works.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Mat4(pub [[f32; 4]; 4]);
+
+fn sub(a: Vec3, b: Vec3) -> Vec3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot(a: Vec3, b: Vec3) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: Vec3, b: Vec3) -> Vec3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn normalize(a: Vec3) -> Vec3 {
+    let l = dot(a, a).sqrt();
+    [a[0] / l, a[1] / l, a[2] / l]
+}
+
+impl Mat4 {
+    pub fn look_at_lh(eye: Vec3, at: Vec3, up: Vec3) -> Self {
+        let z = normalize(sub(at, eye));
+        let x = normalize(cross(up, z));
+        let y = cross(z, x);
+        Mat4([
+            [x[0], y[0], z[0], 0.0],
+            [x[1], y[1], z[1], 0.0],
+            [x[2], y[2], z[2], 0.0],
+            [-dot(x, eye), -dot(y, eye), -dot(z, eye), 1.0],
+        ])
+    }
+
+    pub fn perspective_fov_lh(fovy: f32, aspect: f32, near: f32, far: f32) -> Self {
+        let ys = 1.0 / (fovy / 2.0).tan();
+        let xs = ys / aspect;
+        let q = far / (far - near);
+        Mat4([[xs, 0.0, 0.0, 0.0], [0.0, ys, 0.0, 0.0], [0.0, 0.0, q, 1.0], [0.0, 0.0, -near * q, 0.0]])
+    }
+
+    pub fn mul(&self, o: &Mat4) -> Mat4 {
+        let mut r = [[0.0; 4]; 4];
+        for (i, row) in r.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                *v = (0..4).map(|k| self.0[i][k] * o.0[k][j]).sum();
+            }
+        }
+        Mat4(r)
+    }
+
+    pub fn transform(&self, p: Vec3) -> [f32; 4] {
+        let m = &self.0;
+        let v = [p[0], p[1], p[2], 1.0];
+        std::array::from_fn(|j| (0..4).map(|k| v[k] * m[k][j]).sum())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Camera {
+    pub view: Mat4,
+    pub proj: Mat4,
+}
+
+impl Camera {
+    pub const FOV: f32 = std::f32::consts::PI / 6.0;
+    pub const NEAR: f32 = 100.0;
+    pub const FAR: f32 = 10000.0;
+
+    pub fn default_2d() -> Self {
+        let d = (SCREEN_H / 2.0) / (Self::FOV / 2.0).tan();
+        let (cx, cy) = (SCREEN_W / 2.0, -SCREEN_H / 2.0);
+        Self {
+            view: Mat4::look_at_lh([cx, cy, -d], [cx, cy, 0.0], [0.0, 1.0, 0.0]),
+            proj: Mat4::perspective_fov_lh(Self::FOV, SCREEN_W / SCREEN_H, Self::NEAR, Self::FAR),
+        }
+    }
+
+    pub fn view_proj(&self) -> Mat4 {
+        self.view.mul(&self.proj)
+    }
+
+    // World point → (screen x, screen y, depth 0..1) inside viewport `vp`.
+    pub fn project(&self, p: Vec3, vp: Rect) -> Vec3 {
+        let c = self.view_proj().transform(p);
+        let (x, y, z) = (c[0] / c[3], c[1] / c[3], c[2] / c[3]);
+        [vp.x + (x + 1.0) * vp.w / 2.0, vp.y + (1.0 - y) * vp.h / 2.0, z]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_camera_maps_z0_to_pixels() {
+        let cam = Camera::default_2d();
+        for (x, y) in [(0.0, 0.0), (320.0, 240.0), (640.0, 480.0), (32.0, 16.0), (416.0, 464.0), (100.5, 377.25)] {
+            let s = cam.project([x, -y, 0.0], FULLSCREEN);
+            assert!((s[0] - x).abs() < 1e-3 && (s[1] - y).abs() < 1e-3, "({x},{y}) -> {s:?}");
+            assert!(s[2] > 0.0 && s[2] < 1.0);
+        }
     }
 }

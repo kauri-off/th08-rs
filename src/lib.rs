@@ -1,10 +1,14 @@
 pub mod anm;
+pub mod anmmgr;
 pub mod app;
 pub mod archive;
 pub mod assets;
 pub mod audio;
+pub mod game;
 pub mod gfx;
 pub mod input;
+pub mod supervisor;
+pub mod task;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]

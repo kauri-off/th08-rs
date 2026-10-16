@@ -24,6 +24,8 @@ pub struct Thtx {
 
 pub struct Chunk {
     pub name: String,
+    pub width: u32,
+    pub height: u32,
     pub sprites: Vec<Sprite>,
     pub scripts: Vec<Script>,
     pub texture: Option<Thtx>,
@@ -91,6 +93,7 @@ pub fn parse(b: &[u8]) -> Result<Vec<Chunk>> {
     loop {
         let c = &b[base..];
         let (n_spr, n_scr) = (u32at(c, 0) as usize, u32at(c, 4) as usize);
+        let (width, height) = (u32at(c, 0x0c), u32at(c, 0x10));
         let name_off = u32at(c, 0x1c) as usize;
         ensure!(u32at(c, 0x28) == 3, "anm version mismatch");
         let thtx_off = u32at(c, 0x30) as usize;
@@ -117,7 +120,7 @@ pub fn parse(b: &[u8]) -> Result<Vec<Chunk>> {
             })
             .collect();
         let texture = if thtx_off != 0 { Some(decode_thtx(&c[thtx_off..])?) } else { None };
-        chunks.push(Chunk { name, sprites, scripts, texture });
+        chunks.push(Chunk { name, width, height, sprites, scripts, texture });
         if next == 0 {
             break;
         }
