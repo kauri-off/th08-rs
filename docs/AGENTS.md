@@ -18,6 +18,7 @@
 | 2 | opus 5.5 medium | phase2-opus | running (narrowed mid-run to 05 ANM VM, 06 STD, 07 ECL) |
 | impl 1 | opus 5.5 medium | impl1-engine-skeleton | done: src/task.rs, game.rs, supervisor.rs, anmmgr.rs, gfx viewport+camera; 4 tests |
 | impl 2 | opus 5.5 medium | impl2-anm-vm | done: src/anmvm.rs (all 57 opcodes in data), blend modes, title menu via title01.anm; 9 tests |
+| impl 3 | opus 5.5 medium | impl3-std | running (STD loader/VM, depth+fog, TH08_STAGE debug) |
 
 User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_TEMPLATE.md.
 
