@@ -25,7 +25,12 @@
 - Title BGM is started by the title task after title00.png loads (00_overview §3.2), not at app start.
 - Debug: `TH08_STAGE=<1|2|3|4a|4b|5|6a|6b|ex>` (also `stageN[_s][.std]`, `idx:<0..17>`) runs that stage's background alone over black and starts BGM slot 0; `TH08_STAGE_FRAME=<n>` fast-forwards n stage frames on the first calc (use with `TH08_SHOT=1`). All stages verified visually at frames 60–9000.
 
+- `src/env.rs` — debug settings: env vars natively, URL query on the web (`?stage=4a&stage_frame=600`, `?anm=title01.anm:0-9`, `?anm_int=…`, `?slot_test=…`; key = env name without `TH08_`, lowercase). Web `?shot=<n>` freezes logic at frame n (native `TH08_SHOT` exits) so pages can be screenshotted.
+- Web parity checked (2026-10-17): title (frame 120), `?anm=title01.anm:0-9`, stages 1/3/4a/6b (frame 600) are pixel-identical to native `TH08_SHOT` captures on WebGL2 (Playwright MCP Chromium) and WebGPU (headed Chromium, NVIDIA Vulkan). Title BGM starts after the first key press (AudioContext running). No backend changes were needed.
+- Ground-tile seams on stages 1/3 investigated: geometry is watertight (shared edges project to bit-identical vertices), sampling stays inside the sprite rect (stage 1 row 339 reads texel row 1.52 of sprite (1,1) 254x254), clamp/point sampling don't change them, a white texture removes them → the sprite's first and last rows simply don't match in the data. Not a renderer bug.
+
 ## Run
+WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
 Playwright can only upload from the repo dir: game files are hard-linked into `.playwright-mcp/game/`.
 `cargo run --release --bin th08 -- "/home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night"` (or TH08_DIR env).

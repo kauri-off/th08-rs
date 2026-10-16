@@ -1,4 +1,4 @@
-// Dumps every texture of an ANM file to PNG, with sprite rectangles outlined; `--dis` instead prints the scripts.
+// Dumps every texture of an ANM file to PNG, sprite rects outlined unless `--raw` follows outdir; `--dis` instead prints the scripts.
 fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().collect();
     let ar = th08::archive::Archive::from_bytes(std::fs::read(&a[1])?)?;
@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
     for (i, c) in th08::anm::parse(&ar.read(&a[2])?)?.iter().enumerate() {
         let Some(t) = &c.texture else { continue };
         let mut img = image::RgbaImage::from_raw(t.width, t.height, t.rgba.clone()).unwrap();
-        for s in &c.sprites {
+        for s in c.sprites.iter().filter(|_| a.get(4).map(String::as_str) != Some("--raw")) {
             let (x0, y0) = (s.x as u32, s.y as u32);
             let (x1, y1) = ((s.x + s.w) as u32, (s.y + s.h) as u32);
             for x in x0..x1.min(t.width) {

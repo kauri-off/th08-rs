@@ -145,6 +145,8 @@ impl Gfx {
                 ..Default::default()
             })
             .await?;
+        let info = adapter.get_info();
+        log::info!("adapter: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),

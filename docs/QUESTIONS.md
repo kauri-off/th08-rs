@@ -17,3 +17,7 @@ From impl3 (STD):
 - Ribbons: vertex z and visibility conditions.
 - Billboard scale |s2 − s|: 2D or 3D length?
 - Thin seams between ground tiles (stages 1, 3): texture address mode / texel offset for stage textures?
+
+From impl4 (web/seams):
+- Texture filter + wrap (MAG/MINFILTER, ADDRESSU/V, mipmaps) for ANM, stage and 2D draws. Seams on stages 1/3 come from texture data rows 0–1 vs 254 (filter at sprite edge).
+- Any half-texel UV offset on top of sprite rect UVs?

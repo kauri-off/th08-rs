@@ -271,7 +271,7 @@ impl Stage {
         let std = stdfile::parse(&ctx.archive.read(&std_name)?)?;
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &bg)?;
         let mut st = Stage::new(index, std);
-        st.fast_forward = std::env::var("TH08_STAGE_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        st.fast_forward = crate::env::var("TH08_STAGE_FRAME").and_then(|v| v.parse().ok()).unwrap_or(0);
         st.start(&mut ctx.anm);
         let st = Rc::new(RefCell::new(st));
         let t: task::TaskRef<Ctx> = st.clone();

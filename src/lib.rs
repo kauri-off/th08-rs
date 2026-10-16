@@ -6,6 +6,7 @@ pub mod app;
 pub mod archive;
 pub mod assets;
 pub mod audio;
+pub mod env;
 pub mod game;
 pub mod gfx;
 pub mod input;

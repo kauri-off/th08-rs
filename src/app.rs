@@ -28,7 +28,6 @@ struct App {
     proxy: EventLoopProxy<UserEvent>,
     run: Option<Box<Running>>,
     started: bool,
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     shot: Option<u64>,
 }
 
@@ -109,7 +108,9 @@ impl ApplicationHandler<UserEvent> for App {
                 while r.deadline < now {
                     r.deadline += FRAME;
                 }
-                match r.ctx.calc() {
+                // Web `?shot=<n>`: logic freezes at frame n so the page can be screenshotted.
+                let frozen = cfg!(target_arch = "wasm32") && self.shot.is_some_and(|f| r.ctx.frame >= f);
+                match if frozen { Flow::Continue } else { r.ctx.calc() } {
                     Flow::Continue => {}
                     Flow::Quit => return el.exit(),
                     Flow::Error => {
@@ -136,7 +137,7 @@ impl ApplicationHandler<UserEvent> for App {
 
 pub fn run(source: Source) {
     let el = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
-    let shot = std::env::var("TH08_SHOT").ok().and_then(|v| v.parse().ok());
+    let shot = crate::env::var("TH08_SHOT").and_then(|v| v.parse().ok());
     let app = App { source, proxy: el.create_proxy(), run: None, started: false, shot };
     #[cfg(not(target_arch = "wasm32"))]
     {

@@ -9,7 +9,7 @@ pub struct Supervisor {
 }
 
 pub fn register(ctx: &mut Ctx) -> Result<()> {
-    let t = task::task(Supervisor { debug_sprites: std::env::var("TH08_SLOT_TEST").ok().and_then(|v| v.parse().ok()) });
+    let t = task::task(Supervisor { debug_sprites: crate::env::var("TH08_SLOT_TEST").and_then(|v| v.parse().ok()) });
     task::add(ctx, Chain::Calc, 0, 0, t.clone())?;
     for prio in [0, 2, 16] {
         task::add(ctx, Chain::Draw, prio, prio as u8, t.clone())?;
@@ -22,9 +22,9 @@ impl Task<Ctx> for Supervisor {
         if chain == Chain::Calc {
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 0, "text.anm")?;
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
-            if let Ok(spec) = std::env::var("TH08_ANM") {
+            if let Some(spec) = crate::env::var("TH08_ANM") {
                 crate::anmdebug::register(ctx, &spec)?;
-            } else if let Ok(arg) = std::env::var("TH08_STAGE") {
+            } else if let Some(arg) = crate::env::var("TH08_STAGE") {
                 let index = crate::stage::parse_stage_arg(&arg).with_context(|| format!("TH08_STAGE={arg}: unknown stage"))?;
                 let t = crate::stage::Stage::register(ctx, index)?;
                 let bgm = t.borrow().std.bgm[0].clone();
