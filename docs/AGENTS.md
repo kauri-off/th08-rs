@@ -25,3 +25,5 @@ User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_
 - Task `phase1-test-haiku` (cancelled: REA missing) → `phase1-test-haiku-rea`: provider claudeAgent, model claude-haiku-5-5, effort medium, SPEC_DIR specs/haiku (fresh Ghidra project), PHASE1_BRIEF from scratch.
 - Grading against known truth: extractor must reproduce 317 files byte-identical to src/archive.rs output (`cargo run --release --bin datdump`);
   BGM loop_start = +0x18 relative bytes; ANM header 0x40, script entry {i32 id, u32 off}; THTX fmt 1/3/5 = BGRA8888/RGB565/ARGB4444.
+- 2026-10-17: Haiku web-searched thtk / "TH08 decompilation sources" and tried recalling formats → user called it cheating.
+  Rule now in TASK_TEMPLATE.md: no web, no third-party recalled knowledge; binary + data only. (Earlier GLM/DeepSeek runs had web allowed.)
