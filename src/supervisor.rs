@@ -2,7 +2,7 @@ use crate::anmvm::AnmVm;
 use crate::game::Ctx;
 use crate::gfx::{Blend, PLAYFIELD, Rect, TextureId};
 use crate::task::{self, Chain, Ret, Task};
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 pub struct Supervisor {
     debug_sprites: Option<usize>,
@@ -22,9 +22,15 @@ impl Task<Ctx> for Supervisor {
         if chain == Chain::Calc {
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 0, "text.anm")?;
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
-            match std::env::var("TH08_ANM") {
-                Ok(spec) => crate::anmdebug::register(ctx, &spec)?,
-                Err(_) => Title::register(ctx)?,
+            if let Ok(spec) = std::env::var("TH08_ANM") {
+                crate::anmdebug::register(ctx, &spec)?;
+            } else if let Ok(arg) = std::env::var("TH08_STAGE") {
+                let index = crate::stage::parse_stage_arg(&arg).with_context(|| format!("TH08_STAGE={arg}: unknown stage"))?;
+                let t = crate::stage::Stage::register(ctx, index)?;
+                let bgm = t.borrow().std.bgm[0].clone();
+                ctx.audio.play_bgm(&bgm);
+            } else {
+                Title::register(ctx)?;
             }
         }
         Ok(())
@@ -78,6 +84,8 @@ impl Task<Ctx> for Title {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             self.image = Some(ctx.gfx.load_image(&ctx.archive.read("title00.png")?)?);
+            // SPEC-GAP: the "previous scene was the result screen" exception waits for scene tracking.
+            ctx.audio.play_bgm("bgm/th08_01.mid");
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 20, "title01.anm")?;
             self.vms = TITLE_SCRIPTS
                 .map(|i| {

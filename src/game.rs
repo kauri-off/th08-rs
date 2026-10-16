@@ -48,7 +48,6 @@ impl Ctx {
 
     pub fn start(&mut self) {
         self.audio.ensure_started();
-        self.audio.play_bgm("th08_01.wav");
     }
 
     pub fn calc(&mut self) -> Flow {
@@ -58,7 +57,7 @@ impl Ctx {
         f
     }
 
-    // SPEC-GAP: the draw runner's result is ignored (only the calc result is documented to end the program).
+    // Frame_Run only checks the calc runner's result.
     pub fn draw(&mut self) {
         self.anm.reset_render_state();
         task::run(self, Chain::Draw);

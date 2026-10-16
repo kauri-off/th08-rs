@@ -21,3 +21,10 @@
 - Script data: {i16 op, u16 size incl. header, i16 time, u16 var mask, 4-byte args}, ends with op −1. Semantics: specs/opus/05_anm_vm.md (src/anmvm.rs).
   Data uses 57 distinct opcodes; only draw mode 2 is ever set by scripts (op 83), owners pick the rest.
 - THTX: "THTX", u16 0, u16 fmt, u16 w, u16 h, u32 size, raw D3D texels. fmt 1 BGRA8888, 2 ARGB1555, 3 RGB565, 4 BGR888, 5 ARGB4444.
+
+## STD — source: specs/opus/06_std.md (src/stdfile.rs)
+- Header: i16 objects, i16 quads, u32 instance offset, u32 script offset, 5×0x80 unused text, 4×0x80 BGM names at 0x290 (" " = none), u32 object offsets at 0x490.
+- Object: i16 id, u8 layer, u8 flags, f32[3] bbox origin, f32[3] bbox size, quad records {i16 type, i16 size} until type < 0.
+  Type 0 (0x1C): script, vm, pos[3], w, h (0 = sprite size, negative = mirrored). Type 1 (0x24): script, vm, A[3], B[3], width.
+  Quad positions are not relative to the bbox origin (draw adds only instance pos − origin).
+- Instances: 16 bytes {i16 object (< 0 ends), i16 unused, f32[3] pos}. Script: 20 bytes {i32 time (−1 ends), i16 op, i16 12, 3×4 args}.

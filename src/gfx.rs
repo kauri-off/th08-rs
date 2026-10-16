@@ -7,9 +7,25 @@ pub const SCREEN_H: f32 = 480.0;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
-    pub pos: [f32; 2],
+    pub pos: [f32; 4],
     pub uv: [f32; 2],
     pub color: [u8; 4],
+    pub fog_color: [u8; 4],
+    pub fog: f32,
+}
+
+impl Vertex {
+    // Pre-transformed (D3D rhw = 1) vertex in screen pixels; no fog.
+    pub fn screen(x: f32, y: f32, z: f32, uv: [f32; 2], color: [u8; 4]) -> Self {
+        Self { pos: [x / 320.0 - 1.0, 1.0 - y / 240.0, z, 1.0], uv, color, fog_color: [0; 4], fog: 1.0 }
+    }
+}
+
+// D3D clip coords of viewport `vp` → clip coords of the 640x480 target, with the D3D→wgpu half-pixel shift.
+pub fn clip_in_viewport(c: [f32; 4], vp: Rect) -> [f32; 4] {
+    let (ax, bx) = (vp.w / SCREEN_W, (vp.x + vp.w / 2.0 + 0.5) / 320.0 - 1.0);
+    let (ay, by) = (vp.h / SCREEN_H, 1.0 - (vp.y + vp.h / 2.0 + 0.5) / 240.0);
+    [ax * c[0] + bx * c[3], ay * c[1] + by * c[3], c[2], c[3]]
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -19,6 +35,33 @@ pub enum Blend {
 }
 
 pub type TextureId = usize;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    Draw,
+    ClearColor,
+    ClearDepth,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct PipeKey {
+    blend: Blend,
+    test: bool,
+    write: bool,
+    kind: Kind,
+}
+
+impl PipeKey {
+    fn index(self) -> usize {
+        match self.kind {
+            Kind::ClearColor => 8,
+            Kind::ClearDepth => 9,
+            Kind::Draw => (self.blend == Blend::Add) as usize | (self.test as usize) << 1 | (self.write as usize) << 2,
+        }
+    }
+}
+
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Rect {
@@ -45,7 +88,7 @@ pub struct Texture {
 
 struct Batch {
     tex: TextureId,
-    blend: Blend,
+    key: PipeKey,
     clip: Rect,
     start: u32,
     end: u32,
@@ -56,8 +99,9 @@ pub struct Gfx {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    pipe_alpha: wgpu::RenderPipeline,
-    pipe_add: wgpu::RenderPipeline,
+    pipes: Vec<wgpu::RenderPipeline>,
+    depth: Option<(u32, u32, wgpu::TextureView)>,
+    depth_test: bool,
     tex_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     textures: Vec<Option<Texture>>,
@@ -70,17 +114,24 @@ pub struct Gfx {
 }
 
 const SHADER: &str = r#"
-struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) color: vec4f };
-@vertex fn vs(@location(0) pos: vec2f, @location(1) uv: vec2f, @location(2) color: vec4f) -> VsOut {
+struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) color: vec4f, @location(2) fogc: vec4f, @location(3) fog: f32 };
+@vertex fn vs(@location(0) pos: vec4f, @location(1) uv: vec2f, @location(2) color: vec4f, @location(3) fogc: vec4f, @location(4) fog: f32) -> VsOut {
     var o: VsOut;
-    o.pos = vec4f(pos.x / 320.0 - 1.0, 1.0 - pos.y / 240.0, 0.0, 1.0);
+    o.pos = pos;
     o.uv = uv;
     o.color = color;
+    o.fogc = fogc;
+    o.fog = fog;
     return o;
 }
 @group(0) @binding(0) var t: texture_2d<f32>;
 @group(0) @binding(1) var s: sampler;
-@fragment fn fs(i: VsOut) -> @location(0) vec4f { return textureSample(t, s, i.uv) * i.color; }
+@fragment fn fs(i: VsOut) -> @location(0) vec4f {
+    let c = textureSample(t, s, i.uv) * i.color;
+    if c.a * 255.0 < 3.5 { discard; }
+    return vec4f(mix(i.fogc.rgb, c.rgb, clamp(i.fog, 0.0, 1.0)), c.a);
+}
+@fragment fn fs_clear(i: VsOut) -> @location(0) vec4f { return i.color; }
 "#;
 
 impl Gfx {
@@ -141,7 +192,15 @@ impl Gfx {
             bind_group_layouts: &[Some(&tex_layout)],
             immediate_size: 0,
         });
-        let make = |blend: wgpu::BlendState| {
+        let add = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent::OVER,
+        };
+        let make = |blend: Option<wgpu::BlendState>, mask: wgpu::ColorWrites, test: bool, write: bool, fs: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
                 layout: Some(&layout),
@@ -152,36 +211,36 @@ impl Gfx {
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Vertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4],
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x2, 2 => Unorm8x4, 3 => Unorm8x4, 4 => Float32],
                     })],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs"),
+                    entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: config.format,
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &[Some(wgpu::ColorTargetState { format: config.format, blend, write_mask: mask })],
                 }),
                 primitive: Default::default(),
-                depth_stencil: None,
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(write),
+                    depth_compare: Some(if test { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Always }),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
                 multisample: Default::default(),
                 multiview_mask: None,
                 cache: None,
             })
         };
-        let add = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::SrcAlpha,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent::OVER,
-        };
-        let pipe_alpha = make(wgpu::BlendState::ALPHA_BLENDING);
-        let pipe_add = make(add);
+        let mut pipes: Vec<_> = (0..8)
+            .map(|i| {
+                let blend = if i & 1 != 0 { add } else { wgpu::BlendState::ALPHA_BLENDING };
+                make(Some(blend), wgpu::ColorWrites::ALL, i & 2 != 0, i & 4 != 0, "fs")
+            })
+            .collect();
+        pipes.push(make(None, wgpu::ColorWrites::ALL, false, true, "fs_clear"));
+        pipes.push(make(None, wgpu::ColorWrites::empty(), false, true, "fs_clear"));
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
@@ -194,8 +253,9 @@ impl Gfx {
             device,
             queue,
             config,
-            pipe_alpha,
-            pipe_add,
+            pipes,
+            depth: None,
+            depth_test: false,
             tex_layout,
             sampler,
             textures: Vec::new(),
@@ -289,29 +349,47 @@ impl Gfx {
     }
 
     pub fn quad(&mut self, tex: TextureId, blend: Blend, corners: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: [u8; 4]) {
-        let base = self.verts.len() as u32;
-        for i in 0..4 {
-            self.verts.push(Vertex { pos: corners[i], uv: uv[i], color });
-        }
-        let start = self.indices.len() as u32;
-        self.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
-        match self.batches.last_mut() {
-            Some(b) if b.tex == tex && b.blend == blend && b.clip == self.viewport => b.end += 6,
-            _ => self.batches.push(Batch { tex, blend, clip: self.viewport, start, end: start + 6 }),
-        }
+        let v = std::array::from_fn(|i| Vertex::screen(corners[i][0], corners[i][1], 0.0, uv[i], color));
+        self.push(tex, self.key(blend, false, Kind::Draw), v, [0, 1, 2, 0, 2, 3]);
     }
 
     // D3D vertex order: v0 top-left, v1 top-right, v2 bottom-left, v3 bottom-right; triangles (v0 v1 v2), (v1 v2 v3).
     pub fn quad_strip(&mut self, tex: TextureId, blend: Blend, pos: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: [u8; 4]) {
+        let v = std::array::from_fn(|i| Vertex::screen(pos[i][0], pos[i][1], 0.0, uv[i], color));
+        self.strip(tex, blend, false, v);
+    }
+
+    pub fn strip(&mut self, tex: TextureId, blend: Blend, zwrite: bool, v: [Vertex; 4]) {
+        self.push(tex, self.key(blend, zwrite, Kind::Draw), v, [0, 1, 2, 1, 2, 3]);
+    }
+
+    // ZFUNC: LESSEQUAL when on, ALWAYS when off (the D3D default outside the stage draw).
+    pub fn set_depth_test(&mut self, on: bool) {
+        self.depth_test = on;
+    }
+
+    // D3D Clear on the current viewport: colour (if given) and z = 1.
+    pub fn clear_depth(&mut self, color: Option<[u8; 4]>) {
+        let Rect { x, y, w, h } = self.viewport;
+        let c = color.unwrap_or([0; 4]);
+        let uv = [0.0, 0.0];
+        let v = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(|[px, py]| Vertex::screen(px, py, 1.0, uv, c));
+        let kind = if color.is_some() { Kind::ClearColor } else { Kind::ClearDepth };
+        self.push(self.white, PipeKey { blend: Blend::Alpha, test: false, write: true, kind }, v, [0, 1, 2, 1, 2, 3]);
+    }
+
+    fn key(&self, blend: Blend, write: bool, kind: Kind) -> PipeKey {
+        PipeKey { blend, test: self.depth_test, write, kind }
+    }
+
+    fn push(&mut self, tex: TextureId, key: PipeKey, v: [Vertex; 4], idx: [u32; 6]) {
         let base = self.verts.len() as u32;
-        for i in 0..4 {
-            self.verts.push(Vertex { pos: pos[i], uv: uv[i], color });
-        }
+        self.verts.extend(v);
         let start = self.indices.len() as u32;
-        self.indices.extend([base, base + 1, base + 2, base + 1, base + 2, base + 3]);
+        self.indices.extend(idx.map(|i| base + i));
         match self.batches.last_mut() {
-            Some(b) if b.tex == tex && b.blend == blend && b.clip == self.viewport => b.end += 6,
-            _ => self.batches.push(Batch { tex, blend, clip: self.viewport, start, end: start + 6 }),
+            Some(b) if b.tex == tex && b.key == key && b.clip == self.viewport => b.end += 6,
+            _ => self.batches.push(Batch { tex, key, clip: self.viewport, start, end: start + 6 }),
         }
     }
 
@@ -327,7 +405,28 @@ impl Gfx {
         self.quad(tex, Blend::Alpha, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], uv, [255; 4]);
     }
 
-    fn encode(&self, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, w: f32, h: f32) {
+    fn depth_view(&mut self, w: u32, h: u32) -> wgpu::TextureView {
+        if let Some((dw, dh, v)) = &self.depth
+            && (*dw, *dh) == (w, h)
+        {
+            return v.clone();
+        }
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let v = tex.create_view(&Default::default());
+        self.depth = Some((w, h, v.clone()));
+        v
+    }
+
+    fn encode(&self, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, depth: &wgpu::TextureView, w: f32, h: f32) {
         let buffers = (!self.verts.is_empty()).then(|| {
             let vb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
@@ -349,6 +448,11 @@ impl Gfx {
                 depth_slice: None,
                 ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
             })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                stencil_ops: None,
+            }),
             ..Default::default()
         });
         let scale = (w / SCREEN_W).min(h / SCREEN_H);
@@ -367,7 +471,7 @@ impl Gfx {
                     continue;
                 }
                 pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
-                pass.set_pipeline(if b.blend == Blend::Add { &self.pipe_add } else { &self.pipe_alpha });
+                pass.set_pipeline(&self.pipes[b.key.index()]);
                 pass.set_bind_group(0, &self.texture(b.tex).bind, &[]);
                 pass.draw_indexed(b.start..b.end, 0, 0..1);
             }
@@ -384,8 +488,10 @@ impl Gfx {
             }
         };
         let view = frame.texture.create_view(&Default::default());
+        let (w, h) = (self.config.width, self.config.height);
+        let depth = self.depth_view(w, h);
         let mut enc = self.device.create_command_encoder(&Default::default());
-        self.encode(&mut enc, &view, self.config.width as f32, self.config.height as f32);
+        self.encode(&mut enc, &view, &depth, w as f32, h as f32);
         self.queue.submit([enc.finish()]);
         self.queue.present(frame);
         self.clear_batches();
@@ -411,8 +517,9 @@ impl Gfx {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
+        let depth = self.depth_view(w, h);
         let mut enc = self.device.create_command_encoder(&Default::default());
-        self.encode(&mut enc, &tex.create_view(&Default::default()), w as f32, h as f32);
+        self.encode(&mut enc, &tex.create_view(&Default::default()), &depth, w as f32, h as f32);
         enc.copy_texture_to_buffer(
             tex.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -434,6 +541,7 @@ impl Gfx {
 
     fn clear_batches(&mut self) {
         self.viewport = FULLSCREEN;
+        self.depth_test = false;
         self.verts.clear();
         self.indices.clear();
         self.batches.clear();

@@ -1,7 +1,7 @@
 use crate::anm::{self, Script};
 use crate::anmvm::{self, AnmVm};
 use crate::archive::Archive;
-use crate::gfx::{Blend, Camera, Gfx, Mat4, TextureId};
+use crate::gfx::{self, Blend, Camera, Gfx, Mat4, TextureId, Vertex};
 use crate::rng::Rng;
 use anyhow::{Result, ensure};
 
@@ -31,6 +31,15 @@ pub struct AnmManager {
     pub tint: u32,
     pub stage_camera: Option<Camera>,
     last_blend: Blend,
+    last_tex_matrix: Option<((i16, i16), [f32; 2])>,
+}
+
+// Linear vertex fog in camera-space depth; colour as RGB bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct Fog {
+    pub near: f32,
+    pub far: f32,
+    pub color: [u8; 3],
 }
 
 impl Default for AnmManager {
@@ -44,6 +53,7 @@ impl Default for AnmManager {
             tint: 0,
             stage_camera: None,
             last_blend: Blend::Alpha,
+            last_tex_matrix: None,
         }
     }
 }
@@ -107,6 +117,7 @@ impl AnmManager {
     // SPEC-GAP: initial blend state of a frame is not specified; alpha assumed.
     pub fn reset_render_state(&mut self) {
         self.last_blend = Blend::Alpha;
+        self.last_tex_matrix = None;
     }
 
     pub fn set_script(&mut self, vm: &mut AnmVm, slot: usize, index: usize) {
@@ -135,6 +146,101 @@ impl AnmManager {
     }
 
     pub fn draw_mode(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, mode: i32) {
+        self.draw_mode_z(gfx, vm, mode, 0.0);
+    }
+
+    fn update_world_matrix(vm: &mut AnmVm) {
+        use anmvm::*;
+        if vm.flags & (F_ROT_DIRTY | F_SCALE_DIRTY) != 0 && vm.flags & F_FREEZE_MATRIX == 0 {
+            let mut m = Mat4::scale(vm.sprite_w / 256.0 * vm.scale[0], vm.sprite_h / 256.0 * vm.scale[1], 1.0);
+            let [rx, ry, rz] = vm.rotation;
+            if rx != 0.0 {
+                m = m.mul(&Mat4::rotation_x(rx));
+            }
+            if ry != 0.0 {
+                m = m.mul(&Mat4::rotation_y(ry));
+            }
+            if rz != 0.0 {
+                m = m.mul(&Mat4::rotation_z(rz));
+            }
+            vm.world_matrix = m;
+            vm.flags &= !(F_ROT_DIRTY | F_SCALE_DIRTY);
+        }
+    }
+
+    fn vm_color(&self, vm: &AnmVm) -> [u8; 4] {
+        use anmvm::*;
+        let c = if vm.flags & F_COLOR2 != 0 { vm.color2 } else { vm.color };
+        self.tinted([c[R], c[G], c[B], c[A]])
+    }
+
+    // SPEC-GAP: the global tint is read as a D3DCOLOR applied per channel (including alpha).
+    pub fn tinted(&self, mut rgba: [u8; 4]) -> [u8; 4] {
+        use anmvm::*;
+        if self.tint != 0 {
+            let t = self.tint.to_le_bytes();
+            let tc = [t[R], t[G], t[B], t[A]];
+            for k in 0..4 {
+                rgba[k] = ((rgba[k] as u32 * tc[k] as u32) >> 7).min(255) as u8;
+            }
+        }
+        rgba
+    }
+
+    pub fn blend_for(&mut self, vm: &AnmVm) -> Blend {
+        let blend = match vm.blend() {
+            0 => Blend::Alpha,
+            1 => Blend::Add,
+            _ => self.last_blend,
+        };
+        self.last_blend = blend;
+        blend
+    }
+
+    // AnmManager_Draw3DWorld: real 3D quad through the given camera, with vertex fog.
+    pub fn draw_3d_world(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, cam: &Camera, fog: Option<Fog>) {
+        use anmvm::*;
+        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED) || vm.color[A] == 0 || !vm.has_sprite {
+            return;
+        }
+        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else { return };
+        Self::update_world_matrix(vm);
+        // SPEC-GAP: anchor offset uses |half size| (mirrored stage-3 quads only tile this way).
+        let (hw, hh) = ((vm.sprite_w * vm.scale[0] / 2.0).abs(), (vm.sprite_h * vm.scale[1] / 2.0).abs());
+        let ax = if vm.flags & F_ANCHOR_X != 0 { hw } else { 0.0 };
+        let ay = if vm.flags & F_ANCHOR_Y != 0 { hh } else { 0.0 };
+        let mut w = vm.world_matrix;
+        w.0[3] = [vm.pos[0] + ax + self.screen_offset[0], vm.pos[1] + ay + self.screen_offset[1], vm.pos[2], 1.0];
+        // Texture matrix offset is re-uploaded only for a new sprite or a non-zero u offset (v-only scroll quirk).
+        let key = (vm.anm_slot, vm.sprite_index);
+        let off = match self.last_tex_matrix {
+            Some((k, o)) if k == key && vm.uv_off[0] == 0.0 => o,
+            _ => [spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]],
+        };
+        self.last_tex_matrix = Some((key, off));
+        let (su, sv) = (spr.uv[2] - spr.uv[0], spr.uv[3] - spr.uv[1]);
+        let color = self.vm_color(vm);
+        let vp = gfx.viewport();
+        let vproj = cam.view_proj();
+        let v = [[-128.0, -128.0, 0.0, 0.0], [128.0, -128.0, 1.0, 0.0], [-128.0, 128.0, 0.0, 1.0], [128.0, 128.0, 1.0, 1.0]].map(|[x, y, u, t]| {
+            let p = w.transform([x, y, 0.0]);
+            let p = [p[0], p[1], p[2]];
+            let (fog_color, f) = match fog {
+                Some(fg) => {
+                    let z = cam.view.transform(p)[2];
+                    let [r, g, b] = fg.color;
+                    ([r, g, b, 255], ((fg.far - z) / (fg.far - fg.near)).clamp(0.0, 1.0))
+                }
+                None => ([0; 4], 1.0),
+            };
+            Vertex { pos: gfx::clip_in_viewport(vproj.transform(p), vp), uv: [off[0] + u * su, off[1] + t * sv], color, fog_color, fog: f }
+        });
+        let blend = self.blend_for(vm);
+        gfx.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
+    }
+
+    // `z` is the vertex depth (projected depth for stage billboards, 0 otherwise).
+    pub fn draw_mode_z(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, mode: i32, z: f32) {
         use anmvm::*;
         let alpha = vm.color[A];
         if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED) || alpha == 0 || !vm.has_sprite {
@@ -162,21 +268,7 @@ impl AnmManager {
             // Billboard size uses a reference vector that is always zero, so nothing visible is drawn.
             4 => return,
             5 => {
-                if vm.flags & (F_ROT_DIRTY | F_SCALE_DIRTY) != 0 && vm.flags & F_FREEZE_MATRIX == 0 {
-                    let mut m = Mat4::scale(vm.sprite_w / 256.0 * vm.scale[0], vm.sprite_h / 256.0 * vm.scale[1], 1.0);
-                    let [rx, ry, rz] = vm.rotation;
-                    if rx != 0.0 {
-                        m = m.mul(&Mat4::rotation_x(rx));
-                    }
-                    if ry != 0.0 {
-                        m = m.mul(&Mat4::rotation_y(ry));
-                    }
-                    if rz != 0.0 {
-                        m = m.mul(&Mat4::rotation_z(rz));
-                    }
-                    vm.world_matrix = m;
-                    vm.flags &= !(F_ROT_DIRTY | F_SCALE_DIRTY);
-                }
+                Self::update_world_matrix(vm);
                 let mut w = vm.world_matrix;
                 w.0[3] = [px + ax, py + ay, pz, 1.0];
                 let vp = gfx.viewport();
@@ -210,22 +302,10 @@ impl AnmManager {
         }
         let (u0, v0) = (spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]);
         let (u1, v1) = (spr.uv[2] + vm.uv_off[0], spr.uv[3] + vm.uv_off[1]);
-        let c = if vm.flags & F_COLOR2 != 0 { vm.color2 } else { vm.color };
-        let mut rgba = [c[R], c[G], c[B], c[A]];
-        // SPEC-GAP: the global tint is read as a D3DCOLOR applied per channel (including alpha).
-        if self.tint != 0 {
-            let t = self.tint.to_le_bytes();
-            let tc = [t[R], t[G], t[B], t[A]];
-            for k in 0..4 {
-                rgba[k] = ((rgba[k] as u32 * tc[k] as u32) >> 7).min(255) as u8;
-            }
-        }
-        let blend = match vm.blend() {
-            0 => Blend::Alpha,
-            1 => Blend::Add,
-            _ => self.last_blend,
-        };
-        self.last_blend = blend;
-        gfx.quad_strip(spr.tex, blend, corners, [[u0, v0], [u1, v0], [u0, v1], [u1, v1]], rgba);
+        let rgba = self.vm_color(vm);
+        let blend = self.blend_for(vm);
+        let uv = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
+        let v = std::array::from_fn(|i| Vertex::screen(corners[i][0], corners[i][1], z, uv[i], rgba));
+        gfx.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
     }
 }

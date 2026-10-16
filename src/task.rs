@@ -177,7 +177,7 @@ pub fn run<C: TaskCtx>(ctx: &mut C, chain: Chain) -> Flow {
             Ret::Quit => return Flow::Quit,
             Ret::ErrorQuit => return Flow::Error,
             Ret::Restart if chain == Chain::Calc => i = 0,
-            // SPEC-GAP: code 6 in the draw chain is unspecified; treated as 1.
+            // Code 6 is only special in the calc runner; the draw runner treats it like 1.
             Ret::Next | Ret::Restart => i = pos.map_or(i, |p| p + 1),
         }
     }

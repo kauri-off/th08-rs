@@ -18,6 +18,13 @@
 - Title runs title01.anm scripts 0–9 (side logo + nine menu items) over title00.png.
 - Debug: `TH08_ANM=<file>:<a-b,c>[:pf]` runs scripts live in slot 24 (`TH08_ANM_INT=<frame>:<id>,…`, `TH08_ANM_POS=x,y[,dx]`, `TH08_ANM_MODE=n`); `anmview <dat> <x.anm> --dis` prints sprites and disassembled scripts.
 
+- `src/stdfile.rs` — .std parser (header, BGM names, objects/quads incl. ribbons, instances, 20-byte script); test checks all 18 files (384 sprite / 168 ribbon quads). `cargo run --release --bin stdview <th08.dat> <x.std>` dumps one.
+- `src/stage.rs` — Stage subsystem per 06_std.md (calc 8, draw 6/7, ANM slot 4): Stage_Load (one VM per quad), STD script VM (all opcodes 0–34, halt/jump/section requests), camera interpolation (easing + Hermite), fov, sway, fog interpolation, object update (tag-1 colour2), VMs A/B/C (VM C → clear colour), Stage_DrawLayer culling, 3D world quads, billboards (software fog, projected depth) and ribbons. Tests: synthetic camera/jump/halt/section/fog, every `.std` (incl. `_s`) run 6000 frames.
+- `src/gfx.rs` — vertices are clip-space (x,y,z,w) + per-vertex linear fog; depth buffer (Depth32Float, cleared per frame), ZFUNC LESSEQUAL/ALWAYS (`set_depth_test`), per-quad z-write, viewport clears (`clear_depth`), alpha test (alpha ≥ 4). `clip_in_viewport` maps a D3D viewport's clip space into the 640x480 target (real D3D viewport, not just a scissor).
+- `src/anmmgr.rs` — `draw_3d_world` (Draw3DWorld: world matrix, texture-matrix upload quirk, vertex fog, z-write flag), `draw_mode_z` (2D modes with explicit depth).
+- Title BGM is started by the title task after title00.png loads (00_overview §3.2), not at app start.
+- Debug: `TH08_STAGE=<1|2|3|4a|4b|5|6a|6b|ex>` (also `stageN[_s][.std]`, `idx:<0..17>`) runs that stage's background alone over black and starts BGM slot 0; `TH08_STAGE_FRAME=<n>` fast-forwards n stage frames on the first calc (use with `TH08_SHOT=1`). All stages verified visually at frames 60–9000.
+
 ## Run
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
 Playwright can only upload from the repo dir: game files are hard-linked into `.playwright-mcp/game/`.
@@ -26,7 +33,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase2-opus (running): 05 ANM VM, 06 STD, 07 ECL.
 2. IMPL: ANM VM + sprite rendering — done (z-write/depth buffer and stage camera wait for STD).
-3. RE: 08 bullets/items + 09 player.  4. IMPL: STD backgrounds + 3D camera/fog.
+3. RE: 08 bullets/items + 09 player.  4. IMPL: STD backgrounds + 3D camera/fog — done (overlay VM, spell backgrounds, sparkles, kind-51 effect shift wait for later phases).
 5. IMPL: ECL VM + enemies.  6. IMPL: bullets/items/player/collision.
 7. RE: 10 MSG + 11 RNG/stage flow.  8. IMPL: dialogue, stage flow, HUD, menus.
 9. RE/IMPL: replays, score.dat, config, ending/staff roll, sound effects.

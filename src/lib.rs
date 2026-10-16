@@ -10,6 +10,8 @@ pub mod game;
 pub mod gfx;
 pub mod input;
 pub mod rng;
+pub mod stage;
+pub mod stdfile;
 pub mod supervisor;
 pub mod task;
 

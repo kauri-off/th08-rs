@@ -9,3 +9,11 @@ From impl2 (ANM VM):
 - Blend state left by reset_render_state at frame start.
 - Where/when th08logo.jpg is shown.
 - Supervisor flag 0x20 extra timer decrement (slowdown restore).
+
+From impl3 (STD):
+- Draw3DWorld / draw mode 5: anchor half-size offset signed or absolute for negative scale? (stage 3 needs absolute to tile)
+- Which ANM file/slot is at 0x17CE8F4 (overlay VM script 33)? Owner of byte 0x17D5EF8+5?
+- Texture-matrix "last sprite" cache: shared with 2D paths? where reset?
+- Ribbons: vertex z and visibility conditions.
+- Billboard scale |s2 − s|: 2D or 3D length?
+- Thin seams between ground tiles (stages 1, 3): texture address mode / texel offset for stage textures?
