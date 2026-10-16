@@ -16,6 +16,7 @@
 | 1 resume2 | deepseek | phase1-resume2-deepseek | failed: rate limit |
 | 1 | opus 5.5 medium | phase1-opus | done: all 5 specs; 317/317 files byte-identical; BGM +0x18, ANM 0x40 hdr, THTX 1/3/5 correct |
 | 2 | opus 5.5 medium | phase2-opus | running (narrowed mid-run to 05 ANM VM, 06 STD, 07 ECL) |
+| impl 1 | opus 5.5 medium | impl1-engine-skeleton | running (task chain, ANM slots, viewport + 3D camera) |
 
 User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_TEMPLATE.md.
 
@@ -35,4 +36,4 @@ User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_
 - Run `phase1-opus`: claude-opus-5-5, effort medium, SPEC_DIR specs/opus (fresh Ghidra project), PHASE1_BRIEF from scratch, no sub-agents, no web.
 - 2026-10-17: GLM must NOT be launched without explicit user permission. Default dirty-room agent = Opus 5.5 only.
 - 2026-10-17: keep agent tasks small (≤3 related specs per run); big briefs hurt quality. 08–11 are queued as separate runs.
-- 2026-10-17: only ONE delegated agent at a time.
+- 2026-10-17: one agent per role: 1 Opus RE + 1 Opus implementer in parallel; coordinator orchestrates only.

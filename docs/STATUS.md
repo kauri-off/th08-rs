@@ -14,7 +14,7 @@ Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 
 Playwright can only upload from the repo dir: game files are hard-linked into `.playwright-mcp/game/`.
 `cargo run -- "/home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night"` (or TH08_DIR env).
 
-## Next (one sub-agent at a time; RE = Opus dirty room, IMPL = Opus implementer via specs/IMPL_TEMPLATE.md)
+## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase2-opus (running): 05 ANM VM, 06 STD, 07 ECL.
 2. IMPL: ANM VM + sprite rendering (blend modes, 2D/3D), title/menu via ANM; playfield viewport (32,16,384x448).
 3. RE: 08 bullets/items + 09 player.  4. IMPL: STD backgrounds + 3D camera/fog.
