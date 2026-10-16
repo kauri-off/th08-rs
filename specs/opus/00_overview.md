@@ -91,6 +91,34 @@ inserted after existing nodes with the same priority):
 | 5 | stop, runner returns −1 → exit with error |
 | 6 | (calc only) restart the chain from the head |
 
+### 3.1 Node removal and teardown (answers implementer Q2) — VERIFIED
+
+- Removal (`FuncChain_Remove` 0x43CF50, locked wrapper 0x43CF10) unlinks exactly one node. If the node is
+  static (flag bit 0 clear) its on-remove callback is called once (the pointer is cleared first). If it is
+  heap-allocated (bit 0 set) the node is freed and its destructor (0x43C7D0) calls the on-remove callback.
+- A calc callback returning 0 removes **only that calc node**. Draw nodes are *not* linked to it; each
+  subsystem has its own unregister function that removes its calc node and all its draw nodes explicitly,
+  e.g. Stage 0x409CA0 (calc prio 8 + draw 6 + draw 7). The in-game subsystems are torn down by the
+  GameManager on-remove callback (0x43BE2C), which calls the unregister functions of Dialogue, Stage, Bullets,
+  Player, Enemies, Effects, HUD, …; the Supervisor removes the GameManager calc+draw nodes (0x43BF6E) on
+  scene changes.
+- Runner return value: number of callbacks counted while walking (non-zero) on normal completion, or 1 / 0 /
+  −1 for codes 3 / 4 / 5.
+- **Draw runner** handles codes 0 (remove node), 2 (call again), 3, 4, 5 exactly like the calc runner;
+  code 6 is *not* special in the draw runner (treated like 1: continue with next node). Only the calc runner
+  restarts from the head on 6.
+
+### 3.2 Title-screen BGM (answers implementer Q3) — VERIFIED
+
+`MainMenu_Register` (0x47146D) adds the menu's calc node; its on-register callback (0x470A6C, runs inside
+`FuncChain_AddCalc`, i.e. during the Supervisor's scene switch to the menu scene) sets up menu state and
+starts a **loader thread** (`CreateThread` via 0x4486BA) running 0x470E10. That thread loads `title01.anm`
+(slot 20) and `resulttext.anm` (slot 22); then, if the global at 0x17CE9E4 is 0, loads `title/title00.png`
+and, if that succeeded, calls `Music_Play(slot 8, "bgm/th08_01.mid")` **unless the previous scene
+(Supervisor+0x160) was 5 (result screen)**. So title music starts asynchronously as soon as the title
+graphics have loaded, not on a fixed frame. (`Music_Play` maps `.mid` → `.wav`/thbgm track in WAV mode,
+02_bgm.md.) The options menu (0x46837B) also re-issues the same call after the music-mode setting changes.
+
 ## 4. Subsystems and their calc / draw priorities (VERIFIED from registration calls)
 
 Lower number runs first. Names are INFERRED from the files each one loads / its strings.

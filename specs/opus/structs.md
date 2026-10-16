@@ -26,3 +26,9 @@
 
 ## thbgm.fmt record (0x34) — see 02_bgm.md (VERIFIED)
 ## PBGZ entry (runtime 0x10): name*, offset, size, reserved — see 01_archive.md (VERIFIED)
+
+## Phase 2 structures (full tables in the spec files)
+- AnmVm (0x2A4) — 05_anm_vm.md §2 (VERIFIED). Timer (0xC) — 05 §2.
+- Stage object g_Stage 0x4E4030 (partial) — 06_std.md §3. STD file records — 06 §1.
+- ECL context (0x228), thread block (0x24B0), enemy object (0x53D0, main fields) — 07_ecl.md §4.3/§5.1.
+- Bullet spawn descriptor (enemy +0x2E24, 0x210 bytes): +0 i16 type, +2 i16 colour, +4 f32[3] origin, +0x10 angle1, +0x14 angle2, +0x18 speed1, +0x1C speed2, +0x20 extra commands 18x24 B, +0x1F4 i16 count1, +0x1F6 count2, +0x1F8 aim mode, +0x1FA 0, +0x1FC u32 flags, +0x200 sfx, +0x204 i32, +0x20C template ptr — VERIFIED (07 §9).

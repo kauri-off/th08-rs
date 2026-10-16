@@ -74,3 +74,153 @@ addr,kind,name,signature,confidence,note
 0x0045b8b0,func,ScreenEffect_Register,,INFERRED,
 0x0047146d,func,MainMenu_Register,,INFERRED,
 0x00432830,func,Bullet_WallBounce,,INFERRED,tests x vs 0/384 y vs 0/448
+0x004065f0,func,Timer_Set,,VERIFIED,cur=v sub=0 prev=-999
+0x00406610,func,Timer_SetImpl,,VERIFIED,
+0x004065c0,func,Timer_Reset,,VERIFIED,
+0x0040d3b0,func,Timer_Get,,VERIFIED,returns current (int)
+0x00406640,func,Timer_Tick,,VERIFIED,
+0x00406660,func,Timer_TickImpl,,VERIFIED,prev=cur; Supervisor_AdvanceTimer
+0x00447421,func,Supervisor_AdvanceTimer,,VERIFIED,speed>0.99: cur++ else sub+=speed carry
+0x00447295,func,Timer_Add,,VERIFIED,
+0x0044735b,func,Timer_Sub,,VERIFIED,
+0x00418110,func,Timer_Decrement,,VERIFIED,Timer_Sub(1)
+0x0040b8c0,func,Timer_GetF,,VERIFIED,cur+sub
+0x00406940,func,Matrix_Identity,,VERIFIED,
+0x00404720,func,Vec3_Set,,VERIFIED,
+0x004090d0,func,Vec3_Sub,,VERIFIED,
+0x0040b4c0,func,Vec3_Length,,VERIFIED,
+0x0043edb0,func,Angle_AddNormalize,,VERIFIED,(a+d) wrapped into [-pi,pi] max 17 iters each way
+0x0043ecc0,func,Rng_Next16,,VERIFIED,
+0x0043ed20,func,Rng_Next32,,VERIFIED,
+0x0043ed50,func,Rng_NextFloat,,VERIFIED,u32/2^32
+0x00406ef0,func,Rng_Range,,VERIFIED,
+0x0040d390,func,Rng_FloatRange,,VERIFIED,
+0x0164d520,global,g_Rng,,VERIFIED,
+0x017ce758,global,g_Supervisor,,VERIFIED,
+0x017ce8e0,global,g_GameSpeed,,VERIFIED,Supervisor+0x188
+0x018bdc90,global,g_AnmManager,,VERIFIED,
+0x004a3e70,func,crt_ftol,,VERIFIED,truncation
+0x0041f090,func,Math_Fmod,,VERIFIED,
+0x00409060,func,Math_Sin,,VERIFIED,
+0x00408d40,func,Math_Cos,,VERIFIED,
+0x00462250,func,Math_Tan,,VERIFIED,
+0x00462210,func,Math_Acos,,VERIFIED,
+0x00462230,func,Math_Atan,,VERIFIED,
+0x0045e650,func,AnmVm_GetFloatArg,,VERIFIED,
+0x0045e720,func,AnmVm_GetIntArg,,VERIFIED,
+0x0045e810,func,AnmVm_FloatVarRef,,VERIFIED,
+0x0045e8a0,func,AnmVm_IntVarRef,,VERIFIED,
+0x004068e0,func,AnmVm_Init,,VERIFIED,
+0x0045e580,func,AnmFile_StartScript,,VERIFIED,init vm + run once
+0x0040b910,func,AnmManager_SetScript,,VERIFIED,(vm, script index)
+0x00462360,func,AnmManager_SetScriptRange,,VERIFIED,
+0x00462310,func,AnmManager_RunRange,,VERIFIED,
+0x00462270,func,AnmManager_InterruptRange,,VERIFIED,
+0x00407120,func,AnmVm_Interrupt,,VERIFIED,vm+0x1fe = id
+0x0045e960,func,AnmManager_DrawByMode,,VERIFIED,switch vm+0x200
+0x00462ff0,func,AnmManager_Draw2DSnap,,VERIFIED,mode 0
+0x00463800,func,AnmManager_Draw2D,,VERIFIED,mode 1
+0x00463210,func,AnmManager_Draw2DRot,,VERIFIED,mode 2
+0x00463470,func,AnmManager_Draw2DRotNoSnap,,VERIFIED,mode 3
+0x00463cf0,func,AnmManager_DrawBillboard,,VERIFIED,mode 4
+0x00464070,func,AnmManager_Draw3DQuad,,VERIFIED,mode 5
+0x004639e0,func,AnmManager_ProjectBillboard,,VERIFIED,
+0x00463d60,func,AnmManager_Project3DQuad,,VERIFIED,
+0x004628b0,func,AnmManager_EmitQuad,,VERIFIED,
+0x00462f10,func,AnmManager_PushQuad,,VERIFIED,
+0x00462e40,func,AnmManager_Flush,,VERIFIED,
+0x004623c0,func,AnmManager_SetRenderState,,VERIFIED,
+0x00462790,func,AnmManager_SetRenderState2D,,VERIFIED,
+0x004631d0,func,Rotate2D,,VERIFIED,
+0x00465070,func,AnmManager_Ctor,,VERIFIED,
+0x00465250,func,AnmManager_InitUnitQuad,,VERIFIED,corners +-128
+0x0040b5a0,func,Camera_Set2D,,VERIFIED,
+0x0040b6d0,func,Stage_SetCamera,,VERIFIED,
+0x004e4030,global,g_Stage,,VERIFIED,stage background object (0x6600 bytes)
+0x00409ce0,func,Stage_LoadStd,,VERIFIED,
+0x00407400,func,Stage_Calc,,VERIFIED,std script + camera + fog + objects
+0x00409200,func,Stage_DrawLow,,VERIFIED,draw prio 6: clear/fog/layers 0-1
+0x00409640,func,Stage_DrawHigh,,VERIFIED,draw prio 7: layers 2-3
+0x0040a1b0,func,Stage_DrawLayer,,VERIFIED,
+0x00409f40,func,Stage_UpdateObjects,,VERIFIED,
+0x00408d60,func,Stage_InterpCameraVec,,VERIFIED,EDX=slot
+0x00408fc0,func,Hermite,,VERIFIED,
+0x00409120,func,Vec3_Scale,,VERIFIED,
+0x00409080,func,Vec3_Add,,VERIFIED,
+0x0040b500,func,Vec3_LengthSq,,VERIFIED,
+0x0040b540,func,Vec3_Dot,,VERIFIED,EDX=other
+0x0040b7f0,func,Vec3_Cross,,VERIFIED,
+0x0040b470,func,Vec3_ScaleInv,,VERIFIED,
+0x00464470,func,AnmManager_Draw3DWorld,,VERIFIED,world matrix + texture matrix + unit quad VB
+0x00464dd0,func,AnmManager_DrawCustomQuad,,VERIFIED,4 given XYZRHW vertices
+0x0040baf0,func,AnmManager_DrawRotFlush,,VERIFIED,
+0x004069f0,func,AnmFile_SetScript,,VERIFIED,
+0x00426d10,func,EffectManager_ShiftKind51,,VERIFIED,
+0x004481df,func,Supervisor_FogOn,,VERIFIED,
+0x00448229,func,Supervisor_FogOff,,VERIFIED,
+0x00448270,func,Supervisor_SetRenderState,,VERIFIED,
+0x004184b0,func,Ecl_Run,,INFERRED,ECL interpreter (op 0x92 sets stage section request)
+0x0041f420,func,Ecl_GetIntArg,int __fastcall Ecl_GetIntArg(int e; int v),VERIFIED,int var lookup (ECX enemy EDX value)
+0x0041fe10,func,Ecl_IntVarRef,int * __fastcall Ecl_IntVarRef(int e; int * p; ushort mask; int idx),VERIFIED,
+0x00420120,func,Ecl_GetFloatArg,,VERIFIED,
+0x00420950,func,Ecl_FloatVarRef,float * __fastcall Ecl_FloatVarRef(int e; float * p; ushort mask; int idx),VERIFIED,
+0x00418330,func,Ecl_LoadFile,,VERIFIED,
+0x004eccb8,global,g_EclFile,,VERIFIED,
+0x00423390,func,EclNative_0,,VERIFIED,op136/137 table 0x4c6cb0 index 0
+0x004233d0,func,EclNative_1,,VERIFIED,op136/137 table 0x4c6cb0 index 1
+0x00423400,func,EclNative_2,,VERIFIED,op136/137 table 0x4c6cb0 index 2
+0x00423530,func,EclNative_3,,VERIFIED,op136/137 table 0x4c6cb0 index 3
+0x00423a60,func,EclNative_4,,VERIFIED,op136/137 table 0x4c6cb0 index 4
+0x00424130,func,EclNative_5,,VERIFIED,op136/137 table 0x4c6cb0 index 5
+0x00424170,func,EclNative_6,,VERIFIED,op136/137 table 0x4c6cb0 index 6
+0x004241e0,func,EclNative_7,,VERIFIED,op136/137 table 0x4c6cb0 index 7
+0x004244f0,func,EclNative_8,,VERIFIED,op136/137 table 0x4c6cb0 index 8
+0x00424730,func,EclNative_9,,VERIFIED,op136/137 table 0x4c6cb0 index 9
+0x004246e0,func,EclNative_10,,VERIFIED,op136/137 table 0x4c6cb0 index 10
+0x00424820,func,EclNative_11,,VERIFIED,op136/137 table 0x4c6cb0 index 11
+0x00424a20,func,EclNative_12,,VERIFIED,op136/137 table 0x4c6cb0 index 12
+0x00424e00,func,EclNative_13,,VERIFIED,op136/137 table 0x4c6cb0 index 13
+0x00424c40,func,EclNative_14,,VERIFIED,op136/137 table 0x4c6cb0 index 14
+0x00424e20,func,EclNative_15,,VERIFIED,op136/137 table 0x4c6cb0 index 15
+0x00424e50,func,EclNative_16,,VERIFIED,op136/137 table 0x4c6cb0 index 16
+0x00424f60,func,EclNative_17,,VERIFIED,op136/137 table 0x4c6cb0 index 17
+0x00424f90,func,EclNative_18,,VERIFIED,op136/137 table 0x4c6cb0 index 18
+0x00424fc0,func,EclNative_19,,VERIFIED,op136/137 table 0x4c6cb0 index 19
+0x00423db0,func,EclNative_20,,VERIFIED,op136/137 table 0x4c6cb0 index 20
+0x00423e20,func,EclNative_21,,VERIFIED,op136/137 table 0x4c6cb0 index 21
+0x00424ff0,func,EclNative_22,,VERIFIED,op136/137 table 0x4c6cb0 index 22
+0x00425020,func,EclNative_23,,VERIFIED,op136/137 table 0x4c6cb0 index 23
+0x00425040,func,EclNative_24,,VERIFIED,op136/137 table 0x4c6cb0 index 24
+0x00424910,func,EclNative_25,,VERIFIED,op136/137 table 0x4c6cb0 index 25
+0x00425070,func,EclNative_26,,VERIFIED,op136/137 table 0x4c6cb0 index 26
+0x004250d0,func,EclNative_27,,VERIFIED,op136/137 table 0x4c6cb0 index 27
+0x004251b0,func,EclNative_28,,VERIFIED,op136/137 table 0x4c6cb0 index 28
+0x00425290,func,EclNative_29,,VERIFIED,op136/137 table 0x4c6cb0 index 29
+0x00424a00,func,EclNative_30,,VERIFIED,op136/137 table 0x4c6cb0 index 30
+0x00425390,func,EclNative_31,,VERIFIED,op136/137 table 0x4c6cb0 index 31
+0x00421120,func,EclInterp_Linear,,INFERRED,op36 fn table 0x4c6c90 idx 0-6
+0x00421180,func,EclInterp_Fn7,,INFERRED,op36 fn idx 7
+0x0042a8a0,func,EclTimeline_Run,,VERIFIED,
+0x0042a4e0,func,EnemyMgr_SpawnFromTimeline,,VERIFIED,
+0x0042a680,func,EnemyMgr_SpawnFromEcl,,VERIFIED,
+0x0042c660,func,EnemyMgr_Calc,,VERIFIED,
+0x00429e00,func,EnemyMgr_Ctor,,VERIFIED,template defaults
+0x00422720,func,Ecl_FireBullets,,VERIFIED,
+0x00430e10,func,BulletMgr_SpawnPattern,,VERIFIED,
+0x0042f5f0,func,BulletMgr_PlaceBullet,,VERIFIED,
+0x00422c40,func,Enemy_UpdateMoveMode,,VERIFIED,
+0x00423150,func,Enemy_AutoFireAndDirAnim,,VERIFIED,
+0x0042deb0,func,Enemy_Move,,VERIFIED,
+0x0042c180,func,Enemy_ClampPos,,VERIFIED,
+0x0042b490,func,Enemy_CheckLifeThresholds,,VERIFIED,
+0x0042b930,func,Enemy_CheckTimeout,,VERIFIED,
+0x0042bea0,func,Enemy_DropItems,,VERIFIED,
+0x0042bcf0,func,Enemy_Free,,VERIFIED,
+0x0042adb0,func,Enemy_KillChildren,,VERIFIED,
+0x00421bd0,func,Ecl_CallSub,,VERIFIED,
+0x00421cb0,func,Ecl_Return,,VERIFIED,
+0x004215f0,func,Ecl_CompareJump,,VERIFIED,
+0x00418450,func,Ecl_SetSub,,VERIFIED,
+0x0040c7b0,func,Math_Atan2,,VERIFIED,(y;x)
+0x004286e0,func,Vec3_FromPolar,,INFERRED,
+0x00415c80,func,Enemy_ResetRankParams,,VERIFIED,
