@@ -10,11 +10,33 @@ Deliverables (must exist): 00_overview.md, 01_archive.md, 02_bgm.md, 03_images.m
 - Python tools in tools/: pbgz.py (container extract, works: `python3 tools/pbgz.py extract`), edz.py (payload unwrap), anm_dump.py (ANM info/thtx renderer/sprites/hist), pe_util.py.
 
 ## STATUS
-- 01 (archive) — DONE (verified). 02 (bgm) — 95% (field +0x18 semantics open, documented as INFERRED).
-- 03 (images) — 80%: THTX header+size VERIFIED; pixel format candidates rendered (ascii/stg1enm/eff01 PNGs in work/) — fmt 5 = A4R4G4B4-family (LE, A=high nibble) strongly indicated visually; fmt 3 = unknown (eff01). Sprite 20B record: {u32 id; f32 x; f32 y; f32 w; f32 h}? Fields verified structurally but x/y semantics unclear for font-like sheets (ascii x=8k grows past texture width -> maybe logical strip coords or cell-index*size). Script table = {u32 data_off; i32 script_id}. Script data = sequence of ops {u16 op; u16 size; payload(size-4)} but some scripts start with a 20B record {u32 sprite_id; f32 a,b,c,d} (e.g. ascii script -27 = sprite 159 + 4 floats) — NEEDS Ghidra confirmation (find ANM draw/parse code).
-- 00 (overview) — TODO (need main loop, 60fps timing, 640x480, playfield 384x448 confirmation via Ghidra).
-- 04 (file index) — TODO (work/filelist.txt has all 317 names+sizes; classify by pattern).
-- extract_th08.py — TODO (compose pbgz+edz single pass).
+- 01 (archive) — DONE (verified). §8 basename resolution + §9 full 317-file table added.
+- 02 (bgm) — sub-agent B working (sub/bgm/). +0x18 semantics = the open question.
+- 03 (images) — sub-agent A working (sub/anm/): ANM sprite semantics, THTX fmt 3/5, opcode table, tools/thtx2png.py.
+- 00 (overview) — sub-agent C working (sub/overview/): main loop, 60fps, 640x480, playfield, managers.
+- 04 (file index) — DONE (04_file_index.md). Uses the in-exe resource tables (§4 of that doc).
+- extract_th08.py — DONE + VERIFIED: 317/317, byte-identical to decoded/ (diff -r clean), ~45 s.
+
+## NEW VERIFIED FACTS (parent, this session)
+- th08.exe file-name literals live at 0x4B42AA-0x4B967F; engine requests paths like
+  "bgm/thbgm.fmt", "title/title00.png", "sprt/musiccmt.txt", "result/music.jpg",
+  "demo/demorpy0.rpy" but the archive is flat -> loader takes the basename (strchr-like
+  Lib_StrFindChar 0x4A48B0). 16 path-qualified archive requests all resolve.
+- Resource name tables in .rdata (all VERIFIED by reading exe bytes):
+  0x4C72F8 bg anm (9), 0x4C731C stageN.std (9), 0x4C7340 stageN_s.std (9),
+  0x4C7364 stgNenm (9), 0x4C7388 second enm list (11, unexplained),
+  0x4C73B4 stgenm_XX (6), 0x4C73CC ecldata1..8 (9), 0x4C73F0 ecldata*sp (9),
+  0x4C7418 second sp list (11), 0x4C7444 ecldata_XX (6), 0x4C745C stgNtxt (9),
+  0x4C7480 eff01..eff09yk (15), 0x4C74C0 msg table (per stage: 4 ptrs + 8 ptrs,
+  stage 4: 4+8+12), 0x4C7678 MIDI table (20-byte records, track number field),
+  0x4C7948 D3D format descriptor table {d3dfmt,bytes,maskA,maskR,maskG,maskB} for
+  ids 0x16/0x15/0x18/0x17/0x19/0x1a -> A8R8G8B8/X8R8G8B8/X1R5G5B5/R5G6B5/A1R5G5B5/A4R4G4B4.
+  Consumers: 0x409850 (stage arrays), 0x4390EE (msg + front/times anm), 0x43ABD7 (midi).
+- Image dims: 35 end*.jpg 640x480, staff00(b).jpg 640x720, title00/select00.png 640x480.
+- msg*.dat: header {u32 2, u32 12, u32 0x510,...}, records marked by u16 0x003C; text
+  encoding still unknown (Phase 2).
+- ecl: u32 0x800 header then u32 suboffset table, last entry = filesize.
+
 
 ## VERIFIED FACTS (highlights)
 Hashes: th08.exe 330fbdbf58a710829d65277b4f312cfbb38d5448b3df523e79350b879213d924; th08.dat 9d7edf43b8ddd347cbb641836f6b5050745dd936f688daebbf9382ca557043bb; thbgm.dat 2c2ef05f9ff6f43f752dae5da519a2477372c3f8875b7b44996a8f69fdad4d89.

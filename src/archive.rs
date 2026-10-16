@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
-use std::path::Path;
 
 struct CipherKey {
     key: u8,
@@ -133,8 +132,7 @@ fn u32le(b: &[u8], o: usize) -> u32 {
 }
 
 impl Archive {
-    pub fn open(path: &Path) -> Result<Self> {
-        let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    pub fn from_bytes(data: Vec<u8>) -> Result<Self> {
         if &data[0..4] != b"PBGZ" {
             bail!("not a PBGZ archive");
         }

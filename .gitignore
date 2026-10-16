@@ -4,3 +4,4 @@
 /specs/*/ghidra/
 /specs/*/work/
 __pycache__/
+/web/dist/

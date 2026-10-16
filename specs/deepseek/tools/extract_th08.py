@@ -165,6 +165,45 @@ def edz_unwrap(member: bytes) -> tuple[bytes, str]:
     return member, ""
 
 
+# signatures used by --verify (name suffix -> (magic offset, expected bytes))
+SIGNATURES = {
+    ".wav": (0, b"RIFF"),
+    ".png": (0, b"\x89PNG\r\n\x1a\n"),
+    ".jpg": (0, b"\xff\xd8\xff"),
+    ".mid": (0, b"MThd"),
+    ".rpy": (0, b"T8RP"),
+    ".anm": (0, None),          # chunk header: u32 n_sprites (varies) - checked below
+    ".fmt": (0, b"th08"),
+}
+
+
+def verify_file(name: str, data: bytes) -> str | None:
+    """Return None if the file looks consistent with its extension, else a reason."""
+    low = name.lower()
+    for suf, (off, magic) in SIGNATURES.items():
+        if low.endswith(suf):
+            if magic is None:
+                # .anm: u32 n_sprites must be small and name_off/flags sane
+                if len(data) < 0x3C:
+                    return "too short for an ANM chunk header"
+                return None
+            if data[off:off + len(magic)] != magic:
+                return f"bad magic {data[off:off + len(magic)]!r}"
+            return None
+    if low.endswith(".ver"):
+        if not data[:1].isdigit():
+            return "expected an ASCII version line"
+        return None
+    if low.endswith(".txt"):
+        try:
+            data.decode("cp932")
+        except UnicodeDecodeError:
+            return "not decodable as Shift-JIS"
+        return None
+    return None
+
+
+
 # ----------------------------------------------------------------------------
 # PBGZ container (th08.exe sub_474CE0 / sub_474AF0) — see 01_archive.md §1/§4
 # ----------------------------------------------------------------------------
@@ -247,6 +286,7 @@ def main(argv: list[str]) -> int:
 
     types: dict[str, int] = {}
     bad = 0
+    verify_bad: list[str] = []
     for i, (name, off, usize, _fl) in enumerate(arc.entries):
         try:
             raw = arc.member_raw(i)
@@ -260,6 +300,10 @@ def main(argv: list[str]) -> int:
             continue
         plain, tchar = edz_unwrap(raw)
         types[tchar or "(none)"] = types.get(tchar or "(none)", 0) + 1
+        if "--no-verify" not in opts:
+            why = verify_file(name, plain)
+            if why:
+                verify_bad.append(f"{name}: {why}")
         if outdir:
             dst = os.path.join(outdir, name.replace("/", os.sep))
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -278,10 +322,17 @@ def main(argv: list[str]) -> int:
         print(f"raw members {ok}/{arc.count} -> {rawdir}")
     print("edz type histogram: " + ", ".join(
         f"{k}:{v}" for k, v in sorted(types.items(), key=lambda kv: -kv[1])))
+    if verify_bad:
+        print(f"signature check FAILED for {len(verify_bad)} file(s):", file=sys.stderr)
+        for line in verify_bad[:20]:
+            print("  " + line, file=sys.stderr)
+    elif "--no-verify" not in opts:
+        print(f"signature check: {ok} files OK")
     if bad:
         print(f"{bad} file(s) FAILED", file=sys.stderr)
         return 2
-    return 0
+    return 0 if not verify_bad else 3
+
 
 
 if __name__ == "__main__":

@@ -1,7 +1,12 @@
 # Decisions
 
-- Rust 2024, macroquad 0.4 (window, GL textures, simple 2D) + cpal (audio). anyhow for errors.
-  Why: minimal glue, pure Rust; macroquad materials allow custom blend modes needed for additive sprites.
+- Rust 2024, winit 0.30 + wgpu 30 (WebGPU/WebGL2/Vulkan) + cpal (audio, webaudio on wasm). anyhow for errors.
+  Why: user wants a WebAssembly build. macroquad was dropped (2026-10-16).
+- Logical screen 640x480, letterboxed via viewport; sprite batcher with Alpha/Add pipelines (src/gfx.rs).
+  Surface format forced to 8-bit (Bgra8Unorm/Rgba8Unorm) — the default picked Rgb10a2 and broke capture.
+- Assets are ZUN's: never hosted. Native: game dir path. Web: user selects folder/files; cached in OPFS;
+  thbgm.dat read per track via File.slice (no full 450 MB load). Without thbgm.dat the game runs silent.
+- All asset IO is async through assets::Source (native = blocking fs, web = Blob slices).
 - Assets are loaded at runtime from the user's original th08.dat / thbgm.dat — nothing is copied into the repo.
 - Fixed-timestep 60 Hz logic; rendering once per display frame; at most 4 catch-up steps.
 - Dirty room = opencode agents (GLM-5.3-Flash, DeepSeek V4.1 Flash), reasoning max, run as T3 delegate_task, same brief in parallel.

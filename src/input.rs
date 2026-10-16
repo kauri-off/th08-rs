@@ -1,4 +1,4 @@
-use macroquad::prelude::*;
+use winit::keyboard::KeyCode;
 
 pub const UP: u16 = 1 << 0;
 pub const DOWN: u16 = 1 << 1;
@@ -10,27 +10,41 @@ pub const FOCUS: u16 = 1 << 6;
 pub const PAUSE: u16 = 1 << 7;
 pub const SKIP: u16 = 1 << 8;
 
+pub fn map_key(k: KeyCode) -> u16 {
+    match k {
+        KeyCode::ArrowUp => UP,
+        KeyCode::ArrowDown => DOWN,
+        KeyCode::ArrowLeft => LEFT,
+        KeyCode::ArrowRight => RIGHT,
+        KeyCode::KeyZ => SHOT,
+        KeyCode::KeyX => BOMB,
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => FOCUS,
+        KeyCode::Escape => PAUSE,
+        KeyCode::ControlLeft | KeyCode::ControlRight => SKIP,
+        _ => 0,
+    }
+}
+
 #[derive(Default, Clone, Copy)]
 pub struct Input {
+    pub raw: u16,
     pub held: u16,
     pub prev: u16,
 }
 
 impl Input {
-    pub fn poll(&mut self) {
-        let map = [
-            (KeyCode::Up, UP),
-            (KeyCode::Down, DOWN),
-            (KeyCode::Left, LEFT),
-            (KeyCode::Right, RIGHT),
-            (KeyCode::Z, SHOT),
-            (KeyCode::X, BOMB),
-            (KeyCode::LeftShift, FOCUS),
-            (KeyCode::Escape, PAUSE),
-            (KeyCode::LeftControl, SKIP),
-        ];
+    pub fn key(&mut self, k: KeyCode, down: bool) {
+        let b = map_key(k);
+        if down {
+            self.raw |= b;
+        } else {
+            self.raw &= !b;
+        }
+    }
+
+    pub fn tick(&mut self) {
         self.prev = self.held;
-        self.held = map.iter().filter(|(k, _)| is_key_down(*k)).fold(0, |a, (_, b)| a | b);
+        self.held = self.raw;
     }
 
     pub fn down(&self, b: u16) -> bool {

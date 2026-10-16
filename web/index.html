@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>th08</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ddd; font: 15px sans-serif; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { width: 100vw; height: 100vh; display: block; outline: none; }
+  #setup { max-width: 34em; text-align: center; line-height: 1.5; }
+  button, label.btn { display: inline-block; margin: .4em; padding: .6em 1.2em; background: #333; color: #eee; border: 1px solid #666; cursor: pointer; }
+  #status { color: #f99; min-height: 1.5em; }
+</style>
+</head>
+<body>
+<div id="setup">
+  <p>This is an engine reimplementation. It needs files from your own copy of
+  <i>Touhou 8 ~ Imperishable Night</i>: <code>th08.dat</code> (required) and <code>thbgm.dat</code> (music, optional).
+  They stay in your browser and are never uploaded.</p>
+  <label class="btn">Select game folder<input id="dir" type="file" webkitdirectory hidden></label>
+  <label class="btn">Select files<input id="files" type="file" multiple accept=".dat" hidden></label>
+  <div id="cached" hidden><button id="play">Play (files remembered)</button> <button id="forget">Forget files</button></div>
+  <p id="status"></p>
+</div>
+<script type="module">
+import init, { start } from "./th08.js";
+
+const NEEDED = ["th08.dat", "thbgm.dat"];
+const status = (t) => document.getElementById("status").textContent = t;
+
+async function opfs() {
+  try { return await navigator.storage.getDirectory(); } catch { return null; }
+}
+
+async function cachedFiles() {
+  const root = await opfs();
+  if (!root) return [];
+  const out = [];
+  for (const n of NEEDED) {
+    try { out.push(await (await root.getFileHandle(n)).getFile()); } catch {}
+  }
+  return out;
+}
+
+async function remember(files) {
+  const root = await opfs();
+  if (!root) return;
+  for (const f of files) {
+    try {
+      const w = await (await root.getFileHandle(f.name, { create: true })).createWritable();
+      await f.stream().pipeTo(w);
+    } catch (e) { console.warn("could not cache", f.name, e); }
+  }
+}
+
+async function launch(files) {
+  if (!files.some((f) => f.name.toLowerCase() === "th08.dat")) {
+    status("th08.dat not found in the selection.");
+    return;
+  }
+  document.getElementById("setup").remove();
+  await init();
+  start(files);
+}
+
+async function picked(list) {
+  const files = [...list].filter((f) => NEEDED.includes(f.name.toLowerCase()));
+  status("Saving files in browser storage…");
+  await remember(files);
+  const cached = await cachedFiles();
+  launch(cached.length >= files.length ? cached : files);
+}
+
+document.getElementById("dir").onchange = (e) => picked(e.target.files);
+document.getElementById("files").onchange = (e) => picked(e.target.files);
+document.getElementById("play").onclick = async () => launch(await cachedFiles());
+document.getElementById("forget").onclick = async () => {
+  const root = await opfs();
+  for (const n of NEEDED) { try { await root.removeEntry(n); } catch {} }
+  document.getElementById("cached").hidden = true;
+};
+cachedFiles().then((f) => { if (f.length) document.getElementById("cached").hidden = false; });
+</script>
+</body>
+</html>
