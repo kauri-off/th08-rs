@@ -602,3 +602,26 @@ addr,kind,name,signature,confidence,note
 0x00471181,func,Info_Show,,VERIFIED,blocking unlock notice
 0x0046fd5f,func,Card_IsSelectable,,VERIFIED,attempted or FLSP
 0x0046d7f9,func,SpellPractice_DrawInfo,,VERIFIED,
+0x00427970,func,EffInit_RingOverBullets,,VERIFIED,ring init + draw above bullets
+0x004649a0,func,Anm_RingSetUV_Alt,,VERIFIED,u along strip / v across (only used by EffInit_Ring before first rebuild)
+0x00464b00,func,Anm_RingSetUV,,VERIFIED,v along strip (v1->v0) / u across (outer u0 inner u1) + uv_off; colour
+0x00464c60,func,Anm_DrawRingStrip,,VERIFIED,DrawPrimitiveUP TRIANGLESTRIP fvf 0x144 stride 0x1C
+0x00426280,func,EffInit_Particle51,,VERIFIED,9 RNG draws around stage camera
+0x004264f0,func,EffUpd_Particle51,,VERIFIED,view-cone cull 0.94; boss pull; stage tint into colour2
+0x00426720,func,EffInit_Particle63,,VERIFIED,9 RNG draws
+0x00426990,func,EffUpd_Particle63,,VERIFIED,
+0x00425fe0,func,EffInit_Orbit13,,VERIFIED,layer 2; axis/radius zero
+0x00426030,func,EffUpd_Orbit13,,VERIFIED,quaternion orbit about axis; fade when +0x352
+0x0042e010,func,Enemy_UpdateOrbitEffects,,VERIFIED,op 128 effects: centre/radius+0.3/angle+0.0314
+0x0042a820,func,Enemy_ReleaseOrbitEffects,,VERIFIED,set fade request on op 128 effects
+0x004235a0,func,Stage_SpellMaskCallback,,VERIFIED,natives 3/6/20: black square frame + mirrored spell bg VMs
+0x004253e0,func,EffectMgr_GetFixed,,VERIFIED,returns fixed slot k effect
+0x00425fa0,func,Vec3_Negate,,VERIFIED,
+0x00450ee0,func,PlayerBullet_HitSpark8,,VERIFIED,hit filter: type 5 every 8th call (counter +0xE2A94)
+0x00415d10,func,Spell_ShowNameOnly,,VERIFIED,native 22: flag bit 10 name banner only
+0x00416160,func,Spell_HideName,,VERIFIED,native 23
+0x0041f0e0,func,Spell_SetBonusFrozen,,VERIFIED,op 184: flag bit 11
+0x0041f0b0,func,Spell_SetFlag6,,VERIFIED,op 164
+0x00416b10,func,Spell_AddBonus,,VERIFIED,+8000 per time orb unless bit 11
+0x00416b90,func,Spell_Calc,,VERIFIED,
+0x004178c0,func,Spell_Draw,,VERIFIED,
