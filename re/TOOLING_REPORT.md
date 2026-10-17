@@ -144,3 +144,11 @@ Build: `i686-w64-mingw32-gcc -O2 -shared -o d3d8.dll hook.c d3d8.def -static-lib
   - anm_dis.txt numbers scripts per entry; the runtime script index is global across entries;
   - DI keyboard pointer must be re-zeroed after it is created (`nodik` does it every Present);
   - spell practice does not reseed the RNG, so its bullets differ between runs.
+
+## 5. `tools/dispscan.py` (phase 9)
+`dispscan.py <disp|abs-addr>...` lists every game-code instruction (functions from `callgraph.tsv` below
+0x476CE0, capstone) whose **memory operand** has that displacement, e.g. `dispscan.py 0x3d` → all
+`[reg+0x3D]` accesses, tagged with the function name. Use it for per-object fields (struct members reached
+through a register), which `structxref.py` cannot see (absolute addresses only). Limits: `add reg, imm`
+address arithmetic (Ghidra's `(int)this + 0x1b88` passed as a pointer) is not a memory operand and is missed
+— grep `all_decomp.c` for `0x1b88,` / `0x1b88)` as well.

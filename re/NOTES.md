@@ -233,3 +233,21 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - WRITTEN: specs/answers_phase8.md; 05 §10, 11 §1.2, COVERAGE row updated; TOOLING_REPORT §4 (runtime procedure).
 - PHASE 8 DONE.
 - BUGS1 (docs/bugs/VISUAL_BUGS_1.md): B1 hit streak = player00.anm hit scripts 15/17 (scale x→8/5, y→0, 10 fr) rotated by bullet angle (tag set; rotation saved/restored around SetScript in Player_DamageAgainst). B2 = death ring 59 slot 11 never self-frees; freed by DyingUpdate at window end or UpdateBomb; burst 12 slot 3 self-frees at 40. anm_dis numbers etama scripts per entry (global = 25 + e1 idx, 76 + e2 idx). Probe: effscan cmd; draw-phase RNG now main-thread only. Written specs/answers_bugs1.md; 05/09/13 fixed; refs b1_*, b2_* in specs/data/ref.
+
+# PHASE 9 (2026-10-18) — answers impl10 + impl11
+- NEW TOOL tools/dispscan.py (memory-operand displacement scan; TOOLING_REPORT §5). It misses `add reg, imm` pointer args — grep the dump too.
+- impl10 (all 9): large popups (no motion, life 90, top-left glyph run x0 = pos.x − count·3.5, distance alpha; Hud_DrawBoss "+0" every frame, ref f209), KillChildren full (+0x2DA4 = PARENT pointer from ops 90-92; ÷3 while bombing compounds per child; RNG r then a), sparkles max 15/frame (never > 32), native 12 chain = e+8 next link, flags B bit 7 = ECL paused, practice card id 0x164D0B8 + plate table 0x438046/0x437F5C, Msg_Start hooks (Reisen/Kaguya/Mokou plates, spell-bg base 2), op 176 = last spell (bits 7/8/13), explosion filter order, Alice laser +0x3D.
+- impl11 (1-14): bomb tint stays on through prio 8/9 via +0x646C "bomb drew" flag; +0x3D writers = 7 sites only (Reimu/LS orb D circles, Marisa/LS rects, Alice laser); Reimu areas follow orbs during spin-out; Sakuya hit branch guarded (pointers cleared); Alice rings white + script-83 alpha, 0x2A plain for t<40; Remilia rings from (0,0,0), scale mode 1, no script switch; team Remilia no 0x2F, Yuyuko 0x80602050; Yukari ring re-spawn → slot 4 script 88 (life 140) QUIRK; Yukari aimed enemy persistent; spell-name plate/cut-in/bonus line fully specced (12 §5.8; boss cdbg strips only drawn while player cut-in visible QUIRK); dissolve = forced bomb when GameFlags bits 7-8, end flash (3: 30,1,white), Youmu LS isLS 0.
+- WRITTEN: specs/answers_impl10.md, specs/answers_impl11.md; fixed 06, 07, 09, 10, 11, 12 (+§5.8), 13, 14, answers_impl9 §14. Symbols +15 (0x41FD20 renamed Enemy_HasParent), redump done.
+- PHASE 9 DONE.
+
+## Ranked next RE briefs (phase 9) — each <= 3 deliverables
+1. RUNTIME-2 (wine probe, cheap now): (a) ref PNGs for the things specced statically this phase — a bomb frame per
+   tint colour (tint on enemies/bullets check), Reimu LS blasts, Yukari LS squares, player spell-name plate +
+   cut-in, dissolve spell in practice of a last-spell card; (b) per-frame trace of one bomb (areas list dump:
+   pos/size/dmg/+0x3D) to diff against the port; (c) Yukari option chase trace.
+2. FRONTEND-DRAW (unchanged from phase 7 #2): main-menu list draws 0x47087F family, result-viewer handlers, score.txt.
+3. MIDI (phase 7 #3): SMF player 0x443C60..0x445440, volume/fade, dispatch in mode 2.
+4. MOP-UP: post-Present capture 0x443B60 (pause background), 16-bit colour mode, COVERAGE §5 orphans; boss
+   name glow copies (text.anm 7/8) font-size-0 rendering effect (12 §5.8 INFERRED); effect-level-0/1 parity quirk check at runtime.
+5. (optional) LZSS encoder exact output.

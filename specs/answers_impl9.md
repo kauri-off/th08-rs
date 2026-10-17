@@ -578,7 +578,7 @@ ascii.png strip y = 208 (sprites 0x88 + g): 0xD = '+', 0xE = '(', 0xF = ')'. The
 
 | case | p3 | p4 | colour | scale |
 |---|---|---|---|---|
-| each killed chain child | chain count n (÷3 when 0x17D6ED4 ≠ 0) | 0 | see below | manager scale |
+| each killed chain child | chain count n, but while bombing (0x17D6ED4 ≠ 0) n := n/3 **inside the per-child loop**, so it compounds (n/3, n/9, …) and also lowers later children's orb counts (answers_impl10 §2) | 0 | see below (chosen once from the original n) | manager scale |
 | boss chain kill | boss +0x3380 | 0 | 0xFFF0F00F | 2.0, then 1.0 restored |
 | single kill | 1 | 0 | 0xFFFFFFFF | — |
 
@@ -592,13 +592,15 @@ Chain child colour (n = `FUN_0041FD40` = number of chained children):
 | ≥ 10 | 0xFFFFFF80 |
 
 - The boss chain kill also spawns 2·(+0x3380) time orbs within 128 px.
-- The single-kill popup comes from a child with flag +0x2DA4 when its parent dies: gauge −1/12, +1 time
-  orb.
+- The single-kill popup comes from a chained child (+0x2DA4 = **parent pointer** ≠ 0, set by ECL ops 90–92 —
+  not a flag) killed on its own with reward ≠ 0: gauge −gauge/12, +1 time orb (answers_impl10 §2).
 
 `Popup_LargeStatic` 0x403600 (starts at age 88, i.e. a 2-frame life re-issued every frame), caller
 `Hud_DrawBoss`:
 - shown when not paused, not in the continue menu, bullets not frozen, and a boss exists;
-- screen position (2, 29), scale 1.0;
+- position (2, 29) + playfield origin = screen (34, 45), scale 1.0; there is **no** child-count test, so a
+  boss without children shows a yellow "+0" every frame (answers_impl10 §1, runtime ref
+  `spell54_boss_under_fire_f209.png`);
 - p3 = number of chained children of the boss, p4 = boss +0x3380;
 - colour 0xFFF0F00F.
 

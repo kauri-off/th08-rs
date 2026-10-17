@@ -465,8 +465,8 @@ addr,kind,name,signature,confidence,note
 0x0040bf00,func,Player_SpawnInvulnRing,,VERIFIED,effect 23 fixed slot 0
 0x00403200,func,Popup_Number,,VERIFIED,720 slots life 60
 0x00403330,func,Popup_NumberBig,,VERIFIED,slots 720..722
-0x00403460,func,Popup_Large,,INFERRED,
-0x00403600,func,Popup_LargeStatic,,INFERRED,
+0x00403460,func,Popup_Large,,VERIFIED,128 slots life 90 no motion
+0x00403600,func,Popup_LargeStatic,,VERIFIED,x += count*3.5; starts at age 88
 0x0045b1e0,func,ScreenEffect_DrawRect,,VERIFIED,colour EDX
 0x0040bc60,func,Bomb_DrawTint,,VERIFIED,EDX colour; stage tint ramp 60f
 0x0040c010,func,Bomb_Reimu,,VERIFIED,
@@ -632,7 +632,7 @@ addr,kind,name,signature,confidence,note
 0x004640e0,func,Anm_ProjectBillboard,,VERIFIED,project + size via camera right (g_Stage+0x63C4); optional callback
 0x00464400,func,Anm_DrawBillboardCb,,VERIFIED,
 0x0041fd40,func,Enemy_ChainChildCount,,VERIFIED,
-0x0041fd20,func,Enemy_HasDropOnParentDeath,,INFERRED,+0x2DA4 != 0
+0x0041fd20,func,Enemy_HasParent,,VERIFIED,+0x2DA4 (parent ptr) != 0
 0x00428720,func,Effect_ScriptDone,,VERIFIED,VM +0x220 == 0
 0x00421b60,func,GameMgr_GetStatsTime,,VERIFIED,stats +0x3C
 0x00421b80,func,GameMgr_GetTimeThreshold,,VERIFIED,stats +0x40
@@ -660,3 +660,17 @@ addr,kind,name,signature,confidence,note
 0x0043d7e0,func,Input_PollJoystickRaw,,INFERRED,joyGetPosEx for key-config capture
 0x0164d51c,global,g_JoyShotFocusCounter,,VERIFIED,u16
 0x0164d388,global,g_JoyCaps,,VERIFIED,JOYCAPSA (wXmin +0x24)
+0x00418130,func,GameMgr_IsPracticeCard,,VERIFIED,(id) spell practice && card == id
+0x00418180,func,GameMgr_IsPracticeCardInRange,,VERIFIED,(lo;hi) spell practice && lo<=card<=hi
+0x00437f5c,func,Hud_SetBossNamePlate,,VERIFIED,(n) front sprite n rect -> sprite 10
+0x00438046,func,Hud_SetStageNamePlate,,VERIFIED,per stage idx / practice card
+0x0041efc0,func,Enemy_ChainTail,,VERIFIED,last enemy via +8
+0x0041f000,func,Enemy_IsChainRoot,,VERIFIED,parent==0 && +8 != 0
+0x0042b2f0,func,Enemy_ChainUnlink,,VERIFIED,
+0x0040bab0,func,AnmMgr_TintOff,,VERIFIED,AnmMgr+4=0 colour 0x80808080
+0x0040bad0,func,AnmMgr_TintOn,,VERIFIED,(colour)
+0x00409160,func,Stage_RequestTint,,VERIFIED,store or average with pending request
+0x00416130,func,Gui_HidePlayerSpellName,,VERIFIED,text VM int 1 + plate int 2
+0x004664a0,func,Text_RenderToVmRight,,VERIFIED,right-aligned in sprite strip
+0x0044eb70,func,Option_RemiliaTeam,,VERIFIED,
+0x0044f930,func,Option_Yuyuko,,VERIFIED,effect 0x2F 0x80602050

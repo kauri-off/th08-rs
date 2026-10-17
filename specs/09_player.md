@@ -166,7 +166,7 @@ Function indexes (all values used by the 8 files are in range):
 | | 4 | 0x4505D0 | laser body (follows the option/emitter, length from timer) |
 | | 5 | 0x450840 | laser that follows option 0 with a 32-segment trail and creates damage rectangles |
 | draw | 1 | 0x450AD0 | trail draw |
-| hit | 1 | 0x450C50 | explosion: first hit → hitbox enlarged by sprite (48–128 px), vel = polar(Rng × π/2 − 3π/4, 6) (**RNG**); in hit state only every 2nd frame (4th during a spell card) damages, damage /= 3 (min 1), vel × 0.88 |
+| hit | 1 | 0x450C50 | explosion: first hit → hitbox enlarged by sprite (48–128 px), vel = polar(Rng × π/2 − 3π/4, 6) (**RNG**); in hit state only every 2nd frame (4th during a spell card) damages, damage /= 3 (min 1), vel × 0.88. The RNG draw happens on the first hit regardless of the sprite. After either branch, on non-filtered frames only: bullet timer % 6 == 0 → `Effect_Spawn(5, enemy pos, 1, 0xFFFFFFFF)` (so effectively every 6th frame, every 12th during a spell card) (answers_impl10 §8, VERIFIED) |
 | | 2 | 0x450EE0 | hit effect every 8th hit, never filters |
 
 ## 3. Input and movement (`Player_Move`)
@@ -307,7 +307,9 @@ if forced or bombs < 2 (count kept in +0xFEC, bombs := 0) else 2 bombs; counter 
 function sets the real value on its first frame via 0x40BE30); bomb calc fn runs immediately; **rank −200**;
 spell manager notified; counter += 6 (cap sht +8).
 Each frame while bombing: if timer < duration: bomb calc fn, tick. Else end: spell manager notified, speed
-multipliers 1, bombing := 0; index 4 also unfreezes, un-locks boss enemies and starts a screen effect.
+multipliers 1, bombing := 0; index 4 also clears GameFlags bits 7–8 and, for every boss slot, kills its chained
+children without reward, sets the boss life (+0x2DFC) to 0 and clears flag A bit 30; then a white flash (3: 30, 1,
+0xFFFFFFFF) (14 §2.17, answers_impl11 §14, VERIFIED).
 Gauge while bombing (indexes 0–3): odd index += 26000/duration per frame, even −= 26000/duration (integer).
 Indexes: 0 human bomb, 1 youkai bomb, 2 human last spell, 3 youkai last spell, 4 "dissolve spell".
 Bomb start helper 0x40BE30(name, duration, invulnerability, isLastSpell): declares the spell name, sets the

@@ -188,7 +188,9 @@ mode (copied) · 12–13 movement mode · 14–16 movement easing · 17 store bu
 173, 183; later phase) · 26 calls do not push the stack · 27 spell bonus fixed at 99 999 990 · 28 not deleted
 when leaving the screen · 29 skip movement step. (VERIFIED as bit usage; names of 23/25/30/31 INFERRED.)
 Flags B (e+0x3328): 1 (op 83) · 2 sprites from stage enemy ANM (`stgNenm.anm`) instead of `enemy.anm` ·
-3 death latch · 4–5 low-life warning level · 6 cannot die · 7 (native 12) · 8 (op 182).
+3 death latch · 4–5 low-life warning level · 6 cannot die · 7 paused (native 12: `EnemyMgr_Calc` does not run the enemy's ECL and holds its script time with
+`Timer_Decrement(e+0x2E14)`; the same skip happens when flags A bit 30 is set and the player is bombing or player byte
+0x17D5EF8 ≠ 0; answers_impl10 §4) · 8 (op 182).
 
 ## 5. Script VM
 
@@ -439,7 +441,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 173 | flagA30 | i b | bit 30 | 118 |
 | 174 | aura | i n | (re)create aura effect 0x20+n at final pos | 38 |
 | 175 | spawn_disable | i n | global 0xF54E2C (timeline spawns suppressed if ≠ 0) | 5 |
-| 176 | last_spell | (ignored arg) | sets last-spell game flags in 0x164D0B4 depending on stage/spell id; flag A bit 30 | 41 |
+| 176 | last_spell | (ignored arg) | GameFlags (0x164D0B4): clear bits 7, 8, 13, set bit 7; also bit 13 when (not spell practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); sets flag A bit 30. `Spell_Start` copies bit 7 into spell flag bit 5 (answers_impl10 §7, VERIFIED) | 41 |
 | 177 | set_hud_life | i n | e+0x2E04 | 6 |
 | 178 | move_rand2 | i dur, i ease, f spd | like 67, with 1/4 chance of a fully random angle (§8.3) | 4 |
 | 179 / 180 | hud179 / hud180 | — | HUD functions (later phase) | 2 / 0 |
@@ -646,7 +648,7 @@ decoded strings.
 ### 11.1 Spell flags and the end of a card (`Spell_End` 0x4161B0, op 123) — VERIFIED
 Spell object (g_Gui 0x4EA670) flag word: bit 0 active, bit 2 capture still possible (set at start; cleared by a
 bomb started during the card 0x44CBA0, by the player's real death 0x44D150, by a timeout 0x42BC50), bit 3 timed
-out (0x42BC50, from `Enemy_CheckTimeout`), bit 5 last spell, bit 7 "bomb started during this card" (bomb damage
+out (0x42BC50, from `Enemy_CheckTimeout`), bit 5 last spell (:= GameFlags bit 7 at `Spell_Start`, i.e. op 176 ran before the card; failing such a card shows message 6 "Last Spell Failed", answers_impl10 §7), bit 7 "bomb started during this card" (bomb damage
 allowed, §10.1), bit 8 capture payout pending, bit 9 captured, bit 10 name-only declaration (set by native 22 `Spell_ShowNameOnly` 0x415D10, which also
 clears bits 0 and 4 and shows the name banner; the bonus/history display is skipped; used by Mokou's
 「リザレクション」 in ecldata8/8sp), bit 11 bonus frozen (op 184 `Spell_SetBonusFrozen` 0x41F0E0 = n & 1; no
@@ -675,7 +677,7 @@ Called with the enemy and the instruction; `arg` = second operand (instr +0x10).
 | 8 | familiar ring: chain members with the same tag (var 10038) get an index (var 10037) and count (var 10018, change flag var 10017); each turns its orbit angle toward leader + index·2π/count by 2 % of the difference |
 | 9, 11, 25 | wide horizontal player-hit rectangles (590 × 160/128, 240/192, 288/224) at the boss with a 12-frame warning phase |
 | 10 | flash (type 3: duration 30, 5 repeats, 0x40FFFFFF) + shake (type 7: amplitude 4, ramp 120, hold 190, out 60) (13 §3) |
-| 12, 14 | toggle bullets whose flags match var 10000 between two states (sprite ±16, speed from var 10016/10017); 12 also toggles chain children (flags B bit 7) and stage VMs' interrupt 1/2 by var 10001 |
+| 12, 14 | toggle bullets whose flags match var 10000 between two states (sprite ±16, speed from var 10016/10017); 12 also walks the calling enemy's child chain (e+8 = next: parent+8 → first child → child+8 …, e+4 = prev): var 10001 == 0 → set flags B bit 7 on every chained child and send interrupt 2 to the two spell-background VMs (0x4E4B68 / 0x4E4E0C); else clear bit 7 and send interrupt 1 (answers_impl10 §4, VERIFIED) |
 | 13 | stage tint colour 0xFFC03030 |
 | 15 | shake (type 7: amplitude 16, ramp 20, hold 20, out 20) (13 §3) |
 | 16 | bullets with flag 0x100000 within 64 px of a child whose var 10038 == 0 set its var 10038 = 60 and copy var 10019 |

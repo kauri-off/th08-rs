@@ -36,13 +36,18 @@ rect(pos, w, h, …); "life 0" = exists for one frame); effects = 13 §2.6; scre
 plain VM slots (player +0x11E0 + i × 0x2A4 = object 0 +0x1B8 …) by Marisa and Yukari.
 
 ### 1.2 `Bomb_Start(name, duration, invulnerability, isLastSpell)` (first frame of every bomb)
-Spell-name banner (`Gui_ShowPlayerSpellName`, SE 0xE); player +0xFE4 = duration; player state 3 with
+Spell-name banner (`Gui_ShowPlayerSpellName`, SE 0xE; EDX = cut-in face 0 human / 1 youkai / −1 dissolve; isLastSpell
+only selects the cdbg strip sprite, and Youmu LS passes 0 — QUIRK; 12 §5.8); player +0xFE4 = duration; player state 3 with
 invulnerability timer; invulnerability ring (effect 23, fixed slot 0, 13 §2.6); all bomb objects state 0; all
 items attracted; bomb origin (+0xB8828) = p. (09 §7 for the surrounding start/end logic.)
 
 ### 1.3 Background tint (0x40BC60, called first by every bomb draw function, EDX = colour C)
 Per channel: T < 60 → 128 + (C − 128)·T/60; T ≥ duration − 60 → 128 + (C − 128)·(duration − T)/60;
-else C. Alpha 0x80. The result goes to the stage tint (0x409160, 06) and a stage flag (0x4EA49C) is set.
+else C. Alpha 0x80. It first turns the global tint off (0x40BAB0), then submits the result as the stage tint
+request (`Stage_RequestTint` 0x409160) and sets the stage flag +0x646C (0x4EA49C) = "a bomb drew this frame",
+which stops the next `Stage_DrawHigh` from switching the tint off: the tint applied by the next frame's
+`Stage_DrawLow` therefore also covers the background effects, spell background, prio-8 enemies and the
+flying player bullets, not only the stage layers (06 §10.2, answers_impl11 §1, VERIFIED).
 | bomb | C | bomb | C |
 |---|---|---|---|
 | Reimu | 0x80404040 | Reimu LS | 0x802020D0 |
@@ -74,12 +79,18 @@ write the VM interpolation fields directly (05 §2/§6).
   both areas off; C circle(**p**, r 64, dr 4.267, life 30); D circle(orb, r 64, dr 12.8, dmg 500, life 12,
   period 4, unlimited); effect 6 ×8; state 2; VM interrupt 1; SE 0xF @orb; shake (1: 16, 8, 0). (The code
   computes velocity/8 into a temporary and discards it — the orb keeps its speed. QUIRK)
-- T ≥ 40 every frame (state ≠ 0): pos += velocity·gs. State 1: areas follow the orb. State 2: counter += 1 on
-  advanced frames, freed after 30.
+- T ≥ 40 every frame (state ≠ 0): pos += velocity·gs.
+- Every frame, any T (also during the spin-out T < 40), after the movement: state 1 → both attached areas (C r 96
+  and D r 64) are moved to the orb's current position (so C does not stay at p); state 2: counter += 1 on
+  advanced frames, freed after 30; VM run (answers_impl11 §3, VERIFIED).
+- Hit effect: only the 16 D r 64 orb circles have +0x3D ("no hit effect") set; the impact circles (dmg 500)
+  produce the normal spark (answers_impl11 §2, VERIFIED).
 - Draw: orbs 0–15 (Draw2DSnap at pos + offset + playfield origin, z 0).
 
 ### 2.2 Reimu LS — 神霊「夢想封印　瞬」 (0x40C910 / 0x40D010), dur 200, invuln 260
-- T = 0: same 16 orbs and areas as 2.1; blast index (+0xFF0) = 0; SE 0xD.
+- T = 0: effect 12 at p (0xFF4040FF) and the same 16 orbs and areas as 2.1 (D orb circles with +0x3D);
+  blast index (+0xFF0) = 0; SE 0xD. The impact circles (dmg 25) and the blasts (dmg 400) do **not** set +0x3D
+  (answers_impl11 §2/§4, VERIFIED).
 - Every frame, state-1 orbs: angle ±π/60 as above, pos = centre + (sin, cos)·radius; while T < 40:
   radius += 2.4 (even) / 1.2 (odd). Orb i explodes when T ≥ duration − 40 − i: areas off; C circle(p, r 64,
   dr 4.267, life 30); D circle(orb, r 64, dr 8.533, dmg 25, life 15, period 5, max 50); effect 6 ×8; state 2
@@ -104,8 +115,11 @@ timer +0x6EC). Draw: tint only.
   (1: 16, 8, 0); flash (3: 8, 1, 0x8FFFFFFF). T = 100, 110, 120, 130: effect 0x2D colours 0xFFFFFFFF,
   0xFFFFD0D0, 0xFFFF8080, 0xFFFF0000. T = 150: flash (3: 8, 1, 0x8FFFFFFF), shake (1: 16, 8, 0), SE 0x19.
   T = 209: option state := 1, option timer 0 (the doll re-initialises).
-- Ring effects 0x2A–0x2D (k = 1 − (1 − t/40)², so they expand for 40 frames then collapse; life 80):
-  0x2A wavy ring radius 256k, 64 segments, 5 waves, width 8 (t ≥ 40: amplitude 64k, width +2/frame);
+- Ring effects 0x2A–0x2D (k = 1 − (1 − t/40)², so they expand for 40 frames then collapse; life 80): all
+  spawned with colour 0xFFFFFFFF (also in 2.4, except the four coloured 0x2D); script 83 (etama sprite 224, normal
+  blend) sets alpha 0 → 255 over 8 frames, holds, alpha → 0 from t = 50 over 30, `hide_stop` at 80 (freed);
+  0x2A wavy ring radius 256k, 64 segments, 5 waves, width 8; for t < 40 the amplitude (+0x32C) is never
+  written and stays 0 from the ring init → a **plain** ring; t ≥ 40: amplitude 64k, width +2/frame;
   0x2B / 0x2C ellipses (semi-axes 256k × 128k) rotated +π/4 / −π/4, 48 segments, width 8 (t ≥ 40: +1.5/frame);
   0x2D octagon (8 segments) radius 192k, width 8.
 
@@ -147,15 +161,19 @@ alpha 0.)
   Knives k and k + 48 appear together, two every second frame.
 - Each active knife: age < 30 or age > 69: at age = 70 → if the homing target exists (x > −100) angle =
   atan2(target − pos); speed := 14. speed += accel; velocity = polar(angle, speed). 30 ≤ age ≤ 69: angle +=
-  spin, velocity 0 (hover and spin). Areas follow; while age < 120: if its D area has dealt damage → VM
-  script 0x17, effect 0 (0xFFFF80FF), areas off, SE 0x2B @knife; age ≥ 120: areas off. pos += velocity (not
+  spin, velocity 0 (hover and spin). Only while the knife still holds its D-area pointer: areas follow;
+  age < 120: if its D area has dealt damage (+0x30 > 0) → VM script 0x17, effect 0 (0xFFFF80FF), both areas
+  off **and both pointers cleared**, SE 0x2B @knife; age ≥ 120: areas off, pointers cleared. The hit branch
+  therefore runs at most once per knife (answers_impl11 §5, VERIFIED). pos += velocity (not
   scaled by gs); VM run; age ticks. Knives are never freed before the next bomb.
 - Draw: active knives 0–95, rotation z = angle, Draw2DRot.
 
 ### 2.8 Sakuya LS — 幻葬「夜霧の幻影殺人鬼」 (0x4103F0 / 0x410AC0), dur 320, invuln 350
-As 2.7 but 128 knives; shake (1: 4, 1, 0) only once at T = 0; window 20 ≤ T < 148; knife k at
+As 2.7 but 128 knives; shake (1: 4, 1, 0) only once at T = 0 (SE 6 is still played every window frame that
+does not return early; effect 20 at p is kept and follows p while T ≤ 60 as in 2.7); window 20 ≤ T < 148; knife k at
 T = (k % 64)·2 + 20 with angle = wrap(k·2π/64 − π) and VM script 0x14; damage 30; at age 70 additionally
-effect 0x2E (ring: radius +8/frame, 12 segments, width 32) at the knife; on hit: every knife with k % 3 == 0
+effect 0x2E (ring: radius +8/frame, 12 segments, width 32; script 84: alpha 255, from t = 8 → 0 over 7,
+`hide_stop` at 23 → freed after 23 frames; the update never frees it) at the knife; on hit: every knife with k % 3 == 0
 also flashes (3: 2, 1, 0x208080FF); hit script 0x15. Draw function only draws knives 0–95 (knives 96–127
 are invisible but still damage — QUIRK).
 
@@ -166,15 +184,18 @@ The bats are the 4 options; their anchors (option +0x2B0 = player +0x6BC + k·0x
   A2 = (p.x, p.y + 32), A3 = (p.x + 32, p.y).
 - T ≥ 60: at T = 60 speed multipliers 2 and interrupt 2 to the four option VMs; anchors := A_k every frame;
   C circle(p, r 96, life 0). Advanced frames with T % 10 == 0: ring effect 0x35 in slot 4 + (n % 4), 32
-  segments, 4 waves; pos interpolation 30 frames mode 4 to (192, R·128, 0) (radius → 192, wave amplitude
-  random, **RNG**); width constant 64; alpha 255 → 0 mode 3; colour white → red; n += 1; SE 0x11 @p.
+  segments, 4 waves; pos interpolation 30 frames mode 4 from (0, 0, 0) to (192, R·128, 0) (radius 0 → 192,
+  wave amplitude 0 → random, **RNG**); scale interpolation 30 frames mode 1 (64, 0) → (64, 0) (width constant
+  64); alpha 255 → 0 mode 3; colour white → 0xFFFF0000 mode 0; VM run once; n += 1; SE 0x11 @p. Always the
+  type's own script (88): no odd-n script switch, unlike Marisa LS (answers_impl11 §8, VERIFIED).
   While the shot timer ≥ 5 (shooting): C rect(p, 96 × 800) and C rect(p, 800 × 96), life 0 (a cross).
   T = 239: the 4 options re-initialise (state 1, timers 0).
 - No damage areas: the damage comes from the shot table — `ply02as.sht` levels 6/7 are used while a
   Remilia bomb has run ≥ 60 frames (09 §2.1).
 
 ### 2.10 Remilia LS — 紅魔「スカーレットデビル」 (0x40F570 / 0x40FCB0), dur 280, invuln 320
-Identical to 2.9 except speed multipliers 3 at T = 60, ring width interpolates 64 → 128, options
+Identical to 2.9 except speed multipliers 3 at T = 60, ring scale interpolation mode 1 (64, 0) → (128, 0) over
+30 frames (width 64 → 128; same start pos (0, 0, 0), no script switch), options
 re-initialise at T = 279.
 
 ### 2.11 Youmu — 人符「現世斬」 (0x411B10 / 0x412300), dur 220, invuln 270
@@ -206,7 +227,11 @@ Return dash 150 ≤ T < 180; speed 1 at T = 180. Draw as 2.11 but the rectangle 
   (angle, 1, 4), angle = π/4, 3π/8, π/2, 5π/8 (slot 4 at the start position, the others at p); slots 5–7 get
   VM scripts 0x59 / 0x5A / 0x5B (slot 4 keeps 88). SE 0xD at T = 0. Draw: tint only.
 - Effect 0x24 init (0x411720) re-spawns its own fixed slot as a type-0x23 ring (angle = param.x, radius
-  = param.y, width = param.z) and then sets update 0x4114E0, 44 segments, width 4.
+  = param.y, width = param.z) and then sets update 0x4114E0, 44 segments, width 4. The re-spawn leaves the slot
+  with type 0x23 and **script 88** (type 0x23's); slots 5–7 then get 0x59–0x5B from the bomb.
+- Lifetime: the update always returns 1 (never frees); the effect is freed when its VM reaches `hide_stop`:
+  scripts 88–91 (etama entry 2 scripts 12–15): additive, alpha 0 → 255 over 20, at t = 80 → 0 over 60, hidden
+  and freed at **t = 140** (the side rectangles keep their own area lifetimes) (answers_impl11 §11, VERIFIED).
 - Update 0x4114E0 (shrinking square): t < 40: k = 1 − t/40; width = 88 − 2t; radius = 192 − 384k²; segments
   −= 1 per frame (44 → 4: the ring becomes a square). At t = 40: flash (3: 8, 1, 0x8FF08080);
   s = radius·0.70711, a = angle + π/4; for each of 4 sides: c = centre + polar(a, s); D rect(c, 8s × 4·width,
@@ -218,7 +243,10 @@ Return dash 150 ≤ T < 180; speed 1 at T = 180. Draw as 2.11 but the rectangle 
   object 0 position + offsets, z 0.01 / 0).
 - At T = 0, 10, 20, 30: C circle(p, r 100, dr 1, life 100 / 40 / 100 / 100); D circle as 2.13; effect 0x25 in
   slots 4–7 at the **bomb start position**, same angles; scripts 0x5D / 0x5E / 0x5F for slots 5–7.
-- Effect 0x25 init (0x411A80): ring type 0x23, update 0x4117B0, 54 segments, width 6.
+- Effect 0x25 init (0x411A80): ring type 0x23, update 0x4117B0, 54 segments, width 6. As in 2.13 the re-spawn
+  turns slot 4 into script **88** (life 140, QUIRK: not 0x5C) while slots 5–7 get 0x5D–0x5F (etama entry 2
+  scripts 17–19: alpha 0 → 255 over 20, at t = 160 → 0 over 60, freed at **t = 220**). The update never frees
+  (answers_impl11 §11, VERIFIED).
 - Update 0x4117B0: angle += −π/80 (even slot) / +π/80 (odd) every frame; t < 50: k = 1 − t/50, width =
   88 − 80t/50, radius = (slot − 4)·32 + 192 − ((slot − 4)·32 + 384)·k², segments −= 1; at t = 50: shake
   (1: 16, 8, 0), flash (3: 8, 1, 0x8F6060F0), four side rectangles as 2.13 with D dmg 60 life 100 period 2,
@@ -247,6 +275,15 @@ examined object), shake (1: 30, 8, 0), flash (3: 8, 1, 0xE0F0F0F0). Draw: all 12
 fixed slot 4 (0xFF4040FF): 64 segments, radius 8, width 15, 6 waves, VM pos interpolation over 90 frames
 (30 in spell practice) mode 5 from (8, 64) to (128, 0) (radius 8 → 128, amplitude 64 → 0); SE 0xD; speed
 multipliers 0; flag A bit 6 of all 8 boss slots (0xF54CC0[0..7]) cleared. End handling in 09 §7.
+Trigger (answers_impl11 §14, VERIFIED): bomb index 4 is chosen at bomb start whenever GameFlags (0x164D0B4) bits
+7–8 ≠ 0, i.e. while a boss **last spell** runs (ECL op 176 sets bit 7) or after one was captured (bit 8, kept
+until the next op 176 / this spell's end / stage start). In that state a bomb press only plays SE 0x29 (also in
+spell practice, bit 14), so the dissolve spell starts only as the **forced bomb** of a hit (`Player_Die`: special
+mode → counter 2, +6 = 1). Spell practice of a last-spell card gives the 40/30-frame variant. `Bomb_Start` is
+called with EDX = −1, so no player cut-in is (re)started and the cdbg strips are not drawn (12 §5.8); the card
+name still appears. End (`Player_UpdateBomb`, index 4): GameFlags bits 7–8 cleared; for each boss slot:
+`Enemy_KillChildren(boss, 0)`, boss life (+0x2DFC) := 0, flag A bit 30 cleared; flash (type 3: 30 frames,
+1 repeat, colour **0xFFFFFFFF**).
 
 ## 3. Options (familiars)
 Generic part (09 §5): option = 0x2F4 bytes at player +0x40C + k·0x2F4 (VM, +0x2A4 pos, +0x2B0 anchor,
@@ -262,9 +299,9 @@ state 3 and team 3 slot 2 becomes 0x44F2D0 (trail reset to p).
 |---|---|---|
 | 0x44E3A0 | Yukari (shot 0 focused, 5) | §3.1 |
 | 0x44EA40 | Alice (shot 1 focused, 7) | init: script 0x1D. Each frame while not bombing: pos = p − (0, 32) (bombs move it, §2.3). Leaving: pos = p − (0, 32) |
-| 0x44EB70 | Remilia team ×4 | 09 §5 (anchors fixed at spawn) |
+| 0x44EB70 | Remilia team ×4 | init: script 0x18; anchor = p + offset with the solo offsets (0 (−30, −16), 1 (−10, −32), 2 (+10, −32), 3 (+30, −16)), then **fixed**; orbit angle 0, π, 0, π. Each frame: option timer ≥ 12 → orbit += +π/120, −π/90, +π/90, −π/120 (by index); pos = anchor + polar(orbit, 8). No colour change, **no effect 0x2F** (answers_impl11 §9, VERIFIED) |
 | 0x44EE70 | Remilia solo ×4 | §3.2 |
-| 0x44F930 | Yuyuko ×2 (shot 3 focused, 11) | 09 §5 |
+| 0x44F930 | Yuyuko ×2 (shot 3 focused, 11) | init: script 0x15; anchor = p; orbit 0 (index 0) / −π (index 1). Each frame: target = p − (32, 0) (index 0, orbit += π/60) or p + (32, 0) (index 1, orbit −= π/60); anchor += (target − anchor)·0.09; pos = anchor + polar(orbit, 6), z 0; effect 0x2F at pos, colour **0x80602050**, every frame (answers_impl11 §9, VERIFIED) |
 | 0x44F2D0 | Youmu's half (team 3 unfocused) | §3.3 |
 | 0x44F5E0 | Youmu solo (slot 2) | §3.3 |
 
@@ -277,6 +314,13 @@ interrupt 2, sub 2, scale.x negative (mirrored); v.x < 0: interrupt 2, sub 1, sc
 v.x = 0: interrupt 1, sub 0, scale.x positive; v.x of the other sign: interrupt 2 and switch.
 Sub 3 (attack): while an aimed enemy exists: same smoothing toward enemy pos (+0x2D88) + (0, 32) (y ≥ 32);
 leaves to sub 0 (interrupt 1, aimed := 0) when not shooting and the shot button is released, or no enemy.
+Aimed enemy (player +0xE2ABC = 0x18B89B4, VERIFIED, answers_impl11 §12): a persistent pointer, never re-picked
+from scratch. Each frame `EnemyMgr_Calc`, for every live enemy with flag A bits 4, 5, 11 clear and (bit 31 clear
+or not bombing), replaces it when |enemy final x − p.x| < 64 and the enemy has no parent (+0x2DA4 = 0) and
+(pointer = 0 or enemy **final** y (+0x2D8C) < aimed enemy's **base** y (+0x2D38); mixed fields, QUIRK). It is
+cleared only when the aimed enemy's slot is found inactive or freed (`Enemy_Free`), or by the option itself
+(sub-states 0–2 when not attacking, leaving sub 3). So in sub-state 3 Yukari keeps chasing the same enemy
+after it leaves the 64-px column, unless a higher enemy enters the column.
 
 ### 3.2 Remilia solo (0x44EE70)
 Init: script 0x18; anchor = p + offset, offsets by index: 0 (−30, −16), 1 (−10, −32), 2 (+10, −32),

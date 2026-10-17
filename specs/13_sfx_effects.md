@@ -207,10 +207,10 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 30, 31 | 59, 60 (10) | — | enemy mode reaction (→ human 0x80803030 / → youkai 0x80303080) |
 | 32–34 | 48–50 (10, interrupts) | — | enemy auras (`Effect_SpawnHigh` 0x20 + n, ECL op 174 / child ops) |
 | 35, 39, 49, 52, 59 | 88, 76, 86, 77, 78 | ring (init 0x4272E0: 3 segments ×2 vertices buffer, custom draw; update 0x427990: radius := VM scale.x→width, VM pos.x→radius) | 39 spell-card start (slot 1), 52 spell start in special mode, 59 player death ring (slot 11, colour 0xFFF0404F), 49 Reimu LS |
-| 36, 37 | 88, 92 | ring, bomb-owned update/init (Yukari 0x4114E0 / 0x411720 / 0x411A80) | Yukari boundaries |
+| 36, 37 | 88, 92 | ring, bomb-owned update/init (Yukari 0x4114E0 / 0x411720 / 0x411A80); the init re-spawns the slot as type 0x23 (script 88, life 140) and the bomb overrides slots 5–7 (0x59–0x5B life 140, 0x5D–0x5F life 220); updates never free, the VM `hide_stop` does (answers_impl11 §11) | Yukari boundaries |
 | 40, 55 | 81, 87 | ring, update 0x4279D0 (segments := I0, waves := I1, width := scale.x, radius := pos.x, amplitude := pos.y, angle := rot z, phase := rot y) | Alice bomb (40), Reimu LS (55) |
 | 41 | 82 | ring, update 0x40EB50 (48 segments, width 32, radius 64 / 72 alternating per frame) | no spawn site found (INFERRED unused) |
-| 42–46, 48 | 83, 83, 83, 83, 84, 85 | rings with bomb-owned updates (0x40E040–0x40E2D0 Alice, 0x410BB0 Sakuya LS, 0x413070 Youmu) | 14 §2 |
+| 42–46, 48 | 83, 83, 83, 83, 84, 85 | rings with bomb-owned updates (0x40E040–0x40E2D0 Alice, 0x410BB0 Sakuya LS, 0x413070 Youmu); the Alice/Sakuya updates always return 1, so 42–45 are freed by script 83's `hide_stop` at 80 and 46 by script 84's at 23 (answers_impl11 §6/§11) | 14 §2 |
 | 50 | 80 | ring with 32 segments, ends after 120 frames | dissolve spell (slot 4) |
 | 51, 63 | 73, 74 | 3D background particles (RNG 8 draws, answers_impl9 §4; view-cone cull only); when the boss (0xF54CC0[0]) has flag bit 3 the pos offset tracks the boss position 10%/frame, consumed by the screen-space draw helper (answers_impl9 §8); type 51 also tints colour2 by the stage overlay colour | ECL op 139 (stage-specific) |
 | 53, 54 | 88 | ring update 0x427AE0: frees itself when VM alpha becomes 0 | Marisa sparks (slots 4+) |
@@ -280,6 +280,14 @@ LSB first: [0xF, p4 digits, 0xE,] p3 digits, 0xD; ascii glyphs 0xD '+', 0xE '(',
 "+p3(p4)"; scale from the manager; sprite = glyph + 0x88), life 90 frames (0x403600 starts at age 88 = a
 two-frame display). Callers: `Enemy_KillChildren` (chain kills, boss chain, single) and `Hud_DrawBoss`
 (answers_impl9 §14). Small-popup callers: items (08 §8.5), cancel bonuses (08 §6), kill_all.
+Large popup details (answers_impl10 §1, VERIFIED): spawn pos = given pos + playfield origin (32, 16); count
+(+0x31) = glyphs + 1; `Popup_LargeStatic` adds count·3.5 to x (so its text starts at pos.x + 32); 128 slots
+round robin (+0x8298); scale copied from manager +0x826C/+0x8270 into slot +0x28/+0x2C at spawn.
+Per frame (`Ascii_Calc`, same pause/continue/bit-10 gating as small popups): **no motion** (y unchanged), age
+ticks, freed at age ≥ 90. Draw (0x405420, after the small popups): x0 = pos.x − count·3.5 (unscaled), glyphs
+drawn from the last stored to the first, advance 7·scale.x, anchor top-left (VM +0x548 anchor 0x1800), sprite
+0x88 + glyph (no age-based sprite change), RGB from the colour, alpha **replaced** by the player-distance
+rule of the small popups (0x50 / ramp / 0xD0).
 
 ## 5. Spell-card background
 `Spell_Start` calls `Stage_StartSpellBg` 0x415CE0 (stage +0xB24 = 1, +0xB28 = 0) and sets the stage's spell

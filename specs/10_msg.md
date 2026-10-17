@@ -95,9 +95,14 @@ Speakers 0/1 are the player side (left), 2/3 the opponent side (right).
 
 1. Clear all dialogue state except the file pointer (0x55C dwords from +0x21814).
 2. Stage-specific hooks when `n == 0`:
-   - stage 5 (idx 5): a HUD effect call 0x437F5C(0x16) (INFERRED: stage-specific HUD visual);
-   - 6A (idx 6): stage overlay script base `g_Stage+0xB34 (0x4E4B64) = 2`;
-   - 6B (idx 7) and Extra (idx 8): swap face files of slots 2 and 3, overlay base = 2, and 0x437F5C(0x18 / 0x19).
+   - stage 5 (idx 5): `Hud_SetBossNamePlate(0x16)` 0x437F5C — copies `front.anm` sprite 0x16's rect into
+     sprite 10 (the boss name plate, 12 §5.x), i.e. the plate switches from Tewi (0x15) to **Reisen** (0x16);
+   - 6A (idx 6): spell-background script base `g_Stage+0xB34 (0x4E4B64) = 2` — the two spell-background VMs
+     (0x4E4B68 / 0x4E4E0C) then use slot-9 scripts 2, 3 instead of 0, 1 (`Spell_Start` sets script +0xB34 + i);
+   - 6B (idx 7) and Extra (idx 8): swap face files of slots 2 and 3 (0x4ECC9C ↔ 0x4ECCA0), spell-background base
+     = 2, and plate 0x18 (**Kaguya**) / 0x19 (**Mokou**).
+   (answers_impl10 §5–6, VERIFIED. Other writers of +0xB34: `EffectMgr_OnRegister` = 0, `StageStart` = 2 in
+   spell practice, 06/answers_impl10 §5.)
 3. Stage 5, `n == 10` → final-route resolution (the ECL asks for entry 10 after the stage-5 boss):
    - if practice flag `stats+0x29 != 0`: n = 1, choice = 0;
    - else if replay playback (GM flag bit 3): route byte from the replay header (`replay+8 → +0x11C`):

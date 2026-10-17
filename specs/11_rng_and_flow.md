@@ -141,11 +141,11 @@ counters not advanced during dialogue.
 | 3 | replay playback | VERIFIED |
 | 4 (0x10) | ending-eligible / "cleared without running out of night" (set on final clear, cleared on time-out endings) | VERIFIED writes / INFERRED meaning |
 | 5–6 | stage-end state: 0 none, 1 waiting-for-load (after a clear), 2 clear triggered, 3 clear handled | VERIFIED |
-| 7–8 | last-spell / spell-capture related (ECL op 176, spell end) | INFERRED |
+| 7–8 | 7 = a boss "last spell" is running (ECL op 176 clears 7/8/13 and sets 7); `Spell_End`: captured → bits 7–8 := 8 only, failed → cleared (+ "Last Spell Failed" if spell flag bit 5); bit 8 then persists until the next op 176, the dissolve-spell end or `StageStart` (clears 7, 8, 13). While either is set a bomb press only plays SE 0x29 and a hit forces the dissolve spell (09 §7, answers_impl10 §7, answers_impl11 §14) | VERIFIED |
 | 9 (0x200) | stage-clear bonus panel shown (msg op 9) | VERIFIED |
 | 10 (0x400) | player death in progress (blocks some effects) | VERIFIED write (0x44AB40) |
 | 11–12 | final route choice (0 → 6A, else → 6B) | VERIFIED |
-| 13 (0x2000) | set together with bit 7 by ECL in 6A/6B | VERIFIED write |
+| 13 (0x2000) | set by op 176 together with bit 7 when (not practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); with a boss present `EnemyMgr_Calc` adds a large player-damage box (answers_impl10 §7) | VERIFIED |
 | 14 (0x4000) | spell practice | VERIFIED |
 | 15–17 | unlock states from the score file (Extra/Phantasm …) | VERIFIED source / INFERRED meaning |
 

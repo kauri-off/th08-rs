@@ -85,7 +85,7 @@ Most of the 45 KB is covered by behaviour, not by address: ECL natives 07 §12, 
 | Stage scripts / enemies (ECL) | 07 | COVERED | `Ecl_Run` 0x4184B0, `EclTimeline_Run` 0x42A8A0, `EnemyMgr_Calc` 0x42C660 |
 | ECL natives 0–31 | 07 §12, answers_impl9 §6 | COVERED | table 0x4C6CB0 |
 | Familiars (enemy, native 8 / chains) | 07 §10.5, §12 | COVERED | `EclNative_8` 0x4244F0 |
-| Bosses, spell cards, capture/bonus, Last Spell | 07 §11, 13 §5, answers_phase6 §2 | COVERED | `Spell_Start` 0x4152A0, `Spell_End` 0x4161B0, `Spell_Calc` 0x416B90, `Spell_Draw` 0x4178C0 |
+| Bosses, spell cards, capture/bonus, Last Spell | 07 §11, 13 §5, answers_phase6 §2; name plates / cut-ins / bonus line 12 §5.8; last-spell flags and dissolve spell 11 §2.1, 14 §2.17 | COVERED | `Spell_Start` 0x4152A0, `Spell_End` 0x4161B0, `Spell_Calc` 0x416B90, `Spell_Draw` 0x4178C0 |
 | Bullets, lasers, cancels | 08 §1–7 | COVERED | `BulletMgr_Calc` 0x431240, `PlaceBullet` 0x42F5F0, `Bullet_ApplyExCmds` 0x42FFC0, laser 0x430F20 |
 | Items, point value, extends, power | 08 §8, 11 §5 | COVERED | `ItemMgr_Spawn` 0x4400A0, `ItemMgr_Calc` 0x440500 |
 | Player: movement, focus, shots, death, deathbomb | 09 | COVERED | `Player_Move` 0x44AEC0, 0x450F60, `Player_Die` 0x44AB40, `Player_DamageAgainst` 0x451670 |

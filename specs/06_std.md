@@ -258,7 +258,11 @@ viewport, and sets fog start/end to 1000/2000.
 1. Reset the sparkle-point list (16 × vec3 at +0x6480 = 0, count = 0). Viewport = playfield (above).
    Flush/reset ANM render-state caches.
 2. Optionally (+0xB2C) clear the playfield to black + z once.
-3. Global ANM tint (AnmManager+4/+0) is set if requested (+0x646B), request reset (tint bytes 0x80).
+3. Global ANM tint (AnmManager+4/+0) is turned on (`AnmMgr_TintOn` 0x40BAD0, colour +0x6468) if a request
+   exists (alpha byte +0x646B ≠ 0); the request is then reset to 0x00808080 (alpha 0). Requests come from
+   `Stage_RequestTint` 0x409160 (the bomb tint 0x40BC60, 14 §1.3): an empty request takes the colour, a second
+   request in the same frame averages each channel with the stored one. So the tint drawn in frame N is the
+   request made by the bomb draw of frame N − 1 (VERIFIED, answers_impl11 §1).
 4. Unless stage state +0xB24 ≥ 2 or a HUD condition: draw VM A and VM B (draw mode "2D rotated" 05 §9, if
    sprite index > 0), stage 6B special effect.
 5. Clear: if clear colour alpha == 0xFF → Clear(target + z, colour, z = 1); if clear colour == 0 → Clear(z only);
@@ -267,7 +271,19 @@ viewport, and sets fog start/end to 1000/2000.
 7. Unless +0xB24 ≥ 2 or the HUD condition: `Stage_DrawLayer(0)`, `Stage_DrawLayer(1)`.
 
 `Stage_DrawHigh` (prio 7): layers 2 and 3 (same condition); fog off; effects draw; ZFUNC = ALWAYS; extra
-spell-background VMs when +0xB24 > 0; disable "stage camera" render path; default 2D camera; viewport.
+spell-background VMs when +0xB24 > 0; disable "stage camera" render path; default 2D camera; viewport; at the
+end: if the "bomb drew last frame" flag +0x646C (0x4EA49C) is 0 → global tint off (`AnmMgr_TintOff` 0x40BAB0:
+AnmManager+4 := 0, colour 0x80808080); then +0x646C := 0 and +0x647C := 0.
+Tint lifetime while a bomb runs (VERIFIED, answers_impl11 §1): `Bomb_DrawTint` sets +0x646C := 1 at player
+draw prio 9 every bomb frame, so at the next frame's `Stage_DrawHigh` the tint is **not** switched off. It stays
+on for everything drawn until something turns it off: stage layers 0–3, background effects (list B) and the
+spell-background VMs, the prio-8 enemy pass (layers 0–1) and the player's flying bullets (prio 9, drawn before
+the bomb draw fn) are tinted; `Bomb_DrawTint` itself turns it off first thing. The prio-11 enemy pass,
+`BulletMgr_Draw` (13) and `Spell_Draw` (15) set/clear the tint themselves (on with 0xFFF01010 only while GameFlags
+bit 10, then off). `Player_UpdateBomb` (bomb end) and `Player_DyingUpdate` also turn it off (calc). Edge frames:
+first bomb frame → no request yet, no stage tint; frame after the last bomb draw → the pending request still
+tints that frame's stage and +0x646C (set by the last bomb draw) keeps it on through prio 8/9 (the calc-time
+tint-off of the bomb end happens before the draw, so it does not prevent this); the frame after that is clean.
 
 ### 10.3 `Stage_DrawLayer(layer)` — VERIFIED
 
@@ -302,7 +318,8 @@ for each instance in list order:
   colour is restored after drawing).
 - vm.pos = s (screen x, y, depth z). If 0 ≤ z ≤ 1: fog off, draw with ANM draw mode 1 (2D, no snapping,
   05 §9), using the projected z as vertex depth. If additionally (tag & 0xF0) == 0x10 and dist < fog_near and
-  the sparkle flag (+0x647C) is set, append (s.x, s.y, 0) to the sparkle-point list.
+  the sparkle flag (+0x647C) is set, append (s.x, s.y, 0) to the sparkle-point list (no bounds check; the 32-entry
+  array is never exceeded by the shipped data — at most 15 points per frame, answers_impl10 §3, VERIFIED).
 - Note: vm.pos is left at the projected screen position; it is recomputed every draw.
 
 ### 11.2 3D world quad (`AnmManager_Draw3DWorld` 0x464470) — VERIFIED
