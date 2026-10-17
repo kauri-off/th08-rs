@@ -177,3 +177,8 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - List B: effect level 1 draws nothing (returns). Fog off before list B. 51/63 screen-space helper 0x428310.
 - Sparkles: Stage_DrawLayer records projected pos of tag 0x1X billboards; Stage_Calc spawns 12 (fixed) type 0x3E every 3rd frame.
 - Popup colours: max 0xFFFFFF00, PowerUp 0xFFFFC0A0, time orb 0xDFFFEF80/0xDFFFFFFF; glyph 10 left-anchored, fade sprites 21/31.
+
+## RE tooling brief (deliverables 2-3) — DONE, see TOOLING_REPORT.md
+- rea (ghidra provider): fresh ephemeral import ~41 s, no FixThiscall/signatures (in_ECX, dropped helper args); names 641/641 via set_addresses_names but session-only. xrefs/search_bytes/call graph <1 s. Use for xrefs + byte search; fn.sh stays the reader.
+- Type-3 spark re-verified with exhaustive audit: only push-3 site 0x451C6E; 12 dynamic-type effect sites can't be 3 (ECL op 138 unused in data -> e+0x3310/11 = 0/4; ECL effect ids 17/26/40/51/60/61/63; aura >=32; Spell_Start 39/52).
+- all_decomp.c: 2254 fns, 1306 FUN_.
