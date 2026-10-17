@@ -81,6 +81,18 @@
   - VISUAL_BUGS_1 (answers_bugs1): B1 hit transition keeps the VM rotation across the hit-script restart (hit script re-sets the tag, drawn rotated by the bullet angle); B2 death ring 59 (slot 11) spawns only with ≥ 1 bomb, is freed when the deathbomb window ends (before the real-death effects) and on bomb start; real-death burst = type 12 in slot 3 (`FIX_DEATH_BURST`), colour 0xFF4040FF, 40-frame life. Checked against specs/data/ref/b2_*.
   - Debug: `TH08_BOMB=<0–4>` forces the bomb index (4 = dissolve spell). Questions: `docs/briefs/IMPL11_QUESTIONS.md`.
 
+- impl12 (answers_impl10, answers_impl11, 12 §5.8, 2026-10-18):
+  - Large popups: no motion, x0 = pos.x − count·3.5, advance 7·scale, top-left, player-distance alpha; LargeStatic adds the playfield origin + count·3.5; HUD "+p3(p4)" every boss frame (also "+0").
+  - `Enemy_KillChildren` rewrite (`src/enemy.rs`): chain kill (colour by n, follow-offset fix, unlink, cancel circles r 32, 2·n-based time-orb showers with 2 RNG draws, ÷3 compounding while bombing, drops when no boss / in a card, SE by parity), boss part (×2 popup, 2·count orbs, cancel circle, gauge lock 0), single kill of a chained child (gauge −1/12, timers, "+1", time orb, unlink, parent count −1); also from `Enemy_Free` without reward. Time-orb gauge lock = `ItemManager::collect_timer`.
+  - Native 12 pauses the caller's chain (flags B bit 7: ECL skipped, boss timer held), also flag A bit 30 while bombing / player state ≠ 0.
+  - Name plates: `hud::stage_plate` with the spell-practice exceptions (`Game::card`, `is_practice_card(_in)`), `hud::set_boss_plate`; Msg_Start entry 0 hooks (stage 5 Reisen, 6A/6B/Ex spell-bg base 2, 6B Kaguya, Ex Mokou plates) via msg events.
+  - Last spell / special mode: GameFlags bits 7/8/13/14 mirrored in `Player::gflags` (op 176, Spell_Start bit 5 → "Last Spell Failed", Spell_End capture → bit 8); special mode: bomb press = SE 0x29, hit → forced dissolve spell (index 4, 40/30-frame practice variant), start clears bosses' flag A bit 6, end clears 7–8, kills boss chains + boss life 0 + bit 30, white flash.
+  - Explosion hit filter per answers_impl10 §8 (script 0xC–0x14 → 48–128 hitbox, RNG always drawn, type-5 spark after both branches).
+  - Bomb tint lifetime: `AnmManager::{request_tint (averaging), tint_off, bomb_drew}`; DrawHigh keeps the tint while a bomb drew last frame (stage, list B, spell bg, prio-8 enemies, flying shots tinted); prio-11 enemies / bullets / Gui set red only while frozen, then off; bomb end and dying turn it off.
+  - Bombs/options: Reimu orb areas follow during the spin-out, Reimu LS start effect 12, Sakuya LS SE 6 after the knife loop, Yukari LS slot 4 script 88, Alice rings freed by script 83, Remilia ring width interpolation, Yuyuko sparkle 0x80602050, persistent Yukari aimed enemy (`Player::aimed` = enemy index, replaced by a higher parentless enemy in the 64-px column).
+  - `src/gui.rs` (12 §5.8, calc 12 / draw 15): 14 VMs, player cut-in (face slot 16/17) + cdbg strips + card name (text.anm 4, left) + plate; boss cut-in (slot 18, sprite = face) + name (text.anm 5/6–8, right-aligned) + plate + "Bonus … history" label with bonus/captures/attempts digits; strips only while a player cut-in is visible; natives 22/23. Old HUD spell-name code removed.
+  - Verified: spell cut-in / name / bonus line vs `spell54_cutin_f134.png` and `_under_fire_f209.png` (stage 1 card), player plate + strips (Yukari bomb), Remilia bomb tint on fairies, "+0(3)" boss counter, full scripted runs 1 → 6A → ending → result → menu → 1 → 6B, Extra; tests; wasm check. SPEC-GAPs 34 → 24. Questions: `docs/briefs/IMPL12_QUESTIONS.md`.
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
@@ -89,7 +101,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl11 done (bombs, options, Alice laser, 14 §1–6). Next IMPL: answers to IMPL11_QUESTIONS, spell-name plate; then replays, score.dat, config, endings/result screens.
+2. IMPL impl12 done (answers impl10/11, spell plates/cut-ins). Next IMPL: answers to IMPL12_QUESTIONS; replays, score.dat (spell history), config, endings/result screens, spell practice.
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

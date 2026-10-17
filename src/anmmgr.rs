@@ -31,6 +31,7 @@ pub struct AnmManager {
     pub tint: u32,
     pub tint_on: bool,
     pub stage_tint: Option<u32>,
+    pub bomb_drew: bool,
     pub stage_camera: Option<Camera>,
     last_blend: Blend,
     last_tex_matrix: Option<((i16, i16), [f32; 2])>,
@@ -56,6 +57,7 @@ impl Default for AnmManager {
             tint: 0x8080_8080,
             tint_on: false,
             stage_tint: None,
+            bomb_drew: false,
             stage_camera: None,
             last_blend: Blend::Alpha,
             last_tex_matrix: None,
@@ -183,6 +185,22 @@ impl AnmManager {
         use anmvm::*;
         let c = if vm.flags & F_COLOR2 != 0 { vm.color2 } else { vm.color };
         self.tinted([c[R], c[G], c[B], c[A]])
+    }
+
+    // AnmMgr_TintOff 0x40BAB0.
+    pub fn tint_off(&mut self) {
+        (self.tint, self.tint_on) = (0x8080_8080, false);
+    }
+
+    // Stage_RequestTint 0x409160: a second request in the same frame averages each channel.
+    pub fn request_tint(&mut self, c: u32) {
+        self.stage_tint = Some(match self.stage_tint {
+            Some(o) => {
+                let (a, b) = (o.to_le_bytes(), c.to_le_bytes());
+                u32::from_le_bytes(std::array::from_fn(|k| ((a[k] as u32 + b[k] as u32) / 2) as u8))
+            }
+            None => c,
+        });
     }
 
     // Global tint: D3DCOLOR at AnmManager+0, enabled by +4; every channel including alpha (05 §12.1).

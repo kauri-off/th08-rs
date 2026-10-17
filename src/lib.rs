@@ -18,6 +18,7 @@ pub mod env;
 pub mod game;
 pub mod gamemgr;
 pub mod gfx;
+pub mod gui;
 pub mod hud;
 pub mod input;
 pub mod item;

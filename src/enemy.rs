@@ -42,10 +42,12 @@ pub const A_NO_PUSH: u32 = 1 << 26;
 pub const A_FIXED_BONUS: u32 = 1 << 27;
 pub const A_KEEP_OFFSCREEN: u32 = 1 << 28;
 pub const A_NO_MOVE: u32 = 1 << 29;
+pub const A_LAST_SPELL: u32 = 1 << 30;
 // Flags B (e+0x3328).
 pub const B_STAGE_ANM: u32 = 1 << 2;
 pub const B_DEATH_LATCH: u32 = 1 << 3;
 pub const B_CANNOT_DIE: u32 = 1 << 6;
+pub const B_PAUSED: u32 = 1 << 7;
 
 const DROP_TABLE: [i32; 32] = [0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0];
 
@@ -439,6 +441,7 @@ pub struct Spell {
     pub capture: bool,
     pub timed_out: bool,
     pub bombed: bool,
+    pub last: bool,
 }
 
 // Globals touched by ECL (difficulty, rank, argument registers, spell state, …).
@@ -467,6 +470,7 @@ pub struct Globals {
     pub hud_bars: i32,
     pub hud_requests: Vec<u16>,
     pub misc_calls: u64,
+    pub card: i16,
 }
 
 pub struct EnemyManager {
@@ -486,6 +490,7 @@ pub struct EnemyManager {
     pub debug_damage: i32,
     pub fast_forward: u32,
     pub msg: Option<Rc<RefCell<crate::msg::Dialogue>>>,
+    pub stage_index: usize,
 }
 
 pub fn parse_difficulty(s: &str) -> Option<i32> {
@@ -523,6 +528,7 @@ impl EnemyManager {
             debug_damage: 0,
             fast_forward: 0,
             msg: None,
+            stage_index: 0,
         }
     }
 
@@ -533,6 +539,8 @@ impl EnemyManager {
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_STAGE, &enm)?;
         let mut m = EnemyManager::new(ecl, bullets, diff);
         m.stage = stage;
+        m.stage_index = index;
+        m.g.card = ctx.game.card;
         m.fast_forward = crate::env::var("TH08_STAGE_FRAME").and_then(|v| v.parse().ok()).unwrap_or(0);
         m.debug_damage = crate::env::var("TH08_ENEMY_DMG").and_then(|v| v.parse().ok()).unwrap_or(0);
         m.stage_start(&mut ctx.anm, index);
@@ -584,7 +592,7 @@ impl EnemyManager {
             let d = {
                 let mut b = self.bullets.borrow_mut();
                 let mut p = self.player.borrow_mut();
-                p.offer_target(pos, boss, self.enemies[idx].root.is_some());
+                p.offer_target(pos, boss);
                 let mut d = p.damage_against(anm, Some(&mut b.items), pos, [hb[0], hb[1]], &mut acc, &mut by_bomb);
                 if sb[0] > 0.0 {
                     let d2 = p.damage_against(anm, Some(&mut b.items), pos, [sb[0], sb[1]], &mut acc, &mut by_bomb);
@@ -614,6 +622,10 @@ impl EnemyManager {
     }
 
     pub fn free(&mut self, idx: usize) {
+        self.kill_chain(idx, None);
+        if self.player.borrow().aimed == Some(idx) {
+            self.player.borrow_mut().aimed = None;
+        }
         self.release_effects(idx);
         self.enemies[idx].flags &= !A_ALIVE;
         self.unregister_boss(idx);
@@ -890,42 +902,154 @@ impl EnemyManager {
         n
     }
 
-    // 0x42ADB0 chain kill with its large popups (answers_impl9 §14).
-    // SPEC-GAP: the boss chain's time-orb shower (2 · counter orbs within 128 px) and the single-kill child flag are not modelled.
-    pub(crate) fn kill_chain(&mut self, idx: usize, drops: bool) {
-        let n = self.chain_count(idx);
+    // Enemy_KillChildren 0x42ADB0 (answers_impl10 §2).
+    pub(crate) fn kill_chain(&mut self, idx: usize, mut anm: Option<&mut AnmManager>) {
+        if let Some(anm) = anm.as_deref_mut()
+            && self.enemies[idx].root.is_some()
+        {
+            self.kill_single(idx, anm);
+            return;
+        }
+        // SPEC-GAP: a chained child's own +8 link (its later siblings) is not treated as children here.
+        if self.enemies[idx].root.is_some() || self.enemies[idx].chain_next.is_none() {
+            return;
+        }
+        let mut n = self.chain_count(idx);
         let colour = match n {
             ..2 => 0xFFFFFFFF,
             2..=5 => 0xFFFFFFD0,
             6..=9 => 0xFFFFFFB0,
             _ => 0xFFFFFF80,
         };
-        let mut next = self.enemies[idx].chain_next;
-        let mut guard = 0;
+        let parent_pos = self.enemies[idx].pos;
+        let mut kids = Vec::new();
+        let mut next = std::mem::take(&mut self.enemies[idx].chain_next);
         while let Some(c) = next {
-            guard += 1;
-            if guard > MAX_ENEMIES {
+            if kids.len() > MAX_ENEMIES {
                 break;
             }
+            kids.push(c);
             let e = &mut self.enemies[c];
-            next = e.chain_next;
-            if !e.alive() {
-                continue;
+            next = e.chain_next.take();
+            if e.flags & A_FOLLOW != 0 {
+                e.pos_offset = parent_pos;
             }
             e.flags |= A_CHAIN_KILLED;
-            e.life = 0;
-            if !drops {
-                e.item = -2;
-                e.extra_point = 0;
-                e.extra_power = 0;
+            e.root = None;
+            e.chain_prev = None;
+        }
+        if let Some(anm) = anm.as_deref_mut() {
+            let cancel = if self.enemies[idx].flags & A_BOSS != 0 { 7 } else { 9 };
+            let shot = self.player.borrow().shot_type;
+            let boss_or_spell = self.bosses.iter().any(Option::is_some) && self.g.spell.is_none();
+            for (k, &c) in kids.iter().enumerate() {
+                let orbs = match shot {
+                    0..4 => if n < 8 { 2 * n + 10 } else { 26 },
+                    _ if shot % 2 == 0 => if n < 4 { 6 * n + 16 } else { 40 },
+                    _ => if n < 10 { 2 * n + 6 } else { 26 },
+                };
+                if self.player.borrow().bombing {
+                    n /= 3;
+                }
+                let e = &mut self.enemies[c];
+                crate::ascii::popup_large(e.final_pos, n, 0, colour, 1.0);
+                e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
+                let pos = e.final_pos;
+                self.player.borrow_mut().cancel_circle([pos[0], pos[1]], 32.0, 2.0, 8, cancel);
+                for _ in 0..orbs {
+                    let r = anm.rng.next_f32() * (2 * orbs) as f32;
+                    let a = anm.rng.next_signed() * std::f32::consts::PI;
+                    self.spawn_item(anm, [pos[0] + a.cos() * r, pos[1] + a.sin() * r, 0.0], crate::item::TIME_ORB as i32, 3);
+                }
+                if !boss_or_spell {
+                    self.enemies[c].item = 8;
+                    self.drop_items(c, anm, Some(0));
+                }
+                crate::sound::play_at(crate::sound::ENEP0 + (k & 1) as i32, pos[0]);
             }
-            crate::ascii::popup_large(e.final_pos, n, 0, colour, 1.0);
+        }
+        for &c in &kids {
+            let e = &mut self.enemies[c];
+            e.extra_point = 0;
+            e.extra_power = 0;
+            e.item = -2;
         }
         let e = &self.enemies[idx];
-        if n > 0 && e.flags & A_BOSS != 0 && e.children > 0 {
-            crate::ascii::popup_large(e.final_pos, e.children, 0, 0xFFF0F00F, 2.0);
+        if let Some(anm) = anm
+            && e.flags & A_BOSS != 0
+        {
+            let (pos, count) = (e.final_pos, e.children);
+            crate::ascii::popup_large(pos, count, 0, 0xFFF0F00F, 2.0);
+            for _ in 0..2 * count {
+                let r = anm.rng.next_f32() * 128.0;
+                let a = anm.rng.next_signed() * std::f32::consts::PI;
+                self.spawn_item(anm, [pos[0] + a.cos() * r, pos[1] + a.sin() * r, 0.0], crate::item::TIME_ORB as i32, 1);
+            }
+            self.player.borrow_mut().cancel_circle([pos[0], pos[1]], 32.0, 1.0, 16, 7);
+            self.bullets.borrow_mut().items.collect_timer = 0;
         }
+        // SPEC-GAP: the parent's child counter (+0x3380) is reset after a chain kill.
         self.enemies[idx].children = 0;
+    }
+
+    // Single-kill path of 0x42ADB0: a chained child killed on its own.
+    fn kill_single(&mut self, idx: usize, anm: &mut AnmManager) {
+        {
+            let mut p = self.player.borrow_mut();
+            p.stats.gauge -= p.stats.gauge / 12;
+            p.gauge_c.set(0);
+            p.gauge_b.set(30);
+        }
+        self.bullets.borrow_mut().items.collect_timer = 50;
+        let e = &mut self.enemies[idx];
+        e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
+        let pos = e.final_pos;
+        crate::ascii::popup_large(pos, 1, 0, 0xFFFFFFFF, 1.0);
+        self.spawn_item(anm, pos, crate::item::TIME_ORB as i32, 1);
+        let e = &mut self.enemies[idx];
+        e.item = -2;
+        e.extra_point = 0;
+        e.extra_power = 0;
+        self.unlink(idx);
+    }
+
+    // 0x42B2F0: removes an enemy from its parent's chain.
+    fn unlink(&mut self, idx: usize) {
+        let (prev, next) = (self.enemies[idx].chain_prev.take(), self.enemies[idx].chain_next.take());
+        if let Some(p) = prev {
+            self.enemies[p].chain_next = next;
+        }
+        if let Some(n) = next {
+            self.enemies[n].chain_prev = prev;
+        }
+        self.enemies[idx].root = None;
+    }
+
+    // Yukari's aimed enemy (14 §3.1): a persistent pick, replaced by a higher parentless enemy in the 64-px column.
+    fn offer_aimed(&mut self, idx: usize) {
+        let mut p = self.player.borrow_mut();
+        let e = &self.enemies[idx];
+        if e.flags & (1 << 31) != 0 && p.bombing || e.root.is_some() || (e.final_pos[0] - p.pos[0]).abs() >= 64.0 {
+            return;
+        }
+        if p.aimed.is_none_or(|a| e.final_pos[1] < self.enemies[a].pos[1]) {
+            p.aimed = Some(idx);
+        }
+    }
+
+    // Dissolve spell (14 §2.17): start clears flag A bit 6 of the bosses; the end kills them.
+    fn dissolve_requests(&mut self) {
+        let req = std::mem::take(&mut self.player.borrow_mut().dissolve_req);
+        for b in self.bosses.into_iter().flatten() {
+            if req & crate::player::DISSOLVE_BEGIN != 0 {
+                self.enemies[b].flags &= !A_SHOT_HIT;
+            }
+            if req & crate::player::DISSOLVE_END != 0 {
+                self.kill_chain(b, None);
+                self.enemies[b].life = 0;
+                self.enemies[b].flags &= !A_LAST_SPELL;
+            }
+        }
     }
 
     // Hud_StartMsg: Msg_Start plus its playfield side effects (10 §4.6).
@@ -962,10 +1086,16 @@ impl EnemyManager {
             p.state = 3;
             p.state_timer.set(70);
         }
+        use crate::player::{GF_LAST_CAPTURED, GF_LAST_SPELL};
         if !s.capture || p.deaths != s.deaths0 || p.bombs_started != s.bombs0 {
-            p.stats.popups.push(crate::player::Popup::Message(5, 0));
+            p.gflags &= !(GF_LAST_SPELL | GF_LAST_CAPTURED);
+            p.stats.popups.push(crate::player::Popup::Message(5 + s.last as u8, 0));
             return;
         }
+        if p.gflags & (GF_LAST_SPELL | GF_LAST_CAPTURED) != 0 {
+            p.gflags = p.gflags & !GF_LAST_SPELL | GF_LAST_CAPTURED;
+        }
+        crate::gui::request(crate::gui::Req::Captured(s.id));
         let thr = total - total / 7;
         let time = if self.g.fixed_bonus {
             700
@@ -1005,7 +1135,7 @@ impl EnemyManager {
     }
 
     // Enemy_DropItems (07 §10.4): mode 1 (auto-collected) when killed while the player bombs; extras always mode 0.
-    fn drop_items(&mut self, idx: usize, anm: &mut AnmManager) {
+    fn drop_items(&mut self, idx: usize, anm: &mut AnmManager, mode: Option<u8>) {
         let e = &mut self.enemies[idx];
         let p = e.final_pos;
         if e.item != -2 {
@@ -1013,7 +1143,7 @@ impl EnemyManager {
         }
         let e = &mut self.enemies[idx];
         let mut items = Vec::new();
-        let mode = if e.bomb_hit { 1 } else { 0 };
+        let mode = mode.unwrap_or(if e.bomb_hit { 1 } else { 0 });
         if e.item >= 0 {
             items.push((p, e.item, mode));
         } else if e.item == -1 {
@@ -1039,13 +1169,13 @@ impl EnemyManager {
         }
     }
 
-    fn cleanup_after_jump(&mut self, anm: &mut AnmManager, idx: usize, drops: bool) {
+    fn cleanup_after_jump(&mut self, anm: &mut AnmManager, idx: usize, reward: bool) {
         let e = &mut self.enemies[idx];
         e.threads = Default::default();
         e.desc = BulletDesc::default();
         e.autofire_interval = 0;
         e.reset_rank_ranges();
-        self.kill_chain(idx, drops);
+        self.kill_chain(idx, if reward { Some(&mut *anm) } else { None });
         self.kill_all(anm, Some(idx));
     }
 
@@ -1142,7 +1272,10 @@ impl EnemyManager {
             return;
         }
         self.enemies[idx].flags_b |= B_DEATH_LATCH;
-        self.kill_chain(idx, true);
+        if let Some(r) = self.enemies[idx].root {
+            self.enemies[r].children -= 1;
+        }
+        self.kill_chain(idx, Some(&mut *anm));
         let e = &mut self.enemies[idx];
         let mode = (e.flags >> A_DEATH_SHIFT) & 7;
         match mode {
@@ -1185,7 +1318,7 @@ impl EnemyManager {
                     self.finish_spell(total, remaining, anm, Some(idx));
                 }
             }
-            self.drop_items(idx, anm);
+            self.drop_items(idx, anm, None);
         }
         if mode == 0 {
             self.free(idx);
@@ -1210,11 +1343,8 @@ impl EnemyManager {
     fn update(&mut self, idx: usize, anm: &mut AnmManager) {
         let gs = anm.speed;
         if self.enemies[idx].flags & A_CHAIN_KILLED != 0 {
-            let root_pos = self.enemies[idx].root.map(|r| self.enemies[r].pos);
             let e = &mut self.enemies[idx];
-            if let (true, Some(p)) = (e.flags & A_FOLLOW != 0, root_pos) {
-                e.pos_offset = p;
-            }
+            e.life = 0;
             e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
             self.death(idx, anm);
             return;
@@ -1228,8 +1358,18 @@ impl EnemyManager {
             e.mode_bits = if youkai { 0x40 } else { 0x20 };
             e.set_flag(A_YOUKAI, youkai);
         }
+        let held = {
+            let p = self.player.borrow();
+            let e = &self.enemies[idx];
+            e.flags_b & B_PAUSED != 0 || (e.flags & A_LAST_SPELL != 0 && (p.bombing || p.state != 0))
+        };
+        let mut first = true;
         loop {
-            if crate::eclvm::ecl_run(self, anm, idx) == -1 {
+            if held {
+                if std::mem::take(&mut first) {
+                    self.enemies[idx].boss_timer.dec(gs);
+                }
+            } else if crate::eclvm::ecl_run(self, anm, idx) == -1 {
                 self.free(idx);
                 return;
             }
@@ -1250,6 +1390,7 @@ impl EnemyManager {
         }
         crate::effect::get(e.fx_aura, |x| x.pos = p);
         if self.enemies[idx].flags & (A_HIDDEN | 1 << 5 | A_YOUKAI) == 0 {
+            self.offer_aimed(idx);
             self.player_collision(idx, anm);
         }
         if self.debug_damage > 0 && self.enemies[idx].flags & (A_SHOT_HIT | A_HIDDEN) == A_SHOT_HIT && self.enemies[idx].flags & A_ON_SCREEN != 0 {
@@ -1283,6 +1424,7 @@ impl EnemyManager {
             self.g.player = p.pos;
             self.g.player_mode = p.mode as i32;
         }
+        self.dissolve_requests();
         let bonus = std::mem::take(&mut self.player.borrow_mut().stats.spell_bonus_add);
         let (deaths, bombs) = {
             let p = self.player.borrow();
@@ -1304,6 +1446,14 @@ impl EnemyManager {
         for idx in 0..self.enemies.len() {
             if self.enemies[idx].alive() {
                 self.update(idx, anm);
+            } else if self.player.borrow().aimed == Some(idx) {
+                self.player.borrow_mut().aimed = None;
+            }
+        }
+        {
+            let mut p = self.player.borrow_mut();
+            if let Some(a) = p.aimed {
+                p.aimed_pos = self.enemies[a].final_pos;
             }
         }
         let pull = self.bosses[0].map(|i| &self.enemies[i]).filter(|e| e.flags & A_LOSES_LIFE != 0).map(|e| e.final_pos);
@@ -1337,7 +1487,6 @@ impl EnemyManager {
     fn draw_layer(&mut self, ctx_anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, high: bool) {
         gfx.set_viewport(PLAYFIELD);
         let frozen = self.player.borrow().freeze_bullets;
-        let saved = (ctx_anm.tint, ctx_anm.tint_on);
         if high && frozen {
             (ctx_anm.tint, ctx_anm.tint_on) = (0xFFF01010, true);
         }
@@ -1374,7 +1523,9 @@ impl EnemyManager {
                 vm.pos_offset = saved_off;
             }
         }
-        (ctx_anm.tint, ctx_anm.tint_on) = saved;
+        if high {
+            ctx_anm.tint_off();
+        }
     }
 }
 

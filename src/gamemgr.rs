@@ -71,6 +71,7 @@ pub struct Game {
     pub clock: i32,
     pub continue_clock: bool,
     pub continue_apply: bool,
+    pub card: i16,
 }
 
 impl Default for Game {
@@ -103,6 +104,7 @@ impl Default for Game {
             clock: 0,
             continue_clock: false,
             continue_apply: false,
+            card: 0,
         }
     }
 }
@@ -130,6 +132,15 @@ impl Game {
 
     pub fn spell_practice(&self) -> bool {
         self.flags & F_SPELL_PRACTICE != 0
+    }
+
+    // 0x418130 / 0x418180: spell practice of card `id` (GM +0x3DBB0) / of a card in lo..=hi.
+    pub fn is_practice_card(&self, id: i16) -> bool {
+        self.spell_practice() && self.card == id
+    }
+
+    pub fn is_practice_card_in(&self, lo: i16, hi: i16) -> bool {
+        self.spell_practice() && (lo..=hi).contains(&self.card)
     }
 
     pub fn replay(&self) -> bool {
@@ -303,6 +314,7 @@ impl GameManager {
             p.stats = st;
             p.stats.limits = limits;
             p.stats.difficulty = d as i32;
+            p.gflags = ctx.game.flags & crate::player::GF_SPELL_PRACTICE;
             if fresh && !ctx.game.replay() {
                 p.stats.bombs = p.sht.bombs.trunc();
             }
@@ -341,6 +353,7 @@ impl GameManager {
         }
         let hud = Hud::register(ctx, self.player.clone(), enemies.clone(), stage_t.clone())?;
         let effects = crate::effect::EffectManager::register(ctx)?;
+        let gui = crate::gui::Gui::register(ctx, self.player.clone(), enemies.clone())?;
         enemies.borrow_mut().msg = Some(hud.borrow().msg.clone());
         if !ctx.game.reload_same {
             let bgm = stage_t.borrow().std.bgm[0].clone();
@@ -351,7 +364,7 @@ impl GameManager {
         g.flags |= F_RUNNING;
         g.game_over = 0;
         g.flags &= !F_ENDING_OK;
-        self.tasks = vec![self.player.clone(), stage_t.clone(), bullets.clone(), enemies.clone(), hud.clone(), effects];
+        self.tasks = vec![self.player.clone(), stage_t.clone(), bullets.clone(), enemies.clone(), hud.clone(), effects, gui];
         self.stage = Some(stage_t);
         self.bullets = Some(bullets);
         self.enemies = Some(enemies);

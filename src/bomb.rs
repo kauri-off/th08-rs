@@ -5,7 +5,7 @@ use crate::effect;
 use crate::gfx::{Gfx, PLAYFIELD};
 use crate::input;
 use crate::item::ItemManager;
-use crate::player::{ANM_SLOT, Player, Stats};
+use crate::player::{ANM_SLOT, DISSOLVE_BEGIN, DISSOLVE_END, GF_LAST_CAPTURED, GF_LAST_SPELL, GF_SPELL_PRACTICE, Player, Stats};
 use crate::sound;
 use std::cell::RefCell;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -238,7 +238,11 @@ impl Player {
     pub fn update_bomb(&mut self, anm: &mut AnmManager, inp: &input::Input, items: &mut Option<&mut ItemManager>) {
         if !self.bombing {
             let forced = self.forced_bomb != 0 && self.deathbomb == 1;
-            let pressed = inp.pressed(input::BOMB) && !self.env.dialogue && self.deathbomb != 0 && self.stats.bombs >= 1.0 && self.bomb_cooldown == 0;
+            let mut pressed = inp.pressed(input::BOMB) && !self.env.dialogue && self.deathbomb != 0 && self.stats.bombs >= 1.0 && self.bomb_cooldown == 0;
+            if pressed && (self.special() || self.gflags & GF_SPELL_PRACTICE != 0) {
+                sound::play(0x29);
+                pressed = false;
+            }
             if !(forced || pressed) || matches!(self.state, 1) {
                 return;
             }
@@ -254,15 +258,24 @@ impl Player {
             self.speed_mult = [1.0; 2];
             self.bombing = false;
             self.bomb_active = false;
-            // SPEC-GAP: the dissolve spell's end (unfreeze, boss unlock, flash colour) needs the special mode.
+            anm.tint_off();
+            crate::gui::request(crate::gui::Req::PlayerHide);
+            if self.bomb.index == 4 {
+                self.gflags &= !(GF_LAST_SPELL | GF_LAST_CAPTURED);
+                self.dissolve_req |= DISSOLVE_END;
+                flash(30, 1, 0xFFFFFFFF);
+            }
         }
     }
 
     fn start_bomb(&mut self, anm: &mut AnmManager, forced: bool) {
         let rng = &mut anm.rng;
         self.forced_bomb = 0;
-        self.freeze_bullets = false;
-        effect::free(effect::FIXED_BASE + effect::FIX_DEATH);
+        let special = self.special();
+        if !special {
+            self.freeze_bullets = false;
+            effect::free(effect::FIXED_BASE + effect::FIX_DEATH);
+        }
         let mut index = self.focus.min(1) as usize;
         if self.last_spell != 0 {
             index = 1 - index + 2;
@@ -272,6 +285,9 @@ impl Player {
             self.stats.add_bombs(-used, rng);
         } else {
             self.stats.add_bombs(-1.0, rng);
+        }
+        if special {
+            index = 4;
         }
         if let Some(i) = forced_index() {
             index = i;
@@ -292,10 +308,10 @@ impl Player {
 
     // Bomb_Start 0x40BE30 (14 §1.2).
     fn bomb_begin(&mut self, anm: &mut AnmManager, spec: BombSpec) {
-        // SPEC-GAP: the spell-name plate (Gui_ShowPlayerSpellName) is not drawn; only its SE plays.
         self.bomb.name = spec.0;
         self.bomb.last_spell = spec.3;
-        sound::play(sound::CAT);
+        let face = if self.bomb.index == 4 { -1 } else { (self.bomb.ch & 1) as i32 };
+        crate::gui::request(crate::gui::Req::PlayerShow { face, name: spec.0, last: spec.3 });
         self.bomb.duration = spec.1;
         self.state = 3;
         self.state_timer.set(spec.2);
@@ -313,7 +329,8 @@ impl Player {
         let ls = self.bomb.index & 2 != 0;
         if self.bomb.index == 4 {
             if t == 0 && adv {
-                self.bomb_begin(anm, DISSOLVE);
+                let practice = self.gflags & GF_SPELL_PRACTICE != 0;
+                self.bomb_begin(anm, if practice { (DISSOLVE.0, 40, DISSOLVE.2, DISSOLVE.3) } else { DISSOLVE });
                 self.dissolve_start(anm);
             }
             return;
@@ -425,6 +442,11 @@ impl Player {
                 o.f8 += 3.2;
                 o.v = [o.pos[0] - prev[0], o.pos[1] - prev[1], 0.0];
             }
+            for i in 0..16 {
+                if self.bomb.objs[i].state == 1 {
+                    self.follow(i);
+                }
+            }
         }
         if Self::at(b, 40) {
             for o in self.bomb.objs[..16].iter_mut() {
@@ -477,6 +499,7 @@ impl Player {
     // 2.2 神霊「夢想封印　瞬」.
     fn bomb_reimu_ls(&mut self, anm: &mut AnmManager, b: Bf) {
         if Self::at(b, 0) {
+            effect::spawn(anm, 12, self.pos, 1, 0xFF4040FF);
             self.reimu_orbs(anm);
             self.bomb.n = 0;
             sound::play(0xD);
@@ -696,8 +719,8 @@ impl Player {
             effect::get(self.bomb.fx, |e| e.pos = p);
         }
         if (20..window).contains(&b.t) {
-            sound::play(6);
             if !ls {
+                sound::play(6);
                 shake(4, 1, 0);
             }
             for k in 0..count {
@@ -720,6 +743,9 @@ impl Player {
                 (o.state, o.angle, o.fc, o.f8, o.spin, o.pos) = (1, angle, speed, accel, spin, pos);
                 o.age.set(0);
                 (o.carea, o.darea) = (Some(c), Some(da));
+            }
+            if ls {
+                sound::play(6);
             }
         }
         let target = self.homing_target();
@@ -807,7 +833,7 @@ impl Player {
         if b.adv && b.t % 10 == 0 {
             let n = self.bomb.n;
             let amp = anm.rng.next_f32() * 128.0;
-            let width = b.ls.then_some((64.0, 128.0));
+            let width = Some((64.0, if b.ls { 128.0 } else { 64.0 }));
             self.spark_ring(anm, n, 4, width, [192.0, amp, 0.0], false);
             self.bomb.n += 1;
         }
@@ -915,10 +941,9 @@ impl Player {
             let at_pos = if ls || k == 0 { self.bomb.origin } else { p };
             let kind = if ls { 0x25 } else { 0x24 };
             let i = effect::with(|e| e.spawn_fixed(anm, kind, at_pos, [BOUNDARY_ANGLES[k], 1.0, 4.0], 4 + k, 0xFFFFFFFF));
-            if k > 0 {
-                let script = if ls { 0x5C + k } else { 0x58 + k };
-                effect::with(|e| anm.set_script(&mut e.fx[i].vm, effect::SCRIPT_SLOT, script));
-            }
+            // The init re-spawns the slot as type 0x23, so slot 4 runs script 88 even for 0x25 (answers_impl11 §11).
+            let script = if k == 0 { 88 } else if ls { 0x5C + k } else { 0x58 + k };
+            effect::with(|e| anm.set_script(&mut e.fx[i].vm, effect::SCRIPT_SLOT, script));
         }
         if ls {
             for vm in self.bomb.vms[..2].iter_mut().filter(|v| v.script.is_some()) {
@@ -1005,6 +1030,7 @@ impl Player {
     // 2.17 「ディゾルブスペル」.
     fn dissolve_start(&mut self, anm: &mut AnmManager) {
         let p = self.pos;
+        let practice = self.gflags & GF_SPELL_PRACTICE != 0;
         effect::spawn(anm, 12, p, 1, 0xFF4040FF);
         let i = effect::spawn_fixed(anm, 0x32, p, 4, 0xFF4040FF);
         effect::get(i, |e| {
@@ -1012,11 +1038,11 @@ impl Player {
             e.ring.waves = 6.0;
             e.vm.scale[0] = 15.0;
             e.vm.pos = [8.0, 64.0, 0.0];
-            e.vm.interp_pos_from(90, 5, [8.0, 64.0, 0.0], [128.0, 0.0, 0.0]);
+            e.vm.interp_pos_from(if practice { 30 } else { 90 }, 5, [8.0, 64.0, 0.0], [128.0, 0.0, 0.0]);
         });
         sound::play(0xD);
         self.speed_mult = [0.0; 2];
-        // SPEC-GAP: boss flag A bit 6 is not cleared (no special mode / boss lock in the port yet).
+        self.dissolve_req |= DISSOLVE_BEGIN;
     }
 
     // Background tint 0x40BC60 (14 §1.3): stage tint request for the next Stage_DrawLow.
@@ -1033,7 +1059,9 @@ impl Player {
             };
             (x as u32) & 0xFF
         };
-        anm.stage_tint = Some(0x8000_0000 | ch((c >> 16) & 0xFF) << 16 | ch((c >> 8) & 0xFF) << 8 | ch(c & 0xFF));
+        anm.tint_off();
+        anm.request_tint(0x8000_0000 | ch((c >> 16) & 0xFF) << 16 | ch((c >> 8) & 0xFF) << 8 | ch(c & 0xFF));
+        anm.bomb_drew = true;
     }
 
     fn playfield_rect(gfx: &mut Gfx, rgb: u32, a: i32) {
@@ -1168,9 +1196,14 @@ mod tests {
         p.bomb.timer.set(30);
         p.tint(&mut anm, 0x80404040);
         assert_eq!(anm.stage_tint, Some(0x80606060));
+        assert!(anm.bomb_drew && !anm.tint_on);
         p.bomb.timer.set(100);
         p.tint(&mut anm, 0x802020D0);
+        assert_eq!(anm.stage_tint, Some(0x80404098));
+        anm.stage_tint = None;
+        p.tint(&mut anm, 0x802020D0);
         assert_eq!(anm.stage_tint, Some(0x802020D0));
+        anm.stage_tint = None;
         p.bomb.timer.set(170);
         p.tint(&mut anm, 0x80F00000);
         assert_eq!(anm.stage_tint, Some(0x80B84040));

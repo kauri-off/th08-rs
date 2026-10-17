@@ -743,9 +743,6 @@ fn bomb_ring_update(e: &mut Effect, slot: usize) -> (Vec<ScreenEffect>, bool) {
                 }
                 _ => r.radius = 192.0 * k,
             }
-            if t >= 80 {
-                return (fx, false);
-            }
         }
         46 => r.radius += 8.0,
         _ => {

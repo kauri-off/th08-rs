@@ -1164,7 +1164,6 @@ impl BulletManager {
     // BulletMgr_Draw: items, lasers, then bullets by size class (each list in reverse visiting order).
     pub fn draw(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         gfx.set_viewport(PLAYFIELD);
-        let saved = (anm.tint, anm.tint_on);
         if self.player.borrow().freeze_bullets {
             (anm.tint, anm.tint_on) = (0xFFF01010, true);
         }
@@ -1193,7 +1192,7 @@ impl BulletManager {
                 anm.draw_mode_z(gfx, vm, 2, 0.05);
             }
         }
-        (anm.tint, anm.tint_on) = saved;
+        anm.tint_off();
         crate::effect::with(|e| e.draw_over_bullets(anm, gfx));
     }
 }

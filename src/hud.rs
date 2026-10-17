@@ -63,8 +63,6 @@ pub struct Hud {
     popups: Vec<ActivePopup>,
     clear: Option<ClearPanel>,
     flash: Option<u32>,
-    spell_tex: Option<crate::gfx::TextureId>,
-    spell_shown: Option<i32>,
 }
 
 impl Hud {
@@ -90,8 +88,6 @@ impl Hud {
             popups: Vec::new(),
             clear: None,
             flash: None,
-            spell_tex: None,
-            spell_shown: None,
         }));
         let t: task::TaskRef<Ctx> = h.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -105,16 +101,8 @@ impl Hud {
         let (stage, shot) = (g.stage % 9, g.shot);
         let (gfx, ar) = (&mut ctx.gfx, &ctx.archive);
         ctx.anm.load(gfx, ar, FRONT_SLOT, "front.anm")?;
-        // 0x437F5C: the boss-name plate (front sprite 10) gets the stage's ename.png sprite (answers_phase5 impl8).
-        // SPEC-GAP: the spell-practice card exceptions of the sprite choice are not applied.
-        let n = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x17, 0x20][stage];
-        if let (Some(&src), Some(&dst)) = (ctx.anm.sprite(FRONT_SLOT, n), ctx.anm.sprite(FRONT_SLOT, 10)) {
-            let px = |s: &crate::anmmgr::SlotSprite, gfx: &Gfx| {
-                let t = gfx.texture(s.tex);
-                [(s.uv[0] * t.width as f32).round() as u32, (s.uv[1] * t.height as f32).round() as u32]
-            };
-            let (a, b) = (px(&src, gfx), px(&dst, gfx));
-            gfx.copy_texture(src.tex, a, dst.tex, b, [src.w.min(dst.w) as u32, src.h.min(dst.h) as u32]);
+        if let Some(n) = stage_plate(stage, g) {
+            set_boss_plate(&ctx.anm, gfx, n);
         }
         ctx.anm.load(gfx, ar, TIMES_SLOT, "times.anm")?;
         ctx.anm.load(gfx, ar, TXT_SLOT, &format!("stg{}txt.anm", TXT_NAMES[stage]))?;
@@ -192,6 +180,8 @@ impl Hud {
     fn handle_events(&mut self, ctx: &mut Ctx, events: Vec<Event>) {
         for ev in events {
             match ev {
+                Event::Plate(n) => set_boss_plate(&ctx.anm, &mut ctx.gfx, n),
+                Event::SpellBase(n) => self.stage.borrow_mut().spell_first = n,
                 Event::Bgm(n) if n < 0 => ctx.audio.stop_bgm(),
                 Event::Bgm(n) => {
                     let vm = &mut self.title[3];
@@ -325,15 +315,12 @@ impl Hud {
             let max = if b.hud_life > 0 { b.hud_life } else { b.max_life.max(1) };
             self.bar_target = (b.life.max(0) as f32 / max as f32).clamp(0.0, 1.0);
         }
-        // Popup_LargeStatic from Hud_DrawBoss (answers_impl9 §14). SPEC-GAP: hidden while both counts are 0.
+        // Popup_LargeStatic from Hud_DrawBoss (answers_impl10 §1): "+0" without children too.
         if let Some(i) = e.boss(0)
             && !paused
             && !self.player.borrow().freeze_bullets
         {
-            let (p3, p4) = (e.chain_count(i), e.enemies[i].children);
-            if p3 > 0 || p4 > 0 {
-                crate::ascii::popup_large_static([2.0, 29.0], p3, p4, 0xFFF0F00F);
-            }
+            crate::ascii::popup_large_static([2.0, 29.0], e.chain_count(i), e.enemies[i].children, 0xFFF0F00F);
         }
         drop(e);
         self.bar_alpha = if self.bar_shown { (self.bar_alpha + 4).min(255) } else { (self.bar_alpha - 4).max(0) };
@@ -421,7 +408,6 @@ impl Hud {
             Self::bar_quad(gfx, x0, x1, 19.0, 23.0, c, c);
         }
         let secs = e.boss(0).map(|i| &e.enemies[i]).filter(|b| b.timeout > 0).map(|b| ((b.timeout - b.boss_timer.cur) / 60).clamp(0, 99));
-        let spell = e.g.spell.as_ref().map(|s| (s.id, s.name.clone(), s.bonus));
         drop(e);
         ctx.anm.draw_mode(&mut ctx.gfx, &mut self.front[12], 0);
         if let Some(s) = secs {
@@ -440,22 +426,6 @@ impl Hud {
                 }
             }
             self.timer_last = s;
-        }
-        // SPEC-GAP: the spell-name plate belongs to the (unspecified) Gui; the name is rasterised under the bar.
-        if let Some((id, name, bonus)) = spell {
-            if self.spell_shown != Some(id) {
-                let tex = *self.spell_tex.get_or_insert_with(|| ctx.gfx.create_texture(256, 15, &[0; 256 * 15 * 4]));
-                let rgba = self.raster.render(&crate::text::decode_sjis(&name), [255, 255, 255], 256, 15);
-                ctx.gfx.write_texture(tex, 0, 0, 256, 15, &rgba);
-                self.spell_shown = Some(id);
-            }
-            if let Some(tex) = self.spell_tex {
-                ctx.gfx.set_viewport(PLAYFIELD);
-                ctx.gfx.sprite(tex, Blend::Alpha, Rect::new(160.0, 28.0, 256.0, 15.0), [0.0, 0.0, 1.0, 1.0], [255; 4]);
-            }
-            ctx.ascii.push(Text::new(264.0, 44.0, format!("Bonus {bonus:8}")).scale(0.75).advance(13.0).color(Self::rgb(0xFFFFFF, a)));
-        } else {
-            self.spell_shown = None;
         }
     }
 
@@ -582,9 +552,6 @@ impl Task<Ctx> for Hud {
             for s in [FRONT_SLOT, TIMES_SLOT, TXT_SLOT, LOADING_SLOT].into_iter().chain(msg::FACE_SLOTS) {
                 ctx.anm.unload(&mut ctx.gfx, s);
             }
-            if let Some(t) = self.spell_tex.take() {
-                ctx.gfx.free_texture(t);
-            }
         }
     }
 
@@ -676,5 +643,38 @@ impl Task<Ctx> for Hud {
         }
         let _ = anmvm::A;
         Ret::Next
+    }
+}
+
+// Hud_SetStageNamePlate 0x438046 (answers_impl10 §5); None = no call (the plate keeps its old picture).
+fn stage_plate(stage: usize, g: &crate::gamemgr::Game) -> Option<usize> {
+    let sp = g.spell_practice();
+    Some(match stage {
+        1 => 0x11,
+        2 => 0x12,
+        4 => 0x14,
+        6 => 0x17,
+        3 if !sp || g.card == 0xD6 => 0x13,
+        3 if g.is_practice_card_in(0xD8, 0xDD) => 0x1A + (g.card - 0xD8) as usize,
+        3 => return None,
+        5 if !sp || g.card == 0xD4 => 0x15,
+        5 => 0x16,
+        7 if !sp || g.is_practice_card_in(0x93, 0x96) => 0x17,
+        7 => 0x18,
+        8 if !sp || g.is_practice_card_in(0xBF, 0xC1) || g.card == 0xD5 => 0x20,
+        8 => 0x19,
+        _ => 0x10,
+    })
+}
+
+// Hud_SetBossNamePlate 0x437F5C: front.anm sprite n's pixels into the plate sprite 10.
+pub fn set_boss_plate(anm: &AnmManager, gfx: &mut Gfx, n: usize) {
+    if let (Some(&src), Some(&dst)) = (anm.sprite(FRONT_SLOT, n), anm.sprite(FRONT_SLOT, 10)) {
+        let px = |s: &crate::anmmgr::SlotSprite, gfx: &Gfx| {
+            let t = gfx.texture(s.tex);
+            [(s.uv[0] * t.width as f32).round() as u32, (s.uv[1] * t.height as f32).round() as u32]
+        };
+        let (a, b) = (px(&src, gfx), px(&dst, gfx));
+        gfx.copy_texture(src.tex, a, dst.tex, b, [src.w.min(dst.w) as u32, src.h.min(dst.h) as u32]);
     }
 }

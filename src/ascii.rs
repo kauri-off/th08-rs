@@ -183,13 +183,15 @@ pub fn popup_large(pos: [f32; 3], p3: i32, p4: i32, colour: u32, scale: f32) {
     });
 }
 
-// Popup_LargeStatic 0x403600: starts at age 88 (a two-frame display); `pos` in screen coordinates.
+// Popup_LargeStatic 0x403600: starts at age 88 (a two-frame display), x += count · 3.5.
 pub fn popup_large_static(pos: [f32; 2], p3: i32, p4: i32, colour: u32) {
     let c = colour.to_be_bytes();
+    let glyphs = large_glyphs(p3, p4);
+    let x = pos[0] + 32.0 + (glyphs.len() + 1) as f32 * 3.5;
     POPUPS.with_borrow_mut(|p| {
         let i = p.large_next;
         p.large_next = (i + 1) % LARGE_SLOTS;
-        p.large[i] = Some(LargePopup { glyphs: large_glyphs(p3, p4), pos, colour: [c[1], c[2], c[3], c[0]], scale: 1.0, age: 88.0 });
+        p.large[i] = Some(LargePopup { glyphs, pos: [x, pos[1] + 16.0], colour: [c[1], c[2], c[3], c[0]], scale: 1.0, age: 88.0 });
     });
 }
 
@@ -211,12 +213,8 @@ fn popups_calc(gs: f32) {
                 }
             }
         }
-        // SPEC-GAP: large-popup motion is not given; they rise like the small ones.
         for s in p.large.iter_mut() {
             if let Some(q) = s {
-                if q.age < 88.0 {
-                    q.pos[1] -= 0.5 * gs;
-                }
                 q.age += gs;
                 if q.age >= LARGE_LIFE {
                     *s = None;
@@ -231,16 +229,19 @@ fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
     let pl = crate::effect::with(|e| e.player);
     let o = anm.screen_offset;
     POPUPS.with_borrow(|p| {
-        for q in p.slots.iter().flatten() {
-            let (dx, dy) = (q.pos[0] - 32.0 - pl[0], q.pos[1] - 16.0 - pl[1]);
+        let fade = |pos: [f32; 2]| {
+            let (dx, dy) = (pos[0] - 32.0 - pl[0], pos[1] - 16.0 - pl[1]);
             let d = dx * dx + dy * dy;
-            let alpha = if d <= 1024.0 {
+            if d <= 1024.0 {
                 0x50
             } else if d <= 4096.0 {
                 0x50 + ((d - 1024.0) * 128.0 / 3072.0) as i32
             } else {
                 0xD0
-            };
+            }
+        };
+        for q in p.slots.iter().flatten() {
+            let alpha = fade(q.pos);
             let shift = if q.age < 52.0 { 0 } else if q.age < 56.0 { 11 } else { 21 };
             let n = q.digits.len() as f32;
             let colour = [q.colour[0], q.colour[1], q.colour[2], alpha as u8];
@@ -250,14 +251,13 @@ fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
                 gfx.sprite(sp.tex, Blend::Alpha, Rect::new(x, q.pos[1] + o[1], sp.w, sp.h), sp.uv, colour);
             }
         }
-        // SPEC-GAP: large-popup glyph advance is not given; the sprite width × scale, centred like the small ones.
         for q in p.large.iter().flatten() {
-            let sprites: Vec<_> = q.glyphs.iter().rev().filter_map(|&g| anm.sprite(ANM_SLOT, 0x88 + g as usize).copied()).collect();
-            let w: f32 = sprites.iter().map(|s| s.w * q.scale).sum();
-            let mut x = q.pos[0] - w / 2.0 + o[0];
-            for sp in sprites {
-                gfx.sprite(sp.tex, Blend::Alpha, Rect::new(x, q.pos[1] + o[1], sp.w * q.scale, sp.h * q.scale), sp.uv, q.colour);
-                x += sp.w * q.scale;
+            let colour = [q.colour[0], q.colour[1], q.colour[2], fade(q.pos) as u8];
+            let x0 = q.pos[0] - (q.glyphs.len() + 1) as f32 * 3.5 + o[0];
+            for (k, &g) in q.glyphs.iter().rev().enumerate() {
+                let Some(sp) = anm.sprite(ANM_SLOT, 0x88 + g as usize) else { continue };
+                let x = x0 + 7.0 * q.scale * k as f32;
+                gfx.sprite(sp.tex, Blend::Alpha, Rect::new(x, q.pos[1] + o[1], sp.w * q.scale, sp.h * q.scale), sp.uv, colour);
             }
         }
     });

@@ -17,6 +17,14 @@ pub use crate::pshot::{Opt, PBullet};
 pub use crate::sht::Sht;
 
 pub const CALC_PRIO: u16 = 9;
+// GameFlags (0x164D0B4) bits mirrored in the player: last spell running / captured, bit 13, spell practice.
+pub const GF_LAST_SPELL: u32 = 1 << 7;
+pub const GF_LAST_CAPTURED: u32 = 1 << 8;
+pub const GF_13: u32 = 1 << 13;
+pub const GF_SPELL_PRACTICE: u32 = 1 << 14;
+// Requests for the enemy manager: dissolve spell started / ended.
+pub const DISSOLVE_BEGIN: u8 = 1;
+pub const DISSOLVE_END: u8 = 2;
 pub const DRAW_PRIO: u16 = 9;
 pub const DRAW_PRIO_HIGH: u16 = 10;
 pub const ANM_SLOT: usize = 5;
@@ -270,6 +278,8 @@ pub struct Player {
     pub last_spell: u8,
     pub mode: u8,
     pub forced_bomb: u8,
+    pub gflags: u32,
+    pub dissolve_req: u8,
     pub focus_age: i32,
     pub gauge_aura: bool,
     pub vm: AnmVm,
@@ -294,7 +304,8 @@ pub struct Player {
     pub direction: u8,
     pub last_v: [f32; 2],
     pub targets: [[f32; 3]; 2],
-    pub aimed: Option<[f32; 3]>,
+    pub aimed: Option<usize>,
+    pub aimed_pos: [f32; 3],
     pub boss_target: bool,
     pub shot_timer: Timer,
     pub gauge_b: Timer,
@@ -327,6 +338,8 @@ impl Default for Player {
             last_spell: 0,
             mode: 0,
             forced_bomb: 0,
+            gflags: 0,
+            dissolve_req: 0,
             focus_age: 0,
             gauge_aura: false,
             vm: AnmVm::default(),
@@ -352,6 +365,7 @@ impl Default for Player {
             last_v: [0.0; 2],
             targets: [[-999.0, -999.0, 0.0]; 2],
             aimed: None,
+            aimed_pos: [0.0; 3],
             boss_target: false,
             shot_timer: Timer { cur: -1, ..Timer::default() },
             gauge_b: Timer::default(),
@@ -518,6 +532,11 @@ impl Player {
         crate::effect::spawn_rng(rng, 6, self.pos, 16, 0xFFFFFFFF);
         self.state = 2;
         self.state_timer.set(0);
+        if self.special() {
+            self.deathbomb = 2;
+            self.forced_bomb = 1;
+            return;
+        }
         let st = &mut self.stats;
         st.gauge = 0;
         let n = if st.bombs < 1.0 {
@@ -536,7 +555,7 @@ impl Player {
             }
             n
         };
-        // Ring 59 only with a bomb in stock (and outside the dissolve mode, not in the port yet).
+        // Ring 59 only with a bomb in stock.
         if st.bombs >= 1.0 {
             crate::effect::death_ring(rng, self.pos, n);
         }
@@ -544,6 +563,11 @@ impl Player {
             self.freeze_bullets = true;
         }
         self.deathbomb = n;
+    }
+
+    // GameFlags bits 7–8: a boss last spell runs or was captured (the dissolve-spell mode).
+    pub fn special(&self) -> bool {
+        self.gflags & (GF_LAST_SPELL | GF_LAST_CAPTURED) != 0
     }
 
     // Player_OnGraze (09 §9.2); returns how many time orbs (item type 10) to drop at `p`.
@@ -592,8 +616,8 @@ impl Player {
     }
 
     // EnemyMgr_Calc target pick (09 §2.1): target 1 = boss (horizontally nearest) else the lowest enemy;
-    // aimed = smallest y within 64 px horizontally, not a chained child; target 2 is never written.
-    pub fn offer_target(&mut self, e: [f32; 3], boss: bool, child: bool) {
+    // Target 2 is never written; the aimed enemy is picked by the enemy manager (14 §3.1).
+    pub fn offer_target(&mut self, e: [f32; 3], boss: bool) {
         let t = &mut self.targets[0];
         if boss {
             if !self.boss_target || (e[0] - self.pos[0]).abs() < (t[0] - self.pos[0]).abs() {
@@ -602,9 +626,6 @@ impl Player {
             self.boss_target = true;
         } else if !self.boss_target && e[1] > t[1] {
             *t = e;
-        }
-        if !child && (e[0] - self.pos[0]).abs() < 64.0 && self.aimed.is_none_or(|a| e[1] < a[1]) {
-            self.aimed = Some(e);
         }
     }
 
@@ -767,6 +788,7 @@ impl Player {
 
     // Player_DyingUpdate (09 §6.2); true when the respawn starts.
     fn dying_update(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) -> bool {
+        anm.tint_off();
         if self.deathbomb > 0 {
             self.stats.add_time(-15, &mut anm.rng);
             self.deathbomb -= 1;
@@ -914,7 +936,6 @@ impl Player {
         }
         self.update_shot_timer(anm, inp);
         self.targets = [[-999.0, -999.0, 0.0]; 2];
-        self.aimed = None;
         self.boss_target = false;
         if self.bomb_cooldown > 0 {
             self.bomb_cooldown -= 1;

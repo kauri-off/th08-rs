@@ -157,7 +157,6 @@ impl Player {
                 self.aimed = None;
             }
             OptKind::Alice => o.pos = [p[0], p[1] - 32.0, 0.0],
-            // SPEC-GAP: the team bats' start orbit angle is not given; the solo values are used.
             OptKind::Remilia | OptKind::RemiliaSolo => {
                 o.anchor = [p[0] + REMILIA_ANCHOR[k][0], p[1] + REMILIA_ANCHOR[k][1], 0.0];
                 o.angle = REMILIA_ORBIT[k];
@@ -186,6 +185,7 @@ impl Player {
         let dir = self.direction;
         let trail = self.trail[15];
         let mut aimed = self.aimed;
+        let aimed_pos = self.aimed_pos;
         let o = &mut self.options[k];
         let t = o.timer.cur;
         let mut sparkle = None;
@@ -236,7 +236,7 @@ impl Player {
                     }
                 } else {
                     match aimed {
-                        Some(e) if shooting || shot_held => smooth(o, [e[0], (e[1] + 32.0).max(32.0)]),
+                        Some(_) if shooting || shot_held => smooth(o, [aimed_pos[0], (aimed_pos[1] + 32.0).max(32.0)]),
                         _ => {
                             o.vm.pending_interrupt = 1;
                             o.sub = 0;
@@ -274,8 +274,7 @@ impl Player {
                 o.angle += if k == 0 { PI / 60.0 } else { -PI / 60.0 };
                 let d = polar(o.angle, 6.0);
                 o.pos = [o.anchor[0] + d[0], o.anchor[1] + d[1], 0.0];
-                // SPEC-GAP: the colour of Yuyuko's option sparkle is not given; Youmu's is used.
-                sparkle = Some(0x80405080);
+                sparkle = Some(0x80602050);
             }
             OptKind::YoumuHalf | OptKind::YoumuSolo => {
                 o.angle += PI / 60.0;
@@ -446,7 +445,8 @@ impl Player {
                 if !self.default_init(anm, slot, t, e) {
                     return false;
                 }
-                if let Some(a) = self.aimed {
+                if self.aimed.is_some() {
+                    let a = self.aimed_pos;
                     let p = self.bullets[slot].pos;
                     let ang = (a[1] - p[1]).atan2(a[0] - p[0]) + e.angle + FRAC_PI_2;
                     self.set_dir(slot, ang, e.speed * 1.5);
@@ -629,24 +629,30 @@ impl Player {
         let b = &mut self.bullets[i];
         match b.hit {
             1 => {
-                if b.timer.cur % 6 == 0 {
+                if b.state == 1 {
+                    let a = anm.rng.next_f32() * FRAC_PI_2 - 3.0 * PI / 4.0;
+                    let size = match b.vm.script_index {
+                        0xC => Some(48.0),
+                        0xE => Some(64.0),
+                        0x10 => Some(80.0),
+                        0x12 => Some(96.0),
+                        0x14 => Some(128.0),
+                        _ => None,
+                    };
+                    if let Some(s) = size {
+                        b.size = [s, s];
+                        b.vel = polar(a, 6.0);
+                    }
+                } else {
+                    if b.timer.cur % 2 != 0 || (spell && b.timer.cur % 4 != 0) {
+                        return true;
+                    }
+                    b.damage = (b.damage / 3).max(1);
+                    b.vel = [b.vel[0] * 0.88, b.vel[1] * 0.88];
+                }
+                if self.bullets[i].timer.cur % 6 == 0 {
                     crate::effect::spawn(anm, 5, enemy, 1, 0xFFFFFFFF);
                 }
-                let b = &mut self.bullets[i];
-                if b.state == 1 {
-                    // SPEC-GAP: "enlarged by sprite (48–128 px)": the hit sprite's larger side clamped to 48..128.
-                    let s = b.vm.sprite_w.max(b.vm.sprite_h).clamp(48.0, 128.0);
-                    b.size = [s, s];
-                    let a = anm.rng.next_f32() * FRAC_PI_2 - 3.0 * PI / 4.0;
-                    b.vel = polar(a, 6.0);
-                    return false;
-                }
-                let period = if spell { 4 } else { 2 };
-                if b.timer.cur % period != 0 {
-                    return true;
-                }
-                b.damage = (b.damage / 3).max(1);
-                b.vel = [b.vel[0] * 0.88, b.vel[1] * 0.88];
                 false
             }
             2 => {

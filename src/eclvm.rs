@@ -873,9 +873,21 @@ impl Exec<'_> {
             12 | 14 => {
                 let (mask, a, s) = (t.ctx.int(V_INT0) as u32, t.ctx.flt(V_FLT0), t.ctx.flt(V_FLT0 + 1));
                 self.m.bullets.borrow_mut().toggle_ghost(self.anm, mask, a, s, n == 14);
-                if n == 12 && let Some(st) = &self.m.stage {
-                    // SPEC-GAP: the flags B bit 7 walk along the e+8 links is not modelled.
-                    st.borrow_mut().spell_interrupt(if t.ctx.int(V_INT0 + 1) == 0 { 2 } else { 1 });
+                if n == 12 {
+                    let pause = t.ctx.int(V_INT0 + 1) == 0;
+                    let mut c = self.e.chain_next;
+                    let mut guard = 0;
+                    while let Some(i) = c
+                        && guard <= MAX_ENEMIES
+                    {
+                        guard += 1;
+                        let x = &mut self.m.enemies[i];
+                        x.flags_b = if pause { x.flags_b | B_PAUSED } else { x.flags_b & !B_PAUSED };
+                        c = x.chain_next;
+                    }
+                    if let Some(st) = &self.m.stage {
+                        st.borrow_mut().spell_interrupt(if pause { 2 } else { 1 });
+                    }
                 }
             }
             28 if arg != 0 => self.anm.speed = 1.0 / arg as f32,
@@ -887,7 +899,13 @@ impl Exec<'_> {
             }
             30 => self.m.g.g_18b8a2c = arg,
             31 => self.item(self.e.pos, 5),
-            // SPEC-GAP: natives 4, 7, 9, 11, 13, 16, 21–23, 25 (effect objects, bullet warps, hit rectangles) are not implemented.
+            22 => {
+                // SPEC-GAP: native 22's face argument is not given; no boss cut-in is started.
+                let name = encoding_rs::SHIFT_JIS.encode("「リザレクション」").0.into_owned();
+                crate::gui::request(crate::gui::Req::BossShow { face: -1, name, card: -1, name_only: true });
+            }
+            23 => crate::gui::request(crate::gui::Req::BossHide),
+            // SPEC-GAP: natives 4, 7, 9, 11, 13, 16, 21, 25 (effect objects, bullet warps, hit rectangles) are not implemented.
             _ => {
                 let _ = gs;
                 self.m.g.misc_calls += 1;
@@ -952,11 +970,12 @@ impl Exec<'_> {
             capture: true,
             timed_out: false,
             bombed: false,
+            last: self.m.player.borrow().gflags & crate::player::GF_LAST_SPELL != 0,
         };
-        log::info!("spell card {} ({} bytes name, bonus {})", spell.id, spell.name.len(), spell.bonus);
+        log::info!("spell card {} ({} bytes name, bonus {}) at enemy frame {}", spell.id, spell.name.len(), spell.bonus, self.m.frame);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
+        crate::gui::request(crate::gui::Req::BossShow { face: spell.face, name: spell.name.clone(), card: spell.id, name_only: false });
         self.m.g.spell = Some(spell);
-        crate::sound::play(crate::sound::CAT);
         if let Some(st) = &self.m.stage {
             st.borrow_mut().start_spell_bg(self.anm);
         }
@@ -1611,8 +1630,21 @@ impl Exec<'_> {
             }
             175 => self.m.g.spawn_disabled = self.ai(t, ins, 0),
             176 => {
-                self.e.flags |= 1 << 30;
-                self.m.g.misc_calls += 1;
+                use crate::player::{GF_13, GF_LAST_CAPTURED, GF_LAST_SPELL, GF_SPELL_PRACTICE};
+                let mut p = self.m.player.borrow_mut();
+                p.gflags &= !(GF_LAST_SPELL | GF_LAST_CAPTURED | GF_13);
+                p.gflags |= GF_LAST_SPELL;
+                let card = self.m.g.card;
+                let bit13 = if p.gflags & GF_SPELL_PRACTICE == 0 {
+                    matches!(self.m.stage_index, 6 | 7)
+                } else {
+                    (0x8F..=0x92).contains(&card) || (0xAB..=0xBE).contains(&card)
+                };
+                // SPEC-GAP: bit 13's large player-damage box (EnemyMgr_Calc, boss present) has no size; not modelled.
+                if bit13 {
+                    p.gflags |= GF_13;
+                }
+                self.e.flags |= A_LAST_SPELL;
             }
             177 => self.e.hud_life = self.ai(t, ins, 0),
             179 | 180 => self.m.g.hud_requests.push(op as u16),

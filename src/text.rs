@@ -111,8 +111,13 @@ impl Raster {
 impl Raster {
     // One text row, RGBA w×size: GDI height 2·size − 2 at 2×, outline ±2 px (2× space), then 2:1 downsample.
     pub fn render(&mut self, s: &str, color: [u8; 3], w: usize, size: usize) -> Vec<u8> {
+        self.render_at(s, color, w, size, 0.0)
+    }
+
+    // As `render`, with the text starting at x (strip pixels).
+    pub fn render_at(&mut self, s: &str, color: [u8; 3], w: usize, size: usize, x: f32) -> Vec<u8> {
         let (w2, h2) = ((2 * w).min(1024), 2 * size + 6);
-        let mask = self.mask(s, (2 * size - 2) as f32, 0.0, 0.0, w2, h2);
+        let mask = self.mask(s, (2 * size - 2) as f32, 2.0 * x, 0.0, w2, h2);
         let mut work = vec![[0f32; 4]; w2 * h2];
         let black = [0.0, 0.0, 0.0];
         let col = color.map(|c| c as f32 / 255.0);

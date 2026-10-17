@@ -106,6 +106,8 @@ pub enum Event {
     HaltFinal,
     Route(u8),
     Sfx(u8),
+    Plate(usize),
+    SpellBase(usize),
 }
 
 // Facts Msg_Start needs about the running game (10 §4).
@@ -205,9 +207,20 @@ impl Dialogue {
         let (info, face_slot, events, texts) = (self.info, self.face_slot, std::mem::take(&mut self.events), std::mem::take(&mut self.texts));
         *self = Dialogue { file: Some(file), info, face_slot, events, texts, ..Dialogue::default() };
         let mut n = n;
-        if n == 0 && matches!(info.stage, 7 | 8) {
-            // SPEC-GAP: the overlay base (0x4E4B64) and HUD effect 0x437F5C hooks are not modelled.
-            self.face_slot.swap(2, 3);
+        if n == 0 {
+            // Entry 0 hooks (answers_impl10 §6).
+            if matches!(info.stage, 7 | 8) {
+                self.face_slot.swap(2, 3);
+            }
+            if matches!(info.stage, 6..=8) {
+                self.events.push(Event::SpellBase(2));
+            }
+            match info.stage {
+                5 => self.events.push(Event::Plate(0x16)),
+                7 => self.events.push(Event::Plate(0x18)),
+                8 => self.events.push(Event::Plate(0x19)),
+                _ => {}
+            }
         }
         if info.stage == 5 && n == 10 {
             let (m, c) = if info.continues != 0 {
