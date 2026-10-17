@@ -34,12 +34,27 @@ Derived functions (only one RNG object exists; all 125 call sites pass `&g_Rng`)
 | `Rng_GetState` / `Rng_SetState` | 0x453C20 / 0x453BE0 | read / write `s` (counter untouched) |
 | `Rng_ResetCounter` | 0x453C00 | counter = 0 |
 
-### 1.2 Floating-point precision (INFERRED, matters for bit-exact replays)
-The u32 is loaded exactly (64-bit integer load) and divided on the x87 FPU. The CRT start-up sets 53-bit
-precision (`_controlfp(0x10000, 0x30000)`, 0x4A72D7), but the Direct3D 8 device is created without the
-FPU-preserve flag (00/05), which switches the FPU to 24-bit (single) precision for the rest of the run.
-Under that mode `Rng_Float()` = `(f32)(u32) / 2^32` rounded to nearest-even; values ≥ 0xFFFFFF80 round to
-**1.0**. `Rng_FloatRange(x)` = single-precision product. Equivalent Rust: `(n as f32) / 4294967296.0_f32 * x`.
+### 1.2 Floating-point precision — VERIFIED (runtime, answers_phase8 §1)
+The u32 is loaded exactly (64-bit integer load; precision control does not affect loads) and divided on the x87.
+The CRT start-up sets 53-bit precision (`_controlfp(0x10000, 0x30000)`, 0x4A72D7). The control word was measured
+under wine:
+- the main thread has 0x027F until `CreateDevice`;
+- after `CreateDevice` (no FPU_PRESERVE) the main thread has **0x007F**: 24-bit precision, round to nearest;
+- 0x007F holds for the whole Frame_Run (calc chain, draw chain, Present).
+
+So `Rng_Float()` = `(f32)(u32) / 2^32`, rounded to nearest-even. Values ≥ 0xFFFFFF80 round to **1.0**.
+`Rng_FloatRange(x)` = single-precision product. Equivalent Rust: `(n as f32) / 4294967296.0_f32 * x`.
+
+**Loader threads keep 0x027F (53-bit).** `GameManager_StageStart` runs on the loader thread (`CreateThread` via
+0x4486BA), which has its own FPU state. The measured CW there is 0x027F for every stage start, and RNG calls
+are made from that thread.
+- RNG draws there are integer (Range16, Range, Next32), or feed decoys (`Rng_Float` in the new-game decoys,
+  §1.5). Neither is affected.
+- Float math on that thread that keeps intermediates in x87 registers (multi-operation expressions, fsin/fcos,
+  int→float of values > 2^24) is rounded to 53 bits, not 24.
+- A single +,−,×,÷ whose result is stored straight to a float32 gives the same value under both precisions.
+- Port rule: compute stage-start/loader-thread initialisation in f64 and store as f32 only where the original
+  stores. Compute everything on the main thread in f32 per operation.
 
 ### 1.3 Seeding
 - Boot (0x4464C8): `s = (u16) timeGetTime()`. **No reseed on new game** — a new game continues from whatever

@@ -57,7 +57,7 @@ Most of the 45 KB is covered by behaviour, not by address: ECL natives 07 §12, 
 | Screenshots | answers_phase7 §6 | COVERED (24-bit path; the 16-bit back-buffer branch is not decoded) | `Frame_Present`, 0x44748F |
 | Post-present surface capture (pause background etc.) | 12 §3 (use) | PARTIAL: copy parameters at AnmManager+0x2A252C… not specified | 0x443B60, 0x466F20, 0x467180 |
 | Anti-tamper | 11 §4 step 7, answers_phase7 intro | COVERED (ignore) | `GameMgr_IsTampered` 0x40BB80 |
-| Floating-point environment | 05 §10, 11 §1.2 | PARTIAL: single-precision x87 is INFERRED; it matters for bit-exact replays and needs a runtime check | — |
+| Floating-point environment | 05 §10, 11 §1.2 | VERIFIED at runtime (answers_phase8 §1): main thread CW 0x007F (24-bit precision, round to nearest) after CreateDevice; loader threads 0x027F | — |
 
 ## 2. Graphics and audio subsystems
 

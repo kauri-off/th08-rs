@@ -227,7 +227,12 @@ optional "hit by bomb" output. Returns 0 if the player state timer did not advan
 - every bullet that is active and (state 1 or type 3), overlaps the box, (types 4/5: timer even), and whose hit
   filter (if any) returns 0: damage += bombing ? max(1, dmg/5) : dmg; while accumulator ≥ +0xE2B2C:
   accumulator −= step and, at human max gauge with a human-side shot, a time orb (type 7) spawns at the bullet;
-  unless types 4/5/6 the bullet enters state 2 (hit script +11, effect 5, z 0.1) and (not type 3) vel /= 8.
+  unless types 4/5/6 the bullet enters state 2 and (not type 3) vel /= 8. Entering state 2 (only if it was in
+  state 1): save VM rotation z (vm+0x08); restart the VM with script (entry script + 11) on the player ANM
+  file (this re-initialises the whole VM: scale, colour, tag, timers); **restore rotation z**; effect 5 at the
+  bullet; pos z = 0.1. The bullet angle (+0x450) is not changed. VERIFIED (`Player_DamageAgainst` 0x451670; answers_bugs1 B1).
+  The hit scripts (e.g. player00.anm 15/17) set tag 1 again, so the hit-pass draw (14 §5) keeps setting
+  rotation z = bullet angle every frame: hit animations are oriented along the shot direction.
 - shot damage capped at 50; accumulator += capped value.
 - damage areas (first 192, §8) whose life % period == 0 and that overlap: damage += area damage; the area's
   dealt total grows and is capped by its max (excess removed, area damage := 0 when reached); "hit by bomb" := 1

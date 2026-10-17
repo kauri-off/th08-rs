@@ -52,7 +52,7 @@ direct effect of an opcode/draw routine, INFERRED for names of owner-only fields
 | 0x1F0 | u32 | colour | D3DCOLOR: byte 0x1F0 = B, 0x1F1 = G, 0x1F2 = R, 0x1F3 = A |
 | 0x1F4 | u32 | colour2 | second colour, same byte order (0x1F7 = alpha2) |
 | 0x1F8 | u32 | flags | §2.1 |
-| 0x1FC | u16 | tag | free value written by op 25; read only by owner code (stage/enemy) |
+| 0x1FC | u16 | tag | free value written by op 25 (`set_tag`); read only by owner code. Stage/enemy use it as a value. **Player bullets: tag ≠ 0 → each frame before drawing, rotation z := bullet angle** (14 §5, 09 §4.5; answers_bugs1 B1) |
 | 0x1FE | u16 | pending_interrupt | 0 = none; set by owners (`AnmVm_Interrupt` 0x407120) |
 | 0x200 | i32 | draw_mode | 0..5, used by the generic draw entry (§8) |
 | 0x204 | ptr | anm_file | loaded-file record (structs.md `AnmLoadedFile`) |
@@ -367,13 +367,20 @@ fovY = 0.31415927 (π/10), aspect = vp.w / vp.h, near = 1, far = 10000,
 eye = (vp.w/2, vp.h/2, (vp.h/2)/tan(fovY/2)), at = (vp.w/2, vp.h/2, 0), up = (0, −1, 0), left-handed.
 With this camera, world (x, y, 0) projects to viewport pixel (x, y) (relative to the viewport origin).
 
-## 10. Floating-point environment — VERIFIED / INFERRED
+## 10. Floating-point environment — VERIFIED (runtime, phase 8)
 
-- The D3D8 device is created without D3DCREATE_FPU_PRESERVE (behaviour flags 0x40 or 0x20, VERIFIED), so after
-  device creation the x87 FPU runs in single precision with round-to-nearest (INFERRED from D3D documented
-  behaviour). All VM arithmetic above is therefore effectively IEEE float32 arithmetic.
+- The D3D8 device is created without D3DCREATE_FPU_PRESERVE (behaviour flags 0x40 or 0x20, VERIFIED statically).
+  Runtime measurement (answers_phase8 §1): x87 control word 0x027F before `CreateDevice`, **0x007F** after it,
+  and 0x007F at every Frame_Run calc/draw/Present on the main thread. 0x007F = all exceptions masked,
+  precision control 00 = **24-bit mantissa (single)**, rounding control 00 = **round to nearest even**.
+  No game code executes `fldcw` (byte scan of 0x402000..0x476CE0); only CRT helpers (ftol, math) change it
+  temporarily and restore it.
+  So every x87 arithmetic result on the main thread is rounded to a float32 mantissa, including intermediates
+  kept in registers. The exponent range stays extended, but gameplay values never get near it. All VM
+  arithmetic above is therefore IEEE float32 arithmetic, one rounding per operation.
+- Exception: loader threads (stage start, menu loader) run with **0x027F (53-bit)**, see 11 §1.2.
 - float → int conversions (`crt_ftol`) truncate toward zero (VERIFIED from its code).
-- sin/cos in draw code are x87 `fsin/fcos` (`FSINCOS`).
+- sin/cos in draw code are x87 `fsin/fcos` (`FSINCOS`). Their results are rounded to 24 bits under this CW.
 
 ## 11. Verification
 

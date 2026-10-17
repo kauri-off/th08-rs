@@ -153,7 +153,7 @@ bit 0x400 of a HUD repaint word (INFERRED: unrelated bookkeeping).
 | `Effect_SpawnFixed` 0x425870 | type, pos, slot k, colour | always slot 640 + k (overwrites); skips the script when table script < 0 |
 | `Effect_SpawnFixedParam` 0x4259E0 | type, pos, param, slot k, colour | same with param |
 
-Fixed slots in use: 0 invulnerability ring, 1 spell-card start ring, 2 youkai aura, 3 / 11 death rings,
+Fixed slots in use: 0 invulnerability ring, 1 spell-card start ring, 2 youkai aura, 3 death burst (type 12), 11 deathbomb-window ring (type 59),
 4 dissolve spell, 4–7 Yukari boundaries / Marisa sparks, 8 gauge-max aura, 9–10 boss natives, 12 stage.
 
 ### 2.3 Per frame (`EffectMgr_Calc`, calc prio 13)
@@ -185,14 +185,14 @@ sin((π − 2π/n)/2), start angle +0x318 (VM rotation z), step 2π/n, centre +0
 Ring effects copy VM fields into these parameters every frame, so their ANM scripts animate the ring.
 
 ### 2.6 Effect types (table 0x4C6D30: script, update, init; scripts are global `etama.anm` indices,
-see `extracted/anm_dis.txt`; "life" = frame at which the script stops, ∞ = loops until freed)
+see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global index = entry-0 count (25) + entry-1 index for entry 1, + 51 more for entry 2 (e.g. 44 = entry 1 script 19, 78 = entry 2 script 2); "life" = frame at which the script stops, ∞ = loops until freed)
 | type | script (life) | init / update behaviour | used by |
 |---|---|---|---|
 | 0 | 28 (20) | — | item conversion, enemy death burst (default death-effect byte 0), Sakuya knives |
 | 1, 2 | 29 (20), 30 (40) | — | — |
 | 3 | 31 (40) | spark (additive, scale 3 → 0): v = ((R·256 − 128)·4/33, same for y) (**RNG** x then y), a = −v/20; per frame pos += v, v += a (both × gs at init) | **bomb/last-spell damage area** hits an enemy: every 4th hit (player u8 counter +0xE2A94 & 3 == 0, areas with +0x3D = 0 only), at the enemy box, colour 0xFFFFFFFF — never from bullets (answers_impl9 §P1) |
 | 4–11 | 36–43 (30) | spark: v = (R·256 − 128)/12 per axis (**RNG**), a = −v/19; same motion | enemy death (type e+0x3311 + 4, ×4), drops (×3 / ×6), player death (type 6 ×16), bomb orbs |
-| 12 | 44 (40) | — | deathbomb ring (fixed slot 3), bomb starts (colour 0xFF4040FF) |
+| 12 | 44 (40) | — | death burst at the **real** death (fixed slot 3, `Player_DyingUpdate` when the deathbomb window reaches 0); also bomb starts (pool, 3 bomb fns). Colour 0xFF4040FF. Script 44 (= etama entry 1 script 19): sprite 214 (63×63, etama2.png), additive, alpha 255 → 0 over 40 frames, scale 0.5 growing +0.3/frame, `hide_stop` at 40 → the effect manager frees it (runtime: freed on age 40). Nothing else frees it |
 | 13–15 | 45 (∞) | layer 2 (init zeroes axis/angle); update: pos = centre (+0x2E0) + offset rotated about the normalised axis (+0x2EC) by angle (+0x318) (quaternion; INFERRED geometry), z = 0; when +0x352 is set: +0x353 counts up, alpha = 255·(1 − n/16)… freed after 15 frames, scale grows | ECL op 128 (enemy-attached; the enemy writes axis/angle/centre every frame, 07 op 128) |
 | 16 | 0 | — | — |
 | 17, 27 | 32 (60), 34 (120) | converge: centre = pos, dir = unit at random angle (**RNG**); pos = centre + dir·(256 − 256·t/60) | ECL op 139 (charge-up) |
@@ -233,7 +233,7 @@ gameplay). Exact per-type RNG draw counts: types 3–11 two draws, 17/18/27 one,
 | graze | type 8 at the bullet/player midpoint |
 | enemy dies | death-effect type (e+0x3310, default 0) once + type e+0x3311 + 4 (default 4) ×4 at the enemy; scripted "survive" (death mode 3): death type ×3 |
 | enemy drops items | type e+0x3311 + 4 ×3 (×6 on certain drops) |
-| player hit | type 6 ×16 at the player; ring type 59 (slot 11); at death time type 6 ×16 again and ring 12 (slot 3) |
+| player hit | type 6 ×16 at the player (script 38: 30 frames, then freed); ring type 59 (slot 11) **only when bombs ≥ 1 and not in dissolve mode** (game flags bits 7–8 = 0). The ring never ends by itself (script 78 loops, update 0x427990 always returns 1). It is freed by game code only: active := 0 and player+0xE2B28 := 0, either (a) by `Player_DyingUpdate` on the frame the deathbomb window reaches 0, just before the real-death effects, or (b) by `Player_UpdateBomb` when a (death)bomb starts. At real death: type 6 ×16 again and burst 12 (slot 3, 40 frames). VERIFIED (runtime, answers_bugs1 B2) |
 | bomb start | invulnerability ring (type 23 slot 0) + per-bomb effects (14) |
 | focus switch (teams, state held > 3 frames) | type 28 / 29; youkai side also creates the aura type 22 (slot 2) |
 | gauge at human-max or youkai-max | aura type 25 (slot 8) |

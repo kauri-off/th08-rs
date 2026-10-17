@@ -103,6 +103,7 @@ Build: `i686-w64-mingw32-gcc -O2 -shared -o d3d8.dll hook.c d3d8.def -static-lib
   - `Rng_Next16` 0x43ECC0: counts calls; logs the CW of any non-main thread that calls it.
   - `Sound_Update` 0x45D790: this is the first call after `FuncChain_RunCalc` in Frame_Run, so it is the post-calc sample point. It writes one trace row per frame while scene = 2 and demo flag set (`traceall` command: every game frame).
   - `GameManager_StageStart` 0x43ABD7: logs thread id and CW.
+  - `FuncChain_RunCalc` pass start 0x43CA65 (`mov [ebp-8],0`, 7 bytes): when the chain restarts (return 6, replay fast-forward), emits the row of the previous pass. Without it, fast-forwarded frames are lost, because up to 3 logic frames run per Frame_Run.
 - **Vtable hooks.**
   - IDirect3D8::CreateDevice (idx 15): logs the CW before and after, and the present parameters.
   - Device Present (idx 15): logs CW changes, runs commands, takes screenshots of the back buffer before the real Present. The game already sets LOCKABLE_BACKBUFFER. The format is X8R8G8B8 640×480. The output is `shots/<name>.ppm`.
@@ -118,6 +119,7 @@ Build: `i686-w64-mingw32-gcc -O2 -shared -o d3d8.dll hook.c d3d8.def -static-lib
     - `key VKhex frames`;
     - `poke1|poke2|poke4 addrhex valhex`;
     - `nodik`;
+    - `effscan N` (log active effects of types 4–12 and 59 with slot, age, alpha and ip, for N Presents);
     - `quit`.
   - `traceall` alone on a line enables tracing outside demos.
 - **Outputs** (in game/):
@@ -130,4 +132,15 @@ Build: `i686-w64-mingw32-gcc -O2 -shared -o d3d8.dll hook.c d3d8.def -static-lib
 - Boot to title: about 2 s.
 - With no input, the attract demo starts after about 1550 frames on the title.
 - All 4 demos run in sequence in about 500 s: `run.sh 560`.
-- Runs are deterministic. Two runs with different boot seeds gave identical demo traces.
+- Runs are deterministic. Three runs with different boot seeds gave identical demo traces.
+- Command scripts used in phase 8 are in `re/work/cmds/`:
+  - `spell54.txt` (Spell Practice → 4A → card 54, hold Shot, shots per 15 frames);
+  - `ending.txt` (same, then next scene = 9).
+- Menu navigation: one 3-frame key press = one cursor step. The locked "Extra Start" is skipped. Spell Practice
+  goes straight to the stage-row screen. The card list cursor starts on the first card of the row.
+- Probe pitfalls:
+  - callbacks must not use the FPU;
+  - the loader thread runs StageStart concurrently with Frame_Run, so per-phase RNG counts must be split by thread (the probe counts main-thread calls separately);
+  - anm_dis.txt numbers scripts per entry; the runtime script index is global across entries;
+  - DI keyboard pointer must be re-zeroed after it is created (`nodik` does it every Present);
+  - spell practice does not reseed the RNG, so its bullets differ between runs.
