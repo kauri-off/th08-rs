@@ -24,7 +24,7 @@
 | impl 4 | opus 5.5 medium | impl4-web-parity | done: web pixel-identical to native (WebGL2+WebGPU), ?stage= params via src/env.rs; seams are in texture data |
 | impl 5 | opus 5.5 medium | impl5-ecl | done: src/ecl.rs, eclvm.rs (ops 0..184), enemy.rs, temp bullet.rs; all stages spawn+fire; 17 tests |
 | impl 6 | opus 5.5 medium | impl6-bullets | done: real BulletManager (1536 slots, op111), lasers, src/item.rs, collision vs player stub, phase3 answers applied; 34 tests |
-| impl 7 | opus 5.5 medium | impl7-player | failed: Claude API rate limit (no changes) → relaunched as impl7b-player |
+| impl 7 | opus 5.5 medium | impl7-player | running (rate-limited once, restarted by user; resumed in same thread) |
 
 User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_TEMPLATE.md.
 
