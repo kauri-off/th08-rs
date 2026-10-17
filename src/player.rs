@@ -302,6 +302,7 @@ pub struct Player {
     pub game_over: bool,
     pub freeze_bullets: bool,
     pub hits: u32,
+    pub spark_counter: u8,
     pub grazes: u32,
     pub deaths: u32,
     pub bombs_started: u32,
@@ -357,6 +358,7 @@ impl Default for Player {
             game_over: false,
             freeze_bullets: false,
             hits: 0,
+            spark_counter: 0,
             grazes: 0,
             deaths: 0,
             bombs_started: 0,
@@ -506,7 +508,6 @@ impl Player {
         Stats::checksum(rng);
         crate::sound::play_at(crate::sound::PLDEAD, self.pos[0]);
         crate::effect::spawn_rng(rng, 6, self.pos, 16, 0xFFFFFFFF);
-        crate::effect::death_ring(rng, self.pos);
         self.state = 2;
         self.state_timer.set(0);
         let st = &mut self.stats;
@@ -527,6 +528,7 @@ impl Player {
             }
             n
         };
+        crate::effect::death_ring(rng, self.pos, n);
         if self.env.spell {
             self.freeze_bullets = true;
         }

@@ -71,12 +71,17 @@ pub struct Effect {
     zoff: bool,
     pending: bool,
     spin: f32,
-    death_ring: bool,
+    rot: f32,
+    pull: [f32; 3],
+    disp: [f32; 3],
+    pull_speed: f32,
+    death_ring: i32,
 }
 
 #[derive(Clone, Copy, Default)]
 pub struct View {
     pub cam: Option<Camera>,
+    pub pos: [f32; 3],
     pub eye: [f32; 3],
     pub facing: [f32; 3],
     pub right: [f32; 3],
@@ -89,6 +94,9 @@ pub struct Effects {
     pub frozen: bool,
     pub player: [f32; 3],
     pub view: View,
+    pub boss: Option<[f32; 3]>,
+    pub overlay: [u8; 4],
+    pub paused: bool,
     lists: [Vec<usize>; 5],
     screen: Vec<ScreenEffect>,
 }
@@ -102,6 +110,9 @@ impl Default for Effects {
             frozen: false,
             player: [192.0, 384.0, 0.0],
             view: View::default(),
+            boss: None,
+            overlay: [255; 4],
+            paused: false,
             lists: Default::default(),
             screen: Vec::new(),
         }
@@ -138,6 +149,14 @@ pub fn get(idx: usize, f: impl FnOnce(&mut Effect)) {
 
 pub fn free(idx: usize) {
     get(idx, |x| x.active = false);
+}
+
+pub fn shift_kind(kind: u8, d: [f32; 3]) {
+    with(|e| {
+        for x in e.fx.iter_mut().filter(|x| x.active && x.kind == kind) {
+            x.pos = std::array::from_fn(|k| x.pos[k] + d[k]);
+        }
+    })
 }
 
 pub fn clear() {
@@ -207,21 +226,33 @@ impl Effects {
                     _ => 120,
                 };
             }
-            // SPEC-GAP: the 9 RNG draws of the 3D particles are consumed, but their exact meaning is not given;
-            // they place the particle in front of the stage camera with a slow drift.
+            // 3D background particles (answers_impl9 §4): base = camera + facing/2.
             19 | 51 | 63 => {
-                let r: [f32; 10] = std::array::from_fn(|k| if k < 9 || kind == 19 { rng.next_f32() } else { 0.0 });
-                let dist = 200.0 + r[0] * 600.0;
-                let side = [(r[1] - 0.5) * dist * 1.2, (r[2] - 0.5) * dist];
-                let up = [0.0, 0.0, 1.0];
-                e.pos = [
-                    view.eye[0] + view.facing[0] * dist + view.right[0] * side[0] + up[0] * side[1],
-                    view.eye[1] + view.facing[1] * dist + view.right[1] * side[0] + up[1] * side[1],
-                    view.eye[2] + view.facing[2] * dist + view.right[2] * side[0] + up[2] * side[1],
-                ];
-                e.vel = [(r[3] - 0.5) * 2.0, (r[4] - 0.5) * 2.0, (r[5] - 0.5) * 2.0];
-                e.acc = [(r[6] - 0.5) * 0.02, (r[7] - 0.5) * 0.02, (r[8] - 0.5) * 0.02];
-                e.spin = (r[9] - 0.5) * 0.1;
+                let mut r = |x: f32| rng.next_f32() * x;
+                let base: [f32; 3] = std::array::from_fn(|k| view.pos[k] + view.facing[k] + -view.facing[k] / 2.0);
+                let (off, v, a);
+                if kind == 19 {
+                    let o = [r(120.0) - 60.0, r(200.0) - 100.0, r(100.0) - 100.0];
+                    let vv = [r(0.06) - 0.03 + param[0], r(0.06) - 0.03 + param[1], r(0.1) + 0.03 + param[2]];
+                    let aa = [r(0.0002) - 0.0001, r(0.0002) - 0.0001, 0.0];
+                    (off, v, a) = (o, vv, aa);
+                    e.rot = r(2.0 * PI) - PI;
+                    e.spin = r(0.0314159) - 0.015708;
+                } else {
+                    let ox = rng.next_signed() * 60.0;
+                    let oy = if kind == 51 { rng.next_signed() * 100.0 - 50.0 } else { rng.next_signed() * 200.0 - 200.0 };
+                    let oz = rng.next_f32() * 100.0 - 100.0;
+                    let vx = rng.next_signed() * 0.001 + param[0];
+                    let vy = rng.next_signed() * 0.03 + if kind == 51 { param[1] } else { 0.4 };
+                    let vz = -(rng.next_f32() * 0.1) - 0.3 + param[2];
+                    let ax = rng.next_signed() * 0.0001;
+                    let ay = rng.next_signed() * 0.0001;
+                    (off, v, a) = ([ox, oy, oz], [vx, vy, vz], [ax, ay, -0.0003]);
+                    e.pull = [-9999.0, 0.0, 0.0];
+                }
+                e.pos = std::array::from_fn(|k| base[k] + off[k]);
+                e.vel = v.map(|x| x * gs);
+                e.acc = a.map(|x| x * gs);
                 e.layer = 1;
             }
             21 | 26 => {
@@ -261,12 +292,15 @@ impl Effects {
         }
         e.vm.color = e.colour.to_le_bytes();
         e.vm.pos_offset = [0.0; 3];
-        if e.death_ring {
-            e.vm.pos = [16.0, 0.0, 0.0];
-            e.vm.interp_pos(60, 4, [192.0, 0.0, 0.0]);
+        if e.death_ring > 0 {
+            e.vm.pos = [128.0, 32.0, 0.0];
+            e.vm.interp_pos(e.death_ring, 4, [8.0, 32.0, 0.0]);
         }
         match e.kind {
-            19 | 51 | 63 => e.vm.angular_vel[2] = e.spin,
+            19 => {
+                e.vm.rotation[2] = e.rot;
+                e.vm.flags |= anmvm::F_ROT_DIRTY;
+            }
             60 | 61 => {
                 e.vm.rotation[2] = e.spin;
                 e.vm.flags |= anmvm::F_ROT_DIRTY;
@@ -331,9 +365,11 @@ impl Effects {
     }
 
     // Per-type update (13 §2.6); false frees the effect.
-    fn update(&mut self, i: usize, gs: f32) -> bool {
+    fn update(&mut self, i: usize) -> bool {
         let player = self.player;
         let view = self.view;
+        let boss = self.boss;
+        let overlay = self.overlay;
         let e = &mut self.fx[i];
         let t = e.age.getf();
         match e.kind {
@@ -361,12 +397,31 @@ impl Effects {
             }
             19 | 51 | 63 => {
                 for k in 0..3 {
-                    e.pos[k] += e.vel[k] * gs;
-                    e.vel[k] += e.acc[k] * gs;
+                    e.vel[k] += e.acc[k];
+                    e.pos[k] += e.vel[k];
                 }
-                let d = norm(sub(e.pos, view.eye));
-                if view.cam.is_some() && dot(d, norm(view.facing)) < 0.94 || e.pos[2] < 0.0 {
+                let d = norm(sub(e.pos, view.pos));
+                if dot(d, norm(view.facing)) < 0.94 {
                     return false;
+                }
+                if e.kind == 19 {
+                    e.vm.rotation[2] = anmvm::wrap_add(e.vm.rotation[2], e.spin);
+                    e.vm.flags |= anmvm::F_ROT_DIRTY;
+                    if e.pos[2] >= 0.0 {
+                        return false;
+                    }
+                } else {
+                    if let Some(b) = boss {
+                        if e.pull[0] == -9999.0 {
+                            e.pull = b;
+                        } else {
+                            e.pull = std::array::from_fn(|k| e.pull[k] + (b[k] - e.pull[k]) * 0.1);
+                        }
+                    }
+                    if e.kind == 51 {
+                        e.vm.flags |= anmvm::F_COLOR2;
+                        e.vm.color2 = std::array::from_fn(|k| ((e.vm.color[k] as u32 * overlay[k] as u32) >> 8) as u8);
+                    }
                 }
             }
             21 | 26 => {
@@ -388,9 +443,11 @@ impl Effects {
             let r = &mut e.ring;
             r.width = e.vm.scale[0];
             r.radius = e.vm.pos[0];
-            r.amp = e.vm.pos[1];
-            r.start = e.vm.rotation[2];
-            r.tilt = e.vm.rotation[1];
+            if !matches!(e.kind, 35 | 39 | 49 | 52 | 59) {
+                r.amp = e.vm.pos[1];
+                r.start = e.vm.rotation[2];
+                r.tilt = e.vm.rotation[1];
+            }
             if matches!(e.kind, 40 | 55 | 56 | 58 | 65) {
                 r.segments = e.vm.ivars[0].max(3);
                 r.waves = e.vm.ivars[1] as f32;
@@ -419,7 +476,7 @@ impl Effects {
             self.live += 1;
             self.start(anm, i);
             if !self.frozen || self.fx[i].keep_frozen {
-                if !self.update(i, gs) {
+                if !self.update(i) {
                     self.fx[i].active = false;
                     continue;
                 }
@@ -479,27 +536,44 @@ impl Effects {
         }
     }
 
-    // List B from Stage_DrawHigh; effect level 1 draws every other element. SPEC-GAP: no fog tint for 0x33/0x3F.
+    // List B from Stage_DrawHigh (answers_impl9 §8): only effect level 2 draws; no fog.
     pub fn draw_background(&mut self, anm: &mut AnmManager, gfx: &mut Gfx, level: u8) {
-        if level == 0 {
+        if level < 2 {
             return;
         }
         let Some(cam) = self.view.cam else { return };
         let right = self.view.right;
-        let step = if level == 1 { 2 } else { 1 };
-        for k in (0..self.lists[1].len()).step_by(step) {
+        let player = self.player;
+        for k in 0..self.lists[1].len() {
             let i = self.lists[1][k];
-            let e = &mut self.fx[i];
-            if e.layer == 4 {
+            if self.fx[i].layer == 4 {
                 self.draw_one(anm, gfx, i, 0.07);
                 continue;
             }
-            let s = cam.project(e.pos, PLAYFIELD);
-            let w = e.vm.sprite_w.max(1.0);
-            let s2 = cam.project([e.pos[0] + right[0] * w, e.pos[1] + right[1] * w, e.pos[2] + right[2] * w], PLAYFIELD);
-            let sc = ((s2[0] - s[0]).powi(2) + (s2[1] - s[1]).powi(2)).sqrt() / w;
+            let e = &mut self.fx[i];
+            let mut s = cam.project(e.pos, PLAYFIELD);
             if !(0.0..=1.0).contains(&s[2]) {
                 continue;
+            }
+            let s2 = cam.project([e.pos[0] + right[0], e.pos[1] + right[1], e.pos[2] + right[2]], PLAYFIELD);
+            let sc = ((s2[0] - s[0]).powi(2) + (s2[1] - s[1]).powi(2)).sqrt();
+            if matches!(e.kind, 51 | 63) && !self.paused {
+                let p = [s[0] + e.disp[0], s[1] + e.disp[1]];
+                if e.pull[0] > -9999.0 {
+                    let d = [e.pull[0] - p[0] + 32.0, e.pull[1] - p[1] + 16.0];
+                    if d[0] * d[0] + d[1] * d[1] < 160.0 * 160.0 {
+                        e.pull_speed += 0.0005;
+                        e.disp[0] += d[0] * e.pull_speed;
+                        e.disp[1] += d[1] * e.pull_speed;
+                    }
+                }
+                let d2 = [p[0] - player[0] - 32.0, p[1] - player[1] - 16.0];
+                if d2[0] * d2[0] + d2[1] * d2[1] < 88.0 * 88.0 {
+                    e.disp[0] += d2[0] * 0.02;
+                    e.disp[1] += d2[1] * 0.02;
+                }
+                s[0] += e.disp[0];
+                s[1] += e.disp[1];
             }
             let (pos, scale) = (e.vm.pos, e.vm.scale);
             e.vm.pos = s;
@@ -508,11 +582,12 @@ impl Effects {
             anm.draw_mode_z(gfx, &mut e.vm, 2, s[2]);
             e.vm.pos = pos;
             e.vm.scale = scale;
+            e.vm.flags |= anmvm::F_SCALE_DIRTY;
         }
     }
 }
 
-// Ring renderer 0x427450 (13 §2.5): strip of 2(n+1) vertices, u along the ring, VM colour.
+// Ring renderer 0x427450 (13 §2.5): strip of 2(n+1) vertices, v along the ring, u across the band, WRAP sampling.
 fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
     let vm = &e.vm;
     if vm.flags & (anmvm::F_VISIBLE | anmvm::F_ENABLED) != (anmvm::F_VISIBLE | anmvm::F_ENABLED) || vm.color[anmvm::A] == 0 || !vm.has_sprite {
@@ -523,18 +598,18 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
     let n = r.segments.max(3);
     let step = 2.0 * PI / n as f32;
     let w = r.width / ((PI - step) / 2.0).sin();
-    let o = anm.screen_offset;
-    let (cx, cy) = (e.centre[0] + 32.0 + o[0] + 0.5, e.centre[1] + 16.0 + o[1] + 0.5);
+    let (cx, cy) = (e.centre[0] + 32.0 + 0.5, e.centre[1] + 16.0 + 0.5);
     let c = vm.color;
     let rgba = anm.tinted([c[anmvm::R], c[anmvm::G], c[anmvm::B], c[anmvm::A]]);
+    let wrap = |a: f32| if a >= PI { a - 2.0 * PI } else { a };
     let point = |k: i32, outer: bool| -> [f32; 2] {
-        let th = r.start + k as f32 * step;
+        let th = wrap(r.start + k as f32 * step);
         let sgn = if outer { 1.0 } else { -1.0 };
         if r.amp == 0.0 {
             let rr = r.radius + sgn * w;
             [cx + th.cos() * rr, cy + th.sin() * rr]
         } else if r.waves == 0.0 {
-            let th = k as f32 * step;
+            let th = wrap(k as f32 * step);
             let (x, y) = (th.cos() * (r.radius + sgn * w), th.sin() * (r.amp + sgn * w));
             let (s, co) = r.tilt.sin_cos();
             [cx + x * co - y * s, cy + x * s + y * co]
@@ -545,11 +620,11 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
         }
     };
     let blend = anm.blend_for(vm);
-    let (u0, v0, u1, v1) = (spr.uv[0], spr.uv[1], spr.uv[2], spr.uv[3]);
+    let (u0, v0, u1, v1) = (spr.uv[0] + vm.uv_off[0], spr.uv[1], spr.uv[2] + vm.uv_off[0], spr.uv[3]);
+    let vk = |k: i32| v1 + vm.uv_off[1] - k as f32 * (v1 - v0) / n as f32;
     for k in 0..n {
-        let (ua, ub) = (u0 + (u1 - u0) * k as f32 / n as f32, u0 + (u1 - u0) * (k + 1) as f32 / n as f32);
         let p = [point(k, true), point(k, false), point(k + 1, true), point(k + 1, false)];
-        let uv = [[ua, v0], [ua, v1], [ub, v0], [ub, v1]];
+        let uv = [[u0, vk(k)], [u1, vk(k)], [u0, vk(k + 1)], [u1, vk(k + 1)]];
         let v = std::array::from_fn(|i| Vertex::screen(p[i][0], p[i][1], 0.07, uv[i], rgba));
         gfx.strip(spr.tex, blend, false, v);
     }
@@ -575,11 +650,10 @@ pub fn spawn_fixed(anm: &mut AnmManager, kind: u8, pos: [f32; 3], k: usize, colo
     with(|e| e.spawn_fixed(anm, kind, pos, [0.0; 3], k, colour))
 }
 
-// Spell-card start ring (13 §2.7): 64 segments, width 15, 6 waves, radius 8 → 256 and amplitude 64 → 0 over 100 frames.
+// Spell-card start ring (answers_impl9 §P2): plain ring, 64 segments, radius 8 → 256 over 100 frames (ease 6).
 pub fn spell_ring(anm: &mut AnmManager, pos: [f32; 3], special: bool) {
     let i = spawn_fixed(anm, if special { 52 } else { 39 }, pos, FIX_SPELL, 0xFFFFFFFF);
     get(i, |e| {
-        e.vm.scale = [15.0, 15.0];
         e.ring.segments = 64;
         e.ring.waves = 6.0;
         e.vm.pos = [8.0, 64.0, 0.0];
@@ -626,7 +700,11 @@ impl Task<Ctx> for EffectManager {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        with(|e| e.calc(&mut ctx.anm));
+        let paused = ctx.game.paused != 0 || ctx.game.game_over != 0;
+        with(|e| {
+            e.paused = paused;
+            e.calc(&mut ctx.anm)
+        });
         Ret::Next
     }
 
@@ -779,11 +857,15 @@ impl Task<Ctx> for ScreenEffect {
     }
 }
 
-// Player death ring (type 59, slot 11, colour 0xFFF0404F). SPEC-GAP: its radius is not given; it grows 16 → 192 over 60 frames.
-pub fn death_ring(rng: &mut crate::rng::Rng, pos: [f32; 3]) {
+// Player death ring (type 59, slot 11, colour 0xFFF0404F): radius 128 → 8 over the deathbomb window (ease 4).
+pub fn death_ring(rng: &mut crate::rng::Rng, pos: [f32; 3], frames: i32) {
     with(|e| {
         let i = e.spawn_fixed_rng(rng, 59, pos, FIX_DEATH, 0xFFF0404F);
-        e.fx[i].death_ring = true;
+        let x = &mut e.fx[i];
+        x.death_ring = frames.max(1);
+        x.keep_frozen = true;
+        x.ring.segments = 64;
+        x.ring.waves = 6.0;
     });
 }
 

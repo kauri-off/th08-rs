@@ -358,7 +358,8 @@ impl Stage {
             5 | 7 | 9 => {
                 let s = ((r.op - 5) / 2) as usize;
                 if s == POS && self.jumped {
-                    // SPEC-GAP: shifting kind-51 effects by the target delta waits for the effect system.
+                    let d = sub(r.v(), cam.target.v[s]);
+                    crate::effect::shift_kind(51, d);
                     self.jumped = false;
                 }
                 cam.start.v[s] = cam.target.v[s];
@@ -528,10 +529,13 @@ impl Stage {
         let m = cam.view.0;
         crate::effect::set_view(crate::effect::View {
             cam: Some(cam),
+            pos: self.cam.v[POS],
             eye: self.cam.eye(),
             facing: self.cam.v[FACING],
             right: normalize([m[0][0], m[0][1], m[0][2]]),
         });
+        let overlay = self.overlay.color;
+        crate::effect::with(|e| e.overlay = overlay);
         if self.vm_a.sprite_index > 0 {
             self.vm_a.run(anm);
         }

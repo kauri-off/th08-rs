@@ -24,6 +24,7 @@ pub struct Area {
     pub max: i32,
     pub period: i32,
     pub active: bool,
+    pub no_spark: bool,
 }
 
 impl Area {
@@ -128,13 +129,15 @@ impl Player {
 
     pub fn damage_circle(&mut self, pos: [f32; 2], r: f32, dr: f32, damage: i32, life: i32) -> usize {
         let i = Self::free_slot(&self.damage_areas);
-        self.damage_areas[i] = Area { pos, r, dr, life, damage, period: 1, item: 6, active: true, ..Area::default() };
+        let no_spark = self.bombing && matches!(self.bomb.ch, 0 | 2) && self.bomb.index != 4;
+        self.damage_areas[i] = Area { pos, r, dr, life, damage, period: 1, item: 6, active: true, no_spark, ..Area::default() };
         i
     }
 
     pub fn damage_rect(&mut self, pos: [f32; 2], size: [f32; 2], damage: i32, life: i32) -> usize {
         let i = Self::free_slot(&self.damage_areas);
-        self.damage_areas[i] = Area { pos, size, life, damage, period: 1, item: 6, active: true, ..Area::default() };
+        let no_spark = self.bombing && matches!(self.bomb.ch, 0 | 2) && self.bomb.index != 4;
+        self.damage_areas[i] = Area { pos, size, life, damage, period: 1, item: 6, active: true, no_spark, ..Area::default() };
         i
     }
 

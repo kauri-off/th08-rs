@@ -459,11 +459,15 @@ impl Player {
     }
 
     // Hit filters (table 0x4C7F24); true skips this hit.
-    fn hit_filter(&mut self, anm: &mut AnmManager, i: usize) -> bool {
+    fn hit_filter(&mut self, anm: &mut AnmManager, i: usize, enemy: [f32; 3]) -> bool {
         let spell = self.env.spell;
         let b = &mut self.bullets[i];
         match b.hit {
             1 => {
+                if b.timer.cur % 6 == 0 {
+                    crate::effect::spawn(anm, 5, enemy, 1, 0xFFFFFFFF);
+                }
+                let b = &mut self.bullets[i];
                 if b.state == 1 {
                     // SPEC-GAP: "enlarged by sprite (48–128 px)": the hit sprite's larger side clamped to 48..128.
                     let s = b.vm.sprite_w.max(b.vm.sprite_h).clamp(48.0, 128.0);
@@ -482,6 +486,11 @@ impl Player {
             }
             2 => {
                 b.hits += 1;
+                let x = b.pos[0];
+                self.spark_counter = self.spark_counter.wrapping_add(1);
+                if self.spark_counter & 7 == 0 {
+                    crate::effect::spawn(anm, 5, [x, enemy[1], enemy[2]], 1, 0xFFFFFFFF);
+                }
                 false
             }
             _ => false,
@@ -507,7 +516,7 @@ impl Player {
             if matches!(b.kind, 4 | 5) && b.timer.cur % 2 != 0 {
                 continue;
             }
-            if self.hit_filter(anm, i) {
+            if self.hit_filter(anm, i, pos) {
                 continue;
             }
             let d = self.bullets[i].damage as i32;
@@ -549,6 +558,12 @@ impl Player {
             }
             if self.bombing {
                 *by_bomb = true;
+            }
+            if !a.no_spark {
+                self.spark_counter = self.spark_counter.wrapping_add(1);
+                if self.spark_counter & 3 == 0 {
+                    crate::effect::spawn(anm, 3, pos, 1, 0xFFFFFFFF);
+                }
             }
         }
         if self.stats.youkai_max() {

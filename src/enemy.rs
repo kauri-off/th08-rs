@@ -579,10 +579,6 @@ impl EnemyManager {
                 p.damage_against(anm, Some(&mut b.items), pos, [bx[0], bx[1]], &mut acc, &mut by_bomb)
             };
             self.enemies[idx].orb_acc = acc;
-            // SPEC-GAP: 13 §2.7 gives no rate, colour or enemy filter for the hit spark; one per frame with d > 0.
-            if d > 0 && !by_bomb {
-                crate::effect::spawn(anm, 3, pos, 1, 0xFFFFFFFF);
-            }
             self.damage(idx, d, by_bomb);
         }
     }
@@ -1248,6 +1244,8 @@ impl EnemyManager {
                 self.update(idx, anm);
             }
         }
+        let pull = self.bosses[0].map(|i| &self.enemies[i]).filter(|e| e.flags & A_LOSES_LIFE != 0).map(|e| e.final_pos);
+        crate::effect::with(|fx| fx.boss = pull);
         if let Some(s) = &mut self.g.spell {
             s.frames += 1;
             if s.frames % 60 == 0 && !self.g.fixed_bonus {
