@@ -39,6 +39,8 @@ pub struct Input {
     pub raw: u16,
     pub held: u16,
     pub prev: u16,
+    pub same_frames: u32,
+    pub repeat: bool,
 }
 
 impl Input {
@@ -54,6 +56,9 @@ impl Input {
     pub fn tick(&mut self) {
         self.prev = self.held;
         self.held = self.raw;
+        // Key repeat (12 header): after 30 frames of unchanged input, true on every 8th frame.
+        self.same_frames = if self.held == self.prev { self.same_frames + 1 } else { 0 };
+        self.repeat = self.same_frames >= 30 && self.same_frames % 8 == 0;
     }
 
     pub fn down(&self, b: u16) -> bool {
@@ -62,6 +67,10 @@ impl Input {
 
     pub fn pressed(&self, b: u16) -> bool {
         self.held & b != 0 && self.prev & b == 0
+    }
+
+    pub fn pressed_or_repeat(&self, b: u16) -> bool {
+        self.pressed(b) || self.repeat && self.down(b)
     }
 }
 

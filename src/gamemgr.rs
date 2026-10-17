@@ -34,8 +34,10 @@ pub const SCENE_BOOT: i32 = 0;
 pub const SCENE_MENU: i32 = 1;
 pub const SCENE_GAME: i32 = 2;
 pub const SCENE_NEXT_STAGE: i32 = 3;
+pub const SCENE_RESULT_MENU: i32 = 5;
 pub const SCENE_RESULT: i32 = 6;
 pub const SCENE_REPLAY_END: i32 = 7;
+pub const SCENE_MUSIC_ROOM: i32 = 8;
 pub const SCENE_ENDING: i32 = 9;
 pub const SCENE_RETRY: i32 = 10;
 pub const SCENE_RELOAD: i32 = 11;
@@ -59,7 +61,7 @@ pub struct Game {
     pub frame_counter: u32,
     pub play_time: u32,
     pub rank: [i32; 4],
-    pub config_lives: i32,
+    pub cfg: crate::config::Config,
     pub stats: Stats,
     pub clear_nc: [[u16; 5]; 12],
     pub clear_any: [[u16; 5]; 12],
@@ -91,8 +93,7 @@ impl Default for Game {
             frame_counter: 0,
             play_time: 0,
             rank: [16, 32, 0, 0],
-            // SPEC-GAP: no config file yet; the option default (12 §2.7 "reset": lives 2) is used.
-            config_lives: 2,
+            cfg: Default::default(),
             stats: Stats::default(),
             clear_nc: [[0; 5]; 12],
             clear_any: [[0; 5]; 12],
@@ -248,7 +249,7 @@ impl GameManager {
         } else if g.practice() {
             8
         } else {
-            g.config_lives
+            g.cfg.lives as i32
         };
         st.lives = lives as f32;
         Stats::checksum(rng);
@@ -339,6 +340,7 @@ impl GameManager {
             enemies.borrow_mut().fast_forward = 0;
         }
         let hud = Hud::register(ctx, self.player.clone(), enemies.clone(), stage_t.clone())?;
+        let effects = crate::effect::EffectManager::register(ctx)?;
         enemies.borrow_mut().msg = Some(hud.borrow().msg.clone());
         if !ctx.game.reload_same {
             let bgm = stage_t.borrow().std.bgm[0].clone();
@@ -349,16 +351,17 @@ impl GameManager {
         g.flags |= F_RUNNING;
         g.game_over = 0;
         g.flags &= !F_ENDING_OK;
-        self.tasks = vec![self.player.clone(), stage_t.clone(), bullets.clone(), enemies.clone(), hud.clone()];
+        self.tasks = vec![self.player.clone(), stage_t.clone(), bullets.clone(), enemies.clone(), hud.clone(), effects];
         self.stage = Some(stage_t);
         self.bullets = Some(bullets);
         self.enemies = Some(enemies);
         self.hud = Some(hud);
+        let pos = if ctx.game.previous == SCENE_MENU { [500.0, 440.0, 0.0] } else { [280.0, 430.0, 0.0] };
         self.loading_vms = (0..3)
             .map(|i| {
                 let mut vm = crate::anmvm::AnmVm::default();
                 ctx.anm.set_script(&mut vm, 2, i);
-                vm.pos = [280.0, 430.0, 0.0];
+                vm.pos = pos;
                 vm
             })
             .collect();
@@ -431,7 +434,7 @@ impl GameManager {
             st.score10 = st.continues as i64;
             st.score_disp = st.score10;
             st.graze = 0;
-            st.lives = g.config_lives as f32;
+            st.lives = g.cfg.lives as f32;
             Stats::checksum(rng);
             st.bombs = bombs;
             st.point_items = 0;
@@ -530,6 +533,7 @@ impl Task<Ctx> for GameManager {
         let g = &mut ctx.game;
         if g.paused == 0 && g.game_over == 0 && g.flags & F_DEMO == 0 && ctx.input.pressed(crate::input::PAUSE) {
             g.paused = 1;
+            crate::sound::play(crate::sound::PAUSE);
             ctx.audio.pause_bgm(true);
             let s = ctx.anm.rng.state;
             Stats::checksum(&mut ctx.anm.rng);

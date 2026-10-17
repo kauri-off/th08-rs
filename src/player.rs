@@ -208,9 +208,11 @@ impl Stats {
         if self.lives < 8.0 {
             self.add_lives(1.0, rng);
             self.rank(200);
+            crate::sound::play(crate::sound::EXTEND);
         } else if self.bombs < 8.0 {
             self.add_bombs(1.0, rng);
             self.rank(200);
+            crate::sound::play(crate::sound::EXTEND);
         }
     }
 
@@ -263,6 +265,7 @@ pub struct Player {
     pub mode: u8,
     pub forced_bomb: u8,
     pub focus_age: i32,
+    pub gauge_aura: bool,
     pub vm: AnmVm,
     pub pos: [f32; 3],
     pub trail: [[f32; 3]; 16],
@@ -317,6 +320,7 @@ impl Default for Player {
             mode: 0,
             forced_bomb: 0,
             focus_age: 0,
+            gauge_aura: false,
             vm: AnmVm::default(),
             pos: START,
             trail: [START; 16],
@@ -500,6 +504,9 @@ impl Player {
             return;
         }
         Stats::checksum(rng);
+        crate::sound::play_at(crate::sound::PLDEAD, self.pos[0]);
+        crate::effect::spawn_rng(rng, 6, self.pos, 16, 0xFFFFFFFF);
+        crate::effect::death_ring(rng, self.pos);
         self.state = 2;
         self.state_timer.set(0);
         let st = &mut self.stats;
@@ -527,8 +534,10 @@ impl Player {
     }
 
     // Player_OnGraze (09 §9.2); returns how many time orbs (item type 10) to drop at `p`.
-    pub fn on_graze(&mut self, _p: [f32; 3], laser: bool, env: &GrazeEnv, _rng: &mut Rng) -> u8 {
+    pub fn on_graze(&mut self, p: [f32; 3], laser: bool, env: &GrazeEnv, _rng: &mut Rng) -> u8 {
         self.grazes += 1;
+        crate::sound::play_at(crate::sound::GRAZE, p[0]);
+        crate::effect::spawn_rng(_rng, 8, [(p[0] + self.pos[0]) / 2.0, (p[1] + self.pos[1]) / 2.0, 0.0], 1, 0xFFFFFFFF);
         let (solo_human, solo_youkai) = (self.solo_human(), self.solo_youkai());
         let s = &mut self.stats;
         if !self.bombing {
@@ -627,6 +636,13 @@ impl Player {
             self.gauge_c.set(0);
         } else {
             self.focus_age += 1;
+        }
+        if self.focus_age == 4 && !self.solo() {
+            let (kind, colour) = if f == 1 { (29, 0x80FF8080) } else { (28, 0x808080FF) };
+            crate::effect::spawn(anm, kind, self.pos, 1, colour);
+            if f == 1 {
+                crate::effect::spawn_fixed(anm, 22, self.pos, crate::effect::FIX_AURA, 0xFFFFFFFF);
+            }
         }
         if self.focus_age > 6 {
             self.mode = f;
@@ -764,6 +780,9 @@ impl Player {
     fn real_death(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) {
         self.deaths += 1;
         log::info!("player death at frame {}", self.frames);
+        crate::sound::play_at(crate::sound::TAN00_LOUD, self.pos[0]);
+        crate::effect::spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
+        crate::effect::spawn_fixed(anm, 12, self.pos, crate::effect::FIX_DEATHBOMB, 0xFFFFFFFF);
         self.freeze_bullets = false;
         self.last_spell = 0;
         self.state_timer.set(0);
@@ -865,6 +884,15 @@ impl Player {
         if self.stats.youkai_max() {
             self.stats.add_score(100);
         }
+        let at_max = self.stats.youkai_max() || self.stats.human_max();
+        if at_max != self.gauge_aura {
+            self.gauge_aura = at_max;
+            if at_max {
+                crate::effect::spawn_fixed(anm, 25, self.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
+            } else {
+                crate::effect::free(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE);
+            }
+        }
         self.frames += 1;
     }
 
@@ -912,6 +940,8 @@ impl Task<Ctx> for Player {
             }
             None => self.frame(&mut ctx.anm, &inp, None),
         }
+        crate::effect::set_player(self.pos);
+        crate::effect::set_frozen(self.freeze_bullets);
         Ret::Next
     }
 

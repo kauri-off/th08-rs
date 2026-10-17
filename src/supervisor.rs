@@ -10,7 +10,14 @@ pub struct Supervisor {
     script: Option<Vec<u16>>,
     frame: usize,
     scene_task: Option<TaskRef<Ctx>>,
+    logo: Option<TextureId>,
+    boot_vms: Vec<AnmVm>,
+    boot_frames: u32,
 }
+
+// SPEC-GAP: the original shows the boot logo for as long as its loader thread runs; loading here is instant,
+// so the logo is held for this many frames.
+const BOOT_FRAMES: u32 = 60;
 
 pub fn register(ctx: &mut Ctx) -> Result<()> {
     let t = task::task(Supervisor {
@@ -18,6 +25,9 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
         script: crate::env::var("TH08_INPUT").and_then(|v| crate::input::load_script(&v)),
         frame: 0,
         scene_task: None,
+        logo: None,
+        boot_vms: Vec::new(),
+        boot_frames: 0,
     });
     task::add(ctx, Chain::Calc, 0, 0, t.clone())?;
     for prio in [0, 2, 16] {
@@ -26,8 +36,7 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
-// Menu stand-in: difficulty `TH08_RANK` (default Normal), shot `TH08_PLAYER` (default 0), first stage.
-// SPEC-GAP: the real main menu (12 §2) is a later task.
+// Debug start (`TH08_STAGE`): difficulty `TH08_RANK` (default Normal), shot `TH08_PLAYER` (default 0).
 pub fn setup_new_game(g: &mut Game, stage: usize) -> Result<()> {
     let shot = match crate::env::var("TH08_PLAYER") {
         Some(v) => crate::player::parse_shot(&v).with_context(|| format!("TH08_PLAYER={v}: unknown shot type"))?,
@@ -81,7 +90,7 @@ impl Supervisor {
             (gamemgr::SCENE_BOOT, _) | (_, gamemgr::SCENE_MENU) => {
                 self.drop_scene(ctx);
                 ctx.game.requested = gamemgr::SCENE_MENU;
-                self.set_scene(ctx, Title { image: None, vms: Vec::new(), frame: 0 }, 4, 3)?;
+                self.set_scene(ctx, crate::menu::MainMenu::new(), crate::menu::CALC_PRIO, crate::menu::DRAW_PRIO)?;
             }
             (gamemgr::SCENE_MENU, gamemgr::SCENE_GAME) => {
                 self.drop_scene(ctx);
@@ -111,14 +120,14 @@ impl Supervisor {
                 self.start_game(ctx)?;
                 ctx.game.requested = gamemgr::SCENE_GAME;
             }
-            (_, gamemgr::SCENE_RESULT | gamemgr::SCENE_ENDING) => {
+            (_, gamemgr::SCENE_RESULT | gamemgr::SCENE_ENDING | gamemgr::SCENE_RESULT_MENU | gamemgr::SCENE_MUSIC_ROOM) => {
                 self.drop_scene(ctx);
                 self.set_scene(ctx, Stub { kind: req, frame: 0 }, 4, 3)?;
             }
             (_, gamemgr::SCENE_REPLAY_END) => {
                 self.drop_scene(ctx);
                 ctx.game.requested = gamemgr::SCENE_MENU;
-                self.set_scene(ctx, Title { image: None, vms: Vec::new(), frame: 0 }, 4, 3)?;
+                self.set_scene(ctx, crate::menu::MainMenu::new(), crate::menu::CALC_PRIO, crate::menu::DRAW_PRIO)?;
             }
             _ => log::warn!("unhandled scene switch {cur} -> {req}"),
         }
@@ -134,6 +143,16 @@ impl Task<Ctx> for Supervisor {
         if chain == Chain::Calc {
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 0, "text.anm")?;
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
+            // Boot loading screen (12 §1): th08logo.jpg full screen + nowloading.anm scripts 0–2 at (500, 440).
+            self.logo = Some(ctx.gfx.load_image(&ctx.archive.read("th08logo.jpg")?)?);
+            self.boot_vms = (0..3)
+                .map(|i| {
+                    let mut vm = AnmVm::default();
+                    ctx.anm.set_script(&mut vm, 2, i);
+                    vm.pos = [500.0, 440.0, 0.0];
+                    vm
+                })
+                .collect();
             if let Some(spec) = crate::env::var("TH08_ANM") {
                 crate::anmdebug::register(ctx, &spec)?;
                 return Ok(());
@@ -155,6 +174,19 @@ impl Task<Ctx> for Supervisor {
         }
         self.frame += 1;
         ctx.input.tick();
+        if self.logo.is_some() {
+            self.boot_frames += 1;
+            for vm in &mut self.boot_vms {
+                vm.run(&mut ctx.anm);
+            }
+            if ctx.game.requested == gamemgr::SCENE_MENU && self.boot_frames < BOOT_FRAMES {
+                return Ret::Next;
+            }
+            if let Some(t) = self.logo.take() {
+                ctx.gfx.free_texture(t);
+            }
+            self.boot_vms.clear();
+        }
         match self.switch(ctx) {
             Ok(Some(r)) => r,
             Ok(None) => Ret::Next,
@@ -167,6 +199,18 @@ impl Task<Ctx> for Supervisor {
 
     // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        match (tag, self.logo) {
+            (0, Some(t)) => {
+                ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
+                ctx.gfx.image(t, 0.0, 0.0);
+            }
+            (2, Some(_)) => {
+                for vm in &mut self.boot_vms {
+                    ctx.anm.draw(&mut ctx.gfx, vm);
+                }
+            }
+            _ => {}
+        }
         let (Some(slot), 16) = (self.debug_sprites, tag) else { return Ret::Next };
         let Some(anm) = ctx.anm.get(slot) else { return Ret::Next };
         let sprites = anm.sprites.clone();
@@ -186,70 +230,7 @@ impl Task<Ctx> for Supervisor {
     }
 }
 
-// SPEC-GAP: the main menu's script set is unspecified; title01.anm scripts 0..=9 (side picture + the nine
-// main-menu items, by their positions in the data) are started, drawn in order with their own draw mode.
-const TITLE_SCRIPTS: std::ops::RangeInclusive<usize> = 0..=9;
-
-pub struct Title {
-    image: Option<TextureId>,
-    vms: Vec<AnmVm>,
-    frame: u32,
-}
-
-impl Task<Ctx> for Title {
-    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
-        if chain == Chain::Calc {
-            self.image = Some(ctx.gfx.load_image(&ctx.archive.read("title00.png")?)?);
-            // SPEC-GAP: the "previous scene was the result screen" exception waits for scene tracking.
-            ctx.audio.play_bgm("bgm/th08_01.mid");
-            ctx.anm.load(&mut ctx.gfx, &ctx.archive, 20, "title01.anm")?;
-            self.vms = TITLE_SCRIPTS
-                .map(|i| {
-                    let mut vm = AnmVm::default();
-                    ctx.anm.set_script(&mut vm, 20, i);
-                    vm
-                })
-                .collect();
-        }
-        Ok(())
-    }
-
-    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
-        if chain == Chain::Calc {
-            if let Some(t) = self.image.take() {
-                ctx.gfx.free_texture(t);
-            }
-            ctx.anm.unload(&mut ctx.gfx, 20);
-        }
-    }
-
-    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        for vm in self.vms.iter_mut().filter(|v| v.script_index >= 0) {
-            vm.run(&mut ctx.anm);
-        }
-        self.frame += 1;
-        if self.frame >= 10 && ctx.input.pressed(crate::input::SHOT | crate::input::ENTER) {
-            if let Err(e) = setup_new_game(&mut ctx.game, 0) {
-                log::error!("{e:#}");
-            }
-        } else if self.frame >= 10 && ctx.input.pressed(crate::input::PAUSE) {
-            ctx.game.request(-1);
-        }
-        Ret::Next
-    }
-
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        if let Some(t) = self.image {
-            ctx.gfx.image(t, 0.0, 0.0);
-        }
-        for vm in &mut self.vms {
-            ctx.anm.draw(&mut ctx.gfx, vm);
-        }
-        Ret::Next
-    }
-}
-
-// SPEC-GAP: result screen (scene 6) and ending (scene 9) are later tasks; this stub shows the outcome and
+// SPEC-GAP: result (scenes 5/6), music room (8) and ending (9) are later tasks; this stub shows the outcome and
 // returns on Shot/Enter (ending → result → menu, like the scene table).
 pub struct Stub {
     kind: i32,
@@ -275,6 +256,7 @@ impl Task<Ctx> for Stub {
         let title = match self.kind {
             gamemgr::SCENE_ENDING if g.flags & gamemgr::F_ENDING_OK != 0 => format!("Ending (stub) route {}", if g.stage % 9 == 7 { "Final B" } else { "Final A" }),
             gamemgr::SCENE_ENDING => "Bad ending (stub)".to_string(),
+            gamemgr::SCENE_MUSIC_ROOM => "Music Room (stub)".to_string(),
             _ => "Result (stub)".to_string(),
         };
         let lines = [

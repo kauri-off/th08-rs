@@ -160,6 +160,11 @@ impl PauseMenu {
         let confirm = pressed(input::SHOT | input::ENTER);
         let (up, down) = (pressed(input::UP), pressed(input::DOWN));
         if matches!(self.state, 1..=3 | 5..=8) {
+            if up || down {
+                crate::sound::play(crate::sound::PLST);
+            } else if confirm {
+                crate::sound::play(crate::sound::OK);
+            }
             if inp.pressed(input::PAUSE) {
                 self.goto(4);
             } else if inp.pressed(input::KEY_Q) {
@@ -309,8 +314,10 @@ impl ContinueMenu {
             0 if ready => {
                 if inp.pressed(input::UP) || inp.pressed(input::DOWN) {
                     self.yes = !self.yes;
+                    crate::sound::play(crate::sound::PLST);
                 }
                 if inp.pressed(input::SHOT | input::ENTER) {
+                    crate::sound::play(crate::sound::OK);
                     self.phase = if !self.yes {
                         1
                     } else if g.difficulty >= 4 || g.spell_practice() {

@@ -222,6 +222,8 @@ pub struct Enemy {
     pub running_thread: Option<usize>,
     pub trail: [i32; 4],
     pub effects: u32,
+    pub fx_attached: Vec<usize>,
+    pub fx_aura: usize,
 }
 
 impl Default for Enemy {
@@ -306,6 +308,8 @@ impl Default for Enemy {
             running_thread: None,
             trail: [0; 4],
             effects: 0,
+            fx_attached: Vec::new(),
+            fx_aura: crate::effect::NONE,
         }
     }
 }
@@ -575,6 +579,9 @@ impl EnemyManager {
                 p.damage_against(anm, Some(&mut b.items), pos, [bx[0], bx[1]], &mut acc, &mut by_bomb)
             };
             self.enemies[idx].orb_acc = acc;
+            if d > 0 && !by_bomb {
+                crate::effect::spawn(anm, 3, pos, 1, 0xFFFFFFFF);
+            }
             self.damage(idx, d, by_bomb);
         }
     }
@@ -592,6 +599,7 @@ impl EnemyManager {
     }
 
     pub fn free(&mut self, idx: usize) {
+        self.release_effects(idx);
         self.enemies[idx].flags &= !A_ALIVE;
         self.unregister_boss(idx);
     }
@@ -897,6 +905,10 @@ impl EnemyManager {
     // Spell end (op 123, 0x4161B0). SPEC-GAP: "captured" = no death and no bomb since the card started.
     pub fn finish_spell(&mut self, total: i32, remaining: i32, anm: &mut AnmManager) {
         let Some(s) = self.g.spell.take() else { return };
+        crate::sound::play(crate::sound::TAN00_LOUD);
+        if let Some(st) = &self.stage {
+            st.borrow_mut().end_spell_bg();
+        }
         let mut p = self.player.borrow_mut();
         if p.deaths + p.bombs_started != s.misses {
             p.stats.popups.push(crate::player::Popup::Message(5, 0));
@@ -912,6 +924,8 @@ impl EnemyManager {
         } else {
             (remaining - 180) * 900 / (thr - 180).max(1) + 100
         };
+        crate::sound::play(crate::sound::CARDGET);
+        crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| e.vm.color[crate::anmvm::A] = 0x20);
         let st = &mut p.stats;
         st.add_score(s.bonus);
         st.spells += 1;
@@ -942,6 +956,10 @@ impl EnemyManager {
     fn drop_items(&mut self, idx: usize, anm: &mut AnmManager) {
         let e = &mut self.enemies[idx];
         let p = e.final_pos;
+        if e.item != -2 {
+            crate::effect::spawn(anm, e.death_bytes[1].wrapping_add(4), p, 3, 0xFFFFFFFF);
+        }
+        let e = &mut self.enemies[idx];
         let mut items = Vec::new();
         if e.item >= 0 {
             items.push((p, e.item));
@@ -1053,6 +1071,15 @@ impl EnemyManager {
         }
     }
 
+    // Enemy-owned effects: op 128 effects fade out, the op 174 aura ends.
+    fn release_effects(&mut self, idx: usize) {
+        let e = &mut self.enemies[idx];
+        for i in e.fx_attached.drain(..) {
+            crate::effect::get(i, |x| x.fade = true);
+        }
+        crate::effect::free(std::mem::replace(&mut e.fx_aura, crate::effect::NONE));
+    }
+
     // Death processing (07 §10.3).
     fn death(&mut self, idx: usize, anm: &mut AnmManager) {
         let e = &self.enemies[idx];
@@ -1082,6 +1109,15 @@ impl EnemyManager {
             }
             _ => {}
         }
+        let (pos, db) = (self.enemies[idx].final_pos, self.enemies[idx].death_bytes);
+        if mode <= 2 && self.enemies[idx].flags & A_CHAIN_KILLED == 0 {
+            crate::sound::play_at(if idx % 2 == 0 { crate::sound::ENEP0 } else { crate::sound::ENEP1 }, pos[0]);
+            crate::effect::spawn(anm, db[0], pos, 1, 0xFFFFFFFF);
+            crate::effect::spawn(anm, db[1].wrapping_add(4), pos, 4, 0xFFFFFFFF);
+        } else if mode == 3 {
+            crate::effect::spawn(anm, db[0], pos, 3, 0xFFFFFFFF);
+        }
+        self.release_effects(idx);
         if mode <= 2 {
             if self.enemies[idx].flags & A_BOSS != 0 {
                 self.unregister_boss(idx);
@@ -1133,6 +1169,9 @@ impl EnemyManager {
         if self.enemies[idx].flags & A_MODE_REACT != 0 {
             let youkai = self.g.player_mode != 0;
             let e = &mut self.enemies[idx];
+            if (e.flags & A_YOUKAI != 0) != youkai {
+                crate::sound::play_at(if youkai { crate::sound::OPHIDE } else { crate::sound::OPSHOW }, e.final_pos[0]);
+            }
             e.mode_bits = if youkai { 0x40 } else { 0x20 };
             e.set_flag(A_YOUKAI, youkai);
         }
@@ -1151,6 +1190,12 @@ impl EnemyManager {
             }
         }
         self.run_vms(idx, anm);
+        let e = &self.enemies[idx];
+        let p = e.final_pos;
+        for &i in &e.fx_attached {
+            crate::effect::get(i, |x| x.centre = p);
+        }
+        crate::effect::get(e.fx_aura, |x| x.pos = p);
         if self.enemies[idx].flags & (A_HIDDEN | 1 << 5 | A_YOUKAI) == 0 {
             self.player_collision(idx, anm);
         }
@@ -1160,6 +1205,10 @@ impl EnemyManager {
         let pause = self.g.timer_pause != 0;
         let e = &mut self.enemies[idx];
         if std::mem::take(&mut e.hit) {
+            if e.last_damage > 0 {
+                let low = (e.flags_b >> 4) & 3 >= 2;
+                crate::sound::play_at(if low { crate::sound::DAMAGE1 } else { crate::sound::DAMAGE0 }, e.final_pos[0]);
+            }
             e.vm.flags |= anmvm::F_COLOR2;
             e.vm.color2 = [0x80, 0x60, 0xFF, e.vm.color[anmvm::A]];
             e.flash = true;

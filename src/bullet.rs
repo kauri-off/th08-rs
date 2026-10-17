@@ -361,6 +361,9 @@ impl BulletManager {
                 }
             }
         }
+        if d.flags & 0x200 != 0 {
+            crate::sound::play_at(d.sfx, d.origin[0]);
+        }
     }
 
     // Speed and angle of bullet (i, j) (07 §9.3).
@@ -504,6 +507,9 @@ impl BulletManager {
                     b.st.accel_dur = s.c;
                     b.st.avec = polar(b.st.accel_angle, s.e * gs);
                     b.st.accel_timer = Timer::default();
+                    if k != 0 {
+                        ex_sound(b.ex_sfx);
+                    }
                     false
                 }
                 0x20 => {
@@ -512,6 +518,9 @@ impl BulletManager {
                     b.st.dangle = s.f;
                     b.st.ang_dur = s.c;
                     b.st.ang_timer = Timer::default();
+                    if k != 0 {
+                        ex_sound(b.ex_sfx);
+                    }
                     false
                 }
                 0x40 | 0x80 | 0x100 => {
@@ -554,7 +563,10 @@ impl BulletManager {
                     b.state = 5;
                     false
                 }
-                0x80000 => true,
+                0x80000 => {
+                    crate::sound::play_at(s.c, b.pos[0]);
+                    true
+                }
                 0x400000 | 0x800000 => {
                     b.active |= s.cmd;
                     b.st.wrap.set(s.c);
@@ -639,6 +651,7 @@ impl BulletManager {
             let s = if st.redir_timer.cur < st.period {
                 b.speed - t * b.speed / st.period as f32
             } else {
+                ex_sound(b.ex_sfx);
                 st.redirs += 1;
                 if st.redirs >= st.count {
                     b.active &= !bit;
@@ -656,6 +669,7 @@ impl BulletManager {
             st.redir_timer.tick(gs);
         }
         if b.active & 0xC00 != 0 && !b.on_screen() {
+            ex_sound(b.ex_sfx);
             let [x, y, _] = b.pos;
             if x < 0.0 || x >= 384.0 {
                 b.angle = anmvm::wrap_add(-b.angle - PI, 0.0);
@@ -1156,6 +1170,7 @@ impl BulletManager {
                 anm.draw_mode(gfx, vm, 2);
             }
         }
+        crate::effect::with(|e| e.draw_over_bullets(anm, gfx));
     }
 }
 
@@ -1448,5 +1463,12 @@ mod tests {
         assert_eq!(b.items.collected, 1);
         let line = p.sht.poc_line;
         assert!(p.stats.score() > 0 && p.stats.point_items == 1, "line {line} score {}", p.stats.score());
+    }
+}
+
+// Ex-command "sfx" (08 §5): Sound_Play(ex sfx) when ≥ 0.
+fn ex_sound(id: i32) {
+    if id >= 0 {
+        crate::sound::play(id);
     }
 }

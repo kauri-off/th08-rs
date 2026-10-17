@@ -223,6 +223,12 @@ pub struct Stage {
     overlay_mode: u8,
     overlay_timer: Timer,
     pub player: Option<PlayerRef>,
+    pub spell_state: i32,
+    pub effect_level: u8,
+    spell_frames: i32,
+    pub spell_count: usize,
+    pub spell_first: usize,
+    spell_vms: Vec<AnmVm>,
 }
 
 impl Stage {
@@ -257,6 +263,12 @@ impl Stage {
             sway_mode: 0,
             sway_clock: Timer::default(),
             cull_dist2,
+            spell_state: 0,
+            effect_level: 2,
+            spell_frames: 0,
+            spell_count: 2,
+            spell_first: 0,
+            spell_vms: Vec::new(),
             fast_forward: 0,
             overlay: AnmVm::default(),
             overlay_mode: 0,
@@ -285,6 +297,7 @@ impl Stage {
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &bg)?;
         let mut st = Stage::new(index, std);
         st.player = player;
+        st.effect_level = ctx.game.cfg.effect_level;
         st.fast_forward = crate::env::var("TH08_STAGE_FRAME").and_then(|v| v.parse().ok()).unwrap_or(0);
         st.start(&mut ctx.anm);
         let st = Rc::new(RefCell::new(st));
@@ -501,7 +514,24 @@ impl Stage {
             self.clock.tick(speed);
         }
         self.update_objects(anm);
-        // SPEC-GAP: spell-background VMs (stage state +0xB24) and sparkle effects wait for later phases.
+        // Spell background (13 §5). SPEC-GAP: the sparkle-point effects (type 0x3E) still wait for the sparkle points.
+        if self.spell_state > 0 {
+            if self.spell_frames == 60 {
+                self.spell_state = 2;
+            }
+            self.spell_frames += 1;
+            for vm in self.spell_vms.iter_mut().filter(|v| v.script.is_some()) {
+                vm.run(anm);
+            }
+        }
+        let cam = self.cam.camera(PLAYFIELD);
+        let m = cam.view.0;
+        crate::effect::set_view(crate::effect::View {
+            cam: Some(cam),
+            eye: self.cam.eye(),
+            facing: self.cam.v[FACING],
+            right: normalize([m[0][0], m[0][1], m[0][2]]),
+        });
         if self.vm_a.sprite_index > 0 {
             self.vm_a.run(anm);
         }
@@ -513,6 +543,24 @@ impl Stage {
             self.clear_color = u32::from_le_bytes(self.vm_c.color);
         }
         self.frame += 1;
+    }
+
+    // Stage_StartSpellBg 0x415CE0: the spell VMs run scripts first..first+count of the slot-9 file.
+    pub fn start_spell_bg(&mut self, anm: &mut AnmManager) {
+        self.spell_state = 1;
+        self.spell_frames = 0;
+        self.spell_vms = (0..self.spell_count)
+            .map(|i| {
+                let mut vm = AnmVm::default();
+                anm.set_script(&mut vm, crate::effect::BG_SLOT, self.spell_first + i);
+                vm
+            })
+            .collect();
+    }
+
+    pub fn end_spell_bg(&mut self) {
+        self.spell_state = 0;
+        self.spell_vms.clear();
     }
 
     fn fog_params(&self, anm: &AnmManager) -> Fog {
@@ -684,8 +732,9 @@ impl Task<Ctx> for Stage {
         if tag == 0 {
             gfx.set_viewport(PLAYFIELD);
             anm.reset_render_state();
+            let hide = self.spell_state >= 2;
             for vm in [&mut self.vm_a, &mut self.vm_b] {
-                if vm.sprite_index > 0 {
+                if vm.sprite_index > 0 && !hide {
                     anm.draw_mode(gfx, vm, 2);
                 }
             }
@@ -700,12 +749,22 @@ impl Task<Ctx> for Stage {
                 gfx.clear_depth(None);
             }
             gfx.set_depth_test(true);
-            self.draw_layer(anm, gfx, 0);
-            self.draw_layer(anm, gfx, 1);
+            if !hide {
+                self.draw_layer(anm, gfx, 0);
+                self.draw_layer(anm, gfx, 1);
+            }
         } else {
-            self.draw_layer(anm, gfx, 2);
-            self.draw_layer(anm, gfx, 3);
+            if self.spell_state < 2 {
+                self.draw_layer(anm, gfx, 2);
+                self.draw_layer(anm, gfx, 3);
+            }
+            let level = self.effect_level;
+            crate::effect::with(|e| e.draw_background(anm, gfx, level));
             gfx.set_depth_test(false);
+            gfx.set_viewport(PLAYFIELD);
+            for vm in &mut self.spell_vms {
+                anm.draw(gfx, vm);
+            }
             anm.stage_camera = None;
             gfx.set_viewport(PLAYFIELD);
         }

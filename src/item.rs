@@ -153,6 +153,9 @@ impl ItemManager {
             if it.vel[1] > -0.5 {
                 it.vel = [0.0, -0.5, 0.0];
             }
+            let p = it.pos;
+            crate::effect::spawn(anm, 0, p, 1, 0xFFFFFFFF);
+            let it = &mut self.items[i];
             let mut vm = std::mem::take(&mut it.vm);
             anm.set_script(&mut vm, ANM_SLOT, 0x45);
             vm.flags |= anmvm::F_ZWRITE_OFF;
@@ -169,6 +172,7 @@ impl ItemManager {
         match kind {
             POWER | BIG_POWER => {
                 if st.power < 128.0 {
+                    let level = power_level(st.power);
                     st.power += if kind == POWER { 1.0 } else { 8.0 };
                     Stats::checksum(&mut anm.rng);
                     if st.power >= 128.0 {
@@ -177,6 +181,9 @@ impl ItemManager {
                         self.convert_power_items(anm, idx);
                     }
                     st.add_score(10);
+                    if power_level(st.power) != level {
+                        crate::sound::play(crate::sound::POWERUP);
+                    }
                 }
                 if kind == POWER {
                     st.rank(1);
@@ -210,6 +217,7 @@ impl ItemManager {
             }
             FULL_POWER => {
                 if st.power < 128.0 {
+                    crate::sound::play(crate::sound::POWERUP);
                     out.cancel = true;
                     self.convert_power_items(anm, idx);
                 }
@@ -252,6 +260,7 @@ impl ItemManager {
         let c = p.sht.collect;
         let m = p.item_sht().fall * gs;
         self.count = 0;
+        let mut sound = None;
         let mut k = 0;
         while k < self.order.len() {
             let i = self.order[k] as usize;
@@ -347,6 +356,9 @@ impl ItemManager {
             }
             if step == 1 && it.state != 3 && p.collect_test(it.pos, c) {
                 let out = self.collect(i, anm, p, spell);
+                if sound != Some(crate::sound::ITEM1) {
+                    sound = Some(if self.items[i].max_flag { crate::sound::ITEM1 } else { crate::sound::ITEM0 });
+                }
                 self.items[i].alive = false;
                 self.order[k - 1] = DEAD;
                 if out.cancel {
@@ -361,6 +373,9 @@ impl ItemManager {
             }
         }
         self.order.retain(|&i| i != DEAD && self.items[i as usize].alive);
+        if let Some(id) = sound {
+            crate::sound::play(id);
+        }
         if self.collect_timer != 0 {
             self.collect_timer = (self.collect_timer - 1).max(0);
         }

@@ -16,6 +16,7 @@ pub struct Ctx {
     pub frame: u64,
     pub game: crate::gamemgr::Game,
     pub ascii: crate::ascii::Queue,
+    pub se_log: bool,
 }
 
 impl TaskCtx for Ctx {
@@ -27,7 +28,8 @@ impl TaskCtx for Ctx {
 impl Ctx {
     pub async fn load(source: Source, gfx: Gfx) -> anyhow::Result<Self> {
         let archive = Archive::from_bytes(source.read("th08.dat").await?)?;
-        let audio = Audio::new(source, &archive.read("thbgm.fmt")?);
+        let mut audio = Audio::new(source, &archive.read("thbgm.fmt")?);
+        audio.load_se(&archive);
         let mut ctx = Self {
             gfx,
             archive,
@@ -38,6 +40,7 @@ impl Ctx {
             frame: 0,
             game: Default::default(),
             ascii: Default::default(),
+            se_log: crate::env::var("TH08_SE_LOG").is_some(),
         };
         ctx.anm.rng = crate::rng::Rng::boot();
         crate::supervisor::register(&mut ctx)?;
@@ -58,8 +61,26 @@ impl Ctx {
     pub fn calc(&mut self) -> Flow {
         self.anm.begin_frame();
         let f = task::run(self, Chain::Calc);
+        self.sound_update();
+        crate::effect::register_pending(self);
         self.frame += 1;
         f
+    }
+
+    // Sound_Update (13 §1.3): with SE off the queue is left as is.
+    fn sound_update(&mut self) {
+        let cfg = self.game.cfg;
+        if cfg.se_on == 0 || !crate::sound::pending() {
+            return;
+        }
+        let played = crate::sound::take();
+        if self.se_log {
+            log::info!("frame {} se {:?}", self.frame, played);
+        }
+        for (id, pan) in played {
+            let vol = crate::config::volume_curve(crate::sound::TABLE[id as usize].1 as i32, cfg.se_volume);
+            self.audio.play_se(id as usize, pan, vol);
+        }
     }
 
     // Frame_Run only checks the calc runner's result.

@@ -479,6 +479,11 @@ impl AnmVm {
         if self.flags & F_POS_OFFSET != 0 { &mut self.pos_offset } else { &mut self.pos }
     }
 
+    // Position interpolation started by an owner (as ops 17/18/32).
+    pub fn interp_pos(&mut self, dur: i32, mode: i32, end: [f32; 3]) {
+        self.start_pos(dur, mode, end);
+    }
+
     fn start_pos(&mut self, dur: i32, mode: i32, end: [f32; 3]) {
         self.pos_start = *self.pos_target();
         self.pos_end = end;

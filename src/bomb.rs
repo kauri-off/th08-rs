@@ -209,14 +209,15 @@ impl Player {
     // Bomb start helper 0x40BE30.
     fn bomb_begin(&mut self, anm: &mut AnmManager, spec: BombSpec) {
         self.bomb.name = spec.0;
+        crate::sound::play(crate::sound::CAT);
         self.bomb.duration = spec.1;
         self.state = 3;
         self.state_timer.set(spec.2);
+        crate::effect::invuln_ring(anm, self.pos, spec.2);
         self.bomb.objs.clear();
         self.bomb.bg = None;
         self.bomb.attract = true;
         self.bomb.origin = self.pos;
-        let _ = anm;
     }
 
     fn bomb_calc(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) {

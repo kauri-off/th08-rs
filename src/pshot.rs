@@ -260,6 +260,9 @@ impl Player {
     }
 
     fn spawn_bullet(&mut self, anm: &mut AnmManager, slot: usize, e: &ShotEntry) {
+        if e.sound >= 0 {
+            crate::sound::play_at(e.sound as i32, self.pos[0]);
+        }
         let o = self.origin_pos(e.origin);
         let mut b = PBullet {
             pos: [o[0] + e.offset[0], o[1] + e.offset[1], 0.495],
@@ -519,6 +522,8 @@ impl Player {
             if !(4..=6).contains(&b.kind) && b.state == 1 {
                 b.state = 2;
                 let pos = b.pos;
+                crate::effect::spawn(anm, 5, pos, 1, 0xFFFFFFFF);
+                let b = &mut self.bullets[i];
                 anm.set_script(&mut b.vm, ANM_SLOT, (b.script + 11).max(0) as usize);
                 b.vm.pos = pos;
                 b.vm.flags |= anmvm::F_ZWRITE_OFF;

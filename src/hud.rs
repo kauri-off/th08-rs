@@ -197,7 +197,7 @@ impl Hud {
                     log::info!("final route choice {c} at frame {}", ctx.frame);
                     ctx.game.set_route(c)
                 }
-                Event::Sfx(_) => {}
+                Event::Sfx(n) => crate::sound::play(n as i32),
             }
         }
     }
@@ -226,6 +226,7 @@ impl Hud {
         } else {
             if matches!(shot, 3 | 10 | 11) && st.bombs < 3.0 {
                 st.add_bombs(1.0, rng);
+                crate::sound::play(crate::sound::CARDGET);
             }
         }
         let clear = CLEAR_BONUS[stage];
@@ -257,7 +258,7 @@ impl Hud {
         let (rt, mul) = RANK_TEXT[d];
         lines.push((rt.into(), 0xFFFF8080));
         let mut total = (total as f64 * mul) as i64;
-        let penalty = match g.config_lives {
+        let penalty = match g.cfg.lives {
             3 => Some(("Player Penalty*0.5", 0.5)),
             4 => Some(("Player Penalty*0.2", 0.2)),
             5 => Some(("Player Penalty*0.1", 0.1)),
@@ -404,6 +405,13 @@ impl Hud {
                 _ => 0xFF4040,
             };
             ctx.ascii.push(Text::new(384.0, 16.0, format!("{s:02}")).color(Self::rgb(c, a)));
+            if s != self.timer_last && self.timer_last >= 0 {
+                if s < 3 {
+                    crate::sound::play(crate::sound::TIMEOUT2);
+                } else if s < 10 {
+                    crate::sound::play(crate::sound::TIMEOUT);
+                }
+            }
             self.timer_last = s;
         }
         // SPEC-GAP: the spell-name plate belongs to the (unspecified) Gui; the name is rasterised under the bar.

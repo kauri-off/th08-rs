@@ -529,6 +529,9 @@ impl Exec<'_> {
             _ => [x, y, 0.0],
         };
         let Some(ci) = self.m.spawn_prepare(sub, pos, life, false) else { return };
+        if chained {
+            crate::sound::play_at(crate::sound::OPTION, self.e.final_pos[0]);
+        }
         let vars = t.ctx.vars;
         let youkai = self.m.g.player_mode != 0;
         {
@@ -905,6 +908,11 @@ impl Exec<'_> {
         log::info!("spell card {} ({} bytes name, bonus {})", spell.id, spell.name.len(), spell.bonus);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
         self.m.g.spell = Some(spell);
+        crate::sound::play(crate::sound::CAT);
+        if let Some(st) = &self.m.stage {
+            st.borrow_mut().start_spell_bg(self.anm);
+        }
+        crate::effect::spell_ring(self.anm, self.e.final_pos, false);
         self.cancel_all(1);
         self.e.reset_rank_ranges();
     }
@@ -1333,7 +1341,7 @@ impl Exec<'_> {
                 let (total, remaining) = (self.e.timeout.max(0), (self.e.timeout - self.e.boss_timer.cur).max(0));
                 self.m.finish_spell(total, remaining, self.anm);
             }
-            124 => {}
+            124 => crate::sound::play_at(self.ai(t, ins, 0), self.e.final_pos[0]),
             125 => {
                 self.e.pending_interrupt = self.ai(t, ins, 0);
                 return Flow::Interrupt;
@@ -1359,7 +1367,32 @@ impl Exec<'_> {
                     }
                 }
             }
-            128 | 139 | 140 | 174 => self.e.effects += 1,
+            128 => {
+                self.e.effects += 1;
+                let param = [self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3)];
+                // SPEC-GAP: the per-frame growth to d and the spin of op 128 effects are not given; they follow the enemy.
+                let i = crate::effect::spawn_param(self.anm, 13, self.e.final_pos, param, 1, 0xFF6060D0);
+                if i != crate::effect::NONE {
+                    self.e.fx_attached.push(i);
+                }
+            }
+            139 => {
+                self.e.effects += 1;
+                let (id, n, c) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.ai(t, ins, 2));
+                crate::effect::spawn(self.anm, id as u8, self.e.final_pos, n, c as u32);
+            }
+            140 => {
+                self.e.effects += 1;
+                let (id, n, c) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.ai(t, ins, 2));
+                let param = [self.af(t, ins, 3), self.af(t, ins, 4), self.af(t, ins, 5)];
+                crate::effect::spawn_param(self.anm, id as u8, self.e.final_pos, param, n, c as u32);
+            }
+            174 => {
+                self.e.effects += 1;
+                let n = self.ai(t, ins, 0);
+                crate::effect::free(self.e.fx_aura);
+                self.e.fx_aura = crate::effect::spawn_high(self.anm, (0x20 + n) as u8, self.e.final_pos, 0xFFFFFFFF);
+            }
             129 => {
                 let m = self.raw(ins, 0) & 0xFF;
                 self.e.flags = (self.e.flags & !(7 << A_DEATH_SHIFT)) | ((m & 7) << A_DEATH_SHIFT);
@@ -1538,6 +1571,7 @@ impl Exec<'_> {
             179 | 180 => self.m.g.hud_requests.push(op as u16),
             184 => self.m.g.misc_calls += 1,
             181 => {
+                crate::sound::play(crate::sound::OK_CLOCK);
                 let mut p = self.m.player.borrow_mut();
                 if p.stats.clock < 12 {
                     p.stats.clock += 1;
