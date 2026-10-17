@@ -256,7 +256,7 @@ addr,kind,name,signature,confidence,note
 0x017d5ef8,global,g_Player,,VERIFIED,
 0x0160f508,global,g_GameManager,,VERIFIED,
 0x018b8a68,global,g_SoundManager,,INFERRED,
-0x0045d550,func,Sound_Play,,INFERRED,(id;0)
+0x0045d550,func,Sound_Play,,VERIFIED,(id;0) id table 0x4c8040
 0x0045d660,func,Sound_PlayAt,,INFERRED,(id;x)
 0x0044a470,func,Player_GrazeTest,,VERIFIED,0 none 1 graze 2 bomb area
 0x0044a230,func,Player_HitTest,,VERIFIED,
@@ -324,3 +324,107 @@ addr,kind,name,signature,confidence,note
 0x0164d0b1,global,g_ShotType,,VERIFIED,0-11
 0x0164d52c,global,g_Input,,VERIFIED,
 0x0164d534,global,g_InputPrev,,INFERRED,
+0x00439710,func,Msg_Load,,VERIFIED,loads msg file; offsets->ptrs
+0x00439810,func,Hud_StartMsg,,VERIFIED,
+0x0043396d,func,Msg_Start,,VERIFIED,
+0x00433db3,func,Msg_Run,,VERIFIED,dialogue interpreter
+0x0043542b,func,Msg_Draw,,VERIFIED,
+0x004358bb,func,Msg_IsActive,,VERIFIED,
+0x0043587e,func,Msg_IsBlocking,,VERIFIED,timeline op7
+0x004353ec,func,Msg_DecodeString,,VERIFIED,xor 0x77
+0x004663b0,func,Text_RenderToVm,,VERIFIED,vsprintf + GDI raster into vm sprite
+0x00466310,func,Text_Render,,VERIFIED,
+0x0043f9c8,func,Text_RasterBold,,VERIFIED,CreateFont 2*size-2 w600
+0x0043fce9,func,Text_RasterSmall,,VERIFIED,
+0x004338ca,func,Hud_Calc,,VERIFIED,
+0x00433927,func,Hud_Draw,,VERIFIED,
+0x00418010,func,Gui_Calc,,VERIFIED,
+0x00418030,func,Gui_Draw,,VERIFIED,
+0x00418050,func,Gui_OnRemove,,VERIFIED,
+0x00448081,func,Music_Stop,,VERIFIED,
+0x00447e47,func,Music_PlaySlot,,VERIFIED,
+0x00447f21,func,Music_PlayFile,,VERIFIED,
+0x004480f8,func,Music_Fade,,VERIFIED,
+0x0043d970,func,Input_Poll,,VERIFIED,keyboard VK map
+0x0043d120,func,Input_PollJoystick,,INFERRED,
+0x0042efb0,func,EnemyMgr_KillAll,,VERIFIED,
+0x0043c35f,func,GameMgr_ClockAdvance,,VERIFIED,
+0x00406dd0,func,GameMgr_GetClock,,VERIFIED,stats+0x28
+0x00406df0,func,GameMgr_AddClock,,VERIFIED,
+0x00406c70,func,GameMgr_IsSpellPractice,,VERIFIED,flags bit14
+0x00406c90,func,GameMgr_IsReplay,,VERIFIED,flags bit3
+0x00439829,func,GameMgr_IsClearedA,,VERIFIED,
+0x00439856,func,GameMgr_IsClearedB,,VERIFIED,
+0x0160f428,global,g_Hud,,VERIFIED,
+0x004ea670,global,g_Gui,,VERIFIED,faces/spell bg
+0x0164d528,global,g_InputRawCur,,VERIFIED,
+0x0164d0b4,global,g_GameFlags,,VERIFIED,gm+0x3dbac
+0x0164d2cc,global,g_StageIdx,,VERIFIED,
+0x00410c00,func,Rng_Range16,,VERIFIED,
+0x004143c0,func,Rng_SignedRange,,VERIFIED,
+0x00453be0,func,Rng_SetState,,VERIFIED,
+0x00453c20,func,Rng_GetState,,VERIFIED,
+0x00453c00,func,Rng_ResetCounter,,VERIFIED,
+0x004522a0,func,Replay_FrameHook,,VERIFIED,stores rng state
+0x00452310,func,Replay_RecordCalc,,VERIFIED,
+0x00452550,func,Replay_PlayCalc,,VERIFIED,
+0x00452830,func,Replay_RecordStageStart,,VERIFIED,
+0x00452d60,func,Replay_PlayStageLoad,,VERIFIED,
+0x004531f0,func,Replay_Finish,,INFERRED,save/close
+0x00439bc7,func,GameMgr_Calc,,VERIFIED,
+0x0043aaf4,func,GameMgr_OnRegister,,VERIFIED,starts StageStart thread
+0x0043aa03,func,GameMgr_Draw,,VERIFIED,
+0x0043be2c,func,GameMgr_OnRemove,,VERIFIED,
+0x0043bf6e,func,GameMgr_Unregister,,VERIFIED,
+0x0043c4b3,func,Stage_Advance,,VERIFIED,
+0x0043b984,func,GameMgr_InitDecoys,,VERIFIED,60 rng draws
+0x0043b936,func,GameMgr_InitRank,,VERIFIED,tbl 0x4c7880
+0x0043c686,func,GameMgr_InitPlayfieldRects,,VERIFIED,
+0x00440470,func,GameMgr_UpdateNextExtend,,VERIFIED,
+0x0043bbe1,func,GameMgr_LoadScoreData,,VERIFIED,
+0x00406cd0,func,GameMgr_IsPractice,,VERIFIED,flags bit0
+0x0040bb80,func,GameMgr_IsTampered,,VERIFIED,
+0x0044e260,func,GameMgr_AddDeathCount,,VERIFIED,
+0x0044e2e0,func,GameMgr_AddBombCount,,VERIFIED,
+0x00440e40,func,Item_CollectPoint,,VERIFIED,
+0x004161b0,func,Spell_End,,VERIFIED,capture bonus
+0x004037b0,func,PauseMenu_Update,,VERIFIED,
+0x00404890,func,ContinueMenu_Update,,VERIFIED,
+0x00402200,func,Ascii_Calc,,VERIFIED,runs pause/continue menus
+0x004052b0,func,ContinueMenu_Draw,,INFERRED,
+0x004464c8,func,Supervisor_Init,,VERIFIED,seeds rng with timeGetTime
+0x00467399,func,MainMenu_Calc,,VERIFIED,screen dispatch
+0x004674e0,func,MainMenu_Top,,VERIFIED,
+0x0046837b,func,MainMenu_Option,,VERIFIED,
+0x00469636,func,MainMenu_KeyConfig,,INFERRED,
+0x0046a071,func,MainMenu_Difficulty,,VERIFIED,
+0x0046a625,func,MainMenu_Character,,VERIFIED,
+0x0046adb0,func,MainMenu_PracticeStage,,VERIFIED,
+0x0046b174,func,MainMenu_SpellPracticeChar,,INFERRED,
+0x0046bbc0,func,MainMenu_SpellPracticeCard,,INFERRED,
+0x0046e136,func,MainMenu_Replay,,VERIFIED,
+0x00470a6c,func,MainMenu_OnRegister,,VERIFIED,
+0x00470e10,func,MainMenu_LoaderThread,,VERIFIED,
+0x004694c3,func,Menu_SetScreen,,VERIFIED,
+0x0047030b,func,Menu_CursorUpDown,,VERIFIED,
+0x00470424,func,Menu_CursorLeftRight,,VERIFIED,
+0x00466650,func,Text_RenderCentered,,VERIFIED,
+0x004667c0,func,Anm_LoadSurface,,VERIFIED,jpg/png to fullscreen surface slot
+0x00466ae0,func,Anm_ReleaseSurface,,VERIFIED,
+0x00445fa3,func,Supervisor_OnRegister,,VERIFIED,logo + nowloading
+0x00445bd4,func,Supervisor_DrawLoading,,VERIFIED,
+0x00448790,func,Loading_Begin,,VERIFIED,
+0x0044881a,func,Loading_End,,VERIFIED,
+0x00448972,func,Loading_Wait,,VERIFIED,Press Shot Button
+0x00435900,func,Hud_Update,,VERIFIED,
+0x0043625d,func,Hud_DrawPanel,,VERIFIED,
+0x0043741d,func,Hud_DrawBoss,,VERIFIED,
+0x00438a89,func,Hud_DrawPopups,,VERIFIED,
+0x0043826b,func,Hud_DrawClearPanel,,VERIFIED,
+0x00437ddd,func,Hud_ShowBonus,,VERIFIED,
+0x00437e5d,func,Hud_ShowMessage,,VERIFIED,
+0x00437edc,func,Hud_ShowSpellBonus,,VERIFIED,
+0x00438f58,func,Hud_StageTransition,,VERIFIED,
+0x00402920,func,Ascii_QueueString,,VERIFIED,
+0x00402a30,func,Ascii_Printf,,VERIFIED,
+0x00402b20,func,Ascii_DrawStrings,,VERIFIED,

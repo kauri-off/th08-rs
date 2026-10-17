@@ -17,13 +17,14 @@
 | 1 | opus 5.5 medium | phase1-opus | done: all 5 specs; 317/317 files byte-identical; BGM +0x18, ANM 0x40 hdr, THTX 1/3/5 correct |
 | 2 | opus 5.5 medium | phase2-opus | done: 05 ANM VM, 06 STD, 07 ECL (all ops 0..184), tools 0 problems |
 | 3 | opus 5.5 medium | phase3-opus | done: 08 bullets/items/lasers, 09 player+.sht+bombs, answers_phase3.md; 07 op111/112 corrected |
-| 4 | opus 5.5 medium | phase4-opus | running (10 MSG, 11 RNG/flow, 12 menus/HUD) |
+| 4 | opus 5.5 medium | phase4-opus | done: 10 MSG (23 ops, 33 files), 11 RNG+game flow+scenes, 12 menus/HUD |
 | impl 1 | opus 5.5 medium | impl1-engine-skeleton | done: src/task.rs, game.rs, supervisor.rs, anmmgr.rs, gfx viewport+camera; 4 tests |
 | impl 2 | opus 5.5 medium | impl2-anm-vm | done: src/anmvm.rs (all 57 opcodes in data), blend modes, title menu via title01.anm; 9 tests |
 | impl 3 | opus 5.5 medium | impl3-std | done: src/stdfile.rs, stage.rs, depth/fog/clip-space gfx; all 9 stage bgs render; 15 tests |
 | impl 4 | opus 5.5 medium | impl4-web-parity | done: web pixel-identical to native (WebGL2+WebGPU), ?stage= params via src/env.rs; seams are in texture data |
 | impl 5 | opus 5.5 medium | impl5-ecl | done: src/ecl.rs, eclvm.rs (ops 0..184), enemy.rs, temp bullet.rs; all stages spawn+fire; 17 tests |
 | impl 6 | opus 5.5 medium | impl6-bullets | done: real BulletManager (1536 slots, op111), lasers, src/item.rs, collision vs player stub, phase3 answers applied; 34 tests |
+| impl 7 | opus 5.5 medium | impl7-player | failed: Claude API rate limit (no changes) → relaunched as impl7b-player |
 
 User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_TEMPLATE.md.
 

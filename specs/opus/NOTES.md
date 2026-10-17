@@ -102,3 +102,28 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - 09_player.md WRITTEN (options 0x44EE70/0x44F2D0/0x44F5E0/0x44E770 not detailed = open). Symbols applied.
 - Next: answers_phase3 (QUESTIONS.md). Supervisor+0x19C = 0x17CE8F4 overlay VM question.
 - Phase-3 deliverable 3 DONE: answers in 05 §12, 06 §13, answers_phase3.md (menus/logo/RNG seed deferred).
+
+# PHASE 4 (started 2026-10-17) — 10_msg, 11_rng_and_flow, 12_menus_hud (in that order)
+- Dialogue register 0x417F60 (calc 12, draw 15, anm slots 15-19). Timeline op6 -> 0x439810 (HUD?), ECL ops 148/158/179-181.
+- MSG (VERIFIED): lives in HUD impl object (g_Hud 0x160F428 -> +8 ptr "FRScreen impl"): file ptr +0x21814, cur instr +0x21818, msg idx +0x2181C (-1 none), Timer +0x21820, wait counter +0x2182C, min-wait +0x21830, face VMs 4x0x2A4 at +0x21834, text line VMs 2 at +0x222C4, boss card VM +0x2280C, +0x22AB0 extra VM; colour tbl ptrs +0x22D54[4] (tbl 0x4C7180 shot*4+k), +0x22D64[4]=0 outline; font size +0x22D74=15; skippable +0x22D7C; speaker +0x22D7D; newbox +0x22D7E; line +0x22D7F; active +0x22D80; textbox +0x22D81; choice +0x22D82; release counter +0x22D78.
+  Msg_Start 0x43396D, Msg_Run 0x433DB3, Msg_Draw 0x43542B, Msg_IsBlocking 0x43587E (used by timeline op7), Msg_Load 0x439710 (offsets -> ptrs), Hud_StartMsg 0x439810. Text render 0x4663B0 (vsprintf, GDI "ＭＳ ゴシック" 2x supersample, A1R5G5B5 1024x64 surface 0x1653620, D3DXLoadSurface TRIANGLE). XOR 0x77 strings.
+  tools/msgdump.py: 0 problems over 33 msg files; dump extracted/msg_dump.txt. Ops 0..22 (see 10_msg.md).
+- INPUT keyboard map (0x43D970, GetKeyboardState VK codes; VERIFIED): Z->1 shot, X->2 bomb, Shift->4 focus, Esc->8, arrows/numpad 8246 -> 0x10/0x20/0x40/0x80 (numpad 7/9/1/3 diagonals), Ctrl->0x100 (skip), Q->0x200, S->0x400, Home/P->0x800 (snapshot), Enter->0x1000, D->0x2000, R->0x4000. Joystick buttons from cfg words 0x17CE870..880 -> bits 1..0x100.
+  Input words: 0x164D528 raw cur, 0x164D530 raw prev; 0x164D52C game (replay-substituted) cur, 0x164D534 prev.
+- GM flags word gm+0x3DBAC = 0x164D0B4: bit3 replay playback, bit14 spell practice, bit9 stage-end bonus shown, bits 11-12 final route choice, bit6 (0x40) game-clear trigger (op 11).
+- Stats +0x28 i8 'clock' counter (max 12, sprite index of HUD VM +0x2156C); stage end += 2 if stats+0x3C(time) < stats+0x40 else 1 (st1-5), +0 6A/6B, +4 extra.
+- Clear flags: gm+0x3C49C + shot*0x24 + diff*2 (u16 bitmask by stage idx), second array +0x3C4A6.
+- Pause (gm calc ~0x439bc7 area): saves g_Rng, UpdateChecksum, restores g_Rng (so pause doesn't perturb RNG).
+- DAT_017CE8CC = HUD full-repaint frame counter (Supervisor decrements).
+- 10_msg.md WRITTEN (complete). Hud object: +0xC front.anm, +0x10 stgNtxt.anm, +0x14 times.anm, +0x18 loadingNN.anm, +8 impl (0x8C2E dwords).
+- NEXT: 11_rng_and_flow (RNG, GameManager new game/stage flow, Supervisor scenes, stats block).
+- RNG: u16 state @0x164D520 + u32 call counter @+4. Next16: t=(s^0x9630)-0x6553; s=rotl16(t,2). Seed at boot = timeGetTime() low16 (0x4464C8). Replay: per-stage record +0x1A u16 seed; playback Rng_SetState 0x453BE0. StageStart stores seed 0x164D2C4 = g_Rng after setup. Replay calc prio 7 (0x4522A0) stores state each frame & zeroes counter.
+- StageStart 0x43ABD7 runs in loader thread (0x4486BA) from GM on-register 0x43AAF4. GM calc 0x439BC7: loading flag gm+0x38 (0x160F540): returns 3 (stop calc chain) + gm+0x3C counter++; thread waits counter>=30 (80 replay) then until flags bits5-6 ==0.
+- Stage clear: HUD 0x435900 sets flags bits5-6 =2 when clock anim done (stage<6); msg op 11 sets 2 (st 6-8). GM calc on 2: set 3, record clear masks, next scene 0x164D0A4/0x17CE8B4. Stage advance 0x43C4B3: 0->1->2->(4A=3 for teams1,2 / 4B=4 for teams 0,3)->5->(6A if route bits 0 else 6B).
+- Supervisor +0x158 cur scene, +0x15C next (0x17CE8B4), +0x160 prev. Scenes: 0 boot,1 menu,2 game,3 reload GM (next stage),5 result,6 result(after game),7 game->menu(replay end),8 music room,9 ending,10 retry stage1,11/12 special reload, -1 quit, 4 -> exit code 5.
+- GM calc demo mode (flags bit1): key -> menu; time limit gm+0x3DBB8 vs demo idx gm+0x3DBB4: fade at 6000/4800/4920/6900, menu at 6120/4920/5040/7020.
+- Pause: ESC edge (raw input) when not paused; gm+0x3DBB2 pause state; returns 3 (stop calc) while paused.
+- 11_rng_and_flow.md WRITTEN (RNG alg/seeding/consumers, GM fields+flags, StageStart, GM calc flow, routing, death/continue, stats block, replay stage record, Supervisor scene table, time system).
+- NEXT: 12_menus_hud (MainMenu 0x47146D/0x4674E0 state machine, title01.anm scripts, pause 0x4037B0 / continue 0x404890 menus (ascii.anm scripts 0xC..0x18), HUD draw 0x433927 & update 0x435900, front.anm, th08logo.jpg).
+- 12_menus_hud.md WRITTEN (boot logo/loading states, main menu screens + title01 VM map, difficulty/char/practice/option/replay, pause & continue menus, HUD object, front.anm layout, side panel, boss UI, popups, clear panel + bonus formula).
+- tools/rng.py added (reference RNG). PHASE 4 DELIVERABLES DONE. Symbols applied.
