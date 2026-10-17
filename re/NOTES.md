@@ -251,3 +251,19 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 4. MOP-UP: post-Present capture 0x443B60 (pause background), 16-bit colour mode, COVERAGE §5 orphans; boss
    name glow copies (text.anm 7/8) font-size-0 rendering effect (12 §5.8 INFERRED); effect-level-0/1 parity quirk check at runtime.
 5. (optional) LZSS encoder exact output.
+
+# BUGS2 (2026-10-18) — visual bugs round 2 (C1–C3)
+- C1 menu seam: original background = CopyRects of surface 0 (0x466BB0 Anm_DrawSurface), items = Draw2DSnap quads from
+  title01.png (512² A4R4G4B4, LINEAR+WRAP); glow continues across atlas rows 31/32 → port line = neighbour-row filtering
+  (port upscales / half-texel). Written 12 §2.2, 05 §12.4 consequence. Already specified otherwise.
+- C2: difficulty plate = VM 131+cfg+0x21 interrupt 9 (label 9 → (16,384) out2 20f) at char-select entry (not screen 15).
+  Final-route notice 0x47052D (screen 5 only, frame >8): CLRD nc/any masks bits 0x80 (6B)/0x40 (6A) → title01 sprites
+  145 FinalB挑戦可能 /146 FinalA,Bクリア /147 Final選択可能 /148 FinalBクリア (149 unused), (400,170) top-left. 12 §2.4.
+- C3: pink = time orb item 7 (sprite 179); grey diamonds = effect type 4 sparks (sprite 198, ×4 death + ×3 drop; runtime
+  effscan confirms groups of 7). Gauge readout = end of Ascii_DrawPopups: ascii.anm VMs G0..G4 (+0x7EC.. scripts 5,6,7,8,4),
+  setup 0x402600, interrupts 0x4070B0 (1 fresh start in Player_Load, 99 Player_OnRemove full exit, 2/3 corner fade
+  0x44D420), percent 0x405E10, max point value digits. 12 §5.9 (new).
+- Runtime refs: specs/data/ref/c1_menu_practice_sel, c2_charsel_* (CLRD poke 0x164B9AE.. = 0x41), c3_demo0_f1400/f2200.
+  Cmd files re/work/cmds/bugs2_c2.txt, bugs2_c3.txt, bugs2_eff.txt. Demo 0 = Reimu&Yukari Lunatic stage 5.
+- NEW TOOL re/tools/anmspr.py <anm> [lo hi] = sprite rects. Symbols +12, redump done.
+- WRITTEN: specs/answers_bugs2.md; 12 §2.2/§2.4/§5.9, 13 §3, 05 §12.4. BUGS2 DONE.

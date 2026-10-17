@@ -674,3 +674,15 @@ addr,kind,name,signature,confidence,note
 0x004664a0,func,Text_RenderToVmRight,,VERIFIED,right-aligned in sprite strip
 0x0044eb70,func,Option_RemiliaTeam,,VERIFIED,
 0x0044f930,func,Option_Yuyuko,,VERIFIED,effect 0x2F 0x80602050
+0x00402600,func,Ascii_SetupGaugeVms,,VERIFIED,gauge VMs G0-G4 scripts 5/7/6/8/4; human/youkai end x from gauge min/max; resend +0x827C
+0x004070b0,func,Ascii_GaugeInterrupt,,VERIFIED,interrupt G0-G3; store id +0x827C
+0x00407140,func,Ascii_GetGaugeInterrupt,,VERIFIED,returns +0x827C
+0x00406fd0,func,Ascii_RunGaugeVms,,VERIFIED,runs gauge VMs + 0x17C4.. VMs each Ascii_Calc
+0x00405e10,func,Ascii_DrawGaugePercent,,VERIFIED,(pos, value/100 %, colour) digit glyphs 136+, '.' 147 '%' 146 '-' 148
+0x0044d420,func,Player_UpdateGaugeFade,,VERIFIED,gauge readout fade 2/3 by player pos (x<160,y>=400)
+0x0044dc60,func,Player_OnRemove,,VERIFIED,full exit: gauge interrupt 99, release sht
+0x0047052d,func,MainMenu_CharacterDraw,,VERIFIED,screen 5 Final-route notice sprite 145-148 at (400,170)
+0x00466bb0,func,Anm_DrawSurface,,VERIFIED,CopyRects surface slot to backbuffer
+0x004066e0,func,AnmVm_IsVisible,,VERIFIED,flags bit 0
+0x004338b0,func,GameMgr_IsFreshStart,,VERIFIED,0x17CE8BC
+0x004338c0,func,GameMgr_IsFullExit,,VERIFIED,0x17CE8C0

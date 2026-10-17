@@ -123,6 +123,27 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
   `demo/demorpy((n+1) mod 4).rpy`; on success: flags = replay | demo (bits 3, 1), difficulty/shot from the
   replay header (+0x6B / +0x6A), byte 0x164D0B2 = shot % 2 (answers_phase7 §3), stage = first stage with a record, scene 2. (Demo exit: 11 §4.)
 
+**What the top menu draws** (menu draw 0x47087F, every frame while quit state +0x14434 = 0; VERIFIED, answers_bugs2
+§C1; ref `c1_menu_practice_sel.png`):
+1. **Background.** Surface slot 0 (`title00.png`) is copied to the back buffer with `IDirect3DDevice8::CopyRects`
+   (`Anm_DrawSurface` 0x466BB0: full image rect to dest point (0, 0)). It is a plain pixel copy: no quad, no
+   filtering, no blending, no seams.
+2. **VMs 0..141 in index order**, then the description VM. For each VM whose texture is loaded: pos += pos_offset
+   (+0x288) temporarily, then `Draw2DSnap` if rotation z = 0 else `Draw2DRot`. Items are one quad each:
+   - top-left anchored, 32 px tall, 28 px apart, so each item overlaps the next by **4 px**;
+   - later items draw over earlier ones;
+   - texture `title01.png` 512×512 A4R4G4B4;
+   - normal alpha blend, alpha test ≥ 4, z-write off, LINEAR filter, WRAP addressing (05 §12.4);
+   - colour white (locked items 0xFF404040).
+
+   Example: Practice Start = VM 4, selected sprite 5 (atlas x 240 y 0, 192×32) / unselected 6 (240, 64), pos (64,
+   264). Replay = VM 5, sprites 7/8 (0, 32 / 0, 96, 96×32), y 292. Item x positions wobble slightly
+   (`pos_time_out2` loops); only Practice Start stays at x 64.
+3. The items' white glow (alpha 17–68) runs to the sprite's edge rows and continues in the neighbouring atlas
+   sprites. For example, atlas rows 31 and 32 at x 240–432 both carry glow. In the original the glow just ends at
+   the quad edge, because snapped 1:1 sampling never reads row 32 (05 §12.4 consequence). A visible line at an item
+   edge in a port means the neighbour row is being filtered in.
+
 ### 2.3 Difficulty select (screens 4/8/12) — VERIFIED
 Enter: load surface 0 = `title/select00.png` (unless coming back from character select), interrupt 7 (12 for
 Extra; Extra always selects the single Extra entry, VM 135). Cursor = config +0x21 (last difficulty; >3 → 1).
@@ -155,6 +176,32 @@ Choices = 4 teams, or 12 (teams + 8 solos) when Extra is unlocked for all four t
 Confirm: shot = cursor, sfx 10; practice → screen 11; spell practice → screen 16; else
 `difficulty = config+0x21`, `stage = 0` (Extra: `difficulty + 4` = 8), flags &= ~replay, stop music,
 **scene 2** (new game). Cancel: back to the difficulty screen (spell practice: fade back to the top menu).
+
+**Difficulty plate** (VERIFIED, answers_bugs2 §C2; ref `c2_charsel_team0_normal_*.png`). On the first frame of
+screens 5/9/13 (not 15), right after the range interrupt 8, VM `131 + config+0x21` (Easy 131 … Lunatic 134;
+Extra 135 since config+0x21 = 4 there) gets interrupt **9**. That overrides the 8 the same frame (one pending slot),
+so this one VM does not hide. Script label 9 does `pos_time_out2` → (16, 384) over 20 frames (top-left anchored)
+and keeps the alpha and sprite from the difficulty screen. The sprite stays the base ("selected") sprite: 134/136/
+138/140/142 for E/N/H/L/Ex, 256×80, `select01.png`. It includes the moon, the "… Level" text and the description
+line. Label 18 (practice stage select) pins it at (16, 384). Labels 6/8/10 slide it back and fade it out when leaving.
+
+**Final-route notice** (VERIFIED, `MainMenu_CharacterDraw` 0x47052D, called from the menu draw 0x47087F only on
+**screen 5** = normal game, not practice/Extra/spell practice). It is drawn only while the screen's frame counter
+(+0x1442C) is > 8. It uses the **cursor** team c (menu +0x00, not `g_ShotType`) and d = config+0x21. With CLRD
+(15 §2.4) nc = no-continue mask (+0x0C) and any = any-clear mask (+0x16), the sprite (`title01.anm`, select01.png,
+144×16) is:
+
+| condition (first match) | sprite | text |
+|---|---|---|
+| nc[d] & 0x80 and any[d] & 0x40 | 146 | ——FinalA,B クリア—— |
+| nc[d] & 0x80 | 148 | ——FinalB　クリア—— |
+| c < 4 and no nc[E..L] has 0x80: if some any[E..L] has 0x40 | 145 | ——FinalB 挑戦可能—— (none otherwise) |
+| otherwise (another difficulty has nc & 0x80, or c ≥ 4) | 147 | ——Final　選択可能—— |
+
+Sprite 149 (FinalA クリア) is never used. The notice is drawn with a scratch VM at menu +0xE7B8: `AnmVm_Init`, set
+sprite, anchor top-left (flags |= 0x1800), colour 0xFFFFFFFF, pos (400, 170, 0), `Draw2DSnap`. It is drawn after
+all 142 VMs and the description VM. Bits: 0x40 = stage index 6 (6A) cleared, 0x80 = stage index 7 (6B) cleared
+(15 §2.4, `1 << stage_idx`).
 
 ### 2.5 Practice stage select (screen 11) — VERIFIED
 Sets practice flag. Available stages = any-clear mask (`gm+0x3C4A6 + shot*0x24 + diff*2`) for the chosen
@@ -407,6 +454,75 @@ Scripts (all positions are screen coordinates):
   overridden by the draw's copy of the text position); interrupt 2 → hidden after 30 frames. Script 2 (label,
   sprite 135 = (0, 192, 144×16)): interrupt 1 → alpha 0 → 255 over 30, pos (308, 344) → (308, 324) over 30
   (from t = 30), t = 100 → (308, 52) over 30 (mode 4); interrupt 2 → alpha → 0 over 30, hidden.
+
+### 5.9 Human/youkai gauge readout (bottom-left of the playfield) — VERIFIED (answers_bugs2 §C3b)
+Ref: `specs/data/ref/c3_demo0_f1400_gauge_human_max.png` ("−100.00%", blue) and
+`c3_demo0_f2200_gauge_youkai_max_timeorbs.png` ("82.76%", red). All coordinates are **screen** coordinates (no
+playfield origin added).
+
+VMs live in the ASCII manager (0x4CCE20). They use `ascii.anm` entry 0 (`ascii.png` 256×256) and are run every
+frame by `Ascii_Calc` (also while paused):
+
+| VM | offset | script | sprite | role |
+|---|---|---|---|---|
+| G0 | +0x7EC | 5 | 155 (128×16, line with swirl ends) | bar, top-left anchor |
+| G1 | +0xA90 | 6 | 153 (16×16 「人」) | human end, top-left, pos (88, 449) |
+| G2 | +0xD34 | 7 | 154 (16×16 「妖」) | youkai end, top-left, pos (88, 449) |
+| G3 | +0xFD8 | 8 | 152 (8×12 ▼ heart) | marker, centred, pos (144, 453) |
+| G4 | +0x127C | 4 | 136 | glyph stamp (sprite changed per glyph), centred |
+
+Glyph sprites: 136–145 = '0'–'9', 146 '%', 147 '.', 148 '-' (8×12 each).
+
+**Setup** (`Ascii_SetupGaugeVms` 0x402600). Called from `AsciiManager_Load`, from every `GameManager_StageStart`
+(after `Ascii_InitVms`, which does not touch these VMs) and from `MainMenu_OnRegister`. Steps:
+1. Restart scripts G0 5, G2 7, G1 6, G3 8, G4 4 with `AnmFile_SetScript`. This does **not** zero pos (only
+   `AnmManager_SetScript` does, 05 §8), so G0/G3 keep their last position.
+2. G1.x −= 56·min/−10000 and G2.x += 56·max/10000, with min/max = gauge limits 0x164D300/0x164D302 (09 §9.3).
+   That gives 人 x = 32 and 妖 x = 144 by default; shot 3: 60/144; shot 10: 60/116; solo human: 32/99.2; solo
+   youkai: 76.8/144.
+3. Re-send the stored interrupt (+0x827C) to G0–G3.
+
+**Interrupts** (`Ascii_GaugeInterrupt` 0x4070B0 sends to G0–G3 and stores the id in +0x827C):
+- 1 = show: `Player_Load` on a fresh start (0x17CE8BC ≠ 0, 11 §3).
+- 99 = hide (catch-all label): player on-remove 0x44DC60 when 0x17CE8C0 ≠ 0. That is any leave except next
+  stage / retry (requested scene 3/11/12). Between stages the last id (1/2/3) is just re-sent by step 3.
+- 2/3 = player-overlap fade, `Player_UpdateGaugeFade` 0x44D420, called every frame in `Player_Calc` after the shot
+  timer. With the player pos (playfield coords +0x2B4/+0x2B8) and cur = +0x827C:
+  - y < 400: if cur = 2 → 3.
+  - y ≥ 400: if cur ≠ 2 and x < 160 → 2; else if cur = 2 and x > 160 → 3.
+  - This function also sets player +0xE2AA4 and +0xE2AB0 to (−999, −999, 0) and +0xE2AC0 = 0 first.
+
+Script timing (anm data):
+- G0: label 1 = alpha 0→255 in 15 frames and pos (32, 465) → (32, 449) linear over 40.
+- G1–G3: label 1 = alpha 0, then from frame 60 alpha 0→255 over 40 (G3 pos (144, 453)).
+- All four: label 2 = alpha → 64 over 15; label 3 = alpha → 255 over 15.
+
+**Draw** (end of `Ascii_DrawPopups` 0x405420, draw prio 14, after the popups and after the shake offset is zeroed).
+Nothing is drawn unless G0 is visible (flags bit 0). g = gauge (stats +0x22).
+1. G3.x = G0.x + 64 + g·56/10000 (float), drawn with `Draw2DRotNoSnap` (no snapping).
+2. Zone colour RGB:
+   - human max (`Gauge_IsHumanMax`): (0x70, 0x70, 0xFF);
+   - else human: (0xB0, 0xB0, 0xFF);
+   - else youkai max: (0xFF, 0x70, 0x70);
+   - else youkai: (0xFF, 0xB0, 0xB0);
+   - else white.
+   Alpha = G0's current alpha. This dword becomes **G0's colour** (the bar is tinted) and G4's colour. Then G0,
+   G1, G2 are drawn (`Draw2DSnap`). G1–G3 keep their own white colour.
+3. Percent text (`Ascii_DrawGaugePercent` 0x405E10, also used by the spell-practice list 0x46F5CB):
+   - Anchor P = (G0.x + 64 + g·40/10000, G3.y − 7). Let a = |g|.
+   - Glyph count n = 4 + (g < 0) + (a < 1000 ? 1 : a < 10000 ? 2 : 3). Start x = P.x − (3.5·n − 3.5 − 4).
+   - Each glyph is G4 with that sprite, `Draw2DSnap` at the current x, then x += the advance:
+     - g < 0: '-' +7.
+     - a < 1000: digit a/100 +7, '.' +5, then **scale 0.8 and y + 2**: digit (a%100)/10 +5, digit a%10 +7.
+     - a < 10000: a/1000 +7, (a%1000)/100 +7, '.' +5, scale 0.8 / y + 2: (a%100)/10 +5, a%10 +7.
+     - a ≥ 10000: fixed '1' '0' '0' (+7 each), '.' +5, scale 0.8 / y + 2: '0' +5, '0' +7.
+   - Finally scale 1, y − 2, '%' (no advance).
+   - So the text is g/100 with two decimals: "−75.48%", "0.05%", "100.00%". The two decimals are 0.8× and 2 px
+     lower; the '%' is full size.
+4. Max point value (stats +0x24, the point-item base value, 08 §8.5):
+   - Start x = G0.x + 62 − 14, y = G0.y + 3 + 8 (centred glyphs), scale 1, same colour as step 2.
+   - 8 digit positions, divisor 10 000 000 down to 1. A digit is drawn only once the running sum of the digits
+     so far is ≠ 0 (leading zeros suppressed; value 0 draws nothing). Each drawn digit advances +7.
 
 ## 6. Answers to deferred implementer questions
 - Main menu scripts, highlighting and interrupts: §2.1–2.2 (all 142 `title01.anm` scripts are started at once;

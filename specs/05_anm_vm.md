@@ -418,6 +418,17 @@ TEXTURETRANSFORMFLAGS COUNT2, ADDRESSW CLAMP. Then the AnmManager state caches a
 (blend +0x24C0 = 3, z-write +0x24C1/+0x24C3 = 0xFF, vertex path +0x24C2 = 0xFF, texture +0x24BC = 0,
 camera +0x24C4 = 0xFF). No other code changes filter or address mode.
 
+**Consequence for snapped 2D sprites** (answers_bugs2 §C1). The original renders at 640×480. Mode 0 / unrotated
+mode 2 quads at scale 1 are snapped to integer − 0.5. So with D3D8 pixel-centre rules every pixel centre lands
+**exactly on a texel centre** of the sprite rect. Bilinear filtering then returns that texel unchanged: no texel
+outside the sprite rect is ever read, even though neighbouring atlas sprites touch it. The result is identical to
+point sampling. A reimplementation that renders at a higher resolution, or without the −0.5/half-pixel
+correspondence, still with LINEAR filtering, blends the row/column just outside the rect into the quad edge. That
+shows up as thin lines at sprite edges (e.g. the main-menu items in `title01.png`, whose glow rows run on into the
+neighbouring sprites). To match: render 2D at 640×480 and scale the final image, **or** sample snapped, unscaled 2D
+quads with nearest filtering, **or** inset the UVs by half a texel. 3D/rotated/scaled quads do sample neighbours
+in the original too (06 §seams).
+
 ### 12.5 Render state at frame start
 The per-frame "reset" (0x462E00, called right after BeginScene) only empties the vertex batch; it does **not**
 touch any D3D state or the caches. So each frame starts with whatever blend / z-write / camera / texture the
