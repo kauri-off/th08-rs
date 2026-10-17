@@ -54,7 +54,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 `cargo run --release --bin th08 -- "/home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night"` (or TH08_DIR env).
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
-1. RE phase4-opus (running): 10 MSG, 11 RNG/game flow, menus/HUD.
-2. IMPL impl7 (done): player (09) + RNG (11 §1). Next IMPL: stage flow/game manager (11 §3–4: lives/continue, stage clear, rank → ECL rank), sound effects (shots, items, graze, death), effect manager (hit sparks, death rings), HUD.
+1. RE phase5-opus (running): 13 SFX/effects, 14 bombs/options, answers_phase5.
+2. IMPL impl8 (running): MSG, game manager flow, HUD. Next IMPL: main menu + SFX + effects; then bomb choreography from 14.
 4. RE: 10 MSG + 11 RNG/stage flow/menus.  5. IMPL: dialogue, stage flow, HUD, menus.
 6. RE/IMPL: replays, score.dat, config, ending/staff roll, sound effects.
