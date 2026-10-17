@@ -17,6 +17,7 @@
 | 1 | opus 5.5 medium | phase1-opus | done: all 5 specs; 317/317 files byte-identical; BGM +0x18, ANM 0x40 hdr, THTX 1/3/5 correct |
 | 2 | opus 5.5 medium | phase2-opus | done: 05 ANM VM, 06 STD, 07 ECL (all ops 0..184), tools 0 problems |
 | 3 | opus 5.5 medium | phase3-opus | done: 08 bullets/items/lasers, 09 player+.sht+bombs, answers_phase3.md; 07 op111/112 corrected |
+| 4 | opus 5.5 medium | phase4-opus | running (10 MSG, 11 RNG/flow, 12 menus/HUD) |
 | impl 1 | opus 5.5 medium | impl1-engine-skeleton | done: src/task.rs, game.rs, supervisor.rs, anmmgr.rs, gfx viewport+camera; 4 tests |
 | impl 2 | opus 5.5 medium | impl2-anm-vm | done: src/anmvm.rs (all 57 opcodes in data), blend modes, title menu via title01.anm; 9 tests |
 | impl 3 | opus 5.5 medium | impl3-std | done: src/stdfile.rs, stage.rs, depth/fog/clip-space gfx; all 9 stage bgs render; 15 tests |
