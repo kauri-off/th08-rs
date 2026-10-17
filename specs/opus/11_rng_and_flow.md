@@ -74,7 +74,8 @@ the replay header byte +6 ≠ 0): stores `s` into the replay object (+0xD8) and 
 | EffectManager | effect update functions 0x425D70…0x4270C0 | var. |
 | ScreenEffect shake (types 1, 7) | 2 × Rng_Range(3) per frame | 4/frame |
 | enemy helpers | 0x422020 (op 67/178), 0x4224A0, 0x42ADB0, `Enemy_DropItems` 0x42BEA0, timeline 0x42A8A0 | var. |
-| replay save 0x4531F0 / 0x453D0D | after the game (file key) | — (outside play) |
+| replay save 0x4531F0 | after the game (key, 2 random bytes) | 3 × Range16(256) = 3 (Phase 6, 15 §3.5) |
+| score.dat save 0x453D0D | every Result removal, incl. mode-2 flushes at game start / pause-quit / exit | 2 × Range16(256) = 2 (15 §2.1) |
 
 Pause must not consume RNG: the only RNG use on pausing is the checksum update, wrapped in save/restore.
 
@@ -191,7 +192,7 @@ stats.continues (+0x29) = 0; stats.total_graze (+0x0C) = 0; stats.point_items_to
 config.slow_mode (+0x25) = 0 if difficulty ≥ 4, practice or spell practice
 stats.max_point_value (+0x24) = E 60000, N 100000, H 200000, L 300000, Extra 300000
 stats.extends (+0x34) = 0; next_extend (+0x38) = EXTEND_THR (08 §8)
-load score.dat → hiscore for (shot, difficulty) (practice: practice hiscore table; play counters +1)
+GameMgr_LoadScoreData 0x43BBE1: first flushes score.dat via Result_Register(2) = save (RNG 2 draws, 15 §2.2); then load score.dat → hiscore for (shot, difficulty) (practice: practice hiscore table; play counters +1)
 rank = RANK[d].init, min, max (table 0x4C7880: E/N 10, 8, 16; H/L 8, 8, 12; Extra 16, 15, 16)
   (rank changes: RankAdd/RankSub 0x43BFC3/0x43C03F via sub-counter GM+0x3DE38, ±1 rank per 100,
    clamped; deltas listed in answers_phase5 impl6 "Rank mapping"; +100 every 2400 − 240·lives frames, 0x42C3B0)
@@ -338,7 +339,7 @@ A reimplementation can drop all decoys/checksums **but must still consume the RN
 ## 6. Replay stage record (0x24-byte header per stage) — VERIFIED
 | off | type | field |
 |---|---|---|
-| 0x00 | u32 | score at stage start (written into the previous record's +0 at the next stage) |
+| 0x00 | u32 | score ÷10 at the **end** of this stage: filled in when the next stage starts (or at replay finish for the last stage). Corrected in Phase 6, see 15 §3.2 |
 | 0x04 | i32 | `stats+0x30` point items total |
 | 0x08 | u32 | `stats+0x0C` graze total |
 | 0x0C | i32 | extends |

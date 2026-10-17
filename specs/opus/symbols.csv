@@ -370,7 +370,7 @@ addr,kind,name,signature,confidence,note
 0x00452550,func,Replay_PlayCalc,,VERIFIED,
 0x00452830,func,Replay_RecordStageStart,,VERIFIED,
 0x00452d60,func,Replay_PlayStageLoad,,VERIFIED,
-0x004531f0,func,Replay_Finish,,INFERRED,save/close
+0x004531f0,func,Replay_Finish,,VERIFIED,build+encrypt+write rpy; 3 RNG draws
 0x00439bc7,func,GameMgr_Calc,,VERIFIED,
 0x0043aaf4,func,GameMgr_OnRegister,,VERIFIED,starts StageStart thread
 0x0043aa03,func,GameMgr_Draw,,VERIFIED,
@@ -447,7 +447,7 @@ addr,kind,name,signature,confidence,note
 0x00415d60,func,Gui_ShowPlayerSpellName,,VERIFIED,SE 0xE
 0x00415f00,func,Gui_ShowBossSpellName,,VERIFIED,SE 0xE
 0x0042c420,func,Enemy_ReactPlayerMode,,VERIFIED,SE 0x27/0x28 effects 0x1e/0x1f
-0x004152a0,func,Spell_Start,,INFERRED,
+0x004152a0,func,Spell_Start,,VERIFIED,counts CATK attempts
 0x00427450,func,EffDraw_Ring,,VERIFIED,triangle-strip ring from VM params
 0x004272e0,func,EffInit_Ring,,VERIFIED,alloc 0x1c38 vtx buffer
 0x00427990,func,EffUpd_RingSimple,,VERIFIED,
@@ -540,3 +540,65 @@ addr,kind,name,signature,confidence,note
 0x004222b0,func,Ecl_SetMode2Polar,,VERIFIED,
 0x00432f20,func,Bullet_Draw,,VERIFIED,
 0x004415a0,func,ItemMgr_Draw,,VERIFIED,
+0x0045a5e0,func,ScoreDat_Load,,VERIFIED,decrypt+xor+lzss score.dat; returns buffer or 0
+0x00453d0d,func,ScoreDat_Save,,VERIFIED,this=Result; 2 RNG draws
+0x0045a500,func,ScoreList_Insert,,VERIFIED,sorted insert returns rank
+0x0045a950,func,ScoreDat_GetHiscore,,VERIFIED,max(top,100000)
+0x0045aac0,func,ScoreDat_GetCATK,,VERIFIED,
+0x0045ab70,func,ScoreDat_GetLSNM,,VERIFIED,
+0x0045ac00,func,ScoreDat_GetFLSP,,VERIFIED,
+0x0045ac90,func,ScoreDat_GetCLRD,,VERIFIED,
+0x0045ae00,func,ScoreDat_GetPSCR,,VERIFIED,
+0x0045af30,func,ScoreDat_GetPLST,,VERIFIED,
+0x004144d0,func,Spell_DifficultyOf,,VERIFIED,5 for last words
+0x00414540,func,Spell_IsLastSpell,,VERIFIED,table 0x4C6B90 (43)
+0x0046cbbb,func,LastWord_ComputeUnlocks,,VERIFIED,FLSP slots
+0x00451d90,func,Replay_Load,,VERIFIED,
+0x004531a0,func,Replay_AppendEnd,,VERIFIED,terminator; end=p+6
+0x00452490,func,Replay_FastForward,,VERIFIED,returns 6 (restart chain)
+0x004526c0,func,Replay_PlayCalcDebug,,VERIFIED,6-byte frames
+0x00453080,func,Replay_OnRemove,,INFERRED,
+0x004584b0,func,Result_Calc,,VERIFIED,state switch
+0x0045621e,func,Result_NameEntry,,VERIFIED,state 9
+0x0045696f,func,Result_SaveReplay,,VERIFIED,states 10-14
+0x00459fd2,func,Result_OnRemove,,VERIFIED,saves score.dat
+0x0045964d,func,Result_OnRegister,,VERIFIED,default table + load
+0x004550fc,func,Result_CheatUnlock,,VERIFIED,difficulty page + hidden code
+0x00429980,func,Ending_Init,,VERIFIED,selects end file; CLRD ending bits
+0x0044858d,func,ExeCheck,,VERIFIED,th08_%.4x%c.ver
+0x004482a1,func,Supervisor_UpdateRunTime,,VERIFIED,
+0x00448418,func,Supervisor_UpdatePlayTime,,VERIFIED,
+0x0046ef8d,func,MainMenu_ReplayDraw,,VERIFIED,
+0x0043c15f,func,Clear_TeamFinalB,,VERIFIED,no-cont 0x4000 E-L; t>=4 true
+0x0043c23b,func,Clear_TeamFinalA,,VERIFIED,any 0x8000 E-L; t>=4 true
+0x0043c1e9,func,Clear_ExtraUnlocked,,VERIFIED,flags bit15
+0x0043c2c5,func,Clear_AnyFinalA,,VERIFIED,flags bit16
+0x00447d04,func,Clear_AllTeamsFinalB,,VERIFIED,flags bit17
+0x00453c40,func,Supervisor_NoRecordFlag,,VERIFIED,+0x1A4 bit3
+0x004295e0,func,Ending_LoadScript,,VERIFIED,
+0x004297b0,func,Ending_Ctor,,VERIFIED,
+0x00429860,func,Ending_Calc,,VERIFIED,up to 9x with Ctrl when skip allowed
+0x004298f0,func,Ending_Draw,,VERIFIED,
+0x00429d40,func,Ending_OnRemove,,VERIFIED,scene 6
+0x00428b80,func,Ending_RunScript,,VERIFIED,.end interpreter
+0x00428890,func,Ending_ReadInt,,VERIFIED,atol + skip NULs
+0x00428910,func,Ending_DrawFade,,VERIFIED,
+0x0045b1e0,func,Screen_FillRect,,VERIFIED,untextured quad
+0x00449331,func,MusicRoom_Ctor,,VERIFIED,
+0x00449399,func,MusicRoom_Calc,,VERIFIED,
+0x00449487,func,MusicRoom_Draw,,VERIFIED,
+0x0044970f,func,MusicRoom_Init,,VERIFIED,parses musiccmt.txt
+0x00448a65,func,MusicRoom_StateIntro,,VERIFIED,
+0x00448b16,func,MusicRoom_StateInput,,VERIFIED,
+0x00449c0a,func,MusicRoom_OnRemove,,VERIFIED,
+0x004550b7,func,Result_SetState,,VERIFIED,
+0x00454cb2,func,Result_TopMenu,,VERIFIED,
+0x00454298,func,Result_DumpScoreTxt,,VERIFIED,score.txt
+0x004577e2,func,Result_EndBanner,,VERIFIED,states 15/16
+0x004578aa,func,Result_PlayStats,,VERIFIED,
+0x004586b4,func,Result_Draw,,VERIFIED,
+0x00454c59,func,Result_InsertEntry,,VERIFIED,
+0x00456938,func,Date_Format,,VERIFIED,%m/%d
+0x00471181,func,Info_Show,,VERIFIED,blocking unlock notice
+0x0046fd5f,func,Card_IsSelectable,,VERIFIED,attempted or FLSP
+0x0046d7f9,func,SpellPractice_DrawInfo,,VERIFIED,
