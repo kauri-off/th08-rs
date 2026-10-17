@@ -78,7 +78,7 @@ After the terminator 16 of 18 files contain another 20 bytes of 0xFF (ignored).
    assign the next VM index `k`, store k into the quad's +6 field and start the quad's ANM script on VM k
    (`AnmManager_SetScript`, which zeroes pos/pos_offset and runs the script's time-0 instructions).
 4. Start the stage overlay VM (+0x844) with script 33 of a global ANM file (0x17CE8F4) and send it interrupt 2
-   (INFERRED: tint/overlay used by `Stage_UpdateObjects` §5).
+   (VERIFIED in Phase 3: text.anm, human/youkai stage tint — §13).
 5. Defaults: fog colour 0xFF000000, fog near 200, far 500; camera position (0, 0, 1000), facing (0, 0, 0),
    eye offset (0, 0, 0), up (0, 1, 0), fov 0.5235988 (π/6); the "target" and "previous" camera blocks are
    copied from these values; no interpolation active; sway off.
@@ -328,3 +328,27 @@ v2,v3 from B's fog. Drawn through the 2D batch (fog off).
 ## 12. Open points
 - The 5 text fields at 0x10 are unused; the instance field +2 (always 256) is unused.
 - Stage state +0xB24/+0xB28 (stage transition / spell background) and the sparkle effects: later phases.
+
+## 13. Implementer questions answered in Phase 3 (VERIFIED)
+- **Overlay VM (+0x844) ANM file**: global 0x17CE8F4 = `text.anm` loaded into ANM slot 0 at startup (0x4464C8).
+  Script 33 of text.anm: sprite 21; on interrupt 2 colour → (R 64, G 64, B 255) over 16 frames with alpha 255; on
+  interrupt 1 colour → white over 16 frames. `Stage_LoadStd` starts it and sends interrupt 2; each frame
+  `Stage_UpdateObjects` switches it by the **player mode byte** (player+5): when the mode becomes youkai (≠ 0)
+  → interrupt 1 (white), when it becomes human (0) → interrupt 2 (blue); latch +0x834 (1 = youkai), timer
+  +0x838 reset on each switch. The VM colour is the stage tint of §5 (colour2 = colour × overlay / 256). So the
+  stage objects are tinted blue in human mode and drawn normally in youkai mode.
+- **Byte 0x17D5EF8+5**: owned by the player — the active character / "mode" (0 human, 1 youkai): a copy of the
+  focus state once it has been held for more than 6 frames; solos: shot-type parity (09 §1.1, §3).
+- **Ribbons (§11.3)**: vertex z = projected depth of A for v0/v1 and of B for v2/v3 (rhw 1). Drawn only if the
+  VM is enabled+visible with colour alpha ≠ 0 (`DrawCustomQuad`), the projected direction length ≥ 1e-5 and both
+  projected depths are in [0, 1] (plus the object-level culling of §11). The fog result only changes the vertex
+  colours/alpha (a fully fogged point gives alpha 0 vertices; the quad is still submitted).
+- **Billboard scale (§11.1)**: `|s2 − s|` is the **3D length** of the difference of the two projected points
+  (screen x, y and projected depth z, `Vec3_Length`). s = project(origin) with world = translation(vm.pos);
+  s2 uses translation(vm.pos + right·W·**vm.scale.x**) — the VM's current scale.x, which (when quad.w == 0) is the
+  value written by the previous frame's billboard computation (feedback, faithful).
+- **Seams between ground tiles**: textures are sampled with ADDRESSU/V = WRAP and LINEAR min/mag filtering, no
+  mip-mapping (05 §12.4); 3D world quads use UV 0..1 through the texture matrix with **no half-texel offset**
+  (only 2D draw modes 0/2 snap with −0.5). Linear filtering at the tile edge therefore blends with the wrapped
+  opposite edge of the sprite rect/texture exactly as the original does; a reimplementation should use the same
+  sampler state (wrap + bilinear) and the same UV mapping rather than clamping.

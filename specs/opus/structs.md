@@ -32,3 +32,9 @@
 - Stage object g_Stage 0x4E4030 (partial) — 06_std.md §3. STD file records — 06 §1.
 - ECL context (0x228), thread block (0x24B0), enemy object (0x53D0, main fields) — 07_ecl.md §4.3/§5.1.
 - Bullet spawn descriptor (enemy +0x2E24, 0x210 bytes): +0 i16 type, +2 i16 colour, +4 f32[3] origin, +0x10 angle1, +0x14 angle2, +0x18 speed1, +0x1C speed2, +0x20 extra commands 18x24 B, +0x1F4 i16 count1, +0x1F6 count2, +0x1F8 aim mode, +0x1FA 0, +0x1FC u32 flags, +0x200 sfx, +0x204 i32, +0x20C template ptr — VERIFIED (07 §9).
+
+## Phase 3 structures (full tables in 08 / 09)
+- Bullet manager 0xF54E90 (templates 21×0xD44, bullets 1536×0x10B8 at +0x1A880, lasers 256×0x59C at +0x660938) — 08 §2, §6.
+- Bullet ex-command slot (24 B: f32 e, f32 f, i32 c, i32 d, u32 cmd, i32 chain) — 08 §5.
+- Item manager 0x1653648 (2096×0x2E4, list) — 08 §8.
+- Player 0x17D5EF8 (0xE2B30), player bullet 0x484, option 0x2F4, area 0x40, .sht header/entry — 09.

@@ -380,3 +380,60 @@ With this camera, world (x, y, 0) projects to viewport pixel (x, y) (relative to
 - `python3 -I tools/anmdis.py extracted/dat -q` → coverage line lists ops −1..89 actually used, "unknown
   opcodes: []", "problems: 0" (sizes, jump targets, script contiguity). VERIFIED.
 - Every handler in the table was read from the switch in `AnmVm_Run` (case value = opcode + 1).
+
+## 12. Implementer questions answered in Phase 3 (VERIFIED unless marked)
+
+### 12.1 Global tint (AnmManager +0 / +4)
+The tint is a **D3DCOLOR stored at AnmManager+0** (byte +0 B, +1 G, +2 R, +3 A); the dword at **+4 is only the
+enable flag** (≠ 0 → tint active). When enabled, every channel **including alpha** is multiplied:
+`c' = min(255, (c · t) >> 7)` (0x80 = neutral, helper 0x462750), applied after choosing colour/colour2.
+Both colour paths do it (vertex colour in `AnmManager_EmitQuad`, texture-factor colour in
+`AnmManager_SetRenderState` 0x4623C0).
+
+### 12.2 Draw-skip test and colour2
+All draw entries (modes 0–5, `Draw3DWorld`, `DrawCustomQuad`) skip the VM when flag bit 0 (enabled) or bit 1
+(visible) is clear, or when the **primary colour's alpha (byte vm+0x1F3) is 0** — this is tested even when bit 17
+(draw with colour2) is set; alpha2 (vm+0x1F7) is never tested.
+
+### 12.3 Op 59 (`irand`) with n = 0
+`Rng_Range(n)` returns 0 **without touching the RNG** when n == 0 (the argument is treated as unsigned;
+otherwise `Next32 % n`). The RNG algorithm/seed belongs to spec 11 (deferred).
+
+### 12.4 Device render state, texture filtering and addressing (0x442F60, run at device init and after a reset)
+Render states: ZENABLE 1 (0 if a config option is set), LIGHTING 0, CULLMODE NONE, ALPHABLENDENABLE 1,
+SHADEMODE GOURAUD, SRCBLEND SRCALPHA, DESTBLEND INVSRCALPHA, ZFUNC ALWAYS, ALPHATESTENABLE 1, ALPHAREF 4,
+ALPHAFUNC GREATEREQUAL, FOGENABLE 1 (0 by option), FOGDENSITY 1.0, FOGTABLEMODE NONE, FOGVERTEXMODE LINEAR,
+FOGCOLOR 0xFFA0A0A0, FOGSTART 1000, FOGEND 5000, EDGEANTIALIAS 0, MULTISAMPLEANTIALIAS 0.
+Texture stage 0: COLOROP MODULATE (SELECTARG1 when config flags +0x150 bit 8), COLORARG1 TEXTURE,
+COLORARG2 TFACTOR (DIFFUSE when config bit 1 — the "vertex colour" path), ALPHAOP / ALPHAARG1 / ALPHAARG2 the
+same way; **ADDRESSU = ADDRESSV = WRAP**, **MAGFILTER = MINFILTER = LINEAR**, MIPFILTER NONE,
+TEXTURETRANSFORMFLAGS COUNT2, ADDRESSW CLAMP. Then the AnmManager state caches are invalidated
+(blend +0x24C0 = 3, z-write +0x24C1/+0x24C3 = 0xFF, vertex path +0x24C2 = 0xFF, texture +0x24BC = 0,
+camera +0x24C4 = 0xFF). No other code changes filter or address mode.
+
+### 12.5 Render state at frame start
+The per-frame "reset" (0x462E00, called right after BeginScene) only empties the vertex batch; it does **not**
+touch any D3D state or the caches. So each frame starts with whatever blend / z-write / camera / texture the
+last draw of the previous frame left (the caches still describe it correctly). Blend bits 4–5 of a VM:
+0 → DESTBLEND INVSRCALPHA, 1 → DESTBLEND ONE (additive); 2 and 3 set nothing (the previous blend stays).
+Fog is switched off by the frame loop before the draw chain (`Supervisor_FogOff`).
+
+### 12.6 Supervisor flag 0x20 (slowdown restore)
+Set (Supervisor+0x1A4 = 0x17CE8FC |= 0x20) by ECL native 29 (0x425290) when it restores normal speed after a
+slowdown 1/n with n > 1. **No code clears it.** While set, every `Timer_Add`/`Timer_Sub` (and so every
+`Timer_Decrement`, used by bullets in spawn states, item/player countdowns, ECL waits, …) first moves the counter
+one extra step in the same direction (+1 for Add, −1 for Sub), zeroes the sub-frame and sets prev = −999;
+`Timer_Tick` is not affected. (Faithful quirk; INFERRED: practically only reachable after a native-28/29 pair.)
+
+### 12.7 Draw mode 5 / `Draw3DWorld` anchor offset
+With anchor bit 11 (x) / 12 (y) the translation gets `+ |sprite_w · scale.x / 2|` / `+ |sprite_h · scale.y / 2|`
+— the **absolute value** (FABS) of the half size, so negative scales still shift by a positive amount.
+The global screen-shake offset is added afterwards.
+
+### 12.8 Texture-matrix / texture caches
+`AnmManager+0x24C8` (last sprite record used for the texture matrix) is used only by `Draw3DWorld`; it is reset
+to 0 at the start of `Stage_DrawLow` every frame and by a few other drawers (ending 0x429980, 0x43741D,
+screen effects 0x45B1E0/0x45B490). The texture cache `+0x24BC` **is shared** with the 2D paths
+(`EmitQuad`/`DrawCustomQuad` compare and update the same field); `Draw3DWorld` re-binds the texture only when
+its sprite cache misses (or uv_off_u ≠ 0), and the same reset points clear +0x24BC too. Quirk (see 06 §11.2):
+the update condition tests uv_off_u twice and never uv_off_v.

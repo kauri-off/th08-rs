@@ -224,3 +224,103 @@ addr,kind,name,signature,confidence,note
 0x0040c7b0,func,Math_Atan2,,VERIFIED,(y;x)
 0x004286e0,func,Vec3_FromPolar,,INFERRED,
 0x00415c80,func,Enemy_ResetRankParams,,VERIFIED,
+0x00f54e90,global,g_BulletManager,,VERIFIED,templates 21x0xD44; bullets +0x1A880; lasers +0x660938
+0x0042f360,func,BulletMgr_Ctor,,VERIFIED,zero + cursor + sentinel state 6
+0x00431240,func,BulletMgr_Calc,,VERIFIED,items calc; bullets; lasers
+0x00432b50,func,BulletMgr_Draw,,INFERRED,
+0x0042ffc0,func,Bullet_ApplyExCmds,,VERIFIED,
+0x00432170,func,Bullet_Free,,VERIFIED,
+0x004321b0,func,BulletMgr_ClearDrawLists,,VERIFIED,
+0x00432210,func,Bullet_ExSpeedup,,VERIFIED,ex 0x1
+0x004322b0,func,Bullet_ExAccel,,VERIFIED,ex 0x10
+0x00432390,func,Bullet_ExAngular,,VERIFIED,ex 0x20
+0x00432460,func,Bullet_ExRedirectRel,,VERIFIED,ex 0x40
+0x004325a0,func,Bullet_ExRedirectAbs,,VERIFIED,ex 0x100
+0x004326e0,func,Bullet_ExRedirectAim,,VERIFIED,ex 0x80
+0x004329f0,func,Bullet_ExWrapX,,VERIFIED,ex 0x400000
+0x00432aa0,func,Bullet_ExWrapY,,VERIFIED,ex 0x800000
+0x0042fe70,func,AnmVm_Copy,,VERIFIED,ECX=dst EDX=src 0x2A4
+0x0042fea0,func,Bullet_SetEffectSprite,,VERIFIED,
+0x0042a410,func,BulletDesc_Init,,VERIFIED,zero; +0x204=-1
+0x004399ac,func,GameMgr_IsOnScreen,,VERIFIED,(x;y;w;h) box vs 384x448
+0x0040e390,func,Timer_LessEq,,VERIFIED,cur<=v
+0x0040b8e0,func,Timer_GreaterEq,,VERIFIED,cur>=v
+0x004066a0,func,Timer_Less,,VERIFIED,cur<v
+0x00410a70,func,Vec3_AddInPlace,,VERIFIED,
+0x0040c7d0,func,Vec3_DivScalar,,VERIFIED,
+0x0040ec00,func,AnmVm_SetRotationZ,,VERIFIED,
+0x0043ee30,func,Vec2_Rotate,,VERIFIED,ECX=out EDX=in
+0x00440500,func,ItemMgr_Calc,,VERIFIED,
+0x004400a0,func,ItemMgr_Spawn,,INFERRED,(pos;type;flag)
+0x01653648,global,g_ItemManager,,INFERRED,
+0x017d5ef8,global,g_Player,,VERIFIED,
+0x0160f508,global,g_GameManager,,VERIFIED,
+0x018b8a68,global,g_SoundManager,,INFERRED,
+0x0045d550,func,Sound_Play,,INFERRED,(id;0)
+0x0045d660,func,Sound_PlayAt,,INFERRED,(id;x)
+0x0044a470,func,Player_GrazeTest,,VERIFIED,0 none 1 graze 2 bomb area
+0x0044a230,func,Player_HitTest,,VERIFIED,
+0x0044a360,func,Player_HitTestNoBomb,,VERIFIED,
+0x00449ff0,func,Player_InBombArea,,VERIFIED,
+0x0044a6a0,func,Player_LaserTest,,VERIFIED,
+0x0044a5a0,func,Player_ItemCollectTest,,VERIFIED,
+0x0044c1b0,func,Player_AngleFrom,,VERIFIED,
+0x0044a930,func,Player_OnGraze,,VERIFIED,
+0x0044e160,func,GameMgr_ScrambleDecoys,,VERIFIED,RNG 5 range + 3 float
+0x0043bfc3,func,GameMgr_RankAdd,,VERIFIED,
+0x0043c03f,func,GameMgr_RankSub,,VERIFIED,
+0x0043c0bb,func,GameMgr_GaugeAdd,,VERIFIED,
+0x004181f0,func,GameMgr_AddScore,,VERIFIED,score += n/10
+0x00415c60,func,BulletMgr_CancelAllToItems,,INFERRED,0x430830(1)
+0x0044c390,func,Player_Calc,,VERIFIED,
+0x0044d650,func,Player_Load,,VERIFIED,sht + anm + boxes
+0x0044dd70,func,Sht_Load,,VERIFIED,ECX=&ptr EDX=name
+0x0044aec0,func,Player_Move,,VERIFIED,input/focus/move/boxes/options/gauge
+0x0044c650,func,Player_UpdateBomb,,VERIFIED,
+0x0044ab40,func,Player_Die,,VERIFIED,
+0x0044cbf0,func,Player_DyingUpdate,,VERIFIED,
+0x0044d180,func,Player_RespawnUpdate,,VERIFIED,
+0x0044d2c0,func,Player_UpdateInvuln,,VERIFIED,
+0x0044c5b0,func,Player_UpdateAreas,,VERIFIED,
+0x00451500,func,Player_ShotTimer,,VERIFIED,
+0x00450f60,func,Player_Fire,,VERIFIED,ECX=player EDX=t
+0x0044fb70,func,Player_InitShot,,VERIFIED,
+0x0044fd80,func,Shot_InitDefault,,VERIFIED,
+0x00451150,func,Player_UpdateBullets,,VERIFIED,
+0x00451670,func,Player_DamageAgainst,,VERIFIED,
+0x0040be30,func,Bomb_Start,,VERIFIED,(name;dur;invuln;isLS)
+0x0044df00,func,Player_AddCancelCircle,,VERIFIED,
+0x0044de60,func,Player_AddCancelRect,,VERIFIED,
+0x0044e040,func,Player_AddDamageCircle,,VERIFIED,
+0x0044dfa0,func,Player_AddDamageRect,,VERIFIED,
+0x00406e50,func,GameMgr_UpdateChecksum,,VERIFIED,2x Rng_Range(100000)
+0x00418220,func,GameMgr_AddTime,,VERIFIED,
+0x00439883,func,GameMgr_AddBombs,,VERIFIED,
+0x0043c641,func,GameMgr_AddLives,,VERIFIED,
+0x00441850,func,GameMgr_AddPower,,VERIFIED,
+0x00406fa0,func,GameMgr_SetPower,,VERIFIED,
+0x00406f30,func,GameMgr_SetBombs,,VERIFIED,
+0x00406e20,func,GameMgr_SetLives,,VERIFIED,
+0x00422480,func,GameMgr_GetPower,,VERIFIED,
+0x004398ce,func,GameMgr_GetBombs,,VERIFIED,
+0x0042f2b0,func,GameMgr_GetLives,,VERIFIED,
+0x00439b29,func,GameMgr_Extend,,VERIFIED,
+0x00406cf0,func,GameMgr_GetGauge,,VERIFIED,
+0x0044e140,func,GameMgr_SetGauge,,VERIFIED,
+0x00406d10,func,Gauge_IsHumanMax,,VERIFIED,
+0x00406d40,func,Gauge_IsHuman,,VERIFIED,
+0x00406d70,func,Gauge_IsYoukaiMax,,VERIFIED,
+0x00406da0,func,Gauge_IsYoukai,,VERIFIED,
+0x0042f230,func,GameMgr_IsSoloHuman,,VERIFIED,
+0x0042f270,func,GameMgr_IsSoloYoukai,,VERIFIED,
+0x00430830,func,BulletMgr_CancelAll,,VERIFIED,
+0x00430aa0,func,BulletMgr_CancelBonus,,VERIFIED,
+0x00430d30,func,BulletMgr_CancelRadius,,VERIFIED,
+0x00430f20,func,LaserMgr_Spawn,,VERIFIED,
+0x00441530,func,ItemMgr_DropAttracted,,VERIFIED,
+0x004413e0,func,ItemMgr_AttractAll,,VERIFIED,
+0x00441450,func,ItemMgr_ConvertPower,,VERIFIED,
+0x0043ed80,func,Rng_Signed,,VERIFIED,u32/2^31-1
+0x0164d0b1,global,g_ShotType,,VERIFIED,0-11
+0x0164d52c,global,g_Input,,VERIFIED,
+0x0164d534,global,g_InputPrev,,INFERRED,

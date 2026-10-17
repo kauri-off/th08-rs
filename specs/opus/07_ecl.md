@@ -377,8 +377,8 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 107 / 108 | autofire_store on / off | — | flag A bit 17 | 25 / 25 |
 | 109 | fire_stored | — | fire the descriptor as currently stored, origin = final pos + shot offset | 0 |
 | 110 | shot_offset | f x, f y | (x, y, 0) | 423 |
-| 111 | bullet_ex | i k, i a, i b, i c, i d, f e, f f | descriptor extra slot k (e+0x2E44 + 24k) = {e, f, (float)c, (float)d, (float)a, (float)b} — per-bullet behaviour commands (08 spec) | 1269 |
-| 112 | bullets_412 | — | bullet manager 0x415C60 (later phase) | 10 |
+| 111 | bullet_ex | i k, i a, i b, i c, i d, f e, f f | descriptor extra slot k (e+0x2E44 + 24k) = {f32 e, f32 f, i32 c, i32 d, u32 a, i32 b} (ints copied raw, no conversion — corrected Phase 3) — per-bullet behaviour commands (08 spec §4) | 1269 |
+| 112 | cancel_bullets | — | cancel all bullets/lasers to items (mode 1), 08 §7 | 10 |
 | 113 | bullet_sfx | i id, i x | id < 0: descriptor flag 0x200 off; else sfx = id, flag on; desc+0x204 = x | 161 |
 | 114 / 115 | laser / laser_b | laser block | §9.4 | 59 / 0 |
 | 116 | laser_slot | i k | current laser slot | 18 |
