@@ -127,3 +127,15 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - NEXT: 12_menus_hud (MainMenu 0x47146D/0x4674E0 state machine, title01.anm scripts, pause 0x4037B0 / continue 0x404890 menus (ascii.anm scripts 0xC..0x18), HUD draw 0x433927 & update 0x435900, front.anm, th08logo.jpg).
 - 12_menus_hud.md WRITTEN (boot logo/loading states, main menu screens + title01 VM map, difficulty/char/practice/option/replay, pause & continue menus, HUD object, front.anm layout, side panel, boss UI, popups, clear panel + bonus formula).
 - tools/rng.py added (reference RNG). PHASE 4 DELIVERABLES DONE. Symbols applied.
+
+# PHASE 5 (started 2026-10-17) — 13_sfx_effects, 14_bombs_options, answers_phase5 (in that order)
+- Re-dumped extracted/all_decomp.c with all symbols (old: all_decomp_phase2.c). fn.sh takes addr without 0x (e.g. 0045d550).
+- SFX (VERIFIED): Sound_LoadSE 0x45d3f0: 36 wavs (ptr tbl 0x4c81b0), 46 SE ids tbl 0x4c8040 {i32 wav, i16 vol(1/100dB, applied at load), i16 prio (stored mgr+0x408+id*4, unused)}; DuplicateSoundBuffer per SE id at mgr+0x208+id*4.
+  Sound_Play(id,pan) / Sound_PlayAt(id,x): pan=trunc((x-192)*1000/192). Queue: 12 slots mgr+0x620 (id, -1 end), per-slot pan list mgr+0x680+slot*0x200 (max 128), count mgr+0x650. Same id in a frame merges (pans averaged). Full (12 distinct) -> dropped.
+  Sound_Update 0x45d790 (Frame_Run after calc chain): BGM cmd queue mgr+0x1f88; if cfg SE on (0x17ce890): per slot Stop, pos 0, pan avg, vol = cfg SE vol (0x17ce898, 0..100) v: k=1-(1-v/100)^3, vol=trunc((tblVol+5000)*k)-5000 (v=0 -> -10000), Play.
+- EFFECTS: mgr 0x4ECE60, entries 0x360 at +0x1C: 653 (0..511 ring cursor +0; 512..639 Effect_SpawnHigh; 640+n fixed slots). type tbl 0x4c6d30 {script(etama.anm slot6), update fn, init fn} 66 types. Lists (calc): +0x354 layer, +0x355 over-bullets, blend. Draw: prio12 lists 0/2/4; list1 in Stage_DrawHigh (cfg 0x17ce894 0 none/1 half/2 all); list3 end of BulletMgr_Draw. Ring renderer 0x427450 (VM-param driven). Calls list: /tmp/effcalls (re-run awk if lost).
+- 13_sfx_effects.md WRITTEN (SE table/queue/flush/call sites; effect mgr layout/spawn/calc/draw/ring renderer/66 types/spawn sites; ScreenEffect types 0-7 (ECX type, EDX p0 — 07 lists lacked p0, corrected in 13 §3); popups; spell bg). /tmp/etama_scripts.txt = script lifetimes (regen from anm_dis).
+- NEXT: 14_bombs_options (bomb fns tbl 0x4C7AD0; options 0x44E3A0/0x44EE70/0x44F2D0/0x44F5E0; laser upd 0x4505D0/0x450840).
+- bomb_draft.md has all 16 bombs + dissolve decoded (read after compaction). NEXT: options 0x44E3A0/0x44EE70/0x44F2D0/0x44F5E0 + draws, lasers 0x4505D0/0x450840, shot rotation, red tint, hitbox marker.
+- 14_bombs_options.md WRITTEN (all 16 bombs + dissolve, options 0x44E3A0/0x44EA40/0x44EE70/0x44F2D0/0x44F5E0, Alice laser, shot draw/red tint FF4040/hitbox marker = effect 22 script 54 sprite 218). 13 §2.5 corrected (ellipse mode).
+- NEXT: answers_phase5.md (QUESTIONS.md items).

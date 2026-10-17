@@ -428,3 +428,104 @@ addr,kind,name,signature,confidence,note
 0x00402920,func,Ascii_QueueString,,VERIFIED,
 0x00402a30,func,Ascii_Printf,,VERIFIED,
 0x00402b20,func,Ascii_DrawStrings,,VERIFIED,
+0x0045d790,func,Sound_Update,,VERIFIED,per-frame: BGM command queue + flush SE queue (12 slots)
+0x0045d3f0,func,Sound_LoadSE,,VERIFIED,36 wavs tbl 0x4c81b0; 46 SE ids tbl 0x4c8040 {i32 wav,i16 vol,i16 prio}
+0x0045c8c0,func,Sound_LoadWav,,VERIFIED,
+0x00425430,func,Effect_Spawn,,VERIFIED,(type;pos;count;colour) ring 0..511
+0x00425650,func,Effect_SpawnWithParam,,VERIFIED,(type;pos;param(+0x2B0);count;colour)
+0x00425870,func,Effect_SpawnFixed,,VERIFIED,(type;pos;slot 0..;colour) slot 640+n
+0x004259e0,func,Effect_SpawnFixedParam,,VERIFIED,(type;pos;param;slot;?;colour)
+0x00425b70,func,Effect_SpawnHigh,,VERIFIED,(type;pos;count;colour) slots 512..639
+0x00427bf0,func,EffectMgr_Calc,,VERIFIED,
+0x00427f00,func,EffectMgr_Draw,,VERIFIED,prio 12 lists 0/2/4
+0x00428100,func,EffectMgr_DrawOverBullets,,VERIFIED,list 3 (called from BulletMgr_Draw)
+0x004281e0,func,EffectMgr_DrawBackground,,VERIFIED,list 1 (from Stage_DrawHigh; cfg effect level 0x17ce894)
+0x004284b0,func,EffectMgr_OnRegister,,VERIFIED,
+0x00425d70,func,EffInit_Spark,,VERIFIED,types 4-11
+0x00425ea0,func,EffInit_Spark3,,VERIFIED,type 3
+0x00425e60,func,EffUpd_VelAccel,,VERIFIED,
+0x00415d60,func,Gui_ShowPlayerSpellName,,VERIFIED,SE 0xE
+0x00415f00,func,Gui_ShowBossSpellName,,VERIFIED,SE 0xE
+0x0042c420,func,Enemy_ReactPlayerMode,,VERIFIED,SE 0x27/0x28 effects 0x1e/0x1f
+0x004152a0,func,Spell_Start,,INFERRED,
+0x00427450,func,EffDraw_Ring,,VERIFIED,triangle-strip ring from VM params
+0x004272e0,func,EffInit_Ring,,VERIFIED,alloc 0x1c38 vtx buffer
+0x00427990,func,EffUpd_RingSimple,,VERIFIED,
+0x004279d0,func,EffUpd_RingVars,,VERIFIED,
+0x00426b20,func,EffInit_Converge,,VERIFIED,
+0x00426bb0,func,EffUpd_Converge60,,VERIFIED,
+0x00426c90,func,EffUpd_Converge240,,VERIFIED,
+0x004270c0,func,EffInit_Burst,,VERIFIED,
+0x004271a0,func,EffUpd_Burst90,,VERIFIED,
+0x00426c40,func,EffUpd_FollowPlayer,,VERIFIED,
+0x00426e70,func,EffInit_Petal3D,,VERIFIED,
+0x00426d70,func,EffUpd_Petal3D,,VERIFIED,
+0x00415ce0,func,Stage_StartSpellBg,,VERIFIED,stage+0xB24=1
+0x00416ad0,func,Stage_EndSpellBg,,INFERRED,
+0x0040bf00,func,Player_SpawnInvulnRing,,VERIFIED,effect 23 fixed slot 0
+0x00403200,func,Popup_Number,,VERIFIED,720 slots life 60
+0x00403330,func,Popup_NumberBig,,VERIFIED,slots 720..722
+0x00403460,func,Popup_Large,,INFERRED,
+0x00403600,func,Popup_LargeStatic,,INFERRED,
+0x0045b1e0,func,ScreenEffect_DrawRect,,VERIFIED,colour EDX
+0x0040bc60,func,Bomb_DrawTint,,VERIFIED,EDX colour; stage tint ramp 60f
+0x0040c010,func,Bomb_Reimu,,VERIFIED,
+0x0040c820,func,BombDraw_Reimu,,VERIFIED,
+0x0040c910,func,Bomb_ReimuLS,,VERIFIED,
+0x0040d010,func,BombDraw_ReimuLS,,VERIFIED,
+0x0040d100,func,Bomb_Dissolve,,VERIFIED,
+0x0040d310,func,BombDraw_Dissolve,,VERIFIED,
+0x0040d430,func,Bomb_Alice,,VERIFIED,
+0x0040d950,func,BombDraw_TintOnly,,VERIFIED,Alice/Yukari bomb
+0x0040d970,func,Bomb_AliceLS,,VERIFIED,
+0x0040dee0,func,BombDraw_AliceLS,,VERIFIED,
+0x0040e3b0,func,Bomb_Marisa,,VERIFIED,
+0x0040e610,func,BombDraw_Marisa,,VERIFIED,
+0x0040e780,func,Bomb_MarisaLS,,VERIFIED,
+0x0040ee10,func,Bomb_Remilia,,VERIFIED,
+0x0040f550,func,BombDraw_Remilia,,VERIFIED,
+0x0040f570,func,Bomb_RemiliaLS,,VERIFIED,
+0x0040fcb0,func,BombDraw_RemiliaLS,,VERIFIED,
+0x0040fcd0,func,Bomb_Sakuya,,VERIFIED,
+0x00410300,func,BombDraw_Sakuya,,VERIFIED,
+0x004103f0,func,Bomb_SakuyaLS,,VERIFIED,
+0x00410ac0,func,BombDraw_SakuyaLS,,VERIFIED,
+0x00410c40,func,Bomb_Yukari,,VERIFIED,
+0x00410fe0,func,Bomb_YukariLS,,VERIFIED,
+0x004113a0,func,BombDraw_YukariLS,,VERIFIED,
+0x004114e0,func,EffUpd_YukariSquare,,VERIFIED,
+0x00411720,func,EffInit_YukariBoundary,,VERIFIED,
+0x004117b0,func,EffUpd_YukariLSSquare,,VERIFIED,
+0x00411a80,func,EffInit_YukariLSBoundary,,VERIFIED,
+0x00411b10,func,Bomb_Youmu,,VERIFIED,
+0x00412300,func,BombDraw_Youmu,,VERIFIED,
+0x004123d0,func,Bomb_YoumuLS,,VERIFIED,
+0x00412fa0,func,BombDraw_YoumuLS,,VERIFIED,
+0x00413070,func,EffUpd_Slash,,VERIFIED,
+0x00413140,func,Bomb_Yuyuko,,VERIFIED,
+0x00413890,func,BombDraw_Yuyuko,,VERIFIED,
+0x00413990,func,Bomb_YuyukoLS,,VERIFIED,
+0x004142c0,func,BombDraw_YuyukoLS,,VERIFIED,
+0x0040e040,func,EffUpd_AliceWave,,VERIFIED,
+0x0040e120,func,EffUpd_AliceEllipseA,,VERIFIED,
+0x0040e200,func,EffUpd_AliceEllipseB,,VERIFIED,
+0x0040e2d0,func,EffUpd_AliceOctagon,,VERIFIED,
+0x00410bb0,func,EffUpd_SakuyaRing,,VERIFIED,
+0x0040ec30,func,AnmVm_InterpPos,,VERIFIED,
+0x0040eda0,func,AnmVm_InterpScale,,VERIFIED,
+0x0040ed50,func,AnmVm_InterpAlpha,,VERIFIED,
+0x0040eca0,func,AnmVm_InterpColour,,VERIFIED,
+0x0044e3a0,func,Option_Yukari,,VERIFIED,
+0x0044e770,func,Option_YukariFollow,,VERIFIED,
+0x0044e8d0,func,Option_YukariChase,,VERIFIED,
+0x0044e9e0,func,Option_Draw,,VERIFIED,
+0x0044ea40,func,Option_Alice,,VERIFIED,
+0x0044ee70,func,Option_RemiliaSolo,,VERIFIED,
+0x0044f2d0,func,Option_YoumuHalf,,VERIFIED,
+0x0044f5e0,func,Option_YoumuSolo,,VERIFIED,
+0x0044fe20,func,ShotInit_Laser,,VERIFIED,
+0x004505d0,func,ShotUpd_Laser4,,VERIFIED,unused
+0x00450840,func,ShotUpd_AliceLaser,,VERIFIED,
+0x00450ad0,func,ShotDraw_Trail,,VERIFIED,
+0x004512f0,func,Player_DrawBullets,,VERIFIED,
+0x00451400,func,Player_DrawBulletsHit,,VERIFIED,
