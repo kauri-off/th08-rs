@@ -98,7 +98,9 @@ Entering: request title BGM slot 8 if coming from a non-menu scene; load surface
 coming from the title/difficulty/replay screens; create the 142 VMs once; interrupt 2. If a replay was being
 watched → go straight to the replay screen. If `+0x6C` ≠ 0 → jump to the difficulty screen of practice (8)
 or spell practice (16). Then for 9 frames render one description per frame into the 9 description VMs
-(`Text_RenderCentered` 0x466650: centred in the sprite, text colour 0xFFF0E0, 2-px black outline, font 15):
+(`Text_RenderCentered` 0x466650: centred in the sprite, text colour 0xFFF0E0, 2-px black outline, font 15).
+The 14 description VMs use text.anm script 9 (sprite 21 + i, centred at (320, 448); interrupt 1 = fade in 20
+frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn (answers_impl9 §15):
 
 | item | text | action on confirm |
 |---|---|---|
@@ -160,7 +162,7 @@ difficulty and shot (empty → stage 1 only; if the 6B bit is set, 4A and 4B are
 entries 0..7 (St1, St2, St3, 4A, 4B, St5, 6A, 6B), skipping unavailable ones. Confirm: difficulty, stage =
 cursor, scene 2. Cancel: back to character select.
 
-### 2.6 Spell practice (screens 16/17) — VERIFIED calls, details INFERRED
+### 2.6 Spell practice (screens 16/17) — VERIFIED calls; full screen/selection details in 16 §6 (VERIFIED)
 Screen 16 chooses character and stage (stage 9 used for last words); screen 17 lists the cards of that stage
 from table 0x4C6C40[stage] (spell ids, i16); the chosen id is stored in 0x164D0B8, difficulty derived from the
 id (0x4144D0, Normal for some), stage index derived from the id for last words; then scene 2.
@@ -170,7 +172,9 @@ id (0x4144D0, Normal for some), stage index derived from the id for last words; 
 count 0x164CED0 < 30 / < 60), +0x1E toggle, +0x1F music mode (0 off, 1 WAV, 2 MIDI; changing it restarts
 `bgm/th08_01.mid` in slot 8), +0x27 BGM volume and +0x28 SE volume (0–100, left/right ±1, holding ±4),
 +0x22 toggle, +0x25 slow mode toggle, key config (screen 3), reset (lives 2, +0x1D 3, music 1, +0x20 1,
-slow 0), quit. Sound 0x1D on certain changes.
+slow 0), quit. Sound 0x1D on certain changes. Value display = one VM per value, lit = VM base sprite, dim = base + 1:
+VMs 20–26 lives 0–6 (25/26 hidden below 30/60 plays), 27–28 colour, 29–31 music, 32–35 BGM volume digits
+(sprite base + digit·2), 36–39 SE volume, 40–41 window, 42–43 slow (answers_impl9 §16).
 
 ### 2.8 Replay (screen 7) — VERIFIED strings
 Lists `./replay/th8_%.2d.rpy` (No.01…) and `th8_ud????.rpy` ("User …") files; choosing one loads it and sets

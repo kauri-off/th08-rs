@@ -168,11 +168,14 @@ finished frees; else age ticks. Survivors are linked (in slot order) into a draw
 |---|---|---|
 | A (alpha) then C then E (additive) | `EffectMgr_Draw` 0x427F00, draw prio 12 (after enemies' 2nd layer, before bullets) | A/E: 2D rotated sprite at pos + playfield origin + pos offset, z 0.07, or the custom draw fn; C: billboard at pos (3D) |
 | D | end of `BulletMgr_Draw` (prio 13, over bullets) | as A, z 0.04 |
-| B | `Stage_DrawHigh` (after stage layers 2/3, still in the 3D stage camera) | only if cfg effect level (byte 0x17CE894) ≠ 0; level 1 draws every other list element; layer 4 → 2D rotated, layer 1 → billboard (types 0x33/0x3F through a fog-tinted helper), else 3D quad |
+| B | `Stage_DrawHigh` (after stage layers 2/3, stage camera, fog already off) | only at cfg effect level (byte 0x17CE894) 2: levels 0 **and 1** draw nothing (the parity test returns on the first element, asm 0x428224); layer 4 → 2D rotated, layer 1 → billboard (types 0x33/0x3F through the screen-space boss-pull / player-push helper 0x428310, answers_impl9 §8), else 3D quad |
 
 ### 2.5 Ring renderer (custom draw 0x427450; ring types, §2.6)
-The ring is a triangle strip of 2(n+1) pre-transformed vertices (texture = the VM's sprite, u spread along
-the ring, colour = VM colour) rebuilt whenever +0x356 is set (the ring updates set it each frame):
+The ring is a triangle strip of 2(n+1) pre-transformed vertices (FVF XYZRHW|DIFFUSE|TEX1, colour = VM colour)
+rebuilt whenever +0x356 is set (the ring updates set it each frame). **Texture: v runs along the ring** from
+sprite.v1 to sprite.v0 (normalised, + uv_off_v; k-th pair v = v1 − k·(v1−v0)/n), **u across**: outer edge u0,
+inner edge u1 (+ uv_off_u); WRAP addressing, so a 16×768 sprite in a 128-px texture repeats 6× around the
+ring (`Anm_RingSetUV` 0x464B00; answers_impl9 §P2). Geometry:
 n = segments (+0x324), r = radius (+0x314, from VM pos.x), w = half width = (+0x320, VM scale.x) /
 sin((π − 2π/n)/2), start angle +0x318 (VM rotation z), step 2π/n, centre +0x2E0 (+ playfield origin).
 - +0x32C (VM pos.y) = 0 → plain ring: outer r + w, inner r − w.
@@ -187,14 +190,14 @@ see `extracted/anm_dis.txt`; "life" = frame at which the script stops, ∞ = loo
 |---|---|---|---|
 | 0 | 28 (20) | — | item conversion, enemy death burst (default death-effect byte 0), Sakuya knives |
 | 1, 2 | 29 (20), 30 (40) | — | — |
-| 3 | 31 (40) | spark: v = ((R·256 − 128)·4/33, same for y) (**RNG** x then y), a = −v/20; per frame pos += v, v += a (both × gs at init) | shot hits an enemy (at the enemy box) |
+| 3 | 31 (40) | spark (additive, scale 3 → 0): v = ((R·256 − 128)·4/33, same for y) (**RNG** x then y), a = −v/20; per frame pos += v, v += a (both × gs at init) | **bomb/last-spell damage area** hits an enemy: every 4th hit (player u8 counter +0xE2A94 & 3 == 0, areas with +0x3D = 0 only), at the enemy box, colour 0xFFFFFFFF — never from bullets (answers_impl9 §P1) |
 | 4–11 | 36–43 (30) | spark: v = (R·256 − 128)/12 per axis (**RNG**), a = −v/19; same motion | enemy death (type e+0x3311 + 4, ×4), drops (×3 / ×6), player death (type 6 ×16), bomb orbs |
 | 12 | 44 (40) | — | deathbomb ring (fixed slot 3), bomb starts (colour 0xFF4040FF) |
 | 13–15 | 45 (∞) | layer 2 (init zeroes axis/angle); update: pos = centre (+0x2E0) + offset rotated about the normalised axis (+0x2EC) by angle (+0x318) (quaternion; INFERRED geometry), z = 0; when +0x352 is set: +0x353 counts up, alpha = 255·(1 − n/16)… freed after 15 frames, scale grows | ECL op 128 (enemy-attached; the enemy writes axis/angle/centre every frame, 07 op 128) |
 | 16 | 0 | — | — |
 | 17, 27 | 32 (60), 34 (120) | converge: centre = pos, dir = unit at random angle (**RNG**); pos = centre + dir·(256 − 256·t/60) | ECL op 139 (charge-up) |
 | 18 | 33 (240) | as 17 with 240 frames, keeps z | — |
-| 19 | 51 (300) | 3D background petal/leaf: spawned around the stage camera (**RNG**: 9 draws), drifts with velocity + accel, z-rotation spin; freed when behind the camera (dot(dir to camera, facing) < 0.94) or z < 0 | — |
+| 19 | 51 (300) | 3D background petal/leaf: spawned at camera + facing/2 + random (**RNG**: 10 draws, answers_impl9 §4), drifts with velocity + accel, z-rotation spin; freed when outside the view cone (dot(normalised dir from camera, facing) < 0.94) or when z ≥ 0 (kept only while z < 0) | — |
 | 20 | 56 | — | — |
 | 21, 26 | 52 (90), 53 (90) | burst: angle = param.x if > 0 else random (**RNG**), dir × (1 + R·1.5) (**RNG**); pos = centre + dir·128·(1 − (1 − t/90)²) | — |
 | 22 | 54 (50) | follows the player while its script runs | youkai aura (fixed slot 2, created on focus) |
@@ -209,7 +212,7 @@ see `extracted/anm_dis.txt`; "life" = frame at which the script stops, ∞ = loo
 | 41 | 82 | ring, update 0x40EB50 (48 segments, width 32, radius 64 / 72 alternating per frame) | no spawn site found (INFERRED unused) |
 | 42–46, 48 | 83, 83, 83, 83, 84, 85 | rings with bomb-owned updates (0x40E040–0x40E2D0 Alice, 0x410BB0 Sakuya LS, 0x413070 Youmu) | 14 §2 |
 | 50 | 80 | ring with 32 segments, ends after 120 frames | dissolve spell (slot 4) |
-| 51, 63 | 73, 74 | 3D background particles (as 19, RNG 9 draws); when the boss (0xF54CC0[0]) has flag bit 3 they are pulled 10%/frame toward the boss position (via pos offset); type 51 also tints colour2 by the stage overlay VM colour | ECL op 139 (stage-specific) |
+| 51, 63 | 73, 74 | 3D background particles (RNG 8 draws, answers_impl9 §4; view-cone cull only); when the boss (0xF54CC0[0]) has flag bit 3 the pos offset tracks the boss position 10%/frame, consumed by the screen-space draw helper (answers_impl9 §8); type 51 also tints colour2 by the stage overlay colour | ECL op 139 (stage-specific) |
 | 53, 54 | 88 | ring update 0x427AE0: frees itself when VM alpha becomes 0 | Marisa sparks (slots 4+) |
 | 56, 58, 65 | 96, 100, 98 | ring (init 0x427970 = ring + over-bullets), update 0x4279D0 | boss natives 3 / 6 / 20 (slots 9/10) |
 | 57, 62 | 55, 75 | — | stage (0x3E sparkles, `Stage_Calc`) |
@@ -220,12 +223,13 @@ see `extracted/anm_dis.txt`; "life" = frame at which the script stops, ∞ = loo
 
 R = `Rng_Float` from the game RNG (consumes replay-relevant RNG: every type with an RNG init draws during
 gameplay). Exact per-type RNG draw counts: types 3–11 two draws, 17/18/27 one, 21/26 two (one if param > 0),
-19/51/63 nine (19: ten incl. rotation).
+19 ten, 51/63 eight.
 
 ### 2.7 Main spawn sites (VERIFIED)
 | event | effect |
 |---|---|
-| player bullet hits enemy | type 3 at the enemy box position; type 5 at the bullet when it enters its hit animation (09 §4.5); hit filter 1/2 spawn type 5 too |
+| player bullet hits enemy | type 5 at the bullet when it enters its hit animation (09 §4.5); hit filters 0x450C50 (timer % 6) and 0x450EE0 (counter & 7) spawn type 5 too. No type 3 |
+| bomb damage area hits enemy | type 3 every 4th hit (§2.6) |
 | graze | type 8 at the bullet/player midpoint |
 | enemy dies | death-effect type (e+0x3310, default 0) once + type e+0x3311 + 4 (default 4) ×4 at the enemy; scripted "survive" (death mode 3): death type ×3 |
 | enemy drops items | type e+0x3311 + 4 ×3 (×6 on certain drops) |
@@ -233,7 +237,8 @@ gameplay). Exact per-type RNG draw counts: types 3–11 two draws, 17/18/27 one,
 | bomb start | invulnerability ring (type 23 slot 0) + per-bomb effects (14) |
 | focus switch (teams, state held > 3 frames) | type 28 / 29; youkai side also creates the aura type 22 (slot 2) |
 | gauge at human-max or youkai-max | aura type 25 (slot 8) |
-| spell card start | ring type 39 (52 in special mode) at the boss: segments 64, width 15, waves 6, radius interpolated 8 → 256 and amplitude 64 → 0 over 100 frames (VM pos interpolation, mode 6); on capture `Spell_End` recolours it (alpha → 0x20) |
+| spell card start | ring type 39 (52 in special mode) at the boss: segments 64, plain ring (update 0x427990 copies only width = VM scale.x, script 192 → 15 / 20 over 120 frames, and radius = VM pos.x, 8 → 256 over 100 frames, ease mode 6; the +0x334 = 6 and pos.y values are unused); on capture `Spell_End` recolours it (alpha → 0x20) |
+| player hit (death ring) | type 59 slot 11, colour 0xFFF0404F, 64 segments, radius VM pos.x 128 → 8 over the deathbomb window, ease mode 4; script 78 (sprite 226, one texture repeat) |
 | ECL | op 128 → type 13 (colour 0xFF6060D0); op 139 → effect id × n (data: 17, 40, 51, 63); op 140 → `Effect_SpawnWithParam` (data: 26, 60, 61); op 174 / children → 0x20 + n via `Effect_SpawnHigh` |
 | item conversion to stars | type 0 at the item |
 
@@ -244,7 +249,7 @@ Calc returning 0 removes the effect (on-remove frees it).
 | type | p0 / p1 / p2 / p3 | behaviour | draw |
 |---|---|---|---|
 | 0 | dur / colour RGB | fade **from** colour: alpha = trunc(255 − 255·t/dur); ends t ≥ dur | full screen 640×480 (resets the viewport) |
-| 1 | dur / amp start / amp end | **shake**: a = p1 + t·(p2 − p1)/dur; screen offset x and y each = one of {0, +a, −a} chosen by `Rng_Range(3)` (**2 RNG draws/frame**, x first); frozen (no tick, no RNG) while bullets are frozen or the freeze byte 0x160F534 is set or 0x18B8A2C ≠ 0; ends t ≥ dur (offset left as is) | none |
+| 1 | dur / amp start / amp end | **shake**: a = p1 + t·(p2 − p1)/dur; screen offset x and y each = one of {0, +a, −a} chosen by `Rng_Range(3)` (**2 RNG draws/frame**, x first); frozen (no tick, no RNG) while bullets are frozen or the freeze byte 0x160F534 is set or 0x18B8A2C ≠ 0; ends t ≥ dur (offset left as is, but the popup draw 0x405420 at draw prio 14 zeroes AnmManager +0x1C/+0x20 every frame, so draws after prio 14 — HUD, ASCII strings — never shake) | none |
 | 2 | dur / colour | fade **to** colour: alpha = trunc(255·t/dur); timer holds while paused/continue menu; ends at dur; returns 0 when 0x18B8A2C ≠ 0 | playfield (32,16)–(416,464) |
 | 3 | dur / repeats / ARGB | **flash**: alpha = A − trunc(t·A/dur) (A = colour alpha); at dur: repeats −= 1, restart; ends at 0 repeats | playfield, colour = p2 RGB |
 | 4 | dur / colour | as 2 (fade to colour) | full screen |
@@ -268,9 +273,13 @@ Per frame (`Ascii_Calc`, not while paused/continue, not while bullets frozen): y
 age ≥ 60. Draw: text centred (x − 4·digits, 8 px per glyph, ascii.anm sprites: digit glyph g → sprite g for
 age < 52, g + 11 for age 52–55, g + 21 from 56), alpha by squared distance d to the player: d ≤ 1024 → 0x50,
 1024 < d ≤ 4096 → 0x50 + (d − 1024)·128/3072, else 0xD0 (popups near the player are faded).
-Large popups: 128 slots at +0x15304 (0x403460 / 0x403600: "[(x)]n" format with glyphs 0xD–0xF, scale from
-the manager, sprite = glyph + 0x88), life 90 frames (0x403600 starts at age 88 = a two-frame display).
-Callers: items (08 §8.5), cancel bonuses (08 §6), kill_all / chain kills (07).
+Glyph 10 (negative value) is sprite 10 (48×8) drawn left-anchored at x − 4 (Ascii VM anchor 0x1800), fading
+through sprites 21 / 31 (faithful quirk). Colours per caller: answers_impl9 §12.
+Large popups: 128 slots at +0x15304 (`Popup_Large` 0x403460 / `Popup_LargeStatic` 0x403600; glyphs stored
+LSB first: [0xF, p4 digits, 0xE,] p3 digits, 0xD; ascii glyphs 0xD '+', 0xE '(', 0xF ')' → text "+p3" or
+"+p3(p4)"; scale from the manager; sprite = glyph + 0x88), life 90 frames (0x403600 starts at age 88 = a
+two-frame display). Callers: `Enemy_KillChildren` (chain kills, boss chain, single) and `Hud_DrawBoss`
+(answers_impl9 §14). Small-popup callers: items (08 §8.5), cancel bonuses (08 §6), kill_all.
 
 ## 5. Spell-card background
 `Spell_Start` calls `Stage_StartSpellBg` 0x415CE0 (stage +0xB24 = 1, +0xB28 = 0) and sets the stage's spell
@@ -281,4 +290,4 @@ count to 2). Each `Stage_Calc`: if +0xB24 > 0 → when +0xB28 == 60, +0xB24 = 2 
 longer drawn, 06 §7); +0xB28 += 1; run the spell VMs. `Spell_End` (0x416AD0) sets +0xB24 = 0.
 
 ## 6. Open points
-- Large popup glyph meanings 0xD/0xE/0xF and their callers (time-orb/score "×" display) — INFERRED.
+- (closed) Large popup glyphs 0xD/0xE/0xF = '+', '(', ')' — VERIFIED (answers_phase6, answers_impl9 §14).

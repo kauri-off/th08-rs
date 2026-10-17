@@ -625,3 +625,19 @@ addr,kind,name,signature,confidence,note
 0x00416b10,func,Spell_AddBonus,,VERIFIED,+8000 per time orb unless bit 11
 0x00416b90,func,Spell_Calc,,VERIFIED,
 0x004178c0,func,Spell_Draw,,VERIFIED,
+0x00405420,func,Ascii_DrawPopups,,VERIFIED,draw prio 14 (via 0x402430); small+large popups; zeroes shake offset at end
+0x00402430,func,Ascii_DrawPopupsThunk,,VERIFIED,
+0x00450c50,func,PlayerBullet_HitExplosion,,VERIFIED,hit filter: explosion; type 5 every 6 frames
+0x00428310,func,EffBg_ScreenPullCb,,VERIFIED,types 51/63: screen-space boss pull + player push
+0x004640e0,func,Anm_ProjectBillboard,,VERIFIED,project + size via camera right (g_Stage+0x63C4); optional callback
+0x00464400,func,Anm_DrawBillboardCb,,VERIFIED,
+0x0041fd40,func,Enemy_ChainChildCount,,VERIFIED,
+0x0041fd20,func,Enemy_HasDropOnParentDeath,,INFERRED,+0x2DA4 != 0
+0x00428720,func,Effect_ScriptDone,,VERIFIED,VM +0x220 == 0
+0x00421b60,func,GameMgr_GetStatsTime,,VERIFIED,stats +0x3C
+0x00421b80,func,GameMgr_GetTimeThreshold,,VERIFIED,stats +0x40
+0x00440cf0,func,Item_CollectPowerSmall,,VERIFIED,type 0
+0x00441170,func,Item_CollectPowerBig,,VERIFIED,type 2
+0x00441020,func,Item_CollectConverted,,VERIFIED,type 8
+0x004412b0,func,Item_CollectTimeOrb,,VERIFIED,type 7
+0x00402450,func,Ascii_InitVms,,INFERRED,sets anchor 0x1800

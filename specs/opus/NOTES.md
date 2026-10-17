@@ -42,7 +42,7 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 ## For later phases
 - RNG (11): Rng object 0x164d520; Next16 0x43ecc0; Next32 = (Next16<<16)|Next16 (first call high); Float = u32/[0x4b5b10]; Range(n)=n?u32%n:0.
 - ANM VM fully mapped (AnmVm_Run 0x45ea00, symbols added). Tool tools/anmdis.py: all 1151 scripts parse, 0 problems, all ops known. Dump extracted/anm_dis.txt.
-  Draw modes 0-5 (vm+0x200, only value 2 set from data). Billboard (mode 4) reference vector 0x4ea3f4 never written (zero) -> degenerate? (unused by scripts).
+  Draw modes 0-5 (vm+0x200, only value 2 set from data). Billboard (mode 4) reference vector 0x4ea3f4 = g_Stage+0x63C4 camera right, written by Stage_SetCamera via this+0x63c4 (CORRECTED in impl9 pass; absolute-address scans miss struct-relative writes).
   CreateDevice flags 0x40/0x20, no FPU_PRESERVE.
 ## For later phases (cont.)
 - Game speed g_GameSpeed 0x17ce8e0 set to 1/N by ScreenEffect funcs 0x424f90/0x4251b0, restored 0x425290 (sets Supervisor flag 0x20 -> Timer_Sub extra decrement). Interrupt 2 sent to VMs 0x4e4b68/0x4e4e0c on slowdown, 1 on restore.
@@ -167,3 +167,13 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - SPELL PRACTICE: selectable = attempted or FLSP; LW -> diff 1 + stage table; hint table 0x4C82C8 (204..221).
 - tools/enddump.py (14 files 0 problems), tools/musiccmt.py (0 problems). 16_endings_result.md WRITTEN.
 - NEXT: answers_phase6 (spell flags 10/11, glyphs 0xD-0xF large popups).
+
+## impl9 pass (answers_impl9.md)
+- tools/redump.sh = ApplySymbolsOpus (sig ';'→',') + DumpAll2 -> all_decomp.c, callgraph.tsv, globals_xref.tsv (~50 s). 2254 fns, 1322 unnamed after batch.
+  globals_xref only sees absolute-address operands; struct-relative accesses (g_Stage+0x625c etc.) are NOT listed.
+- Type-3 spark: only bomb damage areas in Player_DamageAgainst, every 4th hit (u8 counter +0xE2A94 &3), not bullets.
+- Ring UV (0x464B00): v along ring v1->v0, u across (outer u0 / inner u1), WRAP; sprite 221 v=6 -> 6 repeats.
+- Spell ring 39/52 plain ring (0x427990 ignores amplitude), radius 8->256 ease 6; death ring 59 radius 128->8 ease 4 over deathbomb window.
+- List B: effect level 1 draws nothing (returns). Fog off before list B. 51/63 screen-space helper 0x428310.
+- Sparkles: Stage_DrawLayer records projected pos of tag 0x1X billboards; Stage_Calc spawns 12 (fixed) type 0x3E every 3rd frame.
+- Popup colours: max 0xFFFFFF00, PowerUp 0xFFFFC0A0, time orb 0xDFFFEF80/0xDFFFFFFF; glyph 10 left-anchored, fade sprites 21/31.

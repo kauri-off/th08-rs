@@ -430,7 +430,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 161 | cancel_radius | f r | bullet manager 0x430D30(final pos, r) (later phase) | 0 |
 | 162 | cancel_all | — | bullet manager 0x430830(4) | 10 |
 | 163 | g_f54cec | i n | global 0xF54CEC | 0 |
-| 164 | spell_mode | i n, f a, f b, f c | spell manager 0x41F0B0(n); n == 0: 0x41F040(a, b, c) | 0 |
+| 164 | spell_mode | i n, f a, f b, f c | spell flag bit 6 := n & 1 (`Spell_SetFlag6` 0x41F0B0); n == 0: 0x41F040(a, b, c) | 0 |
 | 165 | anm_rot_z | f a | main VM rotation.z = a | 28 |
 | 166 | polar_ys | W x, W y, f ang, f r | y = sin(ang)·r, x = cos(ang)·r (no wrap) | 0 |
 | 168 | item_burst1 | i n | n items of type 1 at random offsets | 22 |
@@ -445,7 +445,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 179 / 180 | hud179 / hud180 | — | HUD functions (later phase) | 2 / 0 |
 | 181 | extend181 | — | if game counter < 12: sfx 0x2D, counter += 1, HUD update (later phase) | 8 |
 | 182 / 183 | flagB8 / flagA31 | i b | bit set | 30 / 61 |
-| 184 | spell_ex | i n | spell manager 0x41F0E0(n) | 82 |
+| 184 | spell_ex | i n | spell flag bit 11 (bonus frozen) := n & 1 (`Spell_SetBonusFrozen` 0x41F0E0, §11.1) | 82 |
 
 Any other opcode value is ignored (ip advances).
 
@@ -647,7 +647,12 @@ decoded strings.
 Spell object (g_Gui 0x4EA670) flag word: bit 0 active, bit 2 capture still possible (set at start; cleared by a
 bomb started during the card 0x44CBA0, by the player's real death 0x44D150, by a timeout 0x42BC50), bit 3 timed
 out (0x42BC50, from `Enemy_CheckTimeout`), bit 5 last spell, bit 7 "bomb started during this card" (bomb damage
-allowed, §10.1), bit 8 capture payout pending, bit 9 captured, bit 10 / 11 display flags. Bonus +0xFC.
+allowed, §10.1), bit 8 capture payout pending, bit 9 captured, bit 10 name-only declaration (set by native 22 `Spell_ShowNameOnly` 0x415D10, which also
+clears bits 0 and 4 and shows the name banner; the bonus/history display is skipped; used by Mokou's
+「リザレクション」 in ecldata8/8sp), bit 11 bonus frozen (op 184 `Spell_SetBonusFrozen` 0x41F0E0 = n & 1; no
+decay in `Spell_Calc` 0x416B90 and time-orb +8000 in `Spell_AddBonus` 0x416B10 ignored; all 82 uses are
+`spell_ex 1` at the start of boss death subs). Both cleared by `Spell_Start`; bit 11 also by `Spell_End`.
+Bit 6 is set by op 164 (`Spell_SetFlag6` 0x41F0B0). Bonus +0xFC.
 On op 123 with the card active: bit 0 off; if not timed out → `CancelBonus(8000, 1)` + `KillAll(8000)` →
 score + `Hud_ShowBonus`; if capture still possible → captured: payout value = +0xFC, time reward 700 (flag A
 bit 27) or from the remaining card time (1000 / 100 / linear, answers_phase5 impl8), captures counter, score-file
@@ -676,7 +681,7 @@ Called with the enemy and the instruction; `arg` = second operand (instr +0x10).
 | 16 | bullets with flag 0x100000 within 64 px of a child whose var 10038 == 0 set its var 10038 = 60 and copy var 10019 |
 | 18 | game speed = 1/arg |
 | 19 | var 10000 = current spell id |
-| 22 / 23 | spell manager 0x415D10 / 0x416160 |
+| 22 / 23 | 22: name-only spell declaration (spell flag bit 10, name banner of the string at 0x4B495C 「リザレクション」, §11.1); 23: hide the name banner (0x416160) |
 | 24 | var 10000 = game value at (0x160F510)+0x1C |
 | 26 | global 0x160F534 = arg (pauses enemy timers; stage VMs interrupt 2, or 1 when 0) |
 | 27 | each bullet with flag 0x100000 spawns enemy sub = var 10038 at its position (life 800, item −2, score 10, var 10016 = bullet angle); flag cleared |
