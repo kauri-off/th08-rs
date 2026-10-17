@@ -395,6 +395,10 @@ impl Gfx {
         }
     }
 
+    pub fn white(&self) -> TextureId {
+        self.white
+    }
+
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         self.quad(self.white, Blend::Alpha, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], uv, color);

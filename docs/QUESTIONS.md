@@ -21,3 +21,14 @@ From impl3 (STD):
 From impl4 (web/seams):
 - Texture filter + wrap (MAG/MINFILTER, ADDRESSU/V, mipmaps) for ANM, stage and 2D draws. Seams on stages 1/3 come from texture data rows 0–1 vs 254 (filter at sprite edge).
 - Any half-texel UV offset on top of sprite rect UVs?
+
+From impl5 (ECL):
+- Mode-2 mirroring: velocity negated then subtracted (cancels) → only op 64 delta mirrored; op 66 fairies unmirrored. Intended?
+- Enemy draw mode and per-layer split between draw prio 8 and 11; enemy VM position vs final_pos.
+- Section-request opcode: 06 says 0x92 (=146), 07 says 147 — which?
+- Random-direction helpers 0x422020 / 0x4224A0 exact branches; op 169 constants.
+- Timeline stall (ops 7/13): decrement-and-return or net-zero for the clock?
+- Interrupts: copy argument registers like calls? Main-context return at depth 0?
+- Starting rank value of a new game.
+- Death-sub jump from kill_all / threshold: is the death sub cleared?
+- Player spawn position (impl uses 192,384).

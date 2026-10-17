@@ -29,6 +29,8 @@ impl Task<Ctx> for Supervisor {
                 let t = crate::stage::Stage::register(ctx, index)?;
                 let bgm = t.borrow().std.bgm[0].clone();
                 ctx.audio.play_bgm(&bgm);
+                let bullets = crate::bullet::BulletManager::register(ctx)?;
+                crate::enemy::EnemyManager::register(ctx, index, Some(t), bullets)?;
             } else {
                 Title::register(ctx)?;
             }

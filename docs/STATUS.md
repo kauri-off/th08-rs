@@ -29,6 +29,12 @@
 - Web parity checked (2026-10-17): title (frame 120), `?anm=title01.anm:0-9`, stages 1/3/4a/6b (frame 600) are pixel-identical to native `TH08_SHOT` captures on WebGL2 (Playwright MCP Chromium) and WebGPU (headed Chromium, NVIDIA Vulkan). Title BGM starts after the first key press (AudioContext running). No backend changes were needed.
 - Ground-tile seams on stages 1/3 investigated: geometry is watertight (shared edges project to bit-identical vertices), sampling stays inside the sprite rect (stage 1 row 339 reads texel row 1.52 of sprite (1,1) 254x254), clamp/point sampling don't change them, a white texture removes them → the sprite's first and last rows simply don't match in the data. Not a renderer bug.
 
+- `src/ecl.rs` — .ecl parser (header, timelines, sub table, 12-byte sub / 8-byte timeline instructions, literal write-back into the loaded file) + argument signatures for ops 0–184. Test: all 24 files, every instruction size matches its signature, jumps land on instructions, sub ids valid. `cargo run --release --bin eclview <th08.dat> <x.ecl> [sub]` disassembles.
+- `src/eclvm.rs` — Ecl_Run per 07_ecl.md: main context + 4 threads with own call stacks, exact-time clock matching, wait, rank masks (incl. human/youkai bits), calls/returns (8 argument registers), interrupts skipping the pending instruction, all variables 10000–10100 with literal-destination write-back, 8 interpolation slots (linear/eased/Hermite, position → velocity), every opcode 0–184, natives 0/2/5/8/18/19/24/26–31 (others counted, later phases).
+- `src/enemy.rs` — EnemyManager (calc 11, draw 8 for layers 0–1 / 11 for layers ≥ 2, ANM slots 7 `enemy.anm` / 8 `stgNenm.anm`): template defaults, timelines (all ops, stall, sync slots, boss waits, spawn blocking), spawn (+ immediate first run), movement modes 0–3 with mirror/clamp/follow, screen check, life thresholds / timeout re-runs, damage rules, death modes, drops (every-third table), child chains, boss slots, spell-card state + bonus decay, stage section requests (op 147 → `Stage::section_request`).
+- `src/bullet.rs` — TEMPORARY stub BulletManager (calc 14, draw 13, `etama.anm` slot 6): ECL produces fully-resolved `BulletDesc` requests (type, colour, counts/speeds after rank scaling, angles, aim mode, flags, 18 ex-command slots, sfx) + `LaserDesc` + `ItemReq` queues; the stub places patterns (07 §9.3) and moves bullets in straight lines; lasers are drawn as plain quads, items are only queued. `src/player.rs` — fixed player point (192, 384) behind `player::position()`.
+- Debug: `TH08_STAGE=<n>` (web `?stage=`) now also runs the stage's ECL with enemies and stub bullets; `TH08_RANK=<easy|normal|hard|lunatic|extra>` (default normal, extra on the Extra stage); `TH08_ENEMY_DMG=<n>` deals n damage per frame to every on-screen shootable enemy (to see boss phases/deaths). `TH08_STAGE_FRAME` fast-forwards enemies/bullets too. Verified by screenshots of all 9 stages at frames 1500/3600/7000 (fairies, midbosses and bosses appear and fire; Stage 1: midboss ≈ frame 3000, boss ≈ 5600).
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
@@ -37,7 +43,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase3-opus (running): 08 bullets/items, 09 player, answers to docs/QUESTIONS.md.
-2. IMPL impl4 (running): web parity, ?stage= params, tile seams.  Next IMPL: ECL VM + enemies (07_ecl ready).
+2. IMPL impl5 (done): ECL VM + enemies + bullet stub. Next IMPL: bullets/items (08) replacing src/bullet.rs, player (09).
 3. IMPL: bullets/items/player/collision (after phase 3).
 4. RE: 10 MSG + 11 RNG/stage flow/menus.  5. IMPL: dialogue, stage flow, HUD, menus.
 6. RE/IMPL: replays, score.dat, config, ending/staff roll, sound effects.

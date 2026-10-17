@@ -28,3 +28,8 @@
   Type 0 (0x1C): script, vm, pos[3], w, h (0 = sprite size, negative = mirrored). Type 1 (0x24): script, vm, A[3], B[3], width.
   Quad positions are not relative to the bbox origin (draw adds only instance pos − origin).
 - Instances: 16 bytes {i16 object (< 0 ends), i16 unused, f32[3] pos}. Script: 20 bytes {i32 time (−1 ends), i16 op, i16 12, 3×4 args}.
+
+## ECL — source: specs/opus/07_ecl.md (src/ecl.rs)
+- Header: u32 0x800, i16 subs, i16 timelines run, u32[16] timeline offsets (ntl+1 non-zero; the last is never run), u32[subs] sub offsets at 0x48.
+- Sub instruction: i32 time, i16 op (−1 ends), i16 size, u8 0, u8 rank mask, u16 var mask, 4-byte args. Bullet ops 96–104 are 44 bytes (i16 type/colour, counts, speeds, angles, flags at +0x28), lasers 114/115 64 bytes, spell card 122 244 bytes (strings XOR AA/BB/DD/EE).
+- Timeline instruction: i32 time (< 0 ends), i16 op, u8 size, u8 rank mask, args. Data uses 147 distinct sub ops.
