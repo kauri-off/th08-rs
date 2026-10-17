@@ -261,7 +261,7 @@ impl Exec<'_> {
     fn run_thread(&mut self, t: &mut Thread) -> End {
         let gs = self.anm.speed;
         'outer: loop {
-            if self.e.pending_interrupt >= 0 {
+            if self.e.pending_interrupt >= 0 && self.e.running_thread.is_none() {
                 self.interrupt(t);
                 continue;
             }
@@ -315,6 +315,8 @@ impl Exec<'_> {
         t.ctx.ip += size;
         if self.e.flags & A_NO_PUSH == 0 {
             t.push();
+        } else {
+            t.depth = (t.depth + 1).min(15);
         }
         t.ctx.enter(&self.m.ecl, sub);
     }
@@ -463,26 +465,42 @@ impl Exec<'_> {
         e.set_move_mode(3);
     }
 
-    // 0x422020 random direction. SPEC-GAP: the exact edge branches are not given; reflections away from
-    // the clamp rect edges (±96 x, ±48 y) are applied only while clamping is on.
-    fn random_dir(&mut self, full_random: bool) -> f32 {
+    // Random direction 0x422020 (op 67) / 0x4224A0 (op 178), 07 §8.3.
+    fn random_dir(&mut self, op178: bool) -> f32 {
         let rng = &mut self.anm.rng;
         let e = &*self.e;
-        let mut a = if full_random {
-            rng.next_signed() * PI
-        } else if e.pos[0] <= self.m.g.player[0] {
-            rng.next_f32() * (PI / 2.0) - PI / 4.0
+        let (x, y) = (e.pos[0], e.pos[1]);
+        let px = self.m.g.player[0];
+        let [x0, y0, x1, y1] = e.clamp;
+        let wrap = |a: f32| anmvm::wrap_add(a, 0.0);
+        let mut a;
+        if op178 {
+            if rng.range(4) == 0 {
+                a = rng.next_signed() * PI;
+            } else if x <= px {
+                a = if x - (px - 384.0) <= px - x { wrap(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0) } else { rng.next_f32() * (PI / 2.0) - PI / 4.0 };
+            } else {
+                a = if (px + 384.0) - x <= x - px { wrap(rng.next_f32() * (PI / 2.0) - PI / 4.0) } else { wrap(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0) };
+            }
         } else {
-            anmvm::wrap_add(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0, 0.0)
-        };
-        if e.flags & A_CLAMP != 0 {
-            let [x0, y0, x1, y1] = e.clamp;
-            if (e.pos[0] < x0 + 96.0 && a.cos() < 0.0) || (e.pos[0] > x1 - 96.0 && a.cos() > 0.0) {
-                a = anmvm::wrap_add(PI - a, 0.0);
+            a = if x <= px { rng.next_f32() * (PI / 2.0) - PI / 4.0 } else { wrap(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0) };
+            if x < x0 + 96.0 {
+                if a > PI / 2.0 {
+                    a = PI - a;
+                } else if a < -PI / 2.0 {
+                    a = -PI - a;
+                }
             }
-            if (e.pos[1] < y0 + 48.0 && a.sin() < 0.0) || (e.pos[1] > y1 - 48.0 && a.sin() > 0.0) {
-                a = -a;
+            if x > x1 - 96.0 {
+                if (0.0..PI / 2.0).contains(&a) {
+                    a = PI - e.angle;
+                } else if a > -PI / 2.0 && a < 0.0 {
+                    a = -PI - a;
+                }
             }
+        }
+        if y < y0 + 48.0 && a < 0.0 || y > y1 - 48.0 && a > 0.0 {
+            a = -a;
         }
         a
     }
@@ -806,8 +824,10 @@ impl Exec<'_> {
                 crate::effect::screen(7, 4, 120, 190, 60, 0x15);
             }
             15 => crate::effect::screen(7, 16, 20, 20, 20, 0x15),
-            // SPEC-GAP: the stage callback 0x4235A0 set by these natives is not specified.
             3 | 6 | 20 => {
+                if let Some(st) = &self.m.stage {
+                    st.borrow_mut().spell_mask = true;
+                }
                 let (kind, extra) = match n {
                     3 => (0x38, 0x61),
                     6 => (0x3A, 0x65),
@@ -852,7 +872,11 @@ impl Exec<'_> {
             }
             12 | 14 => {
                 let (mask, a, s) = (t.ctx.int(V_INT0) as u32, t.ctx.flt(V_FLT0), t.ctx.flt(V_FLT0 + 1));
-                self.m.bullets.borrow_mut().toggle_ghost(self.anm, mask, a, s);
+                self.m.bullets.borrow_mut().toggle_ghost(self.anm, mask, a, s, n == 14);
+                if n == 12 && let Some(st) = &self.m.stage {
+                    // SPEC-GAP: the flags B bit 7 walk along the e+8 links is not modelled.
+                    st.borrow_mut().spell_interrupt(if t.ctx.int(V_INT0 + 1) == 0 { 2 } else { 1 });
+                }
             }
             28 if arg != 0 => self.anm.speed = 1.0 / arg as f32,
             29 => {
@@ -863,8 +887,7 @@ impl Exec<'_> {
             }
             30 => self.m.g.g_18b8a2c = arg,
             31 => self.item(self.e.pos, 5),
-            // SPEC-GAP: screen effects, effect objects, bullet warps, the chain/stage half of 12 and hit rectangles
-            // (1, 3, 4, 6, 7, 9–11, 13, 15–17, 20–23, 25) belong to the effect/player phases.
+            // SPEC-GAP: natives 4, 7, 9, 11, 13, 16, 21–23, 25 (effect objects, bullet warps, hit rectangles) are not implemented.
             _ => {
                 let _ = gs;
                 self.m.g.misc_calls += 1;
@@ -924,10 +947,11 @@ impl Exec<'_> {
             owner: dec(0x44, 48, 0xBB),
             comment: [dec(0x74, 64, 0xDD), dec(0xB4, 64, 0xEE)],
             frames: 0,
-            misses: {
-                let p = self.m.player.borrow();
-                p.deaths + p.bombs_started
-            },
+            deaths0: self.m.player.borrow().deaths,
+            bombs0: self.m.player.borrow().bombs_started,
+            capture: true,
+            timed_out: false,
+            bombed: false,
         };
         log::info!("spell card {} ({} bytes name, bonus {})", spell.id, spell.name.len(), spell.bonus);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
@@ -1077,7 +1101,7 @@ impl Exec<'_> {
                     if self.e.running_thread.is_some() {
                         return Flow::ThreadEnd;
                     }
-                    // SPEC-GAP: a main-context return at depth 0 is not covered; the context halts for this frame.
+                    // Malformed main-context return at depth 0 (never in shipped data, answers_phase5): halt this frame.
                     t.depth = 0;
                     return Flow::Post;
                 }
@@ -1136,9 +1160,7 @@ impl Exec<'_> {
             }
             67 | 178 => {
                 let (dur, ease, s) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.af(t, ins, 2));
-                // SPEC-GAP: op 178's distance-based side choice (0x4224A0) falls back to op 67's rule.
-                let full = op == 178 && self.anm.rng.range(4) == 0;
-                let a = self.random_dir(full);
+                let a = self.random_dir(op == 178);
                 self.move_dir(dur, ease, a, s);
             }
             68 => {
@@ -1363,7 +1385,7 @@ impl Exec<'_> {
             122 => self.spell_card(ins),
             123 => {
                 let (total, remaining) = (self.e.timeout.max(0), (self.e.timeout - self.e.boss_timer.cur).max(0));
-                self.m.finish_spell(total, remaining, self.anm);
+                self.m.finish_spell(total, remaining, self.anm, Some(self.idx));
             }
             124 => crate::sound::play_at(self.ai(t, ins, 0), self.e.final_pos[0]),
             125 => {
@@ -1393,10 +1415,11 @@ impl Exec<'_> {
             }
             128 => {
                 self.e.effects += 1;
-                let param = [self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3)];
-                // SPEC-GAP: the per-frame growth to d and the spin of op 128 effects are not given; they follow the enemy.
-                let i = crate::effect::spawn_param(self.anm, 13, self.e.final_pos, param, 1, 0xFF6060D0);
+                let axis = [self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3)];
+                self.e.orbit_target = self.ai(t, ins, 4) as f32;
+                let i = crate::effect::spawn(self.anm, 13, self.e.final_pos, 1, 0xFF6060D0);
                 if i != crate::effect::NONE {
+                    crate::effect::get(i, |x| x.dir = axis);
                     self.e.fx_attached.push(i);
                 }
             }
@@ -1567,9 +1590,9 @@ impl Exec<'_> {
                 self.e.vm.flags |= anmvm::F_ROT_DIRTY;
             }
             169 => {
-                // SPEC-GAP: op 169's exact constants use is not given; a π/2-wide angle pointing away from the nearer side.
-                let r = self.anm.rng.next_f32() * (PI / 2.0) - PI / 4.0;
-                let a = if self.e.pos[0] < 192.0 { r } else { anmvm::wrap_add(PI + r, 0.0) };
+                let (x, px) = (self.e.pos[0], self.m.g.player[0]);
+                let r = self.anm.rng.next_f32() * (PI / 2.0);
+                let a = if x > px && x > 96.0 || x > 288.0 { anmvm::wrap_add(r + 3.0 * PI / 4.0, 0.0) } else { r - PI / 4.0 };
                 self.set_f(t, ins, 0, a);
             }
             170..=172 => {

@@ -291,7 +291,7 @@ impl Gfx {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
@@ -340,6 +340,22 @@ impl Gfx {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
+    }
+
+    // Surface-to-surface copy of a pixel rectangle (submitted at once, before this frame's draws).
+    pub fn copy_texture(&mut self, src: TextureId, from: [u32; 2], dst: TextureId, to: [u32; 2], size: [u32; 2]) {
+        let (Some(Some(a)), Some(Some(b))) = (self.textures.get(src), self.textures.get(dst)) else { return };
+        let w = size[0].min(a.width.saturating_sub(from[0])).min(b.width.saturating_sub(to[0]));
+        let h = size[1].min(a.height.saturating_sub(from[1])).min(b.height.saturating_sub(to[1]));
+        if w == 0 || h == 0 {
+            return;
+        }
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        fn info(t: &wgpu::Texture, p: [u32; 2]) -> wgpu::TexelCopyTextureInfo<'_> {
+            wgpu::TexelCopyTextureInfo { texture: t, mip_level: 0, origin: wgpu::Origin3d { x: p[0], y: p[1], z: 0 }, aspect: wgpu::TextureAspect::All }
+        }
+        enc.copy_texture_to_texture(info(&a.tex, from), info(&b.tex, to), wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+        self.queue.submit([enc.finish()]);
     }
 
     pub fn texture(&self, id: TextureId) -> &Texture {

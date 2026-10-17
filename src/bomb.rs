@@ -217,6 +217,7 @@ impl Player {
         self.state = 3;
         self.state_timer.set(spec.2);
         crate::effect::invuln_ring(anm, self.pos, spec.2);
+        self.invuln_ring = true;
         self.bomb.objs.clear();
         self.bomb.bg = None;
         self.bomb.attract = true;

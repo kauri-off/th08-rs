@@ -1063,9 +1063,10 @@ impl BulletManager {
     }
 
     // ECL natives 12/14 (08 §7): toggle the "ghost" state of bullets whose flags match `mask`.
-    // SPEC-GAP: native 14's 15-frame intermediate fade (tag 2) is not modelled; it toggles like 12.
-    pub fn toggle_ghost(&mut self, anm: &mut AnmManager, mask: u32, angle: f32, speed: f32) {
+    // ECL natives 12 / 14 (08 §7): ghost toggle by VM0 tag; native 14 cycles 1 → 0 → 2 (fade-in) → 1.
+    pub fn toggle_ghost(&mut self, anm: &mut AnmManager, mask: u32, angle: f32, speed: f32, native14: bool) {
         let gs = anm.speed;
+        let set_blend = |vm: &mut AnmVm, b: u32| vm.flags = (vm.flags & !(3 << anmvm::F_BLEND_SHIFT)) | (b << anmvm::F_BLEND_SHIFT);
         for b in self.bullets[..MAX_BULLETS].iter_mut() {
             if b.free() || b.flags & mask == 0 {
                 continue;
@@ -1076,17 +1077,28 @@ impl BulletManager {
                     let sp = vm.sprite_index as i32 + 16;
                     vm.set_sprite(anm, sp);
                     vm.tag = 0;
+                    set_blend(vm, 1);
                     b.intangible = true;
-                    b.vel = polar(angle, speed * gs);
+                    if native14 {
+                        vm.color[anmvm::A] = 0;
+                        b.vel = polar(b.angle, speed * gs);
+                    } else {
+                        b.vel = polar(angle, speed * gs);
+                    }
                 }
-                0 => {
+                0 if native14 => {
+                    vm.tag = 2;
+                    vm.color[anmvm::A] = 0;
+                    vm.interp_alpha(15, 0, 255);
+                }
+                _ => {
                     let sp = vm.sprite_index as i32 - 16;
                     vm.set_sprite(anm, sp);
                     vm.tag = 1;
+                    set_blend(vm, 0);
                     b.intangible = false;
                     b.vel = polar(b.angle, b.speed * gs);
                 }
-                _ => {}
             }
         }
     }
@@ -1151,6 +1163,10 @@ impl BulletManager {
     // BulletMgr_Draw: items, lasers, then bullets by size class (each list in reverse visiting order).
     pub fn draw(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         gfx.set_viewport(PLAYFIELD);
+        let saved = (anm.tint, anm.tint_on);
+        if self.player.borrow().freeze_bullets {
+            (anm.tint, anm.tint_on) = (0xFFF01010, true);
+        }
         self.items.draw(anm, gfx);
         self.draw_lasers(anm, gfx);
         for c in 0..6 {
@@ -1163,14 +1179,20 @@ impl BulletManager {
                     _ => continue,
                 };
                 let vm = &mut b.vms[v];
-                vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.0];
-                // SPEC-GAP: the bullet draw mode/rotation is not given; mode 2 rotated to the travel direction.
-                if v == 0 {
-                    vm.rotation[2] = b.angle + PI / 2.0;
+                // Bullet_Draw (08 §3): z 0.05, RGB white, rotation only for tagged VMs.
+                vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.05];
+                if vm.tag != 0 {
+                    let r = anmvm::wrap_add(b.angle, PI / 2.0);
+                    if vm.rotation[2] != r {
+                        vm.rotation[2] = r;
+                        vm.flags |= anmvm::F_ROT_DIRTY;
+                    }
                 }
-                anm.draw_mode(gfx, vm, 2);
+                vm.color[..3].fill(255);
+                anm.draw_mode_z(gfx, vm, 2, 0.05);
             }
         }
+        (anm.tint, anm.tint_on) = saved;
         crate::effect::with(|e| e.draw_over_bullets(anm, gfx));
     }
 }

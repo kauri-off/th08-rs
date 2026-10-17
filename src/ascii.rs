@@ -89,6 +89,8 @@ impl Queue {
 
 pub const POPUP_SLOTS: usize = 720;
 const POPUP_LIFE: f32 = 60.0;
+const LARGE_SLOTS: usize = 128;
+const LARGE_LIFE: f32 = 90.0;
 
 // Small score popup (13 §4): digits least significant first, glyph 10 = the "PowerUp" sign.
 #[derive(Clone, Default, Debug)]
@@ -99,15 +101,26 @@ pub struct Popup {
     pub age: f32,
 }
 
+#[derive(Clone, Debug)]
+pub struct LargePopup {
+    pub glyphs: Vec<u8>,
+    pub pos: [f32; 2],
+    pub colour: [u8; 4],
+    pub scale: f32,
+    pub age: f32,
+}
+
 #[derive(Default)]
 pub struct Popups {
     pub slots: Vec<Option<Popup>>,
     next: usize,
     special: usize,
+    pub large: Vec<Option<LargePopup>>,
+    large_next: usize,
 }
 
 thread_local! {
-    static POPUPS: std::cell::RefCell<Popups> = std::cell::RefCell::new(Popups { slots: vec![None; POPUP_SLOTS + 3], next: 0, special: 0 });
+    static POPUPS: std::cell::RefCell<Popups> = std::cell::RefCell::new(Popups { slots: vec![None; POPUP_SLOTS + 3], next: 0, special: 0, large: vec![None; LARGE_SLOTS], large_next: 0 });
 }
 
 fn digits(value: i32) -> Vec<u8> {
@@ -147,8 +160,44 @@ pub fn popup_special(pos: [f32; 3], value: i32, colour: u32) {
     });
 }
 
+// Large popup glyphs, least significant first: [0xF, p4 digits, 0xE,] p3 digits, 0xD → "+p3" / "+p3(p4)".
+fn large_glyphs(p3: i32, p4: i32) -> Vec<u8> {
+    let mut g = Vec::new();
+    if p4 > 0 {
+        g.push(0xF);
+        g.extend(digits(p4));
+        g.push(0xE);
+    }
+    g.extend(digits(p3.max(0)));
+    g.push(0xD);
+    g
+}
+
+// Popup_Large 0x403460 (life 90); `pos` in playfield coordinates.
+pub fn popup_large(pos: [f32; 3], p3: i32, p4: i32, colour: u32, scale: f32) {
+    let c = colour.to_be_bytes();
+    POPUPS.with_borrow_mut(|p| {
+        let i = p.large_next;
+        p.large_next = (i + 1) % LARGE_SLOTS;
+        p.large[i] = Some(LargePopup { glyphs: large_glyphs(p3, p4), pos: [pos[0] + 32.0, pos[1] + 16.0], colour: [c[1], c[2], c[3], c[0]], scale, age: 0.0 });
+    });
+}
+
+// Popup_LargeStatic 0x403600: starts at age 88 (a two-frame display); `pos` in screen coordinates.
+pub fn popup_large_static(pos: [f32; 2], p3: i32, p4: i32, colour: u32) {
+    let c = colour.to_be_bytes();
+    POPUPS.with_borrow_mut(|p| {
+        let i = p.large_next;
+        p.large_next = (i + 1) % LARGE_SLOTS;
+        p.large[i] = Some(LargePopup { glyphs: large_glyphs(p3, p4), pos, colour: [c[1], c[2], c[3], c[0]], scale: 1.0, age: 88.0 });
+    });
+}
+
 pub fn clear_popups() {
-    POPUPS.with_borrow_mut(|p| p.slots.iter_mut().for_each(|s| *s = None));
+    POPUPS.with_borrow_mut(|p| {
+        p.slots.iter_mut().for_each(|s| *s = None);
+        p.large.iter_mut().for_each(|s| *s = None);
+    });
 }
 
 fn popups_calc(gs: f32) {
@@ -158,6 +207,18 @@ fn popups_calc(gs: f32) {
                 q.pos[1] -= 0.5 * gs;
                 q.age += gs;
                 if q.age >= POPUP_LIFE {
+                    *s = None;
+                }
+            }
+        }
+        // SPEC-GAP: large-popup motion is not given; they rise like the small ones.
+        for s in p.large.iter_mut() {
+            if let Some(q) = s {
+                if q.age < 88.0 {
+                    q.pos[1] -= 0.5 * gs;
+                }
+                q.age += gs;
+                if q.age >= LARGE_LIFE {
                     *s = None;
                 }
             }
@@ -180,14 +241,23 @@ fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
             } else {
                 0xD0
             };
-            // SPEC-GAP: the fade sprites (+11 / +21) exist only for digits; the PowerUp sign keeps sprite 10.
-            let shift = if q.digits == [10] || q.age < 52.0 { 0 } else if q.age < 56.0 { 11 } else { 21 };
+            let shift = if q.age < 52.0 { 0 } else if q.age < 56.0 { 11 } else { 21 };
             let n = q.digits.len() as f32;
             let colour = [q.colour[0], q.colour[1], q.colour[2], alpha as u8];
             for (k, &g) in q.digits.iter().rev().enumerate() {
                 let Some(sp) = anm.sprite(ANM_SLOT, (g + shift) as usize) else { continue };
-                let cx = q.pos[0] - 4.0 * n + 8.0 * k as f32 + 4.0 + o[0];
-                gfx.sprite(sp.tex, Blend::Alpha, Rect::new(cx - sp.w / 2.0, q.pos[1] - sp.h / 2.0 + o[1], sp.w, sp.h), sp.uv, colour);
+                let x = q.pos[0] - 4.0 * n + 8.0 * k as f32 + o[0];
+                gfx.sprite(sp.tex, Blend::Alpha, Rect::new(x, q.pos[1] + o[1], sp.w, sp.h), sp.uv, colour);
+            }
+        }
+        // SPEC-GAP: large-popup glyph advance is not given; the sprite width × scale, centred like the small ones.
+        for q in p.large.iter().flatten() {
+            let sprites: Vec<_> = q.glyphs.iter().rev().filter_map(|&g| anm.sprite(ANM_SLOT, 0x88 + g as usize).copied()).collect();
+            let w: f32 = sprites.iter().map(|s| s.w * q.scale).sum();
+            let mut x = q.pos[0] - w / 2.0 + o[0];
+            for sp in sprites {
+                gfx.sprite(sp.tex, Blend::Alpha, Rect::new(x, q.pos[1] + o[1], sp.w * q.scale, sp.h * q.scale), sp.uv, q.colour);
+                x += sp.w * q.scale;
             }
         }
     });
@@ -414,9 +484,10 @@ impl ContinueMenu {
                 .collect();
             ctx_anm.set_script(&mut self.clock_vm, crate::hud::TIMES_SLOT, 1);
             self.clock_vm.set_sprite(ctx_anm, g.clock.clamp(0, 15));
-            self.yes = g.difficulty >= 4 || g.spell_practice();
+            // Default "No"; "Yes" only in spell practice (card not captured, 12 §4).
+            self.yes = g.spell_practice();
         }
-        let ready = self.frame >= 30;
+        let ready = self.frame >= if self.yes && g.spell_practice() { 4 } else { 30 };
         match self.phase {
             0 if ready => {
                 if inp.pressed(input::UP) || inp.pressed(input::DOWN) {
@@ -539,6 +610,7 @@ impl Task<Ctx> for AsciiManager {
         }
         if !high {
             popups_draw(&ctx.anm, &mut ctx.gfx);
+            ctx.anm.screen_offset = [0.0; 2];
         }
         let mut q = std::mem::take(&mut ctx.ascii);
         q.draw(&ctx.anm, &mut ctx.gfx, high);

@@ -229,6 +229,9 @@ pub struct Stage {
     pub spell_count: usize,
     pub spell_first: usize,
     spell_vms: Vec<AnmVm>,
+    pub spell_mask: bool,
+    sparkles: RefCell<(usize, [Vec3; 32])>,
+    sparkle_on: bool,
 }
 
 impl Stage {
@@ -269,6 +272,9 @@ impl Stage {
             spell_count: 2,
             spell_first: 0,
             spell_vms: Vec::new(),
+            spell_mask: false,
+            sparkles: RefCell::new((0, [[0.0; 3]; 32])),
+            sparkle_on: false,
             fast_forward: 0,
             overlay: AnmVm::default(),
             overlay_mode: 0,
@@ -515,7 +521,6 @@ impl Stage {
             self.clock.tick(speed);
         }
         self.update_objects(anm);
-        // Spell background (13 §5). SPEC-GAP: the sparkle-point effects (type 0x3E) still wait for the sparkle points.
         if self.spell_state > 0 {
             if self.spell_frames == 60 {
                 self.spell_state = 2;
@@ -546,6 +551,15 @@ impl Stage {
             self.vm_c.run(anm);
             self.clear_color = u32::from_le_bytes(self.vm_c.color);
         }
+        // Stage sparkles (answers_impl9 §10): all 12 points, used or not.
+        if self.frame % 3 == 0 && self.frame > 699 && self.spell_state < 2 {
+            let pts = self.sparkles.borrow().1;
+            for p in &pts[..12] {
+                let i = crate::effect::spawn(anm, 0x3E, *p, 1, 0x20FFFFFF);
+                crate::effect::get(i, |e| e.layer = 4);
+            }
+        }
+        self.sparkle_on = true;
         self.frame += 1;
     }
 
@@ -553,6 +567,7 @@ impl Stage {
     pub fn start_spell_bg(&mut self, anm: &mut AnmManager) {
         self.spell_state = 1;
         self.spell_frames = 0;
+        self.spell_mask = false;
         self.spell_vms = (0..self.spell_count)
             .map(|i| {
                 let mut vm = AnmVm::default();
@@ -560,6 +575,57 @@ impl Stage {
                 vm
             })
             .collect();
+    }
+
+    // Stage_SpellMaskCallback 0x4235A0 (answers_impl9 §6): black square frame between the native 3/6/20 rings,
+    // inside it the spell background redrawn mirrored.
+    fn draw_spell_mask(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
+        let ra = crate::effect::peek(crate::effect::FIXED_BASE + 9, |e| (e.vm.pos[0], e.pos));
+        let rb = crate::effect::peek(crate::effect::FIXED_BASE + 10, |e| e.vm.pos[0]);
+        let ((a, c), b) = (ra, rb);
+        let (a, b) = (a * std::f32::consts::FRAC_1_SQRT_2, b * std::f32::consts::FRAC_1_SQRT_2);
+        let (cx, cy) = (c[0] + 32.0 + 0.5, c[1] + 16.0 + 0.5);
+        let ring = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0)];
+        let white = gfx.white();
+        gfx.set_depth_test(false);
+        for k in 0..4 {
+            let v = [(ring[k], a), (ring[k], b), (ring[k + 1], a), (ring[k + 1], b)]
+                .map(|((sx, sy), r)| Vertex::screen(cx + sx * r, cy + sy * r, 0.8, [0.0, 0.0], [0, 0, 0, 255]));
+            gfx.strip(white, crate::gfx::Blend::Alpha, true, v);
+        }
+        anm.reset_render_state();
+        gfx.set_depth_test(true);
+        let tint = 0xFFE0C0C0u32.to_le_bytes();
+        let grey = [tint[2], tint[1], tint[0], tint[3]];
+        if let Some(vm) = self.spell_vms.get_mut(0) {
+            let col = vm.color;
+            vm.scale = [-1.5, -1.75];
+            vm.pos = [416.0, 464.0, 0.7];
+            vm.color = grey;
+            vm.flags |= anmvm::F_SCALE_DIRTY;
+            anm.draw_mode_z(gfx, vm, 2, 0.7);
+            vm.scale = [1.5, 1.75];
+            vm.pos = [32.0, 16.0, 0.5];
+            vm.color = col;
+            vm.flags |= anmvm::F_SCALE_DIRTY;
+        }
+        if let Some(vm) = self.spell_vms.get_mut(1) {
+            let col = vm.color;
+            vm.rotation[2] = -vm.rotation[2];
+            vm.flags |= anmvm::F_ROT_DIRTY;
+            vm.color = grey;
+            anm.draw_mode_z(gfx, vm, 2, 0.6);
+            vm.rotation[2] = -vm.rotation[2];
+            vm.flags |= anmvm::F_ROT_DIRTY;
+            vm.color = col;
+        }
+        gfx.set_depth_test(false);
+    }
+
+    pub fn spell_interrupt(&mut self, k: u16) {
+        for vm in self.spell_vms.iter_mut().take(2) {
+            vm.pending_interrupt = k;
+        }
     }
 
     pub fn end_spell_bg(&mut self) {
@@ -579,7 +645,8 @@ impl Stage {
         anm.stage_camera = Some(cam);
         let m = cam.view.0;
         let right = normalize([m[0][0], m[0][1], m[0][2]]);
-        let view = View { cam, vp, right, eye: self.cam.eye(), fog: self.fog };
+        let points = if self.sparkle_on && self.spell_state <= 1 { Some(&self.sparkles) } else { None };
+        let view = View { cam, vp, right, eye: self.cam.eye(), fog: self.fog, points };
         let fog = self.fog_params(anm);
         for inst in &self.std.instances {
             let obj = &self.std.objects[inst.object];
@@ -624,15 +691,16 @@ impl Stage {
     }
 }
 
-struct View {
+struct View<'a> {
     cam: Camera,
     vp: Rect,
     right: Vec3,
     eye: Vec3,
     fog: FogState,
+    points: Option<&'a RefCell<(usize, [Vec3; 32])>>,
 }
 
-impl View {
+impl View<'_> {
     // Software fog (D3DCOLOR byte order); None when fully fogged (f ≥ 1).
     fn soft_fog(&self, color: [u8; 4], dist: f32) -> Option<[u8; 4]> {
         let (near, far) = (self.fog.near, self.fog.far);
@@ -672,7 +740,18 @@ impl View {
         if (0.0..=1.0).contains(&s[2]) {
             anm.draw_mode_z(gfx, vm, 1, s[2]);
         }
-        // SPEC-GAP: sparkle points (tag & 0xF0 == 0x10) wait for the effect system.
+        if vm.tag & 0xF0 == 0x10
+            && let Some(pts) = self.points
+        {
+            let near = self.fog.near;
+            let v = if dist <= near { dist } else { (near - dist) / (near - self.fog.far) };
+            let mut p = pts.borrow_mut();
+            if v < near && p.0 < 32 {
+                let n = p.0;
+                p.1[n] = [s[0], s[1], 0.0];
+                p.0 += 1;
+            }
+        }
         vm.color = saved;
     }
 
@@ -734,6 +813,11 @@ impl Task<Ctx> for Stage {
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         if tag == 0 {
+            {
+                let mut p = self.sparkles.borrow_mut();
+                p.0 = 0;
+                p.1[..16].fill([0.0; 3]);
+            }
             gfx.set_viewport(PLAYFIELD);
             anm.reset_render_state();
             let hide = self.spell_state >= 2;
@@ -769,6 +853,10 @@ impl Task<Ctx> for Stage {
             for vm in &mut self.spell_vms {
                 anm.draw(gfx, vm);
             }
+            if self.spell_mask && self.spell_state > 0 {
+                self.draw_spell_mask(anm, gfx);
+            }
+            self.sparkle_on = false;
             anm.stage_camera = None;
             gfx.set_viewport(PLAYFIELD);
         }

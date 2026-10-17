@@ -149,7 +149,7 @@ impl Game {
         m[self.shot as usize % 12].iter().take(4).any(|v| v & (1 << bit) != 0)
     }
 
-    // Rank sub-counter → rank (SPEC-GAP: ±100 sub-units per rank step, clamped to min..max).
+    // RankAdd / RankSub (11 §3.2): ±1 rank per 100 sub-units, clamped to min..max.
     pub fn rank_add(&mut self, d: i32) {
         let [mut r, max, min, mut sub] = self.rank;
         sub += d;

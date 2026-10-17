@@ -15,8 +15,7 @@ pub struct Supervisor {
     boot_frames: u32,
 }
 
-// SPEC-GAP: the original shows the boot logo for as long as its loader thread runs; loading here is instant,
-// so the logo is held for this many frames.
+// The logo stays up while the loader runs (answers_impl9 §18: no fixed time); loading is instant here, so a short hold.
 const BOOT_FRAMES: u32 = 60;
 
 pub fn register(ctx: &mut Ctx) -> Result<()> {
@@ -184,6 +183,7 @@ impl Task<Ctx> for Supervisor {
             }
             if let Some(t) = self.logo.take() {
                 ctx.gfx.free_texture(t);
+                crate::effect::screen(0, 70, 0xFFFFFF, 0, 0, 0x15);
             }
             self.boot_vms.clear();
         }
@@ -239,6 +239,16 @@ pub struct Stub {
 
 impl Task<Ctx> for Stub {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        let g = &mut ctx.game;
+        if self.frame == 0 && self.kind == gamemgr::SCENE_ENDING && g.flags & gamemgr::F_ENDING_OK != 0 && !g.replay() {
+            // Ending_Init step 3 (16 §1): Final A / B bits of the clear masks.
+            let bit = if g.stage % 9 == 7 { 0x4000 } else { 0x8000 };
+            let (shot, d) = (g.shot as usize % 12, g.difficulty.clamp(0, 4) as usize);
+            if g.stats.continues == 0 {
+                g.clear_nc[shot][d] |= bit;
+            }
+            g.clear_any[shot][d] |= bit;
+        }
         self.frame += 1;
         if self.frame >= 30 && ctx.input.pressed(crate::input::SHOT | crate::input::ENTER) {
             let next = if self.kind == gamemgr::SCENE_ENDING { gamemgr::SCENE_RESULT } else { gamemgr::SCENE_MENU };

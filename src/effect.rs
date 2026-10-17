@@ -147,6 +147,11 @@ pub fn get(idx: usize, f: impl FnOnce(&mut Effect)) {
     })
 }
 
+// Reads a slot even after it was freed (the original reads stale slot data).
+pub fn peek<R>(idx: usize, f: impl FnOnce(&Effect) -> R) -> R {
+    with(|e| f(&e.fx[idx]))
+}
+
 pub fn free(idx: usize) {
     get(idx, |x| x.active = false);
 }
@@ -174,6 +179,24 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 fn norm(a: [f32; 3]) -> [f32; 3] {
     let l = dot(a, a).sqrt();
     if l > 0.0 { [a[0] / l, a[1] / l, a[2] / l] } else { a }
+}
+
+impl Effect {
+    // Enemy_UpdateOrbitEffects 0x42E010 (answers_impl9 §5).
+    pub fn orbit_follow(&mut self, centre: [f32; 3], target: f32, hidden: bool) {
+        if hidden {
+            self.vm.flags &= !anmvm::F_VISIBLE;
+        } else {
+            self.vm.flags |= anmvm::F_VISIBLE;
+        }
+        self.centre = centre;
+        if target <= self.ring.radius {
+            self.ring.radius = target;
+        } else {
+            self.ring.radius += 0.3;
+        }
+        self.ring.start = anmvm::wrap_add(self.ring.start, 0.0314159);
+    }
 }
 
 impl Effects {
@@ -213,8 +236,10 @@ impl Effects {
                 e.acc = [-vx / 19.0 * gs, -vy / 19.0 * gs, 0.0];
             }
             13..=15 => {
-                e.layer = 0;
+                e.layer = 2;
                 e.centre = pos;
+                e.dir = [0.0; 3];
+                e.ring.radius = 0.0;
             }
             17 | 18 | 27 => {
                 e.centre = pos;
@@ -380,15 +405,27 @@ impl Effects {
                 }
             }
             13..=15 => {
-                e.pos = [e.centre[0] + e.vm.pos_offset[0], e.centre[1] + e.vm.pos_offset[1], 0.0];
+                let n = norm(e.dir);
+                let th = 2.0 * e.ring.start;
+                let mut p = [n[1], -n[0], 0.0];
+                if dot(p, p) >= 1e-5 {
+                    p = norm(p);
+                }
+                p = p.map(|x| x * e.ring.radius);
+                let (s, c) = th.sin_cos();
+                let nxp = [n[1] * p[2] - n[2] * p[1], n[2] * p[0] - n[0] * p[2], n[0] * p[1] - n[1] * p[0]];
+                let np = dot(n, p);
+                let q: [f32; 3] = std::array::from_fn(|k| p[k] * c + nxp[k] * s + n[k] * np * (1.0 - c));
+                e.pos = [e.centre[0] + q[0], e.centre[1] + q[1], 0.0];
                 if e.fade {
                     e.fade_n += 1;
-                    e.vm.color[anmvm::A] = (255.0 * (1.0 - e.fade_n as f32 / 16.0)).max(0.0) as u8;
-                    e.vm.scale = e.vm.scale.map(|s| s * 1.05);
-                    e.vm.flags |= anmvm::F_SCALE_DIRTY;
-                    if e.fade_n >= 15 {
+                    if e.fade_n > 15 {
                         return false;
                     }
+                    let f = 1.0 - e.fade_n as f32 / 16.0;
+                    e.vm.color[anmvm::A] = (f * 255.0) as u8;
+                    e.vm.scale = [2.0 - f, 2.0 - f];
+                    e.vm.flags |= anmvm::F_SCALE_DIRTY;
                 }
             }
             17 | 18 | 27 => {
@@ -428,10 +465,9 @@ impl Effects {
                 let f = 1.0 - (1.0 - (t / 90.0).min(1.0)).powi(2);
                 e.pos = [e.centre[0] + e.dir[0] * 128.0 * f, e.centre[1] + e.dir[1] * 128.0 * f, 0.0];
             }
-            22 | 25 => e.pos = player,
+            22 => e.pos = player,
             // Invulnerability ring (13 §2.6): scale 1 → 1/16 over I0 frames (the script fades it in).
             23 | 24 => {
-                e.pos = player;
                 let n = e.vm.ivars[0].max(1) as f32;
                 let s = 1.0 + (1.0 / 16.0 - 1.0) * (t / n).min(1.0);
                 e.vm.scale = [s, s];
@@ -547,7 +583,11 @@ impl Effects {
         for k in 0..self.lists[1].len() {
             let i = self.lists[1][k];
             if self.fx[i].layer == 4 {
-                self.draw_one(anm, gfx, i, 0.07);
+                let e = &mut self.fx[i];
+                let saved = e.vm.pos;
+                e.vm.pos = e.pos;
+                anm.draw_mode_z(gfx, &mut e.vm, 2, 0.0);
+                e.vm.pos = saved;
                 continue;
             }
             let e = &mut self.fx[i];
@@ -667,7 +707,7 @@ pub struct EffectManager {
 }
 
 pub fn bg_file(stage: usize) -> &'static str {
-    // SPEC-GAP: table 0x4C7480 is not listed; effNN follows the stage order.
+    // Table 0x4C7480 by stage index (answers_impl9 §7).
     ["eff01.anm", "eff02.anm", "eff03.anm", "eff04a.anm", "eff04b.anm", "eff05.anm", "eff06.anm", "eff07.anm", "eff08.anm"][stage % 9]
 }
 

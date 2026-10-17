@@ -480,6 +480,12 @@ impl AnmVm {
     }
 
     // Position interpolation started by an owner (as ops 17/18/32).
+    pub fn interp_alpha(&mut self, dur: i32, mode: i32, end: u8) {
+        self.color_start[A] = self.color[A];
+        self.color_end[A] = end;
+        self.start_slot(SLOT_ALPHA, dur, mode);
+    }
+
     pub fn interp_pos(&mut self, dur: i32, mode: i32, end: [f32; 3]) {
         self.start_pos(dur, mode, end);
     }

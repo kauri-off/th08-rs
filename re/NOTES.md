@@ -222,3 +222,8 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
    branch); (c) remaining small orphans (COVERAGE §5 last row) + leftover INFERRED in 03/04 header fields and 11
    flag bits 7-8.
 5. (optional) LZSS encoder 0x473CB0/0x475270 exact output, only if byte-identical score.dat/replays are wanted.
+
+# PHASE 8 (started 2026-10-17) — RUNTIME-1 wine pilot
+- Setup: re/work/{prefix (WINEPREFIX, win64), game (copy: th08.exe/dat, thbgm.dat, cfg (window=1, music off, SE off), score.dat), hook (proxy d3d8.dll src hook.c, mingw i686), env.sh, run.sh <secs>}. WINE_LG_11-1 + Xvfb :77 runs the game at 60 fps (wined3d/llvmpipe).
+- Probe: inline hooks Rng_Next16 (count), Sound_Update (post-calc sample -> probe_trace.txt), StageStart (log cw/thread); vtable Present (cmds/shots), CreateDevice; IAT GetKeyboardState (key inject; cmd `nodik` zeroes DI keyboard ptr 0x17CE768). Cmds file game/probe_cmd.txt.
+- RESULT x87: CW 0x027F before CreateDevice -> 0x007F after (PC=00 single, RC nearest, all masked); Frame_Run post-calc 0x007F and Present 0x007F. Game already passes D3DPRESENTFLAG_LOCKABLE_BACKBUFFER (pp flags 1), fmt X8R8G8B8 640x480 windowed, swap DISCARD(3)? (3=COPY in D3D8: 1 discard,2 flip,3 copy), behaviour flags 0x40.

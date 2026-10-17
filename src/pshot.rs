@@ -580,15 +580,16 @@ impl Player {
     pub fn draw_bullets(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         for b in self.bullets.iter_mut().filter(|b| b.state != 0 && b.vm.script.is_some()) {
             b.vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.0];
-            // SPEC-GAP: owner use of the VM tag (op 25) is inferred: tag ≠ 0 shot sprites face their direction.
+            // Rotation = bullet angle only for tagged VMs; red tint RGB (FF, 40, 40), Alice's laser (FF, D0, B0).
             if b.state == 1 && b.vm.tag != 0 && b.vm.rotation[2] != b.angle {
                 b.vm.rotation[2] = b.angle;
                 b.vm.flags |= anmvm::F_ROT_DIRTY;
             }
-            // SPEC-GAP: the "red tint" colour of youkai-side shots at youkai max is not given.
             if b.red {
-                b.vm.color[anmvm::G] = 0x60;
-                b.vm.color[anmvm::B] = 0x60;
+                let (g, bl) = if matches!(b.kind, 4 | 5) { (0xD0, 0xB0) } else { (0x40, 0x40) };
+                b.vm.color[anmvm::R] = 0xFF;
+                b.vm.color[anmvm::G] = g;
+                b.vm.color[anmvm::B] = bl;
             }
             if matches!(b.kind, 4 | 5) {
                 b.vm.pos[1] = b.pos[1] * 2.0 + 16.0 - 224.0;

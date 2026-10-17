@@ -66,26 +66,48 @@ const CHAR_VMS: [[i32; 4]; 12] = [
 
 const STAGE_NAMES: [&str; 8] = ["Stage 1", "Stage 2", "Stage 3", "Stage 4A", "Stage 4B", "Stage 5", "Stage 6A", "Stage 6B"];
 
-// SPEC-GAP: unlock flags come from score.dat (not implemented); `TH08_UNLOCK=1` unlocks everything, otherwise
-// Extra counts as unlocked for a shot once it has cleared 6A or 6B (any difficulty) this session.
+// Unlock checks (15 §2.4) on the session's clear masks. SPEC-GAP: score.dat is not loaded yet; `TH08_UNLOCK=1` unlocks everything.
 fn unlock_all() -> bool {
     crate::env::var("TH08_UNLOCK").is_some_and(|v| v != "0")
 }
 
+// 0x43C15F: a no-continue Final B clear on E–L.
+fn team_final_b(g: &gamemgr::Game, t: usize) -> bool {
+    unlock_all() || t >= 4 || g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0)
+}
+
+// 0x43C23B: a Final A clear on E–L.
+fn team_final_a(g: &gamemgr::Game, t: usize) -> bool {
+    unlock_all() || t >= 4 || g.clear_any[t].iter().take(4).any(|m| m & 0x8000 != 0)
+}
+
 fn extra_unlocked(g: &gamemgr::Game, shot: usize) -> bool {
-    unlock_all() || g.clear_any[shot % 12].iter().take(4).any(|m| m & (3 << 6) != 0)
+    team_final_b(g, shot % 12)
 }
 
 fn extra_any(g: &gamemgr::Game) -> bool {
-    (0..4).any(|t| extra_unlocked(g, t))
+    (0..4).any(|t| team_final_b(g, t))
 }
 
 fn extra_all(g: &gamemgr::Game) -> bool {
-    (0..4).all(|t| extra_unlocked(g, t))
+    (0..4).all(|t| team_final_b(g, t))
 }
 
-fn spell_practice_unlocked() -> bool {
-    unlock_all()
+fn spell_practice_unlocked(g: &gamemgr::Game) -> bool {
+    (0..4).any(|t| team_final_a(g, t))
+}
+
+// Play count (score.dat); lives max 4 / 5 / 6 below 30 / 60 plays (answers_impl9 §16).
+fn play_count() -> u32 {
+    if unlock_all() { 60 } else { 0 }
+}
+
+fn lives_max() -> i32 {
+    match play_count() {
+        ..30 => 4,
+        30..60 => 5,
+        _ => 6,
+    }
 }
 
 struct Pending {
@@ -100,7 +122,7 @@ pub struct MainMenu {
     surface: Option<(TextureId, &'static str)>,
     raster: crate::text::Raster,
     desc: Vec<TextureId>,
-    desc_alpha: u32,
+    desc_vm: AnmVm,
     screen: i32,
     prev_screen: i32,
     frames: u32,
@@ -121,7 +143,7 @@ impl MainMenu {
             surface: None,
             raster: Default::default(),
             desc: Vec::new(),
-            desc_alpha: 0,
+            desc_vm: AnmVm::default(),
             screen: TOP,
             prev_screen: TOP,
             frames: 0,
@@ -171,18 +193,18 @@ impl MainMenu {
     }
 
     fn render_description(&mut self, ctx: &mut Ctx, i: usize) {
-        const W: usize = 384;
         const H: usize = 16;
-        let mut rgba = self.raster.render(DESCRIPTIONS[i], [0xFF, 0xF0, 0xE0], W, H);
-        let width = (0..W).rev().find(|&x| (0..H).any(|y| rgba[(y * W + x) * 4 + 3] != 0)).map_or(0, |x| x + 1);
-        let shift = (W - width) / 2;
+        let w = if self.desc_vm.sprite_w > 0.0 { self.desc_vm.sprite_w as usize } else { 384 };
+        let mut rgba = self.raster.render(DESCRIPTIONS[i], [0xFF, 0xF0, 0xE0], w, H);
+        let width = (0..w).rev().find(|&x| (0..H).any(|y| rgba[(y * w + x) * 4 + 3] != 0)).map_or(0, |x| x + 1);
+        let shift = (w - width) / 2;
         if shift > 0 {
-            for row in rgba.chunks_exact_mut(W * 4) {
+            for row in rgba.chunks_exact_mut(w * 4) {
                 row.copy_within(0..width * 4, shift * 4);
                 row[..shift * 4].fill(0);
             }
         }
-        self.desc.push(ctx.gfx.create_texture(W as u32, H as u32, &rgba));
+        self.desc.push(ctx.gfx.create_texture(w as u32, H as u32, &rgba));
     }
 
     fn move_cursor(&mut self, ctx: &Ctx, n: i32, prev: u16, next: u16, allowed: impl Fn(i32) -> bool) {
@@ -210,7 +232,7 @@ impl MainMenu {
     fn item_locked(ctx: &Ctx, i: usize) -> bool {
         match i {
             1 => !extra_any(&ctx.game),
-            2 => !spell_practice_unlocked(),
+            2 => !spell_practice_unlocked(&ctx.game),
             _ => false,
         }
     }
@@ -219,6 +241,9 @@ impl MainMenu {
         if self.frames == 0 {
             self.set_surface(ctx, "title00.png");
             self.interrupt_all(2);
+        }
+        if self.desc_vm.script.is_none() {
+            ctx.anm.set_script(&mut self.desc_vm, 0, 9);
         }
         if self.desc.len() < ITEMS {
             let i = self.desc.len();
@@ -232,9 +257,9 @@ impl MainMenu {
         }
         if self.cursor != self.prev_cursor {
             self.prev_cursor = self.cursor;
-            self.desc_alpha = 0;
+            self.desc_vm.pending_interrupt = 1;
         }
-        self.desc_alpha = (self.desc_alpha + 16).min(255);
+        self.desc_vm.run(&mut ctx.anm);
         if let Some(f) = &mut self.quitting {
             *f += 1;
             if *f >= 60 {
@@ -457,7 +482,7 @@ impl MainMenu {
         })
     }
 
-    // Option screen (12 §2.7). SPEC-GAP: lives max ignores the play-count limit (0..6).
+    // Option screen (12 §2.7).
     fn option(&mut self, ctx: &mut Ctx) {
         if self.frames == 0 {
             self.interrupt_all(3);
@@ -485,7 +510,7 @@ impl MainMenu {
         if dir != 0 && let Some(v) = Self::option_value(cfg, item) {
             let old = *v;
             let (max, step) = match item {
-                0 => (6, 1),
+                0 => (lives_max(), 1),
                 2 => (2, 1),
                 3 | 4 => (100, if inp.repeat { 4 } else { 1 }),
                 _ => (1, 1),
@@ -534,9 +559,7 @@ impl MainMenu {
         }
     }
 
-    // Value VMs 20–43 (positions from the data): choice VMs get the base sprite when chosen, else sprite + 1;
-    // volume digits are set from the value. SPEC-GAP: lives v shows as digit v + 1,
-    // colour mode 0 = 32Bit, a leading zero of a volume is hidden.
+    // Value VMs 20–43 (answers_impl9 §16): the lit VM is first + value; volume digits are base + digit·2.
     fn option_values(&mut self, ctx: &Ctx) {
         let cfg = ctx.game.cfg;
         let choices: [(usize, usize, u8); 5] = [(20, 7, cfg.lives), (27, 2, cfg.colour_mode), (29, 3, cfg.music), (40, 2, cfg.windowed), (42, 2, cfg.slow)];
@@ -545,14 +568,23 @@ impl MainMenu {
                 self.highlight(ctx, first + k, k == v as usize);
             }
         }
+        let plays = play_count();
+        for (vm, need) in [(25, 30), (26, 60)] {
+            if plays < need {
+                self.vms[vm].set_flag(anmvm::F_VISIBLE, false);
+            }
+        }
         for (first, item, v) in [(32usize, 3, cfg.bgm_volume), (36, 4, cfg.se_volume)] {
             let dim = if self.cursor == item { 0 } else { 1 };
             let digits = [v as i32 / 100, v as i32 / 10 % 10, v as i32 % 10];
             for (k, d) in digits.into_iter().enumerate() {
+                let base = self.base[first + k];
                 let vm = &mut self.vms[first + k];
-                vm.set_sprite(&ctx.anm, 39 + 2 * d + dim);
-                let lead = k == 0 && d == 0 || k == 1 && v < 10 && d == 0;
-                vm.set_flag(anmvm::F_VISIBLE, !lead && vm.color[anmvm::A] > 0);
+                if base >= 0 {
+                    vm.set_sprite(&ctx.anm, if k == 0 { base + dim } else { base + 2 * d + dim });
+                }
+                let hidden = k == 0 && v < 100 || k == 1 && v < 10;
+                vm.set_flag(anmvm::F_VISIBLE, !hidden && vm.color[anmvm::A] > 0);
             }
             self.highlight(ctx, first + 3, self.cursor == item);
         }
@@ -658,10 +690,13 @@ impl Task<Ctx> for MainMenu {
         for vm in &mut self.vms {
             ctx.anm.draw(&mut ctx.gfx, vm);
         }
-        // SPEC-GAP: the description VMs' script/position is unspecified; the text is centred under the menu.
-        if self.screen == TOP && self.quitting.is_none() && self.pending.is_none() {
+        // Description VM: text.anm script 9 at (320, 448), centred (answers_impl9 §15).
+        let vm = &self.desc_vm;
+        if self.screen == TOP && self.quitting.is_none() && self.pending.is_none() && vm.flags & anmvm::F_VISIBLE != 0 {
             if let Some(&t) = self.desc.get(self.cursor as usize) {
-                ctx.gfx.sprite(t, Blend::Alpha, Rect::new(128.0, 440.0, 384.0, 16.0), [0.0, 0.0, 1.0, 1.0], [255, 255, 255, self.desc_alpha as u8]);
+                let (w, h) = (if vm.sprite_w > 0.0 { vm.sprite_w } else { 384.0 }, 16.0);
+                let r = Rect::new(vm.pos[0] - w / 2.0, vm.pos[1] - h / 2.0, w, h);
+                ctx.gfx.sprite(t, Blend::Alpha, r, [0.0, 0.0, 1.0, 1.0], [255, 255, 255, vm.color[anmvm::A]]);
             }
         }
         Ret::Next

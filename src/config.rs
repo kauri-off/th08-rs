@@ -16,8 +16,8 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        // SPEC-GAP: defaults beyond the option "reset" values and SE volume 80 (colour mode, window, effect level, BGM volume) are guesses.
-        Self { lives: 2, bombs: 3, colour_mode: 1, music: 1, se_on: 1, difficulty: 1, windowed: 1, effect_level: 2, slow: 0, bgm_volume: 100, se_volume: 80 }
+        // 15 §1.1 defaults (music 1 = WAV; 2 when thbgm.dat is invalid).
+        Self { lives: 2, bombs: 3, colour_mode: 0, music: 1, se_on: 1, difficulty: 1, windowed: 0, effect_level: 2, slow: 0, bgm_volume: 100, se_volume: 80 }
     }
 }
 

@@ -79,3 +79,55 @@ Using rea only (`procedure_pseudo_code`, `xrefs`, `search_bytes`, `get_call_grap
  ...
 +4. `re/TOOLING_REPORT.md` — tool timings/limits; read once per run, not after every compaction.
 ```
+
+## 4. Runtime on wine (phase 8) — WORKS
+
+Wine runs the original th08.exe headless. Game logic runs at 60 fps on wined3d with Mesa llvmpipe under Xvfb.
+
+### Layout (`re/work/`, not in git)
+| path | content |
+|---|---|
+| `env.sh` | `WINEPREFIX=re/work/prefix` (own win64 prefix), `WINE=~/PortProton/data/dist/WINE_LG_11-1/bin/wine` |
+| `game/` | a COPY of th08.exe, th08.dat, thbgm.dat, score.dat, th08.cfg. The cfg is patched: +0x22 window = 1, +0x1F music = 0, +0x20 SE = 0. The thcrap/vpatch files are not copied. |
+| `hook/hook.c`, `hook/d3d8.def` | the probe, a proxy `d3d8.dll` (build command below) |
+| `run.sh <secs>` | starts Xvfb :77 if it is not running, copies the probe into game/, runs `wine th08.exe` with `WINEDLLOVERRIDES=d3d8=n,b` for <secs>, then `wineserver -k` |
+| `cmds/*.txt` | probe command scripts; copy one to `game/probe_cmd.txt` before a run |
+| `runs/` | saved logs and traces |
+
+One-time setup: `source env.sh; DISPLAY=:77 $WINE wineboot -i` (~20 s).
+Build: `i686-w64-mingw32-gcc -O2 -shared -o d3d8.dll hook.c d3d8.def -static-libgcc -Wl,--enable-stdcall-fixup`.
+
+### Probe (`hook.c`)
+- **Loading.** The game imports `d3d8.dll!Direct3DCreate8`. The override loads our copy from the game dir. Our copy loads the real d3d8 from `GetSystemDirectory()` and forwards to it.
+- **Inline hooks** (all three prologues are `push ebp; mov ebp,esp; sub esp,imm8`, so 6 bytes are stolen). Each stub does `pushad; pushfd; call cb; popfd; popad; <stolen bytes>; jmp back`. The callbacks must not use the FPU.
+  - `Rng_Next16` 0x43ECC0: counts calls; logs the CW of any non-main thread that calls it.
+  - `Sound_Update` 0x45D790: this is the first call after `FuncChain_RunCalc` in Frame_Run, so it is the post-calc sample point. It writes one trace row per frame while scene = 2 and demo flag set (`traceall` command: every game frame).
+  - `GameManager_StageStart` 0x43ABD7: logs thread id and CW.
+- **Vtable hooks.**
+  - IDirect3D8::CreateDevice (idx 15): logs the CW before and after, and the present parameters.
+  - Device Present (idx 15): logs CW changes, runs commands, takes screenshots of the back buffer before the real Present. The game already sets LOCKABLE_BACKBUFFER. The format is X8R8G8B8 640×480. The output is `shots/<name>.ppm`.
+  - Device Reset (idx 14).
+- **IAT hook** on `GetKeyboardState`, for key injection. The keyboard normally comes from DirectInput (device ptr 0x17CE768). The `nodik` command zeroes that pointer, which makes `Input_Poll` fall back to GetKeyboardState.
+- **Commands** (`probe_cmd.txt`, one per line, `<cond> <action> [args]`):
+  - conditions:
+    - `pN` = N-th Present since boot;
+    - `dK:F` = attract demo K at gameplay frame F (GM+0x3DDC0);
+    - `sS:N` = N-th Present since scene S was entered.
+  - actions:
+    - `shot name`;
+    - `key VKhex frames`;
+    - `poke1|poke2|poke4 addrhex valhex`;
+    - `nodik`;
+    - `quit`.
+  - `traceall` alone on a line enables tracing outside demos.
+- **Outputs** (in game/):
+  - `probe_log.txt`: events, CW changes, scene changes, commands;
+  - `probe_trace.txt`: raw rows; column list in `re/tools/trace2demo.py`;
+  - `shots/`.
+  `re/tools/trace2demo.py raw outdir` splits the raw trace into the per-demo files in specs/data.
+
+### Timings
+- Boot to title: about 2 s.
+- With no input, the attract demo starts after about 1550 frames on the title.
+- All 4 demos run in sequence in about 500 s: `run.sh 560`.
+- Runs are deterministic. Two runs with different boot seeds gave identical demo traces.

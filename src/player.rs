@@ -79,6 +79,9 @@ pub struct Stats {
     pub deaths: i32,
     pub bombs_used: i32,
     pub rank_delta: i32,
+    pub stage_frames: u32,
+    pub human_frames: u32,
+    pub youkai_frames: u32,
     pub spell_bonus_add: i32,
     pub point_counter: i32,
     pub score_disp: i64,
@@ -101,7 +104,7 @@ pub enum Popup {
 }
 
 impl Default for Stats {
-    // SPEC-GAP: the config's starting-lives option is not specified; 2 (the Extra value) is used.
+    // Starting lives come from the config at game start (gamemgr); 2 is the config default.
     fn default() -> Self {
         Self {
             difficulty: 1,
@@ -124,6 +127,9 @@ impl Default for Stats {
             deaths: 0,
             bombs_used: 0,
             rank_delta: 0,
+            stage_frames: 0,
+            human_frames: 0,
+            youkai_frames: 0,
             spell_bonus_add: 0,
             point_counter: 0,
             score_disp: 0,
@@ -162,7 +168,7 @@ impl Stats {
         self.score10 * 10
     }
 
-    // SPEC-GAP: rank bookkeeping is collected here; mapping to ECL rank 0–32 is a later phase.
+    // Rank deltas, applied by the game manager through its sub-counter (11 §3.2).
     pub fn rank(&mut self, d: i32) {
         self.rank_delta += d;
     }
@@ -289,6 +295,7 @@ pub struct Player {
     pub last_v: [f32; 2],
     pub targets: [[f32; 3]; 2],
     pub aimed: Option<[f32; 3]>,
+    pub boss_target: bool,
     pub shot_timer: Timer,
     pub gauge_b: Timer,
     pub gauge_c: Timer,
@@ -303,6 +310,7 @@ pub struct Player {
     pub freeze_bullets: bool,
     pub hits: u32,
     pub spark_counter: u8,
+    pub invuln_ring: bool,
     pub grazes: u32,
     pub deaths: u32,
     pub bombs_started: u32,
@@ -345,6 +353,7 @@ impl Default for Player {
             last_v: [0.0; 2],
             targets: [[-999.0, -999.0, 0.0]; 2],
             aimed: None,
+            boss_target: false,
             shot_timer: Timer { cur: -1, ..Timer::default() },
             gauge_b: Timer::default(),
             gauge_c: Timer::default(),
@@ -359,6 +368,7 @@ impl Default for Player {
             freeze_bullets: false,
             hits: 0,
             spark_counter: 0,
+            invuln_ring: false,
             grazes: 0,
             deaths: 0,
             bombs_started: 0,
@@ -474,7 +484,6 @@ impl Player {
     }
 
     // Player_GrazeTest: 0 none, 1 grazed (handler ran), 2 inside a bomb area; plus time orbs to drop.
-    // SPEC-GAP: no graze while respawning/dying (states 1/2), as for lasers.
     pub fn graze_test(&mut self, p: [f32; 3], size: [f32; 2], env: &GrazeEnv, rng: &mut Rng) -> (u8, u8) {
         if self.in_bomb_area(p) {
             return (2, 0);
@@ -491,10 +500,12 @@ impl Player {
         if self.in_bomb_area(p) {
             return 2;
         }
-        if self.state != 0 || !overlap([p[0], p[1]], [size[0] / 2.0, size[1] / 2.0], self.xy(), self.hit_half()) {
+        if !overlap([p[0], p[1]], [size[0] / 2.0, size[1] / 2.0], self.xy(), self.hit_half()) {
             return 0;
         }
-        self.die(rng);
+        if self.state == 0 {
+            self.die(rng);
+        }
         1
     }
 
@@ -580,23 +591,31 @@ impl Player {
         self.cancel_areas.iter().any(|a| a.active && a.contains([p[0], p[1]], half))
     }
 
-    // SPEC-GAP: how the enemy manager fills the homing targets / aimed enemy is not given: nearest shootable
-    // on-screen enemy to the player.
-    pub fn offer_target(&mut self, e: [f32; 3]) {
-        let d = |q: [f32; 3]| (q[0] - self.pos[0]).powi(2) + (q[1] - self.pos[1]).powi(2);
-        if self.aimed.is_none_or(|a| d(e) < d(a)) {
+    // EnemyMgr_Calc target pick (09 §2.1): target 1 = boss (horizontally nearest) else the lowest enemy;
+    // aimed = smallest y within 64 px horizontally, not a chained child; target 2 is never written.
+    pub fn offer_target(&mut self, e: [f32; 3], boss: bool, child: bool) {
+        let t = &mut self.targets[0];
+        if boss {
+            if !self.boss_target || (e[0] - self.pos[0]).abs() < (t[0] - self.pos[0]).abs() {
+                *t = e;
+            }
+            self.boss_target = true;
+        } else if !self.boss_target && e[1] > t[1] {
+            *t = e;
+        }
+        if !child && (e[0] - self.pos[0]).abs() < 64.0 && self.aimed.is_none_or(|a| e[1] < a[1]) {
             self.aimed = Some(e);
-            self.targets = [e; 2];
         }
     }
 
-    // Enemy contact (07 §10.1 step 6): enemy box × 0.7 against the player hitbox.
+    // Player_HitTestNoBomb 0x44A360: true on overlap in every player state; only state 0 dies.
     pub fn contact_test(&mut self, p: [f32; 3], size: [f32; 2], rng: &mut Rng) -> bool {
-        let half = [size[0] * 0.7 / 2.0, size[1] * 0.7 / 2.0];
-        if self.state != 0 || !overlap([p[0], p[1]], half, self.xy(), self.hit_half()) {
+        if !overlap([p[0], p[1]], [size[0] / 2.0, size[1] / 2.0], self.xy(), self.hit_half()) {
             return false;
         }
-        self.die(rng);
+        if self.state == 0 {
+            self.die(rng);
+        }
         true
     }
 
@@ -636,12 +655,18 @@ impl Player {
             }
             self.focus_age = 0;
             self.gauge_c.set(0);
+            if f == 0 {
+                crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_AURA, |e| e.vm.pending_interrupt = 1);
+            }
         } else {
             self.focus_age += 1;
         }
-        if self.focus_age == 4 && !self.solo() {
-            let (kind, colour) = if f == 1 { (29, 0x80FF8080) } else { (28, 0x808080FF) };
-            crate::effect::spawn(anm, kind, self.pos, 1, colour);
+        if self.focus_age == 4 {
+            if !self.solo() {
+                let (kind, colour) = if f == 1 { (29, 0x80FF8080) } else { (28, 0x808080FF) };
+                crate::effect::spawn(anm, kind, self.pos, 1, colour);
+            }
+            // Hitbox marker: effect 22 (etama script 54, sprite 218) in fixed slot 2 (answers_phase5 impl7).
             if f == 1 {
                 crate::effect::spawn_fixed(anm, 22, self.pos, crate::effect::FIX_AURA, 0xFFFFFFFF);
             }
@@ -687,7 +712,7 @@ impl Player {
         self.pos[0] = (self.pos[0] + vx * gs).clamp(CLAMP[0], CLAMP[2]);
         self.pos[1] = (self.pos[1] + vy * gs).clamp(CLAMP[1], CLAMP[3]);
         self.update_options(anm);
-        if inp.down(input::SHOT) && self.shot_timer.cur < 0 {
+        if inp.down(input::SHOT) && self.shot_timer.cur < 0 && !self.env.dialogue {
             self.shot_timer.set(0);
         }
         self.gauge_drift(gs);
@@ -771,7 +796,7 @@ impl Player {
             self.stats.add_lives(-1.0, &mut anm.rng);
             self.stats.bombs = self.sht.bombs.trunc();
         } else {
-            // SPEC-GAP: no continue menu yet; the game-over flag is raised and play goes on with 0 lives.
+            // Game over: the ASCII manager opens the continue menu (12 §4).
             self.game_over = true;
             self.stats.bombs = self.sht.bombs.trunc();
         }
@@ -844,9 +869,17 @@ impl Player {
             self.state_timer.dec(gs);
             let t = self.state_timer.cur;
             self.vm.color = if t.rem_euclid(8) < 2 { [0x20, 0x20, 0xF0, 0xFF] } else { [0xFF; 4] };
+            let ring = crate::effect::FIXED_BASE + crate::effect::FIX_INVULN;
+            if self.invuln_ring {
+                let p = self.pos;
+                crate::effect::get(ring, |e| e.pos = p);
+            }
             if t < 1 {
                 self.state = 0;
                 self.vm.color = [0xFF; 4];
+                if std::mem::take(&mut self.invuln_ring) {
+                    crate::effect::free(ring);
+                }
             }
         } else {
             self.state_timer.tick(gs);
@@ -880,11 +913,20 @@ impl Player {
         self.update_shot_timer(anm, inp);
         self.targets = [[-999.0, -999.0, 0.0]; 2];
         self.aimed = None;
+        self.boss_target = false;
         if self.bomb_cooldown > 0 {
             self.bomb_cooldown -= 1;
         }
-        if self.stats.youkai_max() {
-            self.stats.add_score(100);
+        if !self.env.dialogue {
+            let st = &mut self.stats;
+            st.stage_frames += 1;
+            if st.human_max() {
+                st.human_frames += 1;
+                st.add_score(100);
+            } else if st.youkai_max() {
+                st.youkai_frames += 1;
+                st.add_score(100);
+            }
         }
         let at_max = self.stats.youkai_max() || self.stats.human_max();
         if at_max != self.gauge_aura {
@@ -894,6 +936,10 @@ impl Player {
             } else {
                 crate::effect::free(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE);
             }
+        }
+        if self.gauge_aura {
+            let p = self.pos;
+            crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE, |e| e.pos = p);
         }
         self.frames += 1;
     }
@@ -909,17 +955,6 @@ impl Player {
         }
         self.vm.pos = [self.pos[0] + 32.0, self.pos[1] + 16.0, 0.0];
         anm.draw_mode(gfx, &mut self.vm, 0);
-    }
-
-    // SPEC-GAP: the focused-hitbox marker sprite is not specified; a white square of the hitbox size (min 4 px).
-    fn draw_hitbox(&self, gfx: &mut crate::gfx::Gfx) {
-        if self.focus != 1 || matches!(self.state, 1 | 2) {
-            return;
-        }
-        let (x, y) = (self.pos[0] + 32.0, self.pos[1] + 16.0);
-        let h = self.sht.hitbox.max(4.0) / 2.0;
-        gfx.rect(x - h - 1.0, y - h - 1.0, 2.0 * h + 2.0, 2.0 * h + 2.0, [255, 0, 0, 255]);
-        gfx.rect(x - h, y - h, 2.0 * h, 2.0 * h, [255, 255, 255, 255]);
     }
 }
 
@@ -957,7 +992,6 @@ impl Task<Ctx> for Player {
             self.draw_sprite(anm, gfx);
         } else {
             self.draw_bomb(anm, gfx);
-            self.draw_hitbox(gfx);
         }
         Ret::Next
     }

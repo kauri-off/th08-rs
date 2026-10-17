@@ -105,6 +105,17 @@ impl Hud {
         let (stage, shot) = (g.stage % 9, g.shot);
         let (gfx, ar) = (&mut ctx.gfx, &ctx.archive);
         ctx.anm.load(gfx, ar, FRONT_SLOT, "front.anm")?;
+        // 0x437F5C: the boss-name plate (front sprite 10) gets the stage's ename.png sprite (answers_phase5 impl8).
+        // SPEC-GAP: the spell-practice card exceptions of the sprite choice are not applied.
+        let n = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x17, 0x20][stage];
+        if let (Some(&src), Some(&dst)) = (ctx.anm.sprite(FRONT_SLOT, n), ctx.anm.sprite(FRONT_SLOT, 10)) {
+            let px = |s: &crate::anmmgr::SlotSprite, gfx: &Gfx| {
+                let t = gfx.texture(s.tex);
+                [(s.uv[0] * t.width as f32).round() as u32, (s.uv[1] * t.height as f32).round() as u32]
+            };
+            let (a, b) = (px(&src, gfx), px(&dst, gfx));
+            gfx.copy_texture(src.tex, a, dst.tex, b, [src.w.min(dst.w) as u32, src.h.min(dst.h) as u32]);
+        }
         ctx.anm.load(gfx, ar, TIMES_SLOT, "times.anm")?;
         ctx.anm.load(gfx, ar, TXT_SLOT, &format!("stg{}txt.anm", TXT_NAMES[stage]))?;
         let team = crate::sht::team(shot);
@@ -215,10 +226,14 @@ impl Hud {
             ctx.anm.set_script(&mut self.clear_vm, crate::ascii::ANM_SLOT, 3);
             self.clear_vm.pending_interrupt = 1;
         }
+        let adv = gamemgr::clock_advance(stage, p.stats.time, p.stats.time_threshold);
+        if stage < 6 {
+            self.clear_vm.set_sprite(&ctx.anm, 0x80 + adv);
+        }
         let rng = &mut ctx.anm.rng;
         let st = &mut p.stats;
         let from = st.clock * 30 + 660;
-        st.clock += gamemgr::clock_advance(stage, st.time, st.time_threshold);
+        st.clock += adv;
         let to = st.clock * 30 + 660;
         let final_stage = stage >= 6;
         if final_stage {
@@ -240,7 +255,9 @@ impl Hud {
             (format!("Graze = {graze:8}0"), 0xFFFFFFFF),
             (format!("Time  = {time:8}0"), 0xFFFFFFFF),
         ];
-        // SPEC-GAP: the two "over 80%" statistic lines need per-frame counters that are not modelled.
+        let pct = |n: u32| n as f32 * 100.0 / st.stage_frames.max(1) as f32;
+        lines.push((format!("over-80% = {:.2}%", pct(st.human_frames)), 0xFFFFFFFF));
+        lines.push((format!("over 80% = {:.2}%", pct(st.youkai_frames)), 0xFFFFFFFF));
         if final_stage && !g.practice() && !g.replay() {
             let (lv, bm) = (st.lives as i64 * 2_500_000, st.bombs as i64 * 500_000);
             total += lv + bm;
@@ -296,7 +313,7 @@ impl Hud {
     }
 
     // Boss bar bookkeeping (12 §5.1, §5.4).
-    fn boss_calc(&mut self, anm: &mut AnmManager, dialogue: bool) {
+    fn boss_calc(&mut self, anm: &mut AnmManager, dialogue: bool, paused: bool) {
         let e = self.enemies.borrow();
         let boss = e.boss(0).map(|i| &e.enemies[i]);
         let show = e.g.hud_boss && boss.is_some();
@@ -307,6 +324,16 @@ impl Hud {
         if let Some(b) = boss {
             let max = if b.hud_life > 0 { b.hud_life } else { b.max_life.max(1) };
             self.bar_target = (b.life.max(0) as f32 / max as f32).clamp(0.0, 1.0);
+        }
+        // Popup_LargeStatic from Hud_DrawBoss (answers_impl9 §14). SPEC-GAP: hidden while both counts are 0.
+        if let Some(i) = e.boss(0)
+            && !paused
+            && !self.player.borrow().freeze_bullets
+        {
+            let (p3, p4) = (e.chain_count(i), e.enemies[i].children);
+            if p3 > 0 || p4 > 0 {
+                crate::ascii::popup_large_static([2.0, 29.0], p3, p4, 0xFFF0F00F);
+            }
         }
         drop(e);
         self.bar_alpha = if self.bar_shown { (self.bar_alpha + 4).min(255) } else { (self.bar_alpha - 4).max(0) };
@@ -596,7 +623,7 @@ impl Task<Ctx> for Hud {
             }
         }
         let dialogue = self.msg.borrow().active();
-        self.boss_calc(&mut ctx.anm, dialogue);
+        self.boss_calc(&mut ctx.anm, dialogue, ctx.game.paused != 0 || ctx.game.game_over != 0);
         self.clear_calc(&mut ctx.game, &inp);
         for p in self.player.borrow_mut().stats.popups.drain(..) {
             self.popups.push(ActivePopup { kind: p, frame: 0 });

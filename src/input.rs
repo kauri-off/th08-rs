@@ -4,7 +4,6 @@ use winit::keyboard::KeyCode;
 pub const SHOT: u16 = 1 << 0;
 pub const BOMB: u16 = 1 << 1;
 pub const FOCUS: u16 = 1 << 2;
-// SPEC-GAP: bit 3 for Esc/pause and bit 8 for Ctrl (skip) are not given by the specs.
 pub const PAUSE: u16 = 1 << 3;
 pub const UP: u16 = 1 << 4;
 pub const DOWN: u16 = 1 << 5;
@@ -12,8 +11,11 @@ pub const LEFT: u16 = 1 << 6;
 pub const RIGHT: u16 = 1 << 7;
 pub const SKIP: u16 = 1 << 8;
 pub const ENTER: u16 = 1 << 12;
-// SPEC-GAP: bits for the pause-menu shortcut keys Q / R are not given; two unused bits are taken.
-pub const KEY_Q: u16 = 1 << 13;
+// Keyboard map 0x43D970 (answers_phase5): Q 0x200, S 0x400, Home/P 0x800, D 0x2000, R 0x4000.
+pub const KEY_Q: u16 = 1 << 9;
+pub const KEY_S: u16 = 1 << 10;
+pub const KEY_HOME: u16 = 1 << 11;
+pub const KEY_D: u16 = 1 << 13;
 pub const KEY_R: u16 = 1 << 14;
 
 pub fn map_key(k: KeyCode) -> u16 {
@@ -29,6 +31,9 @@ pub fn map_key(k: KeyCode) -> u16 {
         KeyCode::ControlLeft | KeyCode::ControlRight => SKIP,
         KeyCode::Enter | KeyCode::NumpadEnter => ENTER,
         KeyCode::KeyQ => KEY_Q,
+        KeyCode::KeyS => KEY_S,
+        KeyCode::Home | KeyCode::KeyP => KEY_HOME,
+        KeyCode::KeyD => KEY_D,
         KeyCode::KeyR => KEY_R,
         _ => 0,
     }

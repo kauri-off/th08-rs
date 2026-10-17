@@ -14,11 +14,11 @@ pub const LIFE: u8 = 5;
 pub const STAR: u8 = 6;
 pub const TIME_ORB: u8 = 7;
 pub const CONVERTED: u8 = 8;
-// SPEC-GAP: popup colours are not given (normal white, max value yellow, PowerUp orange, time orb cyan).
 pub const POPUP_NORMAL: u32 = 0xFFFFFFFF;
-pub const POPUP_MAX: u32 = 0xFFFFFF40;
-pub const POPUP_POWER: u32 = 0xFFFFA040;
-pub const POPUP_TIME: u32 = 0xFF80FFFF;
+pub const POPUP_MAX: u32 = 0xFFFFFF00;
+pub const POPUP_POWER: u32 = 0xFFFFC0A0;
+pub const POPUP_TIME: u32 = 0xDFFFFFFF;
+pub const POPUP_TIME_OVER: u32 = 0xDFFFEF80;
 const DEAD: u16 = u16::MAX;
 const POWER_LEVELS: [f32; 6] = [8.0, 24.0, 48.0, 80.0, 128.0, 999.0];
 
@@ -63,8 +63,8 @@ pub fn power_level(p: f32) -> usize {
 
 // Point item value (08 §8.5); `div` 10 gives the converted-point variant.
 pub fn point_value(max: i32, y: f32, line: f32, max_flag: bool, doubled: bool, div: i32) -> i32 {
-    let max = if div > 1 { max / div - (max / div) % 10 } else { max };
     let mut v = if y < line || max_flag { max } else { max / 2 - (y - line) as i32 * (max / 1000) };
+    v /= div;
     v -= v % 10;
     if doubled {
         v *= 2;
@@ -201,8 +201,7 @@ impl ItemManager {
             }
             POINT => {
                 let max = st.max_point;
-                // SPEC-GAP: the doubling threshold (0x406D10) is taken as "gauge at youkai max".
-                let v = point_value(max, y, line, max_flag, st.youkai_max(), 1);
+                let v = point_value(max, y, line, max_flag, st.human_max(), 1);
                 self.items[idx].max_flag = v >= max;
                 popup(v, if v >= max { POPUP_MAX } else { POPUP_NORMAL });
                 st.add_score(v);
@@ -217,8 +216,9 @@ impl ItemManager {
                 st.point_counter += 1;
             }
             CONVERTED => {
-                let v = point_value(st.max_point, y, line, max_flag, st.youkai_max(), 10);
-                popup(v, POPUP_NORMAL);
+                let v = point_value(st.max_point, y, line, max_flag, st.human_max(), 10);
+                let m = st.max_point / 10 - (st.max_point / 10) % 10;
+                popup(v, if v >= m { POPUP_MAX } else { POPUP_NORMAL });
                 st.add_score(v);
             }
             BOMB => {
@@ -245,7 +245,7 @@ impl ItemManager {
                 if v < 1 {
                     v = 10;
                 }
-                popup(v, POPUP_NORMAL);
+                crate::ascii::popup_special(pos, v, POPUP_NORMAL);
                 st.add_score(v);
             }
             TIME_ORB => {
@@ -256,7 +256,7 @@ impl ItemManager {
                 } else {
                     10000
                 };
-                popup(v, POPUP_TIME);
+                crate::ascii::popup_special(pos, v, if st.time >= st.time_threshold { POPUP_TIME_OVER } else { POPUP_TIME });
                 st.add_score(v);
                 st.add_time(1, &mut anm.rng);
                 st.spell_bonus_add += 8000;
@@ -414,7 +414,7 @@ impl ItemManager {
                 it.vm.color[anmvm::A] = 255;
                 it.vm.pos = [it.pos[0] + 32.0, y + 16.0, 0.0];
             }
-            // SPEC-GAP: the item draw mode is not given; 2 (rotation-aware, snapped when unrotated).
+            // Draw2DRot at z 0.15 (08 §8.6).
             anm.draw_mode_z(gfx, &mut it.vm, 2, 0.15);
         }
     }
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(point_value(10000, 228.9, 128.0, false, true, 1), 2 * (5000 - 100 * 10));
         assert_eq!(point_value(12345, 128.5, 128.0, false, false, 1), 6170);
         assert_eq!(point_value(10000, 100.0, 128.0, false, false, 10), 1000);
-        assert_eq!(point_value(12345, 228.0, 128.0, false, false, 10), 1230 / 2 - 100 * 1 - 5);
+        assert_eq!(point_value(12345, 228.0, 128.0, false, false, 10), 490);
     }
 
     #[test]
