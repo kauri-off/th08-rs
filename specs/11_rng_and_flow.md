@@ -97,7 +97,7 @@ Pause must not consume RNG: the only RNG use on pausing is the checksum update, 
 | +0x3DAAC | — | i32 | total time added | VERIFIED |
 | +0x3DBA8 | 0x164D0B0 | u8 | (reset at new game / death; replay record +0x20) | VERIFIED storage |
 | +0x3DBA9 | 0x164D0B1 | u8 | shot type 0–11 (04) | VERIFIED |
-| +0x3DBAA | 0x164D0B2 | u8 | added to shot type into +0x3DBAB (always 0 here) | VERIFIED |
+| +0x3DBAA | 0x164D0B2 | u8 | added to shot type into +0x3DBAB (+0x3DBAB has no reader). 0 except during attract demos, where it is shot % 2 (answers_phase7 §3) | VERIFIED |
 | +0x3DBAC | 0x164D0B4 | u32 | **game flags** (§2.1) | VERIFIED |
 | +0x3DBB0 | 0x164D0B8 | i16 | spell id for spell practice | VERIFIED |
 | +0x3DBB2 | 0x164D0BA | u8 | paused (1 = pause menu open; 2 after it was drawn once) | VERIFIED |

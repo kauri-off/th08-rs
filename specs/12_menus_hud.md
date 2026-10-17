@@ -121,7 +121,7 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
 - Input accepted from frame 10 on. Confirm: sfx 10 (+ sound flush). Cancel: cursor jumps to Quit (sfx 11).
 - **Demo**: idle counter +1 per frame, reset by any raw input; after 1500 frames load
   `demo/demorpy((n+1) mod 4).rpy`; on success: flags = replay | demo (bits 3, 1), difficulty/shot from the
-  replay header (+0x6B / +0x6A), stage = first stage with a record, scene 2. (Demo exit: 11 §4.)
+  replay header (+0x6B / +0x6A), byte 0x164D0B2 = shot % 2 (answers_phase7 §3), stage = first stage with a record, scene 2. (Demo exit: 11 §4.)
 
 ### 2.3 Difficulty select (screens 4/8/12) — VERIFIED
 Enter: load surface 0 = `title/select00.png` (unless coming back from character select), interrupt 7 (12 for

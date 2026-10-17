@@ -39,10 +39,10 @@ The file is 60 bytes (0x3C). In memory it lives at 0x17CE870 (= Supervisor+0x118
 | 0x20 | u8 | sound effects on | < 2 | 1 |
 | 0x21 | u8 | last chosen difficulty | < 6 | 1 |
 | 0x22 | u8 | windowed | < 2 | 0 |
-| 0x23 | u8 | frame skip (0 = every frame, 1 = 1/2, 2 = 1/3) | < 3 | 0 |
+| 0x23 | u8 | frame skip: the draw chain runs when an i8 counter (incremented every frame) reaches this value, then the counter is reset. So 0 **and** 1 = draw every frame, 2 = every 2nd frame (VERIFIED `Frame_Run`, answers_phase7 §6). Not in the option menu. | < 3 | 0 |
 | 0x24 | u8 | effect level (0 none, 1 half, 2 all; see 13 §2) | < 3 | 2 |
 | 0x25 | u8 | slow mode | < 2 | 0 |
-| 0x26 | u8 | "focus while shot held" key-config toggle | < 2 | 0 at load, 1 after a key-config reset; no gameplay reader found (INFERRED unused) |
+| 0x26 | u8 | joystick "shot also focuses" toggle; only read by `Input_PollJoystick` (answers_phase7 §5) — VERIFIED | < 2 | 0 at load, 1 after a key-config reset |
 | 0x27 | u8 | BGM volume 0..100 | — | 100 |
 | 0x28 | u8 | SE volume 0..100 | — | 80 |
 | 0x29..0x37 | | unused | | 0 |
@@ -185,7 +185,7 @@ Write order (VERIFIED from the saver):
 - mode 1 from Supervisor scene 6 (after a game).
 - mode 0 from scene 5 (result viewer from the menu).
 
-In mode 2 with slow mode on (or Supervisor+0x1A4 bit 3), CATK is first reloaded from the old file, which throws away card credit from this run. VERIFIED.
+In mode 2 with slow mode on (or Supervisor+0x1A4 bit 3, which retail code only sets through the anti-tamper fill, answers_phase7 §2), CATK is first reloaded from the old file, which throws away card credit from this run. VERIFIED.
 
 ### 2.3 HSCR (0x168) — high-score entry
 
@@ -295,7 +295,7 @@ In memory at 0x164BB6C + shot·0x178.
 | 0x175 | u8 | used (the chunk is only saved if ≠ 0) |
 
 - A practice start increments plays and sets +0x175 (GameMgr_LoadScoreData).
-- The practice result (Result mode 0x11) stores max(hiscore, score) at index `[shot + byte 0x164D0B2]`. The byte 0x164D0B2 is normally 0 (INFERRED; the loader uses `shot` alone).
+- The practice result (Result mode 0x11) stores max(hiscore, score) at index `[shot + byte 0x164D0B2]`. The byte 0x164D0B2 is 0 on every path that reaches a result screen (VERIFIED, answers_phase7 §3; it is nonzero only during attract demos).
 
 ### 2.7 LSNM (0x18)
 
@@ -430,14 +430,14 @@ Object fields:
 
 Only while flags bit 2 (gameplay running):
 1. `g_InputPrev = g_Input; g_Input = raw input`.
-2. If slow mode (cfg+0x25) or Supervisor+0x1A4 bit 3 is set, nothing is recorded. INFERRED: bit 3 is never set by retail code.
+2. If slow mode (cfg+0x25) or Supervisor+0x1A4 bit 3 is set, nothing is recorded. VERIFIED: no retail code sets bit 3, except the anti-tamper fill that writes 0xFFFFFFFF over the whole Supervisor (answers_phase7 §2).
 3. While flags bit 9 (stage-clear bonus): if counter+4 > 2, return; else counter+4 += 1. So at most 3 frames are recorded during the bonus.
 4. `p += 2; end[stage] = p + 2; *(u16*)p = raw`.
 5. If `frame % 30 == 0`:
    - `fps[q] = fps_now | (flag ? 0x80 : 0)`, `fps[q+1] = fps_now`;
    - `fpsEnd[stage] = q + 2`; `q += 1`.
 
-   fps_now is u8 0x17CE8F0. The flag is the u32 0x17CEA90, which has no writer in the retail exe; INFERRED always 0.
+   fps_now is u8 0x17CE8F0. The flag is the u32 0x17CEA90, = Supervisor+0x338; its only writer stores 0 (MainMenu_OnRegister), so it is always 0. VERIFIED (answers_phase7 §1).
 6. `frame += 1`.
 
 The game objects ran earlier in the same frame using `g_Input` from the previous frame. So the input of frame n is the raw input sampled at the end of frame n−1.
@@ -522,7 +522,7 @@ Info block (offsets in the image):
 | off | type | field |
 |---|---|---|
 | 0x68 | u8 | random |
-| 0x69 | u8 | 100 (set at record start; INFERRED unused) |
+| 0x69 | u8 | 100 (set at record start; VERIFIED never read) |
 | 0x6A | u8 | shot |
 | 0x6B | u8 | difficulty |
 | 0x6C | char[6] | date "%m/%d" |

@@ -48,12 +48,12 @@ r = run(calc_chain)                          # all update callbacks
 sound.update()
 if r == 0  -> quit normally ; if r == -1 -> quit with error
 skip_counter += 1
-if skip_counter >= config.frame_skip:        # INFERRED: frame-skip option
-    BeginScene; anm_manager.reset_render_state; clear;
+if skip_counter >= config.frame_skip:        # VERIFIED cfg+0x23: 0 and 1 both draw every frame, 2 every 2nd
+    BeginScene; anm_manager.reset_render_state;   # no Clear here (Stage_DrawLow / GameMgr_Calc / 0x45B020 clear)
     run(draw_chain)
     anm_manager.flush; EndScene; skip_counter = 0
 Present()                                    # every executed frame; on failure Reset device
-screenshot key -> snapshot/thNNN.bmp
+screenshot key -> snapshot/thNNN.bmp         # answers_phase7 §6
 ```
 
 - Logic rate: fixed **60 Hz**, one calc step per frame; there is no fixed-step catch-up.

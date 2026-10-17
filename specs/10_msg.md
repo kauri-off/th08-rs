@@ -281,7 +281,7 @@ While a dialogue runs: the player cannot start shooting (shot timer not started,
 cannot bomb (0x44C650); certain play counters (0x164D318/0x164D31C, per-frame stats) are not advanced
 (0x44C390); boss life-bar refresh and the bonus/"spell" timer bookkeeping in the enemy manager
 (0x42C3B0/0x42C660) are skipped; option/laser shot updates hold (0x4505D0, 0x450840); the replay manager may
-skip frames when fast-forwarding during dialogue (0x452490, INFERRED purpose).
+skip frames when fast-forwarding during dialogue (0x452490; VERIFIED, see 15 §3.3 playback speed).
 
 ### 8.3 ECL ops touching the HUD (from 07 §7) — VERIFIED
 | ECL op | effect |

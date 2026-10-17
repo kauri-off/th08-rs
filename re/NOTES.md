@@ -182,3 +182,43 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - rea (ghidra provider): fresh ephemeral import ~41 s, no FixThiscall/signatures (in_ECX, dropped helper args); names 641/641 via set_addresses_names but session-only. xrefs/search_bytes/call graph <1 s. Use for xrefs + byte search; fn.sh stays the reader.
 - Type-3 spark re-verified with exhaustive audit: only push-3 site 0x451C6E; 12 dynamic-type effect sites can't be 3 (ECL op 138 unused in data -> e+0x3310/11 = 0/4; ECL effect ids 17/26/40/51/60/61/63; aura >=32; Spell_Start 39/52).
 - all_decomp.c: 2254 fns, 1306 FUN_.
+
+# PHASE 7 (started 2026-10-17) — COVERAGE.md, answers_phase7 (INFERRED items), next-brief ranking
+- NEW TOOL re/tools/structxref.py: `build` (10 s) -> extracted/structxref.tsv = every memory access resolved through constant
+  base pointers (regs, ebp slots, `this` from call sites, pushed ptr args, rep stos/movs) + absolute ones (rw suffix a).
+  `q <lo> [hi] [W]`. NOTE: Wrep with size -1 = unknown length (noise). re/tools/disx.py <va> [before:after] = capstone disasm.
+- Checksum failure (GameMgr_AddBombs/AddLives/AddPower/AddDeathCount/AddBombCount, FUN_00445b7a): fills Supervisor 0x17CE758
+  with 0xD9 dwords of 0xFFFFFFFF (anti-tamper). 
+- Candidate writers found: 0x17CEA90 by FUN_00470dd5 (=0); 0x17CE8FC by many (check bit 3); 0x164D0B2 by Replay_PlayStageLoad,
+  MainMenu_Top, MainMenu_Character; cfg+0x26 read by FUN_0043ef50.
+- RESOLVED (phase7 item 2): 0x17CEA90 = Supervisor+0x338: only write = 0 in FUN_00470dd5 (MainMenu_OnRegister zeroes +0x338/340/344/348/34C) -> always 0 (VERIFIED).
+  Supervisor+0x1A4 bit3: no `or 8` anywhere; only set by anti-tamper fill 0xFFFFFFFF (GameMgr_IsTampered path). Bits seen: 1(cleared InitD3D),2(InitD3D),4(InitD3D),0x10(WinMain),0x20(native29),0x40(ctor, FUN_00443420),0x80(FUN_00442390, Supervisor_Init),0x100(ctor; cleared Supervisor_Init).
+  0x164D0B2: =shot%2 in attract demo (MainMenu_Top 0x467BD6, demos 1&3 have shot 1/3 -> 1), =0 at char confirm (0x46AB76) and Replay_PlayStageLoad. Read: StageStart (+0x3DBAB, no reader), Result name entry/practice result (not reachable from demo).
+  CLRD+0x20 (0x164B9B8+0x24*shot): only Ending_Init reads + clears; no nonzero writer -> only from score.dat (VERIFIED).
+  Replay info +0x69: only writer Replay_RecordStageStart (=100); no `+0x69` reader in whole decompile (VERIFIED unused).
+  cfg+0x26 = Supervisor+0x13E: read by FUN_0043ef50 in Input_PollJoystick: joystick-only "shot also focuses": counter 0x164D51C (u16): shot held -> ++ (cap 20), focus if >9; released -> if <11: 0 else -=10 and focus. JOYCAPS at 0x164D388 (axis thresholds centre±range/4 for winmm; DI uses cfg +0x18/+0x1A).
+- NEXT: ending fade quad colour, natives 3/6/20, then COVERAGE.md.
+- Fade quad colour VERIFIED (EDX=+0x2AA4 -> Screen_FillRect diffuse); natives 3/6/20 intent closed (depth recipe exact).
+- Frame skip VERIFIED: draw when ++counter >= cfg+0x23 (0 and 1 = every frame). Frame_Run has no Clear. FPS meter 0x446F53, screenshots 0x44748F decoded.
+- WRITTEN: specs/answers_phase7.md, specs/COVERAGE.md; structs.md Supervisor table; specs 00/10/11/12/15/16/answers_impl9 edited in place.
+- NEW TOOLS: structxref.py, disx.py, coverage.py (extracted/coverage.tsv). Symbols +19, redump done (661 applied).
+- Game code = 0x402000..0x476CE0; D3DX8 static 0x476D00..0x4A3000; CRT after. Do not RE those.
+- PHASE 7 DONE.
+
+## Ranked next RE briefs (phase 7 deliverable 3) — each <= 3 deliverables
+1. RUNTIME-1 (wine pilot; WINEPREFIX of our own, copy of game dir): (a) x87 control word after CreateDevice and
+   during Frame_Run (closes 05 §10 / 11 §1.2 INFERRED single precision); (b) per-frame dump of RNG state+counter,
+   player pos, score while playing demorpy0..3 -> ground-truth file for port replay-sync tests; (c) reference
+   screenshots of natives-3 mask and an ending fade. Highest value: bit-exact replays depend on it.
+2. FRONTEND-DRAW: (a) main-menu list draws 0x47087F family (0x46F429 practice scores, 0x46F5CB/0x46FFC0 spell
+   card records, 0x47052D, 0x46FDC2/0x464EC0 card-select gfx): positions, formats, colours; (b) result-viewer
+   state handlers 0x45567D/0x455925/0x455A33/0x455CB0/0x455F6B + draws 0x457E00/0x4578AA; (c) score.txt
+   format (Result_DumpScoreTxt 0x454298). Closes COVERAGE PARTIAL rows in §4.
+3. MIDI: (a) SMF player 0x443C60..0x445440 (Midi_Open 0x4442E0, Midi_Play 0x444620, main 0x444820/0x444A90/
+   0x445340, timeSetEvent period, tempo, loop handling, init.mid reset); (b) volume (cfg+0x27) and Midi_Fade
+   0x4447D0; (c) how Music_Play*/Music_Stop dispatch to it in mode 2. Closes the only MISSING gameplay-audible item.
+4. MOP-UP: (a) post-Present capture AnmManager_ApplyPendingCaptures 0x443B60 (+0x2A252C params, used by pause
+   background); (b) 16-bit colour mode end to end (cfg+0x1E, 03 §3 reduced-colour INFERRED, R5G6B5 screenshot
+   branch); (c) remaining small orphans (COVERAGE §5 last row) + leftover INFERRED in 03/04 header fields and 11
+   flag bits 7-8.
+5. (optional) LZSS encoder 0x473CB0/0x475270 exact output, only if byte-identical score.dat/replays are wanted.

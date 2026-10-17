@@ -65,7 +65,7 @@ Supervisor scene 9 calls `Ending_Register` 0x4296A0.
    - timers +0x2A70 and +0x2A64 reset;
    - the previous file buffer is freed.
 
-The CLRD+0x20 flag is read and cleared here, but no writer was found. INFERRED: always 0 in retail, so it does not matter in practice.
+The CLRD+0x20 flag is read and cleared here. No code ever stores a nonzero value in it (struct-relative scan, answers_phase7 §4): it is 0 unless score.dat itself contains a nonzero byte, which is then honoured once and cleared. VERIFIED.
 
 **Skip-allowed** (+0x2A58) enables fast-forward with Ctrl. When it is set and Ctrl is held, the calc runs the interpreter and the 15 VMs up to 9 times per frame. Ctrl also releases waits (§1.4). In effect, an ending already seen can be skipped.
 
@@ -127,7 +127,7 @@ Script names in the files carry a `data/` or `data/end/` prefix. The archive loo
 3. Fade overlay (0x428910), steps once per draw call:
    - modes 1–4 as in §1.3, with counter +0x2AA8 and duration +0x2AAC;
    - when alpha ≠ 0, draw a full-screen 640×480 untextured quad with colour +0x2AA4 (0x45B1E0).
-   - INFERRED: the colour is passed via the rectangle struct; it was verified for the info screen in §4.
+   - VERIFIED: the caller passes +0x2AA4 in EDX to `Screen_FillRect` (ECX = rect {0, 0, 640, 480}); all four vertices get that diffuse colour, z 0, rhw 1, FVF XYZRHW|DIFFUSE, triangle strip; colour/alpha = SELECTARG1(DIFFUSE); z-write is turned off unless cfg+0x38 (Supervisor+0x150) bit 6 is set (0x438A41); DESTBLEND = INVSRCALPHA (answers_phase7 §7).
 
 ### 1.6 Remove (0x429D40)
 
@@ -175,7 +175,7 @@ Each frame `Result_Calc` runs the current state, then the 72 VMs, then frame cou
 | 10–14 | replay save (15 §3.6) |
 | 2 | at frame 1, begin the loading screen and send interrupt 2 to all VMs. After 20 frames, **scene 1 (title/main menu)**, return 0 (object removed → score.dat saved). |
 
-In slow mode (or Supervisor+0x1A4 bit 3), state 9 skips the entry: it restores the CATK backup and goes straight to 0xF.
+In slow mode (or Supervisor+0x1A4 bit 3, set only by the anti-tamper fill), state 9 skips the entry: it restores the CATK backup and goes straight to 0xF.
 
 ### 2.2 Name entry (`Result_NameEntry` 0x45621E)
 

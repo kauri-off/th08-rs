@@ -94,6 +94,9 @@ class Analyzer:
                         if idx:
                             rw += 'i'
                         acc.append((ea, ins.address, fa, rw, o.size, m))
+                    elif 0x4C6000 <= (disp & 0xffffffff) < HI:
+                        rw = 'W' if (o.access & capstone.CS_AC_WRITE) else 'R'
+                        acc.append((disp & 0xffffffff, ins.address, fa, rw + 'ia', o.size, m))
             # rep stos/movs
             if m.startswith('rep stos') or m.startswith('rep movs'):
                 edi = regs.get(x86.X86_REG_EDI)
@@ -216,7 +219,7 @@ def query(lo, hi, wonly):
         ea = int(p[0], 16)
         if p[3] == 'Wrep':
             n = int(p[4])
-            hit = ea <= hi and (n < 0 or ea + n > lo)
+            hit = ea <= hi and (ea + n > lo if n >= 0 else lo - ea < 0x200)
         else:
             hit = lo <= ea <= hi
         if hit and (not wonly or p[3].startswith('W')):

@@ -334,8 +334,8 @@ Fade, when +0x352 is set:
      - then rotation negated back, pos.z 0.5, colour restored.
   6. ZFUNC ALWAYS.
 
-  The visual intent (an inner square showing a mirrored background) is INFERRED. The steps above are
-  VERIFIED.
+  The steps above are VERIFIED and fully determine the picture when the port keeps a depth buffer with these
+  states, so no further RE is needed (answers_phase7 §8).
 
 ---
 

@@ -641,3 +641,22 @@ addr,kind,name,signature,confidence,note
 0x00441020,func,Item_CollectConverted,,VERIFIED,type 8
 0x004412b0,func,Item_CollectTimeOrb,,VERIFIED,type 7
 0x00402450,func,Ascii_InitVms,,INFERRED,sets anchor 0x1800
+0x00470dd5,func,Supervisor_ResetReplayFlags,,VERIFIED,zeroes +0x338/340/344/348/34C (0x17CEA90 fps flag)
+0x0043ef50,func,Supervisor_GetJoyShotFocus,,VERIFIED,returns cfg+0x26 (Supervisor+0x13E)
+0x00446f53,func,Fps_Update,,VERIFIED,fps meter every 500ms; slowdown accumulators; fps_now 0x17CE8F0; draws %.02ffps
+0x0044748f,func,Screenshot_WriteBmp,,VERIFIED,640x480 24bpp bottom-up BMP from back buffer
+0x0043d760,func,Joy_MapButtonMM,,VERIFIED,winmm dwButtons bit -> input bit (EDX = button index)
+0x0043d6e0,func,Joy_MapButtonDI,,VERIFIED,DIJOYSTATE rgbButtons[n]&0x80 -> input bit
+0x00438a41,func,Supervisor_DebugFlag6,,VERIFIED,cfg+0x38 bit 6 (keeps z-write on in Screen_FillRect)
+0x00445b7a,func,Supervisor_Ctor,,VERIFIED,zero 0xD9 dwords; flags |= 0x40|0x100
+0x004442e0,func,Midi_Open,,INFERRED,string ' midi open %d'
+0x00444620,func,Midi_Play,,INFERRED,string ' midi play'
+0x00444680,func,Midi_Stop,,INFERRED,midiOutReset/close path
+0x004447d0,func,Midi_Fade,,INFERRED,called from Music_Fade
+0x00473cb0,func,Lzss_Compress,,INFERRED,used by Replay_Finish / ScoreDat_Save
+0x00443b60,func,AnmManager_ApplyPendingCaptures,,INFERRED,after Present: surface copies queued at +0x2A252C/+8
+0x0045c190,func,SoundMgr_Init,,INFERRED,DirectSound + SetTimer
+0x00437dc7,func,Hud_MsgSkippable,,VERIFIED,HudImpl+0x22D7C
+0x0043d7e0,func,Input_PollJoystickRaw,,INFERRED,joyGetPosEx for key-config capture
+0x0164d51c,global,g_JoyShotFocusCounter,,VERIFIED,u16
+0x0164d388,global,g_JoyCaps,,VERIFIED,JOYCAPSA (wXmin +0x24)

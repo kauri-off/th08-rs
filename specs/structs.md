@@ -38,3 +38,17 @@
 - Bullet ex-command slot (24 B: f32 e, f32 f, i32 c, i32 d, u32 cmd, i32 chain) — 08 §5.
 - Item manager 0x1653648 (2096×0x2E4, list) — 08 §8.
 - Player 0x17D5EF8 (0xE2B30), player bullet 0x484, option 0x2F4, area 0x40, .sht header/entry — 09.
+
+## Supervisor g_Supervisor 0x17CE758 (0x364 bytes = 0xD9 dwords) — fields confirmed in phase 7
+| off | abs | type | meaning | conf |
+|---|---|---|---|---|
+| 0x008 | 0x17CE760 | ptr | IDirect3DDevice8 | VERIFIED |
+| 0x118 | 0x17CE870 | 60 B | th08.cfg copy (15 §1.1); +0x13E = cfg+0x26 joystick shot-focus, +0x150 = cfg+0x38 debug flags | VERIFIED |
+| 0x158/0x15C/0x160 | 0x17CE8B0.. | i32 | current / next / previous scene (11 §7) | VERIFIED |
+| 0x188 | 0x17CE8E0 | f32 | game speed | VERIFIED |
+| 0x190/0x194 | 0x17CE8E8/EC | f32 | slowdown accumulators A / B (15 §2.11) | VERIFIED |
+| 0x198 | 0x17CE8F0 | u8 | fps_now (answers_phase7 §6) | VERIFIED |
+| 0x1A4 | 0x17CE8FC | u32 | flags; bit table in answers_phase7 §2 (bit 3 never set) | VERIFIED |
+| 0x338..0x34C | 0x17CEA90.. | u32×5 | zeroed by MainMenu_OnRegister; +0x338 = replay fps flag (always 0), +0x33C (0x17CEA94) = playback fps-red flag | VERIFIED |
+| 0x350 | 0x17CEAA8 | u32 | fog state cache | VERIFIED |
+Whole object is overwritten with 0xFFFFFFFF on anti-tamper detection (answers_phase7).

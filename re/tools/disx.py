@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dis.py <va> [count|-before:after] : capstone disassembly around an address
+# disx.py <va> [count|-before:after] : capstone disassembly around an address
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pe import PE
