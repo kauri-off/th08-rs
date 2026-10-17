@@ -45,3 +45,4 @@ User (2026-10-17): do not launch subagents for now. Sub-agents disabled in TASK_
 - 2026-10-17: GLM must NOT be launched without explicit user permission. Default dirty-room agent = Opus 5.5 only.
 - 2026-10-17: keep agent tasks small (≤3 related specs per run); big briefs hurt quality. 08–11 are queued as separate runs.
 - 2026-10-17: one agent per role: 1 Opus RE + 1 Opus implementer in parallel; coordinator orchestrates only.
+- 2026-10-17: impl7-player done (commit 71c7f54). Launched phase5-opus (RE: 13 SFX/effects, 14 bombs/options, answers_phase5) and impl8 (MSG, GM flow, HUD), both Opus 5.5 medium.
