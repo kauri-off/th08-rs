@@ -129,10 +129,15 @@ impl PauseMenu {
     fn update(&mut self, ctx_anm: &mut crate::anmmgr::AnmManager, g: &mut Game, inp: &Input, audio: &mut crate::audio::Audio) {
         let replay = g.replay();
         if self.state == 0 {
+            // The practice / slow-mode labels (scripts 20, 21) fade in on start, so they only run when they apply.
+            // SPEC-GAP: slow mode is not configurable yet, so script 21 never runs.
+            let practice = g.practice();
             self.vms = (12..22)
                 .map(|s| {
                     let mut vm = AnmVm::default();
-                    ctx_anm.set_script(&mut vm, ANM_SLOT, s);
+                    if s < 20 || (s == 20 && practice) {
+                        ctx_anm.set_script(&mut vm, ANM_SLOT, s);
+                    }
                     vm
                 })
                 .collect();

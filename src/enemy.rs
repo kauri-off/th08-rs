@@ -463,7 +463,7 @@ pub struct EnemyManager {
     template: Box<Enemy>,
     pub ecl: Ecl,
     pub bosses: [Option<usize>; 4],
-    pub(crate) timelines: Vec<(Timer, usize)>,
+    timelines: Vec<(Timer, usize)>,
     pub sync: [i32; 4],
     pub g: Globals,
     pub bullets: Rc<RefCell<BulletManager>>,
@@ -728,8 +728,7 @@ impl EnemyManager {
                 }
             }
             9 => self.g.misc_calls += 1,
-            // SPEC-GAP: "alive" for wait_boss also excludes death mode 1's dead-but-continuing bit 23 (4B boss waits otherwise).
-            10 => return self.boss(ai(0)).is_none_or(|b| self.enemies[b].life <= 0 || !self.enemies[b].alive() || self.enemies[b].flags & A_DEAD_CONT != 0),
+            10 => return self.boss(ai(0)).is_none_or(|b| self.enemies[b].life <= 0 || !self.enemies[b].alive()),
             11 | 12 => {
                 if !self.spawn_blocked()
                     && let Some(idx) = self.spawn(anm, ai(0), [af(1), af(2), 0.0], ai(3), -1, ai(6), ins.op == 12)
@@ -878,9 +877,20 @@ impl EnemyManager {
         }
     }
 
+    // SPEC-GAP: "destroy" (0x42EFB0) also frees killed enemies that have no death sub and already passed death
+    // processing (latch set); otherwise a stage-4 midboss continuing in its consumed death sub stays forever.
     pub fn msg_side_effects(&mut self, anm: &mut AnmManager) {
         self.cancel_all(anm, 1);
+        let doomed: Vec<usize> = (0..self.enemies.len())
+            .filter(|&j| {
+                let e = &self.enemies[j];
+                e.alive() && e.flags & A_BOSS == 0 && e.flags_b & B_CANNOT_DIE == 0 && e.death_sub < 0 && e.flags_b & B_DEATH_LATCH != 0
+            })
+            .collect();
         self.kill_all(anm, None);
+        for j in doomed {
+            self.free(j);
+        }
         self.bullets.borrow_mut().items.attract_all();
     }
 

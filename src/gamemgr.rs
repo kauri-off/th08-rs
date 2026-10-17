@@ -328,7 +328,7 @@ impl GameManager {
         g.paused = 0;
         g.flags &= !0x2180;
         g.stage_seed = ctx.anm.rng.state;
-        log::info!("stage {stage} start: shot {shot} difficulty {d} seed {:#06x}", g.stage_seed);
+        log::info!("stage {stage} start at frame {}: shot {shot} difficulty {d} seed {:#06x}", ctx.frame, g.stage_seed);
         let first = g.stages_started == 0;
         g.stages_started += 1;
         let stage_t = Stage::register(ctx, stage, Some(self.player.clone()))?;
@@ -524,6 +524,7 @@ impl Task<Ctx> for GameManager {
             let mut p = self.player.borrow_mut();
             if std::mem::take(&mut p.game_over) {
                 ctx.game.game_over = 1;
+                log::info!("game over at frame {}", ctx.frame);
             }
         }
         let g = &mut ctx.game;

@@ -43,3 +43,12 @@ From impl6 (bullets/items):
 - Bomb damage rules during spell cards (impl: d/7).
 - Bomb-allowed counter +0xE2A68 at load; last-spell index "1 − focus, +2"; starting lives (impl: 2).
 - Input bits for Esc and Ctrl.
+
+## From impl8 (msg/flow/hud)
+- 4A/4B midboss after its spell reaches death sub 22 (death mode 2) and keeps running: what removes it? Is 0x42EFB0 "free enemies with no death sub left"?
+- What does 0x42F320 (blocks timeline spawns) test — boss bar shown or dialogue active?
+- Rank deltas (+1/+3/+6/−3/±200/−1600) → rank and sub-counter mapping.
+- Stage-clear ascii script 3 VM: which sprite/grade; front sprite 10 (blank in front.png).
+- Spell-capture condition at ECL op 123; which events call Hud_ShowBonus.
+- Extra game over: continue prompt or straight to result?
+- Clear panel "over 80%" lines; Gui spell-name plate; boss name plates (ename.png); player-overlap HUD fade (impl+0x2175F); shot hold during dialogue.

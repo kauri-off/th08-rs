@@ -193,7 +193,10 @@ impl Hud {
                 Event::Flash => self.flash = Some(0),
                 Event::StageEnd => self.stage_end(ctx),
                 Event::HaltFinal => ctx.game.set_end_state(2),
-                Event::Route(c) => ctx.game.set_route(c),
+                Event::Route(c) => {
+                    log::info!("final route choice {c} at frame {}", ctx.frame);
+                    ctx.game.set_route(c)
+                }
                 Event::Sfx(_) => {}
             }
         }
@@ -201,6 +204,7 @@ impl Hud {
 
     // Msg op 9 (10 §9) and the bonus computation (12 §5.6).
     fn stage_end(&mut self, ctx: &mut Ctx) {
+        log::info!("stage clear (msg op 9) at frame {} score {}", ctx.frame, self.player.borrow().stats.score10);
         let g = &mut ctx.game;
         g.flags |= gamemgr::F_CLEAR_PANEL;
         let stage = g.stage % 9;
@@ -209,6 +213,7 @@ impl Hud {
         let shot = p.shot_type;
         if stage < 6 {
             ctx.anm.set_script(&mut self.clear_vm, crate::ascii::ANM_SLOT, 3);
+            self.clear_vm.pending_interrupt = 1;
         }
         let rng = &mut ctx.anm.rng;
         let st = &mut p.stats;
@@ -268,6 +273,7 @@ impl Hud {
         for _ in 0..10 {
             st.add_score(total as i32);
         }
+        log::info!("clear bonus {total}: score {}", st.score10);
         self.clear = Some(ClearPanel { frame: 0, stage, lines, from, to, shown: from, done: final_stage });
     }
 
@@ -582,11 +588,6 @@ impl Task<Ctx> for Hud {
             }
         }
         let dialogue = self.msg.borrow().active();
-        if self.frame % 600 == 0 {
-            let e = self.enemies.borrow();
-            let b: Vec<_> = e.bosses.iter().flatten().map(|&i| (i, e.enemies[i].life, e.enemies[i].boss_timer.cur, e.enemies[i].timeout, e.enemies[i].main.ctx.sub)).collect();
-            log::warn!("DBG frame {} bosses {:?} hud_boss {} dlg {} spell {:?} tl {:?} flags {:x?}", self.frame, b, e.g.hud_boss, dialogue, e.g.spell.as_ref().map(|s| s.id), e.timelines.iter().map(|t| (t.0.cur, t.1)).collect::<Vec<_>>(), e.bosses.iter().flatten().map(|&i| e.enemies[i].flags).collect::<Vec<_>>());
-        }
         self.boss_calc(&mut ctx.anm, dialogue);
         self.clear_calc(&mut ctx.game, &inp);
         for p in self.player.borrow_mut().stats.popups.drain(..) {

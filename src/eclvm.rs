@@ -1347,7 +1347,6 @@ impl Exec<'_> {
             127 => {
                 let slot = self.ai(t, ins, 0);
                 if slot < 0 {
-                    log::warn!("DBG2 op127 -1 idx {} frame {} clock {}", self.idx, self.m.frame, t.ctx.clock.cur);
                     self.m.unregister_boss(self.idx);
                     self.e.flags &= !A_BOSS;
                 } else if let Some(b) = self.m.bosses.get_mut(slot as usize) {

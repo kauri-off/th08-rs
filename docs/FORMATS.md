@@ -40,3 +40,8 @@
 - Entry 0x38 (list ends with i32 −1): i16 interval, phase; f32 offset x/y, hitbox w/h, angle, speed; i16 damage, side (>0 youkai, <0 human),
   origin (0 player, k option k−1), type (3 pierce, 4/5 laser, 6 no hit anim), script−10, sound; i32 init/update/draw/hit function indexes.
 - All 8 files: 6 levels (thresholds 8/24/48/80/128/999) except ply02as (8; levels 6/7 = Remilia bomb / last spell).
+
+## MSG — source: specs/opus/10_msg.md (src/msg.rs)
+- u32 count, u32 offset[count] (entries may share offsets), then instructions {u16 time, u8 op, u8 arg size, args}; an entry ends at op 0 (or halts at 10/11).
+- Strings: bytes XOR 0x77, terminated by a byte decoding to 0, padded to 4; Shift-JIS. Op 3 = i16 speaker, i16 line, str; ops 15/17 = u32 who + i32 sprites (< 0 keep).
+- Files: msgN{a,b,c,d} by team (solos use their team), 4A/4B: msg4ab/4ac/4ba/4bd, impossible combos → msg4dm; 6A = msg6*, 6B = msg7*, Extra = msg8*.

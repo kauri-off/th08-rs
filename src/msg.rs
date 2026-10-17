@@ -531,4 +531,21 @@ mod tests {
         }
         assert!(n < frames / 10, "skip: {n} frames vs {frames}");
     }
+
+    // Stage-5 entry 10 → Final A / B dialogue or the choice menu (10 §4 step 3).
+    #[test]
+    fn final_route_resolution() {
+        let Some(ar) = crate::archive::test_archive() else { return };
+        let run = |shot: u8, a: bool, b: bool, cont: u8| {
+            let info = StartInfo { stage: 5, shot, cleared_6a: a, cleared_6b: b, continues: cont, ..StartInfo::default() };
+            let mut d = Dialogue { file: Some(parse(ar.read(&file_name(5, shot)).unwrap()).unwrap()), info, ..Dialogue::default() };
+            d.start(10);
+            (d.entry, d.choice)
+        };
+        assert_eq!(run(0, false, false, 0), (1, 0));
+        assert_eq!(run(0, true, false, 0), (2, 1));
+        assert_eq!(run(0, true, true, 0), (3, 0));
+        assert_eq!(run(4, false, false, 0), (3, 0));
+        assert_eq!(run(1, true, true, 1), (1, 0));
+    }
 }
