@@ -64,7 +64,11 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 `cargo run --release --bin th08 -- "/home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night"` (or TH08_DIR env).
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
-1. RE phase5-opus (running): 13 SFX/effects, 14 bombs/options, answers_phase5.
-2. IMPL impl8 done (MSG, game manager flow, HUD). Next IMPL: main menu + SFX + effects; then bomb choreography from 14; then real result/ending screens, score.dat, config.
-4. RE: 10 MSG + 11 RNG/stage flow/menus.  5. IMPL: dialogue, stage flow, HUD, menus.
-6. RE/IMPL: replays, score.dat, config, ending/staff roll, sound effects.
+1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
+2. IMPL impl9 (running): main menu + SFX + effects. Next IMPL: bomb choreography from 14 + answers_phase5 fixes; then replays, score.dat, config, endings/result screens.
+
+## Final phase (after all specs are implemented and the game is complete)
+Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).
+Goals: clear module boundaries and ownership, typed enums/newtypes instead of magic ints, no unnecessary `unsafe`/`static mut`,
+remove SPEC-GAP leftovers and dead paths, clippy-clean. Constraint: behaviour stays bit-exact — replays and the scripted
+1→6 run must produce identical results before/after (use them as regression tests); keep the wasm build working.
