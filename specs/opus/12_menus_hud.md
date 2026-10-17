@@ -203,8 +203,8 @@ sfx 10, cursor moves sfx 0 (`se_plst00`).
 ## 4. Continue / game-over menu (`ContinueMenu_Update` 0x404890) — VERIFIED
 Flow and side effects: 11 §4.2. UI: `ascii.anm` scripts 22–24 on three VMs ("continue?", "yes", "no"),
 `times.anm` script 1 with sprite = clock counter (the night clock, advanced by one at frame 15 of a continue);
-selected item colour 0xFFFF8080, other 0xFF505050; default cursor "No" in normal games (state 2), "Yes"
-otherwise. Input from frame 30 (state 2) / frame 4 (state 1); UP/DOWN toggle with sfx 0; confirm sfx 10.
+selected item colour 0xFFFF8080, other 0xFF505050; default cursor "No" (state 2) in normal games and Extra; "Yes"
+(state 1) only in spell practice when the card was not captured (spell flag bit 9 clear) (VERIFIED 0x404890, corrected Phase 5). Input from frame 30 (state 2) / frame 4 (state 1); UP/DOWN toggle with sfx 0; confirm sfx 10.
 
 ## 5. HUD (`g_Hud` 0x160F428, calc prio 15 `Hud_Calc` 0x4338CA, draw prio 17 `Hud_Draw` 0x433927)
 
@@ -294,7 +294,9 @@ ASCII text (`ascii.anm` glyph = sprite (char − 1), advance 13 px × scale, '\n
 At (120, 96), 16-px lines (32 px gaps where noted):
 "Stage Clear" (stages 1–5) or "All Clear!" (yellow 0xFFFFFF40); "Clear = %8d0" (stage clear bonus);
 "Point = %8d0" (points·5000, 0xFFE0E0FF); "Graze = %8d0" (graze·50); "Time  = %8d0" (time·100);
-two statistic lines "over-80%% …" / "over 80%% …" (frame ratios 0x164D32C/0x164D328 over 0x164D31C);
+two statistic lines "over-80%% = x.yy%" / "over 80%% = x.yy%": percentage of this stage's non-dialogue player frames
+(0x164D31C) spent at human-max gauge (0x164D32C, the "−80 %" side) / at youkai-max gauge (0x164D328); counters
+reset at stage start, incremented in `Player_Calc` together with **+100 points per frame** at either max;
 final stages (not practice, not a replay with header +0x7B): "Player =%8d0" (lives·2 500 000), "Bomb   = %7d0"
 (bombs·500 000); 6B additionally "Last Time = %2d:%.2d", "Night Bonus", "        %8d0" ((12 − clock)·2 000 000);
 difficulty line "Easy Rank    *0.5" / "Normal Rank  *1.0" / "Hard Rank    *1.2" / "Lunatic Rank *1.5" /
@@ -313,9 +315,10 @@ when reached (stages 1–5) the stage-clear trigger fires (11 §4.1).
 ### 5.7 Other HUD elements
 - Stage-start transition: 168 VMs (14 × 12 grid of 32-px `capture.anm` tiles, script 3/4 alternating,
   staggered by `row + 2·col`) drawn as 3D quads while active (impl+0x21810 counts live ones).
-- Player-overlap fade: impl byte +0x2175F (non-zero = element active; set to 0 by ECL op 180) drops by 4 per
-  frame toward 64 while the player is at x ≥ 64 and y < 128 (top of the playfield) and rises back to 255
-  otherwise (INFERRED target: the boss-area overlay).
+- Player-overlap fade (VERIFIED, `Hud_Calc`): impl byte +0x2175F is the **alpha byte of the night-clock VM**
+  (impl+0x2156C, `times.anm` script 2, ECL ops 179/181; op 180 = 0x4390D6 sets it to 0 = hidden). While the
+  alpha is ≠ 0: if the player is at x ≥ 64 and y < 128 it drops by 4 per frame down to 64 (0x40); otherwise
+  it rises by 4 per frame up to 255 (values ≥ 0xFC snap to 0xFF; 0xFF stays).
 - Score/hiscore and the boss UI use the same ASCII manager queue (256 strings per frame, drawn at prio 14/20).
 
 ## 6. Answers to deferred implementer questions

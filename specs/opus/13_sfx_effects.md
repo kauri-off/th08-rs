@@ -166,7 +166,7 @@ finished frees; else age ticks. Survivors are linked (in slot order) into a draw
 ### 2.4 Draw
 | list | drawn by | how |
 |---|---|---|
-| A (alpha) then C then E (additive) | `EffectMgr_Draw` 0x427F00, draw prio 12 (after enemies' 2nd layer, before bullets) | A/E: 2D rotated sprite at pos + screen-shake offset + pos offset, z 0.07, or the custom draw fn; C: billboard at pos (3D) |
+| A (alpha) then C then E (additive) | `EffectMgr_Draw` 0x427F00, draw prio 12 (after enemies' 2nd layer, before bullets) | A/E: 2D rotated sprite at pos + playfield origin + pos offset, z 0.07, or the custom draw fn; C: billboard at pos (3D) |
 | D | end of `BulletMgr_Draw` (prio 13, over bullets) | as A, z 0.04 |
 | B | `Stage_DrawHigh` (after stage layers 2/3, still in the 3D stage camera) | only if cfg effect level (byte 0x17CE894) ≠ 0; level 1 draws every other list element; layer 4 → 2D rotated, layer 1 → billboard (types 0x33/0x3F through a fog-tinted helper), else 3D quad |
 
@@ -174,7 +174,7 @@ finished frees; else age ticks. Survivors are linked (in slot order) into a draw
 The ring is a triangle strip of 2(n+1) pre-transformed vertices (texture = the VM's sprite, u spread along
 the ring, colour = VM colour) rebuilt whenever +0x356 is set (the ring updates set it each frame):
 n = segments (+0x324), r = radius (+0x314, from VM pos.x), w = half width = (+0x320, VM scale.x) /
-sin((π − 2π/n)/2), start angle +0x318 (VM rotation z), step 2π/n, centre +0x2E0 (+ screen shake).
+sin((π − 2π/n)/2), start angle +0x318 (VM rotation z), step 2π/n, centre +0x2E0 (+ playfield origin).
 - +0x32C (VM pos.y) = 0 → plain ring: outer r + w, inner r − w.
 - else if +0x334 = 0 → rotated **ellipse**: vertex = rotate((cos θ·(r ± w), sin θ·(a ± w)), +0x330) with
   a = +0x32C, θ = 0, 2π/n, … (used by effects 0x2B/0x2C and the Youmu slash 0x30, 14 §2).
@@ -255,13 +255,13 @@ Used (type: p0, p1, p2): bomb hits / impacts 1: 16, 8, 0 and 3: 8, 1, colour; Ma
 Sakuya 1: 120, 4 and 1: 50, 4; Yuyuko 1: 120, 12 / 60, 16 / 30, 8; boss natives (below); `Player_UpdateBomb`
 (dissolve-spell end) 3: 30, 1, colour; dialogue op 14: type 4, 442 frames (10 §5); demo end type 2; title
 type 0, 70 frames.
-Correction to 07 §12: the screen-effect argument lists there omit the EDX argument (p0): native 1 is
+Correction applied to 07 §12 (the lists there omitted the EDX argument p0): native 1 is
 (3, p0 = 60, 1, 0xFFFFFFFF), native 10 is (3, 30, 5, 0x40FFFFFF) + (7, 4, 120, 190, 60), native 15 is
 (7, 16, 20, 20, 20), native 17 is (3, 180, 1, …).
 
 ## 4. Score popups (ASCII manager)
 Small popups: 720 + 3 slots × 0x38 at Ascii +0xB4DC: digits[≤12] (least significant first; glyph 10 = special
-sign used for negative arguments), +0xC pos (+ shake offset at spawn), +0x18 colour, +0x1C Timer, +0x30 active,
+sign used for negative arguments), +0xC pos (+ playfield origin at spawn, i.e. screen coords), +0x18 colour, +0x1C Timer, +0x30 active,
 +0x31 digit count. `Popup_Number` 0x403200(pos, value, colour) uses slots 0–719 round robin; 0x403330 uses
 the 3 slots 720–722 (round robin).
 Per frame (`Ascii_Calc`, not while paused/continue, not while bullets frozen): y −= 0.5·gs; age ticks; freed at

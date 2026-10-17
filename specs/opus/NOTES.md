@@ -139,3 +139,12 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - bomb_draft.md has all 16 bombs + dissolve decoded (read after compaction). NEXT: options 0x44E3A0/0x44EE70/0x44F2D0/0x44F5E0 + draws, lasers 0x4505D0/0x450840, shot rotation, red tint, hitbox marker.
 - 14_bombs_options.md WRITTEN (all 16 bombs + dissolve, options 0x44E3A0/0x44EA40/0x44EE70/0x44F2D0/0x44F5E0, Alice laser, shot draw/red tint FF4040/hitbox marker = effect 22 script 54 sprite 218). 13 §2.5 corrected (ellipse mode).
 - NEXT: answers_phase5.md (QUESTIONS.md items).
+- answers_phase5.md started (impl2 done). Findings so far: mirroring (op64 delta mirrored, op66 not), enemy draw (layers 0-1 prio8, 2-3 prio11; e+0x332F layer)
+- answers impl5 written. NEXT impl6 questions.
+- NOTE: 0x164D2DC/E0 = playfield origin (32,16), NOT shake (fixed in 13/14/07). Shake = AnmMgr+0x1C/0x20.
+- found: rank time increase 0x42C3B0; contact test 0x42C290; spell bit7 = bombed during card; homing targets filled in EnemyMgr_Calc (player+0xE2AA4 boss/lowest, +0xE2ABC aimed within 64px highest). Hit test returns 1 for invulnerable -> bullet cancelled.
+- user added impl8 section (7 items) to QUESTIONS — answer too.
+- impl6 answers written
+- impl7 answers written. NEXT impl8 (7 items).
+- impl8 answers written. NEXT: corrections list + final verification.
+- PHASE 5 DONE: answers_phase5.md complete (impl2/5/6/7/8), corrections listed, symbols applied (541).

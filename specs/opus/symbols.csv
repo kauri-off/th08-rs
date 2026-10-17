@@ -529,3 +529,14 @@ addr,kind,name,signature,confidence,note
 0x00450ad0,func,ShotDraw_Trail,,VERIFIED,
 0x004512f0,func,Player_DrawBullets,,VERIFIED,
 0x00451400,func,Player_DrawBulletsHit,,VERIFIED,
+0x0044cba0,func,Spell_OnPlayerBomb,,VERIFIED,clear capture bit2, bonus 0, bit7=active
+0x0042c290,func,Enemy_ContactTest,,VERIFIED,graze box/0.7 every 6f (bit7), hit box/1.5, -10 life
+0x0042c3b0,func,EnemyMgr_TimeRank,,VERIFIED,rank +100 every 2400-240*lives frames
+0x0042e140,func,EnemyMgr_DrawLayers,,VERIFIED,EDX first layer, arg end
+0x00420f40,func,Ecl_OpMoveTo,,VERIFIED,op64
+0x00420d10,func,Ecl_OpMoveDir,,VERIFIED,op66
+0x00422020,func,Ecl_OpMoveRand,,VERIFIED,op67
+0x004224a0,func,Ecl_OpMoveRand2,,VERIFIED,op178
+0x004222b0,func,Ecl_SetMode2Polar,,VERIFIED,
+0x00432f20,func,Bullet_Draw,,VERIFIED,
+0x004415a0,func,ItemMgr_Draw,,VERIFIED,

@@ -26,8 +26,9 @@ manager is re-registered without reloading). Calc priority 9 (runs before enemie
 8. Player bullets update (0x451150, §4.4), shot timer / firing (0x451500, §4.2).
 9. 0x44D420: nearest-target bookkeeping reset (+0xE2AA4/+0xE2AB0 = (−999, −999, 0), +0xE2AC0 = 0) and a HUD
    panel-side switch (player y < C and x ≥ C' → HUD side flag; INFERRED UI only).
-10. Unless a dialogue is running (HUD 0x4358BB): counters 0x164D318/0x164D31C += 1; when the gauge is at the
-    youkai side but not human-max … (score +100 per frame at youkai max, statistics; INFERRED, game flow 11).
+10. Unless a dialogue is running: frame counters 0x164D318 (game) / 0x164D31C (stage) += 1; at human-max
+    gauge: 0x164D324 / 0x164D32C += 1 and AddScore(100); else at youkai-max gauge: 0x164D320 / 0x164D328 += 1
+    and AddScore(100) (VERIFIED; shown as the "over-80%" lines of the clear panel, 12 §5.6).
 
 ### 1.1 Field map (main fields)
 | off | type | name | meaning |
@@ -64,7 +65,7 @@ manager is re-registered without reloading). Calc priority 9 (runs before enemie
 | +0xBB834 | 192 × 0x40 | cancel areas | §8 |
 | +0xBE834 | ptr | youkai aura effect | |
 | +0xBE838 | 128 × 0x484 | player bullets | §4.3 |
-| +0xE2A38 | 4 × 0x10 | laser slots | {Timer, bullet ptr} for laser-type shots |
+| +0xE2A38 | 3 × 0x10 | laser slots | {Timer, bullet ptr} for laser-type shots |
 | +0xE2A68 | i32 | deathbomb counter | §6 |
 | +0xE2A6C | i32 | bomb cooldown | decremented while > 0; bombs need 0 |
 | +0xE2A70 | i32 | respawn clear frames | §6.3 |
@@ -75,8 +76,8 @@ manager is re-registered without reloading). Calc priority 9 (runs before enemie
 | +0xE2A94 | u8 | effect counter | |
 | +0xE2A98 | i32 | direction code | §3 |
 | +0xE2A9C / +0xE2AA0 | f32 | last vx / vy (before gs) | |
-| +0xE2AA4 / +0xE2AB0 | f32[3] | homing targets | −999 when none |
-| +0xE2ABC | ptr | aimed enemy | |
+| +0xE2AA4 / +0xE2AB0 | f32[3] | homing targets | −999 when none; +0xE2AA4 = boss closest in x, else lowest damageable enemy (filled by `EnemyMgr_Calc`); +0xE2AB0 is never written (always −999) |
+| +0xE2ABC | ptr | aimed enemy | highest (smallest y) non-child damageable enemy within 64 px horizontally |
 | +0xE2AC4 | Timer | shot timer | −1 idle, 0..19 firing cycle |
 | +0xE2AD0 / +0xE2AE8 | Timer | gauge timers | §9.3 |
 | +0xE2AF4 | Timer | state timer | death/respawn/invulnerability |

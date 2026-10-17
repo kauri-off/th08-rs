@@ -310,7 +310,7 @@ when (tail < 16 or speed == 0) and (+0x599 == 0 or state ≠ 0); emitter scale =
 - `BulletMgr_CancelAll(mode)` 0x430830 (mode 1 via 0x415C60 = ECL op 112, item collection etc.): every bullet
   not free and not in state 5: if inside a bomb area → item (player+0xE2A90, mode 1) and the slot is zeroed;
   else if mode == 4 → state 5; else item type 6 (mgr+0x6BA570) with item mode = `mode`, slot zeroed. Lasers
-  (alive, and flag bit 2 clear unless mode 4): if state < 2: state 2, timer 0, width restored; unless mode 4,
+  (alive, and flag bit 2 clear unless mode 4): if state < 2: state 2, timer 0, width (+0x564) := current width (+0x568) so the fade shrinks from the current size; unless mode 4,
   one item per 32 px from tail to head along the laser. Fade-collision := 0. Cancel guard := 10.
 - `BulletMgr_CancelBonus(maxValue, lasersToo)` 0x430AA0 (boss defeat, 07 §10.3): every non-free bullet →
   item (bomb-area item or type 6, mode 1), score popup value v starting at 2000, +20 per bullet, capped at
@@ -318,10 +318,19 @@ when (tail < 16 or speed == 0) and (+0x599 == 0 or state ≠ 0); emitter scale =
   items only when lasersToo (also one at the origin).
 - `BulletMgr_CancelRadius(pos, r)` 0x430D30: bullets (not free/5) with |pos − p|² ≤ r² → item type 6 mode 1,
   slot zeroed.
-- ECL natives 12 / 14 (0x424A20 / 0x424C40): toggle "ghost" state of bullets whose flags & mask (native params
-  +0x18): VM tag 1 → 0: sprite + 16, intangible, new velocity from params (+0x38 angle, +0x3C speed); tag 0
-  → normal (sprite − 16, solid, vel from own angle/speed). Native 14 has an extra intermediate step (tag 2,
-  VM helper 0x40ED50(15, 0, 0, 255) — INFERRED 15-frame fade). Mask matching uses the bullet instruction's flags.
+- ECL natives 12 / 14 (0x424A20 / 0x424C40) — VERIFIED. Parameters come from the calling context: mask =
+  var 10000 (ctx+0x18), mode = var 10001 (ctx+0x1C, native 12 only), angle = var 10016 (ctx+0x38), speed =
+  var 10017 (ctx+0x3C). For every bullet slot with state ≠ 0 and (descriptor flags +0xDB0 & mask) ≠ 0, by
+  its VM0 tag (+0x1FC, set by the bullet's ANM script):
+  - Native 12: tag 1 → tag 0 "ghost": blend additive (flags bits 4–5 = 1), sprite index + 16, intangible
+    (+0x10B4 = 1), velocity = polar(var 10016, gs·var 10017) (angle/speed fields unchanged). Any other tag →
+    tag 1: blend alpha, sprite − 16, solid, velocity = polar(own angle +0xD74, gs·own speed +0xD68).
+    Then if var 10001 == 0: every enemy reached through the e+8 link chain gets flags B bit 7 set and the two
+    spell-background VMs (stage +0xB38, +0xDDC = globals 0x4E4B68 / 0x4E4E0C) get interrupt 2; else bit 7 is
+    cleared and interrupt 1.
+  - Native 14 (three-step cycle): tag 1 → tag 0 ghost as above but alpha byte := 0 and velocity = polar(own
+    angle, gs·var 10017); tag 0 → tag 2: alpha 0 and an alpha interpolation 0 → 255 over 15 frames (mode 0,
+    helper 0x40ED50) — the bullet fades back in, still intangible; tag 2 → tag 1: normal as native 12.
 
 ## 8. Items
 
@@ -369,7 +378,7 @@ from the youkai sht record when player byte +3 ≠ 0, else the human one.
 For each item (count += 1):
 - **state 2** (fly to target): if t < 60: pos = start·(1 − t/60) + target·t/60, then collection test. Else (at
   exactly t == 60: vel = 0, state 0); common motion.
-- **state 3**: vel.y += 0.05·gs; if vel.y > 0 or the timer at 0x18B89BC is < 0 → state 1; if player state is 2 →
+- **state 3**: vel.y += 0.05·gs; if vel.y > 0 or the player's shot timer (0x18B89BC = player +0xE2AC4) is < 0, i.e. the player is not shooting → state 1; if player state is 2 →
   state 0, vel = (0, −0.7, 0). Common motion.
 - **state 5**: vel.y += 0.05·gs; pos += vel·m; if vel.y > 0 → state 1 (player state 2 → state 0, vel (0,−0.7,0)),
   common motion; else no collection test this frame.
@@ -383,7 +392,10 @@ For each item (count += 1):
   (C, C) vs the player's collect box player+0x3BC..+0x3CC). On collection: statistics bit 0x40, type handler
   (§8.5), sound choice (0x15, or 0x2C if the item's max-value flag is set), item freed. Else tick timer and run
   the VM.
-After the loop: play the chosen collection sound once; timer 0x18B89D4: if ≠ 0, decrement and clamp at 0.
+After the loop: play the chosen collection sound once; timer 0x18B89D4 (= player +0xE2ADC, "time-orb gauge
+lock"): if > 0, decrement and clamp at 0. It is set to 50 by `Enemy_KillChildren` 0x42ADB0 when a chain is
+killed by the player (together with gauge −= gauge/12, gauge timer B := 30, timer C := 0) and back to 0 when the
+chain's time-orb shower is spawned.
 
 ### 8.5 Collection effects
 Notation: `stats` = game-manager stats block (09 §9), score is stored /10 (`AddScore(v)` adds v/10).

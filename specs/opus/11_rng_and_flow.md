@@ -193,6 +193,8 @@ stats.max_point_value (+0x24) = E 60000, N 100000, H 200000, L 300000, Extra 300
 stats.extends (+0x34) = 0; next_extend (+0x38) = EXTEND_THR (08 §8)
 load score.dat → hiscore for (shot, difficulty) (practice: practice hiscore table; play counters +1)
 rank = RANK[d].init, min, max (table 0x4C7880: E/N 10, 8, 16; H/L 8, 8, 12; Extra 16, 15, 16)
+  (rank changes: RankAdd/RankSub 0x43BFC3/0x43C03F via sub-counter GM+0x3DE38, ±1 rank per 100,
+   clamped; deltas listed in answers_phase5 impl6 "Rank mapping"; +100 every 2400 − 240·lives frames, 0x42C3B0)
 stats.deaths (+0x64/+0x68) = 0 (checksum); stats.bombs_used (+0x84/+0x88) = 0 (checksum)
 stats.spells_captured (+0x1C) = 0; 0x164D318/320/324 = 0
 play counters in the score data incremented unless replay / spell practice / slow mode

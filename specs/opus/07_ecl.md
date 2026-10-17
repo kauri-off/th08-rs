@@ -75,7 +75,7 @@ loop:
 
 | op | name (assigned) | args | effect | uses |
 |---|---|---|---|---|
-| 0 | spawn | sub, f x, f y, i life, i item, i score | spawn enemy at (x, y, 0) — unless a boss/dialogue state is active (HUD 0x160F428 query 0x42F320) or spawning is disabled (global 0xF54E2C, ECL op 175) | 968 |
+| 0 | spawn | sub, f x, f y, i life, i item, i score | spawn enemy at (x, y, 0) — unless a slot-0 boss is registered (HUD +0x2C "boss display" byte, 0x42F320; set by op 127 slot 0, cleared when a boss slot < 4 unregisters) or spawning is disabled (global 0xF54E2C, ECL op 175) | 968 |
 | 1 | spawn_mirror | same | same with the enemy's **mirror** flag (bit 18): all its x motion is negated | 625 |
 | 2 | spawn_randx | sub, f x0, f x1, f y, life, item, score | x = Rng_Float·(x1 − x0) + x0 | 115 |
 | 4 | spawn_randx_mirror | same | mirrored | 37 |
@@ -83,7 +83,7 @@ loop:
 | 6 | msg | i n | start dialogue n (HUD 0x439810; 10_msg later) | 35 |
 | 7 | wait_msg | — | while a dialogue runs: clock.Decrement() and stop this frame (stall) | 43 |
 | 8 | interrupt_boss | i slot, i n | boss[slot].pending_interrupt = n (§5.5) | 18 |
-| 9 | gm_9 | i n | GameManager 0x406FA0(n) (later phase) | 0 |
+| 9 | set_power | i n | `GameMgr_SetPower`(n) (0x406FA0; power := n, checksum with RNG, 09 §9.4) | 0 |
 | 10 | wait_boss | i slot | while boss[slot] exists and is alive: stall | 52 |
 | 11 / 12 | spawn_items (/mirror) | sub, f x, f y, i life, i a, i b, i score | spawn with item = −1; then e+0x3308 = a (point items), e+0x330C = b (power items) | 0 |
 | 13 | wait_sync | i v | look in the 4 sync slots (mgr+0x9DCEFC, init −1): every slot == v is consumed (set −1); if none matched: stall | 46 |
@@ -91,7 +91,9 @@ loop:
 | 15 | spawn_force | as 0 | spawn without the boss/disable checks (not mirrored) | 1 |
 | 16 | flag | — | global byte 0x164D0BB = 1 (later phase) | 15 |
 
-"Stall" = the clock is decremented then the runner returns, so the clock does not advance.
+"Stall" = `clock.Decrement()` immediately followed by the normal `clock.Tick()` exit, i.e. net zero: the clock
+keeps its value (also at game speed < 1, the sub-frame step is undone) and the same instruction is re-tested next
+frame; instructions before it in the same frame are not re-run. VERIFIED (0x42A8A0).
 
 ## 4. Enemy objects (VERIFIED unless marked)
 
@@ -285,7 +287,7 @@ own argument slot in the loaded file** (shared by all enemies; e.g. op 5 with a 
 | 10035 | Rng_Next32/2³¹ − 1 ∈ [−1,1) | — | random |
 | 10036–10039 | ctx ints | int | (10038 also = laser test result, op 120) |
 | 10040 | difficulty | int | global 0x160F538 |
-| 10041 | rank (0–32) | int | global 0x164D334 (§9.2) |
+| 10041 | rank (GM+0x3DE2C; per-difficulty range, e.g. 8–16; changed via a 1/100 sub-counter, 11 §3.2) | int | global 0x164D334 (§9.2) |
 | 10042–10044 | enemy pos x, y, z | float | |
 | 10045–10047 | player pos x, y, z | float (!) | global 0x17D61AC |
 | 10048 | angle enemy final pos → player (π/2 if coincident) | — | |
@@ -377,7 +379,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 107 / 108 | autofire_store on / off | — | flag A bit 17 | 25 / 25 |
 | 109 | fire_stored | — | fire the descriptor as currently stored, origin = final pos + shot offset | 0 |
 | 110 | shot_offset | f x, f y | (x, y, 0) | 423 |
-| 111 | bullet_ex | i k, i a, i b, i c, i d, f e, f f | descriptor extra slot k (e+0x2E44 + 24k) = {f32 e, f32 f, i32 c, i32 d, u32 a, i32 b} (ints copied raw, no conversion — corrected Phase 3) — per-bullet behaviour commands (08 spec §4) | 1269 |
+| 111 | bullet_ex | i k, i a, i b, i c, i d, f e, f f | descriptor extra slot k (e+0x2E44 + 24k) = {f32 e, f32 f, i32 c, i32 d, u32 a, i32 b} (ints stored raw, no float conversion; every argument is variable-capable: mask bit 0 → k, bit 1 → a, bit 2 → b, bit 3 → c, bit 4 → d via the int getter, bits 5/6 → e/f via the float getter — VERIFIED 0x41B565) — per-bullet behaviour commands (08 spec §4) | 1269 |
 | 112 | cancel_bullets | — | cancel all bullets/lasers to items (mode 1), 08 §7 | 10 |
 | 113 | bullet_sfx | i id, i x | id < 0: descriptor flag 0x200 off; else sfx = id, flag on; desc+0x204 = x | 161 |
 | 114 / 115 | laser / laser_b | laser block | §9.4 | 59 / 0 |
@@ -432,7 +434,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 165 | anm_rot_z | f a | main VM rotation.z = a | 28 |
 | 166 | polar_ys | W x, W y, f ang, f r | y = sin(ang)·r, x = cos(ang)·r (no wrap) | 0 |
 | 168 | item_burst1 | i n | n items of type 1 at random offsets | 22 |
-| 169 | rand_away_angle | W a | random angle depending on side (constants 96/288; π/2 range) | 0 |
+| 169 | rand_away_angle | W a | if (pos.x > player.x and pos.x > 96) or pos.x > 288: a = wrap(R·π/2 + 3π/4) (leftward cone) else a = R·π/2 − π/4 (rightward cone); one Rng_Float | 0 |
 | 170–172 | laser fields | i k, … | laser +0x599 byte / +0x560 / +0x558,+0x55C | 0 |
 | 173 | flagA30 | i b | bit 30 | 118 |
 | 174 | aura | i n | (re)create aura effect 0x20+n at final pos | 38 |
@@ -463,12 +465,19 @@ pos.x += gs·vel.x (−= if mirrored); pos.y += gs·vel.y; pos.z += gs·vel.z`; 
 parent's position as offset; final pos = pos + offset with z = 0.
 Clamp (bit 19): x into [xmin, xmax], y into [ymin, ymax].
 
-### 8.3 Random direction (op 67 / 178)
-Op 67: if pos.x ≤ player.x: a = Rng·(π/2) − π/4, else a = wrap(Rng·(π/2) + 3π/4). Near the clamp rect edges
-(x < xmin + 96 / x > xmax − 96) the angle is reflected (π − a or −π − a variants), near y edges (±48) its sign
-is flipped (exact branches in 0x422020). Op 178: with Rng_Range(4) == 0 a = Rng[−1,1)·π, otherwise chooses
-the side by comparing distances to the player (0x4224A0). Then dur < 1 → mode1 with speed; else mode2
-(delta = polar(a, spd·dur), start = final pos).
+### 8.3 Random direction (op 67 / 178) — VERIFIED (0x422020 / 0x4224A0)
+R = Rng_Float (each line one call). Clamp rect = e+0x3340 (xmin), +0x3344 (ymin), +0x3348 (xmax), +0x334C (ymax).
+Op 67: a = R·(π/2) − π/4 if pos.x ≤ player.x, else wrap(R·(π/2) + 3π/4). Then, in order:
+- pos.x < xmin + 96: a > π/2 → a = π − a; a < −π/2 → a = −π − a.
+- pos.x > xmax − 96: 0 ≤ a < π/2 → a = π − (enemy's current angle e+0x2D94) (**QUIRK**: uses the old angle,
+  not a); −π/2 < a < 0 → a = −π − a.
+- pos.y < ymin + 48 and a < 0 → a = −a; pos.y > ymax − 48 and a > 0 → a = −a.
+Op 178: with Rng_Range(4) == 0: a = Rng_SignedRange(π) (= R·2π − π). Otherwise (dx = player.x):
+pos.x ≤ dx: if pos.x − (dx − 384) ≤ dx − pos.x → a = wrap(R·π/2 + 3π/4) else a = R·π/2 − π/4;
+pos.x > dx: if (dx + 384) − pos.x ≤ pos.x − dx → a = wrap(R·π/2 − π/4) else a = wrap(R·π/2 + 3π/4);
+then only the two y-edge flips of op 67.
+Both: dur < 1 → mode 1 (angle a, speed arg, duration 0, timer 0). Else mode 2 (0x4222B0): delta = (cos a·spd·dur,
+sin a·spd·dur, 0) (not mirrored), start = final pos, timer = dur, ease bits = arg.
 
 ## 9. Bullets and lasers
 
@@ -491,7 +500,7 @@ if flags & 0x8000 and player not in youkai mode, or flags & 0x10000 and in youka
 > 0 and squared distance (final pos ↔ player) < radius². Origin = final pos + shot offset; aim mode = op − 96.
 
 ### 9.2 Rank adjustment (unless a spell card is active)
-`lerp_i(a, b) = a + trunc((b − a)·rank / 32)`, `lerp_f(a, b) = a + (b − a)·rank / 32.0`, rank = 0–32
+`lerp_i(a, b) = a + trunc((b − a)·rank / 32)`, `lerp_f(a, b) = a + (b − a)·rank / 32.0`, rank = var 10041 (actual range 8–16 by difficulty, so the lerp only covers the middle of [a, b]; integer division truncates toward 0)
 (var 10041). count1 += lerp_i(c1a, c1b) (min 1); count2 += lerp_i(c2a, c2b) (min 1); if speed1 ≠ 0:
 speed1 += lerp_f(s0, s1) (min 0.3); speed2 += lerp_f(s0, s1)/2 (min 0.3).
 
@@ -537,13 +546,21 @@ left→idle or right→idle script.
    Screen check (unless bit 4 or already done): when the box (final pos ± hitbox/2) first overlaps
    [0,384]×[0,448], set bit 24; afterwards, if it no longer overlaps and bit 28 is clear → free enemy.
 5. Run main ANM VM and the two sub VMs (a finished sub VM is disabled).
-6. Unless bits 4/5/11 (and the player-state exception): contact test with the player (bit 2; boxes scaled
-   0.7 and 1.5, player-side functions 0x44A470/0x44A360; a non-boss without bit 7 loses 10 life on the
-   second test) and, if bit 6, shot damage `d` = player damage against the hitbox (and against the shot box
-   when its x > 0; player spec). If d > 0:
+6. Unless bits 4/5/11 (and the player-state exception): contact test with the player (bit 2, 0x42C290, box
+   = hitbox e+0x2D70): (a) if flag A bit 7 and the enemy timer e+0x2E14 advanced and is a multiple of 6:
+   `Player_GrazeTest` with box = hitbox / 0.7 (larger; grazes the player every 6 frames); (b) unless shot type
+   0/4 and the enemy is a chained child: `Player_HitTestNoBomb` 0x44A360 with box = hitbox / 1.5 (smaller):
+   kills the player in state 0; result 1 (also for an invulnerable player) on a non-boss without bit 7 →
+   enemy life −= 10 (every frame of contact). Then, if bit 6, shot damage `d` = `Player_DamageAgainst`(hitbox,
+   …, &hitByBomb) where hitByBomb starts as "player is bombing"; if the extra shot box (e+0x2D7C) has x > 0, a
+   second call d2 against it, and when hitByBomb is still 0: d = trunc(d + d2/6.5) for shot types 3/11, else
+   trunc(d + d2/1.7). If d > 0:
    - `d = min(d, 70)` (values ≥ 70 become 70); score += (d / 5)·10 (integer division);
-   - if bit 3: while a spell card is active: normal damage `d < 8 ? min(d,1) : d/7`; bomb damage 0 (when the
-     card forbids it or for chained children), else `d < 3 ? min(d,1) : reduced` (player spec); if the
+   - if bit 3: while a spell card is active: normal damage `d < 8 ? min(d,1) : d/7`; bomb damage (hitByBomb) =
+     0 unless spell flag bit 7 is set ("bomb started during this card": set by `Player_UpdateBomb` → 0x44CBA0, which
+     also clears the capture bit 2 and the card bonus; cleared at card start — so a bomb started before the card
+     deals 0) and the enemy is not a chained child, then
+     `d < 3 ? min(d,1) : trunc(d/2.5)` (VERIFIED 0x42D2B9); if the
      damage-reduction timer (op 160) > 0: bosses `d/9`, others 0; life −= d; var 10083 = d; chained enemies
      forward damage to their root (0x42B370: root life −= d/2, or /9 / 0 under the root's timer, never below
      the root's highest active threshold).
@@ -594,6 +611,21 @@ interrupted with 1/2 by mode. Op 91 position relative to the parent's final pos;
 child follow the parent (offset = parent pos, bit 9). Sound 0x24. When the parent dies or passes a threshold,
 children are killed (bit 10) with score popups / item showers proportional to chain length (0x42ADB0).
 
+### 10.6 Enemy drawing — VERIFIED (0x42E140; draw prio 8 → layers 0–1, prio 11 → layers 2–3)
+Enemies are linked each calc into 4 lists by the layer byte e+0x332F (template 0; op 159 = value, op 156 = 2,
+mode-reacting enemies 0 in youkai / 2 in human mode). Prio 11 draws with the global tint 0xFFF01010 while
+bullets are frozen (0x164D0B4 bit 10). Per enemy, all with Draw2DRot; positions + playfield origin (0x164D2DC = 32, 16):
+1. sub VM 0 (e+0x2B0, if its script ≥ 0): rotation = enemy angle (e+0x2D94) if the VM tag ≠ 0; pos = final pos
+   + (flags B bit 8 ? main VM pos offset : its own pos offset), z 0.3;
+2. main VM (e+0xC): rotation = angle if flag A bit 25; pos = final pos + main VM pos offset (+0x288), z 0.25;
+   optional after-image trail (e+0x534C flags, ring buffer at e+0x3394…, op 157) drawn first;
+   skipped when flag A bit 5 (invisible) or trail flag 0x10;
+3. sub VM 1 (e+0x554): as sub 0 but rotation = −angle.
+Death subs: e+0x2CEE is consumed (set −1) by every jump: normal death (with full context reset), `EnemyMgr_KillAll`
+0x42EFB0, and `Enemy_CheckLifeThresholds` 0x42B490 / `Enemy_CheckTimeout` 0x42B930 — the latter two set life (e+0x2DFC) := 0 for
+**every alive non-boss enemy** and run its death sub, when a boss passes a threshold/timeout (main context ip/clock/wait
+reset only).
+
 ## 11. Spell card (op 122, 244 bytes) — VERIFIED
 
 | off | type | meaning |
@@ -611,23 +643,36 @@ which precedes it in all data); flag A bit 27 forces bonus 99 999 990; bullets c
 background started; rank ranges reset; score.dat history updated (later phases). The disassembler prints the
 decoded strings.
 
+### 11.1 Spell flags and the end of a card (`Spell_End` 0x4161B0, op 123) — VERIFIED
+Spell object (g_Gui 0x4EA670) flag word: bit 0 active, bit 2 capture still possible (set at start; cleared by a
+bomb started during the card 0x44CBA0, by the player's real death 0x44D150, by a timeout 0x42BC50), bit 3 timed
+out (0x42BC50, from `Enemy_CheckTimeout`), bit 5 last spell, bit 7 "bomb started during this card" (bomb damage
+allowed, §10.1), bit 8 capture payout pending, bit 9 captured, bit 10 / 11 display flags. Bonus +0xFC.
+On op 123 with the card active: bit 0 off; if not timed out → `CancelBonus(8000, 1)` + `KillAll(8000)` →
+score + `Hud_ShowBonus`; if capture still possible → captured: payout value = +0xFC, time reward 700 (flag A
+bit 27) or from the remaining card time (1000 / 100 / linear, answers_phase5 impl8), captures counter, score-file
+stats, checksum (RNG), start-ring recoloured, SE 0x23, bits 8 and 9; payout 130 frames later in the spell calc
+0x416B90 (`Hud_ShowSpellBonus`, AddScore, AddTime, max point value += reward·10) or at the next card start.
+Not captured → HUD message 5 / 6 (last spell). Always: SE 0xF; player in state 0 → state 3 for 70 frames; stage
+spell background off.
+
 ## 12. Native functions (op 136 once, op 137 every frame) — VERIFIED behaviour summary
 
 Called with the enemy and the instruction; `arg` = second operand (instr +0x10).
 | n | behaviour |
 |---|---|
 | 0 | globals 0x4E3D28 = var 10000, 0x4E3D24 = var 10016 |
-| 1, 17 | screen effect (3, 1, 0xFFFFFFFF, 0, 0x15) |
+| 1, 17 | screen flash (type 3: duration 60 (native 1) / 180 (native 17), 1 repeat, 0xFFFFFFFF; prio 0x15; 13 §3) |
 | 2 | bounce: vel.x negated at x ≤ 0 / ≥ 384; vel.y += var 10022 while vel.y < var 10023; vel.y negated when y < −64; clears bit 28 when y ≥ 480; angle = atan2(vel) when changed |
 | 3, 6, 20 | create two effects (0x38 / 0x3A / 0x41) with an extra ANM script (0x61 / 0x65 / 99) and set the stage callback (0x4235A0) |
 | 4, 7, 21 | bullet "warp" across rectangular zones (zone constants 124/260/140/276 & 56/328/72/344; 56/328/88/360 & −32/416/0/448; 112/271/128/287 & 33/350/49/366) with scaling about the centre; bullets reverse direction |
 | 5 | end effects 9 and 10; global 0x4E4B60 = 2 |
 | 8 | familiar ring: chain members with the same tag (var 10038) get an index (var 10037) and count (var 10018, change flag var 10017); each turns its orbit angle toward leader + index·2π/count by 2 % of the difference |
 | 9, 11, 25 | wide horizontal player-hit rectangles (590 × 160/128, 240/192, 288/224) at the boss with a 12-frame warning phase |
-| 10 | screen effects (3,5,0x40FFFFFF,0,0x15) + (7,120,190,60,0x15) |
+| 10 | flash (type 3: duration 30, 5 repeats, 0x40FFFFFF) + shake (type 7: amplitude 4, ramp 120, hold 190, out 60) (13 §3) |
 | 12, 14 | toggle bullets whose flags match var 10000 between two states (sprite ±16, speed from var 10016/10017); 12 also toggles chain children (flags B bit 7) and stage VMs' interrupt 1/2 by var 10001 |
 | 13 | stage tint colour 0xFFC03030 |
-| 15 | screen effect (7, 20, 20, 20, 0x15) |
+| 15 | shake (type 7: amplitude 16, ramp 20, hold 20, out 20) (13 §3) |
 | 16 | bullets with flag 0x100000 within 64 px of a child whose var 10038 == 0 set its var 10038 = 60 and copy var 10019 |
 | 18 | game speed = 1/arg |
 | 19 | var 10000 = current spell id |

@@ -4,7 +4,8 @@ Sources: bomb table 0x4C7AD0 (09 §7), `Bomb_Start` 0x40BE30, `Player_SpawnInvul
 0x40BC60, per-bomb calc/draw functions (below), effect updates 0x40E040–0x40E2D0 / 0x410BB0 / 0x4114E0 /
 0x4117B0 / 0x413070, option functions (tables 0x4C7D40 / 0x4C7E10), laser 0x44FE20 / 0x450840 / 0x450AD0,
 player draw 0x44D530 / 0x44D630 (bullets 0x4512F0 / 0x451400). VERIFIED unless marked.
-Notation: T = bomb timer (player +0xFF4, 0 on the first frame), "at T = n" = on the frame the timer
+Positions written to VMs are playfield coordinates plus the playfield origin (globals 0x164D2DC/0x164D2E0 = 32, 16); the
+screen-shake offset (AnmManager +0x1C/+0x20) is added later by the draw routines (05 §9). Notation: T = bomb timer (player +0xFF4, 0 on the first frame), "at T = n" = on the frame the timer
 changes to n (the code tests "timer advanced and == n", so nothing fires twice in slow motion); p = player
 position; R = `Rng_Float` (game RNG); areas: C = cancel area, D = damage area (09 §8: circle(pos, r, dr, …),
 rect(pos, w, h, …); "life 0" = exists for one frame); effects = 13 §2.6; screen effects (type: p0, p1, p2) =
@@ -75,7 +76,7 @@ write the VM interpolation fields directly (05 §2/§6).
   computes velocity/8 into a temporary and discards it — the orb keeps its speed. QUIRK)
 - T ≥ 40 every frame (state ≠ 0): pos += velocity·gs. State 1: areas follow the orb. State 2: counter += 1 on
   advanced frames, freed after 30.
-- Draw: orbs 0–15 (Draw2DSnap at pos + offset + shake, z 0).
+- Draw: orbs 0–15 (Draw2DSnap at pos + offset + playfield origin, z 0).
 
 ### 2.2 Reimu LS — 神霊「夢想封印　瞬」 (0x40C910 / 0x40D010), dur 200, invuln 260
 - T = 0: same 16 orbs and areas as 2.1; blast index (+0xFF0) = 0; SE 0xD.
@@ -125,7 +126,7 @@ playfield rectangle alpha 0x70 (no tint call); T > 220: tint 0x802020D0.
   128 × p.y, dmg 12, life 0, no hit effect); D rect((192, p.y/2), 384 × p.y, dmg 6, life 0, no hit effect).
   (Everything above the player is covered; the rectangles are not rotated.)
 - The five VMs run every frame. Draw: tint; beam i (0–4): angle a = i·π/15 − π/2 − 2π/15 (fan of ±24°);
-  pos = p + (cos a, sin a)·(sprite width·scale.x/2); rotation z = a; Draw2DRot (+ shake, z 0).
+  pos = p + (cos a, sin a)·(sprite width·scale.x/2); rotation z = a; Draw2DRot (+ playfield origin, z 0).
 
 ### 2.6 Marisa LS — 魔砲「ファイナルスパーク」 (0x40E780 / 0x40E610), dur 350, invuln 380
 As 2.5 with scripts 0x23–0x27, SE 0xD + 0x13, wide D rect dmg 7 (narrow 12), plus: on advanced frames with
@@ -251,7 +252,7 @@ multipliers 0; flag A bit 6 of all 8 boss slots (0xF54CC0[0..7]) cleared. End ha
 Generic part (09 §5): option = 0x2F4 bytes at player +0x40C + k·0x2F4 (VM, +0x2A4 pos, +0x2B0 anchor,
 +0x2BC velocity, +0x2C8 state, +0x2CC sub-state, +0x2D0 index, +0x2D8 orbit angle, +0x2DC facing, +0x2E0
 timer, +0x2EC calc fn, +0x2F0 draw fn). State 3 (leaving): interrupt 5 at t = 0, freed (state 0, fns
-cleared) at t ≥ 16. Every option's draw fn is 0x44E9E0: VM at pos + shake, z 0.49, Draw2DRot. Options are
+cleared) at t ≥ 16. Every option's draw fn is 0x44E9E0: VM at pos + playfield origin, z 0.49, Draw2DRot. Options are
 drawn by the player draw (prio 9) after the player sprite.
 Creation: solos at load; teams: on focus → all 4 slots rewritten from the youkai table (team 3 thereby
 drops its option 2 instantly); on unfocus → the youkai options (teams 0–2: all, team 3: slots 0–1) get
@@ -315,7 +316,7 @@ init 4, update 5, draw "trail", hit filter 2. Laser slots: **3** × {Timer, bull
   runs the VM and ticks the timer. The bullet itself hits enemies only on even bullet-timer frames (09 §4.5).
   End condition: release shot / dialogue / bomb / death / option lost / level change (above).
 - Trail draw (0x450AD0): a0 = VM alpha·3/4; for c = 0, 2, 4, … < 2n while trail[c].x ≠ −999: draw the VM at
-  trail[c] + shake with alpha = original (c = 0) or a0 − (a0/2)·c/n; at youkai max colour (0xFF, 0x40, 0x40);
+  trail[c] + playfield origin with alpha = original (c = 0) or a0 − (a0/2)·c/n; at youkai max colour (0xFF, 0x40, 0x40);
   alpha restored afterwards.
 - Update 4 (0x4505D0) is not referenced by any shipped entry (a type-4 laser: lifetime from the slot timer,
   capped at 20 during dialogue/bomb, freed at 0; interrupt 1 when ≤ 70 and VM flag bit 14; scale.y = pos.y/14,
@@ -324,8 +325,8 @@ init 4, update 5, draw "trail", hit filter 2. Laser slots: **3** × {Timer, bull
 ## 5. Shot drawing, red tint, hitbox marker
 - Player draw prio 9 (0x44D530): (1) flying bullets (state 1, 0x4512F0): if the VM tag (+0x1FC, set by
   ANM op 25) ≠ 0 → VM rotation z = bullet angle (+0x450) (exactly the movement angle; no π/2 offset);
-  pos + shake, z 0.4; red tint flag (+0x470) → VM colour RGB = (0xFF, 0x40, 0x40) (alpha kept); Draw2DRot;
-  then the entry's extra draw fn (trail). (2) Bomb draw fn while bombing. (3) Player sprite at p + shake,
+  pos + playfield origin, z 0.4; red tint flag (+0x470) → VM colour RGB = (0xFF, 0x40, 0x40) (alpha kept); Draw2DRot;
+  then the entry's extra draw fn (trail). (2) Bomb draw fn while bombing. (3) Player sprite at p + playfield origin,
   z 0.1, Draw2DSnap (hidden while the continue menu is up). (4) Option draw fns.
 - Player draw prio 10 (0x44D630 → 0x451400): bullets in their hit animation (state 2): same rotation/tint
   rule, z 0.2, drawn with the VM's own draw mode.

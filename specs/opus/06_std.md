@@ -106,7 +106,7 @@ After the terminator 16 of 18 files contain another 20 bytes of 0xFF (ignored).
 | 0xB04, 0xB08, 0xB0C | f32, f32, u32 | fog target values |
 | 0xB10 | i32 | fog interpolation duration (0 = inactive) |
 | 0xB14 | Timer | fog interpolation elapsed |
-| 0x6260 | i32 | section request (written by ECL opcode 0x92; 0 = none) |
+| 0x6260 | i32 | section request (written by ECL opcode 147 = 0x93; 0 = none) |
 | 0x6264.. | block | camera **target** values: pos 0x6264, facing 0x6270, up 0x627C, fov 0x62AC |
 | 0x62B0.. | block | camera **start** values: pos 0x62B0, facing 0x62BC, up 0x62C8, fov 0x62F8 |
 | 0x62FC / 0x6308 / 0x6314 | f32[3] | end tangents (pos / facing / up) for Hermite mode |
@@ -162,7 +162,7 @@ Any other opcode is ignored (index just advances).
 ### 4.1 Section requests — VERIFIED
 At the start of `Stage_Calc`, if `section_request ≠ 0`: scan the script from record 0 for an op 31 whose arg
 equals the request. If found: instruction index = (found index + 1), script clock = that record's time,
-request = 0. If not found the request stays pending. (ECL opcode 0x92 writes the request; later phase.)
+request = 0. If not found the request stays pending. (ECL opcode 147 = 0x93 writes the request, 07 §7.)
 Stage index 7 (6B) additionally drives a special effect VM on requests 1–4 (later phase).
 
 ## 5. Per-frame update (`Stage_Calc`) — VERIFIED, in this order
