@@ -29,6 +29,7 @@ struct App {
     run: Option<Box<Running>>,
     started: bool,
     shot: Option<u64>,
+    turbo: u32,
 }
 
 async fn init(window: Arc<Window>, source: Source) -> anyhow::Result<Box<Running>> {
@@ -99,7 +100,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 // Original timing: one logic step per 1/60 s deadline; late frames are dropped, not caught up.
                 let now = r.epoch.elapsed().as_secs_f64();
-                if now <= r.deadline {
+                if self.turbo == 0 && now <= r.deadline {
                     #[cfg(not(target_arch = "wasm32"))]
                     std::thread::sleep(std::time::Duration::from_secs_f64((r.deadline - now).min(0.001)));
                     r.window.request_redraw();
@@ -110,12 +111,18 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 // Web `?shot=<n>`: logic freezes at frame n so the page can be screenshotted.
                 let frozen = cfg!(target_arch = "wasm32") && self.shot.is_some_and(|f| r.ctx.frame >= f);
-                match if frozen { Flow::Continue } else { r.ctx.calc() } {
-                    Flow::Continue => {}
-                    Flow::Quit => return el.exit(),
-                    Flow::Error => {
-                        log::error!("calc chain requested error exit");
-                        return el.exit();
+                // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
+                for _ in 0..self.turbo.max(1) {
+                    if self.shot.is_some_and(|f| r.ctx.frame >= f) && self.turbo > 0 {
+                        break;
+                    }
+                    match if frozen { Flow::Continue } else { r.ctx.calc() } {
+                        Flow::Continue => {}
+                        Flow::Quit => return el.exit(),
+                        Flow::Error => {
+                            log::error!("calc chain requested error exit");
+                            return el.exit();
+                        }
                     }
                 }
                 let size = r.window.inner_size();
@@ -138,7 +145,8 @@ impl ApplicationHandler<UserEvent> for App {
 pub fn run(source: Source) {
     let el = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
     let shot = crate::env::var("TH08_SHOT").and_then(|v| v.parse().ok());
-    let app = App { source, proxy: el.create_proxy(), run: None, started: false, shot };
+    let turbo = crate::env::var("TH08_TURBO").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let app = App { source, proxy: el.create_proxy(), run: None, started: false, shot, turbo };
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut app = app;

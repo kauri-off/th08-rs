@@ -218,7 +218,7 @@ pub struct Stage {
     sway_mode: u8,
     sway_clock: Timer,
     cull_dist2: f32,
-    fast_forward: u32,
+    pub fast_forward: u32,
     overlay: AnmVm,
     overlay_mode: u8,
     overlay_timer: Timer,

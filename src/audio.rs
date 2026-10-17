@@ -50,14 +50,24 @@ struct Mixer {
     generation: u32,
     out_rate: f64,
     volume: f32,
+    paused: bool,
+    fade: f32,
+    fade_step: f32,
 }
 
 impl Mixer {
     fn render(&mut self, out: &mut [f32], channels: usize) {
         let step = BGM_RATE / self.out_rate;
         for fr in out.chunks_exact_mut(channels) {
+            if self.fade_step > 0.0 {
+                self.fade = (self.fade - self.fade_step).max(0.0);
+                if self.fade == 0.0 {
+                    self.music = None;
+                    self.fade_step = 0.0;
+                }
+            }
             let (l, r) = match &mut self.music {
-                Some(m) if !m.samples.is_empty() => {
+                Some(m) if !m.samples.is_empty() && !self.paused => {
                     let n = m.samples.len();
                     let i = m.pos as usize;
                     let t = (m.pos - i as f64) as f32;
@@ -72,9 +82,10 @@ impl Mixer {
                 }
                 _ => (0.0, 0.0),
             };
-            fr[0] = l * self.volume;
+            let v = self.volume * self.fade;
+            fr[0] = l * v;
             if channels > 1 {
-                fr[1] = r * self.volume;
+                fr[1] = r * v;
             }
         }
     }
@@ -89,7 +100,7 @@ pub struct Audio {
 
 impl Audio {
     pub fn new(source: Source, fmt: &[u8]) -> Self {
-        let mixer = Arc::new(Mutex::new(Mixer { volume: 1.0, out_rate: BGM_RATE, ..Default::default() }));
+        let mixer = Arc::new(Mutex::new(Mixer { volume: 1.0, fade: 1.0, out_rate: BGM_RATE, ..Default::default() }));
         Self { source, tracks: parse_fmt(fmt), mixer, stream: None }
     }
 
@@ -117,6 +128,7 @@ impl Audio {
             let mut m = self.mixer.lock().unwrap();
             m.generation += 1;
             m.music = None;
+            (m.paused, m.fade, m.fade_step) = (false, 1.0, 0.0);
             m.generation
         };
         let (source, mixer) = (self.source.clone(), self.mixer.clone());
@@ -138,6 +150,16 @@ impl Audio {
                 Err(e) => log::warn!("bgm {}: {e:#}", t.name),
             }
         });
+    }
+
+    pub fn pause_bgm(&mut self, on: bool) {
+        self.mixer.lock().unwrap().paused = on;
+    }
+
+    // Music_Fade: linear fade-out over `secs`, then stop.
+    pub fn fade_bgm(&mut self, secs: f32) {
+        let mut m = self.mixer.lock().unwrap();
+        m.fade_step = 1.0 / (secs.max(0.01) * m.out_rate as f32);
     }
 
     pub fn stop_bgm(&mut self) {

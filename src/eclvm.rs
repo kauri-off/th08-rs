@@ -897,6 +897,10 @@ impl Exec<'_> {
             owner: dec(0x44, 48, 0xBB),
             comment: [dec(0x74, 64, 0xDD), dec(0xB4, 64, 0xEE)],
             frames: 0,
+            misses: {
+                let p = self.m.player.borrow();
+                p.deaths + p.bombs_started
+            },
         };
         log::info!("spell card {} ({} bytes name, bonus {})", spell.id, spell.name.len(), spell.bonus);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
@@ -1325,7 +1329,10 @@ impl Exec<'_> {
                 });
             }
             122 => self.spell_card(ins),
-            123 => self.m.g.spell = None,
+            123 => {
+                let (total, remaining) = (self.e.timeout.max(0), (self.e.timeout - self.e.boss_timer.cur).max(0));
+                self.m.finish_spell(total, remaining, self.anm);
+            }
             124 => {}
             125 => {
                 self.e.pending_interrupt = self.ai(t, ins, 0);
@@ -1340,6 +1347,7 @@ impl Exec<'_> {
             127 => {
                 let slot = self.ai(t, ins, 0);
                 if slot < 0 {
+                    log::warn!("DBG2 op127 -1 idx {} frame {} clock {}", self.idx, self.m.frame, t.ctx.clock.cur);
                     self.m.unregister_boss(self.idx);
                     self.e.flags &= !A_BOSS;
                 } else if let Some(b) = self.m.bosses.get_mut(slot as usize) {
@@ -1442,8 +1450,8 @@ impl Exec<'_> {
                 }
             }
             148 => {
-                self.m.g.hud_counter += 1800;
-                self.m.g.misc_calls += 1;
+                self.m.g.hud_bars = self.ai(t, ins, 0);
+                self.m.g.hud_requests.push(148);
             }
             149 => {
                 let n = self.ai(t, ins, 0);
@@ -1528,10 +1536,14 @@ impl Exec<'_> {
                 self.m.g.misc_calls += 1;
             }
             177 => self.e.hud_life = self.ai(t, ins, 0),
-            179 | 180 | 184 => self.m.g.misc_calls += 1,
+            179 | 180 => self.m.g.hud_requests.push(op as u16),
+            184 => self.m.g.misc_calls += 1,
             181 => {
-                if self.m.g.extend_counter < 12 {
-                    self.m.g.extend_counter += 1;
+                let mut p = self.m.player.borrow_mut();
+                if p.stats.clock < 12 {
+                    p.stats.clock += 1;
+                    drop(p);
+                    self.m.g.hud_requests.push(181);
                 }
             }
             182 => {

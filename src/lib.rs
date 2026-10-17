@@ -4,6 +4,7 @@ pub mod anmmgr;
 pub mod anmvm;
 pub mod app;
 pub mod archive;
+pub mod ascii;
 pub mod assets;
 pub mod audio;
 pub mod bomb;
@@ -13,9 +14,12 @@ pub mod eclvm;
 pub mod enemy;
 pub mod env;
 pub mod game;
+pub mod gamemgr;
 pub mod gfx;
+pub mod hud;
 pub mod input;
 pub mod item;
+pub mod msg;
 pub mod player;
 pub mod pshot;
 pub mod rng;
@@ -24,6 +28,7 @@ pub mod stage;
 pub mod stdfile;
 pub mod supervisor;
 pub mod task;
+pub mod text;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]

@@ -426,6 +426,7 @@ pub struct Spell {
     pub bonus: i32,
     pub decay: i32,
     pub frames: i32,
+    pub misses: u32,
 }
 
 // Globals touched by ECL (difficulty, rank, argument registers, spell state, …).
@@ -449,10 +450,10 @@ pub struct Globals {
     pub g_f54cec: i32,
     pub g_18b8a2c: i32,
     pub g_4e4b60: i32,
-    pub hud_counter: i32,
     pub hud_markers: [[i32; 3]; 8],
     pub fixed_bonus: bool,
-    pub extend_counter: i32,
+    pub hud_bars: i32,
+    pub hud_requests: Vec<u16>,
     pub misc_calls: u64,
 }
 
@@ -462,7 +463,7 @@ pub struct EnemyManager {
     template: Box<Enemy>,
     pub ecl: Ecl,
     pub bosses: [Option<usize>; 4],
-    timelines: Vec<(Timer, usize)>,
+    pub(crate) timelines: Vec<(Timer, usize)>,
     pub sync: [i32; 4],
     pub g: Globals,
     pub bullets: Rc<RefCell<BulletManager>>,
@@ -471,7 +472,8 @@ pub struct EnemyManager {
     pub full: bool,
     pub frame: u32,
     pub debug_damage: i32,
-    fast_forward: u32,
+    pub fast_forward: u32,
+    pub msg: Option<Rc<RefCell<crate::msg::Dialogue>>>,
 }
 
 pub fn parse_difficulty(s: &str) -> Option<i32> {
@@ -508,16 +510,15 @@ impl EnemyManager {
             frame: 0,
             debug_damage: 0,
             fast_forward: 0,
+            msg: None,
         }
     }
 
-    pub fn register(ctx: &mut Ctx, index: usize, stage: Option<Rc<RefCell<Stage>>>, bullets: Rc<RefCell<BulletManager>>) -> Result<Rc<RefCell<EnemyManager>>> {
+    pub fn register(ctx: &mut Ctx, index: usize, stage: Option<Rc<RefCell<Stage>>>, bullets: Rc<RefCell<BulletManager>>, diff: i32) -> Result<Rc<RefCell<EnemyManager>>> {
         let (ecl_name, enm) = files(index);
         let ecl = ecl::parse(ctx.archive.read(&ecl_name)?)?;
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_STAGE, &enm)?;
-        let default_diff = if index % 9 == 8 { 4 } else { 1 };
-        let diff = crate::env::var("TH08_RANK").and_then(|s| parse_difficulty(&s)).unwrap_or(default_diff);
         let mut m = EnemyManager::new(ecl, bullets, diff);
         m.stage = stage;
         m.fast_forward = crate::env::var("TH08_STAGE_FRAME").and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -665,7 +666,8 @@ impl EnemyManager {
     }
 
     fn spawn_blocked(&self) -> bool {
-        self.g.hud_boss || self.g.dialogue || self.g.spawn_disabled != 0
+        // SPEC-GAP: the HUD query 0x42F320 is taken as "boss bar shown"; dialogue alone does not block (bosses spawn mid-dialogue).
+        self.g.hud_boss || self.g.spawn_disabled != 0
     }
 
     // EclTimeline_Run (07 §3).
@@ -718,15 +720,16 @@ impl EnemyManager {
                     self.spawn(anm, ai(0), [x, af(1), 0.0], ai(2), ai(3), ai(4), ins.op == 5);
                 }
             }
-            6 => log::debug!("timeline: dialogue {} (no dialogue system yet)", ai(0)),
-            7 => return !self.g.dialogue,
+            6 => self.start_msg(anm, ai(0)),
+            7 => return !self.msg.as_ref().is_some_and(|m| m.borrow().blocking()),
             8 => {
                 if let Some(b) = self.boss(ai(0)) {
                     self.enemies[b].pending_interrupt = ai(1);
                 }
             }
             9 => self.g.misc_calls += 1,
-            10 => return self.boss(ai(0)).is_none_or(|b| self.enemies[b].life <= 0 || !self.enemies[b].alive()),
+            // SPEC-GAP: "alive" for wait_boss also excludes death mode 1's dead-but-continuing bit 23 (4B boss waits otherwise).
+            10 => return self.boss(ai(0)).is_none_or(|b| self.enemies[b].life <= 0 || !self.enemies[b].alive() || self.enemies[b].flags & A_DEAD_CONT != 0),
             11 | 12 => {
                 if !self.spawn_blocked()
                     && let Some(idx) = self.spawn(anm, ai(0), [af(1), af(2), 0.0], ai(3), -1, ai(6), ins.op == 12)
@@ -750,7 +753,7 @@ impl EnemyManager {
                 let v = ai(0);
                 self.sync.iter_mut().filter(|s| **s < 0).for_each(|s| *s = v);
             }
-            16 => self.g.flag_164d0bb = true,
+            16 => self.player.borrow_mut().game_over = true,
             _ => {}
         }
         true
@@ -861,6 +864,54 @@ impl EnemyManager {
             }
         }
         self.enemies[idx].children = 0;
+    }
+
+    // Hud_StartMsg: Msg_Start plus its playfield side effects (10 §4.6).
+    pub fn start_msg(&mut self, anm: &mut AnmManager, n: i32) {
+        let Some(m) = self.msg.clone() else { return };
+        let mut m = m.borrow_mut();
+        m.info.clock = self.player.borrow().stats.clock;
+        m.start(n);
+        if std::mem::take(&mut m.side_effects) {
+            drop(m);
+            self.msg_side_effects(anm);
+        }
+    }
+
+    pub fn msg_side_effects(&mut self, anm: &mut AnmManager) {
+        self.cancel_all(anm, 1);
+        self.kill_all(anm, None);
+        self.bullets.borrow_mut().items.attract_all();
+    }
+
+    // Spell end (op 123, 0x4161B0). SPEC-GAP: "captured" = no death and no bomb since the card started.
+    pub fn finish_spell(&mut self, total: i32, remaining: i32, anm: &mut AnmManager) {
+        let Some(s) = self.g.spell.take() else { return };
+        let mut p = self.player.borrow_mut();
+        if p.deaths + p.bombs_started != s.misses {
+            p.stats.popups.push(crate::player::Popup::Message(5, 0));
+            return;
+        }
+        let thr = total - total / 7;
+        let time = if self.g.fixed_bonus {
+            700
+        } else if remaining >= thr {
+            1000
+        } else if remaining < 180 {
+            100
+        } else {
+            (remaining - 180) * 900 / (thr - 180).max(1) + 100
+        };
+        let st = &mut p.stats;
+        st.add_score(s.bonus);
+        st.spells += 1;
+        crate::player::Stats::checksum(&mut anm.rng);
+        st.add_time(time, &mut anm.rng);
+        st.popups.push(crate::player::Popup::SpellBonus(s.bonus));
+    }
+
+    pub fn dialogue_active(&self) -> bool {
+        self.msg.as_ref().is_some_and(|m| m.borrow().active())
     }
 
     pub fn spawn_item(&mut self, anm: &mut AnmManager, pos: [f32; 3], kind: i32, mode: u8) {
@@ -1140,6 +1191,7 @@ impl EnemyManager {
         let mut b = self.bullets.borrow_mut();
         b.env.boss = self.bosses.iter().any(Option::is_some);
         b.env.spell = self.g.spell.is_some();
+        b.env.dialogue = self.dialogue_active();
         b.freeze = self.g.timer_pause != 0;
         let env = b.env;
         drop(b);

@@ -157,7 +157,7 @@ impl Player {
     pub fn update_bomb(&mut self, anm: &mut AnmManager, inp: &input::Input, items: &mut Option<&mut ItemManager>) {
         if !self.bombing {
             let forced = self.forced_bomb != 0 && self.deathbomb == 1;
-            let pressed = inp.pressed(input::BOMB) && self.deathbomb != 0 && self.stats.bombs >= 1.0 && self.bomb_cooldown == 0;
+            let pressed = inp.pressed(input::BOMB) && !self.env.dialogue && self.deathbomb != 0 && self.stats.bombs >= 1.0 && self.bomb_cooldown == 0;
             if !(forced || pressed) || matches!(self.state, 1) {
                 return;
             }

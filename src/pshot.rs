@@ -227,7 +227,7 @@ impl Player {
                 self.shot_timer.set(-1);
             }
         }
-        if inp.down(input::SHOT) && self.shot_timer.cur < 0 {
+        if inp.down(input::SHOT) && self.shot_timer.cur < 0 && !self.env.dialogue {
             self.shot_timer.set(0);
         }
         if matches!(self.state, 1 | 2) {

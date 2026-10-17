@@ -11,6 +11,10 @@ pub const DOWN: u16 = 1 << 5;
 pub const LEFT: u16 = 1 << 6;
 pub const RIGHT: u16 = 1 << 7;
 pub const SKIP: u16 = 1 << 8;
+pub const ENTER: u16 = 1 << 12;
+// SPEC-GAP: bits for the pause-menu shortcut keys Q / R are not given; two unused bits are taken.
+pub const KEY_Q: u16 = 1 << 13;
+pub const KEY_R: u16 = 1 << 14;
 
 pub fn map_key(k: KeyCode) -> u16 {
     match k {
@@ -23,6 +27,9 @@ pub fn map_key(k: KeyCode) -> u16 {
         KeyCode::ShiftLeft | KeyCode::ShiftRight => FOCUS,
         KeyCode::Escape => PAUSE,
         KeyCode::ControlLeft | KeyCode::ControlRight => SKIP,
+        KeyCode::Enter | KeyCode::NumpadEnter => ENTER,
+        KeyCode::KeyQ => KEY_Q,
+        KeyCode::KeyR => KEY_R,
         _ => 0,
     }
 }

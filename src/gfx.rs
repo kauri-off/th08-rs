@@ -84,6 +84,7 @@ pub struct Texture {
     pub width: u32,
     pub height: u32,
     bind: wgpu::BindGroup,
+    tex: wgpu::Texture,
 }
 
 struct Batch {
@@ -290,7 +291,7 @@ impl Gfx {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
@@ -305,7 +306,7 @@ impl Gfx {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
         });
-        let t = Some(Texture { width, height, bind });
+        let t = Some(Texture { width, height, bind, tex });
         if let Some(id) = self.free.pop() {
             self.textures[id] = t;
             id
@@ -324,6 +325,21 @@ impl Gfx {
     pub fn load_image(&mut self, bytes: &[u8]) -> anyhow::Result<TextureId> {
         let img = image::load_from_memory(bytes)?.to_rgba8();
         Ok(self.create_texture(img.width(), img.height(), &img))
+    }
+
+    // Replaces a w×h RGBA region at (x, y); applied before the next submit.
+    pub fn write_texture(&mut self, id: TextureId, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) {
+        let Some(t) = self.textures.get(id).and_then(Option::as_ref) else { return };
+        let (w, h) = (w.min(t.width.saturating_sub(x)), h.min(t.height.saturating_sub(y)));
+        if w == 0 || h == 0 {
+            return;
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &t.tex, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
+            rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
     }
 
     pub fn texture(&self, id: TextureId) -> &Texture {

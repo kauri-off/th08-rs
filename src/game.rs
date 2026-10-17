@@ -14,6 +14,8 @@ pub struct Ctx {
     pub anm: AnmManager,
     pub tasks: Tasks<Ctx>,
     pub frame: u64,
+    pub game: crate::gamemgr::Game,
+    pub ascii: crate::ascii::Queue,
 }
 
 impl TaskCtx for Ctx {
@@ -34,6 +36,8 @@ impl Ctx {
             anm: AnmManager::default(),
             tasks: Tasks::default(),
             frame: 0,
+            game: Default::default(),
+            ascii: Default::default(),
         };
         ctx.anm.rng = crate::rng::Rng::boot();
         crate::supervisor::register(&mut ctx)?;

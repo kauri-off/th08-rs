@@ -81,6 +81,23 @@ pub struct Stats {
     pub rank_delta: i32,
     pub spell_bonus_add: i32,
     pub point_counter: i32,
+    pub score_disp: i64,
+    pub score_step: i64,
+    pub hiscore: i64,
+    pub hiscore_cont: u8,
+    pub clock: i32,
+    pub continues: u8,
+    pub spells: i32,
+    pub gauge_start: i16,
+    pub popups: Vec<Popup>,
+}
+
+// HUD popup requests (12 §5.5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Popup {
+    Bonus(i32),
+    Message(u8, i32),
+    SpellBonus(i32),
 }
 
 impl Default for Stats {
@@ -109,6 +126,15 @@ impl Default for Stats {
             rank_delta: 0,
             spell_bonus_add: 0,
             point_counter: 0,
+            score_disp: 0,
+            score_step: 0,
+            hiscore: 100000,
+            hiscore_cont: 0,
+            clock: 0,
+            continues: 0,
+            spells: 0,
+            gauge_start: 0,
+            popups: Vec::new(),
         }
     }
 }
@@ -227,6 +253,7 @@ fn overlap(a: [f32; 2], ah: [f32; 2], b: [f32; 2], bh: [f32; 2]) -> bool {
 pub struct GrazeEnv {
     pub boss: bool,
     pub spell: bool,
+    pub dialogue: bool,
 }
 
 pub struct Player {
@@ -276,6 +303,7 @@ pub struct Player {
     pub deaths: u32,
     pub bombs_started: u32,
     pub debug_move: bool,
+    pub debug_invuln: bool,
     pub world: Weak<RefCell<BulletManager>>,
     pub option_script: usize,
 }
@@ -329,6 +357,7 @@ impl Default for Player {
             deaths: 0,
             bombs_started: 0,
             debug_move: false,
+            debug_invuln: crate::env::var("TH08_INVULN").is_some_and(|v| v != "0"),
             world: Weak::new(),
             option_script: 0,
         }
@@ -467,7 +496,7 @@ impl Player {
     pub fn die(&mut self, rng: &mut Rng) {
         Stats::scramble(rng);
         self.hits += 1;
-        if self.state != 0 {
+        if self.state != 0 || self.debug_invuln {
             return;
         }
         Stats::checksum(rng);
