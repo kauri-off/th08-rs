@@ -14,6 +14,11 @@ pub const LIFE: u8 = 5;
 pub const STAR: u8 = 6;
 pub const TIME_ORB: u8 = 7;
 pub const CONVERTED: u8 = 8;
+// SPEC-GAP: popup colours are not given (normal white, max value yellow, PowerUp orange, time orb cyan).
+pub const POPUP_NORMAL: u32 = 0xFFFFFFFF;
+pub const POPUP_MAX: u32 = 0xFFFFFF40;
+pub const POPUP_POWER: u32 = 0xFFFFA040;
+pub const POPUP_TIME: u32 = 0xFF80FFFF;
 const DEAD: u16 = u16::MAX;
 const POWER_LEVELS: [f32; 6] = [8.0, 24.0, 48.0, 80.0, 128.0, 999.0];
 
@@ -167,6 +172,8 @@ impl ItemManager {
     fn collect(&mut self, idx: usize, anm: &mut AnmManager, p: &mut Player, spell: bool) -> Collected {
         let mut out = Collected::default();
         let (kind, y, max_flag) = (self.items[idx].kind, self.items[idx].pos[1], self.items[idx].max_flag);
+        let pos = self.items[idx].pos;
+        let popup = |v: i32, c: u32| crate::ascii::popup(pos, v, c);
         let line = p.sht.poc_line;
         let st = &mut p.stats;
         match kind {
@@ -183,6 +190,9 @@ impl ItemManager {
                     st.add_score(10);
                     if power_level(st.power) != level {
                         crate::sound::play(crate::sound::POWERUP);
+                        popup(-1, POPUP_POWER);
+                    } else {
+                        popup(10, POPUP_NORMAL);
                     }
                 }
                 if kind == POWER {
@@ -194,6 +204,7 @@ impl ItemManager {
                 // SPEC-GAP: the doubling threshold (0x406D10) is taken as "gauge at youkai max".
                 let v = point_value(max, y, line, max_flag, st.youkai_max(), 1);
                 self.items[idx].max_flag = v >= max;
+                popup(v, if v >= max { POPUP_MAX } else { POPUP_NORMAL });
                 st.add_score(v);
                 st.point_items += 1;
                 st.point_items2 += 1;
@@ -207,6 +218,7 @@ impl ItemManager {
             }
             CONVERTED => {
                 let v = point_value(st.max_point, y, line, max_flag, st.youkai_max(), 10);
+                popup(v, POPUP_NORMAL);
                 st.add_score(v);
             }
             BOMB => {
@@ -218,11 +230,13 @@ impl ItemManager {
             FULL_POWER => {
                 if st.power < 128.0 {
                     crate::sound::play(crate::sound::POWERUP);
+                    popup(-1, POPUP_POWER);
                     out.cancel = true;
                     self.convert_power_items(anm, idx);
                 }
                 st.power = 128.0;
                 Stats::checksum(&mut anm.rng);
+                popup(1000, POPUP_NORMAL);
                 st.add_score(1000);
             }
             LIFE => st.extend(&mut anm.rng),
@@ -231,6 +245,7 @@ impl ItemManager {
                 if v < 1 {
                     v = 10;
                 }
+                popup(v, POPUP_NORMAL);
                 st.add_score(v);
             }
             TIME_ORB => {
@@ -241,6 +256,7 @@ impl ItemManager {
                 } else {
                     10000
                 };
+                popup(v, POPUP_TIME);
                 st.add_score(v);
                 st.add_time(1, &mut anm.rng);
                 st.spell_bonus_add += 8000;

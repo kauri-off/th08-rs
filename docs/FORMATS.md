@@ -45,3 +45,18 @@
 - u32 count, u32 offset[count] (entries may share offsets), then instructions {u16 time, u8 op, u8 arg size, args}; an entry ends at op 0 (or halts at 10/11).
 - Strings: bytes XOR 0x77, terminated by a byte decoding to 0, padded to 4; Shift-JIS. Op 3 = i16 speaker, i16 line, str; ops 15/17 = u32 who + i32 sprites (< 0 keep).
 - Files: msgN{a,b,c,d} by team (solos use their team), 4A/4B: msg4ab/4ac/4ba/4bd, impossible combos → msg4dm; 6A = msg6*, 6B = msg7*, Extra = msg8*.
+
+## WAV (SE) — source: specs/opus/13_sfx_effects.md §1 (src/audio.rs)
+- `se_*.wav` in th08.dat: RIFF/WAVE, `fmt ` PCM (format 1), 8-bit unsigned or 16-bit signed, mono or stereo; `data` chunk; other chunks skipped.
+- SE table (src/sound.rs): 46 ids → 36 waves, volume in 1/100 dB (DirectSound attenuation, gain = 10^(dB/2000)); pan −1000..1000 = (x − 192)·1000/192.
+- Config volume curve: k = 1 − (1 − v/100)³, vol = trunc((table + 5000)·k) − 5000, v = 0 → −10000.
+
+## title01.anm (menu) — source: specs/opus/12_menus_hud.md §1–2 (src/menu.rs)
+- 142 scripts, VM i runs script i; a selected item shows its base sprite, an unselected one base + 1.
+- Option screen: labels VM 10–19; values lives 20–26, graphic 27/28, BGM 29–31, volume digits 32–35 (BGM) / 36–39 (SE), mode 40/41, slow 42/43.
+
+## ascii.anm popup glyphs — source: specs/opus/13_sfx_effects.md §4
+- Sprites 0–9 small 8×8 digits, 10 = "PowerUp" (48×8), 11–20 / 21–30 the fade variants of the digits.
+
+## etama.anm effect scripts — source: specs/opus/13_sfx_effects.md §2.6
+- Effect type → global etama script table (66 entries, src/effect.rs `SCRIPTS`); ring sprites 221–225 are 16×768 strips in the 128×128 etama3.png (v wraps 6×).

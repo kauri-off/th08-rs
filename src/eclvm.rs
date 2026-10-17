@@ -799,7 +799,31 @@ impl Exec<'_> {
                     e.angle = e.vel[1].atan2(e.vel[0]);
                 }
             }
-            5 => self.m.g.g_4e4b60 = 2,
+            1 => crate::effect::screen(3, 60, 1, 0xFFFFFFFFu32 as i32, 0, 0x15),
+            17 => crate::effect::screen(3, 180, 1, 0xFFFFFFFFu32 as i32, 0, 0x15),
+            10 => {
+                crate::effect::screen(3, 30, 5, 0x40FFFFFF, 0, 0x15);
+                crate::effect::screen(7, 4, 120, 190, 60, 0x15);
+            }
+            15 => crate::effect::screen(7, 16, 20, 20, 20, 0x15),
+            // SPEC-GAP: the stage callback 0x4235A0 set by these natives is not specified.
+            3 | 6 | 20 => {
+                let (kind, extra) = match n {
+                    3 => (0x38, 0x61),
+                    6 => (0x3A, 0x65),
+                    _ => (0x41, 99),
+                };
+                let pos = self.e.final_pos;
+                crate::effect::spawn_fixed(self.anm, kind, pos, 9, 0xFFFFFFFF);
+                let i = crate::effect::spawn_fixed(self.anm, kind, pos, 10, 0xFFFFFFFF);
+                let anm = &mut *self.anm;
+                crate::effect::get(i, |e| anm.set_script(&mut e.vm, crate::effect::SCRIPT_SLOT, extra));
+            }
+            5 => {
+                crate::effect::free(crate::effect::FIXED_BASE + 9);
+                crate::effect::free(crate::effect::FIXED_BASE + 10);
+                self.m.g.g_4e4b60 = 2;
+            }
             8 => self.familiar_ring(t),
             18 if arg != 0 => self.anm.speed = 1.0 / arg as f32,
             19 => t.ctx.set_int(V_INT0, self.m.g.spell.as_ref().map_or(0, |s| s.id)),

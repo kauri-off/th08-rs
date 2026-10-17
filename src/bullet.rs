@@ -1038,6 +1038,7 @@ impl BulletManager {
             } else {
                 self.items.spawn(anm, p, pos, CANCEL_ITEM, 1);
             }
+            crate::ascii::popup(pos, v, if v >= max_value { crate::item::POPUP_MAX } else { crate::item::POPUP_NORMAL });
             sum += v;
             v = (v + 20).min(max_value);
         }

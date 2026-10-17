@@ -555,6 +555,12 @@ impl Task<Ctx> for GameManager {
             e.g.player_char = g.shot as i32;
         }
         g.frame_counter += 1;
+        if let Some(v) = crate::env::var("TH08_SCREEN_FX") {
+            let n: Vec<i64> = v.split([':', ',']).filter_map(|s| s.parse().ok()).collect();
+            if n.len() == 6 && n[0] == g.frame_counter as i64 {
+                crate::effect::screen(n[1] as u8, n[2] as i32, n[3] as i32, n[4] as i32, n[5] as i32, 0x15);
+            }
+        }
         Ret::Next
     }
 

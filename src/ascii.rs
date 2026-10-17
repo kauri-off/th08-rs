@@ -69,11 +69,12 @@ impl Queue {
 
     fn draw(&mut self, ctx_anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, high: bool) {
         gfx.set_viewport(FULLSCREEN);
+        let o = ctx_anm.screen_offset;
         for t in self.items.iter().filter(|t| t.high == high) {
-            let (mut x, mut y) = (t.x, t.y);
+            let (mut x, mut y) = (t.x + o[0], t.y + o[1]);
             for c in t.s.bytes() {
                 if c == b'\n' {
-                    (x, y) = (t.x, y + 16.0);
+                    (x, y) = (t.x + o[0], y + 16.0);
                     continue;
                 }
                 if let Some(sp) = ctx_anm.sprite(ANM_SLOT, c.wrapping_sub(1) as usize).filter(|_| c > b' ') {
@@ -84,6 +85,112 @@ impl Queue {
         }
         self.items.retain(|t| t.high != high);
     }
+}
+
+pub const POPUP_SLOTS: usize = 720;
+const POPUP_LIFE: f32 = 60.0;
+
+// Small score popup (13 §4): digits least significant first, glyph 10 = the "PowerUp" sign.
+#[derive(Clone, Default, Debug)]
+pub struct Popup {
+    pub digits: Vec<u8>,
+    pub pos: [f32; 2],
+    pub colour: [u8; 3],
+    pub age: f32,
+}
+
+#[derive(Default)]
+pub struct Popups {
+    pub slots: Vec<Option<Popup>>,
+    next: usize,
+    special: usize,
+}
+
+thread_local! {
+    static POPUPS: std::cell::RefCell<Popups> = std::cell::RefCell::new(Popups { slots: vec![None; POPUP_SLOTS + 3], next: 0, special: 0 });
+}
+
+fn digits(value: i32) -> Vec<u8> {
+    if value < 0 {
+        return vec![10];
+    }
+    let mut v = value as u32;
+    let mut d = Vec::new();
+    loop {
+        d.push((v % 10) as u8);
+        v /= 10;
+        if v == 0 || d.len() == 12 {
+            return d;
+        }
+    }
+}
+
+fn argb3(c: u32) -> [u8; 3] {
+    [(c >> 16) as u8, (c >> 8) as u8, c as u8]
+}
+
+// Popup_Number 0x403200: slots 0–719 round robin; pos in playfield coordinates; a negative value shows "PowerUp".
+pub fn popup(pos: [f32; 3], value: i32, colour: u32) {
+    POPUPS.with_borrow_mut(|p| {
+        let i = p.next;
+        p.next = (p.next + 1) % POPUP_SLOTS;
+        p.slots[i] = Some(Popup { digits: digits(value), pos: [pos[0] + 32.0, pos[1] + 16.0], colour: argb3(colour), age: 0.0 });
+    });
+}
+
+// 0x403330: the three extra slots 720–722, round robin.
+pub fn popup_special(pos: [f32; 3], value: i32, colour: u32) {
+    POPUPS.with_borrow_mut(|p| {
+        let i = POPUP_SLOTS + p.special;
+        p.special = (p.special + 1) % 3;
+        p.slots[i] = Some(Popup { digits: digits(value), pos: [pos[0] + 32.0, pos[1] + 16.0], colour: argb3(colour), age: 0.0 });
+    });
+}
+
+pub fn clear_popups() {
+    POPUPS.with_borrow_mut(|p| p.slots.iter_mut().for_each(|s| *s = None));
+}
+
+fn popups_calc(gs: f32) {
+    POPUPS.with_borrow_mut(|p| {
+        for s in p.slots.iter_mut() {
+            if let Some(q) = s {
+                q.pos[1] -= 0.5 * gs;
+                q.age += gs;
+                if q.age >= POPUP_LIFE {
+                    *s = None;
+                }
+            }
+        }
+    });
+}
+
+fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
+    gfx.set_viewport(FULLSCREEN);
+    let pl = crate::effect::with(|e| e.player);
+    let o = anm.screen_offset;
+    POPUPS.with_borrow(|p| {
+        for q in p.slots.iter().flatten() {
+            let (dx, dy) = (q.pos[0] - 32.0 - pl[0], q.pos[1] - 16.0 - pl[1]);
+            let d = dx * dx + dy * dy;
+            let alpha = if d <= 1024.0 {
+                0x50
+            } else if d <= 4096.0 {
+                0x50 + ((d - 1024.0) * 128.0 / 3072.0) as i32
+            } else {
+                0xD0
+            };
+            // SPEC-GAP: the fade sprites (+11 / +21) exist only for digits; the PowerUp sign keeps sprite 10.
+            let shift = if q.digits == [10] || q.age < 52.0 { 0 } else if q.age < 56.0 { 11 } else { 21 };
+            let n = q.digits.len() as f32;
+            let colour = [q.colour[0], q.colour[1], q.colour[2], alpha as u8];
+            for (k, &g) in q.digits.iter().rev().enumerate() {
+                let Some(sp) = anm.sprite(ANM_SLOT, (g + shift) as usize) else { continue };
+                let cx = q.pos[0] - 4.0 * n + 8.0 * k as f32 + 4.0 + o[0];
+                gfx.sprite(sp.tex, Blend::Alpha, Rect::new(cx - sp.w / 2.0, q.pos[1] - sp.h / 2.0 + o[1], sp.w, sp.h), sp.uv, colour);
+            }
+        }
+    });
 }
 
 pub fn text_width(s: &str, advance: f32, scale: f32) -> f32 {
@@ -403,6 +510,9 @@ impl Task<Ctx> for AsciiManager {
         } else {
             self.cont.open = false;
             self.pause.state = 0;
+            if !crate::effect::with(|e| e.frozen) {
+                popups_calc(ctx.anm.speed);
+            }
         }
         Ret::Next
     }
@@ -427,9 +537,33 @@ impl Task<Ctx> for AsciiManager {
                 ctx.anm.draw(&mut ctx.gfx, vm);
             }
         }
+        if !high {
+            popups_draw(&ctx.anm, &mut ctx.gfx);
+        }
         let mut q = std::mem::take(&mut ctx.ascii);
         q.draw(&ctx.anm, &mut ctx.gfx, high);
         ctx.ascii = q;
         Ret::Next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn popup_digits_and_life() {
+        assert_eq!(digits(1230), vec![0, 3, 2, 1]);
+        assert_eq!(digits(0), vec![0]);
+        assert_eq!(digits(-1), vec![10]);
+        clear_popups();
+        popup([100.0, 200.0, 0.0], 500, 0xFFFFFFFF);
+        for _ in 0..59 {
+            popups_calc(1.0);
+        }
+        let y = POPUPS.with_borrow(|p| p.slots[0].as_ref().map(|q| q.pos[1]));
+        assert_eq!(y, Some(216.0 - 29.5));
+        popups_calc(1.0);
+        assert!(POPUPS.with_borrow(|p| p.slots[0].is_none()));
     }
 }

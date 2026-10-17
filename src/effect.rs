@@ -611,6 +611,7 @@ impl Task<Ctx> for EffectManager {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             clear();
+            crate::ascii::clear_popups();
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, BG_SLOT, bg_file(ctx.game.stage))?;
         }
         Ok(())
@@ -619,6 +620,7 @@ impl Task<Ctx> for EffectManager {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
             clear();
+            crate::ascii::clear_popups();
             ctx.anm.unload(&mut ctx.gfx, BG_SLOT);
         }
     }

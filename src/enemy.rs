@@ -579,6 +579,7 @@ impl EnemyManager {
                 p.damage_against(anm, Some(&mut b.items), pos, [bx[0], bx[1]], &mut acc, &mut by_bomb)
             };
             self.enemies[idx].orb_acc = acc;
+            // SPEC-GAP: 13 §2.7 gives no rate, colour or enemy filter for the hit spark; one per frame with d > 0.
             if d > 0 && !by_bomb {
                 crate::effect::spawn(anm, 3, pos, 1, 0xFFFFFFFF);
             }
@@ -840,7 +841,9 @@ impl EnemyManager {
                 let p = e.final_pos;
                 // SPEC-GAP: item mode of the cancel-bonus star is not given; 1 (attracted) like bullet cancels.
                 self.spawn_item(anm, p, 6, 1);
-                self.add_score((2000 + 30 * n).min(8000));
+                let v = (2000 + 30 * n).min(8000);
+                crate::ascii::popup(p, v, if v >= 8000 { crate::item::POPUP_MAX } else { crate::item::POPUP_NORMAL });
+                self.add_score(v);
             }
             self.enemies[j].life = 0;
             self.jump_to_death_sub(j);
@@ -1130,6 +1133,10 @@ impl EnemyManager {
                     };
                     self.add_score(sum);
                     self.kill_all(anm, Some(idx));
+                } else {
+                    let e = &self.enemies[idx];
+                    let (total, remaining) = (e.timeout.max(0), (e.timeout - e.boss_timer.cur).max(0));
+                    self.finish_spell(total, remaining, anm);
                 }
             }
             self.drop_items(idx, anm);
