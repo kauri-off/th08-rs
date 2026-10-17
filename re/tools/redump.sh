@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # redump.sh: ApplySymbols(symbols.csv) then re-export all_decomp.c, callgraph.tsv, globals_xref.tsv
 set -e
-D=/home/anon/Projects/th_08/specs/opus
+R="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+D=$R
 X=$D/extracted
 "$D/tools/gh.sh" ApplySymbolsOpus.java "$D/symbols.csv" | tail -5
 "$D/tools/gh.sh" DumpAll2.java "$X"

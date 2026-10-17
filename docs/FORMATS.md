@@ -1,4 +1,4 @@
-# Formats as implemented (source → specs/<agent>/...)
+# Formats as implemented (source → specs/...)
 
 ## th08.dat (PBGZ) — source: deepseek NOTES.md; verified by byte-identical extraction
 - "PBGZ", then 12 bytes ciphered (key 0x1b, step 0x37, block 12, limit 0x400) → 3 u32 minus 123456 / 345678 / 567891
@@ -18,45 +18,45 @@
 - Chunk header 0x40: +0 n_sprites, +4 n_scripts, +0x1C name offset, +0x28 version (=3), +0x30 THTX offset (0 = none),
   +0x34 low byte 1 = texture embedded, +0x38 next chunk offset (relative, 0 = last).
 - +0x40: n_sprites u32 offsets → {u32 id, f32 x, y, w, h} (pixels in texture). Then n_scripts × {i32 id, u32 offset}. Then name.
-- Script data: {i16 op, u16 size incl. header, i16 time, u16 var mask, 4-byte args}, ends with op −1. Semantics: specs/opus/05_anm_vm.md (src/anmvm.rs).
+- Script data: {i16 op, u16 size incl. header, i16 time, u16 var mask, 4-byte args}, ends with op −1. Semantics: specs/05_anm_vm.md (src/anmvm.rs).
   Data uses 57 distinct opcodes; only draw mode 2 is ever set by scripts (op 83), owners pick the rest.
 - THTX: "THTX", u16 0, u16 fmt, u16 w, u16 h, u32 size, raw D3D texels. fmt 1 BGRA8888, 2 ARGB1555, 3 RGB565, 4 BGR888, 5 ARGB4444.
 
-## STD — source: specs/opus/06_std.md (src/stdfile.rs)
+## STD — source: specs/06_std.md (src/stdfile.rs)
 - Header: i16 objects, i16 quads, u32 instance offset, u32 script offset, 5×0x80 unused text, 4×0x80 BGM names at 0x290 (" " = none), u32 object offsets at 0x490.
 - Object: i16 id, u8 layer, u8 flags, f32[3] bbox origin, f32[3] bbox size, quad records {i16 type, i16 size} until type < 0.
   Type 0 (0x1C): script, vm, pos[3], w, h (0 = sprite size, negative = mirrored). Type 1 (0x24): script, vm, A[3], B[3], width.
   Quad positions are not relative to the bbox origin (draw adds only instance pos − origin).
 - Instances: 16 bytes {i16 object (< 0 ends), i16 unused, f32[3] pos}. Script: 20 bytes {i32 time (−1 ends), i16 op, i16 12, 3×4 args}.
 
-## ECL — source: specs/opus/07_ecl.md (src/ecl.rs)
+## ECL — source: specs/07_ecl.md (src/ecl.rs)
 - Header: u32 0x800, i16 subs, i16 timelines run, u32[16] timeline offsets (ntl+1 non-zero; the last is never run), u32[subs] sub offsets at 0x48.
 - Sub instruction: i32 time, i16 op (−1 ends), i16 size, u8 0, u8 rank mask, u16 var mask, 4-byte args. Bullet ops 96–104 are 44 bytes (i16 type/colour, counts, speeds, angles, flags at +0x28), lasers 114/115 64 bytes, spell card 122 244 bytes (strings XOR AA/BB/DD/EE).
 - Timeline instruction: i32 time (< 0 ends), i16 op, u8 size, u8 rank mask, args. Data uses 147 distinct sub ops.
 
-## SHT — source: specs/opus/09_player.md §2.1 (src/sht.rs)
+## SHT — source: specs/09_player.md §2.1 (src/sht.rs)
 - Header 0x38: u16 0, u16 levels, f32 bombs per life, i32 deathbomb base, f32 hitbox, graze box, attraction speed, collect box, POC line,
   i32 unknown, f32 unfocused/focused speed, unfocused/focused diagonal, item fall multiplier; then levels × {u32 file offset, i32 power threshold}.
 - Entry 0x38 (list ends with i32 −1): i16 interval, phase; f32 offset x/y, hitbox w/h, angle, speed; i16 damage, side (>0 youkai, <0 human),
   origin (0 player, k option k−1), type (3 pierce, 4/5 laser, 6 no hit anim), script−10, sound; i32 init/update/draw/hit function indexes.
 - All 8 files: 6 levels (thresholds 8/24/48/80/128/999) except ply02as (8; levels 6/7 = Remilia bomb / last spell).
 
-## MSG — source: specs/opus/10_msg.md (src/msg.rs)
+## MSG — source: specs/10_msg.md (src/msg.rs)
 - u32 count, u32 offset[count] (entries may share offsets), then instructions {u16 time, u8 op, u8 arg size, args}; an entry ends at op 0 (or halts at 10/11).
 - Strings: bytes XOR 0x77, terminated by a byte decoding to 0, padded to 4; Shift-JIS. Op 3 = i16 speaker, i16 line, str; ops 15/17 = u32 who + i32 sprites (< 0 keep).
 - Files: msgN{a,b,c,d} by team (solos use their team), 4A/4B: msg4ab/4ac/4ba/4bd, impossible combos → msg4dm; 6A = msg6*, 6B = msg7*, Extra = msg8*.
 
-## WAV (SE) — source: specs/opus/13_sfx_effects.md §1 (src/audio.rs)
+## WAV (SE) — source: specs/13_sfx_effects.md §1 (src/audio.rs)
 - `se_*.wav` in th08.dat: RIFF/WAVE, `fmt ` PCM (format 1), 8-bit unsigned or 16-bit signed, mono or stereo; `data` chunk; other chunks skipped.
 - SE table (src/sound.rs): 46 ids → 36 waves, volume in 1/100 dB (DirectSound attenuation, gain = 10^(dB/2000)); pan −1000..1000 = (x − 192)·1000/192.
 - Config volume curve: k = 1 − (1 − v/100)³, vol = trunc((table + 5000)·k) − 5000, v = 0 → −10000.
 
-## title01.anm (menu) — source: specs/opus/12_menus_hud.md §1–2 (src/menu.rs)
+## title01.anm (menu) — source: specs/12_menus_hud.md §1–2 (src/menu.rs)
 - 142 scripts, VM i runs script i; a selected item shows its base sprite, an unselected one base + 1.
 - Option screen: labels VM 10–19; values lives 20–26, graphic 27/28, BGM 29–31, volume digits 32–35 (BGM) / 36–39 (SE), mode 40/41, slow 42/43.
 
-## ascii.anm popup glyphs — source: specs/opus/13_sfx_effects.md §4
+## ascii.anm popup glyphs — source: specs/13_sfx_effects.md §4
 - Sprites 0–9 small 8×8 digits, 10 = "PowerUp" (48×8), 11–20 / 21–30 the fade variants of the digits.
 
-## etama.anm effect scripts — source: specs/opus/13_sfx_effects.md §2.6
+## etama.anm effect scripts — source: specs/13_sfx_effects.md §2.6
 - Effect type → global etama script table (66 entries, src/effect.rs `SCRIPTS`); ring sprites 221–225 are 16×768 strips in the 128×128 etama3.png (v wraps 6×).

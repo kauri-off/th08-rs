@@ -2,7 +2,7 @@
 
 ## Done
 - `src/archive.rs` — PBGZ th08.dat reader (header/table cipher, LZSS, edz payload wrapper). All 317 files byte-identical to DeepSeek's extraction. `cargo run --release --bin datdump <th08.dat> <out>`.
-- `src/audio.rs` — thbgm.fmt parse + cpal stream, linear resampling to device rate, intro then loop to `+0x18` (loop start/end VERIFIED by specs/opus/02_bgm.md). Device pick: pipewire → pulse → default (ALSA default is broken on this machine).
+- `src/audio.rs` — thbgm.fmt parse + cpal stream, linear resampling to device rate, intro then loop to `+0x18` (loop start/end VERIFIED by specs/02_bgm.md). Device pick: pipewire → pulse → default (ALSA default is broken on this machine).
 - `src/app.rs` — winit app, original frame timing (1/60 s deadline, late frames dropped), input bitmask (`src/input.rs`), plays th08_01.
 - `src/gfx.rs` — wgpu sprite batcher; `capture()` for screenshots. `web/` — index.html + build.sh (wasm-bindgen --target web).
 - Debug: `TH08_SHOT=<frame>` saves /tmp/th08_shot.png (offscreen 640x480 render) and exits. Use `RUST_LOG=warn,wgpu_hal=off` (a broken Vulkan layer spams errors).

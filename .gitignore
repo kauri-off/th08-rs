@@ -2,7 +2,7 @@
 /web/dist/
 /.playwright-mcp/
 __pycache__/
-specs/**/ghidra/
-specs/**/extracted/
-specs/**/decoded/
-specs/**/work/
+re/ghidra/
+re/extracted/
+re/decoded/
+re/work/

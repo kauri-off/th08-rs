@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fnc.sh <addr>... : print function(s) with referenced _DAT_ constants annotated (f32 / i32)
-D=/home/anon/Projects/th_08/specs/opus
+R="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+D=$R
 for a in "$@"; do
   "$D/tools/fn.sh" "$a" > /tmp/fnc_$$.c
   cat /tmp/fnc_$$.c
