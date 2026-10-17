@@ -230,6 +230,7 @@ pub struct Stage {
     pub spell_first: usize,
     spell_vms: Vec<AnmVm>,
     pub spell_mask: bool,
+    tinted: bool,
     sparkles: RefCell<(usize, [Vec3; 32])>,
     sparkle_on: bool,
 }
@@ -273,6 +274,7 @@ impl Stage {
             spell_first: 0,
             spell_vms: Vec::new(),
             spell_mask: false,
+            tinted: false,
             sparkles: RefCell::new((0, [[0.0; 3]; 32])),
             sparkle_on: false,
             fast_forward: 0,
@@ -820,6 +822,10 @@ impl Task<Ctx> for Stage {
             }
             gfx.set_viewport(PLAYFIELD);
             anm.reset_render_state();
+            // SPEC-GAP: the bomb tint (stage +0x646B request) is applied here and switched off after Stage_DrawHigh.
+            if let Some(c) = anm.stage_tint.take() {
+                (anm.tint, anm.tint_on, self.tinted) = (c, true, true);
+            }
             let hide = self.spell_state >= 2;
             for vm in [&mut self.vm_a, &mut self.vm_b] {
                 if vm.sprite_index > 0 && !hide {
@@ -857,6 +863,9 @@ impl Task<Ctx> for Stage {
                 self.draw_spell_mask(anm, gfx);
             }
             self.sparkle_on = false;
+            if std::mem::take(&mut self.tinted) {
+                (anm.tint, anm.tint_on) = (0x8080_8080, false);
+            }
             anm.stage_camera = None;
             gfx.set_viewport(PLAYFIELD);
         }

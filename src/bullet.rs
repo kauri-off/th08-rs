@@ -1105,6 +1105,7 @@ impl BulletManager {
 
     // BulletMgr_Calc (08 §1).
     pub fn step(&mut self, anm: &mut AnmManager) {
+        self.player.borrow_mut().take_queued_areas();
         if self.frozen || self.player.borrow().freeze_bullets {
             return;
         }

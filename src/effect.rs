@@ -23,7 +23,7 @@ pub const FIXED_BASE: usize = RING_POOL + HIGH_POOL;
 pub const FIX_SPELL_INDEX: usize = FIXED_BASE + FIX_SPELL;
 pub const FIX_SPELL: usize = 1;
 pub const FIX_AURA: usize = 2;
-pub const FIX_DEATHBOMB: usize = 3;
+pub const FIX_DEATH_BURST: usize = 3;
 pub const FIX_GAUGE: usize = 8;
 pub const FIX_DEATH: usize = 11;
 
@@ -299,6 +299,17 @@ impl Effects {
             e.ring.segments = if kind == 41 { 48 } else { 32 };
             e.above = matches!(kind, 56 | 58 | 65);
         }
+        let r = &mut e.ring;
+        match kind {
+            // Boundary inits 0x411720 / 0x411A80: ring with angle/radius/width = param, then 44 / 54 segments.
+            36 | 37 => (r.start, r.radius, r.segments, r.width) = (param[0], param[1], if kind == 36 { 44 } else { 54 }, if kind == 36 { 4.0 } else { 6.0 }),
+            42 => (r.segments, r.waves, r.width) = (64, 5.0, 8.0),
+            43 | 44 => (r.segments, r.width, r.tilt) = (48, 8.0, if kind == 43 { PI / 4.0 } else { -PI / 4.0 }),
+            45 => (r.segments, r.width) = (8, 8.0),
+            46 => (r.segments, r.width) = (12, 32.0),
+            48 => (r.segments, r.width, r.radius, r.amp, r.tilt) = (48, 3.0, 192.0, 0.0001, PI / 2.0),
+            _ => {}
+        }
         true
     }
 
@@ -474,6 +485,12 @@ impl Effects {
                 e.vm.flags |= anmvm::F_SCALE_DIRTY;
             }
             _ => {}
+        }
+        if bomb_ring(e.kind) {
+            let slot = i.wrapping_sub(FIXED_BASE);
+            let (screen, keep) = bomb_ring_update(e, slot);
+            self.screen.extend(screen);
+            return keep;
         }
         if is_ring(e.kind) {
             let r = &mut e.ring;
@@ -670,6 +687,99 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
     }
 }
 
+fn bomb_ring(kind: u8) -> bool {
+    matches!(kind, 36 | 37 | 42..=46 | 48)
+}
+
+// Bomb-owned ring updates (14 §2): Yukari 0x4114E0 / 0x4117B0, Alice 0x40E040–0x40E2D0, Sakuya LS 0x410BB0,
+// Youmu 0x413070. Returns queued screen effects and whether the effect stays.
+fn bomb_ring_update(e: &mut Effect, slot: usize) -> (Vec<ScreenEffect>, bool) {
+    let t = e.age.cur;
+    let tf = t as f32;
+    let at = |n: i32| t == n && e.age.prev != n;
+    let mut fx = Vec::new();
+    let r = &mut e.ring;
+    match e.kind {
+        36 => {
+            if t < 40 {
+                let k = 1.0 - tf / 40.0;
+                r.width = 88.0 - 2.0 * tf;
+                r.radius = 192.0 - 384.0 * k * k;
+                r.segments -= 1;
+            } else if at(40) {
+                fx.push(screen_fx(3, 8, 1, 0x8FF08080u32 as i32, 0));
+                boundary_sides(e.centre, r, 70, 4, 100);
+            }
+        }
+        37 => {
+            r.start += if slot % 2 == 0 { -PI / 80.0 } else { PI / 80.0 };
+            let n = slot as f32 - 4.0;
+            if t < 50 {
+                let k = 1.0 - tf / 50.0;
+                r.width = 88.0 - 80.0 * tf / 50.0;
+                r.radius = n * 32.0 + 192.0 - (n * 32.0 + 384.0) * k * k;
+                r.segments -= 1;
+            } else if at(50) {
+                fx.push(screen_fx(1, 16, 8, 0, 0));
+                fx.push(screen_fx(3, 8, 1, 0x8F6060F0u32 as i32, 0));
+                boundary_sides(e.centre, r, 100, 2, 150);
+            }
+        }
+        42..=45 => {
+            let k = 1.0 - (1.0 - tf / 40.0).powi(2);
+            match e.kind {
+                42 => {
+                    r.radius = 256.0 * k;
+                    if t >= 40 {
+                        r.amp = 64.0 * k;
+                        r.width += 2.0;
+                    }
+                }
+                43 | 44 => {
+                    (r.radius, r.amp) = (256.0 * k, 128.0 * k);
+                    if t >= 40 {
+                        r.width += 1.5;
+                    }
+                }
+                _ => r.radius = 192.0 * k,
+            }
+            if t >= 80 {
+                return (fx, false);
+            }
+        }
+        46 => r.radius += 8.0,
+        _ => {
+            if t >= 30 {
+                let f = ((tf - 30.0) / 30.0).powi(4);
+                (r.amp, r.width) = (192.0 * f, 80.0 * f + 3.0);
+            }
+            if t >= 60 {
+                return (fx, false);
+            }
+        }
+    }
+    (fx, true)
+}
+
+// The four side rectangles of a finished boundary (D rect 8s × 4w, C rect 4s × 4w, rotated a + π/2).
+fn boundary_sides(centre: [f32; 3], r: &Ring, d_life: i32, period: i32, c_life: i32) {
+    let s = r.radius * 0.70711;
+    let mut a = r.start + PI / 4.0;
+    for _ in 0..4 {
+        let c = [centre[0] + a.cos() * s, centre[1] + a.sin() * s];
+        let rot = a + PI / 2.0;
+        let d = crate::bomb::Area { pos: c, size: [8.0 * s, 4.0 * r.width], rot, damage: 60, life: d_life, period, item: 6, active: true, ..Default::default() };
+        crate::bomb::queue_area(true, d);
+        let k = crate::bomb::Area { pos: c, size: [4.0 * s, 4.0 * r.width], rot, item: 6, life: c_life, period: 1, active: true, ..Default::default() };
+        crate::bomb::queue_area(false, k);
+        a += PI / 2.0;
+    }
+}
+
+fn screen_fx(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32) -> ScreenEffect {
+    ScreenEffect { kind, p: [p0, p1, p2, p3], prio: 0x15, alpha: 0.0, release: false, timer: Timer::default() }
+}
+
 pub fn spawn(anm: &mut AnmManager, kind: u8, pos: [f32; 3], count: i32, colour: u32) -> usize {
     with(|e| e.spawn_at(anm, kind, pos, [0.0; 3], count, colour, true))
 }
@@ -770,7 +880,7 @@ pub const SCREEN_CALC_PRIO: u16 = 3;
 
 // Queues a screen effect; registered after the calc pass (calc prio 3, draw at `prio`).
 pub fn screen(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
-    with(|e| e.screen.push(ScreenEffect { kind, p: [p0, p1, p2, p3], prio, alpha: 0.0, release: false, timer: Timer::default() }));
+    with(|e| e.screen.push(ScreenEffect { prio, ..screen_fx(kind, p0, p1, p2, p3) }));
 }
 
 pub fn register_pending(ctx: &mut Ctx) {

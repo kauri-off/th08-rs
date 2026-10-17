@@ -284,7 +284,7 @@ pub struct Player {
     pub damage_areas: Vec<Area>,
     pub cancel_areas: Vec<Area>,
     pub bullets: Vec<PBullet>,
-    pub laser_slots: [Option<usize>; 4],
+    pub laser_slots: [crate::pshot::LaserSlot; crate::pshot::LASER_SLOTS],
     pub deathbomb: i32,
     pub bomb_cooldown: i32,
     pub respawn_clear: i32,
@@ -317,7 +317,6 @@ pub struct Player {
     pub debug_move: bool,
     pub debug_invuln: bool,
     pub world: Weak<RefCell<BulletManager>>,
-    pub option_script: usize,
 }
 
 impl Default for Player {
@@ -342,7 +341,7 @@ impl Default for Player {
             damage_areas: vec![Area::default(); crate::bomb::AREAS],
             cancel_areas: vec![Area::default(); crate::bomb::AREAS],
             bullets: vec![PBullet::default(); crate::pshot::MAX_BULLETS],
-            laser_slots: [None; 4],
+            laser_slots: Default::default(),
             deathbomb: 0,
             bomb_cooldown: 0,
             respawn_clear: 0,
@@ -375,7 +374,6 @@ impl Default for Player {
             debug_move: false,
             debug_invuln: crate::env::var("TH08_INVULN").is_some_and(|v| v != "0"),
             world: Weak::new(),
-            option_script: 0,
         }
     }
 }
@@ -421,7 +419,6 @@ impl Player {
         self.sht_youkai = youkai;
         self.stats.limits = GaugeLimits::for_shot(shot);
         self.orb_step = if self.solo_human() { 27 } else { 40 };
-        self.option_script = crate::pshot::OPTION_SCRIPT[crate::sht::team(shot) as usize];
         let script = if self.solo_youkai() { 5 } else { 0 };
         anm.set_script(&mut self.vm, ANM_SLOT, script);
         self.state = 1;
@@ -539,7 +536,10 @@ impl Player {
             }
             n
         };
-        crate::effect::death_ring(rng, self.pos, n);
+        // Ring 59 only with a bomb in stock (and outside the dissolve mode, not in the port yet).
+        if st.bombs >= 1.0 {
+            crate::effect::death_ring(rng, self.pos, n);
+        }
         if self.env.spell {
             self.freeze_bullets = true;
         }
@@ -619,7 +619,7 @@ impl Player {
         true
     }
 
-    fn set_script(&mut self, anm: &mut AnmManager, s: usize) {
+    pub(crate) fn set_script(&mut self, anm: &mut AnmManager, s: usize) {
         let pos = self.vm.pos;
         anm.set_script(&mut self.vm, ANM_SLOT, s);
         self.vm.pos = pos;
@@ -711,7 +711,7 @@ impl Player {
         self.last_disp = [vx * gs, vy * gs];
         self.pos[0] = (self.pos[0] + vx * gs).clamp(CLAMP[0], CLAMP[2]);
         self.pos[1] = (self.pos[1] + vy * gs).clamp(CLAMP[1], CLAMP[3]);
-        self.update_options(anm);
+        self.update_options(anm, inp.down(input::SHOT));
         if inp.down(input::SHOT) && self.shot_timer.cur < 0 && !self.env.dialogue {
             self.shot_timer.set(0);
         }
@@ -808,8 +808,9 @@ impl Player {
         self.deaths += 1;
         log::info!("player death at frame {}", self.frames);
         crate::sound::play_at(crate::sound::TAN00_LOUD, self.pos[0]);
+        crate::effect::free(crate::effect::FIXED_BASE + crate::effect::FIX_DEATH);
         crate::effect::spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
-        crate::effect::spawn_fixed(anm, 12, self.pos, crate::effect::FIX_DEATHBOMB, 0xFFFFFFFF);
+        crate::effect::spawn_fixed(anm, 12, self.pos, crate::effect::FIX_DEATH_BURST, 0xFF4040FF);
         self.freeze_bullets = false;
         self.last_spell = 0;
         self.state_timer.set(0);
@@ -889,6 +890,7 @@ impl Player {
     // Player_Calc (09 §1); `items` is the item manager when the bullet manager exists.
     pub fn frame(&mut self, anm: &mut AnmManager, inp: &input::Input, mut items: Option<&mut ItemManager>) {
         let gs = anm.speed;
+        self.take_queued_areas();
         self.update_areas();
         self.update_bomb(anm, inp, &mut items);
         match self.state {
@@ -953,8 +955,11 @@ impl Player {
         if self.vm.script.is_none() {
             return;
         }
+        if self.game_over {
+            return;
+        }
         self.vm.pos = [self.pos[0] + 32.0, self.pos[1] + 16.0, 0.0];
-        anm.draw_mode(gfx, &mut self.vm, 0);
+        anm.draw_mode_z(gfx, &mut self.vm, 0, 0.1);
     }
 }
 
@@ -982,16 +987,17 @@ impl Task<Ctx> for Player {
         Ret::Next
     }
 
-    // Draw 9: player bullets, options, sprite; draw 10: bomb visuals and the focused hitbox.
+    // Draw 9 (0x44D530): flying bullets, bomb, sprite, options; draw 10 (0x44D630): bullets in their hit animation.
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         gfx.set_viewport(PLAYFIELD);
         if tag == 0 {
-            self.draw_bullets(anm, gfx);
-            self.draw_options(anm, gfx);
-            self.draw_sprite(anm, gfx);
-        } else {
+            self.draw_bullets(anm, gfx, 1);
             self.draw_bomb(anm, gfx);
+            self.draw_sprite(anm, gfx);
+            self.draw_options(anm, gfx);
+        } else {
+            self.draw_bullets(anm, gfx, 2);
         }
         Ret::Next
     }
@@ -1095,6 +1101,29 @@ mod tests {
             p.step(&mut anm, &input(0));
         }
         assert_eq!(p.state, 0);
+    }
+
+    #[test]
+    fn death_ring_lifecycle() {
+        let ring = crate::effect::FIXED_BASE + crate::effect::FIX_DEATH;
+        let active = || crate::effect::peek(ring, |e| e.active);
+        crate::effect::clear();
+        let (mut p, mut anm) = ready();
+        p.stats.bombs = 1.0;
+        let mut rng = Rng::default();
+        p.die(&mut rng);
+        let n = p.deathbomb;
+        for _ in 0..n - 1 {
+            p.step(&mut anm, &input(0));
+            assert!(active());
+        }
+        p.step(&mut anm, &input(0));
+        assert!(!active() && p.deaths == 1);
+        crate::effect::clear();
+        let (mut p, _) = ready();
+        p.stats.bombs = 0.0;
+        p.die(&mut rng);
+        assert!(!active());
     }
 
     #[test]

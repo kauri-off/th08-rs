@@ -490,6 +490,35 @@ impl AnmVm {
         self.start_pos(dur, mode, end);
     }
 
+    // Bomb helpers 0x40EC30 / 0x40EDA0 / 0x40ED50 / 0x40ECA0 (14 §1.4): explicit start and end values.
+    pub fn interp_pos_from(&mut self, dur: i32, mode: i32, start: [f32; 3], end: [f32; 3]) {
+        self.pos_start = start;
+        self.pos_end = end;
+        self.start_slot(SLOT_POS, dur, mode);
+    }
+
+    pub fn interp_scale_from(&mut self, dur: i32, mode: i32, start: [f32; 2], end: [f32; 2]) {
+        self.scale_start = start;
+        self.scale_end = end;
+        self.start_slot(SLOT_SCALE, dur, mode);
+        self.flags |= F_SCALE_DIRTY;
+    }
+
+    pub fn interp_alpha_from(&mut self, dur: i32, mode: i32, start: u8, end: u8) {
+        self.color_start[A] = start;
+        self.color_end[A] = end;
+        self.start_slot(SLOT_ALPHA, dur, mode);
+    }
+
+    pub fn interp_color_from(&mut self, dur: i32, mode: i32, start: u32, end: u32) {
+        let (s, e) = (start.to_le_bytes(), end.to_le_bytes());
+        for c in [R, G, B] {
+            self.color_start[c] = s[c];
+            self.color_end[c] = e[c];
+        }
+        self.start_slot(SLOT_COLOR, dur, mode);
+    }
+
     fn start_pos(&mut self, dur: i32, mode: i32, end: [f32; 3]) {
         self.pos_start = *self.pos_target();
         self.pos_end = end;
