@@ -404,6 +404,11 @@ impl Gfx {
         self.quad(self.white, Blend::Alpha, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], uv, color);
     }
 
+    pub fn solid_quad(&mut self, blend: Blend, corners: [[f32; 2]; 4], color: [u8; 4]) {
+        let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        self.quad(self.white, blend, corners, uv, color);
+    }
+
     pub fn image(&mut self, tex: TextureId, x: f32, y: f32) {
         let t = self.texture(tex);
         let (w, h) = (t.width as f32, t.height as f32);

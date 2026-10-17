@@ -178,3 +178,9 @@ impl Archive {
         Ok(decrypt(&file[4..], &k))
     }
 }
+
+#[cfg(test)]
+pub fn test_archive() -> Option<Archive> {
+    let dir = std::env::var("TH08_DIR").ok()?;
+    Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).ok()?).ok()
+}

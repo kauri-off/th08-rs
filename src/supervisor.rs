@@ -6,10 +6,16 @@ use anyhow::{Context, Result};
 
 pub struct Supervisor {
     debug_sprites: Option<usize>,
+    script: Option<Vec<u16>>,
+    frame: usize,
 }
 
 pub fn register(ctx: &mut Ctx) -> Result<()> {
-    let t = task::task(Supervisor { debug_sprites: crate::env::var("TH08_SLOT_TEST").and_then(|v| v.parse().ok()) });
+    let t = task::task(Supervisor {
+        debug_sprites: crate::env::var("TH08_SLOT_TEST").and_then(|v| v.parse().ok()),
+        script: crate::env::var("TH08_INPUT").and_then(|v| crate::input::load_script(&v)),
+        frame: 0,
+    });
     task::add(ctx, Chain::Calc, 0, 0, t.clone())?;
     for prio in [0, 2, 16] {
         task::add(ctx, Chain::Draw, prio, prio as u8, t.clone())?;
@@ -26,8 +32,15 @@ impl Task<Ctx> for Supervisor {
                 crate::anmdebug::register(ctx, &spec)?;
             } else if let Some(arg) = crate::env::var("TH08_STAGE") {
                 let index = crate::stage::parse_stage_arg(&arg).with_context(|| format!("TH08_STAGE={arg}: unknown stage"))?;
+                let shot = match crate::env::var("TH08_PLAYER") {
+                    Some(v) => crate::player::parse_shot(&v).with_context(|| format!("TH08_PLAYER={v}: unknown shot type"))?,
+                    None => 0,
+                };
                 let player = crate::player::Player::new_ref();
-                crate::player::Player::register(ctx, player.clone())?;
+                crate::player::Player::register(ctx, player.clone(), shot)?;
+                if let Some(pw) = crate::env::var("TH08_POWER").and_then(|v| v.parse::<f32>().ok()) {
+                    player.borrow_mut().stats.power = pw.clamp(0.0, 128.0);
+                }
                 let t = crate::stage::Stage::register(ctx, index, Some(player.clone()))?;
                 let bgm = t.borrow().std.bgm[0].clone();
                 ctx.audio.play_bgm(&bgm);
@@ -41,6 +54,10 @@ impl Task<Ctx> for Supervisor {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        if let Some(s) = &self.script {
+            ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);
+        }
+        self.frame += 1;
         ctx.input.tick();
         Ret::Next
     }

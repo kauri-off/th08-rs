@@ -80,6 +80,14 @@ impl ItemManager {
         self.items.iter().filter(|i| i.alive)
     }
 
+    // Bomb start (09 §7): every item flies to the player (state 1, velocity (0, −0.5)).
+    pub fn attract_all(&mut self) {
+        for it in self.items.iter_mut().filter(|i| i.alive && i.state != 1) {
+            it.state = 1;
+            it.vel = [0.0, -0.5, 0.0];
+        }
+    }
+
     // ItemMgr_Spawn (08 §8.3).
     pub fn spawn(&mut self, anm: &mut AnmManager, player: &Player, pos: [f32; 3], kind: i32, mode: u8) -> Option<usize> {
         if pos[0] < -64.0 || pos[0] > 448.0 || kind < 0 {

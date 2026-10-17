@@ -335,7 +335,8 @@ impl BulletManager {
 
     pub fn register(ctx: &mut Ctx, player: PlayerRef) -> Result<Rc<RefCell<BulletManager>>> {
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "etama.anm")?;
-        let b = Rc::new(RefCell::new(BulletManager::new(&mut ctx.anm, player)));
+        let b = Rc::new(RefCell::new(BulletManager::new(&mut ctx.anm, player.clone())));
+        player.borrow_mut().world = Rc::downgrade(&b);
         let t: task::TaskRef<Ctx> = b.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
@@ -1077,7 +1078,7 @@ impl BulletManager {
 
     // BulletMgr_Calc (08 §1).
     pub fn step(&mut self, anm: &mut AnmManager) {
-        if self.frozen {
+        if self.frozen || self.player.borrow().freeze_bullets {
             return;
         }
         let pl = self.player.clone();

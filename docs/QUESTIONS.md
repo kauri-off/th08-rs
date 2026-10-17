@@ -32,3 +32,14 @@ From impl6 (bullets/items):
 - Rank: items/graze/death change "rank" by +1/+3/−3/+6/+200/−1600 — how does that map to ECL var 10041 (0–32)? Starting max point value (stats +0x24), lives/bombs.
 - Time-orb timers 0x18B89BC (state 3 → 1 when < 0) and 0x18B89D4 (gauge change gate): who sets them?
 - Which bomb-count changes call GameMgr_UpdateChecksum (09 §9.4 lists 0x439883 but not 0x406F30)?
+
+## From impl7-player
+- Bomb choreography for all 16 bombs: object positions/speeds/spawn timing and ANM scripts.
+- Option draw scripts and behaviour of 0x44E3A0 (attack), 0x44EE70, 0x44F2D0, 0x44F5E0; Remilia solo options, Youmu's half, Yukari's offset.
+- Player laser (Alice) update funcs 4/5: length, trail, damage rects, end condition.
+- Shot sprite rotation vs VM tag; youkai red-tint colour; focused hitbox marker sprite.
+- Enemy contact: which of 0x44A470 / 0x44A360 uses 0.7 vs 1.5 box; the "−10 life on second test".
+- How EnemyManager fills homing targets +0xE2AA4/+0xE2AB0/+0xE2ABC.
+- Bomb damage rules during spell cards (impl: d/7).
+- Bomb-allowed counter +0xE2A68 at load; last-spell index "1 − focus, +2"; starting lives (impl: 2).
+- Input bits for Esc and Ctrl.

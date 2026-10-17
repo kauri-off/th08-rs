@@ -35,6 +35,7 @@ impl Ctx {
             tasks: Tasks::default(),
             frame: 0,
         };
+        ctx.anm.rng = crate::rng::Rng::boot();
         crate::supervisor::register(&mut ctx)?;
         Ok(ctx)
     }

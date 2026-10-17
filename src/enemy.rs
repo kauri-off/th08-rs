@@ -214,6 +214,7 @@ pub struct Enemy {
     pub chain_next: Option<usize>,
     pub root: Option<usize>,
     pub dmg_timer: Timer,
+    pub orb_acc: i32,
     pub bonus_seconds: i32,
     pub hit: bool,
     pub flash: bool,
@@ -297,6 +298,7 @@ impl Default for Enemy {
             chain_next: None,
             root: None,
             dmg_timer: Timer::default(),
+            orb_acc: 0,
             bonus_seconds: 0,
             hit: false,
             flash: false,
@@ -520,12 +522,60 @@ impl EnemyManager {
         m.stage = stage;
         m.fast_forward = crate::env::var("TH08_STAGE_FRAME").and_then(|v| v.parse().ok()).unwrap_or(0);
         m.debug_damage = crate::env::var("TH08_ENEMY_DMG").and_then(|v| v.parse().ok()).unwrap_or(0);
+        m.stage_start(&mut ctx.anm, index);
         let m = Rc::new(RefCell::new(m));
         let t: task::TaskRef<Ctx> = m.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t)?;
         Ok(m)
+    }
+
+    // Stage start values owned by the game manager (11 §3) and EnemyManager_Load's two draws (11 §1.5).
+    pub fn stage_start(&mut self, anm: &mut AnmManager, index: usize) {
+        let d = self.g.difficulty.clamp(0, 4) as usize;
+        let mut p = self.player.borrow_mut();
+        p.stats.max_point = crate::player::MAX_POINT[d];
+        p.stats.time_threshold = crate::player::TIME_THR.get(index % 9).map_or(10, |r| r[d.min(3)]);
+        p.stats.time = 0;
+        p.stats.time_added = 0;
+        drop(p);
+        anm.rng.range16(3);
+        anm.rng.range16(8);
+    }
+
+    // Player collision (07 §10.1 step 6): contact, bomb-area touch, shot/bomb damage, homing target.
+    // SPEC-GAP: pairing of the 0.7 / 1.5 box scales with the two player tests is assumed: 0.7 kills the player,
+    // 1.5 against the bomb cancel areas costs a non-boss without flag bit 7 10 life; the shot box replaces the
+    // hitbox when its width > 0.
+    fn player_collision(&mut self, idx: usize, anm: &mut AnmManager) {
+        let e = &self.enemies[idx];
+        let (flags, pos, hb, sb) = (e.flags, e.final_pos, e.hitbox, e.shotbox);
+        let boss = flags & A_BOSS != 0;
+        if flags & A_CONTACT != 0 {
+            let mut p = self.player.borrow_mut();
+            p.contact_test(pos, [hb[0], hb[1]], &mut anm.rng);
+            let touched = p.box_in_cancel_area(pos, [hb[0] * 0.75, hb[1] * 0.75]);
+            drop(p);
+            if touched && !boss && flags & A_CANCEL_BONUS == 0 {
+                self.enemies[idx].life -= 10;
+            }
+        }
+        if flags & A_SHOT_HIT != 0 {
+            let bx = if sb[0] > 0.0 { sb } else { hb };
+            let mut acc = self.enemies[idx].orb_acc;
+            let mut by_bomb = false;
+            let d = {
+                let mut b = self.bullets.borrow_mut();
+                let mut p = self.player.borrow_mut();
+                if flags & A_ON_SCREEN != 0 {
+                    p.offer_target(pos);
+                }
+                p.damage_against(anm, Some(&mut b.items), pos, [bx[0], bx[1]], &mut acc, &mut by_bomb)
+            };
+            self.enemies[idx].orb_acc = acc;
+            self.damage(idx, d, by_bomb);
+        }
     }
 
     // The running enemy is swapped out for a placeholder whose alive bit keeps its slot reserved.
@@ -906,7 +956,7 @@ impl EnemyManager {
     }
 
     // Shot damage (07 §10.1 step 6); `d` comes from the player side.
-    pub fn damage(&mut self, idx: usize, d: i32) {
+    pub fn damage(&mut self, idx: usize, d: i32, bomb: bool) {
         if d <= 0 {
             return;
         }
@@ -917,8 +967,14 @@ impl EnemyManager {
         if e.flags & A_LOSES_LIFE == 0 {
             return;
         }
-        // SPEC-GAP: bomb damage rules need the player (09).
-        let mut d = if spell { if d < 8 { d.min(1) } else { d / 7 } } else { d };
+        // SPEC-GAP: the "reduced" bomb damage during spell cards is not given; d / 7 as for shots.
+        let child = e.root.is_some();
+        let mut d = match (spell, bomb) {
+            (true, true) if child => 0,
+            (true, true) => if d < 3 { d.min(1) } else { d / 7 },
+            (true, false) => if d < 8 { d.min(1) } else { d / 7 },
+            _ => d,
+        };
         if e.dmg_timer.cur > 0 {
             d = if e.flags & A_BOSS != 0 { d / 9 } else { 0 };
         }
@@ -1034,9 +1090,11 @@ impl EnemyManager {
             }
         }
         self.run_vms(idx, anm);
-        // SPEC-GAP: contact and shot collision need the player (09); TH08_ENEMY_DMG applies debug damage instead.
+        if self.enemies[idx].flags & (A_HIDDEN | 1 << 5 | A_YOUKAI) == 0 {
+            self.player_collision(idx, anm);
+        }
         if self.debug_damage > 0 && self.enemies[idx].flags & (A_SHOT_HIT | A_HIDDEN) == A_SHOT_HIT && self.enemies[idx].flags & A_ON_SCREEN != 0 {
-            self.damage(idx, self.debug_damage);
+            self.damage(idx, self.debug_damage, false);
         }
         let pause = self.g.timer_pause != 0;
         let e = &mut self.enemies[idx];
@@ -1083,7 +1141,9 @@ impl EnemyManager {
         b.env.boss = self.bosses.iter().any(Option::is_some);
         b.env.spell = self.g.spell.is_some();
         b.freeze = self.g.timer_pause != 0;
+        let env = b.env;
         drop(b);
+        self.player.borrow_mut().env = env;
         self.frame += 1;
     }
 
@@ -1135,6 +1195,83 @@ impl Task<Ctx> for EnemyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Scripted input per shot type through a stage: shooting, moving, focusing, bombing.
+    #[test]
+    fn scripted_player_runs() {
+        let Some(ar) = crate::archive::test_archive() else { return };
+        let frames = std::env::var("TH08_TEST_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(4000);
+        for shot in 0..12u8 {
+            let index = [0, 1, 2, 4][shot as usize % 4];
+            let (ecl_name, enm) = files(index);
+            let ecl = ecl::parse(ar.read(&ecl_name).unwrap()).unwrap();
+            let mut anm = AnmManager::default();
+            anm.insert(ANM_ENEMY, "enemy.anm", crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(), |_| 0);
+            anm.insert(ANM_STAGE, &enm, crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(), |_| 0);
+            anm.insert(crate::bullet::ANM_SLOT, "etama.anm", crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(), |_| 0);
+            let (pa, a, sa) = crate::sht::files(shot);
+            anm.insert(crate::player::ANM_SLOT, &pa, crate::anm::parse(&ar.read(&pa).unwrap()).unwrap(), |_| 0);
+            let player = crate::player::Player::new_ref();
+            {
+                let human = crate::sht::parse(&ar.read(&a).unwrap()).unwrap();
+                let youkai = crate::sht::parse(&ar.read(&sa).unwrap()).unwrap();
+                player.borrow_mut().load(&mut anm, human, youkai, shot);
+                player.borrow_mut().stats.power = 128.0;
+            }
+            let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player.clone())));
+            player.borrow_mut().world = Rc::downgrade(&bullets);
+            let mut m = EnemyManager::new(ecl, bullets.clone(), 1);
+            m.stage_start(&mut anm, index);
+            let (mut shots, mut dmg_frames) = (0, 0);
+            let mut inp = crate::input::Input::default();
+            for f in 0..frames {
+                use crate::input::*;
+                let mut bits = SHOT;
+                bits |= if (f / 90) % 2 == 0 { LEFT } else { RIGHT };
+                if (f / 240) % 2 == 1 {
+                    bits |= FOCUS;
+                }
+                if f % 50 < 10 {
+                    bits |= UP;
+                }
+                if f % 700 == 350 {
+                    bits |= BOMB;
+                }
+                inp.raw = bits;
+                inp.tick();
+                {
+                    let mut b = bullets.borrow_mut();
+                    let mut p = player.borrow_mut();
+                    p.frame(&mut anm, &inp, Some(&mut b.items));
+                    if std::mem::take(&mut p.bomb.attract) {
+                        b.items.attract_all();
+                    }
+                }
+                let before: i32 = m.enemies.iter().filter(|e| e.alive()).map(|e| e.life).sum();
+                m.step(&mut anm);
+                let after: i32 = m.enemies.iter().filter(|e| e.alive()).map(|e| e.life).sum();
+                dmg_frames += (after < before) as i32;
+                bullets.borrow_mut().step(&mut anm);
+                let p = player.borrow();
+                shots += p.bullets.iter().filter(|b| b.state != 0).count();
+                assert!(p.pos.iter().all(|v| v.is_finite()), "shot {shot}: non-finite player");
+                for b in p.bullets.iter().filter(|b| b.state != 0) {
+                    assert!(b.pos.iter().all(|v| v.is_finite()), "shot {shot}: non-finite bullet");
+                }
+            }
+            let p = player.borrow();
+            eprintln!(
+                "shot {shot} {ecl_name}: bullet-frames {shots} damage-frames {dmg_frames} bombs {} hits {} deaths {} lives {} score {}",
+                p.bombs_started,
+                p.hits,
+                p.deaths,
+                p.stats.lives,
+                p.stats.score()
+            );
+            assert!(shots > 0 && dmg_frames > 0, "shot {shot}: no shooting/damage");
+            assert!(p.bombs_started > 0, "shot {shot}: never bombed");
+        }
+    }
 
     #[test]
     fn all_stage_scripts_run() {

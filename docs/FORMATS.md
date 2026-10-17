@@ -34,6 +34,9 @@
 - Sub instruction: i32 time, i16 op (−1 ends), i16 size, u8 0, u8 rank mask, u16 var mask, 4-byte args. Bullet ops 96–104 are 44 bytes (i16 type/colour, counts, speeds, angles, flags at +0x28), lasers 114/115 64 bytes, spell card 122 244 bytes (strings XOR AA/BB/DD/EE).
 - Timeline instruction: i32 time (< 0 ends), i16 op, u8 size, u8 rank mask, args. Data uses 147 distinct sub ops.
 
-## SHT header — source: specs/opus/09_player.md §2.1 (src/player.rs `parse_sht`)
-- f32 at +0xC hitbox, +0x10 graze box, +0x14 item attraction speed, +0x18 item collect box, +0x1C point-of-collection line,
-  +0x24/+0x28 unfocused/focused speed, +0x2C/+0x30 diagonal components, +0x34 item fall multiplier. Level table from +0x38 (09).
+## SHT — source: specs/opus/09_player.md §2.1 (src/sht.rs)
+- Header 0x38: u16 0, u16 levels, f32 bombs per life, i32 deathbomb base, f32 hitbox, graze box, attraction speed, collect box, POC line,
+  i32 unknown, f32 unfocused/focused speed, unfocused/focused diagonal, item fall multiplier; then levels × {u32 file offset, i32 power threshold}.
+- Entry 0x38 (list ends with i32 −1): i16 interval, phase; f32 offset x/y, hitbox w/h, angle, speed; i16 damage, side (>0 youkai, <0 human),
+  origin (0 player, k option k−1), type (3 pierce, 4/5 laser, 6 no hit anim), script−10, sound; i32 init/update/draw/hit function indexes.
+- All 8 files: 6 levels (thresholds 8/24/48/80/128/999) except ply02as (8; levels 6/7 = Remilia bomb / last spell).
