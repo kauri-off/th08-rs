@@ -2,6 +2,7 @@ use crate::anmmgr::{AnmManager, Fog};
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::game::Ctx;
 use crate::gfx::{Camera, Gfx, Mat4, PLAYFIELD, Rect, Vertex};
+use crate::player::PlayerRef;
 use crate::stdfile::{self, QuadKind, Record, Std, Vec3};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
@@ -14,6 +15,8 @@ pub const CALC_PRIO: u16 = 8;
 pub const DRAW_LOW_PRIO: u16 = 6;
 pub const DRAW_HIGH_PRIO: u16 = 7;
 const NEAR: f32 = 30.0;
+const OVERLAY_SLOT: usize = 0;
+const OVERLAY_SCRIPT: usize = 33;
 const FAR: f32 = 1800.0;
 
 const STD_NAMES: [&str; 9] = ["stage1", "stage2", "stage3", "stage4a", "stage4b", "stage5", "stage6", "stage7", "stage8"];
@@ -216,6 +219,10 @@ pub struct Stage {
     sway_clock: Timer,
     cull_dist2: f32,
     fast_forward: u32,
+    overlay: AnmVm,
+    overlay_mode: u8,
+    overlay_timer: Timer,
+    pub player: Option<PlayerRef>,
 }
 
 impl Stage {
@@ -251,12 +258,18 @@ impl Stage {
             sway_clock: Timer::default(),
             cull_dist2,
             fast_forward: 0,
+            overlay: AnmVm::default(),
+            overlay_mode: 0,
+            overlay_timer: Timer::default(),
+            player: None,
         }
     }
 
-    // Stage_Load steps 1 and 3 (files already loaded): start every quad's script on its VM.
-    // SPEC-GAP: the overlay VM (script 33 of an unidentified global ANM file) is not run; its colour is taken as white.
+    // Stage_Load steps 1, 3 and 4 (files already loaded): every quad's script, then the overlay VM (text.anm 33).
     pub fn start(&mut self, anm: &mut AnmManager) {
+        anm.set_script(&mut self.overlay, OVERLAY_SLOT, OVERLAY_SCRIPT);
+        self.overlay.pending_interrupt = 2;
+        self.overlay_mode = 0;
         self.clock.set(0);
         self.ip = 0;
         for q in self.std.objects.iter().flat_map(|o| &o.quads) {
@@ -266,11 +279,12 @@ impl Stage {
         }
     }
 
-    pub fn register(ctx: &mut Ctx, index: usize) -> Result<Rc<RefCell<Stage>>> {
+    pub fn register(ctx: &mut Ctx, index: usize, player: Option<PlayerRef>) -> Result<Rc<RefCell<Stage>>> {
         let (std_name, bg) = files(index);
         let std = stdfile::parse(&ctx.archive.read(&std_name)?)?;
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &bg)?;
         let mut st = Stage::new(index, std);
+        st.player = player;
         st.fast_forward = crate::env::var("TH08_STAGE_FRAME").and_then(|v| v.parse().ok()).unwrap_or(0);
         st.start(&mut ctx.anm);
         let st = Rc::new(RefCell::new(st));
@@ -436,9 +450,19 @@ impl Stage {
         }
     }
 
-    // Stage_UpdateObjects (overlay VM not modelled, see `start`).
+    // Stage_UpdateObjects (06 §9): the overlay VM follows the player mode byte (human blue, youkai white).
     fn update_objects(&mut self, anm: &mut AnmManager) {
-        let overlay = [255u8; 4];
+        let mode = self.player.as_ref().map_or(0, |p| p.borrow().mode);
+        if (mode != 0) != (self.overlay_mode != 0) {
+            self.overlay_mode = (mode != 0) as u8;
+            self.overlay.pending_interrupt = if mode != 0 { 1 } else { 2 };
+            self.overlay_timer = Timer::default();
+        }
+        if self.overlay.script.is_some() {
+            self.overlay.run(anm);
+        }
+        self.overlay_timer.tick(anm.speed);
+        let overlay = if self.overlay.has_sprite { self.overlay.color } else { [255u8; 4] };
         for (o, obj) in self.std.objects.iter().enumerate() {
             if self.obj_flags[o] & 1 == 0 {
                 continue;
@@ -600,10 +624,10 @@ impl View {
         vm.color = saved;
     }
 
-    // SPEC-GAP: ribbons are skipped when their VM is hidden/disabled or has no sprite (not stated).
+    // DrawCustomQuad skip rules: enabled, visible, primary alpha ≠ 0 (06 §13).
     fn ribbon(&self, anm: &mut AnmManager, gfx: &mut Gfx, vm: &mut AnmVm, a: Vec3, b: Vec3, w: f32) {
         use anmvm::*;
-        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED) || !vm.has_sprite {
+        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED) || vm.color[A] == 0 || !vm.has_sprite {
             return;
         }
         let Some(&spr) = anm.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else { return };
@@ -628,7 +652,6 @@ impl View {
         let (u1, v1) = (spr.uv[2] + vm.uv_off[0], spr.uv[3] + vm.uv_off[1]);
         let o = anm.screen_offset;
         let vx = |x: f32, y: f32, z: f32, uv: [f32; 2], c: [u8; 4]| Vertex::screen(x + o[0] + 0.5, y + o[1] + 0.5, z, uv, c);
-        // SPEC-GAP: ribbon vertex depths taken from the projected end points.
         let v = [
             vx(sa[0] + dy * wa, sa[1] - dx * wa, sa[2], [u0, v0], ca),
             vx(sa[0] - dy * wa, sa[1] + dx * wa, sa[2], [u1, v0], ca),
@@ -636,6 +659,7 @@ impl View {
             vx(sb[0] - dy * wb, sb[1] + dx * wb, sb[2], [u1, v1], cb),
         ];
         let blend = anm.blend_for(vm);
+        anm.bind(spr.tex);
         gfx.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
     }
 }

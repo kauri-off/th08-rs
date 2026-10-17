@@ -33,3 +33,7 @@
 - Header: u32 0x800, i16 subs, i16 timelines run, u32[16] timeline offsets (ntl+1 non-zero; the last is never run), u32[subs] sub offsets at 0x48.
 - Sub instruction: i32 time, i16 op (−1 ends), i16 size, u8 0, u8 rank mask, u16 var mask, 4-byte args. Bullet ops 96–104 are 44 bytes (i16 type/colour, counts, speeds, angles, flags at +0x28), lasers 114/115 64 bytes, spell card 122 244 bytes (strings XOR AA/BB/DD/EE).
 - Timeline instruction: i32 time (< 0 ends), i16 op, u8 size, u8 rank mask, args. Data uses 147 distinct sub ops.
+
+## SHT header — source: specs/opus/09_player.md §2.1 (src/player.rs `parse_sht`)
+- f32 at +0xC hitbox, +0x10 graze box, +0x14 item attraction speed, +0x18 item collect box, +0x1C point-of-collection line,
+  +0x24/+0x28 unfocused/focused speed, +0x2C/+0x30 diagonal components, +0x34 item fall multiplier. Level table from +0x38 (09).

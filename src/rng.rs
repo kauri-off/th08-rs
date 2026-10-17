@@ -30,8 +30,9 @@ impl Rng {
         (self.next_u32() >> 16) as u16
     }
 
+    // Rng_Range: unsigned modulus; n == 0 returns 0 without drawing (05 §12.3).
     pub fn range(&mut self, n: i32) -> i32 {
-        if n <= 0 { 0 } else { (self.next_u32() % n as u32) as i32 }
+        if n == 0 { 0 } else { (self.next_u32() % n as u32) as i32 }
     }
 
     // Next32 / 2^31 − 1, in [−1, 1).

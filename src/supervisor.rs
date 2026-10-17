@@ -26,10 +26,12 @@ impl Task<Ctx> for Supervisor {
                 crate::anmdebug::register(ctx, &spec)?;
             } else if let Some(arg) = crate::env::var("TH08_STAGE") {
                 let index = crate::stage::parse_stage_arg(&arg).with_context(|| format!("TH08_STAGE={arg}: unknown stage"))?;
-                let t = crate::stage::Stage::register(ctx, index)?;
+                let player = crate::player::Player::new_ref();
+                crate::player::Player::register(ctx, player.clone())?;
+                let t = crate::stage::Stage::register(ctx, index, Some(player.clone()))?;
                 let bgm = t.borrow().std.bgm[0].clone();
                 ctx.audio.play_bgm(&bgm);
-                let bullets = crate::bullet::BulletManager::register(ctx)?;
+                let bullets = crate::bullet::BulletManager::register(ctx, player)?;
                 crate::enemy::EnemyManager::register(ctx, index, Some(t), bullets)?;
             } else {
                 Title::register(ctx)?;

@@ -63,8 +63,12 @@ impl Timer {
         }
     }
 
-    // SPEC-GAP: the extra decrement under Supervisor flag 0x20 (slow-down restore) is not modelled.
     pub fn dec(&mut self, speed: f32) {
+        if slowdown_restore() {
+            self.cur -= 1;
+            self.frac = 0.0;
+            self.prev = -999;
+        }
         if speed > 0.99 {
             self.cur -= 1;
         } else {
@@ -79,6 +83,19 @@ impl Timer {
     pub fn getf(&self) -> f32 {
         self.cur as f32 + self.frac
     }
+}
+
+thread_local! {
+    static SLOWDOWN_RESTORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// Supervisor flag 0x20 (05 §12.6): set by ECL native 29, never cleared; Timer_Sub steps once more.
+pub fn set_slowdown_restore(on: bool) {
+    SLOWDOWN_RESTORE.with(|f| f.set(on));
+}
+
+pub fn slowdown_restore() -> bool {
+    SLOWDOWN_RESTORE.with(|f| f.get())
 }
 
 pub fn wrap_add(a: f32, d: f32) -> f32 {
@@ -742,8 +759,7 @@ impl AnmVm {
                 59 => {
                     let d = self.idest(&ins);
                     let n = self.ival(a[1], m(1));
-                    // SPEC-GAP: whether the RNG is consumed when n == 0 is not stated; it is not.
-                    let v = if n == 0 { 0 } else { (anm.rng.next_u32() % n as u32) as i32 };
+                    let v = anm.rng.range(n);
                     self.write(anm, ip, d, v as u32, false);
                     Step::Next
                 }

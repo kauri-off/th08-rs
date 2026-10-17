@@ -606,7 +606,7 @@ impl Exec<'_> {
         self.fire_desc();
     }
 
-    // Filters, origin and rank scaling (07 §9.1–9.2); the stub BulletManager places the pattern.
+    // Filters, origin and rank scaling (07 §9.1–9.2), then BulletMgr_SpawnPattern.
     fn fire_desc(&mut self) {
         let e = &*self.e;
         let mut d = e.desc.clone();
@@ -632,7 +632,8 @@ impl Exec<'_> {
                 d.speed2 = (d.speed2 + s / 2.0).max(0.3);
             }
         }
-        self.m.bullets.borrow_mut().requests.push(d);
+        let p = self.m.g.player;
+        self.m.bullets.borrow_mut().spawn_pattern(self.anm, &d, p);
     }
 
     fn laser_op(&mut self, t: &Thread, ins: &Ins) {
@@ -655,12 +656,12 @@ impl Exec<'_> {
             hit_start: rd_u32(&b, 0x34) as i32,
             fade_hit: rd_u32(&b, 0x38) as i32,
             flags: rd_u32(&b, 0x3C),
-            aimed: ins.op == 114,
+            fixed: ins.op == 114,
             origin: [0.0; 3],
         };
         d.origin = add3(self.e.final_pos, self.e.shot_offset);
         self.e.laser_desc = d.clone();
-        let id = self.m.bullets.borrow_mut().spawn_laser(d, self.m.g.player);
+        let id = self.m.bullets.borrow_mut().spawn_laser(self.anm, &d, self.m.g.player);
         let cur = self.e.laser_cur.min(31);
         self.e.lasers[cur] = id;
     }
@@ -674,12 +675,18 @@ impl Exec<'_> {
     }
 
     fn item(&mut self, pos: [f32; 3], kind: i32) {
-        self.m.bullets.borrow_mut().items.push(crate::bullet::ItemReq { pos, kind });
+        let p = self.m.player.borrow();
+        self.m.bullets.borrow_mut().items.spawn(self.anm, &p, pos, kind, 0);
+    }
+
+    fn cancel_all(&mut self, mode: i32) {
+        let mut p = self.m.player.borrow_mut();
+        self.m.bullets.borrow_mut().cancel_all(self.anm, &mut p, mode);
     }
 
     fn item_burst(&mut self, n: i32, all_one: bool) {
         let p = self.e.pos;
-        let low = crate::player::power() < 128;
+        let low = self.m.player.borrow().stats.power < 128.0;
         for i in 0..n.max(0) {
             let dx = self.anm.rng.next_f32() * 128.0 - 64.0;
             let dy = self.anm.rng.next_f32() * 128.0 - 64.0;
@@ -800,9 +807,9 @@ impl Exec<'_> {
                 let sub = t.ctx.int(V_INT1 + 2);
                 let marked: Vec<_> = {
                     let mut b = self.m.bullets.borrow_mut();
-                    b.bullets
+                    b.bullets[..crate::bullet::MAX_BULLETS]
                         .iter_mut()
-                        .filter(|x| x.flags & 0x100000 != 0)
+                        .filter(|x| !x.free() && x.flags & 0x100000 != 0)
                         .map(|x| {
                             x.flags &= !0x100000;
                             (x.pos, x.angle)
@@ -816,12 +823,21 @@ impl Exec<'_> {
                     }
                 }
             }
+            12 | 14 => {
+                let (mask, a, s) = (t.ctx.int(V_INT0) as u32, t.ctx.flt(V_FLT0), t.ctx.flt(V_FLT0 + 1));
+                self.m.bullets.borrow_mut().toggle_ghost(self.anm, mask, a, s);
+            }
             28 if arg != 0 => self.anm.speed = 1.0 / arg as f32,
-            29 => self.anm.speed = 1.0,
+            29 => {
+                self.anm.speed = 1.0;
+                if arg > 1 {
+                    anmvm::set_slowdown_restore(true);
+                }
+            }
             30 => self.m.g.g_18b8a2c = arg,
             31 => self.item(self.e.pos, 5),
-            // SPEC-GAP: screen effects, effect objects, bullet warps/toggles and hit rectangles (1, 3, 4, 6, 7,
-            // 9–17, 20–23, 25) belong to the effect/bullet/player phases.
+            // SPEC-GAP: screen effects, effect objects, bullet warps, the chain/stage half of 12 and hit rectangles
+            // (1, 3, 4, 6, 7, 9–11, 13, 15–17, 20–23, 25) belong to the effect/player phases.
             _ => {
                 let _ = gs;
                 self.m.g.misc_calls += 1;
@@ -885,7 +901,7 @@ impl Exec<'_> {
         log::info!("spell card {} ({} bytes name, bonus {})", spell.id, spell.name.len(), spell.bonus);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
         self.m.g.spell = Some(spell);
-        self.m.bullets.borrow_mut().cancel_all();
+        self.cancel_all(1);
         self.e.reset_rank_ranges();
     }
 
@@ -1235,7 +1251,7 @@ impl Exec<'_> {
             }
             90..=94 => self.spawn_child(t, ins),
             95 => {
-                self.m.kill_all(Some(self.idx));
+                self.m.kill_all(self.anm, Some(self.idx));
             }
             96..=104 => self.bullet_op(t, ins),
             105 | 106 => {
@@ -1252,10 +1268,10 @@ impl Exec<'_> {
             111 => {
                 let k = self.ai(t, ins, 0);
                 let cmd = ExCmd {
-                    a: self.raw(ins, 1),
-                    b: self.raw(ins, 2) as i32,
-                    c: self.raw(ins, 3) as i32,
-                    d: self.raw(ins, 4) as i32,
+                    cmd: self.ai(t, ins, 1) as u32,
+                    chain: self.ai(t, ins, 2),
+                    c: self.ai(t, ins, 3),
+                    d: self.ai(t, ins, 4),
                     e: self.af(t, ins, 5),
                     f: self.af(t, ins, 6),
                 };
@@ -1263,7 +1279,8 @@ impl Exec<'_> {
                     *s = cmd;
                 }
             }
-            112 | 162 => self.m.bullets.borrow_mut().cancel_all(),
+            112 => self.cancel_all(1),
+            162 => self.cancel_all(4),
             113 => {
                 let (id, x) = (self.ai(t, ins, 0), self.ai(t, ins, 1));
                 if id < 0 {
@@ -1281,7 +1298,7 @@ impl Exec<'_> {
                 self.with_laser(k, |l, p| {
                     l.angle = match op {
                         117 => anmvm::wrap_add(l.angle, a),
-                        118 => angle_from(l.pos, p) + a,
+                        118 => angle_from(l.origin, p) + a,
                         _ => a,
                     }
                 });
@@ -1290,7 +1307,7 @@ impl Exec<'_> {
                 let k = self.ai(t, ins, 0);
                 let off = [self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3)];
                 let p = add3(self.e.final_pos, off);
-                self.with_laser(k, |l, _| l.pos = p);
+                self.with_laser(k, |l, _| l.origin = p);
             }
             120 => {
                 let k = self.ai(t, ins, 0);
@@ -1303,7 +1320,7 @@ impl Exec<'_> {
                 self.with_laser(k, |l, _| {
                     if l.state < 2 {
                         l.state = 2;
-                        l.timer.set(0);
+                        l.timer = anmvm::Timer::default();
                     }
                 });
             }
@@ -1476,7 +1493,8 @@ impl Exec<'_> {
             }
             161 => {
                 let r = self.af(t, ins, 0);
-                self.m.bullets.borrow_mut().cancel_radius(self.e.final_pos, r);
+                let p = self.m.player.borrow();
+                self.m.bullets.borrow_mut().cancel_radius(self.anm, &p, self.e.final_pos, r);
             }
             163 => self.m.g.g_f54cec = self.ai(t, ins, 0),
             164 => self.m.g.misc_calls += 1,
@@ -1493,9 +1511,10 @@ impl Exec<'_> {
             170..=172 => {
                 let k = self.ai(t, ins, 0);
                 let (a, b) = (self.af(t, ins, 1), if op == 172 { self.af(t, ins, 2) } else { 0.0 });
+                let byte = self.raw(ins, 1) as u8;
                 self.with_laser(k, |l, _| match op {
-                    170 => l.fields[0] = a,
-                    171 => l.desc.max_len = a,
+                    170 => l.hide_emitter = byte,
+                    171 => l.max_len = a,
                     _ => (l.tail, l.head) = (a, b),
                 });
             }

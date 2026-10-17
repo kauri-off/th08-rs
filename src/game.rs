@@ -59,7 +59,6 @@ impl Ctx {
 
     // Frame_Run only checks the calc runner's result.
     pub fn draw(&mut self) {
-        self.anm.reset_render_state();
         task::run(self, Chain::Draw);
     }
 }

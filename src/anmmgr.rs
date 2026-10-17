@@ -29,9 +29,11 @@ pub struct AnmManager {
     pub vm_counter: u32,
     pub screen_offset: [f32; 2],
     pub tint: u32,
+    pub tint_on: bool,
     pub stage_camera: Option<Camera>,
     last_blend: Blend,
     last_tex_matrix: Option<((i16, i16), [f32; 2])>,
+    bound_tex: Option<TextureId>,
 }
 
 // Linear vertex fog in camera-space depth; colour as RGB bytes.
@@ -50,10 +52,12 @@ impl Default for AnmManager {
             rng: Rng::default(),
             vm_counter: 0,
             screen_offset: [0.0; 2],
-            tint: 0,
+            tint: 0x8080_8080,
+            tint_on: false,
             stage_camera: None,
             last_blend: Blend::Alpha,
             last_tex_matrix: None,
+            bound_tex: None,
         }
     }
 }
@@ -114,10 +118,15 @@ impl AnmManager {
         self.vm_counter = 0;
     }
 
-    // SPEC-GAP: initial blend state of a frame is not specified; alpha assumed.
+    // Texture-matrix and texture caches reset (05 §12.8); the blend state carries over between frames (§12.5).
     pub fn reset_render_state(&mut self) {
-        self.last_blend = Blend::Alpha;
         self.last_tex_matrix = None;
+        self.bound_tex = None;
+    }
+
+    // 2D paths (EmitQuad / DrawCustomQuad) update the shared texture cache.
+    pub fn bind(&mut self, tex: TextureId) {
+        self.bound_tex = Some(tex);
     }
 
     pub fn set_script(&mut self, vm: &mut AnmVm, slot: usize, index: usize) {
@@ -174,10 +183,10 @@ impl AnmManager {
         self.tinted([c[R], c[G], c[B], c[A]])
     }
 
-    // SPEC-GAP: the global tint is read as a D3DCOLOR applied per channel (including alpha).
+    // Global tint: D3DCOLOR at AnmManager+0, enabled by +4; every channel including alpha (05 §12.1).
     pub fn tinted(&self, mut rgba: [u8; 4]) -> [u8; 4] {
         use anmvm::*;
-        if self.tint != 0 {
+        if self.tint_on {
             let t = self.tint.to_le_bytes();
             let tc = [t[R], t[G], t[B], t[A]];
             for k in 0..4 {
@@ -205,7 +214,6 @@ impl AnmManager {
         }
         let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else { return };
         Self::update_world_matrix(vm);
-        // SPEC-GAP: anchor offset uses |half size| (mirrored stage-3 quads only tile this way).
         let (hw, hh) = ((vm.sprite_w * vm.scale[0] / 2.0).abs(), (vm.sprite_h * vm.scale[1] / 2.0).abs());
         let ax = if vm.flags & F_ANCHOR_X != 0 { hw } else { 0.0 };
         let ay = if vm.flags & F_ANCHOR_Y != 0 { hh } else { 0.0 };
@@ -213,10 +221,12 @@ impl AnmManager {
         w.0[3] = [vm.pos[0] + ax + self.screen_offset[0], vm.pos[1] + ay + self.screen_offset[1], vm.pos[2], 1.0];
         // Texture matrix offset is re-uploaded only for a new sprite or a non-zero u offset (v-only scroll quirk).
         let key = (vm.anm_slot, vm.sprite_index);
-        let off = match self.last_tex_matrix {
-            Some((k, o)) if k == key && vm.uv_off[0] == 0.0 => o,
-            _ => [spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]],
+        // The texture is re-bound only on the same cache miss, so a 2D draw in between can leave another bound.
+        let (off, tex) = match (self.last_tex_matrix, self.bound_tex) {
+            (Some((k, o)), Some(t)) if k == key && vm.uv_off[0] == 0.0 => (o, t),
+            _ => ([spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]], spr.tex),
         };
+        self.bound_tex = Some(tex);
         self.last_tex_matrix = Some((key, off));
         let (su, sv) = (spr.uv[2] - spr.uv[0], spr.uv[3] - spr.uv[1]);
         let color = self.vm_color(vm);
@@ -236,7 +246,7 @@ impl AnmManager {
             Vertex { pos: gfx::clip_in_viewport(vproj.transform(p), vp), uv: [off[0] + u * su, off[1] + t * sv], color, fog_color, fog: f }
         });
         let blend = self.blend_for(vm);
-        gfx.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
+        gfx.strip(tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
     }
 
     // `z` is the vertex depth (projected depth for stage billboards, 0 otherwise).
@@ -270,7 +280,7 @@ impl AnmManager {
             5 => {
                 Self::update_world_matrix(vm);
                 let mut w = vm.world_matrix;
-                w.0[3] = [px + ax, py + ay, pz, 1.0];
+                w.0[3] = [px + ax.abs(), py + ay.abs(), pz, 1.0];
                 let vp = gfx.viewport();
                 let cam = match (vm.flags & F_STAGE_CAM != 0, self.stage_camera) {
                     (true, Some(c)) => c,
@@ -306,6 +316,7 @@ impl AnmManager {
         let blend = self.blend_for(vm);
         let uv = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
         let v = std::array::from_fn(|i| Vertex::screen(corners[i][0], corners[i][1], z, uv[i], rgba));
+        self.bound_tex = Some(spr.tex);
         gfx.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
     }
 }

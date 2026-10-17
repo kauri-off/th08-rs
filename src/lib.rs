@@ -14,6 +14,7 @@ pub mod env;
 pub mod game;
 pub mod gfx;
 pub mod input;
+pub mod item;
 pub mod player;
 pub mod rng;
 pub mod stage;

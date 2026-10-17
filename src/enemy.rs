@@ -1,6 +1,7 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
-use crate::bullet::{BulletDesc, BulletManager, ItemReq, LaserDesc};
+use crate::bullet::{BulletDesc, BulletManager, LaserDesc};
+use crate::player::PlayerRef;
 use crate::ecl::{self, Ecl};
 use crate::game::Ctx;
 use crate::gfx::PLAYFIELD;
@@ -437,7 +438,6 @@ pub struct Globals {
     pub spell: Option<Spell>,
     pub spawn_disabled: i32,
     pub timer_pause: i32,
-    pub score: i64,
     pub hud_boss: bool,
     pub dialogue: bool,
     pub drop_counter: u32,
@@ -464,6 +464,7 @@ pub struct EnemyManager {
     pub sync: [i32; 4],
     pub g: Globals,
     pub bullets: Rc<RefCell<BulletManager>>,
+    pub player: PlayerRef,
     pub stage: Option<Rc<RefCell<Stage>>>,
     pub full: bool,
     pub frame: u32,
@@ -486,7 +487,9 @@ impl EnemyManager {
     pub fn new(ecl: Ecl, bullets: Rc<RefCell<BulletManager>>, difficulty: i32) -> Self {
         let timelines = ecl.timelines.iter().map(|&o| (Timer::default(), o)).collect();
         // SPEC-GAP: the initial rank value (0–32) is not specified; 16 assumed.
-        let g = Globals { difficulty, rank: 16, player: crate::player::position(), ..Default::default() };
+        let player = bullets.borrow().player.clone();
+        player.borrow_mut().stats.difficulty = difficulty;
+        let g = Globals { difficulty, rank: 16, player: player.borrow().pos, ..Default::default() };
         Self {
             enemies: (0..MAX_ENEMIES).map(|_| Box::new(Enemy { flags: 0, ..Enemy::default() })).collect(),
             spare: Vec::new(),
@@ -497,6 +500,7 @@ impl EnemyManager {
             sync: [-1; 4],
             g,
             bullets,
+            player,
             stage: None,
             full: false,
             frame: 0,
@@ -764,7 +768,7 @@ impl EnemyManager {
 
     // Op 95 / threshold cleanup: every other alive non-boss enemy gets life 0 and jumps to its death sub.
     // SPEC-GAP: the jump is assumed to consume the death sub (otherwise death processing would restart it).
-    pub(crate) fn kill_all(&mut self, except: Option<usize>) -> i32 {
+    pub(crate) fn kill_all(&mut self, anm: &mut AnmManager, except: Option<usize>) -> i32 {
         let mut n = 0;
         for j in 0..self.enemies.len() {
             let e = &self.enemies[j];
@@ -774,8 +778,9 @@ impl EnemyManager {
             if e.flags & A_CANCEL_BONUS != 0 {
                 n += 1;
                 let p = e.final_pos;
-                self.bullets.borrow_mut().items.push(ItemReq { pos: p, kind: 6 });
-                self.g.score += (2000 + 30 * n as i64).min(8000);
+                // SPEC-GAP: item mode of the cancel-bonus star is not given; 1 (attracted) like bullet cancels.
+                self.spawn_item(anm, p, 6, 1);
+                self.add_score((2000 + 30 * n).min(8000));
             }
             self.enemies[j].life = 0;
             self.jump_to_death_sub(j);
@@ -808,45 +813,62 @@ impl EnemyManager {
         self.enemies[idx].children = 0;
     }
 
+    pub fn spawn_item(&mut self, anm: &mut AnmManager, pos: [f32; 3], kind: i32, mode: u8) {
+        let p = self.player.borrow();
+        self.bullets.borrow_mut().items.spawn(anm, &p, pos, kind, mode);
+    }
+
+    pub fn add_score(&mut self, v: i32) {
+        self.player.borrow_mut().stats.add_score(v);
+    }
+
+    pub fn cancel_all(&mut self, anm: &mut AnmManager, mode: i32) {
+        let mut p = self.player.borrow_mut();
+        self.bullets.borrow_mut().cancel_all(anm, &mut p, mode);
+    }
+
+    // SPEC-GAP: drops spawn in mode 0; when a drop counts as "auto-collected" (mode 1) is not given.
     fn drop_items(&mut self, idx: usize, anm: &mut AnmManager) {
         let e = &mut self.enemies[idx];
         let p = e.final_pos;
         let mut items = Vec::new();
         if e.item >= 0 {
-            items.push(ItemReq { pos: p, kind: e.item });
+            items.push((p, e.item));
         } else if e.item == -1 {
             // SPEC-GAP: counter/index update order of the every-third-death table is not specified.
             if self.g.drop_counter.is_multiple_of(3) {
-                items.push(ItemReq { pos: p, kind: DROP_TABLE[self.g.drop_index % 32] });
+                items.push((p, DROP_TABLE[self.g.drop_index % 32]));
                 self.g.drop_index += 1;
             }
             self.g.drop_counter += 1;
         }
-        let power_kind = if crate::player::power() < 128 { 0 } else { 1 };
+        let power_kind = if self.player.borrow().stats.power < 128.0 { 0 } else { 1 };
         for (n, kind) in [(e.extra_power, power_kind), (e.extra_point, 1)] {
             for _ in 0..n.max(0) {
                 let dx = anm.rng.next_f32() * 128.0 - 64.0;
                 let dy = anm.rng.next_f32() * 128.0 - 64.0;
-                items.push(ItemReq { pos: [p[0] + dx, p[1] + dy, p[2]], kind });
+                items.push(([p[0] + dx, p[1] + dy, p[2]], kind));
             }
         }
         e.extra_point = 0;
         e.extra_power = 0;
-        self.bullets.borrow_mut().items.extend(items);
+        for (pos, kind) in items {
+            self.spawn_item(anm, pos, kind, 0);
+        }
     }
 
-    fn cleanup_after_jump(&mut self, idx: usize, drops: bool) {
+    fn cleanup_after_jump(&mut self, anm: &mut AnmManager, idx: usize, drops: bool) {
         let e = &mut self.enemies[idx];
         e.threads = Default::default();
         e.desc = BulletDesc::default();
         e.autofire_interval = 0;
         e.reset_rank_ranges();
         self.kill_chain(idx, drops);
-        self.kill_all(Some(idx));
+        self.kill_all(anm, Some(idx));
     }
 
     // Enemy_CheckLifeThresholds (07 §10.2).
-    fn check_thresholds(&mut self, idx: usize) -> bool {
+    fn check_thresholds(&mut self, anm: &mut AnmManager, idx: usize) -> bool {
         let e = &self.enemies[idx];
         let Some(k) = (0..4).find(|&k| e.thresholds[k] >= 0 && e.life < e.thresholds[k]) else { return false };
         let sub = e.threshold_subs[k];
@@ -856,12 +878,12 @@ impl EnemyManager {
         e.bonus_seconds = (e.timeout - e.boss_timer.cur) / 60;
         e.timeout = -1;
         self.jump_main(idx, sub);
-        self.cleanup_after_jump(idx, true);
+        self.cleanup_after_jump(anm, idx, true);
         true
     }
 
     // Enemy_CheckTimeout (07 §10.2).
-    fn check_timeout(&mut self, idx: usize) -> bool {
+    fn check_timeout(&mut self, anm: &mut AnmManager, idx: usize) -> bool {
         let e = &mut self.enemies[idx];
         if e.timeout < 0 || e.boss_timer.cur < e.timeout {
             return false;
@@ -877,9 +899,9 @@ impl EnemyManager {
         self.jump_main(idx, sub);
         if !fixed {
             self.g.spell = None;
-            self.bullets.borrow_mut().cancel_all();
+            self.cancel_all(anm, 1);
         }
-        self.cleanup_after_jump(idx, false);
+        self.cleanup_after_jump(anm, idx, false);
         true
     }
 
@@ -889,7 +911,7 @@ impl EnemyManager {
             return;
         }
         let d = d.min(70);
-        self.g.score += (d / 5) as i64 * 10;
+        self.add_score((d / 5) * 10);
         let spell = self.g.spell.is_some();
         let e = &mut self.enemies[idx];
         if e.flags & A_LOSES_LIFE == 0 {
@@ -926,13 +948,15 @@ impl EnemyManager {
         let mode = (e.flags >> A_DEATH_SHIFT) & 7;
         match mode {
             0 => {
-                self.g.score += e.score as i64;
+                let sc = e.score;
                 e.flags &= !A_ALIVE;
+                self.add_score(sc);
             }
             1 => {
-                self.g.score += e.score as i64;
+                let sc = e.score;
                 e.flags |= A_DEAD_CONT;
                 e.flags &= !(A_CONTACT | A_LOSES_LIFE | A_SHOT_HIT);
+                self.add_score(sc);
             }
             3 => {
                 e.life = 1;
@@ -946,8 +970,13 @@ impl EnemyManager {
                 self.unregister_boss(idx);
                 self.enemies[idx].flags &= !A_BOSS;
                 if self.g.spell.is_none() {
-                    self.bullets.borrow_mut().cancel_all();
-                    self.kill_all(Some(idx));
+                    // SPEC-GAP: CancelBonus arguments for a boss death are not given; cap 8000, lasers included.
+                    let sum = {
+                        let mut p = self.player.borrow_mut();
+                        self.bullets.borrow_mut().cancel_bonus(anm, &mut p, 8000, true)
+                    };
+                    self.add_score(sum);
+                    self.kill_all(anm, Some(idx));
                 }
             }
             self.drop_items(idx, anm);
@@ -1000,7 +1029,7 @@ impl EnemyManager {
                 self.free(idx);
                 return;
             }
-            if !(self.check_thresholds(idx) || self.check_timeout(idx)) {
+            if !(self.check_thresholds(anm, idx) || self.check_timeout(anm, idx)) {
                 break;
             }
         }
@@ -1028,7 +1057,15 @@ impl EnemyManager {
     }
 
     pub fn step(&mut self, anm: &mut AnmManager) {
-        self.g.player = crate::player::position();
+        {
+            let p = self.player.borrow();
+            self.g.player = p.pos;
+            self.g.player_mode = p.mode as i32;
+        }
+        let bonus = std::mem::take(&mut self.player.borrow_mut().stats.spell_bonus_add);
+        if let Some(s) = &mut self.g.spell {
+            s.bonus += bonus;
+        }
         self.full = false;
         self.run_timelines(anm);
         for idx in 0..self.enemies.len() {
@@ -1042,6 +1079,11 @@ impl EnemyManager {
                 s.bonus = (s.bonus - s.decay).max(0);
             }
         }
+        let mut b = self.bullets.borrow_mut();
+        b.env.boss = self.bosses.iter().any(Option::is_some);
+        b.env.spell = self.g.spell.is_some();
+        b.freeze = self.g.timer_pause != 0;
+        drop(b);
         self.frame += 1;
     }
 
@@ -1107,14 +1149,25 @@ mod tests {
                 anm.insert(ANM_ENEMY, "enemy.anm", crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(), |_| 0);
                 anm.insert(ANM_STAGE, &enm, crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(), |_| 0);
                 anm.insert(crate::bullet::ANM_SLOT, "etama.anm", crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(), |_| 0);
-                let bullets = Rc::new(RefCell::new(BulletManager { lasers: vec![None; crate::bullet::MAX_LASERS], ..Default::default() }));
+                let player = crate::player::Player::new_ref();
+                let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player.clone())));
                 let diff = if index % 9 == 8 { 4 } else { diff };
                 let mut m = EnemyManager::new(ecl, bullets.clone(), diff);
                 m.debug_damage = 8;
-                let (mut spawned, mut max_alive) = (0, 0);
+                let (mut spawned, mut max_alive, mut max_live, mut lasers, mut items) = (0, 0, 0, 0, 0);
+                let inp = crate::input::Input::default();
                 for _ in 0..6000 {
+                    player.borrow_mut().step(&mut anm, &inp);
                     m.step(&mut anm);
                     bullets.borrow_mut().step(&mut anm);
+                    let b = bullets.borrow();
+                    max_live = max_live.max(b.live);
+                    lasers += b.lasers.iter().filter(|l| l.alive).count();
+                    items = items.max(b.items.count);
+                    for x in b.live_bullets() {
+                        assert!(x.pos.iter().all(|v| v.is_finite()) && x.vel.iter().all(|v| v.is_finite()), "{ecl_name}: non-finite bullet");
+                    }
+                    drop(b);
                     let n = m.alive_count();
                     max_alive = max_alive.max(n);
                     spawned += (m.enemies.iter().filter(|e| e.alive() && e.main.ctx.clock.cur == 1).count() > 0) as i32;
@@ -1124,10 +1177,58 @@ mod tests {
                 }
                 assert!(max_alive > 0, "{ecl_name} diff {diff}: no enemy ever spawned");
                 assert!(spawned > 0);
+                assert!(max_live <= crate::bullet::MAX_BULLETS);
                 fired += bullets.borrow().patterns;
+                let p = player.borrow();
+                eprintln!(
+                    "{ecl_name} d{diff}: patterns {} max live {max_live} laser-frames {lasers} max items {items} collected {} hits {} grazes {} score {}",
+                    bullets.borrow().patterns,
+                    bullets.borrow().items.collected,
+                    p.hits,
+                    p.grazes,
+                    p.stats.score()
+                );
             }
             assert!(index >= 9 || fired > 0, "{}: nothing fired", files(index).0);
         }
     }
 }
 
+
+#[cfg(test)]
+mod laser_tests {
+    use super::*;
+
+    // Lasers only appear in later boss phases: run the laser stages longer with more debug damage.
+    #[test]
+    fn laser_stages_run() {
+        let Some(dir) = std::env::var("TH08_DIR").ok() else { return };
+        let ar = crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap()).unwrap();
+        let mut total = 0;
+        for index in [2, 4, 6, 7, 8] {
+            let (ecl_name, enm) = files(index);
+            let mut anm = AnmManager::default();
+            for (slot, name) in [(ANM_ENEMY, "enemy.anm"), (ANM_STAGE, enm.as_str()), (crate::bullet::ANM_SLOT, "etama.anm")] {
+                anm.insert(slot, name, crate::anm::parse(&ar.read(name).unwrap()).unwrap(), |_| 0);
+            }
+            let player = crate::player::Player::new_ref();
+            let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player.clone())));
+            let mut m = EnemyManager::new(ecl::parse(ar.read(&ecl_name).unwrap()).unwrap(), bullets.clone(), 3);
+            m.debug_damage = 40;
+            let mut lasers = 0;
+            for _ in 0..20000 {
+                player.borrow_mut().step(&mut anm, &crate::input::Input::default());
+                m.step(&mut anm);
+                bullets.borrow_mut().step(&mut anm);
+                let b = bullets.borrow();
+                for l in b.lasers.iter().filter(|l| l.alive) {
+                    lasers += 1;
+                    assert!(l.head.is_finite() && l.tail.is_finite() && l.tail <= l.head + 1e-3, "{ecl_name}: bad laser");
+                }
+            }
+            eprintln!("{ecl_name}: laser-frames {lasers} hits {}", player.borrow().hits);
+            total += lasers;
+        }
+        assert!(total > 0, "no laser ever spawned");
+    }
+}

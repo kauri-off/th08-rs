@@ -1,0 +1,412 @@
+use crate::anmmgr::AnmManager;
+use crate::anmvm::{self, AnmVm, Timer};
+use crate::bullet::ANM_SLOT;
+use crate::gfx::Gfx;
+use crate::player::{Player, Stats};
+
+pub const MAX_ITEMS: usize = 2096;
+pub const POWER: u8 = 0;
+pub const POINT: u8 = 1;
+pub const BIG_POWER: u8 = 2;
+pub const BOMB: u8 = 3;
+pub const FULL_POWER: u8 = 4;
+pub const LIFE: u8 = 5;
+pub const STAR: u8 = 6;
+pub const TIME_ORB: u8 = 7;
+pub const CONVERTED: u8 = 8;
+const DEAD: u16 = u16::MAX;
+const POWER_LEVELS: [f32; 6] = [8.0, 24.0, 48.0, 80.0, 128.0, 999.0];
+
+#[derive(Clone, Debug, Default)]
+pub struct Item {
+    pub vm: AnmVm,
+    pub pos: [f32; 3],
+    pub vel: [f32; 3],
+    pub target: [f32; 3],
+    pub timer: Timer,
+    pub kind: u8,
+    pub alive: bool,
+    pub state: u8,
+    pub max_flag: bool,
+}
+
+pub struct ItemManager {
+    pub items: Vec<Item>,
+    cursor: usize,
+    order: Vec<u16>,
+    pub count: usize,
+    pub collect_timer: i32,
+    pub fall_timer: i32,
+    pub collected: u64,
+}
+
+impl Default for ItemManager {
+    fn default() -> Self {
+        Self { items: vec![Item::default(); MAX_ITEMS], cursor: 0, order: Vec::new(), count: 0, collect_timer: 0, fall_timer: 0, collected: 0 }
+    }
+}
+
+// Collection side effects that reach outside the item manager.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Collected {
+    pub cancel: bool,
+}
+
+pub fn power_level(p: f32) -> usize {
+    POWER_LEVELS.iter().filter(|&&t| t <= p).count()
+}
+
+// Point item value (08 §8.5); `div` 10 gives the converted-point variant.
+pub fn point_value(max: i32, y: f32, line: f32, max_flag: bool, doubled: bool, div: i32) -> i32 {
+    let max = if div > 1 { max / div - (max / div) % 10 } else { max };
+    let mut v = if y < line || max_flag { max } else { max / 2 - (y - line) as i32 * (max / 1000) };
+    v -= v % 10;
+    if doubled {
+        v *= 2;
+    }
+    v
+}
+
+pub fn next_extend(difficulty: i32, n: i32) -> i32 {
+    if difficulty < 4 {
+        [100, 250, 500, 800, 1100, 9999].get(n as usize).copied().unwrap_or(9999 + 500 * (n - 5))
+    } else {
+        [200, 666, 9999].get(n as usize).copied().unwrap_or(99999)
+    }
+}
+
+impl ItemManager {
+    pub fn live(&self) -> impl Iterator<Item = &Item> {
+        self.items.iter().filter(|i| i.alive)
+    }
+
+    // ItemMgr_Spawn (08 §8.3).
+    pub fn spawn(&mut self, anm: &mut AnmManager, player: &Player, pos: [f32; 3], kind: i32, mode: u8) -> Option<usize> {
+        if pos[0] < -64.0 || pos[0] > 448.0 || kind < 0 {
+            return None;
+        }
+        let (mut kind, mut mode) = (kind as u8, mode);
+        if player.stats.power >= 128.0 && (kind == POWER || kind == BIG_POWER) {
+            kind = CONVERTED;
+        }
+        if kind == TIME_ORB {
+            mode = 3;
+        } else if kind == 10 {
+            (kind, mode) = (TIME_ORB, 5);
+        }
+        let probes = if kind == TIME_ORB { 1 } else { MAX_ITEMS };
+        let mut slot = None;
+        for _ in 0..probes {
+            let i = self.cursor % MAX_ITEMS;
+            self.cursor = i + 1;
+            if !self.items[i].alive {
+                slot = Some(i);
+                break;
+            }
+        }
+        let i = slot?;
+        if self.cursor > MAX_ITEMS - 1 {
+            self.cursor = 0;
+        }
+        let mut it = Item { pos, vel: [0.0, -2.2, 0.0], kind, alive: true, state: mode, ..Item::default() };
+        match mode {
+            2 => {
+                let x = anm.rng.next_f32() * 288.0 + 48.0;
+                let y = anm.rng.next_f32() * 192.0 - 64.0;
+                it.target = [x, y, 0.0];
+                it.vel = pos;
+            }
+            3 | 5 => {
+                it.vel[1] = -2.0 - anm.rng.next_f32() * 0.2;
+                it.vel[0] = 0.6 * anm.rng.next_signed();
+                if player.state == 2 {
+                    it.state = 0;
+                    it.vel = [0.0, -0.9, 0.0];
+                }
+            }
+            _ => {}
+        }
+        anm.set_script(&mut it.vm, ANM_SLOT, 0x3D + kind as usize);
+        it.vm.color = [0xFF; 4];
+        it.vm.flags |= anmvm::F_ZWRITE_OFF;
+        self.items[i] = it;
+        self.order.push(i as u16);
+        Some(i)
+    }
+
+    // Power reached 128: every other power item becomes a converted point item.
+    fn convert_power_items(&mut self, anm: &mut AnmManager, except: usize) {
+        for i in 0..MAX_ITEMS {
+            let it = &mut self.items[i];
+            if i == except || !it.alive || !(it.kind == POWER || it.kind == BIG_POWER) {
+                continue;
+            }
+            it.kind = CONVERTED;
+            if it.vel[1] > -0.5 {
+                it.vel = [0.0, -0.5, 0.0];
+            }
+            let mut vm = std::mem::take(&mut it.vm);
+            anm.set_script(&mut vm, ANM_SLOT, 0x45);
+            vm.flags |= anmvm::F_ZWRITE_OFF;
+            self.items[i].vm = vm;
+        }
+    }
+
+    // Collection handlers (08 §8.5).
+    fn collect(&mut self, idx: usize, anm: &mut AnmManager, p: &mut Player, spell: bool) -> Collected {
+        let mut out = Collected::default();
+        let (kind, y, max_flag) = (self.items[idx].kind, self.items[idx].pos[1], self.items[idx].max_flag);
+        let line = p.sht.poc_line;
+        let st = &mut p.stats;
+        match kind {
+            POWER | BIG_POWER => {
+                if st.power < 128.0 {
+                    st.power += if kind == POWER { 1.0 } else { 8.0 };
+                    Stats::checksum(&mut anm.rng);
+                    if st.power >= 128.0 {
+                        st.power = 128.0;
+                        out.cancel = !spell;
+                        self.convert_power_items(anm, idx);
+                    }
+                    st.add_score(10);
+                }
+                if kind == POWER {
+                    st.rank(1);
+                }
+            }
+            POINT => {
+                let max = st.max_point;
+                // SPEC-GAP: the doubling threshold (0x406D10) is taken as "gauge at youkai max".
+                let v = point_value(max, y, line, max_flag, st.youkai_max(), 1);
+                self.items[idx].max_flag = v >= max;
+                st.add_score(v);
+                st.point_items += 1;
+                st.point_items2 += 1;
+                st.rank(if v >= max { 10 } else { 3 });
+                while st.extends >= 0 && st.point_items2 >= st.next_extend {
+                    st.extend(&mut anm.rng);
+                    st.extends += 1;
+                    st.next_extend = next_extend(st.difficulty, st.extends);
+                }
+                st.point_counter += 1;
+            }
+            CONVERTED => {
+                let v = point_value(st.max_point, y, line, max_flag, st.youkai_max(), 10);
+                st.add_score(v);
+            }
+            BOMB => {
+                if st.bombs < 8.0 {
+                    st.bombs += 1.0;
+                    Stats::checksum(&mut anm.rng);
+                }
+            }
+            FULL_POWER => {
+                if st.power < 128.0 {
+                    out.cancel = true;
+                    self.convert_power_items(anm, idx);
+                }
+                st.power = 128.0;
+                Stats::checksum(&mut anm.rng);
+                st.add_score(1000);
+            }
+            LIFE => st.extend(&mut anm.rng),
+            STAR => {
+                let mut v = if p.bomb_active { 100 } else { (st.graze_total / 40) * 10 + 300 };
+                if v < 1 {
+                    v = 10;
+                }
+                st.add_score(v);
+            }
+            TIME_ORB => {
+                let v = if p.bomb_active {
+                    100
+                } else if st.point_items < 2000 {
+                    ((st.point_items2 / 2) * 10).max(100)
+                } else {
+                    10000
+                };
+                st.add_score(v);
+                st.add_time(1, &mut anm.rng);
+                st.spell_bonus_add += 8000;
+                if self.collect_timer == 0 && !p.bombing {
+                    st.gauge_add(if p.focus != 0 { 111 } else { -111 });
+                }
+            }
+            _ => {}
+        }
+        self.collected += 1;
+        out
+    }
+
+    // ItemMgr_Calc (08 §8.4). `cancel` runs a mode-1 cancel of all bullets in the middle of the loop.
+    pub fn calc(&mut self, anm: &mut AnmManager, p: &mut Player, spell: bool, mut cancel: impl FnMut(&mut ItemManager, &mut AnmManager, &mut Player)) {
+        let gs = anm.speed;
+        let c = p.sht.collect;
+        let m = p.item_sht().fall * gs;
+        self.count = 0;
+        let mut k = 0;
+        while k < self.order.len() {
+            let i = self.order[k] as usize;
+            k += 1;
+            if i == DEAD as usize || !self.items[i].alive {
+                continue;
+            }
+            self.count += 1;
+            let ps = p.state;
+            let it = &mut self.items[i];
+            let t = it.timer.cur;
+            // 0 common motion, 1 collection test, 2 no test
+            let mut step = 0;
+            match it.state {
+                2 => {
+                    if t < 60 {
+                        let f = t as f32 / 60.0;
+                        for a in 0..3 {
+                            it.pos[a] = it.vel[a] * (1.0 - f) + it.target[a] * f;
+                        }
+                        step = 1;
+                    } else if t == 60 {
+                        it.vel = [0.0; 3];
+                        it.state = 0;
+                    }
+                }
+                3 => {
+                    it.vel[1] += 0.05 * gs;
+                    if it.vel[1] > 0.0 || self.fall_timer < 0 {
+                        it.state = 1;
+                    }
+                    if ps == 2 {
+                        it.state = 0;
+                        it.vel = [0.0, -0.7, 0.0];
+                    }
+                }
+                5 => {
+                    it.vel[1] += 0.05 * gs;
+                    for a in 0..3 {
+                        it.pos[a] += it.vel[a] * m;
+                    }
+                    if it.vel[1] > 0.0 {
+                        it.state = 1;
+                        if ps == 2 {
+                            it.state = 0;
+                            it.vel = [0.0, -0.7, 0.0];
+                        }
+                    } else {
+                        step = 2;
+                    }
+                }
+                _ => {
+                    let attract = it.state == 1
+                        || (p.pos[1] < p.sht.poc_line && (p.stats.power >= 128.0 || p.focus != 0 || p.shot_type == 1 || p.shot_type == 6));
+                    if attract {
+                        if !matches!(ps, 1 | 2) {
+                            let a = crate::bullet::angle_from(it.pos, p.pos);
+                            let s = p.sht.attract_speed;
+                            it.vel = [a.cos() * s, a.sin() * s, 0.0];
+                            it.state = 1;
+                            for a in 0..3 {
+                                it.pos[a] += it.vel[a] * gs;
+                            }
+                            step = 1;
+                        } else {
+                            it.vel[1] = -0.7;
+                            it.state = 0;
+                        }
+                    } else {
+                        it.vel[0] = 0.0;
+                        it.vel[2] = 0.0;
+                        it.vel[1] = it.vel[1].max(-2.2);
+                    }
+                }
+            }
+            if step == 0 {
+                for a in 0..3 {
+                    it.pos[a] += it.vel[a] * m;
+                }
+                if it.state != 0 || it.pos[1] <= 448.0 + 16.0 {
+                    if it.vel[1] >= 3.0 {
+                        it.vel[1] = 3.0;
+                    } else {
+                        it.vel[1] += 0.03 * m;
+                    }
+                    step = 1;
+                } else {
+                    p.stats.rank(-3);
+                    it.alive = false;
+                    self.order[k - 1] = DEAD;
+                    continue;
+                }
+            }
+            if step == 1 && it.state != 3 && p.collect_test(it.pos, c) {
+                let out = self.collect(i, anm, p, spell);
+                self.items[i].alive = false;
+                self.order[k - 1] = DEAD;
+                if out.cancel {
+                    cancel(self, anm, p);
+                }
+                continue;
+            }
+            let it = &mut self.items[i];
+            it.timer.tick(gs);
+            if it.vm.script.is_some() {
+                it.vm.run(anm);
+            }
+        }
+        self.order.retain(|&i| i != DEAD && self.items[i as usize].alive);
+        if self.collect_timer != 0 {
+            self.collect_timer = (self.collect_timer - 1).max(0);
+        }
+    }
+
+    // Item draw (08 §8.6), in list order.
+    pub fn draw(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
+        for k in 0..self.order.len() {
+            let it = &mut self.items[self.order[k] as usize];
+            if !it.alive {
+                continue;
+            }
+            let y = it.pos[1];
+            if y < -8.0 {
+                it.vm.set_sprite(anm, 0xB6 + it.kind as i32);
+                it.vm.color[anmvm::A] = (255 - ((8.0 - y) * 255.0 / 128.0) as i32).max(64) as u8;
+                it.vm.pos = [it.pos[0] + 32.0, 8.0 + 16.0, 0.0];
+            } else {
+                it.vm.set_sprite(anm, 0xAC + it.kind as i32);
+                it.vm.color[anmvm::A] = 255;
+                it.vm.pos = [it.pos[0] + 32.0, y + 16.0, 0.0];
+            }
+            // SPEC-GAP: the item draw mode is not given; 2 (rotation-aware, snapped when unrotated).
+            anm.draw_mode_z(gfx, &mut it.vm, 2, 0.15);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_values() {
+        assert_eq!(point_value(10000, 100.0, 128.0, false, false, 1), 10000);
+        assert_eq!(point_value(10000, 300.0, 128.0, true, false, 1), 10000);
+        assert_eq!(point_value(10000, 228.0, 128.0, false, false, 1), 5000 - 100 * 10);
+        assert_eq!(point_value(10000, 228.9, 128.0, false, true, 1), 2 * (5000 - 100 * 10));
+        assert_eq!(point_value(12345, 128.5, 128.0, false, false, 1), 6170);
+        assert_eq!(point_value(10000, 100.0, 128.0, false, false, 10), 1000);
+        assert_eq!(point_value(12345, 228.0, 128.0, false, false, 10), 1230 / 2 - 100 * 1 - 5);
+    }
+
+    #[test]
+    fn extend_table() {
+        assert_eq!((0..8).map(|n| next_extend(1, n)).collect::<Vec<_>>(), [100, 250, 500, 800, 1100, 9999, 10499, 10999]);
+        assert_eq!((0..4).map(|n| next_extend(4, n)).collect::<Vec<_>>(), [200, 666, 9999, 99999]);
+    }
+
+    #[test]
+    fn power_levels() {
+        assert_eq!(power_level(0.0), 0);
+        assert_eq!(power_level(8.0), 1);
+        assert_eq!(power_level(127.0), 4);
+        assert_eq!(power_level(128.0), 5);
+    }
+}
