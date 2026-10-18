@@ -1,0 +1,6 @@
+rngsite 0 255 268
+rngsite 2 445 455
+rngsite 3 785 800
+rngsite 1 555 562
+bscan 1 545 575
+p30900 quit

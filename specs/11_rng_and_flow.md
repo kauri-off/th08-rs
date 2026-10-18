@@ -225,9 +225,13 @@ Player_Register(0)                      # lives, bombs, power, score carry over
 
 ### 3.4 Replay playback stage load (0x452D60) — VERIFIED
 From the replay header: shot (+0x6A), difficulty (+0x6B), config copy (+0xB4, 60 bytes). From the stage record
-(offset table header+0x20[stage]): score, rank byte (0x164D334), lives, bombs, power (via the setters),
-graze total, input stream pointer, 0x164D0B0, max point value, seed, spells captured, extends, next extend,
-gauge, clock. Missing record for the requested stage → load fails.
+(offset table header+0x20[stage]): point items (+4 → stats+0x30), rank byte (0x164D334), lives, bombs, power
+(via the setters), graze total, input stream pointer, 0x164D0B0, max point value, seed, spells captured,
+extends, next extend, gauge, clock. Missing record for the requested stage → load fails.
+**Score** (answers_impl14 §6, VERIFIED): the stage's own +0 is NOT used (it is the end-of-stage score). Instead
+score (stats+8) and displayed score (stats+0) := +0 of the **last existing record of a lower stage index**
+(scan k = 0 .. stage−1, keep the last non-null record pointer). No earlier record (first recorded stage) → score
+is not touched and keeps the fresh-start value 0 (StageStart fresh branch zeroes stats+0/+8).
 
 ## 4. In-game flow (`GameMgr_Calc` 0x439BC7, prio 2) — VERIFIED
 
@@ -259,6 +263,11 @@ Per frame (after `0x164D09C += 1`):
    (0x164D0BD = 1; uses the recorded per-30-frame FPS byte; INFERRED purpose: emulate recorded slowdown).
 6. Demo mode: any newly pressed key → `scene = 1`; demo timer limits per demo index 0–3: music fade +
    ScreenEffect type 2 at 6000/4800/4920/6900 frames, `scene = 1` and return 3 at 6120/4920/5040/7020.
+   Exact calls (0x43A3FA, VERIFIED): `ScreenEffect_Register(type 2, p0 = 120 frames, colour 0 = black, 0, 0,
+   draw prio 0x15)` (fade the playfield to black over 120 frames) then `Music_Fade(3.0 s)` (WAV mode: ÷ game
+   speed when 0 < speed ≤ 1; MIDI: Midi_Fade(3)). Demo index GM+0x3DBB4 (0x164D0BC): the GameManager static
+   constructor 0x43C5E1 sets it to **3**; `MainMenu_Top` does `n = (n + 1) % 4` before loading
+   `demorpy<n>.rpy`, so the first attract demo after boot is demorpy0, then 1, 2, 3, 0 …
 7. Anti-tamper checks of the decoy values (only affect a debug float 0x164D2FC; not needed).
 8. If paused (1 or 2) or game-over menu open → return 3 (calc chain stops: the whole game is frozen; the
    ASCII manager at prio 1 runs the pause / continue menus, 12).

@@ -185,6 +185,16 @@ Off screen with such a command active: counter += 1; free when it reaches 128. T
 slot is reused (a new bullet that spawns off screen can inherit a leftover count — faithful).
 Freed bullets are not pushed on the draw list and skip VM/timer work this frame.
 
+### 4.3a Live-bullet counter (mgr+0x6BA538 = 0x160F3C8) — VERIFIED (0x431240, runtime answers_impl14 §2)
+`BulletMgr_Calc` zeroes the counter, then for each slot 0..1535 in order: state ≠ 0 → counter += 1 **before**
+the bullet's update. So a bullet freed during this frame's update (off-screen rule, cancel end) is still
+counted this frame, and a bullet spawned this frame is counted only if its slot is processed after the spawn.
+Lasers are not counted. While bullets are frozen (GameFlags bit 10) the whole calc is skipped and the counter
+keeps its last value. Readers: `BulletMgr_SpawnPattern` (≥ 1536 → no spawn), GameMgr_Calc slow mode
+(11 §4 item 10) and the trace column `bullets`. Example (demo 1, frames 548–560, stage 4A): enemies at
+x = 350/400 place 4 bullets at (400, 64) moving right; they leave state 2 at x ≈ 402 and are freed the same
+frame by §4.3 — the original frees them exactly like the port; only the count differs.
+
 ### 4.4 State 5 (cancel)
 pos += vel / 2; run VM4 (cancel animation); when it finishes the bullet is freed. No collision.
 

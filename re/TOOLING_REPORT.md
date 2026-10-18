@@ -227,3 +227,18 @@ Format: `specs/data/drawlog/FORMAT.md`. Data and menu scripts: `specs/data/drawl
 - Game-wide draw paths seen: batched TRIANGLELIST quads (FVF 0x144, 6 vertices per quad, order 0 1 2 1 2 3),
   strip quads (`Draw3DWorld` FVF 0x102 via the VB, or 0x142 UP), ring strips (0x144 strip), untextured 0x44
   quads, CopyRects backgrounds.
+
+## 7. RNG call-site and bullet logging (RE-Q14, 2026-10-18)
+
+`hook.c` (copy in `re/probe/`) has two new `probe_cmd.txt` lines (windows in trace frames, `GM+0x3DDC0`):
+- `rngsite K F0 F1`: for attract demo K, frames F0..F1, every main-thread `Rng_Next16` call is written to
+  `probe_rng.txt` as `<global call no> <ret> <ebp-chain return addresses…>` (the RNG hook is now
+  `inline_hook_sp`, so sp[9] = return address and sp[3] = caller EBP). After each trace row the probe writes
+  `R demo K frame F ctr N rng S bullets B`. The draws listed before an `R` line belong to that frame.
+  `re/tools/rngsites.py probe_rng.txt [K] [-o]` symbolises the chains with callgraph.tsv (grouped, or in call
+  order with `-o`). Frame-pointer-less frames end the chain early; that is harmless.
+- `bscan K F0 F1`: dumps every non-free bullet slot per frame (`probe_bullets.txt`: slot, state, pos, vel,
+  angle, speed, off-screen counter, grace, ex-active bits, flags, colour, sprite w/h). The timer fields in that
+  dump are wrong offsets; ignore them.
+Example: `re/probe/cmds/impl14_rng.txt`; the run output is kept in `re/work/runs/impl14/`. One 4-demo run takes
+`run.sh 600`.

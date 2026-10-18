@@ -174,7 +174,7 @@ Write order (VERIFIED from the saver):
 | caller | what is taken from the file |
 |---|---|
 | Supervisor_OnRegister 0x445FA3 (boot) | PLST only. The block is zeroed first. |
-| MainMenu_OnRegister 0x470A6C | CLRD, PSCR, CATK, FLSP, PLST. Then sets GM flags bit 15/16/17 (16 §4). |
+| MainMenu_OnRegister 0x470A6C | CLRD, PSCR, CATK, FLSP, PLST. Then sets GM flags bit 15/16/17 (16 §4). These two functions are the only writers of bits 15–17 (all `g_GameFlags` stores checked); nothing clears them in game, replay or demo, so playback keeps them (answers_impl14 §11). |
 | GameMgr_LoadScoreData 0x43BBE1 (new game) | Hiscore for (shot, difficulty) → stats+0x14; CATK, CLRD, PSCR. In practice the hiscore is PSCR[shot].hiscore[stage][diff] and that play count is incremented. Then backs up CATK, clears the in-game HSCR record (§2.3) and copies the config into it. |
 | Result_OnRegister 0x45964D | Builds the 5×12 ranking lists and LSNM. In viewer mode (Result mode 0) also loads CATK, CLRD, PSCR. |
 
@@ -358,14 +358,25 @@ Inside each 17-word block:
 
 | index | counter | updated in |
 |---|---|---|
-| [0] | plays | StageStart on a fresh start, and on each continue (continue menu, 0x4037B0) |
+| [0] | plays | StageStart on a fresh start (**including stage practice and retries**), and on each continue (continue menu, 0x4037B0) |
 | [1..12] | plays per shot | same |
-| [13] | retries | StageStart when scene == 10 |
+| [13] | retries | StageStart when the requested scene 0x17CE8B4 == 10 — in addition to [0]/[1+shot] |
 | [14] | clears | ending 0x429980 / Extra clear in GameMgr_Calc |
 | [15] | continues | continue menu |
 | [16] | practice plays | StageStart in practice |
 
-- StageStart counts only when not replay, not spell practice and not slow mode. Every counter is capped at 999999.
+- StageStart counts only in the fresh-start branch, when not replay (GameFlags bit 3), not spell practice (bit 14)
+  and the cfg copy slow-mode byte (+0x25) is 0. The cfg copy's +0x25 is forced to 0 just before for Extra
+  (diff ≥ 4), stage practice (bit 0) and spell practice, so practice always counts. Order: [0] of the
+  difficulty block, [0] of block 6, [1+shot] diff, [1+shot] block 6, then if retry [13] diff + block 6, then if
+  stage practice [16] diff + block 6 (answers_impl14 §9, VERIFIED 0x43B05C–0x43B11A). Every counter is capped at 999999
+  (increment only while < 999999).
+- Play time (`Supervisor_UpdatePlayTime` 0x448418) adds `timeGetTime() − mark` (mark = Supervisor+0x1AC;
+  mark := 0 if the clock went backwards) split into h/m/s/ms with carries, then mark := now. Mark set: top of
+  every `GameManager_StageStart`, on leaving the pause menu (resume/retry/quit paths) and the continue menu.
+  Added: on pause entry (GameMgr_Calc), on continue-menu entry, and in `GameMgr_OnRemove` unless replay
+  (then mark := 0). So play time = wall time with a GM in a stage, excluding pause and continue menus,
+  replays/demos not counted at removal.
 - Music flags are set by `Music_PlaySlot`/`Music_PlayFile` unless in replay or demo. The ending sets flag 18, and 19 on a good ending.
 - The parser checks block 6 == Σ blocks 0..5.
 
@@ -383,6 +394,12 @@ Inside each 17-word block:
 - a line "tag size sum" in that file matches.
 
 The same check is applied to replays (§3.7).
+
+Values written (`ScoreDat_Save` and `Replay_RecordStageStart`): tag = string 0x4B660C "0100d", size/sum =
+0x17CEAB0/0x17CEAAC computed once at boot by 0x443730 over the running exe (`GetModuleFileNameA`): sum =
+Σ (u32 LE words 0 .. size/4 − 2), wrapping. For the shipped th08.exe: **size 840704 (0xCD400), sum
+0xA26861B9** (computed from the exe and matching an original-written score.dat, answers_impl14 §10). A port
+may write these constants; the check itself passes anyway when no `th08_*.ver` file exists.
 
 ### 2.11 Slowdown % (stored in HSCR and replays) — VERIFIED
 
@@ -485,7 +502,7 @@ The HUD shows the playback fps in yellow (0xFFFFFFD0), or red (0xFFFF4040) when 
 
 ### 3.4 Stage record (0x24 header + streams)
 
-See 11 §6 for the table. Corrected meaning of +0: score at the **end** of that stage (÷10). Playback (`Replay_PlayStageLoad`) restores score, lives, bombs, power, rank, seed and so on from the record of the stage being started (11 §3.4).
+See 11 §6 for the table. Corrected meaning of +0: score at the **end** of that stage (÷10). Playback (`Replay_PlayStageLoad`) restores lives, bombs, power, rank, seed and so on from the record of the stage being started; the **score** comes from +0 of the last existing record of an earlier stage (0 / untouched for the first recorded stage) (11 §3.4, answers_impl14 §6).
 
 ### 3.5 File layout
 

@@ -288,8 +288,12 @@ name still appears. End (`Player_UpdateBomb`, index 4): GameFlags bits 7–8 cle
 ## 3. Options (familiars)
 Generic part (09 §5): option = 0x2F4 bytes at player +0x40C + k·0x2F4 (VM, +0x2A4 pos, +0x2B0 anchor,
 +0x2BC velocity, +0x2C8 state, +0x2CC sub-state, +0x2D0 index, +0x2D8 orbit angle, +0x2DC facing, +0x2E0
-timer, +0x2EC calc fn, +0x2F0 draw fn). State 3 (leaving): interrupt 5 at t = 0, freed (state 0, fns
-cleared) at t ≥ 16. Every option's draw fn is 0x44E9E0: VM at pos + playfield origin, z 0.49, Draw2DRot. Options are
+timer, +0x2EC calc fn, +0x2F0 draw fn). State 3 (leaving; set by `Player_Move` on unfocus with the option timer +0x2E0 Set(0)): the calc fn only
+sends interrupt 5 when t == 0 and frees the option (state 0, calc/draw fns cleared) when **t > 16** — no motion,
+no effect 0x2F, no colour/facing work (VERIFIED for all 7 calc fns; answers_impl14 §5). Exception: Alice
+(0x44EA40) keeps pos = player pos − (0, 32) every leaving frame (even while bombing). The generic loop in
+`Player_Move` still runs `AnmVm_Run` and ticks the option timer after the calc fn every frame, including the
+freeing frame; nothing is drawn once the draw fn is cleared. Every option's draw fn is 0x44E9E0: VM at pos + playfield origin, z 0.49, Draw2DRot. Options are
 drawn by the player draw (prio 9) after the player sprite.
 Creation: solos at load; teams: on focus → all 4 slots rewritten from the youkai table (team 3 thereby
 drops its option 2 instantly); on unfocus → the youkai options (teams 0–2: all, team 3: slots 0–1) get

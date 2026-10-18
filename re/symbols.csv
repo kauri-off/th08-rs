@@ -686,3 +686,10 @@ addr,kind,name,signature,confidence,note
 0x004066e0,func,AnmVm_IsVisible,,VERIFIED,flags bit 0
 0x004338b0,func,GameMgr_IsFreshStart,,VERIFIED,0x17CE8BC
 0x004338c0,func,GameMgr_IsFullExit,,VERIFIED,0x17CE8C0
+0x0040ebc0,func,Timer_ChangedMultiple,,VERIFIED,cur != prev && cur % n == 0
+0x004066c0,func,Timer_Greater,,VERIFIED,n < cur
+0x0040d3f0,func,Timer_Equals,,VERIFIED,cur == n
+0x0040bc40,func,Player_GetMode,,VERIFIED,returns player byte +5
+0x0043be09,func,Plst_Inc,,VERIFIED,++ if < 999999
+0x00443730,func,Supervisor_ComputeExeSum,,VERIFIED,exe size/sum -> 0x17CEAB0/0x17CEAAC (VRSM)
+0x0043c5e1,func,GameMgr_Ctor,,VERIFIED,zero + demo index 3

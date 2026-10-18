@@ -37,7 +37,7 @@ manager is re-registered without reloading). Calc priority 9 (runs before enemie
 | +2 | u8 | | 1 after load |
 | +3 | u8 | focus | 0 unfocused / human side, 1 focused / youkai side (2 right after load) |
 | +4 | u8 | last-spell request | set while in the deathbomb window (§6.2) |
-| +5 | u8 | **mode** | active character: copy of +3 once the focus state has been held > 6 frames; solos: shot type parity (even = 0 human, odd = 1 youkai). Read by enemies (07 §10.1 "player mode") |
+| +5 | u8 | **mode** | active character: copy of +3 once the focus state has been held > 6 frames; solos: shot type parity (even = 0 human, odd = 1 youkai). Read by enemies (07 §10.1 "player mode", op 90–92 child setup). NOTE: the enemy-death gauge ±200 (07 §10.3), graze/item code read **+3**, not +5 |
 | +6 | u8 | forced bomb | set on death in the special mode (§6.1) |
 | +8 | i32 | focus age | frames since the last focus change |
 | +0xC | ptr | player ANM file (slot 5) | |

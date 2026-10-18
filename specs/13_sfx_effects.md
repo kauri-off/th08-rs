@@ -219,11 +219,15 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 60, 61 | 102, 103 (110) | init: pos += polar(param.x, 256); rotation z = param.x + π/2 | ECL op 140 (directional) |
 | 64 (0x40) | 77 | ring-like params copied from the VM each frame; centre = VM pos; never put in a draw list | stage (fixed slot 12, `Stage_Calc`) |
 | 47 | 72 | — | option sparkles (Remilia/Youmu/Yuyuko options, colours 0x80602050 / 0x80405080) |
-| 38 | 71 | — | enemy mode-reaction extra (flag B bit 1 + condition) |
+| 38 | 71 (20) | — (script: sprite 219, additive, scale frand+1.1 → 0 over 20, alpha irand 64+48, colour 3 × irand 64+128) | `Enemy_ReactPlayerMode` (07 §10.1 step 3): bit-8 enemies with flags B bit 1 (op 83) in human state, every 2nd frame of the enemy timer, at the final pos. **10 RNG draws per spawn** |
 
 R = `Rng_Float` from the game RNG (consumes replay-relevant RNG: every type with an RNG init draws during
 gameplay). Exact per-type RNG draw counts: types 3–11 two draws, 17/18/27 one, 21/26 two (one if param > 0),
-19 ten, 51/63 eight.
+19 ten, 51/63 eight. **Plus** the RNG ops (`frand` 2 draws, `irand` 2 draws) that the type's script executes at
+t = 0, because `AnmFile_StartScript` runs the VM once when the script is set (05, StartScript). Inside
+`Effect_Spawn` the script is set at +0x10B and the init fn is called at +0x188, so **script draws come before
+the init-fn draws** (VERIFIED by call order in the runtime RNG log). Script t=0 draws per type (scan of anm_dis, answers_impl14 §1): 17, 18, 27: 4 · 21: 4 ·
+22: 2 · 26: 6 · 38: 10 · 47: 8 · 51, 63: 10. All other types: 0.
 
 ### 2.7 Main spawn sites (VERIFIED)
 | event | effect |

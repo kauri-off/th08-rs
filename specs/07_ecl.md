@@ -542,7 +542,18 @@ left→idle or right→idle script.
 ### 10.1 Per frame, in order
 1. Timelines (§3), then for each enemy slot in index order (alive only):
 2. If flag A bit 10 (being chain-killed): only position follow + death processing. Else:
-3. If bit 8: react to player mode changes (effects, aura interrupt, mode bits e+0x3330 = 0x20/0x40, bit 11).
+3. If bit 8: `Enemy_ReactPlayerMode` 0x42C420 (answers_impl14 §1, VERIFIED at runtime). Player mode = player
+   byte +5 (0x17D5EFD, `FUN_0040bc40`). Using the stored mode bit 11 **at entry**:
+   - bit 11 clear (enemy in human state): if mode ≠ 0 → effect 0x1F at final pos (count 1, colour 0x80303080),
+     aura (e+0x53C8) interrupt 2, sfx 0x28, layer := 0. Then (still this branch, also on the switching frame):
+     if flags B bit 1 (op 83) and timer e+0x2E14 "changed and even" (current ≠ previous and current % 2 == 0,
+     `FUN_0040ebc0(t, 2)`) → `Effect_Spawn(38, final pos e+0x2D88, 1, 0xFFFFFFFF)`. Effect 38 = etama script
+     71, which runs at spawn: `frand` (1 Rng_NextFloat = 2 Next16) then 4 × `irand` (4 Rng_Range = 8 Next16) =
+     **10 draws**, in that order. The timer is 0 with previous −999 on a fresh enemy (template Timer_Set), so
+     the first draw happens on the enemy's first update, then every 2nd frame (timer ticks at step 7).
+   - bit 11 set (youkai state): if mode == 0 → effect 0x1E (0x80803030), aura interrupt 1, sfx 0x27, layer := 2.
+     No effect 38 in this state.
+   - Finally bit 11 := mode & 1; mode bits e+0x3330 := 0x40 if mode ≠ 0 else 0x20.
 4. Repeat { `Ecl_Run` (−1 → free enemy, no drops) ; movement (§8) ; screen check ; } while
    `Enemy_CheckLifeThresholds` or `Enemy_CheckTimeout` request a re-run (§10.3).
    Screen check (unless bit 4 or already done): when the box (final pos ± hitbox/2) first overlaps
@@ -583,8 +594,11 @@ left→idle or right→idle script.
   cleanup (children killed **without** drops). Re-run in the same frame.
 
 ### 10.3 Death (life < 1, flags B bits 3 and 6 clear)
-flags B bit 3 set; chained children killed with drops; a game gauge changes by ±200 (player-mode
-dependent, later phase); then by death mode (op 129):
+flags B bit 3 set; chained children killed with drops; `GameMgr_GaugeAdd(d, not forced)` with d = −200 when
+player byte **+3** (0x17D5EFB, the immediate focus byte — not the +5 mode byte) == 0, else +200 (so also +200
+while +3 is 2 right after load); not forced → skipped entirely while bombing (0x17D6ED4 ≠ 0); the gauge is
+clamped to [GM+0x3DDF8, GM+0x3DDFA] and the old-value copy (+0x20) updated (answers_impl14 §4, VERIFIED
+0x42D65C); then by death mode (op 129):
 
 | mode | behaviour |
 |---|---|
@@ -594,7 +608,13 @@ dependent, later phase); then by death mode (op 129):
 | 3 | life = 1, death latch/mode cleared, 3 death effects, aura ends (scripted "survive") |
 | 0–2 | if boss: HUD off and boss unregistered; item drops (§10.4); a boss without an active spell card also turns all bullets into bonus and kills other enemies (score + HUD) |
 
-Unless bit 10: sfx 2/3, death effects (bytes e+0x3310/0x3311). Then, if a death sub is set: context reset
+Unless bit 10: sfx 2/3, death effects: `Effect_Spawn(e+0x3310, pos, 1)` if that signed
+byte ≥ 0, then `Effect_Spawn(e+0x3311 + 4, pos, 4)` (4 sparks, 4 draws each); then **if the gauge is at human
+max or youkai max** (`Gauge_IsHumanMax`: gauge ≤ GM+0x3DDFC, or `Gauge_IsYoukaiMax`: gauge ≥ GM+0x3DDFE) →
+`ItemMgr_Spawn(final pos, 7 = time orb, 1)` → forced mode 3 → Rng_FloatRange + Rng_SignedRange = **4 draws**
+(08 §8.3; nothing if pos.x ∉ [−64, 448] or the item cursor slot is busy). RNG order on a normal kill frame:
+drops (`Enemy_DropItems`: its spark effect ×3 for an item, + random extras) → death sparks ×4 → time orb
+(answers_impl14 §3, VERIFIED at runtime). Then, if a death sub is set: context reset
 (depth 0, threads freed, descriptor reset) and the main context jumps to the death sub (the enemy keeps
 running its script), death sub := −1.
 
@@ -608,8 +628,11 @@ at final pos + (Rng·128 − 64, Rng·128 − 64); counts reset. (Item types: 08
 ### 10.5 Child chains (ops 90–92)
 Spawn fails (manager flag) if the parent's life < 1 or it is being chain-killed. The new enemy (vars copied,
 §4.1) is appended to the parent's chain (root = parent, linked via +4/+8), parent child count += 1; it gets
-bit 8 (reacts to player mode), bit 11 = current mode, layer 0/2, contact damage off, an aura effect (0x20)
-interrupted with 1/2 by mode. Op 91 position relative to the parent's final pos; op 92 additionally makes the
+bit 8 (reacts to player mode), bit 11 = current mode (player byte +5), layer 2 (human, mode 0) / 0 (youkai),
+contact damage off, and — only if it has none yet (e+0x53C8 == 0) — an aura `Effect_SpawnHigh(0x20, pos, 1)`
+(pos e+0x2D34; op 92: e+0x2D88) with `AnmVm_Interrupt` **1 when mode == 0 (human), 2 when youkai**; aura VM flag
+bit 17 := flags A bit 2 (just cleared → 0); if e+0x2E0C bit 0 the aura VM +0x14 is negated (answers_impl14 §7,
+VERIFIED 0x41E5ED…). Op 91 position relative to the parent's final pos; op 92 additionally makes the
 child follow the parent (offset = parent pos, bit 9). Sound 0x24. When the parent dies or passes a threshold,
 children are killed (bit 10) with score popups / item showers proportional to chain length (0x42ADB0).
 

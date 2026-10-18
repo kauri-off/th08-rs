@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <intrin.h>
 
 #define U8(a) (*(volatile uint8_t *)(a))
 #define U16(a) (*(volatile uint16_t *)(a))
@@ -16,6 +17,9 @@ static uint32_t g_present_n, g_calc_n;
 static uint16_t g_last_cw_calc = 0xFFFF, g_last_cw_present = 0xFFFF;
 static int g_trace_all, g_nodik, g_gks_calls, g_effscan_until;
 static uint32_t g_rng_at_calc, g_draw_rng_frames;
+static int g_rsw[16][3], g_nrs, g_rs_on;
+static FILE *g_rsf, *g_bsf;
+static int g_bsw[16][3], g_nbs;
 
 typedef void *(WINAPI *PFN_Create8)(UINT);
 typedef HRESULT(WINAPI *PFN_CreateDevice)(void *, UINT, int, HWND, DWORD, void *, void **);
@@ -50,6 +54,8 @@ static void load_cmds(void) {
         Cmd *c = &g_cmds[g_ncmd]; memset(c, 0, sizeof *c);
         char cond[32];
         if (!strncmp(line, "traceall", 8)) { g_trace_all = 1; continue; }
+        if (!strncmp(line, "bscan", 5)) { if (g_nbs < 16 && sscanf(line + 5, "%d %d %d", &g_bsw[g_nbs][0], &g_bsw[g_nbs][1], &g_bsw[g_nbs][2]) == 3) g_nbs++; continue; }
+        if (!strncmp(line, "rngsite", 7)) { if (g_nrs < 16 && sscanf(line + 7, "%d %d %d", &g_rsw[g_nrs][0], &g_rsw[g_nrs][1], &g_rsw[g_nrs][2]) == 3) g_nrs++; continue; }
         if (line[0] == '#' || sscanf(line, "%31s %15s", cond, c->act) < 2) continue;
         if (!strcmp(cond, "traceall")) { g_trace_all = 1; continue; }
         if (cond[0] == 'p') { c->ctype = C_PRESENT; c->f = atoi(cond + 1); }
@@ -144,9 +150,25 @@ static BOOL WINAPI h_GetKeyboardState(PBYTE s) {
 }
 
 /* ---- callbacks from inline hooks (no FPU use!) ---- */
-static void __cdecl cb_rng(void) {
+static int rs_window(void) {
+    if (!g_nrs || U32(0x17CE8B0) != 2 || !(U32(0x164D0B4) & 2)) return 0;
+    int k = U8(0x164D0BC), f = (int)U32(0x164D2C8);
+    for (int i = 0; i < g_nrs; i++) if (g_rsw[i][0] == k && f + 1 >= g_rsw[i][1] && f <= g_rsw[i][2]) return 1;
+    return 0;
+}
+static void __cdecl cb_rng(uint32_t *sp) {
     g_rng_calls++;
-    if (GetCurrentThreadId() == g_main_tid) g_rng_main++;
+    if (GetCurrentThreadId() == g_main_tid) {
+        g_rng_main++;
+        if (g_rs_on) {
+            if (!g_rsf) g_rsf = fopen("probe_rng.txt", "w");
+            uint32_t lo = __readfsdword(8), hi = __readfsdword(4);
+            uint32_t ebp = sp[3];
+            fprintf(g_rsf, "%u %08x", g_rng_calls, sp[9]);
+            for (int d = 0; d < 6 && ebp >= lo && ebp + 8 <= hi; d++) { fprintf(g_rsf, " %08x", U32(ebp + 4)); uint32_t n = U32(ebp); if (n <= ebp) break; ebp = n; }
+            fprintf(g_rsf, "\n");
+        }
+    }
     else {
         static uint16_t seen[8]; static int nseen;
         uint16_t cw = fpu_cw();
@@ -164,6 +186,27 @@ static void __cdecl cb_stagestart(void) {
 static uint32_t g_pass_rows;
 static int g_pass;
 static void emit_row(void) {
+    if (g_nrs) {
+        if (g_rs_on && g_rsf) { fprintf(g_rsf, "R demo %u frame %u ctr %u rng %04x bullets %u\n", U8(G_DEMOIDX), U32(G_GMFRAME), g_rng_calls, U16(G_RNG), U32(G_BULLETS)); fflush(g_rsf); }
+        g_rs_on = rs_window();
+    }
+    if (g_nbs && in_demo()) {
+        int k = U8(G_DEMOIDX), f = (int)U32(G_GMFRAME);
+        for (int i = 0; i < g_nbs; i++) if (g_bsw[i][0] == k && f >= g_bsw[i][1] && f <= g_bsw[i][2]) {
+            if (!g_bsf) g_bsf = fopen("probe_bullets.txt", "w");
+            fprintf(g_bsf, "F demo %d frame %d count %u\n", k, f, U32(G_BULLETS));
+            for (int j = 0; j < 1536; j++) {
+                uint32_t b = 0xF54E90 + 0x1A880 + j * 0x10B8;
+                if (!U16(b + 0xDB8)) continue;
+                uint32_t spr = U32(b + 0x224), sw = spr ? U32(spr + 0x34) : 0, sh = spr ? U32(spr + 0x30) : 0;
+                fprintf(g_bsf, "B %d st %d pos %08x %08x vel %08x %08x ang %08x spd %08x off %d grace %d act %x fl %x col %d tmr %d age %d wh %08x %08x\n",
+                        j, (int16_t)U16(b + 0xDB8), U32(b + 0xD44), U32(b + 0xD48), U32(b + 0xD50), U32(b + 0xD54), U32(b + 0xD74), U32(b + 0xD68),
+                        (int16_t)U16(b + 0xDBA), (int)U32(b + 0xDA8), U32(b + 0xDAC), U32(b + 0xDB0), (int16_t)U16(b + 0xDB4), (int)U32(b + 0xD80 + 4), (int)U32(b + 0xD8C + 4), sw, sh);
+            }
+            fflush(g_bsf);
+            break;
+        }
+    }
     if (U32(G_SCENE) != 2 || (!in_demo() && !g_trace_all)) return;
     uint32_t st = U32(G_STATS);
     int en = 0;
@@ -351,7 +394,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID res) {
     if (g_inmask) g_nodik = 1;
     g_draw = fopen("probe_draw.txt", "w");
     if (g_draw) setvbuf(g_draw, NULL, _IOFBF, 1 << 22);
-    inline_hook(0x43ECC0, cb_rng, 6);
+    inline_hook_sp(0x43ECC0, cb_rng, 6);
     inline_hook(0x45D790, cb_postcalc, 6);
     inline_hook(0x43ABD7, cb_stagestart, 6);
     inline_hook(0x43CA65, cb_passstart, 7);

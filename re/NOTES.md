@@ -302,3 +302,20 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   too coarse), interpolated perspective-correctly, factor clamped PER PIXEL, + near/far clipping → mean |Δ| 0.20–0.40/255
   (vs 3–4 with per-vertex clamp). drawlog.py: --fog = this model, clipping default (--noclip).
 - WRITTEN: specs/answers_impl13.md; fixed 12 §5.9, 11 §7, 06 §8, 15 §1.1 (bit 10), FORMAT.md fog row, TOOLING_REPORT §6 validation; drawlog.py render clip+fog. RE-Q13 DONE.
+
+# RE-Q14 (2026-10-18) — impl14 questions (demo sync blockers)
+- PROBE: hook.c `rngsite K F0 F1` (RNG call chains per demo frame → probe_rng.txt; tool re/tools/rngsites.py) and
+  `bscan K F0 F1` (bullet slots → probe_bullets.txt). TOOLING_REPORT §7. Run data re/work/runs/impl14/.
+- Q1: 10 draws = Enemy_ReactPlayerMode 0x42C420 → Effect_Spawn(38) (etama script 71: frand + 4 irand), when flag
+  A bit 11 clear (human), flags B bit 1 (op 83), enemy timer changed && even (Timer_ChangedMultiple 0x40EBC0).
+  Effect scripts with t=0 RNG: 17/18/27 4, 21 4, 22 2, 26 6, 38 10, 47 8, 51/63 10 (script draws before init fn).
+- Q2: no off-screen exception; bullet counter 0x160F3C8 counts slots non-free at START of their update (freed
+  this frame still counted). 08 §4.3a.
+- Q3: +4 = time orb ItemMgr_Spawn(pos,7,1) at human/youkai-max gauge after death sparks. Order: hit sparks,
+  drop sparks ×3 (Enemy_DropItems), death sparks ×4, time orb.
+- Q4: death gauge ±200 reads player +3 (focus byte), not +5; not forced. Q5: option state 3: no motion except
+  Alice, freed t > 16, VM still runs. Q6: score = +0 of last existing lower-stage record. Q7: aura int 1 human/2 youkai.
+- Q8: demo end ScreenEffect(2,120,black,prio 0x15) + Music_Fade(3.0 s); demo idx ctor = 3. Q9: practice/retry
+  also count [0]/[1+shot]; play time marks. Q10: VRSM 840704 / 0xA26861B9. Q11: bits 15–17 never cleared.
+- WRITTEN: specs/answers_impl14.md; fixed 07 §10.1/§10.3/§10.5, 08 §4.3a, 09 §1.1, 11 §3.4/§4, 13 §2.6, 14 §3,
+  15 §2.9/§2.10/§3.4. Symbols +7, redump done. RE-Q14 DONE.
