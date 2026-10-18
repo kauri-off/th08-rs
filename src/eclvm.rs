@@ -216,7 +216,7 @@ fn read_i(m: &EnemyManager, e: &Enemy, c: &Context, r: &IRef) -> i32 {
         IRef::Ctx(k) => c.int(k),
         IRef::EInt(k) => e.ivars[k],
         IRef::Difficulty => m.g.difficulty,
-        IRef::Rank => m.g.rank,
+        IRef::Rank => crate::gamemgr::rank(),
         IRef::F2e1c => e.f2e1c,
         IRef::Life => e.life,
         IRef::GArg(k) => m.g.args[k] as i32,
@@ -400,7 +400,7 @@ impl Exec<'_> {
             IRef::Ctx(k) => t.ctx.set_int(k, v),
             IRef::EInt(k) => self.e.ivars[k] = v,
             IRef::Difficulty => self.m.g.difficulty = v,
-            IRef::Rank => self.m.g.rank = v,
+            IRef::Rank => crate::gamemgr::set_rank(v),
             IRef::F2e1c => self.e.f2e1c = v,
             IRef::Life => self.e.life = v,
             IRef::GArg(k) => self.m.g.args[k] = v as u32,
@@ -630,6 +630,13 @@ impl Exec<'_> {
             }
         }
         if chained {
+            // Child aura 0x20 (07 §10.5). SPEC-GAP: interrupt 1 = youkai, 2 = human is a guess.
+            let fp = self.m.enemies[ci].final_pos;
+            let fx = crate::effect::spawn_high(self.anm, 0x20, fp, 0xFFFFFFFF);
+            crate::effect::get(fx, |x| x.vm.pending_interrupt = if youkai { 1 } else { 2 });
+            self.m.enemies[ci].fx_aura = fx;
+        }
+        if chained {
             let mut last: Option<usize> = None;
             let mut n = self.e.chain_next;
             let mut guard = 0;
@@ -702,7 +709,7 @@ impl Exec<'_> {
         }
         d.origin = add3(e.final_pos, e.shot_offset);
         if self.m.g.spell.is_none() {
-            let rank = self.m.g.rank;
+            let rank = crate::gamemgr::rank();
             let [c1a, c1b, c2a, c2b] = e.rank_counts;
             let [s0, s1] = e.rank_speed;
             d.count1 = (d.count1 as i32 + lerp_i(c1a, c1b, rank)).max(1) as i16;
@@ -1112,6 +1119,11 @@ impl Exec<'_> {
             name: spell.name.clone(),
             card: spell.id,
             name_only: false,
+        });
+        crate::gui::request(crate::gui::Req::Attempt {
+            card: spell.id,
+            name: spell.name.clone(),
+            owner: spell.owner.clone(),
         });
         self.m.g.spell = Some(spell);
         if let Some(st) = &self.m.stage {
@@ -1543,7 +1555,7 @@ impl Exec<'_> {
             96..=104 => self.bullet_op(t, ins),
             105 | 106 => {
                 let n = self.ai(t, ins, 0);
-                let iv = n + lerp_i(n / 5, -n / 5, self.m.g.rank);
+                let iv = n + lerp_i(n / 5, -n / 5, crate::gamemgr::rank());
                 self.e.autofire_interval = iv;
                 let start = if op == 106 { self.anm.rng.range(iv) } else { 0 };
                 self.e.autofire_timer.set(start);

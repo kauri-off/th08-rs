@@ -605,7 +605,6 @@ impl EnemyManager {
     pub fn stage_start(&mut self, anm: &mut AnmManager, index: usize) {
         let d = self.g.difficulty.clamp(0, 4) as usize;
         let mut p = self.player.borrow_mut();
-        p.stats.max_point = crate::player::MAX_POINT[d];
         p.stats.time_threshold = crate::player::TIME_THR
             .get(index % 9)
             .map_or(10, |r| r[d.min(3)]);
@@ -1309,7 +1308,11 @@ impl EnemyManager {
         if p.gflags & (GF_LAST_SPELL | GF_LAST_CAPTURED) != 0 {
             p.gflags = p.gflags & !GF_LAST_SPELL | GF_LAST_CAPTURED;
         }
-        crate::gui::request(crate::gui::Req::Captured(s.id));
+        crate::gui::request(crate::gui::Req::Captured {
+            card: s.id,
+            bonus: s.bonus,
+            comment: s.comment.clone(),
+        });
         let thr = total - total / 7;
         let time = if self.g.fixed_bonus {
             700
@@ -1522,6 +1525,14 @@ impl EnemyManager {
             self.enemies[r].children -= 1;
         }
         self.kill_chain(idx, Some(&mut *anm));
+        {
+            // SPEC-GAP: ±200 by player mode (07 §10.3 "later phase"); sign and bombing rule taken from the demo traces.
+            let mut p = self.player.borrow_mut();
+            if !p.bombing {
+                let n = if p.mode == 1 { 200 } else { -200 };
+                p.stats.gauge_add(n);
+            }
+        }
         let e = &mut self.enemies[idx];
         let mode = (e.flags >> A_DEATH_SHIFT) & 7;
         match mode {

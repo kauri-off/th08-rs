@@ -35,6 +35,19 @@ fn payload_key(tag: u8) -> Option<CipherKey> {
 }
 
 fn decrypt(src: &[u8], k: &CipherKey) -> Vec<u8> {
+    crypt(src, k, false)
+}
+
+// Block cipher used by the archive and score.dat (encrypt = inverse permutation).
+pub fn block_decrypt(src: &[u8], key: u8, step: u8, block: usize, limit: usize) -> Vec<u8> {
+    crypt(src, &ck(key, step, block, limit), false)
+}
+
+pub fn block_encrypt(src: &[u8], key: u8, step: u8, block: usize, limit: usize) -> Vec<u8> {
+    crypt(src, &ck(key, step, block, limit), true)
+}
+
+fn crypt(src: &[u8], k: &CipherKey, enc: bool) -> Vec<u8> {
     let len = src.len();
     let mut out = src.to_vec();
     let rem = len % k.block;
@@ -50,7 +63,11 @@ fn decrypt(src: &[u8], k: &CipherKey) -> Vec<u8> {
             let mut d = pos + b - 1 - half;
             let n = if half == 0 { b.div_ceil(2) } else { b / 2 };
             for _ in 0..n {
-                out[d] = src[s] ^ key;
+                if enc {
+                    out[s] = src[d] ^ key;
+                } else {
+                    out[d] = src[s] ^ key;
+                }
                 key = key.wrapping_add(k.step);
                 s += 1;
                 d = d.wrapping_sub(2);
@@ -123,6 +140,87 @@ pub fn lzss_decompress(input: &[u8], size_hint: usize) -> Vec<u8> {
         }
     }
     out
+}
+
+struct BitWriter {
+    out: Vec<u8>,
+    cur: u8,
+    mask: u8,
+}
+
+impl BitWriter {
+    fn bits(&mut self, v: u32, n: u32) {
+        for i in (0..n).rev() {
+            if v >> i & 1 != 0 {
+                self.cur |= self.mask;
+            }
+            self.mask >>= 1;
+            if self.mask == 0 {
+                self.out.push(self.cur);
+                (self.cur, self.mask) = (0, 0x80);
+            }
+        }
+    }
+}
+
+// LZSS encoder producing streams `lzss_decompress` reads back (greedy, hash chains over 3-byte prefixes).
+pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
+    const WINDOW: usize = 0x2000 - 18;
+    let mut w = BitWriter {
+        out: Vec::new(),
+        cur: 0,
+        mask: 0x80,
+    };
+    let key =
+        |i: usize| (input[i] as usize) << 16 | (input[i + 1] as usize) << 8 | input[i + 2] as usize;
+    let mut head: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut i = 0;
+    while i < input.len() {
+        let mut best = (0, 0);
+        if i + 3 <= input.len() {
+            if let Some(c) = head.get(&key(i)) {
+                for &j in c.iter().rev() {
+                    if i - j > WINDOW {
+                        break;
+                    }
+                    if (j + 1) & 0x1fff == 0 {
+                        continue;
+                    }
+                    let n = (0..18.min(input.len() - i))
+                        .take_while(|&k| input[j + k] == input[i + k])
+                        .count();
+                    if n > best.1 {
+                        best = (j, n);
+                        if n == 18 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        let n = if best.1 >= 3 {
+            w.bits(0, 1);
+            w.bits(((best.0 + 1) & 0x1fff) as u32, 13);
+            w.bits(best.1 as u32 - 3, 4);
+            best.1
+        } else {
+            w.bits(1, 1);
+            w.bits(input[i] as u32, 8);
+            1
+        };
+        for k in i..i + n {
+            if k + 3 <= input.len() {
+                head.entry(key(k)).or_default().push(k);
+            }
+        }
+        i += n;
+    }
+    w.bits(0, 1);
+    w.bits(0, 13);
+    if w.mask != 0x80 {
+        w.out.push(w.cur);
+    }
+    w.out
 }
 
 struct Entry {
@@ -198,6 +296,23 @@ impl Archive {
         let k = payload_key(file[3])
             .with_context(|| format!("{name}: unknown edz type {}", file[3]))?;
         Ok(decrypt(&file[4..], &k))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn lzss_and_cipher_round_trip() {
+        let data: Vec<u8> = (0..20000u32)
+            .map(|i| (i * 7 % 251) as u8 ^ (i / 300) as u8)
+            .chain(std::iter::repeat_n(0, 5000))
+            .collect();
+        let c = super::lzss_compress(&data);
+        assert!(c.len() < data.len());
+        assert_eq!(super::lzss_decompress(&c, data.len()), data);
+        let e = super::block_encrypt(&data, 0x59, 0x79, 0x100, 0xC00);
+        assert_ne!(e, data);
+        assert_eq!(super::block_decrypt(&e, 0x59, 0x79, 0x100, 0xC00), data);
     }
 }
 

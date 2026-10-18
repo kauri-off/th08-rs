@@ -651,7 +651,10 @@ impl PauseMenu {
                 if self.frame >= 20 {
                     match self.state {
                         4 => audio.pause_bgm(false),
-                        9 => g.request(gamemgr::SCENE_MENU),
+                        9 => {
+                            g.save_score(&mut ctx_anm.rng, true);
+                            g.request(gamemgr::SCENE_MENU)
+                        }
                         _ => {
                             g.request(if g.practice() || g.spell_practice() || g.difficulty >= 4 {
                                 gamemgr::SCENE_RELOAD

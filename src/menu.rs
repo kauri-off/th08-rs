@@ -81,7 +81,7 @@ const STAGE_NAMES: [&str; 8] = [
     "Stage 1", "Stage 2", "Stage 3", "Stage 4A", "Stage 4B", "Stage 5", "Stage 6A", "Stage 6B",
 ];
 
-// Unlock checks (15 §2.4) on the session's clear masks. SPEC-GAP: score.dat is not loaded yet; `TH08_UNLOCK=1` unlocks everything.
+// Unlock checks (15 §2.4) on the score.dat clear masks; `TH08_UNLOCK=1` unlocks everything.
 fn unlock_all() -> bool {
     crate::env::var("TH08_UNLOCK").is_some_and(|v| v != "0")
 }
@@ -113,12 +113,16 @@ fn spell_practice_unlocked(g: &gamemgr::Game) -> bool {
 }
 
 // Play count (score.dat); lives max 4 / 5 / 6 below 30 / 60 plays (answers_impl9 §16).
-fn play_count() -> u32 {
-    if unlock_all() { 60 } else { 0 }
+fn play_count(g: &gamemgr::Game) -> u32 {
+    if unlock_all() {
+        60
+    } else {
+        g.score.plst.total_plays()
+    }
 }
 
-fn lives_max() -> i32 {
-    match play_count() {
+fn lives_max(g: &gamemgr::Game) -> i32 {
+    match play_count(g) {
         ..30 => 4,
         30..60 => 5,
         _ => 6,
@@ -149,6 +153,9 @@ pub struct MainMenu {
     pending: Option<Pending>,
     snapshot: Config,
     stages: [bool; 8],
+    replays: Vec<(String, crate::replay::Replay)>,
+    replay_step: u8,
+    replay_stage: usize,
 }
 
 impl MainMenu {
@@ -171,6 +178,9 @@ impl MainMenu {
             pending: None,
             snapshot: Config::default(),
             stages: [false; 8],
+            replays: Vec::new(),
+            replay_step: 0,
+            replay_stage: 0,
         }
     }
 
@@ -308,12 +318,28 @@ impl MainMenu {
         if self.frames < 10 || self.pending.is_some() {
             return;
         }
-        // SPEC-GAP: the attract demo (1500 idle frames → demo replay) needs replay playback; the counter only runs.
         self.idle = if ctx.input.held != 0 {
             0
         } else {
             self.idle + 1
         };
+        if self.idle >= 1500 {
+            self.idle = 0;
+            let n = (ctx.game.demo + 1) % 4;
+            let r = ctx
+                .archive
+                .read(&format!("demorpy{n}.rpy"))
+                .and_then(|b| crate::replay::Replay::parse(&b));
+            match r {
+                Ok(r) => {
+                    if crate::replay::start_playback(&mut ctx.game, r, None, Some(n)) {
+                        ctx.audio.stop_bgm();
+                        return;
+                    }
+                }
+                Err(e) => log::warn!("demorpy{n}.rpy: {e:#}"),
+            }
+        }
         let locked: Vec<bool> = (0..ITEMS).map(|i| Self::item_locked(ctx, i)).collect();
         self.move_cursor(ctx, ITEMS as i32, UP, DOWN, |c| !locked[c as usize]);
         if ctx.input.pressed(CONFIRM) {
@@ -571,13 +597,14 @@ impl MainMenu {
             0
         };
         let item = self.cursor;
+        let lmax = lives_max(&ctx.game);
         let cfg = &mut ctx.game.cfg;
         if dir != 0
             && let Some(v) = Self::option_value(cfg, item)
         {
             let old = *v;
             let (max, step) = match item {
-                0 => (lives_max(), 1),
+                0 => (lmax, 1),
                 2 => (2, 1),
                 3 | 4 => (100, if inp.repeat { 4 } else { 1 }),
                 _ => (1, 1),
@@ -641,7 +668,7 @@ impl MainMenu {
                 self.highlight(ctx, first + k, k == v as usize);
             }
         }
-        let plays = play_count();
+        let plays = play_count(&ctx.game);
         for (vm, need) in [(25, 30), (26, 60)] {
             if plays < need {
                 self.vms[vm].set_flag(anmvm::F_VISIBLE, false);
@@ -670,7 +697,197 @@ impl MainMenu {
         }
     }
 
-    // SPEC-GAP: replay, spell practice and key config are later tasks; these screens return on any confirm/cancel.
+    // Replay screen (15 §3.8 / 12 §2.8). SPEC-GAP: the list is drawn with ASCII text, not the title01.anm VMs 77–110.
+    fn replay(&mut self, ctx: &mut Ctx) {
+        const SHOTS: [&str; 12] = [
+            "Reimu&Yukari",
+            "Marisa&Alice",
+            "Sakuya&Remilia",
+            "Youmu&Yuyuko",
+            "Reimu",
+            "Yukari",
+            "Marisa",
+            "Alice",
+            "Sakuya",
+            "Remilia",
+            "Youmu",
+            "Yuyuko",
+        ];
+        const DIFFS: [&str; 5] = ["Easy", "Normal", "Hard", "Lunatic", "Extra"];
+        const SPEEDS: [&str; 3] = ["Normal", "Slowdown", "Fast"];
+        if self.frames == 0 {
+            self.replay_step = 0;
+            self.cursor = 0;
+            let mut names: Vec<String> =
+                (1..=15).map(|i| format!("replay/th8_{i:02}.rpy")).collect();
+            let mut ud: Vec<String> = crate::scoredat::storage_list("replay/th8_ud")
+                .into_iter()
+                .filter(|n| n.ends_with(".rpy"))
+                .collect();
+            ud.sort();
+            names.extend(ud.into_iter().take(45));
+            self.replays = names
+                .into_iter()
+                .filter_map(|n| {
+                    let r =
+                        crate::replay::Replay::parse(&crate::scoredat::storage_read(&n)?).ok()?;
+                    Some((n, r))
+                })
+                .collect();
+        }
+        let y0 = 120.0;
+        let back = |m: &mut Self, ctx: &mut Ctx| {
+            sound::play(sound::CANCEL);
+            m.interrupt_all(6);
+            m.pending = Some(Pending {
+                frames: 20,
+                screen: TOP,
+                cursor: 4,
+            });
+            let _ = ctx;
+        };
+        if self.replays.is_empty() {
+            ctx.ascii.push(Text::new(200.0, 220.0, "No replay files"));
+            if self.frames >= 20 && self.pending.is_none() && ctx.input.pressed(CONFIRM | CANCEL) {
+                back(self, ctx);
+            }
+            return;
+        }
+        let n = self.replays.len() as i32;
+        let page = self.cursor / 15;
+        for (i, (name, r)) in self
+            .replays
+            .iter()
+            .enumerate()
+            .skip(page as usize * 15)
+            .take(15)
+        {
+            let no = name
+                .trim_start_matches("replay/th8_")
+                .trim_end_matches(".rpy")
+                .to_string();
+            let last = if r.spell_id() >= 0 {
+                format!("Spell No.{:3}", r.spell_id())
+            } else {
+                DIFFS[r.difficulty().min(4) as usize].to_string()
+            };
+            let line = format!(
+                "No.{no:>2} {:8}  {:6} {:14} {}",
+                r.name(),
+                r.date(),
+                SHOTS[r.shot() as usize % 12],
+                last
+            );
+            let c = if i as i32 == self.cursor {
+                0xFFFFFFFF
+            } else {
+                0xFF808080
+            };
+            let y = y0 + 12.0 * (i as i32 - page * 15) as f32;
+            ctx.ascii.push(Text::new(40.0, y, line).scale(0.75).argb(c));
+        }
+        let (_, r) = &self.replays[self.cursor.clamp(0, n - 1) as usize];
+        let stages: Vec<usize> = (0..9).filter(|&s| r.stages[s].is_some()).collect();
+        if self.replay_step >= 1 {
+            ctx.ascii.push(Text::new(
+                48.0,
+                320.0,
+                format!("Slowdown {:2.3}%", r.slowdown()),
+            ));
+            ctx.ascii.push(Text::new(48.0, 336.0, "Stage    LastScore"));
+            for (k, &st) in stages.iter().enumerate() {
+                let name = STAGE_NAMES.get(st).copied().unwrap_or("Extra");
+                let score = r.stages[st].as_ref().map_or(0, |s| s.score);
+                let c = if self.replay_step == 1 && k == self.replay_stage {
+                    0xFFFFFFFF
+                } else {
+                    0xFF808080
+                };
+                ctx.ascii.push(
+                    Text::new(
+                        48.0,
+                        352.0 + 16.0 * k as f32,
+                        format!("{name:8} {score:9}0"),
+                    )
+                    .argb(c),
+                );
+            }
+        }
+        if self.replay_step == 2 {
+            let n_speed = if r.spell_id() >= 0 { 2 } else { 3 };
+            for (k, sp) in SPEEDS.iter().take(n_speed).enumerate() {
+                let c = if k as u8 == ctx.game.replay_speed {
+                    0xFFFFFFFF
+                } else {
+                    0xFF808080
+                };
+                ctx.ascii
+                    .push(Text::new(400.0, 352.0 + 16.0 * k as f32, *sp).argb(c));
+            }
+        }
+        if self.frames < 20 || self.pending.is_some() {
+            return;
+        }
+        let inp = ctx.input;
+        match self.replay_step {
+            0 => {
+                self.move_cursor(ctx, n, UP, DOWN, |_| true);
+                if inp.pressed(LEFT) || inp.pressed(RIGHT) {
+                    let d = if inp.pressed(LEFT) { -15 } else { 15 };
+                    self.cursor = (self.cursor + d).clamp(0, n - 1);
+                }
+                if inp.pressed(CONFIRM) {
+                    sound::play(sound::OK);
+                    self.replay_step = 1;
+                    self.replay_stage = 0;
+                } else if inp.pressed(CANCEL) {
+                    back(self, ctx);
+                }
+            }
+            1 => {
+                let k = stages.len().max(1);
+                if inp.pressed_or_repeat(UP) {
+                    self.replay_stage = (self.replay_stage + k - 1) % k;
+                    sound::play(sound::SELECT);
+                } else if inp.pressed_or_repeat(DOWN) {
+                    self.replay_stage = (self.replay_stage + 1) % k;
+                    sound::play(sound::SELECT);
+                }
+                if inp.pressed(CONFIRM) {
+                    sound::play(sound::OK);
+                    self.replay_step = 2;
+                    ctx.game.replay_speed = 0;
+                } else if inp.pressed(CANCEL) {
+                    sound::play(sound::CANCEL);
+                    self.replay_step = 0;
+                }
+            }
+            _ => {
+                let k = if r.spell_id() >= 0 { 2 } else { 3 };
+                let g = &mut ctx.game;
+                if inp.pressed_or_repeat(UP) {
+                    g.replay_speed = (g.replay_speed + k - 1) % k;
+                    sound::play(sound::SELECT);
+                } else if inp.pressed_or_repeat(DOWN) {
+                    g.replay_speed = (g.replay_speed + 1) % k;
+                    sound::play(sound::SELECT);
+                }
+                if inp.pressed(CONFIRM) {
+                    sound::play(sound::OK);
+                    let (_, r) = self.replays.swap_remove(self.cursor as usize);
+                    let st = stages.get(self.replay_stage).copied();
+                    if crate::replay::start_playback(&mut ctx.game, r, st, None) {
+                        ctx.audio.stop_bgm();
+                    }
+                } else if inp.pressed(CANCEL) {
+                    sound::play(sound::CANCEL);
+                    self.replay_step = 1;
+                }
+            }
+        }
+    }
+
+    // SPEC-GAP: spell practice and key config are later tasks; these screens return on any confirm/cancel.
     fn stub(&mut self, ctx: &mut Ctx, name: &str, back: i32, cursor: i32) {
         ctx.ascii.push(Text::new(
             200.0,
@@ -717,6 +934,19 @@ impl Task<Ctx> for MainMenu {
                 -1
             });
             self.vms.push(vm);
+        }
+        // GM flags 15–17 from the clear records (16 §4). SPEC-GAP: the info00/01/02.jpg notices are not shown yet.
+        {
+            let g = &mut ctx.game;
+            let nc_b = |t: usize| g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0);
+            let any_a = |t: usize| g.clear_any[t].iter().take(4).any(|m| m & 0x8000 != 0);
+            let bits = ((0..4).any(nc_b) as u32) << 15
+                | ((0..4).any(any_a) as u32) << 16
+                | ((0..4).all(nc_b) as u32) << 17;
+            g.flags = g.flags & !(7 << 15) | bits;
+        }
+        if std::mem::take(&mut ctx.game.watched_replay) {
+            self.screen = REPLAY;
         }
         let g = &ctx.game;
         if g.previous == gamemgr::SCENE_GAME || g.previous == gamemgr::SCENE_RETRY {
@@ -765,7 +995,7 @@ impl Task<Ctx> for MainMenu {
             CHAR | CHAR_PRACTICE | CHAR_EXTRA => self.character(ctx),
             PRACTICE_STAGE => self.practice_stage(ctx),
             KEY_CONFIG => self.stub(ctx, "Key config", OPTION, 8),
-            REPLAY => self.stub(ctx, "Replay", TOP, 4),
+            REPLAY => self.replay(ctx),
             SPELL_PRACTICE => self.stub(ctx, "Spell practice", TOP, 2),
             _ => {}
         }

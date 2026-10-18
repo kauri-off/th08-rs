@@ -44,6 +44,41 @@ impl Config {
     }
 }
 
+impl Config {
+    // th08.cfg image (15 §1.1), as copied into replays and HSCR.
+    pub fn to_bytes(&self) -> [u8; 60] {
+        let mut b = [0u8; 60];
+        for (i, v) in [0i16, 1, 2, 4, -1, -1, -1, -1, 3].iter().enumerate() {
+            b[2 * i..2 * i + 2].copy_from_slice(&v.to_le_bytes());
+        }
+        b[0x14..0x18].copy_from_slice(&0x80001u32.to_le_bytes());
+        b[0x18..0x1A].copy_from_slice(&600i16.to_le_bytes());
+        b[0x1A..0x1C].copy_from_slice(&600i16.to_le_bytes());
+        b[0x1C] = self.lives;
+        b[0x1D] = self.bombs;
+        b[0x1E] = self.colour_mode;
+        b[0x1F] = self.music;
+        b[0x20] = self.se_on;
+        b[0x21] = self.difficulty;
+        b[0x22] = self.windowed;
+        b[0x24] = self.effect_level;
+        b[0x25] = self.slow;
+        b[0x27] = self.bgm_volume;
+        b[0x28] = self.se_volume;
+        b[0x38] = 1;
+        b
+    }
+
+    // The gameplay copy during playback takes the replay's recorded config (11 §3.4).
+    pub fn apply_gameplay(&mut self, b: &[u8]) {
+        if b.len() >= 0x26 {
+            self.lives = b[0x1C];
+            self.effect_level = b[0x24].min(2);
+            self.slow = b[0x25];
+        }
+    }
+}
+
 // Volume curve (13 §1.3): table volume in 1/100 dB → attenuation for a 0–100 volume setting.
 pub fn volume_curve(table: i32, v: u8) -> i32 {
     if v == 0 {

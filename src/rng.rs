@@ -25,6 +25,11 @@ impl Rng {
     }
 
     pub fn next_u16(&mut self) -> u16 {
+        #[cfg(not(target_arch = "wasm32"))]
+        if TRACE.get() {
+            let bt = std::backtrace::Backtrace::force_capture().to_string();
+            CALLS.with_borrow_mut(|c| c.push(bt));
+        }
         let t = (self.state ^ 0x9630).wrapping_sub(0x6553);
         self.state = t.rotate_left(2);
         self.counter = self.counter.wrapping_add(1);
@@ -59,6 +64,13 @@ impl Rng {
     pub fn next_signed(&mut self) -> f32 {
         self.next_u32() as f32 / 2147483648.0 - 1.0
     }
+}
+
+// Debug: record a backtrace per draw while enabled (demo sync investigation).
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    pub static TRACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub static CALLS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[cfg(test)]

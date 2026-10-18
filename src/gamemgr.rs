@@ -35,6 +35,9 @@ const RANK: [[i32; 3]; 5] = [
     [16, 15, 16],
 ];
 
+// Demo music-fade and end frames per demo index (11 §4).
+const DEMO_LIMITS: [(i32, i32); 4] = [(6000, 6120), (4800, 4920), (4920, 5040), (6900, 7020)];
+
 // Scenes (11 §7).
 pub const SCENE_BOOT: i32 = 0;
 pub const SCENE_MENU: i32 = 1;
@@ -66,11 +69,27 @@ pub struct Game {
     pub loading_frames: u32,
     pub frame_counter: u32,
     pub play_time: u32,
-    pub rank: [i32; 4],
     pub cfg: crate::config::Config,
     pub stats: Stats,
-    pub clear_nc: [[u16; 5]; 12],
-    pub clear_any: [[u16; 5]; 12],
+    pub clear_nc: [[u16; 5]; 13],
+    pub clear_any: [[u16; 5]; 13],
+    pub score: crate::scoredat::ScoreDat,
+    pub persist: bool,
+    catk_backup: Option<Vec<crate::scoredat::Catk>>,
+    run_clock: Option<web_time::Instant>,
+    pub play_clock: Option<web_time::Instant>,
+    pub retrying: bool,
+    pub demo: u8,
+    pub demo_frame: i32,
+    pub demo_shot_bias: u8,
+    pub replay_speed: u8,
+    pub rpy: Option<crate::replay::Replay>,
+    pub cfg_live: Option<crate::config::Config>,
+    pub replay_ff: bool,
+    pub dialogue_skippable: bool,
+    pub replay_fps: u8,
+    pub watched_replay: bool,
+    slow_phase: u32,
     pub stage_seed: u16,
     pub stages_started: u32,
     pub frame_skip: bool,
@@ -99,11 +118,27 @@ impl Default for Game {
             loading_frames: 0,
             frame_counter: 0,
             play_time: 0,
-            rank: [16, 32, 0, 0],
             cfg: Default::default(),
             stats: Stats::default(),
-            clear_nc: [[0; 5]; 12],
-            clear_any: [[0; 5]; 12],
+            clear_nc: [[1; 5]; 13],
+            clear_any: [[1; 5]; 13],
+            score: Default::default(),
+            persist: false,
+            catk_backup: None,
+            run_clock: None,
+            play_clock: None,
+            retrying: false,
+            demo: 3,
+            demo_frame: 0,
+            demo_shot_bias: 0,
+            replay_speed: 0,
+            rpy: None,
+            cfg_live: None,
+            replay_ff: true,
+            dialogue_skippable: false,
+            replay_fps: 60,
+            watched_replay: false,
+            slow_phase: 0,
             stage_seed: 0,
             stages_started: 0,
             frame_skip: false,
@@ -177,6 +212,78 @@ impl Game {
         }
     }
 
+    pub fn cfg_bytes(&self) -> [u8; 60] {
+        self.cfg.to_bytes()
+    }
+
+    // Boot load (15 §2.2); a missing or invalid file starts from defaults.
+    pub fn load_score(&mut self, file: Option<&[u8]>) {
+        self.score = match file.map(crate::scoredat::ScoreDat::parse) {
+            Some(Ok(s)) => s,
+            Some(Err(e)) => {
+                log::warn!("score.dat: {e:#}; starting from defaults");
+                Default::default()
+            }
+            None => Default::default(),
+        };
+        for (i, c) in self.score.clrd.iter().enumerate() {
+            self.clear_nc[i] = c.nc;
+            self.clear_any[i] = c.any;
+        }
+        self.run_clock = Some(web_time::Instant::now());
+    }
+
+    // ScoreDat_Save (Result removal): 2 RNG draws. `flush` = Result mode 2 (slow mode drops this run's card credit).
+    pub fn save_score(&mut self, rng: &mut crate::rng::Rng, flush: bool) {
+        if flush && self.cfg.slow != 0 {
+            if let Some(b) = self.catk_backup.clone() {
+                self.score.catk = b;
+            }
+        }
+        for (i, c) in self.score.clrd.iter_mut().enumerate() {
+            c.nc = self.clear_nc[i];
+            c.any = self.clear_any[i];
+        }
+        if let Some(t) = self.run_clock.replace(web_time::Instant::now()) {
+            crate::scoredat::Plst::add_time(
+                &mut self.score.plst.run_time,
+                t.elapsed().as_millis() as u64,
+            );
+        }
+        let bytes = self.score.encode(rng);
+        if self.persist {
+            crate::scoredat::storage_write("score.dat", &bytes);
+        }
+    }
+
+    // Stage-clear / ending bits: this shot's masks and the union entry 12.
+    pub fn set_clear(&mut self, no_continue: bool, bit: u16) {
+        let (shot, d) = (self.shot as usize % 12, self.diff());
+        for k in [shot, 12] {
+            if no_continue {
+                self.clear_nc[k][d] |= bit;
+            }
+            self.clear_any[k][d] |= bit;
+        }
+    }
+
+    pub fn play_counter(&mut self, idx: usize) {
+        let d = self.diff();
+        self.score.plst.bump(d, idx);
+    }
+
+    // PLST plays: block [plays] and [1 + shot] (fresh starts and continues).
+    pub fn count_play(&mut self) {
+        if self.counts_plays() {
+            self.play_counter(crate::scoredat::PL_PLAYS);
+            self.play_counter(1 + self.shot as usize % 12);
+        }
+    }
+
+    pub fn counts_plays(&self) -> bool {
+        !self.replay() && !self.spell_practice() && self.cfg.slow == 0
+    }
+
     pub fn cleared(&self, any: bool, bit: usize) -> bool {
         let m = if any { &self.clear_any } else { &self.clear_nc };
         m[self.shot as usize % 12]
@@ -184,21 +291,46 @@ impl Game {
             .take(4)
             .any(|v| v & (1 << bit) != 0)
     }
+}
 
-    // RankAdd / RankSub (11 §3.2): ±1 rank per 100 sub-units, clamped to min..max.
-    pub fn rank_add(&mut self, d: i32) {
-        let [mut r, max, min, mut sub] = self.rank;
-        sub += d;
-        while sub >= 100 {
-            sub -= 100;
-            r += 1;
-        }
-        while sub < 0 {
-            sub += 100;
-            r -= 1;
-        }
-        self.rank = [r.clamp(min, max), max, min, sub];
+thread_local! {
+    // GM rank, max, min, sub-counter (GM+0x3DE2C..0x3DE38); ECL var 10041 reads the rank directly.
+    static RANK_STATE: std::cell::Cell<[i32; 4]> = const { std::cell::Cell::new([16, 32, 0, 0]) };
+}
+
+pub fn rank_state() -> [i32; 4] {
+    RANK_STATE.get()
+}
+
+pub fn set_rank_state(r: [i32; 4]) {
+    RANK_STATE.set(r);
+}
+
+pub fn rank() -> i32 {
+    RANK_STATE.get()[0]
+}
+
+pub fn set_rank(v: i32) {
+    RANK_STATE.with(|c| {
+        let mut r = c.get();
+        r[0] = v;
+        c.set(r);
+    });
+}
+
+// RankAdd / RankSub (11 §3.2): ±1 rank per 100 sub-units, clamped to min..max; applied immediately.
+pub fn rank_add(d: i32) {
+    let [mut r, max, min, mut sub] = RANK_STATE.get();
+    sub += d;
+    while sub >= 100 {
+        sub -= 100;
+        r += 1;
     }
+    while sub < 0 {
+        sub += 100;
+        r -= 1;
+    }
+    RANK_STATE.set([r.clamp(min, max), max, min, sub]);
 }
 
 // Stage_Advance (11 §4.1).
@@ -235,6 +367,15 @@ pub fn clock_advance(stage: usize, time: i32, threshold: i32) -> i32 {
     }
 }
 
+thread_local! {
+    static CURRENT: RefCell<std::rc::Weak<RefCell<GameManager>>> = RefCell::new(std::rc::Weak::new());
+}
+
+// The registered game manager (debug tools and the demo sync test).
+pub fn current() -> Option<Rc<RefCell<GameManager>>> {
+    CURRENT.with_borrow(std::rc::Weak::upgrade)
+}
+
 pub struct GameManager {
     pub player: PlayerRef,
     pub stage: Option<Rc<RefCell<Stage>>>,
@@ -258,6 +399,7 @@ impl GameManager {
             loading_vms: Vec::new(),
             wait_frames: 0,
         }));
+        CURRENT.with_borrow_mut(|c| *c = Rc::downgrade(&gm));
         let t: TaskRef<Ctx> = gm.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
@@ -290,8 +432,10 @@ impl GameManager {
         } else {
             g.cfg.lives as i32
         };
-        st.lives = lives as f32;
-        Stats::checksum(rng);
+        if !g.replay() {
+            st.lives = lives as f32;
+            Stats::checksum(rng);
+        }
         st.power = 0.0;
         Stats::checksum(rng);
         g.play_time = 0;
@@ -303,8 +447,23 @@ impl GameManager {
         st.max_point = crate::player::MAX_POINT[d];
         st.extends = 0;
         st.next_extend = crate::item::next_extend(d as i32, 0);
+        // GameMgr_LoadScoreData: flush (Result mode 2), hiscore, practice play count, CATK backup.
+        g.save_score(rng, true);
+        let shot = g.shot as usize % 12;
+        if g.practice() && !g.spell_practice() {
+            let counts = g.counts_plays();
+            let p = &mut g.score.pscr[shot];
+            st.hiscore = p.hiscore[g.stage % 9][d] as i64;
+            if counts {
+                p.plays[g.stage % 9][d] += 1;
+                p.used = 1;
+            }
+        } else {
+            st.hiscore = g.score.hiscore(shot, d) as i64;
+        }
+        g.catk_backup = Some(g.score.catk.clone());
         let [init, min, max] = RANK[d];
-        g.rank = [init, max, min, 0];
+        set_rank_state([init, max, min, 0]);
         st.deaths = 0;
         Stats::checksum(rng);
         st.bombs_used = 0;
@@ -333,6 +492,20 @@ impl GameManager {
             Stats::checksum(&mut ctx.anm.rng);
         }
         let g = &mut ctx.game;
+        if fresh && g.counts_plays() {
+            if g.practice() {
+                g.play_counter(crate::scoredat::PL_PRACTICE);
+            } else {
+                g.count_play();
+            }
+            if g.retrying {
+                g.play_counter(crate::scoredat::PL_RETRIES);
+            }
+        }
+        g.retrying = false;
+        if g.play_clock.is_none() {
+            g.play_clock = Some(web_time::Instant::now());
+        }
         g.fresh_start = false;
         let (stage, shot, d) = (g.stage, g.shot, g.diff());
         Player::register(ctx, self.player.clone(), shot)?;
@@ -382,6 +555,12 @@ impl GameManager {
                 s.power = pw.clamp(0.0, 128.0);
             }
         }
+        if ctx.game.replay() {
+            let [init, min, max] = RANK[d];
+            set_rank_state([init, max, min, 0]);
+            let mut p = self.player.borrow_mut();
+            crate::replay::play_stage_load(&mut ctx.game, &mut p.stats, &mut ctx.anm.rng)?;
+        }
         let g = &mut ctx.game;
         g.paused = 0;
         g.flags &= !0x2180;
@@ -405,6 +584,11 @@ impl GameManager {
         let effects = crate::effect::EffectManager::register(ctx)?;
         let gui = crate::gui::Gui::register(ctx, self.player.clone(), enemies.clone())?;
         enemies.borrow_mut().msg = Some(hud.borrow().msg.clone());
+        if fresh && !ctx.game.replay() {
+            ctx.game.rpy = None;
+        }
+        let st = self.player.borrow().stats.clone();
+        let replay_t = crate::replay::register(ctx, ctx.game.replay(), &st)?;
         if !ctx.game.reload_same {
             let bgm = stage_t.borrow().std.bgm[0].clone();
             ctx.audio.play_bgm(&bgm);
@@ -422,6 +606,7 @@ impl GameManager {
             hud.clone(),
             effects,
             gui,
+            replay_t,
         ];
         self.stage = Some(stage_t);
         self.bullets = Some(bullets);
@@ -452,11 +637,9 @@ impl GameManager {
             g.next_scene_after = -1;
             let (shot, d, stage) = (g.shot as usize % 12, g.diff(), g.stage % 9);
             let st = &self.player.borrow().stats;
+            let _ = d;
             if !g.replay() {
-                if st.continues == 0 {
-                    g.clear_nc[shot][d] |= 1 << stage;
-                }
-                g.clear_any[shot][d] |= 1 << stage;
+                g.set_clear(st.continues == 0, 1 << stage);
             }
             if g.practice() {
                 g.next_scene_after = SCENE_RESULT;
@@ -464,6 +647,9 @@ impl GameManager {
                 if g.replay() {
                     g.next_scene_after = SCENE_REPLAY_END;
                 } else if g.difficulty >= 4 {
+                    g.clear_nc[shot][4] |= 0x8000;
+                    g.clear_any[12][4] |= 0x8000;
+                    g.play_counter(crate::scoredat::PL_CLEARS);
                     g.flags |= F_ENDING_OK;
                     g.next_scene_after = SCENE_RESULT;
                 } else {
@@ -471,7 +657,17 @@ impl GameManager {
                     g.next_scene_after = SCENE_ENDING;
                 }
             } else if g.replay() {
-                g.next_scene_after = SCENE_REPLAY_END;
+                let next = g
+                    .rpy
+                    .as_ref()
+                    .and_then(|r| (stage + 1..9).find(|&s| r.stages[s].is_some()));
+                match next {
+                    Some(s) => {
+                        g.stage = s;
+                        g.request(SCENE_NEXT_STAGE);
+                    }
+                    None => g.next_scene_after = SCENE_REPLAY_END,
+                }
             } else if st.clock > 11 {
                 g.next_scene_after = SCENE_ENDING;
                 g.flags &= !F_ENDING_OK;
@@ -506,6 +702,10 @@ impl GameManager {
             let rng = &mut ctx.anm.rng;
             let st = &mut p.stats;
             st.continues += 1;
+            if g.counts_plays() {
+                g.count_play();
+                g.play_counter(crate::scoredat::PL_CONTINUES);
+            }
             st.score10 = st.continues as i64;
             st.score_disp = st.score10;
             st.graze = 0;
@@ -567,6 +767,14 @@ impl Task<Ctx> for GameManager {
         for t in std::mem::take(&mut self.tasks) {
             task::remove_task(ctx, &t);
         }
+        if !matches!(ctx.game.requested, SCENE_NEXT_STAGE | SCENE_RELOAD) {
+            if let Some(t) = ctx.game.play_clock.take() {
+                crate::scoredat::Plst::add_time(
+                    &mut ctx.game.score.plst.play_time,
+                    t.elapsed().as_millis() as u64,
+                );
+            }
+        }
         ctx.game.flags &= !F_RUNNING;
         ctx.game.paused = 0;
         ctx.game.game_over = 0;
@@ -584,7 +792,7 @@ impl Task<Ctx> for GameManager {
                 vm.run(&mut ctx.anm);
             }
             let g = &mut ctx.game;
-            if g.loading_frames >= 30 {
+            if g.loading_frames >= if g.replay() { 80 } else { 30 } {
                 if g.end_state() == 0 {
                     g.loading = 0;
                     g.flags &= !F_CLEAR_PANEL;
@@ -623,18 +831,45 @@ impl Task<Ctx> for GameManager {
             ctx.anm.rng.state = s;
         }
         let g = &mut ctx.game;
+        // Replay "slowdown reproduction" (15 §3.3): run a frame only on a pattern given by the recorded fps.
+        if g.replay() && g.replay_speed == 1 {
+            let (run, of) = match g.replay_fps {
+                0..20 => (1, 3),
+                20..30 => (1, 2),
+                30..40 => (2, 3),
+                40..50 => (5, 6),
+                _ => (1, 1),
+            };
+            g.slow_phase = (g.slow_phase + 1) % of;
+            if g.slow_phase >= run {
+                return Ret::StopFrame;
+            }
+        }
+        if g.flags & F_DEMO != 0 {
+            // Attract demo (11 §4 step 6). SPEC-GAP: fade colour (black) and the music fade time are unspecified.
+            g.demo_frame += 1;
+            let (fade, end) = DEMO_LIMITS[g.demo as usize % 4];
+            if ctx.input.held & !ctx.input.prev != 0 {
+                g.request(SCENE_MENU);
+            }
+            if g.demo_frame == fade {
+                ctx.audio.fade_bgm(2.0);
+                crate::effect::screen(2, end - fade, 0, 0, 0, 0x15);
+            }
+            if g.demo_frame >= end {
+                g.request(SCENE_MENU);
+                return Ret::StopFrame;
+            }
+        }
         if g.paused != 0 || g.game_over != 0 {
             return Ret::StopFrame;
         }
         let mut p = self.player.borrow_mut();
         Self::roll_score(&mut p.stats);
-        let delta = std::mem::take(&mut p.stats.rank_delta);
+        p.stats.rank_delta = 0;
         drop(p);
         if let Some(e) = &self.enemies {
             let mut e = e.borrow_mut();
-            g.rank[0] = e.g.rank;
-            g.rank_add(delta);
-            e.g.rank = g.rank[0];
             e.g.player_char = g.shot as i32;
         }
         g.frame_counter += 1;
@@ -722,16 +957,13 @@ mod tests {
             ),
             (2, 1, 0, 4)
         );
-        let mut g = Game {
-            rank: [10, 16, 8, 0],
-            ..Game::default()
-        };
-        g.rank_add(250);
-        assert_eq!(g.rank, [12, 16, 8, 50]);
-        g.rank_add(-1600);
-        assert_eq!(g.rank[0], 8);
-        g.rank_add(10_000);
-        assert_eq!(g.rank[0], 16);
+        set_rank_state([10, 16, 8, 0]);
+        rank_add(250);
+        assert_eq!(rank_state(), [12, 16, 8, 50]);
+        rank_add(-1600);
+        assert_eq!(rank(), 8);
+        rank_add(10_000);
+        assert_eq!(rank(), 16);
     }
 
     #[test]

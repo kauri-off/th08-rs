@@ -46,6 +46,9 @@ pub struct Input {
     pub prev: u16,
     pub same_frames: u32,
     pub repeat: bool,
+    // g_Input / g_InputPrev: the gameplay word, written by the replay node (recorded or played back).
+    pub game: u16,
+    pub game_prev: u16,
 }
 
 impl Input {
@@ -68,6 +71,16 @@ impl Input {
             0
         };
         self.repeat = self.same_frames >= 30 && self.same_frames % 8 == 0;
+    }
+
+    // The view gameplay objects read (player, dialogue, HUD).
+    pub fn game_view(&self) -> Input {
+        Input {
+            raw: self.game,
+            held: self.game,
+            prev: self.game_prev,
+            ..*self
+        }
     }
 
     pub fn down(&self, b: u16) -> bool {

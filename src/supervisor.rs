@@ -90,6 +90,8 @@ impl Supervisor {
         }
         g.previous = cur;
         if req < 0 {
+            // WinMain exit flushes score.dat (Result mode 2).
+            ctx.game.save_score(&mut ctx.anm.rng, true);
             return Ok(Some(Ret::Quit));
         }
         log::info!("scene {cur} -> {req}");
@@ -97,6 +99,10 @@ impl Supervisor {
             (gamemgr::SCENE_BOOT, gamemgr::SCENE_GAME) => self.start_game(ctx)?,
             (gamemgr::SCENE_BOOT, _) | (_, gamemgr::SCENE_MENU) => {
                 self.drop_scene(ctx);
+                if matches!(cur, gamemgr::SCENE_GAME | gamemgr::SCENE_RESULT) {
+                    crate::replay::finish(ctx);
+                }
+                crate::replay::end_playback(&mut ctx.game);
                 ctx.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
@@ -117,11 +123,13 @@ impl Supervisor {
             }
             (gamemgr::SCENE_GAME, gamemgr::SCENE_RETRY) => {
                 self.drop_scene(ctx);
+                crate::replay::finish(ctx);
                 let g = &mut ctx.game;
                 if !g.practice() && g.difficulty < 4 {
                     g.stage = 0;
                 }
                 g.fresh_start = true;
+                g.retrying = true;
                 g.stats = Default::default();
                 self.start_game(ctx)?;
                 ctx.game.requested = gamemgr::SCENE_GAME;
@@ -153,6 +161,8 @@ impl Supervisor {
             }
             (_, gamemgr::SCENE_REPLAY_END) => {
                 self.drop_scene(ctx);
+                crate::replay::finish(ctx);
+                crate::replay::end_playback(&mut ctx.game);
                 ctx.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
@@ -191,7 +201,19 @@ impl Task<Ctx> for Supervisor {
                 return Ok(());
             }
             crate::ascii::AsciiManager::register(ctx)?;
-            if let Some(arg) = crate::env::var("TH08_STAGE") {
+            // Debug `TH08_REPLAY=<file | demoN>`: starts that replay; `TH08_REPLAY_SPEED=<0–2>`.
+            if let Some(v) = crate::env::var("TH08_REPLAY") {
+                let bytes = match v.strip_prefix("demo") {
+                    Some(n) => ctx.archive.read(&format!("demorpy{n}.rpy"))?,
+                    None => load_file(&v).with_context(|| format!("TH08_REPLAY={v}"))?,
+                };
+                let r = crate::replay::Replay::parse(&bytes)?;
+                ctx.game.replay_speed = crate::env::var("TH08_REPLAY_SPEED")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let demo = v.strip_prefix("demo").and_then(|n| n.parse().ok());
+                crate::replay::start_playback(&mut ctx.game, r, None, demo);
+            } else if let Some(arg) = crate::env::var("TH08_STAGE") {
                 let index = crate::stage::parse_stage_arg(&arg)
                     .with_context(|| format!("TH08_STAGE={arg}: unknown stage"))?;
                 setup_new_game(&mut ctx.game, index)?;
@@ -282,9 +304,80 @@ pub struct Stub {
     frame: u32,
 }
 
+// A file from disk natively, or from the save storage (web, and `replay/…` names).
+fn load_file(path: &str) -> Option<Vec<u8>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(b) = std::fs::read(path) {
+        return Some(b);
+    }
+    crate::scoredat::storage_read(path)
+}
+
+// Today's "%m/%d" (UTC; the original uses local time).
+pub fn date_md() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    #[cfg(target_arch = "wasm32")]
+    let secs = (js_sys::Date::now() / 1000.0) as i64;
+    let z = secs.div_euclid(86400) + 719468;
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    format!("{m:02}/{d:02}")
+}
+
+// Result records after a game. SPEC-GAP: no name entry yet (16 §2.2); the HSCR entry takes the LSNM name.
+fn record_result(g: &mut Game) {
+    if g.replay() || g.spell_practice() {
+        return;
+    }
+    let st = &g.stats;
+    let (shot, d) = (g.shot as usize % 12, g.difficulty.clamp(0, 4) as usize);
+    let score = st.score10.clamp(0, 999_999_999) as u32;
+    if g.practice() {
+        let h = &mut g.score.pscr[shot + g.demo_shot_bias as usize].hiscore[g.stage % 9][d];
+        *h = (*h).max(score);
+        return;
+    }
+    let mut h = crate::scoredat::Hscr::new();
+    let stage = if g.flags & gamemgr::F_ENDING_OK != 0 {
+        99
+    } else {
+        (g.stage % 9) as u8
+    };
+    let name: Vec<u8> = g.score.lsnm[..8].to_vec();
+    h.set(score, shot as u8, d as u8, stage, &name, &date_md());
+    h.0[0x26] = st.continues;
+    if let Some(rank) = g.score.insert_hscr(h) {
+        log::info!("high score rank {}", rank + 1);
+    }
+}
+
 impl Task<Ctx> for Stub {
+    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
+        if chain == Chain::Calc
+            && matches!(
+                self.kind,
+                gamemgr::SCENE_RESULT | gamemgr::SCENE_RESULT_MENU
+            )
+        {
+            ctx.game.save_score(&mut ctx.anm.rng, false);
+        }
+    }
+
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let g = &mut ctx.game;
+        if self.frame == 0
+            && self.kind == gamemgr::SCENE_RESULT
+            && matches!(g.previous, gamemgr::SCENE_GAME | gamemgr::SCENE_ENDING)
+        {
+            record_result(g);
+        }
         if self.frame == 0
             && self.kind == gamemgr::SCENE_ENDING
             && g.flags & gamemgr::F_ENDING_OK != 0
@@ -292,11 +385,14 @@ impl Task<Ctx> for Stub {
         {
             // Ending_Init step 3 (16 §1): Final A / B bits of the clear masks.
             let bit = if g.stage % 9 == 7 { 0x4000 } else { 0x8000 };
-            let (shot, d) = (g.shot as usize % 12, g.difficulty.clamp(0, 4) as usize);
-            if g.stats.continues == 0 {
-                g.clear_nc[shot][d] |= bit;
-            }
-            g.clear_any[shot][d] |= bit;
+            g.set_clear(g.stats.continues == 0, bit);
+            g.play_counter(crate::scoredat::PL_CLEARS);
+            g.score.plst.music[18] = 1;
+            g.score.plst.music[19] = 1;
+        } else if self.frame == 0 && self.kind == gamemgr::SCENE_ENDING && !g.replay() {
+            let shot = g.shot as usize % 12;
+            g.score.clrd[shot].bad_ending = 0;
+            g.score.plst.music[18] = 1;
         }
         self.frame += 1;
         if self.frame >= 30 && ctx.input.pressed(crate::input::SHOT | crate::input::ENTER) {

@@ -201,9 +201,10 @@ impl Stats {
         self.score10 * 10
     }
 
-    // Rank deltas, applied by the game manager through its sub-counter (11 §3.2).
+    // Rank deltas go straight through the GM sub-counter (11 §3.2); `rank_delta` only sums them per frame.
     pub fn rank(&mut self, d: i32) {
         self.rank_delta += d;
+        crate::gamemgr::rank_add(d);
     }
 
     // GameMgr_UpdateChecksum: 2 × Rng_Range(100000) (11 §1.5).
@@ -652,7 +653,7 @@ impl Player {
             s.graze_total = (s.graze_total + g).min(999_999);
         }
         s.rank(6);
-        s.add_score(if s.youkai_max() { 4000 } else { 2000 });
+        s.add_score(if s.youkai() { 4000 } else { 2000 });
         if self.mode != 0 && !self.bombing {
             s.gauge_add(100);
         }
@@ -757,30 +758,28 @@ impl Player {
             if !self.solo() {
                 self.swap_options(anm, f);
                 self.set_script(anm, self.sprite_base(f));
+                // Switch flash only when the previous state lasted > 3 frames (09 §3).
+                if self.focus_age > 3 {
+                    let (kind, colour) = if f == 1 {
+                        (29, 0x80FF8080)
+                    } else {
+                        (28, 0x808080FF)
+                    };
+                    crate::effect::spawn(anm, kind, self.pos, 1, colour);
+                }
             }
-            self.focus_age = 0;
-            self.gauge_c.set(0);
-            if f == 0 {
+            // Hitbox marker: effect 22 in fixed slot 2 on every switch to focused (14 §5).
+            if f == 1 {
+                crate::effect::spawn_fixed(anm, 22, self.pos, crate::effect::FIX_AURA, 0xFFFFFFFF);
+            } else {
                 crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_AURA, |e| {
                     e.vm.pending_interrupt = 1
                 });
             }
+            self.focus_age = 0;
+            self.gauge_c.set(0);
         } else {
             self.focus_age += 1;
-        }
-        if self.focus_age == 4 {
-            if !self.solo() {
-                let (kind, colour) = if f == 1 {
-                    (29, 0x80FF8080)
-                } else {
-                    (28, 0x808080FF)
-                };
-                crate::effect::spawn(anm, kind, self.pos, 1, colour);
-            }
-            // Hitbox marker: effect 22 (etama script 54, sprite 218) in fixed slot 2 (answers_phase5 impl7).
-            if f == 1 {
-                crate::effect::spawn_fixed(anm, 22, self.pos, crate::effect::FIX_AURA, 0xFFFFFFFF);
-            }
         }
         if self.focus_age > 6 {
             self.mode = f;
@@ -1108,7 +1107,7 @@ impl Task<Ctx> for Player {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let inp = ctx.input;
+        let inp = ctx.input.game_view();
         match self.world.upgrade() {
             Some(b) => {
                 let mut b = b.borrow_mut();

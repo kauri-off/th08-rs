@@ -751,12 +751,13 @@ impl Task<Ctx> for Hud {
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.frame += 1;
-        let inp = ctx.input;
+        let inp = ctx.input.game_view();
         let dying = self.player.borrow().state == 2;
         let (collect, events, side) = {
             let mut d = self.msg.borrow_mut();
             d.info.clock = self.player.borrow().stats.clock;
             let c = d.run(&mut ctx.anm, &inp, dying);
+            ctx.game.dialogue_skippable = d.skippable_shown();
             (
                 c,
                 std::mem::take(&mut d.events),

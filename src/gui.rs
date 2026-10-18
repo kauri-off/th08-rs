@@ -8,7 +8,6 @@ use crate::player::PlayerRef;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 pub const CALC_PRIO: u16 = 12;
@@ -34,7 +33,16 @@ pub enum Req {
         name_only: bool,
     },
     BossHide,
-    Captured(i32),
+    Attempt {
+        card: i32,
+        name: Vec<u8>,
+        owner: Vec<u8>,
+    },
+    Captured {
+        card: i32,
+        bonus: i32,
+        comment: [Vec<u8>; 2],
+    },
 }
 
 thread_local! {
@@ -56,8 +64,7 @@ pub struct Gui {
     shot: u8,
     bonus: i32,
     capturable: bool,
-    // SPEC-GAP: score.dat (CATK) is not loaded; captures/attempts are counted for this session only.
-    history: HashMap<(i32, u8), (u32, u32)>,
+    history: (u32, u32),
 }
 
 impl Gui {
@@ -78,7 +85,7 @@ impl Gui {
             shot: ctx.game.shot,
             bonus: 0,
             capturable: false,
-            history: HISTORY.with_borrow(Clone::clone),
+            history: (0, 0),
         }));
         let t: task::TaskRef<Ctx> = g.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -101,6 +108,33 @@ impl Gui {
             anm.set_script(&mut self.vms[k], ASCII_SLOT, s);
         }
         Ok(())
+    }
+
+    // CATK updates (15 §2.5): attempts in Spell_Start, captures in Spell_End; never in replay playback.
+    fn record(g: &mut crate::gamemgr::Game, r: &Req) {
+        if g.replay() {
+            return;
+        }
+        let (shot, practice) = (g.shot as usize, g.spell_practice());
+        match r {
+            Req::Attempt { card, name, owner } if *card >= 0 => {
+                let d = g.difficulty.clamp(0, 4) as u8;
+                g.score
+                    .card_attempt(*card as usize, shot, d, practice, name, owner)
+            }
+            Req::Captured {
+                card,
+                bonus,
+                comment,
+            } if *card >= 0 => g.score.card_capture(
+                *card as usize,
+                shot,
+                practice,
+                (*bonus).max(0) as u32,
+                comment,
+            ),
+            _ => {}
+        }
     }
 
     fn handle(&mut self, anm: &mut AnmManager, r: Req) {
@@ -155,7 +189,6 @@ impl Gui {
                 if !name_only {
                     v[13].pending_interrupt = 1;
                     self.card = card;
-                    self.history.entry((card, self.shot)).or_default().1 += 1;
                 }
                 self.name_only = name_only;
                 crate::sound::play(0xE);
@@ -168,7 +201,7 @@ impl Gui {
                     v[13].pending_interrupt = 2;
                 }
             }
-            Req::Captured(card) => self.history.entry((card, self.shot)).or_default().0 += 1,
+            Req::Attempt { .. } | Req::Captured { .. } => {}
         }
     }
 
@@ -207,11 +240,7 @@ impl Gui {
 
     // Bonus line: 8 digits of the bonus, captures and attempts (3 digits each), leading zeros suppressed.
     fn draw_bonus(&mut self, anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx) {
-        let (captures, attempts) = self
-            .history
-            .get(&(self.card, self.shot))
-            .copied()
-            .unwrap_or_default();
+        let (captures, attempts) = self.history;
         let base = self.vms[13].pos;
         let mut x = base[0] - 40.0;
         let y = base[1] + 1.0;
@@ -255,10 +284,6 @@ impl Gui {
     }
 }
 
-thread_local! {
-    static HISTORY: RefCell<HashMap<(i32, u8), (u32, u32)>> = RefCell::new(HashMap::new());
-}
-
 impl Task<Ctx> for Gui {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
@@ -270,14 +295,21 @@ impl Task<Ctx> for Gui {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
             ctx.anm.unload(&mut ctx.gfx, CDBG_SLOT);
-            HISTORY.with_borrow_mut(|h| *h = std::mem::take(&mut self.history));
         }
     }
 
     // Spell_Calc 0x416B90 (VM part).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         for r in QUEUE.with_borrow_mut(std::mem::take) {
+            Self::record(&mut ctx.game, &r);
             self.handle(&mut ctx.anm, r);
+        }
+        if self.card >= 0 {
+            self.history = ctx.game.score.card_history(
+                self.card as usize,
+                self.shot as usize,
+                ctx.game.spell_practice(),
+            );
         }
         let frozen = {
             let e = self.enemies.borrow();

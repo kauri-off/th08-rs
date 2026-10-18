@@ -253,6 +253,8 @@ impl ItemManager {
                     st.next_extend = next_extend(st.difficulty, st.extends);
                 }
                 st.point_counter += 1;
+                // Item_CollectPoint 0x440E40 updates the checksum (11 §1.5).
+                Stats::checksum(&mut anm.rng);
             }
             CONVERTED => {
                 let v = point_value(st.max_point, y, line, max_flag, st.human_max(), 10);

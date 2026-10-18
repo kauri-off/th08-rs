@@ -60,3 +60,12 @@
 
 ## etama.anm effect scripts — source: specs/13_sfx_effects.md §2.6
 - Effect type → global etama script table (66 entries, src/effect.rs `SCRIPTS`); ring sprites 221–225 are 16×768 strips in the 128×128 etama3.png (v wraps 6×).
+
+## score.dat — source: specs/15_files_replay_score.md §2 (src/scoredat.rs)
+- Whole file: archive block cipher (key 0x59, step 0x79, block 0x100, limit 0xC00); then from byte 1 a rolling XOR (`acc = rotl8(acc + plain[i], 3); b[i+1] ^= acc`).
+- Header 0x1C: u8 0, u8 random, u16 checksum (Σ bytes 4.. of the decoded file), u16 version 1, u8 random, u32 0x1C, u32 ptr, u32 total size, u32 body size, u32 compressed size; body LZSS.
+- Chunks {magic, u16 size ×2, u8 version, 3 pad}: TH8K 0xC/1, HSCR 0x168/4, CLRD 0x24/4 ×13, CATK 0x22C/3, PSCR 0x178/2, LSNM 0x18/1, FLSP 0x20/1, PLST 0x228/2, VRSM 0x1C/1 (written in this order). Verified: the real file's body re-encodes byte-identically.
+
+## .rpy — source: specs/15 §3, 11 §6 (src/replay.rs)
+- Header 0x68: "T8RP", u16 6, u8 debug, +0xC size w/o USER, +0x10 checksum 0x3F000318 + Σ plain bytes from 0x15, +0x15 key; bytes 0x18.. encrypted `b += key; key += 7`; +0x18 compressed size, +0x1C image size − 0x68, +0x20/+0x44 u32[9] stage / fps offsets (image coordinates).
+- Image = header + info (0x68..0x134) + per stage: 0x24-byte record + u16 input words (dummy 0 first) + fps bytes. USER text section after the compressed body.

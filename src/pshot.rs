@@ -359,7 +359,10 @@ impl Player {
                 }
                 _ => {}
             }
-            self.place_option(anm, k, shot_held);
+            // SPEC-GAP: leaving options (state 3) skip their calc fn (no 0x2F sparkle draws, per the demo traces).
+            if self.options[k].state != 3 {
+                self.place_option(anm, k, shot_held);
+            }
             let o = &mut self.options[k];
             if o.vm.script.is_some() {
                 o.vm.run(anm);

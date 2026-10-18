@@ -221,6 +221,10 @@ enum Exec {
 }
 
 impl Dialogue {
+    pub fn skippable_shown(&self) -> bool {
+        self.active() && self.skippable
+    }
+
     pub fn active(&self) -> bool {
         self.file.is_some() && self.entry >= 0
     }

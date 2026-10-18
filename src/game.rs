@@ -27,8 +27,13 @@ impl TaskCtx for Ctx {
 
 impl Ctx {
     pub async fn load(source: Source, gfx: Gfx) -> anyhow::Result<Self> {
+        Self::load_with(source, gfx, true).await
+    }
+
+    // `persist` = read/write the port's save files (off for tests).
+    pub async fn load_with(source: Source, gfx: Gfx, persist: bool) -> anyhow::Result<Self> {
         let archive = Archive::from_bytes(source.read("th08.dat").await?)?;
-        let mut audio = Audio::new(source, &archive.read("thbgm.fmt")?);
+        let mut audio = Audio::new(source.clone(), &archive.read("thbgm.fmt")?);
         audio.load_se(&archive);
         let mut ctx = Self {
             gfx,
@@ -43,6 +48,17 @@ impl Ctx {
             se_log: crate::env::var("TH08_SE_LOG").is_some(),
         };
         ctx.anm.rng = crate::rng::Rng::boot();
+        if persist {
+            // The port's own save first; else import the original's score.dat (read-only).
+            let file = match crate::scoredat::storage_read("score.dat") {
+                Some(f) => Some(f),
+                None => source.read("score.dat").await.ok(),
+            };
+            ctx.game.load_score(file.as_deref());
+            ctx.game.persist = true;
+        } else {
+            ctx.game.load_score(None);
+        }
         ctx.game.debug_clear_masks();
         crate::supervisor::register(&mut ctx)?;
         Ok(ctx)

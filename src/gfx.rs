@@ -106,7 +106,7 @@ struct Batch {
 }
 
 pub struct Gfx {
-    pub surface: wgpu::Surface<'static>,
+    pub surface: Option<wgpu::Surface<'static>>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -203,7 +203,43 @@ impl Gfx {
         }
         config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&device, &config);
+        Ok(Self::build(Some(surface), device, queue, config))
+    }
 
+    // Offscreen device for tests and tools: renders only into the 640x480 frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn headless() -> anyhow::Result<Self> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                    .using_resolution(adapter.limits()),
+                ..Default::default()
+            })
+            .await?;
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            width: SCREEN_W as u32,
+            height: SCREEN_H as u32,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: Vec::new(),
+            color_space: Default::default(),
+        };
+        Ok(Self::build(None, device, queue, config))
+    }
+
+    fn build(
+        surface: Option<wgpu::Surface<'static>>,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        config: wgpu::SurfaceConfiguration,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -399,14 +435,16 @@ impl Gfx {
             blit,
         };
         g.white = g.create_texture(1, 1, &[255; 4]);
-        Ok(g)
+        g
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
         if w > 0 && h > 0 && (w, h) != (self.config.width, self.config.height) {
             self.config.width = w;
             self.config.height = h;
-            self.surface.configure(&self.device, &self.config);
+            if let Some(s) = &self.surface {
+                s.configure(&self.device, &self.config);
+            }
         }
     }
 
@@ -809,11 +847,15 @@ impl Gfx {
     }
 
     pub fn present(&mut self) {
-        let frame = match self.surface.get_current_texture() {
+        let Some(surface) = &self.surface else {
+            self.clear_batches();
+            return;
+        };
+        let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             _ => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, &self.config);
                 self.clear_batches();
                 return;
             }
