@@ -13,6 +13,10 @@ pub struct Supervisor {
     logo: Option<TextureId>,
     boot_vms: Vec<AnmVm>,
     boot_frames: u32,
+    load_pos: [f32; 2],
+    stage_load: bool,
+    capture_req: bool,
+    presents: u32,
 }
 
 // The logo stays up while the loaders run (answers_impl9 §18: no fixed time); holds measured on the original's draw
@@ -30,6 +34,10 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
         logo: None,
         boot_vms: Vec::new(),
         boot_frames: 0,
+        load_pos: [500.0, 440.0],
+        stage_load: false,
+        capture_req: false,
+        presents: 0,
     });
     task::add(ctx, Chain::Calc, 0, 0, t.clone())?;
     for prio in [0, 2, 16] {
@@ -64,6 +72,12 @@ impl Supervisor {
             let b = ctx.archive.read("th08logo.jpg")?;
             self.logo = Some(ctx.gfx.load_image("th08logo.jpg", &b)?);
         }
+        self.start_vms(ctx, [500.0, 440.0]);
+        Ok(())
+    }
+
+    fn start_vms(&mut self, ctx: &mut Ctx, pos: [f32; 2]) {
+        self.load_pos = pos;
         self.boot_vms = (0..3)
             .map(|i| {
                 let mut vm = AnmVm::default();
@@ -71,7 +85,14 @@ impl Supervisor {
                 vm
             })
             .collect();
-        Ok(())
+    }
+
+    // Surface 8 := the last presented frame (post-present capture of 0x44886F).
+    fn capture(&mut self, ctx: &mut Ctx) {
+        if let Some(t) = self.logo.take() {
+            ctx.gfx.free_texture(t);
+        }
+        self.logo = Some(ctx.gfx.capture_screen("th08logo.jpg"));
     }
 
     // Menu loader done: title fade-from-white, Loading_End (interrupt 1 fades the VMs out, surface released).
@@ -88,6 +109,13 @@ impl Supervisor {
     fn menu_loading(&mut self, ctx: &mut Ctx, from: i32) -> Result<()> {
         ctx.game.menu_loading = if from == gamemgr::SCENE_BOOT {
             MENU_LOAD_BOOT
+        } else if from == gamemgr::SCENE_MUSIC_ROOM {
+            // The music room calls 0x44886F itself on the exit press, one frame before the scene switch.
+            self.begin_loading(ctx)?;
+            for vm in &mut self.boot_vms {
+                vm.run(&mut ctx.anm);
+            }
+            MENU_LOAD - 1
         } else {
             self.begin_loading(ctx)?;
             MENU_LOAD
@@ -101,9 +129,28 @@ impl Supervisor {
         }
     }
 
+    // GameMgr_OnRegister: 0x44886F at (500, 440) + darken overlay after the main menu, else at (280, 430) (12 §1).
     fn start_game(&mut self, ctx: &mut Ctx) -> Result<()> {
         let gm = GameManager::register(ctx)?;
         self.scene_task = Some(gm);
+        // Attract demos always start from the main menu.
+        let from_menu = ctx.game.previous == gamemgr::SCENE_MENU || ctx.game.flags & gamemgr::F_DEMO != 0;
+        if let Some(t) = self.logo.take() {
+            ctx.gfx.free_texture(t);
+        }
+        self.start_vms(
+            ctx,
+            if from_menu {
+                [500.0, 440.0]
+            } else {
+                [280.0, 430.0]
+            },
+        );
+        self.stage_load = true;
+        self.capture_req = true;
+        if from_menu {
+            crate::effect::loading_overlay();
+        }
         Ok(())
     }
 
@@ -138,6 +185,9 @@ impl Supervisor {
         match (cur, req) {
             (gamemgr::SCENE_BOOT, gamemgr::SCENE_GAME) => self.start_game(ctx)?,
             (gamemgr::SCENE_BOOT, _) | (_, gamemgr::SCENE_MENU) => {
+                if cur == gamemgr::SCENE_MUSIC_ROOM {
+                    self.capture(ctx);
+                }
                 self.drop_scene(ctx);
                 if matches!(cur, gamemgr::SCENE_GAME | gamemgr::SCENE_RESULT) {
                     crate::replay::finish(ctx);
@@ -195,6 +245,8 @@ impl Supervisor {
                     Stub {
                         kind: req,
                         frame: 0,
+                        on_return: false,
+                        leave: None,
                     },
                     4,
                     3,
@@ -264,8 +316,28 @@ impl Task<Ctx> for Supervisor {
         }
         self.frame += 1;
         ctx.input.tick();
-        for vm in &mut self.boot_vms {
-            vm.run(&mut ctx.anm);
+        if std::mem::take(&mut self.capture_req) {
+            self.capture(ctx);
+        }
+        if self.stage_load {
+            if ctx.game.loading == 0 {
+                // Loading_End: state 0, surface 8 released.
+                self.stage_load = false;
+                self.boot_vms.clear();
+                if let Some(t) = self.logo.take() {
+                    ctx.gfx.free_texture(t);
+                }
+            } else if ctx.game.loading_wait == 1 {
+                for vm in &mut self.boot_vms {
+                    vm.pending_interrupt = 2;
+                }
+            }
+        }
+        // Presents 1–2 come from Window_InitD3D, before the first Frame_Run (answers_impl15 §Q1).
+        if self.frame > 2 || ctx.game.requested != gamemgr::SCENE_MENU {
+            for vm in &mut self.boot_vms {
+                vm.run(&mut ctx.anm);
+            }
         }
         if self.logo.is_some() && ctx.game.scene == gamemgr::SCENE_BOOT {
             self.boot_frames += 1;
@@ -296,18 +368,36 @@ impl Task<Ctx> for Supervisor {
 
     // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        // Boot: presents 1–2 clear to black, presents 3–5 draw nothing (loader thread start-up, 12 §1).
+        if tag == 0 && self.presents < 5 && ctx.game.scene == gamemgr::SCENE_BOOT {
+            self.presents += 1;
+            if self.presents <= 2 {
+                ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
+                ctx.gfx.clear_depth(Some([0, 0, 0, 255]));
+            }
+            return Ret::StopFrame;
+        }
         match (tag, self.logo) {
             (0, Some(t)) => {
                 ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
                 ctx.gfx.image(t, 0.0, 0.0);
+            }
+            // SPEC-GAP: every gameplay frame starts with a full-screen depth clear (seen in the original's draw log).
+            (0, None) if ctx.game.scene == gamemgr::SCENE_GAME && !self.stage_load => {
+                ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
+                ctx.gfx.clear_depth(None);
             }
             (2, _) => {
                 // The scripts' own positions (slide-in, z) are relative to the loading position.
                 for vm in &mut self.boot_vms {
                     let p = vm.pos;
                     let o = vm.pos_offset;
-                    vm.pos = [p[0] + o[0] + 500.0, p[1] + o[1] + 440.0, p[2] + o[2]];
-                    // SPEC-GAP: draw function taken from the original's draw log (rotated ring → Draw2DRot).
+                    vm.pos = [
+                        p[0] + o[0] + self.load_pos[0],
+                        p[1] + o[1] + self.load_pos[1],
+                        p[2] + o[2],
+                    ];
+                    // 0x445D3E: pos += pos_offset, Draw2DRot, pos −= pos_offset (12 §1).
                     ctx.anm.draw_mode(&mut ctx.gfx, vm, 2);
                     vm.pos = p;
                 }
@@ -344,10 +434,13 @@ impl Task<Ctx> for Supervisor {
 }
 
 // SPEC-GAP: result (scenes 5/6), music room (8) and ending (9) are later tasks; this stub shows the outcome and
-// returns on Shot/Enter (ending → result → menu, like the scene table).
+// returns on Shot/Enter (ending → result → menu, like the scene table). Exit keys of the menu-side scenes: result
+// viewer X → cursor to 「タイトルに戻る」, X again leaves (16 §2.4); music room Bomb/ESC (16 §5.3).
 pub struct Stub {
     kind: i32,
     frame: u32,
+    on_return: bool,
+    leave: Option<u32>,
 }
 
 // A file from disk natively, or from the save storage (web, and `replay/…` names).
@@ -441,7 +534,37 @@ impl Task<Ctx> for Stub {
             g.score.plst.music[18] = 1;
         }
         self.frame += 1;
-        if self.frame >= 30 && ctx.input.pressed(crate::input::SHOT | crate::input::ENTER) {
+        let cancel = ctx.input.pressed(crate::input::BOMB | crate::input::PAUSE);
+        let confirm = ctx.input.pressed(crate::input::SHOT | crate::input::ENTER);
+        match self.kind {
+            gamemgr::SCENE_RESULT_MENU => {
+                // SPEC-GAP: the viewer leaves 20 frames after the second X (menu_base log).
+                if let Some(n) = &mut self.leave {
+                    *n += 1;
+                    if *n >= 20 {
+                        ctx.game.request(gamemgr::SCENE_MENU);
+                    }
+                    return Ret::Next;
+                }
+                if ctx.input.pressed(crate::input::UP | crate::input::DOWN) {
+                    self.on_return = false;
+                }
+                if (cancel || confirm) && self.on_return {
+                    self.leave = Some(0);
+                } else if cancel {
+                    self.on_return = true;
+                }
+                return Ret::Next;
+            }
+            gamemgr::SCENE_MUSIC_ROOM => {
+                if cancel {
+                    ctx.game.request(gamemgr::SCENE_MENU);
+                }
+                return Ret::Next;
+            }
+            _ => {}
+        }
+        if self.frame >= 30 && confirm {
             let next = if self.kind == gamemgr::SCENE_ENDING {
                 gamemgr::SCENE_RESULT
             } else {

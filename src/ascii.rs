@@ -20,8 +20,10 @@ pub struct Text {
     pub s: String,
     pub color: [u8; 4],
     pub scale: f32,
+    pub scale_y: f32,
     pub advance: f32,
     pub high: bool,
+    pub hl: bool,
 }
 
 impl Text {
@@ -32,8 +34,10 @@ impl Text {
             s: s.into(),
             color: [255; 4],
             scale: 1.0,
+            scale_y: 1.0,
             advance: 13.0,
             high: true,
+            hl: false,
         }
     }
 
@@ -49,11 +53,24 @@ impl Text {
 
     pub fn scale(mut self, s: f32) -> Self {
         self.scale = s;
+        self.scale_y = s;
+        self
+    }
+
+    pub fn scale_xy(mut self, x: f32, y: f32) -> Self {
+        self.scale = x;
+        self.scale_y = y;
         self
     }
 
     pub fn advance(mut self, a: f32) -> Self {
         self.advance = a;
+        self
+    }
+
+    // Highlight glyph set (12 §2.9): sprite c + 0x8A (asciis.png), colour forced to white.
+    pub fn highlight(mut self, on: bool) -> Self {
+        self.hl = on;
         self
     }
 
@@ -82,19 +99,43 @@ impl Queue {
             let (mut x, mut y) = (t.x + o[0], t.y + o[1]);
             for c in t.s.bytes() {
                 if c == b'\n' {
-                    (x, y) = (t.x + o[0], y + 16.0);
+                    (x, y) = (t.x + o[0], y + 16.0 * t.scale_y);
                     continue;
                 }
-                if let Some(sp) = ctx_anm
-                    .sprite(ANM_SLOT, c.wrapping_sub(1) as usize)
-                    .filter(|_| c > b' ')
-                {
-                    gfx.sprite(
+                let (idx, col) = if t.hl {
+                    (c as usize + 0x8A, [255; 4])
+                } else {
+                    (c.wrapping_sub(1) as usize, t.color)
+                };
+                if let Some(sp) = ctx_anm.sprite(ANM_SLOT, idx).filter(|_| c > b' ') {
+                    // Glyph VM: z 0, z-write on (answers_impl15 §Q8).
+                    let [u0, v0, u1, v1] = sp.uv;
+                    let (w, h) = (sp.w * t.scale, sp.h * t.scale_y);
+                    // Draw2DSnap culls quads outside the viewport.
+                    let (rx, ry) = (x.round_ties_even() - 0.5, y.round_ties_even() - 0.5);
+                    if rx + w < 0.0 || rx > 640.0 || ry + h < 0.0 || ry > 480.0 {
+                        x += t.advance * t.scale;
+                        continue;
+                    }
+                    let v = |x: f32, y: f32, u: f32, vv: f32| {
+                        crate::gfx::Vertex::screen(
+                            x.round_ties_even(),
+                            y.round_ties_even(),
+                            0.0,
+                            [u, vv],
+                            col,
+                        )
+                    };
+                    gfx.strip(
                         sp.tex,
                         Blend::Alpha,
-                        Rect::new(x, y, sp.w * t.scale, sp.h * t.scale),
-                        sp.uv,
-                        t.color,
+                        true,
+                        [
+                            v(x, y, u0, v0),
+                            v(x + w, y, u1, v0),
+                            v(x, y + h, u0, v1),
+                            v(x + w, y + h, u1, v1),
+                        ],
                     );
                 }
                 x += t.advance * t.scale;
@@ -102,6 +143,13 @@ impl Queue {
         }
         self.items.retain(|t| t.high != high);
     }
+}
+
+// Draws one string at once (outside the queue), in the caller's draw pass.
+pub fn draw_now(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, t: Text) {
+    let high = t.high;
+    let mut q = Queue { items: vec![t] };
+    q.draw(anm, gfx, high);
 }
 
 pub const POPUP_SLOTS: usize = 720;
@@ -443,6 +491,16 @@ fn gauge_draw(
         }
         let my = g.vms[G_MARKER].pos[1];
         let vm = &mut g.vms[G_GLYPH];
+        draw_percent(
+            anm,
+            gfx,
+            vm,
+            gv,
+            bx + 64.0 + gv as f32 * 40.0 / 10000.0,
+            my - 7.0,
+            0.0,
+            colour,
+        );
         vm.color = colour;
         let mut stamp =
             |anm: &mut crate::anmmgr::AnmManager, glyph: i32, x: f32, y: f32, scale: f32| {
@@ -451,42 +509,6 @@ fn gauge_draw(
                 vm.scale = [scale, scale];
                 anm.draw_mode(gfx, vm, 0);
             };
-        // Ascii_DrawGaugePercent 0x405E10: glyphs 0–9, 10 '%', 11 '.', 12 '-'.
-        let a = gv.abs();
-        let n = 4
-            + (gv < 0) as i32
-            + if a < 1000 {
-                1
-            } else if a < 10000 {
-                2
-            } else {
-                3
-            };
-        let (mut x, y) = (
-            bx + 64.0 + gv as f32 * 40.0 / 10000.0 - (3.5 * n as f32 - 3.5 - 4.0),
-            my - 7.0,
-        );
-        let mut seq: Vec<(i32, f32, bool)> = Vec::new();
-        if gv < 0 {
-            seq.push((12, 7.0, false));
-        }
-        let (int, frac): (Vec<i32>, [i32; 2]) = if a < 1000 {
-            (vec![a / 100], [a % 100 / 10, a % 10])
-        } else if a < 10000 {
-            (vec![a / 1000, a % 1000 / 100], [a % 100 / 10, a % 10])
-        } else {
-            (vec![1, 0, 0], [0, 0])
-        };
-        seq.extend(int.into_iter().map(|d| (d, 7.0, false)));
-        seq.push((11, 5.0, false));
-        seq.push((frac[0], 5.0, true));
-        seq.push((frac[1], 7.0, true));
-        for (glyph, adv, small) in seq {
-            let (yy, sc) = if small { (y + 2.0, 0.8) } else { (y, 1.0) };
-            stamp(anm, glyph, x, yy, sc);
-            x += adv;
-        }
-        stamp(anm, 10, x, y, 1.0);
         let (mut x, y) = (bx + 62.0 - 14.0, by + 3.0 + 8.0);
         let (mut div, mut sum) = (10_000_000, 0);
         while div > 0 {
@@ -500,6 +522,58 @@ fn gauge_draw(
         }
         vm.scale = [1.0, 1.0];
     });
+}
+
+// Ascii_DrawGaugePercent 0x405E10 (12 §5.9): "%d.%02d%%" of value/100 with glyph VM sprites 136 + (0–9, 10 '%',
+// 11 '.', 12 '-'), decimals at 0.8×, the integer part centred around x = cx.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_percent(
+    anm: &mut crate::anmmgr::AnmManager,
+    gfx: &mut crate::gfx::Gfx,
+    vm: &mut AnmVm,
+    value: i32,
+    cx: f32,
+    cy: f32,
+    z: f32,
+    colour: [u8; 4],
+) {
+    vm.color = colour;
+    let a = value.abs();
+    let n = 4
+        + (value < 0) as i32
+        + if a < 1000 {
+            1
+        } else if a < 10000 {
+            2
+        } else {
+            3
+        };
+    let mut x = cx - (3.5 * n as f32 - 3.5 - 4.0);
+    let mut seq: Vec<(i32, f32, bool)> = Vec::new();
+    if value < 0 {
+        seq.push((12, 7.0, false));
+    }
+    let (int, frac): (Vec<i32>, [i32; 2]) = if a < 1000 {
+        (vec![a / 100], [a % 100 / 10, a % 10])
+    } else if a < 10000 {
+        (vec![a / 1000, a % 1000 / 100], [a % 100 / 10, a % 10])
+    } else {
+        (vec![1, 0, 0], [0, 0])
+    };
+    seq.extend(int.into_iter().map(|d| (d, 7.0, false)));
+    seq.push((11, 5.0, false));
+    seq.push((frac[0], 5.0, true));
+    seq.push((frac[1], 7.0, true));
+    seq.push((10, 0.0, false));
+    for (glyph, adv, small) in seq {
+        let (yy, sc) = if small { (cy + 2.0, 0.8) } else { (cy, 1.0) };
+        vm.set_sprite(anm, 136 + glyph);
+        vm.pos = [x, yy, z];
+        vm.scale = [sc, sc];
+        anm.draw_mode(gfx, vm, 0);
+        x += adv;
+    }
+    vm.scale = [1.0, 1.0];
 }
 
 pub fn text_width(s: &str, advance: f32, scale: f32) -> f32 {

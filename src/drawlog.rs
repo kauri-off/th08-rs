@@ -92,6 +92,32 @@ pub fn format_frame(h: &Header, recs: &[LogRec]) -> String {
                 body.push('\n');
                 nquads += 1;
             }
+            LogRec::Fan { blend, vp, v: verts } => {
+                set(&mut body, &mut t, "T -".to_string());
+                set(
+                    &mut body,
+                    &mut s,
+                    format!(
+                        "S blend={} atest=ge4 ztest=always zwrite=0 c=col a=col",
+                        if *blend == Blend::Add { "add" } else { "alpha" }
+                    ),
+                );
+                set(&mut body, &mut v, vp_line(vp));
+                let _ = write!(body, "P fan {}", verts.len());
+                for vx in verts {
+                    let [x, y, z, rhw] = screen(vx);
+                    let _ = write!(
+                        body,
+                        " {} {} {} {} - - {:08x}",
+                        num(x, 2),
+                        num(y, 2),
+                        num(z, 4),
+                        num(rhw, 4),
+                        argb(vx.color)
+                    );
+                }
+                body.push('\n');
+            }
             LogRec::Clear { vp, color } => {
                 set(&mut body, &mut v, vp_line(vp));
                 match color {
@@ -1462,6 +1488,30 @@ pub fn clr_pokes(g: &mut crate::gamemgr::Game) {
     }
 }
 
+// Start state of a menu script (README of specs/data/drawlog): a private save directory, empty for menu_base /
+// menu_clr; menu_mopup1 adds its score.dat and the four attract demos as replay/th8_01..04.rpy.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!(
+        "th08_{name}_{}_{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("replay"))?;
+    if name == "menu_mopup1" {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/data/drawlog");
+        let score = std::fs::read(data.join("menu_mopup1.score.dat"))?;
+        ctx.game.load_score(Some(&score));
+        for n in 0..4 {
+            let r = ctx.archive.read(&format!("demorpy{n}.rpy"))?;
+            std::fs::write(dir.join(format!("replay/th8_{:02}.rpy", n + 1)), r)?;
+        }
+    }
+    crate::scoredat::set_save_dir(Some(dir));
+    Ok(())
+}
+
 // Replays a menu input script: script frame 1 = the port's first main-menu frame (boot frames get input 0).
 pub fn run_menu_script(
     ctx: &mut crate::game::Ctx,
@@ -1527,10 +1577,11 @@ mod tests {
     use crate::gfx::{LogTex, Rect};
 
     // Current match level per reference (raise as differences get fixed): (identical frames, % same quads).
-    const MENU_BASE: (usize, f64) = (1250, 49.5);
-    const MENU_CLR: (usize, f64) = (855, 96.5);
+    const MENU_BASE: (usize, f64) = (1750, 70.5);
+    const MENU_CLR: (usize, f64) = (900, 97.3);
+    const MENU_MOPUP1: (usize, f64) = (1590, 84.5);
     // Demos 0–3, first chunk: % same quads (playfield).
-    const DEMO: [f64; 4] = [83.5, 28.5, 77.0, 65.8];
+    const DEMO: [f64; 4] = [85.0, 29.5, 78.5, 67.8];
 
     fn data(p: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1614,6 +1665,7 @@ mod tests {
             eprintln!("xz unavailable: {name} skipped");
             return;
         }
+        menu_start_state(&mut ctx, name).unwrap();
         let input = std::fs::read_to_string(data(&format!("{name}.input.txt"))).unwrap();
         let script = crate::input::parse_script(&input).unwrap();
         let mut text = String::new();
@@ -1637,6 +1689,11 @@ mod tests {
     #[test]
     fn menu_clr() {
         menu("menu_clr", true, MENU_CLR);
+    }
+
+    #[test]
+    fn menu_mopup1() {
+        menu("menu_mopup1", false, MENU_MOPUP1);
     }
 
     #[test]

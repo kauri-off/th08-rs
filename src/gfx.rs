@@ -138,6 +138,11 @@ pub enum LogRec {
         size: [u32; 2],
         to: [u32; 2],
     },
+    Fan {
+        blend: Blend,
+        vp: Rect,
+        v: Vec<Vertex>,
+    },
 }
 
 struct Batch {
@@ -498,6 +503,49 @@ impl Gfx {
     }
 
     pub fn create_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> TextureId {
+        self.create_texture_fmt(width, height, rgba, wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    // Post-present capture (12 §1, 0x44886F): copies the last presented 640x480 frame into a new surface texture.
+    pub fn capture_screen(&mut self, label: &str) -> TextureId {
+        let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
+        let fmt = self.config.format;
+        let blank = vec![0u8; (w * h * 4) as usize];
+        let id = self.create_texture_fmt(w, h, &blank, fmt);
+        if self.surface.is_some() {
+            let mut enc = self.device.create_command_encoder(&Default::default());
+            let dst = &self.textures[id].as_ref().unwrap().tex;
+            enc.copy_texture_to_texture(
+                self.frame.as_image_copy(),
+                dst.as_image_copy(),
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.queue.submit([enc.finish()]);
+        }
+        self.set_label(id, label, w, h);
+        if let Some(log) = self.log.as_mut() {
+            log.push(LogRec::Copy {
+                src: "screen".into(),
+                dst: label.into(),
+                from: [0, 0],
+                size: [w, h],
+                to: [0, 0],
+            });
+        }
+        id
+    }
+
+    fn create_texture_fmt(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        format: wgpu::TextureFormat,
+    ) -> TextureId {
         let tex = self.device.create_texture_with_data(
             &self.queue,
             &wgpu::TextureDescriptor {
@@ -510,7 +558,7 @@ impl Gfx {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_DST
                     | wgpu::TextureUsages::COPY_SRC,
@@ -1065,6 +1113,26 @@ impl Gfx {
     }
 
     // Raw draw of a pre-built quad (v0 TL, v1 TR, v2 BL, v3 BR) with explicit depth state (draw-log renderer).
+    // Untextured triangle fan (vertex 0 = centre), z-write off; logged as one `P fan` record.
+    pub fn fan(&mut self, blend: Blend, v: &[Vertex]) {
+        if v.len() < 3 {
+            return;
+        }
+        let log = self.log.take();
+        let key = self.key(blend, false, Kind::Draw);
+        for i in 1..v.len() - 1 {
+            self.push(self.white, key, [v[0], v[i], v[i + 1], v[i + 1]], [0, 1, 2, 0, 1, 2]);
+        }
+        self.log = log;
+        if let Some(log) = self.log.as_mut() {
+            log.push(LogRec::Fan {
+                blend,
+                vp: self.viewport,
+                v: v.to_vec(),
+            });
+        }
+    }
+
     pub fn draw_raw(
         &mut self,
         tex: Option<TextureId>,

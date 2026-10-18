@@ -536,7 +536,21 @@ impl ScoreDat {
 // Save storage: never the game directory. Native: `TH08_SAVE_DIR`, else $XDG_CONFIG_HOME/th08 or ~/.config/th08,
 // else next to the binary. Web: localStorage (hex).
 #[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    static SAVE_DIR: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+// Tools/tests: a private save directory for this thread (overrides `TH08_SAVE_DIR`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_save_dir(dir: Option<std::path::PathBuf>) {
+    SAVE_DIR.with_borrow_mut(|d| *d = dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn save_dir() -> Option<std::path::PathBuf> {
+    if let Some(d) = SAVE_DIR.with_borrow(|d| d.clone()) {
+        return Some(d);
+    }
     if let Some(d) = crate::env::var("TH08_SAVE_DIR") {
         return Some(d.into());
     }

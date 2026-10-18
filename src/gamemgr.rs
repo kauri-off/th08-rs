@@ -23,8 +23,6 @@ const ROUTE_SHIFT: u32 = 11;
 
 pub const CALC_PRIO: u16 = 2;
 pub const DRAW_PRIO: u16 = 5;
-// SPEC-GAP: the loading screen is drawn by a GM node at prio 16 (over the registered stage) instead of a loader thread.
-pub const LOADING_DRAW_PRIO: u16 = 16;
 
 // Rank init / min / max by difficulty (table 0x4C7880).
 const RANK: [[i32; 3]; 5] = [
@@ -67,6 +65,8 @@ pub struct Game {
     pub next_scene_after: i32,
     pub loading: u8,
     pub loading_frames: u32,
+    pub loading_shown: bool,
+    pub loading_wait: u32,
     pub frame_counter: u32,
     pub play_time: u32,
     pub cfg: crate::config::Config,
@@ -117,6 +117,8 @@ impl Default for Game {
             next_scene_after: -1,
             loading: 0,
             loading_frames: 0,
+            loading_shown: false,
+            loading_wait: 0,
             frame_counter: 0,
             play_time: 0,
             cfg: Default::default(),
@@ -405,8 +407,7 @@ pub struct GameManager {
     pub enemies: Option<Rc<RefCell<EnemyManager>>>,
     pub hud: Option<Rc<RefCell<Hud>>>,
     tasks: Vec<TaskRef<Ctx>>,
-    loading_vms: Vec<crate::anmvm::AnmVm>,
-    wait_frames: u32,
+    gauge_at: Option<(u32, i32, i32)>,
 }
 
 impl GameManager {
@@ -418,14 +419,12 @@ impl GameManager {
             enemies: None,
             hud: None,
             tasks: Vec::new(),
-            loading_vms: Vec::new(),
-            wait_frames: 0,
+            gauge_at: None,
         }));
         CURRENT.with_borrow_mut(|c| *c = Rc::downgrade(&gm));
         let t: TaskRef<Ctx> = gm.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, LOADING_DRAW_PRIO, 1, t)?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
         Ok(gm)
     }
 
@@ -535,7 +534,17 @@ impl GameManager {
         }
         let l = self.player.borrow().stats.limits;
         crate::ascii::gauge_player(&self.player);
-        crate::ascii::gauge_setup(&mut ctx.anm, l.min, l.max);
+        // The loader thread reaches Ascii_SetupGaugeVms k Ascii_Calc ticks before game frame 1 (answers_impl15 §Q7).
+        let demo = (ctx.game.flags & F_DEMO != 0).then_some(ctx.game.demo);
+        let k = match demo {
+            Some(0) => 28,
+            Some(1) => 27,
+            Some(2) => 29,
+            Some(3) => 33,
+            _ => 28,
+        };
+        let total = loading_total(&ctx.game);
+        self.gauge_at = Some(((total + 1).saturating_sub(k).max(1), l.min, l.max));
         {
             let mut p = self.player.borrow_mut();
             let limits = p.stats.limits;
@@ -631,20 +640,6 @@ impl GameManager {
         self.bullets = Some(bullets);
         self.enemies = Some(enemies);
         self.hud = Some(hud);
-        let pos = if ctx.game.previous == SCENE_MENU {
-            [500.0, 440.0, 0.0]
-        } else {
-            [280.0, 430.0, 0.0]
-        };
-        self.loading_vms = (0..3)
-            .map(|i| {
-                let mut vm = crate::anmvm::AnmVm::default();
-                ctx.anm.set_script(&mut vm, 2, i);
-                vm.pos = pos;
-                vm
-            })
-            .collect();
-        self.wait_frames = 0;
         Ok(())
     }
 
@@ -802,26 +797,27 @@ impl Task<Ctx> for GameManager {
             return r;
         }
         let g = &mut ctx.game;
+        g.loading_shown = g.loading != 0;
         if g.loading != 0 {
             g.loading_frames += 1;
-            for vm in self.loading_vms.iter_mut().filter(|v| v.script.is_some()) {
-                vm.run(&mut ctx.anm);
+            if let Some((at, min, max)) = self.gauge_at
+                && g.loading_frames >= at
+            {
+                self.gauge_at = None;
+                crate::ascii::gauge_setup(&mut ctx.anm, min, max);
             }
             let g = &mut ctx.game;
-            if g.loading_frames >= if g.replay() { 80 } else { 30 } {
+            if g.loading_frames >= loading_total(g) {
                 if g.end_state() == 0 {
                     g.loading = 0;
+                    g.loading_wait = 0;
                     g.flags &= !F_CLEAR_PANEL;
-                    self.loading_vms
-                        .iter_mut()
-                        .for_each(|v| v.pending_interrupt = 1);
+                    crate::effect::release_loading_overlay();
                 } else {
-                    if self.wait_frames == 0 {
-                        self.loading_vms
-                            .iter_mut()
-                            .for_each(|v| v.pending_interrupt = 2);
+                    if g.loading_wait == 0 {
+                        crate::effect::release_loading_overlay();
                     }
-                    self.wait_frames += 1;
+                    g.loading_wait += 1;
                 }
             }
             return Ret::StopFrame;
@@ -909,30 +905,34 @@ impl Task<Ctx> for GameManager {
         Ret::Next
     }
 
-    fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        if tag != 1 || ctx.game.loading == 0 {
+    // While loading only the Supervisor's loading screen (draw prio 0–2) and the darken overlay are drawn.
+    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        if !ctx.game.loading_shown {
             return Ret::Next;
         }
-        ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
-        ctx.gfx.rect(0.0, 0.0, 640.0, 480.0, [0, 0, 0, 255]);
-        for vm in &mut self.loading_vms {
-            ctx.anm.draw(&mut ctx.gfx, vm);
-        }
-        if self.wait_frames >= 5 {
-            let t = (self.wait_frames - 5) % 59;
+        let w = ctx.game.loading_wait;
+        if w >= 5 {
+            let t = (w - 5) % 59;
             let a = if t < 30 {
                 255 - t * 128 / 30
             } else {
                 127 + (t - 30) * 128 / 29
             };
-            ctx.ascii.push(
+            crate::ascii::draw_now(
+                &ctx.anm,
+                &mut ctx.gfx,
                 crate::ascii::Text::new(288.0, 454.0, "Press Shot Button")
                     .scale(0.5)
                     .color([255, 255, 255, a as u8]),
             );
         }
-        Ret::Next
+        Ret::StopFrame
     }
+}
+
+// Stage loading frames: replays measured 81 presents (answers_impl15 §Q7). SPEC-GAP: the original waits for its loader thread.
+fn loading_total(g: &Game) -> u32 {
+    if g.replay() { 81 } else { 30 }
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ use crate::ascii::Text;
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
-use crate::gfx::{Blend, FULLSCREEN, Gfx, PLAYFIELD, Rect, Vertex};
+use crate::gfx::{Blend, FULLSCREEN, Gfx, PLAYFIELD, Vertex};
 use crate::msg::{self, Dialogue, Event};
 use crate::player::{PlayerRef, Popup, Stats};
 use crate::stage::Stage;
@@ -637,28 +637,44 @@ impl Hud {
         let gfx = &mut ctx.gfx;
         gfx.set_viewport(FULLSCREEN);
         let anm = &mut ctx.anm;
-        let spr = |anm: &AnmManager, gfx: &mut Gfx, i: usize, x: f32, y: f32| {
+        // Tiles (scripts 13–15) keep z-write on; depths per answers_impl15 §Q8.
+        let spr = |anm: &AnmManager, gfx: &mut Gfx, i: usize, x: f32, y: f32, z: f32| {
             if let Some(s) = anm.sprite(FRONT_SLOT, i) {
-                gfx.sprite(
+                let [u0, v0, u1, v1] = s.uv;
+                let v = |x: f32, y: f32, u: f32, vv: f32| {
+                    Vertex::screen(x, y, z, [u, vv], [255; 4])
+                };
+                gfx.strip(
                     s.tex,
                     Blend::Alpha,
-                    Rect::new(x, y, s.w, s.h),
-                    s.uv,
-                    [255; 4],
+                    true,
+                    [
+                        v(x, y, u0, v0),
+                        v(x + s.w, y, u1, v0),
+                        v(x, y + s.h, u0, v1),
+                        v(x + s.w, y + s.h, u1, v1),
+                    ],
                 );
             }
         };
+        for y in [40.0, 56.0] {
+            spr(anm, gfx, 15, 480.0, y, 0.49);
+        }
+        for y in [88.0, 104.0, 136.0, 152.0, 168.0, 184.0] {
+            spr(anm, gfx, 15, 480.0, y, 0.48);
+        }
+        spr(anm, gfx, 15, 512.0, 464.0, 0.48);
         for y in (0..480).step_by(32) {
-            spr(anm, gfx, 13, 0.0, y as f32);
+            spr(anm, gfx, 13, 0.0, y as f32, 0.49);
         }
         for x in (416..640).step_by(32) {
             for y in (16..480).step_by(32) {
-                spr(anm, gfx, 13, x as f32, y as f32);
+                spr(anm, gfx, 13, x as f32, y as f32, 0.49);
             }
         }
         for x in (0..640).step_by(128) {
-            spr(anm, gfx, 14, x as f32, 0.0);
-            spr(anm, gfx, 14, x as f32, 464.0);
+            spr(anm, gfx, 14, x as f32, 0.0, 0.49);
+            spr(anm, gfx, 14, x as f32, 464.0, 0.49);
         }
         for vm in self.front.iter_mut().take(10) {
             anm.draw_mode(gfx, vm, if vm.script_index == 1 { 2 } else { 0 });
@@ -684,9 +700,12 @@ impl Hud {
         for (row, n, vm) in [(88.0, st.lives as i32, 10), (104.0, st.bombs as i32, 11)] {
             for i in 0..n.clamp(0, 8) {
                 let v = &mut self.front[vm];
-                v.pos = [488.0 + 16.0 * i as f32, row, 0.0];
+                v.pos = [488.0 + 16.0 * i as f32, row, 0.46];
                 anm.draw_mode(gfx, v, 0);
             }
+        }
+        for x in [32.0, 160.0, 288.0] {
+            spr(anm, gfx, 14, x, 464.0, 0.49);
         }
         let pw = st.power.trunc();
         let uv = [0.0, 0.0];
@@ -841,7 +860,8 @@ impl Task<Ctx> for Hud {
         if !self.msg.borrow().active() {
             self.draw_boss(ctx);
         }
-        ctx.gfx.set_viewport(FULLSCREEN);
+        // Stage title / clock VMs keep the playfield viewport left by the gauge readout (answers_impl15 §Q11).
+        ctx.gfx.set_viewport(PLAYFIELD);
         for vm in self
             .title
             .iter_mut()

@@ -25,6 +25,7 @@ pub mod hud;
 pub mod input;
 pub mod item;
 pub mod menu;
+pub mod menulist;
 pub mod msg;
 pub mod player;
 pub mod pshot;

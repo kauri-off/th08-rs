@@ -1027,6 +1027,7 @@ fn screen_fx(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32) -> ScreenEffect {
             _ => 0.0,
         },
         release: false,
+        loading: false,
         timer: Timer::default(),
         done: false,
     }
@@ -1157,8 +1158,30 @@ pub struct ScreenEffect {
     pub prio: u16,
     alpha: f32,
     release: bool,
+    loading: bool,
     timer: Timer,
     done: bool,
+}
+
+thread_local! {
+    static LOADING_RELEASE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// 0x4489CA(0): the loading darken overlay (type 5, 60 frames, black, draw prio 1), released when loading ends.
+pub fn loading_overlay() {
+    LOADING_RELEASE.set(false);
+    with(|e| {
+        e.screen.push(ScreenEffect {
+            prio: 1,
+            loading: true,
+            ..screen_fx(5, 60, 0, 0, 0)
+        })
+    });
+}
+
+// 0x45C160 from Loading_Wait / Loading_End.
+pub fn release_loading_overlay() {
+    LOADING_RELEASE.set(true);
 }
 
 pub const SCREEN_CALC_PRIO: u16 = 3;
@@ -1264,13 +1287,18 @@ impl ScreenEffect {
                 }
             }
             5 | 6 => {
+                if self.loading && !self.release && LOADING_RELEASE.take() {
+                    self.release = true;
+                    self.timer.set(0);
+                }
+                let t = self.timer.cur;
                 if self.release {
-                    self.alpha = (128.0 - 128.0 * t as f32 / 8.0).max(0.0);
-                    if t >= 8 {
+                    if t > 8 {
                         return Ret::Remove;
                     }
-                } else {
-                    self.alpha = (128 * t.min(dur) / dur) as f32;
+                    self.alpha = (128 - t * 128 / 8) as f32;
+                } else if t <= dur {
+                    self.alpha = (t * 128 / dur) as f32;
                 }
             }
             7 => {

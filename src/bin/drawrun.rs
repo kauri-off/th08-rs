@@ -1,5 +1,5 @@
 // Headless port run that writes a draw log: `drawrun <out[.xz]> menu <input.txt> [clr]` replays a menu script
-// (README of specs/data/drawlog), `drawrun <out[.xz]> demo <0-3> [last demo frame]` plays an attract demo.
+// (README of specs/data/drawlog; a `*mopup1*` input gets that script's score.dat and replays), `drawrun <out[.xz]> demo <0-3> [last demo frame]` plays an attract demo.
 use std::io::Write;
 
 fn main() -> anyhow::Result<()> {
@@ -34,6 +34,14 @@ fn main() -> anyhow::Result<()> {
             let script = th08::input::load_script(&args[2])
                 .ok_or_else(|| anyhow::anyhow!("bad input script {}", args[2]))?;
             let clr = args.get(3).is_some_and(|a| a == "clr");
+            let name = if clr {
+                "menu_clr"
+            } else if args[2].contains("mopup1") {
+                "menu_mopup1"
+            } else {
+                "menu_base"
+            };
+            th08::drawlog::menu_start_state(&mut ctx, name)?;
             th08::drawlog::run_menu_script(&mut ctx, &script, clr, &mut put);
         }
         "demo" => {

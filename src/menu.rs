@@ -13,21 +13,22 @@ pub const ANM_SLOT: usize = 20;
 pub const CALC_PRIO: u16 = 4;
 pub const DRAW_PRIO: u16 = 3;
 const VM_COUNT: usize = 142;
-const CONFIRM: u16 = SHOT | ENTER;
-const CANCEL: u16 = BOMB | PAUSE;
+pub(crate) const CONFIRM: u16 = SHOT | ENTER;
+pub(crate) const CANCEL: u16 = BOMB | PAUSE;
 
-const TOP: i32 = 0;
+pub(crate) const TOP: i32 = 0;
 const OPTION: i32 = 2;
 const KEY_CONFIG: i32 = 3;
 const DIFF: i32 = 4;
 const DIFF_PRACTICE: i32 = 8;
 const DIFF_EXTRA: i32 = 12;
 const CHAR: i32 = 5;
-const CHAR_PRACTICE: i32 = 9;
+pub(crate) const CHAR_PRACTICE: i32 = 9;
 const CHAR_EXTRA: i32 = 13;
 const REPLAY: i32 = 7;
 const PRACTICE_STAGE: i32 = 11;
-const SPELL_PRACTICE: i32 = 16;
+pub(crate) const SPELL_PRACTICE: i32 = 16;
+pub(crate) const SPELL_CARD: i32 = 17;
 
 const ITEMS: usize = 9;
 const ITEM_QUIT: i32 = 8;
@@ -49,7 +50,7 @@ const DESCRIPTIONS: [&str; ITEMS] = [
 ];
 
 // Character select VMs per shot (table 0x4B8CD8): shown VMs, then the VM that gets interrupt 23.
-const CHAR_VMS: [[i32; 4]; 12] = [
+pub(crate) const CHAR_VMS: [[i32; 4]; 12] = [
     [119, 111, 112, -1],
     [120, 114, 113, -1],
     [121, 115, 116, -1],
@@ -77,12 +78,9 @@ fn final_notice(g: &gamemgr::Game, c: usize, d: usize) -> Option<i32> {
     Some(147)
 }
 
-const STAGE_NAMES: [&str; 8] = [
-    "Stage 1", "Stage 2", "Stage 3", "Stage 4A", "Stage 4B", "Stage 5", "Stage 6A", "Stage 6B",
-];
 
 // Unlock checks (15 §2.4) on the score.dat clear masks; `TH08_UNLOCK=1` unlocks everything.
-fn unlock_all() -> bool {
+pub(crate) fn unlock_all() -> bool {
     crate::env::var("TH08_UNLOCK").is_some_and(|v| v != "0")
 }
 
@@ -92,7 +90,7 @@ fn team_final_b(g: &gamemgr::Game, t: usize) -> bool {
 }
 
 // 0x43C23B: a Final A clear on E–L.
-fn team_final_a(g: &gamemgr::Game, t: usize) -> bool {
+pub(crate) fn team_final_a(g: &gamemgr::Game, t: usize) -> bool {
     unlock_all() || t >= 4 || g.clear_any[t].iter().take(4).any(|m| m & 0x8000 != 0)
 }
 
@@ -104,7 +102,7 @@ fn extra_any(g: &gamemgr::Game) -> bool {
     (0..4).any(|t| team_final_b(g, t))
 }
 
-fn extra_all(g: &gamemgr::Game) -> bool {
+pub(crate) fn extra_all(g: &gamemgr::Game) -> bool {
     (0..4).all(|t| team_final_b(g, t))
 }
 
@@ -129,34 +127,33 @@ fn lives_max(g: &gamemgr::Game) -> i32 {
     }
 }
 
-struct Pending {
-    frames: u32,
-    screen: i32,
-    cursor: i32,
+pub(crate) struct Pending {
+    pub(crate) frames: u32,
+    pub(crate) screen: i32,
+    pub(crate) cursor: i32,
 }
 
 pub struct MainMenu {
-    vms: Vec<AnmVm>,
-    base: Vec<i32>,
-    surface: Option<(TextureId, &'static str)>,
-    raster: crate::text::Raster,
-    desc_vm: AnmVm,
-    desc_on: bool,
-    desc_first: bool,
-    notice: AnmVm,
-    screen: i32,
-    prev_screen: i32,
-    frames: u32,
-    cursor: i32,
-    prev_cursor: i32,
-    idle: u32,
-    quitting: Option<u32>,
-    pending: Option<Pending>,
-    snapshot: Config,
-    stages: [bool; 8],
-    replays: Vec<(String, crate::replay::Replay)>,
-    replay_step: u8,
-    replay_stage: usize,
+    pub(crate) vms: Vec<AnmVm>,
+    pub(crate) base: Vec<i32>,
+    pub(crate) surface: Option<(TextureId, &'static str)>,
+    pub(crate) raster: crate::text::Raster,
+    pub(crate) desc_vm: AnmVm,
+    pub(crate) desc_on: bool,
+    pub(crate) desc_first: bool,
+    pub(crate) notice: AnmVm,
+    pub(crate) screen: i32,
+    pub(crate) prev_screen: i32,
+    pub(crate) frames: u32,
+    pub(crate) cursor: i32,
+    pub(crate) prev_cursor: i32,
+    pub(crate) idle: u32,
+    pub(crate) quitting: Option<u32>,
+    pub(crate) pending: Option<Pending>,
+    pub(crate) snapshot: Config,
+    pub(crate) stages: [bool; 8],
+    pub(crate) replays: Vec<(String, crate::replay::Replay)>,
+    pub(crate) lists: crate::menulist::Lists,
 }
 
 impl MainMenu {
@@ -181,26 +178,25 @@ impl MainMenu {
             snapshot: Config::default(),
             stages: [false; 8],
             replays: Vec::new(),
-            replay_step: 0,
-            replay_stage: 0,
+            lists: Default::default(),
         }
     }
 
     // Menu_SetScreen.
-    fn set_screen(&mut self, s: i32) {
+    pub(crate) fn set_screen(&mut self, s: i32) {
         self.prev_screen = self.screen;
         self.screen = s;
         self.frames = 0;
         self.prev_cursor = -1;
     }
 
-    fn interrupt_all(&mut self, id: i32) {
+    pub(crate) fn interrupt_all(&mut self, id: i32) {
         for vm in &mut self.vms {
             vm.pending_interrupt = id as _;
         }
     }
 
-    fn set_surface(&mut self, ctx: &mut Ctx, name: &'static str) {
+    pub(crate) fn set_surface(&mut self, ctx: &mut Ctx, name: &'static str) {
         if self.surface.is_some_and(|(_, n)| n == name) {
             return;
         }
@@ -255,7 +251,7 @@ impl MainMenu {
             .write_texture(sp.tex, tx, ty, w as u32, h as u32, &rgba);
     }
 
-    fn move_cursor(
+    pub(crate) fn move_cursor(
         &mut self,
         ctx: &Ctx,
         n: i32,
@@ -471,6 +467,21 @@ impl MainMenu {
         }
     }
 
+    // Portrait VMs of character `c` (12 §2.4): shown 9, main 23, others 8.
+    pub(crate) fn char_vms(&mut self, c: i32) {
+        let row = CHAR_VMS[c.clamp(0, 11) as usize];
+        for vm in 111..=130 {
+            let v = vm as i32;
+            self.vms[vm].pending_interrupt = if row[..3].contains(&v) {
+                9
+            } else if row[3] == v {
+                23
+            } else {
+                8
+            };
+        }
+    }
+
     fn char_allowed(&self, ctx: &Ctx, c: i32) -> bool {
         self.screen != CHAR_EXTRA || extra_unlocked(&ctx.game, c as usize)
     }
@@ -492,17 +503,7 @@ impl MainMenu {
         }
         if self.cursor != self.prev_cursor {
             self.prev_cursor = self.cursor;
-            let row = CHAR_VMS[self.cursor as usize];
-            for vm in 111..=130 {
-                let v = vm as i32;
-                self.vms[vm].pending_interrupt = if row[..3].contains(&v) {
-                    9
-                } else if row[3] == v {
-                    23
-                } else {
-                    8
-                };
-            }
+            self.char_vms(self.cursor);
         }
         if self.frames < 8 {
             return;
@@ -512,7 +513,11 @@ impl MainMenu {
             let g = &mut ctx.game;
             g.shot = self.cursor as u8;
             match self.screen {
-                CHAR_PRACTICE => self.set_screen(PRACTICE_STAGE),
+                CHAR_PRACTICE => {
+                    self.set_screen(PRACTICE_STAGE);
+                    self.practice_enter(ctx);
+                    self.frames = 1;
+                }
                 _ => {
                     let extra = self.screen == CHAR_EXTRA;
                     g.difficulty = if extra {
@@ -531,52 +536,6 @@ impl MainMenu {
             // No interrupt here (12 §2.4): the difficulty screen's enter interrupt 7 does the transition.
             sound::play(sound::CANCEL);
             self.set_screen(self.screen - 1);
-        }
-    }
-
-    // Practice stage select (12 §2.5). SPEC-GAP: the list's drawing is unspecified; ASCII text is used.
-    fn practice_stage(&mut self, ctx: &mut Ctx) {
-        let g = &ctx.game;
-        if self.frames == 0 {
-            self.interrupt_all(18);
-            let mask = g.clear_any[g.shot as usize % 12][g.cfg.difficulty.min(3) as usize];
-            self.stages = std::array::from_fn(|i| unlock_all() || i == 0 || mask & (1 << i) != 0);
-            if mask & (1 << 7) != 0 {
-                self.stages[3] = true;
-                self.stages[4] = true;
-            }
-            if !self.stages[self.cursor.clamp(0, 7) as usize] {
-                self.cursor = 0;
-            }
-        }
-        for (i, name) in STAGE_NAMES.iter().enumerate() {
-            let c = if i as i32 == self.cursor {
-                0xFFFFFFFF
-            } else if self.stages[i] {
-                0xFF808080
-            } else {
-                0xFF303030
-            };
-            ctx.ascii
-                .push(Text::new(400.0, 160.0 + 20.0 * i as f32, *name).argb(c));
-        }
-        if self.frames < 8 {
-            return;
-        }
-        let stages = self.stages;
-        self.move_cursor(ctx, 8, UP, DOWN, |c| stages[c as usize]);
-        if ctx.input.pressed(CONFIRM) {
-            sound::play(sound::OK);
-            let g = &mut ctx.game;
-            g.difficulty = g.cfg.difficulty.min(3) as i32;
-            g.stage = self.cursor as usize;
-            g.flags = g.flags & !F_REPLAY | F_PRACTICE;
-            g.fresh_start = true;
-            ctx.audio.stop_bgm();
-            g.request(gamemgr::SCENE_GAME);
-        } else if ctx.input.pressed(CANCEL) {
-            sound::play(sound::CANCEL);
-            self.set_screen(CHAR_PRACTICE);
         }
     }
 
@@ -717,197 +676,7 @@ impl MainMenu {
         }
     }
 
-    // Replay screen (15 §3.8 / 12 §2.8). SPEC-GAP: the list is drawn with ASCII text, not the title01.anm VMs 77–110.
-    fn replay(&mut self, ctx: &mut Ctx) {
-        const SHOTS: [&str; 12] = [
-            "Reimu&Yukari",
-            "Marisa&Alice",
-            "Sakuya&Remilia",
-            "Youmu&Yuyuko",
-            "Reimu",
-            "Yukari",
-            "Marisa",
-            "Alice",
-            "Sakuya",
-            "Remilia",
-            "Youmu",
-            "Yuyuko",
-        ];
-        const DIFFS: [&str; 5] = ["Easy", "Normal", "Hard", "Lunatic", "Extra"];
-        const SPEEDS: [&str; 3] = ["Normal", "Slowdown", "Fast"];
-        if self.frames == 0 {
-            self.replay_step = 0;
-            self.cursor = 0;
-            let mut names: Vec<String> =
-                (1..=15).map(|i| format!("replay/th8_{i:02}.rpy")).collect();
-            let mut ud: Vec<String> = crate::scoredat::storage_list("replay/th8_ud")
-                .into_iter()
-                .filter(|n| n.ends_with(".rpy"))
-                .collect();
-            ud.sort();
-            names.extend(ud.into_iter().take(45));
-            self.replays = names
-                .into_iter()
-                .filter_map(|n| {
-                    let r =
-                        crate::replay::Replay::parse(&crate::scoredat::storage_read(&n)?).ok()?;
-                    Some((n, r))
-                })
-                .collect();
-        }
-        let y0 = 120.0;
-        let back = |m: &mut Self, ctx: &mut Ctx| {
-            sound::play(sound::CANCEL);
-            m.interrupt_all(6);
-            m.pending = Some(Pending {
-                frames: 20,
-                screen: TOP,
-                cursor: 4,
-            });
-            let _ = ctx;
-        };
-        if self.replays.is_empty() {
-            ctx.ascii.push(Text::new(200.0, 220.0, "No replay files"));
-            if self.frames >= 20 && self.pending.is_none() && ctx.input.pressed(CONFIRM | CANCEL) {
-                back(self, ctx);
-            }
-            return;
-        }
-        let n = self.replays.len() as i32;
-        let page = self.cursor / 15;
-        for (i, (name, r)) in self
-            .replays
-            .iter()
-            .enumerate()
-            .skip(page as usize * 15)
-            .take(15)
-        {
-            let no = name
-                .trim_start_matches("replay/th8_")
-                .trim_end_matches(".rpy")
-                .to_string();
-            let last = if r.spell_id() >= 0 {
-                format!("Spell No.{:3}", r.spell_id())
-            } else {
-                DIFFS[r.difficulty().min(4) as usize].to_string()
-            };
-            let line = format!(
-                "No.{no:>2} {:8}  {:6} {:14} {}",
-                r.name(),
-                r.date(),
-                SHOTS[r.shot() as usize % 12],
-                last
-            );
-            let c = if i as i32 == self.cursor {
-                0xFFFFFFFF
-            } else {
-                0xFF808080
-            };
-            let y = y0 + 12.0 * (i as i32 - page * 15) as f32;
-            ctx.ascii.push(Text::new(40.0, y, line).scale(0.75).argb(c));
-        }
-        let (_, r) = &self.replays[self.cursor.clamp(0, n - 1) as usize];
-        let stages: Vec<usize> = (0..9).filter(|&s| r.stages[s].is_some()).collect();
-        if self.replay_step >= 1 {
-            ctx.ascii.push(Text::new(
-                48.0,
-                320.0,
-                format!("Slowdown {:2.3}%", r.slowdown()),
-            ));
-            ctx.ascii.push(Text::new(48.0, 336.0, "Stage    LastScore"));
-            for (k, &st) in stages.iter().enumerate() {
-                let name = STAGE_NAMES.get(st).copied().unwrap_or("Extra");
-                let score = r.stages[st].as_ref().map_or(0, |s| s.score);
-                let c = if self.replay_step == 1 && k == self.replay_stage {
-                    0xFFFFFFFF
-                } else {
-                    0xFF808080
-                };
-                ctx.ascii.push(
-                    Text::new(
-                        48.0,
-                        352.0 + 16.0 * k as f32,
-                        format!("{name:8} {score:9}0"),
-                    )
-                    .argb(c),
-                );
-            }
-        }
-        if self.replay_step == 2 {
-            let n_speed = if r.spell_id() >= 0 { 2 } else { 3 };
-            for (k, sp) in SPEEDS.iter().take(n_speed).enumerate() {
-                let c = if k as u8 == ctx.game.replay_speed {
-                    0xFFFFFFFF
-                } else {
-                    0xFF808080
-                };
-                ctx.ascii
-                    .push(Text::new(400.0, 352.0 + 16.0 * k as f32, *sp).argb(c));
-            }
-        }
-        if self.frames < 20 || self.pending.is_some() {
-            return;
-        }
-        let inp = ctx.input;
-        match self.replay_step {
-            0 => {
-                self.move_cursor(ctx, n, UP, DOWN, |_| true);
-                if inp.pressed(LEFT) || inp.pressed(RIGHT) {
-                    let d = if inp.pressed(LEFT) { -15 } else { 15 };
-                    self.cursor = (self.cursor + d).clamp(0, n - 1);
-                }
-                if inp.pressed(CONFIRM) {
-                    sound::play(sound::OK);
-                    self.replay_step = 1;
-                    self.replay_stage = 0;
-                } else if inp.pressed(CANCEL) {
-                    back(self, ctx);
-                }
-            }
-            1 => {
-                let k = stages.len().max(1);
-                if inp.pressed_or_repeat(UP) {
-                    self.replay_stage = (self.replay_stage + k - 1) % k;
-                    sound::play(sound::SELECT);
-                } else if inp.pressed_or_repeat(DOWN) {
-                    self.replay_stage = (self.replay_stage + 1) % k;
-                    sound::play(sound::SELECT);
-                }
-                if inp.pressed(CONFIRM) {
-                    sound::play(sound::OK);
-                    self.replay_step = 2;
-                    ctx.game.replay_speed = 0;
-                } else if inp.pressed(CANCEL) {
-                    sound::play(sound::CANCEL);
-                    self.replay_step = 0;
-                }
-            }
-            _ => {
-                let k = if r.spell_id() >= 0 { 2 } else { 3 };
-                let g = &mut ctx.game;
-                if inp.pressed_or_repeat(UP) {
-                    g.replay_speed = (g.replay_speed + k - 1) % k;
-                    sound::play(sound::SELECT);
-                } else if inp.pressed_or_repeat(DOWN) {
-                    g.replay_speed = (g.replay_speed + 1) % k;
-                    sound::play(sound::SELECT);
-                }
-                if inp.pressed(CONFIRM) {
-                    sound::play(sound::OK);
-                    let (_, r) = self.replays.swap_remove(self.cursor as usize);
-                    let st = stages.get(self.replay_stage).copied();
-                    if crate::replay::start_playback(&mut ctx.game, r, st, None) {
-                        ctx.audio.stop_bgm();
-                    }
-                } else if inp.pressed(CANCEL) {
-                    sound::play(sound::CANCEL);
-                    self.replay_step = 1;
-                }
-            }
-        }
-    }
-
-    // SPEC-GAP: spell practice and key config are later tasks; these screens return on any confirm/cancel.
+    // SPEC-GAP: key config is a later task; the screen returns on any confirm/cancel.
     fn stub(&mut self, ctx: &mut Ctx, name: &str, back: i32, cursor: i32) {
         ctx.ascii.push(Text::new(
             200.0,
@@ -943,6 +712,12 @@ impl Task<Ctx> for MainMenu {
         }
         ctx.anm
             .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "title01.anm")?;
+        ctx.anm.load(
+            &mut ctx.gfx,
+            &ctx.archive,
+            crate::menulist::RT_SLOT,
+            "resulttext.anm",
+        )?;
         let l = crate::player::GaugeLimits::default();
         crate::ascii::gauge_setup(&mut ctx.anm, l.min, l.max);
         for i in 0..VM_COUNT {
@@ -971,13 +746,20 @@ impl Task<Ctx> for MainMenu {
         let g = &ctx.game;
         if g.previous == gamemgr::SCENE_GAME || g.previous == gamemgr::SCENE_RETRY {
             if g.spell_practice() {
-                self.screen = SPELL_PRACTICE;
+                // Back from a spell-practice game: straight to the card list (16 §6.1).
+                self.screen = SPELL_CARD;
+                self.lists.sp_row = if g.card >= 205 { 9 } else { g.stage as i32 % 9 };
             } else if g.practice() {
                 self.screen = DIFF_PRACTICE;
             }
         }
+        // SPEC-GAP: back from the result viewer / music room the cursor stays on that item (menu_base log).
         self.cursor = if self.screen == TOP {
-            0
+            match ctx.game.previous {
+                gamemgr::SCENE_RESULT_MENU => 5,
+                gamemgr::SCENE_MUSIC_ROOM => 6,
+                _ => 0,
+            }
         } else {
             ctx.game.cfg.difficulty.min(3) as i32
         };
@@ -992,6 +774,7 @@ impl Task<Ctx> for MainMenu {
             ctx.gfx.free_texture(t);
         }
         ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
+        ctx.anm.unload(&mut ctx.gfx, crate::menulist::RT_SLOT);
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
@@ -1019,7 +802,8 @@ impl Task<Ctx> for MainMenu {
             PRACTICE_STAGE => self.practice_stage(ctx),
             KEY_CONFIG => self.stub(ctx, "Key config", OPTION, 8),
             REPLAY => self.replay(ctx),
-            SPELL_PRACTICE => self.stub(ctx, "Spell practice", TOP, 2),
+            SPELL_PRACTICE => self.spell_char(ctx),
+            SPELL_CARD => self.spell_card(ctx),
             _ => {}
         }
         if self.screen == screen {
@@ -1051,9 +835,23 @@ impl Task<Ctx> for MainMenu {
             ctx.anm.draw(&mut ctx.gfx, vm);
         }
         // Description VM: text.anm script 9 at (320, 448), centred (answers_impl9 §15).
-        let top = self.screen == TOP || (self.prev_screen == TOP && self.frames == 0);
+        // SPEC-GAP: on spell practice the fading description stays drawn (mopup1 log), not on the other screens.
+        let top = self.screen == TOP
+            || (self.prev_screen == TOP && (self.frames == 0 || self.screen == SPELL_PRACTICE));
         if self.desc_on && top && self.quitting.is_none() && self.pending.is_none() {
             ctx.anm.draw(&mut ctx.gfx, &mut self.desc_vm);
+        }
+        // A delayed switch whose counter ran out has already set the new screen in the original.
+        let screen = match &self.pending {
+            Some(p) if p.frames == 0 => p.screen,
+            _ => self.screen,
+        };
+        match screen {
+            PRACTICE_STAGE => self.practice_stage_draw(ctx),
+            REPLAY => self.replay_draw(ctx),
+            SPELL_PRACTICE => self.spell_char_draw(ctx),
+            SPELL_CARD => self.spell_card_draw(ctx),
+            _ => {}
         }
         if self.screen == CHAR
             && self.frames > 8
