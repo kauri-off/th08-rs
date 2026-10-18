@@ -1,0 +1,17 @@
+p1 nodik
+d0:4545 effscan 60
+d0:4547 shot death_4547
+d0:4548 shot death_4548
+d0:4552 shot death_4552
+d0:4560 shot death_4560
+d0:4565 shot death_4565
+d0:4570 shot death_4570
+d0:4574 shot death_4574
+d0:4575 shot death_4575
+d0:4576 shot death_4576
+d0:4580 shot death_4580
+d0:4590 shot death_4590
+d0:4600 shot death_4600
+d0:4614 shot death_4614
+d0:4616 shot death_4616
+d0:4620 quit

@@ -267,3 +267,21 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   Cmd files re/work/cmds/bugs2_c2.txt, bugs2_c3.txt, bugs2_eff.txt. Demo 0 = Reimu&Yukari Lunatic stage 5.
 - NEW TOOL re/tools/anmspr.py <anm> [lo hi] = sprite rects. Symbols +12, redump done.
 - WRITTEN: specs/answers_bugs2.md; 12 §2.2/§2.4/§5.9, 13 §3, 05 §12.4. BUGS2 DONE.
+
+# AUTOCMP (2026-10-18) — reference draw logs for automatic comparison
+- Probe extended (re/work/hook/drawlog.inc; tracked copy re/probe/): per-frame draw log of every primitive (texture
+  label anm#entry from AnmManager slot table, screen-space vertices incl. projected 3D, effective colour with
+  TFACTOR folded, blend/atest/z/fog state, viewport, clears, CopyRects), input-word script (TH08_INPUT syntax,
+  frame 1 = first main-menu frame), `mN` condition, `peek`, `dl` commands. Details TOOLING_REPORT §6.
+- NEW TOOL re/tools/drawlog.py: summary / render (rasteriser, validated vs screenshots) / diff (keys present,
+  scene-visit-frame, demo) / frames / split.
+- DATA specs/data/drawlog/: FORMAT.md, README.md, demos/ (4 demos, all frames, 18 xz chunks ≈ 91 MB, summaries,
+  6 ref PNGs), menu_base / menu_clr logs + input + shot lists, menu_ref/ 48 PNGs, th08.cfg.
+- Findings: windowed swap = COPY, back buffer persists; playfield-only clear; loading screen captures screen into
+  th08logo surface; fps counter and title intro (±1 frame) are the only run-to-run differences; Final-route notice
+  follows the cursor on the press frame while portraits lag.
+- IMPL12 questions answered: specs/answers_impl12.md (chain-kill gate = IsChainRoot, +0x3380 never reset,
+  boss part gated on reward only, c before ÷3, bit-13 whole-playfield box with damage discarded, native 22 fixed
+  string + face −1 + clears bits 0/4, CATK attempt/capture rules incl. timeouts via 0x42BC50, effect table ids
+  216–221 → eff09xx, 0x17CE8CC = panel full-repaint counter). Fixed 07 (+0x3380, op 176 bit 13), 12 §5.3.
+- AUTOCMP DONE.

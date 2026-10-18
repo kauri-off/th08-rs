@@ -1,0 +1,4 @@
+p1 nodik
+p120 shot nav_120
+p240 shot nav_240
+p360 shot nav_360

@@ -1,0 +1,23 @@
+p1 nodik
+p300 poke4 1616BE4 1
+p300 poke4 1616E00 1
+p300 shot n0_title
+p320 key 28 3
+p350 key 28 3
+p380 shot n1_down2
+p400 key 5A 3
+p460 shot n2_after_confirm
+p480 key 5A 3
+p540 shot n3_after_confirm2
+p560 key 28 3
+p590 key 28 3
+p620 key 28 3
+p650 shot n4_row3
+p670 key 5A 3
+p730 shot n5_cards
+p750 key 28 3
+p780 shot n6_card55
+p800 key 5A 3
+p900 shot n7_loading
+p1100 shot n8_game
+p1300 quit

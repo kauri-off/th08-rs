@@ -1,0 +1,78 @@
+p1 nodik
+p300 poke4 1616BE4 1
+p300 poke4 1616E00 1
+p320 key 28 3
+p400 key 5A 3
+p480 key 28 3
+p510 key 28 3
+p540 key 28 3
+p570 shot m1_rows
+p590 key 5A 3
+p650 shot m2_cards
+p670 key 5A 3
+p760 key 5A 700
+s2:300 poke4 17CE8B4 9
+s9:5 shot end_5
+s9:15 shot end_15
+s9:25 shot end_25
+s9:35 shot end_35
+s9:45 shot end_45
+s9:55 shot end_55
+s9:65 shot end_65
+s9:75 shot end_75
+s9:85 shot end_85
+s9:95 shot end_95
+s9:105 shot end_105
+s9:115 shot end_115
+s9:125 shot end_125
+s9:135 shot end_135
+s9:145 shot end_145
+s9:155 shot end_155
+s9:165 shot end_165
+s9:175 shot end_175
+s9:185 shot end_185
+s9:195 shot end_195
+s9:205 shot end_205
+s9:215 shot end_215
+s9:225 shot end_225
+s9:235 shot end_235
+s9:245 shot end_245
+s9:255 shot end_255
+s9:265 shot end_265
+s9:275 shot end_275
+s9:285 shot end_285
+s9:295 shot end_295
+s9:305 shot end_305
+s9:315 shot end_315
+s9:325 shot end_325
+s9:335 shot end_335
+s9:345 shot end_345
+s9:355 shot end_355
+s9:365 shot end_365
+s9:375 shot end_375
+s9:385 shot end_385
+s9:395 shot end_395
+s9:405 shot end_405
+s9:450 shot end_450
+s9:500 shot end_500
+s9:550 shot end_550
+s9:600 shot end_600
+s9:650 shot end_650
+s9:700 shot end_700
+s9:750 shot end_750
+s9:800 shot end_800
+s9:850 shot end_850
+s9:900 shot end_900
+s9:950 shot end_950
+s9:1000 shot end_1000
+s9:1050 shot end_1050
+s9:1100 shot end_1100
+s9:1150 shot end_1150
+s9:1200 shot end_1200
+s9:1250 shot end_1250
+s9:1300 shot end_1300
+s9:1350 shot end_1350
+s9:1400 shot end_1400
+s9:1450 shot end_1450
+s9:1500 shot end_1500
+p2600 quit

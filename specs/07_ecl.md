@@ -171,7 +171,7 @@ sub-ANM VMs disabled; e+0x3330 = 0.
 | 0x3354 | i32 | (var 10083) |
 | 0x3358 / 0x3368 | i32[4] | life thresholds / their subs (op 133) |
 | 0x3378 / 0x337C | i32 | timeout frames / timeout sub (op 134) |
-| 0x3380 | i32 | number of chained children |
+| 0x3380 | i32 | chained children created (ops 90–92 +1) minus children killed by damage while chained (`EnemyMgr_Calc` −1); never reset by a chain kill (answers_impl12 §2) |
 | 0x3384 | ptr[4] | extra script threads (op 135) |
 | 0x5354 | Timer | damage-reduction timer (op 160) |
 | 0x5360 / 0x53C0 | ptr[] / i32 | effect handles (op 128) / count; 0x53C4 = effect parameter |
@@ -441,7 +441,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 173 | flagA30 | i b | bit 30 | 118 |
 | 174 | aura | i n | (re)create aura effect 0x20+n at final pos | 38 |
 | 175 | spawn_disable | i n | global 0xF54E2C (timeline spawns suppressed if ≠ 0) | 5 |
-| 176 | last_spell | (ignored arg) | GameFlags (0x164D0B4): clear bits 7, 8, 13, set bit 7; also bit 13 when (not spell practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); sets flag A bit 30. `Spell_Start` copies bit 7 into spell flag bit 5 (answers_impl10 §7, VERIFIED) | 41 |
+| 176 | last_spell | (ignored arg) | GameFlags (0x164D0B4): clear bits 7, 8, 13, set bit 7; also bit 13 when (not spell practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); sets flag A bit 30. `Spell_Start` copies bit 7 into spell flag bit 5 (answers_impl10 §7, VERIFIED). While bit 13 is set and boss 0 exists, `EnemyMgr_Calc` calls `Player_DamageAgainst` with the whole playfield box (centre (192, 224), size (384, 448), accumulator boss+0x2E10) and discards the damage: all shots count as hits (answers_impl12 §5) | 41 |
 | 177 | set_hud_life | i n | e+0x2E04 | 6 |
 | 178 | move_rand2 | i dur, i ease, f spd | like 67, with 1/4 chance of a fully random angle (§8.3) | 4 |
 | 179 / 180 | hud179 / hud180 | — | HUD functions (later phase) | 2 / 0 |

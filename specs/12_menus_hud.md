@@ -302,7 +302,7 @@ sprite = counter).
 `front.anm` entry 1 (`ename.png`, sprites 16–32): boss name plates (128×16).
 
 ### 5.3 Side panel drawing (`Hud_DrawPanel` 0x43625D) — VERIFIED
-The original only repaints changed rows (dirty counters / full repaint counter 0x17CE8CC); a reimplementation
+The original only repaints changed rows (dirty counters / full repaint counter 0x17CE8CC, writers in answers_impl12 §9; the back buffer is kept between frames, see `specs/data/drawlog/FORMAT.md` §4); a reimplementation
 may redraw everything every frame. Full repaint: tile 13 over x = 0 (y 0..464 step 32) and x 416..624 ×
 y 16..464 (step 32); strip 14 at y 0 and 464 for x 0..624 step 128; then VMs 0–9 and the difficulty VM.
 Each frame strip 14 is also drawn along y = 464 for x 32..368 (step 128).

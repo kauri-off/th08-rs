@@ -1,0 +1,30 @@
+p1 nodik
+p320 key 28 3
+p340 key 28 3
+p400 shot c1_menu_practice_sel
+d0:200 shot c3_d0_f200
+d0:300 shot c3_d0_f300
+d0:400 shot c3_d0_f400
+d0:500 shot c3_d0_f500
+d0:600 shot c3_d0_f600
+d0:700 shot c3_d0_f700
+d0:800 shot c3_d0_f800
+d0:900 shot c3_d0_f900
+d0:1000 shot c3_d0_f1000
+d0:1100 shot c3_d0_f1100
+d0:1200 shot c3_d0_f1200
+d0:1300 shot c3_d0_f1300
+d0:1400 shot c3_d0_f1400
+d0:1500 shot c3_d0_f1500
+d0:1600 shot c3_d0_f1600
+d0:1700 shot c3_d0_f1700
+d0:1800 shot c3_d0_f1800
+d0:1900 shot c3_d0_f1900
+d0:2000 shot c3_d0_f2000
+d0:2100 shot c3_d0_f2100
+d0:2200 shot c3_d0_f2200
+d0:2300 shot c3_d0_f2300
+d0:2400 shot c3_d0_f2400
+d0:2500 shot c3_d0_f2500
+d0:2600 shot c3_d0_f2600
+d0:2610 quit

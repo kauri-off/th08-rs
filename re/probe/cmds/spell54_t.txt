@@ -1,0 +1,62 @@
+traceall
+p1 nodik
+p300 poke4 1616BE4 1
+p300 poke4 1616E00 1
+p320 key 28 3
+p400 key 5A 3
+p480 key 28 3
+p510 key 28 3
+p540 key 28 3
+p570 shot m1_rows
+p590 key 5A 3
+p650 shot m2_cards
+p670 key 5A 3
+p760 key 5A 700
+s2:60 shot sp_60
+s2:75 shot sp_75
+s2:90 shot sp_90
+s2:105 shot sp_105
+s2:120 shot sp_120
+s2:135 shot sp_135
+s2:150 shot sp_150
+s2:165 shot sp_165
+s2:180 shot sp_180
+s2:195 shot sp_195
+s2:210 shot sp_210
+s2:225 shot sp_225
+s2:240 shot sp_240
+s2:255 shot sp_255
+s2:270 shot sp_270
+s2:285 shot sp_285
+s2:300 shot sp_300
+s2:315 shot sp_315
+s2:330 shot sp_330
+s2:345 shot sp_345
+s2:360 shot sp_360
+s2:375 shot sp_375
+s2:390 shot sp_390
+s2:405 shot sp_405
+s2:420 shot sp_420
+s2:435 shot sp_435
+s2:450 shot sp_450
+s2:465 shot sp_465
+s2:480 shot sp_480
+s2:495 shot sp_495
+s2:510 shot sp_510
+s2:525 shot sp_525
+s2:540 shot sp_540
+s2:555 shot sp_555
+s2:570 shot sp_570
+s2:585 shot sp_585
+s2:600 shot sp_600
+s2:615 shot sp_615
+s2:630 shot sp_630
+s2:645 shot sp_645
+s2:660 shot sp_660
+s2:675 shot sp_675
+s2:690 shot sp_690
+s2:705 shot sp_705
+s2:720 shot sp_720
+s2:735 shot sp_735
+s2:750 shot sp_750
+p1500 quit

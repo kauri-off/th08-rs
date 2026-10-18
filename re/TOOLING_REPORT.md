@@ -155,3 +155,74 @@ Build: `i686-w64-mingw32-gcc -O2 -shared -o d3d8.dll hook.c d3d8.def -static-lib
 through a register), which `structxref.py` cannot see (absolute addresses only). Limits: `add reg, imm`
 address arithmetic (Ghidra's `(int)this + 0x1b88` passed as a pointer) is not a memory operand and is missed
 — grep `all_decomp.c` for `0x1b88,` / `0x1b88)` as well.
+
+## 6. Draw log / autocmp (AUTOCMP brief, 2026-10-18)
+
+Probe sources are now tracked in `re/probe/`: `hook.c`, `drawlog.inc`, `d3d8.def`, `run.sh`, `env.sh`,
+`menu_gen.py`, `cmds/`. Copy them to `re/work/hook/` (sources) and `re/work/` (scripts) and build there, as in §4.
+Format: `specs/data/drawlog/FORMAT.md`. Data and menu scripts: `specs/data/drawlog/README.md`.
+
+### What the probe adds
+- **Device vtable hooks** (on top of §4): SetRenderState 50, SetTextureStageState 63, SetTexture 61,
+  SetTransform 37, SetViewport 40, SetVertexShader 76 (FVF), SetStreamSource 83, DrawPrimitive 70,
+  DrawPrimitiveUP 72, DrawIndexedPrimitive 71 (only flagged, never used by the game), CopyRects 28, Clear 36.
+  After CreateDevice and every Reset, the shadow state is re-read with the Get* methods.
+- **Labels.**
+  - Inline hooks on `Anm_Preload` 0x465860 and `Anm_LoadSurface` 0x4667C0 record the file name per ANM slot and
+    per surface slot. The new `inline_hook_sp` passes the saved registers and stack to the callback.
+  - A texture pointer is resolved at draw time by scanning the AnmManager (pointer at 0x18BDC90) slot table
+    (+0x24 + slot·0x1C: data, entry count, …, +0x14 texture records of 0xC bytes).
+  - Surfaces are resolved through AnmManager +0x2038/+0x20B8.
+- **Vertices.**
+  - XYZRHW vertices are logged as given.
+  - XYZ vertices are projected with the shadow world·view·projection and viewport, in double precision.
+  - The texture matrix (COUNT2, D3DTS_TEXTURE0) is applied only to XYZ vertices, the same rule as wined3d for
+    pre-transformed vertices.
+  - The unit-quad vertex buffer of `Draw3DWorld` is read from its mirror at AnmManager+0x24D0.
+  - Colour = diffuse, with the TFACTOR folded in when COLORARG2/ALPHAARG2 = TFACTOR.
+- **Records** are buffered per frame and written at Present, after `scene_track()`, so the F line's
+  scene/scene_frame is the current one.
+- **Commands** (probe_cmd.txt):
+  - `dl 0|1|2`: draw log off / every frame / demo frames only. The output is `probe_draw.txt`.
+  - `peek addr len`: hex dump to the log.
+  - New condition `mN` = N-th frame since the first main-menu frame. This is "script frame N" of the input
+    script.
+- **Input script** `probe_input.txt`, in `TH08_INPUT` syntax (`frames:mask`, comma/newline separated, `#`
+  comments). Script frame k = k-th frame from the first main-menu frame. Keys are injected through
+  GetKeyboardState, and `nodik` is turned on automatically. Bit → VK: 1 Z, 2 X, 4 Shift, 8 Esc, 0x10 Up, 0x20 Down,
+  0x40 Left, 0x80 Right, 0x100 Ctrl, 0x200 Q, 0x400 S, 0x800 P, 0x1000 Enter, 0x2000 D, 0x4000 R
+  (`Input_Poll` 0x43D970 table).
+
+### Regenerating the reference logs
+- **Demos.** game dir with `score.dat` (any) and `th08.cfg` as in §4. `probe_cmd.txt` = `p1 dl 2`, the shot lines,
+  `p30900 quit`. Run `run.sh 600` (~9 min), which writes ~1.1 GB of text. Then run
+  `python3 -I re/tools/drawlog.py split game/probe_draw.txt outdir --chunk 1500` (~10 min, xz -9e) and
+  `drawlog.py summary "outdir/demo0_*.drawlog.xz"`.
+- **Menus.** Move `score.dat` out of the game dir (fresh state). Then:
+  `python3 re/probe/menu_gen.py base|clr outdir`, copy `menu_<v>.input.txt` → `game/probe_input.txt` and
+  `menu_<v>.probe_cmd.txt` → `game/probe_cmd.txt`, `run.sh 120` (~45 s), and xz the `probe_draw.txt`.
+  Screenshots go to `game/shots/<v>_m_*.ppm`.
+  - Shots are taken 5 frames before the next press. A shot taken on the press frame shows the cursor already
+    moved.
+  - Restore `score.dat` afterwards (kept in `re/work/runs/autocmp/score.dat.user`).
+
+### Validation
+`drawlog.py render log P out.png --from P0` rasterises the log with the extracted textures
+(`anm.py --png re/work/tex`, images from `re/extracted/dat`).
+- Menu char select (present 628): mean abs difference 0.009/255 against the screenshot, 0.01 % of pixels off by
+  more than 16. Pixel-exact apart from filtering.
+- Demo 0 frame 1400: identical sprites, HUD, panel and text. The remaining differences are the stage fog
+  (`--fog` is experimental, and 1/rhw as fog depth over-darkens the floor) and unclipped geometry behind the
+  camera, which the reference renderer does not clip. Both are renderer limits, not log problems.
+- `drawlog.py diff` of a log with itself gives 0 differences. Two original runs agree except as listed in the
+  data README (fps counter, title intro ±1 frame).
+
+### Facts learned while building it (VERIFIED at runtime)
+- The windowed swap effect is COPY (3). The back buffer persists between frames.
+  - Every gameplay frame clears depth on the whole screen (`C z`, V 0 0 640 480) and colour+depth only in the playfield (`C tz`, V 32 16 384 448).
+  - The side panel is repainted only by `Hud_DrawPanel` full repaints (12 §5.3, answers_impl12 §9).
+  - During stage loading, the loading screen copies the screen into the `th08logo.jpg` surface slot
+    (`K screen th08logo.jpg`) and pastes it back every frame.
+- Game-wide draw paths seen: batched TRIANGLELIST quads (FVF 0x144, 6 vertices per quad, order 0 1 2 1 2 3),
+  strip quads (`Draw3DWorld` FVF 0x102 via the VB, or 0x142 UP), ring strips (0x144 strip), untextured 0x44
+  quads, CopyRects backgrounds.

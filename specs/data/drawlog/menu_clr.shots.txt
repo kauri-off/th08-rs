@@ -1,0 +1,13 @@
+295 clr_m_title
+355 clr_m_diff_enter
+385 clr_m_diff_0
+415 clr_m_diff_1
+445 clr_m_diff_2
+475 clr_m_diff_3
+545 clr_m_char_team0
+615 clr_m_char_team1
+685 clr_m_char_team2
+755 clr_m_char_team3
+825 clr_m_char_team0_again
+875 clr_m_char_cancel
+935 clr_m_top_back

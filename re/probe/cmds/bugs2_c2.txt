@@ -1,0 +1,19 @@
+p1 nodik
+p320 key 28 3
+p340 key 28 3
+p360 key 28 3
+p420 shot c1_menu_practice_sel
+p440 key 26 3
+p460 key 26 3
+p480 key 26 3
+p500 poke2 164B9AE 41
+p500 poke2 164B9B0 41
+p500 poke2 164B9B2 41
+p500 poke2 164B9B4 41
+p520 key 5A 3
+p600 key 5A 3
+p640 shot c2_charsel_f40
+p700 shot c2_charsel_f100
+p760 key 27 3
+p820 shot c2_charsel_team1
+p840 quit

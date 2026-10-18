@@ -1,0 +1,4 @@
+p1 nodik
+d0:1398 effscan 3
+d0:1400 shot c3_d0_f1400b
+d0:1402 quit

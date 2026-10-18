@@ -6,3 +6,4 @@ re/ghidra/
 re/extracted/
 re/decoded/
 re/work/
+specs/data/drawlog/demos/*.drawlog.xz

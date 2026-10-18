@@ -1,0 +1,37 @@
+p1 nodik
+p320 key 28 3
+p400 key 5A 3
+p480 key 5A 3
+p560 key 28 3
+p590 key 28 3
+p620 key 28 3
+p670 key 5A 3
+p700 key 10 900
+p705 key 5A 900
+s2:150 shot foc_150
+s2:160 shot foc_160
+s2:170 shot foc_170
+s2:180 shot foc_180
+s2:190 shot foc_190
+s2:200 shot foc_200
+s2:210 shot foc_210
+s2:220 shot foc_220
+s2:230 shot foc_230
+s2:240 shot foc_240
+s2:250 shot foc_250
+s2:260 shot foc_260
+s2:270 shot foc_270
+s2:280 shot foc_280
+s2:290 shot foc_290
+s2:300 shot foc_300
+s2:310 shot foc_310
+s2:320 shot foc_320
+s2:330 shot foc_330
+s2:340 shot foc_340
+s2:350 shot foc_350
+s2:360 shot foc_360
+s2:370 shot foc_370
+s2:380 shot foc_380
+s2:390 shot foc_390
+s2:400 shot foc_400
+p1300 quit
