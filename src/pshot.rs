@@ -348,19 +348,24 @@ impl Player {
             match self.options[k].state {
                 0 => continue,
                 1 => self.init_option(anm, k),
+                // Leaving (14 §3): no motion or sparkle; Alice keeps following the player.
                 3 => {
-                    if self.options[k].timer.cur == 0 {
-                        self.options[k].vm.pending_interrupt = 5;
+                    let p = self.pos;
+                    let o = &mut self.options[k];
+                    if o.timer.cur == 0 {
+                        o.vm.pending_interrupt = 5;
                     }
-                    if self.options[k].timer.cur >= 16 {
-                        self.options[k] = Opt::default();
-                        continue;
+                    if o.kind == OptKind::Alice {
+                        o.pos = [p[0], p[1] - 32.0, 0.0];
+                    }
+                    if o.timer.cur > 16 {
+                        o.state = 0;
+                        o.kind = OptKind::None;
                     }
                 }
                 _ => {}
             }
-            // SPEC-GAP: leaving options (state 3) skip their calc fn (no 0x2F sparkle draws, per the demo traces).
-            if self.options[k].state != 3 {
+            if !matches!(self.options[k].state, 0 | 3) {
                 self.place_option(anm, k, shot_held);
             }
             let o = &mut self.options[k];
@@ -769,10 +774,7 @@ impl Player {
                 continue;
             }
             let d = self.bullets[i].damage as i32;
-            let d = if self.bombing { (d / 5).max(1) } else { d };
-            shot += d;
-            // SPEC-GAP: each hit also adds its damage to the accumulator before the orb check (fits demo 3 frames 801/805).
-            *acc += d;
+            shot += if self.bombing { (d / 5).max(1) } else { d };
             while *acc >= self.orb_step {
                 *acc -= self.orb_step;
                 if self.stats.human_max() && self.bullets[i].side < 0 {

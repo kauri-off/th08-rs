@@ -665,6 +665,7 @@ impl PauseMenu {
                         }
                     }
                     g.paused = 0;
+                    g.mark_play_time();
                     self.state = 0;
                     self.vms.clear();
                     return;
@@ -810,6 +811,7 @@ impl ContinueMenu {
                 } else if self.phase_frame >= 90 {
                     g.continue_apply = true;
                     g.game_over = 0;
+                    g.mark_play_time();
                     self.open = false;
                     return;
                 }

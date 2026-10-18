@@ -99,6 +99,8 @@ impl Default for Replay {
         let mut info = vec![0; INFO - HEADER];
         info[1] = 100;
         put_u32(&mut info, 0x120 - HEADER, 30);
+        put_u32(&mut info, 0x124 - HEADER, crate::scoredat::EXE_SIZE);
+        put_u32(&mut info, 0x128 - HEADER, crate::scoredat::EXE_SUM);
         info[0x12C - HEADER..0x131 - HEADER].copy_from_slice(b"0100d");
         Self {
             debug: 0,
@@ -417,8 +419,8 @@ pub fn end_playback(g: &mut crate::gamemgr::Game) {
         | crate::gamemgr::F_SPELL_PRACTICE);
 }
 
-// Replay_PlayStageLoad (11 §3.4): stats, rank and seed from the record of the stage being started.
-// SPEC-GAP: record +0 is the score at the end of a stage, so the start score is taken from the previous record (0 if none).
+// Replay_PlayStageLoad (11 §3.4): stats, rank and seed from the record of the stage being started; the score comes
+// from the last present record of a lower stage (kept as is when there is none).
 pub fn play_stage_load(
     g: &mut crate::gamemgr::Game,
     st: &mut crate::player::Stats,
@@ -431,13 +433,10 @@ pub fn play_stage_load(
     let Some(rec) = r.stages[stage].as_ref() else {
         bail!("replay has no record for stage {stage}")
     };
-    let score = r.stages[..stage]
-        .iter()
-        .flatten()
-        .last()
-        .map_or(0, |p| p.score);
-    st.score10 = score as i64;
-    st.score_disp = score as i64;
+    if let Some(p) = r.stages[..stage].iter().flatten().last() {
+        st.score10 = p.score as i64;
+        st.score_disp = p.score as i64;
+    }
     st.score_step = 0;
     let mut rs = crate::gamemgr::rank_state();
     rs[0] = rec.rank as i32;

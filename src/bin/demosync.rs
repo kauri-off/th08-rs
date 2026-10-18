@@ -81,17 +81,54 @@ fn main() -> anyhow::Result<()> {
                         if x.alive() {
                             println!(
                                 "  e{i} sub {} t {} pos {:.1},{:.1} fl {:x} life {}",
-                                x.main.ctx.sub, x.main.ctx.clock.cur, x.final_pos[0], x.final_pos[1], x.flags, x.life
+                                x.main.ctx.sub,
+                                x.main.ctx.clock.cur,
+                                x.final_pos[0],
+                                x.final_pos[1],
+                                x.flags,
+                                x.life
                             );
                         }
                     }
                 }
-                if let Some(bm) = &gm.bullets {
+                if std::env::var_os("TH08_IDUMP").is_some() {
+                    let p = gm.player.borrow();
+                    println!(
+                        "  player {:.1},{:.1} state {} poc {} {}",
+                        p.pos[0], p.pos[1], p.state, p.sht.poc_line, p.sht_youkai.poc_line
+                    );
+                }
+                if let Some(bm) = gm
+                    .bullets
+                    .as_ref()
+                    .filter(|_| std::env::var_os("TH08_IDUMP").is_some())
+                {
+                    for (i, x) in bm.borrow().items.items.iter().enumerate() {
+                        if x.alive {
+                            println!(
+                                "  i{i} kind {} st {} pos {:.1},{:.1} t {}",
+                                x.kind, x.state, x.pos[0], x.pos[1], x.timer.cur
+                            );
+                        }
+                    }
+                }
+                if let Some(bm) = gm
+                    .bullets
+                    .as_ref()
+                    .filter(|_| std::env::var_os("TH08_IDUMP").is_none())
+                {
                     for (i, x) in bm.borrow().bullets.iter().enumerate() {
                         if x.state != 0 {
                             println!(
                                 "  b{i} st {} pos {:.1},{:.1} vel {:.2},{:.2} ang {:.2} off {} act {:x}",
-                                x.state, x.pos[0], x.pos[1], x.vel[0], x.vel[1], x.angle, x.off_count, x.active
+                                x.state,
+                                x.pos[0],
+                                x.pos[1],
+                                x.vel[0],
+                                x.vel[1],
+                                x.angle,
+                                x.off_count,
+                                x.active
                             );
                         }
                     }

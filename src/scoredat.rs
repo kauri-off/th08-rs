@@ -6,6 +6,9 @@ pub const CARDS: usize = 222;
 const CRYPT: (u8, u8, usize, usize) = (0x59, 0x79, 0x100, 0xC00);
 const CAP: u32 = 9999;
 const PLST_CAP: u32 = 999_999;
+// VRSM values of the shipped th08.exe (15 §2.10).
+pub const EXE_SIZE: u32 = 840_704;
+pub const EXE_SUM: u32 = 0xA268_61B9;
 
 fn u16_at(b: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([b[o], b[o + 1]])
@@ -229,6 +232,8 @@ impl Default for ScoreDat {
     fn default() -> Self {
         let mut vrsm = [0; 0x10];
         vrsm[..5].copy_from_slice(b"0100d");
+        vrsm[8..12].copy_from_slice(&EXE_SIZE.to_le_bytes());
+        vrsm[12..16].copy_from_slice(&EXE_SUM.to_le_bytes());
         Self {
             hscr: Vec::new(),
             clrd: [Clrd::default(); 13],

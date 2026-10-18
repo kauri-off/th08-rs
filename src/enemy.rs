@@ -481,6 +481,7 @@ pub struct Globals {
     pub hud_boss: bool,
     pub dialogue: bool,
     pub drop_counter: u32,
+    pub orb_acc: i32,
     pub drop_index: usize,
     pub native_globals: [i32; 2],
     pub flag_164d0bb: bool,
@@ -539,6 +540,8 @@ impl EnemyManager {
         let g = Globals {
             difficulty,
             rank: 16,
+            // SPEC-GAP: the every-third-drop counter starts at 2 (demo 2: the 2nd item −1 death drops, not the 1st).
+            drop_counter: 2,
             player: player.borrow().pos,
             ..Default::default()
         };
@@ -644,7 +647,12 @@ impl EnemyManager {
             }
         }
         if flags & A_SHOT_HIT != 0 {
-            let mut acc = self.enemies[idx].orb_acc;
+            // SPEC-GAP: one time-orb accumulator for all non-boss enemies (the per-enemy one loses demo 3 sync at 801).
+            let mut acc = if boss {
+                self.enemies[idx].orb_acc
+            } else {
+                self.g.orb_acc
+            };
             let mut by_bomb = self.player.borrow().bombing;
             let d = {
                 let mut b = self.bullets.borrow_mut();
@@ -678,11 +686,11 @@ impl EnemyManager {
                 }
                 d
             };
-            if std::env::var_os("TH08_DMGLOG").is_some() && d > 0 {
-                let p = self.player.borrow();
-                eprintln!("DMG e{idx} d {d} pos {:?} hb {:?} sb {:?} fl {:x} shot {} areas {}", pos, hb, sb, flags, p.shot_type, p.damage_areas.iter().filter(|a| a.active).count());
+            if boss {
+                self.enemies[idx].orb_acc = acc;
+            } else {
+                self.g.orb_acc = acc;
             }
-            self.enemies[idx].orb_acc = acc;
             self.enemies[idx].bomb_hit = by_bomb;
             self.damage(idx, d, by_bomb);
         }
@@ -1171,9 +1179,6 @@ impl EnemyManager {
         let e = &self.enemies[idx];
         if let Some(anm) = anm {
             let (pos, count) = (e.final_pos, e.children);
-            if std::env::var_os("TH08_DMGLOG").is_some() {
-                eprintln!("CHAIN boss part count {count}");
-            }
             crate::ascii::popup_large(pos, count, 0, 0xFFF0F00F, 2.0);
             for _ in 0..2 * count {
                 let r = anm.rng.next_f32() * 128.0;
@@ -1365,22 +1370,22 @@ impl EnemyManager {
         let p = e.final_pos;
         let mut items = Vec::new();
         let mode = mode.unwrap_or(if e.bomb_hit { 1 } else { 0 });
-        if std::env::var_os("TH08_DMGLOG").is_some() {
-            eprintln!("DROP e{idx} item {} ctr {} extra {} {} bytes {:?}", e.item, self.g.drop_counter, e.extra_power, e.extra_point, e.death_bytes);
-        }
+        let mut sparks = 0;
         if e.item >= 0 {
             items.push((p, e.item, mode));
+            sparks = 3;
         } else if e.item == -1 {
             // SPEC-GAP: counter/index update order of the every-third-death table is not specified.
             if self.g.drop_counter.is_multiple_of(3) {
                 items.push((p, DROP_TABLE[self.g.drop_index % 32], mode));
                 self.g.drop_index += 1;
+                sparks = 6;
             }
             self.g.drop_counter += 1;
         }
-        if self.enemies[idx].item >= 0 {
+        if sparks > 0 {
             let spark = self.enemies[idx].death_bytes[1].wrapping_add(4);
-            crate::effect::spawn(anm, spark, p, 3, 0xFFFFFFFF);
+            crate::effect::spawn(anm, spark, p, sparks, 0xFFFFFFFF);
         }
         let e = &mut self.enemies[idx];
         let power_kind = if self.player.borrow().stats.power < 128.0 {

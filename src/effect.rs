@@ -241,7 +241,15 @@ impl Effects {
         self.type_init(rng, gs, i)
     }
 
-    fn reset(&mut self, i: usize, kind: u8, pos: [f32; 3], param: [f32; 3], colour: u32, zoff: bool) {
+    fn reset(
+        &mut self,
+        i: usize,
+        kind: u8,
+        pos: [f32; 3],
+        param: [f32; 3],
+        colour: u32,
+        zoff: bool,
+    ) {
         let e = &mut self.fx[i];
         *e = Effect {
             active: true,

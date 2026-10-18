@@ -112,6 +112,15 @@
   - Fixes from the diff: menu loader phase (boot 13 frames in scene 0, then logo + nowloading in scene 1 until scene frame 34 / 33 on re-entry, title fade started at its end; loading screen also on later menu entries), nowloading VMs drawn Draw2DRot relative to (500, 440) incl. pos_offset/z; ScreenEffect calc removal also removes its draw node (no alpha-0 rect forever), type 0 alpha = trunc(255 − 255·t/dur) in float, t = 0 alpha before the first calc; `Gfx::rect` at D3D coordinates (+0.5); 2D draws carry the VM's z; D3D-coordinate culling; menu: cursor keys handled before highlights/interrupts (press shows in its own frame), difficulty cursor interrupts 24/25 sent on entry, character select interrupts on its first frame, no interrupt 6 on character cancel, delayed screen switches start the frame after the counter ends (press + 21), locked items colour 0xFF404040 incl. alpha, item descriptions rendered into text.anm sprites 21 + i with the per-item VM rules of answers_impl9 §15 (fade-in from frame 9 on re-entry, interrupt 2 when leaving); popups + gauge readout clipped to the playfield; power bar at D3D coordinates with z 0.1; input field logs the held word outside gameplay.
   - Match: menu_base 1257/1902 frames identical (frames 76–1122 all identical; rest = boot race, practice-stage list, replay screen, result/music stubs), 49.7 % quads; menu_clr 859/982, 96.6 %; demos first chunk (playfield) 73.2 / 21.1 / 52.1 / 52.0 %. Questions: `docs/briefs/IMPL15_QUESTIONS.md`.
 
+- impl16 (answers_impl14, demo sync push, 2026-10-18):
+  - `Enemy_ReactPlayerMode` (07 §10.1 step 3): human→youkai effect 0x1F / aura interrupt 2 / sfx 0x28 / layer 0, youkai→human 0x1E / 1 / 0x27 / layer 2, effect 38 for op-83 enemies in human state every 2nd timer tick. Child setup: layer 2 human / 0 youkai, aura interrupt 1 human / 2 youkai, only if no aura yet.
+  - Effects: the script's t = 0 step (and its RNG) runs before the type init's RNG (13 §2.6; `reset` → `start_script` → `type_init` → `start_post`).
+  - Enemy death: gauge ±200 from the focus byte +3, death sparks → time orb (type 7) at human/youkai max; drop sparks only for item ≥ 0 (×3) or a table drop (×6); `Enemy_KillChildren` orb shower for any parent; child counter not reset.
+  - Shot damage uncapped (50 cap on the time-orb accumulator only), one accumulator for all non-boss enemies; every-third-drop counter starts at 2 (SPEC-GAPs, see questions).
+  - Leaving options freed at t > 16 (VM still runs that frame), Alice follows the player while leaving; demo music fade 3 s (÷ game speed); PLST: practice counts plays too, order plays → retries → practice, slow byte ignored for Extra/practice; play time marked at every StageStart / pause & continue exit, added at pause & continue entry and at GM removal unless replay; replay stage load keeps the score when no lower record exists; VRSM size/sum constants (840704, 0xA26861B9) in fresh score.dat and replays.
+  - `demosync` debug: `TH08_BDUMP=1` (enemies + bullets per frame of the range), `TH08_IDUMP=1` (player + items).
+  - Sync: demo0 260→1128, demo1 559→559, demo2 449→723, demo3 794→825 (`MIN_SYNC`); draw log (first chunk, playfield) 73.2/21.1/52.1/52.0 → 83.7/28.6/77.2/66.0 % (`DEMO`). Questions: `docs/briefs/IMPL16_QUESTIONS.md`.
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
@@ -120,7 +129,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl15 done (draw log + drawdiff; raise the thresholds in `src/drawlog.rs` tests as diffs get fixed). Next IMPL: answers to IMPL14_QUESTIONS (raise `MIN_SYNC` in `src/demosync.rs` as divergences get fixed); result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, spell practice, music room.
+2. IMPL impl16 done (answers_impl14, demo sync push). Next IMPL: answers to IMPL16_QUESTIONS (raise `MIN_SYNC` / `DEMO`); result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, spell practice, music room.
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

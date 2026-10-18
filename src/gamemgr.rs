@@ -282,8 +282,28 @@ impl Game {
         }
     }
 
+    // The cfg copy's slow byte is forced to 0 for Extra and practice (15 §2.9).
     pub fn counts_plays(&self) -> bool {
-        !self.replay() && !self.spell_practice() && self.cfg.slow == 0
+        let slow = if self.difficulty >= 4 || self.practice() {
+            0
+        } else {
+            self.cfg.slow
+        };
+        !self.replay() && !self.spell_practice() && slow == 0
+    }
+
+    // Supervisor_UpdatePlayTime (15 §2.9): adds the time since the mark, then clears it.
+    pub fn add_play_time(&mut self) {
+        if let Some(t) = self.play_clock.take() {
+            crate::scoredat::Plst::add_time(
+                &mut self.score.plst.play_time,
+                t.elapsed().as_millis() as u64,
+            );
+        }
+    }
+
+    pub fn mark_play_time(&mut self) {
+        self.play_clock = Some(web_time::Instant::now());
     }
 
     pub fn cleared(&self, any: bool, bit: usize) -> bool {
@@ -495,19 +515,16 @@ impl GameManager {
         }
         let g = &mut ctx.game;
         if fresh && g.counts_plays() {
-            if g.practice() {
-                g.play_counter(crate::scoredat::PL_PRACTICE);
-            } else {
-                g.count_play();
-            }
+            g.count_play();
             if g.retrying {
                 g.play_counter(crate::scoredat::PL_RETRIES);
             }
+            if g.practice() {
+                g.play_counter(crate::scoredat::PL_PRACTICE);
+            }
         }
         g.retrying = false;
-        if g.play_clock.is_none() {
-            g.play_clock = Some(web_time::Instant::now());
-        }
+        g.mark_play_time();
         g.fresh_start = false;
         let (stage, shot, d) = (g.stage, g.shot, g.diff());
         Player::register(ctx, self.player.clone(), shot)?;
@@ -769,13 +786,10 @@ impl Task<Ctx> for GameManager {
         for t in std::mem::take(&mut self.tasks) {
             task::remove_task(ctx, &t);
         }
-        if !matches!(ctx.game.requested, SCENE_NEXT_STAGE | SCENE_RELOAD) {
-            if let Some(t) = ctx.game.play_clock.take() {
-                crate::scoredat::Plst::add_time(
-                    &mut ctx.game.score.plst.play_time,
-                    t.elapsed().as_millis() as u64,
-                );
-            }
+        if ctx.game.replay() {
+            ctx.game.play_clock = None;
+        } else {
+            ctx.game.add_play_time();
         }
         ctx.game.flags &= !F_RUNNING;
         ctx.game.paused = 0;
@@ -816,6 +830,7 @@ impl Task<Ctx> for GameManager {
             let mut p = self.player.borrow_mut();
             if std::mem::take(&mut p.game_over) {
                 ctx.game.game_over = 1;
+                ctx.game.add_play_time();
                 log::info!("game over at frame {}", ctx.frame);
             }
         }
@@ -826,6 +841,7 @@ impl Task<Ctx> for GameManager {
             && ctx.input.pressed(crate::input::PAUSE)
         {
             g.paused = 1;
+            g.add_play_time();
             crate::sound::play(crate::sound::PAUSE);
             ctx.audio.pause_bgm(true);
             let s = ctx.anm.rng.state;
@@ -848,14 +864,16 @@ impl Task<Ctx> for GameManager {
             }
         }
         if g.flags & F_DEMO != 0 {
-            // Attract demo (11 §4 step 6). SPEC-GAP: fade colour (black) and the music fade time are unspecified.
+            // Attract demo (11 §4 step 6).
             g.demo_frame += 1;
             let (fade, end) = DEMO_LIMITS[g.demo as usize % 4];
             if ctx.input.held & !ctx.input.prev != 0 {
                 g.request(SCENE_MENU);
             }
             if g.demo_frame == fade {
-                ctx.audio.fade_bgm(2.0);
+                let gs = ctx.anm.speed;
+                ctx.audio
+                    .fade_bgm(if gs > 0.0 && gs <= 1.0 { 3.0 / gs } else { 3.0 });
                 crate::effect::screen(2, end - fade, 0, 0, 0, 0x15);
             }
             if g.demo_frame >= end {
