@@ -29,7 +29,10 @@ static int dl_active(void) {
 
 /* number formatting: fixed decimals, trailing zeros stripped */
 static char *fnum(char *p, double v, int dec) {
-    char t[48]; snprintf(t, sizeof t, "%.*f", dec, v);
+    char t[48];
+    if (v != v) strcpy(t, "nan");
+    else if (v > 1e300 || v < -1e300) strcpy(t, v > 0 ? "inf" : "-inf");
+    else snprintf(t, sizeof t, "%.*f", dec, v);
     char *e = t + strlen(t);
     if (strchr(t, '.')) { while (e[-1] == '0') e--; if (e[-1] == '.') e--; }
     *e = 0;

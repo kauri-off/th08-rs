@@ -252,3 +252,26 @@ right vectors, the overlay colour 0x4E4A64 and the player position. `E` lines ho
 pos, v, a, VM pos, rotation, scale, colour, colour2, flags, I0/I1, F0, the draw-callback displacement (+0x244), the
 speed (+0x238) and pos_offset. Decode with `python3 -I re/tools/effdump.py probe_eff.txt`. Example:
 `re/probe/cmds/q15_eff.txt` (`run.sh 420`). The probe also logs the caller of each of the first 12 Presents.
+
+## 9. Session recorder (SESSION brief, 2026-10-18)
+
+- `re/tools/record_session.sh [--score F] [--no-drawlog] [--sound on|off|keep] [--display D] [--chunk N] [name]` —
+  user-facing, real display, DEFAULT PortProton prefix, game copy `re/work/game`, output `sessions/<name>/`.
+- `re/tools/play_session.sh <name> [--display D] [--drawlog|--no-drawlog] [--sound keep|off] [--out DIR]` — replays the
+  session in the original (Xvfb :77 by default, null audio sink), then `session.py finalize` + `compare`.
+- `re/tools/session.py finalize <dir>` (polls → input.txt, meta, xz) / `compare <rec> <play>` (trace rows aligned at
+  the first menu row, loader columns skipped on loading rows; draw logs via `drawlog.py diff --key scene`).
+- `re/tools/xkeys.py <display> <script>` — XTest key events (`wait S`, `press KEY [HOLD]`, `down/up KEY`) for
+  scripted test sessions on Xvfb; goes through wine → DirectInput like a real keyboard. Example scripts:
+  `re/work/sesstest/keys1.txt` (title → stage 1 → quit, ~30 s), `keys2.txt` (~3 min).
+- Probe session mode (`re/probe/session.inc`): replaces `Input_Poll` and `Input_PollJoystickRaw`; hooks boot seed,
+  Frame_Run pre/post calc, calc-pass start, MainMenu_Calc / GameMgr_Calc / Result_Calc entries, Rng_SetState and the
+  loader park points (see NOTES "SESSION"). Writes polls.txt, events.txt, trace.txt, draw_NNNNN.txt chunks
+  (compressed by the recorder script in the background with `xz -3`, re-compressed `-6` at the end).
+- Renderer: the prefix's d3d8 is DXVK; the override `c:\windows\syswow64\d3d8.dll=b` makes the probe's
+  `LoadLibrary(<sysdir>\d3d8.dll)` load wine's builtin wined3d instead (CW after CreateDevice 0x007F as before).
+- Timings: 60.0 fps with the draw log under Xvfb/llvmpipe; draw log ≈ 10 MB/min of gameplay compressed; replay =
+  real time; `drawlog.py diff` of a 10.7k-frame session ≈ 30 s.
+- Pitfalls found: `pactl load-module` with an existing sink name fails silently (audio went to the default device
+  in two test replays); `md5sum` with no files reads stdin (fixed: an empty replay folder made the recorder wait);
+  playback must not block the main thread while a loader needs main-thread frames (post-load servicing added).

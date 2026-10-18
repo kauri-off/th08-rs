@@ -49,6 +49,11 @@
 | 0x190/0x194 | 0x17CE8E8/EC | f32 | slowdown accumulators A / B (15 §2.11) | VERIFIED |
 | 0x198 | 0x17CE8F0 | u8 | fps_now (answers_phase7 §6) | VERIFIED |
 | 0x1A4 | 0x17CE8FC | u32 | flags; bit table in answers_phase7 §2 (bit 3 never set) | VERIFIED |
+| 0x284 | 0x17CE9DC | HANDLE | loader thread handle (`Supervisor_StartLoader` 0x4486BA creates the thread with the loader function itself as thread proc: `Supervisor_Init` at boot, `MainMenu_LoaderThread`, `GameManager_StageStart`) | VERIFIED |
+| 0x28C | 0x17CE9E4 | u32 | abort request: set by `Supervisor_JoinLoader` 0x44871B before waiting; loaders and `Anm_LoadAndWait` give up when ≠ 0 | VERIFIED |
+| 0x290 | 0x17CE9E8 | u32 | loader running: 1 from thread start; each loader clears it as its last action | VERIFIED |
+| 0x294 | 0x17CE9EC | u32 | loading state for `Supervisor_Calc`: ≠ 0 → returns before polling input (2 = failed → 4; running → 1); cleared when the loader is done | VERIFIED |
+| 0x2FC | 0x17CEA54 | u32 | loading-screen state: 1 shown, 2 after `Loading_Wait`, 0 after `Loading_End` | VERIFIED |
 | 0x338..0x34C | 0x17CEA90.. | u32×5 | zeroed by MainMenu_OnRegister; +0x338 = replay fps flag (always 0), +0x33C (0x17CEA94) = playback fps-red flag | VERIFIED |
 | 0x350 | 0x17CEAA8 | u32 | fog state cache | VERIFIED |
 Whole object is overwritten with 0xFFFFFFFF on anti-tamper detection (answers_phase7).

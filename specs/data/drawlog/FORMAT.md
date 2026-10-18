@@ -9,7 +9,7 @@ and blend/test state. You do not need to know D3D to read or write it.
 Files are plain text, UTF-8/ASCII, one record per line, fields separated by single spaces. They are stored
 `xz`-compressed (`*.drawlog.xz`). The tools read `.xz` and plain text.
 Numbers are decimal with trailing zeros removed (`436.5`, `0`, `0.00781`). Compare them with a tolerance, not as
-text. Colours are 8 hex digits **AARRGGBB**.
+text. Non-finite values (the game occasionally submits them) are written `nan`, `inf`, `-inf`. Colours are 8 hex digits **AARRGGBB**.
 
 ## 1. Frames
 

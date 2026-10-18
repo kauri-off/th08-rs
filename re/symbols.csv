@@ -725,3 +725,14 @@ addr,kind,name,signature,confidence,note
 0x00466f20,func,Anm_CaptureToTexture,,VERIFIED,back buffer rect -> ANM slot texture rect
 0x00466000,func,AnmManager_PostloadPending,,VERIFIED,PostloadStep for pending slots; -1 on failure
 0x017ce750,global,g_LoadingDarken,,VERIFIED,loading darken ScreenEffect object
+0x004486ba,func,Supervisor_StartLoader,thiscall(this=Supervisor; proc; arg),VERIFIED,joins old loader then CreateThread(proc) -> +0x284; +0x290 = 1
+0x0044871b,func,Supervisor_JoinLoader,,VERIFIED,+0x28C = 1; wait for the loader thread; close handle
+0x0160f540,global,g_GmLoading,,VERIFIED,GM+0x38: 1 while a stage loads; GameMgr_Calc runs gameplay only when 0 (else +0x3C++ and return 3); 2 = load failed
+0x0160f544,global,g_GmLoadFrames,,VERIFIED,GM+0x3C loading-frame counter; StageStart waits for >= 30 (80 in replay) before Loading_Wait
+0x0043b8a8,label,StageStart_Release,,VERIFIED,loader thread clears GM+0x38 (gameplay may start); session sync point
+0x0043b821,label,StageStart_GaugeSetup,,VERIFIED,before Ascii_InitVms/Ascii_SetupGaugeVms on the loader thread; session sync point
+0x004710df,label,MainMenuLoader_Tail,,VERIFIED,after title00.png load: Music_Play, title fade-in, +0x14434 = 0, Loading_End; session sync point
+0x004469ce,label,SupervisorInit_Tail,,VERIFIED,boot loader success tail (clears +0x284..+0x294); session sync point
+0x00441f48,label,FrameRun_PreCalc,,VERIFIED,Frame_Run just before FuncChain_RunCalc
+0x00441f52,label,FrameRun_PostCalc,,VERIFIED,Frame_Run right after FuncChain_RunCalc (Sound_Update follows; that fn is also called from menus)
+0x016535a0,global,g_JoyRawButtons,,VERIFIED,32 button bytes written by Input_PollJoystickRaw (key-config capture)

@@ -1,0 +1,82 @@
+# Recorded play sessions
+
+Each subdirectory is one session of the **original** th08, recorded with `re/tools/record_session.sh`. It holds everything
+needed to replay the session bit-exactly (in the original and in the port) and to compare the two. Session data is
+git-ignored; only this README is tracked.
+
+## Recording a session
+
+```sh
+cd ~/Projects/th_08
+re/tools/record_session.sh my_session                 # name is optional (default: date-time, e.g. 20261018-213000)
+re/tools/record_session.sh --score ~/path/to/score.dat run2   # start from a given score.dat (e.g. your own)
+re/tools/record_session.sh --no-drawlog long_run      # smaller output, see "Size" below
+```
+
+The game opens in a normal 640×480 window on your desktop at normal speed. Play as usual with the keyboard or a
+gamepad (DirectInput, as in normal play), menus included. **To finish, quit the game**: choose *Quit* on the title
+screen, or close the window. The script then copies the results and prints `done: sessions/<name>`. Don't kill
+the terminal while the game runs. Ctrl-C stops the game, and the part played so far is still saved.
+
+What the script uses and changes:
+- wine `~/PortProton/data/dist/WINE_LG_11-1/bin/wine`, prefix `~/PortProton/data/prefixes/DEFAULT` (override with
+  `TH08_WINE` / `TH08_PREFIX`). The renderer is wine's own d3d8 (wined3d). The prefix's DXVK d3d8 is bypassed for
+  this process only, through `WINEDLLOVERRIDES`, so the prefix is not modified.
+- the game copy `re/work/game` (never the folder in ~/Downloads). The probe `d3d8.dll` is copied there and rebuilt
+  from `re/probe/` when its sources change (needs `i686-w64-mingw32-gcc`).
+- `th08.cfg` of the game copy: `+0x22` windowed = 1, always. With the default `--sound on`, also `+0x1F` music = 1
+  (WAV from thbgm.dat) and `+0x20` sound effects = 1. `--sound off` sets both to 0; `--sound keep` leaves them as
+  they are. Nothing else is touched. Sound does not affect the replay (verified: a sound-off replay of a sound-on
+  recording is identical).
+- `--score FILE` copies FILE over `re/work/game/score.dat` before launch. Without it, the copy's current
+  score.dat is used. Either way, the game updates that score.dat as you play, exactly like normal play.
+- `--display D` picks the X display (default `$DISPLAY`). `--chunk N` sets the draw-log chunk length in presented
+  frames (default 1800 = 30 s).
+
+## Replaying a session in the original (check)
+
+```sh
+re/tools/play_session.sh my_session                   # headless (Xvfb :77), audio to a temporary null sink
+re/tools/play_session.sh my_session --display :0      # watch it in a window
+```
+
+It replays the recorded input in the original (probe play mode). It writes the same files to
+`sessions/<name>/play_<time>/` and compares them with the recording: trace rows, plus draw logs when recorded. A
+correct replay prints `trace: … 0 differ` and `compared … frames, 0 differ`. It takes as long as the session (60 fps).
+
+## Files in `sessions/<name>/`
+
+| file | content |
+|---|---|
+| `meta.txt` | settings, wine/prefix, cfg patches, menu-base present, boot seed, counts, saved replays |
+| `input.txt` | the input in the port's `TH08_INPUT` syntax; frame 1 = first presented main-menu frame |
+| `polls.txt` | exact per-poll input list (what the game's input function returned, every call) |
+| `events.txt` | boot RNG seed, RNG re-seeds, loader-thread sync points, key-config joystick captures |
+| `trace.txt.xz` | per-frame state trace, boot to exit (demo-trace columns + scene/menu columns) |
+| `draw_NNNNN.drawlog.xz` | draw log, chunked (omitted with `--no-drawlog`) |
+| `start/` | `th08.cfg`, `score.dat`, `replay/*.rpy` exactly as they were at launch |
+| `end/` | `th08.cfg`, `score.dat` (and `score.txt` if written) after the session |
+| `replays/` | every .rpy saved (or overwritten) during the session |
+| `probe_log.txt`, `wine.log` | diagnostics |
+| `play_*/` | replays made by `play_session.sh` (same layout) |
+
+Formats for the port side: `specs/data/drawlog/README.md`, section "Sessions".
+
+## Limits and good to know
+
+- **Pause, alt-tab, focus loss**: harmless. The recording is per game frame and stores what the game actually read,
+  so pauses (Esc), slow frames or a backgrounded window don't break the replay. While the window is unfocused,
+  DirectInput may deliver no keys; that is recorded as "no input", the same as the game saw it.
+- **Speed**: the recorder keeps 60 fps with the draw log on (measured on Xvfb with software rendering). If the game
+  ever stutters, it slows down instead of skipping logic frames, and the replay stays exact.
+- **Key config with a gamepad**: the raw joystick buttons captured in the key-config screen are recorded too
+  (`events.txt joyraw`).
+- **Things that differ by nature** between the recording and any replay: the fps counter, the dates written into
+  saved replays / score.dat / score.txt, and play-time counters (wall-clock time). The `trace` and draw log of a
+  replay match otherwise. Stage-load rows in the trace show the loader thread's progress (player position, rank,
+  flags while loading). Their timing is not meaningful, and `session.py compare` skips those columns on loading rows.
+- **Size**: the draw log is about 10 MB per minute of gameplay after compression (≈ 0.6 GB per hour). The trace
+  and input are small. Use `--no-drawlog` for long sessions. The draw log can be regenerated later by replaying
+  with `play_session.sh <name> --drawlog`, because the replay is exact.
+- The game writes `score.dat` backups to `re/work/game/backup/` on boot (its own behaviour).
+- Only one game instance at a time. The scripts refuse to start if `th08.exe` is already running.

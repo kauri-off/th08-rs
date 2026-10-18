@@ -45,10 +45,23 @@ def frames(path):
         yield hdr, recs
 
 
+def fl(s):
+    """float, also msvcrt's non-finite spellings (-nan(ind), 1.#INF) from older probe logs"""
+    try:
+        return float(s)
+    except ValueError:
+        s = s.lower()
+        if 'nan' in s or '#ind' in s or '#qnan' in s:
+            return float('nan')
+        if 'inf' in s:
+            return float('-inf') if s.startswith('-') else float('inf')
+        raise
+
+
 def parse_vertex(t):
-    x, y, z, w = map(float, t[:4])
-    u = None if t[4] == '-' else float(t[4])
-    v = None if t[5] == '-' else float(t[5])
+    x, y, z, w = map(fl, t[:4])
+    u = None if t[4] == '-' else fl(t[4])
+    v = None if t[5] == '-' else fl(t[5])
     return (x, y, z, w, u, v, int(t[6], 16))
 
 
@@ -68,21 +81,21 @@ def prims(recs):
             st['V'] = tuple(int(x) for x in p[:4]) + ((float(p[4]), float(p[5])) if len(p) > 4 else (0.0, 1.0))
         elif c == 'R':
             p = rest.split()
-            x0, y0, x1, y1, u0, v0, u1, v1 = map(float, p[:8])
+            x0, y0, x1, y1, u0, v0, u1, v1 = map(fl, p[:8])
             col = int(p[8], 16)
-            z = float(p[9]) if len(p) > 9 else 0.0
+            z = fl(p[9]) if len(p) > 9 else 0.0
             vs = [(x0, y0, z, 1.0, u0, v0, col), (x1, y0, z, 1.0, u1, v0, col),
                   (x0, y1, z, 1.0, u0, v1, col), (x1, y1, z, 1.0, u1, v1, col)]
-            yield st, 'quad', vs, r
+            yield dict(st), 'quad', vs, r
         elif c == 'Q':
             p = rest.split()
-            yield st, 'quad', [parse_vertex(p[i * 7:i * 7 + 7]) for i in range(4)], r
+            yield dict(st), 'quad', [parse_vertex(p[i * 7:i * 7 + 7]) for i in range(4)], r
         elif c == 'P':
             p = rest.split()
             kind, n = p[0], int(p[1])
-            yield st, kind, [parse_vertex(p[2 + i * 7:9 + i * 7]) for i in range(n)], r
+            yield dict(st), kind, [parse_vertex(p[2 + i * 7:9 + i * 7]) for i in range(n)], r
         elif c in 'KC':
-            yield st, c, rest.split(), r
+            yield dict(st), c, rest.split(), r
 
 
 def cmd_summary(path):

@@ -97,3 +97,98 @@ refresh, page change), practice stage select, replay list / detail / speed choic
 D-key dump (`menu_mopup1.score.txt` is the score.txt it wrote), difficulty/character/ranking, card group/
 character/list (page change and character change with the accordion), play data. Twelve screenshots are in
 `menu_ref/mopup1_*.png`.
+
+## Sessions (recorded human play, `sessions/<name>/`)
+
+Recorded with `re/tools/record_session.sh` (user guide: `sessions/README.md`). A session covers one run of the original
+from process start to exit, menus included. VERIFIED: replaying a session in the original (`re/tools/play_session.sh`)
+gives an identical trace and an identical draw log (two scripted sessions: 1 922 rows and 10 654 rows incl. ~2.7 min
+of stage 1 with movement, focus, bombs, pause/resume, quit; 0 differences, apart from the fps counter, which
+`drawlog.py diff` ignores).
+
+### Input: `input.txt` and `polls.txt`
+- The input word is what the game's input function `Input_Poll` (0x43D970) **returned**: keyboard (DirectInput or
+  GetKeyboardState) and joystick combined, bits as in "Keys" above. The game calls it once per frame at the start of
+  `Supervisor_Calc` (calc prio 0) and stores it in `g_InputRawCur` 0x164D528. The previous word and the menu
+  key-repeat counter are derived from it (11 §7), and the gameplay input `g_Input` 0x164D52C is taken from it after
+  the objects ran (replay recorder). Feeding these words as the port's raw input reproduces everything downstream.
+  Exception: with slow mode (cfg +0x25) on, a stalled GM frame sets 0x160F535, and the next frame ORs the new word
+  into the old one instead of replacing it. That is game logic; the file holds the function's return values.
+- `input.txt`: `TH08_INPUT` syntax (`count:mask`, comma separated, `#` comments). **Frame 1 = the first presented
+  frame of the main menu** (scene 1, scene_frame 1), the same convention as `menu_*.input.txt`. Frame k is the word
+  polled during the calc of the frame presented at `menu_base_present + k − 1` (`meta.txt`). Boot frames before it
+  never poll input. Header comments count frames without a poll (the previous word is repeated) and presents with
+  more than one poll (the last one is written); both were 0 in all test sessions. During normal play there is
+  exactly one poll per presented frame. The blocking unlock notice (`Info_Show` 0x471181) polls once per present
+  outside Frame_Run, marked `I` in polls.txt.
+- `polls.txt`: `poll present scene src mask` per call, exact. `present` = number of the presented frame the poll
+  belongs to (draw-log `F` field 1), `scene` = scene id at the moment of the poll (before this frame's scene switch),
+  `src` = `S` (Supervisor_Calc) or `I` (Info_Show), `mask` = hex word.
+
+### State: `events.txt`, `start/`
+- `seed <hex32> present P poll N`: the boot seed = `timeGetTime()` stored at 0x17CE900; its low 16 bits are the RNG
+  state (`Supervisor_Init` 0x4464FF, 11 §1). It is the only non-deterministic RNG input; RNG writes in
+  GameMgr_Calc/StageStart are save/restore pairs, and `setstate` lines (replay playback, `Rng_SetState` 0x453BE0)
+  come from .rpy contents.
+- `loader <kind> poll B present P` / `release <kind> poll P` / `release boot calc C`: loader-thread timing (below).
+- `joyraw <n> <32 hex bytes>`: n-th call of `Input_PollJoystickRaw` (key-config capture) when a button was down.
+- `start/th08.cfg`, `start/score.dat`, `start/replay/*.rpy`: the files the game read at launch. To replay in the port,
+  start from exactly these files.
+
+### Loader threads and frame alignment (VERIFIED by replay)
+Three loaders run on a second thread, concurrently with the main loop (`Supervisor_StartLoader` 0x4486BA): boot
+(`Supervisor_Init`), main menu (`MainMenu_LoaderThread`) and every stage (`GameManager_StageStart`). How many main-loop
+frames they take varies from run to run (they wait for the main thread's texture post-load, one entry per frame).
+This race is the reason two plain runs of the original differ (title intro ±1 frame, gauge VM age, first gameplay
+frame). A session pins it:
+- `release boot calc C`: the boot loader finished before the C-th Frame_Run calc (the first frame that polls).
+- `release menu poll P`: the menu loader's tail (title music, white fade-in `ScreenEffect_Register(0, …)`,
+  MainMenu+0x14434 = 0, `Loading_End`) ran before the calc of the frame whose poll index is P.
+- `loader gauge poll B`, `loader lwait poll B`, `release stage poll P`: the stage loader set up the gauge VMs
+  (`Ascii_InitVms`/`Ascii_SetupGaugeVms`), called `Loading_Wait` (needs GM+0x3C ≥ 30 loading frames) and cleared
+  GM+0x38 (0x160F540) before the calc of the frame with poll index B / B / P. GameMgr_Calc runs the first gameplay
+  frame in frame P.
+A port that loads synchronously should reproduce these frame counts, not its own loading time: e.g. stay on the
+loading screen until poll P, then run gameplay frame 1. Stage loading rows of `trace.txt` (loading column ≠ 0) show
+the loader's progress (player position, rank, flags bit 2) at timing-dependent points. Compare only from the first
+row with loading = 0.
+
+### Trace: `trace.txt.xz`
+One row per calc pass from boot to exit, plus a row (`ff` = −1) for presents without a Frame_Run calc (boot,
+`Info_Show`). Columns 1–23 are those of `specs/data/demo*_trace.txt` (frame demo_frame input rng rng_ctr px py
+pstate score graze points lives bombs power gauge time bullets enemies rank spell boss flags ff), with
+`rng_ctr` = all `Rng_Next16` calls since process start (main and loader thread), and the gameplay stats are zero
+outside scene 2 and while loading. Then:
+
+| col | name | meaning |
+|---|---|---|
+| 24 | present | presented-frame number of this frame (draw-log `F` field 1) |
+| 25 | calc | Frame_Run calc count |
+| 26 | poll | polls so far (= poll index of this frame + 1) |
+| 27 | scene | Supervisor scene after this calc |
+| 28 | scene_frame | as draw-log `F` field 3 |
+| 29 | menu | MainMenu screen (+0x14428) at the start of MainMenu_Calc this frame, −1 if it did not run |
+| 30 | cursor | MainMenu +0x00 at the same point, −1 if not run |
+| 31 | result | Result object state (+0x08) after Result_Calc this frame, −1 if not run |
+| 32 | pause | pause byte 0x164D0BA |
+| 33 | rawinput | `g_InputRawCur` 0x164D528 after this calc |
+| 34 | stage | g_StageIdx |
+| 35 | loading | 0x160F540 (GM+0x38) |
+| 36 | demo | attract demo index, −1 if none |
+
+Compare a port trace with `re/tools/session.py compare <rec dir> <port dir>` (rows aligned at the first main-menu row).
+
+### Draw log: `draw_NNNNN.drawlog.xz`
+Same format as FORMAT.md, every presented frame from present 1 to exit, split into chunks of 1 800 presents
+(`NNNNN` = chunk number). Read the chunks in order or pass the glob to the tools:
+`drawlog.py diff "sessions/<name>/draw_*.drawlog.xz" "<port>/draw_*.drawlog.xz" --key scene`.
+Non-finite numbers are written `nan` / `inf` (older logs: msvcrt spelling `-nan(ind)`; `drawlog.py` reads both).
+Observed once: a `stg1bg.anm` quad (depth-tested, rhw 1) with NaN x/y/z at stage 1 gameplay frame 4942 (session
+`selftest2`, present 7538). The original submits it and D3D draws nothing for it (INFERRED).
+
+### Tooling fix found while building this (2026-10-18)
+`drawlog.py diff` handed every primitive the frame's **last** T/S/V state: `prims()` yielded one shared dict, and
+the diff collected the primitives into a list. Texture/state differences were therefore not detected, and the fps
+filter could miss. Fixed (each primitive gets a copy). The run-to-run determinism notes above were measured before
+the fix. Re-measured: `menu_base` vs `menu_clr` differ in 381 of 982 compared frames, from menu frame 33 on. That is
+the menu-loader race described above, not only the intended difference from script frame 489.

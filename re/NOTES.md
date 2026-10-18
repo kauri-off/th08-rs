@@ -360,3 +360,26 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   slot 0 culled (d1), slot 8 (d3); draw colour = colour2 (update before Run, current overlay); data specs/data/q15/.
 - Q1 cause of 3 empty Frame_Run presents still INFERRED. Tool re/tools/effdump.py; TOOLING_REPORT §8. Symbols +11, redump done.
 - WRITTEN: specs/answers_impl15.md; fixed 12 §1/§2/§5.3/§5.9, 13 §2.6/§3, 16 §5.3, COVERAGE capture row. RE-Q15 DONE.
+
+# SESSION (2026-10-18) — session recorder (docs/briefs/SESSION_RE_BRIEF.md)
+- NEW: re/probe/session.inc (in hook.c; env TH08_SESS=rec|play, TH08_SESS_OUT/IN, TH08_SESS_DL, TH08_SESS_CHUNK),
+  re/tools/record_session.sh (user), play_session.sh (replay in original + compare), session.py (finalize/compare),
+  xkeys.py (XTest key driver for tests). Docs: sessions/README.md, specs/data/drawlog/README.md "Sessions", TOOLING_REPORT §9.
+- Input = return value of Input_Poll 0x43D970 (all callers: Supervisor_Calc once per frame, Info_Show loop); hooked by
+  replacing the function (jmp + trampoline). Joystick raw capture 0x43D7E0 (key config) wrapped too.
+- Boot seed hook 0x4464FF (EAX = timeGetTime, stored also at 0x17CE900); play mode forces it.
+- Frame_Run calls calc at most once per Frame_Run (deadline loop, no catch-up): stutter slows the game, never skips logic.
+- Loader-thread race is the only nondeterminism left (boot / menu / stage loaders, Supervisor_StartLoader 0x4486BA):
+  loaders wait for main-thread texture post-load (Anm_LoadAndWait, one entry per frame) → variable frame counts.
+  Pinned with park points (0x4469CE boot tail, 0x4710DF menu tail, 0x43B821 stage gauge setup, Loading_Wait
+  0x448972, 0x43B8A8 stage release) released at Frame_Run pre-calc 0x441F48 at the recorded poll/calc; main thread
+  services AnmManager_PostloadPending while waiting. Release must be outside FuncChain_RunCalc (menu tail's
+  ScreenEffect_Register blocked when done inside the pass).
+- GM+0x38 (0x160F540) = loading flag GameMgr_Calc tests through `this`; GM+0x3C (0x160F544) loading-frame counter.
+- VERIFIED: 2 scripted Xvfb sessions (1922 rows; 10654 rows ~2.7 min stage 1) replay with 0 trace / 0 draw-log
+  differences; sound-off replay of a sound-on recording also identical. 60.0 fps with draw log under Xvfb.
+- Fixed drawlog.py: prims() shared state dict (diff ignored T/S/V differences); parses nan/inf. Probe writes nan/inf.
+- Quirk: stg1bg.anm quad with NaN x/y/z (selftest2 present 7538, gm frame 4942).
+- DXVK d3d8 in the DEFAULT prefix is bypassed per process: WINEDLLOVERRIDES='d3d8=n,b;c:\windows\syswow64\d3d8.dll=b'.
+- Open: real-display recording by the user not yet done; DXVK renderer untested (would need CW check = 0x007F);
+  replay fast-forward (several polls per present) not exercised; game over / continue / replay-save flow not exercised.

@@ -305,6 +305,7 @@ static void patch_vtbl(void *obj, int idx, void *fn, void **orig) {
 }
 
 #include "drawlog.inc"
+#include "session.inc"
 
 /* ---- screenshots ---- */
 static void save_shot(void *dev, const char *name) {
@@ -350,6 +351,7 @@ static HRESULT WINAPI h_Present(void *dev, const RECT *a, const RECT *b, HWND w,
     if (g_rng_main != g_rng_at_calc) { g_draw_rng_frames++; if (g_draw_rng_frames < 20) lg("# draw phase used %u main-thread rng calls at present %u scene %u\n", g_rng_main - g_rng_at_calc, g_present_n, U32(G_SCENE)); }
     scene_track();
     dl_present();
+    if (g_sess) sess_present();
     run_cmds(dev);
     input_apply();
     return o_Present(dev, a, b, w, d);
@@ -405,10 +407,12 @@ static void hook_iat(const char *dll, const char *fn, void *h, void **orig) {
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID res) {
+    if (reason == DLL_PROCESS_DETACH && g_sess) { sess_flush(); return TRUE; }
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
     char path[MAX_PATH];
     GetSystemDirectoryA(path, MAX_PATH); strcat(path, "\\d3d8.dll");
     g_real = LoadLibraryA(path);
+    if (sess_init()) return TRUE;
     CreateDirectoryA("shots", NULL);
     g_log = fopen("probe_log.txt", "w");
     g_trace = fopen("probe_trace.txt", "w");
