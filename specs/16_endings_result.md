@@ -567,7 +567,7 @@ The draw shows 10 rows from top (+0x7C):
 | Shot / Enter | playing = cursor. If music mode is WAV (0x449C79), restart the stream from `thbgm.dat`. `Music_PlayFile(entry.file, 0)`; title VM: `text.anm` script 0x11, interrupt 1, text = comment line 0 (colour 0xFFE0C0, outline 0x300000). |
 | Ctrl | `Music_Fade(8.0)` |
 | R | replay the playing track |
-| Bomb / ESC | scene 1 with the loading banner (0x44886F) |
+| Bomb / ESC | scene 1 with the loading banner (0x44886F: `Loading_Begin` + capture of the current screen into surface slot 8 after the next Present, which the loading screen then shows instead of the logo; 12 §1) |
 
 Comment reveal: at sub-frame 10, 12, …, 22, comment line k = 0..6 is drawn on VM 0x5508 + k·0x2A4 (`text.anm` script 10 + k, interrupt 1).
 - The text is the real comment if the entry is heard or is the one playing.

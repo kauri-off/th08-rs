@@ -55,7 +55,7 @@ Most of the 45 KB is covered by behaviour, not by address: ECL natives 07 §12, 
 | Replay-substituted input, key repeat | 15 §3.3, 12 intro | COVERED | `Replay_PlayCalc` 0x452550 |
 | FPS meter, slowdown % | answers_phase7 §6, 15 §2.11 | COVERED | 0x446F53 |
 | Screenshots | answers_phase7 §6 | COVERED (24-bit path; the 16-bit back-buffer branch is not decoded) | `Frame_Present`, 0x44748F |
-| Post-present surface capture (pause background etc.) | 12 §3 (use) | PARTIAL: copy parameters at AnmManager+0x2A252C… not specified | 0x443B60, 0x466F20, 0x467180 |
+| Post-present surface capture (pause background etc.) | 12 §1, 12 §3 (use), answers_impl15 §Q5 | PARTIAL: surface-slot capture (+8, 0x467180: back buffer → full-screen surface slot) specified; texture capture +0x2A252C (0x466F20: back-buffer rect → ANM slot texture rect, set by 0x406A30) parameters per caller not specified | 0x443B60, 0x466F20, 0x467180 |
 | Anti-tamper | 11 §4 step 7, answers_phase7 intro | COVERED (ignore) | `GameMgr_IsTampered` 0x40BB80 |
 | Floating-point environment | 05 §10, 11 §1.2 | VERIFIED at runtime (answers_phase8 §1): main thread CW 0x007F (24-bit precision, round to nearest) after CreateDevice; loader threads 0x027F | — |
 

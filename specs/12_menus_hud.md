@@ -32,6 +32,16 @@ Loading-screen state = Supervisor+0x2FC:
   (500, 440) and the full-screen surface-8 view is enabled; otherwise (next stage, retry) `Loading_Begin` at
   (280, 430). The loader thread calls `Loading_Wait` after the stage is ready; after a stage clear it
   waits there until the player confirms (11 §4).
+- **Boot presents** (answers_impl15 §Q1, VERIFIED runtime): presents 1–2 = `Window_InitD3D` (0x45B020: clear black +
+  Present, twice); from present 3 `Frame_Run`. Presents 3–5 contain no primitives (cause INFERRED: loader-thread
+  start-up), but the nowloading VMs already tick every calc; present 6 is the first logo frame (VMs at script time 5).
+- Loading VM draw 0x445D3E (prio 2, VERIFIED): for each of the 3 VMs pos += pos_offset, `Draw2DRot`, pos −= pos_offset.
+- `0x44886F(pos)` = `Loading_Begin(pos)` + post-present capture request (AnmManager+8 = 8, rect 0,0,640,480, only if no
+  capture is pending): after the next Present the back buffer is copied into surface slot 8, which
+  `Supervisor_DrawLoading` then shows. Used by `GameMgr_OnRegister` (both branches), the main-menu loading paths and
+  the music-room exit; the probe labels this `K screen th08logo.jpg` (slot name), but it is the captured last frame.
+- Stage start from the main menu also creates the loading darken overlay (ScreenEffect type 5, 13 §3): full-screen
+  black, alpha 0 while loading, 0x80 → 0x00 over game frames 1–9, drawn at draw prio 1 (first in the frame).
 
 ## 2. Main menu (`MainMenu_Register` 0x47146D) — VERIFIED
 
@@ -71,6 +81,12 @@ Screen dispatch (0x467399):
 
 After the screen function, all 142 VMs are run every frame (and the description VM). A screen switch
 (`Menu_SetScreen` 0x4694C3) resets cursor timers/sub-state and stores the previous screen.
+
+**Screen entry rule (answers_impl15 §Q12, VERIFIED).** `Menu_SetScreen` (0x4694C3) runs inside the old handler (which
+then returns) and zeroes +0x10, +0x1442C, +0x0C, +0xC294. The new handler first runs on the next calc frame; all nine
+handlers begin with an entry block guarded by +0x1442C == 0 (range interrupts, cursor sprites/interrupts), and
+`AnmManager_RunRange` runs after the handler in the same `MainMenu_Calc`, so a press on frame P gives the new screen's
+interrupts and their VM effect on frame P + 1.
 
 ### 2.1 title01.anm VM map (script index = VM index) — VERIFIED from the anm dump
 
@@ -399,6 +415,11 @@ ASCII text (`ascii.anm` glyph = sprite (char − 1), advance 13 px × scale, '\n
 
 (Score digits have an implicit trailing 0: the internal score is ÷10.)
 
+**Depth values (answers_impl15 §Q8, VERIFIED).** pos.z set by `Hud_DrawPanel`: 0.49 border tiles, strips and the
+hiscore/score row blanks; 0.48 the other row blanks; 0.46 life/bomb icons; ASCII text 0. zwrite = VM flag bit 13 clear
+(front.anm scripts 0–12 have `zwrite_off`, tile scripts 13–15 do not). Invisible in practice (ztest always; depth is
+cleared every frame), only relevant for draw-log parity.
+
 ### 5.4 Boss UI (`Hud_DrawBoss` 0x43741D; only when no dialogue runs and the bar is shown or fading) — VERIFIED
 - Life bar quad x 64 … 64 + 320·displayed_fraction, y 19..23, colour alpha|0xFFFFFF (top) / alpha|0x202060.
 - Markers k (8 slots, enabled when end ≠ 0 and start < displayed): x 64 + 320·start … 64 + 320·min(end,
@@ -565,6 +586,12 @@ being started (VERIFIED, answers_impl13 §1). Steps:
    youkai: 76.8/144. The limits are written only by `Player_Load`. They are 0/0 at boot (both ends x = 88) and keep
    the last game's values in the menu. Neither is visible, because the readout is hidden there (answers_impl13 §3).
 3. Re-send the stored interrupt (+0x827C) to G0–G3. At boot it is 0, which has no label: the VMs stay hidden.
+
+**Timing at stage start (answers_impl15 §Q7, VERIFIED).** The setup runs on the loader thread, but `Ascii_Calc` has calc
+prio 1 and keeps running during loading (GM prio 2 returns 3), so label 1 is already k frames old at game frame 1;
+k depends on the loader race: 28 / 27 / 29 / 33 in the demo 0 / 1 / 2 / 3 reference logs (slide ends at gm 12/13/11/7,
+人/妖/▼ appear at k = 61). Port: run the setup at loading frame 81 − k (replay loading lasts 81 frames); k = 28 if one
+constant is wanted.
 
 **Interrupts** (`Ascii_GaugeInterrupt` 0x4070B0 sends to G0–G3 and stores the id in +0x827C):
 - 1 = show: `Player_Load` on a fresh start (0x17CE8BC ≠ 0, 11 §3). It is sent before the limits are written,

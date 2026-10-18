@@ -229,6 +229,16 @@ t = 0, because `AnmFile_StartScript` runs the VM once when the script is set (05
 the init-fn draws** (VERIFIED by call order in the runtime RNG log). Script t=0 draws per type (scan of anm_dis, answers_impl14 §1): 17, 18, 27: 4 · 21: 4 ·
 22: 2 · 26: 6 · 38: 10 · 47: 8 · 51, 63: 10. All other types: 0.
 
+**Spawn frame and draw order (answers_impl15 §Q9, VERIFIED runtime).** In `EffectMgr_Calc` each live slot (index order
+0..652) runs its **update fn first**, then `AnmVm_Run`, then is linked into its draw list; the lists are therefore in
+**slot order** (not spawn order). An effect spawned earlier in the same frame (ECL runs before the effect manager) gets
+both runs in its spawn frame: the script runs at t = 0 inside `SetScript` and at t = 1 in the calc (VM time 2 after the
+frame). Type 51: colour2 (the draw colour, VM flag 0x20000) is computed in the update, i.e. from the colour **before**
+that frame's VM run, times the **current** overlay colour; so the spawn-frame draw uses colour2 from the spawn colour
+(op 139 colour) and the `color` op at t = 1 shows up one frame later. Script 73 (type 51) t = 0 draws in order: frand
+0.05236 (spin), frand 0.1 (scale), irand 32 (+48 alpha target), irand 127 (+128 R), irand 127 (+128 G); then the 8 init
+draws. Reference dumps: `specs/data/q15/eff51_decoded.txt`.
+
 ### 2.7 Main spawn sites (VERIFIED)
 | event | effect |
 |---|---|
@@ -259,6 +269,7 @@ Calc returning 0 removes the effect (on-remove frees it).
 | 3 | dur / repeats / ARGB | **flash**: alpha = A − trunc(t·A/dur) (A = colour alpha); at dur: repeats −= 1, restart; ends at 0 repeats | playfield, colour = p2 RGB |
 | 4 | dur / colour | as 2 (fade to colour) | full screen |
 | 5, 6 | dur / colour | darken: alpha = trunc(128·t/dur) up to dur then held; when +0x24 is set: alpha = 128 − 128·t/8, ends after 8 frames | 5 full screen, 6 playfield |
+| | | **used at loading** (answers_impl15 §Q6): `0x4489CA(0)` registers type 5, p0 = 60, colour 0, draw prio 1 (global 0x17CE750) from `GameMgr_OnRegister` when the previous scene is 1 and from `MainMenu_OnRegister`; its calc (prio 3) does not run during stage loading, so alpha stays 0; `Loading_Wait` / `Loading_End` release it (timer 0) → game frames 1..9 draw alpha 0x80, 0x70 … 0x00, removed at frame 10 | |
 | 7 | amp / ramp-in / hold / ramp-out | **shake** envelope: a = amp × (t/in, 1, (in+hold+out − t)/out); offsets as type 1 (2 RNG/frame); only when frames-since-stage-start (0x164D2C8) ≥ 2, frozen like type 1; ends after in+hold+out | none |
 
 Used (type: p0, p1, p2): bomb hits / impacts 1: 16, 8, 0 and 3: 8, 1, colour; Marisa sparks 7: 16, 120, 60, 120;

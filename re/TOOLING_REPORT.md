@@ -242,3 +242,13 @@ Format: `specs/data/drawlog/FORMAT.md`. Data and menu scripts: `specs/data/drawl
   dump are wrong offsets; ignore them.
 Example: `re/probe/cmds/impl14_rng.txt`; the run output is kept in `re/work/runs/impl14/`. One 4-demo run takes
 `run.sh 600`.
+
+## 8. Effect slot dump (RE-Q15, 2026-10-18)
+
+`hook.c` (copy in `re/probe/`) has a new `probe_cmd.txt` line `effdump K F0 F1 TYPE` (TYPE −1 = all types): for attract
+demo K, trace frames F0..F1, every live effect slot (EffectMgr 0x4ECE60, 653 slots × 0x360) is written after the calc
+to `probe_eff.txt`, raw hex. The `F` line holds the RNG state, ring index, stage camera / facing / normalised facing /
+right vectors, the overlay colour 0x4E4A64 and the player position. `E` lines hold the slot, type, layer, VM time, world
+pos, v, a, VM pos, rotation, scale, colour, colour2, flags, I0/I1, F0, the draw-callback displacement (+0x244), the
+speed (+0x238) and pos_offset. Decode with `python3 -I re/tools/effdump.py probe_eff.txt`. Example:
+`re/probe/cmds/q15_eff.txt` (`run.sh 420`). The probe also logs the caller of each of the first 12 Presents.

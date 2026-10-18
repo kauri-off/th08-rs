@@ -1,0 +1,4 @@
+effdump 1 1 6 51
+effdump 3 1 6 51
+d1:6 peek 4e4a64 4
+p22600 quit

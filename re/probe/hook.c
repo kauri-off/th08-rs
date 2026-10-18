@@ -20,6 +20,7 @@ static uint32_t g_rng_at_calc, g_draw_rng_frames;
 static int g_rsw[16][3], g_nrs, g_rs_on;
 static FILE *g_rsf, *g_bsf;
 static int g_bsw[16][3], g_nbs;
+static int g_edw[16][4], g_neds; static FILE *g_edf;
 
 typedef void *(WINAPI *PFN_Create8)(UINT);
 typedef HRESULT(WINAPI *PFN_CreateDevice)(void *, UINT, int, HWND, DWORD, void *, void **);
@@ -55,6 +56,7 @@ static void load_cmds(void) {
         char cond[32];
         if (!strncmp(line, "traceall", 8)) { g_trace_all = 1; continue; }
         if (!strncmp(line, "bscan", 5)) { if (g_nbs < 16 && sscanf(line + 5, "%d %d %d", &g_bsw[g_nbs][0], &g_bsw[g_nbs][1], &g_bsw[g_nbs][2]) == 3) g_nbs++; continue; }
+        if (!strncmp(line, "effdump", 7)) { if (g_neds < 16 && sscanf(line + 7, "%d %d %d %d", &g_edw[g_neds][0], &g_edw[g_neds][1], &g_edw[g_neds][2], &g_edw[g_neds][3]) == 4) g_neds++; continue; }
         if (!strncmp(line, "rngsite", 7)) { if (g_nrs < 16 && sscanf(line + 7, "%d %d %d", &g_rsw[g_nrs][0], &g_rsw[g_nrs][1], &g_rsw[g_nrs][2]) == 3) g_nrs++; continue; }
         if (line[0] == '#' || sscanf(line, "%31s %15s", cond, c->act) < 2) continue;
         if (!strcmp(cond, "traceall")) { g_trace_all = 1; continue; }
@@ -207,6 +209,28 @@ static void emit_row(void) {
             break;
         }
     }
+    if (g_neds && in_demo()) {
+        int k = U8(G_DEMOIDX), f = (int)U32(G_GMFRAME);
+        for (int i = 0; i < g_neds; i++) if (g_edw[i][0] == k && f >= g_edw[i][1] && f <= g_edw[i][2]) {
+            if (!g_edf) g_edf = fopen("probe_eff.txt", "w");
+            fprintf(g_edf, "F demo %d frame %d rng %04x ring %u cam %08x %08x %08x fac %08x %08x %08x nfac %08x %08x %08x right %08x %08x %08x ovl %08x player %08x %08x\n",
+                    k, f, U16(G_RNG), U32(0x4ECE60), U32(0x4EA3C4), U32(0x4EA3C8), U32(0x4EA3CC), U32(0x4EA3D0), U32(0x4EA3D4), U32(0x4EA3D8),
+                    U32(0x4EA3E8), U32(0x4EA3EC), U32(0x4EA3F0), U32(0x4EA3F4), U32(0x4EA3F8), U32(0x4EA3FC), U32(0x4E4A64), U32(0x17D61AC), U32(0x17D61B0));
+            for (int j = 0; j < 653; j++) {
+                uint32_t e = 0x4ECE60 + 0x1C + j * 0x360;
+                if (!U8(e + 0x350)) continue;
+                if (g_edw[i][3] >= 0 && U8(e + 0x351) != g_edw[i][3]) continue;
+                fprintf(g_edf, "E %d t %u lay %u time %d world %08x %08x %08x v %08x %08x %08x a %08x %08x %08x pos %08x %08x %08x rot %08x %08x %08x scl %08x %08x col %08x col2 %08x fl %08x I %d %d F %08x D %08x %08x %08x spd %08x off %08x %08x\n",
+                        j, U8(e + 0x351), U8(e + 0x354), (int)U32(e + 0x38 + 8),
+                        U32(e + 0x2D4), U32(e + 0x2D8), U32(e + 0x2DC), U32(e + 0x2BC), U32(e + 0x2C0), U32(e + 0x2C4), U32(e + 0x2C8), U32(e + 0x2CC), U32(e + 0x2D0),
+                        U32(e + 0x2A4), U32(e + 0x2A8), U32(e + 0x2AC), U32(e), U32(e + 4), U32(e + 8), U32(e + 0x18), U32(e + 0x1C),
+                        U32(e + 0x1F0), U32(e + 0x1F4), U32(e + 0x1F8), (int)U32(e + 0x100), (int)U32(e + 0x104), U32(e + 0x110),
+                        U32(e + 0x244), U32(e + 0x248), U32(e + 0x24C), U32(e + 0x238), U32(e + 0x288), U32(e + 0x28C));
+            }
+            fflush(g_edf);
+            break;
+        }
+    }
     if (U32(G_SCENE) != 2 || (!in_demo() && !g_trace_all)) return;
     uint32_t st = U32(G_STATS);
     int en = 0;
@@ -321,6 +345,7 @@ static void save_shot(void *dev, const char *name) {
 static HRESULT WINAPI h_Present(void *dev, const RECT *a, const RECT *b, HWND w, const void *d) {
     uint16_t cw = fpu_cw();
     g_present_n++;
+    if (g_present_n <= 12) lg("# present %u ret %08x scene %u ld2fc %u thr290 %u ld294 %u\n", g_present_n, (uint32_t)__builtin_return_address(0), U32(G_SCENE), U32(0x17CE758 + 0x2FC), U32(0x17CE758 + 0x290), U32(0x17CE758 + 0x294));
     if (cw != g_last_cw_present) { lg("# Present cw=%04x at present %u\n", cw, g_present_n); g_last_cw_present = cw; }
     if (g_rng_main != g_rng_at_calc) { g_draw_rng_frames++; if (g_draw_rng_frames < 20) lg("# draw phase used %u main-thread rng calls at present %u scene %u\n", g_rng_main - g_rng_at_calc, g_present_n, U32(G_SCENE)); }
     scene_track();

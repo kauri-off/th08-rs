@@ -714,3 +714,14 @@ addr,kind,name,signature,confidence,note
 0x00454269,func,Str_AppendF,,VERIFIED,vsprintf at end, returns end ptr
 0x0045a4a0,func,Catk_IsAttempted,rec; shot,VERIFIED,story or practice attempts[shot]
 0x004d5098,global,g_AsciiHighlight,,VERIFIED,ASCII queue highlight flag (asciis glyphs)
+0x00445d3e,func,Supervisor_DrawLoadingVms,,VERIFIED,draw prio 2: 3 nowloading VMs Draw2DRot with pos+pos_offset
+0x004489ca,func,Loading_StartDarken,k,VERIFIED,ScreenEffect type 5+k dur 60 colour 0 prio 1 into 0x17CE750
+0x0044886f,func,Loading_BeginCapture,pos,VERIFIED,Loading_Begin + request post-present capture into surface 8
+0x0045c160,func,ScreenEffect_Release,,VERIFIED,+0x24 = 1; timer = 0
+0x0045b800,func,ScreenEffect_CalcDarken,,VERIFIED,types 5/6 calc
+0x0045bbf0,func,ScreenEffect_DrawFull,,VERIFIED,full-screen rect alpha<<24|p1
+0x0045b020,func,Device_ClearPresentTwice,colour,VERIFIED,device init: clear + present x2
+0x00467180,func,Anm_CaptureToSurface,,VERIFIED,back buffer rect -> new surface slot
+0x00466f20,func,Anm_CaptureToTexture,,VERIFIED,back buffer rect -> ANM slot texture rect
+0x00466000,func,AnmManager_PostloadPending,,VERIFIED,PostloadStep for pending slots; -1 on failure
+0x017ce750,global,g_LoadingDarken,,VERIFIED,loading darken ScreenEffect object

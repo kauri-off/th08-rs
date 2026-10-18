@@ -340,3 +340,23 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Runtime: re/work/runs/mopup1 (gen.py + main.seq; demo rpys copied as th8_01..04 then removed; score.dat restored).
   Data: specs/data/drawlog/menu_mopup1.{drawlog.xz,input.txt,shots.txt,seq.py,score.dat,score.txt,summary.txt},
   menu_ref/mopup1_*.png (12). Symbols +21. MOPUP-1 DONE.
+
+# RE-Q15 (2026-10-18) — impl15 questions
+- Probe: hook.c +`effdump K F0 F1 TYPE` (effect slots of TYPE → probe_eff.txt, raw hex) + present-caller log for presents ≤12.
+  Runs: re/work/runs/q15 (rngsite d0-3 f1-4), re/work/runs/q15/eff (effdump demos 1,3 type 51 f1-6).
+- Q9: demos 1/3 frame 2 (and every 4 frames): ECL enemy from timeline → op 139 effect 51 ×32; per effect 26 Next16:
+  script 73 (frand,frand,irand,irand,irand; sprite 220) then EffInit_Particle51 (8 draws). Draw order = slot order
+  (EffectMgr_Calc links list 1 in slot index order 0..652). Demo 2 also spawns 51 at f2. Ovl colour 0x4E4A64=ffb7b7ff at d1 f6.
+- Q6: overlay = ScreenEffect type 5 (dur 60, colour 0, draw prio 1) registered by GameMgr_OnRegister (prev scene 1)
+  and MainMenu_OnRegister via 0x4489CA; calc prio 3 doesn't run during loading (GM returns 3) → alpha 0;
+  Loading_Wait/Loading_End release → 128 − t·16, freed after t>8 → 0x80..0x00 on df1..9.
+- Q7: gauge setup on loader thread; Ascii_Calc prio 1 runs during loading → label-1 age at gm1 = 28/27/29/33 (d0..3), race.
+- Q1: presents 1-2 = Window_InitD3D 0x45B020 black clear+present ×2; 3.. Frame_Present; logo draws from present 6.
+- Q8 panel z: Hud_DrawPanel Vec3 z consts 0.49 (tiles/strips, hiscore/score row blanks), 0.48 (other row blanks),
+  0.46 (life/bomb icons); zwrite = !VM flag 13 (front scripts 0-12 zwrite_off; tiles 13-15 not).
+- Q12: menu handlers' entry block guarded by +0x1442C == 0 (all 9 handlers); runs on the calc after SetScreen,
+  RunRange after the handler same frame.
+- Q9 verified float-exact (sim re/work/runs/q15/sim51.py from rng 0x351E): 16 effects/call (26 Next16 each), slots 0-15,
+  slot 0 culled (d1), slot 8 (d3); draw colour = colour2 (update before Run, current overlay); data specs/data/q15/.
+- Q1 cause of 3 empty Frame_Run presents still INFERRED. Tool re/tools/effdump.py; TOOLING_REPORT §8. Symbols +11, redump done.
+- WRITTEN: specs/answers_impl15.md; fixed 12 §1/§2/§5.3/§5.9, 13 §2.6/§3, 16 §5.3, COVERAGE capture row. RE-Q15 DONE.
