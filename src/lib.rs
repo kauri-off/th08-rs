@@ -12,6 +12,8 @@ pub mod bullet;
 pub mod config;
 pub mod demosync;
 pub mod drawlog;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod drawreport;
 pub mod ecl;
 pub mod eclvm;
 pub mod effect;
@@ -32,6 +34,7 @@ pub mod pshot;
 pub mod replay;
 pub mod rng;
 pub mod scoredat;
+pub mod session;
 pub mod sht;
 pub mod sound;
 pub mod stage;

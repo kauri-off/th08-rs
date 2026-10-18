@@ -481,7 +481,6 @@ pub struct Globals {
     pub hud_boss: bool,
     pub dialogue: bool,
     pub drop_counter: u32,
-    pub orb_acc: i32,
     pub drop_index: usize,
     pub native_globals: [i32; 2],
     pub flag_164d0bb: bool,
@@ -509,6 +508,8 @@ pub struct EnemyManager {
     pub player: PlayerRef,
     pub stage: Option<Rc<RefCell<Stage>>>,
     pub full: bool,
+    // Draw lists by layer, linked at the end of each enemy's calc (07 §10.1 step 7).
+    draw_lists: [Vec<usize>; 4],
     pub frame: u32,
     pub debug_damage: i32,
     pub fast_forward: u32,
@@ -537,6 +538,7 @@ impl EnemyManager {
         // Rank is GM+0x3DE2C, synced from the game manager every frame (11 §3.2).
         let player = bullets.borrow().player.clone();
         player.borrow_mut().stats.difficulty = difficulty;
+        let step = player.borrow().orb_step;
         let g = Globals {
             difficulty,
             rank: 16,
@@ -555,7 +557,11 @@ impl EnemyManager {
                 })
                 .collect(),
             spare: Vec::new(),
-            template: Box::default(),
+            // EnemyMgr_Ctor: the template's time-orb accumulator starts at the player's step (07 e+0x2E10).
+            template: Box::new(Enemy {
+                orb_acc: step,
+                ..Enemy::default()
+            }),
             ecl,
             bosses: [None; 4],
             timelines,
@@ -565,6 +571,7 @@ impl EnemyManager {
             player,
             stage: None,
             full: false,
+            draw_lists: Default::default(),
             frame: 0,
             debug_damage: 0,
             fast_forward: 0,
@@ -647,12 +654,7 @@ impl EnemyManager {
             }
         }
         if flags & A_SHOT_HIT != 0 {
-            // SPEC-GAP: one time-orb accumulator for all non-boss enemies (the per-enemy one loses demo 3 sync at 801).
-            let mut acc = if boss {
-                self.enemies[idx].orb_acc
-            } else {
-                self.g.orb_acc
-            };
+            let mut acc = self.enemies[idx].orb_acc;
             let mut by_bomb = self.player.borrow().bombing;
             let d = {
                 let mut b = self.bullets.borrow_mut();
@@ -686,11 +688,7 @@ impl EnemyManager {
                 }
                 d
             };
-            if boss {
-                self.enemies[idx].orb_acc = acc;
-            } else {
-                self.g.orb_acc = acc;
-            }
+            self.enemies[idx].orb_acc = acc;
             self.enemies[idx].bomb_hit = by_bomb;
             self.damage(idx, d, by_bomb);
         }
@@ -1705,7 +1703,8 @@ impl EnemyManager {
         }
         let pause = self.g.timer_pause != 0;
         let e = &mut self.enemies[idx];
-        if std::mem::take(&mut e.hit) {
+        // SPEC-GAP: a hit right after a flashed frame does not flash again (golden draw log: hits on 3 frames flash 1st and 3rd).
+        if std::mem::take(&mut e.hit) && !e.flash {
             if e.last_damage > 0 {
                 let low = (e.flags_b >> 4) & 3 >= 2;
                 crate::sound::play_at(
@@ -1728,6 +1727,9 @@ impl EnemyManager {
         }
         if e.dmg_timer.cur > 0 {
             e.dmg_timer.dec(gs);
+        }
+        if e.flags & A_HIDDEN == 0 {
+            self.draw_lists[e.layer.min(3) as usize].push(idx);
         }
         self.death(idx, anm);
     }
@@ -1756,6 +1758,7 @@ impl EnemyManager {
             }
         }
         self.full = false;
+        self.draw_lists.iter_mut().for_each(Vec::clear);
         self.run_timelines(anm);
         for idx in 0..self.enemies.len() {
             if self.enemies[idx].alive() {
@@ -1807,8 +1810,14 @@ impl EnemyManager {
         if high && frozen {
             (ctx_anm.tint, ctx_anm.tint_on) = (0xFFF01010, true);
         }
-        for e in &mut self.enemies {
-            if !e.alive() || e.flags & A_HIDDEN != 0 || (e.layer >= 2) != high {
+        // SPEC-GAP: lists are drawn newest-linked first (prepend linking; session draw logs show reverse slot order).
+        let first = if high { 2 } else { 0 };
+        let order: Vec<usize> = (first..first + 2)
+            .flat_map(|l| self.draw_lists[l].iter().rev().copied())
+            .collect();
+        for i in order {
+            let e = &mut self.enemies[i];
+            if !e.alive() || e.flags & A_HIDDEN != 0 {
                 continue;
             }
             let p = [e.final_pos[0] + 32.0, e.final_pos[1] + 16.0];

@@ -361,6 +361,7 @@ impl MainMenu {
                     g.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
                     self.interrupt_all(5);
                     self.set_screen(DIFF);
+                    self.cursor = last_difficulty(g);
                 }
                 1 => {
                     g.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
@@ -376,6 +377,7 @@ impl MainMenu {
                     g.flags = g.flags & !F_SPELL_PRACTICE | F_PRACTICE;
                     self.interrupt_all(5);
                     self.set_screen(DIFF_PRACTICE);
+                    self.cursor = last_difficulty(g);
                 }
                 4 => {
                     self.interrupt_all(13);
@@ -410,14 +412,7 @@ impl MainMenu {
                 self.set_surface(ctx, "select00.png");
             }
             self.interrupt_all(if extra { 12 } else { 7 });
-            let d = ctx.game.cfg.difficulty as i32;
-            self.cursor = if extra {
-                0
-            } else if d > 3 {
-                1
-            } else {
-                d
-            };
+            self.cursor = if extra { 0 } else { last_difficulty(&ctx.game) };
         }
         let active = self.frames >= 8 && self.pending.is_none();
         if !extra {
@@ -448,6 +443,8 @@ impl MainMenu {
             store(&mut ctx.game, self.cursor);
             sound::play(sound::OK);
             self.set_screen(self.screen + 1);
+            // SPEC-GAP: the character cursor is already set when its screen's first calc starts (session trace).
+            self.char_cursor(ctx);
         } else if ctx.input.pressed(CANCEL) {
             store(&mut ctx.game, self.cursor);
             sound::play(sound::CANCEL);
@@ -485,16 +482,21 @@ impl MainMenu {
         self.screen != CHAR_EXTRA || extra_unlocked(&ctx.game, c as usize)
     }
 
+    fn char_cursor(&mut self, ctx: &Ctx) {
+        let n = if extra_all(&ctx.game) { 12 } else { 4 };
+        self.cursor = (ctx.game.shot as i32).min(n - 1);
+        if !self.char_allowed(ctx, self.cursor) {
+            self.cursor = (0..n).find(|&c| self.char_allowed(ctx, c)).unwrap_or(0);
+        }
+    }
+
     fn character(&mut self, ctx: &mut Ctx) {
         let n = if extra_all(&ctx.game) { 12 } else { 4 };
         if self.frames == 0 {
             self.interrupt_all(8);
             // Difficulty plate slides to (16, 384) (12 §2.4).
             self.vms[VM_DIFF + (ctx.game.cfg.difficulty as usize).min(4)].pending_interrupt = 9;
-            self.cursor = (ctx.game.shot as i32).min(n - 1);
-            if !self.char_allowed(ctx, self.cursor) {
-                self.cursor = (0..n).find(|&c| self.char_allowed(ctx, c)).unwrap_or(0);
-            }
+            self.char_cursor(ctx);
         }
         let allowed: Vec<bool> = (0..n).map(|c| self.char_allowed(ctx, c)).collect();
         if self.frames >= 8 {
@@ -777,6 +779,7 @@ impl Task<Ctx> for MainMenu {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        ctx.game.trace_menu = Some((self.screen, self.cursor));
         // The menu starts when its loader has finished (Supervisor loading screen, 12 §1).
         if ctx.game.menu_loading > 0 {
             return Ret::Next;
@@ -890,5 +893,13 @@ mod tests {
         g.clear_any[0][1] = 0x40;
         assert_eq!(final_notice(&g, 0, 1), Some(146));
         assert_eq!(final_notice(&g, 5, 1), Some(147));
+    }
+}
+
+// Cursor on the difficulty screen: config +0x21, Extra values → Normal (12 §2.2–2.3).
+fn last_difficulty(g: &gamemgr::Game) -> i32 {
+    match g.cfg.difficulty as i32 {
+        d if d > 3 => 1,
+        d => d,
     }
 }

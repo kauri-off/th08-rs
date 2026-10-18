@@ -199,7 +199,7 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     // Frames each demo must stay in sync for (raise as divergences get fixed).
-    const MIN_SYNC: [usize; 4] = [1128, 559, 723, 825];
+    const MIN_SYNC: [usize; 4] = [1317, 559, 743, 1058];
 
     fn state(ctx: &crate::game::Ctx) -> [i64; 22] {
         let mut s = super::sample(ctx, 0);

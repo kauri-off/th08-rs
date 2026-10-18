@@ -1390,6 +1390,8 @@ pub struct DemoMerge<I: Iterator<Item = Frame>> {
     pub opts: Opts,
     pub report: Report,
     pub range: Option<(i64, i64)>,
+    // Demo: demo frame (frames outside demos skipped); Present: present number.
+    pub key: KeyMode,
 }
 
 impl<I: Iterator<Item = Frame>> DemoMerge<I> {
@@ -1402,6 +1404,14 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
             opts,
             report: Report::new(worst),
             range: None,
+            key: KeyMode::Demo,
+        }
+    }
+
+    fn frame_key(&self, f: &Frame) -> Option<i64> {
+        match self.key {
+            KeyMode::Present => Some(f.present),
+            _ => (f.demo >= 0).then_some(f.demo_frame),
         }
     }
 
@@ -1421,11 +1431,11 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
         }
         loop {
             let f = self.reference.next()?;
-            if f.demo < 0 {
+            let Some(fk) = self.frame_key(&f) else {
                 continue;
-            }
-            let k = Self::occ(&mut self.ref_occ, f.demo_frame);
-            if !self.in_range(f.demo_frame) {
+            };
+            let k = Self::occ(&mut self.ref_occ, fk);
+            if !self.in_range(fk) {
                 continue;
             }
             self.report.note_sprites(&f, false, &self.opts);
@@ -1434,11 +1444,11 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
     }
 
     pub fn feed(&mut self, p: &Frame) {
-        if p.demo < 0 {
+        let Some(pk) = self.frame_key(p) else {
             return;
-        }
-        let key = Self::occ(&mut self.port_occ, p.demo_frame);
-        if !self.in_range(p.demo_frame) {
+        };
+        let key = Self::occ(&mut self.port_occ, pk);
+        if !self.in_range(pk) {
             return;
         }
         self.report.note_sprites(p, true, &self.opts);
@@ -1451,7 +1461,13 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
                 std::cmp::Ordering::Less => self.report.ref_only += 1,
                 std::cmp::Ordering::Equal => {
                     let d = diff_frame(&r, p, &self.opts);
-                    let k = format!("demo frame {} #{}", key.0, key.1);
+                    let k = match self.key {
+                        KeyMode::Present => format!(
+                            "present {} (scene {} frame {})",
+                            key.0, r.scene, r.scene_frame
+                        ),
+                        _ => format!("demo frame {} #{}", key.0, key.1),
+                    };
                     self.report.add(k, &r, p, &d);
                     return;
                 }
@@ -1476,7 +1492,7 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
 // ---- headless runs of the port (tests, drawrun) ----
 
 // One calc + draw + present; returns the logged frame text.
-fn step(ctx: &mut crate::game::Ctx) -> Option<(crate::task::Flow, Vec<String>)> {
+pub fn step(ctx: &mut crate::game::Ctx) -> Option<(crate::task::Flow, Vec<String>)> {
     let f = ctx.calc();
     ctx.draw();
     ctx.gfx.present();
@@ -1585,7 +1601,7 @@ mod tests {
     const MENU_CLR: (usize, f64) = (900, 97.3);
     const MENU_MOPUP1: (usize, f64) = (1590, 84.5);
     // Demos 0–3, first chunk: % same quads (playfield).
-    const DEMO: [f64; 4] = [85.0, 29.5, 78.5, 67.8];
+    const DEMO: [f64; 4] = [86.0, 29.5, 74.5, 77.8];
 
     fn data(p: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

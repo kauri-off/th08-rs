@@ -367,6 +367,12 @@ impl Player {
         }
         if self.bomb.timer.cur < self.bomb.duration {
             self.bomb_calc(anm, items);
+            // SPEC-GAP: not on the start frame (session trace: the gauge moves from the 2nd bomb frame).
+            if self.bomb.index < 4 {
+                let d = 26000 / self.bomb.duration.max(1);
+                self.stats
+                    .gauge_add(if self.bomb.index & 1 == 1 { d } else { -d });
+            }
             self.bomb.timer.tick(anm.speed);
         } else {
             self.speed_mult = [1.0; 2];
@@ -485,9 +491,6 @@ impl Player {
             6 => self.bomb_youmu(anm, b),
             _ => self.bomb_yuyuko(anm, b),
         }
-        let d = 26000 / self.bomb.duration.max(1);
-        self.stats
-            .gauge_add(if self.bomb.index & 1 == 1 { d } else { -d });
     }
 
     fn at(b: Bf, n: i32) -> bool {

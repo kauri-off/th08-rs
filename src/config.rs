@@ -69,6 +69,30 @@ impl Config {
         b
     }
 
+    // Config_Load (15 §1.2): None when the size, version or any byte field is invalid (→ defaults).
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() != 0x3C || u32::from_le_bytes(b[0x14..0x18].try_into().ok()?) != 0x80001 {
+            return None;
+        }
+        let limits = [7, 4, 2, 3, 2, 6, 2, 3, 3, 2, 2];
+        if (0..11).any(|i| b[0x1C + i] >= limits[i]) {
+            return None;
+        }
+        Some(Self {
+            lives: b[0x1C],
+            bombs: b[0x1D],
+            colour_mode: b[0x1E],
+            music: b[0x1F],
+            se_on: b[0x20],
+            difficulty: b[0x21],
+            windowed: b[0x22],
+            effect_level: b[0x24],
+            slow: b[0x25],
+            bgm_volume: b[0x27],
+            se_volume: b[0x28],
+        })
+    }
+
     // The gameplay copy during playback takes the replay's recorded config (11 §3.4).
     pub fn apply_gameplay(&mut self, b: &[u8]) {
         if b.len() >= 0x26 {

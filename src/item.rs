@@ -41,7 +41,6 @@ pub struct ItemManager {
     order: Vec<u16>,
     pub count: usize,
     pub collect_timer: i32,
-    pub fall_timer: i32,
     pub collected: u64,
 }
 
@@ -53,7 +52,6 @@ impl Default for ItemManager {
             order: Vec::new(),
             count: 0,
             collect_timer: 0,
-            fall_timer: 0,
             collected: 0,
         }
     }
@@ -364,7 +362,7 @@ impl ItemManager {
                 }
                 3 => {
                     it.vel[1] += 0.05 * gs;
-                    if it.vel[1] > 0.0 || self.fall_timer < 0 {
+                    if it.vel[1] > 0.0 || p.shot_timer.cur < 0 {
                         it.state = 1;
                     }
                     if ps == 2 {

@@ -745,7 +745,7 @@ impl Player {
     pub fn damage_against(
         &mut self,
         anm: &mut AnmManager,
-        items: Option<&mut ItemManager>,
+        mut items: Option<&mut ItemManager>,
         pos: [f32; 3],
         size: [f32; 2],
         acc: &mut i32,
@@ -755,7 +755,6 @@ impl Player {
             return 0;
         }
         let half = [size[0] / 2.0, size[1] / 2.0];
-        let mut orbs = Vec::new();
         let mut shot = 0;
         for i in 0..MAX_BULLETS {
             let b = &self.bullets[i];
@@ -777,8 +776,12 @@ impl Player {
             shot += if self.bombing { (d / 5).max(1) } else { d };
             while *acc >= self.orb_step {
                 *acc -= self.orb_step;
-                if self.stats.human_max() && self.bullets[i].side < 0 {
-                    orbs.push(self.bullets[i].pos);
+                if self.stats.human_max()
+                    && self.bullets[i].side < 0
+                    && let Some(items) = items.as_deref_mut()
+                {
+                    let p = self.bullets[i].pos;
+                    items.spawn(anm, self, p, crate::item::TIME_ORB as i32, 0);
                 }
             }
             let b = &mut self.bullets[i];
@@ -825,11 +828,6 @@ impl Player {
         }
         if self.stats.youkai_max() {
             dmg = dmg * 106 / 100;
-        }
-        if let Some(items) = items {
-            for p in orbs {
-                items.spawn(anm, self, p, crate::item::TIME_ORB as i32, 0);
-            }
         }
         dmg
     }

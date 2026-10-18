@@ -98,6 +98,9 @@ pub struct Game {
     pub continue_apply: bool,
     pub card: i16,
     pub menu_loading: u32,
+    // Recorded loader timing of a session replay (src/session.rs).
+    pub sched: Option<crate::session::Sched>,
+    pub trace_menu: Option<(i32, i32)>,
 }
 
 impl Default for Game {
@@ -150,6 +153,8 @@ impl Default for Game {
             continue_apply: false,
             card: 0,
             menu_loading: 0,
+            sched: None,
+            trace_menu: None,
         }
     }
 }
@@ -800,19 +805,37 @@ impl Task<Ctx> for GameManager {
         g.loading_shown = g.loading != 0;
         if g.loading != 0 {
             g.loading_frames += 1;
-            if let Some((at, min, max)) = self.gauge_at
-                && g.loading_frames >= at
+            // Session replay: the loader's recorded steps take effect before the calc of their poll index.
+            let (gauge_due, wait_due, release_due) = match g
+                .sched
+                .as_ref()
+                .and_then(|s| Some((s.poll + 1, *s.stages.front()?)))
+            {
+                Some((next, [gauge, wait, release])) => {
+                    (next >= gauge, next >= wait, next >= release)
+                }
+                None => {
+                    let done = g.loading_frames >= loading_total(g);
+                    let gauge = self.gauge_at.is_some_and(|a| g.loading_frames >= a.0);
+                    (gauge, done, done)
+                }
+            };
+            if let Some((_, min, max)) = self.gauge_at
+                && gauge_due
             {
                 self.gauge_at = None;
                 crate::ascii::gauge_setup(&mut ctx.anm, min, max);
             }
             let g = &mut ctx.game;
-            if g.loading_frames >= loading_total(g) {
-                if g.end_state() == 0 {
+            if wait_due || release_due {
+                if release_due && g.end_state() == 0 {
                     g.loading = 0;
                     g.loading_wait = 0;
                     g.flags &= !F_CLEAR_PANEL;
                     crate::effect::release_loading_overlay();
+                    if let Some(s) = &mut g.sched {
+                        s.stages.pop_front();
+                    }
                 } else {
                     if g.loading_wait == 0 {
                         crate::effect::release_loading_overlay();

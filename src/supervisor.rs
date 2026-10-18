@@ -334,6 +334,15 @@ impl Task<Ctx> for Supervisor {
                 }
             }
         }
+        // Session schedule: the menu loader's tail ran before this calc, so its interrupt reaches this frame's VM run.
+        if ctx.game.menu_loading > 0
+            && let Some(s) = &mut ctx.game.sched
+            && s.menu.front().is_some_and(|&p| s.poll >= p)
+        {
+            s.menu.pop_front();
+            ctx.game.menu_loading = 0;
+            self.end_loading(ctx);
+        }
         // Presents 1–2 come from Window_InitD3D, before the first Frame_Run (answers_impl15 §Q1).
         if self.frame > 2 || ctx.game.requested != gamemgr::SCENE_MENU {
             for vm in &mut self.boot_vms {
@@ -342,7 +351,8 @@ impl Task<Ctx> for Supervisor {
         }
         if self.logo.is_some() && ctx.game.scene == gamemgr::SCENE_BOOT {
             self.boot_frames += 1;
-            if ctx.game.requested == gamemgr::SCENE_MENU && self.boot_frames < BOOT_FRAMES {
+            let boot = ctx.game.sched.as_ref().map_or(BOOT_FRAMES, |s| s.boot_calc);
+            if ctx.game.requested == gamemgr::SCENE_MENU && self.boot_frames < boot {
                 return Ret::Next;
             }
             if ctx.game.requested != gamemgr::SCENE_MENU {
@@ -352,8 +362,16 @@ impl Task<Ctx> for Supervisor {
         }
         let r = self.switch(ctx);
         if ctx.game.menu_loading > 0 {
-            ctx.game.menu_loading -= 1;
-            if ctx.game.menu_loading == 0 {
+            let g = &mut ctx.game;
+            match &mut g.sched {
+                Some(s) if s.menu.front().is_some_and(|&p| s.poll >= p) => {
+                    s.menu.pop_front();
+                    g.menu_loading = 0;
+                }
+                Some(s) if !s.menu.is_empty() => {}
+                _ => g.menu_loading -= 1,
+            }
+            if g.menu_loading == 0 {
                 self.end_loading(ctx);
             }
         }

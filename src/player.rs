@@ -778,6 +778,8 @@ impl Player {
             }
             self.focus_age = 0;
             self.gauge_c.set(0);
+            // SPEC-GAP: the start/stop check sees previous vx 0 after a switch (golden draw log: start script replays).
+            self.last_v[0] = 0.0;
         } else {
             self.focus_age += 1;
         }
@@ -1108,6 +1110,8 @@ impl Task<Ctx> for Player {
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let inp = ctx.input.game_view();
+        // 0x164D2C8 (frames since stage start) already counts this frame (session trace: shot-timer phase).
+        self.frames = ctx.game.frame_counter as i32;
         match self.world.upgrade() {
             Some(b) => {
                 let mut b = b.borrow_mut();
