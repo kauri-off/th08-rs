@@ -589,7 +589,7 @@ Otherwise:
 4. Compute the checksum, then encrypt.
 5. Write the header, body and USER section.
 
-Save UI, Result states 10–14 (0x45696F):
+Save UI, Result states 10–14 (0x45696F); full input, interrupt and draw details in 16 §2.6:
 
 | state | behaviour |
 |---|---|
@@ -615,7 +615,7 @@ Steps:
 
 Error message: "リプレイデータが異常".
 
-### 3.8 Replay menu (`MainMenu_Replay` 0x46E136, draw `MainMenu_ReplayDraw` 0x46EF8D)
+### 3.8 Replay menu (`MainMenu_Replay` 0x46E136, draw `MainMenu_ReplayDraw` 0x46EF8D; layout 12 §2.8)
 
 Listing:
 - Loads slots 01..15, then up to 45 `th8_ud????.rpy` files (shown as "User ").

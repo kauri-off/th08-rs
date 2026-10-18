@@ -100,7 +100,7 @@ Most of the 45 KB is covered by behaviour, not by address: ECL natives 07 §12, 
 | HUD, side panel, boss UI, popups, clear panel | 12 §5, 13 §4 | COVERED | `Hud_Update` 0x435900, `Hud_DrawPanel` 0x43625D, `Hud_DrawBoss` 0x43741D |
 | Pause menu | 12 §3 | COVERED | `PauseMenu_Update` 0x4037B0 |
 | Continue / game over | 12 §4, 11 §4.2 | COVERED | `ContinueMenu_Update` 0x404890, `ContinueMenu_Draw` 0x4052B0 |
-| Stage practice, spell practice, Last Word | 12 §2.5–2.6, 16 §6 | COVERED (logic). The list/record **draw layout** is PARTIAL (see menus). | `MainMenu_PracticeStage` 0x46ADB0, `_SpellPracticeChar` 0x46B174, `_SpellPracticeCard` 0x46BBC0, `LastWord_ComputeUnlocks` 0x46CBBB |
+| Stage practice, spell practice, Last Word | 12 §2.5–2.6, 16 §6 | COVERED (logic and draw layout: 12 §2.5, 16 §6.3–6.5) | `MainMenu_PracticeStage` 0x46ADB0, `_SpellPracticeChar` 0x46B174, `_SpellPracticeCard` 0x46BBC0, `LastWord_ComputeUnlocks` 0x46CBBB |
 | Demo / attract mode | 12 §2.2, 11 §4, answers_phase7 §3 | COVERED | `MainMenu_Top` 0x4674E0, `GameMgr_Calc` |
 | Replay record/playback/speed | 15 §3 | COVERED | `Replay_*` 0x451D90…0x4531F0 |
 
@@ -110,14 +110,14 @@ Most of the 45 KB is covered by behaviour, not by address: ECL natives 07 §12, 
 |---|---|---|---|
 | Boot logo, loading screens | 12 §1 | COVERED | `Supervisor_OnRegister` 0x445FA3, `Supervisor_DrawLoading` 0x445BD4, `Loading_*` 0x448790… |
 | Main menu: top, difficulty, character, option, key config | 12 §2, 15 §1.3 | COVERED | `MainMenu_Calc` 0x467399, `MainMenu_Top` 0x4674E0, `_Difficulty` 0x46A071, `_Character` 0x46A625, `_Option` 0x46837B, `_KeyConfig` 0x469636 |
-| Main menu draw of the practice-score, spell-card-record and replay lists | 12 §2.5–2.8, 16 §6.3 (strings only) | **PARTIAL**: row positions, formats and colours of these draws are not specified | draw 0x47087F → 0x46F429 ("Stage HI-Score"), 0x46F5CB ("%sTotal", 1.9 KB), 0x46FFC0 ("%sNo.%.3d"), 0x47052D, 0x46FDC2 / 0x464EC0 (rotating card-select gfx) |
+| Main menu draw of the practice-score, spell-card-record and replay lists | 12 §2.5, §2.8, §2.9 (ASCII queue + highlight glyphs), 16 §6.3–6.5 | COVERED (MOPUP-1; refs `specs/data/drawlog/menu_mopup1.*`, `menu_ref/mopup1_*.png`) | draw 0x47087F → `MainMenu_PracticeStageDraw` 0x46F429, `MainMenu_SpellPracticeCharDraw` 0x46F5CB, `MainMenu_SpellPracticeCardDraw` 0x46FFC0, `MainMenu_ReplayDraw` 0x46EF8D, `MainMenu_CharacterDraw` 0x47052D (12 §2.4), `Menu_DrawPie` 0x46FDC2 / `AnmManager_DrawFan` 0x464EC0 (pie charts, not a rotating graphic) |
 | Replay menu | 15 §3.8 | COVERED | `MainMenu_Replay` 0x46E136, `MainMenu_ReplayDraw` 0x46EF8D |
 | Unlock notices (info00–02) | 16 §4 | COVERED | `Info_Show` 0x471181 |
 | Music room | 16 §5 | COVERED | `MusicRoom_*` 0x449254…0x449C0A |
 | Endings, staff roll | 16 §1 | COVERED | `Ending_Init` 0x429980, `Ending_RunScript` 0x428B80, `Ending_Draw` 0x4298F0, `Ending_DrawFade` 0x428910 |
 | Result: name entry, ranking | 16 §2.1–2.3 | COVERED | `Result_Calc` 0x4584B0, `Result_NameEntry` 0x45621E, `Result_Draw` 0x4586B4 |
-| Result viewer pages (card history, play data) | 16 §2.4 | PARTIAL: states and strings are given; per-state input handlers and draw positions are not | 0x45567D, 0x455925, 0x455A33, 0x455CB0, 0x455F6B, `Result_PlayStats` 0x457E00, 0x4578AA |
-| score.txt dump (D key in result viewer) | 16 §2.4 (one line) | **MISSING** (format) | `Result_DumpScoreTxt` 0x454298 |
+| Result viewer pages (ranking, card history, play data), end-of-game panel, name entry, replay-save dialogue | 16 §2.2–2.6 | COVERED (MOPUP-1) | `Result_TopMenu` 0x454CB2, `Result_CheatUnlock` 0x4550FC, `Result_CharSelect` 0x45567D, `Result_Ranking` 0x455925, `Result_CardGroup` 0x455A33, `Result_CardChar` 0x455CB0, `Result_CardList` 0x455F6B, `Result_PlayStats` 0x4578AA, `Result_DrawEndPanel` 0x457E00, `Result_Draw` 0x4586B4, `Result_SaveReplay` 0x45696F |
+| score.txt dump (D key in result viewer) | 16 §2.7 | COVERED (MOPUP-1; sample `specs/data/drawlog/menu_mopup1.score.txt`) | `Result_DumpScoreTxt` 0x454298 |
 | th08.cfg | 15 §1 | COVERED | `Config_Load` 0x4477B1 |
 | score.dat (all chunks), unlocks, hidden code | 15 §2 | COVERED | `ScoreDat_Load` 0x45A5E0, `ScoreDat_Save` 0x453D0D, `ScoreDat_Get*` 0x45AAC0… |
 | Replay file format | 15 §3.5 | COVERED | `Replay_Load` 0x451D90, `Replay_Finish` 0x4531F0 |
@@ -134,8 +134,8 @@ quoting its addresses.
 | 0x443C60–0x445440 | ~5 KB | MIDI player | MISSING |
 | 0x4718D0–0x473790 | ~6 KB | DirectSound buffers, streaming thread, sound-manager ctor (0x45C190 / 0x45C4B0, SetTimer) | platform; behaviour covered by 02 / 13 |
 | 0x423400–0x425300 | ~5 KB | ECL natives 2, 4, 7, 8, 9, 11, 16, 21, 25, 27, 28 | behaviour covered, 07 §12 |
-| 0x46F429–0x47052D, 0x46FDC2, 0x464EC0 | ~5 KB | main-menu list draws | PARTIAL |
-| 0x45567D–0x455F6B, 0x457E00 | ~3.6 KB | result-viewer states | PARTIAL |
+| 0x46F429–0x47052D, 0x46FDC2, 0x464EC0 | ~5 KB | main-menu list draws | COVERED |
+| 0x45567D–0x455F6B, 0x457E00 | ~3.6 KB | result-viewer states | COVERED |
 | 0x45B760–0x45BF10 | ~1.9 KB | screen-effect type handlers | behaviour covered, 13 §3 |
 | 0x443420, 0x443840, 0x4436A0, 0x442390, 0x442A80, 0x446A37, 0x446D06, 0x446232 | ~4 KB | start-up, window proc, DirectInput init, Supervisor teardown, timer resolution | platform |
 | 0x43F10D–0x43F898 | ~2 KB | text DIB / raster helpers | PARTIAL (10 §6) |

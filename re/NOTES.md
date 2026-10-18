@@ -319,3 +319,24 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   also count [0]/[1+shot]; play time marks. Q10: VRSM 840704 / 0xA26861B9. Q11: bits 15–17 never cleared.
 - WRITTEN: specs/answers_impl14.md; fixed 07 §10.1/§10.3/§10.5, 08 §4.3a, 09 §1.1, 11 §3.4/§4, 13 §2.6, 14 §3,
   15 §2.9/§2.10/§3.4. Symbols +7, redump done. RE-Q14 DONE.
+
+# MOPUP-1 (2026-10-18) — main-menu list draws, result viewer, score.txt
+- ASCII queue (12 §2.9 NEW): state colour/scale/viewport/highlight copied per entry; highlight (0x4D5098) always
+  effective (cfg+0x38 bit 0 forced) → glyph sprite c+0x8A from asciis.png (ascii.anm entry 1), colour forced white;
+  advance 13. Ascii_DrawGaugePercent draws immediately (not queued).
+- Main menu: practice list (0x46F429) + screen 16 table/pies (0x46F5CB) anchored to title01 VM 141 raw pos (label 18
+  → (256,320)); replay list/detail anchored to VMs 78/79/80+k/95+j/97 (12 §2.8). "Rotating card-select gfx"
+  0x46FDC2/0x464EC0 = pie charts (64-vertex XYZRHW fan from 12 o'clock, ratio·2π), 4 pies at (530,420)/(562,438).
+  Screen 17 rows y 94+16j, info VMs text.anm 21..27 at x 64 (lines 5/6 x 96), refresh counter 21 → texts at 11/9/7/5/3.
+  QUIRK: screen-16 VM ED00 keeps centred anchor (code ORs EA5C's flags twice).
+- Result viewer (16 §2.3–2.4): VM 40 = invisible anchor (32,112) for ranking + card list, text only while x<640.
+  Per-state menus table, card list layout (rows y 128+33i, accordion), play-data VMs (x 56, y 64..387).
+  QUIRK VERIFIED at runtime: play-data continue Total shows PLST block 5 [15] (always 0); score.txt uses block 6.
+- End-of-game panel 0x457E00 (16 §2.5 NEW): text at VM 71 + (210,32), lines 22 apart; unused rating computation.
+- Name entry fixes (16 §2.2): only cell 0x5D is a space (0x5C = '^'); confirm/cancel also repeat; grid (160,356),
+  pulse 1.2..2.0 per 64 frames, colours 0xC0C0C0C0 / 0xFFFFFFC0.
+- Replay save UI (16 §2.6 NEW): states 10–14 full inputs/interrupts/draw; QUIRK: state-10 interrupt loop starts at VM 4.
+- score.txt (16 §2.7 NEW): exact line formats; Version 0.01; CRLF; names padded to 48 bytes.
+- Runtime: re/work/runs/mopup1 (gen.py + main.seq; demo rpys copied as th8_01..04 then removed; score.dat restored).
+  Data: specs/data/drawlog/menu_mopup1.{drawlog.xz,input.txt,shots.txt,seq.py,score.dat,score.txt,summary.txt},
+  menu_ref/mopup1_*.png (12). Symbols +21. MOPUP-1 DONE.

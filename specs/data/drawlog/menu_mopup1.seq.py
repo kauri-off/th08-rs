@@ -1,0 +1,13 @@
+seq=[
+ (DOWN,40,None),(Z,90,'sp16'),(DOWN,30,'sp16_row1'),(Z,70,'sp17'),(DOWN,10,'sp17_d_f5'),(0,30,'sp17_d'),(RIGHT,40,'sp17_page'),
+ (X,50,None),(X,70,'top_after_sp'),
+ (DOWN,40,None),(Z,70,None),(Z,70,None),(Z,70,'prac11'),(DOWN,30,'prac11_d'),(X,50,None),(X,50,None),(X,70,'top_after_prac'),
+ (DOWN,40,None),(Z,80,'rep_list'),(DOWN,30,'rep_list_d'),(Z,60,'rep_detail'),(DOWN,30,'rep_detail_d'),(Z,50,'rep_speed'),(DOWN,30,'rep_speed_d'),
+ (X,40,'rep_back2'),(X,60,'rep_back1'),(X,70,'top_after_rep'),
+ (DOWN,40,None),(Z,120,'res_top'),(DKEY,30,'res_dump'),(Z,60,'res_diff'),(Z,40,'res_char'),(Z,60,'res_rank'),(RIGHT,40,'res_rank_r'),
+ (X,40,None),(X,40,None),(X,40,'res_top2'),
+ (DOWN,30,None),(Z,60,'res_cat'),(Z,50,'res_cardchar'),(Z,60,'res_cards'),(RIGHT,8,'res_cards_p2_f3'),(0,42,'res_cards_p2'),(DOWN,8,'res_cards_ch_f3'),(0,42,'res_cards_ch'),
+ (X,50,None),(X,40,None),(X,40,'res_top3'),
+ (DOWN,30,None),(Z,20,'res_play_f15'),(0,60,'res_play'),(Z,40,'res_top4'),
+ (X,40,None),(X,120,'top_end'),
+]

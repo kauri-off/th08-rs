@@ -86,3 +86,14 @@ portraits.
 The demo logs are about 91 MB of xz in total (≈ 57 KB of text per gameplay frame before compression, mostly bullets).
 If that is too much for the repository, keep the first chunk of each demo and regenerate the rest
 (`re/TOOLING_REPORT.md` §6, ~10 min).
+
+## menu_mopup1 (MOPUP-1, list screens)
+
+Start state differs from menu_base: `menu_mopup1.score.dat` (team Reimu & Yukari has records, Spell Practice
+unlocked) and the four attract-demo replays copied to `replay/th8_01.rpy` … `th8_04.rpy`. Same th08.cfg.
+Script `menu_mopup1.seq.py` (presses + shot names, 3-frame presses), input `menu_mopup1.input.txt`, shots
+`menu_mopup1.shots.txt`; draw log of all 2962 presents. Covers: spell practice screens 16/17 (incl. info-panel
+refresh, page change), practice stage select, replay list / detail / speed choice, result viewer top menu,
+D-key dump (`menu_mopup1.score.txt` is the score.txt it wrote), difficulty/character/ranking, card group/
+character/list (page change and character change with the accordion), play data. Twelve screenshots are in
+`menu_ref/mopup1_*.png`.

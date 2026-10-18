@@ -209,7 +209,20 @@ difficulty and shot (empty → stage 1 only; if the 6B bit is set, 4A and 4B are
 entries 0..7 (St1, St2, St3, 4A, 4B, St5, 6A, 6B), skipping unavailable ones. Confirm: difficulty, stage =
 cursor, scene 2. Cancel: back to character select.
 
-### 2.6 Spell practice (screens 16/17) — VERIFIED calls; full screen/selection details in 16 §6 (VERIFIED)
+**Draw** (`MainMenu_PracticeStageDraw` 0x46F429, from the menu draw on screen 11; VERIFIED, ref
+`menu_ref/mopup1_prac11.png`). All text goes through the ASCII string queue (§2.9). Anchor A = **current
+position of VM 141** (raw `pos`, no pos_offset; title01 script 141 is an invisible sprite whose label 18 slides it
+from (640, 320) to (256, 320) over 20 frames, label 6 slides it to (768, 320)), so the table slides in with it.
+- Header `Stage    HI-Score` at (A.x, A.y − 96), colour white, no highlight.
+- Mask m = any-clear mask CLRD[shot].any[cfg difficulty] (same as the logic above): 0 → 1; bit 7 set → |= 0x18.
+- 8 rows r = 0..7 at (A.x, A.y − 80 + 16·r): `"%s %9d0 (%3d)"` with the stage name from table 0x4C8250
+  (`Stage1 `, `Stage2 `, `Stage3 `, `Stage4A`, `Stage4B`, `Stage5 `, `Stage6A`, `Stage6B`, 7 chars), PSCR hiscore
+  (÷10) and PSCR play count for [shot][stage r][difficulty] (15 §2.6).
+- Row colour: cursor row = white **with highlight** (§2.9); other rows 0xFFA0A0A0 if bit r of m is set, else
+  0xFF404040.
+- Steady state: header y 224, rows y 240…352, x 256.
+
+### 2.6 Spell practice (screens 16/17) — VERIFIED calls; full screen/selection details and draw layout in 16 §6 (VERIFIED)
 Screen 16 chooses character and stage (stage 9 used for last words); screen 17 lists the cards of that stage
 from table 0x4C6C40[stage] (spell ids, i16); the chosen id is stored in 0x164D0B8, difficulty derived from the
 id (0x4144D0, Normal for some), stage index derived from the id for last words; then scene 2.
@@ -223,9 +236,73 @@ slow 0), quit. Sound 0x1D on certain changes. Value display = one VM per value, 
 VMs 20–26 lives 0–6 (25/26 hidden below 30/60 plays), 27–28 colour, 29–31 music, 32–35 BGM volume digits
 (sprite base + digit·2), 36–39 SE volume, 40–41 window, 42–43 slow (answers_impl9 §16).
 
-### 2.8 Replay (screen 7) — VERIFIED strings
+### 2.8 Replay (screen 7) — VERIFIED
 Lists `./replay/th8_%.2d.rpy` (No.01…) and `th8_ud????.rpy` ("User …") files; choosing one loads it and sets
-difficulty (+0x6B), shot (+0x6A), spell id (+0x7C), the chosen stage, flags |= replay, scene 2.
+difficulty (+0x6B), shot (+0x6A), spell id (+0x7C), the chosen stage, flags |= replay, scene 2. Logic and
+sub-states: 15 §3.8.
+
+Menu fields: +0xC280 loaded replay (sub-states 2/3), +0xC288 file count, +0xC28C chosen/current list row,
++0xC290 chosen stage row, +0x7870 + 8·i label `No.%.2d` / `User `, +0x7A50 + 0x134·i copy of the first 0x134
+bytes of file i (header: +0x6A shot, +0x6B difficulty, +0x6C date, +0x72 name, +0x7C spell id, +0x7E card name),
++0x70 + 0x200·i path.
+
+Interrupts sent by the screen (title01 VMs 77–110, positions from the anm scripts):
+
+| when | interrupt | effect on the VMs used for text anchors |
+|---|---|---|
+| enter (frame 0) and back to the list | 14 to all | VM 79 → (24, 128); VM 80 + k → (24, 160 + 17k), k = 0..14 |
+| choose a file | 15 to all, then 17 to VM 80 + (row mod 15) | the other rows leave to y −32; the chosen row VM moves to (24, 160); VM 78 → (24, 192); VM 95 + j → (24, 256 + 17j) |
+| stage chosen → speed | 19 to all, 17 to the row VM, then 21 to VMs 108/109/110 and 20 to VM 108 + cursor | 108/109/110 = speed plates (replay00.png sprites 111/112/113) at (384, 256/304/352); 20 = selected (moves to −4,−4, alpha → 255 over 10 frames), 21 = not selected (alpha → 96). In spell replays VM 110's alpha byte is set to 0 (hidden) |
+| leave | 16 to all | |
+
+Sub-state 3 cursor: `Menu_CursorUpDown(3)`, or 2 for spell replays; on every change the 21/20 interrupts above
+are resent.
+
+**Draw** (`MainMenu_ReplayDraw` 0x46EF8D, ref `menu_ref/mopup1_rep_list.png`, `…_rep_detail.png`,
+`…_rep_speed.png`). Every string uses the ASCII queue (§2.9); "at VM k" = VM k's current raw pos.
+1. Header `No.   Name       Date  Player   Rank` at VM 79.
+2. Page = rows ⌊cur/15⌋·15 … +14 (cur = +0xC28C), only rows < count. Row j of the page at VM 80 + j:
+   `"%s %8s  %6s %7s  %8s"` = label, name, date, character (0x4C86C0: `Rm & Yk`, `Ms & Al`, `Sk & Rr`,
+   `Ym & Yy`, `Reimu  `, `Yukari `, `Marisa `, `Alice  `, `Sakuya `, `Remilia`, `Youmu  `, `Yuyuko `),
+   difficulty (0x4C86F0: `Easy    `, `Normal  `, `Hard    `, `Lunatic `, `Extra   `). Spell replays
+   (id ≥ 0): `"%s %8s  %6s %7s  Spell No.%3d"` with id + 1. Current row white **with highlight**, others
+   0xFF808080 without.
+3. Only in sub-states 2 and 3 (a replay is loaded):
+   - `"       %2.3f%%"` (slowdown %, header +0x118 f32) at VM 78, white. The label 処理落ち率 is part of VM 78's sprite.
+   - `Stage    LastScore` at VM 95.
+   - Normal replays: 9 rows s = 0..8 at VM 96 + s: `"%s %9d0"` (stage name table 0x4C8250, 9 entries, last
+     `StageEX`; score = stage record +0 ÷10, the score at the end of that stage, 15 §3.4) if the stage record exists,
+     else `"%s ----------"`. Sub-state 2: chosen stage row white with highlight, others 0xFF808080. Sub-state 3:
+     no highlight, chosen 0x60FFFFFF, others 0x60808080.
+   - Spell replays: `"No.%.3d %9d0"` (id + 1, header +0xB0) at VM 97, colour/highlight as left over from the
+     list (white, no highlight). Then scratch VM menu+0xE7B8 drawn at VM 97's pos + (0, 16): it holds the card
+     name (header +0x7E) rendered at selection time with `Text_RenderToVm` (white, outline 0, font 15) into
+     `resulttext.anm` sprite 11 (512×17 strip at y 162), anchor top-left, colour white.
+4. At the end the queue colour is reset to white and highlight off.
+
+### 2.9 ASCII string queue (`Ascii_Printf` 0x402A30 / `Ascii_QueueString` 0x402920, drawn by `Ascii_DrawStrings` 0x402B20) — VERIFIED
+
+Menu lists, the result screens and the HUD print text through the ASCII manager (0x4CCE20). A call formats the
+string (`vsprintf`, ≤ 512 bytes) and appends an entry to a per-frame queue (max 256 entries of 0x60 bytes,
+excess ignored): text (≤ 64 bytes copied), position (x, y, z), and a **copy of the current state**:
+
+| state field | global | default | meaning |
+|---|---|---|---|
+| +0x8268 | 0x4D5088 | 0xFFFFFFFF | colour (ARGB). Set by the callers directly or with `Ascii_SetColor` 0x4398E8 |
+| +0x826C / +0x8270 | 0x4D508C / 0x4D5090 | 1.0 / 1.0 | glyph scale x / y (`Ascii_SetScale` 0x42F2F0) |
+| +0x8274 | 0x4D5094 | 0 | 1 = clip to the playfield viewport while drawing |
+| +0x8278 | 0x4D5098 | 0 | **highlight**: stored only when cfg+0x38 bit 0 or bit 8 is set. Bit 0 is always forced to 1 (15 §1.1), so in practice it always takes effect |
+| +0x8280 | | 13 | advance per glyph in px (×scale x) |
+
+Drawing (`Ascii_DrawStrings`, ASCII draw pass, after everything drawn by the menu/result object): one VM is
+reused, anchor top-left. Pen = entry position. '\n' → y += 16·scale y, x = start; ' ' → x += advance; any other
+byte c:
+- normal: sprite `ascii.anm` index c − 1 (entry 0, `ascii.png`), colour = entry colour;
+- highlight: sprite c + 0x8A (entry 1, `asciis.png`, index c − 22 inside that entry: a different, blue-white
+  glyph set), colour forced to 0xFFFFFFFF (the entry colour is ignored);
+- `Draw2DSnap`, x += advance.
+Glyphs are 16×16 cells drawn 13 px apart (scaled). Scale applies to both the quad and the advance.
+`Ascii_DrawGaugePercent` (§5.9) is **not** queued: it draws immediately in the caller's draw pass.
 
 ## 3. Pause menu (ASCII manager, `PauseMenu_Update` 0x4037B0, runs while paused) — VERIFIED
 

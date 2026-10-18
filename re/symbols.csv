@@ -693,3 +693,24 @@ addr,kind,name,signature,confidence,note
 0x0043be09,func,Plst_Inc,,VERIFIED,++ if < 999999
 0x00443730,func,Supervisor_ComputeExeSum,,VERIFIED,exe size/sum -> 0x17CEAB0/0x17CEAAC (VRSM)
 0x0043c5e1,func,GameMgr_Ctor,,VERIFIED,zero + demo index 3
+0x0046f429,func,MainMenu_PracticeStageDraw,,VERIFIED,screen 11 PSCR list anchored to VM 141
+0x0046f5cb,func,MainMenu_SpellPracticeCharDraw,,VERIFIED,screen 16 stats table + 4 pies
+0x0046fdc2,func,Menu_DrawPie,ECX=centre xyz; EDX=colour; args ratio; 2R,VERIFIED,64-vertex fan from 12 o clock
+0x00464ec0,func,AnmManager_DrawFan,vm; verts; n,VERIFIED,XYZRHW|DIFFUSE trianglefan untextured
+0x0046ffc0,func,MainMenu_SpellPracticeCardDraw,,VERIFIED,screen 17 rows + info VMs
+0x0046d763,func,Fmt_FullwidthDigits,ECX=n EDX=digits,VERIFIED,static buffer 0x18BDDC8
+0x004398e8,func,Ascii_SetColor,,VERIFIED,+0x8268
+0x0042f2f0,func,Ascii_SetScale,sx; sy,VERIFIED,+0x826C/+0x8270
+0x00407180,func,Ascii_SetAdvance,,VERIFIED,+0x8280 (13)
+0x0045567d,func,Result_CharSelect,,VERIFIED,state 4
+0x00455925,func,Result_Ranking,,VERIFIED,state 5
+0x00455a33,func,Result_CardGroup,,VERIFIED,state 6
+0x00455cb0,func,Result_CardChar,,VERIFIED,state 7
+0x00455f6b,func,Result_CardList,,VERIFIED,state 8
+0x00457e00,func,Result_DrawEndPanel,,VERIFIED,states 0xF/0x10 stats text at VM 71
+0x0045a0f4,func,Result_CursorUpDown,EDX=count,VERIFIED,+0x1C
+0x0045a1f3,func,Result_CursorUpDown2,EDX=count,VERIFIED,+0x30
+0x0045a2f2,func,Result_CursorLeftRight,EDX=count,VERIFIED,+0x1C
+0x00454269,func,Str_AppendF,,VERIFIED,vsprintf at end, returns end ptr
+0x0045a4a0,func,Catk_IsAttempted,rec; shot,VERIFIED,story or practice attempts[shot]
+0x004d5098,global,g_AsciiHighlight,,VERIFIED,ASCII queue highlight flag (asciis glyphs)
