@@ -64,6 +64,19 @@ const CHAR_VMS: [[i32; 4]; 12] = [
     [130, 117, -1, 118],
 ];
 
+// Final-route notice sprite for the cursor team (MainMenu_CharacterDraw, 12 §2.4).
+fn final_notice(g: &gamemgr::Game, c: usize, d: usize) -> Option<i32> {
+    let (nc, any) = (&g.clear_nc[c % 12], &g.clear_any[c % 12]);
+    let d = d.min(4);
+    if nc[d] & 0x80 != 0 {
+        return Some(if any[d] & 0x40 != 0 { 146 } else { 148 });
+    }
+    if c < 4 && !nc[..4].iter().any(|m| m & 0x80 != 0) {
+        return any[..4].iter().any(|m| m & 0x40 != 0).then_some(145);
+    }
+    Some(147)
+}
+
 const STAGE_NAMES: [&str; 8] = [
     "Stage 1", "Stage 2", "Stage 3", "Stage 4A", "Stage 4B", "Stage 5", "Stage 6A", "Stage 6B",
 ];
@@ -125,6 +138,7 @@ pub struct MainMenu {
     raster: crate::text::Raster,
     desc: Vec<TextureId>,
     desc_vm: AnmVm,
+    notice: AnmVm,
     screen: i32,
     prev_screen: i32,
     frames: u32,
@@ -146,6 +160,7 @@ impl MainMenu {
             raster: Default::default(),
             desc: Vec::new(),
             desc_vm: AnmVm::default(),
+            notice: AnmVm::default(),
             screen: TOP,
             prev_screen: TOP,
             frames: 0,
@@ -419,6 +434,8 @@ impl MainMenu {
         let n = if extra_all(&ctx.game) { 12 } else { 4 };
         if self.frames == 0 {
             self.interrupt_all(8);
+            // Difficulty plate slides to (16, 384) (12 §2.4).
+            self.vms[VM_DIFF + (ctx.game.cfg.difficulty as usize).min(4)].pending_interrupt = 9;
             self.cursor = (ctx.game.shot as i32).min(n - 1);
             if !self.char_allowed(ctx, self.cursor) {
                 self.cursor = (0..n).find(|&c| self.char_allowed(ctx, c)).unwrap_or(0);
@@ -689,6 +706,8 @@ impl Task<Ctx> for MainMenu {
         }
         ctx.anm
             .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "title01.anm")?;
+        let l = crate::player::GaugeLimits::default();
+        crate::ascii::gauge_setup(&mut ctx.anm, l.min, l.max);
         for i in 0..VM_COUNT {
             let mut vm = AnmVm::default();
             ctx.anm.set_script(&mut vm, ANM_SLOT, i);
@@ -793,6 +812,43 @@ impl Task<Ctx> for MainMenu {
                 );
             }
         }
+        if self.screen == CHAR
+            && self.frames > 8
+            && let Some(spr) = final_notice(
+                &ctx.game,
+                self.cursor as usize,
+                ctx.game.cfg.difficulty as usize,
+            )
+        {
+            let vm = &mut self.notice;
+            vm.init();
+            vm.anm_slot = ANM_SLOT as _;
+            vm.set_sprite(&ctx.anm, spr);
+            vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
+            vm.pos = [400.0, 170.0, 0.0];
+            ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
+        }
         Ret::Next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::final_notice;
+    use crate::gamemgr::Game;
+
+    #[test]
+    fn notice_table() {
+        let mut g = Game::default();
+        assert_eq!(final_notice(&g, 0, 1), None);
+        g.clear_any[0][2] = 0x41;
+        assert_eq!(final_notice(&g, 0, 1), Some(145));
+        g.clear_nc[0][3] = 0x80;
+        assert_eq!(final_notice(&g, 0, 1), Some(147));
+        g.clear_nc[0][1] = 0x80;
+        assert_eq!(final_notice(&g, 0, 1), Some(148));
+        g.clear_any[0][1] = 0x40;
+        assert_eq!(final_notice(&g, 0, 1), Some(146));
+        assert_eq!(final_notice(&g, 5, 1), Some(147));
     }
 }

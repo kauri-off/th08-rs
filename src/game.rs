@@ -43,6 +43,7 @@ impl Ctx {
             se_log: crate::env::var("TH08_SE_LOG").is_some(),
         };
         ctx.anm.rng = crate::rng::Rng::boot();
+        ctx.game.debug_clear_masks();
         crate::supervisor::register(&mut ctx)?;
         Ok(ctx)
     }

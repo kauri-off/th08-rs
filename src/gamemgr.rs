@@ -161,6 +161,22 @@ impl Game {
         self.difficulty.clamp(0, 4) as usize
     }
 
+    // Debug `TH08_CLRD=<shot>,<any>[,<nc>]`: sets that shot's clear masks on every difficulty.
+    pub fn debug_clear_masks(&mut self) {
+        let Some(v) = crate::env::var("TH08_CLRD") else {
+            return;
+        };
+        let num = |t: &str| {
+            t.strip_prefix("0x")
+                .map_or_else(|| t.parse().ok(), |h| u16::from_str_radix(h, 16).ok())
+        };
+        let p: Vec<u16> = v.split(',').filter_map(num).collect();
+        if let [shot, any, ref rest @ ..] = p[..] {
+            self.clear_any[shot as usize % 12] = [any; 5];
+            self.clear_nc[shot as usize % 12] = [rest.first().copied().unwrap_or(0); 5];
+        }
+    }
+
     pub fn cleared(&self, any: bool, bit: usize) -> bool {
         let m = if any { &self.clear_any } else { &self.clear_nc };
         m[self.shot as usize % 12]
@@ -320,6 +336,14 @@ impl GameManager {
         g.fresh_start = false;
         let (stage, shot, d) = (g.stage, g.shot, g.diff());
         Player::register(ctx, self.player.clone(), shot)?;
+        // Player_Load shows the gauge readout on a fresh start; StageStart re-runs its setup (12 §5.9).
+        // SPEC-GAP: setup order vs Player_Load inside StageStart is unspecified; run after it so the limits are current.
+        if fresh {
+            crate::ascii::gauge_interrupt(1);
+        }
+        let l = self.player.borrow().stats.limits;
+        crate::ascii::gauge_player(&self.player);
+        crate::ascii::gauge_setup(&mut ctx.anm, l.min, l.max);
         {
             let mut p = self.player.borrow_mut();
             let limits = p.stats.limits;

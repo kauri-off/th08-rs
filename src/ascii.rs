@@ -324,6 +324,183 @@ fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
     });
 }
 
+// Human/youkai gauge readout VMs (12 §5.9): bar, 人, 妖, marker, glyph stamp.
+#[derive(Default)]
+struct Gauge {
+    vms: Vec<AnmVm>,
+    id: i32,
+    player: std::rc::Weak<std::cell::RefCell<crate::player::Player>>,
+}
+
+thread_local! {
+    static GAUGE: std::cell::RefCell<Gauge> = std::cell::RefCell::new(Gauge::default());
+}
+
+const G_BAR: usize = 0;
+const G_HUMAN: usize = 1;
+const G_YOUKAI: usize = 2;
+const G_MARKER: usize = 3;
+const G_GLYPH: usize = 4;
+
+// Ascii_SetupGaugeVms 0x402600: restarts the scripts (keeping pos), places 人/妖 from the gauge limits, re-sends the stored interrupt.
+pub fn gauge_setup(anm: &mut crate::anmmgr::AnmManager, min: i32, max: i32) {
+    GAUGE.with_borrow_mut(|g| {
+        if g.vms.is_empty() {
+            g.vms = vec![AnmVm::default(); 5];
+        }
+        for (k, script) in [
+            (G_BAR, 5),
+            (G_YOUKAI, 7),
+            (G_HUMAN, 6),
+            (G_MARKER, 8),
+            (G_GLYPH, 4),
+        ] {
+            anm.start_script(&mut g.vms[k], ANM_SLOT, script);
+        }
+        g.vms[G_HUMAN].pos[0] -= 56.0 * min as f32 / -10000.0;
+        g.vms[G_YOUKAI].pos[0] += 56.0 * max as f32 / 10000.0;
+        let id = g.id;
+        g.vms[..4]
+            .iter_mut()
+            .for_each(|v| v.pending_interrupt = id as _);
+    });
+}
+
+pub fn gauge_player(p: &std::rc::Rc<std::cell::RefCell<crate::player::Player>>) {
+    GAUGE.with_borrow_mut(|g| g.player = std::rc::Rc::downgrade(p));
+}
+
+// Ascii_GaugeInterrupt 0x4070B0: 1 show, 2/3 fade out/in, 99 hide.
+pub fn gauge_interrupt(id: i32) {
+    GAUGE.with_borrow_mut(|g| {
+        g.id = id;
+        g.vms
+            .iter_mut()
+            .take(4)
+            .for_each(|v| v.pending_interrupt = id as _);
+    });
+}
+
+// Player_UpdateGaugeFade 0x44D420 (playfield coordinates).
+pub fn gauge_fade(pos: [f32; 3]) {
+    let cur = GAUGE.with_borrow(|g| g.id);
+    if pos[1] < 400.0 {
+        if cur == 2 {
+            gauge_interrupt(3);
+        }
+    } else if cur != 2 && pos[0] < 160.0 {
+        gauge_interrupt(2);
+    } else if cur == 2 && pos[0] > 160.0 {
+        gauge_interrupt(3);
+    }
+}
+
+fn gauge_calc(anm: &mut crate::anmmgr::AnmManager) {
+    GAUGE.with_borrow_mut(|g| {
+        g.vms
+            .iter_mut()
+            .filter(|v| v.script.is_some())
+            .for_each(|v| {
+                v.run(anm);
+            })
+    });
+}
+
+// End of Ascii_DrawPopups: bar, ends, marker, percent text and max point value.
+fn gauge_draw(
+    anm: &mut crate::anmmgr::AnmManager,
+    gfx: &mut crate::gfx::Gfx,
+    fallback: &crate::player::Stats,
+) {
+    GAUGE.with_borrow_mut(|g| {
+        if g.vms.len() < 5 || !g.vms[G_BAR].visible() {
+            return;
+        }
+        let player = g.player.upgrade();
+        let borrowed = player.as_ref().and_then(|p| p.try_borrow().ok());
+        let st = borrowed.as_ref().map_or(fallback, |p| &p.stats);
+        let gv = st.gauge as i32;
+        let (bx, by) = (g.vms[G_BAR].pos[0], g.vms[G_BAR].pos[1]);
+        let m = &mut g.vms[G_MARKER];
+        m.pos[0] = bx + 64.0 + gv as f32 * 56.0 / 10000.0;
+        anm.draw_mode(gfx, m, 3);
+        let rgb: u32 = if st.human_max() {
+            0x7070FF
+        } else if st.human() {
+            0xB0B0FF
+        } else if st.youkai_max() {
+            0xFF7070
+        } else if st.youkai() {
+            0xFFB0B0
+        } else {
+            0xFFFFFF
+        };
+        set_rgb(&mut g.vms[G_BAR], rgb);
+        let colour = g.vms[G_BAR].color;
+        for k in [G_BAR, G_HUMAN, G_YOUKAI] {
+            anm.draw_mode(gfx, &mut g.vms[k], 0);
+        }
+        let my = g.vms[G_MARKER].pos[1];
+        let vm = &mut g.vms[G_GLYPH];
+        vm.color = colour;
+        let mut stamp =
+            |anm: &mut crate::anmmgr::AnmManager, glyph: i32, x: f32, y: f32, scale: f32| {
+                vm.set_sprite(anm, 136 + glyph);
+                vm.pos = [x, y, 0.0];
+                vm.scale = [scale, scale];
+                anm.draw_mode(gfx, vm, 0);
+            };
+        // Ascii_DrawGaugePercent 0x405E10: glyphs 0–9, 10 '%', 11 '.', 12 '-'.
+        let a = gv.abs();
+        let n = 4
+            + (gv < 0) as i32
+            + if a < 1000 {
+                1
+            } else if a < 10000 {
+                2
+            } else {
+                3
+            };
+        let (mut x, y) = (
+            bx + 64.0 + gv as f32 * 40.0 / 10000.0 - (3.5 * n as f32 - 3.5 - 4.0),
+            my - 7.0,
+        );
+        let mut seq: Vec<(i32, f32, bool)> = Vec::new();
+        if gv < 0 {
+            seq.push((12, 7.0, false));
+        }
+        let (int, frac): (Vec<i32>, [i32; 2]) = if a < 1000 {
+            (vec![a / 100], [a % 100 / 10, a % 10])
+        } else if a < 10000 {
+            (vec![a / 1000, a % 1000 / 100], [a % 100 / 10, a % 10])
+        } else {
+            (vec![1, 0, 0], [0, 0])
+        };
+        seq.extend(int.into_iter().map(|d| (d, 7.0, false)));
+        seq.push((11, 5.0, false));
+        seq.push((frac[0], 5.0, true));
+        seq.push((frac[1], 7.0, true));
+        for (glyph, adv, small) in seq {
+            let (yy, sc) = if small { (y + 2.0, 0.8) } else { (y, 1.0) };
+            stamp(anm, glyph, x, yy, sc);
+            x += adv;
+        }
+        stamp(anm, 10, x, y, 1.0);
+        let (mut x, y) = (bx + 62.0 - 14.0, by + 3.0 + 8.0);
+        let (mut div, mut sum) = (10_000_000, 0);
+        while div > 0 {
+            let d = st.max_point / div % 10;
+            sum += d;
+            if sum != 0 {
+                stamp(anm, d, x, y, 1.0);
+                x += 7.0;
+            }
+            div /= 10;
+        }
+        vm.scale = [1.0, 1.0];
+    });
+}
+
 pub fn text_width(s: &str, advance: f32, scale: f32) -> f32 {
     s.len() as f32 * advance * scale
 }
@@ -677,12 +854,15 @@ impl Task<Ctx> for AsciiManager {
                 .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "ascii.anm")?;
             ctx.anm
                 .load(&mut ctx.gfx, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
+            let l = crate::player::GaugeLimits::default();
+            gauge_setup(&mut ctx.anm, l.min, l.max);
         }
         Ok(())
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let inp = ctx.input;
+        gauge_calc(&mut ctx.anm);
         if ctx.game.paused != 0 {
             self.pause
                 .update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
@@ -728,6 +908,7 @@ impl Task<Ctx> for AsciiManager {
         if !high {
             popups_draw(&ctx.anm, &mut ctx.gfx);
             ctx.anm.screen_offset = [0.0; 2];
+            gauge_draw(&mut ctx.anm, &mut ctx.gfx, &ctx.game.stats);
         }
         let mut q = std::mem::take(&mut ctx.ascii);
         q.draw(&ctx.anm, &mut ctx.gfx, high);

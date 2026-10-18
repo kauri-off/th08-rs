@@ -29,6 +29,8 @@ struct App {
     run: Option<Box<Running>>,
     started: bool,
     shot: Option<u64>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    shot_size: Option<(u32, u32)>,
     turbo: u32,
 }
 
@@ -140,7 +142,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if self.shot.is_some_and(|f| r.ctx.frame >= f) {
                     r.ctx
                         .gfx
-                        .capture()
+                        .capture(self.shot_size)
                         .save("/tmp/th08_shot.png")
                         .expect("save shot");
                     el.exit();
@@ -162,12 +164,18 @@ pub fn run(source: Source) {
     let turbo = crate::env::var("TH08_TURBO")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
+    // Debug `TH08_SHOT_SIZE=WxH`: the shot goes through the window's scaling blit.
+    let shot_size = crate::env::var("TH08_SHOT_SIZE").and_then(|v| {
+        let (w, h) = v.split_once('x')?;
+        Some((w.parse().ok()?, h.parse().ok()?))
+    });
     let app = App {
         source,
         proxy: el.create_proxy(),
         run: None,
         started: false,
         shot,
+        shot_size,
         turbo,
     };
     #[cfg(not(target_arch = "wasm32"))]

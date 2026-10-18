@@ -122,6 +122,9 @@ pub struct Gfx {
     indices: Vec<u32>,
     batches: Vec<Batch>,
     white: TextureId,
+    frame: wgpu::Texture,
+    frame_bind: wgpu::BindGroup,
+    blit: wgpu::RenderPipeline,
 }
 
 const SHADER: &str = r#"
@@ -143,6 +146,20 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(
     return vec4f(mix(i.fogc.rgb, c.rgb, clamp(i.fog, 0.0, 1.0)), c.a);
 }
 @fragment fn fs_clear(i: VsOut) -> @location(0) vec4f { return i.color; }
+"#;
+
+const BLIT: &str = r#"
+struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> VsOut {
+    let uv = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+    var o: VsOut;
+    o.pos = vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    o.uv = uv;
+    return o;
+}
+@group(0) @binding(0) var t: texture_2d<f32>;
+@group(0) @binding(1) var s: sampler;
+@fragment fn fs(i: VsOut) -> @location(0) vec4f { return textureSample(t, s, i.uv); }
 "#;
 
 impl Gfx {
@@ -293,6 +310,73 @@ impl Gfx {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(BLIT.into()),
+        });
+        let blit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        // The original renders at 640x480; the window shows that image scaled (05 §12.4).
+        let frame = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: SCREEN_W as u32,
+                height: SCREEN_H as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let frame_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &tex_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        &frame.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&blit_sampler),
+                },
+            ],
+        });
         let mut g = Self {
             surface,
             device,
@@ -310,6 +394,9 @@ impl Gfx {
             indices: Vec::new(),
             batches: Vec::new(),
             white: 0,
+            frame,
+            frame_bind,
+            blit,
         };
         g.white = g.create_texture(1, 1, &[255; 4]);
         Ok(g)
@@ -663,8 +750,6 @@ impl Gfx {
         enc: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         depth: &wgpu::TextureView,
-        w: f32,
-        h: f32,
     ) {
         let buffers = (!self.verts.is_empty()).then(|| {
             let vb = self
@@ -704,18 +789,14 @@ impl Gfx {
             }),
             ..Default::default()
         });
-        let scale = (w / SCREEN_W).min(h / SCREEN_H);
-        let (vw, vh) = (SCREEN_W * scale, SCREEN_H * scale);
-        let (ox, oy) = ((w - vw) / 2.0, (h - vh) / 2.0);
-        pass.set_viewport(ox, oy, vw, vh, 0.0, 1.0);
         if let Some((vb, ib)) = &buffers {
             pass.set_vertex_buffer(0, vb.slice(..));
             pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
             for b in &self.batches {
-                let x0 = (ox + b.clip.x * scale).round().clamp(0.0, w) as u32;
-                let y0 = (oy + b.clip.y * scale).round().clamp(0.0, h) as u32;
-                let x1 = (ox + (b.clip.x + b.clip.w) * scale).round().clamp(0.0, w) as u32;
-                let y1 = (oy + (b.clip.y + b.clip.h) * scale).round().clamp(0.0, h) as u32;
+                let x0 = b.clip.x.round().clamp(0.0, SCREEN_W) as u32;
+                let y0 = b.clip.y.round().clamp(0.0, SCREEN_H) as u32;
+                let x1 = (b.clip.x + b.clip.w).round().clamp(0.0, SCREEN_W) as u32;
+                let y1 = (b.clip.y + b.clip.h).round().clamp(0.0, SCREEN_H) as u32;
                 if x1 <= x0 || y1 <= y0 {
                     continue;
                 }
@@ -738,55 +819,91 @@ impl Gfx {
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        let (w, h) = (self.config.width, self.config.height);
-        let depth = self.depth_view(w, h);
         let mut enc = self.device.create_command_encoder(&Default::default());
-        self.encode(&mut enc, &view, &depth, w as f32, h as f32);
+        self.render_frame(&mut enc);
+        self.blit(&mut enc, &view, self.config.width, self.config.height);
         self.queue.submit([enc.finish()]);
         self.queue.present(frame);
         self.clear_batches();
     }
 
-    // Renders the pending batches at 640x480 into memory (BGRA/RGBA per surface format → RGBA).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn capture(&mut self) -> image::RgbaImage {
-        let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
-        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+    // Letterboxed, linearly scaled copy of the 640x480 frame into a w×h target.
+    fn blit(&self, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, w: u32, h: u32) {
+        let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
         });
+        let (w, h) = (w as f32, h as f32);
+        let scale = (w / SCREEN_W).min(h / SCREEN_H);
+        let (vw, vh) = ((SCREEN_W * scale).round(), (SCREEN_H * scale).round());
+        pass.set_viewport(
+            ((w - vw) / 2.0).floor(),
+            ((h - vh) / 2.0).floor(),
+            vw,
+            vh,
+            0.0,
+            1.0,
+        );
+        pass.set_pipeline(&self.blit);
+        pass.set_bind_group(0, &self.frame_bind, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    fn render_frame(&mut self, enc: &mut wgpu::CommandEncoder) {
+        let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
+        let depth = self.depth_view(w, h);
+        let view = self.frame.create_view(&Default::default());
+        self.encode(enc, &view, &depth);
+    }
+
+    // Renders the pending batches at 640x480 into memory, optionally scaled to `size` like the window (RGBA).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn capture(&mut self, size: Option<(u32, u32)>) -> image::RgbaImage {
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        self.render_frame(&mut enc);
+        let scaled = size.map(|(w, h)| {
+            let t = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            self.blit(&mut enc, &t.create_view(&Default::default()), w, h);
+            t
+        });
+        let src = scaled.as_ref().unwrap_or(&self.frame);
+        let (w, h) = (src.width(), src.height());
+        let row = (w * 4).div_ceil(256) * 256;
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: (w * h * 4) as u64,
+            size: (row * h) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let depth = self.depth_view(w, h);
-        let mut enc = self.device.create_command_encoder(&Default::default());
-        self.encode(
-            &mut enc,
-            &tex.create_view(&Default::default()),
-            &depth,
-            w as f32,
-            h as f32,
-        );
         enc.copy_texture_to_buffer(
-            tex.as_image_copy(),
+            src.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &buf,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(w * 4),
+                    bytes_per_row: Some(row),
                     rows_per_image: Some(h),
                 },
             },
@@ -799,7 +916,12 @@ impl Gfx {
         self.queue.submit([enc.finish()]);
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        let mut px = buf.slice(..).get_mapped_range().unwrap().to_vec();
+        let data = buf.slice(..).get_mapped_range().unwrap().to_vec();
+        let mut px: Vec<u8> = data
+            .chunks_exact(row as usize)
+            .flat_map(|r| &r[..(w * 4) as usize])
+            .copied()
+            .collect();
         if matches!(
             self.config.format,
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb

@@ -1045,6 +1045,7 @@ impl Player {
             self.update_bullets(anm);
         }
         self.update_shot_timer(anm, inp);
+        crate::ascii::gauge_fade(self.pos);
         self.targets = [[-999.0, -999.0, 0.0]; 2];
         self.boss_target = false;
         if self.bomb_cooldown > 0 {
@@ -1099,6 +1100,9 @@ impl Player {
 impl Task<Ctx> for Player {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
+            if !matches!(ctx.game.requested, 3 | 11 | 12) {
+                crate::ascii::gauge_interrupt(99);
+            }
             ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
         }
     }
