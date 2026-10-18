@@ -1,0 +1,22 @@
+name: golden
+recorded: 2026-10-18T19:13:17+03:00
+wine: /home/anon/PortProton/data/dist/WINE_LG_11-1/bin/wine
+prefix: /home/anon/PortProton/data/prefixes/DEFAULT
+display: :0
+renderer: wined3d (wine builtin d3d8 behind the probe)
+drawlog: 1
+sound: on
+score_source: re/work/game/score.dat
+cfg_patch: +0x22 windowed=1, +0x1F music=1 (WAV), +0x20 SE=1
+elapsed_seconds: 432
+replays_saved: 
+menu_base_present: 14
+boot_presents: 13
+boot_polls: 0
+first_menu_poll: 0
+polls: 25634
+last_present: 25647
+frames_without_poll: 0
+presents_with_multiple_polls: 0
+boot_seed: 001afaed
+rng_state_after_seed: faed

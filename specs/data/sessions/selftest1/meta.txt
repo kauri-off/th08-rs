@@ -1,0 +1,22 @@
+name: selftest1
+recorded: 2026-10-18T17:50:06+03:00
+wine: /home/anon/PortProton/data/dist/WINE_LG_11-1/bin/wine
+prefix: /home/anon/PortProton/data/prefixes/DEFAULT
+display: :77
+renderer: wined3d (wine builtin d3d8 behind the probe)
+drawlog: 1
+sound: on
+score_source: re/work/game/score.dat
+cfg_patch: +0x22 windowed=1, +0x1F music=1 (WAV), +0x20 SE=1
+elapsed_seconds: 36
+replays_saved: 
+menu_base_present: 15
+boot_presents: 14
+boot_polls: 0
+first_menu_poll: 0
+polls: 1922
+last_present: 1936
+frames_without_poll: 0
+presents_with_multiple_polls: 0
+boot_seed: 01564037
+rng_state_after_seed: 4037

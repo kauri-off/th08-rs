@@ -1,0 +1,11 @@
+seed 01564037 present 3 poll 0
+loader boot poll 0 present 15
+release boot calc 13 present 15
+loader menu poll 32 present 47
+release menu poll 32 present 47
+loader gauge poll 614 present 629
+loader lwait poll 614 present 629
+loader stage poll 614 present 629
+release stage poll 614 present 629
+loader menu poll 1571 present 1586
+release menu poll 1571 present 1586
