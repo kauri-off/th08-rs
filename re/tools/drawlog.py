@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Draw-log tool (format: specs/data/drawlog/FORMAT.md).
   drawlog.py summary <log[.xz]>                         (label, uv rect) -> first frame, count
-  drawlog.py render  <log[.xz]> <present> <out.png> [--from PRESENT] [--fog] [--tex DIR] [--img DIR]
-      (approximate: no clipping of geometry behind the camera; --fog = experimental vertex fog from 1/rhw)
+  drawlog.py render  <log[.xz]> <present> <out.png> [--from PRESENT] [--fog] [--noclip] [--tex DIR] [--img DIR]
+      (3D quads are clipped to 0 <= z <= 1 in homogeneous space; --fog = stage fog as FORMAT.md §2:
+       eye depth interpolated perspective-correctly, factor clamped per pixel)
       (--from: draw all frames from PRESENT on into the same buffer; the original never clears outside
        the playfield, see FORMAT.md "persistence")
   drawlog.py diff    <orig[.xz]> <port[.xz]> [--key present|scene|demo] [--tol 0.6] [--max 20] [--playfield]
@@ -113,6 +114,14 @@ def cmd_summary(path):
 
 # ---------------------------------------------------------------- render
 FOG = False
+CLIP = True
+
+
+def stage_depth(z):
+    """eye-space depth from the projected z of the stage projection (near 30, far 1800; 06 §10.1).
+    More precise than 1/rhw, which the log rounds to 4 decimals."""
+    den = 1800 - 1770 * z
+    return 54000 / den if den != 0 else 1e9
 
 
 def cmd_render(path, present, out, texdir, imgdir, start=None):
@@ -156,7 +165,50 @@ def cmd_render(path, present, out, texdir, imgdir, start=None):
     def col4(c):
         return np.array([(c >> 16) & 255, (c >> 8) & 255, c & 255, c >> 24], np.float32) / 255
 
+    def fogf(st, v):
+        fc, fs, fe = st['S']['fog'].split(',')
+        fs, fe = float(fs), float(fe)
+        return (fe - stage_depth(v[2])) / (fe - fs)
+
+    def lerpv(p, q, t):
+        w0, w1 = 1 / p[3], 1 / q[3]
+        X = [(1 - t) * p[i] * w0 + t * q[i] * w1 for i in range(3)]
+        w = (1 - t) * w0 + t * w1
+        out = [X[0] / w, X[1] / w, X[2] / w, 1 / w]
+        for i in (4, 5):
+            out.append(None if p[i] is None else (1 - t) * p[i] + t * q[i])
+        c = 0
+        for sh in (24, 16, 8, 0):
+            c |= int(round((1 - t) * ((p[6] >> sh) & 255) + t * ((q[6] >> sh) & 255))) << sh
+        out.append(c)
+        out.append((1 - t) * p[7] + t * q[7])
+        return out
+
     def tri(st, a, b, c):
+        fog = 'fog' in st['S'] and FOG
+        vs = [list(v[:7]) + [fogf(st, v) if fog else 1.0] for v in (a, b, c)]
+        if CLIP and any(v[3] != 1 and v[3] != 0 for v in vs):
+            # clip 0 <= z <= w in homogeneous space; fogged quads are stage quads: w from z
+            if fog:
+                for v in vs:
+                    v[3] = 1 / stage_depth(v[2])
+            for side in (0, 1):
+                out = []
+                for i in range(len(vs)):
+                    p, q = vs[i], vs[(i + 1) % len(vs)]
+                    dp = (p[2] if side == 0 else 1 - p[2]) / p[3]
+                    dq = (q[2] if side == 0 else 1 - q[2]) / q[3]
+                    if dp >= 0:
+                        out.append(p)
+                    if (dp >= 0) != (dq >= 0):
+                        out.append(lerpv(p, q, dp / (dp - dq)))
+                vs = out
+                if len(vs) < 3:
+                    return
+        for i in range(1, len(vs) - 1):
+            raster(st, vs[0], vs[i], vs[i + 1], fog)
+
+    def raster(st, a, b, c, fog):
         vx0, vy0, vw, vh = st['V'][:4]
         xs = [a[0], b[0], c[0]]
         ys = [a[1], b[1], c[1]]
@@ -210,14 +262,12 @@ def cmd_render(path, present, out, texdir, imgdir, start=None):
         if at.startswith('ge'):
             ok = al * 255 >= int(at[2:]) - 0.5
             rgb, al, px, py, z = rgb[ok], al[ok], px[ok], py[ok], z[ok]
-        if 'fog' in S and FOG:
-            fc, fs, fe = S['fog'].split(',')
-            fc, fs, fe = int(fc, 16), float(fs), float(fe)
-            fv = [min(1, max(0, (fe - (1 / v[3] if v[3] else 1e9)) / (fe - fs))) for v in (a, b, c)]
-            f = (l0 * fv[0] + l1 * fv[1] + l2 * fv[2])
+        if fog:
+            fv = [a[7], b[7], c[7]]
+            f = np.clip((l0 * fv[0] * w0 + l1 * fv[1] * w1 + l2 * fv[2] * w2) / q, 0, 1)
             if at.startswith('ge'):
                 f = f[ok]
-            rgb = rgb * f[:, None] + col4(fc)[:3] * (1 - f[:, None])
+            rgb = rgb * f[:, None] + col4(int(S['fog'].split(',')[0], 16))[:3] * (1 - f[:, None])
         bl = S.get('blend', 'alpha')
         dst = fb[py, px]
         if bl == 'alpha':
@@ -395,8 +445,9 @@ def main(argv):
     if argv[1] == 'summary':
         cmd_summary(argv[2])
     elif argv[1] == 'render':
-        global FOG
+        global FOG, CLIP
         FOG = '--fog' in argv
+        CLIP = '--noclip' not in argv
         cmd_render(argv[2], int(argv[3]), argv[4], opt('--tex', os.path.join(here, '../work/tex')),
                    opt('--img', os.path.join(here, '../extracted/dat')),
                    int(opt('--from', '0')) if '--from' in argv else None)

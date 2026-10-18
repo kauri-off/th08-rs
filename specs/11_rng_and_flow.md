@@ -414,6 +414,12 @@ Unregistering the GM (0x43BF6E) also clamps the score to 999 999 999, sets displ
 game speed to 1. The GM on-remove callback stops music (unless spell practice reload), waits for sounds,
 unregisters Gui, Stage, HUD, Player, Enemies, Effects, Bullets, Replay (recording) and saves score data.
 
+Exit / fresh-start flags (VERIFIED, answers_impl13 §2): `GameMgr_OnRemove` first sets the full-exit flag
+0x17CE8C0 = (requested ∉ {3, 11, 12}). `GameMgr_OnRegister` first sets the fresh-start flag 0x17CE8BC with
+the same test. The supervisor writes requested = 3 before it unregisters for 11 and 12, so those two look like
+"next stage" to the GM. A retry (10) is a full exit **and** a fresh start. A full exit hides the gauge readout
+(12 §5.9), stops the music even in spell practice, and makes `Player_OnRemove` release the player's sht files.
+
 Requested-scene writers: menu (2 start game, 5 result, 8 music room, −1 quit), GM calc (3, 6, 7, 9, 1),
 pause menu (1, 10, 11), continue menu (6, 7, 9, 11), demo (1), result screen (1), ending (6), staff/ending
 (0x429D40: 6).

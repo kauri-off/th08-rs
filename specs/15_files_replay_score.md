@@ -61,6 +61,7 @@ Debug flags at +0x38 (VERIFIED from the log strings printed at load):
 | 6 | depth test off |
 | 8 | colour composite off |
 | 9 | (logged) |
+| 10 | fog off: FOGENABLE 0 at device init, `Supervisor_FogOn/Off` never called (06 §8; VERIFIED from code) |
 | 11–15 | DirectInput off, BGM read into memory, bit 14 = no vsync, … |
 
 The real file has 0x4001.

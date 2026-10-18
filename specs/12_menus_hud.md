@@ -474,18 +474,29 @@ frame by `Ascii_Calc` (also while paused):
 Glyph sprites: 136–145 = '0'–'9', 146 '%', 147 '.', 148 '-' (8×12 each).
 
 **Setup** (`Ascii_SetupGaugeVms` 0x402600). Called from `AsciiManager_Load`, from every `GameManager_StageStart`
-(after `Ascii_InitVms`, which does not touch these VMs) and from `MainMenu_OnRegister`. Steps:
+and from `MainMenu_OnRegister`. In StageStart it runs near the end (after the Gui registration, right after
+`Ascii_InitVms`, which does not touch these VMs). That is **after** `Player_Load`, which runs synchronously inside
+`Player_Register` at the top of StageStart and writes the limits. So the setup always uses the limits of the game
+being started (VERIFIED, answers_impl13 §1). Steps:
 1. Restart scripts G0 5, G2 7, G1 6, G3 8, G4 4 with `AnmFile_SetScript`. This does **not** zero pos (only
-   `AnmManager_SetScript` does, 05 §8), so G0/G3 keep their last position.
+   `AnmManager_SetScript` does, 05 §8), so G0/G3 keep their last position. The restart runs the script once
+   immediately (`AnmFile_StartScript`), so G1/G2 are at (88, 449) again before step 2 (no accumulation).
+   The same call also restarts +0x1520 with script 9 and +0x17C4/+0x1A68/+0x1D0C/+0x1FB0 with script 10
+   (other ASCII-manager VMs, sprites 156/157, drawn by the HUD. INFERRED role, VERIFIED calls).
 2. G1.x −= 56·min/−10000 and G2.x += 56·max/10000, with min/max = gauge limits 0x164D300/0x164D302 (09 §9.3).
    That gives 人 x = 32 and 妖 x = 144 by default; shot 3: 60/144; shot 10: 60/116; solo human: 32/99.2; solo
-   youkai: 76.8/144.
-3. Re-send the stored interrupt (+0x827C) to G0–G3.
+   youkai: 76.8/144. The limits are written only by `Player_Load`. They are 0/0 at boot (both ends x = 88) and keep
+   the last game's values in the menu. Neither is visible, because the readout is hidden there (answers_impl13 §3).
+3. Re-send the stored interrupt (+0x827C) to G0–G3. At boot it is 0, which has no label: the VMs stay hidden.
 
 **Interrupts** (`Ascii_GaugeInterrupt` 0x4070B0 sends to G0–G3 and stores the id in +0x827C):
-- 1 = show: `Player_Load` on a fresh start (0x17CE8BC ≠ 0, 11 §3).
-- 99 = hide (catch-all label): player on-remove 0x44DC60 when 0x17CE8C0 ≠ 0. That is any leave except next
-  stage / retry (requested scene 3/11/12). Between stages the last id (1/2/3) is just re-sent by step 3.
+- 1 = show: `Player_Load` on a fresh start (0x17CE8BC ≠ 0, 11 §3). It is sent before the limits are written,
+  and step 3 of the setup sends it again later.
+- 99 = hide (catch-all label): player on-remove 0x44DC60 when the full-exit flag 0x17CE8C0 ≠ 0. That is any
+  leave except next stage (3) and same-stage reload (11; 12 is never requested). The supervisor turns 11/12 into 3
+  before the GM is removed (11 §7). After 3/11 the last id (1/2/3) is just re-sent by step 3.
+  **Retry (10)** is a full exit: 99 hides the readout, then the new GM is a fresh start and `Player_Load` sends
+  1, so the readout fades in again exactly like at a new game (VERIFIED, answers_impl13 §2).
 - 2/3 = player-overlap fade, `Player_UpdateGaugeFade` 0x44D420, called every frame in `Player_Calc` after the shot
   timer. With the player pos (playfield coords +0x2B4/+0x2B8) and cur = +0x827C:
   - y < 400: if cur = 2 → 3.

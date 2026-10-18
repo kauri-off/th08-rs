@@ -211,9 +211,10 @@ Format: `specs/data/drawlog/FORMAT.md`. Data and menu scripts: `specs/data/drawl
 (`anm.py --png re/work/tex`, images from `re/extracted/dat`).
 - Menu char select (present 628): mean abs difference 0.009/255 against the screenshot, 0.01 % of pixels off by
   more than 16. Pixel-exact apart from filtering.
-- Demo 0 frame 1400: identical sprites, HUD, panel and text. The remaining differences are the stage fog
-  (`--fog` is experimental, and 1/rhw as fog depth over-darkens the floor) and unclipped geometry behind the
-  camera, which the reference renderer does not clip. Both are renderer limits, not log problems.
+- Demo frames (6 screenshots, d0 f1400/f2200, d1/d2/d3 f1000, d3 f4000) with `--fog`: mean abs difference
+  0.20–0.40/255 on the playfield, 0.06–0.24 % of pixels off by more than 16. 3D quads are clipped to 0 ≤ z ≤ w
+  (default; `--noclip` turns it off). Fog = per-pixel clamp of the perspective-interpolated eye depth,
+  derived from z, not from the 4-decimal rhw (06 §8, answers_impl13 §4).
 - `drawlog.py diff` of a log with itself gives 0 differences. Two original runs agree except as listed in the
   data README (fps counter, title intro ±1 frame).
 

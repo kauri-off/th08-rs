@@ -221,10 +221,23 @@ After computing, `sway_clock.Tick()`; if clock ≥ wrap value it is Set(0). Mode
 
 Interpolation (when duration ≠ 0): `elapsed.Tick(); t = min(1, elapsed.GetF()/d)`; each of the 4 colour bytes
 `= trunc((target − start)·t + start)`; near and far linear; when elapsed ≥ d the duration becomes 0.
-Fog is D3D **vertex fog, linear** (device init: FOGTABLEMODE = NONE, FOGVERTEXMODE = LINEAR), colour/start/end
-set from the current values every frame by `Stage_DrawLow` (colour multiplied by the global ANM tint when
-active). D3D vertex fog uses camera-space depth (range fog not enabled). Billboard sprites get software fog
-(§11.1).
+Fog is D3D **vertex fog, linear** (device init 0x442F60: FOGTABLEMODE = NONE, FOGVERTEXMODE = LINEAR,
+FOGDENSITY 1 unused). Colour/start/end are set from the current values every frame by `Stage_DrawLow` (colour
+multiplied by the global ANM tint when active; start/end written as floats). RANGEFOGENABLE is never set (all 36
+SetRenderState sites checked), so the fog distance is the **eye-space z**, not the radial distance.
+Fog is enabled only around `Draw3DWorld` stage quads (§10.3). Their vertices are untransformed (FVF XYZ[|DIFFUSE]|TEX1),
+so the pipeline computes the fog from world × view. With the stage projection (PerspectiveFovLH, near 30,
+far 1800, §10.1), w_clip = eye z. Billboard sprites and ribbons get software fog instead (§11.1, §11.3; fog is off
+for them). cfg+0x38 bit 10 disables fog entirely (FOGENABLE 0 at init, all fog on/off calls skipped).
+
+Fog model to reproduce (VERIFIED at runtime against 6 wine screenshots of the 4 demos, mean |Δ| 0.2–0.4/255 on
+the playfield, answers_impl13 §4):
+1. Clip the triangle to the near/far planes (0 ≤ z ≤ w).
+2. Interpolate the eye depth d perspective-correctly (= the pixel's true eye z).
+3. Per pixel: f = clamp((end − d)/(end − start), 0, 1); rgb = f·rgb + (1 − f)·fog rgb; alpha unchanged; then
+   alpha test/blend as usual.
+Clamping f per vertex and interpolating it (the textbook D3D8 vertex-fog description) is visibly wrong against
+the reference. Walls that span `start` come out 10–12 levels too dark.
 
 ## 9. Object update (`Stage_UpdateObjects`) — VERIFIED
 

@@ -285,3 +285,20 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   string + face −1 + clears bits 0/4, CATK attempt/capture rules incl. timeouts via 0x42BC50, effect table ids
   216–221 → eff09xx, 0x17CE8CC = panel full-repaint counter). Fixed 07 (+0x3380, op 176 bit 13), 12 §5.3.
 - AUTOCMP DONE.
+
+# RE-Q13 (2026-10-18) — impl13 questions + stage fog depth
+- Q1: Player_Register (top of StageStart, both branches) → FuncChain_AddCalc runs the on-register cb Player_Load
+  synchronously → limits 0x164D300/302 written; Ascii_SetupGaugeVms runs much later (after Gui_Register, after
+  Ascii_InitVms). So setup uses the CURRENT game's limits. Player_Load sends interrupt 1 before writing limits (harmless).
+- Q2: GameMgr_OnRemove: 0x17CE8C0 (full exit) = requested ∉ {3,11,12}; GameMgr_OnRegister: 0x17CE8BC (fresh) same test.
+  Supervisor case 11/12 sets requested = 3 BEFORE unregister. Case 10 (retry) keeps 10 → full exit (99) + fresh (1).
+- Q3: 0x164D300/302 only writer = Player_Load (byte scan: 4+3 stores at 0x44D9F1.., 1 read each in setup 0x40270C/37).
+  BSS (beyond .data raw) → 0 at boot → both ends at x 88 at boot. MainMenu setup = last game's limits; readout hidden
+  (99 or never-shown id 0) so invisible. Setup also restarts +0x1520 (script 9) and +0x17C4/+0x1A68/+0x1D0C/+0x1FB0 (script 10).
+- FOG: device init 0x442F60 TABLEMODE NONE, VERTEXMODE LINEAR, DENSITY 1; RANGEFOGENABLE never set (all 36 SetRenderState
+  sites, byte scan FF 9x C8). Fog on only around Draw3DWorld in Stage_DrawLayer (FVF 0x102/0x142 untransformed).
+  cfg+0x38 bit 10 = fog off (gates device-init FOGENABLE and all FogOn/Off). Runtime check with drawlog.py render vs
+  6 demo screenshots: eye depth (= w_clip, recovered from logged z with near 30/far 1800; logged rhw has 4 decimals,
+  too coarse), interpolated perspective-correctly, factor clamped PER PIXEL, + near/far clipping → mean |Δ| 0.20–0.40/255
+  (vs 3–4 with per-vertex clamp). drawlog.py: --fog = this model, clipping default (--noclip).
+- WRITTEN: specs/answers_impl13.md; fixed 12 §5.9, 11 §7, 06 §8, 15 §1.1 (bit 10), FORMAT.md fog row, TOOLING_REPORT §6 validation; drawlog.py render clip+fog. RE-Q13 DONE.
