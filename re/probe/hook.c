@@ -21,6 +21,8 @@ static int g_rsw[16][3], g_nrs, g_rs_on;
 static FILE *g_rsf, *g_bsf;
 static int g_bsw[16][3], g_nbs;
 static int g_edw[16][4], g_neds; static FILE *g_edf;
+static int g_esw[16][3], g_nes; static FILE *g_esf;
+static int g_isw[16][3], g_nis; static FILE *g_isf;
 
 typedef void *(WINAPI *PFN_Create8)(UINT);
 typedef HRESULT(WINAPI *PFN_CreateDevice)(void *, UINT, int, HWND, DWORD, void *, void **);
@@ -56,6 +58,8 @@ static void load_cmds(void) {
         char cond[32];
         if (!strncmp(line, "traceall", 8)) { g_trace_all = 1; continue; }
         if (!strncmp(line, "bscan", 5)) { if (g_nbs < 16 && sscanf(line + 5, "%d %d %d", &g_bsw[g_nbs][0], &g_bsw[g_nbs][1], &g_bsw[g_nbs][2]) == 3) g_nbs++; continue; }
+        if (!strncmp(line, "escan", 5)) { if (g_nes < 16 && sscanf(line + 5, "%d %d %d", &g_esw[g_nes][0], &g_esw[g_nes][1], &g_esw[g_nes][2]) == 3) g_nes++; continue; }
+        if (!strncmp(line, "iscan", 5)) { if (g_nis < 16 && sscanf(line + 5, "%d %d %d", &g_isw[g_nis][0], &g_isw[g_nis][1], &g_isw[g_nis][2]) == 3) g_nis++; continue; }
         if (!strncmp(line, "effdump", 7)) { if (g_neds < 16 && sscanf(line + 7, "%d %d %d %d", &g_edw[g_neds][0], &g_edw[g_neds][1], &g_edw[g_neds][2], &g_edw[g_neds][3]) == 4) g_neds++; continue; }
         if (!strncmp(line, "rngsite", 7)) { if (g_nrs < 16 && sscanf(line + 7, "%d %d %d", &g_rsw[g_nrs][0], &g_rsw[g_nrs][1], &g_rsw[g_nrs][2]) == 3) g_nrs++; continue; }
         if (line[0] == '#' || sscanf(line, "%31s %15s", cond, c->act) < 2) continue;
@@ -228,6 +232,40 @@ static void emit_row(void) {
                         U32(e + 0x244), U32(e + 0x248), U32(e + 0x24C), U32(e + 0x238), U32(e + 0x288), U32(e + 0x28C));
             }
             fflush(g_edf);
+            break;
+        }
+    }
+    if (g_nes && in_demo()) {
+        int k = U8(G_DEMOIDX), f = (int)U32(G_GMFRAME);
+        for (int i = 0; i < g_nes; i++) if (g_esw[i][0] == k && f >= g_esw[i][1] && f <= g_esw[i][2]) {
+            if (!g_esf) g_esf = fopen("probe_enemies.txt", "w");
+            fprintf(g_esf, "F demo %d frame %d tmpl_acc %d step %d\n", k, f, (int)U32(0x577F20 + 0x2E10), (int)U32(0x18B8A24));
+            for (int j = 0; j < 480; j++) {
+                uint32_t e = 0x577F20 + 0x53D0 + j * 0x53D0;
+                if (!(U32(e + 0x3324) & 1)) continue;
+                fprintf(g_esf, "E %d fl %08x %08x pos %08x %08x life %d acc %d item %d t %d par %08x nch %d\n", j, U32(e + 0x3324), U32(e + 0x3328),
+                        U32(e + 0x2D88), U32(e + 0x2D8C), (int)U32(e + 0x2DFC), (int)U32(e + 0x2E10), (int)U32(e + 0x3304), (int)U32(e + 0x2E14 + 8), U32(e + 0x2DA4), (int)U32(e + 0x3380));
+            }
+            fflush(g_esf);
+            break;
+        }
+    }
+    if (g_nis && in_demo()) {
+        int k = U8(G_DEMOIDX), f = (int)U32(G_GMFRAME);
+        for (int i = 0; i < g_nis; i++) if (g_isw[i][0] == k && f >= g_isw[i][1] && f <= g_isw[i][2]) {
+            if (!g_isf) g_isf = fopen("probe_items.txt", "w");
+            uint32_t sh = U32(0x18B896C), sy = U32(0x18B8970), st = U32(G_STATS);
+            fprintf(g_isf, "F demo %d frame %d player %08x %08x p3 %u p5 %u pst %u shot %d sht %08x %08x line %08x %08x c %08x spd %08x pow %08x gauge %d lock %d n2c %d n30 %d max %d\n", k, f,
+                    U32(0x17D61AC), U32(0x17D61B0), U8(G_PLAYER + 3), U8(G_PLAYER + 5), U8(G_PLAYER), (int)U32(0x18B89BC + 8), sh, sy,
+                    sh ? U32(sh + 0x1C) : 0, sy ? U32(sy + 0x1C) : 0, sh ? U32(sh + 0x18) : 0, sh ? U32(sh + 0x14) : 0, U32(st + 0x98), (int16_t)U16(st + 0x22), (int)U32(0x18B89D4 + 8),
+                    (int)U32(st + 0x2C), (int)U32(st + 0x30), (int)U32(st + 0x24));
+            uint32_t it = U32(0x1653648 + 0x17B088); int n = 0;
+            while (it && n < 3000) {
+                fprintf(g_isf, "I %u ty %u st %u mx %u pos %08x %08x vel %08x %08x t %d\n", (it - 0x1653648) / 0x2E4, U8(it + 0x2D4), U8(it + 0x2D7), U8(it + 0x2D8),
+                        U32(it + 0x2A4), U32(it + 0x2A8), U32(it + 0x2B0), U32(it + 0x2B4), (int)U32(it + 0x2C8 + 8));
+                it = U32(it + 0x2DC); n++;
+            }
+            fflush(g_isf);
             break;
         }
     }

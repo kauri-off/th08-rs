@@ -151,6 +151,7 @@ sub-ANM VMs disabled; e+0x3330 = 0.
 | 0x2DFC / 0x2E00 / 0x2E04 | i32 | life / max life / life for HUD |
 | 0x2E08 | i32 | score |
 | 0x2E0C | i32 | slot index |
+| 0x2E10 | i32 | time-orb damage accumulator (passed to `Player_DamageAgainst`, 09 §4.5). Starts at the **step** (40, 27 solo human): `Player_Load` writes the template's copy (0x57AD30 = template+0x2E10) and `EnemyMgr_Ctor` copies player+0xE2B2C into it; every spawn copies the template, so a fresh enemy's first hitting bullet spawns an orb at human max gauge. Per enemy, never shared, never reset (VERIFIED runtime, answers_impl16 §2) |
 | 0x2E14 | Timer | boss/spell timer (op 132), ticks every frame unless global 0x160F534 ≠ 0 |
 | 0x2E24 | desc | bullet spawn descriptor (§9; reset from defaults at 0x57AD44) |
 | 0x3034 | 44 B | stored bullet instruction for auto-fire |
@@ -355,7 +356,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 63 | set_pos | f x, f y | pos = (x, y, 0); clamp (§8) | 96 |
 | 64 | move_to | i dur, i ease, f x, f y | mode2: delta = (x, y, 0) − final pos, start = pos, timer = dur, velocity 0 (delta.x negated if mirrored) | 342 |
 | 65 | set_dir | f ang, f spd | mode1: angle = wrap(ang), speed = spd, duration 0 | 171 |
-| 66 | move_dir | i dur, i ease, f ang, f spd | dur < 1: as 65. Else mode2 with delta = (cos a·spd·dur, sin a·spd·dur, 0), start = final pos | 188 |
+| 66 | move_dir | i dur, i ease, f ang, f spd | dur < 1: as 65. Else mode2 with delta = (cos a·spd·dur, sin a·spd·dur, 0), start = final pos; **delta.x negated if mirrored** (bit 18; `Ecl_OpMoveDir` 0x420D10, VERIFIED answers_impl16 §8) | 188 |
 | 67 | move_rand | i dur, i ease, f spd | random direction (§8.3) then as 65/66 | 270 |
 | 68 | set_dir_aim | f off, f spd | angle = wrap(angle_to_player(pos) + off); speed = spd (mode unchanged) | 0 |
 | 69 | move_dir_aim | i dur, i ease, f off, f spd | dur < 1: aimed mode1 with movement duration dur. dur ≥ 1: **same as 66 (not aimed)** | 0 |
@@ -619,10 +620,15 @@ drops (`Enemy_DropItems`: its spark effect ×3 for an item, + random extras) →
 running its script), death sub := −1.
 
 ### 10.4 Drops (`Enemy_DropItems` 0x42BEA0)
-item ≥ 0: spawn item `item` at final pos (+ effect). item == −1: on every third such death (global counter
-% 3 == 0) spawn item from the 32-entry byte table 0x4C70D8 (cyclic index):
+item ≥ 0: `Effect_Spawn(e+0x3311 + 4, final pos, 3)` (3 sparks), then spawn item `item` at final pos.
+item == −1: if counter (u16 mgr+0x9DCDC0 = 0xF54CE0) % 3 == 0 → `Effect_Spawn(e+0x3311 + 4, final pos, **6**)`
+and spawn the item from the 32-entry byte table 0x4C70D8 at index (u16 mgr+0x9DCDC2 = 0xF54CE2; then += 1,
+wraps 32 → 0); **then counter += 1 in every case** (check before increment). Both values are set at every stage
+load by `EnemyManager_Load`: counter = `Rng_Range16(3)`, index = `Rng_Range16(8)` (the 2 RNG draws of 11 §3
+table); nothing else writes them (VERIFIED, answers_impl16 §5). An item −1 death that does not drop spawns no
+sparks. The item table:
 `00 00 01 00 01 00 00 00 01 01 00 00 01 01 01 00 01 00 01 00 01 00 01 00 01 00 00 01 01 01 00 00`.
-item ≤ −2: nothing. Then e+0x330C power items (type 0 if player power < 128 else 1) and e+0x3308 type-1 items
+item ≤ −2: nothing (no sparks, counter unchanged). Then e+0x330C power items (type 0 if player power < 128 else 1) and e+0x3308 type-1 items
 at final pos + (Rng·128 − 64, Rng·128 − 64); counts reset. (Item types: 08 spec.)
 
 ### 10.5 Child chains (ops 90–92)

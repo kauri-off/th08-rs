@@ -383,3 +383,25 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - DXVK d3d8 in the DEFAULT prefix is bypassed per process: WINEDLLOVERRIDES='d3d8=n,b;c:\windows\syswow64\d3d8.dll=b'.
 - Open: real-display recording by the user not yet done; DXVK renderer untested (would need CW check = 0x007F);
   replay fast-forward (several polls per present) not exercised; game over / continue / replay-save flow not exercised.
+
+# RE-Q16 (2026-10-18) — impl16 questions + IMPL17 Q2/Q5 — DONE
+- Probe: hook.c +`escan K F0 F1` (enemy slots → probe_enemies.txt: flags, pos, life, acc +0x2E10, item, timer, parent, +0x3380)
+  and `iscan K F0 F1` (item list → probe_items.txt; F line: player pos/p3/p5/state/shot timer/sht ptrs/line/C/attract speed/
+  power/gauge/orb lock/stats +0x2C/+0x30/+0x24). Cmds re/work/cmds/q16.txt, q16b.txt; runs re/work/runs/q16/.
+- Q1 VERIFIED: Player_DamageAgainst returns uncapped sum; only accumulator += min(sum,50); orb loop per hitting bullet BEFORE the add.
+- Q2/Q3 VERIFIED (runtime): per-enemy acc e+0x2E10 starts at step (Player_Load writes template 0x57AD30 = step; spawn copies
+  template) → first hit of a fresh enemy = orb. d0 f1129 slots 0/1 acc 22/11; d3 slot 9 acc 42 at kill.
+- Q4 VERIFIED (Enemy_DropItems). Q5 VERIFIED: counter = Rng_Range16(3), table idx = Rng_Range16(8) in EnemyManager_Load (11 §3 had it).
+- Q6/Q7 VERIFIED: shower gated only by chain child count + reward flag; +0x3380 writers: ops 90-92 ++, child death --, never reset.
+- Q8 VERIFIED (runtime): op 66 (Ecl_OpMoveDir 0x420D10, dur ≥ 1) negates delta.x when mirrored (07 table missed it) → e1 goes LEFT.
+- Q9: 3 orbs (items 358/359/361) homing at speed 10; 358+359 collected f724 (box 24 vs player half 12; player calc prio 9 before
+  items prio 14). Port likely kept an orb in state 3 (284,−9). Run 2 for f640-724.
+- IMPL17 Q2: loader waits loading_frames ≥ 30/80 → 31/81 loading frames when not texture-bound; golden/selftest1 fresh stage 1 = 48.
+  Depth clear = GameMgr_Calc (Clear flags 2) every non-loading calc except early returns.
+- IMPL17 Q5: '%2d' fps text = Fps_Update (replay + gameplay) at (384,448) colour FFFFFFD0/FFFF4040, refreshed by 500ms meter;
+  clock VM impl+0x34D4 runs only while stage-title VM0 alpha byte (+0x2A44+0x1F3) ≠ 0; ribbon fogged-out ends keep stale RGB
+  (A: 0x910D20/0x676E85 initial, B: 0) with alpha 0.
+- Q9 DONE (run 2): orbs switch state 3→1 on f707 when shot timer 19→−1 (vel.y still −1.06); port likely kept 359 in state 3.
+- WRITTEN: specs/answers_impl16.md, answers_impl17.md; fixed 06 §11.3, 07 §4.3/§7/§10.4, 08 §8.4, 09 §4.5, 11 §3.1, 12 §5.1, 15 §3.3;
+  TOOLING_REPORT §10; symbols +3 (redump not rerun). Work cfg restored (sound on). RE-Q16 DONE.
+- Next RE run: IMPL17 Q1/Q3/Q4/Q6/Q7 (menus).

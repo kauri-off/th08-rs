@@ -178,7 +178,7 @@ spell practice in 6A/6B/Ex outside the last-word ranges: stage overlay base (0x4
 unless reloading the same stage (0x17CE8C4): start BGM slots 0..2 from the STD names (spell practice:
     BGM chosen from table 0x4C7670 by spell id)
 flags |= 4; game_over = 0; ... flags &= ~0x10
-wait (thread) until loading_frames >= 30 (80 in replay playback)
+wait (thread) until loading_frames >= 30 (80 in replay playback)      # see 'Loading frame count' below
 end loading screen; wait until flags bits 5–6 == 0     # after a clear: until the player confirms (§4)
 loading = 0; flags &= ~0x200; HUD repaint 60 frames
 ```
@@ -188,6 +188,26 @@ table (value 10) — irrelevant because Extra's clock advance is fixed (§4.1).
 
 While `loading ≠ 0`, `GameMgr_Calc` increments `loading_frames` and returns 3 (nothing else in the calc
 chain runs); `loading == 2` → return 4 (quit).
+
+**Loading frame count** (answers_impl17 §2, VERIFIED code + sessions). The loader thread polls `loading_frames`
+with `Sleep(17)`, so after the threshold is reached it ends the loading screen before the next calc in practice:
+the stage has **31** loading calcs (81 in replay playback) when the loader's own work is shorter than the threshold.
+The loader's work is bounded below by the texture uploads: every `Anm_LoadAndWait` makes the loader sleep until the
+main thread has uploaded the file's entries in `Supervisor_Calc` (`AnmManager_PostloadPending`, **one entry per
+frame**), plus file decoding time on the loader thread (host dependent). Measured with the session recorder:
+fresh start of stage 1 = 48 loading calcs (two sessions, Reimu & Yukari: stg1bg/eff01/enemy/stg1enm/etama/front/
+times/stg1txt/player/face files ≈ 41 entries); later stages and demos (fewer files) = 31 / 81. After a stage
+clear the loader then also waits for the confirm press (flags bits 5–6), so those rows continue until the press.
+A port should use max(31 | 81, entries_to_upload + small constant) and, for session comparison, the recorded
+`release stage poll`.
+
+**Per-frame depth clear.** `GameMgr_Calc` itself issues `Clear(Z only, 1.0)` on the device's current viewport
+(left full-screen 0,0,640,480 by the previous frame's draw — every logged frame shows `C z` with V 0 0 640 480) on
+every calc that passes the loading test (loading = 0), after the attract-demo end check and before the pause /
+game-over / slow-mode early returns: it runs also while paused and on the game-over menu. It is skipped on: loading
+calcs, the stage-end early returns of §4 step 1 (return 3), the attract-demo end frames, and replay "slowdown
+reproduction" skipped frames (playback speed byte 1). The colour+depth clear of the playfield comes from
+`Stage_DrawLow` (draw prio 6).
 
 ### 3.2 Fresh start (new game, and every start in practice / spell practice / Extra)
 Condition: `fresh_start || spell practice || stage practice || difficulty ≥ 4`.

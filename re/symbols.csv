@@ -736,3 +736,6 @@ addr,kind,name,signature,confidence,note
 0x00441f48,label,FrameRun_PreCalc,,VERIFIED,Frame_Run just before FuncChain_RunCalc
 0x00441f52,label,FrameRun_PostCalc,,VERIFIED,Frame_Run right after FuncChain_RunCalc (Sound_Update follows; that fn is also called from menus)
 0x016535a0,global,g_JoyRawButtons,,VERIFIED,32 button bytes written by Input_PollJoystickRaw (key-config capture)
+0x00f54ce0,global,g_EnemyDropCounter,,VERIFIED,u16 EnemyMgr+0x9DCDC0; item -1 every-third counter; Rng_Range16(3) at EnemyManager_Load
+0x00f54ce2,global,g_EnemyDropTableIdx,,VERIFIED,u16 EnemyMgr+0x9DCDC2; index into 0x4C70D8; Rng_Range16(8) at EnemyManager_Load
+0x0057ad30,global,g_EnemyTemplateOrbAcc,,VERIFIED,enemy template +0x2E10 = orb step (Player_Load); copied to every spawn

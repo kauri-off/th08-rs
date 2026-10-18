@@ -371,6 +371,13 @@ Impl VMs: `front.anm` scripts 0–15 → VMs impl+i·0x2A4 (i = 0..15); `stgNtxt
 (stage-clear), script 0x1A → impl+0x5484, script 0x19 → impl+0x22E14 (difficulty name, sprite 0x11B + difficulty,
 0x120 for spell practice ids ≥ 205); `times.anm` → impl+0x2156C (night clock, ECL 179/181), impl+0x34D4 (clock,
 sprite = counter).
+**impl+0x34D4 runs only while the stage title shows** (VERIFIED, answers_impl17 §5.2): `Hud_Update` calls
+`RunRange(impl+0x34D4, 1)` only when not spell practice (GameFlags bit 14 clear) **and** the alpha byte of the
+stage-title VM 0 colour (impl+0x2A44 + 0x1F3 = `stgNtxt.anm` script 0) is ≠ 0; it is drawn every frame
+(`Hud_DrawBoss`). times.anm script 0 fades in at its time 240, so the clock appears 240 run-frames after title
+VM 0 starts its fade-in: demo 1 (stg4atxt script 0 fades in at 130) → clock first drawn at gameplay frame 369;
+demo 0 (stg5txt script 0 fades in at 730) → 969. When the title VM's alpha returns to 0 the clock VM stops where
+it is (stage 4A: last clock draw at frame 547 with alpha 4, exactly at the end of its own fade-out).
 
 ### 5.2 front.anm layout (positions are sprite centres) — VERIFIED from the anm data
 | VM / script | sprite | pos | role (INFERRED from position) |

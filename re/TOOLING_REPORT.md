@@ -275,3 +275,15 @@ speed (+0x238) and pos_offset. Decode with `python3 -I re/tools/effdump.py probe
 - Pitfalls found: `pactl load-module` with an existing sink name fails silently (audio went to the default device
   in two test replays); `md5sum` with no files reads stdin (fixed: an empty replay folder made the recorder wait);
   playback must not block the main thread while a loader needs main-thread frames (post-load servicing added).
+
+## 10. Enemy / item dumps (RE-Q16, 2026-10-18)
+
+`hook.c` (copy in `re/probe/`) has two new `probe_cmd.txt` lines, both written after the frame's calc (same point as the trace row):
+- `escan K F0 F1` → `probe_enemies.txt`: `F` line with the template accumulator (0x57AD30) and the orb step (0x18B8A24); one `E` line
+  per live enemy slot (0..479): flags A/B (+0x3324/+0x3328), final pos, life +0x2DFC, time-orb accumulator +0x2E10, item +0x3304,
+  timer +0x2E14 current, parent pointer +0x2DA4, child count +0x3380.
+- `iscan K F0 F1` → `probe_items.txt`: `F` line with player pos, bytes +3/+5/state, shot timer current (0x18B89BC), sht pointers,
+  collection lines (sht +0x1C), C (+0x18), attract speed (+0x14), power, gauge, orb-lock timer, stats +0x2C/+0x30/+0x24; one `I` line
+  per item in list order: slot, type, state, max flag, pos, vel, timer.
+Floats are raw hex. Timer current values are at Timer+8. Example commands: `re/work/cmds/q16.txt`, `q16b.txt`; a `dK:F quit` line
+ends the run early. Mute: the work cfg has music/SE on; patch +0x1F/+0x20 to 0 for the run and restore it afterwards.

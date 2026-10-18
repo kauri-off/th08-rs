@@ -233,7 +233,10 @@ optional "hit by bomb" output. Returns 0 if the player state timer did not advan
   bullet; pos z = 0.1. The bullet angle (+0x450) is not changed. VERIFIED (`Player_DamageAgainst` 0x451670; answers_bugs1 B1).
   The hit scripts (e.g. player00.anm 15/17) set tag 1 again, so the hit-pass draw (14 §5) keeps setting
   rotation z = bullet angle every frame: hit animations are oriented along the shot direction.
-- shot damage capped at 50; accumulator += capped value.
+- after the bullet loop: accumulator += min(shot sum, 50). The **returned damage is not capped** (only the
+  accumulator increment is); the orb `while` loop runs inside the bullet loop, per hitting bullet, against the
+  accumulator value from earlier frames, before this frame's add. The accumulator is the enemy's own e+0x2E10,
+  which starts at the step (07 §4.3 +0x2E10) (VERIFIED, answers_impl16 §1–3).
 - damage areas (first 192, §8) whose life % period == 0 and that overlap: damage += area damage; the area's
   dealt total grows and is capped by its max (excess removed, area damage := 0 when reached); "hit by bomb" := 1
   while bombing.

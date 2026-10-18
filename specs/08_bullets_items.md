@@ -390,6 +390,9 @@ For each item (count += 1):
   exactly t == 60: vel = 0, state 0); common motion.
 - **state 3**: vel.y += 0.05·gs; if vel.y > 0 or the player's shot timer (0x18B89BC = player +0xE2AC4) is < 0, i.e. the player is not shooting → state 1; if player state is 2 →
   state 0, vel = (0, −0.7, 0). Common motion.
+  Example (VERIFIED runtime, demo 2, answers_impl16 §9): the shot timer reads 19 on frame 706 and −1 on 707 (player calc
+  prio 9 runs before the item calc in `BulletMgr_Calc`, prio 14), so every time orb still rising in state 3 switches to
+  state 1 on frame 707 even with vel.y ≈ −1.1, and orbs spawned later (not shooting) switch on their first update.
 - **state 5**: vel.y += 0.05·gs; pos += vel·m; if vel.y > 0 → state 1 (player state 2 → state 0, vel (0,−0.7,0)),
   common motion; else no collection test this frame.
 - **state 0/1**: attract when state == 1, or when player.y < the collection line (sht +0x1C) and (power ≥ 128, or
@@ -399,7 +402,8 @@ For each item (count += 1):
 - **common motion**: pos += vel·m. If state ≠ 0 or pos.y ≤ 448 + 16 (global 0x164D2E8 = 448): if vel.y ≥ 3 →
   vel.y = 3 else vel.y += 0.03·m; then collection test. Else (fell out): **rank −3** and the item is freed.
 - **collection test**: skipped in state 3; `Player_ItemCollectTest` (player state 0/3/4; item box of size
-  (C, C) vs the player's collect box player+0x3BC..+0x3CC). On collection: statistics bit 0x40, type handler
+  (C, C) vs the player's collect box player+0x3BC..+0x3CC). Both boxes are centred: item ±C/2, player ±collect/2 (09 §3, sht +0x18 / 2, recomputed
+  in the player calc after movement), inclusive overlap, i.e. |dx| ≤ (C + collect)/2 and |dy| ≤ (C + collect)/2 (= 24 for C = collect = 24). On collection: statistics bit 0x40, type handler
   (§8.5), sound choice (0x15, or 0x2C if the item's max-value flag is set), item freed. Else tick timer and run
   the VM.
 After the loop: play the chosen collection sound once; timer 0x18B89D4 (= player +0xE2ADC, "time-orb gauge

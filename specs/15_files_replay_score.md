@@ -499,6 +499,20 @@ Playback speed byte 0x164D0BD (chosen in the replay menu, §3.8):
 In any playback mode, while skippable dialogue is shown (HUD impl+0x22D7C), the chain is restarted on 2 of every 3 frames (= 3× speed).
 
 The HUD shows the playback fps in yellow (0xFFFFFFD0), or red (0xFFFF4040) when the flag is set.
+Exact behaviour (`Fps_Update` 0x446F53, VERIFIED answers_impl17 §5.3; this is the attract demos' "2-digit text at the
+bottom right of the playfield"):
+- Drawn every frame while replay playback (GameFlags bit 3) **and** gameplay running (bit 2), unless 0x17CE8D0 ≠ 0
+  (ending): `Ascii_QueueString` at (384, 448) (ASCII queue, 12 §2.9: 16 × 16 `ascii.anm#0` glyphs, advance 13 →
+  quads (383.5, 447.5)–(399.5, 463.5) and (396.5, 447.5)–(412.5, 463.5)), colour as above, then the queue colour
+  is reset to white. The normal fps string ("%.02ffps" at (512, 464), white) is queued just before it.
+- The text is a separate buffer (0x17CF2B8) formatted with **"%2d" of fps_now (0x17CE8F0)** only when the fps meter
+  closes a measuring window (≥ 500 ms of host time, `timeGetTime`, or the performance counter when present) — i.e.
+  about every 30 frames at 60 fps, with a host-dependent phase. Between refreshes the old text stays; the buffer
+  survives between games (a demo starts by showing the previous demo's last value).
+- fps_now itself changes every 30 replay frames (the `frame % 30 == 0` read above). Demo 1's fps bytes are
+  60, 16, 60, 60, … → frame 0 reads 16 (QUIRK, byte q+1); the original showed "60" for gameplay frames 1–4 (old
+  text), "16" for frames 5–34 and "60" afterwards. A port without a real-time meter should refresh the text every
+  30 frames; the exact refresh frame cannot be reproduced bit-exactly.
 
 ### 3.4 Stage record (0x24 header + streams)
 

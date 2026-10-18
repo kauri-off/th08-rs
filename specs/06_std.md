@@ -354,6 +354,19 @@ v0 = (sA.x + dir.y·wA, sA.y − dir.x·wA), v1 = (sA.x − dir.y·wA, sA.y + di
 v2 = (sB.x + dir.y·wB, sB.y − dir.x·wB), v3 = (sB.x − dir.y·wB, sB.y + dir.x·wB);
 UV: v0 (u0,v0), v1 (u1,v0), v2 (u0,v1), v3 (u1,v1) (sprite rect + uv offset); colours: v0,v1 from A's fog,
 v2,v3 from B's fog. Drawn through the 2D batch (fog off).
+Details (VERIFIED, answers_impl17 §5.1, demo 1 draw log):
+- `wP` uses the **3D** length (`Vec3_Length` of the projected x, y, depth difference), like §11.1.
+- Point colour by distance d = |P − (cam.position + eye_offset)|: d ≤ fog_near → the VM colour (+0x1F0, colour 1, not
+  the stage-tint colour 2); near < d with f < 1 → fogged as §11.1; **f ≥ 1 → only the alpha byte is cleared, the RGB
+  bytes keep whatever the vertex slot held** (the four vertex colours live in one stack array that is reused for every
+  ribbon of the `Stage_DrawLayer` call). So a fully fogged end keeps the RGB of the previous ribbon's same-end colour
+  (A ends share local slots v0/v1, B ends v2/v3). Before any ribbon of the call has written them, the original shows
+  A = (0x910D20 for v0, 0x676E85 for v1) and B = 0 (stack residue, identical in every frame of demo 1 — INFERRED
+  constant). This matters slightly: the RGB of an alpha-0 end is interpolated toward the visible end (alpha test ≥ 4).
+- The colours are computed (and the slots updated) before the direction/depth checks, so a skipped ribbon still
+  changes the stale values.
+- Stage 4A (`stg4abg.anm` script 1, sprite 1 = 16 × 512 at (496, 0), tag 2) is the only stage using ribbons in the
+  demos; in demo 1 ≈ 68 ribbons per frame, A end usually fully fogged (alpha 0), B end alpha 0…0x60.
 
 ## 12. Open points
 - The 5 text fields at 0x10 are unused; the instance field +2 (always 256) is unused.
