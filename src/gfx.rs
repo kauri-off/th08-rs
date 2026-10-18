@@ -1121,7 +1121,12 @@ impl Gfx {
         let log = self.log.take();
         let key = self.key(blend, false, Kind::Draw);
         for i in 1..v.len() - 1 {
-            self.push(self.white, key, [v[0], v[i], v[i + 1], v[i + 1]], [0, 1, 2, 0, 1, 2]);
+            self.push(
+                self.white,
+                key,
+                [v[0], v[i], v[i + 1], v[i + 1]],
+                [0, 1, 2, 0, 1, 2],
+            );
         }
         self.log = log;
         if let Some(log) = self.log.as_mut() {

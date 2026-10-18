@@ -134,7 +134,8 @@ impl Supervisor {
         let gm = GameManager::register(ctx)?;
         self.scene_task = Some(gm);
         // Attract demos always start from the main menu.
-        let from_menu = ctx.game.previous == gamemgr::SCENE_MENU || ctx.game.flags & gamemgr::F_DEMO != 0;
+        let from_menu =
+            ctx.game.previous == gamemgr::SCENE_MENU || ctx.game.flags & gamemgr::F_DEMO != 0;
         if let Some(t) = self.logo.take() {
             ctx.gfx.free_texture(t);
         }
@@ -433,9 +434,7 @@ impl Task<Ctx> for Supervisor {
     }
 }
 
-// SPEC-GAP: result (scenes 5/6), music room (8) and ending (9) are later tasks; this stub shows the outcome and
-// returns on Shot/Enter (ending → result → menu, like the scene table). Exit keys of the menu-side scenes: result
-// viewer X → cursor to 「タイトルに戻る」, X again leaves (16 §2.4); music room Bomb/ESC (16 §5.3).
+// SPEC-GAP: result (5/6), music room (8), ending (9) are stubs; viewer X → 「タイトルに戻る」, X again leaves; music Bomb/ESC.
 pub struct Stub {
     kind: i32,
     frame: u32,

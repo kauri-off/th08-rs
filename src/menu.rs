@@ -78,7 +78,6 @@ fn final_notice(g: &gamemgr::Game, c: usize, d: usize) -> Option<i32> {
     Some(147)
 }
 
-
 // Unlock checks (15 §2.4) on the score.dat clear masks; `TH08_UNLOCK=1` unlocks everything.
 pub(crate) fn unlock_all() -> bool {
     crate::env::var("TH08_UNLOCK").is_some_and(|v| v != "0")

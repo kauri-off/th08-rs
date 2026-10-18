@@ -137,7 +137,9 @@ fn main() -> anyhow::Result<()> {
         }
         if f >= a
             && f <= b
-            && let Some(k) = std::env::var("TH08_EDUMP").ok().and_then(|v| v.parse().ok())
+            && let Some(k) = std::env::var("TH08_EDUMP")
+                .ok()
+                .and_then(|v| v.parse().ok())
         {
             print!("frame {f} {}", th08::effect::dump(k));
         }

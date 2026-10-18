@@ -40,15 +40,15 @@ const SP_ROWS: [&str; 10] = [
     "Last Word",
 ];
 const STAGES: [&str; 9] = [
-    "Stage1 ", "Stage2 ", "Stage3 ", "Stage4A", "Stage4B", "Stage5 ", "Stage6A", "Stage6B", "StageEX",
+    "Stage1 ", "Stage2 ", "Stage3 ", "Stage4A", "Stage4B", "Stage5 ", "Stage6A", "Stage6B",
+    "StageEX",
 ];
 const CHARS: [&str; 12] = [
-    "Rm & Yk", "Ms & Al", "Sk & Rr", "Ym & Yy", "Reimu  ", "Yukari ", "Marisa ", "Alice  ", "Sakuya ",
-    "Remilia", "Youmu  ", "Yuyuko ",
+    "Rm & Yk", "Ms & Al", "Sk & Rr", "Ym & Yy", "Reimu  ", "Yukari ", "Marisa ", "Alice  ",
+    "Sakuya ", "Remilia", "Youmu  ", "Yuyuko ",
 ];
 const DIFFS: [&str; 5] = ["Easy    ", "Normal  ", "Hard    ", "Lunatic ", "Extra   "];
-// SPEC-GAP: the shot names (info line 2) and the difficulty names (table 0x4C8628) are not in the spec; only
-// 「三日月（ノーマル）」 is visible in mopup1_sp17_d.png.
+// SPEC-GAP: shot/difficulty names (table 0x4C8628) unknown; only 「三日月（ノーマル）」 is in mopup1_sp17_d.png.
 const SHOT_NAMES: [&str; 12] = [
     "霊夢＆紫",
     "魔理沙＆アリス",
@@ -167,7 +167,12 @@ fn text(x: f32, y: f32, s: impl Into<String>, argb: u32, hl: bool) -> Text {
 
 // Menu_DrawPie 0x46FDC2 → AnmManager_DrawFan: 64-vertex fan from 12 o'clock, clockwise over v·360° (16 §6.4).
 fn pie(ctx: &mut Ctx, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
-    let col = [(argb >> 16) as u8, (argb >> 8) as u8, argb as u8, (argb >> 24) as u8];
+    let col = [
+        (argb >> 16) as u8,
+        (argb >> 8) as u8,
+        argb as u8,
+        (argb >> 24) as u8,
+    ];
     let p = |x: f32, y: f32| Vertex::screen(x + 0.5, y + 0.5, z, [0.0, 0.0], col);
     let mut verts = vec![p(c[0], c[1])];
     let step = 0.101342 * v;
@@ -233,8 +238,7 @@ impl MainMenu {
     pub(crate) fn practice_enter(&mut self, ctx: &mut Ctx) {
         {
             self.interrupt_all(18);
-            // SPEC-GAP (mopup1 log): the portraits ignore the range interrupt, the description disappears at once,
-            // and the cursor starts on the last stage index.
+            // SPEC-GAP (mopup1 log): portraits ignore the range interrupt, description hides at once, cursor = last stage.
             for v in 111..=130 {
                 self.vms[v].pending_interrupt = 0;
                 if v >= 119 {
@@ -243,8 +247,7 @@ impl MainMenu {
             }
             self.cursor = (ctx.game.stage as i32).clamp(0, 7);
             let m = Self::practice_mask(ctx);
-            self.stages =
-                std::array::from_fn(|i| crate::menu::unlock_all() || m & (1 << i) != 0);
+            self.stages = std::array::from_fn(|i| crate::menu::unlock_all() || m & (1 << i) != 0);
             if !self.stages[self.cursor.clamp(0, 7) as usize] {
                 self.cursor = 0;
             }
@@ -290,10 +293,7 @@ impl MainMenu {
             } else {
                 0xFF404040
             };
-            let s = format!(
-                "{} {:9}0 ({:3})",
-                STAGES[r], p.hiscore[r][d], p.plays[r][d]
-            );
+            let s = format!("{} {:9}0 ({:3})", STAGES[r], p.hiscore[r][d], p.plays[r][d]);
             ctx.ascii
                 .push(text(ax, ay - 80.0 + 16.0 * r as f32, s, c, cur));
         }
@@ -410,7 +410,8 @@ impl MainMenu {
     // MainMenu_SpellPracticeCharDraw 0x46F5CB.
     pub(crate) fn spell_char_draw(&mut self, ctx: &mut Ctx) {
         // The draw follows the screen variable, so the press frame already draws this screen (VMs not created yet).
-        let own = self.lists.scratch_for == crate::menu::SPELL_PRACTICE && self.lists.scratch.len() >= 3;
+        let own =
+            self.lists.scratch_for == crate::menu::SPELL_PRACTICE && self.lists.scratch.len() >= 3;
         let [ax, ay] = self.anchor();
         // SPEC-GAP: the rows sit 32 px left of VM 141 in mopup1 (x 224 at rest), like VM E7B8.
         let x0 = ax - 32.0;
@@ -629,8 +630,7 @@ impl MainMenu {
                 if att { sjis(&c.name) } else { UNKNOWN8.into() }
             ),
             1 => {
-                // SPEC-GAP: Spell_DifficultyOf needs the per-difficulty card lists (not in the spec); the CATK
-                // difficulty of the last attempt is used, and the "Last" marker (list 0x4C6B90) is not shown.
+                // SPEC-GAP: no per-difficulty card lists; CATK last-attempt difficulty used, "Last" marker not shown.
                 let d = if lw { 5 } else { c.difficulty.min(4) as usize };
                 if att {
                     format!("使用者  {}　　{} ", sjis(&c.owner), DIFF_NAMES[d])
@@ -665,8 +665,7 @@ impl MainMenu {
                 }
             }
             4 => "カードの補足".into(),
-            // SPEC-GAP: the unlock-hint texts of table 0x4C82C8 are not in the spec; locked cards show the
-            // unknown line.
+            // SPEC-GAP: unlock hints (table 0x4C82C8) not in the spec; locked cards show the unknown line.
             _ => {
                 if c.counters[PC][12] != 0 {
                     sjis(&c.comment[k - 5])
@@ -715,12 +714,7 @@ impl MainMenu {
             self.lists.prev_card = self.lists.card;
             self.card_rows(ctx);
             self.lists.header = scratch(ctx, RT_SLOT, 17, false);
-            self.render_vm(
-                ctx,
-                RT_SLOT,
-                17,
-                "取得数/挑戦数（()内は本編での集計）",
-            );
+            self.render_vm(ctx, RT_SLOT, 17, "取得数/挑戦数（()内は本編での集計）");
             self.lists.info = (0..7)
                 .map(|k| scratch(ctx, TEXT_SLOT, 21 + k, false))
                 .collect();
@@ -838,7 +832,8 @@ impl MainMenu {
 
     // MainMenu_SpellPracticeCardDraw 0x46FFC0.
     pub(crate) fn spell_card_draw(&mut self, ctx: &mut Ctx) {
-        let own = self.lists.scratch_for == crate::menu::SPELL_CARD && self.lists.scratch.len() >= 15;
+        let own =
+            self.lists.scratch_for == crate::menu::SPELL_CARD && self.lists.scratch.len() >= 15;
         let (a, b) = self.card_ids();
         if !own {
             return;
@@ -863,8 +858,13 @@ impl MainMenu {
             } else {
                 " "
             };
-            ctx.ascii
-                .push(text(16.0, y, format!("{marker}No.{:03}", id + 1), col, false));
+            ctx.ascii.push(text(
+                16.0,
+                y,
+                format!("{marker}No.{:03}", id + 1),
+                col,
+                false,
+            ));
             ctx.ascii.push(
                 text(
                     430.0,
@@ -1070,7 +1070,10 @@ impl MainMenu {
                 break;
             }
             let (name, r) = &self.replays[i];
-            let label = match name.trim_start_matches("replay/th8_").trim_end_matches(".rpy") {
+            let label = match name
+                .trim_start_matches("replay/th8_")
+                .trim_end_matches(".rpy")
+            {
                 s if s.starts_with("ud") => "User ".to_string(),
                 s => format!("No.{s:>2}"),
             };

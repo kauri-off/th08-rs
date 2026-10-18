@@ -121,6 +121,12 @@
   - `demosync` debug: `TH08_BDUMP=1` (enemies + bullets per frame of the range), `TH08_IDUMP=1` (player + items).
   - Sync: demo0 260→1128, demo1 559→559, demo2 449→723, demo3 794→825 (`MIN_SYNC`); draw log (first chunk, playfield) 73.2/21.1/52.1/52.0 → 83.7/28.6/77.2/66.0 % (`DEMO`). Questions: `docs/briefs/IMPL16_QUESTIONS.md`.
 
+- impl17 (answers_impl15 + spec fixes, main-menu lists, 2026-10-18):
+  - Effect 51/63: ring slot = cursor then advance, init offset from −facing/2 with the spec's expression order (matches `specs/data/q15/eff51_decoded.txt` for demos 1 and 3); `demosync` debug `TH08_EDUMP=<type>`.
+  - Stage start: loading darken overlay (ScreenEffect type 5 flagged `loading`, released when loading ends, fade 8 frames), deferred gauge readout setup by demo index, "Press Shot Button" after 5 wait frames, nowloading VMs at (500, 440)/(280, 430) with the captured screen (`Gfx::capture_screen`), boot presents (clear only), HUD panel tiles with z-write and per-row z, stage title/clock in the playfield viewport, music-room capture on exit.
+  - Menu lists (`src/menulist.rs`): practice stage list (screen 11), spell-practice character screen 16 (rows, totals, four pies via `Gfx::fan`, percent readouts), card list + info panel (screen 17), replay list + stage detail; ASCII queue with highlight glyph set (+0x8A), strips with z-write. `drawlog::menu_start_state` gives tests/drawrun a private save dir (`scoredat::set_save_dir`) with menu_mopup1.score.dat + demo replays as th8_01..04.
+  - Match (before → after): menu_base 1257 identical / 49.7 % → 1754 / 70.7 %; menu_clr 859 / 96.6 % → 903 / 97.4 %; menu_mopup1 (new test) 318 / 6.5 % → 1593 / 84.7 % (rest = result-viewer stub); demos first chunk (playfield) 83.7/28.6/77.2/66.0 → 85.2/29.7/78.7/68.0 %; demo sync unchanged (1128/559/723/825). Thresholds `MENU_BASE` (1750, 70.5), `MENU_CLR` (900, 97.3), `MENU_MOPUP1` (1590, 84.5), `DEMO` [85.0, 29.5, 78.5, 67.8].
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
@@ -129,7 +135,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl16 done (answers_impl14, demo sync push). Next IMPL: answers to IMPL16_QUESTIONS (raise `MIN_SYNC` / `DEMO`); result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, spell practice, music room.
+2. IMPL impl17 done (answers_impl15, menu lists). Next IMPL: answers to IMPL17 questions; result viewer (scene 5 / RESULT_MENU stub), result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, music room, spell-practice data tables (difficulty names, card unlock hints, Last Word unlocks).
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

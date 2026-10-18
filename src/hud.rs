@@ -641,9 +641,8 @@ impl Hud {
         let spr = |anm: &AnmManager, gfx: &mut Gfx, i: usize, x: f32, y: f32, z: f32| {
             if let Some(s) = anm.sprite(FRONT_SLOT, i) {
                 let [u0, v0, u1, v1] = s.uv;
-                let v = |x: f32, y: f32, u: f32, vv: f32| {
-                    Vertex::screen(x, y, z, [u, vv], [255; 4])
-                };
+                let v =
+                    |x: f32, y: f32, u: f32, vv: f32| Vertex::screen(x, y, z, [u, vv], [255; 4]);
                 gfx.strip(
                     s.tex,
                     Blend::Alpha,

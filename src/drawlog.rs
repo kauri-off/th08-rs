@@ -92,7 +92,11 @@ pub fn format_frame(h: &Header, recs: &[LogRec]) -> String {
                 body.push('\n');
                 nquads += 1;
             }
-            LogRec::Fan { blend, vp, v: verts } => {
+            LogRec::Fan {
+                blend,
+                vp,
+                v: verts,
+            } => {
                 set(&mut body, &mut t, "T -".to_string());
                 set(
                     &mut body,
