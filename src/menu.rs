@@ -3,7 +3,7 @@ use crate::ascii::Text;
 use crate::config::Config;
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
-use crate::gfx::{Blend, FULLSCREEN, Rect, TextureId};
+use crate::gfx::{FULLSCREEN, TextureId};
 use crate::input::{BOMB, DOWN, ENTER, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
 use crate::task::{Chain, Ret, Task};
@@ -140,8 +140,9 @@ pub struct MainMenu {
     base: Vec<i32>,
     surface: Option<(TextureId, &'static str)>,
     raster: crate::text::Raster,
-    desc: Vec<TextureId>,
     desc_vm: AnmVm,
+    desc_on: bool,
+    desc_first: bool,
     notice: AnmVm,
     screen: i32,
     prev_screen: i32,
@@ -165,8 +166,9 @@ impl MainMenu {
             base: Vec::new(),
             surface: None,
             raster: Default::default(),
-            desc: Vec::new(),
             desc_vm: AnmVm::default(),
+            desc_on: false,
+            desc_first: true,
             notice: AnmVm::default(),
             screen: TOP,
             prev_screen: TOP,
@@ -205,7 +207,11 @@ impl MainMenu {
         if let Some((t, _)) = self.surface.take() {
             ctx.gfx.free_texture(t);
         }
-        match ctx.archive.read(name).and_then(|b| ctx.gfx.load_image(&b)) {
+        match ctx
+            .archive
+            .read(name)
+            .and_then(|b| ctx.gfx.load_image(name, &b))
+        {
             Ok(t) => self.surface = Some((t, name)),
             Err(e) => log::warn!("{name}: {e:#}"),
         }
@@ -219,19 +225,24 @@ impl MainMenu {
         }
     }
 
+    // Rasterises description `i` into the description VM's text.anm sprite rect, centred.
     fn render_description(&mut self, ctx: &mut Ctx, i: usize) {
-        const H: usize = 16;
-        let w = if self.desc_vm.sprite_w > 0.0 {
-            self.desc_vm.sprite_w as usize
-        } else {
-            384
+        let vm = &self.desc_vm;
+        let Some(sp) = ctx.anm.sprite(0, vm.sprite_index.max(0) as usize).copied() else {
+            return;
         };
+        let t = ctx.gfx.texture(sp.tex);
+        let (tx, ty) = (
+            (sp.uv[0] * t.width as f32).round() as u32,
+            (sp.uv[1] * t.height as f32).round() as u32,
+        );
+        let (w, h) = (sp.w as usize, sp.h as usize);
         let mut rgba = self
             .raster
-            .render(DESCRIPTIONS[i], [0xFF, 0xF0, 0xE0], w, H);
+            .render(DESCRIPTIONS[i], [0xFF, 0xF0, 0xE0], w, h);
         let width = (0..w)
             .rev()
-            .find(|&x| (0..H).any(|y| rgba[(y * w + x) * 4 + 3] != 0))
+            .find(|&x| (0..h).any(|y| rgba[(y * w + x) * 4 + 3] != 0))
             .map_or(0, |x| x + 1);
         let shift = (w - width) / 2;
         if shift > 0 {
@@ -240,8 +251,8 @@ impl MainMenu {
                 row[..shift * 4].fill(0);
             }
         }
-        self.desc
-            .push(ctx.gfx.create_texture(w as u32, H as u32, &rgba));
+        ctx.gfx
+            .write_texture(sp.tex, tx, ty, w as u32, h as u32, &rgba);
     }
 
     fn move_cursor(
@@ -286,28 +297,35 @@ impl MainMenu {
             self.set_surface(ctx, "title00.png");
             self.interrupt_all(2);
         }
-        if self.desc_vm.script.is_none() {
-            ctx.anm.set_script(&mut self.desc_vm, 0, 9);
-        }
-        if self.desc.len() < ITEMS {
-            let i = self.desc.len();
-            self.render_description(ctx, i);
+        // The cursor moves before the highlight, so a press shows in its own frame.
+        if self.frames >= 10 && self.pending.is_none() && self.quitting.is_none() {
+            let locked: Vec<bool> = (0..ITEMS).map(|i| Self::item_locked(ctx, i)).collect();
+            self.move_cursor(ctx, ITEMS as i32, UP, DOWN, |c| !locked[c as usize]);
         }
         for i in 0..ITEMS {
             let on = i as i32 == self.cursor;
             self.highlight(ctx, 1 + i, on);
-            let grey = if Self::item_locked(ctx, i) {
-                0x40
+            if Self::item_locked(ctx, i) {
+                self.vms[1 + i].color = [0x40, 0x40, 0x40, 0xFF];
             } else {
-                0xFF
-            };
-            self.vms[1 + i].color[..3].fill(grey);
+                self.vms[1 + i].color[..3].fill(0xFF);
+            }
         }
-        if self.cursor != self.prev_cursor {
+        // One description VM per item (sprite 21 + i, answers_impl9 §15); after (re-)entering the top menu it
+        // is chosen from frame 9 (measured), except on the very first visit.
+        if self.frames == 0 && !self.desc_first {
+            self.desc_on = false;
+        }
+        if (self.frames >= 9 || self.desc_first) && self.cursor != self.prev_cursor {
             self.prev_cursor = self.cursor;
+            self.desc_first = false;
+            self.desc_on = true;
+            ctx.anm.set_script(&mut self.desc_vm, 0, 9);
+            self.desc_vm.set_sprite(&ctx.anm, 21 + self.cursor);
             self.desc_vm.pending_interrupt = 1;
+            self.render_description(ctx, self.cursor as usize);
         }
-        self.desc_vm.run(&mut ctx.anm);
+
         if let Some(f) = &mut self.quitting {
             *f += 1;
             if *f >= 60 {
@@ -340,8 +358,6 @@ impl MainMenu {
                 Err(e) => log::warn!("demorpy{n}.rpy: {e:#}"),
             }
         }
-        let locked: Vec<bool> = (0..ITEMS).map(|i| Self::item_locked(ctx, i)).collect();
-        self.move_cursor(ctx, ITEMS as i32, UP, DOWN, |c| !locked[c as usize]);
         if ctx.input.pressed(CONFIRM) {
             sound::play(sound::OK);
             let g = &mut ctx.game;
@@ -408,18 +424,11 @@ impl MainMenu {
                 d
             };
         }
-        if extra {
-            self.highlight(ctx, VM_DIFF_EXTRA, true);
-        } else {
-            for i in 0..4 {
-                self.highlight(ctx, VM_DIFF + i, i as i32 == self.cursor);
-            }
-        }
-        if self.frames < 8 || self.pending.is_some() {
-            return;
-        }
+        let active = self.frames >= 8 && self.pending.is_none();
         if !extra {
-            self.move_cursor(ctx, 4, UP, DOWN, |_| true);
+            if active {
+                self.move_cursor(ctx, 4, UP, DOWN, |_| true);
+            }
             if self.cursor != self.prev_cursor {
                 self.prev_cursor = self.cursor;
                 for i in 0..4 {
@@ -427,6 +436,16 @@ impl MainMenu {
                         if i as i32 == self.cursor { 24 } else { 25 };
                 }
             }
+        }
+        if extra {
+            self.highlight(ctx, VM_DIFF_EXTRA, true);
+        } else {
+            for i in 0..4 {
+                self.highlight(ctx, VM_DIFF + i, i as i32 == self.cursor);
+            }
+        }
+        if !active {
+            return;
         }
         let store =
             |g: &mut gamemgr::Game, c: i32| g.cfg.difficulty = if extra { 4 + c } else { c } as u8;
@@ -466,7 +485,10 @@ impl MainMenu {
             if !self.char_allowed(ctx, self.cursor) {
                 self.cursor = (0..n).find(|&c| self.char_allowed(ctx, c)).unwrap_or(0);
             }
-            return;
+        }
+        let allowed: Vec<bool> = (0..n).map(|c| self.char_allowed(ctx, c)).collect();
+        if self.frames >= 8 {
+            self.move_cursor(ctx, n, LEFT, RIGHT, |c| allowed[c as usize]);
         }
         if self.cursor != self.prev_cursor {
             self.prev_cursor = self.cursor;
@@ -485,8 +507,6 @@ impl MainMenu {
         if self.frames < 8 {
             return;
         }
-        let allowed: Vec<bool> = (0..n).map(|c| self.char_allowed(ctx, c)).collect();
-        self.move_cursor(ctx, n, LEFT, RIGHT, |c| allowed[c as usize]);
         if ctx.input.pressed(CONFIRM) {
             sound::play(sound::OK);
             let g = &mut ctx.game;
@@ -508,8 +528,8 @@ impl MainMenu {
                 }
             }
         } else if ctx.input.pressed(CANCEL) {
+            // No interrupt here (12 §2.4): the difficulty screen's enter interrupt 7 does the transition.
             sound::play(sound::CANCEL);
-            self.interrupt_all(6);
             self.set_screen(self.screen - 1);
         }
     }
@@ -971,20 +991,23 @@ impl Task<Ctx> for MainMenu {
         if let Some((t, _)) = self.surface.take() {
             ctx.gfx.free_texture(t);
         }
-        for t in self.desc.drain(..) {
-            ctx.gfx.free_texture(t);
-        }
         ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        // The menu starts when its loader has finished (Supervisor loading screen, 12 §1).
+        if ctx.game.menu_loading > 0 {
+            return Ret::Next;
+        }
+        // Delayed switch: the new screen starts on the frame after the counter ran out (measured: press + 21).
         if let Some(p) = &mut self.pending {
-            p.frames = p.frames.saturating_sub(1);
             if p.frames == 0 {
                 let (s, c) = (p.screen, p.cursor);
                 self.pending = None;
                 self.set_screen(s);
                 self.cursor = c;
+            } else {
+                p.frames -= 1;
             }
         }
         let screen = self.screen;
@@ -1002,13 +1025,24 @@ impl Task<Ctx> for MainMenu {
         if self.screen == screen {
             self.frames += 1;
         }
+
         for vm in self.vms.iter_mut().filter(|v| v.script.is_some()) {
             vm.run(&mut ctx.anm);
+        }
+        // Leaving the top menu fades the description out (script 9 interrupt 2).
+        if screen == TOP && self.screen != TOP {
+            self.desc_vm.pending_interrupt = 2;
+        }
+        if self.desc_on {
+            self.desc_vm.run(&mut ctx.anm);
         }
         Ret::Next
     }
 
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        if ctx.game.menu_loading > 0 {
+            return Ret::Next;
+        }
         ctx.gfx.set_viewport(FULLSCREEN);
         if let Some((t, _)) = self.surface {
             ctx.gfx.image(t, 0.0, 0.0);
@@ -1017,30 +1051,9 @@ impl Task<Ctx> for MainMenu {
             ctx.anm.draw(&mut ctx.gfx, vm);
         }
         // Description VM: text.anm script 9 at (320, 448), centred (answers_impl9 §15).
-        let vm = &self.desc_vm;
-        if self.screen == TOP
-            && self.quitting.is_none()
-            && self.pending.is_none()
-            && vm.flags & anmvm::F_VISIBLE != 0
-        {
-            if let Some(&t) = self.desc.get(self.cursor as usize) {
-                let (w, h) = (
-                    if vm.sprite_w > 0.0 {
-                        vm.sprite_w
-                    } else {
-                        384.0
-                    },
-                    16.0,
-                );
-                let r = Rect::new(vm.pos[0] - w / 2.0, vm.pos[1] - h / 2.0, w, h);
-                ctx.gfx.sprite(
-                    t,
-                    Blend::Alpha,
-                    r,
-                    [0.0, 0.0, 1.0, 1.0],
-                    [255, 255, 255, vm.color[anmvm::A]],
-                );
-            }
+        let top = self.screen == TOP || (self.prev_screen == TOP && self.frames == 0);
+        if self.desc_on && top && self.quitting.is_none() && self.pending.is_none() {
+            ctx.anm.draw(&mut ctx.gfx, &mut self.desc_vm);
         }
         if self.screen == CHAR
             && self.frames > 8

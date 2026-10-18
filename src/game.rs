@@ -17,6 +17,7 @@ pub struct Ctx {
     pub game: crate::gamemgr::Game,
     pub ascii: crate::ascii::Queue,
     pub se_log: bool,
+    pub drawlog: Option<crate::drawlog::Writer>,
 }
 
 impl TaskCtx for Ctx {
@@ -46,7 +47,14 @@ impl Ctx {
             game: Default::default(),
             ascii: Default::default(),
             se_log: crate::env::var("TH08_SE_LOG").is_some(),
+            drawlog: None,
         };
+        if persist {
+            ctx.drawlog = crate::drawlog::Writer::from_env();
+        }
+        if ctx.drawlog.is_some() {
+            ctx.gfx.enable_log();
+        }
         ctx.anm.rng = crate::rng::Rng::boot();
         if persist {
             // The port's own save first; else import the original's score.dat (read-only).
@@ -106,5 +114,35 @@ impl Ctx {
     // Frame_Run only checks the calc runner's result.
     pub fn draw(&mut self) {
         task::run(self, Chain::Draw);
+        if self.drawlog.is_some() {
+            self.log_frame();
+        }
+    }
+
+    // TH08_DRAWLOG: one F record per presented frame, sampled after the draw.
+    fn log_frame(&mut self) {
+        let recs = self.gfx.take_log();
+        let g = &self.game;
+        let game_frame = if g.scene == crate::gamemgr::SCENE_GAME {
+            g.frame_counter
+        } else {
+            0
+        };
+        let demo = (g.flags & crate::gamemgr::F_DEMO != 0).then_some((g.demo, g.demo_frame));
+        let input = if g.scene == crate::gamemgr::SCENE_GAME {
+            self.input.game
+        } else {
+            self.input.held
+        };
+        let scene = g.scene;
+        if let Some(w) = &mut self.drawlog {
+            w.frame(scene, game_frame, demo, input, &recs);
+        }
+    }
+
+    // Starts an in-memory draw log (tests and tools).
+    pub fn log_to_memory(&mut self) {
+        self.drawlog = Some(crate::drawlog::Writer::memory());
+        self.gfx.enable_log();
     }
 }

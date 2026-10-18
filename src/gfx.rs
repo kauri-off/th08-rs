@@ -5,7 +5,7 @@ pub const SCREEN_W: f32 = 640.0;
 pub const SCREEN_H: f32 = 480.0;
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     pub pos: [f32; 4],
     pub uv: [f32; 2],
@@ -95,6 +95,49 @@ pub struct Texture {
     pub height: u32,
     bind: wgpu::BindGroup,
     tex: wgpu::Texture,
+    label: Option<LogTex>,
+}
+
+// Draw-log attribution of a texture: `<anm file>#<entry>` or an image file name, with the logical size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LogTex {
+    pub label: Arc<str>,
+    pub w: u32,
+    pub h: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LogFog {
+    pub color: [u8; 3],
+    pub start: f32,
+    pub end: f32,
+}
+
+// One recorded draw call (TH08_DRAWLOG); vertices in v0 TL, v1 TR, v2 BL, v3 BR order.
+#[derive(Clone, Debug)]
+pub enum LogRec {
+    Quad {
+        tex: Option<LogTex>,
+        id: TextureId,
+        textured: bool,
+        blend: Blend,
+        test: bool,
+        write: bool,
+        vp: Rect,
+        fog: Option<LogFog>,
+        v: [Vertex; 4],
+    },
+    Clear {
+        vp: Rect,
+        color: Option<[u8; 4]>,
+    },
+    Copy {
+        src: String,
+        dst: String,
+        from: [u32; 2],
+        size: [u32; 2],
+        to: [u32; 2],
+    },
 }
 
 struct Batch {
@@ -125,6 +168,9 @@ pub struct Gfx {
     frame: wgpu::Texture,
     frame_bind: wgpu::BindGroup,
     blit: wgpu::RenderPipeline,
+    log: Option<Vec<LogRec>>,
+    log_fog: Option<LogFog>,
+    pub persistent: bool,
 }
 
 const SHADER: &str = r#"
@@ -433,6 +479,9 @@ impl Gfx {
             frame,
             frame_bind,
             blit,
+            log: None,
+            log_fog: None,
+            persistent: false,
         };
         g.white = g.create_texture(1, 1, &[255; 4]);
         g
@@ -490,6 +539,7 @@ impl Gfx {
             height,
             bind,
             tex,
+            label: None,
         });
         if let Some(id) = self.free.pop() {
             self.textures[id] = t;
@@ -506,9 +556,12 @@ impl Gfx {
         }
     }
 
-    pub fn load_image(&mut self, bytes: &[u8]) -> anyhow::Result<TextureId> {
+    // `name` = the image file, used as its draw-log label.
+    pub fn load_image(&mut self, name: &str, bytes: &[u8]) -> anyhow::Result<TextureId> {
         let img = image::load_from_memory(bytes)?.to_rgba8();
-        Ok(self.create_texture(img.width(), img.height(), &img))
+        let id = self.create_texture(img.width(), img.height(), &img);
+        self.set_label(id, name, img.width(), img.height());
+        Ok(id)
     }
 
     // Replaces a w×h RGBA region at (x, y); applied before the next submit.
@@ -566,6 +619,16 @@ impl Gfx {
         if w == 0 || h == 0 {
             return;
         }
+        if self.log.is_some() {
+            let rec = LogRec::Copy {
+                src: self.label_name(src),
+                dst: self.label_name(dst),
+                from,
+                size: [w, h],
+                to,
+            };
+            self.log.as_mut().unwrap().push(rec);
+        }
         let mut enc = self.device.create_command_encoder(&Default::default());
         fn info(t: &wgpu::Texture, p: [u32; 2]) -> wgpu::TexelCopyTextureInfo<'_> {
             wgpu::TexelCopyTextureInfo {
@@ -589,6 +652,40 @@ impl Gfx {
             },
         );
         self.queue.submit([enc.finish()]);
+    }
+
+    pub fn set_label(&mut self, id: TextureId, label: &str, w: u32, h: u32) {
+        if let Some(Some(t)) = self.textures.get_mut(id) {
+            t.label = Some(LogTex {
+                label: label.into(),
+                w,
+                h,
+            });
+        }
+    }
+
+    fn label_name(&self, id: TextureId) -> String {
+        match self.textures.get(id).and_then(Option::as_ref) {
+            Some(Texture { label: Some(l), .. }) => l.label.to_string(),
+            _ => format!("?{id:x}"),
+        }
+    }
+
+    pub fn enable_log(&mut self) {
+        self.log.get_or_insert_with(Vec::new);
+    }
+
+    pub fn logging(&self) -> bool {
+        self.log.is_some()
+    }
+
+    pub fn take_log(&mut self) -> Vec<LogRec> {
+        self.log.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
+    // Vertex fog parameters reported for the following draws (the factor itself is per vertex).
+    pub fn set_log_fog(&mut self, fog: Option<LogFog>) {
+        self.log_fog = fog;
     }
 
     pub fn texture(&self, id: TextureId) -> &Texture {
@@ -686,6 +783,12 @@ impl Gfx {
         } else {
             Kind::ClearDepth
         };
+        if let Some(log) = &mut self.log {
+            log.push(LogRec::Clear {
+                vp: self.viewport,
+                color,
+            });
+        }
         self.push(
             self.white,
             PipeKey {
@@ -709,6 +812,26 @@ impl Gfx {
     }
 
     fn push(&mut self, tex: TextureId, key: PipeKey, v: [Vertex; 4], idx: [u32; 6]) {
+        if key.kind == Kind::Draw && self.log.is_some() {
+            let v = if idx[3] == 0 {
+                [v[0], v[1], v[3], v[2]]
+            } else {
+                v
+            };
+            let t = self.textures.get(tex).and_then(Option::as_ref);
+            let rec = LogRec::Quad {
+                tex: t.and_then(|t| t.label.clone()),
+                id: tex,
+                textured: tex != self.white,
+                blend: key.blend,
+                test: key.test,
+                write: key.write,
+                vp: self.viewport,
+                fog: self.log_fog,
+                v,
+            };
+            self.log.as_mut().unwrap().push(rec);
+        }
         let base = self.verts.len() as u32;
         self.verts.extend(v);
         let start = self.indices.len() as u32;
@@ -729,7 +852,9 @@ impl Gfx {
         self.white
     }
 
+    // Untextured rectangle in D3D screen coordinates (pixel centres on integers).
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
+        let (x, y) = (x + 0.5, y + 0.5);
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         self.quad(
             self.white,
@@ -745,10 +870,30 @@ impl Gfx {
         self.quad(self.white, blend, corners, uv, color);
     }
 
+    // Full-surface copy to the screen (logged as a K record).
     pub fn image(&mut self, tex: TextureId, x: f32, y: f32) {
         let t = self.texture(tex);
         let (w, h) = (t.width as f32, t.height as f32);
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let log = self.log.take();
+        if let Some(mut log) = log {
+            log.push(LogRec::Copy {
+                src: self.label_name(tex),
+                dst: "screen".into(),
+                from: [0, 0],
+                size: [w as u32, h as u32],
+                to: [x as u32, y as u32],
+            });
+            self.quad(
+                tex,
+                Blend::Alpha,
+                [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+                uv,
+                [255; 4],
+            );
+            self.log = Some(log);
+            return;
+        }
         self.quad(
             tex,
             Blend::Alpha,
@@ -813,15 +958,26 @@ impl Gfx {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: if self.persistent {
+                        wgpu::LoadOp::Load
+                    } else {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    },
                     store: wgpu::StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Discard,
+                depth_ops: Some(if self.persistent {
+                    wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }
+                } else {
+                    wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }
                 }),
                 stencil_ops: None,
             }),
@@ -900,6 +1056,33 @@ impl Gfx {
         pass.draw(0..3, 0..1);
     }
 
+    // Renders the pending batches into the 640x480 frame without presenting (tools).
+    pub fn flush(&mut self) {
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        self.render_frame(&mut enc);
+        self.queue.submit([enc.finish()]);
+        self.clear_batches();
+    }
+
+    // Raw draw of a pre-built quad (v0 TL, v1 TR, v2 BL, v3 BR) with explicit depth state (draw-log renderer).
+    pub fn draw_raw(
+        &mut self,
+        tex: Option<TextureId>,
+        blend: Blend,
+        test: bool,
+        write: bool,
+        v: [Vertex; 4],
+    ) {
+        let tex = tex.unwrap_or(self.white);
+        let key = PipeKey {
+            blend,
+            test,
+            write,
+            kind: Kind::Draw,
+        };
+        self.push(tex, key, v, [0, 1, 2, 1, 2, 3]);
+    }
+
     fn render_frame(&mut self, enc: &mut wgpu::CommandEncoder) {
         let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
         let depth = self.depth_view(w, h);
@@ -975,6 +1158,10 @@ impl Gfx {
     }
 
     fn clear_batches(&mut self) {
+        if let Some(l) = &mut self.log {
+            l.clear();
+        }
+        self.log_fog = None;
         self.viewport = FULLSCREEN;
         self.depth_test = false;
         self.verts.clear();

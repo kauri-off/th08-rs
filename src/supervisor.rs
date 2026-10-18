@@ -15,8 +15,11 @@ pub struct Supervisor {
     boot_frames: u32,
 }
 
-// The logo stays up while the loader runs (answers_impl9 §18: no fixed time); loading is instant here, so a short hold.
-const BOOT_FRAMES: u32 = 60;
+// The logo stays up while the loaders run (answers_impl9 §18: no fixed time); holds measured on the original's draw
+// log: 13 boot frames, then the menu loader until scene frame 34 (33 when the menu is entered again).
+const BOOT_FRAMES: u32 = 14;
+const MENU_LOAD_BOOT: u32 = 34;
+const MENU_LOAD: u32 = 33;
 
 pub fn register(ctx: &mut Ctx) -> Result<()> {
     let t = task::task(Supervisor {
@@ -55,6 +58,43 @@ pub fn setup_new_game(g: &mut Game, stage: usize) -> Result<()> {
 }
 
 impl Supervisor {
+    // Loading_Begin (12 §1): surface 8 (the logo) full screen + nowloading.anm scripts 0–2 at (500, 440).
+    fn begin_loading(&mut self, ctx: &mut Ctx) -> Result<()> {
+        if self.logo.is_none() {
+            let b = ctx.archive.read("th08logo.jpg")?;
+            self.logo = Some(ctx.gfx.load_image("th08logo.jpg", &b)?);
+        }
+        self.boot_vms = (0..3)
+            .map(|i| {
+                let mut vm = AnmVm::default();
+                ctx.anm.set_script(&mut vm, 2, i);
+                vm
+            })
+            .collect();
+        Ok(())
+    }
+
+    // Menu loader done: title fade-from-white, Loading_End (interrupt 1 fades the VMs out, surface released).
+    fn end_loading(&mut self, ctx: &mut Ctx) {
+        if let Some(t) = self.logo.take() {
+            ctx.gfx.free_texture(t);
+        }
+        crate::effect::screen(0, 70, 0xFFFFFF, 0, 0, 0x15);
+        for vm in &mut self.boot_vms {
+            vm.pending_interrupt = 1;
+        }
+    }
+
+    fn menu_loading(&mut self, ctx: &mut Ctx, from: i32) -> Result<()> {
+        ctx.game.menu_loading = if from == gamemgr::SCENE_BOOT {
+            MENU_LOAD_BOOT
+        } else {
+            self.begin_loading(ctx)?;
+            MENU_LOAD
+        };
+        Ok(())
+    }
+
     fn drop_scene(&mut self, ctx: &mut Ctx) {
         if let Some(t) = self.scene_task.take() {
             task::remove_task(ctx, &t);
@@ -110,6 +150,7 @@ impl Supervisor {
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;
+                self.menu_loading(ctx, cur)?;
             }
             (gamemgr::SCENE_MENU, gamemgr::SCENE_GAME) => {
                 self.drop_scene(ctx);
@@ -170,6 +211,7 @@ impl Supervisor {
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;
+                self.menu_loading(ctx, cur)?;
             }
             _ => log::warn!("unhandled scene switch {cur} -> {req}"),
         }
@@ -187,15 +229,7 @@ impl Task<Ctx> for Supervisor {
             ctx.anm
                 .load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
             // Boot loading screen (12 §1): th08logo.jpg full screen + nowloading.anm scripts 0–2 at (500, 440).
-            self.logo = Some(ctx.gfx.load_image(&ctx.archive.read("th08logo.jpg")?)?);
-            self.boot_vms = (0..3)
-                .map(|i| {
-                    let mut vm = AnmVm::default();
-                    ctx.anm.set_script(&mut vm, 2, i);
-                    vm.pos = [500.0, 440.0, 0.0];
-                    vm
-                })
-                .collect();
+            self.begin_loading(ctx)?;
             if let Some(spec) = crate::env::var("TH08_ANM") {
                 crate::anmdebug::register(ctx, &spec)?;
                 return Ok(());
@@ -230,21 +264,27 @@ impl Task<Ctx> for Supervisor {
         }
         self.frame += 1;
         ctx.input.tick();
-        if self.logo.is_some() {
+        for vm in &mut self.boot_vms {
+            vm.run(&mut ctx.anm);
+        }
+        if self.logo.is_some() && ctx.game.scene == gamemgr::SCENE_BOOT {
             self.boot_frames += 1;
-            for vm in &mut self.boot_vms {
-                vm.run(&mut ctx.anm);
-            }
             if ctx.game.requested == gamemgr::SCENE_MENU && self.boot_frames < BOOT_FRAMES {
                 return Ret::Next;
             }
-            if let Some(t) = self.logo.take() {
-                ctx.gfx.free_texture(t);
-                crate::effect::screen(0, 70, 0xFFFFFF, 0, 0, 0x15);
+            if ctx.game.requested != gamemgr::SCENE_MENU {
+                self.end_loading(ctx);
+                self.boot_vms.clear();
             }
-            self.boot_vms.clear();
         }
-        match self.switch(ctx) {
+        let r = self.switch(ctx);
+        if ctx.game.menu_loading > 0 {
+            ctx.game.menu_loading -= 1;
+            if ctx.game.menu_loading == 0 {
+                self.end_loading(ctx);
+            }
+        }
+        match r {
             Ok(Some(r)) => r,
             Ok(None) => Ret::Next,
             Err(e) => {
@@ -261,9 +301,15 @@ impl Task<Ctx> for Supervisor {
                 ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
                 ctx.gfx.image(t, 0.0, 0.0);
             }
-            (2, Some(_)) => {
+            (2, _) => {
+                // The scripts' own positions (slide-in, z) are relative to the loading position.
                 for vm in &mut self.boot_vms {
-                    ctx.anm.draw(&mut ctx.gfx, vm);
+                    let p = vm.pos;
+                    let o = vm.pos_offset;
+                    vm.pos = [p[0] + o[0] + 500.0, p[1] + o[1] + 440.0, p[2] + o[2]];
+                    // SPEC-GAP: draw function taken from the original's draw log (rotated ring → Draw2DRot).
+                    ctx.anm.draw_mode(&mut ctx.gfx, vm, 2);
+                    vm.pos = p;
                 }
             }
             _ => {}

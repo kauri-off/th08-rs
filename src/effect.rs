@@ -943,9 +943,15 @@ fn screen_fx(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32) -> ScreenEffect {
         kind,
         p: [p0, p1, p2, p3],
         prio: 0x15,
-        alpha: 0.0,
+        // A draw before the first calc shows the t = 0 alpha.
+        alpha: match kind {
+            0 => 255.0,
+            3 => (p2 as u32 >> 24) as f32,
+            _ => 0.0,
+        },
         release: false,
         timer: Timer::default(),
+        done: false,
     }
 }
 
@@ -1075,6 +1081,7 @@ pub struct ScreenEffect {
     alpha: f32,
     release: bool,
     timer: Timer,
+    done: bool,
 }
 
 pub const SCREEN_CALC_PRIO: u16 = 3;
@@ -1119,14 +1126,31 @@ impl ScreenEffect {
 }
 
 impl Task<Ctx> for ScreenEffect {
+    // Calc returning 0 removes the whole effect, draw node included (13 §3).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        let r = self.step(ctx);
+        self.done = r == Ret::Remove;
+        r
+    }
+
+    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        if self.done {
+            return Ret::Remove;
+        }
+        self.draw_fx(ctx);
+        Ret::Next
+    }
+}
+
+impl ScreenEffect {
+    fn step(&mut self, ctx: &mut Ctx) -> Ret {
         let t = self.timer.cur;
         let gs = ctx.anm.speed;
         let [p0, p1, p2, p3] = self.p;
         let dur = p0.max(1);
         match self.kind {
             0 => {
-                self.alpha = (255 - 255 * t / dur).max(0) as f32;
+                self.alpha = (255.0 - 255.0 * t as f32 / dur as f32).max(0.0).trunc();
                 if t >= dur {
                     return Ret::Remove;
                 }
@@ -1196,11 +1220,11 @@ impl Task<Ctx> for ScreenEffect {
         Ret::Next
     }
 
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    fn draw_fx(&mut self, ctx: &mut Ctx) {
         let colour = match self.kind {
             0 | 2 | 4 | 5 | 6 => self.p[1] as u32,
             3 => self.p[2] as u32,
-            _ => return Ret::Next,
+            _ => return,
         };
         let rgba = [
             (colour >> 16) as u8,
@@ -1212,7 +1236,6 @@ impl Task<Ctx> for ScreenEffect {
         let r = if full { FULLSCREEN } else { PLAYFIELD };
         ctx.gfx.set_viewport(r);
         ctx.gfx.rect(r.x, r.y, r.w, r.h, rgba);
-        Ret::Next
     }
 }
 

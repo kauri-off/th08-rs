@@ -77,14 +77,20 @@ impl AnmManager {
         ensure!(slot < SLOTS, "anm slot {slot} out of range");
         let chunks = anm::parse(&archive.read(name)?)?;
         self.unload(gfx, slot);
-        self.insert(slot, name, chunks, |c| match &c.texture {
-            Some(t) => gfx.create_texture(t.width, t.height, &t.rgba),
-            // '@' entries are blank render targets (text / capture).
-            None => gfx.create_texture(
-                c.width.max(1),
-                c.height.max(1),
-                &vec![0; (c.width.max(1) * c.height.max(1) * 4) as usize],
-            ),
+        let mut entry = 0;
+        self.insert(slot, name, chunks, |c| {
+            let id = match &c.texture {
+                Some(t) => gfx.create_texture(t.width, t.height, &t.rgba),
+                // '@' entries are blank render targets (text / capture).
+                None => gfx.create_texture(
+                    c.width.max(1),
+                    c.height.max(1),
+                    &vec![0; (c.width.max(1) * c.height.max(1) * 4) as usize],
+                ),
+            };
+            gfx.set_label(id, &format!("{name}#{entry}"), c.width, c.height);
+            entry += 1;
+            id
         });
         Ok(())
     }
@@ -182,8 +188,10 @@ impl AnmManager {
         self.draw_mode(gfx, vm, vm.draw_mode);
     }
 
+    // 2D draws carry the VM's z as the vertex depth.
     pub fn draw_mode(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, mode: i32) {
-        self.draw_mode_z(gfx, vm, mode, 0.0);
+        let z = vm.pos[2];
+        self.draw_mode_z(gfx, vm, mode, z);
     }
 
     fn update_world_matrix(vm: &mut AnmVm) {
@@ -331,7 +339,13 @@ impl AnmManager {
             }
         });
         let blend = self.blend_for(vm);
+        gfx.set_log_fog(fog.map(|f| gfx::LogFog {
+            color: f.color,
+            start: f.near,
+            end: f.far,
+        }));
         gfx.strip(tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
+        gfx.set_log_fog(None);
     }
 
     // `z` is the vertex depth (projected depth for stage billboards, 0 otherwise).
@@ -411,6 +425,8 @@ impl AnmManager {
         let (miny, maxy) = corners
             .iter()
             .fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c[1]), b.max(c[1])));
+        // Culled in D3D coordinates (corners carry the +0.5 shift here).
+        let (minx, maxx, miny, maxy) = (minx - 0.5, maxx - 0.5, miny - 0.5, maxy - 0.5);
         if maxx < vp.x || minx > vp.x + vp.w || maxy < vp.y || miny > vp.y + vp.h {
             return;
         }

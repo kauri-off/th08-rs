@@ -11,6 +11,7 @@ pub mod bomb;
 pub mod bullet;
 pub mod config;
 pub mod demosync;
+pub mod drawlog;
 pub mod ecl;
 pub mod eclvm;
 pub mod effect;

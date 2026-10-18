@@ -696,10 +696,11 @@ impl Hud {
             Blend::Alpha,
             false,
             [
-                Vertex::screen(488.0, 136.0, 0.0, uv, l),
-                Vertex::screen(488.0 + pw, 136.0, 0.0, uv, r),
-                Vertex::screen(488.0, 152.0, 0.0, uv, l),
-                Vertex::screen(488.0 + pw, 152.0, 0.0, uv, r),
+                // D3D coordinates (+0.5 for wgpu) and z 0.1, as in the original's draw log.
+                Vertex::screen(488.5, 136.5, 0.1, uv, l),
+                Vertex::screen(488.5 + pw, 136.5, 0.1, uv, r),
+                Vertex::screen(488.5, 152.5, 0.1, uv, l),
+                Vertex::screen(488.5 + pw, 152.5, 0.1, uv, r),
             ],
         );
         q.push(Text::new(

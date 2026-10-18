@@ -97,6 +97,7 @@ pub struct Game {
     pub continue_clock: bool,
     pub continue_apply: bool,
     pub card: i16,
+    pub menu_loading: u32,
 }
 
 impl Default for Game {
@@ -146,6 +147,7 @@ impl Default for Game {
             continue_clock: false,
             continue_apply: false,
             card: 0,
+            menu_loading: 0,
         }
     }
 }

@@ -263,8 +263,9 @@ fn popups_calc(gs: f32) {
     });
 }
 
+// Popups and the gauge readout are clipped to the playfield (viewport seen in the original's draw log).
 fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
-    gfx.set_viewport(FULLSCREEN);
+    gfx.set_viewport(crate::gfx::PLAYFIELD);
     let pl = crate::effect::with(|e| e.player);
     let o = anm.screen_offset;
     POPUPS.with_borrow(|p| {
