@@ -73,6 +73,31 @@ fn main() -> anyhow::Result<()> {
                 println!("  {n:4} x {g}");
             }
         }
+        if f >= a && f <= b && std::env::var_os("TH08_BDUMP").is_some() {
+            if let Some(gm) = th08::gamemgr::current() {
+                let gm = gm.borrow();
+                if let Some(em) = &gm.enemies {
+                    for (i, x) in em.borrow().enemies.iter().enumerate() {
+                        if x.alive() {
+                            println!(
+                                "  e{i} sub {} t {} pos {:.1},{:.1} fl {:x} life {}",
+                                x.main.ctx.sub, x.main.ctx.clock.cur, x.final_pos[0], x.final_pos[1], x.flags, x.life
+                            );
+                        }
+                    }
+                }
+                if let Some(bm) = &gm.bullets {
+                    for (i, x) in bm.borrow().bullets.iter().enumerate() {
+                        if x.state != 0 {
+                            println!(
+                                "  b{i} st {} pos {:.1},{:.1} vel {:.2},{:.2} ang {:.2} off {} act {:x}",
+                                x.state, x.pos[0], x.pos[1], x.vel[0], x.vel[1], x.angle, x.off_count, x.active
+                            );
+                        }
+                    }
+                }
+            }
+        }
         if f >= a && f <= b {
             let got = sample(&ctx, base);
             let want = rows[f - 1];

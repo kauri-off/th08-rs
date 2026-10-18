@@ -620,7 +620,7 @@ impl Exec<'_> {
                 c.flags |= A_MODE_REACT;
                 c.set_flag(A_YOUKAI, youkai);
                 c.mode_bits = if youkai { 0x40 } else { 0x20 };
-                c.layer = if youkai { 2 } else { 0 };
+                c.layer = if youkai { 0 } else { 2 };
                 c.flags &= !A_CONTACT;
                 if op == 92 {
                     c.pos_offset = self.e.pos;
@@ -630,11 +630,13 @@ impl Exec<'_> {
             }
         }
         if chained {
-            // Child aura 0x20 (07 §10.5). SPEC-GAP: interrupt 1 = youkai, 2 = human is a guess.
-            let fp = self.m.enemies[ci].final_pos;
-            let fx = crate::effect::spawn_high(self.anm, 0x20, fp, 0xFFFFFFFF);
-            crate::effect::get(fx, |x| x.vm.pending_interrupt = if youkai { 1 } else { 2 });
-            self.m.enemies[ci].fx_aura = fx;
+            // Child aura 0x20 (07 §10.5).
+            if self.m.enemies[ci].fx_aura == crate::effect::NONE {
+                let fp = self.m.enemies[ci].final_pos;
+                let fx = crate::effect::spawn_high(self.anm, 0x20, fp, 0xFFFFFFFF);
+                crate::effect::get(fx, |x| x.vm.pending_interrupt = if youkai { 2 } else { 1 });
+                self.m.enemies[ci].fx_aura = fx;
+            }
         }
         if chained {
             let mut last: Option<usize> = None;

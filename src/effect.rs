@@ -237,8 +237,11 @@ impl Effects {
         colour: u32,
         zoff: bool,
     ) -> bool {
-        let player = self.player;
-        let view = self.view;
+        self.reset(i, kind, pos, param, colour, zoff);
+        self.type_init(rng, gs, i)
+    }
+
+    fn reset(&mut self, i: usize, kind: u8, pos: [f32; 3], param: [f32; 3], colour: u32, zoff: bool) {
         let e = &mut self.fx[i];
         *e = Effect {
             active: true,
@@ -251,6 +254,13 @@ impl Effects {
             ..Effect::default()
         };
         e.age.set(0);
+    }
+
+    fn type_init(&mut self, rng: &mut crate::rng::Rng, gs: f32, i: usize) -> bool {
+        let player = self.player;
+        let view = self.view;
+        let e = &mut self.fx[i];
+        let (kind, pos, param) = (e.kind, e.pos, e.param);
         match kind {
             3 => {
                 let vx = (rng.next_f32() * 256.0 - 128.0) * 4.0 / 33.0;
@@ -369,9 +379,16 @@ impl Effects {
 
     // Common init's script part (13 §2.2), then the VM fields the type init sets.
     fn start(&mut self, anm: &mut AnmManager, i: usize) {
+        if self.start_script(anm, i) {
+            self.start_post(i);
+        }
+    }
+
+    // The script runs its t = 0 step here, so its RNG draws precede the type init's (13 §2.6).
+    fn start_script(&mut self, anm: &mut AnmManager, i: usize) -> bool {
         let e = &mut self.fx[i];
         if !std::mem::take(&mut e.pending) {
-            return;
+            return false;
         }
         let script = SCRIPTS.get(e.kind as usize).copied().unwrap_or(-1);
         if script >= 0 {
@@ -382,6 +399,11 @@ impl Effects {
         }
         e.vm.color = e.colour.to_le_bytes();
         e.vm.pos_offset = [0.0; 3];
+        true
+    }
+
+    fn start_post(&mut self, i: usize) {
+        let e = &mut self.fx[i];
         if e.death_ring > 0 {
             e.vm.pos = [128.0, 32.0, 0.0];
             e.vm.interp_pos(e.death_ring, 4, [8.0, 32.0, 0.0]);
@@ -410,9 +432,11 @@ impl Effects {
         zoff: bool,
     ) -> bool {
         let gs = anm.speed;
-        let ok = self.init(&mut anm.rng, gs, i, kind, pos, param, colour, zoff);
+        self.reset(i, kind, pos, param, colour, zoff);
+        self.start_script(anm, i);
+        let ok = self.type_init(&mut anm.rng, gs, i);
         if ok {
-            self.start(anm, i);
+            self.start_post(i);
         }
         ok
     }

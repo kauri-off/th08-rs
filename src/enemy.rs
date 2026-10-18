@@ -678,6 +678,10 @@ impl EnemyManager {
                 }
                 d
             };
+            if std::env::var_os("TH08_DMGLOG").is_some() && d > 0 {
+                let p = self.player.borrow();
+                eprintln!("DMG e{idx} d {d} pos {:?} hb {:?} sb {:?} fl {:x} shot {} areas {}", pos, hb, sb, flags, p.shot_type, p.damage_areas.iter().filter(|a| a.active).count());
+            }
             self.enemies[idx].orb_acc = acc;
             self.enemies[idx].bomb_hit = by_bomb;
             self.damage(idx, d, by_bomb);
@@ -1165,10 +1169,11 @@ impl EnemyManager {
             e.item = -2;
         }
         let e = &self.enemies[idx];
-        if let Some(anm) = anm
-            && e.flags & A_BOSS != 0
-        {
+        if let Some(anm) = anm {
             let (pos, count) = (e.final_pos, e.children);
+            if std::env::var_os("TH08_DMGLOG").is_some() {
+                eprintln!("CHAIN boss part count {count}");
+            }
             crate::ascii::popup_large(pos, count, 0, 0xFFF0F00F, 2.0);
             for _ in 0..2 * count {
                 let r = anm.rng.next_f32() * 128.0;
@@ -1185,8 +1190,6 @@ impl EnemyManager {
                 .cancel_circle([pos[0], pos[1]], 32.0, 1.0, 16, 7);
             self.bullets.borrow_mut().items.collect_timer = 0;
         }
-        // SPEC-GAP: the parent's child counter (+0x3380) is reset after a chain kill.
-        self.enemies[idx].children = 0;
     }
 
     // Single-kill path of 0x42ADB0: a chained child killed on its own.
@@ -1360,12 +1363,11 @@ impl EnemyManager {
     fn drop_items(&mut self, idx: usize, anm: &mut AnmManager, mode: Option<u8>) {
         let e = &mut self.enemies[idx];
         let p = e.final_pos;
-        if e.item != -2 {
-            crate::effect::spawn(anm, e.death_bytes[1].wrapping_add(4), p, 3, 0xFFFFFFFF);
-        }
-        let e = &mut self.enemies[idx];
         let mut items = Vec::new();
         let mode = mode.unwrap_or(if e.bomb_hit { 1 } else { 0 });
+        if std::env::var_os("TH08_DMGLOG").is_some() {
+            eprintln!("DROP e{idx} item {} ctr {} extra {} {} bytes {:?}", e.item, self.g.drop_counter, e.extra_power, e.extra_point, e.death_bytes);
+        }
         if e.item >= 0 {
             items.push((p, e.item, mode));
         } else if e.item == -1 {
@@ -1376,6 +1378,11 @@ impl EnemyManager {
             }
             self.g.drop_counter += 1;
         }
+        if self.enemies[idx].item >= 0 {
+            let spark = self.enemies[idx].death_bytes[1].wrapping_add(4);
+            crate::effect::spawn(anm, spark, p, 3, 0xFFFFFFFF);
+        }
+        let e = &mut self.enemies[idx];
         let power_kind = if self.player.borrow().stats.power < 128.0 {
             0
         } else {
@@ -1526,10 +1533,9 @@ impl EnemyManager {
         }
         self.kill_chain(idx, Some(&mut *anm));
         {
-            // SPEC-GAP: ±200 by player mode (07 §10.3 "later phase"); sign and bombing rule taken from the demo traces.
             let mut p = self.player.borrow_mut();
             if !p.bombing {
-                let n = if p.mode == 1 { 200 } else { -200 };
+                let n = if p.focus == 0 { -200 } else { 200 };
                 p.stats.gauge_add(n);
             }
         }
@@ -1555,21 +1561,6 @@ impl EnemyManager {
             _ => {}
         }
         let (pos, db) = (self.enemies[idx].final_pos, self.enemies[idx].death_bytes);
-        if mode <= 2 && self.enemies[idx].flags & A_CHAIN_KILLED == 0 {
-            crate::sound::play_at(
-                if idx % 2 == 0 {
-                    crate::sound::ENEP0
-                } else {
-                    crate::sound::ENEP1
-                },
-                pos[0],
-            );
-            crate::effect::spawn(anm, db[0], pos, 1, 0xFFFFFFFF);
-            crate::effect::spawn(anm, db[1].wrapping_add(4), pos, 4, 0xFFFFFFFF);
-        } else if mode == 3 {
-            crate::effect::spawn(anm, db[0], pos, 3, 0xFFFFFFFF);
-        }
-        self.release_effects(idx);
         if mode <= 2 {
             if self.enemies[idx].flags & A_BOSS != 0 {
                 self.unregister_boss(idx);
@@ -1585,6 +1576,28 @@ impl EnemyManager {
             }
             self.drop_items(idx, anm, None);
         }
+        if mode <= 2 && self.enemies[idx].flags & A_CHAIN_KILLED == 0 {
+            crate::sound::play_at(
+                if idx % 2 == 0 {
+                    crate::sound::ENEP0
+                } else {
+                    crate::sound::ENEP1
+                },
+                pos[0],
+            );
+            crate::effect::spawn(anm, db[0], pos, 1, 0xFFFFFFFF);
+            crate::effect::spawn(anm, db[1].wrapping_add(4), pos, 4, 0xFFFFFFFF);
+            let max = {
+                let p = self.player.borrow();
+                p.stats.human_max() || p.stats.youkai_max()
+            };
+            if max {
+                self.spawn_item(anm, pos, crate::item::TIME_ORB as i32, 1);
+            }
+        } else if mode == 3 {
+            crate::effect::spawn(anm, db[0], pos, 3, 0xFFFFFFFF);
+        }
+        self.release_effects(idx);
         if mode == 0 {
             self.free(idx);
             return;
@@ -1604,6 +1617,32 @@ impl EnemyManager {
         }
     }
 
+    // Enemy_ReactPlayerMode (07 §10.1 step 3).
+    fn react_player_mode(&mut self, idx: usize, anm: &mut AnmManager) {
+        let youkai = self.g.player_mode != 0;
+        let e = &mut self.enemies[idx];
+        let p = e.final_pos;
+        if e.flags & A_YOUKAI == 0 {
+            if youkai {
+                crate::effect::spawn(anm, 0x1F, p, 1, 0x80303080);
+                crate::effect::get(e.fx_aura, |x| x.vm.pending_interrupt = 2);
+                crate::sound::play_at(crate::sound::OPHIDE, p[0]);
+                e.layer = 0;
+            }
+            let t = e.boss_timer;
+            if e.flags_b & 1 << 1 != 0 && t.cur != t.prev && t.cur % 2 == 0 {
+                crate::effect::spawn(anm, 38, p, 1, 0xFFFFFFFF);
+            }
+        } else if !youkai {
+            crate::effect::spawn(anm, 0x1E, p, 1, 0x80803030);
+            crate::effect::get(e.fx_aura, |x| x.vm.pending_interrupt = 1);
+            crate::sound::play_at(crate::sound::OPSHOW, p[0]);
+            e.layer = 2;
+        }
+        e.mode_bits = if youkai { 0x40 } else { 0x20 };
+        e.set_flag(A_YOUKAI, youkai);
+    }
+
     // EnemyMgr_Calc per enemy (07 §10.1).
     fn update(&mut self, idx: usize, anm: &mut AnmManager) {
         let gs = anm.speed;
@@ -1615,20 +1654,7 @@ impl EnemyManager {
             return;
         }
         if self.enemies[idx].flags & A_MODE_REACT != 0 {
-            let youkai = self.g.player_mode != 0;
-            let e = &mut self.enemies[idx];
-            if (e.flags & A_YOUKAI != 0) != youkai {
-                crate::sound::play_at(
-                    if youkai {
-                        crate::sound::OPHIDE
-                    } else {
-                        crate::sound::OPSHOW
-                    },
-                    e.final_pos[0],
-                );
-            }
-            e.mode_bits = if youkai { 0x40 } else { 0x20 };
-            e.set_flag(A_YOUKAI, youkai);
+            self.react_player_mode(idx, anm);
         }
         let held = {
             let p = self.player.borrow();

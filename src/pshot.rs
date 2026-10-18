@@ -769,7 +769,10 @@ impl Player {
                 continue;
             }
             let d = self.bullets[i].damage as i32;
-            shot += if self.bombing { (d / 5).max(1) } else { d };
+            let d = if self.bombing { (d / 5).max(1) } else { d };
+            shot += d;
+            // SPEC-GAP: each hit also adds its damage to the accumulator before the orb check (fits demo 3 frames 801/805).
+            *acc += d;
             while *acc >= self.orb_step {
                 *acc -= self.orb_step;
                 if self.stats.human_max() && self.bullets[i].side < 0 {
@@ -794,8 +797,8 @@ impl Player {
                 }
             }
         }
-        let shot = shot.min(50);
-        *acc += shot;
+        // SPEC-GAP: the 50 cap (09 §4.5) is applied to the accumulator only; the traces show uncapped shot damage.
+        *acc += shot.min(50);
         let mut dmg = shot;
         for a in self.damage_areas.iter_mut().filter(|a| a.active) {
             if a.period > 0 && a.life % a.period != 0 || !a.contains([pos[0], pos[1]], half) {
