@@ -165,6 +165,44 @@ pub fn shift_kind(kind: u8, d: [f32; 3]) {
     })
 }
 
+// Debug dump of every live effect of `kind` (format of specs/data/q15/eff51_decoded.txt).
+pub fn dump(kind: u8) -> String {
+    let argb = |c: [u8; 4]| u32::from_le_bytes(c);
+    with(|m| {
+        let v = m.view;
+        let mut s = format!(
+            "F ring {} cam {:?} fac {:?} ovl {:08x} player {:?}\n",
+            m.cursor,
+            v.pos,
+            v.facing,
+            argb(m.overlay),
+            m.player
+        );
+        for (i, e) in m.fx.iter().enumerate() {
+            if !e.active || e.kind != kind {
+                continue;
+            }
+            s += &format!(
+                " E{i} t{} time{} world{:?} v{:?} a{:?} rotz{:.5} scl{:?} col {:08x} col2 {:08x} fl {:08x} I {} {} D{:?}\n",
+                e.kind,
+                e.vm.time.cur,
+                e.pos,
+                e.vel,
+                e.acc,
+                e.vm.rotation[2],
+                e.vm.scale,
+                argb(e.vm.color),
+                argb(e.vm.color2),
+                e.vm.flags,
+                e.vm.ivars[0],
+                e.vm.ivars[1],
+                e.disp
+            );
+        }
+        s
+    })
+}
+
 pub fn clear() {
     with(|e| {
         *e = Effects {
@@ -212,9 +250,10 @@ impl Effect {
 impl Effects {
     fn slot_ring(&mut self) -> Option<usize> {
         for _ in 0..RING_POOL {
-            self.cursor = (self.cursor + 1) % RING_POOL;
-            if !self.fx[self.cursor].active {
-                return Some(self.cursor);
+            let i = self.cursor;
+            self.cursor = (i + 1) % RING_POOL;
+            if !self.fx[i].active {
+                return Some(i);
             }
         }
         None
@@ -316,13 +355,15 @@ impl Effects {
                     e.rot = r(2.0 * PI) - PI;
                     e.spin = r(0.0314159) - 0.015708;
                 } else {
-                    let ox = rng.next_signed() * 60.0;
-                    let oy = if kind == 51 {
-                        rng.next_signed() * 100.0 - 50.0
-                    } else {
-                        rng.next_signed() * 200.0 - 200.0
-                    };
-                    let oz = rng.next_f32() * 100.0 - 100.0;
+                    let h = view.facing.map(|f| -f / 2.0);
+                    let ox = h[0] + rng.next_signed() * 60.0;
+                    let oy = h[1]
+                        + if kind == 51 {
+                            rng.next_signed() * 100.0 - 50.0
+                        } else {
+                            rng.next_signed() * 200.0 - 200.0
+                        };
+                    let oz = h[2] + (rng.next_f32() * 100.0 - 100.0);
                     let vx = rng.next_signed() * 0.001 + param[0];
                     let vy = rng.next_signed() * 0.03 + if kind == 51 { param[1] } else { 0.4 };
                     let vz = -(rng.next_f32() * 0.1) - 0.3 + param[2];
@@ -331,7 +372,11 @@ impl Effects {
                     (off, v, a) = ([ox, oy, oz], [vx, vy, vz], [ax, ay, -0.0003]);
                     e.pull = [-9999.0, 0.0, 0.0];
                 }
-                e.pos = std::array::from_fn(|k| base[k] + off[k]);
+                e.pos = if kind == 19 {
+                    std::array::from_fn(|k| base[k] + off[k])
+                } else {
+                    std::array::from_fn(|k| off[k] + (view.facing[k] + view.pos[k]))
+                };
                 e.vel = v.map(|x| x * gs);
                 e.acc = a.map(|x| x * gs);
                 e.layer = 1;
