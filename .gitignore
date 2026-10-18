@@ -7,3 +7,5 @@ re/extracted/
 re/decoded/
 re/work/
 specs/data/drawlog/demos/*.drawlog.xz
+/sessions/*
+!/sessions/README.md
