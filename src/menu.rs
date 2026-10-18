@@ -64,7 +64,9 @@ const CHAR_VMS: [[i32; 4]; 12] = [
     [130, 117, -1, 118],
 ];
 
-const STAGE_NAMES: [&str; 8] = ["Stage 1", "Stage 2", "Stage 3", "Stage 4A", "Stage 4B", "Stage 5", "Stage 6A", "Stage 6B"];
+const STAGE_NAMES: [&str; 8] = [
+    "Stage 1", "Stage 2", "Stage 3", "Stage 4A", "Stage 4B", "Stage 5", "Stage 6A", "Stage 6B",
+];
 
 // Unlock checks (15 §2.4) on the session's clear masks. SPEC-GAP: score.dat is not loaded yet; `TH08_UNLOCK=1` unlocks everything.
 fn unlock_all() -> bool {
@@ -194,9 +196,18 @@ impl MainMenu {
 
     fn render_description(&mut self, ctx: &mut Ctx, i: usize) {
         const H: usize = 16;
-        let w = if self.desc_vm.sprite_w > 0.0 { self.desc_vm.sprite_w as usize } else { 384 };
-        let mut rgba = self.raster.render(DESCRIPTIONS[i], [0xFF, 0xF0, 0xE0], w, H);
-        let width = (0..w).rev().find(|&x| (0..H).any(|y| rgba[(y * w + x) * 4 + 3] != 0)).map_or(0, |x| x + 1);
+        let w = if self.desc_vm.sprite_w > 0.0 {
+            self.desc_vm.sprite_w as usize
+        } else {
+            384
+        };
+        let mut rgba = self
+            .raster
+            .render(DESCRIPTIONS[i], [0xFF, 0xF0, 0xE0], w, H);
+        let width = (0..w)
+            .rev()
+            .find(|&x| (0..H).any(|y| rgba[(y * w + x) * 4 + 3] != 0))
+            .map_or(0, |x| x + 1);
         let shift = (w - width) / 2;
         if shift > 0 {
             for row in rgba.chunks_exact_mut(w * 4) {
@@ -204,10 +215,18 @@ impl MainMenu {
                 row[..shift * 4].fill(0);
             }
         }
-        self.desc.push(ctx.gfx.create_texture(w as u32, H as u32, &rgba));
+        self.desc
+            .push(ctx.gfx.create_texture(w as u32, H as u32, &rgba));
     }
 
-    fn move_cursor(&mut self, ctx: &Ctx, n: i32, prev: u16, next: u16, allowed: impl Fn(i32) -> bool) {
+    fn move_cursor(
+        &mut self,
+        ctx: &Ctx,
+        n: i32,
+        prev: u16,
+        next: u16,
+        allowed: impl Fn(i32) -> bool,
+    ) {
         let i = &ctx.input;
         let d = if i.pressed_or_repeat(prev) {
             -1
@@ -252,7 +271,11 @@ impl MainMenu {
         for i in 0..ITEMS {
             let on = i as i32 == self.cursor;
             self.highlight(ctx, 1 + i, on);
-            let grey = if Self::item_locked(ctx, i) { 0x40 } else { 0xFF };
+            let grey = if Self::item_locked(ctx, i) {
+                0x40
+            } else {
+                0xFF
+            };
             self.vms[1 + i].color[..3].fill(grey);
         }
         if self.cursor != self.prev_cursor {
@@ -271,7 +294,11 @@ impl MainMenu {
             return;
         }
         // SPEC-GAP: the attract demo (1500 idle frames → demo replay) needs replay playback; the counter only runs.
-        self.idle = if ctx.input.held != 0 { 0 } else { self.idle + 1 };
+        self.idle = if ctx.input.held != 0 {
+            0
+        } else {
+            self.idle + 1
+        };
         let locked: Vec<bool> = (0..ITEMS).map(|i| Self::item_locked(ctx, i)).collect();
         self.move_cursor(ctx, ITEMS as i32, UP, DOWN, |c| !locked[c as usize]);
         if ctx.input.pressed(CONFIRM) {
@@ -306,7 +333,11 @@ impl MainMenu {
                 6 => g.request(gamemgr::SCENE_MUSIC_ROOM),
                 7 => {
                     self.interrupt_all(5);
-                    self.pending = Some(Pending { frames: 30, screen: OPTION, cursor: 0 });
+                    self.pending = Some(Pending {
+                        frames: 30,
+                        screen: OPTION,
+                        cursor: 0,
+                    });
                 }
                 _ => {
                     self.interrupt_all(1);
@@ -328,7 +359,13 @@ impl MainMenu {
             }
             self.interrupt_all(if extra { 12 } else { 7 });
             let d = ctx.game.cfg.difficulty as i32;
-            self.cursor = if extra { 0 } else if d > 3 { 1 } else { d };
+            self.cursor = if extra {
+                0
+            } else if d > 3 {
+                1
+            } else {
+                d
+            };
         }
         if extra {
             self.highlight(ctx, VM_DIFF_EXTRA, true);
@@ -345,11 +382,13 @@ impl MainMenu {
             if self.cursor != self.prev_cursor {
                 self.prev_cursor = self.cursor;
                 for i in 0..4 {
-                    self.vms[VM_DIFF + i].pending_interrupt = if i as i32 == self.cursor { 24 } else { 25 };
+                    self.vms[VM_DIFF + i].pending_interrupt =
+                        if i as i32 == self.cursor { 24 } else { 25 };
                 }
             }
         }
-        let store = |g: &mut gamemgr::Game, c: i32| g.cfg.difficulty = if extra { 4 + c } else { c } as u8;
+        let store =
+            |g: &mut gamemgr::Game, c: i32| g.cfg.difficulty = if extra { 4 + c } else { c } as u8;
         if ctx.input.pressed(CONFIRM) {
             store(&mut ctx.game, self.cursor);
             sound::play(sound::OK);
@@ -364,7 +403,11 @@ impl MainMenu {
                 _ => 0,
             };
             ctx.game.flags &= !F_PRACTICE;
-            self.pending = Some(Pending { frames: 20, screen: TOP, cursor });
+            self.pending = Some(Pending {
+                frames: 20,
+                screen: TOP,
+                cursor,
+            });
         }
     }
 
@@ -409,7 +452,11 @@ impl MainMenu {
                 CHAR_PRACTICE => self.set_screen(PRACTICE_STAGE),
                 _ => {
                     let extra = self.screen == CHAR_EXTRA;
-                    g.difficulty = if extra { 4 } else { g.cfg.difficulty.min(3) as i32 };
+                    g.difficulty = if extra {
+                        4
+                    } else {
+                        g.cfg.difficulty.min(3) as i32
+                    };
                     g.stage = if extra { 8 } else { 0 };
                     g.flags &= !F_REPLAY;
                     g.fresh_start = true;
@@ -447,7 +494,8 @@ impl MainMenu {
             } else {
                 0xFF303030
             };
-            ctx.ascii.push(Text::new(400.0, 160.0 + 20.0 * i as f32, *name).argb(c));
+            ctx.ascii
+                .push(Text::new(400.0, 160.0 + 20.0 * i as f32, *name).argb(c));
         }
         if self.frames < 8 {
             return;
@@ -507,7 +555,9 @@ impl MainMenu {
         };
         let item = self.cursor;
         let cfg = &mut ctx.game.cfg;
-        if dir != 0 && let Some(v) = Self::option_value(cfg, item) {
+        if dir != 0
+            && let Some(v) = Self::option_value(cfg, item)
+        {
             let old = *v;
             let (max, step) = match item {
                 0 => (lives_max(), 1),
@@ -562,7 +612,13 @@ impl MainMenu {
     // Value VMs 20–43 (answers_impl9 §16): the lit VM is first + value; volume digits are base + digit·2.
     fn option_values(&mut self, ctx: &Ctx) {
         let cfg = ctx.game.cfg;
-        let choices: [(usize, usize, u8); 5] = [(20, 7, cfg.lives), (27, 2, cfg.colour_mode), (29, 3, cfg.music), (40, 2, cfg.windowed), (42, 2, cfg.slow)];
+        let choices: [(usize, usize, u8); 5] = [
+            (20, 7, cfg.lives),
+            (27, 2, cfg.colour_mode),
+            (29, 3, cfg.music),
+            (40, 2, cfg.windowed),
+            (42, 2, cfg.slow),
+        ];
         for (first, n, v) in choices {
             for k in 0..n {
                 self.highlight(ctx, first + k, k == v as usize);
@@ -581,7 +637,14 @@ impl MainMenu {
                 let base = self.base[first + k];
                 let vm = &mut self.vms[first + k];
                 if base >= 0 {
-                    vm.set_sprite(&ctx.anm, if k == 0 { base + dim } else { base + 2 * d + dim });
+                    vm.set_sprite(
+                        &ctx.anm,
+                        if k == 0 {
+                            base + dim
+                        } else {
+                            base + 2 * d + dim
+                        },
+                    );
                 }
                 let hidden = k == 0 && v < 100 || k == 1 && v < 10;
                 vm.set_flag(anmvm::F_VISIBLE, !hidden && vm.color[anmvm::A] > 0);
@@ -592,8 +655,13 @@ impl MainMenu {
 
     // SPEC-GAP: replay, spell practice and key config are later tasks; these screens return on any confirm/cancel.
     fn stub(&mut self, ctx: &mut Ctx, name: &str, back: i32, cursor: i32) {
-        ctx.ascii.push(Text::new(200.0, 220.0, format!("{name}: not implemented yet")));
-        ctx.ascii.push(Text::new(200.0, 244.0, "Press Shot or Bomb").argb(0xFF808080));
+        ctx.ascii.push(Text::new(
+            200.0,
+            220.0,
+            format!("{name}: not implemented yet"),
+        ));
+        ctx.ascii
+            .push(Text::new(200.0, 244.0, "Press Shot or Bomb").argb(0xFF808080));
         if self.frames >= 10 && ctx.input.pressed(CONFIRM | CANCEL) {
             sound::play(sound::CANCEL);
             self.set_screen(back);
@@ -619,11 +687,16 @@ impl Task<Ctx> for MainMenu {
         if ctx.game.cfg.music != 0 {
             ctx.audio.play_bgm("bgm/th08_01.mid");
         }
-        ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "title01.anm")?;
+        ctx.anm
+            .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "title01.anm")?;
         for i in 0..VM_COUNT {
             let mut vm = AnmVm::default();
             ctx.anm.set_script(&mut vm, ANM_SLOT, i);
-            self.base.push(if vm.has_sprite { vm.sprite_index as i32 } else { -1 });
+            self.base.push(if vm.has_sprite {
+                vm.sprite_index as i32
+            } else {
+                -1
+            });
             self.vms.push(vm);
         }
         let g = &ctx.game;
@@ -634,7 +707,11 @@ impl Task<Ctx> for MainMenu {
                 self.screen = DIFF_PRACTICE;
             }
         }
-        self.cursor = if self.screen == TOP { 0 } else { ctx.game.cfg.difficulty.min(3) as i32 };
+        self.cursor = if self.screen == TOP {
+            0
+        } else {
+            ctx.game.cfg.difficulty.min(3) as i32
+        };
         Ok(())
     }
 
@@ -692,11 +769,28 @@ impl Task<Ctx> for MainMenu {
         }
         // Description VM: text.anm script 9 at (320, 448), centred (answers_impl9 §15).
         let vm = &self.desc_vm;
-        if self.screen == TOP && self.quitting.is_none() && self.pending.is_none() && vm.flags & anmvm::F_VISIBLE != 0 {
+        if self.screen == TOP
+            && self.quitting.is_none()
+            && self.pending.is_none()
+            && vm.flags & anmvm::F_VISIBLE != 0
+        {
             if let Some(&t) = self.desc.get(self.cursor as usize) {
-                let (w, h) = (if vm.sprite_w > 0.0 { vm.sprite_w } else { 384.0 }, 16.0);
+                let (w, h) = (
+                    if vm.sprite_w > 0.0 {
+                        vm.sprite_w
+                    } else {
+                        384.0
+                    },
+                    16.0,
+                );
                 let r = Rect::new(vm.pos[0] - w / 2.0, vm.pos[1] - h / 2.0, w, h);
-                ctx.gfx.sprite(t, Blend::Alpha, r, [0.0, 0.0, 1.0, 1.0], [255, 255, 255, vm.color[anmvm::A]]);
+                ctx.gfx.sprite(
+                    t,
+                    Blend::Alpha,
+                    r,
+                    [0.0, 0.0, 1.0, 1.0],
+                    [255, 255, 255, vm.color[anmvm::A]],
+                );
             }
         }
         Ret::Next

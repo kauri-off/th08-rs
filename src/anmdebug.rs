@@ -32,10 +32,18 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
             vms.push(vm);
         }
     }
-    let pos: Vec<f32> = crate::env::var("TH08_ANM_POS").unwrap_or_default().split(',').filter_map(|v| v.parse().ok()).collect();
+    let pos: Vec<f32> = crate::env::var("TH08_ANM_POS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|v| v.parse().ok())
+        .collect();
     if pos.len() >= 2 {
         for (i, vm) in vms.iter_mut().enumerate() {
-            vm.pos = [pos[0] + i as f32 * pos.get(2).copied().unwrap_or(0.0), pos[1], 0.0];
+            vm.pos = [
+                pos[0] + i as f32 * pos.get(2).copied().unwrap_or(0.0),
+                pos[1],
+                0.0,
+            ];
         }
     }
     let interrupts = crate::env::var("TH08_ANM_INT")
@@ -46,7 +54,13 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
             Some((f.parse().ok()?, id.parse().ok()?))
         })
         .collect();
-    let t = task::task(AnmDebug { vms, playfield, interrupts, frame: 0, mode: crate::env::var("TH08_ANM_MODE").and_then(|m| m.parse().ok()) });
+    let t = task::task(AnmDebug {
+        vms,
+        playfield,
+        interrupts,
+        frame: 0,
+        mode: crate::env::var("TH08_ANM_MODE").and_then(|m| m.parse().ok()),
+    });
     task::add(ctx, Chain::Calc, 4, 0, t.clone())?;
     task::add(ctx, Chain::Draw, 3, 0, t)?;
     Ok(())
@@ -67,7 +81,11 @@ impl Task<Ctx> for AnmDebug {
     }
 
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        ctx.gfx.set_viewport(if self.playfield { PLAYFIELD } else { FULLSCREEN });
+        ctx.gfx.set_viewport(if self.playfield {
+            PLAYFIELD
+        } else {
+            FULLSCREEN
+        });
         ctx.gfx.clear_viewport([32, 32, 64, 255]);
         for vm in &mut self.vms {
             let mode = self.mode.unwrap_or(vm.draw_mode);

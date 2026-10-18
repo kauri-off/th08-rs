@@ -78,11 +78,21 @@ pub struct LaserSlot {
     pub entry: Option<ShotEntry>,
 }
 
-const REMILIA_ANCHOR: [[f32; 2]; 4] = [[-30.0, -16.0], [-10.0, -32.0], [10.0, -32.0], [30.0, -16.0]];
+const REMILIA_ANCHOR: [[f32; 2]; 4] =
+    [[-30.0, -16.0], [-10.0, -32.0], [10.0, -32.0], [30.0, -16.0]];
 const REMILIA_SPIN: [f32; 4] = [PI / 120.0, -PI / 90.0, PI / 90.0, -PI / 120.0];
 const REMILIA_ORBIT: [f32; 4] = [0.0, PI, 0.0, PI];
 // Youmu facing target by direction code 1–8 (away from the motion).
-const FACING: [f32; 8] = [FRAC_PI_2, -FRAC_PI_2, 0.0, PI, PI / 4.0, 3.0 * PI / 4.0, -PI / 4.0, -3.0 * PI / 4.0];
+const FACING: [f32; 8] = [
+    FRAC_PI_2,
+    -FRAC_PI_2,
+    0.0,
+    PI,
+    PI / 4.0,
+    3.0 * PI / 4.0,
+    -PI / 4.0,
+    -3.0 * PI / 4.0,
+];
 
 impl Player {
     fn youkai_set(&self) -> (OptKind, usize) {
@@ -97,7 +107,12 @@ impl Player {
     // A new option starts in state 1; its calc fn initialises it on the next update.
     fn set_option(&mut self, k: usize, kind: OptKind) {
         let state = if kind == OptKind::None { 0 } else { 1 };
-        self.options[k] = Opt { kind, index: k, state, ..Opt::default() };
+        self.options[k] = Opt {
+            kind,
+            index: k,
+            state,
+            ..Opt::default()
+        };
     }
 
     fn remove_option(&mut self, k: usize) {
@@ -158,7 +173,11 @@ impl Player {
             }
             OptKind::Alice => o.pos = [p[0], p[1] - 32.0, 0.0],
             OptKind::Remilia | OptKind::RemiliaSolo => {
-                o.anchor = [p[0] + REMILIA_ANCHOR[k][0], p[1] + REMILIA_ANCHOR[k][1], 0.0];
+                o.anchor = [
+                    p[0] + REMILIA_ANCHOR[k][0],
+                    p[1] + REMILIA_ANCHOR[k][1],
+                    0.0,
+                ];
                 o.angle = REMILIA_ORBIT[k];
             }
             OptKind::Yuyuko => {
@@ -193,7 +212,10 @@ impl Player {
             OptKind::Yukari => {
                 let smooth = |o: &mut Opt, target: [f32; 2]| {
                     let want = [(target[0] - o.pos[0]) / 16.0, (target[1] - o.pos[1]) / 16.0];
-                    o.vel = [o.vel[0] + (want[0] - o.vel[0]) * 0.2, o.vel[1] + (want[1] - o.vel[1]) * 0.2];
+                    o.vel = [
+                        o.vel[0] + (want[0] - o.vel[0]) * 0.2,
+                        o.vel[1] + (want[1] - o.vel[1]) * 0.2,
+                    ];
                     o.pos[0] += o.vel[0];
                     o.pos[1] += o.vel[1];
                     if o.vel[0].abs() < 0.05 {
@@ -208,7 +230,13 @@ impl Player {
                     } else {
                         aimed = None;
                         let vx = o.vel[0];
-                        let mirror = |o: &mut Opt, neg: bool| o.vm.scale[0] = if neg { -o.vm.scale[0].abs() } else { o.vm.scale[0].abs() };
+                        let mirror = |o: &mut Opt, neg: bool| {
+                            o.vm.scale[0] = if neg {
+                                -o.vm.scale[0].abs()
+                            } else {
+                                o.vm.scale[0].abs()
+                            }
+                        };
                         match o.sub {
                             0 if vx != 0.0 => {
                                 o.vm.pending_interrupt = 2;
@@ -236,7 +264,9 @@ impl Player {
                     }
                 } else {
                     match aimed {
-                        Some(_) if shooting || shot_held => smooth(o, [aimed_pos[0], (aimed_pos[1] + 32.0).max(32.0)]),
+                        Some(_) if shooting || shot_held => {
+                            smooth(o, [aimed_pos[0], (aimed_pos[1] + 32.0).max(32.0)])
+                        }
                         _ => {
                             o.vm.pending_interrupt = 1;
                             o.sub = 0;
@@ -289,9 +319,17 @@ impl Player {
                 if tracks && (1..=8).contains(&dir) {
                     let mut target = FACING[dir as usize - 1];
                     if (o.facing - target).abs() > PI {
-                        target += if target < o.facing { 2.0 * PI } else { -2.0 * PI };
+                        target += if target < o.facing {
+                            2.0 * PI
+                        } else {
+                            -2.0 * PI
+                        };
                     }
-                    o.facing = if (target - o.facing).abs() <= FRAC_PI_2 { anmvm::wrap_add(o.facing + (target - o.facing) * 0.07, 0.0) } else { target };
+                    o.facing = if (target - o.facing).abs() <= FRAC_PI_2 {
+                        anmvm::wrap_add(o.facing + (target - o.facing) * 0.07, 0.0)
+                    } else {
+                        target
+                    };
                 }
                 sparkle = Some(if tracks { 0x80405080 } else { 0xFFF05080 });
             }
@@ -332,7 +370,11 @@ impl Player {
 
     // Option draw fn 0x44E9E0: VM at pos + playfield origin, z 0.49, Draw2DRot.
     pub fn draw_options(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
-        for o in self.options.iter_mut().filter(|o| o.state != 0 && o.vm.script.is_some()) {
+        for o in self
+            .options
+            .iter_mut()
+            .filter(|o| o.state != 0 && o.vm.script.is_some())
+        {
             o.vm.pos = [o.pos[0] + 32.0, o.pos[1] + 16.0, 0.0];
             anm.draw_mode_z(gfx, &mut o.vm, 2, 0.49);
         }
@@ -371,13 +413,20 @@ impl Player {
 
     fn forced_level(&self) -> Option<usize> {
         let typed = (self.shot_type == 2 && self.bomb.index & 1 == 1) || self.shot_type == 9;
-        (typed && self.bombing && self.bomb.timer.cur >= 60).then_some(if self.bomb.index & 2 != 0 { 7 } else { 6 })
+        (typed && self.bombing && self.bomb.timer.cur >= 60)
+            .then_some(if self.bomb.index & 2 != 0 { 7 } else { 6 })
     }
 
     // Firing (0x450F60, 09 §4.3).
     pub fn fire(&mut self, anm: &mut AnmManager, t: i32) {
-        let sht = if self.focus == 1 { &self.sht_youkai } else { &self.sht };
-        let Some(level) = sht.level(self.stats.power, self.forced_level()) else { return };
+        let sht = if self.focus == 1 {
+            &self.sht_youkai
+        } else {
+            &self.sht
+        };
+        let Some(level) = sht.level(self.stats.power, self.forced_level()) else {
+            return;
+        };
         let entries = level.entries.clone();
         let mut slot = 0;
         for e in &entries {
@@ -474,7 +523,11 @@ impl Player {
                 b.trail_n = e.interval as i32;
                 b.trail = [[-999.0, 0.0, 0.0]; 32];
                 b.pos[0] = -999.0;
-                self.laser_slots[s] = LaserSlot { owner: Some(slot), timer: 999, entry: Some(*e) };
+                self.laser_slots[s] = LaserSlot {
+                    owner: Some(slot),
+                    timer: 999,
+                    entry: Some(*e),
+                };
                 true
             }
             5 => {
@@ -521,7 +574,11 @@ impl Player {
         let b = &mut self.bullets[i];
         match b.update {
             1 => {
-                if b.state == 1 && tg[0] > -100.0 && b.timer.cur <= 39 && b.timer.cur != b.timer.prev {
+                if b.state == 1
+                    && tg[0] > -100.0
+                    && b.timer.cur <= 39
+                    && b.timer.cur != b.timer.prev
+                {
                     let d = [tg[0] - b.pos[0], tg[1] - b.pos[1]];
                     let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
                     let k = (len / (b.speed / 4.0)).max(1.0);
@@ -553,7 +610,8 @@ impl Player {
     fn laser_update(&mut self, i: usize) -> bool {
         let s = self.bullets[i].slot.clamp(0, LASER_SLOTS as i16 - 1) as usize;
         let owned = self.laser_slots[s].owner == Some(i);
-        if !owned || self.env.dialogue || self.shot_timer.cur < 0 || self.state == 2 || self.bombing {
+        if !owned || self.env.dialogue || self.shot_timer.cur < 0 || self.state == 2 || self.bombing
+        {
             let b = &mut self.bullets[i];
             b.vm.pending_interrupt = 1;
             b.update = 0;
@@ -585,7 +643,11 @@ impl Player {
         b.pos = [opt[0], opt[1] - 208.0, 0.44];
         b.size[1] = 448.0;
         let c = if white { [0xFF; 3] } else { [0xFF, 0xD0, 0xB0] };
-        (b.vm.color[anmvm::R], b.vm.color[anmvm::G], b.vm.color[anmvm::B]) = (c[0], c[1], c[2]);
+        (
+            b.vm.color[anmvm::R],
+            b.vm.color[anmvm::G],
+            b.vm.color[anmvm::B],
+        ) = (c[0], c[1], c[2]);
         false
     }
 
@@ -605,7 +667,10 @@ impl Player {
             b.pos[1] += b.vel[1] * gs;
             if !matches!(b.kind, 4 | 5) {
                 let (hw, hh) = (b.vm.sprite_w / 2.0, b.vm.sprite_h / 2.0);
-                let on = b.pos[0] + hw >= 0.0 && b.pos[0] - hw <= 384.0 && b.pos[1] + hh >= 0.0 && b.pos[1] - hh <= 448.0;
+                let on = b.pos[0] + hw >= 0.0
+                    && b.pos[0] - hw <= 384.0
+                    && b.pos[1] + hh >= 0.0
+                    && b.pos[1] - hh <= 448.0;
                 if !on {
                     b.state = 0;
                     continue;
@@ -669,7 +734,15 @@ impl Player {
     }
 
     // Player_DamageAgainst (0x451670, 09 §4.5); `acc` is the enemy's time-orb accumulator.
-    pub fn damage_against(&mut self, anm: &mut AnmManager, items: Option<&mut ItemManager>, pos: [f32; 3], size: [f32; 2], acc: &mut i32, by_bomb: &mut bool) -> i32 {
+    pub fn damage_against(
+        &mut self,
+        anm: &mut AnmManager,
+        items: Option<&mut ItemManager>,
+        pos: [f32; 3],
+        size: [f32; 2],
+        acc: &mut i32,
+        by_bomb: &mut bool,
+    ) -> i32 {
         if self.state_timer.cur == self.state_timer.prev {
             return 0;
         }
@@ -681,7 +754,9 @@ impl Player {
             if b.state == 0 || !(b.state == 1 || b.kind == 3) {
                 continue;
             }
-            if (b.pos[0] - pos[0]).abs() > half[0] + b.size[0] / 2.0 || (b.pos[1] - pos[1]).abs() > half[1] + b.size[1] / 2.0 {
+            if (b.pos[0] - pos[0]).abs() > half[0] + b.size[0] / 2.0
+                || (b.pos[1] - pos[1]).abs() > half[1] + b.size[1] / 2.0
+            {
                 continue;
             }
             if matches!(b.kind, 4 | 5) && b.timer.cur % 2 != 0 {
@@ -754,13 +829,21 @@ impl Player {
     // Player draw (14 §5): flying bullets (state 1) at z 0.4 with their extra draw fn, or hit bullets (state 2) at z 0.2.
     pub fn draw_bullets(&mut self, anm: &mut AnmManager, gfx: &mut Gfx, state: u8) {
         let youkai_max = self.stats.youkai_max();
-        for b in self.bullets.iter_mut().filter(|b| b.state == state && b.vm.script.is_some()) {
+        for b in self
+            .bullets
+            .iter_mut()
+            .filter(|b| b.state == state && b.vm.script.is_some())
+        {
             if b.vm.tag != 0 && b.vm.rotation[2] != b.angle {
                 b.vm.rotation[2] = b.angle;
                 b.vm.flags |= anmvm::F_ROT_DIRTY;
             }
             if b.red {
-                (b.vm.color[anmvm::R], b.vm.color[anmvm::G], b.vm.color[anmvm::B]) = (0xFF, 0x40, 0x40);
+                (
+                    b.vm.color[anmvm::R],
+                    b.vm.color[anmvm::G],
+                    b.vm.color[anmvm::B],
+                ) = (0xFF, 0x40, 0x40);
             }
             b.vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.0];
             if state == 2 {
@@ -783,9 +866,17 @@ impl Player {
         let mut c = 0;
         while c < 2 * n && c < 32 && b.trail[c as usize][0] != -999.0 {
             let p = b.trail[c as usize];
-            b.vm.color[anmvm::A] = if c == 0 { alpha } else { (a0 - (a0 / 2) * c / n).clamp(0, 255) as u8 };
+            b.vm.color[anmvm::A] = if c == 0 {
+                alpha
+            } else {
+                (a0 - (a0 / 2) * c / n).clamp(0, 255) as u8
+            };
             if youkai_max {
-                (b.vm.color[anmvm::R], b.vm.color[anmvm::G], b.vm.color[anmvm::B]) = (0xFF, 0x40, 0x40);
+                (
+                    b.vm.color[anmvm::R],
+                    b.vm.color[anmvm::G],
+                    b.vm.color[anmvm::B],
+                ) = (0xFF, 0x40, 0x40);
             }
             b.vm.pos = [p[0] + 32.0, p[1] + 16.0, 0.0];
             anm.draw_mode_z(gfx, &mut b.vm, 2, 0.4);

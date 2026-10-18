@@ -16,7 +16,9 @@ impl Rng {
             return Self::seeded(s);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
         #[cfg(target_arch = "wasm32")]
         let ms = js_sys::Date::now() as u64;
         Self::seeded(ms as u16)
@@ -42,7 +44,11 @@ impl Rng {
 
     // Rng_Range: unsigned modulus; n == 0 returns 0 without drawing.
     pub fn range(&mut self, n: i32) -> i32 {
-        if n == 0 { 0 } else { (self.next_u32() % n as u32) as i32 }
+        if n == 0 {
+            0
+        } else {
+            (self.next_u32() % n as u32) as i32
+        }
     }
 
     pub fn range16(&mut self, n: u16) -> u16 {

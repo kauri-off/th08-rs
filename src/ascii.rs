@@ -26,7 +26,15 @@ pub struct Text {
 
 impl Text {
     pub fn new(x: f32, y: f32, s: impl Into<String>) -> Self {
-        Self { x, y, s: s.into(), color: [255; 4], scale: 1.0, advance: 13.0, high: true }
+        Self {
+            x,
+            y,
+            s: s.into(),
+            color: [255; 4],
+            scale: 1.0,
+            advance: 13.0,
+            high: true,
+        }
     }
 
     pub fn color(mut self, c: [u8; 4]) -> Self {
@@ -77,8 +85,17 @@ impl Queue {
                     (x, y) = (t.x + o[0], y + 16.0);
                     continue;
                 }
-                if let Some(sp) = ctx_anm.sprite(ANM_SLOT, c.wrapping_sub(1) as usize).filter(|_| c > b' ') {
-                    gfx.sprite(sp.tex, Blend::Alpha, Rect::new(x, y, sp.w * t.scale, sp.h * t.scale), sp.uv, t.color);
+                if let Some(sp) = ctx_anm
+                    .sprite(ANM_SLOT, c.wrapping_sub(1) as usize)
+                    .filter(|_| c > b' ')
+                {
+                    gfx.sprite(
+                        sp.tex,
+                        Blend::Alpha,
+                        Rect::new(x, y, sp.w * t.scale, sp.h * t.scale),
+                        sp.uv,
+                        t.color,
+                    );
                 }
                 x += t.advance * t.scale;
             }
@@ -147,7 +164,12 @@ pub fn popup(pos: [f32; 3], value: i32, colour: u32) {
     POPUPS.with_borrow_mut(|p| {
         let i = p.next;
         p.next = (p.next + 1) % POPUP_SLOTS;
-        p.slots[i] = Some(Popup { digits: digits(value), pos: [pos[0] + 32.0, pos[1] + 16.0], colour: argb3(colour), age: 0.0 });
+        p.slots[i] = Some(Popup {
+            digits: digits(value),
+            pos: [pos[0] + 32.0, pos[1] + 16.0],
+            colour: argb3(colour),
+            age: 0.0,
+        });
     });
 }
 
@@ -156,7 +178,12 @@ pub fn popup_special(pos: [f32; 3], value: i32, colour: u32) {
     POPUPS.with_borrow_mut(|p| {
         let i = POPUP_SLOTS + p.special;
         p.special = (p.special + 1) % 3;
-        p.slots[i] = Some(Popup { digits: digits(value), pos: [pos[0] + 32.0, pos[1] + 16.0], colour: argb3(colour), age: 0.0 });
+        p.slots[i] = Some(Popup {
+            digits: digits(value),
+            pos: [pos[0] + 32.0, pos[1] + 16.0],
+            colour: argb3(colour),
+            age: 0.0,
+        });
     });
 }
 
@@ -179,7 +206,13 @@ pub fn popup_large(pos: [f32; 3], p3: i32, p4: i32, colour: u32, scale: f32) {
     POPUPS.with_borrow_mut(|p| {
         let i = p.large_next;
         p.large_next = (i + 1) % LARGE_SLOTS;
-        p.large[i] = Some(LargePopup { glyphs: large_glyphs(p3, p4), pos: [pos[0] + 32.0, pos[1] + 16.0], colour: [c[1], c[2], c[3], c[0]], scale, age: 0.0 });
+        p.large[i] = Some(LargePopup {
+            glyphs: large_glyphs(p3, p4),
+            pos: [pos[0] + 32.0, pos[1] + 16.0],
+            colour: [c[1], c[2], c[3], c[0]],
+            scale,
+            age: 0.0,
+        });
     });
 }
 
@@ -191,7 +224,13 @@ pub fn popup_large_static(pos: [f32; 2], p3: i32, p4: i32, colour: u32) {
     POPUPS.with_borrow_mut(|p| {
         let i = p.large_next;
         p.large_next = (i + 1) % LARGE_SLOTS;
-        p.large[i] = Some(LargePopup { glyphs, pos: [x, pos[1] + 16.0], colour: [c[1], c[2], c[3], c[0]], scale: 1.0, age: 88.0 });
+        p.large[i] = Some(LargePopup {
+            glyphs,
+            pos: [x, pos[1] + 16.0],
+            colour: [c[1], c[2], c[3], c[0]],
+            scale: 1.0,
+            age: 88.0,
+        });
     });
 }
 
@@ -242,22 +281,44 @@ fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
         };
         for q in p.slots.iter().flatten() {
             let alpha = fade(q.pos);
-            let shift = if q.age < 52.0 { 0 } else if q.age < 56.0 { 11 } else { 21 };
+            let shift = if q.age < 52.0 {
+                0
+            } else if q.age < 56.0 {
+                11
+            } else {
+                21
+            };
             let n = q.digits.len() as f32;
             let colour = [q.colour[0], q.colour[1], q.colour[2], alpha as u8];
             for (k, &g) in q.digits.iter().rev().enumerate() {
-                let Some(sp) = anm.sprite(ANM_SLOT, (g + shift) as usize) else { continue };
+                let Some(sp) = anm.sprite(ANM_SLOT, (g + shift) as usize) else {
+                    continue;
+                };
                 let x = q.pos[0] - 4.0 * n + 8.0 * k as f32 + o[0];
-                gfx.sprite(sp.tex, Blend::Alpha, Rect::new(x, q.pos[1] + o[1], sp.w, sp.h), sp.uv, colour);
+                gfx.sprite(
+                    sp.tex,
+                    Blend::Alpha,
+                    Rect::new(x, q.pos[1] + o[1], sp.w, sp.h),
+                    sp.uv,
+                    colour,
+                );
             }
         }
         for q in p.large.iter().flatten() {
             let colour = [q.colour[0], q.colour[1], q.colour[2], fade(q.pos) as u8];
             let x0 = q.pos[0] - (q.glyphs.len() + 1) as f32 * 3.5 + o[0];
             for (k, &g) in q.glyphs.iter().rev().enumerate() {
-                let Some(sp) = anm.sprite(ANM_SLOT, 0x88 + g as usize) else { continue };
+                let Some(sp) = anm.sprite(ANM_SLOT, 0x88 + g as usize) else {
+                    continue;
+                };
                 let x = x0 + 7.0 * q.scale * k as f32;
-                gfx.sprite(sp.tex, Blend::Alpha, Rect::new(x, q.pos[1] + o[1], sp.w * q.scale, sp.h * q.scale), sp.uv, colour);
+                gfx.sprite(
+                    sp.tex,
+                    Blend::Alpha,
+                    Rect::new(x, q.pos[1] + o[1], sp.w * q.scale, sp.h * q.scale),
+                    sp.uv,
+                    colour,
+                );
             }
         }
     });
@@ -303,7 +364,13 @@ impl PauseMenu {
         self.frame = 0;
     }
 
-    fn update(&mut self, ctx_anm: &mut crate::anmmgr::AnmManager, g: &mut Game, inp: &Input, audio: &mut crate::audio::Audio) {
+    fn update(
+        &mut self,
+        ctx_anm: &mut crate::anmmgr::AnmManager,
+        g: &mut Game,
+        inp: &Input,
+        audio: &mut crate::audio::Audio,
+    ) {
         let replay = g.replay();
         if self.state == 0 {
             // The practice / slow-mode labels (scripts 20, 21) fade in on start, so they only run when they apply.
@@ -319,7 +386,11 @@ impl PauseMenu {
                 })
                 .collect();
             self.shown = [false; 10];
-            let d = if g.spell_practice() { 0x120 - 0x11B } else { g.difficulty.clamp(0, 4) };
+            let d = if g.spell_practice() {
+                0x120 - 0x11B
+            } else {
+                g.difficulty.clamp(0, 4)
+            };
             let diff_vm = &mut self.vms[P_DIFF];
             diff_vm.set_sprite(ctx_anm, 0x11B + d);
             for k in [P_TITLE, 1, 2, P_DIFF] {
@@ -404,7 +475,13 @@ impl PauseMenu {
                     match self.state {
                         4 => audio.pause_bgm(false),
                         9 => g.request(gamemgr::SCENE_MENU),
-                        _ => g.request(if g.practice() || g.spell_practice() || g.difficulty >= 4 { gamemgr::SCENE_RELOAD } else { gamemgr::SCENE_RETRY }),
+                        _ => {
+                            g.request(if g.practice() || g.spell_practice() || g.difficulty >= 4 {
+                                gamemgr::SCENE_RELOAD
+                            } else {
+                                gamemgr::SCENE_RETRY
+                            })
+                        }
                     }
                     g.paused = 0;
                     self.state = 0;
@@ -415,11 +492,24 @@ impl PauseMenu {
             _ => {}
         }
         for (i, &k) in P_ITEMS.iter().enumerate() {
-            set_rgb(&mut self.vms[k], if self.state as usize == i + 1 { 0xFFFFFFFF } else { 0xFF505050 });
+            set_rgb(
+                &mut self.vms[k],
+                if self.state as usize == i + 1 {
+                    0xFFFFFFFF
+                } else {
+                    0xFF505050
+                },
+            );
         }
         let yes_sel = matches!(self.state, 5 | 7);
-        set_rgb(&mut self.vms[P_YES], if yes_sel { 0xFFFF8080 } else { 0xFF505050 });
-        set_rgb(&mut self.vms[P_NO], if !yes_sel { 0xFFFF8080 } else { 0xFF505050 });
+        set_rgb(
+            &mut self.vms[P_YES],
+            if yes_sel { 0xFFFF8080 } else { 0xFF505050 },
+        );
+        set_rgb(
+            &mut self.vms[P_NO],
+            if !yes_sel { 0xFFFF8080 } else { 0xFF505050 },
+        );
         for vm in self.vms.iter_mut().filter(|v| v.script.is_some()) {
             vm.run(ctx_anm);
         }
@@ -460,7 +550,10 @@ struct ContinueMenu {
 impl ContinueMenu {
     fn update(&mut self, ctx_anm: &mut crate::anmmgr::AnmManager, g: &mut Game, inp: &Input) {
         if !self.open {
-            *self = ContinueMenu { open: true, ..ContinueMenu::default() };
+            *self = ContinueMenu {
+                open: true,
+                ..ContinueMenu::default()
+            };
             if g.practice() && !g.spell_practice() {
                 g.request(gamemgr::SCENE_RESULT);
                 return;
@@ -487,7 +580,12 @@ impl ContinueMenu {
             // Default "No"; "Yes" only in spell practice (card not captured, 12 §4).
             self.yes = g.spell_practice();
         }
-        let ready = self.frame >= if self.yes && g.spell_practice() { 4 } else { 30 };
+        let ready = self.frame
+            >= if self.yes && g.spell_practice() {
+                4
+            } else {
+                30
+            };
         match self.phase {
             0 if ready => {
                 if inp.pressed(input::UP) || inp.pressed(input::DOWN) {
@@ -511,7 +609,11 @@ impl ContinueMenu {
                 }
             }
             1 | 2 if self.phase_frame >= 20 => {
-                g.request(if self.phase == 1 { gamemgr::SCENE_RESULT } else { gamemgr::SCENE_RELOAD });
+                g.request(if self.phase == 1 {
+                    gamemgr::SCENE_RESULT
+                } else {
+                    gamemgr::SCENE_RELOAD
+                });
                 self.open = false;
                 return;
             }
@@ -538,7 +640,12 @@ impl ContinueMenu {
             set_rgb(y, if self.yes { on } else { off });
             set_rgb(n, if self.yes { off } else { on });
         }
-        for vm in self.vms.iter_mut().chain(std::iter::once(&mut self.clock_vm)).filter(|v| v.script.is_some()) {
+        for vm in self
+            .vms
+            .iter_mut()
+            .chain(std::iter::once(&mut self.clock_vm))
+            .filter(|v| v.script.is_some())
+        {
             vm.run(ctx_anm);
         }
         self.frame += 1;
@@ -566,8 +673,10 @@ impl AsciiManager {
 impl Task<Ctx> for AsciiManager {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
-            ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "ascii.anm")?;
-            ctx.anm.load(&mut ctx.gfx, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
+            ctx.anm
+                .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "ascii.anm")?;
+            ctx.anm
+                .load(&mut ctx.gfx, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
         }
         Ok(())
     }
@@ -575,7 +684,8 @@ impl Task<Ctx> for AsciiManager {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let inp = ctx.input;
         if ctx.game.paused != 0 {
-            self.pause.update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
+            self.pause
+                .update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
         } else if ctx.game.game_over != 0 {
             self.cont.update(&mut ctx.anm, &mut ctx.game, &inp);
         } else {
@@ -592,7 +702,9 @@ impl Task<Ctx> for AsciiManager {
         let high = tag == 1;
         if high && ctx.game.paused != 0 {
             ctx.gfx.set_viewport(FULLSCREEN);
-            let sel: Vec<bool> = (0..self.pause.vms.len()).map(|k| self.pause.selected(k)).collect();
+            let sel: Vec<bool> = (0..self.pause.vms.len())
+                .map(|k| self.pause.selected(k))
+                .collect();
             for (vm, sel) in self.pause.vms.iter_mut().zip(sel) {
                 let pos = vm.pos;
                 if sel {
@@ -604,7 +716,12 @@ impl Task<Ctx> for AsciiManager {
         }
         if high && ctx.game.game_over != 0 && self.cont.open {
             ctx.gfx.set_viewport(FULLSCREEN);
-            for vm in self.cont.vms.iter_mut().chain(std::iter::once(&mut self.cont.clock_vm)) {
+            for vm in self
+                .cont
+                .vms
+                .iter_mut()
+                .chain(std::iter::once(&mut self.cont.clock_vm))
+            {
                 ctx.anm.draw(&mut ctx.gfx, vm);
             }
         }

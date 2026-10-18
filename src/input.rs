@@ -62,7 +62,11 @@ impl Input {
         self.prev = self.held;
         self.held = self.raw;
         // Key repeat (12 header): after 30 frames of unchanged input, true on every 8th frame.
-        self.same_frames = if self.held == self.prev { self.same_frames + 1 } else { 0 };
+        self.same_frames = if self.held == self.prev {
+            self.same_frames + 1
+        } else {
+            0
+        };
         self.repeat = self.same_frames >= 30 && self.same_frames % 8 == 0;
     }
 
@@ -82,7 +86,10 @@ impl Input {
 // Debug input script (`TH08_INPUT`): items separated by newlines/commas/spaces, each `mask` or `frames:mask`
 // (decimal or 0x hex, game bit layout); `#` starts a comment. The script then holds 0.
 pub fn parse_script(s: &str) -> Option<Vec<u16>> {
-    let num = |t: &str| t.strip_prefix("0x").map_or_else(|| t.parse().ok(), |h| u16::from_str_radix(h, 16).ok());
+    let num = |t: &str| {
+        t.strip_prefix("0x")
+            .map_or_else(|| t.parse().ok(), |h| u16::from_str_radix(h, 16).ok())
+    };
     let mut out = Vec::new();
     for line in s.lines() {
         let line = line.split('#').next().unwrap_or("");
@@ -110,7 +117,10 @@ pub fn load_script(v: &str) -> Option<Vec<u16>> {
 mod tests {
     #[test]
     fn script() {
-        assert_eq!(super::parse_script("2:0x11, 1 # c\n3:4").unwrap(), vec![0x11, 0x11, 1, 4, 4, 4]);
+        assert_eq!(
+            super::parse_script("2:0x11, 1 # c\n3:4").unwrap(),
+            vec![0x11, 0x11, 1, 4, 4, 4]
+        );
         assert!(super::parse_script("x").is_none());
     }
 }

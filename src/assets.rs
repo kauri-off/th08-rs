@@ -55,7 +55,9 @@ impl Source {
             .ok_or_else(|| anyhow::anyhow!("{name} was not provided"))?;
         let blob = match range {
             None => file.slice().map_err(err)?,
-            Some((off, len)) => file.slice_with_f64_and_f64(off as f64, (off + len as u64) as f64).map_err(err)?,
+            Some((off, len)) => file
+                .slice_with_f64_and_f64(off as f64, (off + len as u64) as f64)
+                .map_err(err)?,
         };
         let buf = JsFuture::from(blob.array_buffer()).await.map_err(err)?;
         Ok(js_sys::Uint8Array::new(&buf).to_vec())

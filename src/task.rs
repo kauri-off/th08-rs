@@ -69,7 +69,12 @@ pub struct Tasks<C> {
 
 impl<C> Default for Tasks<C> {
     fn default() -> Self {
-        Self { calc: Vec::new(), draw: Vec::new(), next_id: 0, dead: Vec::new() }
+        Self {
+            calc: Vec::new(),
+            draw: Vec::new(),
+            next_id: 0,
+            dead: Vec::new(),
+        }
     }
 }
 
@@ -82,21 +87,44 @@ impl<C> Tasks<C> {
     }
 
     pub fn priorities(&self, chain: Chain) -> Vec<u16> {
-        let l = if chain == Chain::Calc { &self.calc } else { &self.draw };
+        let l = if chain == Chain::Calc {
+            &self.calc
+        } else {
+            &self.draw
+        };
         l.iter().map(|n| n.prio).collect()
     }
 }
 
 // Inserted after nodes of equal priority; the on-register hook runs immediately and a failure unlinks the node.
-pub fn add<C: TaskCtx>(ctx: &mut C, chain: Chain, prio: u16, tag: u8, task: TaskRef<C>) -> Result<NodeId> {
+pub fn add<C: TaskCtx>(
+    ctx: &mut C,
+    chain: Chain,
+    prio: u16,
+    tag: u8,
+    task: TaskRef<C>,
+) -> Result<NodeId> {
     let id = NodeId(ctx.tasks().next_id);
     ctx.tasks().next_id += 1;
     let list = ctx.tasks().list(chain);
-    let at = list.iter().position(|n| n.prio > prio).unwrap_or(list.len());
-    list.insert(at, Node { id, prio, tag, task: task.clone() });
+    let at = list
+        .iter()
+        .position(|n| n.prio > prio)
+        .unwrap_or(list.len());
+    list.insert(
+        at,
+        Node {
+            id,
+            prio,
+            tag,
+            task: task.clone(),
+        },
+    );
     let r = match task.try_borrow_mut() {
         Ok(mut t) => t.on_register(ctx, chain, tag),
-        Err(_) => Err(anyhow::anyhow!("task registered while its own callback is running")),
+        Err(_) => Err(anyhow::anyhow!(
+            "task registered while its own callback is running"
+        )),
     };
     if let Err(e) = r {
         let list = ctx.tasks().list(chain);
@@ -121,7 +149,12 @@ pub fn remove<C: TaskCtx>(ctx: &mut C, id: NodeId) -> bool {
 
 pub fn remove_task<C: TaskCtx>(ctx: &mut C, task: &TaskRef<C>) {
     for chain in [Chain::Calc, Chain::Draw] {
-        while let Some(p) = ctx.tasks().list(chain).iter().position(|n| Rc::ptr_eq(&n.task, task)) {
+        while let Some(p) = ctx
+            .tasks()
+            .list(chain)
+            .iter()
+            .position(|n| Rc::ptr_eq(&n.task, task))
+        {
             unlink(ctx, chain, p);
         }
     }
@@ -152,7 +185,12 @@ fn reap<C: TaskCtx>(ctx: &mut C) {
 pub fn run<C: TaskCtx>(ctx: &mut C, chain: Chain) -> Flow {
     let mut i = 0;
     loop {
-        let Some((id, tag, task)) = ctx.tasks().list(chain).get(i).map(|n| (n.id, n.tag, n.task.clone())) else {
+        let Some((id, tag, task)) = ctx
+            .tasks()
+            .list(chain)
+            .get(i)
+            .map(|n| (n.id, n.tag, n.task.clone()))
+        else {
             return Flow::Continue;
         };
         let r = {
@@ -207,7 +245,11 @@ mod tests {
     impl Task<T> for Script {
         fn calc(&mut self, ctx: &mut T, tag: u8) -> Ret {
             ctx.log.push(format!("{}{tag}", self.name));
-            if self.rets.is_empty() { Ret::Next } else { self.rets.remove(0) }
+            if self.rets.is_empty() {
+                Ret::Next
+            } else {
+                self.rets.remove(0)
+            }
         }
         fn on_register(&mut self, ctx: &mut T, _: Chain, tag: u8) -> Result<()> {
             ctx.log.push(format!("+{}{tag}", self.name));
@@ -219,16 +261,33 @@ mod tests {
     }
 
     fn s(name: &'static str, rets: &[Ret]) -> TaskRef<T> {
-        task(Script { name, rets: rets.to_vec() })
+        task(Script {
+            name,
+            rets: rets.to_vec(),
+        })
     }
 
     #[test]
     fn priority_order_and_codes() {
         let mut c = T::default();
         add(&mut c, Chain::Calc, 5, 0, s("b", &[])).unwrap();
-        add(&mut c, Chain::Calc, 1, 0, s("a", &[Ret::Repeat, Ret::Next, Ret::Remove])).unwrap();
+        add(
+            &mut c,
+            Chain::Calc,
+            1,
+            0,
+            s("a", &[Ret::Repeat, Ret::Next, Ret::Remove]),
+        )
+        .unwrap();
         add(&mut c, Chain::Calc, 5, 1, s("c", &[Ret::Restart])).unwrap();
-        add(&mut c, Chain::Calc, 9, 0, s("d", &[Ret::StopFrame, Ret::Quit, Ret::ErrorQuit])).unwrap();
+        add(
+            &mut c,
+            Chain::Calc,
+            9,
+            0,
+            s("d", &[Ret::StopFrame, Ret::Quit, Ret::ErrorQuit]),
+        )
+        .unwrap();
         assert_eq!(c.tasks.priorities(Chain::Calc), [1, 5, 5, 9]);
         c.log.clear();
         assert_eq!(run(&mut c, Chain::Calc), Flow::Continue);

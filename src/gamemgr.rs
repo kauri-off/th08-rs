@@ -27,7 +27,13 @@ pub const DRAW_PRIO: u16 = 5;
 pub const LOADING_DRAW_PRIO: u16 = 16;
 
 // Rank init / min / max by difficulty (table 0x4C7880).
-const RANK: [[i32; 3]; 5] = [[10, 8, 16], [10, 8, 16], [8, 8, 12], [8, 8, 12], [16, 15, 16]];
+const RANK: [[i32; 3]; 5] = [
+    [10, 8, 16],
+    [10, 8, 16],
+    [8, 8, 12],
+    [8, 8, 12],
+    [16, 15, 16],
+];
 
 // Scenes (11 §7).
 pub const SCENE_BOOT: i32 = 0;
@@ -157,7 +163,10 @@ impl Game {
 
     pub fn cleared(&self, any: bool, bit: usize) -> bool {
         let m = if any { &self.clear_any } else { &self.clear_nc };
-        m[self.shot as usize % 12].iter().take(4).any(|v| v & (1 << bit) != 0)
+        m[self.shot as usize % 12]
+            .iter()
+            .take(4)
+            .any(|v| v & (1 << bit) != 0)
     }
 
     // RankAdd / RankSub (11 §3.2): ±1 rank per 100 sub-units, clamped to min..max.
@@ -252,7 +261,10 @@ impl GameManager {
         }
         let g = &mut ctx.game;
         let d = g.diff();
-        *st = Stats { difficulty: d as i32, ..Stats::default() };
+        *st = Stats {
+            difficulty: d as i32,
+            ..Stats::default()
+        };
         st.gauge = 0;
         st.clock = if g.stage % 9 == 8 { 6 } else { 0 };
         let lives = if d >= 4 {
@@ -324,7 +336,13 @@ impl GameManager {
             s.gauge_start = s.gauge;
             s.time = 0;
             s.time_added = 0;
-            s.time_threshold = if ctx.game.spell_practice() { 0 } else { crate::player::TIME_THR.get(stage % 9).map_or(10, |r| r[d.min(3)]) };
+            s.time_threshold = if ctx.game.spell_practice() {
+                0
+            } else {
+                crate::player::TIME_THR
+                    .get(stage % 9)
+                    .map_or(10, |r| r[d.min(3)])
+            };
             if ctx.game.practice() {
                 let pw = match stage {
                     0 => 0.0,
@@ -333,7 +351,10 @@ impl GameManager {
                 };
                 s.set_power(pw, &mut ctx.anm.rng);
             }
-            if let Some(pw) = crate::env::var("TH08_POWER").and_then(|v| v.parse::<f32>().ok()).filter(|_| ctx.game.stages_started == 0) {
+            if let Some(pw) = crate::env::var("TH08_POWER")
+                .and_then(|v| v.parse::<f32>().ok())
+                .filter(|_| ctx.game.stages_started == 0)
+            {
                 s.power = pw.clamp(0.0, 128.0);
             }
         }
@@ -341,12 +362,17 @@ impl GameManager {
         g.paused = 0;
         g.flags &= !0x2180;
         g.stage_seed = ctx.anm.rng.state;
-        log::info!("stage {stage} start at frame {}: shot {shot} difficulty {d} seed {:#06x}", ctx.frame, g.stage_seed);
+        log::info!(
+            "stage {stage} start at frame {}: shot {shot} difficulty {d} seed {:#06x}",
+            ctx.frame,
+            g.stage_seed
+        );
         let first = g.stages_started == 0;
         g.stages_started += 1;
         let stage_t = Stage::register(ctx, stage, Some(self.player.clone()))?;
         let bullets = BulletManager::register(ctx, self.player.clone())?;
-        let enemies = EnemyManager::register(ctx, stage, Some(stage_t.clone()), bullets.clone(), d as i32)?;
+        let enemies =
+            EnemyManager::register(ctx, stage, Some(stage_t.clone()), bullets.clone(), d as i32)?;
         if !first {
             stage_t.borrow_mut().fast_forward = 0;
             enemies.borrow_mut().fast_forward = 0;
@@ -364,12 +390,24 @@ impl GameManager {
         g.flags |= F_RUNNING;
         g.game_over = 0;
         g.flags &= !F_ENDING_OK;
-        self.tasks = vec![self.player.clone(), stage_t.clone(), bullets.clone(), enemies.clone(), hud.clone(), effects, gui];
+        self.tasks = vec![
+            self.player.clone(),
+            stage_t.clone(),
+            bullets.clone(),
+            enemies.clone(),
+            hud.clone(),
+            effects,
+            gui,
+        ];
         self.stage = Some(stage_t);
         self.bullets = Some(bullets);
         self.enemies = Some(enemies);
         self.hud = Some(hud);
-        let pos = if ctx.game.previous == SCENE_MENU { [500.0, 440.0, 0.0] } else { [280.0, 430.0, 0.0] };
+        let pos = if ctx.game.previous == SCENE_MENU {
+            [500.0, 440.0, 0.0]
+        } else {
+            [280.0, 430.0, 0.0]
+        };
         self.loading_vms = (0..3)
             .map(|i| {
                 let mut vm = crate::anmvm::AnmVm::default();
@@ -526,10 +564,14 @@ impl Task<Ctx> for GameManager {
                 if g.end_state() == 0 {
                     g.loading = 0;
                     g.flags &= !F_CLEAR_PANEL;
-                    self.loading_vms.iter_mut().for_each(|v| v.pending_interrupt = 1);
+                    self.loading_vms
+                        .iter_mut()
+                        .for_each(|v| v.pending_interrupt = 1);
                 } else {
                     if self.wait_frames == 0 {
-                        self.loading_vms.iter_mut().for_each(|v| v.pending_interrupt = 2);
+                        self.loading_vms
+                            .iter_mut()
+                            .for_each(|v| v.pending_interrupt = 2);
                     }
                     self.wait_frames += 1;
                 }
@@ -544,7 +586,11 @@ impl Task<Ctx> for GameManager {
             }
         }
         let g = &mut ctx.game;
-        if g.paused == 0 && g.game_over == 0 && g.flags & F_DEMO == 0 && ctx.input.pressed(crate::input::PAUSE) {
+        if g.paused == 0
+            && g.game_over == 0
+            && g.flags & F_DEMO == 0
+            && ctx.input.pressed(crate::input::PAUSE)
+        {
             g.paused = 1;
             crate::sound::play(crate::sound::PAUSE);
             ctx.audio.pause_bgm(true);
@@ -571,7 +617,14 @@ impl Task<Ctx> for GameManager {
         if let Some(v) = crate::env::var("TH08_SCREEN_FX") {
             let n: Vec<i64> = v.split([':', ',']).filter_map(|s| s.parse().ok()).collect();
             if n.len() == 6 && n[0] == g.frame_counter as i64 {
-                crate::effect::screen(n[1] as u8, n[2] as i32, n[3] as i32, n[4] as i32, n[5] as i32, 0x15);
+                crate::effect::screen(
+                    n[1] as u8,
+                    n[2] as i32,
+                    n[3] as i32,
+                    n[4] as i32,
+                    n[5] as i32,
+                    0x15,
+                );
             }
         }
         Ret::Next
@@ -588,8 +641,16 @@ impl Task<Ctx> for GameManager {
         }
         if self.wait_frames >= 5 {
             let t = (self.wait_frames - 5) % 59;
-            let a = if t < 30 { 255 - t * 128 / 30 } else { 127 + (t - 30) * 128 / 29 };
-            ctx.ascii.push(crate::ascii::Text::new(288.0, 454.0, "Press Shot Button").scale(0.5).color([255, 255, 255, a as u8]));
+            let a = if t < 30 {
+                255 - t * 128 / 30
+            } else {
+                127 + (t - 30) * 128 / 29
+            };
+            ctx.ascii.push(
+                crate::ascii::Text::new(288.0, 454.0, "Press Shot Button")
+                    .scale(0.5)
+                    .color([255, 255, 255, a as u8]),
+            );
         }
         Ret::Next
     }
@@ -612,15 +673,35 @@ mod tests {
         assert_eq!(run(1, 1), [0, 1, 2, 3, 5, 7]);
         assert_eq!(run(2, 0), [0, 1, 2, 3, 5, 6]);
         assert_eq!(run(3, 1), [0, 1, 2, 4, 5, 7]);
-        for (shot, four) in [(4, 4), (5, 4), (6, 3), (7, 3), (8, 3), (9, 3), (10, 4), (11, 4)] {
+        for (shot, four) in [
+            (4, 4),
+            (5, 4),
+            (6, 3),
+            (7, 3),
+            (8, 3),
+            (9, 3),
+            (10, 4),
+            (11, 4),
+        ] {
             assert_eq!(next_stage(2, shot, 0), four, "shot {shot}");
         }
     }
 
     #[test]
     fn clock_and_rank() {
-        assert_eq!((clock_advance(0, 100, 2000), clock_advance(0, 2000, 2000), clock_advance(6, 0, 0), clock_advance(8, 0, 10)), (2, 1, 0, 4));
-        let mut g = Game { rank: [10, 16, 8, 0], ..Game::default() };
+        assert_eq!(
+            (
+                clock_advance(0, 100, 2000),
+                clock_advance(0, 2000, 2000),
+                clock_advance(6, 0, 0),
+                clock_advance(8, 0, 10)
+            ),
+            (2, 1, 0, 4)
+        );
+        let mut g = Game {
+            rank: [10, 16, 8, 0],
+            ..Game::default()
+        };
         g.rank_add(250);
         assert_eq!(g.rank, [12, 16, 8, 50]);
         g.rank_add(-1600);
@@ -631,7 +712,10 @@ mod tests {
 
     #[test]
     fn score_roll() {
-        let mut st = Stats { score10: 1000, ..Stats::default() };
+        let mut st = Stats {
+            score10: 1000,
+            ..Stats::default()
+        };
         let mut frames = 0;
         while st.score_disp < st.score10 {
             GameManager::roll_score(&mut st);

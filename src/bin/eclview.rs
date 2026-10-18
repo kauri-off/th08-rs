@@ -10,12 +10,25 @@ fn main() -> anyhow::Result<()> {
         println!("timeline {t}");
         let mut off = start;
         while let Some(i) = e.tl_ins(off).filter(|i| i.time >= 0) {
-            let args: Vec<String> = (0..(i.size - 8) / 4).map(|k| fmt(e.tl_arg(&i, k), false)).collect();
-            println!("  {off:#07x} t{:<6} op{:<3} r{:02x} {}", i.time, i.op, i.rank, args.join(", "));
+            let args: Vec<String> = (0..(i.size - 8) / 4)
+                .map(|k| fmt(e.tl_arg(&i, k), false))
+                .collect();
+            println!(
+                "  {off:#07x} t{:<6} op{:<3} r{:02x} {}",
+                i.time,
+                i.op,
+                i.rank,
+                args.join(", ")
+            );
             off += i.size;
         }
     }
-    for (s, &start) in e.subs.iter().enumerate().filter(|(s, _)| only.is_none_or(|o| o == *s)) {
+    for (s, &start) in e
+        .subs
+        .iter()
+        .enumerate()
+        .filter(|(s, _)| only.is_none_or(|o| o == *s))
+    {
         println!("sub {s}");
         let mut off = start;
         while let Some(i) = e.ins(off) {
@@ -24,10 +37,19 @@ fn main() -> anyhow::Result<()> {
             let args: Vec<String> = (0..n.min(9))
                 .map(|k| {
                     let v = if i.mask & (1 << k) != 0 { "$" } else { "" };
-                    format!("{v}{}", fmt(e.arg(&i, k), matches!(sig.get(k), Some(b'f' | b'W'))))
+                    format!(
+                        "{v}{}",
+                        fmt(e.arg(&i, k), matches!(sig.get(k), Some(b'f' | b'W')))
+                    )
                 })
                 .collect();
-            println!("  {off:#07x} t{:<5} op{:<3} r{:02x} {}", i.time, i.op, i.rank, args.join(", "));
+            println!(
+                "  {off:#07x} t{:<5} op{:<3} r{:02x} {}",
+                i.time,
+                i.op,
+                i.rank,
+                args.join(", ")
+            );
             if i.op == -1 {
                 break;
             }
@@ -38,5 +60,9 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn fmt(v: u32, float: bool) -> String {
-    if float { format!("{}", f32::from_bits(v)) } else { format!("{}", v as i32) }
+    if float {
+        format!("{}", f32::from_bits(v))
+    } else {
+        format!("{}", v as i32)
+    }
 }

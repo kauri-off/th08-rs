@@ -39,7 +39,12 @@ pub fn face_files(stage: usize, shot: u8) -> [Option<String>; 4] {
         7 => ("st06", Some("st07")),
         _ => ("st08m", Some("st08")),
     };
-    [Some(format!("face_{a}00.anm")), Some(format!("face_{b}00.anm")), Some(format!("face_{s2}.anm")), s3.map(|s| format!("face_{s}.anm"))]
+    [
+        Some(format!("face_{a}00.anm")),
+        Some(format!("face_{b}00.anm")),
+        Some(format!("face_{s2}.anm")),
+        s3.map(|s| format!("face_{s}.anm")),
+    ]
 }
 
 pub struct MsgFile {
@@ -59,8 +64,13 @@ pub fn parse(data: Vec<u8>) -> Result<MsgFile> {
     ensure!(data.len() >= 4, "msg file too short");
     let n = u32::from_le_bytes(data[0..4].try_into()?) as usize;
     ensure!(data.len() >= 4 + 4 * n, "msg entry table truncated");
-    let entries = (0..n).map(|i| u32::from_le_bytes(data[4 + 4 * i..8 + 4 * i].try_into().unwrap()) as usize).collect::<Vec<_>>();
-    ensure!(entries.iter().all(|&o| o + 4 <= data.len()), "msg entry offset out of range");
+    let entries = (0..n)
+        .map(|i| u32::from_le_bytes(data[4 + 4 * i..8 + 4 * i].try_into().unwrap()) as usize)
+        .collect::<Vec<_>>();
+    ensure!(
+        entries.iter().all(|&o| o + 4 <= data.len()),
+        "msg entry offset out of range"
+    );
     Ok(MsgFile { data, entries })
 }
 
@@ -68,7 +78,12 @@ impl MsgFile {
     pub fn ins(&self, at: usize) -> Option<Ins> {
         let h = self.data.get(at..at + 4)?;
         let size = h[3] as usize;
-        (at + 4 + size <= self.data.len()).then_some(Ins { time: u16::from_le_bytes([h[0], h[1]]), op: h[2], size, at })
+        (at + 4 + size <= self.data.len()).then_some(Ins {
+            time: u16::from_le_bytes([h[0], h[1]]),
+            op: h[2],
+            size,
+            at,
+        })
     }
 
     pub fn args(&self, i: &Ins) -> &[u8] {
@@ -77,12 +92,14 @@ impl MsgFile {
 
     pub fn i16(&self, i: &Ins, k: usize) -> i16 {
         let a = self.args(i);
-        a.get(2 * k..2 * k + 2).map_or(0, |b| i16::from_le_bytes([b[0], b[1]]))
+        a.get(2 * k..2 * k + 2)
+            .map_or(0, |b| i16::from_le_bytes([b[0], b[1]]))
     }
 
     pub fn i32(&self, i: &Ins, k: usize) -> i32 {
         let a = self.args(i);
-        a.get(4 * k..4 * k + 4).map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()))
+        a.get(4 * k..4 * k + 4)
+            .map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()))
     }
 
     pub fn u8(&self, i: &Ins, k: usize) -> u8 {
@@ -91,7 +108,13 @@ impl MsgFile {
 
     // XOR-0x77 Shift-JIS string starting at byte `from` of the arguments.
     pub fn string(&self, i: &Ins, from: usize) -> String {
-        let raw: Vec<u8> = self.args(i).iter().skip(from).map(|b| b ^ 0x77).take_while(|&b| b != 0).collect();
+        let raw: Vec<u8> = self
+            .args(i)
+            .iter()
+            .skip(from)
+            .map(|b| b ^ 0x77)
+            .take_while(|&b| b != 0)
+            .collect();
         crate::text::decode_sjis(&raw)
     }
 }
@@ -151,7 +174,12 @@ pub struct Dialogue {
 }
 
 // tbl 0x4C7180 as RGB (10 §6).
-const COLOURS: [[u8; 3]; 4] = [[255, 240, 232], [255, 232, 240], [240, 232, 255], [240, 232, 255]];
+const COLOURS: [[u8; 3]; 4] = [
+    [255, 240, 232],
+    [255, 232, 240],
+    [240, 232, 255],
+    [240, 232, 255],
+];
 
 impl Default for Dialogue {
     fn default() -> Self {
@@ -204,8 +232,20 @@ impl Dialogue {
     // Msg_Start (10 §4); the caller performs the playfield side effects (§4.6) when `side_effects` is set.
     pub fn start(&mut self, n: i32) {
         let Some(file) = self.file.take() else { return };
-        let (info, face_slot, events, texts) = (self.info, self.face_slot, std::mem::take(&mut self.events), std::mem::take(&mut self.texts));
-        *self = Dialogue { file: Some(file), info, face_slot, events, texts, ..Dialogue::default() };
+        let (info, face_slot, events, texts) = (
+            self.info,
+            self.face_slot,
+            std::mem::take(&mut self.events),
+            std::mem::take(&mut self.texts),
+        );
+        *self = Dialogue {
+            file: Some(file),
+            info,
+            face_slot,
+            events,
+            texts,
+            ..Dialogue::default()
+        };
         let mut n = n;
         if n == 0 {
             // Entry 0 hooks (answers_impl10 §6).
@@ -243,7 +283,9 @@ impl Dialogue {
         if info.stage == 7 && n > 5 && info.clock > 11 {
             n = 5;
         }
-        let Some(&ip) = self.file.as_ref().and_then(|f| f.entries.get(n as usize)) else { return };
+        let Some(&ip) = self.file.as_ref().and_then(|f| f.entries.get(n as usize)) else {
+            return;
+        };
         self.entry = n;
         self.ip = ip;
         self.lines.iter_mut().for_each(|l| l.script_index = -1);
@@ -273,7 +315,11 @@ impl Dialogue {
         if who != self.active_speaker {
             let prev = self.active_speaker;
             for k in 0..4u8 {
-                self.faces[k as usize].pending_interrupt = if k == prev && prev / 2 != who / 2 { 6 } else { 4 };
+                self.faces[k as usize].pending_interrupt = if k == prev && prev / 2 != who / 2 {
+                    6
+                } else {
+                    4
+                };
             }
         }
         self.faces[who as usize].pending_interrupt = 3;
@@ -304,7 +350,11 @@ impl Dialogue {
                 self.set_face_sprite(anm, k, s);
             }
             3 => {
-                let (sp, line, s) = (f.i16(&ins, 0) as usize, f.i16(&ins, 1) as usize, f.string(&ins, 4));
+                let (sp, line, s) = (
+                    f.i16(&ins, 0) as usize,
+                    f.i16(&ins, 1) as usize,
+                    f.string(&ins, 4),
+                );
                 if line == 0 {
                     self.clear_line1();
                 }
@@ -368,7 +418,10 @@ impl Dialogue {
                     self.clear_line1();
                     self.next_line = 0;
                 }
-                let (line, c) = (self.next_line.min(1) as usize, self.text_colour[self.text_speaker as usize]);
+                let (line, c) = (
+                    self.next_line.min(1) as usize,
+                    self.text_colour[self.text_speaker as usize],
+                );
                 self.render(anm, line, s, c);
                 self.wait_count = 0;
                 self.new_box = false;
@@ -458,7 +511,12 @@ impl Dialogue {
         if !stalled {
             self.clock.tick(anm.speed);
         }
-        for vm in self.faces.iter_mut().chain(self.lines.iter_mut()).chain(std::iter::once(&mut self.boss_card)) {
+        for vm in self
+            .faces
+            .iter_mut()
+            .chain(self.lines.iter_mut())
+            .chain(std::iter::once(&mut self.boss_card))
+        {
             if vm.script.is_some() {
                 vm.run(anm);
             }
@@ -487,8 +545,11 @@ mod tests {
     // Every msg file parses, every entry walks to op 0 / halt with known opcodes and in-range strings.
     #[test]
     fn all_msg_files() {
-        let Some(ar) = crate::archive::test_archive() else { return };
-        let names: std::collections::BTreeSet<String> = FILES.iter().flatten().map(|s| format!("{s}.dat")).collect();
+        let Some(ar) = crate::archive::test_archive() else {
+            return;
+        };
+        let names: std::collections::BTreeSet<String> =
+            FILES.iter().flatten().map(|s| format!("{s}.dat")).collect();
         let mut ops = [0usize; 23];
         for name in &names {
             let f = parse(ar.read(name).unwrap()).unwrap();
@@ -496,7 +557,9 @@ mod tests {
                 let mut at = e;
                 let mut last = 0;
                 loop {
-                    let i = f.ins(at).unwrap_or_else(|| panic!("{name}: bad instruction at {at:#x}"));
+                    let i = f
+                        .ins(at)
+                        .unwrap_or_else(|| panic!("{name}: bad instruction at {at:#x}"));
                     assert!(i.op <= 22, "{name}: op {}", i.op);
                     ops[i.op as usize] += 1;
                     if i.op == 0 || i.op == 10 || i.op == 11 {
@@ -520,8 +583,13 @@ mod tests {
     // Wait: Shot advances only after min_wait frames; timeout after n; skip is instant.
     #[test]
     fn wait_and_release() {
-        let Some(ar) = crate::archive::test_archive() else { return };
-        let mut d = Dialogue { file: Some(parse(ar.read("msg1a.dat").unwrap()).unwrap()), ..Dialogue::default() };
+        let Some(ar) = crate::archive::test_archive() else {
+            return;
+        };
+        let mut d = Dialogue {
+            file: Some(parse(ar.read("msg1a.dat").unwrap()).unwrap()),
+            ..Dialogue::default()
+        };
         let mut anm = AnmManager::default();
         d.start(0);
         assert!(d.blocking() && d.side_effects);
@@ -533,10 +601,16 @@ mod tests {
             released |= !d.blocking() && d.active();
             frames += 1;
         }
-        assert!(!d.active() && released, "dialogue ended by timeouts after {frames} frames");
+        assert!(
+            !d.active() && released,
+            "dialogue ended by timeouts after {frames} frames"
+        );
         assert!(frames > 1000);
         d.start(0);
-        let skip = Input { held: input::SKIP, ..Input::default() };
+        let skip = Input {
+            held: input::SKIP,
+            ..Input::default()
+        };
         let mut n = 0;
         while d.active() && n < 100_000 {
             d.run(&mut anm, &skip, false);
@@ -548,10 +622,23 @@ mod tests {
     // Stage-5 entry 10 → Final A / B dialogue or the choice menu (10 §4 step 3).
     #[test]
     fn final_route_resolution() {
-        let Some(ar) = crate::archive::test_archive() else { return };
+        let Some(ar) = crate::archive::test_archive() else {
+            return;
+        };
         let run = |shot: u8, a: bool, b: bool, cont: u8| {
-            let info = StartInfo { stage: 5, shot, cleared_6a: a, cleared_6b: b, continues: cont, ..StartInfo::default() };
-            let mut d = Dialogue { file: Some(parse(ar.read(&file_name(5, shot)).unwrap()).unwrap()), info, ..Dialogue::default() };
+            let info = StartInfo {
+                stage: 5,
+                shot,
+                cleared_6a: a,
+                cleared_6b: b,
+                continues: cont,
+                ..StartInfo::default()
+            };
+            let mut d = Dialogue {
+                file: Some(parse(ar.read(&file_name(5, shot)).unwrap()).unwrap()),
+                info,
+                ..Dialogue::default()
+            };
             d.start(10);
             (d.entry, d.choice)
         };

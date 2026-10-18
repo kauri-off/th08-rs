@@ -9,7 +9,12 @@ struct CipherKey {
 }
 
 const fn ck(key: u8, step: u8, block: usize, limit: usize) -> CipherKey {
-    CipherKey { key, step, block, limit }
+    CipherKey {
+        key,
+        step,
+        block,
+        limit,
+    }
 }
 
 const HEADER_KEY: CipherKey = ck(0x1b, 0x37, 0x0c, 0x400);
@@ -88,7 +93,12 @@ pub fn lzss_decompress(input: &[u8], size_hint: usize) -> Vec<u8> {
     let mut ring = [0u8; 0x2000];
     let mut rp = 1usize;
     let mut out = Vec::with_capacity(size_hint);
-    let mut bs = Bits { data: input, pos: 0, mask: 0x80, cur: 0 };
+    let mut bs = Bits {
+        data: input,
+        pos: 0,
+        mask: 0x80,
+        cur: 0,
+    };
     loop {
         if bs.pos > input.len() {
             break;
@@ -144,10 +154,17 @@ impl Archive {
         let mut raw = Vec::with_capacity(count);
         let mut p = 0;
         for _ in 0..count {
-            let nul = table[p..].iter().position(|&c| c == 0).context("bad table")?;
+            let nul = table[p..]
+                .iter()
+                .position(|&c| c == 0)
+                .context("bad table")?;
             let name = String::from_utf8_lossy(&table[p..p + nul]).to_ascii_lowercase();
             p += nul + 1;
-            raw.push((name, u32le(&table, p) as usize, u32le(&table, p + 4) as usize));
+            raw.push((
+                name,
+                u32le(&table, p) as usize,
+                u32le(&table, p + 4) as usize,
+            ));
             p += 12;
         }
         let mut entries = HashMap::new();
@@ -158,7 +175,11 @@ impl Archive {
             names.push(name.clone());
             entries.insert(name, Entry { offset, size, end });
         }
-        Ok(Self { data, entries, names })
+        Ok(Self {
+            data,
+            entries,
+            names,
+        })
     }
 
     pub fn names(&self) -> &[String] {
@@ -174,7 +195,8 @@ impl Archive {
         if file.len() < 4 || &file[0..3] != b"edz" {
             bail!("{name}: missing edz wrapper");
         }
-        let k = payload_key(file[3]).with_context(|| format!("{name}: unknown edz type {}", file[3]))?;
+        let k = payload_key(file[3])
+            .with_context(|| format!("{name}: unknown edz type {}", file[3]))?;
         Ok(decrypt(&file[4..], &k))
     }
 }

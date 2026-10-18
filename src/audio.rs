@@ -19,7 +19,9 @@ pub fn parse_fmt(data: &[u8]) -> Vec<Track> {
         .map(|e| {
             let u = |o: usize| u32::from_le_bytes(e[o..o + 4].try_into().unwrap());
             Track {
-                name: String::from_utf8_lossy(&e[..16]).trim_end_matches('\0').to_string(),
+                name: String::from_utf8_lossy(&e[..16])
+                    .trim_end_matches('\0')
+                    .to_string(),
                 offset: u(0x10) as u64,
                 loop_start: u(0x18) as usize / 4,
                 length: u(0x1c) as usize / 4,
@@ -51,7 +53,10 @@ pub struct Wave {
 }
 
 pub fn parse_wav(data: &[u8]) -> Result<Wave> {
-    anyhow::ensure!(data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WAVE", "not a RIFF/WAVE file");
+    anyhow::ensure!(
+        data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WAVE",
+        "not a RIFF/WAVE file"
+    );
     let (mut fmt, mut pcm) = (None, None);
     let mut p = 12;
     while p + 8 <= data.len() {
@@ -66,18 +71,42 @@ pub fn parse_wav(data: &[u8]) -> Result<Wave> {
     }
     let (fmt, pcm) = (fmt.context("no fmt chunk")?, pcm.context("no data chunk")?);
     let u16_at = |o: usize| u16::from_le_bytes([fmt[o], fmt[o + 1]]);
-    let (tag, channels, rate, bits) = (u16_at(0), u16_at(2) as usize, u32::from_le_bytes(fmt[4..8].try_into().unwrap()), u16_at(14));
-    anyhow::ensure!(tag == 1 && (1..=2).contains(&channels) && (bits == 8 || bits == 16), "unsupported wav format {tag}/{channels}/{bits}");
+    let (tag, channels, rate, bits) = (
+        u16_at(0),
+        u16_at(2) as usize,
+        u32::from_le_bytes(fmt[4..8].try_into().unwrap()),
+        u16_at(14),
+    );
+    anyhow::ensure!(
+        tag == 1 && (1..=2).contains(&channels) && (bits == 8 || bits == 16),
+        "unsupported wav format {tag}/{channels}/{bits}"
+    );
     let bytes = bits as usize / 8;
-    let sample = |c: &[u8]| if bytes == 1 { (c[0] as f32 - 128.0) / 128.0 } else { i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0 };
+    let sample = |c: &[u8]| {
+        if bytes == 1 {
+            (c[0] as f32 - 128.0) / 128.0
+        } else {
+            i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0
+        }
+    };
     let samples = pcm
         .chunks_exact(bytes * channels)
         .map(|f| {
             let l = sample(f);
-            [l, if channels == 2 { sample(&f[bytes..]) } else { l }]
+            [
+                l,
+                if channels == 2 {
+                    sample(&f[bytes..])
+                } else {
+                    l
+                },
+            ]
         })
         .collect();
-    Ok(Wave { samples, rate: rate as f64 })
+    Ok(Wave {
+        samples,
+        rate: rate as f64,
+    })
 }
 
 #[derive(Default, Clone)]
@@ -90,7 +119,11 @@ struct Voice {
 
 // DirectSound attenuation (1/100 dB) → amplitude.
 fn db_gain(db: i32) -> f32 {
-    if db <= -10000 { 0.0 } else { 10f32.powf(db as f32 / 2000.0) }
+    if db <= -10000 {
+        0.0
+    } else {
+        10f32.powf(db as f32 / 2000.0)
+    }
 }
 
 #[derive(Default)]
@@ -165,8 +198,18 @@ pub struct Audio {
 
 impl Audio {
     pub fn new(source: Source, fmt: &[u8]) -> Self {
-        let mixer = Arc::new(Mutex::new(Mixer { volume: 1.0, fade: 1.0, out_rate: BGM_RATE, ..Default::default() }));
-        Self { source, tracks: parse_fmt(fmt), mixer, stream: None }
+        let mixer = Arc::new(Mutex::new(Mixer {
+            volume: 1.0,
+            fade: 1.0,
+            out_rate: BGM_RATE,
+            ..Default::default()
+        }));
+        Self {
+            source,
+            tracks: parse_fmt(fmt),
+            mixer,
+            stream: None,
+        }
     }
 
     pub fn is_started(&self) -> bool {
@@ -203,13 +246,18 @@ impl Audio {
                     let samples = buf
                         .chunks_exact(4)
                         .map(|c| {
-                            let s = |o: usize| i16::from_le_bytes([c[o], c[o + 1]]) as f32 / 32768.0;
+                            let s =
+                                |o: usize| i16::from_le_bytes([c[o], c[o + 1]]) as f32 / 32768.0;
                             [s(0), s(2)]
                         })
                         .collect();
                     let mut m = mixer.lock().unwrap();
                     if m.generation == generation {
-                        m.music = Some(Music { samples, loop_start: t.loop_start, pos: 0.0 });
+                        m.music = Some(Music {
+                            samples,
+                            loop_start: t.loop_start,
+                            pos: 0.0,
+                        });
                     }
                 }
                 Err(e) => log::warn!("bgm {}: {e:#}", t.name),
@@ -225,7 +273,10 @@ impl Audio {
             let w = match waves.iter().find(|(n, _)| *n == name) {
                 Some((_, w)) => w.clone(),
                 None => {
-                    let w = archive.read(&format!("{name}.wav")).and_then(|d| parse_wav(&d)).map(Arc::new);
+                    let w = archive
+                        .read(&format!("{name}.wav"))
+                        .and_then(|d| parse_wav(&d))
+                        .map(Arc::new);
                     if let Err(e) = &w {
                         log::warn!("{name}.wav: {e:#}");
                     }
@@ -233,7 +284,10 @@ impl Audio {
                     waves.last().unwrap().1.clone()
                 }
             };
-            voices.push(Voice { wave: w, ..Voice::default() });
+            voices.push(Voice {
+                wave: w,
+                ..Voice::default()
+            });
         }
         self.mixer.lock().unwrap().voices = voices;
     }
@@ -241,7 +295,9 @@ impl Audio {
     // Stop, rewind, set pan/volume (1/100 dB) and play once (13 §1.3).
     pub fn play_se(&mut self, id: usize, pan: i32, volume: i32) {
         let mut m = self.mixer.lock().unwrap();
-        let Some(v) = m.voices.get_mut(id) else { return };
+        let Some(v) = m.voices.get_mut(id) else {
+            return;
+        };
         let g = db_gain(volume);
         let pan = pan.clamp(-10000, 10000);
         v.gain = [g * db_gain(-pan.max(0)), g * db_gain(pan.min(0))];
@@ -275,9 +331,11 @@ impl Audio {
 fn open_stream(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
     let host = cpal::default_host();
     let pick = |want: &str| {
-        host.output_devices()
-            .ok()?
-            .find(|d| d.id().map(|i| format!("{i:?}").contains(want)).unwrap_or(false))
+        host.output_devices().ok()?.find(|d| {
+            d.id()
+                .map(|i| format!("{i:?}").contains(want))
+                .unwrap_or(false)
+        })
     };
     let dev = pick("pipewire")
         .or_else(|| pick("pulse"))
@@ -311,21 +369,37 @@ mod tests {
 
     #[test]
     fn se_mix_pan_and_volume() {
-        let wave = Arc::new(Wave { samples: vec![[0.5, 0.5]; 100], rate: 44100.0 });
-        let mut m = Mixer { volume: 1.0, fade: 1.0, out_rate: 44100.0, voices: vec![Voice { wave: Some(wave), ..Voice::default() }], ..Default::default() };
+        let wave = Arc::new(Wave {
+            samples: vec![[0.5, 0.5]; 100],
+            rate: 44100.0,
+        });
+        let mut m = Mixer {
+            volume: 1.0,
+            fade: 1.0,
+            out_rate: 44100.0,
+            voices: vec![Voice {
+                wave: Some(wave),
+                ..Voice::default()
+            }],
+            ..Default::default()
+        };
         let g = db_gain(-600);
         let v = &mut m.voices[0];
         (v.gain, v.playing) = ([g * db_gain(-1000), g], true);
         let mut out = vec![0.0; 2 * 120];
         m.render(&mut out, 2);
-        assert!((out[1] - 0.5 * g).abs() < 1e-6 && (out[0] - 0.5 * g * db_gain(-1000)).abs() < 1e-6);
+        assert!(
+            (out[1] - 0.5 * g).abs() < 1e-6 && (out[0] - 0.5 * g * db_gain(-1000)).abs() < 1e-6
+        );
         assert_eq!(out[2 * 110], 0.0);
         assert!(!m.voices[0].playing);
         assert!((db_gain(-2000) - 0.1).abs() < 1e-6 && db_gain(-10000) == 0.0);
     }
     #[test]
     fn se_waves_parse() {
-        let Some(a) = crate::archive::test_archive() else { return };
+        let Some(a) = crate::archive::test_archive() else {
+            return;
+        };
         for (name, _) in crate::sound::TABLE {
             let w = super::parse_wav(&a.read(&format!("{name}.wav")).unwrap()).unwrap();
             assert!(!w.samples.is_empty() && w.rate > 8000.0, "{name}");

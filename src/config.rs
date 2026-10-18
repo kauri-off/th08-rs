@@ -17,7 +17,19 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         // 15 §1.1 defaults (music 1 = WAV; 2 when thbgm.dat is invalid).
-        Self { lives: 2, bombs: 3, colour_mode: 0, music: 1, se_on: 1, difficulty: 1, windowed: 0, effect_level: 2, slow: 0, bgm_volume: 100, se_volume: 80 }
+        Self {
+            lives: 2,
+            bombs: 3,
+            colour_mode: 0,
+            music: 1,
+            se_on: 1,
+            difficulty: 1,
+            windowed: 0,
+            effect_level: 2,
+            slow: 0,
+            bgm_volume: 100,
+            se_volume: 80,
+        }
     }
 }
 
@@ -47,6 +59,9 @@ mod tests {
     fn curve() {
         assert_eq!(super::volume_curve(-1100, 100), -1100);
         assert_eq!(super::volume_curve(-1100, 0), -10000);
-        assert_eq!(super::volume_curve(-1100, 80), (3900.0f32 * 0.992) as i32 - 5000);
+        assert_eq!(
+            super::volume_curve(-1100, 80),
+            (3900.0f32 * 0.992) as i32 - 5000
+        );
     }
 }

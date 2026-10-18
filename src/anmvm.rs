@@ -41,13 +41,21 @@ pub struct Timer {
 
 impl Default for Timer {
     fn default() -> Self {
-        Self { prev: -999, frac: 0.0, cur: 0 }
+        Self {
+            prev: -999,
+            frac: 0.0,
+            cur: 0,
+        }
     }
 }
 
 impl Timer {
     pub fn set(&mut self, v: i32) {
-        *self = Self { prev: -999, frac: 0.0, cur: v };
+        *self = Self {
+            prev: -999,
+            frac: 0.0,
+            cur: v,
+        };
     }
 
     pub fn tick(&mut self, speed: f32) {
@@ -184,7 +192,12 @@ pub fn disasm(data: &[u8]) -> String {
                 }
             })
             .collect();
-        s += &format!("  @{ip:<5} t={:<4} op{:<3} {}\n", ins.time, ins.op, args.join(", "));
+        s += &format!(
+            "  @{ip:<5} t={:<4} op{:<3} {}\n",
+            ins.time,
+            ins.op,
+            args.join(", ")
+        );
         if ins.op == -1 || ins.size == 0 {
             break;
         }
@@ -390,7 +403,9 @@ impl AnmVm {
     }
 
     pub fn set_sprite(&mut self, anm: &AnmManager, idx: i32) {
-        let Some(s) = anm.sprite(self.anm_slot as usize, idx as usize) else { return };
+        let Some(s) = anm.sprite(self.anm_slot as usize, idx as usize) else {
+            return;
+        };
         self.sprite_index = idx as i16;
         self.has_sprite = true;
         self.sprite_w = s.w;
@@ -456,8 +471,20 @@ impl AnmVm {
     // Literal destinations write into the shared script bytes (the instruction's own argument).
     fn write(&mut self, anm: &mut AnmManager, ip: usize, d: Dest, bits: u32, is_float: bool) {
         match d {
-            Dest::I(i) => self.ivars[i] = if is_float { f32::from_bits(bits) as i32 } else { bits as i32 },
-            Dest::F(i) => self.fvars[i] = if is_float { f32::from_bits(bits) } else { bits as i32 as f32 },
+            Dest::I(i) => {
+                self.ivars[i] = if is_float {
+                    f32::from_bits(bits) as i32
+                } else {
+                    bits as i32
+                }
+            }
+            Dest::F(i) => {
+                self.fvars[i] = if is_float {
+                    f32::from_bits(bits)
+                } else {
+                    bits as i32 as f32
+                }
+            }
             Dest::Arg(k) => {
                 if let Some((slot, idx)) = self.script
                     && let Some(s) = anm.script_mut(slot, idx)
@@ -476,7 +503,11 @@ impl AnmVm {
     }
 
     fn pos_target(&mut self) -> &mut [f32; 3] {
-        if self.flags & F_POS_OFFSET != 0 { &mut self.pos_offset } else { &mut self.pos }
+        if self.flags & F_POS_OFFSET != 0 {
+            &mut self.pos_offset
+        } else {
+            &mut self.pos
+        }
     }
 
     // Position interpolation started by an owner (as ops 17/18/32).
@@ -592,7 +623,11 @@ impl AnmVm {
                     }
                 }
                 6 => {
-                    let p = [self.fval(a[0], m(0)), self.fval(a[1], m(1)), self.fval(a[2], m(2))];
+                    let p = [
+                        self.fval(a[0], m(0)),
+                        self.fval(a[1], m(1)),
+                        self.fval(a[2], m(2)),
+                    ];
                     *self.pos_target() = p;
                     Step::Next
                 }
@@ -606,8 +641,16 @@ impl AnmVm {
                     Step::Next
                 }
                 9 | 84 => {
-                    let (r, g, b) = (self.ival(a[0], m(0)) as u8, self.ival(a[1], m(1)) as u8, self.ival(a[2], m(2)) as u8);
-                    let c = if ins.op == 9 { &mut self.color } else { &mut self.color2 };
+                    let (r, g, b) = (
+                        self.ival(a[0], m(0)) as u8,
+                        self.ival(a[1], m(1)) as u8,
+                        self.ival(a[2], m(2)) as u8,
+                    );
+                    let c = if ins.op == 9 {
+                        &mut self.color
+                    } else {
+                        &mut self.color2
+                    };
                     (c[R], c[G], c[B]) = (r, g, b);
                     Step::Next
                 }
@@ -624,8 +667,16 @@ impl AnmVm {
                     Step::Next
                 }
                 12 | 13 => {
-                    let v = [self.fval(a[0], m(0)), self.fval(a[1], m(1)), self.fval(a[2], m(2))];
-                    if ins.op == 12 { self.rotation = v } else { self.angular_vel = v }
+                    let v = [
+                        self.fval(a[0], m(0)),
+                        self.fval(a[1], m(1)),
+                        self.fval(a[2], m(2)),
+                    ];
+                    if ins.op == 12 {
+                        self.rotation = v
+                    } else {
+                        self.angular_vel = v
+                    }
                     self.flags |= F_ROT_DIRTY;
                     Step::Next
                 }
@@ -646,7 +697,11 @@ impl AnmVm {
                     Step::Next
                 }
                 17..=19 => {
-                    let end = [self.fval(a[0], m(0)), self.fval(a[1], m(1)), self.fval(a[2], m(2))];
+                    let end = [
+                        self.fval(a[0], m(0)),
+                        self.fval(a[1], m(1)),
+                        self.fval(a[2], m(2)),
+                    ];
                     let dur = self.ival(a[3], m(3));
                     self.start_pos(dur, [0, 4, 6][(ins.op - 17) as usize], end);
                     Step::Next
@@ -707,17 +762,35 @@ impl AnmVm {
                 }
                 32 => {
                     let (dur, mode) = (self.ival(a[0], m(0)), self.ival(a[1], m(1)));
-                    let end = [self.fval(a[2], m(2)), self.fval(a[3], m(3)), self.fval(a[4], m(4))];
+                    let end = [
+                        self.fval(a[2], m(2)),
+                        self.fval(a[3], m(3)),
+                        self.fval(a[4], m(4)),
+                    ];
                     self.start_pos(dur, mode, end);
                     Step::Next
                 }
                 33 | 86 => {
                     let (dur, mode) = (self.ival(a[0], m(0)), self.ival(a[1], m(1)));
-                    let rgb = [self.ival(a[2], m(2)) as u8, self.ival(a[3], m(3)) as u8, self.ival(a[4], m(4)) as u8];
+                    let rgb = [
+                        self.ival(a[2], m(2)) as u8,
+                        self.ival(a[3], m(3)) as u8,
+                        self.ival(a[4], m(4)) as u8,
+                    ];
                     let (cur, start, end, slot) = if ins.op == 33 {
-                        (self.color, &mut self.color_start, &mut self.color_end, SLOT_COLOR)
+                        (
+                            self.color,
+                            &mut self.color_start,
+                            &mut self.color_end,
+                            SLOT_COLOR,
+                        )
                     } else {
-                        (self.color2, &mut self.color2_start, &mut self.color2_end, SLOT_COLOR2)
+                        (
+                            self.color2,
+                            &mut self.color2_start,
+                            &mut self.color2_end,
+                            SLOT_COLOR2,
+                        )
                     };
                     (start[R], start[G], start[B]) = (cur[R], cur[G], cur[B]);
                     (end[R], end[G], end[B]) = (rgb[0], rgb[1], rgb[2]);
@@ -725,7 +798,11 @@ impl AnmVm {
                     Step::Next
                 }
                 34 | 87 => {
-                    let (dur, mode, v) = (self.ival(a[0], m(0)), self.ival(a[1], m(1)), self.ival(a[2], m(2)) as u8);
+                    let (dur, mode, v) = (
+                        self.ival(a[0], m(0)),
+                        self.ival(a[1], m(1)),
+                        self.ival(a[2], m(2)) as u8,
+                    );
                     if ins.op == 34 {
                         self.color_start[A] = self.color[A];
                         self.color_end[A] = v;
@@ -740,7 +817,11 @@ impl AnmVm {
                 35 => {
                     let (dur, mode) = (self.ival(a[0], m(0)), self.ival(a[1], m(1)));
                     self.rot_start = self.rotation;
-                    self.rot_end = [self.fval(a[2], m(2)), self.fval(a[3], m(3)), self.fval(a[4], m(4))];
+                    self.rot_end = [
+                        self.fval(a[2], m(2)),
+                        self.fval(a[3], m(3)),
+                        self.fval(a[4], m(4)),
+                    ];
                     self.start_slot(SLOT_ROT, dur, mode);
                     self.flags |= F_ROT_DIRTY;
                     Step::Next
@@ -805,7 +886,11 @@ impl AnmVm {
                 }
                 60..=66 => {
                     let d = self.fdest(&ins);
-                    let x = if ins.op == 66 { self.read_f(d, &ins) } else { self.fval(a[1], m(1)) };
+                    let x = if ins.op == 66 {
+                        self.read_f(d, &ins)
+                    } else {
+                        self.fval(a[1], m(1))
+                    };
                     let v = match ins.op {
                         60 => anm.rng.next_f32() * x,
                         61 => x.sin(),
@@ -985,7 +1070,10 @@ impl AnmVm {
                     self.flags |= F_ROT_DIRTY;
                 }
                 SLOT_SCALE => {
-                    self.scale = [lerp(self.scale_start[0], self.scale_end[0]), lerp(self.scale_start[1], self.scale_end[1])];
+                    self.scale = [
+                        lerp(self.scale_start[0], self.scale_end[0]),
+                        lerp(self.scale_start[1], self.scale_end[1]),
+                    ];
                     self.flags |= F_SCALE_DIRTY;
                 }
                 SLOT_COLOR2 => {
@@ -1021,8 +1109,17 @@ mod tests {
             name: "t".into(),
             width: 256,
             height: 256,
-            sprites: vec![crate::anm::Sprite { id: 0, x: 0.0, y: 0.0, w: 32.0, h: 16.0 }],
-            scripts: vec![crate::anm::Script { id: 0, data: script }],
+            sprites: vec![crate::anm::Sprite {
+                id: 0,
+                x: 0.0,
+                y: 0.0,
+                w: 32.0,
+                h: 16.0,
+            }],
+            scripts: vec![crate::anm::Script {
+                id: 0,
+                data: script,
+            }],
             texture: None,
         };
         anm.insert(0, "t", vec![chunk], |_| 0);
@@ -1109,8 +1206,12 @@ mod tests {
 
     #[test]
     fn all_game_opcodes_handled() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else { return };
-        let ar = crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap()).unwrap();
+        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+            return;
+        };
+        let ar =
+            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
+                .unwrap();
         let mut seen = std::collections::BTreeSet::new();
         let mut scripts = 0;
         for n in ar.names().iter().filter(|n| n.ends_with(".anm")) {
@@ -1124,7 +1225,8 @@ mod tests {
                         if i.op == -1 {
                             break;
                         }
-                        let sig = signature(i.op).unwrap_or_else(|| panic!("{n}: unknown opcode {}", i.op));
+                        let sig = signature(i.op)
+                            .unwrap_or_else(|| panic!("{n}: unknown opcode {}", i.op));
                         assert_eq!(i.size, 8 + 4 * sig.len(), "{n}: op {} size", i.op);
                         if sig.contains('O') {
                             let off = i.args[sig.find('O').unwrap()] as usize;
@@ -1151,7 +1253,11 @@ mod tests {
             }
         }
         assert_eq!(scripts, 1151);
-        let missing: Vec<i16> = seen.iter().copied().filter(|&o| signature(o).is_none()).collect();
+        let missing: Vec<i16> = seen
+            .iter()
+            .copied()
+            .filter(|&o| signature(o).is_none())
+            .collect();
         assert!(missing.is_empty(), "{missing:?}");
         assert_eq!(seen.len(), 57, "{seen:?}");
     }

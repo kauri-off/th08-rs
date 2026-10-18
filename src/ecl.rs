@@ -37,7 +37,10 @@ fn i16_at(d: &[u8], o: usize) -> Option<i16> {
 }
 
 pub fn parse(data: Vec<u8>) -> Result<Ecl> {
-    ensure!(data.len() >= 0x48 && u32_at(&data, 0) == Some(MAGIC), "not an ECL file");
+    ensure!(
+        data.len() >= 0x48 && u32_at(&data, 0) == Some(MAGIC),
+        "not an ECL file"
+    );
     let nsubs = i16_at(&data, 4).unwrap_or(0).max(0) as usize;
     let ntl = i16_at(&data, 6).unwrap_or(0).clamp(0, 16) as usize;
     let mut timelines = Vec::new();
@@ -48,11 +51,17 @@ pub fn parse(data: Vec<u8>) -> Result<Ecl> {
     }
     let mut subs = Vec::new();
     for k in 0..nsubs {
-        let Some(o) = u32_at(&data, 0x48 + 4 * k) else { bail!("sub table truncated") };
+        let Some(o) = u32_at(&data, 0x48 + 4 * k) else {
+            bail!("sub table truncated")
+        };
         ensure!((o as usize) < data.len(), "sub {k}: bad offset {o:#x}");
         subs.push(o as usize);
     }
-    Ok(Ecl { data, subs, timelines })
+    Ok(Ecl {
+        data,
+        subs,
+        timelines,
+    })
 }
 
 impl Ecl {
@@ -89,7 +98,13 @@ impl Ecl {
 
     pub fn tl_ins(&self, off: usize) -> Option<TlIns> {
         let d = &self.data;
-        Some(TlIns { off, time: u32_at(d, off)? as i32, op: i16_at(d, off + 4)?, size: (*d.get(off + 6)? as usize).max(8), rank: *d.get(off + 7)? })
+        Some(TlIns {
+            off,
+            time: u32_at(d, off)? as i32,
+            op: i16_at(d, off + 4)?,
+            size: (*d.get(off + 6)? as usize).max(8),
+            rank: *d.get(off + 7)?,
+        })
     }
 
     pub fn tl_arg(&self, ins: &TlIns, k: usize) -> u32 {
@@ -97,7 +112,9 @@ impl Ecl {
     }
 
     pub fn sub_start(&self, sub: i32) -> Option<usize> {
-        usize::try_from(sub).ok().and_then(|s| self.subs.get(s).copied())
+        usize::try_from(sub)
+            .ok()
+            .and_then(|s| self.subs.get(s).copied())
     }
 }
 
@@ -105,8 +122,28 @@ impl Ecl {
 // B bullet block (8 dwords), L laser block (13), C spell block (58).
 pub fn signature(op: i16) -> Option<&'static str> {
     Some(match op {
-        0 | 1 | 53 | 62 | 76 | 84 | 85 | 95 | 107 | 108 | 109 | 112 | 123 | 153 | 154 | 162 | 179 | 180 | 181 => "",
-        2 | 3 | 54 | 55 | 58 | 59 | 79..=81 | 83 | 105 | 106 | 116 | 120 | 121 | 124 | 125 | 127 | 131 | 132 | 141..=143 | 146..=149 => "i",
+        0 | 1 | 53 | 62 | 76 | 84 | 85 | 95 | 107 | 108 | 109 | 112 | 123 | 153 | 154 | 162
+        | 179 | 180 | 181 => "",
+        2
+        | 3
+        | 54
+        | 55
+        | 58
+        | 59
+        | 79..=81
+        | 83
+        | 105
+        | 106
+        | 116
+        | 120
+        | 121
+        | 124
+        | 125
+        | 127
+        | 131
+        | 132
+        | 141..=143
+        | 146..=149 => "i",
         159 | 160 | 163 | 168 | 173..=177 | 182..=184 => "i",
         4 => "TO",
         5 => "TOV",
@@ -172,15 +209,17 @@ pub fn ins_size(op: i16) -> Option<usize> {
 }
 
 pub fn tl_size(op: i16) -> Option<usize> {
-    Some(8 + 4 * match op {
-        0 | 1 | 15 => 6,
-        2 | 4 | 11 | 12 => 7,
-        3 | 5 => 5,
-        6 | 10 | 13 | 14 | 9 => 1,
-        8 => 2,
-        7 | 16 => 0,
-        _ => return None,
-    })
+    Some(
+        8 + 4 * match op {
+            0 | 1 | 15 => 6,
+            2 | 4 | 11 | 12 => 7,
+            3 | 5 => 5,
+            6 | 10 | 13 | 14 | 9 => 1,
+            8 => 2,
+            7 | 16 => 0,
+            _ => return None,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -188,26 +227,59 @@ mod tests {
     use super::*;
 
     pub const FILES: [&str; 24] = [
-        "ecldata1", "ecldata2", "ecldata3", "ecldata4a", "ecldata4b", "ecldata5", "ecldata6", "ecldata7", "ecldata8", "ecldata1sp", "ecldata2sp",
-        "ecldata3sp", "ecldata4asp", "ecldata4bsp", "ecldata5sp", "ecldata6sp", "ecldata7sp", "ecldata8sp", "ecldata_al", "ecldata_rm",
-        "ecldata_sk", "ecldata_yk", "ecldata_ym", "ecldata_yy",
+        "ecldata1",
+        "ecldata2",
+        "ecldata3",
+        "ecldata4a",
+        "ecldata4b",
+        "ecldata5",
+        "ecldata6",
+        "ecldata7",
+        "ecldata8",
+        "ecldata1sp",
+        "ecldata2sp",
+        "ecldata3sp",
+        "ecldata4asp",
+        "ecldata4bsp",
+        "ecldata5sp",
+        "ecldata6sp",
+        "ecldata7sp",
+        "ecldata8sp",
+        "ecldata_al",
+        "ecldata_rm",
+        "ecldata_sk",
+        "ecldata_yk",
+        "ecldata_ym",
+        "ecldata_yy",
     ];
 
     #[test]
     fn all_ecl_parse_and_ops_known() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else { return };
-        let ar = crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap()).unwrap();
+        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+            return;
+        };
+        let ar =
+            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
+                .unwrap();
         let mut used = std::collections::BTreeSet::new();
         for f in FILES {
             let ecl = parse(ar.read(&format!("{f}.ecl")).unwrap()).unwrap();
             for (s, &start) in ecl.subs.iter().enumerate() {
                 let mut off = start;
                 loop {
-                    let ins = ecl.ins(off).unwrap_or_else(|| panic!("{f} sub {s}: truncated at {off:#x}"));
+                    let ins = ecl
+                        .ins(off)
+                        .unwrap_or_else(|| panic!("{f} sub {s}: truncated at {off:#x}"));
                     if ins.op == -1 {
                         break;
                     }
-                    assert_eq!(ins_size(ins.op), Some(ins.size), "{f} sub {s} @{off:#x}: op {} size {}", ins.op, ins.size);
+                    assert_eq!(
+                        ins_size(ins.op),
+                        Some(ins.size),
+                        "{f} sub {s} @{off:#x}: op {} size {}",
+                        ins.op,
+                        ins.size
+                    );
                     used.insert(ins.op);
                     if matches!(ins.op, 4 | 5 | 40..=51) {
                         let k = if ins.op == 4 || ins.op == 5 { 1 } else { 3 };
@@ -217,7 +289,10 @@ mod tests {
                     if matches!(ins.op, 52 | 88 | 135) {
                         let k = if ins.op == 52 { 0 } else { 1 };
                         let sub = ecl.arg(&ins, k) as i32;
-                        assert!(ins.mask != 0 || sub < 0 || ecl.sub_start(sub).is_some(), "{f} sub {s}: bad sub id {sub}");
+                        assert!(
+                            ins.mask != 0 || sub < 0 || ecl.sub_start(sub).is_some(),
+                            "{f} sub {s}: bad sub id {sub}"
+                        );
                     }
                     off += ins.size;
                 }
@@ -228,7 +303,13 @@ mod tests {
                     if ins.time < 0 {
                         break;
                     }
-                    assert_eq!(tl_size(ins.op), Some(ins.size), "{f} timeline {t}: op {} size {}", ins.op, ins.size);
+                    assert_eq!(
+                        tl_size(ins.op),
+                        Some(ins.size),
+                        "{f} timeline {t}: op {} size {}",
+                        ins.op,
+                        ins.size
+                    );
                     off += ins.size;
                 }
             }

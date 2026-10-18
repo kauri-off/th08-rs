@@ -104,7 +104,10 @@ impl Queue {
 
     // Sound_Update: (id, integer average pan) in queue order; the queue is cleared.
     pub fn drain(&mut self) -> Vec<(i32, i32)> {
-        self.slots.drain(..).map(|(id, p)| (id, p.iter().sum::<i32>() / p.len() as i32)).collect()
+        self.slots
+            .drain(..)
+            .map(|(id, p)| (id, p.iter().sum::<i32>() / p.len() as i32))
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {

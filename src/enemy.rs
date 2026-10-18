@@ -1,10 +1,10 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::{BulletDesc, BulletManager, LaserDesc};
-use crate::player::PlayerRef;
 use crate::ecl::{self, Ecl};
 use crate::game::Ctx;
 use crate::gfx::PLAYFIELD;
+use crate::player::PlayerRef;
 use crate::stage::Stage;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
@@ -49,7 +49,9 @@ pub const B_DEATH_LATCH: u32 = 1 << 3;
 pub const B_CANNOT_DIE: u32 = 1 << 6;
 pub const B_PAUSED: u32 = 1 << 7;
 
-const DROP_TABLE: [i32; 32] = [0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0];
+const DROP_TABLE: [i32; 32] = [
+    0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0,
+];
 
 const ECL_NAMES: [&str; 9] = ["1", "2", "3", "4a", "4b", "5", "6", "7", "8"];
 
@@ -87,7 +89,16 @@ pub struct Context {
 
 impl Default for Context {
     fn default() -> Self {
-        Self { ip: 0, clock: Timer::default(), callback: -1, callback_arg: 0, vars: [0; 30], wait: Timer::default(), interp: [Interp::default(); 8], sub: -1 }
+        Self {
+            ip: 0,
+            clock: Timer::default(),
+            callback: -1,
+            callback_arg: 0,
+            vars: [0; 30],
+            wait: Timer::default(),
+            interp: [Interp::default(); 8],
+            sub: -1,
+        }
     }
 }
 
@@ -116,7 +127,9 @@ impl Context {
     }
 
     pub fn enter(&mut self, ecl: &Ecl, sub: i32) -> bool {
-        let Some(ip) = ecl.sub_start(sub) else { return false };
+        let Some(ip) = ecl.sub_start(sub) else {
+            return false;
+        };
         self.ip = ip;
         self.clock.set(0);
         self.wait.set(0);
@@ -354,7 +367,11 @@ impl Enemy {
     }
 
     pub fn anm_slot(&self) -> usize {
-        if self.flags_b & B_STAGE_ANM != 0 { ANM_STAGE } else { ANM_ENEMY }
+        if self.flags_b & B_STAGE_ANM != 0 {
+            ANM_STAGE
+        } else {
+            ANM_ENEMY
+        }
     }
 
     pub fn clamp_pos(&mut self) {
@@ -377,7 +394,11 @@ impl Enemy {
             1 => {
                 self.angle = anmvm::wrap_add(self.angle, gs * self.angvel);
                 self.speed += gs * self.accel;
-                self.vel = [self.angle.cos() * self.speed, self.angle.sin() * self.speed, 0.0];
+                self.vel = [
+                    self.angle.cos() * self.speed,
+                    self.angle.sin() * self.speed,
+                    0.0,
+                ];
                 self.tick_duration(gs);
             }
             2 => {
@@ -385,7 +406,8 @@ impl Enemy {
                 let dur = self.move_dur.max(1) as f32;
                 let t = (1.0 - self.move_timer.getf() / dur).max(0.0);
                 let t = anmvm::ease(((self.flags >> A_EASE_SHIFT) & 7) as u8, t);
-                let target: [f32; 3] = std::array::from_fn(|k| self.interp_start[k] + self.interp_delta[k] * t);
+                let target: [f32; 3] =
+                    std::array::from_fn(|k| self.interp_start[k] + self.interp_delta[k] * t);
                 self.vel = std::array::from_fn(|k| target[k] - self.pos[k]);
                 if mirror {
                     self.vel[0] = -self.vel[0];
@@ -506,13 +528,29 @@ pub fn parse_difficulty(s: &str) -> Option<i32> {
 
 impl EnemyManager {
     pub fn new(ecl: Ecl, bullets: Rc<RefCell<BulletManager>>, difficulty: i32) -> Self {
-        let timelines = ecl.timelines.iter().map(|&o| (Timer::default(), o)).collect();
+        let timelines = ecl
+            .timelines
+            .iter()
+            .map(|&o| (Timer::default(), o))
+            .collect();
         // Rank is GM+0x3DE2C, synced from the game manager every frame (11 §3.2).
         let player = bullets.borrow().player.clone();
         player.borrow_mut().stats.difficulty = difficulty;
-        let g = Globals { difficulty, rank: 16, player: player.borrow().pos, ..Default::default() };
+        let g = Globals {
+            difficulty,
+            rank: 16,
+            player: player.borrow().pos,
+            ..Default::default()
+        };
         Self {
-            enemies: (0..MAX_ENEMIES).map(|_| Box::new(Enemy { flags: 0, ..Enemy::default() })).collect(),
+            enemies: (0..MAX_ENEMIES)
+                .map(|_| {
+                    Box::new(Enemy {
+                        flags: 0,
+                        ..Enemy::default()
+                    })
+                })
+                .collect(),
             spare: Vec::new(),
             template: Box::default(),
             ecl,
@@ -532,17 +570,28 @@ impl EnemyManager {
         }
     }
 
-    pub fn register(ctx: &mut Ctx, index: usize, stage: Option<Rc<RefCell<Stage>>>, bullets: Rc<RefCell<BulletManager>>, diff: i32) -> Result<Rc<RefCell<EnemyManager>>> {
+    pub fn register(
+        ctx: &mut Ctx,
+        index: usize,
+        stage: Option<Rc<RefCell<Stage>>>,
+        bullets: Rc<RefCell<BulletManager>>,
+        diff: i32,
+    ) -> Result<Rc<RefCell<EnemyManager>>> {
         let (ecl_name, enm) = files(index);
         let ecl = ecl::parse(ctx.archive.read(&ecl_name)?)?;
-        ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
+        ctx.anm
+            .load(&mut ctx.gfx, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_STAGE, &enm)?;
         let mut m = EnemyManager::new(ecl, bullets, diff);
         m.stage = stage;
         m.stage_index = index;
         m.g.card = ctx.game.card;
-        m.fast_forward = crate::env::var("TH08_STAGE_FRAME").and_then(|v| v.parse().ok()).unwrap_or(0);
-        m.debug_damage = crate::env::var("TH08_ENEMY_DMG").and_then(|v| v.parse().ok()).unwrap_or(0);
+        m.fast_forward = crate::env::var("TH08_STAGE_FRAME")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        m.debug_damage = crate::env::var("TH08_ENEMY_DMG")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         m.stage_start(&mut ctx.anm, index);
         let m = Rc::new(RefCell::new(m));
         let t: task::TaskRef<Ctx> = m.clone();
@@ -557,10 +606,16 @@ impl EnemyManager {
         let d = self.g.difficulty.clamp(0, 4) as usize;
         let mut p = self.player.borrow_mut();
         p.stats.max_point = crate::player::MAX_POINT[d];
-        p.stats.time_threshold = crate::player::TIME_THR.get(index % 9).map_or(10, |r| r[d.min(3)]);
+        p.stats.time_threshold = crate::player::TIME_THR
+            .get(index % 9)
+            .map_or(10, |r| r[d.min(3)]);
         p.stats.time = 0;
         p.stats.time_added = 0;
-        (p.stats.stage_frames, p.stats.human_frames, p.stats.youkai_frames) = (0, 0, 0);
+        (
+            p.stats.stage_frames,
+            p.stats.human_frames,
+            p.stats.youkai_frames,
+        ) = (0, 0, 0);
         drop(p);
         anm.rng.range16(3);
         anm.rng.range16(8);
@@ -573,14 +628,17 @@ impl EnemyManager {
         let boss = flags & A_BOSS != 0;
         if flags & A_CONTACT != 0 {
             let e = &self.enemies[idx];
-            let graze = flags & A_CANCEL_BONUS != 0 && e.boss_timer.cur != e.boss_timer.prev && e.boss_timer.cur % 6 == 0;
+            let graze = flags & A_CANCEL_BONUS != 0
+                && e.boss_timer.cur != e.boss_timer.prev
+                && e.boss_timer.cur % 6 == 0;
             let child = e.root.is_some();
             let mut p = self.player.borrow_mut();
             if graze {
                 let env = p.env;
                 p.graze_test(pos, [hb[0] / 0.7, hb[1] / 0.7], &env, &mut anm.rng);
             }
-            let touched = !(child && matches!(p.shot_type, 0 | 4)) && p.contact_test(pos, [hb[0] / 1.5, hb[1] / 1.5], &mut anm.rng);
+            let touched = !(child && matches!(p.shot_type, 0 | 4))
+                && p.contact_test(pos, [hb[0] / 1.5, hb[1] / 1.5], &mut anm.rng);
             drop(p);
             if touched && !boss && flags & A_CANCEL_BONUS == 0 {
                 self.enemies[idx].life -= 10;
@@ -593,11 +651,29 @@ impl EnemyManager {
                 let mut b = self.bullets.borrow_mut();
                 let mut p = self.player.borrow_mut();
                 p.offer_target(pos, boss);
-                let mut d = p.damage_against(anm, Some(&mut b.items), pos, [hb[0], hb[1]], &mut acc, &mut by_bomb);
+                let mut d = p.damage_against(
+                    anm,
+                    Some(&mut b.items),
+                    pos,
+                    [hb[0], hb[1]],
+                    &mut acc,
+                    &mut by_bomb,
+                );
                 if sb[0] > 0.0 {
-                    let d2 = p.damage_against(anm, Some(&mut b.items), pos, [sb[0], sb[1]], &mut acc, &mut by_bomb);
+                    let d2 = p.damage_against(
+                        anm,
+                        Some(&mut b.items),
+                        pos,
+                        [sb[0], sb[1]],
+                        &mut acc,
+                        &mut by_bomb,
+                    );
                     if !by_bomb {
-                        let k = if matches!(p.shot_type, 3 | 11) { 6.5 } else { 1.7 };
+                        let k = if matches!(p.shot_type, 3 | 11) {
+                            6.5
+                        } else {
+                            1.7
+                        };
                         d = (d as f32 + d2 as f32 / k) as i32;
                     }
                 }
@@ -642,7 +718,10 @@ impl EnemyManager {
     }
 
     pub fn boss(&self, slot: i32) -> Option<usize> {
-        self.bosses.get(usize::try_from(slot).ok()?).copied().flatten()
+        self.bosses
+            .get(usize::try_from(slot).ok()?)
+            .copied()
+            .flatten()
     }
 
     pub fn alive_count(&self) -> usize {
@@ -655,7 +734,13 @@ impl EnemyManager {
     }
 
     // EnemyMgr_Spawn* steps 1–3; the caller finishes with `spawn_finish`.
-    pub(crate) fn spawn_prepare(&mut self, sub: i32, pos: [f32; 3], life: i32, mirror: bool) -> Option<usize> {
+    pub(crate) fn spawn_prepare(
+        &mut self,
+        sub: i32,
+        pos: [f32; 3],
+        life: i32,
+        mirror: bool,
+    ) -> Option<usize> {
         let Some(idx) = self.enemies.iter().position(|e| !e.alive()) else {
             self.full = true;
             return None;
@@ -674,7 +759,15 @@ impl EnemyManager {
         Some(idx)
     }
 
-    pub(crate) fn spawn_finish(&mut self, anm: &mut AnmManager, idx: usize, life: i32, item: i32, score: i32, from_ecl: bool) -> Option<usize> {
+    pub(crate) fn spawn_finish(
+        &mut self,
+        anm: &mut AnmManager,
+        idx: usize,
+        life: i32,
+        item: i32,
+        score: i32,
+        from_ecl: bool,
+    ) -> Option<usize> {
         if crate::eclvm::ecl_run(self, anm, idx) == -1 {
             self.free(idx);
             return None;
@@ -693,7 +786,16 @@ impl EnemyManager {
         Some(idx)
     }
 
-    pub fn spawn(&mut self, anm: &mut AnmManager, sub: i32, pos: [f32; 3], life: i32, item: i32, score: i32, mirror: bool) -> Option<usize> {
+    pub fn spawn(
+        &mut self,
+        anm: &mut AnmManager,
+        sub: i32,
+        pos: [f32; 3],
+        life: i32,
+        item: i32,
+        score: i32,
+        mirror: bool,
+    ) -> Option<usize> {
         let idx = self.spawn_prepare(sub, pos, life, mirror)?;
         self.spawn_finish(anm, idx, life, item, score, false)
     }
@@ -710,7 +812,9 @@ impl EnemyManager {
         for i in 0..self.timelines.len() {
             loop {
                 let (clock, ptr) = self.timelines[i];
-                let Some(ins) = self.ecl.tl_ins(ptr) else { break };
+                let Some(ins) = self.ecl.tl_ins(ptr) else {
+                    break;
+                };
                 if ins.time < 0 {
                     self.timelines[i].0.tick(gs);
                     break;
@@ -734,23 +838,50 @@ impl EnemyManager {
     // Returns false to stall.
     fn timeline_op(&mut self, anm: &mut AnmManager, ins: &ecl::TlIns) -> bool {
         let args: [u32; 7] = std::array::from_fn(|k| self.ecl.tl_arg(ins, k));
-        let (ai, af) = (|k: usize| args[k] as i32, |k: usize| f32::from_bits(args[k]));
+        let (ai, af) = (
+            |k: usize| args[k] as i32,
+            |k: usize| f32::from_bits(args[k]),
+        );
         match ins.op {
             0 | 1 | 15 => {
                 if ins.op == 15 || !self.spawn_blocked() {
-                    self.spawn(anm, ai(0), [af(1), af(2), 0.0], ai(3), ai(4), ai(5), ins.op == 1);
+                    self.spawn(
+                        anm,
+                        ai(0),
+                        [af(1), af(2), 0.0],
+                        ai(3),
+                        ai(4),
+                        ai(5),
+                        ins.op == 1,
+                    );
                 }
             }
             2 | 4 => {
                 if !self.spawn_blocked() {
                     let x = anm.rng.next_f32() * (af(2) - af(1)) + af(1);
-                    self.spawn(anm, ai(0), [x, af(3), 0.0], ai(4), ai(5), ai(6), ins.op == 4);
+                    self.spawn(
+                        anm,
+                        ai(0),
+                        [x, af(3), 0.0],
+                        ai(4),
+                        ai(5),
+                        ai(6),
+                        ins.op == 4,
+                    );
                 }
             }
             3 | 5 => {
                 if !self.spawn_blocked() {
                     let x = anm.rng.next_f32() * 384.0;
-                    self.spawn(anm, ai(0), [x, af(1), 0.0], ai(2), ai(3), ai(4), ins.op == 5);
+                    self.spawn(
+                        anm,
+                        ai(0),
+                        [x, af(1), 0.0],
+                        ai(2),
+                        ai(3),
+                        ai(4),
+                        ins.op == 5,
+                    );
                 }
             }
             6 => self.start_msg(anm, ai(0)),
@@ -761,10 +892,22 @@ impl EnemyManager {
                 }
             }
             9 => self.g.misc_calls += 1,
-            10 => return self.boss(ai(0)).is_none_or(|b| self.enemies[b].life <= 0 || !self.enemies[b].alive()),
+            10 => {
+                return self
+                    .boss(ai(0))
+                    .is_none_or(|b| self.enemies[b].life <= 0 || !self.enemies[b].alive());
+            }
             11 | 12 => {
                 if !self.spawn_blocked()
-                    && let Some(idx) = self.spawn(anm, ai(0), [af(1), af(2), 0.0], ai(3), -1, ai(6), ins.op == 12)
+                    && let Some(idx) = self.spawn(
+                        anm,
+                        ai(0),
+                        [af(1), af(2), 0.0],
+                        ai(3),
+                        -1,
+                        ai(6),
+                        ins.op == 12,
+                    )
                 {
                     self.enemies[idx].extra_point = ai(4);
                     self.enemies[idx].extra_power = ai(5);
@@ -783,7 +926,10 @@ impl EnemyManager {
             }
             14 => {
                 let v = ai(0);
-                self.sync.iter_mut().filter(|s| **s < 0).for_each(|s| *s = v);
+                self.sync
+                    .iter_mut()
+                    .filter(|s| **s < 0)
+                    .for_each(|s| *s = v);
             }
             16 => self.player.borrow_mut().game_over = true,
             _ => {}
@@ -857,7 +1003,11 @@ impl EnemyManager {
         let (mut n, mut sum) = (0, 0);
         for j in 0..self.enemies.len() {
             let e = &self.enemies[j];
-            if Some(j) == except || !e.alive() || e.flags & A_BOSS != 0 || e.flags_b & B_CANNOT_DIE != 0 {
+            if Some(j) == except
+                || !e.alive()
+                || e.flags & A_BOSS != 0
+                || e.flags_b & B_CANNOT_DIE != 0
+            {
                 continue;
             }
             if e.flags & A_CANCEL_BONUS != 0 {
@@ -865,7 +1015,15 @@ impl EnemyManager {
                 let p = e.final_pos;
                 self.spawn_item(anm, p, 6, 1);
                 let v = (2000 + 30 * n).min(8000);
-                crate::ascii::popup(p, v, if v >= 8000 { crate::item::POPUP_MAX } else { crate::item::POPUP_NORMAL });
+                crate::ascii::popup(
+                    p,
+                    v,
+                    if v >= 8000 {
+                        crate::item::POPUP_MAX
+                    } else {
+                        crate::item::POPUP_NORMAL
+                    },
+                );
                 sum += v;
             }
             self.enemies[j].life = 0;
@@ -879,12 +1037,16 @@ impl EnemyManager {
     fn cancel_and_kill_bonus(&mut self, anm: &mut AnmManager, except: Option<usize>) {
         let sum = {
             let mut p = self.player.borrow_mut();
-            self.bullets.borrow_mut().cancel_bonus(anm, &mut p, 8000, true)
+            self.bullets
+                .borrow_mut()
+                .cancel_bonus(anm, &mut p, 8000, true)
         };
         let kills = self.kill_all(anm, except);
         let mut p = self.player.borrow_mut();
         p.stats.add_score(sum);
-        p.stats.popups.push(crate::player::Popup::Bonus(sum + kills));
+        p.stats
+            .popups
+            .push(crate::player::Popup::Bonus(sum + kills));
     }
 
     // FUN_0041FD40: number of alive chained children.
@@ -939,14 +1101,36 @@ impl EnemyManager {
             e.chain_prev = None;
         }
         if let Some(anm) = anm.as_deref_mut() {
-            let cancel = if self.enemies[idx].flags & A_BOSS != 0 { 7 } else { 9 };
+            let cancel = if self.enemies[idx].flags & A_BOSS != 0 {
+                7
+            } else {
+                9
+            };
             let shot = self.player.borrow().shot_type;
             let boss_or_spell = self.bosses.iter().any(Option::is_some) && self.g.spell.is_none();
             for (k, &c) in kids.iter().enumerate() {
                 let orbs = match shot {
-                    0..4 => if n < 8 { 2 * n + 10 } else { 26 },
-                    _ if shot % 2 == 0 => if n < 4 { 6 * n + 16 } else { 40 },
-                    _ => if n < 10 { 2 * n + 6 } else { 26 },
+                    0..4 => {
+                        if n < 8 {
+                            2 * n + 10
+                        } else {
+                            26
+                        }
+                    }
+                    _ if shot % 2 == 0 => {
+                        if n < 4 {
+                            6 * n + 16
+                        } else {
+                            40
+                        }
+                    }
+                    _ => {
+                        if n < 10 {
+                            2 * n + 6
+                        } else {
+                            26
+                        }
+                    }
                 };
                 if self.player.borrow().bombing {
                     n /= 3;
@@ -955,11 +1139,18 @@ impl EnemyManager {
                 crate::ascii::popup_large(e.final_pos, n, 0, colour, 1.0);
                 e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
                 let pos = e.final_pos;
-                self.player.borrow_mut().cancel_circle([pos[0], pos[1]], 32.0, 2.0, 8, cancel);
+                self.player
+                    .borrow_mut()
+                    .cancel_circle([pos[0], pos[1]], 32.0, 2.0, 8, cancel);
                 for _ in 0..orbs {
                     let r = anm.rng.next_f32() * (2 * orbs) as f32;
                     let a = anm.rng.next_signed() * std::f32::consts::PI;
-                    self.spawn_item(anm, [pos[0] + a.cos() * r, pos[1] + a.sin() * r, 0.0], crate::item::TIME_ORB as i32, 3);
+                    self.spawn_item(
+                        anm,
+                        [pos[0] + a.cos() * r, pos[1] + a.sin() * r, 0.0],
+                        crate::item::TIME_ORB as i32,
+                        3,
+                    );
                 }
                 if !boss_or_spell {
                     self.enemies[c].item = 8;
@@ -983,9 +1174,16 @@ impl EnemyManager {
             for _ in 0..2 * count {
                 let r = anm.rng.next_f32() * 128.0;
                 let a = anm.rng.next_signed() * std::f32::consts::PI;
-                self.spawn_item(anm, [pos[0] + a.cos() * r, pos[1] + a.sin() * r, 0.0], crate::item::TIME_ORB as i32, 1);
+                self.spawn_item(
+                    anm,
+                    [pos[0] + a.cos() * r, pos[1] + a.sin() * r, 0.0],
+                    crate::item::TIME_ORB as i32,
+                    1,
+                );
             }
-            self.player.borrow_mut().cancel_circle([pos[0], pos[1]], 32.0, 1.0, 16, 7);
+            self.player
+                .borrow_mut()
+                .cancel_circle([pos[0], pos[1]], 32.0, 1.0, 16, 7);
             self.bullets.borrow_mut().items.collect_timer = 0;
         }
         // SPEC-GAP: the parent's child counter (+0x3380) is reset after a chain kill.
@@ -1015,7 +1213,10 @@ impl EnemyManager {
 
     // 0x42B2F0: removes an enemy from its parent's chain.
     fn unlink(&mut self, idx: usize) {
-        let (prev, next) = (self.enemies[idx].chain_prev.take(), self.enemies[idx].chain_next.take());
+        let (prev, next) = (
+            self.enemies[idx].chain_prev.take(),
+            self.enemies[idx].chain_next.take(),
+        );
         if let Some(p) = prev {
             self.enemies[p].chain_next = next;
         }
@@ -1029,10 +1230,15 @@ impl EnemyManager {
     fn offer_aimed(&mut self, idx: usize) {
         let mut p = self.player.borrow_mut();
         let e = &self.enemies[idx];
-        if e.flags & (1 << 31) != 0 && p.bombing || e.root.is_some() || (e.final_pos[0] - p.pos[0]).abs() >= 64.0 {
+        if e.flags & (1 << 31) != 0 && p.bombing
+            || e.root.is_some()
+            || (e.final_pos[0] - p.pos[0]).abs() >= 64.0
+        {
             return;
         }
-        if p.aimed.is_none_or(|a| e.final_pos[1] < self.enemies[a].pos[1]) {
+        if p.aimed
+            .is_none_or(|a| e.final_pos[1] < self.enemies[a].pos[1])
+        {
             p.aimed = Some(idx);
         }
     }
@@ -1072,7 +1278,13 @@ impl EnemyManager {
     }
 
     // Spell_End 0x4161B0 (07 §11.1). SPEC-GAP: the capture payout is made at once, not 130 frames later.
-    pub fn finish_spell(&mut self, total: i32, remaining: i32, anm: &mut AnmManager, except: Option<usize>) {
+    pub fn finish_spell(
+        &mut self,
+        total: i32,
+        remaining: i32,
+        anm: &mut AnmManager,
+        except: Option<usize>,
+    ) {
         let Some(s) = self.g.spell.take() else { return };
         crate::sound::play(crate::sound::TAN00_LOUD);
         if let Some(st) = &self.stage {
@@ -1089,7 +1301,9 @@ impl EnemyManager {
         use crate::player::{GF_LAST_CAPTURED, GF_LAST_SPELL};
         if !s.capture || p.deaths != s.deaths0 || p.bombs_started != s.bombs0 {
             p.gflags &= !(GF_LAST_SPELL | GF_LAST_CAPTURED);
-            p.stats.popups.push(crate::player::Popup::Message(5 + s.last as u8, 0));
+            p.stats
+                .popups
+                .push(crate::player::Popup::Message(5 + s.last as u8, 0));
             return;
         }
         if p.gflags & (GF_LAST_SPELL | GF_LAST_CAPTURED) != 0 {
@@ -1107,7 +1321,9 @@ impl EnemyManager {
             (remaining - 180) * 900 / (thr - 180).max(1) + 100
         };
         crate::sound::play(crate::sound::CARDGET);
-        crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| e.vm.color[crate::anmvm::A] = 0x20);
+        crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| {
+            e.vm.color[crate::anmvm::A] = 0x20
+        });
         let st = &mut p.stats;
         st.add_score(s.bonus);
         st.spells += 1;
@@ -1122,7 +1338,10 @@ impl EnemyManager {
 
     pub fn spawn_item(&mut self, anm: &mut AnmManager, pos: [f32; 3], kind: i32, mode: u8) {
         let p = self.player.borrow();
-        self.bullets.borrow_mut().items.spawn(anm, &p, pos, kind, mode);
+        self.bullets
+            .borrow_mut()
+            .items
+            .spawn(anm, &p, pos, kind, mode);
     }
 
     pub fn add_score(&mut self, v: i32) {
@@ -1154,7 +1373,11 @@ impl EnemyManager {
             }
             self.g.drop_counter += 1;
         }
-        let power_kind = if self.player.borrow().stats.power < 128.0 { 0 } else { 1 };
+        let power_kind = if self.player.borrow().stats.power < 128.0 {
+            0
+        } else {
+            1
+        };
         for (n, kind) in [(e.extra_power, power_kind), (e.extra_point, 1)] {
             for _ in 0..n.max(0) {
                 let dx = anm.rng.next_f32() * 128.0 - 64.0;
@@ -1182,7 +1405,9 @@ impl EnemyManager {
     // Enemy_CheckLifeThresholds (07 §10.2).
     fn check_thresholds(&mut self, anm: &mut AnmManager, idx: usize) -> bool {
         let e = &self.enemies[idx];
-        let Some(k) = (0..4).find(|&k| e.thresholds[k] >= 0 && e.life < e.thresholds[k]) else { return false };
+        let Some(k) = (0..4).find(|&k| e.thresholds[k] >= 0 && e.life < e.thresholds[k]) else {
+            return false;
+        };
         let sub = e.threshold_subs[k];
         let e = &mut self.enemies[idx];
         e.life = e.thresholds[k];
@@ -1200,7 +1425,10 @@ impl EnemyManager {
         if e.timeout < 0 || e.boss_timer.cur < e.timeout {
             return false;
         }
-        if let Some(k) = (0..4).filter(|&k| e.thresholds[k] >= 0).max_by_key(|&k| e.thresholds[k]) {
+        if let Some(k) = (0..4)
+            .filter(|&k| e.thresholds[k] >= 0)
+            .max_by_key(|&k| e.thresholds[k])
+        {
             e.life = e.thresholds[k];
             e.thresholds[k] = -1;
         }
@@ -1235,8 +1463,20 @@ impl EnemyManager {
         let child = e.root.is_some();
         let mut d = match (spell, bomb) {
             (true, true) if child || !bombed => 0,
-            (true, true) => if d < 3 { d.min(1) } else { (d as f32 / 2.5) as i32 },
-            (true, false) => if d < 8 { d.min(1) } else { d / 7 },
+            (true, true) => {
+                if d < 3 {
+                    d.min(1)
+                } else {
+                    (d as f32 / 2.5) as i32
+                }
+            }
+            (true, false) => {
+                if d < 8 {
+                    d.min(1)
+                } else {
+                    d / 7
+                }
+            }
             _ => d,
         };
         if e.dmg_timer.cur > 0 {
@@ -1251,7 +1491,13 @@ impl EnemyManager {
             if root.dmg_timer.cur > 0 {
                 rd = if root.flags & A_BOSS != 0 { d / 9 } else { 0 };
             }
-            let floor = root.thresholds.iter().copied().filter(|&t| t >= 0).max().unwrap_or(i32::MIN);
+            let floor = root
+                .thresholds
+                .iter()
+                .copied()
+                .filter(|&t| t >= 0)
+                .max()
+                .unwrap_or(i32::MIN);
             root.life = (root.life - rd).max(floor);
         }
     }
@@ -1299,7 +1545,14 @@ impl EnemyManager {
         }
         let (pos, db) = (self.enemies[idx].final_pos, self.enemies[idx].death_bytes);
         if mode <= 2 && self.enemies[idx].flags & A_CHAIN_KILLED == 0 {
-            crate::sound::play_at(if idx % 2 == 0 { crate::sound::ENEP0 } else { crate::sound::ENEP1 }, pos[0]);
+            crate::sound::play_at(
+                if idx % 2 == 0 {
+                    crate::sound::ENEP0
+                } else {
+                    crate::sound::ENEP1
+                },
+                pos[0],
+            );
             crate::effect::spawn(anm, db[0], pos, 1, 0xFFFFFFFF);
             crate::effect::spawn(anm, db[1].wrapping_add(4), pos, 4, 0xFFFFFFFF);
         } else if mode == 3 {
@@ -1314,7 +1567,8 @@ impl EnemyManager {
                     self.cancel_and_kill_bonus(anm, Some(idx));
                 } else {
                     let e = &self.enemies[idx];
-                    let (total, remaining) = (e.timeout.max(0), (e.timeout - e.boss_timer.cur).max(0));
+                    let (total, remaining) =
+                        (e.timeout.max(0), (e.timeout - e.boss_timer.cur).max(0));
                     self.finish_spell(total, remaining, anm, Some(idx));
                 }
             }
@@ -1353,7 +1607,14 @@ impl EnemyManager {
             let youkai = self.g.player_mode != 0;
             let e = &mut self.enemies[idx];
             if (e.flags & A_YOUKAI != 0) != youkai {
-                crate::sound::play_at(if youkai { crate::sound::OPHIDE } else { crate::sound::OPSHOW }, e.final_pos[0]);
+                crate::sound::play_at(
+                    if youkai {
+                        crate::sound::OPHIDE
+                    } else {
+                        crate::sound::OPSHOW
+                    },
+                    e.final_pos[0],
+                );
             }
             e.mode_bits = if youkai { 0x40 } else { 0x20 };
             e.set_flag(A_YOUKAI, youkai);
@@ -1361,7 +1622,8 @@ impl EnemyManager {
         let held = {
             let p = self.player.borrow();
             let e = &self.enemies[idx];
-            e.flags_b & B_PAUSED != 0 || (e.flags & A_LAST_SPELL != 0 && (p.bombing || p.state != 0))
+            e.flags_b & B_PAUSED != 0
+                || (e.flags & A_LAST_SPELL != 0 && (p.bombing || p.state != 0))
         };
         let mut first = true;
         loop {
@@ -1393,7 +1655,10 @@ impl EnemyManager {
             self.offer_aimed(idx);
             self.player_collision(idx, anm);
         }
-        if self.debug_damage > 0 && self.enemies[idx].flags & (A_SHOT_HIT | A_HIDDEN) == A_SHOT_HIT && self.enemies[idx].flags & A_ON_SCREEN != 0 {
+        if self.debug_damage > 0
+            && self.enemies[idx].flags & (A_SHOT_HIT | A_HIDDEN) == A_SHOT_HIT
+            && self.enemies[idx].flags & A_ON_SCREEN != 0
+        {
             self.damage(idx, self.debug_damage, false);
         }
         let pause = self.g.timer_pause != 0;
@@ -1401,7 +1666,14 @@ impl EnemyManager {
         if std::mem::take(&mut e.hit) {
             if e.last_damage > 0 {
                 let low = (e.flags_b >> 4) & 3 >= 2;
-                crate::sound::play_at(if low { crate::sound::DAMAGE1 } else { crate::sound::DAMAGE0 }, e.final_pos[0]);
+                crate::sound::play_at(
+                    if low {
+                        crate::sound::DAMAGE1
+                    } else {
+                        crate::sound::DAMAGE0
+                    },
+                    e.final_pos[0],
+                );
             }
             e.vm.flags |= anmvm::F_COLOR2;
             e.vm.color2 = [0x80, 0x60, 0xFF, e.vm.color[anmvm::A]];
@@ -1456,7 +1728,10 @@ impl EnemyManager {
                 p.aimed_pos = self.enemies[a].final_pos;
             }
         }
-        let pull = self.bosses[0].map(|i| &self.enemies[i]).filter(|e| e.flags & A_LOSES_LIFE != 0).map(|e| e.final_pos);
+        let pull = self.bosses[0]
+            .map(|i| &self.enemies[i])
+            .filter(|e| e.flags & A_LOSES_LIFE != 0)
+            .map(|e| e.final_pos);
         crate::effect::with(|fx| fx.boss = pull);
         if let Some(s) = &mut self.g.spell {
             s.frames += 1;
@@ -1500,10 +1775,16 @@ impl EnemyManager {
             for k in [0usize, 2, 1] {
                 let main = k == 2;
                 let vm = if main { &mut e.vm } else { &mut e.sub_vms[k] };
-                if vm.script.is_none() || main && (e.flags & (1 << 5) != 0 || e.trail[0] & 0x10 != 0) {
+                if vm.script.is_none()
+                    || main && (e.flags & (1 << 5) != 0 || e.trail[0] & 0x10 != 0)
+                {
                     continue;
                 }
-                let off = if main || shared { main_off } else { vm.pos_offset };
+                let off = if main || shared {
+                    main_off
+                } else {
+                    vm.pos_offset
+                };
                 let z = if main { 0.25 } else { 0.3 };
                 let rot = if main {
                     (e.flags & (1 << 25) != 0).then_some(angle)
@@ -1561,18 +1842,43 @@ mod tests {
     // Scripted input per shot type through a stage: shooting, moving, focusing, bombing.
     #[test]
     fn scripted_player_runs() {
-        let Some(ar) = crate::archive::test_archive() else { return };
-        let frames = std::env::var("TH08_TEST_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(4000);
+        let Some(ar) = crate::archive::test_archive() else {
+            return;
+        };
+        let frames = std::env::var("TH08_TEST_FRAMES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4000);
         for shot in 0..12u8 {
             let index = [0, 1, 2, 4][shot as usize % 4];
             let (ecl_name, enm) = files(index);
             let ecl = ecl::parse(ar.read(&ecl_name).unwrap()).unwrap();
             let mut anm = AnmManager::default();
-            anm.insert(ANM_ENEMY, "enemy.anm", crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(), |_| 0);
-            anm.insert(ANM_STAGE, &enm, crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(), |_| 0);
-            anm.insert(crate::bullet::ANM_SLOT, "etama.anm", crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(), |_| 0);
+            anm.insert(
+                ANM_ENEMY,
+                "enemy.anm",
+                crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(),
+                |_| 0,
+            );
+            anm.insert(
+                ANM_STAGE,
+                &enm,
+                crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(),
+                |_| 0,
+            );
+            anm.insert(
+                crate::bullet::ANM_SLOT,
+                "etama.anm",
+                crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(),
+                |_| 0,
+            );
             let (pa, a, sa) = crate::sht::files(shot);
-            anm.insert(crate::player::ANM_SLOT, &pa, crate::anm::parse(&ar.read(&pa).unwrap()).unwrap(), |_| 0);
+            anm.insert(
+                crate::player::ANM_SLOT,
+                &pa,
+                crate::anm::parse(&ar.read(&pa).unwrap()).unwrap(),
+                |_| 0,
+            );
             let player = crate::player::Player::new_ref();
             {
                 let human = crate::sht::parse(&ar.read(&a).unwrap()).unwrap();
@@ -1616,9 +1922,15 @@ mod tests {
                 bullets.borrow_mut().step(&mut anm);
                 let p = player.borrow();
                 shots += p.bullets.iter().filter(|b| b.state != 0).count();
-                assert!(p.pos.iter().all(|v| v.is_finite()), "shot {shot}: non-finite player");
+                assert!(
+                    p.pos.iter().all(|v| v.is_finite()),
+                    "shot {shot}: non-finite player"
+                );
                 for b in p.bullets.iter().filter(|b| b.state != 0) {
-                    assert!(b.pos.iter().all(|v| v.is_finite()), "shot {shot}: non-finite bullet");
+                    assert!(
+                        b.pos.iter().all(|v| v.is_finite()),
+                        "shot {shot}: non-finite bullet"
+                    );
                 }
             }
             let p = player.borrow();
@@ -1630,30 +1942,53 @@ mod tests {
                 p.stats.lives,
                 p.stats.score()
             );
-            assert!(shots > 0 && dmg_frames > 0, "shot {shot}: no shooting/damage");
+            assert!(
+                shots > 0 && dmg_frames > 0,
+                "shot {shot}: no shooting/damage"
+            );
             assert!(p.bombs_started > 0, "shot {shot}: never bombed");
         }
     }
 
     #[test]
     fn all_stage_scripts_run() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else { return };
-        let ar = crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap()).unwrap();
+        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+            return;
+        };
+        let ar =
+            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
+                .unwrap();
         for index in 0..18 {
             let mut fired = 0;
             for diff in [0, 3] {
                 let (ecl_name, enm) = files(index);
                 let ecl = ecl::parse(ar.read(&ecl_name).unwrap()).unwrap();
                 let mut anm = AnmManager::default();
-                anm.insert(ANM_ENEMY, "enemy.anm", crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(), |_| 0);
-                anm.insert(ANM_STAGE, &enm, crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(), |_| 0);
-                anm.insert(crate::bullet::ANM_SLOT, "etama.anm", crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(), |_| 0);
+                anm.insert(
+                    ANM_ENEMY,
+                    "enemy.anm",
+                    crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(),
+                    |_| 0,
+                );
+                anm.insert(
+                    ANM_STAGE,
+                    &enm,
+                    crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(),
+                    |_| 0,
+                );
+                anm.insert(
+                    crate::bullet::ANM_SLOT,
+                    "etama.anm",
+                    crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(),
+                    |_| 0,
+                );
                 let player = crate::player::Player::new_ref();
                 let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player.clone())));
                 let diff = if index % 9 == 8 { 4 } else { diff };
                 let mut m = EnemyManager::new(ecl, bullets.clone(), diff);
                 m.debug_damage = 8;
-                let (mut spawned, mut max_alive, mut max_live, mut lasers, mut items) = (0, 0, 0, 0, 0);
+                let (mut spawned, mut max_alive, mut max_live, mut lasers, mut items) =
+                    (0, 0, 0, 0, 0);
                 let inp = crate::input::Input::default();
                 for _ in 0..6000 {
                     player.borrow_mut().step(&mut anm, &inp);
@@ -1664,17 +1999,32 @@ mod tests {
                     lasers += b.lasers.iter().filter(|l| l.alive).count();
                     items = items.max(b.items.count);
                     for x in b.live_bullets() {
-                        assert!(x.pos.iter().all(|v| v.is_finite()) && x.vel.iter().all(|v| v.is_finite()), "{ecl_name}: non-finite bullet");
+                        assert!(
+                            x.pos.iter().all(|v| v.is_finite())
+                                && x.vel.iter().all(|v| v.is_finite()),
+                            "{ecl_name}: non-finite bullet"
+                        );
                     }
                     drop(b);
                     let n = m.alive_count();
                     max_alive = max_alive.max(n);
-                    spawned += (m.enemies.iter().filter(|e| e.alive() && e.main.ctx.clock.cur == 1).count() > 0) as i32;
+                    spawned += (m
+                        .enemies
+                        .iter()
+                        .filter(|e| e.alive() && e.main.ctx.clock.cur == 1)
+                        .count()
+                        > 0) as i32;
                     for e in m.enemies.iter().filter(|e| e.alive()) {
-                        assert!(e.pos.iter().all(|v| v.is_finite()), "{ecl_name}: non-finite position");
+                        assert!(
+                            e.pos.iter().all(|v| v.is_finite()),
+                            "{ecl_name}: non-finite position"
+                        );
                     }
                 }
-                assert!(max_alive > 0, "{ecl_name} diff {diff}: no enemy ever spawned");
+                assert!(
+                    max_alive > 0,
+                    "{ecl_name} diff {diff}: no enemy ever spawned"
+                );
                 assert!(spawned > 0);
                 assert!(max_live <= crate::bullet::MAX_BULLETS);
                 fired += bullets.borrow().patterns;
@@ -1693,7 +2043,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod laser_tests {
     use super::*;
@@ -1701,31 +2050,56 @@ mod laser_tests {
     // Lasers only appear in later boss phases: run the laser stages longer with more debug damage.
     #[test]
     fn laser_stages_run() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else { return };
-        let ar = crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap()).unwrap();
+        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+            return;
+        };
+        let ar =
+            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
+                .unwrap();
         let mut total = 0;
         for index in [2, 4, 6, 7, 8] {
             let (ecl_name, enm) = files(index);
             let mut anm = AnmManager::default();
-            for (slot, name) in [(ANM_ENEMY, "enemy.anm"), (ANM_STAGE, enm.as_str()), (crate::bullet::ANM_SLOT, "etama.anm")] {
-                anm.insert(slot, name, crate::anm::parse(&ar.read(name).unwrap()).unwrap(), |_| 0);
+            for (slot, name) in [
+                (ANM_ENEMY, "enemy.anm"),
+                (ANM_STAGE, enm.as_str()),
+                (crate::bullet::ANM_SLOT, "etama.anm"),
+            ] {
+                anm.insert(
+                    slot,
+                    name,
+                    crate::anm::parse(&ar.read(name).unwrap()).unwrap(),
+                    |_| 0,
+                );
             }
             let player = crate::player::Player::new_ref();
             let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player.clone())));
-            let mut m = EnemyManager::new(ecl::parse(ar.read(&ecl_name).unwrap()).unwrap(), bullets.clone(), 3);
+            let mut m = EnemyManager::new(
+                ecl::parse(ar.read(&ecl_name).unwrap()).unwrap(),
+                bullets.clone(),
+                3,
+            );
             m.debug_damage = 40;
             let mut lasers = 0;
             for _ in 0..20000 {
-                player.borrow_mut().step(&mut anm, &crate::input::Input::default());
+                player
+                    .borrow_mut()
+                    .step(&mut anm, &crate::input::Input::default());
                 m.step(&mut anm);
                 bullets.borrow_mut().step(&mut anm);
                 let b = bullets.borrow();
                 for l in b.lasers.iter().filter(|l| l.alive) {
                     lasers += 1;
-                    assert!(l.head.is_finite() && l.tail.is_finite() && l.tail <= l.head + 1e-3, "{ecl_name}: bad laser");
+                    assert!(
+                        l.head.is_finite() && l.tail.is_finite() && l.tail <= l.head + 1e-3,
+                        "{ecl_name}: bad laser"
+                    );
                 }
             }
-            eprintln!("{ecl_name}: laser-frames {lasers} hits {}", player.borrow().hits);
+            eprintln!(
+                "{ecl_name}: laser-frames {lasers} hits {}",
+                player.borrow().hits
+            );
             total += lasers;
         }
         assert!(total > 0, "no laser ever spawned");

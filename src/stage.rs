@@ -19,14 +19,21 @@ const OVERLAY_SLOT: usize = 0;
 const OVERLAY_SCRIPT: usize = 33;
 const FAR: f32 = 1800.0;
 
-const STD_NAMES: [&str; 9] = ["stage1", "stage2", "stage3", "stage4a", "stage4b", "stage5", "stage6", "stage7", "stage8"];
-const BG_NAMES: [&str; 9] = ["stg1bg", "stg2bg", "stg3bg", "stg4abg", "stg4abg", "stg5bg", "stg6bg", "stg7bg", "stg8bg"];
+const STD_NAMES: [&str; 9] = [
+    "stage1", "stage2", "stage3", "stage4a", "stage4b", "stage5", "stage6", "stage7", "stage8",
+];
+const BG_NAMES: [&str; 9] = [
+    "stg1bg", "stg2bg", "stg3bg", "stg4abg", "stg4abg", "stg5bg", "stg6bg", "stg7bg", "stg8bg",
+];
 
 // Stage index 0..17 (9..17 = `_s` variants) → (.std, bg .anm).
 pub fn files(index: usize) -> (String, String) {
     let k = index % 9;
     let s = if index >= 9 { "_s" } else { "" };
-    (format!("{}{s}.std", STD_NAMES[k]), format!("{}.anm", BG_NAMES[k]))
+    (
+        format!("{}{s}.std", STD_NAMES[k]),
+        format!("{}.anm", BG_NAMES[k]),
+    )
 }
 
 // Accepts 1, 2, 3, 4a, 4b, 5, 6a, 6b, ex (also 6/7/8 = file digits), stageN[_s][.std], or `idx:<n>`.
@@ -160,7 +167,9 @@ impl StageCamera {
 
     fn update(&mut self, speed: f32) {
         for s in [POS, FACING, UP] {
-            let Some(t) = self.step(s, speed) else { continue };
+            let Some(t) = self.step(s, speed) else {
+                continue;
+            };
             let (a, b) = (self.start.v[s], self.target.v[s]);
             self.v[s] = if self.mode[s] == 7 {
                 let (t0, t1) = (self.tan0[s], self.tan1[s]);
@@ -241,7 +250,11 @@ impl Stage {
             6 | 7 => 3_240_000.0,
             _ => 1_322_500.0,
         };
-        let fog = FogState { near: 200.0, far: 500.0, color: 0xFF00_0000 };
+        let fog = FogState {
+            near: 200.0,
+            far: 500.0,
+            color: 0xFF00_0000,
+        };
         Self {
             index,
             obj_flags: vec![1; std.objects.len()],
@@ -297,14 +310,20 @@ impl Stage {
         }
     }
 
-    pub fn register(ctx: &mut Ctx, index: usize, player: Option<PlayerRef>) -> Result<Rc<RefCell<Stage>>> {
+    pub fn register(
+        ctx: &mut Ctx,
+        index: usize,
+        player: Option<PlayerRef>,
+    ) -> Result<Rc<RefCell<Stage>>> {
         let (std_name, bg) = files(index);
         let std = stdfile::parse(&ctx.archive.read(&std_name)?)?;
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &bg)?;
         let mut st = Stage::new(index, std);
         st.player = player;
         st.effect_level = ctx.game.cfg.effect_level;
-        st.fast_forward = crate::env::var("TH08_STAGE_FRAME").and_then(|v| v.parse().ok()).unwrap_or(0);
+        st.fast_forward = crate::env::var("TH08_STAGE_FRAME")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         st.start(&mut ctx.anm);
         let st = Rc::new(RefCell::new(st));
         let t: task::TaskRef<Ctx> = st.clone();
@@ -331,7 +350,11 @@ impl Stage {
     }
 
     fn fog_from(c: u32, near: f32, far: f32) -> FogState {
-        FogState { near, far, color: c }
+        FogState {
+            near,
+            far,
+            color: c,
+        }
     }
 
     // Executes one record; returns false when processing must stop for this frame (op 3).
@@ -420,7 +443,12 @@ impl Stage {
         if self.section_request == 0 {
             return;
         }
-        if let Some(k) = self.std.script.iter().position(|r| r.time != -1 && r.op == 31 && r.i(0) == self.section_request) {
+        if let Some(k) = self
+            .std
+            .script
+            .iter()
+            .position(|r| r.time != -1 && r.op == 31 && r.i(0) == self.section_request)
+        {
             self.ip = k + 1;
             self.clock.set(self.std.script[k].time);
             self.section_request = 0;
@@ -460,8 +488,12 @@ impl Stage {
         self.fog_elapsed.tick(speed);
         let d = self.fog_dur as f32;
         let t = (self.fog_elapsed.getf() / d).min(1.0);
-        let (a, b) = (self.fog_start.color.to_le_bytes(), self.fog_target.color.to_le_bytes());
-        let c: [u8; 4] = std::array::from_fn(|k| ((b[k] as f32 - a[k] as f32) * t + a[k] as f32) as u8);
+        let (a, b) = (
+            self.fog_start.color.to_le_bytes(),
+            self.fog_target.color.to_le_bytes(),
+        );
+        let c: [u8; 4] =
+            std::array::from_fn(|k| ((b[k] as f32 - a[k] as f32) * t + a[k] as f32) as u8);
         self.fog.color = u32::from_le_bytes(c);
         self.fog.near = (self.fog_target.near - self.fog_start.near) * t + self.fog_start.near;
         self.fog.far = (self.fog_target.far - self.fog_start.far) * t + self.fog_start.far;
@@ -482,7 +514,11 @@ impl Stage {
             self.overlay.run(anm);
         }
         self.overlay_timer.tick(anm.speed);
-        let overlay = if self.overlay.has_sprite { self.overlay.color } else { [255u8; 4] };
+        let overlay = if self.overlay.has_sprite {
+            self.overlay.color
+        } else {
+            [255u8; 4]
+        };
         for (o, obj) in self.std.objects.iter().enumerate() {
             if self.obj_flags[o] & 1 == 0 {
                 continue;
@@ -497,7 +533,9 @@ impl Stage {
                 let vm = &mut self.vms[last.vm];
                 if vm.tag == 1 {
                     vm.flags |= anmvm::F_COLOR2;
-                    vm.color2 = std::array::from_fn(|k| ((vm.color[k] as u32 * overlay[k] as u32) / 256) as u8);
+                    vm.color2 = std::array::from_fn(|k| {
+                        ((vm.color[k] as u32 * overlay[k] as u32) / 256) as u8
+                    });
                 }
             }
             if running == 0 {
@@ -583,14 +621,30 @@ impl Stage {
         let ra = crate::effect::peek(crate::effect::FIXED_BASE + 9, |e| (e.vm.pos[0], e.pos));
         let rb = crate::effect::peek(crate::effect::FIXED_BASE + 10, |e| e.vm.pos[0]);
         let ((a, c), b) = (ra, rb);
-        let (a, b) = (a * std::f32::consts::FRAC_1_SQRT_2, b * std::f32::consts::FRAC_1_SQRT_2);
+        let (a, b) = (
+            a * std::f32::consts::FRAC_1_SQRT_2,
+            b * std::f32::consts::FRAC_1_SQRT_2,
+        );
         let (cx, cy) = (c[0] + 32.0 + 0.5, c[1] + 16.0 + 0.5);
-        let ring = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0)];
+        let ring = [
+            (-1.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, -1.0),
+        ];
         let white = gfx.white();
         gfx.set_depth_test(false);
         for k in 0..4 {
-            let v = [(ring[k], a), (ring[k], b), (ring[k + 1], a), (ring[k + 1], b)]
-                .map(|((sx, sy), r)| Vertex::screen(cx + sx * r, cy + sy * r, 0.8, [0.0, 0.0], [0, 0, 0, 255]));
+            let v = [
+                (ring[k], a),
+                (ring[k], b),
+                (ring[k + 1], a),
+                (ring[k + 1], b),
+            ]
+            .map(|((sx, sy), r)| {
+                Vertex::screen(cx + sx * r, cy + sy * r, 0.8, [0.0, 0.0], [0, 0, 0, 255])
+            });
             gfx.strip(white, crate::gfx::Blend::Alpha, true, v);
         }
         anm.reset_render_state();
@@ -636,7 +690,11 @@ impl Stage {
     fn fog_params(&self, anm: &AnmManager) -> Fog {
         let c = self.fog.color.to_le_bytes();
         let [r, g, b, _] = anm.tinted([c[2], c[1], c[0], c[3]]);
-        Fog { near: self.fog.near, far: self.fog.far, color: [r, g, b] }
+        Fog {
+            near: self.fog.near,
+            far: self.fog.far,
+            color: [r, g, b],
+        }
     }
 
     fn draw_layer(&mut self, anm: &mut AnmManager, gfx: &mut Gfx, layer: u8) {
@@ -645,15 +703,29 @@ impl Stage {
         anm.stage_camera = Some(cam);
         let m = cam.view.0;
         let right = normalize([m[0][0], m[0][1], m[0][2]]);
-        let points = if self.sparkle_on && self.spell_state <= 1 { Some(&self.sparkles) } else { None };
-        let view = View { cam, vp, right, eye: self.cam.eye(), fog: self.fog, points };
+        let points = if self.sparkle_on && self.spell_state <= 1 {
+            Some(&self.sparkles)
+        } else {
+            None
+        };
+        let view = View {
+            cam,
+            vp,
+            right,
+            eye: self.cam.eye(),
+            fog: self.fog,
+            points,
+        };
         let fog = self.fog_params(anm);
         for inst in &self.std.instances {
             let obj = &self.std.objects[inst.object];
             if obj.layer != layer {
                 continue;
             }
-            let centre = add(sub(add(obj.pos, inst.pos), self.origin), scale(obj.size, 0.5));
+            let centre = add(
+                sub(add(obj.pos, inst.pos), self.origin),
+                scale(obj.size, 0.5),
+            );
             let rel = sub(centre, view.eye);
             if dot(rel, rel) > self.cull_dist2 {
                 continue;
@@ -728,13 +800,17 @@ impl View<'_> {
     fn billboard(&self, anm: &mut AnmManager, gfx: &mut Gfx, vm: &mut AnmVm, w: f32) {
         let s = self.cam.project(vm.pos, self.vp);
         let ww = if w != 0.0 { w } else { vm.sprite_w };
-        let s2 = self.cam.project(add(vm.pos, scale(self.right, ww * vm.scale[0])), self.vp);
+        let s2 = self
+            .cam
+            .project(add(vm.pos, scale(self.right, ww * vm.scale[0])), self.vp);
         let d = sub(s2, s);
         let sc = dot(d, d).sqrt() / ww;
         vm.scale = [sc, if ww < 0.0 { -sc } else { sc }];
         let dist = self.dist(vm.pos);
         let saved = vm.color;
-        let Some(c) = self.soft_fog(vm.color, dist) else { return };
+        let Some(c) = self.soft_fog(vm.color, dist) else {
+            return;
+        };
         vm.color = c;
         vm.pos = s;
         if (0.0..=1.0).contains(&s[2]) {
@@ -744,7 +820,11 @@ impl View<'_> {
             && let Some(pts) = self.points
         {
             let near = self.fog.near;
-            let v = if dist <= near { dist } else { (near - dist) / (near - self.fog.far) };
+            let v = if dist <= near {
+                dist
+            } else {
+                (near - dist) / (near - self.fog.far)
+            };
             let mut p = pts.borrow_mut();
             if v < near && p.0 < 32 {
                 let n = p.0;
@@ -756,18 +836,37 @@ impl View<'_> {
     }
 
     // DrawCustomQuad skip rules: enabled, visible, primary alpha ≠ 0 (06 §13).
-    fn ribbon(&self, anm: &mut AnmManager, gfx: &mut Gfx, vm: &mut AnmVm, a: Vec3, b: Vec3, w: f32) {
+    fn ribbon(
+        &self,
+        anm: &mut AnmManager,
+        gfx: &mut Gfx,
+        vm: &mut AnmVm,
+        a: Vec3,
+        b: Vec3,
+        w: f32,
+    ) {
         use anmvm::*;
-        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED) || vm.color[A] == 0 || !vm.has_sprite {
+        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
+            || vm.color[A] == 0
+            || !vm.has_sprite
+        {
             return;
         }
-        let Some(&spr) = anm.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else { return };
+        let Some(&spr) = anm.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+            return;
+        };
         let ww = if w != 0.0 { w } else { vm.sprite_w };
-        let base = if vm.flags & F_COLOR2 != 0 { vm.color2 } else { vm.color };
+        let base = if vm.flags & F_COLOR2 != 0 {
+            vm.color2
+        } else {
+            vm.color
+        };
         let point = |p: Vec3| {
             let sp = self.cam.project(p, self.vp);
             let e = sub(self.cam.project(add(p, scale(self.right, ww)), self.vp), sp);
-            let mut c = self.soft_fog(base, self.dist(p)).unwrap_or([base[0], base[1], base[2], 0]);
+            let mut c = self
+                .soft_fog(base, self.dist(p))
+                .unwrap_or([base[0], base[1], base[2], 0]);
             c = anm.tinted([c[R], c[G], c[B], c[A]]);
             (sp, dot(e, e).sqrt() / 2.0, c)
         };
@@ -782,7 +881,9 @@ impl View<'_> {
         let (u0, v0) = (spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]);
         let (u1, v1) = (spr.uv[2] + vm.uv_off[0], spr.uv[3] + vm.uv_off[1]);
         let o = anm.screen_offset;
-        let vx = |x: f32, y: f32, z: f32, uv: [f32; 2], c: [u8; 4]| Vertex::screen(x + o[0] + 0.5, y + o[1] + 0.5, z, uv, c);
+        let vx = |x: f32, y: f32, z: f32, uv: [f32; 2], c: [u8; 4]| {
+            Vertex::screen(x + o[0] + 0.5, y + o[1] + 0.5, z, uv, c)
+        };
         let v = [
             vx(sa[0] + dy * wa, sa[1] - dx * wa, sa[2], [u0, v0], ca),
             vx(sa[0] - dy * wa, sa[1] + dx * wa, sa[2], [u1, v0], ca),
@@ -883,7 +984,13 @@ mod tests {
     }
 
     fn synthetic(script: Vec<Record>) -> Stage {
-        let std = Std { quad_count: 0, bgm: Default::default(), objects: Vec::new(), instances: Vec::new(), script };
+        let std = Std {
+            quad_count: 0,
+            bgm: Default::default(),
+            objects: Vec::new(),
+            instances: Vec::new(),
+            script,
+        };
         Stage::new(0, std)
     }
 
@@ -926,12 +1033,19 @@ mod tests {
         assert_eq!((st.ip, st.clock.cur, st.clear_color), (0, 0, 0));
         st.section_request = 2;
         st.step(&mut anm);
-        assert_eq!((st.clear_color, st.section_request, st.clock.cur), (2, 0, 51));
+        assert_eq!(
+            (st.clear_color, st.section_request, st.clock.cur),
+            (2, 0, 51)
+        );
     }
 
     #[test]
     fn fog_interpolates() {
-        let mut st = synthetic(vec![rec(0, 2, [4, 0, 0]), rec(0, 1, [0xFF40_8000, 100f32.to_bits(), 300f32.to_bits()]), rec(-1, 0, [0; 3])]);
+        let mut st = synthetic(vec![
+            rec(0, 2, [4, 0, 0]),
+            rec(0, 1, [0xFF40_8000, 100f32.to_bits(), 300f32.to_bits()]),
+            rec(-1, 0, [0; 3]),
+        ]);
         let mut anm = AnmManager::default();
         st.step(&mut anm);
         assert_eq!(st.fog.near, 175.0);
@@ -939,7 +1053,14 @@ mod tests {
         for _ in 0..3 {
             st.step(&mut anm);
         }
-        assert_eq!(st.fog, FogState { near: 100.0, far: 300.0, color: 0xFF40_8000 });
+        assert_eq!(
+            st.fog,
+            FogState {
+                near: 100.0,
+                far: 300.0,
+                color: 0xFF40_8000
+            }
+        );
         assert_eq!(st.fog_dur, 0);
     }
 
@@ -954,13 +1075,22 @@ mod tests {
 
     #[test]
     fn all_std_scripts_run() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else { return };
-        let ar = crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap()).unwrap();
+        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+            return;
+        };
+        let ar =
+            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
+                .unwrap();
         for index in 0..18 {
             let (std_name, bg) = files(index);
             let std = stdfile::parse(&ar.read(&std_name).unwrap()).unwrap();
             let mut anm = AnmManager::default();
-            anm.insert(ANM_SLOT, &bg, crate::anm::parse(&ar.read(&bg).unwrap()).unwrap(), |_| 0);
+            anm.insert(
+                ANM_SLOT,
+                &bg,
+                crate::anm::parse(&ar.read(&bg).unwrap()).unwrap(),
+                |_| 0,
+            );
             let mut st = Stage::new(index, std);
             st.start(&mut anm);
             for f in 0..6000 {
@@ -969,7 +1099,11 @@ mod tests {
                 }
                 st.step(&mut anm);
                 let cam = st.cam.camera(PLAYFIELD);
-                assert!(cam.view.0.iter().flatten().all(|v| v.is_finite()), "{std_name} frame {f}: camera {:?}", st.cam.v);
+                assert!(
+                    cam.view.0.iter().flatten().all(|v| v.is_finite()),
+                    "{std_name} frame {f}: camera {:?}",
+                    st.cam.v
+                );
             }
             assert!(st.ip > 0, "{std_name}: script never advanced");
         }

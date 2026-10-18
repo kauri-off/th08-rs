@@ -47,7 +47,15 @@ pub struct ItemManager {
 
 impl Default for ItemManager {
     fn default() -> Self {
-        Self { items: vec![Item::default(); MAX_ITEMS], cursor: 0, order: Vec::new(), count: 0, collect_timer: 0, fall_timer: 0, collected: 0 }
+        Self {
+            items: vec![Item::default(); MAX_ITEMS],
+            cursor: 0,
+            order: Vec::new(),
+            count: 0,
+            collect_timer: 0,
+            fall_timer: 0,
+            collected: 0,
+        }
     }
 }
 
@@ -63,7 +71,11 @@ pub fn power_level(p: f32) -> usize {
 
 // Point item value (08 §8.5); `div` 10 gives the converted-point variant.
 pub fn point_value(max: i32, y: f32, line: f32, max_flag: bool, doubled: bool, div: i32) -> i32 {
-    let mut v = if y < line || max_flag { max } else { max / 2 - (y - line) as i32 * (max / 1000) };
+    let mut v = if y < line || max_flag {
+        max
+    } else {
+        max / 2 - (y - line) as i32 * (max / 1000)
+    };
     v /= div;
     v -= v % 10;
     if doubled {
@@ -74,7 +86,10 @@ pub fn point_value(max: i32, y: f32, line: f32, max_flag: bool, doubled: bool, d
 
 pub fn next_extend(difficulty: i32, n: i32) -> i32 {
     if difficulty < 4 {
-        [100, 250, 500, 800, 1100, 9999].get(n as usize).copied().unwrap_or(9999 + 500 * (n - 5))
+        [100, 250, 500, 800, 1100, 9999]
+            .get(n as usize)
+            .copied()
+            .unwrap_or(9999 + 500 * (n - 5))
     } else {
         [200, 666, 9999].get(n as usize).copied().unwrap_or(99999)
     }
@@ -94,7 +109,14 @@ impl ItemManager {
     }
 
     // ItemMgr_Spawn (08 §8.3).
-    pub fn spawn(&mut self, anm: &mut AnmManager, player: &Player, pos: [f32; 3], kind: i32, mode: u8) -> Option<usize> {
+    pub fn spawn(
+        &mut self,
+        anm: &mut AnmManager,
+        player: &Player,
+        pos: [f32; 3],
+        kind: i32,
+        mode: u8,
+    ) -> Option<usize> {
         if pos[0] < -64.0 || pos[0] > 448.0 || kind < 0 {
             return None;
         }
@@ -121,7 +143,14 @@ impl ItemManager {
         if self.cursor > MAX_ITEMS - 1 {
             self.cursor = 0;
         }
-        let mut it = Item { pos, vel: [0.0, -2.2, 0.0], kind, alive: true, state: mode, ..Item::default() };
+        let mut it = Item {
+            pos,
+            vel: [0.0, -2.2, 0.0],
+            kind,
+            alive: true,
+            state: mode,
+            ..Item::default()
+        };
         match mode {
             2 => {
                 let x = anm.rng.next_f32() * 288.0 + 48.0;
@@ -169,9 +198,19 @@ impl ItemManager {
     }
 
     // Collection handlers (08 §8.5).
-    fn collect(&mut self, idx: usize, anm: &mut AnmManager, p: &mut Player, spell: bool) -> Collected {
+    fn collect(
+        &mut self,
+        idx: usize,
+        anm: &mut AnmManager,
+        p: &mut Player,
+        spell: bool,
+    ) -> Collected {
         let mut out = Collected::default();
-        let (kind, y, max_flag) = (self.items[idx].kind, self.items[idx].pos[1], self.items[idx].max_flag);
+        let (kind, y, max_flag) = (
+            self.items[idx].kind,
+            self.items[idx].pos[1],
+            self.items[idx].max_flag,
+        );
         let pos = self.items[idx].pos;
         let popup = |v: i32, c: u32| crate::ascii::popup(pos, v, c);
         let line = p.sht.poc_line;
@@ -241,7 +280,11 @@ impl ItemManager {
             }
             LIFE => st.extend(&mut anm.rng),
             STAR => {
-                let mut v = if p.bomb_active { 100 } else { (st.graze_total / 40) * 10 + 300 };
+                let mut v = if p.bomb_active {
+                    100
+                } else {
+                    (st.graze_total / 40) * 10 + 300
+                };
                 if v < 1 {
                     v = 10;
                 }
@@ -256,7 +299,15 @@ impl ItemManager {
                 } else {
                     10000
                 };
-                crate::ascii::popup_special(pos, v, if st.time >= st.time_threshold { POPUP_TIME_OVER } else { POPUP_TIME });
+                crate::ascii::popup_special(
+                    pos,
+                    v,
+                    if st.time >= st.time_threshold {
+                        POPUP_TIME_OVER
+                    } else {
+                        POPUP_TIME
+                    },
+                );
                 st.add_score(v);
                 st.add_time(1, &mut anm.rng);
                 st.spell_bonus_add += 8000;
@@ -271,7 +322,13 @@ impl ItemManager {
     }
 
     // ItemMgr_Calc (08 §8.4). `cancel` runs a mode-1 cancel of all bullets in the middle of the loop.
-    pub fn calc(&mut self, anm: &mut AnmManager, p: &mut Player, spell: bool, mut cancel: impl FnMut(&mut ItemManager, &mut AnmManager, &mut Player)) {
+    pub fn calc(
+        &mut self,
+        anm: &mut AnmManager,
+        p: &mut Player,
+        spell: bool,
+        mut cancel: impl FnMut(&mut ItemManager, &mut AnmManager, &mut Player),
+    ) {
         let gs = anm.speed;
         let c = p.sht.collect;
         let m = p.item_sht().fall * gs;
@@ -330,7 +387,11 @@ impl ItemManager {
                 }
                 _ => {
                     let attract = it.state == 1
-                        || (p.pos[1] < p.sht.poc_line && (p.stats.power >= 128.0 || p.focus != 0 || p.shot_type == 1 || p.shot_type == 6));
+                        || (p.pos[1] < p.sht.poc_line
+                            && (p.stats.power >= 128.0
+                                || p.focus != 0
+                                || p.shot_type == 1
+                                || p.shot_type == 6));
                     if attract {
                         if !matches!(ps, 1 | 2) {
                             let a = crate::bullet::angle_from(it.pos, p.pos);
@@ -373,7 +434,11 @@ impl ItemManager {
             if step == 1 && it.state != 3 && p.collect_test(it.pos, c) {
                 let out = self.collect(i, anm, p, spell);
                 if sound != Some(crate::sound::ITEM1) {
-                    sound = Some(if self.items[i].max_flag { crate::sound::ITEM1 } else { crate::sound::ITEM0 });
+                    sound = Some(if self.items[i].max_flag {
+                        crate::sound::ITEM1
+                    } else {
+                        crate::sound::ITEM0
+                    });
                 }
                 self.items[i].alive = false;
                 self.order[k - 1] = DEAD;
@@ -388,7 +453,8 @@ impl ItemManager {
                 it.vm.run(anm);
             }
         }
-        self.order.retain(|&i| i != DEAD && self.items[i as usize].alive);
+        self.order
+            .retain(|&i| i != DEAD && self.items[i as usize].alive);
         if let Some(id) = sound {
             crate::sound::play(id);
         }
@@ -428,8 +494,14 @@ mod tests {
     fn point_values() {
         assert_eq!(point_value(10000, 100.0, 128.0, false, false, 1), 10000);
         assert_eq!(point_value(10000, 300.0, 128.0, true, false, 1), 10000);
-        assert_eq!(point_value(10000, 228.0, 128.0, false, false, 1), 5000 - 100 * 10);
-        assert_eq!(point_value(10000, 228.9, 128.0, false, true, 1), 2 * (5000 - 100 * 10));
+        assert_eq!(
+            point_value(10000, 228.0, 128.0, false, false, 1),
+            5000 - 100 * 10
+        );
+        assert_eq!(
+            point_value(10000, 228.9, 128.0, false, true, 1),
+            2 * (5000 - 100 * 10)
+        );
         assert_eq!(point_value(12345, 128.5, 128.0, false, false, 1), 6170);
         assert_eq!(point_value(10000, 100.0, 128.0, false, false, 10), 1000);
         assert_eq!(point_value(12345, 228.0, 128.0, false, false, 10), 490);
@@ -437,8 +509,14 @@ mod tests {
 
     #[test]
     fn extend_table() {
-        assert_eq!((0..8).map(|n| next_extend(1, n)).collect::<Vec<_>>(), [100, 250, 500, 800, 1100, 9999, 10499, 10999]);
-        assert_eq!((0..4).map(|n| next_extend(4, n)).collect::<Vec<_>>(), [200, 666, 9999, 99999]);
+        assert_eq!(
+            (0..8).map(|n| next_extend(1, n)).collect::<Vec<_>>(),
+            [100, 250, 500, 800, 1100, 9999, 10499, 10999]
+        );
+        assert_eq!(
+            (0..4).map(|n| next_extend(4, n)).collect::<Vec<_>>(),
+            [200, 666, 9999, 99999]
+        );
     }
 
     #[test]

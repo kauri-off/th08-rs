@@ -78,7 +78,10 @@ impl Ctx {
             log::info!("frame {} se {:?}", self.frame, played);
         }
         for (id, pan) in played {
-            let vol = crate::config::volume_curve(crate::sound::TABLE[id as usize].1 as i32, cfg.se_volume);
+            let vol = crate::config::volume_curve(
+                crate::sound::TABLE[id as usize].1 as i32,
+                cfg.se_volume,
+            );
             self.audio.play_se(id as usize, pan, vol);
         }
     }

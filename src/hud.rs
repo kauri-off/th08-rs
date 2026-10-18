@@ -22,9 +22,17 @@ pub const TIMES_SLOT: usize = 14;
 
 const TXT_NAMES: [&str; 9] = ["1", "2", "3", "4a", "4b", "5", "6", "7", "8"];
 // Per-stage clear bonus (tbl 0x4C7158).
-const CLEAR_BONUS: [i64; 9] = [1_000_000, 1_500_000, 2_000_000, 2_500_000, 2_500_000, 3_000_000, 4_000_000, 6_000_000, 6_660_000];
-const RANK_TEXT: [(&str, f64); 5] =
-    [("Easy Rank    *0.5", 0.5), ("Normal Rank  *1.0", 1.0), ("Hard Rank    *1.2", 1.2), ("Lunatic Rank *1.5", 1.5), ("Extra Rank   *2.0", 2.0)];
+const CLEAR_BONUS: [i64; 9] = [
+    1_000_000, 1_500_000, 2_000_000, 2_500_000, 2_500_000, 3_000_000, 4_000_000, 6_000_000,
+    6_660_000,
+];
+const RANK_TEXT: [(&str, f64); 5] = [
+    ("Easy Rank    *0.5", 0.5),
+    ("Normal Rank  *1.0", 1.0),
+    ("Hard Rank    *1.2", 1.2),
+    ("Lunatic Rank *1.5", 1.5),
+    ("Extra Rank   *2.0", 2.0),
+];
 
 struct ActivePopup {
     kind: Popup,
@@ -66,7 +74,12 @@ pub struct Hud {
 }
 
 impl Hud {
-    pub fn register(ctx: &mut Ctx, player: PlayerRef, enemies: Rc<RefCell<EnemyManager>>, stage: Rc<RefCell<Stage>>) -> Result<Rc<RefCell<Hud>>> {
+    pub fn register(
+        ctx: &mut Ctx,
+        player: PlayerRef,
+        enemies: Rc<RefCell<EnemyManager>>,
+        stage: Rc<RefCell<Stage>>,
+    ) -> Result<Rc<RefCell<Hud>>> {
         let h = Rc::new(RefCell::new(Hud {
             msg: Rc::new(RefCell::new(Dialogue::default())),
             player,
@@ -105,14 +118,24 @@ impl Hud {
             set_boss_plate(&ctx.anm, gfx, n);
         }
         ctx.anm.load(gfx, ar, TIMES_SLOT, "times.anm")?;
-        ctx.anm.load(gfx, ar, TXT_SLOT, &format!("stg{}txt.anm", TXT_NAMES[stage]))?;
+        ctx.anm.load(
+            gfx,
+            ar,
+            TXT_SLOT,
+            &format!("stg{}txt.anm", TXT_NAMES[stage]),
+        )?;
         let team = crate::sht::team(shot);
         let variant = match shot {
             0..=3 => "",
             s if s % 2 == 0 => "h",
             _ => "a",
         };
-        if let Err(e) = ctx.anm.load(gfx, ar, LOADING_SLOT, &format!("loading{team:02}{variant}.anm")) {
+        if let Err(e) = ctx.anm.load(
+            gfx,
+            ar,
+            LOADING_SLOT,
+            &format!("loading{team:02}{variant}.anm"),
+        ) {
             log::debug!("loading anm: {e:#}");
         }
         for (k, f) in msg::face_files(stage, shot).into_iter().enumerate() {
@@ -153,14 +176,23 @@ impl Hud {
             })
             .collect();
         anm.set_script(&mut self.diff_vm, crate::ascii::ANM_SLOT, 0x19);
-        let d = if g.spell_practice() { 5 } else { g.difficulty.clamp(0, 4) };
+        let d = if g.spell_practice() {
+            5
+        } else {
+            g.difficulty.clamp(0, 4)
+        };
         self.diff_vm.set_sprite(anm, 0x11B + d);
         anm.set_script(&mut self.start_clock_vm, TIMES_SLOT, 0);
-        self.start_clock_vm.set_sprite(anm, g.stats.clock.clamp(0, 15));
+        self.start_clock_vm
+            .set_sprite(anm, g.stats.clock.clamp(0, 15));
         Ok(())
     }
 
-    fn line_texture(anm: &AnmManager, gfx: &Gfx, vm: &AnmVm) -> Option<(crate::gfx::TextureId, u32, u32)> {
+    fn line_texture(
+        anm: &AnmManager,
+        gfx: &Gfx,
+        vm: &AnmVm,
+    ) -> Option<(crate::gfx::TextureId, u32, u32)> {
         let sp = anm.sprite(msg::TEXT_SLOT, vm.sprite_index.max(0) as usize)?;
         let t = gfx.texture(sp.tex);
         Some((sp.tex, t.width, (sp.uv[1] * t.height as f32).round() as u32))
@@ -171,7 +203,9 @@ impl Hud {
         let mut d = self.msg.borrow_mut();
         let size = d.font_size;
         for (line, s, colour) in std::mem::take(&mut d.texts) {
-            let Some((tex, w, y)) = Self::line_texture(&ctx.anm, &ctx.gfx, &d.lines[line]) else { continue };
+            let Some((tex, w, y)) = Self::line_texture(&ctx.anm, &ctx.gfx, &d.lines[line]) else {
+                continue;
+            };
             let rgba = self.raster.render(&s, colour, w as usize, size);
             ctx.gfx.write_texture(tex, 0, y, w, size as u32, &rgba);
         }
@@ -187,7 +221,14 @@ impl Hud {
                     let vm = &mut self.title[3];
                     ctx.anm.set_script(vm, TXT_SLOT, 3);
                     vm.set_sprite(&ctx.anm, n + 3);
-                    let name = self.stage.borrow().std.bgm.get(n as usize).cloned().unwrap_or_default();
+                    let name = self
+                        .stage
+                        .borrow()
+                        .std
+                        .bgm
+                        .get(n as usize)
+                        .cloned()
+                        .unwrap_or_default();
                     ctx.audio.play_bgm(&name);
                 }
                 Event::BgmFade => ctx.audio.fade_bgm(4.0),
@@ -205,7 +246,11 @@ impl Hud {
 
     // Msg op 9 (10 §9) and the bonus computation (12 §5.6).
     fn stage_end(&mut self, ctx: &mut Ctx) {
-        log::info!("stage clear (msg op 9) at frame {} score {}", ctx.frame, self.player.borrow().stats.score10);
+        log::info!(
+            "stage clear (msg op 9) at frame {} score {}",
+            ctx.frame,
+            self.player.borrow().stats.score10
+        );
         let g = &mut ctx.game;
         g.flags |= gamemgr::F_CLEAR_PANEL;
         let stage = g.stage % 9;
@@ -213,7 +258,8 @@ impl Hud {
         let mut p = self.player.borrow_mut();
         let shot = p.shot_type;
         if stage < 6 {
-            ctx.anm.set_script(&mut self.clear_vm, crate::ascii::ANM_SLOT, 3);
+            ctx.anm
+                .set_script(&mut self.clear_vm, crate::ascii::ANM_SLOT, 3);
             self.clear_vm.pending_interrupt = 1;
         }
         let adv = gamemgr::clock_advance(stage, p.stats.time, p.stats.time_threshold);
@@ -235,10 +281,22 @@ impl Hud {
             }
         }
         let clear = CLEAR_BONUS[stage];
-        let (points, graze, time) = (st.point_items as i64 * 5000, st.graze as i64 * 50, st.time as i64 * 100);
+        let (points, graze, time) = (
+            st.point_items as i64 * 5000,
+            st.graze as i64 * 50,
+            st.time as i64 * 100,
+        );
         let mut total = clear + points + graze + time;
         let mut lines = vec![
-            (if final_stage { "All Clear!" } else { "Stage Clear" }.to_string(), 0xFFFFFF40),
+            (
+                if final_stage {
+                    "All Clear!"
+                } else {
+                    "Stage Clear"
+                }
+                .to_string(),
+                0xFFFFFF40,
+            ),
             (String::new(), 0),
             (format!("Clear = {clear:8}0"), 0xFFFFFFFF),
             (format!("Point = {points:8}0"), 0xFFE0E0FF),
@@ -246,8 +304,14 @@ impl Hud {
             (format!("Time  = {time:8}0"), 0xFFFFFFFF),
         ];
         let pct = |n: u32| n as f32 * 100.0 / st.stage_frames.max(1) as f32;
-        lines.push((format!("over-80% = {:.2}%", pct(st.human_frames)), 0xFFFFFFFF));
-        lines.push((format!("over 80% = {:.2}%", pct(st.youkai_frames)), 0xFFFFFFFF));
+        lines.push((
+            format!("over-80% = {:.2}%", pct(st.human_frames)),
+            0xFFFFFFFF,
+        ));
+        lines.push((
+            format!("over 80% = {:.2}%", pct(st.youkai_frames)),
+            0xFFFFFFFF,
+        ));
         if final_stage && !g.practice() && !g.replay() {
             let (lv, bm) = (st.lives as i64 * 2_500_000, st.bombs as i64 * 500_000);
             total += lv + bm;
@@ -257,7 +321,10 @@ impl Hud {
                 let night = (12 - st.clock).max(0) as i64 * 2_000_000;
                 total += night;
                 let m = 660 + 30 * st.clock;
-                lines.push((format!("Last Time = {:2}:{:02}", (m / 60) % 12, m % 60), 0xFFFFFFFF));
+                lines.push((
+                    format!("Last Time = {:2}:{:02}", (m / 60) % 12, m % 60),
+                    0xFFFFFFFF,
+                ));
                 lines.push(("Night Bonus".into(), 0xFFFFFFFF));
                 lines.push((format!("        {night:8}0"), 0xFFFFFFFF));
             }
@@ -282,7 +349,15 @@ impl Hud {
             st.add_score(total as i32);
         }
         log::info!("clear bonus {total}: score {}", st.score10);
-        self.clear = Some(ClearPanel { frame: 0, stage, lines, from, to, shown: from, done: final_stage });
+        self.clear = Some(ClearPanel {
+            frame: 0,
+            stage,
+            lines,
+            from,
+            to,
+            shown: from,
+            done: final_stage,
+        });
     }
 
     fn clear_calc(&mut self, g: &mut Game, inp: &crate::input::Input) {
@@ -312,7 +387,11 @@ impl Hud {
             self.front[12].pending_interrupt = if show { 1 } else { 2 };
         }
         if let Some(b) = boss {
-            let max = if b.hud_life > 0 { b.hud_life } else { b.max_life.max(1) };
+            let max = if b.hud_life > 0 {
+                b.hud_life
+            } else {
+                b.max_life.max(1)
+            };
             self.bar_target = (b.life.max(0) as f32 / max as f32).clamp(0.0, 1.0);
         }
         // Popup_LargeStatic from Hud_DrawBoss (answers_impl10 §1): "+0" without children too.
@@ -320,10 +399,19 @@ impl Hud {
             && !paused
             && !self.player.borrow().freeze_bullets
         {
-            crate::ascii::popup_large_static([2.0, 29.0], e.chain_count(i), e.enemies[i].children, 0xFFF0F00F);
+            crate::ascii::popup_large_static(
+                [2.0, 29.0],
+                e.chain_count(i),
+                e.enemies[i].children,
+                0xFFF0F00F,
+            );
         }
         drop(e);
-        self.bar_alpha = if self.bar_shown { (self.bar_alpha + 4).min(255) } else { (self.bar_alpha - 4).max(0) };
+        self.bar_alpha = if self.bar_shown {
+            (self.bar_alpha + 4).min(255)
+        } else {
+            (self.bar_alpha - 4).max(0)
+        };
         if !dialogue {
             if self.bar_disp < self.bar_target {
                 self.bar_disp = (self.bar_disp + 0.01).min(self.bar_target);
@@ -342,7 +430,11 @@ impl Hud {
         gfx.set_viewport(PLAYFIELD);
         for pair in [[0usize, 1], [2, 3]] {
             let (a, b) = (pair[0], pair[1]);
-            let order = if d.faces[a].pos[2] >= d.faces[b].pos[2] { [a, b] } else { [b, a] };
+            let order = if d.faces[a].pos[2] >= d.faces[b].pos[2] {
+                [a, b]
+            } else {
+                [b, a]
+            };
             for k in order {
                 if d.faces[k].script.is_some() {
                     anm.draw_mode(gfx, &mut d.faces[k], 0);
@@ -350,7 +442,11 @@ impl Hud {
             }
         }
         if d.textbox {
-            let h = if d.clock.cur >= 60 { 48.0 } else { d.clock.cur as f32 * 48.0 / 60.0 };
+            let h = if d.clock.cur >= 60 {
+                48.0
+            } else {
+                d.clock.cur as f32 * 48.0 / 60.0
+            };
             let (x0, x1, y0) = (PLAYFIELD.x + 16.0, PLAYFIELD.x + 368.0, 384.0);
             let (top, bot) = ([0, 0, 0, 0xD0], [0, 0, 0, 0x90]);
             let uv = [0.0, 0.0];
@@ -372,7 +468,12 @@ impl Hud {
 
     fn bar_quad(gfx: &mut Gfx, x0: f32, x1: f32, y0: f32, y1: f32, top: [u8; 4], bot: [u8; 4]) {
         let uv = [0.0, 0.0];
-        let v = [Vertex::screen(x0, y0, 0.0, uv, top), Vertex::screen(x1, y0, 0.0, uv, top), Vertex::screen(x0, y1, 0.0, uv, bot), Vertex::screen(x1, y1, 0.0, uv, bot)];
+        let v = [
+            Vertex::screen(x0, y0, 0.0, uv, top),
+            Vertex::screen(x1, y0, 0.0, uv, top),
+            Vertex::screen(x0, y1, 0.0, uv, bot),
+            Vertex::screen(x1, y1, 0.0, uv, bot),
+        ];
         gfx.strip(gfx.white(), Blend::Alpha, false, v);
     }
 
@@ -389,14 +490,36 @@ impl Hud {
         let gfx = &mut ctx.gfx;
         gfx.set_viewport(PLAYFIELD);
         let disp = self.bar_disp;
-        Self::bar_quad(gfx, 64.0, 64.0 + 320.0 * disp, 19.0, 23.0, Self::rgb(0xFFFFFF, a), Self::rgb(0x202060, a));
+        Self::bar_quad(
+            gfx,
+            64.0,
+            64.0 + 320.0 * disp,
+            19.0,
+            23.0,
+            Self::rgb(0xFFFFFF, a),
+            Self::rgb(0x202060, a),
+        );
         let e = self.enemies.borrow();
-        let max = e.boss(0).map(|i| &e.enemies[i]).map_or(1, |b| if b.hud_life > 0 { b.hud_life } else { b.max_life.max(1) }) as f32;
+        let max = e.boss(0).map(|i| &e.enemies[i]).map_or(1, |b| {
+            if b.hud_life > 0 {
+                b.hud_life
+            } else {
+                b.max_life.max(1)
+            }
+        }) as f32;
         for [end, start, col] in e.g.hud_markers {
             let (end, start) = (end as f32 / max, start as f32 / max);
             if end != 0.0 && start < disp {
                 let c = col as u32;
-                Self::bar_quad(gfx, 64.0 + 320.0 * start, 64.0 + 320.0 * end.min(disp), 19.0, 23.0, Self::rgb(c, a), Self::rgb((c >> 2) & 0x3F3F3F, a));
+                Self::bar_quad(
+                    gfx,
+                    64.0 + 320.0 * start,
+                    64.0 + 320.0 * end.min(disp),
+                    19.0,
+                    23.0,
+                    Self::rgb(c, a),
+                    Self::rgb((c >> 2) & 0x3F3F3F, a),
+                );
             }
         }
         let n = e.g.hud_bars.max(0);
@@ -407,7 +530,11 @@ impl Hud {
             let c = Self::rgb(0xFFFFFF - (i as u32 * 255 / 9), a);
             Self::bar_quad(gfx, x0, x1, 19.0, 23.0, c, c);
         }
-        let secs = e.boss(0).map(|i| &e.enemies[i]).filter(|b| b.timeout > 0).map(|b| ((b.timeout - b.boss_timer.cur) / 60).clamp(0, 99));
+        let secs = e
+            .boss(0)
+            .map(|i| &e.enemies[i])
+            .filter(|b| b.timeout > 0)
+            .map(|b| ((b.timeout - b.boss_timer.cur) / 60).clamp(0, 99));
         drop(e);
         ctx.anm.draw_mode(&mut ctx.gfx, &mut self.front[12], 0);
         if let Some(s) = secs {
@@ -417,7 +544,8 @@ impl Hud {
                 5..=9 => 0xE080C0,
                 _ => 0xFF4040,
             };
-            ctx.ascii.push(Text::new(384.0, 16.0, format!("{s:02}")).color(Self::rgb(c, a)));
+            ctx.ascii
+                .push(Text::new(384.0, 16.0, format!("{s:02}")).color(Self::rgb(c, a)));
             if s != self.timer_last && self.timer_last >= 0 {
                 if s < 3 {
                     crate::sound::play(crate::sound::TIMEOUT2);
@@ -433,7 +561,9 @@ impl Hud {
         for p in &self.popups {
             let slide = |f: u32| 416.0 - 312.0 * (f.min(30) as f32 / 30.0);
             match p.kind {
-                Popup::Bonus(n) => ctx.ascii.push(Text::new(slide(p.frame), 48.0, format!(" BONUS {n:8}")).argb(0xFFFFFF80)),
+                Popup::Bonus(n) => ctx.ascii.push(
+                    Text::new(slide(p.frame), 48.0, format!(" BONUS {n:8}")).argb(0xFFFFFF80),
+                ),
                 Popup::Message(t, v) => {
                     let (s, small) = match t {
                         1 => ("Full Power Mode!".to_string(), false),
@@ -449,9 +579,24 @@ impl Hud {
                 }
                 Popup::SpellBonus(n) => {
                     let s = "Spell Card Bonus!";
-                    ctx.ascii.push(Text::new(224.0 - crate::ascii::text_width(s, 13.0, 1.0) / 2.0, 80.0, s).argb(0xFFFF0000));
+                    ctx.ascii.push(
+                        Text::new(
+                            224.0 - crate::ascii::text_width(s, 13.0, 1.0) / 2.0,
+                            80.0,
+                            s,
+                        )
+                        .argb(0xFFFF0000),
+                    );
                     let v = format!("+{n}");
-                    ctx.ascii.push(Text::new(224.0 - crate::ascii::text_width(&v, 13.0, 2.0) / 2.0, 100.0, v).scale(2.0).argb(0xFFFF8080));
+                    ctx.ascii.push(
+                        Text::new(
+                            224.0 - crate::ascii::text_width(&v, 13.0, 2.0) / 2.0,
+                            100.0,
+                            v,
+                        )
+                        .scale(2.0)
+                        .argb(0xFFFF8080),
+                    );
                 }
             }
         }
@@ -467,8 +612,19 @@ impl Hud {
             y += 16.0;
         }
         if c.stage <= 5 {
-            let fmt = |m: i32| format!("{} {:2}:{:02}", if m / 60 < 12 { "PM" } else { "AM" }, (m / 60) % 12, m % 60);
-            ctx.ascii.push(Text::new(120.0, y + 16.0, format!("{} >> {}", fmt(c.from), fmt(c.shown))));
+            let fmt = |m: i32| {
+                format!(
+                    "{} {:2}:{:02}",
+                    if m / 60 < 12 { "PM" } else { "AM" },
+                    (m / 60) % 12,
+                    m % 60
+                )
+            };
+            ctx.ascii.push(Text::new(
+                120.0,
+                y + 16.0,
+                format!("{} >> {}", fmt(c.from), fmt(c.shown)),
+            ));
         }
         ctx.gfx.set_viewport(FULLSCREEN);
         if self.clear_vm.script.is_some() {
@@ -483,7 +639,13 @@ impl Hud {
         let anm = &mut ctx.anm;
         let spr = |anm: &AnmManager, gfx: &mut Gfx, i: usize, x: f32, y: f32| {
             if let Some(s) = anm.sprite(FRONT_SLOT, i) {
-                gfx.sprite(s.tex, Blend::Alpha, Rect::new(x, y, s.w, s.h), s.uv, [255; 4]);
+                gfx.sprite(
+                    s.tex,
+                    Blend::Alpha,
+                    Rect::new(x, y, s.w, s.h),
+                    s.uv,
+                    [255; 4],
+                );
             }
         };
         for y in (0..480).step_by(32) {
@@ -503,9 +665,21 @@ impl Hud {
         }
         anm.draw_mode(gfx, &mut self.diff_vm, 0);
         let q = &mut ctx.ascii;
-        q.push(Text::new(488.0, 40.0, format!("{:09}", st.hiscore.min(999_999_999))));
-        q.push(Text::new(605.0, 40.0, format!("{}", st.hiscore_cont.min(9))));
-        q.push(Text::new(488.0, 56.0, format!("{:09}", st.score_disp.min(999_999_999))));
+        q.push(Text::new(
+            488.0,
+            40.0,
+            format!("{:09}", st.hiscore.min(999_999_999)),
+        ));
+        q.push(Text::new(
+            605.0,
+            40.0,
+            format!("{}", st.hiscore_cont.min(9)),
+        ));
+        q.push(Text::new(
+            488.0,
+            56.0,
+            format!("{:09}", st.score_disp.min(999_999_999)),
+        ));
         q.push(Text::new(605.0, 56.0, format!("{}", st.continues.min(9))));
         for (row, n, vm) in [(88.0, st.lives as i32, 10), (104.0, st.bombs as i32, 11)] {
             for i in 0..n.clamp(0, 8) {
@@ -521,16 +695,33 @@ impl Hud {
             gfx.white(),
             Blend::Alpha,
             false,
-            [Vertex::screen(488.0, 136.0, 0.0, uv, l), Vertex::screen(488.0 + pw, 136.0, 0.0, uv, r), Vertex::screen(488.0, 152.0, 0.0, uv, l), Vertex::screen(488.0 + pw, 152.0, 0.0, uv, r)],
+            [
+                Vertex::screen(488.0, 136.0, 0.0, uv, l),
+                Vertex::screen(488.0 + pw, 136.0, 0.0, uv, r),
+                Vertex::screen(488.0, 152.0, 0.0, uv, l),
+                Vertex::screen(488.0 + pw, 152.0, 0.0, uv, r),
+            ],
         );
-        q.push(Text::new(488.0, 136.0, if pw >= 128.0 { "MAX".to_string() } else { format!("{}", pw as i32) }));
+        q.push(Text::new(
+            488.0,
+            136.0,
+            if pw >= 128.0 {
+                "MAX".to_string()
+            } else {
+                format!("{}", pw as i32)
+            },
+        ));
         q.push(Text::new(488.0, 152.0, format!("{}", st.graze_total)));
         let pt = format!("{}", st.point_items2);
         q.push(Text::new(488.0, 168.0, pt.clone()));
         let x = 488.0 + 13.0 * pt.len() as f32;
         q.push(Text::new(x, 168.0, "/"));
         q.push(Text::new(x + 6.0, 168.0, format!("{}", st.next_extend)));
-        let col = if st.time >= st.time_threshold { 0xFFFFF0C0 } else { 0xFFFFFFFF };
+        let col = if st.time >= st.time_threshold {
+            0xFFFFF0C0
+        } else {
+            0xFFFFFFFF
+        };
         let tt = format!("{}", st.time);
         q.push(Text::new(488.0, 184.0, tt.clone()).argb(col));
         let x = 488.0 + 13.0 * tt.len() as f32;
@@ -549,7 +740,10 @@ impl Task<Ctx> for Hud {
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            for s in [FRONT_SLOT, TIMES_SLOT, TXT_SLOT, LOADING_SLOT].into_iter().chain(msg::FACE_SLOTS) {
+            for s in [FRONT_SLOT, TIMES_SLOT, TXT_SLOT, LOADING_SLOT]
+                .into_iter()
+                .chain(msg::FACE_SLOTS)
+            {
                 ctx.anm.unload(&mut ctx.gfx, s);
             }
         }
@@ -563,13 +757,22 @@ impl Task<Ctx> for Hud {
             let mut d = self.msg.borrow_mut();
             d.info.clock = self.player.borrow().stats.clock;
             let c = d.run(&mut ctx.anm, &inp, dying);
-            (c, std::mem::take(&mut d.events), std::mem::take(&mut d.side_effects))
+            (
+                c,
+                std::mem::take(&mut d.events),
+                std::mem::take(&mut d.side_effects),
+            )
         };
         if side {
             self.enemies.borrow_mut().msg_side_effects(&mut ctx.anm);
         }
         if collect {
-            self.enemies.borrow().bullets.borrow_mut().items.attract_all();
+            self.enemies
+                .borrow()
+                .bullets
+                .borrow_mut()
+                .items
+                .attract_all();
         }
         self.flush_texts(ctx);
         self.handle_events(ctx, events);
@@ -590,7 +793,11 @@ impl Task<Ctx> for Hud {
             }
         }
         let dialogue = self.msg.borrow().active();
-        self.boss_calc(&mut ctx.anm, dialogue, ctx.game.paused != 0 || ctx.game.game_over != 0);
+        self.boss_calc(
+            &mut ctx.anm,
+            dialogue,
+            ctx.game.paused != 0 || ctx.game.game_over != 0,
+        );
         self.clear_calc(&mut ctx.game, &inp);
         for p in self.player.borrow_mut().stats.popups.drain(..) {
             self.popups.push(ActivePopup { kind: p, frame: 0 });
@@ -611,7 +818,12 @@ impl Task<Ctx> for Hud {
             }
         }
         let anm = &mut ctx.anm;
-        for vm in self.front.iter_mut().chain(self.title.iter_mut()).chain([&mut self.diff_vm, &mut self.clear_vm, &mut self.night_vm, &mut self.start_clock_vm]) {
+        for vm in self.front.iter_mut().chain(self.title.iter_mut()).chain([
+            &mut self.diff_vm,
+            &mut self.clear_vm,
+            &mut self.night_vm,
+            &mut self.start_clock_vm,
+        ]) {
             if vm.script.is_some() {
                 vm.run(anm);
             }
@@ -628,7 +840,11 @@ impl Task<Ctx> for Hud {
             self.draw_boss(ctx);
         }
         ctx.gfx.set_viewport(FULLSCREEN);
-        for vm in self.title.iter_mut().chain([&mut self.night_vm, &mut self.start_clock_vm]) {
+        for vm in self
+            .title
+            .iter_mut()
+            .chain([&mut self.night_vm, &mut self.start_clock_vm])
+        {
             if vm.script.is_some() {
                 ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
             }
@@ -639,7 +855,13 @@ impl Task<Ctx> for Hud {
         self.draw_panel(ctx, &st);
         if let Some(f) = self.flash {
             ctx.gfx.set_viewport(FULLSCREEN);
-            ctx.gfx.rect(0.0, 0.0, 640.0, 480.0, [255, 255, 255, (255 * f / 442) as u8]);
+            ctx.gfx.rect(
+                0.0,
+                0.0,
+                640.0,
+                480.0,
+                [255, 255, 255, (255 * f / 442) as u8],
+            );
         }
         let _ = anmvm::A;
         Ret::Next
@@ -672,9 +894,18 @@ pub fn set_boss_plate(anm: &AnmManager, gfx: &mut Gfx, n: usize) {
     if let (Some(&src), Some(&dst)) = (anm.sprite(FRONT_SLOT, n), anm.sprite(FRONT_SLOT, 10)) {
         let px = |s: &crate::anmmgr::SlotSprite, gfx: &Gfx| {
             let t = gfx.texture(s.tex);
-            [(s.uv[0] * t.width as f32).round() as u32, (s.uv[1] * t.height as f32).round() as u32]
+            [
+                (s.uv[0] * t.width as f32).round() as u32,
+                (s.uv[1] * t.height as f32).round() as u32,
+            ]
         };
         let (a, b) = (px(&src, gfx), px(&dst, gfx));
-        gfx.copy_texture(src.tex, a, dst.tex, b, [src.w.min(dst.w) as u32, src.h.min(dst.h) as u32]);
+        gfx.copy_texture(
+            src.tex,
+            a,
+            dst.tex,
+            b,
+            [src.w.min(dst.w) as u32, src.h.min(dst.h) as u32],
+        );
     }
 }

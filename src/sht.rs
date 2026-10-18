@@ -80,7 +80,10 @@ impl Sht {
 pub const ENTRY_SIZE: usize = 0x38;
 
 pub fn parse(b: &[u8]) -> Result<Sht> {
-    let rd = |o: usize, n: usize| b.get(o..o + n).ok_or_else(|| anyhow::anyhow!("sht: truncated at {o:#x}"));
+    let rd = |o: usize, n: usize| {
+        b.get(o..o + n)
+            .ok_or_else(|| anyhow::anyhow!("sht: truncated at {o:#x}"))
+    };
     let f = |o: usize| -> Result<f32> { Ok(f32::from_le_bytes(rd(o, 4)?.try_into()?)) };
     let i = |o: usize| -> Result<i32> { Ok(i32::from_le_bytes(rd(o, 4)?.try_into()?)) };
     let h = |o: usize| -> Result<i16> { Ok(i16::from_le_bytes(rd(o, 2)?.try_into()?)) };
@@ -160,7 +163,9 @@ mod tests {
 
     #[test]
     fn all_sht_files() {
-        let Some(ar) = crate::archive::test_archive() else { return };
+        let Some(ar) = crate::archive::test_archive() else {
+            return;
+        };
         for t in 0..4 {
             for suf in ["a", "as"] {
                 let name = format!("ply{t:02}{suf}.sht");
@@ -171,12 +176,27 @@ mod tests {
                 assert!(s.levels.iter().all(|l| !l.entries.is_empty()), "{name}");
                 for l in &s.levels {
                     for e in &l.entries {
-                        assert!((0..=8).contains(&e.init) && [0, 1, 3, 4, 5].contains(&e.update) && (0..=1).contains(&e.draw) && (0..=2).contains(&e.hit), "{name} {e:?}");
-                        assert!(e.interval > 0 && (0..=4).contains(&e.origin), "{name} {e:?}");
+                        assert!(
+                            (0..=8).contains(&e.init)
+                                && [0, 1, 3, 4, 5].contains(&e.update)
+                                && (0..=1).contains(&e.draw)
+                                && (0..=2).contains(&e.hit),
+                            "{name} {e:?}"
+                        );
+                        assert!(
+                            e.interval > 0 && (0..=4).contains(&e.origin),
+                            "{name} {e:?}"
+                        );
                     }
                 }
                 if std::env::var("SHT_DUMP").is_ok() {
-                    eprintln!("{name}: {:?}", Sht { levels: vec![], ..s.clone() });
+                    eprintln!(
+                        "{name}: {:?}",
+                        Sht {
+                            levels: vec![],
+                            ..s.clone()
+                        }
+                    );
                     for (k, l) in s.levels.iter().enumerate() {
                         eprintln!(" level {k} thr {}", l.threshold);
                         for e in &l.entries {

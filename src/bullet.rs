@@ -16,7 +16,9 @@ pub const DRAW_PRIO: u16 = 13;
 pub const MAX_BULLETS: usize = 1536;
 pub const MAX_LASERS: usize = 256;
 pub const TYPES: usize = 21;
-const MAIN_SCRIPTS: [usize; TYPES] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 25, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115];
+const MAIN_SCRIPTS: [usize; TYPES] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 25, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
+];
 const COLOR_MID: [i32; 8] = [0, 1, 1, 2, 2, 3, 4, 0];
 const COLOR_SMALL: [i32; 16] = [0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 0];
 const CANCEL_ITEM: i32 = 6;
@@ -71,7 +73,11 @@ fn polar(a: f32, r: f32) -> [f32; 3] {
 
 pub fn angle_from(o: [f32; 3], p: [f32; 3]) -> f32 {
     let (dx, dy) = (p[0] - o[0], p[1] - o[1]);
-    if dx == 0.0 && dy == 0.0 { PI / 2.0 } else { dy.atan2(dx) }
+    if dx == 0.0 && dy == 0.0 {
+        PI / 2.0
+    } else {
+        dy.atan2(dx)
+    }
 }
 
 // One extra-command slot (08 §5.1), filled by ECL op 111.
@@ -254,15 +260,27 @@ pub struct Laser {
 
 impl Laser {
     // Rotated-rectangle collision (08 §6.3 step 2 with the per-state size).
-    fn test(&self, p: &mut Player, size: [f32; 2], graze: bool, env: &GrazeEnv, rng: &mut crate::rng::Rng) -> u8 {
+    fn test(
+        &self,
+        p: &mut Player,
+        size: [f32; 2],
+        graze: bool,
+        env: &GrazeEnv,
+        rng: &mut crate::rng::Rng,
+    ) -> u8 {
         let len = self.head - self.tail;
         let centre = [self.origin[0] + self.tail + len / 2.0, self.origin[1]];
         let (dx, dy) = (p.pos[0] - self.origin[0], p.pos[1] - self.origin[1]);
         let (s, c) = (-self.angle).sin_cos();
-        let q = [dx * c - dy * s + self.origin[0], dx * s + dy * c + self.origin[1]];
+        let q = [
+            dx * c - dy * s + self.origin[0],
+            dx * s + dy * c + self.origin[1],
+        ];
         let half = [size[0] / 2.0, size[1] / 2.0];
         let ph = p.hit_half();
-        let over = |h: [f32; 2]| (q[0] - centre[0]).abs() <= h[0] + ph[0] && (q[1] - centre[1]).abs() <= h[1] + ph[1];
+        let over = |h: [f32; 2]| {
+            (q[0] - centre[0]).abs() <= h[0] + ph[0] && (q[1] - centre[1]).abs() <= h[1] + ph[1]
+        };
         if over(half) {
             if p.state == 0 {
                 p.die(rng);
@@ -309,7 +327,12 @@ impl BulletManager {
                 });
                 let h = vms[0].sprite_h;
                 let (hitbox, class) = hitbox_class(h, s);
-                Template { vms, hitbox, class, height: h as u8 }
+                Template {
+                    vms,
+                    hitbox,
+                    class,
+                    height: h as u8,
+                }
             })
             .collect();
         let mut bullets = vec![Bullet::default(); MAX_BULLETS + 1];
@@ -334,8 +357,12 @@ impl BulletManager {
     }
 
     pub fn register(ctx: &mut Ctx, player: PlayerRef) -> Result<Rc<RefCell<BulletManager>>> {
-        ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "etama.anm")?;
-        let b = Rc::new(RefCell::new(BulletManager::new(&mut ctx.anm, player.clone())));
+        ctx.anm
+            .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "etama.anm")?;
+        let b = Rc::new(RefCell::new(BulletManager::new(
+            &mut ctx.anm,
+            player.clone(),
+        )));
         player.borrow_mut().world = Rc::downgrade(&b);
         let t: task::TaskRef<Ctx> = b.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -371,11 +398,19 @@ impl BulletManager {
         let (c1, c2) = (d.count1 as i32, d.count2 as i32);
         let (a1, a2) = (d.angle1, d.angle2);
         let tau = 2.0 * PI;
-        let mut speed = if c2 < 2 { d.speed1 } else { d.speed1 - (d.speed1 - d.speed2) * j as f32 / c2 as f32 };
+        let mut speed = if c2 < 2 {
+            d.speed1
+        } else {
+            d.speed1 - (d.speed1 - d.speed2) * j as f32 / c2 as f32
+        };
         let ring = j as f32 * a2 + a1 + i as f32 * tau / c1 as f32;
         let angle = match d.aim_mode {
             0 | 1 => {
-                let mut k = if c1 % 2 == 0 { a2 / 2.0 + (i / 2) as f32 * a2 } else { ((i + 1) / 2) as f32 * a2 };
+                let mut k = if c1 % 2 == 0 {
+                    a2 / 2.0 + (i / 2) as f32 * a2
+                } else {
+                    ((i + 1) / 2) as f32 * a2
+                };
                 if i % 2 == 1 {
                     k = -k;
                 }
@@ -405,7 +440,15 @@ impl BulletManager {
     }
 
     // BulletMgr_PlaceBullet (08 §3.2).
-    fn place(&mut self, anm: &mut AnmManager, d: &BulletDesc, i: i32, j: i32, aim: f32, ppos: [f32; 3]) -> bool {
+    fn place(
+        &mut self,
+        anm: &mut AnmManager,
+        d: &BulletDesc,
+        i: i32,
+        j: i32,
+        aim: f32,
+        ppos: [f32; 3],
+    ) -> bool {
         let mut idx = self.cursor;
         let mut found = None;
         for _ in 0..MAX_BULLETS {
@@ -614,7 +657,10 @@ impl BulletManager {
         let st = &mut b.st;
         if b.active & 0x1 != 0 {
             if st.speedup.cur <= 16 {
-                b.vel = polar(b.angle, (5.0 - 5.0 * st.speedup.getf() / 16.0 + b.speed) * gs);
+                b.vel = polar(
+                    b.angle,
+                    (5.0 - 5.0 * st.speedup.getf() / 16.0 + b.speed) * gs,
+                );
             } else {
                 b.active &= !0x1;
             }
@@ -855,14 +901,23 @@ impl BulletManager {
     }
 
     // Laser spawn (08 §6.2).
-    pub fn spawn_laser(&mut self, anm: &mut AnmManager, d: &LaserDesc, ppos: [f32; 3]) -> Option<usize> {
+    pub fn spawn_laser(
+        &mut self,
+        anm: &mut AnmManager,
+        d: &LaserDesc,
+        ppos: [f32; 3],
+    ) -> Option<usize> {
         if self.cancel_guard != 0 && d.flags & 4 == 0 {
             return None;
         }
         let slot = self.lasers.iter().position(|l| !l.alive)?;
         let mut l = Laser {
             origin: d.origin,
-            angle: if d.fixed { d.angle } else { d.angle + angle_from(d.origin, ppos) },
+            angle: if d.fixed {
+                d.angle
+            } else {
+                d.angle + angle_from(d.origin, ppos)
+            },
             speed: d.speed,
             tail: d.tail,
             head: d.head,
@@ -882,8 +937,13 @@ impl BulletManager {
         anm.set_script(&mut l.body, ANM_SLOT, (d.kind as i32 + 10).max(0) as usize);
         let sp = l.body.sprite_index as i32 + d.colour as i32;
         l.body.set_sprite(anm, sp);
-        anm.set_script(&mut l.emitter, ANM_SLOT, 0x92 + COLOR_SMALL.get(d.colour as usize).copied().unwrap_or(0) as usize);
-        l.emitter.flags = (l.emitter.flags & !(3 << anmvm::F_BLEND_SHIFT)) | (1 << anmvm::F_BLEND_SHIFT);
+        anm.set_script(
+            &mut l.emitter,
+            ANM_SLOT,
+            0x92 + COLOR_SMALL.get(d.colour as usize).copied().unwrap_or(0) as usize,
+        );
+        l.emitter.flags =
+            (l.emitter.flags & !(3 << anmvm::F_BLEND_SHIFT)) | (1 << anmvm::F_BLEND_SHIFT);
         if l.state == 1 {
             l.cur_width = l.width;
         }
@@ -918,9 +978,17 @@ impl BulletManager {
         if l.state == 0 {
             let t = l.timer.cur;
             if l.flags & 1 != 0 {
-                l.body.color[anmvm::A] = if l.startup > 0 { (t * 255 / l.startup).min(255) as u8 } else { 255 };
+                l.body.color[anmvm::A] = if l.startup > 0 {
+                    (t * 255 / l.startup).min(255) as u8
+                } else {
+                    255
+                };
             } else {
-                l.cur_width = if t > l.startup - l.startup.min(30) { t as f32 * l.width / l.startup as f32 } else { 1.2 };
+                l.cur_width = if t > l.startup - l.startup.min(30) {
+                    t as f32 * l.width / l.startup as f32
+                } else {
+                    1.2
+                };
                 l.body.scale[0] = l.cur_width / 16.0;
                 size[0] = l.cur_width / 2.0;
             }
@@ -947,7 +1015,11 @@ impl BulletManager {
         if l.alive && l.state == 2 {
             let t = l.timer.cur;
             if l.flags & 1 != 0 {
-                l.body.color[anmvm::A] = if l.startup > 0 { (t * 255 / l.startup).min(255) as u8 } else { 255 };
+                l.body.color[anmvm::A] = if l.startup > 0 {
+                    (t * 255 / l.startup).min(255) as u8
+                } else {
+                    255
+                };
             } else if l.fade > 0 {
                 l.cur_width = l.width - t as f32 * l.width / l.fade as f32;
                 l.body.scale[0] = l.cur_width / 16.0;
@@ -974,7 +1046,14 @@ impl BulletManager {
     }
 
     // Laser part of the cancels (08 §7); `items` false skips the item line.
-    fn cancel_lasers(&mut self, anm: &mut AnmManager, p: &Player, mode: i32, items: bool, at_origin: bool) {
+    fn cancel_lasers(
+        &mut self,
+        anm: &mut AnmManager,
+        p: &Player,
+        mode: i32,
+        items: bool,
+        at_origin: bool,
+    ) {
         for k in 0..MAX_LASERS {
             let l = &mut self.lasers[k];
             if !l.alive || (l.flags & 4 != 0 && mode != 4) {
@@ -992,7 +1071,8 @@ impl BulletManager {
                     }
                     let mut d = tail;
                     while d < head {
-                        self.items.spawn(anm, p, [o[0] + c * d, o[1] + s * d, 0.0], CANCEL_ITEM, 1);
+                        self.items
+                            .spawn(anm, p, [o[0] + c * d, o[1] + s * d, 0.0], CANCEL_ITEM, 1);
                         d += 32.0;
                     }
                 }
@@ -1024,7 +1104,13 @@ impl BulletManager {
     }
 
     // BulletMgr_CancelBonus (08 §7): returns the sum of the popup values.
-    pub fn cancel_bonus(&mut self, anm: &mut AnmManager, p: &mut Player, max_value: i32, lasers_too: bool) -> i32 {
+    pub fn cancel_bonus(
+        &mut self,
+        anm: &mut AnmManager,
+        p: &mut Player,
+        max_value: i32,
+        lasers_too: bool,
+    ) -> i32 {
         let (mut v, mut sum) = (2000, 0);
         for i in 0..MAX_BULLETS {
             let b = &mut self.bullets[i];
@@ -1038,7 +1124,15 @@ impl BulletManager {
             } else {
                 self.items.spawn(anm, p, pos, CANCEL_ITEM, 1);
             }
-            crate::ascii::popup(pos, v, if v >= max_value { crate::item::POPUP_MAX } else { crate::item::POPUP_NORMAL });
+            crate::ascii::popup(
+                pos,
+                v,
+                if v >= max_value {
+                    crate::item::POPUP_MAX
+                } else {
+                    crate::item::POPUP_NORMAL
+                },
+            );
             sum += v;
             v = (v + 20).min(max_value);
         }
@@ -1064,9 +1158,18 @@ impl BulletManager {
 
     // ECL natives 12/14 (08 §7): toggle the "ghost" state of bullets whose flags match `mask`.
     // ECL natives 12 / 14 (08 §7): ghost toggle by VM0 tag; native 14 cycles 1 → 0 → 2 (fade-in) → 1.
-    pub fn toggle_ghost(&mut self, anm: &mut AnmManager, mask: u32, angle: f32, speed: f32, native14: bool) {
+    pub fn toggle_ghost(
+        &mut self,
+        anm: &mut AnmManager,
+        mask: u32,
+        angle: f32,
+        speed: f32,
+        native14: bool,
+    ) {
         let gs = anm.speed;
-        let set_blend = |vm: &mut AnmVm, b: u32| vm.flags = (vm.flags & !(3 << anmvm::F_BLEND_SHIFT)) | (b << anmvm::F_BLEND_SHIFT);
+        let set_blend = |vm: &mut AnmVm, b: u32| {
+            vm.flags = (vm.flags & !(3 << anmvm::F_BLEND_SHIFT)) | (b << anmvm::F_BLEND_SHIFT)
+        };
         for b in self.bullets[..MAX_BULLETS].iter_mut() {
             if b.free() || b.flags & mask == 0 {
                 continue;
@@ -1145,7 +1248,11 @@ impl BulletManager {
             let (s, c) = l.angle.sin_cos();
             let len = l.head - l.tail;
             let mid = l.tail + len / 2.0;
-            l.body.pos = [l.origin[0] + c * mid + 32.0, l.origin[1] + s * mid + 16.0, 0.0];
+            l.body.pos = [
+                l.origin[0] + c * mid + 32.0,
+                l.origin[1] + s * mid + 16.0,
+                0.0,
+            ];
             anm.draw_mode_z(gfx, &mut l.body, 2, 0.06);
             if (l.tail < 16.0 || l.speed == 0.0) && (l.hide_emitter == 0 || l.state != 0) {
                 let mut sc = (16.0 - l.tail) / 16.0 * l.width / 10.0;
@@ -1155,7 +1262,11 @@ impl BulletManager {
                 l.emitter.scale = [sc, sc];
                 l.emitter.color = l.body.color;
                 l.emitter.color[anmvm::A] = 255;
-                l.emitter.pos = [l.origin[0] + c * l.tail + 32.0, l.origin[1] + s * l.tail + 16.0, 0.0];
+                l.emitter.pos = [
+                    l.origin[0] + c * l.tail + 32.0,
+                    l.origin[1] + s * l.tail + 16.0,
+                    0.0,
+                ];
                 anm.draw_mode_z(gfx, &mut l.emitter, 2, 0.05);
             }
         }
@@ -1215,7 +1326,6 @@ impl Task<Ctx> for BulletManager {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1231,19 +1341,37 @@ mod tests {
     }
 
     fn desc(angle: f32, speed: f32, flags: u32, ex: &[ExCmd]) -> BulletDesc {
-        let mut d = BulletDesc { aim_mode: 3, count1: 1, count2: 1, angle1: angle, speed1: speed, flags, origin: [192.0, 224.0, 0.0], ..BulletDesc::default() };
+        let mut d = BulletDesc {
+            aim_mode: 3,
+            count1: 1,
+            count2: 1,
+            angle1: angle,
+            speed1: speed,
+            flags,
+            origin: [192.0, 224.0, 0.0],
+            ..BulletDesc::default()
+        };
         d.ex[..ex.len()].copy_from_slice(ex);
         d
     }
 
     fn cmd(cmd: u32, e: f32, f: f32, c: i32, d: i32) -> ExCmd {
-        ExCmd { e, f, c, d, cmd, chain: 0 }
+        ExCmd {
+            e,
+            f,
+            c,
+            d,
+            cmd,
+            chain: 0,
+        }
     }
 
     fn spawn(anm: &mut AnmManager, b: &mut BulletManager, d: &BulletDesc) -> usize {
         let before: Vec<bool> = b.bullets.iter().map(Bullet::free).collect();
         b.spawn_pattern(anm, d, [-1000.0, -1000.0, 0.0]);
-        (0..MAX_BULLETS).find(|&i| before[i] && !b.bullets[i].free()).expect("bullet placed")
+        (0..MAX_BULLETS)
+            .find(|&i| before[i] && !b.bullets[i].free())
+            .expect("bullet placed")
     }
 
     fn speed(b: &Bullet) -> f32 {
@@ -1253,14 +1381,27 @@ mod tests {
     #[test]
     fn ring_pattern_and_visit_order() {
         let (mut anm, mut b) = mgr();
-        let d = BulletDesc { aim_mode: 3, count1: 4, count2: 1, speed1: 2.0, origin: [100.0, 100.0, 0.0], ..BulletDesc::default() };
+        let d = BulletDesc {
+            aim_mode: 3,
+            count1: 4,
+            count2: 1,
+            speed1: 2.0,
+            origin: [100.0, 100.0, 0.0],
+            ..BulletDesc::default()
+        };
         b.spawn_pattern(&mut anm, &d, [0.0; 3]);
         let a: Vec<f32> = b.live_bullets().map(|x| x.angle).collect();
         assert_eq!(a.len(), 4);
         for (got, want) in a.iter().zip([0.0, PI / 2.0, PI, -PI / 2.0]) {
-            assert!((anmvm::wrap_add(got - want, 0.0)).abs() < 1e-5, "{got} vs {want}");
+            assert!(
+                (anmvm::wrap_add(got - want, 0.0)).abs() < 1e-5,
+                "{got} vs {want}"
+            );
         }
-        assert!(b.live_bullets().all(|x| (speed(x) - 2.0).abs() < 1e-5 && x.pos[2] == 0.1));
+        assert!(
+            b.live_bullets()
+                .all(|x| (speed(x) - 2.0).abs() < 1e-5 && x.pos[2] == 0.1)
+        );
         b.step(&mut anm);
         assert_eq!(b.live, 4);
         assert_eq!(b.lists[5].len(), 4);
@@ -1269,7 +1410,11 @@ mod tests {
     #[test]
     fn speed_up_command() {
         let (mut anm, mut b) = mgr();
-        let i = spawn(&mut anm, &mut b, &desc(0.0, 1.0, 1, &[cmd(1, 0.0, 0.0, 0, 0)]));
+        let i = spawn(
+            &mut anm,
+            &mut b,
+            &desc(0.0, 1.0, 1, &[cmd(1, 0.0, 0.0, 0, 0)]),
+        );
         assert_eq!(b.bullets[i].active, 1);
         b.step(&mut anm);
         assert!((speed(&b.bullets[i]) - 6.0).abs() < 1e-5);
@@ -1287,23 +1432,39 @@ mod tests {
     #[test]
     fn accel_command() {
         let (mut anm, mut b) = mgr();
-        let i = spawn(&mut anm, &mut b, &desc(0.0, 1.0, 0x10, &[cmd(0x10, 0.1, PI / 2.0, 10, 0)]));
+        let i = spawn(
+            &mut anm,
+            &mut b,
+            &desc(0.0, 1.0, 0x10, &[cmd(0x10, 0.1, PI / 2.0, 10, 0)]),
+        );
         for _ in 0..12 {
             b.step(&mut anm);
         }
         let x = &b.bullets[i];
         assert_eq!(x.active, 0);
-        assert!((x.vel[0] - 1.0).abs() < 1e-4 && (x.vel[1] - 1.0).abs() < 1e-4, "{:?}", x.vel);
+        assert!(
+            (x.vel[0] - 1.0).abs() < 1e-4 && (x.vel[1] - 1.0).abs() < 1e-4,
+            "{:?}",
+            x.vel
+        );
         assert!((x.angle - PI / 4.0).abs() < 1e-4);
         assert_eq!(x.speed, 1.0);
-        let j = spawn(&mut anm, &mut b, &desc(0.5, 1.0, 0x10, &[cmd(0x10, 0.1, -999.0, 1, 0)]));
+        let j = spawn(
+            &mut anm,
+            &mut b,
+            &desc(0.5, 1.0, 0x10, &[cmd(0x10, 0.1, -999.0, 1, 0)]),
+        );
         assert!((b.bullets[j].st.accel_angle - 0.5).abs() < 1e-6);
     }
 
     #[test]
     fn angular_command() {
         let (mut anm, mut b) = mgr();
-        let i = spawn(&mut anm, &mut b, &desc(0.0, 1.0, 0x20, &[cmd(0x20, 0.5, 0.1, 4, 0)]));
+        let i = spawn(
+            &mut anm,
+            &mut b,
+            &desc(0.0, 1.0, 0x20, &[cmd(0x20, 0.5, 0.1, 4, 0)]),
+        );
         for _ in 0..6 {
             b.step(&mut anm);
         }
@@ -1315,7 +1476,11 @@ mod tests {
     #[test]
     fn redirect_commands() {
         let (mut anm, mut b) = mgr();
-        let i = spawn(&mut anm, &mut b, &desc(0.0, 2.0, 0x100, &[cmd(0x100, 1.0, 3.0, 4, 1)]));
+        let i = spawn(
+            &mut anm,
+            &mut b,
+            &desc(0.0, 2.0, 0x100, &[cmd(0x100, 1.0, 3.0, 4, 1)]),
+        );
         b.step(&mut anm);
         assert!((speed(&b.bullets[i]) - 2.0).abs() < 1e-5);
         b.step(&mut anm);
@@ -1326,7 +1491,11 @@ mod tests {
         let x = &b.bullets[i];
         assert_eq!(x.active, 0);
         assert_eq!((x.angle, x.speed), (1.0, 3.0));
-        let j = spawn(&mut anm, &mut b, &desc(0.5, 2.0, 0x40, &[cmd(0x40, 1.0, -1000.0, 0, 2)]));
+        let j = spawn(
+            &mut anm,
+            &mut b,
+            &desc(0.5, 2.0, 0x40, &[cmd(0x40, 1.0, -1000.0, 0, 2)]),
+        );
         b.step(&mut anm);
         b.step(&mut anm);
         assert!((b.bullets[j].angle - 2.5).abs() < 1e-5 && b.bullets[j].speed == 2.0);
@@ -1343,19 +1512,37 @@ mod tests {
         assert!(b.bullets[i].pos[0] < 0.0);
         b.step(&mut anm);
         let x = &b.bullets[i];
-        assert!(x.angle.abs() < 1e-5 && x.speed == 1.5 && x.active == 0, "{} {}", x.angle, x.speed);
-        let mut d = desc(PI, 4.0, 0x2000 | 0x400000, &[cmd(0x2000, 0.0, 0.0, 5, 0), cmd(0x400000, 0.0, 0.0, 3, 0)]);
+        assert!(
+            x.angle.abs() < 1e-5 && x.speed == 1.5 && x.active == 0,
+            "{} {}",
+            x.angle,
+            x.speed
+        );
+        let mut d = desc(
+            PI,
+            4.0,
+            0x2000 | 0x400000,
+            &[cmd(0x2000, 0.0, 0.0, 5, 0), cmd(0x400000, 0.0, 0.0, 3, 0)],
+        );
         d.origin = [2.0, 200.0, 0.0];
         let j = spawn(&mut anm, &mut b, &d);
         b.step(&mut anm);
         b.step(&mut anm);
-        assert!((b.bullets[j].pos[0] - (2.0 - 8.0 + 384.0)).abs() < 1e-4, "{}", b.bullets[j].pos[0]);
+        assert!(
+            (b.bullets[j].pos[0] - (2.0 - 8.0 + 384.0)).abs() < 1e-4,
+            "{}",
+            b.bullets[j].pos[0]
+        );
     }
 
     #[test]
     fn chaining_and_flag_gating() {
         let (mut anm, mut b) = mgr();
-        let ex = [cmd(0x10, 0.0, 0.0, 1, 0), cmd(0x20000, 0.0, 0.0, 3, 0), cmd(0x100, 2.0, 1.0, 0, 1)];
+        let ex = [
+            cmd(0x10, 0.0, 0.0, 1, 0),
+            cmd(0x20000, 0.0, 0.0, 3, 0),
+            cmd(0x100, 2.0, 1.0, 0, 1),
+        ];
         let i = spawn(&mut anm, &mut b, &desc(0.0, 1.0, 0x20000 | 0x100, &ex));
         assert_eq!((b.bullets[i].active, b.bullets[i].ex_index), (0x20000, 2));
         for _ in 0..4 {
@@ -1375,12 +1562,25 @@ mod tests {
     fn sub_pattern_command() {
         let (mut anm, mut b) = mgr();
         let a = (3 << 24) | (2 << 16) | (5 << 8);
-        let ex = [cmd(0x1000000, 3.0, 1.0, a | (1 << 31), 4), ExCmd { e: 0.25, f: 0.0, c: 1, d: 0, cmd: 0, chain: 0 }];
+        let ex = [
+            cmd(0x1000000, 3.0, 1.0, a | (1 << 31), 4),
+            ExCmd {
+                e: 0.25,
+                f: 0.0,
+                c: 1,
+                d: 0,
+                cmd: 0,
+                chain: 0,
+            },
+        ];
         let i = spawn(&mut anm, &mut b, &desc(0.0, 1.0, 0x1000000, &ex));
         assert_eq!(b.bullets[i].state, 5);
         let subs: Vec<&Bullet> = b.live_bullets().filter(|x| x.state == 1).collect();
         assert_eq!(subs.len(), 4);
-        assert!(subs.iter().all(|x| x.colour == 5 && x.speed == 3.0 && x.pos[0] == 192.0));
+        assert!(
+            subs.iter()
+                .all(|x| x.colour == 5 && x.speed == 3.0 && x.pos[0] == 192.0)
+        );
         assert!((subs[1].angle - (0.25 + PI / 2.0)).abs() < 1e-5);
     }
 
@@ -1407,7 +1607,14 @@ mod tests {
     #[test]
     fn cancel_to_items() {
         let (mut anm, mut b) = mgr();
-        let d = BulletDesc { aim_mode: 3, count1: 5, count2: 1, speed1: 1.0, origin: [100.0, 100.0, 0.0], ..BulletDesc::default() };
+        let d = BulletDesc {
+            aim_mode: 3,
+            count1: 5,
+            count2: 1,
+            speed1: 1.0,
+            origin: [100.0, 100.0, 0.0],
+            ..BulletDesc::default()
+        };
         b.spawn_pattern(&mut anm, &d, [0.0; 3]);
         let pl = b.player.clone();
         b.cancel_all(&mut anm, &mut pl.borrow_mut(), 1);
@@ -1424,14 +1631,31 @@ mod tests {
         assert_eq!(b.items.live().count(), 5);
 
         let (mut anm, mut b) = mgr();
-        b.spawn_pattern(&mut anm, &BulletDesc { count1: 3, ..d.clone() }, [0.0; 3]);
+        b.spawn_pattern(
+            &mut anm,
+            &BulletDesc {
+                count1: 3,
+                ..d.clone()
+            },
+            [0.0; 3],
+        );
         let pl = b.player.clone();
         let sum = b.cancel_bonus(&mut anm, &mut pl.borrow_mut(), 2030, false);
         assert_eq!(sum, 2000 + 2020 + 2030);
         assert!(b.live_bullets().all(|x| x.state == 5));
 
         let (mut anm, mut b) = mgr();
-        let l = LaserDesc { fixed: true, head: 100.0, max_len: 200.0, width: 16.0, startup: 0, duration: 100, fade: 10, origin: [50.0, 50.0, 0.0], ..LaserDesc::default() };
+        let l = LaserDesc {
+            fixed: true,
+            head: 100.0,
+            max_len: 200.0,
+            width: 16.0,
+            startup: 0,
+            duration: 100,
+            fade: 10,
+            origin: [50.0, 50.0, 0.0],
+            ..LaserDesc::default()
+        };
         let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
         b.cancel_all(&mut anm, &mut pl.borrow_mut(), 1);
         assert_eq!(b.lasers[k].state, 2);
@@ -1443,7 +1667,18 @@ mod tests {
     #[test]
     fn laser_lifecycle() {
         let (mut anm, mut b) = mgr();
-        let l = LaserDesc { fixed: true, speed: 4.0, head: 0.0, max_len: 64.0, width: 16.0, startup: 10, duration: 20, fade: 5, origin: [50.0, 50.0, 0.0], ..LaserDesc::default() };
+        let l = LaserDesc {
+            fixed: true,
+            speed: 4.0,
+            head: 0.0,
+            max_len: 64.0,
+            width: 16.0,
+            startup: 10,
+            duration: 20,
+            fade: 5,
+            origin: [50.0, 50.0, 0.0],
+            ..LaserDesc::default()
+        };
         let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
         assert_eq!(b.lasers[k].state, 0);
         for _ in 0..10 {
@@ -1469,23 +1704,46 @@ mod tests {
         let (mut anm, mut b) = mgr();
         let pl = b.player.clone();
         pl.borrow_mut().stats.power = 128.0;
-        let k = b.items.spawn(&mut anm, &pl.borrow(), [100.0, 100.0, 0.0], 0, 0).unwrap();
+        let k = b
+            .items
+            .spawn(&mut anm, &pl.borrow(), [100.0, 100.0, 0.0], 0, 0)
+            .unwrap();
         assert_eq!(b.items.items[k].kind, item::CONVERTED);
-        let k = b.items.spawn(&mut anm, &pl.borrow(), [100.0, 100.0, 0.0], 10, 0).unwrap();
-        assert_eq!((b.items.items[k].kind, b.items.items[k].state), (item::TIME_ORB, 5));
-        assert!(b.items.spawn(&mut anm, &pl.borrow(), [500.0, 100.0, 0.0], 1, 0).is_none());
+        let k = b
+            .items
+            .spawn(&mut anm, &pl.borrow(), [100.0, 100.0, 0.0], 10, 0)
+            .unwrap();
+        assert_eq!(
+            (b.items.items[k].kind, b.items.items[k].state),
+            (item::TIME_ORB, 5)
+        );
+        assert!(
+            b.items
+                .spawn(&mut anm, &pl.borrow(), [500.0, 100.0, 0.0], 1, 0)
+                .is_none()
+        );
 
         let (mut anm, mut b) = mgr();
         let pl = b.player.clone();
         pl.borrow_mut().pos = [100.0, 300.0, 0.0];
-        b.items.spawn(&mut anm, &pl.borrow(), [100.0, 100.0, 0.0], item::POINT as i32, 1);
+        b.items.spawn(
+            &mut anm,
+            &pl.borrow(),
+            [100.0, 100.0, 0.0],
+            item::POINT as i32,
+            1,
+        );
         for _ in 0..40 {
             b.step(&mut anm);
         }
         let p = pl.borrow();
         assert_eq!(b.items.collected, 1);
         let line = p.sht.poc_line;
-        assert!(p.stats.score() > 0 && p.stats.point_items == 1, "line {line} score {}", p.stats.score());
+        assert!(
+            p.stats.score() > 0 && p.stats.point_items == 1,
+            "line {line} score {}",
+            p.stats.score()
+        );
     }
 }
 

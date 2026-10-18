@@ -67,19 +67,35 @@ impl Default for AnmManager {
 }
 
 impl AnmManager {
-    pub fn load(&mut self, gfx: &mut Gfx, archive: &Archive, slot: usize, name: &str) -> Result<()> {
+    pub fn load(
+        &mut self,
+        gfx: &mut Gfx,
+        archive: &Archive,
+        slot: usize,
+        name: &str,
+    ) -> Result<()> {
         ensure!(slot < SLOTS, "anm slot {slot} out of range");
         let chunks = anm::parse(&archive.read(name)?)?;
         self.unload(gfx, slot);
         self.insert(slot, name, chunks, |c| match &c.texture {
             Some(t) => gfx.create_texture(t.width, t.height, &t.rgba),
             // '@' entries are blank render targets (text / capture).
-            None => gfx.create_texture(c.width.max(1), c.height.max(1), &vec![0; (c.width.max(1) * c.height.max(1) * 4) as usize]),
+            None => gfx.create_texture(
+                c.width.max(1),
+                c.height.max(1),
+                &vec![0; (c.width.max(1) * c.height.max(1) * 4) as usize],
+            ),
         });
         Ok(())
     }
 
-    pub fn insert(&mut self, slot: usize, name: &str, chunks: Vec<anm::Chunk>, mut make_tex: impl FnMut(&anm::Chunk) -> TextureId) {
+    pub fn insert(
+        &mut self,
+        slot: usize,
+        name: &str,
+        chunks: Vec<anm::Chunk>,
+        mut make_tex: impl FnMut(&anm::Chunk) -> TextureId,
+    ) {
         let (mut sprites, mut scripts, mut textures) = (Vec::new(), Vec::new(), Vec::new());
         for c in chunks {
             let tex = make_tex(&c);
@@ -93,7 +109,12 @@ impl AnmManager {
             }));
             scripts.extend(c.scripts);
         }
-        self.slots[slot] = Some(LoadedAnm { name: name.to_string(), sprites, scripts, textures });
+        self.slots[slot] = Some(LoadedAnm {
+            name: name.to_string(),
+            sprites,
+            scripts,
+            textures,
+        });
     }
 
     pub fn unload(&mut self, gfx: &mut Gfx, slot: usize) {
@@ -142,7 +163,10 @@ impl AnmManager {
 
     pub fn start_script(&mut self, vm: &mut AnmVm, slot: usize, index: usize) {
         if self.script(slot, index).is_none() {
-            *vm = AnmVm { script_index: 0, ..AnmVm::default() };
+            *vm = AnmVm {
+                script_index: 0,
+                ..AnmVm::default()
+            };
             return;
         }
         vm.init();
@@ -165,7 +189,11 @@ impl AnmManager {
     fn update_world_matrix(vm: &mut AnmVm) {
         use anmvm::*;
         if vm.flags & (F_ROT_DIRTY | F_SCALE_DIRTY) != 0 && vm.flags & F_FREEZE_MATRIX == 0 {
-            let mut m = Mat4::scale(vm.sprite_w / 256.0 * vm.scale[0], vm.sprite_h / 256.0 * vm.scale[1], 1.0);
+            let mut m = Mat4::scale(
+                vm.sprite_w / 256.0 * vm.scale[0],
+                vm.sprite_h / 256.0 * vm.scale[1],
+                1.0,
+            );
             let [rx, ry, rz] = vm.rotation;
             if rx != 0.0 {
                 m = m.mul(&Mat4::rotation_x(rx));
@@ -183,7 +211,11 @@ impl AnmManager {
 
     fn vm_color(&self, vm: &AnmVm) -> [u8; 4] {
         use anmvm::*;
-        let c = if vm.flags & F_COLOR2 != 0 { vm.color2 } else { vm.color };
+        let c = if vm.flags & F_COLOR2 != 0 {
+            vm.color2
+        } else {
+            vm.color
+        };
         self.tinted([c[R], c[G], c[B], c[A]])
     }
 
@@ -197,7 +229,9 @@ impl AnmManager {
         self.stage_tint = Some(match self.stage_tint {
             Some(o) => {
                 let (a, b) = (o.to_le_bytes(), c.to_le_bytes());
-                u32::from_le_bytes(std::array::from_fn(|k| ((a[k] as u32 + b[k] as u32) / 2) as u8))
+                u32::from_le_bytes(std::array::from_fn(|k| {
+                    ((a[k] as u32 + b[k] as u32) / 2) as u8
+                }))
             }
             None => c,
         });
@@ -229,22 +263,38 @@ impl AnmManager {
     // AnmManager_Draw3DWorld: real 3D quad through the given camera, with vertex fog.
     pub fn draw_3d_world(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, cam: &Camera, fog: Option<Fog>) {
         use anmvm::*;
-        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED) || vm.color[A] == 0 || !vm.has_sprite {
+        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
+            || vm.color[A] == 0
+            || !vm.has_sprite
+        {
             return;
         }
-        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else { return };
+        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+            return;
+        };
         Self::update_world_matrix(vm);
-        let (hw, hh) = ((vm.sprite_w * vm.scale[0] / 2.0).abs(), (vm.sprite_h * vm.scale[1] / 2.0).abs());
+        let (hw, hh) = (
+            (vm.sprite_w * vm.scale[0] / 2.0).abs(),
+            (vm.sprite_h * vm.scale[1] / 2.0).abs(),
+        );
         let ax = if vm.flags & F_ANCHOR_X != 0 { hw } else { 0.0 };
         let ay = if vm.flags & F_ANCHOR_Y != 0 { hh } else { 0.0 };
         let mut w = vm.world_matrix;
-        w.0[3] = [vm.pos[0] + ax + self.screen_offset[0], vm.pos[1] + ay + self.screen_offset[1], vm.pos[2], 1.0];
+        w.0[3] = [
+            vm.pos[0] + ax + self.screen_offset[0],
+            vm.pos[1] + ay + self.screen_offset[1],
+            vm.pos[2],
+            1.0,
+        ];
         // Texture matrix offset is re-uploaded only for a new sprite or a non-zero u offset (v-only scroll quirk).
         let key = (vm.anm_slot, vm.sprite_index);
         // The texture is re-bound only on the same cache miss, so a 2D draw in between can leave another bound.
         let (off, tex) = match (self.last_tex_matrix, self.bound_tex) {
             (Some((k, o)), Some(t)) if k == key && vm.uv_off[0] == 0.0 => (o, t),
-            _ => ([spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]], spr.tex),
+            _ => (
+                [spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]],
+                spr.tex,
+            ),
         };
         self.bound_tex = Some(tex);
         self.last_tex_matrix = Some((key, off));
@@ -252,18 +302,33 @@ impl AnmManager {
         let color = self.vm_color(vm);
         let vp = gfx.viewport();
         let vproj = cam.view_proj();
-        let v = [[-128.0, -128.0, 0.0, 0.0], [128.0, -128.0, 1.0, 0.0], [-128.0, 128.0, 0.0, 1.0], [128.0, 128.0, 1.0, 1.0]].map(|[x, y, u, t]| {
+        let v = [
+            [-128.0, -128.0, 0.0, 0.0],
+            [128.0, -128.0, 1.0, 0.0],
+            [-128.0, 128.0, 0.0, 1.0],
+            [128.0, 128.0, 1.0, 1.0],
+        ]
+        .map(|[x, y, u, t]| {
             let p = w.transform([x, y, 0.0]);
             let p = [p[0], p[1], p[2]];
             let (fog_color, f) = match fog {
                 Some(fg) => {
                     let z = cam.view.transform(p)[2];
                     let [r, g, b] = fg.color;
-                    ([r, g, b, 255], ((fg.far - z) / (fg.far - fg.near)).clamp(0.0, 1.0))
+                    (
+                        [r, g, b, 255],
+                        ((fg.far - z) / (fg.far - fg.near)).clamp(0.0, 1.0),
+                    )
                 }
                 None => ([0; 4], 1.0),
             };
-            Vertex { pos: gfx::clip_in_viewport(vproj.transform(p), vp), uv: [off[0] + u * su, off[1] + t * sv], color, fog_color, fog: f }
+            Vertex {
+                pos: gfx::clip_in_viewport(vproj.transform(p), vp),
+                uv: [off[0] + u * su, off[1] + t * sv],
+                color,
+                fog_color,
+                fog: f,
+            }
         });
         let blend = self.blend_for(vm);
         gfx.strip(tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
@@ -273,11 +338,19 @@ impl AnmManager {
     pub fn draw_mode_z(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, mode: i32, z: f32) {
         use anmvm::*;
         let alpha = vm.color[A];
-        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED) || alpha == 0 || !vm.has_sprite {
+        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
+            || alpha == 0
+            || !vm.has_sprite
+        {
             return;
         }
-        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else { return };
-        let (hw, hh) = (vm.sprite_w * vm.scale[0] / 2.0, vm.sprite_h * vm.scale[1] / 2.0);
+        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+            return;
+        };
+        let (hw, hh) = (
+            vm.sprite_w * vm.scale[0] / 2.0,
+            vm.sprite_h * vm.scale[1] / 2.0,
+        );
         let [px, py, pz] = vm.pos;
         let ax = if vm.flags & F_ANCHOR_X != 0 { hw } else { 0.0 };
         let ay = if vm.flags & F_ANCHOR_Y != 0 { hh } else { 0.0 };
@@ -288,7 +361,8 @@ impl AnmManager {
         };
         let rotated = || {
             let (s, c) = vm.rotation[2].sin_cos();
-            [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)].map(|(dx, dy)| [dx * c - dy * s + px + ax, dx * s + dy * c + py + ay])
+            [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
+                .map(|(dx, dy)| [dx * c - dy * s + px + ax, dx * s + dy * c + py + ay])
         };
         let (corners, snap) = match mode {
             0 => (axis_aligned(), true),
@@ -306,7 +380,13 @@ impl AnmManager {
                     (true, Some(c)) => c,
                     _ => Camera::set_2d(vp),
                 };
-                let corners = [[-128.0, -128.0], [128.0, -128.0], [-128.0, 128.0], [128.0, 128.0]].map(|[x, y]| {
+                let corners = [
+                    [-128.0, -128.0],
+                    [128.0, -128.0],
+                    [-128.0, 128.0],
+                    [128.0, 128.0],
+                ]
+                .map(|[x, y]| {
                     let p = w.transform([x, y, 0.0]);
                     let s = cam.project([p[0], p[1], p[2]], vp);
                     [s[0], s[1]]
@@ -325,8 +405,12 @@ impl AnmManager {
             [x + 0.5, y + 0.5]
         });
         let vp = gfx.viewport();
-        let (minx, maxx) = corners.iter().fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c[0]), b.max(c[0])));
-        let (miny, maxy) = corners.iter().fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c[1]), b.max(c[1])));
+        let (minx, maxx) = corners
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c[0]), b.max(c[0])));
+        let (miny, maxy) = corners
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c[1]), b.max(c[1])));
         if maxx < vp.x || minx > vp.x + vp.w || maxy < vp.y || miny > vp.y + vp.h {
             return;
         }
@@ -335,7 +419,8 @@ impl AnmManager {
         let rgba = self.vm_color(vm);
         let blend = self.blend_for(vm);
         let uv = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
-        let v = std::array::from_fn(|i| Vertex::screen(corners[i][0], corners[i][1], z, uv[i], rgba));
+        let v =
+            std::array::from_fn(|i| Vertex::screen(corners[i][0], corners[i][1], z, uv[i], rgba));
         self.bound_tex = Some(spr.tex);
         gfx.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
     }

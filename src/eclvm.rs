@@ -37,7 +37,9 @@ fn run_enemy(m: &mut EnemyManager, anm: &mut AnmManager, e: &mut Enemy, idx: usi
         return -1;
     }
     for k in 0..4 {
-        let Some(mut t) = e.threads[k].take() else { continue };
+        let Some(mut t) = e.threads[k].take() else {
+            continue;
+        };
         e.running_thread = Some(k);
         e.kill_running_thread = false;
         let r = Exec { m, anm, e, idx }.run_thread(&mut t);
@@ -140,7 +142,13 @@ fn flt_ref(id: i32) -> Option<FRef> {
 }
 
 // Variable getters (07 §6) evaluated on any enemy/context (also used for boss queries, ops 86/87).
-pub(crate) fn var_f(m: &mut EnemyManager, anm: &mut AnmManager, e: &Enemy, c: &Context, lit: f32) -> f32 {
+pub(crate) fn var_f(
+    m: &mut EnemyManager,
+    anm: &mut AnmManager,
+    e: &Enemy,
+    c: &Context,
+    lit: f32,
+) -> f32 {
     let id = lit as i32;
     if let Some(r) = flt_ref(id) {
         return read_f(m, e, c, &r);
@@ -169,7 +177,13 @@ pub(crate) fn var_f(m: &mut EnemyManager, anm: &mut AnmManager, e: &Enemy, c: &C
     }
 }
 
-pub(crate) fn var_i(m: &mut EnemyManager, anm: &mut AnmManager, e: &Enemy, c: &Context, id: i32) -> i32 {
+pub(crate) fn var_i(
+    m: &mut EnemyManager,
+    anm: &mut AnmManager,
+    e: &Enemy,
+    c: &Context,
+    id: i32,
+) -> i32 {
     if let Some(r) = int_ref(id) {
         return read_i(m, e, c, &r);
     }
@@ -180,7 +194,13 @@ pub(crate) fn var_i(m: &mut EnemyManager, anm: &mut AnmManager, e: &Enemy, c: &C
         10098 => 0,
         10100 => m.g.spell.as_ref().map_or(0, |s| s.frames),
         10079..=10082 => id,
-        _ if flt_ref(id).is_some() || matches!(id, 10032 | 10034 | 10035 | 10048 | 10050 | 10052 | 10083..=10091 | 10096 | 10097 | 10099) => {
+        _ if flt_ref(id).is_some()
+            || matches!(
+                id,
+                10032 | 10034 | 10035 | 10048 | 10050 | 10052 | 10083
+                    ..=10091 | 10096 | 10097 | 10099
+            ) =>
+        {
             let v = var_f(m, anm, e, c, id as f32);
             match id {
                 10032 | 10034 => v as i64 as i32,
@@ -250,11 +270,13 @@ fn lerp_f(a: f32, b: f32, rank: i32) -> f32 {
 }
 
 fn rd_u32(b: &[u8], o: usize) -> u32 {
-    b.get(o..o + 4).map_or(0, |s| u32::from_le_bytes(s.try_into().unwrap()))
+    b.get(o..o + 4)
+        .map_or(0, |s| u32::from_le_bytes(s.try_into().unwrap()))
 }
 
 fn rd_i16(b: &[u8], o: usize) -> i16 {
-    b.get(o..o + 2).map_or(0, |s| i16::from_le_bytes(s.try_into().unwrap()))
+    b.get(o..o + 2)
+        .map_or(0, |s| i16::from_le_bytes(s.try_into().unwrap()))
 }
 
 impl Exec<'_> {
@@ -272,7 +294,9 @@ impl Exec<'_> {
                     t.ctx.clock.dec(gs);
                     break 'outer;
                 }
-                let Some(ins) = self.m.ecl.ins(t.ctx.ip) else { break 'outer };
+                let Some(ins) = self.m.ecl.ins(t.ctx.ip) else {
+                    break 'outer;
+                };
                 if ins.op == -1 || t.ctx.clock.cur != ins.time {
                     break 'outer;
                 }
@@ -339,20 +363,36 @@ impl Exec<'_> {
 
     fn ai(&mut self, t: &Thread, ins: &Ins, k: usize) -> i32 {
         let raw = self.raw(ins, k) as i32;
-        if ins.mask & (1 << k) != 0 { var_i(self.m, self.anm, self.e, &t.ctx, raw) } else { raw }
+        if ins.mask & (1 << k) != 0 {
+            var_i(self.m, self.anm, self.e, &t.ctx, raw)
+        } else {
+            raw
+        }
     }
 
     fn af(&mut self, t: &Thread, ins: &Ins, k: usize) -> f32 {
         let raw = f32::from_bits(self.raw(ins, k));
-        if ins.mask & (1 << k) != 0 { var_f(self.m, self.anm, self.e, &t.ctx, raw) } else { raw }
+        if ins.mask & (1 << k) != 0 {
+            var_f(self.m, self.anm, self.e, &t.ctx, raw)
+        } else {
+            raw
+        }
     }
 
     fn vi(&mut self, t: &Thread, id: i32, var: bool) -> i32 {
-        if var { var_i(self.m, self.anm, self.e, &t.ctx, id) } else { id }
+        if var {
+            var_i(self.m, self.anm, self.e, &t.ctx, id)
+        } else {
+            id
+        }
     }
 
     fn vf(&mut self, t: &Thread, v: f32, var: bool) -> f32 {
-        if var { var_f(self.m, self.anm, self.e, &t.ctx, v) } else { v }
+        if var {
+            var_f(self.m, self.anm, self.e, &t.ctx, v)
+        } else {
+            v
+        }
     }
 
     fn write_i(&mut self, t: &mut Thread, r: IRef, v: i32) {
@@ -478,12 +518,24 @@ impl Exec<'_> {
             if rng.range(4) == 0 {
                 a = rng.next_signed() * PI;
             } else if x <= px {
-                a = if x - (px - 384.0) <= px - x { wrap(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0) } else { rng.next_f32() * (PI / 2.0) - PI / 4.0 };
+                a = if x - (px - 384.0) <= px - x {
+                    wrap(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0)
+                } else {
+                    rng.next_f32() * (PI / 2.0) - PI / 4.0
+                };
             } else {
-                a = if (px + 384.0) - x <= x - px { wrap(rng.next_f32() * (PI / 2.0) - PI / 4.0) } else { wrap(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0) };
+                a = if (px + 384.0) - x <= x - px {
+                    wrap(rng.next_f32() * (PI / 2.0) - PI / 4.0)
+                } else {
+                    wrap(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0)
+                };
             }
         } else {
-            a = if x <= px { rng.next_f32() * (PI / 2.0) - PI / 4.0 } else { wrap(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0) };
+            a = if x <= px {
+                rng.next_f32() * (PI / 2.0) - PI / 4.0
+            } else {
+                wrap(rng.next_f32() * (PI / 2.0) + 3.0 * PI / 4.0)
+            };
             if x < x0 + 96.0 {
                 if a > PI / 2.0 {
                     a = PI - a;
@@ -517,7 +569,9 @@ impl Exec<'_> {
 
     fn start_sub(&mut self, k: usize, script: i32) {
         let slot = self.e.anm_slot();
-        let Some(vm) = self.e.sub_vms.get_mut(k) else { return };
+        let Some(vm) = self.e.sub_vms.get_mut(k) else {
+            return;
+        };
         if script < 0 {
             *vm = AnmVm::default();
         } else {
@@ -530,7 +584,11 @@ impl Exec<'_> {
         let op = ins.op;
         let sub = self.ai(t, ins, 0);
         let (x, y) = (self.af(t, ins, 1), self.af(t, ins, 2));
-        let (z, base) = if op >= 93 { (self.af(t, ins, 3), 4) } else { (0.0, 3) };
+        let (z, base) = if op >= 93 {
+            (self.af(t, ins, 3), 4)
+        } else {
+            (0.0, 3)
+        };
         let life = self.ai(t, ins, base);
         let item = self.ai(t, ins, base + 1);
         let score = self.ai(t, ins, base + 2);
@@ -546,7 +604,9 @@ impl Exec<'_> {
             93 => [x, y, z],
             _ => [x, y, 0.0],
         };
-        let Some(ci) = self.m.spawn_prepare(sub, pos, life, false) else { return };
+        let Some(ci) = self.m.spawn_prepare(sub, pos, life, false) else {
+            return;
+        };
         if chained {
             crate::sound::play_at(crate::sound::OPTION, self.e.final_pos[0]);
         }
@@ -682,13 +742,19 @@ impl Exec<'_> {
         };
         d.origin = add3(self.e.final_pos, self.e.shot_offset);
         self.e.laser_desc = d.clone();
-        let id = self.m.bullets.borrow_mut().spawn_laser(self.anm, &d, self.m.g.player);
+        let id = self
+            .m
+            .bullets
+            .borrow_mut()
+            .spawn_laser(self.anm, &d, self.m.g.player);
         let cur = self.e.laser_cur.min(31);
         self.e.lasers[cur] = id;
     }
 
     fn with_laser(&mut self, k: i32, f: impl FnOnce(&mut crate::bullet::Laser, [f32; 3])) {
-        let Some(&Some(id)) = self.e.lasers.get(k as usize) else { return };
+        let Some(&Some(id)) = self.e.lasers.get(k as usize) else {
+            return;
+        };
         let p = self.m.g.player;
         if let Some(l) = self.m.bullets.borrow_mut().laser_mut(id) {
             f(l, p);
@@ -697,12 +763,19 @@ impl Exec<'_> {
 
     fn item(&mut self, pos: [f32; 3], kind: i32) {
         let p = self.m.player.borrow();
-        self.m.bullets.borrow_mut().items.spawn(self.anm, &p, pos, kind, 0);
+        self.m
+            .bullets
+            .borrow_mut()
+            .items
+            .spawn(self.anm, &p, pos, kind, 0);
     }
 
     fn cancel_all(&mut self, mode: i32) {
         let mut p = self.m.player.borrow_mut();
-        self.m.bullets.borrow_mut().cancel_all(self.anm, &mut p, mode);
+        self.m
+            .bullets
+            .borrow_mut()
+            .cancel_all(self.anm, &mut p, mode);
     }
 
     fn item_burst(&mut self, n: i32, all_one: bool) {
@@ -711,7 +784,13 @@ impl Exec<'_> {
         for i in 0..n.max(0) {
             let dx = self.anm.rng.next_f32() * 128.0 - 64.0;
             let dy = self.anm.rng.next_f32() * 128.0 - 64.0;
-            let kind = if all_one || !low { 1 } else if i == 0 { 2 } else { 0 };
+            let kind = if all_one || !low {
+                1
+            } else if i == 0 {
+                2
+            } else {
+                0
+            };
             self.item([p[0] + dx, p[1] + dy, p[2]], kind);
         }
     }
@@ -772,11 +851,19 @@ impl Exec<'_> {
             if sl.elapsed.cur >= sl.dur {
                 sl.elapsed.set(sl.dur);
             }
-            let tt = if sl.dur > 0 { sl.elapsed.getf() / sl.dur as f32 } else { 1.0 };
+            let tt = if sl.dur > 0 {
+                sl.elapsed.getf() / sl.dur as f32
+            } else {
+                1.0
+            };
             let tt = ease(sl.mode, tt);
-            let v: [f32; 4] = std::array::from_fn(|k| var_f(self.m, self.anm, self.e, &t.ctx, sl.abcd[k]));
+            let v: [f32; 4] =
+                std::array::from_fn(|k| var_f(self.m, self.anm, self.e, &t.ctx, sl.abcd[k]));
             let val = if sl.func == 7 {
-                (2.0 * tt + 1.0) * (tt - 1.0) * (tt - 1.0) * v[0] + (3.0 - 2.0 * tt) * tt * tt * v[1] + tt * (1.0 - tt) * (1.0 - tt) * v[2] + (tt - 1.0) * tt * tt * v[3]
+                (2.0 * tt + 1.0) * (tt - 1.0) * (tt - 1.0) * v[0]
+                    + (3.0 - 2.0 * tt) * tt * tt * v[1]
+                    + tt * (1.0 - tt) * (1.0 - tt) * v[2]
+                    + (tt - 1.0) * tt * tt * v[3]
             } else {
                 v[0] + (v[1] - v[0]) * tt
             };
@@ -837,7 +924,9 @@ impl Exec<'_> {
                 crate::effect::spawn_fixed(self.anm, kind, pos, 9, 0xFFFFFFFF);
                 let i = crate::effect::spawn_fixed(self.anm, kind, pos, 10, 0xFFFFFFFF);
                 let anm = &mut *self.anm;
-                crate::effect::get(i, |e| anm.set_script(&mut e.vm, crate::effect::SCRIPT_SLOT, extra));
+                crate::effect::get(i, |e| {
+                    anm.set_script(&mut e.vm, crate::effect::SCRIPT_SLOT, extra)
+                });
             }
             5 => {
                 crate::effect::free(crate::effect::FIXED_BASE + 9);
@@ -846,7 +935,9 @@ impl Exec<'_> {
             }
             8 => self.familiar_ring(t),
             18 if arg != 0 => self.anm.speed = 1.0 / arg as f32,
-            19 => t.ctx.set_int(V_INT0, self.m.g.spell.as_ref().map_or(0, |s| s.id)),
+            19 => t
+                .ctx
+                .set_int(V_INT0, self.m.g.spell.as_ref().map_or(0, |s| s.id)),
             // SPEC-GAP: game value at (0x160F510)+0x1C belongs to a later phase; reads 0.
             24 => t.ctx.set_int(V_INT0, 0),
             26 => self.m.g.timer_pause = arg,
@@ -871,8 +962,15 @@ impl Exec<'_> {
                 }
             }
             12 | 14 => {
-                let (mask, a, s) = (t.ctx.int(V_INT0) as u32, t.ctx.flt(V_FLT0), t.ctx.flt(V_FLT0 + 1));
-                self.m.bullets.borrow_mut().toggle_ghost(self.anm, mask, a, s, n == 14);
+                let (mask, a, s) = (
+                    t.ctx.int(V_INT0) as u32,
+                    t.ctx.flt(V_FLT0),
+                    t.ctx.flt(V_FLT0 + 1),
+                );
+                self.m
+                    .bullets
+                    .borrow_mut()
+                    .toggle_ghost(self.anm, mask, a, s, n == 14);
                 if n == 12 {
                     let pause = t.ctx.int(V_INT0 + 1) == 0;
                     let mut c = self.e.chain_next;
@@ -882,7 +980,11 @@ impl Exec<'_> {
                     {
                         guard += 1;
                         let x = &mut self.m.enemies[i];
-                        x.flags_b = if pause { x.flags_b | B_PAUSED } else { x.flags_b & !B_PAUSED };
+                        x.flags_b = if pause {
+                            x.flags_b | B_PAUSED
+                        } else {
+                            x.flags_b & !B_PAUSED
+                        };
                         c = x.chain_next;
                     }
                     if let Some(st) = &self.m.stage {
@@ -901,8 +1003,16 @@ impl Exec<'_> {
             31 => self.item(self.e.pos, 5),
             22 => {
                 // SPEC-GAP: native 22's face argument is not given; no boss cut-in is started.
-                let name = encoding_rs::SHIFT_JIS.encode("「リザレクション」").0.into_owned();
-                crate::gui::request(crate::gui::Req::BossShow { face: -1, name, card: -1, name_only: true });
+                let name = encoding_rs::SHIFT_JIS
+                    .encode("「リザレクション」")
+                    .0
+                    .into_owned();
+                crate::gui::request(crate::gui::Req::BossShow {
+                    face: -1,
+                    name,
+                    card: -1,
+                    name_only: true,
+                });
             }
             23 => crate::gui::request(crate::gui::Req::BossHide),
             // SPEC-GAP: natives 4, 7, 9, 11, 13, 16, 21, 25 (effect objects, bullet warps, hit rectangles) are not implemented.
@@ -918,7 +1028,13 @@ impl Exec<'_> {
         let tag = t.ctx.int(V_INT1 + 2);
         let root = self.e.root;
         let mut members = Vec::new();
-        let mut n = root.and_then(|r| if r == self.idx { self.e.chain_next } else { self.m.enemies[r].chain_next });
+        let mut n = root.and_then(|r| {
+            if r == self.idx {
+                self.e.chain_next
+            } else {
+                self.m.enemies[r].chain_next
+            }
+        });
         let mut guard = 0;
         while let Some(i) = n {
             guard += 1;
@@ -936,7 +1052,9 @@ impl Exec<'_> {
             }
             n = c.chain_next;
         }
-        let Some(index) = members.iter().position(|&(i, _)| i == self.idx) else { return };
+        let Some(index) = members.iter().position(|&(i, _)| i == self.idx) else {
+            return;
+        };
         let count = members.len() as f32;
         let changed = t.ctx.flt(V_FLT0 + 2) != count;
         t.ctx.set_int(V_INT1 + 1, index as i32);
@@ -950,7 +1068,12 @@ impl Exec<'_> {
     fn spell_card(&mut self, ins: &Ins) {
         let b = self.m.ecl.bytes(ins);
         let dec = |o: usize, n: usize, key: u8| -> Vec<u8> {
-            let s: Vec<u8> = b.get(o..o + n).unwrap_or(&[]).iter().map(|c| c ^ key).collect();
+            let s: Vec<u8> = b
+                .get(o..o + n)
+                .unwrap_or(&[])
+                .iter()
+                .map(|c| c ^ key)
+                .collect();
             let end = s.iter().position(|&c| c == 0).unwrap_or(s.len());
             s[..end].to_vec()
         };
@@ -959,7 +1082,11 @@ impl Exec<'_> {
         let spell = Spell {
             face: rd_i16(b, 0x0C) as i32,
             id: rd_i16(b, 0x0E) as i32,
-            bonus: if self.e.flags & A_FIXED_BONUS != 0 { 99_999_990 } else { bonus },
+            bonus: if self.e.flags & A_FIXED_BONUS != 0 {
+                99_999_990
+            } else {
+                bonus
+            },
             decay: (bonus - bonus / 7) / secs,
             name: dec(0x14, 48, 0xAA),
             owner: dec(0x44, 48, 0xBB),
@@ -972,9 +1099,20 @@ impl Exec<'_> {
             bombed: false,
             last: self.m.player.borrow().gflags & crate::player::GF_LAST_SPELL != 0,
         };
-        log::info!("spell card {} ({} bytes name, bonus {}) at enemy frame {}", spell.id, spell.name.len(), spell.bonus, self.m.frame);
+        log::info!(
+            "spell card {} ({} bytes name, bonus {}) at enemy frame {}",
+            spell.id,
+            spell.name.len(),
+            spell.bonus,
+            self.m.frame
+        );
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
-        crate::gui::request(crate::gui::Req::BossShow { face: spell.face, name: spell.name.clone(), card: spell.id, name_only: false });
+        crate::gui::request(crate::gui::Req::BossShow {
+            face: spell.face,
+            name: spell.name.clone(),
+            card: spell.id,
+            name_only: false,
+        });
         self.m.g.spell = Some(spell);
         if let Some(st) = &self.m.stage {
             st.borrow_mut().start_spell_bg(self.anm);
@@ -1012,16 +1150,28 @@ impl Exec<'_> {
             }
             8 => {
                 let b = self.ai(t, ins, 1);
-                let v = if self.anm.rng.next_u16() & 1 != 0 { b } else { -b };
+                let v = if self.anm.rng.next_u16() & 1 != 0 {
+                    b
+                } else {
+                    -b
+                };
                 self.set_i(t, ins, 0, v);
             }
             9 => {
                 let b = self.af(t, ins, 1);
-                let v = if self.anm.rng.next_u16() & 1 != 0 { b } else { -b };
+                let v = if self.anm.rng.next_u16() & 1 != 0 {
+                    b
+                } else {
+                    -b
+                };
                 self.set_f(t, ins, 0, v);
             }
             10..=14 | 20..=24 => {
-                let (a, b) = if op < 20 { (self.ai(t, ins, 0), self.ai(t, ins, 1)) } else { (self.ai(t, ins, 1), self.ai(t, ins, 2)) };
+                let (a, b) = if op < 20 {
+                    (self.ai(t, ins, 0), self.ai(t, ins, 1))
+                } else {
+                    (self.ai(t, ins, 1), self.ai(t, ins, 2))
+                };
                 let v = match op % 10 {
                     0 => a.wrapping_add(b),
                     1 => a.wrapping_sub(b),
@@ -1032,7 +1182,11 @@ impl Exec<'_> {
                 self.set_i(t, ins, 0, v);
             }
             15..=19 | 25..=29 => {
-                let (a, b) = if op < 25 { (self.af(t, ins, 0), self.af(t, ins, 1)) } else { (self.af(t, ins, 1), self.af(t, ins, 2)) };
+                let (a, b) = if op < 25 {
+                    (self.af(t, ins, 0), self.af(t, ins, 1))
+                } else {
+                    (self.af(t, ins, 1), self.af(t, ins, 2))
+                };
                 let v = match (op - 15) % 10 {
                     0 => a + b,
                     1 => a - b,
@@ -1044,15 +1198,33 @@ impl Exec<'_> {
             }
             30 | 31 => {
                 let a = self.ai(t, ins, 0);
-                self.set_i(t, ins, 0, if op == 30 { a.wrapping_add(1) } else { a.wrapping_sub(1) });
+                self.set_i(
+                    t,
+                    ins,
+                    0,
+                    if op == 30 {
+                        a.wrapping_add(1)
+                    } else {
+                        a.wrapping_sub(1)
+                    },
+                );
             }
             32 | 33 => {
                 let b = self.af(t, ins, 1);
                 self.set_f(t, ins, 0, if op == 32 { b.sin() } else { b.cos() });
             }
             34 | 39 => {
-                let (x1, y1, x2, y2) = (self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3), self.af(t, ins, 4));
-                let v = if op == 34 { (y2 - y1).atan2(x2 - x1) } else { ((x1 - x2).powi(2) + (y1 - y2).powi(2)).sqrt() };
+                let (x1, y1, x2, y2) = (
+                    self.af(t, ins, 1),
+                    self.af(t, ins, 2),
+                    self.af(t, ins, 3),
+                    self.af(t, ins, 4),
+                );
+                let v = if op == 34 {
+                    (y2 - y1).atan2(x2 - x1)
+                } else {
+                    ((x1 - x2).powi(2) + (y1 - y2).powi(2)).sqrt()
+                };
                 self.set_f(t, ins, 0, v);
             }
             35 => {
@@ -1066,11 +1238,22 @@ impl Exec<'_> {
                 let mode = self.ai(t, ins, 3);
                 let abcd: [f32; 4] = std::array::from_fn(|k| f32::from_bits(self.raw(ins, 4 + k)));
                 let slots = &mut t.ctx.interp;
-                let s = slots.iter().position(|s| s.active && s.target == target).or_else(|| slots.iter().position(|s| !s.active));
+                let s = slots
+                    .iter()
+                    .position(|s| s.active && s.target == target)
+                    .or_else(|| slots.iter().position(|s| !s.active));
                 if let Some(s) = s {
                     let mut elapsed = anmvm::Timer::default();
                     elapsed.set(0);
-                    slots[s] = Interp { active: true, elapsed, dur, func, mode, abcd, target };
+                    slots[s] = Interp {
+                        active: true,
+                        elapsed,
+                        dur,
+                        func,
+                        mode,
+                        abcd,
+                        target,
+                    };
                 }
             }
             37 => {
@@ -1079,7 +1262,11 @@ impl Exec<'_> {
             }
             38 | 166 => {
                 let (ang, r) = (self.af(t, ins, 2), self.af(t, ins, 3));
-                let ang = if op == 38 { anmvm::wrap_add(ang, 0.0) } else { ang };
+                let ang = if op == 38 {
+                    anmvm::wrap_add(ang, 0.0)
+                } else {
+                    ang
+                };
                 if op == 38 {
                     self.set_f(t, ins, 0, ang.cos() * r);
                     self.set_f(t, ins, 1, ang.sin() * r);
@@ -1093,7 +1280,9 @@ impl Exec<'_> {
                 let ord = if op % 2 == 0 {
                     self.ai(t, ins, 0).cmp(&self.ai(t, ins, 1))
                 } else {
-                    self.af(t, ins, 0).partial_cmp(&self.af(t, ins, 1)).unwrap_or(Greater)
+                    self.af(t, ins, 0)
+                        .partial_cmp(&self.af(t, ins, 1))
+                        .unwrap_or(Greater)
                 };
                 let take = match (op - 40) / 2 {
                     0 => ord == Equal,
@@ -1174,7 +1363,12 @@ impl Exec<'_> {
                 self.mode1(a, s, 0);
             }
             66 => {
-                let (dur, ease, a, s) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3));
+                let (dur, ease, a, s) = (
+                    self.ai(t, ins, 0),
+                    self.ai(t, ins, 1),
+                    self.af(t, ins, 2),
+                    self.af(t, ins, 3),
+                );
                 self.move_dir(dur, ease, a, s);
             }
             67 | 178 => {
@@ -1188,7 +1382,12 @@ impl Exec<'_> {
                 self.e.speed = s;
             }
             69 => {
-                let (dur, ease, off, s) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3));
+                let (dur, ease, off, s) = (
+                    self.ai(t, ins, 0),
+                    self.ai(t, ins, 1),
+                    self.af(t, ins, 2),
+                    self.af(t, ins, 3),
+                );
                 if dur < 1 {
                     let a = self.player_angle(self.e.pos) + off;
                     self.mode1(a, s, dur);
@@ -1230,7 +1429,12 @@ impl Exec<'_> {
                 self.mode3(dur);
             }
             75 => {
-                self.e.clamp = [self.af(t, ins, 0), self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3)];
+                self.e.clamp = [
+                    self.af(t, ins, 0),
+                    self.af(t, ins, 1),
+                    self.af(t, ins, 2),
+                    self.af(t, ins, 3),
+                ];
                 self.e.flags |= A_CLAMP;
             }
             76 => self.e.flags &= !A_CLAMP,
@@ -1287,10 +1491,16 @@ impl Exec<'_> {
                 let (var, slot) = (self.ai(t, ins, 1), self.ai(t, ins, 2));
                 if let Some(b) = self.m.boss(slot) {
                     let (v_i, v_f) = if b == self.idx {
-                        (var_i(self.m, self.anm, self.e, &t.ctx, var), var_f(self.m, self.anm, self.e, &t.ctx, var as f32))
+                        (
+                            var_i(self.m, self.anm, self.e, &t.ctx, var),
+                            var_f(self.m, self.anm, self.e, &t.ctx, var as f32),
+                        )
                     } else {
                         let other = self.m.enemies[b].clone();
-                        (var_i(self.m, self.anm, &other, &other.main.ctx, var), var_f(self.m, self.anm, &other, &other.main.ctx, var as f32))
+                        (
+                            var_i(self.m, self.anm, &other, &other.main.ctx, var),
+                            var_f(self.m, self.anm, &other, &other.main.ctx, var as f32),
+                        )
                     };
                     if op == 86 {
                         self.set_i(t, ins, 0, v_i);
@@ -1403,8 +1613,12 @@ impl Exec<'_> {
             }
             122 => self.spell_card(ins),
             123 => {
-                let (total, remaining) = (self.e.timeout.max(0), (self.e.timeout - self.e.boss_timer.cur).max(0));
-                self.m.finish_spell(total, remaining, self.anm, Some(self.idx));
+                let (total, remaining) = (
+                    self.e.timeout.max(0),
+                    (self.e.timeout - self.e.boss_timer.cur).max(0),
+                );
+                self.m
+                    .finish_spell(total, remaining, self.anm, Some(self.idx));
             }
             124 => crate::sound::play_at(self.ai(t, ins, 0), self.e.final_pos[0]),
             125 => {
@@ -1451,13 +1665,25 @@ impl Exec<'_> {
                 self.e.effects += 1;
                 let (id, n, c) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.ai(t, ins, 2));
                 let param = [self.af(t, ins, 3), self.af(t, ins, 4), self.af(t, ins, 5)];
-                crate::effect::spawn_param(self.anm, id as u8, self.e.final_pos, param, n, c as u32);
+                crate::effect::spawn_param(
+                    self.anm,
+                    id as u8,
+                    self.e.final_pos,
+                    param,
+                    n,
+                    c as u32,
+                );
             }
             174 => {
                 self.e.effects += 1;
                 let n = self.ai(t, ins, 0);
                 crate::effect::free(self.e.fx_aura);
-                self.e.fx_aura = crate::effect::spawn_high(self.anm, (0x20 + n) as u8, self.e.final_pos, 0xFFFFFFFF);
+                self.e.fx_aura = crate::effect::spawn_high(
+                    self.anm,
+                    (0x20 + n) as u8,
+                    self.e.final_pos,
+                    0xFFFFFFFF,
+                );
             }
             129 => {
                 let m = self.raw(ins, 0) & 0xFF;
@@ -1579,11 +1805,17 @@ impl Exec<'_> {
                 self.m.g.fixed_bonus = on;
             }
             156 => {
-                self.e.set_flag(A_CANCEL_BONUS, self.raw(ins, 0) & 0xFF != 0);
+                self.e
+                    .set_flag(A_CANCEL_BONUS, self.raw(ins, 0) & 0xFF != 0);
                 self.e.layer = 2;
             }
             157 => {
-                self.e.trail = [self.raw(ins, 0) as i32, self.ai(t, ins, 1), self.ai(t, ins, 2), self.ai(t, ins, 3)];
+                self.e.trail = [
+                    self.raw(ins, 0) as i32,
+                    self.ai(t, ins, 1),
+                    self.ai(t, ins, 2),
+                    self.ai(t, ins, 3),
+                ];
             }
             158 => {
                 let k = self.ai(t, ins, 0);
@@ -1600,7 +1832,10 @@ impl Exec<'_> {
             161 => {
                 let r = self.af(t, ins, 0);
                 let p = self.m.player.borrow();
-                self.m.bullets.borrow_mut().cancel_radius(self.anm, &p, self.e.final_pos, r);
+                self.m
+                    .bullets
+                    .borrow_mut()
+                    .cancel_radius(self.anm, &p, self.e.final_pos, r);
             }
             163 => self.m.g.g_f54cec = self.ai(t, ins, 0),
             164 => self.m.g.misc_calls += 1,
@@ -1611,12 +1846,19 @@ impl Exec<'_> {
             169 => {
                 let (x, px) = (self.e.pos[0], self.m.g.player[0]);
                 let r = self.anm.rng.next_f32() * (PI / 2.0);
-                let a = if x > px && x > 96.0 || x > 288.0 { anmvm::wrap_add(r + 3.0 * PI / 4.0, 0.0) } else { r - PI / 4.0 };
+                let a = if x > px && x > 96.0 || x > 288.0 {
+                    anmvm::wrap_add(r + 3.0 * PI / 4.0, 0.0)
+                } else {
+                    r - PI / 4.0
+                };
                 self.set_f(t, ins, 0, a);
             }
             170..=172 => {
                 let k = self.ai(t, ins, 0);
-                let (a, b) = (self.af(t, ins, 1), if op == 172 { self.af(t, ins, 2) } else { 0.0 });
+                let (a, b) = (
+                    self.af(t, ins, 1),
+                    if op == 172 { self.af(t, ins, 2) } else { 0.0 },
+                );
                 let byte = self.raw(ins, 1) as u8;
                 self.with_laser(k, |l, _| match op {
                     170 => l.hide_emitter = byte,

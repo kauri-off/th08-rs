@@ -5,12 +5,23 @@ fn main() -> anyhow::Result<()> {
     if a[3] == "--dis" {
         let (mut spr, mut scr) = (0, 0);
         for (i, c) in th08::anm::parse(&ar.read(&a[2])?)?.iter().enumerate() {
-            println!("entry {i} {} {}x{} sprites {spr}..{} scripts {scr}..{}", c.name, c.width, c.height, spr + c.sprites.len(), scr + c.scripts.len());
+            println!(
+                "entry {i} {} {}x{} sprites {spr}..{} scripts {scr}..{}",
+                c.name,
+                c.width,
+                c.height,
+                spr + c.sprites.len(),
+                scr + c.scripts.len()
+            );
             for s in &c.sprites {
                 println!("  sprite {} ({}, {}) {}x{}", s.id, s.x, s.y, s.w, s.h);
             }
             for s in &c.scripts {
-                println!("script {scr} (id {})\n{}", s.id, th08::anmvm::disasm(&s.data));
+                println!(
+                    "script {scr} (id {})\n{}",
+                    s.id,
+                    th08::anmvm::disasm(&s.data)
+                );
                 scr += 1;
             }
             spr += c.sprites.len();
@@ -22,7 +33,11 @@ fn main() -> anyhow::Result<()> {
     for (i, c) in th08::anm::parse(&ar.read(&a[2])?)?.iter().enumerate() {
         let Some(t) = &c.texture else { continue };
         let mut img = image::RgbaImage::from_raw(t.width, t.height, t.rgba.clone()).unwrap();
-        for s in c.sprites.iter().filter(|_| a.get(4).map(String::as_str) != Some("--raw")) {
+        for s in c
+            .sprites
+            .iter()
+            .filter(|_| a.get(4).map(String::as_str) != Some("--raw"))
+        {
             let (x0, y0) = (s.x as u32, s.y as u32);
             let (x1, y1) = ((s.x + s.w) as u32, (s.y + s.h) as u32);
             for x in x0..x1.min(t.width) {
@@ -35,7 +50,16 @@ fn main() -> anyhow::Result<()> {
         }
         let p = out.join(format!("{}_{i}_fmt{}.png", a[2], t.format));
         img.save(&p)?;
-        println!("{} {}x{} fmt{} sprites={} scripts={} name={}", p.display(), t.width, t.height, t.format, c.sprites.len(), c.scripts.len(), c.name);
+        println!(
+            "{} {}x{} fmt{} sprites={} scripts={} name={}",
+            p.display(),
+            t.width,
+            t.height,
+            t.format,
+            c.sprites.len(),
+            c.scripts.len(),
+            c.name
+        );
     }
     Ok(())
 }

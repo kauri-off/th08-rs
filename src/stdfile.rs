@@ -60,7 +60,9 @@ pub struct Std {
 }
 
 fn rd<const N: usize>(b: &[u8], o: usize) -> Result<[u8; N]> {
-    b.get(o..o + N).and_then(|s| s.try_into().ok()).with_context(|| format!("std: read past end at {o:#x}"))
+    b.get(o..o + N)
+        .and_then(|s| s.try_into().ok())
+        .with_context(|| format!("std: read past end at {o:#x}"))
 }
 fn i16at(b: &[u8], o: usize) -> Result<i16> {
     Ok(i16::from_le_bytes(rd(b, o)?))
@@ -81,7 +83,9 @@ pub fn parse(b: &[u8]) -> Result<Std> {
     let inst_off = u32at(b, 4)? as usize;
     let script_off = u32at(b, 8)? as usize;
     let bgm = std::array::from_fn(|k| {
-        let s = b.get(0x290 + k * 0x80..0x290 + (k + 1) * 0x80).unwrap_or_default();
+        let s = b
+            .get(0x290 + k * 0x80..0x290 + (k + 1) * 0x80)
+            .unwrap_or_default();
         let end = s.iter().position(|&c| c == 0).unwrap_or(s.len());
         String::from_utf8_lossy(&s[..end]).into_owned()
     });
@@ -106,14 +110,26 @@ pub fn parse(b: &[u8]) -> Result<Std> {
             let size = i16at(b, q + 2)? as usize;
             ensure!(size >= 4, "std: quad record size {size} at {q:#x}");
             let kind = match ty {
-                0 => QuadKind::Sprite { pos: v3at(b, q + 8)?, w: f32at(b, q + 0x14)?, h: f32at(b, q + 0x18)? },
-                1 => QuadKind::Ribbon { a: v3at(b, q + 8)?, b: v3at(b, q + 0x14)?, w: f32at(b, q + 0x20)? },
+                0 => QuadKind::Sprite {
+                    pos: v3at(b, q + 8)?,
+                    w: f32at(b, q + 0x14)?,
+                    h: f32at(b, q + 0x18)?,
+                },
+                1 => QuadKind::Ribbon {
+                    a: v3at(b, q + 8)?,
+                    b: v3at(b, q + 0x14)?,
+                    w: f32at(b, q + 0x20)?,
+                },
                 _ => {
                     q += size;
                     continue;
                 }
             };
-            obj.quads.push(Quad { script: i16at(b, q + 4)?, vm, kind });
+            obj.quads.push(Quad {
+                script: i16at(b, q + 4)?,
+                vm,
+                kind,
+            });
             vm += 1;
             q += size;
         }
@@ -126,8 +142,14 @@ pub fn parse(b: &[u8]) -> Result<Std> {
         if idx < 0 {
             break;
         }
-        ensure!((idx as usize) < objects.len(), "std: instance of object {idx}");
-        instances.push(Instance { object: idx as usize, pos: v3at(b, o + 4)? });
+        ensure!(
+            (idx as usize) < objects.len(),
+            "std: instance of object {idx}"
+        );
+        instances.push(Instance {
+            object: idx as usize,
+            pos: v3at(b, o + 4)?,
+        });
         o += 16;
     }
     let mut script = Vec::new();
@@ -136,13 +158,27 @@ pub fn parse(b: &[u8]) -> Result<Std> {
         let time = u32at(b, o)? as i32;
         let op = i16at(b, o + 4)?;
         if time == -1 {
-            script.push(Record { time, op, args: [0; 3] });
+            script.push(Record {
+                time,
+                op,
+                args: [0; 3],
+            });
             break;
         }
-        script.push(Record { time, op, args: [u32at(b, o + 8)?, u32at(b, o + 12)?, u32at(b, o + 16)?] });
+        script.push(Record {
+            time,
+            op,
+            args: [u32at(b, o + 8)?, u32at(b, o + 12)?, u32at(b, o + 16)?],
+        });
         o += 20;
     }
-    Ok(Std { quad_count: quad_count.max(vm), bgm, objects, instances, script })
+    Ok(Std {
+        quad_count: quad_count.max(vm),
+        bgm,
+        objects,
+        instances,
+        script,
+    })
 }
 
 #[cfg(test)]
@@ -151,14 +187,22 @@ mod tests {
 
     #[test]
     fn all_std_parse() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else { return };
-        let ar = crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap()).unwrap();
+        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+            return;
+        };
+        let ar =
+            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
+                .unwrap();
         let mut files = 0;
         let (mut sprites, mut ribbons) = (0, 0);
         for n in ar.names().iter().filter(|n| n.ends_with(".std")) {
             let b = ar.read(n).unwrap();
             let s = parse(&b).unwrap_or_else(|e| panic!("{n}: {e}"));
-            assert_eq!(s.quad_count, i16::from_le_bytes([b[2], b[3]]) as usize, "{n}");
+            assert_eq!(
+                s.quad_count,
+                i16::from_le_bytes([b[2], b[3]]) as usize,
+                "{n}"
+            );
             for q in s.objects.iter().flat_map(|o| &o.quads) {
                 match q.kind {
                     QuadKind::Sprite { .. } => sprites += 1,

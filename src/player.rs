@@ -47,7 +47,14 @@ pub struct GaugeLimits {
 
 impl Default for GaugeLimits {
     fn default() -> Self {
-        Self { min: -10000, max: 10000, human_max: -8000, youkai_max: 8000, human: -2000, youkai: 2000 }
+        Self {
+            min: -10000,
+            max: 10000,
+            human_max: -8000,
+            youkai_max: 8000,
+            human: -2000,
+            youkai: 2000,
+        }
     }
 }
 
@@ -55,10 +62,28 @@ impl GaugeLimits {
     pub fn for_shot(shot: u8) -> Self {
         let d = Self::default();
         match shot {
-            3 => Self { min: -5000, human_max: -3000, ..d },
-            10 => Self { min: -5000, max: 5000, human_max: -3000, youkai_max: 3000, ..d },
-            s if s >= 4 && s % 2 == 0 => Self { max: 2000, youkai: 2001, ..d },
-            s if s >= 4 => Self { min: -2000, human: -2001, ..d },
+            3 => Self {
+                min: -5000,
+                human_max: -3000,
+                ..d
+            },
+            10 => Self {
+                min: -5000,
+                max: 5000,
+                human_max: -3000,
+                youkai_max: 3000,
+                ..d
+            },
+            s if s >= 4 && s % 2 == 0 => Self {
+                max: 2000,
+                youkai: 2001,
+                ..d
+            },
+            s if s >= 4 => Self {
+                min: -2000,
+                human: -2001,
+                ..d
+            },
             _ => d,
         }
     }
@@ -367,7 +392,10 @@ impl Default for Player {
             aimed: None,
             aimed_pos: [0.0; 3],
             boss_target: false,
-            shot_timer: Timer { cur: -1, ..Timer::default() },
+            shot_timer: Timer {
+                cur: -1,
+                ..Timer::default()
+            },
             gauge_b: Timer::default(),
             gauge_c: Timer::default(),
             state_timer: Timer::default(),
@@ -394,7 +422,20 @@ impl Default for Player {
 
 // TH08_PLAYER: shot type 0–11 or a name (09 §2).
 pub fn parse_shot(s: &str) -> Option<u8> {
-    const NAMES: [&str; 12] = ["reimu&yukari", "marisa&alice", "sakuya&remilia", "youmu&yuyuko", "reimu", "yukari", "marisa", "alice", "sakuya", "remilia", "youmu", "yuyuko"];
+    const NAMES: [&str; 12] = [
+        "reimu&yukari",
+        "marisa&alice",
+        "sakuya&remilia",
+        "youmu&yuyuko",
+        "reimu",
+        "yukari",
+        "marisa",
+        "alice",
+        "sakuya",
+        "remilia",
+        "youmu",
+        "yuyuko",
+    ];
     let s = s.trim().to_ascii_lowercase();
     if let Ok(n) = s.parse::<u8>() {
         return (n < 12).then_some(n);
@@ -474,7 +515,11 @@ impl Player {
 
     // Item fall multiplier source (08 §8.4).
     pub fn item_sht(&self) -> &Sht {
-        if self.focus == 1 { &self.sht_youkai } else { &self.sht }
+        if self.focus == 1 {
+            &self.sht_youkai
+        } else {
+            &self.sht
+        }
     }
 
     pub fn angle_from(&self, o: [f32; 3]) -> f32 {
@@ -495,12 +540,19 @@ impl Player {
     }
 
     // Player_GrazeTest: 0 none, 1 grazed (handler ran), 2 inside a bomb area; plus time orbs to drop.
-    pub fn graze_test(&mut self, p: [f32; 3], size: [f32; 2], env: &GrazeEnv, rng: &mut Rng) -> (u8, u8) {
+    pub fn graze_test(
+        &mut self,
+        p: [f32; 3],
+        size: [f32; 2],
+        env: &GrazeEnv,
+        rng: &mut Rng,
+    ) -> (u8, u8) {
         if self.in_bomb_area(p) {
             return (2, 0);
         }
         let half = [size[0] / 2.0 + 20.0, size[1] / 2.0 + 20.0];
-        if matches!(self.state, 1 | 2) || !overlap([p[0], p[1]], half, self.xy(), self.graze_half()) {
+        if matches!(self.state, 1 | 2) || !overlap([p[0], p[1]], half, self.xy(), self.graze_half())
+        {
             return (0, 0);
         }
         (1, self.on_graze(p, false, env, rng))
@@ -511,7 +563,12 @@ impl Player {
         if self.in_bomb_area(p) {
             return 2;
         }
-        if !overlap([p[0], p[1]], [size[0] / 2.0, size[1] / 2.0], self.xy(), self.hit_half()) {
+        if !overlap(
+            [p[0], p[1]],
+            [size[0] / 2.0, size[1] / 2.0],
+            self.xy(),
+            self.hit_half(),
+        ) {
             return 0;
         }
         if self.state == 0 {
@@ -574,7 +631,13 @@ impl Player {
     pub fn on_graze(&mut self, p: [f32; 3], laser: bool, env: &GrazeEnv, _rng: &mut Rng) -> u8 {
         self.grazes += 1;
         crate::sound::play_at(crate::sound::GRAZE, p[0]);
-        crate::effect::spawn_rng(_rng, 8, [(p[0] + self.pos[0]) / 2.0, (p[1] + self.pos[1]) / 2.0, 0.0], 1, 0xFFFFFFFF);
+        crate::effect::spawn_rng(
+            _rng,
+            8,
+            [(p[0] + self.pos[0]) / 2.0, (p[1] + self.pos[1]) / 2.0, 0.0],
+            1,
+            0xFFFFFFFF,
+        );
         let (solo_human, solo_youkai) = (self.solo_human(), self.solo_youkai());
         let s = &mut self.stats;
         if !self.bombing {
@@ -608,11 +671,14 @@ impl Player {
 
     // Player_ItemCollectTest: item box (c, c) vs the collect box.
     pub fn collect_test(&self, p: [f32; 3], c: f32) -> bool {
-        matches!(self.state, 0 | 3 | 4) && overlap([p[0], p[1]], [c / 2.0; 2], self.xy(), self.item_half())
+        matches!(self.state, 0 | 3 | 4)
+            && overlap([p[0], p[1]], [c / 2.0; 2], self.xy(), self.item_half())
     }
 
     pub fn box_in_cancel_area(&self, p: [f32; 3], half: [f32; 2]) -> bool {
-        self.cancel_areas.iter().any(|a| a.active && a.contains([p[0], p[1]], half))
+        self.cancel_areas
+            .iter()
+            .any(|a| a.active && a.contains([p[0], p[1]], half))
     }
 
     // EnemyMgr_Calc target pick (09 §2.1): target 1 = boss (horizontally nearest) else the lowest enemy;
@@ -631,7 +697,12 @@ impl Player {
 
     // Player_HitTestNoBomb 0x44A360: true on overlap in every player state; only state 0 dies.
     pub fn contact_test(&mut self, p: [f32; 3], size: [f32; 2], rng: &mut Rng) -> bool {
-        if !overlap([p[0], p[1]], [size[0] / 2.0, size[1] / 2.0], self.xy(), self.hit_half()) {
+        if !overlap(
+            [p[0], p[1]],
+            [size[0] / 2.0, size[1] / 2.0],
+            self.xy(),
+            self.hit_half(),
+        ) {
             return false;
         }
         if self.state == 0 {
@@ -647,7 +718,11 @@ impl Player {
     }
 
     fn sprite_base(&self, focus: u8) -> usize {
-        let youkai = if self.solo() { self.shot_type % 2 == 1 } else { focus == 1 };
+        let youkai = if self.solo() {
+            self.shot_type % 2 == 1
+        } else {
+            focus == 1
+        };
         if youkai { 5 } else { 0 }
     }
 
@@ -655,7 +730,12 @@ impl Player {
     fn move_player(&mut self, anm: &mut AnmManager, inp: &input::Input) {
         let gs = anm.speed;
         let bits = inp.held;
-        let (u, d, l, r) = (bits & input::UP != 0, bits & input::DOWN != 0, bits & input::LEFT != 0, bits & input::RIGHT != 0);
+        let (u, d, l, r) = (
+            bits & input::UP != 0,
+            bits & input::DOWN != 0,
+            bits & input::LEFT != 0,
+            bits & input::RIGHT != 0,
+        );
         self.direction = match (u, d, l, r) {
             (true, _, true, _) => 5,
             (_, true, true, _) => 7,
@@ -667,7 +747,11 @@ impl Player {
             (_, _, _, true) => 4,
             _ => 0,
         };
-        let f = if self.bombing { (self.bomb.index & 1) as u8 } else { (bits & input::FOCUS != 0) as u8 };
+        let f = if self.bombing {
+            (self.bomb.index & 1) as u8
+        } else {
+            (bits & input::FOCUS != 0) as u8
+        };
         if f != self.focus {
             self.focus = f;
             if !self.solo() {
@@ -677,14 +761,20 @@ impl Player {
             self.focus_age = 0;
             self.gauge_c.set(0);
             if f == 0 {
-                crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_AURA, |e| e.vm.pending_interrupt = 1);
+                crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_AURA, |e| {
+                    e.vm.pending_interrupt = 1
+                });
             }
         } else {
             self.focus_age += 1;
         }
         if self.focus_age == 4 {
             if !self.solo() {
-                let (kind, colour) = if f == 1 { (29, 0x80FF8080) } else { (28, 0x808080FF) };
+                let (kind, colour) = if f == 1 {
+                    (29, 0x80FF8080)
+                } else {
+                    (28, 0x808080FF)
+                };
                 crate::effect::spawn(anm, kind, self.pos, 1, colour);
             }
             // Hitbox marker: effect 22 (etama script 54, sprite 218) in fixed slot 2 (answers_phase5 impl7).
@@ -698,7 +788,11 @@ impl Player {
         if self.solo() {
             self.mode = self.shot_type % 2;
         }
-        let (ortho, diag) = if f == 1 { (self.sht_youkai.speed_focus, self.sht_youkai.diag_focus) } else { (self.sht.speed, self.sht.diag) };
+        let (ortho, diag) = if f == 1 {
+            (self.sht_youkai.speed_focus, self.sht_youkai.diag_focus)
+        } else {
+            (self.sht.speed, self.sht.diag)
+        };
         let (mut vx, mut vy) = match self.direction {
             1 => (0.0, -ortho),
             2 => (0.0, ortho),
@@ -832,7 +926,13 @@ impl Player {
         crate::sound::play_at(crate::sound::TAN00_LOUD, self.pos[0]);
         crate::effect::free(crate::effect::FIXED_BASE + crate::effect::FIX_DEATH);
         crate::effect::spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
-        crate::effect::spawn_fixed(anm, 12, self.pos, crate::effect::FIX_DEATH_BURST, 0xFF4040FF);
+        crate::effect::spawn_fixed(
+            anm,
+            12,
+            self.pos,
+            crate::effect::FIX_DEATH_BURST,
+            0xFF4040FF,
+        );
         self.freeze_bullets = false;
         self.last_spell = 0;
         self.state_timer.set(0);
@@ -847,7 +947,8 @@ impl Player {
             drops.extend([crate::item::FULL_POWER as i32; 5]);
         } else {
             let p = self.stats.power;
-            self.stats.set_power(if p <= 16.0 { 0.0 } else { p - 16.0 }, rng);
+            self.stats
+                .set_power(if p <= 16.0 { 0.0 } else { p - 16.0 }, rng);
             drops.push(crate::item::BIG_POWER as i32);
             drops.extend([crate::item::POWER as i32; 5]);
             if matches!(self.shot_type, 2 | 8 | 9) && self.stats.bombs > 0.0 {
@@ -891,7 +992,11 @@ impl Player {
         if self.state == 3 {
             self.state_timer.dec(gs);
             let t = self.state_timer.cur;
-            self.vm.color = if t.rem_euclid(8) < 2 { [0x20, 0x20, 0xF0, 0xFF] } else { [0xFF; 4] };
+            self.vm.color = if t.rem_euclid(8) < 2 {
+                [0x20, 0x20, 0xF0, 0xFF]
+            } else {
+                [0xFF; 4]
+            };
             let ring = crate::effect::FIXED_BASE + crate::effect::FIX_INVULN;
             if self.invuln_ring {
                 let p = self.pos;
@@ -910,7 +1015,12 @@ impl Player {
     }
 
     // Player_Calc (09 §1); `items` is the item manager when the bullet manager exists.
-    pub fn frame(&mut self, anm: &mut AnmManager, inp: &input::Input, mut items: Option<&mut ItemManager>) {
+    pub fn frame(
+        &mut self,
+        anm: &mut AnmManager,
+        inp: &input::Input,
+        mut items: Option<&mut ItemManager>,
+    ) {
         let gs = anm.speed;
         self.take_queued_areas();
         self.update_areas();
@@ -962,7 +1072,9 @@ impl Player {
         }
         if self.gauge_aura {
             let p = self.pos;
-            crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE, |e| e.pos = p);
+            crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE, |e| {
+                e.pos = p
+            });
         }
         self.frames += 1;
     }
@@ -1029,13 +1141,20 @@ mod tests {
     use super::*;
 
     fn ready() -> (Player, AnmManager) {
-        let mut p = Player { state: 0, focus: 0, ..Player::default() };
+        let mut p = Player {
+            state: 0,
+            focus: 0,
+            ..Player::default()
+        };
         p.stats.limits = GaugeLimits::default();
         (p, AnmManager::default())
     }
 
     fn input(bits: u16) -> input::Input {
-        let mut i = input::Input { raw: bits, ..Default::default() };
+        let mut i = input::Input {
+            raw: bits,
+            ..Default::default()
+        };
         i.tick();
         i
     }
@@ -1044,7 +1163,10 @@ mod tests {
     fn movement_speeds_and_bounds() {
         let (mut p, mut anm) = ready();
         p.step(&mut anm, &input(input::LEFT | input::UP));
-        assert!((p.pos[0] - (192.0 - p.sht.diag)).abs() < 1e-5 && (p.pos[1] - (384.0 - p.sht.diag)).abs() < 1e-5);
+        assert!(
+            (p.pos[0] - (192.0 - p.sht.diag)).abs() < 1e-5
+                && (p.pos[1] - (384.0 - p.sht.diag)).abs() < 1e-5
+        );
         let x = p.pos[0];
         p.step(&mut anm, &input(input::RIGHT));
         assert!((p.pos[0] - (x + p.sht.speed)).abs() < 1e-5);
@@ -1080,8 +1202,16 @@ mod tests {
         let mut rng = Rng::default();
         let env = GrazeEnv::default();
         let q = p.pos;
-        assert_eq!(p.graze_test([q[0] + 25.0, q[1], 0.0], [4.0, 4.0], &env, &mut rng).0, 0);
-        assert_eq!(p.graze_test([q[0] + 20.0, q[1], 0.0], [4.0, 4.0], &env, &mut rng).0, 1);
+        assert_eq!(
+            p.graze_test([q[0] + 25.0, q[1], 0.0], [4.0, 4.0], &env, &mut rng)
+                .0,
+            0
+        );
+        assert_eq!(
+            p.graze_test([q[0] + 20.0, q[1], 0.0], [4.0, 4.0], &env, &mut rng)
+                .0,
+            1
+        );
         assert_eq!(p.hit_test([q[0] + 2.0, q[1], 0.0], [4.0, 4.0], &mut rng), 1);
         assert_eq!((p.state, p.hits), (2, 1));
         p.cancel_rect([q[0], q[1]], [100.0, 100.0], 9, 10);
@@ -1108,12 +1238,18 @@ mod tests {
             p.step(&mut anm, &input(0));
             assert_eq!(p.state, 2, "frame {k}");
         }
-        assert_eq!((p.deaths, p.stats.power, p.stats.rank_delta), (1, 24.0, -1600));
+        assert_eq!(
+            (p.deaths, p.stats.power, p.stats.rank_delta),
+            (1, 24.0, -1600)
+        );
         assert_eq!(p.stats.time, 1000 - 15 * 15 - (1000 - 225) / 10);
         for _ in 0..31 {
             p.step(&mut anm, &input(0));
         }
-        assert_eq!((p.state, p.stats.lives, p.stats.bombs, p.pos), (1, 1.0, 3.0, RESPAWN));
+        assert_eq!(
+            (p.state, p.stats.lives, p.stats.bombs, p.pos),
+            (1, 1.0, 3.0, RESPAWN)
+        );
         for _ in 0..31 {
             p.step(&mut anm, &input(0));
         }
@@ -1157,7 +1293,10 @@ mod tests {
         p.die(&mut rng);
         p.step(&mut anm, &input(0));
         p.step(&mut anm, &input(input::BOMB));
-        assert_eq!((p.state, p.bombing, p.bomb.index, p.stats.bombs, p.bomb.used), (3, true, 3, 0.0, 2));
+        assert_eq!(
+            (p.state, p.bombing, p.bomb.index, p.stats.bombs, p.bomb.used),
+            (3, true, 3, 0.0, 2)
+        );
         assert_eq!(p.deaths, 0);
     }
 
@@ -1181,7 +1320,11 @@ mod tests {
             p.step(&mut anm, &input(0));
         }
         assert_eq!(p.stats.power, 0.0);
-        let mut s = Stats { lives: 8.0, bombs: 7.0, ..Stats::default() };
+        let mut s = Stats {
+            lives: 8.0,
+            bombs: 7.0,
+            ..Stats::default()
+        };
         s.extend(&mut rng);
         assert_eq!((s.lives, s.bombs), (8.0, 8.0));
         let before = rng.counter;
@@ -1191,7 +1334,10 @@ mod tests {
 
     #[test]
     fn gauge_limits() {
-        let mut s = Stats { limits: GaugeLimits::for_shot(4), ..Stats::default() };
+        let mut s = Stats {
+            limits: GaugeLimits::for_shot(4),
+            ..Stats::default()
+        };
         s.gauge_add(5000);
         assert_eq!(s.gauge, 2000);
         assert!(!s.youkai());

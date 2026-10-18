@@ -1,7 +1,7 @@
 use crate::anmvm::AnmVm;
 use crate::game::Ctx;
-use crate::gfx::{Blend, PLAYFIELD, Rect, TextureId};
 use crate::gamemgr::{self, Game, GameManager};
+use crate::gfx::{Blend, PLAYFIELD, Rect, TextureId};
 use crate::task::{self, Chain, Ret, Task, TaskRef};
 use anyhow::{Context, Result};
 
@@ -38,11 +38,14 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
 // Debug start (`TH08_STAGE`): difficulty `TH08_RANK` (default Normal), shot `TH08_PLAYER` (default 0).
 pub fn setup_new_game(g: &mut Game, stage: usize) -> Result<()> {
     let shot = match crate::env::var("TH08_PLAYER") {
-        Some(v) => crate::player::parse_shot(&v).with_context(|| format!("TH08_PLAYER={v}: unknown shot type"))?,
+        Some(v) => crate::player::parse_shot(&v)
+            .with_context(|| format!("TH08_PLAYER={v}: unknown shot type"))?,
         None => 0,
     };
     let default_diff = if stage % 9 == 8 { 4 } else { 1 };
-    g.difficulty = crate::env::var("TH08_RANK").and_then(|s| crate::enemy::parse_difficulty(&s)).unwrap_or(default_diff);
+    g.difficulty = crate::env::var("TH08_RANK")
+        .and_then(|s| crate::enemy::parse_difficulty(&s))
+        .unwrap_or(default_diff);
     g.shot = shot;
     g.stage = stage;
     g.flags = 0;
@@ -64,7 +67,13 @@ impl Supervisor {
         Ok(())
     }
 
-    fn set_scene<T: Task<Ctx> + 'static>(&mut self, ctx: &mut Ctx, t: T, calc: u16, draw: u16) -> Result<()> {
+    fn set_scene<T: Task<Ctx> + 'static>(
+        &mut self,
+        ctx: &mut Ctx,
+        t: T,
+        calc: u16,
+        draw: u16,
+    ) -> Result<()> {
         let t = task::task(t);
         task::add(ctx, Chain::Calc, calc, 0, t.clone())?;
         task::add(ctx, Chain::Draw, draw, 0, t.clone())?;
@@ -89,7 +98,12 @@ impl Supervisor {
             (gamemgr::SCENE_BOOT, _) | (_, gamemgr::SCENE_MENU) => {
                 self.drop_scene(ctx);
                 ctx.game.requested = gamemgr::SCENE_MENU;
-                self.set_scene(ctx, crate::menu::MainMenu::new(), crate::menu::CALC_PRIO, crate::menu::DRAW_PRIO)?;
+                self.set_scene(
+                    ctx,
+                    crate::menu::MainMenu::new(),
+                    crate::menu::CALC_PRIO,
+                    crate::menu::DRAW_PRIO,
+                )?;
             }
             (gamemgr::SCENE_MENU, gamemgr::SCENE_GAME) => {
                 self.drop_scene(ctx);
@@ -119,14 +133,33 @@ impl Supervisor {
                 self.start_game(ctx)?;
                 ctx.game.requested = gamemgr::SCENE_GAME;
             }
-            (_, gamemgr::SCENE_RESULT | gamemgr::SCENE_ENDING | gamemgr::SCENE_RESULT_MENU | gamemgr::SCENE_MUSIC_ROOM) => {
+            (
+                _,
+                gamemgr::SCENE_RESULT
+                | gamemgr::SCENE_ENDING
+                | gamemgr::SCENE_RESULT_MENU
+                | gamemgr::SCENE_MUSIC_ROOM,
+            ) => {
                 self.drop_scene(ctx);
-                self.set_scene(ctx, Stub { kind: req, frame: 0 }, 4, 3)?;
+                self.set_scene(
+                    ctx,
+                    Stub {
+                        kind: req,
+                        frame: 0,
+                    },
+                    4,
+                    3,
+                )?;
             }
             (_, gamemgr::SCENE_REPLAY_END) => {
                 self.drop_scene(ctx);
                 ctx.game.requested = gamemgr::SCENE_MENU;
-                self.set_scene(ctx, crate::menu::MainMenu::new(), crate::menu::CALC_PRIO, crate::menu::DRAW_PRIO)?;
+                self.set_scene(
+                    ctx,
+                    crate::menu::MainMenu::new(),
+                    crate::menu::CALC_PRIO,
+                    crate::menu::DRAW_PRIO,
+                )?;
             }
             _ => log::warn!("unhandled scene switch {cur} -> {req}"),
         }
@@ -141,7 +174,8 @@ impl Task<Ctx> for Supervisor {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 0, "text.anm")?;
-            ctx.anm.load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
+            ctx.anm
+                .load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
             // Boot loading screen (12 §1): th08logo.jpg full screen + nowloading.anm scripts 0–2 at (500, 440).
             self.logo = Some(ctx.gfx.load_image(&ctx.archive.read("th08logo.jpg")?)?);
             self.boot_vms = (0..3)
@@ -158,7 +192,8 @@ impl Task<Ctx> for Supervisor {
             }
             crate::ascii::AsciiManager::register(ctx)?;
             if let Some(arg) = crate::env::var("TH08_STAGE") {
-                let index = crate::stage::parse_stage_arg(&arg).with_context(|| format!("TH08_STAGE={arg}: unknown stage"))?;
+                let index = crate::stage::parse_stage_arg(&arg)
+                    .with_context(|| format!("TH08_STAGE={arg}: unknown stage"))?;
                 setup_new_game(&mut ctx.game, index)?;
             } else {
                 ctx.game.request(gamemgr::SCENE_MENU);
@@ -211,8 +246,12 @@ impl Task<Ctx> for Supervisor {
             }
             _ => {}
         }
-        let (Some(slot), 16) = (self.debug_sprites, tag) else { return Ret::Next };
-        let Some(anm) = ctx.anm.get(slot) else { return Ret::Next };
+        let (Some(slot), 16) = (self.debug_sprites, tag) else {
+            return Ret::Next;
+        };
+        let Some(anm) = ctx.anm.get(slot) else {
+            return Ret::Next;
+        };
         let sprites = anm.sprites.clone();
         ctx.gfx.set_viewport(PLAYFIELD);
         ctx.gfx.clear_viewport([0, 0, 64, 255]);
@@ -221,7 +260,13 @@ impl Task<Ctx> for Supervisor {
             if x + s.w > 640.0 {
                 (x, y, row) = (0.0, y + row, 0.0);
             }
-            ctx.gfx.sprite(s.tex, Blend::Alpha, Rect::new(x, y, s.w, s.h), s.uv, [255; 4]);
+            ctx.gfx.sprite(
+                s.tex,
+                Blend::Alpha,
+                Rect::new(x, y, s.w, s.h),
+                s.uv,
+                [255; 4],
+            );
             x += s.w;
             row = row.max(s.h);
         }
@@ -240,7 +285,11 @@ pub struct Stub {
 impl Task<Ctx> for Stub {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let g = &mut ctx.game;
-        if self.frame == 0 && self.kind == gamemgr::SCENE_ENDING && g.flags & gamemgr::F_ENDING_OK != 0 && !g.replay() {
+        if self.frame == 0
+            && self.kind == gamemgr::SCENE_ENDING
+            && g.flags & gamemgr::F_ENDING_OK != 0
+            && !g.replay()
+        {
             // Ending_Init step 3 (16 §1): Final A / B bits of the clear masks.
             let bit = if g.stage % 9 == 7 { 0x4000 } else { 0x8000 };
             let (shot, d) = (g.shot as usize % 12, g.difficulty.clamp(0, 4) as usize);
@@ -251,7 +300,11 @@ impl Task<Ctx> for Stub {
         }
         self.frame += 1;
         if self.frame >= 30 && ctx.input.pressed(crate::input::SHOT | crate::input::ENTER) {
-            let next = if self.kind == gamemgr::SCENE_ENDING { gamemgr::SCENE_RESULT } else { gamemgr::SCENE_MENU };
+            let next = if self.kind == gamemgr::SCENE_ENDING {
+                gamemgr::SCENE_RESULT
+            } else {
+                gamemgr::SCENE_MENU
+            };
             ctx.game.request(next);
         }
         Ret::Next
@@ -264,7 +317,14 @@ impl Task<Ctx> for Stub {
         let g = &ctx.game;
         let st = &g.stats;
         let title = match self.kind {
-            gamemgr::SCENE_ENDING if g.flags & gamemgr::F_ENDING_OK != 0 => format!("Ending (stub) route {}", if g.stage % 9 == 7 { "Final B" } else { "Final A" }),
+            gamemgr::SCENE_ENDING if g.flags & gamemgr::F_ENDING_OK != 0 => format!(
+                "Ending (stub) route {}",
+                if g.stage % 9 == 7 {
+                    "Final B"
+                } else {
+                    "Final A"
+                }
+            ),
             gamemgr::SCENE_ENDING => "Bad ending (stub)".to_string(),
             gamemgr::SCENE_MUSIC_ROOM => "Music Room (stub)".to_string(),
             _ => "Result (stub)".to_string(),
@@ -272,7 +332,11 @@ impl Task<Ctx> for Stub {
         let lines = [
             title,
             String::new(),
-            format!("Score    {:09}{}", st.score10.min(999_999_999), st.continues.min(9)),
+            format!(
+                "Score    {:09}{}",
+                st.score10.min(999_999_999),
+                st.continues.min(9)
+            ),
             format!("Stage    {}", g.stage),
             format!("Clock    {}", st.clock),
             format!("Continue {}", st.continues),

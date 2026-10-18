@@ -17,7 +17,13 @@ pub struct Vertex {
 impl Vertex {
     // Pre-transformed (D3D rhw = 1) vertex in screen pixels; no fog.
     pub fn screen(x: f32, y: f32, z: f32, uv: [f32; 2], color: [u8; 4]) -> Self {
-        Self { pos: [x / 320.0 - 1.0, 1.0 - y / 240.0, z, 1.0], uv, color, fog_color: [0; 4], fog: 1.0 }
+        Self {
+            pos: [x / 320.0 - 1.0, 1.0 - y / 240.0, z, 1.0],
+            uv,
+            color,
+            fog_color: [0; 4],
+            fog: 1.0,
+        }
     }
 }
 
@@ -56,7 +62,11 @@ impl PipeKey {
         match self.kind {
             Kind::ClearColor => 8,
             Kind::ClearDepth => 9,
-            Kind::Draw => (self.blend == Blend::Add) as usize | (self.test as usize) << 1 | (self.write as usize) << 2,
+            Kind::Draw => {
+                (self.blend == Blend::Add) as usize
+                    | (self.test as usize) << 1
+                    | (self.write as usize) << 2
+            }
         }
     }
 }
@@ -138,7 +148,10 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(
 impl Gfx {
     pub async fn new(window: Arc<winit::window::Window>) -> anyhow::Result<Self> {
         let size = window.inner_size();
-        let instance = wgpu::util::new_instance_with_webgpu_detection(wgpu::InstanceDescriptor::new_without_display_handle()).await;
+        let instance = wgpu::util::new_instance_with_webgpu_detection(
+            wgpu::InstanceDescriptor::new_without_display_handle(),
+        )
+        .await;
         let surface = instance.create_surface(window)?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -147,10 +160,16 @@ impl Gfx {
             })
             .await?;
         let info = adapter.get_info();
-        log::info!("adapter: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
+        log::info!(
+            "adapter: {} ({:?}, {:?})",
+            info.name,
+            info.backend,
+            info.device_type
+        );
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                    .using_resolution(adapter.limits()),
                 ..Default::default()
             })
             .await?;
@@ -158,7 +177,10 @@ impl Gfx {
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .ok_or_else(|| anyhow::anyhow!("surface unsupported"))?;
         let caps = surface.get_capabilities(&adapter);
-        let want = [wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Rgba8Unorm];
+        let want = [
+            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
+        ];
         if let Some(f) = caps.formats.iter().find(|f| want.contains(f)) {
             config.format = *f;
         }
@@ -203,7 +225,11 @@ impl Gfx {
             },
             alpha: wgpu::BlendComponent::OVER,
         };
-        let make = |blend: Option<wgpu::BlendState>, mask: wgpu::ColorWrites, test: bool, write: bool, fs: &str| {
+        let make = |blend: Option<wgpu::BlendState>,
+                    mask: wgpu::ColorWrites,
+                    test: bool,
+                    write: bool,
+                    fs: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
                 layout: Some(&layout),
@@ -238,12 +264,28 @@ impl Gfx {
         };
         let mut pipes: Vec<_> = (0..8)
             .map(|i| {
-                let blend = if i & 1 != 0 { add } else { wgpu::BlendState::ALPHA_BLENDING };
-                make(Some(blend), wgpu::ColorWrites::ALL, i & 2 != 0, i & 4 != 0, "fs")
+                let blend = if i & 1 != 0 {
+                    add
+                } else {
+                    wgpu::BlendState::ALPHA_BLENDING
+                };
+                make(
+                    Some(blend),
+                    wgpu::ColorWrites::ALL,
+                    i & 2 != 0,
+                    i & 4 != 0,
+                    "fs",
+                )
             })
             .collect();
         pipes.push(make(None, wgpu::ColorWrites::ALL, false, true, "fs_clear"));
-        pipes.push(make(None, wgpu::ColorWrites::empty(), false, true, "fs_clear"));
+        pipes.push(make(
+            None,
+            wgpu::ColorWrites::empty(),
+            false,
+            true,
+            "fs_clear",
+        ));
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
@@ -286,12 +328,18 @@ impl Gfx {
             &self.queue,
             &wgpu::TextureDescriptor {
                 label: None,
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
@@ -302,11 +350,22 @@ impl Gfx {
             label: None,
             layout: &self.tex_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
-        let t = Some(Texture { width, height, bind, tex });
+        let t = Some(Texture {
+            width,
+            height,
+            bind,
+            tex,
+        });
         if let Some(id) = self.free.pop() {
             self.textures[id] = t;
             id
@@ -329,32 +388,81 @@ impl Gfx {
 
     // Replaces a w×h RGBA region at (x, y); applied before the next submit.
     pub fn write_texture(&mut self, id: TextureId, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) {
-        let Some(t) = self.textures.get(id).and_then(Option::as_ref) else { return };
-        let (w, h) = (w.min(t.width.saturating_sub(x)), h.min(t.height.saturating_sub(y)));
+        let Some(t) = self.textures.get(id).and_then(Option::as_ref) else {
+            return;
+        };
+        let (w, h) = (
+            w.min(t.width.saturating_sub(x)),
+            h.min(t.height.saturating_sub(y)),
+        );
         if w == 0 || h == 0 {
             return;
         }
         self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &t.tex, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &t.tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
             rgba,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
     // Surface-to-surface copy of a pixel rectangle (submitted at once, before this frame's draws).
-    pub fn copy_texture(&mut self, src: TextureId, from: [u32; 2], dst: TextureId, to: [u32; 2], size: [u32; 2]) {
-        let (Some(Some(a)), Some(Some(b))) = (self.textures.get(src), self.textures.get(dst)) else { return };
-        let w = size[0].min(a.width.saturating_sub(from[0])).min(b.width.saturating_sub(to[0]));
-        let h = size[1].min(a.height.saturating_sub(from[1])).min(b.height.saturating_sub(to[1]));
+    pub fn copy_texture(
+        &mut self,
+        src: TextureId,
+        from: [u32; 2],
+        dst: TextureId,
+        to: [u32; 2],
+        size: [u32; 2],
+    ) {
+        let (Some(Some(a)), Some(Some(b))) = (self.textures.get(src), self.textures.get(dst))
+        else {
+            return;
+        };
+        let w = size[0]
+            .min(a.width.saturating_sub(from[0]))
+            .min(b.width.saturating_sub(to[0]));
+        let h = size[1]
+            .min(a.height.saturating_sub(from[1]))
+            .min(b.height.saturating_sub(to[1]));
         if w == 0 || h == 0 {
             return;
         }
         let mut enc = self.device.create_command_encoder(&Default::default());
         fn info(t: &wgpu::Texture, p: [u32; 2]) -> wgpu::TexelCopyTextureInfo<'_> {
-            wgpu::TexelCopyTextureInfo { texture: t, mip_level: 0, origin: wgpu::Origin3d { x: p[0], y: p[1], z: 0 }, aspect: wgpu::TextureAspect::All }
+            wgpu::TexelCopyTextureInfo {
+                texture: t,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: p[0],
+                    y: p[1],
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            }
         }
-        enc.copy_texture_to_texture(info(&a.tex, from), info(&b.tex, to), wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+        enc.copy_texture_to_texture(
+            info(&a.tex, from),
+            info(&b.tex, to),
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
         self.queue.submit([enc.finish()]);
     }
 
@@ -376,25 +484,64 @@ impl Gfx {
         self.rect(r.x, r.y, r.w, r.h, color);
     }
 
-    pub fn sprite(&mut self, tex: TextureId, blend: Blend, dst: Rect, uv: [f32; 4], color: [u8; 4]) {
+    pub fn sprite(
+        &mut self,
+        tex: TextureId,
+        blend: Blend,
+        dst: Rect,
+        uv: [f32; 4],
+        color: [u8; 4],
+    ) {
         let Rect { x, y, w, h } = dst;
         let [u0, v0, u1, v1] = uv;
-        self.quad(tex, blend, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], [[u0, v0], [u1, v0], [u1, v1], [u0, v1]], color);
+        self.quad(
+            tex,
+            blend,
+            [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+            [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
+            color,
+        );
     }
 
-    pub fn quad(&mut self, tex: TextureId, blend: Blend, corners: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: [u8; 4]) {
-        let v = std::array::from_fn(|i| Vertex::screen(corners[i][0], corners[i][1], 0.0, uv[i], color));
-        self.push(tex, self.key(blend, false, Kind::Draw), v, [0, 1, 2, 0, 2, 3]);
+    pub fn quad(
+        &mut self,
+        tex: TextureId,
+        blend: Blend,
+        corners: [[f32; 2]; 4],
+        uv: [[f32; 2]; 4],
+        color: [u8; 4],
+    ) {
+        let v = std::array::from_fn(|i| {
+            Vertex::screen(corners[i][0], corners[i][1], 0.0, uv[i], color)
+        });
+        self.push(
+            tex,
+            self.key(blend, false, Kind::Draw),
+            v,
+            [0, 1, 2, 0, 2, 3],
+        );
     }
 
     // D3D vertex order: v0 top-left, v1 top-right, v2 bottom-left, v3 bottom-right; triangles (v0 v1 v2), (v1 v2 v3).
-    pub fn quad_strip(&mut self, tex: TextureId, blend: Blend, pos: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: [u8; 4]) {
+    pub fn quad_strip(
+        &mut self,
+        tex: TextureId,
+        blend: Blend,
+        pos: [[f32; 2]; 4],
+        uv: [[f32; 2]; 4],
+        color: [u8; 4],
+    ) {
         let v = std::array::from_fn(|i| Vertex::screen(pos[i][0], pos[i][1], 0.0, uv[i], color));
         self.strip(tex, blend, false, v);
     }
 
     pub fn strip(&mut self, tex: TextureId, blend: Blend, zwrite: bool, v: [Vertex; 4]) {
-        self.push(tex, self.key(blend, zwrite, Kind::Draw), v, [0, 1, 2, 1, 2, 3]);
+        self.push(
+            tex,
+            self.key(blend, zwrite, Kind::Draw),
+            v,
+            [0, 1, 2, 1, 2, 3],
+        );
     }
 
     // ZFUNC: LESSEQUAL when on, ALWAYS when off (the D3D default outside the stage draw).
@@ -407,13 +554,33 @@ impl Gfx {
         let Rect { x, y, w, h } = self.viewport;
         let c = color.unwrap_or([0; 4]);
         let uv = [0.0, 0.0];
-        let v = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(|[px, py]| Vertex::screen(px, py, 1.0, uv, c));
-        let kind = if color.is_some() { Kind::ClearColor } else { Kind::ClearDepth };
-        self.push(self.white, PipeKey { blend: Blend::Alpha, test: false, write: true, kind }, v, [0, 1, 2, 1, 2, 3]);
+        let v = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]
+            .map(|[px, py]| Vertex::screen(px, py, 1.0, uv, c));
+        let kind = if color.is_some() {
+            Kind::ClearColor
+        } else {
+            Kind::ClearDepth
+        };
+        self.push(
+            self.white,
+            PipeKey {
+                blend: Blend::Alpha,
+                test: false,
+                write: true,
+                kind,
+            },
+            v,
+            [0, 1, 2, 1, 2, 3],
+        );
     }
 
     fn key(&self, blend: Blend, write: bool, kind: Kind) -> PipeKey {
-        PipeKey { blend, test: self.depth_test, write, kind }
+        PipeKey {
+            blend,
+            test: self.depth_test,
+            write,
+            kind,
+        }
     }
 
     fn push(&mut self, tex: TextureId, key: PipeKey, v: [Vertex; 4], idx: [u32; 6]) {
@@ -423,7 +590,13 @@ impl Gfx {
         self.indices.extend(idx.map(|i| base + i));
         match self.batches.last_mut() {
             Some(b) if b.tex == tex && b.key == key && b.clip == self.viewport => b.end += 6,
-            _ => self.batches.push(Batch { tex, key, clip: self.viewport, start, end: start + 6 }),
+            _ => self.batches.push(Batch {
+                tex,
+                key,
+                clip: self.viewport,
+                start,
+                end: start + 6,
+            }),
         }
     }
 
@@ -433,7 +606,13 @@ impl Gfx {
 
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        self.quad(self.white, Blend::Alpha, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], uv, color);
+        self.quad(
+            self.white,
+            Blend::Alpha,
+            [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+            uv,
+            color,
+        );
     }
 
     pub fn solid_quad(&mut self, blend: Blend, corners: [[f32; 2]; 4], color: [u8; 4]) {
@@ -445,7 +624,13 @@ impl Gfx {
         let t = self.texture(tex);
         let (w, h) = (t.width as f32, t.height as f32);
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        self.quad(tex, Blend::Alpha, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], uv, [255; 4]);
+        self.quad(
+            tex,
+            Blend::Alpha,
+            [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+            uv,
+            [255; 4],
+        );
     }
 
     fn depth_view(&mut self, w: u32, h: u32) -> wgpu::TextureView {
@@ -456,7 +641,11 @@ impl Gfx {
         }
         let tex = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -469,18 +658,29 @@ impl Gfx {
         v
     }
 
-    fn encode(&self, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, depth: &wgpu::TextureView, w: f32, h: f32) {
+    fn encode(
+        &self,
+        enc: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        w: f32,
+        h: f32,
+    ) {
         let buffers = (!self.verts.is_empty()).then(|| {
-            let vb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&self.verts),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            let ib = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&self.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
+            let vb = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::cast_slice(&self.verts),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            let ib = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::cast_slice(&self.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
             (vb, ib)
         });
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -489,11 +689,17 @@ impl Gfx {
                 view,
                 resolve_target: None,
                 depth_slice: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
                 stencil_ops: None,
             }),
             ..Default::default()
@@ -523,7 +729,8 @@ impl Gfx {
 
     pub fn present(&mut self) {
         let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             _ => {
                 self.surface.configure(&self.device, &self.config);
                 self.clear_batches();
@@ -546,7 +753,11 @@ impl Gfx {
         let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
         let tex = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -562,20 +773,37 @@ impl Gfx {
         });
         let depth = self.depth_view(w, h);
         let mut enc = self.device.create_command_encoder(&Default::default());
-        self.encode(&mut enc, &tex.create_view(&Default::default()), &depth, w as f32, h as f32);
+        self.encode(
+            &mut enc,
+            &tex.create_view(&Default::default()),
+            &depth,
+            w as f32,
+            h as f32,
+        );
         enc.copy_texture_to_buffer(
             tex.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &buf,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         self.queue.submit([enc.finish()]);
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         let mut px = buf.slice(..).get_mapped_range().unwrap().to_vec();
-        if matches!(self.config.format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb) {
+        if matches!(
+            self.config.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
             px.chunks_exact_mut(4).for_each(|p| p.swap(0, 2));
         }
         self.clear_batches();
@@ -606,7 +834,11 @@ fn dot(a: Vec3, b: Vec3) -> f32 {
 }
 
 fn cross(a: Vec3, b: Vec3) -> Vec3 {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn normalize(a: Vec3) -> Vec3 {
@@ -615,25 +847,50 @@ fn normalize(a: Vec3) -> Vec3 {
 }
 
 impl Mat4 {
-    pub const IDENTITY: Mat4 = Mat4([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]);
+    pub const IDENTITY: Mat4 = Mat4([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]);
 
     pub fn scale(x: f32, y: f32, z: f32) -> Self {
-        Mat4([[x, 0.0, 0.0, 0.0], [0.0, y, 0.0, 0.0], [0.0, 0.0, z, 0.0], [0.0, 0.0, 0.0, 1.0]])
+        Mat4([
+            [x, 0.0, 0.0, 0.0],
+            [0.0, y, 0.0, 0.0],
+            [0.0, 0.0, z, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
     }
 
     pub fn rotation_x(a: f32) -> Self {
         let (s, c) = a.sin_cos();
-        Mat4([[1.0, 0.0, 0.0, 0.0], [0.0, c, s, 0.0], [0.0, -s, c, 0.0], [0.0, 0.0, 0.0, 1.0]])
+        Mat4([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, c, s, 0.0],
+            [0.0, -s, c, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
     }
 
     pub fn rotation_y(a: f32) -> Self {
         let (s, c) = a.sin_cos();
-        Mat4([[c, 0.0, -s, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [0.0, 0.0, 0.0, 1.0]])
+        Mat4([
+            [c, 0.0, -s, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [s, 0.0, c, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
     }
 
     pub fn rotation_z(a: f32) -> Self {
         let (s, c) = a.sin_cos();
-        Mat4([[c, s, 0.0, 0.0], [-s, c, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
+        Mat4([
+            [c, s, 0.0, 0.0],
+            [-s, c, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
     }
 
     pub fn look_at_lh(eye: Vec3, at: Vec3, up: Vec3) -> Self {
@@ -652,7 +909,12 @@ impl Mat4 {
         let ys = 1.0 / (fovy / 2.0).tan();
         let xs = ys / aspect;
         let q = far / (far - near);
-        Mat4([[xs, 0.0, 0.0, 0.0], [0.0, ys, 0.0, 0.0], [0.0, 0.0, q, 1.0], [0.0, 0.0, -near * q, 0.0]])
+        Mat4([
+            [xs, 0.0, 0.0, 0.0],
+            [0.0, ys, 0.0, 0.0],
+            [0.0, 0.0, q, 1.0],
+            [0.0, 0.0, -near * q, 0.0],
+        ])
     }
 
     pub fn mul(&self, o: &Mat4) -> Mat4 {
@@ -697,7 +959,11 @@ impl Camera {
         let fov = std::f32::consts::PI / 10.0;
         let (cx, cy) = (vp.w / 2.0, vp.h / 2.0);
         Self {
-            view: Mat4::look_at_lh([cx, cy, cy / (fov / 2.0).tan()], [cx, cy, 0.0], [0.0, -1.0, 0.0]),
+            view: Mat4::look_at_lh(
+                [cx, cy, cy / (fov / 2.0).tan()],
+                [cx, cy, 0.0],
+                [0.0, -1.0, 0.0],
+            ),
             proj: Mat4::perspective_fov_lh(fov, vp.w / vp.h, 1.0, 10000.0),
         }
     }
@@ -710,7 +976,11 @@ impl Camera {
     pub fn project(&self, p: Vec3, vp: Rect) -> Vec3 {
         let c = self.view_proj().transform(p);
         let (x, y, z) = (c[0] / c[3], c[1] / c[3], c[2] / c[3]);
-        [vp.x + (x + 1.0) * vp.w / 2.0, vp.y + (1.0 - y) * vp.h / 2.0, z]
+        [
+            vp.x + (x + 1.0) * vp.w / 2.0,
+            vp.y + (1.0 - y) * vp.h / 2.0,
+            z,
+        ]
     }
 }
 
@@ -721,9 +991,19 @@ mod tests {
     #[test]
     fn default_camera_maps_z0_to_pixels() {
         let cam = Camera::default_2d();
-        for (x, y) in [(0.0, 0.0), (320.0, 240.0), (640.0, 480.0), (32.0, 16.0), (416.0, 464.0), (100.5, 377.25)] {
+        for (x, y) in [
+            (0.0, 0.0),
+            (320.0, 240.0),
+            (640.0, 480.0),
+            (32.0, 16.0),
+            (416.0, 464.0),
+            (100.5, 377.25),
+        ] {
             let s = cam.project([x, -y, 0.0], FULLSCREEN);
-            assert!((s[0] - x).abs() < 1e-3 && (s[1] - y).abs() < 1e-3, "({x},{y}) -> {s:?}");
+            assert!(
+                (s[0] - x).abs() < 1e-3 && (s[1] - y).abs() < 1e-3,
+                "({x},{y}) -> {s:?}"
+            );
             assert!(s[2] > 0.0 && s[2] < 1.0);
         }
     }
@@ -733,7 +1013,10 @@ mod tests {
         let cam = Camera::set_2d(PLAYFIELD);
         for (x, y) in [(0.0, 0.0), (192.0, 224.0), (384.0, 448.0), (10.0, 300.0)] {
             let s = cam.project([x, y, 0.0], PLAYFIELD);
-            assert!((s[0] - x - 32.0).abs() < 1e-2 && (s[1] - y - 16.0).abs() < 1e-2, "({x},{y}) -> {s:?}");
+            assert!(
+                (s[0] - x - 32.0).abs() < 1e-2 && (s[1] - y - 16.0).abs() < 1e-2,
+                "({x},{y}) -> {s:?}"
+            );
         }
     }
 }

@@ -29,8 +29,9 @@ pub const FIX_DEATH: usize = 11;
 
 // Effect type → etama.anm script (table 0x4C6D30, 13 §2.6).
 const SCRIPTS: [i32; 66] = [
-    28, 29, 30, 31, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 45, 45, 0, 32, 33, 51, 56, 52, 54, 104, 104, 35, 53, 34, 57, 58, 59, 60, 48, 49, 50, 88, 88, 92, 71,
-    76, 81, 82, 83, 83, 83, 83, 84, 72, 85, 86, 80, 73, 77, 88, 88, 87, 96, 55, 100, 78, 102, 103, 75, 74, 77, 98,
+    28, 29, 30, 31, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 45, 45, 0, 32, 33, 51, 56, 52, 54, 104,
+    104, 35, 53, 34, 57, 58, 59, 60, 48, 49, 50, 88, 88, 92, 71, 76, 81, 82, 83, 83, 83, 83, 84,
+    72, 85, 86, 80, 73, 77, 88, 88, 87, 96, 55, 100, 78, 102, 103, 75, 74, 77, 98,
 ];
 
 fn is_ring(kind: u8) -> bool {
@@ -165,7 +166,12 @@ pub fn shift_kind(kind: u8, d: [f32; 3]) {
 }
 
 pub fn clear() {
-    with(|e| *e = Effects { player: e.player, ..Effects::default() });
+    with(|e| {
+        *e = Effects {
+            player: e.player,
+            ..Effects::default()
+        }
+    });
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -178,7 +184,11 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 fn norm(a: [f32; 3]) -> [f32; 3] {
     let l = dot(a, a).sqrt();
-    if l > 0.0 { [a[0] / l, a[1] / l, a[2] / l] } else { a }
+    if l > 0.0 {
+        [a[0] / l, a[1] / l, a[2] / l]
+    } else {
+        a
+    }
 }
 
 impl Effect {
@@ -216,11 +226,30 @@ impl Effects {
 
     // Common init (13 §2.2) and the per-type init; false = init asked to free the slot.
     // The VM script is started by `start` (at once with an AnmManager, else at the next calc).
-    fn init(&mut self, rng: &mut crate::rng::Rng, gs: f32, i: usize, kind: u8, pos: [f32; 3], param: [f32; 3], colour: u32, zoff: bool) -> bool {
+    fn init(
+        &mut self,
+        rng: &mut crate::rng::Rng,
+        gs: f32,
+        i: usize,
+        kind: u8,
+        pos: [f32; 3],
+        param: [f32; 3],
+        colour: u32,
+        zoff: bool,
+    ) -> bool {
         let player = self.player;
         let view = self.view;
         let e = &mut self.fx[i];
-        *e = Effect { active: true, kind, pos, param, colour, zoff, pending: true, ..Effect::default() };
+        *e = Effect {
+            active: true,
+            kind,
+            pos,
+            param,
+            colour,
+            zoff,
+            pending: true,
+            ..Effect::default()
+        };
         e.age.set(0);
         match kind {
             3 => {
@@ -254,18 +283,27 @@ impl Effects {
             // 3D background particles (answers_impl9 §4): base = camera + facing/2.
             19 | 51 | 63 => {
                 let mut r = |x: f32| rng.next_f32() * x;
-                let base: [f32; 3] = std::array::from_fn(|k| view.pos[k] + view.facing[k] + -view.facing[k] / 2.0);
+                let base: [f32; 3] =
+                    std::array::from_fn(|k| view.pos[k] + view.facing[k] + -view.facing[k] / 2.0);
                 let (off, v, a);
                 if kind == 19 {
                     let o = [r(120.0) - 60.0, r(200.0) - 100.0, r(100.0) - 100.0];
-                    let vv = [r(0.06) - 0.03 + param[0], r(0.06) - 0.03 + param[1], r(0.1) + 0.03 + param[2]];
+                    let vv = [
+                        r(0.06) - 0.03 + param[0],
+                        r(0.06) - 0.03 + param[1],
+                        r(0.1) + 0.03 + param[2],
+                    ];
                     let aa = [r(0.0002) - 0.0001, r(0.0002) - 0.0001, 0.0];
                     (off, v, a) = (o, vv, aa);
                     e.rot = r(2.0 * PI) - PI;
                     e.spin = r(0.0314159) - 0.015708;
                 } else {
                     let ox = rng.next_signed() * 60.0;
-                    let oy = if kind == 51 { rng.next_signed() * 100.0 - 50.0 } else { rng.next_signed() * 200.0 - 200.0 };
+                    let oy = if kind == 51 {
+                        rng.next_signed() * 100.0 - 50.0
+                    } else {
+                        rng.next_signed() * 200.0 - 200.0
+                    };
                     let oz = rng.next_f32() * 100.0 - 100.0;
                     let vx = rng.next_signed() * 0.001 + param[0];
                     let vy = rng.next_signed() * 0.03 + if kind == 51 { param[1] } else { 0.4 };
@@ -282,7 +320,11 @@ impl Effects {
             }
             21 | 26 => {
                 e.centre = pos;
-                let a = if param[0] > 0.0 { param[0] } else { rng.next_f32() * 2.0 * PI };
+                let a = if param[0] > 0.0 {
+                    param[0]
+                } else {
+                    rng.next_f32() * 2.0 * PI
+                };
                 let m = 1.0 + rng.next_f32() * 1.5;
                 e.dir = [a.cos() * m, a.sin() * m, 0.0];
             }
@@ -302,12 +344,24 @@ impl Effects {
         let r = &mut e.ring;
         match kind {
             // Boundary inits 0x411720 / 0x411A80: ring with angle/radius/width = param, then 44 / 54 segments.
-            36 | 37 => (r.start, r.radius, r.segments, r.width) = (param[0], param[1], if kind == 36 { 44 } else { 54 }, if kind == 36 { 4.0 } else { 6.0 }),
+            36 | 37 => {
+                (r.start, r.radius, r.segments, r.width) = (
+                    param[0],
+                    param[1],
+                    if kind == 36 { 44 } else { 54 },
+                    if kind == 36 { 4.0 } else { 6.0 },
+                )
+            }
             42 => (r.segments, r.waves, r.width) = (64, 5.0, 8.0),
-            43 | 44 => (r.segments, r.width, r.tilt) = (48, 8.0, if kind == 43 { PI / 4.0 } else { -PI / 4.0 }),
+            43 | 44 => {
+                (r.segments, r.width, r.tilt) =
+                    (48, 8.0, if kind == 43 { PI / 4.0 } else { -PI / 4.0 })
+            }
             45 => (r.segments, r.width) = (8, 8.0),
             46 => (r.segments, r.width) = (12, 32.0),
-            48 => (r.segments, r.width, r.radius, r.amp, r.tilt) = (48, 3.0, 192.0, 0.0001, PI / 2.0),
+            48 => {
+                (r.segments, r.width, r.radius, r.amp, r.tilt) = (48, 3.0, 192.0, 0.0001, PI / 2.0)
+            }
             _ => {}
         }
         true
@@ -345,7 +399,16 @@ impl Effects {
         }
     }
 
-    fn init_start(&mut self, anm: &mut AnmManager, i: usize, kind: u8, pos: [f32; 3], param: [f32; 3], colour: u32, zoff: bool) -> bool {
+    fn init_start(
+        &mut self,
+        anm: &mut AnmManager,
+        i: usize,
+        kind: u8,
+        pos: [f32; 3],
+        param: [f32; 3],
+        colour: u32,
+        zoff: bool,
+    ) -> bool {
         let gs = anm.speed;
         let ok = self.init(&mut anm.rng, gs, i, kind, pos, param, colour, zoff);
         if ok {
@@ -355,7 +418,14 @@ impl Effects {
     }
 
     // Spawn from code that only holds the RNG (Player_Die, graze); the script starts at the next calc.
-    pub fn spawn_rng(&mut self, rng: &mut crate::rng::Rng, kind: u8, pos: [f32; 3], count: i32, colour: u32) -> usize {
+    pub fn spawn_rng(
+        &mut self,
+        rng: &mut crate::rng::Rng,
+        kind: u8,
+        pos: [f32; 3],
+        count: i32,
+        colour: u32,
+    ) -> usize {
         let mut last = NONE;
         for _ in 0..count.max(1) {
             let Some(i) = self.slot_ring() else { break };
@@ -368,13 +438,29 @@ impl Effects {
         last
     }
 
-    pub fn spawn_fixed_rng(&mut self, rng: &mut crate::rng::Rng, kind: u8, pos: [f32; 3], k: usize, colour: u32) -> usize {
+    pub fn spawn_fixed_rng(
+        &mut self,
+        rng: &mut crate::rng::Rng,
+        kind: u8,
+        pos: [f32; 3],
+        k: usize,
+        colour: u32,
+    ) -> usize {
         let i = FIXED_BASE + k.min(FIXED - 1);
         self.init(rng, 1.0, i, kind, pos, [0.0; 3], colour, true);
         i
     }
 
-    pub fn spawn_at(&mut self, anm: &mut AnmManager, kind: u8, pos: [f32; 3], param: [f32; 3], count: i32, colour: u32, zoff: bool) -> usize {
+    pub fn spawn_at(
+        &mut self,
+        anm: &mut AnmManager,
+        kind: u8,
+        pos: [f32; 3],
+        param: [f32; 3],
+        count: i32,
+        colour: u32,
+        zoff: bool,
+    ) -> usize {
         let mut last = NONE;
         for _ in 0..count.max(1) {
             let Some(i) = self.slot_ring() else { break };
@@ -387,14 +473,30 @@ impl Effects {
         last
     }
 
-    pub fn spawn_high(&mut self, anm: &mut AnmManager, kind: u8, pos: [f32; 3], colour: u32) -> usize {
-        let Some(i) = self.slot_high() else { return NONE };
+    pub fn spawn_high(
+        &mut self,
+        anm: &mut AnmManager,
+        kind: u8,
+        pos: [f32; 3],
+        colour: u32,
+    ) -> usize {
+        let Some(i) = self.slot_high() else {
+            return NONE;
+        };
         self.init_start(anm, i, kind, pos, [0.0; 3], colour, true);
         self.fx[i].layer = 0;
         i
     }
 
-    pub fn spawn_fixed(&mut self, anm: &mut AnmManager, kind: u8, pos: [f32; 3], param: [f32; 3], k: usize, colour: u32) -> usize {
+    pub fn spawn_fixed(
+        &mut self,
+        anm: &mut AnmManager,
+        kind: u8,
+        pos: [f32; 3],
+        param: [f32; 3],
+        k: usize,
+        colour: u32,
+    ) -> usize {
         let i = FIXED_BASE + k.min(FIXED - 1);
         self.init_start(anm, i, kind, pos, param, colour, true);
         i
@@ -424,9 +526,14 @@ impl Effects {
                 }
                 p = p.map(|x| x * e.ring.radius);
                 let (s, c) = th.sin_cos();
-                let nxp = [n[1] * p[2] - n[2] * p[1], n[2] * p[0] - n[0] * p[2], n[0] * p[1] - n[1] * p[0]];
+                let nxp = [
+                    n[1] * p[2] - n[2] * p[1],
+                    n[2] * p[0] - n[0] * p[2],
+                    n[0] * p[1] - n[1] * p[0],
+                ];
                 let np = dot(n, p);
-                let q: [f32; 3] = std::array::from_fn(|k| p[k] * c + nxp[k] * s + n[k] * np * (1.0 - c));
+                let q: [f32; 3] =
+                    std::array::from_fn(|k| p[k] * c + nxp[k] * s + n[k] * np * (1.0 - c));
                 e.pos = [e.centre[0] + q[0], e.centre[1] + q[1], 0.0];
                 if e.fade {
                     e.fade_n += 1;
@@ -441,7 +548,11 @@ impl Effects {
             }
             17 | 18 | 27 => {
                 let r = 256.0 - 256.0 * t / e.life as f32;
-                e.pos = [e.centre[0] + e.dir[0] * r, e.centre[1] + e.dir[1] * r, if e.kind == 18 { e.pos[2] } else { 0.0 }];
+                e.pos = [
+                    e.centre[0] + e.dir[0] * r,
+                    e.centre[1] + e.dir[1] * r,
+                    if e.kind == 18 { e.pos[2] } else { 0.0 },
+                ];
             }
             19 | 51 | 63 => {
                 for k in 0..3 {
@@ -468,13 +579,19 @@ impl Effects {
                     }
                     if e.kind == 51 {
                         e.vm.flags |= anmvm::F_COLOR2;
-                        e.vm.color2 = std::array::from_fn(|k| ((e.vm.color[k] as u32 * overlay[k] as u32) >> 8) as u8);
+                        e.vm.color2 = std::array::from_fn(|k| {
+                            ((e.vm.color[k] as u32 * overlay[k] as u32) >> 8) as u8
+                        });
                     }
                 }
             }
             21 | 26 => {
                 let f = 1.0 - (1.0 - (t / 90.0).min(1.0)).powi(2);
-                e.pos = [e.centre[0] + e.dir[0] * 128.0 * f, e.centre[1] + e.dir[1] * 128.0 * f, 0.0];
+                e.pos = [
+                    e.centre[0] + e.dir[0] * 128.0 * f,
+                    e.centre[1] + e.dir[1] * 128.0 * f,
+                    0.0,
+                ];
             }
             22 => e.pos = player,
             // Invulnerability ring (13 §2.6): scale 1 → 1/16 over I0 frames (the script fades it in).
@@ -562,7 +679,11 @@ impl Effects {
             return;
         }
         let saved = e.vm.pos;
-        e.vm.pos = [e.pos[0] + 32.0 + e.vm.pos_offset[0], e.pos[1] + 16.0 + e.vm.pos_offset[1], 0.0];
+        e.vm.pos = [
+            e.pos[0] + 32.0 + e.vm.pos_offset[0],
+            e.pos[1] + 16.0 + e.vm.pos_offset[1],
+            0.0,
+        ];
         let off = e.vm.pos_offset;
         e.vm.pos_offset = [0.0; 3];
         anm.draw_mode_z(gfx, &mut e.vm, 2, z);
@@ -612,7 +733,14 @@ impl Effects {
             if !(0.0..=1.0).contains(&s[2]) {
                 continue;
             }
-            let s2 = cam.project([e.pos[0] + right[0], e.pos[1] + right[1], e.pos[2] + right[2]], PLAYFIELD);
+            let s2 = cam.project(
+                [
+                    e.pos[0] + right[0],
+                    e.pos[1] + right[1],
+                    e.pos[2] + right[2],
+                ],
+                PLAYFIELD,
+            );
             let sc = ((s2[0] - s[0]).powi(2) + (s2[1] - s[1]).powi(2)).sqrt();
             if matches!(e.kind, 51 | 63) && !self.paused {
                 let p = [s[0] + e.disp[0], s[1] + e.disp[1]];
@@ -647,10 +775,15 @@ impl Effects {
 // Ring renderer 0x427450 (13 §2.5): strip of 2(n+1) vertices, v along the ring, u across the band, WRAP sampling.
 fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
     let vm = &e.vm;
-    if vm.flags & (anmvm::F_VISIBLE | anmvm::F_ENABLED) != (anmvm::F_VISIBLE | anmvm::F_ENABLED) || vm.color[anmvm::A] == 0 || !vm.has_sprite {
+    if vm.flags & (anmvm::F_VISIBLE | anmvm::F_ENABLED) != (anmvm::F_VISIBLE | anmvm::F_ENABLED)
+        || vm.color[anmvm::A] == 0
+        || !vm.has_sprite
+    {
         return;
     }
-    let Some(&spr) = anm.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else { return };
+    let Some(&spr) = anm.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+        return;
+    };
     let r = e.ring;
     let n = r.segments.max(3);
     let step = 2.0 * PI / n as f32;
@@ -667,7 +800,10 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
             [cx + th.cos() * rr, cy + th.sin() * rr]
         } else if r.waves == 0.0 {
             let th = wrap(k as f32 * step);
-            let (x, y) = (th.cos() * (r.radius + sgn * w), th.sin() * (r.amp + sgn * w));
+            let (x, y) = (
+                th.cos() * (r.radius + sgn * w),
+                th.sin() * (r.amp + sgn * w),
+            );
             let (s, co) = r.tilt.sin_cos();
             [cx + x * co - y * s, cy + x * s + y * co]
         } else {
@@ -677,10 +813,20 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
         }
     };
     let blend = anm.blend_for(vm);
-    let (u0, v0, u1, v1) = (spr.uv[0] + vm.uv_off[0], spr.uv[1], spr.uv[2] + vm.uv_off[0], spr.uv[3]);
+    let (u0, v0, u1, v1) = (
+        spr.uv[0] + vm.uv_off[0],
+        spr.uv[1],
+        spr.uv[2] + vm.uv_off[0],
+        spr.uv[3],
+    );
     let vk = |k: i32| v1 + vm.uv_off[1] - k as f32 * (v1 - v0) / n as f32;
     for k in 0..n {
-        let p = [point(k, true), point(k, false), point(k + 1, true), point(k + 1, false)];
+        let p = [
+            point(k, true),
+            point(k, false),
+            point(k + 1, true),
+            point(k + 1, false),
+        ];
         let uv = [[u0, vk(k)], [u1, vk(k)], [u0, vk(k + 1)], [u1, vk(k + 1)]];
         let v = std::array::from_fn(|i| Vertex::screen(p[i][0], p[i][1], 0.07, uv[i], rgba));
         gfx.strip(spr.tex, blend, false, v);
@@ -765,27 +911,66 @@ fn boundary_sides(centre: [f32; 3], r: &Ring, d_life: i32, period: i32, c_life: 
     for _ in 0..4 {
         let c = [centre[0] + a.cos() * s, centre[1] + a.sin() * s];
         let rot = a + PI / 2.0;
-        let d = crate::bomb::Area { pos: c, size: [8.0 * s, 4.0 * r.width], rot, damage: 60, life: d_life, period, item: 6, active: true, ..Default::default() };
+        let d = crate::bomb::Area {
+            pos: c,
+            size: [8.0 * s, 4.0 * r.width],
+            rot,
+            damage: 60,
+            life: d_life,
+            period,
+            item: 6,
+            active: true,
+            ..Default::default()
+        };
         crate::bomb::queue_area(true, d);
-        let k = crate::bomb::Area { pos: c, size: [4.0 * s, 4.0 * r.width], rot, item: 6, life: c_life, period: 1, active: true, ..Default::default() };
+        let k = crate::bomb::Area {
+            pos: c,
+            size: [4.0 * s, 4.0 * r.width],
+            rot,
+            item: 6,
+            life: c_life,
+            period: 1,
+            active: true,
+            ..Default::default()
+        };
         crate::bomb::queue_area(false, k);
         a += PI / 2.0;
     }
 }
 
 fn screen_fx(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32) -> ScreenEffect {
-    ScreenEffect { kind, p: [p0, p1, p2, p3], prio: 0x15, alpha: 0.0, release: false, timer: Timer::default() }
+    ScreenEffect {
+        kind,
+        p: [p0, p1, p2, p3],
+        prio: 0x15,
+        alpha: 0.0,
+        release: false,
+        timer: Timer::default(),
+    }
 }
 
 pub fn spawn(anm: &mut AnmManager, kind: u8, pos: [f32; 3], count: i32, colour: u32) -> usize {
     with(|e| e.spawn_at(anm, kind, pos, [0.0; 3], count, colour, true))
 }
 
-pub fn spawn_param(anm: &mut AnmManager, kind: u8, pos: [f32; 3], param: [f32; 3], count: i32, colour: u32) -> usize {
+pub fn spawn_param(
+    anm: &mut AnmManager,
+    kind: u8,
+    pos: [f32; 3],
+    param: [f32; 3],
+    count: i32,
+    colour: u32,
+) -> usize {
     with(|e| e.spawn_at(anm, kind, pos, param, count, colour, false))
 }
 
-pub fn spawn_rng(rng: &mut crate::rng::Rng, kind: u8, pos: [f32; 3], count: i32, colour: u32) -> usize {
+pub fn spawn_rng(
+    rng: &mut crate::rng::Rng,
+    kind: u8,
+    pos: [f32; 3],
+    count: i32,
+    colour: u32,
+) -> usize {
     with(|e| e.spawn_rng(rng, kind, pos, count, colour))
 }
 
@@ -799,7 +984,13 @@ pub fn spawn_fixed(anm: &mut AnmManager, kind: u8, pos: [f32; 3], k: usize, colo
 
 // Spell-card start ring (answers_impl9 §P2): plain ring, 64 segments, radius 8 → 256 over 100 frames (ease 6).
 pub fn spell_ring(anm: &mut AnmManager, pos: [f32; 3], special: bool) {
-    let i = spawn_fixed(anm, if special { 52 } else { 39 }, pos, FIX_SPELL, 0xFFFFFFFF);
+    let i = spawn_fixed(
+        anm,
+        if special { 52 } else { 39 },
+        pos,
+        FIX_SPELL,
+        0xFFFFFFFF,
+    );
     get(i, |e| {
         e.ring.segments = 64;
         e.ring.waves = 6.0;
@@ -815,12 +1006,24 @@ pub struct EffectManager {
 
 pub fn bg_file(stage: usize) -> &'static str {
     // Table 0x4C7480 by stage index (answers_impl9 §7).
-    ["eff01.anm", "eff02.anm", "eff03.anm", "eff04a.anm", "eff04b.anm", "eff05.anm", "eff06.anm", "eff07.anm", "eff08.anm"][stage % 9]
+    [
+        "eff01.anm",
+        "eff02.anm",
+        "eff03.anm",
+        "eff04a.anm",
+        "eff04b.anm",
+        "eff05.anm",
+        "eff06.anm",
+        "eff07.anm",
+        "eff08.anm",
+    ][stage % 9]
 }
 
 impl EffectManager {
     pub fn register(ctx: &mut Ctx) -> Result<std::rc::Rc<RefCell<EffectManager>>> {
-        let m = std::rc::Rc::new(RefCell::new(EffectManager { level: ctx.game.cfg.effect_level }));
+        let m = std::rc::Rc::new(RefCell::new(EffectManager {
+            level: ctx.game.cfg.effect_level,
+        }));
         let t: task::TaskRef<Ctx> = m.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
@@ -833,7 +1036,8 @@ impl Task<Ctx> for EffectManager {
         if chain == Chain::Calc {
             clear();
             crate::ascii::clear_popups();
-            ctx.anm.load(&mut ctx.gfx, &ctx.archive, BG_SLOT, bg_file(ctx.game.stage))?;
+            ctx.anm
+                .load(&mut ctx.gfx, &ctx.archive, BG_SLOT, bg_file(ctx.game.stage))?;
         }
         Ok(())
     }
@@ -877,7 +1081,12 @@ pub const SCREEN_CALC_PRIO: u16 = 3;
 
 // Queues a screen effect; registered after the calc pass (calc prio 3, draw at `prio`).
 pub fn screen(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
-    with(|e| e.screen.push(ScreenEffect { prio, ..screen_fx(kind, p0, p1, p2, p3) }));
+    with(|e| {
+        e.screen.push(ScreenEffect {
+            prio,
+            ..screen_fx(kind, p0, p1, p2, p3)
+        })
+    });
 }
 
 pub fn register_pending(ctx: &mut Ctx) {
@@ -905,9 +1114,7 @@ impl ScreenEffect {
     }
 
     fn frozen(ctx: &Ctx) -> bool {
-        with(|e| e.frozen)
-            || ctx.game.paused != 0
-            || ctx.game.game_over != 0
+        with(|e| e.frozen) || ctx.game.paused != 0 || ctx.game.game_over != 0
     }
 }
 
@@ -995,7 +1202,12 @@ impl Task<Ctx> for ScreenEffect {
             3 => self.p[2] as u32,
             _ => return Ret::Next,
         };
-        let rgba = [(colour >> 16) as u8, (colour >> 8) as u8, colour as u8, self.alpha.clamp(0.0, 255.0) as u8];
+        let rgba = [
+            (colour >> 16) as u8,
+            (colour >> 8) as u8,
+            colour as u8,
+            self.alpha.clamp(0.0, 255.0) as u8,
+        ];
         let full = matches!(self.kind, 0 | 4 | 5);
         let r = if full { FULLSCREEN } else { PLAYFIELD };
         ctx.gfx.set_viewport(r);

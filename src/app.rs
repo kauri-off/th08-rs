@@ -35,7 +35,12 @@ struct App {
 async fn init(window: Arc<Window>, source: Source) -> anyhow::Result<Box<Running>> {
     let gfx = Gfx::new(window.clone()).await?;
     let ctx = Ctx::load(source, gfx).await?;
-    Ok(Box::new(Running { window, ctx, deadline: 0.0, epoch: Instant::now() }))
+    Ok(Box::new(Running {
+        window,
+        ctx,
+        deadline: 0.0,
+        epoch: Instant::now(),
+    }))
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -102,7 +107,9 @@ impl ApplicationHandler<UserEvent> for App {
                 let now = r.epoch.elapsed().as_secs_f64();
                 if self.turbo == 0 && now <= r.deadline {
                     #[cfg(not(target_arch = "wasm32"))]
-                    std::thread::sleep(std::time::Duration::from_secs_f64((r.deadline - now).min(0.001)));
+                    std::thread::sleep(std::time::Duration::from_secs_f64(
+                        (r.deadline - now).min(0.001),
+                    ));
                     r.window.request_redraw();
                     return;
                 }
@@ -110,7 +117,8 @@ impl ApplicationHandler<UserEvent> for App {
                     r.deadline += FRAME;
                 }
                 // Web `?shot=<n>`: logic freezes at frame n so the page can be screenshotted.
-                let frozen = cfg!(target_arch = "wasm32") && self.shot.is_some_and(|f| r.ctx.frame >= f);
+                let frozen =
+                    cfg!(target_arch = "wasm32") && self.shot.is_some_and(|f| r.ctx.frame >= f);
                 // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
                 for _ in 0..self.turbo.max(1) {
                     if self.shot.is_some_and(|f| r.ctx.frame >= f) && self.turbo > 0 {
@@ -130,7 +138,11 @@ impl ApplicationHandler<UserEvent> for App {
                 r.ctx.draw();
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.shot.is_some_and(|f| r.ctx.frame >= f) {
-                    r.ctx.gfx.capture().save("/tmp/th08_shot.png").expect("save shot");
+                    r.ctx
+                        .gfx
+                        .capture()
+                        .save("/tmp/th08_shot.png")
+                        .expect("save shot");
                     el.exit();
                     return;
                 }
@@ -143,10 +155,21 @@ impl ApplicationHandler<UserEvent> for App {
 }
 
 pub fn run(source: Source) {
-    let el = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
+    let el = EventLoop::<UserEvent>::with_user_event()
+        .build()
+        .expect("event loop");
     let shot = crate::env::var("TH08_SHOT").and_then(|v| v.parse().ok());
-    let turbo = crate::env::var("TH08_TURBO").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let app = App { source, proxy: el.create_proxy(), run: None, started: false, shot, turbo };
+    let turbo = crate::env::var("TH08_TURBO")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let app = App {
+        source,
+        proxy: el.create_proxy(),
+        run: None,
+        started: false,
+        shot,
+        turbo,
+    };
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut app = app;

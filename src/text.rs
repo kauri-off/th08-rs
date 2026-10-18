@@ -31,10 +31,14 @@ const FONT_PATHS: &[&str] = &[
 impl Default for Raster {
     fn default() -> Self {
         let env = crate::env::var("TH08_FONT");
-        let font = env.iter().map(String::as_str).chain(FONT_PATHS.iter().copied()).find_map(|p| {
-            let data = std::fs::read(p).ok()?;
-            ab_glyph::FontVec::try_from_vec_and_index(data, 0).ok()
-        });
+        let font = env
+            .iter()
+            .map(String::as_str)
+            .chain(FONT_PATHS.iter().copied())
+            .find_map(|p| {
+                let data = std::fs::read(p).ok()?;
+                ab_glyph::FontVec::try_from_vec_and_index(data, 0).ok()
+            });
         if font.is_none() {
             log::warn!("no Japanese font found (set TH08_FONT); dialogue text stays blank");
         }
@@ -57,7 +61,9 @@ impl Raster {
             let id = font.glyph_id(ch);
             let g = id.with_scale_and_position(scale, point(pen, y + cell * BASELINE));
             pen += sf.h_advance(id);
-            let Some(o) = font.outline_glyph(g) else { continue };
+            let Some(o) = font.outline_glyph(g) else {
+                continue;
+            };
             let b = o.px_bounds();
             o.draw(|gx, gy, c| {
                 let (px, py) = (b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32);
@@ -74,7 +80,10 @@ impl Raster {
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 pub struct Raster {
-    canvas: Option<(web_sys::HtmlCanvasElement, web_sys::CanvasRenderingContext2d)>,
+    canvas: Option<(
+        web_sys::HtmlCanvasElement,
+        web_sys::CanvasRenderingContext2d,
+    )>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -84,19 +93,28 @@ impl Raster {
         let mut out = vec![0u8; w * h];
         if self.canvas.is_none() {
             let doc = web_sys::window().and_then(|w| w.document());
-            let c = doc.and_then(|d| d.create_element("canvas").ok()).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok());
-            let ctx = c.as_ref().and_then(|c| c.get_context("2d").ok().flatten()).and_then(|x| x.dyn_into::<web_sys::CanvasRenderingContext2d>().ok());
+            let c = doc
+                .and_then(|d| d.create_element("canvas").ok())
+                .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok());
+            let ctx = c
+                .as_ref()
+                .and_then(|c| c.get_context("2d").ok().flatten())
+                .and_then(|x| x.dyn_into::<web_sys::CanvasRenderingContext2d>().ok());
             if let (Some(c), Some(ctx)) = (c, ctx) {
                 self.canvas = Some((c, ctx));
             }
         }
-        let Some((c, ctx)) = &self.canvas else { return out };
+        let Some((c, ctx)) = &self.canvas else {
+            return out;
+        };
         if c.width() as usize != w || c.height() as usize != h {
             c.set_width(w as u32);
             c.set_height(h as u32);
         }
         ctx.clear_rect(0.0, 0.0, w as f64, h as f64);
-        ctx.set_font(&format!("600 {cell}px \"MS Gothic\", \"Noto Sans CJK JP\", \"Hiragino Sans\", monospace"));
+        ctx.set_font(&format!(
+            "600 {cell}px \"MS Gothic\", \"Noto Sans CJK JP\", \"Hiragino Sans\", monospace"
+        ));
         ctx.set_fill_style_str("#fff");
         let _ = ctx.fill_text(s, x as f64, (y + cell * BASELINE) as f64);
         if let Ok(img) = ctx.get_image_data(0.0, 0.0, w as f64, h as f64) {
@@ -121,7 +139,13 @@ impl Raster {
         let mut work = vec![[0f32; 4]; w2 * h2];
         let black = [0.0, 0.0, 0.0];
         let col = color.map(|c| c as f32 / 255.0);
-        for (dx, dy, c) in [(4, 2, black), (0, 2, black), (2, 0, black), (2, 4, black), (2, 2, col)] {
+        for (dx, dy, c) in [
+            (4, 2, black),
+            (0, 2, black),
+            (2, 0, black),
+            (2, 4, black),
+            (2, 2, col),
+        ] {
             for y in 0..h2 - dy {
                 for x in 0..w2 - dx {
                     let a = mask[y * w2 + x] as f32 / 255.0;
