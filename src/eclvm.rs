@@ -488,12 +488,15 @@ impl Exec<'_> {
         e.set_move_mode(2);
     }
 
-    fn move_dir(&mut self, dur: i32, ease: i32, ang: f32, spd: f32) {
+    fn move_dir(&mut self, dur: i32, ease: i32, ang: f32, spd: f32, mirror: bool) {
         if dur < 1 {
             self.mode1(ang, spd, 0);
         } else {
             let d = spd * dur as f32;
-            let delta = [ang.cos() * d, ang.sin() * d, 0.0];
+            let mut delta = [ang.cos() * d, ang.sin() * d, 0.0];
+            if mirror && self.e.flags & A_MIRROR != 0 {
+                delta[0] = -delta[0];
+            }
             self.mode2(dur, ease, self.e.final_pos, delta);
         }
     }
@@ -1383,12 +1386,12 @@ impl Exec<'_> {
                     self.af(t, ins, 2),
                     self.af(t, ins, 3),
                 );
-                self.move_dir(dur, ease, a, s);
+                self.move_dir(dur, ease, a, s, true);
             }
             67 | 178 => {
                 let (dur, ease, s) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.af(t, ins, 2));
                 let a = self.random_dir(op == 178);
-                self.move_dir(dur, ease, a, s);
+                self.move_dir(dur, ease, a, s, false);
             }
             68 => {
                 let (off, s) = (self.af(t, ins, 0), self.af(t, ins, 1));
@@ -1407,7 +1410,7 @@ impl Exec<'_> {
                     self.mode1(a, s, dur);
                 } else {
                     // Quirk: with a duration the movement is not aimed (same as op 66).
-                    self.move_dir(dur, ease, off, s);
+                    self.move_dir(dur, ease, off, s, true);
                 }
             }
             70 => {

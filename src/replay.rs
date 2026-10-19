@@ -578,6 +578,7 @@ impl ReplayTask {
                 .and_then(|s| s.fps.get(self.fps_q + 1).copied())
                 .unwrap_or(60);
             ctx.game.replay_fps = b & 0x7F;
+            ctx.game.replay_fps_red = b >> 7 != 0;
             self.fps_q += 1;
         }
         self.frame += 1;

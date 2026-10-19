@@ -1601,7 +1601,7 @@ mod tests {
     const MENU_CLR: (usize, f64) = (900, 97.3);
     const MENU_MOPUP1: (usize, f64) = (1590, 84.5);
     // Demos 0–3, first chunk: % same quads (playfield).
-    const DEMO: [f64; 4] = [86.0, 29.5, 74.5, 77.8];
+    const DEMO: [f64; 4] = [90.3, 71.5, 83.1, 86.8];
 
     fn data(p: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

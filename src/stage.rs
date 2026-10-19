@@ -717,6 +717,8 @@ impl Stage {
             points,
         };
         let fog = self.fog_params(anm);
+        // Stack residue before the first ribbon of the call (answers_impl17 §5.1, INFERRED constant).
+        let mut slots = [0x00910D20u32, 0x00676E85, 0, 0].map(u32::to_le_bytes);
         for inst in &self.std.instances {
             let obj = &self.std.objects[inst.object];
             if obj.layer != layer {
@@ -755,7 +757,7 @@ impl Stage {
                     QuadKind::Ribbon { a, b, w } => {
                         let pa = sub(add(a, inst.pos), self.origin);
                         let pb = sub(add(b, inst.pos), self.origin);
-                        view.ribbon(anm, gfx, vm, pa, pb, w);
+                        view.ribbon(anm, gfx, vm, &mut slots, pa, pb, w);
                     }
                 }
             }
@@ -835,17 +837,28 @@ impl View<'_> {
         vm.color = saved;
     }
 
-    // DrawCustomQuad skip rules: enabled, visible, primary alpha ≠ 0 (06 §13).
+    // Colours go to the call's reused slots first; f ≥ 1 clears only alpha (06 §11.3). Then the DrawCustomQuad checks.
+    #[allow(clippy::too_many_arguments)]
     fn ribbon(
         &self,
         anm: &mut AnmManager,
         gfx: &mut Gfx,
         vm: &mut AnmVm,
+        slots: &mut [[u8; 4]; 4],
         a: Vec3,
         b: Vec3,
         w: f32,
     ) {
         use anmvm::*;
+        let base = vm.color;
+        for (p, k) in [(a, 0), (b, 2)] {
+            for s in &mut slots[k..k + 2] {
+                match self.soft_fog(base, self.dist(p)) {
+                    Some(c) => *s = c,
+                    None => s[A] = 0,
+                }
+            }
+        }
         if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
             || vm.color[A] == 0
             || !vm.has_sprite
@@ -856,22 +869,15 @@ impl View<'_> {
             return;
         };
         let ww = if w != 0.0 { w } else { vm.sprite_w };
-        let base = if vm.flags & F_COLOR2 != 0 {
-            vm.color2
-        } else {
-            vm.color
-        };
         let point = |p: Vec3| {
             let sp = self.cam.project(p, self.vp);
             let e = sub(self.cam.project(add(p, scale(self.right, ww)), self.vp), sp);
-            let mut c = self
-                .soft_fog(base, self.dist(p))
-                .unwrap_or([base[0], base[1], base[2], 0]);
-            c = anm.tinted([c[R], c[G], c[B], c[A]]);
-            (sp, dot(e, e).sqrt() / 2.0, c)
+            (sp, dot(e, e).sqrt() / 2.0)
         };
-        let (sa, wa, ca) = point(a);
-        let (sb, wb, cb) = point(b);
+        let col = |c: [u8; 4]| anm.tinted([c[R], c[G], c[B], c[A]]);
+        let (c0, c1, c2, c3) = (col(slots[0]), col(slots[1]), col(slots[2]), col(slots[3]));
+        let (sa, wa) = point(a);
+        let (sb, wb) = point(b);
         let (dx, dy) = (sb[0] - sa[0], sb[1] - sa[1]);
         let len = (dx * dx + dy * dy).sqrt();
         if len < 1e-5 || !(0.0..=1.0).contains(&sa[2]) || !(0.0..=1.0).contains(&sb[2]) {
@@ -885,10 +891,10 @@ impl View<'_> {
             Vertex::screen(x + o[0] + 0.5, y + o[1] + 0.5, z, uv, c)
         };
         let v = [
-            vx(sa[0] + dy * wa, sa[1] - dx * wa, sa[2], [u0, v0], ca),
-            vx(sa[0] - dy * wa, sa[1] + dx * wa, sa[2], [u1, v0], ca),
-            vx(sb[0] + dy * wb, sb[1] - dx * wb, sb[2], [u0, v1], cb),
-            vx(sb[0] - dy * wb, sb[1] + dx * wb, sb[2], [u1, v1], cb),
+            vx(sa[0] + dy * wa, sa[1] - dx * wa, sa[2], [u0, v0], c0),
+            vx(sa[0] - dy * wa, sa[1] + dx * wa, sa[2], [u1, v0], c1),
+            vx(sb[0] + dy * wb, sb[1] - dx * wb, sb[2], [u0, v1], c2),
+            vx(sb[0] - dy * wb, sb[1] + dx * wb, sb[2], [u1, v1], c3),
         ];
         let blend = anm.blend_for(vm);
         anm.bind(spr.tex);

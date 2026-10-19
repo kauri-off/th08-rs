@@ -36,6 +36,7 @@ pub struct AnmManager {
     last_blend: Blend,
     last_tex_matrix: Option<((i16, i16), [f32; 2])>,
     bound_tex: Option<TextureId>,
+    pub entries_loaded: u32,
 }
 
 // Linear vertex fog in camera-space depth; colour as RGB bytes.
@@ -62,6 +63,7 @@ impl Default for AnmManager {
             last_blend: Blend::Alpha,
             last_tex_matrix: None,
             bound_tex: None,
+            entries_loaded: 0,
         }
     }
 }
@@ -92,6 +94,7 @@ impl AnmManager {
             entry += 1;
             id
         });
+        self.entries_loaded += entry;
         Ok(())
     }
 

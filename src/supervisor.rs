@@ -17,6 +17,8 @@ pub struct Supervisor {
     stage_load: bool,
     capture_req: bool,
     presents: u32,
+    fps_text: String,
+    fps_frames: u32,
 }
 
 // The logo stays up while the loaders run (answers_impl9 §18: no fixed time); holds measured on the original's draw
@@ -38,6 +40,8 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
         stage_load: false,
         capture_req: false,
         presents: 0,
+        fps_text: String::new(),
+        fps_frames: 0,
     });
     task::add(ctx, Chain::Calc, 0, 0, t.clone())?;
     for prio in [0, 2, 16] {
@@ -66,6 +70,30 @@ pub fn setup_new_game(g: &mut Game, stage: usize) -> Result<()> {
 }
 
 impl Supervisor {
+    // Fps_Update's playback text (15 §3.3). The original refreshes on a host-timed 500 ms window; fixed rule here:
+    // every 30 gameplay calcs, on the 3rd of each (demo 0 / 2 phase).
+    fn replay_fps(&mut self, ctx: &mut Ctx) {
+        let g = &ctx.game;
+        if g.loading != 0 || g.scene != gamemgr::SCENE_GAME {
+            self.fps_frames = 0;
+            return;
+        }
+        if !g.replay() || g.flags & gamemgr::F_RUNNING == 0 {
+            return;
+        }
+        self.fps_frames += 1;
+        if self.fps_frames % 30 == 3 {
+            self.fps_text = format!("{:2}", g.replay_fps);
+        }
+        let c = if g.replay_fps_red {
+            0xFFFF4040
+        } else {
+            0xFFFFFFD0
+        };
+        ctx.ascii
+            .push(crate::ascii::Text::new(384.0, 448.0, self.fps_text.clone()).argb(c));
+    }
+
     // Loading_Begin (12 §1): surface 8 (the logo) full screen + nowloading.anm scripts 0–2 at (500, 440).
     fn begin_loading(&mut self, ctx: &mut Ctx) -> Result<()> {
         if self.logo.is_none() {
@@ -317,6 +345,7 @@ impl Task<Ctx> for Supervisor {
         }
         self.frame += 1;
         ctx.input.tick();
+        self.replay_fps(ctx);
         if std::mem::take(&mut self.capture_req) {
             self.capture(ctx);
         }
@@ -400,11 +429,6 @@ impl Task<Ctx> for Supervisor {
             (0, Some(t)) => {
                 ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
                 ctx.gfx.image(t, 0.0, 0.0);
-            }
-            // SPEC-GAP: every gameplay frame starts with a full-screen depth clear (seen in the original's draw log).
-            (0, None) if ctx.game.scene == gamemgr::SCENE_GAME && !self.stage_load => {
-                ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
-                ctx.gfx.clear_depth(None);
             }
             (2, _) => {
                 // The scripts' own positions (slide-in, z) are relative to the loading position.

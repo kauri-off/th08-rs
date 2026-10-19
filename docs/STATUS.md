@@ -133,6 +133,13 @@
   - Fixes from the traces: difficulty cursor set on Start/Practice confirm, character cursor on difficulty confirm; bomb gauge not on the start frame; shot-timer gate uses the game frame counter (0x164D2C8 = this frame); item state 3 → 1 when the player's shot timer < 0 (was never true); time orbs spawn inside the bullet loop (RNG order); per-enemy time-orb accumulator starting at the step (07 e+0x2E10); focus switch replays the start-move sprite; enemy draw lists linked per calc and drawn newest-first; hit flash not on two consecutive frames.
   - Leading identical rows: golden 1101 → 2172, selftest1 344 → 1325 (test `session::tests::session_sync`, `MIN_LEADING`). Demo sync 1128/559/723/825 → 1317/559/743/1058. Draw logs: menu_base 1754 / 70.66 %, menu_clr 903 / 97.41 %, mopup1 1593 / 84.71 % (unchanged); demos first chunk 85.2/29.7/78.7/68.0 → 86.3/29.8/74.6/78.0 % (`DEMO` [86.0, 29.5, 74.5, 77.8]; demo 2 drops after its trace divergence at 744). Questions: `docs/briefs/IMPL18_QUESTIONS.md`.
 
+- impl19 (answers_impl16 / answers_impl17 Q2/Q5, 2026-10-19):
+  - Every-third drop counter / table index = `Rng_Range16(3)` / `Rng_Range16(8)` at each stage load (u16, check then increment, index wraps 32); op 66 / 69 (dur ≥ 1) negate delta.x when mirrored (67/178 not).
+  - Stage loading max(31 | 81, ANM entries loaded + 6) (`AnmManager::entries_loaded`); GameMgr_Calc's full-screen z clear moved into the calc (after the demo-end / slowdown returns, before pause/game-over); stg4abg ribbons: colour 1, per-layer-call stale vertex slots (f ≥ 1 clears alpha only, residue 0x910D20 / 0x676E85 / 0 / 0); clock VM ticks only while stage-title VM 0 alpha ≠ 0; replay fps text "%2d" at (384, 448) 0xFFFFFFD0 / 0xFFFF4040, refreshed every 30 gameplay calcs at phase 3.
+  - Full-power clamp is a checksummed write (SPEC-GAP, demo 3).
+  - Session `meta.txt` line `noclip: 1` → player `debug_invuln` (bin and `session_sync`).
+  - Sync: demos 1317/559/743/1058 → 1719/1807/2260/1500 (`MIN_SYNC`); draw logs first chunk 86.3/29.8/74.6/78.0 → 90.5/71.7/83.3/87.0 % (`DEMO` [90.3, 71.5, 83.1, 86.8]); sessions golden 2172 / selftest1 1325 and menus (1754/70.66, 903/97.41, 1593/84.71) unchanged. SPEC-GAP 45 → 41. Questions: `docs/briefs/IMPL19_QUESTIONS.md`.
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
@@ -141,7 +148,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl18 done (session replay tool; golden 2172 / selftest1 1325 leading rows). Next IMPL: answers to IMPL18 questions (golden blocker = Yukari aimed enemy at frame 1432), answers to IMPL17 questions; result viewer (scene 5 / RESULT_MENU stub), result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, music room, spell-practice data tables (difficulty names, card unlock hints, Last Word unlocks).
+2. IMPL impl19 done (answers_impl16/17 gameplay). Next IMPL: answers to IMPL19 questions, answers to IMPL18 questions (golden blocker = Yukari aimed enemy at frame 1432), answers to IMPL17 questions; result viewer (scene 5 / RESULT_MENU stub), result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, music room, spell-practice data tables (difficulty names, card unlock hints, Last Word unlocks).
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

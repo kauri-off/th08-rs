@@ -842,11 +842,15 @@ impl Task<Ctx> for Hud {
             &mut self.diff_vm,
             &mut self.clear_vm,
             &mut self.night_vm,
-            &mut self.start_clock_vm,
         ]) {
             if vm.script.is_some() {
                 vm.run(anm);
             }
+        }
+        // The clock VM ticks only while stage-title VM 0 has alpha ≠ 0, never in spell practice (12 §5.1).
+        let title_on = self.title.first().is_some_and(|v| v.color[anmvm::A] != 0);
+        if self.start_clock_vm.script.is_some() && title_on && !ctx.game.spell_practice() {
+            self.start_clock_vm.run(anm);
         }
         Ret::Next
     }

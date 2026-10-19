@@ -46,6 +46,9 @@ fn main() -> anyhow::Result<()> {
         )
     })?;
     let s = Session::load(&dir)?;
+    if s.noclip {
+        eprintln!("noclip: player invulnerable (meta.txt)");
+    }
     std::fs::create_dir_all(&out)?;
     let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let mut ref_paths = drawlog::expand(&dir.join("draw").to_string_lossy());

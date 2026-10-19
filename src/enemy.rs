@@ -480,8 +480,8 @@ pub struct Globals {
     pub timer_pause: i32,
     pub hud_boss: bool,
     pub dialogue: bool,
-    pub drop_counter: u32,
-    pub drop_index: usize,
+    pub drop_counter: u16,
+    pub drop_index: u16,
     pub native_globals: [i32; 2],
     pub flag_164d0bb: bool,
     pub g_f54cec: i32,
@@ -542,8 +542,6 @@ impl EnemyManager {
         let g = Globals {
             difficulty,
             rank: 16,
-            // SPEC-GAP: the every-third-drop counter starts at 2 (demo 2: the 2nd item −1 death drops, not the 1st).
-            drop_counter: 2,
             player: player.borrow().pos,
             ..Default::default()
         };
@@ -626,8 +624,8 @@ impl EnemyManager {
             p.stats.youkai_frames,
         ) = (0, 0, 0);
         drop(p);
-        anm.rng.range16(3);
-        anm.rng.range16(8);
+        self.g.drop_counter = anm.rng.range16(3);
+        self.g.drop_index = anm.rng.range16(8);
     }
 
     // Player collision (07 §10.1 step 6): graze box hitbox/0.7, contact box hitbox/1.5, shot/bomb damage.
@@ -1373,13 +1371,12 @@ impl EnemyManager {
             items.push((p, e.item, mode));
             sparks = 3;
         } else if e.item == -1 {
-            // SPEC-GAP: counter/index update order of the every-third-death table is not specified.
             if self.g.drop_counter.is_multiple_of(3) {
-                items.push((p, DROP_TABLE[self.g.drop_index % 32], mode));
-                self.g.drop_index += 1;
+                items.push((p, DROP_TABLE[self.g.drop_index as usize % 32], mode));
+                self.g.drop_index = (self.g.drop_index + 1) % 32;
                 sparks = 6;
             }
-            self.g.drop_counter += 1;
+            self.g.drop_counter = self.g.drop_counter.wrapping_add(1);
         }
         if sparks > 0 {
             let spark = self.enemies[idx].death_bytes[1].wrapping_add(4);

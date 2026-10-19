@@ -88,6 +88,8 @@ pub struct Game {
     pub replay_ff: bool,
     pub dialogue_skippable: bool,
     pub replay_fps: u8,
+    pub replay_fps_red: bool,
+    pub noclip: bool,
     pub watched_replay: bool,
     slow_phase: u32,
     pub stage_seed: u16,
@@ -143,6 +145,8 @@ impl Default for Game {
             replay_ff: true,
             dialogue_skippable: false,
             replay_fps: 60,
+            replay_fps_red: false,
+            noclip: false,
             watched_replay: false,
             slow_phase: 0,
             stage_seed: 0,
@@ -413,6 +417,7 @@ pub struct GameManager {
     pub hud: Option<Rc<RefCell<Hud>>>,
     tasks: Vec<TaskRef<Ctx>>,
     gauge_at: Option<(u32, i32, i32)>,
+    loading_total: u32,
 }
 
 impl GameManager {
@@ -425,7 +430,9 @@ impl GameManager {
             hud: None,
             tasks: Vec::new(),
             gauge_at: None,
+            loading_total: 31,
         }));
+        gm.borrow().player.borrow_mut().debug_invuln |= ctx.game.noclip;
         CURRENT.with_borrow_mut(|c| *c = Rc::downgrade(&gm));
         let t: TaskRef<Ctx> = gm.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -499,6 +506,7 @@ impl GameManager {
 
     // GameManager_StageStart (11 §3.1) with the subsystems registered synchronously.
     fn stage_start(&mut self, ctx: &mut Ctx) -> Result<()> {
+        let entries0 = ctx.anm.entries_loaded;
         let g = &mut ctx.game;
         g.loading = 1;
         g.loading_frames = 0;
@@ -548,8 +556,6 @@ impl GameManager {
             Some(3) => 33,
             _ => 28,
         };
-        let total = loading_total(&ctx.game);
-        self.gauge_at = Some(((total + 1).saturating_sub(k).max(1), l.min, l.max));
         {
             let mut p = self.player.borrow_mut();
             let limits = p.stats.limits;
@@ -641,6 +647,9 @@ impl GameManager {
             gui,
             replay_t,
         ];
+        let total = loading_total(&ctx.game, ctx.anm.entries_loaded - entries0);
+        self.loading_total = total;
+        self.gauge_at = Some(((total + 1).saturating_sub(k).max(1), l.min, l.max));
         self.stage = Some(stage_t);
         self.bullets = Some(bullets);
         self.enemies = Some(enemies);
@@ -815,7 +824,7 @@ impl Task<Ctx> for GameManager {
                     (next >= gauge, next >= wait, next >= release)
                 }
                 None => {
-                    let done = g.loading_frames >= loading_total(g);
+                    let done = g.loading_frames >= self.loading_total;
                     let gauge = self.gauge_at.is_some_and(|a| g.loading_frames >= a.0);
                     (gauge, done, done)
                 }
@@ -900,6 +909,9 @@ impl Task<Ctx> for GameManager {
                 return Ret::StopFrame;
             }
         }
+        // GameMgr_Calc's own z clear (11 §3.1), the previous frame left the viewport full-screen.
+        ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
+        ctx.gfx.clear_depth(None);
         if g.paused != 0 || g.game_over != 0 {
             return Ret::StopFrame;
         }
@@ -953,9 +965,10 @@ impl Task<Ctx> for GameManager {
     }
 }
 
-// Stage loading frames: replays measured 81 presents (answers_impl15 §Q7). SPEC-GAP: the original waits for its loader thread.
-fn loading_total(g: &Game) -> u32 {
-    if g.replay() { 81 } else { 30 }
+// Loader minimum 31 / 81 calcs (11 §3.1), floored by one texture upload per frame; +6 fits stage 1 (42 → 48).
+fn loading_total(g: &Game, entries: u32) -> u32 {
+    let min = if g.replay() { 81 } else { 31 };
+    min.max(entries + 6)
 }
 
 #[cfg(test)]

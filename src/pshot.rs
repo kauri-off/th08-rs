@@ -802,7 +802,7 @@ impl Player {
                 }
             }
         }
-        // SPEC-GAP: the 50 cap (09 §4.5) is applied to the accumulator only; the traces show uncapped shot damage.
+        // Only the accumulator add is capped at 50 (09 §4.5).
         *acc += shot.min(50);
         let mut dmg = shot;
         for a in self.damage_areas.iter_mut().filter(|a| a.active) {

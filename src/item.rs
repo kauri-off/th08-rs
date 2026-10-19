@@ -220,7 +220,8 @@ impl ItemManager {
                     st.power += if kind == POWER { 1.0 } else { 8.0 };
                     Stats::checksum(&mut anm.rng);
                     if st.power >= 128.0 {
-                        st.power = 128.0;
+                        // SPEC-GAP: the clamp is a checksummed write (demo 3 frame 1059 needs 4 more draws).
+                        st.set_power(128.0, &mut anm.rng);
                         out.cancel = !spell;
                         self.convert_power_items(anm, idx);
                     }

@@ -301,6 +301,7 @@ mod native {
         pub input: Vec<u16>,
         pub seed: u32,
         pub sched: Sched,
+        pub noclip: bool,
     }
 
     impl Session {
@@ -310,11 +311,14 @@ mod native {
             let input = std::fs::read_to_string(dir.join("input.txt"))?;
             let input = crate::input::parse_script(&input)
                 .ok_or_else(|| anyhow::anyhow!("bad input.txt"))?;
+            let noclip = std::fs::read_to_string(dir.join("meta.txt"))
+                .is_ok_and(|m| m.lines().any(|l| l.trim() == "noclip: 1"));
             Ok(Self {
                 dir: dir.to_path_buf(),
                 input,
                 seed,
                 sched,
+                noclip,
             })
         }
 
@@ -360,6 +364,7 @@ mod native {
             crate::scoredat::set_save_dir(Some(save));
             ctx.anm.rng = crate::rng::Rng::seeded(self.seed as u16);
             ctx.game.sched = Some(self.sched.clone());
+            ctx.game.noclip = self.noclip;
             Ok(())
         }
 
