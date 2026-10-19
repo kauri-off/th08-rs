@@ -5,3 +5,4 @@ Draw logs are large and stay outside git in `sessions/<name>/draw_*.drawlog.xz` 
 
 - `golden`: human play, 25 634 frames (~7 min): menu → stage 1 → stage 2 → start of stage 3 → back to the menu. Replay in the original is identical (trace and draw log).
 - `selftest1`: scripted, 1 922 frames: title → stage 1 → pause → quit → title → quit.
+- `fullrun_noclip`: human play with `--noclip` (`noclip: 1`, 2 733 absorbed hits logged as `noclip_hit` in events.txt), 124 705 frames (~35 min): menu → stages 1–6 → ending/staff roll. Not re-verified by replay in the original (too long); the noclip recorder itself was verified bit-exact on `noclip_test1`.

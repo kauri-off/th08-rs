@@ -1,0 +1,23 @@
+name: fullrun_noclip
+recorded: 2026-10-19T11:22:21+03:00
+wine: /home/anon/PortProton/data/dist/WINE_LG_11-1/bin/wine
+prefix: /home/anon/PortProton/data/prefixes/DEFAULT
+display: :0
+renderer: wined3d (wine builtin d3d8 behind the probe)
+drawlog: 0
+noclip: 1
+sound: on
+score_source: re/work/game/score.dat
+cfg_patch: +0x22 windowed=1, +0x1F music=1 (WAV), +0x20 SE=1
+elapsed_seconds: 2082
+replays_saved: 
+menu_base_present: 14
+boot_presents: 13
+boot_polls: 0
+first_menu_poll: 0
+polls: 124705
+last_present: 124720
+frames_without_poll: 2
+presents_with_multiple_polls: 0
+boot_seed: 00100ab3
+rng_state_after_seed: 0ab3
