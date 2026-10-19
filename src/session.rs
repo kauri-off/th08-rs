@@ -144,6 +144,7 @@ pub fn sample(ctx: &mut crate::game::Ctx, present: i64, poll: i64, scene_frame: 
     let d = crate::demosync::sample(ctx, 0);
     r[..22].copy_from_slice(&d);
     let (menu, cursor) = ctx.game.trace_menu.take().unwrap_or((-1, -1));
+    let result = ctx.game.trace_result.take().unwrap_or(-1);
     let g2 = &ctx.game;
     r[22] = 0;
     r[23] = present;
@@ -153,7 +154,7 @@ pub fn sample(ctx: &mut crate::game::Ctx, present: i64, poll: i64, scene_frame: 
     r[27] = scene_frame;
     r[28] = menu as i64;
     r[29] = cursor as i64;
-    r[30] = -1;
+    r[30] = result as i64;
     r[31] = g2.paused as i64;
     r[32] = ctx.input.held as i64;
     r[33] = g2.stage as i64;
@@ -166,8 +167,8 @@ pub fn sample(ctx: &mut crate::game::Ctx, present: i64, poll: i64, scene_frame: 
     r
 }
 
-// Columns not compared: result (the port's result screens are stubs).
-pub const SKIP: [usize; 1] = [30];
+// Columns not compared.
+pub const SKIP: [usize; 0] = [];
 // Gameplay columns compared only in scene 2 (the original keeps stale values of freed objects elsewhere).
 pub const GAMEPLAY: std::ops::RangeInclusive<usize> = 5..=20;
 
@@ -281,7 +282,7 @@ impl std::fmt::Display for Comparison {
         }
         writeln!(
             f,
-            "\nnot compared: result (port stub); gameplay columns {}–{} outside scene 2",
+            "\nnot compared: gameplay columns {}–{} outside scene 2",
             COLUMNS[*GAMEPLAY.start()],
             COLUMNS[*GAMEPLAY.end()]
         )

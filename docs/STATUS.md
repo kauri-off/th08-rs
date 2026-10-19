@@ -52,7 +52,7 @@
 - `src/gamemgr.rs` — `Game` (persistent GM state in `Ctx`: scene, difficulty, shot, stage, flags, rank, clear masks) and GameManager task (calc 2): new game / next stage start (RNG jitter + decoys + checksums, stats defaults, time thresholds, rank table), stats carried between stages through the player, stage-end state machine (clear masks, Stage_Advance 4A/4B and 6A/6B, ending / result / night-over), loading with "Press Shot Button" wait after a clear, pause (ESC), game over → continue menu, score roll, rank sub-counter → ECL rank var, continue side effects.
 - `src/ascii.rs` — ASCII manager (calc 1, draw 14/20): text queue with `ascii.anm` glyphs, pause menu (12 §3: states, confirm screens, ESC/Q/R shortcuts, quit / retry scenes) and continue menu (11 §4.2 / 12 §4: ending when the night is over, Yes → +1 clock, continue resets; No → result).
 - `src/hud.rs` — HUD (calc 15, draw 17): front.anm side panel (tiles, labels, hiscore/score + continue digit, life/bomb icons, power gauge, graze, point/extend, time/threshold), stage title + song card (stgNtxt) and night clock (times.anm, ECL 179/181), dialogue drawing (portraits by z, growing text box, lines, boss name card), boss UI (life bar ±0.01/0.02, markers (ECL 158), remaining-bars gauge (ECL 148), timer colours, spell name/bonus), popups (bonus, messages, spell card bonus), stage-clear panel with bonus computation and animated clock that fires the clear trigger, op 14 white flash, op 7 BGM change, op 12 fade.
-- `src/supervisor.rs` — scene switching per 11 §7 (0 boot, 1 menu, 2 game, 3 next stage, 6 result, 9 ending, 10 retry, 11 reload); the main menu (`src/menu.rs`) starts games; result and ending are text stubs. `TH08_STAGE` now starts a full game at that stage.
+- `src/supervisor.rs` — scene switching per 11 §7 (0 boot, 1 menu, 2 game, 3 next stage, 6 result, 9 ending, 10 retry, 11 reload); the main menu (`src/menu.rs`) starts games; ending is a text stub (result: impl23). `TH08_STAGE` now starts a full game at that stage.
 - `src/audio.rs` — BGM pause/resume and linear fade-out.
 - Spell end (ECL 123): capture → score bonus, spells +1, time bonus formula (11 §8), popups; enemies freed by the dialogue's destroy step when they have no death sub left (4A/4B midboss).
 - Debug: `TH08_INVULN=1` (no deaths), `TH08_TURBO=<n>` (n logic frames per drawn frame, no pacing). Verified: dialogue on the stage 1 boss, HUD during play, pause menu, continue menu (Yes → continue), stage-clear panel + "Press Shot Button", 4A/4B by team, Final A/B choice (solo) → 6B, full scripted runs 1 → 2 → 3 → 4A/4B → 5 → 6A → ending stub → result stub → menu → new game, Extra → result. Tests: routing, clock advance, rank, score roll, every msg file, wait/skip/release, final-route resolution.
@@ -163,6 +163,27 @@
   - Demo sync 4450/3869/2260/1605 → 4450/3869/2937/1605. Demo draw 90.59/71.65/83.30/86.97 → 90.61/71.66/83.33/86.97 %. Menus unchanged (70.81/97.79/84.74 %). Thresholds raised.
   - SPEC-GAP 40 → 31. Questions: `docs/briefs/IMPL22_QUESTIONS.md`.
 
+- impl23 (16 §2.1–2.5, 15 §2.2–2.9, 2026-10-19):
+  - `src/result.rs` — Result object (calc 16, draw 18; result.jpg, result00.anm slot 21, resulttext.anm slot 22, 72 VMs, 28 text
+    VMs + separator bar). Mode 1 after a game (scene 6): name entry (charset grid with pulse, Up/Down/Left/Right skipping the
+    space cell, Shot types / SP / END, Bomb/ESC backspace, ESC finishes, cursor on END when an LSNM chunk was loaded), ranking
+    with the new row and cursor underline, end panel (VM 71), stage-practice hiscore (0x11), spell practice (0x16), slow-mode
+    skip (CATK backup). Mode 0 viewer (scene 5): top menu, difficulty / character / ranking pages, card groups / character /
+    card list (pages, accordion, MaxBonus, captured counts), play-data page (fade in/out, run time refresh), exit via state 2
+    (Loading_Begin at frame 1, menu after 20 frames, result.jpg becomes the loading background). Replaces the result stubs.
+  - Not done: replay-save dialogue (states 10–14 go straight to the exit; `TH08_REPLAY_SAVE=<slot>` still saves),
+    score.txt (D key), hidden unlock code (15 §2.12).
+  - score.dat: ranking lists = default table + file entries (`ScoreDat::ranking`), insert keeps lists ordered by difficulty
+    then shot; HSCR entry filled from the in-game record (`Stats::rec`: play frames, points, misses, bombs, Last Spells,
+    pauses, time orbs, human rate; `Game::rec_cards`; cfg copy). Saved on Result removal to the port's save dir, loaded at
+    start (HUD hiscore uses it). Session column 31 (result state) is now compared.
+  - Verified: headless test `result::tests::game_over_name_entry_saves` (stage 1 → game over → No → name "PP" → panel →
+    title → score.dat reloaded from the save dir has the entry and LSNM, save → load → save byte-identical with the same
+    RNG; then the viewer ranking shows it; `TH08_RESULT_SHOTS=k,…` writes screenshots). Draw logs: menu_mopup1 1593 →
+    2709 identical frames, 84.74 → 99.77 %; menu_base 1754 → 1934, 70.81 → 73.94 %; menu_clr and demos unchanged;
+    sessions golden 8055 / fullrun 6265 / selftest1 1422 unchanged. Thresholds raised.
+  - SPEC-GAP 31 → 40 (result screen details). Questions: `docs/briefs/IMPL23_QUESTIONS.md`.
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
@@ -171,7 +192,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl22 done (boss phases, IMPL17 menu answers). Open: IMPL22 questions (op 36 a–d, payout time, fullrun 6266 homing hit, golden 8056, demo 2 2938). Next IMPL: result viewer (scene 5 / RESULT_MENU stub), result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, music room, info notices, key config.
+2. IMPL impl22 done (boss phases, IMPL17 menu answers). Open: IMPL22 questions (op 36 a–d, payout time, fullrun 6266 homing hit, golden 8056, demo 2 2938). IMPL impl23 done (result screen, name entry, score.dat saving, viewer). Next IMPL: replay save dialogue (16 §2.6), th08.cfg load/save, endings, music room, info notices, key config.
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

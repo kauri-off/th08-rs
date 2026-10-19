@@ -103,6 +103,14 @@ pub struct Game {
     // Recorded loader timing of a session replay (src/session.rs).
     pub sched: Option<crate::session::Sched>,
     pub trace_menu: Option<(i32, i32)>,
+    // Result state (+0x08) after Result_Calc, session trace column 31.
+    pub trace_result: Option<i32>,
+    // HSCR +0x88: cards captured in this game (15 §2.3).
+    pub rec_cards: Vec<u8>,
+    // An LSNM chunk was read from score.dat (16 §2.2: name-entry cursor starts on END).
+    pub lsnm_found: bool,
+    // Loading_Begin requested by the result screen (16 §2.1 state 2).
+    pub loading_req: bool,
 }
 
 impl Default for Game {
@@ -159,6 +167,10 @@ impl Default for Game {
             menu_loading: 0,
             sched: None,
             trace_menu: None,
+            trace_result: None,
+            rec_cards: vec![0; crate::scoredat::CARDS],
+            lsnm_found: false,
+            loading_req: false,
         }
     }
 }
@@ -231,8 +243,12 @@ impl Game {
 
     // Boot load (15 §2.2); a missing or invalid file starts from defaults.
     pub fn load_score(&mut self, file: Option<&[u8]>) {
+        self.lsnm_found = false;
         self.score = match file.map(crate::scoredat::ScoreDat::parse) {
-            Some(Ok(s)) => s,
+            Some(Ok(s)) => {
+                self.lsnm_found = true;
+                s
+            }
             Some(Err(e)) => {
                 log::warn!("score.dat: {e:#}; starting from defaults");
                 Default::default()
@@ -249,23 +265,34 @@ impl Game {
     // ScoreDat_Save (Result removal): 2 RNG draws. `flush` = Result mode 2 (slow mode drops this run's card credit).
     pub fn save_score(&mut self, rng: &mut crate::rng::Rng, flush: bool) {
         if flush && self.cfg.slow != 0 {
-            if let Some(b) = self.catk_backup.clone() {
-                self.score.catk = b;
-            }
+            self.restore_catk_backup();
         }
         for (i, c) in self.score.clrd.iter_mut().enumerate() {
             c.nc = self.clear_nc[i];
             c.any = self.clear_any[i];
         }
+        self.update_run_time();
+        let bytes = self.score.encode(rng);
+        self.lsnm_found = true;
+        if self.persist {
+            crate::scoredat::storage_write("score.dat", &bytes);
+        }
+    }
+
+    // CATK backup taken at game start (15 §2.5): slow mode drops this run's card credit.
+    pub fn restore_catk_backup(&mut self) {
+        if let Some(b) = self.catk_backup.clone() {
+            self.score.catk = b;
+        }
+    }
+
+    // Supervisor_UpdateRunTime (15 §2.9): PLST run time += time since the last update.
+    pub fn update_run_time(&mut self) {
         if let Some(t) = self.run_clock.replace(web_time::Instant::now()) {
             crate::scoredat::Plst::add_time(
                 &mut self.score.plst.run_time,
                 t.elapsed().as_millis() as u64,
             );
-        }
-        let bytes = self.score.encode(rng);
-        if self.persist {
-            crate::scoredat::storage_write("score.dat", &bytes);
         }
     }
 
@@ -472,6 +499,7 @@ impl GameManager {
         st.power = 0.0;
         Stats::checksum(rng);
         g.play_time = 0;
+        g.rec_cards = vec![0; crate::scoredat::CARDS];
         (st.score10, st.score_disp, st.score_step) = (0, 0, 0);
         st.hiscore = 100000;
         st.continues = 0;
@@ -806,6 +834,8 @@ impl Task<Ctx> for GameManager {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        // 0x164D09C += 1 at the top of GameMgr_Calc (11 §4): HSCR play time in frames.
+        self.player.borrow_mut().stats.rec.frames += 1;
         self.continue_effects(ctx);
         if let Some(r) = self.stage_end(ctx) {
             return r;
@@ -869,6 +899,8 @@ impl Task<Ctx> for GameManager {
             && ctx.input.pressed(crate::input::PAUSE)
         {
             g.paused = 1;
+            // HSCR +0x7C pauses (GM+0x3DAA8++, 15 §2.3).
+            self.player.borrow_mut().stats.rec.pauses += 1;
             g.add_play_time();
             crate::sound::play(crate::sound::PAUSE);
             ctx.audio.pause_bgm(true);
@@ -924,6 +956,8 @@ impl Task<Ctx> for GameManager {
             e.g.player_char = g.shot as i32;
         }
         g.frame_counter += 1;
+        // SPEC-GAP: 0x164D30C (end-panel progress) assumed +1 per gameplay frame, like the frame counter.
+        self.player.borrow_mut().stats.rec.progress += 1;
         if let Some(v) = crate::env::var("TH08_SCREEN_FX") {
             let n: Vec<i64> = v.split([':', ',']).filter_map(|s| s.parse().ok()).collect();
             if n.len() == 6 && n[0] == g.frame_counter as i64 {

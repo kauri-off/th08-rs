@@ -398,6 +398,8 @@ impl Player {
         let mut index = self.focus.min(1) as usize;
         if self.last_spell != 0 {
             index = 1 - index + 2;
+            // SPEC-GAP: HSCR +0x78 (Last Spells used) counted here, at the bomb start.
+            self.stats.rec.last_spells += 1;
             let b = self.stats.bombs;
             let used = if forced || b < 2.0 { b } else { 2.0 };
             self.bomb.used = used as i32;

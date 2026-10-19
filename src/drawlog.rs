@@ -1597,9 +1597,9 @@ mod tests {
     use crate::gfx::{LogTex, Rect};
 
     // Current match level per reference (raise as differences get fixed): (identical frames, % same quads).
-    const MENU_BASE: (usize, f64) = (1750, 70.7);
+    const MENU_BASE: (usize, f64) = (1930, 73.9);
     const MENU_CLR: (usize, f64) = (900, 97.7);
-    const MENU_MOPUP1: (usize, f64) = (1590, 84.6);
+    const MENU_MOPUP1: (usize, f64) = (2700, 99.7);
     // Demos 0–3, first chunk: % same quads (playfield).
     const DEMO: [f64; 4] = [90.6, 71.6, 83.3, 86.9];
 

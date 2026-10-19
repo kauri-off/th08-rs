@@ -126,6 +126,21 @@ pub struct Stats {
     pub spells: i32,
     pub gauge_start: i16,
     pub popups: Vec<Popup>,
+    pub rec: Record,
+}
+
+// In-game HSCR record counters (15 §2.3; GM+0x3DA2C), zeroed with the stats at a new game. human/total: frames
+// outside dialogue (human rate = human·10000/total).
+#[derive(Clone, Debug, Default)]
+pub struct Record {
+    pub frames: u32,
+    pub progress: i32,
+    pub points: u32,
+    pub last_spells: u32,
+    pub pauses: u32,
+    pub orbs: i32,
+    pub human: u32,
+    pub total: u32,
 }
 
 // HUD popup requests (12 §5.5).
@@ -174,6 +189,7 @@ impl Default for Stats {
             spells: 0,
             gauge_start: 0,
             popups: Vec::new(),
+            rec: Record::default(),
         }
     }
 }
@@ -278,6 +294,7 @@ impl Stats {
             return;
         }
         self.time += n;
+        self.rec.orbs += n;
         if n > 0 {
             self.time_added += n;
             self.max_point += (n + (self.time_added & 1)) / 2 * 10;
@@ -1060,6 +1077,9 @@ impl Player {
         }
         if !self.env.dialogue {
             let st = &mut self.stats;
+            // SPEC-GAP: human-rate frames (15 §2.3) counted here; EnemyMgr_Calc's timer > 15 test is not applied.
+            st.rec.total += 1;
+            st.rec.human += (self.mode == 0) as u32;
             st.stage_frames += 1;
             if st.human_max() {
                 st.human_frames += 1;

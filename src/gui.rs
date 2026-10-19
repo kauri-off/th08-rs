@@ -126,13 +126,19 @@ impl Gui {
                 card,
                 bonus,
                 comment,
-            } if *card >= 0 => g.score.card_capture(
-                *card as usize,
-                shot,
-                practice,
-                (*bonus).max(0) as u32,
-                comment,
-            ),
+            } if *card >= 0 => {
+                // HSCR +0x88 + id: captured during this game (15 §2.3).
+                if let Some(c) = g.rec_cards.get_mut(*card as usize) {
+                    *c = 1;
+                }
+                g.score.card_capture(
+                    *card as usize,
+                    shot,
+                    practice,
+                    (*bonus).max(0) as u32,
+                    comment,
+                )
+            }
             _ => {}
         }
     }

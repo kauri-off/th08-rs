@@ -805,6 +805,8 @@ impl Task<Ctx> for Hud {
                     ctx.anm.set_script(&mut self.night_vm, TIMES_SLOT, 2);
                     self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
                 }
+                // ECL op 148: progress counter 0x164D30C += 1800 (07 §op148, end panel 16 §2.5).
+                148 => self.player.borrow_mut().stats.rec.progress += 1800,
                 181 => {
                     self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
                     self.night_vm.pending_interrupt = if clock >= 12 { 2 } else { 1 };

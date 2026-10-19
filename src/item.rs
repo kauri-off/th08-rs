@@ -247,6 +247,7 @@ impl ItemManager {
                 popup(v, if v >= max { POPUP_MAX } else { POPUP_NORMAL });
                 st.add_score(v);
                 st.point_items += 1;
+                st.rec.points += 1;
                 st.point_items2 += 1;
                 st.rank(if v >= max { 10 } else { 3 });
                 while st.extends >= 0 && st.point_items2 >= st.next_extend {

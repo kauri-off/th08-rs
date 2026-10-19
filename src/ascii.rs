@@ -97,7 +97,8 @@ impl Queue {
         let o = ctx_anm.screen_offset;
         for t in self.items.iter().filter(|t| t.high == high) {
             let (mut x, mut y) = (t.x + o[0], t.y + o[1]);
-            for c in t.s.bytes() {
+            // Chars U+0000-U+00FF are glyph bytes (U+0080 / U+0081 = the "SP" / "END" cells, 16 §2.2).
+            for c in t.s.chars().map(|c| c as u32 as u8) {
                 if c == b'\n' {
                     (x, y) = (t.x + o[0], y + 16.0 * t.scale_y);
                     continue;

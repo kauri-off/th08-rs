@@ -137,6 +137,16 @@ impl Supervisor {
     fn menu_loading(&mut self, ctx: &mut Ctx, from: i32) -> Result<()> {
         ctx.game.menu_loading = if from == gamemgr::SCENE_BOOT {
             MENU_LOAD_BOOT
+        } else if matches!(from, gamemgr::SCENE_RESULT | gamemgr::SCENE_RESULT_MENU) {
+            // Loading_Begin already ran at result state 2 frame 1; Result_OnRemove moved result.jpg into surface 8,
+            // so the menu loader shows it without a capture (16 §2.4 exit).
+            if let Some(t) = self.logo.take() {
+                ctx.gfx.free_texture(t);
+            }
+            // Labelled by its surface slot's file name, as the draw log names surface 8.
+            let b = ctx.archive.read("result.jpg")?;
+            self.logo = Some(ctx.gfx.load_image("th08logo.jpg", &b)?);
+            MENU_LOAD
         } else if from == gamemgr::SCENE_MUSIC_ROOM {
             // The music room calls 0x44886F itself on the exit press, one frame before the scene switch.
             self.begin_loading(ctx)?;
@@ -270,21 +280,23 @@ impl Supervisor {
                 self.start_game(ctx)?;
                 ctx.game.requested = gamemgr::SCENE_GAME;
             }
-            (
-                _,
-                gamemgr::SCENE_RESULT
-                | gamemgr::SCENE_ENDING
-                | gamemgr::SCENE_RESULT_MENU
-                | gamemgr::SCENE_MUSIC_ROOM,
-            ) => {
+            (_, gamemgr::SCENE_RESULT | gamemgr::SCENE_RESULT_MENU) => {
+                self.drop_scene(ctx);
+                let mode = (req == gamemgr::SCENE_RESULT) as u8;
+                self.set_scene(
+                    ctx,
+                    crate::result::ResultScreen::new(mode),
+                    crate::result::CALC_PRIO,
+                    crate::result::DRAW_PRIO,
+                )?;
+            }
+            (_, gamemgr::SCENE_ENDING | gamemgr::SCENE_MUSIC_ROOM) => {
                 self.drop_scene(ctx);
                 self.set_scene(
                     ctx,
                     Stub {
                         kind: req,
                         frame: 0,
-                        on_return: false,
-                        leave: None,
                     },
                     4,
                     3,
@@ -356,6 +368,18 @@ impl Task<Ctx> for Supervisor {
         self.frame += 1;
         ctx.input.tick();
         self.replay_fps(ctx);
+        // Loading_Begin from the result screen (16 §2.1 state 2): requested in its calc (prio 16), so the VMs
+        // catch up the frame they missed.
+        // Surface 8 stays empty until the result object's removal moves result.jpg into it.
+        if std::mem::take(&mut ctx.game.loading_req) {
+            if let Some(t) = self.logo.take() {
+                ctx.gfx.free_texture(t);
+            }
+            self.start_vms(ctx, [500.0, 440.0]);
+            for vm in &mut self.boot_vms {
+                vm.run(&mut ctx.anm);
+            }
+        }
         if std::mem::take(&mut self.capture_req) {
             self.capture(ctx);
         }
@@ -486,12 +510,10 @@ impl Task<Ctx> for Supervisor {
     }
 }
 
-// SPEC-GAP: result (5/6), music room (8), ending (9) are stubs; viewer X → 「タイトルに戻る」, X again leaves; music Bomb/ESC.
+// SPEC-GAP: music room (8) and ending (9) are stubs; music room leaves on Bomb/ESC.
 pub struct Stub {
     kind: i32,
     frame: u32,
-    on_return: bool,
-    leave: Option<u32>,
 }
 
 // A file from disk natively, or from the save storage (web, and `replay/…` names).
@@ -521,53 +543,9 @@ pub fn date_md() -> String {
     format!("{m:02}/{d:02}")
 }
 
-// Result records after a game. SPEC-GAP: no name entry yet (16 §2.2); the HSCR entry takes the LSNM name.
-fn record_result(g: &mut Game) {
-    if g.replay() || g.spell_practice() {
-        return;
-    }
-    let st = &g.stats;
-    let (shot, d) = (g.shot as usize % 12, g.difficulty.clamp(0, 4) as usize);
-    let score = st.score10.clamp(0, 999_999_999) as u32;
-    if g.practice() {
-        let h = &mut g.score.pscr[shot + g.demo_shot_bias as usize].hiscore[g.stage % 9][d];
-        *h = (*h).max(score);
-        return;
-    }
-    let mut h = crate::scoredat::Hscr::new();
-    let stage = if g.flags & gamemgr::F_ENDING_OK != 0 {
-        99
-    } else {
-        (g.stage % 9) as u8
-    };
-    let name: Vec<u8> = g.score.lsnm[..8].to_vec();
-    h.set(score, shot as u8, d as u8, stage, &name, &date_md());
-    h.0[0x26] = st.continues;
-    if let Some(rank) = g.score.insert_hscr(h) {
-        log::info!("high score rank {}", rank + 1);
-    }
-}
-
 impl Task<Ctx> for Stub {
-    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
-        if chain == Chain::Calc
-            && matches!(
-                self.kind,
-                gamemgr::SCENE_RESULT | gamemgr::SCENE_RESULT_MENU
-            )
-        {
-            ctx.game.save_score(&mut ctx.anm.rng, false);
-        }
-    }
-
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let g = &mut ctx.game;
-        if self.frame == 0
-            && self.kind == gamemgr::SCENE_RESULT
-            && matches!(g.previous, gamemgr::SCENE_GAME | gamemgr::SCENE_ENDING)
-        {
-            record_result(g);
-        }
         if self.frame == 0
             && self.kind == gamemgr::SCENE_ENDING
             && g.flags & gamemgr::F_ENDING_OK != 0
@@ -588,25 +566,6 @@ impl Task<Ctx> for Stub {
         let cancel = ctx.input.pressed(crate::input::BOMB | crate::input::PAUSE);
         let confirm = ctx.input.pressed(crate::input::SHOT | crate::input::ENTER);
         match self.kind {
-            gamemgr::SCENE_RESULT_MENU => {
-                // SPEC-GAP: the viewer leaves 20 frames after the second X (menu_base log).
-                if let Some(n) = &mut self.leave {
-                    *n += 1;
-                    if *n >= 20 {
-                        ctx.game.request(gamemgr::SCENE_MENU);
-                    }
-                    return Ret::Next;
-                }
-                if ctx.input.pressed(crate::input::UP | crate::input::DOWN) {
-                    self.on_return = false;
-                }
-                if (cancel || confirm) && self.on_return {
-                    self.leave = Some(0);
-                } else if cancel {
-                    self.on_return = true;
-                }
-                return Ret::Next;
-            }
             gamemgr::SCENE_MUSIC_ROOM => {
                 if cancel {
                     ctx.game.request(gamemgr::SCENE_MENU);

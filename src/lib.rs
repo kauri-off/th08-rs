@@ -32,6 +32,7 @@ pub mod msg;
 pub mod player;
 pub mod pshot;
 pub mod replay;
+pub mod result;
 pub mod rng;
 pub mod scoredat;
 pub mod session;

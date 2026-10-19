@@ -57,6 +57,39 @@ impl Hscr {
     pub fn difficulty(&self) -> usize {
         self.0[0x15] as usize
     }
+    // Default table entry (Result_OnRegister, 15 §2.3): name "--------", date "--/--", +0x166 = 1.
+    // SPEC-GAP: stage byte 1, not 0: the reference ranking shows "(1)" for default rows and "(5)" for stage index 5.
+    pub fn placeholder(score: u32, shot: usize, diff: usize) -> Self {
+        let mut h = Self::new();
+        h.set(score, shot as u8, diff as u8, 1, b"--------", "--/--");
+        h.0[0x166] = 1;
+        h
+    }
+    pub fn is_placeholder(&self) -> bool {
+        self.0[0x166] != 0
+    }
+    pub fn stage(&self) -> u8 {
+        self.0[0x16]
+    }
+    pub fn continues(&self) -> u8 {
+        self.0[0x26]
+    }
+    pub fn name(&self) -> String {
+        let n = &self.0[0x17..0x20];
+        let end = n.iter().position(|&c| c == 0).unwrap_or(n.len());
+        n[..end].iter().map(|&c| c as char).collect()
+    }
+    pub fn date(&self) -> String {
+        let n = &self.0[0x20..0x26];
+        let end = n.iter().position(|&c| c == 0).unwrap_or(n.len());
+        n[..end].iter().map(|&c| c as char).collect()
+    }
+    pub fn slowdown(&self) -> f32 {
+        f32::from_le_bytes(self.0[0x10..0x14].try_into().unwrap())
+    }
+    pub fn put_u32(&mut self, o: usize, v: u32) {
+        put_u32(&mut self.0, o, v);
+    }
     pub fn set(&mut self, score: u32, shot: u8, diff: u8, stage: u8, name: &[u8], date: &str) {
         put_u32(&mut self.0, 0x0C, score);
         self.0[0x14] = shot;
@@ -441,27 +474,51 @@ impl ScoreDat {
             .max(100_000)
     }
 
-    // ScoreList_Insert (default table first, file entries after equal scores, new entry after equal); only the
-    // top 10 survive and default entries are never stored. Returns the 0-based rank.
-    pub fn insert_hscr(&mut self, h: Hscr) -> Option<usize> {
-        let (shot, diff) = (h.shot(), h.difficulty());
-        let mut list: Vec<(u32, Option<Hscr>)> =
-            (0..10u32).map(|i| (100_000 - 10_000 * i, None)).collect();
+    // One ranking list [diff][shot] as Result_OnRegister builds it (15 §2.3): the default table, then the file's
+    // entries inserted after equal scores. Default entries carry +0x166 = 1.
+    pub fn ranking(&self, shot: usize, diff: usize) -> Vec<Hscr> {
+        let mut list: Vec<Hscr> = (0..10u32)
+            .map(|i| Hscr::placeholder(100_000 - 10_000 * i, shot, diff))
+            .collect();
         for e in self
             .hscr
             .iter()
             .filter(|e| e.shot() == shot && e.difficulty() == diff)
         {
-            let at = list.iter().filter(|(s, _)| *s >= e.score()).count();
-            list.insert(at, (e.score(), Some(e.clone())));
+            let at = list.iter().filter(|h| h.score() >= e.score()).count();
+            list.insert(at, e.clone());
         }
-        let rank = list.iter().filter(|(s, _)| *s >= h.score()).count();
-        list.insert(rank, (h.score(), Some(h)));
+        list.truncate(10);
+        list
+    }
+
+    // ScoreList_Insert (new entry after equal scores; INFERRED); only the top 10 survive and default entries are
+    // never stored. Returns the 0-based rank.
+    pub fn insert_hscr(&mut self, h: Hscr) -> Option<usize> {
+        let (shot, diff) = (h.shot(), h.difficulty());
+        let mut list = self.ranking(shot, diff);
+        let rank = list.iter().filter(|e| e.score() >= h.score()).count();
+        list.insert(rank, h);
         list.truncate(10);
         self.hscr
             .retain(|e| e.shot() != shot || e.difficulty() != diff);
-        self.hscr.extend(list.into_iter().filter_map(|(_, e)| e));
+        self.hscr
+            .extend(list.into_iter().filter(|e| !e.is_placeholder()));
+        // The saver walks the lists by difficulty, then shot (15 §2.1).
+        self.hscr.sort_by_key(|e| (e.difficulty(), e.shot()));
         (rank < 10).then_some(rank)
+    }
+
+    // The entry being named (Result list node byte +9 ≠ 0, 16 §2.3).
+    pub fn new_entry_mut(&mut self) -> Option<&mut Hscr> {
+        self.hscr.iter_mut().find(|h| h.0[9] != 0)
+    }
+
+    // SPEC-GAP: the "new entry" byte +9 is 0 in every saved file read so far; cleared before saving.
+    pub fn clear_new_flags(&mut self) {
+        for h in &mut self.hscr {
+            h.0[9] = 0;
+        }
     }
 
     // Spell_Start attempt (15 §2.5): checksum check, then attempts of this shot and of all shots.

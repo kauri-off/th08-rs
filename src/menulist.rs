@@ -49,7 +49,7 @@ const CHARS: [&str; 12] = [
 ];
 const DIFFS: [&str; 5] = ["Easy    ", "Normal  ", "Hard    ", "Lunatic ", "Extra   "];
 // Shot names 0x4C7F4C, padded to 8 full-width cells (specs/data/spell_tables.md §5).
-const SHOT_NAMES: [&str; 13] = [
+pub(crate) const SHOT_NAMES: [&str; 13] = [
     "霊夢＆紫　　　　",
     "魔理沙＆アリス　",
     "咲夜＆レミリア　",
@@ -167,7 +167,7 @@ const HINTS: [[&str; 2]; 18] = [
 ];
 
 // Spell_DifficultyOf 0x4144D0.
-fn difficulty_of(id: usize) -> usize {
+pub(crate) fn difficulty_of(id: usize) -> usize {
     let has = |l: &[u8]| l.iter().any(|&v| v as usize == id);
     if has(&EASY) {
         0
@@ -348,27 +348,37 @@ fn pie(ctx: &mut Ctx, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
     ctx.gfx.fan(Blend::Alpha, &verts);
 }
 
+// Text_RenderToVm (white, black outline, font 15) into the sprite's texture strip.
+pub(crate) fn render_strip(
+    ctx: &mut Ctx,
+    raster: &mut crate::text::Raster,
+    slot: usize,
+    sprite: i32,
+    s: &str,
+) {
+    let Some(sp) = ctx.anm.sprite(slot, sprite.max(0) as usize).copied() else {
+        return;
+    };
+    let t = ctx.gfx.texture(sp.tex);
+    let (tx, ty) = (
+        (sp.uv[0] * t.width as f32).round() as u32,
+        (sp.uv[1] * t.height as f32).round() as u32,
+    );
+    let (w, h) = (sp.w as usize, sp.h as usize);
+    let mut rgba = raster.render(s, [255, 255, 255], w, 15);
+    rgba.resize(w * h * 4, 0);
+    ctx.gfx
+        .write_texture(sp.tex, tx, ty, w as u32, h as u32, &rgba);
+}
+
 impl MainMenu {
     fn anchor(&self) -> [f32; 2] {
         let p = self.vms[VM_ANCHOR].pos;
         [p[0], p[1]]
     }
 
-    // Text_RenderToVm (white, black outline, font 15) into the VM's sprite strip.
     fn render_vm(&mut self, ctx: &mut Ctx, slot: usize, sprite: i32, s: &str) {
-        let Some(sp) = ctx.anm.sprite(slot, sprite.max(0) as usize).copied() else {
-            return;
-        };
-        let t = ctx.gfx.texture(sp.tex);
-        let (tx, ty) = (
-            (sp.uv[0] * t.width as f32).round() as u32,
-            (sp.uv[1] * t.height as f32).round() as u32,
-        );
-        let (w, h) = (sp.w as usize, sp.h as usize);
-        let mut rgba = self.raster.render(s, [255, 255, 255], w, 15);
-        rgba.resize(w * h * 4, 0);
-        ctx.gfx
-            .write_texture(sp.tex, tx, ty, w as u32, h as u32, &rgba);
+        render_strip(ctx, &mut self.raster, slot, sprite, s);
     }
 
     fn glyph_vm(&mut self, ctx: &mut Ctx) {
