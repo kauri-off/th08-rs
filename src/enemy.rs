@@ -48,6 +48,8 @@ pub const B_STAGE_ANM: u32 = 1 << 2;
 pub const B_DEATH_LATCH: u32 = 1 << 3;
 pub const B_CANNOT_DIE: u32 = 1 << 6;
 pub const B_PAUSED: u32 = 1 << 7;
+pub const B_WARN_SHIFT: u32 = 4;
+pub const B_WARN_MASK: u32 = 3 << B_WARN_SHIFT;
 
 const DROP_TABLE: [i32; 32] = [
     0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0,
@@ -441,10 +443,12 @@ impl Enemy {
         }
     }
 
+    // Phase-change cleanup; the depth := 0 only hits the working depth, so the main depth stays (07 §5.4).
     pub fn reset_for_jump(&mut self) {
-        self.main.depth = 0;
         self.threads = Default::default();
         self.desc = BulletDesc::default();
+        self.autofire_interval = 0;
+        self.reset_rank_ranges();
     }
 }
 
@@ -458,6 +462,7 @@ pub struct Spell {
     pub bonus: i32,
     pub decay: i32,
     pub frames: i32,
+    pub duration: i32,
     pub deaths0: u32,
     pub bombs0: u32,
     pub capture: bool,
@@ -505,6 +510,15 @@ pub struct Globals {
     pub hud_requests: Vec<u16>,
     pub misc_calls: u64,
     pub card: i16,
+    pub payout: Option<Payout>,
+}
+
+// Capture payout pending in the spell object (07 §11.1): paid 130 frames after Spell_End or at the next card start.
+#[derive(Clone, Copy, Debug)]
+pub struct Payout {
+    pub end_frame: u32,
+    pub bonus: i32,
+    pub time: i32,
 }
 
 pub struct EnemyManager {
@@ -1010,15 +1024,16 @@ impl EnemyManager {
 
     pub(crate) fn jump_main(&mut self, idx: usize, sub: i32) {
         let ecl = &self.ecl;
-        let e = &mut self.enemies[idx];
-        e.main.depth = 0;
-        e.main.ctx.enter(ecl, sub);
+        self.enemies[idx].main.ctx.enter(ecl, sub);
     }
 
     pub(crate) fn jump_to_death_sub(&mut self, idx: usize) {
         let sub = self.enemies[idx].death_sub;
         if sub >= 0 {
-            self.enemies[idx].reset_for_jump();
+            let e = &mut self.enemies[idx];
+            e.reset_for_jump();
+            e.thresholds = [-1; 4];
+            e.timeout = -1;
             self.jump_main(idx, sub);
             self.enemies[idx].death_sub = -1;
         }
@@ -1305,14 +1320,9 @@ impl EnemyManager {
     }
 
     // Spell_End 0x4161B0 (07 §11.1). SPEC-GAP: the capture payout is made at once, not 130 frames later.
-    pub fn finish_spell(
-        &mut self,
-        total: i32,
-        remaining: i32,
-        anm: &mut AnmManager,
-        except: Option<usize>,
-    ) {
+    pub fn finish_spell(&mut self, anm: &mut AnmManager, except: Option<usize>) {
         let Some(s) = self.g.spell.take() else { return };
+        let (total, remaining) = (s.duration, (s.duration - s.frames).max(0));
         crate::sound::play(crate::sound::TAN00_LOUD);
         if let Some(st) = &self.stage {
             st.borrow_mut().end_spell_bg();
@@ -1355,12 +1365,24 @@ impl EnemyManager {
         crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| {
             e.vm.color[crate::anmvm::A] = 0x20
         });
-        let st = &mut p.stats;
-        st.add_score(s.bonus);
-        st.spells += 1;
+        p.stats.spells += 1;
         crate::player::Stats::checksum(&mut anm.rng);
-        st.add_time(time, &mut anm.rng);
-        st.popups.push(crate::player::Popup::SpellBonus(s.bonus));
+        self.g.payout = Some(Payout {
+            end_frame: self.frame,
+            bonus: s.bonus,
+            time,
+        });
+    }
+
+    // SPEC-GAP: the payout's AddTime is not applied (no session trace shows the reward in stats +0x3C); max point value only.
+    pub fn pay_capture(&mut self) {
+        let Some(c) = self.g.payout.take() else {
+            return;
+        };
+        let st = &mut self.player.borrow_mut().stats;
+        st.add_score(c.bonus);
+        st.max_point += c.time * 10;
+        st.popups.push(crate::player::Popup::SpellBonus(c.bonus));
     }
 
     pub fn dialogue_active(&self) -> bool {
@@ -1426,25 +1448,80 @@ impl EnemyManager {
         }
     }
 
+    // Threshold / timeout switch cleanup (07 §10.2).
     fn cleanup_after_jump(&mut self, anm: &mut AnmManager, idx: usize, reward: bool) {
         let e = &mut self.enemies[idx];
-        e.threads = Default::default();
-        e.desc = BulletDesc::default();
-        e.autofire_interval = 0;
-        e.reset_rank_ranges();
+        e.reset_for_jump();
+        e.flags_b &= !B_WARN_MASK;
         self.kill_chain(idx, if reward { Some(&mut *anm) } else { None });
-        self.kill_all(anm, Some(idx));
+        self.kill_non_bosses(idx);
+        if self.enemies[idx].flags & A_BOSS != 0 {
+            self.protect_player(70);
+        }
+    }
+
+    // Every alive non-boss enemy: life 0 and a jump to its death sub. SPEC-GAP: the switching enemy itself is skipped.
+    fn kill_non_bosses(&mut self, except: usize) {
+        for j in 0..self.enemies.len() {
+            let e = &self.enemies[j];
+            if j == except || !e.alive() || e.flags & A_BOSS != 0 {
+                continue;
+            }
+            self.enemies[j].life = 0;
+            self.jump_to_death_sub(j);
+        }
+    }
+
+    fn protect_player(&mut self, t: i32) {
+        let mut p = self.player.borrow_mut();
+        if p.state == 0 {
+            p.state = 3;
+            p.state_timer.set(t);
+        }
+    }
+
+    // Low-life warning level (07 §10.2).
+    fn warn_level(&self, e: &Enemy, diff: i32, with_thr: bool) -> u32 {
+        let card = self.g.spell.is_some();
+        let t: [i32; 3] = match (with_thr, card, e.flags & A_BOSS != 0) {
+            (true, false, _) => [500, 1500, 2200],
+            (true, true, _) => [120, 200, 300],
+            (false, false, true) => [600, 1600, 2400],
+            (false, true, true) => [120, 300, 400],
+            (false, false, false) => [50, i32::MIN, i32::MIN],
+            (false, true, false) => [10, i32::MIN, i32::MIN],
+        };
+        t.iter().position(|&v| diff < v).map_or(0, |k| 3 - k as u32)
     }
 
     // Enemy_CheckLifeThresholds (07 §10.2).
     fn check_thresholds(&mut self, anm: &mut AnmManager, idx: usize) -> bool {
+        self.enemies[idx].flags_b &= !B_WARN_MASK;
         let e = &self.enemies[idx];
-        let Some(k) = (0..4).find(|&k| e.thresholds[k] >= 0 && e.life < e.thresholds[k]) else {
+        let mut level = 0;
+        let mut hit = None;
+        for k in 0..4 {
+            let t = e.thresholds[k];
+            if t < 0 {
+                continue;
+            }
+            if e.life < t {
+                hit = Some(k);
+                break;
+            }
+            level = level.max(self.warn_level(e, e.life - t, true));
+        }
+        let Some(k) = hit else {
+            if e.thresholds.iter().all(|&t| t < 0) {
+                level = level.max(self.warn_level(e, e.life, false));
+            }
+            self.enemies[idx].flags_b |= level << B_WARN_SHIFT;
             return false;
         };
         let sub = e.threshold_subs[k];
         let e = &mut self.enemies[idx];
         e.life = e.thresholds[k];
+        e.hud_life = e.life;
         e.thresholds[k] = -1;
         e.bonus_seconds = (e.timeout - e.boss_timer.cur) / 60;
         e.timeout = -1;
@@ -1459,23 +1536,28 @@ impl EnemyManager {
         if e.timeout < 0 || e.boss_timer.cur < e.timeout {
             return false;
         }
+        e.bonus_seconds = 0;
         if let Some(k) = (0..4)
-            .filter(|&k| e.thresholds[k] >= 0)
+            .filter(|&k| e.thresholds[k] > 0)
             .max_by_key(|&k| e.thresholds[k])
         {
             e.life = e.thresholds[k];
+            e.hud_life = e.life;
             e.thresholds[k] = -1;
         }
         let sub = e.timeout_sub;
+        e.timeout = -1;
         e.timeout_sub = e.death_sub;
         e.boss_timer.set(0);
         let fixed = e.flags & A_FIXED_BONUS != 0;
         self.jump_main(idx, sub);
-        if !fixed && let Some(sp) = &mut self.g.spell {
-            sp.timed_out = true;
-            sp.capture = false;
+        if !fixed {
+            if let Some(sp) = &mut self.g.spell {
+                sp.timed_out = true;
+                sp.capture = false;
+                sp.bonus = 0;
+            }
             self.cancel_all(anm, 4);
-            self.finish_spell(0, 0, anm, Some(idx));
         }
         self.cleanup_after_jump(anm, idx, false);
         true
@@ -1551,7 +1633,12 @@ impl EnemyManager {
         if e.life >= 1 || e.flags_b & (B_DEATH_LATCH | B_CANNOT_DIE) != 0 || !e.alive() {
             return;
         }
-        self.enemies[idx].flags_b |= B_DEATH_LATCH;
+        let e = &mut self.enemies[idx];
+        e.flags_b |= B_DEATH_LATCH;
+        e.bonus_seconds = (e.timeout - e.boss_timer.cur) / 60;
+        e.timeout = -1;
+        e.thresholds = [-1; 4];
+        e.threads = Default::default();
         if let Some(r) = self.enemies[idx].root {
             self.enemies[r].children -= 1;
         }
@@ -1565,11 +1652,13 @@ impl EnemyManager {
         }
         let e = &mut self.enemies[idx];
         let mode = (e.flags >> A_DEATH_SHIFT) & 7;
+        let boss = e.flags & A_BOSS != 0;
         match mode {
             0 => {
                 let sc = e.score;
                 e.flags &= !A_ALIVE;
                 self.add_score(sc);
+                self.end_aura(idx);
             }
             1 => {
                 let sc = e.score;
@@ -1579,25 +1668,33 @@ impl EnemyManager {
             }
             3 => {
                 e.life = 1;
-                e.flags_b &= !B_DEATH_LATCH;
-                e.flags &= !(7 << A_DEATH_SHIFT);
+                e.flags &= !(A_LOSES_LIFE | 7 << A_DEATH_SHIFT | 3 << 30);
+                if boss {
+                    self.g.hud_boss = false;
+                }
+                let db = e.death_bytes[0];
+                let pos = e.final_pos;
+                if db < 0x80 {
+                    crate::effect::spawn(anm, db, pos, 3, 0xFFFFFFFF);
+                }
+                self.end_aura(idx);
+                self.protect_player(90);
             }
             _ => {}
         }
+        if mode <= 1 && boss {
+            self.g.hud_boss = false;
+            for i in self.enemies[idx].fx_attached.drain(..) {
+                crate::effect::get(i, |x| x.fade = true);
+            }
+        }
         let (pos, db) = (self.enemies[idx].final_pos, self.enemies[idx].death_bytes);
         if mode <= 2 {
-            if self.enemies[idx].flags & A_BOSS != 0 {
-                // SPEC-GAP: sessions keep the boss slot and HUD byte set after a mode-1 death until op 127 −1.
-                if self.g.spell.is_none() {
-                    self.cancel_and_kill_bonus(anm, Some(idx));
-                } else {
-                    let e = &self.enemies[idx];
-                    let (total, remaining) =
-                        (e.timeout.max(0), (e.timeout - e.boss_timer.cur).max(0));
-                    self.finish_spell(total, remaining, anm, Some(idx));
-                }
-            }
             self.drop_items(idx, anm, None);
+            if boss && self.g.spell.is_none() {
+                self.cancel_and_kill_bonus(anm, Some(idx));
+            }
+            self.enemies[idx].life = 0;
         }
         if mode <= 2 && self.enemies[idx].flags & A_CHAIN_KILLED == 0 {
             crate::sound::play_at(
@@ -1608,7 +1705,9 @@ impl EnemyManager {
                 },
                 pos[0],
             );
-            crate::effect::spawn(anm, db[0], pos, 1, 0xFFFFFFFF);
+            if db[0] < 0x80 {
+                crate::effect::spawn(anm, db[0], pos, 1, 0xFFFFFFFF);
+            }
             crate::effect::spawn(anm, db[1].wrapping_add(4), pos, 4, 0xFFFFFFFF);
             let max = {
                 let p = self.player.borrow();
@@ -1617,15 +1716,18 @@ impl EnemyManager {
             if max {
                 self.spawn_item(anm, pos, crate::item::TIME_ORB as i32, 1);
             }
-        } else if mode == 3 {
-            crate::effect::spawn(anm, db[0], pos, 3, 0xFFFFFFFF);
         }
-        self.release_effects(idx);
         if mode == 0 {
             self.release(idx);
             return;
         }
         self.jump_to_death_sub(idx);
+    }
+
+    // Aura told to end (interrupt 3).
+    fn end_aura(&mut self, idx: usize) {
+        let h = std::mem::replace(&mut self.enemies[idx].fx_aura, crate::effect::NONE);
+        crate::effect::get(h, |x| x.vm.pending_interrupt = 3);
     }
 
     fn run_vms(&mut self, idx: usize, anm: &mut AnmManager) {
@@ -1751,6 +1853,9 @@ impl EnemyManager {
         if e.flags & A_HIDDEN == 0 {
             self.draw_lists[e.layer.min(3) as usize].push(idx);
         }
+        if !held && e.life > 0 {
+            e.flags_b &= !B_DEATH_LATCH;
+        }
         self.death(idx, anm);
     }
 
@@ -1798,6 +1903,13 @@ impl EnemyManager {
             .filter(|e| e.flags & A_LOSES_LIFE != 0)
             .map(|e| e.final_pos);
         crate::effect::with(|fx| fx.boss = pull);
+        if self
+            .g
+            .payout
+            .is_some_and(|c| self.frame.wrapping_sub(c.end_frame) >= 130)
+        {
+            self.pay_capture();
+        }
         if let Some(s) = &mut self.g.spell {
             s.frames += 1;
             if s.frames % 60 == 0 && !self.g.fixed_bonus {

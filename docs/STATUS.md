@@ -155,6 +155,13 @@
   - Demo sync: 1940/3869/2260/1500 → 4450/3869/2260/1605 (`MIN_SYNC`).
   - Draw logs: demos 90.49 → 90.59 % (others unchanged); menus base 70.66 → 70.81 %, clr 97.41 → 97.79 %, mopup1 84.71 → 84.74 % (identical frames unchanged). Thresholds raised.
   - SPEC-GAP 44 → 40. Questions: `docs/briefs/IMPL21_QUESTIONS.md`.
+- impl22 (answers_boss_phases, 07 §4.3/§5.4/§6/§10.1–10.3, answers_impl17 menus, 2026-10-19):
+  - Boss phases: a threshold switch runs in the step-4 loop (Ecl_Run → move → screen → thresholds/timeout, same-frame re-run). It sets life/hud to the threshold and bonus seconds, and resets threads, desc, auto-fire, rank ranges and warning bits; the call depth is kept (quirk). Other enemies die and the player is protected for 70 frames. Warning levels in flags B bits 4–5. A timeout only marks the card (timed out, no capture, cancel_all(4)). Death modes 0–3: mode 3 sets life 1 and player state 3 for 90 frames. The death sub runs on the next frame, and the latch is cleared when life > 0. Spell cards keep their own duration; the capture payout comes 130 frames after Spell_End. var 10098 = time + pending + time orbs ≥ threshold.
+  - Var 10032/10034 read Next32 as integers (they had gone through f32). Demo 2 f2261 child wait fixed. Op 36 a–d are evaluated once (SPEC-GAP).
+  - Menus (answers_impl17 Q1/Q3/Q4/Q7): shot/difficulty names, difficulty lists, unlock hints, Last Word unlocks (flsp), selectable/info panel rules, portrait enable bits (VMs 111–130, 138/139 interrupt 27), screen 17 range interrupt 26, register cursor table. Q6 is a font difference only. Stubs: info notices, key config, the spell-replay card-name VM, and the fading description on non-top screens (SPEC-GAP).
+  - Leading rows: golden 4466 → 8055, fullrun_noclip 6263 → 6265 (pb22 homing hit one frame early), selftest1 1422. fullrun stage starts 1:240 2:11252 3:25882 4B:43197 5:73137 6B:107484.
+  - Demo sync 4450/3869/2260/1605 → 4450/3869/2937/1605. Demo draw 90.59/71.65/83.30/86.97 → 90.61/71.66/83.33/86.97 %. Menus unchanged (70.81/97.79/84.74 %). Thresholds raised.
+  - SPEC-GAP 40 → 31. Questions: `docs/briefs/IMPL22_QUESTIONS.md`.
 
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
@@ -164,7 +171,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl21 done (answers_impl18/19). Open: IMPL21 questions (var 10096, cancel→items, pause flags), IMPL20 Q1 (var 10098 Last Spells). Next IMPL: answers to IMPL17 questions; result viewer (scene 5 / RESULT_MENU stub), result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, music room, spell-practice data tables (difficulty names, card unlock hints, Last Word unlocks).
+2. IMPL impl22 done (boss phases, IMPL17 menu answers). Open: IMPL22 questions (op 36 a–d, payout time, fullrun 6266 homing hit, golden 8056, demo 2 2938). Next IMPL: result viewer (scene 5 / RESULT_MENU stub), result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, music room, info notices, key config.
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

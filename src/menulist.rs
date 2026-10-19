@@ -48,29 +48,187 @@ const CHARS: [&str; 12] = [
     "Sakuya ", "Remilia", "Youmu  ", "Yuyuko ",
 ];
 const DIFFS: [&str; 5] = ["Easy    ", "Normal  ", "Hard    ", "Lunatic ", "Extra   "];
-// SPEC-GAP: shot/difficulty names (table 0x4C8628) unknown; only 「三日月（ノーマル）」 is in mopup1_sp17_d.png.
-const SHOT_NAMES: [&str; 12] = [
-    "霊夢＆紫",
-    "魔理沙＆アリス",
-    "咲夜＆レミリア",
-    "妖夢＆幽々子",
-    "霊夢",
-    "紫",
-    "魔理沙",
-    "アリス",
-    "咲夜",
-    "レミリア",
-    "妖夢",
-    "幽々子",
+// Shot names 0x4C7F4C, padded to 8 full-width cells (specs/data/spell_tables.md §5).
+const SHOT_NAMES: [&str; 13] = [
+    "霊夢＆紫　　　　",
+    "魔理沙＆アリス　",
+    "咲夜＆レミリア　",
+    "妖夢＆幽々子　　",
+    "博麗　霊夢　　　",
+    "八雲　紫　　　　",
+    "霧雨　魔理沙　　",
+    "アリス・Ｍ　　　",
+    "十六夜　咲夜　　",
+    "レミリア・Ｓ　　",
+    "魂魄　妖夢　　　",
+    "西行寺　幽々子　",
+    "全主人公合計　　",
 ];
 const DIFF_NAMES: [&str; 6] = [
-    "（イージー）",
+    "初月（イージー）",
     "三日月（ノーマル）",
-    "（ハード）",
-    "（ルナティック）",
-    "（エキストラ）",
-    "（ラストワード）",
+    "上つ弓張（ハード）",
+    "待宵（ルナティック）",
+    "望月（エキストラ）",
+    "極意（ラストワード）",
 ];
+// Easy / Normal card lists (0x4C6120 / 0x4C61C8); Hard and Lunatic follow from them (spell_tables.md §1).
+const EASY: [u8; 42] = [
+    2, 6, 13, 17, 21, 25, 32, 39, 43, 47, 54, 58, 62, 66, 70, 77, 81, 85, 89, 93, 100, 104, 108,
+    112, 119, 123, 127, 131, 135, 139, 143, 147, 151, 155, 159, 163, 167, 171, 175, 179, 183, 187,
+];
+const NORMAL: [u8; 49] = [
+    3, 7, 10, 14, 18, 22, 26, 29, 33, 36, 40, 44, 48, 51, 55, 59, 63, 67, 71, 74, 78, 82, 86, 90,
+    94, 97, 101, 105, 109, 113, 116, 120, 124, 128, 132, 136, 140, 144, 148, 152, 156, 160, 164,
+    168, 172, 176, 180, 184, 188,
+];
+const HARD: [u8; 50] = [
+    0, 4, 8, 11, 15, 19, 23, 27, 30, 34, 37, 41, 45, 49, 52, 56, 60, 64, 68, 72, 75, 79, 83, 87,
+    91, 95, 98, 102, 106, 110, 114, 117, 121, 125, 129, 133, 137, 141, 145, 149, 153, 157, 161,
+    165, 169, 173, 177, 181, 185, 189,
+];
+// "Last" list 0x4C6B90 (Spell_IsLastSpell).
+const LAST: [u8; 43] = [
+    10, 11, 12, 29, 30, 31, 51, 52, 53, 74, 75, 76, 97, 98, 99, 116, 117, 118, 143, 144, 145, 146,
+    171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189,
+    190, 204,
+];
+// Unlock hints 0x4C82C8 for ids 204–221, numbers already printed + 1 (spell_tables.md §7).
+const HINTS: [[&str; 2]; 18] = [
+    [
+        "挑戦可能条件：望月（エキストラ）をスペルカード７枚以上取得して",
+        "　　　　　　　クリアする。",
+    ],
+    [
+        "挑戦可能条件：通常モードFinalBを２キャラ以上クリアする。",
+        "　　　　　　　難易度不問。",
+    ],
+    [
+        "挑戦可能条件：通常モードFinalBを３キャラ以上クリアする。",
+        "　　　　　　　難易度不問。",
+    ],
+    [
+        "挑戦可能条件：スペルカードモードでスペルカードを50枚以上取得する。",
+        "　　　　　　　全キャラ合計。",
+    ],
+    [
+        "挑戦可能条件：通常モードFinalBを４キャラ以上クリアする。",
+        "　　　　　　　難易度不問。",
+    ],
+    ["挑戦可能条件：No.138を取得する。", " "],
+    [
+        "挑戦可能条件：スペルカードモードでラストスペルを15枚以上取得する。",
+        "　　　　　　　全キャラ合計。",
+    ],
+    [
+        "挑戦可能条件：No.146,196を取得し",
+        "　　　　　　　かつ、No.205を一度でも見る。",
+    ],
+    [
+        "挑戦可能条件：No.209,210,211を一度でも見る。",
+        "　　　　　　　取得の必要はない。",
+    ],
+    [
+        "挑戦可能条件：No.206,207,208,212を一度でも見る。",
+        "　　　　　　　取得の必要はない。",
+    ],
+    [
+        "挑戦可能条件：魔理沙（単独使用）で三日月（ノーマル）の",
+        "　　　　　　　スペルカードを全て取得。",
+    ],
+    [
+        "挑戦可能条件：霊夢（単独使用）で上つ弓張（ハード）以上をクリア。",
+        "　　　　　　　最終面はFinalBのみ。",
+    ],
+    [
+        "挑戦可能条件：スペルカードモードでスペルカードを120枚以上取得する",
+        "　　　　　　　全キャラ合計。",
+    ],
+    [
+        "挑戦可能条件：通常モードFinalBを６キャラ以上クリアする。",
+        "　　　　　　　",
+    ],
+    [
+        "挑戦可能条件：望月（エキストラ）を３キャラ以上クリアする。",
+        " ",
+    ],
+    [
+        "挑戦可能条件：スペルカードモードでラストスペルを30枚以上取得する。",
+        "　　　　　　　全キャラ合計。",
+    ],
+    [
+        "挑戦可能条件：待宵（ルナティック）をクリアする。",
+        "　　　　　　　コンティニュー可、使用キャラ不問。",
+    ],
+    [
+        "挑戦可能条件：これ以外のラストワードを全て一度見る。",
+        "　　　　　　　取得の必要はない。",
+    ],
+];
+
+// Spell_DifficultyOf 0x4144D0.
+fn difficulty_of(id: usize) -> usize {
+    let has = |l: &[u8]| l.iter().any(|&v| v as usize == id);
+    if has(&EASY) {
+        0
+    } else if has(&NORMAL) {
+        1
+    } else if has(&HARD) {
+        2
+    } else if id < 191 {
+        3
+    } else if id < 205 {
+        4
+    } else {
+        5
+    }
+}
+
+fn is_last(id: usize) -> bool {
+    LAST.iter().any(|&v| v as usize == id)
+}
+
+// LastWord_ComputeUnlocks 0x46CBBB (15 §2.8): sets FLSP slots, never clears them.
+pub fn compute_last_word_unlocks(g: &mut crate::gamemgr::Game) {
+    let c = |id: usize| g.score.catk.get(id).cloned().unwrap_or_default();
+    let prac = |id: usize| c(id).counters[PC][12] != 0;
+    let captured = |id: usize| c(id).counters[SC][12] != 0 || prac(id);
+    let attempted = |id: usize| seen(&c(id), 12);
+    let final_b = (0..12)
+        .filter(|&t| g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0))
+        .count();
+    let prac_n = (0..222).filter(|&i| prac(i)).count();
+    let last_n = LAST.iter().filter(|&&i| prac(i as usize)).count();
+    let extra = (0..12).filter(|&t| g.clear_nc[t][4] & 0x100 != 0).count();
+    let unlocked = [
+        final_b >= 2,
+        final_b >= 3,
+        prac_n >= 50,
+        final_b >= 4,
+        captured(137),
+        last_n >= 15,
+        captured(195) && captured(145) && attempted(204),
+        (208..=210).all(attempted),
+        [205, 206, 207, 211].into_iter().all(attempted),
+        NORMAL.iter().all(|&i| {
+            let k = c(i as usize);
+            k.counters[SC][6] != 0 || k.counters[PC][6] != 0
+        }),
+        g.clear_nc[4][2..4].iter().any(|m| m & 0x4000 != 0),
+        prac_n >= 120,
+        final_b >= 6,
+        extra >= 3,
+        last_n >= 30,
+        g.clear_any[12][3] & 0xC000 != 0,
+        (205..=220).all(attempted),
+    ];
+    for (k, u) in unlocked.into_iter().enumerate() {
+        if u {
+            g.score.flsp[k] = 0xCD + k as u8;
+        }
+    }
+}
+
 const UNKNOWN8: &str = "？？？？？？？？";
 const UNKNOWN9: &str = "？？？？？？？？？";
 
@@ -108,9 +266,16 @@ fn seen(c: &Catk, s: usize) -> bool {
     c.counters[SA][s] != 0 || c.counters[PA][s] != 0
 }
 
-// Card_IsSelectable 0x46FD5F: a Last Word whose FLSP slot is set.
+// Card_IsSelectable 0x46FD5F: attempted (ids < 205) or the Last Word's FLSP slot set.
 fn selectable(ctx: &Ctx, id: usize) -> bool {
-    id >= 205 && ctx.game.score.flsp.get(id - 205).is_some_and(|&v| v != 0)
+    if id < 205 {
+        return seen(&catk(ctx, id), 12);
+    }
+    ctx.game
+        .score
+        .flsp
+        .get(id - 205)
+        .is_some_and(|&v| v as usize == id - 205 + 0xCD)
 }
 
 fn sjis(b: &[u8]) -> String {
@@ -238,13 +403,7 @@ impl MainMenu {
     pub(crate) fn practice_enter(&mut self, ctx: &mut Ctx) {
         {
             self.interrupt_all(18);
-            // SPEC-GAP (mopup1 log): portraits ignore the range interrupt, description hides at once, cursor = last stage.
-            for v in 111..=130 {
-                self.vms[v].pending_interrupt = 0;
-                if v >= 119 {
-                    set_alpha(&mut self.vms[v], 0);
-                }
-            }
+            self.char_vms_list(ctx.game.shot as i32);
             self.cursor = (ctx.game.stage as i32).clamp(0, 7);
             let m = Self::practice_mask(ctx);
             self.stages = std::array::from_fn(|i| crate::menu::unlock_all() || m & (1 << i) != 0);
@@ -321,7 +480,7 @@ impl MainMenu {
         {
             self.set_surface(ctx, "select00.png");
             ctx.game.flags |= F_PRACTICE | F_SPELL_PRACTICE;
-            // SPEC-GAP: VM 141 restarts its slide from (640, 320) on every entry (mopup1 log, also back from 17).
+            // SPEC-GAP: VM 141's catch-all should reset it to (640, 320); the port's interrupt path misses a case (mopup1).
             self.vms[VM_ANCHOR].pos = [640.0, 320.0, 0.0];
             self.interrupt_all(18);
             let mut c = (ctx.game.shot as i32).min(n - 1);
@@ -358,16 +517,11 @@ impl MainMenu {
         if self.cursor != self.prev_cursor {
             self.prev_cursor = self.cursor;
             ctx.game.shot = self.cursor as u8;
-            // Portraits only: the description VMs keep the range interrupt (18 on entry, none later).
-            self.char_vms(self.cursor);
-            for vm in &mut self.vms[119..=130] {
-                vm.pending_interrupt = if entry { 18 } else { 0 };
-            }
+            self.char_vms_list(self.cursor);
         }
         if entry {
-            // SPEC-GAP: heading VMs (title01 scripts 138/139) per the mopup1 log: 138 fades in at once, 139 stays hidden.
             self.vms[138].pending_interrupt = 27;
-            self.vms[139].pending_interrupt = 26;
+            self.vms[139].pending_interrupt = 27;
         }
     }
 
@@ -413,7 +567,7 @@ impl MainMenu {
         let own =
             self.lists.scratch_for == crate::menu::SPELL_PRACTICE && self.lists.scratch.len() >= 3;
         let [ax, ay] = self.anchor();
-        // SPEC-GAP: the rows sit 32 px left of VM 141 in mopup1 (x 224 at rest), like VM E7B8.
+        // The heading x (A.x − 32) is also the row pen x (answers_impl17 Q3).
         let x0 = ax - 32.0;
         if own {
             let mut vm = std::mem::take(&mut self.lists.scratch[0]);
@@ -629,19 +783,16 @@ impl MainMenu {
                 fullwidth_digits(id + 1),
                 if att { sjis(&c.name) } else { UNKNOWN8.into() }
             ),
-            1 => {
-                // SPEC-GAP: no per-difficulty card lists; CATK last-attempt difficulty used, "Last" marker not shown.
-                let d = if lw { 5 } else { c.difficulty.min(4) as usize };
-                if att {
-                    format!("使用者  {}　　{} ", sjis(&c.owner), DIFF_NAMES[d])
-                } else {
-                    format!("使用者  {UNKNOWN8}")
-                }
-            }
+            1 => format!(
+                "使用者  {}　　{} {}",
+                if att { sjis(&c.owner) } else { UNKNOWN8.into() },
+                DIFF_NAMES[difficulty_of(id)],
+                if is_last(id) { "Last" } else { " " }
+            ),
             2 => format!("取得数/挑戦数[最高点]　{}　全主人公合計", SHOT_NAMES[s]),
             3 => {
                 if !att {
-                    "---/---(---/---)[--------]".into()
+                    "　　---/---(---/---)[--------]　　---/---(---/---)[--------]".into()
                 } else if lw {
                     let f = |s: usize| {
                         format!(
@@ -649,7 +800,7 @@ impl MainMenu {
                             c.counters[PC][s], c.counters[PA][s], c.counters[PB][s]
                         )
                     };
-                    format!("{}    {}", f(s), f(12))
+                    format!("　　{}　　{}", f(s), f(12))
                 } else {
                     let f = |s: usize| {
                         format!(
@@ -661,13 +812,14 @@ impl MainMenu {
                             c.counters[PB][s]
                         )
                     };
-                    format!("{}    {}", f(s), f(12))
+                    format!("　　{}　　{}", f(s), f(12))
                 }
             }
             4 => "カードの補足".into(),
-            // SPEC-GAP: unlock hints (table 0x4C82C8) not in the spec; locked cards show the unknown line.
             _ => {
-                if c.counters[PC][12] != 0 {
+                if id >= 204 && !att && !selectable(ctx, id) {
+                    HINTS[id - 204][k - 5].into()
+                } else if c.counters[PC][12] != 0 {
                     sjis(&c.comment[k - 5])
                 } else {
                     UNKNOWN9.into()
@@ -697,17 +849,10 @@ impl MainMenu {
         let (a, b) = self.card_ids();
         let count = (b - a) as i32;
         {
-            // SPEC-GAP: interrupt 26 (portraits of the chosen team dim, heading 140 in) as seen in the mopup1 log.
-            for v in 136..=140 {
-                self.vms[v].pending_interrupt = 26;
+            for vm in &mut self.vms {
+                vm.pending_interrupt = 26;
             }
-            let row = crate::menu::CHAR_VMS[self.cursor.clamp(0, 11) as usize];
-            for &v in &row[1..] {
-                if (111..=118).contains(&v) {
-                    self.vms[v as usize].pending_interrupt = 26;
-                }
-            }
-            // SPEC-GAP: LastWord_ComputeUnlocks (15 §2.8) needs the card lists; FLSP is used as loaded.
+            compute_last_word_unlocks(&mut ctx.game);
             let id = ctx.game.card as i32 - a as i32;
             self.lists.card = if (0..count).contains(&id) { id } else { 0 };
             self.lists.page = self.lists.card / 15;

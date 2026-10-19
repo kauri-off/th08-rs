@@ -469,19 +469,36 @@ impl MainMenu {
         }
     }
 
-    // Portrait VMs of character `c` (12 §2.4): shown 9, main 23, others 8.
-    pub(crate) fn char_vms(&mut self, c: i32) {
-        let row = CHAR_VMS[c.clamp(0, 11) as usize];
-        for vm in 111..=130 {
-            let v = vm as i32;
-            self.vms[vm].pending_interrupt = if row[..3].contains(&v) {
-                9
-            } else if row[3] == v {
-                23
-            } else {
-                8
-            };
+    // Portrait VMs of character `c` (12 §2.4, answers_impl17 §Q3): a cursor move first enables all of them with 8.
+    pub(crate) fn char_vms(&mut self, c: i32, moved: bool) {
+        if moved {
+            for vm in &mut self.vms[111..=130] {
+                vm.flags |= anmvm::F_ENABLED;
+                vm.pending_interrupt = 8;
+            }
         }
+        self.char_row(c, 0);
+    }
+
+    // Entries `from`..3 of the team row: enabled with 9, the partner entry 3 with 23.
+    pub(crate) fn char_row(&mut self, c: i32, from: usize) {
+        let row = CHAR_VMS[c.clamp(0, 11) as usize];
+        for (k, &v) in row.iter().enumerate().skip(from) {
+            if v >= 0 {
+                let vm = &mut self.vms[v as usize];
+                vm.flags |= anmvm::F_ENABLED;
+                vm.pending_interrupt = if k == 3 { 23 } else { 9 };
+            }
+        }
+    }
+
+    // Screens 11 / 16: portraits disabled with 8, then the row without the description (entry 0).
+    pub(crate) fn char_vms_list(&mut self, c: i32) {
+        for vm in &mut self.vms[111..=130] {
+            vm.flags &= !anmvm::F_ENABLED;
+            vm.pending_interrupt = 8;
+        }
+        self.char_row(c, 1);
     }
 
     fn char_allowed(&self, ctx: &Ctx, c: i32) -> bool {
@@ -509,8 +526,9 @@ impl MainMenu {
             self.move_cursor(ctx, n, LEFT, RIGHT, |c| allowed[c as usize]);
         }
         if self.cursor != self.prev_cursor {
+            let moved = self.frames != 0;
             self.prev_cursor = self.cursor;
-            self.char_vms(self.cursor);
+            self.char_vms(self.cursor, moved);
         }
         if self.frames < 8 {
             return;
@@ -747,6 +765,7 @@ impl Task<Ctx> for MainMenu {
                 | ((0..4).all(nc_b) as u32) << 17;
             g.flags = g.flags & !(7 << 15) | bits;
         }
+        crate::menulist::compute_last_word_unlocks(&mut ctx.game);
         if std::mem::take(&mut ctx.game.watched_replay) {
             self.screen = REPLAY;
         }
@@ -760,9 +779,14 @@ impl Task<Ctx> for MainMenu {
                 self.screen = DIFF_PRACTICE;
             }
         }
-        // SPEC-GAP: back from the result viewer / music room the cursor stays on that item (menu_base log).
         self.cursor = if self.screen == TOP {
-            match ctx.game.previous {
+            let g = &ctx.game;
+            match g.previous {
+                _ if g.spell_practice() => 2,
+                _ if g.practice() => 3,
+                gamemgr::SCENE_GAME | gamemgr::SCENE_NEXT_STAGE | gamemgr::SCENE_RESULT => {
+                    (g.difficulty > 3) as i32
+                }
                 gamemgr::SCENE_RESULT_MENU => 5,
                 gamemgr::SCENE_MUSIC_ROOM => 6,
                 _ => 0,
@@ -846,7 +870,7 @@ impl Task<Ctx> for MainMenu {
             ctx.anm.draw(&mut ctx.gfx, vm);
         }
         // Description VM: text.anm script 9 at (320, 448), centred (answers_impl9 §15).
-        // SPEC-GAP: on spell practice the fading description stays drawn (mopup1 log), not on the other screens.
+        // SPEC-GAP: Q7 draws it on every screen, but the port's VM misses the fade-out interrupts off the top menu.
         let top = self.screen == TOP
             || (self.prev_screen == TOP && (self.frames == 0 || self.screen == SPELL_PRACTICE));
         if self.desc_on && top && self.quitting.is_none() && self.pending.is_none() {

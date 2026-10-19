@@ -185,6 +185,23 @@ fn dump_items(row: i64) {
         "row {row}: player {:.3},{:.3} state {} power {} target {:?}",
         p.pos[0], p.pos[1], p.state, p.stats.power, p.targets[0]
     );
+    if std::env::var("TH08_SESSION_PB").is_ok() {
+        for (i, b) in p.bullets.iter().enumerate().filter(|(_, b)| b.state != 0) {
+            println!(
+                "  pb{i} st {} kind {} pos {:.2},{:.2} size {:.1},{:.1} vel {:.2},{:.2} dmg {} t {}",
+                b.state,
+                b.kind,
+                b.pos[0],
+                b.pos[1],
+                b.size[0],
+                b.size[1],
+                b.vel[0],
+                b.vel[1],
+                b.damage,
+                b.timer.cur
+            );
+        }
+    }
     for (k, o) in p.options.iter().enumerate().filter(|(_, o)| o.state != 0) {
         println!(
             "  opt{k} st {} sub {} pos {:.2},{:.2} vel {:.3},{:.3} t {} aimed {:?}",
@@ -204,6 +221,23 @@ fn dump_items(row: i64) {
                     x.life,
                     x.orb_acc
                 );
+                if x.flags & th08::enemy::A_BOSS != 0 {
+                    println!(
+                        "    boss dep {} max {} hud {} thr {:?} tsub {:?} tmo {} tmosub {} dsub {} tim {} dmgt {} flb {:x} bon {}",
+                        x.main.depth,
+                        x.max_life,
+                        x.hud_life,
+                        x.thresholds,
+                        x.threshold_subs,
+                        x.timeout,
+                        x.timeout_sub,
+                        x.death_sub,
+                        x.boss_timer.cur,
+                        x.dmg_timer.cur,
+                        x.flags_b,
+                        x.bonus_seconds
+                    );
+                }
                 for t in x.threads.iter().flatten() {
                     println!(
                         "    thread sub {} t {} w {} ip {:#x}",

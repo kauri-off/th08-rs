@@ -98,6 +98,10 @@ impl ItemManager {
         self.items.iter().filter(|i| i.alive)
     }
 
+    pub fn count(&self, kind: u8) -> i32 {
+        self.live().filter(|i| i.kind == kind).count() as i32
+    }
+
     // Bomb start (09 §7): every item flies to the player (state 1, velocity (0, −0.5)).
     pub fn attract_all(&mut self) {
         for it in self.items.iter_mut().filter(|i| i.alive && i.state != 1) {

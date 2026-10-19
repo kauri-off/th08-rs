@@ -191,22 +191,27 @@ pub(crate) fn var_i(
     match id {
         // SPEC-GAP: whether an int read of 10033 consumes a random number is not stated (assumed not).
         10033 => 0,
-        // SPEC-GAP: 10098 compares game counters of a later phase; reads 0.
-        10098 => 0,
+        10032 => (anm.rng.next_u32() & 0x7FFF_FFFF) as i32,
+        10034 => anm.rng.next_u32() as i32,
+        10098 => {
+            let pending = m.g.payout.map_or(0, |c| c.time);
+            let orbs = m.bullets.borrow().items.count(crate::item::TIME_ORB);
+            let st = &m.player.borrow().stats;
+            if st.time + pending + orbs >= st.time_threshold {
+                2
+            } else {
+                0
+            }
+        }
         10100 => m.g.spell.as_ref().map_or(0, |s| s.frames),
         10079..=10082 => id,
         _ if flt_ref(id).is_some()
             || matches!(
                 id,
-                10032 | 10034 | 10035 | 10048 | 10050 | 10052 | 10083
-                    ..=10091 | 10096 | 10097 | 10099
+                10035 | 10048 | 10050 | 10052 | 10083..=10091 | 10096 | 10097 | 10099
             ) =>
         {
-            let v = var_f(m, anm, e, c, id as f32);
-            match id {
-                10032 | 10034 => v as i64 as i32,
-                _ => v as i32,
-            }
+            var_f(m, anm, e, c, id as f32) as i32
         }
         _ => id,
     }
@@ -625,7 +630,6 @@ impl Exec<'_> {
                 c.set_flag(A_YOUKAI, youkai);
                 c.mode_bits = if youkai { 0x40 } else { 0x20 };
                 c.layer = if youkai { 0 } else { 2 };
-                c.flags &= !A_CONTACT;
                 if op == 92 {
                     c.pos_offset = self.e.pos;
                     c.flags |= A_FOLLOW;
@@ -666,7 +670,15 @@ impl Exec<'_> {
             }
             self.e.children += 1;
         }
-        self.m.spawn_finish(self.anm, ci, life, item, score, true);
+        // Contact off after the child's first run: its time-0 op 81 does not re-enable it (demo 2 / fullrun escans).
+        if self
+            .m
+            .spawn_finish(self.anm, ci, life, item, score, true)
+            .is_some()
+            && chained
+        {
+            self.m.enemies[ci].flags &= !A_CONTACT;
+        }
     }
 
     // --- bullets (07 §9) ---
@@ -870,8 +882,7 @@ impl Exec<'_> {
                 1.0
             };
             let tt = ease(sl.mode, tt);
-            let v: [f32; 4] =
-                std::array::from_fn(|k| var_f(self.m, self.anm, self.e, &t.ctx, sl.abcd[k]));
+            let v = sl.abcd;
             let val = if sl.func == 7 {
                 (2.0 * tt + 1.0) * (tt - 1.0) * (tt - 1.0) * v[0]
                     + (3.0 - 2.0 * tt) * tt * tt * v[1]
@@ -1105,6 +1116,7 @@ impl Exec<'_> {
             owner: dec(0x44, 48, 0xBB),
             comment: [dec(0x74, 64, 0xDD), dec(0xB4, 64, 0xEE)],
             frames: 0,
+            duration: self.e.timeout.max(0),
             deaths0: self.m.player.borrow().deaths,
             bombs0: self.m.player.borrow().bombs_started,
             capture: true,
@@ -1119,6 +1131,7 @@ impl Exec<'_> {
             spell.bonus,
             self.m.frame
         );
+        self.m.pay_capture();
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
         crate::gui::request(crate::gui::Req::BossShow {
             face: spell.face,
@@ -1254,7 +1267,8 @@ impl Exec<'_> {
                 let dur = self.ai(t, ins, 1);
                 let func = self.ai(t, ins, 2);
                 let mode = self.ai(t, ins, 3);
-                let abcd: [f32; 4] = std::array::from_fn(|k| f32::from_bits(self.raw(ins, 4 + k)));
+                // SPEC-GAP: a–d are evaluated once here (fullrun stage 1 familiars match H(t) with the op-36-time values exactly).
+                let abcd: [f32; 4] = std::array::from_fn(|k| self.af(t, ins, 4 + k));
                 let slots = &mut t.ctx.interp;
                 let s = slots
                     .iter()
@@ -1630,14 +1644,7 @@ impl Exec<'_> {
                 });
             }
             122 => self.spell_card(ins),
-            123 => {
-                let (total, remaining) = (
-                    self.e.timeout.max(0),
-                    (self.e.timeout - self.e.boss_timer.cur).max(0),
-                );
-                self.m
-                    .finish_spell(total, remaining, self.anm, Some(self.idx));
-            }
+            123 => self.m.finish_spell(self.anm, Some(self.idx)),
             124 => crate::sound::play_at(self.ai(t, ins, 0), self.e.final_pos[0]),
             125 => {
                 self.e.pending_interrupt = self.ai(t, ins, 0);
@@ -1711,8 +1718,6 @@ impl Exec<'_> {
             131 => {
                 let n = self.ai(t, ins, 0);
                 (self.e.life, self.e.max_life, self.e.hud_life) = (n, n, n);
-                // SPEC-GAP: set_life re-arms death (clears the latch); bosses with death mode 2 die again later (fullrun_noclip).
-                self.e.flags_b &= !B_DEATH_LATCH;
                 if self.e.boss_slot == 0 && self.e.flags & A_BOSS != 0 {
                     self.m.g.hud_markers = Default::default();
                 }
