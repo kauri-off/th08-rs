@@ -405,3 +405,23 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - WRITTEN: specs/answers_impl16.md, answers_impl17.md; fixed 06 §11.3, 07 §4.3/§7/§10.4, 08 §8.4, 09 §4.5, 11 §3.1, 12 §5.1, 15 §3.3;
   TOOLING_REPORT §10; symbols +3 (redump not rerun). Work cfg restored (sound on). RE-Q16 DONE.
 - Next RE run: IMPL17 Q1/Q3/Q4/Q6/Q7 (menus).
+
+# RE-Q17M (2026-10-19) — IMPL17 Q1/Q3/Q4/Q6/Q7 (menus) — DONE
+- NEW specs/data/spell_tables.md (all spell tables + strings, read from the exe; script re/work/runs/q17m/tables.py).
+- Q1: LastWord_ComputeUnlocks also in MainMenu_OnRegister; only sets slots; FLSP read whole if chunk present, saved on every save.
+- Q3: delivery rules (one pending slot, catch-all, enable bit 1). Screens 11/16 portraits: entries 1–3 only (description disabled);
+  16 writes 27 to VMs 138/139; 17 sends 26 (VM 141 catch-all → pos 640,320). Screen-16 pen x = A.x − 32 (16 §6.4 fixed).
+  Practice cursor = g_StageIdx.
+- Q4: result exit P+1 Loading_Begin, P+20 scene request, P+21 menu; Result_OnRemove → Anm_MoveSurface 0x45A3FD (slot 0 → 8);
+  menu Loading_Begin no-op when already loading; description VM0 for the 9 render frames, then +8 = −1 → switch.
+- Q6: wine draws text with Droid Sans Fallback (face name mis-converted, proportional, ppem 21, synthetic bold) → reference
+  screenshots ≠ MS Gothic layout. Q7: description VM run/drawn on all screens; shares text.anm rows with screen-17 info VMs.
+- Runs: re/work/runs/q17m (own game copy with hardlinked exe/dat; peeks + shots). Symbols +2 (redump not rerun).
+
+# RE-NOCLIP (2026-10-19) — DONE
+- session.inc: TH08_NOCLIP=1 → Player_Die 0x44AB40 jmp to noclip_die (lock inc counter; ret) + GameMgr_IsTampered 0x40BB80 → xor eax,eax; ret
+  (skipping Die skips UpdateChecksum after ScrambleDecoys → tamper detected → quit at EffectMgr counter%300==100, bombs refused).
+  events.txt `noclip_hit n calc c present p`. record_session.sh --noclip (meta `noclip: 1`), play_session.sh reads meta.
+- Verified: sessions/noclip_test1 (4284 frames, 78 hits) replays 0 trace / 0 draw diffs. 09 §6.1 caller order documented
+  (state check precedes ScrambleDecoys in the original). Docs: sessions/README.md, specs/data/drawlog/README.md.
+- re/work/game score.dat/th08.cfg restored after the test (backup re/work/runs/q17m/noclip/game_backup).

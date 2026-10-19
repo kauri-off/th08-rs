@@ -254,6 +254,14 @@ Text colours (`tbl 0x4C7180`, identical for all 12 shot types), COLORREF 0x00BBG
 | 1 | 0x00F0E8FF | (255, 232, 240) pinkish white |
 | 2, 3 | 0x00FFE8F0 | (240, 232, 255) bluish white |
 
+Reference runs (wine) do **not** use MS Gothic (answers_impl17 §Q6, VERIFIED with WINEDEBUG=+font):
+- the Shift-JIS face name is mis-converted (process code page ≠ 932);
+- wine falls back to Droid Sans Fallback (proportional) at ppem 21 with synthetic bold;
+- all text strips in `menu_ref` screenshots and recorded sessions have that layout (full-width ≈ 11 px, digits 6.5 px at
+  1×).
+On Windows, MS Gothic is monospaced: 7 / 14 px. Strings contain no tabs; columns come only from spaces in the format
+strings.
+
 A reimplementation may rasterise with any Japanese font at ~14 px with a 1 px black outline and the colours
 above (INFERRED equivalence).
 

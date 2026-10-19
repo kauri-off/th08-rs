@@ -287,3 +287,9 @@ speed (+0x238) and pos_offset. Decode with `python3 -I re/tools/effdump.py probe
   per item in list order: slot, type, state, max flag, pos, vel, timer.
 Floats are raw hex. Timer current values are at Timer+8. Example commands: `re/work/cmds/q16.txt`, `q16b.txt`; a `dK:F quit` line
 ends the run early. Mute: the work cfg has music/SE on; patch +0x1F/+0x20 to 0 for the run and restore it afterwards.
+
+## 11. Noclip sessions (RE_NOCLIP, 2026-10-19)
+`record_session.sh --noclip` / env `TH08_NOCLIP=1`: Player_Die → count+ret, GameMgr_IsTampered → 0 (needed: otherwise the stale
+decoy checksum makes the original quit ~300 frames after the first absorbed hit). `play_session.sh` follows `noclip:` in meta.txt.
+Test keys: `re/work/runs/q17m/noclip/keys_noclip.txt`. Font note (RE-Q17M): wine renders the game's text with Droid Sans Fallback
+(face name arrives garbled, non-932 ANSI code page) — `WINEDEBUG=-all,+font` shows the choice.

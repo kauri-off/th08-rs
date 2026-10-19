@@ -739,3 +739,5 @@ addr,kind,name,signature,confidence,note
 0x00f54ce0,global,g_EnemyDropCounter,,VERIFIED,u16 EnemyMgr+0x9DCDC0; item -1 every-third counter; Rng_Range16(3) at EnemyManager_Load
 0x00f54ce2,global,g_EnemyDropTableIdx,,VERIFIED,u16 EnemyMgr+0x9DCDC2; index into 0x4C70D8; Rng_Range16(8) at EnemyManager_Load
 0x0057ad30,global,g_EnemyTemplateOrbAcc,,VERIFIED,enemy template +0x2E10 = orb step (Player_Load); copied to every spawn
+0x0045a3fd,func,Anm_MoveSurface,"void __thiscall Anm_MoveSurface(void *this,int dst,int src)",VERIFIED,release dst; move surfaces+size of src into dst; Result_OnRemove 8<-0
+0x00453cfa,func,Shot_Name,"char * __thiscall Shot_Name(int shot)",VERIFIED,table 0x4C7F4C (13)

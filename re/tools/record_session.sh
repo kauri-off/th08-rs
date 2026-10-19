@@ -1,5 +1,5 @@
 #!/bin/zsh
-# record_session.sh [--score FILE] [--no-drawlog] [--sound on|off|keep] [--display D] [--chunk N] [name]
+# record_session.sh [--score FILE] [--no-drawlog] [--sound on|off|keep] [--display D] [--chunk N] [--noclip] [name]
 # Plays the original th08 (re/work/game copy, probe d3d8.dll in record mode) and saves the session to sessions/<name>/.
 # User guide: sessions/README.md. File formats: specs/data/drawlog/README.md ("Sessions").
 emulate -L zsh
@@ -12,7 +12,7 @@ PROBE=$REPO/re/probe
 WINE=${TH08_WINE:-$HOME/PortProton/data/dist/WINE_LG_11-1/bin/wine}
 export WINEPREFIX=${TH08_PREFIX:-$HOME/PortProton/data/prefixes/DEFAULT}
 
-score="" drawlog=1 sound=on disp=${DISPLAY:-:0} chunk=1800 name=""
+noclip=0 score="" drawlog=1 sound=on disp=${DISPLAY:-:0} chunk=1800 name=""
 while (( $# )); do
   case $1 in
     --score) score=$2; shift 2 ;;
@@ -21,6 +21,7 @@ while (( $# )); do
     --sound) sound=$2; shift 2 ;;
     --display) disp=$2; shift 2 ;;
     --chunk) chunk=$2; shift 2 ;;
+    --noclip) noclip=1; shift ;;
     -h|--help) sed -n 2,4p $0; exit 0 ;;
     -*) print -u2 "unknown option $1"; exit 2 ;;
     *) name=$1; shift ;;
@@ -76,6 +77,7 @@ start_ts=$(date +%s)
   print "display: $disp"
   print "renderer: wined3d (wine builtin d3d8 behind the probe)"
   print "drawlog: $drawlog"
+  print "noclip: $noclip"
   print "sound: $sound"
   print "score_source: ${score:-re/work/game/score.dat}"
   print "cfg_patch: +0x22 windowed=1$([[ $sound == on ]] && print ', +0x1F music=1 (WAV), +0x20 SE=1')$([[ $sound == off ]] && print ', +0x1F music=0, +0x20 SE=0')"
@@ -94,14 +96,14 @@ if (( drawlog )); then
   comp_pid=$!
 fi
 
-print "recording session '$name' -> $SESS"
+print "recording session '$name' -> $SESS$( (( noclip )) && print ' (noclip: the player cannot die)')"
 print "play normally; quit the game (Quit on the title screen or close the window) to finish."
 win_out="Z:${SESS//\//\\}"
 (
   cd $GAME
   export DISPLAY=$disp WINEDEBUG=-all
   export WINEDLLOVERRIDES='d3d8=n,b;c:\windows\syswow64\d3d8.dll=b'
-  export TH08_SESS=rec TH08_SESS_OUT=$win_out TH08_SESS_DL=$drawlog TH08_SESS_CHUNK=$chunk
+  export TH08_SESS=rec TH08_SESS_OUT=$win_out TH08_SESS_DL=$drawlog TH08_SESS_CHUNK=$chunk TH08_NOCLIP=$noclip
   exec $WINE th08.exe > $SESS/wine.log 2>&1
 ) &
 wine_pid=$!

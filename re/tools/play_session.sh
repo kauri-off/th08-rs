@@ -33,6 +33,7 @@ SESS=${name:A}; [[ -d $SESS ]] || SESS=$REPO/sessions/$name
 pgrep -A -f 'th08\.exe' >/dev/null && die "th08.exe is already running"
 [[ -z $drawlog ]] && drawlog=$(sed -n 's/^drawlog: //p' $SESS/meta.txt)
 [[ -z $drawlog ]] && drawlog=0
+noclip=$(sed -n 's/^noclip: //p' $SESS/meta.txt); noclip=${noclip:-0}
 [[ -z $out ]] && out=$SESS/play_$(date +%Y%m%d-%H%M%S)
 mkdir -p $out; out=${out:A}
 
@@ -60,13 +61,13 @@ if [[ -z $sink_mod ]]; then
 fi
 presents=$(sed -n 's/^last_present: //p' $SESS/meta.txt)
 limit=$(( ${presents:-36000} / 60 * 3 / 2 + 120 ))
-print "playing $SESS -> $out (display $disp, draw log $drawlog, time limit ${limit}s)"
+print "playing $SESS -> $out (display $disp, draw log $drawlog, noclip $noclip, time limit ${limit}s)"
 (
   cd $PGAME
   export DISPLAY=$disp WINEDEBUG=-all
   [[ -n $sink_mod ]] && export PULSE_SINK=$sink
   export WINEDLLOVERRIDES='d3d8=n,b;c:\windows\syswow64\d3d8.dll=b'
-  export TH08_SESS=play TH08_SESS_IN="Z:${SESS//\//\\}" TH08_SESS_OUT="Z:${out//\//\\}" TH08_SESS_DL=$drawlog
+  export TH08_SESS=play TH08_SESS_IN="Z:${SESS//\//\\}" TH08_SESS_OUT="Z:${out//\//\\}" TH08_SESS_DL=$drawlog TH08_NOCLIP=$noclip
   timeout $limit $WINE th08.exe > $out/wine.log 2>&1
 )
 sleep 1

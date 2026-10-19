@@ -306,7 +306,13 @@ In memory at 0x164BB6C + shot·0x178.
 
 In memory at GM+0xC (0x160F514), +0x0C..+0x1C u8[17]. Slot k holds 0xCD + k when Last Word 205 + k is unlocked, else 0.
 
-The slots are recomputed by `LastWord_ComputeUnlocks` 0x46CBBB when the spell-practice card list opens. Card ids count from 0. "Prac" = practice capture counters (CATK +0x1F4[12]); "story or prac" = either capture counter.
+The slots are computed by `LastWord_ComputeUnlocks` 0x46CBBB in `MainMenu_OnRegister` (every menu load, after the
+score.dat chunks are read) and on every entry to screen 17.
+- It only **sets** slots (0xCD + k), never clears them.
+- The block (with its 12-byte header) is read whole from a "FLSP" v1 chunk (`ScoreDat_GetFLSP`); memory is untouched when
+  there is no chunk.
+- It is written by every `ScoreDat_Save` with a fresh header.
+- `Card_IsSelectable(id)` compares byte GM+(id − 181) with id (answers_impl17 §Q1). Tables: `specs/data/spell_tables.md`. Card ids count from 0. "Prac" = practice capture counters (CATK +0x1F4[12]); "story or prac" = either capture counter.
 
 | card | owner | unlock condition (VERIFIED) |
 |---|---|---|

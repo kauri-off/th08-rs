@@ -40,6 +40,10 @@ Loading-screen state = Supervisor+0x2FC:
   capture is pending): after the next Present the back buffer is copied into surface slot 8, which
   `Supervisor_DrawLoading` then shows. Used by `GameMgr_OnRegister` (both branches), the main-menu loading paths and
   the music-room exit; the probe labels this `K screen th08logo.jpg` (slot name), but it is the captured last frame.
+- **Result viewer → menu** (answers_impl17 §Q4, VERIFIED): `Result_OnRemove` moves surface slot 0 (`result.jpg`) into slot 8
+  (0x45A3FD: release slot 8, move both surface pointers and the size record, clear slot 0). The loading screen of the
+  following menu load shows the plain `result.jpg` (no capture). The result viewer already started the loading state, so
+  the menu's `Loading_Begin` is a no-op and the banner animation continues (it started at result frame P+1).
 - Stage start from the main menu also creates the loading darken overlay (ScreenEffect type 5, 13 §3): full-screen
   black, alpha 0 while loading, 0x80 → 0x00 over game frames 1–9, drawn at draw prio 1 (first in the frame).
 
@@ -103,6 +107,14 @@ interrupts and their VM effect on frame P + 1.
 | 135 | Extra difficulty image |
 | 136–141 | headings (`sl_text.png`: e.g. select difficulty / character) |
 
+**Interrupt delivery** (answers_impl17 §Q3, VERIFIED):
+- Each VM has one pending slot (+0x1FE). A per-VM write after `AnmManager_InterruptRange` in the same handler call replaces
+  the range interrupt for that VM.
+- A VM without a label for the id takes its catch-all label (−1). In every title01 script the catch-all is followed by
+  `hide_wait_interrupt`. In script 141 it is followed by `pos 640,320`, so any interrupt other than 18/6 resets VM 141
+  to (640, 320), hidden.
+- Handlers hide VMs instantly by clearing flag bit 1 (enabled, 05 §2.1); the script's fade label still runs undrawn.
+
 Screens drive the VMs with interrupts sent to the whole range (`AnmManager_InterruptRange`): 2 = show top menu,
 5 = leave top menu to a sub-screen, 13 = to replay screen, 1 = quit/fade out, 7 = enter difficulty select, 12 =
 enter Extra difficulty, 6 = cancel back, 8 = enter character select, 18 = practice stage select. Individual VMs
@@ -134,6 +146,24 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
   and 2 are skipped and drawn with colour 0xFF404040.
 - Every frame: all item VMs get the unselected sprite, the cursor item its base sprite; when the cursor
   changes the new description VM gets interrupt 1.
+- **Description VM timing** (answers_impl17 §Q4, VERIFIED, mopup1 presents 2866–2875):
+  - The menu loader ends by setting +0xC2BC = description VM 0. All 14 description VMs start text.anm script 9, which
+    fades in by itself (alpha 255·t/20).
+  - During the 9 render frames of sub-state 0 the drawn description is therefore item 0, whatever the cursor.
+  - On the 9th frame the handler sets +0x08 = −1 and enters sub-state 1 in the same call. The change test then switches
+    to VM[cursor] with interrupt 1 (fade-in from 0).
+- **Cursor on menu load** (`MainMenu_OnRegister`, by previous scene):
+  - 5 (result viewer) → 5;
+  - 8 (music room) → 6;
+  - 2/3/6 (game) → 1 if the last difficulty was Extra, else 0;
+  - otherwise 0;
+  - then practice flags override: practice → 3, spell practice → 2, with +0x6C = 1/2.
+- **The current description VM is run and drawn on every screen** (menu calc/draw, after VMs 0–141), at (320, 448).
+  Leaving the top menu sends it interrupt 2 (fade 60 frames, then hidden), so it stays visible for ~60 frames on the next
+  screen.
+  - Description strips are text.anm sprites 21+k = the same rows as the screen-17 info VMs. Screen 17 entry overwrites
+    strips 0–6.
+  - The top menu re-renders all 9 descriptions on each entry.
 - Input accepted from frame 10 on. Confirm: sfx 10 (+ sound flush). Cancel: cursor jumps to Quit (sfx 11).
 - **Demo**: idle counter +1 per frame, reset by any raw input; after 1500 frames load
   `demo/demorpy((n+1) mod 4).rpy`; on success: flags = replay | demo (bits 3, 1), difficulty/shot from the
@@ -188,7 +218,13 @@ Choices = 4 teams, or 12 (teams + 8 solos) when Extra is unlocked for all four t
 | 10 | 129, 118 (−1, 117) |
 | 11 | 130, 117 (−1, 118) |
 
-(Listed VMs get interrupt 9 and are made visible; the 4th entry of each row gets 23; all other VMs 111–130 get 8.)
+(Enable/interrupt details, answers_impl17 §Q3, VERIFIED. Here "enabled" = flag bit 1.)
+- **On entry:** every VM 111–130 is disabled and gets 8; table entries 0–2 are enabled and get 9; entry 3 is enabled and
+  gets 23.
+- **On a cursor move:** every VM 111–130 is enabled (not disabled) and gets 8, so the old ones fade out visibly; then
+  entries 0–2 → 9 and entry 3 → 23.
+- **Screens 11 and 16** (entry, and screen 16's shot change) use entries **1–3 only**. Entry 0, the `sl_pltxt`
+  description, stays disabled and disappears at once. The portraits get 9/23, which replaces the range interrupt 18.
 Confirm: shot = cursor, sfx 10; practice → screen 11; spell practice → screen 16; else
 `difficulty = config+0x21`, `stage = 0` (Extra: `difficulty + 4` = 8), flags &= ~replay, stop music,
 **scene 2** (new game). Cancel: back to the difficulty screen (spell practice: fade back to the top menu).
@@ -220,6 +256,15 @@ all 142 VMs and the description VM. Bits: 0x40 = stage index 6 (6A) cleared, 0x8
 (15 §2.4, `1 << stage_idx`).
 
 ### 2.5 Practice stage select (screen 11) — VERIFIED
+Entry (frame 0):
+- range interrupt 18 (VM 139 fades in; VM 138 has no label 18 → hidden; VM 141 slides 640 → 256);
+- portraits/description as in §2.4 (description hidden at once);
+- +0x6C = 0;
+- practice flag set.
+
+The cursor is **not** set on entry: it is g_StageIdx, copied by the character-select confirm. That is the stage of the
+last game, or the last spell-practice row. Sub-state 1 resets it to 0 if that stage is unavailable.
+
 Sets practice flag. Available stages = any-clear mask (`gm+0x3C4A6 + shot*0x24 + diff*2`) for the chosen
 difficulty and shot (empty → stage 1 only; if the 6B bit is set, 4A and 4B are both added). Cursor over the 8
 entries 0..7 (St1, St2, St3, 4A, 4B, St5, 6A, 6B), skipping unavailable ones. Confirm: difficulty, stage =

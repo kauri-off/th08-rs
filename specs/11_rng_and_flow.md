@@ -288,7 +288,8 @@ Per frame (after `0x164D09C += 1`):
    speed when 0 < speed ≤ 1; MIDI: Midi_Fade(3)). Demo index GM+0x3DBB4 (0x164D0BC): the GameManager static
    constructor 0x43C5E1 sets it to **3**; `MainMenu_Top` does `n = (n + 1) % 4` before loading
    `demorpy<n>.rpy`, so the first attract demo after boot is demorpy0, then 1, 2, 3, 0 …
-7. Anti-tamper checks of the decoy values (only affect a debug float 0x164D2FC; not needed).
+7. Anti-tamper checks of the decoy values (only affect a debug float 0x164D2FC; not needed). `GameMgr_IsTampered` 0x40BB80 has more callers (bomb input, AddLives/AddPower/AddBombs, EffectMgr quit); all are inert
+   in an untampered run, which is the only case a faithful port has to model (09 §6.1).
 8. If paused (1 or 2) or game-over menu open → return 3 (calc chain stops: the whole game is frozen; the
    ASCII manager at prio 1 runs the pause / continue menus, 12).
 9. Score display roll: `d = clamp((score − disp) >> 5, 1, 578910)`; `step = max(step, d)`; if `disp + step >

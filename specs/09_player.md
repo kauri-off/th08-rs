@@ -277,6 +277,31 @@ Special mode (bits 7–8 set): n = 2 and forced bomb (+6 = 1, §7 "dissolve spel
 All items in state 1 fall again (0x441530).
 Before this, the hit test itself calls `GameMgr_ScrambleDecoys` (5 × Rng_Range(100000) + 3 × Rng_Float…; 08 §4).
 
+**Work before `Player_Die`** (RE_NOCLIP, VERIFIED). The callers are `Player_HitTest` 0x44A230 (bullets),
+`Player_HitTestNoBomb` 0x44A360 (enemy contact) and `Player_LaserTest` 0x44A6A0 (lasers). In order:
+1. player+0xE2A90 := 6 (HitTest, HitTestNoBomb).
+2. HitTest only: the bomb-area test. Inside a bomb area → return 2, nothing else.
+3. The hit-box overlap test. LaserTest has its own geometry and graze path. No overlap → return 0.
+4. The replay statistics word (0x18B8A28)+0xDA |= 2. It is not a counter.
+5. **if player state (byte +0) ≠ 0 → return 1** (LaserTest: 0). The decoys are **not** scrambled in this case.
+6. State 0: `GameMgr_ScrambleDecoys` (5 Rng_Range + 3 Rng_FloatRange = 11 draws), then `Player_Die`, return 1.
+   No caller uses the LaserTest return value.
+
+`Player_Die` itself starts with a debug print, then freeze byte 0x160F534 := 0, then `GameMgr_UpdateChecksum` (4 draws).
+So an invulnerability cheat that "returns at the start of `Player_Die`" keeps steps 1–6, including the 11 decoy draws,
+and skips everything in this section's first paragraph. That is what the noclip session mode does (probe: `Player_Die`
+→ ret).
+
+QUIRK: the original's own state ≠ 0 check (step 5) comes *before* the scramble. A port that places its
+state check after the scramble consumes 11 extra draws on every hit during invulnerability. Keep the order above for
+normal play.
+
+Side effect of skipping `Player_Die`: the decoys stay scrambled without the matching checksum update, so
+`GameMgr_IsTampered` 0x40BB80 reports tampering until the next `GameMgr_UpdateChecksum`. In the original that refuses
+bombs (`Player_Move`), power/lives/bomb adds, and quits from `EffectMgr_Calc` at its next frame-counter ≡ 100 (mod 300).
+The noclip probe therefore also forces `GameMgr_IsTampered` to return 0. That check is pure and returns 0 in every
+untampered run, so this matches a port that ignores the anti-tamper checks (13 §2.1, 11 §4 step 7).
+
 ### 6.2 Dying state (state 2, `Player_DyingUpdate`)
 While n > 0 (every frame): time −15 (0x418220), n −= 1, last-spell request (+4) := 1. A bomb pressed now
 (§7) becomes a last spell and saves the player (the bomb sets state 3). When n reaches 0 (the real death):

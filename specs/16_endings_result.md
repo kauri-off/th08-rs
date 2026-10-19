@@ -262,6 +262,13 @@ ranking difficulty (initial 1), +0x48 card group (initial 5), +0x4C hidden-code 
 leaving flag, +0x64 + 0x34·g + 4·s captured-card counts (below). VMs: 72 `result00.anm` VMs (VM i runs script
 i) at +0x1A0; interrupt k to VM i = pending interrupt at VM+0x1FE.
 
+**Exit** (answers_impl17 §Q4, VERIFIED with mopup1): X/confirm on item 3 at frame P → state 2.
+- P+1: `Loading_Begin(500, 440)`, all VMs interrupt 2.
+- P+20: next scene 1, object removed (score.dat saved; surface slot 0 `result.jpg` moved to slot 8 = the loading
+  background).
+- P+21: first menu frame. The loading VMs are already 20 frames old there; in scene 5 they were covered by the result
+  background.
+
 **Menu pattern** (states 1, 3, 4, 6, 7): sub-state 0, sub-frame 0: cursor := remembered value; every VM of the
 page gets interrupt 22, is run once, then 20 (selected) or 21 (others). After N sub-frames (N = 20 in state 1,
 6 elsewhere) sub-state 1: Up/Down (edge or repeat, wrap, SE 12, `Result_CursorUpDown` 0x45A0F4) → resend
@@ -595,6 +602,15 @@ Controls:
 
 Returning from a spell-practice game (+0x6C ≠ 0) jumps straight to screen 17. If the last card id is ≥ 205, the stage row is set to 9.
 
+Entry interrupts (answers_impl17 §Q3, VERIFIED):
+- range interrupt 18, then pending **27** written into VMs 138 and 139. 138 has label 27 → fades in (16 frames) and
+  slides to (320, 48); 139 has none → hidden.
+- portraits/description per 12 §2.4 (entries 1–3, description disabled). The same is redone on every shot change, which
+  also zeroes the screen frame counter (pie easing restarts).
+- cursor (stage row) = g_StageIdx.
+- Leaving: confirm sets g_StageIdx = row; Bomb sets g_StageIdx = row, sends range interrupt 6, and returns to the top
+  menu (cursor 2) after 20 frames.
+
 ### 6.2 Screen 17 (`MainMenu_SpellPracticeCard` 0x46BBC0)
 
 The card list for row s comes from table 0x4C6C40[s], counts 0x4C6C68:
@@ -613,6 +629,9 @@ The card list for row s comes from table 0x4C6C40[s], counts 0x4C6C68:
 | 9 | 17 | 205–221 (Last Words) |
 
 On entry:
+- range interrupt **26** to all 142 title01 VMs. Portraits 111–118: alpha → 128, (320, 240). Headings 138/139 fade out,
+  140 fades in. VM 141 has no label 26 → catch-all → reset to (640, 320) and hidden, so the next screen-16 entry slides
+  it in again;
 - `LastWord_ComputeUnlocks` runs (15 §2.8);
 - the cursor is placed on the previously played id (0x164D0B8);
 - the list is shown 15 rows per page.
@@ -668,7 +687,7 @@ panel is blank for 18 frames after a move, then appears at once.
   - Last Words: `%3d/%3d(---/---)[%.8d]`;
   - never attempted: `---/---(---/---)[--------]`.
 - `カードの補足` (card notes): the two comment lines (CATK +0x70/+0xB0). They are shown only if practice captures[12] ≠ 0, else `？？？？？？？？？` (9 full-width ?, string 0x4B9330).
-- For locked cards with id ≥ 204 that were never attempted, a two-line **unlock hint** comes instead from table 0x4C82C8 (18 records × 0x30: {format ptr, 5 ints} ×2, ints printed +1).
+- For locked cards with id ≥ 204 that were never attempted, a two-line **unlock hint** comes instead from table 0x4C82C8 (18 records × 0x30: {format ptr, 5 ints} ×2, ints printed +1). Full texts of all tables and format strings: `specs/data/spell_tables.md`.
 
 The hints match the conditions in 15 §2.8:
 
@@ -706,19 +725,20 @@ Scratch VMs created on entry (sub-state 0, frame 0):
 - The four pie values (+0xC2A0..+0xC2AC) are zeroed.
 
 Per frame:
-1. VM E7B8 at (A.x − 32, A.y − 152). Pen y = A.y − 136, x = A.x.
+1. VM E7B8 at (A.x − 32, A.y − 152). Pen y = A.y − 136, **x = A.x − 32** (the code reuses the heading's x as the pen;
+   answers_impl17 §Q3, matches the mopup1 log). Steady state: rows at x 224, numbers at x 406.
 2. Rows r = 0..9 (stage rows 0..8 and Last Word, card lists of §6.2). Over the cards of row r count, for the
    current shot s: pc = practice captures[s] ≠ 0, sc = story captures[s] ≠ 0, seen = story or practice
    attempts[s] ≠ 0 (or, for rows > 8, `Card_IsSelectable`), and the same over all shots ([12]): PC, SC, SEEN.
    Marker = `@` if pc = count, else `*` if PC = count, else ` `.
    - colour: cursor row white + highlight, others 0xFFA0A0A0;
    - `"%s%s"` (marker, name from 0x4C8274: `Stage1   `, `Stage2   `, `Stage3   `, `Stage4A  `, `Stage4B  `,
-     `Stage5   `, `Stage6A  `, `Stage6B  `, `Extra    `, `Last Word`) at (A.x, y);
-   - scale x 0.75 (y 1.0), `"%3d(%3d)/%3d/%3d"` = pc, PC, SEEN, count at (A.x + 182, y); scale back to 1;
+     `Stage5   `, `Stage6A  `, `Stage6B  `, `Extra    `, `Last Word`) at (A.x − 32, y);
+   - scale x 0.75 (y 1.0), `"%3d(%3d)/%3d/%3d"` = pc, PC, SEEN, count at (A.x + 150, y); scale back to 1;
    - y += 16.
    (The per-shot "seen" count and the SC sums are computed but only used below.)
-3. y += 5; colour 0xFFD06060, no highlight: `"%sTotal"` with the marker rule against 222 at (A.x, y), then
-   scale x 0.75 `"%3d(%3d)/%3d/%3d"` = Σpc, ΣPC, ΣSEEN, 222 at (A.x + 182, y). Reset white, scale 1.
+3. y += 5; colour 0xFFD06060, no highlight: `"%sTotal"` with the marker rule against 222 at (A.x − 32, y), then
+   scale x 0.75 `"%3d(%3d)/%3d/%3d"` = Σpc, ΣPC, ΣSEEN, 222 at (A.x + 150, y). Reset white, scale 1.
 4. VM EA5C at (400, 376); VM ED00 at (552, 426) (centred).
 5. Pie charts (`Menu_DrawPie` 0x46FDC2 → `AnmManager_DrawFan` 0x464EC0). Values:
    v1 = Σpc/222, v2 = ΣSC/205 (this shot), v3 = ΣPC/222, v4 = Σ(story captures[12] ≠ 0)/205 (all shots). Each

@@ -177,9 +177,19 @@ static void __cdecl cb_sess_framestart(void) {
     if (g_sess == 2 && g_boot_calc && !g_boot_done && g_calc_n + 1 >= g_boot_calc) g_boot_done = lk_release(4);
     if (g_sess == 2 && g_play_anchor != 0xFFFFFFFF) lk_sync(g_rp_anchor + (g_poll_n - g_play_anchor));
 }
+/* noclip (RE_NOCLIP_BRIEF): Player_Die 0x44AB40 (thiscall, no stack args) becomes "count; ret". Its callers have already
+   done the hit-box test, the replay-stats flag (+0xDA |= 2), the state == 0 check and GameMgr_ScrambleDecoys. */
+volatile uint32_t g_noclip_hits;
+static uint32_t g_noclip_on, g_noclip_logged;
+__asm__(".globl _noclip_die\n_noclip_die:\n\tlock incl _g_noclip_hits\n\tret\n");
+extern void noclip_die(void);
 static void __cdecl cb_sess_postcalc(void) {
     uint16_t cw = fpu_cw();
     g_calc_n++;
+    if (g_noclip_on && g_noclip_hits != g_noclip_logged && g_sev) {
+        g_noclip_logged = g_noclip_hits;
+        fprintf(g_sev, "noclip_hit %u calc %u present %u\n", g_noclip_logged, g_calc_n, g_present_n + 1); fflush(g_sev);
+    }
     g_rng_at_calc = g_rng_main;
     if (cw != g_last_cw_calc) { lg("# Frame_Run post-calc cw=%04x at calc %u present %u\n", cw, g_calc_n, g_present_n); g_last_cw_calc = cw; }
     g_spass--;
@@ -304,5 +314,16 @@ static int sess_init(void) {
     inline_hook(0x43ABD7, cb_stagestart, 6);
     inline_hook_sp(0x465860, cb_anm_preload, 6);
     inline_hook_sp(0x4667C0, cb_surf_load, 6);
+    { const char *nc = getenv("TH08_NOCLIP");
+      if (nc && atoi(nc)) {
+          /* skipping Player_Die skips its GameMgr_UpdateChecksum after the caller's ScrambleDecoys, so the decoy check
+             GameMgr_IsTampered 0x40BB80 would report tampering (quit at EffectMgr frame %300 == 100, bombs/power/lives
+             refused). It is a pure check that is 0 in every untampered run: make it always 0 (no RNG, no state). */
+          static const uint8_t ret0[3] = { 0x31, 0xC0, 0xC3 };
+          DWORD old; VirtualProtect((void *)0x40BB80, 3, PAGE_EXECUTE_READWRITE, &old);
+          memcpy((void *)0x40BB80, ret0, 3); VirtualProtect((void *)0x40BB80, 3, old, &old);
+          FlushInstructionCache(GetCurrentProcess(), (void *)0x40BB80, 3);
+          g_noclip_on = 1; jmp_patch(0x44AB40, (void *)noclip_die, 5);
+          lg("# noclip: Player_Die 0x44AB40 -> count+ret, GameMgr_IsTampered 0x40BB80 -> 0\n"); } }
     return 1;
 }

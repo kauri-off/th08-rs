@@ -106,6 +106,21 @@ gives an identical trace and an identical draw log (two scripted sessions: 1 922
 of stage 1 with movement, focus, bombs, pause/resume, quit; 0 differences, apart from the fps counter, which
 `drawlog.py diff` ignores).
 
+### Noclip sessions (`record_session.sh --noclip`)
+`meta.txt` has `noclip: 1`. In the original the probe:
+- turns `Player_Die` 0x44AB40 into "count, return": the player never dies;
+- forces `GameMgr_IsTampered` 0x40BB80 to 0.
+
+Everything before `Player_Die` still happens (09 §6.1 "Work before Player_Die"): the hit flag, the state check and
+`GameMgr_ScrambleDecoys` (11 RNG draws per hit while state is 0). Graze, items, bombs, the deathbomb logic and all
+other code are untouched.
+
+`events.txt` gets one line per absorbed hit: `noclip_hit <n> calc <c> present <p>`.
+
+To replay in the port, enable its `debug_invuln` (early return at the same point, no state change, no RNG) and ignore
+the anti-tamper checks. `play_session.sh` reads the flag from `meta.txt` and applies the same patches. Verified:
+a 4284-frame noclip session with 78 absorbed hits replays with 0 trace and 0 draw-log differences.
+
 ### Input: `input.txt` and `polls.txt`
 - The input word is what the game's input function `Input_Poll` (0x43D970) **returned**: keyboard (DirectInput or
   GetKeyboardState) and joystick combined, bits as in "Keys" above. The game calls it once per frame at the start of
