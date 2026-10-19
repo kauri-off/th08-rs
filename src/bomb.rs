@@ -1,4 +1,4 @@
-// Bombs (14 §1–2, 09 §7) and damage/cancel areas (09 §8).
+//! Bombs: Player_UpdateBomb, Bomb_Start, the 16 bombs + dissolve spell, tint (09 §7, 14 §1–§2); areas (09 §8).
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::effect;
@@ -13,31 +13,48 @@ use crate::sound;
 use std::cell::RefCell;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+// 192 damage + 192 cancel areas, 0x40 each (09 §8).
 pub const AREAS: usize = 192;
+// 128 × 0x16F0 bomb objects at player +0x1028 (14 §1.1).
 pub const OBJS: usize = 128;
+// Playfield origin 0x164D2DC / 0x164D2E0 added to VM positions (14 intro).
 const ORIGIN: [f32; 2] = [32.0, 16.0];
+// SPEC-GAP: draw prio 0x15 for bomb shakes/flashes is taken from the demo fade (11 §4 step 6), not 14.
 const SCREEN_PRIO: u16 = 0x15;
 
+// Damage / cancel area, 0x40 bytes (09 §8).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Area {
+    // +0 x, y.
     pub pos: [f32; 2],
+    // +8 radius (0 → rectangle), +0xC growth per frame.
     pub r: f32,
     pub dr: f32,
+    // +0x10 rectangle w, h; +0x18 growth per frame.
     pub size: [f32; 2],
     pub dsize: [f32; 2],
+    // +0x20 rotation (rectangle tested in the rotated frame).
     pub rot: f32,
+    // +0x24 frames; decremented while ≥ 0, freed below 1.
     pub life: i32,
+    // +0x28 cancel item type (6 default, −1 none).
     pub item: i32,
+    // +0x2C damage per hit.
     pub damage: i32,
+    // +0x30 hit counter (cancel) / dealt total (damage).
     pub total: i32,
+    // +0x34 max total damage (0 = unlimited).
     pub max: i32,
+    // +0x38 damages when life % period == 0.
     pub period: i32,
+    // +0x3C active, +0x3D no hit effect.
     pub active: bool,
     pub no_spark: bool,
 }
 
 impl Area {
-    // Circle: distance² < r² (to the nearest point of the box); rectangle: inside the rotated bounds.
+    // Circle: distance² < r²; rectangle: inside the rotated bounds (09 §8).
+    // SPEC-GAP: the box-vs-area geometry for a non-zero `half` (enemy boxes) is not given in 09 §4.5.
     pub fn contains(&self, p: [f32; 2], half: [f32; 2]) -> bool {
         let (dx, dy) = (p[0] - self.pos[0], p[1] - self.pos[1]);
         if self.r > 0.0 {
@@ -55,7 +72,7 @@ thread_local! {
     static QUEUED: RefCell<Vec<(bool, Area)>> = const { RefCell::new(Vec::new()) };
 }
 
-// Areas created by effect updates (Yukari's boundaries); added to the player before the bullet pass.
+// Port-only queue: areas created by effect updates (Yukari's boundaries, 14 §2.13); added at the next Player_Calc.
 pub fn queue_area(damage: bool, a: Area) {
     QUEUED.with_borrow_mut(|q| q.push((damage, a)));
 }
@@ -63,37 +80,60 @@ pub fn queue_area(damage: bool, a: Area) {
 // Bomb object (14 §1.1, 0x16F0 bytes); fields keep their values between bombs.
 #[derive(Clone, Debug, Default)]
 pub struct BombObj {
+    // +0: 0 free, 1 active, 2 exploding.
     pub state: i32,
+    // +4.
     pub counter: i32,
+    // +8 speed / orbit radius / angular speed, +0xC speed (per bomb).
     pub f8: f32,
     pub fc: f32,
+    // +0x10 radians.
     pub angle: f32,
+    // +0x14 position, +0x20 centre / spawn point, +0x2C last displacement (Yuyuko).
     pub pos: [f32; 3],
     pub centre: [f32; 3],
     pub disp: [f32; 3],
+    // +0x1A0 velocity / radius + radial speed (per bomb).
     pub v: [f32; 3],
+    // +0x1AC spin (Sakuya).
     pub spin: f32,
+    // +0x1B8 sprite (player ANM file).
     pub vm: AnmVm,
+    // +0x440 draw offset.
     pub offset: [f32; 3],
+    // +0x16DC age (Sakuya).
     pub age: Timer,
+    // +0x16E8 / +0x16EC attached damage / cancel area.
     pub darea: Option<usize>,
     pub carea: Option<usize>,
 }
 
+// Player bomb fields (09 §1.1, 14 §1).
 #[derive(Clone, Debug)]
 pub struct Bomb {
+    // +0xFE0: 0 human bomb, 1 youkai bomb, 2 / 3 last spells, 4 dissolve spell.
     pub index: usize,
+    // +0xFE4 frames (999 until Bomb_Start sets it).
     pub duration: i32,
+    // +0xFEC bombs used by the last spell.
     pub used: i32,
+    // +0xFF4 T, 0 on the first frame.
     pub timer: Timer,
+    // +0xB8828 bomb origin.
     pub origin: [f32; 3],
     pub objs: Vec<BombObj>,
+    // Object 0's +0x1B8 VM and the next ones' used as plain VM slots (Marisa beams, Yukari LS) (14 §1.1).
     pub vms: [AnmVm; 5],
+    // Port-only: spell name and cut-in data for the GUI banner (14 §1.2).
     pub name: &'static str,
     pub last_spell: bool,
+    // Port-only: character row of SPECS (bomb_char).
     pub ch: u8,
+    // Port-only: "all items attracted" request for the item manager.
     pub attract: bool,
+    // +0xFF0 counter (Reimu LS blast index, ring index n).
     pub n: i32,
+    // Port-only scratch: start S, dash target P, return start Q (Alice, Youmu); Sakuya effect-20 index.
     pub start: [f32; 3],
     pub dash: [f32; 3],
     pub back: [f32; 3],
@@ -160,10 +200,13 @@ const SPECS: [[BombSpec; 2]; 8] = [
         ("死蝶「華胥の永眠」", 300, 350, true),
     ],
 ];
+// Youmu LS passes isLastSpell = 0 (14 §2.12 quirk); the dissolve spell is 40 frames in spell practice.
 const DISSOLVE: BombSpec = ("「ディゾルブスペル」", 120, 200, false);
+// Table 0x4C6100 (14 §2.2).
 const BLAST_COLOURS: [u32; 7] = [
     0x8FFFFFFF, 0x8F0000FF, 0x8FFF00FF, 0x8FFF0000, 0x8FFFFF00, 0x8F00FF00, 0x8F00FFFF,
 ];
+// Alice effect 0x28 / 0x2D colours (14 §2.3) and the boundary angles of Yukari (14 §2.13).
 const DOLL_FLASH: [u32; 5] = [0xFFFFFFFF, 0xFFFFD0D0, 0xFFFFB0B0, 0xFFFF8080, 0xFFFF4040];
 const DOLL_OCTAGON: [u32; 4] = [0xFFFFFFFF, 0xFFFFD0D0, 0xFFFF8080, 0xFFFF0000];
 const BOUNDARY_ANGLES: [f32; 4] = [PI / 4.0, 3.0 * PI / 8.0, PI / 2.0, 5.0 * PI / 8.0];
@@ -180,6 +223,7 @@ fn len(v: [f32; 2]) -> f32 {
     (v[0] * v[0] + v[1] * v[1]).sqrt()
 }
 
+// Screen effects (13 §3): shake (1: p0, p1, p2), flash (3: p0, p1, colour).
 fn shake(dur: i32, a0: i32, a1: i32) {
     effect::screen(1, dur, a0, a1, 0, SCREEN_PRIO);
 }
@@ -188,6 +232,7 @@ fn flash(dur: i32, repeats: i32, colour: u32) {
     effect::screen(3, dur, repeats, colour as i32, 0, SCREEN_PRIO);
 }
 
+// Table 0x4C7AD0 (09 §7): teams take the human member's bomb for even indexes, the youkai member's for odd.
 pub fn bomb_char(shot: u8, index: usize) -> u8 {
     if shot >= 4 {
         shot - 4
@@ -204,10 +249,12 @@ fn forced_index() -> Option<usize> {
 }
 
 impl Player {
+    // First inactive slot of the half; index 191 reused when full (09 §8.1).
     fn free_slot(v: &[Area]) -> usize {
         v.iter().position(|a| !a.active).unwrap_or(AREAS - 1)
     }
 
+    // Creators 0x44DF00 / 0x44DE60 / 0x44E040 / 0x44DFA0 (09 §8.1).
     pub fn cancel_circle(&mut self, pos: [f32; 2], r: f32, dr: f32, life: i32, item: i32) -> usize {
         let i = Self::free_slot(&self.cancel_areas);
         self.cancel_areas[i] = Area {
@@ -275,6 +322,7 @@ impl Player {
         i
     }
 
+    // Damage circle / rect with period, max and the +0x3D no-hit-effect flag set by the bomb.
     fn dc(
         &mut self,
         pos: [f32; 2],
@@ -319,7 +367,7 @@ impl Player {
         }
     }
 
-    // 09 §8.1, start of Player_Calc.
+    // 09 §8.1, start of Player_Calc: an area created with life 0 exists for exactly one pass.
     pub fn update_areas(&mut self) {
         for a in self
             .damage_areas
@@ -339,7 +387,7 @@ impl Player {
         }
     }
 
-    // Player_UpdateBomb (09 §7).
+    // Player_UpdateBomb 0x44C650 (09 §7).
     pub fn update_bomb(
         &mut self,
         anm: &mut AnmManager,
@@ -357,9 +405,11 @@ impl Player {
                 sound::play(0x29);
                 pressed = false;
             }
+            // SPEC-GAP: no bomb while respawning (state 1) is not in 09 §7's start conditions.
             if !(forced || pressed) || matches!(self.state, 1) {
                 return;
             }
+            // The bomb calc fn runs immediately on the start frame; that branch returns before the gauge add.
             self.start_bomb(anm, forced);
             self.bomb_calc(anm, items);
             self.bomb.timer.tick(anm.speed);
@@ -369,6 +419,8 @@ impl Player {
             self.bomb_calc(anm, items);
             self.bomb.timer.tick(anm.speed);
         } else {
+            // End: speed multipliers 1, bombing 0, tint off (06 §10.2); index 4 per 14 §2.17.
+            // SPEC-GAP: when +0xE2A7C is cleared is not in 09 §1.1; the port clears it here.
             self.speed_mult = [1.0; 2];
             self.bombing = false;
             self.bomb_active = false;
@@ -380,6 +432,7 @@ impl Player {
                 flash(30, 1, 0xFFFFFFFF);
             }
         }
+        // Quirk kept (09 §7): forced gauge add also on the end frame, with the old index.
         if self.bomb.index < 4 {
             let d = 26000 / self.bomb.duration.max(1);
             self.stats
@@ -387,6 +440,8 @@ impl Player {
         }
     }
 
+    // Bomb start (09 §7): index from focus / last-spell request, bomb cost, checksum (0x44E2E0), rank −200,
+    // counter += 6 (cap sht +8). Not implemented: statistics bit.
     fn start_bomb(&mut self, anm: &mut AnmManager, forced: bool) {
         let rng = &mut anm.rng;
         self.forced_bomb = 0;
@@ -410,6 +465,7 @@ impl Player {
         if special {
             index = 4;
         }
+        // Port-only debug override.
         if let Some(i) = forced_index() {
             index = i;
         }
@@ -427,7 +483,8 @@ impl Player {
         self.deathbomb = (self.deathbomb + 6).min(self.sht.deathbomb);
     }
 
-    // Bomb_Start 0x40BE30 (14 §1.2).
+    // Bomb_Start 0x40BE30 (14 §1.2): banner, duration, state 3 + invulnerability, ring, objects freed (other
+    // fields kept), items attracted, origin = p.
     fn bomb_begin(&mut self, anm: &mut AnmManager, spec: BombSpec) {
         self.bomb.name = spec.0;
         self.bomb.last_spell = spec.3;
@@ -451,6 +508,7 @@ impl Player {
         self.bomb.origin = self.pos;
     }
 
+    // Bomb calc fn dispatch (table 0x4C7AD0 fns 0–4); Bomb_Start runs on the T = 0 frame of each.
     fn bomb_calc(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) {
         let _ = items;
         let t = self.bomb.timer.cur;
@@ -494,6 +552,7 @@ impl Player {
         }
     }
 
+    // "At T = n": the timer advanced and equals n, so nothing fires twice in slow motion (14 intro).
     fn at(b: Bf, n: i32) -> bool {
         b.adv && b.t == n
     }
@@ -502,6 +561,7 @@ impl Player {
         anm.set_script(&mut o.vm, ANM_SLOT, script);
     }
 
+    // Attached areas follow the object (no-op once the pointers are cleared).
     fn follow(&mut self, k: usize) {
         let o = &self.bomb.objs[k];
         let p = xy(o.pos);
@@ -547,6 +607,7 @@ impl Player {
         }
     }
 
+    // Orb impact (14 §2.1 / §2.2). Quirk kept: the C circle is centred on the player, not the orb.
     fn orb_explode(&mut self, anm: &mut AnmManager, i: usize, ls: bool) {
         self.areas_off(i);
         let p = xy(self.pos);
@@ -565,7 +626,7 @@ impl Player {
         shake(16, 8, 0);
     }
 
-    // 2.1 霊符「夢想妙珠」.
+    // 14 §2.1 霊符「夢想妙珠」 0x40C010. (The original's discarded velocity/8 temporary has no effect.)
     fn bomb_reimu(&mut self, anm: &mut AnmManager, b: Bf) {
         let p = self.pos;
         if Self::at(b, 0) {
@@ -573,6 +634,7 @@ impl Player {
             self.reimu_orbs(anm);
             sound::play(0xD);
         }
+        // T < 40 spin-out: pos = centre + (sin a, cos a)·radius, radius += 3.2.
         if b.t < 40 {
             for (i, o) in self.bomb.objs[..16]
                 .iter_mut()
@@ -602,6 +664,7 @@ impl Player {
                 (o.counter, o.f8) = (0, 8.0);
             }
         }
+        // T ≥ 40: homing on advanced frames (1e-6 floor port-only), one-frame C r 128, impact at max or T ≥ dur − 30.
         if b.t >= 40 {
             let target = self.homing_target().unwrap_or(xy(p));
             for i in 0..16 {
@@ -645,7 +708,7 @@ impl Player {
         }
     }
 
-    // 2.2 神霊「夢想封印　瞬」.
+    // 14 §2.2 神霊「夢想封印　瞬」 0x40C910: orb i explodes at T ≥ dur − 40 − i; blasts every 20 frames from T = 40.
     fn bomb_reimu_ls(&mut self, anm: &mut AnmManager, b: Bf) {
         if Self::at(b, 0) {
             effect::spawn(anm, 12, self.pos, 1, 0xFF4040FF);
@@ -674,6 +737,8 @@ impl Player {
             }
         }
         if b.t >= 40 && b.t % 20 == 0 && b.adv {
+            // Quirk kept: the first blast uses object 16, every later one reuses object 17.
+            // SPEC-GAP: 14 §2.2 sets the VM script before the RNG point; the port draws the point first.
             let k = 16 + self.bomb.n as usize;
             self.bomb.n = 1;
             let colour = BLAST_COLOURS[((b.t / 20) % 7) as usize];
@@ -710,6 +775,7 @@ impl Player {
         }
     }
 
+    // Draws active objects 0..n at pos + offset + playfield origin, z 0, optional rotation z.
     fn draw_objs(
         &mut self,
         anm: &mut AnmManager,
@@ -734,7 +800,7 @@ impl Player {
         }
     }
 
-    // 2.3 / 2.4 Alice: the doll is option 0.
+    // 14 §2.3 / §2.4 Alice 0x40D430 / 0x40D970: the doll is option 0.
     fn bomb_alice(&mut self, anm: &mut AnmManager, b: Bf) {
         let ls = b.ls;
         let centre = [192.0, 224.0, 0.0];
@@ -749,6 +815,7 @@ impl Player {
         }
         let s = self.bomb.start;
         let doll = &mut self.options[0];
+        // T < 60: doll pos = S + (centre − S)·(T/60)², spin −π/10, one-frame C/D r 32.
         if b.t < 60 {
             let f = (b.t as f32 / 60.0).powi(2);
             doll.pos = [
@@ -812,7 +879,7 @@ impl Player {
         }
     }
 
-    // 2.5 / 2.6 Marisa: five beam VMs in object 0's memory.
+    // 14 §2.5 / §2.6 Marisa 0x40E3B0 / 0x40E780: five beam VMs in object 0's memory.
     fn bomb_marisa(&mut self, anm: &mut AnmManager, b: Bf) {
         let p = self.pos;
         if Self::at(b, 0) {
@@ -829,6 +896,7 @@ impl Player {
             effect::screen(7, 16, 120, 60, 120, SCREEN_PRIO);
             self.bomb.n = 0;
         }
+        // Advanced frames with T % 4 ≠ 0: everything above the player, unrotated, life 0.
         if b.adv && b.t % 4 != 0 {
             let h = p[1];
             self.cancel_rect([192.0, h / 2.0], [384.0, h], 6, 0);
@@ -854,7 +922,8 @@ impl Player {
         }
     }
 
-    // Ring effect 0x35 in fixed slot 4 + n % 4 (Marisa LS, Remilia): radius/amplitude, width, fade, white → red.
+    // Ring effect 0x35 in fixed slot 4 + n % 4 (14 §2.6, §2.9): radius/amplitude, width, fade, white → red;
+    // `alt` = Marisa LS odd n → script 0x5C. `width` None = constant 64 (Remilia's 64 → 64 interpolation).
     fn spark_ring(
         &mut self,
         anm: &mut AnmManager,
@@ -889,7 +958,7 @@ impl Player {
         sound::play_at(0x11, p[0]);
     }
 
-    // 2.7 / 2.8 Sakuya: knives.
+    // 14 §2.7 / §2.8 Sakuya 0x40FCD0 / 0x4103F0: knives k and k + per appear together every second frame.
     fn bomb_sakuya(&mut self, anm: &mut AnmManager, b: Bf) {
         let ls = b.ls;
         let p = self.pos;
@@ -915,6 +984,7 @@ impl Player {
                 if !Self::at(b, (k % per) as i32 * 2 + 20) {
                     continue;
                 }
+                // Quirk kept: an already active knife makes the whole function return for this frame.
                 if self.bomb.objs[k].state != 0 {
                     return;
                 }
@@ -925,6 +995,7 @@ impl Player {
                 };
                 let speed = anm.rng.next_f32() + 0.5;
                 let accel = anm.rng.next_f32() * 0.1 + 0.03;
+                // Quirk kept: Rng_Range16(1) is always 0, so the spin is always −π/20 (one draw; 3 per knife).
                 let spin = if anm.rng.range16(1) == 0 {
                     -PI / 20.0
                 } else {
@@ -960,6 +1031,7 @@ impl Player {
             }
             let o = &mut self.bomb.objs[k];
             let age = o.age.cur;
+            // Ages 30–69 hover and spin; at 70 re-aim at the homing target with speed 14.
             if !(30..=69).contains(&age) {
                 if age == 70 && o.age.prev != 70 {
                     if let Some(t) = target {
@@ -980,6 +1052,7 @@ impl Player {
                 o.v = [0.0; 3];
             }
             self.follow(k);
+            // First damage dealt (age < 120): hit script, effect 0, areas off and pointers cleared (runs once).
             if age < 120 {
                 if self.bomb.objs[k]
                     .darea
@@ -998,6 +1071,7 @@ impl Player {
             } else {
                 self.areas_off(k);
             }
+            // Not scaled by gs (14 §2.7); knives are never freed before the next bomb.
             let o = &mut self.bomb.objs[k];
             o.pos[0] += o.v[0];
             o.pos[1] += o.v[1];
@@ -1006,7 +1080,8 @@ impl Player {
         }
     }
 
-    // 2.9 / 2.10 Remilia: the bats are the 4 options (anchors moved).
+    // 14 §2.9 / §2.10 Remilia 0x40EE10 / 0x40F570: the bats are the 4 options (anchors moved).
+    // No damage areas: ply02as.sht levels 6/7 do the damage (09 §2.1).
     fn bomb_remilia(&mut self, anm: &mut AnmManager, b: Bf) {
         let p = self.pos;
         let targets = [
@@ -1050,6 +1125,7 @@ impl Player {
             self.spark_ring(anm, n, 4, width, [192.0, amp, 0.0], false);
             self.bomb.n += 1;
         }
+        // While shooting (shot timer ≥ 5): a cross of two cancel rects, life 0.
         if self.shot_timer.cur >= 5 {
             self.cancel_rect(xy(p), [96.0, 800.0], 6, 0);
             self.cancel_rect(xy(p), [800.0, 96.0], 6, 0);
@@ -1062,7 +1138,7 @@ impl Player {
         }
     }
 
-    // 2.11 / 2.12 Youmu: dash down, slashes from the top, dash back.
+    // 14 §2.11 / §2.12 Youmu 0x411B10 / 0x4123D0: dash down, slashes from the top, dash back.
     fn bomb_youmu(&mut self, anm: &mut AnmManager, b: Bf) {
         let ls = b.ls;
         if Self::at(b, 0) {
@@ -1130,6 +1206,7 @@ impl Player {
         if Self::at(b, q_at) {
             self.bomb.back = self.pos;
         }
+        // Return dash; the original function exits early here.
         if (back0..back0 + 30).contains(&b.t) {
             let q = self.bomb.back;
             let f = 1.0 - (1.0 - (b.t - back0) as f32 / 30.0).powi(2);
@@ -1142,7 +1219,7 @@ impl Player {
         }
     }
 
-    // 2.13 / 2.14 Yukari: boundary rings (effects 0x24 / 0x25) and expanding circles.
+    // 14 §2.13 / §2.14 Yukari 0x410C40 / 0x410FE0: boundary rings (effects 0x24 / 0x25) and expanding circles.
     fn bomb_yukari(&mut self, anm: &mut AnmManager, b: Bf) {
         let ls = b.ls;
         let p = self.pos;
@@ -1174,7 +1251,7 @@ impl Player {
                     0xFFFFFFFF,
                 )
             });
-            // The init re-spawns the slot as type 0x23, so slot 4 runs script 88 even for 0x25 (answers_impl11 §11).
+            // Quirk kept (14 §2.14): the init re-spawns the slot as type 0x23, so slot 4 runs script 88 even for 0x25.
             let script = if k == 0 {
                 88
             } else if ls {
@@ -1191,7 +1268,7 @@ impl Player {
         }
     }
 
-    // 2.15 / 2.16 Yuyuko: butterflies.
+    // 14 §2.15 / §2.16 Yuyuko 0x413140 / 0x413990: butterflies.
     fn bomb_yuyuko(&mut self, anm: &mut AnmManager, b: Bf) {
         let p = self.pos;
         if Self::at(b, 0) {
@@ -1224,6 +1301,8 @@ impl Player {
             }
         }
         if b.ls && (60..200).contains(&b.t) && b.adv && b.t % 20 == 0 {
+            // Rng_SignedRange(π); quirks kept: angle uses the object slot index, the angular speed (f8) is
+            // whatever the slot held, SE 0xF is panned at the last examined object.
             let base = anm.rng.next_signed() * PI;
             let (mut taken, mut last) = (0, OBJS - 1);
             for k in 0..OBJS {
@@ -1271,7 +1350,7 @@ impl Player {
         }
     }
 
-    // 2.17 「ディゾルブスペル」.
+    // 14 §2.17 「ディゾルブスペル」 0x40D100: boss flag clearing is done by the enemy manager on DISSOLVE_BEGIN.
     fn dissolve_start(&mut self, anm: &mut AnmManager) {
         let p = self.pos;
         let practice = self.gflags & GF_SPELL_PRACTICE != 0;
@@ -1294,7 +1373,8 @@ impl Player {
         self.dissolve_req |= DISSOLVE_BEGIN;
     }
 
-    // Background tint 0x40BC60 (14 §1.3): stage tint request for the next Stage_DrawLow.
+    // Background tint 0x40BC60 (14 §1.3): ramps over the first/last 60 frames, alpha 0x80; global tint off, then
+    // a stage tint request for the next Stage_DrawLow and the +0x646C "bomb drew" flag.
     fn tint(&self, anm: &mut AnmManager, c: u32) {
         let (t, dur) = (self.bomb.timer.cur, self.bomb.duration);
         let ch = |v: u32| -> u32 {
@@ -1315,6 +1395,7 @@ impl Player {
         anm.bomb_drew = true;
     }
 
+    // Alpha-blended playfield rectangle (Alice LS, Youmu draw fns).
     fn playfield_rect(gfx: &mut Gfx, rgb: u32, a: i32) {
         let r = PLAYFIELD;
         gfx.rect(
@@ -1331,7 +1412,8 @@ impl Player {
         );
     }
 
-    // Bomb draw functions (table 0x4C7AD0 fns 5–9), called from the player draw (prio 9).
+    // Bomb draw functions (table 0x4C7AD0 fns 5–9), called from the player draw (prio 9, 14 §5).
+    // Quirk kept: Sakuya LS draws only knives 0–95 (96–127 are invisible but damage).
     pub fn draw_bomb(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         if !self.bombing {
             return;
@@ -1419,6 +1501,7 @@ impl Player {
     }
 }
 
+// Per-frame bomb context: T, timer advanced, last spell, game speed.
 #[derive(Clone, Copy)]
 struct Bf {
     t: i32,

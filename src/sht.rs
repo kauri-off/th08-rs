@@ -1,26 +1,37 @@
-// .sht player shot files (09 §2.1).
+//! .sht player shot files: header, level table, shot entries (09 §2.1).
 use anyhow::{Result, bail};
 
+// Shot entry, 0x38 bytes (09 §2.1); the list ends with i32 −1.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ShotEntry {
+    // +0x00 / +0x02: fires when shot timer % interval == phase (laser entries: phase = laser slot).
     pub interval: i16,
     pub phase: i16,
+    // +0x04 spawn offset, +0x0C hitbox w/h, px.
     pub offset: [f32; 2],
     pub size: [f32; 2],
+    // +0x14 radians, +0x18 px/frame.
     pub angle: f32,
     pub speed: f32,
     pub damage: i16,
+    // +0x1E: > 0 youkai-side (red at youkai max), < 0 human-side (time orbs at human max).
     pub side: i16,
+    // +0x20: 0 player, k = option k−1.
     pub origin: i16,
+    // +0x22: 3 piercing, 4/5 laser, 6 no hit animation.
     pub kind: i16,
+    // +0x24 ANM script − 10 (bullet +10, hit animation +11).
     pub script: i16,
+    // +0x26 sfx id, −1 none.
     pub sound: i16,
+    // +0x28.. function indexes: init 0x4C7EE0, update 0x4C7F04, draw 0x4C7F1C, hit 0x4C7F24.
     pub init: i32,
     pub update: i32,
     pub draw: i32,
     pub hit: i32,
 }
 
+// Level table record +0x38 + 8k: file offset, power threshold.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Level {
     pub threshold: i32,
@@ -28,23 +39,33 @@ pub struct Level {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+// Header, 0x38 bytes (09 §2.1).
 pub struct Sht {
+    // +4 bombs per life (truncated on respawn).
     pub bombs: f32,
+    // +8 deathbomb base / bomb-allowed counter.
     pub deathbomb: i32,
+    // +0xC / +0x10 / +0x18 hitbox, graze and item box sizes, px.
     pub hitbox: f32,
     pub graze: f32,
+    // +0x14 item attraction speed.
     pub attract_speed: f32,
     pub collect: f32,
+    // +0x1C point-of-collection line y.
     pub poc_line: f32,
+    // +0x20 not referenced by the original.
     pub unknown: i32,
+    // +0x24 unfocused, +0x28 focused speed; +0x2C / +0x30 diagonal components.
     pub speed: f32,
     pub speed_focus: f32,
     pub diag: f32,
     pub diag_focus: f32,
+    // +0x34 item fall multiplier (08 §8.4).
     pub fall: f32,
     pub levels: Vec<Level>,
 }
 
+// Port-only defaults (ply00a values) for tests without data.
 impl Default for Sht {
     fn default() -> Self {
         Self {
@@ -67,7 +88,7 @@ impl Default for Sht {
 }
 
 impl Sht {
-    // First level whose threshold > trunc(power); `forced` picks a bomb level (shot types 2/9).
+    // First level whose threshold > trunc(power) (09 §2.1); `forced` picks bomb level 6/7 (shot types 2/9).
     pub fn level(&self, power: f32, forced: Option<usize>) -> Option<&Level> {
         if let Some(k) = forced.filter(|&k| k < self.levels.len()) {
             return self.levels.get(k);
@@ -117,6 +138,7 @@ pub fn parse(b: &[u8]) -> Result<Sht> {
                 hit: i(o + 0x34)?,
             });
             o += ENTRY_SIZE;
+            // Port-only guard.
             if entries.len() > 4096 {
                 bail!("sht: unterminated level {k}");
             }
@@ -141,11 +163,12 @@ pub fn parse(b: &[u8]) -> Result<Sht> {
     })
 }
 
+// Team / character-pair index 0–3 for file names (09 §2).
 pub fn team(shot: u8) -> u8 {
     if shot < 4 { shot } else { (shot - 4) / 2 }
 }
 
-// Files per shot type 0–11 (09 §2): (anm, human sht, youkai sht).
+// Files per shot type 0–11 (09 §2): (anm, human sht, youkai sht); solos use one file for both.
 pub fn files(shot: u8) -> (String, String, String) {
     let team = team(shot);
     let anm = format!("player{team:02}.anm");

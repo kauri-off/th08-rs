@@ -1,4 +1,4 @@
-// Player (09): movement, boxes, states, death/deathbomb/respawn, gauge, stats; shots in pshot.rs, bombs in bomb.rs.
+//! Player 0x17D5EF8 and the stats block (09 §1–§3, §6, §9; 11 §5); shots in pshot.rs, bombs in bomb.rs.
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::BulletManager;
@@ -16,6 +16,7 @@ pub use crate::bomb::{Area, Bomb};
 pub use crate::pshot::{Opt, PBullet};
 pub use crate::sht::Sht;
 
+// Player_Calc 0x44C390 (09 §1).
 pub const CALC_PRIO: u16 = 9;
 // GameFlags (0x164D0B4) bits mirrored in the player: last spell running / captured, bit 13, spell practice.
 pub const GF_LAST_SPELL: u32 = 1 << 7;
@@ -25,11 +26,16 @@ pub const GF_SPELL_PRACTICE: u32 = 1 << 14;
 // Requests for the enemy manager: dissolve spell started / ended.
 pub const DISSOLVE_BEGIN: u8 = 1;
 pub const DISSOLVE_END: u8 = 2;
+// Draw 0x44D530 / 0x44D630 (09 §1, 14 §5).
 pub const DRAW_PRIO: u16 = 9;
 pub const DRAW_PRIO_HIGH: u16 = 10;
+// playerNN.anm slot (09 §1.1 +0xC).
 pub const ANM_SLOT: usize = 5;
+// (192, 448 − 64), playfield px (09 §6.2).
 pub const RESPAWN: [f32; 3] = [192.0, 384.0, 0.0];
+// SPEC-GAP: the start position is not in 09; the port uses the respawn point.
 pub const START: [f32; 3] = RESPAWN;
+// Clamp rect min x, min y, max x, max y (GM +0x3DDE4.., 09 §3).
 pub const CLAMP: [f32; 4] = [8.0, 16.0, 376.0, 432.0];
 
 pub type PlayerRef = Rc<RefCell<Player>>;
@@ -59,6 +65,7 @@ impl Default for GaugeLimits {
 }
 
 impl GaugeLimits {
+    // Table of 09 §9.3 by shot type (solo human = even ≥ 4, solo youkai = odd ≥ 4).
     pub fn for_shot(shot: u8) -> Self {
         let d = Self::default();
         match shot {
@@ -92,39 +99,59 @@ impl GaugeLimits {
 // Game-manager stats block (09 §9.1, 11 §5).
 #[derive(Clone, Debug)]
 pub struct Stats {
+    // GM +0x30, 0 Easy .. 4 Extra.
     pub difficulty: i32,
+    // +0x08 score ÷ 10, cap 999 999 999.
     pub score10: i64,
+    // +0x04 graze this stage (cap 99 999), +0x0C total (cap 999 999).
     pub graze: i32,
     pub graze_total: i32,
+    // +0x22 human/youkai gauge.
     pub gauge: i16,
+    // GM +0x3DDF8.. (09 §9.3).
     pub limits: GaugeLimits,
+    // +0x24 max point value.
     pub max_point: i32,
+    // +0x2C point items this stage, +0x30 total (extend counter).
     pub point_items: i32,
     pub point_items2: i32,
+    // +0x34 extends (−1 disabled), +0x38 next extend threshold.
     pub extends: i32,
     pub next_extend: i32,
+    // +0x3C time this stage, +0x40 clock-advance threshold, +0x44 time added (parity for AddTime).
     pub time: i32,
     pub time_threshold: i32,
     pub time_added: i32,
+    // +0x74 / +0x80 / +0x98 floats; getters truncate.
     pub lives: f32,
     pub bombs: f32,
     pub power: f32,
+    // +0x64 deaths, +0x84 bombs used.
     pub deaths: i32,
     pub bombs_used: i32,
+    // Port-only: sum of this frame's rank deltas.
     pub rank_delta: i32,
+    // 0x164D31C stage frames, 0x164D32C human-max / 0x164D328 youkai-max frames (09 §1 step 10).
     pub stage_frames: u32,
     pub human_frames: u32,
     pub youkai_frames: u32,
+    // Port-only: pending Spell_AddBonus 0x416B10 amount (07 §11.1), paid by the spell manager.
     pub spell_bonus_add: i32,
+    // Port-only: point items collected (statistics).
     pub point_counter: i32,
+    // +0x00 displayed score, +0x10 roll step, +0x14 hiscore, +0x18 continues at hiscore (11 §4 step 9).
     pub score_disp: i64,
     pub score_step: i64,
     pub hiscore: i64,
     pub hiscore_cont: u8,
+    // +0x28 night clock 0–12, +0x29 continues used.
     pub clock: i32,
     pub continues: u8,
+    // +0x1C spell cards captured.
     pub spells: i32,
+    // +0x20 gauge at stage start.
     pub gauge_start: i16,
+    // Port-only HUD popup queue.
     pub popups: Vec<Popup>,
     pub rec: Record,
 }
@@ -152,7 +179,7 @@ pub enum Popup {
 }
 
 impl Default for Stats {
-    // Starting lives come from the config at game start (gamemgr); 2 is the config default.
+    // Starting lives come from the config at game start (gamemgr); 2 is the config default (15 §1.1).
     fn default() -> Self {
         Self {
             difficulty: 1,
@@ -209,6 +236,7 @@ pub const TIME_THR: [[i32; 4]; 8] = [
 ];
 
 impl Stats {
+    // AddScore 0x4181F0: score += n/10 (11 §5).
     pub fn add_score(&mut self, v: i32) {
         self.score10 = (self.score10 + (v / 10) as i64).min(999_999_999);
     }
@@ -223,13 +251,13 @@ impl Stats {
         crate::gamemgr::rank_add(d);
     }
 
-    // GameMgr_UpdateChecksum: 2 × Rng_Range(100000) (11 §1.5).
+    // GameMgr_UpdateChecksum 0x406E50: only the 2 × Rng_Range(100000) draws are kept (11 §1.5, §5).
     pub fn checksum(rng: &mut Rng) {
         rng.range(100000);
         rng.range(100000);
     }
 
-    // GameMgr_ScrambleDecoys: 5 × Range + 3 × Float.
+    // GameMgr_ScrambleDecoys 0x44E160: 5 × Range + 3 × Float, draws only (11 §1.5).
     pub fn scramble(rng: &mut Rng) {
         for _ in 0..5 {
             rng.range(100000);
@@ -239,6 +267,7 @@ impl Stats {
         }
     }
 
+    // Gauge queries (09 §9.3).
     pub fn youkai_max(&self) -> bool {
         self.gauge as i32 >= self.limits.youkai_max
     }
@@ -255,11 +284,12 @@ impl Stats {
         self.gauge as i32 <= self.limits.human
     }
 
+    // GaugeAdd clamp; callers apply the "ignored while bombing unless forced" rule (09 §9.3).
     pub fn gauge_add(&mut self, n: i32) {
         self.gauge = (self.gauge as i32 + n).clamp(self.limits.min, self.limits.max) as i16;
     }
 
-    // 08 §8.5 1up rule (Extend 0x439B29).
+    // 08 §8.5 1up rule (Extend 0x439B29, 11 §5): life, else bomb; sfx 0x1C, rank +200.
     pub fn extend(&mut self, rng: &mut Rng) {
         if self.lives < 8.0 {
             self.add_lives(1.0, rng);
@@ -272,6 +302,7 @@ impl Stats {
         }
     }
 
+    // AddLives 0x43C641 / AddBombs 0x439883 / SetPower 0x406FA0: each runs a checksum (09 §9.4).
     pub fn add_lives(&mut self, n: f32, rng: &mut Rng) {
         self.lives += n;
         Self::checksum(rng);
@@ -287,7 +318,8 @@ impl Stats {
         Self::checksum(rng);
     }
 
-    // AddTime 0x418220: clamps at 0 (no checksum when clamped); n > 0 also raises the max point value.
+    // AddTime 0x418220 (11 §5): clamps at 0 (no checksum when clamped); n > 0 also raises the max point value
+    // with the updated parity.
     pub fn add_time(&mut self, n: i32, rng: &mut Rng) {
         if self.time + n < 0 {
             self.time = 0;
@@ -303,6 +335,7 @@ impl Stats {
     }
 }
 
+// Centred boxes, inclusive overlap (08 §8.4).
 fn overlap(a: [f32; 2], ah: [f32; 2], b: [f32; 2], bh: [f32; 2]) -> bool {
     (a[0] - b[0]).abs() <= ah[0] + bh[0] && (a[1] - b[1]).abs() <= ah[1] + bh[1]
 }
@@ -315,59 +348,103 @@ pub struct GrazeEnv {
     pub dialogue: bool,
 }
 
+// Player object 0x17D5EF8, 0xE2B30 bytes (09 §1.1).
 pub struct Player {
+    // +0: 0 normal, 1 respawning, 2 dying (deathbomb window), 3 invulnerable.
     pub state: u8,
+    // +3: 0 unfocused / human, 1 focused / youkai, 2 right after load.
     pub focus: u8,
+    // +4 last-spell request (deathbomb window).
     pub last_spell: u8,
+    // +5 active character: focus held > 6 frames; solos: shot-type parity.
     pub mode: u8,
+    // +6 forced bomb (dissolve spell, 09 §6.1).
     pub forced_bomb: u8,
+    // Port copy of GameFlags 0x164D0B4 (11 §2.1).
     pub gflags: u32,
     pub dissolve_req: u8,
+    // +8 frames since the last focus change.
     pub focus_age: i32,
+    // Gauge-max aura effect 25 alive (09 §9.3).
     pub gauge_aura: bool,
+    // +0x10 sprite VM.
     pub vm: AnmVm,
+    // +0x2B4 playfield px.
     pub pos: [f32; 3],
+    // +0x2CC previous positions, shifted only on frames with movement.
     pub trail: [[f32; 3]; 16],
+    // +0x3F8 velocity × gs.
     pub last_disp: [f32; 2],
+    // +0x404 / +0x408 x / y speed multipliers (bombs change them).
     pub speed_mult: [f32; 2],
+    // +0x40C 4 × 0x2F4 (09 §5, 14 §3).
     pub options: [Opt; 4],
+    // +0xFDC.. bomb state and objects (14 §1).
     pub bomb: Bomb,
+    // +0xFDC bombing.
     pub bombing: bool,
+    // +0xE2A7C bomb active flag (items/graze).
     pub bomb_active: bool,
+    // +0xB8834 / +0xBB834 192 × 0x40 each (09 §8).
     pub damage_areas: Vec<Area>,
     pub cancel_areas: Vec<Area>,
+    // +0xBE838 128 × 0x484 (09 §4.1).
     pub bullets: Vec<PBullet>,
+    // +0xE2A38 3 slots (14 §6).
     pub laser_slots: [crate::pshot::LaserSlot; crate::pshot::LASER_SLOTS],
+    // +0xE2A68 deathbomb counter / bomb-allowed counter (09 §6).
     pub deathbomb: i32,
+    // +0xE2A6C decremented while > 0; bombs need 0.
     pub bomb_cooldown: i32,
+    // +0xE2A70 respawn clear frames (09 §6.3).
     pub respawn_clear: i32,
+    // +0xE2A74 / +0xE2A78 human / youkai sht (which fields come from which: 09 §2.1).
     pub sht: Sht,
     pub sht_youkai: Sht,
+    // +0xE2A90 cancel item type, reset to 6 by every test.
     pub cancel_item: i32,
+    // +0xE2A98 direction code (09 §3).
     pub direction: u8,
+    // +0xE2A9C / +0xE2AA0 last vx / vy before gs.
     pub last_v: [f32; 2],
+    // +0xE2AA4 / +0xE2AB0 homing targets (−999 = none; the second is never written).
     pub targets: [[f32; 3]; 2],
+    // +0xE2ABC aimed enemy (index) and its position.
     pub aimed: Option<usize>,
     pub aimed_pos: [f32; 3],
+    // Port-only: target 0 holds a boss.
     pub boss_target: bool,
+    // +0xE2AC4: −1 idle, 0..19 firing cycle (09 §4.2).
     pub shot_timer: Timer,
+    // +0xE2AD0 / +0xE2AE8 gauge timers B / C (09 §9.3).
     pub gauge_b: Timer,
     pub gauge_c: Timer,
+    // +0xE2AF4 death / respawn / invulnerability timer.
     pub state_timer: Timer,
+    // +0xE2B0C option base angle, −π/2 at load.
     pub option_angle: f32,
+    // +0xE2B2C time-orb damage step: 40, solo human 27.
     pub orb_step: i32,
+    // GM +0x3DBA9 shot type 0–11 (09 §2).
     pub shot_type: u8,
     pub stats: Stats,
     pub env: GrazeEnv,
+    // 0x164D2C8 gameplay frame counter copy.
     pub frames: i32,
+    // GM +0x3DBB3 game-over / continue menu.
     pub game_over: bool,
+    // GameFlags bit 10 bullet freeze (09 §6.1).
     pub freeze_bullets: bool,
+    // Port-only counters (hits, grazes, deaths, bombs started; spell failure reads deaths / bombs_started).
     pub hits: u32,
+    // +0xE2A94 effect counter (13 §2.6 type 3).
     pub spark_counter: u8,
+    // Invulnerability ring effect alive (fixed slot 0).
     pub invuln_ring: bool,
     pub grazes: u32,
     pub deaths: u32,
     pub bombs_started: u32,
+    // Port-only debug switches (TH08_INVULN = noclip probe, 09 §6.1).
     pub debug_move: bool,
     pub debug_invuln: bool,
     pub world: Weak<RefCell<BulletManager>>,
@@ -485,7 +562,9 @@ impl Player {
         self.shot_type >= 4
     }
 
-    // Player_Load: sht files, gauge limits, initial script, options for solos, state 1 with timer 120.
+    // Player_Load 0x44D650 (09 §2, §6.4): sht files, gauge limits, initial script 0 / 5, solo options, state 1
+    // with timer 120.
+    // SPEC-GAP: timer 10 when GameFlags bit 14 (09 §6.4) is not applied.
     pub fn load(&mut self, anm: &mut AnmManager, human: Sht, youkai: Sht, shot: u8) {
         self.shot_type = shot;
         self.sht = human;
@@ -515,6 +594,7 @@ impl Player {
         Ok(())
     }
 
+    // Box half sizes, all from the human sht (09 §2.1, §3).
     pub fn hit_half(&self) -> [f32; 2] {
         [self.sht.hitbox / 2.0; 2]
     }
@@ -531,7 +611,7 @@ impl Player {
         [self.pos[0], self.pos[1]]
     }
 
-    // Item fall multiplier source (08 §8.4).
+    // Item fall multiplier source: youkai sht when +3 ≠ 0 (09 §2.1, 08 §8.4).
     pub fn item_sht(&self) -> &Sht {
         if self.focus == 1 {
             &self.sht_youkai
@@ -544,7 +624,7 @@ impl Player {
         crate::bullet::angle_from(o, self.pos)
     }
 
-    // Player_InBombArea (09 §8): resets the cancel item type, then tests every active cancel area.
+    // Player_InBombArea (09 §8, §6.1 step 1): resets the cancel item type, then tests every active cancel area.
     pub fn in_bomb_area(&mut self, p: [f32; 3]) -> bool {
         self.cancel_item = 6;
         for a in self.cancel_areas.iter_mut().filter(|a| a.active) {
@@ -557,7 +637,8 @@ impl Player {
         false
     }
 
-    // Player_GrazeTest: 0 none, 1 grazed (handler ran), 2 inside a bomb area; plus time orbs to drop.
+    // Player_GrazeTest 0x44A470 (08 §4.1): 0 none, 1 grazed (handler ran), 2 inside a bomb area; plus time orbs.
+    // Bomb-area test first; bullet box enlarged by 20 px per side; no graze in states 1/2.
     pub fn graze_test(
         &mut self,
         p: [f32; 3],
@@ -576,7 +657,7 @@ impl Player {
         (1, self.on_graze(p, false, env, rng))
     }
 
-    // Player_HitTest: 0 miss, 1 hit, 2 inside a bomb area.
+    // Player_HitTest 0x44A230 (09 §6.1 steps 1–6): 0 miss, 1 hit, 2 inside a bomb area.
     pub fn hit_test(&mut self, p: [f32; 3], size: [f32; 2], rng: &mut Rng) -> u8 {
         if self.in_bomb_area(p) {
             return 2;
@@ -594,6 +675,7 @@ impl Player {
     }
 
     // Hit path of bullets/lasers/enemies (09 §6.1 steps 5–6): state check, ScrambleDecoys, then Player_Die.
+    // Quirk kept: the state ≠ 0 return comes before the scramble, so invulnerable hits draw no RNG.
     pub fn die(&mut self, rng: &mut Rng) {
         if self.state != 0 {
             return;
@@ -603,11 +685,13 @@ impl Player {
         self.player_die(rng);
     }
 
-    // Player_Die 0x44AB40; `debug_invuln` returns at its start like the noclip probe.
+    // Player_Die 0x44AB40 (09 §6.1); `debug_invuln` returns at its start like the noclip probe.
+    // SPEC-GAP: "all items in state 1 fall again" (0x441530) is left to ItemMgr_Calc's player-state test.
     fn player_die(&mut self, rng: &mut Rng) {
         if self.debug_invuln {
             return;
         }
+        // Freeze byte 0x160F534 := 0.
         crate::enemy::set_timer_pause(0);
         Stats::checksum(rng);
         crate::sound::play_at(crate::sound::PLDEAD, self.pos[0]);
@@ -637,7 +721,7 @@ impl Player {
             }
             n
         };
-        // Ring 59 only with a bomb in stock.
+        // Ring 59 (fixed slot 11) only with a bomb in stock (09 §6.1 "else" branch).
         if st.bombs >= 1.0 {
             crate::effect::death_ring(rng, self.pos, n);
         }
@@ -647,12 +731,13 @@ impl Player {
         self.deathbomb = n;
     }
 
-    // GameFlags bits 7–8: a boss last spell runs or was captured (the dissolve-spell mode).
+    // GameFlags bits 7–8: a boss last spell runs or was captured (the dissolve-spell mode, 11 §2.1).
     pub fn special(&self) -> bool {
         self.gflags & (GF_LAST_SPELL | GF_LAST_CAPTURED) != 0
     }
 
-    // Player_OnGraze (09 §9.2); returns how many time orbs (item type 10) to drop at `p`.
+    // Player_OnGraze 0x44A930 (09 §9.2); returns how many time orbs (item type 10, mode 5) to drop at `p`.
+    // Not implemented: HUD flag and statistics bit 0x2000.
     pub fn on_graze(&mut self, p: [f32; 3], laser: bool, env: &GrazeEnv, _rng: &mut Rng) -> u8 {
         self.grazes += 1;
         crate::sound::play_at(crate::sound::GRAZE, p[0]);
@@ -694,19 +779,20 @@ impl Player {
         orbs
     }
 
-    // Player_ItemCollectTest: item box (c, c) vs the collect box.
+    // Player_ItemCollectTest (08 §8.4): player states 0/3/4; item box (c, c) vs the collect box.
     pub fn collect_test(&self, p: [f32; 3], c: f32) -> bool {
         matches!(self.state, 0 | 3 | 4)
             && overlap([p[0], p[1]], [c / 2.0; 2], self.xy(), self.item_half())
     }
 
+    // SPEC-GAP: box-vs-cancel-area test with no hit-counter update; no spec section names this caller.
     pub fn box_in_cancel_area(&self, p: [f32; 3], half: [f32; 2]) -> bool {
         self.cancel_areas
             .iter()
             .any(|a| a.active && a.contains([p[0], p[1]], half))
     }
 
-    // EnemyMgr_Calc target pick (09 §2.1): target 1 = boss (horizontally nearest) else the lowest enemy;
+    // EnemyMgr_Calc target pick (09 §1.1 +0xE2AA4): target 1 = boss (horizontally nearest) else the lowest enemy;
     // Target 2 is never written; the aimed enemy is picked by the enemy manager (14 §3.1).
     pub fn offer_target(&mut self, e: [f32; 3], boss: bool) {
         let t = &mut self.targets[0];
@@ -720,7 +806,7 @@ impl Player {
         }
     }
 
-    // Player_HitTestNoBomb 0x44A360: true on overlap in every player state; only state 0 dies.
+    // Player_HitTestNoBomb 0x44A360 (09 §6.1): no bomb-area test; true on overlap in every state; only state 0 dies.
     pub fn contact_test(&mut self, p: [f32; 3], size: [f32; 2], rng: &mut Rng) -> bool {
         self.cancel_item = 6;
         if !overlap(
@@ -735,12 +821,14 @@ impl Player {
         true
     }
 
+    // Restarts the sprite VM keeping its position (the player sprite is placed at draw time).
     pub(crate) fn set_script(&mut self, anm: &mut AnmManager, s: usize) {
         let pos = self.vm.pos;
         anm.set_script(&mut self.vm, ANM_SLOT, s);
         self.vm.pos = pos;
     }
 
+    // Sprite script base: 0 human / 5 youkai; teams by focus, solos by parity (09 §3).
     fn sprite_base(&self, focus: u8) -> usize {
         let youkai = if self.solo() {
             self.shot_type % 2 == 1
@@ -760,6 +848,7 @@ impl Player {
             bits & input::LEFT != 0,
             bits & input::RIGHT != 0,
         );
+        // Direction code +0xE2A98 in the priority order of 09 §3.
         self.direction = match (u, d, l, r) {
             (true, _, true, _) => 5,
             (_, true, true, _) => 7,
@@ -791,7 +880,7 @@ impl Player {
                     crate::effect::spawn(anm, kind, self.pos, 1, colour);
                 }
             }
-            // Hitbox marker: effect 22 in fixed slot 2 on every switch to focused (14 §5).
+            // Hitbox marker: effect 22 in fixed slot 2 on every switch to focused, all shot types (14 §5).
             if f == 1 {
                 crate::effect::spawn_fixed(anm, 22, self.pos, crate::effect::FIX_AURA, 0xFFFFFFFF);
             } else {
@@ -801,7 +890,8 @@ impl Player {
             }
             self.focus_age = 0;
             self.gauge_c.set(0);
-            // SPEC-GAP: the start/stop check sees previous vx 0 after a switch (golden draw log: start script replays).
+            // 09 §3: the switch resets +0xE2A9C := 0, so moving on the switch frame replays the start-move script.
+            // SPEC-GAP: 09 §3 ties this to the team sprite reset; the port also does it for solos.
             self.last_v[0] = 0.0;
         } else {
             self.focus_age += 1;
@@ -812,6 +902,7 @@ impl Player {
         if self.solo() {
             self.mode = self.shot_type % 2;
         }
+        // Unfocused: human sht +0x24 / +0x2C; focused: youkai sht +0x28 / +0x30 (09 §2.1).
         let (ortho, diag) = if f == 1 {
             (self.sht_youkai.speed_focus, self.sht_youkai.diag_focus)
         } else {
@@ -832,6 +923,7 @@ impl Player {
         vy *= self.speed_mult[1];
         let base = self.sprite_base(f);
         let pvx = self.last_v[0];
+        // Start/stop scripts 1–4 (+5 youkai) against the previous frame's vx (09 §3).
         let script = if vx < 0.0 && pvx >= 0.0 {
             Some(1)
         } else if vx > 0.0 && pvx <= 0.0 {
@@ -861,7 +953,7 @@ impl Player {
         }
     }
 
-    // Gauge per frame (09 §9.3).
+    // Gauge per frame (09 §9.3): shooting → timer C ramp (sign by focus); idle → drift toward 0 after B ≥ 30.
     fn gauge_drift(&mut self, gs: f32) {
         if self.focus_age < 30 || self.bombing || self.env.dialogue {
             return;
@@ -904,7 +996,7 @@ impl Player {
         }
     }
 
-    // Player_DyingUpdate (09 §6.2); true when the respawn starts.
+    // Player_DyingUpdate 0x44CBF0 (09 §6.2); true when the respawn starts. The global tint goes off (06 §10.2).
     fn dying_update(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) -> bool {
         anm.tint_off();
         if self.deathbomb > 0 {
@@ -930,6 +1022,7 @@ impl Player {
         let base = self.sprite_base(self.focus.min(1));
         self.set_script(anm, base);
         self.vm.scale = [3.0, 3.0];
+        // SPEC-GAP: last vx/vy reset and respawn_clear = 60 here are not placed by 09 §6.2 / §6.3.
         self.last_v = [0.0; 2];
         self.respawn_clear = 60;
         if self.stats.lives >= 1.0 {
@@ -938,12 +1031,15 @@ impl Player {
         } else {
             // Game over: the ASCII manager opens the continue menu (12 §4).
             self.game_over = true;
+            // SPEC-GAP: 09 §6.2 / 11 §4.2 reset the bombs only when a life is left.
             self.stats.bombs = self.sht.bombs.trunc();
         }
         true
     }
 
-    // The death completes when the deathbomb window runs out.
+    // The real death when the deathbomb window runs out (09 §6.2): effects, sound 0xF, unfreeze, miss counter
+    // (checksum), time −= min(time/10, 500), drops (mode 2), rank −1600. The spell manager detects the failure
+    // through `deaths`.
     fn real_death(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) {
         self.deaths += 1;
         log::info!("player death at frame {}", self.frames);
@@ -987,7 +1083,8 @@ impl Player {
         self.stats.rank(-1600);
     }
 
-    // Player_RespawnUpdate (09 §6.3).
+    // Player_RespawnUpdate 0x44D180 (09 §6.3): 60-frame clear rect (item −1), 30-frame grow from scale 3.
+    // SPEC-GAP: the invulnerability timer 240 is set even with GameFlags bit 14 (09 §6.3 skips it).
     fn respawn_update(&mut self) {
         if self.respawn_clear > 0 {
             self.respawn_clear -= 1;
@@ -1011,7 +1108,7 @@ impl Player {
         self.deathbomb = self.sht.deathbomb;
     }
 
-    // Player_UpdateInvuln (09 §6.4).
+    // Player_UpdateInvuln 0x44D2C0 (09 §6.4): colour 0xFFF02020 when t mod 8 < 2; the ring follows the player.
     fn update_invuln(&mut self, gs: f32) {
         if self.state == 3 {
             self.state_timer.dec(gs);
@@ -1038,7 +1135,8 @@ impl Player {
         }
     }
 
-    // Player_Calc (09 §1); `items` is the item manager when the bullet manager exists.
+    // Player_Calc (09 §1 steps 2–10); `items` is the item manager when the bullet manager exists.
+    // SPEC-GAP: step 1 (freeze byte 0x160F534 → set aura VM flag 0x80000 and return) is not done.
     pub fn frame(
         &mut self,
         anm: &mut AnmManager,
@@ -1046,6 +1144,7 @@ impl Player {
         mut items: Option<&mut ItemManager>,
     ) {
         let gs = anm.speed;
+        // Port-only: areas queued by effects (bomb-owned rings) during the last frame.
         self.take_queued_areas();
         self.update_areas();
         self.update_bomb(anm, inp, &mut items);
@@ -1065,13 +1164,16 @@ impl Player {
         if self.vm.script.is_some() {
             self.vm.run(anm);
         }
+        // 09 §4.4: skipped while GameFlags bit 10.
         if !self.freeze_bullets {
             self.update_bullets(anm);
         }
         self.update_shot_timer(anm, inp);
+        // Step 9 (0x44D420): HUD panel-side switch, then the target reset.
         crate::ascii::gauge_fade(self.pos);
         self.targets = [[-999.0, -999.0, 0.0]; 2];
         self.boss_target = false;
+        // SPEC-GAP: 09 §1.1 gives no place for the +0xE2A6C decrement; done here.
         if self.bomb_cooldown > 0 {
             self.bomb_cooldown -= 1;
         }
@@ -1089,6 +1191,7 @@ impl Player {
                 st.add_score(100);
             }
         }
+        // Gauge-max aura: effect 25 in fixed slot 8 follows the player (09 §9.3, 13 §2.6).
         let at_max = self.stats.youkai_max() || self.stats.human_max();
         if at_max != self.gauge_aura {
             self.gauge_aura = at_max;
@@ -1112,6 +1215,7 @@ impl Player {
         self.frame(anm, inp, None);
     }
 
+    // 14 §5 (3): sprite at pos + playfield origin, z 0.1, Draw2DSnap; hidden while the continue menu is up.
     fn draw_sprite(&mut self, anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx) {
         if self.vm.script.is_none() {
             return;
@@ -1127,6 +1231,7 @@ impl Player {
 impl Task<Ctx> for Player {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
+            // Full exit hides the gauge readout (11 §7, 12 §5.9).
             if !matches!(ctx.game.requested, 3 | 11 | 12) {
                 crate::ascii::gauge_interrupt(99);
             }
@@ -1136,7 +1241,7 @@ impl Task<Ctx> for Player {
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let inp = ctx.input.game_view();
-        // 0x164D2C8 (frames since stage start) already counts this frame (session trace: shot-timer phase).
+        // 0x164D2C8 gameplay frame counter (11 §2), read after GameMgr_Calc (prio 2) incremented it.
         self.frames = ctx.game.frame_counter as i32;
         // The dialogue state is read live: the previous frame's dialogue calc (prio 12) ran after the enemies.
         if let Some(gm) = crate::gamemgr::current()
@@ -1161,7 +1266,8 @@ impl Task<Ctx> for Player {
         Ret::Next
     }
 
-    // Draw 9 (0x44D530): flying bullets, bomb, sprite, options; draw 10 (0x44D630): bullets in their hit animation.
+    // Draw 9 (0x44D530): flying bullets, bomb, sprite, options; draw 10 (0x44D630): bullets in their hit animation
+    // (14 §5).
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         gfx.set_viewport(PLAYFIELD);

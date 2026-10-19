@@ -1,3 +1,5 @@
+//! Game manager GM 0x160F508: stage start, GameMgr_Calc flow, rank, routing, scene state (11 §2–§7).
+
 use crate::bullet::BulletManager;
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
@@ -9,7 +11,7 @@ use anyhow::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-// Game flags (11 §2.1).
+// Game flags GM +0x3DBAC = 0x164D0B4 (11 §2.1).
 pub const F_PRACTICE: u32 = 1 << 0;
 pub const F_DEMO: u32 = 1 << 1;
 pub const F_RUNNING: u32 = 1 << 2;
@@ -18,13 +20,15 @@ pub const F_ENDING_OK: u32 = 1 << 4;
 pub const F_CLEAR_PANEL: u32 = 1 << 9;
 pub const F_DEATH: u32 = 1 << 10;
 pub const F_SPELL_PRACTICE: u32 = 1 << 14;
+// Bits 5–6 stage-end state, bits 11–12 final route (11 §2.1).
 const END_SHIFT: u32 = 5;
 const ROUTE_SHIFT: u32 = 11;
 
+// GameMgr_Calc 0x439BC7 prio 2, draw 0x43AA03 prio 5 (11 §3).
 pub const CALC_PRIO: u16 = 2;
 pub const DRAW_PRIO: u16 = 5;
 
-// Rank init / min / max by difficulty (table 0x4C7880).
+// Rank init / min / max by difficulty (table 0x4C7880, 11 §3.2).
 const RANK: [[i32; 3]; 5] = [
     [10, 8, 16],
     [10, 8, 16],
@@ -33,7 +37,7 @@ const RANK: [[i32; 3]; 5] = [
     [16, 15, 16],
 ];
 
-// Demo music-fade and end frames per demo index (11 §4).
+// Demo music-fade and end frames per demo index (11 §4 step 6).
 const DEMO_LIMITS: [(i32, i32); 4] = [(6000, 6120), (4800, 4920), (4920, 5040), (6900, 7020)];
 
 // Scenes (11 §7).
@@ -51,26 +55,39 @@ pub const SCENE_RELOAD: i32 = 11;
 
 // Game state that survives scene changes (GM object 11 §2 + the menu's choices).
 pub struct Game {
+    // Supervisor +0x158 current, +0x15C requested (0x17CE8B4), +0x160 previous scene (11 §7).
     pub scene: i32,
     pub requested: i32,
     pub previous: i32,
+    // GM +0x30: 0 Easy .. 4 Extra.
     pub difficulty: i32,
+    // GM +0x3DBA9 shot type 0–11.
     pub shot: u8,
+    // GM +0x3DDC4 stage index 0–8.
     pub stage: usize,
+    // GM +0x3DBAC game flags.
     pub flags: u32,
+    // GM +0x3DBB2 paused (1 menu open, 2 drawn once), +0x3DBB3 game-over / continue menu.
     pub paused: u8,
     pub game_over: u8,
+    // 0x17CE8BC fresh-start flag, 0x17CE8C4 reload-same-stage flag (11 §7).
     pub fresh_start: bool,
     pub reload_same: bool,
+    // Scene to request once the stage-end state is confirmed (11 §4 step 1).
     pub next_scene_after: i32,
+    // GM +0x38 loading state (0 playing, 1 loading, 2 failed), +0x3C frames spent loading.
     pub loading: u8,
     pub loading_frames: u32,
+    // Port-only: loading screen drawn this frame; frames in Loading_Wait (12 §1 "Press Shot Button").
     pub loading_shown: bool,
     pub loading_wait: u32,
+    // 0x164D2C8 = GM +0x3DDC0 gameplay frame counter (11 §2).
     pub frame_counter: u32,
+    // 0x164D30C play-time counter (11 §3.2 zeroes it at a fresh start).
     pub play_time: u32,
     pub cfg: crate::config::Config,
     pub stats: Stats,
+    // Clear masks per shot (12 = union) and difficulty: no-continue / any (11 §4 step 1, 15 CLRD).
     pub clear_nc: [[u16; 5]; 13],
     pub clear_any: [[u16; 5]; 13],
     pub score: crate::scoredat::ScoreDat,
@@ -79,9 +96,11 @@ pub struct Game {
     run_clock: Option<web_time::Instant>,
     pub play_clock: Option<web_time::Instant>,
     pub retrying: bool,
+    // GM +0x3DBB4 demo index (3 at boot, 11 §4 step 6), +0x3DBB8 demo frame counter, +0x3DBAA shot bias.
     pub demo: u8,
     pub demo_frame: i32,
     pub demo_shot_bias: u8,
+    // 0x164D0BD playback speed setting (1 = slowdown reproduction, 15 §3.3).
     pub replay_speed: u8,
     pub rpy: Option<crate::replay::Replay>,
     pub cfg_live: Option<crate::config::Config>,
@@ -91,13 +110,16 @@ pub struct Game {
     pub replay_fps_red: bool,
     pub noclip: bool,
     pub watched_replay: bool,
+    // Port-only phase of the slowdown-reproduction pattern.
     slow_phase: u32,
+    // 0x164D2C4 RNG state captured at stage start (11 §1.3).
     pub stage_seed: u16,
     pub stages_started: u32,
     pub frame_skip: bool,
     pub clock: i32,
     pub continue_clock: bool,
     pub continue_apply: bool,
+    // GM +0x3DBB0 spell id for spell practice.
     pub card: i16,
     pub menu_loading: u32,
     // Recorded loader timing of a session replay (src/session.rs).
@@ -176,6 +198,7 @@ impl Default for Game {
 }
 
 impl Game {
+    // Bits 5–6: 0 none, 1 waiting for load, 2 clear triggered, 3 clear handled (11 §2.1).
     pub fn end_state(&self) -> u32 {
         (self.flags >> END_SHIFT) & 3
     }
@@ -184,6 +207,7 @@ impl Game {
         self.flags = self.flags & !(3 << END_SHIFT) | (v & 3) << END_SHIFT;
     }
 
+    // Bits 11–12: 0 → 6A, else 6B (11 §4.1).
     pub fn route(&self) -> u8 {
         ((self.flags >> ROUTE_SHIFT) & 3) as u8
     }
@@ -354,7 +378,8 @@ impl Game {
 }
 
 thread_local! {
-    // GM rank, max, min, sub-counter (GM+0x3DE2C..0x3DE38); ECL var 10041 reads the rank directly.
+    // GM rank, max, min, sub-counter (GM+0x3DE2C..0x3DE38, 11 §2); ECL var 10041 reads the rank directly.
+    // SPEC-GAP: the boot values (16, 32, 0, 0) before the first new game are not in 11.
     static RANK_STATE: std::cell::Cell<[i32; 4]> = const { std::cell::Cell::new([16, 32, 0, 0]) };
 }
 
@@ -378,7 +403,7 @@ pub fn set_rank(v: i32) {
     });
 }
 
-// RankAdd / RankSub (11 §3.2): ±1 rank per 100 sub-units, clamped to min..max; applied immediately.
+// RankAdd / RankSub 0x43BFC3 / 0x43C03F (11 §3.2): ±1 rank per 100 sub-units, clamped to min..max.
 pub fn rank_add(d: i32) {
     let [mut r, max, min, mut sub] = RANK_STATE.get();
     sub += d;
@@ -393,7 +418,7 @@ pub fn rank_add(d: i32) {
     RANK_STATE.set([r.clamp(min, max), max, min, sub]);
 }
 
-// Stage_Advance (11 §4.1).
+// Stage_Advance 0x43C4B3 (11 §4.1): stage 3 → 4A for teams 1, 2 and solos 6–9, else 4B; 6A/6B by route.
 pub fn next_stage(stage: usize, shot: u8, route: u8) -> usize {
     match stage {
         2 => match shot {
@@ -412,7 +437,7 @@ pub fn next_stage(stage: usize, shot: u8, route: u8) -> usize {
     }
 }
 
-// GameMgr_ClockAdvance (11 §4.1).
+// GameMgr_ClockAdvance 0x43C35F (11 §4.1): stages 1–5 +2 if time < threshold else +1; 6A/6B 0; Extra 4.
 pub fn clock_advance(stage: usize, time: i32, threshold: i32) -> i32 {
     match stage {
         0..=5 => {
@@ -442,8 +467,11 @@ pub struct GameManager {
     pub bullets: Option<Rc<RefCell<BulletManager>>>,
     pub enemies: Option<Rc<RefCell<EnemyManager>>>,
     pub hud: Option<Rc<RefCell<Hud>>>,
+    // Subsystems unregistered by the GM on-remove (11 §7).
     tasks: Vec<TaskRef<Ctx>>,
+    // Port-only: loading frame at which Ascii_SetupGaugeVms runs, with the gauge limits (12 §5.9).
     gauge_at: Option<(u32, i32, i32)>,
+    // Port-only: loading calcs of this stage start (11 §3.1 "Loading frame count").
     loading_total: u32,
 }
 
@@ -467,8 +495,10 @@ impl GameManager {
         Ok(gm)
     }
 
-    // New game (11 §3.2): RNG jitter + decoys, stats defaults, rank.
+    // Fresh start (11 §3.2) in its RNG order: heap jitter (2 draws), decoys (60), lives / power checksums,
+    // score.dat flush (2), rank, deaths / bombs-used checksums.
     fn fresh_start(ctx: &mut Ctx, st: &mut Stats) {
+        // Port rule (11 §1.2): the loader thread's 53-bit precision does not affect these integer/decoy draws.
         let rng = &mut ctx.anm.rng;
         rng.next_u32();
         for _ in 0..21 {
@@ -532,12 +562,14 @@ impl GameManager {
         st.spells = 0;
     }
 
-    // GameManager_StageStart (11 §3.1) with the subsystems registered synchronously.
+    // GameManager_StageStart 0x43ABD7 (11 §3.1) with the subsystems registered synchronously (no loader thread).
+    // Not implemented: spell-practice power (11 §3.1), the spell-practice stage overlay base 2, BGM by spell id.
     fn stage_start(&mut self, ctx: &mut Ctx) -> Result<()> {
         let entries0 = ctx.anm.entries_loaded;
         let g = &mut ctx.game;
         g.loading = 1;
         g.loading_frames = 0;
+        // GM on-register: a cleared stage (bits 5–6 ≥ 2) waits for the confirm press.
         if g.end_state() >= 2 {
             g.set_end_state(1);
         }
@@ -548,12 +580,14 @@ impl GameManager {
         if fresh {
             Self::fresh_start(ctx, &mut st);
         } else {
+            // 11 §3.3 continuing: score display synced, two decoy checksums.
             st.score_disp = st.score10;
             st.score_step = 0;
             Stats::checksum(&mut ctx.anm.rng);
             Stats::checksum(&mut ctx.anm.rng);
         }
         let g = &mut ctx.game;
+        // PLST play counters (15 §2.9).
         if fresh && g.counts_plays() {
             g.count_play();
             if g.retrying {
@@ -568,14 +602,14 @@ impl GameManager {
         g.fresh_start = false;
         let (stage, shot, d) = (g.stage, g.shot, g.diff());
         Player::register(ctx, self.player.clone(), shot)?;
-        // Player_Load shows the gauge readout on a fresh start; StageStart re-runs its setup (12 §5.9).
-        // SPEC-GAP: setup order vs Player_Load inside StageStart is unspecified; run after it so the limits are current.
+        // Player_Load shows the gauge readout on a fresh start; StageStart re-runs its setup after Player_Load, so
+        // it uses the new game's limits (12 §5.9).
         if fresh {
             crate::ascii::gauge_interrupt(1);
         }
         let l = self.player.borrow().stats.limits;
         crate::ascii::gauge_player(&self.player);
-        // The loader thread reaches Ascii_SetupGaugeVms k Ascii_Calc ticks before game frame 1 (answers_impl15 §Q7).
+        // The loader thread reaches Ascii_SetupGaugeVms k Ascii_Calc ticks before game frame 1 (12 §5.9 timing).
         let demo = (ctx.game.flags & F_DEMO != 0).then_some(ctx.game.demo);
         let k = match demo {
             Some(0) => 28,
@@ -615,6 +649,7 @@ impl GameManager {
                 };
                 s.set_power(pw, &mut ctx.anm.rng);
             }
+            // Port-only debug override.
             if let Some(pw) = crate::env::var("TH08_POWER")
                 .and_then(|v| v.parse::<f32>().ok())
                 .filter(|_| ctx.game.stages_started == 0)
@@ -622,6 +657,7 @@ impl GameManager {
                 s.power = pw.clamp(0.0, 128.0);
             }
         }
+        // Replay playback: rank init, stage record load (seed set), checksum with RNG preserved (11 §3.4).
         if ctx.game.replay() {
             let [init, min, max] = RANK[d];
             set_rank_state([init, max, min, 0]);
@@ -631,6 +667,7 @@ impl GameManager {
         let g = &mut ctx.game;
         g.paused = 0;
         g.flags &= !0x2180;
+        // stage_seed is captured before the subsystems register (11 §1.3).
         g.stage_seed = ctx.anm.rng.state;
         log::info!(
             "stage {stage} start at frame {}: shot {shot} difficulty {d} seed {:#06x}",
@@ -639,6 +676,7 @@ impl GameManager {
         );
         let first = g.stages_started == 0;
         g.stages_started += 1;
+        // SPEC-GAP: 11 §3.1 registers Effects before HUD; the port registers HUD first.
         let stage_t = Stage::register(ctx, stage, Some(self.player.clone()))?;
         let bullets = BulletManager::register(ctx, self.player.clone())?;
         let enemies =
@@ -656,6 +694,7 @@ impl GameManager {
         }
         let st = self.player.borrow().stats.clone();
         let replay_t = crate::replay::register(ctx, ctx.game.replay(), &st)?;
+        // SPEC-GAP: only BGM slot 0 is started; 11 §3.1 starts slots 0..2 from the STD names.
         if !ctx.game.reload_same {
             let bgm = stage_t.borrow().std.bgm[0].clone();
             ctx.audio.play_bgm(&bgm);
@@ -685,7 +724,8 @@ impl GameManager {
         Ok(())
     }
 
-    // Stage-end handling (11 §4 step 1).
+    // Stage-end handling (11 §4 step 1); the clear-mask bits are set unless replaying.
+    // SPEC-GAP: no "return 3" on the clear frame (11 §4 step 1); the port runs the confirm test at once.
     fn stage_end(&mut self, ctx: &mut Ctx) -> Option<Ret> {
         let g = &mut ctx.game;
         if g.end_state() == 2 {
@@ -746,7 +786,8 @@ impl GameManager {
         None
     }
 
-    // Continue sequence side effects requested by the continue menu (11 §4.2).
+    // Continue sequence side effects requested by the continue menu (11 §4.2): frame 15 clock + 1; frame 90
+    // continues + 1, score = display = continues, lives (checksum), bombs, point items, power 0 (checksum).
     fn continue_effects(&mut self, ctx: &mut Ctx) {
         let g = &mut ctx.game;
         let mut p = self.player.borrow_mut();
@@ -778,7 +819,7 @@ impl GameManager {
         g.clock = p.stats.clock;
     }
 
-    // Score display roll (11 §4 step 9).
+    // Score display roll (11 §4 step 9): step = max(step, clamp((score − disp) >> 5, 1, 578910)).
     fn roll_score(st: &mut Stats) {
         st.score10 = st.score10.min(999_999_999);
         let d = ((st.score10 - st.score_disp) >> 5).clamp(1, 578_910);
@@ -806,7 +847,8 @@ impl Task<Ctx> for GameManager {
         Ok(())
     }
 
-    // GM on-remove (11 §7): stats carried over, subsystems torn down, music stopped.
+    // GM on-remove 0x43BE2C (11 §7): score clamped and shown, game speed 1, music stopped (unless reloading the
+    // same stage), subsystems torn down.
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain != Chain::Calc {
             return;
@@ -833,6 +875,9 @@ impl Task<Ctx> for GameManager {
         ctx.game.game_over = 0;
     }
 
+    // GameMgr_Calc 0x439BC7 (11 §4); Ret::StopFrame = return 3 (the rest of the calc chain does not run).
+    // SPEC-GAP: GameFlags bit 2 is not recomputed per calc (11 §2.1); the port sets it at stage start only.
+    // Not implemented: deferred music start (step 3), slow mode (step 10).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // 0x164D09C += 1 at the top of GameMgr_Calc (11 §4): HSCR play time in frames.
         self.player.borrow_mut().stats.rec.frames += 1;
@@ -844,7 +889,7 @@ impl Task<Ctx> for GameManager {
         g.loading_shown = g.loading != 0;
         if g.loading != 0 {
             g.loading_frames += 1;
-            // Session replay: the loader's recorded steps take effect before the calc of their poll index.
+            // Port-only session replay: the loader's recorded steps take effect before the calc of their poll index.
             let (gauge_due, wait_due, release_due) = match g
                 .sched
                 .as_ref()
@@ -893,6 +938,7 @@ impl Task<Ctx> for GameManager {
             }
         }
         let g = &mut ctx.game;
+        // Step 4 pause: sfx 0x22, music paused, pauses + 1, checksum with the RNG saved and restored.
         if g.paused == 0
             && g.game_over == 0
             && g.flags & F_DEMO == 0
@@ -956,8 +1002,9 @@ impl Task<Ctx> for GameManager {
             e.g.player_char = g.shot as i32;
         }
         g.frame_counter += 1;
-        // SPEC-GAP: 0x164D30C (end-panel progress) assumed +1 per gameplay frame, like the frame counter.
+        // SPEC-GAP: 0x164D30C is "frames" in 11 §2 without the increment site; assumed +1 per gameplay frame.
         self.player.borrow_mut().stats.rec.progress += 1;
+        // Port-only debug: TH08_SCREEN_FX=<frame>:<type>,<p0>,<p1>,<p2>,<p3>.
         if let Some(v) = crate::env::var("TH08_SCREEN_FX") {
             let n: Vec<i64> = v.split([':', ',']).filter_map(|s| s.parse().ok()).collect();
             if n.len() == 6 && n[0] == g.frame_counter as i64 {
@@ -974,7 +1021,8 @@ impl Task<Ctx> for GameManager {
         Ret::Next
     }
 
-    // While loading only the Supervisor's loading screen (draw prio 0–2) and the darken overlay are drawn.
+    // While loading only the Supervisor's loading screen (draw prio 0–2) and the darken overlay are drawn;
+    // in Loading_Wait "Press Shot Button" from the 5th frame, alpha pulsing with a 59-frame loop (12 §1).
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if !ctx.game.loading_shown {
             return Ret::Next;

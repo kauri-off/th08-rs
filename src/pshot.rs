@@ -1,4 +1,4 @@
-// Player shots and options (09 §4, §5).
+//! Player bullets, shot functions, options and the player laser (09 §4–§5, 14 §3–§5).
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::gfx::Gfx;
@@ -8,12 +8,15 @@ use crate::player::{ANM_SLOT, Player};
 use crate::sht::ShotEntry;
 use std::f32::consts::{FRAC_PI_2, PI};
 
+// 128 × 0x484 at player +0xBE838 (09 §4.1).
 pub const MAX_BULLETS: usize = 128;
 
 fn polar(a: f32, r: f32) -> [f32; 2] {
     [a.cos() * r, a.sin() * r]
 }
 
+// Option calc fn (14 §3 table): Yukari 0x44E3A0, Alice 0x44EA40, Remilia 0x44EB70, Yuyuko 0x44F930,
+// Youmu's half 0x44F2D0, Remilia solo 0x44EE70, Youmu solo 0x44F5E0.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum OptKind {
     #[default]
@@ -27,47 +30,70 @@ pub enum OptKind {
     YoumuSolo,
 }
 
+// Option 0x2F4 at player +0x40C + k·0x2F4 (14 §3).
 #[derive(Clone, Debug, Default)]
 pub struct Opt {
     pub vm: AnmVm,
+    // +0x2A4 playfield px (shot origin), +0x2B0 anchor, +0x2BC velocity.
     pub pos: [f32; 3],
     pub anchor: [f32; 3],
     pub vel: [f32; 2],
+    // +0x2C8: 0 free, 1 init, 2 active, 3 leaving; +0x2CC sub-state; +0x2D0 index.
     pub state: u8,
     pub sub: u8,
     pub index: usize,
+    // +0x2D8 orbit angle, +0x2DC facing, radians.
     pub angle: f32,
     pub facing: f32,
+    // +0x2E0.
     pub timer: Timer,
+    // +0x2EC calc fn (the draw fn is always 0x44E9E0).
     pub kind: OptKind,
 }
 
+// Player bullet 0x484 (09 §4.1).
 #[derive(Clone, Debug, Default)]
 pub struct PBullet {
     pub vm: AnmVm,
+    // +0x2A4 playfield px.
     pub pos: [f32; 3],
+    // +0x430 hitbox w, h.
     pub size: [f32; 2],
+    // +0x43C px/frame, +0x44C speed, +0x450 angle (radians).
     pub vel: [f32; 2],
     pub speed: f32,
     pub angle: f32,
+    // +0x454.
     pub timer: Timer,
+    // +0x460.
     pub damage: i16,
+    // +0x462: 0 free, 1 flying, 2 hit animation.
     pub state: u8,
+    // +0x464 entry type (3 piercing, 4/5 laser, 6 no hit animation).
     pub kind: i16,
+    // +0x466 laser slot.
     pub slot: i16,
+    // +0x46C focus at fire.
     pub focus: u8,
+    // +0x46E entry script (−10 base).
     pub script: i16,
     pub side: i16,
+    // +0x468 origin.
     pub origin: i16,
+    // +0x470 red tint (14 §5).
     pub red: bool,
+    // +0x474 update / +0x478 extra draw / +0x47C hit filter function indexes.
     pub update: i32,
     pub draw: i32,
     pub hit: i32,
+    // Port-only hit counter.
     pub hits: u32,
+    // +0x2B0 laser trail, 32 × f32[3] (x −999 = unused), and +0x46A its length n (14 §4).
     pub trail: [[f32; 3]; 32],
     pub trail_n: i32,
 }
 
+// 14 §4 / §6: 3 slots (09 said 4).
 pub const LASER_SLOTS: usize = 3;
 
 // Player laser slot (+0xE2A38 Timer + bullet, entry at +0xE2A80; 14 §4).
@@ -78,11 +104,12 @@ pub struct LaserSlot {
     pub entry: Option<ShotEntry>,
 }
 
+// Remilia anchor offsets, orbit speeds (rad/frame) and start angles by index (14 §3, §3.2).
 const REMILIA_ANCHOR: [[f32; 2]; 4] =
     [[-30.0, -16.0], [-10.0, -32.0], [10.0, -32.0], [30.0, -16.0]];
 const REMILIA_SPIN: [f32; 4] = [PI / 120.0, -PI / 90.0, PI / 90.0, -PI / 120.0];
 const REMILIA_ORBIT: [f32; 4] = [0.0, PI, 0.0, PI];
-// Youmu facing target by direction code 1–8 (away from the motion).
+// Youmu facing target by direction code 1–8, pointing away from the motion (14 §3.3).
 const FACING: [f32; 8] = [
     FRAC_PI_2,
     -FRAC_PI_2,
@@ -95,6 +122,7 @@ const FACING: [f32; 8] = [
 ];
 
 impl Player {
+    // Youkai option set of a team and its slot count (14 §3 table).
     fn youkai_set(&self) -> (OptKind, usize) {
         match crate::sht::team(self.shot_type) {
             0 => (OptKind::Yukari, 1),
@@ -104,7 +132,7 @@ impl Player {
         }
     }
 
-    // A new option starts in state 1; its calc fn initialises it on the next update.
+    // A new option starts in state 1; its calc fn initialises it on the next update (09 §5).
     fn set_option(&mut self, k: usize, kind: OptKind) {
         let state = if kind == OptKind::None { 0 } else { 1 };
         self.options[k] = Opt {
@@ -115,6 +143,7 @@ impl Player {
         };
     }
 
+    // Unfocus: state 3 with timer Set(0) (14 §3).
     fn remove_option(&mut self, k: usize) {
         let o = &mut self.options[k];
         if o.state != 0 && o.state != 3 {
@@ -123,7 +152,7 @@ impl Player {
         }
     }
 
-    // Solos get their set at load (14 §3).
+    // Solos get their set at load (09 §5, 14 §3).
     pub fn spawn_options(&mut self, _anm: &mut AnmManager, _solo: bool) {
         match self.shot_type {
             5 => self.set_option(0, OptKind::Yukari),
@@ -135,7 +164,7 @@ impl Player {
         }
     }
 
-    // Teams: focus rewrites all 4 slots from the youkai table; unfocus sends the youkai options away and
+    // Teams (14 §3): focus rewrites all 4 slots from the youkai table; unfocus sends the youkai options away and
     // gives team 3 Youmu's half in slot 2 (trail reset to the player).
     pub fn swap_options(&mut self, _anm: &mut AnmManager, f: u8) {
         let (kind, n) = self.youkai_set();
@@ -151,6 +180,7 @@ impl Player {
         }
     }
 
+    // Calc-fn init per kind (14 §3, §3.1–§3.3): script, start position / anchor, orbit, facing.
     fn init_option(&mut self, anm: &mut AnmManager, k: usize) {
         let p = self.pos;
         let trail = self.trail[15];
@@ -224,13 +254,14 @@ impl Player {
                 };
                 if o.sub < 3 {
                     smooth(o, [px, (py - 96.0).max(32.0)]);
-                    // SPEC-GAP: a sub-0 start move takes precedence over the attack test (golden scan f1463).
+                    // SPEC-GAP: 14 §3.1 runs the animation test after the attack test always; port: sub-0 start only.
                     let starting = o.sub == 0 && o.vel[0] != 0.0;
                     if shooting && aimed.is_some() && t >= 10 && !starting {
                         o.vm.pending_interrupt = 3;
                         o.sub = 3;
                     } else {
                         aimed = None;
+                        // Animation test (14 §3.1): scale.x negative = mirrored while moving right.
                         let vx = o.vel[0];
                         let mirror = |o: &mut Opt, neg: bool| {
                             o.vm.scale[0] = if neg {
@@ -265,6 +296,7 @@ impl Player {
                         o.vm.flags |= anmvm::F_SCALE_DIRTY;
                     }
                 } else {
+                    // Sub 3 attack: chase the aimed enemy's final pos + (0, 32), y ≥ 32.
                     match aimed {
                         Some(_) if shooting || shot_held => {
                             smooth(o, [aimed_pos[0], (aimed_pos[1] + 32.0).max(32.0)])
@@ -277,6 +309,7 @@ impl Player {
                     }
                 }
             }
+            // While bombing the bomb moves option 0 (14 §2.3).
             OptKind::Alice => {
                 if !bombing || leaving {
                     o.pos = [px, py - 32.0, 0.0];
@@ -286,6 +319,7 @@ impl Player {
                 if t >= 12 {
                     o.angle += REMILIA_SPIN[k];
                 }
+                // Solo (14 §3.2): colour by focus, anchor follows only while unfocused, sparkle 0x2F.
                 if o.kind == OptKind::RemiliaSolo {
                     let c = if unfocused { 0xFF80FFFFu32 } else { 0xFFFF8080 };
                     o.vm.color = c.to_le_bytes();
@@ -314,12 +348,14 @@ impl Player {
                 o.anchor[1] += (trail[1] - o.anchor[1]) * 0.05;
                 let d = polar(o.angle, 8.0);
                 o.pos = [o.anchor[0] + d[0], o.anchor[1] + d[1], 0.0];
+                // Team half always tracks; solo tracks only unfocused (14 §3.3).
                 let tracks = o.kind == OptKind::YoumuHalf || unfocused;
                 if o.kind == OptKind::YoumuSolo {
                     o.vm.color = if unfocused { 0xFFFFFFFFu32 } else { 0xFFFF8080 }.to_le_bytes();
                 }
                 if tracks && (1..=8).contains(&dir) {
                     let mut target = FACING[dir as usize - 1];
+                    // Shift the target by 2π toward facing; ease by 0.07 within π/2, else snap.
                     if (o.facing - target).abs() > PI {
                         target += if target < o.facing {
                             2.0 * PI
@@ -344,6 +380,7 @@ impl Player {
         }
     }
 
+    // Generic option loop in Player_Move (09 §5, 14 §3): calc fn, then VM run and timer tick every frame.
     pub fn update_options(&mut self, anm: &mut AnmManager, shot_held: bool) {
         let gs = anm.speed;
         for k in 0..4 {
@@ -390,6 +427,8 @@ impl Player {
         }
     }
 
+    // Shot origin: 0 player, k = option k−1 (09 §2.1 +0x20).
+    // SPEC-GAP: a free option falls back to the player position; 09 §4.3 does not say.
     fn origin_pos(&self, origin: i16) -> [f32; 3] {
         match origin {
             1..=4 => {
@@ -400,7 +439,7 @@ impl Player {
         }
     }
 
-    // Shot timer (0x451500, 09 §4.2).
+    // Shot timer (0x451500, 09 §4.2): fires on frames where the timer value changed; t > 19 → −1.
     pub fn update_shot_timer(&mut self, anm: &mut AnmManager, inp: &input::Input) {
         let special = self.bombing && self.bomb.index == 4;
         if self.frames >= 20 && self.shot_timer.cur >= 0 && !special {
@@ -421,13 +460,14 @@ impl Player {
         }
     }
 
+    // Bomb levels 6 / 7 for shot 2 (youkai bomb) and 9 once the bomb timer ≥ 60 (09 §2.1).
     fn forced_level(&self) -> Option<usize> {
         let typed = (self.shot_type == 2 && self.bomb.index & 1 == 1) || self.shot_type == 9;
         (typed && self.bombing && self.bomb.timer.cur >= 60)
             .then_some(if self.bomb.index & 2 != 0 { 7 } else { 6 })
     }
 
-    // Firing (0x450F60, 09 §4.3).
+    // Firing (0x450F60, 09 §4.3): free slots in index order paired with the entries; a used slot advances.
     pub fn fire(&mut self, anm: &mut AnmManager, t: i32) {
         let sht = if self.focus == 1 {
             &self.sht_youkai
@@ -452,6 +492,7 @@ impl Player {
         }
     }
 
+    // Default spawn 0x44FB70 (09 §4.3): z 0.495, VM script = entry script + 10, VM flag 0x2000.
     fn spawn_bullet(&mut self, anm: &mut AnmManager, slot: usize, e: &ShotEntry) {
         if e.sound >= 0 {
             crate::sound::play_at(e.sound as i32, self.pos[0]);
@@ -483,6 +524,7 @@ impl Player {
         self.bullets[slot] = b;
     }
 
+    // Init 0 0x44FD80: fire on phase match.
     fn default_init(&mut self, anm: &mut AnmManager, slot: usize, t: i32, e: &ShotEntry) -> bool {
         if e.interval <= 0 || t % e.interval as i32 != e.phase as i32 {
             return false;
@@ -497,7 +539,7 @@ impl Player {
         b.vel = polar(b.angle, speed);
     }
 
-    // Init functions (table 0x4C7EE0); true when the slot was used.
+    // Init functions (table 0x4C7EE0, 09 §2.1); true when the slot was used.
     fn init_bullet(&mut self, anm: &mut AnmManager, slot: usize, t: i32, e: &ShotEntry) -> bool {
         match e.init {
             1 => {
@@ -513,7 +555,8 @@ impl Player {
                 true
             }
             2 | 3 => !self.bombing && self.default_init(anm, slot, t, e),
-            // Laser 0x44FE20: one live laser per slot; a different entry (level change) ends the old one.
+            // Laser 0x44FE20 (14 §4): one live laser per slot; a different entry (level change) ends the old one.
+            // SPEC-GAP: the GameFlags bit 13 refusal is not tested.
             4 => {
                 let s = (e.phase.max(0) as usize).min(LASER_SLOTS - 1);
                 if self.bombing {
@@ -578,11 +621,12 @@ impl Player {
         }
     }
 
-    // Update functions (table 0x4C7F04); true frees the bullet.
+    // Update functions (table 0x4C7F04, 09 §2.1); true frees the bullet.
     fn bullet_update_fn(&mut self, anm: &mut AnmManager, i: usize) -> bool {
         let tg = self.targets[0];
         let b = &mut self.bullets[i];
         match b.update {
+            // Homing 0x450320 (09 §4.4); the 1e-6 floors are port-only.
             1 => {
                 if b.state == 1
                     && tg[0] > -100.0
@@ -604,6 +648,8 @@ impl Player {
                 b.angle = b.vel[1].atan2(b.vel[0]);
                 false
             }
+            // 0x450580: vy −= Rng_Float × 0.1 + 0.27 (RNG).
+            // SPEC-GAP: the state-1 condition is not in 09 §2.1.
             3 => {
                 if b.state == 1 {
                     b.vel[1] -= anm.rng.next_f32() * 0.1 + 0.27;
@@ -616,7 +662,8 @@ impl Player {
         }
     }
 
-    // Laser update 5 (0x450840): follows option 0, leaves a 32-point trail of damage rectangles.
+    // Laser update 5 (0x450840, 14 §4): follows option 0, leaves a 32-point trail of one-frame damage rects.
+    // SPEC-GAP: the GameFlags bit 13 end condition is not tested.
     fn laser_update(&mut self, i: usize) -> bool {
         let s = self.bullets[i].slot.clamp(0, LASER_SLOTS as i16 - 1) as usize;
         let owned = self.laser_slots[s].owner == Some(i);
@@ -634,6 +681,7 @@ impl Player {
             self.laser_slots[s] = LaserSlot::default();
             return true;
         }
+        // The clamp is a port-only bound for the 32-point trail.
         let n = self.bullets[i].trail_n.clamp(0, 16) as usize;
         for k in 0..n {
             let p = self.bullets[i].trail[2 * k];
@@ -661,7 +709,7 @@ impl Player {
         false
     }
 
-    // Player bullets update (0x451150, 09 §4.4).
+    // Player bullets update (0x451150, 09 §4.4): update fn, move, off-screen (08 §4.3) unless types 4/5, VM, timer.
     pub fn update_bullets(&mut self, anm: &mut AnmManager) {
         let gs = anm.speed;
         for i in 0..MAX_BULLETS {
@@ -690,6 +738,7 @@ impl Player {
                 b.state = 0;
                 continue;
             }
+            // Port-only: a bullet without a script is freed.
             if b.vm.script.is_none() {
                 b.state = 0;
                 continue;
@@ -698,11 +747,12 @@ impl Player {
         }
     }
 
-    // Hit filters (table 0x4C7F24); true skips this hit.
+    // Hit filters (table 0x4C7F24, 09 §2.1); true skips this hit.
     fn hit_filter(&mut self, anm: &mut AnmManager, i: usize, enemy: [f32; 3]) -> bool {
         let spell = self.env.spell;
         let b = &mut self.bullets[i];
         match b.hit {
+            // 0x450C50 explosion: first hit draws the RNG even when the sprite has no size entry.
             1 => {
                 if b.state == 1 {
                     let a = anm.rng.next_f32() * FRAC_PI_2 - 3.0 * PI / 4.0;
@@ -730,6 +780,8 @@ impl Player {
                 }
                 false
             }
+            // 0x450EE0: hit effect every 8th hit, never filters.
+            // SPEC-GAP: the counter (+0xE2A94) and the position (bullet x, enemy y) are not in 09 §2.1.
             2 => {
                 b.hits += 1;
                 let x = b.pos[0];
@@ -788,11 +840,13 @@ impl Player {
                 }
             }
             let b = &mut self.bullets[i];
+            // SPEC-GAP: effect 5 before the VM restart (09 §4.5 has it after); VM pos / flag 0x2000 re-set.
             if !(4..=6).contains(&b.kind) && b.state == 1 {
                 b.state = 2;
                 let pos = b.pos;
                 crate::effect::spawn(anm, 5, pos, 1, 0xFFFFFFFF);
                 let b = &mut self.bullets[i];
+                // Quirk kept (09 §4.5): rotation z survives the VM restart.
                 let rot = b.vm.rotation[2];
                 anm.set_script(&mut b.vm, ANM_SLOT, (b.script + 11).max(0) as usize);
                 b.vm.rotation[2] = rot;
@@ -808,6 +862,7 @@ impl Player {
         // Only the accumulator add is capped at 50 (09 §4.5).
         *acc += shot.min(50);
         let mut dmg = shot;
+        // Damage areas: life % period == 0 (period > 0 test port-only); dealt total capped by max.
         for a in self.damage_areas.iter_mut().filter(|a| a.active) {
             if a.period > 0 && a.life % a.period != 0 || !a.contains([pos[0], pos[1]], half) {
                 continue;
@@ -822,6 +877,7 @@ impl Player {
             if self.bombing {
                 *by_bomb = true;
             }
+            // Effect 3 every 4th area hit, areas with +0x3D = 0 only (13 §2.6).
             if !a.no_spark {
                 self.spark_counter = self.spark_counter.wrapping_add(1);
                 if self.spark_counter & 3 == 0 {
@@ -867,7 +923,7 @@ impl Player {
         }
     }
 
-    // Trail draw 0x450AD0: every second trail point, alpha fading from 3/4 of the VM alpha.
+    // Trail draw 0x450AD0 (14 §4): every second trail point, alpha fading from 3/4 of the VM alpha.
     fn draw_trail(anm: &mut AnmManager, gfx: &mut Gfx, b: &mut PBullet, youkai_max: bool) {
         let n = b.trail_n.max(1);
         let (alpha, colour) = (b.vm.color[anmvm::A], b.vm.color);

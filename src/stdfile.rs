@@ -1,36 +1,49 @@
+//! .std stage background file parser (06 §1).
+
 use anyhow::{Context, Result, ensure};
 
 pub type Vec3 = [f32; 3];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum QuadKind {
+    // Type 0, 0x1C bytes: pos relative to the object origin; w/h 0 = keep sprite size (06 §1.2).
     Sprite { pos: Vec3, w: f32, h: f32 },
+    // Type 1, 0x24 bytes: points A/B; w 0 = sprite width (06 §1.2, §11.3).
     Ribbon { a: Vec3, b: Vec3, w: f32 },
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Quad {
+    // +4 ANM script index in stgNbg.anm.
     pub script: i16,
+    // +6 VM index, assigned in load order (06 §2 step 3).
     pub vm: usize,
     pub kind: QuadKind,
 }
 
 #[derive(Clone, Debug)]
+// Object record (06 §1.1).
 pub struct Object {
     pub id: i16,
+    // +2 layer 0..3.
     pub layer: u8,
+    // +3 runtime: bit 0 script running, bit 1 drawn this frame.
     pub flags: u8,
+    // +4 origin.
     pub pos: Vec3,
+    // +0x10 bounding-box extent.
     pub size: Vec3,
     pub quads: Vec<Quad>,
 }
 
+// 16-byte instance record; the +2 field (always 256) is never read (06 §1.3).
 #[derive(Clone, Copy, Debug)]
 pub struct Instance {
     pub object: usize,
     pub pos: Vec3,
 }
 
+// 20-byte script record: time in frames (−1 terminates), opcode, 3 args (06 §1.4).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Record {
     pub time: i32,
@@ -52,7 +65,9 @@ impl Record {
 
 #[derive(Clone, Debug)]
 pub struct Std {
+    // +2 total quads = VMs allocated.
     pub quad_count: usize,
+    // +0x290 BGM names for music slots 0..3 (" " = none).
     pub bgm: [String; 4],
     pub objects: Vec<Object>,
     pub instances: Vec<Instance>,
@@ -120,6 +135,7 @@ pub fn parse(b: &[u8]) -> Result<Std> {
                     b: v3at(b, q + 0x14)?,
                     w: f32at(b, q + 0x20)?,
                 },
+                // SPEC-GAP: other non-negative quad types do not occur (06 §1.2); the port skips them.
                 _ => {
                     q += size;
                     continue;
@@ -173,6 +189,7 @@ pub fn parse(b: &[u8]) -> Result<Std> {
         o += 20;
     }
     Ok(Std {
+        // Port-only guard against a header count below the quads found.
         quad_count: quad_count.max(vm),
         bgm,
         objects,
