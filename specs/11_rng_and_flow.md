@@ -101,7 +101,7 @@ Pause must not consume RNG: the only RNG use on pausing is the checksum update, 
 | +0x00 | 0x160F508 | ptr | dummy block (heap jitter, freed immediately) | VERIFIED |
 | +0x04 | 0x160F50C | ptr | copy of the 60-byte config (0x17CE870); +0x1C = starting lives, +0x25 = slow-mode option | VERIFIED copy / INFERRED names |
 | +0x08 | 0x160F510 | ptr | stats block (0xE4 bytes, §5) | VERIFIED |
-| +0x2C | 0x160F534 | u8 | freeze flag (HUD calc and timers skip while ≠ 0; set during player death) | VERIFIED use |
+| +0x2C | 0x160F534 | u8 | freeze flag (HUD calc, enemy timers, bullet movement, player calc, spell calc skip while ≠ 0). Only writer that sets it: ECL native 26 (= arg). Cleared by `Player_Die` and `GameManager_StageStart` (answers_impl20 Notes) | VERIFIED |
 | +0x2D | 0x160F535 | u8 | slow-mode skipped frame (input is OR-accumulated by the Supervisor while set) | VERIFIED |
 | +0x30 | 0x160F538 | u32 | difficulty 0 Easy, 1 Normal, 2 Hard, 3 Lunatic, 4 Extra | VERIFIED (tables) / names INFERRED |
 | +0x34 | 0x160F53C | u32 | difficulty mask (1 << d, Extra = 0xF) | VERIFIED |
@@ -361,7 +361,7 @@ sets flags bits 5–6 = 2 (stages 1–5); stages 6A/6B/Extra are triggered by ms
 | 0x30 | i32 | point items total (extend counter) | VERIFIED |
 | 0x34 | i32 | extends obtained (−1 = disabled, stages 6A/6B/Ex after op 9) | VERIFIED |
 | 0x38 | i32 | next extend threshold | VERIFIED |
-| 0x3C | i32 | time this stage (AddTime; clamps at 0) | VERIFIED |
+| 0x3C | i32 | time this stage. Reset to 0 at every stage start (§3.1). `GameMgr_AddTime` 0x418220 (n < 0 and time < −n → 0, else time += n, +0x44 += n, GM+0x3DAAC += n, checksum). Writers: +1 per collected time orb; card capture reward (Spell_End stores it in g_Gui +0x10, paid by `Spell_Calc` 130 frames later or by the next `Spell_Start`); −15 per frame of the death-bomb window (`Player_DyingUpdate`); at the death itself −time/10 if time ≤ 5000, else −500 (answers_impl20 §Q1) | VERIFIED |
 | 0x40 | i32 | time threshold for the clock advance | VERIFIED |
 | 0x44 | i32 | time added this stage (parity used by AddTime) | VERIFIED |
 | 0x48..0x60 | i32×7 | decoys (random 6543..106542) | VERIFIED |

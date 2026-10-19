@@ -193,7 +193,7 @@ static void sess_scan(int pass) {
 
 /* TH08_BOSS="P0 P1" (RE-Q19): per calc row with poll in [P0,P1] in scene 2 while any enemy has flag A bit 1 (boss),
    G = globals (spell flags/bonus/timer, bullets, player state/timer, HUD boss flag), B = each boss enemy, T = its threads */
-static int g_boss0 = -1, g_boss1 = -1; static FILE *g_bossf;
+static int g_boss0 = -1, g_boss1 = -1; static int g_srs0 = -1, g_srs1 = -1; static FILE *g_bossf;
 static void sess_boss(int pass) {
     if (g_boss0 < 0 || (int)g_poll_n < g_boss0 || (int)g_poll_n > g_boss1 || U32(G_SCENE) != 2 || U32(G_LOADING)) return;
     int any = 0;
@@ -208,6 +208,11 @@ static void sess_boss(int pass) {
             g_poll_n, pass, U32(G_GMFRAME), U16(G_RNG), U32(G_SPELL), (int)U32(G_SPELL + 0xFC), (int)U32(G_SPELL + 8),
             (int)U32(G_SPELL + 0x108 + 8), (int)U32(G_SPELL + 0x114 + 8), U32(G_BULLETS), en, U8(P), (int)U32(0x18B89EC + 8),
             (int)U32(0x17D6ED4), U8(0x160F428 + 0x2C), U32(G_BOSS), U32(G_GMFLAGS), U32(0x1653648 + 0x17B08C));
+    { uint32_t st = U32(G_STATS); int orbs = 0; uint32_t it = U32(0x1653648 + 0x17B088); int n = 0;
+      while (it && n < 3000) { if (U8(it + 0x2D4) == 7) orbs++; it = U32(it + 0x2DC); n++; }
+      { uint32_t cur = U32(0x1653648 + 0x17ADA4); fprintf(o, "C itemcursor %u busy %d\n", cur, cur < 0x830 ? (int)U8(0x1653648 + cur * 0x2E4 + 0x2D5) : -1); }
+      fprintf(o, "L time %d thr %d pend %d orbs %d diff %u stage %u\n", st >= 0x10000 ? (int)U32(st + 0x3C) : -1, st >= 0x10000 ? (int)U32(st + 0x40) : -1,
+              (int)U32(G_SPELL + 0x10), orbs, U32(0x160F538), U32(G_STAGE)); }
     uint32_t subs = U32(0x4ECCB8 + 4);
     for (int j = 0; j < 480; j++) {
         uint32_t e = 0x577F20 + 0x53D0 + j * 0x53D0;
@@ -255,6 +260,10 @@ static void sess_row(int pass) {
             in_demo() ? (int)U8(G_DEMOIDX) : -1);
     g_rows_since_present++;
     if (pass >= 0) { sess_scan(pass); sess_boss(pass); }
+    if (g_srs0 >= 0) {
+        if (g_rs_on && g_rsf) { fprintf(g_rsf, "R poll %u frame %u ctr %u rng %04x bullets %u\n", g_poll_n, U32(G_GMFRAME), g_rng_calls, U16(G_RNG), U32(G_BULLETS)); fflush(g_rsf); }
+        g_rs_on = (int)g_poll_n + 1 >= g_srs0 && (int)g_poll_n + 1 <= g_srs1;
+    }
 }
 
 static int g_spass;
@@ -369,6 +378,7 @@ static int sess_init(void) {
     if (in) snprintf(g_sess_in, sizeof g_sess_in, "%s", in);
     if (ch && atoi(ch) > 0) g_sess_chunk = atoi(ch);
     { const char *sc = getenv("TH08_SCAN"); if (sc) sscanf(sc, "%d %d", &g_scan0, &g_scan1); }
+    { const char *sc = getenv("TH08_RNGSITE"); if (sc) sscanf(sc, "%d %d", &g_srs0, &g_srs1); }
     { const char *sc = getenv("TH08_BOSS"); if (sc) sscanf(sc, "%d %d", &g_boss0, &g_boss1); }
     CreateDirectoryA(g_sess_out, NULL);
     g_log = sess_open(g_sess_out, "probe_log.txt", "w");

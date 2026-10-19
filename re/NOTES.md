@@ -451,3 +451,12 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - IMPL19 Q3: var 10096 = chain child count (demo 3: n1 = 5 − 4 = 1; port 0 → +12). Demo 2: child sub15 wait =
   (Next32&0x7FFFFFFF)%30+10 = 30 (draws E72F,2F30, first = high) → shot 2279 (spawn-frame double run); port shot 2261.
 - WRITTEN: specs/answers_boss_phases.md, answers_impl19.md §Q3 completed; 07 §4.3/§5.4/§6/§10.1/§10.2/§10.3; TOOLING §13.
+
+# RE-Q20 (2026-10-19) — IMPL20 questions — DONE
+- Var 10098 = 2 iff stats+0x3C time + g_Gui+0x10 pending capture reward + live type-7 orbs ≥ stats+0x40 TIME_THR.
+  fullrun_noclip Normal: st1 2062+622+1 ≥ 2500; st2 5304+0+512 < 7200 → skipped. Time writers: orb +1, capture reward,
+  −15/frame death-bomb window, death −min(time/10,500).
+- Death never clears boss table (only op127 −1 / Enemy_Free); mode 0 = alive bit only. HUD byte off in modes 0/1/3.
+- Death latch: single clear point after damage, life > 0. Screen box: sprite +0x34/+0x30 unscaled.
+- Row 6264: orb spawned (4 draws); original 3 hit sparks (12) vs port 4. Probe: L/C lines, TH08_RNGSITE (session).
+- Notes: Msg_Run is in Hud_Calc prio 15; freeze byte set only by native 26. Runs re/work/runs/q20, data specs/data/q20.

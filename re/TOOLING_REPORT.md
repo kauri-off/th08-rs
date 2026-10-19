@@ -320,3 +320,7 @@ Test keys: `re/work/runs/q17m/noclip/keys_noclip.txt`. Font note (RE-Q17M): wine
   dump block after `== calc for frame N` is the state after calc N; run the port's `target/release/demosync` with
   `TH08_DIR=<game dir>` and stdout+stderr interleaved).
 - Note: probe_rng.txt column 2 is the first return address, not the drawn value; recompute values from the R-line state.
+- (RE-Q20) boss.txt also has `L` (stage time, threshold, pending card time reward g_Gui+0x10, live time-orb count,
+  difficulty, stage) and `C` (item search cursor, busy byte of its slot). `TH08_RNGSITE="P0 P1"` (session mode): RNG
+  call chains for polls P0..P1 → `probe_rng.txt` in the game dir (`re/work/sessplay/game`, copy it out), `R poll …` rows;
+  symbolise with `re/tools/rngsites.py probe_rng.txt -o`.

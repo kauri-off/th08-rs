@@ -1,0 +1,54 @@
+G poll 9400 pass 0 frame 9160 rng 3111 spf 00000805 spbonus 6707010 spid 7 sptimer 1187 2220 bul 292 en 2 pst 3 pt 36 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 2061 thr 2500 pend 0 orbs 1 diff 1 stage 0
+B 1 sub 50 ip 184 clk 4 wait 0 dep 2 life 1 max 13000 hud 1800 thr -1 -1 -1 -1 tsub 44 0 0 0 tmo -1 tmosub 50 dsub -1 tim 1033 dmgt 0 fl 11092003 00000034 pos 4384419a 42a58c49 bon 20 slot 0 int -1
+G poll 9401 pass 0 frame 9161 rng acbb spf 00000805 spbonus 6707010 spid 7 sptimer 1186 2220 bul 292 en 2 pst 3 pt 35 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 2061 thr 2500 pend 0 orbs 1 diff 1 stage 0
+B 1 sub 50 ip 1cc clk 5 wait 0 dep 2 life 1 max 13000 hud 1800 thr -1 -1 -1 -1 tsub 44 0 0 0 tmo -1 tmosub 50 dsub -1 tim 1034 dmgt 0 fl 11092003 00000034 pos 4384451f 42a58c2b bon 20 slot 0 int -1
+G poll 9402 pass 0 frame 9162 rng 756c spf 00000805 spbonus 6707010 spid 7 sptimer 1185 2220 bul 292 en 2 pst 3 pt 34 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 2061 thr 2500 pend 0 orbs 1 diff 1 stage 0
+B 1 sub 50 ip 214 clk 6 wait 0 dep 2 life 1 max 13000 hud 1800 thr -1 -1 -1 -1 tsub 44 0 0 0 tmo -1 tmosub 50 dsub -1 tim 1035 dmgt 0 fl 11092003 00000034 pos 43844801 42a58c13 bon 20 slot 0 int -1
+G poll 9403 pass 0 frame 9163 rng 24a5 spf 00000805 spbonus 6707010 spid 7 sptimer 1184 2220 bul 292 en 2 pst 3 pt 33 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 2061 thr 2500 pend 0 orbs 1 diff 1 stage 0
+B 1 sub 50 ip 25c clk 7 wait 0 dep 2 life 1 max 13000 hud 1800 thr -1 -1 -1 -1 tsub 44 0 0 0 tmo -1 tmosub 50 dsub -1 tim 1036 dmgt 0 fl 11092003 00000034 pos 43844a3e 42a58c00 bon 20 slot 0 int -1
+G poll 9404 pass 0 frame 9164 rng 0d84 spf 00000805 spbonus 6707010 spid 7 sptimer 1183 2220 bul 292 en 2 pst 3 pt 32 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 2061 thr 2500 pend 0 orbs 1 diff 1 stage 0
+B 1 sub 50 ip 2a4 clk 8 wait 0 dep 2 life 1 max 13000 hud 1800 thr -1 -1 -1 -1 tsub 44 0 0 0 tmo -1 tmosub 50 dsub -1 tim 1037 dmgt 0 fl 11092003 00000034 pos 43844bd8 42a58bf2 bon 20 slot 0 int -1
+G poll 9405 pass 0 frame 9165 rng 6360 spf 00000805 spbonus 6707010 spid 7 sptimer 1182 2220 bul 292 en 2 pst 3 pt 31 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 2061 thr 2500 pend 0 orbs 1 diff 1 stage 0
+B 1 sub 50 ip 2ec clk 9 wait 0 dep 2 life 1 max 13000 hud 1800 thr -1 -1 -1 -1 tsub 44 0 0 0 tmo -1 tmosub 50 dsub -1 tim 1038 dmgt 0 fl 11092003 00000034 pos 43844ccd 42a58bea bon 20 slot 0 int -1
+G poll 9406 pass 0 frame 9166 rng b4ec spf 00000805 spbonus 6707010 spid 7 sptimer 1181 2220 bul 292 en 2 pst 3 pt 30 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 2061 thr 2500 pend 0 orbs 1 diff 1 stage 0
+B 1 sub 50 ip 334 clk 10 wait 0 dep 2 life 1 max 13000 hud 1800 thr -1 -1 -1 -1 tsub 44 0 0 0 tmo -1 tmosub 50 dsub -1 tim 1039 dmgt 0 fl 11090003 00000034 pos 43844d1f 42a58be7 bon 20 slot 0 int -1
+G poll 9408 pass 0 frame 9168 rng 457d spf 00000304 spbonus 6715010 spid 7 sptimer 1179 2220 bul 292 en 2 pst 3 pt 28 bomb 0 hudboss 1 boss0 005826c0 gf 00010084 itm 0
+L time 2062 thr 2500 pend 622 orbs 1 diff 1 stage 0
+B 1 sub 37 ip c0 clk 1 wait 0 dep 0 life 1600 max 1600 hud 1600 thr -1 -1 -1 -1 tsub 0 0 0 0 tmo -1 tmosub 0 dsub -1 tim 0 dmgt 0 fl 4008005f 00000004 pos 43400000 43000000 bon 0 slot 0 int -1
+G poll 9409 pass 0 frame 9169 rng 7b27 spf 00000304 spbonus 6715010 spid 7 sptimer 1178 2220 bul 292 en 2 pst 3 pt 27 bomb 0 hudboss 1 boss0 005826c0 gf 00010084 itm 0
+L time 2062 thr 2500 pend 622 orbs 1 diff 1 stage 0
+B 1 sub 37 ip c0 clk 1 wait 0 dep 0 life 1600 max 1600 hud 1600 thr -1 -1 -1 -1 tsub 0 0 0 0 tmo -1 tmosub 0 dsub -1 tim 0 dmgt 0 fl 4008005f 00000004 pos 43400000 43000000 bon 0 slot 0 int -1
+G poll 9410 pass 0 frame 9170 rng 7b27 spf 00000304 spbonus 6715010 spid 7 sptimer 1177 2220 bul 292 en 2 pst 3 pt 26 bomb 0 hudboss 1 boss0 005826c0 gf 00010084 itm 0
+L time 2062 thr 2500 pend 622 orbs 1 diff 1 stage 0
+B 1 sub 37 ip c0 clk 1 wait 0 dep 0 life 1600 max 1600 hud 1600 thr -1 -1 -1 -1 tsub 0 0 0 0 tmo -1 tmosub 0 dsub -1 tim 0 dmgt 0 fl 4008005f 00000004 pos 43400000 43000000 bon 0 slot 0 int -1
+G poll 25478 pass 0 frame 14192 rng 711d spf 00000805 spbonus 9210350 spid 26 sptimer 681 2220 bul 217 en 2 pst 3 pt 37 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 5145 thr 7200 pend 0 orbs 671 diff 1 stage 1
+B 1 sub 62 ip 13c clk 3 wait 0 dep 3 life 1 max 19000 hud 2100 thr -1 -1 -1 -1 tsub 51 44 0 0 tmo -1 tmosub 62 dsub -1 tim 1539 dmgt 0 fl 11892003 00000034 pos 4316ef9b 4294efce bon 12 slot 0 int -1
+G poll 25479 pass 0 frame 14193 rng 2a6c spf 00000805 spbonus 9210350 spid 26 sptimer 680 2220 bul 216 en 2 pst 3 pt 36 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 5156 thr 7200 pend 0 orbs 660 diff 1 stage 1
+B 1 sub 62 ip 184 clk 4 wait 0 dep 3 life 1 max 19000 hud 2100 thr -1 -1 -1 -1 tsub 51 44 0 0 tmo -1 tmosub 62 dsub -1 tim 1540 dmgt 0 fl 11892003 00000034 pos 4316eb51 4294e18c bon 12 slot 0 int -1
+G poll 25480 pass 0 frame 14194 rng 9879 spf 00000805 spbonus 9210350 spid 26 sptimer 679 2220 bul 216 en 2 pst 3 pt 35 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 5176 thr 7200 pend 0 orbs 640 diff 1 stage 1
+B 1 sub 62 ip 1cc clk 5 wait 0 dep 3 life 1 max 19000 hud 2100 thr -1 -1 -1 -1 tsub 51 44 0 0 tmo -1 tmosub 62 dsub -1 tim 1541 dmgt 0 fl 11892003 00000034 pos 4316e7b0 4294d57b bon 12 slot 0 int -1
+G poll 25481 pass 0 frame 14195 rng 1e81 spf 00000805 spbonus 9210350 spid 26 sptimer 678 2220 bul 215 en 2 pst 3 pt 34 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 5200 thr 7200 pend 0 orbs 616 diff 1 stage 1
+B 1 sub 62 ip 214 clk 6 wait 0 dep 3 life 1 max 19000 hud 2100 thr -1 -1 -1 -1 tsub 51 44 0 0 tmo -1 tmosub 62 dsub -1 tim 1542 dmgt 0 fl 11892003 00000034 pos 4316e4b8 4294cb9c bon 12 slot 0 int -1
+G poll 25482 pass 0 frame 14196 rng af32 spf 00000805 spbonus 9210350 spid 26 sptimer 677 2220 bul 214 en 2 pst 3 pt 33 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 5221 thr 7200 pend 0 orbs 595 diff 1 stage 1
+B 1 sub 62 ip 25c clk 7 wait 0 dep 3 life 1 max 19000 hud 2100 thr -1 -1 -1 -1 tsub 51 44 0 0 tmo -1 tmosub 62 dsub -1 tim 1543 dmgt 0 fl 11892003 00000034 pos 4316e269 4294c3ef bon 12 slot 0 int -1
+G poll 25483 pass 0 frame 14197 rng 722f spf 00000805 spbonus 9210350 spid 26 sptimer 676 2220 bul 214 en 2 pst 3 pt 32 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 5240 thr 7200 pend 0 orbs 576 diff 1 stage 1
+B 1 sub 62 ip 2a4 clk 8 wait 0 dep 3 life 1 max 19000 hud 2100 thr -1 -1 -1 -1 tsub 51 44 0 0 tmo -1 tmosub 62 dsub -1 tim 1544 dmgt 0 fl 11892003 00000034 pos 4316e0c2 4294be73 bon 12 slot 0 int -1
+G poll 25484 pass 0 frame 14198 rng 2979 spf 00000805 spbonus 9210350 spid 26 sptimer 675 2220 bul 212 en 2 pst 3 pt 31 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 5273 thr 7200 pend 0 orbs 543 diff 1 stage 1
+B 1 sub 62 ip 2ec clk 9 wait 0 dep 3 life 1 max 19000 hud 2100 thr -1 -1 -1 -1 tsub 51 44 0 0 tmo -1 tmosub 62 dsub -1 tim 1545 dmgt 0 fl 11892003 00000034 pos 4316dfc5 4294bb29 bon 12 slot 0 int -1
+G poll 25485 pass 0 frame 14199 rng 0a02 spf 00000805 spbonus 9210350 spid 26 sptimer 674 2220 bul 210 en 2 pst 3 pt 30 bomb 0 hudboss 0 boss0 005826c0 gf 00010004 itm 0
+L time 5304 thr 7200 pend 0 orbs 512 diff 1 stage 1
+B 1 sub 62 ip 334 clk 10 wait 0 dep 3 life 1 max 19000 hud 2100 thr -1 -1 -1 -1 tsub 51 44 0 0 tmo -1 tmosub 62 dsub -1 tim 1546 dmgt 0 fl 11890003 00000034 pos 4316df70 4294ba10 bon 12 slot 0 int -1

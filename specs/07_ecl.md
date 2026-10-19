@@ -323,7 +323,7 @@ own argument slot in the loaded file** (shared by all enemies; e.g. op 5 with a 
 | 10094 / 10095 | ctx floats | float | |
 | 10096 | number of children currently linked in the chain: for a chain root its own count, for a chained child its root's count, 0 if not chained (`Enemy_ChainChildCount`, walks the +8 links; VERIFIED code + demo 3 runtime, answers_impl19 §Q3 RE-Q19) | — | |
 | 10097 | player mode byte (0x17D5EF8+5) | — | |
-| 10098 | (int only) 2 if stats time + spell counter (0x453CC0) + item counter (0x4417E0) **≥** `GameMgr_GetTimeThreshold`, else 0 (stage 1 boss sub37: the final spell is skipped with op 1 unless 10098 ≥ 2; VERIFIED code, fullrun_noclip took the final spell) | — | |
+| 10098 | (int only) **2 if a + b + c ≥ d, else 0** — a = stage time (stats +0x3C), b = pending time reward of a captured card not yet paid (spell object g_Gui +0x10), c = number of time-orb items (type 7) currently in the item list, d = stage time threshold (stats +0x40 = `TIME_THR`[stage][difficulty], 11 §3.1). Read by the Last Spell host sub of each stage boss (ecldata1–5: `≠ 2 → delete`). VERIFIED code + runtime (answers_impl20 §Q1) | — | |
 | 10099 | spell-card state (bomb-allowed / running) | — | |
 | 10100 | (int only) spell-card timer | — | |
 
@@ -349,7 +349,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 32 / 33 | fsin / fcos | W a, f b | a = sin b / cos b | 136 / 131 |
 | 34 | fatan2 | W a, f x1, y1, x2, y2 | a = atan2(y2 − y1, x2 − x1) | 38 |
 | 35 | flerp | W a, f b, f c, f d | a = (b − c)·d + c | 0 |
-| 36 | interp | raw var, i dur, i fn, i mode, f a, b, c, d | start interpolation slot (§5.6) | 97 |
+| 36 | interp | target var id stored as a **float** (e.g. 10016.0; the raw dword is kept in the slot and compared as a float, all 37 uses), i dur, i fn, i mode, f a, b, c, d | start interpolation slot (§5.6) | 97 |
 | 37 | normangle | W a | a = wrap(a) into [−π, π] | 1708 |
 | 38 | polar | W x, W y, f ang, f r | x = cos(wrap ang)·r; y = sin(wrap ang)·r | 110 |
 | 39 | fdist | W a, f x1, y1, x2, y2 | a = √((x1−x2)² + (y1−y2)²) | 2 |
@@ -674,13 +674,16 @@ if chained; `Enemy_KillChildren(e, with drops)`; gauge ±200 (below).
 |---|---|
 | 0 | add score; enemy dead (alive cleared); aura told to end (interrupt 3); then as "0–1" and "0–2" |
 | 1 | add score; flags A bit 23 set, bits 2, 3, 6 cleared (stays alive, e.g. scripted death animation); then as "0–1" and "0–2" |
-| 0–1 | if boss: HUD boss display off (Hud +0x2C := 0; the boss table entry is **not** cleared — op 127 −1 does that) and op 128 effects released |
+| 0–1 | if boss: HUD boss display off (Hud +0x2C := 0) and op 128 effects released. No death mode clears the boss table entry (0xF54CC0[slot]) or flags A bit 1: only op 127 −1 and `Enemy_Free` (op 1 delete, off-screen free) do. Mode 0 clears only the alive bit (no `Enemy_Free`), so a mode-0 boss stays in the boss table; timeline op 10 still stops waiting because it also tests the alive bit (answers_impl20 §Q2) |
 | 2 | no score; stays alive; only "0–2" |
 | 0–2 | item drops (§10.4); if boss and **no** card active: `BulletMgr_CancelBonus(8000, 1)` + `EnemyMgr_KillAll(8000)`, sum → score + `Hud_ShowBonus`; life := 0; replay-stats word (0x18B8A28)+0xDA \|= 0x20 |
 | 3 | life := 1; flags A bit 3 (loses life) and death-mode bits 20–22 cleared (the latch B bit 3 stays until life > 0 again); HUD boss display off; stats \|= 0x20; death effect e+0x3310 ×3 if ≥ 0; aura interrupt 3; player state 0 → 3 with timer **90**; flags A bits 30 and 31 cleared. No drops, no bullet cancel, no score |
 
-The death latch (flags B bit 3) is cleared at the end of step 6 of any frame where it is set and life > 0 (e.g. after the
-death sub's `set_life`).
+The death latch (flags B bit 3) is set only by the death path above and cleared at one place: in `EnemyMgr_Calc`, right
+after step 6 and before the death test, if the latch is set and life > 0 (VERIFIED 0x42D52x; answers_impl20 §Q3). Any
+way life becomes positive works (op 131, a write to var 10051, a threshold clamp, mode 3's life := 1). The check runs
+only on frames where the enemy's script block runs (not chain-killed, flags A bit 10; not paused by flags B bit 7 or the
+flags A bit 30 bomb/state condition).
 
 Unless bit 10: sfx 2/3, death effects: `Effect_Spawn(e+0x3310, pos, 1)` if that signed
 byte ≥ 0, then `Effect_Spawn(e+0x3311 + 4, pos, 4)` (4 sparks, 4 draws each); then **if the gauge is at human
