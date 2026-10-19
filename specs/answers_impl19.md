@@ -1,5 +1,8 @@
 # Answers to IMPL19 questions (RE-Q18)
 
+Spec sections changed (RE-Q19 addendum, §Q3 completed below):
+- 07 §6 var 10096: number of children linked in the chain (root's count), not the chain depth.
+
 Spec sections changed:
 - 08 §8.5: the power clamp goes through `GameMgr_SetPower` (checksummed); type 4 always calls SetPower and its
   cancel is unconditional.
@@ -96,3 +99,57 @@ poll 614 (lf 48).
 
 ## Notes (no change)
 - Replay fps text and ribbon stale colours: nothing contradicts the rules picked; not re-checked.
+
+## Q3 completed (RE-Q19) — VERIFIED (code + runtime)
+
+New runtime data in `specs/data/q19/`: `demo_enemies_bullets_excerpts.txt` (escan/bscan of demo 2 f2249–2251,
+2278–2280 and demo 3 f1484–1486, 1501), `demo2_f2250_rngsites.txt`, `demo2_port_vs_orig_bullets_f2256-2262.txt`
+(the port's `demosync 2 2255-2262` with `TH08_BDUMP=1`, diffed slot by slot), `demo_probe_cmd.txt`.
+
+### Demo 3 frame 1501 (port 92 vs 80): var 10096 is the chain child count
+- Stage 2 (ecldata2). The parent e1 is sub7. At t 80 it creates 4 `child_follow` sub10 children (spawned on frame
+  1485). Its thread sub8 fires every 32 frames: `n1 = 5 − var10096` ways × `n2 = 3` (Lunatic) aimed bullets.
+- **Var 10096** = `Enemy_ChainChildCount` of the chain: for a root, the number of enemies linked after it (+8 links);
+  for a chained child, its root's count; 0 when the enemy is in no chain. The old spec said "depth in the chain",
+  which is wrong.
+  - With 4 children linked, n1 = 1, so the original fires one 3-bullet stack (the 3 bullets seen at f1501, and again
+    at f1533).
+  - A port that reads 0 here fires 5 × 3 = 15, i.e. **+12**: exactly the difference.
+  - As children die and are unlinked, the parent's fan widens (2, 3, 4, 5 ways).
+- The children fire nothing at f1501 because of their own script, not a gate. sub10 orbits until t 100 and only then
+  starts thread sub9. They are at t 17. No fire gate applies:
+  - the bullet-flag 0x8000 / 0x10000 youkai/human gates (flags 0x203);
+  - the 32 px no-fire radius (the player is ≥ 50 px away).
+
+### Demo 2 frame 2261 (port 0x8c vs 0x8a): a child's first shot comes 18 frames early in the port
+- Diff (port block = after calc, against the original bscan): the port has two extra state-2 bullets.
+  - Slots 156 / 157, at (330.0, 77.2) / (325.8, 77.5), angle 3.06, speeds ≈ 2.86 / 1.67.
+  - Origin ≈ (320, 78) = the child e2.
+  - Everything else is identical.
+- The original fires **the same two bullets in the same slots on frame 2279** (child timer 30), not 2261.
+- Script (ecldata3): parent sub14 spawns `child_rel sub16` on frame 2250. sub16 at t 0 starts thread sub15, which
+  does:
+  1. `imod3 $10000, $10032, 30`;
+  2. `iadd $10000, 10`;
+  3. `wait $10000`;
+  4. then (Lunatic) `bul_fan_aim` n1 1, n2 2, speed 2.9: the 2-bullet aimed stack.
+- Original value of the wait (computed from the logged RNG; the state after the frame's 32 draws is edfe, matching the
+  trace):
+  - The thread's read of var 10032 is draws 9–10 of frame 2250 (`Ecl_GetIntArg` ← `Ecl_Run` ←
+    `EnemyMgr_SpawnFromEcl`), starting from state 47eb.
+  - Next16 returns 0xE72F, then 0x2F30.
+  - `Rng_Next32` = **first draw << 16 | second draw** = 0xE72F2F30.
+  - Var 10032 = that & 0x7FFFFFFF = 0x672F2F30 = 1731145520.
+  - % 30 = 20, + 10 = **wait 30**.
+- Timing rule: the child is in a higher slot than its parent, so on its spawn frame its ECL runs twice. It runs once
+  inside `EnemyMgr_SpawnFromEcl` and once in the slot loop (07 §10.1). The wait therefore loses one extra count on
+  frame 2250, and the shot comes at 2250 + 30 − 1 = **2279**, as observed.
+- The port's shot at 2261 implies a wait of about 12. None of the obvious variants reproduces it:
+  - halves swapped: 23;
+  - no 0x7FFFFFFF mask, unsigned: 38;
+  - no mask, signed C `%`: −8.
+
+  So check the port's evaluation of `imod3` with a random variable as its source. Also check that the spawn-frame
+  double run and the thread's first `wait` decrement both happen.
+- The RNG stays in sync because the draw count is the same; only the value use differs. This is a gameplay
+  divergence: the bullets exist 18 frames early.

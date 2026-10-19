@@ -438,3 +438,16 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - IMPL19 Q1 SetPower checksum (type 4 always); Q2 sprite box inclusive (verified d0 f1720 / d1 f1808); Q4 1 entry/frame +
   decode gaps (selftest1 42 + 6). Q3 open: d3 f1501 original fires 3 from parent e1 only (port likely 4 children too).
 - Spec edits: 07 §10.1/§10.6, 08 §8.5, 09 §3/§7, 11 §3, 12 §2.2/§2.4, 14 §3.1, answers_phase5 row. Symbols +1 (redump not rerun).
+
+# RE-Q19 (2026-10-19) — boss phase transitions + IMPL19 Q3 remainder — DONE
+- Probe: session.inc TH08_BOSS (boss.txt); runs re/work/runs/q19 (b1 = fullrun_noclip polls 3100–11000, 0 trace diffs;
+  demo = escan/bscan/rngsite demos 2/3; port = port demosync dump). Data specs/data/q19. Work game cfg/score/probe_cmd restored (md5 ok).
+- Thresholds checked after Ecl_Run, before damage: switch on the frame after the crossing damage, new sub t0 same frame
+  (re-run repeats move/automove/autofire). Death sub: t0 next frame. Threshold keeps death sub / timer / vars; timeout
+  marks card timed out (0x42BC50) + CancelAll(4), card stays active. Player state 3/70 on boss switch; mode 3 → 90.
+- QUIRK: main stack depth persists in e+0x2CE8; handlers zero only 0x2CEA (reloaded by Ecl_Run) → depth not reset by
+  phase changes (runtime 1, 2, 2). No phase target sub returns.
+- Death mode table fixed (mode 2 no HUD off; mode 3 clears A bit 3, latch stays). Var 10098 direction fixed (≥).
+- IMPL19 Q3: var 10096 = chain child count (demo 3: n1 = 5 − 4 = 1; port 0 → +12). Demo 2: child sub15 wait =
+  (Next32&0x7FFFFFFF)%30+10 = 30 (draws E72F,2F30, first = high) → shot 2279 (spawn-frame double run); port shot 2261.
+- WRITTEN: specs/answers_boss_phases.md, answers_impl19.md §Q3 completed; 07 §4.3/§5.4/§6/§10.1/§10.2/§10.3; TOOLING §13.

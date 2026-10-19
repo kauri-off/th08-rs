@@ -129,7 +129,7 @@ sub-ANM VMs disabled; e+0x3330 = 0.
 | 0x2CA0 / 0x2CA4 | ptr | current context / current stack base |
 | 0x2CA8–0x2CC4 | i32[8] | enemy int vars 10008–10015 |
 | 0x2CC8–0x2CE4 | f32[8] | enemy float vars 10024–10031 |
-| 0x2CE8 / 0x2CEA | i16 | saved main stack depth / current depth |
+| 0x2CE8 / 0x2CEA | i16 | main context's stack depth (persistent) / working depth of the context being run (§5.4: `Ecl_Run` reloads 0x2CEA from 0x2CE8 at entry; answers_boss_phases §3) |
 | 0x2CEE | i16 | death sub (op 130), −1 none |
 | 0x2CF0 | i16[32] | interrupt table: sub id per interrupt index (op 126) |
 | 0x2D30 | i16 | pending interrupt index (−1 none) |
@@ -254,6 +254,14 @@ after all contexts: Enemy_UpdateMoveMode (§8), Enemy_AutoFireAndDirAnim (§9.3)
 - **thread (op 135 slot, sub)**: free thread slot; if sub ≥ 0 create it (copy of the current context's 30
   var dwords, clock 0).
 - Op 88 calls a sub *in another enemy's* (boss slot) main context the same way.
+- **Depth storage** (VERIFIED code + runtime, answers_boss_phases §3): the main context's depth lives in e+0x2CE8; e+0x2CEA is
+  only the working depth. `Ecl_Run` starts with 0x2CEA := 0x2CE8, swaps in each thread's own depth (thread +6) while
+  running it, and writes 0x2CEA back to 0x2CE8 (main) or thread +6 after each context. The "depth := 0" written by the
+  life-threshold, timeout and death-sub handlers (§10.2/§10.3) goes to **0x2CEA only**, so it is overwritten at the next
+  `Ecl_Run` entry: a phase change does **not** reset the main stack depth. The new phase sub runs at the depth the old
+  phase had at that moment (e.g. 1 after interrupt entry, 2 if the change happened inside a called sub), and its calls
+  push from there. Stale frames below are never popped in the data (no threshold/timeout/death/interrupt target sub
+  executes `return`; checked over all 305 targets), but the 15-push cap (§5.4 call) is reached earlier.
 
 ### 5.5 Interrupts — VERIFIED
 `e.pending_interrupt = k` (set by op 125 immediately, op 89 / timeline op 8 on another enemy). At the next
@@ -313,9 +321,9 @@ own argument slot in the loaded file** (shared by all enemies; e.g. op 5 with a 
 | 10092 | item drop | int | |
 | 10093 | score | int | |
 | 10094 / 10095 | ctx floats | float | |
-| 10096 | depth of this enemy in its child chain (0 if not chained) | — | |
+| 10096 | number of children currently linked in the chain: for a chain root its own count, for a chained child its root's count, 0 if not chained (`Enemy_ChainChildCount`, walks the +8 links; VERIFIED code + demo 3 runtime, answers_impl19 §Q3 RE-Q19) | — | |
 | 10097 | player mode byte (0x17D5EF8+5) | — | |
-| 10098 | (int only) 2 if a+b+c < d else 0 (game counters; later phase) | — | |
+| 10098 | (int only) 2 if stats time + spell counter (0x453CC0) + item counter (0x4417E0) **≥** `GameMgr_GetTimeThreshold`, else 0 (stage 1 boss sub37: the final spell is skipped with op 1 unless 10098 ≥ 2; VERIFIED code, fullrun_noclip took the final spell) | — | |
 | 10099 | spell-card state (bomb-allowed / running) | — | |
 | 10100 | (int only) spell-card timer | — | |
 
@@ -556,7 +564,10 @@ left→idle or right→idle script.
      No effect 38 in this state.
    - Finally bit 11 := mode & 1; mode bits e+0x3330 := 0x40 if mode ≠ 0 else 0x20.
 4. Repeat { `Ecl_Run` (−1 → free enemy, no drops) ; movement (§8) ; screen check ; } while
-   `Enemy_CheckLifeThresholds` or `Enemy_CheckTimeout` request a re-run (§10.3).
+   `Enemy_CheckLifeThresholds` returns 1, or (timeout ≥ 0 and `Enemy_CheckTimeout` returns 1) (§10.2). On a phase-change
+   frame the whole body runs twice: the old phase's instructions for this frame run first, then the new sub's time-0
+   instructions, and the clamp/move/clamp step, the end-of-`Ecl_Run` move-mode update and auto-fire run again
+   (answers_boss_phases §2).
    Screen check (answers_impl18 §IMPL19-Q2, VERIFIED code + runtime): if the main VM has no sprite (e+0x230 = 0)
    bit 4 is set first (the enemy is then never screen-checked, linked or hit). The box is the **main VM's current
    sprite** size (sprite +0x34 width, +0x30 height, unscaled), centred on the final pos — **not** the hitbox. "On
@@ -605,16 +616,48 @@ left→idle or right→idle script.
    check — an enemy killed this frame (even one spawned and killed in the same frame) can become the aimed enemy,
    and death mode 0 does not clear the pointer (only `Enemy_Free` and the next frame's inactive-slot test do).
 
-### 10.2 Life thresholds (op 133) and timeout (op 134)
-- Thresholds (checked after every Ecl_Run): for each active k: if life < threshold: life = threshold;
-  main context jumps (no push, depth 0) to its sub; threshold cleared; bonus seconds
-  (timeout − timer)/60 stored; timeout cleared; threads freed; bullet descriptor reset; auto-fire off;
-  rank ranges reset (speed ±0.5, counts 0); children chain-killed (with drops); every alive non-boss
-  enemy gets life 0 and jumps to its death sub; boss: global player-side timer set (70). The script is
-  re-run in the same frame.
-- Timeout: when timer (e+0x2E14) ≥ timeout: life = largest active threshold (cleared); jump to the timeout
-  sub; timeout sub := death sub; timer = 0; unless bit 27: spell card ends and bullets are cancelled; same
-  cleanup (children killed **without** drops). Re-run in the same frame.
+### 10.2 Life thresholds (op 133) and timeout (op 134) — VERIFIED (code + runtime, answers_boss_phases)
+Both checks run inside the step-4 loop, i.e. **after this frame's `Ecl_Run` and before this frame's damage (step 6)**:
+damage that takes life below a threshold on frame N switches the phase on frame N+1.
+
+`Enemy_CheckLifeThresholds` 0x42B490 (every pass):
+1. Clear the low-life warning level (flags B bits 4–5).
+2. For k = 0..3 in order, skipping thresholds < 0: if life < threshold[k] (strict): **switch** (below) and return 1 —
+   the first matching index wins, later ones stay armed. Otherwise raise the warning level to
+   `level(life − threshold[k])` if higher.
+3. If no threshold is active, raise the level to `level(life)` with the no-threshold table. Return 0.
+   Warning levels (3 / 2 / 1 / 0): with thresholds, diff < 500 / 1500 / 2200 (no card) or < 120 / 200 / 300 (card
+   active); without thresholds, bosses life < 600 / 1600 / 2400 (no card) or < 120 / 300 / 400 (card), non-bosses only
+   level 3 at life < 50 (no card) or < 10 (card). Used for the hit sfx (0x25 at level ≥ 2, §10.1 step 7) and the HUD
+   enemy-marker blink (level + 1, else the hit-flash flag).
+
+Switch (threshold k):
+- life := threshold[k]; HUD life e+0x2E04 := life (max life e+0x2E00 is **not** changed, so the boss bar shows
+  life/max of the previous `set_life`); main context ip := sub[k], clock := 0, wait := 0, sub id (`Ecl_SetSub`;
+  variables, interpolation slots, interrupt table and the per-frame callback are kept); threshold[k] := −1;
+- spell-capture bonus seconds e+0x53CC := (timeout − timer e+0x2E14)/60 (integer); timeout := −1 (the timeout **sub**
+  and the **death sub are kept** — op 153 later copies the death sub);
+- the 4 threads freed; rank ranges reset (speed −0.5…+0.5, counts 0); working depth 0x2CEA := 0 (no effect, §5.4);
+  warning level cleared; bullet descriptor e+0x2E24 reset from the template (0x84 dwords); auto-fire interval
+  e+0x3060 := 0; enemy timer e+0x2E14 **not** reset;
+- `Enemy_KillChildren(e, with drops)`; every alive **non-boss** enemy (flags A bit 1 clear, any slot): life := 0 and, if
+  it has a death sub, its main context jumps there (death sub := −1); its normal death runs in its own update;
+- if e is a boss (flags A bit 1) and the player state byte (0x17D5EF8) is 0: player state := 3 with state timer
+  (0x18B89EC) := 70 (the same invulnerable state `Spell_End` uses);
+- no bullet cancel, no spell-card change, no HUD change here — those come from the new sub's own ops (`kill_all`,
+  `spellcard`, …) in the immediate re-run.
+
+`Enemy_CheckTimeout` 0x42B930 (only while timeout e+0x3378 ≥ 0, and only if the threshold check returned 0):
+- every call on a boss with boss slot byte e+0x3313 == 0: HUD timer seconds (Hud +0x24) := (timeout − timer)/60;
+- fires when timer ≥ timeout (`Timer_GreaterEq`; op 134 sets the timer to 0 in the same frame and it ticks at step 7,
+  so op 134 on frame F times out on frame F + timeout);
+- e+0x53CC := 0; the **largest** active threshold (> 0) becomes life and HUD life and is cleared (the others stay);
+  main context → timeout sub (`Ecl_SetSub`); timeout := −1; timeout sub := death sub; timer := 0;
+- unless flags A bit 27: the card is marked timed out (`0x42BC50`: spell flags bit 2 cleared, bit 3 set, card bonus
+  +0xFC := 0 — the card stays **active**; the timeout sub's own op 123 ends it) and `BulletMgr_CancelAll(4)`;
+- boss and player state 0 → player state 3 for 70 frames (as above);
+- `Enemy_KillChildren(e, no drops)`; non-boss enemies life 0 + death subs (as above); threads freed; descriptor and
+  auto-fire reset; rank ranges reset; working depth 0 (no effect); warning level cleared. Return 1 (re-run).
 
 ### 10.3 Death (life < 1, flags B bits 3 and 6 clear)
 flags B bit 3 set; chained children killed with drops; `GameMgr_GaugeAdd(d, not forced)` with d = −200 when
@@ -623,13 +666,21 @@ while +3 is 2 right after load); not forced → skipped entirely while bombing (
 clamped to [GM+0x3DDF8, GM+0x3DDFA] and the old-value copy (+0x20) updated (answers_impl14 §4, VERIFIED
 0x42D65C); then by death mode (op 129):
 
+Before the mode switch (all modes, VERIFIED `EnemyMgr_Calc` 0x42D551): flags B bit 3 (death latch) set;
+e+0x53CC := (timeout − timer)/60; timeout := −1; **all 4 life thresholds := −1**; threads freed; parent child count −1
+if chained; `Enemy_KillChildren(e, with drops)`; gauge ±200 (below).
+
 | mode | behaviour |
 |---|---|
-| 0 | add score; enemy dead (alive cleared); aura effect told to end |
-| 1 | add score; bit 23; contact/damage/shot bits cleared (stays alive, e.g. scripted death animation) |
-| 2 | no score; stays alive |
-| 3 | life = 1, death latch/mode cleared, 3 death effects, aura ends (scripted "survive") |
-| 0–2 | if boss: HUD off and boss unregistered; item drops (§10.4); a boss without an active spell card also turns all bullets into bonus and kills other enemies (score + HUD) |
+| 0 | add score; enemy dead (alive cleared); aura told to end (interrupt 3); then as "0–1" and "0–2" |
+| 1 | add score; flags A bit 23 set, bits 2, 3, 6 cleared (stays alive, e.g. scripted death animation); then as "0–1" and "0–2" |
+| 0–1 | if boss: HUD boss display off (Hud +0x2C := 0; the boss table entry is **not** cleared — op 127 −1 does that) and op 128 effects released |
+| 2 | no score; stays alive; only "0–2" |
+| 0–2 | item drops (§10.4); if boss and **no** card active: `BulletMgr_CancelBonus(8000, 1)` + `EnemyMgr_KillAll(8000)`, sum → score + `Hud_ShowBonus`; life := 0; replay-stats word (0x18B8A28)+0xDA \|= 0x20 |
+| 3 | life := 1; flags A bit 3 (loses life) and death-mode bits 20–22 cleared (the latch B bit 3 stays until life > 0 again); HUD boss display off; stats \|= 0x20; death effect e+0x3310 ×3 if ≥ 0; aura interrupt 3; player state 0 → 3 with timer **90**; flags A bits 30 and 31 cleared. No drops, no bullet cancel, no score |
+
+The death latch (flags B bit 3) is cleared at the end of step 6 of any frame where it is set and life > 0 (e.g. after the
+death sub's `set_life`).
 
 Unless bit 10: sfx 2/3, death effects: `Effect_Spawn(e+0x3310, pos, 1)` if that signed
 byte ≥ 0, then `Effect_Spawn(e+0x3311 + 4, pos, 4)` (4 sparks, 4 draws each); then **if the gauge is at human
@@ -637,9 +688,10 @@ max or youkai max** (`Gauge_IsHumanMax`: gauge ≤ GM+0x3DDFC, or `Gauge_IsYouka
 `ItemMgr_Spawn(final pos, 7 = time orb, 1)` → forced mode 3 → Rng_FloatRange + Rng_SignedRange = **4 draws**
 (08 §8.3; nothing if pos.x ∉ [−64, 448] or the item cursor slot is busy). RNG order on a normal kill frame:
 drops (`Enemy_DropItems`: its spark effect ×3 for an item, + random extras) → death sparks ×4 → time orb
-(answers_impl14 §3, VERIFIED at runtime). Then, if a death sub is set: context reset
-(depth 0, threads freed, descriptor reset) and the main context jumps to the death sub (the enemy keeps
-running its script), death sub := −1.
+(answers_impl14 §3, VERIFIED at runtime). Then, if a death sub is set: rank ranges reset, working depth 0 (no effect, §5.4), thresholds and timeout −1, threads
+freed, descriptor reset, auto-fire interval 0, main context → death sub (clock 0), death sub := −1. Death happens in
+step 6, after this frame's `Ecl_Run`, so the death sub's time-0 instructions run on the **next** frame (one frame later
+than a threshold switch; answers_boss_phases §2).
 
 ### 10.4 Drops (`Enemy_DropItems` 0x42BEA0)
 item ≥ 0: `Effect_Spawn(e+0x3311 + 4, final pos, 3)` (3 sparks), then spawn item `item` at final pos.

@@ -1,0 +1,11 @@
+frame 2256: orig 138 port 139
+frame 2257: orig 138 port 139
+frame 2258: orig 138 port 139
+frame 2259: orig 138 port 139
+frame 2260: orig 138 port 139
+frame 2261: orig 137 port 140
+  port only b156 st 2 pos 330.0,77.2 vel -2.85,0.24 ang 3.06 off 0 act 0
+  port only b157 st 2 pos 325.8,77.5 vel -1.67,0.14 ang 3.06 off 0 act 0
+frame 2262: orig 137 port 140
+  port only b156 st 2 pos 328.6,77.3 vel -2.85,0.24 ang 3.06 off 0 act 0
+  port only b157 st 2 pos 325.0,77.6 vel -1.67,0.14 ang 3.06 off 0 act 0

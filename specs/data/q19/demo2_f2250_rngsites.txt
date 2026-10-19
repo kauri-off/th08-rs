@@ -1,0 +1,13 @@
+R demo 2 frame 2250 ctr 514358 rng edfe bullets 140 (32 draws)
+    2 Rng_NextFloat+11 < Rng_FloatRange+f < AnmVm_Run+24b9 < AnmFile_StartScript+b3 < AnmFile_SetScript+3a < Effect_Spawn+10b
+    2 Rng_Range+17 < AnmVm_Run+2455 < AnmFile_StartScript+b3 < AnmFile_SetScript+3a < Effect_Spawn+10b < Option_YoumuHalf+161
+    4 Rng_NextFloat+11 < Rng_FloatRange+f < AnmVm_Run+24b9 < AnmFile_StartScript+b3 < AnmFile_SetScript+3a < Effect_Spawn+10b
+    2 Ecl_GetIntArg+1bd < Ecl_Run+d19 < EnemyMgr_SpawnFromEcl+f3 < FUN_0041f280+169 < Ecl_Run+2c71 < EnemyMgr_Calc+33d
+    2 Rng_NextFloat+11 < Rng_FloatRange+f < AnmVm_Run+24b9 < AnmFile_StartScript+b3 < AnmFile_SetScript+3a < Effect_Spawn+10b
+    8 Rng_Range+17 < AnmVm_Run+2455 < AnmFile_StartScript+b3 < AnmFile_SetScript+3a < Effect_Spawn+10b < Enemy_ReactPlayerMode+bf
+    2 Rng_Range+17 < GameMgr_UpdateChecksum+18 < Item_CollectPoint+1d2 < ItemMgr_Calc+57f < BulletMgr_Calc+40 < FuncChain_RunCalc+51
+    2 Rng_Range+17 < GameMgr_UpdateChecksum+35 < Item_CollectPoint+1d2 < ItemMgr_Calc+57f < BulletMgr_Calc+40 < FuncChain_RunCalc+51
+    2 Rng_Range+17 < GameMgr_UpdateChecksum+18 < Item_CollectPoint+1d2 < ItemMgr_Calc+57f < BulletMgr_Calc+40 < FuncChain_RunCalc+51
+    2 Rng_Range+17 < GameMgr_UpdateChecksum+35 < Item_CollectPoint+1d2 < ItemMgr_Calc+57f < BulletMgr_Calc+40 < FuncChain_RunCalc+51
+    2 Rng_Range+17 < GameMgr_UpdateChecksum+18 < Item_CollectPoint+1d2 < ItemMgr_Calc+57f < BulletMgr_Calc+40 < FuncChain_RunCalc+51
+    2 Rng_Range+17 < GameMgr_UpdateChecksum+35 < Item_CollectPoint+1d2 < ItemMgr_Calc+57f < BulletMgr_Calc+40 < FuncChain_RunCalc+51

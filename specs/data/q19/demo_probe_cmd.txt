@@ -1,0 +1,7 @@
+escan 2 2240 2330
+bscan 2 2256 2330
+rngsite 2 2240 2262
+escan 3 1478 1540
+bscan 3 1496 1540
+rngsite 3 1478 1502
+d3:1545 quit

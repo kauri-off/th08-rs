@@ -191,6 +191,46 @@ static void sess_scan(int pass) {
     fflush(o);
 }
 
+/* TH08_BOSS="P0 P1" (RE-Q19): per calc row with poll in [P0,P1] in scene 2 while any enemy has flag A bit 1 (boss),
+   G = globals (spell flags/bonus/timer, bullets, player state/timer, HUD boss flag), B = each boss enemy, T = its threads */
+static int g_boss0 = -1, g_boss1 = -1; static FILE *g_bossf;
+static void sess_boss(int pass) {
+    if (g_boss0 < 0 || (int)g_poll_n < g_boss0 || (int)g_poll_n > g_boss1 || U32(G_SCENE) != 2 || U32(G_LOADING)) return;
+    int any = 0;
+    for (int j = 0; j < 480; j++) { uint32_t e = 0x577F20 + 0x53D0 + j * 0x53D0; if ((U32(e + 0x3324) & 3) == 3) { any = 1; break; } }
+    if (!any && !U32(G_BOSS) && !(U8(G_SPELL) & 1)) return;
+    if (!g_bossf) g_bossf = sess_open(g_sess_out, "boss.txt", "w");
+    if (!g_bossf) return;
+    FILE *o = g_bossf; uint32_t P = G_PLAYER;
+    int en = 0;
+    for (int i = 0; i < 480; i++) if (U8(G_ENEMIES + 0x53D0 + i * 0x53D0 + 0x3324) & 1) en++;
+    fprintf(o, "G poll %u pass %d frame %u rng %04x spf %08x spbonus %d spid %d sptimer %d %d bul %u en %d pst %u pt %d bomb %d hudboss %u boss0 %08x gf %08x itm %u\n",
+            g_poll_n, pass, U32(G_GMFRAME), U16(G_RNG), U32(G_SPELL), (int)U32(G_SPELL + 0xFC), (int)U32(G_SPELL + 8),
+            (int)U32(G_SPELL + 0x108 + 8), (int)U32(G_SPELL + 0x114 + 8), U32(G_BULLETS), en, U8(P), (int)U32(0x18B89EC + 8),
+            (int)U32(0x17D6ED4), U8(0x160F428 + 0x2C), U32(G_BOSS), U32(G_GMFLAGS), U32(0x1653648 + 0x17B08C));
+    uint32_t subs = U32(0x4ECCB8 + 4);
+    for (int j = 0; j < 480; j++) {
+        uint32_t e = 0x577F20 + 0x53D0 + j * 0x53D0;
+        if ((U32(e + 0x3324) & 3) != 3) continue;
+        uint32_t c = e + 0x7F8; int sub = (int16_t)U16(c + 0x224);
+        uint32_t ipo = (sub >= 0 && subs) ? U32(c) - U32(subs + sub * 4) : U32(c);
+        fprintf(o, "B %d sub %d ip %x clk %d wait %d dep %d life %d max %d hud %d thr %d %d %d %d tsub %d %d %d %d tmo %d tmosub %d dsub %d tim %d dmgt %d fl %08x %08x pos %08x %08x bon %d slot %u int %d\n",
+                j, sub, ipo, (int)U32(c + 4 + 8), (int)U32(c + 0x90 + 8), (int16_t)U16(e + 0x2CEA), (int)U32(e + 0x2DFC), (int)U32(e + 0x2E00), (int)U32(e + 0x2E04),
+                (int)U32(e + 0x3358), (int)U32(e + 0x335C), (int)U32(e + 0x3360), (int)U32(e + 0x3364),
+                (int)U32(e + 0x3368), (int)U32(e + 0x336C), (int)U32(e + 0x3370), (int)U32(e + 0x3374),
+                (int)U32(e + 0x3378), (int)U32(e + 0x337C), (int16_t)U16(e + 0x2CEE), (int)U32(e + 0x2E14 + 8), (int)U32(e + 0x5354 + 8),
+                U32(e + 0x3324), U32(e + 0x3328), U32(e + 0x2D88), U32(e + 0x2D8C), (int)U32(e + 0x53CC), U8(e + 0x3313), (int16_t)U16(e + 0x2D30));
+        for (int k = 0; k < 4; k++) {
+            uint32_t t = U32(e + 0x3384 + 4 * k);
+            if (!t) continue;
+            uint32_t tc = t + 8; int ts = (int16_t)U16(tc + 0x224);
+            fprintf(o, "T %d %d sub %d ip %x clk %d wait %d\n", j, k, ts, (ts >= 0 && subs) ? U32(tc) - U32(subs + ts * 4) : U32(tc),
+                    (int)U32(tc + 4 + 8), (int)U32(tc + 0x90 + 8));
+        }
+    }
+    fflush(o);
+}
+
 /* one trace row per calc pass; columns = demo trace columns, then the session extension */
 static void sess_row(int pass) {
     if (!g_strace) return;
@@ -214,7 +254,7 @@ static void sess_row(int pass) {
             g_present_n + 1, g_calc_n, g_poll_n, sc, sc != g_scene_prev ? 1 : g_scene_n + 1, menu, cur, res, U8(G_PAUSE), U16(0x164D528), U32(G_STAGE), U32(G_LOADING),
             in_demo() ? (int)U8(G_DEMOIDX) : -1);
     g_rows_since_present++;
-    if (pass >= 0) sess_scan(pass);
+    if (pass >= 0) { sess_scan(pass); sess_boss(pass); }
 }
 
 static int g_spass;
@@ -329,6 +369,7 @@ static int sess_init(void) {
     if (in) snprintf(g_sess_in, sizeof g_sess_in, "%s", in);
     if (ch && atoi(ch) > 0) g_sess_chunk = atoi(ch);
     { const char *sc = getenv("TH08_SCAN"); if (sc) sscanf(sc, "%d %d", &g_scan0, &g_scan1); }
+    { const char *sc = getenv("TH08_BOSS"); if (sc) sscanf(sc, "%d %d", &g_boss0, &g_boss1); }
     CreateDirectoryA(g_sess_out, NULL);
     g_log = sess_open(g_sess_out, "probe_log.txt", "w");
     g_spoll = sess_open(g_sess_out, "polls.txt", "w");

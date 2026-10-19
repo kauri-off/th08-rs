@@ -307,3 +307,16 @@ Test keys: `re/work/runs/q17m/noclip/keys_noclip.txt`. Font note (RE-Q17M): wine
   QPC ms, thread id, present, poll and GM loading-frame counter.
 - escan `E` lines (demo mode) now end with `spr <w> <h> hb <w> <h>` (main-VM sprite size and hitbox, hex floats).
 - Known nit: play_session.sh's `pgrep -A -x Xvfb -f ':77'` prints "only one pattern" (harmless when Xvfb is running).
+
+## 13. Boss log (RE-Q19, 2026-10-19)
+- `TH08_BOSS="P0 P1"` (session record/play): for every calc row with poll in [P0,P1] in scene 2 while a boss-flagged enemy
+  exists (or boss slot 0 / a card is active) the probe writes `boss.txt` to the session output dir: `G` (spell flags, card
+  bonus/id/timers, bullets, enemies, player state + timer, HUD boss flag), `B` per boss (sub id, ip offset in the sub via
+  g_EclFile+4, clock, wait, working depth 0x2CEA, life/max/HUD life, thresholds+subs, timeout+sub, death sub, timer,
+  op-160 timer, flags, pos, bonus seconds, pending interrupt), `T` threads. Format: specs/answers_boss_phases.md §4.
+- `re/work/runs/q19/bossrun.sh <session> <out> <p0> <p1> [scan p0 p1]`: play_session (always with `--out`, never into
+  sessions/) and kill once the trace reaches p1. Stage 1 of fullrun_noclip (to poll 11000) takes ~3 min.
+- `re/work/runs/q19/bdiff.py <orig bscan> <port demosync TH08_BDUMP dump> <demo>`: slot-by-slot bullet diff (the port's
+  dump block after `== calc for frame N` is the state after calc N; run the port's `target/release/demosync` with
+  `TH08_DIR=<game dir>` and stdout+stderr interleaved).
+- Note: probe_rng.txt column 2 is the first return address, not the drawn value; recompute values from the R-line state.
