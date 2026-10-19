@@ -34,7 +34,7 @@ Derived functions (only one RNG object exists; all 125 call sites pass `&g_Rng`)
 | `Rng_GetState` / `Rng_SetState` | 0x453C20 / 0x453BE0 | read / write `s` (counter untouched) |
 | `Rng_ResetCounter` | 0x453C00 | counter = 0 |
 
-### 1.2 Floating-point precision — VERIFIED (runtime, answers_phase8 §1)
+### 1.2 Floating-point precision — VERIFIED (runtime, changelog/answers_phase8.md §1)
 The u32 is loaded exactly (64-bit integer load; precision control does not affect loads) and divided on the x87.
 The CRT start-up sets 53-bit precision (`_controlfp(0x10000, 0x30000)`, 0x4A72D7). The control word was measured
 under wine:
@@ -101,7 +101,7 @@ Pause must not consume RNG: the only RNG use on pausing is the checksum update, 
 | +0x00 | 0x160F508 | ptr | dummy block (heap jitter, freed immediately) | VERIFIED |
 | +0x04 | 0x160F50C | ptr | copy of the 60-byte config (0x17CE870); +0x1C = starting lives, +0x25 = slow-mode option | VERIFIED copy / INFERRED names |
 | +0x08 | 0x160F510 | ptr | stats block (0xE4 bytes, §5) | VERIFIED |
-| +0x2C | 0x160F534 | u8 | freeze flag (HUD calc, enemy timers, bullet movement, player calc, spell calc skip while ≠ 0). Only writer that sets it: ECL native 26 (= arg). Cleared by `Player_Die` and `GameManager_StageStart` (answers_impl20 Notes) | VERIFIED |
+| +0x2C | 0x160F534 | u8 | freeze flag (HUD calc, enemy timers, bullet movement, player calc, spell calc skip while ≠ 0). Only writer that sets it: ECL native 26 (= arg). Cleared by `Player_Die` and `GameManager_StageStart` (changelog/answers_impl20.md Notes) | VERIFIED |
 | +0x2D | 0x160F535 | u8 | slow-mode skipped frame (input is OR-accumulated by the Supervisor while set) | VERIFIED |
 | +0x30 | 0x160F538 | u32 | difficulty 0 Easy, 1 Normal, 2 Hard, 3 Lunatic, 4 Extra | VERIFIED (tables) / names INFERRED |
 | +0x34 | 0x160F53C | u32 | difficulty mask (1 << d, Extra = 0xF) | VERIFIED |
@@ -112,7 +112,7 @@ Pause must not consume RNG: the only RNG use on pausing is the checksum update, 
 | +0x3DAAC | — | i32 | total time added | VERIFIED |
 | +0x3DBA8 | 0x164D0B0 | u8 | (reset at new game / death; replay record +0x20) | VERIFIED storage |
 | +0x3DBA9 | 0x164D0B1 | u8 | shot type 0–11 (04) | VERIFIED |
-| +0x3DBAA | 0x164D0B2 | u8 | added to shot type into +0x3DBAB (+0x3DBAB has no reader). 0 except during attract demos, where it is shot % 2 (answers_phase7 §3) | VERIFIED |
+| +0x3DBAA | 0x164D0B2 | u8 | added to shot type into +0x3DBAB (+0x3DBAB has no reader). 0 except during attract demos, where it is shot % 2 (changelog/answers_phase7.md §3) | VERIFIED |
 | +0x3DBAC | 0x164D0B4 | u32 | **game flags** (§2.1) | VERIFIED |
 | +0x3DBB0 | 0x164D0B8 | i16 | spell id for spell practice | VERIFIED |
 | +0x3DBB2 | 0x164D0BA | u8 | paused (1 = pause menu open; 2 after it was drawn once) | VERIFIED |
@@ -128,7 +128,7 @@ Pause must not consume RNG: the only RNG use on pausing is the checksum update, 
 | +0x3DE28 | — | i32 | deferred music start (1 = play stage BGM 0) | VERIFIED |
 | +0x3DE2C/30/34/38 | — | i32 | rank, max, min, sub-counter (07/09) | VERIFIED |
 
-Gameplay frame counter 0x164D2C8 (GM+0x3DDC0): += 1 near the end of `GameMgr_Calc` (not on its early returns: loading, pause/game-over, slow-mode skip); := 0 by `GameManager_Register` and `GameMgr_OnRemove`, so it reads 0 in the menus after a pause-quit (answers_impl21 §Q3). Globals next to it: 0x164D30C play-time counter (frames, + 1800 per ECL op 148); 0x164D318/0x164D31C per-frame
+Gameplay frame counter 0x164D2C8 (GM+0x3DDC0): += 1 near the end of `GameMgr_Calc` (not on its early returns: loading, pause/game-over, slow-mode skip); := 0 by `GameManager_Register` and `GameMgr_OnRemove`, so it reads 0 in the menus after a pause-quit (changelog/answers_impl21.md §Q3). Globals next to it: 0x164D30C play-time counter (frames, + 1800 per ECL op 148); 0x164D318/0x164D31C per-frame
 counters not advanced during dialogue.
 
 ### 2.1 Game flags (GM+0x3DBAC = 0x164D0B4) — bits seen in code
@@ -137,15 +137,15 @@ counters not advanced during dialogue.
 |---|---|---|
 | 0 | stage practice | VERIFIED (lives 8, power per stage, ends with result) |
 | 1 | demo play (attract mode) | VERIFIED (any key → menu; time limits) |
-| 2 | gameplay running: **recomputed every `GameMgr_Calc`** (after the pause-key test, before the clear/stage-end handling) as paused byte GM+0x3DBB2 (0x164D0BA) == 0 and game-over byte GM+0x3DBB3 == 0, so it drops on the ESC frame and returns on the first calc after unpausing; also set at stage start, cleared by `GameMgr_OnRemove` (answers_impl21 §Q3) | VERIFIED |
+| 2 | gameplay running: **recomputed every `GameMgr_Calc`** (after the pause-key test, before the clear/stage-end handling) as paused byte GM+0x3DBB2 (0x164D0BA) == 0 and game-over byte GM+0x3DBB3 == 0, so it drops on the ESC frame and returns on the first calc after unpausing; also set at stage start, cleared by `GameMgr_OnRemove` (changelog/answers_impl21.md §Q3) | VERIFIED |
 | 3 | replay playback | VERIFIED |
 | 4 (0x10) | ending-eligible / "cleared without running out of night" (set on final clear, cleared on time-out endings) | VERIFIED writes / INFERRED meaning |
 | 5–6 | stage-end state: 0 none, 1 waiting-for-load (after a clear), 2 clear triggered, 3 clear handled | VERIFIED |
-| 7–8 | 7 = a boss "last spell" is running (ECL op 176 clears 7/8/13 and sets 7); `Spell_End`: captured → bits 7–8 := 8 only, failed → cleared (+ "Last Spell Failed" if spell flag bit 5); bit 8 then persists until the next op 176, the dissolve-spell end or `StageStart` (clears 7, 8, 13). While either is set a bomb press only plays SE 0x29 and a hit forces the dissolve spell (09 §7, answers_impl10 §7, answers_impl11 §14) | VERIFIED |
+| 7–8 | 7 = a boss "last spell" is running (ECL op 176 clears 7/8/13 and sets 7); `Spell_End`: captured → bits 7–8 := 8 only, failed → cleared (+ "Last Spell Failed" if spell flag bit 5); bit 8 then persists until the next op 176, the dissolve-spell end or `StageStart` (clears 7, 8, 13). While either is set a bomb press only plays SE 0x29 and a hit forces the dissolve spell (09 §7, changelog/answers_impl10.md §7, changelog/answers_impl11.md §14) | VERIFIED |
 | 9 (0x200) | stage-clear bonus panel shown (msg op 9) | VERIFIED |
 | 10 (0x400) | player death in progress (blocks some effects) | VERIFIED write (0x44AB40) |
 | 11–12 | final route choice (0 → 6A, else → 6B) | VERIFIED |
-| 13 (0x2000) | set by op 176 together with bit 7 when (not practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); with a boss present `EnemyMgr_Calc` adds a large player-damage box (answers_impl10 §7) | VERIFIED |
+| 13 (0x2000) | set by op 176 together with bit 7 when (not practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); with a boss present `EnemyMgr_Calc` adds a large player-damage box (changelog/answers_impl10.md §7) | VERIFIED |
 | 14 (0x4000) | spell practice | VERIFIED |
 | 15–17 | unlock states from the score file (Extra/Phantasm …) | VERIFIED source / INFERRED meaning |
 
@@ -189,7 +189,7 @@ table (value 10) — irrelevant because Extra's clock advance is fixed (§4.1).
 While `loading ≠ 0`, `GameMgr_Calc` increments `loading_frames` and returns 3 (nothing else in the calc
 chain runs); `loading == 2` → return 4 (quit).
 
-**Loading frame count** (answers_impl17 §2, VERIFIED code + sessions). The loader thread polls `loading_frames`
+**Loading frame count** (changelog/answers_impl17.md §2, VERIFIED code + sessions). The loader thread polls `loading_frames`
 with `Sleep(17)`, so after the threshold is reached it ends the loading screen before the next calc in practice:
 the stage has **31** loading calcs (81 in replay playback) when the loader's own work is shorter than the threshold.
 The loader's work is bounded below by the texture uploads: every `Anm_LoadAndWait` makes the loader sleep until the
@@ -198,7 +198,7 @@ frame**), plus file decoding time on the loader thread (host dependent). Measure
 fresh start of stage 1 = 48 loading calcs (two sessions, Reimu & Yukari: stg1bg/eff01/enemy/stg1enm/etama/front/
 times/stg1txt/player/face files ≈ 41 entries); later stages and demos (fewer files) = 31 / 81. After a stage
 clear the loader then also waits for the confirm press (flags bits 5–6), so those rows continue until the press.
-Upload timeline (answers_impl18 §IMPL19-Q4, VERIFIED at runtime, selftest1 stage 1): `Anm_LoadAndWait` preloads
+Upload timeline (changelog/answers_impl18.md §IMPL19-Q4, VERIFIED at runtime, selftest1 stage 1): `Anm_LoadAndWait` preloads
 (reads + decodes) a file on the loader thread, then sets the slot's pending index to 1; each main-thread
 `Supervisor_Calc` uploads exactly one entry (`Anm_PostloadStep`); after the last entry the loader preloads the
 next file. A file costs `entries` frames, plus an **empty frame for every frame boundary the next file's preload
@@ -237,10 +237,14 @@ stats.extends (+0x34) = 0; next_extend (+0x38) = EXTEND_THR (08 §8)
 GameMgr_LoadScoreData 0x43BBE1: first flushes score.dat via Result_Register(2) = save (RNG 2 draws, 15 §2.2); then load score.dat → hiscore for (shot, difficulty) (practice: practice hiscore table; play counters +1)
 rank = RANK[d].init, min, max (table 0x4C7880: E/N 10, 8, 16; H/L 8, 8, 12; Extra 16, 15, 16)
   (rank changes: RankAdd/RankSub 0x43BFC3/0x43C03F via sub-counter GM+0x3DE38, ±1 rank per 100,
-   clamped; deltas listed in answers_phase5 impl6 "Rank mapping"; +100 every 2400 − 240·lives frames, 0x42C3B0)
+   clamped; deltas: power item +1, point item +3 if v < max else +10, bomb item +5, graze +6, extend +200, item fell off
+   the bottom −3, bomb −200, death −1600; +100 every 2400 − 240·lives frames of the enemy-manager clock outside
+   dialogue, 0x42C3B0)
 stats.deaths (+0x64/+0x68) = 0 (checksum); stats.bombs_used (+0x84/+0x88) = 0 (checksum)
 stats.spells_captured (+0x1C) = 0; 0x164D318/320/324 = 0
 play counters in the score data incremented unless replay / spell practice / slow mode
+if the requested scene was 10 (retry): two more score-data counters +1 (0x164CD6C + 0x44·difficulty and 0x164CF04,
+  0x43BE09; INFERRED: retry counts)
 ```
 
 ### 3.3 Continuing to the next stage (fresh_start = 0, normal difficulty, not practice)
@@ -255,7 +259,7 @@ From the replay header: shot (+0x6A), difficulty (+0x6B), config copy (+0xB4, 60
 (offset table header+0x20[stage]): point items (+4 → stats+0x30), rank byte (0x164D334), lives, bombs, power
 (via the setters), graze total, input stream pointer, 0x164D0B0, max point value, seed, spells captured,
 extends, next extend, gauge, clock. Missing record for the requested stage → load fails.
-**Score** (answers_impl14 §6, VERIFIED): the stage's own +0 is NOT used (it is the end-of-stage score). Instead
+**Score** (changelog/answers_impl14.md §6, VERIFIED): the stage's own +0 is NOT used (it is the end-of-stage score). Instead
 score (stats+8) and displayed score (stats+0) := +0 of the **last existing record of a lower stage index**
 (scan k = 0 .. stage−1, keep the last non-null record pointer). No earlier record (first recorded stage) → score
 is not touched and keeps the fresh-start value 0 (StageStart fresh branch zeroes stats+0/+8).
@@ -361,7 +365,7 @@ sets flags bits 5–6 = 2 (stages 1–5); stages 6A/6B/Extra are triggered by ms
 | 0x30 | i32 | point items total (extend counter) | VERIFIED |
 | 0x34 | i32 | extends obtained (−1 = disabled, stages 6A/6B/Ex after op 9) | VERIFIED |
 | 0x38 | i32 | next extend threshold | VERIFIED |
-| 0x3C | i32 | time this stage. Reset to 0 at every stage start (§3.1). `GameMgr_AddTime` 0x418220 (n < 0 and time < −n → 0, else time += n, +0x44 += n, GM+0x3DAAC += n, checksum). Writers: +1 per collected time orb; card capture reward (Spell_End stores it in g_Gui +0x10, paid by `Spell_Calc` 130 frames later or by the next `Spell_Start`); −15 per frame of the death-bomb window (`Player_DyingUpdate`); at the death itself −time/10 if time ≤ 5000, else −500 (answers_impl20 §Q1) | VERIFIED |
+| 0x3C | i32 | time this stage. Reset to 0 at every stage start (§3.1). `GameMgr_AddTime` 0x418220 (n < 0 and time < −n → 0, else time += n, +0x44 += n, GM+0x3DAAC += n, checksum). Writers: +1 per collected time orb; card capture reward (Spell_End stores it in g_Gui +0x10, paid by `Spell_Calc` 130 frames later or by the next `Spell_Start`); −15 per frame of the death-bomb window (`Player_DyingUpdate`); at the death itself −time/10 if time ≤ 5000, else −500 (changelog/answers_impl20.md §Q1) | VERIFIED |
 | 0x40 | i32 | time threshold for the clock advance | VERIFIED |
 | 0x44 | i32 | time added this stage (parity used by AddTime) | VERIFIED |
 | 0x48..0x60 | i32×7 | decoys (random 6543..106542) | VERIFIED |
@@ -451,7 +455,7 @@ Unregistering the GM (0x43BF6E) also clamps the score to 999 999 999, sets displ
 game speed to 1. The GM on-remove callback stops music (unless spell practice reload), waits for sounds,
 unregisters Gui, Stage, HUD, Player, Enemies, Effects, Bullets, Replay (recording) and saves score data.
 
-Exit / fresh-start flags (VERIFIED, answers_impl13 §2): `GameMgr_OnRemove` first sets the full-exit flag
+Exit / fresh-start flags (VERIFIED, changelog/answers_impl13.md §2): `GameMgr_OnRemove` first sets the full-exit flag
 0x17CE8C0 = (requested ∉ {3, 11, 12}). `GameMgr_OnRegister` first sets the fresh-start flag 0x17CE8BC with
 the same test. The supervisor writes requested = 3 before it unregisters for 11 and 12, so those two look like
 "next stage" to the GM. A retry (10) is a full exit **and** a fresh start. A full exit hides the gauge readout

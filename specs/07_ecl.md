@@ -129,7 +129,7 @@ sub-ANM VMs disabled; e+0x3330 = 0.
 | 0x2CA0 / 0x2CA4 | ptr | current context / current stack base |
 | 0x2CA8–0x2CC4 | i32[8] | enemy int vars 10008–10015 |
 | 0x2CC8–0x2CE4 | f32[8] | enemy float vars 10024–10031 |
-| 0x2CE8 / 0x2CEA | i16 | main context's stack depth (persistent) / working depth of the context being run (§5.4: `Ecl_Run` reloads 0x2CEA from 0x2CE8 at entry; answers_boss_phases §3) |
+| 0x2CE8 / 0x2CEA | i16 | main context's stack depth (persistent) / working depth of the context being run (§5.4: `Ecl_Run` reloads 0x2CEA from 0x2CE8 at entry; changelog/answers_boss_phases.md §3) |
 | 0x2CEE | i16 | death sub (op 130), −1 none |
 | 0x2CF0 | i16[32] | interrupt table: sub id per interrupt index (op 126) |
 | 0x2D30 | i16 | pending interrupt index (−1 none) |
@@ -151,7 +151,7 @@ sub-ANM VMs disabled; e+0x3330 = 0.
 | 0x2DFC / 0x2E00 / 0x2E04 | i32 | life / max life / life for HUD |
 | 0x2E08 | i32 | score |
 | 0x2E0C | i32 | slot index |
-| 0x2E10 | i32 | time-orb damage accumulator (passed to `Player_DamageAgainst`, 09 §4.5). Starts at the **step** (40, 27 solo human): `Player_Load` writes the template's copy (0x57AD30 = template+0x2E10) and `EnemyMgr_Ctor` copies player+0xE2B2C into it; every spawn copies the template, so a fresh enemy's first hitting bullet spawns an orb at human max gauge. Per enemy, never shared, never reset (VERIFIED runtime, answers_impl16 §2) |
+| 0x2E10 | i32 | time-orb damage accumulator (passed to `Player_DamageAgainst`, 09 §4.5). Starts at the **step** (40, 27 solo human): `Player_Load` writes the template's copy (0x57AD30 = template+0x2E10) and `EnemyMgr_Ctor` copies player+0xE2B2C into it; every spawn copies the template, so a fresh enemy's first hitting bullet spawns an orb at human max gauge. Per enemy, never shared, never reset (VERIFIED runtime, changelog/answers_impl16.md §2) |
 | 0x2E14 | Timer | boss/spell timer (op 132), ticks every frame unless global 0x160F534 ≠ 0 |
 | 0x2E24 | desc | bullet spawn descriptor (§9; reset from defaults at 0x57AD44) |
 | 0x3034 | 44 B | stored bullet instruction for auto-fire |
@@ -172,9 +172,9 @@ sub-ANM VMs disabled; e+0x3330 = 0.
 | 0x3354 | i32 | (var 10083) |
 | 0x3358 / 0x3368 | i32[4] | life thresholds / their subs (op 133) |
 | 0x3378 / 0x337C | i32 | timeout frames / timeout sub (op 134) |
-| 0x3380 | i32 | chained children created (ops 90–92 +1) minus children killed by damage while chained (`EnemyMgr_Calc` −1); never reset by a chain kill (answers_impl12 §2) |
+| 0x3380 | i32 | chained children created (ops 90–92 +1) minus children killed by damage while chained (`EnemyMgr_Calc` −1); never reset by a chain kill (changelog/answers_impl12.md §2) |
 | 0x3384 | ptr[4] | extra script threads (op 135) |
-| 0x3394 | 96 × 0x1C | after-image trail ring (op 157): per entry final pos[3], velocity[3] (e+0x2D4C), angle (e+0x2D94); template x = −999 (answers_impl21 §Q7) |
+| 0x3394 | 96 × 0x1C | after-image trail ring (op 157): per entry final pos[3], velocity[3] (e+0x2D4C), angle (e+0x2D94); template x = −999 (changelog/answers_impl21.md §Q7) |
 | 0x534C / 0x534E / 0x5350 / 0x5352 | u8 / i16 ×3 | trail flags (≠ 0 = trail on; 8 = allocate the draw history, 0x10 = main VM hidden) / length n / op 157 arg a / draw step b |
 | 0x5354 | Timer | damage-reduction timer (op 160) |
 | 0x5360 / 0x53C0 | ptr[] / i32 | effect handles (op 128) / count; 0x53C4 = effect parameter |
@@ -193,7 +193,7 @@ when leaving the screen · 29 skip movement step. (VERIFIED as bit usage; names 
 Flags B (e+0x3328): 1 (op 83) · 2 sprites from stage enemy ANM (`stgNenm.anm`) instead of `enemy.anm` ·
 3 death latch · 4–5 low-life warning level · 6 cannot die · 7 paused (native 12: `EnemyMgr_Calc` does not run the enemy's ECL and holds its script time with
 `Timer_Decrement(e+0x2E14)`; the same skip happens when flags A bit 30 is set and the player is bombing or player byte
-0x17D5EF8 ≠ 0; answers_impl10 §4) · 8 (op 182).
+0x17D5EF8 ≠ 0; changelog/answers_impl10.md §4) · 8 (op 182).
 
 ## 5. Script VM
 
@@ -251,12 +251,14 @@ after all contexts: Enemy_UpdateMoveMode (§8), Enemy_AutoFireAndDirAnim (§9.3)
   sub id); copy the 8 global "argument" dwords (vars 10061–10068, globals 0x4ECE20–0x4ECE3C) into the
   callee's vars 10053–10060; depth += 1 (max 15, only when pushing). Execution continues immediately.
 - **return (op 53, 0x421CB0)**: depth −= 1; if depth < 0 (a thread returning from its first sub): free the
-  thread, continue with the next context; else restore the whole context from stack[depth] (ip, clock, local
+  thread slot (context +0x220) − 1, switch back to the main context with depth := e+0x2CE8, continue with the next
+  context (for the main context itself this would address slot −1 = e+0x3380, the child counter: malformed, never in
+  the data — do not emit); else restore the whole context from stack[depth] (ip, clock, local
   vars …) and continue.
 - **thread (op 135 slot, sub)**: free thread slot; if sub ≥ 0 create it (copy of the current context's 30
   var dwords, clock 0).
 - Op 88 calls a sub *in another enemy's* (boss slot) main context the same way.
-- **Depth storage** (VERIFIED code + runtime, answers_boss_phases §3): the main context's depth lives in e+0x2CE8; e+0x2CEA is
+- **Depth storage** (VERIFIED code + runtime, changelog/answers_boss_phases.md §3): the main context's depth lives in e+0x2CE8; e+0x2CEA is
   only the working depth. `Ecl_Run` starts with 0x2CEA := 0x2CE8, swaps in each thread's own depth (thread +6) while
   running it, and writes 0x2CEA back to 0x2CE8 (main) or thread +6 after each context. The "depth := 0" written by the
   life-threshold, timeout and death-sub handlers (§10.2/§10.3) goes to **0x2CEA only**, so it is overwritten at the next
@@ -269,7 +271,9 @@ after all contexts: Enemy_UpdateMoveMode (§8), Enemy_AutoFireAndDirAnim (§9.3)
 `e.pending_interrupt = k` (set by op 125 immediately, op 89 / timeline op 8 on another enemy). At the next
 LOOP check: ctx.ip = ip + size of the **current** (not yet executed) instruction — i.e. that instruction is
 skipped when the interrupt returns; unless flag A bit 26: push the context; set sub = interrupt_table[k]
-(e+0x2CF0, op 126); depth += 1 (≤ 15); pending = −1.
+(e+0x2CF0, op 126); clock = wait = 0; depth += 1 (≤ 15) — **also when flag A bit 26 suppressed the push** (calls
+only increment when pushing); pending = −1. Interrupts always target the **main** context (e+0x7F8) and do **not**
+copy the 8 argument dwords (only calls do). VERIFIED (changelog/answers_phase5.md impl5).
 
 ### 5.6 Variable interpolation slots (op 36) — VERIFIED
 Slot = {fn, Timer elapsed, dur, fn index, easing mode, a, b, c, d, target var id}. Op 36 reuses the slot whose
@@ -323,9 +327,9 @@ own argument slot in the loaded file** (shared by all enemies; e.g. op 5 with a 
 | 10092 | item drop | int | |
 | 10093 | score | int | |
 | 10094 / 10095 | ctx floats | float | |
-| 10096 | chain count (`Enemy_ChainChildCount` 0x41FD40): if the enemy is a chain root (no parent +0x2DA4 and +8 ≠ 0) = number of enemies reached by following +8 from it; else if it has a parent = the same count evaluated on the **parent** (+0x2DA4, the enemy that spawned it with op 90–92), which is 0 unless that parent is a root; else 0. No alive test: every death, `Enemy_Free`, kill-all and chain kill unlinks the enemy (`Enemy_ChainUnlink`), so the walk only meets live members. VERIFIED code + demo 3 runtime (answers_impl19 §Q3, answers_impl21 §Q1) | — | |
+| 10096 | chain count (`Enemy_ChainChildCount` 0x41FD40): if the enemy is a chain root (no parent +0x2DA4 and +8 ≠ 0) = number of enemies reached by following +8 from it; else if it has a parent = the same count evaluated on the **parent** (+0x2DA4, the enemy that spawned it with op 90–92), which is 0 unless that parent is a root; else 0. No alive test: every death, `Enemy_Free`, kill-all and chain kill unlinks the enemy (`Enemy_ChainUnlink`), so the walk only meets live members. VERIFIED code + demo 3 runtime (changelog/answers_impl19.md §Q3, changelog/answers_impl21.md §Q1) | — | |
 | 10097 | player mode byte (0x17D5EF8+5) | — | |
-| 10098 | (int only) **2 if a + b + c ≥ d, else 0** — a = stage time (stats +0x3C), b = pending time reward of a captured card not yet paid (spell object g_Gui +0x10), c = number of time-orb items (type 7) currently in the item list, d = stage time threshold (stats +0x40 = `TIME_THR`[stage][difficulty], 11 §3.1). Read by the Last Spell host sub of each stage boss (ecldata1–5: `≠ 2 → delete`). VERIFIED code + runtime (answers_impl20 §Q1) | — | |
+| 10098 | (int only) **2 if a + b + c ≥ d, else 0** — a = stage time (stats +0x3C), b = pending time reward of a captured card not yet paid (spell object g_Gui +0x10), c = number of time-orb items (type 7) currently in the item list, d = stage time threshold (stats +0x40 = `TIME_THR`[stage][difficulty], 11 §3.1). Read by the Last Spell host sub of each stage boss (ecldata1–5: `≠ 2 → delete`). VERIFIED code + runtime (changelog/answers_impl20.md §Q1) | — | |
 | 10099 | spell-card state (bomb-allowed / running) | — | |
 | 10100 | (int only) spell-card timer | — | |
 
@@ -366,7 +370,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 63 | set_pos | f x, f y | pos = (x, y, 0); clamp (§8) | 96 |
 | 64 | move_to | i dur, i ease, f x, f y | mode2: delta = (x, y, 0) − final pos, start = pos, timer = dur, velocity 0 (delta.x negated if mirrored) | 342 |
 | 65 | set_dir | f ang, f spd | mode1: angle = wrap(ang), speed = spd, duration 0 | 171 |
-| 66 | move_dir | i dur, i ease, f ang, f spd | dur < 1: as 65. Else mode2 with delta = (cos a·spd·dur, sin a·spd·dur, 0), start = final pos; **delta.x negated if mirrored** (bit 18; `Ecl_OpMoveDir` 0x420D10, VERIFIED answers_impl16 §8) | 188 |
+| 66 | move_dir | i dur, i ease, f ang, f spd | dur < 1: as 65. Else mode2 with delta = (cos a·spd·dur, sin a·spd·dur, 0), start = final pos; **delta.x negated if mirrored** (bit 18; `Ecl_OpMoveDir` 0x420D10, VERIFIED changelog/answers_impl16.md §8) | 188 |
 | 67 | move_rand | i dur, i ease, f spd | random direction (§8.3) then as 65/66 | 270 |
 | 68 | set_dir_aim | f off, f spd | angle = wrap(angle_to_player(pos) + off); speed = spd (mode unchanged) | 0 |
 | 69 | move_dir_aim | i dur, i ease, f off, f spd | dur < 1: aimed mode1 with movement duration dur. dur ≥ 1: **same as 66 (not aimed)** | 0 |
@@ -452,7 +456,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 173 | flagA30 | i b | bit 30 | 118 |
 | 174 | aura | i n | (re)create aura effect 0x20+n at final pos | 38 |
 | 175 | spawn_disable | i n | global 0xF54E2C (timeline spawns suppressed if ≠ 0) | 5 |
-| 176 | last_spell | (ignored arg) | GameFlags (0x164D0B4): clear bits 7, 8, 13, set bit 7; also bit 13 when (not spell practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); sets flag A bit 30. `Spell_Start` copies bit 7 into spell flag bit 5 (answers_impl10 §7, VERIFIED). While bit 13 is set and boss 0 exists, `EnemyMgr_Calc` calls `Player_DamageAgainst` with the whole playfield box (centre (192, 224), size (384, 448), accumulator boss+0x2E10) and discards the damage: all shots count as hits (answers_impl12 §5) | 41 |
+| 176 | last_spell | (ignored arg) | GameFlags (0x164D0B4): clear bits 7, 8, 13, set bit 7; also bit 13 when (not spell practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); sets flag A bit 30. `Spell_Start` copies bit 7 into spell flag bit 5 (changelog/answers_impl10.md §7, VERIFIED). While bit 13 is set and boss 0 exists, `EnemyMgr_Calc` calls `Player_DamageAgainst` with the whole playfield box (centre (192, 224), size (384, 448), accumulator boss+0x2E10) and discards the damage: all shots count as hits (changelog/answers_impl12.md §5) | 41 |
 | 177 | set_hud_life | i n | e+0x2E04 | 6 |
 | 178 | move_rand2 | i dur, i ease, f spd | like 67, with 1/4 chance of a fully random angle (§8.3) | 4 |
 | 179 / 180 | hud179 / hud180 | — | HUD functions (later phase) | 2 / 0 |
@@ -553,7 +557,7 @@ left→idle or right→idle script.
 ### 10.1 Per frame, in order
 1. Timelines (§3), then for each enemy slot in index order (alive only):
 2. If flag A bit 10 (being chain-killed): only position follow + death processing. Else:
-3. If bit 8: `Enemy_ReactPlayerMode` 0x42C420 (answers_impl14 §1, VERIFIED at runtime). Player mode = player
+3. If bit 8: `Enemy_ReactPlayerMode` 0x42C420 (changelog/answers_impl14.md §1, VERIFIED at runtime). Player mode = player
    byte +5 (0x17D5EFD, `FUN_0040bc40`). Using the stored mode bit 11 **at entry**:
    - bit 11 clear (enemy in human state): if mode ≠ 0 → effect 0x1F at final pos (count 1, colour 0x80303080),
      aura (e+0x53C8) interrupt 2, sfx 0x28, layer := 0. Then (still this branch, also on the switching frame):
@@ -569,8 +573,8 @@ left→idle or right→idle script.
    `Enemy_CheckLifeThresholds` returns 1, or (timeout ≥ 0 and `Enemy_CheckTimeout` returns 1) (§10.2). On a phase-change
    frame the whole body runs twice: the old phase's instructions for this frame run first, then the new sub's time-0
    instructions, and the clamp/move/clamp step, the end-of-`Ecl_Run` move-mode update and auto-fire run again
-   (answers_boss_phases §2).
-   Screen check (answers_impl18 §IMPL19-Q2, VERIFIED code + runtime): if the main VM has no sprite (e+0x230 = 0)
+   (changelog/answers_boss_phases.md §2).
+   Screen check (changelog/answers_impl18.md §IMPL19-Q2, VERIFIED code + runtime): if the main VM has no sprite (e+0x230 = 0)
    bit 4 is set first (the enemy is then never screen-checked, linked or hit). The box is the **main VM's current
    sprite** size (sprite +0x34 width, +0x30 height, unscaled), centred on the final pos — **not** the hitbox. "On
    screen" (`GameMgr_IsOnScreen` 0x4399AC) = x + w/2 ≥ 0 and x − w/2 ≤ 384 and y + h/2 ≥ 0 and y − h/2 ≤ 448
@@ -578,7 +582,7 @@ left→idle or right→idle script.
    pass); once bit 24 is set and bit 28 is clear, the enemy is freed (`Enemy_Free`, no drops) when it is off
    screen — for an enemy with an after-image trail (e+0x534C ≠ 0) only when both the current pos and the
     oldest trail pos (entry n − 1) are off screen (same sprite box).
-   Trail ring (VERIFIED code, answers_impl21 §Q7): 96 entries × 0x1C at e+0x3394 = {final pos x, y, z; velocity
+   Trail ring (VERIFIED code, changelog/answers_impl21.md §Q7): 96 entries × 0x1C at e+0x3394 = {final pos x, y, z; velocity
    x, y, z; angle}. The template sets every entry's x to −999 (others 0) and every spawn copies the template, so
    unwritten entries are off screen. On every pass of this loop, after movement and before the screen check, while
    e+0x534C ≠ 0: entries shift up (for i = n − 1 down to 1: entry[i] = entry[i − 1], n = e+0x534E), then
@@ -594,7 +598,7 @@ left→idle or right→idle script.
    …, &hitByBomb). hitByBomb is initialised to "player is bombing" (player +0xFDC, set for the whole bomb), but
    `Player_DamageAgainst` overwrites it: when the player's state timer (+0xE2AF4) has advanced (current ≠
    previous, i.e. every normal frame) it writes 0 at entry and 1 only when a damage area of the first 192
-   (+0xB8834) **overlaps the enemy box on this call while life % period == 0** and +0xFDC ≠ 0 (answers_impl18
+   (+0xB8834) **overlaps the enemy box on this call while life % period == 0** and +0xFDC ≠ 0 (changelog/answers_impl18.md
    §Q2, VERIFIED code + runtime). So a kill by shots during a bomb has hitByBomb 0 → drop mode 0. If the extra shot
    box (e+0x2D7C) has x > 0, a second call d2 against it (it overwrites hitByBomb again), and when hitByBomb is
    still 0: d = trunc(d + d2/6.5) for shot types 3/11, else
@@ -608,7 +612,7 @@ left→idle or right→idle script.
      damage-reduction timer (op 160) > 0: bosses `d/9`, others 0; life −= d; var 10083 = d; chained enemies
      forward damage to their root (0x42B370: root life −= d/2, or /9 / 0 under the root's timer, never below
      the root's highest active threshold).
-7. Hit flash (counter byte e+0x3314, answers_impl18 §Q3, VERIFIED code): if the counter is 0 and the enemy took
+7. Hit flash (counter byte e+0x3314, changelog/answers_impl18.md §Q3, VERIFIED code): if the counter is 0 and the enemy took
    damage this frame (d > 0 at step 6) → colour2 = (R 0xFF, G 0x60, B 0x80, alpha = current), VM colour2 flag on,
    sfx 0x14 (0x25 when the low-life warning level ≥ 2), counter := 1; else if the counter ≠ 0 → counter −= 1 and
    flag off (no sfx even if hit); else flag off. Continuous hits therefore flash every 2nd frame; in youkai mode the enemy is drawn with colour2
@@ -624,7 +628,7 @@ left→idle or right→idle script.
    check — an enemy killed this frame (even one spawned and killed in the same frame) can become the aimed enemy,
    and death mode 0 does not clear the pointer (only `Enemy_Free` and the next frame's inactive-slot test do).
 
-### 10.2 Life thresholds (op 133) and timeout (op 134) — VERIFIED (code + runtime, answers_boss_phases)
+### 10.2 Life thresholds (op 133) and timeout (op 134) — VERIFIED (code + runtime, changelog/answers_boss_phases.md)
 Both checks run inside the step-4 loop, i.e. **after this frame's `Ecl_Run` and before this frame's damage (step 6)**:
 damage that takes life below a threshold on frame N switches the phase on frame N+1.
 
@@ -671,7 +675,7 @@ Switch (threshold k):
 flags B bit 3 set; chained children killed with drops; `GameMgr_GaugeAdd(d, not forced)` with d = −200 when
 player byte **+3** (0x17D5EFB, the immediate focus byte — not the +5 mode byte) == 0, else +200 (so also +200
 while +3 is 2 right after load); not forced → skipped entirely while bombing (0x17D6ED4 ≠ 0); the gauge is
-clamped to [GM+0x3DDF8, GM+0x3DDFA] and the old-value copy (+0x20) updated (answers_impl14 §4, VERIFIED
+clamped to [GM+0x3DDF8, GM+0x3DDFA] and the old-value copy (+0x20) updated (changelog/answers_impl14.md §4, VERIFIED
 0x42D65C); then by death mode (op 129):
 
 Before the mode switch (all modes, VERIFIED `EnemyMgr_Calc` 0x42D551): flags B bit 3 (death latch) set;
@@ -682,13 +686,13 @@ if chained; `Enemy_KillChildren(e, with drops)`; gauge ±200 (below).
 |---|---|
 | 0 | add score; enemy dead (alive cleared); aura told to end (interrupt 3); then as "0–1" and "0–2" |
 | 1 | add score; flags A bit 23 set, bits 2, 3, 6 cleared (stays alive, e.g. scripted death animation); then as "0–1" and "0–2" |
-| 0–1 | if boss: HUD boss display off (Hud +0x2C := 0) and op 128 effects released. No death mode clears the boss table entry (0xF54CC0[slot]) or flags A bit 1: only op 127 −1 and `Enemy_Free` (op 1 delete, off-screen free) do. Mode 0 clears only the alive bit (no `Enemy_Free`), so a mode-0 boss stays in the boss table; timeline op 10 still stops waiting because it also tests the alive bit (answers_impl20 §Q2) |
+| 0–1 | if boss: HUD boss display off (Hud +0x2C := 0) and op 128 effects released. No death mode clears the boss table entry (0xF54CC0[slot]) or flags A bit 1: only op 127 −1 and `Enemy_Free` (op 1 delete, off-screen free) do. Mode 0 clears only the alive bit (no `Enemy_Free`), so a mode-0 boss stays in the boss table; timeline op 10 still stops waiting because it also tests the alive bit (changelog/answers_impl20.md §Q2) |
 | 2 | no score; stays alive; only "0–2" |
 | 0–2 | item drops (§10.4); if boss and **no** card active: `BulletMgr_CancelBonus(8000, 1)` + `EnemyMgr_KillAll(8000)`, sum → score + `Hud_ShowBonus`; life := 0; replay-stats word (0x18B8A28)+0xDA \|= 0x20 |
 | 3 | life := 1; flags A bit 3 (loses life) and death-mode bits 20–22 cleared (the latch B bit 3 stays until life > 0 again); HUD boss display off; stats \|= 0x20; death effect e+0x3310 ×3 if ≥ 0; aura interrupt 3; player state 0 → 3 with timer **90**; flags A bits 30 and 31 cleared. No drops, no bullet cancel, no score |
 
 The death latch (flags B bit 3) is set only by the death path above and cleared at one place: in `EnemyMgr_Calc`, right
-after step 6 and before the death test, if the latch is set and life > 0 (VERIFIED 0x42D52x; answers_impl20 §Q3). Any
+after step 6 and before the death test, if the latch is set and life > 0 (VERIFIED 0x42D52x; changelog/answers_impl20.md §Q3). Any
 way life becomes positive works (op 131, a write to var 10051, a threshold clamp, mode 3's life := 1). The check runs
 only on frames where the enemy's script block runs (not chain-killed, flags A bit 10; not paused by flags B bit 7 or the
 flags A bit 30 bomb/state condition).
@@ -699,10 +703,58 @@ max or youkai max** (`Gauge_IsHumanMax`: gauge ≤ GM+0x3DDFC, or `Gauge_IsYouka
 `ItemMgr_Spawn(final pos, 7 = time orb, 1)` → forced mode 3 → Rng_FloatRange + Rng_SignedRange = **4 draws**
 (08 §8.3; nothing if pos.x ∉ [−64, 448] or the item cursor slot is busy). RNG order on a normal kill frame:
 drops (`Enemy_DropItems`: its spark effect ×3 for an item, + random extras) → death sparks ×4 → time orb
-(answers_impl14 §3, VERIFIED at runtime). Then, if a death sub is set: rank ranges reset, working depth 0 (no effect, §5.4), thresholds and timeout −1, threads
+(changelog/answers_impl14.md §3, VERIFIED at runtime). Then, if a death sub is set: rank ranges reset, working depth 0 (no effect, §5.4), thresholds and timeout −1, threads
 freed, descriptor reset, auto-fire interval 0, main context → death sub (clock 0), death sub := −1. Death happens in
 step 6, after this frame's `Ecl_Run`, so the death sub's time-0 instructions run on the **next** frame (one frame later
-than a threshold switch; answers_boss_phases §2).
+than a threshold switch; changelog/answers_boss_phases.md §2).
+
+### 10.3a `Enemy_KillChildren(e, reward)` 0x42ADB0 — VERIFIED
+
+Two independent blocks, in this order, then `Enemy_ChainUnlink(e)` always (changelog/answers_impl12.md §1–4):
+1. **Chain block** when n = `Enemy_ChainChildCount(e)` ≠ 0 (only a chain root: parent +0x2DA4 == 0 and +8 ≠ 0;
+   a chained child counts 0 and never chain-kills its later siblings). The boss part (step 5 below) is gated only
+   on reward ≠ 0, not on the boss flag (flag A bit 1 only selects the cancel type 7/9).
+2. **Single block** when e has a parent and reward ≠ 0.
+Per child the order is: cancel type → c from the **current** n → if bombing n := n/3 → popup with the divided n →
+c orbs (so c uses n before this child's division; the colour is chosen once from the undivided n).
+Parent counter +0x3380: +1 per child created (ops 90–92), −1 in `EnemyMgr_Calc` when an enemy **with a parent**
+dies by damage (just before its `Enemy_KillChildren(e, 1)`); nothing else writes it (never reset by a chain kill,
+not decremented for freed / timed-out children). Starts at 0 (slot zeroed at creation).
+
+Chain links: e+4 = prev, e+8 = next (parent+8 → first child → …); child +0x2DA4 = **parent pointer** (set by
+ECL ops 90–92, which also increment parent +0x3380 and link the child, §10.5). 0x41FD20 = `Enemy_HasParent`.
+
+Chain-kill path (e has children):
+1. n = `Enemy_ChainChildCount(e)`; colour once: n < 2 → 0xFFFFFFFF, 2–5 → 0xFFFFFFD0, 6–9 → 0xFFFFFFB0,
+   ≥ 10 → 0xFFFFFF80.
+2. For each child (via +8): if child flag A bit 9 (follow) → child +0x2D40 := parent pos (+0x2D34); set child flag
+   A bit 10 (0x400); +0x2DA4 = 0, +8 = 0, +4 = 0.
+3. If reward ≠ 0, for each child k:
+   - cancel type = 7 if the parent has flag A bit 1, else 9;
+   - orb count c: team shots: n < 8 ? 2n + 10 : 26; solo human: n < 4 ? 6n + 16 : 40; solo youkai: n < 10 ?
+     2n + 6 : 26;
+   - **QUIRK**: if the player is bombing (0x17D6ED4 ≠ 0) n := n / 3 here, inside the loop, so it compounds
+     (n/3, n/9, …) and also lowers the following children's c;
+   - `Popup_Large`(child +0x2D88 (the old final pos), n, 0, colour); then child final pos +0x2D88 := +0x2D34 +
+     +0x2D40;
+   - `Player_AddCancelCircle`(pos, 32.0, 2.0, 8, type);
+   - c times: r = `Rng_FloatRange(2c)`, then a = `Rng_SignedRange(π)` (**2 RNG draws**, r first); orb at pos +
+     (cos a·r, sin a·r), z 0; `ItemMgr_Spawn`(type 7 time orb, mode 3);
+   - if !0x42F1F0(EnemyMgr) or a spell card is active (0x4178A0): child +0x3304 := 8 and `Enemy_DropItems`(child, 0);
+   - `Sound_PlayAt`(2 + (k & 1), pos).
+4. Always for each child: +0x330C = +0x3308 = 0, +0x3304 = −2.
+5. Boss part (reward ≠ 0): manager scale (2, 2); `Popup_Large`(boss +0x2D88, boss +0x3380, 0, 0xFFF0F00F);
+   scale (1, 1); then 2·(+0x3380) times: r = `Rng_FloatRange(128)`, a = `Rng_SignedRange(π)` (r first), pos =
+   boss +0x2D88 + polar(a, r), z 0, `ItemMgr_Spawn`(type 7, mode 1); then `Player_AddCancelCircle`(boss pos, 32,
+   1.0, 16, 7) and `Timer_Set`(0x18B89D4, 0).
+
+Single-kill path: taken when e has a parent and reward ≠ 0 (a chained child killed on its own; `EnemyMgr_Calc`
+first does parent +0x3380 −= 1): gauge −= gauge/12; timers 0x18B89E0 = 0, 0x18B89C8 = 30, 0x18B89D4 = 50; final
+pos recomputed; `Popup_Large`(pos, 1, 0, 0xFFFFFFFF) ("+1"); `ItemMgr_Spawn`(type 7, mode 1); drops cleared; then
+unlinked from the chain (0x42B2F0).
+
+Callers: `EnemyMgr_Calc` death (reward 1), `Enemy_CheckLifeThresholds` (1), `Enemy_CheckTimeout` (0),
+`Enemy_Free` (0), `Player_UpdateBomb` dissolve end (0).
 
 ### 10.4 Drops (`Enemy_DropItems` 0x42BEA0)
 item ≥ 0: `Effect_Spawn(e+0x3311 + 4, final pos, 3)` (3 sparks), then spawn item `item` at final pos.
@@ -710,7 +762,7 @@ item == −1: if counter (u16 mgr+0x9DCDC0 = 0xF54CE0) % 3 == 0 → `Effect_Spaw
 and spawn the item from the 32-entry byte table 0x4C70D8 at index (u16 mgr+0x9DCDC2 = 0xF54CE2; then += 1,
 wraps 32 → 0); **then counter += 1 in every case** (check before increment). Both values are set at every stage
 load by `EnemyManager_Load`: counter = `Rng_Range16(3)`, index = `Rng_Range16(8)` (the 2 RNG draws of 11 §3
-table); nothing else writes them (VERIFIED, answers_impl16 §5). An item −1 death that does not drop spawns no
+table); nothing else writes them (VERIFIED, changelog/answers_impl16.md §5). An item −1 death that does not drop spawns no
 sparks. The item table:
 `00 00 01 00 01 00 00 00 01 01 00 00 01 01 01 00 01 00 01 00 01 00 01 00 01 00 00 01 01 01 00 00`.
 item ≤ −2: nothing (no sparks, counter unchanged). Then e+0x330C power items (type 0 if player power < 128 else 1) and e+0x3308 type-1 items
@@ -718,11 +770,11 @@ at final pos + (Rng·128 − 64, Rng·128 − 64); counts reset. (Item types: 08
 
 ### 10.5 Child chains (ops 90–92)
 Spawn fails (manager flag) if the parent's life < 1 or it is being chain-killed. The new enemy (vars copied,
-§4.1; its time-0 instructions already ran inside the spawn) is linked after the chain tail: if the spawner is a chain root, the tail found by following +8; otherwise (a root without children yet, or a chained child spawning) **the spawner itself** — a chained child that spawns links the new enemy directly after itself and overwrites its own +8, cutting the rest of the chain off the root's walk (no data case known). Parent pointer +0x2DA4 = the spawner (not the root); spawner +0x3380 += 1. All of the following is applied **after** the spawn-time `Ecl_Run`, so it overrides the child's own time-0 ops (e.g. ecldata3 sub16 `flags_on 3` sets bit 2, then bit 2 is cleared here: escan 0x01001149, answers_impl21 §Q5); it gets
+§4.1; its time-0 instructions already ran inside the spawn — so a child placed in a higher slot than the slot being processed runs `Ecl_Run` **twice** in its spawn frame and a `wait n` started at time 0 fires at spawn frame + n − 1; VERIFIED demo 2: wait 30, spawn 2250, shot 2279) is linked after the chain tail: if the spawner is a chain root, the tail found by following +8; otherwise (a root without children yet, or a chained child spawning) **the spawner itself** — a chained child that spawns links the new enemy directly after itself and overwrites its own +8, cutting the rest of the chain off the root's walk (no data case known). Parent pointer +0x2DA4 = the spawner (not the root); spawner +0x3380 += 1. All of the following is applied **after** the spawn-time `Ecl_Run`, so it overrides the child's own time-0 ops (e.g. ecldata3 sub16 `flags_on 3` sets bit 2, then bit 2 is cleared here: escan 0x01001149, changelog/answers_impl21.md §Q5); it gets
 bit 8 (reacts to player mode), bit 11 = current mode (player byte +5), layer 2 (human, mode 0) / 0 (youkai),
 contact damage off, and — only if it has none yet (e+0x53C8 == 0) — an aura `Effect_SpawnHigh(0x20, pos, 1)`
 (pos e+0x2D34; op 92: e+0x2D88) with `AnmVm_Interrupt` **1 when mode == 0 (human), 2 when youkai**; aura VM flag
-bit 17 := flags A bit 2 (just cleared → 0); if e+0x2E0C bit 0 the aura VM +0x14 is negated (answers_impl14 §7,
+bit 17 := flags A bit 2 (just cleared → 0); if e+0x2E0C bit 0 the aura VM +0x14 is negated (changelog/answers_impl14.md §7,
 VERIFIED 0x41E5ED…). Op 91 position relative to the parent's final pos; op 92 additionally makes the
 child follow the parent (offset = parent pos, bit 9). Sound 0x24. When the parent dies or passes a threshold,
 children are killed (bit 10) with score popups / item showers proportional to chain length (0x42ADB0).
@@ -762,19 +814,19 @@ decoded strings.
 ### 11.1 Spell flags and the end of a card (`Spell_End` 0x4161B0, op 123) — VERIFIED
 Spell object (g_Gui 0x4EA670) flag word: bit 0 active, bit 2 capture still possible (set at start; cleared by a
 bomb started during the card 0x44CBA0, by the player's real death 0x44D150, by a timeout 0x42BC50), bit 3 timed
-out (0x42BC50, from `Enemy_CheckTimeout`), bit 5 last spell (:= GameFlags bit 7 at `Spell_Start`, i.e. op 176 ran before the card; failing such a card shows message 6 "Last Spell Failed", answers_impl10 §7), bit 7 "bomb started during this card" (bomb damage
+out (0x42BC50, from `Enemy_CheckTimeout`), bit 5 last spell (:= GameFlags bit 7 at `Spell_Start`, i.e. op 176 ran before the card; failing such a card shows message 6 "Last Spell Failed", changelog/answers_impl10.md §7), bit 7 "bomb started during this card" (bomb damage
 allowed, §10.1), bit 8 capture payout pending, bit 9 captured, bit 10 name-only declaration (set by native 22 `Spell_ShowNameOnly` 0x415D10, which also
-clears bits 0 and 4 and shows the name banner; the bonus/history display is skipped; used by Mokou's
+clears bits 0 and 4 and calls `Gui_ShowBossSpellName(face −1, fixed exe string 0x4B495C, sprite 1)`: no portrait / cut-in, the spell-background VM +0x2374 gets no interrupt 1, only the name plate, text VM and plate interrupt play, SE 0xE, panel repaint 2; bits 2/3 untouched, so a later `Spell_End` sees bit 0 clear and does nothing; the bonus/history display is skipped; used by Mokou's
 「リザレクション」 in ecldata8/8sp), bit 11 bonus frozen (op 184 `Spell_SetBonusFrozen` 0x41F0E0 = n & 1; no
 decay in `Spell_Calc` 0x416B90 and time-orb +8000 in `Spell_AddBonus` 0x416B10 ignored; all 82 uses are
 `spell_ex 1` at the start of boss death subs). Both cleared by `Spell_Start`; bit 11 also by `Spell_End`.
 Bit 6 is set by op 164 (`Spell_SetFlag6` 0x41F0B0). Bonus +0xFC.
 On op 123 with the card active: bit 0 off; if not timed out → `CancelBonus(8000, 1)` + `KillAll(8000)` →
 score + `Hud_ShowBonus`; if capture still possible → captured: payout value = +0xFC, time reward 700 (flag A
-bit 27) or from the remaining card time (1000 / 100 / linear, answers_phase5 impl8), captures counter, score-file
+bit 27) or from the remaining card time: D = card timer +0x114 (the duration at start), thr = D − D/7, r = remaining +0x108; r ≥ thr → 1000, r < 180 → 100, else (r − 180)·900/(thr − 180) + 100 (integer), captures counter, score-file
 stats, checksum (RNG), start-ring recoloured, SE 0x23, bits 8 and 9; payout 130 frames later in the spell calc
 0x416B90 (`Hud_ShowSpellBonus`, AddScore, AddTime, max point value += reward·10) or at the next card start.
-Not captured → HUD message 5 / 6 (last spell). Always: SE 0xF; player in state 0 → state 3 for 70 frames; stage
+GameFlags bits 7–8 (last-spell / dissolve mode): captured → if bits 7–8 ≠ 0 they become "bit 8 only"; not captured → cleared. Not captured → HUD message 5 "Spell Bonus Failed" / 6 "Last Spell Failed" (5 + bit 5). Always: SE 0xF; player in state 0 → state 3 for 70 frames; stage
 spell background off.
 
 ## 12. Native functions (op 136 once, op 137 every frame) — VERIFIED behaviour summary
@@ -785,13 +837,13 @@ Called with the enemy and the instruction; `arg` = second operand (instr +0x10).
 | 0 | globals 0x4E3D28 = var 10000, 0x4E3D24 = var 10016 |
 | 1, 17 | screen flash (type 3: duration 60 (native 1) / 180 (native 17), 1 repeat, 0xFFFFFFFF; prio 0x15; 13 §3) |
 | 2 | bounce: vel.x negated at x ≤ 0 / ≥ 384; vel.y += var 10022 while vel.y < var 10023; vel.y negated when y < −64; clears bit 28 when y ≥ 480; angle = atan2(vel) when changed |
-| 3, 6, 20 | create two effects (0x38 / 0x3A / 0x41) with an extra ANM script (0x61 / 0x65 / 99) and set the stage callback (0x4235A0) |
+| 3, 6, 20 | create two effects of the same type (native 3: 0x38, 6: 0x3A, 20: 0x41; colour 0xFFFFFFFF at the enemy) in fixed slots 9 and 10; the slot-10 effect then gets etama script 0x61 / 0x65 / 99; set the stage callback 0x4235A0 (§12.1). Native 5 ends both |
 | 4, 7, 21 | bullet "warp" across rectangular zones (zone constants 124/260/140/276 & 56/328/72/344; 56/328/88/360 & −32/416/0/448; 112/271/128/287 & 33/350/49/366) with scaling about the centre; bullets reverse direction |
 | 5 | end effects 9 and 10; global 0x4E4B60 = 2 |
 | 8 | familiar ring: chain members with the same tag (var 10038) get an index (var 10037) and count (var 10018, change flag var 10017); each turns its orbit angle toward leader + index·2π/count by 2 % of the difference |
 | 9, 11, 25 | wide horizontal player-hit rectangles (590 × 160/128, 240/192, 288/224) at the boss with a 12-frame warning phase |
 | 10 | flash (type 3: duration 30, 5 repeats, 0x40FFFFFF) + shake (type 7: amplitude 4, ramp 120, hold 190, out 60) (13 §3) |
-| 12, 14 | toggle bullets whose flags match var 10000 between two states (sprite ±16, speed from var 10016/10017); 12 also walks the calling enemy's child chain (e+8 = next: parent+8 → first child → child+8 …, e+4 = prev): var 10001 == 0 → set flags B bit 7 on every chained child and send interrupt 2 to the two spell-background VMs (0x4E4B68 / 0x4E4E0C); else clear bit 7 and send interrupt 1 (answers_impl10 §4, VERIFIED) |
+| 12, 14 | toggle bullets whose flags match var 10000 between two states (sprite ±16, speed from var 10016/10017); 12 also walks the calling enemy's child chain (e+8 = next: parent+8 → first child → child+8 …, e+4 = prev): var 10001 == 0 → set flags B bit 7 on every chained child and send interrupt 2 to the two spell-background VMs (0x4E4B68 / 0x4E4E0C); else clear bit 7 and send interrupt 1 (changelog/answers_impl10.md §4, VERIFIED) |
 | 13 | stage tint colour 0xFFC03030 |
 | 15 | shake (type 7: amplitude 16, ramp 20, hold 20, out 20) (13 §3) |
 | 16 | bullets with flag 0x100000 within 64 px of a child whose var 10038 == 0 set its var 10038 = 60 and copy var 10019 |
@@ -805,6 +857,33 @@ Called with the enemy and the instruction; `arg` = second operand (instr +0x10).
 | 29 | undo 28: speed 1, velocities restored, sprites restored, interrupt 1 (Supervisor flag 0x20 if arg > 1) |
 | 30 | global 0x18B8A2C = arg |
 | 31 | item at pos: type 5 (type 3 when global 0x17D6ED4 ≠ 0) |
+
+
+### 12.1 Spell mask callback of natives 3 / 6 / 20 — VERIFIED
+
+**Stage callback** `Stage_SpellMaskCallback` 0x4235A0 is stored in `g_Stage`+0x625C (0x4EA28C).
+  `Stage_DrawHigh` calls it after drawing the spell-background VMs, only while `g_Stage`+0xB24 > 0.
+  `Spell_Start` clears it. Steps:
+  1. a = effect 9's VM pos.x · √½ and b = effect 10's VM pos.x · √½. These are the ring radii (update
+     0x4279D0: radius := pos.x), so the squares are inscribed in the rings. c = effect 9 pos + (32, 16).
+  2. Draw a 10-vertex triangle strip, opaque **black** (0xFF000000), z 0.8, rhw 1, with FVF XYZRHW|DIFFUSE.
+     It is a square frame between the square of half-size a and the one of half-size b around c; vertex
+     order (c−a), (c−b), (+a,−a), (+b,−b), (+a,+a), (+b,+b), (−a,+a), (−b,+b), back to the start.
+     Render state:
+     - colour/alpha op SELECTARG1 with arg DIFFUSE (no texture);
+     - z-write on;
+     - ZFUNC unchanged (ALWAYS).
+  3. Restore texture stage 0 to MODULATE / TEXTURE, invalidate the ANM state caches, and set ZFUNC
+     LESSEQUAL.
+  4. Redraw spell-background VM 0 (`g_Stage`+0xB38) mirrored:
+     - scale (−1.5, −1.75), pos (416, 464, 0.7), colour 0xFFE0C0C0, `Draw2DRot`;
+     - then restore scale (1.5, 1.75), pos (32, 16, 0.5) and the colour.
+  5. Redraw VM 1 (+0xDDC):
+     - rotation z negated, pos.z 0.6, colour 0xFFE0C0C0, `DrawRotFlush`;
+     - then rotation negated back, pos.z 0.5, colour restored.
+  6. ZFUNC ALWAYS.
+
+With a depth buffer and these states the picture follows from the depth test (z 0.8 frame, 0.7/0.6 mirrored copies, ZFUNC LESSEQUAL).
 
 ## 13. Verification
 

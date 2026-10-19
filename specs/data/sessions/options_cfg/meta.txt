@@ -1,0 +1,23 @@
+name: options_cfg
+recorded: 2026-10-19T21:41:02+03:00
+wine: /home/anon/PortProton/data/dist/WINE_LG_11-1/bin/wine
+prefix: /home/anon/PortProton/data/prefixes/DEFAULT
+display: :77
+renderer: wined3d (wine builtin d3d8 behind the probe)
+drawlog: 1
+noclip: 0
+sound: on
+score_source: re/work/runs/q22/game_backup/score.dat
+cfg_patch: +0x22 windowed=1, +0x1F music=1 (WAV), +0x20 SE=1
+elapsed_seconds: 84
+replays_saved: 
+menu_base_present: 14
+boot_presents: 13
+boot_polls: 0
+first_menu_poll: 0
+polls: 4743
+last_present: 4756
+frames_without_poll: 0
+presents_with_multiple_polls: 0
+boot_seed: 00e3cb55
+rng_state_after_seed: cb55

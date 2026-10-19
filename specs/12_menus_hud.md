@@ -4,7 +4,8 @@ Sources: th08.exe via Ghidra (names in `symbols.csv`), `title01.anm`, `front.anm
 `nowloading.anm`, `ascii.anm` (dumps `extracted/anm_dis.txt`, `anm_index.txt`). VERIFIED = read from code/data;
 INFERRED = interpretation. "Pressed" = bit set in the raw input word 0x164D528 and not in the previous raw word
 0x164D530. Input bits (11 §7 / 10 §5): SHOT 0x1, BOMB 0x2, ESC 0x8, UP 0x10, DOWN 0x20, LEFT 0x40,
-RIGHT 0x80, ENTER 0x1000. "Confirm" = SHOT|ENTER (0x1001), "Cancel" = BOMB|ESC (0x0A). Key repeat flag
+RIGHT 0x80, SKIP (Ctrl) 0x100, Q 0x200, S 0x400, Home/P 0x800, ENTER 0x1000, D 0x2000, R 0x4000 (keyboard map
+0x43D970, VERIFIED changelog/answers_phase5.md). "Confirm" = SHOT|ENTER (0x1001), "Cancel" = BOMB|ESC (0x0A). Key repeat flag
 0x164D538: after 30 frames of unchanged input, true on every 8th frame (Supervisor).
 
 Common sounds: 10 `se_ok00` confirm, 11 `se_cancel00` cancel, 12 `se_select00` cursor move.
@@ -32,7 +33,7 @@ Loading-screen state = Supervisor+0x2FC:
   (500, 440) and the full-screen surface-8 view is enabled; otherwise (next stage, retry) `Loading_Begin` at
   (280, 430). The loader thread calls `Loading_Wait` after the stage is ready; after a stage clear it
   waits there until the player confirms (11 §4).
-- **Boot presents** (answers_impl15 §Q1, VERIFIED runtime): presents 1–2 = `Window_InitD3D` (0x45B020: clear black +
+- **Boot presents** (changelog/answers_impl15.md §Q1, VERIFIED runtime): presents 1–2 = `Window_InitD3D` (0x45B020: clear black +
   Present, twice); from present 3 `Frame_Run`. Presents 3–5 contain no primitives (cause INFERRED: loader-thread
   start-up), but the nowloading VMs already tick every calc; present 6 is the first logo frame (VMs at script time 5).
 - Loading VM draw 0x445D3E (prio 2, VERIFIED): for each of the 3 VMs pos += pos_offset, `Draw2DRot`, pos −= pos_offset.
@@ -40,7 +41,7 @@ Loading-screen state = Supervisor+0x2FC:
   capture is pending): after the next Present the back buffer is copied into surface slot 8, which
   `Supervisor_DrawLoading` then shows. Used by `GameMgr_OnRegister` (both branches), the main-menu loading paths and
   the music-room exit; the probe labels this `K screen th08logo.jpg` (slot name), but it is the captured last frame.
-- **Result viewer → menu** (answers_impl17 §Q4, VERIFIED): `Result_OnRemove` moves surface slot 0 (`result.jpg`) into slot 8
+- **Result viewer → menu** (changelog/answers_impl17.md §Q4, VERIFIED): `Result_OnRemove` moves surface slot 0 (`result.jpg`) into slot 8
   (0x45A3FD: release slot 8, move both surface pointers and the size record, clear slot 0). The loading screen of the
   following menu load shows the plain `result.jpg` (no capture). The result viewer already started the loading state, so
   the menu's `Loading_Begin` is a no-op and the banner animation continues (it started at result frame P+1).
@@ -86,7 +87,7 @@ Screen dispatch (0x467399):
 After the screen function, all 142 VMs are run every frame (and the description VM). A screen switch
 (`Menu_SetScreen` 0x4694C3) resets cursor timers/sub-state and stores the previous screen.
 
-**Screen entry rule (answers_impl15 §Q12, VERIFIED).** `Menu_SetScreen` (0x4694C3) runs inside the old handler (which
+**Screen entry rule (changelog/answers_impl15.md §Q12, VERIFIED).** `Menu_SetScreen` (0x4694C3) runs inside the old handler (which
 then returns) and zeroes +0x10, +0x1442C, +0x0C, +0xC294. The new handler first runs on the next calc frame; all nine
 handlers begin with an entry block guarded by +0x1442C == 0 (range interrupts, cursor sprites/interrupts), and
 `AnmManager_RunRange` runs after the handler in the same `MainMenu_Calc`, so a press on frame P gives the new screen's
@@ -107,7 +108,7 @@ interrupts and their VM effect on frame P + 1.
 | 135 | Extra difficulty image |
 | 136–141 | headings (`sl_text.png`: e.g. select difficulty / character) |
 
-**Interrupt delivery** (answers_impl17 §Q3, VERIFIED):
+**Interrupt delivery** (changelog/answers_impl17.md §Q3, VERIFIED):
 - Each VM has one pending slot (+0x1FE). A per-VM write after `AnmManager_InterruptRange` in the same handler call replaces
   the range interrupt for that VM.
 - A VM without a label for the id takes its catch-all label (−1). In every title01 script the catch-all is followed by
@@ -122,7 +123,7 @@ get: description VM 1 = show, 2 = hide; difficulty VMs 24 = selected, 25 = not s
 8 = hide, 23 = main portrait.
 
 ### 2.2 Top menu (screen 0) — VERIFIED
-Background (answers_impl18 §Q3, VERIFIED code + draw logs): surface 0 (`title00.png`) is copied by the menu's own
+Background (changelog/answers_impl18.md §Q3, VERIFIED code + draw logs): surface 0 (`title00.png`) is copied by the menu's own
 draw (prio 3, 0x47087F: `Anm_DrawSurface(0)` first, then the 142 VMs and the description VM). The nowloading VMs of
 `Supervisor_DrawLoadingVms` (prio 2) are queued earlier in the sprite batch, but `Anm_DrawSurface` is an immediate
 `CopyRects` that does **not** flush the batch, so the device receives the copy first and the batched nowloading
@@ -130,11 +131,15 @@ quads after it (flushed by the next state change, i.e. the first title01 quad): 
 top of** the background. A port must draw surface 0 before the prio-2 loading VMs (or emulate the deferred batch).
 Entering: request title BGM slot 8 if coming from a non-menu scene; load surface 0 = `title/title00.png` when
 coming from the title/difficulty/replay screens; create the 142 VMs once; interrupt 2. If a replay was being
-watched → go straight to the replay screen. If `+0x6C` ≠ 0 → jump to the difficulty screen of practice (8)
-or spell practice (16). Then for 9 frames render one description per frame into the 9 description VMs
+watched → go straight to the replay screen. If `+0x6C` ≠ 0 (back from a practice game; 2 =
+spell practice, which also sets flags bit 14) → screen 8 + 7·(flags bit 14), i.e. **8** (practice difficulty) or **15**
+(character select, spell-practice variant), range interrupt 5. Each of these screens forwards at once while +0x6C ≠ 0
+(VERIFIED code; `musicroom_practice` trace shows menu 0 → 15 → 17 on consecutive frames 7887–7889):
+practice 8 → 9 (cursor 0) → 11 (cursor = g_StageIdx); spell practice 15 → 16 → 17 (16 §6.1: stage row 9 if the
+last card id > 204). Then for 9 frames render one description per frame into the 9 description VMs
 (`Text_RenderCentered` 0x466650: centred in the sprite, text colour 0xFFF0E0, 2-px black outline, font 15).
 The 14 description VMs use text.anm script 9 (sprite 21 + i, centred at (320, 448); interrupt 1 = fade in 20
-frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn (answers_impl9 §15):
+frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn (changelog/answers_impl9.md §15):
 
 | item | text | action on confirm |
 |---|---|---|
@@ -152,10 +157,10 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
   and 2 are skipped and drawn with colour 0xFF404040.
 - Every frame: all item VMs get the unselected sprite, the cursor item its base sprite; when the cursor
   changes the new description VM gets interrupt 1.
-- **Description VM timing** (answers_impl17 §Q4, VERIFIED, mopup1 presents 2866–2875):
+- **Description VM timing** (changelog/answers_impl17.md §Q4, VERIFIED, mopup1 presents 2866–2875):
   - The menu loader ends by setting +0xC2BC = description VM 0. All 14 description VMs start text.anm script 9, which
     fades in by itself (alpha 255·t/20).
-  - Release frame (answers_impl18 §Q3, VERIFIED code + selftest1 presents 46–48): the loader tail sets +0xC2BC,
+  - Release frame (changelog/answers_impl18.md §Q3, VERIFIED code + selftest1 presents 46–48): the loader tail sets +0xC2BC,
     +0x14434 = 0 and `Loading_End` before that frame's calc (the session park point releases it at Frame_Run
     pre-calc), so `MainMenu_Calc` runs fully in the release frame: the Top handler's entry block (interrupt 2 to
     the item VMs), `RunRange` and `AnmVm_Run(+0xC2BC)`. The description VM therefore ticks for the first time in the
@@ -180,9 +185,9 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
 - Input accepted from frame 10 on. Confirm: sfx 10 (+ sound flush). Cancel: cursor jumps to Quit (sfx 11).
 - **Demo**: idle counter +1 per frame, reset by any raw input; after 1500 frames load
   `demo/demorpy((n+1) mod 4).rpy`; on success: flags = replay | demo (bits 3, 1), difficulty/shot from the
-  replay header (+0x6B / +0x6A), byte 0x164D0B2 = shot % 2 (answers_phase7 §3), stage = first stage with a record, scene 2. (Demo exit: 11 §4.)
+  replay header (+0x6B / +0x6A), byte 0x164D0B2 = shot % 2 (changelog/answers_phase7.md §3), stage = first stage with a record, scene 2. (Demo exit: 11 §4.)
 
-**What the top menu draws** (menu draw 0x47087F, every frame while quit state +0x14434 = 0; VERIFIED, answers_bugs2
+**What the top menu draws** (menu draw 0x47087F, every frame while quit state +0x14434 = 0; VERIFIED, changelog/answers_bugs2.md
 §C1; ref `c1_menu_practice_sel.png`):
 1. **Background.** Surface slot 0 (`title00.png`) is copied to the back buffer with `IDirect3DDevice8::CopyRects`
    (`Anm_DrawSurface` 0x466BB0: full image rect to dest point (0, 0)). It is a plain pixel copy: no quad, no
@@ -231,8 +236,8 @@ Choices = 4 teams, or 12 (teams + 8 solos) when Extra is unlocked for all four t
 | 10 | 129, 118 (−1, 117) |
 | 11 | 130, 117 (−1, 118) |
 
-(Enable/interrupt details, answers_impl17 §Q3, VERIFIED. Here "enabled" = flag bit 1.)
-- **Cursor** (answers_impl18 §Q3, VERIFIED code): the difficulty screen's confirm calls `Menu_SetScreen(5/9/13)` and
+(Enable/interrupt details, changelog/answers_impl17.md §Q3, VERIFIED. Here "enabled" = flag bit 1.)
+- **Cursor** (changelog/answers_impl18.md §Q3, VERIFIED code): the difficulty screen's confirm calls `Menu_SetScreen(5/9/13)` and
   then sets cursor := 0; the character screen's entry block (its first calc, +0x1442C == 0) sets cursor :=
   g_ShotType (0x164D0B1, the last used shot type) before any input handling. The session trace's `cursor` column is
   sampled at `MainMenu_Calc` **entry**, so on the screen's first row it shows the 0 left by the difficulty confirm
@@ -247,7 +252,7 @@ Confirm: shot = cursor, sfx 10; practice → screen 11; spell practice → scree
 `difficulty = config+0x21`, `stage = 0` (Extra: `difficulty + 4` = 8), flags &= ~replay, stop music,
 **scene 2** (new game). Cancel: back to the difficulty screen (spell practice: fade back to the top menu).
 
-**Difficulty plate** (VERIFIED, answers_bugs2 §C2; ref `c2_charsel_team0_normal_*.png`). On the first frame of
+**Difficulty plate** (VERIFIED, changelog/answers_bugs2.md §C2; ref `c2_charsel_team0_normal_*.png`). On the first frame of
 screens 5/9/13 (not 15), right after the range interrupt 8, VM `131 + config+0x21` (Easy 131 … Lunatic 134;
 Extra 135 since config+0x21 = 4 there) gets interrupt **9**. That overrides the 8 the same frame (one pending slot),
 so this one VM does not hide. Script label 9 does `pos_time_out2` → (16, 384) over 20 frames (top-left anchored)
@@ -306,14 +311,16 @@ Screen 16 chooses character and stage (stage 9 used for last words); screen 17 l
 from table 0x4C6C40[stage] (spell ids, i16); the chosen id is stored in 0x164D0B8, difficulty derived from the
 id (0x4144D0, Normal for some), stage index derived from the id for last words; then scene 2.
 
-### 2.7 Option (screen 2) — VERIFIED fields, labels INFERRED
-10 items. Values in the live config (0x17CE870 + off): +0x1C starting lives (0..`max`, max limited by the play
-count 0x164CED0 < 30 / < 60), +0x1E toggle, +0x1F music mode (0 off, 1 WAV, 2 MIDI; changing it restarts
-`bgm/th08_01.mid` in slot 8), +0x27 BGM volume and +0x28 SE volume (0–100, left/right ±1, holding ±4),
-+0x22 toggle, +0x25 slow mode toggle, key config (screen 3), reset (lives 2, +0x1D 3, music 1, +0x20 1,
-slow 0), quit. Sound 0x1D on certain changes. Value display = one VM per value, lit = VM base sprite, dim = base + 1:
+### 2.7 Option (screen 2) — VERIFIED (item order and labels confirmed on screen, `options_cfg` session)
+10 items, top to bottom: Player, Graphic, BGM, Vol, S.E.Vol, Mode, SlowMode, Reset, KeyConfig, Quit (logic: 15 §1.3).
+Values in the live config (0x17CE870 + off): +0x1C starting lives (shown as 1..7 = lives + 1; 0..`max`, max limited
+by the play count 0x164CED0 < 30 / < 60), +0x1E Graphic 32Bit/16Bit, +0x1F music mode (Off, Wav, Midi; changing it
+restarts `bgm/th08_01.mid` in slot 8), +0x27 BGM volume and +0x28 SE volume (0–100; a press steps ±5, holding ±1
+per frame after 30 frames: 15 §1.3), +0x22 Mode FullScreen/Window, +0x25 SlowMode Off/On, Reset (lives 2, +0x1D 3,
+music 1, +0x20 1, slow 0), KeyConfig (screen 3), Quit. SE 0x1D plays every 50 frames while the cursor is on Vol or
+S.E.Vol. Value display = one VM per value, lit = VM base sprite, dim = base + 1:
 VMs 20–26 lives 0–6 (25/26 hidden below 30/60 plays), 27–28 colour, 29–31 music, 32–35 BGM volume digits
-(sprite base + digit·2), 36–39 SE volume, 40–41 window, 42–43 slow (answers_impl9 §16).
+(sprite base + digit·2), 36–39 SE volume, 40–41 window, 42–43 slow (changelog/answers_impl9.md §16).
 
 ### 2.8 Replay (screen 7) — VERIFIED
 Lists `./replay/th8_%.2d.rpy` (No.01…) and `th8_ud????.rpy` ("User …") files; choosing one loads it and sets
@@ -388,9 +395,21 @@ Glyphs are 16×16 cells drawn 13 px apart (scaled). Scale applies to both the qu
 Opening: GM calc on ESC (11 §4). The ASCII manager calc (prio 1, 0x402200) runs this while `paused`, and
 the continue menu while `game_over` (only one of each). The playfield is captured into `capture.anm`
 (rect 32,16,384,448) when the capture option bit (0x17CE8FC bit 1) is set and drawn behind the menu.
+**Texture capture** (VERIFIED code): `AnmManager_QueueCapture` 0x406A30(slot, src x, y, w, h, dst x, y, w, h) stores a
+request at AnmManager +0x2A252C… only if none is pending (else it returns −1 and the pause/continue menu closes at
+once, state 0). After the next Present, `AnmManager_ApplyPendingCaptures` 0x443B60 copies the back-buffer rect into
+the texture of ANM slot `slot` entry 0 (`Anm_CaptureToTexture` 0x466F20, D3DX surface load with the default filter,
+so a size mismatch is filtered). All four callers (pause menu, continue menu, `Hud_StageTransition`, `Msg_Run`
+stage-end) pass slot 3 (`capture.anm`), source (32, 16, 384, 448) = the playfield, and as destination the capture
+VM's current sprite rectangle truncated to int: (sprite +0x08 u0, +0x0C v0 in texture pixels, +0x34 width, +0x30
+height) (structs.md AnmSprite). The capture therefore shows the frame presented just before the request.
 VMs: `ascii.anm` scripts 12–21 on 10 menu VMs (title, items "resume / quit / retry", confirm "yes/no" …).
 Colours: selected 0xFFFFFFFF, others 0xFF505050 (confirm screen: selected 0xFFFF8080); the selected item is
 offset (−4, −4).
+**Draw** (0x404750, ASCII manager draw, only while paused 0x164D0BA ≠ 0; VERIFIED): flush the batch, viewport =
+playfield (32, 16, 384, 448); if the capture option bit is set and the pause state ≠ 0, draw a temporary copy of the
+capture VM (+0x1A70) with VM flag bit 13 set (z-write off) via `Draw2DSnap`; then `Draw2DSnap` each visible menu VM
++8 + i·0x2A4, i = 0..9.
 
 | state | meaning | input (from frame 4 of the state) |
 |---|---|---|
@@ -413,6 +432,13 @@ Flow and side effects: 11 §4.2. UI: `ascii.anm` scripts 22–24 on three VMs ("
 selected item colour 0xFFFF8080, other 0xFF505050; default cursor "No" (state 2) in normal games and Extra; "Yes"
 (state 1) only in spell practice when the card was not captured (spell flag bit 9 clear) (VERIFIED 0x404890, corrected Phase 5). Input from frame 30 (state 2) / frame 4 (state 1); UP/DOWN toggle with sfx 0; confirm sfx 10.
 
+**Draw** (`ContinueMenu_Draw` 0x4052B0, from the ASCII manager draw, only while game_over 0x164D0BB ≠ 0; VERIFIED):
+flush the sprite batch, set the D3D viewport to the playfield (x 32, y 16, w 384, h 448 from 0x164D2DC…0x164D2E8,
+truncated); if the capture option bit (0x17CE8FC bit 1) is set and (state ≠ 0 or the state frame > 2), draw the
+captured playfield VM (menu +0xFE0) with `Draw2DSnap`; then `Draw2DSnap` each visible menu VM at +8 + i·0x2A4:
+i = 0..3 (continue?, yes, no, night clock) in a normal game below Extra, i = 0..2 (no clock) in spell practice or
+Extra. Positions and fades come from the VMs' scripts (ascii.anm 22–24, times.anm 1).
+
 ## 5. HUD (`g_Hud` 0x160F428, calc prio 15 `Hud_Calc` 0x4338CA, draw prio 17 `Hud_Draw` 0x433927)
 
 ### 5.1 HUD object — VERIFIED
@@ -434,7 +460,11 @@ Impl VMs: `front.anm` scripts 0–15 → VMs impl+i·0x2A4 (i = 0..15); `stgNtxt
 (stage-clear), script 0x1A → impl+0x5484, script 0x19 → impl+0x22E14 (difficulty name, sprite 0x11B + difficulty,
 0x120 for spell practice ids ≥ 205); `times.anm` → impl+0x2156C (night clock, ECL 179/181), impl+0x34D4 (clock,
 sprite = counter).
-**impl+0x34D4 runs only while the stage title shows** (VERIFIED, answers_impl17 §5.2): `Hud_Update` calls
+Stage-title render state (VERIFIED): `stgNtxt.anm` scripts contain no `blend_mode` and no `zwrite_off`, so title
+quads use the default VM state (alpha blend, zwrite 1, ztest always, colour = tex × col); colour changes only through
+`color_time` (scripts 0/1 at t 970 → (80, 96, 144) over 120 frames) and alpha ops. Do not inherit the previous
+sprite's blend state.
+**impl+0x34D4 runs only while the stage title shows** (VERIFIED, changelog/answers_impl17.md §5.2): `Hud_Update` calls
 `RunRange(impl+0x34D4, 1)` only when not spell practice (GameFlags bit 14 clear) **and** the alpha byte of the
 stage-title VM 0 colour (impl+0x2A44 + 0x1F3 = `stgNtxt.anm` script 0) is ≠ 0; it is drawn every frame
 (`Hud_DrawBoss`). times.anm script 0 fades in at its time 240, so the clock appears 240 run-frames after title
@@ -464,8 +494,28 @@ it is (stage 4A: last clock draw at frame 547 with alpha 4, exactly at the end o
 
 `front.anm` entry 1 (`ename.png`, sprites 16–32): boss name plates (128×16).
 
+**Boss name plate** (VERIFIED): front sprite 10 (128×16 at (0, 208) of front.png, empty in the file) is filled after
+each stage load: `GameMgr_Calc` calls `Hud_SetStageNamePlate` 0x438046, which calls `Hud_SetBossNamePlate(n)` 0x437F5C;
+that copies the rectangle of front.anm sprite n into sprite 10's rectangle of the front.png texture
+(surface-to-surface copy 0x467040). front.anm script 12 shows it (pos (80, 26) → (32, 26), fade in 16 frames on
+interrupt 1, out on interrupt −1). `Msg_Start` entry 0 also sets plates (10 §4). Practice = spell practice,
+id = card id 0x164D0B8:
+
+| stage idx | plate |
+|---|---|
+| 0 (default) | 0x10 |
+| 1 / 2 / 4 / 6 | 0x11 / 0x12 / 0x14 / 0x17 |
+| 3 | not practice or id 0xD6 → 0x13; ids 0xD8–0xDD → 0x1A–0x1F; other practice ids: **no call** (plate left as it was, QUIRK) |
+| 5 | not practice or id 0xD4 → 0x15, else 0x16 |
+| 7 | not practice or id 0x93–0x96 → 0x17, else 0x18 |
+| 8 | not practice, id 0xBF–0xC1 or 0xD5 → 0x20, else 0x19 |
+
+`ename.png` rows (16 px, 128 wide): 0x10 Wriggle, 0x11 Mystia, 0x12 Keine, 0x13 Reimu, 0x14 Marisa, 0x15 Tewi,
+0x16 Reisen, 0x17 Eirin, 0x18 Kaguya, 0x19 Mokou, 0x1A Sakuya, 0x1B Youmu, 0x1C Alice, 0x1D Remilia, 0x1E Yuyuko,
+0x1F Yukari; 0x20 = sprite 32, rect y 32 = Keine (the Extra plate).
+
 ### 5.3 Side panel drawing (`Hud_DrawPanel` 0x43625D) — VERIFIED
-The original only repaints changed rows (dirty counters / full repaint counter 0x17CE8CC, writers in answers_impl12 §9; the back buffer is kept between frames, see `specs/data/drawlog/FORMAT.md` §4); a reimplementation
+The original only repaints changed rows (dirty counters / full repaint counter 0x17CE8CC, writers below; the back buffer is kept between frames, see `specs/data/drawlog/FORMAT.md` §4); a reimplementation
 may redraw everything every frame. Full repaint: tile 13 over x = 0 (y 0..464 step 32) and x 416..624 ×
 y 16..464 (step 32); strip 14 at y 0 and 464 for x 0..624 step 128; then VMs 0–9 and the difficulty VM.
 Each frame strip 14 is also drawn along y = 464 for x 32..368 (step 128).
@@ -485,10 +535,19 @@ ASCII text (`ascii.anm` glyph = sprite (char − 1), advance 13 px × scale, '\n
 
 (Score digits have an implicit trailing 0: the internal score is ÷10.)
 
-**Depth values (answers_impl15 §Q8, VERIFIED).** pos.z set by `Hud_DrawPanel`: 0.49 border tiles, strips and the
+**Depth values (changelog/answers_impl15.md §Q8, VERIFIED).** pos.z set by `Hud_DrawPanel`: 0.49 border tiles, strips and the
 hiscore/score row blanks; 0.48 the other row blanks; 0.46 life/bomb icons; ASCII text 0. zwrite = VM flag bit 13 clear
 (front.anm scripts 0–12 have `zwrite_off`, tile scripts 13–15 do not). Invisible in practice (ztest always; depth is
 cleared every frame), only relevant for draw-log parity.
+
+**Full-repaint counter 0x17CE8CC** (VERIFIED): `Hud_DrawPanel` repaints the panel background in full while it is ≠ 0; `Frame_Present` decrements it once per presented frame while not paused (0x164D0BA == 0). Writers (value = number of full-repaint frames): 
+- 2: `Gui_ShowPlayerSpellName` / `Gui_ShowBossSpellName` (spell-name plates), `Hud_ShowBonus`, `Hud_ShowMessage`, 
+  `Hud_ShowSpellBonus`, `Frame_Present` after a failed Present + device reset; 
+- 3: WinMain after a device reset; 
+- 8: `ContinueMenu_Update`; `Hud_Calc` raises it to 8 while the Skip key (input 0x100) is held; 
+- 0x10: `Hud_Load`; 0x3C: `GameManager_StageStart`; 0x1BA: `Msg_Run` (one dialogue op); 
+- 0: `Supervisor_Init`.
+A port that redraws the whole screen every frame can ignore it.
 
 ### 5.4 Boss UI (`Hud_DrawBoss` 0x43741D; only when no dialogue runs and the bar is shown or fading) — VERIFIED
 - Life bar quad x 64 … 64 + 320·displayed_fraction, y 19..23, colour alpha|0xFFFFFF (top) / alpha|0x202060.
@@ -502,7 +561,7 @@ cleared every frame), only relevant for draw-log parity.
 - Every frame when not paused, no continue menu, bullets not frozen (bit 10) and boss slot 0 (0xF54CC0) ≠ 0:
   `Popup_LargeStatic`(pos (2, 29) → screen (34, 45), p3 = number of chained children of the boss
   (`Enemy_ChainChildCount`), p4 = boss +0x3380, colour 0xFFF0F00F, manager scale (1, 1)) — a 2-frame large
-  popup re-issued every frame; no count > 0 test, so it reads "+0" without children (VERIFIED, answers_impl10
+  popup re-issued every frame; no count > 0 test, so it reads "+0" without children (VERIFIED, changelog/answers_impl10.md
   §1; 13 §4).
 
 ### 5.5 Popups (`Hud_DrawPopups` 0x438A89) — VERIFIED
@@ -543,7 +602,7 @@ when reached (stages 1–5) the stage-clear trigger fires (11 §4.1).
   it rises by 4 per frame up to 255 (values ≥ 0xFC snap to 0xFF; 0xFF stays).
 - Score/hiscore and the boss UI use the same ASCII manager queue (256 strings per frame, drawn at prio 14/20).
 
-### 5.8 Spell-name plates, cut-ins, spell-bonus line (`g_Gui` 0x4EA670) — VERIFIED (answers_impl11 §13)
+### 5.8 Spell-name plates, cut-ins, spell-bonus line (`g_Gui` 0x4EA670) — VERIFIED (changelog/answers_impl11.md §13)
 The spell manager object is `g_Gui`; `Gui_Calc` (calc prio 12) = `Spell_Calc` 0x416B90, `Gui_Draw` (draw prio
 15) = `Spell_Draw` 0x4178C0. It owns 14 VMs at +0x120 + k·0x2A4:
 
@@ -623,7 +682,7 @@ Scripts (all positions are screen coordinates):
   sprite 135 = (0, 192, 144×16)): interrupt 1 → alpha 0 → 255 over 30, pos (308, 344) → (308, 324) over 30
   (from t = 30), t = 100 → (308, 52) over 30 (mode 4); interrupt 2 → alpha → 0 over 30, hidden.
 
-### 5.9 Human/youkai gauge readout (bottom-left of the playfield) — VERIFIED (answers_bugs2 §C3b)
+### 5.9 Human/youkai gauge readout (bottom-left of the playfield) — VERIFIED (changelog/answers_bugs2.md §C3b)
 Ref: `specs/data/ref/c3_demo0_f1400_gauge_human_max.png` ("−100.00%", blue) and
 `c3_demo0_f2200_gauge_youkai_max_timeorbs.png` ("82.76%", red). All coordinates are **screen** coordinates (no
 playfield origin added).
@@ -645,7 +704,7 @@ Glyph sprites: 136–145 = '0'–'9', 146 '%', 147 '.', 148 '-' (8×12 each).
 and from `MainMenu_OnRegister`. In StageStart it runs near the end (after the Gui registration, right after
 `Ascii_InitVms`, which does not touch these VMs). That is **after** `Player_Load`, which runs synchronously inside
 `Player_Register` at the top of StageStart and writes the limits. So the setup always uses the limits of the game
-being started (VERIFIED, answers_impl13 §1). Steps:
+being started (VERIFIED, changelog/answers_impl13.md §1). Steps:
 1. Restart scripts G0 5, G2 7, G1 6, G3 8, G4 4 with `AnmFile_SetScript`. This does **not** zero pos (only
    `AnmManager_SetScript` does, 05 §8), so G0/G3 keep their last position. The restart runs the script once
    immediately (`AnmFile_StartScript`), so G1/G2 are at (88, 449) again before step 2 (no accumulation).
@@ -654,10 +713,10 @@ being started (VERIFIED, answers_impl13 §1). Steps:
 2. G1.x −= 56·min/−10000 and G2.x += 56·max/10000, with min/max = gauge limits 0x164D300/0x164D302 (09 §9.3).
    That gives 人 x = 32 and 妖 x = 144 by default; shot 3: 60/144; shot 10: 60/116; solo human: 32/99.2; solo
    youkai: 76.8/144. The limits are written only by `Player_Load`. They are 0/0 at boot (both ends x = 88) and keep
-   the last game's values in the menu. Neither is visible, because the readout is hidden there (answers_impl13 §3).
+   the last game's values in the menu. Neither is visible, because the readout is hidden there (changelog/answers_impl13.md §3).
 3. Re-send the stored interrupt (+0x827C) to G0–G3. At boot it is 0, which has no label: the VMs stay hidden.
 
-**Timing at stage start (answers_impl15 §Q7, VERIFIED).** The setup runs on the loader thread, but `Ascii_Calc` has calc
+**Timing at stage start (changelog/answers_impl15.md §Q7, VERIFIED).** The setup runs on the loader thread, but `Ascii_Calc` has calc
 prio 1 and keeps running during loading (GM prio 2 returns 3), so label 1 is already k frames old at game frame 1;
 k depends on the loader race: 28 / 27 / 29 / 33 in the demo 0 / 1 / 2 / 3 reference logs (slide ends at gm 12/13/11/7,
 人/妖/▼ appear at k = 61). Port: run the setup at loading frame 81 − k (replay loading lasts 81 frames); k = 28 if one
@@ -670,7 +729,7 @@ constant is wanted.
   leave except next stage (3) and same-stage reload (11; 12 is never requested). The supervisor turns 11/12 into 3
   before the GM is removed (11 §7). After 3/11 the last id (1/2/3) is just re-sent by step 3.
   **Retry (10)** is a full exit: 99 hides the readout, then the new GM is a fresh start and `Player_Load` sends
-  1, so the readout fades in again exactly like at a new game (VERIFIED, answers_impl13 §2).
+  1, so the readout fades in again exactly like at a new game (VERIFIED, changelog/answers_impl13.md §2).
 - 2/3 = player-overlap fade, `Player_UpdateGaugeFade` 0x44D420, called every frame in `Player_Calc` after the shot
   timer. With the player pos (playfield coords +0x2B4/+0x2B8) and cur = +0x827C:
   - y < 400: if cur = 2 → 3.

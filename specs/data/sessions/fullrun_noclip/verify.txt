@@ -1,0 +1,8 @@
+fullrun_noclip replay verification in the original (2026-10-19, after RE-Q22)
+command: TH08_BOSS="0 200000" re/tools/play_session.sh fullrun_noclip --no-drawlog --out re/work/runs/fullrun_verify/play
+probe: play mode (recorded input words, boot seed 00100ab3 forced), noclip 1, headless Xvfb :77
+result: trace 124708 rows compared from the first main-menu row through the ending/staff roll (scene 9), 0 differ
+events: identical to the recording (2733 noclip_hit, all loader/release/scene events match)
+poll alignment: 0 PLAY MISMATCH lines; replay exited 600 polls past the recording
+output (not in git): re/work/runs/fullrun_verify/play/{trace.txt.xz,events.txt,polls.txt,probe_log.txt,meta.txt}
+boss log: re/work/runs/fullrun_verify/play/boss.txt(.xz), 388651 lines, every boss/spell calc row of the whole run (format: re/probe/session.inc sess_boss)

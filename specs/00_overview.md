@@ -53,7 +53,7 @@ if skip_counter >= config.frame_skip:        # VERIFIED cfg+0x23: 0 and 1 both d
     run(draw_chain)
     anm_manager.flush; EndScene; skip_counter = 0
 Present()                                    # every executed frame; on failure Reset device
-screenshot key -> snapshot/thNNN.bmp         # answers_phase7 §6
+screenshot key -> snapshot/thNNN.bmp         # changelog/answers_phase7.md §6
 ```
 
 - Logic rate: fixed **60 Hz**, one calc step per frame; there is no fixed-step catch-up.

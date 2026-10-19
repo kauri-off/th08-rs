@@ -65,7 +65,7 @@ Supervisor scene 9 calls `Ending_Register` 0x4296A0.
    - timers +0x2A70 and +0x2A64 reset;
    - the previous file buffer is freed.
 
-The CLRD+0x20 flag is read and cleared here. No code ever stores a nonzero value in it (struct-relative scan, answers_phase7 §4): it is 0 unless score.dat itself contains a nonzero byte, which is then honoured once and cleared. VERIFIED.
+The CLRD+0x20 flag is read and cleared here. No code ever stores a nonzero value in it (struct-relative scan, changelog/answers_phase7.md §4): it is 0 unless score.dat itself contains a nonzero byte, which is then honoured once and cleared. VERIFIED.
 
 **Skip-allowed** (+0x2A58) enables fast-forward with Ctrl. When it is set and Ctrl is held, the calc runs the interpreter and the 15 VMs up to 9 times per frame. Ctrl also releases waits (§1.4). In effect, an ending already seen can be skipped.
 
@@ -127,7 +127,7 @@ Script names in the files carry a `data/` or `data/end/` prefix. The archive loo
 3. Fade overlay (0x428910), steps once per draw call:
    - modes 1–4 as in §1.3, with counter +0x2AA8 and duration +0x2AAC;
    - when alpha ≠ 0, draw a full-screen 640×480 untextured quad with colour +0x2AA4 (0x45B1E0).
-   - VERIFIED: the caller passes +0x2AA4 in EDX to `Screen_FillRect` (ECX = rect {0, 0, 640, 480}); all four vertices get that diffuse colour, z 0, rhw 1, FVF XYZRHW|DIFFUSE, triangle strip; colour/alpha = SELECTARG1(DIFFUSE); z-write is turned off unless cfg+0x38 (Supervisor+0x150) bit 6 is set (0x438A41); DESTBLEND = INVSRCALPHA (answers_phase7 §7).
+   - VERIFIED: the caller passes +0x2AA4 in EDX to `Screen_FillRect` (ECX = rect {0, 0, 640, 480}); all four vertices get that diffuse colour, z 0, rhw 1, FVF XYZRHW|DIFFUSE, triangle strip; colour/alpha = SELECTARG1(DIFFUSE); z-write is turned off unless cfg+0x38 (Supervisor+0x150) bit 6 is set (0x438A41); DESTBLEND = INVSRCALPHA (changelog/answers_phase7.md §7).
 
 ### 1.6 Remove (0x429D40)
 
@@ -262,7 +262,7 @@ ranking difficulty (initial 1), +0x48 card group (initial 5), +0x4C hidden-code 
 leaving flag, +0x64 + 0x34·g + 4·s captured-card counts (below). VMs: 72 `result00.anm` VMs (VM i runs script
 i) at +0x1A0; interrupt k to VM i = pending interrupt at VM+0x1FE.
 
-**Exit** (answers_impl17 §Q4, VERIFIED with mopup1): X/confirm on item 3 at frame P → state 2.
+**Exit** (changelog/answers_impl17.md §Q4, VERIFIED with mopup1): X/confirm on item 3 at frame P → state 2.
 - P+1: `Loading_Begin(500, 440)`, all VMs interrupt 2.
 - P+20: next scene 1, object removed (score.dat saved; surface slot 0 `result.jpg` moved to slot 8 = the loading
   background).
@@ -600,9 +600,9 @@ Controls:
 - Confirm: g_StageIdx = row, screen 17.
 - Bomb/ESC: back to the top menu (cursor 2), flags &= ~1.
 
-Returning from a spell-practice game (+0x6C ≠ 0) jumps straight to screen 17. If the last card id is ≥ 205, the stage row is set to 9.
+Returning from a spell-practice game (+0x6C ≠ 0) arrives through screen 15 (12 §2.2) and jumps straight to screen 17. If the last card id is ≥ 205, the stage row is set to 9.
 
-Entry interrupts (answers_impl17 §Q3, VERIFIED):
+Entry interrupts (changelog/answers_impl17.md §Q3, VERIFIED):
 - range interrupt 18, then pending **27** written into VMs 138 and 139. 138 has label 27 → fades in (16 frames) and
   slides to (320, 48); 139 has none → hidden.
 - portraits/description per 12 §2.4 (entries 1–3, description disabled). The same is redone on every shot change, which
@@ -726,7 +726,7 @@ Scratch VMs created on entry (sub-state 0, frame 0):
 
 Per frame:
 1. VM E7B8 at (A.x − 32, A.y − 152). Pen y = A.y − 136, **x = A.x − 32** (the code reuses the heading's x as the pen;
-   answers_impl17 §Q3, matches the mopup1 log). Steady state: rows at x 224, numbers at x 406.
+   changelog/answers_impl17.md §Q3, matches the mopup1 log). Steady state: rows at x 224, numbers at x 406.
 2. Rows r = 0..9 (stage rows 0..8 and Last Word, card lists of §6.2). Over the cards of row r count, for the
    current shot s: pc = practice captures[s] ≠ 0, sc = story captures[s] ≠ 0, seen = story or practice
    attempts[s] ≠ 0 (or, for rows > 8, `Card_IsSelectable`), and the same over all shots ([12]): PC, SC, SEEN.

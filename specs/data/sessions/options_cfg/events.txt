@@ -1,0 +1,5 @@
+seed 00e3cb55 present 3 poll 0
+loader boot poll 0 present 14
+release boot calc 12 present 14
+loader menu poll 32 present 46
+release menu poll 32 present 46

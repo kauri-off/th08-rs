@@ -166,7 +166,7 @@ Function indexes (all values used by the 8 files are in range):
 | | 4 | 0x4505D0 | laser body (follows the option/emitter, length from timer) |
 | | 5 | 0x450840 | laser that follows option 0 with a 32-segment trail and creates damage rectangles |
 | draw | 1 | 0x450AD0 | trail draw |
-| hit | 1 | 0x450C50 | explosion: first hit → hitbox enlarged by sprite (48–128 px), vel = polar(Rng × π/2 − 3π/4, 6) (**RNG**); in hit state only every 2nd frame (4th during a spell card) damages, damage /= 3 (min 1), vel × 0.88. The RNG draw happens on the first hit regardless of the sprite. After either branch, on non-filtered frames only: bullet timer % 6 == 0 → `Effect_Spawn(5, enemy pos, 1, 0xFFFFFFFF)` (so effectively every 6th frame, every 12th during a spell card) (answers_impl10 §8, VERIFIED) |
+| hit | 1 | 0x450C50 | explosion: first hit → hitbox enlarged by sprite (48–128 px), vel = polar(Rng × π/2 − 3π/4, 6) (**RNG**); in hit state only every 2nd frame (4th during a spell card) damages, damage /= 3 (min 1), vel × 0.88. The RNG draw happens on the first hit regardless of the sprite. After either branch, on non-filtered frames only: bullet timer % 6 == 0 → `Effect_Spawn(5, enemy pos, 1, 0xFFFFFFFF)` (so effectively every 6th frame, every 12th during a spell card) (changelog/answers_impl10.md §8, VERIFIED) |
 | | 2 | 0x450EE0 | hit effect every 8th hit, never filters |
 
 ## 3. Input and movement (`Player_Move`)
@@ -184,7 +184,7 @@ multipliers (+0x404 x, +0x408 y). Sprite script on horizontal start/stop (teams 
 human set 1 (start left: vx < 0 and previous vx ≥ 0), 2 (stop from left), 3 (start right), 4 (stop from right);
 youkai set 6/7/8/9. "Previous vx" is the float player +0xE2A9C, written with this frame's vx at the end of the
 movement; the focus-switch sprite-script reset (teams, script 0 / 5) also sets +0xE2A9C := 0, so moving on the
-switch frame replays the start-move script (answers_impl18 §Q3, VERIFIED code).
+switch frame replays the start-move script (changelog/answers_impl18.md §Q3, VERIFIED code).
 pos += v × gs; clamp x to [8, 376] and y to [16, 432] (game-manager +0x3DDE4/+0x3DDE8 = 8/16, ranges
 +0x3DDEC/+0x3DDF0 = 368/416). Then the three boxes are recomputed. Options run (§5). Shot button: shot timer
 starts (§4.2) if no dialogue and not blocked. Gauge drift (§9.3). Trail shifted if moving.
@@ -202,7 +202,7 @@ Boxes (half sizes from the human sht): hitbox ±(hit/2) — e.g. Reimu 0.825 →
 +0x474 update fn; +0x478 extra draw fn; +0x47C hit filter; +0x480 entry.
 
 ### 4.2 Shot timer (0x451500, after movement)
-Only when the global 0x164D2C8 ≥ 20 (frames since stage start, INFERRED) and the shot timer ≥ 0 and not in
+Only when the gameplay frame counter 0x164D2C8 ≥ 20 (11 §2: GM+0x3DDC0, +1 per non-paused gameplay calc, reset at GM register/remove) and the shot timer ≥ 0 and not in
 the "special bomb" (index 4): if the timer value changed since last frame (prev ≠ cur) and not (bombing with
 shot types 1, 6, 7): fire with t = timer value. Tick; if t > 19 → −1. If shot held and timer < 0 and no
 dialogue → 0. In states 1/2 → −1. `Player_Move` also sets it to 0 on shot press.
@@ -232,13 +232,13 @@ optional "hit by bomb" output. Returns 0 if the player state timer did not advan
   unless types 4/5/6 the bullet enters state 2 and (not type 3) vel /= 8. Entering state 2 (only if it was in
   state 1): save VM rotation z (vm+0x08); restart the VM with script (entry script + 11) on the player ANM
   file (this re-initialises the whole VM: scale, colour, tag, timers); **restore rotation z**; effect 5 at the
-  bullet; pos z = 0.1. The bullet angle (+0x450) is not changed. VERIFIED (`Player_DamageAgainst` 0x451670; answers_bugs1 B1).
+  bullet; pos z = 0.1. The bullet angle (+0x450) is not changed. VERIFIED (`Player_DamageAgainst` 0x451670; changelog/answers_bugs1.md B1).
   The hit scripts (e.g. player00.anm 15/17) set tag 1 again, so the hit-pass draw (14 §5) keeps setting
   rotation z = bullet angle every frame: hit animations are oriented along the shot direction.
 - after the bullet loop: accumulator += min(shot sum, 50). The **returned damage is not capped** (only the
   accumulator increment is); the orb `while` loop runs inside the bullet loop, per hitting bullet, against the
   accumulator value from earlier frames, before this frame's add. The accumulator is the enemy's own e+0x2E10,
-  which starts at the step (07 §4.3 +0x2E10) (VERIFIED, answers_impl16 §1–3).
+  which starts at the step (07 §4.3 +0x2E10) (VERIFIED, changelog/answers_impl16.md §1–3).
 - damage areas (first 192, §8) whose life % period == 0 and that overlap: damage += area damage; the area's
   dealt total grows and is capped by its max (excess removed, area damage := 0 when reached); "hit by bomb" := 1
   while bombing.
@@ -339,11 +339,11 @@ spell manager notified; counter += 6 (cap sht +8).
 Each frame while bombing: if timer < duration: bomb calc fn, tick. Else end: spell manager notified, speed
 multipliers 1, bombing := 0; index 4 also clears GameFlags bits 7–8 and, for every boss slot, kills its chained
 children without reward, sets the boss life (+0x2DFC) to 0 and clears flag A bit 30; then a white flash (3: 30, 1,
-0xFFFFFFFF) (14 §2.17, answers_impl11 §14, VERIFIED).
+0xFFFFFFFF) (14 §2.17, changelog/answers_impl11.md §14, VERIFIED).
 Gauge while bombing (indexes 0–3): odd index += 26000/duration per frame, even −= 26000/duration (integer).
 Added only in the "already bombing" branch of `Player_UpdateBomb`, after the calc-fn/end test — so **not on the
 start frame** (that branch returns after the start), but **also on the end frame** (timer ≥ duration: the end
-handling runs, then the gauge add still happens with the old index) (answers_impl18 §Q3, VERIFIED code; trace
+handling runs, then the gauge add still happens with the old index) (changelog/answers_impl18.md §Q3, VERIFIED code; trace
 selftest1 frame 684: no change, then +173 per frame). Forced add (`GaugeAdd(v, 1)`), so not skipped while bombing.
 Indexes: 0 human bomb, 1 youkai bomb, 2 human last spell, 3 youkai last spell, 4 "dissolve spell".
 Bomb start helper 0x40BE30(name, duration, invulnerability, isLastSpell): declares the spell name, sets the

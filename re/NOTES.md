@@ -471,3 +471,26 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   Demo 1 f3870: AddTime parity raises max point value. Golden 4467: attract C/speed/line from human sht 0x18B896C.
 - Trail ring e+0x3394 96×0x1C, template x = −999, shift each loop pass; settings 0x534C–0x5352.
 - Runs re/work/runs/q21 (demo probe, golden 0 diffs, port bdump); data specs/data/q21. Work cfg/score/probe_cmd restored.
+
+# RE-Q22 (2026-10-19) — scripted reference sessions — DONE
+- Sessions sessions/{gameover_save,musicroom_practice,options_cfg} (+ small copies in specs/data/sessions/), all
+  replay 0 trace diffs; gameover_save draw diffs = fps digits only (replay fps samples). Driver: xkeys.py on Xvfb :77,
+  helpers re/work/runs/q22/{k.sh,st.sh,xshot.py (Xvfb-only grab)}; music to pulse null sink th08_q22.
+- Score 31620 ranks > 9 → no ranking name entry; the replay-save name entry covers the grid.
+- Spec fixes: option volume ±5/press, ±1/frame held ≥30 (15 §1.3, 12 §2.7); key config rows/joystick-only (15 §1.3);
+  +0x6C return → screen 15 (12 §2.2). Changelog specs/answers_re_q22.md.
+- Tool fixes: session.py LOADER_COLS += bullets, enemies; play_session.sh pgrep. Work cfg/score restored (md5 ok).
+
+# RE-Q23 (2026-10-19) — spec consolidation — DONE
+- D1 merge audit DONE: specs/changelog/AUDIT.md. Added to specs: 07 §5.4/5.5 interrupts, §10.3a KillChildren, §11.1
+  reward formula + bits 7–8 + native 22, §12.1 mask callback, §10.5 double run; 13 §2.6a/b/c, popup colours/callers,
+  type-51 expression order; 12 keyboard map, boss name plates, repaint counter, stgNtxt state; 15 joystick mapping;
+  11 rank deltas, retry counters; 06 sparkle rule; 08 graze states; specs/data/README.md (demo traces, ref shots).
+- D2 DONE: answers_*.md moved to specs/changelog/ (22 files), 157 refs rewritten; templates + RE_WORKFLOW updated.
+- D3 DONE: COVERAGE §A implementability table + PARTIAL/MISSING + INFERRED list; added 12 §3 pause draw + texture
+  capture (0x406A30 AnmManager_QueueCapture), 12 §4 continue draw, 09 §4.2 frame counter; only MIDI mode MISSING.
+- Fullrun verify running in background: re/work/runs/fullverify (play_session, no drawlog).
+
+# fullrun_noclip full verify (2026-10-19) — DONE
+- Full replay in the original (TH08_BOSS over the whole run): 124 708 trace rows, 0 differ, events identical (2 733 noclip_hit), 0 poll mismatches.
+- Output re/work/runs/fullrun_verify/play (boss.txt.xz = boss/spell rows of every boss); summary specs/data/sessions/fullrun_noclip/verify.txt; sessions README line updated.

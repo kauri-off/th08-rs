@@ -1,0 +1,25 @@
+# th08.cfg start -> end (options_cfg). offset: start end (hex bytes); fields per 15 §1.1
+0x1C: 02 -> 03
+0x1F: 01 -> 00
+0x25: 00 -> 01
+0x26: 00 -> 01
+0x27: 64 -> 35
+0x28: 50 -> 41
+
+# decoded (re/tools/cfg.py)
+2c2
+< lives 2
+---
+> lives 3
+5c5
+< music 1
+---
+> music 0
+11,13c11,13
+< slow 0
+< shotfocus 0
+< bgmvol 100 sevol 80 debug 0x4001
+---
+> slow 1
+> shotfocus 1
+> bgmvol 53 sevol 65 debug 0x4001

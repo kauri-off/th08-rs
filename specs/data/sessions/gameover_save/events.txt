@@ -1,0 +1,18 @@
+seed 006e749d present 3 poll 0
+loader boot poll 0 present 16
+release boot calc 14 present 16
+loader menu poll 33 present 49
+release menu poll 33 present 49
+loader gauge poll 1799 present 1815
+loader lwait poll 1799 present 1815
+loader stage poll 1799 present 1815
+release stage poll 1799 present 1815
+loader menu poll 7734 present 7750
+release menu poll 7734 present 7750
+setstate 26c2 obj 0164d520 present 9739 poll 9723
+loader gauge poll 9769 present 9785
+loader lwait poll 9800 present 9816
+loader stage poll 9800 present 9816
+release stage poll 9800 present 9816
+loader menu poll 11278 present 11294
+release menu poll 11278 present 11294

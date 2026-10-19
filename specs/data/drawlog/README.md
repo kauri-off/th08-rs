@@ -78,7 +78,7 @@ portraits.
   Final-route notice from script frame 489 on). The only other differences are 2–3 frames of the top-menu item
   wobble. So a correct port should match every frame keyed by `(scene, visit, scene_frame)`, except those
   intro frames.
-- Demos are deterministic. Three earlier runs gave identical traces (answers_phase8). The draw logs do not
+- Demos are deterministic. Three earlier runs gave identical traces (specs/changelog/answers_phase8.md). The draw logs do not
   depend on wall time, except the fps counter.
 
 ## Size

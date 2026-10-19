@@ -47,7 +47,7 @@ if [[ $sound == off ]]; then
   python3 -I -c "import sys;p=sys.argv[1];b=bytearray(open(p,'rb').read());b[0x1F]=0;b[0x20]=0;open(p,'wb').write(b)" $PGAME/th08.cfg
 fi
 
-if [[ $disp == :77 ]] && ! pgrep -A -x Xvfb -f ':77' >/dev/null; then
+if [[ $disp == :77 ]] && ! pgrep -A -f 'Xvfb :77' >/dev/null; then
   Xvfb :77 -screen 0 1024x768x24 >/dev/null 2>&1 &
   sleep 1
 fi

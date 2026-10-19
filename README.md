@@ -86,7 +86,7 @@ direction.
 |---|---|
 | `src/` | the port (library + `th08` binary); `src/bin/` holds tools: `datdump`, `anmview`, `stdview`, `eclview`, `demosync`, `session`, `drawdiff` |
 | `specs/` | the specifications (`00_overview.md` … `16_endings_result.md`, `structs.md`), the coverage map, and reference data |
-| `specs/answers_*.md` | answered implementer questions and the evidence behind spec changes (moving to `specs/changelog/`) |
+| `specs/changelog/` | answered questions and the evidence behind spec changes (the numbered specs already contain every fact) |
 | `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session record/replay harness |
 | `docs/` | project status, decisions, the agent workflow and task briefs |
 | `web/` | the browser front end |

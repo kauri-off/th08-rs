@@ -1,0 +1,17 @@
+seed 00de03fc present 3 poll 0
+loader boot poll 0 present 15
+release boot calc 13 present 15
+loader menu poll 33 present 48
+release menu poll 33 present 48
+loader menu poll 2545 present 2560
+release menu poll 2545 present 2560
+loader gauge poll 4216 present 4231
+loader lwait poll 4225 present 4240
+loader stage poll 4225 present 4240
+release stage poll 4225 present 4240
+loader gauge poll 5078 present 5093
+loader lwait poll 5108 present 5123
+loader stage poll 5108 present 5123
+release stage poll 5108 present 5123
+loader menu poll 7886 present 7901
+release menu poll 7886 present 7901

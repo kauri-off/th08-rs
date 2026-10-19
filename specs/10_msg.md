@@ -101,8 +101,8 @@ Speakers 0/1 are the player side (left), 2/3 the opponent side (right).
      (0x4E4B68 / 0x4E4E0C) then use slot-9 scripts 2, 3 instead of 0, 1 (`Spell_Start` sets script +0xB34 + i);
    - 6B (idx 7) and Extra (idx 8): swap face files of slots 2 and 3 (0x4ECC9C ↔ 0x4ECCA0), spell-background base
      = 2, and plate 0x18 (**Kaguya**) / 0x19 (**Mokou**).
-   (answers_impl10 §5–6, VERIFIED. Other writers of +0xB34: `EffectMgr_OnRegister` = 0, `StageStart` = 2 in
-   spell practice, 06/answers_impl10 §5.)
+   (changelog/answers_impl10.md §5–6, VERIFIED. Other writers of +0xB34: `EffectMgr_OnRegister` = 0, `StageStart` = 2 in
+   spell practice, 06, changelog/answers_impl10.md §5.)
 3. Stage 5, `n == 10` → final-route resolution (the ECL asks for entry 10 after the stage-5 boss):
    - if practice flag `stats+0x29 != 0`: n = 1, choice = 0;
    - else if replay playback (GM flag bit 3): route byte from the replay header (`replay+8 → +0x11C`):
@@ -254,7 +254,7 @@ Text colours (`tbl 0x4C7180`, identical for all 12 shot types), COLORREF 0x00BBG
 | 1 | 0x00F0E8FF | (255, 232, 240) pinkish white |
 | 2, 3 | 0x00FFE8F0 | (240, 232, 255) bluish white |
 
-Reference runs (wine) do **not** use MS Gothic (answers_impl17 §Q6, VERIFIED with WINEDEBUG=+font):
+Reference runs (wine) do **not** use MS Gothic (changelog/answers_impl17.md §Q6, VERIFIED with WINEDEBUG=+font):
 - the Shift-JIS face name is mis-converted (process code page ≠ 932);
 - wine falls back to Droid Sans Fallback (proportional) at ppem 21 with synthetic bold;
 - all text strips in `menu_ref` screenshots and recorded sessions have that layout (full-width ≈ 11 px, digits 6.5 px at

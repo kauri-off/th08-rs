@@ -52,7 +52,7 @@ direct effect of an opcode/draw routine, INFERRED for names of owner-only fields
 | 0x1F0 | u32 | colour | D3DCOLOR: byte 0x1F0 = B, 0x1F1 = G, 0x1F2 = R, 0x1F3 = A |
 | 0x1F4 | u32 | colour2 | second colour, same byte order (0x1F7 = alpha2) |
 | 0x1F8 | u32 | flags | §2.1 |
-| 0x1FC | u16 | tag | free value written by op 25 (`set_tag`); read only by owner code. Stage/enemy use it as a value. **Player bullets: tag ≠ 0 → each frame before drawing, rotation z := bullet angle** (14 §5, 09 §4.5; answers_bugs1 B1) |
+| 0x1FC | u16 | tag | free value written by op 25 (`set_tag`); read only by owner code. Stage/enemy use it as a value. **Player bullets: tag ≠ 0 → each frame before drawing, rotation z := bullet angle** (14 §5, 09 §4.5; changelog/answers_bugs1.md B1) |
 | 0x1FE | u16 | pending_interrupt | 0 = none; set by owners (`AnmVm_Interrupt` 0x407120) |
 | 0x200 | i32 | draw_mode | 0..5, used by the generic draw entry (§8) |
 | 0x204 | ptr | anm_file | loaded-file record (structs.md `AnmLoadedFile`) |
@@ -370,7 +370,7 @@ With this camera, world (x, y, 0) projects to viewport pixel (x, y) (relative to
 ## 10. Floating-point environment — VERIFIED (runtime, phase 8)
 
 - The D3D8 device is created without D3DCREATE_FPU_PRESERVE (behaviour flags 0x40 or 0x20, VERIFIED statically).
-  Runtime measurement (answers_phase8 §1): x87 control word 0x027F before `CreateDevice`, **0x007F** after it,
+  Runtime measurement (changelog/answers_phase8.md §1): x87 control word 0x027F before `CreateDevice`, **0x007F** after it,
   and 0x007F at every Frame_Run calc/draw/Present on the main thread. 0x007F = all exceptions masked,
   precision control 00 = **24-bit mantissa (single)**, rounding control 00 = **round to nearest even**.
   No game code executes `fldcw` (byte scan of 0x402000..0x476CE0); only CRT helpers (ftol, math) change it
@@ -418,7 +418,7 @@ TEXTURETRANSFORMFLAGS COUNT2, ADDRESSW CLAMP. Then the AnmManager state caches a
 (blend +0x24C0 = 3, z-write +0x24C1/+0x24C3 = 0xFF, vertex path +0x24C2 = 0xFF, texture +0x24BC = 0,
 camera +0x24C4 = 0xFF). No other code changes filter or address mode.
 
-**Consequence for snapped 2D sprites** (answers_bugs2 §C1). The original renders at 640×480. Mode 0 / unrotated
+**Consequence for snapped 2D sprites** (changelog/answers_bugs2.md §C1). The original renders at 640×480. Mode 0 / unrotated
 mode 2 quads at scale 1 are snapped to integer − 0.5. So with D3D8 pixel-centre rules every pixel centre lands
 **exactly on a texel centre** of the sprite rect. Bilinear filtering then returns that texel unchanged: no texel
 outside the sprite rect is ever read, even though neighbouring atlas sprites touch it. The result is identical to

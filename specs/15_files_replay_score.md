@@ -39,16 +39,30 @@ The file is 60 bytes (0x3C). In memory it lives at 0x17CE870 (= Supervisor+0x118
 | 0x20 | u8 | sound effects on | < 2 | 1 |
 | 0x21 | u8 | last chosen difficulty | < 6 | 1 |
 | 0x22 | u8 | windowed | < 2 | 0 |
-| 0x23 | u8 | frame skip: the draw chain runs when an i8 counter (incremented every frame) reaches this value, then the counter is reset. So 0 **and** 1 = draw every frame, 2 = every 2nd frame (VERIFIED `Frame_Run`, answers_phase7 §6). Not in the option menu. | < 3 | 0 |
+| 0x23 | u8 | frame skip: the draw chain runs when an i8 counter (incremented every frame) reaches this value, then the counter is reset. So 0 **and** 1 = draw every frame, 2 = every 2nd frame (VERIFIED `Frame_Run`, changelog/answers_phase7.md §6). Not in the option menu. | < 3 | 0 |
 | 0x24 | u8 | effect level (0 none, 1 half, 2 all; see 13 §2) | < 3 | 2 |
 | 0x25 | u8 | slow mode | < 2 | 0 |
-| 0x26 | u8 | joystick "shot also focuses" toggle; only read by `Input_PollJoystick` (answers_phase7 §5) — VERIFIED | < 2 | 0 at load, 1 after a key-config reset |
+| 0x26 | u8 | joystick "shot also focuses" toggle; only read by `Input_PollJoystick` (changelog/answers_phase7.md §5) — VERIFIED | < 2 | 0 at load, 1 after a key-config reset |
 | 0x27 | u8 | BGM volume 0..100 | — | 100 |
 | 0x28 | u8 | SE volume 0..100 | — | 80 |
 | 0x29..0x37 | | unused | | 0 |
 | 0x38 | u32 | debug/driver flags | — | bit 0 is always forced to 1 |
 
 Pad buttons are DirectInput button indices; −1 means no button.
+
+**Joystick mapping** (`Input_PollJoystick` 0x43D120, both the winmm `joyGetPosEx` path and the DirectInput path;
+VERIFIED, changelog/answers_phase7.md §5):
+- Button fields +0x00…+0x10 in file order map to input bits 0x1 (Shot), 0x2 (Bomb), 0x4 (Focus), 0x8 (Pause/ESC),
+  0x10 (Up), 0x20 (Down), 0x40 (Left), 0x80 (Right), 0x100 (Skip). Index < 0 = not mapped. A button is down when
+  winmm `dwButtons` bit n is set, or DirectInput `rgbButtons[n] & 0x80`.
+- Directions, winmm: q = range/4 around the axis centre (JOYCAPS read at 0x164D388: wXmin/wXmax 0x164D3AC/0x164D3B0,
+  wYmin/wYmax 0x164D3B4/0x164D3B8); x > centre + q → Right, x < centre − q → Left, y > centre + q → Down,
+  y < centre − q → Up. DirectInput (DIJOYSTATE): lX > +0x18 → Right, lX < −(+0x18) → Left, lY > +0x1A → Down,
+  lY < −(+0x1A) → Up (defaults 600).
+- **+0x26 ≠ 0 "shot also focuses"** (0x43EF50): u16 counter 0x164D51C, once per poll. Shot button down: counter += 1
+  if < 20; if counter > 9 add Focus. Shot button up: counter < 11 → counter := 0, else counter −= 10 and add Focus.
+  So holding the pad's shot button for 10 polls also focuses, and focus stays for one poll after release. Keyboard
+  input is unaffected.
 
 Debug flags at +0x38 (VERIFIED from the log strings printed at load):
 
@@ -83,12 +97,30 @@ When that happens it logs "コンフィグデータが異常". After the music-m
 | 0 Player (lives) | Cycles +0x1C. The maximum depends on the total play count (PLST total block [0], 0x164CED0): < 30 → 0..4, < 60 → 0..5, otherwise 0..6. |
 | 1 Color | Toggles +0x1E. |
 | 2 BGM | Cycles +0x1F. Any change restarts `bgm/th08_01.mid` (title music). |
-| 3 BGM volume, 4 SE volume | ±1 per press; key repeat starts after 30 frames held; the repeat path steps ±4. Range 0..100. Sends the set-volume command. |
+| 3 BGM volume, 4 SE volume | Two steps run in this order every frame (VERIFIED code + `options_cfg` session). (a) Left/Right **edge**: value ∓/± 4, clamped to 0..100. (b) Left/Right edge, **or** that direction held while the unchanged-input counter 0x164D53C > 29 (not the every-8th-frame repeat flag): value ∓/± 1 if it is still above 0 / below 100. So one press steps ±5 (e.g. 80 → 75 → 70 → 65; 98 → 100), and a held key adds ±1 on every frame from the 30th unchanged frame on. Every step sends the set-volume command. While the cursor is on item 3 or 4, SE 0x1D plays whenever the menu frame counter (+0x1442C) is a multiple of 50 (volume preview). |
 | 5 Mode | Toggles window mode +0x22. |
 | 6 Slow | Toggles +0x25. |
 | 7 Reset | Sets lives 2, +0x1D 3, music 1, SE 1, slow 0. |
-| 8 KeyConfig | Opens key config (0x469636): 12 rows = 9 buttons from §1.1, the +0x26 toggle, Default (reset to the table at 0x4C78C8 and set +0x26 = 1), Quit. |
+| 8 KeyConfig | Opens key config (`MainMenu_KeyConfig` 0x469636, screen 3; details below). |
 | 9 Quit | Leaves the option menu. |
+
+**Key config (screen 3)** — VERIFIED code; on-screen labels from the `options_cfg` session:
+- 12 rows, top to bottom: Shot (+0x00), Bomb (+0x02), Slow (+0x04), Skip (+0x10), Pause (+0x06), Up (+0x08),
+  Down (+0x0A), Left (+0x0C), Right (+0x0E), ShotSlow (+0x26 Off/On), Reset, Quit. Note the order differs from the
+  file order: Skip comes 4th. Each button row shows its pad button number as two digits; no number for −1.
+- On entry the 9 button fields are copied to a working copy (menu +0x14440…+0x14451), and the **live** Up/Down
+  fields (+0x08/+0x0A) are set to −1 while the screen is open.
+- Cursor: `Menu_CursorUpDown(12)`.
+- **Assigning** works only from the joystick: each frame the raw DirectInput button array (`Input_PollJoystickRaw`,
+  32 bytes) is scanned for the first button with bit 7 set. If one is found, differs from the button found on the
+  previous frame (global 0x4C868C, i.e. an edge), and the cursor is on rows 0–8: every row of the working copy
+  that already holds that button gets the row's old button (swap), the row gets the new button, SE 10.
+  Keyboard keys cannot change a binding.
+- ShotSlow row: Left or Right edge toggles +0x26 (live, not the working copy).
+- Confirm (Shot/Enter edge, mask 0x1001) on Reset: SE 10, working copy := table 0x4C78C8 (0, 1, 2, 4, −1, −1, −1, −1,
+  3), +0x26 := 1. On Quit: SE 11, screen 2 with cursor 8, working copy written back to +0x00…+0x11 (this also
+  restores Up/Down). Bomb/ESC do nothing here.
+- After 3600 frames without raw input the screen quits the same way.
 
 When leaving the menu, if +0x1E or +0x22 changed, the function returns 5. That makes the Supervisor recreate the D3D device. After 3600 idle frames the menu falls back to the top menu.
 
@@ -174,7 +206,7 @@ Write order (VERIFIED from the saver):
 | caller | what is taken from the file |
 |---|---|
 | Supervisor_OnRegister 0x445FA3 (boot) | PLST only. The block is zeroed first. |
-| MainMenu_OnRegister 0x470A6C | CLRD, PSCR, CATK, FLSP, PLST. Then sets GM flags bit 15/16/17 (16 §4). These two functions are the only writers of bits 15–17 (all `g_GameFlags` stores checked); nothing clears them in game, replay or demo, so playback keeps them (answers_impl14 §11). |
+| MainMenu_OnRegister 0x470A6C | CLRD, PSCR, CATK, FLSP, PLST. Then sets GM flags bit 15/16/17 (16 §4). These two functions are the only writers of bits 15–17 (all `g_GameFlags` stores checked); nothing clears them in game, replay or demo, so playback keeps them (changelog/answers_impl14.md §11). |
 | GameMgr_LoadScoreData 0x43BBE1 (new game) | Hiscore for (shot, difficulty) → stats+0x14; CATK, CLRD, PSCR. In practice the hiscore is PSCR[shot].hiscore[stage][diff] and that play count is incremented. Then backs up CATK, clears the in-game HSCR record (§2.3) and copies the config into it. |
 | Result_OnRegister 0x45964D | Builds the 5×12 ranking lists and LSNM. In viewer mode (Result mode 0) also loads CATK, CLRD, PSCR. |
 
@@ -186,7 +218,7 @@ Write order (VERIFIED from the saver):
 - mode 1 from Supervisor scene 6 (after a game).
 - mode 0 from scene 5 (result viewer from the menu).
 
-In mode 2 with slow mode on (or Supervisor+0x1A4 bit 3, which retail code only sets through the anti-tamper fill, answers_phase7 §2), CATK is first reloaded from the old file, which throws away card credit from this run. VERIFIED.
+In mode 2 with slow mode on (or Supervisor+0x1A4 bit 3, which retail code only sets through the anti-tamper fill, changelog/answers_phase7.md §2), CATK is first reloaded from the old file, which throws away card credit from this run. VERIFIED.
 
 ### 2.3 HSCR (0x168) — high-score entry
 
@@ -296,7 +328,7 @@ In memory at 0x164BB6C + shot·0x178.
 | 0x175 | u8 | used (the chunk is only saved if ≠ 0) |
 
 - A practice start increments plays and sets +0x175 (GameMgr_LoadScoreData).
-- The practice result (Result mode 0x11) stores max(hiscore, score) at index `[shot + byte 0x164D0B2]`. The byte 0x164D0B2 is 0 on every path that reaches a result screen (VERIFIED, answers_phase7 §3; it is nonzero only during attract demos).
+- The practice result (Result mode 0x11) stores max(hiscore, score) at index `[shot + byte 0x164D0B2]`. The byte 0x164D0B2 is 0 on every path that reaches a result screen (VERIFIED, changelog/answers_phase7.md §3; it is nonzero only during attract demos).
 
 ### 2.7 LSNM (0x18)
 
@@ -312,7 +344,7 @@ score.dat chunks are read) and on every entry to screen 17.
 - The block (with its 12-byte header) is read whole from a "FLSP" v1 chunk (`ScoreDat_GetFLSP`); memory is untouched when
   there is no chunk.
 - It is written by every `ScoreDat_Save` with a fresh header.
-- `Card_IsSelectable(id)` compares byte GM+(id − 181) with id (answers_impl17 §Q1). Tables: `specs/data/spell_tables.md`. Card ids count from 0. "Prac" = practice capture counters (CATK +0x1F4[12]); "story or prac" = either capture counter.
+- `Card_IsSelectable(id)` compares byte GM+(id − 181) with id (changelog/answers_impl17.md §Q1). Tables: `specs/data/spell_tables.md`. Card ids count from 0. "Prac" = practice capture counters (CATK +0x1F4[12]); "story or prac" = either capture counter.
 
 | card | owner | unlock condition (VERIFIED) |
 |---|---|---|
@@ -375,7 +407,7 @@ Inside each 17-word block:
   and the cfg copy slow-mode byte (+0x25) is 0. The cfg copy's +0x25 is forced to 0 just before for Extra
   (diff ≥ 4), stage practice (bit 0) and spell practice, so practice always counts. Order: [0] of the
   difficulty block, [0] of block 6, [1+shot] diff, [1+shot] block 6, then if retry [13] diff + block 6, then if
-  stage practice [16] diff + block 6 (answers_impl14 §9, VERIFIED 0x43B05C–0x43B11A). Every counter is capped at 999999
+  stage practice [16] diff + block 6 (changelog/answers_impl14.md §9, VERIFIED 0x43B05C–0x43B11A). Every counter is capped at 999999
   (increment only while < 999999).
 - Play time (`Supervisor_UpdatePlayTime` 0x448418) adds `timeGetTime() − mark` (mark = Supervisor+0x1AC;
   mark := 0 if the clock went backwards) split into h/m/s/ms with carries, then mark := now. Mark set: top of
@@ -404,7 +436,7 @@ The same check is applied to replays (§3.7).
 Values written (`ScoreDat_Save` and `Replay_RecordStageStart`): tag = string 0x4B660C "0100d", size/sum =
 0x17CEAB0/0x17CEAAC computed once at boot by 0x443730 over the running exe (`GetModuleFileNameA`): sum =
 Σ (u32 LE words 0 .. size/4 − 2), wrapping. For the shipped th08.exe: **size 840704 (0xCD400), sum
-0xA26861B9** (computed from the exe and matching an original-written score.dat, answers_impl14 §10). A port
+0xA26861B9** (computed from the exe and matching an original-written score.dat, changelog/answers_impl14.md §10). A port
 may write these constants; the check itself passes anyway when no `th08_*.ver` file exists.
 
 ### 2.11 Slowdown % (stored in HSCR and replays) — VERIFIED
@@ -454,14 +486,14 @@ Object fields:
 
 Only while flags bit 2 (gameplay running):
 1. `g_InputPrev = g_Input; g_Input = raw input`.
-2. If slow mode (cfg+0x25) or Supervisor+0x1A4 bit 3 is set, nothing is recorded. VERIFIED: no retail code sets bit 3, except the anti-tamper fill that writes 0xFFFFFFFF over the whole Supervisor (answers_phase7 §2).
+2. If slow mode (cfg+0x25) or Supervisor+0x1A4 bit 3 is set, nothing is recorded. VERIFIED: no retail code sets bit 3, except the anti-tamper fill that writes 0xFFFFFFFF over the whole Supervisor (changelog/answers_phase7.md §2).
 3. While flags bit 9 (stage-clear bonus): if counter+4 > 2, return; else counter+4 += 1. So at most 3 frames are recorded during the bonus.
 4. `p += 2; end[stage] = p + 2; *(u16*)p = raw`.
 5. If `frame % 30 == 0`:
    - `fps[q] = fps_now | (flag ? 0x80 : 0)`, `fps[q+1] = fps_now`;
    - `fpsEnd[stage] = q + 2`; `q += 1`.
 
-   fps_now is u8 0x17CE8F0. The flag is the u32 0x17CEA90, = Supervisor+0x338; its only writer stores 0 (MainMenu_OnRegister), so it is always 0. VERIFIED (answers_phase7 §1).
+   fps_now is u8 0x17CE8F0. The flag is the u32 0x17CEA90, = Supervisor+0x338; its only writer stores 0 (MainMenu_OnRegister), so it is always 0. VERIFIED (changelog/answers_phase7.md §1).
 6. `frame += 1`.
 
 The game objects ran earlier in the same frame using `g_Input` from the previous frame. So the input of frame n is the raw input sampled at the end of frame n−1.
@@ -505,7 +537,7 @@ Playback speed byte 0x164D0BD (chosen in the replay menu, §3.8):
 In any playback mode, while skippable dialogue is shown (HUD impl+0x22D7C), the chain is restarted on 2 of every 3 frames (= 3× speed).
 
 The HUD shows the playback fps in yellow (0xFFFFFFD0), or red (0xFFFF4040) when the flag is set.
-Exact behaviour (`Fps_Update` 0x446F53, VERIFIED answers_impl17 §5.3; this is the attract demos' "2-digit text at the
+Exact behaviour (`Fps_Update` 0x446F53, VERIFIED changelog/answers_impl17.md §5.3; this is the attract demos' "2-digit text at the
 bottom right of the playfield"):
 - Drawn every frame while replay playback (GameFlags bit 3) **and** gameplay running (bit 2), unless 0x17CE8D0 ≠ 0
   (ending): `Ascii_QueueString` at (384, 448) (ASCII queue, 12 §2.9: 16 × 16 `ascii.anm#0` glyphs, advance 13 →
@@ -522,7 +554,7 @@ bottom right of the playfield"):
 
 ### 3.4 Stage record (0x24 header + streams)
 
-See 11 §6 for the table. Corrected meaning of +0: score at the **end** of that stage (÷10). Playback (`Replay_PlayStageLoad`) restores lives, bombs, power, rank, seed and so on from the record of the stage being started; the **score** comes from +0 of the last existing record of an earlier stage (0 / untouched for the first recorded stage) (11 §3.4, answers_impl14 §6).
+See 11 §6 for the table. Corrected meaning of +0: score at the **end** of that stage (÷10). Playback (`Replay_PlayStageLoad`) restores lives, bombs, power, rank, seed and so on from the record of the stage being started; the **score** comes from +0 of the last existing record of an earlier stage (0 / untouched for the first recorded stage) (11 §3.4, changelog/answers_impl14.md §6).
 
 ### 3.5 File layout
 

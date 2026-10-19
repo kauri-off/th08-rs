@@ -160,7 +160,8 @@ No free slot → failure. Speed and angle: 07 §9.3 (mode table). Then:
 5. Off-screen handling (§4.3) only when grace == 0 (re-tested after step 3).
 6. Collision, only if intangible == 0:
    - if not yet grazed and age > 15: g = `Player_GrazeTest` (box = hitbox enlarged by 20 on every side vs the
-     player's graze box). g == 1: grazed := 1 (the graze handler already ran, 09 §6), continue to the hit test.
+     player's graze box; 0x44A470: the bomb-area test runs first → 2; otherwise no graze while the player is in
+     state 1 or 2, graze allowed in states 0 and 3). g == 1: grazed := 1 (the graze handler already ran, 09 §6), continue to the hit test.
      g == 2 (inside a bomb area): if flags lacks 0x1000 → state 5 + bomb drop (below); no hit test.
      g == 0: no hit test this frame.
    - hit test h = `Player_HitTest` (hitbox vs the player's hitbox): h == 1 → state 5 (the player is hit, 09 §7);
@@ -176,7 +177,7 @@ if flags lacks 0x1000 and `Player_InBombArea(pos)` → +0xDBE = 1 (sticky: teste
 never cleared). Run the effect VM. When it finishes:
 if +0xDBE: bomb drop as above (the state is set to 5 but immediately overwritten — the bullet survives; faithful
 quirk); state := 1, state timer reset, and the state-1 update runs in the same frame — whose collision test can
-hit the bomb area again (state 5 + a second drop). Runtime demo 0 f4451 (answers_impl21 §Q4): bullets 181/182/183
+hit the bomb area again (state 5 + a second drop). Runtime demo 0 f4451 (changelog/answers_impl21.md §Q4): bullets 181/182/183
 end state 2 marked → 5 time orbs (181 and 183 two each, 182 one and it stays in state 1). Otherwise tick timers,
 push on list.
 
@@ -188,7 +189,7 @@ Off screen with such a command active: counter += 1; free when it reaches 128. T
 slot is reused (a new bullet that spawns off screen can inherit a leftover count — faithful).
 Freed bullets are not pushed on the draw list and skip VM/timer work this frame.
 
-### 4.3a Live-bullet counter (mgr+0x6BA538 = 0x160F3C8) — VERIFIED (0x431240, runtime answers_impl14 §2)
+### 4.3a Live-bullet counter (mgr+0x6BA538 = 0x160F3C8) — VERIFIED (0x431240, runtime changelog/answers_impl14.md §2)
 `BulletMgr_Calc` zeroes the counter, then for each slot 0..1535 in order: state ≠ 0 → counter += 1 **before**
 the bullet's update. So a bullet freed during this frame's update (off-screen rule, cancel end) is still
 counted this frame, and a bullet spawned this frame is counted only if its slot is processed after the spawn.
@@ -394,7 +395,7 @@ For each item (count += 1):
   exactly t == 60: vel = 0, state 0); common motion.
 - **state 3**: vel.y += 0.05·gs; if vel.y > 0 or the player's shot timer (0x18B89BC = player +0xE2AC4) is < 0, i.e. the player is not shooting → state 1; if player state is 2 →
   state 0, vel = (0, −0.7, 0). Common motion.
-  Example (VERIFIED runtime, demo 2, answers_impl16 §9): the shot timer reads 19 on frame 706 and −1 on 707 (player calc
+  Example (VERIFIED runtime, demo 2, changelog/answers_impl16.md §9): the shot timer reads 19 on frame 706 and −1 on 707 (player calc
   prio 9 runs before the item calc in `BulletMgr_Calc`, prio 14), so every time orb still rising in state 3 switches to
   state 1 on frame 707 even with vel.y ≈ −1.1, and orbs spawned later (not shooting) switch on their first update.
 - **state 5**: vel.y += 0.05·gs; pos += vel·m; if vel.y > 0 → state 1 (player state 2 → state 0, vel (0,−0.7,0)),
@@ -420,7 +421,7 @@ Notation: `stats` = game-manager stats block (09 §9), score is stored /10 (`Add
 - **Power (0: +1, 2: +8)**, only if power < 128: remember the power level (number of entries of the threshold
   table 0x4C7A6C `8, 24, 48, 80, 128, 999` that are ≤ power); power += n (`GameMgr_AddPower` 0x441850: checksum,
 **4 RNG draws**); if power ≥ 128: power = 128 through `GameMgr_SetPower` 0x406FA0 (also checksummed: **+4 draws**,
-so a collect that reaches full power costs 8; answers_impl18 §IMPL19-Q1, VERIFIED code + runtime demo 3 frame 1059:
+so a collect that reaches full power costs 8; changelog/answers_impl18.md §IMPL19-Q1, VERIFIED code + runtime demo 3 frame 1059:
 two collects = 4 + 4 + 4 = 12 draws), if no
   spell card is running cancel all bullets to items (mode 1), HUD message, convert all other type 0/2 items to
   type 8 (vel = (0, −0.5, 0) if vel.y > −0.5; effect; script 0x45). AddScore(10). Popup "10", or a power-up popup +

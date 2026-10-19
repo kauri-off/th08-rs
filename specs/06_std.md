@@ -184,8 +184,10 @@ if the current record's opcode ≠ 3: clock.Tick()
 Stage_UpdateObjects()                                                                      (§9)
 (spell-background VMs when stage state +0xB24 > 0 — later phase)
 run VM A if its sprite index > 0; run VM B if > 0; run VM C if > 0 and copy VM C's colour to the clear colour
-every 3rd frame (frame counter % 3 == 0) if frame counter > 699 or alternative-mode flag, and +0xB24 < 2:
-    spawn 12 effects of type 0x3E at the recorded "sparkle" points (§10)   (later phase: effects)
+every 3rd frame (frame counter % 3 == 0) if frame counter > 699 or spell practice, and +0xB24 < 2:
+    spawn type 0x3E (colour 0x20FFFFFF, layer 4) at **all 12** sparkle points 0..11 (§11.1), whatever the
+    recorded count: unused points are (0, 0, 0) from the per-frame clear in Stage_DrawLow, so those sparkles
+    appear at screen (0, 0) under the HUD frame (faithful quirk; VERIFIED)
 frame counter += 1
 ```
 
@@ -231,7 +233,7 @@ far 1800, §10.1), w_clip = eye z. Billboard sprites and ribbons get software fo
 for them). cfg+0x38 bit 10 disables fog entirely (FOGENABLE 0 at init, all fog on/off calls skipped).
 
 Fog model to reproduce (VERIFIED at runtime against 6 wine screenshots of the 4 demos, mean |Δ| 0.2–0.4/255 on
-the playfield, answers_impl13 §4):
+the playfield, changelog/answers_impl13.md §4):
 1. Clip the triangle to the near/far planes (0 ≤ z ≤ w).
 2. Interpolate the eye depth d perspective-correctly (= the pixel's true eye z).
 3. Per pixel: f = clamp((end − d)/(end − start), 0, 1); rgb = f·rgb + (1 − f)·fog rgb; alpha unchanged; then
@@ -241,7 +243,7 @@ the reference. Walls that span `start` come out 10–12 levels too dark.
 
 ## 9. Object update (`Stage_UpdateObjects`) — VERIFIED
 
-1. Overlay VM (+0x844): when the byte at 0x17D5EF8+5 (owner not yet identified) becomes non-zero, send interrupt 1;
+1. Overlay VM (+0x844): when the player mode byte 0x17D5EF8+5 (player+5: 0 human, 1 youkai; §13) becomes non-zero, send interrupt 1;
    when it becomes zero again, interrupt 2. Run it.
 2. For every object with flag bit 0: run the VM of every quad (types 0 and 1); count VMs whose script has not
    finished. If the **last** quad's VM has tag (vm+0x1FC) == 1: set its "use colour2" flag and set
@@ -275,7 +277,7 @@ viewport, and sets fog start/end to 1000/2000.
    exists (alpha byte +0x646B ≠ 0); the request is then reset to 0x00808080 (alpha 0). Requests come from
    `Stage_RequestTint` 0x409160 (the bomb tint 0x40BC60, 14 §1.3): an empty request takes the colour, a second
    request in the same frame averages each channel with the stored one. So the tint drawn in frame N is the
-   request made by the bomb draw of frame N − 1 (VERIFIED, answers_impl11 §1).
+   request made by the bomb draw of frame N − 1 (VERIFIED, changelog/answers_impl11.md §1).
 4. Unless stage state +0xB24 ≥ 2 or a HUD condition: draw VM A and VM B (draw mode "2D rotated" 05 §9, if
    sprite index > 0), stage 6B special effect.
 5. Clear: if clear colour alpha == 0xFF → Clear(target + z, colour, z = 1); if clear colour == 0 → Clear(z only);
@@ -287,7 +289,7 @@ viewport, and sets fog start/end to 1000/2000.
 spell-background VMs when +0xB24 > 0; disable "stage camera" render path; default 2D camera; viewport; at the
 end: if the "bomb drew last frame" flag +0x646C (0x4EA49C) is 0 → global tint off (`AnmMgr_TintOff` 0x40BAB0:
 AnmManager+4 := 0, colour 0x80808080); then +0x646C := 0 and +0x647C := 0.
-Tint lifetime while a bomb runs (VERIFIED, answers_impl11 §1): `Bomb_DrawTint` sets +0x646C := 1 at player
+Tint lifetime while a bomb runs (VERIFIED, changelog/answers_impl11.md §1): `Bomb_DrawTint` sets +0x646C := 1 at player
 draw prio 9 every bomb frame, so at the next frame's `Stage_DrawHigh` the tint is **not** switched off. It stays
 on for everything drawn until something turns it off: stage layers 0–3, background effects (list B) and the
 spell-background VMs, the prio-8 enemy pass (layers 0–1) and the player's flying bullets (prio 9, drawn before
@@ -332,7 +334,7 @@ for each instance in list order:
 - vm.pos = s (screen x, y, depth z). If 0 ≤ z ≤ 1: fog off, draw with ANM draw mode 1 (2D, no snapping,
   05 §9), using the projected z as vertex depth. If additionally (tag & 0xF0) == 0x10 and dist < fog_near and
   the sparkle flag (+0x647C) is set, append (s.x, s.y, 0) to the sparkle-point list (no bounds check; the 32-entry
-  array is never exceeded by the shipped data — at most 15 points per frame, answers_impl10 §3, VERIFIED).
+  array is never exceeded by the shipped data — at most 15 points per frame, changelog/answers_impl10.md §3, VERIFIED).
 - Note: vm.pos is left at the projected screen position; it is recomputed every draw.
 
 ### 11.2 3D world quad (`AnmManager_Draw3DWorld` 0x464470) — VERIFIED
@@ -354,7 +356,7 @@ v0 = (sA.x + dir.y·wA, sA.y − dir.x·wA), v1 = (sA.x − dir.y·wA, sA.y + di
 v2 = (sB.x + dir.y·wB, sB.y − dir.x·wB), v3 = (sB.x − dir.y·wB, sB.y + dir.x·wB);
 UV: v0 (u0,v0), v1 (u1,v0), v2 (u0,v1), v3 (u1,v1) (sprite rect + uv offset); colours: v0,v1 from A's fog,
 v2,v3 from B's fog. Drawn through the 2D batch (fog off).
-Details (VERIFIED, answers_impl17 §5.1, demo 1 draw log):
+Details (VERIFIED, changelog/answers_impl17.md §5.1, demo 1 draw log):
 - `wP` uses the **3D** length (`Vec3_Length` of the projected x, y, depth difference), like §11.1.
 - Point colour by distance d = |P − (cam.position + eye_offset)|: d ≤ fog_near → the VM colour (+0x1F0, colour 1, not
   the stage-tint colour 2); near < d with f < 1 → fogged as §11.1; **f ≥ 1 → only the alpha byte is cleared, the RGB

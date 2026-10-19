@@ -10,7 +10,7 @@ TRACE_COLS = ("frame demo_frame input rng rng_ctr px py pstate score graze point
               "pause rawinput stage loading demo").split()
 SKIP = {"present", "calc", "poll"}
 # written by the stage loader thread while the main thread keeps running loading frames (timing-dependent)
-LOADER_COLS = {"rng", "rng_ctr", "px", "py", "pstate", "rank", "flags", "lives", "bombs", "power"}
+LOADER_COLS = {"rng", "rng_ctr", "px", "py", "pstate", "rank", "flags", "lives", "bombs", "power", "bullets", "enemies"}
 
 
 def opentext(path):
