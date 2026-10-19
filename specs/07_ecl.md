@@ -174,6 +174,8 @@ sub-ANM VMs disabled; e+0x3330 = 0.
 | 0x3378 / 0x337C | i32 | timeout frames / timeout sub (op 134) |
 | 0x3380 | i32 | chained children created (ops 90–92 +1) minus children killed by damage while chained (`EnemyMgr_Calc` −1); never reset by a chain kill (answers_impl12 §2) |
 | 0x3384 | ptr[4] | extra script threads (op 135) |
+| 0x3394 | 96 × 0x1C | after-image trail ring (op 157): per entry final pos[3], velocity[3] (e+0x2D4C), angle (e+0x2D94); template x = −999 (answers_impl21 §Q7) |
+| 0x534C / 0x534E / 0x5350 / 0x5352 | u8 / i16 ×3 | trail flags (≠ 0 = trail on; 8 = allocate the draw history, 0x10 = main VM hidden) / length n / op 157 arg a / draw step b |
 | 0x5354 | Timer | damage-reduction timer (op 160) |
 | 0x5360 / 0x53C0 | ptr[] / i32 | effect handles (op 128) / count; 0x53C4 = effect parameter |
 | 0x53C8 | ptr | aura effect (ops 90–92, 174) |
@@ -321,7 +323,7 @@ own argument slot in the loaded file** (shared by all enemies; e.g. op 5 with a 
 | 10092 | item drop | int | |
 | 10093 | score | int | |
 | 10094 / 10095 | ctx floats | float | |
-| 10096 | number of children currently linked in the chain: for a chain root its own count, for a chained child its root's count, 0 if not chained (`Enemy_ChainChildCount`, walks the +8 links; VERIFIED code + demo 3 runtime, answers_impl19 §Q3 RE-Q19) | — | |
+| 10096 | chain count (`Enemy_ChainChildCount` 0x41FD40): if the enemy is a chain root (no parent +0x2DA4 and +8 ≠ 0) = number of enemies reached by following +8 from it; else if it has a parent = the same count evaluated on the **parent** (+0x2DA4, the enemy that spawned it with op 90–92), which is 0 unless that parent is a root; else 0. No alive test: every death, `Enemy_Free`, kill-all and chain kill unlinks the enemy (`Enemy_ChainUnlink`), so the walk only meets live members. VERIFIED code + demo 3 runtime (answers_impl19 §Q3, answers_impl21 §Q1) | — | |
 | 10097 | player mode byte (0x17D5EF8+5) | — | |
 | 10098 | (int only) **2 if a + b + c ≥ d, else 0** — a = stage time (stats +0x3C), b = pending time reward of a captured card not yet paid (spell object g_Gui +0x10), c = number of time-orb items (type 7) currently in the item list, d = stage time threshold (stats +0x40 = `TIME_THR`[stage][difficulty], 11 §3.1). Read by the Last Spell host sub of each stage boss (ecldata1–5: `≠ 2 → delete`). VERIFIED code + runtime (answers_impl20 §Q1) | — | |
 | 10099 | spell-card state (bomb-allowed / running) | — | |
@@ -575,7 +577,13 @@ left→idle or right→idle script.
    (inclusive). Unless bit 4: while bit 24 is clear, the first on-screen frame sets bit 24 (no free test on that
    pass); once bit 24 is set and bit 28 is clear, the enemy is freed (`Enemy_Free`, no drops) when it is off
    screen — for an enemy with an after-image trail (e+0x534C ≠ 0) only when both the current pos and the
-    oldest trail pos are off screen (same sprite box).
+    oldest trail pos (entry n − 1) are off screen (same sprite box).
+   Trail ring (VERIFIED code, answers_impl21 §Q7): 96 entries × 0x1C at e+0x3394 = {final pos x, y, z; velocity
+   x, y, z; angle}. The template sets every entry's x to −999 (others 0) and every spawn copies the template, so
+   unwritten entries are off screen. On every pass of this loop, after movement and before the screen check, while
+   e+0x534C ≠ 0: entries shift up (for i = n − 1 down to 1: entry[i] = entry[i − 1], n = e+0x534E), then
+   entry[0] = current final pos, velocity, angle. A phase-change re-run therefore shifts twice that frame. Data: n 15
+   (21 uses) and 90 (1 use).
 5. Run main ANM VM and the two sub VMs (a finished sub VM is disabled).
 6. Unless bits 4/5/11 (and the player-state exception): contact test with the player (bit 2, 0x42C290, box
    = hitbox e+0x2D70): (a) if flag A bit 7 and the enemy timer e+0x2E14 advanced and is a multiple of 6:
@@ -710,7 +718,7 @@ at final pos + (Rng·128 − 64, Rng·128 − 64); counts reset. (Item types: 08
 
 ### 10.5 Child chains (ops 90–92)
 Spawn fails (manager flag) if the parent's life < 1 or it is being chain-killed. The new enemy (vars copied,
-§4.1) is appended to the parent's chain (root = parent, linked via +4/+8), parent child count += 1; it gets
+§4.1; its time-0 instructions already ran inside the spawn) is linked after the chain tail: if the spawner is a chain root, the tail found by following +8; otherwise (a root without children yet, or a chained child spawning) **the spawner itself** — a chained child that spawns links the new enemy directly after itself and overwrites its own +8, cutting the rest of the chain off the root's walk (no data case known). Parent pointer +0x2DA4 = the spawner (not the root); spawner +0x3380 += 1. All of the following is applied **after** the spawn-time `Ecl_Run`, so it overrides the child's own time-0 ops (e.g. ecldata3 sub16 `flags_on 3` sets bit 2, then bit 2 is cleared here: escan 0x01001149, answers_impl21 §Q5); it gets
 bit 8 (reacts to player mode), bit 11 = current mode (player byte +5), layer 2 (human, mode 0) / 0 (youkai),
 contact damage off, and — only if it has none yet (e+0x53C8 == 0) — an aura `Effect_SpawnHigh(0x20, pos, 1)`
 (pos e+0x2D34; op 92: e+0x2D88) with `AnmVm_Interrupt` **1 when mode == 0 (human), 2 when youkai**; aura VM flag

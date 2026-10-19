@@ -460,3 +460,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Death latch: single clear point after damage, life > 0. Screen box: sprite +0x34/+0x30 unscaled.
 - Row 6264: orb spawned (4 draws); original 3 hit sparks (12) vs port 4. Probe: L/C lines, TH08_RNGSITE (session).
 - Notes: Msg_Run is in Hud_Calc prio 15; freeze byte set only by native 26. Runs re/work/runs/q20, data specs/data/q20.
+
+# RE-Q21 (2026-10-19) — IMPL21 questions — DONE
+- Var 10096: Enemy_ChainChildCount walks +8 from root (no alive test; all exits unlink); child → parent's count
+  (parent = spawner). Link: after tail if spawner is root, else after spawner.
+- Yukari: follow → attack test (sub 3, aimed kept) → caller's entry-sub animation test runs anyway (may overwrite sub 3).
+- GameFlags bit 2 = !paused(GM+0x3DBB2) && !gameover(+0x3DBB3) each GameMgr_Calc; frame ctr 0x164D2C8 = GM+0x3DDC0,
+  ++ at end of calc, reset only by Register / OnRemove.
+- Demo 0 f4451: sticky +0xDBE → effect-end orb (state 5 → 1) + same-frame state-1 area orb (bullets 181/183) = 5 orbs.
+  Demo 1 f3870: AddTime parity raises max point value. Golden 4467: attract C/speed/line from human sht 0x18B896C.
+- Trail ring e+0x3394 96×0x1C, template x = −999, shift each loop pass; settings 0x534C–0x5352.
+- Runs re/work/runs/q21 (demo probe, golden 0 diffs, port bdump); data specs/data/q21. Work cfg/score/probe_cmd restored.

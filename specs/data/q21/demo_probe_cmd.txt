@@ -1,0 +1,8 @@
+bscan 0 4448 4452
+iscan 0 4448 4452
+rngsite 0 4449 4452
+bscan 1 3866 3871
+iscan 1 3866 3871
+rngsite 1 3867 3871
+escan 1 3866 3871
+d1:3875 quit

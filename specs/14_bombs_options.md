@@ -313,7 +313,11 @@ state 3 and team 3 slot 2 becomes 0x44F2D0 (trail reset to p).
 Init: VM script 0x12; pos = (p.x, max(p.y − 96, 32)); aimed enemy (+0xE2ABC) := 0.
 Sub-states 0–2 (following): target = (p.x, max(p.y − 96, 32)); desired = (target − pos)/16; v += (desired −
 v)·0.2; pos += v; |v.x| < 0.05 → v.x = 0. If shooting (shot timer ≥ 0), an aimed enemy exists and option
-timer ≥ 10 → interrupt 3, sub-state 3; otherwise the aimed enemy is cleared. Animation: sub 0 → v.x > 0:
+timer ≥ 10 → interrupt 3, sub-state 3 (aimed kept); otherwise the aimed enemy is cleared. **Branch order**
+(`Option_YukariFollow` 0x44E770 does the follow step and this attack test; the caller then runs the animation
+test below **unconditionally**, using the sub-state it entered with): the animation test can overwrite the
+sub-state 3 just set (and its interrupt 3 with interrupt 2/1), while the aimed pointer stays set, so the attack
+starts on the next frame (golden 1462–1464, answers_impl21 §Q2). Animation: sub 0 → v.x > 0:
 interrupt 2, sub 2, scale.x negative (mirrored); v.x < 0: interrupt 2, sub 1, scale.x positive; subs 1/2 →
 v.x = 0: interrupt 1, sub 0, scale.x positive; v.x of the other sign: interrupt 2 and switch.
 Sub 3 (attack): while an aimed enemy exists: same smoothing toward enemy pos (+0x2D88) + (0, 32) (y ≥ 32);

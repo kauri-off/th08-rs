@@ -128,7 +128,7 @@ Pause must not consume RNG: the only RNG use on pausing is the checksum update, 
 | +0x3DE28 | — | i32 | deferred music start (1 = play stage BGM 0) | VERIFIED |
 | +0x3DE2C/30/34/38 | — | i32 | rank, max, min, sub-counter (07/09) | VERIFIED |
 
-Globals next to it: 0x164D30C play-time counter (frames, + 1800 per ECL op 148); 0x164D318/0x164D31C per-frame
+Gameplay frame counter 0x164D2C8 (GM+0x3DDC0): += 1 near the end of `GameMgr_Calc` (not on its early returns: loading, pause/game-over, slow-mode skip); := 0 by `GameManager_Register` and `GameMgr_OnRemove`, so it reads 0 in the menus after a pause-quit (answers_impl21 §Q3). Globals next to it: 0x164D30C play-time counter (frames, + 1800 per ECL op 148); 0x164D318/0x164D31C per-frame
 counters not advanced during dialogue.
 
 ### 2.1 Game flags (GM+0x3DBAC = 0x164D0B4) — bits seen in code
@@ -137,7 +137,7 @@ counters not advanced during dialogue.
 |---|---|---|
 | 0 | stage practice | VERIFIED (lives 8, power per stage, ends with result) |
 | 1 | demo play (attract mode) | VERIFIED (any key → menu; time limits) |
-| 2 | gameplay running (replay record/playback active; set at stage start, cleared on teardown) | VERIFIED |
+| 2 | gameplay running: **recomputed every `GameMgr_Calc`** (after the pause-key test, before the clear/stage-end handling) as paused byte GM+0x3DBB2 (0x164D0BA) == 0 and game-over byte GM+0x3DBB3 == 0, so it drops on the ESC frame and returns on the first calc after unpausing; also set at stage start, cleared by `GameMgr_OnRemove` (answers_impl21 §Q3) | VERIFIED |
 | 3 | replay playback | VERIFIED |
 | 4 (0x10) | ending-eligible / "cleared without running out of night" (set on final clear, cleared on time-out endings) | VERIFIED writes / INFERRED meaning |
 | 5–6 | stage-end state: 0 none, 1 waiting-for-load (after a clear), 2 clear triggered, 3 clear handled | VERIFIED |

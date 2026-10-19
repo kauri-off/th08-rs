@@ -1,0 +1,17 @@
+# golden: items at the end of row 4466 nearest the player (Chebyshev distance after one more move); collected = gone at end of 4467; player 179.012 372.828
+slot 748 ty 7 st 1 pos 187.556 348.389 vel -3.300 9.440 dist 14.999 collected True
+slot 690 ty 7 st 1 pos 175.799 347.012 vel 1.235 9.923 dist 15.893 collected True
+slot 567 ty 7 st 1 pos 183.214 346.507 vel -1.576 9.875 dist 16.447 collected True
+slot 649 ty 7 st 1 pos 183.212 345.285 vel -1.507 9.886 dist 17.657 collected True
+slot 693 ty 7 st 1 pos 192.642 346.003 vel -4.530 8.915 dist 17.910 collected True
+slot 596 ty 7 st 1 pos 190.547 342.627 vel -3.568 9.342 dist 20.860 collected True
+slot 559 ty 7 st 1 pos 188.031 342.186 vel -2.823 9.593 dist 21.050 collected True
+slot 520 ty 7 st 1 pos 197.080 342.630 vel -5.134 8.581 dist 21.617 collected True
+slot 719 ty 7 st 1 pos 184.078 339.298 vel -1.494 9.888 dist 23.642 collected True
+slot 699 ty 7 st 1 pos 184.403 338.517 vel -1.552 9.879 dist 24.433 collected False
+slot 608 ty 7 st 1 pos 187.359 337.653 vel -2.309 9.730 dist 25.446 collected False
+slot 514 ty 7 st 1 pos 200.485 338.160 vel -5.266 8.501 dist 26.167 collected False
+slot 747 ty 7 st 1 pos 188.390 336.636 vel -2.508 9.680 dist 26.512 collected False
+slot 643 ty 7 st 1 pos 184.623 335.557 vel -1.489 9.889 dist 27.383 collected False
+slot 717 ty 7 st 1 pos 187.702 335.593 vel -2.273 9.738 dist 27.497 collected False
+slot 527 ty 7 st 1 pos 195.283 335.393 vel -3.986 9.171 dist 28.264 collected False

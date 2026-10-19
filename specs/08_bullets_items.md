@@ -172,9 +172,12 @@ No free slot → failure. Speed and angle: 07 §9.3 (mode table). Then:
 
 ### 4.2 States 2, 3, 4 (spawn effect)
 age.Decrement (so the age does not advance net); pos += vel / 2 (state 2), / 2.5 (state 3), / 3 (state 4);
-if flags lacks 0x1000 and `Player_InBombArea(pos)` → +0xDBE = 1. Run the effect VM. When it finishes:
+if flags lacks 0x1000 and `Player_InBombArea(pos)` → +0xDBE = 1 (sticky: tested on every spawn-effect frame and
+never cleared). Run the effect VM. When it finishes:
 if +0xDBE: bomb drop as above (the state is set to 5 but immediately overwritten — the bullet survives; faithful
-quirk); state := 1, state timer reset, and the state-1 update runs in the same frame. Otherwise tick timers,
+quirk); state := 1, state timer reset, and the state-1 update runs in the same frame — whose collision test can
+hit the bomb area again (state 5 + a second drop). Runtime demo 0 f4451 (answers_impl21 §Q4): bullets 181/182/183
+end state 2 marked → 5 time orbs (181 and 183 two each, 182 one and it stays in state 1). Otherwise tick timers,
 push on list.
 
 ### 4.3 Off-screen rule
@@ -384,7 +387,8 @@ cancels (type 6 / bomb-area type, mode 1), graze (type 10), timeline/ECL item op
 
 ### 8.4 Per frame (`ItemMgr_Calc`, list order)
 Setup: collection box = (C, C) with C = sht field +0x18 (09 §4); fall multiplier m = sht +0x34 × gs, taken
-from the youkai sht record when player byte +3 ≠ 0, else the human one.
+from the youkai sht record when player byte +3 ≠ 0, else the human one. C, the attract speed (+0x14) and the
+collection line (+0x1C) always come from the human sht (0x18B896C), whatever the focus byte.
 For each item (count += 1):
 - **state 2** (fly to target): if t < 60: pos = start·(1 − t/60) + target·t/60, then collection test. Else (at
   exactly t == 60: vel = 0, state 0); common motion.
