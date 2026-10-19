@@ -48,7 +48,7 @@ web/build.sh
 python3 -m http.server -d web/dist 8087
 ```
 
-Then open the page and select the game files; they are cached in the browser (OPFS).
+Live build: https://kauri-off.github.io/th_08/ (deployed on every push to master). Open the page and select the game files; they are cached in the browser (OPFS).
 
 Tests that need game data read `TH08_DIR`:
 
