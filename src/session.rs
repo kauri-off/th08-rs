@@ -477,7 +477,11 @@ mod tests {
     use super::*;
 
     // Leading identical trace rows per session (raise as divergences get fixed).
-    const MIN_LEADING: [(&str, usize); 2] = [("selftest1", 1325), ("golden", 2172)];
+    const MIN_LEADING: [(&str, usize); 3] = [
+        ("selftest1", 1325),
+        ("golden", 2172),
+        ("fullrun_noclip", 6263),
+    ];
 
     #[test]
     fn events() {
@@ -547,6 +551,78 @@ mod tests {
                 "{name} regressed: {} leading identical rows (min {min})",
                 c.leading
             );
+        }
+    }
+
+    // Smoke test: the whole 124 705-frame noclip run (stages 1–6, ending) without panics or hangs (~12 s release).
+    #[test]
+    fn fullrun_smoke() {
+        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+            return;
+        };
+        let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
+            eprintln!("no GPU adapter; fullrun smoke skipped");
+            return;
+        };
+        let src = crate::assets::Source::native(dir.into());
+        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
+        let s = Session::load(&data_dir("fullrun_noclip")).unwrap();
+        let Ok(rec) = s.recorded() else {
+            eprintln!("xz unavailable: fullrun smoke skipped");
+            return;
+        };
+        let events = std::fs::read_to_string(s.dir.join("events.txt")).unwrap();
+        let hits: Vec<(i64, u32)> = events
+            .lines()
+            .filter_map(|l| {
+                let w: Vec<&str> = l.split_whitespace().collect();
+                (w.first() == Some(&"noclip_hit"))
+                    .then(|| (w[3].parse().unwrap(), w[1].parse().unwrap()))
+            })
+            .collect();
+        s.start(&mut ctx).unwrap();
+        let t0 = std::time::Instant::now();
+        let (mut port, mut port_hits) = (Vec::new(), Vec::new());
+        s.run(
+            &mut ctx,
+            rec.len(),
+            |r| {
+                if r[26] == 1 || !port.is_empty() {
+                    port.push(*r);
+                    let h =
+                        crate::gamemgr::current().map_or(0, |g| g.borrow().player.borrow().hits);
+                    port_hits.push((r[24], h));
+                }
+                true
+            },
+            None,
+        );
+        let starts = |rows: &[Row]| {
+            let mut v: Vec<(i64, usize)> = Vec::new();
+            for (k, r) in rows.iter().enumerate() {
+                if r[26] == 2 && r[34] == 0 && v.last().is_none_or(|l| l.0 != r[33]) {
+                    v.push((r[33], k + 1));
+                }
+            }
+            v
+        };
+        let (rs, ps) = (starts(&rec), starts(&port));
+        eprintln!(
+            "fullrun: {} rows in {:.1} s; stage starts recorded {rs:?} port {ps:?}",
+            port.len(),
+            t0.elapsed().as_secs_f64()
+        );
+        assert!(
+            port.len() + 1 >= rec.len(),
+            "the port stopped at row {}",
+            port.len()
+        );
+        assert!(ps.len() >= 6, "the port reached only stages {ps:?}");
+        let c = compare(&rec, &port);
+        let synced_calc = port[c.leading.saturating_sub(1)][24];
+        for &(calc, n) in hits.iter().filter(|h| h.0 <= synced_calc) {
+            let got = port_hits.iter().find(|h| h.0 == calc).map(|h| h.1);
+            assert_eq!(got, Some(n), "noclip hit {n} at calc {calc}");
         }
     }
 }

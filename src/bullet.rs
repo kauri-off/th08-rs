@@ -282,9 +282,7 @@ impl Laser {
             (q[0] - centre[0]).abs() <= h[0] + ph[0] && (q[1] - centre[1]).abs() <= h[1] + ph[1]
         };
         if over(half) {
-            if p.state == 0 {
-                p.die(rng);
-            }
+            p.die(rng);
             return 0;
         }
         if graze && over([half[0] + 48.0, half[1] + 48.0]) && !matches!(p.state, 1 | 2) {
@@ -307,7 +305,6 @@ pub struct BulletManager {
     lists: [Vec<u16>; 6],
     cursor: usize,
     pub env: GrazeEnv,
-    pub freeze: bool,
     pub frozen: bool,
     pub patterns: u64,
 }
@@ -350,7 +347,6 @@ impl BulletManager {
             lists: Default::default(),
             cursor: 0,
             env: GrazeEnv::default(),
-            freeze: false,
             frozen: false,
             patterns: 0,
         }
@@ -779,7 +775,7 @@ impl BulletManager {
     fn update_normal(&mut self, anm: &mut AnmManager, idx: usize, p: &mut Player) -> bool {
         let gs = anm.speed;
         self.apply_ex(anm, idx, p.pos);
-        let freeze = self.freeze;
+        let freeze = crate::enemy::timer_pause() != 0;
         let b = &mut self.bullets[idx];
         if b.active != 0 {
             Self::motion(b, gs, p.pos);

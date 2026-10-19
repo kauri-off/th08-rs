@@ -466,6 +466,19 @@ pub struct Spell {
     pub last: bool,
 }
 
+thread_local! {
+    static TIMER_PAUSE: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
+
+// Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
+pub fn timer_pause() -> i32 {
+    TIMER_PAUSE.get()
+}
+
+pub fn set_timer_pause(v: i32) {
+    TIMER_PAUSE.set(v);
+}
+
 // Globals touched by ECL (difficulty, rank, argument registers, spell state, …).
 #[derive(Clone, Debug, Default)]
 pub struct Globals {
@@ -477,7 +490,6 @@ pub struct Globals {
     pub player_mode: i32,
     pub spell: Option<Spell>,
     pub spawn_disabled: i32,
-    pub timer_pause: i32,
     pub hud_boss: bool,
     pub dialogue: bool,
     pub drop_counter: u16,
@@ -539,6 +551,7 @@ impl EnemyManager {
         let player = bullets.borrow().player.clone();
         player.borrow_mut().stats.difficulty = difficulty;
         let step = player.borrow().orb_step;
+        set_timer_pause(0);
         let g = Globals {
             difficulty,
             rank: 16,
@@ -900,9 +913,7 @@ impl EnemyManager {
             }
             9 => self.g.misc_calls += 1,
             10 => {
-                return self
-                    .boss(ai(0))
-                    .is_none_or(|b| self.enemies[b].life <= 0 || !self.enemies[b].alive());
+                return self.boss(ai(0)).is_none_or(|b| !self.enemies[b].alive());
             }
             11 | 12 => {
                 if !self.spawn_blocked()
@@ -975,7 +986,8 @@ impl EnemyManager {
         if e.flags & A_HIDDEN != 0 {
             return false;
         }
-        let (hw, hh) = (e.hitbox[0] / 2.0, e.hitbox[1] / 2.0);
+        // SPEC-GAP: box = main VM sprite size like bullets (08 §4.3); the hitbox frees too early (IMPL19 Q2).
+        let (hw, hh) = (e.vm.sprite_w / 2.0, e.vm.sprite_h / 2.0);
         let [x, y, _] = e.final_pos;
         let inside = x + hw >= 0.0 && x - hw <= 384.0 && y + hh >= 0.0 && y - hh <= 448.0;
         if e.flags & A_ON_SCREEN == 0 {
@@ -1563,8 +1575,7 @@ impl EnemyManager {
         let (pos, db) = (self.enemies[idx].final_pos, self.enemies[idx].death_bytes);
         if mode <= 2 {
             if self.enemies[idx].flags & A_BOSS != 0 {
-                self.unregister_boss(idx);
-                self.enemies[idx].flags &= !A_BOSS;
+                // SPEC-GAP: sessions keep the boss slot and HUD byte set after a mode-1 death until op 127 −1.
                 if self.g.spell.is_none() {
                     self.cancel_and_kill_bonus(anm, Some(idx));
                 } else {
@@ -1698,7 +1709,7 @@ impl EnemyManager {
         {
             self.damage(idx, self.debug_damage, false);
         }
-        let pause = self.g.timer_pause != 0;
+        let pause = timer_pause() != 0;
         let e = &mut self.enemies[idx];
         // SPEC-GAP: a hit right after a flashed frame does not flash again (golden draw log: hits on 3 frames flash 1st and 3rd).
         if std::mem::take(&mut e.hit) && !e.flash {
@@ -1793,7 +1804,6 @@ impl EnemyManager {
                 self.player.borrow_mut().stats.rank(100);
             }
         }
-        b.freeze = self.g.timer_pause != 0;
         let env = b.env;
         drop(b);
         self.player.borrow_mut().env = env;

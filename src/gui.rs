@@ -316,7 +316,7 @@ impl Task<Ctx> for Gui {
             if let Some(s) = &e.g.spell {
                 (self.bonus, self.capturable) = (s.bonus, s.capture);
             }
-            self.player.borrow().freeze_bullets || e.g.timer_pause != 0
+            self.player.borrow().freeze_bullets || crate::enemy::timer_pause() != 0
         };
         if !frozen {
             for k in CALC_ORDER {

@@ -952,7 +952,7 @@ impl Exec<'_> {
                 .set_int(V_INT0, self.m.g.spell.as_ref().map_or(0, |s| s.id)),
             // SPEC-GAP: game value at (0x160F510)+0x1C belongs to a later phase; reads 0.
             24 => t.ctx.set_int(V_INT0, 0),
-            26 => self.m.g.timer_pause = arg,
+            26 => set_timer_pause(arg),
             27 => {
                 let sub = t.ctx.int(V_INT1 + 2);
                 let marked: Vec<_> = {
@@ -1249,7 +1249,7 @@ impl Exec<'_> {
                 self.set_f(t, ins, 0, (b - c) * d + c);
             }
             36 => {
-                let target = self.raw(ins, 0) as i32;
+                let target = f32::from_bits(self.raw(ins, 0)) as i32;
                 let dur = self.ai(t, ins, 1);
                 let func = self.ai(t, ins, 2);
                 let mode = self.ai(t, ins, 3);
@@ -1710,6 +1710,8 @@ impl Exec<'_> {
             131 => {
                 let n = self.ai(t, ins, 0);
                 (self.e.life, self.e.max_life, self.e.hud_life) = (n, n, n);
+                // SPEC-GAP: set_life re-arms death (clears the latch); bosses with death mode 2 die again later (fullrun_noclip).
+                self.e.flags_b &= !B_DEATH_LATCH;
                 if self.e.boss_slot == 0 && self.e.flags & A_BOSS != 0 {
                     self.m.g.hud_markers = Default::default();
                 }

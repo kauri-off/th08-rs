@@ -204,6 +204,12 @@ fn dump_items(row: i64) {
                     x.life,
                     x.orb_acc
                 );
+                for t in x.threads.iter().flatten() {
+                    println!(
+                        "    thread sub {} t {} w {} ip {:#x}",
+                        t.ctx.sub, t.ctx.clock.cur, t.ctx.wait.cur, t.ctx.ip
+                    );
+                }
             }
         }
     }

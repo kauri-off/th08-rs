@@ -572,19 +572,26 @@ impl Player {
         ) {
             return 0;
         }
-        if self.state == 0 {
-            self.die(rng);
-        }
+        self.die(rng);
         1
     }
 
-    // Hit path of bullets/lasers/enemies: ScrambleDecoys, then Player_Die (09 §6.1).
+    // Hit path of bullets/lasers/enemies (09 §6.1 steps 5–6): state check, ScrambleDecoys, then Player_Die.
     pub fn die(&mut self, rng: &mut Rng) {
-        Stats::scramble(rng);
-        self.hits += 1;
-        if self.state != 0 || self.debug_invuln {
+        if self.state != 0 {
             return;
         }
+        Stats::scramble(rng);
+        self.hits += 1;
+        self.player_die(rng);
+    }
+
+    // Player_Die 0x44AB40; `debug_invuln` returns at its start like the noclip probe.
+    fn player_die(&mut self, rng: &mut Rng) {
+        if self.debug_invuln {
+            return;
+        }
+        crate::enemy::set_timer_pause(0);
         Stats::checksum(rng);
         crate::sound::play_at(crate::sound::PLDEAD, self.pos[0]);
         crate::effect::spawn_rng(rng, 6, self.pos, 16, 0xFFFFFFFF);
@@ -698,6 +705,7 @@ impl Player {
 
     // Player_HitTestNoBomb 0x44A360: true on overlap in every player state; only state 0 dies.
     pub fn contact_test(&mut self, p: [f32; 3], size: [f32; 2], rng: &mut Rng) -> bool {
+        self.cancel_item = 6;
         if !overlap(
             [p[0], p[1]],
             [size[0] / 2.0, size[1] / 2.0],
@@ -706,9 +714,7 @@ impl Player {
         ) {
             return false;
         }
-        if self.state == 0 {
-            self.die(rng);
-        }
+        self.die(rng);
         true
     }
 
@@ -840,7 +846,7 @@ impl Player {
 
     // Gauge per frame (09 §9.3).
     fn gauge_drift(&mut self, gs: f32) {
-        if self.focus_age < 30 || self.bombing {
+        if self.focus_age < 30 || self.bombing || self.env.dialogue {
             return;
         }
         let st = &mut self.stats;
@@ -1112,6 +1118,14 @@ impl Task<Ctx> for Player {
         let inp = ctx.input.game_view();
         // 0x164D2C8 (frames since stage start) already counts this frame (session trace: shot-timer phase).
         self.frames = ctx.game.frame_counter as i32;
+        // The dialogue state is read live: the previous frame's dialogue calc (prio 12) ran after the enemies.
+        if let Some(gm) = crate::gamemgr::current()
+            && let Ok(gm) = gm.try_borrow()
+            && let Some(e) = &gm.enemies
+            && let Ok(e) = e.try_borrow()
+        {
+            self.env.dialogue = e.dialogue_active();
+        }
         match self.world.upgrade() {
             Some(b) => {
                 let mut b = b.borrow_mut();
