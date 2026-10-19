@@ -293,3 +293,17 @@ ends the run early. Mute: the work cfg has music/SE on; patch +0x1F/+0x20 to 0 f
 decoy checksum makes the original quit ~300 frames after the first absorbed hit). `play_session.sh` follows `noclip:` in meta.txt.
 Test keys: `re/work/runs/q17m/noclip/keys_noclip.txt`. Font note (RE-Q17M): wine renders the game's text with Droid Sans Fallback
 (face name arrives garbled, non-932 ANSI code page) — `WINEDEBUG=-all,+font` shows the choice.
+
+## 12. Session scans and load log (RE-Q18, 2026-10-19)
+- `TH08_SCAN="P0 P1"` (env, session record or play): for every calc row with poll in [P0,P1] in scene 2 (not loading) the
+  probe writes `scan.txt` to the session output dir: `F` (poll, frame, rng, player pos/state/+3/+5, +0xFDC, +0xFE4,
+  +0xE2A7C, shot timer, aimed-enemy slot, homing target, power, bullet count), `O` (option k raw +0x2A4..+0x2F0), `X`
+  (the aimed enemy's slot even if dead), `E`/`S` (live enemies: flags, final/base pos, hitbox, life, item, timer, parent,
+  sprite w/h), `A` (active bomb areas, 16 raw dwords), `I` (item list). Floats are hex: `re/work/runs/q18/scandec.py`.
+- `re/work/runs/q18/scanrun.sh <session> <outdir> <p0> <p1>`: play_session with TH08_SCAN, kills the game once poll p1
+  was dumped (partial replays of golden/selftest1 take ~40–60 s). The compare step then reports only the played rows.
+- `TH08_LDLOG=1` (session mode): `ldlog.txt` in the game dir (`re/work/sessplay/game`, copy it out — the next
+  play_session wipes it) with ANM preloads (loader thread), `Anm_PostloadStep` calls and surface loads, each stamped with
+  QPC ms, thread id, present, poll and GM loading-frame counter.
+- escan `E` lines (demo mode) now end with `spr <w> <h> hb <w> <h>` (main-VM sprite size and hitbox, hex floats).
+- Known nit: play_session.sh's `pgrep -A -x Xvfb -f ':77'` prints "only one pattern" (harmless when Xvfb is running).

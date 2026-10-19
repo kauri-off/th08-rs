@@ -557,8 +557,14 @@ left→idle or right→idle script.
    - Finally bit 11 := mode & 1; mode bits e+0x3330 := 0x40 if mode ≠ 0 else 0x20.
 4. Repeat { `Ecl_Run` (−1 → free enemy, no drops) ; movement (§8) ; screen check ; } while
    `Enemy_CheckLifeThresholds` or `Enemy_CheckTimeout` request a re-run (§10.3).
-   Screen check (unless bit 4 or already done): when the box (final pos ± hitbox/2) first overlaps
-   [0,384]×[0,448], set bit 24; afterwards, if it no longer overlaps and bit 28 is clear → free enemy.
+   Screen check (answers_impl18 §IMPL19-Q2, VERIFIED code + runtime): if the main VM has no sprite (e+0x230 = 0)
+   bit 4 is set first (the enemy is then never screen-checked, linked or hit). The box is the **main VM's current
+   sprite** size (sprite +0x34 width, +0x30 height, unscaled), centred on the final pos — **not** the hitbox. "On
+   screen" (`GameMgr_IsOnScreen` 0x4399AC) = x + w/2 ≥ 0 and x − w/2 ≤ 384 and y + h/2 ≥ 0 and y − h/2 ≤ 448
+   (inclusive). Unless bit 4: while bit 24 is clear, the first on-screen frame sets bit 24 (no free test on that
+   pass); once bit 24 is set and bit 28 is clear, the enemy is freed (`Enemy_Free`, no drops) when it is off
+   screen — for an enemy with an after-image trail (e+0x534C ≠ 0) only when both the current pos and the
+    oldest trail pos are off screen (same sprite box).
 5. Run main ANM VM and the two sub VMs (a finished sub VM is disabled).
 6. Unless bits 4/5/11 (and the player-state exception): contact test with the player (bit 2, 0x42C290, box
    = hitbox e+0x2D70): (a) if flag A bit 7 and the enemy timer e+0x2E14 advanced and is a multiple of 6:
@@ -566,8 +572,13 @@ left→idle or right→idle script.
    0/4 and the enemy is a chained child: `Player_HitTestNoBomb` 0x44A360 with box = hitbox / 1.5 (smaller):
    kills the player in state 0; result 1 (also for an invulnerable player) on a non-boss without bit 7 →
    enemy life −= 10 (every frame of contact). Then, if bit 6, shot damage `d` = `Player_DamageAgainst`(hitbox,
-   …, &hitByBomb) where hitByBomb starts as "player is bombing"; if the extra shot box (e+0x2D7C) has x > 0, a
-   second call d2 against it, and when hitByBomb is still 0: d = trunc(d + d2/6.5) for shot types 3/11, else
+   …, &hitByBomb). hitByBomb is initialised to "player is bombing" (player +0xFDC, set for the whole bomb), but
+   `Player_DamageAgainst` overwrites it: when the player's state timer (+0xE2AF4) has advanced (current ≠
+   previous, i.e. every normal frame) it writes 0 at entry and 1 only when a damage area of the first 192
+   (+0xB8834) **overlaps the enemy box on this call while life % period == 0** and +0xFDC ≠ 0 (answers_impl18
+   §Q2, VERIFIED code + runtime). So a kill by shots during a bomb has hitByBomb 0 → drop mode 0. If the extra shot
+   box (e+0x2D7C) has x > 0, a second call d2 against it (it overwrites hitByBomb again), and when hitByBomb is
+   still 0: d = trunc(d + d2/6.5) for shot types 3/11, else
    trunc(d + d2/1.7). If d > 0:
    - `d = min(d, 70)` (values ≥ 70 become 70); score += (d / 5)·10 (integer division);
    - if bit 3: while a spell card is active: normal damage `d < 8 ? min(d,1) : d/7`; bomb damage (hitByBomb) =
@@ -578,10 +589,21 @@ left→idle or right→idle script.
      damage-reduction timer (op 160) > 0: bosses `d/9`, others 0; life −= d; var 10083 = d; chained enemies
      forward damage to their root (0x42B370: root life −= d/2, or /9 / 0 under the root's timer, never below
      the root's highest active threshold).
-7. Hit flash: on a hit the main VM uses colour2 = (R 0xFF, G 0x60, B 0x80, alpha = current) for one frame
-   with sfx 0x14 (0x25 when the low-life warning level ≥ 2); in youkai mode the enemy is drawn with colour2
+7. Hit flash (counter byte e+0x3314, answers_impl18 §Q3, VERIFIED code): if the counter is 0 and the enemy took
+   damage this frame (d > 0 at step 6) → colour2 = (R 0xFF, G 0x60, B 0x80, alpha = current), VM colour2 flag on,
+   sfx 0x14 (0x25 when the low-life warning level ≥ 2), counter := 1; else if the counter ≠ 0 → counter −= 1 and
+   flag off (no sfx even if hit); else flag off. Continuous hits therefore flash every 2nd frame; in youkai mode the enemy is drawn with colour2
    (0x20, 0x20, 0xC0, alpha/2) permanently. Then boss HUD life bar, effect followers, timer 0x2E14 tick
-   (unless global 0x160F534), damage-reduction timer decrement, add to draw list (layer e+0x332F) unless bit 4.
+   (unless global 0x160F534), damage-reduction timer decrement, add to draw list (layer e+0x332F) if still alive
+   (bit 0) and bit 4 clear: **prepend** (e+0 next := head; head := e). The 4 heads are cleared at the start of
+   every `EnemyMgr_Calc` (before the timelines). Paths that skip the link: inactive slot, `Ecl_Run` −1 / screen
+   free (`Enemy_Free`), death mode 0 (alive cleared). Timeline spawns happen before the slot loop, so they are
+   processed (their timer reads 1 after the spawn frame) and linked in the spawn frame; an enemy spawned by
+   another enemy's ECL (ops 90–92, child) into a higher slot is processed and linked the same frame, into a
+   lower slot only from the next frame.
+   Aimed enemy (14 §3.1): the aimed-pointer update is done in step 6 right after the damage, **before** the death
+   check — an enemy killed this frame (even one spawned and killed in the same frame) can become the aimed enemy,
+   and death mode 0 does not clear the pointer (only `Enemy_Free` and the next frame's inactive-slot test do).
 
 ### 10.2 Life thresholds (op 133) and timeout (op 134)
 - Thresholds (checked after every Ecl_Run): for each active k: if life < threshold: life = threshold;
@@ -643,9 +665,9 @@ child follow the parent (offset = parent pos, bit 9). Sound 0x24. When the paren
 children are killed (bit 10) with score popups / item showers proportional to chain length (0x42ADB0).
 
 ### 10.6 Enemy drawing — VERIFIED (0x42E140; draw prio 8 → layers 0–1, prio 11 → layers 2–3)
-Enemies are linked each calc into 4 lists by the layer byte e+0x332F (template 0; op 159 = value, op 156 = 2,
+Enemies are linked each calc (prepended, §10.1 step 7) into 4 lists by the layer byte e+0x332F (template 0; op 159 = value, op 156 = 2,
 mode-reacting enemies 0 in youkai / 2 in human mode). Prio 11 draws with the global tint 0xFFF01010 while
-bullets are frozen (0x164D0B4 bit 10). Per enemy, all with Draw2DRot; positions + playfield origin (0x164D2DC = 32, 16):
+bullets are frozen (0x164D0B4 bit 10). Each list is walked from its head, i.e. in reverse processing order (highest linked slot first). Per enemy, all with Draw2DRot; positions + playfield origin (0x164D2DC = 32, 16):
 1. sub VM 0 (e+0x2B0, if its script ≥ 0): rotation = enemy angle (e+0x2D94) if the VM tag ≠ 0; pos = final pos
    + (flags B bit 8 ? main VM pos offset : its own pos offset), z 0.3;
 2. main VM (e+0xC): rotation = angle if flag A bit 25; pos = final pos + main VM pos offset (+0x288), z 0.25;

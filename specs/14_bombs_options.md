@@ -325,6 +325,13 @@ or not bombing), replaces it when |enemy final x − p.x| < 64 and the enemy has
 cleared only when the aimed enemy's slot is found inactive or freed (`Enemy_Free`), or by the option itself
 (sub-states 0–2 when not attacking, leaving sub 3). So in sub-state 3 Yukari keeps chasing the same enemy
 after it leaves the 64-px column, unless a higher enemy enters the column.
+Ordering (answers_impl18 §Q1, VERIFIED at runtime, golden frames 1431–1433): the pointer is updated in the enemy's
+damage step **before** its death check, and death mode 0 does not clear it, so an enemy killed in the same frame
+— golden frame 1431: slot 7 spawned by the timeline at (284.0, −21.7), killed by shots in its first update,
+life 0 — is left as the aimed enemy after that frame. The player calc (prio 9) runs before the enemies (prio 11):
+on the next frame the option sees the pointer, enters sub-state 3 (interrupt 3) and makes its first attack move
+toward that dead enemy's final pos + (0, 32) (y ≥ 32); then that frame's `EnemyMgr_Calc` finds slot 7 inactive
+and clears the pointer, and the frame after the option leaves sub-state 3 (interrupt 1, sub 0).
 
 ### 3.2 Remilia solo (0x44EE70)
 Init: script 0x18; anchor = p + offset, offsets by index: 0 (−30, −16), 1 (−10, −32), 2 (+10, −32),

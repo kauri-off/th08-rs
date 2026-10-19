@@ -243,8 +243,10 @@ static void emit_row(void) {
             for (int j = 0; j < 480; j++) {
                 uint32_t e = 0x577F20 + 0x53D0 + j * 0x53D0;
                 if (!(U32(e + 0x3324) & 1)) continue;
-                fprintf(g_esf, "E %d fl %08x %08x pos %08x %08x life %d acc %d item %d t %d par %08x nch %d\n", j, U32(e + 0x3324), U32(e + 0x3328),
-                        U32(e + 0x2D88), U32(e + 0x2D8C), (int)U32(e + 0x2DFC), (int)U32(e + 0x2E10), (int)U32(e + 0x3304), (int)U32(e + 0x2E14 + 8), U32(e + 0x2DA4), (int)U32(e + 0x3380));
+                { uint32_t spr = U32(e + 0x230);
+                fprintf(g_esf, "E %d fl %08x %08x pos %08x %08x life %d acc %d item %d t %d par %08x nch %d spr %08x %08x hb %08x %08x\n", j, U32(e + 0x3324), U32(e + 0x3328),
+                        U32(e + 0x2D88), U32(e + 0x2D8C), (int)U32(e + 0x2DFC), (int)U32(e + 0x2E10), (int)U32(e + 0x3304), (int)U32(e + 0x2E14 + 8), U32(e + 0x2DA4), (int)U32(e + 0x3380),
+                        spr ? U32(spr + 0x34) : 0, spr ? U32(spr + 0x30) : 0, U32(e + 0x2D70), U32(e + 0x2D74)); }
             }
             fflush(g_esf);
             break;

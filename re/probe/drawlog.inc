@@ -47,12 +47,29 @@ static const char *basename_of(const char *s) {
 }
 
 /* hook callbacks (inline, no FPU) */
+/* TH08_LDLOG=1 (RE-Q18): log ANM preloads / post-load steps / surface loads with poll + loading frame counter */
+static FILE *g_ldf; static int g_ldlog = -1; static uint32_t g_poll_n;
+static void ldlog(const char *fmt, ...) {
+    if (g_ldlog < 0) { const char *e = getenv("TH08_LDLOG"); g_ldlog = e && atoi(e); }
+    if (!g_ldlog) return;
+    if (!g_ldf) g_ldf = fopen("ldlog.txt", "w");
+    if (!g_ldf) return;
+    LARGE_INTEGER q, fr; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&fr);
+    fprintf(g_ldf, "%.3f tid %lu present %u poll %u lf %u ", (double)q.QuadPart * 1000.0 / (double)fr.QuadPart, GetCurrentThreadId(), g_present_n, g_poll_n, U32(0x160F544));
+    va_list ap; va_start(ap, fmt); vfprintf(g_ldf, fmt, ap); va_end(ap); fflush(g_ldf);
+}
+static void __cdecl cb_postload(uint32_t *sp) {
+    uint32_t rec = sp[10];
+    ldlog("post slot %d entry %d\n", (int)((rec - (ANMMGR + 0x24)) / 0x1C), (int)U32(rec + 0x18));
+}
 static void __cdecl cb_anm_preload(uint32_t *sp) {
     uint32_t slot = sp[10]; const char *name = (const char *)sp[11];
+    ldlog("preload slot %u %s\n", slot, name ? name : "?");
     if (slot < 25 && name) { strncpy(g_anm_name[slot], basename_of(name), 63); g_anm_name[slot][63] = 0; }
 }
 static void __cdecl cb_surf_load(uint32_t *sp) {
     uint32_t slot = sp[10]; const char *name = (const char *)sp[11];
+    ldlog("surface slot %u %s\n", slot, name ? name : "?");
     if (slot < 32 && name) { strncpy(g_surf_name[slot], basename_of(name), 63); g_surf_name[slot][63] = 0; }
 }
 

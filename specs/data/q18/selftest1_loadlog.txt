@@ -1,0 +1,97 @@
+4260130.000 tid 36 present 2 poll 0 lf 0 surface slot 8 title/th08logo.jpg
+4260159.000 tid 36 present 2 poll 0 lf 0 preload slot 2 nowloading.anm
+4260159.500 tid 36 present 2 poll 0 lf 0 post slot 2 entry 1
+4260254.449 tid 288 present 9 poll 0 lf 0 preload slot 0 text.anm
+4260268.000 tid 36 present 9 poll 0 lf 0 post slot 0 entry 1
+4260268.515 tid 288 present 10 poll 0 lf 0 preload slot 1 ascii.anm
+4260285.000 tid 36 present 10 poll 0 lf 0 post slot 1 entry 1
+4260302.000 tid 36 present 11 poll 0 lf 0 post slot 1 entry 2
+4260318.000 tid 36 present 12 poll 0 lf 0 post slot 1 entry 3
+4260318.518 tid 288 present 13 poll 0 lf 0 preload slot 3 capture.anm
+4260335.000 tid 36 present 13 poll 0 lf 0 post slot 3 entry 1
+4260354.349 tid 300 present 15 poll 1 lf 0 preload slot 20 title01.anm
+4260435.000 tid 36 present 19 poll 5 lf 0 post slot 20 entry 1
+4260451.500 tid 36 present 20 poll 6 lf 0 post slot 20 entry 2
+4260468.500 tid 36 present 21 poll 7 lf 0 post slot 20 entry 3
+4260485.000 tid 36 present 22 poll 8 lf 0 post slot 20 entry 4
+4260501.500 tid 36 present 23 poll 9 lf 0 post slot 20 entry 5
+4260518.000 tid 36 present 24 poll 10 lf 0 post slot 20 entry 6
+4260535.000 tid 36 present 25 poll 11 lf 0 post slot 20 entry 7
+4260552.000 tid 36 present 26 poll 12 lf 0 post slot 20 entry 8
+4260568.000 tid 36 present 27 poll 13 lf 0 post slot 20 entry 9
+4260585.000 tid 36 present 28 poll 14 lf 0 post slot 20 entry 10
+4260601.500 tid 36 present 29 poll 15 lf 0 post slot 20 entry 11
+4260618.000 tid 36 present 30 poll 16 lf 0 post slot 20 entry 12
+4260635.000 tid 36 present 31 poll 17 lf 0 post slot 20 entry 13
+4260651.500 tid 36 present 32 poll 18 lf 0 post slot 20 entry 14
+4260668.500 tid 36 present 33 poll 19 lf 0 post slot 20 entry 15
+4260684.500 tid 36 present 34 poll 20 lf 0 post slot 20 entry 16
+4260701.500 tid 36 present 35 poll 21 lf 0 post slot 20 entry 17
+4260718.500 tid 36 present 36 poll 22 lf 0 post slot 20 entry 18
+4260735.000 tid 36 present 37 poll 23 lf 0 post slot 20 entry 19
+4260751.500 tid 36 present 38 poll 24 lf 0 post slot 20 entry 20
+4260768.000 tid 36 present 39 poll 25 lf 0 post slot 20 entry 21
+4260785.000 tid 36 present 40 poll 26 lf 0 post slot 20 entry 22
+4260801.500 tid 36 present 41 poll 27 lf 0 post slot 20 entry 23
+4260818.000 tid 36 present 42 poll 28 lf 0 post slot 20 entry 24
+4260835.000 tid 36 present 43 poll 29 lf 0 post slot 20 entry 25
+4260835.812 tid 300 present 44 poll 30 lf 0 preload slot 22 resulttext.anm
+4260851.500 tid 36 present 44 poll 30 lf 0 post slot 22 entry 1
+4260886.000 tid 36 present 46 poll 33 lf 0 surface slot 0 title/title00.png
+4266083.500 tid 36 present 358 poll 345 lf 0 surface slot 0 title/select00.png
+4269766.839 tid 304 present 580 poll 566 lf 0 preload slot 5 player00.anm
+4269782.500 tid 36 present 580 poll 566 lf 0 post slot 5 entry 1
+4269799.500 tid 36 present 581 poll 567 lf 1 post slot 5 entry 2
+4269814.291 tid 304 present 582 poll 568 lf 2 preload slot 4 stg1bg.anm
+4269832.500 tid 36 present 583 poll 569 lf 3 post slot 4 entry 1
+4269834.067 tid 304 present 584 poll 570 lf 4 preload slot 6 etama.anm
+4269849.500 tid 36 present 584 poll 570 lf 4 post slot 6 entry 1
+4269866.000 tid 36 present 585 poll 571 lf 5 post slot 6 entry 2
+4269883.000 tid 36 present 586 poll 572 lf 6 post slot 6 entry 3
+4269899.000 tid 36 present 587 poll 573 lf 7 post slot 6 entry 4
+4269916.000 tid 36 present 588 poll 574 lf 8 post slot 6 entry 5
+4269933.000 tid 36 present 589 poll 575 lf 9 post slot 6 entry 6
+4269933.376 tid 304 present 590 poll 576 lf 10 preload slot 7 enemy.anm
+4269949.000 tid 36 present 590 poll 576 lf 10 post slot 7 entry 1
+4269949.866 tid 304 present 591 poll 577 lf 11 preload slot 8 stg1enm.anm
+4269966.000 tid 36 present 591 poll 577 lf 11 post slot 8 entry 1
+4269967.227 tid 304 present 592 poll 578 lf 12 preload slot 9 eff01.anm
+4269982.500 tid 36 present 592 poll 578 lf 12 post slot 9 entry 1
+4269999.500 tid 36 present 593 poll 579 lf 13 post slot 9 entry 2
+4269999.827 tid 304 present 594 poll 580 lf 14 preload slot 10 front.anm
+4270016.000 tid 36 present 594 poll 580 lf 14 post slot 10 entry 1
+4270032.500 tid 36 present 595 poll 581 lf 15 post slot 10 entry 2
+4270033.007 tid 304 present 596 poll 582 lf 16 preload slot 14 times.anm
+4270049.500 tid 36 present 596 poll 582 lf 16 post slot 14 entry 1
+4270049.879 tid 304 present 597 poll 583 lf 17 preload slot 12 loading00.anm
+4270066.000 tid 36 present 597 poll 583 lf 17 post slot 12 entry 1
+4270067.057 tid 304 present 598 poll 584 lf 18 preload slot 13 stg1txt.anm
+4270082.500 tid 36 present 598 poll 584 lf 18 post slot 13 entry 1
+4270083.297 tid 304 present 599 poll 585 lf 19 preload slot 15 face_cdbg.anm
+4270099.500 tid 36 present 599 poll 585 lf 19 post slot 15 entry 1
+4270099.654 tid 304 present 600 poll 586 lf 20 preload slot 16 face_rm00.anm
+4270149.000 tid 36 present 602 poll 588 lf 22 post slot 16 entry 1
+4270166.000 tid 36 present 603 poll 589 lf 23 post slot 16 entry 2
+4270182.500 tid 36 present 604 poll 590 lf 24 post slot 16 entry 3
+4270199.000 tid 36 present 605 poll 591 lf 25 post slot 16 entry 4
+4270216.000 tid 36 present 606 poll 592 lf 26 post slot 16 entry 5
+4270232.500 tid 36 present 607 poll 593 lf 27 post slot 16 entry 6
+4270249.000 tid 36 present 608 poll 594 lf 28 post slot 16 entry 7
+4270266.000 tid 36 present 609 poll 595 lf 29 post slot 16 entry 8
+4270282.500 tid 36 present 610 poll 596 lf 30 post slot 16 entry 9
+4270283.280 tid 304 present 611 poll 597 lf 31 preload slot 17 face_yk00.anm
+4270332.500 tid 36 present 613 poll 599 lf 33 post slot 17 entry 1
+4270349.000 tid 36 present 614 poll 600 lf 34 post slot 17 entry 2
+4270366.000 tid 36 present 615 poll 601 lf 35 post slot 17 entry 3
+4270382.500 tid 36 present 616 poll 602 lf 36 post slot 17 entry 4
+4270399.000 tid 36 present 617 poll 603 lf 37 post slot 17 entry 5
+4270416.000 tid 36 present 618 poll 604 lf 38 post slot 17 entry 6
+4270432.500 tid 36 present 619 poll 605 lf 39 post slot 17 entry 7
+4270449.000 tid 36 present 620 poll 606 lf 40 post slot 17 entry 8
+4270466.000 tid 36 present 621 poll 607 lf 41 post slot 17 entry 9
+4270465.997 tid 304 present 622 poll 608 lf 42 preload slot 18 face_st01.anm
+4270499.000 tid 36 present 623 poll 609 lf 43 post slot 18 entry 1
+4270516.000 tid 36 present 624 poll 610 lf 44 post slot 18 entry 2
+4270532.500 tid 36 present 625 poll 611 lf 45 post slot 18 entry 3
+4270549.500 tid 36 present 626 poll 612 lf 46 post slot 18 entry 4
+4270565.500 tid 36 present 627 poll 613 lf 47 post slot 18 entry 5

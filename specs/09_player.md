@@ -182,7 +182,9 @@ byte +5 := f. Solos override +5 with their parity every frame.
 Velocity per frame: orthogonal speed or diagonal component from the sht fields (§2.1), × the speed
 multipliers (+0x404 x, +0x408 y). Sprite script on horizontal start/stop (teams by focus, solos by parity):
 human set 1 (start left: vx < 0 and previous vx ≥ 0), 2 (stop from left), 3 (start right), 4 (stop from right);
-youkai set 6/7/8/9.
+youkai set 6/7/8/9. "Previous vx" is the float player +0xE2A9C, written with this frame's vx at the end of the
+movement; the focus-switch sprite-script reset (teams, script 0 / 5) also sets +0xE2A9C := 0, so moving on the
+switch frame replays the start-move script (answers_impl18 §Q3, VERIFIED code).
 pos += v × gs; clamp x to [8, 376] and y to [16, 432] (game-manager +0x3DDE4/+0x3DDE8 = 8/16, ranges
 +0x3DDEC/+0x3DDF0 = 368/416). Then the three boxes are recomputed. Options run (§5). Shot button: shot timer
 starts (§4.2) if no dialogue and not blocked. Gauge drift (§9.3). Trail shifted if moving.
@@ -339,6 +341,10 @@ multipliers 1, bombing := 0; index 4 also clears GameFlags bits 7–8 and, for e
 children without reward, sets the boss life (+0x2DFC) to 0 and clears flag A bit 30; then a white flash (3: 30, 1,
 0xFFFFFFFF) (14 §2.17, answers_impl11 §14, VERIFIED).
 Gauge while bombing (indexes 0–3): odd index += 26000/duration per frame, even −= 26000/duration (integer).
+Added only in the "already bombing" branch of `Player_UpdateBomb`, after the calc-fn/end test — so **not on the
+start frame** (that branch returns after the start), but **also on the end frame** (timer ≥ duration: the end
+handling runs, then the gauge add still happens with the old index) (answers_impl18 §Q3, VERIFIED code; trace
+selftest1 frame 684: no change, then +173 per frame). Forced add (`GaugeAdd(v, 1)`), so not skipped while bombing.
 Indexes: 0 human bomb, 1 youkai bomb, 2 human last spell, 3 youkai last spell, 4 "dissolve spell".
 Bomb start helper 0x40BE30(name, duration, invulnerability, isLastSpell): declares the spell name, sets the
 duration, **state 3 with the invulnerability timer**, invulnerability ring effect, clears bomb objects, all

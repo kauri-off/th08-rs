@@ -1,0 +1,10 @@
+escan 0 1714 1721
+escan 1 1804 1809
+escan 2 2256 2262
+escan 3 1496 1502
+bscan 2 2256 2262
+bscan 3 1496 1502
+rngsite 3 1057 1060
+rngsite 3 1499 1502
+rngsite 2 2259 2262
+d3:1510 quit

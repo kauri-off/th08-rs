@@ -141,6 +141,56 @@ static void __cdecl cb_setstate(uint32_t *sp) {
 }
 static void __cdecl cb_result_calc(uint32_t *sp) { g_res_obj = sp[7]; g_res_hit = 1; }
 
+
+/* TH08_SCAN="P0 P1": per calc row with poll in [P0,P1] in scene 2, dump enemies/items/bomb areas to scan.txt (RE-Q18) */
+static int g_scan0 = -1, g_scan1 = -1; static FILE *g_scanf;
+static void sess_scan(int pass) {
+    if (g_scan0 < 0 || (int)g_poll_n < g_scan0 || (int)g_poll_n > g_scan1 || U32(G_SCENE) != 2 || U32(G_LOADING)) return;
+    if (!g_scanf) g_scanf = sess_open(g_sess_out, "scan.txt", "w");
+    if (!g_scanf) return;
+    FILE *o = g_scanf; uint32_t P = G_PLAYER, st = U32(G_STATS), am = U32(0x18B89B4);
+    int aslot = am ? (int)((am - 0x577F20 - 0x53D0) / 0x53D0) : -1;
+    fprintf(o, "F poll %u pass %d frame %u rng %04x ctr %u player %08x %08x pst %u p3 %u p5 %u fdc %d fe4 %d e2a7c %d shot %d aimed %d tgt %08x %08x flag %d pow %08x bul %u\n",
+            g_poll_n, pass, U32(G_GMFRAME), U16(G_RNG), g_rng_calls, U32(0x17D61AC), U32(0x17D61B0), U8(P), U8(P + 3), U8(P + 5),
+            (int)U32(P + 0xFDC), (int)U32(P + 0xFE4), (int)U32(P + 0xE2A7C), (int)U32(0x18B89BC + 8), aslot, U32(P + 0xE2AA4), U32(P + 0xE2AA8), (int)U32(P + 0xE2AC0),
+            st >= 0x10000 ? U32(st + 0x98) : 0, U32(G_BULLETS));
+    for (int k = 0; k < 4; k++) {
+        uint32_t op = P + 0x40C + k * 0x2F4;
+        if (!U32(op + 0x2EC)) continue;
+        fprintf(o, "O %d", k);
+        for (int q = 0x2A4; q < 0x2F4; q += 4) fprintf(o, " %08x", U32(op + q));
+        fprintf(o, "\n");
+    }
+    if (am) {
+        fprintf(o, "X %08x fl %08x %08x pos %08x %08x base %08x %08x life %d t %d par %08x sub %d raw", am, U32(am + 0x3324), U32(am + 0x3328), U32(am + 0x2D88), U32(am + 0x2D8C),
+                U32(am + 0x2D34), U32(am + 0x2D38), (int)U32(am + 0x2DFC), (int)U32(am + 0x2E14 + 8), U32(am + 0x2DA4), (int)U32(am + 0x2DF8));
+        for (int q = 0x2D00; q < 0x2E40; q += 4) fprintf(o, " %08x", U32(am + q));
+        fprintf(o, "\n");
+    }
+    for (int j = 0; j < 480; j++) {
+        uint32_t e = 0x577F20 + 0x53D0 + j * 0x53D0;
+        if (!(U32(e + 0x3324) & 1)) continue;
+        fprintf(o, "E %d fl %08x %08x pos %08x %08x base %08x %08x hb %08x %08x life %d item %d t %d par %08x sub %d\n", j, U32(e + 0x3324), U32(e + 0x3328),
+                U32(e + 0x2D88), U32(e + 0x2D8C), U32(e + 0x2D34), U32(e + 0x2D38), U32(e + 0x2D70), U32(e + 0x2D74), (int)U32(e + 0x2DFC), (int)U32(e + 0x3304),
+                (int)U32(e + 0x2E14 + 8), U32(e + 0x2DA4), (int)U32(e + 0x2DF8));
+        { uint32_t spr = U32(e + 0x230); fprintf(o, "S %d spr %08x %08x\n", j, spr ? U32(spr + 0x34) : 0, spr ? U32(spr + 0x30) : 0); }
+    }
+    for (int j = 0; j < 384; j++) {
+        uint32_t a = P + 0xB8834 + j * 0x40;
+        if (!U8(a + 0x3C)) continue;
+        fprintf(o, "A %d", j);
+        for (int q = 0; q < 0x40; q += 4) fprintf(o, " %08x", U32(a + q));
+        fprintf(o, "\n");
+    }
+    uint32_t it = U32(0x1653648 + 0x17B088); int n = 0;
+    while (it && n < 3000) {
+        fprintf(o, "I %u ty %u st %u mx %u pos %08x %08x vel %08x %08x t %d\n", (it - 0x1653648) / 0x2E4, U8(it + 0x2D4), U8(it + 0x2D7), U8(it + 0x2D8),
+                U32(it + 0x2A4), U32(it + 0x2A8), U32(it + 0x2B0), U32(it + 0x2B4), (int)U32(it + 0x2C8 + 8));
+        it = U32(it + 0x2DC); n++;
+    }
+    fflush(o);
+}
+
 /* one trace row per calc pass; columns = demo trace columns, then the session extension */
 static void sess_row(int pass) {
     if (!g_strace) return;
@@ -164,6 +214,7 @@ static void sess_row(int pass) {
             g_present_n + 1, g_calc_n, g_poll_n, sc, sc != g_scene_prev ? 1 : g_scene_n + 1, menu, cur, res, U8(G_PAUSE), U16(0x164D528), U32(G_STAGE), U32(G_LOADING),
             in_demo() ? (int)U8(G_DEMOIDX) : -1);
     g_rows_since_present++;
+    if (pass >= 0) sess_scan(pass);
 }
 
 static int g_spass;
@@ -277,6 +328,7 @@ static int sess_init(void) {
     snprintf(g_sess_out, sizeof g_sess_out, "%s", o);
     if (in) snprintf(g_sess_in, sizeof g_sess_in, "%s", in);
     if (ch && atoi(ch) > 0) g_sess_chunk = atoi(ch);
+    { const char *sc = getenv("TH08_SCAN"); if (sc) sscanf(sc, "%d %d", &g_scan0, &g_scan1); }
     CreateDirectoryA(g_sess_out, NULL);
     g_log = sess_open(g_sess_out, "probe_log.txt", "w");
     g_spoll = sess_open(g_sess_out, "polls.txt", "w");
@@ -314,6 +366,7 @@ static int sess_init(void) {
     inline_hook(0x43ABD7, cb_stagestart, 6);
     inline_hook_sp(0x465860, cb_anm_preload, 6);
     inline_hook_sp(0x4667C0, cb_surf_load, 6);
+    { const char *e = getenv("TH08_LDLOG"); if (e && atoi(e)) inline_hook_sp(0x465BA0, cb_postload, 6); }
     { const char *nc = getenv("TH08_NOCLIP");
       if (nc && atoi(nc)) {
           /* skipping Player_Die skips its GameMgr_UpdateChecksum after the caller's ScrambleDecoys, so the decoy check

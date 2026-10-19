@@ -425,3 +425,16 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Verified: sessions/noclip_test1 (4284 frames, 78 hits) replays 0 trace / 0 draw diffs. 09 §6.1 caller order documented
   (state check precedes ScrambleDecoys in the original). Docs: sessions/README.md, specs/data/drawlog/README.md.
 - re/work/game score.dat/th08.cfg restored after the test (backup re/work/runs/q17m/noclip/game_backup).
+
+# RE-Q18 (2026-10-19) — IMPL18 + IMPL19 questions — DONE (IMPL19 Q3 partial)
+- Probe: session.inc TH08_SCAN (scan.txt) + TH08_LDLOG (ldlog.txt, PostloadStep hook 0x465BA0); escan + sprite/hitbox. Runs
+  re/work/runs/q18 (golden_a/b, self_a, self_ld, demo). Data specs/data/q18. Work game cfg/score/probe_cmd restored (md5 ok).
+- IMPL18 Q1: aimed = slot 7 spawned+killed on golden f1431 (aimed update before death check, mode-0 death keeps pointer);
+  option sub 3 on 1432, pointer cleared by slot check that frame. Q2: DamageAgainst resets hitByBomb to 0, sets 1 only on a
+  firing bomb-area overlap; selftest1 item was dropped f698 (draw-log present = poll+14) by shots → mode 0.
+  Q3: prepend lists/heads cleared before timelines; hit-flash counter e+0x3314; bomb gauge also on end frame; prev vx
+  +0xE2A9C zeroed on switch; char cursor: difficulty confirm → 0, char entry → g_ShotType; description VM ticks on the
+  release-frame calc; title surface: CopyRects not flushing the sprite batch → nowloading quads after the K.
+- IMPL19 Q1 SetPower checksum (type 4 always); Q2 sprite box inclusive (verified d0 f1720 / d1 f1808); Q4 1 entry/frame +
+  decode gaps (selftest1 42 + 6). Q3 open: d3 f1501 original fires 3 from parent e1 only (port likely 4 children too).
+- Spec edits: 07 §10.1/§10.6, 08 §8.5, 09 §3/§7, 11 §3, 12 §2.2/§2.4, 14 §3.1, answers_phase5 row. Symbols +1 (redump not rerun).

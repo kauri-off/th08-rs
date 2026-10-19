@@ -741,3 +741,4 @@ addr,kind,name,signature,confidence,note
 0x0057ad30,global,g_EnemyTemplateOrbAcc,,VERIFIED,enemy template +0x2E10 = orb step (Player_Load); copied to every spawn
 0x0045a3fd,func,Anm_MoveSurface,"void __thiscall Anm_MoveSurface(void *this,int dst,int src)",VERIFIED,release dst; move surfaces+size of src into dst; Result_OnRemove 8<-0
 0x00453cfa,func,Shot_Name,"char * __thiscall Shot_Name(int shot)",VERIFIED,table 0x4C7F4C (13)
+0x0047087f,func,MainMenu_Draw,,VERIFIED,draw prio 3: Anm_DrawSurface(0) then menu VMs + description VM (no batch flush before the copy)

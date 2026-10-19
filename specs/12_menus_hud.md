@@ -122,6 +122,12 @@ get: description VM 1 = show, 2 = hide; difficulty VMs 24 = selected, 25 = not s
 8 = hide, 23 = main portrait.
 
 ### 2.2 Top menu (screen 0) — VERIFIED
+Background (answers_impl18 §Q3, VERIFIED code + draw logs): surface 0 (`title00.png`) is copied by the menu's own
+draw (prio 3, 0x47087F: `Anm_DrawSurface(0)` first, then the 142 VMs and the description VM). The nowloading VMs of
+`Supervisor_DrawLoadingVms` (prio 2) are queued earlier in the sprite batch, but `Anm_DrawSurface` is an immediate
+`CopyRects` that does **not** flush the batch, so the device receives the copy first and the batched nowloading
+quads after it (flushed by the next state change, i.e. the first title01 quad): the nowloading sprites end up **on
+top of** the background. A port must draw surface 0 before the prio-2 loading VMs (or emulate the deferred batch).
 Entering: request title BGM slot 8 if coming from a non-menu scene; load surface 0 = `title/title00.png` when
 coming from the title/difficulty/replay screens; create the 142 VMs once; interrupt 2. If a replay was being
 watched → go straight to the replay screen. If `+0x6C` ≠ 0 → jump to the difficulty screen of practice (8)
@@ -149,6 +155,13 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
 - **Description VM timing** (answers_impl17 §Q4, VERIFIED, mopup1 presents 2866–2875):
   - The menu loader ends by setting +0xC2BC = description VM 0. All 14 description VMs start text.anm script 9, which
     fades in by itself (alpha 255·t/20).
+  - Release frame (answers_impl18 §Q3, VERIFIED code + selftest1 presents 46–48): the loader tail sets +0xC2BC,
+    +0x14434 = 0 and `Loading_End` before that frame's calc (the session park point releases it at Frame_Run
+    pre-calc), so `MainMenu_Calc` runs fully in the release frame: the Top handler's entry block (interrupt 2 to
+    the item VMs), `RunRange` and `AnmVm_Run(+0xC2BC)`. The description VM therefore ticks for the first time in the
+    release frame, exactly like the title01 VMs. Nothing menu-side is drawn in that frame (the loading screen still
+    shows); the first drawn frame has t = 2 for both: description alpha 0x19 (= 255·2/20), title01 VMs 0x1E.
+    No interrupt 1 is involved before sub-state 1.
   - During the 9 render frames of sub-state 0 the drawn description is therefore item 0, whatever the cursor.
   - On the 9th frame the handler sets +0x08 = −1 and enters sub-state 1 in the same call. The change test then switches
     to VM[cursor] with interrupt 1 (fade-in from 0).
@@ -219,6 +232,11 @@ Choices = 4 teams, or 12 (teams + 8 solos) when Extra is unlocked for all four t
 | 11 | 130, 117 (−1, 118) |
 
 (Enable/interrupt details, answers_impl17 §Q3, VERIFIED. Here "enabled" = flag bit 1.)
+- **Cursor** (answers_impl18 §Q3, VERIFIED code): the difficulty screen's confirm calls `Menu_SetScreen(5/9/13)` and
+  then sets cursor := 0; the character screen's entry block (its first calc, +0x1442C == 0) sets cursor :=
+  g_ShotType (0x164D0B1, the last used shot type) before any input handling. The session trace's `cursor` column is
+  sampled at `MainMenu_Calc` **entry**, so on the screen's first row it shows the 0 left by the difficulty confirm
+  (selftest1 row 440; shot type 0 there, so the two cannot be told apart).
 - **On entry:** every VM 111–130 is disabled and gets 8; table entries 0–2 are enabled and get 9; entry 3 is enabled and
   gets 23.
 - **On a cursor move:** every VM 111–130 is enabled (not disabled) and gets 8, so the old ones fade out visibly; then

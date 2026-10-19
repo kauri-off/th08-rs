@@ -414,7 +414,10 @@ chain's time-orb shower is spawned.
 ### 8.5 Collection effects
 Notation: `stats` = game-manager stats block (09 §9), score is stored /10 (`AddScore(v)` adds v/10).
 - **Power (0: +1, 2: +8)**, only if power < 128: remember the power level (number of entries of the threshold
-  table 0x4C7A6C `8, 24, 48, 80, 128, 999` that are ≤ power); power += n; if power ≥ 128: power = 128, if no
+  table 0x4C7A6C `8, 24, 48, 80, 128, 999` that are ≤ power); power += n (`GameMgr_AddPower` 0x441850: checksum,
+**4 RNG draws**); if power ≥ 128: power = 128 through `GameMgr_SetPower` 0x406FA0 (also checksummed: **+4 draws**,
+so a collect that reaches full power costs 8; answers_impl18 §IMPL19-Q1, VERIFIED code + runtime demo 3 frame 1059:
+two collects = 4 + 4 + 4 = 12 draws), if no
   spell card is running cancel all bullets to items (mode 1), HUD message, convert all other type 0/2 items to
   type 8 (vel = (0, −0.5, 0) if vel.y > −0.5; effect; script 0x45). AddScore(10). Popup "10", or a power-up popup +
   sound 0x1F if the level changed. Type 0 additionally rank +1 (always, even at full power).
@@ -428,8 +431,9 @@ Notation: `stats` = game-manager stats block (09 §9), score is stored /10 (`Add
 - **Converted point (8)**: like point but with max/10 and v/10 each rounded down to a multiple of 10, no counters,
   no rank.
 - **Bomb (3)**: if bombs < 8: bombs += 1, HUD.
-- **Full power (4)**: if power < 128: cancel to items, HUD, sound 0x1F, popup, convert items. Always: power :=
-  128, AddScore(1000), popup 1000.
+- **Full power (4)**: if power < 128: cancel to items (**unconditionally**, no spell-card test), HUD, sound 0x1F,
+  popup, convert items. Always (even when already at 128): power := 128 via `GameMgr_SetPower` (checksum, 4 RNG
+  draws), AddScore(1000), popup 1000.
 - **1up (5) / extend**: if lives < 8: lives += 1, sound 0x1C, rank +200; else if bombs < 8: bombs += 1, sound
   0x1C, rank +200.
 - **Star (6)**: v = 100 if player+0xE2A7C ≠ 0, else (stats+0xC / 40)·10 + 300 (< 1 → 10); popup + AddScore(v).

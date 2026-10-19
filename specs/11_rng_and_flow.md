@@ -198,8 +198,15 @@ frame**), plus file decoding time on the loader thread (host dependent). Measure
 fresh start of stage 1 = 48 loading calcs (two sessions, Reimu & Yukari: stg1bg/eff01/enemy/stg1enm/etama/front/
 times/stg1txt/player/face files ≈ 41 entries); later stages and demos (fewer files) = 31 / 81. After a stage
 clear the loader then also waits for the confirm press (flags bits 5–6), so those rows continue until the press.
-A port should use max(31 | 81, entries_to_upload + small constant) and, for session comparison, the recorded
-`release stage poll`.
+Upload timeline (answers_impl18 §IMPL19-Q4, VERIFIED at runtime, selftest1 stage 1): `Anm_LoadAndWait` preloads
+(reads + decodes) a file on the loader thread, then sets the slot's pending index to 1; each main-thread
+`Supervisor_Calc` uploads exactly one entry (`Anm_PostloadStep`); after the last entry the loader preloads the
+next file. A file costs `entries` frames, plus an **empty frame for every frame boundary the next file's preload
+spans** — 0 for small files, 1–2 for large images (selftest1: stg1bg 1, face_rm00 2, face_yk00 2, face_st01 1 =
+6 gaps on top of 42 entries → 48). So the "+6" is host decode time, not one frame per file; the rest of the
+stage start (ECL/MSG/STD, gauge setup, `Loading_Wait`) finished within the frame after the last upload.
+A port should use max(31 | 81, entries_to_upload + host-dependent gaps; 6 reproduces the recorded fresh stage-1
+starts of Reimu & Yukari) and, for session comparison, the recorded `release stage poll`.
 
 **Per-frame depth clear.** `GameMgr_Calc` itself issues `Clear(Z only, 1.0)` on the device's current viewport
 (left full-screen 0,0,640,480 by the previous frame's draw — every logged frame shows `C z` with V 0 0 640 480) on
