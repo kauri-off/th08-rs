@@ -944,6 +944,8 @@ impl Task<Ctx> for AsciiManager {
         let inp = ctx.input;
         gauge_calc(&mut ctx.anm);
         if ctx.game.paused != 0 {
+            // 11 §2: paused = 2 once the menu was drawn (GameMgr_Calc opened it after this calc).
+            ctx.game.paused = 2;
             self.pause
                 .update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
         } else if ctx.game.game_over != 0 {

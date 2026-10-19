@@ -170,7 +170,8 @@ pub(crate) fn var_f(
         10084 => e.boss_slot as f32,
         10085..=10087 => e.displacement[(id - 10085) as usize],
         10088..=10091 => e.thresholds[(id - 10088) as usize] as f32,
-        10096 => chain_depth(m, e) as f32,
+        // SPEC-GAP: chain entries after this one (+8 link); demo 3 f1501 root with 4 children reads 4.
+        10096 => chain_after(m, e) as f32,
         10097 => m.g.player_mode as f32,
         10099 => m.g.spell.is_some() as i32 as f32,
         _ => lit,
@@ -248,15 +249,15 @@ fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
-fn chain_depth(m: &EnemyManager, e: &Enemy) -> i32 {
+fn chain_after(m: &EnemyManager, e: &Enemy) -> i32 {
     let mut d = 0;
-    let mut p = e.chain_prev;
+    let mut p = e.chain_next;
     while let Some(i) = p {
         d += 1;
         if d > MAX_ENEMIES as i32 {
             break;
         }
-        p = m.enemies[i].chain_prev;
+        p = m.enemies[i].chain_next;
     }
     d
 }

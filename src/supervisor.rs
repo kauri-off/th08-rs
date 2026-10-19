@@ -151,6 +151,14 @@ impl Supervisor {
         Ok(())
     }
 
+    fn menu_surface(&mut self, ctx: &mut Ctx) -> Result<()> {
+        if let Some(t) = &self.scene_task {
+            let p = crate::menu::SURFACE_PRIO;
+            task::add(ctx, Chain::Draw, p, p as u8, t.clone())?;
+        }
+        Ok(())
+    }
+
     fn drop_scene(&mut self, ctx: &mut Ctx) {
         if let Some(t) = self.scene_task.take() {
             task::remove_task(ctx, &t);
@@ -229,6 +237,7 @@ impl Supervisor {
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;
+                self.menu_surface(ctx)?;
                 self.menu_loading(ctx, cur)?;
             }
             (gamemgr::SCENE_MENU, gamemgr::SCENE_GAME) => {
@@ -292,6 +301,7 @@ impl Supervisor {
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;
+                self.menu_surface(ctx)?;
                 self.menu_loading(ctx, cur)?;
             }
             _ => log::warn!("unhandled scene switch {cur} -> {req}"),

@@ -12,6 +12,8 @@ use anyhow::Result;
 pub const ANM_SLOT: usize = 20;
 pub const CALC_PRIO: u16 = 4;
 pub const DRAW_PRIO: u16 = 3;
+// Surface 0 reaches the device before the batched prio-2 nowloading quads (12 §2.2).
+pub const SURFACE_PRIO: u16 = 1;
 const VM_COUNT: usize = 142;
 pub(crate) const CONFIRM: u16 = SHOT | ENTER;
 pub(crate) const CANCEL: u16 = BOMB | PAUSE;
@@ -306,12 +308,17 @@ impl MainMenu {
                 self.vms[1 + i].color[..3].fill(0xFF);
             }
         }
-        // One description VM per item (sprite 21 + i, answers_impl9 §15); after (re-)entering the top menu it
-        // is chosen from frame 9 (measured), except on the very first visit.
-        if self.frames == 0 && !self.desc_first {
-            self.desc_on = false;
+        // One description VM per item (sprite 21 + i, answers_impl9 §15). The loader leaves VM 0 running (12 §2.2);
+        // the cursor's VM takes over from frame 9 (measured).
+        if self.frames == 0 {
+            self.desc_on = self.desc_first;
+            if self.desc_first {
+                ctx.anm.set_script(&mut self.desc_vm, 0, 9);
+                self.desc_vm.set_sprite(&ctx.anm, 21);
+                self.render_description(ctx, 0);
+            }
         }
-        if (self.frames >= 9 || self.desc_first) && self.cursor != self.prev_cursor {
+        if self.frames >= 9 && self.cursor != self.prev_cursor {
             self.prev_cursor = self.cursor;
             self.desc_first = false;
             self.desc_on = true;
@@ -443,8 +450,7 @@ impl MainMenu {
             store(&mut ctx.game, self.cursor);
             sound::play(sound::OK);
             self.set_screen(self.screen + 1);
-            // SPEC-GAP: the character cursor is already set when its screen's first calc starts (session trace).
-            self.char_cursor(ctx);
+            self.cursor = 0;
         } else if ctx.input.pressed(CANCEL) {
             store(&mut ctx.game, self.cursor);
             sound::play(sound::CANCEL);
@@ -825,13 +831,16 @@ impl Task<Ctx> for MainMenu {
         Ret::Next
     }
 
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         if ctx.game.menu_loading > 0 {
             return Ret::Next;
         }
         ctx.gfx.set_viewport(FULLSCREEN);
-        if let Some((t, _)) = self.surface {
-            ctx.gfx.image(t, 0.0, 0.0);
+        if tag == SURFACE_PRIO as u8 {
+            if let Some((t, _)) = self.surface {
+                ctx.gfx.image(t, 0.0, 0.0);
+            }
+            return Ret::Next;
         }
         for vm in &mut self.vms {
             ctx.anm.draw(&mut ctx.gfx, vm);

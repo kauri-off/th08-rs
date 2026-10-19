@@ -224,7 +224,9 @@ impl Player {
                 };
                 if o.sub < 3 {
                     smooth(o, [px, (py - 96.0).max(32.0)]);
-                    if shooting && aimed.is_some() && t >= 10 {
+                    // SPEC-GAP: a sub-0 start move takes precedence over the attack test (golden scan f1463).
+                    let starting = o.sub == 0 && o.vel[0] != 0.0;
+                    if shooting && aimed.is_some() && t >= 10 && !starting {
                         o.vm.pending_interrupt = 3;
                         o.sub = 3;
                     } else {
@@ -754,6 +756,7 @@ impl Player {
         if self.state_timer.cur == self.state_timer.prev {
             return 0;
         }
+        *by_bomb = false;
         let half = [size[0] / 2.0, size[1] / 2.0];
         let mut shot = 0;
         for i in 0..MAX_BULLETS {

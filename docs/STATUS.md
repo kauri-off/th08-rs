@@ -146,6 +146,16 @@
   - Test `session::tests::fullrun_smoke` (~11 s release): whole fullrun_noclip, no panic/hang; stage starts (menu row) recorded 1:241 2:11287 3:25844 4B:43232 5:68101 6B:89433, port 1:240 2:11208 3:25810 4B:43131 5:72934 6B:107496; boss/spell structure identical in every stage except the Last Spells after the stage 1/3/4B/5 bosses (var 10098 reads 0, IMPL20 Q1); the input ends while the port is still in 6B (original reached the ending at 121239).
   - Leading rows: fullrun_noclip 3861 → 6263 (`MIN_LEADING`), golden 2172 / selftest1 1325 unchanged; demo sync 1719/1807/2260/1500 → 1940/3869/2260/1500 (`MIN_SYNC`); draw logs and menus unchanged (90.49/71.65/83.30/86.97 %, 1754/70.66, 903/97.41, 1593/84.71). SPEC-GAP 41 → 44. Questions: `docs/briefs/IMPL20_QUESTIONS.md`.
 
+- impl21 (answers_impl18 / answers_impl19, 2026-10-19):
+  - Aimed enemy: a mode-0 death no longer clears the pointer (only `Enemy_Free` and the next frame's inactive-slot test do). Yukari option: a sub-0 start move replaces the attack test (SPEC-GAP, golden scan f1463). `Player_DamageAgainst` writes hitByBomb = 0 at entry. The bomb gauge also adds on the end frame. Bomb item: `AddBombs` + rank +5. Full-power item: `SetPower` (power-clamp SPEC-GAP closed).
+  - Chains: var 10096 = chain entries after this enemy (SPEC-GAP, demo 3 f1501). A chained child freed without reward unlinks itself (answers_impl12 §1). Enemies whose main VM has no sprite get bit 4.
+  - Menus: difficulty confirm sets cursor 0 (the character screen's entry sets the shot). The loader leaves description VM 0 running with no interrupt 1, and the cursor's VM takes over from frame 9. Surface 0 is drawn at draw prio 1, before the nowloading quads. paused 1 → 2 on the ASCII calc after the first draw.
+  - Hit-flash / draw-list / start-move SPEC-GAPs closed as matching the spec.
+  - Leading rows: golden 2172 → 4466, selftest1 1325 → 1422 (the rest is the pause/quit tail, Q3), fullrun_noclip 6263 (unchanged). fullrun stage starts are now 1:240 2:11198 3:25835 4B:43131 5:68252 6B:89394 (recorded 6B 89433), and the port reaches the ending/menu (row 122259; original 121239).
+  - Demo sync: 1940/3869/2260/1500 → 4450/3869/2260/1605 (`MIN_SYNC`).
+  - Draw logs: demos 90.49 → 90.59 % (others unchanged); menus base 70.66 → 70.81 %, clr 97.41 → 97.79 %, mopup1 84.71 → 84.74 % (identical frames unchanged). Thresholds raised.
+  - SPEC-GAP 44 → 40. Questions: `docs/briefs/IMPL21_QUESTIONS.md`.
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
@@ -154,7 +164,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl20 done (boss phases, fullrun smoke, Player_Die). Next IMPL: answers to IMPL20 questions (var 10098 Last Spells), answers to IMPL19 questions, answers to IMPL18 questions (golden blocker = Yukari aimed enemy at frame 1432), answers to IMPL17 questions; result viewer (scene 5 / RESULT_MENU stub), result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, music room, spell-practice data tables (difficulty names, card unlock hints, Last Word unlocks).
+2. IMPL impl21 done (answers_impl18/19). Open: IMPL21 questions (var 10096, cancel→items, pause flags), IMPL20 Q1 (var 10098 Last Spells). Next IMPL: answers to IMPL17 questions; result viewer (scene 5 / RESULT_MENU stub), result screen + name entry + replay save dialogue (16), th08.cfg load/save, endings, music room, spell-practice data tables (difficulty names, card unlock hints, Last Word unlocks).
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

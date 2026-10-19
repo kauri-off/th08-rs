@@ -718,10 +718,15 @@ impl EnemyManager {
     }
 
     pub fn free(&mut self, idx: usize) {
-        self.kill_chain(idx, None);
         if self.player.borrow().aimed == Some(idx) {
             self.player.borrow_mut().aimed = None;
         }
+        self.release(idx);
+    }
+
+    // Death mode 0: like Enemy_Free but the aimed pointer survives until the next frame's slot test.
+    fn release(&mut self, idx: usize) {
+        self.kill_chain(idx, None);
         self.release_effects(idx);
         self.enemies[idx].flags &= !A_ALIVE;
         self.unregister_boss(idx);
@@ -983,10 +988,13 @@ impl EnemyManager {
     // Returns true when the enemy left the screen and must be freed.
     fn screen_check(&mut self, idx: usize) -> bool {
         let e = &mut self.enemies[idx];
+        if !e.vm.has_sprite {
+            e.flags |= A_HIDDEN;
+        }
         if e.flags & A_HIDDEN != 0 {
             return false;
         }
-        // SPEC-GAP: box = main VM sprite size like bullets (08 §4.3); the hitbox frees too early (IMPL19 Q2).
+        // Main VM sprite box, inclusive (07 §10.1 step 4). SPEC-GAP: no trail history, so the oldest-trail test is skipped.
         let (hw, hh) = (e.vm.sprite_w / 2.0, e.vm.sprite_h / 2.0);
         let [x, y, _] = e.final_pos;
         let inside = x + hw >= 0.0 && x - hw <= 384.0 && y + hh >= 0.0 && y - hh <= 448.0;
@@ -1091,8 +1099,12 @@ impl EnemyManager {
             self.kill_single(idx, anm);
             return;
         }
-        // SPEC-GAP: a chained child's own +8 link (its later siblings) is not treated as children here.
-        if self.enemies[idx].root.is_some() || self.enemies[idx].chain_next.is_none() {
+        // A chained child never chain-kills its later siblings; without reward it only unlinks (answers_impl12 §1).
+        if self.enemies[idx].root.is_some() {
+            self.unlink(idx);
+            return;
+        }
+        if self.enemies[idx].chain_next.is_none() {
             return;
         }
         let mut n = self.chain_count(idx);
@@ -1610,7 +1622,7 @@ impl EnemyManager {
         }
         self.release_effects(idx);
         if mode == 0 {
-            self.free(idx);
+            self.release(idx);
             return;
         }
         self.jump_to_death_sub(idx);
@@ -1711,7 +1723,7 @@ impl EnemyManager {
         }
         let pause = timer_pause() != 0;
         let e = &mut self.enemies[idx];
-        // SPEC-GAP: a hit right after a flashed frame does not flash again (golden draw log: hits on 3 frames flash 1st and 3rd).
+        // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
         if std::mem::take(&mut e.hit) && !e.flash {
             if e.last_damage > 0 {
                 let low = (e.flags_b >> 4) & 3 >= 2;
@@ -1817,7 +1829,7 @@ impl EnemyManager {
         if high && frozen {
             (ctx_anm.tint, ctx_anm.tint_on) = (0xFFF01010, true);
         }
-        // SPEC-GAP: lists are drawn newest-linked first (prepend linking; session draw logs show reverse slot order).
+        // Lists are prepended (07 §10.1 step 7), so they are drawn newest-linked first.
         let first = if high { 2 } else { 0 };
         let order: Vec<usize> = (first..first + 2)
             .flat_map(|l| self.draw_lists[l].iter().rev().copied())

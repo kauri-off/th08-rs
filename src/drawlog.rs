@@ -1597,11 +1597,11 @@ mod tests {
     use crate::gfx::{LogTex, Rect};
 
     // Current match level per reference (raise as differences get fixed): (identical frames, % same quads).
-    const MENU_BASE: (usize, f64) = (1750, 70.5);
-    const MENU_CLR: (usize, f64) = (900, 97.3);
-    const MENU_MOPUP1: (usize, f64) = (1590, 84.5);
+    const MENU_BASE: (usize, f64) = (1750, 70.7);
+    const MENU_CLR: (usize, f64) = (900, 97.7);
+    const MENU_MOPUP1: (usize, f64) = (1590, 84.6);
     // Demos 0–3, first chunk: % same quads (playfield).
-    const DEMO: [f64; 4] = [90.3, 71.5, 83.1, 86.8];
+    const DEMO: [f64; 4] = [90.5, 71.5, 83.1, 86.8];
 
     fn data(p: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
