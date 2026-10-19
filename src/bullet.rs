@@ -1,3 +1,5 @@
+//! Bullet manager 0xF54E90: templates, patterns, ex commands, lasers, cancels (08 §1–§7, 07 §9).
+
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::game::Ctx;
@@ -10,19 +12,26 @@ use std::cell::RefCell;
 use std::f32::consts::PI;
 use std::rc::Rc;
 
+// etama.anm slot (08 §2, mgr+0x6BA574).
 pub const ANM_SLOT: usize = 6;
 pub const CALC_PRIO: u16 = 14;
 pub const DRAW_PRIO: u16 = 13;
+// 08 §2: bullets at +0x1A880 (slot 1536 is the state-6 sentinel), lasers at +0x660938.
 pub const MAX_BULLETS: usize = 1536;
 pub const MAX_LASERS: usize = 256;
 pub const TYPES: usize = 21;
+// Main-sprite script per bullet type, exe table 0x4B4AD8 (08 §2.1).
 const MAIN_SCRIPTS: [usize; TYPES] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 25, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
 ];
+// Reduced colour tables 0x4C7138 (16 < h ≤ 32) and 0x4C70F8 (h ≤ 16) (08 §3.2).
 const COLOR_MID: [i32; 8] = [0, 1, 1, 2, 2, 3, 4, 0];
 const COLOR_SMALL: [i32; 16] = [0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 0];
+// Item type of ordinary cancels, mgr+0x6BA570 (08 §2).
 const CANCEL_ITEM: i32 = 6;
+// Bullet flag 0x1000: immune to cancels, bomb areas and the cancel guard (08 §3.2, §4.1).
 pub const F_NO_CANCEL: u32 = 0x1000;
+// `active & 0xDC0` of the off-screen rule (08 §4.3).
 const REDIRECT_OR_BOUNCE: u32 = 0x40 | 0x80 | 0x100 | 0x400 | 0x800;
 
 // Spawn-effect (VM1..VM3) and cancel (VM4) scripts per type (08 §2.1).
@@ -46,6 +55,7 @@ pub fn hitbox_class(h: f32, s: usize) -> (f32, u8) {
             _ => (10.0, 1),
         }
     } else if h > 8.0 {
+        // s = 5 falls through to the next case in the original; the net result is the same (08 §2.1).
         match s {
             2 | 4 | 5 | 6 | 106 | 107 | 108 => (4.0, 4),
             _ => (6.0, 3),
@@ -71,6 +81,7 @@ fn polar(a: f32, r: f32) -> [f32; 3] {
     [a.cos() * r, a.sin() * r, 0.0]
 }
 
+// Player_AngleFrom (08 §3.1): π/2 when both differences are exactly 0.
 pub fn angle_from(o: [f32; 3], p: [f32; 3]) -> f32 {
     let (dx, dy) = (p[0] - o[0], p[1] - o[1]);
     if dx == 0.0 && dy == 0.0 {
@@ -80,34 +91,43 @@ pub fn angle_from(o: [f32; 3], p: [f32; 3]) -> f32 {
     }
 }
 
-// One extra-command slot (08 §5.1), filled by ECL op 111.
+// One extra-command slot, 24 bytes (08 §5.1), filled by ECL op 111 (07 §7).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ExCmd {
     pub e: f32,
     pub f: f32,
     pub c: i32,
     pub d: i32,
+    // +0x10 command bit; only runs if the bullet's flags contain it.
     pub cmd: u32,
+    // +0x14: 0 = wait until no command is active.
     pub chain: i32,
 }
 
-// ECL bullet descriptor (enemy +0x2E24) with rank scaling already applied.
+// ECL bullet descriptor (enemy +0x2E24, 0x210 bytes, structs.md) with rank scaling already applied (07 §9.2).
 #[derive(Clone, Debug, PartialEq)]
 pub struct BulletDesc {
+    // +0 type (sprite group, 08 §2.1), +2 colour.
     pub kind: i16,
     pub colour: i16,
     pub origin: [f32; 3],
+    // +0x10/+0x14 radians, +0x18/+0x1C px/frame.
     pub angle1: f32,
     pub angle2: f32,
     pub speed1: f32,
     pub speed2: f32,
+    // +0x20: 18 × 24 B.
     pub ex: [ExCmd; 18],
     pub count1: i16,
     pub count2: i16,
+    // +0x1F8 = ECL op − 96 (07 §9.3).
     pub aim_mode: i16,
+    // +0x1FC (ECL bullet instruction +0x28).
     pub flags: u32,
+    // +0x200 pattern sfx (template 7), +0x204 ex-command sfx (template 25, 07 §4.2).
     pub sfx: i32,
     pub ex_sfx: i32,
+    // +0x208 first ex slot.
     pub ex_start: i32,
 }
 
@@ -154,15 +174,20 @@ pub struct LaserDesc {
     pub fixed: bool,
 }
 
+// Bullet template 0xD44 (08 §2.1).
 #[derive(Clone, Debug, Default)]
 pub struct Template {
+    // VM0 main sprite, VM1–3 spawn effects (flags 2/4/8), VM4 cancel animation.
     pub vms: [AnmVm; 5],
+    // +0xD34 px (width = height).
     pub hitbox: f32,
+    // +0xD42 size class (draw bucket, §2.3).
     pub class: u8,
+    // +0xD41 trunc(main sprite height).
     pub height: u8,
 }
 
-// Extra-command state blocks (08 §5.2).
+// Extra-command state blocks +0xF80 + 0x2C·k (08 §5.2); 0x40/0x80/0x100 share block k3.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExState {
     pub speedup: Timer,
@@ -188,31 +213,46 @@ pub struct ExState {
     pub wrap: Timer,
 }
 
+// Bullet object 0x10B8 (08 §2.2); the first 0xD44 bytes are a template copy.
 #[derive(Clone, Debug, Default)]
 pub struct Bullet {
     pub vms: [AnmVm; 5],
     pub hitbox: f32,
     pub class: u8,
     pub height: u8,
+    // +0xD44 playfield px; z 0.1 at spawn.
     pub pos: [f32; 3],
+    // +0xD50 per-frame displacement, already × gs.
     pub vel: [f32; 3],
     pub speed: f32,
+    // +0xD74 radians.
     pub angle: f32,
+    // +0xD80, reset on entering state 1.
     pub state_timer: Timer,
+    // +0xD8C; graze only after 15 frames.
     pub age: Timer,
+    // +0xDA8 frames with the off-screen check skipped (ex 0x2000).
     pub grace: i32,
+    // +0xDAC bits of running ex commands.
     pub active: u32,
+    // +0xDB0 descriptor flags.
     pub flags: u32,
     pub colour: i16,
+    // +0xDB8: 0 free, 1 normal, 2/3/4 spawn effect, 5 cancelling, 6 sentinel.
     pub state: i16,
+    // +0xDBA off-screen counter (§4.3); not reset on slot reuse.
     pub off_count: i16,
     pub grazed: bool,
+    // +0xDBE: sticky "in a bomb area during the spawn effect".
     pub cancel_after_spawn: bool,
+    // +0xDC8 ex sfx (−1 none), +0xDCC next ex slot.
     pub ex_sfx: i32,
     pub ex_index: i32,
     pub ex: [ExCmd; 18],
     pub st: ExState,
+    // +0x10B4: no graze/hit (natives 12/14, §7).
     pub intangible: bool,
+    // Index of the spawn-effect VM (1–3) for states 2–4.
     effect: usize,
 }
 
@@ -228,11 +268,13 @@ impl Bullet {
         x + hw >= 0.0 && x - hw <= 384.0 && y + hh >= 0.0 && y - hh <= 448.0
     }
 
+    // Square hitbox (template +0xD34).
     fn size(&self) -> [f32; 2] {
         [self.hitbox; 2]
     }
 }
 
+// Laser object 0x59C (08 §6.1); lengths in px along the laser from the origin, times in frames.
 #[derive(Clone, Debug, Default)]
 pub struct Laser {
     pub body: AnmVm,
@@ -244,22 +286,29 @@ pub struct Laser {
     pub max_len: f32,
     pub width: f32,
     pub cur_width: f32,
+    // +0x56C head growth per frame.
     pub speed: f32,
     pub startup: i32,
+    // +0x574 collision start, frames into startup.
     pub hit_start: i32,
     pub duration: i32,
     pub fade: i32,
+    // +0x580 collision frames during fade-out.
     pub fade_hit: i32,
     pub alive: bool,
     pub timer: Timer,
+    // +0x594: bit 0 alpha fade instead of width; bit 2 immune to ordinary cancels / spawns during the guard.
     pub flags: u16,
     pub colour: i16,
+    // +0x598: 0 startup, 1 active, 2 fade.
     pub state: u8,
+    // +0x599 (ECL op 170): emitter hidden during startup when ≠ 0.
     pub hide_emitter: u8,
 }
 
 impl Laser {
-    // Rotated-rectangle collision (08 §6.3 step 2 with the per-state size).
+    // Rotated-rectangle collision (08 §6.3 step 2 with the per-state size); hit kills the player, else graze
+    // with the box grown by 48 when enabled and the player state is not 1/2.
     fn test(
         &self,
         p: &mut Player,
@@ -292,25 +341,34 @@ impl Laser {
     }
 }
 
+// Bullet manager 0xF54E90 (08 §2).
 pub struct BulletManager {
     pub templates: Vec<Template>,
     pub bullets: Vec<Bullet>,
     pub lasers: Vec<Laser>,
+    // Updated from inside the bullet calc and drawn from its draw (08 §1).
     pub items: ItemManager,
     pub player: PlayerRef,
+    // +0x6BA538 = 0x160F3C8 live-bullet count from the last calc (08 §4.3a).
     pub live: usize,
+    // +0x6BA53C, frames: set to 10 by every mass cancel (08 §2).
     pub cancel_guard: i32,
+    // +0x6BA540 / +0x6BA54C.
     pub timer: Timer,
     pub frame: i32,
+    // +0x6BA554 draw lists per size class (08 §2.3).
     lists: [Vec<u16>; 6],
+    // +0x6BA56C allocation cursor.
     cursor: usize,
     pub env: GrazeEnv,
+    // GameFlags bit 10: the whole calc is skipped (08 §1).
     pub frozen: bool,
+    // Port-only count of SpawnPattern calls.
     pub patterns: u64,
 }
 
 impl BulletManager {
-    // BulletManager_Load: one template per type with its 5 VMs (etama.anm must be in ANM_SLOT).
+    // BulletManager_Load 0x433070 (08 §2.1): one template per type with its 5 VMs (etama.anm in ANM_SLOT).
     pub fn new(anm: &mut AnmManager, player: PlayerRef) -> Self {
         let templates = (0..TYPES)
             .map(|t| {
@@ -370,7 +428,7 @@ impl BulletManager {
         self.bullets[..MAX_BULLETS].iter().filter(|b| !b.free())
     }
 
-    // BulletMgr_SpawnPattern (08 §3.1).
+    // BulletMgr_SpawnPattern 0x430E10 (08 §3.1): stops at the first failed placement.
     pub fn spawn_pattern(&mut self, anm: &mut AnmManager, d: &BulletDesc, ppos: [f32; 3]) {
         self.patterns += 1;
         if self.live >= MAX_BULLETS {
@@ -389,7 +447,7 @@ impl BulletManager {
         }
     }
 
-    // Speed and angle of bullet (i, j) (07 §9.3).
+    // Speed and angle of bullet (i, j) (07 §9.3). RNG: mode 6 one Float, 7 one, 8 angle first then speed.
     fn pattern_angle(anm: &mut AnmManager, d: &BulletDesc, i: i32, j: i32, aim: f32) -> (f32, f32) {
         let (c1, c2) = (d.count1 as i32, d.count2 as i32);
         let (a1, a2) = (d.angle1, d.angle2);
@@ -435,7 +493,7 @@ impl BulletManager {
         vm.set_sprite(anm, base.sprite_index as i32 + k);
     }
 
-    // BulletMgr_PlaceBullet (08 §3.2).
+    // BulletMgr_PlaceBullet 0x42F5F0 (08 §3.2).
     fn place(
         &mut self,
         anm: &mut AnmManager,
@@ -497,6 +555,7 @@ impl BulletManager {
             b.state = state;
             b.effect = v;
             Self::recolor(anm, &mut b.vms[v], &t.vms[v], k);
+            // 08 §3.2: the spawn effect starts 4 frames back along the velocity.
             for a in 0..3 {
                 b.pos[a] -= 4.0 * b.vel[a];
             }
@@ -506,6 +565,7 @@ impl BulletManager {
         b.active = 0;
         b.ex_index = d.ex_start;
         b.st = ExState::default();
+        // 08 §3.2: ex commands run once at placement, before the cancel-guard test.
         self.apply_ex(anm, idx, ppos);
         let b = &mut self.bullets[idx];
         if self.cancel_guard > 0 && b.flags & F_NO_CANCEL == 0 {
@@ -515,7 +575,7 @@ impl BulletManager {
         true
     }
 
-    // Bullet_ApplyExCmds (08 §5.1).
+    // Bullet_ApplyExCmds 0x42FFC0 (08 §5.1); `cont` true = "→ continue" commands of the §5.1 table.
     fn apply_ex(&mut self, anm: &mut AnmManager, idx: usize, ppos: [f32; 3]) {
         let gs = anm.speed;
         loop {
@@ -611,6 +671,7 @@ impl BulletManager {
                     b.st.wrap.set(s.c);
                     false
                 }
+                // Sub-pattern (08 §5.1): slot A = this, B = next; no rank adjustment.
                 0x1000000 => {
                     let nb = b.ex.get(k as usize + 1).copied().unwrap_or_default();
                     let mut d = BulletDesc {
@@ -632,6 +693,7 @@ impl BulletManager {
                     };
                     d.origin[2] = 0.0;
                     b.ex_index += 1;
+                    // A.c bit 31: this bullet → state 5.
                     let kill = s.c < 0;
                     self.spawn_pattern(anm, &d, ppos);
                     if kill {
@@ -648,10 +710,11 @@ impl BulletManager {
         }
     }
 
-    // Motion handlers for every running extra command (08 §5.3), in the original order.
+    // Motion handlers for every running extra command (08 §5.3), in the order of 08 §4.1 step 2.
     fn motion(b: &mut Bullet, gs: f32, ppos: [f32; 3]) {
         let st = &mut b.st;
         if b.active & 0x1 != 0 {
+            // t includes the sub-frame part at game speed < 1.
             if st.speedup.cur <= 16 {
                 b.vel = polar(
                     b.angle,
@@ -685,6 +748,7 @@ impl BulletManager {
             }
             st.ang_timer.tick(gs);
         }
+        // 08 §5.3: `speed` is unchanged while decelerating; 0x40 adds without wrapping.
         for bit in [0x40, 0x100, 0x80] {
             if b.active & bit == 0 {
                 continue;
@@ -710,6 +774,7 @@ impl BulletManager {
             b.vel = polar(b.angle, s * gs);
             st.redir_timer.tick(gs);
         }
+        // Bounce only while off screen; 0x800 does not reflect at the bottom but still counts (08 §5.3).
         if b.active & 0xC00 != 0 && !b.on_screen() {
             ex_sound(b.ex_sfx);
             let [x, y, _] = b.pos;
@@ -728,6 +793,7 @@ impl BulletManager {
             }
         }
         let st = &mut b.st;
+        // Wrap X / Y share one timer (block k6), so with both bits it is decremented twice (08 §5.3).
         for (bit, axis, len) in [(0x400000, 0, 384.0), (0x800000, 1, 448.0)] {
             if b.active & bit == 0 {
                 continue;
@@ -752,7 +818,7 @@ impl BulletManager {
         }
     }
 
-    // Items dropped by a bullet cancelled inside a bomb area (08 §4.1).
+    // Bomb drop (08 §4.1): item type player+0xE2A90; 9 → two time orbs, −1 → none; item mode 1.
     fn bomb_drop(items: &mut ItemManager, anm: &mut AnmManager, p: &Player, pos: [f32; 3]) {
         match p.cancel_item {
             9 => {
@@ -766,6 +832,7 @@ impl BulletManager {
         }
     }
 
+    // Push on the size-class draw list (08 §2.3).
     fn push(&mut self, idx: usize) {
         let c = (self.bullets[idx].class as usize).min(5);
         self.lists[c].push(idx as u16);
@@ -775,6 +842,7 @@ impl BulletManager {
     fn update_normal(&mut self, anm: &mut AnmManager, idx: usize, p: &mut Player) -> bool {
         let gs = anm.speed;
         self.apply_ex(anm, idx, p.pos);
+        // Freeze byte 0x160F534 (native 26) stops step 4 only.
         let freeze = crate::enemy::timer_pause() != 0;
         let b = &mut self.bullets[idx];
         if b.active != 0 {
@@ -809,11 +877,13 @@ impl BulletManager {
         if !b.intangible {
             let (pos, size) = (b.pos, b.size());
             let mut hit_test = true;
+            // 08 §4.1 step 6: graze 1 → hit test; 2 (bomb area) → cancel, no hit test; 0 → no hit test.
             if !b.grazed && b.age.cur > 15 {
                 let (g, orbs) = p.graze_test(pos, size, &self.env, &mut anm.rng);
                 match g {
                     1 => {
                         self.bullets[idx].grazed = true;
+                        // Graze time orbs, item type 10 (08 §8.3).
                         for _ in 0..orbs {
                             self.items.spawn(anm, p, pos, 10, 0);
                         }
@@ -855,6 +925,7 @@ impl BulletManager {
             1 => {
                 self.update_normal(anm, idx, p);
             }
+            // Spawn effect (08 §4.2): the age does not advance net.
             2..=4 => {
                 let b = &mut self.bullets[idx];
                 b.age.dec(gs);
@@ -867,6 +938,8 @@ impl BulletManager {
                 }
                 let e = b.effect;
                 if b.vms[e].run(anm) {
+                    // Quirk kept (08 §4.2): the drop's state 5 is overwritten by state 1, the bullet survives
+                    // and its same-frame state-1 update can hit the bomb area again (a second drop).
                     if b.cancel_after_spawn {
                         let pos = b.pos;
                         Self::bomb_drop(&mut self.items, anm, p, pos);
@@ -881,6 +954,7 @@ impl BulletManager {
                     self.push(idx);
                 }
             }
+            // Cancel animation (08 §4.4), no collision.
             5 => {
                 let b = &mut self.bullets[idx];
                 for a in 0..3 {
@@ -896,7 +970,7 @@ impl BulletManager {
         }
     }
 
-    // Laser spawn (08 §6.2).
+    // Laser spawn 0x430F20 (08 §6.2): first free of 256 slots; aimed unless op 114 (`fixed`).
     pub fn spawn_laser(
         &mut self,
         anm: &mut AnmManager,
@@ -930,6 +1004,7 @@ impl BulletManager {
             alive: true,
             ..Laser::default()
         };
+        // Body script = type + 10, emitter 0x92 + 0x4C70F8[colour] with blend bits 4–5 := 1 (08 §6.1).
         anm.set_script(&mut l.body, ANM_SLOT, (d.kind as i32 + 10).max(0) as usize);
         let sp = l.body.sprite_index as i32 + d.colour as i32;
         l.body.set_sprite(anm, sp);
@@ -986,11 +1061,13 @@ impl BulletManager {
                     1.2
                 };
                 l.body.scale[0] = l.cur_width / 16.0;
+                // Quirk kept (08 §6.3 step 4): the along-axis extent is replaced, not the width.
                 size[0] = l.cur_width / 2.0;
             }
             if t >= l.hit_start {
                 orbs += l.test(p, size, false, &env, &mut anm.rng);
             }
+            // State 1 runs in the same frame (08 §6.3).
             if t >= l.startup {
                 l.timer = Timer::default();
                 l.state = 1;
@@ -999,6 +1076,7 @@ impl BulletManager {
         }
         if l.state == 1 {
             let t = l.timer.cur;
+            // Graze only every 20th frame (08 §6.3 step 5).
             orbs += l.test(p, size, t % 20 == 0, &env, &mut anm.rng);
             if t >= l.duration {
                 l.timer = Timer::default();
@@ -1010,6 +1088,7 @@ impl BulletManager {
         }
         if l.alive && l.state == 2 {
             let t = l.timer.cur;
+            // Quirk kept (08 §6.3 step 6): the fade-out alpha divides by `startup`, not `fade`.
             if l.flags & 1 != 0 {
                 l.body.color[anmvm::A] = if l.startup > 0 {
                     (t * 255 / l.startup).min(255) as u8
@@ -1041,7 +1120,8 @@ impl BulletManager {
         }
     }
 
-    // Laser part of the cancels (08 §7); `items` false skips the item line.
+    // Laser part of the cancels (08 §7): fade from state 2, one item per 32 px tail → head; `items` false
+    // skips them, `at_origin` adds the CancelBonus item at the origin.
     fn cancel_lasers(
         &mut self,
         anm: &mut AnmManager,
@@ -1058,6 +1138,7 @@ impl BulletManager {
             if l.state < 2 {
                 l.state = 2;
                 l.timer = Timer::default();
+                // SPEC-GAP: 08 §7 says width := current width; this sets current := width (IMPL24 Q1).
                 l.cur_width = l.width;
                 if items {
                     let (o, a, tail, head) = (l.origin, l.angle, l.tail, l.head);
@@ -1077,7 +1158,8 @@ impl BulletManager {
         }
     }
 
-    // BulletMgr_CancelAll (08 §7).
+    // BulletMgr_CancelAll 0x430830 (08 §7): mode 4 → state 5 without items; else item type 6 with item mode
+    // `mode`; bomb-area bullets always drop the bomb item. Sets the 10-frame cancel guard.
     pub fn cancel_all(&mut self, anm: &mut AnmManager, p: &mut Player, mode: i32) {
         for i in 0..MAX_BULLETS {
             let b = &mut self.bullets[i];
@@ -1099,7 +1181,8 @@ impl BulletManager {
         self.cancel_guard = 10;
     }
 
-    // BulletMgr_CancelBonus (08 §7): returns the sum of the popup values.
+    // BulletMgr_CancelBonus 0x430AA0 (08 §7): popups from 2000, +20 per bullet, capped at `max_value`;
+    // returns their sum.
     pub fn cancel_bonus(
         &mut self,
         anm: &mut AnmManager,
@@ -1136,7 +1219,7 @@ impl BulletManager {
         sum
     }
 
-    // BulletMgr_CancelRadius (08 §7).
+    // BulletMgr_CancelRadius 0x430D30 (08 §7): |pos − c|² ≤ r².
     pub fn cancel_radius(&mut self, anm: &mut AnmManager, p: &Player, c: [f32; 3], r: f32) {
         for i in 0..MAX_BULLETS {
             let b = &mut self.bullets[i];
@@ -1152,8 +1235,8 @@ impl BulletManager {
         }
     }
 
-    // ECL natives 12/14 (08 §7): toggle the "ghost" state of bullets whose flags match `mask`.
-    // ECL natives 12 / 14 (08 §7): ghost toggle by VM0 tag; native 14 cycles 1 → 0 → 2 (fade-in) → 1.
+    // ECL natives 12 / 14 0x424A20 / 0x424C40 (08 §7): ghost toggle by VM0 tag for bullets whose flags match
+    // `mask` (var 10000); native 14 cycles 1 → 0 → 2 (fade-in) → 1. `angle`/`speed` = vars 10016/10017.
     pub fn toggle_ghost(
         &mut self,
         anm: &mut AnmManager,
@@ -1202,8 +1285,9 @@ impl BulletManager {
         }
     }
 
-    // BulletMgr_Calc (08 §1).
+    // BulletMgr_Calc 0x431240 (08 §1).
     pub fn step(&mut self, anm: &mut AnmManager) {
+        // Port plumbing: bomb areas registered by other tasks this frame become visible here.
         self.player.borrow_mut().take_queued_areas();
         if self.frozen || self.player.borrow().freeze_bullets {
             return;
@@ -1220,6 +1304,7 @@ impl BulletManager {
         self.items = items;
         self.live = 0;
         self.lists.iter_mut().for_each(Vec::clear);
+        // 08 §1 step 3: visit order 0, 1535, 1534, …, 1; counted before the update (08 §4.3a).
         for idx in std::iter::once(0).chain((1..MAX_BULLETS).rev()) {
             if self.bullets[idx].free() {
                 continue;
@@ -1239,6 +1324,7 @@ impl BulletManager {
         self.frame += 1;
     }
 
+    // Laser draw (08 §6.3): body z 0.06 at the middle, emitter z 0.05 at the tail; +(32, 16) playfield origin.
     fn draw_lasers(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         for l in self.lasers.iter_mut().filter(|l| l.alive) {
             let (s, c) = l.angle.sin_cos();
@@ -1268,9 +1354,11 @@ impl BulletManager {
         }
     }
 
-    // BulletMgr_Draw: items, lasers, then bullets by size class (each list in reverse visiting order).
+    // BulletMgr_Draw 0x432B50 (08 §1): items, lasers, then bullets by size class (each list in reverse
+    // visiting order), then the effect manager.
     pub fn draw(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         gfx.set_viewport(PLAYFIELD);
+        // Tint 0xFFF01010 only while bullets are frozen, then off (06 §10.2).
         if self.player.borrow().freeze_bullets {
             (anm.tint, anm.tint_on) = (0xFFF01010, true);
         }
@@ -1286,7 +1374,7 @@ impl BulletManager {
                     _ => continue,
                 };
                 let vm = &mut b.vms[v];
-                // Bullet_Draw (08 §3): z 0.05, RGB white, rotation only for tagged VMs.
+                // SPEC-GAP: per-bullet draw (z 0.05, RGB white, rotation for tagged VMs) has no spec section.
                 vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.05];
                 if vm.tag != 0 {
                     let r = anmvm::wrap_add(b.angle, PI / 2.0);
@@ -1743,7 +1831,7 @@ mod tests {
     }
 }
 
-// Ex-command "sfx" (08 §5): Sound_Play(ex sfx) when ≥ 0.
+// Ex-command "sfx" (08 §5.1): Sound_Play(ex sfx) when ≥ 0.
 fn ex_sound(id: i32) {
     if id >= 0 {
         crate::sound::play(id);

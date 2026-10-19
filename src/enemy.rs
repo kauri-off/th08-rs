@@ -1,3 +1,5 @@
+//! Enemy manager 0x577F20: timelines, enemy objects, update, damage, death, drawing (07 §3, §4, §8, §10, §11).
+
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::{BulletDesc, BulletManager, LaserDesc};
@@ -12,13 +14,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 pub const CALC_PRIO: u16 = 11;
+// 07 §10.6: draw prio 8 → layers 0–1, prio 11 → layers 2–3.
 pub const DRAW_LOW_PRIO: u16 = 8;
 pub const DRAW_HIGH_PRIO: u16 = 11;
+// ANM slots of enemy.anm and stgNenm.anm (flags B bit 2 picks the latter).
 pub const ANM_ENEMY: usize = 7;
 pub const ANM_STAGE: usize = 8;
+// 07 §4: 480 slots of 0x53D0 after the template.
 pub const MAX_ENEMIES: usize = 480;
 
-// Flags A (e+0x3324).
+// Flags A (e+0x3324, 07 §4.4).
 pub const A_ALIVE: u32 = 1 << 0;
 pub const A_BOSS: u32 = 1 << 1;
 pub const A_CONTACT: u32 = 1 << 2;
@@ -30,11 +35,13 @@ pub const A_MODE_REACT: u32 = 1 << 8;
 pub const A_FOLLOW: u32 = 1 << 9;
 pub const A_CHAIN_KILLED: u32 = 1 << 10;
 pub const A_YOUKAI: u32 = 1 << 11;
+// Bits 12–13 movement mode (07 §8), 14–16 easing (07 §5.6 table).
 pub const A_MOVE_SHIFT: u32 = 12;
 pub const A_EASE_SHIFT: u32 = 14;
 pub const A_STORE_FIRE: u32 = 1 << 17;
 pub const A_MIRROR: u32 = 1 << 18;
 pub const A_CLAMP: u32 = 1 << 19;
+// Bits 20–22 death mode (op 129, 07 §10.3).
 pub const A_DEATH_SHIFT: u32 = 20;
 pub const A_DEAD_CONT: u32 = 1 << 23;
 pub const A_ON_SCREEN: u32 = 1 << 24;
@@ -42,35 +49,44 @@ pub const A_NO_PUSH: u32 = 1 << 26;
 pub const A_FIXED_BONUS: u32 = 1 << 27;
 pub const A_KEEP_OFFSCREEN: u32 = 1 << 28;
 pub const A_NO_MOVE: u32 = 1 << 29;
+// Set by ops 173 / 176 (07 §7); pauses the script while the player bombs (07 §4.4 flags B bit 7).
 pub const A_LAST_SPELL: u32 = 1 << 30;
-// Flags B (e+0x3328).
+// Flags B (e+0x3328, 07 §4.4).
 pub const B_STAGE_ANM: u32 = 1 << 2;
 pub const B_DEATH_LATCH: u32 = 1 << 3;
 pub const B_CANNOT_DIE: u32 = 1 << 6;
 pub const B_PAUSED: u32 = 1 << 7;
+// Bits 4–5 low-life warning level (07 §10.2).
 pub const B_WARN_SHIFT: u32 = 4;
 pub const B_WARN_MASK: u32 = 3 << B_WARN_SHIFT;
 
+// Item table 0x4C70D8 for item −1 drops (07 §10.4).
 const DROP_TABLE: [i32; 32] = [
     0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0,
 ];
 
 const ECL_NAMES: [&str; 9] = ["1", "2", "3", "4a", "4b", "5", "6", "7", "8"];
 
+// ECL and stage-enemy ANM file names (07 §1): index ≥ 9 = spell practice (`…sp.ecl`).
 pub fn files(index: usize) -> (String, String) {
     let k = ECL_NAMES[index % 9];
     let sp = if index >= 9 { "sp" } else { "" };
     (format!("ecldata{k}{sp}.ecl"), format!("stg{k}enm.anm"))
 }
 
+// Variable interpolation slot, ctx+0x9C + 0x30·k (07 §5.6, op 36).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Interp {
     pub active: bool,
     pub elapsed: Timer,
     pub dur: i32,
+    // fn index 0–6 linear, 7 Hermite.
     pub func: i32,
+    // Easing mode (07 §5.6 table).
     pub mode: i32,
+    // Raw a–d, re-read through the float getter at every evaluation.
     pub abcd: [f32; 4],
+    // Target var id, the raw dword of a float (e.g. 10016.0).
     pub target: i32,
 }
 
@@ -79,13 +95,19 @@ pub struct Interp {
 // 22..26 call-argument ints 10053–56, 26..30 call-argument floats 10057–60.
 #[derive(Clone, Debug)]
 pub struct Context {
+    // +0x00 byte offset into the ECL file.
     pub ip: usize,
+    // +0x04 (07 §5.3).
     pub clock: Timer,
+    // +0x10 / +0x14 per-frame native (op 137), −1 none; its argument.
     pub callback: i32,
     pub callback_arg: i32,
+    // +0x18–0x8F, raw dwords (ints or f32 bits).
     pub vars: [u32; 30],
+    // +0x90 op 2 wait.
     pub wait: Timer,
     pub interp: [Interp; 8],
+    // +0x224 current sub id.
     pub sub: i32,
 }
 
@@ -104,6 +126,7 @@ impl Default for Context {
     }
 }
 
+// Offsets into `Context::vars` of each variable group (see above).
 pub const V_INT0: usize = 0;
 pub const V_FLT0: usize = 8;
 pub const V_INT1: usize = 16;
@@ -128,6 +151,7 @@ impl Context {
         self.vars[k] = v.to_bits();
     }
 
+    // Ecl_SetSub: ip = sub start, clock 0, wait 0, sub id; variables and slots kept (07 §10.2).
     pub fn enter(&mut self, ecl: &Ecl, sub: i32) -> bool {
         let Some(ip) = ecl.sub_start(sub) else {
             return false;
@@ -140,15 +164,17 @@ impl Context {
     }
 }
 
-// The main context or a thread (op 135): a context plus its own 16-entry call stack.
+// The main context or a thread (op 135, 0x24B0 block, 07 §5.1): a context plus its own 16-entry call stack.
 #[derive(Clone, Debug, Default)]
 pub struct Thread {
     pub ctx: Context,
     pub stack: Vec<Context>,
+    // Main: e+0x2CE8; thread: block +6 (07 §5.4 depth storage).
     pub depth: i32,
 }
 
 impl Thread {
+    // Push a copy of the whole context at stack[depth]; depth max 15 (07 §5.4).
     pub fn push(&mut self) {
         if self.stack.len() < 16 {
             self.stack.resize(16, Context::default());
@@ -159,24 +185,37 @@ impl Thread {
     }
 }
 
+// Enemy object 0x53D0 (07 §4.3); positions in playfield px, angles in radians, timers in frames.
 #[derive(Clone, Debug)]
 pub struct Enemy {
+    // e+0xC main VM, e+0x2B0 / e+0x554 sub VMs (ops 57/61).
     pub vm: AnmVm,
     pub sub_vms: [AnmVm; 2],
+    // e+0x7F8 main context + e+0xA20 call stack.
     pub main: Thread,
+    // e+0x3384 op 135 threads.
     pub threads: [Option<Box<Thread>>; 4],
+    // e+0x2CA8 vars 10008–15, e+0x2CC8 vars 10024–31.
     pub ivars: [i32; 8],
     pub fvars: [f32; 8],
+    // e+0x2CEE op 130, −1 none.
     pub death_sub: i32,
+    // e+0x2CF0 sub per interrupt index (op 126).
     pub interrupts: [i32; 32],
+    // e+0x2D30 (07 §5.5).
     pub pending_interrupt: i32,
     pub pos: [f32; 3],
+    // e+0x2D40 parent position for followers (flags A bit 9).
     pub pos_offset: [f32; 3],
+    // e+0x2D4C per frame at game speed 1.
     pub vel: [f32; 3],
+    // e+0x2D58 / e+0x2D64 (vars 10085–87).
     pub prev_pos: [f32; 3],
     pub displacement: [f32; 3],
+    // e+0x2D70 (op 77) / e+0x2D7C (op 78, used if x > 0).
     pub hitbox: [f32; 3],
     pub shotbox: [f32; 3],
+    // e+0x2D88 pos + offset, z forced 0 after movement.
     pub final_pos: [f32; 3],
     pub angle: f32,
     pub angvel: f32,
@@ -186,62 +225,98 @@ pub struct Enemy {
     pub accel: f32,
     pub radius: f32,
     pub radius_vel: f32,
+    // e+0x2DB8 (op 110).
     pub shot_offset: [f32; 3],
+    // e+0x2DC4 / e+0x2DD0: mode-2 delta / start, or the mode-3 orbit centre.
     pub interp_delta: [f32; 3],
     pub interp_start: [f32; 3],
+    // e+0x2DDC / e+0x2DE8.
     pub move_timer: Timer,
     pub move_dur: i32,
+    // e+0x2DEC–0x2DFA bullet rank ranges (op 152, 07 §9.2): speed s0/s1, counts c1a c1b c2a c2b.
     pub rank_speed: [f32; 2],
     pub rank_counts: [i32; 4],
+    // e+0x2DFC / e+0x2E00 / e+0x2E04 (HUD).
     pub life: i32,
     pub max_life: i32,
     pub hud_life: i32,
     pub score: i32,
+    // e+0x2E0C slot index.
     pub slot: i32,
+    // e+0x2E1C (var 10049).
     pub f2e1c: i32,
+    // e+0x2E14 boss/spell timer (op 132); held by the freeze byte 0x160F534.
     pub boss_timer: Timer,
+    // e+0x2E20 main VM colour copied after the spawn run (07 §4.1).
     pub main_color: [u8; 4],
+    // e+0x2E24 (07 §9).
     pub desc: BulletDesc,
+    // e+0x3034 stored 44-byte bullet instruction for auto-fire.
     pub stored_fire: Option<Vec<u8>>,
+    // e+0x3060 / e+0x3064.
     pub autofire_interval: i32,
     pub autofire_timer: Timer,
+    // e+0x3070 (07 §9.4).
     pub laser_desc: LaserDesc,
+    // e+0x3280 laser slots (bullet-manager indexes), e+0x3300 current.
     pub lasers: [Option<usize>; 32],
     pub laser_cur: usize,
+    // e+0x3304 item drop (var 10092); e+0x3308 / e+0x330C extra point / power items.
     pub item: i32,
     pub extra_point: i32,
     pub extra_power: i32,
+    // e+0x3310–0x3312 death-effect parameters (op 138).
     pub death_bytes: [u8; 3],
+    // e+0x3313 (var 10084).
     pub boss_slot: i32,
     pub flags: u32,
     pub flags_b: u32,
+    // e+0x332E current direction anim / e+0x332F draw layer.
     pub dir: i8,
     pub layer: u8,
+    // e+0x3330 rank-mask mode bits (07 §2.3): 0x20 human, 0x40 youkai.
     pub mode_bits: u8,
+    // e+0x3332–0x333C: idle, left, right, left→idle, right→idle, replay.
     pub dir_scripts: [i32; 6],
+    // e+0x3340 xmin, ymin, xmax, ymax.
     pub clamp: [f32; 4],
+    // e+0x3350 no-fire radius², px².
     pub nofire_r2: f32,
+    // e+0x3354 (var 10083).
     pub last_damage: i32,
+    // e+0x3358 / e+0x3368 (op 133).
     pub thresholds: [i32; 4],
     pub threshold_subs: [i32; 4],
+    // e+0x3378 / e+0x337C (op 134).
     pub timeout: i32,
     pub timeout_sub: i32,
+    // e+0x3380 chained children created minus killed by damage (07 §4.3).
     pub children: i32,
+    // e+0x4 / e+0x8 chain links, e+0x2DA4 parent (the spawner, 07 §10.5).
     pub chain_prev: Option<usize>,
     pub chain_next: Option<usize>,
     pub root: Option<usize>,
+    // e+0x5354 damage-reduction timer (op 160).
     pub dmg_timer: Timer,
+    // e+0x2E10 time-orb damage accumulator (07 §4.3).
     pub orb_acc: i32,
+    // e+0x53CC spell-capture bonus seconds.
     pub bonus_seconds: i32,
+    // Port: damage taken this frame / hitByBomb / hit-flash flag (07 §10.1 steps 6–7).
     pub hit: bool,
     pub bomb_hit: bool,
     pub flash: bool,
+    // Port: a thread returned from its first sub while running (07 §5.4 return).
     pub kill_running_thread: bool,
     pub running_thread: Option<usize>,
+    // e+0x534C–0x5352: trail flags, length n, op 157 arg a, draw step b.
     pub trail: [i32; 4],
+    // e+0x53C0 effect count (op 128 and friends); handles in `fx_attached`.
     pub effects: u32,
     pub fx_attached: Vec<usize>,
+    // e+0x53C4 effect parameter target (op 128 d).
     pub orbit_target: f32,
+    // e+0x53C8 aura effect.
     pub fx_aura: usize,
 }
 
@@ -368,6 +443,7 @@ impl Enemy {
         self.flags = (self.flags & !(7 << A_EASE_SHIFT)) | (((m as u32) & 7) << A_EASE_SHIFT);
     }
 
+    // Sprite file by flags B bit 2 (07 §7 ops 54/58).
     pub fn anm_slot(&self) -> usize {
         if self.flags_b & B_STAGE_ANM != 0 {
             ANM_STAGE
@@ -376,6 +452,7 @@ impl Enemy {
         }
     }
 
+    // Enemy_ClampPos 0x42C180 (07 §8): only with flag A bit 19.
     pub fn clamp_pos(&mut self) {
         if self.flags & A_CLAMP != 0 {
             let [x0, y0, x1, y1] = self.clamp;
@@ -384,12 +461,13 @@ impl Enemy {
         }
     }
 
+    // Phase-change / death reset (07 §10.2): speed −0.5…+0.5, not the template's ±0.15.
     pub fn reset_rank_ranges(&mut self) {
         self.rank_speed = [-0.5, 0.5];
         self.rank_counts = [0; 4];
     }
 
-    // Enemy_UpdateMoveMode (07 §8).
+    // Enemy_UpdateMoveMode 0x422C40 (07 §8 table).
     pub fn update_move_mode(&mut self, gs: f32) {
         let mirror = self.flags & A_MIRROR != 0;
         match self.move_mode() {
@@ -434,6 +512,7 @@ impl Enemy {
         }
     }
 
+    // Modes 1/3 with a duration: timer ≤ 0 → mode 0, velocity kept (07 §8).
     fn tick_duration(&mut self, gs: f32) {
         if self.move_dur > 0 {
             self.move_timer.dec(gs);
@@ -452,19 +531,25 @@ impl Enemy {
     }
 }
 
+// Running spell card (op 122 block, 07 §11; spell object g_Gui 0x4EA670, §11.1).
 #[derive(Clone, Debug, Default)]
 pub struct Spell {
     pub id: i32,
+    // +0x0C portrait/face parameter.
     pub face: i32,
+    // Decoded name / owner / comment lines (XOR 0xAA / 0xBB / 0xDD / 0xEE, Shift-JIS).
     pub name: Vec<u8>,
     pub owner: Vec<u8>,
     pub comment: [Vec<u8>; 2],
+    // Bonus +0xFC and its per-second decay (bonus − bonus/7) / (timeout/60).
     pub bonus: i32,
     pub decay: i32,
     pub frames: i32,
     pub duration: i32,
+    // Port: death / bomb counters at card start.
     pub deaths0: u32,
     pub bombs0: u32,
+    // Spell flag bit 2 capture possible, bit 3 timed out, bit 7 bomb started during the card, bit 5 last spell.
     pub capture: bool,
     pub timed_out: bool,
     pub bombed: bool,
@@ -487,28 +572,44 @@ pub fn set_timer_pause(v: i32) {
 // Globals touched by ECL (difficulty, rank, argument registers, spell state, …).
 #[derive(Clone, Debug, Default)]
 pub struct Globals {
+    // 0x160F538 (var 10040): 0 Easy … 3 Lunatic, 4 Extra.
     pub difficulty: i32,
+    // GM+0x3DE2C (var 10041, 07 §9.2).
     pub rank: i32,
+    // 0x4ECE20–0x4ECE3C vars 10061–10068, copied into the callee on a call (07 §5.4).
     pub args: [u32; 8],
+    // 0x17D61AC (vars 10045–47).
     pub player: [f32; 3],
+    // Byte 0x164D0B1 (var 10052).
     pub player_char: i32,
+    // Player byte +5 (var 10097).
     pub player_mode: i32,
     pub spell: Option<Spell>,
+    // 0xF54E2C (op 175).
     pub spawn_disabled: i32,
+    // HUD +0x2C boss display byte (07 §3 timeline op 0).
     pub hud_boss: bool,
     pub dialogue: bool,
+    // mgr+0x9DCDC0 / +0x9DCDC2 (07 §10.4).
     pub drop_counter: u16,
     pub drop_index: u16,
+    // 0x4E3D28 / 0x4E3D24 (native 0, 07 §12).
     pub native_globals: [i32; 2],
+    // Byte 0x164D0BB (timeline op 16).
     pub flag_164d0bb: bool,
+    // 0xF54CEC (op 163), 0x18B8A2C (native 30), 0x4E4B60 (native 5).
     pub g_f54cec: i32,
     pub g_18b8a2c: i32,
     pub g_4e4b60: i32,
+    // HUD life-bar markers (op 158).
     pub hud_markers: [[i32; 3]; 8],
+    // 0x4ECCA8 = 99 999 990 (op 155).
     pub fixed_bonus: bool,
+    // Port: op 148 argument, HUD requests (ops 148/179–181) handled by the HUD, unimplemented-op counter.
     pub hud_bars: i32,
     pub hud_requests: Vec<u16>,
     pub misc_calls: u64,
+    // Spell-practice card id.
     pub card: i16,
     pub payout: Option<Payout>,
 }
@@ -521,22 +622,29 @@ pub struct Payout {
     pub time: i32,
 }
 
+// Enemy manager 0x577F20 (07 §4).
 pub struct EnemyManager {
     pub enemies: Vec<Box<Enemy>>,
     spare: Vec<Box<Enemy>>,
+    // mgr+0 template enemy (07 §4.2), copied into every spawned slot.
     template: Box<Enemy>,
     pub ecl: Ecl,
+    // 0xF54CC0[4] boss table.
     pub bosses: [Option<usize>; 4],
+    // mgr+0x9DCDD0 + 16·i: {clock, ip} per timeline (07 §3).
     timelines: Vec<(Timer, usize)>,
+    // mgr+0x9DCEFC sync slots (timeline ops 13/14), −1 empty.
     pub sync: [i32; 4],
     pub g: Globals,
     pub bullets: Rc<RefCell<BulletManager>>,
     pub player: PlayerRef,
     pub stage: Option<Rc<RefCell<Stage>>>,
+    // Manager "full" flag: the last spawn found no slot (07 §4.1).
     pub full: bool,
     // Draw lists by layer, linked at the end of each enemy's calc (07 §10.1 step 7).
     draw_lists: [Vec<usize>; 4],
     pub frame: u32,
+    // Debug: `TH08_ENEMY_DMG`, `TH08_STAGE_FRAME`.
     pub debug_damage: i32,
     pub fast_forward: u32,
     pub msg: Option<Rc<RefCell<crate::msg::Dialogue>>>,
@@ -636,7 +744,7 @@ impl EnemyManager {
         Ok(m)
     }
 
-    // Stage start values owned by the game manager (11 §3) and EnemyManager_Load's two draws (11 §1.5).
+    // Stage start values owned by the game manager (11 §3.1) and EnemyManager_Load's two draws (11 §1.5, 07 §10.4).
     pub fn stage_start(&mut self, anm: &mut AnmManager, index: usize) {
         let d = self.g.difficulty.clamp(0, 4) as usize;
         let mut p = self.player.borrow_mut();
@@ -660,6 +768,8 @@ impl EnemyManager {
         let e = &self.enemies[idx];
         let (flags, pos, hb, sb) = (e.flags, e.final_pos, e.hitbox, e.shotbox);
         let boss = flags & A_BOSS != 0;
+        // (a) graze every 6 frames of the enemy timer for flag A bit 7, (b) contact unless a chained child
+        // under shot type 0/4; contact costs a non-boss without bit 7 10 life per frame.
         if flags & A_CONTACT != 0 {
             let e = &self.enemies[idx];
             let graze = flags & A_CANCEL_BONUS != 0
@@ -680,6 +790,7 @@ impl EnemyManager {
         }
         if flags & A_SHOT_HIT != 0 {
             let mut acc = self.enemies[idx].orb_acc;
+            // hitByBomb starts as "player is bombing" but Player_DamageAgainst overwrites it (07 §10.1 step 6).
             let mut by_bomb = self.player.borrow().bombing;
             let d = {
                 let mut b = self.bullets.borrow_mut();
@@ -702,6 +813,7 @@ impl EnemyManager {
                         &mut acc,
                         &mut by_bomb,
                     );
+                    // Extra shot box d2 is added only when the second call left hitByBomb 0.
                     if !by_bomb {
                         let k = if matches!(p.shot_type, 3 | 11) {
                             6.5
@@ -731,6 +843,7 @@ impl EnemyManager {
         self.spare.push(p);
     }
 
+    // Enemy_Free: also clears the aimed pointer (14 §3.1, 07 §10.1).
     pub fn free(&mut self, idx: usize) {
         if self.player.borrow().aimed == Some(idx) {
             self.player.borrow_mut().aimed = None;
@@ -767,12 +880,14 @@ impl EnemyManager {
         self.enemies.iter().filter(|e| e.alive()).count()
     }
 
+    // Rank mask D (07 §2.3).
     pub fn rank_mask(&self, mode_bits: u8) -> u8 {
         let d = self.g.difficulty;
         (if d < 4 { 1u8 << d } else { 0x0F }) | mode_bits
     }
 
-    // EnemyMgr_Spawn* steps 1–3; the caller finishes with `spawn_finish`.
+    // EnemyMgr_SpawnFromTimeline 0x42A4E0 / _FromEcl 0x42A680 steps 1–3 (07 §4.1); the caller finishes with
+    // `spawn_finish`. SPEC-GAP: prev_pos / final_pos := spawn pos is not in 07 §4.1.
     pub(crate) fn spawn_prepare(
         &mut self,
         sub: i32,
@@ -786,6 +901,7 @@ impl EnemyManager {
         };
         let mut e = self.template.clone();
         e.slot = idx as i32;
+        // Mirror bit 18: all x motion negated (07 §3 timeline op 1).
         e.set_flag(A_MIRROR, mirror);
         if life >= 0 {
             e.life = life;
@@ -807,16 +923,19 @@ impl EnemyManager {
         score: i32,
         from_ecl: bool,
     ) -> Option<usize> {
+        // 07 §4.1 steps 4–5: time-0 instructions run at once; op 1 frees the slot.
         if crate::eclvm::ecl_run(self, anm, idx) == -1 {
             self.free(idx);
             return None;
         }
         let e = &mut self.enemies[idx];
         e.main_color = e.vm.color;
+        // Item is taken as a signed char (07 §4.1 step 5).
         e.item = item as i8 as i32;
         if score >= 0 {
             e.score = score;
         }
+        // ECL spawns re-apply life ≥ 0 after the run.
         if from_ecl && life >= 0 {
             e.life = life;
         }
@@ -844,7 +963,7 @@ impl EnemyManager {
         self.g.hud_boss || self.g.spawn_disabled != 0
     }
 
-    // EclTimeline_Run (07 §3).
+    // EclTimeline_Run 0x42A8A0 (07 §3): late instructions are skipped, not stalled.
     fn run_timelines(&mut self, anm: &mut AnmManager) {
         let gs = anm.speed;
         let dmask = self.rank_mask(0);
@@ -860,7 +979,7 @@ impl EnemyManager {
                 }
                 if clock.cur == ins.time {
                     if ins.rank & dmask != 0 && !self.timeline_op(anm, &ins) {
-                        // Stall: the clock does not advance.
+                        // Stall (07 §3): Decrement then the normal Tick, net zero even at game speed < 1.
                         self.timelines[i].0.dec(gs);
                         self.timelines[i].0.tick(gs);
                         break;
@@ -874,7 +993,7 @@ impl EnemyManager {
         }
     }
 
-    // Returns false to stall.
+    // Timeline ops (07 §3 table). Returns false to stall.
     fn timeline_op(&mut self, anm: &mut AnmManager, ins: &ecl::TlIns) -> bool {
         let args: [u32; 7] = std::array::from_fn(|k| self.ecl.tl_arg(ins, k));
         let (ai, af) = (
@@ -930,7 +1049,9 @@ impl EnemyManager {
                     self.enemies[b].pending_interrupt = ai(1);
                 }
             }
+            // SPEC-GAP: set_power (GameMgr_SetPower) not done; 0 uses in data.
             9 => self.g.misc_calls += 1,
+            // A mode-0 boss stays in the table, so the alive bit is tested too (07 §10.3).
             10 => {
                 return self.boss(ai(0)).is_none_or(|b| !self.enemies[b].alive());
             }
@@ -968,13 +1089,15 @@ impl EnemyManager {
                     .filter(|s| **s < 0)
                     .for_each(|s| *s = v);
             }
+            // 0x164D0BB = 1: game-over / continue byte (11 §2).
             16 => self.player.borrow_mut().game_over = true,
             _ => {}
         }
         true
     }
 
-    // Enemy_Move: clamp, step by velocity (x mirrored), clamp, follow parent, final position.
+    // Enemy_Move 0x42DEB0 (07 §8): clamp, step by velocity (x mirrored), clamp, follow parent, final pos z 0.
+    // Flag A bit 29 skips only the clamp/step part.
     fn move_enemy(&mut self, idx: usize, gs: f32) {
         let root_pos = self.enemies[idx].root.map(|r| self.enemies[r].pos);
         let e = &mut self.enemies[idx];
@@ -999,7 +1122,8 @@ impl EnemyManager {
         e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
     }
 
-    // Returns true when the enemy left the screen and must be freed.
+    // Screen check (07 §10.1 step 4); returns true when the enemy left the screen and must be freed.
+    // No free test on the pass that first sets bit 24.
     fn screen_check(&mut self, idx: usize) -> bool {
         let e = &mut self.enemies[idx];
         if !e.vm.has_sprite {
@@ -1027,6 +1151,7 @@ impl EnemyManager {
         self.enemies[idx].main.ctx.enter(ecl, sub);
     }
 
+    // Jump to the death sub with the full context reset; the death sub is consumed (07 §10.3, §10.6).
     pub(crate) fn jump_to_death_sub(&mut self, idx: usize) {
         let sub = self.enemies[idx].death_sub;
         if sub >= 0 {
@@ -1039,8 +1164,8 @@ impl EnemyManager {
         }
     }
 
-    // Op 95 / threshold cleanup: every other alive non-boss enemy gets life 0 and jumps to its death sub.
-    // EnemyMgr_KillAll 0x42EFB0: non-boss enemies without flags B bit 6 get life 0 and jump to their death sub (consumed).
+    // EnemyMgr_KillAll 0x42EFB0 (07 §7 op 95): non-boss enemies without flags B bit 6 get life 0 and jump to
+    // their death sub (consumed); flag A bit 7 also drops item 6 and a popup 2000 + 30·n, capped at 8000.
     pub(crate) fn kill_all(&mut self, anm: &mut AnmManager, except: Option<usize>) -> i32 {
         let (mut n, mut sum) = (0, 0);
         for j in 0..self.enemies.len() {
@@ -1091,7 +1216,8 @@ impl EnemyManager {
             .push(crate::player::Popup::Bonus(sum + kills));
     }
 
-    // FUN_0041FD40: number of alive chained children.
+    // Enemy_ChainChildCount 0x41FD40 (07 §6 var 10096), walked from `idx` via +8. The original has no alive
+    // test (dead members are always unlinked); this one counts alive members only.
     pub fn chain_count(&self, idx: usize) -> i32 {
         let (mut next, mut n) = (self.enemies[idx].chain_next, 0);
         while let Some(c) = next {
@@ -1106,7 +1232,7 @@ impl EnemyManager {
         n
     }
 
-    // Enemy_KillChildren 0x42ADB0 (answers_impl10 §2).
+    // Enemy_KillChildren 0x42ADB0 (07 §10.5, 13 §4 large popups, 08 §8.4 gauge lock); `anm` None = no drops.
     pub(crate) fn kill_chain(&mut self, idx: usize, mut anm: Option<&mut AnmManager>) {
         if let Some(anm) = anm.as_deref_mut()
             && self.enemies[idx].root.is_some()
@@ -1123,6 +1249,7 @@ impl EnemyManager {
             return;
         }
         let mut n = self.chain_count(idx);
+        // Popup colour chosen once from the original n (13 §4).
         let colour = match n {
             ..2 => 0xFFFFFFFF,
             2..=5 => 0xFFFFFFD0,
@@ -1155,6 +1282,7 @@ impl EnemyManager {
             let shot = self.player.borrow().shot_type;
             let boss_or_spell = self.bosses.iter().any(Option::is_some) && self.g.spell.is_none();
             for (k, &c) in kids.iter().enumerate() {
+                // SPEC-GAP: orb counts and cancel circles are only in answers_impl10 §2 (IMPL24 Q2).
                 let orbs = match shot {
                     0..4 => {
                         if n < 8 {
@@ -1178,6 +1306,7 @@ impl EnemyManager {
                         }
                     }
                 };
+                // Quirk kept (13 §4): n /= 3 inside the loop while bombing, so it compounds per child.
                 if self.player.borrow().bombing {
                     n /= 3;
                 }
@@ -1202,6 +1331,7 @@ impl EnemyManager {
                     self.enemies[c].item = 8;
                     self.drop_items(c, anm, Some(0));
                 }
+                // SPEC-GAP: parity of the chain index; 13 §1.4 says enemy slot parity (IMPL24 Q3).
                 crate::sound::play_at(crate::sound::ENEP0 + (k & 1) as i32, pos[0]);
             }
         }
@@ -1212,6 +1342,7 @@ impl EnemyManager {
             e.item = -2;
         }
         let e = &self.enemies[idx];
+        // Boss chain kill (13 §4): popup of e+0x3380 at scale 2, 2·count time orbs within 128 px.
         if let Some(anm) = anm {
             let (pos, count) = (e.final_pos, e.children);
             crate::ascii::popup_large(pos, count, 0, 0xFFF0F00F, 2.0);
@@ -1232,7 +1363,7 @@ impl EnemyManager {
         }
     }
 
-    // Single-kill path of 0x42ADB0: a chained child killed on its own.
+    // Single-kill path of 0x42ADB0 (13 §4, 08 §8.4): gauge −gauge/12, gauge lock 50, one time orb.
     fn kill_single(&mut self, idx: usize, anm: &mut AnmManager) {
         {
             let mut p = self.player.borrow_mut();
@@ -1253,7 +1384,7 @@ impl EnemyManager {
         self.unlink(idx);
     }
 
-    // 0x42B2F0: removes an enemy from its parent's chain.
+    // Enemy_ChainUnlink 0x42B2F0 (07 §6 var 10096): removes an enemy from its parent's chain.
     fn unlink(&mut self, idx: usize) {
         let (prev, next) = (
             self.enemies[idx].chain_prev.take(),
@@ -1319,7 +1450,7 @@ impl EnemyManager {
         self.bullets.borrow_mut().items.attract_all();
     }
 
-    // Spell_End 0x4161B0 (07 §11.1). SPEC-GAP: the capture payout is made at once, not 130 frames later.
+    // Spell_End 0x4161B0 (07 §11.1); the payout is queued and made 130 frames later in `step`.
     pub fn finish_spell(&mut self, anm: &mut AnmManager, except: Option<usize>) {
         let Some(s) = self.g.spell.take() else { return };
         let (total, remaining) = (s.duration, (s.duration - s.frames).max(0));
@@ -1351,6 +1482,7 @@ impl EnemyManager {
             bonus: s.bonus,
             comment: s.comment.clone(),
         });
+        // Time reward 700 (flag A bit 27) or from the remaining card time (07 §11.1 → answers_phase5 impl8).
         let thr = total - total / 7;
         let time = if self.g.fixed_bonus {
             700
@@ -1366,6 +1498,7 @@ impl EnemyManager {
             e.vm.color[crate::anmvm::A] = 0x20
         });
         p.stats.spells += 1;
+        // Spell capture checksum (11 §1.5, 4 draws).
         crate::player::Stats::checksum(&mut anm.rng);
         self.g.payout = Some(Payout {
             end_frame: self.frame,
@@ -1406,7 +1539,8 @@ impl EnemyManager {
         self.bullets.borrow_mut().cancel_all(anm, &mut p, mode);
     }
 
-    // Enemy_DropItems (07 §10.4): mode 1 (auto-collected) when killed while the player bombs; extras always mode 0.
+    // Enemy_DropItems 0x42BEA0 (07 §10.4): mode 1 (auto-collected) when hitByBomb; extras always mode 0.
+    // RNG order: sparks (effect), then extras x then y per item, then the items themselves.
     fn drop_items(&mut self, idx: usize, anm: &mut AnmManager, mode: Option<u8>) {
         let e = &mut self.enemies[idx];
         let p = e.final_pos;
@@ -1417,6 +1551,7 @@ impl EnemyManager {
             items.push((p, e.item, mode));
             sparks = 3;
         } else if e.item == -1 {
+            // Check before the increment; the counter advances on every item −1 death.
             if self.g.drop_counter.is_multiple_of(3) {
                 items.push((p, DROP_TABLE[self.g.drop_index as usize % 32], mode));
                 self.g.drop_index = (self.g.drop_index + 1) % 32;
@@ -1460,7 +1595,7 @@ impl EnemyManager {
         }
     }
 
-    // Every alive non-boss enemy: life 0 and a jump to its death sub. SPEC-GAP: the switching enemy itself is skipped.
+    // Every alive non-boss enemy: life 0 and a jump to its death sub (07 §10.2). SPEC-GAP: the switching enemy itself is skipped.
     fn kill_non_bosses(&mut self, except: usize) {
         for j in 0..self.enemies.len() {
             let e = &self.enemies[j];
@@ -1472,6 +1607,7 @@ impl EnemyManager {
         }
     }
 
+    // Player state 0 → 3 (invulnerable) for `t` frames (07 §10.2, §10.3, §11.1).
     fn protect_player(&mut self, t: i32) {
         let mut p = self.player.borrow_mut();
         if p.state == 0 {
@@ -1480,7 +1616,7 @@ impl EnemyManager {
         }
     }
 
-    // Low-life warning level (07 §10.2).
+    // Low-life warning level 0–3 (07 §10.2); `diff` = life − threshold, or life without thresholds.
     fn warn_level(&self, e: &Enemy, diff: i32, with_thr: bool) -> u32 {
         let card = self.g.spell.is_some();
         let t: [i32; 3] = match (with_thr, card, e.flags & A_BOSS != 0) {
@@ -1494,7 +1630,7 @@ impl EnemyManager {
         t.iter().position(|&v| diff < v).map_or(0, |k| 3 - k as u32)
     }
 
-    // Enemy_CheckLifeThresholds (07 §10.2).
+    // Enemy_CheckLifeThresholds 0x42B490 (07 §10.2): first k with life < threshold[k] wins; max life unchanged.
     fn check_thresholds(&mut self, anm: &mut AnmManager, idx: usize) -> bool {
         self.enemies[idx].flags_b &= !B_WARN_MASK;
         let e = &self.enemies[idx];
@@ -1530,7 +1666,7 @@ impl EnemyManager {
         true
     }
 
-    // Enemy_CheckTimeout (07 §10.2).
+    // Enemy_CheckTimeout 0x42B930 (07 §10.2): the largest active threshold becomes life; timeout sub := death sub.
     fn check_timeout(&mut self, anm: &mut AnmManager, idx: usize) -> bool {
         let e = &mut self.enemies[idx];
         if e.timeout < 0 || e.boss_timer.cur < e.timeout {
@@ -1551,6 +1687,7 @@ impl EnemyManager {
         e.boss_timer.set(0);
         let fixed = e.flags & A_FIXED_BONUS != 0;
         self.jump_main(idx, sub);
+        // 0x42BC50: the card stays active, its own op 123 ends it.
         if !fixed {
             if let Some(sp) = &mut self.g.spell {
                 sp.timed_out = true;
@@ -1563,7 +1700,7 @@ impl EnemyManager {
         true
     }
 
-    // Shot damage (07 §10.1 step 6); `d` comes from the player side.
+    // Shot damage (07 §10.1 step 6); `d` comes from the player side. Score is added before the bit-3 test.
     pub fn damage(&mut self, idx: usize, d: i32, bomb: bool) {
         if d <= 0 {
             return;
@@ -1577,6 +1714,7 @@ impl EnemyManager {
             return;
         }
         let child = e.root.is_some();
+        // Bomb damage during a card only after a bomb started in it (spell flag bit 7), never to chained children.
         let mut d = match (spell, bomb) {
             (true, true) if child || !bombed => 0,
             (true, true) => {
@@ -1601,6 +1739,7 @@ impl EnemyManager {
         e.life -= d;
         e.last_damage = d;
         e.hit = true;
+        // 0x42B370: chained damage to the root, never below its highest active threshold.
         if let Some(r) = e.root {
             let root = &mut self.enemies[r];
             let mut rd = d / 2;
@@ -1627,7 +1766,7 @@ impl EnemyManager {
         crate::effect::free(std::mem::replace(&mut e.fx_aura, crate::effect::NONE));
     }
 
-    // Death processing (07 §10.3).
+    // Death processing (07 §10.3): runs after this frame's Ecl_Run, so the death sub starts next frame.
     fn death(&mut self, idx: usize, anm: &mut AnmManager) {
         let e = &self.enemies[idx];
         if e.life >= 1 || e.flags_b & (B_DEATH_LATCH | B_CANNOT_DIE) != 0 || !e.alive() {
@@ -1645,6 +1784,7 @@ impl EnemyManager {
         self.kill_chain(idx, Some(&mut *anm));
         {
             let mut p = self.player.borrow_mut();
+            // Non-forced GaugeAdd, skipped while bombing; sign by player byte +3, not the +5 mode byte.
             if !p.bombing {
                 let n = if p.focus == 0 { -200 } else { 200 };
                 p.stats.gauge_add(n);
@@ -1666,6 +1806,7 @@ impl EnemyManager {
                 e.flags &= !(A_CONTACT | A_LOSES_LIFE | A_SHOT_HIT);
                 self.add_score(sc);
             }
+            // Latch B bit 3 stays until life > 0 again. SPEC-GAP: 07 §10.3 has no boss test for the HUD display.
             3 => {
                 e.life = 1;
                 e.flags &= !(A_LOSES_LIFE | 7 << A_DEATH_SHIFT | 3 << 30);
@@ -1696,6 +1837,7 @@ impl EnemyManager {
             }
             self.enemies[idx].life = 0;
         }
+        // RNG order (07 §10.3): drops → death sparks ×4 → time orb.
         if mode <= 2 && self.enemies[idx].flags & A_CHAIN_KILLED == 0 {
             crate::sound::play_at(
                 if idx % 2 == 0 {
@@ -1730,6 +1872,7 @@ impl EnemyManager {
         crate::effect::get(h, |x| x.vm.pending_interrupt = 3);
     }
 
+    // 07 §10.1 step 5: a finished sub VM is disabled.
     fn run_vms(&mut self, idx: usize, anm: &mut AnmManager) {
         let e = &mut self.enemies[idx];
         if e.vm.script.is_some() {
@@ -1742,7 +1885,7 @@ impl EnemyManager {
         }
     }
 
-    // Enemy_ReactPlayerMode (07 §10.1 step 3).
+    // Enemy_ReactPlayerMode 0x42C420 (07 §10.1 step 3), using the stored bit 11 at entry.
     fn react_player_mode(&mut self, idx: usize, anm: &mut AnmManager) {
         let youkai = self.g.player_mode != 0;
         let e = &mut self.enemies[idx];
@@ -1754,6 +1897,7 @@ impl EnemyManager {
                 crate::sound::play_at(crate::sound::OPHIDE, p[0]);
                 e.layer = 0;
             }
+            // Effect 38 (10 RNG draws) when the timer "changed and even", also on the switching frame.
             let t = e.boss_timer;
             if e.flags_b & 1 << 1 != 0 && t.cur != t.prev && t.cur % 2 == 0 {
                 crate::effect::spawn(anm, 38, p, 1, 0xFFFFFFFF);
@@ -1781,6 +1925,7 @@ impl EnemyManager {
         if self.enemies[idx].flags & A_MODE_REACT != 0 {
             self.react_player_mode(idx, anm);
         }
+        // Flags B bit 7, or bit 30 while bombing / player state ≠ 0: no ECL, script time held (07 §4.4).
         let held = {
             let p = self.player.borrow();
             let e = &self.enemies[idx];
@@ -1788,6 +1933,7 @@ impl EnemyManager {
                 || (e.flags & A_LAST_SPELL != 0 && (p.bombing || p.state != 0))
         };
         let mut first = true;
+        // 07 §10.1 step 4: a threshold or timeout switch re-runs the whole body in the same frame.
         loop {
             if held {
                 if std::mem::take(&mut first) {
@@ -1817,6 +1963,7 @@ impl EnemyManager {
             self.offer_aimed(idx);
             self.player_collision(idx, anm);
         }
+        // Debug: `TH08_ENEMY_DMG` damage per frame.
         if self.debug_damage > 0
             && self.enemies[idx].flags & (A_SHOT_HIT | A_HIDDEN) == A_SHOT_HIT
             && self.enemies[idx].flags & A_ON_SCREEN != 0
@@ -1839,6 +1986,7 @@ impl EnemyManager {
                 );
             }
             e.vm.flags |= anmvm::F_COLOR2;
+            // BGRA: R 0xFF, G 0x60, B 0x80, current alpha.
             e.vm.color2 = [0x80, 0x60, 0xFF, e.vm.color[anmvm::A]];
             e.flash = true;
         } else if std::mem::take(&mut e.flash) {
@@ -1850,15 +1998,18 @@ impl EnemyManager {
         if e.dmg_timer.cur > 0 {
             e.dmg_timer.dec(gs);
         }
+        // Linked before the death test; a mode-0 death clears alive, and the draw skips it (07 §10.1 step 7).
         if e.flags & A_HIDDEN == 0 {
             self.draw_lists[e.layer.min(3) as usize].push(idx);
         }
+        // Death latch cleared when life > 0, only on frames the script block ran (07 §10.3).
         if !held && e.life > 0 {
             e.flags_b &= !B_DEATH_LATCH;
         }
         self.death(idx, anm);
     }
 
+    // EnemyMgr_Calc 0x42C660 (07 §10.1).
     pub fn step(&mut self, anm: &mut AnmManager) {
         {
             let p = self.player.borrow();
@@ -1871,6 +2022,7 @@ impl EnemyManager {
             let p = self.player.borrow();
             (p.deaths, p.bombs_started)
         };
+        // Port: spell flag bits 2/7 from the player's bomb/death counters (07 §11.1: 0x44CBA0, 0x44D150).
         if let Some(s) = &mut self.g.spell {
             s.bonus += bonus;
             if bombs != s.bombs0 && !s.bombed {
@@ -1885,6 +2037,7 @@ impl EnemyManager {
         self.full = false;
         self.draw_lists.iter_mut().for_each(Vec::clear);
         self.run_timelines(anm);
+        // Slot order; an inactive slot clears the aimed pointer (07 §10.1 step 7, 14 §3.1).
         for idx in 0..self.enemies.len() {
             if self.enemies[idx].alive() {
                 self.update(idx, anm);
@@ -1903,6 +2056,7 @@ impl EnemyManager {
             .filter(|e| e.flags & A_LOSES_LIFE != 0)
             .map(|e| e.final_pos);
         crate::effect::with(|fx| fx.boss = pull);
+        // Capture payout 130 frames after Spell_End (07 §11.1).
         if self
             .g
             .payout
@@ -1910,6 +2064,7 @@ impl EnemyManager {
         {
             self.pay_capture();
         }
+        // Bonus decay once per second (07 §11). SPEC-GAP: op 184 bonus-frozen (spell bit 11) is not implemented.
         if let Some(s) = &mut self.g.spell {
             s.frames += 1;
             if s.frames % 60 == 0 && !self.g.fixed_bonus {
@@ -1920,7 +2075,7 @@ impl EnemyManager {
         b.env.boss = self.bosses.iter().any(Option::is_some);
         b.env.spell = self.g.spell.is_some();
         b.env.dialogue = self.dialogue_active();
-        // 0x42C3B0: rank +100 every 2400 − 240·lives enemy-manager frames outside dialogue.
+        // 0x42C3B0 (11 §3.2): rank +100 every 2400 − 240·lives enemy-manager frames outside dialogue.
         if !b.env.dialogue {
             let lives = self.player.borrow().stats.lives.max(0.0) as u32;
             let period = 2400u32.saturating_sub(240 * lives).max(1);
@@ -1937,6 +2092,7 @@ impl EnemyManager {
     // Enemy drawing (07 §10.6): sub VM 0, main VM, sub VM 1, all Draw2DRot.
     fn draw_layer(&mut self, ctx_anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, high: bool) {
         gfx.set_viewport(PLAYFIELD);
+        // Prio 11 draws with tint 0xFFF01010 while bullets are frozen (07 §10.6).
         let frozen = self.player.borrow().freeze_bullets;
         if high && frozen {
             (ctx_anm.tint, ctx_anm.tint_on) = (0xFFF01010, true);
@@ -1953,10 +2109,12 @@ impl EnemyManager {
             }
             let p = [e.final_pos[0] + 32.0, e.final_pos[1] + 16.0];
             let (angle, main_off) = (e.angle, e.vm.pos_offset);
+            // Flags B bit 8: sub VMs use the main VM's position offset.
             let shared = e.flags_b & (1 << 8) != 0;
             for k in [0usize, 2, 1] {
                 let main = k == 2;
                 let vm = if main { &mut e.vm } else { &mut e.sub_vms[k] };
+                // Main VM skipped when flag A bit 5 (invisible) or trail flag 0x10. SPEC-GAP: the trail itself is not drawn.
                 if vm.script.is_none()
                     || main && (e.flags & (1 << 5) != 0 || e.trail[0] & 0x10 != 0)
                 {

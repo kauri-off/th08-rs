@@ -184,6 +184,14 @@
     sessions golden 8055 / fullrun 6265 / selftest1 1422 unchanged. Thresholds raised.
   - SPEC-GAP 31 → 40 (result screen details). Questions: `docs/briefs/IMPL23_QUESTIONS.md`.
 
+- impl24 (comment pass batch A, 2026-10-19): `ecl.rs`, `eclvm.rs`, `enemy.rs`, `bullet.rs`, `item.rs`, `rng.rs` now have
+  `//!` module lines and spec references (07 / 08 / 11 / 13 sections, original names and addresses, offsets, units) on
+  fields, constants, opcode handlers and kept quirks. Comments only: the session traces golden / fullrun_noclip /
+  selftest1 are byte-identical (8055 / 6265 / 1422), demo MIN_SYNC 4450/3869/2937/1605 and the draw-log percentages are
+  unchanged, and all 78 tests pass. Spec items that are still missing are marked "Not implemented". SPEC-GAP 40 → 53:
+  code vs spec differences found in this pass, plus code with no spec section. Questions:
+  `docs/briefs/IMPL24_QUESTIONS.md`.
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).

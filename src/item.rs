@@ -1,10 +1,14 @@
+//! Item manager 0x1653648: spawn, per-frame calc, collection, draw (08 §8).
+
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::ANM_SLOT;
 use crate::gfx::Gfx;
 use crate::player::{Player, Stats};
 
+// 08 §8.1: 2096 slots × 0x2E4.
 pub const MAX_ITEMS: usize = 2096;
+// Item types (08 §8.2); sprite script = etama.anm 0x3D + type.
 pub const POWER: u8 = 0;
 pub const POINT: u8 = 1;
 pub const BIG_POWER: u8 = 2;
@@ -14,33 +18,49 @@ pub const LIFE: u8 = 5;
 pub const STAR: u8 = 6;
 pub const TIME_ORB: u8 = 7;
 pub const CONVERTED: u8 = 8;
+// Small-popup colours per caller (13 §4 → answers_impl9 §12).
 pub const POPUP_NORMAL: u32 = 0xFFFFFFFF;
 pub const POPUP_MAX: u32 = 0xFFFFFF00;
 pub const POPUP_POWER: u32 = 0xFFFFC0A0;
 pub const POPUP_TIME: u32 = 0xDFFFFFFF;
 pub const POPUP_TIME_OVER: u32 = 0xDFFFEF80;
+// Tombstone in `order` for an item freed during this calc.
 const DEAD: u16 = u16::MAX;
+// Power level table 0x4C7A6C (08 §8.5).
 const POWER_LEVELS: [f32; 6] = [8.0, 24.0, 48.0, 80.0, 128.0, 999.0];
 
+// Item object 0x2E4 (08 §8.1).
 #[derive(Clone, Debug, Default)]
 pub struct Item {
     pub vm: AnmVm,
+    // +0x2A4 playfield px.
     pub pos: [f32; 3],
+    // +0x2B0 px/frame; in state 2 it holds the start position instead.
     pub vel: [f32; 3],
+    // +0x2BC fly-to target (state 2).
     pub target: [f32; 3],
+    // +0x2C8 frames since spawn.
     pub timer: Timer,
+    // +0x2D4 type (08 §8.2).
     pub kind: u8,
     pub alive: bool,
+    // +0x2D7: 0 fall, 1 attracted, 2 fly to target, 3/5 time-orb rise (08 §8.4).
     pub state: u8,
+    // +0x2D8 max-value flag (point items collected at full value).
     pub max_flag: bool,
 }
 
 pub struct ItemManager {
     pub items: Vec<Item>,
+    // +0x17ADA4 search cursor (08 §8.3).
     cursor: usize,
+    // Live-item list in spawn order (08 §8.1 doubly linked list).
     order: Vec<u16>,
+    // +0x17ADA8 live count, recomputed by calc.
     pub count: usize,
+    // Time-orb gauge lock 0x18B89D4 = player +0xE2ADC (08 §8.4), frames.
     pub collect_timer: i32,
+    // Port-only counter of collections.
     pub collected: u64,
 }
 
@@ -60,9 +80,11 @@ impl Default for ItemManager {
 // Collection side effects that reach outside the item manager.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Collected {
+    // Mode-1 cancel of all bullets (08 §8.5 full power).
     pub cancel: bool,
 }
 
+// Number of POWER_LEVELS entries ≤ power (08 §8.5).
 pub fn power_level(p: f32) -> usize {
     POWER_LEVELS.iter().filter(|&&t| t <= p).count()
 }
@@ -82,6 +104,7 @@ pub fn point_value(max: i32, y: f32, line: f32, max_flag: bool, doubled: bool, d
     v
 }
 
+// Next extend threshold in point items (08 §8.5): `difficulty` = gm+0x30, n = extends so far.
 pub fn next_extend(difficulty: i32, n: i32) -> i32 {
     if difficulty < 4 {
         [100, 250, 500, 800, 1100, 9999]
@@ -110,7 +133,7 @@ impl ItemManager {
         }
     }
 
-    // ItemMgr_Spawn (08 §8.3).
+    // ItemMgr_Spawn 0x4400A0 (08 §8.3). RNG: mode 2 x then y; mode 3/5 vel.y (Float) then vel.x (Signed).
     pub fn spawn(
         &mut self,
         anm: &mut AnmManager,
@@ -131,6 +154,7 @@ impl ItemManager {
         } else if kind == 10 {
             (kind, mode) = (TIME_ORB, 5);
         }
+        // 08 §8.3: a time orb probes only the cursor slot; occupied → nothing.
         let probes = if kind == TIME_ORB { 1 } else { MAX_ITEMS };
         let mut slot = None;
         for _ in 0..probes {
@@ -178,7 +202,7 @@ impl ItemManager {
         Some(i)
     }
 
-    // Power reached 128: every other power item becomes a converted point item.
+    // Power reached 128 (08 §8.5): every other type 0/2 item becomes type 8 (effect 0, script 0x45).
     fn convert_power_items(&mut self, anm: &mut AnmManager, except: usize) {
         for i in 0..MAX_ITEMS {
             let it = &mut self.items[i];
@@ -199,7 +223,7 @@ impl ItemManager {
         }
     }
 
-    // Collection handlers (08 §8.5).
+    // Collection handlers 0x440CF0–0x4412B0 (08 §8.5); score is stored /10 by `add_score`.
     fn collect(
         &mut self,
         idx: usize,
@@ -222,6 +246,7 @@ impl ItemManager {
                 if st.power < 128.0 {
                     let level = power_level(st.power);
                     st.power += if kind == POWER { 1.0 } else { 8.0 };
+                    // GameMgr_AddPower 0x441850 checksum (4 draws); reaching 128 adds SetPower's 4 (08 §8.5).
                     Stats::checksum(&mut anm.rng);
                     if st.power >= 128.0 {
                         st.set_power(128.0, &mut anm.rng);
@@ -236,6 +261,7 @@ impl ItemManager {
                         popup(10, POPUP_NORMAL);
                     }
                 }
+                // 08 §8.5: type 0 always adds rank +1, even at full power.
                 if kind == POWER {
                     st.rank(1);
                 }
@@ -269,9 +295,11 @@ impl ItemManager {
                 if st.bombs < 8.0 {
                     st.add_bombs(1.0, &mut anm.rng);
                 }
+                // Bomb item rank +5 (11 §3.2 rank deltas).
                 st.rank(5);
             }
             FULL_POWER => {
+                // 08 §8.5: this cancel has no spell-card test, unlike the power-item one.
                 if st.power < 128.0 {
                     crate::sound::play(crate::sound::POWERUP);
                     popup(-1, POPUP_POWER);
@@ -314,7 +342,9 @@ impl ItemManager {
                 );
                 st.add_score(v);
                 st.add_time(1, &mut anm.rng);
+                // Spell_AddBonus 0x416B10 +8000 (ignored while the bonus is frozen, 07 §11.1).
                 st.spell_bonus_add += 8000;
+                // ±111 by player byte +3; a non-forced GaugeAdd is skipped while bombing (07 §10.3).
                 if self.collect_timer == 0 && !p.bombing {
                     st.gauge_add(if p.focus != 0 { 111 } else { -111 });
                 }
@@ -325,7 +355,8 @@ impl ItemManager {
         out
     }
 
-    // ItemMgr_Calc (08 §8.4). `cancel` runs a mode-1 cancel of all bullets in the middle of the loop.
+    // ItemMgr_Calc 0x440500 (08 §8.4), in list order. `cancel` runs a mode-1 cancel of all bullets in the
+    // middle of the loop, as the original does from inside the collection handler.
     pub fn calc(
         &mut self,
         anm: &mut AnmManager,
@@ -334,6 +365,7 @@ impl ItemManager {
         mut cancel: impl FnMut(&mut ItemManager, &mut AnmManager, &mut Player),
     ) {
         let gs = anm.speed;
+        // 08 §8.4: box C from the human sht; fall multiplier m from the sht chosen by player byte +3.
         let c = p.sht.collect;
         let m = p.item_sht().fall * gs;
         self.count = 0;
@@ -360,12 +392,14 @@ impl ItemManager {
                         }
                         step = 1;
                     } else if t == 60 {
+                        // 08 §8.4: state 0 only at exactly t == 60; common motion runs either way.
                         it.vel = [0.0; 3];
                         it.state = 0;
                     }
                 }
                 3 => {
                     it.vel[1] += 0.05 * gs;
+                    // Shot timer player +0xE2AC4 < 0 = not shooting (08 §8.4).
                     if it.vel[1] > 0.0 || p.shot_timer.cur < 0 {
                         it.state = 1;
                     }
@@ -390,6 +424,7 @@ impl ItemManager {
                     }
                 }
                 _ => {
+                    // 08 §8.4: shot types 1 (Marisa & Alice) and 6 (Marisa solo) auto-collect above the line.
                     let attract = it.state == 1
                         || (p.pos[1] < p.sht.poc_line
                             && (p.stats.power >= 128.0
@@ -421,6 +456,7 @@ impl ItemManager {
                 for a in 0..3 {
                     it.pos[a] += it.vel[a] * m;
                 }
+                // 08 §8.4: only a falling (state 0) item below 448 + 16 is lost (rank −3).
                 if it.state != 0 || it.pos[1] <= 448.0 + 16.0 {
                     if it.vel[1] >= 3.0 {
                         it.vel[1] = 3.0;
@@ -437,6 +473,7 @@ impl ItemManager {
             }
             if step == 1 && it.state != 3 && p.collect_test(it.pos, c) {
                 let out = self.collect(i, anm, p, spell);
+                // One sound per calc after the loop: 0x2C once any max-value item was collected, else 0x15.
                 if sound != Some(crate::sound::ITEM1) {
                     sound = Some(if self.items[i].max_flag {
                         crate::sound::ITEM1
@@ -462,6 +499,7 @@ impl ItemManager {
         if let Some(id) = sound {
             crate::sound::play(id);
         }
+        // 08 §8.4: gauge lock decremented and clamped at 0 after the loop.
         if self.collect_timer != 0 {
             self.collect_timer = (self.collect_timer - 1).max(0);
         }
@@ -475,6 +513,7 @@ impl ItemManager {
                 continue;
             }
             let y = it.pos[1];
+            // Above the playfield: arrow sprite at y 8, alpha fading with distance (08 §8.6).
             if y < -8.0 {
                 it.vm.set_sprite(anm, 0xB6 + it.kind as i32);
                 it.vm.color[anmvm::A] = (255 - ((8.0 - y) * 255.0 / 128.0) as i32).max(64) as u8;

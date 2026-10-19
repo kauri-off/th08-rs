@@ -1,3 +1,5 @@
+//! ECL interpreter `Ecl_Run` 0x4184B0: contexts, variables, opcodes, natives (07 §5–§9, §11, §12).
+
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
 use crate::bullet::{BulletDesc, ExCmd, LaserDesc, angle_from};
@@ -5,6 +7,7 @@ use crate::ecl::Ins;
 use crate::enemy::*;
 use std::f32::consts::PI;
 
+// What an opcode does to the §5.2 EXEC loop.
 enum Flow {
     Next,
     Jumped,
@@ -14,6 +17,7 @@ enum Flow {
     ThreadEnd,
 }
 
+// How a context's run ended: POST reached, op 1 delete, or a thread returned from its first sub.
 #[derive(PartialEq)]
 enum End {
     Post,
@@ -36,6 +40,7 @@ fn run_enemy(m: &mut EnemyManager, anm: &mut AnmManager, e: &mut Enemy, idx: usi
     if r == End::Delete {
         return -1;
     }
+    // Threads in slot order after main; one created this frame by main runs this frame (07 §5.2).
     for k in 0..4 {
         let Some(mut t) = e.threads[k].take() else {
             continue;
@@ -51,6 +56,7 @@ fn run_enemy(m: &mut EnemyManager, anm: &mut AnmManager, e: &mut Enemy, idx: usi
             e.threads[k] = Some(t);
         }
     }
+    // After all contexts: Enemy_UpdateMoveMode, then Enemy_AutoFireAndDirAnim (07 §5.2).
     e.update_move_mode(anm.speed);
     let mut main = std::mem::take(&mut e.main);
     Exec { m, anm, e, idx }.autofire_and_dir_anim(&mut main);
@@ -73,6 +79,7 @@ pub(crate) struct Exec<'a> {
     idx: usize,
 }
 
+// Writable int variables (07 §6 "writable as int").
 enum IRef {
     Ctx(usize),
     EInt(usize),
@@ -85,6 +92,7 @@ enum IRef {
     Score,
 }
 
+// Writable float variables (07 §6 "writable as float"); 10045–47 (player pos) are writable (!).
 enum FRef {
     Ctx(usize),
     EFlt(usize),
@@ -149,6 +157,7 @@ pub(crate) fn var_f(
     c: &Context,
     lit: f32,
 ) -> f32 {
+    // Float variable ids are float literals (e.g. 10016.0), truncated before lookup (07 §6).
     let id = lit as i32;
     if let Some(r) = flt_ref(id) {
         return read_f(m, e, c, &r);
@@ -170,7 +179,7 @@ pub(crate) fn var_f(
         10084 => e.boss_slot as f32,
         10085..=10087 => e.displacement[(id - 10085) as usize],
         10088..=10091 => e.thresholds[(id - 10088) as usize] as f32,
-        // SPEC-GAP: chain entries after this one (+8 link); demo 3 f1501 root with 4 children reads 4.
+        // SPEC-GAP: counts entries after this one (+8 link); 07 §6 evaluates a child on its parent (IMPL24 Q4).
         10096 => chain_after(m, e) as f32,
         10097 => m.g.player_mode as f32,
         10099 => m.g.spell.is_some() as i32 as f32,
@@ -178,6 +187,7 @@ pub(crate) fn var_f(
     }
 }
 
+// Int getter 0x41F420 (07 §6): float variables read through the float getter and truncate.
 pub(crate) fn var_i(
     m: &mut EnemyManager,
     anm: &mut AnmManager,
@@ -193,6 +203,7 @@ pub(crate) fn var_i(
         10033 => 0,
         10032 => (anm.rng.next_u32() & 0x7FFF_FFFF) as i32,
         10034 => anm.rng.next_u32() as i32,
+        // 07 §6: 2 if stage time + pending capture time + live time orbs ≥ TIME_THR (11 §3.1).
         10098 => {
             let pending = m.g.payout.map_or(0, |c| c.time);
             let orbs = m.bullets.borrow().items.count(crate::item::TIME_ORB);
@@ -204,6 +215,7 @@ pub(crate) fn var_i(
             }
         }
         10100 => m.g.spell.as_ref().map_or(0, |s| s.frames),
+        // Int read of 10079–10081 gives the literal; 10082 is float only.
         10079..=10082 => id,
         _ if flt_ref(id).is_some()
             || matches!(
@@ -254,6 +266,7 @@ fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
+// Number of enemies reached from `e` by the +8 link (var 10096).
 fn chain_after(m: &EnemyManager, e: &Enemy) -> i32 {
     let mut d = 0;
     let mut p = e.chain_next;
@@ -267,6 +280,7 @@ fn chain_after(m: &EnemyManager, e: &Enemy) -> i32 {
     d
 }
 
+// Rank lerps (07 §9.2): rank = var 10041 (8–16), integer division truncates toward 0.
 fn lerp_i(a: i32, b: i32, rank: i32) -> i32 {
     a + ((b - a) * rank) / 32
 }
@@ -286,15 +300,18 @@ fn rd_i16(b: &[u8], o: usize) -> i16 {
 }
 
 impl Exec<'_> {
+    // One context of Ecl_Run (07 §5.2): LOOP / EXEC / POST.
     fn run_thread(&mut self, t: &mut Thread) -> End {
         let gs = self.anm.speed;
         'outer: loop {
+            // SPEC-GAP: interrupts are dispatched in the main context only; 07 §5.2 tests in every context (IMPL24 Q5).
             if self.e.pending_interrupt >= 0 && self.e.running_thread.is_none() {
                 self.interrupt(t);
                 continue;
             }
             loop {
                 self.e.final_pos = add3(self.e.pos, self.e.pos_offset);
+                // Wait: the clock is decremented so POST's Tick nets zero.
                 if t.ctx.wait.cur > 0 {
                     t.ctx.wait.dec(gs);
                     t.ctx.clock.dec(gs);
@@ -303,9 +320,11 @@ impl Exec<'_> {
                 let Some(ins) = self.m.ecl.ins(t.ctx.ip) else {
                     break 'outer;
                 };
+                // Exact time match (07 §5.2): a past instruction is never reached, the sub stalls.
                 if ins.op == -1 || t.ctx.clock.cur != ins.time {
                     break 'outer;
                 }
+                // Rank mask (07 §2.3): skipped in the same frame.
                 let d = self.m.rank_mask(self.e.mode_bits);
                 if ins.rank & d != d {
                     t.ctx.ip += ins.size;
@@ -321,6 +340,7 @@ impl Exec<'_> {
                 }
             }
         }
+        // POST (07 §5.2): native callback and interpolation slots only while life > 0.
         if self.e.life > 0 {
             if t.ctx.callback >= 0 {
                 let (n, arg) = (t.ctx.callback, t.ctx.callback_arg);
@@ -343,6 +363,7 @@ impl Exec<'_> {
         }
         let size = self.m.ecl.ins(t.ctx.ip).map_or(0, |i| i.size);
         t.ctx.ip += size;
+        // Unless flag A bit 26 push; depth += 1 either way (≤ 15).
         if self.e.flags & A_NO_PUSH == 0 {
             t.push();
         } else {
@@ -351,6 +372,8 @@ impl Exec<'_> {
         t.ctx.enter(&self.m.ecl, sub);
     }
 
+    // Ecl_CallSub 0x421BD0 (07 §5.4): push unless flag A bit 26, then copy the global args 10061–68 into
+    // the callee's 10053–60.
     fn call(&mut self, t: &mut Thread, next_ip: usize, sub: i32) {
         t.ctx.ip = next_ip;
         if self.e.flags & A_NO_PUSH == 0 {
@@ -367,6 +390,7 @@ impl Exec<'_> {
         self.m.ecl.arg(ins, k)
     }
 
+    // Argument k as int / float: a variable id when var-mask bit k is set (07 §2.1, §6).
     fn ai(&mut self, t: &Thread, ins: &Ins, k: usize) -> i32 {
         let raw = self.raw(ins, k) as i32;
         if ins.mask & (1 << k) != 0 {
@@ -385,6 +409,7 @@ impl Exec<'_> {
         }
     }
 
+    // Same with an explicit mask bit (bullet/laser blocks, 07 §9.1, §9.4).
     fn vi(&mut self, t: &Thread, id: i32, var: bool) -> i32 {
         if var {
             var_i(self.m, self.anm, self.e, &t.ctx, id)
@@ -452,7 +477,7 @@ impl Exec<'_> {
         }
     }
 
-    // Interpolation targets: float variables, else int variables (truncated).
+    // Interpolation targets (07 §5.6): float variables, else int variables (truncated).
     fn set_var_any(&mut self, t: &mut Thread, id: i32, v: f32) {
         if let Some(r) = flt_ref(id) {
             self.write_f(t, r, v);
@@ -461,6 +486,7 @@ impl Exec<'_> {
         }
     }
 
+    // Jump (07 §7 op 4): clock = t; ip = this instruction + byte offset.
     fn jump(&mut self, t: &mut Thread, ins: &Ins, tk: usize) -> Flow {
         let time = self.ai(t, ins, tk);
         let off = self.ai(t, ins, tk + 1);
@@ -474,6 +500,7 @@ impl Exec<'_> {
     }
 
     // --- movement helpers (07 §8) ---
+    // Mode 1 polar (07 §8): angle wrapped; `dur` 0 = no duration.
     fn mode1(&mut self, ang: f32, spd: f32, dur: i32) {
         let e = &mut *self.e;
         e.angle = anmvm::wrap_add(ang, 0.0);
@@ -483,6 +510,7 @@ impl Exec<'_> {
         e.set_move_mode(1);
     }
 
+    // Mode 2 interpolate (07 §8): velocity 0, ease in flag A bits 14–16.
     fn mode2(&mut self, dur: i32, ease: i32, start: [f32; 3], delta: [f32; 3]) {
         let e = &mut *self.e;
         e.interp_start = start;
@@ -494,6 +522,8 @@ impl Exec<'_> {
         e.set_move_mode(2);
     }
 
+    // Ops 66 / 67 / 178 (07 §7, §8.3): dur < 1 → mode 1; else mode 2 from the final pos. `mirror`: op 66
+    // negates delta.x for mirrored enemies (`Ecl_OpMoveDir` 0x420D10); ops 67/178 do not.
     fn move_dir(&mut self, dur: i32, ease: i32, ang: f32, spd: f32, mirror: bool) {
         if dur < 1 {
             self.mode1(ang, spd, 0);
@@ -514,7 +544,7 @@ impl Exec<'_> {
         e.set_move_mode(3);
     }
 
-    // Random direction 0x422020 (op 67) / 0x4224A0 (op 178), 07 §8.3.
+    // Random direction 0x422020 (op 67) / 0x4224A0 (op 178), 07 §8.3; one Rng_Float per line, in order.
     fn random_dir(&mut self, op178: bool) -> f32 {
         let rng = &mut self.anm.rng;
         let e = &*self.e;
@@ -553,6 +583,7 @@ impl Exec<'_> {
                 }
             }
             if x > x1 - 96.0 {
+                // Quirk kept (07 §8.3): uses the enemy's current angle, not a.
                 if (0.0..PI / 2.0).contains(&a) {
                     a = PI - e.angle;
                 } else if a > -PI / 2.0 && a < 0.0 {
@@ -567,6 +598,7 @@ impl Exec<'_> {
     }
 
     // --- ANM ---
+    // Main VM script from enemy.anm or stgNenm.anm by flags B bit 2 (07 §7 ops 54/58).
     fn start_main(&mut self, script: i32) {
         let slot = self.e.anm_slot();
         if script < 0 {
@@ -576,6 +608,7 @@ impl Exec<'_> {
         self.anm.set_script(&mut self.e.vm, slot, script as usize);
     }
 
+    // Ops 57/61: script < 0 disables the sub VM.
     fn start_sub(&mut self, k: usize, script: i32) {
         let slot = self.e.anm_slot();
         let Some(vm) = self.e.sub_vms.get_mut(k) else {
@@ -602,6 +635,7 @@ impl Exec<'_> {
         let item = self.ai(t, ins, base + 1);
         let score = self.ai(t, ins, base + 2);
         let chained = op <= 92;
+        // 07 §10.5: fails (manager flag) if the parent's life < 1 or it is being chain-killed.
         if chained && (self.e.life < 1 || self.e.flags & A_CHAIN_KILLED != 0) {
             self.m.full = true;
             return;
@@ -616,14 +650,17 @@ impl Exec<'_> {
         let Some(ci) = self.m.spawn_prepare(sub, pos, life, false) else {
             return;
         };
+        // Sound 0x24 (07 §10.5).
         if chained {
             crate::sound::play_at(crate::sound::OPTION, self.e.final_pos[0]);
         }
+        // 07 §4.1 step 3: the 30 variable dwords of the spawning context.
         let vars = t.ctx.vars;
         let youkai = self.m.g.player_mode != 0;
         {
             let c = &mut self.m.enemies[ci];
             c.main.ctx.vars = vars;
+            // SPEC-GAP: 07 §10.5 applies these after the spawn-time Ecl_Run; here only contact-off is (IMPL24 Q6).
             if chained {
                 c.root = Some(self.idx);
                 c.flags |= A_MODE_REACT;
@@ -638,7 +675,7 @@ impl Exec<'_> {
             }
         }
         if chained {
-            // Child aura 0x20 (07 §10.5).
+            // Child aura 0x20 (07 §10.5), interrupt 1 human / 2 youkai; only if it has none yet.
             if self.m.enemies[ci].fx_aura == crate::effect::NONE {
                 let fp = self.m.enemies[ci].final_pos;
                 let fx = crate::effect::spawn_high(self.anm, 0x20, fp, 0xFFFFFFFF);
@@ -646,6 +683,7 @@ impl Exec<'_> {
                 self.m.enemies[ci].fx_aura = fx;
             }
         }
+        // Link after the chain tail, or after the spawner itself when it has no children (07 §10.5).
         if chained {
             let mut last: Option<usize> = None;
             let mut n = self.e.chain_next;
@@ -682,6 +720,7 @@ impl Exec<'_> {
     }
 
     // --- bullets (07 §9) ---
+    // Bullet block (07 §9.1): fields over the enemy's current descriptor; mask bits 0–7, flags raw.
     fn decode_bullet(&mut self, t: &Thread, b: &[u8]) -> BulletDesc {
         let mask = u16::from_le_bytes([b[10], b[11]]);
         let mb = |k: u32| mask & (1 << k) != 0;
@@ -699,6 +738,7 @@ impl Exec<'_> {
         d
     }
 
+    // Ecl_FireBullets 0x422720 (07 §9.1): only while life > 0; flag A bit 17 stores the instruction instead.
     fn bullet_op(&mut self, t: &Thread, ins: &Ins) {
         if self.e.life <= 0 {
             return;
@@ -742,6 +782,7 @@ impl Exec<'_> {
         self.m.bullets.borrow_mut().spawn_pattern(self.anm, &d, p);
     }
 
+    // Laser block (07 §9.4, 64 bytes) → laser slot[current]; +0x34/+0x38/+0x3C raw.
     fn laser_op(&mut self, t: &Thread, ins: &Ins) {
         let b = self.m.ecl.bytes(ins).to_vec();
         let mask = u16::from_le_bytes([b[10], b[11]]);
@@ -803,6 +844,7 @@ impl Exec<'_> {
             .cancel_all(self.anm, &mut p, mode);
     }
 
+    // Ops 142 / 168 (07 §7): offsets Rng·128 − 64 on x then y; 142 below full power: first type 2, rest 0.
     fn item_burst(&mut self, n: i32, all_one: bool) {
         let p = self.e.pos;
         let low = self.m.player.borrow().stats.power < 128.0;
@@ -820,7 +862,7 @@ impl Exec<'_> {
         }
     }
 
-    // Enemy_AutoFireAndDirAnim (07 §9.3).
+    // Enemy_AutoFireAndDirAnim 0x423150 (07 §9.3).
     fn autofire_and_dir_anim(&mut self, t: &mut Thread) {
         let gs = self.anm.speed;
         if self.e.life > 0 && self.e.autofire_interval > 0 {
@@ -844,6 +886,7 @@ impl Exec<'_> {
         } else {
             0
         };
+        // Swapped when mirrored.
         if self.e.flags & A_MIRROR != 0 && dir != 0 {
             dir = 3 - dir;
         }
@@ -862,7 +905,7 @@ impl Exec<'_> {
         self.start_main(script);
     }
 
-    // Variable interpolation slots (07 §5.6).
+    // Variable interpolation slots (07 §5.6); a position target turns into velocity + angle, pos restored.
     fn run_interp(&mut self, t: &mut Thread) {
         let gs = self.anm.speed;
         let old = self.e.pos;
@@ -904,11 +947,12 @@ impl Exec<'_> {
         }
     }
 
-    // --- native functions (07 §12) ---
+    // --- native functions (07 §12): op 136 once, op 137 every POST; `arg` = instr +0x10 ---
     fn native(&mut self, t: &mut Thread, n: i32, arg: i32) {
         let gs = self.anm.speed;
         match n {
             0 => self.m.g.native_globals = [t.ctx.int(V_INT0), t.ctx.flt(V_FLT0).to_bits() as i32],
+            // Bounce: vars 10022 / 10023 are the gravity step and the fall-speed cap.
             2 => {
                 let e = &mut *self.e;
                 let before = e.vel;
@@ -928,6 +972,7 @@ impl Exec<'_> {
                     e.angle = e.vel[1].atan2(e.vel[0]);
                 }
             }
+            // Screen flash / shake parameters (07 §12, 13 §3).
             1 => crate::effect::screen(3, 60, 1, 0xFFFFFFFFu32 as i32, 0, 0x15),
             17 => crate::effect::screen(3, 180, 1, 0xFFFFFFFFu32 as i32, 0, 0x15),
             10 => {
@@ -935,6 +980,7 @@ impl Exec<'_> {
                 crate::effect::screen(7, 4, 120, 190, 60, 0x15);
             }
             15 => crate::effect::screen(7, 16, 20, 20, 20, 0x15),
+            // Two effects (0x38 / 0x3A / 0x41) with an extra script and the stage callback 0x4235A0.
             3 | 6 | 20 => {
                 if let Some(st) = &self.m.stage {
                     st.borrow_mut().spell_mask = true;
@@ -964,7 +1010,9 @@ impl Exec<'_> {
                 .set_int(V_INT0, self.m.g.spell.as_ref().map_or(0, |s| s.id)),
             // SPEC-GAP: game value at (0x160F510)+0x1C belongs to a later phase; reads 0.
             24 => t.ctx.set_int(V_INT0, 0),
+            // Not implemented: the stage VM interrupts 2 / 1 of 07 §12.
             26 => set_timer_pause(arg),
+            // Bullets with flag 0x100000 spawn enemy sub = var 10038 (life 800, item −2, score 10, var 10016 = angle).
             27 => {
                 let sub = t.ctx.int(V_INT1 + 2);
                 let marked: Vec<_> = {
@@ -985,6 +1033,8 @@ impl Exec<'_> {
                     }
                 }
             }
+            // Natives 12/14 (08 §7): mask = var 10000, angle/speed = vars 10016/10017; 12 also toggles flags B
+            // bit 7 on the chain by var 10001 and interrupts the spell-background VMs.
             12 | 14 => {
                 let (mask, a, s) = (
                     t.ctx.int(V_INT0) as u32,
@@ -1016,6 +1066,7 @@ impl Exec<'_> {
                     }
                 }
             }
+            // Not implemented: 28/29's bullet velocity / sprite changes and stage interrupts (07 §12).
             28 if arg != 0 => self.anm.speed = 1.0 / arg as f32,
             29 => {
                 self.anm.speed = 1.0;
@@ -1024,6 +1075,7 @@ impl Exec<'_> {
                 }
             }
             30 => self.m.g.g_18b8a2c = arg,
+            // SPEC-GAP: 07 §12 gives type 3 while 0x17D6ED4 ≠ 0; always type 5 here (IMPL24 Q7).
             31 => self.item(self.e.pos, 5),
             22 => {
                 // SPEC-GAP: native 22's face argument is not given; no boss cut-in is started.
@@ -1047,7 +1099,8 @@ impl Exec<'_> {
         }
     }
 
-    // Native 8 (INFERRED reading of 07 §12): chain members sharing var 10038 spread their orbit angles.
+    // Native 8 (INFERRED reading of 07 §12): chain members sharing var 10038 get index var 10037, count
+    // var 10018, change flag var 10017, and turn their orbit angle 2 % toward leader + index·2π/count.
     fn familiar_ring(&mut self, t: &mut Thread) {
         let tag = t.ctx.int(V_INT1 + 2);
         let root = self.e.root;
@@ -1089,6 +1142,8 @@ impl Exec<'_> {
         self.e.orbit_angle = anmvm::wrap_add(self.e.orbit_angle, diff * 0.02);
     }
 
+    // Op 122 spell block (07 §11): decoded strings, bonus decay per second, pending payout paid first
+    // (07 §11.1), bullets cancelled, spell background, rank ranges reset.
     fn spell_card(&mut self, ins: &Ins) {
         let b = self.m.ecl.bytes(ins);
         let dec = |o: usize, n: usize, key: u8| -> Vec<u8> {
@@ -1102,6 +1157,7 @@ impl Exec<'_> {
             s[..end].to_vec()
         };
         let bonus = rd_u32(b, 0x10) as i32;
+        // Decay (bonus − bonus/7) / (timeout/60); op 134 precedes op 122 in all data.
         let secs = (self.e.timeout / 60).max(1);
         let spell = Spell {
             face: rd_i16(b, 0x0C) as i32,
@@ -1153,6 +1209,7 @@ impl Exec<'_> {
         self.e.reset_rank_ranges();
     }
 
+    // Opcode switch (07 §7 table; unknown ops are ignored).
     fn exec(&mut self, t: &mut Thread, ins: &Ins) -> Flow {
         let op = ins.op;
         let next = ins.off + ins.size;
@@ -1179,6 +1236,7 @@ impl Exec<'_> {
                 let v = self.af(t, ins, 1);
                 self.set_f(t, ins, 0, v);
             }
+            // Random sign: one Rng_Next16, bit 0.
             8 => {
                 let b = self.ai(t, ins, 1);
                 let v = if self.anm.rng.next_u16() & 1 != 0 {
@@ -1207,6 +1265,7 @@ impl Exec<'_> {
                     0 => a.wrapping_add(b),
                     1 => a.wrapping_sub(b),
                     2 => a.wrapping_mul(b),
+                    // C truncating / and %; the 0 result for b == 0 is a port guard.
                     3 => a.checked_div(b).unwrap_or(0),
                     _ => a.checked_rem(b).unwrap_or(0),
                 };
@@ -1262,12 +1321,13 @@ impl Exec<'_> {
                 let (b, c, d) = (self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3));
                 self.set_f(t, ins, 0, (b - c) * d + c);
             }
+            // Target id is a float literal; reuse the slot with the same target, else the first free one.
             36 => {
                 let target = f32::from_bits(self.raw(ins, 0)) as i32;
                 let dur = self.ai(t, ins, 1);
                 let func = self.ai(t, ins, 2);
                 let mode = self.ai(t, ins, 3);
-                // SPEC-GAP: a–d are evaluated once here (fullrun stage 1 familiars match H(t) with the op-36-time values exactly).
+                // SPEC-GAP: a–d evaluated once here; 07 §5.6 re-reads them at every evaluation (IMPL22 question).
                 let abcd: [f32; 4] = std::array::from_fn(|k| self.af(t, ins, 4 + k));
                 let slots = &mut t.ctx.interp;
                 let s = slots
@@ -1292,6 +1352,7 @@ impl Exec<'_> {
                 let a = self.af(t, ins, 0);
                 self.set_f(t, ins, 0, anmvm::wrap_add(a, 0.0));
             }
+            // 38 wraps the angle and writes x first; 166 does not wrap and writes y first.
             38 | 166 => {
                 let (ang, r) = (self.af(t, ins, 2), self.af(t, ins, 3));
                 let ang = if op == 38 {
@@ -1307,6 +1368,7 @@ impl Exec<'_> {
                     self.set_f(t, ins, 0, ang.cos() * r);
                 }
             }
+            // Even ops int, odd ops float compares (NaN taken as Greater).
             40..=51 => {
                 use std::cmp::Ordering::*;
                 let ord = if op % 2 == 0 {
@@ -1335,6 +1397,7 @@ impl Exec<'_> {
                     return Flow::Jumped;
                 }
             }
+            // 0x421CB0 (07 §5.4): restore the whole context from stack[depth].
             53 => {
                 t.depth -= 1;
                 if t.depth < 0 {
@@ -1380,6 +1443,7 @@ impl Exec<'_> {
                 self.e.pos = [self.af(t, ins, 0), self.af(t, ins, 1), 0.0];
                 self.e.clamp_pos();
             }
+            // delta = target − final pos, start = pos (07 §7).
             64 => {
                 let (dur, ease) = (self.ai(t, ins, 0), self.ai(t, ins, 1));
                 let (x, y) = (self.af(t, ins, 2), self.af(t, ins, 3));
@@ -1408,6 +1472,7 @@ impl Exec<'_> {
                 let a = self.random_dir(op == 178);
                 self.move_dir(dur, ease, a, s, false);
             }
+            // Movement mode unchanged.
             68 => {
                 let (off, s) = (self.af(t, ins, 0), self.af(t, ins, 1));
                 self.e.angle = anmvm::wrap_add(self.player_angle(self.e.pos) + off, 0.0);
@@ -1424,7 +1489,7 @@ impl Exec<'_> {
                     let a = self.player_angle(self.e.pos) + off;
                     self.mode1(a, s, dur);
                 } else {
-                    // Quirk: with a duration the movement is not aimed (same as op 66).
+                    // Quirk kept (07 §7 op 69): with a duration the movement is not aimed (same as op 66).
                     self.move_dir(dur, ease, off, s, true);
                 }
             }
@@ -1519,6 +1584,7 @@ impl Exec<'_> {
                 let b = self.ai(t, ins, 0);
                 self.e.set_flag_b(1 << 1, b & 1 != 0);
             }
+            // Variable `var` evaluated on boss[slot]'s main context.
             86 | 87 => {
                 let (var, slot) = (self.ai(t, ins, 1), self.ai(t, ins, 2));
                 if let Some(b) = self.m.boss(slot) {
@@ -1541,6 +1607,7 @@ impl Exec<'_> {
                     }
                 }
             }
+            // Call in boss[slot]'s main context the same way (07 §5.4).
             88 => {
                 let (slot, sub) = (self.ai(t, ins, 0), self.ai(t, ins, 1));
                 if let Some(b) = self.m.boss(slot)
@@ -1569,10 +1636,12 @@ impl Exec<'_> {
                 }
             }
             90..=94 => self.spawn_child(t, ins),
+            // SPEC-GAP: the calling enemy is excluded; 07 §7 op 95 does not say so.
             95 => {
                 self.m.kill_all(self.anm, Some(self.idx));
             }
             96..=104 => self.bullet_op(t, ins),
+            // interval = n + lerp_i(n/5, −n/5) (07 §7, §9.2); 106 starts the timer at Rng_Range(interval).
             105 | 106 => {
                 let n = self.ai(t, ins, 0);
                 let iv = n + lerp_i(n / 5, -n / 5, crate::gamemgr::rank());
@@ -1584,6 +1653,7 @@ impl Exec<'_> {
             108 => self.e.flags &= !A_STORE_FIRE,
             109 => self.fire_desc(),
             110 => self.e.shot_offset = [self.af(t, ins, 0), self.af(t, ins, 1), 0.0],
+            // Ex slot k = {e, f, c, d, a, b}; ints stored raw, every argument variable-capable (07 §7).
             111 => {
                 let k = self.ai(t, ins, 0);
                 let cmd = ExCmd {
@@ -1600,6 +1670,7 @@ impl Exec<'_> {
             }
             112 => self.cancel_all(1),
             162 => self.cancel_all(4),
+            // id < 0: descriptor flag 0x200 off; desc+0x204 = x either way.
             113 => {
                 let (id, x) = (self.ai(t, ins, 0), self.ai(t, ins, 1));
                 if id < 0 {
@@ -1628,6 +1699,7 @@ impl Exec<'_> {
                 let p = add3(self.e.final_pos, off);
                 self.with_laser(k, |l, _| l.origin = p);
             }
+            // Result in var 10038.
             120 => {
                 let k = self.ai(t, ins, 0);
                 let mut alive = false;
@@ -1644,6 +1716,7 @@ impl Exec<'_> {
                 });
             }
             122 => self.spell_card(ins),
+            // SPEC-GAP: the calling enemy is excluded from KillAll (07 §11.1 does not say so).
             123 => self.m.finish_spell(self.anm, Some(self.idx)),
             124 => crate::sound::play_at(self.ai(t, ins, 0), self.e.final_pos[0]),
             125 => {
@@ -1656,6 +1729,7 @@ impl Exec<'_> {
                     *s = sub;
                 }
             }
+            // Boss table 0xF54CC0 (07 §7 op 127): no-fire radius 0; slot 0 turns on the HUD boss display.
             127 => {
                 let slot = self.ai(t, ins, 0);
                 if slot < 0 {
@@ -1671,6 +1745,7 @@ impl Exec<'_> {
                     }
                 }
             }
+            // Effect 13 (0xFF6060D0) kept in e+0x5360[] and updated every frame (follow, grow to d, spin).
             128 => {
                 self.e.effects += 1;
                 let axis = [self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3)];
@@ -1710,11 +1785,13 @@ impl Exec<'_> {
                     0xFFFFFFFF,
                 );
             }
+            // Not implemented: the spell-practice guard (0x164D0B4 bits 7–8) of ops 129/130/133/134.
             129 => {
                 let m = self.raw(ins, 0) & 0xFF;
                 self.e.flags = (self.e.flags & !(7 << A_DEATH_SHIFT)) | ((m & 7) << A_DEATH_SHIFT);
             }
             130 => self.e.death_sub = self.raw(ins, 0) as i16 as i32,
+            // life = max = HUD life; boss slot 0 resets the 8 HUD markers.
             131 => {
                 let n = self.ai(t, ins, 0);
                 (self.e.life, self.e.max_life, self.e.hud_life) = (n, n, n);
@@ -1733,11 +1810,13 @@ impl Exec<'_> {
                     self.e.threshold_subs[k] = sub;
                 }
             }
+            // Timer 0 here, so op 134 on frame F times out on frame F + timeout (07 §10.2).
             134 => {
                 self.e.timeout = self.ai(t, ins, 0);
                 self.e.timeout_sub = self.ai(t, ins, 1);
                 self.e.boss_timer.set(0);
             }
+            // Free thread slot k; sub ≥ 0 creates it with the current context's 30 var dwords, clock 0 (07 §5.4).
             135 => {
                 let (k, sub) = (self.ai(t, ins, 0), self.ai(t, ins, 1));
                 if let Some(k) = usize::try_from(k).ok().filter(|&k| k < 4) {
@@ -1788,16 +1867,19 @@ impl Exec<'_> {
                 self.e.extra_power = self.ai(t, ins, 1);
             }
             145 => self.e.set_flag(1 << 25, self.raw(ins, 0) & 0xFF != 0),
+            // Context clock += n.
             146 => {
                 let n = self.ai(t, ins, 0);
                 t.ctx.clock.cur += n;
             }
+            // Stage section request (06 §4.1).
             147 => {
                 let n = self.ai(t, ins, 0);
                 if let Some(s) = &self.m.stage {
                     s.borrow_mut().section_request = n;
                 }
             }
+            // HUD 0x423130(n); the 0x164D30C += 1800 happens in the HUD request handler (07 §7 op 148).
             148 => {
                 self.m.g.hud_bars = self.ai(t, ins, 0);
                 self.m.g.hud_requests.push(148);
@@ -1863,11 +1945,13 @@ impl Exec<'_> {
                     .cancel_radius(self.anm, &p, self.e.final_pos, r);
             }
             163 => self.m.g.g_f54cec = self.ai(t, ins, 0),
+            // Not implemented: op 164 spell flag bit 6 / 0x41F040 (0 uses in data).
             164 => self.m.g.misc_calls += 1,
             165 => {
                 self.e.vm.rotation[2] = self.af(t, ins, 0);
                 self.e.vm.flags |= anmvm::F_ROT_DIRTY;
             }
+            // Leftward / rightward cone from one Rng_Float (07 §7 op 169).
             169 => {
                 let (x, px) = (self.e.pos[0], self.m.g.player[0]);
                 let r = self.anm.rng.next_f32() * (PI / 2.0);
@@ -1878,6 +1962,7 @@ impl Exec<'_> {
                 };
                 self.set_f(t, ins, 0, a);
             }
+            // Laser +0x599 byte / +0x560 max length / +0x558, +0x55C tail and head.
             170..=172 => {
                 let k = self.ai(t, ins, 0);
                 let (a, b) = (
@@ -1896,6 +1981,7 @@ impl Exec<'_> {
                 self.e.set_flag(1 << 30, v);
             }
             175 => self.m.g.spawn_disabled = self.ai(t, ins, 0),
+            // GameFlags 0x164D0B4: clear 7, 8, 13, set 7; bit 13 by stage / practice card (07 §7 op 176).
             176 => {
                 use crate::player::{GF_13, GF_LAST_CAPTURED, GF_LAST_SPELL, GF_SPELL_PRACTICE};
                 let mut p = self.m.player.borrow_mut();
@@ -1907,7 +1993,7 @@ impl Exec<'_> {
                 } else {
                     (0x8F..=0x92).contains(&card) || (0xAB..=0xBE).contains(&card)
                 };
-                // SPEC-GAP: bit 13's large player-damage box (EnemyMgr_Calc, boss present) has no size; not modelled.
+                // Not implemented: bit 13's whole-playfield Player_DamageAgainst (07 §7 op 176 gives the box).
                 if bit13 {
                     p.gflags |= GF_13;
                 }
@@ -1915,7 +2001,9 @@ impl Exec<'_> {
             }
             177 => self.e.hud_life = self.ai(t, ins, 0),
             179 | 180 => self.m.g.hud_requests.push(op as u16),
+            // Not implemented: op 184 Spell_SetBonusFrozen (07 §11.1).
             184 => self.m.g.misc_calls += 1,
+            // SPEC-GAP: sfx 0x2D also when the counter is already 12; 07 §7 plays it only below 12 (IMPL24 Q8).
             181 => {
                 crate::sound::play(crate::sound::OK_CLOCK);
                 let mut p = self.m.player.borrow_mut();

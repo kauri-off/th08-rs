@@ -1,24 +1,36 @@
+//! ECL file format: header, subs, timelines, instruction signatures (07 §2, §2.1, §2.2, §7).
+
 use anyhow::{Result, bail, ensure};
 
+// Header dword 0x00 (07 §2): checked, load fails otherwise.
 pub const MAGIC: u32 = 0x800;
+// Sub instruction header (07 §2.1): time, opcode, size, unused byte, rank mask, var mask.
 pub const SUB_HEADER: usize = 12;
 
 pub struct Ecl {
     pub data: Vec<u8>,
+    // Sub offsets from file start (07 §2, table at 0x48).
     pub subs: Vec<usize>,
+    // The `ntl` timelines that are run (07 §2: the extra last entry is never run).
     pub timelines: Vec<usize>,
 }
 
+// Sub instruction (07 §2.1).
 #[derive(Clone, Copy, Debug)]
 pub struct Ins {
     pub off: usize,
+    // +0: runs when the context clock == time exactly (07 §5.3).
     pub time: i32,
+    // +4: −1 = end-of-sub marker.
     pub op: i16,
     pub size: usize,
+    // +9 rank mask (07 §2.3).
     pub rank: u8,
+    // +10: bit k = argument k is a variable id (07 §6); bullet/laser blocks use their own bits (07 §9).
     pub mask: u16,
 }
 
+// Timeline instruction (07 §2.2): +0 time (< 0 end), +4 op, +6 u8 size, +7 u8 rank mask.
 #[derive(Clone, Copy, Debug)]
 pub struct TlIns {
     pub off: usize,
@@ -36,6 +48,7 @@ fn i16_at(d: &[u8], o: usize) -> Option<i16> {
     Some(i16::from_le_bytes(d.get(o..o + 2)?.try_into().ok()?))
 }
 
+// Loader 0x418330 (07 §2): offsets stay file-relative instead of being relocated to pointers.
 pub fn parse(data: Vec<u8>) -> Result<Ecl> {
     ensure!(
         data.len() >= 0x48 && u32_at(&data, 0) == Some(MAGIC),
@@ -82,7 +95,7 @@ impl Ecl {
         u32_at(&self.data, ins.off + SUB_HEADER + 4 * k).unwrap_or(0)
     }
 
-    // Literal destinations write into the loaded file (shared by every enemy running the instruction).
+    // 07 §6: literal destinations write into the loaded file (shared by every enemy running the instruction).
     pub fn set_arg(&mut self, ins: &Ins, k: usize, v: u32) {
         let o = ins.off + SUB_HEADER + 4 * k;
         if o + 4 <= ins.off + ins.size
@@ -119,7 +132,7 @@ impl Ecl {
 }
 
 // Argument letters (07 §7): i int, f float, V/W int/float destination, T time, O offset, S sub, r raw;
-// B bullet block (8 dwords), L laser block (13), C spell block (58).
+// B bullet block (8 dwords, 07 §9.1), L laser block (13, §9.4), C spell block (58, §11).
 pub fn signature(op: i16) -> Option<&'static str> {
     Some(match op {
         0 | 1 | 53 | 62 | 76 | 84 | 85 | 95 | 107 | 108 | 109 | 112 | 123 | 153 | 154 | 162
@@ -208,6 +221,7 @@ pub fn ins_size(op: i16) -> Option<usize> {
     Some(SUB_HEADER + 4 * n)
 }
 
+// Timeline instruction sizes by op (07 §3 table args).
 pub fn tl_size(op: i16) -> Option<usize> {
     Some(
         8 + 4 * match op {
