@@ -1197,15 +1197,12 @@ impl EnemyManager {
 
     // EnemyMgr_KillAll 0x42EFB0 (07 §7 op 95): non-boss enemies without flags B bit 6 get life 0 and jump to
     // their death sub (consumed); flag A bit 7 also drops item 6 and a popup 2000 + 30·n, capped at 8000.
-    pub(crate) fn kill_all(&mut self, anm: &mut AnmManager, except: Option<usize>) -> i32 {
+    // No self test: an ECL caller must be back in its slot (`Exec::with_self_in_slot`) to be included.
+    pub(crate) fn kill_all(&mut self, anm: &mut AnmManager) -> i32 {
         let (mut n, mut sum) = (0, 0);
         for j in 0..self.enemies.len() {
             let e = &self.enemies[j];
-            if Some(j) == except
-                || !e.alive()
-                || e.flags & A_BOSS != 0
-                || e.flags_b & B_CANNOT_DIE != 0
-            {
+            if !e.alive() || e.flags & A_BOSS != 0 || e.flags_b & B_CANNOT_DIE != 0 {
                 continue;
             }
             if e.flags & A_CANCEL_BONUS != 0 {
@@ -1232,14 +1229,14 @@ impl EnemyManager {
     }
 
     // CancelBonus(8000, lasers) + KillAll(8000): score and Hud_ShowBonus (08 §7, 07 §11.1).
-    fn cancel_and_kill_bonus(&mut self, anm: &mut AnmManager, except: Option<usize>) {
+    fn cancel_and_kill_bonus(&mut self, anm: &mut AnmManager) {
         let sum = {
             let mut p = self.player.borrow_mut();
             self.bullets
                 .borrow_mut()
                 .cancel_bonus(anm, &mut p, 8000, true)
         };
-        let kills = self.kill_all(anm, except);
+        let kills = self.kill_all(anm);
         let mut p = self.player.borrow_mut();
         p.stats.add_score(sum);
         p.stats
@@ -1481,12 +1478,12 @@ impl EnemyManager {
     // Msg_Start side effects (10 §4.6): cancel bullets, KillAll, attract items.
     pub fn msg_side_effects(&mut self, anm: &mut AnmManager) {
         self.cancel_all(anm, 1);
-        self.kill_all(anm, None);
+        self.kill_all(anm);
         self.bullets.borrow_mut().items.attract_all();
     }
 
     // Spell_End 0x4161B0 (07 §11.1); the payout is queued and made 130 frames later in `step`.
-    pub fn finish_spell(&mut self, anm: &mut AnmManager, except: Option<usize>) {
+    pub fn finish_spell(&mut self, anm: &mut AnmManager) {
         let Some(s) = self.g.spell.take() else { return };
         self.g.bonus_frozen = false;
         let (total, remaining) = (s.duration, (s.duration - s.frames).max(0));
@@ -1495,7 +1492,7 @@ impl EnemyManager {
             st.borrow_mut().end_spell_bg();
         }
         if !s.timed_out {
-            self.cancel_and_kill_bonus(anm, except);
+            self.cancel_and_kill_bonus(anm);
         }
         let mut p = self.player.borrow_mut();
         if p.state == 0 {
@@ -1793,17 +1790,18 @@ impl EnemyManager {
         e.reset_for_jump();
         e.flags_b &= !B_WARN_MASK;
         self.kill_chain(idx, if reward { Some(&mut *anm) } else { None });
-        self.kill_non_bosses(idx);
+        self.kill_non_bosses();
         if self.enemies[idx].flags & A_BOSS != 0 {
             self.protect_player(70);
         }
     }
 
-    // Every alive non-boss enemy: life 0 and a jump to its death sub (07 §10.2). SPEC-GAP: the switching enemy itself is skipped.
-    fn kill_non_bosses(&mut self, except: usize) {
+    // Every alive non-boss enemy: life 0 and a jump to its death sub (07 §10.2). No self test: a non-boss
+    // switching enemy also dies, its new phase sub replaced by its death sub.
+    fn kill_non_bosses(&mut self) {
         for j in 0..self.enemies.len() {
             let e = &self.enemies[j];
-            if j == except || !e.alive() || e.flags & A_BOSS != 0 {
+            if !e.alive() || e.flags & A_BOSS != 0 {
                 continue;
             }
             self.enemies[j].life = 0;
@@ -2039,7 +2037,7 @@ impl EnemyManager {
         if mode <= 2 {
             self.drop_items(idx, anm, None);
             if boss && self.g.spell.is_none() {
-                self.cancel_and_kill_bonus(anm, Some(idx));
+                self.cancel_and_kill_bonus(anm);
             }
             self.enemies[idx].life = 0;
         }

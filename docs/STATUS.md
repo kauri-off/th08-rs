@@ -367,6 +367,13 @@
   (15 §2.3); name-entry Up, Down, Left, Right are four independent tests per frame in that order (`move_char_cursor`,
   16 §2.2); the HSCR / replay date is local time (`chrono::Local` native, JS `Date` on wasm; 16 §2.2). Unit tests for
   ties and Up+Down. Traces not run (cloud). SPEC-GAP 168 → 167. Questions: `docs/briefs/IMPL47_QUESTIONS.md`.
+- impl50 (audit A.12, A.15, A.16, cloud, 2026-10-20): `EnemyManager::kill_all` (op 95, op 123 `Spell_End`, death
+  modes 0–2) and `kill_non_bosses` (threshold / timeout switch) have no self test (07 §7 op 95, §10.2): the ECL
+  caller is put back in its slot with its running main context (`Exec::with_self_in_slot`), so a non-boss caller
+  without flags B bit 6 gets life 0 and its death sub in slot order (main context: the death sub runs at once; thread:
+  the thread is freed). Native 31 drops item type 3 while the player is bombing, else 5 (07 §12); op 181 does nothing
+  at all at clock 12, sfx 0x2D only below (07 §7). Unit tests for all three. Traces not run (cloud). SPEC-GAP
+  134 → 130. Questions: `docs/briefs/IMPL50_QUESTIONS.md`.
 - impl54 (audit A.22, A.23, A.26, cloud, 2026-10-20): damage areas test enemies per 09 §4.5 (`Area::hits_enemy`:
   circle = point test on the enemy centre `≤ r²`, rectangles = inclusive box overlap, unrotated box in the area frame);
   the bomb active flag +0xE2A7C is no longer cleared at the bomb end but by the next failed normal start test (09 §1.1);

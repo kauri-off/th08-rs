@@ -839,6 +839,40 @@ impl Exec<'_> {
         }
     }
 
+    // Runs a manager-wide op (KillAll, Spell_End) with the running enemy and its running main context back in
+    // its slot, so the loop sees the caller in slot order (07 §7 op 95, §10.2: no self test). If the caller's
+    // death sub was taken: from the main context it runs now; from a thread, that thread is freed (as op 135).
+    // SPEC-GAP: whether the caller's ip still advances past op 95/123 after its own death-sub jump.
+    fn with_self_in_slot(
+        &mut self,
+        t: &mut Thread,
+        f: impl FnOnce(&mut EnemyManager, &mut AnmManager),
+    ) -> Flow {
+        let in_main = self.e.running_thread.is_none();
+        if in_main {
+            std::mem::swap(t, &mut self.e.main);
+        }
+        let had_death_sub = self.e.death_sub >= 0;
+        std::mem::swap(self.e, &mut *self.m.enemies[self.idx]);
+        f(self.m, self.anm);
+        std::mem::swap(self.e, &mut *self.m.enemies[self.idx]);
+        // `put` takes the links from the slot: keep any change made while the caller was in it.
+        let (e, p) = (&*self.e, &mut self.m.enemies[self.idx]);
+        (p.chain_prev, p.chain_next, p.root) = (e.chain_prev, e.chain_next, e.root);
+        if in_main {
+            std::mem::swap(t, &mut self.e.main);
+        }
+        if !(had_death_sub && self.e.death_sub < 0) {
+            return Flow::Next;
+        }
+        if in_main {
+            Flow::Jumped
+        } else {
+            self.e.kill_running_thread = true;
+            Flow::Next
+        }
+    }
+
     fn item(&mut self, pos: [f32; 3], kind: i32) {
         let p = self.m.player.borrow();
         self.m
@@ -1087,8 +1121,11 @@ impl Exec<'_> {
                 }
             }
             30 => set_load_frames(arg),
-            // SPEC-GAP: 07 §12 gives type 3 while 0x17D6ED4 ≠ 0; always type 5 here (IMPL24 Q7).
-            31 => self.item(self.e.pos, 5),
+            // Type 3 (bomb) while the player is bombing (player +0xFDC = 0x17D6ED4), else 5 (1up) (07 §12).
+            31 => {
+                let kind = if self.m.player.borrow().bombing { 3 } else { 5 };
+                self.item(self.e.pos, kind);
+            }
             22 => {
                 // SPEC-GAP: native 22's face argument is not given; no boss cut-in is started.
                 let name = encoding_rs::SHIFT_JIS
@@ -1660,9 +1697,10 @@ impl Exec<'_> {
                 }
             }
             90..=94 => self.spawn_child(t, ins),
-            // SPEC-GAP: the calling enemy is excluded; 07 §7 op 95 does not say so.
             95 => {
-                self.m.kill_all(self.anm, Some(self.idx));
+                return self.with_self_in_slot(t, |m, anm| {
+                    m.kill_all(anm);
+                });
             }
             96..=104 => self.bullet_op(t, ins),
             // interval = n + lerp_i(n/5, −n/5) (07 §7, §9.2); 106 starts the timer at Rng_Range(interval).
@@ -1740,8 +1778,7 @@ impl Exec<'_> {
                 });
             }
             122 => self.spell_card(ins),
-            // SPEC-GAP: the calling enemy is excluded from KillAll (07 §11.1 does not say so).
-            123 => self.m.finish_spell(self.anm, Some(self.idx)),
+            123 => return self.with_self_in_slot(t, |m, anm| m.finish_spell(anm)),
             124 => crate::sound::play_at(self.ai(t, ins, 0), self.e.final_pos[0]),
             125 => {
                 self.e.pending_interrupt = self.ai(t, ins, 0);
@@ -2038,11 +2075,11 @@ impl Exec<'_> {
             179 | 180 => self.m.g.hud_requests.push(op as u16),
             // Spell_SetBonusFrozen 0x41F0E0: spell flag bit 11 := n & 1 (07 §11.1).
             184 => self.m.g.bonus_frozen = self.ai(t, ins, 0) & 1 != 0,
-            // SPEC-GAP: sfx 0x2D also when the counter is already 12; 07 §7 plays it only below 12 (IMPL24 Q8).
+            // Only below 12: at 12 nothing at all, not even the sfx 0x2D (07 §7).
             181 => {
-                crate::sound::play(crate::sound::OK_CLOCK);
                 let mut p = self.m.player.borrow_mut();
                 if p.stats.clock < 12 {
+                    crate::sound::play(crate::sound::OK_CLOCK);
                     p.stats.clock += 1;
                     drop(p);
                     self.m.g.hud_requests.push(181);
@@ -2059,5 +2096,137 @@ impl Exec<'_> {
             _ => {}
         }
         Flow::Next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bullet::BulletManager;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // Sub instruction (07 §2.1): time, op, size, rank mask 0xFF, then i32 args.
+    fn ins(time: i32, op: i16, args: &[i32]) -> Vec<u8> {
+        let mut v = time.to_le_bytes().to_vec();
+        v.extend(op.to_le_bytes());
+        v.extend(((12 + 4 * args.len()) as i16).to_le_bytes());
+        v.extend([0, 0xFF, 0, 0]);
+        for a in args {
+            v.extend(a.to_le_bytes());
+        }
+        v
+    }
+
+    // Subs placed after a zeroed 0x48-byte header; each ends with an op −1 marker.
+    fn manager(subs: &[&[Vec<u8>]]) -> (AnmManager, EnemyManager) {
+        let mut data = vec![0u8; 0x48];
+        let mut offs = Vec::new();
+        for sub in subs {
+            offs.push(data.len());
+            for i in sub.iter() {
+                data.extend(i);
+            }
+            data.extend(ins(0, -1, &[]));
+        }
+        let ecl = crate::ecl::Ecl {
+            data,
+            subs: offs,
+            timelines: Vec::new(),
+        };
+        let mut anm = AnmManager::default();
+        let player = crate::player::Player::new_ref();
+        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player)));
+        (anm, EnemyManager::new(ecl, bullets, 1))
+    }
+
+    fn spawn(m: &mut EnemyManager, idx: usize, sub: i32, death_sub: i32, flags_b: u32) {
+        let e = &mut m.enemies[idx];
+        e.flags = A_ALIVE;
+        e.flags_b = flags_b;
+        e.life = 100;
+        e.death_sub = death_sub;
+        e.main.ctx.enter(&m.ecl, sub);
+    }
+
+    // 07 §7 op 95: no self test, the calling non-boss dies and its main context jumps to its death sub.
+    #[test]
+    fn kill_all_includes_caller() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 95, &[])], &[], &[ins(5, 0, &[])]]);
+        spawn(&mut m, 0, 2, 1, B_CANNOT_DIE);
+        spawn(&mut m, 1, 0, 1, 0);
+        spawn(&mut m, 2, 2, 1, 0);
+        assert_eq!(ecl_run(&mut m, &mut anm, 1), 0);
+        let death = m.ecl.subs[1];
+        for k in [1, 2] {
+            let e = &m.enemies[k];
+            assert_eq!(
+                (e.life, e.death_sub, e.main.ctx.ip),
+                (0, -1, death),
+                "slot {k}"
+            );
+        }
+        // Flags B bit 6 spares an enemy.
+        assert_eq!((m.enemies[0].life, m.enemies[0].death_sub), (100, 1));
+    }
+
+    // Op 95 in a thread: the main context takes the death sub and the threads are freed (07 §10.3 reset).
+    #[test]
+    fn kill_all_from_thread() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 135, &[0, 2])], &[], &[ins(0, 95, &[])]]);
+        spawn(&mut m, 0, 0, 1, 0);
+        ecl_run(&mut m, &mut anm, 0);
+        let e = &m.enemies[0];
+        assert_eq!((e.life, e.death_sub, e.main.ctx.ip), (0, -1, m.ecl.subs[1]));
+        assert!(e.threads.iter().all(Option::is_none));
+    }
+
+    // The caller is spared like any other enemy by flags B bit 6.
+    #[test]
+    fn kill_all_spares_caller_with_b6() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 95, &[])], &[]]);
+        spawn(&mut m, 3, 0, 1, B_CANNOT_DIE);
+        ecl_run(&mut m, &mut anm, 3);
+        let e = &m.enemies[3];
+        assert_eq!((e.life, e.death_sub), (100, 1));
+        assert_ne!(e.main.ctx.ip, m.ecl.subs[1]);
+    }
+
+    // 07 §12 native 31: item type 3 while the player is bombing, else 5.
+    #[test]
+    fn native31_item_type() {
+        for (bombing, kind) in [(false, 5), (true, 3)] {
+            let (mut anm, mut m) = manager(&[&[ins(0, 136, &[31, 0])]]);
+            m.player.borrow_mut().bombing = bombing;
+            spawn(&mut m, 0, 0, -1, 0);
+            ecl_run(&mut m, &mut anm, 0);
+            let b = m.bullets.borrow();
+            let kinds: Vec<u8> = b
+                .items
+                .items
+                .iter()
+                .filter(|i| i.alive)
+                .map(|i| i.kind)
+                .collect();
+            assert_eq!(kinds, [kind], "bombing {bombing}");
+        }
+    }
+
+    // 07 §7 op 181: below 12 sfx 0x2D and clock + 1; at 12 nothing, no sfx.
+    #[test]
+    fn op181_clock() {
+        for (clock, after, sfx) in [(11, 12, true), (12, 12, false)] {
+            let (mut anm, mut m) = manager(&[&[ins(0, 181, &[])]]);
+            m.player.borrow_mut().stats.clock = clock;
+            spawn(&mut m, 0, 0, -1, 0);
+            crate::sound::take();
+            ecl_run(&mut m, &mut anm, 0);
+            assert_eq!(m.player.borrow().stats.clock, after);
+            let played = crate::sound::take()
+                .iter()
+                .any(|&(id, _)| id == crate::sound::OK_CLOCK);
+            assert_eq!(played, sfx, "clock {clock}");
+            assert_eq!(m.g.hud_requests.contains(&181), sfx);
+        }
     }
 }
