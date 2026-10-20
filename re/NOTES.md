@@ -553,3 +553,15 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - fullrun_noclip replayed WITH drawlog: 0 diffs; re/work/runs/q26/fullrun_dl (ending in draw_00067–69; replay ends
   inside the staff roll, before @z). Ribbon residue differs per session (fullrun 0x991C10/0x66B705). phantasm.jpg unused.
 - CODE BUGs: ScoreList_Insert tie order; ending init 2 white clear presents; +0x2A94/colour init; fade n=0.
+
+# RE-Q27 (2026-10-20) — next sync divergences, IMPL29/30 — DONE (specs/changelog/answers_re_q27.md)
+- Runs re/work/runs/q27/ (orig scans, port dumps, scratch port portfix/ + portfix.diff to confirm root causes; src/ untouched).
+- golden 8105 / fullrun 7553: start ring follows boss pos+offset /16 per frame during the card (Spell_Calc active branch);
+  port leaves it at spawn → capture-ring orbs offset. Next: paid bonus = per-frame decay trunc(D/60), round to 10, AddBonus
+  D += n/120 + cap. With both: golden 8298, fullrun 7746.
+- demo0 4451: +0xE2A90 reset to 6 only by HitTest/HitTestNoBomb/GrazeTest, not InBombArea (port resets) → 4629.
+- demo1 3870 / demo2 3082: AddTime +0x44 += n also for negative n (parity) → 3880 / 4036.
+- demo3 1606: Remilia option orbit when timer > 12 (spec said ≥) → 6665. selftest1 1423: GM flag bit 2 at step 7 → 1540.
+- IMPL30 Q1: ASCII +0x8284 = menu frame number (ASCII mgr registered by Supervisor_Init on boot loader thread; 13 boot calcs
+  not counted). Q2 Enemy_Free bit1 && slot<4 (port right); Q3 mode-0 boss marker frozen visible (CODE BUG); Q4 raw dmg>0.
+- Probe: iscan A/P lines, oscan, TH08_ACTR (TOOLING §14). Old build d3d8_v9_pre_q27.dll.

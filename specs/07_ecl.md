@@ -625,7 +625,9 @@ left→idle or right→idle script.
      forward damage to their root (0x42B370: root life −= d/2, or /9 / 0 under the root's timer, never below
      the root's highest active threshold).
 7. Hit flash (counter byte e+0x3314, changelog/answers_impl18.md §Q3, VERIFIED code): if the counter is 0 and the enemy took
-   damage this frame (d > 0 at step 6) → colour2 = (R 0xFF, G 0x60, B 0x80, alpha = current), VM colour2 flag on,
+   damage this frame (d > 0 at step 6 — the **raw** `Player_DamageAgainst` result, before the spell-card, damage-timer and
+   flag-A-bit-3 reductions; the flag is set even when the reduced damage is 0, so the flash and sfx 0x14/0x25 also fire on
+   an invulnerable or damage-reduced enemy; VERIFIED RE-Q27, flag set at 0x42D367 inside `if (d > 0)`, tested at 0x42DB62) → colour2 = (R 0xFF, G 0x60, B 0x80, alpha = current), VM colour2 flag on,
    sfx 0x14 (0x25 when the low-life warning level ≥ 2), counter := 1; else if the counter ≠ 0 → counter −= 1 and
    flag off (no sfx even if hit); else flag off. Continuous hits therefore flash every 2nd frame; in youkai mode the enemy is drawn with colour2
    (0x20, 0x20, 0xC0, alpha/2) permanently. Then boss HUD life bar, effect followers, timer 0x2E14 tick
@@ -841,8 +843,14 @@ reset only).
 | +0x74 | 64 B | comment line 1, XOR 0xDD |
 | +0xB4 | 64 B | comment line 2, XOR 0xEE |
 
-Effect: spell-card state on; bonus decays every second by (bonus − bonus/7) / (timeout/60) (timeout from op 134,
-which precedes it in all data); flag A bit 27 forces bonus 99 999 990; bullets cancelled; stage spell
+Effect: spell-card state on; bonus decays **every frame** (SPEC FIXED RE-Q27; it was "every second"): per-second
+rate R = (bonus − bonus/7) / (timeout/60) (unsigned integer; timeout from op 134, which precedes it in all data) is
+stored, and each `Spell_Calc` frame while the card is active and capture is still possible subtracts
+trunc((R / 60) · game speed) (R / 60 an unsigned integer division) and then rounds the bonus down to a multiple of
+10 (§11.1 step 1.3; golden: the paid bonus at row 8177 matches only with this rule). `Spell_AddBonus` 0x416B10
+(+8000 per collected time orb, 08 §8.5; ignored while spell bit 11): bonus += n; if the result is still below the
+max +0x2638 (unsigned compare) → R += n / 120 (+66 per orb, so the faster decay eats part of it back), else bonus :=
+max; flag A bit 27 forces bonus 99 999 990; bullets cancelled; stage spell
 background started; rank ranges reset; score.dat history updated (later phases). The disassembler prints the
 decoded strings.
 
@@ -855,7 +863,43 @@ clears bits 0 and 4 and calls `Gui_ShowBossSpellName(face −1, fixed exe string
 「リザレクション」 in ecldata8/8sp), bit 11 bonus frozen (op 184 `Spell_SetBonusFrozen` 0x41F0E0 = n & 1; no
 decay in `Spell_Calc` 0x416B90 and time-orb +8000 in `Spell_AddBonus` 0x416B10 ignored; all 82 uses are
 `spell_ex 1` at the start of boss death subs). Both cleared by `Spell_Start`; bit 11 also by `Spell_End`.
-Bit 6 is set by op 164 (`Spell_SetFlag6` 0x41F0B0). Bonus +0xFC.
+Bit 6 is set by op 164 (`Spell_SetFlag6` 0x41F0B0): while set, the start ring stops following the boss (below). Bonus +0xFC.
+
+**Start ring at `Spell_Start`** (VERIFIED 0x4152A0, RE-Q27): fixed effect slot 1, type 39 (52 when GameFlags bits 7–8 ≠ 0)
+at the boss pos e+0x2D34 (ring init: centre +0x2E0 := that pos), pointer in g_Gui +0xF4. Then: VM pos slot 0
+(elapsed := 0, duration := 100, mode 6) from (8, 64) to (256, 0), VM pos.y := 64; effect pos := boss pos; segments
++0x324 := 64, rotation +0x318 := 0, radius +0x314 := 256, width +0x320 := 15, wave count +0x334 := 6. Spell flags:
+bit 5 := GameFlags bit 7, bit 6 := 0, bit 11 := 0. Also g_Gui +0x2620 := 0x80808080 (bonus-line tint, 12 §5.8), timers
++0x108 (remaining) and +0x114 (duration) := e+0x3378, bonus +0xFC := card bonus, max +0x2638 := bonus (99 999 990 with
+flag A bit 27), decay per second +0x100 := (bonus − bonus/7) / (e+0x3378 / 60) (unsigned integer).
+
+**`Spell_Calc` 0x416B90 per frame** (Gui calc prio 12; VERIFIED RE-Q27). Nothing at all while GameFlags bit 10 or the
+freeze byte 0x160F534 is set. Otherwise, in this order:
+1. Card active (bit 0):
+   1. if the boss (g_Gui +4) is not alive (flags A bit 0) or its slot index e+0x2E0C ≠ g_Gui +0xC: bit 0 := 0 and
+      `Spell_HideName` (the card ends silently: no `Spell_End`, no capture);
+   2. bonus-line tint alpha (byte +0x2623): if player x < 64 or player y ≥ 64: += 4 while < 0x80; else −= 4 while
+      > 0x20 (fades the line when the player is in the top band x ≥ 64, y < 64);
+   3. if bit 2 (capture possible) is clear: if the ring's sprite +0x214 is 0xDD → `AnmVm_SetSprite`(ring, 0xDE),
+      scale_end.x and scale.x := 4 (the "failed" ring look). Else, unless bit 11 or boss flag A bit 27: bonus +0xFC
+      −= trunc((+0x100 / 60 unsigned integer) · game speed), then +0xFC −= +0xFC % 10 (unsigned);
+   4. if ring +0x334 ≠ 0: +0x32C := VM pos.y (+0x20C), and if that is 0 → +0x334 := 0 (the wavy start ring:
+      amplitude 64 → 0 over the first 100 frames, then a plain ring, 13 §2.5);
+   5. if the ring VM's pos-slot duration (+0xA4 current) is 0 (the 100-frame grow-in has ended, 05 §6): restart slot
+      0: elapsed := 0, duration := e+0x3378 − 100, mode 0 (linear), from (256, 0) to (8, 0) — the ring shrinks over
+      the rest of the card time;
+   6. unless bit 6: centre +0x2E0 += (boss pos e+0x2D34 + offset e+0x2D40 − centre) / 16, then centre z := 0
+      (the ring follows the boss);
+   7. rotation +0x318 := `Angle_AddNormalize`(+0x318, d) with d = −0.031415928 if (bit 0 and bit 5, i.e. last spell)
+      else +0.015707964.
+2. Card inactive and capture ring +0xF8 ≠ 0 (t = the ring's age timer +0x338, which `Spell_End` set to 0): see below.
+3. Always: run the 13 VMs (12 §5.8 order), then `Timer_Decrement`(+0x108) (remaining card time; also while inactive).
+
+**Capture ring** (`Spell_End`, captured; VERIFIED 0x4161B0, RE-Q27): bit 8; GameFlags bits 7–8 → bit 8 only if ≠ 0;
+ring VM pos slot 0: elapsed 0, duration 30, mode 6, from (radius +0x314, +0x32C) to (256, 0), VM pos := (+0x314,
++0x32C); colour slot 1 (+0x5C/+0xB0): elapsed 0, duration 60, mode 3, colour_start := VM colour, colour_end :=
+D3DCOLOR 0x20D080A0 (alpha 0x20, R 0xD0, G 0x80, B 0xA0); wave count +0x334 := 6; **age timer +0x338 := 0**; +0xF8 :=
++0xF4, +0xF4 := 0; SE 0x23. Not captured: ring freed (active := 0), +0xF4 := 0, HUD message 5/6.
 On op 123 with the card active: bit 0 off; if not timed out → `CancelBonus(8000, 1)` + `KillAll(8000)` →
 score + `Hud_ShowBonus`; if capture still possible → captured: payout value = +0xFC, time reward 700 (flag A
 bit 27) or from the remaining card time: D = card timer +0x114 (the duration at start), thr = D − D/7, r = remaining +0x108; r ≥ thr → 1000, r < 180 → 100, else (r − 180)·900/(thr − 180) + 100 (integer), captures counter, score-file
@@ -864,10 +908,17 @@ stats, checksum (RNG), start-ring recoloured, SE 0x23, bits 8 and 9; the ring po
 payout frame changes the score but not stats+0x3C, the time rises orb by orb before it; RE-Q24). `Spell_Calc`
 (skipped while GameFlags bit 10 or the freeze byte is set), while the card is inactive and +0xF8 ≠ 0, per frame
 with t = the ring's timer +0x338:
-- t == 30, t == 60: ring restyle steps (VM timers/targets; no gameplay effect); t == 130: payout (below);
-- centre +0x2E0 += (player pos 0x17D61AC − centre)/4 if t > 80, else /16 (z := 0); rotation +0x318 += −0.0524
-  (t > 80) or −0.0157; +0x32C := VM +0x20C;
-- if t > 8 and +0x10 > 0: angle = Angle_AddNormalize((t − 10)·2π/40 − π/2) (t as float); k = min(+0x10, 7);
+- t == 30: VM pos slot 0: elapsed 0, duration 100, mode 4, from (+0x314, +0x32C) to (0, 60), VM pos := (+0x314,
+  +0x32C); scale slot 4 (+0x80/+0xD4): elapsed 0, duration 20, mode 1, scale_start.x := width +0x320, scale_end.x :=
+  64. t == 60: scale slot 4: elapsed 0, duration 70, mode 1, scale_start.x := +0x320, scale_end.x := 0. t == 130:
+  payout (below; the ring is freed and +0xF8 := 0, so the steps below are skipped that frame). Only one of the three
+  runs per frame (t tested against 30, then 60, then 130);
+- centre +0x2E0 += (player pos 0x17D61AC − centre)/4 if t > 80, else /16 (z := 0); rotation +0x318 :=
+  `Angle_AddNormalize`(+0x318, −0.05235988 if t > 80 else −0.015707964); +0x32C := VM pos.y +0x20C (no +0x334 test
+  here); so the orbs are spawned around a centre that started where the ring followed the boss to (step 1.6 above);
+- if t > 8 and +0x10 > 0: angle = `Angle_AddNormalize`(a, 0) with a = ((t − 10)·6.2831855)/40 − 1.5707964, t =
+  `Timer_GetF` (current + fraction), evaluated left to right with every operation rounded to f32 (the x87 runs at
+  24-bit precision on the main thread, CW 0x007F, 11 §1.2); k = min(+0x10, 7);
   k × `ItemMgr_Spawn`(centre + polar(angle, 128), type 10, mode 0); +0x10 −= k; then at angle + π (normalised):
   k' = min(+0x10, 7), but **6** spawns whatever k' is (quirk), +0x10 −= k'; +0x10 := max(+0x10, 0). Type 10
   becomes a time orb (type 7, mode 5, 08 §8.3); the time arrives when the orbs are collected.

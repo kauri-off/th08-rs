@@ -341,6 +341,10 @@ t × 255 / 30, deathbomb counter 0. At t > 29: state 3, scale 1, colour white; i
 30 frames; VERIFIED 0x44D180); counter := sht +8 (bombing allowed). Since `Player_UpdateBomb` runs before the state update in `Player_Calc` and the counter is 0 throughout state 1 (it reached 0 in state 2 and the respawn rewrites 0 every frame), **no bomb can start in state 1**; the first possible start is the first state-3 frame (VERIFIED 0x44C390, 0x44D180, RE-Q24).
 
 ### 6.4 Invulnerability (state 3)
+`Player_UpdateInvuln` 0x44D2C0 order (VERIFIED RE-Q27): (1) respawn clear first: if +0xE2A70 ≠ 0 → −= 1 and the
+768 × 896 cancel rectangle (§6.3); (2) then state 3: byte +4 := 0, the invulnerability ring (+0xE2B1C, if any) moved to
+the player pos, timer decremented; t < 1 → ring freed, state 0, timer := 0, colour white; else colour 0xFFF02020 when
+(t mod 8) < 2 else white; (3) any other state: the timer (+0xE2AF4) ticks.
 Timer decremented each frame; colour 0xFFF02020 when (t mod 8) < 2 else white; at t < 1: state 0. In other
 states the timer just ticks. Bombs set state 3 with their own invulnerability time (§7). At load (`Player_Load`
 0x44D650, VERIFIED RE-Q24): pos = (playfield w / 2, playfield h − 64, 0.49) = (192, 384, 0.49) (the respawn uses z 0.2,
@@ -421,7 +425,8 @@ Creators: cancel circle 0x44DF00(pos, r, dr, life, item), cancel rect 0x44DE60(p
 circle 0x44E040(pos, r, dr, dmg, life), damage rect 0x44DFA0(pos, w, h, dmg, life); slot = first inactive of
 the half (index 191 reused when full).
 Bullet test (`Player_InBombArea`, cancel half): circle → distance² < r²; rect → inside (rotated) bounds;
-hit: player +0xE2A90 := area item, hit counter += 1, returns 2.
+hit: player +0xE2A90 := area item, hit counter += 1, returns 2; a miss returns 0 and **does not touch +0xE2A90**
+(only the hit/graze tests reset it to 6 first; 08 §4.1; VERIFIED RE-Q27).
 
 ## 9. Lives, bombs, power, gauge, scoring hooks
 

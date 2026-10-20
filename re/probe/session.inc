@@ -161,6 +161,12 @@ static void sess_scan(int pass) {
         for (int q = 0x2A4; q < 0x2F4; q += 4) fprintf(o, " %08x", U32(op + q));
         fprintf(o, "\n");
     }
+    for (int k = 0; k < 128; k++) {
+        uint32_t b = P + 0xBE838 + k * 0x484;
+        if (!U16(b + 0x462)) continue;
+        fprintf(o, "B %d st %d ty %d pos %08x %08x sz %08x %08x vel %08x %08x dmg %d t %d\n", k, (int)(int16_t)U16(b + 0x462), (int)(int16_t)U16(b + 0x464),
+                U32(b + 0x2A4), U32(b + 0x2A8), U32(b + 0x430), U32(b + 0x434), U32(b + 0x43C), U32(b + 0x440), (int)(int16_t)U16(b + 0x460), (int)U32(b + 0x454 + 8));
+    }
     if (am) {
         fprintf(o, "X %08x fl %08x %08x pos %08x %08x base %08x %08x life %d t %d par %08x sub %d raw", am, U32(am + 0x3324), U32(am + 0x3328), U32(am + 0x2D88), U32(am + 0x2D8C),
                 U32(am + 0x2D34), U32(am + 0x2D38), (int)U32(am + 0x2DFC), (int)U32(am + 0x2E14 + 8), U32(am + 0x2DA4), (int)U32(am + 0x2DF8));
@@ -237,8 +243,17 @@ static void sess_boss(int pass) {
 }
 
 /* one trace row per calc pass; columns = demo trace columns, then the session extension */
+/* TH08_ACTR=1: ASCII manager frame counter +0x8284 per trace row -> actr.txt (RE-Q27) */
+static int g_actr = -1; static FILE *g_actrf;
+static void sess_actr(void) {
+    if (g_actr < 0) { const char *e = getenv("TH08_ACTR"); g_actr = e && atoi(e); }
+    if (!g_actr) return;
+    if (!g_actrf) g_actrf = sess_open(g_sess_out, "actr.txt", "w");
+    if (g_actrf) fprintf(g_actrf, "%u %u %u\n", g_poll_n, U32(0x4CCE20 + 0x8284), U32(G_SCENE));
+}
 static void sess_row(int pass) {
     if (!g_strace) return;
+    sess_actr();
     uint32_t st = U32(G_STATS), sc = U32(G_SCENE);
     uint32_t s8 = 0, sC = 0, s30 = 0, s74 = 0, s80 = 0, s98 = 0; int s22 = 0, s3C = 0;
     if (sc == 2 && !U32(G_LOADING) && st >= 0x10000) { s8 = U32(st + 8); sC = U32(st + 0xC); s30 = U32(st + 0x30); s74 = U32(st + 0x74); s80 = U32(st + 0x80); s98 = U32(st + 0x98); s22 = (int16_t)U16(st + 0x22); s3C = (int)U32(st + 0x3C); }

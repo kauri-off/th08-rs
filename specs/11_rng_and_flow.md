@@ -137,7 +137,7 @@ counters not advanced during dialogue.
 |---|---|---|
 | 0 | stage practice | VERIFIED (lives 8, power per stage, ends with result) |
 | 1 | demo play (attract mode) | VERIFIED (any key → menu; time limits) |
-| 2 | gameplay running: **recomputed every `GameMgr_Calc`** (after the pause-key test, before the clear/stage-end handling) as paused byte GM+0x3DBB2 (0x164D0BA) == 0 and game-over byte GM+0x3DBB3 == 0, so it drops on the ESC frame and returns on the first calc after unpausing; also set at stage start, cleared by `GameMgr_OnRemove` (changelog/answers_impl21.md §Q3) | VERIFIED |
+| 2 | gameplay running: **recomputed every `GameMgr_Calc`** at step 7 of §4 (after the pause-key test of step 4, among the anti-tamper checks, before the step-8 pause return; not on the frames that return earlier: loading, demo end, replay slow-mode skip) as paused byte GM+0x3DBB2 (0x164D0BA) == 0 and game-over byte GM+0x3DBB3 == 0, so it drops on the ESC frame and returns on the first calc after unpausing; also set at stage start, cleared by `GameMgr_OnRemove` (changelog/answers_impl21.md §Q3) | VERIFIED |
 | 3 | replay playback | VERIFIED |
 | 4 (0x10) | ending-eligible / "cleared without running out of night" (set on final clear, cleared on time-out endings) | VERIFIED writes / INFERRED meaning |
 | 5–6 | stage-end state: 0 none, 1 waiting-for-load (after a clear), 2 clear triggered, 3 clear handled | VERIFIED |
@@ -314,7 +314,9 @@ Per frame (after `0x164D09C += 1`):
    speed when 0 < speed ≤ 1; MIDI: Midi_Fade(3)). Demo index GM+0x3DBB4 (0x164D0BC): the GameManager static
    constructor 0x43C5E1 sets it to **3**; `MainMenu_Top` does `n = (n + 1) % 4` before loading
    `demorpy<n>.rpy`, so the first attract demo after boot is demorpy0, then 1, 2, 3, 0 …
-7. Anti-tamper checks of the decoy values (only affect a debug float 0x164D2FC; not needed). `GameMgr_IsTampered` 0x40BB80 has more callers (bomb input, AddLives/AddPower/AddBombs, EffectMgr quit); all are inert
+7. Anti-tamper checks of the decoy values (only affect a debug float 0x164D2FC; not needed). In the middle of them
+   (VERIFIED RE-Q27, store at 0x43A5BC): **GM flags bit 2 := (paused byte == 0 and game-over byte == 0)**, so on the ESC frame
+   (step 4 has just set paused = 1) bit 2 is already 0 when step 8 returns (selftest1 row 1423: flags 0x10000). `GameMgr_IsTampered` 0x40BB80 has more callers (bomb input, AddLives/AddPower/AddBombs, EffectMgr quit); all are inert
    in an untampered run, which is the only case a faithful port has to model (09 §6.1).
 8. If paused (1 or 2) or game-over menu open → return 3 (calc chain stops: the whole game is frozen; the
    ASCII manager at prio 1 runs the pause / continue menus, 12).
@@ -383,7 +385,7 @@ sets flags bits 5–6 = 2 (stages 1–5); stages 6A/6B/Extra are triggered by ms
 | 0x38 | i32 | next extend threshold | VERIFIED |
 | 0x3C | i32 | time this stage. Reset to 0 at every stage start (§3.1). `GameMgr_AddTime` 0x418220 (n < 0 and time < −n → 0, else time += n, +0x44 += n, GM+0x3DAAC += n, checksum). Writers: +1 per collected time orb; card capture reward (Spell_End stores it in g_Gui +0x10, paid by `Spell_Calc` 130 frames later or by the next `Spell_Start`); −15 per frame of the death-bomb window (`Player_DyingUpdate`); at the death itself −time/10 if time ≤ 5000, else −500 (changelog/answers_impl20.md §Q1) | VERIFIED |
 | 0x40 | i32 | time threshold for the clock advance | VERIFIED |
-| 0x44 | i32 | time added this stage (parity used by AddTime) | VERIFIED |
+| 0x44 | i32 | time parity accumulator: += n on every non-clamped `GameMgr_AddTime`, including negative n (death-bomb drain, death penalty); only bit 0 is read (max-point step, §1.5 setters) | VERIFIED |
 | 0x48..0x60 | i32×7 | decoys (random 6543..106542) | VERIFIED |
 | 0x50 | i32 | checksum random A (inside the decoy range) | VERIFIED |
 | 0x64, 0x68 | f32 | deaths (pair) | VERIFIED |
@@ -402,8 +404,11 @@ sets flags bits 5–6 = 2 (stages 1–5); stages 6A/6B/Extra are triggered by ms
 | 0xD0..0xE0 | i32×5 | decoys | VERIFIED |
 
 Getters truncate the floats (`trunc`). Setters/adders: SetLives 0x406E20, AddLives 0x43C641, SetBombs
-0x406F30 (no RNG), AddBombs 0x439883, SetPower 0x406FA0, AddPower 0x441850, AddTime 0x418220 (n > 0 also
-`max_point_value += ((n + (time_parity & 1)) / 2) · 10` using the updated parity), AddScore 0x4181F0
+0x406F30 (no RNG), AddBombs 0x439883, SetPower 0x406FA0, AddPower 0x441850, AddTime 0x418220 (if n < 0 and time < −n: time := 0 and nothing else — no parity, no
+checksum; otherwise time += n, **time_parity +0x44 += n for every n, negative ones included**, GM+0x3DAAC += n,
+checksum (4 draws), and for n > 0 `max_point_value += ((n + (time_parity & 1)) / 2) · 10` using the updated parity.
+So the −15 per frame of a death-bomb window and the death penalty change the parity too: attract demo 1 frames
+3844–3854 (11 × −15) flip it, and the point items at 3870 (and demo 2 at 3082) depend on it; VERIFIED 0x418220, RE-Q27), AddScore 0x4181F0
 (`score += n/10`), Extend 0x439B29 (lives < 8 → +1 life else bombs < 8 → +1 bomb; sfx 0x1C; rank +200).
 A reimplementation can drop all decoys/checksums **but must still consume the RNG** exactly where
 `UpdateChecksum` / `ScrambleDecoys` run.

@@ -709,7 +709,13 @@ interrupt 1, VM 11 interrupt 2, VM 13 interrupt 2 (unless bit 10). Nothing else 
 name stays parked at its top position until native 23 or the next show.
 
 Calc: all VMs (0, 2, 4, 6, 10, 1, 3, 5, 7, 8, 9, 11, 13 in this order) run only when bullets are not frozen
-(GameFlags bit 10) and the freeze byte 0x160F534 is 0.
+(GameFlags bit 10) and the freeze byte 0x160F534 is 0. They run **after** the card-active step or the capture-ring step
+of the same `Spell_Calc` (07 §11.1 steps 1–2; the ring/orb step runs whenever the card is inactive, including after
+native 22's name-only declaration, which clears bit 0), and are followed by the decrement of the remaining-time timer
++0x108 (VERIFIED RE-Q27). The tint +0x2620 used by draw step 4 starts at 0x80808080 at every `Spell_Start`; while a
+card is active its alpha byte +0x2623 moves by 4 per frame between 0x20 and 0x80: down while the player is at
+x ≥ 64 and y < 64 (playfield coordinates), up otherwise (07 §11.1 step 1.2) — the boss name, plate, label and bonus
+line fade to alpha 0x20 when the player is under them.
 Draw (`Spell_Draw`):
 1. If VM 0 is visible: VM 0 Draw2DSnap, VM 2 Draw2DSnap, VM 4 Draw2DRot. The boss strips (VM 2/4 scripts 1/3)
    are therefore **only drawn while a player cut-in is visible** (QUIRK; matches the runtime ref
@@ -842,8 +848,13 @@ Four VMs in the ASCII manager, M_k = +0x17C4 + k·0x2A4 (k = 0..3 = boss slot, 0
 sprite 157 (48×16 "ENEMY" plate at (0, 240)), z-write off, alpha 0, hidden until interrupt 1; label 1: alpha 0 → 255
 over 30 frames, then wait; label 2: alpha → 0 over 30, hidden; catch-all (−1): hidden at once. Restarted by
 `Ascii_SetupGaugeVms` (§5.9 step 1, every stage start) and run every `Ascii_Calc` (also while paused).
-Interrupts (`0x422BB0`): op 127 slot ≥ 0 → 1 to M_slot; op 127 −1 and `Enemy_Free` of a boss (slot < 4) → 2, and
-M_slot pos := (−999, −999, 0); `Player_Load` → 2 to M_0, M_1, M_2; player on-remove with the full-exit flag → 99 (→ hidden)
+Interrupts (`0x422BB0`): op 127 slot ≥ 0 → 1 to M_slot; op 127 −1 and `Enemy_Free` of a boss → 2, and
+M_slot pos := (−999, −999, 0). `Enemy_Free` 0x42BCF0 tests **flags A bit 1 (boss) and** the slot byte e+0x3313 < 4; op 127
+−1 clears bit 1 (but not the byte), so a later `Enemy_Free` of that enemy does nothing here. e+0x3313 is written only by
+op 127 (0x41C562, also with −1: the byte keeps the old slot); the template value is 0 (VERIFIED RE-Q27). A boss that dies
+with death mode 0 (07 §10.3) keeps its table entry and bit 1 and is never freed: its death frame still runs the
+per-frame marker step below, later frames skip the dead slot, so **its marker stays visible at its last position with
+its last mode** until op 127 −1 / a new op 127 on that slot / the next stage's `Ascii_SetupGaugeVms` (VERIFIED 0x42C6A0). `Player_Load` → 2 to M_0, M_1, M_2; player on-remove with the full-exit flag → 99 (→ hidden)
 to M_0..M_2 (M_3 never gets these two).
 Per frame in `EnemyMgr_Calc`, for every enemy with the boss flag (flags A bit 1), after the damage/hit-flash step
 (07 §10.1 step 7): M_slot pos := (x + 32, 472, 0) (x = enemy final pos x; **−999** instead when flags A bit 4 is set),
@@ -855,7 +866,16 @@ else 1 if the enemy's main VM colour2 flag (bit 17, the hit flash) is set, else 
 - 0: RGB white, alpha = d < 64 ? trunc(d + 96) : 160 (the marker fades when the player is under the boss);
 - 1: 0x80FF4040 (hit flash);
 - 2 / 3 / 4: on frames where the ASCII frame counter +0x8284 (incremented at the end of every `Ascii_Calc`) % 8 / % 4 /
-  % 2 == 0: sprite 158 (0x9E, the 48×16 plate at (48, 240)) and colour 0xFFFFFFFF; on the other frames as mode 0.
+  % 2 == 0 (counter rule below): sprite 158 (0x9E, the 48×16 plate at (48, 240)) and colour 0xFFFFFFFF; on the other frames as mode 0.
+**Frame counter +0x8284** (VERIFIED RE-Q27, displacement scan + runtime): its only writer is the `+= 1` at the very end of
+`Ascii_Calc` 0x402200 (after the early-out branches, so it also counts paused and game-over frames); it is never reset
+(`Ascii_InitVms` zero-fills +0x2264..+0x8263 and +0x82A0.., not +0x8284; the manager is a static object, so it starts at
+0). The ASCII manager is registered (calc prio 1) by `Supervisor_Init` 0x4464C8 on the **boot loader thread**, after
+`text.anm` is loaded — not when the supervisor registers. So the calc passes run while the boot loader is still working
+(the 13 "boot calc" rows of every recorded session: `release boot calc 12` in events.txt) do not call `Ascii_Calc`, and the
+counter equals the main-menu-relative frame number: 1 after the calc of the first menu frame, N after menu frame N, through
+menus, loading screens, pauses and gameplay (golden: counter == poll on every row checked up to 4400). A port that counts
+from its own boot registration is 13 ahead (13 mod 4 = 1: the mode-3 blink one frame early).
 Then `Draw2DSnap(M_k)` (still subject to the VM's visible bit and alpha ≠ 0). The colour bytes are overwritten by the
 draw every frame, so after the 30-frame fade-in the script alpha no longer matters. Golden draw log: `ascii.anm#0`
 quad (199.5, 463.5)–(247.5, 479.5), uv (0, 0.9375)–(0.1875, 1), colour 0x60FFFFFF / 0x80FF4040 during the stage-1 boss.

@@ -168,8 +168,14 @@ No free slot → failure. Speed and angle: 07 §9.3 (mode table). Then:
      g == 0: no hit test this frame.
    - hit test h = `Player_HitTest` (hitbox vs the player's hitbox): h == 1 → state 5 (the player is hit, 09 §7);
      h == 2 → if flags lacks 0x1000: state 5 + bomb drop.
-   - Bomb drop: item type = player+0xE2A90 (set from the bomb area, default 6): 9 → two items of type 7;
-     ≥ 0 → one item of that type; −1 → none. Item mode 1 (attracted).
+   - Bomb drop: item type = player+0xE2A90: 9 → two items of type 7; ≥ 0 → one item of that type; −1 → none.
+     Item mode 1 (attracted). **+0xE2A90 has exactly 4 writers** (VERIFIED RE-Q27, displacement scan):
+     `Player_InBombArea` 0x449FF0 writes the area's item **only on a hit**; `Player_HitTest` 0x44A230,
+     `Player_HitTestNoBomb` and `Player_GrazeTest` 0x44A470 write 6 at their start, before their own bomb-area test.
+     The state 2–4 mark test (§4.2) and the cancels (`BulletMgr_CancelAll` / `CancelBonus`) call `Player_InBombArea`
+     directly, so a miss there **keeps the previous value** (the item of the last hit by any bullet, this frame or
+     earlier). Runtime demo 0 f4451: bullet 182 drops at its effect end with +0xE2A90 = 7 left by bullet 181's
+     hits (area 199, item 7), although 182 itself is in no area that frame → a time orb, not a star.
 7. If VM0 has a script: run VM0.
 8. Tick state timer and age; push on class list.
 

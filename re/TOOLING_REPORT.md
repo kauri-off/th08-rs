@@ -324,3 +324,14 @@ Test keys: `re/work/runs/q17m/noclip/keys_noclip.txt`. Font note (RE-Q17M): wine
   difficulty, stage) and `C` (item search cursor, busy byte of its slot). `TH08_RNGSITE="P0 P1"` (session mode): RNG
   call chains for polls P0..P1 → `probe_rng.txt` in the game dir (`re/work/sessplay/game`, copy it out), `R poll …` rows;
   symbolise with `re/tools/rngsites.py probe_rng.txt -o`.
+
+## 14. RE-Q27 probe additions (2026-10-20)
+- `iscan K F0 F1` lines now also include `A <idx> <16 raw dwords>` (bomb areas: 0–191 damage, 192–383 cancel; +0 pos, +8 r,
+  +0x10 w/h, +0x20 rot, +0x24 life, +0x28 item) and `P <slot> st ty pos sz vel dmg t` (player bullets, floats hex).
+- `oscan K F0 F1` → `probe_opts.txt`: `F` (player pos, +3, +5, state) and `O q` = raw option block q +0x2A4..+0x2F0
+  (pos, anchor, vel, state, sub, index, angle, facing, timer prev/frac/cur, calc fn, draw fn).
+- Session mode `TH08_ACTR=1` → `actr.txt` in the out dir: `poll counter scene` per trace row (ASCII +0x8284).
+- One-demo runs: `p1 poke1 164d0bc <n-1>` sets the demo index before the title, the first attract demo is then n
+  (demo 3 to frame 1610 in ~3 min with `run.sh 240`).
+- Port side: experiments go in a scratch copy (`re/work/runs/q27/portfix`, `cp -r src Cargo.* target` then edit + build
+  there, ~5 s incremental); `demosync` there has `TH08_ADUMP` (areas + player bullets) and `TH08_ODUMP` (options).

@@ -303,7 +303,7 @@ state 3 and team 3 slot 2 becomes 0x44F2D0 (trail reset to p).
 |---|---|---|
 | 0x44E3A0 | Yukari (shot 0 focused, 5) | §3.1 |
 | 0x44EA40 | Alice (shot 1 focused, 7) | init: script 0x1D. Each frame while not bombing: pos = p − (0, 32) (bombs move it, §2.3). Leaving: pos = p − (0, 32) |
-| 0x44EB70 | Remilia team ×4 | init: script 0x18; anchor = p + offset with the solo offsets (0 (−30, −16), 1 (−10, −32), 2 (+10, −32), 3 (+30, −16)), then **fixed**; orbit angle 0, π, 0, π. Each frame: option timer ≥ 12 → orbit += +π/120, −π/90, +π/90, −π/120 (by index); pos = anchor + polar(orbit, 8). No colour change, **no effect 0x2F** (changelog/answers_impl11.md §9, VERIFIED) |
+| 0x44EB70 | Remilia team ×4 | init: script 0x18; anchor = p + offset with the solo offsets (0 (−30, −16), 1 (−10, −32), 2 (+10, −32), 3 (+30, −16)), then **fixed**; orbit angle 0, π, 0, π. Each frame: option timer (+0x2E0 current) **> 12** → orbit += +π/120, −π/90, +π/90, −π/120 (by index); pos = anchor + polar(orbit, 8). The timer is ticked after the calc fn and the VM run (09 §5) and the init call (state 1 → 2) also runs the orbit step with t = 0, so the first rotation happens on the 14th calc of the option (t = 13); SPEC FIXED RE-Q27 (`Timer_Greater`(t, 12) 0x44EB70; was "≥ 12"; attract demo 3: the original's options rotate from frame 1590, one frame after the old rule). No colour change, **no effect 0x2F** (changelog/answers_impl11.md §9, VERIFIED) |
 | 0x44EE70 | Remilia solo ×4 | §3.2 |
 | 0x44F930 | Yuyuko ×2 (shot 3 focused, 11) | init: script 0x15; anchor = p; orbit 0 (index 0) / −π (index 1). Each frame: target = p − (32, 0) (index 0, orbit += π/60) or p + (32, 0) (index 1, orbit −= π/60); anchor += (target − anchor)·0.09; pos = anchor + polar(orbit, 6), z 0; effect 0x2F at pos, colour **0x80602050**, every frame (changelog/answers_impl11.md §9, VERIFIED) |
 | 0x44F2D0 | Youmu's half (team 3 unfocused) | §3.3 |
@@ -339,7 +339,7 @@ and clears the pointer, and the frame after the option leaves sub-state 3 (inter
 
 ### 3.2 Remilia solo (0x44EE70)
 Init: script 0x18; anchor = p + offset, offsets by index: 0 (−30, −16), 1 (−10, −32), 2 (+10, −32),
-3 (+30, −16); orbit angle 0, π, 0, π. Each frame: option timer ≥ 12 → orbit angle += +π/120, −π/90, +π/90,
+3 (+30, −16); orbit angle 0, π, 0, π. Each frame: option timer **> 12** (as the team version, §3 table; SPEC FIXED RE-Q27) → orbit angle += +π/120, −π/90, +π/90,
 −π/120 (by index). Colour 0xFFFF8080; when the player is unfocused (+3 = 0): colour 0xFF80FFFF and
 anchor += (p + offset − anchor)·0.2 (focused: anchor frozen). pos = anchor + polar(orbit, 8), z 0; effect 0x2F
 (0x80602050) at the option every frame.
