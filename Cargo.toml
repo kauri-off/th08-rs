@@ -19,6 +19,7 @@ wgpu = { version = "30", features = ["webgl"] }
 winit = "0.30"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd = "0.17"
 ab_glyph = "0.2"
 env_logger = "0.11.11"
 pollster = "1.0.1"

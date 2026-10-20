@@ -509,7 +509,7 @@ impl Default for Player {
             deaths: 0,
             bombs_started: 0,
             debug_move: false,
-            debug_invuln: crate::env::var("TH08_INVULN").is_some_and(|v| v != "0"),
+            debug_invuln: crate::settings::get().invuln,
             world: Weak::new(),
         }
     }

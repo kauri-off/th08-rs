@@ -11,7 +11,7 @@ fn main() -> anyhow::Result<()> {
         Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
     });
     let rng_frame: Option<i32> = args.get(3).and_then(|v| v.parse().ok());
-    let dir = std::env::var("TH08_DIR")?;
+    let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
     let src = th08::assets::Source::native(dir.into());
     let mut ctx = pollster::block_on(th08::game::Ctx::load_with(src, gfx, false))?;
@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
                 println!("  {n:4} x {g}");
             }
         }
-        if f >= a && f <= b && std::env::var_os("TH08_BDUMP").is_some() {
+        if f >= a && f <= b && th08::settings::get().bdump {
             if let Some(gm) = th08::gamemgr::current() {
                 let gm = gm.borrow();
                 if let Some(em) = &gm.enemies {
@@ -92,18 +92,14 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                if std::env::var_os("TH08_IDUMP").is_some() {
+                if th08::settings::get().idump {
                     let p = gm.player.borrow();
                     println!(
                         "  player {:.1},{:.1} state {} poc {} {}",
                         p.pos[0], p.pos[1], p.state, p.sht.poc_line, p.sht_youkai.poc_line
                     );
                 }
-                if let Some(bm) = gm
-                    .bullets
-                    .as_ref()
-                    .filter(|_| std::env::var_os("TH08_IDUMP").is_some())
-                {
+                if let Some(bm) = gm.bullets.as_ref().filter(|_| th08::settings::get().idump) {
                     for (i, x) in bm.borrow().items.items.iter().enumerate() {
                         if x.alive {
                             println!(
@@ -113,11 +109,7 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                if let Some(bm) = gm
-                    .bullets
-                    .as_ref()
-                    .filter(|_| std::env::var_os("TH08_IDUMP").is_none())
-                {
+                if let Some(bm) = gm.bullets.as_ref().filter(|_| !th08::settings::get().idump) {
                     for (i, x) in bm.borrow().bullets.iter().enumerate() {
                         if x.state != 0 {
                             println!(
@@ -138,9 +130,7 @@ fn main() -> anyhow::Result<()> {
         }
         if f >= a
             && f <= b
-            && let Some(k) = std::env::var("TH08_EDUMP")
-                .ok()
-                .and_then(|v| v.parse().ok())
+            && let Some(k) = th08::settings::get().edump
         {
             print!("frame {f} {}", th08::effect::dump(k));
         }

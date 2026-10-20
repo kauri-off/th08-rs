@@ -1283,12 +1283,9 @@ mod tests {
 
     #[test]
     fn all_game_opcodes_handled() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        let ar =
-            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
-                .unwrap();
         let mut seen = std::collections::BTreeSet::new();
         let mut scripts = 0;
         for n in ar.names().iter().filter(|n| n.ends_with(".anm")) {

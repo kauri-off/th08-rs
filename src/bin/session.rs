@@ -64,7 +64,7 @@ fn main() -> anyhow::Result<()> {
         eprintln!("draw log: off (no reference draw_*.drawlog.xz or --no-drawlog)");
     }
 
-    let tdir = std::env::var("TH08_DIR")?;
+    let tdir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
     let src = th08::assets::Source::native(tdir.into());
     let mut ctx = pollster::block_on(th08::game::Ctx::load_with(src, gfx, false))?;
@@ -92,10 +92,7 @@ fn main() -> anyhow::Result<()> {
     trace.write_all(session::trace_header().as_bytes())?;
     let mut port_rows = Vec::new();
     // Debug `TH08_SESSION_DUMP=a-b`: player and items after each calc of menu frames a..b.
-    let dump = std::env::var("TH08_SESSION_DUMP").ok().and_then(|v| {
-        let (a, b) = v.split_once('-')?;
-        Some((a.parse::<i64>().ok()?, b.parse::<i64>().ok()?))
-    });
+    let dump = th08::settings::get().session_dump;
     let t0 = std::time::Instant::now();
     {
         let mut on_draw = |text: String| {
@@ -186,7 +183,7 @@ fn dump_items(row: i64) {
         "row {row}: player {:.3},{:.3} state {} power {} target {:?}",
         p.pos[0], p.pos[1], p.state, p.stats.power, p.targets[0]
     );
-    if std::env::var("TH08_SESSION_PB").is_ok() {
+    if th08::settings::get().session_pb {
         for (i, b) in p.bullets.iter().enumerate().filter(|(_, b)| b.state != 0) {
             println!(
                 "  pb{i} st {} kind {} pos {:.2},{:.2} size {:.1},{:.1} vel {:.2},{:.2} dmg {} t {}",

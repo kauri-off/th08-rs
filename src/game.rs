@@ -23,6 +23,7 @@ pub struct Ctx {
     pub ascii: crate::ascii::Queue,
     // Debug: `TH08_SE_LOG` logs each frame's flushed SE ids.
     pub se_log: bool,
+    pub settings: &'static crate::settings::Settings,
     pub drawlog: Option<crate::drawlog::Writer>,
 }
 
@@ -42,6 +43,7 @@ impl Ctx {
     // SPEC-GAP: th08.cfg is not read at boot (15 §1.2); the config keeps its defaults.
     pub async fn load_with(source: Source, gfx: Gfx, persist: bool) -> anyhow::Result<Self> {
         let archive = Archive::from_bytes(source.read("th08.dat").await?)?;
+        let settings = crate::settings::get();
         let mut audio = Audio::new(source.clone(), &archive.read("thbgm.fmt")?);
         audio.load_se(&archive);
         let mut ctx = Self {
@@ -54,11 +56,15 @@ impl Ctx {
             frame: 0,
             game: Default::default(),
             ascii: Default::default(),
-            se_log: crate::env::var("TH08_SE_LOG").is_some(),
+            se_log: settings.se_log,
+            settings,
             drawlog: None,
         };
         if persist {
-            ctx.drawlog = crate::drawlog::Writer::from_env();
+            ctx.drawlog = settings
+                .drawlog
+                .as_deref()
+                .and_then(crate::drawlog::Writer::from_spec);
         }
         if ctx.drawlog.is_some() {
             ctx.gfx.enable_log();
@@ -77,7 +83,7 @@ impl Ctx {
             ctx.game.load_score(None);
         }
         // Debug: `TH08_CLRD` overrides clear masks.
-        ctx.game.debug_clear_masks();
+        ctx.game.debug_clear_masks(settings.clrd.as_deref());
         crate::supervisor::register(&mut ctx)?;
         Ok(ctx)
     }

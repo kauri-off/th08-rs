@@ -340,6 +340,8 @@ mod tests {
 
 #[cfg(test)]
 pub fn test_archive() -> Option<Archive> {
-    let dir = std::env::var("TH08_DIR").ok()?;
-    Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).ok()?).ok()
+    let dir = crate::settings::test_game_dir()?;
+    let path = crate::assets::find_file(&dir, "th08.dat");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    Some(Archive::from_bytes(bytes).expect("th08.dat"))
 }

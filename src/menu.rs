@@ -91,7 +91,7 @@ fn final_notice(g: &gamemgr::Game, c: usize, d: usize) -> Option<i32> {
 
 // Unlock checks (15 §2.4) on the score.dat clear masks; debug `TH08_UNLOCK=1` unlocks everything.
 pub(crate) fn unlock_all() -> bool {
-    crate::env::var("TH08_UNLOCK").is_some_and(|v| v != "0")
+    crate::settings::get().unlock
 }
 
 // 0x43C15F: a no-continue Final B clear on E–L.

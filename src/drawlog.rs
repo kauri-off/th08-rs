@@ -256,11 +256,10 @@ impl Writer {
 
     // `TH08_DRAWLOG=<path>[,from-to | ,dfrom-to]`; a `.xz` path is compressed through the xz tool.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn from_env() -> Option<Self> {
-        let v = crate::env::var("TH08_DRAWLOG")?;
+    pub fn from_spec(v: &str) -> Option<Self> {
         let (path, range) = match v.rsplit_once(',') {
             Some((p, r)) => (p.to_string(), parse_range(r)),
-            None => (v.clone(), None),
+            None => (v.to_string(), None),
         };
         let file = match std::fs::File::create(&path) {
             Ok(f) => f,
@@ -294,7 +293,7 @@ impl Writer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn from_env() -> Option<Self> {
+    pub fn from_spec(_: &str) -> Option<Self> {
         None
     }
 
@@ -1518,7 +1517,7 @@ pub fn clr_pokes(g: &mut crate::gamemgr::Game) {
 // menu_clr; menu_mopup1 adds its score.dat and the four attract demos as replay/th8_01..04.rpy.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Result<()> {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::settings::temp_dir().join(format!(
         "th08_{name}_{}_{:?}",
         std::process::id(),
         std::thread::current().id()
@@ -1616,7 +1615,7 @@ mod tests {
     }
 
     fn ctx() -> Option<crate::game::Ctx> {
-        let dir = std::env::var("TH08_DIR").ok()?;
+        let dir = crate::settings::test_game_dir()?;
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
         let src = crate::assets::Source::native(dir.into());
         Some(pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap())

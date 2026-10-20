@@ -1098,7 +1098,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn game_over_name_entry_saves() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(dir) = crate::settings::test_game_dir() else {
             return;
         };
         let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
@@ -1106,11 +1106,12 @@ mod tests {
         };
         let src = crate::assets::Source::native(dir.into());
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
-        let save = std::env::temp_dir().join(format!("th08_result_test_{}", std::process::id()));
+        let save =
+            crate::settings::temp_dir().join(format!("th08_result_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&save);
         crate::scoredat::set_save_dir(Some(save.clone()));
         ctx.game.persist = true;
-        crate::supervisor::setup_new_game(&mut ctx.game, 0).unwrap();
+        crate::supervisor::setup_new_game(&mut ctx.game, ctx.settings, 0);
         let keys: [(u32, u16); 6] = [
             (20, DOWN),
             (28, SHOT),
@@ -1203,9 +1204,7 @@ mod tests {
     // `TH08_RESULT_SHOTS=k1,k2,…`: /tmp/th08_result_<tag>_<k>.png at those result frames.
     #[cfg(not(target_arch = "wasm32"))]
     fn shot(ctx: &mut Ctx, on: bool, k: u32, tag: &str) {
-        let want = std::env::var("TH08_RESULT_SHOTS")
-            .ok()
-            .is_some_and(|v| v.split(',').any(|t| t.parse() == Ok(k)));
+        let want = ctx.settings.result_shots.contains(&k);
         if on && want {
             let img = ctx.gfx.capture(None);
             let _ = img.save(format!("/tmp/th08_result_{tag}_{k}.png"));

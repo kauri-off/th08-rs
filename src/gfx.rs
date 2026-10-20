@@ -228,7 +228,8 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 "#;
 
 impl Gfx {
-    pub async fn new(window: Arc<winit::window::Window>) -> anyhow::Result<Self> {
+    // `vsync` = port display setting; logic pacing is separate (app.rs).
+    pub async fn new(window: Arc<winit::window::Window>, vsync: bool) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let instance = wgpu::util::new_instance_with_webgpu_detection(
             wgpu::InstanceDescriptor::new_without_display_handle(),
@@ -266,7 +267,11 @@ impl Gfx {
         if let Some(f) = caps.formats.iter().find(|f| want.contains(f)) {
             config.format = *f;
         }
-        config.present_mode = wgpu::PresentMode::AutoVsync;
+        config.present_mode = if vsync {
+            wgpu::PresentMode::AutoVsync
+        } else {
+            wgpu::PresentMode::AutoNoVsync
+        };
         surface.configure(&device, &config);
         Ok(Self::build(Some(surface), device, queue, config))
     }

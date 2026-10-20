@@ -212,7 +212,7 @@ mod tests {
                         );
                     }
                 }
-                if std::env::var("SHT_DUMP").is_ok() {
+                if crate::settings::get().sht_dump {
                     eprintln!(
                         "{name}: {:?}",
                         Sht {

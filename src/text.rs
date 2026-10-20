@@ -32,8 +32,8 @@ const FONT_PATHS: &[&str] = &[
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for Raster {
     fn default() -> Self {
-        let env = crate::env::var("TH08_FONT");
-        let font = env
+        let font = crate::settings::get()
+            .font
             .iter()
             .map(String::as_str)
             .chain(FONT_PATHS.iter().copied())

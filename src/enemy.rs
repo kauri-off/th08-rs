@@ -729,12 +729,8 @@ impl EnemyManager {
         m.stage = stage;
         m.stage_index = index;
         m.g.card = ctx.game.card;
-        m.fast_forward = crate::env::var("TH08_STAGE_FRAME")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
-        m.debug_damage = crate::env::var("TH08_ENEMY_DMG")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
+        m.fast_forward = ctx.settings.stage_frame;
+        m.debug_damage = ctx.settings.enemy_dmg;
         m.stage_start(&mut ctx.anm, index);
         let m = Rc::new(RefCell::new(m));
         let t: task::TaskRef<Ctx> = m.clone();
@@ -2253,10 +2249,7 @@ mod tests {
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        let frames = std::env::var("TH08_TEST_FRAMES")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(4000);
+        let frames = crate::settings::get().test_frames;
         for shot in 0..12u8 {
             let index = [0, 1, 2, 4][shot as usize % 4];
             let (ecl_name, enm) = files(index);
@@ -2360,12 +2353,9 @@ mod tests {
 
     #[test]
     fn all_stage_scripts_run() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        let ar =
-            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
-                .unwrap();
         for index in 0..18 {
             let mut fired = 0;
             for diff in [0, 3] {
@@ -2458,12 +2448,9 @@ mod laser_tests {
     // Lasers only appear in later boss phases: run the laser stages longer with more debug damage.
     #[test]
     fn laser_stages_run() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        let ar =
-            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
-                .unwrap();
         let mut total = 0;
         for index in [2, 4, 6, 7, 8] {
             let (ecl_name, enm) = files(index);

@@ -34,11 +34,7 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
             vms.push(vm);
         }
     }
-    let pos: Vec<f32> = crate::env::var("TH08_ANM_POS")
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|v| v.parse().ok())
-        .collect();
+    let pos = &crate::settings::get().anm_pos;
     if pos.len() >= 2 {
         for (i, vm) in vms.iter_mut().enumerate() {
             vm.pos = [
@@ -48,20 +44,13 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
             ];
         }
     }
-    let interrupts = crate::env::var("TH08_ANM_INT")
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|p| {
-            let (f, id) = p.split_once(':')?;
-            Some((f.parse().ok()?, id.parse().ok()?))
-        })
-        .collect();
+    let interrupts = ctx.settings.anm_int.clone();
     let t = task::task(AnmDebug {
         vms,
         playfield,
         interrupts,
         frame: 0,
-        mode: crate::env::var("TH08_ANM_MODE").and_then(|m| m.parse().ok()),
+        mode: ctx.settings.anm_mode,
     });
     task::add(ctx, Chain::Calc, 4, 0, t.clone())?;
     task::add(ctx, Chain::Draw, 3, 0, t)?;

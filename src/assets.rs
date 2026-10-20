@@ -35,7 +35,7 @@ impl Source {
     async fn fetch(&self, name: &str, range: Option<(u64, usize)>) -> Result<Vec<u8>> {
         use std::io::{Read, Seek, SeekFrom};
         let Source::Native(dir) = self;
-        let path = dir.join(name);
+        let path = find_file(dir, name);
         Ok(match range {
             None => std::fs::read(path)?,
             Some((off, len)) => {
@@ -67,6 +67,22 @@ impl Source {
         let buf = JsFuture::from(blob.array_buffer()).await.map_err(err)?;
         Ok(js_sys::Uint8Array::new(&buf).to_vec())
     }
+}
+
+// Game file lookup: exact name first, else a case-insensitive match in `dir` (as on Windows and the web);
+// a missing file gives `dir/name` so the read error names it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn find_file(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let exact = dir.join(name);
+    if exact.exists() {
+        return exact;
+    }
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name))
+        .map_or(exact, |e| e.path())
 }
 
 // Background loader, standing in for the original's loader threads (00 §3.2, §6).

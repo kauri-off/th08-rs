@@ -147,9 +147,10 @@ impl Ending {
             })
             .collect();
         // Debug `TH08_ENDING=<file>.end` loads that script instead of the one chosen by the game state.
-        let name = crate::env::var("TH08_ENDING")
-            .filter(|v| v.ends_with(".end"))
-            .unwrap_or_else(|| script_name(&ctx.game));
+        let name = match &ctx.settings.ending {
+            Some(crate::settings::Ending::File(f)) => f.clone(),
+            _ => script_name(&ctx.game),
+        };
         log::info!("ending script {name}");
         self.load_script(ctx, &name)?;
         Ok(())

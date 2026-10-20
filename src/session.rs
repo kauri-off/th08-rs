@@ -338,7 +338,7 @@ mod native {
 
         // Start state: private save dir with start/score.dat, th08.cfg, replays; boot seed; loader schedule.
         pub fn start(&self, ctx: &mut crate::game::Ctx) -> anyhow::Result<()> {
-            let save = std::env::temp_dir().join(format!(
+            let save = crate::settings::temp_dir().join(format!(
                 "th08_session_{}_{:?}",
                 std::process::id(),
                 std::thread::current().id()
@@ -384,9 +384,7 @@ mod native {
                 ctx.log_to_memory();
             }
             // Debug `TH08_SESSION_RNG=<row>`: RNG call sites of that menu frame.
-            let rng_row: Option<i64> = std::env::var("TH08_SESSION_RNG")
-                .ok()
-                .and_then(|v| v.parse().ok());
+            let rng_row = ctx.settings.session_rng;
             let boot = self.sched.boot_calc as i64;
             let (mut scene, mut scene_frame) = (i32::MIN, 0i64);
             let to = to.min(self.input.len()) as i64;
@@ -507,7 +505,7 @@ mod tests {
 
     #[test]
     fn session_sync() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(dir) = crate::settings::test_game_dir() else {
             return;
         };
         for (name, min) in MIN_LEADING {
@@ -560,7 +558,7 @@ mod tests {
     // Smoke test: the whole 124 705-frame noclip run (stages 1–6, ending) without panics or hangs (~12 s release).
     #[test]
     fn fullrun_smoke() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(dir) = crate::settings::test_game_dir() else {
             return;
         };
         let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {

@@ -31,12 +31,12 @@ fn parse_fog(state: &str) -> Option<(u32, f32, f32)> {
 }
 
 impl Renderer {
-    pub fn new(dir: Option<String>) -> anyhow::Result<Self> {
+    pub fn new(dir: Option<std::path::PathBuf>) -> anyhow::Result<Self> {
         let mut gfx = pollster::block_on(Gfx::headless())?;
         gfx.persistent = true;
         let ar = match dir {
             Some(d) => Some(crate::archive::Archive::from_bytes(std::fs::read(
-                Path::new(&d).join("th08.dat"),
+                crate::assets::find_file(&d, "th08.dat"),
             )?)?),
             None => None,
         };
@@ -275,7 +275,7 @@ where
         let _ = writeln!(list, "{} {} {} {}", p.0, p.1, p.2, p.3);
     }
     std::fs::write(out.join("frames.txt"), list)?;
-    let dir = std::env::var("TH08_DIR").ok();
+    let dir = crate::settings::test_game_dir();
     if dir.is_none() {
         eprintln!("TH08_DIR not set: renders use no textures");
     }
@@ -283,7 +283,7 @@ where
     let want_r: Vec<i64> = entries.iter().map(|e| e.ref_present).collect();
     let want_p: Vec<i64> = entries.iter().map(|e| e.port_present).collect();
     let ri = render_pass(&mut renderer, reference, &want_r);
-    let mut renderer2 = Renderer::new(std::env::var("TH08_DIR").ok())?;
+    let mut renderer2 = Renderer::new(crate::settings::test_game_dir())?;
     let pi = render_pass(&mut renderer2, port, &want_p);
     let esc = |s: &str| {
         s.replace('&', "&amp;")

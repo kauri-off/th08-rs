@@ -9,7 +9,7 @@ fn main() -> anyhow::Result<()> {
         args.len() >= 3,
         "usage: drawrun <out> menu <input.txt> [clr] | drawrun <out> demo <n> [last]"
     );
-    let dir = std::env::var("TH08_DIR")?;
+    let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
     let src = th08::assets::Source::native(dir.into());
     let mut ctx = pollster::block_on(th08::game::Ctx::load_with(src, gfx, false))?;

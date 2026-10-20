@@ -204,12 +204,9 @@ mod tests {
 
     #[test]
     fn all_std_parse() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        let ar =
-            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
-                .unwrap();
         let mut files = 0;
         let (mut sprites, mut ribbons) = (0, 0);
         for n in ar.names().iter().filter(|n| n.ends_with(".std")) {

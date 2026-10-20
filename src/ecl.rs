@@ -269,12 +269,9 @@ mod tests {
 
     #[test]
     fn all_ecl_parse_and_ops_known() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        let ar =
-            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
-                .unwrap();
         let mut used = std::collections::BTreeSet::new();
         for f in FILES {
             let ecl = parse(ar.read(&format!("{f}.ecl")).unwrap()).unwrap();

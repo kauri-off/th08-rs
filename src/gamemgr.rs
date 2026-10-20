@@ -246,16 +246,8 @@ impl Game {
     }
 
     // Debug `TH08_CLRD=<shot>,<any>[,<nc>]`: sets that shot's clear masks on every difficulty.
-    pub fn debug_clear_masks(&mut self) {
-        let Some(v) = crate::env::var("TH08_CLRD") else {
-            return;
-        };
-        let num = |t: &str| {
-            t.strip_prefix("0x")
-                .map_or_else(|| t.parse().ok(), |h| u16::from_str_radix(h, 16).ok())
-        };
-        let p: Vec<u16> = v.split(',').filter_map(num).collect();
-        if let [shot, any, ref rest @ ..] = p[..] {
+    pub fn debug_clear_masks(&mut self, clrd: Option<&[u16]>) {
+        if let Some(&[shot, any, ref rest @ ..]) = clrd {
             self.clear_any[shot as usize % 12] = [any; 5];
             self.clear_nc[shot as usize % 12] = [rest.first().copied().unwrap_or(0); 5];
         }
@@ -652,10 +644,7 @@ impl GameManager {
                 s.set_power(pw, &mut ctx.anm.rng);
             }
             // Port-only debug override.
-            if let Some(pw) = crate::env::var("TH08_POWER")
-                .and_then(|v| v.parse::<f32>().ok())
-                .filter(|_| ctx.game.stages_started == 0)
-            {
+            if let Some(pw) = ctx.settings.power.filter(|_| ctx.game.stages_started == 0) {
                 s.power = pw.clamp(0.0, 128.0);
             }
         }
@@ -1007,9 +996,8 @@ impl Task<Ctx> for GameManager {
         // SPEC-GAP: 0x164D30C is "frames" in 11 §2 without the increment site; assumed +1 per gameplay frame.
         self.player.borrow_mut().stats.rec.progress += 1;
         // Port-only debug: TH08_SCREEN_FX=<frame>:<type>,<p0>,<p1>,<p2>,<p3>.
-        if let Some(v) = crate::env::var("TH08_SCREEN_FX") {
-            let n: Vec<i64> = v.split([':', ',']).filter_map(|s| s.parse().ok()).collect();
-            if n.len() == 6 && n[0] == g.frame_counter as i64 {
+        if let Some(n) = ctx.settings.screen_fx {
+            if n[0] == g.frame_counter as i64 {
                 crate::effect::screen(
                     n[1] as u8,
                     n[2] as i32,

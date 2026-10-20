@@ -366,9 +366,7 @@ impl Stage {
         let mut st = Stage::new(index, std);
         st.player = player;
         st.effect_level = ctx.game.cfg.effect_level;
-        st.fast_forward = crate::env::var("TH08_STAGE_FRAME")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
+        st.fast_forward = ctx.settings.stage_frame;
         st.start(&mut ctx.anm);
         let st = Rc::new(RefCell::new(st));
         let t: task::TaskRef<Ctx> = st.clone();
@@ -1164,12 +1162,9 @@ mod tests {
 
     #[test]
     fn all_std_scripts_run() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        let ar =
-            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
-                .unwrap();
         for index in 0..18 {
             let (std_name, bg) = files(index);
             let std = stdfile::parse(&ar.read(&std_name).unwrap()).unwrap();

@@ -496,7 +496,7 @@ pub fn finish(ctx: &mut crate::game::Ctx) {
     let Some(mut r) = take_recording(&mut ctx.game) else {
         return;
     };
-    let Some(slot) = crate::env::var("TH08_REPLAY_SAVE").and_then(|v| v.parse::<u32>().ok()) else {
+    let Some(slot) = ctx.settings.replay_save else {
         return;
     };
     let name = ctx.game.score.lsnm;

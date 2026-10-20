@@ -5,6 +5,7 @@ use crate::anmvm::AnmVm;
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game, GameManager};
 use crate::gfx::{Blend, PLAYFIELD, Rect, TextureId};
+use crate::settings::{Ending, Settings};
 use crate::task::{self, Chain, Ret, Task, TaskRef};
 use anyhow::{Context, Result};
 
@@ -40,8 +41,12 @@ const MENU_LOAD: u32 = 33;
 
 pub fn register(ctx: &mut Ctx) -> Result<()> {
     let t = task::task(Supervisor {
-        debug_sprites: crate::env::var("TH08_SLOT_TEST").and_then(|v| v.parse().ok()),
-        script: crate::env::var("TH08_INPUT").and_then(|v| crate::input::load_script(&v)),
+        debug_sprites: ctx.settings.slot_test,
+        script: ctx
+            .settings
+            .input
+            .as_deref()
+            .and_then(crate::input::load_script),
         frame: 0,
         scene_task: None,
         logo: None,
@@ -62,49 +67,27 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
 }
 
 // Debug tool, not a port. Debug start (`TH08_STAGE`): difficulty `TH08_RANK` (default Normal), shot `TH08_PLAYER` (default 0).
-pub fn setup_new_game(g: &mut Game, stage: usize) -> Result<()> {
-    let shot = match crate::env::var("TH08_PLAYER") {
-        Some(v) => crate::player::parse_shot(&v)
-            .with_context(|| format!("TH08_PLAYER={v}: unknown shot type"))?,
-        None => 0,
-    };
+pub fn setup_new_game(g: &mut Game, s: &Settings, stage: usize) {
+    let shot = s.player.unwrap_or(0);
     let default_diff = if stage % 9 == 8 { 4 } else { 1 };
-    g.difficulty = crate::env::var("TH08_RANK")
-        .and_then(|s| crate::enemy::parse_difficulty(&s))
-        .unwrap_or(default_diff);
+    g.difficulty = s.rank.unwrap_or(default_diff);
     g.shot = shot;
     g.stage = stage;
     g.flags = 0;
     g.fresh_start = true;
     g.request(gamemgr::SCENE_GAME);
-    Ok(())
 }
 
 // Debug tool, not a port. `TH08_ENDING=<shot 0–11><a|b|c>` (bad / good 6A / good 6B, e.g. `0b`, `7a`) or a
 // `.end` file name (played as a good 6A ending of `TH08_PLAYER`); difficulty `TH08_RANK`, continues `TH08_CONTINUES`.
-pub fn setup_ending(g: &mut Game, v: &str) -> Result<()> {
-    let (shot, kind) = if v.ends_with(".end") {
-        let shot = match crate::env::var("TH08_PLAYER") {
-            Some(p) => crate::player::parse_shot(&p)
-                .with_context(|| format!("TH08_PLAYER={p}: unknown shot type"))?,
-            None => 0,
-        };
-        (shot, 'b')
-    } else {
-        let (n, k) = v.split_at(v.len().saturating_sub(1));
-        let shot: u8 = n
-            .parse()
-            .with_context(|| format!("TH08_ENDING={v}: expected <shot><a|b|c>"))?;
-        (shot, k.chars().next().unwrap_or('b'))
+pub fn setup_ending(g: &mut Game, s: &Settings, e: &Ending) {
+    let (shot, kind) = match e {
+        Ending::File(_) => (s.player.unwrap_or(0), 'b'),
+        Ending::Kind { shot, kind } => (*shot, *kind),
     };
-    g.difficulty = crate::env::var("TH08_RANK")
-        .and_then(|s| crate::enemy::parse_difficulty(&s))
-        .unwrap_or(1)
-        .min(3);
+    g.difficulty = s.rank.unwrap_or(1).min(3);
     g.shot = shot % 12;
-    g.stats.continues = crate::env::var("TH08_CONTINUES")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    g.stats.continues = s.continues;
     match kind {
         'a' => {
             g.flags = 0;
@@ -121,7 +104,6 @@ pub fn setup_ending(g: &mut Game, v: &str) -> Result<()> {
         }
     }
     g.request(gamemgr::SCENE_ENDING);
-    Ok(())
 }
 
 impl Supervisor {
@@ -406,29 +388,26 @@ impl Task<Ctx> for Supervisor {
                 .load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
             // Boot loading screen (12 §1): th08logo.jpg full screen + nowloading.anm scripts 0–2 at (500, 440).
             self.begin_loading(ctx)?;
-            if let Some(spec) = crate::env::var("TH08_ANM") {
-                crate::anmdebug::register(ctx, &spec)?;
+            let st = ctx.settings;
+            if let Some(spec) = &st.anm {
+                crate::anmdebug::register(ctx, spec)?;
                 return Ok(());
             }
             crate::ascii::AsciiManager::register(ctx)?;
             // Debug `TH08_REPLAY=<file | demoN>`: starts that replay; `TH08_REPLAY_SPEED=<0–2>`.
-            if let Some(v) = crate::env::var("TH08_REPLAY") {
+            if let Some(v) = &st.replay {
                 let bytes = match v.strip_prefix("demo") {
                     Some(n) => ctx.archive.read(&format!("demorpy{n}.rpy"))?,
-                    None => load_file(&v).with_context(|| format!("TH08_REPLAY={v}"))?,
+                    None => load_file(v).with_context(|| format!("TH08_REPLAY={v}"))?,
                 };
                 let r = crate::replay::Replay::parse(&bytes)?;
-                ctx.game.replay_speed = crate::env::var("TH08_REPLAY_SPEED")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
+                ctx.game.replay_speed = st.replay_speed;
                 let demo = v.strip_prefix("demo").and_then(|n| n.parse().ok());
                 crate::replay::start_playback(&mut ctx.game, r, None, demo);
-            } else if let Some(v) = crate::env::var("TH08_ENDING") {
-                setup_ending(&mut ctx.game, &v)?;
-            } else if let Some(arg) = crate::env::var("TH08_STAGE") {
-                let index = crate::stage::parse_stage_arg(&arg)
-                    .with_context(|| format!("TH08_STAGE={arg}: unknown stage"))?;
-                setup_new_game(&mut ctx.game, index)?;
+            } else if let Some(e) = &st.ending {
+                setup_ending(&mut ctx.game, st, e);
+            } else if let Some(index) = st.stage {
+                setup_new_game(&mut ctx.game, st, index);
             } else {
                 ctx.game.request(gamemgr::SCENE_MENU);
             }

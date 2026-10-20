@@ -617,7 +617,7 @@ impl ScoreDat {
     }
 }
 
-// Port save storage (not a port of the original, which writes next to th08.exe, 00 §1): never the game directory. Native: `TH08_SAVE_DIR`, else $XDG_CONFIG_HOME/th08 or ~/.config/th08,
+// Port save storage (not a port of the original, which writes next to th08.exe, 00 §1): never the game directory. Native: `TH08_SAVE_DIR`, else the port config dir (settings.rs),
 // else next to the binary. Web: localStorage (hex).
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {
@@ -635,18 +635,11 @@ fn save_dir() -> Option<std::path::PathBuf> {
     if let Some(d) = SAVE_DIR.with_borrow(|d| d.clone()) {
         return Some(d);
     }
-    if let Some(d) = crate::env::var("TH08_SAVE_DIR") {
-        return Some(d.into());
-    }
-    let cfg = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config")));
-    cfg.map(|c| c.join("th08")).or_else(|| {
-        std::env::current_exe()
-            .ok()?
-            .parent()
-            .map(|p| p.to_path_buf())
-    })
+    let s = crate::settings::get();
+    s.save_dir
+        .clone()
+        .or_else(crate::settings::config_dir)
+        .or_else(crate::settings::exe_dir)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -752,10 +745,10 @@ mod tests {
 
     #[test]
     fn real_file() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(dir) = crate::settings::test_game_dir() else {
             return;
         };
-        let Ok(f) = std::fs::read(format!("{dir}/score.dat")) else {
+        let Ok(f) = std::fs::read(crate::assets::find_file(&dir, "score.dat")) else {
             return;
         };
         let s = ScoreDat::parse(&f).unwrap();

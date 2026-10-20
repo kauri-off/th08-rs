@@ -3,13 +3,18 @@
 use crate::assets::Source;
 use crate::game::Ctx;
 use crate::gfx::Gfx;
+use crate::settings::Settings;
 use crate::task::Flow;
 use std::sync::Arc;
 use web_time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+#[cfg(not(target_arch = "wasm32"))]
+use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey;
+#[cfg(not(target_arch = "wasm32"))]
+use winit::window::Fullscreen;
 use winit::window::{Window, WindowId};
 
 // Frame_Run deadline step, 1/60 s (00 §2).
@@ -32,15 +37,21 @@ struct App {
     proxy: EventLoopProxy<UserEvent>,
     run: Option<Box<Running>>,
     started: bool,
+    settings: &'static Settings,
     // Debug `TH08_SHOT` frame.
     shot: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     shot_size: Option<(u32, u32)>,
     turbo: u32,
+    // Port display: Alt held, current fullscreen state (Alt+Enter toggles and saves it).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    alt: bool,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fullscreen: bool,
 }
 
-async fn init(window: Arc<Window>, source: Source) -> anyhow::Result<Box<Running>> {
-    let gfx = Gfx::new(window.clone()).await?;
+async fn init(window: Arc<Window>, source: Source, vsync: bool) -> anyhow::Result<Box<Running>> {
+    let gfx = Gfx::new(window.clone(), vsync).await?;
     let ctx = Ctx::load(source, gfx).await?;
     Ok(Box::new(Running {
         window,
@@ -56,10 +67,17 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         self.started = true;
-        let attrs = Window::default_attributes()
-            // 640×480 client area (00 §1); the port window is resizable and scaled.
-            .with_title("th08")
-            .with_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0));
+        let attrs = Window::default_attributes().with_title("th08");
+        // 640×480 client area (00 §1); the port window is resizable and scaled (port setting `scale`, native).
+        #[cfg(not(target_arch = "wasm32"))]
+        let attrs = {
+            let k = self.settings.scale as f64;
+            attrs
+                .with_inner_size(winit::dpi::LogicalSize::new(640.0 * k, 480.0 * k))
+                .with_fullscreen(self.fullscreen.then_some(Fullscreen::Borderless(None)))
+        };
+        #[cfg(target_arch = "wasm32")]
+        let attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0));
         #[cfg(target_arch = "wasm32")]
         let attrs = {
             use winit::platform::web::WindowAttributesExtWebSys;
@@ -67,8 +85,9 @@ impl ApplicationHandler<UserEvent> for App {
         };
         let window = Arc::new(el.create_window(attrs).expect("window"));
         let (proxy, source) = (self.proxy.clone(), self.source.clone());
+        let vsync = self.settings.vsync;
         let fut = async move {
-            match init(window, source).await {
+            match init(window, source, vsync).await {
                 Ok(r) => {
                     let _ = proxy.send_event(UserEvent::Ready(r));
                 }
@@ -103,6 +122,28 @@ impl ApplicationHandler<UserEvent> for App {
         match ev {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Resized(s) => r.ctx.gfx.resize(s.width, s.height),
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::ModifiersChanged(m) => self.alt = m.state().alt_key(),
+            // Port-only Alt+Enter: toggle fullscreen and save it; the Enter press does not reach the game.
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::KeyboardInput { event, .. }
+                if self.alt
+                    && event.state == ElementState::Pressed
+                    && matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter)
+                    ) =>
+            {
+                if !event.repeat {
+                    self.fullscreen = !self.fullscreen;
+                    r.window
+                        .set_fullscreen(self.fullscreen.then_some(Fullscreen::Borderless(None)));
+                    crate::settings::save_port_cfg(
+                        "fullscreen",
+                        if self.fullscreen { "on" } else { "off" },
+                    );
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 #[cfg(target_arch = "wasm32")]
                 r.ctx.start_once();
@@ -167,23 +208,19 @@ pub fn run(source: Source) {
     let el = EventLoop::<UserEvent>::with_user_event()
         .build()
         .expect("event loop");
-    let shot = crate::env::var("TH08_SHOT").and_then(|v| v.parse().ok());
-    let turbo = crate::env::var("TH08_TURBO")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-    // Debug `TH08_SHOT_SIZE=WxH`: the shot goes through the window's scaling blit.
-    let shot_size = crate::env::var("TH08_SHOT_SIZE").and_then(|v| {
-        let (w, h) = v.split_once('x')?;
-        Some((w.parse().ok()?, h.parse().ok()?))
-    });
+    let settings = crate::settings::get();
     let app = App {
         source,
         proxy: el.create_proxy(),
         run: None,
         started: false,
-        shot,
-        shot_size,
-        turbo,
+        settings,
+        shot: settings.shot,
+        // Debug `TH08_SHOT_SIZE=WxH`: the shot goes through the window's scaling blit.
+        shot_size: settings.shot_size,
+        turbo: settings.turbo,
+        alt: false,
+        fullscreen: settings.fullscreen && cfg!(not(target_arch = "wasm32")),
     };
     #[cfg(not(target_arch = "wasm32"))]
     {

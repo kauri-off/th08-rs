@@ -243,9 +243,7 @@ pub fn bomb_char(shot: u8, index: usize) -> u8 {
 
 // TH08_BOMB=<0–4>: forces the bomb index (4 = dissolve spell) for debugging.
 fn forced_index() -> Option<usize> {
-    crate::env::var("TH08_BOMB")
-        .and_then(|v| v.parse().ok())
-        .filter(|&i: &usize| i <= 4)
+    crate::settings::get().bomb
 }
 
 impl Player {

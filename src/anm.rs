@@ -200,21 +200,14 @@ mod tests {
     use super::*;
 
     fn game_file(name: &str) -> Option<Vec<u8>> {
-        let dir = std::env::var("TH08_DIR").ok()?;
-        let ar =
-            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).ok()?)
-                .ok()?;
-        ar.read(name).ok()
+        crate::archive::test_archive()?.read(name).ok()
     }
 
     #[test]
     fn all_anm_parse() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        let ar =
-            crate::archive::Archive::from_bytes(std::fs::read(format!("{dir}/th08.dat")).unwrap())
-                .unwrap();
         let (mut files, mut tex) = (0, 0);
         for n in ar.names().iter().filter(|n| n.ends_with(".anm")) {
             let chunks = parse(&ar.read(n).unwrap()).unwrap_or_else(|e| panic!("{n}: {e}"));

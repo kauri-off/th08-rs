@@ -213,7 +213,7 @@ mod tests {
     // Records a scripted Lunatic stage-1 run, saves/loads the .rpy and plays it back: every frame must match.
     #[test]
     fn record_playback() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(dir) = crate::settings::test_game_dir() else {
             return;
         };
         let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn demo_sync() {
-        let Some(dir) = std::env::var("TH08_DIR").ok() else {
+        let Some(dir) = crate::settings::test_game_dir() else {
             return;
         };
         let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
