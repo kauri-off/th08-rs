@@ -324,6 +324,10 @@
   Draw2DRot after the title VMs and the stage-start clock (12 §5.7). Sync: golden 8297, fullrun_noclip 7745,
   selftest1 1921, demo MIN_SYNC 4628/3879/4035/6664 unchanged; draw logs: selftest1 95.49 → 95.74 %, golden 26.94 %,
   demo / menu draw logs unchanged. SPEC-GAP 169 → 168. Questions: `docs/briefs/IMPL40_QUESTIONS.md`.
+- impl47 (audit A.45, A.60, A.61, cloud, 2026-10-20): `ScoreDat::insert_hscr` puts a new entry before equal scores
+  (15 §2.3); name-entry Up, Down, Left, Right are four independent tests per frame in that order (`move_char_cursor`,
+  16 §2.2); the HSCR / replay date is local time (`chrono::Local` native, JS `Date` on wasm; 16 §2.2). Unit tests for
+  ties and Up+Down. Traces not run (cloud). SPEC-GAP 168 → 167. Questions: `docs/briefs/IMPL47_QUESTIONS.md`.
 - impl39 (RE-Q25 CODE BUGs 4–6, 2026-10-20): screen effects registered from calc nodes below prio 3 are linked at once
   (`effect::screen_now` for the `GameMgr_Calc` demo-end fade, `loading_overlay` from the Supervisor on-register), so
   their first calc runs in the same frame (13 §3). Stage-clear panel per the rewritten 12 §5.6: op 9 stores the values

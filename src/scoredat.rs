@@ -500,8 +500,9 @@ impl ScoreDat {
             .max(100_000)
     }
 
-    // One ranking list [diff][shot] as Result_OnRegister builds it (15 §2.3): the default table, then the file's
-    // entries inserted after equal scores. Default entries carry +0x166 = 1.
+    // One ranking list [diff][shot] as Result_OnRegister builds it (15 §2.3): the default table, then the stored entries.
+    // Default entries carry +0x166 = 1.
+    // SPEC-GAP: ties keep stored order (score.dat is parsed once); 15 §2.3 reverses equal scores at each load.
     pub fn ranking(&self, shot: usize, diff: usize) -> Vec<Hscr> {
         let mut list: Vec<Hscr> = (0..10u32)
             .map(|i| Hscr::placeholder(100_000 - 10_000 * i, shot, diff))
@@ -518,12 +519,12 @@ impl ScoreDat {
         list
     }
 
-    // ScoreList_Insert 0x45A500 (15 §2.3; new entry after equal scores, INFERRED); only the top 10 survive and default
-    // entries are never stored. Returns the 0-based rank.
+    // ScoreList_Insert 0x45A500 (15 §2.3): the new entry goes before every equal score (the walk passes a node only while
+    // the new score is strictly less); only the top 10 survive and default entries are never stored. Returns the rank.
     pub fn insert_hscr(&mut self, h: Hscr) -> Option<usize> {
         let (shot, diff) = (h.shot(), h.difficulty());
         let mut list = self.ranking(shot, diff);
-        let rank = list.iter().filter(|e| e.score() >= h.score()).count();
+        let rank = list.iter().filter(|e| e.score() > h.score()).count();
         list.insert(rank, h);
         list.truncate(10);
         self.hscr
@@ -741,6 +742,24 @@ mod tests {
         assert_eq!(t, s);
         assert_eq!(t.hiscore(0, 1), 5_000_000);
         assert_eq!(t.card_history(54, 0, false), (1, 1));
+    }
+
+    // 15 §2.3 (RE-Q26): a new entry goes before equal scores, including a default entry of the same score.
+    #[test]
+    fn insert_before_equal() {
+        let mut s = ScoreDat::default();
+        let mut a = Hscr::new();
+        a.set(3_000_000, 0, 1, 2, b"FIRST", "10/18");
+        let mut b = Hscr::new();
+        b.set(3_000_000, 0, 1, 3, b"SECOND", "10/19");
+        assert_eq!(s.insert_hscr(a.clone()), Some(0));
+        assert_eq!(s.insert_hscr(b.clone()), Some(0));
+        let r = s.ranking(0, 1);
+        assert_eq!((&r[0], &r[1]), (&b, &a));
+        let mut c = Hscr::new();
+        c.set(90_000, 0, 1, 1, b"TIE", "10/20");
+        // Default rows: 100000, 90000, …; with FIRST/SECOND on top the 90000 default is rank 3.
+        assert_eq!(s.insert_hscr(c), Some(3));
     }
 
     #[test]

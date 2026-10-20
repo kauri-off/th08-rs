@@ -582,23 +582,16 @@ fn load_file(path: &str) -> Option<Vec<u8>> {
     crate::scoredat::storage_read(path)
 }
 
-// Today's "%m/%d" for HSCR +0x20 / replay info +0x6C (15 §2.3, §3.5).
-// SPEC-GAP: UTC; the original uses local time.
+// Today's "%m/%d" in local time for HSCR +0x20 / replay info +0x6C (15 §2.3, §3.5; 16 §2.2: C `localtime`).
 pub fn date_md() -> String {
     #[cfg(not(target_arch = "wasm32"))]
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
+    return chrono::Local::now().format("%m/%d").to_string();
     #[cfg(target_arch = "wasm32")]
-    let secs = (js_sys::Date::now() / 1000.0) as i64;
-    let z = secs.div_euclid(86400) + 719468;
-    let doe = z.rem_euclid(146097);
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    format!("{m:02}/{d:02}")
+    {
+        // The JS Date getters are local time.
+        let d = js_sys::Date::new_0();
+        format!("{:02}/{:02}", d.get_month() + 1, d.get_date())
+    }
 }
 
 impl Task<Ctx> for Stub {

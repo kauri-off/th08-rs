@@ -634,7 +634,6 @@ impl ResultScreen {
     }
 
     // State 9, Result_NameEntry 0x45621E (16 §2.2): input from frame 10, every key edge or repeat except the ESC finish.
-    // SPEC-GAP: 16 §2.2 runs Up, Down, Left, Right in order in one frame; here Up wins over Down and Left over Right.
     fn name_entry(&mut self, ctx: &mut Ctx) {
         if self.frame == 0 && !self.name_start(ctx) {
             return;
@@ -644,26 +643,11 @@ impl ResultScreen {
         }
         let inp = ctx.input;
         let rep = |b: u16| inp.pressed_or_repeat(b);
-        let space = |c: i32| CHARSET[c as usize] == b' ';
-        let mut c = self.char_cursor;
-        if rep(UP) || rep(DOWN) {
-            let d = if rep(UP) { -16 } else { 16 };
-            loop {
-                c = (c + d).rem_euclid(96);
-                if !space(c) {
-                    break;
-                }
-            }
-            sound::play(sound::SELECT);
-        }
-        if rep(LEFT) || rep(RIGHT) {
-            let d = if rep(LEFT) { 15 } else { 1 };
-            loop {
-                c = c / 16 * 16 + (c % 16 + d) % 16;
-                if !space(c) {
-                    break;
-                }
-            }
+        let (c, moves) = move_char_cursor(
+            self.char_cursor,
+            [rep(UP), rep(DOWN), rep(LEFT), rep(RIGHT)],
+        );
+        for _ in 0..moves {
             sound::play(sound::SELECT);
         }
         self.char_cursor = c;
@@ -1089,9 +1073,66 @@ impl Task<Ctx> for ResultScreen {
     }
 }
 
+// Name-entry cursor (16 §2.2): Up, Down, Left, Right are four independent tests in that order, each skipping the
+// space cell and playing SE 12, so Up+Down held both move. Keys are [up, down, left, right]; returns (cursor, moves).
+fn move_char_cursor(mut c: i32, keys: [bool; 4]) -> (i32, u32) {
+    let space = |c: i32| CHARSET[c as usize] == b' ';
+    let mut moves = 0;
+    for (k, held) in keys.into_iter().enumerate() {
+        if !held {
+            continue;
+        }
+        loop {
+            c = match k {
+                0 => (c - 16).rem_euclid(96),
+                1 => (c + 16).rem_euclid(96),
+                // Left/Right wrap inside the 16-cell row.
+                2 => c / 16 * 16 + (c % 16 + 15) % 16,
+                _ => c / 16 * 16 + (c % 16 + 1) % 16,
+            };
+            if !space(c) {
+                break;
+            }
+        }
+        moves += 1;
+    }
+    (c, moves)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 16 §2.2: Up and Down held in one frame both apply (−16 then +16), with SE 12 twice; same for Left+Right.
+    #[test]
+    fn name_cursor_keys_independent() {
+        assert_eq!(
+            move_char_cursor(0x12, [true, true, false, false]),
+            (0x12, 2)
+        );
+        assert_eq!(
+            move_char_cursor(0x12, [false, false, true, true]),
+            (0x12, 2)
+        );
+        assert_eq!(
+            move_char_cursor(0x02, [true, false, false, false]),
+            (0x52, 1)
+        );
+        assert_eq!(
+            move_char_cursor(0x30, [false, false, true, false]),
+            (0x3F, 1)
+        );
+        // Up from 0x0D (`N`) lands on 0x5D (space) and repeats to 0x4D.
+        assert_eq!(
+            move_char_cursor(0x0D, [true, false, false, false]),
+            (0x4D, 1)
+        );
+        // Up then Down from 0x0D: 0x4D, then 0x5D (space) is skipped to 0x0D.
+        assert_eq!(
+            move_char_cursor(0x0D, [true, true, false, false]),
+            (0x0D, 2)
+        );
+    }
 
     // Headless: stage 1 with Shot held until game over, "No" on the continue menu, name "PP" (cursor starts on END
     // because the game-start flush wrote LSNM), END, end panel, title; then score.dat is reloaded from the save dir.
