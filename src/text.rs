@@ -136,18 +136,32 @@ impl Raster {
 
     // As `render`, with the text starting at x (strip pixels).
     pub fn render_at(&mut self, s: &str, color: [u8; 3], w: usize, size: usize, x: f32) -> Vec<u8> {
+        self.render_outline(s, color, w, size, x, 0)
+    }
+
+    // As `render_at` with the outline argument: −1 → ±1 px offsets (2× space), else ±2 px (10 §6).
+    pub fn render_outline(
+        &mut self,
+        s: &str,
+        color: [u8; 3],
+        w: usize,
+        size: usize,
+        x: f32,
+        outline: i32,
+    ) -> Vec<u8> {
+        let o = if outline == -1 { 1 } else { 2 };
         // 1024×64 work surface, cleared over (0, 0, 2w, 2·size + 6) (10 §6).
         let (w2, h2) = ((2 * w).min(1024), 2 * size + 6);
         let mask = self.mask(s, (2 * size - 2) as f32, 2.0 * x, 0.0, w2, h2);
         let mut work = vec![[0f32; 4]; w2 * h2];
         let black = [0.0, 0.0, 0.0];
         let col = color.map(|c| c as f32 / 255.0);
-        // Black at (2x+4, 2), (2x, 2), (2x+2, 0), (2x+2, 4), then the colour at the centre (2x+2, 2) (10 §6, outline 0).
+        // Black at (2x+2±o, 2), (2x+2, 2±o), then the colour at the centre (2x+2, 2) (10 §6).
         for (dx, dy, c) in [
-            (4, 2, black),
-            (0, 2, black),
-            (2, 0, black),
-            (2, 4, black),
+            (2 + o, 2, black),
+            (2 - o, 2, black),
+            (2, 2 - o, black),
+            (2, 2 + o, black),
             (2, 2, col),
         ] {
             for y in 0..h2 - dy {

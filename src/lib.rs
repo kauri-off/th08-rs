@@ -20,6 +20,7 @@ pub mod drawreport;
 pub mod ecl;
 pub mod eclvm;
 pub mod effect;
+pub mod ending;
 pub mod enemy;
 pub mod env;
 pub mod game;

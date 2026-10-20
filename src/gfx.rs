@@ -970,6 +970,45 @@ impl Gfx {
         );
     }
 
+    // Copy of the (sx, sy, w, h) source rectangle to the screen at (dx, dy) (logged as a K record).
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_rect(
+        &mut self,
+        tex: TextureId,
+        sx: u32,
+        sy: u32,
+        w: u32,
+        h: u32,
+        dx: f32,
+        dy: f32,
+    ) {
+        let t = self.texture(tex);
+        let (tw, th) = (t.width as f32, t.height as f32);
+        let (u0, v0) = (sx as f32 / tw, sy as f32 / th);
+        let (u1, v1) = ((sx + w) as f32 / tw, (sy + h) as f32 / th);
+        let uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+        if let Some(mut log) = self.log.take() {
+            log.push(LogRec::Copy {
+                src: self.label_name(tex),
+                dst: "screen".into(),
+                from: [sx, sy],
+                size: [w, h],
+                to: [dx as u32, dy as u32],
+            });
+            self.log = Some(log);
+        }
+        let log = self.log.take();
+        let (w, h) = (w as f32, h as f32);
+        self.quad(
+            tex,
+            Blend::Alpha,
+            [[dx, dy], [dx + w, dy], [dx + w, dy + h], [dx, dy + h]],
+            uv,
+            [255; 4],
+        );
+        self.log = log;
+    }
+
     fn depth_view(&mut self, w: u32, h: u32) -> wgpu::TextureView {
         if let Some((dw, dh, v)) = &self.depth
             && (*dw, *dh) == (w, h)

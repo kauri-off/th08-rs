@@ -70,6 +70,11 @@
 - Header 0x68: "T8RP", u16 6, u8 debug, +0xC size w/o USER, +0x10 checksum 0x3F000318 + Σ plain bytes from 0x15, +0x15 key; bytes 0x18.. encrypted `b += key; key += 7`; +0x18 compressed size, +0x1C image size − 0x68, +0x20/+0x44 u32[9] stage / fps offsets (image coordinates).
 - Image = header + info (0x68..0x134) + per stage: 0x24-byte record + u16 input words (dummy 0 first) + fps bytes. USER text section after the compressed body.
 
+## .end (ending / staff scripts) — source: specs/16_endings_result.md §1.3 (src/ending.rs)
+- Shift-JIS text. `@` lines are commands: one command byte, then NUL-separated arguments (`@w120\0120\0\n`); ints by `atol`, strings up to the NUL; the reader then skips to the end of the line and over CR/LF. Other lines are text, copied 2 bytes at a time (≤ 0x44-byte buffer).
+- File names carry `data/` or `data/end/` prefixes; the port strips directories for the archive lookup. 14 files: `end0N{a,b,c}.end` (bad / 6A / 6B, N = team), `staff00.end` (6B), `staff00b.end` (6A). Pictures are 640×480 (`end*.jpg`) or 640×720 (`staff*.jpg`, scrolled by `@v` / `@V`).
+- `@F` falls through into `@R`, so the loaded file's first line is skipped; both staff files start with a dummy `@R`.
+
 ## Draw log — source: specs/data/drawlog/FORMAT.md (src/drawlog.rs)
 - Writer: one `F` per presented frame (sampled after the draw), `T`/`S`/`V` before a primitive when changed in the frame; `R` exactly when the formatted values satisfy the rectangle rule, else `Q`; untextured = `T -` + `-` UVs; numbers: xy 2, z/rhw 4, uv 5 decimals, trailing zeros removed. Port vertices are converted back from clip space: x = (ndc.x + 1)·320 − 0.5 (the port's +0.5 wgpu shift removed), z = z/w, rhw = 1/w.
 - Labels: `AnmManager::load` labels each entry `<file>#<index>` with the ANM header size; `Gfx::load_image(name, …)` labels images by file name. Unlabelled textures log as `?<id hex> 0 0`.

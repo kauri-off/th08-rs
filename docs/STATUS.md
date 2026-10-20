@@ -217,6 +217,23 @@
   (demo 0 90.61 %), all 78 tests pass, the wasm check passes. SPEC-GAP 110 → 172. Questions:
   `docs/briefs/IMPL27_QUESTIONS.md`.
 
+- impl28 (16 §1.1–§1.7, §3, 2026-10-20): `src/ending.rs` replaces the ending stub (scene 9). Ending object (calc 5,
+  draw 4): Ending_Init clear records (bad: CLRD+0x20 read and cleared, music 18; good: Final A/B bit 0x8000/0x4000 in
+  the no-continue / any masks of the shot and entry 12, clears counter, skip-allowed from the earlier masks,
+  "skip on the next file" from Extra unlocked / any Final A, music 18/19), `staff01.anm` in slot 24, 15 text VMs
+  (text.anm scripts 0x12+i at (64, 400 + 16i)), file choice by team (`end0N{a,b,c}.end`). `.end` interpreter: page /
+  line timers with min-waits and Shot/Enter/Ctrl release, all commands (`@0`–`@3` fades, `@F` with the `@R`
+  fall-through, `@M`, `@V`/`@v` picture scroll, `@a` staff VMs, `@b` picture, `@c` colour 0xRRGGBB, `@m` BGM + music
+  flag 0, `@r`, `@s`, `@w`, `@z`), Ctrl fast-forward ×9 when skip-allowed. Draw: picture source rect (x, y) 640×480,
+  text VMs, fade overlay stepped per draw. Text lines use Text_RenderToVm with outline −1 (±1 px, new
+  `Raster::render_outline`); `Gfx::image_rect` copies a source rectangle. Removal → scene 6 (result name entry) → title.
+  Music room stays a stub. Unlock notices (16 §4) not done.
+- Debug: `TH08_ENDING=<shot 0–11><a|b|c>` (bad / good 6A / good 6B) or `TH08_ENDING=<file>.end` starts that ending from
+  boot (`TH08_RANK`, `TH08_CONTINUES`, `TH08_PLAYER` for the file form). The scene-switch log line shows the calc frame.
+- Verified by screenshots (bad end00a pages, good end00b / end03c, staff roll start / credits / end, result panel at
+  100 %, title fade-in) and a scripted stage 1 → 6A → ending → staff roll → result → menu run. Metrics unchanged
+  (see the impl28 report). Questions: `docs/briefs/IMPL28_QUESTIONS.md`.
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
@@ -225,7 +242,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl22 done (boss phases, IMPL17 menu answers). Open: IMPL22 questions (op 36 a–d, payout time, fullrun 6266 homing hit, golden 8056, demo 2 2938). IMPL impl23 done (result screen, name entry, score.dat saving, viewer). Next IMPL: replay save dialogue (16 §2.6), th08.cfg load/save, endings, music room, info notices, key config.
+2. IMPL impl22 done (boss phases, IMPL17 menu answers). Open: IMPL22 questions (op 36 a–d, payout time, fullrun 6266 homing hit, golden 8056, demo 2 2938). IMPL impl23 done (result screen, name entry, score.dat saving, viewer). Next IMPL: replay save dialogue (16 §2.6), th08.cfg load/save, music room, info notices (16 §4), key config. Endings done (impl28).
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

@@ -80,6 +80,50 @@ pub fn setup_new_game(g: &mut Game, stage: usize) -> Result<()> {
     Ok(())
 }
 
+// Debug tool, not a port. `TH08_ENDING=<shot 0–11><a|b|c>` (bad / good 6A / good 6B, e.g. `0b`, `7a`) or a
+// `.end` file name (played as a good 6A ending of `TH08_PLAYER`); difficulty `TH08_RANK`, continues `TH08_CONTINUES`.
+pub fn setup_ending(g: &mut Game, v: &str) -> Result<()> {
+    let (shot, kind) = if v.ends_with(".end") {
+        let shot = match crate::env::var("TH08_PLAYER") {
+            Some(p) => crate::player::parse_shot(&p)
+                .with_context(|| format!("TH08_PLAYER={p}: unknown shot type"))?,
+            None => 0,
+        };
+        (shot, 'b')
+    } else {
+        let (n, k) = v.split_at(v.len().saturating_sub(1));
+        let shot: u8 = n
+            .parse()
+            .with_context(|| format!("TH08_ENDING={v}: expected <shot><a|b|c>"))?;
+        (shot, k.chars().next().unwrap_or('b'))
+    };
+    g.difficulty = crate::env::var("TH08_RANK")
+        .and_then(|s| crate::enemy::parse_difficulty(&s))
+        .unwrap_or(1)
+        .min(3);
+    g.shot = shot % 12;
+    g.stats.continues = crate::env::var("TH08_CONTINUES")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    match kind {
+        'a' => {
+            g.flags = 0;
+            g.stage = 4;
+            g.stats.clock = 12;
+        }
+        'c' => {
+            g.flags = gamemgr::F_ENDING_OK;
+            g.stage = 7;
+        }
+        _ => {
+            g.flags = gamemgr::F_ENDING_OK;
+            g.stage = 6;
+        }
+    }
+    g.request(gamemgr::SCENE_ENDING);
+    Ok(())
+}
+
 impl Supervisor {
     // Fps_Update 0x446F53 playback text (15 §3.3): "%2d" of fps_now at (384, 448), yellow or red with the flag.
     // The original refreshes on a host-timed 500 ms window, which 15 §3.3 says cannot be reproduced.
@@ -245,10 +289,20 @@ impl Supervisor {
             ctx.game.save_score(&mut ctx.anm.rng, true);
             return Ok(Some(Ret::Quit));
         }
-        log::info!("scene {cur} -> {req}");
+        log::info!("scene {cur} -> {req} (calc {})", ctx.frame);
         match (cur, req) {
             // Debug start (TH08_STAGE / TH08_REPLAY) from boot; the original always goes 0 → 1.
             (gamemgr::SCENE_BOOT, gamemgr::SCENE_GAME) => self.start_game(ctx)?,
+            // 1 / 2 → 9 (0 → 9: debug `TH08_ENDING`): unregister GM, Ending_Register 0x4296A0 (16 §1.1–§1.2).
+            (_, gamemgr::SCENE_ENDING) => {
+                self.drop_scene(ctx);
+                self.set_scene(
+                    ctx,
+                    crate::ending::Ending::new(),
+                    crate::ending::CALC_PRIO,
+                    crate::ending::DRAW_PRIO,
+                )?;
+            }
             (gamemgr::SCENE_BOOT, _) | (_, gamemgr::SCENE_MENU) => {
                 if cur == gamemgr::SCENE_MUSIC_ROOM {
                     self.capture(ctx);
@@ -311,17 +365,9 @@ impl Supervisor {
                     crate::result::DRAW_PRIO,
                 )?;
             }
-            (_, gamemgr::SCENE_ENDING | gamemgr::SCENE_MUSIC_ROOM) => {
+            (_, gamemgr::SCENE_MUSIC_ROOM) => {
                 self.drop_scene(ctx);
-                self.set_scene(
-                    ctx,
-                    Stub {
-                        kind: req,
-                        frame: 0,
-                    },
-                    4,
-                    3,
-                )?;
+                self.set_scene(ctx, Stub { kind: req }, 4, 3)?;
             }
             // 2 → 7: like 2 → 1 (also releases managed textures in the original).
             (_, gamemgr::SCENE_REPLAY_END) => {
@@ -377,6 +423,8 @@ impl Task<Ctx> for Supervisor {
                     .unwrap_or(0);
                 let demo = v.strip_prefix("demo").and_then(|n| n.parse().ok());
                 crate::replay::start_playback(&mut ctx.game, r, None, demo);
+            } else if let Some(v) = crate::env::var("TH08_ENDING") {
+                setup_ending(&mut ctx.game, &v)?;
             } else if let Some(arg) = crate::env::var("TH08_STAGE") {
                 let index = crate::stage::parse_stage_arg(&arg)
                     .with_context(|| format!("TH08_STAGE={arg}: unknown stage"))?;
@@ -541,10 +589,9 @@ impl Task<Ctx> for Supervisor {
     }
 }
 
-// SPEC-GAP: music room (8, 16 §5) and ending (9, 16 §1) are stubs; music room leaves on Bomb/ESC.
+// SPEC-GAP: the music room (8, 16 §5) is a stub; it leaves on Bomb/ESC.
 pub struct Stub {
     kind: i32,
-    frame: u32,
 }
 
 // Debug: a file from disk natively, or from the save storage (web, and `replay/…` names).
@@ -577,85 +624,22 @@ pub fn date_md() -> String {
 
 impl Task<Ctx> for Stub {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let g = &mut ctx.game;
-        if self.frame == 0
-            && self.kind == gamemgr::SCENE_ENDING
-            && g.flags & gamemgr::F_ENDING_OK != 0
-            && !g.replay()
+        if self.kind == gamemgr::SCENE_MUSIC_ROOM
+            && ctx.input.pressed(crate::input::BOMB | crate::input::PAUSE)
         {
-            // Ending_Init 0x429980 step 3 (16 §1.2): Final A / B bits of the clear masks, clears counter, music flags 18/19.
-            // SPEC-GAP: skip-allowed and "skip on the next file" are not computed (no ending script).
-            let bit = if g.stage % 9 == 7 { 0x4000 } else { 0x8000 };
-            g.set_clear(g.stats.continues == 0, bit);
-            g.play_counter(crate::scoredat::PL_CLEARS);
-            g.score.plst.music[18] = 1;
-            g.score.plst.music[19] = 1;
-        } else if self.frame == 0 && self.kind == gamemgr::SCENE_ENDING && !g.replay() {
-            // Bad ending (16 §1.2): CLRD[shot]+0x20 is read and cleared, music flag 18.
-            let shot = g.shot as usize % 12;
-            g.score.clrd[shot].bad_ending = 0;
-            g.score.plst.music[18] = 1;
-        }
-        self.frame += 1;
-        let cancel = ctx.input.pressed(crate::input::BOMB | crate::input::PAUSE);
-        let confirm = ctx.input.pressed(crate::input::SHOT | crate::input::ENTER);
-        match self.kind {
-            gamemgr::SCENE_MUSIC_ROOM => {
-                if cancel {
-                    ctx.game.request(gamemgr::SCENE_MENU);
-                }
-                return Ret::Next;
-            }
-            _ => {}
-        }
-        if self.frame >= 30 && confirm {
-            let next = if self.kind == gamemgr::SCENE_ENDING {
-                gamemgr::SCENE_RESULT
-            } else {
-                gamemgr::SCENE_MENU
-            };
-            ctx.game.request(next);
+            ctx.game.request(gamemgr::SCENE_MENU);
         }
         Ret::Next
     }
 
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        use crate::ascii::Text;
         ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
         ctx.gfx.rect(0.0, 0.0, 640.0, 480.0, [0, 0, 0, 255]);
-        let g = &ctx.game;
-        let st = &g.stats;
-        let title = match self.kind {
-            gamemgr::SCENE_ENDING if g.flags & gamemgr::F_ENDING_OK != 0 => format!(
-                "Ending (stub) route {}",
-                if g.stage % 9 == 7 {
-                    "Final B"
-                } else {
-                    "Final A"
-                }
-            ),
-            gamemgr::SCENE_ENDING => "Bad ending (stub)".to_string(),
-            gamemgr::SCENE_MUSIC_ROOM => "Music Room (stub)".to_string(),
-            _ => "Result (stub)".to_string(),
-        };
-        let lines = [
-            title,
-            String::new(),
-            format!(
-                "Score    {:09}{}",
-                st.score10.min(999_999_999),
-                st.continues.min(9)
-            ),
-            format!("Stage    {}", g.stage),
-            format!("Clock    {}", st.clock),
-            format!("Continue {}", st.continues),
-            format!("Spells   {}", st.spells),
-            String::new(),
-            "Press Shot".to_string(),
-        ];
-        for (i, l) in lines.into_iter().enumerate() {
-            ctx.ascii.push(Text::new(160.0, 160.0 + 16.0 * i as f32, l));
-        }
+        ctx.ascii.push(crate::ascii::Text::new(
+            160.0,
+            160.0,
+            "Music Room (stub)".to_string(),
+        ));
         Ret::Next
     }
 }
