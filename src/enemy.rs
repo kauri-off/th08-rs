@@ -1925,21 +1925,24 @@ impl EnemyManager {
         }
         e.life -= d;
         e.last_damage = d;
-        // 0x42B370: chained damage to the root, never below its highest active threshold.
+        // 0x42B370: chained damage to the root; skipped while bombing; the root's damage timer cuts trunc(d/2)/9.
         if let Some(r) = e.root {
+            if self.player.borrow().bombing {
+                return;
+            }
             let root = &mut self.enemies[r];
             let mut rd = d / 2;
             if root.dmg_timer.cur > 0 {
-                rd = if root.flags & A_BOSS != 0 { d / 9 } else { 0 };
+                rd = if root.flags & A_BOSS != 0 { rd / 9 } else { 0 };
             }
-            let floor = root
-                .thresholds
-                .iter()
-                .copied()
-                .filter(|&t| t >= 0)
-                .max()
-                .unwrap_or(i32::MIN);
-            root.life = (root.life - rd).max(floor);
+            // Unused −1 thresholds count as 0.
+            let floor = root.thresholds.iter().fold(0, |m, &t| m.max(t));
+            if rd != 0 {
+                root.life -= rd;
+                if root.life <= floor {
+                    root.life = floor;
+                }
+            }
         }
     }
 
@@ -2021,8 +2024,8 @@ impl EnemyManager {
             }
             self.enemies[idx].life = 0;
         }
-        // RNG order (07 §10.3): drops → death sparks ×4 → time orb.
-        if mode <= 2 && self.enemies[idx].flags & A_CHAIN_KILLED == 0 {
+        // Every death mode, also 3 and 4–7 (07 §10.3). RNG order: drops → death sparks ×4 → time orb.
+        if self.enemies[idx].flags & A_CHAIN_KILLED == 0 {
             crate::sound::play_at(
                 if idx % 2 == 0 {
                     crate::sound::ENEP0
@@ -2031,10 +2034,11 @@ impl EnemyManager {
                 },
                 pos[0],
             );
+            // Both spawns only when the signed byte e+0x3310 ≥ 0.
             if db[0] < 0x80 {
                 crate::effect::spawn(anm, db[0], pos, 1, 0xFFFFFFFF);
+                crate::effect::spawn(anm, db[1].wrapping_add(4), pos, 4, 0xFFFFFFFF);
             }
-            crate::effect::spawn(anm, db[1].wrapping_add(4), pos, 4, 0xFFFFFFFF);
             let max = {
                 let p = self.player.borrow();
                 p.stats.human_max() || p.stats.youkai_max()

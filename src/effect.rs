@@ -426,10 +426,11 @@ impl Effects {
             }
             21 | 26 => {
                 e.centre = pos;
-                let a = if param[0] > 0.0 {
-                    param[0]
+                // EffInit_Burst 0x4270C0 (13 §2.6): ECL passes −999.0 for "random"; 0 and negative angles are kept.
+                let a = if param[0] <= -990.0 {
+                    rng.next_f32() * (2.0 * PI) - PI
                 } else {
-                    rng.next_f32() * 2.0 * PI
+                    crate::anmvm::wrap_add(param[0], 0.0)
                 };
                 let m = 1.0 + rng.next_f32() * 1.5;
                 e.dir = [a.cos() * m, a.sin() * m, 0.0];

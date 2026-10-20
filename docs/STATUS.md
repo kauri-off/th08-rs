@@ -296,6 +296,13 @@
   value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
   and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
   Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
+- impl43 (RE-Q28 CODE BUGs 3–5, 2026-10-21): chained damage forward to the root (07 §10.1 step 6): skipped while
+  bombing, rd = d/2 then rd/9 (boss) or 0 by the root's damage timer, floor = max(0, the root's thresholds), applied
+  only when rd ≠ 0. Death sfx, sparks and time orb for every death mode (also 3 and 4–7), both spark spawns only when
+  e+0x3310 ≥ 0 (07 §10.3). Burst effects 21/26: random angle FloatRange(2π) − π only when param.x ≤ −990, else
+  `Angle_AddNormalize(param.x)` (13 §2.6). Sync: golden 9046 → 10781, fullrun_noclip 9345 → 9407 (`MIN_LEADING`),
+  selftest1 1921, demo MIN_SYNC 4628/3879/4035/6664 unchanged; draw logs: golden 38.17 → 47.51 %, selftest1 95.74 %.
+  SPEC-GAP 167. Questions: `docs/briefs/IMPL43_QUESTIONS.md`.
 - impl42 (RE-Q28 CODE BUGs 1–2 + port infrastructure, 2026-10-21): tests, `settings::get()`/`test_game_dir()` and every
   `src/bin/*` tool use defaults + env/CLI only (`Settings::from_environment` / `from_args`); only the game entry
   points read port.cfg / localStorage (`Settings::game_from_args` in `main.rs`, `Settings::game_environment` in the
