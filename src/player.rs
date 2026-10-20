@@ -1235,6 +1235,8 @@ impl Task<Ctx> for Player {
             // Full exit hides the gauge readout (11 §7, 12 §5.9).
             if !matches!(ctx.game.requested, 3 | 11 | 12) {
                 crate::ascii::gauge_interrupt(99);
+                // Boss markers M_0..M_2 hidden at once (12 §5.10).
+                (0..3).for_each(|k| crate::ascii::marker_interrupt(k, 99));
             }
             ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
         }

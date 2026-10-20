@@ -843,8 +843,12 @@ impl EnemyManager {
         self.spare.push(p);
     }
 
-    // Enemy_Free: also clears the aimed pointer (14 §3.1, 07 §10.1).
+    // Enemy_Free: also clears the aimed pointer (14 §3.1, 07 §10.1); a boss fades its ENEMY marker out (12 §5.10).
     pub fn free(&mut self, idx: usize) {
+        let e = &self.enemies[idx];
+        if e.flags & A_BOSS != 0 && (0..4).contains(&e.boss_slot) {
+            crate::ascii::marker_release(e.boss_slot as usize);
+        }
         if self.player.borrow().aimed == Some(idx) {
             self.player.borrow_mut().aimed = None;
         }
@@ -1768,6 +1772,8 @@ impl EnemyManager {
         let spell = self.g.spell.is_some();
         let bombed = self.g.spell.as_ref().is_some_and(|s| s.bombed);
         let e = &mut self.enemies[idx];
+        // The hit flash needs only d > 0 at step 6, also without bit 3 (07 §10.1 step 7).
+        e.hit = true;
         if e.flags & A_LOSES_LIFE == 0 {
             return;
         }
@@ -1796,7 +1802,6 @@ impl EnemyManager {
         }
         e.life -= d;
         e.last_damage = d;
-        e.hit = true;
         // 0x42B370: chained damage to the root, never below its highest active threshold.
         if let Some(r) = e.root {
             let root = &mut self.enemies[r];
@@ -2032,23 +2037,36 @@ impl EnemyManager {
         let e = &mut self.enemies[idx];
         // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
         if std::mem::take(&mut e.hit) && !e.flash {
-            if e.last_damage > 0 {
-                let low = (e.flags_b >> 4) & 3 >= 2;
-                crate::sound::play_at(
-                    if low {
-                        crate::sound::DAMAGE1
-                    } else {
-                        crate::sound::DAMAGE0
-                    },
-                    e.final_pos[0],
-                );
-            }
+            let low = (e.flags_b >> 4) & 3 >= 2;
+            crate::sound::play_at(
+                if low {
+                    crate::sound::DAMAGE1
+                } else {
+                    crate::sound::DAMAGE0
+                },
+                e.final_pos[0],
+            );
             e.vm.flags |= anmvm::F_COLOR2;
             // BGRA: R 0xFF, G 0x60, B 0x80, current alpha.
             e.vm.color2 = [0x80, 0x60, 0xFF, e.vm.color[anmvm::A]];
             e.flash = true;
         } else if std::mem::take(&mut e.flash) {
             e.vm.flags &= !anmvm::F_COLOR2;
+        }
+        // ENEMY marker (12 §5.10): x + 32 (−999 while not drawn); mode = warning level + 1, else 1 on a hit flash.
+        if e.flags & A_BOSS != 0 && (0..4).contains(&e.boss_slot) {
+            let x = if e.flags & A_HIDDEN != 0 {
+                -999.0
+            } else {
+                e.final_pos[0] + 32.0
+            };
+            let level = ((e.flags_b >> 4) & 3) as u8;
+            let mode = if level != 0 {
+                level + 1
+            } else {
+                (e.vm.flags & anmvm::F_COLOR2 != 0) as u8
+            };
+            crate::ascii::marker_track(e.boss_slot as usize, x, mode);
         }
         if !pause {
             e.boss_timer.tick(gs);

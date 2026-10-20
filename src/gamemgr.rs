@@ -602,6 +602,8 @@ impl GameManager {
         g.fresh_start = false;
         let (stage, shot, d) = (g.stage, g.shot, g.diff());
         Player::register(ctx, self.player.clone(), shot)?;
+        // Player_Load fades out boss markers M_0..M_2 (M_3 is never sent this, 12 §5.10).
+        (0..3).for_each(|k| crate::ascii::marker_interrupt(k, 2));
         // Player_Load shows the gauge readout on a fresh start; StageStart re-runs its setup after Player_Load, so
         // it uses the new game's limits (12 §5.9).
         if fresh {

@@ -51,7 +51,7 @@
 - `src/text.rs` — Text_RenderToVm rasteriser: 2× work surface, 4-offset black outline, speaker colour, 2:1 box downsample into the `text.anm` render target (`Gfx::write_texture`). Font: `TH08_FONT`, else MS Gothic / Noto Sans CJK / Droid paths natively; canvas 2D `fillText` on the web.
 - `src/gamemgr.rs` — `Game` (persistent GM state in `Ctx`: scene, difficulty, shot, stage, flags, rank, clear masks) and GameManager task (calc 2): new game / next stage start (RNG jitter + decoys + checksums, stats defaults, time thresholds, rank table), stats carried between stages through the player, stage-end state machine (clear masks, Stage_Advance 4A/4B and 6A/6B, ending / result / night-over), loading with "Press Shot Button" wait after a clear, pause (ESC), game over → continue menu, score roll, rank sub-counter → ECL rank var, continue side effects.
 - `src/ascii.rs` — ASCII manager (calc 1, draw 14/20): text queue with `ascii.anm` glyphs, pause menu (12 §3: states, confirm screens, ESC/Q/R shortcuts, quit / retry scenes) and continue menu (11 §4.2 / 12 §4: ending when the night is over, Yes → +1 clock, continue resets; No → result).
-- `src/hud.rs` — HUD (calc 15, draw 17): front.anm side panel (tiles, labels, hiscore/score + continue digit, life/bomb icons, power gauge, graze, point/extend, time/threshold), stage title + song card (stgNtxt) and night clock (times.anm, ECL 179/181), dialogue drawing (portraits by z, growing text box, lines, boss name card), boss UI (life bar ±0.01/0.02, markers (ECL 158), remaining-bars gauge (ECL 148), timer colours, spell name/bonus), popups (bonus, messages, spell card bonus), stage-clear panel with bonus computation and animated clock that fires the clear trigger, op 14 white flash, op 7 BGM change, op 12 fade.
+- `src/hud.rs` — HUD (calc 15, draw 17): front.anm side panel (tiles, labels, hiscore/score + continue digit, life/bomb icons, power gauge, graze, point/extend, time/threshold), stage title + song card (stgNtxt) and night clock (times.anm, ECL 179/181), dialogue drawing (portraits by z, growing text box, lines, boss name card), boss UI (life bar ±0.01/0.02, markers (ECL 158), remaining-bars gauge (ECL 148), timer colours, spell name/bonus), popups (bonus, messages, spell card bonus), stage-clear panel with bonus computation and animated clock that fires the clear trigger, op 7 BGM change, op 12 fade (op 14 flash = ScreenEffect type 4 since impl30).
 - `src/supervisor.rs` — scene switching per 11 §7 (0 boot, 1 menu, 2 game, 3 next stage, 6 result, 9 ending, 10 retry, 11 reload); the main menu (`src/menu.rs`) starts games; ending is a text stub (result: impl23). `TH08_STAGE` now starts a full game at that stage.
 - `src/audio.rs` — BGM pause/resume and linear fade-out.
 - Spell end (ECL 123): capture → score bonus, spells +1, time bonus formula (11 §8), popups; enemies freed by the dialogue's destroy step when they have no death sub left (4A/4B midboss).
@@ -243,6 +243,19 @@
   - Leading rows: golden 8055 → 8104, fullrun_noclip 6265 → 7552, selftest1 1422. Demo sync 4450/3869/2937/1605 →
     4450/3869/3081/1605. Draw logs unchanged. fullrun smoke now reaches 5 stages (desynced input; assert lowered).
     SPEC-GAP 179 → 182. Questions: `docs/briefs/IMPL29_QUESTIONS.md`.
+
+- impl30 (RE-Q25 draw fixes, 2026-10-20): boss "ENEMY" markers (12 §5.10) in `src/ascii.rs`: four ASCII VMs
+  (`ascii.anm` script 10) restarted by `gauge_setup`, run every `Ascii_Calc`, frame counter +0x8284; interrupts from
+  op 127 (1 / 2), `Enemy_Free` of a boss (2 + pos −999), Player_Load (2 to M_0–M_2), full-exit player on-remove
+  (99); `EnemyMgr_Calc` writes pos (x + 32, 472) and the mode (warning level + 1 / hit flash) after the hit flash;
+  drawn at the end of the prio-20 ASCII pass (alpha by player distance, 0x80FF4040 flash, sprite 158 blink).
+  Hit flash + damage sfx now on any d > 0 at step 6, also without flags A bit 3 (07 §10.1 step 7).
+  Draw mode 5 uses the projected z per vertex; mode 4 = DrawBillboard via `AnmManager::cam_right` (05 §9;
+  unreachable through the dispatch). Msg op 14 = ScreenEffect type 4, 442 frames, prio 0x15 (13 §3); HUD flash removed.
+  - Golden markers match the reference draw log on every synced frame (positions, alpha, flash) except the blink
+    phase (one frame, SPEC-GAP Q1). Golden draw log 25.10 → 25.14 %. Leading rows 8104 / 7552 / 1422, demo
+    MIN_SYNC 4450/3869/3081/1605, demo / menu draw logs unchanged, 81 tests, wasm check passes. SPEC-GAP 182 → 180.
+    Questions: `docs/briefs/IMPL30_QUESTIONS.md`.
 
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).

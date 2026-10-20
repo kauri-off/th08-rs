@@ -45,6 +45,8 @@ pub struct AnmManager {
     pub bomb_drew: bool,
     // Camera used by VMs with flag bit 15 (05 §9).
     pub stage_camera: Option<Camera>,
+    // 0x4EA3F4 = g_Stage+0x63C4: normalised camera-right vector written by Stage_SetCamera every frame (05 §9 mode 4).
+    pub cam_right: [f32; 3],
     // Blend state cache +0x24C0: blend bits 2/3 keep whatever the previous sprite set (05 §12.5).
     last_blend: Blend,
     // +0x24C8: last sprite whose texture matrix Draw3DWorld uploaded, with its UV offset (05 §12.8).
@@ -76,6 +78,7 @@ impl Default for AnmManager {
             stage_tint: None,
             bomb_drew: false,
             stage_camera: None,
+            cam_right: [0.0; 3],
             last_blend: Blend::Alpha,
             last_tex_matrix: None,
             bound_tex: None,
@@ -409,25 +412,45 @@ impl AnmManager {
             [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
                 .map(|(dx, dy)| [dx * c - dy * s + px + ax, dx * s + dy * c + py + ay])
         };
+        // Mode 4 sizes the quad from the projection; both 3D modes carry the projected z as vertex depth (05 §9).
+        let mut depth = [z; 4];
+        let stage_cam = vm.flags & F_STAGE_CAM != 0;
+        let cam = |anm: &Self, vp| match (stage_cam, anm.stage_camera) {
+            (true, Some(c)) => c,
+            _ => Camera::set_2d(vp),
+        };
         let (corners, snap) = match mode {
             // 0 Draw2DSnap 0x462FF0, 1 Draw2D 0x463800, 2 Draw2DRot 0x463210 (snaps only when unrotated), 3 Draw2DRotNoSnap 0x463470.
             0 => (axis_aligned(), true),
             1 => (axis_aligned(), false),
             2 | 3 if vm.rotation[2] == 0.0 => (axis_aligned(), mode == 2),
             2 | 3 => (rotated(), false),
-            // SPEC-GAP: mode 4 draws nothing; 05 §9 sizes it with the camera-right vector Stage_SetCamera writes each frame.
-            4 => return,
+            // 4 DrawBillboard 0x463CF0: never reached through the dispatch (05 §9 reachability), kept for completeness.
+            4 => {
+                let vp = gfx.viewport();
+                let cam = cam(self, vp);
+                let s = cam.project([px, py, pz], vp);
+                if !(0.0..=1.0).contains(&s[2]) {
+                    return;
+                }
+                let r = self.cam_right;
+                let s2 = cam.project([px + r[0], py + r[1], pz + r[2]], vp);
+                let len = ((s2[0] - s[0]).powi(2) + (s2[1] - s[1]).powi(2)).sqrt();
+                let (hw, hh) = (hw * len, hh * len);
+                depth = [s[2]; 4];
+                let (sn, cs) = vm.rotation[2].sin_cos();
+                let c = [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
+                    .map(|(dx, dy)| [dx * cs - dy * sn + s[0], dx * sn + dy * cs + s[1]]);
+                (c, false)
+            }
             // 5 Draw3DQuad 0x464070; the anchor shift uses the absolute half size (05 §12.7).
             5 => {
                 Self::update_world_matrix(vm);
                 let mut w = vm.world_matrix;
                 w.0[3] = [px + ax.abs(), py + ay.abs(), pz, 1.0];
                 let vp = gfx.viewport();
-                let cam = match (vm.flags & F_STAGE_CAM != 0, self.stage_camera) {
-                    (true, Some(c)) => c,
-                    _ => Camera::set_2d(vp),
-                };
-                let corners = [
+                let cam = cam(self, vp);
+                let projected = [
                     [-128.0, -128.0],
                     [128.0, -128.0],
                     [-128.0, 128.0],
@@ -435,11 +458,11 @@ impl AnmManager {
                 ]
                 .map(|[x, y]| {
                     let p = w.transform([x, y, 0.0]);
-                    let s = cam.project([p[0], p[1], p[2]], vp);
-                    [s[0], s[1]]
+                    cam.project([p[0], p[1], p[2]], vp)
                 });
-                // SPEC-GAP: 05 §9 uses the projected z as the mode-5 vertex depth; the port keeps `z` (pos z).
-                (corners, false)
+                // EmitQuad never rewrites z: the projected z is the vertex depth (≈ 0.9994 for z = 0 under the 2D camera).
+                depth = projected.map(|s| s[2]);
+                (projected.map(|s| [s[0], s[1]]), false)
             }
             _ => return,
         };
@@ -471,8 +494,9 @@ impl AnmManager {
         let rgba = self.vm_color(vm);
         let blend = self.blend_for(vm);
         let uv = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
-        let v =
-            std::array::from_fn(|i| Vertex::screen(corners[i][0], corners[i][1], z, uv[i], rgba));
+        let v = std::array::from_fn(|i| {
+            Vertex::screen(corners[i][0], corners[i][1], depth[i], uv[i], rgba)
+        });
         self.bound_tex = Some(spr.tex);
         gfx.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
     }

@@ -1,4 +1,4 @@
-//! ASCII manager 0x4CCE20: string queue, score popups, gauge readout, pause and continue menus (12 §2.9, §3, §4, §5.9; 13 §4).
+//! ASCII manager 0x4CCE20: string queue, score popups, gauge readout, boss markers, pause and continue menus (12 §2.9, §3, §4, §5.9, §5.10; 13 §4).
 
 use crate::anmvm::{self, AnmVm};
 use crate::game::Ctx;
@@ -398,6 +398,13 @@ struct Gauge {
     vms: Vec<AnmVm>,
     id: i32,
     player: std::rc::Weak<std::cell::RefCell<crate::player::Player>>,
+    // Boss "ENEMY" markers M_k at +0x17C4 + k·0x2A4, k = boss slot (12 §5.10).
+    markers: Vec<AnmVm>,
+    // +0x2254[slot]: 0 plain, 1 hit flash, 2–4 low-life blink (warning level + 1), written by EnemyMgr_Calc.
+    marker_mode: [u8; 4],
+    // +0x8284: incremented at the end of every Ascii_Calc (12 §5.10).
+    // SPEC-GAP: start value / boot calc count of +0x8284 not in 12 §5.10 (golden blink phase is one frame off).
+    frame: u32,
 }
 
 thread_local! {
@@ -412,11 +419,12 @@ const G_GLYPH: usize = 4;
 
 // Ascii_SetupGaugeVms 0x402600: restarts the scripts (keeping pos), places 人/妖 from the gauge limits, re-sends the stored interrupt.
 // AnmFile_StartScript does not zero pos (05 §8), so G0/G3 keep theirs; min/max = gauge limits (09 §9.3).
-// Not implemented: the restarts of the other ASCII VMs +0x1520 (script 9) and +0x17C4.. (script 10) (12 §5.9 step 1).
+// The restart of +0x1520 (script 9) is skipped: that VM is run but never drawn (12 §5.9 step 1).
 pub fn gauge_setup(anm: &mut crate::anmmgr::AnmManager, min: i32, max: i32) {
     GAUGE.with_borrow_mut(|g| {
         if g.vms.is_empty() {
             g.vms = vec![AnmVm::default(); 5];
+            g.markers = vec![AnmVm::default(); 4];
         }
         for (k, script) in [
             (G_BAR, 5),
@@ -426,6 +434,9 @@ pub fn gauge_setup(anm: &mut crate::anmmgr::AnmManager, min: i32, max: i32) {
             (G_GLYPH, 4),
         ] {
             anm.start_script(&mut g.vms[k], ANM_SLOT, script);
+        }
+        for m in g.markers.iter_mut() {
+            anm.start_script(m, ANM_SLOT, MARKER_SCRIPT);
         }
         g.vms[G_HUMAN].pos[0] -= 56.0 * min as f32 / -10000.0;
         g.vms[G_YOUKAI].pos[0] += 56.0 * max as f32 / 10000.0;
@@ -466,15 +477,84 @@ pub fn gauge_fade(pos: [f32; 3]) {
     }
 }
 
-// Run every frame by Ascii_Calc, also while paused (12 §5.9).
+// Run every frame by Ascii_Calc, also while paused (12 §5.9, §5.10).
 fn gauge_calc(anm: &mut crate::anmmgr::AnmManager) {
     GAUGE.with_borrow_mut(|g| {
         g.vms
             .iter_mut()
+            .chain(g.markers.iter_mut())
             .filter(|v| v.script.is_some())
             .for_each(|v| {
                 v.run(anm);
             })
+    });
+}
+
+// ascii.anm script 10: sprite 157 plate, label 1 fade in over 30, label 2 fade out over 30 then hidden, −1 hidden.
+const MARKER_SCRIPT: usize = 10;
+const MARKER_SPRITE: i16 = 157;
+const MARKER_BLINK_SPRITE: i16 = 158;
+
+// 0x422BB0: interrupt to marker k (12 §5.10).
+pub fn marker_interrupt(k: usize, id: u16) {
+    GAUGE.with_borrow_mut(|g| {
+        if let Some(m) = g.markers.get_mut(k) {
+            m.pending_interrupt = id;
+        }
+    });
+}
+
+// Op 127 −1 / Enemy_Free of a boss: interrupt 2 and pos := (−999, −999, 0) (12 §5.10).
+pub fn marker_release(k: usize) {
+    marker_interrupt(k, 2);
+    GAUGE.with_borrow_mut(|g| {
+        if let Some(m) = g.markers.get_mut(k) {
+            m.pos = [-999.0, -999.0, 0.0];
+        }
+    });
+}
+
+// Per boss-flag enemy in EnemyMgr_Calc after the hit flash (12 §5.10): pos (x, 472, 0) in screen coordinates.
+pub fn marker_track(k: usize, x: f32, mode: u8) {
+    GAUGE.with_borrow_mut(|g| {
+        if let Some(m) = g.markers.get_mut(k) {
+            m.pos = [x, 472.0, 0.0];
+            g.marker_mode[k] = mode;
+        }
+    });
+}
+
+// Tail of Ascii_DrawStrings (prio 20, full-screen viewport, 12 §5.10); the colour is rewritten every frame.
+fn markers_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
+    GAUGE.with_borrow_mut(|g| {
+        let px = g
+            .player
+            .upgrade()
+            .and_then(|p| p.try_borrow().ok().map(|p| p.pos[0]));
+        let px = px.unwrap_or(0.0);
+        let frame = g.frame;
+        gfx.set_viewport(FULLSCREEN);
+        for k in 0..g.markers.len() {
+            let m = &mut g.markers[k];
+            if !(56.0..=392.0).contains(&m.pos[0]) {
+                continue;
+            }
+            let d = (m.pos[0] - 32.0 - px).abs();
+            // Set directly, without SetSprite (both plates are 48×16).
+            m.sprite_index = MARKER_SPRITE;
+            let plain = 0xFFFFFF | (if d < 64.0 { (d + 96.0) as u32 } else { 160 }) << 24;
+            let argb = match g.marker_mode[k] {
+                1 => 0x80FF4040,
+                n @ 2..=4 if frame % (32 >> n) == 0 => {
+                    m.sprite_index = MARKER_BLINK_SPRITE;
+                    0xFFFFFFFF
+                }
+                _ => plain,
+            };
+            set_rgb(m, argb);
+            m.color[anmvm::A] = (argb >> 24) as u8;
+            anm.draw_mode(gfx, m, 0);
+        }
     });
 }
 
@@ -997,6 +1077,8 @@ impl Task<Ctx> for AsciiManager {
                 popups_calc(ctx.anm.speed);
             }
         }
+        // +0x8284 is incremented at the very end of Ascii_Calc (12 §5.10).
+        GAUGE.with_borrow_mut(|g| g.frame = g.frame.wrapping_add(1));
         Ret::Next
     }
 
@@ -1037,6 +1119,9 @@ impl Task<Ctx> for AsciiManager {
         let mut q = std::mem::take(&mut ctx.ascii);
         q.draw(&ctx.anm, &mut ctx.gfx, high);
         ctx.ascii = q;
+        if high {
+            markers_draw(&mut ctx.anm, &mut ctx.gfx);
+        }
         Ret::Next
     }
 }

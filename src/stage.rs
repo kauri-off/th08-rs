@@ -630,12 +630,15 @@ impl Stage {
         // Port-only hand-off: camera and overlay colour for the effect manager (13 §2.6a, §2.6c).
         let cam = self.cam.camera(PLAYFIELD);
         let m = cam.view.0;
+        let right = normalize([m[0][0], m[0][1], m[0][2]]);
+        // Stage_SetCamera's camera-right vector 0x4EA3F4, used by DrawBillboard (05 §9 mode 4).
+        anm.cam_right = right;
         crate::effect::set_view(crate::effect::View {
             cam: Some(cam),
             pos: self.cam.v[POS],
             eye: self.cam.eye(),
             facing: self.cam.v[FACING],
-            right: normalize([m[0][0], m[0][1], m[0][2]]),
+            right,
         });
         let overlay = self.overlay.color;
         crate::effect::with(|e| e.overlay = overlay);

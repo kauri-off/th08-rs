@@ -1739,7 +1739,14 @@ impl Exec<'_> {
                 if slot < 0 {
                     self.m.unregister_boss(self.idx);
                     self.e.flags &= !A_BOSS;
+                    // ENEMY marker fade-out (12 §5.10).
+                    if (0..4).contains(&self.e.boss_slot) {
+                        crate::ascii::marker_release(self.e.boss_slot as usize);
+                    }
                 } else if let Some(b) = self.m.bosses.get_mut(slot as usize) {
+                    if slot < 4 {
+                        crate::ascii::marker_interrupt(slot as usize, 1);
+                    }
                     *b = Some(self.idx);
                     self.e.flags |= A_BOSS;
                     self.e.boss_slot = slot;

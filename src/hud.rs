@@ -86,8 +86,6 @@ pub struct Hud {
     timer_last: i32,
     popups: Vec<ActivePopup>,
     clear: Option<ClearPanel>,
-    // Msg op 14 flash age in frames (442-frame fade to white, 10 §5.1).
-    flash: Option<u32>,
 }
 
 impl Hud {
@@ -117,7 +115,6 @@ impl Hud {
             timer_last: -1,
             popups: Vec::new(),
             clear: None,
-            flash: None,
         }));
         let t: task::TaskRef<Ctx> = h.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -253,7 +250,9 @@ impl Hud {
                     ctx.audio.play_bgm(&name);
                 }
                 Event::BgmFade => ctx.audio.fade_bgm(4.0),
-                Event::Flash => self.flash = Some(0),
+                // Msg op 14 (10 §5.1, 13 §3): ScreenEffect type 4, 442 frames to white, draw prio 0x15.
+                // The full-repaint counter 0x17CE8CC := 442 is moot: the port repaints the panel every frame.
+                Event::Flash => crate::effect::screen(4, 442, 0xFFFFFF, 0, 0, 0x15),
                 Event::StageEnd => self.stage_end(ctx),
                 // Msg op 11: GM flags & ~0x60 | 0x40 (game-clear trigger).
                 Event::HaltFinal => ctx.game.set_end_state(2),
@@ -884,12 +883,6 @@ impl Task<Ctx> for Hud {
                     Popup::SpellBonus(_) => 280,
                 }
         });
-        if let Some(f) = &mut self.flash {
-            *f += 1;
-            if *f > 442 {
-                self.flash = None;
-            }
-        }
         let anm = &mut ctx.anm;
         for vm in self.front.iter_mut().chain(self.title.iter_mut()).chain([
             &mut self.diff_vm,
@@ -932,18 +925,6 @@ impl Task<Ctx> for Hud {
         self.draw_clear(ctx);
         let st = self.player.borrow().stats.clone();
         self.draw_panel(ctx, &st);
-        // SPEC-GAP: 10 §5.1 makes op 14 a ScreenEffect type 4 at draw prio 21; the port draws it inside the HUD (prio 17).
-        if let Some(f) = self.flash {
-            ctx.gfx.set_viewport(FULLSCREEN);
-            ctx.gfx.rect(
-                0.0,
-                0.0,
-                640.0,
-                480.0,
-                [255, 255, 255, (255 * f / 442) as u8],
-            );
-        }
-        let _ = anmvm::A;
         Ret::Next
     }
 }
