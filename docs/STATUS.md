@@ -377,6 +377,11 @@
   spell practice (GameFlags bit 14, `Stage::sparkle_due`, 06 §5); a billboard appends a sparkle point only when it is
   drawn (0 ≤ z ≤ 1), `v < fog_near` quirk in `sparkle_point_ok` (06 §11.1). Unit tests for all three. Traces not run
   (cloud). SPEC-GAP 148 → 145. No questions.
+- impl57 (audit A.29, A.30, A.31, cloud, 2026-10-20): Yukari's option always runs the animation test after the attack
+  test, on the sub-state the frame entered with, so it can overwrite sub 3 / interrupt 3 while the aimed pointer stays
+  (14 §3.1); a shot origin reads the option pos whatever the option's state (09 §4.3); laser init 4 and update 5 both
+  honour GameFlags bit 13 (refuse / end the laser, 14 §4). Unit tests for all three. Traces not run (cloud).
+  SPEC-GAP 134 → 130. No questions.
 - impl39 (RE-Q25 CODE BUGs 4–6, 2026-10-20): screen effects registered from calc nodes below prio 3 are linked at once
   (`effect::screen_now` for the `GameMgr_Calc` demo-end fade, `loading_overlay` from the Supervisor on-register), so
   their first calc runs in the same frame (13 §3). Stage-clear panel per the rewritten 12 §5.6: op 9 stores the values

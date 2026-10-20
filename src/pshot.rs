@@ -4,7 +4,7 @@ use crate::anmvm::{self, AnmVm, Timer};
 use crate::gfx::Gfx;
 use crate::input;
 use crate::item::ItemManager;
-use crate::player::{ANM_SLOT, Player};
+use crate::player::{ANM_SLOT, GF_13, Player};
 use crate::sht::ShotEntry;
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -253,48 +253,50 @@ impl Player {
                     }
                 };
                 if o.sub < 3 {
+                    // `Option_YukariFollow` 0x44E770: follow step, then the attack test.
+                    let entered = o.sub;
                     smooth(o, [px, (py - 96.0).max(32.0)]);
-                    // SPEC-GAP: 14 §3.1 runs the animation test after the attack test always; port: sub-0 start only.
-                    let starting = o.sub == 0 && o.vel[0] != 0.0;
-                    if shooting && aimed.is_some() && t >= 10 && !starting {
+                    if shooting && aimed.is_some() && t >= 10 {
                         o.vm.pending_interrupt = 3;
                         o.sub = 3;
                     } else {
                         aimed = None;
-                        // Animation test (14 §3.1): scale.x negative = mirrored while moving right.
-                        let vx = o.vel[0];
-                        let mirror = |o: &mut Opt, neg: bool| {
-                            o.vm.scale[0] = if neg {
-                                -o.vm.scale[0].abs()
-                            } else {
-                                o.vm.scale[0].abs()
-                            }
-                        };
-                        match o.sub {
-                            0 if vx != 0.0 => {
-                                o.vm.pending_interrupt = 2;
-                                o.sub = if vx > 0.0 { 2 } else { 1 };
-                                mirror(o, vx > 0.0);
-                            }
-                            1 | 2 if vx == 0.0 => {
-                                o.vm.pending_interrupt = 1;
-                                o.sub = 0;
-                                mirror(o, false);
-                            }
-                            1 if vx > 0.0 => {
-                                o.vm.pending_interrupt = 2;
-                                o.sub = 2;
-                                mirror(o, true);
-                            }
-                            2 if vx < 0.0 => {
-                                o.vm.pending_interrupt = 2;
-                                o.sub = 1;
-                                mirror(o, false);
-                            }
-                            _ => {}
-                        }
-                        o.vm.flags |= anmvm::F_SCALE_DIRTY;
                     }
+                    // Animation test (14 §3.1), always run on the sub-state the frame entered with: it can overwrite
+                    // the sub 3 / interrupt 3 just set while the aimed pointer stays, so the attack starts next frame.
+                    // scale.x negative = mirrored while moving right.
+                    let vx = o.vel[0];
+                    let mirror = |o: &mut Opt, neg: bool| {
+                        o.vm.scale[0] = if neg {
+                            -o.vm.scale[0].abs()
+                        } else {
+                            o.vm.scale[0].abs()
+                        }
+                    };
+                    match entered {
+                        0 if vx != 0.0 => {
+                            o.vm.pending_interrupt = 2;
+                            o.sub = if vx > 0.0 { 2 } else { 1 };
+                            mirror(o, vx > 0.0);
+                        }
+                        1 | 2 if vx == 0.0 => {
+                            o.vm.pending_interrupt = 1;
+                            o.sub = 0;
+                            mirror(o, false);
+                        }
+                        1 if vx > 0.0 => {
+                            o.vm.pending_interrupt = 2;
+                            o.sub = 2;
+                            mirror(o, true);
+                        }
+                        2 if vx < 0.0 => {
+                            o.vm.pending_interrupt = 2;
+                            o.sub = 1;
+                            mirror(o, false);
+                        }
+                        _ => {}
+                    }
+                    o.vm.flags |= anmvm::F_SCALE_DIRTY;
                 } else {
                     // Sub 3 attack: chase the aimed enemy's final pos + (0, 32), y ≥ 32.
                     match aimed {
@@ -428,14 +430,11 @@ impl Player {
         }
     }
 
-    // Shot origin: 0 player, k = option k−1 (09 §2.1 +0x20).
-    // SPEC-GAP: a free option falls back to the player position; 09 §4.3 does not say.
+    // Shot origin: 0 player, k = option k−1 (09 §2.1 +0x20). 09 §4.3: the option pos is read whatever its state,
+    // so a free option gives its last stored pos.
     fn origin_pos(&self, origin: i16) -> [f32; 3] {
         match origin {
-            1..=4 => {
-                let o = &self.options[origin as usize - 1];
-                if o.state != 0 { o.pos } else { self.pos }
-            }
+            1..=4 => self.options[origin as usize - 1].pos,
             _ => self.pos,
         }
     }
@@ -556,11 +555,11 @@ impl Player {
                 true
             }
             2 | 3 => !self.bombing && self.default_init(anm, slot, t, e),
-            // Laser 0x44FE20 (14 §4): one live laser per slot; a different entry (level change) ends the old one.
-            // SPEC-GAP: the GameFlags bit 13 refusal is not tested.
+            // Laser 0x44FE20 (14 §4): refused while bombing or GameFlags bit 13; one live laser per slot; a different
+            // entry (level change) ends the old one.
             4 => {
                 let s = (e.phase.max(0) as usize).min(LASER_SLOTS - 1);
-                if self.bombing {
+                if self.bombing || self.gflags & GF_13 != 0 {
                     return false;
                 }
                 let ls = self.laser_slots[s];
@@ -664,11 +663,15 @@ impl Player {
     }
 
     // Laser update 5 (0x450840, 14 §4): follows option 0, leaves a 32-point trail of one-frame damage rects.
-    // SPEC-GAP: the GameFlags bit 13 end condition is not tested.
     fn laser_update(&mut self, i: usize) -> bool {
         let s = self.bullets[i].slot.clamp(0, LASER_SLOTS as i16 - 1) as usize;
         let owned = self.laser_slots[s].owner == Some(i);
-        if !owned || self.env.dialogue || self.shot_timer.cur < 0 || self.state == 2 || self.bombing
+        if !owned
+            || self.env.dialogue
+            || self.shot_timer.cur < 0
+            || self.state == 2
+            || self.bombing
+            || self.gflags & GF_13 != 0
         {
             let b = &mut self.bullets[i];
             b.vm.pending_interrupt = 1;
@@ -949,5 +952,93 @@ impl Player {
             c += 2;
         }
         b.vm.color = colour;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn yukari(p: &mut Player) {
+        p.pos = [192.0, 400.0, 0.0];
+        let o = &mut p.options[0];
+        o.kind = OptKind::Yukari;
+        o.state = 2;
+        o.sub = 0;
+        o.pos = [100.0, 304.0, 0.0];
+        o.timer.set(10);
+    }
+
+    // 14 §3.1: the animation test runs after the attack test on the entry sub-state and overwrites sub 3.
+    #[test]
+    fn yukari_animation_test_overrides_attack() {
+        let mut anm = AnmManager::default();
+        let mut p = Player::default();
+        yukari(&mut p);
+        p.shot_timer.set(0);
+        p.aimed = Some(3);
+        p.aimed_pos = [192.0, 100.0, 0.0];
+        p.place_option(&mut anm, 0, true);
+        let o = &p.options[0];
+        assert_eq!((o.sub, o.vm.pending_interrupt), (2, 2));
+        assert_eq!(p.aimed, Some(3));
+        // Next frame: entered with sub 2, still moving right → no animation change, the attack sticks.
+        p.options[0].vm.pending_interrupt = 0;
+        p.place_option(&mut anm, 0, true);
+        let o = &p.options[0];
+        assert_eq!((o.sub, o.vm.pending_interrupt), (3, 3));
+    }
+
+    // 09 §4.3: the origin is the option's stored pos whatever its state.
+    #[test]
+    fn free_option_origin_is_its_last_pos() {
+        let mut p = Player::default();
+        p.pos = [192.0, 400.0, 0.0];
+        p.options[1].state = 0;
+        p.options[1].pos = [50.0, 60.0, 0.0];
+        assert_eq!(p.origin_pos(2), [50.0, 60.0, 0.0]);
+        assert_eq!(p.origin_pos(0), p.pos);
+    }
+
+    fn laser_entry() -> ShotEntry {
+        ShotEntry {
+            interval: 2,
+            phase: 0,
+            origin: 1,
+            init: 4,
+            update: 5,
+            sound: -1,
+            ..ShotEntry::default()
+        }
+    }
+
+    // 14 §4: laser init refuses while GameFlags bit 13 is set.
+    #[test]
+    fn laser_init_refused_with_bit13() {
+        let mut anm = AnmManager::default();
+        let mut p = Player::default();
+        let e = laser_entry();
+        p.gflags = GF_13;
+        assert!(!p.init_bullet(&mut anm, 0, 0, &e));
+        assert!(p.laser_slots[0].owner.is_none());
+        p.gflags = 0;
+        assert!(p.init_bullet(&mut anm, 0, 0, &e));
+        assert_eq!(p.laser_slots[0].owner, Some(0));
+    }
+
+    // 14 §4: laser update 5 ends the laser (interrupt 1, slot cleared, update removed) on bit 13.
+    #[test]
+    fn laser_update_ends_on_bit13() {
+        let mut anm = AnmManager::default();
+        let mut p = Player::default();
+        let e = laser_entry();
+        p.options[0].state = 2;
+        assert!(p.init_bullet(&mut anm, 0, 0, &e));
+        p.shot_timer.set(0);
+        p.gflags = GF_13;
+        assert!(!p.laser_update(0));
+        let b = &p.bullets[0];
+        assert_eq!((b.vm.pending_interrupt, b.update), (1, 0));
+        assert!(p.laser_slots[0].owner.is_none());
     }
 }
