@@ -875,7 +875,7 @@ impl Task<Ctx> for GameManager {
         ctx.game.flags &= !F_RUNNING;
         ctx.game.paused = 0;
         ctx.game.game_over = 0;
-        // 0x164D2C8 := 0, so the menus after a pause-quit read 0 (11 §2).
+        // 0x164D2C8 := 0 as the last statement (0x43BE2C), so the menus after a pause-quit read 0 (11 §2).
         ctx.game.frame_counter = 0;
     }
 
@@ -1013,8 +1013,6 @@ impl Task<Ctx> for GameManager {
             e.g.player_char = g.shot as i32;
         }
         g.frame_counter += 1;
-        // SPEC-GAP: 0x164D30C is "frames" in 11 §2 without the increment site; assumed +1 per gameplay frame.
-        self.player.borrow_mut().stats.rec.progress += 1;
         // Port-only debug: TH08_SCREEN_FX=<frame>:<type>,<p0>,<p1>,<p2>,<p3>.
         if let Some(n) = ctx.settings.screen_fx {
             if n[0] == g.frame_counter as i64 {

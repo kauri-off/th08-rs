@@ -2257,6 +2257,15 @@ impl EnemyManager {
                 s.capture = false;
             }
         }
+        // 0x164D30C play-time counter: top of EnemyMgr_Calc outside dialogue, before the bit-10 test (11 §2).
+        if !self.dialogue_active() {
+            self.player.borrow_mut().stats.rec.progress += 1;
+        }
+        // Step 0: GameFlags bit 10 (spell-card death freeze) returns here; the draw lists keep last frame's
+        // enemies, the manager clock and Spell_Calc's card timer hold (07 §10.1 step 0, §11.1).
+        if self.player.borrow().freeze_bullets {
+            return;
+        }
         self.full = false;
         self.draw_lists.iter_mut().for_each(Vec::clear);
         self.run_timelines(anm);
@@ -2389,6 +2398,29 @@ impl Task<Ctx> for EnemyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // GameFlags bit 10 (07 §10.1 step 0): only the play-time counter runs; lists and the manager clock hold.
+    #[test]
+    fn death_freeze_skips_manager() {
+        let mut anm = AnmManager::default();
+        let player = crate::player::Player::new_ref();
+        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player.clone())));
+        let ecl = ecl::Ecl {
+            data: Vec::new(),
+            subs: Vec::new(),
+            timelines: Vec::new(),
+        };
+        let mut m = EnemyManager::new(ecl, bullets, 1);
+        m.draw_lists[0].push(5);
+        player.borrow_mut().freeze_bullets = true;
+        m.step(&mut anm);
+        assert_eq!((m.frame, m.draw_lists[0].len()), (0, 1));
+        assert_eq!(player.borrow().stats.rec.progress, 1);
+        player.borrow_mut().freeze_bullets = false;
+        m.step(&mut anm);
+        assert_eq!((m.frame, m.draw_lists[0].len()), (1, 0));
+        assert_eq!(player.borrow().stats.rec.progress, 2);
+    }
 
     // Scripted input per shot type through a stage: shooting, moving, focusing, bombing.
     #[test]

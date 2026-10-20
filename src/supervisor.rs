@@ -266,9 +266,8 @@ impl Supervisor {
         }
         g.previous = cur;
         if req < 0 {
-            // WinMain exit flushes score.dat (Result mode 2, 15 §2.2).
+            // The score.dat flush comes after this frame's draw and Present (`Ctx::exit_save`, 15 §2.2).
             // SPEC-GAP: 6 → −1 also finishes the replay in 11 §7; the port does not.
-            ctx.game.save_score(&mut ctx.anm.rng, true);
             return Ok(Some(Ret::Quit));
         }
         log::info!("scene {cur} -> {req} (calc {})", ctx.frame);

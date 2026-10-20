@@ -142,6 +142,12 @@ impl Ctx {
         }
     }
 
+    // WinMain exit 0x441B95 (15 §2.2): once the main loop has left (after the last frame's calc, draw and Present),
+    // Result_Register(2) and the chain teardown flush score.dat (2 RNG draws, 11 §1.5).
+    pub fn exit_save(&mut self) {
+        self.game.save_score(&mut self.anm.rng, true);
+    }
+
     // Debug tool. TH08_DRAWLOG: one F record per presented frame, sampled after the draw.
     fn log_frame(&mut self) {
         let recs = self.gfx.take_log();

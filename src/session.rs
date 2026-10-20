@@ -423,6 +423,10 @@ mod native {
                 }
                 scene_frame += 1;
                 let r = sample(ctx, present, poll.max(-1), scene_frame);
+                // The exit save follows the quitting frame's sample (15 §2.2).
+                if flow == crate::task::Flow::Quit {
+                    ctx.exit_save();
+                }
                 if !row(&r) || flow != crate::task::Flow::Continue {
                     break;
                 }
