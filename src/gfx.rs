@@ -186,6 +186,8 @@ pub struct Gfx {
     frame: wgpu::Texture,
     frame_bind: wgpu::BindGroup,
     blit: wgpu::RenderPipeline,
+    // Filtered sub-rect copy of the frame into an Rgba8Unorm texture (texture capture, 12 §3).
+    crop: wgpu::RenderPipeline,
     log: Option<Vec<LogRec>>,
     log_fog: Option<LogFog>,
     pub persistent: bool,
@@ -219,6 +221,19 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
     let uv = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
     var o: VsOut;
     o.pos = vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    o.uv = uv;
+    return o;
+}
+@group(0) @binding(0) var t: texture_2d<f32>;
+@group(0) @binding(1) var s: sampler;
+@fragment fn fs(i: VsOut) -> @location(0) vec4f { return textureSample(t, s, i.uv); }
+"#;
+
+const CROP: &str = r#"
+struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(@location(0) pos: vec2f, @location(1) uv: vec2f) -> VsOut {
+    var o: VsOut;
+    o.pos = vec4f(pos, 0.0, 1.0);
     o.uv = uv;
     return o;
 }
@@ -446,6 +461,42 @@ impl Gfx {
             multiview_mask: None,
             cache: None,
         });
+        let crop_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(CROP.into()),
+        });
+        let crop = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &crop_shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: 16,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &crop_shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         // The original renders at 640x480; the window shows that image scaled (05 §12.4).
         let frame = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -504,6 +555,7 @@ impl Gfx {
             frame,
             frame_bind,
             blit,
+            crop,
             log: None,
             log_fog: None,
             persistent: false,
@@ -584,6 +636,78 @@ impl Gfx {
         id
     }
 
+    // Anm_CaptureToTexture 0x466F20 (12 §3): the last presented frame's rect `from`/`size` is filtered into the
+    // texture rect `to`/`to_size` (D3DX surface load, default filter; the port samples linearly).
+    pub fn capture_rect(
+        &mut self,
+        dst: TextureId,
+        from: [u32; 2],
+        size: [u32; 2],
+        to: [u32; 2],
+        to_size: [u32; 2],
+    ) {
+        let Some(Some(t)) = self.textures.get(dst) else {
+            return;
+        };
+        let (tw, th) = (t.width, t.height);
+        let w = to_size[0].min(tw.saturating_sub(to[0]));
+        let h = to_size[1].min(th.saturating_sub(to[1]));
+        if w == 0 || h == 0 || size[0] == 0 || size[1] == 0 {
+            return;
+        }
+        if self.log.is_some() {
+            let rec = LogRec::Copy {
+                src: "screen".into(),
+                dst: self.label_name(dst),
+                from,
+                size,
+                to,
+            };
+            self.log.as_mut().unwrap().push(rec);
+        }
+        if self.surface.is_none() || t.tex.format() != wgpu::TextureFormat::Rgba8Unorm {
+            return;
+        }
+        let (u0, v0) = (from[0] as f32 / SCREEN_W, from[1] as f32 / SCREEN_H);
+        let (u1, v1) = (
+            (from[0] + size[0]) as f32 / SCREEN_W,
+            (from[1] + size[1]) as f32 / SCREEN_H,
+        );
+        let quad: [f32; 16] = [
+            -1.0, 1.0, u0, v0, 1.0, 1.0, u1, v0, -1.0, -1.0, u0, v1, 1.0, -1.0, u1, v1,
+        ];
+        let vb = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&quad),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let view = t.tex.create_view(&Default::default());
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_viewport(to[0] as f32, to[1] as f32, w as f32, h as f32, 0.0, 1.0);
+            pass.set_pipeline(&self.crop);
+            pass.set_bind_group(0, &self.frame_bind, &[]);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.draw(0..4, 0..1);
+        }
+        self.queue.submit([enc.finish()]);
+    }
+
     fn create_texture_fmt(
         &mut self,
         width: u32,
@@ -606,7 +730,8 @@ impl Gfx {
                 format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::COPY_SRC,
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::LayerMajor,

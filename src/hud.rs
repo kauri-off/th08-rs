@@ -200,13 +200,11 @@ impl Hud {
             })
             .collect();
         anm.set_script(&mut self.diff_vm, crate::ascii::ANM_SLOT, 0x19);
-        let d = if g.spell_practice() {
-            5
-        } else {
-            g.difficulty.clamp(0, 4)
-        };
-        // SPEC-GAP: 12 §5.1 uses sprite 0x120 only for spell-practice ids ≥ 205; the port uses it for every spell practice.
-        self.diff_vm.set_sprite(anm, 0x11B + d);
+        self.diff_vm
+            .set_sprite(anm, crate::ascii::difficulty_sprite(g));
+        // Hud_Load 0x4390D6: the night-clock VM starts hidden with alpha 0 (12 §5.7).
+        self.night_vm = AnmVm::default();
+        self.night_vm.color[anmvm::A] = 0;
         // Clock sprite = clock counter stats+0x28 (12 §5.1); the clamp is a port guard.
         anm.set_script(&mut self.start_clock_vm, TIMES_SLOT, 0);
         self.start_clock_vm
@@ -875,7 +873,6 @@ impl Task<Ctx> for Hud {
         }
     }
 
-    // Not implemented: the night-clock player-overlap fade and ECL op 180 (12 §5.7).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.frame += 1;
         let inp = ctx.input.game_view();
@@ -911,11 +908,13 @@ impl Task<Ctx> for Hud {
         let clock = self.player.borrow().stats.clock;
         for r in reqs {
             match r {
-                // ECL 179 / 181 (10 §8.3): night clock script 2 with sprite = clock; 181 interrupts 2 at 12, else 1.
+                // ECL 179 / 181 (12 §5.7, 07 §7): night clock script 2 with sprite = clock; 181 interrupts 2 at 12,
+                // else 1; 180 hides it with alpha := 0.
                 179 => {
                     ctx.anm.set_script(&mut self.night_vm, TIMES_SLOT, 2);
                     self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
                 }
+                180 => self.night_vm.color[anmvm::A] = 0,
                 // ECL op 148: progress counter 0x164D30C += 1800 (10 §8.3, end panel 16 §2.5).
                 148 => self.player.borrow_mut().stats.rec.progress += 1800,
                 181 => {
@@ -946,6 +945,20 @@ impl Task<Ctx> for Hud {
                     Popup::SpellBonus(_) => 280,
                 }
         });
+        // Player-overlap fade of the night clock (12 §5.7): while alpha ≠ 0, −4 down to 0x40 with the player at
+        // x ≥ 64, y < 128, else +4 up to 0xFF (≥ 0xFC snaps to 0xFF).
+        // SPEC-GAP: 12 §5.7 does not order the fade against the VM run in Hud_Calc; fade first.
+        let a = self.night_vm.color[anmvm::A];
+        if a != 0 {
+            let p = self.player.borrow().pos;
+            self.night_vm.color[anmvm::A] = if p[0] >= 64.0 && p[1] < 128.0 {
+                if a > 0x40 { (a - 4).max(0x40) } else { a }
+            } else if a >= 0xFC {
+                0xFF
+            } else {
+                a + 4
+            };
+        }
         let anm = &mut ctx.anm;
         for vm in self.front.iter_mut().chain(self.title.iter_mut()).chain([
             &mut self.diff_vm,
@@ -978,15 +991,18 @@ impl Task<Ctx> for Hud {
             self.draw_boss(ctx);
         }
         ctx.gfx.set_viewport(PLAYFIELD);
-        // Stage title VMs, the stage-start clock and the night clock (12 §5.1, §5.7).
+        // Stage title VMs, the stage-start clock, then the night clock with Draw2DRot (12 §5.1, §5.7).
         for vm in self
             .title
             .iter_mut()
-            .chain([&mut self.start_clock_vm, &mut self.night_vm])
+            .chain(std::iter::once(&mut self.start_clock_vm))
         {
             if vm.script.is_some() {
                 ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
             }
+        }
+        if self.night_vm.script.is_some() {
+            ctx.anm.draw_mode(&mut ctx.gfx, &mut self.night_vm, 2);
         }
         // SPEC-GAP: the draw site of the stage-clear VM impl+0x212C8 is not in 10 §9 / 12 §5; drawn here, playfield viewport.
         if self.clear_vm.script.is_some() {

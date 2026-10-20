@@ -715,6 +715,9 @@ struct PauseMenu {
     frame: u32,
     vms: Vec<AnmVm>,
     shown: [bool; 10],
+    // Capture VM +0x1A70 (capture.anm) and the pending AnmManager_QueueCapture request (12 §3).
+    cap_vm: AnmVm,
+    capture: bool,
 }
 
 const P_TITLE: usize = 0;
@@ -761,13 +764,10 @@ impl PauseMenu {
                 })
                 .collect();
             self.shown = [false; 10];
-            let d = if g.spell_practice() {
-                0x120 - 0x11B
-            } else {
-                g.difficulty.clamp(0, 4)
-            };
+            start_capture(ctx_anm, &mut self.cap_vm);
+            self.capture = true;
             let diff_vm = &mut self.vms[P_DIFF];
-            diff_vm.set_sprite(ctx_anm, 0x11B + d);
+            diff_vm.set_sprite(ctx_anm, difficulty_sprite(g));
             for k in [P_TITLE, 1, 2, P_DIFF] {
                 self.show(k, true);
             }
@@ -868,6 +868,7 @@ impl PauseMenu {
                     g.mark_play_time();
                     self.state = 0;
                     self.vms.clear();
+                    self.cap_vm = AnmVm::default();
                     return;
                 }
             }
@@ -893,7 +894,12 @@ impl PauseMenu {
             &mut self.vms[P_NO],
             if !yes_sel { 0xFFFF8080 } else { 0xFF505050 },
         );
-        for vm in self.vms.iter_mut().filter(|v| v.script.is_some()) {
+        for vm in self
+            .vms
+            .iter_mut()
+            .chain(std::iter::once(&mut self.cap_vm))
+            .filter(|v| v.script.is_some())
+        {
             vm.run(ctx_anm);
         }
         self.frame += 1;
@@ -918,6 +924,40 @@ impl PauseMenu {
     }
 }
 
+// Difficulty sprite of the pause menu VM +0x1284 and the HUD (12 §3, §5.1): 0x120 only for spell-practice ids
+// ≥ 205, else 0x11B + difficulty (in spell practice the card's).
+pub(crate) fn difficulty_sprite(g: &Game) -> i32 {
+    if g.spell_practice() && g.card >= 205 {
+        0x120
+    } else {
+        0x11B + g.difficulty.clamp(0, 4)
+    }
+}
+
+// SPEC-GAP: 12 §3 / §4 name neither the capture VM's script nor its position; capture.anm script 0 (sprite 0,
+// scale 3 × 3.5 = 384×448) placed on the playfield origin (32, 16).
+fn start_capture(anm: &mut crate::anmmgr::AnmManager, vm: &mut AnmVm) {
+    *vm = AnmVm::default();
+    anm.set_script(vm, CAPTURE_SLOT, 0);
+    vm.pos = [32.0, 16.0, 0.0];
+}
+
+// AnmManager_QueueCapture 0x406A30 (12 §3): playfield (32, 16, 384, 448) into slot 3 entry 0 at the VM's sprite rect
+// (u0, v0 in texture pixels, width, height, truncated). The port copies at once from the last presented frame, so no
+// request is ever pending and the "close at once" failure path cannot happen.
+fn apply_capture(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, vm: &AnmVm) {
+    let Some(sp) = anm.sprite(CAPTURE_SLOT, vm.sprite_index.max(0) as usize) else {
+        return;
+    };
+    let t = gfx.texture(sp.tex);
+    let to = [
+        (sp.uv[0] * t.width as f32) as u32,
+        (sp.uv[1] * t.height as f32) as u32,
+    ];
+    let tex = sp.tex;
+    gfx.capture_rect(tex, [32, 16], [384, 448], to, [sp.w as u32, sp.h as u32]);
+}
+
 // Continue / game-over menu (11 §4.2, 12 §4): ascii scripts 22–24 and times.anm script 1 (night clock).
 // ContinueMenu_Update 0x404890 (12 §4); phase 1 = no, 2 = yes in Extra / spell practice, 3 = continue (11 §4.2).
 #[derive(Default)]
@@ -929,6 +969,9 @@ struct ContinueMenu {
     phase_frame: u32,
     vms: Vec<AnmVm>,
     clock_vm: AnmVm,
+    // Capture VM menu +0xFE0 and the pending capture request (12 §4).
+    cap_vm: AnmVm,
+    capture: bool,
 }
 
 impl ContinueMenu {
@@ -961,9 +1004,13 @@ impl ContinueMenu {
                 .collect();
             ctx_anm.set_script(&mut self.clock_vm, crate::hud::TIMES_SLOT, 1);
             self.clock_vm.set_sprite(ctx_anm, g.clock.clamp(0, 15));
-            // Default "No"; "Yes" only in spell practice (card not captured, 12 §4).
-            // SPEC-GAP: 12 §4 also needs the card not captured (spell flag bit 9 clear); the port does not test it.
-            self.yes = g.spell_practice();
+            start_capture(ctx_anm, &mut self.cap_vm);
+            self.capture = true;
+            // Default "No"; "Yes" only in spell practice with spell flag bit 9 (captured) clear (12 §4).
+            let captured = gamemgr::current()
+                .and_then(|gm| gm.borrow().enemies.clone())
+                .is_some_and(|e| e.borrow().g.spell_captured);
+            self.yes = g.spell_practice() && !captured;
         }
         // Input from frame 30 (cursor on "No") or frame 4 (cursor on "Yes") (12 §4).
         let ready = self.frame
@@ -1031,7 +1078,7 @@ impl ContinueMenu {
         for vm in self
             .vms
             .iter_mut()
-            .chain(std::iter::once(&mut self.clock_vm))
+            .chain([&mut self.clock_vm, &mut self.cap_vm])
             .filter(|v| v.script.is_some())
         {
             vm.run(ctx_anm);
@@ -1085,8 +1132,14 @@ impl Task<Ctx> for AsciiManager {
             ctx.game.paused = 2;
             self.pause
                 .update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
+            if std::mem::take(&mut self.pause.capture) {
+                apply_capture(&ctx.anm, &mut ctx.gfx, &self.pause.cap_vm);
+            }
         } else if ctx.game.game_over != 0 {
             self.cont.update(&mut ctx.anm, &mut ctx.game, &inp);
+            if std::mem::take(&mut self.cont.capture) {
+                apply_capture(&ctx.anm, &mut ctx.gfx, &self.cont.cap_vm);
+            }
         } else {
             self.cont.open = false;
             self.pause.state = 0;
@@ -1101,9 +1154,15 @@ impl Task<Ctx> for AsciiManager {
 
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let high = tag == 1;
-        // SPEC-GAP: 12 §3 / §4 draw the menus in the playfield viewport over the capture VM; the port uses the full screen and no capture.
+        // Pause draw 0x404750 (12 §3): playfield viewport; the capture VM (temporary copy, z-write off) while
+        // the state ≠ 0; then menu VMs 0..9, all Draw2DSnap.
         if high && ctx.game.paused != 0 {
-            ctx.gfx.set_viewport(FULLSCREEN);
+            ctx.gfx.set_viewport(crate::gfx::PLAYFIELD);
+            if self.pause.state != 0 && self.pause.cap_vm.script.is_some() {
+                let mut v = self.pause.cap_vm.clone();
+                v.flags |= anmvm::F_ZWRITE_OFF;
+                ctx.anm.draw_mode(&mut ctx.gfx, &mut v, 0);
+            }
             let sel: Vec<bool> = (0..self.pause.vms.len())
                 .map(|k| self.pause.selected(k))
                 .collect();
@@ -1112,19 +1171,23 @@ impl Task<Ctx> for AsciiManager {
                 if sel {
                     vm.pos = [pos[0] - 4.0, pos[1] - 4.0, pos[2]];
                 }
-                ctx.anm.draw(&mut ctx.gfx, vm);
+                ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
                 vm.pos = pos;
             }
         }
+        // ContinueMenu_Draw 0x4052B0 (12 §4): playfield viewport, capture VM, then VMs 0..3 (clock VM 3 only in a
+        // normal game below Extra), all Draw2DSnap. The port's menu is past state 0 after its first calc.
         if high && ctx.game.game_over != 0 && self.cont.open {
-            ctx.gfx.set_viewport(FULLSCREEN);
-            for vm in self
-                .cont
-                .vms
-                .iter_mut()
-                .chain(std::iter::once(&mut self.cont.clock_vm))
+            ctx.gfx.set_viewport(crate::gfx::PLAYFIELD);
+            let g = &ctx.game;
+            let clock = g.difficulty < 4 && !g.spell_practice();
+            let c = &mut self.cont;
+            for vm in [&mut c.cap_vm]
+                .into_iter()
+                .chain(c.vms.iter_mut())
+                .chain(clock.then_some(&mut c.clock_vm))
             {
-                ctx.anm.draw(&mut ctx.gfx, vm);
+                ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
             }
         }
         if !high {

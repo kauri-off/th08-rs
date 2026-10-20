@@ -1199,6 +1199,8 @@ impl Exec<'_> {
         self.m.pay_capture(self.anm, false);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
         (self.m.g.spell_flag6, self.m.g.bonus_frozen) = (false, false);
+        // Spell flag bit 9 cleared at card start (see `finish_spell`).
+        self.m.g.spell_captured = false;
         crate::gui::request(crate::gui::Req::BossShow {
             face: spell.face,
             name: spell.name.clone(),

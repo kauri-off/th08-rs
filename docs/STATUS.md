@@ -296,6 +296,18 @@
   value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
   and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
   Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
+- impl40 (RE-Q25 CODE BUGs 7–9, 2026-10-20): texture capture `Gfx::capture_rect` (Anm_CaptureToTexture: filtered copy of
+  the last presented frame's playfield rect into capture.anm#0 at the capture VM's sprite rect, logged as `K screen`);
+  pause and continue menus start a capture VM (capture.anm script 0 at (32, 16), SPEC-GAP), request the capture on open
+  and draw in the playfield viewport: capture VM (pause: copy with z-write off while state ≠ 0) then the menu VMs, all
+  Draw2DSnap; continue clock VM only in a normal game below Extra (12 §3, §4). Difficulty sprite 0x120 only for
+  spell-practice ids ≥ 205, else 0x11B + difficulty, shared by the pause menu and the HUD (`ascii::difficulty_sprite`).
+  Continue "Yes" default only in spell practice with spell flag bit 9 clear (`enemy::Globals::spell_captured`, set on
+  capture, cleared at Spell_Start, SPEC-GAP). Gui player show with face −1 restarts strips 2/4 (12 §5.8). Night clock:
+  Hud_Load alpha 0, ECL 180 alpha := 0, player-overlap fade (−4 to 0x40 at x ≥ 64, y < 128, else +4 to 0xFF), drawn
+  Draw2DRot after the title VMs and the stage-start clock (12 §5.7). Sync: golden 8297, fullrun_noclip 7745,
+  selftest1 1921, demo MIN_SYNC 4628/3879/4035/6664 unchanged; draw logs: selftest1 95.49 → 95.74 %, golden 26.94 %,
+  demo / menu draw logs unchanged. SPEC-GAP 169 → 168. Questions: `docs/briefs/IMPL40_QUESTIONS.md`.
 - impl39 (RE-Q25 CODE BUGs 4–6, 2026-10-20): screen effects registered from calc nodes below prio 3 are linked at once
   (`effect::screen_now` for the `GameMgr_Calc` demo-end fade, `loading_overlay` from the Supervisor on-register), so
   their first calc runs in the same frame (13 §3). Stage-clear panel per the rewritten 12 §5.6: op 9 stores the values

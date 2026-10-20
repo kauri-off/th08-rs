@@ -162,15 +162,15 @@ impl Gui {
         match r {
             // Gui_ShowPlayerSpellName 0x415D60 (12 §5.8); face −1 = dissolve spell.
             Req::PlayerShow { face, name, last } => {
-                // SPEC-GAP: 12 §5.8 skips only VM 0 for face −1 (dissolve spell); the port also leaves VMs 2/4 untouched.
+                // Face −1 (dissolve spell) skips only VM 0; the strips 2/4 always restart (12 §5.8).
                 if face >= 0 {
                     anm.set_script(&mut v[0], FACE_SLOT + face as usize, 0);
                     v[0].set_sprite(anm, 0);
-                    anm.set_script(&mut v[2], CDBG_SLOT, 0);
-                    v[2].set_sprite(anm, last as i32);
-                    anm.set_script(&mut v[4], CDBG_SLOT, 2);
-                    v[4].set_sprite(anm, last as i32);
                 }
+                anm.set_script(&mut v[2], CDBG_SLOT, 0);
+                v[2].set_sprite(anm, last as i32);
+                anm.set_script(&mut v[4], CDBG_SLOT, 2);
+                v[4].set_sprite(anm, last as i32);
                 // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 is not needed (full redraw).
                 anm.set_script(&mut v[6], TEXT_SLOT, 4);
                 self.texts.push((6, name.to_string(), [255, 240, 240], 0.0));

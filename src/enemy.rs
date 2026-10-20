@@ -612,6 +612,8 @@ pub struct Globals {
     // Spell flag bit 6 (op 164: the start ring stops following the boss) and bit 11 (op 184: bonus frozen), 07 §11.1.
     pub spell_flag6: bool,
     pub bonus_frozen: bool,
+    // Spell flag bit 9 "captured" (07 §11.1); read by the continue menu default (12 §4).
+    pub spell_captured: bool,
     // Port: op 148 argument, HUD requests (ops 148/179–181) handled by the HUD, unimplemented-op counter.
     pub hud_bars: i32,
     pub hud_requests: Vec<u16>,
@@ -1488,6 +1490,8 @@ impl EnemyManager {
         if p.gflags & (GF_LAST_SPELL | GF_LAST_CAPTURED) != 0 {
             p.gflags = p.gflags & !GF_LAST_SPELL | GF_LAST_CAPTURED;
         }
+        // SPEC-GAP: 07 §11.1 names bit 9 "captured" but not when it is set / cleared; here and at Spell_Start.
+        self.g.spell_captured = true;
         crate::gui::request(crate::gui::Req::Captured {
             card: s.id,
             bonus: s.bonus,
