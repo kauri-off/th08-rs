@@ -207,6 +207,15 @@
   are token-identical to before. golden / fullrun_noclip / selftest1 8055 / 6265 / 1422, demo MIN_SYNC
   4450/3869/2937/1605, drawlog demo 0 90.61 %, all 78 tests pass, the wasm check passes. SPEC-GAP 93 → 110.
   Questions: `docs/briefs/IMPL26_QUESTIONS.md`.
+- impl27 (comment pass batch D, 2026-10-20): `menu.rs`, `menulist.rs`, `result.rs`, `supervisor.rs`, `replay.rs`,
+  `scoredat.rs`, `config.rs`, `archive.rs`, `input.rs`, `audio.rs`, `sound.rs`, `task.rs`, `game.rs`, `app.rs`,
+  `assets.rs` now have `//!` module lines and spec references (00 / 01 / 02 / 11 / 12 / 13 / 15 / 16 sections,
+  original names and addresses, offsets, units) on fields, constants, functions and kept quirks; the tools
+  (`session`, `demosync`, `drawlog`, `drawreport`, `anmdebug`, `env`, `lib`, `main`, `bin/*`) have `//!` lines saying
+  what they do. Comments only: with comments and whitespace stripped, all of `src/` is token-identical to before.
+  golden / fullrun_noclip / selftest1 8055 / 6265 / 1422, demo MIN_SYNC 4450/3869/2937/1605, draw logs unchanged
+  (demo 0 90.61 %), all 78 tests pass, the wasm check passes. SPEC-GAP 110 → 172. Questions:
+  `docs/briefs/IMPL27_QUESTIONS.md`.
 
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).

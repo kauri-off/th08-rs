@@ -1,3 +1,5 @@
+//! SE queue of the sound manager (13 §1.1–§1.3): `Sound_Play` 0x45D550, `Sound_PlayAt` 0x45D660, flushed by `Sound_Update` 0x45D790.
+
 use std::cell::RefCell;
 
 // Sound effect ids (13 §1.1).
@@ -27,9 +29,10 @@ pub const OPSHOW: i32 = 39;
 pub const OPHIDE: i32 = 40;
 pub const INVALID: i32 = 41;
 pub const ITEM1: i32 = 44;
+// se_ok00 at −100: ECL op 181 (clock +1, 13 §1.4).
 pub const OK_CLOCK: i32 = 45;
 
-// SE table (13 §1.1): wave file, volume in 1/100 dB.
+// SE table 0x4C8040 (13 §1.1): wave file, volume in 1/100 dB; the unused priority word is not kept.
 pub const TABLE: [(&str, i16); 46] = [
     ("se_plst00", -1900),
     ("se_plst00", -2100),
@@ -82,7 +85,8 @@ pub const TABLE: [(&str, i16); 46] = [
 const MAX_IDS: usize = 12;
 const MAX_PANS: usize = 128;
 
-// Per-frame queue (13 §1.2): up to 12 distinct ids, each with up to 128 pan values.
+// Per-frame queue (13 §1.2): up to 12 distinct ids (manager +0x620), each with up to 128 pan values (+0x680);
+// a 13th distinct id in one frame is dropped, so each id sounds at most once per frame.
 #[derive(Default, Debug)]
 pub struct Queue {
     slots: Vec<(i32, Vec<i32>)>,
@@ -90,6 +94,7 @@ pub struct Queue {
 
 impl Queue {
     pub fn push(&mut self, id: i32, pan: i32) {
+        // SPEC-GAP: out-of-range ids (e.g. sht +0x26 = −1) are ignored; 13 §1.2 does not say what the original does.
         if !(0..TABLE.len() as i32).contains(&id) {
             return;
         }
@@ -119,12 +124,12 @@ thread_local! {
     static QUEUE: RefCell<Queue> = RefCell::default();
 }
 
-// Sound_Play(id, pan).
+// Sound_Play(id, pan); every call site passes pan 0 (13 §1.2).
 pub fn play(id: i32) {
     QUEUE.with_borrow_mut(|q| q.push(id, 0));
 }
 
-// Sound_PlayAt(id, x): pan from the playfield x.
+// Sound_PlayAt(id, x): pan = trunc((x − 192)·1000/192), −1000 at x = 0 … +1000 at x = 384 (13 §1.2).
 pub fn play_at(id: i32, x: f32) {
     QUEUE.with_borrow_mut(|q| q.push(id, ((x - 192.0) * 1000.0 / 192.0) as i32));
 }

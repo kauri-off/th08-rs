@@ -1,4 +1,5 @@
-// Draw log (specs/data/drawlog/FORMAT.md): the port's writer, a reader and a per-frame diff against a reference log.
+//! Draw log (specs/data/drawlog/FORMAT.md): the port's writer, a reader and a per-frame diff against a reference log.
+
 use crate::gfx::{Blend, LogRec, Vertex};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -811,6 +812,7 @@ struct Item<'a> {
     c: [f32; 2],
 }
 
+// Texel rect of a textured quad: the matching key between reference and port items (untextured → 0).
 fn sprite_rect(p: &Prim, q: &[Vtx; 4]) -> [i32; 4] {
     if !p.textured() {
         return [0; 4];
@@ -831,6 +833,7 @@ fn sprite_rect(p: &Prim, q: &[Vtx; 4]) -> [i32; 4] {
     ]
 }
 
+// The fps counter at (512, 464) (15 §3.3) depends on host timing, so it is never compared.
 fn is_fps(p: &Prim, q: &[Vtx; 4]) -> bool {
     p.tex.starts_with("ascii.anm") && q.iter().all(|v| v.x >= 496.0 && v.y >= 456.0)
 }
@@ -846,6 +849,7 @@ fn in_playfield(q: &[Vtx; 4]) -> bool {
     x1 > PLAYFIELD[0] && x0 < PLAYFIELD[2] && y1 > PLAYFIELD[1] && y0 < PLAYFIELD[3]
 }
 
+// Comparable quads of a frame (strips split into quads); clears, copies and other polygons go to `others` as text.
 fn items<'a>(fr: &'a Frame, o: &Opts, others: &mut Vec<String>) -> Vec<Item<'a>> {
     let mut out = Vec::new();
     let push = |p: &'a Prim, q: [Vtx; 4], out: &mut Vec<Item<'a>>| {
@@ -893,6 +897,7 @@ fn items<'a>(fr: &'a Frame, o: &Opts, others: &mut Vec<String>) -> Vec<Item<'a>>
     out
 }
 
+// Position tolerance: 0.03 px plus a relative term for large (3D) coordinates; colours may differ by 1 per channel.
 fn tol(v: f32) -> f32 {
     0.03 + 1e-4 * v.abs()
 }
@@ -1419,6 +1424,7 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
         self.range.is_none_or(|(a, b)| df >= a && df <= b)
     }
 
+    // Occurrence index of a frame key: several presents can share one demo frame (pause, loading).
     fn occ(last: &mut (i64, u32), df: i64) -> (i64, u32) {
         let n = if last.0 == df { last.1 + 1 } else { 0 };
         *last = (df, n);

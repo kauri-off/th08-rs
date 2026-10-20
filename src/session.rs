@@ -1,5 +1,6 @@
-// Session replay (specs/data/drawlog/README.md "Sessions"): recorded input, boot seed and loader timing of the
-// original, the port's 36-column trace and its comparison with the recorded one.
+//! Session replay (specs/data/drawlog/README.md "Sessions"): recorded input, boot seed and loader timing of the
+//! original, the port's 36-column trace and its comparison with the recorded one.
+
 use std::collections::VecDeque;
 
 // Loader steps of the original, by poll index (0 = first main-menu frame).
@@ -172,6 +173,7 @@ pub const SKIP: [usize; 0] = [];
 // Gameplay columns compared only in scene 2 (the original keeps stale values of freed objects elsewhere).
 pub const GAMEPLAY: std::ops::RangeInclusive<usize> = 5..=20;
 
+// Column 26 is the recorded scene.
 pub fn compared(c: usize, rec: &Row) -> bool {
     !SKIP.contains(&c) && (rec[26] == 2 || !GAMEPLAY.contains(&c))
 }

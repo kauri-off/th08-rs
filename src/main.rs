@@ -1,3 +1,5 @@
+//! Native entry point: `th08 <game dir>` (or TH08_DIR) runs the game window (app.rs).
+
 fn main() {
     env_logger::init();
     let dir = std::env::args()

@@ -1,4 +1,5 @@
-// Debug settings: env vars natively; on the web `?stage_frame=600` is read as TH08_STAGE_FRAME.
+//! Debug settings: env vars natively; on the web `?stage_frame=600` is read as TH08_STAGE_FRAME.
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn var(name: &str) -> Option<String> {
     std::env::var(name).ok()

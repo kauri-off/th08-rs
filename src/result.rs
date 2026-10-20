@@ -1,5 +1,6 @@
 //! Result object `Result_Register(mode)` 0x4582A0 (16 §2): name entry, ranking and end panel after a game (mode 1),
 //! result viewer from the main menu (mode 0). score.dat is saved when it is removed (15 §2.2).
+
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
 use crate::game::Ctx;
@@ -11,6 +12,7 @@ use crate::scoredat::{C_ATTEMPTS, C_BONUS, C_CAPTURES, C_PRACTICE, CARDS, Hscr};
 use crate::sound;
 use crate::task::{Chain, Ret, Task};
 
+// Result_Calc 0x4584B0 at prio 16, Result_Draw 0x4586B4 at prio 18 (16 §2).
 pub const CALC_PRIO: u16 = 16;
 pub const DRAW_PRIO: u16 = 18;
 // result00.anm in slot 0x15, resulttext.anm in 0x16 (16 §2).
@@ -22,6 +24,7 @@ const VM_ANCHOR: usize = 40;
 // End-panel picture result03.png (16 §2.5).
 const VM_PANEL: usize = 71;
 
+// Result states (+8, 16 §2.1 / §2.4 / §2.6).
 const S_INIT: i32 = 0;
 const S_TOP: i32 = 1;
 const S_LEAVE: i32 = 2;
@@ -66,7 +69,9 @@ fn group_cards(g: i32) -> Vec<usize> {
         .collect()
 }
 
+// The 0x477B0-byte result object (16 §2).
 pub struct ResultScreen {
+    // Result_Register mode: 0 viewer, 1 after a game (2 = flush only, handled by Game::save_score).
     mode: u8,
     state: i32,
     // Result +4 frame counter, +0x10 sub-state, +0x18 sub-frame, +0x1C cursor (16 §2.4).
@@ -88,17 +93,22 @@ pub struct ResultScreen {
     name: [u8; 8],
     name_pos: i32,
     char_cursor: i32,
+    // 72 result00.anm VMs at +0x1A0, VM i runs script i.
     vms: Vec<AnmVm>,
     // 28 Text_RenderToVm targets: k 0–13 text.anm sprites 21–34, k 14–27 resulttext.anm sprites 2–15.
     text_vms: Vec<AnmVm>,
+    // VM +0x1119C: result00.anm sprite 32, the 256×16 separator bar (centred anchor).
     bar: AnmVm,
     raster: crate::text::Raster,
+    // Surface slot 0: result/result.jpg.
     surface: Option<TextureId>,
     // +0x64: captured-card counts [group][character] (Result_OnRegister).
     captured: [[u32; 13]; 6],
+    // Run-time seconds kept at Result+0x19C (play-data page, 16 §2.4).
     run_secs: u32,
 }
 
+// AnmVm_Init + sprite, top-left anchor unless centred, white (16 §2.4 text VMs).
 fn text_vm(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     let mut vm = AnmVm::default();
     vm.init();
@@ -166,7 +176,7 @@ impl ResultScreen {
         }
     }
 
-    // Result_SetState 0x4550B7: the frame and sub counters restart.
+    // Result_SetState 0x4550B7: the frame and sub counters restart (the original also stores prev = state).
     fn set_state(&mut self, s: i32) {
         self.state = s;
         self.frame = 0;
@@ -180,6 +190,7 @@ impl ResultScreen {
         }
     }
 
+    // Text_RenderToVm into text VM k (white, outline 0, font 15) and alpha 255.
     fn render(&mut self, ctx: &mut Ctx, k: usize, s: &str) {
         let (slot, sprite) = if k < 14 {
             (0, 21 + k as i32)
@@ -251,6 +262,7 @@ impl ResultScreen {
 
     fn calc_state(&mut self, ctx: &mut Ctx) {
         match self.state {
+            // Mode 1 (16 §2.1): name entry, or 0x11 / 0x16 for stage / spell practice.
             S_INIT if self.mode == 1 => {
                 let g = &ctx.game;
                 let s = if g.spell_practice() {
@@ -270,7 +282,7 @@ impl ResultScreen {
             }
             S_TOP => self.top(ctx),
             S_LEAVE => {
-                // Exit (answers_impl17 §Q4 via 16 §2.4): frame 1 Loading_Begin + interrupt 2, scene 1 after 20.
+                // Exit (16 §2.1 state 2, §2.4 exit): frame 1 Loading_Begin + interrupt 2, scene 1 after 20.
                 if self.frame == 1 {
                     ctx.game.loading_req = true;
                     self.interrupt_all(2);
@@ -279,6 +291,8 @@ impl ResultScreen {
                     ctx.game.request(gamemgr::SCENE_MENU);
                 }
             }
+            // State 3, Result_CheatUnlock 0x4550FC (16 §2.4).
+            // SPEC-GAP: the hidden unlock code of this state (15 §2.12) is not implemented.
             S_DIFF => match self.page(ctx, 4, 5, self.rank_diff, 6) {
                 Some(true) => {
                     sound::play(sound::OK);
@@ -293,6 +307,7 @@ impl ResultScreen {
                 }
                 None => {}
             },
+            // State 4 (0x45567D).
             S_CHAR => match self.page(ctx, 15, 12, self.rank_shot, 6) {
                 Some(true) => {
                     sound::play(sound::OK);
@@ -310,6 +325,7 @@ impl ResultScreen {
                 None => {}
             },
             S_RANK => self.ranking(ctx),
+            // State 6 (0x455A33).
             S_GROUP => match self.page(ctx, 9, 6, self.card_group, 6) {
                 Some(true) => {
                     sound::play(sound::OK);
@@ -323,6 +339,7 @@ impl ResultScreen {
                 }
                 None => {}
             },
+            // State 7 (0x455CB0).
             S_CARD_CHAR => match self.page(ctx, 27, 13, self.card_char, 6) {
                 Some(true) => {
                     sound::play(sound::OK);
@@ -343,12 +360,14 @@ impl ResultScreen {
             },
             S_CARDS => self.cards(ctx),
             S_NAME => self.name_entry(ctx),
+            // State 0xF: end banner; after 90 frames Shot/Enter → interrupt 2, state 0x10 (16 §2.1).
             S_PANEL => {
                 if self.frame >= 90 && ctx.input.pressed(SHOT | ENTER) {
                     self.vms[VM_PANEL].pending_interrupt = 2;
                     self.set_state(S_PANEL_OUT);
                 }
             }
+            // State 0x10: after 30 frames → state 10 with frame counter 9 (16 §2.1).
             S_PANEL_OUT => {
                 if self.frame >= 30 {
                     self.set_state(S_SAVE);
@@ -381,7 +400,8 @@ impl ResultScreen {
         }
     }
 
-    // State 1, Result_TopMenu 0x454CB2.
+    // State 1, Result_TopMenu 0x454CB2 (16 §2.4): all 72 VMs get interrupt 1 on entry, then the page pattern (N = 20).
+    // SPEC-GAP: the D key (score.txt dump, 16 §2.7) is not implemented.
     fn top(&mut self, ctx: &mut Ctx) {
         if self.sub == 0 && self.sub_frame == 0 {
             self.interrupt_all(1);
@@ -418,7 +438,7 @@ impl ResultScreen {
         }
     }
 
-    // State 5 (0x455925).
+    // State 5 (0x455925, 16 §2.4): the shot is applied at frame 10, while VM 40 is off-screen.
     fn ranking(&mut self, ctx: &mut Ctx) {
         if self.frame == 10 {
             self.rank_shot = self.cursor;
@@ -528,7 +548,8 @@ impl ResultScreen {
         }
     }
 
-    // States 0x13–0x15, Result_PlayStats 0x4578AA.
+    // States 0x13–0x15, Result_PlayStats 0x4578AA (16 §2.4): fade in over 40 frames, wait (run time refreshed every
+    // 60 frames), fade out over 20 frames, then back to state 1 in the same frame.
     fn play_data(&mut self, ctx: &mut Ctx) {
         match self.state {
             S_PLAY => {
@@ -612,7 +633,8 @@ impl ResultScreen {
         }
     }
 
-    // State 9, Result_NameEntry 0x45621E.
+    // State 9, Result_NameEntry 0x45621E (16 §2.2): input from frame 10, every key edge or repeat except the ESC finish.
+    // SPEC-GAP: 16 §2.2 runs Up, Down, Left, Right in order in one frame; here Up wins over Down and Left over Right.
     fn name_entry(&mut self, ctx: &mut Ctx) {
         if self.frame == 0 && !self.name_start(ctx) {
             return;
@@ -656,6 +678,7 @@ impl ResultScreen {
                 finish = true;
             }
         }
+        // Backspace (16 §2.2): name[min(pos, 7)] = ' ', pos −= 1, name[pos] = ' '.
         if rep(BOMB | PAUSE) && self.name_pos > 0 {
             self.name[self.name_pos.min(7) as usize] = b' ';
             self.name_pos -= 1;
@@ -665,6 +688,7 @@ impl ResultScreen {
         if inp.pressed(PAUSE) {
             finish = true;
         }
+        // The entry is edited in place inside the list, so the ranking shows it during entry.
         let name = self.name;
         if let Some(e) = ctx.game.score.new_entry_mut() {
             e.0[0x17..0x1F].copy_from_slice(&name);
@@ -678,6 +702,7 @@ impl ResultScreen {
         }
     }
 
+    // name[min(pos, 7)] = ch; pos < 8 → pos += 1; at 8 the cursor jumps to END; SE 10 (16 §2.2).
     fn type_char(&mut self, ch: u8) {
         self.name[self.name_pos.min(7) as usize] = ch;
         if self.name_pos < 8 {
@@ -740,6 +765,7 @@ impl ResultScreen {
         h.0[0x88..0x88 + CARDS].copy_from_slice(&g.rec_cards[..CARDS]);
         // Slowdown % (15 §2.11): the port never drops frames, so x = 1 and the value is 0.
         h.0[0x10..0x14].copy_from_slice(&0f32.to_le_bytes());
+        // Port marker for the entry being named (Result list node byte +9, 16 §2.3); rank > 9 → state 0xF.
         h.0[9] = 1;
         if g.score.insert_hscr(h).is_none() {
             self.enter_panel();
@@ -747,6 +773,7 @@ impl ResultScreen {
         }
         self.name.copy_from_slice(&lsnm[..8]);
         self.name_pos = 0;
+        // The cursor starts on END if an LSNM chunk was found in the file, else on 'A'.
         self.char_cursor = if g.lsnm_found { CELL_END } else { 0 };
         // SPEC-GAP: the slide-in of the ranking (VM 40), the difficulty plate (41–46) and the title (48) is
         // not specified for state 9; interrupt 3 + difficulty is sent to all VMs as in the viewer's state 5.
@@ -754,7 +781,7 @@ impl ResultScreen {
         true
     }
 
-    // Ranking table (16 §2.3).
+    // Ranking table (16 §2.3): drawn while VM 40's x < 640; A = VM 40's raw pos.
     fn draw_ranking(&self, ctx: &mut Ctx) {
         let a = self.vms[VM_ANCHOR].pos;
         if a[0] >= 640.0 || self.rank_shot < 0 {
@@ -861,6 +888,7 @@ impl ResultScreen {
             format!("{:9}", st.deaths),
             format!("{:9}", st.bombs_used),
             format!("{:9}", st.spells),
+            // Slowdown %: the port has no fps meter (15 §2.11), so it is always 0.
             "    0.00%".to_string(),
         ];
         let cont = st.continues.min(9);
@@ -874,7 +902,7 @@ impl ResultScreen {
         }
     }
 
-    // Card list (16 §2.4 state 8).
+    // Card list (16 §2.4 state 8): bar, row text VM, counts and MaxBonus per row; accordion step after a character change.
     fn draw_cards(&mut self, ctx: &mut Ctx) {
         let a = self.vms[VM_ANCHOR].pos;
         if a[0] >= 640.0 || self.card_page < 0 {
@@ -978,7 +1006,7 @@ impl Task<Ctx> for ResultScreen {
             })
             .collect();
         self.bar = text_vm(ctx, ANM_SLOT, 32, true);
-        // Captured counts per group and character: CATK present (v3) and a story or practice capture.
+        // Captured counts +0x64 per group and character: CATK present (v3) and a story or practice capture (16 §2.4).
         let catk = &ctx.game.score.catk;
         for g in 0..6 {
             for id in group_cards(g as i32) {
@@ -997,7 +1025,7 @@ impl Task<Ctx> for ResultScreen {
         Ok(())
     }
 
-    // Result_OnRemove 0x459FD2: saves score.dat (2 RNG draws).
+    // Result_OnRemove 0x459FD2: saves score.dat (2 RNG draws, 15 §2.1).
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain != Chain::Calc {
             return;
@@ -1014,6 +1042,7 @@ impl Task<Ctx> for ResultScreen {
     // Result_Calc 0x4584B0: state, then the 72 VMs, then frame += 1.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.calc_state(ctx);
+        // Session tool hook.
         ctx.game.trace_result = Some(self.state);
         for vm in &mut self.vms {
             vm.run(&mut ctx.anm);

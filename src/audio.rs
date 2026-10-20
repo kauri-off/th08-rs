@@ -1,18 +1,24 @@
+//! Port audio back end (cpal): thbgm.dat BGM streaming (02 §1–§4) and the SE voices DirectSound plays (13 §1.1, §1.3).
+
 use crate::assets::{Source, spawn};
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 
+// thbgm.fmt WAVEFORMATEX: 44100 Hz, stereo, 16-bit for every track (02 §2).
 const BGM_RATE: f64 = 44100.0;
 
+// thbgm.fmt record (0x34 bytes, 02 §2); positions are in stereo frames (bytes / 4).
 #[derive(Clone, Debug)]
 pub struct Track {
     pub name: String,
     pub offset: u64,
     pub loop_start: usize,
+    // Loop end +0x1C = frames stored in thbgm.dat; +0x14 (full length) is larger and never read (02 §2).
     pub length: usize,
 }
 
+// 52-byte records up to the one whose name starts with NUL (02 §2).
 pub fn parse_fmt(data: &[u8]) -> Vec<Track> {
     data.chunks_exact(52)
         .take_while(|e| e[0] != 0)
@@ -30,6 +36,8 @@ pub fn parse_fmt(data: &[u8]) -> Vec<Track> {
         .collect()
 }
 
+// Music_Play's .mid → .wav rename plus Bgm_FindTrack 0x45C6B0 (02 §4): basename, case-sensitive compare,
+// no match → track 0 (th08_01.wav). So the std typos th08_02 / th08_13_b play the title theme.
 fn find_track<'a>(tracks: &'a [Track], name: &str) -> Option<&'a Track> {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let wav = match base.rfind('.') {
@@ -39,6 +47,7 @@ fn find_track<'a>(tracks: &'a [Track], name: &str) -> Option<&'a Track> {
     tracks.iter().find(|t| t.name == wav).or(tracks.first())
 }
 
+// The playing BGM: whole stored track in memory; after the end it loops from loop_start (02 §3).
 #[derive(Default)]
 struct Music {
     samples: Vec<[f32; 2]>,
@@ -46,7 +55,7 @@ struct Music {
     pos: f64,
 }
 
-// One PCM wave file (RIFF, 8/16-bit, mono/stereo).
+// One se_*.wav PCM wave file (RIFF, 8/16-bit, mono/stereo; 04 file index, 13 §1.1).
 pub struct Wave {
     samples: Vec<[f32; 2]>,
     rate: f64,
@@ -109,6 +118,7 @@ pub fn parse_wav(data: &[u8]) -> Result<Wave> {
     })
 }
 
+// One SE id's DirectSound buffer (13 §1.1): a non-looping copy of its wave; gain holds volume and pan per channel.
 #[derive(Default, Clone)]
 struct Voice {
     wave: Option<Arc<Wave>>,
@@ -117,7 +127,7 @@ struct Voice {
     playing: bool,
 }
 
-// DirectSound attenuation (1/100 dB) → amplitude.
+// DirectSound attenuation (1/100 dB) → amplitude; −10000 is silence.
 fn db_gain(db: i32) -> f32 {
     if db <= -10000 {
         0.0
@@ -142,6 +152,7 @@ impl Mixer {
     fn render(&mut self, out: &mut [f32], channels: usize) {
         let step = BGM_RATE / self.out_rate;
         for fr in out.chunks_exact_mut(channels) {
+            // Port mixer: linear resampling to the device rate; WaveStream_* chunking (02 §3) is platform detail.
             if self.fade_step > 0.0 {
                 self.fade = (self.fade - self.fade_step).max(0.0);
                 if self.fade == 0.0 {
@@ -158,6 +169,7 @@ impl Mixer {
                     let j = if i + 1 >= n { m.loop_start } else { i + 1 };
                     let b = m.samples[j];
                     m.pos += step;
+                    // 02 §3: after loop_end, continue from loop_start (track start when loop_start is 0).
                     if m.pos >= n as f64 {
                         m.pos -= (n - m.loop_start) as f64;
                     }
@@ -226,6 +238,8 @@ impl Audio {
         }
     }
 
+    // Music_Play + Music_PlaySlot (02 §4) in one step, WAV mode only: loads the stored part (never past loop_end) and plays.
+    // SPEC-GAP: MIDI mode (cfg +0x1F = 2) and music off (0) are not implemented; the music-room heard flags are set by callers.
     // Accepts script names like "bgm/th08_00.mid"; unknown names fall back to track 0.
     pub fn play_bgm(&mut self, name: &str) {
         let Some(t) = find_track(&self.tracks, name).cloned() else {
@@ -265,7 +279,8 @@ impl Audio {
         });
     }
 
-    // Sound_LoadSE (13 §1.1): one buffer per SE id, each a copy of its wave file.
+    // Sound_LoadSE 0x45D3F0 (13 §1.1): one buffer per SE id, each a copy of its wave file; the table volume is not
+    // stored because Sound_Update overwrites it on every play (13 §1.3).
     pub fn load_se(&mut self, archive: &crate::archive::Archive) {
         let mut waves: Vec<(&str, Option<Arc<Wave>>)> = Vec::new();
         let mut voices = Vec::new();
@@ -292,7 +307,8 @@ impl Audio {
         self.mixer.lock().unwrap().voices = voices;
     }
 
-    // Stop, rewind, set pan/volume (1/100 dB) and play once (13 §1.3).
+    // Sound_Update per queued id (13 §1.3): stop, rewind, set pan/volume (1/100 dB) and play once.
+    // Pan uses the DirectSound rule: the opposite channel is attenuated by |pan| (1/100 dB).
     pub fn play_se(&mut self, id: usize, pan: i32, volume: i32) {
         let mut m = self.mixer.lock().unwrap();
         let Some(v) = m.voices.get_mut(id) else {
@@ -309,13 +325,14 @@ impl Audio {
         self.mixer.lock().unwrap().paused = on;
     }
 
-    // Music_Fade: linear fade-out over `secs`, then stop.
+    // Music_Fade 0x4480F8 (10 §5 op 12, 11 §4, 16 §1.3 `@M`): fade out over `secs`, then stop.
+    // SPEC-GAP: the fade curve is not specified (linear in amplitude here).
     pub fn fade_bgm(&mut self, secs: f32) {
         let mut m = self.mixer.lock().unwrap();
         m.fade_step = 1.0 / (secs.max(0.01) * m.out_rate as f32);
     }
 
-    // BGM volume through the 13 §1.3 curve (table volume 0); SE volumes are applied per play.
+    // BGM volume through the 13 §1.3 curve with cfg +0x27 (table volume 0); SE volumes are applied per play.
     pub fn set_volumes(&mut self, cfg: &crate::config::Config) {
         let db = crate::config::volume_curve(0, cfg.bgm_volume);
         self.mixer.lock().unwrap().volume = db_gain(db);
@@ -328,6 +345,7 @@ impl Audio {
     }
 }
 
+// Port: output device setup (prefers 44.1 kHz stereo so the BGM needs no resampling).
 fn open_stream(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
     let host = cpal::default_host();
     let pick = |want: &str| {

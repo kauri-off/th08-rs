@@ -1,7 +1,9 @@
-// Replays (15 §3, 11 §6): .rpy load/save, the per-stage records, playback and recording.
+//! Replays (15 §3, 11 §6): .rpy load/save, the per-stage records, playback and recording.
+
 use crate::archive::{lzss_compress, lzss_decompress};
 use anyhow::{Result, bail};
 
+// File header size, end of the info block, stage record header size and checksum base (15 §3.5, 11 §6).
 const HEADER: usize = 0x68;
 const INFO: usize = 0x134;
 const REC: usize = 0x24;
@@ -19,8 +21,10 @@ fn put_u32(b: &mut [u8], o: usize, v: u32) {
     b[o..o + 4].copy_from_slice(&v.to_le_bytes());
 }
 
+// Stage record, 0x24-byte header (11 §6) + input words + fps bytes (15 §3.4).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StageRecord {
+    // +0x00 score ÷10 at the end of this stage (filled when the next stage starts or at finish).
     pub score: u32,
     pub point_items: i32,
     pub graze: u32,
@@ -28,15 +32,17 @@ pub struct StageRecord {
     pub next_extend: i32,
     pub max_point: i32,
     pub gauge: i16,
+    // +0x1A stage_seed (11 §1.3).
     pub seed: u16,
     pub power: u8,
     pub lives: u8,
     pub bombs: u8,
+    // +0x1F rank byte 0x164D334; +0x20 the byte 0x164D0B0.
     pub rank: u8,
     pub b20: u8,
     pub spells: u8,
     pub clock: i8,
-    // Input words from the dummy word on; fps bytes as stored.
+    // Input words from the dummy word on (15 §3.2); fps bytes as stored (one per 30 frames, bit 7 = flag).
     pub inputs: Vec<u16>,
     pub fps: Vec<u8>,
 }
@@ -87,14 +93,17 @@ impl StageRecord {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Replay {
+    // File header +6, debug-frame flag (15 §3.1); retail files have 0.
     pub debug: u8,
     // Info block 0x68..0x134 of the image (date, name, card, config copy, slowdown, …).
     pub info: Vec<u8>,
     pub stages: [Option<StageRecord>; 9],
+    // Raw "USER" section after the file size (15 §3.5), kept as read.
     pub user: Vec<u8>,
 }
 
 impl Default for Replay {
+    // Info constants of 15 §3.5: +0x69 = 100, +0x120 = 30 (fps interval), exe size/sum and tag "0100d" (15 §2.10).
     fn default() -> Self {
         let mut info = vec![0; INFO - HEADER];
         info[1] = 100;
@@ -111,6 +120,7 @@ impl Default for Replay {
     }
 }
 
+// 15 §3.5: from header +0x18 on, b += key, key += 7 (u8); decrypt subtracts the same sequence.
 fn crypt(b: &mut [u8], mut key: u8, decrypt: bool) {
     for c in b {
         *c = if decrypt {
@@ -158,7 +168,8 @@ impl Replay {
         self.stages.iter().position(Option::is_some)
     }
 
-    // Replay_Load (15 §3.7).
+    // Replay_Load 0x451D90 (15 §3.7): magic + version 6, decrypt from 0x18 with key +0x15, checksum, LZSS, slow-mode reject.
+    // SPEC-GAP: the exe check of step 5 (info +0x124/+0x128/+0x12C, 15 §2.10) is not made.
     pub fn parse(file: &[u8]) -> Result<Self> {
         if file.len() < HEADER || &file[..4] != b"T8RP" || u16_at(file, 4) != 6 {
             bail!("not a th08 replay");
@@ -186,6 +197,7 @@ impl Replay {
         if info[0xD9 - HEADER] != 0 {
             bail!("replay recorded in slow mode");
         }
+        // Header +0x20[9] record offsets and +0x44[9] fps offsets, in image coordinates (0 = stage not played).
         let offs: Vec<usize> = (0..9)
             .map(|i| u32_at(&img, 0x20 + 4 * i) as usize)
             .collect();
@@ -198,6 +210,7 @@ impl Replay {
             if o == 0 {
                 continue;
             }
+            // A record runs to its fps stream, the fps stream to the next record (15 §3.5 image order).
             let next = offs[i + 1..]
                 .iter()
                 .copied()
@@ -220,7 +233,9 @@ impl Replay {
         })
     }
 
-    // Replay_Finish image/compress/checksum/encrypt (15 §3.5); 3 RNG draws.
+    // Replay_Finish image/compress/checksum/encrypt (15 §3.5, §3.6 steps 2–5). 3 RNG draws in this order:
+    // key byte, info +0x68, header +0x14 (Rng_Range16(256) each).
+    // SPEC-GAP: the USER section is not generated; only one read from a file is written back.
     pub fn encode(&mut self, rng: &mut crate::rng::Rng) -> Vec<u8> {
         let key = rng.range16(256) as u8;
         self.info[0] = rng.range16(256) as u8;
@@ -251,6 +266,7 @@ impl Replay {
         put_u32(&mut f, 0x18, comp.len() as u32);
         put_u32(&mut f, 0x1C, (img.len() - HEADER) as u32);
         f.extend(comp);
+        // Checksum over [0x15, 0x68) + the compressed body, before encryption.
         let sum = f[0x15..]
             .iter()
             .fold(CHECK_BASE, |a, &c| a.wrapping_add(c as u32));
@@ -267,6 +283,8 @@ fn cstr(b: &[u8]) -> String {
     String::from_utf8_lossy(&b[..end]).into_owned()
 }
 
+// Replay_PlayCalc 0x452550 prio 6, Replay_RecordCalc 0x452310 prio 17, Replay_FastForward 0x452490 prio 18 (15 §3.1).
+// SPEC-GAP: Replay_FrameHook (prio 7, 11 §1.4) and the debug playback calc are not registered.
 pub const PLAY_PRIO: u16 = 6;
 pub const RECORD_PRIO: u16 = 17;
 pub const FF_PRIO: u16 = 18;
@@ -275,11 +293,14 @@ pub const FF_PRIO: u16 = 18;
 pub struct ReplayTask {
     play: bool,
     stage: usize,
+    // +0x50 input cursor (in words), +0 frame counter, +4 clear-bonus frame counter, fps cursor q (+0xA0).
     cursor: usize,
     frame: u32,
     bonus_frames: u32,
     fps_q: usize,
+    // Playback's key-repeat emulation counter (0x164D53C, 15 §3.3).
     repeat_ctr: u32,
+    // Dialogue fast-forward phase (15 §3.3).
     ff: u32,
 }
 
@@ -289,6 +310,7 @@ pub fn register(
     st: &crate::player::Stats,
 ) -> anyhow::Result<crate::task::TaskRef<crate::game::Ctx>> {
     use crate::task::{self, Chain};
+    // Replay_Register 0x451F90 sets g_Input and g_InputPrev to 0 (15 §3.1).
     ctx.input.game = 0;
     ctx.input.game_prev = 0;
     let t = task::task(ReplayTask {
@@ -311,7 +333,8 @@ pub fn register(
     Ok(t)
 }
 
-// Replay_RecordStageStart: the previous record gets the current score, then a new record with the dummy word.
+// Replay_RecordStageStart 0x452830 (15 §3.2): the previous record gets the current score, then a new record with the
+// dummy word (the debug words at +0x26 / +0x28 are overwritten by frames 1 and 2, so they are not kept).
 fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
     let stage = g.stage % 9;
     if g.rpy.is_none() {
@@ -324,6 +347,7 @@ fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
         ));
     }
     let r = g.rpy.as_mut().unwrap();
+    // SPEC-GAP: 15 §3.2 sets only the previous stage's +0; this overwrites every earlier record with the current score.
     for s in r.stages.iter_mut().flatten() {
         s.score = st.score10 as u32;
     }
@@ -340,6 +364,7 @@ fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
         lives: st.lives as u8,
         bombs: st.bombs as u8,
         rank: crate::gamemgr::rank() as u8,
+        // SPEC-GAP: 0x164D0B0 is not tracked; written as 0.
         b20: 0,
         spells: st.spells as u8,
         clock: st.clock as i8,
@@ -348,6 +373,9 @@ fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
     });
 }
 
+// Info block at record start (15 §3.5): shot, difficulty, "NO NAME", practice flag +0x7B, spell id +0x7C (−1 outside
+// spell practice), +0xAE = 0x100, config copy +0xB4.
+// SPEC-GAP: the clear status +0x11C and the card name +0x7E are not filled.
 fn new_recording(shot: u8, diff: i32, flags: u32, card: i16, cfg: &[u8; 60]) -> Replay {
     let mut r = Replay::default();
     let i = &mut r.info;
@@ -367,6 +395,7 @@ fn new_recording(shot: u8, diff: i32, flags: u32, card: i16, cfg: &[u8; 60]) -> 
 }
 
 // Replay start from the menu (15 §3.8) or the title demo (12 §2.2): header values, flags, scene 2.
+// Flags become replay (| demo), keeping only the unlock bits 15–17 (15 §2.2: playback keeps them).
 pub fn start_playback(
     g: &mut crate::gamemgr::Game,
     r: Replay,
@@ -383,6 +412,7 @@ pub fn start_playback(
     g.flags = g.flags & (7 << 15) | F_REPLAY;
     let id = r.spell_id();
     if id >= 0 {
+        // SPEC-GAP: 15 §3.8 sets only bit 14; bit 0 is added as the menu's spell-practice start does (16 §6.1).
         g.flags |= F_SPELL_PRACTICE | F_PRACTICE;
         g.card = id;
     }
@@ -390,6 +420,7 @@ pub fn start_playback(
         g.flags |= F_DEMO;
         g.demo = n;
         g.demo_frame = 0;
+        // Byte 0x164D0B2 = shot % 2 for attract demos (12 §2.2).
         g.demo_shot_bias = r.shot() % 2;
     } else {
         g.demo_shot_bias = 0;
@@ -404,7 +435,7 @@ pub fn start_playback(
     true
 }
 
-// Back to the menu after playback: the live config returns, replay state is dropped.
+// Back to the menu after playback: the live config returns, replay state is dropped (port bookkeeping).
 pub fn end_playback(g: &mut crate::gamemgr::Game) {
     if let Some(c) = g.cfg_live.take() {
         g.cfg = c;
@@ -419,8 +450,9 @@ pub fn end_playback(g: &mut crate::gamemgr::Game) {
         | crate::gamemgr::F_SPELL_PRACTICE);
 }
 
-// Replay_PlayStageLoad (11 §3.4): stats, rank and seed from the record of the stage being started; the score comes
-// from the last present record of a lower stage (kept as is when there is none).
+// Replay_PlayStageLoad 0x452D60 (11 §3.4, 15 §3.4): stats, rank and seed from the record of the stage being started;
+// the score comes from the last present record of a lower stage (kept as is when there is none).
+// SetLives and SetPower each consume RNG before Rng_SetState(seed) (11 §1.3), hence the order below.
 pub fn play_stage_load(
     g: &mut crate::gamemgr::Game,
     st: &mut crate::player::Stats,
@@ -457,8 +489,9 @@ pub fn play_stage_load(
     Ok(())
 }
 
-// Replay_AppendEnd + Replay_Finish (scene changes out of the game): last score, terminator, date; then the save.
-// SPEC-GAP: the save dialogue (16 / 15 §3.6 states 10–14) is not implemented; `TH08_REPLAY_SAVE=<1–15>` saves there.
+// Replay_AppendEnd 0x4531A0 + Replay_Finish 0x4531F0 (scene changes out of the game): last score, terminator, date; then the save.
+// SPEC-GAP: the save dialogue (16 §2.6 / 15 §3.6 states 10–14) is not implemented; `TH08_REPLAY_SAVE=<1–15>` saves there.
+// SPEC-GAP: the 15 §3.6 skip tests (changed config, recorded slow mode) and the slowdown fields are not applied.
 pub fn finish(ctx: &mut crate::game::Ctx) {
     let Some(mut r) = take_recording(&mut ctx.game) else {
         return;
@@ -487,6 +520,7 @@ pub fn take_recording(g: &mut crate::gamemgr::Game) -> Option<Replay> {
         }
     }
     if let Some(s) = r.stages.iter_mut().flatten().last() {
+        // 0 terminator + 4 uninitialised bytes, written as the demo files' 0xCDCD (15 §3.2).
         s.inputs.extend([0, 0xCDCD, 0xCDCD]);
     }
     put_u32(&mut r.info, 0xB0 - HEADER, score);
@@ -497,6 +531,7 @@ pub fn take_recording(g: &mut crate::gamemgr::Game) -> Option<Replay> {
     Some(r)
 }
 
+// The boss test 0x42F1F0 used by fast playback (15 §3.3).
 fn boss_active() -> bool {
     crate::gamemgr::current()
         .and_then(|g| g.borrow().enemies.clone())
@@ -504,7 +539,8 @@ fn boss_active() -> bool {
 }
 
 impl ReplayTask {
-    // Replay_RecordCalc (15 §3.2).
+    // Replay_RecordCalc 0x452310 (15 §3.2): runs after the game objects, so frame n's input is the raw word sampled at
+    // the end of frame n − 1.
     fn record(&mut self, ctx: &mut crate::game::Ctx) {
         let g = &mut ctx.game;
         if g.flags & crate::gamemgr::F_RUNNING == 0 {
@@ -513,9 +549,11 @@ impl ReplayTask {
         let i = &mut ctx.input;
         i.game_prev = i.game;
         i.game = i.held;
+        // Step 2: slow mode records nothing (Supervisor+0x1A4 bit 3 is never set in retail code).
         if g.cfg.slow != 0 {
             return;
         }
+        // Step 3: at most 3 frames are recorded during the stage-clear bonus (flags bit 9).
         if g.flags & crate::gamemgr::F_CLEAR_PANEL != 0 {
             if self.bonus_frames > 2 {
                 return;
@@ -529,6 +567,8 @@ impl ReplayTask {
         s.inputs.push(raw);
         if self.frame % 30 == 0 {
             let q = self.fps_q;
+            // Overlapping two-byte write: fps[q] = fps | flag, fps[q+1] = fps (15 §3.2 step 5).
+            // SPEC-GAP: the port has no fps meter; fps_now is written as 60.
             s.fps.resize(q + 2, 0);
             s.fps[q] = 60;
             s.fps[q + 1] = 60;
@@ -537,7 +577,8 @@ impl ReplayTask {
         self.frame += 1;
     }
 
-    // Replay_PlayCalc (15 §3.3): input substitution and the key-repeat emulation.
+    // Replay_PlayCalc 0x452550 (15 §3.3): input substitution and the key-repeat emulation; not during the clear bonus.
+    // The first word read is the dummy 0, matching the one-frame latency of recording.
     fn play(&mut self, ctx: &mut crate::game::Ctx) {
         let g = &ctx.game;
         if g.flags & crate::gamemgr::F_RUNNING == 0
@@ -591,9 +632,11 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
         match (self.play, tag) {
             (false, _) => self.record(ctx),
             (true, 0) => self.play(ctx),
+            // Replay_FastForward 0x452490 (15 §3.3); `replay_ff` = false is a tool switch that disables both restarts.
             // While skippable dialogue is shown the chain is restarted on 2 of every 3 frames (15 §3.3).
             (true, _) => {
-                // Fast playback: restart on every frame except frame % 5 == 4 while no boss is active.
+                // Fast playback (speed byte 0x164D0BD = 2): restart on every frame except frame % 5 == 4 while no boss is active.
+                // SPEC-GAP: 15 §3.3 does not say whether the fast and dialogue tests share one call; here fast wins.
                 if ctx.game.replay_ff
                     && ctx.game.replay_speed == 2
                     && self.frame % 5 != 4

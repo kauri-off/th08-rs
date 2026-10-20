@@ -1,6 +1,8 @@
+//! Input word and key repeat (12 intro, 11 §7 `Input_Poll` 0x43D970; gameplay word 09 §3, 15 §3.2–§3.3).
+
 use winit::keyboard::KeyCode;
 
-// Game input word layout (09 §3).
+// Input word bits (09 §3, 12 intro); also the replay stream format (15 §3.2).
 pub const SHOT: u16 = 1 << 0;
 pub const BOMB: u16 = 1 << 1;
 pub const FOCUS: u16 = 1 << 2;
@@ -11,13 +13,15 @@ pub const LEFT: u16 = 1 << 6;
 pub const RIGHT: u16 = 1 << 7;
 pub const SKIP: u16 = 1 << 8;
 pub const ENTER: u16 = 1 << 12;
-// Keyboard map 0x43D970 (answers_phase5): Q 0x200, S 0x400, Home/P 0x800, D 0x2000, R 0x4000.
+// Keyboard map 0x43D970 (12 intro): Q 0x200, S 0x400, Home/P 0x800, D 0x2000, R 0x4000.
 pub const KEY_Q: u16 = 1 << 9;
 pub const KEY_S: u16 = 1 << 10;
 pub const KEY_HOME: u16 = 1 << 11;
 pub const KEY_D: u16 = 1 << 13;
 pub const KEY_R: u16 = 1 << 14;
 
+// SPEC-GAP: the specs name only Z, Ctrl, ESC, Enter, Q, S, Home/P, D, R; arrows, X and Shift are assumed.
+// SPEC-GAP: the joystick (15 §1.1 mapping, ShotSlow counter) is not implemented.
 pub fn map_key(k: KeyCode) -> u16 {
     match k {
         KeyCode::ArrowUp => UP,
@@ -41,12 +45,14 @@ pub fn map_key(k: KeyCode) -> u16 {
 
 #[derive(Default, Clone, Copy)]
 pub struct Input {
+    // Keyboard state; `held` / `prev` are the polled raw word 0x164D528 / previous 0x164D530 (12 intro, 11 §7).
     pub raw: u16,
     pub held: u16,
     pub prev: u16,
+    // Unchanged-input counter 0x164D53C and key-repeat flag 0x164D538.
     pub same_frames: u32,
     pub repeat: bool,
-    // g_Input / g_InputPrev: the gameplay word, written by the replay node (recorded or played back).
+    // g_Input 0x164D52C / g_InputPrev 0x164D534: the gameplay word, written by the replay node (15 §3.2, §3.3).
     pub game: u16,
     pub game_prev: u16,
 }
@@ -64,7 +70,9 @@ impl Input {
     pub fn tick(&mut self) {
         self.prev = self.held;
         self.held = self.raw;
-        // Key repeat (12 header): after 30 frames of unchanged input, true on every 8th frame.
+        // Key repeat (12 intro): after 30 frames of unchanged input, true on every 8th frame.
+        // SPEC-GAP: 15 §3.3 tests the counter before incrementing it (first repeat on the 33rd equal frame); this
+        // increments first, so it fires one frame earlier (32nd).
         self.same_frames = if self.held == self.prev {
             self.same_frames + 1
         } else {
@@ -73,7 +81,7 @@ impl Input {
         self.repeat = self.same_frames >= 30 && self.same_frames % 8 == 0;
     }
 
-    // The view gameplay objects read (player, dialogue, HUD).
+    // The view gameplay objects read (player, dialogue, HUD): g_Input as both raw and held.
     pub fn game_view(&self) -> Input {
         Input {
             raw: self.game,
@@ -96,7 +104,7 @@ impl Input {
     }
 }
 
-// Debug input script (`TH08_INPUT`): items separated by newlines/commas/spaces, each `mask` or `frames:mask`
+// Port debug tool, not a port of the original. Debug input script (`TH08_INPUT`): items separated by newlines/commas/spaces, each `mask` or `frames:mask`
 // (decimal or 0x hex, game bit layout); `#` starts a comment. The script then holds 0.
 pub fn parse_script(s: &str) -> Option<Vec<u16>> {
     let num = |t: &str| {

@@ -1,4 +1,5 @@
-// Disassembles an .ecl file: `eclview <th08.dat> <x.ecl> [sub]`.
+//! Disassembles an .ecl file: `eclview <th08.dat> <x.ecl> [sub]`.
+
 use th08::ecl;
 
 fn main() -> anyhow::Result<()> {

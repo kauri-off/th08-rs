@@ -1,4 +1,5 @@
-// Dumps every texture of an ANM file to PNG, sprite rects outlined unless `--raw` follows outdir; `--dis` instead prints the scripts.
+//! Dumps every texture of an ANM file to PNG, sprite rects outlined unless `--raw` follows outdir; `--dis` instead prints the scripts.
+
 fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().collect();
     let ar = th08::archive::Archive::from_bytes(std::fs::read(&a[1])?)?;

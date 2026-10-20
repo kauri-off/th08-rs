@@ -1,5 +1,6 @@
-// Demo sync check (answers_phase8 §2): plays demorpyN in the port and compares each gameplay frame with the
-// ground-truth trace (specs/data/demoN_trace.txt).
+//! Debug tool: demo sync check. Plays demorpyN in the port and compares each gameplay frame with the
+//! ground-truth trace (specs/data/demoN_trace.txt); used to locate divergences only.
+
 use crate::game::Ctx;
 
 pub const FIELDS: [&str; 22] = [
@@ -130,6 +131,7 @@ impl std::fmt::Display for Report {
     }
 }
 
+// RNG state before frame 1, from the trace's second header line ("… rng state XXXX …").
 fn header_rng(text: &str) -> u16 {
     text.lines()
         .nth(1)

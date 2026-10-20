@@ -1,9 +1,12 @@
-// score.dat (15 §2): container, chunks and the in-memory records the game updates.
+//! score.dat (15 §2): container, chunks and the in-memory records the game updates; plus the port's save storage.
+
 use crate::archive::{block_decrypt, block_encrypt, lzss_compress, lzss_decompress};
 use anyhow::{Result, bail};
 
 pub const CARDS: usize = 222;
+// Outer layer: archive block cipher (key, step, block, limit) (15 §2.1, cipher of 01 §2).
 const CRYPT: (u8, u8, usize, usize) = (0x59, 0x79, 0x100, 0xC00);
+// CATK counter cap (15 §2.5) and PLST counter cap (15 §2.9).
 const CAP: u32 = 9999;
 const PLST_CAP: u32 = 999_999;
 // VRSM values of the shipped th08.exe (15 §2.10).
@@ -32,6 +35,7 @@ fn put_u32s(b: &mut [u8], o: usize, v: &[u32]) {
     }
 }
 
+// Chunk header (15 §2.1): magic, u16 size twice, u8 version, 3 bytes padding.
 fn chunk(magic: &[u8; 4], size: usize, version: u8) -> Vec<u8> {
     let mut c = vec![0; size];
     c[..4].copy_from_slice(magic);
@@ -41,6 +45,8 @@ fn chunk(magic: &[u8; 4], size: usize, version: u8) -> Vec<u8> {
     c
 }
 
+// HSCR chunk v4, 0x168 bytes, kept raw (15 §2.3 offsets): +0x0C score ÷10, +0x10 slowdown f32, +0x14 shot, +0x15
+// difficulty, +0x16 stage (99 = cleared), +0x17 name, +0x20 date, +0x26 continues, +0x166 default flag.
 #[derive(Clone)]
 pub struct Hscr(pub Vec<u8>);
 
@@ -110,6 +116,8 @@ impl Default for Hscr {
     }
 }
 
+// CLRD chunk v4 (15 §2.4): +0x0C no-continue masks, +0x16 any-clear masks (E, N, H, L, Ex; bit 1 << stage, 0x4000
+// Final B, 0x8000 Final A), +0x20 "bad ending seen" flag. Entry 12 is the union over all shots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clrd {
     pub nc: [u16; 5],
@@ -120,6 +128,7 @@ pub struct Clrd {
 impl Default for Clrd {
     fn default() -> Self {
         Self {
+            // Every mask defaults to 1 (the stage-1 bit, 15 §2.4).
             nc: [1; 5],
             any: [1; 5],
             bad_ending: 0,
@@ -127,15 +136,18 @@ impl Default for Clrd {
     }
 }
 
+// CATK chunk v3, 0x22C bytes (15 §2.5); in memory at GM+0x40.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Catk {
+    // The chunk is saved only when its magic is set.
     pub present: bool,
     pub difficulty: u8,
     pub checksum: u8,
     pub name: [u8; 48],
     pub owner: [u8; 48],
+    // +0x10 name, +0x40 owner, +0x70 / +0xB0 comment lines; stored decoded (XOR 0xAA / 0xBB / 0xDD / 0xEE come from ECL).
     pub comment: [[u8; 64]; 2],
-    // [story bonus, story attempts, story captures, practice bonus, practice attempts, practice captures][shot or 12]
+    // +0xF0.. six u32[13] rows: [story bonus, story attempts, story captures, practice bonus, practice attempts, practice captures][shot or 12]
     pub counters: [[u32; 13]; 6],
 }
 
@@ -159,6 +171,7 @@ impl Default for Catk {
 }
 
 impl Catk {
+    // +0x0E = (Σ signed name bytes [48] + Σ all 78 u32 counters) & 0xFF (15 §2.5).
     pub fn compute_checksum(&self) -> u8 {
         let n: i32 = self.name.iter().map(|&c| c as i8 as i32).sum();
         let c: u32 = self
@@ -169,11 +182,13 @@ impl Catk {
         (n as u32).wrapping_add(c) as u8
     }
 
+    // "Attempted" for the FLSP unlocks: any attempt counter ≠ 0, story or practice (15 §2.8).
     pub fn attempted(&self) -> bool {
         self.counters[C_ATTEMPTS][12] != 0 || self.counters[C_PRACTICE + C_ATTEMPTS][12] != 0
     }
 }
 
+// PSCR chunk v2, 0x178 bytes per shot (15 §2.6): +0x0C plays [stage][diff], +0xC0 hiscore ÷10, +0x175 used.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Pscr {
     pub plays: [[u32; 5]; 9],
@@ -181,6 +196,8 @@ pub struct Pscr {
     pub used: u8,
 }
 
+// PLST chunk v2, 0x228 bytes (15 §2.9): run / play time h, m, s, ms; counters [block][17] with blocks 0..4 =
+// difficulty, 5 unused, 6 total; +0x208 music-room heard flags.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plst {
     pub run_time: [u32; 4],
@@ -200,6 +217,7 @@ impl Default for Plst {
     }
 }
 
+// Counter indices inside a 17-word block (15 §2.9); [1 + shot] are per-shot plays.
 pub const PL_PLAYS: usize = 0;
 pub const PL_RETRIES: usize = 13;
 pub const PL_CLEARS: usize = 14;
@@ -219,7 +237,7 @@ impl Plst {
         }
     }
 
-    // Adds `ms` to an h/m/s/ms clock.
+    // Adds `ms` to an h/m/s/ms clock with carries (Supervisor_UpdatePlayTime 0x448418, 15 §2.9).
     pub fn add_time(t: &mut [u32; 4], ms: u64) {
         let total = ((t[0] as u64 * 60 + t[1] as u64) * 60 + t[2] as u64) * 1000 + t[3] as u64 + ms;
         *t = [
@@ -231,6 +249,8 @@ impl Plst {
     }
 }
 
+// All chunks of one score.dat; `lsnm` +0x0C char[12] (15 §2.7), `flsp` +0x0C u8[17] (15 §2.8), `vrsm` +0x0C..+0x1C
+// tag, exe size, exe sum (15 §2.10).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScoreDat {
     pub hscr: Vec<Hscr>,
@@ -272,6 +292,7 @@ impl Default for ScoreDat {
             clrd: [Clrd::default(); 13],
             catk: vec![Catk::default(); CARDS],
             pscr: Default::default(),
+            // LSNM default: 8 spaces (15 §2.7).
             lsnm: *b"        \0\0\0\0",
             flsp: [0; 17],
             plst: Plst::default(),
@@ -280,7 +301,8 @@ impl Default for ScoreDat {
     }
 }
 
-// Removes both layers (archive cipher, then the rolling XOR) and checks the header.
+// ScoreDat_Load 0x45A5E0 container (15 §2.1): removes both layers (archive cipher, then the rolling XOR from byte 1),
+// checks the u16 checksum of bytes 4.., header size 0x1C and version 1, then LZSS-decompresses the body.
 pub fn decode_container(file: &[u8]) -> Result<Vec<u8>> {
     if file.len() < 0x1C {
         bail!("score.dat too small");
@@ -304,7 +326,8 @@ pub fn decode_container(file: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-// Builds the container around a decompressed body; `r` are the two random header bytes.
+// ScoreDat_Save 0x453D0D container: `r` are the random header bytes +0x01 and +0x06; the rolling XOR runs on the
+// plain bytes so that the decoder above recovers them (15 §2.1).
 pub fn encode_container(body: &[u8], r: [u8; 2]) -> Vec<u8> {
     let comp = lzss_compress(body);
     let mut b = vec![0u8; 0x1C];
@@ -328,6 +351,9 @@ pub fn encode_container(body: &[u8], r: [u8; 2]) -> Vec<u8> {
 }
 
 impl ScoreDat {
+    // Chunk walk of ScoreDat_Get* (15 §2.1): only chunks with matching magic and version are taken; a size-0 chunk or no
+    // TH8K v1 rejects the file.
+    // SPEC-GAP: the VRSM exe check (15 §2.10) is not made.
     pub fn parse(file: &[u8]) -> Result<Self> {
         let d = decode_container(file)?;
         let mut s = Self::default();
@@ -457,13 +483,13 @@ impl ScoreDat {
         out
     }
 
-    // Saving draws two Rng_Range16(256) values (15 §2.1).
+    // Saving draws two Rng_Range16(256) values (15 §2.1); the RNG state carries into the next game (11 §1.5).
     pub fn encode(&self, rng: &mut crate::rng::Rng) -> Vec<u8> {
         let r = [rng.range16(256) as u8, rng.range16(256) as u8];
         encode_container(&self.body(), r)
     }
 
-    // ScoreDat_GetHiscore: max(top entry of (shot, difficulty), 100000), ÷10 units.
+    // ScoreDat_GetHiscore 0x45A950: max(top entry of (shot, difficulty), 100000), ÷10 units (15 §2.3).
     pub fn hiscore(&self, shot: usize, diff: usize) -> u32 {
         self.hscr
             .iter()
@@ -492,8 +518,8 @@ impl ScoreDat {
         list
     }
 
-    // ScoreList_Insert (new entry after equal scores; INFERRED); only the top 10 survive and default entries are
-    // never stored. Returns the 0-based rank.
+    // ScoreList_Insert 0x45A500 (15 §2.3; new entry after equal scores, INFERRED); only the top 10 survive and default
+    // entries are never stored. Returns the 0-based rank.
     pub fn insert_hscr(&mut self, h: Hscr) -> Option<usize> {
         let (shot, diff) = (h.shot(), h.difficulty());
         let mut list = self.ranking(shot, diff);
@@ -521,7 +547,8 @@ impl ScoreDat {
         }
     }
 
-    // Spell_Start attempt (15 §2.5): checksum check, then attempts of this shot and of all shots.
+    // Spell_Start 0x4152A0 attempt (15 §2.5): a bad checksum zeroes all counters first, then attempts of this shot and of
+    // all shots (index 12), capped at 9999; difficulty +0x0F = this attempt's.
     pub fn card_attempt(
         &mut self,
         id: usize,
@@ -550,7 +577,7 @@ impl ScoreDat {
         c.checksum = c.compute_checksum();
     }
 
-    // Spell_End capture: captures and max bonus; comments only in spell practice.
+    // Spell_End 0x4161B0 capture (15 §2.5): captures and max bonus; comments only in spell practice.
     pub fn card_capture(
         &mut self,
         id: usize,
@@ -590,7 +617,7 @@ impl ScoreDat {
     }
 }
 
-// Save storage: never the game directory. Native: `TH08_SAVE_DIR`, else $XDG_CONFIG_HOME/th08 or ~/.config/th08,
+// Port save storage (not a port of the original, which writes next to th08.exe, 00 §1): never the game directory. Native: `TH08_SAVE_DIR`, else $XDG_CONFIG_HOME/th08 or ~/.config/th08,
 // else next to the binary. Web: localStorage (hex).
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {

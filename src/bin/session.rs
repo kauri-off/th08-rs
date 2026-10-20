@@ -1,6 +1,7 @@
-// Session replay: `session <session dir> [--out DIR] [--no-drawlog] [--from N] [--to N]` runs a recorded session
-// of the original in the port (headless), writes DIR/trace.txt (+ DIR/draw.drawlog.xz), compares the trace with the
-// recorded one and the draw log with sessions/<name>/draw_*.drawlog.xz (DIR/index.html). N = main-menu frame.
+//! Session replay: `session <session dir> [--out DIR] [--no-drawlog] [--from N] [--to N]` runs a recorded session
+//! of the original in the port (headless), writes DIR/trace.txt (+ DIR/draw.drawlog.xz), compares the trace with the
+//! recorded one and the draw log with sessions/<name>/draw_*.drawlog.xz (DIR/index.html). N = main-menu frame.
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use th08::drawlog::{self, DemoMerge, KeyMode, Opts};

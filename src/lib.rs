@@ -1,3 +1,6 @@
+//! th08 port library: one module per ported subsystem plus the debug tools (session, demosync, drawlog,
+//! drawreport, anmdebug).
+
 pub mod anm;
 pub mod anmdebug;
 pub mod anmmgr;

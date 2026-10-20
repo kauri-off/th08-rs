@@ -1,5 +1,6 @@
-// Demo sync check: `demosync <0-3> [from-to] [rng-frame]` prints the report, trace/port rows around a range and,
-// with rng-frame, the call sites of every RNG draw made in that gameplay frame.
+//! Demo sync check: `demosync <0-3> [from-to] [rng-frame]` prints the report, trace/port rows around a range and,
+//! with rng-frame, the call sites of every RNG draw made in that gameplay frame.
+
 use th08::demosync::{FIELDS, parse_trace, sample};
 
 fn main() -> anyhow::Result<()> {

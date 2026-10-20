@@ -1,6 +1,9 @@
+//! th08.dat "PBGZ" archive reader (01 §2–§7) plus the cipher/LZSS encoders the score.dat and replay savers need (15 §2.1, §3.5).
+
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 
+// decrypt() parameters of 01 §2: start key, key step (both mod 256), block size and byte limit.
 struct CipherKey {
     key: u8,
     step: u8,
@@ -17,9 +20,11 @@ const fn ck(key: u8, step: u8, block: usize, limit: usize) -> CipherKey {
     }
 }
 
+// 01 §4 (header dwords at +4) and 01 §5 (file table, before LZSS).
 const HEADER_KEY: CipherKey = ck(0x1b, 0x37, 0x0c, 0x400);
 const TABLE_KEY: CipherKey = ck(0x3e, 0x9b, 0x80, 0x400);
 
+// edz type char → cipher, table at exe 0x4C78E0 (01 §6); 'M' and '*' are unused by th08.dat.
 fn payload_key(tag: u8) -> Option<CipherKey> {
     Some(match tag {
         b'M' => ck(0x1b, 0x37, 0x40, 0x2800),
@@ -38,7 +43,7 @@ fn decrypt(src: &[u8], k: &CipherKey) -> Vec<u8> {
     crypt(src, k, false)
 }
 
-// Block cipher used by the archive and score.dat (encrypt = inverse permutation).
+// Crypt_XorBlockReverse 0x43E1D0 (01 §2), also used by score.dat (15 §2.1); encrypt 0x43E4A0 is the inverse permutation.
 pub fn block_decrypt(src: &[u8], key: u8, step: u8, block: usize, limit: usize) -> Vec<u8> {
     crypt(src, &ck(key, step, block, limit), false)
 }
@@ -47,6 +52,7 @@ pub fn block_encrypt(src: &[u8], key: u8, step: u8, block: usize, limit: usize) 
     crypt(src, &ck(key, step, block, limit), true)
 }
 
+// 01 §2 steps 1–4: the key runs on across blocks; the tail and bytes past `limit` are copied as-is.
 fn crypt(src: &[u8], k: &CipherKey, enc: bool) -> Vec<u8> {
     let len = src.len();
     let mut out = src.to_vec();
@@ -57,6 +63,7 @@ fn crypt(src: &[u8], k: &CipherKey, enc: bool) -> Vec<u8> {
     let mut key = k.key;
     let mut pos = 0;
     while left > 0 && budget > 0 {
+        // The spec's shrunk block persists, but a shrink only happens on the last block, so the min is equivalent.
         let b = left.min(k.block);
         let mut s = pos;
         for half in 0..2 {
@@ -80,6 +87,7 @@ fn crypt(src: &[u8], k: &CipherKey, enc: bool) -> Vec<u8> {
     out
 }
 
+// MSB-first bit reader (01 §3).
 struct Bits<'a> {
     data: &'a [u8],
     pos: usize,
@@ -106,6 +114,8 @@ impl Bits<'_> {
     }
 }
 
+// Lzss_Decompress 0x4740E0 (01 §3): 0x2000-byte dictionary, cursor starts at 1, 13-bit offset / 4-bit length+3.
+// The original never re-clears its global dictionary; 01 §3 says clearing it per call is byte-exact.
 pub fn lzss_decompress(input: &[u8], size_hint: usize) -> Vec<u8> {
     let mut ring = [0u8; 0x2000];
     let mut rp = 1usize;
@@ -117,6 +127,7 @@ pub fn lzss_decompress(input: &[u8], size_hint: usize) -> Vec<u8> {
         cur: 0,
     };
     loop {
+        // Past the end the spec reads 0 bits, i.e. a 0 flag and offset 0 = end of stream; stopping here is equivalent.
         if bs.pos > input.len() {
             break;
         }
@@ -164,6 +175,7 @@ impl BitWriter {
 }
 
 // LZSS encoder producing streams `lzss_decompress` reads back (greedy, hash chains over 3-byte prefixes).
+// SPEC-GAP: the original's encoder is not specified; only decoder compatibility is kept (score.dat 15 §2.1, replays 15 §3.5).
 pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
     const WINDOW: usize = 0x2000 - 18;
     let mut w = BitWriter {
@@ -183,6 +195,7 @@ pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
                     if i - j > WINDOW {
                         break;
                     }
+                    // Offset 0 is the end marker (01 §3), so a match at dictionary position 0 cannot be coded.
                     if (j + 1) & 0x1fff == 0 {
                         continue;
                     }
@@ -223,6 +236,8 @@ pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
     w.out
 }
 
+// File-table entry (01 §5): absolute data offset, decompressed size incl. the 4-byte edz wrapper, and the next
+// entry's offset (the table offset for the last one) as the end of the compressed data.
 struct Entry {
     offset: usize,
     size: usize,
@@ -245,6 +260,8 @@ impl Archive {
             bail!("not a PBGZ archive");
         }
         let hdr = decrypt(&data[4..16], &HEADER_KEY);
+        // 01 §4: entry count, table offset and table size are stored biased by 123456 / 345678 / 567891.
+        // SPEC-GAP: the engine's count > 0 / table offset < file size checks are not made.
         let count = u32le(&hdr, 0).wrapping_sub(123456) as usize;
         let table_off = u32le(&hdr, 4).wrapping_sub(345678) as usize;
         let table_size = u32le(&hdr, 8).wrapping_sub(567891) as usize;
@@ -256,6 +273,7 @@ impl Archive {
                 .iter()
                 .position(|&c| c == 0)
                 .context("bad table")?;
+            // PbgArchive_FindEntry 0x474C70 compares names case-insensitively (01 §5).
             let name = String::from_utf8_lossy(&table[p..p + nul]).to_ascii_lowercase();
             p += nul + 1;
             raw.push((
@@ -263,6 +281,7 @@ impl Archive {
                 u32le(&table, p) as usize,
                 u32le(&table, p + 4) as usize,
             ));
+            // Skips offset, size and the unread reserved dword.
             p += 12;
         }
         let mut entries = HashMap::new();
@@ -284,12 +303,15 @@ impl Archive {
         &self.names
     }
 
+    // FileSystem_OpenFile 0x43E660, archive path (01 §6, §7): LZSS, then the edz type cipher; the wrapper is dropped.
+    // Callers pass bare names; the original strips any directory part before the lookup (01 §5).
     pub fn read(&self, name: &str) -> Result<Vec<u8>> {
         let e = self
             .entries
             .get(&name.to_ascii_lowercase())
             .with_context(|| format!("{name} not in archive"))?;
         let file = lzss_decompress(&self.data[e.offset..e.end], e.size);
+        // SPEC-GAP: 01 §6 step 4 uses data without a known edz wrapper as-is; the port rejects it (all 317 files have one).
         if file.len() < 4 || &file[0..3] != b"edz" {
             bail!("{name}: missing edz wrapper");
         }

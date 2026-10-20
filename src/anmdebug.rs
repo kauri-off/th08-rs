@@ -1,3 +1,5 @@
+//! Debug tool: live ANM script viewer (TH08_ANM), not a port of the original.
+
 use crate::anmvm::AnmVm;
 use crate::game::Ctx;
 use crate::gfx::{FULLSCREEN, PLAYFIELD};

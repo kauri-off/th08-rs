@@ -1,3 +1,6 @@
+//! Main menu (12 §2, `MainMenu_Register` 0x47146D): top menu, difficulty / character select, option screen; the
+//! practice, replay and spell-practice screens are in menulist.rs.
+
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
 use crate::config::Config;
@@ -9,15 +12,18 @@ use crate::sound;
 use crate::task::{Chain, Ret, Task};
 use anyhow::Result;
 
+// title01.anm in ANM slot 20; calc prio 4 (0x467399), draw prio 3 (0x47087F) (12 §2, 00 §4).
 pub const ANM_SLOT: usize = 20;
 pub const CALC_PRIO: u16 = 4;
 pub const DRAW_PRIO: u16 = 3;
 // Surface 0 reaches the device before the batched prio-2 nowloading quads (12 §2.2).
 pub const SURFACE_PRIO: u16 = 1;
+// +0x14424 VM count 0x8E; Confirm = 0x1001, Cancel = 0x0A (12 intro).
 const VM_COUNT: usize = 142;
 pub(crate) const CONFIRM: u16 = SHOT | ENTER;
 pub(crate) const CANCEL: u16 = BOMB | PAUSE;
 
+// Screen ids (menu +0x14428, 12 §2 dispatch table).
 pub(crate) const TOP: i32 = 0;
 const OPTION: i32 = 2;
 const KEY_CONFIG: i32 = 3;
@@ -32,6 +38,7 @@ const PRACTICE_STAGE: i32 = 11;
 pub(crate) const SPELL_PRACTICE: i32 = 16;
 pub(crate) const SPELL_CARD: i32 = 17;
 
+// Top-menu items = VMs 1–9; difficulty VMs 131–134 and 135 (Extra); option labels from VM 10 (12 §2.1, §2.7).
 const ITEMS: usize = 9;
 const ITEM_QUIT: i32 = 8;
 const VM_DIFF: usize = 131;
@@ -39,6 +46,7 @@ const VM_DIFF_EXTRA: usize = 135;
 const VM_OPTION: usize = 10;
 const OPTION_ITEMS: i32 = 10;
 
+// Top-menu item descriptions (12 §2.2 table).
 const DESCRIPTIONS: [&str; ITEMS] = [
     "ゲームを開始します",
     "エキストラステージを開始します",
@@ -67,7 +75,8 @@ pub(crate) const CHAR_VMS: [[i32; 4]; 12] = [
     [130, 117, -1, 118],
 ];
 
-// Final-route notice sprite for the cursor team (MainMenu_CharacterDraw, 12 §2.4).
+// Final-route notice sprite for the cursor team (MainMenu_CharacterDraw 0x47052D, 12 §2.4 table, first match);
+// 0x80 = 6B (stage index 7) cleared, 0x40 = 6A.
 fn final_notice(g: &gamemgr::Game, c: usize, d: usize) -> Option<i32> {
     let (nc, any) = (&g.clear_nc[c % 12], &g.clear_any[c % 12]);
     let d = d.min(4);
@@ -80,7 +89,7 @@ fn final_notice(g: &gamemgr::Game, c: usize, d: usize) -> Option<i32> {
     Some(147)
 }
 
-// Unlock checks (15 §2.4) on the score.dat clear masks; `TH08_UNLOCK=1` unlocks everything.
+// Unlock checks (15 §2.4) on the score.dat clear masks; debug `TH08_UNLOCK=1` unlocks everything.
 pub(crate) fn unlock_all() -> bool {
     crate::env::var("TH08_UNLOCK").is_some_and(|v| v != "0")
 }
@@ -95,23 +104,27 @@ pub(crate) fn team_final_a(g: &gamemgr::Game, t: usize) -> bool {
     unlock_all() || t >= 4 || g.clear_any[t].iter().take(4).any(|m| m & 0x8000 != 0)
 }
 
+// Extra character select (screen 13) offers only shots whose team passes 0x43C15F (12 §2.4).
 fn extra_unlocked(g: &gamemgr::Game, shot: usize) -> bool {
     team_final_b(g, shot % 12)
 }
 
+// 0x43C1E9: Extra unlocked (GM flags bit 15).
 fn extra_any(g: &gamemgr::Game) -> bool {
     (0..4).any(|t| team_final_b(g, t))
 }
 
+// 0x447D04: all teams → the 8 solo shots are selectable (flags bit 17).
 pub(crate) fn extra_all(g: &gamemgr::Game) -> bool {
     (0..4).all(|t| team_final_b(g, t))
 }
 
+// 0x43C2C5: some team has a Final A clear (flags bit 16), gating top-menu item 2.
 fn spell_practice_unlocked(g: &gamemgr::Game) -> bool {
     (0..4).any(|t| team_final_a(g, t))
 }
 
-// Play count (score.dat); lives max 4 / 5 / 6 below 30 / 60 plays (answers_impl9 §16).
+// PLST total plays (block 6 [0], 0x164CED0); option lives max 4 / 5 / 6 below 30 / 60 plays (15 §1.3).
 fn play_count(g: &gamemgr::Game) -> u32 {
     if unlock_all() {
         60
@@ -128,30 +141,43 @@ fn lives_max(g: &gamemgr::Game) -> i32 {
     }
 }
 
+// A screen switch that waits `frames` calcs (option 30, difficulty cancel 20, 12 §2.2–§2.3).
 pub(crate) struct Pending {
     pub(crate) frames: u32,
     pub(crate) screen: i32,
     pub(crate) cursor: i32,
 }
 
+// The 0x14490-byte menu object, global 0x18BDE08 (12 §2 field table).
 pub struct MainMenu {
+    // +0xC2B8: VM i runs title01.anm script i; `base` = each script's own (selected) sprite.
     pub(crate) vms: Vec<AnmVm>,
     pub(crate) base: Vec<i32>,
+    // Surface slot 0 (title00.png / select00.png), copied before everything (12 §2.2).
     pub(crate) surface: Option<(TextureId, &'static str)>,
     pub(crate) raster: crate::text::Raster,
+    // Current description VM +0xC2BC (text.anm script 9, sprite 21 + item).
+    // Port: one VM re-rendered per item instead of the original's 14 pre-rendered strips.
     pub(crate) desc_vm: AnmVm,
     pub(crate) desc_on: bool,
     pub(crate) desc_first: bool,
+    // Scratch VM menu+0xE7B8 (final-route notice, replay card name).
     pub(crate) notice: AnmVm,
+    // +0x14428 screen, +0x68 previous screen, +0x1442C frames on this screen.
     pub(crate) screen: i32,
     pub(crate) prev_screen: i32,
     pub(crate) frames: u32,
+    // +0x00 cursor, +0x08 previous cursor (−1 forces the change test).
     pub(crate) cursor: i32,
     pub(crate) prev_cursor: i32,
+    // +0x14430 idle frames (demo timer).
     pub(crate) idle: u32,
+    // Quit (item 8) frame counter; scene −1 after 60 frames.
     pub(crate) quitting: Option<u32>,
     pub(crate) pending: Option<Pending>,
+    // Config snapshot taken on entering the option screen (12 §2.2 item 7).
     pub(crate) snapshot: Config,
+    // Practice stages available on screen 11 (12 §2.5).
     pub(crate) stages: [bool; 8],
     pub(crate) replays: Vec<(String, crate::replay::Replay)>,
     pub(crate) lists: crate::menulist::Lists,
@@ -183,7 +209,7 @@ impl MainMenu {
         }
     }
 
-    // Menu_SetScreen.
+    // Menu_SetScreen 0x4694C3 (12 §2 entry rule): the new handler runs from the next calc with frames = 0.
     pub(crate) fn set_screen(&mut self, s: i32) {
         self.prev_screen = self.screen;
         self.screen = s;
@@ -191,6 +217,7 @@ impl MainMenu {
         self.prev_cursor = -1;
     }
 
+    // AnmManager_InterruptRange over the 142 VMs; a later per-VM write replaces it (one pending slot, 12 §2.1).
     pub(crate) fn interrupt_all(&mut self, id: i32) {
         for vm in &mut self.vms {
             vm.pending_interrupt = id as _;
@@ -222,7 +249,8 @@ impl MainMenu {
         }
     }
 
-    // Rasterises description `i` into the description VM's text.anm sprite rect, centred.
+    // Text_RenderCentered 0x466650 (12 §2.2): description `i` into the VM's text.anm sprite rect, centred, colour
+    // 0xFFF0E0.
     fn render_description(&mut self, ctx: &mut Ctx, i: usize) {
         let vm = &self.desc_vm;
         let Some(sp) = ctx.anm.sprite(0, vm.sprite_index.max(0) as usize).copied() else {
@@ -252,6 +280,8 @@ impl MainMenu {
             .write_texture(sp.tex, tx, ty, w as u32, h as u32, &rgba);
     }
 
+    // Menu_CursorUpDown 0x47030B / Menu_CursorLeftRight 0x470424: wraps, skips locked entries, held keys use the
+    // repeat flag, sfx 12 (12 §2.2, §2.4).
     pub(crate) fn move_cursor(
         &mut self,
         ctx: &Ctx,
@@ -281,6 +311,7 @@ impl MainMenu {
         }
     }
 
+    // Items 1 (Extra) and 2 (Spell Practice) are skipped and drawn 0xFF404040 while locked (12 §2.2).
     fn item_locked(ctx: &Ctx, i: usize) -> bool {
         match i {
             1 => !extra_any(&ctx.game),
@@ -289,6 +320,7 @@ impl MainMenu {
         }
     }
 
+    // Screen 0, 0x4674E0 (12 §2.2).
     fn top(&mut self, ctx: &mut Ctx) {
         if self.frames == 0 {
             self.set_surface(ctx, "title00.png");
@@ -308,8 +340,8 @@ impl MainMenu {
                 self.vms[1 + i].color[..3].fill(0xFF);
             }
         }
-        // One description VM per item (sprite 21 + i, answers_impl9 §15). The loader leaves VM 0 running (12 §2.2);
-        // the cursor's VM takes over from frame 9 (measured).
+        // One description VM per item (sprite 21 + i, 12 §2.2). The loader leaves VM 0 running; on the 9th frame the
+        // handler sets +0x08 = −1 and enters sub-state 1, so the change test switches to the cursor's VM (12 §2.2).
         if self.frames == 0 {
             self.desc_on = self.desc_first;
             if self.desc_first {
@@ -329,6 +361,7 @@ impl MainMenu {
         }
 
         if let Some(f) = &mut self.quitting {
+            // Item 8: after 60 frames free the VMs, scene −1 (12 §2.2).
             *f += 1;
             if *f >= 60 {
                 ctx.game.request(-1);
@@ -343,6 +376,7 @@ impl MainMenu {
         } else {
             self.idle + 1
         };
+        // Demo (12 §2.2): idle counter reset by any raw input; after 1500 frames load demorpy((n+1) mod 4).
         if self.idle >= 1500 {
             self.idle = 0;
             let n = (ctx.game.demo + 1) % 4;
@@ -360,6 +394,7 @@ impl MainMenu {
                 Err(e) => log::warn!("demorpy{n}.rpy: {e:#}"),
             }
         }
+        // Confirm actions of the 12 §2.2 item table. SPEC-GAP: the sound flush after sfx 10 is not done.
         if ctx.input.pressed(CONFIRM) {
             sound::play(sound::OK);
             let g = &mut ctx.game;
@@ -402,6 +437,7 @@ impl MainMenu {
                 }
                 _ => {
                     self.interrupt_all(1);
+                    // SPEC-GAP: 12 §2.2 says "fade music 30" without a unit; 30 frames assumed.
                     ctx.audio.fade_bgm(0.5);
                     self.quitting = Some(0);
                 }
@@ -412,6 +448,7 @@ impl MainMenu {
         }
     }
 
+    // Screens 4 / 8 / 12, 0x46A071 (12 §2.3): interactive from frame 8, cursor = config +0x21 (> 3 → 1), Extra fixed.
     fn difficulty(&mut self, ctx: &mut Ctx) {
         let extra = self.screen == DIFF_EXTRA;
         if self.frames == 0 {
@@ -469,7 +506,7 @@ impl MainMenu {
         }
     }
 
-    // Portrait VMs of character `c` (12 §2.4, answers_impl17 §Q3): a cursor move first enables all of them with 8.
+    // Portrait VMs of character `c` (12 §2.4): a cursor move first enables all of them with 8, so the old ones fade out.
     pub(crate) fn char_vms(&mut self, c: i32, moved: bool) {
         if moved {
             for vm in &mut self.vms[111..=130] {
@@ -513,6 +550,8 @@ impl MainMenu {
         }
     }
 
+    // Screens 5 / 9 / 13, 0x46A625 (12 §2.4); screen 15 is handled with spell practice (menulist.rs).
+    // SPEC-GAP: 12 §2.4 gives no input start frame; 8 is used as on the difficulty screen.
     fn character(&mut self, ctx: &mut Ctx) {
         let n = if extra_all(&ctx.game) { 12 } else { 4 };
         if self.frames == 0 {
@@ -533,6 +572,8 @@ impl MainMenu {
         if self.frames < 8 {
             return;
         }
+        // Confirm (12 §2.4): shot = cursor; practice → screen 11; else difficulty = config +0x21 (Extra 4, stage 8),
+        // replay flag cleared, music stopped, scene 2.
         if ctx.input.pressed(CONFIRM) {
             sound::play(sound::OK);
             let g = &mut ctx.game;
@@ -564,6 +605,7 @@ impl MainMenu {
         }
     }
 
+    // Live config byte behind option item `item` (12 §2.7, 15 §1.3).
     fn option_value(cfg: &mut Config, item: i32) -> Option<&mut u8> {
         Some(match item {
             0 => &mut cfg.lives,
@@ -577,7 +619,8 @@ impl MainMenu {
         })
     }
 
-    // Option screen (12 §2.7).
+    // Option screen 2, MainMenu_Option 0x46837B (12 §2.7, 15 §1.3).
+    // SPEC-GAP: the return value 5 (device recreate on colour/window change) and the 3600-frame idle exit are not done.
     fn option(&mut self, ctx: &mut Ctx) {
         if self.frames == 0 {
             self.interrupt_all(3);
@@ -607,6 +650,9 @@ impl MainMenu {
             && let Some(v) = Self::option_value(cfg, item)
         {
             let old = *v;
+            // SPEC-GAP: 15 §1.3 steps a volume ±4 then ±1 on an edge (±5 per press) and ±1 per frame once the
+            // unchanged-input counter is > 29; this steps ±1 per press and ±4 on repeat frames. The volume preview
+            // (SE 0x1D every 50 frames on items 3/4) is not played.
             let (max, step) = match item {
                 0 => (lmax, 1),
                 2 => (2, 1),
@@ -620,6 +666,7 @@ impl MainMenu {
             };
             if *v != old {
                 sound::play(sound::TIMEOUT);
+                // Item 2: any change restarts bgm/th08_01.mid in slot 8 (15 §1.3); music off simply stops it.
                 match item {
                     2 if cfg.music == 0 => ctx.audio.stop_bgm(),
                     2 => ctx.audio.play_bgm("bgm/th08_01.mid"),
@@ -647,6 +694,7 @@ impl MainMenu {
                 _ => {}
             }
         } else if ctx.input.pressed(CANCEL) {
+            // SPEC-GAP: cancel on the option screen is not described in 12 §2.7 / 15 §1.3.
             sound::play(sound::CANCEL);
             if self.cursor == OPTION_ITEMS - 1 {
                 self.set_screen(TOP);
@@ -657,7 +705,8 @@ impl MainMenu {
         }
     }
 
-    // Value VMs 20–43 (answers_impl9 §16): the lit VM is first + value; volume digits are base + digit·2.
+    // Value VMs 20–43 (12 §2.7): lit = base sprite, dim = base + 1; volume digits are base + digit·2; VMs 25 / 26 are
+    // hidden below 30 / 60 plays.
     fn option_values(&mut self, ctx: &Ctx) {
         let cfg = ctx.game.cfg;
         let choices: [(usize, usize, u8); 5] = [
@@ -701,7 +750,7 @@ impl MainMenu {
         }
     }
 
-    // SPEC-GAP: key config is a later task; the screen returns on any confirm/cancel.
+    // SPEC-GAP: key config (screen 3, 15 §1.3) is a later task; the screen returns on any confirm/cancel.
     fn stub(&mut self, ctx: &mut Ctx, name: &str, back: i32, cursor: i32) {
         ctx.ascii.push(Text::new(
             200.0,
@@ -728,10 +777,12 @@ impl Default for MainMenu {
 }
 
 impl Task<Ctx> for MainMenu {
+    // MainMenu_OnRegister 0x470A6C + the loader thread 0x470E10 (00 §3.2, 12 §2.2, 15 §2.2), run synchronously.
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain != Chain::Calc {
             return Ok(());
         }
+        // SPEC-GAP: 00 §3.2 skips the title music when the previous scene was 5 (result viewer); not tested here.
         if ctx.game.cfg.music != 0 {
             ctx.audio.play_bgm("bgm/th08_01.mid");
         }
@@ -743,6 +794,7 @@ impl Task<Ctx> for MainMenu {
             crate::menulist::RT_SLOT,
             "resulttext.anm",
         )?;
+        // SPEC-GAP: gauge readout limits are reset on menu load; no spec section names this call.
         let l = crate::player::GaugeLimits::default();
         crate::ascii::gauge_setup(&mut ctx.anm, l.min, l.max);
         for i in 0..VM_COUNT {
@@ -755,7 +807,7 @@ impl Task<Ctx> for MainMenu {
             });
             self.vms.push(vm);
         }
-        // GM flags 15–17 from the clear records (16 §4). SPEC-GAP: the info00/01/02.jpg notices are not shown yet.
+        // GM flags 15–17 from the clear records (15 §2.2, §2.4, 16 §4). SPEC-GAP: the info00/01/02.jpg notices are not shown yet.
         {
             let g = &mut ctx.game;
             let nc_b = |t: usize| g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0);
@@ -766,11 +818,14 @@ impl Task<Ctx> for MainMenu {
             g.flags = g.flags & !(7 << 15) | bits;
         }
         crate::menulist::compute_last_word_unlocks(&mut ctx.game);
+        // A replay was being watched → straight to the replay screen (12 §2.2).
         if std::mem::take(&mut ctx.game.watched_replay) {
             self.screen = REPLAY;
         }
         let g = &ctx.game;
         if g.previous == gamemgr::SCENE_GAME || g.previous == gamemgr::SCENE_RETRY {
+            // SPEC-GAP: 12 §2.2 goes through screen 8 → 9 → 11 (practice) or 15 → 16 → 17 (spell practice) on
+            // consecutive frames with +0x6C; the port enters 8 (and stays) or 17 directly.
             if g.spell_practice() {
                 // Back from a spell-practice game: straight to the card list (16 §6.1).
                 self.screen = SPELL_CARD;
@@ -779,6 +834,7 @@ impl Task<Ctx> for MainMenu {
                 self.screen = DIFF_PRACTICE;
             }
         }
+        // Cursor on menu load by previous scene (12 §2.2), practice flags override.
         self.cursor = if self.screen == TOP {
             let g = &ctx.game;
             match g.previous {
@@ -809,12 +865,14 @@ impl Task<Ctx> for MainMenu {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        // Session tool hook: screen/cursor at calc entry, as the trace samples them.
         ctx.game.trace_menu = Some((self.screen, self.cursor));
         // The menu starts when its loader has finished (Supervisor loading screen, 12 §1).
         if ctx.game.menu_loading > 0 {
             return Ret::Next;
         }
-        // Delayed switch: the new screen starts on the frame after the counter ran out (measured: press + 21).
+        // Delayed switch: the new screen starts on the frame after the counter ran out.
+        // SPEC-GAP: "after 20 frames" (12 §2.3) is placed at press + 21 from the draw log.
         if let Some(p) = &mut self.pending {
             if p.frames == 0 {
                 let (s, c) = (p.screen, p.cursor);
@@ -842,6 +900,7 @@ impl Task<Ctx> for MainMenu {
             self.frames += 1;
         }
 
+        // After the screen handler all 142 VMs run, then the description VM (12 §2).
         for vm in self.vms.iter_mut().filter(|v| v.script.is_some()) {
             vm.run(&mut ctx.anm);
         }
@@ -855,6 +914,8 @@ impl Task<Ctx> for MainMenu {
         Ret::Next
     }
 
+    // Menu draw 0x47087F (12 §2.2): surface 0 on its own earlier node (SURFACE_PRIO), VMs 0–141 in order, the
+    // description VM, then the per-screen text and the final-route notice.
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         if ctx.game.menu_loading > 0 {
             return Ret::Next;
@@ -869,8 +930,8 @@ impl Task<Ctx> for MainMenu {
         for vm in &mut self.vms {
             ctx.anm.draw(&mut ctx.gfx, vm);
         }
-        // Description VM: text.anm script 9 at (320, 448), centred (answers_impl9 §15).
-        // SPEC-GAP: Q7 draws it on every screen, but the port's VM misses the fade-out interrupts off the top menu.
+        // Description VM: text.anm script 9 at (320, 448), centred (12 §2.2).
+        // SPEC-GAP: 12 §2.2 draws it on every screen, but the port's VM misses the fade-out interrupts off the top menu.
         let top = self.screen == TOP
             || (self.prev_screen == TOP && (self.frames == 0 || self.screen == SPELL_PRACTICE));
         if self.desc_on && top && self.quitting.is_none() && self.pending.is_none() {
@@ -888,6 +949,7 @@ impl Task<Ctx> for MainMenu {
             SPELL_CARD => self.spell_card_draw(ctx),
             _ => {}
         }
+        // Final-route notice: screen 5 only, frame counter > 8, scratch VM at (400, 170) top-left, Draw2DSnap (12 §2.4).
         if self.screen == CHAR
             && self.frames > 8
             && let Some(spr) = final_notice(
@@ -929,7 +991,8 @@ mod tests {
     }
 }
 
-// Cursor on the difficulty screen: config +0x21, Extra values → Normal (12 §2.2–2.3).
+// Cursor on the difficulty screen: config +0x21, Extra values → Normal (12 §2.3).
+// SPEC-GAP: 12 §2.2 item 0 says "clamp ≤ 3 → 2", 12 §2.3 says "> 3 → 1"; the latter is used.
 fn last_difficulty(g: &gamemgr::Game) -> i32 {
     match g.cfg.difficulty as i32 {
         d if d > 3 => 1,

@@ -1,3 +1,6 @@
+//! Supervisor g_Supervisor 0x17CE758 (11 §7, 12 §1): scene switches, input poll, boot / loading screens; calc prio 0,
+//! draw prios 0 / 2 / 16 (00 §4).
+
 use crate::anmvm::AnmVm;
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game, GameManager};
@@ -6,23 +9,31 @@ use crate::task::{self, Chain, Ret, Task, TaskRef};
 use anyhow::{Context, Result};
 
 pub struct Supervisor {
+    // Debug `TH08_SLOT_TEST` / `TH08_INPUT`.
     debug_sprites: Option<usize>,
     script: Option<Vec<u16>>,
     frame: usize,
+    // The registered scene object (GM, MainMenu, Result, stub).
     scene_task: Option<TaskRef<Ctx>>,
+    // Full-screen surface slot 8 (logo, captured frame or result.jpg), drawn at prio 0 while loading (12 §1).
     logo: Option<TextureId>,
+    // The three nowloading.anm VMs (scripts 0–2) and their screen position (12 §1 state 1).
     boot_vms: Vec<AnmVm>,
     boot_frames: u32,
     load_pos: [f32; 2],
+    // Loading state of a stage start: Loading_Wait / Loading_End follow the GM loader (12 §1).
     stage_load: bool,
+    // Pending post-present capture into surface 8 (0x44886F, 12 §1).
     capture_req: bool,
     presents: u32,
+    // Playback fps text buffer 0x17CF2B8 (15 §3.3) and the port's refresh counter.
     fps_text: String,
     fps_frames: u32,
 }
 
-// The logo stays up while the loaders run (answers_impl9 §18: no fixed time); holds measured on the original's draw
-// log: 13 boot frames, then the menu loader until scene frame 34 (33 when the menu is entered again).
+// The logo stays up while the loader threads run (12 §1: no fixed time).
+// SPEC-GAP: the holds were measured on the original's draw log: 13 boot frames, then the menu loader until scene
+// frame 34 (33 when the menu is entered again).
 const BOOT_FRAMES: u32 = 14;
 const MENU_LOAD_BOOT: u32 = 34;
 const MENU_LOAD: u32 = 33;
@@ -50,7 +61,7 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
-// Debug start (`TH08_STAGE`): difficulty `TH08_RANK` (default Normal), shot `TH08_PLAYER` (default 0).
+// Debug tool, not a port. Debug start (`TH08_STAGE`): difficulty `TH08_RANK` (default Normal), shot `TH08_PLAYER` (default 0).
 pub fn setup_new_game(g: &mut Game, stage: usize) -> Result<()> {
     let shot = match crate::env::var("TH08_PLAYER") {
         Some(v) => crate::player::parse_shot(&v)
@@ -70,8 +81,9 @@ pub fn setup_new_game(g: &mut Game, stage: usize) -> Result<()> {
 }
 
 impl Supervisor {
-    // Fps_Update's playback text (15 §3.3). The original refreshes on a host-timed 500 ms window; fixed rule here:
-    // every 30 gameplay calcs, on the 3rd of each (demo 0 / 2 phase).
+    // Fps_Update 0x446F53 playback text (15 §3.3): "%2d" of fps_now at (384, 448), yellow or red with the flag.
+    // The original refreshes on a host-timed 500 ms window, which 15 §3.3 says cannot be reproduced.
+    // SPEC-GAP: fixed rule here, every 30 gameplay calcs on the 3rd of each (demo 0 / 2 phase, from traces).
     fn replay_fps(&mut self, ctx: &mut Ctx) {
         let g = &ctx.game;
         if g.loading != 0 || g.scene != gamemgr::SCENE_GAME {
@@ -94,7 +106,7 @@ impl Supervisor {
             .push(crate::ascii::Text::new(384.0, 448.0, self.fps_text.clone()).argb(c));
     }
 
-    // Loading_Begin (12 §1): surface 8 (the logo) full screen + nowloading.anm scripts 0–2 at (500, 440).
+    // Loading_Begin 0x448790 (12 §1): surface 8 (the logo) full screen + nowloading.anm scripts 0–2 at (500, 440).
     fn begin_loading(&mut self, ctx: &mut Ctx) -> Result<()> {
         if self.logo.is_none() {
             let b = ctx.archive.read("th08logo.jpg")?;
@@ -123,7 +135,8 @@ impl Supervisor {
         self.logo = Some(ctx.gfx.capture_screen("th08logo.jpg"));
     }
 
-    // Menu loader done: title fade-from-white, Loading_End (interrupt 1 fades the VMs out, surface released).
+    // Menu loader done: title fade-from-white (ScreenEffect type 0, 70 frames, 13 §3), Loading_End 0x44881A (interrupt 1
+    // fades the VMs out, surface released, 12 §1).
     fn end_loading(&mut self, ctx: &mut Ctx) {
         if let Some(t) = self.logo.take() {
             ctx.gfx.free_texture(t);
@@ -134,6 +147,7 @@ impl Supervisor {
         }
     }
 
+    // Main-menu loading screen by previous scene (12 §1); returns the port's hold length (see BOOT_FRAMES).
     fn menu_loading(&mut self, ctx: &mut Ctx, from: i32) -> Result<()> {
         ctx.game.menu_loading = if from == gamemgr::SCENE_BOOT {
             MENU_LOAD_BOOT
@@ -161,6 +175,7 @@ impl Supervisor {
         Ok(())
     }
 
+    // The menu's extra draw node for its title surface (menu::SURFACE_PRIO).
     fn menu_surface(&mut self, ctx: &mut Ctx) -> Result<()> {
         if let Some(t) = &self.scene_task {
             let p = crate::menu::SURFACE_PRIO;
@@ -175,7 +190,8 @@ impl Supervisor {
         }
     }
 
-    // GameMgr_OnRegister: 0x44886F at (500, 440) + darken overlay after the main menu, else at (280, 430) (12 §1).
+    // GameMgr_OnRegister 0x43AAF4: 0x44886F at (500, 440) + darken overlay (ScreenEffect type 5) after the main menu,
+    // else at (280, 430) (12 §1).
     fn start_game(&mut self, ctx: &mut Ctx) -> Result<()> {
         let gm = GameManager::register(ctx)?;
         self.scene_task = Some(gm);
@@ -215,7 +231,7 @@ impl Supervisor {
         Ok(())
     }
 
-    // Supervisor_Calc scene switch (11 §7).
+    // Supervisor_Calc 0x445453 scene switch (11 §7 table): `previous` (+0x160) := current, then by (current, requested).
     fn switch(&mut self, ctx: &mut Ctx) -> Result<Option<Ret>> {
         let g = &mut ctx.game;
         let (cur, req) = (g.scene, g.requested);
@@ -224,12 +240,14 @@ impl Supervisor {
         }
         g.previous = cur;
         if req < 0 {
-            // WinMain exit flushes score.dat (Result mode 2).
+            // WinMain exit flushes score.dat (Result mode 2, 15 §2.2).
+            // SPEC-GAP: 6 → −1 also finishes the replay in 11 §7; the port does not.
             ctx.game.save_score(&mut ctx.anm.rng, true);
             return Ok(Some(Ret::Quit));
         }
         log::info!("scene {cur} -> {req}");
         match (cur, req) {
+            // Debug start (TH08_STAGE / TH08_REPLAY) from boot; the original always goes 0 → 1.
             (gamemgr::SCENE_BOOT, gamemgr::SCENE_GAME) => self.start_game(ctx)?,
             (gamemgr::SCENE_BOOT, _) | (_, gamemgr::SCENE_MENU) => {
                 if cur == gamemgr::SCENE_MUSIC_ROOM {
@@ -260,6 +278,7 @@ impl Supervisor {
                 self.start_game(ctx)?;
                 ctx.game.requested = gamemgr::SCENE_GAME;
             }
+            // 2 → 10: a full exit and a fresh start (11 §7).
             (gamemgr::SCENE_GAME, gamemgr::SCENE_RETRY) => {
                 self.drop_scene(ctx);
                 crate::replay::finish(ctx);
@@ -273,6 +292,7 @@ impl Supervisor {
                 self.start_game(ctx)?;
                 ctx.game.requested = gamemgr::SCENE_GAME;
             }
+            // 2 → 11: requested = 3 is written before the unregister, so the GM sees "next stage", not a fresh start (11 §7).
             (gamemgr::SCENE_GAME, gamemgr::SCENE_RELOAD) => {
                 ctx.game.reload_same = true;
                 self.drop_scene(ctx);
@@ -280,6 +300,7 @@ impl Supervisor {
                 self.start_game(ctx)?;
                 ctx.game.requested = gamemgr::SCENE_GAME;
             }
+            // 1 → 5 Result_Register(0) viewer; 2 / 9 → 6 Result_Register(1) after a game.
             (_, gamemgr::SCENE_RESULT | gamemgr::SCENE_RESULT_MENU) => {
                 self.drop_scene(ctx);
                 let mode = (req == gamemgr::SCENE_RESULT) as u8;
@@ -302,6 +323,7 @@ impl Supervisor {
                     3,
                 )?;
             }
+            // 2 → 7: like 2 → 1 (also releases managed textures in the original).
             (_, gamemgr::SCENE_REPLAY_END) => {
                 self.drop_scene(ctx);
                 crate::replay::finish(ctx);
@@ -316,8 +338,11 @@ impl Supervisor {
                 self.menu_surface(ctx)?;
                 self.menu_loading(ctx, cur)?;
             }
+            // 2 → 12 is never requested (11 §7).
             _ => log::warn!("unhandled scene switch {cur} -> {req}"),
         }
+        // The raw input words are cleared so the new scene sees no held keys (11 §7).
+        // SPEC-GAP: the +0x154 frame counter (config re-check every 4000 frames) is not kept.
         ctx.input.held = 0;
         ctx.input.prev = 0;
         ctx.game.scene = ctx.game.requested;
@@ -326,8 +351,10 @@ impl Supervisor {
 }
 
 impl Task<Ctx> for Supervisor {
+    // Supervisor on-register 0x445FA3 (12 §1); score.dat and the unlock flags are loaded in Ctx::load_with.
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
+            // ANM slots 0 text.anm and 2 nowloading.anm (00 §4).
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, 0, "text.anm")?;
             ctx.anm
                 .load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
@@ -361,6 +388,8 @@ impl Task<Ctx> for Supervisor {
         Ok(())
     }
 
+    // Supervisor_Calc 0x445453 (11 §7): input poll, loading VMs, then the scene switch.
+    // SPEC-GAP: the slow-mode OR-accumulation of input (gm+0x2D) is not done.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if let Some(s) = &self.script {
             ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);
@@ -397,7 +426,8 @@ impl Task<Ctx> for Supervisor {
                 }
             }
         }
-        // Session schedule: the menu loader's tail ran before this calc, so its interrupt reaches this frame's VM run.
+        // Session tool hook: the session trace supplies when the async menu loader finishes (12 §1 has no fixed time).
+        // Its tail ran before this calc, so its interrupt reaches this frame's VM run.
         if ctx.game.menu_loading > 0
             && let Some(s) = &mut ctx.game.sched
             && s.menu.front().is_some_and(|&p| s.poll >= p)
@@ -406,7 +436,7 @@ impl Task<Ctx> for Supervisor {
             ctx.game.menu_loading = 0;
             self.end_loading(ctx);
         }
-        // Presents 1–2 come from Window_InitD3D, before the first Frame_Run (answers_impl15 §Q1).
+        // Presents 1–2 come from Window_InitD3D, before the first Frame_Run (12 §1 boot presents).
         if self.frame > 2 || ctx.game.requested != gamemgr::SCENE_MENU {
             for vm in &mut self.boot_vms {
                 vm.run(&mut ctx.anm);
@@ -448,6 +478,7 @@ impl Task<Ctx> for Supervisor {
         }
     }
 
+    // Draw prio 0 `Supervisor_DrawLoading` 0x445BD4 (surface 8), prio 2 loading VMs 0x445D3E (12 §1); prio 16 debug only.
     // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         // Boot: presents 1–2 clear to black, presents 3–5 draw nothing (loader thread start-up, 12 §1).
@@ -510,13 +541,13 @@ impl Task<Ctx> for Supervisor {
     }
 }
 
-// SPEC-GAP: music room (8) and ending (9) are stubs; music room leaves on Bomb/ESC.
+// SPEC-GAP: music room (8, 16 §5) and ending (9, 16 §1) are stubs; music room leaves on Bomb/ESC.
 pub struct Stub {
     kind: i32,
     frame: u32,
 }
 
-// A file from disk natively, or from the save storage (web, and `replay/…` names).
+// Debug: a file from disk natively, or from the save storage (web, and `replay/…` names).
 fn load_file(path: &str) -> Option<Vec<u8>> {
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(b) = std::fs::read(path) {
@@ -525,7 +556,8 @@ fn load_file(path: &str) -> Option<Vec<u8>> {
     crate::scoredat::storage_read(path)
 }
 
-// Today's "%m/%d" (UTC; the original uses local time).
+// Today's "%m/%d" for HSCR +0x20 / replay info +0x6C (15 §2.3, §3.5).
+// SPEC-GAP: UTC; the original uses local time.
 pub fn date_md() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     let secs = std::time::SystemTime::now()
@@ -551,13 +583,15 @@ impl Task<Ctx> for Stub {
             && g.flags & gamemgr::F_ENDING_OK != 0
             && !g.replay()
         {
-            // Ending_Init step 3 (16 §1): Final A / B bits of the clear masks.
+            // Ending_Init 0x429980 step 3 (16 §1.2): Final A / B bits of the clear masks, clears counter, music flags 18/19.
+            // SPEC-GAP: skip-allowed and "skip on the next file" are not computed (no ending script).
             let bit = if g.stage % 9 == 7 { 0x4000 } else { 0x8000 };
             g.set_clear(g.stats.continues == 0, bit);
             g.play_counter(crate::scoredat::PL_CLEARS);
             g.score.plst.music[18] = 1;
             g.score.plst.music[19] = 1;
         } else if self.frame == 0 && self.kind == gamemgr::SCENE_ENDING && !g.replay() {
+            // Bad ending (16 §1.2): CLRD[shot]+0x20 is read and cleared, music flag 18.
             let shot = g.shot as usize % 12;
             g.score.clrd[shot].bad_ending = 0;
             g.score.plst.music[18] = 1;

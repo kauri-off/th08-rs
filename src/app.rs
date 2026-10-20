@@ -1,3 +1,5 @@
+//! Window and message loop (00 §1, §2: WinMain 0x4418C0, `Frame_Run` 0x441E70 pacing) on winit; plus debug run modes.
+
 use crate::assets::Source;
 use crate::game::Ctx;
 use crate::gfx::Gfx;
@@ -10,11 +12,13 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
+// Frame_Run deadline step, 1/60 s (00 §2).
 const FRAME: f64 = 1.0 / 60.0;
 
 struct Running {
     window: Arc<Window>,
     ctx: Ctx,
+    // Frame_Run's next-frame deadline, seconds since `epoch`.
     deadline: f64,
     epoch: Instant,
 }
@@ -28,6 +32,7 @@ struct App {
     proxy: EventLoopProxy<UserEvent>,
     run: Option<Box<Running>>,
     started: bool,
+    // Debug `TH08_SHOT` frame.
     shot: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     shot_size: Option<(u32, u32)>,
@@ -52,6 +57,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         self.started = true;
         let attrs = Window::default_attributes()
+            // 640×480 client area (00 §1); the port window is resizable and scaled.
             .with_title("th08")
             .with_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0));
         #[cfg(target_arch = "wasm32")]
@@ -105,7 +111,8 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // Original timing: one logic step per 1/60 s deadline; late frames are dropped, not caught up.
+                // Frame_Run timing (00 §2): one logic step per 1/60 s deadline; late frames are dropped, not caught up.
+                // The monotonic clock never runs backwards, so the timer-wrap reset is not needed; the port sleeps ≤ 1 ms for Sleep(0).
                 let now = r.epoch.elapsed().as_secs_f64();
                 if self.turbo == 0 && now <= r.deadline {
                     #[cfg(not(target_arch = "wasm32"))]

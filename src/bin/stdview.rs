@@ -1,4 +1,5 @@
-// Prints an .std file: header, objects with quads, instances and the script.
+//! Prints an .std file: header, objects with quads, instances and the script.
+
 fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().collect();
     let ar = th08::archive::Archive::from_bytes(std::fs::read(&a[1])?)?;

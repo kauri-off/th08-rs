@@ -1,3 +1,6 @@
+//! Port I/O layer: reads th08.dat / thbgm.dat from the game directory (native) or user-picked files (web)
+//! (00 §1 data, 01 §7); the original loads synchronously or on a loader thread (00 §6).
+
 use anyhow::Result;
 
 #[derive(Clone)]
@@ -23,6 +26,7 @@ impl Source {
         self.fetch(name, None).await
     }
 
+    // Byte-range read, used to stream thbgm.dat tracks (02 §1) without loading the whole file.
     pub async fn read_range(&self, name: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
         self.fetch(name, Some((offset, len))).await
     }
@@ -51,6 +55,7 @@ impl Source {
         let err = |e: wasm_bindgen::JsValue| anyhow::anyhow!("{e:?}");
         let file = files
             .iter()
+            // Web: files are matched by name only, case-insensitively.
             .find(|f| f.name().eq_ignore_ascii_case(name))
             .ok_or_else(|| anyhow::anyhow!("{name} was not provided"))?;
         let blob = match range {
@@ -64,6 +69,7 @@ impl Source {
     }
 }
 
+// Background loader, standing in for the original's loader threads (00 §3.2, §6).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spawn(fut: impl std::future::Future<Output = ()> + Send + 'static) {
     std::thread::spawn(move || pollster::block_on(fut));
