@@ -318,7 +318,7 @@ impl Stats {
         Self::checksum(rng);
     }
 
-    // AddTime 0x418220 (11 §5): clamps at 0 (no checksum when clamped); n > 0 also raises the max point value
+    // AddTime 0x418220 (11 §1.5): clamps at 0 (no checksum when clamped); n > 0 also raises the max point value
     // with the updated parity.
     pub fn add_time(&mut self, n: i32, rng: &mut Rng) {
         if self.time + n < 0 {
@@ -327,8 +327,9 @@ impl Stats {
         }
         self.time += n;
         self.rec.orbs += n;
+        // Parity +0x44 takes negative n too (death-bomb drain, death penalty) (11 §1.5 setters).
+        self.time_added += n;
         if n > 0 {
-            self.time_added += n;
             self.max_point += (n + (self.time_added & 1)) / 2 * 10;
         }
         Self::checksum(rng);

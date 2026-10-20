@@ -316,7 +316,8 @@ impl Player {
                 }
             }
             OptKind::Remilia | OptKind::RemiliaSolo => {
-                if t >= 12 {
+                // `Timer_Greater`(t, 12): strictly > 12, first turn at t = 13 (14 §3 table, §3.2).
+                if t > 12 {
                     o.angle += REMILIA_SPIN[k];
                 }
                 // Solo (14 §3.2): colour by focus, anchor follows only while unfocused, sparkle 0x2F.

@@ -867,7 +867,6 @@ impl Task<Ctx> for GameManager {
     }
 
     // GameMgr_Calc 0x439BC7 (11 §4); Ret::StopFrame = return 3 (the rest of the calc chain does not run).
-    // SPEC-GAP: GameFlags bit 2 is not recomputed per calc (11 §2.1); the port sets it at stage start only.
     // Not implemented: deferred music start (step 3), slow mode (step 10).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // 0x164D09C += 1 at the top of GameMgr_Calc (11 §4): HSCR play time in frames.
@@ -981,6 +980,12 @@ impl Task<Ctx> for GameManager {
         // GameMgr_Calc's own z clear (11 §3.1), the previous frame left the viewport full-screen.
         ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
         ctx.gfx.clear_depth(None);
+        // Step 7 (0x43A5BC): bit 2 := not paused and no game-over menu, so it is already 0 on the ESC frame (11 §2.1).
+        if g.paused == 0 && g.game_over == 0 {
+            g.flags |= F_RUNNING;
+        } else {
+            g.flags &= !F_RUNNING;
+        }
         if g.paused != 0 || g.game_over != 0 {
             return Ret::StopFrame;
         }
