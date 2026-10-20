@@ -541,9 +541,12 @@ pub struct Spell {
     pub name: Vec<u8>,
     pub owner: Vec<u8>,
     pub comment: [Vec<u8>; 2],
-    // Bonus +0xFC and its per-second decay (bonus − bonus/7) / (timeout/60).
+    // Bonus +0xFC, max +0x2638, per-second decay rate R +0x100 = (bonus − bonus/7) / (timeout/60) (07 §11.1).
     pub bonus: i32,
+    pub max: i32,
     pub decay: i32,
+    // g_Gui +4: the boss that started the card (enemy slot).
+    pub boss: usize,
     pub frames: i32,
     pub duration: i32,
     // Port: death / bomb counters at card start.
@@ -605,6 +608,9 @@ pub struct Globals {
     pub hud_markers: [[i32; 3]; 8],
     // 0x4ECCA8 = 99 999 990 (op 155).
     pub fixed_bonus: bool,
+    // Spell flag bit 6 (op 164: the start ring stops following the boss) and bit 11 (op 184: bonus frozen), 07 §11.1.
+    pub spell_flag6: bool,
+    pub bonus_frozen: bool,
     // Port: op 148 argument, HUD requests (ops 148/179–181) handled by the HUD, unimplemented-op counter.
     pub hud_bars: i32,
     pub hud_requests: Vec<u16>,
@@ -1453,6 +1459,7 @@ impl EnemyManager {
     // Spell_End 0x4161B0 (07 §11.1); the payout is queued and made 130 frames later in `step`.
     pub fn finish_spell(&mut self, anm: &mut AnmManager, except: Option<usize>) {
         let Some(s) = self.g.spell.take() else { return };
+        self.g.bonus_frozen = false;
         let (total, remaining) = (s.duration, (s.duration - s.frames).max(0));
         crate::sound::play(crate::sound::TAN00_LOUD);
         if let Some(st) = &self.stage {
@@ -1500,8 +1507,7 @@ impl EnemyManager {
         p.stats.spells += 1;
         // Spell capture checksum (11 §1.5, 4 draws).
         crate::player::Stats::checksum(&mut anm.rng);
-        // The start ring becomes the capture ring (+0xF4 → +0xF8).
-        // SPEC-GAP: 07 §11.1 does not say the ring timer +0x338 restarts here; 11 §3 "paid 130 frames later" implies it.
+        // The start ring becomes the capture ring (+0xF4 → +0xF8), age timer +0x338 := 0 (07 §11.1).
         crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| e.age.set(0));
         self.g.payout = Some(Payout {
             bonus: s.bonus,
@@ -1525,6 +1531,42 @@ impl EnemyManager {
             if ring {
                 st.max_point += c.time * 10;
             }
+        }
+    }
+
+    // Spell_AddBonus 0x416B10 (07 §11): ignored while bit 11; below the max (unsigned) R += n/120, else bonus := max.
+    pub fn spell_add_bonus(&mut self, n: i32) {
+        if self.g.bonus_frozen {
+            return;
+        }
+        if let Some(s) = &mut self.g.spell {
+            s.bonus = s.bonus.wrapping_add(n);
+            if (s.bonus as u32) < s.max as u32 {
+                s.decay += n / 120;
+            } else {
+                s.bonus = s.max;
+            }
+        }
+    }
+
+    // Card-active part of Spell_Calc 0x416B90 (07 §11.1 steps 1.3 and 1.6); the caller skips it while bit 10 / the
+    // freeze byte is set. SPEC-GAP: steps 1.1 (silent end), 1.2, 1.4, 1.5, 1.7 and the failed-ring look are not done.
+    pub fn spell_step(&mut self, gs: f32) {
+        let Some(s) = &mut self.g.spell else { return };
+        let boss = &self.enemies[s.boss];
+        if s.capture && !self.g.bonus_frozen && boss.flags & A_FIXED_BONUS == 0 {
+            let d = ((s.decay as u32 / 60) as f32 * gs) as u32;
+            let b = (s.bonus as u32).wrapping_sub(d);
+            s.bonus = (b - b % 10) as i32;
+        }
+        if !self.g.spell_flag6 {
+            let target: [f32; 3] = std::array::from_fn(|k| boss.pos[k] + boss.pos_offset[k]);
+            crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| {
+                for k in 0..2 {
+                    e.centre[k] += (target[k] - e.centre[k]) / 16.0;
+                }
+                e.centre[2] = 0.0;
+            });
         }
     }
 
@@ -2089,14 +2131,17 @@ impl EnemyManager {
             self.g.player_mode = p.mode as i32;
         }
         self.dissolve_requests();
-        let bonus = std::mem::take(&mut self.player.borrow_mut().stats.spell_bonus_add);
+        let orbs = std::mem::take(&mut self.player.borrow_mut().stats.spell_bonus_orbs);
         let (deaths, bombs) = {
             let p = self.player.borrow();
             (p.deaths, p.bombs_started)
         };
         // Port: spell flag bits 2/7 from the player's bomb/death counters (07 §11.1: 0x44CBA0, 0x44D150).
+        // Port: the orbs' Spell_AddBonus calls are applied here, before anything reads the bonus.
+        for _ in 0..orbs {
+            self.spell_add_bonus(8000);
+        }
         if let Some(s) = &mut self.g.spell {
-            s.bonus += bonus;
             if bombs != s.bombs0 && !s.bombed {
                 s.bombed = true;
                 s.capture = false;
@@ -2128,12 +2173,8 @@ impl EnemyManager {
             .filter(|e| e.flags & A_LOSES_LIFE != 0)
             .map(|e| e.final_pos);
         crate::effect::with(|fx| fx.boss = pull);
-        // Bonus decay once per second (07 §11). SPEC-GAP: op 184 bonus-frozen (spell bit 11) is not implemented.
         if let Some(s) = &mut self.g.spell {
             s.frames += 1;
-            if s.frames % 60 == 0 && !self.g.fixed_bonus {
-                s.bonus = (s.bonus - s.decay).max(0);
-            }
         }
         let mut b = self.bullets.borrow_mut();
         b.env.boss = self.bosses.iter().any(Option::is_some);

@@ -335,23 +335,23 @@ impl Task<Ctx> for Gui {
                 ctx.game.spell_practice(),
             );
         }
-        let frozen = {
-            let e = self.enemies.borrow();
-            if let Some(s) = &e.g.spell {
-                (self.bonus, self.capturable) = (s.bonus, s.capture);
-            }
-            self.player.borrow().freeze_bullets || crate::enemy::timer_pause() != 0
-        };
-        // VMs run only while bullets are not frozen (GameFlags bit 10) and the freeze byte 0x160F534 is 0 (12 §5.8).
+        let frozen = self.player.borrow().freeze_bullets || crate::enemy::timer_pause() != 0;
+        // Nothing runs while bullets are frozen (GameFlags bit 10) or the freeze byte 0x160F534 is set (07 §11.1).
         if !frozen {
-            // SPEC-GAP: 07 §11.1 does not order the capture-ring step against the VM runs; done first.
-            self.enemies.borrow_mut().capture_ring_step(&mut ctx.anm);
+            // Steps 1 (card active) and 2 (capture ring) run before the VMs (07 §11.1).
+            let mut e = self.enemies.borrow_mut();
+            e.spell_step(ctx.anm.speed);
+            e.capture_ring_step(&mut ctx.anm);
+            drop(e);
             for k in CALC_ORDER {
                 let vm = &mut self.vms[k];
                 if vm.script.is_some() && vm.run(&mut ctx.anm) {
                     vm.script = None;
                 }
             }
+        }
+        if let Some(s) = &self.enemies.borrow().g.spell {
+            (self.bonus, self.capturable) = (s.bonus, s.capture);
         }
         Ret::Next
     }

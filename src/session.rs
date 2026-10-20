@@ -476,8 +476,8 @@ mod tests {
     // Leading identical trace rows per session (raise as divergences get fixed).
     const MIN_LEADING: [(&str, usize); 3] = [
         ("selftest1", 1422),
-        ("golden", 8104),
-        ("fullrun_noclip", 7552),
+        ("golden", 8297),
+        ("fullrun_noclip", 7745),
     ];
 
     #[test]

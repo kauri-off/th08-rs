@@ -296,6 +296,15 @@
   value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
   and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
   Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
+- impl35 (RE-Q27 CODE BUGs 1–3, 2026-10-20): `Spell_Calc` card-active steps 1.3 / 1.6 (07 §11.1) in
+  `EnemyManager::spell_step`, run from the Gui calc before the capture-ring step and the VMs (skipped while GameFlags
+  bit 10 / freeze byte): per-frame bonus decay −= trunc((R/60)·gs) then rounded down to 10 while capture is possible
+  (not bit 11 / boss flag A bit 27), start ring centre += (boss pos + offset − centre)/16 unless bit 6, z := 0.
+  `Spell_Start` spawns the ring at the boss pos e+0x2D34 (type 52 while GameFlags bits 7–8), stores max +0x2638 and
+  the boss slot, clears bits 6 / 11; `spell_add_bonus` (07 §11: R += n/120 below the max, else bonus := max, ignored
+  while bit 11), one call per collected time orb; ops 164 / 184 set spell bits 6 / 11 (bit 11 cleared by Spell_End).
+  `Player::in_bomb_area` no longer resets the cancel item; `graze_test` / `hit_test` / `contact_test` write 6 first
+  (08 §4.1, 09 §8). Sync: golden 8104 → 8297, fullrun_noclip 7552 → 7745, demo 0 4451 → 4629 (thresholds raised).
 - impl34 (port infrastructure, no spec section, 2026-10-20): release builds. `.github/workflows/release.yml` (tag `v*`
   or manual run): `windows` (windows-latest, MSVC, `+crt-static` via `.cargo/config.toml`, icon + version info via
   `build.rs`/winresource) uploads `th08.exe`; `linux` (container ubuntu:22.04, glibc 2.35) runs

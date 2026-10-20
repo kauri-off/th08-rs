@@ -135,8 +135,8 @@ pub struct Stats {
     pub stage_frames: u32,
     pub human_frames: u32,
     pub youkai_frames: u32,
-    // Port-only: pending Spell_AddBonus 0x416B10 amount (07 §11.1), paid by the spell manager.
-    pub spell_bonus_add: i32,
+    // Port-only: pending Spell_AddBonus 0x416B10 calls (+8000 each, one per time orb, 07 §11), paid by the enemy manager.
+    pub spell_bonus_orbs: i32,
     // Port-only: point items collected (statistics).
     pub point_counter: i32,
     // +0x00 displayed score, +0x10 roll step, +0x14 hiscore, +0x18 continues at hiscore (11 §4 step 9).
@@ -205,7 +205,7 @@ impl Default for Stats {
             stage_frames: 0,
             human_frames: 0,
             youkai_frames: 0,
-            spell_bonus_add: 0,
+            spell_bonus_orbs: 0,
             point_counter: 0,
             score_disp: 0,
             score_step: 0,
@@ -624,9 +624,9 @@ impl Player {
         crate::bullet::angle_from(o, self.pos)
     }
 
-    // Player_InBombArea (09 §8, §6.1 step 1): resets the cancel item type, then tests every active cancel area.
+    // Player_InBombArea 0x449FF0 (09 §8): pure point test of the active cancel areas; +0xE2A90 is written only on a
+    // hit, so a miss keeps the item of the last hit (08 §4.1).
     pub fn in_bomb_area(&mut self, p: [f32; 3]) -> bool {
-        self.cancel_item = 6;
         for a in self.cancel_areas.iter_mut().filter(|a| a.active) {
             if a.contains([p[0], p[1]], [0.0, 0.0]) {
                 self.cancel_item = a.item;
@@ -646,6 +646,7 @@ impl Player {
         env: &GrazeEnv,
         rng: &mut Rng,
     ) -> (u8, u8) {
+        self.cancel_item = 6;
         if self.in_bomb_area(p) {
             return (2, 0);
         }
@@ -659,6 +660,7 @@ impl Player {
 
     // Player_HitTest 0x44A230 (09 §6.1 steps 1–6): 0 miss, 1 hit, 2 inside a bomb area.
     pub fn hit_test(&mut self, p: [f32; 3], size: [f32; 2], rng: &mut Rng) -> u8 {
+        self.cancel_item = 6;
         if self.in_bomb_area(p) {
             return 2;
         }
@@ -1367,6 +1369,12 @@ mod tests {
         p.cancel_rect([q[0], q[1]], [100.0, 100.0], 9, 10);
         assert_eq!(p.hit_test([q[0] + 2.0, q[1], 0.0], [4.0, 4.0], &mut rng), 2);
         assert_eq!(p.cancel_item, 9);
+        // A bomb-area miss keeps the last item; the hit test resets it to 6 first (08 §4.1).
+        let far = [q[0] + 200.0, q[1], 0.0];
+        assert!(!p.in_bomb_area(far));
+        assert_eq!(p.cancel_item, 9);
+        assert_eq!(p.hit_test(far, [4.0, 4.0], &mut rng), 0);
+        assert_eq!(p.cancel_item, 6);
     }
 
     #[test]

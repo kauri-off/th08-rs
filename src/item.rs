@@ -342,8 +342,8 @@ impl ItemManager {
                 );
                 st.add_score(v);
                 st.add_time(1, &mut anm.rng);
-                // Spell_AddBonus 0x416B10 +8000 (ignored while the bonus is frozen, 07 §11.1).
-                st.spell_bonus_add += 8000;
+                // Spell_AddBonus 0x416B10 +8000 (07 §11), applied by the enemy manager.
+                st.spell_bonus_orbs += 1;
                 // ±111 by player byte +3; a non-forced GaugeAdd is skipped while bombing (07 §10.3).
                 if self.collect_timer == 0 && !p.bombing {
                     st.gauge_add(if p.focus != 0 { 111 } else { -111 });

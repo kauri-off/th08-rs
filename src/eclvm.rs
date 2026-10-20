@@ -1146,7 +1146,7 @@ impl Exec<'_> {
         self.e.orbit_angle = anmvm::wrap_add(self.e.orbit_angle, diff * 0.02);
     }
 
-    // Op 122 spell block (07 §11): decoded strings, bonus decay per second, pending payout paid first
+    // Op 122 spell block (07 §11): decoded strings, bonus / max / decay rate, pending payout paid first
     // (07 §11.1), bullets cancelled, spell background, rank ranges reset.
     fn spell_card(&mut self, ins: &Ins) {
         let b = self.m.ecl.bytes(ins);
@@ -1160,18 +1160,21 @@ impl Exec<'_> {
             let end = s.iter().position(|&c| c == 0).unwrap_or(s.len());
             s[..end].to_vec()
         };
-        let bonus = rd_u32(b, 0x10) as i32;
-        // Decay (bonus − bonus/7) / (timeout/60); op 134 precedes op 122 in all data.
-        let secs = (self.e.timeout / 60).max(1);
+        let bonus = rd_u32(b, 0x10);
+        // Rate R = (bonus − bonus/7) / (timeout/60), unsigned; op 134 precedes op 122 in all data.
+        let secs = (self.e.timeout / 60).max(1) as u32;
+        let max = if self.e.flags & A_FIXED_BONUS != 0 {
+            99_999_990
+        } else {
+            bonus as i32
+        };
         let spell = Spell {
             face: rd_i16(b, 0x0C) as i32,
             id: rd_i16(b, 0x0E) as i32,
-            bonus: if self.e.flags & A_FIXED_BONUS != 0 {
-                99_999_990
-            } else {
-                bonus
-            },
-            decay: (bonus - bonus / 7) / secs,
+            bonus: max,
+            max,
+            decay: ((bonus - bonus / 7) / secs) as i32,
+            boss: self.idx,
             name: dec(0x14, 48, 0xAA),
             owner: dec(0x44, 48, 0xBB),
             comment: [dec(0x74, 64, 0xDD), dec(0xB4, 64, 0xEE)],
@@ -1193,6 +1196,7 @@ impl Exec<'_> {
         );
         self.m.pay_capture(self.anm, false);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
+        (self.m.g.spell_flag6, self.m.g.bonus_frozen) = (false, false);
         crate::gui::request(crate::gui::Req::BossShow {
             face: spell.face,
             name: spell.name.clone(),
@@ -1208,7 +1212,11 @@ impl Exec<'_> {
         if let Some(st) = &self.m.stage {
             st.borrow_mut().start_spell_bg(self.anm);
         }
-        crate::effect::spell_ring(self.anm, self.e.final_pos, false);
+        // Ring at the boss pos e+0x2D34 (not the final pos); type 52 while GameFlags bits 7–8 ≠ 0 (07 §11.1).
+        let special = self.m.player.borrow().gflags
+            & (crate::player::GF_LAST_SPELL | crate::player::GF_LAST_CAPTURED)
+            != 0;
+        crate::effect::spell_ring(self.anm, self.e.pos, special);
         self.cancel_all(1);
         self.e.reset_rank_ranges();
     }
@@ -1957,7 +1965,11 @@ impl Exec<'_> {
             }
             163 => self.m.g.g_f54cec = self.ai(t, ins, 0),
             // Not implemented: op 164 spell flag bit 6 / 0x41F040 (0 uses in data).
-            164 => self.m.g.misc_calls += 1,
+            // Not implemented: the n == 0 call 0x41F040(a, b, c) (op unused in the data).
+            164 => {
+                self.m.g.spell_flag6 = self.ai(t, ins, 0) & 1 != 0;
+                self.m.g.misc_calls += 1;
+            }
             165 => {
                 self.e.vm.rotation[2] = self.af(t, ins, 0);
                 self.e.vm.flags |= anmvm::F_ROT_DIRTY;
@@ -2012,8 +2024,8 @@ impl Exec<'_> {
             }
             177 => self.e.hud_life = self.ai(t, ins, 0),
             179 | 180 => self.m.g.hud_requests.push(op as u16),
-            // Not implemented: op 184 Spell_SetBonusFrozen (07 §11.1).
-            184 => self.m.g.misc_calls += 1,
+            // Spell_SetBonusFrozen 0x41F0E0: spell flag bit 11 := n & 1 (07 §11.1).
+            184 => self.m.g.bonus_frozen = self.ai(t, ins, 0) & 1 != 0,
             // SPEC-GAP: sfx 0x2D also when the counter is already 12; 07 §7 plays it only below 12 (IMPL24 Q8).
             181 => {
                 crate::sound::play(crate::sound::OK_CLOCK);
