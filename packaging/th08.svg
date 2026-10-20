@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1030"/>
+      <stop offset="1" stop-color="#2a1a5e"/>
+    </linearGradient>
+    <mask id="crescent">
+      <circle cx="128" cy="124" r="78" fill="#fff"/>
+      <circle cx="160" cy="104" r="66" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="44" fill="url(#sky)"/>
+  <circle cx="128" cy="124" r="78" fill="#f4e7a1" mask="url(#crescent)"/>
+  <g fill="#ffffff">
+    <path d="M58 170 l4 12 12 4 -12 4 -4 12 -4 -12 -12 -4 12 -4z"/>
+    <path d="M196 56 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3z"/>
+    <circle cx="150" cy="200" r="3"/>
+    <circle cx="214" cy="112" r="2.5"/>
+    <circle cx="60" cy="52" r="2.5"/>
+  </g>
+</svg>

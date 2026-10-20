@@ -26,6 +26,18 @@ Not done yet:
 
 Synchronisation with the original is measured against recorded sessions; see `docs/STATUS.md` for numbers.
 
+## Download
+
+Prebuilt binaries are attached to each [GitHub release](https://github.com/kauri-off/th_08/releases) (built by `.github/workflows/release.yml`):
+- **Windows** (x86_64): `th08.exe`, a single executable, no installer and no VC++ runtime needed. Put it anywhere and
+  run it. Started from a terminal it prints `--help` and errors there; double-clicked it opens no console window.
+- **Linux** (x86_64): `th08-x86_64.AppImage`. `chmod +x th08-x86_64.AppImage` and run it. It needs glibc 2.35 or
+  newer (Ubuntu 22.04, Debian 12, Fedora 36 or later) and uses the system's Vulkan or OpenGL driver, X11 or Wayland
+  and ALSA/PipeWire/PulseAudio. Without FUSE, run it with `--appimage-extract-and-run`.
+
+Neither contains game data: on first start the launcher screen asks for your Touhou 8 folder (the one with
+`th08.dat`).
+
 ## Building and running
 
 Requires a recent stable Rust (edition 2024).
@@ -121,6 +133,7 @@ direction.
 | `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session record/replay harness |
 | `docs/` | project status, decisions, the agent workflow and task briefs |
 | `web/` | the browser front end |
+| `packaging/` | release packaging: icon, Linux `.desktop` file and `build-appimage.sh` |
 
 ## License
 

@@ -3,6 +3,7 @@ name = "th08"
 version = "0.1.0"
 license = "GPL-3.0-or-later"
 edition = "2024"
+description = "Clean-room reimplementation of Touhou 8: Imperishable Night"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -20,6 +21,9 @@ web-time = "1.1.0"
 wgpu = { version = "30", features = ["webgl"] }
 winit = "0.30"
 
+[build-dependencies]
+winresource = { version = "0.1.34", default-features = false }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.17"
 clap = { version = "4.6", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions", "color", "string"] }
@@ -27,6 +31,9 @@ egui-winit = { version = "0.37", default-features = false, features = ["clipboar
 ab_glyph = "0.2"
 env_logger = "0.11.11"
 pollster = "1.0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"

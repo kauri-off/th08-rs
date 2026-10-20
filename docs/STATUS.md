@@ -296,6 +296,15 @@
   value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
   and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
   Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
+- impl34 (port infrastructure, no spec section, 2026-10-20): release builds. `.github/workflows/release.yml` (tag `v*`
+  or manual run): `windows` (windows-latest, MSVC, `+crt-static` via `.cargo/config.toml`, icon + version info via
+  `build.rs`/winresource) uploads `th08.exe`; `linux` (container ubuntu:22.04, glibc 2.35) runs
+  `packaging/linux/build-appimage.sh` (pinned appimagetool 1.9.1 + type2-runtime 20251108, sha256-checked) and uploads
+  `th08-x86_64.AppImage`; on tags `release` (contents: write) creates/updates the GitHub Release with both files.
+  The AppImage holds only the stripped binary (needs libasound, libc/libm/libgcc_s from the host; X11/Wayland,
+  xkbcommon, Vulkan/GL are dlopen'ed from the host). Windows release builds use the GUI subsystem and attach to the
+  parent console (`AttachConsole`) when started from a terminal, so `--help` and errors still print. Icon
+  `packaging/th08.svg` (original artwork) rendered to `packaging/linux/th08.png` and `packaging/windows/th08.ico`.
 
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).

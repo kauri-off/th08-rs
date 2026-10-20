@@ -1,0 +1,67 @@
+name: Release builds
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # +crt-static comes from .cargo/config.toml; icon and version info from build.rs.
+      - name: Build
+        run: cargo build --release --locked --bin th08
+      - uses: actions/upload-artifact@v4
+        with:
+          name: th08-windows
+          path: target/release/th08.exe
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    # Build against Ubuntu 22.04's glibc 2.35 so the AppImage runs on Ubuntu 22.04+, Debian 12+, Fedora 36+,
+    # SteamOS 3; a container keeps that base independent of GitHub's runner image retirements.
+    container: ubuntu:22.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config libasound2-dev file zstd
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build AppImage
+        run: packaging/linux/build-appimage.sh target/appimage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: th08-linux
+          path: target/appimage/th08-x86_64.AppImage
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          gh release upload "$TAG" dist/th08.exe dist/th08-x86_64.AppImage --clobber

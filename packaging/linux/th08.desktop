@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=th08
+GenericName=Touhou 8 port
+Comment=Clean-room reimplementation of Touhou 8: Imperishable Night (needs your own copy of the game)
+Exec=th08
+Icon=th08
+Terminal=false
+Categories=Game;ActionGame;
