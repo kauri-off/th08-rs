@@ -7,21 +7,6 @@ use std::path::{Path, PathBuf};
 use th08::drawlog::{self, DemoMerge, KeyMode, Opts};
 use th08::session::{self, Session};
 
-fn xz_writer(
-    path: &Path,
-) -> anyhow::Result<(
-    std::process::Child,
-    std::io::BufWriter<std::process::ChildStdin>,
-)> {
-    let mut c = std::process::Command::new("xz")
-        .args(["-1", "-T0", "-c"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::fs::File::create(path)?)
-        .spawn()?;
-    let w = std::io::BufWriter::new(c.stdin.take().unwrap());
-    Ok((c, w))
-}
-
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (mut dir, mut out, mut drawlog_on, mut from, mut to) = (
@@ -84,7 +69,7 @@ fn main() -> anyhow::Result<()> {
     };
     let port_log = out.join("draw.drawlog.xz");
     let mut xz = if drawlog_on {
-        Some(xz_writer(&port_log)?)
+        Some(th08::xz::create(&port_log)?)
     } else {
         None
     };
@@ -96,7 +81,7 @@ fn main() -> anyhow::Result<()> {
     let t0 = std::time::Instant::now();
     {
         let mut on_draw = |text: String| {
-            if let Some((_, w)) = &mut xz {
+            if let Some(w) = &mut xz {
                 let _ = w.write_all(text.as_bytes());
             }
             if let Some(m) = &mut merge {
@@ -125,9 +110,8 @@ fn main() -> anyhow::Result<()> {
     }
     trace.flush()?;
     drop(trace);
-    if let Some((mut c, w)) = xz.take() {
-        drop(w);
-        c.wait()?;
+    if let Some(w) = xz.take() {
+        th08::xz::finish(w)?;
     }
     eprintln!(
         "ran {} menu-relative rows in {:.1} s",

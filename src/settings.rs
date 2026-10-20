@@ -1141,22 +1141,11 @@ pub fn test_game_dir() -> Option<PathBuf> {
     get().game_dir.clone()
 }
 
-// Platform config dir: $XDG_CONFIG_HOME/th08 (~/.config/th08), %APPDATA%\th08, ~/Library/Application Support/th08.
+// Platform config dir (`directories` BaseDirs): $XDG_CONFIG_HOME/th08 (~/.config/th08), %APPDATA%\th08,
+// ~/Library/Application Support/th08.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn config_dir() -> Option<PathBuf> {
-    let var = |n: &str| {
-        std::env::var_os(n)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    let base = if cfg!(windows) {
-        var("APPDATA")
-    } else if cfg!(target_os = "macos") {
-        var("HOME").map(|h| h.join("Library/Application Support"))
-    } else {
-        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|h| h.join(".config")))
-    };
-    base.map(|b| b.join("th08"))
+    Some(directories::BaseDirs::new()?.config_dir().join("th08"))
 }
 
 #[cfg(target_arch = "wasm32")]

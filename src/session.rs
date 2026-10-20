@@ -327,12 +327,8 @@ mod native {
 
         // Recorded trace rows from the first main-menu row on.
         pub fn recorded(&self) -> anyhow::Result<Vec<Row>> {
-            let out = std::process::Command::new("xz")
-                .arg("-dc")
-                .arg(self.dir.join("trace.txt.xz"))
-                .output()?;
-            anyhow::ensure!(out.status.success(), "xz failed on trace.txt.xz");
-            let rows = parse_trace(&String::from_utf8_lossy(&out.stdout));
+            let text = crate::xz::read_to_string(&self.dir.join("trace.txt.xz"))?;
+            let rows = parse_trace(&text);
             Ok(menu_rows(rows))
         }
 
@@ -517,7 +513,7 @@ mod tests {
             let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
             let s = Session::load(&data_dir(name)).unwrap();
             let Ok(rec) = s.recorded() else {
-                eprintln!("xz unavailable: {name} skipped");
+                eprintln!("{name}: reference unreadable, skipped");
                 continue;
             };
             s.start(&mut ctx).unwrap();
@@ -569,7 +565,7 @@ mod tests {
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
         let s = Session::load(&data_dir("fullrun_noclip")).unwrap();
         let Ok(rec) = s.recorded() else {
-            eprintln!("xz unavailable: fullrun smoke skipped");
+            eprintln!("fullrun trace unreadable: smoke skipped");
             return;
         };
         let events = std::fs::read_to_string(s.dir.join("events.txt")).unwrap();

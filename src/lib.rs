@@ -48,6 +48,8 @@ pub mod stdfile;
 pub mod supervisor;
 pub mod task;
 pub mod text;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod xz;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]

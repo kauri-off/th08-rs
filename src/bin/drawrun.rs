@@ -13,21 +13,18 @@ fn main() -> anyhow::Result<()> {
     let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
     let src = th08::assets::Source::native(dir.into());
     let mut ctx = pollster::block_on(th08::game::Ctx::load_with(src, gfx, false))?;
-    let file = std::fs::File::create(&args[0])?;
-    let mut child = None;
-    let mut w: Box<dyn Write> = if args[0].ends_with(".xz") {
-        let mut c = std::process::Command::new("xz")
-            .args(["-1", "-T0", "-c"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(file)
-            .spawn()?;
-        let w = std::io::BufWriter::new(c.stdin.take().unwrap());
-        child = Some(c);
-        Box::new(w)
+    let (mut xz, mut plain) = if args[0].ends_with(".xz") {
+        (Some(th08::xz::create(args[0].as_ref())?), None)
     } else {
-        Box::new(std::io::BufWriter::new(file))
+        let f = std::fs::File::create(&args[0])?;
+        (None, Some(std::io::BufWriter::new(f)))
     };
     let mut put = |s: String| {
+        let w: &mut dyn Write = match (&mut xz, &mut plain) {
+            (Some(w), _) => w,
+            (_, Some(w)) => w,
+            _ => unreachable!(),
+        };
         let _ = w.write_all(s.as_bytes());
     };
     match args[1].as_str() {
@@ -55,10 +52,11 @@ fn main() -> anyhow::Result<()> {
         }
         m => anyhow::bail!("unknown mode {m}"),
     }
-    w.flush()?;
-    drop(w);
-    if let Some(mut c) = child {
-        c.wait()?;
+    if let Some(w) = xz {
+        th08::xz::finish(w)?;
+    }
+    if let Some(mut w) = plain {
+        w.flush()?;
     }
     Ok(())
 }

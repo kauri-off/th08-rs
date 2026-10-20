@@ -220,7 +220,7 @@ fn quad_line(verts: &[Vertex; 4], textured: bool) -> String {
 enum Sink {
     Memory(Vec<String>),
     #[cfg(not(target_arch = "wasm32"))]
-    File(Box<dyn std::io::Write>, Option<std::process::Child>),
+    File(Box<dyn std::io::Write>),
 }
 
 // Frame filter: present numbers, or demo frames with a `d` prefix (`d1000-1100`).
@@ -254,38 +254,24 @@ impl Writer {
         Self::new(Sink::Memory(Vec::new()))
     }
 
-    // `TH08_DRAWLOG=<path>[,from-to | ,dfrom-to]`; a `.xz` path is compressed through the xz tool.
+    // `TH08_DRAWLOG=<path>[,from-to | ,dfrom-to]`; a `.xz` path is xz-compressed.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_spec(v: &str) -> Option<Self> {
         let (path, range) = match v.rsplit_once(',') {
             Some((p, r)) => (p.to_string(), parse_range(r)),
             None => (v.to_string(), None),
         };
-        let file = match std::fs::File::create(&path) {
-            Ok(f) => f,
+        let w: std::io::Result<Box<dyn std::io::Write>> = if path.ends_with(".xz") {
+            crate::xz::create(path.as_ref()).map(|w| Box::new(w) as _)
+        } else {
+            std::fs::File::create(&path).map(|f| Box::new(std::io::BufWriter::new(f)) as _)
+        };
+        let sink = match w {
+            Ok(w) => Sink::File(w),
             Err(e) => {
                 log::error!("TH08_DRAWLOG={path}: {e}");
                 return None;
             }
-        };
-        let sink = if path.ends_with(".xz") {
-            let child = std::process::Command::new("xz")
-                .args(["-1", "-T0", "-c"])
-                .stdin(std::process::Stdio::piped())
-                .stdout(file)
-                .spawn();
-            match child {
-                Ok(mut c) => {
-                    let w = std::io::BufWriter::new(c.stdin.take().unwrap());
-                    Sink::File(Box::new(w), Some(c))
-                }
-                Err(e) => {
-                    log::error!("xz: {e}");
-                    return None;
-                }
-            }
-        } else {
-            Sink::File(Box::new(std::io::BufWriter::new(file)), None)
         };
         let mut w = Self::new(sink);
         w.range = range;
@@ -333,7 +319,7 @@ impl Writer {
         match &mut self.sink {
             Sink::Memory(v) => v.push(text),
             #[cfg(not(target_arch = "wasm32"))]
-            Sink::File(w, _) => {
+            Sink::File(w) => {
                 let _ = w.write_all(text.as_bytes());
             }
         }
@@ -344,19 +330,6 @@ impl Writer {
             Sink::Memory(v) => std::mem::take(v),
             #[cfg(not(target_arch = "wasm32"))]
             _ => Vec::new(),
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for Writer {
-    fn drop(&mut self) {
-        if let Sink::File(w, child) = &mut self.sink {
-            let _ = w.flush();
-            *w = Box::new(std::io::sink());
-            if let Some(c) = child {
-                let _ = c.wait();
-            }
         }
     }
 }
@@ -632,7 +605,7 @@ pub fn parse_str(text: &str) -> Vec<Frame> {
     Reader::new(std::io::Cursor::new(text.as_bytes())).collect()
 }
 
-// Opens one or more logs (plain or .xz, concatenated in order); `.xz` goes through the xz tool.
+// Opens one or more logs (plain or .xz, concatenated in order).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open(paths: &[std::path::PathBuf]) -> anyhow::Result<Reader<Box<dyn BufRead>>> {
     use std::io::Read;
@@ -640,12 +613,7 @@ pub fn open(paths: &[std::path::PathBuf]) -> anyhow::Result<Reader<Box<dyn BufRe
     let mut src: Box<dyn Read> = Box::new(std::io::empty());
     for p in paths {
         let r: Box<dyn Read> = if p.extension().is_some_and(|e| e == "xz") {
-            let mut c = std::process::Command::new("xz")
-                .arg("-dc")
-                .arg(p)
-                .stdout(std::process::Stdio::piped())
-                .spawn()?;
-            Box::new(c.stdout.take().unwrap())
+            Box::new(crate::xz::open(p)?)
         } else {
             Box::new(std::fs::File::open(p)?)
         };
@@ -1687,7 +1655,7 @@ mod tests {
         };
         let r: Vec<Frame> = r.collect();
         if r.is_empty() {
-            eprintln!("xz unavailable: {name} skipped");
+            eprintln!("{name}: reference unreadable, skipped");
             return;
         }
         menu_start_state(&mut ctx, name).unwrap();

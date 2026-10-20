@@ -61,60 +61,30 @@ pub struct Wave {
     rate: f64,
 }
 
+// PCM WAV (8/16-bit, mono/stereo) via hound; 8-bit is unsigned on disk, hound yields it centred on 0.
 pub fn parse_wav(data: &[u8]) -> Result<Wave> {
+    let r = hound::WavReader::new(std::io::Cursor::new(data))?;
+    let spec = r.spec();
+    let (channels, bits) = (spec.channels as usize, spec.bits_per_sample);
     anyhow::ensure!(
-        data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WAVE",
-        "not a RIFF/WAVE file"
+        spec.sample_format == hound::SampleFormat::Int
+            && (1..=2).contains(&channels)
+            && (bits == 8 || bits == 16),
+        "unsupported wav format {:?}/{channels}/{bits}",
+        spec.sample_format
     );
-    let (mut fmt, mut pcm) = (None, None);
-    let mut p = 12;
-    while p + 8 <= data.len() {
-        let len = u32::from_le_bytes(data[p + 4..p + 8].try_into().unwrap()) as usize;
-        let body = &data[p + 8..(p + 8 + len).min(data.len())];
-        match &data[p..p + 4] {
-            b"fmt " if body.len() >= 16 => fmt = Some(body),
-            b"data" => pcm = Some(body),
-            _ => {}
-        }
-        p += 8 + len + (len & 1);
-    }
-    let (fmt, pcm) = (fmt.context("no fmt chunk")?, pcm.context("no data chunk")?);
-    let u16_at = |o: usize| u16::from_le_bytes([fmt[o], fmt[o + 1]]);
-    let (tag, channels, rate, bits) = (
-        u16_at(0),
-        u16_at(2) as usize,
-        u32::from_le_bytes(fmt[4..8].try_into().unwrap()),
-        u16_at(14),
-    );
-    anyhow::ensure!(
-        tag == 1 && (1..=2).contains(&channels) && (bits == 8 || bits == 16),
-        "unsupported wav format {tag}/{channels}/{bits}"
-    );
-    let bytes = bits as usize / 8;
-    let sample = |c: &[u8]| {
-        if bytes == 1 {
-            (c[0] as f32 - 128.0) / 128.0
-        } else {
-            i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0
-        }
-    };
+    let scale = if bits == 8 { 128.0 } else { 32768.0 };
+    let pcm = r
+        .into_samples::<i16>()
+        .map(|v| v.map(|v| v as f32 / scale))
+        .collect::<Result<Vec<f32>, _>>()?;
     let samples = pcm
-        .chunks_exact(bytes * channels)
-        .map(|f| {
-            let l = sample(f);
-            [
-                l,
-                if channels == 2 {
-                    sample(&f[bytes..])
-                } else {
-                    l
-                },
-            ]
-        })
+        .chunks_exact(channels)
+        .map(|f| [f[0], f[channels - 1]])
         .collect();
     Ok(Wave {
         samples,
-        rate: rate as f64,
+        rate: spec.sample_rate as f64,
     })
 }
 
@@ -419,8 +389,79 @@ mod tests {
             return;
         };
         for (name, _) in crate::sound::TABLE {
-            let w = super::parse_wav(&a.read(&format!("{name}.wav")).unwrap()).unwrap();
+            let data = a.read(&format!("{name}.wav")).unwrap();
+            let w = super::parse_wav(&data).unwrap();
             assert!(!w.samples.is_empty() && w.rate > 8000.0, "{name}");
+            let r = parse_wav_reference(&data).unwrap();
+            assert_eq!(w.rate, r.rate, "{name}");
+            assert!(
+                w.samples.len() == r.samples.len()
+                    && w.samples.iter().zip(&r.samples).all(|(a, b)| {
+                        a[0].to_bits() == b[0].to_bits() && a[1].to_bits() == b[1].to_bits()
+                    }),
+                "{name}: hound samples differ from the RIFF parser"
+            );
         }
+    }
+
+    // The pre-hound RIFF/WAVE parser, kept as the reference for se_waves_parse.
+    fn parse_wav_reference(data: &[u8]) -> Result<Wave> {
+        anyhow::ensure!(
+            data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WAVE",
+            "not a RIFF/WAVE file"
+        );
+        let (mut fmt, mut pcm) = (None, None);
+        let mut p = 12;
+        while p + 8 <= data.len() {
+            let len = u32::from_le_bytes(data[p + 4..p + 8].try_into().unwrap()) as usize;
+            let body = &data[p + 8..(p + 8 + len).min(data.len())];
+            match &data[p..p + 4] {
+                b"fmt " if body.len() >= 16 => fmt = Some(body),
+                b"data" => pcm = Some(body),
+                _ => {}
+            }
+            p += 8 + len + (len & 1);
+        }
+        let (fmt, pcm) = (
+            anyhow::Context::context(fmt, "no fmt chunk")?,
+            anyhow::Context::context(pcm, "no data chunk")?,
+        );
+        let u16_at = |o: usize| u16::from_le_bytes([fmt[o], fmt[o + 1]]);
+        let (tag, channels, rate, bits) = (
+            u16_at(0),
+            u16_at(2) as usize,
+            u32::from_le_bytes(fmt[4..8].try_into().unwrap()),
+            u16_at(14),
+        );
+        anyhow::ensure!(
+            tag == 1 && (1..=2).contains(&channels) && (bits == 8 || bits == 16),
+            "unsupported wav format {tag}/{channels}/{bits}"
+        );
+        let bytes = bits as usize / 8;
+        let sample = |c: &[u8]| {
+            if bytes == 1 {
+                (c[0] as f32 - 128.0) / 128.0
+            } else {
+                i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0
+            }
+        };
+        let samples = pcm
+            .chunks_exact(bytes * channels)
+            .map(|f| {
+                let l = sample(f);
+                [
+                    l,
+                    if channels == 2 {
+                        sample(&f[bytes..])
+                    } else {
+                        l
+                    },
+                ]
+            })
+            .collect();
+        Ok(Wave {
+            samples,
+            rate: rate as f64,
+        })
     }
 }
