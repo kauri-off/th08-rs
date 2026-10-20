@@ -454,5 +454,8 @@ max(64, 255 − trunc((8 − y)·255/128)); else normal sprite (0xAC + type), al
 
 ## 9. Open points
 - Popup function 0x403200 / 0x403330 colour semantics and the effect manager are not specified here.
-- Statistics word at (0x18B8A28)+0xDA (bits 0x2, 0x40, 0x800, 0x2000) – replay/statistics, not gameplay (INFERRED).
+- Statistics word at (0x18B8A28)+0xDA (replay object, 15 §3): **write-only** (VERIFIED RE-Q26). `Replay_FrameHook` (prio 7)
+  clears it every frame (bit 0x100 if 0x164D0A0 was set), events OR bits in (effect spawns 0x400, enemy spawn/free, items,
+  player hit/graze/death/bomb, cancels …); no code reads it for a decision and `Replay_RecordCalc` stores only the input
+  word. It can be ignored.
 - Global 0x164D0B4 bit 10 (bullets frozen) belong to the game flow (11).

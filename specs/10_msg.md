@@ -66,7 +66,7 @@ extra (`msg8*`): 3.
 | 0x21834 + k·0x2A4 | AnmVm[4] | face[k] | portrait VMs, k = 0..3 |
 | 0x222C4 + l·0x2A4 | AnmVm[2] | line[l] | text line VMs (text.anm) |
 | 0x2280C | AnmVm | boss_card | boss name card VM (op 8) |
-| 0x22AB0 | AnmVm | — | run and drawn every frame; not started by any msg op (INFERRED unused here) |
+| 0x22AB0 | AnmVm | — | run and drawn every frame, but no code ever sets a script or sprite on it (its only references are the run in `Msg_Run` and the draw; msg ops address faces 0–3 / lines 0–1 and the data stays in range) → it never draws anything (VERIFIED RE-Q26) |
 | 0x22D54 + k·4 | u32[4] | text_colour[k] | GDI COLORREF per speaker (from table 0x4C7180, §6) |
 | 0x22D64 + k·4 | u32[4] | outline[k] | always 0 (selects the 2-px outline style, §6) |
 | 0x22D74 | i32 | font_size | 15 |
@@ -317,10 +317,10 @@ skip frames when fast-forwarding during dialogue (0x452490; VERIFIED, see 15 §3
 ### 8.3 ECL ops touching the HUD (from 07 §7) — VERIFIED
 | ECL op | effect |
 |---|---|
-| 148 | `g_Hud+0x20 = n` (INFERRED: boss/spell display mode); global 0x164D30C += 1800 |
+| 148 | `g_Hud+0x20 = n` (boss "remaining bars" count, drawn as in 12 §5.4, VERIFIED); global 0x164D30C += 1800 |
 | 158 | boss life-bar marker k at a/max, b/max, style c (12) |
 | 179 | HUD clock VM (HudImpl+0x2156C) runs `times.anm` script 2 with sprite = clock counter (stats+0x28) |
-| 180 | `HudImpl+0x2175F = 0` (INFERRED: hide a HUD element; detail in 12) |
+| 180 | `HudImpl+0x2175F = 0` (alpha byte of the night-clock VM := 0, hides the clock; 12 §5.7, VERIFIED) |
 | 181 | if clock counter < 12: sfx 0x2D (`se_ok00`), counter += 1, clock VM sprite = counter, interrupt 2 if it reached 12 else 1 |
 
 ### 8.4 Music

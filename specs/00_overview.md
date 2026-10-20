@@ -19,7 +19,7 @@ D3DX). Marking: **VERIFIED** = read directly from code/data; **INFERRED** = inte
 
 ### Default 3D camera (set once after device creation, `Window_InitD3D` 0x4424C0) — VERIFIED constants
 - View: left-handed look-at, eye `(320, −240, −d)`, target `(320, −240, 0)`, up `(0, 1, 0)`
-  where `d = 240 / tan(fov/2)` ≈ 895.7 (INFERRED: the helper at 0x4A4110 is `tan` of half-FOV).
+  where `d = 240 / tan(fov/2)` ≈ 895.7 (VERIFIED RE-Q26: 0x4A4110 is the CRT `tan` — x87 `fptan`, evaluated with the control word temporarily at 0x27F, i.e. 64-bit precision).
 - Projection: left-handed perspective, FOV **π/6 (30°)**, aspect **4/3**, near **100**, far **10000**.
 - Effect: a point at z = 0 with world (x, −y) maps 1:1 to screen pixel (x, y). 2D sprites are drawn
   in screen space; stage backgrounds (`.std`) use this camera with their own view changes.
@@ -58,7 +58,9 @@ screenshot key -> snapshot/thNNN.bmp         # changelog/answers_phase7.md §6
 
 - Logic rate: fixed **60 Hz**, one calc step per frame; there is no fixed-step catch-up.
 - A global float game-speed multiplier (0x17CE8E0) scales per-frame motion (VERIFIED as multiplier in
-  bullet/ANM movement code; INFERRED use = slowdown/replay speed).
+  bullet/ANM movement code). Writers (VERIFIED RE-Q26, globals xref): ECL natives 18/28 (1/arg) and 29 (1.0), and
+  resets to 1.0 in `GameManager_StageStart`, GM unregister, `MainMenu_OnRegister`, `Supervisor_OnRegister`. Replay
+  speed does not use it (fast-forward runs extra calc passes, 15 §3).
 
 ## 3. Task system ("funcChain", `FuncChain_*` 0x43C760…0x43CF50) — VERIFIED
 
@@ -166,7 +168,7 @@ ANM system: 25 slots (0–24), each holding one loaded `.anm` file (03_images.md
 | Screen | 640×480 pixels, origin top-left, +y down | VERIFIED |
 | Playfield viewport | screen rect **x = 32, y = 16, w = 384, h = 448** (the stage draw sets this viewport and clears it) | VERIFIED |
 | Game (playfield) coords | origin = playfield top-left, x ∈ [0, 384), y ∈ [0, 448), +y down; screen = game + (32, 16) | VERIFIED for bullets (wall-bounce tests against 0/384 and 0/448; centre constants 192/224 used for mirroring) / INFERRED for all other objects |
-| Angles | radians, 0 = +x, increasing clockwise on screen (because +y is down) | INFERRED |
+| Angles | radians, 0 = +x, increasing clockwise on screen (because +y is down) | VERIFIED (velocity = (cos a, sin a)·speed everywhere, 08 §3; aim = atan2(dy, dx) in screen y-down coordinates) |
 
 ## 6. Per-frame data-loading model (relevant for a reimplementation)
 

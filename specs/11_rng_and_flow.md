@@ -147,7 +147,7 @@ counters not advanced during dialogue.
 | 11–12 | final route choice (0 → 6A, else → 6B) | VERIFIED |
 | 13 (0x2000) | set by op 176 together with bit 7 when (not practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); with a boss present `EnemyMgr_Calc` adds a large player-damage box (changelog/answers_impl10.md §7) | VERIFIED |
 | 14 (0x4000) | spell practice | VERIFIED |
-| 15–17 | unlock states from the score file (Extra/Phantasm …) | VERIFIED source / INFERRED meaning |
+| 15–17 | unlock states from the score file: 15 Extra (`Clear_ExtraUnlocked`), 16 spell practice (`Clear_AnyFinalA`), 17 solo characters (`Clear_AllTeamsFinalB`) (16 §4 table) | VERIFIED |
 
 ## 3. New game and stage start (`GameManager_StageStart`, loader thread) — VERIFIED
 
@@ -251,7 +251,7 @@ stats.deaths (+0x64/+0x68) = 0 (checksum); stats.bombs_used (+0x84/+0x88) = 0 (c
 stats.spells_captured (+0x1C) = 0; 0x164D318/320/324 = 0
 play counters in the score data incremented unless replay / spell practice / slow mode
 if the requested scene was 10 (retry): two more score-data counters +1 (0x164CD6C + 0x44·difficulty and 0x164CF04,
-  0x43BE09; INFERRED: retry counts)
+  0x43BE09; PLST [13] retries, 15 §2.9, VERIFIED)
 ```
 
 ### 3.3 Continuing to the next stage (fresh_start = 0, normal difficulty, not practice)

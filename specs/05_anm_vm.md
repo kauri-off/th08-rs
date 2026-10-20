@@ -48,7 +48,7 @@ direct effect of an opcode/draw routine, INFERRED for names of owner-only fields
 | 0x12C | f32 | uv_scroll_v | |
 | 0x130 | Matrix4 | base_matrix | identity with [0][0] = w/256, [1][1] = h/256 (set with the sprite) |
 | 0x170 | Matrix4 | world_matrix | cached model matrix for draw mode 5 |
-| 0x1B0 | Matrix4 | tex_matrix | identity with [0][0] = (w / tex_w_actual)·sprite.scale_x, [1][1] = (h / tex_h_actual)·sprite.scale_y (INFERRED: UV matrix for 3D stage quads) |
+| 0x1B0 | Matrix4 | tex_matrix | identity with [0][0] = (w / tex_w_actual)·sprite.scale_x, [1][1] = (h / tex_h_actual)·sprite.scale_y — the texture transform of `Draw3DWorld` (draw mode 5 / 3D stage quads): copied, [2][0]/[2][1] := sprite uv0 + uv_off, `SetTransform(TEXTURE0)` (06 §11, VERIFIED RE-Q26). sprite.scale_x/y = sprite +0x38/+0x3C = actual texture size / ANM header size (structs.md), so [0][0] = w / header width |
 | 0x1F0 | u32 | colour | D3DCOLOR: byte 0x1F0 = B, 0x1F1 = G, 0x1F2 = R, 0x1F3 = A |
 | 0x1F4 | u32 | colour2 | second colour, same byte order (0x1F7 = alpha2) |
 | 0x1F8 | u32 | flags | §2.1 |
@@ -59,7 +59,7 @@ direct effect of an opcode/draw routine, INFERRED for names of owner-only fields
 | 0x208 | f32[3] | pos | position x, y, z |
 | 0x214 | i16 | sprite_index | index into the file's sprite table |
 | 0x216 | i16 | anm_slot | ANM slot of the file |
-| 0x218 | i16 | saved_sprite | owner copy of sprite_index (INFERRED) |
+| 0x218 | i16 | saved_sprite | base sprite copy of sprite_index: written by `AnmManager_SetScriptRange` 0x462360 (after each script start), the bullet template load (0x433070) and ECL native 28 (bullets); read by native 29 (restores the bullet sprite) and 0x469FA9 (digit sprite = base + 2·digit). No other reader (VERIFIED RE-Q26) |
 | 0x21A | i16 | script_index | < 0 = no script (range runner skips it) |
 | 0x21C | ptr | script_start | |
 | 0x220 | ptr | ip | current instruction; NULL = script finished |
@@ -441,7 +441,7 @@ Set (Supervisor+0x1A4 = 0x17CE8FC |= 0x20) by ECL native 29 (0x425290) when it r
 slowdown 1/n with n > 1. **No code clears it.** While set, every `Timer_Add`/`Timer_Sub` (and so every
 `Timer_Decrement`, used by bullets in spawn states, item/player countdowns, ECL waits, …) first moves the counter
 one extra step in the same direction (+1 for Add, −1 for Sub), zeroes the sub-frame and sets prev = −999;
-`Timer_Tick` is not affected. (Faithful quirk; INFERRED: practically only reachable after a native-28/29 pair.)
+`Timer_Tick` is not affected. (Faithful quirk. **Unreachable with retail data** (VERIFIED RE-Q26): native 29 sets the flag only when 1/arg < 1, and its only two uses in the ECL files (ecldata_ym.ecl) pass arg 1.)
 
 ### 12.7 Draw mode 5 / `Draw3DWorld` anchor offset
 With anchor bit 11 (x) / 12 (y) the translation gets `+ |sprite_w · scale.x / 2|` / `+ |sprite_h · scale.y / 2|`

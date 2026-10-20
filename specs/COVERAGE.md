@@ -43,24 +43,22 @@ ids, sounds and file effects are all in a numbered spec; PARTIAL lists exactly w
 - PARTIAL: Screenshot 16-bit back-buffer branch (00 §2; 24-bit path specified).
 - Not needed: window/platform code, DirectSound internals, anti-tamper paths (only reachable after tampering).
 
-**Remaining INFERRED items per spec** (all are naming/role or unused-field notes; none changes gameplay):
-- 00: angle convention wording; scene-id names; d = 240/tan(fov/2) helper identity; 16-bit format choice.
-- 01: reserved table field; `out_size` meaning.
-- 02: MIDI fallback default; chunk size meaning; boss/alternate BGM slot roles; spell-practice BGM table field names.
-- 03: unused header fields (x, y, 0x08, 0x3C), colour-key use, texture priority meaning, reduced-colour option name.
-- 04: file roles (select00, loading pictures, *_s.std, *sp.ecl, per-character boss files, face_cdbg, info/phantasm, demorpy).
-- 05: tex-matrix description, saved_sprite / pos_offset owner semantics, flag-0x20 reachability.
-- 06: viewport MinZ/MaxZ; stack residue in stg4abg vertices.
+**Remaining INFERRED items per spec** (after RE-Q26; every item that could affect sync, RNG order, the draw log or a
+saved file was verified or corrected — changelog/answers_re_q26.md §2. What is left is naming, purpose or platform):
+- 00: back-buffer format choice (16-bit); subsystem / scene-id names; game coordinates wording for non-bullet objects.
+- 01: reserved table field; `out_size` includes the 4 wrapper bytes (no caller depends on it).
+- 02: MIDI fade argument and MIDI-only paths; DirectSound chunk-size meaning; BGM slot 1/2 role names; spell-practice
+  BGM table field names.
+- 03: texture resource priority meaning (D3D `SetPriority`, no rendering effect); reduced-colour option name.
+- 04: character name order; loading-picture `h`/`a` variants; `a`/`as` sht naming; `face_*sp`, `face_cdbg`, `msg4dm`,
+  `.ver` roles.
 - 07: names of flag A bits 23/25/30/31.
-- 08: statistics word at (0x18B8A28)+0xDA (replay statistics, not gameplay).
-- 09: HUD side flag (UI only); bomb phase order inside the summary table; per-bomb detail level.
-- 10: unused dialogue VM 0x22AB0; text pixel equivalence; ops 148/180 HUD meaning.
-- 11: names of difficulty values / GameFlags bits 4 and 15–17; slowdown-replay purpose; retry counters (11 §3.2).
-- 12: boot presents 3–5 cause; front.anm VM roles by position; spell-plate width side effect; ASCII VMs 156/157 role.
-- 13: SE buffer caps bit; unused SE ids and effect type 41; HUD repaint word bit 0x400; orbit-13 quaternion geometry.
-- 14: per-bomb detail level note.
-- 15, 16: none affecting behaviour.
-- structs: sprite load_state, scale-factor fields.
+- 09, 14: per-bomb choreography "detail level" note (superseded by 14 §2).
+- 10: GDI text pixel equivalence.
+- 11: difficulty / GameFlags bit 4 names; purpose of slowdown replay playback.
+- 12: cause of the empty boot presents 3–5 (the observable is VERIFIED); front.anm VM roles by position.
+- 13: SE buffer caps bit; unused SE ids.
+- 15: joystick-only bits after a failed keyboard `GetDeviceState` (platform).
 
 ## 0. Method and numbers
 

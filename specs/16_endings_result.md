@@ -30,8 +30,20 @@ Supervisor scene 9 calls `Ending_Register` 0x4296A0.
 - draw 0x4298F0 at prio 4;
 - on-remove 0x429D40.
 
+`Ending_Ctor` 0x4297B0 zero-fills the whole object, then (VERIFIED RE-Q26):
+- constructs an array of **16** AnmVms at +0x14 (stride 0x2A4, so +0x14 … +0x2A54). VMs 0–14 are the text VMs
+  (§1.2 step 4, run by the calc, drawn by the draw). VM 15 is constructed but never given a script, never run and
+  never drawn;
+- per-line wait normal +0x2A90 := 8. Everything else starts at 0: per-line fast/min +0x2A94 = 0, text colour
+  +0x2AA0 = 0 (black), line index +0x2A9C = 0, picture offsets +8/+0xC and scroll speed +0x10 = 0, fade mode
+  +0x2AB0 = 0, skip-allowed = 0.
+
 `Ending_Init` does the following:
-1. Clears some AnmManager state and sets 0x17CE8D0 = 1 (the HUD stops drawing).
+1. Resets four AnmManager render caches (texture +0x24BC := 0, texture-matrix sprite +0x24C8 := 0, blend +0x24C0 := 3,
+   vertex path +0x24C2 := 0xFF; 05 §12.4/§12.8), then `Device_ClearPresentTwice(0xFFFFFFFF)` 0x45B020: clear colour
+   and depth to **white** (z 1.0) and Present, twice (a failed Present resets the device). These are two extra
+   presents with no primitives (runtime, fullrun_noclip draw log: presents 121250/121251 = `C tz ffffffff` only, then
+   the first ending frame). Then it sets 0x17CE8D0 = 1 (the HUD stops drawing).
 2. Loads `staff01.anm` into ANM slot 0x18 (8 scripts, 13 sprites).
 3. Updates the clear records according to the ending type:
 
@@ -61,9 +73,13 @@ Supervisor scene 9 calls `Ending_Register` 0x4296A0.
 6. Loads it with `Ending_LoadScript` 0x4295E0:
    - reads the file from the archive;
    - script pointer = file start;
-   - per-line wait = 8;
+   - per-line wait **normal** +0x2A90 := 8 (only this field; fast/min +0x2A94 keeps its value: 0 on the first
+     file, the last `@s` value after `@F`) (VERIFIED RE-Q26);
    - timers +0x2A70 and +0x2A64 reset;
    - the previous file buffer is freed.
+   Nothing else is reset: line index, page timer, colour, fade and picture state carry over to the new file.
+   If the file is not found the old buffer stays, an error is logged and the result is −1: from `Ending_Init` the
+   registration fails, from `@F` the interpreter returns −1 (the ending ends as with `@z`).
 
 The CLRD+0x20 flag is read and cleared here. No code ever stores a nonzero value in it (struct-relative scan, changelog/answers_phase7.md §4): it is 0 unless score.dat itself contains a nonzero byte, which is then honoured once and cleared. VERIFIED.
 
@@ -77,9 +93,21 @@ The file is Shift-JIS text.
 - Integer arguments are read with `atol`; the reader then skips to the next NUL and over any NULs.
 - After a command, the reader skips to the end of the line and over all CR/LF.
 
-Text line handling:
+Text line handling (VERIFIED RE-Q26):
 - Bytes are copied **two at a time** into a 0x44-byte buffer until a byte 0, LF or CR is reached at an even position.
-- The line is drawn with `Text_RenderToVm(text VM[line], colour, −1, text)`, followed by interrupt 1 on that VM. Then line index += 1.
+  There is no length check (a longer line overruns the stack buffer; retail lines are far shorter).
+- If at least one pair was copied, the line is drawn with `Text_RenderToVm(text VM[line], colour, −1, text)`, followed by
+  interrupt 1 on that VM.
+- Then the reader skips **every** following byte that is 0, LF or CR (not "to the end of the line" as after a
+  command). With the retail `\0\n` endings both readings land on the next line.
+- Then the wait below is set and line index += 1 — **also for an empty line**: a line that starts with 0, LF or CR
+  renders nothing but still costs a VM index and a line wait. Retail files have no such line (the CR/LF skip after
+  every command and text line removes blank lines; `enddump`/reader simulation, re/work/runs/q26/endsim.py).
+- Line index is not range-checked. Index 15 renders into VM 15, which is never run or drawn (invisible); index ≥ 16
+  writes past the VM array into the object's own fields (+0x2A54 script pointer …), i.e. corrupts the interpreter.
+  Retail pages have at most 4 text lines (index 0–3). A reimplementation may drop lines ≥ 15.
+- **End of buffer**: the reader has no end test. A script without `@z` runs past the loaded buffer (undefined; heap
+  bytes). Every retail file ends `@z\n\0\n`. Treating the buffer end as `@z` is a safe choice.
 - The wait timer is set to per-line-normal (+0x2A90). If Shot or Enter is held, it is set to per-line-fast (+0x2A94) instead. The min-wait is per-line-fast.
 
 All retail lines have an even byte length; `enddump.py` checks this.
@@ -91,11 +119,11 @@ All retail lines have an even byte length; `enddump.py` checks this.
 | `@2` n | | fade-in from white (alpha as `@0`, RGB = FFFFFF); then off |
 | `@3` n | | fade-out to white; holds 0xFFFFFFFF |
 | `@F` file | name | load another script (`Ending_LoadScript`). On success, skip-allowed = +0x2A5C, text buffer reset. **Falls through into `@R`**, and then the normal "skip to end of line" runs on the **new** file, so the new file's first line is always skipped. Both staff files start with a dummy `@R`. |
-| `@R` | — | sets i16 VM+0x21A (script index) = 0 on all 16 VMs |
+| `@R` | — | sets i16 VM+0x21A (script index) = 0 on all 16 VMs (§1.2, VM 15 included). **No observable effect**: the ending runs its VMs with `AnmVm_Run` directly and nothing on this path reads +0x21A (only `AnmManager_RunRange` and owners' range loops test it) (VERIFIED RE-Q26) |
 | `@M` n | | `Music_Fade(n)` (seconds as float) |
 | `@V` a b | | scroll speed +0x10 = a / b (float) |
-| `@a` vm script sprite | | on VM[vm]: set script `script` of `staff01.anm`, then set sprite `sprite` |
-| `@b` file | | load the picture into surface slot 0 (`Anm_LoadSurface`) |
+| `@a` vm script sprite | | on VM[vm]: set script `script` of `staff01.anm`, then set sprite `sprite`. The VM array is the same as the text VMs: the staff roll uses VMs 0–2, which the calc runs and the draw draws like text lines |
+| `@b` file | | load the picture into surface slot 0 (`Anm_LoadSurface`); on failure the interpreter returns −1 (ending ends) |
 | `@c` n | decimal 0xRRGGBB | text colour +0x2AA0 |
 | `@m` file | | `Music_Play(0, file)` then `Music_PlaySlot(0, 0)` (the latter also marks music flag 0 heard) |
 | `@r` a b | | page wait: page timer +0x2A7C = a, page min-wait +0x2A88 = b. Line wait reset to 0. Ends this frame. |
@@ -122,14 +150,32 @@ Script names in the files carry a `data/` or `data/end/` prefix. The archive loo
 
 ### 1.5 Drawing (0x4298F0, draw prio 4)
 
-1. Copy surface slot 0 (the `@b` picture) to the back buffer at (0, 0). The source rectangle is (+8, +0xC), size 640×480. +8 is always 0, so the picture scrolls by moving the source y offset.
+1. Copy surface slot 0 (the `@b` picture) to the back buffer at (0, 0) with `CopyRects` (0x466D70: a plain pixel copy,
+   no filtering, no blending). The source rectangle is (x, y, x + 640, y + 480) with x = trunc(+8), y = trunc(+0xC)
+   (`ftol`, truncation; y ≥ 0 always because the scroll clamps at 0). +8 is always 0, so the picture scrolls by whole
+   pixels of the source y offset (VERIFIED RE-Q26; draw log `K end00b.jpg screen 0 0 640 480 0 0`). Nothing is copied
+   when the slot is empty.
 2. Draw the 15 text VMs.
-3. Fade overlay (0x428910), steps once per draw call:
-   - modes 1–4 as in §1.3, with counter +0x2AA8 and duration +0x2AAC;
+3. Fade overlay (0x428910), steps once per draw call (VERIFIED RE-Q26, code and fullrun_noclip draw log):
+   - modes 1–4 = `@0`…`@3`, with counter t (+0x2AA8, set to 0 by the command) and duration n (+0x2AAC);
+   - if t < n: the colour is computed **from t first**, then t += 1. So the draw of the frame whose calc ran the
+     command uses t = 0 (fade-in: alpha 255);
+   - if t ≥ n: fade-ins (`@0`, `@2`) set mode 0 and colour 0 in that same call, so **nothing is drawn** from the
+     call where t reaches n (n = 0: off at once); fade-outs (`@1`, `@3`) hold alpha 255. Mode 0 sets colour 0;
+   - runtime (end00b, `@2 180` executed in the calc of scene frame 122): frame 122 alpha 0xFF, 123 0xFE, …, 301 0x02,
+     302 no quad;
+   - screen effects are not part of the ending and survive the scene change: in fullrun_noclip the final dialogue's
+     fade to white (MSG op 14, type 4, 442 frames, draw prio 0x15; 13 §3) is still running and draws a second
+     full-screen white quad after the ending's own (alpha 0xFD, 0xFE) on ending frames 1–2, then ends;
    - when alpha ≠ 0, draw a full-screen 640×480 untextured quad with colour +0x2AA4 (0x45B1E0).
    - VERIFIED: the caller passes +0x2AA4 in EDX to `Screen_FillRect` (ECX = rect {0, 0, 640, 480}); all four vertices get that diffuse colour, z 0, rhw 1, FVF XYZRHW|DIFFUSE, triangle strip; colour/alpha = SELECTARG1(DIFFUSE); z-write is turned off unless cfg+0x38 (Supervisor+0x150) bit 6 is set (0x438A41); DESTBLEND = INVSRCALPHA (changelog/answers_phase7.md §7).
 
 ### 1.6 Remove (0x429D40)
+
+`@z` (or a failed `@F` / `@b`) makes the interpreter return −1 and `Ending_Calc` return 0. The calc runner then removes
+the calc node and calls this on-remove callback at once (00 §3.1), which unlinks the draw node (0x43CF10, the node
+stored at object +4). The draw chain runs after the calc chain, so **the ending draws nothing on the removal frame**
+(no picture copy, no text, no fade) (VERIFIED RE-Q26, code).
 
 - Releases ANM slot 0x18 and surface 0.
 - Frees the script.

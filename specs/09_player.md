@@ -26,8 +26,8 @@ manager is re-registered without reloading). Calc priority 9 (runs before enemie
 6. If state is not 1/2: `Player_Move` (§3; also options §5, shot trigger, gauge §9.3).
 7. Run the player sprite VM (+0x10).
 8. Player bullets update (0x451150, §4.4), shot timer / firing (0x451500, §4.2).
-9. 0x44D420: nearest-target bookkeeping reset (+0xE2AA4/+0xE2AB0 = (−999, −999, 0), +0xE2AC0 = 0) and a HUD
-   panel-side switch (player y < C and x ≥ C' → HUD side flag; INFERRED UI only).
+9. 0x44D420: nearest-target bookkeeping reset (+0xE2AA4/+0xE2AB0 = (−999, −999, 0), +0xE2AC0 = 0) and the gauge-readout
+   fade by player position (`Player_UpdateGaugeFade`; full rule in 12 §5.9, VERIFIED).
 10. Unless a dialogue is running: frame counters 0x164D318 (game) / 0x164D31C (stage) += 1; at human-max
     gauge: 0x164D324 / 0x164D32C += 1 and AddScore(100); else at youkai-max gauge: 0x164D320 / 0x164D328 += 1
     and AddScore(100) (VERIFIED; shown as the "over-80%" lines of the clear panel, 12 §5.6).
@@ -373,7 +373,7 @@ items attracted (state 1, vel (0, −0.5)), stores the origin.
 Per bomb (names from the exe strings; areas: cancel C = bullet-cancel circle/rect, D = damage circle/rect with
 damage per hit, period +0x38, max total +0x34; sizes in px):
 
-| owner (table) | name | dur | invuln | speed mult (values written; order between phases INFERRED) | areas (main) |
+| owner (table) | name | dur | invuln | speed mult (values written; timing per phase in 14 §2, VERIFIED) | areas (main) |
 |---|---|---|---|---|---|
 | Reimu 0x40C010 | 霊符「夢想妙珠」 | 200 | 260 | — | at start C r 96 at the player (200 f); 16 orbs each with D r 64 dmg 5 period 2 max 200 (life 200) and, while flying, a one-frame C r 128; on impact C r 64 (+4.27/f, 30 f) and D r 64 (+12.8/f) dmg 500 life 12 period 4 |
 | Reimu LS 0x40C910 | 神霊「夢想封印　瞬」 | 200 | 260 | — | 16 orbs as above; impact D r 64 (+8.53/f) dmg 25 life 15 period 5 max 50; from frame 40 every 20 frames a blast at the target (or a random point, **RNG**): C r 64 (+4.27/f, 30 f), D r 64 (+8.53/f) dmg 400 life 15 period 2 |

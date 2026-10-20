@@ -531,3 +531,25 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   return-2 same-frame screens (12 §2 edited); replay row +0xC290 lag; SP replay no bit0; quit WAV no music change;
   Music_Fade linear dB (02 edited); BGM curve squared vs SE cubic (13 §1.3 wrong); keyboard map (15 §1.1 edited);
   replay cfg copy full 60 bytes no clamp; FastForward order; FuncChain_AddCalc links always; SE register from GM prio2.
+
+# RE-Q26 (2026-10-20) — IMPL28 ending questions + INFERRED sweep — DONE (specs/changelog/answers_re_q26.md)
+- Runs re/work/runs/q26/ (endsim.py reader sim, dispscan.py, fullrun_dl = fullrun_noclip replay WITH drawlog, bg).
+- Ending: ctor 0x4297B0 zero-fills 0x2AB8, constructs **16** VMs at +0x14 (array ctor count 0x10), sets +0x2A90=8 only.
+  Q1 only +0x2A90 (fast +0x2A94 = 0); Q2 colour 0; Q3 @R VM+0x21A write is never read on ending VMs (run by AnmVm_Run
+  directly), VM 15 exists but never run/drawn; @a VMs = text VMs. Q4 alpha from t then t++, t>=n → off same call (alpha 0,
+  not drawn). Q5 past buffer = undefined (reads heap). Q6 idx 15 → VM 15 (invisible), ≥16 corrupts +0x2A54..; retail max 4
+  lines/page. Q7 ftol truncation, CopyRects integer rect. Q8 Init: AnmMgr +0x24BC=0,+0x24C8=0,+0x24C0=3,+0x24C2=0xFF, then
+  Device_ClearPresentTwice(0xFFFFFFFF) (clear white + Present ×2). Q9 calc ret 0 → on-remove removes draw node → nothing
+  drawn that frame. Q10 after text skips all 0/LF/CR bytes; blank line (starts with 0/LF/CR) still waits + line++.
+  @b/@F failure → interpreter −1 → ending ends.
+- INFERRED sweep: ScoreList_Insert new entry BEFORE equal scores (strict unsigned <) — CODE BUG (scoredat.rs uses >=).
+  tex_matrix VERIFIED; sprite +0x38/+0x3C = actual/logical tex size VERIFIED; load_state VERIFIED; tan VERIFIED;
+  flag 0x20 unreachable (native 29 arg 1 in data); viewport minz/maxz 0/1 (drawlog V); stats word +0xDA write-only
+  (also effect spawns |= 0x400); orbit13 = quaternion (n·sin a, cos a) i.e. rotation 2a, offset = r·norm(n×z), near-z
+  quirk; type 41 unused (all sites); 0x22AB0 never scripted; Text_Render sizes ≤0 → 15 (both); trail strip path
+  (flag 8) unused in data, θ = mid(E[i−1],E[i]), next = mid(E[i+b−1],E[b]); SE off leaves queue; SE priority never read;
+  cfg music default 2 only if thbgm.dat can't be opened; game speed writers natives 18/28/29 + resets; saved_sprite
+  writers/readers; colour key/x/y/+8/+3C never read (all entries THTX).
+- fullrun_noclip replayed WITH drawlog: 0 diffs; re/work/runs/q26/fullrun_dl (ending in draw_00067–69; replay ends
+  inside the staff roll, before @z). Ribbon residue differs per session (fullrun 0x991C10/0x66B705). phantasm.jpg unused.
+- CODE BUGs: ScoreList_Insert tie order; ending init 2 white clear presents; +0x2A94/colour init; fade n=0.

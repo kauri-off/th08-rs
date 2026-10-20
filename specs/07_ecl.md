@@ -439,7 +439,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 145 | flagA25 | raw byte | bit 25 | 107 |
 | 146 | time_add | i n | ctx clock += n | 0 |
 | 147 | std_section | i n | stage section request (06_std §4.1) | 41 |
-| 148 | hud148 | i n | HUD 0x423130(n); global 0x164D30C += 1800 (later phase) | 188 |
+| 148 | hud148 | i n | HUD 0x423130(n): remaining-bars count g_Hud+0x20 = n (12 §5.1, §5.4); global 0x164D30C += 1800 | 188 |
 | 149 | anm_interrupt | i n | main VM pending interrupt = n | 0 |
 | 150 | subanm_interrupt | raw vm, raw n | sub VM pending interrupt = n | 0 |
 | 151 | no_stack | raw byte | flag A bit 26 | 0 |
@@ -812,12 +812,15 @@ bullets are frozen (0x164D0B4 bit 10). Each list is walked from its head, i.e. i
    - F bit 3 set — one triangle strip (`Anm_DrawRingStrip`, vertex buffer e+0x3E14): walk i = 0, b, 2b, … while i < n
      and E[i].x ≥ −990, counting 2 vertices per entry (k). If k > 2: texture coordinate A runs from sprite +0x28 + VM +0x30
      down by (sprite +0x28 − sprite +0x20)/((k+1)/2 − 1) per entry (both vertices of an entry share it); per entry, angle θ = E[0].angle for i = 0, else
-     mid(E[i−b].angle, E[i].angle) with mid(a, c) = lo + 0.5·d where lo = min, d = the smaller of |a − c| and
+     mid(E[i−1].angle, E[i].angle) (index i−1, the adjacent history entry, even when b > 1; VERIFIED RE-Q26 disassembly 0x42E64E) with mid(a, c) = lo + 0.5·d where lo = min, d = the smaller of |a − c| and
      lo + 2π − hi (QUIRK: takes the wrap distance from lo, not the true shortest-arc midpoint); half width
      h = scale.y·sprite height (+0x30)/2, shrunk by (1 − i/n) if F bit 1; the two vertices are E[i].pos + (32, 16) +
      (−sin θ·h, cos θ·h) and + (sin θ·h, −cos θ·h), coordinate B = sprite +0x24 + VM +0x34 for the first vertex and sprite +0x2C + VM +0x34 for the second,
-     colour = VM colour with alpha a − a·i/n if F bit 2. With F bit 1, an interior entry (0 < i, i + b < n) whose angle is within 1e−5 of the neighbouring midpoints is
-     skipped (k −= 2) (INFERRED reading of the fabs tests). Drawn if k > 2 after the walk.
+     colour = VM colour with alpha a − a·i/n if F bit 2. With F bit 1, an interior entry (0 < i, i + b < n) is
+     skipped (k −= 2) when |θ_prev − θ| < 1e−5 **and** |θ − m| < 1e−5, where θ_prev = θ of the last entry that was
+     emitted and m = mid(E[i + b − 1].angle, E[b].angle) (QUIRK: E[b] is a fixed index, not E[i + b]) (VERIFIED RE-Q26,
+     0x42E6C0–0x42E72A). Drawn if k > 2 after the walk.
+     **Unreachable with retail data**: op 157 is used 22 times with flags 0 or 5 (bits 0 and 2); F bit 3 never occurs.
    - The main VM itself is then drawn unless F bit 4 (0x10) or flag A bit 5.
    skipped when flag A bit 5 (invisible) or trail flag 0x10;
 3. sub VM 1 (e+0x554): as sub 0 but rotation = −angle.

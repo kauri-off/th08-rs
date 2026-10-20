@@ -16,7 +16,9 @@ the real `thbgm.dat`, and can write each track as a playable RIFF WAV with `--wa
 | 0x0C | u32 | 0 | unused |
 
   If the file exists but the header mismatches, startup fails with an error. If the file is
-  missing, the default music mode falls back to MIDI (INFERRED from config default code).
+  missing and the defaults are applied (no / invalid th08.cfg, 15 §1.2), music mode +0x1F := 2 (MIDI) and a message
+  box (0x437CDD) is shown; with a valid cfg the stored mode is kept even when thbgm.dat is missing (VERIFIED RE-Q26,
+  `Config_Load` 0x4477B1).
 - After the header: raw 16-bit little-endian PCM tracks, back to back, no per-track headers.
 - The engine opens it as `./thbgm.dat` (working directory). A global "base offset" added to every
   seek exists (0x18BDC7C) but is never written, i.e. always 0 (VERIFIED via xrefs: reads only).

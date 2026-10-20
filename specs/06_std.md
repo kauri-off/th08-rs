@@ -264,7 +264,7 @@ the reference. Walls that span `start` come out 10–12 levels too dark.
 ### 10.1 Viewport and projection — VERIFIED (answers implementer Q1)
 
 `Stage_DrawLow` sets the global viewport record to **x = 32, y = 16, w = 384, h = 448** and calls
-`SetViewport` with it (MinZ/MaxZ = 0/1 from the zero-initialised record — INFERRED) — a real D3D viewport, so
+`SetViewport` with it (MinZ/MaxZ = 0/1; VERIFIED RE-Q26 at runtime: every `V` record in the demo and fullrun draw logs has the default 0/1) — a real D3D viewport, so
 the 3D projection is mapped into the playfield rectangle (not just clipped). `Stage_DrawLayer` then sets the
 stage camera (`Stage_SetCamera` 0x40B6D0):
 
@@ -376,8 +376,10 @@ Details (VERIFIED, changelog/answers_impl17.md §5.1, demo 1 draw log):
   bytes keep whatever the vertex slot held** (the four vertex colours live in one stack array that is reused for every
   ribbon of the `Stage_DrawLayer` call). So a fully fogged end keeps the RGB of the previous ribbon's same-end colour
   (A ends share local slots v0/v1, B ends v2/v3). Before any ribbon of the call has written them, the original shows
-  A = (0x910D20 for v0, 0x676E85 for v1) and B = 0 (stack residue, identical in every frame of demo 1 — INFERRED
-  constant). This matters slightly: the RGB of an alpha-0 end is interpolated toward the visible end (alpha test ≥ 4).
+  A = (0x910D20 for v0, 0x676E85 for v1) and B = 0 in demo 1 — stack residue. **Not a constant** (VERIFIED RE-Q26):
+  the fullrun_noclip draw log shows A = (0x991C10, 0x66B705) in its stage 4A, constant within that session. The values
+  are whatever an earlier call left in that stack slot; they only tint alpha-0 ribbon ends, so any value (e.g. the
+  demo-1 pair) is an acceptable approximation. This matters slightly: the RGB of an alpha-0 end is interpolated toward the visible end (alpha test ≥ 4).
 - The colours are computed (and the slots updated) before the direction/depth checks, so a skipped ribbon still
   changes the stale values.
 - Stage 4A (`stg4abg.anm` script 1, sprite 1 = 16 × 512 at (496, 0), tag 2) is the only stage using ribbons in the

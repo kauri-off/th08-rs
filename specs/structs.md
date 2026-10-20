@@ -9,7 +9,7 @@
 | 0x0C | 4 | ptr | sprites | AnmSprite[total] (0x44 each) | VERIFIED |
 | 0x10 | 4 | ptr | scripts | ptr[total scripts] | VERIFIED |
 | 0x14 | 4 | ptr | textures | {tex, ext_data, ext_size}[num_entries] | VERIFIED |
-| 0x18 | 4 | int | load_state | | INFERRED |
+| 0x18 | 4 | int | load_state | 0 = all entries uploaded; n ≥ 1 = entry n−1 is the next to upload (`Anm_PostloadStep` 0x465BA0 uploads one entry per call, sets 0 after the last entry or on failure; `Anm_Load` loops until 0). `AnmVm_SetSprite` fails (−1, VM unchanged) while ≠ 0 | VERIFIED RE-Q26 |
 
 ## AnmSprite runtime (0x44) — from Anm_LoadEntryTexture / FUN_004661b0
 | off | type | meaning | conf |
@@ -22,7 +22,7 @@
 | 0x20..0x2C | f32×4 | normalised u0,v0,u1,v1 | VERIFIED |
 | 0x30 | f32 | sprite height (logical px) | VERIFIED |
 | 0x34 | f32 | sprite width (logical px) | VERIFIED |
-| 0x38,0x3C | f32 | scale factors actual/logical (x,y) | INFERRED |
+| 0x38,0x3C | f32 | actual texture width / ANM header width, actual height / header height (`Anm_LoadEntryTexture`; ≠ 1 only when the THTX is larger than the header, e.g. eff09sk.anm#1). Sprite size +0x34/+0x30 = UV pixel extent / these factors | VERIFIED RE-Q26 |
 
 ## thbgm.fmt record (0x34) — see 02_bgm.md (VERIFIED)
 ## PBGZ entry (runtime 0x10): name*, offset, size, reserved — see 01_archive.md (VERIFIED)

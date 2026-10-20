@@ -29,20 +29,20 @@ of 0 ends the chain. All offsets inside an entry are **relative to that entry's 
 |---|---|---|---|---|---|
 | 0x00 | 4 | u32 | sprite_count | number of sprite offsets that follow the header | VERIFIED |
 | 0x04 | 4 | u32 | script_count | number of script table entries after the sprite offsets | VERIFIED |
-| 0x08 | 4 | u32 | — | always 0 in th08 data; unused by loader | INFERRED |
+| 0x08 | 4 | u32 | — | always 0 in th08 data; never read by the loader | VERIFIED RE-Q26 |
 | 0x0C | 4 | u32 | width | logical texture width; sprite UVs are normalised by this | VERIFIED |
 | 0x10 | 4 | u32 | height | logical texture height | VERIFIED |
 | 0x14 | 4 | u32 | format | texture format index (§3) | VERIFIED |
-| 0x18 | 4 | u32 | color_key | ARGB colour key, only passed to the external-image loader (0 or 0xFF000000 in data) | INFERRED use |
+| 0x18 | 4 | u32 | color_key | ARGB colour key, only passed to the external-image loader `Anm_CreateTextureFromImage`; 0xFF000000 in 3 entries, 0 elsewhere — all of them have a THTX block, so the key is never used with retail data | VERIFIED RE-Q26 |
 | 0x1C | 4 | u32 | name_offset | offset of NUL-terminated image name (e.g. `data/etama/etama.png`); a name starting with `@` means "create a blank texture of width×height×format" (render target for text / screen capture) | VERIFIED |
-| 0x20 | 4 | u32 | x | always 0 in data | INFERRED |
-| 0x24 | 4 | u32 | y | always 0 in data | INFERRED |
+| 0x20 | 4 | u32 | x | always 0 in data; never read | VERIFIED RE-Q26 |
+| 0x24 | 4 | u32 | y | always 0 in data; never read | VERIFIED RE-Q26 |
 | 0x28 | 4 | u32 | version | must be **3**, otherwise load fails | VERIFIED |
 | 0x2C | 4 | u32 | priority | passed to the texture's resource priority (D3D `SetPriority`); values 0/1/10/11 | VERIFIED call, meaning INFERRED |
 | 0x30 | 4 | u32 | thtx_offset | offset of embedded THTX block | VERIFIED |
 | 0x34 | 1(+3) | u8 | has_thtx | non-zero → texture comes from the THTX block; zero → load image named at name_offset from **disk** (unless name starts with `@`) | VERIFIED |
 | 0x38 | 4 | u32 | next_offset | offset to the next entry, 0 = last | VERIFIED |
-| 0x3C | 4 | u32 | — | 0 | INFERRED |
+| 0x3C | 4 | u32 | — | 0 in all 310 entries; never read | VERIFIED RE-Q26 |
 | 0x40 | 4×N | u32[sprite_count] | sprite_offsets | offsets of sprite records | VERIFIED |
 | … | 8×M | {i32 id, u32 offset}[script_count] | script table | the loader **ignores `id`** and uses only `offset`; scripts are addressed by cumulative index (see 2.4) | VERIFIED |
 
@@ -80,8 +80,8 @@ Scripts are byte streams of variable-length instructions:
 | 0x06 | u16 | parameter mask: bit *n* set → argument *n* is a variable reference instead of an immediate |
 | 0x08 | … | arguments, 4 bytes each (int or float) |
 
-Interpreter: `AnmVm_Run` 0x45EA00, opcodes −1…0x58 via a jump table. Examples (VERIFIED encodings,
-semantics INFERRED, to be specified in a later phase):
+Interpreter: `AnmVm_Run` 0x45EA00, opcodes −1…0x58 via a jump table. Examples (VERIFIED encodings;
+full semantics in 05_anm_vm.md):
 opcode 3 `(size 12)` = set sprite (arg = cumulative sprite index; mask bit 0 → arg read from a variable),
 opcode 2 `(size 8)` = stop, opcode 25 `(size 12)` = flag-setting op seen right after set-sprite.
 

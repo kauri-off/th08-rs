@@ -13,8 +13,8 @@ VERIFIED unless marked. Coordinates: playfield space (00 §5) unless "screen".
 36 wave files (loaded from the archive by name, RIFF/WAVE parsed, one DirectSound buffer each, flags
 0x80C8 = static | ctrl pan | ctrl volume | ctrl frequency-less | get-current-pos2 INFERRED), then 46 SE ids,
 each a duplicate of a wave buffer: record = {i32 wave index, i16 volume, i16 priority}. Volume is in 1/100 dB
-(DirectSound attenuation) and is applied once at load; the priority word is copied into the manager when the
-id is queued but nothing reads it (INFERRED unused).
+(DirectSound attenuation) and is applied once at load; the priority word is copied into the manager (+0x408 + id·4) when the
+id is queued but nothing reads it (VERIFIED RE-Q26: only `SoundMgr_Init` (−1), `Sound_Play`, `Sound_PlayAt` write it).
 
 | id | hex | wave | vol | prio | | id | hex | wave | vol | prio |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -58,8 +58,9 @@ is in the exe); the wave files are ordinary PCM RIFF files.
 shot sound sht +0x26 is played only when ≥ 0, 09 §2), so out-of-range ids never reach them (RE-Q25).
 
 ### 1.3 Flush (`Sound_Update`, once per frame after all calc callbacks, also while paused)
-Skipped entirely when config "SE on" (cfg byte 0x17CE890, default 1) is 0 — the queue is then left as is
-(INFERRED: it is not cleared). Otherwise for each queued slot in order: clear the slot; stop the id's buffer,
+Skipped entirely when config "SE on" (cfg byte 0x17CE890, default 1) is 0 — the queue is then left as is, not
+cleared (VERIFIED RE-Q26): new ids are dropped once 12 distinct ids are queued, and the stale queue plays once when SE
+is switched back on. Otherwise for each queued slot in order: clear the slot; stop the id's buffer,
 rewind to 0 (so a still-playing instance restarts), set pan = integer average of its pan list, set volume
 (below), play once (non-looping).
 Volume: v = cfg SE volume (byte 0x17CE898, 0–100, default 80). v = 0 → −10000 (silent). Else
@@ -148,7 +149,7 @@ Effect (0x360):
 Common init: slot zeroed (heap buffer freed), active = 1, type, pos, VM script = table[type].script on slot-6
 file, VM flag 0x2000 (z-write off), VM colour = the colour argument, pos offset = 0, update = table[type].update;
 then table[type].init runs (ECX = effect); init returning ≠ 0 frees the slot immediately. Every spawn also sets
-bit 0x400 of a HUD repaint word (INFERRED: unrelated bookkeeping).
+bit 0x400 of the replay statistics word (0x18B8A28)+0xDA, which nothing reads (08 §8 end; VERIFIED RE-Q26).
 | function | args | slot choice |
 |---|---|---|
 | `Effect_Spawn` 0x425430 | type, pos, count, colour | ring pool: advance cursor (wraps 512 → 0), take the first inactive slot; repeat for count effects (consecutive slots after the cursor); search at most 512 slots |
@@ -197,7 +198,7 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 3 | 31 (40) | spark (additive, scale 3 → 0): v = ((R·256 − 128)·4/33, same for y) (**RNG** x then y), a = −v/20; per frame pos += v, v += a (both × gs at init) | **bomb/last-spell damage area** hits an enemy: every 4th hit (player u8 counter +0xE2A94 & 3 == 0, areas with +0x3D = 0 only), at the enemy box, colour 0xFFFFFFFF — never from bullets (changelog/answers_impl9.md §P1) |
 | 4–11 | 36–43 (30) | spark: v = (R·256 − 128)/12 per axis (**RNG**), a = −v/19; same motion | enemy death (type e+0x3311 + 4, ×4), drops (×3 / ×6), player death (type 6 ×16), bomb orbs |
 | 12 | 44 (40) | — | death burst at the **real** death (fixed slot 3, `Player_DyingUpdate` when the deathbomb window reaches 0); also bomb starts (pool, 3 bomb fns). Colour 0xFF4040FF. Script 44 (= etama entry 1 script 19): sprite 214 (63×63, etama2.png), additive, alpha 255 → 0 over 40 frames, scale 0.5 growing +0.3/frame, `hide_stop` at 40 → the effect manager frees it (runtime: freed on age 40). Nothing else frees it |
-| 13–15 | 45 (∞) | layer 2 (init zeroes axis/angle); update: pos = centre (+0x2E0) + offset rotated about the normalised axis (+0x2EC) by angle (+0x318) (quaternion; INFERRED geometry), z = 0; when +0x352 is set: +0x353 counts up, alpha = 255·(1 − n/16)… freed after 15 frames, scale grows | ECL op 128 (enemy-attached; the enemy writes axis/angle/centre every frame, 07 op 128) |
+| 13–15 | 45 (∞) | layer 2 (init zeroes axis/angle); update: pos = centre (+0x2E0) + offset rotated about the normalised axis (+0x2EC) by angle (+0x318) (VERIFIED RE-Q26, 0x426030 with the D3DX helpers 0x4791BC normalize, 0x4781CD rotation-from-quaternion, 0x4792E8 transform-coord): n = normalize(axis); q = (n·sin a, cos a) with a = angle — **not** a/2, so the rotation is by 2a about n; offset v = normalize(n × (0, 0, 1)) = normalize(n.y, −n.x, 0) scaled by the radius +0x314, rotated by q; pos = centre + v; then z := 0. QUIRK: when |n × z|² < 1e−5 (axis along z) the fallback (1, 0, 0) is written into n, not v, so v stays the tiny unnormalised cross product × radius (effect ≈ at the centre); when +0x352 is set: +0x353 counts up, alpha = 255·(1 − n/16)… freed after 15 frames, scale grows | ECL op 128 (enemy-attached; the enemy writes axis/angle/centre every frame, 07 op 128) |
 | 16 | 0 | — | — |
 | 17, 27 | 32 (60), 34 (120) | converge: centre = pos, dir = unit at random angle (**RNG**); pos = centre + dir·(256 − 256·t/60) | ECL op 139 (charge-up) |
 | 18 | 33 (240) | as 17 with 240 frames, keeps z | — |
@@ -213,7 +214,7 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 35, 39, 49, 52, 59 | 88, 76, 86, 77, 78 | ring (init 0x4272E0, shared by every ring type 35, 39–46, 48–50, 52–55, 59, 64 (VERIFIED, table 0x4C6D30, RE-Q24): allocates the 0x1C38-byte vertex buffer (+0x358; failure → spawn fails), centre +0x2E0 := spawn pos, axis vectors +0x2EC := (0, 0, 1) and +0x2F8 := (0, −1, 0), +0x314/+0x318/+0x320 := the three floats at +0x2B0/+0x2B4/+0x2B8 (in that crossed order: +0x318 ← +0x2B0, +0x314 ← +0x2B4, +0x320 ← +0x2B8), UV setup (`Anm_RingSetUV_Alt`) for 3 segments (6 vertices), rebuild flag +0x356 := 1, custom draw 0x427450, +0x32C/+0x330/+0x334 := 0, then **segments +0x324 := 24** (the default). Overrides: spawners `Spell_Start` (type 39) and `Player_Die` (type 59) and `Bomb_Dissolve` set 64; updates set it every frame for type 41 (48), 42 (64), 43/44 (48), 45 (8), 46 (12), 48 (48), 50 (32), and 40/55/64 copy it from +0x100; types 35, 49, 52, 53, 54 keep 24 unless their spawner writes it; custom draw; update 0x427990: radius := VM scale.x→width, VM pos.x→radius) | 39 spell-card start (slot 1), 52 spell start in special mode, 59 player death ring (slot 11, colour 0xFFF0404F), 49 Reimu LS |
 | 36, 37 | 88, 92 | ring, bomb-owned update/init (Yukari 0x4114E0 / 0x411720 / 0x411A80); the init re-spawns the slot as type 0x23 (script 88, life 140) and the bomb overrides slots 5–7 (0x59–0x5B life 140, 0x5D–0x5F life 220); updates never free, the VM `hide_stop` does (changelog/answers_impl11.md §11) | Yukari boundaries |
 | 40, 55 | 81, 87 | ring, update 0x4279D0 (segments := I0, waves := I1, width := scale.x, radius := pos.x, amplitude := pos.y, angle := rot z, phase := rot y) | Alice bomb (40), Reimu LS (55) |
-| 41 | 82 | ring, update 0x40EB50 (48 segments, width 32, radius 64 / 72 alternating per frame) | no spawn site found (INFERRED unused) |
+| 41 | 82 | ring, update 0x40EB50 (48 segments, width 32, radius 64 / 72 alternating per frame) | never spawned (VERIFIED RE-Q26: every constant spawn argument checked, and every data-driven one: op 139 ids {17, 40, 51, 63}, op 140 {26, 60, 61}, op 174 0x20 + 1, op 138 unused so e+0x3310/0x3311 stay 0 → types 0 and 4, `Spell_Start` 0x27 / 0x34) |
 | 42–46, 48 | 83, 83, 83, 83, 84, 85 | rings with bomb-owned updates (0x40E040–0x40E2D0 Alice, 0x410BB0 Sakuya LS, 0x413070 Youmu); the Alice/Sakuya updates always return 1, so 42–45 are freed by script 83's `hide_stop` at 80 and 46 by script 84's at 23 (changelog/answers_impl11.md §6/§11) | 14 §2 |
 | 50 | 80 | ring with 32 segments, ends after 120 frames | dissolve spell (slot 4) |
 | 51, 63 | 73, 74 | 3D background particles (RNG 8 draws, §2.6a; view-cone cull only); when the boss (0xF54CC0[0]) has flag bit 3 the pos offset tracks the boss position 10%/frame, consumed by the screen-space draw helper (§2.6c); type 51 also tints colour2 by the stage overlay colour | ECL op 139 (stage-specific) |

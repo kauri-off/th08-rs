@@ -688,8 +688,10 @@ The spell manager object is `g_Gui`; `Gui_Calc` (calc prio 12) = `Spell_Calc` 0x
 | 3, 5 | +0x90C, +0xE54 | never given a script (inert; drawn in the boss block but invisible) | — |
 
 `Gui_LoadFaces` also clears the ip (+0x220) and the visible bit (flag bit 0) of VMs 0–7 and sets VM 6/7 font size bytes
-(+0x298/+0x299) to 15 (the copies 8/9 keep 0; the boss renderer then uses 15 for the width, INFERRED effect on
-the height).
+(+0x298/+0x299) to 15 (the copies 8/9 keep 0, because their scripts are started with `AnmFile_SetScript`, which does not touch these
+bytes, unlike `AnmManager_SetScript` 0x40B910, which sets both to 15). No visible effect: `Text_Render` 0x466310
+replaces **any** size ≤ 0 (width and height) with 15 (VERIFIED RE-Q26), and the right-aligned renderer also uses 15
+for a 0 width.
 
 **Player show** `Gui_ShowPlayerSpellName(face, name, isLastSpell)` (from `Bomb_Start`, EDX = face: 0 for
 Reimu/Marisa/Sakuya/Youmu bombs, 1 for Yukari/Alice/Remilia/Yuyuko, −1 for the dissolve spell → VM 0 not
