@@ -296,6 +296,15 @@
   value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
   and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
   Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
+- impl42 (RE-Q28 CODE BUGs 1–2 + port infrastructure, 2026-10-21): tests, `settings::get()`/`test_game_dir()` and every
+  `src/bin/*` tool use defaults + env/CLI only (`Settings::from_environment` / `from_args`); only the game entry
+  points read port.cfg / localStorage (`Settings::game_from_args` in `main.rs`, `Settings::game_environment` in the
+  web `start`); test `tests/port_cfg.rs`. Var 10096 (07 §6): a child is evaluated on its parent (0 unless the parent is
+  a root). `EnemyManager::take` keeps the running enemy's chain links in its placeholder and `put` copies the slot's
+  links back, so walks pass through the running enemy (07 §6). Sync: golden 8297 → 9046, fullrun_noclip 7745 → 9345
+  (`MIN_LEADING`), selftest1 1921, demo MIN_SYNC 4628/3879/4035/6664 unchanged; draw logs: golden 26.94 → 38.17 %,
+  selftest1 95.74 %. Identical with and without a port.cfg holding `invuln = on`. SPEC-GAP 168 → 167.
+  Questions: `docs/briefs/IMPL42_QUESTIONS.md`.
 - impl40 (RE-Q25 CODE BUGs 7–9, 2026-10-20): texture capture `Gfx::capture_rect` (Anm_CaptureToTexture: filtered copy of
   the last presented frame's playfield rect into capture.anm#0 at the capture VM's sprite rect, logged as `K screen`);
   pause and continue menus start a capture VM (capture.anm script 0 at (32, 16), SPEC-GAP), request the capture on open
@@ -374,7 +383,7 @@
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
 Playwright can only upload from the repo dir: game files are hard-linked into `.playwright-mcp/game/`.
-`cargo run --release --bin th08 -- "/home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night"` (or TH08_DIR env, or port.cfg `game_dir`, else a folder dialog); `th08 --help` lists every switch.
+`cargo run --release --bin th08 -- "/home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night"` (or TH08_DIR env, or port.cfg `game_dir`, else a folder dialog; tests and tools never read port.cfg, only TH08_DIR); `th08 --help` lists every switch.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.

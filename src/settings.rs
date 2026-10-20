@@ -902,10 +902,23 @@ impl Settings {
     // help/version output or a parse error (`Error::exit` prints it with the right exit code).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, clap::Error> {
+        Self::from_args_over(Self::from_environment(), args)
+    }
+
+    // The `th08` game binary: as `from_args`, with port.cfg under env and command line.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn game_from_args(args: impl IntoIterator<Item = String>) -> Result<Self, clap::Error> {
+        Self::from_args_over(Self::game_environment(), args)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn from_args_over(
+        mut s: Self,
+        args: impl IntoIterator<Item = String>,
+    ) -> Result<Self, clap::Error> {
         let m = command().try_get_matches_from(
             std::iter::once("th08".to_string()).chain(join_bool_values(args)),
         )?;
-        let mut s = Self::from_environment();
         // The positional folder first, so a `--game-dir` flag beats it.
         if let Some(v) = m.get_one::<String>(POS_DIR) {
             s.apply(Origin::Cli, "game dir", find("game_dir").unwrap(), v);
@@ -948,8 +961,13 @@ impl Settings {
             || self.slot_test.is_some()
     }
 
-    // Defaults < port.cfg < env vars / URL params (no command line: tests, tools, the web build).
+    // Defaults < env vars / URL params: tests and tools never read the user's port.cfg / localStorage.
     pub fn from_environment() -> Self {
+        Self::default().with_env()
+    }
+
+    // The game (native binary, web build): defaults < port.cfg (web: localStorage) < env vars / URL params.
+    pub fn game_environment() -> Self {
         let mut s = Self::default();
         for (k, v) in read_port_cfg() {
             match find(&k) {
@@ -957,12 +975,16 @@ impl Settings {
                 None => log::error!("port.cfg: unknown key {k} ignored"),
             }
         }
+        s.with_env()
+    }
+
+    fn with_env(mut self) -> Self {
         for sw in ENTRIES {
             if let Some(v) = env_value(sw) {
-                s.apply(Origin::Env, sw.env, sw, &v);
+                self.apply(Origin::Env, sw.env, sw, &v);
             }
         }
-        s
+        self
     }
 }
 
@@ -1131,12 +1153,12 @@ pub fn init(s: Settings) {
     }
 }
 
-// The settings, read once (from env / URL / port.cfg if the entry point did not call `init`).
+// The settings, read once (defaults + env / URL, never port.cfg, if the entry point did not call `init`).
 pub fn get() -> &'static Settings {
     SETTINGS.get_or_init(Settings::from_environment)
 }
 
-// Tests and tools: the game directory (TH08_DIR, else port.cfg `game_dir`).
+// Tests and tools: the game directory (TH08_DIR only).
 pub fn test_game_dir() -> Option<PathBuf> {
     get().game_dir.clone()
 }

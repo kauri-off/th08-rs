@@ -836,14 +836,20 @@ impl EnemyManager {
         }
     }
 
-    // The running enemy is swapped out for a placeholder whose alive bit keeps its slot reserved.
+    // The running enemy is swapped out for a placeholder whose alive bit keeps its slot reserved. The placeholder
+    // keeps the chain links (07 §6 var 10096: the original's walks pass through the running enemy).
     pub(crate) fn take(&mut self, idx: usize) -> Box<Enemy> {
         let mut p = self.spare.pop().unwrap_or_default();
         p.flags = A_ALIVE;
+        let e = &self.enemies[idx];
+        (p.chain_prev, p.chain_next, p.root) = (e.chain_prev, e.chain_next, e.root);
         std::mem::replace(&mut self.enemies[idx], p)
     }
 
-    pub(crate) fn put(&mut self, idx: usize, e: Box<Enemy>) {
+    // Links changed in the slot during the run (a neighbour unlinked, the running enemy unlinked) win.
+    pub(crate) fn put(&mut self, idx: usize, mut e: Box<Enemy>) {
+        let p = &self.enemies[idx];
+        (e.chain_prev, e.chain_next, e.root) = (p.chain_prev, p.chain_next, p.root);
         let p = std::mem::replace(&mut self.enemies[idx], e);
         self.spare.push(p);
     }

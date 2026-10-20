@@ -179,8 +179,7 @@ pub(crate) fn var_f(
         10084 => e.boss_slot as f32,
         10085..=10087 => e.displacement[(id - 10085) as usize],
         10088..=10091 => e.thresholds[(id - 10088) as usize] as f32,
-        // SPEC-GAP: counts entries after this one (+8 link); 07 §6 evaluates a child on its parent (IMPL24 Q4).
-        10096 => chain_after(m, e) as f32,
+        10096 => chain_count(m, e) as f32,
         10097 => m.g.player_mode as f32,
         10099 => m.g.spell.is_some() as i32 as f32,
         _ => lit,
@@ -266,10 +265,18 @@ fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
-// Number of enemies reached from `e` by the +8 link (var 10096).
-fn chain_after(m: &EnemyManager, e: &Enemy) -> i32 {
+// Var 10096, Enemy_ChainChildCount 0x41FD40 (07 §6): a root (no parent, +8 set) counts the enemies reached by +8;
+// a child is evaluated on its parent (0 unless the parent is a root); no parent and no +8 → 0. No alive test.
+fn chain_count(m: &EnemyManager, e: &Enemy) -> i32 {
+    let root = match e.root {
+        Some(p) => &*m.enemies[p],
+        None => e,
+    };
+    if root.root.is_some() {
+        return 0;
+    }
     let mut d = 0;
-    let mut p = e.chain_next;
+    let mut p = root.chain_next;
     while let Some(i) = p {
         d += 1;
         if d > MAX_ENEMIES as i32 {
@@ -707,6 +714,7 @@ impl Exec<'_> {
                 }
                 None => {
                     self.e.chain_next = Some(ci);
+                    self.m.enemies[self.idx].chain_next = Some(ci);
                     self.m.enemies[ci].chain_prev = Some(self.idx);
                 }
             }

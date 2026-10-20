@@ -63,7 +63,7 @@ pub fn start(files: js_sys::Array) {
         .collect();
     let source = assets::Source::web(files);
     // `?launcher=0` (or a saved launcher = off) starts the game directly; `?shot=` runs never show it.
-    let s = settings::Settings::from_environment();
+    let s = settings::Settings::game_environment();
     if s.launcher && !s.is_tool_run() {
         app::run_launcher(Some(source), s);
     } else {
