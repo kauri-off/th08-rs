@@ -142,6 +142,19 @@ impl Ctx {
         }
     }
 
+    // Device_ClearPresentTwice 0x45B020 (16 §1.2 step 1): clear colour (`color`) and z 1.0, Present, twice; called from
+    // inside a calc node, so these presents carry no primitives and shift the present numbering by 2.
+    pub fn clear_present_twice(&mut self, color: [u8; 4]) {
+        for _ in 0..2 {
+            self.gfx.set_viewport(crate::gfx::FULLSCREEN);
+            self.gfx.clear_depth(Some(color));
+            if self.drawlog.is_some() {
+                self.log_frame();
+            }
+            self.gfx.present();
+        }
+    }
+
     // WinMain exit 0x441B95 (15 §2.2): once the main loop has left (after the last frame's calc, draw and Present),
     // Result_Register(2) and the chain teardown flush score.dat (2 RNG draws, 11 §1.5).
     pub fn exit_save(&mut self) {

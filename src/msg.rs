@@ -27,29 +27,60 @@ pub fn file_name(stage: usize, shot: u8) -> String {
     format!("{}.dat", FILES[stage % 9][crate::sht::team(shot) as usize])
 }
 
-// Gui_LoadFaces (10 §3): player A, partner, stage face, second stage face.
-// SPEC-GAP: 10 §3 names face_st01 … face_st08m only by range; the per-stage names here are not tabled.
-pub fn face_files(stage: usize, shot: u8) -> [Option<String>; 4] {
-    let team = crate::sht::team(shot) as usize;
-    let a = ["rm", "mr", "sk", "ym"][team];
-    let b = ["yk", "al", "rs", "yy"][team];
-    let (s2, s3) = match stage % 9 {
-        0 => ("st01", None),
-        1 => ("st02", None),
-        2 => ("st03", None),
-        3 => ("st04a", None),
-        4 => ("st04b", None),
-        5 => ("st05", Some("st05b")),
-        6 => ("st06", None),
-        7 => ("st06", Some("st07")),
-        _ => ("st08m", Some("st08")),
+// Gui_LoadFaces (10 §3): player A, partner, stage face, second stage face. `card` is the practised card id in
+// spell practice: player slots stay empty and slot 18 gets the `…sp` cut-in file (Ex: none for other cards).
+pub fn face_files(stage: usize, shot: u8, card: Option<i16>) -> [Option<String>; 4] {
+    let face = |s: &str| Some(format!("face_{s}.anm"));
+    let Some(c) = card else {
+        let team = crate::sht::team(shot) as usize;
+        let (s2, s3) = match stage {
+            0 => ("st01", None),
+            1 => ("st02", None),
+            2 => ("st03", None),
+            3 => ("st04a", None),
+            4 => ("st04b", None),
+            5 => ("st05", Some("st05b")),
+            6 => ("st06", None),
+            7 => ("st06", Some("st07")),
+            8 => ("st08m", Some("st08")),
+            _ => ("st03", None),
+        };
+        return [
+            face(&format!("{}00", ["rm", "mr", "sk", "ym"][team])),
+            face(&format!("{}00", ["yk", "al", "rs", "yy"][team])),
+            face(s2),
+            s3.and_then(face),
+        ];
     };
-    [
-        Some(format!("face_{a}00.anm")),
-        Some(format!("face_{b}00.anm")),
-        Some(format!("face_{s2}.anm")),
-        s3.map(|s| format!("face_{s}.anm")),
-    ]
+    let s2 = match stage {
+        0 => Some("st01sp"),
+        1 => Some("st02sp"),
+        2 => Some("st03sp"),
+        3 => Some(match c {
+            0xD8 => "sksp",
+            0xD9 => "ymsp",
+            0xDA => "alsp",
+            0xDB => "rssp",
+            0xDC => "yysp",
+            0xDD => "yksp",
+            _ => "st04asp",
+        }),
+        4 => Some("st04bsp"),
+        5 => Some(if c == 0xD4 { "st05msp" } else { "st05sp" }),
+        6 => Some("st06sp"),
+        7 => Some(if (0x93..=0x96).contains(&c) {
+            "st06sp"
+        } else {
+            "st07sp"
+        }),
+        8 => match c {
+            0xBF..=0xC1 | 0xD5 => Some("st08msp"),
+            0xC2..=0xCC | 0xD3 => Some("st08sp"),
+            _ => None,
+        },
+        _ => Some("st03"),
+    };
+    [None, None, s2.and_then(face), None]
 }
 
 // File layout (10 §2): u32 count, u32 offset[count] (entries may share an offset), instructions.
@@ -586,6 +617,33 @@ pub fn argb(c: u32) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 10 §3 face tables: normal per stage and team, spell practice by card id.
+    #[test]
+    fn face_file_tables() {
+        let f = |v: [Option<String>; 4]| v.map(|s| s.unwrap_or_default());
+        assert_eq!(
+            f(face_files(7, 9, None)),
+            [
+                "face_sk00.anm",
+                "face_rs00.anm",
+                "face_st06.anm",
+                "face_st07.anm"
+            ]
+        );
+        assert_eq!(f(face_files(3, 1, None))[3], "");
+        assert_eq!(
+            f(face_files(3, 0, Some(0xDB))),
+            ["", "", "face_rssp.anm", ""]
+        );
+        assert_eq!(f(face_files(3, 0, Some(0xD6)))[2], "face_st04asp.anm");
+        assert_eq!(f(face_files(5, 0, Some(0xD4)))[2], "face_st05msp.anm");
+        assert_eq!(f(face_files(7, 0, Some(0x96)))[2], "face_st06sp.anm");
+        assert_eq!(f(face_files(7, 0, Some(0x97)))[2], "face_st07sp.anm");
+        assert_eq!(f(face_files(8, 0, Some(0xD5)))[2], "face_st08msp.anm");
+        assert_eq!(f(face_files(8, 0, Some(0xD3)))[2], "face_st08sp.anm");
+        assert_eq!(face_files(8, 0, Some(0xCD)), [None, None, None, None]);
+    }
 
     // Every msg file parses, every entry walks to op 0 / halt with known opcodes and in-range strings.
     #[test]

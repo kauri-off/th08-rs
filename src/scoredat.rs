@@ -501,8 +501,8 @@ impl ScoreDat {
             .max(100_000)
     }
 
-    // One ranking list [diff][shot] as Result_OnRegister builds it (15 §2.3): the default table, then the stored entries.
-    // SPEC-GAP: ties keep stored order (score.dat is parsed once); 15 §2.3 reverses equal scores at each load.
+    // One ranking list [diff][shot] as it stands in memory (15 §2.3): `hscr` holds the list's stored entries in list
+    // order, each one above the default rows of equal score.
     pub fn ranking(&self, shot: usize, diff: usize) -> Vec<Hscr> {
         let mut list: Vec<Hscr> = (0..10u32)
             .map(|i| Hscr::placeholder(100_000 - 10_000 * i, diff))
@@ -512,11 +512,44 @@ impl ScoreDat {
             .iter()
             .filter(|e| e.shot() == shot && e.difficulty() == diff)
         {
-            let at = list.iter().filter(|h| h.score() >= e.score()).count();
+            let at = list
+                .iter()
+                .take_while(|h| h.score() > e.score() || !h.is_placeholder())
+                .count();
             list.insert(at, e.clone());
         }
         list.truncate(10);
         list
+    }
+
+    // Result_OnRegister 0x45964D list build (15 §2.3): the default table, then the file's HSCR entries in file order,
+    // each with ScoreList_Insert (before every equal score); top 10 kept. Equal scores of one list end up in reverse
+    // file order, so each load/save cycle flips them. Port: `hscr` stands for the file (it is what the last save wrote).
+    pub fn rebuild_lists(&mut self) {
+        let file = std::mem::take(&mut self.hscr);
+        let mut lists: Vec<((usize, usize), Vec<Hscr>)> = Vec::new();
+        for e in file {
+            let key = (e.difficulty(), e.shot());
+            let i = match lists.iter().position(|(k, _)| *k == key) {
+                Some(i) => i,
+                None => {
+                    let d = (0..10u32)
+                        .map(|i| Hscr::placeholder(100_000 - 10_000 * i, key.0))
+                        .collect();
+                    lists.push((key, d));
+                    lists.len() - 1
+                }
+            };
+            let list = &mut lists[i].1;
+            let at = list.iter().filter(|h| h.score() > e.score()).count();
+            list.insert(at, e);
+            list.truncate(10);
+        }
+        lists.sort_by_key(|(k, _)| *k);
+        self.hscr = lists
+            .into_iter()
+            .flat_map(|(_, l)| l.into_iter().filter(|e| !e.is_placeholder()))
+            .collect();
     }
 
     // ScoreList_Insert 0x45A500 (15 §2.3): the new entry goes before every equal score (the walk passes a node only while
@@ -760,6 +793,29 @@ mod tests {
         c.set(90_000, 0, 1, 1, b"TIE", "10/20");
         // Default rows: 100000, 90000, …; with FIRST/SECOND on top the 90000 default is rank 3.
         assert_eq!(s.insert_hscr(c), Some(3));
+    }
+
+    // 15 §2.3 (audit A.67): each Result_OnRegister rebuild re-inserts the stored entries, flipping equal scores.
+    #[test]
+    fn rebuild_flips_ties() {
+        let mut s = ScoreDat::default();
+        let mut a = Hscr::new();
+        a.set(3_000_000, 0, 1, 2, b"A", "10/18");
+        let mut b = Hscr::new();
+        b.set(3_000_000, 0, 1, 3, b"B", "10/19");
+        let mut c = Hscr::new();
+        c.set(5_000_000, 0, 1, 3, b"C", "10/19");
+        let mut d = Hscr::new();
+        d.set(100_000, 2, 0, 1, b"D", "10/20");
+        s.hscr = vec![d.clone(), a.clone(), c.clone(), b.clone()];
+        s.rebuild_lists();
+        assert_eq!(s.hscr, [d.clone(), c.clone(), b.clone(), a.clone()]);
+        assert_eq!(s.ranking(0, 1)[..3], [c.clone(), b.clone(), a.clone()]);
+        s.rebuild_lists();
+        assert_eq!(s.hscr, [d.clone(), c.clone(), a.clone(), b.clone()]);
+        // The 100000 entry sits above the equal default row.
+        let r = s.ranking(2, 0);
+        assert_eq!((&r[0], r[1].is_placeholder()), (&d, true));
     }
 
     // 15 §2.3 (audit A.46): default rows are "DMYS" entries with stage byte 0 and are never saved.

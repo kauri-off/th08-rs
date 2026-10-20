@@ -285,6 +285,10 @@ impl Game {
 
     // ScoreDat_Save (Result removal): 2 RNG draws. `flush` = Result mode 2 (slow mode drops this run's card credit).
     pub fn save_score(&mut self, rng: &mut crate::rng::Rng, flush: bool) {
+        // Result mode 2 registers and is removed at once: its Result_OnRegister list build runs first (15 §2.3).
+        if flush {
+            self.score.rebuild_lists();
+        }
         if flush && self.cfg.slow != 0 {
             self.restore_catk_backup();
         }

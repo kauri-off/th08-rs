@@ -342,6 +342,14 @@
   Supervisor decrement); type 7 is removed while the gameplay frame counter < 2. Ring init 0x4272E0: 24 segments,
   crossed param copy (13 §2.6). List C draws as `DrawBillboard` through `Camera_Set2D` on the playfield (13 §2.4).
   Unit test for the ring init. Traces not run (cloud). SPEC-GAP 148 → 145. Questions: `docs/briefs/IMPL62_QUESTIONS.md`.
+- impl66 (audit A.62, A.63, A.64, A.67, cloud, 2026-10-20): `msg::face_files` follows the 10 §3 tables (stage faces
+  per index; in spell practice no player faces and slot 18 = the `…sp` cut-in chosen by card id, Ex: none outside its
+  card ranges). `Ending_Init` step 1 resets the AnmManager texture caches and runs `Ctx::clear_present_twice` (two
+  white clear+Presents, 16 §1.2); Ending_Ctor start values text colour 0, +0x2A94 = 0, and LoadScript sets only
+  +0x2A90 := 8. `ScoreDat::rebuild_lists` re-inserts the stored HSCR entries with ScoreList_Insert at every
+  Result_OnRegister (modes 0/1 in `on_register`, mode 2 in `save_score(flush)`), so equal scores flip per load/save
+  (15 §2.3); `ranking` keeps the in-memory order and puts entries above equal default rows. Unit tests for all four.
+  Traces not run (cloud). SPEC-GAP 134 → 129. Questions: `docs/briefs/IMPL66_QUESTIONS.md`.
 - impl48 (audit A.50, A.51, A.52, cloud, 2026-10-20): BGM volume uses the square curve `config::bgm_volume_curve`
   (02 §4 `0x472840`; the cube stays for SE); `Audio::fade_bgm` queues command 5 with trunc(secs), started in
   Sound_Update (`start_fade`) and ticked at the top of the Supervisor calc (`tick_fade`): p = n·5000/N − 5000, linear

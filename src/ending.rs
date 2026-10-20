@@ -117,11 +117,11 @@ impl Ending {
             line_min: 0,
             page_timer: 0,
             page_min: 0,
+            // Ending_Ctor (16 §1.2): only +0x2A90 starts at 8; +0x2A94 and the colour are zero-filled (black).
             line_normal: 8,
-            line_fast: 8,
+            line_fast: 0,
             line: 0,
-            // SPEC-GAP: the initial text colour is not in 16 §1; every retail file sets `@c` before its first line.
-            text_rgb: 0xFFFFFF,
+            text_rgb: 0,
             fade_mode: 0,
             fade_t: 0,
             fade_n: 1,
@@ -132,8 +132,11 @@ impl Ending {
 
     // Ending_Init 0x429980 (16 §1.2).
     fn init(&mut self, ctx: &mut Ctx) -> Result<()> {
-        // SPEC-GAP: step 1 "clears some AnmManager state" is not specified; the HUD flag 0x17CE8D0 has no effect
-        // here because the GM (and its HUD) is already unregistered (11 §7, 2 → 9).
+        // Step 1: AnmManager texture / texture-matrix caches reset (the blend and vertex-path cache resets only force the
+        // next state set, the device state the port tracks is unchanged), then two white clear+Presents. The HUD flag
+        // 0x17CE8D0 has no effect here because the GM (and its HUD) is already unregistered (11 §7, 2 → 9).
+        ctx.anm.reset_render_state();
+        ctx.clear_present_twice([0xFF; 4]);
         ctx.anm
             .load(&mut ctx.gfx, &ctx.archive, STAFF_SLOT, "staff01.anm")?;
         self.update_clear_records(&mut ctx.game);
@@ -187,16 +190,19 @@ impl Ending {
         g.score.plst.music[19] = 1;
     }
 
-    // Ending_LoadScript 0x4295E0: script := file, ip := start, per-line wait 8, timers +0x2A70 / +0x2A64 reset.
-    // SPEC-GAP: "per-line wait = 8" does not say which of +0x2A90 / +0x2A94; both are set.
+    // Ending_LoadScript 0x4295E0: script := file, ip := start, per-line wait normal +0x2A90 := 8 (+0x2A94 keeps the
+    // last `@s` value), timers +0x2A70 / +0x2A64 reset (16 §1.2 step 6).
     fn load_script(&mut self, ctx: &mut Ctx, name: &str) -> Result<()> {
-        self.script = ctx.archive.read(base_name(name))?;
+        self.set_script(ctx.archive.read(base_name(name))?);
+        Ok(())
+    }
+
+    fn set_script(&mut self, data: Vec<u8>) {
+        self.script = data;
         self.ip = 0;
         self.line_normal = 8;
-        self.line_fast = 8;
         self.line_timer = 0;
         self.frame = 0;
-        Ok(())
     }
 
     fn byte(&self, p: usize) -> u8 {
@@ -609,6 +615,16 @@ mod tests {
         e.script = b"@Fdata/staff00b.end\x00\n".to_vec();
         e.ip = 2;
         assert_eq!(base_name(&e.str_arg()), "staff00b.end");
+    }
+
+    // 16 §1.2: Ending_Ctor zero-fills colour and +0x2A94; LoadScript resets only +0x2A90.
+    #[test]
+    fn start_values() {
+        let mut e = Ending::new();
+        assert_eq!((e.text_rgb, e.line_normal, e.line_fast), (0, 8, 0));
+        (e.line_normal, e.line_fast) = (20, 3);
+        e.set_script(b"@z\n".to_vec());
+        assert_eq!((e.line_normal, e.line_fast), (8, 3));
     }
 
     #[test]

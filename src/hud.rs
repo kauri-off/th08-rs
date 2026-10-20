@@ -162,7 +162,8 @@ impl Hud {
         ) {
             log::debug!("loading anm: {e:#}");
         }
-        for (k, f) in msg::face_files(stage, shot).into_iter().enumerate() {
+        let card = g.spell_practice().then_some(g.card);
+        for (k, f) in msg::face_files(stage, shot, card).into_iter().enumerate() {
             ctx.anm.unload(gfx, msg::FACE_SLOTS[k]);
             if let Some(f) = f {
                 ctx.anm.load(gfx, ar, msg::FACE_SLOTS[k], &f)?;
