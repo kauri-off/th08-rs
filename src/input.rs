@@ -70,15 +70,20 @@ impl Input {
     pub fn tick(&mut self) {
         self.prev = self.held;
         self.held = self.raw;
-        // Key repeat (12 intro): after 30 frames of unchanged input, true on every 8th frame.
-        // SPEC-GAP: 15 §3.3 tests the counter before incrementing it (first repeat on the 33rd equal frame); this
-        // increments first, so it fires one frame earlier (32nd).
-        self.same_frames = if self.held == self.prev {
-            self.same_frames + 1
+        // Key repeat (11 §7, same rule as 15 §3.3): the counter is tested before it is incremented, and reset to 30
+        // after 37, so the flag is set on the 33rd, 41st, … unchanged frame.
+        self.repeat = false;
+        if self.held == self.prev {
+            if self.same_frames > 29 {
+                self.repeat = self.same_frames % 8 == 0;
+                if self.same_frames > 37 {
+                    self.same_frames = 30;
+                }
+            }
+            self.same_frames += 1;
         } else {
-            0
-        };
-        self.repeat = self.same_frames >= 30 && self.same_frames % 8 == 0;
+            self.same_frames = 0;
+        }
     }
 
     // The view gameplay objects read (player, dialogue, HUD): g_Input as both raw and held.
@@ -143,5 +148,23 @@ mod tests {
             vec![0x11, 0x11, 1, 4, 4, 4]
         );
         assert!(super::parse_script("x").is_none());
+    }
+
+    // 11 §7: holding a key, the repeat flag first fires on the 33rd unchanged frame, then on the 41st.
+    #[test]
+    fn key_repeat() {
+        let mut i = super::Input {
+            raw: 1,
+            ..Default::default()
+        };
+        i.tick();
+        assert!(!i.repeat);
+        let fired: Vec<u32> = (1..=50)
+            .filter(|_| {
+                i.tick();
+                i.repeat
+            })
+            .collect();
+        assert_eq!(fired, [33, 41, 49]);
     }
 }

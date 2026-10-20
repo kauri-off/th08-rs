@@ -58,7 +58,8 @@ fn crypt(src: &[u8], k: &CipherKey, enc: bool) -> Vec<u8> {
     let mut out = src.to_vec();
     let rem = len % k.block;
     let tail = if rem < k.block / 4 { rem } else { 0 } + (len & 1);
-    let mut left = len - tail;
+    // n is signed in the original: a tail longer than the data (short odd input) deciphers nothing.
+    let mut left = len.saturating_sub(tail);
     let mut budget = k.limit as isize;
     let mut key = k.key;
     let mut pos = 0;
@@ -256,15 +257,19 @@ fn u32le(b: &[u8], o: usize) -> u32 {
 
 impl Archive {
     pub fn from_bytes(data: Vec<u8>) -> Result<Self> {
-        if &data[0..4] != b"PBGZ" {
+        if data.len() < 16 || &data[0..4] != b"PBGZ" {
             bail!("not a PBGZ archive");
         }
         let hdr = decrypt(&data[4..16], &HEADER_KEY);
         // 01 §4: entry count, table offset and table size are stored biased by 123456 / 345678 / 567891.
-        // SPEC-GAP: the engine's count > 0 / table offset < file size checks are not made.
-        let count = u32le(&hdr, 0).wrapping_sub(123456) as usize;
+        // The open fails unless count > 0 and table offset < file size (signed count).
+        let count = u32le(&hdr, 0).wrapping_sub(123456) as i32;
         let table_off = u32le(&hdr, 4).wrapping_sub(345678) as usize;
         let table_size = u32le(&hdr, 8).wrapping_sub(567891) as usize;
+        if count <= 0 || table_off >= data.len() {
+            bail!("bad PBGZ header (count {count}, table offset {table_off:#x})");
+        }
+        let count = count as usize;
         let table = lzss_decompress(&decrypt(&data[table_off..], &TABLE_KEY), table_size);
         let mut raw = Vec::with_capacity(count);
         let mut p = 0;
@@ -311,13 +316,14 @@ impl Archive {
             .get(&name.to_ascii_lowercase())
             .with_context(|| format!("{name} not in archive"))?;
         let file = lzss_decompress(&self.data[e.offset..e.end], e.size);
-        // SPEC-GAP: 01 §6 step 4 uses data without a known edz wrapper as-is; the port rejects it (all 317 files have one).
-        if file.len() < 4 || &file[0..3] != b"edz" {
-            bail!("{name}: missing edz wrapper");
+        // 01 §6 step 4: without `edz` + a known type char the data is used as-is.
+        match file.get(..4) {
+            Some([b'e', b'd', b'z', t]) => match payload_key(*t) {
+                Some(k) => Ok(decrypt(&file[4..], &k)),
+                None => Ok(file),
+            },
+            _ => Ok(file),
         }
-        let k = payload_key(file[3])
-            .with_context(|| format!("{name}: unknown edz type {}", file[3]))?;
-        Ok(decrypt(&file[4..], &k))
     }
 }
 
@@ -335,6 +341,71 @@ mod tests {
         let e = super::block_encrypt(&data, 0x59, 0x79, 0x100, 0xC00);
         assert_ne!(e, data);
         assert_eq!(super::block_decrypt(&e, 0x59, 0x79, 0x100, 0xC00), data);
+    }
+
+    // Synthetic PBGZ (01 §4–§6): header dwords as stored (biased), the given entries, table after the data.
+    fn build(count: u32, table_off_delta: i64, files: &[(&str, &[u8])]) -> Vec<u8> {
+        use super::{HEADER_KEY as H, TABLE_KEY as T, block_encrypt, lzss_compress};
+        let mut out = b"PBGZ".to_vec();
+        out.resize(16, 0);
+        let mut table = Vec::new();
+        for (name, raw) in files {
+            table.extend_from_slice(name.as_bytes());
+            table.push(0);
+            table.extend_from_slice(&(out.len() as u32).to_le_bytes());
+            table.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+            table.extend_from_slice(&0u32.to_le_bytes());
+            out.extend_from_slice(&lzss_compress(raw));
+        }
+        let table_off = (out.len() as i64 + table_off_delta) as u32;
+        let table_size = table.len() as u32;
+        out.extend_from_slice(&block_encrypt(
+            &lzss_compress(&table),
+            T.key,
+            T.step,
+            T.block,
+            T.limit,
+        ));
+        let hdr: Vec<u8> = [
+            count.wrapping_add(123456),
+            table_off.wrapping_add(345678),
+            table_size.wrapping_add(567891),
+        ]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+        out[4..16].copy_from_slice(&block_encrypt(&hdr, H.key, H.step, H.block, H.limit));
+        out
+    }
+
+    #[test]
+    fn header_checks() {
+        let f: &[(&str, &[u8])] = &[("a.txt", b"hello")];
+        assert!(super::Archive::from_bytes(build(1, 0, f)).is_ok());
+        assert!(super::Archive::from_bytes(build(0, 0, f)).is_err());
+        assert!(super::Archive::from_bytes(build(-1i32 as u32, 0, f)).is_err());
+        assert!(super::Archive::from_bytes(build(1, 0x10000, f)).is_err());
+    }
+
+    #[test]
+    fn edz_wrapper_optional() {
+        let key = super::payload_key(b'T').unwrap();
+        let body = b"some text payload, long enough to span a cipher block or two......".repeat(4);
+        let mut wrapped = b"edzT".to_vec();
+        wrapped.extend(super::block_encrypt(
+            &body, key.key, key.step, key.block, key.limit,
+        ));
+        let f: &[(&str, &[u8])] = &[
+            ("w.txt", &wrapped),
+            ("plain.bin", b"no wrapper here"),
+            ("odd.bin", b"edzQrest"),
+            ("x", b"ed"),
+        ];
+        let a = super::Archive::from_bytes(build(f.len() as u32, 0, f)).unwrap();
+        assert_eq!(a.read("W.TXT").unwrap(), body);
+        assert_eq!(a.read("plain.bin").unwrap(), b"no wrapper here");
+        assert_eq!(a.read("odd.bin").unwrap(), b"edzQrest");
+        assert_eq!(a.read("x").unwrap(), b"ed");
     }
 }
 

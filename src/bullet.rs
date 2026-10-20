@@ -1138,8 +1138,8 @@ impl BulletManager {
             if l.state < 2 {
                 l.state = 2;
                 l.timer = Timer::default();
-                // SPEC-GAP: 08 §7 says width := current width; this sets current := width (IMPL24 Q1).
-                l.cur_width = l.width;
+                // 08 §7: width := current width, so the fade (state 2) shrinks from the current size.
+                l.width = l.cur_width;
                 if items {
                     let (o, a, tail, head) = (l.origin, l.angle, l.tail, l.head);
                     let (s, c) = a.sin_cos();

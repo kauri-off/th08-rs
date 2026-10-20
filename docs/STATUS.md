@@ -324,6 +324,13 @@
   Draw2DRot after the title VMs and the stage-start clock (12 §5.7). Sync: golden 8297, fullrun_noclip 7745,
   selftest1 1921, demo MIN_SYNC 4628/3879/4035/6664 unchanged; draw logs: selftest1 95.49 → 95.74 %, golden 26.94 %,
   demo / menu draw logs unchanged. SPEC-GAP 169 → 168. Questions: `docs/briefs/IMPL40_QUESTIONS.md`.
+- impl49 (audit A.20, A.55, A.65, cloud, 2026-10-20): laser cancels set width := current width so the fade shrinks
+  from the current size (`cancel_lasers`, 08 §7); key repeat tests the unchanged-input counter before incrementing it,
+  first repeat on the 33rd equal frame (`Input::tick`, 11 §7); `Archive::from_bytes` rejects count ≤ 0 or table offset
+  ≥ file size (01 §4) and `Archive::read` returns data without `edz` + known type char as-is (01 §6 step 4); the block
+  cipher deciphers nothing when the tail exceeds a short odd input (01 §2, signed n) instead of panicking. Unit tests
+  for repeat frames and synthetic archives. Traces not run (cloud). SPEC-GAP 148 → 144. Questions:
+  `docs/briefs/IMPL49_QUESTIONS.md`.
 - impl47 (audit A.45, A.60, A.61, cloud, 2026-10-20): `ScoreDat::insert_hscr` puts a new entry before equal scores
   (15 §2.3); name-entry Up, Down, Left, Right are four independent tests per frame in that order (`move_char_cursor`,
   16 §2.2); the HSCR / replay date is local time (`chrono::Local` native, JS `Date` on wasm; 16 §2.2). Unit tests for
