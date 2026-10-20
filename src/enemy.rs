@@ -545,8 +545,9 @@ pub struct Spell {
     pub bonus: i32,
     pub max: i32,
     pub decay: i32,
-    // g_Gui +4: the boss that started the card (enemy slot).
+    // g_Gui +4: the boss that started the card (enemy slot); g_Gui +0xC: its slot index e+0x2E0C (07 §11.1 step 1.1).
     pub boss: usize,
+    pub slot: i32,
     pub frames: i32,
     pub duration: i32,
     // Port: death / bomb counters at card start.
@@ -1477,6 +1478,8 @@ impl EnemyManager {
         use crate::player::{GF_LAST_CAPTURED, GF_LAST_SPELL};
         if !s.capture || p.deaths != s.deaths0 || p.bombs_started != s.bombs0 {
             p.gflags &= !(GF_LAST_SPELL | GF_LAST_CAPTURED);
+            // Not captured: the start ring is freed, +0xF4 := 0 (07 §11.1).
+            crate::effect::free(crate::effect::FIX_SPELL_INDEX);
             p.stats
                 .popups
                 .push(crate::player::Popup::Message(5 + s.last as u8, 0));
@@ -1502,14 +1505,23 @@ impl EnemyManager {
             (remaining - 180) * 900 / (thr - 180).max(1) + 100
         };
         crate::sound::play(crate::sound::CARDGET);
-        crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| {
-            e.vm.color[crate::anmvm::A] = 0x20
-        });
         p.stats.spells += 1;
         // Spell capture checksum (11 §1.5, 4 draws).
         crate::player::Stats::checksum(&mut anm.rng);
-        // The start ring becomes the capture ring (+0xF4 → +0xF8), age timer +0x338 := 0 (07 §11.1).
-        crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| e.age.set(0));
+        // Capture ring restyle (07 §11.1): radius → 256 over 30 (mode 6), colour slot → 0x20D080A0 over 60 (mode 3),
+        // waves 6, age timer +0x338 := 0; the start ring becomes the capture ring (+0xF4 → +0xF8).
+        crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| {
+            let p = [e.ring.radius, e.ring.amp, 0.0];
+            e.vm.interp_pos_from(30, 6, p, [256.0, 0.0, 0.0]);
+            e.vm.pos = p;
+            let c = u32::from_le_bytes(e.vm.color);
+            e.vm.interp_color_from(60, 3, c, 0x20D0_80A0);
+            // SPEC-GAP: whether colour slot 1 also moves alpha (colour_end alpha 0x20) is not in 05 §6; RGB only.
+            e.vm.color_start[crate::anmvm::A] = e.vm.color[crate::anmvm::A];
+            e.vm.color_end[crate::anmvm::A] = 0x20;
+            e.ring.waves = 6.0;
+            e.age.set(0);
+        });
         self.g.payout = Some(Payout {
             bonus: s.bonus,
             time,
@@ -1550,25 +1562,67 @@ impl EnemyManager {
         }
     }
 
-    // Card-active part of Spell_Calc 0x416B90 (07 §11.1 steps 1.3 and 1.6); the caller skips it while bit 10 / the
-    // freeze byte is set. SPEC-GAP: steps 1.1 (silent end), 1.2, 1.4, 1.5, 1.7 and the failed-ring look are not done.
-    pub fn spell_step(&mut self, gs: f32) {
-        let Some(s) = &mut self.g.spell else { return };
+    // Card-active part of Spell_Calc 0x416B90 (07 §11.1 steps 1.1 and 1.3–1.7); the caller skips it while bit 10 /
+    // the freeze byte is set and does step 1.2 (bonus-line tint). Returns true when step 1.1 ended the card.
+    pub fn spell_step(&mut self, anm: &AnmManager) -> bool {
+        let Some(mut s) = self.g.spell.take() else {
+            return false;
+        };
         let boss = &self.enemies[s.boss];
-        if s.capture && !self.g.bonus_frozen && boss.flags & A_FIXED_BONUS == 0 {
-            let d = ((s.decay as u32 / 60) as f32 * gs) as u32;
+        // Step 1.1: the card ends silently (no Spell_End, no capture); steps 1.2–1.7 still run with bit 0 clear.
+        let active = boss.alive() && boss.slot == s.slot;
+        if !active {
+            crate::gui::request(crate::gui::Req::BossHide);
+        }
+        let ring = crate::effect::FIX_SPELL_INDEX;
+        if !s.capture {
+            // Failed-ring look: sprite 0xDD → 0xDE, scale_end.x and scale.x := 4.
+            crate::effect::get(ring, |e| {
+                if e.vm.sprite_index == 0xDD {
+                    e.vm.set_sprite(anm, 0xDE);
+                    e.vm.scale_end[0] = 4.0;
+                    e.vm.scale[0] = 4.0;
+                }
+            });
+        } else if !self.g.bonus_frozen && boss.flags & A_FIXED_BONUS == 0 {
+            let d = ((s.decay as u32 / 60) as f32 * anm.speed) as u32;
             let b = (s.bonus as u32).wrapping_sub(d);
             s.bonus = (b - b % 10) as i32;
         }
-        if !self.g.spell_flag6 {
-            let target: [f32; 3] = std::array::from_fn(|k| boss.pos[k] + boss.pos_offset[k]);
-            crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| {
+        let duration = s.duration;
+        let follow = (!self.g.spell_flag6)
+            .then(|| -> [f32; 3] { std::array::from_fn(|k| boss.pos[k] + boss.pos_offset[k]) });
+        let d = if active && s.last {
+            -0.031415928
+        } else {
+            0.015707964
+        };
+        crate::effect::get(ring, |e| {
+            // Step 1.4: wavy start ring, amplitude +0x32C := VM pos.y until it reaches 0, then plain (+0x334 := 0).
+            if e.ring.waves != 0.0 {
+                e.ring.amp = e.vm.pos[1];
+                if e.ring.amp == 0.0 {
+                    e.ring.waves = 0.0;
+                }
+            }
+            // Step 1.5: after the 100-frame grow-in, shrink 256 → 8 (linear) over the rest of the card time.
+            if e.vm.interp_duration[0].cur == 0 {
+                e.vm.interp_pos_from(duration - 100, 0, [256.0, 0.0, 0.0], [8.0, 0.0, 0.0]);
+            }
+            // Step 1.6: the ring follows the boss unless spell bit 6.
+            if let Some(target) = follow {
                 for k in 0..2 {
                     e.centre[k] += (target[k] - e.centre[k]) / 16.0;
                 }
                 e.centre[2] = 0.0;
-            });
+            }
+            // Step 1.7: −π/100 per frame for a last spell (bit 0 and bit 5), else +π/200.
+            e.ring.start = anmvm::wrap_add(e.ring.start, d);
+        });
+        if active {
+            self.g.spell = Some(s);
         }
+        !active
     }
 
     // Capture-ring part of Spell_Calc 0x416B90 (07 §11.1); the caller skips it while bit 10 / the freeze byte is set.
@@ -1577,8 +1631,27 @@ impl EnemyManager {
             return;
         }
         let ring = crate::effect::FIX_SPELL_INDEX;
-        let (t, centre) = crate::effect::peek(ring, |e| (e.age.cur, e.centre));
-        // SPEC-GAP: the t == 30 / 60 ring restyle steps (VM timers/targets, no gameplay effect) are not done.
+        let t = crate::effect::peek(ring, |e| e.age.cur);
+        // Only one of t == 30 / 60 / 130 runs per frame; at 130 the ring is freed and the rest is skipped.
+        match t {
+            30 => crate::effect::get(ring, |e| {
+                let p = [e.ring.radius, e.ring.amp, 0.0];
+                e.vm.interp_pos_from(100, 4, p, [0.0, 60.0, 0.0]);
+                e.vm.pos = p;
+                let (s, end) = (e.vm.scale_start, e.vm.scale_end);
+                e.vm.interp_scale_from(20, 1, [e.ring.width, s[1]], [64.0, end[1]]);
+            }),
+            60 => crate::effect::get(ring, |e| {
+                let (s, end) = (e.vm.scale_start, e.vm.scale_end);
+                e.vm.interp_scale_from(70, 1, [e.ring.width, s[1]], [0.0, end[1]]);
+            }),
+            130 => {
+                self.pay_capture(anm, true);
+                return;
+            }
+            _ => {}
+        }
+        let centre = crate::effect::peek(ring, |e| e.centre);
         let pp = self.player.borrow().pos;
         let div = if t > 80 { 4.0 } else { 16.0 };
         let centre = [
@@ -1588,13 +1661,17 @@ impl EnemyManager {
         ];
         crate::effect::get(ring, |e| {
             e.centre = centre;
-            e.ring.start += if t > 80 { -0.0524 } else { -0.0157 };
+            let d = if t > 80 { -0.05235988 } else { -0.015707964 };
+            e.ring.start = anmvm::wrap_add(e.ring.start, d);
+            // +0x32C := VM pos.y every frame (no +0x334 test here).
+            e.ring.amp = e.vm.pos[1];
         });
         let left = self.g.payout.map_or(0, |c| c.time);
         if t > 8 && left > 0 {
-            // SPEC-GAP: f32 evaluation order of (t − 10)·2π/40 is not given; left to right.
+            // t = Timer_GetF; f32 per operation, left to right (07 §11.1, main-thread CW 0x007F).
             use std::f32::consts::PI;
-            let a = anmvm::wrap_add((t as f32 - 10.0) * (2.0 * PI) / 40.0 - PI / 2.0, 0.0);
+            let tf = crate::effect::peek(ring, |e| e.age.getf());
+            let a = anmvm::wrap_add((tf - 10.0) * (2.0 * PI) / 40.0 - PI / 2.0, 0.0);
             let mut left = left;
             for (ang, n) in [(a, None), (anmvm::wrap_add(a + PI, 0.0), Some(6))] {
                 let k = left.min(7);
@@ -1613,9 +1690,6 @@ impl EnemyManager {
             if let Some(c) = &mut self.g.payout {
                 c.time = left.max(0);
             }
-        }
-        if t == 130 {
-            self.pay_capture(anm, true);
         }
     }
 

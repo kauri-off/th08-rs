@@ -1175,6 +1175,8 @@ impl Exec<'_> {
             max,
             decay: ((bonus - bonus / 7) / secs) as i32,
             boss: self.idx,
+            // SPEC-GAP: 07 §11.1 does not say where g_Gui +0xC is written; the boss slot index at Spell_Start.
+            slot: self.e.slot,
             name: dec(0x14, 48, 0xAA),
             owner: dec(0x44, 48, 0xBB),
             comment: [dec(0x74, 64, 0xDD), dec(0xB4, 64, 0xEE)],

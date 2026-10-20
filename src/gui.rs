@@ -76,6 +76,8 @@ pub struct Gui {
     capturable: bool,
     // Captures / attempts of the card for this shot type (CATK story +0x158 / +0x124, practice +0x1F4 / +0x1C0).
     history: (u32, u32),
+    // +0x2620 bonus-line tint, 0x80808080 at Spell_Start; alpha +0x2623 fades 0x80 ↔ 0x20 (12 §5.8, 07 §11.1 step 1.2).
+    tint: u32,
 }
 
 impl Gui {
@@ -97,6 +99,7 @@ impl Gui {
             bonus: 0,
             capturable: false,
             history: (0, 0),
+            tint: 0x8080_8080,
         }));
         let t: task::TaskRef<Ctx> = g.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -221,7 +224,9 @@ impl Gui {
                     v[13].pending_interrupt = 2;
                 }
             }
-            Req::Attempt { .. } | Req::Captured { .. } => {}
+            // Spell_Start resets the bonus-line tint (07 §11.1).
+            Req::Attempt { .. } => self.tint = 0x8080_8080,
+            Req::Captured { .. } => {}
         }
     }
 
@@ -340,9 +345,28 @@ impl Task<Ctx> for Gui {
         if !frozen {
             // Steps 1 (card active) and 2 (capture ring) run before the VMs (07 §11.1).
             let mut e = self.enemies.borrow_mut();
-            e.spell_step(ctx.anm.speed);
+            if e.g.spell.is_some() {
+                // Step 1.2: fade the bonus line while the player is in the top band x ≥ 64, y < 64.
+                let p = self.player.borrow().pos;
+                let a = self.tint >> 24;
+                let a = if p[0] < 64.0 || p[1] >= 64.0 {
+                    if a < 0x80 { a + 4 } else { a }
+                } else if a > 0x20 {
+                    a - 4
+                } else {
+                    a
+                };
+                self.tint = self.tint & 0x00FF_FFFF | a << 24;
+            }
+            let ended = e.spell_step(&ctx.anm);
             e.capture_ring_step(&mut ctx.anm);
             drop(e);
+            if ended {
+                // Spell_HideName from step 1.1 lands before this frame's VM run.
+                for r in QUEUE.with_borrow_mut(std::mem::take) {
+                    self.handle(&mut ctx.anm, r);
+                }
+            }
             for k in CALC_ORDER {
                 let vm = &mut self.vms[k];
                 if vm.script.is_some() && vm.run(&mut ctx.anm) {
@@ -387,8 +411,8 @@ impl Task<Ctx> for Gui {
             Self::rot(anm, gfx, &mut v[6]);
         }
         if Self::shown(&v[7]) {
-            // Neutral tint +0x2620 = 0x80808080 from Spell_Start (12 §5.8 step 4).
-            (anm.tint, anm.tint_on) = (0x8080_8080, true);
+            // Tint +0x2620 (12 §5.8 step 4).
+            (anm.tint, anm.tint_on) = (self.tint, true);
             v[11].pos = v[7].pos;
             Self::snap(anm, gfx, &mut v[11]);
             for k in [7, 8, 9] {

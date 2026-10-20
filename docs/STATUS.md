@@ -296,6 +296,19 @@
   value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
   and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
   Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
+- impl38 (RE-Q27 CODE BUGs 8–9, 2026-10-20): `Spell_Calc` card-active steps 1.1–1.7 (07 §11.1) in
+  `EnemyManager::spell_step` + `Gui::calc`: the card ends silently (bit 0 off, `Spell_HideName`, no Spell_End) when the
+  boss is dead or its slot index differs from the one stored at Spell_Start; bonus-line tint +0x2620 (reset at
+  Spell_Start) alpha fades 0x80 ↔ 0x20 by 4 per frame with the player in the top band x ≥ 64, y < 64 (12 §5.8);
+  failed-ring look (sprite 0xDD → 0xDE, scale.x / scale_end.x := 4) once capture is lost; wavy start ring (+0x32C :=
+  VM pos.y while waves ≠ 0, then plain); shrink 256 → 8 over duration − 100 once the grow-in slot ends; rotation via
+  `Angle_AddNormalize` (+π/200, −π/100 for a last spell). Spell_Start ring init per 07 §11.1 (pos slot (8, 64) →
+  (256, 0), radius 256, width 15, waves 6, rotation 0). Spell_End: capture restyle (pos slot → (256, 0) over 30 mode
+  6, colour slot → 0x20D080A0 over 60 mode 3, waves 6); not captured → ring freed. Capture ring: t 30 / 60 restyle
+  slot writes, t 130 payout first and nothing else that frame, exact rotation constants via `Angle_AddNormalize`,
+  +0x32C := VM pos.y, orb angle from `Timer_GetF`. Sync: golden 8297, fullrun_noclip 7745, selftest1 1921, demo
+  MIN_SYNC 4628/3879/4035/6664 unchanged; golden draw log same quads 2088144 → 2165520 (25.84 → 26.80 %); selftest1
+  95.49 %, demo / menu draw logs unchanged. SPEC-GAP 175 → 174. Questions: `docs/briefs/IMPL38_QUESTIONS.md`.
 - impl37 (RE-Q27 CODE BUGs 7, 10 + selftest1 1540, 2026-10-20): gameplay frame counter 0x164D2C8 := 0 in
   `GameManager::register` and `on_remove`, so the menus after a pause-quit read 0 (11 §2); `Ascii_Calc` does not run
   during the boot calc passes (scene 0), so +0x8284 equals the main-menu frame number (12 §5.10); death mode 0 keeps

@@ -1147,8 +1147,8 @@ pub fn spawn_fixed(anm: &mut AnmManager, kind: u8, pos: [f32; 3], k: usize, colo
     with(|e| e.spawn_fixed(anm, kind, pos, [0.0; 3], k, colour))
 }
 
-// Spell-card start ring (13 §2.7): plain ring, 64 segments, radius 8 → 256 over 100 frames (ease 6); the
-// waves = 6 and pos.y values are unused by update 0x427990.
+// Spell-card start ring at Spell_Start (07 §11.1, 13 §2.7): fixed slot 1, VM pos (8, 64) → (256, 0) over 100
+// frames (ease 6); Spell_Calc turns pos.y into the wave amplitude while waves ≠ 0.
 pub fn spell_ring(anm: &mut AnmManager, pos: [f32; 3], special: bool) {
     let i = spawn_fixed(
         anm,
@@ -1158,10 +1158,17 @@ pub fn spell_ring(anm: &mut AnmManager, pos: [f32; 3], special: bool) {
         0xFFFFFFFF,
     );
     get(i, |e| {
-        e.ring.segments = 64;
-        e.ring.waves = 6.0;
+        e.vm.interp_pos_from(100, 6, [8.0, 64.0, 0.0], [256.0, 0.0, 0.0]);
         e.vm.pos = [8.0, 64.0, 0.0];
-        e.vm.interp_pos(100, 6, [256.0, 0.0, 0.0]);
+        e.pos = pos;
+        e.ring = Ring {
+            segments: 64,
+            start: 0.0,
+            radius: 256.0,
+            width: 15.0,
+            waves: 6.0,
+            ..e.ring
+        };
     });
 }
 
