@@ -347,8 +347,8 @@ fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
         ));
     }
     let r = g.rpy.as_mut().unwrap();
-    // SPEC-GAP: 15 §3.2 sets only the previous stage's +0; this overwrites every earlier record with the current score.
-    for s in r.stages.iter_mut().flatten() {
+    // Only the record of the highest stage below this one gets +0 := score (scan 0 .. stage − 1, last non-null).
+    if let Some(s) = r.stages[..stage].iter_mut().flatten().last() {
         s.score = st.score10 as u32;
     }
     r.stages[stage] = Some(StageRecord {
@@ -412,8 +412,8 @@ pub fn start_playback(
     g.flags = g.flags & (7 << 15) | F_REPLAY;
     let id = r.spell_id();
     if id >= 0 {
-        // SPEC-GAP: 15 §3.8 sets only bit 14; bit 0 is added as the menu's spell-practice start does (16 §6.1).
-        g.flags |= F_SPELL_PRACTICE | F_PRACTICE;
+        // Only bit 14: bit 0 stays clear in a spell-practice replay (15 §3.8).
+        g.flags |= F_SPELL_PRACTICE;
         g.card = id;
     }
     if let Some(n) = demo {
@@ -661,6 +661,69 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 15 §3.2 (audit A.48): a stage start sets +0 := score only on the highest recorded stage below it.
+    #[test]
+    fn stage_start_scores_previous_record() {
+        let mut g = crate::gamemgr::Game::default();
+        let mut st = crate::player::Stats::default();
+        let mut r = Replay::default();
+        r.stages[0] = Some(StageRecord {
+            score: 11,
+            ..Default::default()
+        });
+        r.stages[2] = Some(StageRecord {
+            score: 22,
+            ..Default::default()
+        });
+        r.stages[5] = Some(StageRecord {
+            score: 55,
+            ..Default::default()
+        });
+        g.rpy = Some(r);
+        g.stage = 4;
+        st.score10 = 777;
+        record_stage_start(&mut g, &st);
+        let s: Vec<_> = g
+            .rpy
+            .unwrap()
+            .stages
+            .iter()
+            .map(|s| s.as_ref().map(|s| s.score))
+            .collect();
+        assert_eq!(
+            s,
+            [
+                Some(11),
+                None,
+                Some(777),
+                None,
+                Some(0),
+                Some(55),
+                None,
+                None,
+                None
+            ]
+        );
+    }
+
+    // 15 §3.8 (audit A.49): a spell-practice replay starts with bit 14 and bit 3, bit 0 clear.
+    #[test]
+    fn spell_practice_playback_flags() {
+        use crate::gamemgr::*;
+        let mut g = Game::default();
+        g.flags = F_PRACTICE;
+        let mut r = Replay::default();
+        r.stages[0] = Some(StageRecord::default());
+        r.info[0x7C - HEADER..0x7E - HEADER].copy_from_slice(&5i16.to_le_bytes());
+        assert_eq!(r.spell_id(), 5);
+        assert!(start_playback(&mut g, r, None, None));
+        assert_eq!(
+            g.flags & (F_PRACTICE | F_SPELL_PRACTICE | F_REPLAY),
+            F_SPELL_PRACTICE | F_REPLAY
+        );
+        assert_eq!(g.card, 5);
+    }
 
     #[test]
     fn demos() {

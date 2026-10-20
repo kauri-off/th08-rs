@@ -62,6 +62,14 @@ const DIFF_PANEL: [&str; 5] = [
 const DIFF_LETTER: [char; 5] = ['E', 'N', 'H', 'L', '-'];
 const UNKNOWN5: &str = "？？？？？";
 
+// Ranking stage map, table 0x4C7F80 (16 §2.3): stage byte 0..8 → shown number (4A/4B → 4, 6A/6B → 6, Extra → 1).
+const STAGE_SHOWN: [u8; 9] = [1, 2, 3, 4, 4, 5, 6, 6, 1];
+
+fn stage_shown(b: u8) -> u8 {
+    // The game writes only 0..8 or 99 (15 §2.3); other bytes from a foreign file are shown raw instead of indexing past the table.
+    STAGE_SHOWN.get(b as usize).copied().unwrap_or(b)
+}
+
 // Card ids of result-viewer group g (16 §2.4; spell_tables.md §1): 0–4 = Spell_DifficultyOf, 5 = all 222.
 fn group_cards(g: i32) -> Vec<usize> {
     (0..CARDS)
@@ -798,10 +806,10 @@ impl ResultScreen {
                 u[self.name_pos.min(7) as usize] = b'_';
                 put(ctx, x, y, String::from_utf8_lossy(&u).into_owned(), col);
             }
-            let stage = if e.stage() == 99 {
+            let stage = if e.stage() >= 99 {
                 "C".to_string()
             } else {
-                e.stage().to_string()
+                stage_shown(e.stage()).to_string()
             };
             put(
                 ctx,
@@ -1102,6 +1110,13 @@ fn move_char_cursor(mut c: i32, keys: [bool; 4]) -> (i32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 16 §2.3 (audit A.46): the ranking prints table 0x4C7F80[stage byte], so a default row (byte 0) shows "(1)".
+    #[test]
+    fn ranking_stage_map() {
+        let shown: Vec<u8> = (0..9).map(stage_shown).collect();
+        assert_eq!(shown, [1, 2, 3, 4, 4, 5, 6, 6, 1]);
+    }
 
     // 16 §2.2: Up and Down held in one frame both apply (−16 then +16), with SE 12 twice; same for Left+Right.
     #[test]

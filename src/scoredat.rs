@@ -63,16 +63,17 @@ impl Hscr {
     pub fn difficulty(&self) -> usize {
         self.0[0x15] as usize
     }
-    // Default table entry (Result_OnRegister, 15 §2.3): name "--------", date "--/--", +0x166 = 1.
-    // SPEC-GAP: stage byte 1, not 0: the reference ranking shows "(1)" for default rows and "(5)" for stage index 5.
-    pub fn placeholder(score: u32, shot: usize, diff: usize) -> Self {
-        let mut h = Self::new();
-        h.set(score, shot as u8, diff as u8, 1, b"--------", "--/--");
+    // Default table entry (Result_OnRegister 0x45964D, 15 §2.3): magic "DMYS", name "--------", date "--/--",
+    // stage byte 0 (shown as stage 1, 16 §2.3), +0x166 = 1. The loop never writes the shot byte +0x14, so it stays 0.
+    pub fn placeholder(score: u32, diff: usize) -> Self {
+        let mut h = Self(chunk(b"DMYS", 0x168, 4));
+        h.set(score, 0, diff as u8, 0, b"--------", "--/--");
         h.0[0x166] = 1;
         h
     }
+    // ScoreDat_Save skips every node whose magic is not "HSCR" (15 §2.3).
     pub fn is_placeholder(&self) -> bool {
-        self.0[0x166] != 0
+        &self.0[..4] != b"HSCR"
     }
     pub fn stage(&self) -> u8 {
         self.0[0x16]
@@ -501,11 +502,10 @@ impl ScoreDat {
     }
 
     // One ranking list [diff][shot] as Result_OnRegister builds it (15 §2.3): the default table, then the stored entries.
-    // Default entries carry +0x166 = 1.
     // SPEC-GAP: ties keep stored order (score.dat is parsed once); 15 §2.3 reverses equal scores at each load.
     pub fn ranking(&self, shot: usize, diff: usize) -> Vec<Hscr> {
         let mut list: Vec<Hscr> = (0..10u32)
-            .map(|i| Hscr::placeholder(100_000 - 10_000 * i, shot, diff))
+            .map(|i| Hscr::placeholder(100_000 - 10_000 * i, diff))
             .collect();
         for e in self
             .hscr
@@ -760,6 +760,24 @@ mod tests {
         c.set(90_000, 0, 1, 1, b"TIE", "10/20");
         // Default rows: 100000, 90000, …; with FIRST/SECOND on top the 90000 default is rank 3.
         assert_eq!(s.insert_hscr(c), Some(3));
+    }
+
+    // 15 §2.3 (audit A.46): default rows are "DMYS" entries with stage byte 0 and are never saved.
+    #[test]
+    fn default_rows() {
+        let mut s = ScoreDat::default();
+        let r = s.ranking(3, 2);
+        assert_eq!(r.len(), 10);
+        for (i, e) in r.iter().enumerate() {
+            assert_eq!(&e.0[..4], b"DMYS");
+            assert_eq!((e.stage(), e.shot(), e.difficulty()), (0, 0, 2));
+            assert_eq!(e.score(), 100_000 - 10_000 * i as u32);
+            assert!(e.is_placeholder());
+        }
+        let mut h = Hscr::new();
+        h.set(95_000, 3, 2, 4, b"X", "10/20");
+        assert_eq!(s.insert_hscr(h), Some(1));
+        assert_eq!(s.hscr.len(), 1);
     }
 
     #[test]
