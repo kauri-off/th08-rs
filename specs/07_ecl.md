@@ -467,7 +467,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 176 | last_spell | (ignored arg) | GameFlags (0x164D0B4): clear bits 7, 8, 13, set bit 7; also bit 13 when (not spell practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); sets flag A bit 30. `Spell_Start` copies bit 7 into spell flag bit 5 (changelog/answers_impl10.md §7, VERIFIED). While bit 13 is set and boss 0 exists, `EnemyMgr_Calc` calls `Player_DamageAgainst` with the whole playfield box (centre (192, 224), size (384, 448), accumulator boss+0x2E10) and discards the damage: all shots count as hits (changelog/answers_impl12.md §5) | 41 |
 | 177 | set_hud_life | i n | e+0x2E04 | 6 |
 | 178 | move_rand2 | i dur, i ease, f spd | like 67, with 1/4 chance of a fully random angle (§8.3) | 4 |
-| 179 / 180 | hud179 / hud180 | — | HUD functions (later phase) | 2 / 0 |
+| 179 / 180 | night_clock_show / night_clock_hide | — | 179 (0x439007): HUD night-clock VM impl+0x2156C starts `times.anm` script 2 with sprite = clock counter; 180 (0x4390D6): that VM's alpha byte := 0 (12 §5.7) (VERIFIED, RE-Q25) | 2 / 0 |
 | 181 | extend181 | — | only if the night clock stats+0x28 < 12 (else nothing at all, no sfx): `Sound_Play`(0x2D), clock += 1, then the HUD night-clock VM (impl+0x2156C, times.anm, 12 §5) gets sprite = clock and interrupt 2 if the clock is now 12, else interrupt 1 (VERIFIED, RE-Q24) | 8 |
 | 182 / 183 | flagB8 / flagA31 | i b | bit set | 30 / 61 |
 | 184 | spell_ex | i n | spell flag bit 11 (bonus frozen) := n & 1 (`Spell_SetBonusFrozen` 0x41F0E0, §11.1) | 82 |

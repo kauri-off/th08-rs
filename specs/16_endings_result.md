@@ -186,7 +186,7 @@ In slow mode (or Supervisor+0x1A4 bit 3, set only by the anti-tamper fill), stat
 - version 4, size 0x168, magic "HSCR", shot = `shot + byte 0x164D0B2`;
 - stage = g_StageIdx, or 99 when flags bit 4 is set;
 - name = LSNM (default 8 spaces);
-- date = "%m/%d" (0x456938);
+- date = "%m/%d" (0x456938: C `time` + `localtime` + `strftime`, i.e. **local** time, VERIFIED RE-Q25);
 - slowdown % (15 §2.11).
 
 It then inserts the entry into list [diff][shot] (`ScoreList_Insert`):
@@ -602,7 +602,9 @@ Controls:
 - Confirm: g_StageIdx = row, screen 17.
 - Bomb/ESC: back to the top menu (cursor 2), flags &= ~1.
 
-Returning from a spell-practice game (+0x6C ≠ 0) arrives through screen 15 (12 §2.2) and jumps straight to screen 17. If the last card id is ≥ 205, the stage row is set to 9.
+Returning from a spell-practice game (+0x6C ≠ 0) arrives through screen 15 (12 §2.2): screen 16 runs for one frame and
+forwards to 17 (cursor 0), returning 2 so screen 17 runs in the same frame. If the last card id is ≥ 205, g_StageIdx := 9.
+Bomb/ESC keeps flags bit 14 (only bit 0 is cleared).
 
 Entry interrupts (changelog/answers_impl17.md §Q3, VERIFIED):
 - range interrupt 18, then pending **27** written into VMs 138 and 139. 138 has label 27 → fades in (16 frames) and

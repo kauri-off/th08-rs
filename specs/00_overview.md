@@ -91,6 +91,12 @@ inserted after existing nodes with the same priority):
 | 5 | stop, runner returns −1 → exit with error |
 | 6 | (calc only) restart the chain from the head |
 
+**Adding a node** (`FuncChain_AddCalc` 0x43C880 / `AddDraw` 0x43C960, VERIFIED RE-Q25): if the node has an
+on-register callback it is called first and then cleared; **whatever it returns, the node is linked** (under the
+chain lock) after the last node whose priority is ≤ the new one (so equal priorities keep insertion order); the
+callback's result is returned to the caller, which decides what to do (e.g. a failed `GameManager_Register` makes the
+Supervisor return 4). A node added during a chain walk is visited in the same walk if it lands after the current node.
+
 ### 3.1 Node removal and teardown (answers implementer Q2) — VERIFIED
 
 - Removal (`FuncChain_Remove` 0x43CF50, locked wrapper 0x43CF10) unlinks exactly one node. If the node is

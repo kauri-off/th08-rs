@@ -511,3 +511,23 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - RE-Q24 IMPL22/23/24-uncited: op 36 operands resolved at op time (07 §5.6); capture time reward = time orbs from the ring in Spell_Calc (07 §11.1; explains golden row 8056); threshold/timeout/KillAll have no self test; demo 2 frame 2938 = shrink timer not reset at real death (09 §6.2); fullrun_noclip 6266 = op 67 y tests sequential (07 §8.3; port eclvm.rs:594 uses one ||); result screen: stage map 0x4C7F80, DMYS defaults, save clears +9, state 9/0xF interrupts, pos_offset in Result_Draw, sub-state timing; menu description VM int 2 senders; bullet draw, trail draw, spawn prev pos.
 - PROBE: session.inc TH08_SCAN now also dumps player bullets (`B` lines); old build kept as d3d8_v8_pre_q24.dll / session_v8_pre_q24.inc. Work game probe_cmd/cfg/score restored (md5 ok; score.dat restored from backup/score_1.261020.bak, identical md5).
 - RE-Q24 DONE: specs/changelog/answers_re_q24.md.
+
+# RE-Q25 (2026-10-20) — IMPL26/IMPL27 questions — DONE (changelog specs/changelog/answers_re_q25.md)
+- Runs re/work/runs/q25/. Changelog target specs/changelog/answers_re_q25.md.
+- IMPL26 so far: Q1 mode 4 unreachable via DrawByMode (vm+0x200 written only by ANM op 83, data value 2; DrawByMode caller
+  only Player_DrawBulletsHit); DrawBillboard direct from EffectMgr_Draw/DrawBackground. Q2 CODE BUG (golden draw_00005
+  capture.anm Q z 0.9994 = projected). Q3 CODE BUG (hud + pause menu VM +0x1284: 0x120 only if SP id ≥ 205 (0xCD)).
+  Q4: FUN_0043c322 = replay && info+0x7B (practice flag) → only Hud_DrawClearPanel; calc adds lives/bombs if !GM bit0
+  (replays too); night bonus always on 6B; penalty applied always in calc, drawn only diff<4 && !bit0; int math.
+  Q7 CODE BUG (FUN_00405260 = g_Gui flags bit 9). Q8 CODE BUG (gameover_save chunk1 line 364204 V 32 16 384 448).
+- IMPL27 Q7/Q8 seen in MainMenu_Replay: sub-state 1 confirm sets cursor = first recorded stage (+0xc290 updated only in
+  sub-state 2); start sets flags bit 3, bit 14 = id ≥ 0 (no bit 0).
+- More done: Q5 MSG op14 = SE(4, p0 442 EDX, colour 0xFFFFFF, prio 0x15) CODE BUG; Q6 VMs 2/4 always restarted CODE BUG;
+  Q9 op179=0x439007 (times script 2 sprite clock) op180 alpha byte 0; Q10 ASCII +0x17C4.. = boss "ENEMY" markers
+  (Ascii_DrawStrings tail; EnemyMgr_Calc pos x+32,472; mode +0x2254) NOT IN PORT (golden draw_00004 R 199.5 463.5);
+  Q11 +0x29 = continues. Hud clear panel full rules (calc vs draw conditions); VM13 ip≠0 full repaint (200 frames);
+  blank patch (512,464). Face table + SP faces (port lacks SP). Popup (p4) only p4>0.
+  IMPL27: key repeat 33rd frame (11 §7/12 edited); replay prev-record = highest earlier existing; SP difficulty;
+  return-2 same-frame screens (12 §2 edited); replay row +0xC290 lag; SP replay no bit0; quit WAV no music change;
+  Music_Fade linear dB (02 edited); BGM curve squared vs SE cubic (13 §1.3 wrong); keyboard map (15 §1.1 edited);
+  replay cfg copy full 60 bytes no clamp; FastForward order; FuncChain_AddCalc links always; SE register from GM prio2.

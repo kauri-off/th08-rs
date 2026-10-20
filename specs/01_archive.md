@@ -54,6 +54,9 @@ Engine function: `Lzss_Decompress` (0x4740E0).
 - (Engine detail) The dictionary is a single global buffer that is not re-cleared between calls.
   Zero-initialising it per call reproduces all 317 files byte-exactly (VERIFIED via signatures and
   sizes), so the implementer should simply clear it per call.
+- (RE-Q25) The game's own encoder is `Lzss_Compress` 0x473CB0 (score.dat and replays). Byte-identical output is not
+  required by any reader: score.dat and replay checksums are computed by the writer over the bytes it wrote, and the
+  decoder above accepts any valid stream, so any correct LZSS encoder in this format is compatible.
 
 ## 4. Archive header (file offset 0, 16 bytes)
 

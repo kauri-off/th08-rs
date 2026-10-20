@@ -65,6 +65,16 @@ the loop end is not shipped); a reimplementation must never read past `loop_end`
   command **2 = play** (slot); MIDI: stop, open slot, play. Both mark music-room track `track` as heard
   (0x164CF14[track] := 1) unless replay playback or demo (VERIFIED, RE-Q24).
   - mode 0: no music.
+- `Music_Fade(secs)` (0x4480F8, VERIFIED RE-Q25 for WAV mode): MIDI mode → `Midi_Fade` (argument INFERRED); WAV mode: if the game
+  speed (Supervisor+0x188) is ≠ 0 and ≤ 1, secs := secs / speed; queues sound command **5** with the integer
+  `trunc(secs)`. The sound thread (`Sound_Update`, after the calc chain) starts the fade on the streaming object:
+  mode := 1, N := trunc(float(that integer) · 60), n := N. Every Supervisor calc (`0x447764` from `Supervisor_Calc`,
+  before the input poll) then does: n −= 1; if n < 1 → mode 0 and the buffer is **stopped**; else the volume is set
+  to `p = n·5000/N − 5000` (integer division; DirectSound hundredths of dB, so the fade is **linear in dB** from
+  0 to −50 dB over N frames, not linear in amplitude). Every volume write goes through the BGM-volume scaling
+  `0x472840`: BGM volume v (0..100, cfg +0x27 copy 0x18BDC80) = 0 → −10000; else f = 1 − v/100,
+  `SetVolume(trunc((p + 5000)·(1 − f²)) − 5000)`. Fade modes 2/3 (same tick, volume −n·5000/N resp. −n·1000/N,
+  no stop) belong to other commands (INFERRED fade-ins; not used by `Music_Fade`).
 - `Bgm_FindTrack` (0x45C6B0): takes the basename (after last `/` or `\`), compares it with the
   record names case-sensitively; **if no record matches, index 0 (`th08_01.wav`) is used**.
 

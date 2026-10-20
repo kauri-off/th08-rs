@@ -50,6 +50,26 @@ The file is 60 bytes (0x3C). In memory it lives at 0x17CE870 (= Supervisor+0x118
 
 Pad buttons are DirectInput button indices; −1 means no button.
 
+**Keyboard mapping** (`Input_Poll` 0x43D970, VERIFIED disassembly, RE-Q25). The raw word starts at 0; each mapped key
+whose state byte has bit 7 set ORs its bits in; then the joystick bits are ORed (below). With the DirectInput keyboard
+(device 0x17CE768 ≠ 0) the state comes from `GetDeviceState` (DIK scan codes); when the device pointer is null,
+from `GetKeyboardState` (VK codes). A failed `GetDeviceState` re-acquires the device and
+returns the joystick bits only (INFERRED).
+
+| bits | VK path | DIK path |
+|---|---|---|
+| 0x10 Up / 0x20 Down / 0x40 Left / 0x80 Right | arrows 0x26/0x28/0x25/0x27; numpad 8/2/4/6 (0x68/0x62/0x64/0x66) | arrows 0xC8/0xD0/0xCB/0xCD; numpad 0x48/0x50/0x4B/0x4D |
+| diagonals 0x50 / 0x90 / 0x60 / 0xA0 | numpad 7/9/1/3 (0x67/0x69/0x61/0x63) | numpad 0x47/0x49/0x4F/0x51 |
+| 0x1 Shot | Z 0x5A | Z 0x2C |
+| 0x2 Bomb | X 0x58 | X 0x2D |
+| 0x4 Focus | Shift 0x10 | LShift 0x2A, RShift 0x36 |
+| 0x8 ESC | Esc 0x1B | Esc 0x01 |
+| 0x100 Skip | Ctrl 0x11 | LCtrl 0x1D, RCtrl 0x9D |
+| 0x200 / 0x400 / 0x4000 | Q 0x51 / S 0x53 / R 0x52 | Q 0x10 / S 0x1F / R 0x13 |
+| 0x800 | Home 0x24, P 0x50 | Home 0xC7, P 0x19 |
+| 0x1000 Enter | Enter 0x0D | Enter 0x1C (main Enter only) |
+| 0x2000 | D 0x44 | D 0x20 |
+
 **Joystick mapping** (`Input_PollJoystick` 0x43D120, both the winmm `joyGetPosEx` path and the DirectInput path;
 VERIFIED, changelog/answers_phase7.md §5):
 - Button fields +0x00…+0x10 in file order map to input bits 0x1 (Shot), 0x2 (Bomb), 0x4 (Focus), 0x8 (Pause/ESC),
@@ -102,7 +122,7 @@ When that happens it logs "コンフィグデータが異常". After the music-m
 | 6 Slow | Toggles +0x25. |
 | 7 Reset | Sets lives 2, +0x1D 3, music 1, SE 1, slow 0. |
 | 8 KeyConfig | Opens key config (`MainMenu_KeyConfig` 0x469636, screen 3; details below). |
-| 9 Quit | Leaves the option menu. |
+| 9 Quit | Leaves the option menu (confirm). Bomb/ESC on any other item moves the cursor to Quit (SE 11); Bomb/ESC on Quit leaves. Leaving: SE 11, top-menu cursor 7, screen 0 at once (return 1, or 5 when colour depth or window mode changed). The cursor moves from the first call; Left/Right/confirm/cancel are accepted from screen frame 4 (VERIFIED 0x46837B, RE-Q25). |
 
 **Key config (screen 3)** — VERIFIED code; on-screen labels from the `options_cfg` session:
 - 12 rows, top to bottom: Shot (+0x00), Bomb (+0x02), Slow (+0x04), Skip (+0x10), Pause (+0x06), Up (+0x08),
@@ -133,7 +153,7 @@ When leaving the menu, if +0x1E or +0x22 changed, the function returns 5. That m
 Load: `ScoreDat_Load` 0x45A5E0. Save: `ScoreDat_Save` 0x453D0D (`this` = Result object).
 
 The file is encrypted on disk with two layers, outermost first:
-1. Archive block cipher `Crypt(key 0x59, step 0x79, block 0x100, limit 0xC00)` over the whole file (01 §3). Decrypt with 0x43E1D0, encrypt with 0x43E4A0.
+1. Archive block cipher `Crypt(key 0x59, step 0x79, block 0x100, limit 0xC00)` over the whole file (01 §2). Decrypt with 0x43E1D0, encrypt with 0x43E4A0.
 2. A rolling XOR that starts at byte 1:
    - Decode: `acc = 0`; for i = 1 .. size−2: `acc = rotl8(acc + b[i], 3)`, then `b[i+1] ^= acc`. Because the loop runs forward, `b[i]` is already decoded (plain) when it is used, and b[1] is never changed.
    - Encode (save): the same running `acc`, computed from the plain bytes; each byte from index 2 on is XOR-ed with it. The saver processes the bytes so that the decoder above recovers them (VERIFIED by round-trip with the real file).
@@ -153,7 +173,7 @@ Header after decoding (0x1C bytes):
 | 0x14 | u32 | decompressed body size (= +0x10 − 0x1C) |
 | 0x18 | u32 | compressed size (= file size − 0x1C) |
 
-The body from +0x1C is LZSS (01 §4). It decompresses to a list of chunks.
+The body from +0x1C is LZSS (01 §3). It decompresses to a list of chunks.
 
 **Saving consumes 2 RNG draws** (two Rng_Range16(256)). Saves happen only outside gameplay, but the RNG state carries over into the next game (11 §1.5).
 
@@ -507,7 +527,10 @@ Stage start (`Replay_RecordStageStart`):
 
 So the stream is `[dummy 0][frame 1][frame 2]…`.
 
-Before allocating, the previous stage's record +0 is set to the current score (stats+8). Record +0 is therefore the **score at the end of that stage**. For the last stage it is set when the replay is finished.
+Before allocating (only when the info block already exists, i.e. not at the first recorded stage), exactly **one**
+record gets +0 := current score (stats+8): the record of the **highest stage index below the current stage that has a
+record** (scan k = 0 … stage − 1, keep the last non-null pointer; VERIFIED 0x452830, RE-Q25). Earlier records are not
+touched. Record +0 is therefore the **score at the end of that stage**. For the last stage it is set when the replay is finished.
 
 `Replay_AppendEnd` 0x4531A0 runs on game end, before saving: `p += 2; *p = 0; end = p + 6`. The stream ends with a 0 terminator plus 4 uninitialised bytes. The demo files contain 0xCDCD there.
 
@@ -536,6 +559,10 @@ Playback speed byte 0x164D0BD (chosen in the replay menu, §3.8):
 | 2 | fast. `Replay_FastForward` (prio 18) returns 6 ("restart the calc chain") on every frame except `frame % 5 == 4`, only when no boss is active (0x42F1F0). |
 
 In any playback mode, while skippable dialogue is shown (HUD impl+0x22D7C), the chain is restarted on 2 of every 3 frames (= 3× speed).
+Both rules are one function (`Replay_FastForward` 0x452490, calc prio 18, registered only for playback; VERIFIED RE-Q25):
+only while GM flags bit 2 is set and bit 9 clear: (1) dialogue active and skippable and `frame % 3 ≠ 2` → return 6;
+(2) otherwise, speed byte 2, no boss (0x42F1F0) and `frame % 5 ≠ 4` → return 6; else return 1. `frame` = the replay
+object's frame counter (+0).
 
 The HUD shows the playback fps in yellow (0xFFFFFFD0), or red (0xFFFF4040) when the flag is set.
 Exact behaviour (`Fps_Update` 0x446F53, VERIFIED changelog/answers_impl17.md §5.3; this is the attract demos' "2-digit text at the
@@ -680,12 +707,21 @@ Detail view after choosing a file:
 - a "Stage    LastScore" table: `%s %9d0` per stage that has a record, `----------` otherwise. For spell practice: `No.%.3d %9d0`.
 
 The user then:
-- picks one of the recorded stages (sub-state 2);
+- picks one of the recorded stages (sub-state 2). On the file confirm (sub-state 1) the stage cursor (+0) is set to
+  the **first stage with a record** (scan from 0; none → error message, scene −1). Sub-state 2: `Menu_CursorUpDown(9)`,
+  then while the cursor's stage has no record it keeps moving in the same direction (wrapping 0 ↔ 8), then the
+  displayed stage row +0xC290 := cursor. +0xC290 is written **only** there, and the draw highlights +0xC290, so on the
+  confirm frame the table shows the previous +0xC290 (0 after the menu was entered, else the last chosen row) and the
+  first recorded stage from the next frame on (VERIFIED, RE-Q25). Confirm → sub-state 3 (speed cursor 0); Bomb → free
+  the replay, back to the list (cursor = file row);
 - picks the speed (sub-state 3): 3 options (normal / slowdown reproduction / fast), or 2 in spell practice.
 
 Start:
 - flags |= 8 (replay);
 - the path is copied to 0x164D0C4;
+- **GM flag bit 0 (practice) is not set** — it was cleared when the Replay item was chosen in the top menu (and by
+  `MainMenu_OnRegister`), so a spell-practice replay plays with bit 14 set and bit 0 clear, a stage-practice replay with
+  both clear (its practice nature is only in info +0x7B, 12 §5.6) (VERIFIED 0x4674E0 / 0x46E136, RE-Q25);
 - difficulty, shot and spell practice (spell id ≥ 0 → flags bit 14, id → 0x164D0B8) come from the header;
 - stage = the chosen stage;
 - scene 2.

@@ -262,7 +262,8 @@ Player_Register(0)                      # lives, bombs, power, score carry over
 ```
 
 ### 3.4 Replay playback stage load (0x452D60) — VERIFIED
-From the replay header: shot (+0x6A), difficulty (+0x6B), config copy (+0xB4, 60 bytes). From the stage record
+From the replay header: shot (+0x6A), difficulty (+0x6B), config copy (+0xB4, 60 bytes: **all 60 bytes** are copied over the gameplay config copy `*(GM+4)` as stored — no field
+selection and no clamping, VERIFIED 0x452D60, RE-Q25). From the stage record
 (offset table header+0x20[stage]): point items (+4 → stats+0x30), rank byte (0x164D334), lives, bombs, power
 (via the setters), graze total, input stream pointer, 0x164D0B0, max point value, seed, spells captured,
 extends, next extend, gauge, clock. Missing record for the requested stage → load fails.
@@ -433,8 +434,12 @@ A second per-stage stream holds one byte per 30 frames: FPS value (bit 7 = flag)
 
 Fields: `+0x158` current scene, `+0x15C` requested scene (0x17CE8B4, written by everyone), `+0x160` previous.
 Every frame (before the scene logic): reset some ANM manager state, run Supervisor VMs, poll input (raw word
-0x164D528, previous 0x164D530, key-repeat flag 0x164D538: after 30 frames of the same input, true every 8th
-frame), unless `gm+0x2D` (slow-mode skipped frame), in which case input is OR-accumulated.
+0x164D528, previous 0x164D530, key-repeat flag 0x164D538), unless `gm+0x2D` (slow-mode skipped frame), in which
+case input is OR-accumulated (no repeat update). Key repeat (VERIFIED 0x445453, the same rule as the replay emulation
+15 §3.3): repeat := 0; if the new raw word equals the previous one: **test first** — if the counter 0x164D53C > 29,
+repeat := (counter % 8 == 0), and if the counter > 37 it is reset to 30 — **then** counter += 1; else counter := 0.
+The tested value runs 0, 1, …, 32 (repeat), 33 … 38 (reset to 30, stored 31), 31, 32 (repeat), …, so repeat is set
+on the 33rd, 41st, 49th, … consecutive unchanged frame (every 8 frames), never on the 32nd.
 
 When `requested ≠ current`: `previous = current`, then by `(current, requested)`:
 

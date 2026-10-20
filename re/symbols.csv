@@ -743,3 +743,13 @@ addr,kind,name,signature,confidence,note
 0x00453cfa,func,Shot_Name,"char * __thiscall Shot_Name(int shot)",VERIFIED,table 0x4C7F4C (13)
 0x0047087f,func,MainMenu_Draw,,VERIFIED,draw prio 3: Anm_DrawSurface(0) then menu VMs + description VM (no batch flush before the copy)
 0x00406a30,func,AnmManager_QueueCapture,,VERIFIED,queue back-buffer rect -> ANM slot texture rect (applied after Present)
+0x00422bb0,func,Ascii_BossMarkerInterrupt,"(slot,label)",VERIFIED,RE-Q25 marker VMs +0x17C4
+0x00422be0,func,Ascii_BossMarkerSetPos,"(slot,vec3*)",VERIFIED,RE-Q25
+0x0042f2d0,func,Ascii_BossMarkerSetMode,"(slot,mode)",VERIFIED,RE-Q25 +0x2254
+0x0043c322,func,GameMgr_IsPracticeReplay,,VERIFIED,replay && info+0x7B
+0x00439007,func,Hud_NightClockShow,,VERIFIED,ECL op 179
+0x004390d6,func,Hud_NightClockHide,,VERIFIED,ECL op 180 / Hud_Load
+0x00405260,func,Gui_IsCaptured,,VERIFIED,g_Gui flags bit 9
+0x00447764,func,Sound_TickBgmFades,,VERIFIED,called by Supervisor_Calc
+0x0045e3f0,func,Bgm_StartFadeOut,,VERIFIED,mode 1 N=secs*60
+0x00472840,func,Bgm_SetVolume,,VERIFIED,k=1-(1-v/100)^2

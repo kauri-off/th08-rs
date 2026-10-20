@@ -54,6 +54,9 @@ is in the exe); the wave files are ordinary PCM RIFF files.
   has 128); else the id takes the next free slot; if all 12 slots are used the request is **dropped**.
   So every SE id sounds at most once per frame (per-frame dedup), with the average pan of all requests.
 
+`Sound_Play` 0x45D550 / `Sound_PlayAt` 0x45D660 do **no** range check on the id; every caller passes a valid id (the
+shot sound sht +0x26 is played only when ≥ 0, 09 §2), so out-of-range ids never reach them (RE-Q25).
+
 ### 1.3 Flush (`Sound_Update`, once per frame after all calc callbacks, also while paused)
 Skipped entirely when config "SE on" (cfg byte 0x17CE890, default 1) is 0 — the queue is then left as is
 (INFERRED: it is not cleared). Otherwise for each queued slot in order: clear the slot; stop the id's buffer,
@@ -61,7 +64,8 @@ rewind to 0 (so a still-playing instance restarts), set pan = integer average of
 (below), play once (non-looping).
 Volume: v = cfg SE volume (byte 0x17CE898, 0–100, default 80). v = 0 → −10000 (silent). Else
 k = 1 − (1 − v/100)³ and volume = trunc((tableVolume + 5000) × k) − 5000. (The table volume set at load is
-overwritten by this every time.) The same curve with the BGM volume byte 0x17CE897 drives music (02).
+overwritten by this every time.) Music uses a **different** curve: k = 1 − (1 − v/100)² with the BGM volume
+(02 §4 `0x472840`; SE cubic VERIFIED 0x45DFE7, BGM square VERIFIED 0x472849, RE-Q25).
 The BGM command queue (+0x1F88) is processed in the same call (02_bgm).
 
 ### 1.4 Call sites (VERIFIED; `@x` = panned at that x)
@@ -405,6 +409,13 @@ s += D
 Call: ECX = type, EDX = p0, stack: p1 (+0x18), p2 (+0x1C), p3 (+0x20), draw priority. Object: +0 type,
 +0x10 current alpha (or amplitude), +0x14 p0, +0x18 p1, +0x1C p2, +0x20 p3, +0x24 release flag, +0x28 Timer.
 Calc returning 0 removes the effect (on-remove frees it).
+**Linking (RE-Q25, VERIFIED 0x43C880):** the calc node (prio 3) and draw node are linked **immediately** by
+`FuncChain_AddCalc`/`AddDraw` (inserted after the last node with prio ≤ its own), even in the middle of a chain
+walk. Registrations made by a calc node with prio < 3 therefore get their **first calc in the same frame**:
+`GameMgr_Calc` (prio 2: the attract-demo end fade, type 2) and `Loading_StartDarken` (called from an on-register
+callback inside the Supervisor calc, prio 0). All other callers (player/bombs 9, ECL natives 11, effect updates 13,
+`Msg_Run` in the HUD calc 15) run after prio 3, so their effect's first calc is the next frame. The draw node
+(prio 21 / 1) is reached in the same frame in every case.
 Draw priority: **every** code call passes 0x15 (bombs, Yukari square updates, ECL natives 1/10/15/17, `Msg_Run` type 4, `GameMgr_Calc` type 2, `Player_UpdateBomb` end flash, `MainMenu_LoaderThread` fades) except `Loading_StartDarken` 0x4489CA, which passes 1 (VERIFIED, every call site in the binary, RE-Q24).
 | type | p0 / p1 / p2 / p3 | behaviour | draw |
 |---|---|---|---|
@@ -453,7 +464,8 @@ Colour rule used by points/cancel/kill_all: 0xFFFFFFFF when v < max, 0xFFFFFF00 
 
 Large popups: 128 slots at +0x15304 (`Popup_Large` 0x403460 / `Popup_LargeStatic` 0x403600; glyphs stored
 LSB first: [0xF, p4 digits, 0xE,] p3 digits, 0xD; ascii glyphs 0xD '+', 0xE '(', 0xF ')' → text "+p3" or
-"+p3(p4)"; scale from the manager; sprite = glyph + 0x88), life 90 frames (0x403600 starts at age 88 = a
+"+p3(p4)"; the "(p4)" part is written only when p4 > 0, and p3 < 1 is written as a single '0' ("+0") (VERIFIED
+0x403460 / 0x403600, RE-Q25); scale from the manager; sprite = glyph + 0x88), life 90 frames (0x403600 starts at age 88 = a
 two-frame display). Callers (VERIFIED):
 
 `Popup_Large` 0x403460 (life 90), callers in `Enemy_KillChildren` 0x42ADB0:

@@ -86,8 +86,25 @@ Portrait slots k ↔ face files (Gui object 0x4EA670, `Gui_LoadFaces` 0x414590):
 |---|---|---|---|
 | 0 | 0x4ECC94 | 16 | player-team character A (`face_rm00`/`mr00`/`sk00`/`ym00` by shot: team/solos 0,4,5 → rm; 1,6,7 → mr; 2,8,9 → sk; 3,10,11 → ym) |
 | 1 | 0x4ECC98 | 17 | partner (`face_yk00`/`al00`/`rs00`/`yy00`) |
-| 2 | 0x4ECC9C | 18 | stage face file (`face_st01` … `face_st08m`, per stage) |
-| 3 | 0x4ECCA0 | 19 | second stage face file (stage 5: `face_st05b`; 6B: `face_st07`; Ex: `face_st08`; else none) |
+| 2 | 0x4ECC9C | 18 | stage face file (table below) |
+| 3 | 0x4ECCA0 | 19 | second stage face file (table below; else none) |
+
+Stage face files by stage index (VERIFIED `Gui_LoadFaces`, RE-Q25). Slots 16–19 are loaded only on a fresh start; a
+same-stage reload (0x17CE8C4) re-uses the loaded slots. In **spell practice** slots 16/17 are not loaded at all and slot
+18 gets the `…sp.anm` cut-in file instead (slot 19 none); `face_cdbg.anm` (slot 15) is always loaded.
+
+| idx | slot 18 / slot 19 (normal) | slot 18 in spell practice (card id c) |
+|---|---|---|
+| 0 | face_st01 / — | face_st01sp |
+| 1 | face_st02 / — | face_st02sp |
+| 2 | face_st03 / — | face_st03sp |
+| 3 (4A) | face_st04a / — | c = 0xD8 sksp, 0xD9 ymsp, 0xDA alsp, 0xDB rssp, 0xDC yysp, 0xDD yksp (`face_<x>.anm`); else (incl. 0xD6) face_st04asp |
+| 4 (4B) | face_st04b / — | face_st04bsp |
+| 5 | face_st05 / face_st05b | c = 0xD4 face_st05msp, else face_st05sp |
+| 6 (6A) | face_st06 / — | face_st06sp |
+| 7 (6B) | face_st06 / face_st07 | c in 0x93–0x96 face_st06sp, else face_st07sp |
+| 8 (Ex) | face_st08m / face_st08 | c in 0xBF–0xC1 or 0xD5 face_st08msp; c in 0xC2–0xCC or 0xD3 face_st08sp; else nothing loaded |
+| other | face_st03 / — | face_st03 |
 
 Speakers 0/1 are the player side (left), 2/3 the opponent side (right).
 
@@ -104,7 +121,8 @@ Speakers 0/1 are the player side (left), 2/3 the opponent side (right).
    (changelog/answers_impl10.md §5–6, VERIFIED. Other writers of +0xB34: `EffectMgr_OnRegister` = 0, `StageStart` = 2 in
    spell practice, 06, changelog/answers_impl10.md §5.)
 3. Stage 5, `n == 10` → final-route resolution (the ECL asks for entry 10 after the stage-5 boss):
-   - if practice flag `stats+0x29 != 0`: n = 1, choice = 0;
+   - if the continue count `stats+0x29 != 0` (any continue used; +0x29 is incremented by each continue, 16 §2.2 —
+     corrected name, RE-Q25): n = 1, choice = 0;
    - else if replay playback (GM flag bit 3): route byte from the replay header (`replay+8 → +0x11C`):
      2 → n = 3, 1 → n = 2, else n = 1 (choice = 0 for n = 1, 1 otherwise);
    - else: if the player has never cleared 6B (clear-mask bit 7 in `gm+0x3C49C + shot*0x24 + diff*2`, all 4
@@ -317,8 +335,14 @@ VERIFIED actions: store for the bonus panel the current power, `stats+0x2C` (poi
 (1 000 000, 1 500 000, 2 000 000, 2 500 000, 2 500 000, 3 000 000, 4 000 000, 6 000 000, 6 660 000),
 `clock*30 + 660` before and after advancing the clock counter by `ClockAdvance()` (stages 1–5: +2 if
 time < `stats+0x40` else +1; 6A/6B +0; Extra +4); `stage_end = 1`; GM flag 0x200.
-Stages 1–5 also start the bonus panel VMs and capture the playfield (0x406A30 with rect 32,16,384,448);
-stages 6A/6B/Ex set `stats+0x34 = −1` instead. Team Youmu&Yuyuko and solo Youmu/Yuyuko (shot 3, 10, 11) get
+Stage-clear VM impl+0x212C8 (VERIFIED 0x433DB3, RE-Q25): stages 1–5 restart it with `ascii.anm` script 3 and sprite
+**0x80 + clock advance** (129 / 130 = the 48×16 "+1" / "+2" clock plates at (0, 16) / (48, 16)); 6A/6B/Ex only clear
+its ip (+0x220 := NULL, so it never runs); then interrupt 1 in every case.
+Stages 1–5 also start the bonus panel VMs and capture the playfield (0x406A30 with rect 32,16,384,448): VM
+impl+0x3778 `loadingNN.anm` script 0, VM impl+0x3CC0 `capture.anm` script 1, and the 8 VMs impl+0x3F64 + k·0x2A4
+`capture.anm` script 2 with I4 (+0x120) := 4k + 3 and alpha byte := 64 − 2k (k = 0..7); these are drawn as mode-5 quads
+by `Hud_DrawBoss` (12 §5.4).
+Stages 6A/6B/Ex set `stats+0x34 = −1` instead. Team Youmu&Yuyuko and solo Youmu/Yuyuko (shot 3, 10, 11) get
 +1 bomb (sfx 0x23 `se_cardget`) if they have fewer than 3 bombs (stages 1–5 only).
 
 ## 10. Sound ids used here (table 0x4C8040: i32 wav index, i16 volume (1/100 dB), i16 priority) — VERIFIED
