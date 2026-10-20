@@ -781,6 +781,8 @@ impl Task<Ctx> for MainMenu {
         if chain != Chain::Calc {
             return Ok(());
         }
+        // 0x18B8A2C := 0 (13 §3).
+        crate::enemy::set_load_frames(0);
         // SPEC-GAP: 00 §3.2 skips the title music when the previous scene was 5 (result viewer); not tested here.
         if ctx.game.cfg.music != 0 {
             ctx.audio.play_bgm("bgm/th08_01.mid");

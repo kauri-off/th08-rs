@@ -445,10 +445,17 @@ impl Effects {
             }
             _ => {}
         }
-        // SPEC-GAP: the generic ring init (0x4272E0) defaults (32 segments, centre = pos) are not in 13 §2.5.
+        // Ring init 0x4272E0 (13 §2.6): centre := pos, crossed param copy (+0x318 ← x, +0x314 ← y, +0x320 ← z),
+        // segments := 24. Types 41 and 50 get their update's per-frame count (48 / 32) here; 56/58/65 are over bullets.
         if is_ring(kind) {
             e.centre = pos;
-            e.ring.segments = if kind == 41 { 48 } else { 32 };
+            (e.ring.start, e.ring.radius, e.ring.width) = (param[0], param[1], param[2]);
+            e.ring.segments = match kind {
+                41 => 48,
+                // SPEC-GAP: 13 §2.6 has both `Bomb_Dissolve` writing 64 and the type-50 update writing 32 every frame.
+                50 => 32,
+                _ => 24,
+            };
             e.above = matches!(kind, 56 | 58 | 65);
         }
         let r = &mut e.ring;
@@ -837,16 +844,32 @@ impl Effects {
         e.vm.pos_offset = off;
     }
 
-    // EffectMgr_Draw (prio 12): list A, then C, then E, z 0.07.
-    // SPEC-GAP: list C (layer 2) is drawn as 2D at pos, not as a 3D billboard (13 §2.4).
+    // EffectMgr_Draw (prio 12): list A, then C, then E; A/E at z 0.07.
     pub fn draw_main(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         gfx.set_viewport(PLAYFIELD);
         for list in [0, 2, 4] {
             for k in 0..self.lists[list].len() {
                 let i = self.lists[list][k];
-                self.draw_one(anm, gfx, i, 0.07);
+                if list == 2 {
+                    self.draw_billboard_c(anm, gfx, i);
+                } else {
+                    self.draw_one(anm, gfx, i, 0.07);
+                }
             }
         }
+    }
+
+    // List C (13 §2.4): `AnmManager_DrawBillboard` (05 §9 mode 4) at the effect pos as-is (no playfield origin, no
+    // pos offset), projected through `Camera_Set2D` on the playfield viewport left by `Stage_DrawHigh`, whatever
+    // the VM's camera bit; sized by the stage camera's right vector, vertex z = projected z.
+    fn draw_billboard_c(&mut self, anm: &mut AnmManager, gfx: &mut Gfx, i: usize) {
+        let e = &mut self.fx[i];
+        let (saved, cam) = (e.vm.pos, e.vm.flags & anmvm::F_STAGE_CAM);
+        e.vm.pos = e.pos;
+        e.vm.flags &= !anmvm::F_STAGE_CAM;
+        anm.draw_mode_z(gfx, &mut e.vm, 4, 0.0);
+        e.vm.flags |= cam;
+        e.vm.pos = saved;
     }
 
     // List D, drawn at the end of BulletMgr_Draw (prio 13), z 0.04.
@@ -1339,9 +1362,9 @@ impl ScreenEffect {
         ctx.anm.screen_offset = [x, y];
     }
 
-    // SPEC-GAP: the freeze byte 0x160F534 and 0x18B8A2C ≠ 0 freezes of 13 §3 are not tested.
-    fn frozen(ctx: &Ctx) -> bool {
-        with(|e| e.frozen) || ctx.game.paused != 0 || ctx.game.game_over != 0
+    // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set (13 §3).
+    fn frozen() -> bool {
+        with(|e| e.frozen) || crate::enemy::timer_pause() != 0
     }
 }
 
@@ -1376,17 +1399,28 @@ impl ScreenEffect {
                     return Ret::Remove;
                 }
             }
+            // 0x45BDC0: frozen → hold; 0x18B8A2C ≠ 0 → removed; else tick first, then end test, then a and 2 draws.
             1 => {
-                if Self::frozen(ctx) {
+                if Self::frozen() {
                     return Ret::Next;
                 }
-                let a = p1 as f32 + t as f32 * (p2 - p1) as f32 / dur as f32;
-                self.shake(ctx, a);
+                if crate::enemy::load_frames() != 0 {
+                    return Ret::Remove;
+                }
+                self.timer.tick(gs);
+                let t = self.timer.cur;
                 if t >= dur {
                     return Ret::Remove;
                 }
+                let a = p1 as f32 + t as f32 * (p2 - p1) as f32 / dur as f32;
+                self.shake(ctx, a);
+                return Ret::Next;
             }
+            // 0x45B760 (type 4 "as 2"): 0x18B8A2C ≠ 0 → removed before anything else.
             2 | 4 => {
+                if crate::enemy::load_frames() != 0 {
+                    return Ret::Remove;
+                }
                 self.alpha = (255 * t.min(dur) / dur) as f32;
                 if t >= dur {
                     return Ret::Remove;
@@ -1422,12 +1456,21 @@ impl ScreenEffect {
                     self.alpha = (t * 128 / dur) as f32;
                 }
             }
-            // SPEC-GAP: the "0x164D2C8 ≥ 2" condition of type 7 is not tested.
+            // 0x45BF10: frozen → hold; gameplay frame counter 0x164D2C8 < 2 → removed (no 0x18B8A2C test); else
+            // tick first, then end test, then the 2 draws.
             7 => {
-                if Self::frozen(ctx) {
+                if Self::frozen() {
                     return Ret::Next;
                 }
+                if ctx.game.frame_counter < 2 {
+                    return Ret::Remove;
+                }
+                self.timer.tick(gs);
+                let t = self.timer.cur;
                 let (amp, i, h, o) = (p0 as f32, p1.max(1), p2, p3.max(1));
+                if t >= i + h + o {
+                    return Ret::Remove;
+                }
                 let tf = t as f32;
                 let env = if t < i {
                     tf / i as f32
@@ -1437,9 +1480,7 @@ impl ScreenEffect {
                     ((i + h + o - t) as f32 / o as f32).max(0.0)
                 };
                 self.shake(ctx, amp * env);
-                if t >= i + h + o {
-                    return Ret::Remove;
-                }
+                return Ret::Next;
             }
             _ => return Ret::Remove,
         }
@@ -1486,4 +1527,35 @@ pub fn death_ring(rng: &mut crate::rng::Rng, pos: [f32; 3], frames: i32) {
 pub fn invuln_ring(anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
     let i = spawn_fixed(anm, 23, pos, FIX_INVULN, 0xFFFF4040);
     get(i, |e| e.vm.ivars[0] = frames);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Ring init 0x4272E0 (13 §2.6): 24 segments by default, centre = spawn pos, crossed param copy.
+    #[test]
+    fn ring_init_defaults() {
+        let mut fx = Effects::default();
+        let mut rng = crate::rng::Rng::seeded(0);
+        let pos = [10.0, 20.0, 0.0];
+        for (kind, n) in [
+            (35, 24),
+            (39, 24),
+            (49, 24),
+            (52, 24),
+            (53, 24),
+            (59, 24),
+            (41, 48),
+            (42, 64),
+        ] {
+            let i = fx.spawn_rng(&mut rng, kind, pos, 1, 0);
+            assert_eq!(fx.fx[i].ring.segments, n, "type {kind}");
+            assert_eq!(fx.fx[i].centre, pos);
+        }
+        let i = FIXED_BASE;
+        assert!(fx.init(&mut rng, 1.0, i, 35, pos, [1.0, 2.0, 3.0], 0, true));
+        let r = fx.fx[i].ring;
+        assert_eq!((r.start, r.radius, r.width), (1.0, 2.0, 3.0));
+    }
 }

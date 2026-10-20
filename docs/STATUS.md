@@ -324,6 +324,12 @@
   Draw2DRot after the title VMs and the stage-start clock (12 §5.7). Sync: golden 8297, fullrun_noclip 7745,
   selftest1 1921, demo MIN_SYNC 4628/3879/4035/6664 unchanged; draw logs: selftest1 95.49 → 95.74 %, golden 26.94 %,
   demo / menu draw logs unchanged. SPEC-GAP 169 → 168. Questions: `docs/briefs/IMPL40_QUESTIONS.md`.
+- impl62 (audit A.41, A.42, A.43, cloud, 2026-10-20): screen effects 1/2/4/7 follow 13 §3: shakes 1/7 hold on GameFlags
+  bit 10 or the freeze byte, otherwise tick first and end before the RNG draws; type 1 and fades 2/4 are removed while
+  0x18B8A2C ≠ 0 (now a global `enemy::load_frames`: native 30, StageStart 2, GM on-remove 1, Result/MainMenu 0,
+  Supervisor decrement); type 7 is removed while the gameplay frame counter < 2. Ring init 0x4272E0: 24 segments,
+  crossed param copy (13 §2.6). List C draws as `DrawBillboard` through `Camera_Set2D` on the playfield (13 §2.4).
+  Unit test for the ring init. Traces not run (cloud). SPEC-GAP 148 → 145. Questions: `docs/briefs/IMPL62_QUESTIONS.md`.
 - impl48 (audit A.50, A.51, A.52, cloud, 2026-10-20): BGM volume uses the square curve `config::bgm_volume_curve`
   (02 §4 `0x472840`; the cube stays for SE); `Audio::fade_bgm` queues command 5 with trunc(secs), started in
   Sound_Update (`start_fade`) and ticked at the top of the Supervisor calc (`tick_fade`): p = n·5000/N − 5000, linear

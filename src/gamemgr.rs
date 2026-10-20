@@ -719,6 +719,8 @@ impl GameManager {
         self.bullets = Some(bullets);
         self.enemies = Some(enemies);
         self.hud = Some(hud);
+        // 0x18B8A2C := 2 at the end of StageStart (13 §3).
+        crate::enemy::set_load_frames(2);
         Ok(())
     }
 
@@ -851,6 +853,8 @@ impl Task<Ctx> for GameManager {
         if chain != Chain::Calc {
             return;
         }
+        // 0x18B8A2C := 1 (13 §3).
+        crate::enemy::set_load_frames(1);
         let mut st = self.player.borrow().stats.clone();
         st.score10 = st.score10.min(999_999_999);
         st.score_disp = st.score10;

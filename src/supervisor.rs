@@ -482,6 +482,11 @@ impl Task<Ctx> for Supervisor {
             }
         }
         let r = self.switch(ctx);
+        // 0x18B8A2C decrements once per frame while ≠ 0 (13 §3, 11 §7).
+        let n = crate::enemy::load_frames();
+        if n != 0 {
+            crate::enemy::set_load_frames(n - 1);
+        }
         if ctx.game.menu_loading > 0 {
             let g = &mut ctx.game;
             match &mut g.sched {

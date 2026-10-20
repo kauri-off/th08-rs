@@ -562,6 +562,7 @@ pub struct Spell {
 
 thread_local! {
     static TIMER_PAUSE: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+    static LOAD_FRAMES: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
 }
 
 // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
@@ -571,6 +572,17 @@ pub fn timer_pause() -> i32 {
 
 pub fn set_timer_pause(v: i32) {
     TIMER_PAUSE.set(v);
+}
+
+// Global 0x18B8A2C "frames since load" (13 §3): ECL native 30 (= arg), 2 at the end of StageStart, 1 by
+// GameMgr_OnRemove, 0 by Result / MainMenu register; Supervisor_Calc decrements it once per frame while ≠ 0.
+// Read by screen effects 1 / 2 / 4, which are removed while it is ≠ 0.
+pub fn load_frames() -> i32 {
+    LOAD_FRAMES.get()
+}
+
+pub fn set_load_frames(v: i32) {
+    LOAD_FRAMES.set(v);
 }
 
 // Globals touched by ECL (difficulty, rank, argument registers, spell state, …).
@@ -601,9 +613,8 @@ pub struct Globals {
     pub native_globals: [i32; 2],
     // Byte 0x164D0BB (timeline op 16).
     pub flag_164d0bb: bool,
-    // 0xF54CEC (op 163), 0x18B8A2C (native 30), 0x4E4B60 (native 5).
+    // 0xF54CEC (op 163), 0x4E4B60 (native 5).
     pub g_f54cec: i32,
-    pub g_18b8a2c: i32,
     pub g_4e4b60: i32,
     // HUD life-bar markers (op 158).
     pub hud_markers: [[i32; 3]; 8],

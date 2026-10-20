@@ -1086,7 +1086,7 @@ impl Exec<'_> {
                     anmvm::set_slowdown_restore(true);
                 }
             }
-            30 => self.m.g.g_18b8a2c = arg,
+            30 => set_load_frames(arg),
             // SPEC-GAP: 07 §12 gives type 3 while 0x17D6ED4 ≠ 0; always type 5 here (IMPL24 Q7).
             31 => self.item(self.e.pos, 5),
             22 => {
