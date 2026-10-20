@@ -591,7 +591,11 @@ impl Exec<'_> {
                 }
             }
         }
-        if y < y0 + 48.0 && a < 0.0 || y > y1 - 48.0 && a > 0.0 {
+        // 07 §8.3: two sequential tests; when the bands overlap both can flip, so the move goes up.
+        if y < y0 + 48.0 && a < 0.0 {
+            a = -a;
+        }
+        if y > y1 - 48.0 && a > 0.0 {
             a = -a;
         }
         a
@@ -1187,7 +1191,7 @@ impl Exec<'_> {
             spell.bonus,
             self.m.frame
         );
-        self.m.pay_capture();
+        self.m.pay_capture(self.anm, false);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
         crate::gui::request(crate::gui::Req::BossShow {
             face: spell.face,

@@ -344,6 +344,8 @@ impl Task<Ctx> for Gui {
         };
         // VMs run only while bullets are not frozen (GameFlags bit 10) and the freeze byte 0x160F534 is 0 (12 §5.8).
         if !frozen {
+            // SPEC-GAP: 07 §11.1 does not order the capture-ring step against the VM runs; done first.
+            self.enemies.borrow_mut().capture_ring_step(&mut ctx.anm);
             for k in CALC_ORDER {
                 let vm = &mut self.vms[k];
                 if vm.script.is_some() && vm.run(&mut ctx.anm) {

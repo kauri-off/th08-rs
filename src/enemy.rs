@@ -614,10 +614,10 @@ pub struct Globals {
     pub payout: Option<Payout>,
 }
 
-// Capture payout pending in the spell object (07 §11.1): paid 130 frames after Spell_End or at the next card start.
+// Capture payout pending in the spell object (07 §11.1, bit 8): paid at ring timer 130 or at the next card start.
 #[derive(Clone, Copy, Debug)]
 pub struct Payout {
-    pub end_frame: u32,
+    // +0x104 bonus, +0x10 time reward still to be spawned as time orbs.
     pub bonus: i32,
     pub time: i32,
 }
@@ -1500,22 +1500,80 @@ impl EnemyManager {
         p.stats.spells += 1;
         // Spell capture checksum (11 §1.5, 4 draws).
         crate::player::Stats::checksum(&mut anm.rng);
+        // The start ring becomes the capture ring (+0xF4 → +0xF8).
+        // SPEC-GAP: 07 §11.1 does not say the ring timer +0x338 restarts here; 11 §3 "paid 130 frames later" implies it.
+        crate::effect::get(crate::effect::FIX_SPELL_INDEX, |e| e.age.set(0));
         self.g.payout = Some(Payout {
-            end_frame: self.frame,
             bonus: s.bonus,
             time,
         });
     }
 
-    // SPEC-GAP: the payout's AddTime is not applied (no session trace shows the reward in stats +0x3C); max point value only.
-    pub fn pay_capture(&mut self) {
+    // Payout (07 §11.1): at ring timer 130 (`ring`: ring freed, max point += left·10) or at the next Spell_Start.
+    pub fn pay_capture(&mut self, anm: &mut AnmManager, ring: bool) {
         let Some(c) = self.g.payout.take() else {
             return;
         };
+        if ring {
+            crate::effect::free(crate::effect::FIX_SPELL_INDEX);
+        }
         let st = &mut self.player.borrow_mut().stats;
-        st.add_score(c.bonus);
-        st.max_point += c.time * 10;
         st.popups.push(crate::player::Popup::SpellBonus(c.bonus));
+        st.add_score(c.bonus);
+        if c.time > 0 {
+            st.add_time(c.time, &mut anm.rng);
+            if ring {
+                st.max_point += c.time * 10;
+            }
+        }
+    }
+
+    // Capture-ring part of Spell_Calc 0x416B90 (07 §11.1); the caller skips it while bit 10 / the freeze byte is set.
+    pub fn capture_ring_step(&mut self, anm: &mut AnmManager) {
+        if self.g.spell.is_some() || self.g.payout.is_none() {
+            return;
+        }
+        let ring = crate::effect::FIX_SPELL_INDEX;
+        let (t, centre) = crate::effect::peek(ring, |e| (e.age.cur, e.centre));
+        // SPEC-GAP: the t == 30 / 60 ring restyle steps (VM timers/targets, no gameplay effect) are not done.
+        let pp = self.player.borrow().pos;
+        let div = if t > 80 { 4.0 } else { 16.0 };
+        let centre = [
+            centre[0] + (pp[0] - centre[0]) / div,
+            centre[1] + (pp[1] - centre[1]) / div,
+            0.0,
+        ];
+        crate::effect::get(ring, |e| {
+            e.centre = centre;
+            e.ring.start += if t > 80 { -0.0524 } else { -0.0157 };
+        });
+        let left = self.g.payout.map_or(0, |c| c.time);
+        if t > 8 && left > 0 {
+            // SPEC-GAP: f32 evaluation order of (t − 10)·2π/40 is not given; left to right.
+            use std::f32::consts::PI;
+            let a = anmvm::wrap_add((t as f32 - 10.0) * (2.0 * PI) / 40.0 - PI / 2.0, 0.0);
+            let mut left = left;
+            for (ang, n) in [(a, None), (anmvm::wrap_add(a + PI, 0.0), Some(6))] {
+                let k = left.min(7);
+                // Quirk kept (07 §11.1): the second burst always spawns 6, whatever k is.
+                let spawns = n.unwrap_or(k);
+                let pos = [
+                    centre[0] + ang.cos() * 128.0,
+                    centre[1] + ang.sin() * 128.0,
+                    centre[2],
+                ];
+                for _ in 0..spawns {
+                    self.spawn_item(anm, pos, 10, 0);
+                }
+                left -= k;
+            }
+            if let Some(c) = &mut self.g.payout {
+                c.time = left.max(0);
+            }
+        }
+        if t == 130 {
+            self.pay_capture(anm, true);
+        }
     }
 
     pub fn dialogue_active(&self) -> bool {
@@ -2056,14 +2114,6 @@ impl EnemyManager {
             .filter(|e| e.flags & A_LOSES_LIFE != 0)
             .map(|e| e.final_pos);
         crate::effect::with(|fx| fx.boss = pull);
-        // Capture payout 130 frames after Spell_End (07 §11.1).
-        if self
-            .g
-            .payout
-            .is_some_and(|c| self.frame.wrapping_sub(c.end_frame) >= 130)
-        {
-            self.pay_capture();
-        }
         // Bonus decay once per second (07 §11). SPEC-GAP: op 184 bonus-frozen (spell bit 11) is not implemented.
         if let Some(s) = &mut self.g.spell {
             s.frames += 1;

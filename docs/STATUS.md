@@ -234,6 +234,16 @@
   100 %, title fade-in) and a scripted stage 1 → 6A → ending → staff roll → result → menu run. Metrics unchanged
   (see the impl28 report). Questions: `docs/briefs/IMPL28_QUESTIONS.md`.
 
+- impl29 (RE-Q24 sync bugs, 2026-10-20): capture time reward as time orbs from the capture ring (07 §11.1:
+  `EnemyManager::capture_ring_step` in `Spell_Calc`, centre follows the player, min(r,7) + 6 type-10 spawns per frame
+  from t > 8, payout at ring t 130 with AddTime/max point only for a remainder; `Spell_Start` payout adds the time
+  without max point); death shrink timer counts from the hit (09 §6.2; not reset at the real death, last vx/vy := 0
+  each shrink frame); respawn clear +0xE2A70 := 60 every respawn call and counted down in UpdateInvuln (09 §6.3);
+  op 67/178 y-edge tests sequential (07 §8.3).
+  - Leading rows: golden 8055 → 8104, fullrun_noclip 6265 → 7552, selftest1 1422. Demo sync 4450/3869/2937/1605 →
+    4450/3869/3081/1605. Draw logs unchanged. fullrun smoke now reaches 5 stages (desynced input; assert lowered).
+    SPEC-GAP 179 → 182. Questions: `docs/briefs/IMPL29_QUESTIONS.md`.
+
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).

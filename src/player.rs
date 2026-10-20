@@ -1008,6 +1008,8 @@ impl Player {
             }
             return false;
         }
+        // 09 §6.2: t counts from the hit (not reset at the real death); last vx/vy := 0 every frame here.
+        self.last_v = [0.0; 2];
         let t = self.state_timer.cur;
         if t <= 29 {
             self.vm.scale = [1.0 - t as f32 / 30.0, 1.0 + 3.0 * t as f32 / 30.0];
@@ -1022,9 +1024,6 @@ impl Player {
         let base = self.sprite_base(self.focus.min(1));
         self.set_script(anm, base);
         self.vm.scale = [3.0, 3.0];
-        // SPEC-GAP: last vx/vy reset and respawn_clear = 60 here are not placed by 09 §6.2 / §6.3.
-        self.last_v = [0.0; 2];
-        self.respawn_clear = 60;
         if self.stats.lives >= 1.0 {
             self.stats.add_lives(-1.0, &mut anm.rng);
             self.stats.bombs = self.sht.bombs.trunc();
@@ -1055,7 +1054,6 @@ impl Player {
         );
         self.freeze_bullets = false;
         self.last_spell = 0;
-        self.state_timer.set(0);
         let rng = &mut anm.rng;
         self.stats.deaths += 1;
         Stats::checksum(rng);
@@ -1083,13 +1081,10 @@ impl Player {
         self.stats.rank(-1600);
     }
 
-    // Player_RespawnUpdate 0x44D180 (09 §6.3): 60-frame clear rect (item −1), 30-frame grow from scale 3.
+    // Player_RespawnUpdate 0x44D180 (09 §6.3): clear timer := 60 on every call, 30-frame grow from scale 3.
     // SPEC-GAP: the invulnerability timer 240 is set even with GameFlags bit 14 (09 §6.3 skips it).
     fn respawn_update(&mut self) {
-        if self.respawn_clear > 0 {
-            self.respawn_clear -= 1;
-            self.cancel_rect([self.pos[0], self.pos[1]], [768.0, 896.0], -1, 0);
-        }
+        self.respawn_clear = 60;
         let t = self.state_timer.cur;
         self.speed_mult = [1.0; 2];
         self.deathbomb = 0;
@@ -1110,6 +1105,12 @@ impl Player {
 
     // Player_UpdateInvuln 0x44D2C0 (09 §6.4): colour 0xFFF02020 when t mod 8 < 2; the ring follows the player.
     fn update_invuln(&mut self, gs: f32) {
+        // 09 §6.3: +0xE2A70 counts down here (60 more frames after the respawn), full-screen clear, item −1.
+        // SPEC-GAP: 09 §6.3 does not place the clear relative to the state-3 colour/timer step; done first.
+        if self.respawn_clear != 0 {
+            self.respawn_clear -= 1;
+            self.cancel_rect([self.pos[0], self.pos[1]], [768.0, 896.0], -1, 0);
+        }
         if self.state == 3 {
             self.state_timer.dec(gs);
             let t = self.state_timer.cur;
