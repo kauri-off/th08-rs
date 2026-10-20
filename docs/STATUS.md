@@ -296,6 +296,18 @@
   value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
   and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
   Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
+- impl39 (RE-Q25 CODE BUGs 4–6, 2026-10-20): screen effects registered from calc nodes below prio 3 are linked at once
+  (`effect::screen_now` for the `GameMgr_Calc` demo-end fade, `loading_overlay` from the Supervisor on-register), so
+  their first calc runs in the same frame (13 §3). Stage-clear panel per the rewritten 12 §5.6: op 9 stores the values
+  and restarts / clears the stage-clear VM (sprite 0x80 + clock advance, 10 §9); `Hud_Calc` computes the bonus once on
+  the next frame in i32 (lives/bombs bonus unless practice, 6B night bonus always, integer rank multipliers, lives-option
+  penalty always); the draw builds the strings each frame with the table's colours and pen layout, lines hidden for
+  practice and practice replays (`Game::practice_replay`, info +0x7B), integer percentages, "PM%2d:%02d" clock line at
+  x 120 / 219 / 253. HUD draw order clear panel → Msg → boss UI / title / clocks / stage-clear VM (playfield viewport)
+  → panel → popups (12 §5.3); ASCII strings carry the clip flag (12 §2.9), popups use it; spell-bonus lines at
+  (105, 80) and ((384 − len·28)/2 + 32, 96) (12 §5.5). Sync: golden 8297, fullrun_noclip 7745, selftest1 1921, demo
+  MIN_SYNC 4628/3879/4035/6664 unchanged; golden draw log same quads 2165520 → 2176755 (26.80 → 26.94 %); selftest1
+  95.49 %, demo / menu draw logs unchanged. SPEC-GAP 174 → 169. Questions: `docs/briefs/IMPL39_QUESTIONS.md`.
 - impl38 (RE-Q27 CODE BUGs 8–9, 2026-10-20): `Spell_Calc` card-active steps 1.1–1.7 (07 §11.1) in
   `EnemyManager::spell_step` + `Gui::calc`: the card ends silently (bit 0 off, `Spell_HideName`, no Spell_End) when the
   boss is dead or its slot index differs from the one stored at Spell_Start; bonus-line tint +0x2620 (reset at

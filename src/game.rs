@@ -104,8 +104,8 @@ impl Ctx {
         self.anm.begin_frame();
         let f = task::run(self, Chain::Calc);
         self.sound_update();
-        // Port: ScreenEffect_Register (13 §3) links its nodes at once; queued effects are linked here, after the chain.
-        // SPEC-GAP: one registered by a calc node below prio 3 would run its first calc on the same frame in the original.
+        // Port: ScreenEffect_Register (13 §3) links its nodes at once; effects queued by calc nodes after prio 3 are linked
+        // here (their first calc is the next frame either way); callers below prio 3 use `effect::screen_now`.
         crate::effect::register_pending(self);
         self.frame += 1;
         f

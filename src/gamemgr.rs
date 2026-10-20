@@ -237,6 +237,11 @@ impl Game {
         self.flags & F_REPLAY != 0
     }
 
+    // 0x43C322 (12 §5.6): replay playback of a practice game (replay info +0x7B).
+    pub fn practice_replay(&self) -> bool {
+        self.replay() && self.rpy.as_ref().is_some_and(|r| r.practice())
+    }
+
     pub fn request(&mut self, scene: i32) {
         self.requested = scene;
     }
@@ -974,8 +979,9 @@ impl Task<Ctx> for GameManager {
                 let gs = ctx.anm.speed;
                 ctx.audio
                     .fade_bgm(if gs > 0.0 && gs <= 1.0 { 3.0 / gs } else { 3.0 });
-                crate::effect::screen(2, end - fade, 0, 0, 0, 0x15);
+                crate::effect::screen_now(ctx, 2, end - fade, 0, 0, 0, 0x15);
             }
+            let g = &mut ctx.game;
             if g.demo_frame >= end {
                 g.request(SCENE_MENU);
                 return Ret::StopFrame;
@@ -984,6 +990,7 @@ impl Task<Ctx> for GameManager {
         // GameMgr_Calc's own z clear (11 §3.1), the previous frame left the viewport full-screen.
         ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
         ctx.gfx.clear_depth(None);
+        let g = &mut ctx.game;
         // Step 7 (0x43A5BC): bit 2 := not paused and no game-over menu, so it is already 0 on the ESC frame (11 §2.1).
         if g.paused == 0 && g.game_over == 0 {
             g.flags |= F_RUNNING;

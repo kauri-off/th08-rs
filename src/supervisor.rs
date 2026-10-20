@@ -238,7 +238,7 @@ impl Supervisor {
         self.stage_load = true;
         self.capture_req = true;
         if from_menu {
-            crate::effect::loading_overlay();
+            crate::effect::loading_overlay(ctx);
         }
         Ok(())
     }

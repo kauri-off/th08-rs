@@ -30,6 +30,8 @@ pub struct Text {
     pub high: bool,
     // Highlight state +0x8278 (12 §2.9).
     pub hl: bool,
+    // +0x8274: 1 = drawn in the playfield viewport (12 §2.9).
+    pub clip: bool,
 }
 
 impl Text {
@@ -44,6 +46,7 @@ impl Text {
             advance: 13.0,
             high: true,
             hl: false,
+            clip: false,
         }
     }
 
@@ -80,6 +83,11 @@ impl Text {
         self
     }
 
+    pub fn clip(mut self) -> Self {
+        self.clip = true;
+        self
+    }
+
     pub fn low(mut self) -> Self {
         self.high = false;
         self
@@ -101,9 +109,14 @@ impl Queue {
 
     // Ascii_DrawStrings 0x402B20 (12 §2.9): '\n' → y += 16·scale y, ' ' → advance only, other bytes Draw2DSnap.
     fn draw(&mut self, ctx_anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, high: bool) {
-        gfx.set_viewport(FULLSCREEN);
         let o = ctx_anm.screen_offset;
         for t in self.items.iter().filter(|t| t.high == high) {
+            let vp = if t.clip {
+                crate::gfx::PLAYFIELD
+            } else {
+                FULLSCREEN
+            };
+            gfx.set_viewport(vp);
             let (mut x, mut y) = (t.x + o[0], t.y + o[1]);
             // Chars U+0000-U+00FF are glyph bytes (U+0080 / U+0081 = the "SP" / "END" cells, 16 §2.2).
             for c in t.s.chars().map(|c| c as u32 as u8) {
@@ -122,7 +135,7 @@ impl Queue {
                     let (w, h) = (sp.w * t.scale, sp.h * t.scale_y);
                     // Draw2DSnap culls quads outside the viewport (05 §9 EmitQuad step 3).
                     let (rx, ry) = (x.round_ties_even() - 0.5, y.round_ties_even() - 0.5);
-                    if rx + w < 0.0 || rx > 640.0 || ry + h < 0.0 || ry > 480.0 {
+                    if rx + w < vp.x || rx > vp.x + vp.w || ry + h < vp.y || ry > vp.y + vp.h {
                         x += t.advance * t.scale;
                         continue;
                     }
@@ -326,7 +339,7 @@ fn popups_calc(gs: f32) {
     });
 }
 
-// SPEC-GAP: the playfield viewport for popups and the gauge readout is not in a numbered spec (13 §4 draw 0x405420).
+// Popups and the gauge readout are drawn in the playfield viewport (12 §5.3, 13 §4 draw 0x405420).
 fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
     gfx.set_viewport(crate::gfx::PLAYFIELD);
     let pl = crate::effect::with(|e| e.player);

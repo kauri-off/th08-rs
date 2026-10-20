@@ -30,13 +30,14 @@ const CLEAR_BONUS: [i64; 9] = [
     1_000_000, 1_500_000, 2_000_000, 2_500_000, 2_500_000, 3_000_000, 4_000_000, 6_000_000,
     6_660_000,
 ];
-// Difficulty line and multiplier of the clear bonus (12 §5.6).
-const RANK_TEXT: [(&str, f64); 5] = [
-    ("Easy Rank    *0.5", 0.5),
-    ("Normal Rank  *1.0", 1.0),
-    ("Hard Rank    *1.2", 1.2),
-    ("Lunatic Rank *1.5", 1.5),
-    ("Extra Rank   *2.0", 2.0),
+// Difficulty line of the clear panel, difficulties 0–5 (12 §5.6).
+const RANK_TEXT: [&str; 6] = [
+    "Easy Rank    *0.5",
+    "Normal Rank  *1.0",
+    "Hard Rank    *1.2",
+    "Lunatic Rank *1.5",
+    "Extra Rank   *2.0",
+    "Phantasm Rank*2.0",
 ];
 
 // Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus popup with its age in frames (12 §5.5).
@@ -49,9 +50,15 @@ struct ActivePopup {
 struct ClearPanel {
     frame: u32,
     stage: usize,
-    // Text lines at (120, 96 + 16·i) with ARGB colour; an empty line is a gap.
-    lines: Vec<(String, u32)>,
-    // Night clock in minutes (660 + 30·clock) before / after the advance, and the animated value (12 §5.6).
+    // Stored by msg op 9 (10 §9): clear bonus, point items, graze, time.
+    clear: i32,
+    points: i32,
+    graze: i32,
+    time: i32,
+    // Bonus not computed yet: Hud_Calc does it once, on the first frame after op 9 (12 §5.6).
+    pending: bool,
+    // Night clock in minutes (660 + 30·clock) before / after the advance (impl+0x22E04 / +0x22E08), and the animated
+    // value (impl+0x22E0C).
     from: i32,
     to: i32,
     shown: i32,
@@ -86,6 +93,8 @@ pub struct Hud {
     timer_last: i32,
     popups: Vec<ActivePopup>,
     clear: Option<ClearPanel>,
+    // impl+0x22D88: stored clear-panel total (12 §5.6).
+    clear_total: i32,
 }
 
 impl Hud {
@@ -115,6 +124,7 @@ impl Hud {
             timer_last: -1,
             popups: Vec::new(),
             clear: None,
+            clear_total: 0,
         }));
         let t: task::TaskRef<Ctx> = h.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -265,7 +275,7 @@ impl Hud {
         }
     }
 
-    // Msg op 9 (10 §9) and the bonus computation (12 §5.6).
+    // Msg op 9 (10 §9): stores the panel values, advances the clock, restarts the stage-clear VM.
     fn stage_end(&mut self, ctx: &mut Ctx) {
         log::info!(
             "stage clear (msg op 9) at frame {} score {}",
@@ -275,20 +285,19 @@ impl Hud {
         let g = &mut ctx.game;
         g.flags |= gamemgr::F_CLEAR_PANEL;
         let stage = g.stage % 9;
-        let d = g.difficulty.clamp(0, 4) as usize;
         let mut p = self.player.borrow_mut();
         let shot = p.shot_type;
-        // Stages 1–5 start the bonus panel VMs (10 §9).
+        let adv = gamemgr::clock_advance(stage, p.stats.time, p.stats.time_threshold);
+        // Stage-clear VM impl+0x212C8 (10 §9): stages 1–5 restart ascii.anm script 3 with sprite 0x80 + clock advance;
+        // 6A/6B/Ex only clear its ip; interrupt 1 in every case.
         if stage < 6 {
             ctx.anm
                 .set_script(&mut self.clear_vm, crate::ascii::ANM_SLOT, 3);
-            self.clear_vm.pending_interrupt = 1;
-        }
-        let adv = gamemgr::clock_advance(stage, p.stats.time, p.stats.time_threshold);
-        if stage < 6 {
-            // SPEC-GAP: sprite 0x80 + clock advance of the stage-clear VM has no spec section.
             self.clear_vm.set_sprite(&ctx.anm, 0x80 + adv);
+        } else {
+            self.clear_vm.script = None;
         }
+        self.clear_vm.pending_interrupt = 1;
         let rng = &mut ctx.anm.rng;
         let st = &mut p.stats;
         let from = st.clock * 30 + 660;
@@ -305,88 +314,62 @@ impl Hud {
                 crate::sound::play(crate::sound::CARDGET);
             }
         }
-        let clear = CLEAR_BONUS[stage];
-        let (points, graze, time) = (
-            st.point_items as i64 * 5000,
-            st.graze as i64 * 50,
-            st.time as i64 * 100,
-        );
-        let mut total = clear + points + graze + time;
-        let mut lines = vec![
-            (
-                if final_stage {
-                    "All Clear!"
-                } else {
-                    "Stage Clear"
-                }
-                .to_string(),
-                0xFFFFFF40,
-            ),
-            (String::new(), 0),
-            (format!("Clear = {clear:8}0"), 0xFFFFFFFF),
-            (format!("Point = {points:8}0"), 0xFFE0E0FF),
-            (format!("Graze = {graze:8}0"), 0xFFFFFFFF),
-            (format!("Time  = {time:8}0"), 0xFFFFFFFF),
-        ];
-        // Share of non-dialogue player frames at human / youkai max gauge (12 §5.6).
-        let pct = |n: u32| n as f32 * 100.0 / st.stage_frames.max(1) as f32;
-        lines.push((
-            format!("over-80% = {:.2}%", pct(st.human_frames)),
-            0xFFFFFFFF,
-        ));
-        lines.push((
-            format!("over 80% = {:.2}%", pct(st.youkai_frames)),
-            0xFFFFFFFF,
-        ));
-        // SPEC-GAP: 12 §5.6 excludes "a replay with header +0x7B"; the port excludes every replay.
-        if final_stage && !g.practice() && !g.replay() {
-            let (lv, bm) = (st.lives as i64 * 2_500_000, st.bombs as i64 * 500_000);
-            total += lv + bm;
-            lines.push((format!("Player ={lv:8}0"), 0xFFFFFFFF));
-            lines.push((format!("Bomb   = {:7}0", bm), 0xFFFFFFFF));
-            if stage == 7 {
-                // 6B night bonus (12 − clock)·2 000 000; the max(0) is a port guard.
-                let night = (12 - st.clock).max(0) as i64 * 2_000_000;
-                total += night;
-                let m = 660 + 30 * st.clock;
-                lines.push((
-                    format!("Last Time = {:2}:{:02}", (m / 60) % 12, m % 60),
-                    0xFFFFFFFF,
-                ));
-                lines.push(("Night Bonus".into(), 0xFFFFFFFF));
-                lines.push((format!("        {night:8}0"), 0xFFFFFFFF));
-            }
-        }
-        let (rt, mul) = RANK_TEXT[d];
-        lines.push((rt.into(), 0xFFFF8080));
-        let mut total = (total as f64 * mul) as i64;
-        let penalty = match g.cfg.lives {
-            3 => Some(("Player Penalty*0.5", 0.5)),
-            4 => Some(("Player Penalty*0.2", 0.2)),
-            5 => Some(("Player Penalty*0.1", 0.1)),
-            6 => Some(("Player Penalty*0.05", 0.05)),
-            _ => None,
-        };
-        if let Some((t, m)) = penalty {
-            lines.push((t.into(), 0xFFFF8080));
-            total = (total as f64 * m) as i64;
-        }
-        lines.push((String::new(), 0));
-        lines.push((format!("Total = {total:8}0"), 0xFFFFFFFF));
-        // AddScore(total) is called 10 times: displayed points = total·10, matching the "%8d0" text (12 §5.6).
-        for _ in 0..10 {
-            st.add_score(total as i32);
-        }
-        log::info!("clear bonus {total}: score {}", st.score10);
         self.clear = Some(ClearPanel {
             frame: 0,
             stage,
-            lines,
+            clear: CLEAR_BONUS[stage] as i32,
+            points: st.point_items,
+            graze: st.graze,
+            time: st.time,
+            pending: true,
             from,
             to,
             shown: from,
             done: final_stage,
         });
+    }
+
+    // Bonus computation (12 §5.6), integer arithmetic; the lives-option penalty applies in every game.
+    fn clear_bonus(&mut self, g: &Game) {
+        let Some(c) = &mut self.clear else { return };
+        if !std::mem::take(&mut c.pending) {
+            return;
+        }
+        let mut p = self.player.borrow_mut();
+        let st = &mut p.stats;
+        let mut t = c
+            .clear
+            .wrapping_add(c.graze.wrapping_mul(50))
+            .wrapping_add(c.points.wrapping_mul(5000))
+            .wrapping_add(c.time.wrapping_mul(100));
+        // Replays included, even practice replays (only GM bit 0 is tested).
+        if c.stage >= 6 && !g.practice() {
+            t = t
+                .wrapping_add((st.lives as i32).wrapping_mul(2_500_000))
+                .wrapping_add((st.bombs as i32).wrapping_mul(500_000));
+        }
+        if c.stage == 7 {
+            t = t.wrapping_add((12 - st.clock).wrapping_mul(2_000_000));
+        }
+        t = match g.difficulty {
+            0 => t / 2,
+            2 => t.wrapping_mul(12) / 10,
+            3 => t.wrapping_mul(15) / 10,
+            4 => t.wrapping_mul(2),
+            _ => t,
+        };
+        t = match g.cfg.lives {
+            3 => t.wrapping_mul(5) / 10,
+            4 => t.wrapping_mul(2) / 10,
+            5 => t / 10,
+            6 => t / 20,
+            _ => t,
+        };
+        self.clear_total = t;
+        for _ in 0..10 {
+            st.add_score(t);
+        }
+        log::info!("clear bonus {t}: score {}", st.score10);
     }
 
     // Clock animation (12 §5.6): after 60 frames +1 minute per frame, +3 more while Shot or Skip is held.
@@ -595,13 +578,16 @@ impl Hud {
         }
     }
 
-    // Hud_DrawPopups 0x438A89 (12 §5.5): bonus / message popups slide from x 416 by −312 over 30 frames.
+    // Hud_DrawPopups 0x438A89 (12 §5.5): every string with the clip flag (playfield viewport); bonus / message
+    // popups slide from x 416 by −312 over 30 frames.
     fn draw_popups(&mut self, ctx: &mut Ctx) {
         for p in &self.popups {
             let slide = |f: u32| 416.0 - 312.0 * (f.min(30) as f32 / 30.0);
             match p.kind {
                 Popup::Bonus(n) => ctx.ascii.push(
-                    Text::new(slide(p.frame), 48.0, format!(" BONUS {n:8}")).argb(0xFFFFFF80),
+                    Text::new(slide(p.frame), 48.0, format!(" BONUS {n:8}"))
+                        .argb(0xFFFFFF80)
+                        .clip(),
                 ),
                 Popup::Message(t, v) => {
                     let (s, small) = match t {
@@ -610,70 +596,144 @@ impl Hud {
                         5 => ("Spell Bonus Failed".to_string(), true),
                         _ => ("Last Spell Failed".to_string(), true),
                     };
-                    let mut tx = Text::new(slide(p.frame), 168.0, s);
+                    let mut tx = Text::new(slide(p.frame), 168.0, s).clip();
                     if small {
                         tx = tx.scale(0.9).advance(11.0);
                     }
                     ctx.ascii.push(tx);
                 }
+                // "Spell Card Bonus!" at x (384 − 17·14)/2 + 32 = 105 (14 px per glyph, not the 13 px advance), y 80;
+                // "+%d" 2× at y 96, x (384 − len·28)/2 + 32.
                 Popup::SpellBonus(n) => {
                     let s = "Spell Card Bonus!";
-                    ctx.ascii.push(
-                        Text::new(
-                            224.0 - crate::ascii::text_width(s, 13.0, 1.0) / 2.0,
-                            80.0,
-                            s,
-                        )
-                        .argb(0xFFFF0000),
-                    );
+                    let x = ((384 - s.len() as i32 * 14) / 2 + 32) as f32;
+                    ctx.ascii
+                        .push(Text::new(x, 80.0, s).argb(0xFFFF0000).clip());
                     let v = format!("+{n}");
-                    ctx.ascii.push(
-                        Text::new(
-                            224.0 - crate::ascii::text_width(&v, 13.0, 2.0) / 2.0,
-                            // SPEC-GAP: 12 §5.5 gives no y for the 2× "+%d" line.
-                            100.0,
-                            v,
-                        )
-                        .scale(2.0)
-                        .argb(0xFFFF8080),
-                    );
+                    let x = ((384 - v.len() as i32 * 28) / 2 + 32) as f32;
+                    ctx.ascii
+                        .push(Text::new(x, 96.0, v).scale(2.0).argb(0xFFFF8080).clip());
                 }
             }
         }
     }
 
-    // Hud_DrawClearPanel 0x43826B (12 §5.6); stages 1–5 add the "AM|PM h:mm >> AM|PM h:mm" clock line.
+    // Hud_DrawClearPanel 0x43826B (12 §5.6): ASCII strings only, full-screen (clip flag 0); pen from (120, 96).
     fn draw_clear(&mut self, ctx: &mut Ctx) {
         let Some(c) = &self.clear else { return };
+        let g = &ctx.game;
+        let st = &self.player.borrow().stats;
+        let q = &mut ctx.ascii;
         let mut y = 96.0;
-        for (s, col) in &c.lines {
-            if !s.is_empty() {
-                ctx.ascii.push(Text::new(120.0, y, s.clone()).argb(*col));
-            }
+        let line = |q: &mut crate::ascii::Queue, y: f32, s: String, col: u32| {
+            q.push(Text::new(120.0, y, s).argb(col));
+        };
+        let title = if c.stage < 6 {
+            "Stage Clear"
+        } else {
+            "All Clear!"
+        };
+        // 6B / Extra put the title at y 80; the pen stays at 96.
+        let ty = if c.stage > 6 { 80.0 } else { y };
+        line(q, ty, title.into(), 0xFFFFFF40);
+        y += 32.0;
+        line(q, y, format!("Clear = {:8}0", c.clear), 0xFFFFFFFF);
+        y += 16.0;
+        line(
+            q,
+            y,
+            format!("Point = {:8}0", c.points.wrapping_mul(5000)),
+            0xFFE0E0FF,
+        );
+        y += 16.0;
+        line(
+            q,
+            y,
+            format!("Graze = {:8}0", c.graze.wrapping_mul(50)),
+            0xFFD0D0FF,
+        );
+        y += 16.0;
+        line(
+            q,
+            y,
+            format!("Time  = {:8}0", c.time.wrapping_mul(100)),
+            0xFFD0D0FF,
+        );
+        // Integer percentages (h·100)/f and ((h·10000)/f) % 100, truncated.
+        // SPEC-GAP: f = 0 (no counted frame) is a division by zero in 12 §5.6; the port divides by 1.
+        let f = st.stage_frames.max(1) as i32;
+        let pct = |h: u32| {
+            let h = h as i32;
+            (h.wrapping_mul(100) / f, h.wrapping_mul(10000) / f % 100)
+        };
+        let (a, b) = pct(st.human_frames);
+        y += 32.0;
+        line(q, y, format!("over-80% = {a:3}.{b:02}%"), 0xFFD0D0FF);
+        let (a, b) = pct(st.youkai_frames);
+        y += 16.0;
+        line(q, y, format!("over 80% = {a:3}.{b:02}%"), 0xFFD0D0FF);
+        if c.stage >= 6 && !g.practice() && !g.practice_replay() {
+            let (lv, bm) = (
+                (st.lives as i32).wrapping_mul(2_500_000),
+                (st.bombs as i32).wrapping_mul(500_000),
+            );
             y += 16.0;
+            line(q, y, format!("Player ={lv:8}0"), 0xFFFFFF80);
+            y += 16.0;
+            line(q, y, format!("Bomb   = {bm:7}0"), 0xFFFFFF80);
+            if c.stage == 7 {
+                let m = c.to;
+                y += 16.0;
+                line(
+                    q,
+                    y,
+                    format!("Last Time = {:2}:{:02}", (m / 60) % 12, m % 60),
+                    0xFFFFFF80,
+                );
+                y += 16.0;
+                line(q, y, "Night Bonus".into(), 0xFFFFFF80);
+                y += 16.0;
+                let night = (12 - st.clock).wrapping_mul(2_000_000);
+                line(q, y, format!("        {night:8}0"), 0xFFFFFF80);
+            }
         }
-        if c.stage <= 5 {
-            let fmt = |m: i32| {
+        y += 32.0;
+        let rank = RANK_TEXT.get(g.difficulty as usize).copied().unwrap_or("");
+        line(q, y, rank.into(), 0xFFFF8080);
+        if g.difficulty < 4 && !g.practice() {
+            y += 16.0;
+            let pen = match g.cfg.lives {
+                3 => Some("Player Penalty*0.5"),
+                4 => Some("Player Penalty*0.2"),
+                5 => Some("Player Penalty*0.1"),
+                6 => Some("Player Penalty*0.05"),
+                _ => None,
+            };
+            if let Some(t) = pen {
+                line(q, y, t.into(), 0xFFFF8080);
+                y += 16.0;
+            }
+        }
+        y += 16.0;
+        line(q, y, format!("Total = {:8}0", self.clear_total), 0xFFFFFFFF);
+        if c.stage < 6 {
+            // Prefix "PM" while minutes/60 < 12, else "AM"; hours (minutes/60) % 12.
+            let clock = |m: i32| {
                 format!(
-                    "{} {:2}:{:02}",
+                    "{}{:2}:{:02}",
                     if m / 60 < 12 { "PM" } else { "AM" },
                     (m / 60) % 12,
                     m % 60
                 )
             };
-            ctx.ascii.push(Text::new(
-                120.0,
-                y + 16.0,
-                format!("{} >> {}", fmt(c.from), fmt(c.shown)),
-            ));
-        }
-        ctx.gfx.set_viewport(FULLSCREEN);
-        if self.clear_vm.script.is_some() {
-            ctx.anm.draw_mode(&mut ctx.gfx, &mut self.clear_vm, 0);
+            y += 40.0;
+            q.push(Text::new(120.0, y, clock(c.from)).argb(0xFFDFDFDF));
+            q.push(Text::new(219.0, y, ">>").argb(0xFFAFAFAF));
+            q.push(Text::new(253.0, y, clock(c.shown)).argb(0xFFFF8F8F));
         }
     }
 
-    // Hud_DrawPanel (12 §5.3), redrawn every frame.
+    // Hud_DrawPanel (12 §5.3), redrawn every frame; flushes and sets the full-screen viewport first.
     fn draw_panel(&mut self, ctx: &mut Ctx, st: &Stats) {
         let gfx = &mut ctx.gfx;
         gfx.set_viewport(FULLSCREEN);
@@ -703,8 +763,10 @@ impl Hud {
         for y in [88.0, 104.0, 136.0, 152.0, 168.0, 184.0] {
             spr(anm, gfx, 15, 480.0, y, 0.48);
         }
-        // SPEC-GAP: this erase patch at (512, 464) is not in the 12 §5.3 repaint list.
+        // Always: the corner under the fps text.
         spr(anm, gfx, 15, 512.0, 464.0, 0.48);
+        // Full repaint (cfg bit 12, tile VM 13 still running = first 200 frames, or counter 0x17CE8CC ≠ 0) and the
+        // dirty rows are not tracked: the port clears the screen every frame, so it repaints in full every frame.
         for y in (0..480).step_by(32) {
             spr(anm, gfx, 13, 0.0, y as f32, 0.49);
         }
@@ -869,6 +931,7 @@ impl Task<Ctx> for Hud {
             dialogue,
             ctx.game.paused != 0 || ctx.game.game_over != 0,
         );
+        self.clear_bonus(&ctx.game);
         self.clear_calc(&mut ctx.game, &inp);
         for p in self.player.borrow_mut().stats.popups.drain(..) {
             self.popups.push(ActivePopup { kind: p, frame: 0 });
@@ -901,30 +964,37 @@ impl Task<Ctx> for Hud {
         Ret::Next
     }
 
+    // Hud_Draw (12 §5.3): clear panel strings, Msg_Draw, Hud_DrawBoss, Hud_DrawPanel, Hud_DrawPopups. Everything
+    // before Hud_DrawPanel inherits the playfield viewport set by Stage_DrawLow.
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if ctx.game.loading != 0 {
             return Ret::Next;
         }
+        self.draw_clear(ctx);
+        ctx.gfx.set_viewport(PLAYFIELD);
         self.draw_msg(&mut ctx.anm, &mut ctx.gfx);
-        // Hud_DrawBoss 0x43741D only while no dialogue runs (12 §5.4).
+        // Hud_DrawBoss 0x43741D: the bar and timer only while no dialogue runs (12 §5.4).
         if !self.msg.borrow().active() {
             self.draw_boss(ctx);
         }
-        // SPEC-GAP: the playfield viewport for the title / clock VMs is not in a numbered spec.
         ctx.gfx.set_viewport(PLAYFIELD);
+        // Stage title VMs, the stage-start clock and the night clock (12 §5.1, §5.7).
         for vm in self
             .title
             .iter_mut()
-            .chain([&mut self.night_vm, &mut self.start_clock_vm])
+            .chain([&mut self.start_clock_vm, &mut self.night_vm])
         {
             if vm.script.is_some() {
                 ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
             }
         }
-        self.draw_popups(ctx);
-        self.draw_clear(ctx);
+        // SPEC-GAP: the draw site of the stage-clear VM impl+0x212C8 is not in 10 §9 / 12 §5; drawn here, playfield viewport.
+        if self.clear_vm.script.is_some() {
+            ctx.anm.draw_mode(&mut ctx.gfx, &mut self.clear_vm, 0);
+        }
         let st = self.player.borrow().stats.clone();
         self.draw_panel(ctx, &st);
+        self.draw_popups(ctx);
         Ret::Next
     }
 }

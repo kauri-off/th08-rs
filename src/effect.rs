@@ -1264,16 +1264,18 @@ thread_local! {
     static LOADING_RELEASE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-// 0x4489CA(0): the loading darken overlay (type 5, 60 frames, black, draw prio 1), released when loading ends.
-pub fn loading_overlay() {
+// 0x4489CA(0) `Loading_StartDarken`: the loading darken overlay (type 5, 60 frames, black, draw prio 1), released when
+// loading ends. Called from an on-register callback inside the Supervisor calc (prio 0), so it is linked at once (13 §3).
+pub fn loading_overlay(ctx: &mut Ctx) {
     LOADING_RELEASE.set(false);
-    with(|e| {
-        e.screen.push(ScreenEffect {
+    link(
+        ctx,
+        ScreenEffect {
             prio: 1,
             loading: true,
             ..screen_fx(5, 60, 0, 0, 0)
-        })
-    });
+        },
+    );
 }
 
 // 0x45C160 from Loading_Wait / Loading_End.
@@ -1283,7 +1285,8 @@ pub fn release_loading_overlay() {
 
 pub const SCREEN_CALC_PRIO: u16 = 3;
 
-// Queues a screen effect; registered after the calc pass (calc prio 3, draw at `prio`).
+// Queues a screen effect; registered after the calc pass (calc prio 3, draw at `prio`). Only valid for callers that run
+// after calc prio 3: their effect's first calc is the next frame either way (13 §3).
 pub fn screen(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
     with(|e| {
         e.screen.push(ScreenEffect {
@@ -1293,15 +1296,32 @@ pub fn screen(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
     });
 }
 
+// ScreenEffect_Register from a calc node below prio 3 (`GameMgr_Calc`): the nodes are linked at once, so the first
+// calc runs in the same frame (13 §3).
+pub fn screen_now(ctx: &mut Ctx, kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
+    link(
+        ctx,
+        ScreenEffect {
+            prio,
+            ..screen_fx(kind, p0, p1, p2, p3)
+        },
+    );
+}
+
 pub fn register_pending(ctx: &mut Ctx) {
     let list = with(|e| std::mem::take(&mut e.screen));
-    for mut s in list {
-        s.timer.set(0);
-        let t = task::task(s);
-        let prio = s.prio;
-        if task::add(ctx, Chain::Calc, SCREEN_CALC_PRIO, 0, t.clone()).is_ok() {
-            let _ = task::add(ctx, Chain::Draw, prio, 0, t);
-        }
+    for s in list {
+        link(ctx, s);
+    }
+}
+
+// FuncChain_AddCalc (prio 3) + AddDraw (13 §3).
+fn link(ctx: &mut Ctx, mut s: ScreenEffect) {
+    s.timer.set(0);
+    let t = task::task(s);
+    let prio = s.prio;
+    if task::add(ctx, Chain::Calc, SCREEN_CALC_PRIO, 0, t.clone()).is_ok() {
+        let _ = task::add(ctx, Chain::Draw, prio, 0, t);
     }
 }
 
