@@ -14,8 +14,10 @@ manager is re-registered without reloading). Calc priority 9 (runs before enemie
 (0x44D530) and 10 (0x44D630).
 
 `Player_Calc` per frame:
-1. If the global freeze byte 0x160F534 is set: only VM flag 0x80000 is set on the two aura effects; return.
-   Otherwise the flag is cleared.
+1. If the global freeze byte 0x160F534 is set (ECL native 26; used by ecldata_sk.ecl sub1): VM flag 0x80000 is set on the
+   youkai aura effect (+0xBE834) and the gauge-max aura effect (+0xE2B24), each if present; return at once (no areas,
+   bomb, death/respawn, invulnerability, movement, VM, bullets, shot timer, gauge fade, counters). Otherwise the flag is
+   cleared on both and the calc goes on (VERIFIED 0x44C390, RE-Q24).
 2. Damage/cancel areas update (§8.1).
 3. `Player_UpdateBomb` (§7).
 4. State 2 (dying): `Player_DyingUpdate`; if it returns 1 (respawn starts) → `Player_RespawnUpdate` runs too.
@@ -67,10 +69,10 @@ manager is re-registered without reloading). Calc priority 9 (runs before enemie
 | +0xBE838 | 128 × 0x484 | player bullets | §4.3 |
 | +0xE2A38 | 3 × 0x10 | laser slots | {Timer, bullet ptr} for laser-type shots |
 | +0xE2A68 | i32 | deathbomb counter | §6 |
-| +0xE2A6C | i32 | bomb cooldown | decremented while > 0; bombs need 0 |
+| +0xE2A6C | i32 | bomb cooldown | := 16 by `Spell_End` (07 §11.1, absolute 0x18B8964) — its only writer; decremented while ≠ 0 at the top of `Player_UpdateBomb` (once per `Player_Calc`; skipped on a forced-start call: +6 set and +0xE2A68 == 1); a normal bomb start needs 0 (VERIFIED 0x4161B0, 0x44C650, RE-Q24) |
 | +0xE2A70 | i32 | respawn clear frames | §6.3 |
 | +0xE2A74 / +0xE2A78 | ptr | sht human / sht youkai | (also globals 0x18B896C / 0x18B8970) |
-| +0xE2A7C | i32 | bomb active flag | 1 from bomb start until… (items/graze use it) |
+| +0xE2A7C | i32 | bomb active flag | := 1 at bomb start; := 0 by every non-bombing `Player_UpdateBomb` call whose normal start test fails (no press, tampered, dialogue, counter 0, bombs < 1, cooldown ≠ 0), so it stays 1 through the bomb and its end frame and drops on the next non-bombing call. Readers (absolute 0x18B8974): `ItemMgr_Calc` 0x440500 and `Item_CollectTimeOrb` 0x4412B0 (VERIFIED, RE-Q24) |
 | +0xE2A80 | ptr[4] | laser entry per slot | |
 | +0xE2A90 | i32 | cancel item type | set by bomb-area hits (08 §4.1), reset to 6 by every test |
 | +0xE2A94 | u8 | effect counter | |
@@ -162,12 +164,12 @@ Function indexes (all values used by the 8 files are in range):
 | | 7 | 0x4501B0 | angle = Rng_Signed × π/48 − π/2 (**RNG**) |
 | | 8 | 0x450110 | not while bombing; angle = wrap(option angle (+0xCD0) + entry angle) |
 | update | 1 | 0x450320 | homing (§4.4) |
-| | 3 | 0x450580 | vy −= Rng_Float × 0.1 + 0.27 (**RNG**) |
+| | 3 | 0x450580 | only while the bullet state (+0x462) == 1 (flying): vy (+0x440) −= `Rng_FloatRange`(0.1) + 0.27 (**RNG**); in any other state (hit animation) nothing, no draw (VERIFIED, RE-Q24) |
 | | 4 | 0x4505D0 | laser body (follows the option/emitter, length from timer) |
 | | 5 | 0x450840 | laser that follows option 0 with a 32-segment trail and creates damage rectangles |
 | draw | 1 | 0x450AD0 | trail draw |
 | hit | 1 | 0x450C50 | explosion: first hit → hitbox enlarged by sprite (48–128 px), vel = polar(Rng × π/2 − 3π/4, 6) (**RNG**); in hit state only every 2nd frame (4th during a spell card) damages, damage /= 3 (min 1), vel × 0.88. The RNG draw happens on the first hit regardless of the sprite. After either branch, on non-filtered frames only: bullet timer % 6 == 0 → `Effect_Spawn(5, enemy pos, 1, 0xFFFFFFFF)` (so effectively every 6th frame, every 12th during a spell card) (changelog/answers_impl10.md §8, VERIFIED) |
-| | 2 | 0x450EE0 | hit effect every 8th hit, never filters |
+| | 2 | 0x450EE0 | u8 counter player +0xE2A94 (shared with the damage-area hit effect, §4.5) += 1 per call; when it is ≡ 0 mod 8: effect type 5 at (bullet pos.x, enemy pos.y, enemy pos.z); returns 0, so it never filters (VERIFIED, RE-Q24) |
 
 ## 3. Input and movement (`Player_Move`)
 Input word 0x164D52C (previous frame 0x164D534): bit 0 shot, 1 bomb, 2 focus, 4 up, 5 down, 6 left, 7 right.
@@ -212,7 +214,7 @@ So a held shot button gives a continuous 20-frame cycle t = 0..19.
 sht = youkai sht if focused else human sht; level (§2.1). Walk free bullet slots in index order together with
 the entry list: for the current entry call its init(slot, t, entry); result 1 → the slot is taken (VM flag
 0x2000, state 1, fns copied), next slot + next entry; 0 → same slot, next entry; stop at list end.
-Default spawn (0x44FB70): pos = player (origin 0) or option (origin k) + offset, z 0.495; hitbox, angle, speed;
+Default spawn (0x44FB70): pos = player (origin 0) or option (origin k: the option's pos field +0x6B0 + (k − 1)·0x2F4, read whatever the option's state — there is no free/active test, a free option gives its last stored pos; VERIFIED 0x44FB70 and `Player_Fire` 0x450F60, RE-Q24) + offset, z 0.495; hitbox, angle, speed;
 vel = (cos, sin)·speed; timer 0; focus copy; type, damage, script; sound; VM script = script + 10; red tint if
 side > 0 and gauge ≥ youkai max.
 
@@ -232,7 +234,13 @@ optional "hit by bomb" output. Returns 0 if the player state timer did not advan
   unless types 4/5/6 the bullet enters state 2 and (not type 3) vel /= 8. Entering state 2 (only if it was in
   state 1): save VM rotation z (vm+0x08); restart the VM with script (entry script + 11) on the player ANM
   file (this re-initialises the whole VM: scale, colour, tag, timers); **restore rotation z**; effect 5 at the
-  bullet; pos z = 0.1. The bullet angle (+0x450) is not changed. VERIFIED (`Player_DamageAgainst` 0x451670; changelog/answers_bugs1.md B1).
+  bullet; pos z = 0.1. The bullet angle (+0x450) is not changed. Exact order (VERIFIED 0x451670, RE-Q24): rotation saved →
+  `AnmFile_SetScript` 0x4069F0 (sets file/script, `AnmFile_StartScript`: `AnmVm_Init` + one `AnmVm_Run`; unlike
+  `AnmManager_SetScript` it does **not** zero the VM pos / pos offset, and the owner writes neither afterwards) → rotation
+  restored → `Effect_Spawn(5, bullet pos, 1)` (its 2 RNG draws) → bullet pos z := 0.1 → state := 2. VM flag 0x2000
+  (z-write off) is **not** re-set by the code: `AnmVm_Init` resets the low flag bits, so the hit VM has bit 13 only if
+  its own script runs `zwrite_off` (most player hit scripts do at time 0). No player*.anm script draws RNG, so the
+  restart itself never touches the RNG. VERIFIED (`Player_DamageAgainst` 0x451670; changelog/answers_bugs1.md B1).
   The hit scripts (e.g. player00.anm 15/17) set tag 1 again, so the hit-pass draw (14 §5) keeps setting
   rotation z = bullet angle every frame: hit animations are oriented along the shot direction.
 - after the bullet loop: accumulator += min(shot sum, 50). The **returned damage is not capped** (only the
@@ -241,7 +249,14 @@ optional "hit by bomb" output. Returns 0 if the player state timer did not advan
   which starts at the step (07 §4.3 +0x2E10) (VERIFIED, changelog/answers_impl16.md §1–3).
 - damage areas (first 192, §8) whose life % period == 0 and that overlap: damage += area damage; the area's
   dealt total grows and is capped by its max (excess removed, area damage := 0 when reached); "hit by bomb" := 1
-  while bombing.
+  while bombing. "Overlap" with enemy pos p and hitbox size s (VERIFIED 0x451670, RE-Q24):
+  - circle (r ≠ 0): **point test on the enemy centre only**, (a.y − p.y)² + (a.x − p.x)² ≤ r² (the box is ignored);
+  - rect, rotation 0: inclusive AABB overlap, with box min = p − s·0.5 and max = s·0.5 + p (helper 0x451CE0):
+    a.x − w/2 ≤ max.x, min.x ≤ w/2 + a.x, a.y − h/2 ≤ max.y, min.y ≤ h/2 + a.y;
+  - rect, rotation ≠ 0: d = p − a rotated by −rotation (`Vec2_Rotate`), then −w/2 ≤ s.x/2 + d.x, d.x − s.x/2 ≤ w/2,
+    and the same for y with h, s.y (the box is not rotated).
+  Hit effect: unless the area's no-effect byte +0x3D is set, the u8 counter +0xE2A94 += 1, and when it is ≡ 0 mod 4
+  effect type 3 spawns at p (the type-5 branch for index ≥ 192 is unreachable).
 - at youkai max gauge: damage = damage × 106 / 100 (integer).
 The enemy side then applies its own caps/scaling (07 §10.1).
 
@@ -276,7 +291,7 @@ Normal mode (0x164D0B4 bits 7–8 clear): gauge := 0; deathbomb counter n:
   shot types 0, 4, 5: n = n × 9 / 5; a ring effect is shown; during a spell card bullets are frozen (0x164D0B4
   bit 10 → `BulletMgr_Calc` skipped).
 Special mode (bits 7–8 set): n = 2 and forced bomb (+6 = 1, §7 "dissolve spell").
-All items in state 1 fall again (0x441530).
+All items in state 1 fall again: `ItemMgr_DropAttracted` 0x441530, called as the last step of `Player_Die` (both modes) and again at the real death (`Player_DyingUpdate`, after the death drops, §6.2), walks the active item list and for every item with state +0x2D7 == 1 sets state := 0 and vel (+0x2B0) := (0, −0.9, 0). This is not the −0.7 of the `ItemMgr_Calc` player-dying branch (08 §8.4), which only applies to items still in state 1 when the calc runs (VERIFIED 0x441530, RE-Q24).
 Before this, the hit test itself calls `GameMgr_ScrambleDecoys` (5 × Rng_Range(100000) + 3 × Rng_Float…; 08 §4).
 
 **Work before `Player_Die`** (RE_NOCLIP, VERIFIED). The callers are `Player_HitTest` 0x44A230 (bullets),
@@ -311,20 +326,25 @@ effects + sound 0xF; bullets unfrozen; spell-card failure notified; miss counter
 (as −(time)/10 when time ≤ 5000); drops: lives < 1 → power := 0 and 5 full-power items; else power :=
 0 if ≤ 16 else power − 16, 1 big + 5 small power items, and for shot types 2, 8, 9 with bombs > 0 a bomb
 item (all mode 2); attracted items fall; **rank −1600**.
-When n == 0 at entry (after death): 30-frame shrink animation (scale y = 1 + 3t/30, x = 1 − t/30); at t > 29:
+When n == 0 at entry (after death): shrink animation (scale y = 1 + 3t/30, x = 1 − t/30, t = the state timer +0xE2AF4; **that timer is not reset at the real death**: it was set to 0 by `Player_Die` and has ticked once per `Player_Calc` ever since (`Player_UpdateInvuln` ticks it in every state except 3), so t counts from the hit, the shrink only covers what is left of the 30 frames after the window, and when the deathbomb window lasted ≥ 30 frames the respawn happens on the first frame with n == 0 at entry, with no visible shrink. Example (attract demo 2): hit → state 2 at frame 2907, real death 2922, state 1 at 2938 (VERIFIED 0x44CBF0, 0x44D2C0, runtime rngsite demo 2, RE-Q24); every such frame
+also last vx/vy +0xE2A9C/+0xE2AA0 := 0); at t > 29:
 state 1, pos = (192, 448 − 64), timer 0, scale 3, idle script; if lives > 0: lives −= 1, bombs :=
-trunc(sht bombs) (3); respawn starts (returns 1); else game over (0x164D0BB = 1).
+trunc(sht bombs) (3); respawn starts (returns 1); else game over (0x164D0BB = 1) — lives and **bombs are not
+changed** on game over (VERIFIED 0x44CBF0, RE-Q24).
 
 ### 6.3 Respawn (state 1, `Player_RespawnUpdate`)
-Clear area for 60 frames (+0xE2A70 = 60; each frame a full-screen cancel rectangle 768 × 896 at the player
+Clear area for 60 frames (+0xE2A70 := 60 on **every** `Player_RespawnUpdate` call, so it counts down from 60 only after
+the respawn ends; `Player_UpdateInvuln` decrements it while ≠ 0 and adds, each frame a full-screen cancel rectangle 768 × 896 at the player
 with item −1, i.e. bullets vanish without items). Grow animation over 30 frames, speed multipliers 1, alpha =
 t × 255 / 30, deathbomb counter 0. At t > 29: state 3, scale 1, colour white; invulnerability timer = 240
-(unless 0x164D0B4 bit 14); counter := sht +8 (bombing allowed).
+(with 0x164D0B4 bit 14, spell practice, the timer is not set and keeps its value 30, so the invulnerability lasts
+30 frames; VERIFIED 0x44D180); counter := sht +8 (bombing allowed). Since `Player_UpdateBomb` runs before the state update in `Player_Calc` and the counter is 0 throughout state 1 (it reached 0 in state 2 and the respawn rewrites 0 every frame), **no bomb can start in state 1**; the first possible start is the first state-3 frame (VERIFIED 0x44C390, 0x44D180, RE-Q24).
 
 ### 6.4 Invulnerability (state 3)
 Timer decremented each frame; colour 0xFFF02020 when (t mod 8) < 2 else white; at t < 1: state 0. In other
-states the timer just ticks. Bombs set state 3 with their own invulnerability time (§7). At load: state 1 and
-timer 120 (10 when game-manager flag +0x3DBAC bit 14).
+states the timer just ticks. Bombs set state 3 with their own invulnerability time (§7). At load (`Player_Load`
+0x44D650, VERIFIED RE-Q24): pos = (playfield w / 2, playfield h − 64, 0.49) = (192, 384, 0.49) (the respawn uses z 0.2,
+§6.2); state 1 and timer 120, or 10 in spell practice (game-manager flag +0x3DBAC bit 14).
 
 ## 7. Bombs (`Player_UpdateBomb` 0x44C650)
 Start conditions (when not bombing): forced (+6 set and counter == 1), or: bomb pressed (input bit 1), not

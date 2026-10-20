@@ -76,7 +76,7 @@ direct effect of an opcode/draw routine, INFERRED for names of owner-only fields
 | 0x27C | u8[4] | colour_end | B, G, R at 0x27C..0x27E; alpha_end at 0x27F |
 | 0x280 | u8[4] | colour2_start | B, G, R, alpha2_start (0x283) |
 | 0x284 | u8[4] | colour2_end | B, G, R, alpha2_end (0x287) |
-| 0x288 | f32[3] | pos_offset | written instead of `pos` when flag bit 8 is set; added to pos by owner code (INFERRED) |
+| 0x288 | f32[3] | pos_offset | written instead of `pos` when flag bit 8 is set; added to pos by owner code (VERIFIED for `Result_Draw` 0x4586B4, 16 §2; other owners per their sections) |
 | 0x294 | i32 | sprite_set_time | script time when op 3 last ran |
 | 0x298, 0x299 | u8 | — | set to 15 by `AnmManager_SetScript`; owner-only (unknown) |
 

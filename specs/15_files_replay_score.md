@@ -237,8 +237,8 @@ In mode 2 with slow mode on (or Supervisor+0x1A4 bit 3, which retail code only s
 | 0x68 | u32 | point items collected (incremented in Item_CollectPoint 0x440E40) |
 | 0x6C | u32 | never written (0) |
 | 0x70 | u32 | misses (GM+0x3DA9C++) |
-| 0x74 | u32 | bombs used |
-| 0x78 | u32 | Last Spells used |
+| 0x74 | u32 | bombs used (0x164CFA8 += 1 in `Player_UpdateBomb` at a normal-mode bomb start without the last-spell flag; VERIFIED RE-Q24) |
+| 0x78 | u32 | Last Spells used (0x164CFAC += 1 in `Player_UpdateBomb` at a normal-mode start with the last-spell flag +4 set, 09 §7; never for the dissolve spell; VERIFIED RE-Q24) |
 | 0x7C | u32 | pauses (GM+0x3DAA8++) |
 | 0x80 | u32 | time-orb total (GM+0x3DAAC += n) |
 | 0x84 | u32 | human rate × 100 (see below) |
@@ -247,15 +247,16 @@ In mode 2 with slow mode on (or Supervisor+0x1A4 bit 3, which retail code only s
 
 The in-game record is at 0x164CF34 (= GM+0x3DA2C). It is zeroed at new-game start (GameMgr_LoadScoreData). Shot and difficulty are filled at that point; the date, name and slowdown at name entry.
 
-Human rate: EnemyMgr_Calc counts only outside dialogue and while its timer is > 15. Each frame it increments `total` (0x164D0AC), and also `human` (0x164D0A8) when the player is in human mode (player+3 == 0). Then rate = human·10000 / total. VERIFIED.
+Human rate: EnemyMgr_Calc counts only outside dialogue and while its timer is > 15 — the timer is the enemy-manager clock (Timer at EnemyMgr +0x9DCED0, the same clock as the time rank 11 §3.2; ticked once at the end of every `EnemyMgr_Calc`), so frames while that clock reads 0–15 are not counted; the test runs at the top of `EnemyMgr_Calc`, next to the play-time counter 0x164D30C (11 §2), and EnemyMgr_Calc does not run on paused, game-over-menu, loading or post-clear frames (`GameMgr_Calc` returns 3 earlier in the chain) (VERIFIED 0x42C6A0, RE-Q24). Each frame it increments `total` (0x164D0AC), and also `human` (0x164D0A8) when the player is in human mode (player+3 == 0). Then rate = human·10000 / total. VERIFIED.
 
 **Default table** (Result_OnRegister). For every difficulty d, shot s and rank i = 0..9:
 - score (÷10) = 100000 − 10000·i;
+- magic +0 = "DMYS" (0x4B7D58), not "HSCR";
 - name "--------", date "--/--";
-- stage 0, continues 0, version 4;
+- stage byte 0 (printed as stage 1 by the ranking's stage map, 16 §2.3), continues 0, version 4, difficulty byte +0x15 = d, slowdown 0, sizes +4/+6 = 0x168, byte +9 = 0; the shot byte +0x14 is **not** written by this loop (VERIFIED 0x45964D, RE-Q24);
 - +0x166 = 1.
 
-The file's HSCR entries are then inserted into these lists in order. `ScoreList_Insert` 0x45A500 inserts into a singly linked list sorted by descending score (order among equal scores INFERRED: new entry after) and returns its 0-based rank. Only the first 10 are kept or saved; default entries (+0x166 = 1) are never written to the file.
+The file's HSCR entries are then inserted into these lists in order. `ScoreList_Insert` 0x45A500 inserts into a singly linked list sorted by descending score (order among equal scores INFERRED: new entry after) and returns its 0-based rank. Only the first 10 are kept or saved; default entries are never written to the file — `ScoreDat_Save` 0x453D0D skips every list node whose magic is not "HSCR" (the defaults carry "DMYS"). For each saved HSCR node it first rewrites, **in the in-memory entry itself**, shot +0x14 := list shot, difficulty +0x15 := list difficulty, sizes +4/+6 := 0x168, version +8 := 4 and the new-entry byte **+9 := 0**, then copies the 0x168 bytes; so +9 is always 0 in the file and the highlight of a new entry (16 §2.3, state 9) ends at the next save (VERIFIED, RE-Q24).
 
 `ScoreDat_GetHiscore` 0x45A950 returns max(top entry of (shot, difficulty), 100000), in ÷10 units. That value is the HUD "HiScore" at game start.
 

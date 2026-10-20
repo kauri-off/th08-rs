@@ -179,6 +179,7 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
 - **The current description VM is run and drawn on every screen** (menu calc/draw, after VMs 0–141), at (320, 448).
   Leaving the top menu sends it interrupt 2 (fade 60 frames, then hidden), so it stays visible for ~60 frames on the next
   screen.
+  Exact senders (VERIFIED `MainMenu_Top` 0x4674E0, RE-Q24): the pending interrupt 2 is written into the current description VM (pointer menu+0xC2BC; it is **not** in the title01 range, so range interrupts never reach it) by every confirm that leaves to another screen or scene — Start/Extra/Practice/Spell Practice (with their range interrupt 5/7/…), Replay (range 13), Result viewer (scene 5), Music Room (scene 8) — and by the entry redirects (returning to the replay screen after a replay, range 13; returning to practice / spell practice, range 5). **Option (item 7) and Quit (item 8) send nothing to it**: Option sets sub-state 3 and calls `MainMenu_Option` 0x46837B in place, Quit (sub-state 2) only sends range interrupt 1, so on those the current description keeps its state.
   - Description strips are text.anm sprites 21+k = the same rows as the screen-17 info VMs. Screen 17 entry overwrites
     strips 0–6.
   - The top menu re-renders all 9 descriptions on each entry.

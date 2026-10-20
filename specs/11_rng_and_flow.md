@@ -126,9 +126,9 @@ Pause must not consume RNG: the only RNG use on pausing is the checksum update, 
 | +0x3DDD4..+0x3DDF0 | 0x164D2DC.. | f32×8 | playfield rect (32, 16, 384, 448) and player clamp rect (8, 16, 376, 432) | VERIFIED (0x43C686) |
 | +0x3DDF8.. | — | i16 | gauge thresholds (09) | VERIFIED |
 | +0x3DE28 | — | i32 | deferred music start (1 = play stage BGM 0) | VERIFIED |
-| +0x3DE2C/30/34/38 | — | i32 | rank, max, min, sub-counter (07/09) | VERIFIED |
+| +0x3DE2C/30/34/38 | — | i32 | rank, max, min, sub-counter (07/09); boot values **0, 0, 0, 0**: `GameMgr_Ctor` 0x43C5E1 (static init) zeroes GM +0..+0x3DE3B, then sets only the playfield rect +0x3DDD4..+0x3DDE0 = (32, 16, 384, 448) and demo index +0x3DBB4 = 3; the first `GameMgr_InitRank` (§3) writes the real values (RE-Q24) | VERIFIED |
 
-Gameplay frame counter 0x164D2C8 (GM+0x3DDC0): += 1 near the end of `GameMgr_Calc` (not on its early returns: loading, pause/game-over, slow-mode skip); := 0 by `GameManager_Register` and `GameMgr_OnRemove`, so it reads 0 in the menus after a pause-quit (changelog/answers_impl21.md §Q3). Globals next to it: 0x164D30C play-time counter (frames, + 1800 per ECL op 148); 0x164D318/0x164D31C per-frame
+Gameplay frame counter 0x164D2C8 (GM+0x3DDC0): += 1 near the end of `GameMgr_Calc` (not on its early returns: loading, pause/game-over, slow-mode skip); := 0 by `GameManager_Register` and `GameMgr_OnRemove`, so it reads 0 in the menus after a pause-quit (changelog/answers_impl21.md §Q3). Globals next to it: 0x164D30C play-time counter (frames: += 1 at the top of every `EnemyMgr_Calc` call while no dialogue is active (`Msg_IsActive` == 0), before the bit-10 test, in the same block as the human-rate counters (15 §2.3) — so not on paused / game-over-menu / loading / post-clear frames, where `GameMgr_Calc` returns 3 before the enemy manager's calc, but yes during the bit-10 death freeze; + 1800 per ECL op 148; := 0 by StageStart; VERIFIED 0x42C6A0, RE-Q24); 0x164D318/0x164D31C per-frame
 counters not advanced during dialogue.
 
 ### 2.1 Game flags (GM+0x3DBAC = 0x164D0B4) — bits seen in code
@@ -143,7 +143,7 @@ counters not advanced during dialogue.
 | 5–6 | stage-end state: 0 none, 1 waiting-for-load (after a clear), 2 clear triggered, 3 clear handled | VERIFIED |
 | 7–8 | 7 = a boss "last spell" is running (ECL op 176 clears 7/8/13 and sets 7); `Spell_End`: captured → bits 7–8 := 8 only, failed → cleared (+ "Last Spell Failed" if spell flag bit 5); bit 8 then persists until the next op 176, the dissolve-spell end or `StageStart` (clears 7, 8, 13). While either is set a bomb press only plays SE 0x29 and a hit forces the dissolve spell (09 §7, changelog/answers_impl10.md §7, changelog/answers_impl11.md §14) | VERIFIED |
 | 9 (0x200) | stage-clear bonus panel shown (msg op 9) | VERIFIED |
-| 10 (0x400) | player death in progress (blocks some effects) | VERIFIED write (0x44AB40) |
+| 10 (0x400) | spell-card death freeze: set by `Player_Die` 0x44AB40 only when a spell card is active (0x4178A0 ≠ 0), together with the anm tint; cleared when the deathbomb window ends in a real death (`Player_DyingUpdate`, with `AnmMgr_TintOff`), when a (death)bomb starts with GameFlags bits 7–8 clear (`Player_UpdateBomb`), and at `StageStart`. While set: `Stage_Calc` returns at once (06 §5: no STD script, camera, sway, fog, objects, VMs, sparkles, frame counter), `BulletMgr_Calc` and the player bullet update are skipped (09 §4.4), and enemies on prio 11 draw tinted (07 §10.6). VERIFIED (RE-Q24) | VERIFIED |
 | 11–12 | final route choice (0 → 6A, else → 6B) | VERIFIED |
 | 13 (0x2000) | set by op 176 together with bit 7 when (not practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); with a boss present `EnemyMgr_Calc` adds a large player-damage box (changelog/answers_impl10.md §7) | VERIFIED |
 | 14 (0x4000) | spell practice | VERIFIED |
@@ -174,10 +174,17 @@ spell practice: power = id < 2: 30, id < 13: 80, else 128       (checksum)
 replay playback: rank init; Replay_Register(1) (loads stage record, sets seed); checksum (RNG preserved)
 stage_seed = rng.s
 register: Stage(stage), Bullets("etama.anm"), Enemies, Effects, HUD, Gui; Replay_Register(0) if recording
+    # order VERIFIED (`GameManager_StageStart` 0x43ABD7): each on-register callback runs inside its FuncChain_AddCalc; Effects'
+    # (manager clear, eff anm load, no RNG) and HUD's (Hud_Load: ANM loads + script starts, Msg_Load; no effect spawn)
+    # do not touch each other's state, and the calc/draw priorities (13/12 vs 15/17) are distinct, so swapping them
+    # changes no logic or RNG (only the ANM load order). RE-Q24
 spell practice in 6A/6B/Ex outside the last-word ranges: stage overlay base (0x4E4B64) = 2
-unless reloading the same stage (0x17CE8C4): start BGM slots 0..2 from the STD names (spell practice:
+unless reloading the same stage (0x17CE8C4): load (not play: `Music_Play` = sound command 1, 02 §4) BGM slot 0 and
+    slots 1/2 whose name does not start with ' ' from the STD names (spell practice: slot 0 only,
     BGM chosen from table 0x4C7670 by spell id)
-flags |= 4; game_over = 0; ... flags &= ~0x10
+flags |= 4; game_over = 0; ... freeze byte 0x160F534 (GM+0x2C) := 0; stats.score (+0x08) := 0; flags &= ~0x10
+    # score := 0 is undone by the first gameplay calc: §4 step 9 sets score := score_display (equal to the score at
+    # a clear, §4 step 1; = continues after a continue). VERIFIED 0x43B7FE–0x43B808, RE-Q24
 wait (thread) until loading_frames >= 30 (80 in replay playback)      # see 'Loading frame count' below
 end loading screen; wait until flags bits 5–6 == 0     # after a clear: until the player confirms (§4)
 loading = 0; flags &= ~0x200; HUD repaint 60 frames
@@ -269,11 +276,12 @@ is not touched and keeps the fresh-start value 0 (StageStart fresh branch zeroes
 Per frame (after `0x164D09C += 1`):
 
 1. **Stage-end handling** (flags bits 5–6 ≠ 0):
-   - state 2 (clear triggered) → set state 3, `next_scene_after = −1`, then:
+   - state 2 (clear triggered) → set state 3, **loading (GM+0x38) := 1**, `next_scene_after = −1`, then:
      - not replay: if `continues == 0` set clear bit `1 << stage` in the no-continue mask
        (`gm+0x3C49C + shot*0x24 + diff*2`, also 0x164BB54 + diff*2); always set it in the any-clear mask
        (`gm+0x3C4A6 …`, 0x164BB5E …).
-     - stage practice → score_display = score; `next_scene_after = 6` (result); return 3.
+     - score_display (stats+0) := score (stats+8), for **every** stage (VERIFIED 0x439BC7, RE-Q24).
+     - stage practice → score_display = score again; `next_scene_after = 6` (result); return 3.
      - stage 6A/6B/Extra: replay → `next_scene_after = 7`. Not replay: Extra (diff ≥ 4) → Extra-clear bit
        0x8000, clear count++, flags |= 0x10, `next_scene_after = 6`, return 3; else flags |= 0x10,
        `next_scene_after = 9` (ending), return 3.
@@ -285,6 +293,12 @@ Per frame (after `0x164D09C += 1`):
      clear bits 5–6 and, if `next_scene_after ≥ 0`, `scene = next_scene_after`.
      (So after a stage-1–5 clear, the next stage's loader thread waits on the clear screen until the player
      confirms; endings/results after the final stage happen immediately.)
+   - **Clear-frame timing** (VERIFIED, RE-Q24): the "return 3" exits above skip the confirm test on the clear frame,
+     so for practice, 6A/6B/Extra (not replay) and the night-over ending `scene = next_scene_after` is written on the
+     **next** frame (state 3, stage ≥ 6 or replay → no key needed; practice/night-over in stages 1–5 wait for a newly
+     pressed SHOT/ENTER). The paths that do not return (stage 1–5 advance, replay) run the confirm test on the clear
+     frame itself. Because loading was set to 1, every path then takes the loading branch of step 2 (loading_frames
+     += 1, return 3) on this and all later frames until a loader clears it: no gameplay calc after the clear frame.
 2. If loading → §3.1 (return 3 or 4).
 3. Deferred music start (`gm+0x3DE28`).
 4. **Pause**: if not paused, no game-over menu, not demo, `gm+0x2D == 0`, and ESC newly pressed (raw input):
@@ -303,7 +317,8 @@ Per frame (after `0x164D09C += 1`):
    in an untampered run, which is the only case a faithful port has to model (09 §6.1).
 8. If paused (1 or 2) or game-over menu open → return 3 (calc chain stops: the whole game is frozen; the
    ASCII manager at prio 1 runs the pause / continue menus, 12).
-9. Score display roll: `d = clamp((score − disp) >> 5, 1, 578910)`; `step = max(step, d)`; if `disp + step >
+9. Score display roll (score cap first; the rest only when disp ≠ score): **if score < disp: score := disp** (this
+   is how the score survives `StageStart`'s score := 0, §3.1; VERIFIED RE-Q24); `d = clamp((score − disp) >> 5, 1, 578910)` (unsigned); `step = max(step, d)`; if `disp + step >
    score` then `step = score − disp`; `disp += step`; when `disp ≥ score`: `disp = score, step = 0`; score
    capped at 999 999 999 (×10 displayed). `hiscore = max(hiscore, disp)`; on update hiscore-continues byte
    (+0x18) = continues.

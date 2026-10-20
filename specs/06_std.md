@@ -21,7 +21,7 @@ All values little-endian. Offsets are from file start.
 | 0x008 | u32 | offset of the script |
 | 0x00C | u32 | 0 (unused) |
 | 0x010 | char[5][0x80] | text fields ("dm", "dm", "dm", " ", " " in all files); never read by the code |
-| 0x290 | char[4][0x80] | BGM file names for music slots 0..3 (" " = none). Slot 0 always played at stage start, slots 1/2 if not " "; other slots by ECL/MSG music-change (later phase) |
+| 0x290 | char[4][0x80] | BGM file names for music slots 0..3 (" " = none). `StageStart` **loads** (`Music_Play`, 02 §4) slot 0 always and slots 1/2 if their first char is not ' '; only slot 0 is then **played**, by the deferred music start in `GameMgr_Calc` (11 §4 step 3, `Music_PlaySlot`); slots 1–3 are played later by ECL/MSG music changes (VERIFIED, RE-Q24) |
 | 0x490 | u32[count] | offsets of the objects |
 
 The loader converts the object offsets to pointers (only when the file is freshly loaded).
@@ -75,10 +75,12 @@ After the terminator 16 of 18 files contain another 20 bytes of 0xFF (ignored).
 2. Load `stgNbg.anm` into ANM slot 4 (04_file_index.md) and `stageN.std` (or `stageN_s.std` in the
    alternative mode, 04_file_index.md).
 3. Allocate `quad_count` ANM VMs. For every object (in order) set flag bit 0 = 1; for every quad in order
-   assign the next VM index `k`, store k into the quad's +6 field and start the quad's ANM script on VM k
+   (every record up to the type −1 terminator, **whatever its type** — no 0/1 filter; the shipped files contain only
+   types 0 and 1, 552 quads; VERIFIED `Stage_LoadStd` 0x409CE0, RE-Q24) assign the next VM index `k`, store k into the quad's +6 field and start the quad's ANM script on VM k
    (`AnmManager_SetScript`, which zeroes pos/pos_offset and runs the script's time-0 instructions).
-4. Start the stage overlay VM (+0x844) with script 33 of a global ANM file (0x17CE8F4) and send it interrupt 2
+4. (Inside `Stage_LoadStd`, after all quads of step 3.) Start the stage overlay VM (+0x844) with script 33 of a global ANM file (0x17CE8F4) and send it interrupt 2
    (VERIFIED in Phase 3: text.anm, human/youkai stage tint — §13).
+   No stage-bg ANM script and no text.anm script 33 draws RNG, so the step 3 / step 4 order changes no RNG draw.
 5. Defaults: fog colour 0xFF000000, fog near 200, far 500; camera position (0, 0, 1000), facing (0, 0, 0),
    eye offset (0, 0, 0), up (0, 1, 0), fov 0.5235988 (π/6); the "target" and "previous" camera blocks are
    copied from these values; no interpolation active; sway off.
@@ -184,12 +186,19 @@ if the current record's opcode ≠ 3: clock.Tick()
 Stage_UpdateObjects()                                                                      (§9)
 (spell-background VMs when stage state +0xB24 > 0 — later phase)
 run VM A if its sprite index > 0; run VM B if > 0; run VM C if > 0 and copy VM C's colour to the clear colour
-every 3rd frame (frame counter % 3 == 0) if frame counter > 699 or spell practice, and +0xB24 < 2:
+every 3rd frame (frame counter % 3 == 0) if (frame counter > 699 or spell practice — the practice test
+replaces the frame test, so in spell practice sparkles spawn from frame 0), and +0xB24 < 2:
     spawn type 0x3E (colour 0x20FFFFFF, layer 4) at **all 12** sparkle points 0..11 (§11.1), whatever the
     recorded count: unused points are (0, 0, 0) from the per-frame clear in Stage_DrawLow, so those sparkles
     appear at screen (0, 0) under the HUD frame (faithful quirk; VERIFIED)
+sparkle flag +0x647C := 1 (every calc that gets here); if +0xB24 > 1: sparkle count +0x6478 := 0
 frame counter += 1
 ```
+Sparkle point cycle per frame (VERIFIED, RE-Q24): `Stage_Calc` spawns at the points recorded by the previous
+frame's draw and sets the flag → `Stage_DrawLow` clears 16 points and the count → quads drawn by DrawLow (layers
+0–1) and DrawHigh (layers 2–3) append → `Stage_DrawHigh` clears the flag at its end. The flag is set **only** by
+`Stage_Calc`, so after a calc that returned early (no std, GameFlags bit 10) the next draw records no points. The
++0xB24 > 1 count reset has no visible effect (the draw clears the list anyway and no sparkle spawns then).
 
 Note: VM A/B/C are run/drawn only when their **sprite index** (vm+0x214) is > 0 — i.e. after the script has executed an op 3 with a sprite other than 0; disabling sets it to −1.
 
@@ -332,8 +341,12 @@ for each instance in list order:
   `c = c − trunc((c − fog_c)·f)` (byte arithmetic) and `alpha = trunc(alpha·(1 − f))` (temporary: the VM
   colour is restored after drawing).
 - vm.pos = s (screen x, y, depth z). If 0 ≤ z ≤ 1: fog off, draw with ANM draw mode 1 (2D, no snapping,
-  05 §9), using the projected z as vertex depth. If additionally (tag & 0xF0) == 0x10 and dist < fog_near and
-  the sparkle flag (+0x647C) is set, append (s.x, s.y, 0) to the sparkle-point list (no bounds check; the 32-entry
+  05 §9), using the projected z as vertex depth. If additionally (tag & 0xF0) == 0x10 and v < fog_near and
+  the sparkle flag (+0x647C) is set, append (s.x, s.y, 0) to the sparkle-point list. **QUIRK** (VERIFIED
+  `Stage_DrawLayer` 0x40A1B0, RE-Q24): v is the distance variable after the fog step, i.e. v = dist when
+  dist ≤ fog_near, but v = the fog factor f when dist > fog_near (the code overwrites it); since f < 1 there
+  (f ≥ 1 skips the quad) the test is true for every drawn quad whenever fog_near > 1. Only quads that pass the
+  0 ≤ z ≤ 1 test (are drawn) can append (no bounds check; the 32-entry
   array is never exceeded by the shipped data — at most 15 points per frame, changelog/answers_impl10.md §3, VERIFIED).
 - Note: vm.pos is left at the projected screen position; it is recomputed every draw.
 

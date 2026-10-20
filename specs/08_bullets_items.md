@@ -30,6 +30,8 @@ Everything is VERIFIED from code unless marked INFERRED. Units: pixels, frames, 
 Draw: items (§8.6), then lasers, then bullets by size class 0 → 5 (each class list in reverse visiting order:
 the list is a LIFO built during calc), then the effect manager.
 
+Per-bullet draw (`Bullet_Draw` 0x432F20, VERIFIED RE-Q24): the VM is chosen by the state +0xDB8 — states 2–5 use the spawn-effect VMs at +0x2A4·(state − 1) (+0x2A4, +0x548, +0x7EC, +0xA90), any other state the main VM at +0; that VM's pos := bullet pos (+0xD44) + playfield origin (0x164D2DC/E0), z := 0.05; colour RGB := 0xFFFFFF keeping the VM's alpha; if the VM tag +0x1FC ≠ 0: rotation z := Angle_AddNormalize(π/2 + bullet angle +0xD74); then `AnmManager_Draw2DRot`.
+
 ## 2. Bullet manager layout
 
 | offset | size | content |

@@ -77,7 +77,7 @@ The BGM command queue (+0x1F88) is processed in the same call (02_bgm).
 | spell card captured | 0x23 | `Spell_End` 0x4161B0 |
 | any spell card end (captured or not) | 0xF | `Spell_End` |
 | enemy damaged (frame with damage > 0, not invincible) | 0x14 @enemy; 0x25 when the enemy's low-life warning level (flags B bits 4–5) ≥ 2 | `EnemyMgr_Calc` |
-| enemy destroyed | 2 or 3 @enemy (by enemy slot parity: even 2, odd 3) | `EnemyMgr_Calc`, `Enemy_KillChildren` |
+| enemy destroyed | 2 or 3 @enemy: `EnemyMgr_Calc` death by enemy slot parity (even 2, odd 3); `Enemy_KillChildren` chain kill by the child's index k in the chain walk (2 + (k & 1), k = 0 for the first child after the root; only with reward ≠ 0, played at the child's new final pos; 07 §10.3a) | `EnemyMgr_Calc`, `Enemy_KillChildren` |
 | enemy reacting to a player mode switch (flag A bit 8) | 0x28 to youkai, 0x27 to human | `Enemy_ReactPlayerMode` 0x42C420 |
 | child enemy spawn (ops 90–92) | 0x24 @enemy | `Ecl_Run` |
 | ECL op 124 | arg @enemy (data uses 5, 7, 8, 13, 15, 16, 17, 18, 19, 25, 33, 36, 42) | `Ecl_Run` |
@@ -136,7 +136,7 @@ Effect (0x360):
 | +0x354 | u8 | layer: 0 normal 2D, 1 3D billboard (background), 2 3D (custom matrix), 4 2D in background pass |
 | +0x355 | u8 | draw above bullets |
 | +0x356 | u8 | ring geometry dirty |
-| +0x357 | u8 | keeps running while bullets are frozen |
+| +0x357 | u8 | keeps running while bullets are frozen (GameFlags bit 10, §2.3); zeroed with the whole object at every spawn; the **only** writer is `Player_Die`, which sets 1 on the type-59 deathbomb ring (slot 11), so that ring is the only effect updated during the bit-10 freeze (VERIFIED, RE-Q24) |
 | +0x358 | ptr | heap vertex buffer (0x1C38 bytes; freed when the slot is reused / on remove) |
 | +0x35C | ptr | draw-list link |
 
@@ -166,9 +166,9 @@ finished frees; else age ticks. Survivors are linked (in slot order) into a draw
 ### 2.4 Draw
 | list | drawn by | how |
 |---|---|---|
-| A (alpha) then C then E (additive) | `EffectMgr_Draw` 0x427F00, draw prio 12 (after enemies' 2nd layer, before bullets) | A/E: 2D rotated sprite at pos + playfield origin + pos offset, z 0.07, or the custom draw fn; C: billboard at pos (3D) |
+| A (alpha) then C then E (additive) | `EffectMgr_Draw` 0x427F00, draw prio 12 (after enemies' 2nd layer, before bullets) | A/E: 2D rotated sprite at pos + playfield origin + pos offset, z 0.07, or the custom draw fn; C: `AnmManager_DrawBillboard` (05 §9 mode 4) with VM pos := effect pos as-is (no playfield origin, no pos offset, z = 0 from the type-13 update), through the camera that is current at prio 12, i.e. `Camera_Set2D` (05 §9) on the playfield viewport (32, 16, 384, 448) left by `Stage_DrawHigh`. So it lands at pos + (32, 16) like a 2D sprite, but half-size = 0.5·|project(pos + stage right +0x63C4) − project(pos)|·sprite size·scale: exactly the 2D size only when the stage camera's right vector has z = 0 (it depends on the stage's facing/up, 06 §2 op 9); vertex z = projected z (≈ 0.9994 for z = 0, INFERRED arithmetic), not 0.07 (VERIFIED 0x427F00, 0x409640, RE-Q24) |
 | D | end of `BulletMgr_Draw` (prio 13, over bullets) | as A, z 0.04 |
-| B | `Stage_DrawHigh` (after stage layers 2/3, stage camera, fog already off) | only at cfg effect level (byte 0x17CE894) 2: levels 0 **and 1** draw nothing (the parity test returns on the first element, asm 0x428224); layer 4 → 2D rotated, layer 1 → billboard (types 0x33/0x3F through the screen-space boss-pull / player-push helper 0x428310, §2.6c), else 3D quad |
+| B | `Stage_DrawHigh` (after stage layers 2/3, stage camera, fog already off) | only at cfg effect level (byte 0x17CE894) 2: levels 0 **and 1** draw nothing (the parity test returns on the first element, asm 0x428224); layer 4 → 2D rotated, layer 1 → billboard (types 0x33/0x3F through the screen-space boss-pull / player-push helper 0x428310, §2.6c), else 3D quad (unreachable: the only writers of +0x354 set 0 (`Effect_SpawnHigh`), 1 (`EffInit_Particle51` 0x426280, `EffInit_Particle63` 0x426720, `EffInit_Petal3D` 0x426E70), 2 (`EffInit_Orbit13` 0x425FE0) and 4 (`Stage_Calc` 0x407400), so no shipped effect has layer 3 or ≥ 5; VERIFIED RE-Q24) |
 
 ### 2.5 Ring renderer (custom draw 0x427450; ring types, §2.6)
 The ring is a triangle strip of 2(n+1) pre-transformed vertices (FVF XYZRHW|DIFFUSE|TEX1, colour = VM colour)
@@ -200,13 +200,13 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 19 | 51 (300) | 3D background petal/leaf: spawned at camera + facing/2 + random (**RNG**: 10 draws, §2.6a), drifts with velocity + accel, z-rotation spin; freed when outside the view cone (dot(normalised dir from camera, facing) < 0.94) or when z ≥ 0 (kept only while z < 0) | — |
 | 20 | 56 | — | — |
 | 21, 26 | 52 (90), 53 (90) | burst: angle = param.x if > 0 else random (**RNG**), dir × (1 + R·1.5) (**RNG**); pos = centre + dir·128·(1 − (1 − t/90)²) | — |
-| 22 | 54 (50) | follows the player while its script runs | youkai aura (fixed slot 2, created on focus) |
-| 23, 24 | 104 (I0 + 1; script sets I0 = 32, the spawner overwrites it) | no-op update (keep) | invulnerability ring (fixed slot 0, `Bomb_Start` → 0x40BF00): I0 := invulnerability frames, scale interpolates (slot 4, linear) from current to 1/16 over the invulnerability time, z spin × const, colour R 0xFF G 0x40 B 0x40, fades in to alpha 160 over 30 frames |
-| 25 | 35 (∞) | — | gauge-max aura (fixed slot 8) |
+| 22 | 54 (50) | no init (table init 0; pos = the spawn pos, i.e. the player pos +0x2B4 passed by `Player_Move`); follows the player while its script runs | youkai aura (fixed slot 2, created on focus) |
+| 23, 24 | 104 (I0 + 1; script sets I0 = 32, the spawner overwrites it) | no-op update (keep) | invulnerability ring (fixed slot 0, `Bomb_Start` → 0x40BF00; no init, pos = player pos +0x2B4 at the spawn): I0 := invulnerability frames, scale interpolates (slot 4, linear) from current to 1/16 over the invulnerability time (current is always (1, 1): script 104 sets `scale 1.0, 1.0` at time 0; VERIFIED 0x40BF00, RE-Q24), z spin × const, colour R 0xFF G 0x40 B 0x40, fades in to alpha 160 over 30 frames |
+| 25 | 35 (∞) | no init, no update; pos = the spawn pos (player pos +0x2B4 from `Player_Move`) | gauge-max aura (fixed slot 8) |
 | 28, 29 | 57, 58 (10) | — | focus-switch flashes (human 0x808080FF / youkai 0x80FF8080) |
 | 30, 31 | 59, 60 (10) | — | enemy mode reaction (→ human 0x80803030 / → youkai 0x80303080) |
 | 32–34 | 48–50 (10, interrupts) | — | enemy auras (`Effect_SpawnHigh` 0x20 + n, ECL op 174 / child ops) |
-| 35, 39, 49, 52, 59 | 88, 76, 86, 77, 78 | ring (init 0x4272E0: 3 segments ×2 vertices buffer, custom draw; update 0x427990: radius := VM scale.x→width, VM pos.x→radius) | 39 spell-card start (slot 1), 52 spell start in special mode, 59 player death ring (slot 11, colour 0xFFF0404F), 49 Reimu LS |
+| 35, 39, 49, 52, 59 | 88, 76, 86, 77, 78 | ring (init 0x4272E0, shared by every ring type 35, 39–46, 48–50, 52–55, 59, 64 (VERIFIED, table 0x4C6D30, RE-Q24): allocates the 0x1C38-byte vertex buffer (+0x358; failure → spawn fails), centre +0x2E0 := spawn pos, axis vectors +0x2EC := (0, 0, 1) and +0x2F8 := (0, −1, 0), +0x314/+0x318/+0x320 := the three floats at +0x2B0/+0x2B4/+0x2B8 (in that crossed order: +0x318 ← +0x2B0, +0x314 ← +0x2B4, +0x320 ← +0x2B8), UV setup (`Anm_RingSetUV_Alt`) for 3 segments (6 vertices), rebuild flag +0x356 := 1, custom draw 0x427450, +0x32C/+0x330/+0x334 := 0, then **segments +0x324 := 24** (the default). Overrides: spawners `Spell_Start` (type 39) and `Player_Die` (type 59) and `Bomb_Dissolve` set 64; updates set it every frame for type 41 (48), 42 (64), 43/44 (48), 45 (8), 46 (12), 48 (48), 50 (32), and 40/55/64 copy it from +0x100; types 35, 49, 52, 53, 54 keep 24 unless their spawner writes it; custom draw; update 0x427990: radius := VM scale.x→width, VM pos.x→radius) | 39 spell-card start (slot 1), 52 spell start in special mode, 59 player death ring (slot 11, colour 0xFFF0404F), 49 Reimu LS |
 | 36, 37 | 88, 92 | ring, bomb-owned update/init (Yukari 0x4114E0 / 0x411720 / 0x411A80); the init re-spawns the slot as type 0x23 (script 88, life 140) and the bomb overrides slots 5–7 (0x59–0x5B life 140, 0x5D–0x5F life 220); updates never free, the VM `hide_stop` does (changelog/answers_impl11.md §11) | Yukari boundaries |
 | 40, 55 | 81, 87 | ring, update 0x4279D0 (segments := I0, waves := I1, width := scale.x, radius := pos.x, amplitude := pos.y, angle := rot z, phase := rot y) | Alice bomb (40), Reimu LS (55) |
 | 41 | 82 | ring, update 0x40EB50 (48 segments, width 32, radius 64 / 72 alternating per frame) | no spawn site found (INFERRED unused) |
@@ -405,16 +405,17 @@ s += D
 Call: ECX = type, EDX = p0, stack: p1 (+0x18), p2 (+0x1C), p3 (+0x20), draw priority. Object: +0 type,
 +0x10 current alpha (or amplitude), +0x14 p0, +0x18 p1, +0x1C p2, +0x20 p3, +0x24 release flag, +0x28 Timer.
 Calc returning 0 removes the effect (on-remove frees it).
+Draw priority: **every** code call passes 0x15 (bombs, Yukari square updates, ECL natives 1/10/15/17, `Msg_Run` type 4, `GameMgr_Calc` type 2, `Player_UpdateBomb` end flash, `MainMenu_LoaderThread` fades) except `Loading_StartDarken` 0x4489CA, which passes 1 (VERIFIED, every call site in the binary, RE-Q24).
 | type | p0 / p1 / p2 / p3 | behaviour | draw |
 |---|---|---|---|
 | 0 | dur / colour RGB | fade **from** colour: alpha = trunc(255 − 255·t/dur); ends t ≥ dur | full screen 640×480 (resets the viewport) |
-| 1 | dur / amp start / amp end | **shake**: a = p1 + t·(p2 − p1)/dur; screen offset x and y each = one of {0, +a, −a} chosen by `Rng_Range(3)` (**2 RNG draws/frame**, x first); frozen (no tick, no RNG) while bullets are frozen or the freeze byte 0x160F534 is set or 0x18B8A2C ≠ 0; ends t ≥ dur (offset left as is, but the popup draw 0x405420 at draw prio 14 zeroes AnmManager +0x1C/+0x20 every frame, so draws after prio 14 — HUD, ASCII strings — never shake) | none |
-| 2 | dur / colour | fade **to** colour: alpha = trunc(255·t/dur); timer holds while paused/continue menu; ends at dur; returns 0 when 0x18B8A2C ≠ 0 | playfield (32,16)–(416,464) |
+| 1 | dur / amp start / amp end | **shake**: a = p1 + t·(p2 − p1)/dur; screen offset x and y each = one of {0, +a, −a} chosen by `Rng_Range(3)` (**2 RNG draws/frame**, x first); per calc, in this order (VERIFIED 0x45BDC0, RE-Q24): GameFlags bit 10 (11 §2.1) or freeze byte 0x160F534 set → **frozen** (return 1: no tick, no RNG, effect kept); else 0x18B8A2C ≠ 0 (written by ECL native 30 (data: 1 then 0 a few frames later), 2 at the end of `StageStart`, 1 by `GameMgr_OnRemove`, 0 by Result/MainMenu register; `Supervisor_Calc` decrements it once per frame while ≠ 0) → return 0: the effect is **removed** at once (no RNG, it does not resume); else tick, then t ≥ dur → removed (no RNG on that frame), else a and the 2 draws; ends t ≥ dur (offset left as is, but the popup draw 0x405420 at draw prio 14 zeroes AnmManager +0x1C/+0x20 every frame, so draws after prio 14 — HUD, ASCII strings — never shake) | none |
+| 2 | dur / colour | fade **to** colour (0x45B760): 0x18B8A2C ≠ 0 → return 0 (removed) before anything else; else alpha = trunc(255·t/dur) (if dur ≠ 0, ≥ 0), then t ≥ dur → removed, else tick unless paused (0x164D0BA) or game-over menu (0x164D0BB) | playfield (32,16)–(416,464) |
 | 3 | dur / repeats / ARGB | **flash**: alpha = A − trunc(t·A/dur) (A = colour alpha); at dur: repeats −= 1, restart; ends at 0 repeats | playfield, colour = p2 RGB |
 | 4 | dur / colour | as 2 (fade to colour) | full screen |
 | 5, 6 | dur / colour | darken: alpha = trunc(128·t/dur) up to dur then held; when +0x24 is set: alpha = 128 − 128·t/8, ends after 8 frames | 5 full screen, 6 playfield |
 | | | **used at loading** (changelog/answers_impl15.md §Q6): `0x4489CA(0)` registers type 5, p0 = 60, colour 0, draw prio 1 (global 0x17CE750) from `GameMgr_OnRegister` when the previous scene is 1 and from `MainMenu_OnRegister`; its calc (prio 3) does not run during stage loading, so alpha stays 0; `Loading_Wait` / `Loading_End` release it (timer 0) → game frames 1..9 draw alpha 0x80, 0x70 … 0x00, removed at frame 10 | |
-| 7 | amp / ramp-in / hold / ramp-out | **shake** envelope: a = amp × (t/in, 1, (in+hold+out − t)/out); offsets as type 1 (2 RNG/frame); only when frames-since-stage-start (0x164D2C8) ≥ 2, frozen like type 1; ends after in+hold+out | none |
+| 7 | amp / ramp-in / hold / ramp-out | **shake** envelope: a = amp × (t/in, 1, (in+hold+out − t)/out); offsets as type 1 (2 RNG/frame). Per calc (VERIFIED 0x45BF10, RE-Q24): bit 10 or freeze byte → frozen (return 1, no tick/RNG); else gameplay frame counter 0x164D2C8 < 2 → return 0 = **removed** (a shake registered in the first 2 gameplay frames never runs); else tick, t ≥ in+hold+out → removed, else the 2 draws. **No** 0x18B8A2C test (unlike type 1) | none |
 
 Used (type: p0, p1, p2): bomb hits / impacts 1: 16, 8, 0 and 3: 8, 1, colour; Marisa sparks 7: 16, 120, 60, 120;
 Sakuya 1: 120, 4 and 1: 50, 4; Yuyuko 1: 120, 12 / 60, 16 / 30, 8; boss natives (below); `Player_UpdateBomb`

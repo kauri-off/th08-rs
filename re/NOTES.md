@@ -494,3 +494,20 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 # fullrun_noclip full verify (2026-10-19) — DONE
 - Full replay in the original (TH08_BOSS over the whole run): 124 708 trace rows, 0 differ, events identical (2 733 noclip_hit), 0 poll mismatches.
 - Output re/work/runs/fullrun_verify/play (boss.txt.xz = boss/spell rows of every boss); summary specs/data/sessions/fullrun_noclip/verify.txt; sessions README line updated.
+
+# RE-Q24 (2026-10-19) — IMPL22/23/24 questions — IN PROGRESS
+- redump rerun at start. Runs re/work/runs/q24/. Changelog target specs/changelog/answers_re_q24.md.
+- IMPL24 done so far: Q1 CODE BUG (cancel +0x564:=+0x568, spec right); Q2 already in 07 §10.3a; Q3 SPEC FIXED 13 §1.4
+  (chain kill sfx by chain index k); Q4 CODE BUG; Q5 NEW FACT 07 §5.5 thread path (unreachable in data); Q6 CODE BUG
+  (+ link order written to §10.5); Q7 CODE BUG (07 §12 row clarified, ecldata8 sub30); Q8 CODE BUG (§7 181 row filled);
+  Q9 CODE BUG (mode 3 unconditional HUD off; aura ptr cleared); Q10 spec right, equivalent (all alive clears unlink).
+- Scope added: IMPL25_QUESTIONS (priority Q2,Q6,Q12–16,Q19).
+- IMPL25 priority done: Q2 CODE BUG (11 §2.1 bit 10 set/clear/effects); Q6 CODE BUG (09 §1 step 1); Q12 SPEC FIXED 09 §2.1
+  (upd 3 only state 1); Q13 CODE BUG + 09 §4.5 exact order (AnmFile_SetScript keeps pos; 0x2000 only from script; no
+  player anm rand); Q14 harmless (14 §2.2 note); Q15 CODE BUG + SPEC (11 §4: clear frame loading:=1, score disp copy
+  always, timing); NEW: StageStart score:=0 restored by score<disp clamp (11 §3.1/§4 step 9); Q16 harmless note 11 §3.1;
+  Q19 SPEC FIXED 13 §3 (0x18B8A2C removes type 1/2; type 7 removed if 0x164D2C8<2, no 8A2C test) + CODE BUG.
+- RE-Q24 IMPL25 rest: Q17 load-vs-play (02 §4, 06 hdr, 11 §3.1); Q18 bit-2 recompute confirmed (CODE BUG); Q20 ring start scale always 1 (script 104 `scale 1,1`); Q21 list C = DrawBillboard via Camera_Set2D on playfield viewport, layer 3 never set (13 §2.4). Uncited: DropAttracted vel (0,−0.9) state 0 (09 §6.1); cooldown +0xE2A6C := 16 only by Spell_End (abs 0x18B8964; 09 §1.1, 07 §11.1); +0xE2A7C semantics; box test has no original (only point test 0x449FF0); damage-area circle = point test on enemy centre (09 §4.5); option origin read without free test (09 §4.3); filter 2 (09 §2.1); no bomb in state 1 (09 §6.3); screen-effect prio 0x15 everywhere except loading darken (13 §3); ring init default 24 segments (13 §2.6); +0x357 only type 59; boot rank 0,0,0,0 (GameMgr_Ctor); 0x164D30C += 1 in EnemyMgr_Calc outside dialogue (11 §2).
+- RE-Q24 IMPL22/23/24-uncited: op 36 operands resolved at op time (07 §5.6); capture time reward = time orbs from the ring in Spell_Calc (07 §11.1; explains golden row 8056); threshold/timeout/KillAll have no self test; demo 2 frame 2938 = shrink timer not reset at real death (09 §6.2); fullrun_noclip 6266 = op 67 y tests sequential (07 §8.3; port eclvm.rs:594 uses one ||); result screen: stage map 0x4C7F80, DMYS defaults, save clears +9, state 9/0xF interrupts, pos_offset in Result_Draw, sub-state timing; menu description VM int 2 senders; bullet draw, trail draw, spawn prev pos.
+- PROBE: session.inc TH08_SCAN now also dumps player bullets (`B` lines); old build kept as d3d8_v8_pre_q24.dll / session_v8_pre_q24.inc. Work game probe_cmd/cfg/score restored (md5 ok; score.dat restored from backup/score_1.261020.bak, identical md5).
+- RE-Q24 DONE: specs/changelog/answers_re_q24.md.

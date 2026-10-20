@@ -170,7 +170,7 @@ Each frame `Result_Calc` runs the current state, then the 72 VMs, then frame cou
 | 9 | normal game: name entry (§2.2) |
 | 0x11 | stage practice: store the practice hiscore (15 §2.6); goes to 10 |
 | 0x16 | spell practice: goes to 10 |
-| 0xF | VM 71 (interrupt 18) shows the end banner (stats panel 16 §2.5). After 90 frames, Shot or Enter → interrupt 2, state 0x10. |
+| 0xF | VM 71 (interrupt 18) shows the end banner (stats panel 16 §2.5). `Result_EndBanner` 0x4577E2 itself writes VM 71's pending interrupt := 18 on **every** state-0xF call while the state frame (+4) ≤ 30 (frames 0–30, so the label-18 entry is re-triggered each of those frames); from frame 90 (> 89), a Shot/Enter edge (0x1001) → VM 71 **only** gets interrupt 2, frame := 0, state 0x10. State 0x10: at frame > 29 → frame := 9, state 10 (VERIFIED RE-Q24). |
 | 0x10 | after 30 frames → state 10 with frame counter 9 |
 | 10–14 | replay save (15 §3.6, 16 §2.6) |
 | 2 | at frame 1, begin the loading screen and send interrupt 2 to all VMs. After 20 frames, **scene 1 (title/main menu)**, return 0 (object removed → score.dat saved). |
@@ -179,7 +179,7 @@ In slow mode (or Supervisor+0x1A4 bit 3, set only by the anti-tamper fill), stat
 
 ### 2.2 Name entry (`Result_NameEntry` 0x45621E)
 
-**Frame 0** builds the entry from the in-game record (15 §2.3):
+**Frame 0** first sends interrupt **difficulty + 3** (difficulty = 0x160F538, stored in Result+0x44; shot index `shot + byte 0x164D0B2` in Result+0x3C) to **all 72** result00 VMs (Result+0x1A0, stride 0x2A4: pending interrupt +0x1FE := d + 3 — no other interrupt is sent at state 9 entry; VM 40's slide-in and the plate/title VMs react to that interrupt in their own scripts), renders the shot title text into the text VM at +0xBFC0 (`Text_RenderCentered`, white, string table 0x4C7F4C[shot index]) and sets byte +0xC1B3 := 0xFF (VERIFIED 0x45621E, RE-Q24). Then it builds the entry from the in-game record (15 §2.3):
 - play time = 0x164D09C;
 - human rate = human·10000/total;
 - score = stats+8, continues = stats+0x29;
@@ -246,7 +246,7 @@ head at Result+0x1144C + 0x90·diff + 0xC·shot).
   - colour: state 9 → the new entry (entry byte +9 ≠ 0) 0xFFF0F0FF, others 0xC0FFC0C0; other states 0xFFFFC0C0;
   - `%2d` rank at x; x += 48;
   - state 9, new entry: `"%8s"` of 8 spaces with `_` at min(pos, 7) at x (the cursor underline);
-  - `"%8s %9d%1d(%d)"` / `"%8s %9d%1d(C)"` (§2.2 values) at x; x += 320;
+  - `"%8s %9d%1d(%d)"` / `"%8s %9d%1d(C)"` (§2.2 values) at x; x += 320. Arguments: name (+0x17), score (+0x0C), min(continues +0x26, 9), and for the `(%d)` form (stage byte +0x16 < 99) the **shown stage number = table 0x4C7F80[stage byte]** = (1, 2, 3, 4, 4, 5, 6, 6, 1) for bytes 0..8 (4A/4B both 4, 6A/6B both 6, Extra 1), not the raw byte; byte ≥ 99 → `(C)`. So default entries (stage byte 0, 15 §2.3) print `(1)` (VERIFIED `Result_Draw` 0x4586B4, table 0x4C7F80; RE-Q24);
   - `" %5s   %3.2f"` date, slowdown at x;
   - next row: x −= 368.
 - Steady state: header (56, 130); rank x 56, name x 104, date x 424; rows y 148 … 310.
@@ -254,6 +254,8 @@ head at Result+0x1144C + 0x90·diff + 0xC·shot).
 ### 2.4 Result viewer from the main menu (mode 0) — VERIFIED
 
 Refs `menu_ref/mopup1_res_*.png`, draw log `menu_mopup1.drawlog.xz` (scene 5).
+
+**VM draw** (`Result_Draw` 0x4586B4, VERIFIED RE-Q24): every frame all 72 `result00.anm` VMs are drawn in index order with `AnmManager_Draw2DSnap` at pos **+ pos_offset** (+0x288; pos is saved, offset added, drawn, then pos restored), so the op-6/op-24 offset writes (e.g. the selected item at (−4, −4)) shift the drawn position of every result00 VM.
 
 Result object fields used here: +4 frame counter (zeroed by `Result_SetState`), +8 state, +0x10 sub-state,
 +0x18 sub-frame, +0x1C cursor, +0x30 card-list character (0..12, 12 = all; initial 12), +0x34 character the
@@ -271,7 +273,7 @@ i) at +0x1A0; interrupt k to VM i = pending interrupt at VM+0x1FE.
 
 **Menu pattern** (states 1, 3, 4, 6, 7): sub-state 0, sub-frame 0: cursor := remembered value; every VM of the
 page gets interrupt 22, is run once, then 20 (selected) or 21 (others). After N sub-frames (N = 20 in state 1,
-6 elsewhere) sub-state 1: Up/Down (edge or repeat, wrap, SE 12, `Result_CursorUpDown` 0x45A0F4) → resend
+6 elsewhere) sub-state 1 — exact timing (VERIFIED 0x454CB2, 0x45567D, RE-Q24): the sub-frame +0x18 is incremented at the end of each sub-state-0 call that is still waiting; on the call where it reads N at the test, sub-state := 1, sub-frame := 0 and the sub-state-1 input code below runs **in that same call**, so input is accepted on sub-frame N: Up/Down (edge or repeat, wrap, SE 12, `Result_CursorUpDown` 0x45A0F4) → resend
 20/21. Confirm (Shot/Enter edge): selected VM 23, others 1, SE 10. Cancel (Bomb/ESC edge): SE 11.
 
 | state | VMs | count | confirm | cancel |
@@ -302,13 +304,13 @@ is off-screen, so the list swap is invisible.) Draw: §2.3.
   else `？？？？？` (5 full-width ?), alpha 255; header VM 10 is rendered `"%3d/%3d（キャラ切り替え↓↑）"` with
   (captured count [group][character], n), alpha 255.
 - From frame 6: Left/Right (edge or repeat, wrap over (n + 9) / 10 pages, SE 12) → frame 0, VM 40 interrupt 10.
-  Only if no Left/Right this frame: Up/Down (13 characters, `Result_CursorUpDown2` 0x45A1F3 on +0x30) → frame 0, +0x38 := 1, VM
+  Only if no Left/Right this frame: Up/Down (13 characters, `Result_CursorUpDown2` 0x45A1F3 on +0x30: Up (0x10) first, then Down (0x20), each on an edge press or key repeat 0x164D538; wraps mod 13; **SE 12** on a move; VERIFIED RE-Q24) → frame 0, +0x38 := 1, VM
   (27 + old) interrupt 24, VM (27 + new) 25. Cancel: +0x54 := 1, frame 0, SE 11, VM 40 interrupt 1.
 
 Captured counts (Result_OnRegister): for group g and character s = 0..12, count of cards of the group whose
 CATK magic is `CATK`, byte +8 = 3, and (story captures[s] ≠ 0 or practice captures[s] ≠ 0).
 
-Text VMs (Result_OnRegister): 28 VMs at Result+0xBFC0 + 0x2A4·k, anchor top-left, font 15: k = 0..13 use
+Text VMs (Result_OnRegister): 28 VMs at Result+0xBFC0 + 0x2A4·k, each set up by `AnmVm_Init` + `AnmVm_SetSprite` (0x4068A0: no script runs, so the VM keeps the `AnmVm_Init` defaults — colour/alpha as initialised there, not hidden), pos := (0, 0, 0), flags |= 0x1800 (anchor top-left), font bytes +0x298/+0x299 := 15 (VERIFIED 0x45964D, RE-Q24); a text VM that `Result_Draw` draws without positioning it first therefore appears at (0, 0): k = 0..13 use
 `text.anm` sprites 21..34, k = 14..27 `resulttext.anm` sprites 2..15 (512×17 strips). Card list: k = 0..9
 rows, k = 10 header. Play data: k = 0..19. Plus VM +0x1119C = `result00.anm` sprite 32 (256×16 separator bar,
 default centred anchor).
@@ -606,7 +608,8 @@ Entry interrupts (changelog/answers_impl17.md §Q3, VERIFIED):
 - range interrupt 18, then pending **27** written into VMs 138 and 139. 138 has label 27 → fades in (16 frames) and
   slides to (320, 48); 139 has none → hidden.
 - portraits/description per 12 §2.4 (entries 1–3, description disabled). The same is redone on every shot change, which
-  also zeroes the screen frame counter (pie easing restarts).
+  also zeroes the screen frame counter (pie easing restarts). A shot change writes **only** these per-VM interrupts (VMs 111–130: enabled bit off + interrupt 8; the shot's two portrait VMs from table 0x4B8CD8[shot][1..2]: on + 9; the description VM [shot][3]: on + 23) — no range interrupt, so VMs 0–110 and 131–141 (incl. 141) are untouched (VERIFIED 0x46B174, RE-Q24).
+- Input (sub-state 1) starts when the screen frame counter +0x1442C reaches 8 (it counts from 0 at entry, +1 per call).
 - cursor (stage row) = g_StageIdx.
 - Leaving: confirm sets g_StageIdx = row; Bomb sets g_StageIdx = row, sends range interrupt 6, and returns to the top
   menu (cursor 2) after 20 frames.

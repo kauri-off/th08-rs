@@ -96,7 +96,7 @@ write the VM interpolation fields directly (05 §2/§6).
   dr 4.267, life 30); D circle(orb, r 64, dr 8.533, dmg 25, life 15, period 5, max 50); effect 6 ×8; state 2
   (not freed; its VM keeps running); interrupt 1; SE 0xF @orb; shake (1: 16, 8, 0). Areas follow.
 - Blasts: when T ≥ 40 and T % 20 == 0 (T = 40, 60, …, 180): object 16 + (+0xFF0), then +0xFF0 := 1 (so the
-  first blast uses object 16 and every later one reuses object 17 — QUIRK); VM script 0x14; colour =
+  first blast uses object 16 and every later one reuses object 17 — QUIRK); VM script 0x14 (`AnmFile_SetScript` on the player ANM: runs its time-0 instructions now, before the point is drawn; no player*.anm script draws RNG, so the order changes no RNG draw; VERIFIED 0x40C910, RE-Q24); colour =
   table 0x4C6100[(T/20) % 7] = {0x8FFFFFFF, 0x8F0000FF, 0x8FFF00FF, 0x8FFF0000, 0x8FFFFF00, 0x8F00FF00,
   0x8F00FFFF}; point = homing target if x > −100 else (R·320 + 32, R·384 + 32) (**RNG**, x first);
   effects 0x31 and 0x37 (colour); C circle(point, r 64, dr 4.267, life 30); D circle(point, r 64, dr 8.533,

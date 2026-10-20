@@ -57,8 +57,13 @@ the loop end is not shipped); a reimplementation must never read past `loop_end`
 
 - Scripts and code name music as `bgm/<name>.mid`. `Music_Play(slot, name)` (0x447D56):
   - music mode (config byte) **1 = WAV**: copies the name, replaces the text after the last `.` with
-    `wav`, and queues it to the streaming thread.
-  - mode **2 = MIDI**: plays `bgm/<name>.mid` from the archive with the MIDI player.
+    `wav`, and queues sound command **1 = load** (slot, name) to the sound thread (queue at SoundManager
+    +0x1F88, 31 entries × 0x10C: command, slot, flag, name; full queue → dropped). It only loads/prepares the slot;
+    nothing is heard yet.
+  - mode **2 = MIDI**: opens `bgm/<name>.mid` for the slot (MIDI loader 0x4441A0).
+- `Music_PlaySlot(slot, track)` (0x447E47) starts a loaded slot: WAV: (if config +0x38 (0x17CE8A8, debug/driver flags, 15 §1) bit 13: command 4 first) then
+  command **2 = play** (slot); MIDI: stop, open slot, play. Both mark music-room track `track` as heard
+  (0x164CF14[track] := 1) unless replay playback or demo (VERIFIED, RE-Q24).
   - mode 0: no music.
 - `Bgm_FindTrack` (0x45C6B0): takes the basename (after last `/` or `\`), compares it with the
   record names case-sensitively; **if no record matches, index 0 (`th08_01.wav`) is used**.
