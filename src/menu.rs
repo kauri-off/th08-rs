@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::gfx::{FULLSCREEN, TextureId};
-use crate::input::{BOMB, DOWN, ENTER, LEFT, PAUSE, RIGHT, SHOT, UP};
+use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
 use crate::task::{Chain, Ret, Task};
 use anyhow::Result;
@@ -634,44 +634,49 @@ impl MainMenu {
             return;
         }
         self.move_cursor(ctx, OPTION_ITEMS, UP, DOWN, |_| true);
-        let inp = ctx.input;
-        let dir = if inp.pressed_or_repeat(LEFT) {
-            -1
-        } else if inp.pressed_or_repeat(RIGHT) {
-            1
-        } else {
-            0
-        };
         let item = self.cursor;
+        // Volume preview (15 §1.3): SE 0x1D whenever the screen frame counter +0x1442C is a multiple of 50.
+        if matches!(item, 3 | 4) && self.frames % 50 == 0 {
+            sound::play(sound::TIMEOUT);
+        }
+        let inp = ctx.input;
         let lmax = lives_max(&ctx.game);
         let cfg = &mut ctx.game.cfg;
-        if dir != 0
-            && let Some(v) = Self::option_value(cfg, item)
-        {
+        if matches!(item, 3 | 4) {
+            let v = Self::option_value(cfg, item).unwrap();
             let old = *v;
-            // SPEC-GAP: 15 §1.3 steps a volume ±4 then ±1 on an edge (±5 per press) and ±1 per frame once the
-            // unchanged-input counter is > 29; this steps ±1 per press and ±4 on repeat frames. The volume preview
-            // (SE 0x1D every 50 frames on items 3/4) is not played.
-            let (max, step) = match item {
-                0 => (lmax, 1),
-                2 => (2, 1),
-                3 | 4 => (100, if inp.repeat { 4 } else { 1 }),
-                _ => (1, 1),
-            };
-            *v = if matches!(item, 3 | 4) {
-                (*v as i32 + dir * step).clamp(0, max) as u8
-            } else {
-                (*v as i32 + dir).rem_euclid(max + 1) as u8
-            };
+            *v = volume_step(old, &inp);
             if *v != old {
-                sound::play(sound::TIMEOUT);
-                // Item 2: any change restarts bgm/th08_01.mid in slot 8 (15 §1.3); music off simply stops it.
-                match item {
-                    2 if cfg.music == 0 => ctx.audio.stop_bgm(),
-                    2 => ctx.audio.play_bgm("bgm/th08_01.mid"),
-                    _ => {}
-                }
                 ctx.audio.set_volumes(&ctx.game.cfg);
+            }
+        } else {
+            let dir = if inp.pressed_or_repeat(LEFT) {
+                -1
+            } else if inp.pressed_or_repeat(RIGHT) {
+                1
+            } else {
+                0
+            };
+            if dir != 0
+                && let Some(v) = Self::option_value(cfg, item)
+            {
+                let old = *v;
+                let max = match item {
+                    0 => lmax,
+                    2 => 2,
+                    _ => 1,
+                };
+                *v = (*v as i32 + dir).rem_euclid(max + 1) as u8;
+                if *v != old {
+                    sound::play(sound::TIMEOUT);
+                    // Item 2: any change restarts bgm/th08_01.mid in slot 8 (15 §1.3); music off simply stops it.
+                    match item {
+                        2 if cfg.music == 0 => ctx.audio.stop_bgm(),
+                        2 => ctx.audio.play_bgm("bgm/th08_01.mid"),
+                        _ => {}
+                    }
+                    ctx.audio.set_volumes(&ctx.game.cfg);
+                }
             }
         }
         if ctx.input.pressed(CONFIRM) {
@@ -783,8 +788,7 @@ impl Task<Ctx> for MainMenu {
         }
         // 0x18B8A2C := 0 (13 §3).
         crate::enemy::set_load_frames(0);
-        // SPEC-GAP: 00 §3.2 skips the title music when the previous scene was 5 (result viewer); not tested here.
-        if ctx.game.cfg.music != 0 {
+        if title_music(&ctx.game) {
             ctx.audio.play_bgm("bgm/th08_01.mid");
         }
         ctx.anm
@@ -971,10 +975,81 @@ impl Task<Ctx> for MainMenu {
     }
 }
 
+// Option items 3/4 volume, 15 §1.3: (a) Left/Right edge ∓/±4 clamped to 0..100, then (b) on an edge or with the
+// direction held while the unchanged-input counter 0x164D53C > 29, ∓/±1 if still above 0 / below 100.
+fn volume_step(v: u8, inp: &Input) -> u8 {
+    let mut v = v as i32;
+    if inp.pressed(LEFT) {
+        v = (v - 4).max(0);
+    } else if inp.pressed(RIGHT) {
+        v = (v + 4).min(100);
+    }
+    let held = inp.same_frames > 29;
+    if (inp.pressed(LEFT) || held && inp.down(LEFT)) && v > 0 {
+        v -= 1;
+    } else if (inp.pressed(RIGHT) || held && inp.down(RIGHT)) && v < 100 {
+        v += 1;
+    }
+    v as u8
+}
+
+// Loader thread 0x470E10 (00 §3.2): title music unless music is off or the previous scene was 5 (result screen).
+fn title_music(g: &gamemgr::Game) -> bool {
+    g.cfg.music != 0 && g.previous != gamemgr::SCENE_RESULT_MENU
+}
+
 #[cfg(test)]
 mod tests {
-    use super::final_notice;
-    use crate::gamemgr::Game;
+    use super::{final_notice, title_music, volume_step};
+    use crate::gamemgr::{self, Game};
+    use crate::input::{Input, LEFT, RIGHT};
+
+    #[test]
+    fn volume_press_and_hold() {
+        let mut i = Input::default();
+        let mut v = 80;
+        // One press steps 5 per edge: 80 → 75 → 70 → 65 (15 §1.3).
+        for want in [75, 70, 65] {
+            i.raw = LEFT;
+            i.tick();
+            v = volume_step(v, &i);
+            assert_eq!(v, want);
+            i.raw = 0;
+            i.tick();
+            assert_eq!(volume_step(v, &i), v);
+        }
+        // 98 → 100 on a Right edge; 2 → 0 on a Left edge.
+        i.raw = RIGHT;
+        i.tick();
+        assert_eq!(volume_step(98, &i), 100);
+        i.raw = 0;
+        i.tick();
+        i.raw = LEFT;
+        i.tick();
+        assert_eq!(volume_step(2, &i), 0);
+        // Held: nothing until the counter passes 29, then −1 every frame.
+        let mut v = 50;
+        for n in 1..=35 {
+            i.tick();
+            let next = volume_step(v, &i);
+            assert_eq!(next, if n < 30 { v } else { v - 1 }, "frame {n}");
+            v = next;
+        }
+        assert_eq!(v, 44);
+    }
+
+    #[test]
+    fn title_music_after_result() {
+        let mut g = Game::default();
+        g.cfg.music = 1;
+        g.previous = gamemgr::SCENE_GAME;
+        assert!(title_music(&g));
+        g.previous = gamemgr::SCENE_RESULT_MENU;
+        assert!(!title_music(&g));
+        g.previous = gamemgr::SCENE_BOOT;
+        g.cfg.music = 0;
+        assert!(!title_music(&g));
+    }
 
     #[test]
     fn notice_table() {

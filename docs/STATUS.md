@@ -367,6 +367,12 @@
   (15 §2.3); name-entry Up, Down, Left, Right are four independent tests per frame in that order (`move_char_cursor`,
   16 §2.2); the HSCR / replay date is local time (`chrono::Local` native, JS `Date` on wasm; 16 §2.2). Unit tests for
   ties and Up+Down. Traces not run (cloud). SPEC-GAP 168 → 167. Questions: `docs/briefs/IMPL47_QUESTIONS.md`.
+- impl64 (audit A.53, A.54, A.59, cloud, 2026-10-20): option volumes (items 3/4) step ∓/±4 on a Left/Right edge
+  then ∓/±1 on an edge or while held with the unchanged-input counter > 29 (`menu::volume_step`, 15 §1.3); SE 0x1D
+  volume preview every 50 screen frames on items 3/4, no SE on a volume step; title music is skipped when the
+  previous scene was 5 (`menu::title_music`, 00 §3.2); resulttext.anm in ANM slot 22 (00 §3.2). Unit tests for the
+  volume steps and the music rule. Traces not run (cloud). SPEC-GAP 134 → 131 (src). Questions:
+  `docs/briefs/IMPL64_QUESTIONS.md`.
 - impl50 (audit A.12, A.15, A.16, cloud, 2026-10-20): `EnemyManager::kill_all` (op 95, op 123 `Spell_End`, death
   modes 0–2) and `kill_non_bosses` (threshold / timeout switch) have no self test (07 §7 op 95, §10.2): the ECL
   caller is put back in its slot with its running main context (`Exec::with_self_in_slot`), so a non-boss caller

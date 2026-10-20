@@ -10,9 +10,8 @@ use crate::menu::{CANCEL, CONFIRM, MainMenu, Pending};
 use crate::scoredat::Catk;
 use crate::sound;
 
-// resulttext.anm ANM slot; text.anm slot 0 (info strips, 16 §6.3).
-// SPEC-GAP: 00 §3.2 loads resulttext.anm into slot 22; the port uses 21.
-pub const RT_SLOT: usize = 21;
+// resulttext.anm ANM slot (00 §3.2 loader thread); text.anm slot 0 (info strips, 16 §6.3).
+pub const RT_SLOT: usize = 22;
 const TEXT_SLOT: usize = 0;
 // Anchor A = raw pos of title01 VM 141 (12 §2.5, 16 §6.4); unselected row colour.
 const VM_ANCHOR: usize = 141;
