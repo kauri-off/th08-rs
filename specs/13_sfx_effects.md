@@ -204,7 +204,7 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 18 | 33 (240) | as 17 with 240 frames, keeps z | — |
 | 19 | 51 (300) | 3D background petal/leaf: spawned at camera + facing/2 + random (**RNG**: 10 draws, §2.6a), drifts with velocity + accel, z-rotation spin; freed when outside the view cone (dot(normalised dir from camera, facing) < 0.94) or when z ≥ 0 (kept only while z < 0) | — |
 | 20 | 56 | — | — |
-| 21, 26 | 52 (90), 53 (90) | burst: angle = param.x if > 0 else random (**RNG**), dir × (1 + R·1.5) (**RNG**); pos = centre + dir·128·(1 − (1 − t/90)²) | — |
+| 21, 26 | 52 (90), 53 (90) | burst (`EffInit_Burst` 0x4270C0, VERIFIED RE-Q28): if param.x (+0x2B0) ≤ −990.0 (x87 compare with the double at 0x4B49A0; ECL passes −999.0 as "random") angle = `Rng_FloatRange(2π)` − π (**RNG**), else angle = `Angle_AddNormalize`(param.x, 0) (no RNG; 0 and negative angles are kept); dir = (cos a, sin a, 0) × (1 + `Rng_FloatRange(1.5)`) (**RNG**, always); plain `Effect_Spawn` leaves param 0 → angle 0; pos = centre + dir·128·(1 − (1 − t/90)²) | — |
 | 22 | 54 (50) | no init (table init 0; pos = the spawn pos, i.e. the player pos +0x2B4 passed by `Player_Move`); follows the player while its script runs | youkai aura (fixed slot 2, created on focus) |
 | 23, 24 | 104 (I0 + 1; script sets I0 = 32, the spawner overwrites it) | no-op update (keep) | invulnerability ring (fixed slot 0, `Bomb_Start` → 0x40BF00; no init, pos = player pos +0x2B4 at the spawn): I0 := invulnerability frames, scale interpolates (slot 4, linear) from current to 1/16 over the invulnerability time (current is always (1, 1): script 104 sets `scale 1.0, 1.0` at time 0; VERIFIED 0x40BF00, RE-Q24), z spin × const, colour R 0xFF G 0x40 B 0x40, fades in to alpha 160 over 30 frames |
 | 25 | 35 (∞) | no init, no update; pos = the spawn pos (player pos +0x2B4 from `Player_Move`) | gauge-max aura (fixed slot 8) |
@@ -488,7 +488,7 @@ Chain child colour (n = `FUN_0041FD40` = number of chained children):
 
 - The boss chain kill also spawns 2·(+0x3380) time orbs within 128 px.
 - The single-kill popup comes from a chained child (+0x2DA4 = **parent pointer** ≠ 0, set by ECL ops 90–92 —
-  not a flag) killed on its own with reward ≠ 0: gauge −gauge/12, +1 time orb (changelog/answers_impl10.md §2).
+  not a flag) killed on its own with reward ≠ 0: `GaugeAdd(−gauge/12, not forced)` (nothing while bombing), +1 time orb (changelog/answers_impl10.md §2).
 
 `Popup_LargeStatic` 0x403600 (starts at age 88, i.e. a 2-frame life re-issued every frame), caller
 `Hud_DrawBoss`:

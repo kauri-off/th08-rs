@@ -291,7 +291,7 @@ Normal mode (0x164D0B4 bits 7–8 clear): gauge := 0; deathbomb counter n:
   shot types 0, 4, 5: n = n × 9 / 5; a ring effect is shown; during a spell card bullets are frozen (0x164D0B4
   bit 10 → `BulletMgr_Calc` skipped).
 Special mode (bits 7–8 set): n = 2 and forced bomb (+6 = 1, §7 "dissolve spell").
-All items in state 1 fall again: `ItemMgr_DropAttracted` 0x441530, called as the last step of `Player_Die` (both modes) and again at the real death (`Player_DyingUpdate`, after the death drops, §6.2), walks the active item list and for every item with state +0x2D7 == 1 sets state := 0 and vel (+0x2B0) := (0, −0.9, 0). This is not the −0.7 of the `ItemMgr_Calc` player-dying branch (08 §8.4), which only applies to items still in state 1 when the calc runs (VERIFIED 0x441530, RE-Q24).
+All items in state 1 fall again: `ItemMgr_DropAttracted` 0x441530, called as the last step of `Player_Die` (both modes) and again at the real death (`Player_DyingUpdate`, after the death drops, §6.2), walks the active item list and for every item with state +0x2D7 == 1 sets state := 0 and vel (+0x2B0) := (0, −0.9, 0). This is not the −0.7 of the `ItemMgr_Calc` player-dying branch (08 §8.4), which only applies to items still in state 1 when the calc runs (VERIFIED 0x441530, RE-Q24; runtime: attract demo 0, player hit at 4547 above the collection line with the auto-collect condition true, point item 428 stops at x 174.3 instead of drifting to 300, RE-Q28).
 Before this, the hit test itself calls `GameMgr_ScrambleDecoys` (5 × Rng_Range(100000) + 3 × Rng_Float…; 08 §4).
 
 **Work before `Player_Die`** (RE_NOCLIP, VERIFIED). The callers are `Player_HitTest` 0x44A230 (bullets),
@@ -445,7 +445,8 @@ graze += g (cap 99 999), graze total += g (cap 999 999). Always: effect 8 at the
 sound 0x1E (pan x), score += 2000 (4000 at gauge ≥ youkai): AddScore; if mode byte +5 (youkai): gauge +100 (not
 while bombing). Time-orb drops: if (not solo human, or shot type 10) and a boss exists (any of 8 boss slots at
 0x9DCDA0 + mgr) and gauge ≥ youkai max: one item type 10 (time orb, mode 5) at the bullet; if bullet (not
-laser) and a spell card runs: a second; and unless solo youkai: a third. Statistics bit 0x2000.
+laser) and a spell card runs: a second and, still inside that branch, unless solo youkai a third — so a laser or a
+no-card graze gives at most one orb (VERIFIED 0x44AACE–0x44AB14, RE-Q28). Statistics bit 0x2000.
 
 ### 9.3 Human/youkai gauge (stats +0x22, i16)
 Limits/thresholds (game manager +0x3DDF8.., set at player load):

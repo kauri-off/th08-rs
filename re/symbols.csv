@@ -753,3 +753,5 @@ addr,kind,name,signature,confidence,note
 0x00447764,func,Sound_TickBgmFades,,VERIFIED,called by Supervisor_Calc
 0x0045e3f0,func,Bgm_StartFadeOut,,VERIFIED,mode 1 N=secs*60
 0x00472840,func,Bgm_SetVolume,,VERIFIED,k=1-(1-v/100)^2
+0x0042b370,func,Enemy_ForwardDamageToRoot,void __thiscall(Enemy*,int d),VERIFIED,RE-Q28: not bombing; rd=d/2; root dmg timer -> rd/9 boss else 0; floor max(0 thr)
+0x004b49a0,global,g_EffBurstRandomBelow,double,VERIFIED,-990.0: EffInit_Burst random angle iff param.x <= this

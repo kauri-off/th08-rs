@@ -335,3 +335,13 @@ Test keys: `re/work/runs/q17m/noclip/keys_noclip.txt`. Font note (RE-Q17M): wine
   (demo 3 to frame 1610 in ~3 min with `run.sh 240`).
 - Port side: experiments go in a scratch copy (`re/work/runs/q27/portfix`, `cp -r src Cargo.* target` then edit + build
   there, ~5 s incremental); `demosync` there has `TH08_ADUMP` (areas + player bullets) and `TH08_ODUMP` (options).
+
+## 15. RE-Q28 probe additions (2026-10-20)
+- Session mode `TH08_SCANBUL=1` (with `TH08_SCAN`): `Q` lines in scan.txt = every non-free enemy bullet (slot, state, pos, vel,
+  angle, speed, off-screen count, grace, ex-active, flags, colour, sprite w/h; floats hex).
+- `TH08_BOSS` now also writes `V <slot> f` = the boss main context's float vars 10016–10023 (context e+0x7F8 +0x38..+0x54).
+- Previous build: `re/work/hook/d3d8_v10_pre_q28.dll` / `session_v10_pre_q28.inc`.
+- Port side (scratch `re/work/runs/q28/portfix`): `session` has `TH08_SCANBUL` (Q lines in the `TH08_SESSION_DUMP` output) and
+  `EH` hex enemy positions; `TH08_SESSION_RNG=<row>` prints the port's RNG call sites of one session row.
+- Pitfall: the user's `~/.config/th08/port.cfg` can carry `invuln = on` (launcher); run port tools with `TH08_INVULN=off`.
+- Pitfall: a probe `quit` command exits through WinMain and rewrites `score.dat` (exit save) — restore it after demo runs.

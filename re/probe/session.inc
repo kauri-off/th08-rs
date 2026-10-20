@@ -188,6 +188,14 @@ static void sess_scan(int pass) {
         for (int q = 0; q < 0x40; q += 4) fprintf(o, " %08x", U32(a + q));
         fprintf(o, "\n");
     }
+    if (getenv("TH08_SCANBUL")) for (int j = 0; j < 1536; j++) {
+        uint32_t b = 0xF54E90 + 0x1A880 + j * 0x10B8;
+        if (!U16(b + 0xDB8)) continue;
+        uint32_t spr = U32(b + 0x224);
+        fprintf(o, "Q %d st %d pos %08x %08x vel %08x %08x ang %08x spd %08x off %d grace %d act %x fl %x col %d wh %08x %08x\n",
+                j, (int16_t)U16(b + 0xDB8), U32(b + 0xD44), U32(b + 0xD48), U32(b + 0xD50), U32(b + 0xD54), U32(b + 0xD74), U32(b + 0xD68),
+                (int16_t)U16(b + 0xDBA), (int)U32(b + 0xDA8), U32(b + 0xDAC), U32(b + 0xDB0), (int16_t)U16(b + 0xDB4), spr ? U32(spr + 0x34) : 0, spr ? U32(spr + 0x30) : 0);
+    }
     uint32_t it = U32(0x1653648 + 0x17B088); int n = 0;
     while (it && n < 3000) {
         fprintf(o, "I %u ty %u st %u mx %u pos %08x %08x vel %08x %08x t %d\n", (it - 0x1653648) / 0x2E4, U8(it + 0x2D4), U8(it + 0x2D7), U8(it + 0x2D8),
@@ -231,6 +239,7 @@ static void sess_boss(int pass) {
                 (int)U32(e + 0x3368), (int)U32(e + 0x336C), (int)U32(e + 0x3370), (int)U32(e + 0x3374),
                 (int)U32(e + 0x3378), (int)U32(e + 0x337C), (int16_t)U16(e + 0x2CEE), (int)U32(e + 0x2E14 + 8), (int)U32(e + 0x5354 + 8),
                 U32(e + 0x3324), U32(e + 0x3328), U32(e + 0x2D88), U32(e + 0x2D8C), (int)U32(e + 0x53CC), U8(e + 0x3313), (int16_t)U16(e + 0x2D30));
+        fprintf(o, "V %d f", j); for (int q = 0x38; q < 0x58; q += 4) fprintf(o, " %08x", U32(c + q)); fprintf(o, "\n");
         for (int k = 0; k < 4; k++) {
             uint32_t t = U32(e + 0x3384 + 4 * k);
             if (!t) continue;

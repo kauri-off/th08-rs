@@ -234,7 +234,10 @@ Write order (VERIFIED from the saver):
 - mode 2 (flush only: load, then immediately save) from:
   - the pause menu "quit" (0x4045AC);
   - GameMgr_LoadScoreData (0x43BBF3, at game start);
-  - WinMain exit (0x441B95).
+  - WinMain exit (0x441B95): after the main loop has left (`Frame_Run` returned non-zero, i.e. after that frame's
+    calc, draw and Present), and only if the PLST block tag 0x164CD0C ≠ 0 (always after boot); then the chains are
+    torn down (0x43CE30), which removes the Result and saves. So the 2 save draws (11 §1.5) come after the last
+    frame's post-calc state, never inside a frame (VERIFIED WinMain, RE-Q28).
 - mode 1 from Supervisor scene 6 (after a game).
 - mode 0 from scene 5 (result viewer from the menu).
 

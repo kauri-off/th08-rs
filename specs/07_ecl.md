@@ -335,7 +335,7 @@ own argument slot in the loaded file** (shared by all enemies; e.g. op 5 with a 
 | 10092 | item drop | int | |
 | 10093 | score | int | |
 | 10094 / 10095 | ctx floats | float | |
-| 10096 | chain count (`Enemy_ChainChildCount` 0x41FD40): if the enemy is a chain root (no parent +0x2DA4 and +8 ≠ 0) = number of enemies reached by following +8 from it; else if it has a parent = the same count evaluated on the **parent** (+0x2DA4, the enemy that spawned it with op 90–92), which is 0 unless that parent is a root; else 0. No alive test: every death, `Enemy_Free`, kill-all and chain kill unlinks the enemy (`Enemy_ChainUnlink`), so the walk only meets live members. VERIFIED code + demo 3 runtime (changelog/answers_impl19.md §Q3, changelog/answers_impl21.md §Q1) | — | |
+| 10096 | chain count (`Enemy_ChainChildCount` 0x41FD40): if the enemy is a chain root (no parent +0x2DA4 and +8 ≠ 0) = number of enemies reached by following +8 from it; else if it has a parent = the same count evaluated on the **parent** (+0x2DA4, the enemy that spawned it with op 90–92), which is 0 unless that parent is a root; else 0. No alive test: every death, `Enemy_Free`, kill-all and chain kill unlinks the enemy (`Enemy_ChainUnlink`), so the walk only meets live members. The walk also passes through the enemy whose ECL is running (it stays linked while it runs), so siblings read the same count: e.g. 3 children of a root all read 3, not 2/1/0 (golden 8298, RE-Q28). VERIFIED code + demo 3 runtime (changelog/answers_impl19.md §Q3, changelog/answers_impl21.md §Q1) | — | |
 | 10097 | player mode byte (0x17D5EF8+5) | — | |
 | 10098 | (int only) **2 if a + b + c ≥ d, else 0** — a = stage time (stats +0x3C), b = pending time reward of a captured card not yet paid (spell object g_Gui +0x10), c = number of time-orb items (type 7) currently in the item list, d = stage time threshold (stats +0x40 = `TIME_THR`[stage][difficulty], 11 §3.1). Read by the Last Spell host sub of each stage boss (ecldata1–5: `≠ 2 → delete`). VERIFIED code + runtime (changelog/answers_impl20.md §Q1) | — | |
 | 10099 | spell-card state (bomb-allowed / running) | — | |
@@ -567,6 +567,10 @@ left→idle or right→idle script.
 ## 10. Enemy update, damage, death — VERIFIED (`EnemyMgr_Calc` 0x42C660)
 
 ### 10.1 Per frame, in order
+0. While GameFlags bit 10 (spell-card death freeze, 11 §2.1) is set, `EnemyMgr_Calc` runs only the play-time and
+   human-rate counters (11 §2) and returns 1: no timelines, no slot loop (no ECL, movement, VMs, damage, timers),
+   the 4 draw-list heads keep last frame's lists, the manager timer +0x9DCED0 and the tamper test are skipped
+   (VERIFIED 0x42C6A0, RE-Q28).
 1. Timelines (§3), then for each enemy slot in index order (alive only):
 2. If flag A bit 10 (being chain-killed): only position follow + death processing. Else:
 3. If bit 8: `Enemy_ReactPlayerMode` 0x42C420 (changelog/answers_impl14.md §1, VERIFIED at runtime). Player mode = player
@@ -622,8 +626,11 @@ left→idle or right→idle script.
      deals 0) and the enemy is not a chained child, then
      `d < 3 ? min(d,1) : trunc(d/2.5)` (VERIFIED 0x42D2B9); if the
      damage-reduction timer (op 160) > 0: bosses `d/9`, others 0; life −= d; var 10083 = d; chained enemies
-     forward damage to their root (0x42B370: root life −= d/2, or /9 / 0 under the root's timer, never below
-     the root's highest active threshold).
+     forward damage to their root (0x42B370, VERIFIED RE-Q28): skipped while the player is bombing (0x17D6ED4 ≠ 0);
+     rd = d/2 (d = the child's reduced damage, integer); if the **root's** damage-reduction timer (+0x5354) > 0:
+     rd = rd/9 if the root has flag A bit 1 (boss), else 0 — i.e. trunc(trunc(d/2)/9), not d/9; floor = max(0,
+     the root's 4 thresholds +0x3358) (unused −1 entries count as 0); only if rd ≠ 0: root life −= rd, and if
+     root life ≤ floor then root life := floor.
 7. Hit flash (counter byte e+0x3314, changelog/answers_impl18.md §Q3, VERIFIED code): if the counter is 0 and the enemy took
    damage this frame (d > 0 at step 6 — the **raw** `Player_DamageAgainst` result, before the spell-card, damage-timer and
    flag-A-bit-3 reductions; the flag is set even when the reduced damage is 0, so the flash and sfx 0x14/0x25 also fire on
@@ -715,8 +722,10 @@ way life becomes positive works (op 131, a write to var 10051, a threshold clamp
 only on frames where the enemy's script block runs (not chain-killed, flags A bit 10; not paused by flags B bit 7 or the
 flags A bit 30 bomb/state condition).
 
-Unless bit 10: sfx 2/3, death effects: `Effect_Spawn(e+0x3310, pos, 1)` if that signed
-byte ≥ 0, then `Effect_Spawn(e+0x3311 + 4, pos, 4)` (4 sparks, 4 draws each); then **if the gauge is at human
+After the mode switch, for **every** death mode (0–3 and the unused 4–7; VERIFIED 0x42D6AF…0x42DA59, RE-Q28), unless
+flag A bit 10: sfx 2/3, then **only if** the signed byte e+0x3310 ≥ 0: `Effect_Spawn(e+0x3310, pos, 1)` and
+`Effect_Spawn(e+0x3311 + 4, pos, 4)` (4 sparks, 4 draws each; both skipped when e+0x3310 < 0); then (whatever
+e+0x3310 is) **if the gauge is at human
 max or youkai max** (`Gauge_IsHumanMax`: gauge ≤ GM+0x3DDFC, or `Gauge_IsYoukaiMax`: gauge ≥ GM+0x3DDFE) →
 `ItemMgr_Spawn(final pos, 7 = time orb, 1)` → forced mode 3 → Rng_FloatRange + Rng_SignedRange = **4 draws**
 (08 §8.3; nothing if pos.x ∉ [−64, 448] or the item cursor slot is busy). RNG order on a normal kill frame:
@@ -767,7 +776,7 @@ Chain-kill path (e has children):
    1.0, 16, 7) and `Timer_Set`(0x18B89D4, 0).
 
 Single-kill path: taken when e has a parent and reward ≠ 0 (a chained child killed on its own; `EnemyMgr_Calc`
-first does parent +0x3380 −= 1): gauge −= gauge/12; timers 0x18B89E0 = 0, 0x18B89C8 = 30, 0x18B89D4 = 50; final
+first does parent +0x3380 −= 1): `GameMgr_GaugeAdd(−gauge/12, not forced)` (C division, truncates toward 0; skipped while the player is bombing, clamped like every GaugeAdd; VERIFIED 0x42B223, RE-Q28); timers 0x18B89E0 = 0, 0x18B89C8 = 30, 0x18B89D4 = 50; final
 pos recomputed; `Popup_Large`(pos, 1, 0, 0xFFFFFFFF) ("+1"); `ItemMgr_Spawn`(type 7, mode 1); drops cleared; then
 unlinked from the chain (0x42B2F0).
 

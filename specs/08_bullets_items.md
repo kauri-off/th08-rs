@@ -411,7 +411,8 @@ For each item (count += 1):
 - **state 0/1**: attract when state == 1, or when player.y < the collection line (sht +0x1C) and (power ≥ 128, or
   player byte +3 ≠ 0, or the shot type 0x164D0B1 is 1 (Marisa & Alice) or 6 (Marisa solo)). Attract: if the player state is not 1/2: vel = polar(angle
   from item to player, sht +0x14), state 1, pos += vel·gs, then collection test (skip common motion); else
-  vel.y = −0.7, state 0. Not attracting: vel.x = vel.z = 0; vel.y = max(vel.y, −2.2). Common motion.
+  vel.y = −0.7, state 0 (vel.x/z untouched: an item still above the line keeps drifting sideways every frame of
+  the player's death, which is why `ItemMgr_DropAttracted` (09 §6.1) zeroes vel.x first; RE-Q28). Not attracting: vel.x = vel.z = 0; vel.y = max(vel.y, −2.2). Common motion.
 - **common motion**: pos += vel·m. If state ≠ 0 or pos.y ≤ 448 + 16 (global 0x164D2E8 = 448): if vel.y ≥ 3 →
   vel.y = 3 else vel.y += 0.03·m; then collection test. Else (fell out): **rank −3** and the item is freed.
 - **collection test**: skipped in state 3; `Player_ItemCollectTest` (player state 0/3/4; item box of size
@@ -421,7 +422,7 @@ For each item (count += 1):
   the VM.
 After the loop: play the chosen collection sound once; timer 0x18B89D4 (= player +0xE2ADC, "time-orb gauge
 lock"): if > 0, decrement and clamp at 0. It is set to 50 by `Enemy_KillChildren` 0x42ADB0 when a chain is
-killed by the player (together with gauge −= gauge/12, gauge timer B := 30, timer C := 0) and back to 0 when the
+killed by the player (together with `GameMgr_GaugeAdd(−gauge/12, not forced)` — skipped while bombing, 07 §10.3a — gauge timer B := 30, timer C := 0) and back to 0 when the
 chain's time-orb shower is spawned.
 
 ### 8.5 Collection effects

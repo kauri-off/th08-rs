@@ -565,3 +565,12 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - IMPL30 Q1: ASCII +0x8284 = menu frame number (ASCII mgr registered by Supervisor_Init on boot loader thread; 13 boot calcs
   not counted). Q2 Enemy_Free bit1 && slot<4 (port right); Q3 mode-0 boss marker frozen visible (CODE BUG); Q4 raw dmg>0.
 - Probe: iscan A/P lines, oscan, TH08_ACTR (TOOLING §14). Old build d3d8_v9_pre_q27.dll.
+
+# RE-Q28 (2026-10-20) — next sync divergences after RE-Q27 fixes — DONE (specs/changelog/answers_re_q28.md)
+- Runs re/work/runs/q28/ (scratch port portfix/ with fixes A–K, fix sites listed in q28_fix_sites.txt; src/ untouched).
+- golden 8298 / fullrun 7746: var 10096 (port SPEC-GAP: counts entries after self; spec: parent's count) + port placeholder
+  breaks the chain walk for the running enemy → golden 8508 → (C root forward (d/2)/9) → 10516 → (J death fx all modes) → 10533
+  → (K burst param ≤ −990) → 10707. fullrun 7746 → 8166 → 9346 → 9363 → 9408.
+- demos: 0 4629 DropAttracted missing (F) → 5246; 1 3880 single-kill gauge via GaugeAdd (G) → 4155; 2 4036 graze 3rd orb nested
+  (H) → 4641 → (I bit-10 EnemyMgr skip) → 4660; 3 6665 bit 10 (I) → 6684.
+- selftest1 1540: frame counter := 0 in GameMgr_OnRemove (D) → 1922 = exit save inside the frame (E) → full match.
