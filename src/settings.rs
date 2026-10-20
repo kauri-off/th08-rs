@@ -1,5 +1,6 @@
 //! Port settings, not a port of the original (the game's own th08.cfg is 15 §1): one typed struct, read once from
-//! command-line flags > env vars (native) or URL params (web) > the port config file `port.cfg` > defaults.
+//! command-line flags > env vars (native) or URL params (web) > the port config file `port.cfg` (web: localStorage)
+//! > defaults.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -30,7 +31,9 @@ pub enum Kind {
     Enum(&'static [&'static str]),
     // Free text in the given format.
     Text(&'static str),
+    // A folder / a file.
     Path,
+    File,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +46,14 @@ pub enum Group {
 }
 
 impl Group {
+    pub const ALL: [Group; 5] = [
+        Group::GameData,
+        Group::Display,
+        Group::StartGame,
+        Group::Cheats,
+        Group::Tools,
+    ];
+
     pub fn title(self) -> &'static str {
         match self {
             Group::GameData => "Game data",
@@ -98,7 +109,13 @@ impl Entry {
             Kind::Enum(_) => "NAME".into(),
             Kind::Text(f) => f.into(),
             Kind::Path => "PATH".into(),
+            Kind::File => "FILE".into(),
         }
+    }
+
+    // Whether `v` is a valid value (parsed into a scratch `Settings`).
+    pub fn check(&self, v: &str) -> Result<(), String> {
+        self.parse_into(&mut Settings::empty(), v.trim())
     }
 
     // Type check from `kind`, then the entry's own parser.
@@ -128,6 +145,8 @@ pub struct Settings {
     pub scale: u32,
     pub fullscreen: bool,
     pub vsync: bool,
+    // Show the launcher screen before the game (th08 binary only).
+    pub launcher: bool,
     pub save_dir: Option<PathBuf>,
     pub font: Option<String>,
     pub seed: Option<u16>,
@@ -189,6 +208,7 @@ impl Settings {
             scale: 1,
             fullscreen: false,
             vsync: true,
+            launcher: true,
             save_dir: None,
             font: None,
             seed: None,
@@ -330,6 +350,18 @@ pub const ENTRIES: &[Entry] = &[
         },
     },
     Entry {
+        key: "launcher",
+        env: "TH08_LAUNCHER",
+        kind: Kind::Bool,
+        default: "on",
+        group: Group::Display,
+        help: "show this settings screen at start (--no-launcher skips it once)",
+        set: |s, v| {
+            s.launcher = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
         key: "save_dir",
         env: "TH08_SAVE_DIR",
         kind: Kind::Path,
@@ -344,7 +376,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry {
         key: "font",
         env: "TH08_FONT",
-        kind: Kind::Path,
+        kind: Kind::File,
         default: "",
         group: Group::GameData,
         help: "Japanese font for dialogue text (native)",
@@ -866,53 +898,54 @@ impl Settings {
         self.values.get(key).map_or(Origin::Default, |v| v.1)
     }
 
-    // Native: CLI args (without the program name). `Err` = help text for `--help`.
-    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
-        let mut cli: Vec<(String, &'static Entry, String)> = Vec::new();
-        let mut it = args.into_iter().peekable();
-        while let Some(a) = it.next() {
-            if a == "--help" || a == "-h" {
-                return Err(help());
-            }
-            let Some(flag) = a.strip_prefix("--") else {
-                match find("game_dir") {
-                    Some(sw) if !cli.iter().any(|c| c.1.key == "game_dir") => {
-                        cli.push(("game dir".into(), sw, a))
-                    }
-                    _ => log::error!("command line: extra argument {a:?} ignored"),
-                }
-                continue;
-            };
-            let (name, inline) = match flag.split_once('=') {
-                Some((n, v)) => (n, Some(v.to_string())),
-                None => (flag, None),
-            };
-            let Some(sw) = find(name) else {
-                log::error!("command line: unknown option --{name} ignored (see --help)");
-                continue;
-            };
-            let v = match inline {
-                Some(v) => v,
-                // A boolean takes the next word only if it is an on/off value.
-                None if sw.is_bool() => match it.peek() {
-                    Some(n) if !n.trim().is_empty() && parse_bool(n).is_ok() => it.next().unwrap(),
-                    _ => "1".into(),
-                },
-                None => match it.next() {
-                    Some(v) => v,
-                    None => {
-                        log::error!("command line: --{name} needs a value; ignored");
-                        continue;
-                    }
-                },
-            };
-            cli.push((format!("--{name}"), sw, v));
-        }
+    // Native: CLI args (without the program name) parsed by the clap command built from `ENTRIES`. `Err` = clap's
+    // help/version output or a parse error (`Error::exit` prints it with the right exit code).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, clap::Error> {
+        let m = command().try_get_matches_from(
+            std::iter::once("th08".to_string()).chain(join_bool_values(args)),
+        )?;
         let mut s = Self::from_environment();
-        for (name, sw, v) in cli {
-            s.apply(Origin::Cli, &name, sw, &v);
+        // The positional folder first, so a `--game-dir` flag beats it.
+        if let Some(v) = m.get_one::<String>(POS_DIR) {
+            s.apply(Origin::Cli, "game dir", find("game_dir").unwrap(), v);
+        }
+        let mut cli: Vec<(usize, &'static Entry, String)> = Vec::new();
+        for e in ENTRIES {
+            if let (Some(i), Some(v)) = (m.index_of(e.key), m.get_one::<String>(e.key)) {
+                cli.push((i, e, v.clone()));
+            }
+            if let Some(i) = m.index_of(&no_id(e)).filter(|_| m.get_flag(&no_id(e))) {
+                cli.push((i, e, "off".into()));
+            }
+        }
+        // Last on the command line wins (`--no-x --x`).
+        cli.sort_by_key(|c| c.0);
+        for (_, e, v) in cli {
+            s.apply(Origin::Cli, e.key, e, &v);
         }
         Ok(s)
+    }
+
+    // Defaults, then each (entry, value text, origin); used by the launcher screen after Play.
+    pub fn from_values<'a>(
+        values: impl IntoIterator<Item = (&'static Entry, &'a str, Origin)>,
+    ) -> Self {
+        let mut s = Self::default();
+        for (e, v, o) in values {
+            s.apply(o, e.key, e, v);
+        }
+        s
+    }
+
+    // Scripted / headless runs of the th08 binary (screenshot, draw log, input script, anm viewer, slot test):
+    // never show the launcher.
+    pub fn is_tool_run(&self) -> bool {
+        self.shot.is_some()
+            || self.drawlog.is_some()
+            || self.input.is_some()
+            || self.anm.is_some()
+            || self.slot_test.is_some()
     }
 
     // Defaults < port.cfg < env vars / URL params (no command line: tests, tools, the web build).
@@ -956,34 +989,137 @@ fn env_value(sw: &Entry) -> Option<String> {
     params.get(&sw.url())
 }
 
-pub fn help() -> String {
-    let mut h = String::from(
-        "usage: th08 [game dir] [--switch value | --switch]...\n\
-         Each switch is also an env var (shown), a web URL parameter (name without TH08_, lowercase) and a\n\
-         `key = value` line in port.cfg. Priority: command line > env > port.cfg > default.\n\
-         Booleans take 1/0, true/false or on/off; `--switch` alone means on.\n\n",
-    );
-    for group in [
-        Group::GameData,
-        Group::Display,
-        Group::StartGame,
-        Group::Cheats,
-        Group::Tools,
-    ] {
-        h += &format!("{}:\n", group.title());
-        for sw in ENTRIES.iter().filter(|e| e.group == group) {
-            let flag = format!("--{} {}", sw.key.replace('_', "-"), sw.hint());
-            let def = match sw.default {
-                "" => String::new(),
-                d => format!(", default {d}"),
-            };
-            h += &format!("  {flag:<36} {} ({}{def})\n", sw.help, sw.env);
+#[cfg(not(target_arch = "wasm32"))]
+const POS_DIR: &str = "game dir";
+
+#[cfg(not(target_arch = "wasm32"))]
+fn no_id(e: &Entry) -> String {
+    format!("no-{}", e.key)
+}
+
+// Validates a CLI value with the entry's own table parser (kind range/choices plus aliases such as `idx:N`).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+struct EntryParser(&'static Entry);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl clap::builder::TypedValueParser for EntryParser {
+    type Value = String;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        v: &std::ffi::OsStr,
+    ) -> Result<String, clap::Error> {
+        let v = v
+            .to_str()
+            .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8).with_cmd(cmd))?;
+        self.0.check(v).map(|_| v.to_string()).map_err(|msg| {
+            let name = arg.map_or(self.0.key.to_string(), |a| a.to_string());
+            clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                format!("invalid value '{v}' for '{name}': {msg}\n"),
+            )
+            .with_cmd(cmd)
+        })
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        match self.0.kind {
+            Kind::Enum(c) if c.len() <= 9 => Some(Box::new(
+                c.iter().map(|&v| clap::builder::PossibleValue::new(v)),
+            )),
+            _ => None,
         }
     }
-    if let Some(p) = port_cfg_path() {
-        h += &format!("\nport.cfg: {}\n", p.display());
+}
+
+// clap cannot let an optional flag value depend on the next word, so `--bool on` is joined to `--bool=on` first
+// (old rule: a boolean takes the next word only if it is an on/off value; else `--bool` alone = on).
+#[cfg(not(target_arch = "wasm32"))]
+fn join_bool_values(args: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut it = args.into_iter().peekable();
+    while let Some(a) = it.next() {
+        let is_bool_flag = a
+            .strip_prefix("--")
+            .filter(|f| !f.contains('='))
+            .and_then(find)
+            .is_some_and(Entry::is_bool);
+        match it.peek() {
+            Some(n) if is_bool_flag && !n.trim().is_empty() && parse_bool(n).is_ok() => {
+                let n = it.next().unwrap();
+                out.push(format!("{a}={n}"));
+            }
+            _ => out.push(a),
+        }
     }
-    h
+    out
+}
+
+// The `th08` command line, one flag per `ENTRIES` row (`--key`, `--k_e_y` and the URL name as aliases), grouped by
+// `Group` in `--help`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn command() -> clap::Command {
+    use clap::{Arg, ArgAction, Command};
+    let mut cmd = Command::new("th08")
+        .about("Touhou 8 (Imperishable Night) engine port")
+        .args_override_self(true)
+        .after_help(format!(
+            "Each switch is also an env var (shown), a web URL parameter (name without TH08_, lowercase) and a\n\
+             `key = value` line in port.cfg. Priority: command line > env > port.cfg > default.\n\
+             Booleans take 1/0, true/false or on/off; `--switch` alone means on, `--no-switch` off.\n\
+             port.cfg: {}",
+            port_cfg_path().map_or("(no config dir)".into(), |p| p.display().to_string())
+        ))
+        .arg(
+            Arg::new(POS_DIR)
+                .value_name("GAME DIR")
+                .help("game folder (same as --game-dir)")
+                .value_parser(EntryParser(find("game_dir").unwrap())),
+        );
+    for e in ENTRIES {
+        let long = e.key.replace('_', "-");
+        let def = match e.default {
+            "" => String::new(),
+            d => format!(", default {d}"),
+        };
+        let mut arg = Arg::new(e.key)
+            .long(long.clone())
+            .help(format!("{} ({}{def})", e.help, e.env))
+            .help_heading(e.group.title())
+            .action(ArgAction::Set)
+            .value_parser(EntryParser(e));
+        let mut aliases = vec![e.key.to_string(), e.url(), e.url().replace('_', "-")];
+        aliases.sort();
+        aliases.dedup();
+        for a in aliases.into_iter().filter(|a| *a != long) {
+            arg = arg.alias(a);
+        }
+        arg = match e.kind {
+            Kind::Bool => arg
+                .num_args(0..=1)
+                .require_equals(true)
+                .default_missing_value("on")
+                .value_name("on|off"),
+            Kind::Enum(_) => arg.value_name(e.key.to_uppercase()),
+            _ => arg.value_name(e.hint()),
+        };
+        cmd = cmd.arg(arg);
+        if e.is_bool() {
+            cmd = cmd.arg(
+                Arg::new(no_id(e))
+                    .long(format!("no-{long}"))
+                    .alias(format!("no_{}", e.key))
+                    .action(ArgAction::SetTrue)
+                    .hide(true),
+            );
+        }
+    }
+    cmd
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -1044,6 +1180,7 @@ pub fn port_cfg_path() -> Option<PathBuf> {
 }
 
 // `key = value` lines; `#` comments and blank lines skipped.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn parse_port_cfg(text: &str) -> Vec<(String, String)> {
     text.lines()
         .map(str::trim)
@@ -1058,6 +1195,7 @@ fn parse_port_cfg(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn read_port_cfg() -> Vec<(String, String)> {
     port_cfg_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -1065,49 +1203,107 @@ fn read_port_cfg() -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+// Web: the port.cfg slot is localStorage, one `th08.<key>` item per setting.
+#[cfg(target_arch = "wasm32")]
+fn read_port_cfg() -> Vec<(String, String)> {
+    let Some(st) = local_storage() else {
+        return Vec::new();
+    };
+    ENTRIES
+        .iter()
+        .filter_map(|e| Some((e.key.to_string(), st.get_item(&storage_key(e.key)).ok()??)))
+        .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
+#[cfg(target_arch = "wasm32")]
+fn storage_key(key: &str) -> String {
+    format!("th08.{key}")
+}
+
 // Sets `key = value` in port.cfg (other lines kept, the key appended if new). Called only after a folder pick or
 // an interactive setting change.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn save_port_cfg(key: &str, value: &str) {
-    let Some(e) = find(key) else {
-        log::error!("port.cfg: unknown key {key} not saved");
-        return;
-    };
+    write_port_cfg(&[(key, Some(value))]);
+}
+
+// Sets (Some) or removes (None) port.cfg keys in one write; web: localStorage items.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_port_cfg(changes: &[(&str, Option<&str>)]) {
     let Some(path) = port_cfg_path() else {
         log::error!("no config directory; port.cfg not saved");
         return;
     };
     let old = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut text = old.clone();
+    for &(key, value) in changes {
+        match find(key) {
+            Some(e) => text = set_cfg_line(&text, e.key, value),
+            None => log::error!("port.cfg: unknown key {key} not saved"),
+        }
+    }
+    if text == old {
+        return;
+    }
     let res = path
         .parent()
         .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|_| std::fs::write(&path, set_cfg_line(&old, e.key, value)));
+        .and_then(|_| std::fs::write(&path, text));
     if let Err(e) = res {
         log::error!("{}: {e}", path.display());
     }
 }
 
-// port.cfg text with `key = value` replaced in place or appended; other lines (comments too) kept.
-fn set_cfg_line(old: &str, key: &str, value: &str) -> String {
+#[cfg(target_arch = "wasm32")]
+pub fn write_port_cfg(changes: &[(&str, Option<&str>)]) {
+    let Some(st) = local_storage() else {
+        log::error!("no localStorage; settings not saved");
+        return;
+    };
+    for &(key, value) in changes {
+        let Some(e) = find(key) else {
+            log::error!("localStorage: unknown key {key} not saved");
+            continue;
+        };
+        let res = match value {
+            Some(v) => st.set_item(&storage_key(e.key), v),
+            None => st.remove_item(&storage_key(e.key)),
+        };
+        if res.is_err() {
+            log::error!("localStorage: {key} not saved");
+        }
+    }
+}
+
+// port.cfg text with `key = value` replaced in place, appended (new key) or removed (None); other lines (comments
+// too) kept.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn set_cfg_line(old: &str, key: &str, value: Option<&str>) -> String {
     let mut found = false;
-    let mut out: Vec<String> = old
-        .lines()
-        .map(|l| match l.split_once('=') {
-            Some((k, _)) if !l.trim_start().starts_with('#') && k.trim() == key => {
-                found = true;
-                format!("{key} = {value}")
-            }
-            _ => l.to_string(),
-        })
-        .collect();
-    if !found {
-        out.push(format!("{key} = {value}"));
+    let is_key = |l: &str| {
+        !l.trim_start().starts_with('#') && l.split_once('=').is_some_and(|(k, _)| k.trim() == key)
+    };
+    let mut out: Vec<String> = Vec::new();
+    for l in old.lines() {
+        if !is_key(l) {
+            out.push(l.to_string());
+        } else if let Some(v) = value.filter(|_| !found) {
+            found = true;
+            out.push(format!("{key} = {v}"));
+        }
+    }
+    if let (false, Some(v)) = (found, value) {
+        out.push(format!("{key} = {v}"));
+    }
+    if out.is_empty() {
+        return String::new();
     }
     out.join("\n") + "\n"
 }
-
-#[cfg(target_arch = "wasm32")]
-pub fn save_port_cfg(_: &str, _: &str) {}
 
 #[cfg(test)]
 mod tests {
@@ -1127,8 +1323,6 @@ mod tests {
             "--invuln",
             "--unlock",
             "off",
-            "--scale",
-            "9",
             "--shot-size",
             "800x600",
             "--ending",
@@ -1139,10 +1333,34 @@ mod tests {
         assert_eq!(s.stage, Some(3));
         assert_eq!(s.player, Some(3));
         assert!(s.invuln && !s.unlock);
-        assert_eq!(s.scale, 1);
         assert_eq!(s.shot_size, Some((800, 600)));
         assert_eq!(s.ending, Some(Ending::Kind { shot: 7, kind: 'c' }));
         assert!(Settings::from_args(["--help".to_string()]).is_err());
+        let bad = |a: &[&str]| Settings::from_args(a.iter().map(|s| s.to_string())).is_err();
+        assert!(
+            bad(&["--scale", "9"])
+                && bad(&["--bogus"])
+                && bad(&["--stage"])
+                && bad(&["--stage", "9z"])
+        );
+        let s = args(&[
+            "--se_log",
+            "--stage_frame=60",
+            "--dir",
+            "/d",
+            "--game-dir",
+            "/e",
+        ]);
+        assert!(s.se_log && s.stage_frame == 60 && s.game_dir == Some(PathBuf::from("/e")));
+        assert!(
+            args(&["--fullscreen=on", "--vsync", "0", "/g"])
+                .game_dir
+                .is_some()
+        );
+        assert!(!args(&["--vsync", "0"]).vsync && args(&["--fullscreen", "/g"]).fullscreen);
+        assert!(!args(&["--no-launcher"]).launcher);
+        assert!(args(&["--no-launcher", "--launcher"]).launcher);
+        assert_eq!(args(&["--no-launcher"]).origin("launcher"), Origin::Cli);
     }
 
     #[test]
@@ -1163,13 +1381,28 @@ mod tests {
     }
 
     #[test]
+    fn from_values() {
+        let e = |k| find(k).unwrap();
+        let s = Settings::from_values([
+            (e("stage"), "4a", Origin::Cli),
+            (e("scale"), "3", Origin::PortCfg),
+            (e("vsync"), "off", Origin::Cli),
+        ]);
+        assert_eq!((s.stage, s.scale, s.vsync), (Some(3), 3, false));
+        assert_eq!(s.origin("scale"), Origin::PortCfg);
+        assert_eq!(s.value("fullscreen"), Some("off"));
+        assert!(e("power").check("129").is_err() && e("power").check("128").is_ok());
+    }
+
+    #[test]
     fn port_cfg_write() {
-        let t = set_cfg_line("# keep\nscale = 2\n", "fullscreen", "on");
+        let t = set_cfg_line("# keep\nscale = 2\n", "fullscreen", Some("on"));
         assert_eq!(t, "# keep\nscale = 2\nfullscreen = on\n");
         assert_eq!(
-            set_cfg_line(&t, "scale", "3"),
+            set_cfg_line(&t, "scale", Some("3")),
             "# keep\nscale = 3\nfullscreen = on\n"
         );
+        assert_eq!(set_cfg_line(&t, "scale", None), "# keep\nfullscreen = on\n");
     }
 
     #[test]

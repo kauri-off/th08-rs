@@ -22,6 +22,13 @@ impl Source {
         Source::Web(std::rc::Rc::new(files))
     }
 
+    // Names of the files picked in the web page (launcher screen).
+    #[cfg(target_arch = "wasm32")]
+    pub fn file_names(&self) -> Vec<String> {
+        let Source::Web(files) = self;
+        files.iter().map(|f| f.name()).collect()
+    }
+
     pub async fn read(&self, name: &str) -> Result<Vec<u8>> {
         self.fetch(name, None).await
     }

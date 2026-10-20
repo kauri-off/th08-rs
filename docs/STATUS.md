@@ -277,6 +277,25 @@
     check passes. Changed meanings: `TH08_SE_LOG=0` / `TH08_BDUMP=0` / `TH08_IDUMP=0` / `TH08_SESSION_PB=0` /
     `SHT_DUMP=0` now mean off (were "set = on"); a bad `TH08_STAGE` / `TH08_PLAYER` / `TH08_ENDING` is logged and
     ignored instead of failing start-up.
+- impl32 (port infrastructure, no spec section, 2026-10-20): launcher screen (`src/launcher.rs`, egui 0.37 +
+  egui-wgpu 0.37 + egui-winit 0.37, exact matches for wgpu 30 / winit 0.30.13) drawn on the game's own wgpu device
+  and window before `settings::init`. Built only from `settings::ENTRIES`: one collapsible section per `Group` (Game
+  data, Display and any group holding a CLI/env value open), widget per `Kind` (bool checkbox, int slider ≤16 values
+  else drag value, optional ints with an enable box, enum combo with "(not set)", text with the format hint, path /
+  new `Kind::File` with rfd Browse…), help line per row, "set by TH08_X / --x / URL ?x=", "port.cfg", "changed"
+  markers, inline validation (`Entry::check`). Game folder row on top (Browse…, th08.dat check; web: the files picked
+  in the page); Play disabled while the folder or a value is invalid. Play: `Model::save` writes only rows edited on
+  screen (removed when back at the default; comments/other lines kept; `settings::write_port_cfg`), builds the final
+  `Settings` (`Settings::from_values`), drops egui (renderer + GPU objects), applies vsync (`Gfx::set_vsync`),
+  fullscreen and scale, then `settings::init` and `Ctx::load` on the same device — the game path is unchanged.
+  New setting `launcher` (Display, `TH08_LAUNCHER`, default on); `--no-launcher` / `launcher = off` start directly
+  (impl31 flow); tool runs (`Settings::is_tool_run`: shot, drawlog, input, anm, slot_test) never show it.
+  Web: same screen in the canvas after the JS folder step; `?launcher=0` skips; the port.cfg slot is localStorage
+  (`th08.<key>`). CLI now parsed by clap 4 (builder API generated from `ENTRIES`, native only): `--key`, `--k_e_y`
+  and the URL name as aliases, `--no-<bool>`, `--bool[=on|off]` (and `--bool on`, joined before clap), per-entry
+  value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
+  and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
+  Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
 
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
@@ -286,7 +305,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl22 done (boss phases, IMPL17 menu answers). Open: IMPL22 questions (op 36 a–d, payout time, fullrun 6266 homing hit, golden 8056, demo 2 2938). IMPL impl23 done (result screen, name entry, score.dat saving, viewer). Next IMPL: replay save dialogue (16 §2.6), th08.cfg load/save, music room, info notices (16 §4), key config. Endings done (impl28). Next port infra: a visual launcher screen over `settings::ENTRIES` (impl31 table: kind, default, group, help).
+2. IMPL impl22 done (boss phases, IMPL17 menu answers). Open: IMPL22 questions (op 36 a–d, payout time, fullrun 6266 homing hit, golden 8056, demo 2 2938). IMPL impl23 done (result screen, name entry, score.dat saving, viewer). Next IMPL: replay save dialogue (16 §2.6), th08.cfg load/save, music room, info notices (16 §4), key config. Endings done (impl28). Launcher screen done (impl32).
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

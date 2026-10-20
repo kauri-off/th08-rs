@@ -9,7 +9,7 @@ use std::sync::Arc;
 use web_time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey;
@@ -30,14 +30,30 @@ struct Running {
 
 enum UserEvent {
     Ready(Box<Running>),
+    // Launcher mode: the window's GPU device is ready.
+    Gfx(Box<Gfx>),
+}
+
+// The launcher screen in the game window, before `settings::init`.
+struct Launch {
+    window: Arc<Window>,
+    gfx: Option<Box<Gfx>>,
+    screen: Option<crate::launcher::Screen>,
+    // Settings before the launcher (window size, vsync) and the files picked in the web page.
+    start: Settings,
+    folder: Option<crate::launcher::Folder>,
 }
 
 struct App {
-    source: Source,
+    // None in launcher mode on native (the folder is chosen on screen).
+    source: Option<Source>,
     proxy: EventLoopProxy<UserEvent>,
     run: Option<Box<Running>>,
     started: bool,
-    settings: &'static Settings,
+    // Launcher mode: settings before Play; then the window (`launch`).
+    pre: Option<Settings>,
+    launch: Option<Box<Launch>>,
+    settings: Option<&'static Settings>,
     // Debug `TH08_SHOT` frame.
     shot: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -52,6 +68,10 @@ struct App {
 
 async fn init(window: Arc<Window>, source: Source, vsync: bool) -> anyhow::Result<Box<Running>> {
     let gfx = Gfx::new(window.clone(), vsync).await?;
+    load(window, source, gfx).await
+}
+
+async fn load(window: Arc<Window>, source: Source, gfx: Gfx) -> anyhow::Result<Box<Running>> {
     let ctx = Ctx::load(source, gfx).await?;
     Ok(Box::new(Running {
         window,
@@ -67,37 +87,45 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         self.started = true;
-        let attrs = Window::default_attributes().with_title("th08");
-        // 640×480 client area (00 §1); the port window is resizable and scaled (port setting `scale`, native).
-        #[cfg(not(target_arch = "wasm32"))]
-        let attrs = {
-            let k = self.settings.scale as f64;
-            attrs
-                .with_inner_size(winit::dpi::LogicalSize::new(640.0 * k, 480.0 * k))
-                .with_fullscreen(self.fullscreen.then_some(Fullscreen::Borderless(None)))
-        };
-        #[cfg(target_arch = "wasm32")]
-        let attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0));
-        #[cfg(target_arch = "wasm32")]
-        let attrs = {
-            use winit::platform::web::WindowAttributesExtWebSys;
-            attrs.with_append(true)
-        };
-        let window = Arc::new(el.create_window(attrs).expect("window"));
-        let (proxy, source) = (self.proxy.clone(), self.source.clone());
-        let vsync = self.settings.vsync;
-        let fut = async move {
+        let s = self.pre.as_ref().or(self.settings).unwrap();
+        let window = Arc::new(
+            el.create_window(window_attrs(s.scale, self.fullscreen))
+                .expect("window"),
+        );
+        let proxy = self.proxy.clone();
+        let vsync = s.vsync;
+        if let Some(start) = self.pre.take() {
+            let folder = Some(match &self.source {
+                #[cfg(target_arch = "wasm32")]
+                Some(src) => crate::launcher::Folder::Web(src.file_names()),
+                _ => crate::launcher::Folder::Native,
+            });
+            self.launch = Some(Box::new(Launch {
+                window: window.clone(),
+                gfx: None,
+                screen: None,
+                start,
+                folder,
+            }));
+            spawn(async move {
+                match Gfx::new(window, vsync).await {
+                    Ok(g) => {
+                        let _ = proxy.send_event(UserEvent::Gfx(Box::new(g)));
+                    }
+                    Err(e) => log::error!("startup failed: {e:#}"),
+                }
+            });
+            return;
+        }
+        let source = self.source.clone().unwrap();
+        spawn(async move {
             match init(window, source, vsync).await {
                 Ok(r) => {
                     let _ = proxy.send_event(UserEvent::Ready(r));
                 }
                 Err(e) => log::error!("startup failed: {e:#}"),
             }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        pollster::block_on(fut);
-        #[cfg(target_arch = "wasm32")]
-        wasm_bindgen_futures::spawn_local(fut);
+        });
     }
 
     fn user_event(&mut self, _: &ActiveEventLoop, ev: UserEvent) {
@@ -109,10 +137,36 @@ impl ApplicationHandler<UserEvent> for App {
                 r.window.request_redraw();
                 self.run = Some(r);
             }
+            UserEvent::Gfx(gfx) => {
+                let Some(l) = self.launch.as_mut() else {
+                    return;
+                };
+                let model = crate::launcher::Model::new(&l.start, l.folder.take().unwrap());
+                l.screen = Some(crate::launcher::Screen::new(&l.window, &gfx, model));
+                l.gfx = Some(gfx);
+                l.window.request_redraw();
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        let Some(l) = self.launch.as_ref() else {
+            return;
+        };
+        match l.screen.as_ref().and_then(|s| s.repaint_at) {
+            Some(t) if t <= Instant::now() => {
+                l.window.request_redraw();
+                el.set_control_flow(ControlFlow::Wait);
+            }
+            Some(t) => el.set_control_flow(ControlFlow::WaitUntil(t)),
+            None => el.set_control_flow(ControlFlow::Wait),
         }
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, ev: WindowEvent) {
+        if self.launch.is_some() {
+            return self.launcher_event(el, ev);
+        }
         let Some(r) = self.run.as_mut() else {
             if matches!(ev, WindowEvent::CloseRequested) {
                 el.exit();
@@ -204,24 +258,157 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+impl App {
+    fn new(el: &EventLoop<UserEvent>, source: Option<Source>, pre: Option<Settings>) -> Self {
+        let mut app = App {
+            source,
+            proxy: el.create_proxy(),
+            run: None,
+            started: false,
+            pre: None,
+            launch: None,
+            settings: None,
+            shot: None,
+            shot_size: None,
+            turbo: 0,
+            alt: false,
+            fullscreen: false,
+        };
+        match pre {
+            Some(s) => {
+                app.fullscreen = s.fullscreen && cfg!(not(target_arch = "wasm32"));
+                app.pre = Some(s);
+            }
+            None => app.adopt(crate::settings::get()),
+        }
+        app
+    }
+
+    // The final settings drive the run.
+    fn adopt(&mut self, settings: &'static Settings) {
+        self.settings = Some(settings);
+        self.shot = settings.shot;
+        // Debug `TH08_SHOT_SIZE=WxH`: the shot goes through the window's scaling blit.
+        self.shot_size = settings.shot_size;
+        self.turbo = settings.turbo;
+        self.fullscreen = settings.fullscreen && cfg!(not(target_arch = "wasm32"));
+    }
+
+    fn launcher_event(&mut self, el: &ActiveEventLoop, ev: WindowEvent) {
+        let l = self.launch.as_mut().unwrap();
+        let (Some(screen), Some(gfx)) = (l.screen.as_mut(), l.gfx.as_mut()) else {
+            if matches!(ev, WindowEvent::CloseRequested) {
+                el.exit();
+            }
+            return;
+        };
+        match ev {
+            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::RedrawRequested => match screen.redraw(&l.window, gfx) {
+                Some(crate::launcher::Action::Play) => self.play(el),
+                Some(crate::launcher::Action::Quit) => el.exit(),
+                None => {}
+            },
+            ev => {
+                if let WindowEvent::Resized(s) = ev {
+                    gfx.resize(s.width, s.height);
+                }
+                if screen.on_event(&l.window, &ev) {
+                    l.window.request_redraw();
+                }
+            }
+        }
+    }
+
+    // Play: save the edited settings, drop egui (and its GPU objects), apply the display settings, install the final
+    // settings and load the game on the same device exactly as without the launcher.
+    fn play(&mut self, el: &ActiveEventLoop) {
+        let l = *self.launch.take().unwrap();
+        let screen = l.screen.unwrap();
+        let mut gfx = l.gfx.unwrap();
+        screen.model().save();
+        let s = screen.model().settings();
+        drop(screen);
+        el.set_control_flow(ControlFlow::Wait);
+        if s.vsync != l.start.vsync {
+            gfx.set_vsync(s.vsync);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if s.fullscreen != self.fullscreen {
+                l.window
+                    .set_fullscreen(s.fullscreen.then_some(Fullscreen::Borderless(None)));
+            }
+            if s.scale != l.start.scale && !s.fullscreen {
+                let k = s.scale as f64;
+                let _ = l
+                    .window
+                    .request_inner_size(winit::dpi::LogicalSize::new(640.0 * k, 480.0 * k));
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = Source::native(s.game_dir.clone().expect("Play needs a game folder"));
+        #[cfg(target_arch = "wasm32")]
+        let source = self.source.take().expect("web files");
+        crate::settings::init(s);
+        self.adopt(crate::settings::get());
+        let (proxy, window) = (self.proxy.clone(), l.window);
+        spawn(async move {
+            match load(window, source, *gfx).await {
+                Ok(r) => {
+                    let _ = proxy.send_event(UserEvent::Ready(r));
+                }
+                Err(e) => log::error!("startup failed: {e:#}"),
+            }
+        });
+    }
+}
+
+// 640×480 client area (00 §1); the port window is resizable and scaled (port setting `scale`, native).
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+fn window_attrs(scale: u32, fullscreen: bool) -> winit::window::WindowAttributes {
+    let attrs = Window::default_attributes().with_title("th08");
+    #[cfg(not(target_arch = "wasm32"))]
+    let attrs = {
+        let k = scale as f64;
+        attrs
+            .with_inner_size(winit::dpi::LogicalSize::new(640.0 * k, 480.0 * k))
+            .with_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)))
+    };
+    #[cfg(target_arch = "wasm32")]
+    let attrs = {
+        use winit::platform::web::WindowAttributesExtWebSys;
+        attrs
+            .with_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0))
+            .with_append(true)
+    };
+    attrs
+}
+
+// Native start-up blocks on the future (as before the launcher); web runs it on the JS event loop.
+fn spawn(fut: impl std::future::Future<Output = ()> + 'static) {
+    #[cfg(not(target_arch = "wasm32"))]
+    pollster::block_on(fut);
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(fut);
+}
+
+// Game window with the settings already installed (`settings::init` or `get`).
 pub fn run(source: Source) {
+    run_app(Some(source), None);
+}
+
+// Game window that shows the launcher screen first; `settings::init` happens on Play. Native: `source` None (the
+// folder comes from the screen); web: the files picked in the page.
+pub fn run_launcher(source: Option<Source>, s: Settings) {
+    run_app(source, Some(s));
+}
+
+fn run_app(source: Option<Source>, pre: Option<Settings>) {
     let el = EventLoop::<UserEvent>::with_user_event()
         .build()
         .expect("event loop");
-    let settings = crate::settings::get();
-    let app = App {
-        source,
-        proxy: el.create_proxy(),
-        run: None,
-        started: false,
-        settings,
-        shot: settings.shot,
-        // Debug `TH08_SHOT_SIZE=WxH`: the shot goes through the window's scaling blit.
-        shot_size: settings.shot_size,
-        turbo: settings.turbo,
-        alt: false,
-        fullscreen: settings.fullscreen && cfg!(not(target_arch = "wasm32")),
-    };
+    let app = App::new(&el, source, pre);
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut app = app;

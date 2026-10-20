@@ -29,7 +29,6 @@ pub mod gui;
 pub mod hud;
 pub mod input;
 pub mod item;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod launcher;
 pub mod menu;
 pub mod menulist;
@@ -60,5 +59,13 @@ pub fn start(files: js_sys::Array) {
         .iter()
         .filter_map(|f| f.dyn_into::<web_sys::File>().ok())
         .collect();
-    app::run(assets::Source::web(files));
+    let source = assets::Source::web(files);
+    // `?launcher=0` (or a saved launcher = off) starts the game directly; `?shot=` runs never show it.
+    let s = settings::Settings::from_environment();
+    if s.launcher && !s.is_tool_run() {
+        app::run_launcher(Some(source), s);
+    } else {
+        settings::init(s);
+        app::run(source);
+    }
 }

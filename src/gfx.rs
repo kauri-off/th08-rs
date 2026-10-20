@@ -512,6 +512,30 @@ impl Gfx {
         g
     }
 
+    // Port display setting `vsync`, changed by the launcher screen after the surface exists.
+    pub fn set_vsync(&mut self, vsync: bool) {
+        self.config.present_mode = if vsync {
+            wgpu::PresentMode::AutoVsync
+        } else {
+            wgpu::PresentMode::AutoNoVsync
+        };
+        self.reconfigure();
+    }
+
+    pub fn reconfigure(&self) {
+        if let Some(s) = &self.surface {
+            s.configure(&self.device, &self.config);
+        }
+    }
+
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    pub fn surface_size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
     pub fn resize(&mut self, w: u32, h: u32) {
         if w > 0 && h > 0 && (w, h) != (self.config.width, self.config.height) {
             self.config.width = w;
@@ -1250,6 +1274,18 @@ impl Gfx {
             t
         });
         let src = scaled.as_ref().unwrap_or(&self.frame);
+        let img = self.read_texture(enc, src);
+        self.clear_batches();
+        img
+    }
+
+    // Submits `enc` plus a copy of `src` (surface format) and reads it back as RGBA.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_texture(
+        &self,
+        mut enc: wgpu::CommandEncoder,
+        src: &wgpu::Texture,
+    ) -> image::RgbaImage {
         let (w, h) = (src.width(), src.height());
         let row = (w * 4).div_ceil(256) * 256;
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1289,7 +1325,6 @@ impl Gfx {
         ) {
             px.chunks_exact_mut(4).for_each(|p| p.swap(0, 2));
         }
-        self.clear_batches();
         image::RgbaImage::from_raw(w, h, px).unwrap()
     }
 
