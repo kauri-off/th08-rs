@@ -480,6 +480,8 @@ impl GameManager {
             loading_total: 31,
         }));
         gm.borrow().player.borrow_mut().debug_invuln |= ctx.game.noclip;
+        // GameManager_Register zeroes the gameplay frame counter 0x164D2C8 (11 §2).
+        ctx.game.frame_counter = 0;
         CURRENT.with_borrow_mut(|c| *c = Rc::downgrade(&gm));
         let t: TaskRef<Ctx> = gm.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -864,6 +866,8 @@ impl Task<Ctx> for GameManager {
         ctx.game.flags &= !F_RUNNING;
         ctx.game.paused = 0;
         ctx.game.game_over = 0;
+        // 0x164D2C8 := 0, so the menus after a pause-quit read 0 (11 §2).
+        ctx.game.frame_counter = 0;
     }
 
     // GameMgr_Calc 0x439BC7 (11 §4); Ret::StopFrame = return 3 (the rest of the calc chain does not run).

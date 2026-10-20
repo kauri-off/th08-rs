@@ -296,6 +296,14 @@
   value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
   and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
   Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
+- impl37 (RE-Q27 CODE BUGs 7, 10 + selftest1 1540, 2026-10-20): gameplay frame counter 0x164D2C8 := 0 in
+  `GameManager::register` and `on_remove`, so the menus after a pause-quit read 0 (11 §2); `Ascii_Calc` does not run
+  during the boot calc passes (scene 0), so +0x8284 equals the main-menu frame number (12 §5.10); death mode 0 keeps
+  the boss table entry and flags A bit 1 (`release` no longer unregisters; `free` does), so the ENEMY marker stays at
+  its last position (07 §10.3 rows 0–1, 12 §5.10); mode 3 turns the HUD boss display off for every enemy (07 §10.3).
+  Sync: selftest1 1539 → 1921, golden 8297 / fullrun_noclip 7745 / demo MIN_SYNC 4628/3879/4035/6664 unchanged;
+  golden draw log same quads 2087684 → 2088144 (ascii.anm +460, 25.84 %); demo/menu draw logs unchanged.
+  SPEC-GAP 177 → 175. Questions: `docs/briefs/IMPL37_QUESTIONS.md`.
 - impl36 (RE-Q27 CODE BUGs 4–6, 2026-10-20): `Stats::add_time` adds n to the parity +0x44 also for negative n
   (unclamped only; 11 §1.5 setters); Remilia team/solo options turn only while the option timer is > 12 (14 §3 table,
   §3.2); `GameMgr_Calc` step 7 recomputes GM flags bit 2 := paused == 0 and game-over == 0 before the step-8 pause

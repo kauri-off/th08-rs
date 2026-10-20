@@ -402,8 +402,7 @@ struct Gauge {
     markers: Vec<AnmVm>,
     // +0x2254[slot]: 0 plain, 1 hit flash, 2–4 low-life blink (warning level + 1), written by EnemyMgr_Calc.
     marker_mode: [u8; 4],
-    // +0x8284: incremented at the end of every Ascii_Calc (12 §5.10).
-    // SPEC-GAP: start value / boot calc count of +0x8284 not in 12 §5.10 (golden blink phase is one frame off).
+    // +0x8284: incremented at the end of every Ascii_Calc, never reset, starts at 0 (12 §5.10).
     frame: u32,
 }
 
@@ -1060,6 +1059,11 @@ impl Task<Ctx> for AsciiManager {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        // Supervisor_Init registers the manager on the boot loader thread, so the boot calc passes never reach
+        // Ascii_Calc and +0x8284 equals the main-menu frame number (12 §5.10).
+        if ctx.game.scene == crate::gamemgr::SCENE_BOOT {
+            return Ret::Next;
+        }
         let inp = ctx.input;
         gauge_calc(&mut ctx.anm);
         // The pause menu runs while paused, the continue menu while game_over; popups only otherwise (12 §3, 13 §4).

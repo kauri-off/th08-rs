@@ -855,14 +855,15 @@ impl EnemyManager {
             self.player.borrow_mut().aimed = None;
         }
         self.release(idx);
+        self.unregister_boss(idx);
     }
 
-    // Death mode 0: like Enemy_Free but the aimed pointer survives until the next frame's slot test.
+    // Death mode 0: like Enemy_Free but the aimed pointer survives until the next frame's slot test, and the boss
+    // table entry and flags A bit 1 stay, so the ENEMY marker keeps its last position (07 §10.3 rows 0–1, 12 §5.10).
     fn release(&mut self, idx: usize) {
         self.kill_chain(idx, None);
         self.release_effects(idx);
         self.enemies[idx].flags &= !A_ALIVE;
-        self.unregister_boss(idx);
     }
 
     // HUD +0x2C (boss display) is cleared when any boss slot unregisters (answers_phase5 impl8).
@@ -1907,13 +1908,11 @@ impl EnemyManager {
                 e.flags &= !(A_CONTACT | A_LOSES_LIFE | A_SHOT_HIT);
                 self.add_score(sc);
             }
-            // Latch B bit 3 stays until life > 0 again. SPEC-GAP: 07 §10.3 has no boss test for the HUD display.
+            // Latch B bit 3 stays until life > 0 again; HUD boss display off for every mode-3 enemy (07 §10.3).
             3 => {
                 e.life = 1;
                 e.flags &= !(A_LOSES_LIFE | 7 << A_DEATH_SHIFT | 3 << 30);
-                if boss {
-                    self.g.hud_boss = false;
-                }
+                self.g.hud_boss = false;
                 let db = e.death_bytes[0];
                 let pos = e.final_pos;
                 if db < 0x80 {
