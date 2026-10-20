@@ -1207,7 +1207,7 @@ impl Exec<'_> {
         self.m.pay_capture(self.anm, false);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
         (self.m.g.spell_flag6, self.m.g.bonus_frozen) = (false, false);
-        // Spell flag bit 9 cleared at card start (see `finish_spell`).
+        // SPEC-GAP: 07 §11.1 lists bits 5, 6, 11 written by Spell_Start but not bit 9; cleared here (IMPL46 Q1).
         self.m.g.spell_captured = false;
         crate::gui::request(crate::gui::Req::BossShow {
             face: spell.face,
@@ -1351,7 +1351,7 @@ impl Exec<'_> {
                 let dur = self.ai(t, ins, 1);
                 let func = self.ai(t, ins, 2);
                 let mode = self.ai(t, ins, 3);
-                // SPEC-GAP: a–d evaluated once here; 07 §5.6 re-reads them at every evaluation (IMPL22 question).
+                // 07 §5.6: a–d are resolved once, at op time.
                 let abcd: [f32; 4] = std::array::from_fn(|k| self.af(t, ins, 4 + k));
                 let slots = &mut t.ctx.interp;
                 let s = slots

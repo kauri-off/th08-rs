@@ -135,7 +135,7 @@ pub fn parse(b: &[u8]) -> Result<Std> {
                     b: v3at(b, q + 0x14)?,
                     w: f32at(b, q + 0x20)?,
                 },
-                // SPEC-GAP: other non-negative quad types do not occur (06 §1.2); the port skips them.
+                // 06 §2: the original does not filter, but shipped files have only types 0 and 1.
                 _ => {
                     q += size;
                     continue;

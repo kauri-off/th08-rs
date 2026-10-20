@@ -1298,7 +1298,7 @@ impl EnemyManager {
             let shot = self.player.borrow().shot_type;
             let boss_or_spell = self.bosses.iter().any(Option::is_some) && self.g.spell.is_none();
             for (k, &c) in kids.iter().enumerate() {
-                // SPEC-GAP: orb counts and cancel circles are only in answers_impl10 §2 (IMPL24 Q2).
+                // Orb count c and cancel circle per child (07 §10.3a step 3).
                 let orbs = match shot {
                     0..4 => {
                         if n < 8 {
@@ -1347,7 +1347,7 @@ impl EnemyManager {
                     self.enemies[c].item = 8;
                     self.drop_items(c, anm, Some(0));
                 }
-                // SPEC-GAP: parity of the chain index; 13 §1.4 says enemy slot parity (IMPL24 Q3).
+                // SE 2 + (k & 1) by the child's index in the chain walk (07 §10.3a, 13 §1.4).
                 crate::sound::play_at(crate::sound::ENEP0 + (k & 1) as i32, pos[0]);
             }
         }
@@ -1496,7 +1496,7 @@ impl EnemyManager {
         if p.gflags & (GF_LAST_SPELL | GF_LAST_CAPTURED) != 0 {
             p.gflags = p.gflags & !GF_LAST_SPELL | GF_LAST_CAPTURED;
         }
-        // SPEC-GAP: 07 §11.1 names bit 9 "captured" but not when it is set / cleared; here and at Spell_Start.
+        // Spell flag bit 9 "captured" is set by `Spell_End` (07 §11.1).
         self.g.spell_captured = true;
         crate::gui::request(crate::gui::Req::Captured {
             card: s.id,

@@ -175,7 +175,7 @@ impl BitWriter {
 }
 
 // LZSS encoder producing streams `lzss_decompress` reads back (greedy, hash chains over 3-byte prefixes).
-// SPEC-GAP: the original's encoder is not specified; only decoder compatibility is kept (score.dat 15 §2.1, replays 15 §3.5).
+// 01 §3: any valid stream is compatible with the decoder; byte-identical output is not required.
 pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
     const WINDOW: usize = 0x2000 - 18;
     let mut w = BitWriter {

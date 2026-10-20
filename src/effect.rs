@@ -435,7 +435,7 @@ impl Effects {
                 let m = 1.0 + rng.next_f32() * 1.5;
                 e.dir = [a.cos() * m, a.sin() * m, 0.0];
             }
-            // SPEC-GAP: types 22–25 starting at the player position is not in 13 §2.6.
+            // 13 §2.6: no init; the spawners pass the player pos +0x2B4.
             22..=25 => e.pos = player,
             // pos += polar(param.x, 256); rotation z = param.x + π/2.
             60 | 61 => {
@@ -735,7 +735,7 @@ impl Effects {
             }
             22 => e.pos = player,
             // Invulnerability ring (13 §2.6): scale → 1/16 over I0 frames (the script fades it in).
-            // SPEC-GAP: 13 §2.6 interpolates from the current scale; the port starts from 1.
+            // 13 §2.6: interpolates from the current scale, always (1, 1) (script 104 sets it at time 0).
             23 | 24 => {
                 let n = e.vm.ivars[0].max(1) as f32;
                 let s = 1.0 + (1.0 / 16.0 - 1.0) * (t / n).min(1.0);
@@ -858,7 +858,7 @@ impl Effects {
     }
 
     // List B from Stage_DrawHigh (13 §2.4, §2.6c): only effect level 2 draws; no fog. Layer 4 at raw coordinates.
-    // SPEC-GAP: layer ≥ 3 (other than 4) should be a 3D quad; the port billboards it.
+    // Layer 3 / ≥ 5 would be a 3D quad, unreachable (13 §2.4: no writer sets them); the port billboards them.
     pub fn draw_background(&mut self, anm: &mut AnmManager, gfx: &mut Gfx, level: u8) {
         if level < 2 {
             return;
@@ -1101,7 +1101,7 @@ fn screen_fx(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32) -> ScreenEffect {
         kind,
         p: [p0, p1, p2, p3],
         prio: 0x15,
-        // SPEC-GAP: draw prio 0x15 for code-spawned flashes/shakes is not in 13 §3.
+        // Draw prio 0x15: every code call passes it except the loading darken (1) (13 §3).
         // A draw before the first calc shows the t = 0 alpha.
         alpha: match kind {
             0 => 255.0,
@@ -1469,7 +1469,7 @@ impl ScreenEffect {
 
 // Player death ring (type 59, slot 11, colour 0xFFF0404F): radius 128 → 8 over the deathbomb window (ease 4,
 // 13 §2.7).
-// SPEC-GAP: +0x357 (keeps running while bullets are frozen) set for this ring is not in 13.
+// +0x357 (keeps running while bullets are frozen): set only for this ring (13 §2.1).
 pub fn death_ring(rng: &mut crate::rng::Rng, pos: [f32; 3], frames: i32) {
     with(|e| {
         let i = e.spawn_fixed_rng(rng, 59, pos, FIX_DEATH, 0xFFF0404F);

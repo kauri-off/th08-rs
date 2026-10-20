@@ -1374,7 +1374,7 @@ impl BulletManager {
                     _ => continue,
                 };
                 let vm = &mut b.vms[v];
-                // SPEC-GAP: per-bullet draw (z 0.05, RGB white, rotation for tagged VMs) has no spec section.
+                // Bullet_Draw (08 §1): z 0.05, RGB white keeping alpha, rotation only for tagged VMs.
                 vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.05];
                 if vm.tag != 0 {
                     let r = anmvm::wrap_add(b.angle, PI / 2.0);

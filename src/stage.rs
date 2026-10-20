@@ -659,7 +659,7 @@ impl Stage {
                 crate::effect::get(i, |e| e.layer = 4);
             }
         }
-        // SPEC-GAP: where +0x647C is set is not in the spec; the port sets it every calc.
+        // Sparkle flag +0x647C (06 §5); cleared at the end of Stage_DrawHigh.
         self.sparkle_on = true;
         self.frame += 1;
     }

@@ -1590,7 +1590,7 @@ pub struct Camera {
 }
 
 impl Camera {
-    // SPEC-GAP: FOV π/6 / near 100 of `default_2d` have no spec section; only the gfx tests use it.
+    // Default camera (00 §1): FOV π/6, aspect 4/3, near 100, far 10000.
     pub const FOV: f32 = std::f32::consts::PI / 6.0;
     pub const NEAR: f32 = 100.0;
     pub const FAR: f32 = 10000.0;

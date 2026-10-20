@@ -107,7 +107,7 @@ impl<C> Tasks<C> {
 }
 
 // FuncChain_AddCalc / AddDraw (00 §3): inserted after nodes of equal priority; the on-register hook runs immediately.
-// SPEC-GAP: 00 §3 only says a non-zero on-register result is returned; unlinking the node on failure is the port's choice.
+// SPEC-GAP: 00 §3 runs on-register first, then links on any result; the port links first, unlinks on Err (audit D.1).
 pub fn add<C: TaskCtx>(
     ctx: &mut C,
     chain: Chain,

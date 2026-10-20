@@ -650,7 +650,7 @@ impl Player {
                 false
             }
             // 0x450580: vy −= Rng_Float × 0.1 + 0.27 (RNG).
-            // SPEC-GAP: the state-1 condition is not in 09 §2.1.
+            // Only while flying (state 1), 09 §2.1.
             3 => {
                 if b.state == 1 {
                     b.vel[1] -= anm.rng.next_f32() * 0.1 + 0.27;
@@ -782,7 +782,7 @@ impl Player {
                 false
             }
             // 0x450EE0: hit effect every 8th hit, never filters.
-            // SPEC-GAP: the counter (+0xE2A94) and the position (bullet x, enemy y) are not in 09 §2.1.
+            // 09 §2.1: u8 counter +0xE2A94 (shared with the area hit effect); type 5 at (bullet x, enemy y, z).
             2 => {
                 b.hits += 1;
                 let x = b.pos[0];

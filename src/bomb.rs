@@ -19,7 +19,7 @@ pub const AREAS: usize = 192;
 pub const OBJS: usize = 128;
 // Playfield origin 0x164D2DC / 0x164D2E0 added to VM positions (14 intro).
 const ORIGIN: [f32; 2] = [32.0, 16.0];
-// SPEC-GAP: draw prio 0x15 for bomb shakes/flashes is taken from the demo fade (11 §4 step 6), not 14.
+// Draw prio of bomb shakes/flashes (13 §3: every code call passes 0x15).
 const SCREEN_PRIO: u16 = 0x15;
 
 // Damage / cancel area, 0x40 bytes (09 §8).
@@ -403,7 +403,7 @@ impl Player {
                 sound::play(0x29);
                 pressed = false;
             }
-            // SPEC-GAP: no bomb while respawning (state 1) is not in 09 §7's start conditions.
+            // State 1 test is redundant: the counter is 0 throughout state 1 (09 §6.3).
             if !(forced || pressed) || matches!(self.state, 1) {
                 return;
             }
@@ -418,7 +418,7 @@ impl Player {
             self.bomb.timer.tick(anm.speed);
         } else {
             // End: speed multipliers 1, bombing 0, tint off (06 §10.2); index 4 per 14 §2.17.
-            // SPEC-GAP: when +0xE2A7C is cleared is not in 09 §1.1; the port clears it here.
+            // SPEC-GAP: 09 §1.1 keeps +0xE2A7C up to the next failed start test, not cleared on end (audit A.23).
             self.speed_mult = [1.0; 2];
             self.bombing = false;
             self.bomb_active = false;

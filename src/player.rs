@@ -1109,7 +1109,7 @@ impl Player {
     // Player_UpdateInvuln 0x44D2C0 (09 §6.4): colour 0xFFF02020 when t mod 8 < 2; the ring follows the player.
     fn update_invuln(&mut self, gs: f32) {
         // 09 §6.3: +0xE2A70 counts down here (60 more frames after the respawn), full-screen clear, item −1.
-        // SPEC-GAP: 09 §6.3 does not place the clear relative to the state-3 colour/timer step; done first.
+        // 09 §6.4: the respawn clear runs first, before the state-3 step.
         if self.respawn_clear != 0 {
             self.respawn_clear -= 1;
             self.cancel_rect([self.pos[0], self.pos[1]], [768.0, 896.0], -1, 0);
@@ -1177,7 +1177,7 @@ impl Player {
         crate::ascii::gauge_fade(self.pos);
         self.targets = [[-999.0, -999.0, 0.0]; 2];
         self.boss_target = false;
-        // SPEC-GAP: 09 §1.1 gives no place for the +0xE2A6C decrement; done here.
+        // SPEC-GAP: 09 §1.1 decrements +0xE2A6C atop Player_UpdateBomb, not on a forced start; here every frame (IMPL46 Q2).
         if self.bomb_cooldown > 0 {
             self.bomb_cooldown -= 1;
         }
