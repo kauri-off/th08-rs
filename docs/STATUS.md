@@ -352,6 +352,11 @@
   (15 §2.3); name-entry Up, Down, Left, Right are four independent tests per frame in that order (`move_char_cursor`,
   16 §2.2); the HSCR / replay date is local time (`chrono::Local` native, JS `Date` on wasm; 16 §2.2). Unit tests for
   ties and Up+Down. Traces not run (cloud). SPEC-GAP 168 → 167. Questions: `docs/briefs/IMPL47_QUESTIONS.md`.
+- impl59 (audit A.34, A.35, A.36, cloud, 2026-10-20): `Stage::step` returns at once while GameFlags bit 10 (player
+  `freeze_bullets`): no script, camera, clock, sparkle flag or frame counter (06 §5); sparkles spawn from frame 0 in
+  spell practice (GameFlags bit 14, `Stage::sparkle_due`, 06 §5); a billboard appends a sparkle point only when it is
+  drawn (0 ≤ z ≤ 1), `v < fog_near` quirk in `sparkle_point_ok` (06 §11.1). Unit tests for all three. Traces not run
+  (cloud). SPEC-GAP 148 → 145. No questions.
 - impl39 (RE-Q25 CODE BUGs 4–6, 2026-10-20): screen effects registered from calc nodes below prio 3 are linked at once
   (`effect::screen_now` for the `GameMgr_Calc` demo-end fade, `loading_overlay` from the Supervisor on-register), so
   their first calc runs in the same frame (13 §3). Stage-clear panel per the rewritten 12 §5.6: op 9 stores the values

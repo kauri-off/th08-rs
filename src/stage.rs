@@ -165,6 +165,17 @@ fn normalize(a: Vec3) -> Vec3 {
     if l == 0.0 { a } else { scale(a, 1.0 / l) }
 }
 
+// Sparkle-point test `v < fog_near` (06 §11.1). Quirk kept: past fog_near the original has overwritten v with
+// the fog factor f, so any drawn quad passes there whenever fog_near > 1.
+fn sparkle_point_ok(dist: f32, fog: FogState) -> bool {
+    let v = if dist <= fog.near {
+        dist
+    } else {
+        (fog.near - dist) / (fog.near - fog.far)
+    };
+    v < fog.near
+}
+
 impl StageCamera {
     // 0x408D60 timer part (06 §6): factor for slot s (None if inactive); finishing sets t = 1 and duration 0.
     fn step(&mut self, s: usize, speed: f32) -> Option<f32> {
@@ -597,9 +608,16 @@ impl Stage {
     }
 
     // Stage_Calc body (06 §5).
-    // SPEC-GAP: 06 §5 returns early while GameFlags bit 10 (death in progress); the port does not test it.
     // Not implemented: the stage 6B special-effect VM (06 §4.1, §5).
     pub fn step(&mut self, anm: &mut AnmManager) {
+        // GameFlags bit 10 (bullets frozen): nothing runs, the sparkle flag is not set and the frame counter holds.
+        if self
+            .player
+            .as_ref()
+            .is_some_and(|p| p.borrow().freeze_bullets)
+        {
+            return;
+        }
         let speed = anm.speed;
         self.handle_section_request();
         while let Some(&r) = self.std.script.get(self.ip) {
@@ -651,8 +669,7 @@ impl Stage {
             self.clear_color = u32::from_le_bytes(self.vm_c.color);
         }
         // 06 §5 quirk kept: sparkles at all 12 points, used or not (unused ones at screen (0, 0)).
-        // SPEC-GAP: the "or spell practice" alternative to frame > 699 is not tested.
-        if self.frame % 3 == 0 && self.frame > 699 && self.spell_state < 2 {
+        if self.sparkle_due() {
             let pts = self.sparkles.borrow().1;
             for p in &pts[..12] {
                 let i = crate::effect::spawn(anm, 0x3E, *p, 1, 0x20FFFFFF);
@@ -662,6 +679,15 @@ impl Stage {
         // Sparkle flag +0x647C (06 §5); cleared at the end of Stage_DrawHigh.
         self.sparkle_on = true;
         self.frame += 1;
+    }
+
+    // 06 §5: every 3rd frame, from frame 700 (from frame 0 in spell practice, GameFlags bit 14), while +0xB24 < 2.
+    fn sparkle_due(&self) -> bool {
+        let practice = self
+            .player
+            .as_ref()
+            .is_some_and(|p| p.borrow().gflags & crate::player::GF_SPELL_PRACTICE != 0);
+        self.frame % 3 == 0 && (self.frame > 699 || practice) && self.spell_state < 2
     }
 
     // Stage_StartSpellBg 0x415CE0 (13 §5): spell VMs run scripts first..first+count of the slot-9 file.
@@ -891,22 +917,19 @@ impl View<'_> {
         vm.pos = s;
         if (0.0..=1.0).contains(&s[2]) {
             anm.draw_mode_z(gfx, vm, 1, s[2]);
-        }
-        // SPEC-GAP: 06 §11.1 needs 0 ≤ z ≤ 1 and dist < fog_near; port tests v < near (v = f past near), cap 32.
-        if vm.tag & 0xF0 == 0x10
-            && let Some(pts) = self.points
-        {
-            let near = self.fog.near;
-            let v = if dist <= near {
-                dist
-            } else {
-                (near - dist) / (near - self.fog.far)
-            };
-            let mut p = pts.borrow_mut();
-            if v < near && p.0 < 32 {
-                let n = p.0;
-                p.1[n] = [s[0], s[1], 0.0];
-                p.0 += 1;
+            // Only drawn quads append a sparkle point (06 §11.1).
+            if vm.tag & 0xF0 == 0x10
+                && let Some(pts) = self.points
+            {
+                if sparkle_point_ok(dist, self.fog) {
+                    let mut p = pts.borrow_mut();
+                    // Port-only bound: the original has no check (the shipped data stays ≤ 15 points, 06 §11.1).
+                    if p.0 < 32 {
+                        let n = p.0;
+                        p.1[n] = [s[0], s[1], 0.0];
+                        p.0 += 1;
+                    }
+                }
             }
         }
         vm.color = saved;
@@ -1149,6 +1172,59 @@ mod tests {
             }
         );
         assert_eq!(st.fog_dur, 0);
+    }
+
+    #[test]
+    fn frozen_bullets_skip_calc() {
+        let mut st = synthetic(vec![rec(0, 13, [7, 0, 0]), rec(-1, 0, [0; 3])]);
+        let player = crate::player::Player::new_ref();
+        player.borrow_mut().freeze_bullets = true;
+        st.player = Some(player.clone());
+        let mut anm = AnmManager::default();
+        st.step(&mut anm);
+        assert_eq!((st.ip, st.frame, st.clear_color), (0, 0, 0));
+        assert!(!st.sparkle_on);
+        player.borrow_mut().freeze_bullets = false;
+        st.step(&mut anm);
+        assert_eq!((st.ip, st.frame, st.clear_color), (1, 1, 7));
+        assert!(st.sparkle_on);
+    }
+
+    #[test]
+    fn sparkle_frames() {
+        let mut st = synthetic(vec![rec(-1, 0, [0; 3])]);
+        let due = Stage::sparkle_due;
+        st.frame = 0;
+        assert!(!due(&st));
+        st.frame = 702;
+        assert!(due(&st));
+        st.frame = 703;
+        assert!(!due(&st));
+        let player = crate::player::Player::new_ref();
+        player.borrow_mut().gflags = crate::player::GF_SPELL_PRACTICE;
+        st.player = Some(player);
+        st.frame = 0;
+        assert!(due(&st));
+        st.frame = 1;
+        assert!(!due(&st));
+        st.spell_state = 2;
+        st.frame = 0;
+        assert!(!due(&st));
+    }
+
+    #[test]
+    fn sparkle_point_v_quirk() {
+        let fog = FogState {
+            near: 200.0,
+            far: 500.0,
+            color: 0,
+        };
+        assert!(sparkle_point_ok(100.0, fog));
+        assert!(!sparkle_point_ok(200.0, fog));
+        // Past near v is the fog factor (< 1), so the test passes.
+        assert!(sparkle_point_ok(400.0, fog));
+        let tight = FogState { near: 0.5, ..fog };
+        assert!(!sparkle_point_ok(400.0, tight));
     }
 
     #[test]
