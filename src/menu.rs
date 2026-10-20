@@ -436,9 +436,8 @@ impl MainMenu {
                     });
                 }
                 _ => {
+                    // 12 §2.2: no music change in WAV mode (only MIDI mode restarts its track).
                     self.interrupt_all(1);
-                    // SPEC-GAP: 12 §2.2 says "fade music 30" without a unit; 30 frames assumed.
-                    ctx.audio.fade_bgm(0.5);
                     self.quitting = Some(0);
                 }
             }

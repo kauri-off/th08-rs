@@ -114,8 +114,25 @@ struct Mixer {
     out_rate: f64,
     volume: f32,
     paused: bool,
-    fade: f32,
-    fade_step: f32,
+}
+
+// Music_Fade on the streaming object (02 §4): `n` counts down from N = trunc(secs·60) once per Supervisor calc.
+struct Fade {
+    n: i32,
+    total: i32,
+}
+
+impl Fade {
+    fn new(secs: i32) -> Self {
+        let total = (secs as f32 * 60.0) as i32;
+        Self { n: total, total }
+    }
+
+    // One tick (0x447764): the attenuation p = n·5000/N − 5000 (1/100 dB, linear in dB), or None = stop the buffer.
+    fn tick(&mut self) -> Option<i32> {
+        self.n -= 1;
+        (self.n >= 1).then(|| self.n * 5000 / self.total - 5000)
+    }
 }
 
 impl Mixer {
@@ -123,13 +140,6 @@ impl Mixer {
         let step = BGM_RATE / self.out_rate;
         for fr in out.chunks_exact_mut(channels) {
             // Port mixer: linear resampling to the device rate; WaveStream_* chunking (02 §3) is platform detail.
-            if self.fade_step > 0.0 {
-                self.fade = (self.fade - self.fade_step).max(0.0);
-                if self.fade == 0.0 {
-                    self.music = None;
-                    self.fade_step = 0.0;
-                }
-            }
             let (l, r) = match &mut self.music {
                 Some(m) if !m.samples.is_empty() && !self.paused => {
                     let n = m.samples.len();
@@ -147,8 +157,7 @@ impl Mixer {
                 }
                 _ => (0.0, 0.0),
             };
-            let v = self.volume * self.fade;
-            let (mut l, mut r) = (l * v, r * v);
+            let (mut l, mut r) = (l * self.volume, r * self.volume);
             for vc in self.voices.iter_mut().filter(|v| v.playing) {
                 let Some(w) = &vc.wave else { continue };
                 let i = vc.pos as usize;
@@ -176,13 +185,18 @@ pub struct Audio {
     tracks: Vec<Track>,
     mixer: Arc<Mutex<Mixer>>,
     stream: Option<cpal::Stream>,
+    // BGM volume cfg +0x27 (0..100) and the current fade attenuation p (1/100 dB, 0 = none), 02 §4.
+    bgm_volume: u8,
+    fade_p: i32,
+    // Sound command 5 queued by Music_Fade (whole seconds), started by Sound_Update.
+    fade_req: Option<i32>,
+    fade: Option<Fade>,
 }
 
 impl Audio {
     pub fn new(source: Source, fmt: &[u8]) -> Self {
         let mixer = Arc::new(Mutex::new(Mixer {
             volume: 1.0,
-            fade: 1.0,
             out_rate: BGM_RATE,
             ..Default::default()
         }));
@@ -191,6 +205,10 @@ impl Audio {
             tracks: parse_fmt(fmt),
             mixer,
             stream: None,
+            bgm_volume: 100,
+            fade_p: 0,
+            fade_req: None,
+            fade: None,
         }
     }
 
@@ -216,11 +234,14 @@ impl Audio {
             log::warn!("no bgm {name}");
             return;
         };
+        // SPEC-GAP: whether a new track cancels a running fade / resets its attenuation is not specified (it does here).
+        (self.fade_req, self.fade, self.fade_p) = (None, None, 0);
+        self.apply_volume();
         let generation = {
             let mut m = self.mixer.lock().unwrap();
             m.generation += 1;
             m.music = None;
-            (m.paused, m.fade, m.fade_step) = (false, 1.0, 0.0);
+            m.paused = false;
             m.generation
         };
         let (source, mixer) = (self.source.clone(), self.mixer.clone());
@@ -295,16 +316,42 @@ impl Audio {
         self.mixer.lock().unwrap().paused = on;
     }
 
-    // Music_Fade 0x4480F8 (10 §5 op 12, 11 §4, 16 §1.3 `@M`): fade out over `secs`, then stop.
-    // SPEC-GAP: the fade curve is not specified (linear in amplitude here).
+    // Music_Fade 0x4480F8 (10 §5 op 12, 11 §4, 16 §1.3 `@M`), WAV mode: queues command 5 with trunc(secs); callers
+    // have already divided by the game speed. Linear in dB from 0 to −50 dB over trunc(secs)·60 frames, then stop.
     pub fn fade_bgm(&mut self, secs: f32) {
-        let mut m = self.mixer.lock().unwrap();
-        m.fade_step = 1.0 / (secs.max(0.01) * m.out_rate as f32);
+        self.fade_req = Some(secs as i32);
     }
 
-    // BGM volume through the 13 §1.3 curve with cfg +0x27 (table volume 0); SE volumes are applied per play.
+    // Sound_Update (13 §1.3) handling command 5: mode 1, N = n = trunc(secs·60); no volume write yet.
+    pub fn start_fade(&mut self) {
+        if let Some(secs) = self.fade_req.take() {
+            self.fade = Some(Fade::new(secs));
+        }
+    }
+
+    // 0x447764, every Supervisor calc before the input poll (02 §4): fade tick; n < 1 stops the buffer.
+    pub fn tick_fade(&mut self) {
+        let Some(f) = &mut self.fade else { return };
+        match f.tick() {
+            Some(p) => {
+                self.fade_p = p;
+                self.apply_volume();
+            }
+            None => {
+                self.fade = None;
+                self.stop_bgm();
+            }
+        }
+    }
+
+    // BGM volume through the square curve of 0x472840 (02 §4) with cfg +0x27; SE volumes are applied per play.
     pub fn set_volumes(&mut self, cfg: &crate::config::Config) {
-        let db = crate::config::volume_curve(0, cfg.bgm_volume);
+        self.bgm_volume = cfg.bgm_volume;
+        self.apply_volume();
+    }
+
+    fn apply_volume(&mut self) {
+        let db = crate::config::bgm_volume_curve(self.fade_p, self.bgm_volume);
         self.mixer.lock().unwrap().volume = db_gain(db);
     }
 
@@ -363,7 +410,6 @@ mod tests {
         });
         let mut m = Mixer {
             volume: 1.0,
-            fade: 1.0,
             out_rate: 44100.0,
             voices: vec![Voice {
                 wave: Some(wave),
@@ -383,6 +429,26 @@ mod tests {
         assert!(!m.voices[0].playing);
         assert!((db_gain(-2000) - 0.1).abs() < 1e-6 && db_gain(-10000) == 0.0);
     }
+    #[test]
+    fn fade_linear_in_db() {
+        // Music_Fade(4): N = 240; first tick n = 239, middle n = 120, last audible n = 1, then stop.
+        let mut f = Fade::new(4);
+        let p: Vec<i32> = std::iter::from_fn(|| f.tick()).collect();
+        assert_eq!(p.len(), 239);
+        assert_eq!([p[0], p[119], p[238]], [-21, -2500, -4980]);
+        let bgm = |p, v| crate::config::bgm_volume_curve(p, v);
+        assert_eq!(
+            [bgm(p[0], 100), bgm(p[119], 100), bgm(p[238], 100)],
+            [-21, -2500, -4980]
+        );
+        // v = 50 (k = 0.75): trunc((p + 5000)·0.75) − 5000.
+        assert_eq!(
+            [bgm(p[0], 50), bgm(p[119], 50), bgm(p[238], 50)],
+            [-1266, -3125, -4985]
+        );
+        assert_eq!(Fade::new(0).tick(), None);
+    }
+
     #[test]
     fn se_waves_parse() {
         let Some(a) = crate::archive::test_archive() else {

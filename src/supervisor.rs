@@ -418,6 +418,7 @@ impl Task<Ctx> for Supervisor {
     // Supervisor_Calc 0x445453 (11 §7): input poll, loading VMs, then the scene switch.
     // SPEC-GAP: the slow-mode OR-accumulation of input (gm+0x2D) is not done.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        ctx.audio.tick_fade();
         if let Some(s) = &self.script {
             ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);
         }

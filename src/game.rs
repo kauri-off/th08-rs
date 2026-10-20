@@ -115,6 +115,8 @@ impl Ctx {
     // queue is left as is. Volume = the curve applied to the table volume and cfg +0x28.
     fn sound_update(&mut self) {
         let cfg = self.game.cfg;
+        // SPEC-GAP: whether "SE off" also skips the BGM command queue (02 §4 command 5) is unclear; it does not here.
+        self.audio.start_fade();
         if cfg.se_on == 0 || !crate::sound::pending() {
             return;
         }

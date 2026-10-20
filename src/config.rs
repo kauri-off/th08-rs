@@ -121,24 +121,44 @@ impl Config {
     }
 }
 
-// Volume curve (13 §1.3): k = 1 − (1 − v/100)³, result = trunc((table + 5000)·k) − 5000 (1/100 dB); v = 0 → −10000.
+// SE volume curve (13 §1.3, 0x45DFE7): k = 1 − (1 − v/100)³, result = trunc((table + 5000)·k) − 5000 (1/100 dB);
+// v = 0 → −10000.
 pub fn volume_curve(table: i32, v: u8) -> i32 {
+    curve(table, v, 3)
+}
+
+// BGM volume scaling (02 §4 `0x472840`, 13 §1.3): the same with a square, k = 1 − (1 − v/100)²; `p` is the fade
+// attenuation (0 when not fading).
+pub fn bgm_volume_curve(p: i32, v: u8) -> i32 {
+    curve(p, v, 2)
+}
+
+fn curve(table: i32, v: u8, exp: i32) -> i32 {
     if v == 0 {
         return -10000;
     }
-    let k = 1.0 - (1.0 - v.min(100) as f32 / 100.0).powi(3);
+    let k = 1.0 - (1.0 - v.min(100) as f32 / 100.0).powi(exp);
     ((table + 5000) as f32 * k) as i32 - 5000
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn curve() {
-        assert_eq!(super::volume_curve(-1100, 100), -1100);
-        assert_eq!(super::volume_curve(-1100, 0), -10000);
+        assert_eq!(volume_curve(-1100, 100), -1100);
+        assert_eq!(volume_curve(-1100, 0), -10000);
+        assert_eq!(volume_curve(-1100, 80), (3900.0f32 * 0.992) as i32 - 5000);
+    }
+
+    #[test]
+    fn se_cube_and_bgm_square() {
+        // v = 50: SE k = 0.875, BGM k = 0.75.
+        assert_eq!([0, 50, 100].map(|v| volume_curve(0, v)), [-10000, -625, 0]);
         assert_eq!(
-            super::volume_curve(-1100, 80),
-            (3900.0f32 * 0.992) as i32 - 5000
+            [0, 50, 100].map(|v| bgm_volume_curve(0, v)),
+            [-10000, -1250, 0]
         );
     }
 }
