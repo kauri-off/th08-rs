@@ -296,6 +296,11 @@
   value validation through the table parser (ranges, choices, aliases), `--help` grouped by `Group` with env name
   and default; unknown flags / missing or invalid values exit 2 with clap's error; env/port.cfg keep log-and-ignore.
   Tool `launchershot OUT.png [WxH] [switches]` renders the screen offscreen (`launcher::render_image`).
+- impl44 (RE-Q28 CODE BUGs 6–8, cloud, 2026-10-20): `ItemMgr_DropAttracted` (state-1 items → state 0, vel (0, −0.9, 0))
+  as the last step of `Player_Die` (both modes) and after the real-death drops (09 §6.1–6.2); single-kill gauge
+  through `GaugeAdd(−gauge/12)`, skipped while bombing, clamped (07 §10.3a); graze: the third time orb only inside
+  the bullet-and-card branch (09 §9.2). Traces not run (cloud). SPEC-GAP 148 → 147. Questions:
+  `docs/briefs/IMPL44_QUESTIONS.md`.
 - impl43 (RE-Q28 CODE BUGs 3–5, 2026-10-21): chained damage forward to the root (07 §10.1 step 6): skipped while
   bombing, rd = d/2 then rd/9 (boss) or 0 by the root's damage timer, floor = max(0, the root's thresholds), applied
   only when rd ≠ 0. Death sfx, sparks and time orb for every death mode (also 3 and 4–7), both spark spawns only when

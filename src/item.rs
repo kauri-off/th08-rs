@@ -125,6 +125,14 @@ impl ItemManager {
         self.live().filter(|i| i.kind == kind).count() as i32
     }
 
+    // ItemMgr_DropAttracted 0x441530 (09 §6.1): every state-1 item falls again, state 0, vel (0, −0.9, 0).
+    pub fn drop_attracted(&mut self) {
+        for it in self.items.iter_mut().filter(|i| i.alive && i.state == 1) {
+            it.state = 0;
+            it.vel = [0.0, -0.9, 0.0];
+        }
+    }
+
     // Bomb start (09 §7): every item flies to the player (state 1, velocity (0, −0.5)).
     pub fn attract_all(&mut self) {
         for it in self.items.iter_mut().filter(|i| i.alive && i.state != 1) {
@@ -568,5 +576,20 @@ mod tests {
         assert_eq!(power_level(8.0), 1);
         assert_eq!(power_level(127.0), 4);
         assert_eq!(power_level(128.0), 5);
+    }
+
+    #[test]
+    fn drop_attracted_only_state_1() {
+        let mut m = ItemManager::default();
+        for (k, st) in [1u8, 0, 3].into_iter().enumerate() {
+            let it = &mut m.items[k];
+            it.alive = true;
+            it.state = st;
+            it.vel = [5.0, -1.0, 0.0];
+        }
+        m.drop_attracted();
+        assert_eq!((m.items[0].state, m.items[0].vel), (0, [0.0, -0.9, 0.0]));
+        assert_eq!((m.items[1].state, m.items[1].vel), (0, [5.0, -1.0, 0.0]));
+        assert_eq!(m.items[2].state, 3);
     }
 }

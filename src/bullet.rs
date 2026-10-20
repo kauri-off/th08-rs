@@ -900,7 +900,12 @@ impl BulletManager {
             }
             if hit_test {
                 match p.hit_test(pos, size, &mut anm.rng) {
-                    1 => self.bullets[idx].state = 5,
+                    1 => {
+                        self.bullets[idx].state = 5;
+                        if std::mem::take(&mut p.drop_attracted) {
+                            self.items.drop_attracted();
+                        }
+                    }
                     2 if self.bullets[idx].flags & F_NO_CANCEL == 0 => {
                         self.bullets[idx].state = 5;
                         Self::bomb_drop(&mut self.items, anm, p, pos);
@@ -1114,6 +1119,10 @@ impl BulletManager {
                 l.timer.tick(gs);
                 l.body.run(anm);
             }
+        }
+        // A hit's Player_Die ends with DropAttracted; nothing touches the items between it and here.
+        if std::mem::take(&mut p.drop_attracted) {
+            self.items.drop_attracted();
         }
         for _ in 0..orbs {
             self.items.spawn(anm, p, p.pos, 10, 0);

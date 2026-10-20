@@ -404,6 +404,9 @@ pub struct Player {
     pub sht_youkai: Sht,
     // +0xE2A90 cancel item type, reset to 6 by every test.
     pub cancel_item: i32,
+    // Port-only: `Player_Die` ended with `ItemMgr_DropAttracted` (09 §6.1); the caller that owns the item
+    // manager runs it right after the hit test returns.
+    pub drop_attracted: bool,
     // +0xE2A98 direction code (09 §3).
     pub direction: u8,
     // +0xE2A9C / +0xE2AA0 last vx / vy before gs.
@@ -482,6 +485,7 @@ impl Default for Player {
             sht: Sht::default(),
             sht_youkai: Sht::default(),
             cancel_item: 6,
+            drop_attracted: false,
             direction: 0,
             last_v: [0.0; 2],
             targets: [[-999.0, -999.0, 0.0]; 2],
@@ -689,7 +693,7 @@ impl Player {
     }
 
     // Player_Die 0x44AB40 (09 §6.1); `debug_invuln` returns at its start like the noclip probe.
-    // SPEC-GAP: "all items in state 1 fall again" (0x441530) is left to ItemMgr_Calc's player-state test.
+    // Both paths end with ItemMgr_DropAttracted, requested through `drop_attracted`.
     fn player_die(&mut self, rng: &mut Rng) {
         if self.debug_invuln {
             return;
@@ -704,6 +708,7 @@ impl Player {
         if self.special() {
             self.deathbomb = 2;
             self.forced_bomb = 1;
+            self.drop_attracted = true;
             return;
         }
         let st = &mut self.stats;
@@ -732,6 +737,7 @@ impl Player {
             self.freeze_bullets = true;
         }
         self.deathbomb = n;
+        self.drop_attracted = true;
     }
 
     // GameFlags bits 7–8: a boss last spell runs or was captured (the dissolve-spell mode, 11 §2.1).
@@ -774,9 +780,10 @@ impl Player {
             orbs = 1;
             if !laser && env.spell {
                 orbs += 1;
-            }
-            if !solo_youkai {
-                orbs += 1;
+                // Nested in the bullet-and-card branch (09 §9.2, RE-Q28).
+                if !solo_youkai {
+                    orbs += 1;
+                }
             }
         }
         orbs
@@ -1080,6 +1087,8 @@ impl Player {
             for k in drops {
                 it.spawn(anm, self, self.pos, k, 2);
             }
+            // 09 §6.2 "attracted items fall": ItemMgr_DropAttracted after the death drops.
+            it.drop_attracted();
         }
         self.stats.rank(-1600);
     }
@@ -1376,6 +1385,39 @@ mod tests {
         assert_eq!(p.cancel_item, 9);
         assert_eq!(p.hit_test(far, [4.0, 4.0], &mut rng), 0);
         assert_eq!(p.cancel_item, 6);
+    }
+
+    #[test]
+    fn die_requests_drop_attracted() {
+        let (mut p, _) = ready();
+        let mut rng = Rng::default();
+        p.die(&mut rng);
+        assert!(p.drop_attracted);
+        let (mut p, _) = ready();
+        p.gflags |= GF_LAST_SPELL;
+        p.die(&mut rng);
+        assert!(p.drop_attracted);
+    }
+
+    // 09 §9.2: the third time orb only inside the bullet-and-card branch.
+    #[test]
+    fn graze_orbs() {
+        let (mut p, _) = ready();
+        let mut rng = Rng::default();
+        let env = |spell| GrazeEnv {
+            boss: true,
+            spell,
+            dialogue: false,
+        };
+        let mut orbs = |p: &mut Player, laser, spell| {
+            p.stats.gauge = 9000;
+            p.on_graze([0.0; 3], laser, &env(spell), &mut rng)
+        };
+        assert_eq!(orbs(&mut p, false, false), 1);
+        assert_eq!(orbs(&mut p, true, true), 1);
+        assert_eq!(orbs(&mut p, false, true), 3);
+        p.shot_type = 5;
+        assert_eq!(orbs(&mut p, false, true), 2);
     }
 
     #[test]

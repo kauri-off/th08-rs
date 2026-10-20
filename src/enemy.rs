@@ -799,7 +799,11 @@ impl EnemyManager {
             }
             let touched = !(child && matches!(p.shot_type, 0 | 4))
                 && p.contact_test(pos, [hb[0] / 1.5, hb[1] / 1.5], &mut anm.rng);
+            let drop_attracted = std::mem::take(&mut p.drop_attracted);
             drop(p);
+            if drop_attracted {
+                self.bullets.borrow_mut().items.drop_attracted();
+            }
             if touched && !boss && flags & A_CANCEL_BONUS == 0 {
                 self.enemies[idx].life -= 10;
             }
@@ -1394,7 +1398,11 @@ impl EnemyManager {
     fn kill_single(&mut self, idx: usize, anm: &mut AnmManager) {
         {
             let mut p = self.player.borrow_mut();
-            p.stats.gauge -= p.stats.gauge / 12;
+            // 07 §10.3a: GaugeAdd(−gauge/12, not forced), so nothing while bombing; clamped.
+            if !p.bombing {
+                let g = p.stats.gauge as i32;
+                p.stats.gauge_add(-g / 12);
+            }
             p.gauge_c.set(0);
             p.gauge_b.set(30);
         }
