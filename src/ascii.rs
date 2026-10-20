@@ -1,3 +1,5 @@
+//! ASCII manager 0x4CCE20: string queue, score popups, gauge readout, pause and continue menus (12 §2.9, §3, §4, §5.9; 13 §4).
+
 use crate::anmvm::{self, AnmVm};
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
@@ -6,13 +8,14 @@ use crate::input::{self, Input};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 
+// ascii.anm slot 1, capture.anm slot 3 (12 §3); calc prio 1, draw prio 14 / 20 (12 §5.7).
 pub const ANM_SLOT: usize = 1;
 pub const CAPTURE_SLOT: usize = 3;
 pub const CALC_PRIO: u16 = 1;
 pub const DRAW_LOW_PRIO: u16 = 14;
 pub const DRAW_HIGH_PRIO: u16 = 20;
 
-// One queued ASCII string (12 §5.3): glyph = ascii.anm sprite (char − 1), advance 13 px × scale, '\n' = +16 px.
+// One queued ASCII string (12 §2.9, §5.3): glyph = ascii.anm sprite (char − 1), advance 13 px × scale, '\n' = +16 px.
 #[derive(Clone, Debug)]
 pub struct Text {
     pub x: f32,
@@ -20,9 +23,12 @@ pub struct Text {
     pub s: String,
     pub color: [u8; 4],
     pub scale: f32,
+    // Glyph scale x / y (+0x826C / +0x8270), advance per glyph +0x8280 (13 px × scale x) (12 §2.9).
     pub scale_y: f32,
     pub advance: f32,
+    // Port-only: drawn in the prio-20 pass (true) or the prio-14 pass.
     pub high: bool,
+    // Highlight state +0x8278 (12 §2.9).
     pub hl: bool,
 }
 
@@ -80,6 +86,7 @@ impl Text {
     }
 }
 
+// Per-frame string queue, at most 256 entries, excess ignored (12 §2.9).
 #[derive(Default)]
 pub struct Queue {
     items: Vec<Text>,
@@ -92,6 +99,7 @@ impl Queue {
         }
     }
 
+    // Ascii_DrawStrings 0x402B20 (12 §2.9): '\n' → y += 16·scale y, ' ' → advance only, other bytes Draw2DSnap.
     fn draw(&mut self, ctx_anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, high: bool) {
         gfx.set_viewport(FULLSCREEN);
         let o = ctx_anm.screen_offset;
@@ -109,10 +117,10 @@ impl Queue {
                     (c.wrapping_sub(1) as usize, t.color)
                 };
                 if let Some(sp) = ctx_anm.sprite(ANM_SLOT, idx).filter(|_| c > b' ') {
-                    // Glyph VM: z 0, z-write on (answers_impl15 §Q8).
+                    // Glyph VM: z 0, z-write on (12 §5.3 depth values).
                     let [u0, v0, u1, v1] = sp.uv;
                     let (w, h) = (sp.w * t.scale, sp.h * t.scale_y);
-                    // Draw2DSnap culls quads outside the viewport.
+                    // Draw2DSnap culls quads outside the viewport (05 §9 EmitQuad step 3).
                     let (rx, ry) = (x.round_ties_even() - 0.5, y.round_ties_even() - 0.5);
                     if rx + w < 0.0 || rx > 640.0 || ry + h < 0.0 || ry > 480.0 {
                         x += t.advance * t.scale;
@@ -146,13 +154,14 @@ impl Queue {
     }
 }
 
-// Draws one string at once (outside the queue), in the caller's draw pass.
+// Draws one string at once (outside the queue), in the caller's draw pass (like Ascii_DrawGaugePercent, 12 §2.9).
 pub fn draw_now(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, t: Text) {
     let high = t.high;
     let mut q = Queue { items: vec![t] };
     q.draw(anm, gfx, high);
 }
 
+// Small popups: slots 0–719 plus 3 special slots 720–722, life 60; large popups: 128 slots, life 90 (13 §4).
 pub const POPUP_SLOTS: usize = 720;
 const POPUP_LIFE: f32 = 60.0;
 const LARGE_SLOTS: usize = 128;
@@ -167,6 +176,7 @@ pub struct Popup {
     pub age: f32,
 }
 
+// Large popup (13 §4): glyphs LSB first, pos in screen coordinates, scale copied from the manager at spawn.
 #[derive(Clone, Debug)]
 pub struct LargePopup {
     pub glyphs: Vec<u8>,
@@ -176,6 +186,7 @@ pub struct LargePopup {
     pub age: f32,
 }
 
+// Popup arrays at Ascii +0xB4DC (small) and +0x15304 (large) with their round-robin cursors (+0x8298 for large).
 #[derive(Default)]
 pub struct Popups {
     pub slots: Vec<Option<Popup>>,
@@ -189,6 +200,7 @@ thread_local! {
     static POPUPS: std::cell::RefCell<Popups> = std::cell::RefCell::new(Popups { slots: vec![None; POPUP_SLOTS + 3], next: 0, special: 0, large: vec![None; LARGE_SLOTS], large_next: 0 });
 }
 
+// At most 12 digits, least significant first; a negative value is the single glyph 10 (13 §4).
 fn digits(value: i32) -> Vec<u8> {
     if value < 0 {
         return vec![10];
@@ -237,6 +249,7 @@ pub fn popup_special(pos: [f32; 3], value: i32, colour: u32) {
 }
 
 // Large popup glyphs, least significant first: [0xF, p4 digits, 0xE,] p3 digits, 0xD → "+p3" / "+p3(p4)".
+// SPEC-GAP: 13 §4 does not say when the "(p4)" part is added; the port adds it for p4 > 0.
 fn large_glyphs(p3: i32, p4: i32) -> Vec<u8> {
     let mut g = Vec::new();
     if p4 > 0 {
@@ -290,6 +303,7 @@ pub fn clear_popups() {
     });
 }
 
+// Ascii_Calc popup part (13 §4): small popups rise 0.5·gs per frame; large popups do not move.
 fn popups_calc(gs: f32) {
     POPUPS.with_borrow_mut(|p| {
         for s in p.slots.iter_mut() {
@@ -312,12 +326,13 @@ fn popups_calc(gs: f32) {
     });
 }
 
-// Popups and the gauge readout are clipped to the playfield (viewport seen in the original's draw log).
+// SPEC-GAP: the playfield viewport for popups and the gauge readout is not in a numbered spec (13 §4 draw 0x405420).
 fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
     gfx.set_viewport(crate::gfx::PLAYFIELD);
     let pl = crate::effect::with(|e| e.player);
     let o = anm.screen_offset;
     POPUPS.with_borrow(|p| {
+        // Alpha by squared distance to the player (13 §4): ≤ 1024 → 0x50, ramp to 4096, else 0xD0.
         let fade = |pos: [f32; 2]| {
             let (dx, dy) = (pos[0] - 32.0 - pl[0], pos[1] - 16.0 - pl[1]);
             let d = dx * dx + dy * dy;
@@ -331,6 +346,7 @@ fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
         };
         for q in p.slots.iter().flatten() {
             let alpha = fade(q.pos);
+            // Digit glyph g → sprite g (age < 52), g + 11 (52–55), g + 21 (≥ 56) (13 §4).
             let shift = if q.age < 52.0 {
                 0
             } else if q.age < 56.0 {
@@ -356,6 +372,7 @@ fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
         }
         for q in p.large.iter().flatten() {
             let colour = [q.colour[0], q.colour[1], q.colour[2], fade(q.pos) as u8];
+            // x0 = pos.x − count·3.5 (count = glyphs + 1), glyphs from the last stored, advance 7·scale, sprite 0x88 + glyph.
             let x0 = q.pos[0] - (q.glyphs.len() + 1) as f32 * 3.5 + o[0];
             for (k, &g) in q.glyphs.iter().rev().enumerate() {
                 let Some(sp) = anm.sprite(ANM_SLOT, 0x88 + g as usize) else {
@@ -375,6 +392,7 @@ fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
 }
 
 // Human/youkai gauge readout VMs (12 §5.9): bar, 人, 妖, marker, glyph stamp.
+// VMs G0–G4 at ASCII manager +0x7EC.. and the stored interrupt +0x827C (12 §5.9).
 #[derive(Default)]
 struct Gauge {
     vms: Vec<AnmVm>,
@@ -393,6 +411,8 @@ const G_MARKER: usize = 3;
 const G_GLYPH: usize = 4;
 
 // Ascii_SetupGaugeVms 0x402600: restarts the scripts (keeping pos), places 人/妖 from the gauge limits, re-sends the stored interrupt.
+// AnmFile_StartScript does not zero pos (05 §8), so G0/G3 keep theirs; min/max = gauge limits (09 §9.3).
+// Not implemented: the restarts of the other ASCII VMs +0x1520 (script 9) and +0x17C4.. (script 10) (12 §5.9 step 1).
 pub fn gauge_setup(anm: &mut crate::anmmgr::AnmManager, min: i32, max: i32) {
     GAUGE.with_borrow_mut(|g| {
         if g.vms.is_empty() {
@@ -420,7 +440,7 @@ pub fn gauge_player(p: &std::rc::Rc<std::cell::RefCell<crate::player::Player>>) 
     GAUGE.with_borrow_mut(|g| g.player = std::rc::Rc::downgrade(p));
 }
 
-// Ascii_GaugeInterrupt 0x4070B0: 1 show, 2/3 fade out/in, 99 hide.
+// Ascii_GaugeInterrupt 0x4070B0 (12 §5.9): 1 show, 2/3 fade out/in, 99 hide (catch-all label); sent to G0–G3.
 pub fn gauge_interrupt(id: i32) {
     GAUGE.with_borrow_mut(|g| {
         g.id = id;
@@ -431,7 +451,8 @@ pub fn gauge_interrupt(id: i32) {
     });
 }
 
-// Player_UpdateGaugeFade 0x44D420 (playfield coordinates).
+// Player_UpdateGaugeFade 0x44D420 (12 §5.9), player pos in playfield coordinates.
+// 12 §5.9 interrupts 2/3; the player-side writes to +0xE2AA4 / +0xE2AB0 / +0xE2AC0 are not modelled here.
 pub fn gauge_fade(pos: [f32; 3]) {
     let cur = GAUGE.with_borrow(|g| g.id);
     if pos[1] < 400.0 {
@@ -445,6 +466,7 @@ pub fn gauge_fade(pos: [f32; 3]) {
     }
 }
 
+// Run every frame by Ascii_Calc, also while paused (12 §5.9).
 fn gauge_calc(anm: &mut crate::anmmgr::AnmManager) {
     GAUGE.with_borrow_mut(|g| {
         g.vms
@@ -456,7 +478,8 @@ fn gauge_calc(anm: &mut crate::anmmgr::AnmManager) {
     });
 }
 
-// End of Ascii_DrawPopups: bar, ends, marker, percent text and max point value.
+// End of Ascii_DrawPopups 0x405420 (draw prio 14): bar, ends, marker, percent text and max point value.
+// Nothing is drawn unless G0 is visible; g = gauge stats+0x22 (12 §5.9 draw steps 1–4).
 fn gauge_draw(
     anm: &mut crate::anmmgr::AnmManager,
     gfx: &mut crate::gfx::Gfx,
@@ -473,6 +496,7 @@ fn gauge_draw(
         let (bx, by) = (g.vms[G_BAR].pos[0], g.vms[G_BAR].pos[1]);
         let m = &mut g.vms[G_MARKER];
         m.pos[0] = bx + 64.0 + gv as f32 * 56.0 / 10000.0;
+        // Marker G3 with Draw2DRotNoSnap (12 §5.9 step 1).
         anm.draw_mode(gfx, m, 3);
         let rgb: u32 = if st.human_max() {
             0x7070FF
@@ -485,6 +509,7 @@ fn gauge_draw(
         } else {
             0xFFFFFF
         };
+        // The zone colour becomes G0's colour (alpha kept) and G4's colour (12 §5.9 step 2).
         set_rgb(&mut g.vms[G_BAR], rgb);
         let colour = g.vms[G_BAR].color;
         for k in [G_BAR, G_HUMAN, G_YOUKAI] {
@@ -510,6 +535,7 @@ fn gauge_draw(
                 vm.scale = [scale, scale];
                 anm.draw_mode(gfx, vm, 0);
             };
+        // Max point value stats+0x24 (12 §5.9 step 4): a digit is drawn once the running digit sum is ≠ 0.
         let (mut x, y) = (bx + 62.0 - 14.0, by + 3.0 + 8.0);
         let (mut div, mut sum) = (10_000_000, 0);
         while div > 0 {
@@ -577,10 +603,12 @@ pub fn draw_percent(
     vm.scale = [1.0, 1.0];
 }
 
+// Width of a one-line string: bytes × advance × scale (12 §2.9).
 pub fn text_width(s: &str, advance: f32, scale: f32) -> f32 {
     s.len() as f32 * advance * scale
 }
 
+// Sets R, G, B of the VM colour from 0x..RRGGBB; alpha is untouched.
 fn set_rgb(vm: &mut AnmVm, argb: u32) {
     vm.color[anmvm::R] = (argb >> 16) as u8;
     vm.color[anmvm::G] = (argb >> 8) as u8;
@@ -588,6 +616,7 @@ fn set_rgb(vm: &mut AnmVm, argb: u32) {
 }
 
 // Pause menu (12 §3); VM i runs ascii.anm script 12 + i.
+// PauseMenu_Update 0x4037B0 state machine (12 §3 table); `shown` = interrupt 1 (show) / 2 (hide) last sent per VM.
 #[derive(Default)]
 struct PauseMenu {
     state: u8,
@@ -617,6 +646,7 @@ impl PauseMenu {
         self.frame = 0;
     }
 
+    // Input is read from frame 4 of each state; confirms sfx 10, cursor moves sfx 0 (12 §3).
     fn update(
         &mut self,
         ctx_anm: &mut crate::anmmgr::AnmManager,
@@ -666,6 +696,7 @@ impl PauseMenu {
             } else if confirm {
                 crate::sound::play(crate::sound::OK);
             }
+            // Shortcut keys ESC / Q / R (R not in replay) (12 §3).
             if inp.pressed(input::PAUSE) {
                 self.goto(4);
             } else if inp.pressed(input::KEY_Q) {
@@ -728,10 +759,12 @@ impl PauseMenu {
                     match self.state {
                         4 => audio.pause_bgm(false),
                         9 => {
+                            // State 9: Result_Register(2) (save) and scene 1 (12 §3).
                             g.save_score(&mut ctx_anm.rng, true);
                             g.request(gamemgr::SCENE_MENU)
                         }
                         _ => {
+                            // State 10: spell practice / practice / Extra reload the stage (scene 11), else scene 10 (12 §3).
                             g.request(if g.practice() || g.spell_practice() || g.difficulty >= 4 {
                                 gamemgr::SCENE_RELOAD
                             } else {
@@ -748,6 +781,7 @@ impl PauseMenu {
             }
             _ => {}
         }
+        // Selected 0xFFFFFFFF, others 0xFF505050; confirm screen selected 0xFFFF8080 (12 §3).
         for (i, &k) in P_ITEMS.iter().enumerate() {
             set_rgb(
                 &mut self.vms[k],
@@ -793,6 +827,7 @@ impl PauseMenu {
 }
 
 // Continue / game-over menu (11 §4.2, 12 §4): ascii scripts 22–24 and times.anm script 1 (night clock).
+// ContinueMenu_Update 0x404890 (12 §4); phase 1 = no, 2 = yes in Extra / spell practice, 3 = continue (11 §4.2).
 #[derive(Default)]
 struct ContinueMenu {
     open: bool,
@@ -835,8 +870,10 @@ impl ContinueMenu {
             ctx_anm.set_script(&mut self.clock_vm, crate::hud::TIMES_SLOT, 1);
             self.clock_vm.set_sprite(ctx_anm, g.clock.clamp(0, 15));
             // Default "No"; "Yes" only in spell practice (card not captured, 12 §4).
+            // SPEC-GAP: 12 §4 also needs the card not captured (spell flag bit 9 clear); the port does not test it.
             self.yes = g.spell_practice();
         }
+        // Input from frame 30 (cursor on "No") or frame 4 (cursor on "Yes") (12 §4).
         let ready = self.frame
             >= if self.yes && g.spell_practice() {
                 4
@@ -875,6 +912,7 @@ impl ContinueMenu {
                 return;
             }
             3 => {
+                // The night clock advances by one at frame 15 of a continue (12 §4).
                 if self.phase_frame == 15 {
                     g.continue_clock = true;
                     g.clock += 1;
@@ -944,6 +982,7 @@ impl Task<Ctx> for AsciiManager {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let inp = ctx.input;
         gauge_calc(&mut ctx.anm);
+        // The pause menu runs while paused, the continue menu while game_over; popups only otherwise (12 §3, 13 §4).
         if ctx.game.paused != 0 {
             // 11 §2: paused = 2 once the menu was drawn (GameMgr_Calc opened it after this calc).
             ctx.game.paused = 2;
@@ -963,6 +1002,7 @@ impl Task<Ctx> for AsciiManager {
 
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let high = tag == 1;
+        // SPEC-GAP: 12 §3 / §4 draw the menus in the playfield viewport over the capture VM; the port uses the full screen and no capture.
         if high && ctx.game.paused != 0 {
             ctx.gfx.set_viewport(FULLSCREEN);
             let sel: Vec<bool> = (0..self.pause.vms.len())
@@ -990,6 +1030,7 @@ impl Task<Ctx> for AsciiManager {
         }
         if !high {
             popups_draw(&ctx.anm, &mut ctx.gfx);
+            // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
             ctx.anm.screen_offset = [0.0; 2];
             gauge_draw(&mut ctx.anm, &mut ctx.gfx, &ctx.game.stats);
         }

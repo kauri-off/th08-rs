@@ -1,9 +1,13 @@
+//! wgpu renderer standing in for the D3D8 device state the original sets up (05 §9, §12.4–§12.5; 06 §10).
+
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+// The original renders at 640×480 (05 §12.4); the window is a scaled copy.
 pub const SCREEN_W: f32 = 640.0;
 pub const SCREEN_H: f32 = 480.0;
 
+// `pos` in wgpu clip space; `fog` is the vertex fog factor f of 06 §10.1 (1 = no fog), mixed with `fog_color`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -34,12 +38,14 @@ pub fn clip_in_viewport(c: [f32; 4], vp: Rect) -> [f32; 4] {
     [ax * c[0] + bx * c[3], ay * c[1] + by * c[3], c[2], c[3]]
 }
 
+// SRCBLEND SRCALPHA with DESTBLEND INVSRCALPHA (Alpha) or ONE (Add) (05 §12.4, §2.1 bits 4–5).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Blend {
     Alpha,
     Add,
 }
 
+// Port handle; free slots are reused.
 pub type TextureId = usize;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -49,6 +55,7 @@ enum Kind {
     ClearDepth,
 }
 
+// Render state of a batch: blend, ZFUNC LESSEQUAL (`test`) vs ALWAYS, ZWRITEENABLE (05 §12.4, §2.1 bit 13).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct PipeKey {
     blend: Blend,
@@ -71,8 +78,10 @@ impl PipeKey {
     }
 }
 
+// Port choice; the D3D8 depth format is not specified.
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+// Viewport / rectangle in 640×480 screen pixels.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Rect {
     pub x: f32,
@@ -88,6 +97,7 @@ impl Rect {
 }
 
 pub const FULLSCREEN: Rect = Rect::new(0.0, 0.0, SCREEN_W, SCREEN_H);
+// Playfield viewport (32,16)–(416,464) (06 §10.2 step 5).
 pub const PLAYFIELD: Rect = Rect::new(32.0, 16.0, 384.0, 448.0);
 
 pub struct Texture {
@@ -106,6 +116,7 @@ pub struct LogTex {
     pub h: u32,
 }
 
+// Fog colour / start / end of the draw (06 §10.1), recorded in the draw log.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LogFog {
     pub color: [u8; 3],
@@ -145,6 +156,7 @@ pub enum LogRec {
     },
 }
 
+// Consecutive quads with equal texture, state and viewport, drawn in one call (05 §9 EmitQuad step 5).
 struct Batch {
     tex: TextureId,
     key: PipeKey,
@@ -153,6 +165,7 @@ struct Batch {
     end: u32,
 }
 
+// Port-only GPU state: device, pipelines, texture table, pending batches and the 640×480 frame target.
 pub struct Gfx {
     pub surface: Option<wgpu::Surface<'static>>,
     pub device: wgpu::Device,
@@ -178,6 +191,7 @@ pub struct Gfx {
     pub persistent: bool,
 }
 
+// Texture × diffuse (05 §12.4 stage 0 MODULATE), alpha test ALPHAREF 4 / GREATEREQUAL, then 06 §10.1 step 3 fog mix.
 const SHADER: &str = r#"
 struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) color: vec4f, @location(2) fogc: vec4f, @location(3) fog: f32 };
 @vertex fn vs(@location(0) pos: vec4f, @location(1) uv: vec2f, @location(2) color: vec4f, @location(3) fogc: vec4f, @location(4) fog: f32) -> VsOut {
@@ -390,6 +404,7 @@ impl Gfx {
             true,
             "fs_clear",
         ));
+        // ADDRESSU/V = WRAP, MAG/MIN = LINEAR, no mip (05 §12.4).
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
@@ -502,6 +517,7 @@ impl Gfx {
         }
     }
 
+    // Full-precision RGBA8 upload (03 §3: the reduced-colour option can be ignored).
     pub fn create_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> TextureId {
         self.create_texture_fmt(width, height, rgba, wgpu::TextureFormat::Rgba8Unorm)
     }
@@ -605,6 +621,7 @@ impl Gfx {
     }
 
     // `name` = the image file, used as its draw-log label.
+    // Standalone .jpg / .png images (03 §1).
     pub fn load_image(&mut self, name: &str, bytes: &[u8]) -> anyhow::Result<TextureId> {
         let img = image::load_from_memory(bytes)?.to_rgba8();
         let id = self.create_texture(img.width(), img.height(), &img);
@@ -754,6 +771,7 @@ impl Gfx {
         self.rect(r.x, r.y, r.w, r.h, color);
     }
 
+    // Axis-aligned textured rectangle at `dst`, no depth write.
     pub fn sprite(
         &mut self,
         tex: TextureId,
@@ -859,6 +877,7 @@ impl Gfx {
         }
     }
 
+    // Appends to the last batch while texture, state and viewport match; any change starts a new batch (05 §9 step 5).
     fn push(&mut self, tex: TextureId, key: PipeKey, v: [Vertex; 4], idx: [u32; 6]) {
         if key.kind == Kind::Draw && self.log.is_some() {
             let v = if idx[3] == 0 {
@@ -1112,7 +1131,6 @@ impl Gfx {
         self.clear_batches();
     }
 
-    // Raw draw of a pre-built quad (v0 TL, v1 TR, v2 BL, v3 BR) with explicit depth state (draw-log renderer).
     // Untextured triangle fan (vertex 0 = centre), z-write off; logged as one `P fan` record.
     pub fn fan(&mut self, blend: Blend, v: &[Vertex]) {
         if v.len() < 3 {
@@ -1138,6 +1156,7 @@ impl Gfx {
         }
     }
 
+    // Raw draw of a pre-built quad (v0 TL, v1 TR, v2 BL, v3 BR) with explicit depth state (draw-log renderer).
     pub fn draw_raw(
         &mut self,
         tex: Option<TextureId>,
@@ -1317,6 +1336,7 @@ impl Mat4 {
         ])
     }
 
+    // D3DXMatrixLookAtLH / D3DXMatrixPerspectiveFovLH equivalents (left-handed, row vectors).
     pub fn look_at_lh(eye: Vec3, at: Vec3, up: Vec3) -> Self {
         let z = normalize(sub(at, eye));
         let x = normalize(cross(up, z));
@@ -1358,6 +1378,7 @@ impl Mat4 {
     }
 }
 
+// View and projection of one camera: Camera_Set2D (05 §9) or the stage camera (06 §10.1).
 #[derive(Clone, Copy, Debug)]
 pub struct Camera {
     pub view: Mat4,
@@ -1365,6 +1386,7 @@ pub struct Camera {
 }
 
 impl Camera {
+    // SPEC-GAP: FOV π/6 / near 100 of `default_2d` have no spec section; only the gfx tests use it.
     pub const FOV: f32 = std::f32::consts::PI / 6.0;
     pub const NEAR: f32 = 100.0;
     pub const FAR: f32 = 10000.0;
@@ -1378,7 +1400,7 @@ impl Camera {
         }
     }
 
-    // Camera_Set2D: world (x, y, 0) maps to viewport pixel (x, y).
+    // Camera_Set2D 0x40B5A0 (05 §9): fovY π/10, near 1, far 10000, up (0, −1, 0); world (x, y, 0) maps to viewport pixel (x, y).
     pub fn set_2d(vp: Rect) -> Self {
         let fov = std::f32::consts::PI / 10.0;
         let (cx, cy) = (vp.w / 2.0, vp.h / 2.0);
@@ -1397,6 +1419,7 @@ impl Camera {
     }
 
     // World point → (screen x, screen y, depth 0..1) inside viewport `vp`.
+    // D3DXVec3Project with world = identity (05 §9 modes 4/5).
     pub fn project(&self, p: Vec3, vp: Rect) -> Vec3 {
         let c = self.view_proj().transform(p);
         let (x, y, z) = (c[0] / c[3], c[1] / c[3], c[2] / c[3]);

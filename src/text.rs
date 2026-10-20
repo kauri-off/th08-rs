@@ -1,11 +1,12 @@
-// Text_RenderToVm rasteriser (10 §6): 2× work surface, 4-offset black outline, colour at the centre, 2:1 box downsample.
-// SPEC-GAP: GDI "ＭＳ ゴシック" pixels are not reproducible; a system Japanese font (native) or the browser's canvas font (web) is used.
+//! Text_RenderToVm 0x4663B0 rasteriser (10 §6): 2× work surface, 4-offset black outline, colour at the centre, 2:1 box downsample.
+//! SPEC-GAP: GDI "ＭＳ ゴシック" pixels are not reproducible; a system Japanese font (native) or the browser's canvas font (web) is used.
 
+// Msg strings and spell names are Shift-JIS (cp932) (10 §2).
 pub fn decode_sjis(bytes: &[u8]) -> String {
     encoding_rs::SHIFT_JIS.decode(bytes).0.into_owned()
 }
 
-// Baseline of the glyph cell as a fraction of the cell height (MS Gothic ascent ≈ 0.86 em).
+// Port font metric, no spec section: baseline of the glyph cell as a fraction of the cell height (MS Gothic ascent ≈ 0.86 em).
 const BASELINE: f32 = 0.86;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -13,6 +14,7 @@ pub struct Raster {
     font: Option<ab_glyph::FontVec>,
 }
 
+// Port-only font search order; TH08_FONT overrides it.
 #[cfg(not(target_arch = "wasm32"))]
 const FONT_PATHS: &[&str] = &[
     "C:\\Windows\\Fonts\\msgothic.ttc",
@@ -127,18 +129,20 @@ impl Raster {
 }
 
 impl Raster {
-    // One text row, RGBA w×size: GDI height 2·size − 2 at 2×, outline ±2 px (2× space), then 2:1 downsample.
+    // One text row, RGBA w×size (10 §6): GDI height 2·size − 2 at 2×, outline ±2 px (2× space), then 2:1 downsample.
     pub fn render(&mut self, s: &str, color: [u8; 3], w: usize, size: usize) -> Vec<u8> {
         self.render_at(s, color, w, size, 0.0)
     }
 
     // As `render`, with the text starting at x (strip pixels).
     pub fn render_at(&mut self, s: &str, color: [u8; 3], w: usize, size: usize, x: f32) -> Vec<u8> {
+        // 1024×64 work surface, cleared over (0, 0, 2w, 2·size + 6) (10 §6).
         let (w2, h2) = ((2 * w).min(1024), 2 * size + 6);
         let mask = self.mask(s, (2 * size - 2) as f32, 2.0 * x, 0.0, w2, h2);
         let mut work = vec![[0f32; 4]; w2 * h2];
         let black = [0.0, 0.0, 0.0];
         let col = color.map(|c| c as f32 / 255.0);
+        // Black at (2x+4, 2), (2x, 2), (2x+2, 0), (2x+2, 4), then the colour at the centre (2x+2, 2) (10 §6, outline 0).
         for (dx, dy, c) in [
             (4, 2, black),
             (0, 2, black),
@@ -160,6 +164,7 @@ impl Raster {
                 }
             }
         }
+        // SPEC-GAP: D3DX filter TRIANGLE is approximated by an alpha-weighted 2×2 box.
         let mut out = vec![0u8; w * size * 4];
         for y in 0..size {
             for x in 0..w.min(w2 / 2) {

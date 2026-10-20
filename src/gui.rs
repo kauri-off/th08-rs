@@ -1,4 +1,5 @@
-// Spell manager g_Gui (12 §5.8): player/boss spell-name plates, cut-ins, streak strips and the bonus line.
+//! Spell manager g_Gui (12 §5.8): player/boss spell-name plates, cut-ins, streak strips and the bonus line.
+
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
 use crate::enemy::EnemyManager;
@@ -10,15 +11,19 @@ use anyhow::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+// Gui_Calc = Spell_Calc 0x416B90 at calc prio 12, Gui_Draw = Spell_Draw 0x4178C0 at draw prio 15 (12 §5.8).
 pub const CALC_PRIO: u16 = 12;
 pub const DRAW_PRIO: u16 = 15;
+// face_cdbg.anm slot 15; player faces 16 (human) / 17 (youkai); spell face file slot 18 (12 §5.8).
 pub const CDBG_SLOT: usize = 15;
 const FACE_SLOT: usize = 16;
 const SPELL_FACE_SLOT: usize = 18;
 const TEXT_SLOT: usize = crate::msg::TEXT_SLOT;
 const ASCII_SLOT: usize = crate::ascii::ANM_SLOT;
+// VM run order of Spell_Calc (12 §5.8); VM 12 (digit stamp) is never run.
 const CALC_ORDER: [usize; 13] = [0, 2, 4, 6, 10, 1, 3, 5, 7, 8, 9, 11, 13];
 
+// Calls into g_Gui from Bomb_Start, Player_UpdateBomb, Spell_Start / Spell_End and ECL natives 22/23, queued for Gui_Calc.
 pub enum Req {
     PlayerShow {
         face: i32,
@@ -53,17 +58,23 @@ pub fn request(r: Req) {
     QUEUE.with_borrow_mut(|q| q.push(r));
 }
 
+// g_Gui 0x4EA670.
 pub struct Gui {
     player: PlayerRef,
     enemies: Rc<RefCell<EnemyManager>>,
+    // VMs at +0x120 + k·0x2A4, roles in the 12 §5.8 table; 3 and 5 never get a script.
     vms: [AnmVm; 14],
     raster: crate::text::Raster,
+    // Pending Text_RenderToVm requests: (VM, text, colour, x inside the strip).
     texts: Vec<(usize, String, [u8; 3], f32)>,
+    // Spell flag bit 10: name-only show (native 22), no bonus line and no VM 13 interrupts.
     name_only: bool,
     card: i32,
     shot: u8,
+    // Spell +0xFC bonus and spell flag bit 2 (still capturable), copied from the running spell (12 §5.8 draw step 4).
     bonus: i32,
     capturable: bool,
+    // Captures / attempts of the card for this shot type (CATK story +0x158 / +0x124, practice +0x1F4 / +0x1C0).
     history: (u32, u32),
 }
 
@@ -93,7 +104,7 @@ impl Gui {
         Ok(g)
     }
 
-    // Gui_LoadFaces part: face_cdbg, VMs 0–7 hidden, the load-time scripts of VMs 6 and 10–13.
+    // Gui_LoadFaces 0x414590 part (12 §5.8): face_cdbg, VMs 0–7 hidden, the load-time scripts of VMs 6 and 10–13.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
         ctx.anm
             .load(&mut ctx.gfx, &ctx.archive, CDBG_SLOT, "face_cdbg.anm")?;
@@ -146,8 +157,9 @@ impl Gui {
     fn handle(&mut self, anm: &mut AnmManager, r: Req) {
         let v = &mut self.vms;
         match r {
-            // Gui_ShowPlayerSpellName 0x415D60.
+            // Gui_ShowPlayerSpellName 0x415D60 (12 §5.8); face −1 = dissolve spell.
             Req::PlayerShow { face, name, last } => {
+                // SPEC-GAP: 12 §5.8 skips only VM 0 for face −1 (dissolve spell); the port also leaves VMs 2/4 untouched.
                 if face >= 0 {
                     anm.set_script(&mut v[0], FACE_SLOT + face as usize, 0);
                     v[0].set_sprite(anm, 0);
@@ -156,12 +168,13 @@ impl Gui {
                     anm.set_script(&mut v[4], CDBG_SLOT, 2);
                     v[4].set_sprite(anm, last as i32);
                 }
+                // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 is not needed (full redraw).
                 anm.set_script(&mut v[6], TEXT_SLOT, 4);
                 self.texts.push((6, name.to_string(), [255, 240, 240], 0.0));
                 v[10].pending_interrupt = 1;
                 crate::sound::play(0xE);
             }
-            // 0x416130.
+            // Player hide 0x416130 (Player_UpdateBomb, bomb end).
             Req::PlayerHide => {
                 v[6].pending_interrupt = 1;
                 v[10].pending_interrupt = 2;
@@ -188,6 +201,7 @@ impl Gui {
                 } else {
                     anm.set_script(&mut v[7], TEXT_SLOT, 5);
                 }
+                // Right-aligned (0x4664A0): x = strip.x + strip.w − len·size/2, size 15, colour 0x00FFF0F0.
                 let x = 320.0 - name.len() as f32 * 15.0 / 2.0;
                 self.texts
                     .push((7, crate::text::decode_sjis(&name), [240, 240, 255], x));
@@ -211,7 +225,7 @@ impl Gui {
         }
     }
 
-    // Text_RenderToVm into the VM's text.anm strip (size 15).
+    // Text_RenderToVm 0x4663B0 into the VM's text.anm strip (size 15, 10 §6).
     fn flush_texts(&mut self, ctx: &mut Ctx) {
         for (k, s, colour, x) in std::mem::take(&mut self.texts) {
             let Some(sp) = ctx
@@ -232,6 +246,7 @@ impl Gui {
         }
     }
 
+    // Draw2DSnap (mode 0) / Draw2DRot (mode 2) (05 §9).
     fn snap(anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, vm: &mut AnmVm) {
         anm.draw_mode(gfx, vm, 0);
     }
@@ -245,6 +260,7 @@ impl Gui {
     }
 
     // Bonus line: 8 digits of the bonus, captures and attempts (3 digits each), leading zeros suppressed.
+    // 12 §5.8 draw step 4: VM 12 stamps sprite 0x88 + d from VM 13 pos + (−40, +1), advance 7.
     fn draw_bonus(&mut self, anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx) {
         let (captures, attempts) = self.history;
         let base = self.vms[13].pos;
@@ -273,6 +289,7 @@ impl Gui {
             div /= 10;
         }
         x += 32.0;
+        // Captures after x += 32, attempts after x += 13; the attempts' tens digit is forced when captures have hundreds.
         let c = captures.min(999);
         let hundreds = c >= 100;
         for (k, div) in [100, 10, 1].into_iter().enumerate() {
@@ -304,13 +321,14 @@ impl Task<Ctx> for Gui {
         }
     }
 
-    // Spell_Calc 0x416B90 (VM part).
+    // Spell_Calc 0x416B90 (VM part, 12 §5.8).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         for r in QUEUE.with_borrow_mut(std::mem::take) {
             Self::record(&mut ctx.game, &r);
             self.handle(&mut ctx.anm, r);
         }
         if self.card >= 0 {
+            // Read from score.dat every frame for the bonus line.
             self.history = ctx.game.score.card_history(
                 self.card as usize,
                 self.shot as usize,
@@ -324,6 +342,7 @@ impl Task<Ctx> for Gui {
             }
             self.player.borrow().freeze_bullets || crate::enemy::timer_pause() != 0
         };
+        // VMs run only while bullets are not frozen (GameFlags bit 10) and the freeze byte 0x160F534 is 0 (12 §5.8).
         if !frozen {
             for k in CALC_ORDER {
                 let vm = &mut self.vms[k];
@@ -335,15 +354,17 @@ impl Task<Ctx> for Gui {
         Ret::Next
     }
 
-    // Spell_Draw 0x4178C0.
+    // Spell_Draw 0x4178C0 (12 §5.8 draw steps 1–4).
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.flush_texts(ctx);
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         gfx.set_viewport(PLAYFIELD);
+        // Tint 0xFFF01010 only while GameFlags bit 10, off at the end (06 §10.2).
         if self.player.borrow().freeze_bullets {
             (anm.tint, anm.tint_on) = (0xFFF01010, true);
         }
         let v = &mut self.vms;
+        // Boss strips (VM 2/4) are drawn only while the player cut-in VM 0 is visible: original quirk (12 §5.8 step 1).
         if Self::shown(&v[0]) {
             Self::snap(anm, gfx, &mut v[0]);
             Self::snap(anm, gfx, &mut v[2]);
@@ -352,6 +373,7 @@ impl Task<Ctx> for Gui {
         if Self::shown(&v[1]) {
             let p = v[1].pos;
             let o = v[1].pos_offset;
+            // Boss cut-in drawn at pos + pos_offset, restored afterwards (12 §5.8 step 2).
             v[1].pos = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
             Self::snap(anm, gfx, &mut v[1]);
             v[1].pos = p;
@@ -363,6 +385,7 @@ impl Task<Ctx> for Gui {
             Self::rot(anm, gfx, &mut v[6]);
         }
         if Self::shown(&v[7]) {
+            // Neutral tint +0x2620 = 0x80808080 from Spell_Start (12 §5.8 step 4).
             (anm.tint, anm.tint_on) = (0x8080_8080, true);
             v[11].pos = v[7].pos;
             Self::snap(anm, gfx, &mut v[11]);

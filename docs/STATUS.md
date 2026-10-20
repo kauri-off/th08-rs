@@ -200,6 +200,13 @@
   4450/3869/2937/1605, all 78 tests pass, the wasm check passes. SPEC-GAP 53 → 93: code vs spec differences found in
   this pass, plus code with no spec section. Two old gaps were closed by the current specs (12 §5.9, 09 §3).
   Questions: `docs/briefs/IMPL25_QUESTIONS.md`.
+- impl26 (comment pass batch C, 2026-10-20): `anm.rs`, `anmvm.rs`, `anmmgr.rs`, `gfx.rs`, `msg.rs`, `hud.rs`, `gui.rs`,
+  `ascii.rs`, `text.rs` now have `//!` module lines and spec references (03 / 05 / 06 / 10 / 12 / 13 sections, original
+  names and addresses, struct offsets, units) on fields, constants, opcode handlers, functions and kept quirks; stale
+  `answers_*` citations replaced by numbered sections. Comments only: with comments and whitespace stripped, all 9 files
+  are token-identical to before. golden / fullrun_noclip / selftest1 8055 / 6265 / 1422, demo MIN_SYNC
+  4450/3869/2937/1605, drawlog demo 0 90.61 %, all 78 tests pass, the wasm check passes. SPEC-GAP 93 → 110.
+  Questions: `docs/briefs/IMPL26_QUESTIONS.md`.
 
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).

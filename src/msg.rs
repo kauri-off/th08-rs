@@ -1,8 +1,11 @@
+//! Dialogue interpreter of the HUD (Msg_Load / Msg_Start / Msg_Run, msg*.dat) (10 §1–§5, §8).
+
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::input::{self, Input};
 use anyhow::{Result, ensure};
 
+// ANM slots of the portrait files face[0..3] (10 §3); text.anm is slot 0 (10 §6).
 pub const FACE_SLOTS: [usize; 4] = [16, 17, 18, 19];
 pub const TEXT_SLOT: usize = 0;
 
@@ -19,11 +22,13 @@ const FILES: [[&str; 4]; 9] = [
     ["msg8a", "msg8b", "msg8c", "msg8d"],
 ];
 
+// Table 0x4C74C0: solos use their team's file (10 §1).
 pub fn file_name(stage: usize, shot: u8) -> String {
     format!("{}.dat", FILES[stage % 9][crate::sht::team(shot) as usize])
 }
 
 // Gui_LoadFaces (10 §3): player A, partner, stage face, second stage face.
+// SPEC-GAP: 10 §3 names face_st01 … face_st08m only by range; the per-stage names here are not tabled.
 pub fn face_files(stage: usize, shot: u8) -> [Option<String>; 4] {
     let team = crate::sht::team(shot) as usize;
     let a = ["rm", "mr", "sk", "ym"][team];
@@ -47,11 +52,13 @@ pub fn face_files(stage: usize, shot: u8) -> [Option<String>; 4] {
     ]
 }
 
+// File layout (10 §2): u32 count, u32 offset[count] (entries may share an offset), instructions.
 pub struct MsgFile {
     data: Vec<u8>,
     pub entries: Vec<usize>,
 }
 
+// Instruction header (10 §2): u16 time, u8 opcode, u8 arg_size; next = at + 4 + arg_size.
 #[derive(Clone, Copy, Debug)]
 pub struct Ins {
     pub time: u16,
@@ -120,6 +127,8 @@ impl MsgFile {
 }
 
 // Things the HUD / game manager must do after a Msg_Run (10 §5.1).
+// Bgm op 7, BgmFade op 12, Flash op 14, StageEnd op 9, HaltFinal op 11, Route = GM flags bits 11–12 (ops 21/22,
+// 10 §4 step 3), Plate / SpellBase = entry-0 hooks (10 §4 step 2).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     Bgm(i32),
@@ -138,28 +147,40 @@ pub enum Event {
 pub struct StartInfo {
     pub stage: usize,
     pub shot: u8,
+    // stats+0x29: 10 §4 step 3 calls it the practice flag, 16 §1 the continue count.
     pub continues: u8,
+    // Route byte of the replay header (replay+8 → +0x11C) during playback (10 §4 step 3).
     pub replay_route: Option<u8>,
+    // Clear-mask bits 6 (6A) / 7 (6B) over all four difficulties for this shot (10 §4 step 3).
     pub cleared_6a: bool,
     pub cleared_6b: bool,
+    // Clock counter stats+0x28 (10 §4 step 4).
     pub clock: i32,
 }
 
+// Dialogue state at HudImpl+0x21814.. (10 §3).
 pub struct Dialogue {
     pub file: Option<MsgFile>,
     pub info: StartInfo,
+    // Portrait file per face index; 6B / Extra swap slots 2 and 3 on entry 0 (Gui file pointers 0x4ECC9C ↔ 0x4ECCA0).
     pub face_slot: [usize; 4],
     ip: usize,
+    // +0x2181C running entry, −1 = none; +0x21820 script clock (05 §2 Timer).
     pub entry: i32,
     pub clock: Timer,
+    // +0x2182C frames since the last text op; +0x21830 frames a wait must last before Shot advances it (6, then 8 or 30).
     wait_count: i32,
     min_wait: i32,
+    // face[k] +0x21834, line[l] +0x222C4 (text.anm strips), boss_card +0x2280C; VM +0x22AB0 is not modelled (unused).
     pub faces: [AnmVm; 4],
     pub lines: [AnmVm; 2],
     pub boss_card: AnmVm,
+    // +0x22D54 per-speaker COLORREF as RGB; outline style +0x22D64 is always 0 and not stored.
     text_colour: [[u8; 3]; 4],
     pub font_size: usize,
+    // +0x22D78: op 6 increments, each Msg_Run decrements; Msg_IsBlocking needs 0 (10 §8.1).
     pub release_counter: i32,
+    // +0x22D7C..+0x22D82: skippable, text_speaker, new_box, next_line, active_speaker (0xFF none), textbox, choice.
     skippable: bool,
     text_speaker: u8,
     new_box: bool,
@@ -167,9 +188,12 @@ pub struct Dialogue {
     active_speaker: u8,
     pub textbox: bool,
     pub choice: u8,
+    // +0x22D84, set by op 9; the HUD then draws the clear bonus panel (10 §9).
     pub stage_end: bool,
+    // Port-only: pending Text_RenderToVm requests (line, text, colour) for the HUD to rasterise (10 §6).
     pub texts: Vec<(usize, String, [u8; 3])>,
     pub events: Vec<Event>,
+    // Port-only: set by Msg_Start; the caller then performs the playfield side effects of 10 §4 step 6.
     pub side_effects: bool,
 }
 
@@ -225,6 +249,7 @@ impl Dialogue {
         self.active() && self.skippable
     }
 
+    // Msg_IsActive 0x4358BB / Msg_IsBlocking 0x43587E (10 §1).
     pub fn active(&self) -> bool {
         self.file.is_some() && self.entry >= 0
     }
@@ -287,11 +312,13 @@ impl Dialogue {
         if info.stage == 7 && n > 5 && info.clock > 11 {
             n = 5;
         }
+        // Port-only guard: a missing entry leaves the dialogue inactive.
         let Some(&ip) = self.file.as_ref().and_then(|f| f.entries.get(n as usize)) else {
             return;
         };
         self.entry = n;
         self.ip = ip;
+        // 10 §4 step 5: script index −1 makes the first line-1 clear a no-op; the other defaults come from Default.
         self.lines.iter_mut().for_each(|l| l.script_index = -1);
         self.textbox = true;
         self.skippable = true;
@@ -300,11 +327,13 @@ impl Dialogue {
         self.side_effects = true;
     }
 
+    // Starts text.anm script `line` on line[line] and queues Text_RenderToVm (10 §6).
     fn render(&mut self, anm: &mut AnmManager, line: usize, s: String, colour: [u8; 3]) {
         anm.set_script(&mut self.lines[line], TEXT_SLOT, line);
         self.texts.push((line, s, colour));
     }
 
+    // Renders " " into line 1 if it has a script (ops 3/16).
     fn clear_line1(&mut self) {
         if self.lines[1].script_index >= 0 {
             self.texts.push((1, " ".into(), [255; 3]));
@@ -336,6 +365,7 @@ impl Dialogue {
         }
     }
 
+    // One instruction of the 10 §5.1 opcode table.
     fn exec(&mut self, f: &MsgFile, anm: &mut AnmManager, inp: &Input, ins: Ins) -> Exec {
         let skip = self.skippable && inp.down(input::SKIP);
         match ins.op {
@@ -345,6 +375,7 @@ impl Dialogue {
             }
             1 => {
                 let (k, s) = (f.i16(&ins, 0) as usize, f.i16(&ins, 1));
+                // The pos_offset writes of ops 1/2 are omitted: they have no visible effect (10 §5.1 note).
                 if k < 4 && s >= 0 {
                     anm.set_script(&mut self.faces[k], self.face_slot[k], s as usize);
                 }
@@ -367,6 +398,7 @@ impl Dialogue {
                 self.wait_count = 0;
             }
             4 => {
+                // Op 4 wait (10 §5.2): Skip advances at once; Shot after min_wait; else stall up to n frames, then time out.
                 let n = f.i32(&ins, 0);
                 if skip {
                 } else if inp.pressed(input::SHOT) && self.wait_count >= self.min_wait {
@@ -396,8 +428,10 @@ impl Dialogue {
                 self.stage_end = true;
                 self.events.push(Event::StageEnd);
             }
+            // Op 10 halt stalls forever; the game manager ends the stage.
             10 => return Exec::Stall,
             11 => {
+                // Op 11 sets GM flags & ~0x60 | 0x40 every stalled frame; one event is enough.
                 if !self.events.contains(&Event::HaltFinal) {
                     self.events.push(Event::HaltFinal);
                 }
@@ -446,6 +480,7 @@ impl Dialogue {
                 self.wait_count = 0;
             }
             21 => {
+                // Op 21 choice (10 §5.4): ignores Skip; Shot needs wait_count ≥ 60; timeout keeps the current choice.
                 let n = f.i32(&ins, 0);
                 let old = self.choice;
                 if inp.pressed(input::UP) {
@@ -469,6 +504,7 @@ impl Dialogue {
                     self.min_wait = 30;
                 }
             }
+            // Op 22: Msg_Start(choice + 1) and the new entry runs in the same frame (10 §5.1).
             22 => {
                 self.events.push(Event::Route(self.choice));
                 return Exec::Choice(self.choice);
@@ -487,12 +523,14 @@ impl Dialogue {
             self.release_counter -= 1;
         }
         let skip = self.skippable && inp.down(input::SKIP);
+        // Ctrl fast-forward: clock = time of the current instruction (10 §5).
         if skip && let Some(i) = self.file.as_ref().unwrap().ins(self.ip) {
             self.clock.set(i.time as i32);
         }
         let mut stalled = false;
         loop {
             let Some(ins) = self.file.as_ref().unwrap().ins(self.ip) else {
+                // Port-only guard: running off the file ends the dialogue.
                 self.entry = -1;
                 return !dying;
             };
@@ -508,10 +546,12 @@ impl Dialogue {
                     stalled = true;
                     break;
                 }
+                // Op 0 returns at once: no clock tick and no VM run this frame (10 §5.1).
                 Exec::End => return !dying,
                 Exec::Choice(c) => self.start(c as i32 + 1),
             }
         }
+        // A stall leaves without ticking the clock, but the VMs still run (10 §5).
         if !stalled {
             self.clock.tick(anm.speed);
         }
@@ -533,6 +573,7 @@ impl Dialogue {
 }
 
 // D3DCOLOR ARGB → VM colour bytes.
+// D3DCOLOR 0xAARRGGBB → VM colour bytes B, G, R, A (05 §2).
 pub fn argb(c: u32) -> [u8; 4] {
     let mut v = [0u8; 4];
     v[anmvm::A] = (c >> 24) as u8;

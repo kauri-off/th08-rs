@@ -1,3 +1,5 @@
+//! HUD g_Hud 0x160F428 (Hud_Calc / Hud_Draw): side panel, boss UI, popups, clear panel, dialogue host (12 §5, 10).
+
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
@@ -13,6 +15,7 @@ use anyhow::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+// Hud_Calc 0x4338CA prio 15, Hud_Draw 0x433927 prio 17; ANM slots front 10, loadingNN 12, stgNtxt 13, times 14 (12 §5.1).
 pub const CALC_PRIO: u16 = 15;
 pub const DRAW_PRIO: u16 = 17;
 pub const FRONT_SLOT: usize = 10;
@@ -20,12 +23,14 @@ pub const LOADING_SLOT: usize = 12;
 pub const TXT_SLOT: usize = 13;
 pub const TIMES_SLOT: usize = 14;
 
+// stgNtxt.anm name per stage index 0–8.
 const TXT_NAMES: [&str; 9] = ["1", "2", "3", "4a", "4b", "5", "6", "7", "8"];
 // Per-stage clear bonus (tbl 0x4C7158).
 const CLEAR_BONUS: [i64; 9] = [
     1_000_000, 1_500_000, 2_000_000, 2_500_000, 2_500_000, 3_000_000, 4_000_000, 6_000_000,
     6_660_000,
 ];
+// Difficulty line and multiplier of the clear bonus (12 §5.6).
 const RANK_TEXT: [(&str, f64); 5] = [
     ("Easy Rank    *0.5", 0.5),
     ("Normal Rank  *1.0", 1.0),
@@ -34,6 +39,7 @@ const RANK_TEXT: [(&str, f64); 5] = [
     ("Extra Rank   *2.0", 2.0),
 ];
 
+// Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus popup with its age in frames (12 §5.5).
 struct ActivePopup {
     kind: Popup,
     frame: u32,
@@ -43,10 +49,13 @@ struct ActivePopup {
 struct ClearPanel {
     frame: u32,
     stage: usize,
+    // Text lines at (120, 96 + 16·i) with ARGB colour; an empty line is a gap.
     lines: Vec<(String, u32)>,
+    // Night clock in minutes (660 + 30·clock) before / after the advance, and the animated value (12 §5.6).
     from: i32,
     to: i32,
     shown: i32,
+    // Stage-clear trigger already fired (11 §4.1); final stages never fire it here.
     done: bool,
 }
 
@@ -56,20 +65,28 @@ pub struct Hud {
     enemies: Rc<RefCell<EnemyManager>>,
     stage: Rc<RefCell<Stage>>,
     frame: u32,
+    // front.anm VMs 0–15 (impl+i·0x2A4, 12 §5.2).
     front: Vec<AnmVm>,
+    // stgNtxt.anm scripts 0–3 at impl+0x2A44 (stage title, song-title card = script 3).
     title: Vec<AnmVm>,
+    // ascii.anm script 0x19 at impl+0x22E14 (difficulty name), script 3 at impl+0x212C8 (stage clear).
     diff_vm: AnmVm,
     clear_vm: AnmVm,
+    // times.anm night clock impl+0x2156C (ECL 179/181) and the stage-start clock impl+0x34D4 (12 §5.1).
     night_vm: AnmVm,
     start_clock_vm: AnmVm,
     raster: crate::text::Raster,
+    // +0x1C boss bar alpha 0–255, ±4 per frame (12 §5.1).
     bar_alpha: i32,
     bar_shown: bool,
+    // +0x30 / +0x34 target and displayed life fraction (+0.01 up, −0.02 down per frame).
     bar_target: f32,
     bar_disp: f32,
+    // +0x28 boss timer value last shown; −1 = none yet.
     timer_last: i32,
     popups: Vec<ActivePopup>,
     clear: Option<ClearPanel>,
+    // Msg op 14 flash age in frames (442-frame fade to white, 10 §5.1).
     flash: Option<u32>,
 }
 
@@ -108,7 +125,7 @@ impl Hud {
         Ok(h)
     }
 
-    // Hud_Load + Gui_LoadFaces + Msg_Load.
+    // Hud_Load + Gui_LoadFaces 0x414590 + Msg_Load 0x439710 (12 §5.1, 10 §1, §3); no msg file in spell practice.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
         let g = &ctx.game;
         let (stage, shot) = (g.stage % 9, g.shot);
@@ -181,13 +198,16 @@ impl Hud {
         } else {
             g.difficulty.clamp(0, 4)
         };
+        // SPEC-GAP: 12 §5.1 uses sprite 0x120 only for spell-practice ids ≥ 205; the port uses it for every spell practice.
         self.diff_vm.set_sprite(anm, 0x11B + d);
+        // Clock sprite = clock counter stats+0x28 (12 §5.1); the clamp is a port guard.
         anm.set_script(&mut self.start_clock_vm, TIMES_SLOT, 0);
         self.start_clock_vm
             .set_sprite(anm, g.stats.clock.clamp(0, 15));
         Ok(())
     }
 
+    // The line VM's strip of the text.anm render target: texture, row width and strip top y in texture pixels.
     fn line_texture(
         anm: &AnmManager,
         gfx: &Gfx,
@@ -198,7 +218,7 @@ impl Hud {
         Some((sp.tex, t.width, (sp.uv[1] * t.height as f32).round() as u32))
     }
 
-    // Text_RenderToVm for the queued dialogue lines.
+    // Text_RenderToVm 0x4663B0 for the queued dialogue lines (10 §6).
     fn flush_texts(&mut self, ctx: &mut Ctx) {
         let mut d = self.msg.borrow_mut();
         let size = d.font_size;
@@ -217,6 +237,7 @@ impl Hud {
                 Event::Plate(n) => set_boss_plate(&ctx.anm, &mut ctx.gfx, n),
                 Event::SpellBase(n) => self.stage.borrow_mut().spell_first = n,
                 Event::Bgm(n) if n < 0 => ctx.audio.stop_bgm(),
+                // Msg op 7 (10 §5.1): song-title card = stgNtxt script 3 with sprite n + 3, then BGM slot n.
                 Event::Bgm(n) => {
                     let vm = &mut self.title[3];
                     ctx.anm.set_script(vm, TXT_SLOT, 3);
@@ -234,6 +255,7 @@ impl Hud {
                 Event::BgmFade => ctx.audio.fade_bgm(4.0),
                 Event::Flash => self.flash = Some(0),
                 Event::StageEnd => self.stage_end(ctx),
+                // Msg op 11: GM flags & ~0x60 | 0x40 (game-clear trigger).
                 Event::HaltFinal => ctx.game.set_end_state(2),
                 Event::Route(c) => {
                     log::info!("final route choice {c} at frame {}", ctx.frame);
@@ -257,6 +279,7 @@ impl Hud {
         let d = g.difficulty.clamp(0, 4) as usize;
         let mut p = self.player.borrow_mut();
         let shot = p.shot_type;
+        // Stages 1–5 start the bonus panel VMs (10 §9).
         if stage < 6 {
             ctx.anm
                 .set_script(&mut self.clear_vm, crate::ascii::ANM_SLOT, 3);
@@ -264,6 +287,7 @@ impl Hud {
         }
         let adv = gamemgr::clock_advance(stage, p.stats.time, p.stats.time_threshold);
         if stage < 6 {
+            // SPEC-GAP: sprite 0x80 + clock advance of the stage-clear VM has no spec section.
             self.clear_vm.set_sprite(&ctx.anm, 0x80 + adv);
         }
         let rng = &mut ctx.anm.rng;
@@ -273,8 +297,10 @@ impl Hud {
         let to = st.clock * 30 + 660;
         let final_stage = stage >= 6;
         if final_stage {
+            // Stages 6A/6B/Ex set stats+0x34 = −1 (10 §9).
             st.extends = -1;
         } else {
+            // Youmu&Yuyuko team and solos: +1 bomb below 3 bombs, stages 1–5 only (10 §9).
             if matches!(shot, 3 | 10 | 11) && st.bombs < 3.0 {
                 st.add_bombs(1.0, rng);
                 crate::sound::play(crate::sound::CARDGET);
@@ -303,6 +329,7 @@ impl Hud {
             (format!("Graze = {graze:8}0"), 0xFFFFFFFF),
             (format!("Time  = {time:8}0"), 0xFFFFFFFF),
         ];
+        // Share of non-dialogue player frames at human / youkai max gauge (12 §5.6).
         let pct = |n: u32| n as f32 * 100.0 / st.stage_frames.max(1) as f32;
         lines.push((
             format!("over-80% = {:.2}%", pct(st.human_frames)),
@@ -312,12 +339,14 @@ impl Hud {
             format!("over 80% = {:.2}%", pct(st.youkai_frames)),
             0xFFFFFFFF,
         ));
+        // SPEC-GAP: 12 §5.6 excludes "a replay with header +0x7B"; the port excludes every replay.
         if final_stage && !g.practice() && !g.replay() {
             let (lv, bm) = (st.lives as i64 * 2_500_000, st.bombs as i64 * 500_000);
             total += lv + bm;
             lines.push((format!("Player ={lv:8}0"), 0xFFFFFFFF));
             lines.push((format!("Bomb   = {:7}0", bm), 0xFFFFFFFF));
             if stage == 7 {
+                // 6B night bonus (12 − clock)·2 000 000; the max(0) is a port guard.
                 let night = (12 - st.clock).max(0) as i64 * 2_000_000;
                 total += night;
                 let m = 660 + 30 * st.clock;
@@ -345,6 +374,7 @@ impl Hud {
         }
         lines.push((String::new(), 0));
         lines.push((format!("Total = {total:8}0"), 0xFFFFFFFF));
+        // AddScore(total) is called 10 times: displayed points = total·10, matching the "%8d0" text (12 §5.6).
         for _ in 0..10 {
             st.add_score(total as i32);
         }
@@ -360,6 +390,7 @@ impl Hud {
         });
     }
 
+    // Clock animation (12 §5.6): after 60 frames +1 minute per frame, +3 more while Shot or Skip is held.
     fn clear_calc(&mut self, g: &mut Game, inp: &crate::input::Input) {
         let Some(c) = &mut self.clear else { return };
         c.frame += 1;
@@ -386,6 +417,7 @@ impl Hud {
             self.bar_shown = show;
             self.front[12].pending_interrupt = if show { 1 } else { 2 };
         }
+        // Target fraction life/max from the enemy calc (12 §5.1); hud_life overrides max when set.
         if let Some(b) = boss {
             let max = if b.hud_life > 0 {
                 b.hud_life
@@ -394,7 +426,7 @@ impl Hud {
             };
             self.bar_target = (b.life.max(0) as f32 / max as f32).clamp(0.0, 1.0);
         }
-        // Popup_LargeStatic from Hud_DrawBoss (answers_impl10 §1): "+0" without children too.
+        // Popup_LargeStatic from Hud_DrawBoss (12 §5.4, 13 §4): re-issued every frame, "+0" without children too.
         if let Some(i) = e.boss(0)
             && !paused
             && !self.player.borrow().freeze_bullets
@@ -412,6 +444,7 @@ impl Hud {
         } else {
             (self.bar_alpha - 4).max(0)
         };
+        // The life-bar refresh is skipped while a dialogue runs (10 §8.2).
         if !dialogue {
             if self.bar_disp < self.bar_target {
                 self.bar_disp = (self.bar_disp + 0.01).min(self.bar_target);
@@ -422,6 +455,7 @@ impl Hud {
         let _ = anm;
     }
 
+    // Msg_Draw 0x43542B (10 §7): portrait pairs back-to-front by pos.z, text box, lines, boss card (Draw2DSnap).
     fn draw_msg(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         let mut d = self.msg.borrow_mut();
         if !d.active() {
@@ -447,6 +481,7 @@ impl Hud {
             } else {
                 d.clock.cur as f32 * 48.0 / 60.0
             };
+            // Text box (10 §7 step 2): top colour 0xD0000000, bottom 0x90000000; grows down over the first 60 clock frames.
             let (x0, x1, y0) = (PLAYFIELD.x + 16.0, PLAYFIELD.x + 368.0, 384.0);
             let (top, bot) = ([0, 0, 0, 0xD0], [0, 0, 0, 0x90]);
             let uv = [0.0, 0.0];
@@ -477,6 +512,7 @@ impl Hud {
         gfx.strip(gfx.white(), Blend::Alpha, false, v);
     }
 
+    // 0xRRGGBB with an explicit alpha → RGBA.
     fn rgb(c: u32, a: u8) -> [u8; 4] {
         [(c >> 16) as u8, (c >> 8) as u8, c as u8, a]
     }
@@ -507,6 +543,7 @@ impl Hud {
                 b.max_life.max(1)
             }
         }) as f32;
+        // ECL op 158 markers: drawn when end ≠ 0 and start < displayed; bottom colour (c >> 2) & 0x3F3F3F.
         for [end, start, col] in e.g.hud_markers {
             let (end, start) = (end as f32 / max, start as f32 / max);
             if end != 0.0 && start < disp {
@@ -522,6 +559,7 @@ impl Hud {
                 );
             }
         }
+        // Remaining-bars gauge (+0x20, ECL op 148) between x 35 and 61.
         let n = e.g.hud_bars.max(0);
         let gap = if n < 6 { 2.0 } else { 1.0 };
         for i in 0..n {
@@ -546,6 +584,7 @@ impl Hud {
             };
             ctx.ascii
                 .push(Text::new(384.0, 16.0, format!("{s:02}")).color(Self::rgb(c, a)));
+            // On a change of the shown value: < 3 se_timeout2 (0x26), < 10 se_timeout (0x1D) (12 §5.4).
             if s != self.timer_last && self.timer_last >= 0 {
                 if s < 3 {
                     crate::sound::play(crate::sound::TIMEOUT2);
@@ -557,6 +596,7 @@ impl Hud {
         }
     }
 
+    // Hud_DrawPopups 0x438A89 (12 §5.5): bonus / message popups slide from x 416 by −312 over 30 frames.
     fn draw_popups(&mut self, ctx: &mut Ctx) {
         for p in &self.popups {
             let slide = |f: u32| 416.0 - 312.0 * (f.min(30) as f32 / 30.0);
@@ -591,6 +631,7 @@ impl Hud {
                     ctx.ascii.push(
                         Text::new(
                             224.0 - crate::ascii::text_width(&v, 13.0, 2.0) / 2.0,
+                            // SPEC-GAP: 12 §5.5 gives no y for the 2× "+%d" line.
                             100.0,
                             v,
                         )
@@ -602,6 +643,7 @@ impl Hud {
         }
     }
 
+    // Hud_DrawClearPanel 0x43826B (12 §5.6); stages 1–5 add the "AM|PM h:mm >> AM|PM h:mm" clock line.
     fn draw_clear(&mut self, ctx: &mut Ctx) {
         let Some(c) = &self.clear else { return };
         let mut y = 96.0;
@@ -637,7 +679,7 @@ impl Hud {
         let gfx = &mut ctx.gfx;
         gfx.set_viewport(FULLSCREEN);
         let anm = &mut ctx.anm;
-        // Tiles (scripts 13–15) keep z-write on; depths per answers_impl15 §Q8.
+        // Tiles (scripts 13–15) keep z-write on; depths 0.49 / 0.48 / 0.46 (12 §5.3).
         let spr = |anm: &AnmManager, gfx: &mut Gfx, i: usize, x: f32, y: f32, z: f32| {
             if let Some(s) = anm.sprite(FRONT_SLOT, i) {
                 let [u0, v0, u1, v1] = s.uv;
@@ -662,6 +704,7 @@ impl Hud {
         for y in [88.0, 104.0, 136.0, 152.0, 168.0, 184.0] {
             spr(anm, gfx, 15, 480.0, y, 0.48);
         }
+        // SPEC-GAP: this erase patch at (512, 464) is not in the 12 §5.3 repaint list.
         spr(anm, gfx, 15, 512.0, 464.0, 0.48);
         for y in (0..480).step_by(32) {
             spr(anm, gfx, 13, 0.0, y as f32, 0.49);
@@ -703,9 +746,11 @@ impl Hud {
                 anm.draw_mode(gfx, v, 0);
             }
         }
+        // Strip 14 along y = 464 for x 32..368 every frame (12 §5.3).
         for x in [32.0, 160.0, 288.0] {
             spr(anm, gfx, 14, x, 464.0, 0.49);
         }
+        // Power gauge x 488 … 488 + power, y 136..152, left 0xE0E0E0FF / right 0x80E0E0FF (12 §5.3).
         let pw = st.power.trunc();
         let uv = [0.0, 0.0];
         let (l, r) = ([0xE0, 0xE0, 0xFF, 0xE0], [0xE0, 0xE0, 0xFF, 0x80]);
@@ -731,6 +776,7 @@ impl Hud {
             },
         ));
         q.push(Text::new(488.0, 152.0, format!("{}", st.graze_total)));
+        // "/" at half a glyph width (+6 px) after the value (12 §5.3).
         let pt = format!("{}", st.point_items2);
         q.push(Text::new(488.0, 168.0, pt.clone()));
         let x = 488.0 + 13.0 * pt.len() as f32;
@@ -768,6 +814,7 @@ impl Task<Ctx> for Hud {
         }
     }
 
+    // Not implemented: the night-clock player-overlap fade and ECL op 180 (12 §5.7).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.frame += 1;
         let inp = ctx.input.game_view();
@@ -783,9 +830,11 @@ impl Task<Ctx> for Hud {
                 std::mem::take(&mut d.side_effects),
             )
         };
+        // Msg_Start playfield side effects (10 §4 step 6): cancel bullets, kill killable enemies.
         if side {
             self.enemies.borrow_mut().msg_side_effects(&mut ctx.anm);
         }
+        // All items auto-collect while a dialogue runs and the player is not dying (10 §5).
         if collect {
             self.enemies
                 .borrow()
@@ -801,11 +850,12 @@ impl Task<Ctx> for Hud {
         let clock = self.player.borrow().stats.clock;
         for r in reqs {
             match r {
+                // ECL 179 / 181 (10 §8.3): night clock script 2 with sprite = clock; 181 interrupts 2 at 12, else 1.
                 179 => {
                     ctx.anm.set_script(&mut self.night_vm, TIMES_SLOT, 2);
                     self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
                 }
-                // ECL op 148: progress counter 0x164D30C += 1800 (07 §op148, end panel 16 §2.5).
+                // ECL op 148: progress counter 0x164D30C += 1800 (10 §8.3, end panel 16 §2.5).
                 148 => self.player.borrow_mut().stats.rec.progress += 1800,
                 181 => {
                     self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
@@ -824,6 +874,7 @@ impl Task<Ctx> for Hud {
         for p in self.player.borrow_mut().stats.popups.drain(..) {
             self.popups.push(ActivePopup { kind: p, frame: 0 });
         }
+        // Popup lifetimes 250 / 180 / 280 frames (12 §5.5).
         self.popups.retain_mut(|p| {
             p.frame += 1;
             p.frame
@@ -862,10 +913,11 @@ impl Task<Ctx> for Hud {
             return Ret::Next;
         }
         self.draw_msg(&mut ctx.anm, &mut ctx.gfx);
+        // Hud_DrawBoss 0x43741D only while no dialogue runs (12 §5.4).
         if !self.msg.borrow().active() {
             self.draw_boss(ctx);
         }
-        // Stage title / clock VMs keep the playfield viewport left by the gauge readout (answers_impl15 §Q11).
+        // SPEC-GAP: the playfield viewport for the title / clock VMs is not in a numbered spec.
         ctx.gfx.set_viewport(PLAYFIELD);
         for vm in self
             .title
@@ -880,6 +932,7 @@ impl Task<Ctx> for Hud {
         self.draw_clear(ctx);
         let st = self.player.borrow().stats.clone();
         self.draw_panel(ctx, &st);
+        // SPEC-GAP: 10 §5.1 makes op 14 a ScreenEffect type 4 at draw prio 21; the port draws it inside the HUD (prio 17).
         if let Some(f) = self.flash {
             ctx.gfx.set_viewport(FULLSCREEN);
             ctx.gfx.rect(
@@ -895,7 +948,7 @@ impl Task<Ctx> for Hud {
     }
 }
 
-// Hud_SetStageNamePlate 0x438046 (answers_impl10 §5); None = no call (the plate keeps its old picture).
+// Hud_SetStageNamePlate 0x438046 (12 §5.2 table); None = no call (the plate keeps its old picture, quirk).
 fn stage_plate(stage: usize, g: &crate::gamemgr::Game) -> Option<usize> {
     let sp = g.spell_practice();
     Some(match stage {
@@ -916,7 +969,7 @@ fn stage_plate(stage: usize, g: &crate::gamemgr::Game) -> Option<usize> {
     })
 }
 
-// Hud_SetBossNamePlate 0x437F5C: front.anm sprite n's pixels into the plate sprite 10.
+// Hud_SetBossNamePlate 0x437F5C (12 §5.2): copies front.anm sprite n's pixels into sprite 10's rect (copy 0x467040).
 pub fn set_boss_plate(anm: &AnmManager, gfx: &mut Gfx, n: usize) {
     if let (Some(&src), Some(&dst)) = (anm.sprite(FRONT_SLOT, n), anm.sprite(FRONT_SLOT, 10)) {
         let px = |s: &crate::anmmgr::SlotSprite, gfx: &Gfx| {
