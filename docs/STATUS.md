@@ -359,6 +359,11 @@
   (15 §2.3); name-entry Up, Down, Left, Right are four independent tests per frame in that order (`move_char_cursor`,
   16 §2.2); the HSCR / replay date is local time (`chrono::Local` native, JS `Date` on wasm; 16 §2.2). Unit tests for
   ties and Up+Down. Traces not run (cloud). SPEC-GAP 168 → 167. Questions: `docs/briefs/IMPL47_QUESTIONS.md`.
+- impl54 (audit A.22, A.23, A.26, cloud, 2026-10-20): damage areas test enemies per 09 §4.5 (`Area::hits_enemy`:
+  circle = point test on the enemy centre `≤ r²`, rectangles = inclusive box overlap, unrotated box in the area frame);
+  the bomb active flag +0xE2A7C is no longer cleared at the bomb end but by the next failed normal start test (09 §1.1);
+  game over leaves lives and bombs unchanged (09 §6.2). Unit tests for all three. Traces not run (cloud).
+  SPEC-GAP 134 → 132. Question: IMPL54_QUESTIONS.md.
 - impl59 (audit A.34, A.35, A.36, cloud, 2026-10-20): `Stage::step` returns at once while GameFlags bit 10 (player
   `freeze_bullets`): no script, camera, clock, sparkle flag or frame counter (06 §5); sparkles spawn from frame 0 in
   spell practice (GameFlags bit 14, `Stage::sparkle_due`, 06 §5); a billboard appends a sparkle point only when it is

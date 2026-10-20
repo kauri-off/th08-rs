@@ -1039,9 +1039,8 @@ impl Player {
             self.stats.bombs = self.sht.bombs.trunc();
         } else {
             // Game over: the ASCII manager opens the continue menu (12 §4).
+            // Lives and bombs are not changed on game over (09 §6.2).
             self.game_over = true;
-            // SPEC-GAP: 09 §6.2 / 11 §4.2 reset the bombs only when a life is left.
-            self.stats.bombs = self.sht.bombs.trunc();
         }
         true
     }
@@ -1513,7 +1512,11 @@ mod tests {
         for _ in 0..40 {
             p.step(&mut anm, &input(0));
         }
-        assert_eq!((p.stats.power, p.game_over), (0.0, true));
+        // 09 §6.2: lives and bombs unchanged on game over.
+        assert_eq!(
+            (p.stats.power, p.game_over, p.stats.lives, p.stats.bombs),
+            (0.0, true, 0.0, 0.0)
+        );
         let (mut p, mut anm) = ready();
         p.stats.power = 10.0;
         p.die(&mut rng);

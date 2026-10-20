@@ -865,7 +865,7 @@ impl Player {
         let mut dmg = shot;
         // Damage areas: life % period == 0 (period > 0 test port-only); dealt total capped by max.
         for a in self.damage_areas.iter_mut().filter(|a| a.active) {
-            if a.period > 0 && a.life % a.period != 0 || !a.contains([pos[0], pos[1]], half) {
+            if a.period > 0 && a.life % a.period != 0 || !a.hits_enemy([pos[0], pos[1]], size) {
                 continue;
             }
             dmg += a.damage;

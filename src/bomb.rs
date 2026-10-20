@@ -53,8 +53,35 @@ pub struct Area {
 }
 
 impl Area {
-    // Circle: distance² < r²; rectangle: inside the rotated bounds (09 §8).
-    // SPEC-GAP: the box-vs-area geometry for a non-zero `half` (enemy boxes) is not given in 09 §4.5.
+    // Damage-area overlap in Player_DamageAgainst (09 §4.5): enemy centre `p`, hitbox size `s` (full w, h).
+    // Circle: point test on the centre only, `≤ r²` (the box is ignored); rectangle: inclusive box overlap,
+    // the box unrotated in the area's frame.
+    pub fn hits_enemy(&self, p: [f32; 2], s: [f32; 2]) -> bool {
+        let (w2, h2) = (self.size[0] / 2.0, self.size[1] / 2.0);
+        if self.r != 0.0 {
+            let (dx, dy) = (self.pos[0] - p[0], self.pos[1] - p[1]);
+            return dy * dy + dx * dx <= self.r * self.r;
+        }
+        if self.rot == 0.0 {
+            // Helper 0x451CE0: min = p − s·0.5, max = s·0.5 + p.
+            let min = [p[0] - s[0] * 0.5, p[1] - s[1] * 0.5];
+            let max = [s[0] * 0.5 + p[0], s[1] * 0.5 + p[1]];
+            return self.pos[0] - w2 <= max[0]
+                && min[0] <= w2 + self.pos[0]
+                && self.pos[1] - h2 <= max[1]
+                && min[1] <= h2 + self.pos[1];
+        }
+        let (dx, dy) = (p[0] - self.pos[0], p[1] - self.pos[1]);
+        let (sn, c) = (-self.rot).sin_cos();
+        let d = [dx * c - dy * sn, dx * sn + dy * c];
+        -w2 <= s[0] / 2.0 + d[0]
+            && d[0] - s[0] / 2.0 <= w2
+            && -h2 <= s[1] / 2.0 + d[1]
+            && d[1] - s[1] / 2.0 <= h2
+    }
+
+    // Cancel-area test (Player_InBombArea, 09 §8): circle distance² < r²; rectangle inside the rotated bounds.
+    // `half` is non-zero only for `Player::box_in_cancel_area` (unspecified caller, see there).
     pub fn contains(&self, p: [f32; 2], half: [f32; 2]) -> bool {
         let (dx, dy) = (p[0] - self.pos[0], p[1] - self.pos[1]);
         if self.r > 0.0 {
@@ -399,6 +426,11 @@ impl Player {
                 && self.deathbomb != 0
                 && self.stats.bombs >= 1.0
                 && self.bomb_cooldown == 0;
+            // +0xE2A7C drops on a failed normal start test, so it stays 1 through the end frame (09 §1.1).
+            if !pressed {
+                self.bomb_active = false;
+            }
+            // SPEC-GAP: 09 §1.1 does not list the special-mode block among the tests that clear +0xE2A7C; kept.
             if pressed && (self.special() || self.gflags & GF_SPELL_PRACTICE != 0) {
                 sound::play(0x29);
                 pressed = false;
@@ -418,10 +450,9 @@ impl Player {
             self.bomb.timer.tick(anm.speed);
         } else {
             // End: speed multipliers 1, bombing 0, tint off (06 §10.2); index 4 per 14 §2.17.
-            // SPEC-GAP: 09 §1.1 keeps +0xE2A7C up to the next failed start test, not cleared on end (audit A.23).
+            // +0xE2A7C is not cleared here (09 §1.1).
             self.speed_mult = [1.0; 2];
             self.bombing = false;
-            self.bomb_active = false;
             anm.tint_off();
             crate::gui::request(crate::gui::Req::PlayerHide);
             if self.bomb.index == 4 {
@@ -1552,10 +1583,43 @@ mod tests {
         for _ in 0..199 {
             p.step(&mut anm, &press(0));
         }
-        assert!(p.bombing);
+        assert!(p.bombing && p.bomb_active);
         p.step(&mut anm, &press(0));
         assert!(!p.bombing && p.speed_mult == [1.0; 2]);
         assert!(p.bomb.objs[..16].iter().all(|o| o.state == 0));
+        // 09 §1.1: +0xE2A7C holds through the end frame, drops on the next failed start test.
+        assert!(p.bomb_active);
+        p.step(&mut anm, &press(0));
+        assert!(!p.bomb_active);
+    }
+
+    // 09 §4.5: circle = point test on the enemy centre, `≤ r²`; rectangles overlap the box inclusively.
+    #[test]
+    fn damage_area_enemy_overlap() {
+        let circle = Area {
+            pos: [100.0, 100.0],
+            r: 10.0,
+            ..Area::default()
+        };
+        assert!(circle.hits_enemy([110.0, 100.0], [64.0, 64.0]));
+        assert!(!circle.hits_enemy([111.0, 100.0], [64.0, 64.0]));
+        let rect = Area {
+            pos: [100.0, 100.0],
+            size: [20.0, 40.0],
+            ..Area::default()
+        };
+        assert!(rect.hits_enemy([120.0, 100.0], [20.0, 2.0]));
+        assert!(!rect.hits_enemy([120.5, 100.0], [20.0, 2.0]));
+        assert!(rect.hits_enemy([100.0, 125.0], [2.0, 10.0]));
+        let rot = Area {
+            rot: FRAC_PI_2,
+            ..rect
+        };
+        assert!(rot.hits_enemy([120.0, 100.0], [2.0, 2.0]));
+        assert!(
+            rect.hits_enemy([100.0, 112.0], [2.0, 2.0])
+                && !rot.hits_enemy([100.0, 112.0], [2.0, 2.0])
+        );
     }
 
     #[test]
