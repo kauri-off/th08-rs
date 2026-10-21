@@ -48,22 +48,45 @@ struct ActivePopup {
 
 // Stage-clear panel state (10 §9, 12 §5.6).
 struct ClearPanel {
-    frame: u32,
+    // impl+0x22E10: clock-animation delay timer (op 9 := 0).
+    timer: u32,
     stage: usize,
     // Stored by msg op 9 (10 §9): clear bonus, point items, graze, time.
     clear: i32,
     points: i32,
     graze: i32,
     time: i32,
-    // Bonus not computed yet: Hud_Calc does it once, on the first frame after op 9 (12 §5.6).
+    // impl+0x22D84 = 1: bonus not computed yet; Hud_Update does it once, on the first frame after op 9 (12 §5.1b).
     pending: bool,
     // Night clock in minutes (660 + 30·clock) before / after the advance (impl+0x22E04 / +0x22E08), and the animated
     // value (impl+0x22E0C).
     from: i32,
     to: i32,
     shown: i32,
-    // Stage-clear trigger already fired (11 §4.1); final stages never fire it here.
-    done: bool,
+}
+
+impl ClearPanel {
+    // Clear trigger then clock animation (12 §5.6), once per Hud_Update after the bonus step; `end` = GM flags bits
+    // 5–6, `fast` = SHOT or SKIP in g_Input. Returns true when the trigger sets bits 5–6 := 2.
+    fn step(&mut self, end: u32, fast: bool) -> bool {
+        // Tested before the step and without a 60-frame gate: fires the frame after `shown` reaches `to`, or on the
+        // bonus frame when the clock did not advance.
+        let fire = self.stage < 6 && self.shown != 0 && self.shown >= self.to && end == 0;
+        if self.shown != 0 && self.shown != self.to {
+            if self.timer < 60 {
+                self.timer += 1;
+            } else if self.shown < self.to {
+                self.shown += 1;
+                if fast {
+                    self.shown += 3;
+                }
+                self.shown = self.shown.min(self.to);
+            } else {
+                self.timer += 1;
+            }
+        }
+        fire
+    }
 }
 
 pub struct Hud {
@@ -306,7 +329,7 @@ impl Hud {
             }
         }
         self.clear = Some(ClearPanel {
-            frame: 0,
+            timer: 0,
             stage,
             clear: CLEAR_BONUS[stage] as i32,
             points: st.point_items,
@@ -316,7 +339,6 @@ impl Hud {
             from,
             to,
             shown: from,
-            done: final_stage,
         });
     }
 
@@ -363,21 +385,14 @@ impl Hud {
         log::info!("clear bonus {t}: score {}", st.score10);
     }
 
-    // Clock animation (12 §5.6): after 60 frames +1 minute per frame, +3 more while Shot or Skip is held.
+    // Clear trigger and clock animation (12 §5.6); `None` before op 9 stands for `shown` = 0.
     fn clear_calc(&mut self, g: &mut Game, inp: &crate::input::Input) {
         let Some(c) = &mut self.clear else { return };
-        c.frame += 1;
-        if c.frame > 60 && c.shown < c.to {
-            c.shown += 1;
-            if inp.down(crate::input::SHOT | crate::input::SKIP) {
-                c.shown = (c.shown + 3).min(c.to);
-            }
-        }
-        if c.frame > 60 && c.shown >= c.to && !c.done {
-            c.done = true;
-            if c.stage <= 5 {
-                g.set_end_state(2);
-            }
+        if c.step(
+            g.end_state(),
+            inp.down(crate::input::SHOT | crate::input::SKIP),
+        ) {
+            g.set_end_state(2);
         }
     }
 
@@ -624,9 +639,11 @@ impl Hud {
         } else {
             "All Clear!"
         };
-        // 6B / Extra put the title at y 80; the pen stays at 96.
-        let ty = if c.stage > 6 { 80.0 } else { y };
-        line(q, ty, title.into(), 0xFFFFFF40);
+        // 6B / Extra lower the pen by 16 before the title: the whole panel starts at y 80.
+        if c.stage > 6 {
+            y -= 16.0;
+        }
+        line(q, y, title.into(), 0xFFFFFF40);
         y += 32.0;
         line(q, y, format!("Clear = {:8}0", c.clear), 0xFFFFFFFF);
         y += 16.0;
@@ -866,9 +883,88 @@ impl Task<Ctx> for Hud {
         }
     }
 
+    // Hud_Calc 0x4338CA (12 §5.1b): Hud_Update, then Msg_Run, then the frame counter. Hud_Update runs first, so what
+    // a msg op sets this frame (op 9 bonus, trigger, clock animation) is acted on the next frame.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        self.frame += 1;
         let inp = ctx.input.game_view();
+        // HUD requests queued by ECL ops this frame (ECL runs before the HUD).
+        let reqs = std::mem::take(&mut self.enemies.borrow_mut().g.hud_requests);
+        let clock = self.player.borrow().stats.clock;
+        for r in reqs {
+            match r {
+                // ECL 179 / 181 (12 §5.7, 07 §7): night clock script 2 with sprite = clock; 181 interrupts 2 at 12,
+                // else 1; 180 hides it with alpha := 0.
+                179 => {
+                    ctx.anm.set_script(&mut self.night_vm, TIMES_SLOT, 2);
+                    self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
+                }
+                180 => self.night_vm.color[anmvm::A] = 0,
+                // ECL op 148: progress counter 0x164D30C += 1800 (10 §8.3, end panel 16 §2.5).
+                148 => self.player.borrow_mut().stats.rec.progress += 1800,
+                181 => {
+                    self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
+                    self.night_vm.pending_interrupt = if clock >= 12 { 2 } else { 1 };
+                }
+                _ => {}
+            }
+        }
+        // Hud_Update 0x435900, steps 1–7 of 12 §5.1b.
+        let dialogue = self.msg.borrow().active();
+        self.boss_calc(
+            &mut ctx.anm,
+            dialogue,
+            ctx.game.paused != 0 || ctx.game.game_over != 0,
+        );
+        // Front VMs, stage-title VMs, the stage-start clock, the stage-clear VM, the night clock.
+        let anm = &mut ctx.anm;
+        for vm in self.front.iter_mut().chain(self.title.iter_mut()) {
+            if vm.script.is_some() {
+                vm.run(anm);
+            }
+        }
+        // The clock VM ticks only while stage-title VM 0 has alpha ≠ 0, never in spell practice (12 §5.1).
+        let title_on = self.title.first().is_some_and(|v| v.color[anmvm::A] != 0);
+        if self.start_clock_vm.script.is_some() && title_on && !ctx.game.spell_practice() {
+            self.start_clock_vm.run(anm);
+        }
+        for vm in [&mut self.clear_vm, &mut self.night_vm] {
+            if vm.script.is_some() {
+                vm.run(anm);
+            }
+        }
+        // Player-overlap fade of the night clock (12 §5.7): while alpha ≠ 0, −4 down to 0x40 with the player at
+        // x ≥ 64, y < 128, else +4 up to 0xFF (≥ 0xFC snaps to 0xFF).
+        let a = self.night_vm.color[anmvm::A];
+        if a != 0 {
+            let p = self.player.borrow().pos;
+            self.night_vm.color[anmvm::A] = if p[0] >= 64.0 && p[1] < 128.0 {
+                if a > 0x40 { (a - 4).max(0x40) } else { a }
+            } else if a >= 0xFC {
+                0xFF
+            } else {
+                a + 4
+            };
+        }
+        // Difficulty name VM impl+0x22E14.
+        if self.diff_vm.script.is_some() {
+            self.diff_vm.run(&mut ctx.anm);
+        }
+        for p in self.player.borrow_mut().stats.popups.drain(..) {
+            self.popups.push(ActivePopup { kind: p, frame: 0 });
+        }
+        // Popup lifetimes 250 / 180 / 280 frames (12 §5.5).
+        self.popups.retain_mut(|p| {
+            p.frame += 1;
+            p.frame
+                < match p.kind {
+                    Popup::Bonus(_) => 250,
+                    Popup::Message(..) => 180,
+                    Popup::SpellBonus(_) => 280,
+                }
+        });
+        self.clear_bonus(&ctx.game);
+        self.clear_calc(&mut ctx.game, &inp);
+        // Msg_Run (10 §5), including op 9.
         let dying = self.player.borrow().state == 2;
         let (collect, events, side) = {
             let mut d = self.msg.borrow_mut();
@@ -897,76 +993,7 @@ impl Task<Ctx> for Hud {
         self.flush_texts(ctx);
         self.handle_events(ctx, events);
         self.flush_texts(ctx);
-        let reqs = std::mem::take(&mut self.enemies.borrow_mut().g.hud_requests);
-        let clock = self.player.borrow().stats.clock;
-        for r in reqs {
-            match r {
-                // ECL 179 / 181 (12 §5.7, 07 §7): night clock script 2 with sprite = clock; 181 interrupts 2 at 12,
-                // else 1; 180 hides it with alpha := 0.
-                179 => {
-                    ctx.anm.set_script(&mut self.night_vm, TIMES_SLOT, 2);
-                    self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
-                }
-                180 => self.night_vm.color[anmvm::A] = 0,
-                // ECL op 148: progress counter 0x164D30C += 1800 (10 §8.3, end panel 16 §2.5).
-                148 => self.player.borrow_mut().stats.rec.progress += 1800,
-                181 => {
-                    self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
-                    self.night_vm.pending_interrupt = if clock >= 12 { 2 } else { 1 };
-                }
-                _ => {}
-            }
-        }
-        let dialogue = self.msg.borrow().active();
-        self.boss_calc(
-            &mut ctx.anm,
-            dialogue,
-            ctx.game.paused != 0 || ctx.game.game_over != 0,
-        );
-        self.clear_bonus(&ctx.game);
-        self.clear_calc(&mut ctx.game, &inp);
-        for p in self.player.borrow_mut().stats.popups.drain(..) {
-            self.popups.push(ActivePopup { kind: p, frame: 0 });
-        }
-        // Popup lifetimes 250 / 180 / 280 frames (12 §5.5).
-        self.popups.retain_mut(|p| {
-            p.frame += 1;
-            p.frame
-                < match p.kind {
-                    Popup::Bonus(_) => 250,
-                    Popup::Message(..) => 180,
-                    Popup::SpellBonus(_) => 280,
-                }
-        });
-        // Player-overlap fade of the night clock (12 §5.7): while alpha ≠ 0, −4 down to 0x40 with the player at
-        // x ≥ 64, y < 128, else +4 up to 0xFF (≥ 0xFC snaps to 0xFF).
-        // SPEC-GAP: 12 §5.7 does not order the fade against the VM run in Hud_Calc; fade first.
-        let a = self.night_vm.color[anmvm::A];
-        if a != 0 {
-            let p = self.player.borrow().pos;
-            self.night_vm.color[anmvm::A] = if p[0] >= 64.0 && p[1] < 128.0 {
-                if a > 0x40 { (a - 4).max(0x40) } else { a }
-            } else if a >= 0xFC {
-                0xFF
-            } else {
-                a + 4
-            };
-        }
-        let anm = &mut ctx.anm;
-        for vm in self.front.iter_mut().chain(self.title.iter_mut()).chain([
-            &mut self.diff_vm,
-            &mut self.clear_vm,
-            &mut self.night_vm,
-        ]) {
-            if vm.script.is_some() {
-                vm.run(anm);
-            }
-        }
-        // The clock VM ticks only while stage-title VM 0 has alpha ≠ 0, never in spell practice (12 §5.1).
-        let title_on = self.title.first().is_some_and(|v| v.color[anmvm::A] != 0);
-        if self.start_clock_vm.script.is_some() && title_on && !ctx.game.spell_practice() {
-            self.start_clock_vm.run(anm);
-        }
+        self.frame += 1;
         Ret::Next
     }
 
@@ -1047,5 +1074,73 @@ pub fn set_boss_plate(anm: &AnmManager, gfx: &mut Gfx, n: usize) {
             b,
             [src.w.min(dst.w) as u32, src.h.min(dst.h) as u32],
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn panel(stage: usize, from: i32, to: i32) -> ClearPanel {
+        ClearPanel {
+            timer: 0,
+            stage,
+            clear: 0,
+            points: 0,
+            graze: 0,
+            time: 0,
+            pending: false,
+            from,
+            to,
+            shown: from,
+        }
+    }
+
+    // 12 §5.6: no clock advance → the trigger fires on the first step (the bonus frame), no 60-frame wait.
+    #[test]
+    fn trigger_without_advance_fires_at_once() {
+        let mut c = panel(2, 720, 720);
+        assert!(c.step(0, false));
+        assert_eq!((c.shown, c.timer), (720, 0));
+        // Bits 5–6 already set: no second trigger.
+        assert!(!c.step(2, false));
+    }
+
+    // 12 §5.6: 60 delay steps, then +1 per step; the trigger is tested before the step, so it fires one step after
+    // `shown` reaches `to`.
+    #[test]
+    fn trigger_after_animation() {
+        let mut c = panel(0, 660, 663);
+        for _ in 0..60 {
+            assert!(!c.step(0, false));
+        }
+        assert_eq!((c.timer, c.shown), (60, 660));
+        for m in 661..=663 {
+            assert!(!c.step(0, false));
+            assert_eq!(c.shown, m);
+        }
+        assert!(c.step(0, false));
+    }
+
+    // 12 §5.6: SHOT/SKIP adds 3 more, clamped to `to`.
+    #[test]
+    fn fast_step_clamps() {
+        let mut c = panel(0, 660, 666);
+        c.timer = 60;
+        c.step(0, true);
+        assert_eq!(c.shown, 664);
+        c.step(0, true);
+        assert_eq!(c.shown, 666);
+    }
+
+    // 12 §5.6: final stages never trigger here; `shown` > `to` triggers (≥) and only ticks the timer.
+    #[test]
+    fn final_stage_and_backwards() {
+        let mut c = panel(6, 900, 900);
+        assert!(!c.step(0, false));
+        let mut c = panel(1, 700, 690);
+        c.timer = 60;
+        assert!(c.step(0, false));
+        assert_eq!((c.shown, c.timer), (700, 61));
     }
 }

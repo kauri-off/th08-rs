@@ -582,6 +582,12 @@
   3600-frame idle exit, return 5 → `Game::device_reset` (the app applies +0x22 as fullscreen). Unit tests: mapping,
   ShotSlow counter, key swap. Traces not run (cloud). SPEC-GAP 111 → 113 (src). Questions:
   `docs/briefs/IMPL68_QUESTIONS.md`.
+- impl74 (audit 72–74, cloud, 2026-10-21): `Hud::calc` follows 12 §5.1b — `Hud_Update` (boss bar; front, title,
+  stage-start clock, stage-clear and night-clock VMs; night-clock fade; difficulty VM; popup timers; clear bonus;
+  clear trigger + clock animation) first, then `Msg_Run`, then the frame counter, so op 9's bonus lands the next
+  frame. Clear trigger (12 §5.6, `ClearPanel::step`): tested before the animation step, no 60-frame gate, impl+0x22E10
+  delay timer. Clear panel: for stage idx > 6 the pen starts at y 80 for every line. Unit tests for the trigger and
+  animation. Traces not run (cloud). SPEC-GAP 115 → 114 (src). Questions: `docs/briefs/IMPL74_QUESTIONS.md`.
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
