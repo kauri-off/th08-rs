@@ -380,6 +380,13 @@
   previous scene was 5 (`menu::title_music`, 00 §3.2); resulttext.anm in ANM slot 22 (00 §3.2). Unit tests for the
   volume steps and the music rule. Traces not run (cloud). SPEC-GAP 134 → 131 (src). Questions:
   `docs/briefs/IMPL64_QUESTIONS.md`.
+- impl51 (audit A.13, A.14, A.66, cloud, 2026-10-20): `spawn_child` (ops 90–92) applies bit 8, bit 11, layer,
+  contact off and the aura **after** the child's spawn-time `Ecl_Run` (07 §10.5); aura VM bit 17 := flags A bit 2 and
+  VM +0x14 negated for an odd slot; the chain link (parent, tail +8, child +4, spawner +0x3380) is written last, with
+  the tail looked up before the spawn: a root links after its last child, a chained child after itself (cutting the
+  rest off). `spawn_prepare` writes only pos; prev pos / final pos keep the template's (0, 0, 0) (07 §4.1). Unit
+  tests for all three. Traces not run (cloud). SPEC-GAP 115 → 115 (2 removed, 2 new). Questions:
+  `docs/briefs/IMPL51_QUESTIONS.md`.
 - impl50 (audit A.12, A.15, A.16, cloud, 2026-10-20): `EnemyManager::kill_all` (op 95, op 123 `Spell_End`, death
   modes 0–2) and `kill_non_bosses` (threshold / timeout switch) have no self test (07 §7 op 95, §10.2): the ECL
   caller is put back in its slot with its running main context (`Exec::with_self_in_slot`), so a non-boss caller

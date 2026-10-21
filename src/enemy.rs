@@ -918,7 +918,8 @@ impl EnemyManager {
     }
 
     // EnemyMgr_SpawnFromTimeline 0x42A4E0 / _FromEcl 0x42A680 steps 1–3 (07 §4.1); the caller finishes with
-    // `spawn_finish`. SPEC-GAP: prev_pos / final_pos := spawn pos is not in 07 §4.1.
+    // `spawn_finish`. Only pos is written: prev pos and final pos keep the template's (0, 0, 0), so the first
+    // move's displacement (vars 10085–87) equals the spawn pos (07 §4.1 step 3 QUIRK).
     pub(crate) fn spawn_prepare(
         &mut self,
         sub: i32,
@@ -938,8 +939,6 @@ impl EnemyManager {
             e.life = life;
         }
         e.pos = pos;
-        e.prev_pos = pos;
-        e.final_pos = pos;
         e.main.ctx.enter(&self.ecl, sub);
         self.enemies[idx] = e;
         Some(idx)

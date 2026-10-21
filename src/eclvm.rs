@@ -658,6 +658,22 @@ impl Exec<'_> {
             93 => [x, y, z],
             _ => [x, y, 0.0],
         };
+        // 07 §10.5: the tail is looked up before the spawn. A chain root (no parent) links after its last child;
+        // a chained child links after itself, overwriting its own +8 (the rest of the chain is cut off).
+        let tail = if chained && self.m.enemies[self.idx].root.is_none() {
+            let mut last = self.idx;
+            let mut guard = 0;
+            while let Some(i) = self.m.enemies[last].chain_next {
+                guard += 1;
+                if guard > MAX_ENEMIES {
+                    break;
+                }
+                last = i;
+            }
+            last
+        } else {
+            self.idx
+        };
         let Some(ci) = self.m.spawn_prepare(sub, pos, life, false) else {
             return;
         };
@@ -671,64 +687,55 @@ impl Exec<'_> {
         {
             let c = &mut self.m.enemies[ci];
             c.main.ctx.vars = vars;
-            // SPEC-GAP: 07 §10.5 applies these after the spawn-time Ecl_Run; here only contact-off is (IMPL24 Q6).
             if chained {
-                c.root = Some(self.idx);
-                c.flags |= A_MODE_REACT;
-                c.set_flag(A_YOUKAI, youkai);
+                // SPEC-GAP: 07 §10.5 does not say whether op 90–92 write mode bits e+0x3330; set before the run (IMPL51 Q1).
                 c.mode_bits = if youkai { 0x40 } else { 0x20 };
-                c.layer = if youkai { 0 } else { 2 };
+                // SPEC-GAP: when op 92 writes the follow offset and bit 9 is not in 07 §10.5; before the run (IMPL51 Q2).
                 if op == 92 {
                     c.pos_offset = self.e.pos;
                     c.flags |= A_FOLLOW;
-                    c.final_pos = add3(c.pos, c.pos_offset);
                 }
             }
         }
-        if chained {
-            // Child aura 0x20 (07 §10.5), interrupt 1 human / 2 youkai; only if it has none yet.
-            if self.m.enemies[ci].fx_aura == crate::effect::NONE {
-                let fp = self.m.enemies[ci].final_pos;
-                let fx = crate::effect::spawn_high(self.anm, 0x20, fp, 0xFFFFFFFF);
-                crate::effect::get(fx, |x| x.vm.pending_interrupt = if youkai { 2 } else { 1 });
-                self.m.enemies[ci].fx_aura = fx;
-            }
-        }
-        // Link after the chain tail, or after the spawner itself when it has no children (07 §10.5).
-        if chained {
-            let mut last: Option<usize> = None;
-            let mut n = self.e.chain_next;
-            let mut guard = 0;
-            while let Some(i) = n {
-                guard += 1;
-                if guard > MAX_ENEMIES || i == ci {
-                    break;
-                }
-                last = Some(i);
-                n = self.m.enemies[i].chain_next;
-            }
-            match last {
-                Some(l) => {
-                    self.m.enemies[l].chain_next = Some(ci);
-                    self.m.enemies[ci].chain_prev = Some(l);
-                }
-                None => {
-                    self.e.chain_next = Some(ci);
-                    self.m.enemies[self.idx].chain_next = Some(ci);
-                    self.m.enemies[ci].chain_prev = Some(self.idx);
-                }
-            }
-            self.e.children += 1;
-        }
-        // Contact off after the child's first run: its time-0 op 81 does not re-enable it (demo 2 / fullrun escans).
         if self
             .m
             .spawn_finish(self.anm, ci, life, item, score, true)
-            .is_some()
-            && chained
+            .is_none()
+            || !chained
         {
-            self.m.enemies[ci].flags &= !A_CONTACT;
+            return;
         }
+        // 07 §10.5: applied after the spawn-time Ecl_Run, overriding the child's own time-0 ops.
+        let c = &mut self.m.enemies[ci];
+        c.flags |= A_MODE_REACT;
+        c.set_flag(A_YOUKAI, youkai);
+        c.layer = if youkai { 0 } else { 2 };
+        c.flags &= !A_CONTACT;
+        // Aura 0x20 only if it has none yet, at pos (op 92: final pos); interrupt 1 human / 2 youkai.
+        if c.fx_aura == crate::effect::NONE {
+            let at = if op == 92 { c.final_pos } else { c.pos };
+            let contact = c.flags & A_CONTACT != 0;
+            let odd = c.slot & 1 != 0;
+            let fx = crate::effect::spawn_high(self.anm, 0x20, at, 0xFFFFFFFF);
+            crate::effect::get(fx, |x| {
+                x.vm.pending_interrupt = if youkai { 2 } else { 1 };
+                // VM bit 17 := flags A bit 2 (just cleared); odd slot negates VM +0x14 (z angular velocity).
+                x.vm.flags =
+                    (x.vm.flags & !anmvm::F_COLOR2) | if contact { anmvm::F_COLOR2 } else { 0 };
+                if odd {
+                    x.vm.angular_vel[2] = -x.vm.angular_vel[2];
+                }
+            });
+            c.fx_aura = fx;
+        }
+        // The chain link is written last (07 §10.5): during the spawn-time run the child has no parent.
+        c.root = Some(self.idx);
+        c.chain_prev = Some(tail);
+        self.m.enemies[tail].chain_next = Some(ci);
+        if tail == self.idx {
+            self.e.chain_next = Some(ci);
+        }
+        self.e.children += 1;
     }
 
     // --- bullets (07 §9) ---
@@ -2228,5 +2235,100 @@ mod tests {
             assert_eq!(played, sfx, "clock {clock}");
             assert_eq!(m.g.hud_requests.contains(&181), sfx);
         }
+    }
+
+    // `ins` with a var mask (07 §2.1 +10).
+    fn ins_v(time: i32, op: i16, mask: u16, args: &[i32]) -> Vec<u8> {
+        let mut v = ins(time, op, args);
+        v[10..12].copy_from_slice(&mask.to_le_bytes());
+        v
+    }
+
+    fn child_op(op: i16, sub: i32) -> Vec<u8> {
+        ins(0, op, &[sub, 0, 0, 10, 0, 100])
+    }
+
+    // 07 §10.5: bit 8, bit 11, layer, contact off and aura override the child's time-0 ops; the link is written
+    // after its spawn-time run, so var 10096 reads 0 there although the spawner is a root with a child.
+    #[test]
+    fn child_flags_after_spawn_run() {
+        let child = [
+            ins(0, 81, &[2]),
+            ins(0, 159, &[5]),
+            ins_v(0, 6, 3, &[10000, 10096]),
+        ];
+        let (mut anm, mut m) = manager(&[&[child_op(90, 1)], &child, &[]]);
+        spawn(&mut m, 0, 2, -1, 0);
+        spawn(&mut m, 1, 2, -1, 0);
+        (m.enemies[0].chain_next, m.enemies[1].chain_prev) = (Some(1), Some(0));
+        m.enemies[1].root = Some(0);
+        m.enemies[0].main.ctx.enter(&m.ecl, 0);
+        m.enemies[0].main.ctx.vars[V_INT0] = 7;
+        ecl_run(&mut m, &mut anm, 0);
+        let c = &m.enemies[2];
+        assert!(c.alive());
+        assert_eq!(c.main.ctx.vars[V_INT0], 0);
+        assert_eq!(
+            c.flags & (A_CONTACT | A_MODE_REACT | A_YOUKAI),
+            A_MODE_REACT
+        );
+        assert_eq!(c.layer, 2);
+        assert_eq!(
+            (c.root, c.chain_prev, c.chain_next),
+            (Some(0), Some(1), None)
+        );
+        assert_eq!(m.enemies[1].chain_next, Some(2));
+        assert_eq!(m.enemies[0].children, 1);
+        assert_ne!(c.fx_aura, crate::effect::NONE);
+        crate::effect::get(c.fx_aura, |x| {
+            assert_eq!(x.vm.pending_interrupt, 1);
+            assert_eq!(x.vm.flags & anmvm::F_COLOR2, 0);
+        });
+    }
+
+    // 07 §10.5: a chained child links the new enemy right after itself and overwrites its own +8.
+    #[test]
+    fn chained_child_links_after_itself() {
+        let (mut anm, mut m) = manager(&[&[child_op(90, 1)], &[]]);
+        for k in 0..3 {
+            spawn(&mut m, k, 1, -1, 0);
+        }
+        (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(1), Some(2));
+        (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(0), Some(1));
+        (m.enemies[1].root, m.enemies[2].root) = (Some(0), Some(0));
+        m.enemies[1].main.ctx.enter(&m.ecl, 0);
+        ecl_run(&mut m, &mut anm, 1);
+        assert_eq!(m.enemies[1].chain_next, Some(3));
+        let c = &m.enemies[3];
+        assert_eq!(
+            (c.root, c.chain_prev, c.chain_next),
+            (Some(1), Some(1), None)
+        );
+        // The cut-off enemy keeps its +4.
+        assert_eq!(m.enemies[2].chain_prev, Some(1));
+        assert_eq!((m.enemies[1].children, m.enemies[0].children), (1, 0));
+    }
+
+    // 07 §10.5: the aura VM +0x14 (z angular velocity) is negated for an odd slot.
+    #[test]
+    fn child_aura_odd_slot_negated() {
+        let (mut anm, mut m) = manager(&[&[child_op(90, 1)], &[]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        ecl_run(&mut m, &mut anm, 0);
+        let c = &m.enemies[1];
+        assert_eq!(c.slot, 1);
+        crate::effect::get(c.fx_aura, |x| {
+            assert!(x.vm.angular_vel[2].is_sign_negative())
+        });
+    }
+
+    // 07 §4.1 step 3: only pos is written; prev pos stays (0, 0, 0), final pos is recomputed by the run.
+    #[test]
+    fn spawn_keeps_template_prev_pos() {
+        let (mut anm, mut m) = manager(&[&[]]);
+        let i = m.spawn(&mut anm, 0, [100.0, 50.0, 0.0], 10, 0, 100, false);
+        let e = &m.enemies[i.unwrap()];
+        assert_eq!(e.prev_pos, [0.0; 3]);
+        assert_eq!(e.final_pos, [100.0, 50.0, 0.0]);
     }
 }
