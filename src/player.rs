@@ -411,6 +411,8 @@ pub struct Player {
     // Port-only: `Player_Die` ended with `ItemMgr_DropAttracted` (09 §6.1); the caller that owns the item
     // manager runs it right after the hit test returns.
     pub drop_attracted: bool,
+    // +0x3BC..+0x3D0 item box min x, min y, max x, max y = pos ∓ collect/2, stored by `Player_Move` (09 §1.1, §3).
+    pub item_box: [f32; 4],
     // +0xE2A98 direction code (09 §3).
     pub direction: u8,
     // +0xE2A9C / +0xE2AA0 last vx / vy before gs.
@@ -490,6 +492,7 @@ impl Default for Player {
             sht_youkai: Sht::default(),
             cancel_item: 6,
             drop_attracted: false,
+            item_box: [0.0; 4],
             direction: 0,
             last_v: [0.0; 2],
             targets: [[-999.0, -999.0, 0.0]; 2],
@@ -804,10 +807,24 @@ impl Player {
         orbs
     }
 
-    // Player_ItemCollectTest (08 §8.4): player states 0/3/4; item box (c, c) vs the collect box.
+    // Item box min/max = pos ∓ collect/2 (09 §3), as `Player_Move` stores it after the clamp.
+    pub fn update_item_box(&mut self) {
+        let h = self.item_half();
+        self.item_box = [
+            self.pos[0] - h[0],
+            self.pos[1] - h[1],
+            self.pos[0] + h[0],
+            self.pos[1] + h[1],
+        ];
+    }
+
+    // Player_ItemCollectTest 0x44A5A0 (08 §8.4): player states 0/3/4; item box (c, c) vs the stored collect box.
+    // Each edge is rounded to f32 before the inclusive compare, which differs from |d| ≤ sum of halves.
     pub fn collect_test(&self, p: [f32; 3], c: f32) -> bool {
+        let h = c / 2.0;
+        let [x0, y0, x1, y1] = self.item_box;
         matches!(self.state, 0 | 3 | 4)
-            && overlap([p[0], p[1]], [c / 2.0; 2], self.xy(), self.item_half())
+            && !(p[0] + h < x0 || x1 < p[0] - h || p[1] + h < y0 || y1 < p[1] - h)
     }
 
     // EnemyMgr_Calc target pick (09 §1.1 +0xE2AA4): target 1 = boss (horizontally nearest) else the lowest enemy;
@@ -960,6 +977,7 @@ impl Player {
         self.last_disp = [vx * gs, vy * gs];
         self.pos[0] = (self.pos[0] + vx * gs).clamp(CLAMP[0], CLAMP[2]);
         self.pos[1] = (self.pos[1] + vy * gs).clamp(CLAMP[1], CLAMP[3]);
+        self.update_item_box();
         self.update_options(anm, inp.down(input::SHOT));
         if inp.down(input::SHOT) && self.shot_timer.cur < 0 && !self.env.dialogue {
             self.shot_timer.set(0);
@@ -1335,6 +1353,18 @@ mod tests {
         };
         i.tick();
         i
+    }
+
+    #[test]
+    fn collect_test_rounds_f32_edges() {
+        let (mut p, _) = ready();
+        p.item_box = [140.0, 0.0, 200.0, 100.0];
+        // 127.99999 + 12 rounds to 140.0 in f32 although the exact gap is 12 + 2^-17 (08 §8.4).
+        assert!(p.collect_test([127.99999, 50.0, 0.0], 24.0));
+        assert!(!p.collect_test([127.9999, 50.0, 0.0], 24.0));
+        assert!(p.collect_test([212.0, 112.0, 0.0], 24.0));
+        p.state = 1;
+        assert!(!p.collect_test([150.0, 50.0, 0.0], 24.0));
     }
 
     #[test]

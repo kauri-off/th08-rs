@@ -537,6 +537,12 @@
   SPEC-GAP. Unit tests for the parser, title / unlock texts, cursor window and music off. Traces not run (cloud).
   SPEC-GAP 99 → 111 (src). Questions: `docs/briefs/IMPL70_QUESTIONS.md`.
 
+- impl76 (audit 78–80, cloud, 2026-10-21): `Timer::dec` slow path (speed ≤ 0.99) sets prev := cur, the fast path
+  leaves it (05 §2); enemy step 6 skipped for flag A bit 31 while bombing (also the Yukari aimed pick), and the first
+  `Player_DamageAgainst` call not made during a card for a parented enemy while bombing (07 §10.1 step 6); item
+  collection compares f32 box edges against the item box stored by `Player_Move` (08 §8.4, `Player::item_box`).
+  Unit tests for the timer and the collect test. Traces not run (cloud). SPEC-GAP 115 → 116 (src). Questions:
+  `docs/briefs/IMPL76_QUESTIONS.md`.
 - impl72 (audit §B, cloud, 2026-10-21): ECL natives 4 / 7 / 21 warp live bullets that leave the outer zone into the
   inner one (scaled about the shared centre, direction reversed, `BulletManager::warp`); 9 / 11 / 25 hit-test a
   590 × 128 / 192 / 224 box at the caller once its context clock reaches 12; 13 requests stage tint 0xFFC03030;

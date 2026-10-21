@@ -865,15 +865,22 @@ impl EnemyManager {
             let d = {
                 let mut b = self.bullets.borrow_mut();
                 let mut p = self.player.borrow_mut();
+                // SPEC-GAP: whether the homing-target pick is also skipped with the gated first call (IMPL76 Q1).
                 p.offer_target(pos, boss);
-                let mut d = p.damage_against(
-                    anm,
-                    Some(&mut b.items),
-                    pos,
-                    [hb[0], hb[1]],
-                    &mut acc,
-                    &mut by_bomb,
-                );
+                // The first call is not made for a parented enemy during a card while bombing (07 §10.1 step 6).
+                let skip = self.g.spell.is_some() && self.enemies[idx].root.is_some() && p.bombing;
+                let mut d = if skip {
+                    0
+                } else {
+                    p.damage_against(
+                        anm,
+                        Some(&mut b.items),
+                        pos,
+                        [hb[0], hb[1]],
+                        &mut acc,
+                        &mut by_bomb,
+                    )
+                };
                 if sb[0] > 0.0 {
                     let d2 = p.damage_against(
                         anm,
@@ -1488,10 +1495,7 @@ impl EnemyManager {
     fn offer_aimed(&mut self, idx: usize) {
         let mut p = self.player.borrow_mut();
         let e = &self.enemies[idx];
-        if e.flags & (1 << 31) != 0 && p.bombing
-            || e.root.is_some()
-            || (e.final_pos[0] - p.pos[0]).abs() >= 64.0
-        {
+        if e.root.is_some() || (e.final_pos[0] - p.pos[0]).abs() >= 64.0 {
             return;
         }
         if p.aimed
@@ -2222,7 +2226,11 @@ impl EnemyManager {
             crate::effect::get(i, |x| x.orbit_follow(p, d, hidden));
         }
         crate::effect::get(e.fx_aura, |x| x.pos = p);
-        if self.enemies[idx].flags & (A_HIDDEN | 1 << 5 | A_YOUKAI) == 0 {
+        // Step 6 is skipped for flag A bits 4/5/11, and for bit 31 while the player is bombing (07 §10.1 step 6).
+        let flags = self.enemies[idx].flags;
+        if flags & (A_HIDDEN | 1 << 5 | A_YOUKAI) == 0
+            && !(flags & 1 << 31 != 0 && self.player.borrow().bombing)
+        {
             self.offer_aimed(idx);
             self.player_collision(idx, anm);
         }

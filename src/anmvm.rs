@@ -94,9 +94,11 @@ impl Timer {
             self.frac = 0.0;
             self.prev = -999;
         }
+        // The fast path leaves prev alone (−999 after a Set stays); only the slow path copies it (05 §2, 0x44735B).
         if speed > 0.99 {
             self.cur -= 1;
         } else {
+            self.prev = self.cur;
             self.frac -= speed;
             while self.frac < 0.0 {
                 self.cur -= 1;
@@ -1179,6 +1181,19 @@ impl AnmVm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timer_dec_prev_only_on_slow_path() {
+        let mut t = Timer::default();
+        t.set(10);
+        t.dec(1.0);
+        assert_eq!((t.prev, t.cur), (-999, 9));
+        t.set(10);
+        t.dec(0.5);
+        assert_eq!((t.prev, t.cur, t.frac), (10, 9, 0.5));
+        t.dec(0.5);
+        assert_eq!((t.prev, t.cur, t.frac), (9, 9, 0.0));
+    }
 
     fn vm_with(script: Vec<u8>) -> (AnmManager, AnmVm) {
         let mut anm = AnmManager::default();

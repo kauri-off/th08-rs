@@ -1886,6 +1886,7 @@ mod tests {
         let (mut anm, mut b) = mgr();
         let pl = b.player.clone();
         pl.borrow_mut().pos = [100.0, 300.0, 0.0];
+        pl.borrow_mut().update_item_box();
         b.items.spawn(
             &mut anm,
             &pl.borrow(),
