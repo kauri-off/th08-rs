@@ -31,10 +31,10 @@ pub const DRAW_PRIO: u16 = 9;
 pub const DRAW_PRIO_HIGH: u16 = 10;
 // playerNN.anm slot (09 §1.1 +0xC).
 pub const ANM_SLOT: usize = 5;
-// (192, 448 − 64), playfield px (09 §6.2).
-pub const RESPAWN: [f32; 3] = [192.0, 384.0, 0.0];
-// SPEC-GAP: the start position is not in 09; the port uses the respawn point.
-pub const START: [f32; 3] = RESPAWN;
+// (192, 448 − 64, 0.2), playfield px (09 §6.2, z per §6.4).
+pub const RESPAWN: [f32; 3] = [192.0, 384.0, 0.2];
+// Player_Load: (playfield w / 2, playfield h − 64, 0.49) (09 §6.4).
+pub const START: [f32; 3] = [192.0, 384.0, 0.49];
 // Clamp rect min x, min y, max x, max y (GM +0x3DDE4.., 09 §3).
 pub const CLAMP: [f32; 4] = [8.0, 16.0, 376.0, 432.0];
 
@@ -396,7 +396,7 @@ pub struct Player {
     pub laser_slots: [crate::pshot::LaserSlot; crate::pshot::LASER_SLOTS],
     // +0xE2A68 deathbomb counter / bomb-allowed counter (09 §6).
     pub deathbomb: i32,
-    // +0xE2A6C decremented while > 0; bombs need 0.
+    // +0xE2A6C := 16 by Spell_End; decremented atop Player_UpdateBomb; a normal start needs 0 (09 §1.1).
     pub bomb_cooldown: i32,
     // +0xE2A70 respawn clear frames (09 §6.3).
     pub respawn_clear: i32,
@@ -578,6 +578,7 @@ impl Player {
         self.orb_step = if self.solo_human() { 27 } else { 40 };
         let script = if self.solo_youkai() { 5 } else { 0 };
         anm.set_script(&mut self.vm, ANM_SLOT, script);
+        self.pos = START;
         self.state = 1;
         let t = if self.gflags & GF_SPELL_PRACTICE != 0 {
             10
@@ -642,7 +643,7 @@ impl Player {
     // hit, so a miss keeps the item of the last hit (08 §4.1).
     pub fn in_bomb_area(&mut self, p: [f32; 3]) -> bool {
         for a in self.cancel_areas.iter_mut().filter(|a| a.active) {
-            if a.contains([p[0], p[1]], [0.0, 0.0]) {
+            if a.contains([p[0], p[1]]) {
                 self.cancel_item = a.item;
                 a.total += 1;
                 return true;
@@ -802,13 +803,6 @@ impl Player {
     pub fn collect_test(&self, p: [f32; 3], c: f32) -> bool {
         matches!(self.state, 0 | 3 | 4)
             && overlap([p[0], p[1]], [c / 2.0; 2], self.xy(), self.item_half())
-    }
-
-    // SPEC-GAP: box-vs-cancel-area test with no hit-counter update; no spec section names this caller.
-    pub fn box_in_cancel_area(&self, p: [f32; 3], half: [f32; 2]) -> bool {
-        self.cancel_areas
-            .iter()
-            .any(|a| a.active && a.contains([p[0], p[1]], half))
     }
 
     // EnemyMgr_Calc target pick (09 §1.1 +0xE2AA4): target 1 = boss (horizontally nearest) else the lowest enemy;
@@ -1210,10 +1204,6 @@ impl Player {
         crate::ascii::gauge_fade(self.pos);
         self.targets = [[-999.0, -999.0, 0.0]; 2];
         self.boss_target = false;
-        // SPEC-GAP: 09 §1.1 decrements +0xE2A6C atop Player_UpdateBomb, not on a forced start; here every frame (IMPL46 Q2).
-        if self.bomb_cooldown > 0 {
-            self.bomb_cooldown -= 1;
-        }
         if !self.env.dialogue {
             let st = &mut self.stats;
             st.stage_frames += 1;
@@ -1406,6 +1396,14 @@ mod tests {
         assert_eq!(p.cancel_item, 9);
         assert_eq!(p.hit_test(far, [4.0, 4.0], &mut rng), 0);
         assert_eq!(p.cancel_item, 6);
+    }
+
+    // 09 §6.4: Player_Load start (192, 384, 0.49); the respawn point uses z 0.2.
+    #[test]
+    fn start_and_respawn_z() {
+        let p = Player::default();
+        assert_eq!(p.pos, [192.0, 384.0, 0.49]);
+        assert_eq!(RESPAWN, [192.0, 384.0, 0.2]);
     }
 
     #[test]

@@ -440,6 +440,10 @@
   (14 §3.1); a shot origin reads the option pos whatever the option's state (09 §4.3); laser init 4 and update 5 both
   honour GameFlags bit 13 (refuse / end the laser, 14 §4). Unit tests for all three. Traces not run (cloud).
   SPEC-GAP 134 → 130. No questions.
+- impl56 (audit A.28, A.33, A.68, cloud, 2026-10-21): `Player_Load` puts the player at (192, 384, 0.49) and the
+  respawn point is (192, 384, 0.2) (09 §6.4); the dead `box_in_cancel_area` is gone and `Area::contains` is the plain
+  point test (09 §8); the +0xE2A6C cooldown drops at the top of `update_bomb`, skipped on a forced-start call
+  (09 §1.1). Unit tests for the start/respawn z and the cooldown. Traces not run (cloud). SPEC-GAP 99 → 96. No questions.
 - impl39 (RE-Q25 CODE BUGs 4–6, 2026-10-20): screen effects registered from calc nodes below prio 3 are linked at once
   (`effect::screen_now` for the `GameMgr_Calc` demo-end fade, `loading_overlay` from the Supervisor on-register), so
   their first calc runs in the same frame (13 §3). Stage-clear panel per the rewritten 12 §5.6: op 9 stores the values

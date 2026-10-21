@@ -81,17 +81,14 @@ impl Area {
     }
 
     // Cancel-area test (Player_InBombArea, 09 §8): circle distance² < r²; rectangle inside the rotated bounds.
-    // `half` is non-zero only for `Player::box_in_cancel_area` (unspecified caller, see there).
-    pub fn contains(&self, p: [f32; 2], half: [f32; 2]) -> bool {
+    pub fn contains(&self, p: [f32; 2]) -> bool {
         let (dx, dy) = (p[0] - self.pos[0], p[1] - self.pos[1]);
         if self.r > 0.0 {
-            let ex = (dx.abs() - half[0]).max(0.0);
-            let ey = (dy.abs() - half[1]).max(0.0);
-            return ex * ex + ey * ey < self.r * self.r;
+            return dx * dx + dy * dy < self.r * self.r;
         }
         let (s, c) = (-self.rot).sin_cos();
         let (rx, ry) = (dx * c - dy * s, dx * s + dy * c);
-        rx.abs() <= self.size[0] / 2.0 + half[0] && ry.abs() <= self.size[1] / 2.0 + half[1]
+        rx.abs() <= self.size[0] / 2.0 && ry.abs() <= self.size[1] / 2.0
     }
 }
 
@@ -419,8 +416,12 @@ impl Player {
         inp: &input::Input,
         items: &mut Option<&mut ItemManager>,
     ) {
+        // +0xE2A6C decrement at the top, skipped on a forced-start call (09 §1.1).
+        let forced = self.forced_bomb != 0 && self.deathbomb == 1;
+        if !forced && self.bomb_cooldown != 0 {
+            self.bomb_cooldown -= 1;
+        }
         if !self.bombing {
-            let forced = self.forced_bomb != 0 && self.deathbomb == 1;
             let mut pressed = inp.pressed(input::BOMB)
                 && !self.env.dialogue
                 && self.deathbomb != 0
@@ -1591,6 +1592,27 @@ mod tests {
         assert!(p.bomb_active);
         p.step(&mut anm, &press(0));
         assert!(!p.bomb_active);
+    }
+
+    // 09 §1.1: +0xE2A6C drops atop Player_UpdateBomb (so 1 → 0 allows a start in the same call), except on a
+    // forced-start call.
+    #[test]
+    fn bomb_cooldown_decrement() {
+        let (mut p, mut anm) = ready(4);
+        p.bomb_cooldown = 2;
+        p.step(&mut anm, &press(input::BOMB));
+        assert!(!p.bombing && p.bomb_cooldown == 1);
+        p.step(&mut anm, &press(0));
+        p.step(&mut anm, &press(input::BOMB));
+        assert!(p.bombing && p.bomb_cooldown == 0);
+        let (mut p, mut anm) = ready(4);
+        p.bomb_cooldown = 5;
+        p.forced_bomb = 1;
+        p.deathbomb = 1;
+        p.step(&mut anm, &press(0));
+        assert!(p.bombing && p.bomb_cooldown == 5);
+        p.step(&mut anm, &press(0));
+        assert_eq!(p.bomb_cooldown, 4);
     }
 
     // 09 §4.5: circle = point test on the enemy centre, `≤ r²`; rectangles overlap the box inclusively.
