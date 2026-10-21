@@ -91,6 +91,100 @@ fn final_notice(g: &gamemgr::Game, c: usize, d: usize) -> Option<i32> {
     Some(147)
 }
 
+// `Info_Show` 0x471181 (16 §4): the unlock notices queued by MainMenu_OnRegister. The original runs each as a
+// blocking loop with its own Present; the port runs one loop step per frame in place of the calc and draw chains.
+#[derive(Default)]
+pub struct InfoNotices {
+    pub(crate) queue: std::collections::VecDeque<&'static str>,
+    // Surface 0 (title/infoNN.jpg) and the loop frame t.
+    cur: Option<(TextureId, i32)>,
+}
+
+const INFO_FRAMES: i32 = 6000;
+const INFO_FADE_OUT: i32 = 5980;
+
+impl InfoNotices {
+    pub fn active(&self) -> bool {
+        self.cur.is_some() || !self.queue.is_empty()
+    }
+
+    // A notice loop is running (queued ones start at the next calc).
+    pub fn showing(&self) -> bool {
+        self.cur.is_some()
+    }
+
+    // Input part of loop frame t; false once no notice is left (the frame then runs normally).
+    // SPEC-GAP: 16 §4 lists the per-frame steps without the place of t += 1; here the jump is drawn on its own frame.
+    pub fn calc(ctx: &mut Ctx) -> bool {
+        loop {
+            match ctx.info.cur {
+                Some((t, f)) if f >= INFO_FRAMES => {
+                    // After the loop, surface 0 is released.
+                    ctx.gfx.free_texture(t);
+                    ctx.info.cur = None;
+                }
+                Some(_) => break,
+                None => {
+                    let Some(file) = ctx.info.queue.pop_front() else {
+                        return false;
+                    };
+                    match ctx
+                        .archive
+                        .read(file)
+                        .and_then(|b| ctx.gfx.load_image(file, &b))
+                    {
+                        Ok(t) => ctx.info.cur = Some((t, 0)),
+                        Err(e) => log::warn!("{file}: {e:#}"),
+                    }
+                }
+            }
+        }
+        let Some((_, t)) = &mut ctx.info.cur else {
+            return false;
+        };
+        // From t ≥ 180 Shot, Bomb or Enter (edge, 0x1003) jumps to the fade-out, SE 10.
+        if *t >= 180 && ctx.input.pressed(SHOT | BOMB | ENTER) {
+            *t = INFO_FADE_OUT;
+            sound::play(sound::OK);
+        }
+        true
+    }
+
+    // Draw part of loop frame t: the picture full-screen and the black fade quad; then t += 1.
+    pub fn draw(ctx: &mut Ctx) {
+        let Some((tex, t)) = ctx.info.cur else {
+            return;
+        };
+        ctx.gfx.set_viewport(FULLSCREEN);
+        ctx.gfx.image(tex, 0.0, 0.0);
+        if let Some(a) = info_fade_alpha(t) {
+            ctx.gfx.rect(0.0, 0.0, 640.0, 480.0, [0, 0, 0, a]);
+        }
+        ctx.info.cur = Some((tex, t + 1));
+    }
+}
+
+// Notices of the unlock bits `bits` (GM flags 15–17) not yet set in `flags`, in the 16 §4 table order.
+fn info_files(bits: u32, flags: u32) -> impl Iterator<Item = &'static str> {
+    [(15, "info00.jpg"), (16, "info02.jpg"), (17, "info01.jpg")]
+        .into_iter()
+        .filter(move |(b, _)| bits & !flags & 1 << b != 0)
+        .map(|(_, f)| f)
+}
+
+// Black-quad alpha byte of notice frame t (16 §4). QUIRK: the fade-in byte starts at 253 and falls (wrapping) before the
+// quad vanishes; the fade-out byte wraps for t < 5980.
+// SPEC-GAP: 16 §4 says the fade-in ends at 23, its formula gives 23 at t = 18 and 10 at t = 19 (formula kept).
+fn info_fade_alpha(t: i32) -> Option<u8> {
+    if t < 20 {
+        Some(((60 - t) * 255 / 20) as u8)
+    } else if t > 5940 {
+        Some(((t - INFO_FADE_OUT) * 255 / 20) as u8)
+    } else {
+        None
+    }
+}
+
 // Unlock checks (15 §2.4) on the score.dat clear masks; debug `TH08_UNLOCK=1` unlocks everything.
 pub(crate) fn unlock_all() -> bool {
     crate::settings::get().unlock
@@ -860,7 +954,7 @@ impl Task<Ctx> for MainMenu {
             });
             self.vms.push(vm);
         }
-        // GM flags 15–17 from the clear records (15 §2.2, §2.4, 16 §4). SPEC-GAP: the info00/01/02.jpg notices are not shown yet.
+        // GM flags 15–17 from the clear records (15 §2.2, §2.4, 16 §4).
         {
             let g = &mut ctx.game;
             let nc_b = |t: usize| g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0);
@@ -868,6 +962,11 @@ impl Task<Ctx> for MainMenu {
             let bits = ((0..4).any(nc_b) as u32) << 15
                 | ((0..4).any(any_a) as u32) << 16
                 | ((0..4).all(nc_b) as u32) << 17;
+            // Unlock notices (16 §4): a condition now true whose flag bit is still clear. The port loads CLRD at boot,
+            // where the original's in-memory CLRD is still empty, so the first menu after boot shows none.
+            if g.previous != gamemgr::SCENE_BOOT {
+                ctx.info.queue.extend(info_files(bits, g.flags));
+            }
             g.flags = g.flags & !(7 << 15) | bits;
         }
         crate::menulist::compute_last_word_unlocks(&mut ctx.game);
@@ -1055,8 +1154,28 @@ fn title_music(g: &gamemgr::Game) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{final_notice, title_music, volume_step};
+    use super::{final_notice, info_fade_alpha, info_files, title_music, volume_step};
     use crate::gamemgr::{self, Game};
+
+    // 16 §4: notice order info00 (bit 15), info02 (16), info01 (17); only bits not yet in the flags.
+    #[test]
+    fn unlock_notices() {
+        let all = 7 << 15;
+        let v: Vec<_> = info_files(all, 0).collect();
+        assert_eq!(v, ["info00.jpg", "info02.jpg", "info01.jpg"]);
+        let v: Vec<_> = info_files(all, 1 << 15 | 1 << 3).collect();
+        assert_eq!(v, ["info02.jpg", "info01.jpg"]);
+        assert_eq!(info_files(1 << 16, 1 << 16).count(), 0);
+        // Fade-in 253 … 23 (t 18), 10 (t 19), then gone; fade-out wraps below 5980 and rises to 242.
+        assert_eq!(info_fade_alpha(0), Some(253));
+        assert_eq!(info_fade_alpha(18), Some(23));
+        assert_eq!(info_fade_alpha(19), Some(10));
+        assert_eq!(info_fade_alpha(20), None);
+        assert_eq!(info_fade_alpha(5940), None);
+        assert_eq!(info_fade_alpha(5941), Some(15));
+        assert_eq!(info_fade_alpha(5980), Some(0));
+        assert_eq!(info_fade_alpha(5999), Some(242));
+    }
     use crate::input::{Input, LEFT, RIGHT};
 
     #[test]

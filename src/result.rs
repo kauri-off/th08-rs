@@ -6,7 +6,9 @@ use crate::ascii::Text;
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::gfx::{FULLSCREEN, TextureId};
-use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
+use crate::input::{
+    BOMB, DOWN, ENTER, FOCUS, Input, KEY_D, KEY_Q, LEFT, PAUSE, RIGHT, SHOT, SKIP, UP,
+};
 use crate::menu::{CANCEL, CONFIRM};
 use crate::scoredat::{C_ATTEMPTS, C_BONUS, C_CAPTURES, C_PRACTICE, CARDS, Hscr};
 use crate::sound;
@@ -124,6 +126,8 @@ pub struct ResultScreen {
     slots: Vec<(bool, Option<crate::replay::Replay>)>,
     entry_date: String,
     entry_score: u32,
+    // +0x4C hidden-code counter (15 §2.12).
+    hidden: HiddenCode,
 }
 
 // Name-entry outcome of one frame (16 §2.2): END chosen, ESC edge.
@@ -201,6 +205,7 @@ impl ResultScreen {
             slots: Vec::new(),
             entry_date: String::new(),
             entry_score: 0,
+            hidden: HiddenCode::default(),
         }
     }
 
@@ -319,22 +324,28 @@ impl ResultScreen {
                     ctx.game.request(gamemgr::SCENE_MENU);
                 }
             }
-            // State 3, Result_CheatUnlock 0x4550FC (16 §2.4).
-            // SPEC-GAP: the hidden unlock code of this state (15 §2.12) is not implemented.
-            S_DIFF => match self.page(ctx, 4, 5, self.rank_diff, 6) {
-                Some(true) => {
-                    sound::play(sound::OK);
-                    self.rank_diff = self.cursor;
-                    self.set_state(S_CHAR);
-                    self.cursor = 0;
+            // State 3, Result_CheatUnlock 0x4550FC (16 §2.4); the hidden code runs every frame, sub-state 0 included.
+            S_DIFF => {
+                // SPEC-GAP: whether the code is tested before or after the page input is not given (before).
+                if self.hidden.step(ctx.input) {
+                    hidden_unlock(&mut ctx.game);
+                    sound::play(sound::EXTEND);
                 }
-                Some(false) => {
-                    self.rank_diff = self.cursor;
-                    self.set_state(S_TOP);
-                    self.cursor = 0;
+                match self.page(ctx, 4, 5, self.rank_diff, 6) {
+                    Some(true) => {
+                        sound::play(sound::OK);
+                        self.rank_diff = self.cursor;
+                        self.set_state(S_CHAR);
+                        self.cursor = 0;
+                    }
+                    Some(false) => {
+                        self.rank_diff = self.cursor;
+                        self.set_state(S_TOP);
+                        self.cursor = 0;
+                    }
+                    None => {}
                 }
-                None => {}
-            },
+            }
             // State 4 (0x45567D).
             S_CHAR => match self.page(ctx, 15, 12, self.rank_shot, 6) {
                 Some(true) => {
@@ -435,10 +446,19 @@ impl ResultScreen {
     }
 
     // State 1, Result_TopMenu 0x454CB2 (16 §2.4): all 72 VMs get interrupt 1 on entry, then the page pattern (N = 20).
-    // SPEC-GAP: the D key (score.txt dump, 16 §2.7) is not implemented.
     fn top(&mut self, ctx: &mut Ctx) {
         if self.sub == 0 && self.sub_frame == 0 {
             self.interrupt_all(1);
+        }
+        // D in sub-state 1 dumps score.txt, no sound (16 §2.7). Port: written next to score.dat (web: localStorage).
+        // SPEC-GAP: the order of the D test and the cursor/confirm input in sub-state 1 is not given (D first).
+        if self.sub == 1 && ctx.input.pressed(KEY_D) {
+            ctx.game.update_run_time();
+            let stamp = crate::supervisor::datetime_now();
+            let txt = score_txt(&ctx.game.score, stamp.get(2..).unwrap_or(&stamp));
+            if ctx.game.persist {
+                crate::scoredat::storage_write("score.txt", &txt);
+            }
         }
         let c = self.cursor;
         match self.page(ctx, 0, 4, c, 20) {
@@ -637,34 +657,8 @@ impl ResultScreen {
         }
     }
 
-    // Play-data line k (16 §2.4 table; PLST 15 §2.9).
     fn play_line(&self, ctx: &Ctx, k: usize) -> String {
-        let p = &ctx.game.score.plst;
-        let row = |label: &str, idx: usize, last: usize| {
-            let mut s = label.to_string();
-            for b in [0, 1, 2, 3, 4, last] {
-                s += &format!(" {:6}", p.counters[b][idx]);
-            }
-            s
-        };
-        let names = &crate::menulist::SHOT_NAMES;
-        match k {
-            0 => format!(
-                "総起動時間   {:02}:{:02}:{:02}",
-                p.run_time[0], p.run_time[1], p.run_time[2]
-            ),
-            1 => format!(
-                "総プレイ時間 {:02}:{:02}:{:02}",
-                p.play_time[0], p.play_time[1], p.play_time[2]
-            ),
-            2 => "プレイ回数　　　 　Easy 　Norm 　Hard 　Luna  Extra  Total".into(),
-            3..=14 => row(names[k - 3], 1 + k - 3, 6),
-            15 => row(names[12], 0, 6),
-            16 => row("クリア回数  　　", 14, 6),
-            // QUIRK: the continue row's last column is block 5 (always 0), not the total (16 §2.4).
-            17 => row("コンティニュー  ", 15, 5),
-            _ => row("プラクティス　  ", 16, 6),
-        }
+        play_line(&ctx.game.score.plst, k, 5)
     }
 
     // State 9, Result_NameEntry 0x45621E (16 §2.2): input from frame 10, every key edge or repeat except the ESC finish.
@@ -1378,9 +1372,356 @@ fn move_char_cursor(mut c: i32, keys: [bool; 4]) -> (i32, u32) {
     (c, moves)
 }
 
+// Hidden unlock code (15 §2.12): while Focus or Skip is held, Right ×4, Left ×1, D ×2, Q ×3 (edge presses).
+const HIDDEN_KEYS: [u16; 10] = [
+    RIGHT, RIGHT, RIGHT, RIGHT, LEFT, KEY_D, KEY_D, KEY_Q, KEY_Q, KEY_Q,
+];
+
+// Result +0x4C: keys of the code entered so far.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+struct HiddenCode(usize);
+
+impl HiddenCode {
+    // One frame of input; true when the last key of the code was entered.
+    // SPEC-GAP: 15 §2.12 does not say what a wrong key or releasing Focus/Skip does (a wrong code-key press restarts).
+    fn step(&mut self, inp: Input) -> bool {
+        if !inp.down(FOCUS | SKIP) {
+            return false;
+        }
+        let want = HIDDEN_KEYS[self.0];
+        if inp.pressed(want) {
+            self.0 += 1;
+            if self.0 == HIDDEN_KEYS.len() {
+                self.0 = 0;
+                return true;
+            }
+        } else if inp.pressed(RIGHT | LEFT | KEY_D | KEY_Q) {
+            self.0 = (inp.pressed(HIDDEN_KEYS[0])) as usize;
+        }
+        false
+    }
+}
+
+// Effect of the hidden code (15 §2.12): every CLRD mask := 0xFFFF, every card's attempt counter +1 (SE by the caller).
+// SPEC-GAP: "attempt counter" is taken as the story all-shot count [12] of present CATK records, checksum refreshed.
+fn hidden_unlock(g: &mut gamemgr::Game) {
+    for m in g.clear_nc.iter_mut().chain(g.clear_any.iter_mut()) {
+        *m = [0xFFFF; 5];
+    }
+    for c in g.score.catk.iter_mut().filter(|c| c.present) {
+        let a = &mut c.counters[C_ATTEMPTS][12];
+        *a = (*a + 1).min(9999);
+        c.checksum = c.compute_checksum();
+    }
+}
+
+// Play-data line k (16 §2.4 table; PLST 15 §2.9). `cont_last` = block of the continue row's last column: 5 on the
+// page (QUIRK: the unused block, always 0), 6 in score.txt (16 §2.7 step 5).
+fn play_line(p: &crate::scoredat::Plst, k: usize, cont_last: usize) -> String {
+    let row = |label: &str, idx: usize, last: usize| {
+        let mut s = label.to_string();
+        for b in [0, 1, 2, 3, 4, last] {
+            s += &format!(" {:6}", p.counters[b][idx]);
+        }
+        s
+    };
+    let names = &crate::menulist::SHOT_NAMES;
+    match k {
+        0 => format!(
+            "総起動時間   {:02}:{:02}:{:02}",
+            p.run_time[0], p.run_time[1], p.run_time[2]
+        ),
+        1 => format!(
+            "総プレイ時間 {:02}:{:02}:{:02}",
+            p.play_time[0], p.play_time[1], p.play_time[2]
+        ),
+        2 => "プレイ回数　　　 　Easy 　Norm 　Hard 　Luna  Extra  Total".into(),
+        3..=14 => row(names[k - 3], 1 + k - 3, 6),
+        15 => row(names[12], 0, 6),
+        16 => row("クリア回数  　　", 14, 6),
+        17 => row("コンティニュー  ", 15, cont_last),
+        _ => row("プラクティス　  ", 16, 6),
+    }
+}
+
+// score.txt tables (16 §2.7): stage names 0x4C7FAC, difficulty names 0x4C7FD4.
+const TXT_STAGES: [&str; 9] = [
+    "Stage 1",
+    "Stage 2",
+    "Stage 3",
+    "Stage 4-uncanny",
+    "Stage 4-powerful",
+    "Stage 5",
+    "Stage 6-Eirin",
+    "Stage 6-Kaguya",
+    "Extra Stage",
+];
+const TXT_DIFFS: [&str; 5] = ["Easy", "Normal", "Hard", "Lunatic", "Extra"];
+const TXT_RULE: &str = "# ======================================== ";
+
+// C `%.2d` of a signed value (at least two digits, sign before them).
+fn d02(v: i32) -> String {
+    if v < 0 {
+        format!("-{:02}", v.unsigned_abs())
+    } else {
+        format!("{v:02}")
+    }
+}
+
+// `Result_DumpScoreTxt` 0x454298 (16 §2.7): the Shift-JIS, CR LF text of the in-memory records. `stamp` is the
+// local time as "%y/%m/%d %H:%M:%S"; the play-data block reads PLST as it is (the caller updates the run time).
+pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let sj = |o: &mut Vec<u8>, t: &str| o.extend_from_slice(&encoding_rs::SHIFT_JIS.encode(t).0);
+    let line = |o: &mut Vec<u8>, t: &str| {
+        sj(o, t);
+        o.extend_from_slice(b"\r\n");
+    };
+    // Card names: CATK +0x10 (raw Shift-JIS) or 5 full-width ?; padded with spaces to 48 bytes.
+    let unknown = encoding_rs::SHIFT_JIS.encode(UNKNOWN5).0.into_owned();
+    let names: Vec<Vec<u8>> = s
+        .catk
+        .iter()
+        .map(|c| {
+            let mut n = if c.present {
+                let end = c.name.iter().position(|&b| b == 0).unwrap_or(48);
+                c.name[..end].to_vec()
+            } else {
+                unknown.clone()
+            };
+            if n.len() < 48 {
+                n.resize(48, b' ');
+            }
+            n
+        })
+        .collect();
+    let i32_at = |h: &Hscr, o: usize| i32::from_le_bytes(h.0[o..o + 4].try_into().unwrap());
+    let cstr = |b: &[u8]| b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())].to_vec();
+
+    for t in [
+        "# 東方永夜抄　～ Imperishable Night. ver 1.00d 記録テキスト版",
+        "# ",
+        "# このファイルは、現在の記録をダンプした物です。",
+        "# このファイルの内容を変更してもゲームには反映されません。",
+        "# このファイルは自由に利用したり転載したり、別のフォーマットにしても構いません。",
+    ] {
+        line(&mut out, t);
+    }
+    line(
+        &mut out,
+        &format!("# {}   Time-stamp: <{stamp}>", "　".repeat(12)),
+    );
+    line(&mut out, "");
+    line(&mut out, "");
+    line(&mut out, &format!("Version: {:.2}", 0.01));
+    line(&mut out, "");
+
+    for d in 0..5 {
+        let mut first = true;
+        for shot in 0..12 {
+            let mut buf = Vec::new();
+            // Default entries carry no HSCR magic: skipped, but they count in n.
+            for (n, h) in s.ranking(shot, d).iter().enumerate() {
+                if h.is_placeholder() {
+                    continue;
+                }
+                let b = &h.0;
+                let cont = b[0x26] as i8;
+                line(&mut buf, &format!("  No.{} ", n + 1));
+                line(&mut buf, &format!("    得点  {}{}", i32_at(h, 0x0C), cont));
+                sj(&mut buf, "    名前  ");
+                buf.extend(cstr(&b[0x17..0x20]));
+                buf.extend_from_slice(b"\r\n");
+                let stage = match h.stage() {
+                    99 => "All Clear".to_string(),
+                    st => TXT_STAGES
+                        .get(st as usize)
+                        .map_or_else(|| st.to_string(), |n| n.to_string()),
+                };
+                line(&mut buf, &format!("    ステージ         {stage}"));
+                sj(&mut buf, "    日付               ");
+                buf.extend(cstr(&b[0x20..0x26]));
+                buf.extend_from_slice(b"\r\n");
+                line(
+                    &mut buf,
+                    &format!("    処理落ち率        {:.2}％", h.slowdown()),
+                );
+                let frames = i32_at(h, 0x64);
+                line(
+                    &mut buf,
+                    &format!(
+                        "    プレイ時間      {}分{}秒",
+                        d02(frames / 3600),
+                        d02(frames / 60 % 60)
+                    ),
+                );
+                line(
+                    &mut buf,
+                    &format!("    初期プレイヤー数     {}人", b[0x44] as i32 + 1),
+                );
+                line(
+                    &mut buf,
+                    &format!("    得点アイテム数   {:5}個", i32_at(h, 0x68)),
+                );
+                line(
+                    &mut buf,
+                    &format!("    刻符数          {:6}個", i32_at(h, 0x80)),
+                );
+                line(
+                    &mut buf,
+                    &format!("    ミス回数           {:3}回", i32_at(h, 0x70)),
+                );
+                line(
+                    &mut buf,
+                    &format!("    ボム回数           {:3}回", i32_at(h, 0x74)),
+                );
+                line(
+                    &mut buf,
+                    &format!("    ラストスペル回数   {:3}回", i32_at(h, 0x78)),
+                );
+                line(
+                    &mut buf,
+                    &format!("    ポーズ回数         {:3}回", i32_at(h, 0x7C)),
+                );
+                line(&mut buf, &format!("    コンティニュー回数 {cont:3}回"));
+                line(
+                    &mut buf,
+                    &format!(
+                        "    人間率          {:3.2}%",
+                        i32_at(h, 0x84) as f64 / 100.0
+                    ),
+                );
+                line(&mut buf, "    取得スペルカード一覧 (総取得回数/総遭遇回数)");
+                for (i, c) in s.catk.iter().enumerate() {
+                    if b[0x88 + i] == 0 {
+                        continue;
+                    }
+                    // All-shot story totals from CATK, not this entry's.
+                    sj(&mut buf, &format!("      No.{:03} ", i + 1));
+                    buf.extend(&names[i]);
+                    let (cap, att) = (c.counters[C_CAPTURES][12], c.counters[C_ATTEMPTS][12]);
+                    line(&mut buf, &format!(" ({}/{})", cap as i32, att as i32));
+                }
+            }
+            if buf.is_empty() {
+                continue;
+            }
+            if std::mem::take(&mut first) {
+                line(&mut out, TXT_RULE);
+                line(&mut out, &format!("難易度 {}", TXT_DIFFS[d]));
+            }
+            line(&mut out, "# ---------------------------------------- ");
+            line(
+                &mut out,
+                &format!("使用キャラ {}", crate::menulist::SHOT_NAMES[shot]),
+            );
+            out.extend(buf);
+            out.extend_from_slice(b"\r\n");
+        }
+    }
+
+    line(&mut out, TXT_RULE);
+    line(&mut out, "スペルカード一覧 本編　練習");
+    for (i, c) in s.catk.iter().enumerate() {
+        let k = &c.counters;
+        if !c.present || (k[C_ATTEMPTS][12] == 0 && k[C_PRACTICE + C_ATTEMPTS][12] == 0) {
+            continue;
+        }
+        sj(&mut out, &format!("No.{:03} ", i + 1));
+        out.extend(&names[i]);
+        let diff = TXT_DIFFS.get(c.difficulty as usize).copied().unwrap_or("");
+        line(
+            &mut out,
+            &format!(
+                " {:3}/{:3} {:3}/{:3}  ({diff})",
+                k[C_CAPTURES][12] as i32,
+                k[C_ATTEMPTS][12] as i32,
+                k[C_PRACTICE + C_CAPTURES][12] as i32,
+                k[C_PRACTICE + C_ATTEMPTS][12] as i32,
+            ),
+        );
+    }
+
+    line(&mut out, TXT_RULE);
+    for k in 0..19 {
+        line(&mut out, &play_line(&s.plst, k, 6));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 15 §2.12: Right ×4, Left, D ×2, Q ×3 as edge presses while Focus (or Skip) is held.
+    #[test]
+    fn hidden_code_sequence() {
+        let feed = |c: &mut HiddenCode, mods: u16, keys: &[u16]| {
+            let mut fired = 0;
+            for &k in keys {
+                for held in [mods | k, mods] {
+                    let inp = Input {
+                        prev: if held == mods { mods | k } else { mods },
+                        held,
+                        ..Default::default()
+                    };
+                    fired += c.step(inp) as u32;
+                }
+            }
+            fired
+        };
+        let mut c = HiddenCode::default();
+        assert_eq!(feed(&mut c, FOCUS, &HIDDEN_KEYS), 1);
+        assert_eq!(c, HiddenCode(0));
+        assert_eq!(feed(&mut c, SKIP, &HIDDEN_KEYS), 1);
+        // Without Focus/Skip nothing counts.
+        assert_eq!(feed(&mut c, 0, &HIDDEN_KEYS), 0);
+        assert_eq!(c, HiddenCode(0));
+        // A fifth Right restarts the code at its first key.
+        let mut keys = vec![RIGHT; 5];
+        keys.extend(&HIDDEN_KEYS[4..]);
+        assert_eq!(feed(&mut c, FOCUS, &keys), 0);
+        assert_eq!(feed(&mut c, FOCUS, &HIDDEN_KEYS), 1);
+
+        let mut g = gamemgr::Game::default();
+        g.score.catk[3].present = true;
+        hidden_unlock(&mut g);
+        assert!(
+            g.clear_nc
+                .iter()
+                .chain(&g.clear_any)
+                .all(|m| *m == [0xFFFF; 5])
+        );
+        assert_eq!(g.score.catk[3].counters[C_ATTEMPTS][12], 1);
+        assert_eq!(g.score.catk[3].checksum, g.score.catk[3].compute_checksum());
+    }
+
+    // 16 §2.7 against its reference dump (written from the same score.dat by the original).
+    #[test]
+    fn score_txt_reference() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/data/drawlog");
+        let dat = std::fs::read(dir.join("menu_mopup1.score.dat")).unwrap();
+        let want = std::fs::read(dir.join("menu_mopup1.score.txt")).unwrap();
+        let mut s = crate::scoredat::ScoreDat::parse(&dat).unwrap();
+        s.rebuild_lists();
+        // Supervisor_UpdateRunTime before the dump added the wall-clock time since boot.
+        s.plst.run_time[1..3].copy_from_slice(&[18, 31]);
+        let got = score_txt(&s, "26/10/18 13:06:36");
+        let lines = |b: &[u8]| -> Vec<String> {
+            encoding_rs::SHIFT_JIS
+                .decode(b)
+                .0
+                .split("\r\n")
+                .map(str::to_string)
+                .collect()
+        };
+        let (g, w) = (lines(&got), lines(&want));
+        for (i, (a, b)) in g.iter().zip(&w).enumerate() {
+            assert_eq!(a, b, "line {}", i + 1);
+        }
+        assert_eq!(g.len(), w.len());
+        assert_eq!(got, want);
+    }
 
     // 16 §2.3 (audit A.46): the ranking prints table 0x4C7F80[stage byte], so a default row (byte 0) shows "(1)".
     #[test]

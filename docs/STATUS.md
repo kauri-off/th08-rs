@@ -551,6 +551,16 @@
   +0x11C at record start; 0x164D0B0 (`Stats::d0b0`) recorded in +0x20 and restored on playback. `TH08_REPLAY_SAVE`
   still saves at the scene change when the dialogue did not. Unit tests: save → parse header fields, card name, skips.
   Traces not run (cloud). SPEC-GAP 99 → 98 (src). Questions: `docs/briefs/IMPL69_QUESTIONS.md`.
+- impl71 (audit §B, cloud, 2026-10-21): D in the result top menu (sub-state 1) writes `score.txt` (16 §2.7,
+  `result::score_txt`: Shift-JIS, CR LF, header + time stamp, per difficulty/shot HSCR blocks with captured cards,
+  card table, play data with the correct continue total); native → port save dir next to score.dat, web →
+  localStorage key `th08:score.txt` (same storage as score.dat). Hidden unlock code on the difficulty page (15 §2.12):
+  Focus/Skip + Right ×4, Left, D ×2, Q ×3 → CLRD masks 0xFFFF, card attempts +1, SE 0x1C. Unlock notices (16 §4):
+  MainMenu_OnRegister queues info00 / info02 / info01.jpg for flag bits 15 / 16 / 17 that turn on; `Ctx` runs the
+  `Info_Show` loop (6000 frames, fades, skip from t 180 with SE 10) in place of the calc and draw chains; none at
+  the first menu after boot. Unit tests: score.txt byte-identical to `specs/data/drawlog/menu_mopup1.score.txt`,
+  code sequence + effect, notice order and fade bytes. Traces not run (cloud). SPEC-GAP 110 → 113 (src).
+  Questions: `docs/briefs/IMPL71_QUESTIONS.md`.
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).

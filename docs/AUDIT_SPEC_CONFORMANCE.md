@@ -127,12 +127,12 @@ Natives 4, 7, 9, 11, 13, 16, 21, 25 (`eclvm.rs:1098`); timeline op 9 (0 испо
 129/130/133/134; комната музыки ✅ impl70 (16 §5, `musicroom.rs`); диалог сохранения replay (16 §2.6 / 15 §3.6, `result.rs:378`,
 Natives 4, 7, 9, 11, 13, 16, 21, 25 ✅ impl72 (`eclvm.rs:1098`); timeline op 9 (0 использований); spell-practice guard для ops
 129/130/133/134; комната музыки (16 §5, `supervisor.rs:571`); диалог сохранения replay (16 §2.6 / 15 §3.6, `result.rs:378`,
-`replay.rs:493`) ✅ impl69; hidden unlock code (15 §2.12, `result.rs:295`); D → score.txt (16 §2.7); key config (15 §1.3);
+`replay.rs:493`) ✅ impl69; hidden unlock code (15 §2.12, `result.rs:295`) ✅ impl71; D → score.txt (16 §2.7) ✅ impl71; key config (15 §1.3);
 MIDI и «music off» (`audio.rs:212`); джойстик и ShotSlow (`input.rs:24`); чтение и запись th08.cfg (`game.rs:43`,
 `config.rs:88`) ✅ impl67; frame skip cfg+0x23 (`game.rs:135`) ✅ impl67; проверка VRSM / exe (15 §2.10); `Replay_FrameHook` prio 7
 MIDI и «music off» (`audio.rs:212`; music off ✅ impl70, MIDI открыт); джойстик и ShotSlow (`input.rs:24`); чтение и запись th08.cfg (`game.rs:43`,
 `config.rs:88`); frame skip cfg+0x23 (`game.rs:135`); проверка VRSM / exe (15 §2.10); `Replay_FrameHook` prio 7
-(`replay.rs:287`); USER-секция replay ✅ impl69; уведомления info00–02.jpg (16 §4, `menu.rs:810`); 3600-кадровый idle-выход
+(`replay.rs:287`); USER-секция replay ✅ impl69; уведомления info00–02.jpg (16 §4, `menu.rs:810`) ✅ impl71; 3600-кадровый idle-выход
 и return 5 из опций (`menu.rs:623`); slow-mode OR-накопление ввода (`supervisor.rs:419`).
 
 ## C. Устаревшие SPEC-GAP: спецификация теперь отвечает, код уже соответствует
