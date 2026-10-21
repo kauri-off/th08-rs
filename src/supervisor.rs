@@ -14,7 +14,7 @@ pub struct Supervisor {
     debug_sprites: Option<usize>,
     script: Option<Vec<u16>>,
     frame: usize,
-    // The registered scene object (GM, MainMenu, Result, stub).
+    // The registered scene object (GM, MainMenu, Result, Ending, MusicRoom).
     scene_task: Option<TaskRef<Ctx>>,
     // Full-screen surface slot 8 (logo, captured frame or result.jpg), drawn at prio 0 while loading (12 §1).
     logo: Option<TextureId>,
@@ -348,7 +348,12 @@ impl Supervisor {
             }
             (_, gamemgr::SCENE_MUSIC_ROOM) => {
                 self.drop_scene(ctx);
-                self.set_scene(ctx, Stub { kind: req }, 4, 3)?;
+                self.set_scene(
+                    ctx,
+                    crate::musicroom::MusicRoom::new(),
+                    crate::musicroom::CALC_PRIO,
+                    crate::musicroom::DRAW_PRIO,
+                )?;
             }
             // 2 → 7: like 2 → 1 (also releases managed textures in the original).
             (_, gamemgr::SCENE_REPLAY_END) => {
@@ -573,11 +578,6 @@ impl Task<Ctx> for Supervisor {
     }
 }
 
-// SPEC-GAP: the music room (8, 16 §5) is a stub; it leaves on Bomb/ESC.
-pub struct Stub {
-    kind: i32,
-}
-
 // Debug: a file from disk natively, or from the save storage (web, and `replay/…` names).
 fn load_file(path: &str) -> Option<Vec<u8>> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -596,27 +596,5 @@ pub fn date_md() -> String {
         // The JS Date getters are local time.
         let d = js_sys::Date::new_0();
         format!("{:02}/{:02}", d.get_month() + 1, d.get_date())
-    }
-}
-
-impl Task<Ctx> for Stub {
-    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        if self.kind == gamemgr::SCENE_MUSIC_ROOM
-            && ctx.input.pressed(crate::input::BOMB | crate::input::PAUSE)
-        {
-            ctx.game.request(gamemgr::SCENE_MENU);
-        }
-        Ret::Next
-    }
-
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
-        ctx.gfx.rect(0.0, 0.0, 640.0, 480.0, [0, 0, 0, 255]);
-        ctx.ascii.push(crate::ascii::Text::new(
-            160.0,
-            160.0,
-            "Music Room (stub)".to_string(),
-        ));
-        Ret::Next
     }
 }

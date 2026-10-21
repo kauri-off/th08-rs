@@ -193,6 +193,8 @@ pub struct Audio {
     fade: Option<Fade>,
     // Music slots 0..15 (02 §3 preload): the name queued by sound command 1 (`Music_Play`), started by `play_slot`.
     slots: [Option<String>; 16],
+    // Music mode cfg +0x1F (02 §4): 0 off, 1 WAV, 2 MIDI.
+    music: u8,
 }
 
 impl Audio {
@@ -212,6 +214,7 @@ impl Audio {
             fade_req: None,
             fade: None,
             slots: Default::default(),
+            music: 1,
         }
     }
 
@@ -229,10 +232,14 @@ impl Audio {
         }
     }
 
-    // Music_Play + Music_PlaySlot (02 §4) in one step, WAV mode only: loads the stored part (never past loop_end) and plays.
-    // SPEC-GAP: MIDI mode (cfg +0x1F = 2) and music off (0) are not implemented; the music-room heard flags are set by callers.
+    // Music_Play + Music_PlaySlot (02 §4) in one step: loads the stored part (never past loop_end) and plays; music
+    // mode 0 plays nothing. The music-room heard flags are set by callers.
+    // SPEC-GAP: MIDI mode (cfg +0x1F = 2) is not implemented; it plays the WAV track.
     // Accepts script names like "bgm/th08_00.mid"; unknown names fall back to track 0.
     pub fn play_bgm(&mut self, name: &str) {
+        if self.music == 0 {
+            return;
+        }
         let Some(t) = find_track(&self.tracks, name).cloned() else {
             log::warn!("no bgm {name}");
             return;
@@ -275,6 +282,9 @@ impl Audio {
 
     // Music_Play(slot, name) 0x447D56, WAV mode (02 §4): sound command 1 only prepares the slot; nothing is heard.
     pub fn load_bgm(&mut self, slot: usize, name: &str) {
+        if self.music == 0 {
+            return;
+        }
         if let Some(s) = self.slots.get_mut(slot) {
             *s = Some(name.to_owned());
         }
@@ -336,7 +346,11 @@ impl Audio {
 
     // Music_Fade 0x4480F8 (10 §5 op 12, 11 §4, 16 §1.3 `@M`), WAV mode: queues command 5 with trunc(secs); callers
     // have already divided by the game speed. Linear in dB from 0 to −50 dB over trunc(secs)·60 frames, then stop.
+    // Music mode 0 queues nothing.
     pub fn fade_bgm(&mut self, secs: f32) {
+        if self.music == 0 {
+            return;
+        }
         self.fade_req = Some(secs as i32);
     }
 
@@ -362,8 +376,10 @@ impl Audio {
         }
     }
 
-    // BGM volume through the square curve of 0x472840 (02 §4) with cfg +0x27; SE volumes are applied per play.
+    // Music mode cfg +0x1F, and the BGM volume through the square curve of 0x472840 (02 §4) with cfg +0x27; SE
+    // volumes are applied per play.
     pub fn set_volumes(&mut self, cfg: &crate::config::Config) {
+        self.music = cfg.music;
         self.bgm_volume = cfg.bgm_volume;
         self.apply_volume();
     }
@@ -447,6 +463,23 @@ mod tests {
         assert!(!m.voices[0].playing);
         assert!((db_gain(-2000) - 0.1).abs() < 1e-6 && db_gain(-10000) == 0.0);
     }
+    #[test]
+    fn music_off_plays_nothing() {
+        // cfg +0x1F = 0 (02 §4): no slot is loaded and no fade is queued; mode 1 loads.
+        let mut a = Audio::new(Source::native(std::env::temp_dir()), &[]);
+        let mut cfg = crate::config::Config::default();
+        cfg.music = 0;
+        a.set_volumes(&cfg);
+        a.load_bgm(0, "bgm/th08_00.mid");
+        a.fade_bgm(4.0);
+        assert!(a.slots[0].is_none() && a.fade_req.is_none());
+        cfg.music = 1;
+        a.set_volumes(&cfg);
+        a.load_bgm(0, "bgm/th08_00.mid");
+        a.fade_bgm(4.0);
+        assert!(a.slots[0].is_some() && a.fade_req == Some(4));
+    }
+
     #[test]
     fn fade_linear_in_db() {
         // Music_Fade(4): N = 240; first tick n = 239, middle n = 120, last audible n = 1, then stop.

@@ -716,13 +716,14 @@ impl MainMenu {
                 *v = (*v as i32 + dir).rem_euclid(max + 1) as u8;
                 if *v != old {
                     sound::play(sound::TIMEOUT);
+                    let music = cfg.music;
+                    ctx.audio.set_volumes(&ctx.game.cfg);
                     // Item 2: any change restarts bgm/th08_01.mid in slot 8 (15 §1.3); music off simply stops it.
                     match item {
-                        2 if cfg.music == 0 => ctx.audio.stop_bgm(),
+                        2 if music == 0 => ctx.audio.stop_bgm(),
                         2 => ctx.audio.play_bgm("bgm/th08_01.mid"),
                         _ => {}
                     }
-                    ctx.audio.set_volumes(&ctx.game.cfg);
                 }
             }
         }
