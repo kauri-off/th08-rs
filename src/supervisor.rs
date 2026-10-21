@@ -374,7 +374,7 @@ impl Supervisor {
             _ => log::warn!("unhandled scene switch {cur} -> {req}"),
         }
         // The raw input words are cleared so the new scene sees no held keys (11 §7).
-        // SPEC-GAP: the +0x154 frame counter (config re-check every 4000 frames) is not kept.
+        // SPEC-GAP: the +0x154 counter's "config re-check every 4000 frames" (11 §7) has no condition or action in the spec.
         ctx.input.held = 0;
         ctx.input.prev = 0;
         ctx.game.scene = ctx.game.requested;

@@ -370,6 +370,14 @@
   Result_OnRegister (modes 0/1 in `on_register`, mode 2 in `save_score(flush)`), so equal scores flip per load/save
   (15 §2.3); `ranking` keeps the in-memory order and puts entries above equal default rows. Unit tests for all four.
   Traces not run (cloud). SPEC-GAP 134 → 129. Questions: `docs/briefs/IMPL66_QUESTIONS.md`.
+- impl67 (audit §B th08.cfg, frame skip, cloud, 2026-10-21): `Config` keeps every th08.cfg field (pad buttons, stick
+  thresholds, frame skip +0x23, ShotSlow +0x26, debug flags +0x38 with bit 0 forced, padding and unused bytes), so
+  `to_bytes` writes the file back as loaded. `Config::load` (15 §1.2, 02 §1) probes the thbgm.dat header (bad header =
+  startup error; missing + defaults = music 2); `Ctx::load_with` reads th08.cfg (port save, else the game folder),
+  writes it back at once and again in `exit_save` (native: next to score.dat; web: localStorage). `Ctx::draw` runs
+  the draw chain only when the i8 skip counter reaches cfg +0x23 (00 §2). Supervisor +0x154 4000-frame check: not in
+  the spec (question). Unit tests: round trip, load rules. Traces not run (cloud). SPEC-GAP 99 → 95 (`grep -c`
+  lines). Questions: `docs/briefs/IMPL67_QUESTIONS.md`.
 - impl60 (audit A.37, A.38, A.39, cloud, 2026-10-20): the stage-clear frame sets loading := 1 and score_display :=
   score for every stage; practice, Extra, 6A/6B and the night-over ending return 3 before the confirm test, which
   then runs on the next frame; the old GM's later calcs only count loading frames (no loader behind them) until the

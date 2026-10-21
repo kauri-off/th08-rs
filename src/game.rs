@@ -25,6 +25,8 @@ pub struct Ctx {
     pub se_log: bool,
     pub settings: &'static crate::settings::Settings,
     pub drawlog: Option<crate::drawlog::Writer>,
+    // Frame_Run frame-skip counter (i8, 00 §2), compared with cfg +0x23.
+    pub skip_counter: i8,
 }
 
 impl TaskCtx for Ctx {
@@ -40,12 +42,25 @@ impl Ctx {
 
     // WinMain start-up (00 §2): archive, sound (thbgm.fmt 02 §2, SE 13 §1.1), RNG boot seed (11 §1.3), score data, then the
     // Supervisor task. `persist` = read/write the port's save files (off for tests).
-    // SPEC-GAP: th08.cfg is not read at boot (15 §1.2); the config keeps its defaults.
     pub async fn load_with(source: Source, gfx: Gfx, persist: bool) -> anyhow::Result<Self> {
         let archive = Archive::from_bytes(source.read("th08.dat").await?)?;
         let settings = crate::settings::get();
         let mut audio = Audio::new(source.clone(), &archive.read("thbgm.fmt")?);
         audio.load_se(&archive);
+        // Config_Load (15 §1.2): th08.cfg and the thbgm.dat header probe (02 §1), then the file is written back.
+        // The port's own save first; else import the original's th08.cfg (read-only).
+        let bgm_header = source.read_range("thbgm.dat", 0, 16).await.ok();
+        let mut cfg_file = None;
+        if persist {
+            cfg_file = match crate::scoredat::storage_read("th08.cfg") {
+                Some(f) => Some(f),
+                None => source.read("th08.cfg").await.ok(),
+            };
+        }
+        let cfg = crate::config::Config::load(cfg_file.as_deref(), bgm_header.as_deref())?;
+        if persist {
+            crate::scoredat::storage_write("th08.cfg", &cfg.to_bytes());
+        }
         let mut ctx = Self {
             gfx,
             archive,
@@ -59,7 +74,9 @@ impl Ctx {
             se_log: settings.se_log,
             settings,
             drawlog: None,
+            skip_counter: 0,
         };
+        ctx.game.cfg = cfg;
         if persist {
             ctx.drawlog = settings
                 .drawlog
@@ -133,10 +150,14 @@ impl Ctx {
         }
     }
 
-    // Frame_Run second half (00 §2); Frame_Run only checks the calc runner's result.
-    // SPEC-GAP: frame skip (cfg +0x23) is not kept, so the draw chain runs every frame (the default).
+    // Frame_Run second half (00 §2); Frame_Run only checks the calc runner's result. The draw chain runs when the
+    // counter reaches cfg +0x23 (so 0 and 1 both draw every frame); Present follows either way.
     pub fn draw(&mut self) {
-        task::run(self, Chain::Draw);
+        self.skip_counter = self.skip_counter.wrapping_add(1);
+        if self.skip_counter >= self.game.cfg.frame_skip as i8 {
+            task::run(self, Chain::Draw);
+            self.skip_counter = 0;
+        }
         if self.drawlog.is_some() {
             self.log_frame();
         }
@@ -156,9 +177,13 @@ impl Ctx {
     }
 
     // WinMain exit 0x441B95 (15 §2.2): once the main loop has left (after the last frame's calc, draw and Present),
-    // Result_Register(2) and the chain teardown flush score.dat (2 RNG draws, 11 §1.5).
+    // Result_Register(2) and the chain teardown flush score.dat (2 RNG draws, 11 §1.5); th08.cfg is written again at
+    // WinMain exit (15 §1.2).
     pub fn exit_save(&mut self) {
         self.game.save_score(&mut self.anm.rng, true);
+        if self.game.persist {
+            crate::scoredat::storage_write("th08.cfg", &self.game.cfg.to_bytes());
+        }
     }
 
     // Debug tool. TH08_DRAWLOG: one F record per presented frame, sampled after the draw.
