@@ -83,8 +83,6 @@ pub struct Game {
     pub loading_wait: u32,
     // 0x164D2C8 = GM +0x3DDC0 gameplay frame counter (11 §2).
     pub frame_counter: u32,
-    // 0x164D30C play-time counter (11 §3.2 zeroes it at a fresh start).
-    pub play_time: u32,
     pub cfg: crate::config::Config,
     pub stats: Stats,
     // Clear masks per shot (12 = union) and difficulty: no-continue / any (11 §4 step 1, 15 CLRD).
@@ -155,7 +153,6 @@ impl Default for Game {
             loading_shown: false,
             loading_wait: 0,
             frame_counter: 0,
-            play_time: 0,
             cfg: Default::default(),
             stats: Stats::default(),
             clear_nc: [[1; 5]; 13],
@@ -380,8 +377,8 @@ impl Game {
 
 thread_local! {
     // GM rank, max, min, sub-counter (GM+0x3DE2C..0x3DE38, 11 §2); ECL var 10041 reads the rank directly.
-    // SPEC-GAP: the boot values (16, 32, 0, 0) before the first new game are not in 11.
-    static RANK_STATE: std::cell::Cell<[i32; 4]> = const { std::cell::Cell::new([16, 32, 0, 0]) };
+    // Boot values 0, 0, 0, 0 (GameMgr_Ctor zeroes the GM) until the first GameMgr_InitRank.
+    static RANK_STATE: std::cell::Cell<[i32; 4]> = const { std::cell::Cell::new([0; 4]) };
 }
 
 pub fn rank_state() -> [i32; 4] {
@@ -474,6 +471,8 @@ pub struct GameManager {
     gauge_at: Option<(u32, i32, i32)>,
     // Port-only: loading calcs of this stage start (11 §3.1 "Loading frame count").
     loading_total: u32,
+    // Port-only: the stage-clear frame has run (11 §4 step 1 loading := 1 with no loader behind it).
+    cleared: bool,
 }
 
 impl GameManager {
@@ -487,6 +486,7 @@ impl GameManager {
             tasks: Vec::new(),
             gauge_at: None,
             loading_total: 31,
+            cleared: false,
         }));
         gm.borrow().player.borrow_mut().debug_invuln |= ctx.game.noclip;
         // GameManager_Register zeroes the gameplay frame counter 0x164D2C8 (11 §2).
@@ -531,7 +531,6 @@ impl GameManager {
         }
         st.power = 0.0;
         Stats::checksum(rng);
-        g.play_time = 0;
         g.rec_cards = vec![0; crate::scoredat::CARDS];
         (st.score10, st.score_disp, st.score_step) = (0, 0, 0);
         st.hiscore = 100000;
@@ -728,21 +727,21 @@ impl GameManager {
         Ok(())
     }
 
-    // Stage-end handling (11 §4 step 1); the clear-mask bits are set unless replaying.
-    // SPEC-GAP: no "return 3" on the clear frame (11 §4 step 1); the port runs the confirm test at once.
-    fn stage_end(&mut self, ctx: &mut Ctx) -> Option<Ret> {
-        let g = &mut ctx.game;
+    // Stage-end handling (11 §4 step 1); the clear-mask bits are set unless replaying. On the clear frame loading
+    // := 1 and the practice / 6A–Extra / night-over paths return 3 before the confirm test (it runs next frame).
+    fn stage_end(g: &mut Game, st: &mut Stats, confirm: bool) -> Option<Ret> {
         if g.end_state() == 2 {
             g.set_end_state(3);
+            g.loading = 1;
             g.next_scene_after = -1;
-            let (shot, d, stage) = (g.shot as usize % 12, g.diff(), g.stage % 9);
-            let st = &self.player.borrow().stats;
-            let _ = d;
+            let (shot, stage) = (g.shot as usize % 12, g.stage % 9);
             if !g.replay() {
                 g.set_clear(st.continues == 0, 1 << stage);
             }
+            st.score_disp = st.score10;
             if g.practice() {
                 g.next_scene_after = SCENE_RESULT;
+                return Some(Ret::StopFrame);
             } else if stage >= 6 {
                 if g.replay() {
                     g.next_scene_after = SCENE_REPLAY_END;
@@ -752,9 +751,11 @@ impl GameManager {
                     g.play_counter(crate::scoredat::PL_CLEARS);
                     g.flags |= F_ENDING_OK;
                     g.next_scene_after = SCENE_RESULT;
+                    return Some(Ret::StopFrame);
                 } else {
                     g.flags |= F_ENDING_OK;
                     g.next_scene_after = SCENE_ENDING;
+                    return Some(Ret::StopFrame);
                 }
             } else if g.replay() {
                 let next = g
@@ -771,20 +772,17 @@ impl GameManager {
             } else if st.clock > 11 {
                 g.next_scene_after = SCENE_ENDING;
                 g.flags &= !F_ENDING_OK;
+                return Some(Ret::StopFrame);
             } else {
-                g.stage = next_stage(g.stage % 9, g.shot, g.route());
+                g.stage = next_stage(stage, g.shot, g.route());
                 g.request(SCENE_NEXT_STAGE);
             }
         }
-        let g = &mut ctx.game;
-        if g.end_state() != 0 {
-            let confirm = ctx.input.pressed(crate::input::SHOT | crate::input::ENTER);
-            if confirm || g.replay() || g.stage % 9 >= 6 {
-                g.set_end_state(0);
-                if g.next_scene_after >= 0 {
-                    g.request(g.next_scene_after);
-                    return Some(Ret::StopFrame);
-                }
+        if g.end_state() != 0 && (confirm || g.replay() || g.stage % 9 >= 6) {
+            g.set_end_state(0);
+            if g.next_scene_after >= 0 {
+                g.request(g.next_scene_after);
+                return Some(Ret::StopFrame);
             }
         }
         None
@@ -889,13 +887,22 @@ impl Task<Ctx> for GameManager {
         // 0x164D09C += 1 at the top of GameMgr_Calc (11 §4): HSCR play time in frames.
         self.player.borrow_mut().stats.rec.frames += 1;
         self.continue_effects(ctx);
-        if let Some(r) = self.stage_end(ctx) {
+        let cleared = ctx.game.end_state() == 2;
+        let confirm = ctx.input.pressed(crate::input::SHOT | crate::input::ENTER);
+        let r = Self::stage_end(&mut ctx.game, &mut self.player.borrow_mut().stats, confirm);
+        self.cleared |= cleared;
+        if let Some(r) = r {
             return r;
         }
         let g = &mut ctx.game;
-        g.loading_shown = g.loading != 0;
+        // SPEC-GAP: GM draw 0x43AA03 on the post-clear loading frames is not in 11/12; the port keeps drawing the stage.
+        g.loading_shown = g.loading != 0 && !self.cleared;
         if g.loading != 0 {
             g.loading_frames += 1;
+            // After a clear no loader thread runs for this GM: loading stays 1 until the scene switch (11 §4 step 1).
+            if self.cleared {
+                return Ret::StopFrame;
+            }
             // Port-only session replay: the loader's recorded steps take effect before the calc of their poll index.
             let (gauge_due, wait_due, release_due) = match g
                 .sched
@@ -1114,6 +1121,56 @@ mod tests {
         assert_eq!(rank(), 8);
         rank_add(10_000);
         assert_eq!(rank(), 16);
+    }
+
+    // RANK_STATE before the first GameMgr_InitRank: GameMgr_Ctor zeroes the GM (11 §2).
+    #[test]
+    fn rank_boot_state() {
+        assert_eq!(std::thread::spawn(rank_state).join().unwrap(), [0; 4]);
+    }
+
+    // 11 §4 step 1: the clear frame sets loading and score_display; the returning paths skip the confirm test.
+    #[test]
+    fn clear_frame() {
+        let clear = |flags: u32, stage: usize, clock: i32, confirm: bool| {
+            let mut g = Game {
+                flags,
+                stage,
+                ..Game::default()
+            };
+            g.set_end_state(2);
+            let mut st = Stats {
+                score10: 1234,
+                clock,
+                ..Stats::default()
+            };
+            let r = GameManager::stage_end(&mut g, &mut st, confirm);
+            assert_eq!((g.loading, st.score_disp), (1, 1234));
+            (r, g)
+        };
+        // Practice, Extra, 6A, night over: return 3 with the bits still 3; the next frame confirms.
+        for (flags, stage, clock, next) in [
+            (F_PRACTICE, 1, 0, SCENE_RESULT),
+            (0, 6, 0, SCENE_ENDING),
+            (0, 2, 12, SCENE_ENDING),
+        ] {
+            let (r, mut g) = clear(flags, stage, clock, true);
+            assert_eq!(
+                (r, g.end_state(), g.requested),
+                (Some(Ret::StopFrame), 3, SCENE_BOOT)
+            );
+            let mut st = Stats::default();
+            let r = GameManager::stage_end(&mut g, &mut st, true);
+            assert_eq!(
+                (r, g.end_state(), g.requested),
+                (Some(Ret::StopFrame), 0, next)
+            );
+        }
+        // Stage 1–5 advance: confirm tested on the clear frame itself, then the loading branch runs.
+        let (r, g) = clear(0, 0, 0, true);
+        assert_eq!((r, g.end_state(), g.requested), (None, 0, SCENE_NEXT_STAGE));
+        let (r, g) = clear(0, 0, 0, false);
+        assert_eq!((r, g.end_state(), g.stage), (None, 3, 1));
     }
 
     #[test]

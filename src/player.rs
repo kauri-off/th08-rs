@@ -161,6 +161,7 @@ pub struct Stats {
 #[derive(Clone, Debug, Default)]
 pub struct Record {
     pub frames: u32,
+    // 0x164D30C play-time counter (11 §2): EnemyMgr_Calc outside dialogue, + 1800 per ECL op 148; zeroed at a fresh start (11 §3.2).
     pub progress: i32,
     pub points: u32,
     pub last_spells: u32,

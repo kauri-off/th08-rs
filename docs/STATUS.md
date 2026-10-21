@@ -350,6 +350,13 @@
   Result_OnRegister (modes 0/1 in `on_register`, mode 2 in `save_score(flush)`), so equal scores flip per load/save
   (15 §2.3); `ranking` keeps the in-memory order and puts entries above equal default rows. Unit tests for all four.
   Traces not run (cloud). SPEC-GAP 134 → 129. Questions: `docs/briefs/IMPL66_QUESTIONS.md`.
+- impl60 (audit A.37, A.38, A.39, cloud, 2026-10-20): the stage-clear frame sets loading := 1 and score_display :=
+  score for every stage; practice, Extra, 6A/6B and the night-over ending return 3 before the confirm test, which
+  then runs on the next frame; the old GM's later calcs only count loading frames (no loader behind them) until the
+  scene switch (`GameManager::stage_end`, 11 §4 step 1). RANK_STATE boots as 0, 0, 0, 0 (11 §2). A.39 was already
+  fixed by impl45 (`EnemyMgr_Calc` counts 0x164D30C outside dialogue); the dead `Game::play_time` duplicate is gone.
+  Unit tests for the clear-frame paths and the boot rank. Traces not run (cloud). SPEC-GAP 115 → 114.
+  Questions: `docs/briefs/IMPL60_QUESTIONS.md`.
 - impl48 (audit A.50, A.51, A.52, cloud, 2026-10-20): BGM volume uses the square curve `config::bgm_volume_curve`
   (02 §4 `0x472840`; the cube stays for SE); `Audio::fade_bgm` queues command 5 with trunc(secs), started in
   Sound_Update (`start_fade`) and ticked at the top of the Supervisor calc (`tick_fade`): p = n·5000/N − 5000, linear
