@@ -1063,8 +1063,11 @@ impl Exec<'_> {
                 .set_int(V_INT0, self.m.g.spell.as_ref().map_or(0, |s| s.id)),
             // SPEC-GAP: game value at (0x160F510)+0x1C belongs to a later phase; reads 0.
             24 => t.ctx.set_int(V_INT0, 0),
-            // Not implemented: the stage VM interrupts 2 / 1 of 07 §12.
-            26 => set_timer_pause(arg),
+            // Freeze byte 0x160F534 := arg; stage VMs get interrupt 2, or 1 when arg is 0 (07 §12).
+            26 => {
+                set_timer_pause(arg);
+                self.stage_interrupt(if arg != 0 { 2 } else { 1 });
+            }
             // Bullets with flag 0x100000 spawn enemy sub = var 10038 (life 800, item −2, score 10, var 10016 = angle).
             27 => {
                 let sub = t.ctx.int(V_INT1 + 2);
@@ -1119,10 +1122,20 @@ impl Exec<'_> {
                     }
                 }
             }
-            // Not implemented: 28/29's bullet velocity / sprite changes and stage interrupts (07 §12).
-            28 if arg != 0 => self.anm.speed = 1.0 / arg as f32,
+            // Slow-down (07 §12): game speed 1/arg, bullet velocities and sprites 0x60–0x6F → 0x6F, interrupt 2.
+            // SPEC-GAP: 07 §12 says only "velocities scaled / restored"; here × 1/arg, then ÷ the slowed game speed.
+            28 if arg != 0 => {
+                self.anm.speed = 1.0 / arg as f32;
+                let k = self.anm.speed;
+                self.m.bullets.borrow_mut().slow_down(self.anm, k);
+                self.stage_interrupt(2);
+            }
+            // Undo 28: speed 1, velocities and sprites restored, interrupt 1; Supervisor flag 0x20 if arg > 1.
             29 => {
+                let gs = self.anm.speed;
                 self.anm.speed = 1.0;
+                self.m.bullets.borrow_mut().slow_down_restore(self.anm, gs);
+                self.stage_interrupt(1);
                 if arg > 1 {
                     anmvm::set_slowdown_restore(true);
                 }
@@ -1152,6 +1165,14 @@ impl Exec<'_> {
                 let _ = gs;
                 self.m.g.misc_calls += 1;
             }
+        }
+    }
+
+    // Natives 26 / 28 / 29 "stage VMs interrupt k" (07 §12).
+    // SPEC-GAP: 07 §12 does not name the stage VMs; the two spell-background VMs of native 12 are used.
+    fn stage_interrupt(&mut self, k: u16) {
+        if let Some(st) = &self.m.stage {
+            st.borrow_mut().spell_interrupt(k);
         }
     }
 

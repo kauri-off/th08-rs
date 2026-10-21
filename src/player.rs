@@ -396,7 +396,7 @@ pub struct Player {
     pub laser_slots: [crate::pshot::LaserSlot; crate::pshot::LASER_SLOTS],
     // +0xE2A68 deathbomb counter / bomb-allowed counter (09 §6).
     pub deathbomb: i32,
-    // +0xE2A6C := 16 by Spell_End; decremented atop Player_UpdateBomb; a normal start needs 0 (09 §1.1).
+    // +0xE2A6C := 16 by Spell_End (07 §11.1); decremented atop Player_UpdateBomb; a normal bomb start needs 0.
     pub bomb_cooldown: i32,
     // +0xE2A70 respawn clear frames (09 §6.3).
     pub respawn_clear: i32,

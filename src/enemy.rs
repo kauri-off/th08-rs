@@ -1494,6 +1494,8 @@ impl EnemyManager {
             self.cancel_and_kill_bonus(anm);
         }
         let mut p = self.player.borrow_mut();
+        // Always: bomb cooldown +0xE2A6C := 16, its only writer (07 §11.1, 09 §1.1).
+        p.bomb_cooldown = 16;
         if p.state == 0 {
             p.state = 3;
             p.state_timer.set(70);
@@ -2425,6 +2427,29 @@ mod tests {
         m.step(&mut anm);
         assert_eq!((m.frame, m.draw_lists[0].len()), (1, 0));
         assert_eq!(player.borrow().stats.rec.progress, 2);
+    }
+
+    // Spell_End (07 §11.1): bomb cooldown +0xE2A6C := 16 whether or not the card was captured.
+    #[test]
+    fn spell_end_sets_bomb_cooldown() {
+        let mut anm = AnmManager::default();
+        let player = crate::player::Player::new_ref();
+        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player.clone())));
+        let ecl = ecl::Ecl {
+            data: Vec::new(),
+            subs: Vec::new(),
+            timelines: Vec::new(),
+        };
+        let mut m = EnemyManager::new(ecl, bullets, 1);
+        m.finish_spell(&mut anm);
+        assert_eq!(player.borrow().bomb_cooldown, 0);
+        m.g.spell = Some(Spell {
+            timed_out: true,
+            duration: 600,
+            ..Spell::default()
+        });
+        m.finish_spell(&mut anm);
+        assert_eq!(player.borrow().bomb_cooldown, 16);
     }
 
     // Human rate (15 §2.3): counted by EnemyMgr_Calc only while its clock reads > 15; human = player +3 == 0.

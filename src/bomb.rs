@@ -1615,6 +1615,25 @@ mod tests {
         assert_eq!(p.bomb_cooldown, 4);
     }
 
+    // 09 §1.1: the cooldown blocks a normal start, is decremented atop Player_UpdateBomb, but not on a forced start.
+    #[test]
+    fn bomb_cooldown() {
+        let (mut p, mut anm) = ready(4);
+        p.bomb_cooldown = 2;
+        p.update_bomb(&mut anm, &press(input::BOMB), &mut None);
+        assert!(!p.bombing && p.bomb_cooldown == 1);
+        p.update_bomb(&mut anm, &press(0), &mut None);
+        assert_eq!(p.bomb_cooldown, 0);
+        p.update_bomb(&mut anm, &press(input::BOMB), &mut None);
+        assert!(p.bombing);
+        let (mut p, mut anm) = ready(4);
+        p.bomb_cooldown = 16;
+        p.forced_bomb = 1;
+        p.deathbomb = 1;
+        p.update_bomb(&mut anm, &press(0), &mut None);
+        assert!(p.bombing && p.bomb_cooldown == 16);
+    }
+
     // 09 §4.5: circle = point test on the enemy centre, `≤ r²`; rectangles overlap the box inclusively.
     #[test]
     fn damage_area_enemy_overlap() {

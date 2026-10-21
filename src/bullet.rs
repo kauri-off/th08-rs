@@ -252,6 +252,8 @@ pub struct Bullet {
     pub st: ExState,
     // +0x10B4: no graze/hit (natives 12/14, §7).
     pub intangible: bool,
+    // VM0 +0x218 saved_sprite (05 §2): set at spawn and by native 28, restored by native 29 (07 §12).
+    pub saved_sprite: i16,
     // Index of the spawn-effect VM (1–3) for states 2–4.
     effect: usize,
 }
@@ -540,6 +542,8 @@ impl BulletManager {
         if b.vms[0].sprite_index != t.vms[0].sprite_index + d.colour {
             b.vms[0].set_sprite(anm, t.vms[0].sprite_index as i32 + d.colour as i32);
         }
+        // SPEC-GAP: 05 §2 has the template load write +0x218 (base sprite, colour offset not stated); here the final sprite.
+        b.saved_sprite = b.vms[0].sprite_index;
         let k = effect_color(t.height, d.colour);
         Self::recolor(anm, &mut b.vms[4], &t.vms[4], k);
         let eff = if d.flags & 2 != 0 {
@@ -1244,6 +1248,35 @@ impl BulletManager {
         }
     }
 
+    // ECL native 28 (07 §12): velocities × `k` (the new game speed 1/arg), sprites 0x60–0x6F → 0x6F with the
+    // old sprite saved in +0x218.
+    pub fn slow_down(&mut self, anm: &mut AnmManager, k: f32) {
+        for b in self.bullets[..MAX_BULLETS].iter_mut().filter(|b| !b.free()) {
+            for v in b.vel.iter_mut() {
+                *v *= k;
+            }
+            let sp = b.vms[0].sprite_index;
+            b.saved_sprite = sp;
+            if (0x60..=0x6F).contains(&sp) {
+                b.vms[0].set_sprite(anm, 0x6F);
+            }
+        }
+    }
+
+    // ECL native 29 (07 §12): undo native 28; `gs` is the game speed native 28 set (1/arg).
+    pub fn slow_down_restore(&mut self, anm: &mut AnmManager, gs: f32) {
+        for b in self.bullets[..MAX_BULLETS].iter_mut().filter(|b| !b.free()) {
+            if gs != 0.0 {
+                for v in b.vel.iter_mut() {
+                    *v /= gs;
+                }
+            }
+            if b.vms[0].sprite_index != b.saved_sprite {
+                b.vms[0].set_sprite(anm, b.saved_sprite as i32);
+            }
+        }
+    }
+
     // ECL natives 12 / 14 0x424A20 / 0x424C40 (08 §7): ghost toggle by VM0 tag for bullets whose flags match
     // `mask` (var 10000); native 14 cycles 1 → 0 → 2 (fade-in) → 1. `angle`/`speed` = vars 10016/10017.
     pub fn toggle_ghost(
@@ -1498,6 +1531,19 @@ mod tests {
         b.step(&mut anm);
         assert_eq!(b.live, 4);
         assert_eq!(b.lists[5].len(), 4);
+    }
+
+    // Natives 28 / 29 (07 §12): velocities × 1/arg, the sprite saved in +0x218, then both restored.
+    #[test]
+    fn slow_down_and_restore() {
+        let (mut anm, mut b) = mgr();
+        let i = spawn(&mut anm, &mut b, &desc(0.0, 4.0, 0, &[]));
+        b.bullets[i].vms[0].sprite_index = 0x64;
+        b.slow_down(&mut anm, 0.5);
+        assert!((speed(&b.bullets[i]) - 2.0).abs() < 1e-5);
+        assert_eq!(b.bullets[i].saved_sprite, 0x64);
+        b.slow_down_restore(&mut anm, 0.5);
+        assert!((speed(&b.bullets[i]) - 4.0).abs() < 1e-5);
     }
 
     #[test]

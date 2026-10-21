@@ -506,6 +506,12 @@
   `settings::config_dir` uses `directories` 6 `BaseDirs::config_dir()/th08` (same paths as before).
   `audio::parse_wav` uses `hound` 3.5; `se_waves_parse` compares every SE sample with the old RIFF parser.
 
+- impl53 (audit A.19, A.21, cloud, 2026-10-21): ECL native 26 sends interrupt 2 (arg ≠ 0) / 1 to the stage VMs;
+  native 28 also scales live bullet velocities by 1/arg and maps sprites 0x60–0x6F → 0x6F (old sprite kept in the
+  bullet's +0x218 copy `saved_sprite`, also set at spawn), interrupt 2; native 29 restores velocities and sprites,
+  interrupt 1 (07 §12). `Spell_End` sets the bomb cooldown +0xE2A6C := 16 (07 §11.1); the decrement moved to the top of
+  `update_bomb` and is skipped on a forced start (09 §1.1). Unit tests for the cooldown, `Spell_End` and the
+  slow-down. Traces not run (cloud). SPEC-GAP 99 → 101 (src). Questions: `docs/briefs/IMPL53_QUESTIONS.md`.
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
