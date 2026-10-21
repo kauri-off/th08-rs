@@ -192,6 +192,42 @@ pub(crate) fn difficulty_of(id: usize) -> usize {
     }
 }
 
+// Replay sub-state 2 (15 §3.8): Menu_CursorUpDown(9) (wraps), then keep moving the same way while the stage has
+// no record.
+fn rpy_stage_step(have: &[bool; 9], cur: usize, d: i32) -> usize {
+    let mut c = cur as i32;
+    if d == 0 || !have.contains(&true) {
+        return cur;
+    }
+    c = (c + d).rem_euclid(9);
+    while !have[c as usize] {
+        c = (c + d).rem_euclid(9);
+    }
+    c as usize
+}
+
+// Screen-17 confirm (16 §6.2): difficulty = Spell_DifficultyOf(id); a Last Word (5) plays on Normal (1) at the stage of
+// the id table. Returns (difficulty, stage for Last Words).
+fn spell_start(id: usize) -> (i32, Option<usize>) {
+    match difficulty_of(id) {
+        5 => (
+            1,
+            Some(match id {
+                205 => 0,
+                206 => 1,
+                207 => 2,
+                208 | 212 => 5,
+                209 => 6,
+                210 => 7,
+                211 | 213 => 8,
+                215 => 4,
+                _ => 3,
+            }),
+        ),
+        d => (d as i32, None),
+    }
+}
+
 fn is_last(id: usize) -> bool {
     LAST.iter().any(|&v| v as usize == id)
 }
@@ -264,14 +300,19 @@ pub struct Lists {
     pies: [f32; 4],
     // Spell-practice stage row (g_StageIdx on screens 16/17).
     pub sp_row: i32,
+    // Screen 16 in its input sub-state (16 §6.1).
+    sp_input: bool,
     // Screen-17 cursor (index in the row's card list), page = card / 15.
     card: i32,
     page: i32,
     prev_card: i32,
     // Info refresh counter +0xC29C (16 §6.3).
     info_counter: u32,
-    // Replay screen sub-state +0x0C (1 list, 2 stage, 3 speed), chosen stage +0xC290, speed, loaded file +0xC280.
+    // Replay screen sub-state +0x0C (1 list, 2 stage, 3 speed), stage cursor (+0 in sub-state 2), displayed / chosen
+    // stage row +0xC290 (15 §3.8), speed, loaded file +0xC280.
     rpy_sub: u8,
+    rpy_cur: usize,
+    // SPEC-GAP: 15 §3.8 "0 after the menu was entered" read as menu creation; the replay screen entry keeps it.
     rpy_stage: usize,
     rpy_speed: i32,
     rpy_loaded: Option<usize>,
@@ -431,11 +472,10 @@ impl MainMenu {
         self.practice_run(ctx);
     }
 
-    // Entry (12 §2.5): range interrupt 18, portraits entries 1–3, cursor = g_StageIdx (0 if unavailable).
-    // SPEC-GAP: run from the character screen on the confirm frame (mopup1 log), not on the next calc as the
-    // Menu_SetScreen entry rule (12 §2) says.
-    pub(crate) fn practice_enter(&mut self, ctx: &mut Ctx) {
+    // Entry (12 §2.5): range interrupt 18, portraits entries 1–3, +0x6C = 0, cursor = g_StageIdx (0 if unavailable).
+    fn practice_enter(&mut self, ctx: &mut Ctx) {
         {
+            self.back = 0;
             self.interrupt_all(18);
             self.char_vms_list(ctx.game.shot as i32);
             self.cursor = (ctx.game.stage as i32).clamp(0, 7);
@@ -447,7 +487,7 @@ impl MainMenu {
         }
     }
 
-    // SPEC-GAP: 12 §2.5 gives no input start frame; 8 is used.
+    // Input from +0x1442C == 8 (12 §2).
     fn practice_run(&mut self, ctx: &mut Ctx) {
         if self.frames < 8 {
             return;
@@ -465,7 +505,9 @@ impl MainMenu {
             g.request(gamemgr::SCENE_GAME);
         } else if ctx.input.pressed(CANCEL) {
             sound::play(sound::CANCEL);
+            // 11 → 9 returns 2: screen 9 runs in this frame (12 §2).
             self.set_screen(crate::menu::CHAR_PRACTICE);
+            self.again = true;
         }
     }
 
@@ -497,7 +539,7 @@ impl MainMenu {
     // ---- screen 16 (16 §6.1, §6.4) ----
 
     // Screen 16 offers shots whose team has a Final A clear (Clear_TeamFinalA); solo shots always pass (16 §6.1).
-    fn sp_shot_ok(ctx: &Ctx, s: i32) -> bool {
+    pub(crate) fn sp_shot_ok(ctx: &Ctx, s: i32) -> bool {
         s >= 4 || crate::menu::team_final_a(&ctx.game, s as usize)
     }
 
@@ -507,16 +549,29 @@ impl MainMenu {
         } else {
             4
         };
-        if self.frames == 0 && self.lists.scratch_for != crate::menu::SPELL_PRACTICE {
+        if self.frames == 0 {
             self.spell_char_enter(ctx, n);
+        }
+        // Back from a spell-practice game: 16 → 17 at once, stage row 9 if the last card was a Last Word,
+        // return 2 so screen 17 runs in this frame (12 §2.2, 16 §6.1).
+        if self.back != 0 {
+            if ctx.game.card >= 205 {
+                ctx.game.stage = 9;
+            }
+            self.lists.sp_row = ctx.game.stage.min(9) as i32;
+            self.set_screen(crate::menu::SPELL_CARD);
+            self.again = true;
+            return;
         }
         self.spell_char_run(ctx, n);
     }
 
     // Screen 16 entry (16 §6.1, §6.4): select00.png, flags |= 0x4001, interrupt 18, cursor = first allowed shot,
-    // scratch VMs E7B8 / EA5C / ED00 with their strips, pie values zeroed.
+    // stage row = g_StageIdx, scratch VMs E7B8 / EA5C / ED00 with their strips, pie values zeroed.
     fn spell_char_enter(&mut self, ctx: &mut Ctx, n: i32) {
         {
+            self.lists.sp_row = ctx.game.stage.min(9) as i32;
+            self.lists.sp_input = false;
             self.set_surface(ctx, "select00.png");
             ctx.game.flags |= F_PRACTICE | F_SPELL_PRACTICE;
             // SPEC-GAP: VM 141's catch-all should reset it to (640, 320); the port's interrupt path misses a case (mopup1).
@@ -553,9 +608,12 @@ impl MainMenu {
     }
 
     // Portraits redone on entry and on every shot change; VMs 138/139 get pending 27 after the range interrupt (16 §6.1).
-    // SPEC-GAP: 16 §6.1 also zeroes the screen frame counter on a shot change (pie easing restarts); not done.
+    // A shot change also zeroes +0x1442C, so the pie easing (16 §6.4 step 5) restarts.
     fn spell_char_shot(&mut self, ctx: &mut Ctx, entry: bool) {
         if self.cursor != self.prev_cursor {
+            if !entry {
+                self.frames = 0;
+            }
             self.prev_cursor = self.cursor;
             ctx.game.shot = self.cursor as u8;
             self.char_vms_list(self.cursor);
@@ -567,10 +625,13 @@ impl MainMenu {
     }
 
     // Screen 16 controls (16 §6.1): Left/Right shot, Up/Down 10 stage rows, confirm → 17, Bomb → top (cursor 2) after 20 frames.
-    // SPEC-GAP: no input start frame in 16 §6.1 (8 used); Bomb does not store the row into g_StageIdx.
+    // Input (sub-state 1) from +0x1442C == 8; a later shot change zeroes the counter but stays in sub-state 1 (16 §6.1).
     fn spell_char_run(&mut self, ctx: &mut Ctx, n: i32) {
         self.spell_char_shot(ctx, false);
-        if self.frames < 8 || self.pending.is_some() {
+        if self.frames >= 8 {
+            self.lists.sp_input = true;
+        }
+        if !self.lists.sp_input || self.pending.is_some() {
             return;
         }
         self.move_cursor(ctx, n, LEFT, RIGHT, |c| Self::sp_shot_ok(ctx, c));
@@ -589,11 +650,13 @@ impl MainMenu {
         if inp.pressed(CONFIRM) {
             sound::play(sound::OK);
             ctx.game.stage = self.lists.sp_row as usize;
+            // 16 → 17 returns 2: screen 17 runs in this frame (12 §2).
             self.set_screen(crate::menu::SPELL_CARD);
-            // SPEC-GAP: the card list is built (and drawn) on the press frame (mopup1 log), not on the next calc.
-            self.spell_card_setup(ctx);
+            self.again = true;
         } else if inp.pressed(CANCEL) {
             sound::play(sound::CANCEL);
+            // Bomb also stores the row into g_StageIdx (16 §6.1).
+            ctx.game.stage = self.lists.sp_row as usize;
             self.interrupt_all(6);
             ctx.game.flags &= !F_PRACTICE;
             self.pending = Some(Pending {
@@ -879,12 +942,11 @@ impl MainMenu {
         self.render_vm(ctx, TEXT_SLOT, 21 + k as i32, &s);
     }
 
-    // Screen 17, MainMenu_SpellPracticeCard 0x46BBC0 (16 §6.2).
-    // SPEC-GAP: no input start frame in 16 §6.2 (8 used).
+    // Screen 17, MainMenu_SpellPracticeCard 0x46BBC0 (16 §6.2); input from +0x1442C == 8 (12 §2).
     pub(crate) fn spell_card(&mut self, ctx: &mut Ctx) {
         let (a, b) = self.card_ids();
         let count = (b - a) as i32;
-        if self.frames == 0 && self.lists.scratch_for != crate::menu::SPELL_CARD {
+        if self.frames == 0 {
             self.spell_card_setup(ctx);
         }
         if self.frames < 8 || self.pending.is_some() {
@@ -894,11 +956,12 @@ impl MainMenu {
     }
 
     // Screen 17 entry (16 §6.2): range interrupt 26, LastWord_ComputeUnlocks, cursor on the last played id (0x164D0B8),
-    // all 7 info lines rendered and shown at once.
+    // all 7 info lines rendered and shown at once; +0x6C = 0 (12 §2.2).
     fn spell_card_setup(&mut self, ctx: &mut Ctx) {
         let (a, b) = self.card_ids();
         let count = (b - a) as i32;
         {
+            self.back = 0;
             for vm in &mut self.vms {
                 vm.pending_interrupt = 26;
             }
@@ -983,50 +1046,23 @@ impl MainMenu {
                 return;
             }
             sound::play(sound::OK);
-            let last_d = catk(ctx, id).difficulty as i32;
             let g = &mut ctx.game;
             g.flags |= F_SPELL_PRACTICE;
             g.flags &= !F_REPLAY;
             g.card = id as i16;
-            // Last Words: difficulty 1 (Normal), stage by id (16 §6.2 table).
-            if id >= 205 {
-                g.difficulty = 1;
-                g.stage = match id {
-                    205 => 0,
-                    206 => 1,
-                    207 => 2,
-                    208 | 212 => 5,
-                    209 => 6,
-                    210 => 7,
-                    211 | 213 => 8,
-                    215 => 4,
-                    _ => 3,
-                };
-            } else {
-                // SPEC-GAP: 16 §6.2 sets difficulty = Spell_DifficultyOf(id) (`difficulty_of`); the port uses CATK +0x0F
-                // (the last attempt's difficulty), Extra for row 8.
-                g.difficulty = if self.lists.sp_row == 8 {
-                    4
-                } else {
-                    last_d.min(3)
-                };
-                g.stage = self.lists.sp_row as usize;
-            }
+            let (d, st) = spell_start(id);
+            g.difficulty = d;
+            // Other cards keep g_StageIdx = the row set by the screen-16 confirm (16 §6.1).
+            g.stage = st.unwrap_or(self.lists.sp_row as usize);
             g.fresh_start = true;
             ctx.audio.stop_bgm();
             g.request(gamemgr::SCENE_GAME);
         } else if inp.pressed(CANCEL) {
             sound::play(sound::CANCEL);
             ctx.game.card = id as i16;
+            // 17 → 16 returns 2: screen 16 runs in this frame (12 §2).
             self.set_screen(crate::menu::SPELL_PRACTICE);
-            // SPEC-GAP: screen 16 is rebuilt (and drawn) on the press frame (mopup1 log), not on the next calc.
-            let n = if crate::menu::extra_all(&ctx.game) {
-                12
-            } else {
-                4
-            };
-            self.spell_char_enter(ctx, n);
-            self.frames = 1;
+            self.again = true;
         }
     }
 
@@ -1165,14 +1201,16 @@ impl MainMenu {
                     sound::play(sound::OK);
                     let i = self.cursor as usize;
                     self.lists.rpy_loaded = Some(i);
-                    // SPEC-GAP: the stage row starts at 0 and snaps to a recorded stage on the next frame (mopup1 log).
-                    self.lists.rpy_stage = 0;
+                    // Stage cursor = first stage with a record; +0xC290 keeps its old value until sub-state 2 (15 §3.8).
+                    // SPEC-GAP: no recorded stage → error message and scene −1 (15 §3.8) are not done; stage 0 is used.
+                    let st = &self.replays[i].1.stages;
+                    self.lists.rpy_cur = (0..9).find(|&s| st[s].is_some()).unwrap_or(0);
                     self.lists.rpy_sub = 2;
                     self.rpy_choose();
                 } else if inp.pressed(CANCEL) {
                     sound::play(sound::CANCEL);
                     self.interrupt_all(16);
-                    // SPEC-GAP: the 30-frame leave delay and cursor 4 are not in 12 §2.8 / 15 §3.8.
+                    // Replay leave: top menu (cursor 4) after 30 frames (12 §2).
                     self.pending = Some(Pending {
                         frames: 30,
                         screen: crate::menu::TOP,
@@ -1184,19 +1222,10 @@ impl MainMenu {
                 let Some(i) = self.lists.rpy_loaded else {
                     return;
                 };
-                let have: Vec<usize> = (0..9)
-                    .filter(|&s| self.replays[i].1.stages[s].is_some())
-                    .collect();
-                if !have.contains(&self.lists.rpy_stage) {
-                    self.lists.rpy_stage = have.first().copied().unwrap_or(0);
-                }
-                let k = have
-                    .iter()
-                    .position(|&s| s == self.lists.rpy_stage)
-                    .unwrap_or(0);
-                let m = have.len().max(1);
+                let have: [bool; 9] =
+                    std::array::from_fn(|s| self.replays[i].1.stages[s].is_some());
                 let d = if inp.pressed_or_repeat(UP) {
-                    m - 1
+                    -1
                 } else if inp.pressed_or_repeat(DOWN) {
                     1
                 } else {
@@ -1204,10 +1233,10 @@ impl MainMenu {
                 };
                 if d != 0 {
                     sound::play(sound::SELECT);
-                    if let Some(&s) = have.get((k + d) % m) {
-                        self.lists.rpy_stage = s;
-                    }
                 }
+                // +0xC290 is written only here, so the row shown on the file-confirm frame lags by one (15 §3.8).
+                self.lists.rpy_cur = rpy_stage_step(&have, self.lists.rpy_cur, d);
+                self.lists.rpy_stage = self.lists.rpy_cur;
                 if inp.pressed(CONFIRM) {
                     sound::play(sound::OK);
                     self.lists.rpy_sub = 3;
@@ -1348,5 +1377,40 @@ impl MainMenu {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 16 §6.2: difficulty = Spell_DifficultyOf(id), not the card's last attempt; Last Words → Normal + table stage.
+    #[test]
+    fn spell_start_difficulty() {
+        assert_eq!(spell_start(EASY[0] as usize), (0, None));
+        assert_eq!(spell_start(NORMAL[0] as usize), (1, None));
+        assert_eq!(spell_start(HARD[0] as usize), (2, None));
+        assert_eq!(spell_start(1), (3, None));
+        assert_eq!(spell_start(191), (4, None));
+        assert_eq!(spell_start(204), (4, None));
+        let lw: Vec<_> = (205..222).map(spell_start).collect();
+        assert!(lw.iter().all(|&(d, _)| d == 1));
+        let st: Vec<usize> = lw.iter().map(|&(_, s)| s.unwrap()).collect();
+        assert_eq!(st, [0, 1, 2, 5, 6, 7, 8, 5, 8, 3, 4, 3, 3, 3, 3, 3, 3]);
+    }
+
+    // 15 §3.8: Menu_CursorUpDown(9) wraps, then skips stages without a record in the same direction.
+    #[test]
+    fn replay_stage_cursor() {
+        let mut have = [false; 9];
+        have[1] = true;
+        have[4] = true;
+        have[8] = true;
+        assert_eq!(rpy_stage_step(&have, 1, 0), 1);
+        assert_eq!(rpy_stage_step(&have, 1, 1), 4);
+        assert_eq!(rpy_stage_step(&have, 4, 1), 8);
+        assert_eq!(rpy_stage_step(&have, 8, 1), 1);
+        assert_eq!(rpy_stage_step(&have, 1, -1), 8);
+        assert_eq!(rpy_stage_step(&[false; 9], 0, 1), 0);
     }
 }

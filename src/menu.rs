@@ -33,6 +33,8 @@ const DIFF_EXTRA: i32 = 12;
 const CHAR: i32 = 5;
 pub(crate) const CHAR_PRACTICE: i32 = 9;
 const CHAR_EXTRA: i32 = 13;
+// Spell-practice character select: only reached through the +0x6C forward (12 §2.2); the top menu goes to 16.
+const CHAR_SPELL: i32 = 15;
 const REPLAY: i32 = 7;
 const PRACTICE_STAGE: i32 = 11;
 pub(crate) const SPELL_PRACTICE: i32 = 16;
@@ -175,6 +177,10 @@ pub struct MainMenu {
     // Quit (item 8) frame counter; scene −1 after 60 frames.
     pub(crate) quitting: Option<u32>,
     pub(crate) pending: Option<Pending>,
+    // +0x6C: 1 / 2 = back from a practice / spell-practice game; screens 8, 9, 15, 16 forward while set (12 §2.2).
+    pub(crate) back: u8,
+    // The handler returned 2: MainMenu_Calc runs again in the same frame (12 §2 screen-entry exception).
+    pub(crate) again: bool,
     // Config snapshot taken on entering the option screen (12 §2.2 item 7).
     pub(crate) snapshot: Config,
     // Practice stages available on screen 11 (12 §2.5).
@@ -202,6 +208,8 @@ impl MainMenu {
             idle: 0,
             quitting: None,
             pending: None,
+            back: 0,
+            again: false,
             snapshot: Config::default(),
             stages: [false; 8],
             replays: Vec::new(),
@@ -477,6 +485,13 @@ impl MainMenu {
                 self.highlight(ctx, VM_DIFF + i, i as i32 == self.cursor);
             }
         }
+        // Back from a practice game: 8 → 9 (cursor 0) at once, return 1 (12 §2.2).
+        // SPEC-GAP: 12 §2.2 does not say which parts of the handler run before a +0x6C forward (entry work assumed).
+        if self.back != 0 {
+            self.set_screen(self.screen + 1);
+            self.cursor = 0;
+            return;
+        }
         if !active {
             return;
         }
@@ -538,7 +553,11 @@ impl MainMenu {
     }
 
     fn char_allowed(&self, ctx: &Ctx, c: i32) -> bool {
-        self.screen != CHAR_EXTRA || extra_unlocked(&ctx.game, c as usize)
+        match self.screen {
+            CHAR_EXTRA => extra_unlocked(&ctx.game, c as usize),
+            CHAR_SPELL => Self::sp_shot_ok(ctx, c),
+            _ => true,
+        }
     }
 
     fn char_cursor(&mut self, ctx: &Ctx) {
@@ -549,14 +568,15 @@ impl MainMenu {
         }
     }
 
-    // Screens 5 / 9 / 13, 0x46A625 (12 §2.4); screen 15 is handled with spell practice (menulist.rs).
-    // SPEC-GAP: 12 §2.4 gives no input start frame; 8 is used as on the difficulty screen.
+    // Screens 5 / 9 / 13 / 15, 0x46A625 (12 §2.4); input from +0x1442C == 8 (12 §2).
     fn character(&mut self, ctx: &mut Ctx) {
         let n = if extra_all(&ctx.game) { 12 } else { 4 };
         if self.frames == 0 {
             self.interrupt_all(8);
-            // Difficulty plate slides to (16, 384) (12 §2.4).
-            self.vms[VM_DIFF + (ctx.game.cfg.difficulty as usize).min(4)].pending_interrupt = 9;
+            // Difficulty plate slides to (16, 384), not on screen 15 (12 §2.4).
+            if self.screen != CHAR_SPELL {
+                self.vms[VM_DIFF + (ctx.game.cfg.difficulty as usize).min(4)].pending_interrupt = 9;
+            }
             self.char_cursor(ctx);
         }
         let allowed: Vec<bool> = (0..n).map(|c| self.char_allowed(ctx, c)).collect();
@@ -568,7 +588,18 @@ impl MainMenu {
             self.prev_cursor = self.cursor;
             self.char_vms(self.cursor, moved);
         }
-        if self.frames < 8 {
+        // Back from a game with +0x6C: 9 → 11 (cursor = g_StageIdx) / 15 → 16 (stage row = g_StageIdx) at once,
+        // return 1, one screen per frame (12 §2.2).
+        if self.back != 0 {
+            self.set_screen(if self.screen == CHAR_SPELL {
+                SPELL_PRACTICE
+            } else {
+                PRACTICE_STAGE
+            });
+            self.cursor = ctx.game.stage as i32;
+            return;
+        }
+        if self.frames < 8 || self.pending.is_some() {
             return;
         }
         // Confirm (12 §2.4): shot = cursor; practice → screen 11; else difficulty = config +0x21 (Extra 4, stage 8),
@@ -578,10 +609,14 @@ impl MainMenu {
             let g = &mut ctx.game;
             g.shot = self.cursor as u8;
             match self.screen {
+                // 9 → 11 / 15 → 16 return 2: the new screen runs in this frame (12 §2).
                 CHAR_PRACTICE => {
                     self.set_screen(PRACTICE_STAGE);
-                    self.practice_enter(ctx);
-                    self.frames = 1;
+                    self.again = true;
+                }
+                CHAR_SPELL => {
+                    self.set_screen(SPELL_PRACTICE);
+                    self.again = true;
                 }
                 _ => {
                     let extra = self.screen == CHAR_EXTRA;
@@ -598,9 +633,21 @@ impl MainMenu {
                 }
             }
         } else if ctx.input.pressed(CANCEL) {
-            // No interrupt here (12 §2.4): the difficulty screen's enter interrupt 7 does the transition.
             sound::play(sound::CANCEL);
-            self.set_screen(self.screen - 1);
+            if self.screen == CHAR_SPELL {
+                // Spell practice fades back to the top menu (12 §2.4), cursor 2 (16 §6.1), after 30 frames (12 §2).
+                // SPEC-GAP: 12 §2.4 names no range interrupt for the screen-15 cancel (6 used, as on screen 16).
+                self.interrupt_all(6);
+                ctx.game.flags &= !F_PRACTICE;
+                self.pending = Some(Pending {
+                    frames: 30,
+                    screen: TOP,
+                    cursor: 2,
+                });
+            } else {
+                // No interrupt here (12 §2.4): the difficulty screen's enter interrupt 7 does the transition.
+                self.set_screen(self.screen - 1);
+            }
         }
     }
 
@@ -829,14 +876,15 @@ impl Task<Ctx> for MainMenu {
         }
         let g = &ctx.game;
         if g.previous == gamemgr::SCENE_GAME || g.previous == gamemgr::SCENE_RETRY {
-            // SPEC-GAP: 12 §2.2 goes through screen 8 → 9 → 11 (practice) or 15 → 16 → 17 (spell practice) on
-            // consecutive frames with +0x6C; the port enters 8 (and stays) or 17 directly.
+            // +0x6C ≠ 0 → screen 8 + 7·(flags bit 14), range interrupt 5; the screens forward to 11 / 17 (12 §2.2).
             if g.spell_practice() {
-                // Back from a spell-practice game: straight to the card list (16 §6.1).
-                self.screen = SPELL_CARD;
-                self.lists.sp_row = if g.card >= 205 { 9 } else { g.stage as i32 % 9 };
+                self.back = 2;
+                self.screen = CHAR_SPELL;
+                self.interrupt_all(5);
             } else if g.practice() {
+                self.back = 1;
                 self.screen = DIFF_PRACTICE;
+                self.interrupt_all(5);
             }
         }
         // Cursor on menu load by previous scene (12 §2.2), practice flags override.
@@ -877,7 +925,7 @@ impl Task<Ctx> for MainMenu {
             return Ret::Next;
         }
         // Delayed switch: the new screen starts on the frame after the counter ran out.
-        // SPEC-GAP: "after 20 frames" (12 §2.3) is placed at press + 21 from the draw log.
+        // "+0x10 > 19" is true in the call P + 20 after a press on P, so the new screen first runs on P + 21 (12 §2).
         if let Some(p) = &mut self.pending {
             if p.frames == 0 {
                 let (s, c) = (p.screen, p.cursor);
@@ -888,35 +936,41 @@ impl Task<Ctx> for MainMenu {
                 p.frames -= 1;
             }
         }
-        let screen = self.screen;
-        match self.screen {
-            TOP => self.top(ctx),
-            OPTION => self.option(ctx),
-            DIFF | DIFF_PRACTICE | DIFF_EXTRA => self.difficulty(ctx),
-            CHAR | CHAR_PRACTICE | CHAR_EXTRA => self.character(ctx),
-            PRACTICE_STAGE => self.practice_stage(ctx),
-            KEY_CONFIG => self.stub(ctx, "Key config", OPTION, 8),
-            REPLAY => self.replay(ctx),
-            SPELL_PRACTICE => self.spell_char(ctx),
-            SPELL_CARD => self.spell_card(ctx),
-            _ => {}
-        }
-        if self.screen == screen {
-            self.frames += 1;
-        }
+        // A handler that returns 2 makes the chain call this node again at once (00 §3), so the new screen's
+        // handler, RunRange and the description VM run a second time in this frame (12 §2 entry exception).
+        loop {
+            let screen = self.screen;
+            match self.screen {
+                TOP => self.top(ctx),
+                OPTION => self.option(ctx),
+                DIFF | DIFF_PRACTICE | DIFF_EXTRA => self.difficulty(ctx),
+                CHAR | CHAR_PRACTICE | CHAR_EXTRA | CHAR_SPELL => self.character(ctx),
+                PRACTICE_STAGE => self.practice_stage(ctx),
+                KEY_CONFIG => self.stub(ctx, "Key config", OPTION, 8),
+                REPLAY => self.replay(ctx),
+                SPELL_PRACTICE => self.spell_char(ctx),
+                SPELL_CARD => self.spell_card(ctx),
+                _ => {}
+            }
+            if self.screen == screen {
+                self.frames += 1;
+            }
 
-        // After the screen handler all 142 VMs run, then the description VM (12 §2).
-        for vm in self.vms.iter_mut().filter(|v| v.script.is_some()) {
-            vm.run(&mut ctx.anm);
+            // After the screen handler all 142 VMs run, then the description VM (12 §2).
+            for vm in self.vms.iter_mut().filter(|v| v.script.is_some()) {
+                vm.run(&mut ctx.anm);
+            }
+            // Leaving the top menu fades the description out (script 9 interrupt 2).
+            if screen == TOP && self.screen != TOP {
+                self.desc_vm.pending_interrupt = 2;
+            }
+            if self.desc_on {
+                self.desc_vm.run(&mut ctx.anm);
+            }
+            if !std::mem::take(&mut self.again) {
+                return Ret::Next;
+            }
         }
-        // Leaving the top menu fades the description out (script 9 interrupt 2).
-        if screen == TOP && self.screen != TOP {
-            self.desc_vm.pending_interrupt = 2;
-        }
-        if self.desc_on {
-            self.desc_vm.run(&mut ctx.anm);
-        }
-        Ret::Next
     }
 
     // Menu draw 0x47087F (12 §2.2): surface 0 on its own earlier node (SURFACE_PRIO), VMs 0–141 in order, the
