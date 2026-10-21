@@ -311,6 +311,8 @@ pub struct Enemy {
     pub running_thread: Option<usize>,
     // e+0x534C–0x5352: trail flags, length n, op 157 arg a, draw step b.
     pub trail: [i32; 4],
+    // e+0x3394 after-image ring (07 §4.3, §10.1 step 4): entry 0 newest; template x = −999.
+    pub trail_ring: [TrailEntry; TRAIL_LEN],
     // e+0x53C0 effect count (op 128 and friends); handles in `fx_attached`.
     pub effects: u32,
     pub fx_attached: Vec<usize>,
@@ -318,6 +320,35 @@ pub struct Enemy {
     pub orbit_target: f32,
     // e+0x53C8 aura effect.
     pub fx_aura: usize,
+}
+
+// Trail strip angle midpoint (07 §10.6): lo + d/2 with d = min(|a − c|, lo + 2π − hi).
+// QUIRK: the wrap distance is taken from lo, not the true shortest-arc midpoint.
+fn trail_mid(a: f32, c: f32) -> f32 {
+    let (lo, hi) = (a.min(c), a.max(c));
+    lo + 0.5 * (a - c).abs().min(lo + 2.0 * std::f32::consts::PI - hi)
+}
+
+// e+0x3394 ring length: 96 entries of 0x1C (07 §4.3).
+pub const TRAIL_LEN: usize = 96;
+
+// One 0x1C ring entry (07 §10.1 step 4): final pos, velocity e+0x2D4C, angle e+0x2D94.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrailEntry {
+    pub pos: [f32; 3],
+    pub vel: [f32; 3],
+    pub angle: f32,
+}
+
+impl Default for TrailEntry {
+    // EnemyMgr_Ctor writes only x = −999, so an unwritten entry is off screen (07 §10.1 step 4).
+    fn default() -> Self {
+        Self {
+            pos: [-999.0, 0.0, 0.0],
+            vel: [0.0; 3],
+            angle: 0.0,
+        }
+    }
 }
 
 impl Default for Enemy {
@@ -402,6 +433,7 @@ impl Default for Enemy {
             kill_running_thread: false,
             running_thread: None,
             trail: [0; 4],
+            trail_ring: [TrailEntry::default(); TRAIL_LEN],
             effects: 0,
             fx_attached: Vec::new(),
             orbit_target: 0.0,
@@ -411,6 +443,24 @@ impl Default for Enemy {
 }
 
 impl Enemy {
+    // e+0x534E trail length n; the clamp is a port-only bound for the 96-entry ring (data: 15 and 90).
+    fn trail_n(&self) -> usize {
+        self.trail[1].clamp(0, TRAIL_LEN as i32) as usize
+    }
+
+    // Ring shift (07 §10.1 step 4): entry[i] = entry[i − 1] for i = n − 1..1, then entry[0] = now.
+    fn push_trail(&mut self) {
+        let n = self.trail_n();
+        if n > 1 {
+            self.trail_ring.copy_within(0..n - 1, 1);
+        }
+        self.trail_ring[0] = TrailEntry {
+            pos: self.final_pos,
+            vel: self.vel,
+            angle: self.angle,
+        };
+    }
+
     pub fn alive(&self) -> bool {
         self.flags & A_ALIVE != 0
     }
@@ -1162,17 +1212,21 @@ impl EnemyManager {
         if e.flags & A_HIDDEN != 0 {
             return false;
         }
-        // Main VM sprite box, inclusive (07 §10.1 step 4). SPEC-GAP: no trail history, so the oldest-trail test is skipped.
+        // Main VM sprite box, inclusive (07 §10.1 step 4).
         let (hw, hh) = (e.vm.sprite_w / 2.0, e.vm.sprite_h / 2.0);
-        let [x, y, _] = e.final_pos;
-        let inside = x + hw >= 0.0 && x - hw <= 384.0 && y + hh >= 0.0 && y - hh <= 448.0;
+        let on_screen = |[x, y, _]: [f32; 3]| {
+            x + hw >= 0.0 && x - hw <= 384.0 && y + hh >= 0.0 && y - hh <= 448.0
+        };
+        let inside = on_screen(e.final_pos);
         if e.flags & A_ON_SCREEN == 0 {
             if inside {
                 e.flags |= A_ON_SCREEN;
             }
             false
         } else {
-            !inside && e.flags & A_KEEP_OFFSCREEN == 0
+            // With a trail the oldest entry n − 1 must be off screen too (port bound: n = 0 reads entry 0).
+            let oldest = e.trail[0] != 0 && on_screen(e.trail_ring[e.trail_n().max(1) - 1].pos);
+            !inside && !oldest && e.flags & A_KEEP_OFFSCREEN == 0
         }
     }
 
@@ -2150,6 +2204,9 @@ impl EnemyManager {
                 return;
             }
             self.move_enemy(idx, gs);
+            if self.enemies[idx].trail[0] != 0 {
+                self.enemies[idx].push_trail();
+            }
             if self.screen_check(idx) {
                 self.free(idx);
                 return;
@@ -2284,6 +2341,7 @@ impl EnemyManager {
                 self.player.borrow_mut().aimed = None;
             }
         }
+        self.last_spell_box(anm);
         {
             let mut p = self.player.borrow_mut();
             if let Some(a) = p.aimed {
@@ -2316,6 +2374,123 @@ impl EnemyManager {
         self.frame += 1;
     }
 
+    // After-image trail (07 §10.6, op 157), drawn before the main VM; the main VM's scale and colour are restored.
+    fn draw_trail(anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, e: &mut Enemy) {
+        let (f, n) = (e.trail[0], e.trail_n() as i32);
+        // Port-only bound: a step b ≤ 0 would never end the walk (data: b ≥ 1).
+        let b = e.trail[3].max(1);
+        let ring = e.trail_ring;
+        let used = |i: i32| ring[i as usize].pos[0] >= -990.0;
+        let (scale, color) = (e.vm.scale, e.vm.color);
+        let a = color[anmvm::A] as i32;
+        if f & 8 == 0 {
+            // Sprite copies, oldest first; entry 0 is not drawn here.
+            let mut i = n - 1;
+            while i > 0 {
+                if used(i) {
+                    let t = ring[i as usize];
+                    let vm = &mut e.vm;
+                    if e.flags & (1 << 25) != 0 && vm.rotation[2] != t.angle {
+                        vm.rotation[2] = t.angle;
+                        vm.flags |= anmvm::F_ROT_DIRTY;
+                    }
+                    if f & 2 != 0 {
+                        vm.scale[0] = scale[0] - i as f32 * scale[0] / n as f32;
+                    }
+                    if f & 4 != 0 {
+                        vm.color[anmvm::A] = (a - a * i / n) as u8;
+                    }
+                    let saved_off = vm.pos_offset;
+                    vm.pos = [
+                        t.pos[0] + saved_off[0] + 32.0,
+                        t.pos[1] + saved_off[1] + 16.0,
+                        0.3,
+                    ];
+                    vm.pos_offset = [0.0; 3];
+                    anm.draw_mode_z(gfx, vm, 2, 0.0);
+                    vm.pos_offset = saved_off;
+                }
+                i -= b;
+            }
+        } else if let Some(&spr) = anm.sprite(e.vm.anm_slot as usize, e.vm.sprite_index as usize) {
+            // One triangle strip (Anm_DrawRingStrip); unreachable with retail data (07 §10.6).
+            let mut idx = Vec::new();
+            let mut i = 0;
+            while i < n && used(i) {
+                idx.push(i);
+                i += b;
+            }
+            let vm = &e.vm;
+            let [u0, _, u1, _] = spr.uv;
+            let step = (u1 - u0) / (idx.len() as f32 - 1.0).max(1.0);
+            let (va, vb) = (spr.uv[1] + vm.uv_off[1], spr.uv[3] + vm.uv_off[1]);
+            let theta = |i: i32| {
+                let at = |k: i32| ring[k as usize].angle;
+                if i == 0 {
+                    at(0)
+                } else {
+                    trail_mid(at(i - 1), at(i))
+                }
+            };
+            let mut v = Vec::new();
+            let mut prev = None;
+            for (j, &i) in idx.iter().enumerate() {
+                let th = theta(i);
+                // Flag 2: an interior entry on a straight run is skipped (QUIRK: m uses the fixed index b).
+                if f & 2 != 0 && i > 0 && i + b < n {
+                    let m = trail_mid(ring[(i + b - 1) as usize].angle, ring[b as usize].angle);
+                    if prev.is_some_and(|p: f32| (p - th).abs() < 1e-5) && (th - m).abs() < 1e-5 {
+                        continue;
+                    }
+                }
+                prev = Some(th);
+                // SPEC-GAP: coordinate A steps per walked entry, also across skipped ones.
+                let ua = u1 + vm.uv_off[0] - step * j as f32;
+                let mut h = vm.scale[1] * vm.sprite_h / 2.0;
+                if f & 2 != 0 {
+                    h *= 1.0 - i as f32 / n as f32;
+                }
+                let al = if f & 4 != 0 { a - a * i / n } else { a } as u8;
+                let p = ring[i as usize].pos;
+                let (sn, cs) = th.sin_cos();
+                let (x, y) = (p[0] + 32.0, p[1] + 16.0);
+                v.push(([x - sn * h, y + cs * h], [ua, va], al));
+                v.push(([x + sn * h, y - cs * h], [ua, vb], al));
+            }
+            if v.len() > 2 {
+                anm.draw_ring_strip(gfx, vm, &v);
+            }
+        }
+        (e.vm.scale, e.vm.color) = (scale, color);
+    }
+
+    // GameFlags bit 13 with boss slot 0 set (07 §7 op 176): Player_DamageAgainst over the whole playfield with the
+    // boss's time-orb accumulator; the damage and hitByBomb are discarded, so every shot only counts as a hit.
+    // SPEC-GAP: position of this call inside EnemyMgr_Calc (port: after the slot loop).
+    fn last_spell_box(&mut self, anm: &mut AnmManager) {
+        let Some(boss) = self.bosses[0] else {
+            return;
+        };
+        if self.player.borrow().gflags & crate::player::GF_13 == 0 {
+            return;
+        }
+        let mut acc = self.enemies[boss].orb_acc;
+        let mut scratch = false;
+        {
+            let mut b = self.bullets.borrow_mut();
+            let mut p = self.player.borrow_mut();
+            p.damage_against(
+                anm,
+                Some(&mut b.items),
+                [192.0, 224.0, 0.0],
+                [384.0, 448.0],
+                &mut acc,
+                &mut scratch,
+            );
+        }
+        self.enemies[boss].orb_acc = acc;
+    }
+
     // Enemy drawing (07 §10.6): sub VM 0, main VM, sub VM 1, all Draw2DRot.
     fn draw_layer(&mut self, ctx_anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, high: bool) {
         gfx.set_viewport(PLAYFIELD);
@@ -2340,8 +2515,11 @@ impl EnemyManager {
             let shared = e.flags_b & (1 << 8) != 0;
             for k in [0usize, 2, 1] {
                 let main = k == 2;
+                if main && e.trail[0] != 0 {
+                    Self::draw_trail(ctx_anm, gfx, e);
+                }
                 let vm = if main { &mut e.vm } else { &mut e.sub_vms[k] };
-                // Main VM skipped when flag A bit 5 (invisible) or trail flag 0x10. SPEC-GAP: the trail itself is not drawn.
+                // Main VM skipped when flag A bit 5 (invisible) or trail flag 0x10.
                 if vm.script.is_none()
                     || main && (e.flags & (1 << 5) != 0 || e.trail[0] & 0x10 != 0)
                 {
@@ -2429,18 +2607,94 @@ mod tests {
         assert_eq!(player.borrow().stats.rec.progress, 2);
     }
 
-    // Spell_End (07 §11.1): bomb cooldown +0xE2A6C := 16 whether or not the card was captured.
-    #[test]
-    fn spell_end_sets_bomb_cooldown() {
-        let mut anm = AnmManager::default();
+    fn empty_manager(anm: &mut AnmManager) -> (EnemyManager, Rc<RefCell<crate::player::Player>>) {
         let player = crate::player::Player::new_ref();
-        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player.clone())));
+        let bullets = Rc::new(RefCell::new(BulletManager::new(anm, player.clone())));
         let ecl = ecl::Ecl {
             data: Vec::new(),
             subs: Vec::new(),
             timelines: Vec::new(),
         };
-        let mut m = EnemyManager::new(ecl, bullets, 1);
+        (EnemyManager::new(ecl, bullets, 1), player)
+    }
+
+    // 07 §10.1 step 4: the ring shifts n − 1 entries, entry 0 = final pos, velocity, angle; the rest untouched.
+    #[test]
+    fn trail_ring_shift() {
+        let mut e = Enemy::default();
+        e.trail = [5, 3, 0, 1];
+        for k in 0..4 {
+            e.final_pos = [k as f32, 0.0, 0.0];
+            e.vel = [0.0, k as f32, 0.0];
+            e.angle = k as f32 / 10.0;
+            e.push_trail();
+        }
+        let xs: Vec<f32> = e.trail_ring[..4].iter().map(|t| t.pos[0]).collect();
+        assert_eq!(xs, [3.0, 2.0, 1.0, -999.0]);
+        assert_eq!((e.trail_ring[1].vel[1], e.trail_ring[1].angle), (2.0, 0.2));
+    }
+
+    // 07 §10.1 step 4: with a trail, an off-screen enemy is freed only once the oldest entry n − 1 is off screen too.
+    #[test]
+    fn trail_oldest_entry_keeps_enemy() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        let e = &mut m.enemies[0];
+        e.flags = A_ALIVE | A_ON_SCREEN;
+        (e.vm.has_sprite, e.vm.sprite_w, e.vm.sprite_h) = (true, 32.0, 32.0);
+        e.final_pos = [-100.0, 100.0, 0.0];
+        e.trail = [1, 15, 0, 1];
+        e.trail_ring[14].pos = [10.0, 100.0, 0.0];
+        assert!(!m.screen_check(0));
+        m.enemies[0].trail_ring[14].pos = [-17.0, 100.0, 0.0];
+        assert!(m.screen_check(0));
+        // Without a trail the ring is ignored.
+        m.enemies[0].trail = [0, 15, 0, 1];
+        m.enemies[0].trail_ring[14].pos = [10.0, 100.0, 0.0];
+        assert!(m.screen_check(0));
+    }
+
+    // 07 §10.6 mid(): lo + d/2 with the wrap distance taken from lo.
+    #[test]
+    fn trail_mid_quirk() {
+        assert!((trail_mid(1.0, 2.0) - 1.5).abs() < 1e-6);
+        assert!(
+            (trail_mid(3.0, -3.0) - (-3.0 + 0.5 * (2.0 * std::f32::consts::PI - 6.0))).abs() < 1e-6
+        );
+    }
+
+    // 07 §7 op 176: with bit 13 and boss 0, every shot in the playfield is a hit, feeding the boss accumulator only.
+    #[test]
+    fn last_spell_box_hits_all_shots() {
+        for bit13 in [false, true] {
+            let mut anm = AnmManager::default();
+            let (mut m, player) = empty_manager(&mut anm);
+            m.enemies[0].flags = A_ALIVE | A_BOSS;
+            m.enemies[0].life = 1000;
+            m.bosses[0] = Some(0);
+            let acc0 = m.enemies[0].orb_acc;
+            {
+                let mut p = player.borrow_mut();
+                p.gflags = if bit13 { crate::player::GF_13 } else { 0 };
+                p.state_timer.set(5);
+                let b = &mut p.bullets[0];
+                (b.state, b.kind, b.damage) = (1, 1, 10);
+                (b.pos, b.size) = ([20.0, 30.0, 0.0], [8.0, 8.0]);
+            }
+            m.last_spell_box(&mut anm);
+            let state = player.borrow().bullets[0].state;
+            let e = &m.enemies[0];
+            assert_eq!(state, if bit13 { 2 } else { 1 });
+            assert_eq!(e.orb_acc - acc0, if bit13 { 10 } else { 0 });
+            assert_eq!(e.life, 1000);
+        }
+    }
+
+    // Spell_End (07 §11.1): bomb cooldown +0xE2A6C := 16 whether or not the card was captured.
+    #[test]
+    fn spell_end_sets_bomb_cooldown() {
+        let mut anm = AnmManager::default();
+        let (mut m, player) = empty_manager(&mut anm);
         m.finish_spell(&mut anm);
         assert_eq!(player.borrow().bomb_cooldown, 0);
         m.g.spell = Some(Spell {

@@ -2013,11 +2013,12 @@ impl Exec<'_> {
                 self.e.layer = 2;
             }
             157 => {
+                // u8 flags and i16 n / a / b fields (07 §4.3 e+0x534C–0x5352).
                 self.e.trail = [
-                    self.raw(ins, 0) as i32,
-                    self.ai(t, ins, 1),
-                    self.ai(t, ins, 2),
-                    self.ai(t, ins, 3),
+                    (self.raw(ins, 0) & 0xFF) as i32,
+                    self.ai(t, ins, 1) as i16 as i32,
+                    self.ai(t, ins, 2) as i16 as i32,
+                    self.ai(t, ins, 3) as i16 as i32,
                 ];
             }
             158 => {
@@ -2093,7 +2094,7 @@ impl Exec<'_> {
                 } else {
                     (0x8F..=0x92).contains(&card) || (0xAB..=0xBE).contains(&card)
                 };
-                // Not implemented: bit 13's whole-playfield Player_DamageAgainst (07 §7 op 176 gives the box).
+                // Bit 13's whole-playfield Player_DamageAgainst runs in EnemyMgr_Calc (`last_spell_box`).
                 if bit13 {
                     p.gflags |= GF_13;
                 }

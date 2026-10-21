@@ -386,6 +386,38 @@ impl AnmManager {
         gfx.set_log_fog(None);
     }
 
+    // Anm_DrawRingStrip (07 §10.6 trail, flag 8): one triangle strip of (pos, uv, alpha) vertices with the VM's
+    // texture, blend and colour, emitted as consecutive 4-vertex strips.
+    pub fn draw_ring_strip(&mut self, gfx: &mut Gfx, vm: &AnmVm, v: &[([f32; 2], [f32; 2], u8)]) {
+        use anmvm::*;
+        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+            return;
+        };
+        let c = if vm.flags & F_COLOR2 != 0 {
+            vm.color2
+        } else {
+            vm.color
+        };
+        let blend = self.blend_for(vm);
+        let off = self.screen_offset;
+        let vert = |&([x, y], uv, a): &([f32; 2], [f32; 2], u8)| {
+            let rgba = self.tinted([c[R], c[G], c[B], a]);
+            Vertex::screen(x + off[0] + 0.5, y + off[1] + 0.5, 0.0, uv, rgba)
+        };
+        let v: Vec<Vertex> = v.iter().map(vert).collect();
+        for q in (0..v.len().saturating_sub(2)).step_by(2) {
+            if q + 3 < v.len() {
+                gfx.strip(
+                    spr.tex,
+                    blend,
+                    vm.flags & F_ZWRITE_OFF == 0,
+                    [v[q], v[q + 1], v[q + 2], v[q + 3]],
+                );
+            }
+        }
+        self.bound_tex = Some(spr.tex);
+    }
+
     // `z` is the vertex depth (projected depth for stage billboards, 0 otherwise).
     // AnmManager_DrawByMode 0x45E960 (05 §9); skip unless visible, enabled and primary alpha ≠ 0 (05 §12.2).
     pub fn draw_mode_z(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, mode: i32, z: f32) {

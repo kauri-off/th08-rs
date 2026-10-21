@@ -336,6 +336,14 @@
   Draw2DRot after the title VMs and the stage-start clock (12 §5.7). Sync: golden 8297, fullrun_noclip 7745,
   selftest1 1921, demo MIN_SYNC 4628/3879/4035/6664 unchanged; draw logs: selftest1 95.49 → 95.74 %, golden 26.94 %,
   demo / menu draw logs unchanged. SPEC-GAP 169 → 168. Questions: `docs/briefs/IMPL40_QUESTIONS.md`.
+- impl52 (audit A.17, A.18, cloud, 2026-10-21): enemy after-image trail (07 §10.1 step 4, §10.6): 96-entry ring
+  `Enemy::trail_ring` (template x = −999) shifted on every step-4 pass after movement while e+0x534C ≠ 0; the screen
+  check frees a trail enemy only when the oldest entry n − 1 is off screen too; the trail is drawn before the main VM
+  (sprite copies oldest first with flags 2/4 scale/alpha fade; flag 8 strip via `AnmManager::draw_ring_strip`,
+  unreachable with retail data). Op 157 stores u8 / i16 fields. Op 176 bit 13: `last_spell_box` calls
+  `Player_DamageAgainst` over the whole playfield with boss 0's accumulator each frame, damage discarded (07 §7).
+  Unit tests for the ring, the oldest-entry test, mid() and the box. Traces not run (cloud). SPEC-GAP 99 → 99.
+  Questions: `docs/briefs/IMPL52_QUESTIONS.md`.
 - impl62 (audit A.41, A.42, A.43, cloud, 2026-10-20): screen effects 1/2/4/7 follow 13 §3: shakes 1/7 hold on GameFlags
   bit 10 or the freeze byte, otherwise tick first and end before the RNG draws; type 1 and fades 2/4 are removed while
   0x18B8A2C ≠ 0 (now a global `enemy::load_frames`: native 30, StageStart 2, GM on-remove 1, Result/MainMenu 0,
