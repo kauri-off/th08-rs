@@ -693,6 +693,17 @@ pub fn storage_write(name: &str, data: &[u8]) {
     }
 }
 
+// Result state 12 creates the directory `replay` (16 §2.6); web storage has no directories.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn storage_mkdir(name: &str) {
+    if let Some(dir) = save_dir() {
+        let _ = std::fs::create_dir_all(dir.join(name));
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn storage_mkdir(_: &str) {}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn storage_list(prefix: &str) -> Vec<String> {
     let Some(dir) = save_dir() else {

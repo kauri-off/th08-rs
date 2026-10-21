@@ -543,6 +543,14 @@
   16 sets var 10038 = 60 and the caller's var 10019 on chained children near a flag-0x100000 bullet (07 §12). The
   §12 table leaves the details open: SPEC-GAP 99 → 103 (src), questions `docs/briefs/IMPL72_QUESTIONS.md`. Unit tests
   for natives 4, 9, 13, 16. Traces not run (cloud).
+- impl69 (audit §B replay save, cloud, 2026-10-21): Result states 10–14 (16 §2.6): "save replay?" with the
+  slow-mode / continue messages (interrupt from VM 4), slot list `replay/th8_01..15.rpy` (headers read at frame 0),
+  overwrite prompt, name entry on the §2.2 grid writing +0x58 (pre-filled from LSNM), save → LSNM, draw of VMs 49–54
+  and the slot rows. `replay::save` / `build_save` = `Replay_Finish` (15 §3.6): skip tests (changed config on a normal
+  E–L game, recorded slow mode), name, slowdown +0x114/+0x118, card name +0x7E, USER section (15 §3.5); clear status
+  +0x11C at record start; 0x164D0B0 (`Stats::d0b0`) recorded in +0x20 and restored on playback. `TH08_REPLAY_SAVE`
+  still saves at the scene change when the dialogue did not. Unit tests: save → parse header fields, card name, skips.
+  Traces not run (cloud). SPEC-GAP 99 → 98 (src). Questions: `docs/briefs/IMPL69_QUESTIONS.md`.
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).
@@ -551,7 +559,7 @@ Playwright can only upload from the repo dir: game files are hard-linked into `.
 
 ## Next (RE and IMPL pipelines run in parallel, one Opus agent each; IMPL uses specs/IMPL_TEMPLATE.md)
 1. RE phase5 done (answers_phase5 + spec fixes). RE phase6-opus (running): 15 cfg/score.dat/replay, 16 endings/result/music room, answers_phase6.
-2. IMPL impl22 done (boss phases, IMPL17 menu answers). Open: IMPL22 questions (op 36 a–d, payout time, fullrun 6266 homing hit, golden 8056, demo 2 2938). IMPL impl23 done (result screen, name entry, score.dat saving, viewer). Next IMPL: replay save dialogue (16 §2.6), th08.cfg load/save, music room, info notices (16 §4), key config. Endings done (impl28). Launcher screen done (impl32).
+2. IMPL impl22 done (boss phases, IMPL17 menu answers). Open: IMPL22 questions (op 36 a–d, payout time, fullrun 6266 homing hit, golden 8056, demo 2 2938). IMPL impl23 done (result screen, name entry, score.dat saving, viewer). Next IMPL: th08.cfg load/save, music room, info notices (16 §4), key config. Endings done (impl28). Launcher screen done (impl32).
 
 ## Final phase (after all specs are implemented and the game is complete)
 Refactor to idiomatic Rust: the current code mirrors the spec structure (flat state, global-ish managers, raw offsets/indices).

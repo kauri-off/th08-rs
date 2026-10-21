@@ -147,6 +147,8 @@ pub struct Stats {
     // +0x28 night clock 0–12, +0x29 continues used.
     pub clock: i32,
     pub continues: u8,
+    // GM byte 0x164D0B0: reset at new game / death, kept in replay record +0x20 (11 §2 table, §3.4, §6).
+    pub d0b0: u8,
     // +0x1C spell cards captured.
     pub spells: i32,
     // +0x20 gauge at stage start.
@@ -214,6 +216,7 @@ impl Default for Stats {
             hiscore_cont: 0,
             clock: 0,
             continues: 0,
+            d0b0: 0,
             spells: 0,
             gauge_start: 0,
             popups: Vec::new(),
@@ -710,6 +713,8 @@ impl Player {
         }
         // Freeze byte 0x160F534 := 0.
         crate::enemy::set_timer_pause(0);
+        // SPEC-GAP: 11 §2 says 0x164D0B0 is reset at death but not by which function or where; done here.
+        self.stats.d0b0 = 0;
         Stats::checksum(rng);
         crate::sound::play_at(crate::sound::PLDEAD, self.pos[0]);
         crate::effect::spawn_rng(rng, 6, self.pos, 16, 0xFFFFFFFF);

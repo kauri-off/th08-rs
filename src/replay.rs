@@ -233,9 +233,16 @@ impl Replay {
         })
     }
 
+    pub fn clear_status(&self) -> u8 {
+        self.info[0x11C - HEADER]
+    }
+    pub fn card_name(&self) -> &[u8] {
+        let c = &self.info[0x7E - HEADER..0xAE - HEADER];
+        &c[..c.iter().position(|&b| b == 0).unwrap_or(c.len())]
+    }
+
     // Replay_Finish image/compress/checksum/encrypt (15 §3.5, §3.6 steps 2–5). 3 RNG draws in this order:
-    // key byte, info +0x68, header +0x14 (Rng_Range16(256) each).
-    // SPEC-GAP: the USER section is not generated; only one read from a file is written back.
+    // key byte, info +0x68, header +0x14 (Rng_Range16(256) each). `user` is appended as is.
     pub fn encode(&mut self, rng: &mut crate::rng::Rng) -> Vec<u8> {
         let key = rng.range16(256) as u8;
         self.info[0] = rng.range16(256) as u8;
@@ -338,13 +345,9 @@ pub fn register(
 fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
     let stage = g.stage % 9;
     if g.rpy.is_none() {
-        g.rpy = Some(new_recording(
-            g.shot,
-            g.difficulty,
-            g.flags,
-            g.card,
-            &g.cfg_bytes(),
-        ));
+        let mut r = new_recording(g.shot, g.difficulty, g.flags, g.card, &g.cfg_bytes());
+        r.info[0x11C - HEADER] = clear_status(g);
+        g.rpy = Some(r);
     }
     let r = g.rpy.as_mut().unwrap();
     // Only the record of the highest stage below this one gets +0 := score (scan 0 .. stage − 1, last non-null).
@@ -364,8 +367,7 @@ fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
         lives: st.lives as u8,
         bombs: st.bombs as u8,
         rank: crate::gamemgr::rank() as u8,
-        // SPEC-GAP: 0x164D0B0 is not tracked; written as 0.
-        b20: 0,
+        b20: st.d0b0,
         spells: st.spells as u8,
         clock: st.clock as i8,
         inputs: vec![0],
@@ -373,9 +375,21 @@ fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
     });
 }
 
+// Info +0x11C at record start (15 §3.5): 2 if the shot passes 0x43C15F (a no-continue Final B clear on E–L, or shot ≥ 4),
+// else 1 if it passes 0x43C23B (a Final A clear on E–L), else 0 (15 §2.4). Read back as the route byte (10 §4 step 3).
+fn clear_status(g: &crate::gamemgr::Game) -> u8 {
+    let t = g.shot as usize % 12;
+    if t >= 4 || g.clear_nc[t][..4].iter().any(|m| m & 0x4000 != 0) {
+        2
+    } else if g.clear_any[t][..4].iter().any(|m| m & 0x8000 != 0) {
+        1
+    } else {
+        0
+    }
+}
+
 // Info block at record start (15 §3.5): shot, difficulty, "NO NAME", practice flag +0x7B, spell id +0x7C (−1 outside
 // spell practice), +0xAE = 0x100, config copy +0xB4.
-// SPEC-GAP: the clear status +0x11C and the card name +0x7E are not filled.
 fn new_recording(shot: u8, diff: i32, flags: u32, card: i16, cfg: &[u8; 60]) -> Replay {
     let mut r = Replay::default();
     let i = &mut r.info;
@@ -480,27 +494,138 @@ pub fn play_stage_load(
     st.next_extend = rec.next_extend;
     st.gauge = rec.gauge;
     st.clock = rec.clock as i32;
+    st.d0b0 = rec.b20;
     rng.state = rec.seed;
     Ok(())
 }
 
-// Replay_AppendEnd 0x4531A0 + Replay_Finish 0x4531F0 (scene changes out of the game): last score, terminator, date; then the save.
-// SPEC-GAP: the save dialogue (16 §2.6 / 15 §3.6 states 10–14) is not implemented; `TH08_REPLAY_SAVE=<1–15>` saves there.
-// SPEC-GAP: the 15 §3.6 skip tests (changed config, recorded slow mode) and the slowdown fields are not applied.
+// Scene change out of the game or the result (port): a recording the result dialogue did not save is dropped.
+// Tool switch `TH08_REPLAY_SAVE=<1–15>` saves it to that slot with the LSNM name instead.
 pub fn finish(ctx: &mut crate::game::Ctx) {
-    let Some(mut r) = take_recording(&mut ctx.game) else {
-        return;
+    match ctx.settings.replay_save {
+        Some(slot) => {
+            let mut name = [0; 8];
+            name.copy_from_slice(&ctx.game.score.lsnm[..8]);
+            save(ctx, slot.clamp(1, 15) as usize, &name);
+        }
+        None => drop(take_recording(&mut ctx.game)),
+    }
+}
+
+// Replay_Finish("./replay/th8_%.2d.rpy", slot) 0x4531F0 (15 §3.6), called by Result state 13 (16 §2.6).
+pub fn save(ctx: &mut crate::game::Ctx, slot: usize, name: &[u8; 8]) -> bool {
+    let Some(bytes) = build_save(&mut ctx.game, name, &mut ctx.anm.rng) else {
+        return false;
     };
-    let Some(slot) = ctx.settings.replay_save else {
-        return;
-    };
-    let name = ctx.game.score.lsnm;
-    r.info[0x72 - HEADER..0x7B - HEADER].fill(0);
-    r.info[0x72 - HEADER..0x7A - HEADER].copy_from_slice(&name[..8]);
-    let bytes = r.encode(&mut ctx.anm.rng);
-    let path = format!("replay/th8_{:02}.rpy", slot.clamp(1, 15));
+    let path = format!("replay/th8_{slot:02}.rpy");
     crate::scoredat::storage_write(&path, &bytes);
     log::info!("replay saved to {path} ({} bytes)", bytes.len());
+    true
+}
+
+// 15 §3.6: skip tests, then step 1 (date, name, score, slowdown, card name), steps 2–5 (`Replay::encode`) and the
+// USER section (15 §3.5). None = nothing to write.
+pub fn build_save(
+    g: &mut crate::gamemgr::Game,
+    name: &[u8; 8],
+    rng: &mut crate::rng::Rng,
+) -> Option<Vec<u8>> {
+    let mut r = take_recording(g)?;
+    // Skipped for a normal game on E–L whose config changed since record start, and for a recorded slow mode (+0xD9).
+    if !g.practice() && g.difficulty < 4 && r.config() != g.cfg_bytes() {
+        return None;
+    }
+    if r.info[0xD9 - HEADER] != 0 {
+        return None;
+    }
+    r.info[0x72 - HEADER..0x7B - HEADER].fill(0);
+    r.info[0x72 - HEADER..0x7A - HEADER].copy_from_slice(name);
+    // Slowdown % (15 §2.11): the port never drops frames, so x = 1 and the value is 0; +0x114 = % + 1.12 (0x4B7088).
+    let slow = 0f32;
+    r.info[0x114 - HEADER..0x118 - HEADER].copy_from_slice(&(slow + 1.12).to_le_bytes());
+    r.info[0x118 - HEADER..0x11C - HEADER].copy_from_slice(&slow.to_le_bytes());
+    let id = r.spell_id();
+    if id >= 0 {
+        // SPEC-GAP: 15 §3.6 does not name the source of the card name +0x7E; CATK[id] +0x10 is used.
+        let c = &g.score.catk[id as usize % crate::scoredat::CARDS].name;
+        r.info[0x7E - HEADER..0xAE - HEADER].copy_from_slice(c);
+    }
+    r.user = user_section(&user_lines(g, &r, slow));
+    Some(r.encode(rng))
+}
+
+// USER lines `key\tvalue` (15 §3.5).
+// SPEC-GAP: the string tables of キャラ名 / 難易度 / 最終ステージ are not given; 0x4C7F4C, 0x4C7FD4, 0x4C7FAC are used.
+fn user_lines(g: &crate::gamemgr::Game, r: &Replay, slow: f32) -> Vec<(&'static str, String)> {
+    const DIFF: [&str; 5] = ["Easy", "Normal", "Hard", "Lunatic", "Extra"];
+    const STAGE: [&str; 9] = [
+        "Stage 1",
+        "Stage 2",
+        "Stage 3",
+        "Stage 4-uncanny",
+        "Stage 4-powerful",
+        "Stage 5",
+        "Stage 6-Eirin",
+        "Stage 6-Kaguya",
+        "Extra Stage",
+    ];
+    let st = &g.stats;
+    let id = r.spell_id();
+    let last = if id >= 0 {
+        (
+            "カード名",
+            format!(
+                "No.{:3} {}",
+                id as i32 + 1,
+                crate::text::decode_sjis(r.card_name())
+            ),
+        )
+    } else if g.flags & crate::gamemgr::F_ENDING_OK != 0 {
+        ("最終ステージ", "Clear".into())
+    } else {
+        ("最終ステージ", STAGE[g.stage % 9].into())
+    };
+    // HSCR +0x84 = human·10000/total (16 §2.2), printed ÷ 100.
+    let human = (st.rec.human as u64 * 10000)
+        .checked_div(st.rec.total as u64)
+        .unwrap_or(0);
+    vec![
+        ("プレイヤー名", r.name()),
+        ("プレイ時刻", crate::supervisor::datetime_now()),
+        (
+            "キャラ名",
+            crate::menulist::SHOT_NAMES[r.shot() as usize % 12]
+                .trim_end_matches('　')
+                .into(),
+        ),
+        ("スコア", format!("{}0", r.score())),
+        ("難易度", DIFF[r.difficulty().min(4) as usize].into()),
+        last,
+        ("ミス回数", st.deaths.to_string()),
+        ("ボム回数", st.bombs_used.to_string()),
+        ("処理落ち率", format!("{slow:.6}%")),
+        ("人間率", format!("{:3.2}％", human as f32 / 100.0)),
+        ("ゲームのバージョン", "1.00d".into()),
+    ]
+}
+
+// "USER", u32 total length (with this 12-byte head), u8 type 0, 3 garbage bytes (written 0); then the Shift-JIS lines
+// with CR LF, NUL-terminated and padded to an even length (15 §3.5).
+pub fn user_section(lines: &[(&str, String)]) -> Vec<u8> {
+    let mut text = String::new();
+    for (k, v) in lines {
+        text += &format!("{k}\t{v}\r\n");
+    }
+    let mut body = encoding_rs::SHIFT_JIS.encode(&text).0.into_owned();
+    body.push(0);
+    if body.len() % 2 != 0 {
+        body.push(0);
+    }
+    let mut out = b"USER".to_vec();
+    out.extend(((12 + body.len()) as u32).to_le_bytes());
+    out.extend([0; 4]);
+    out.extend(body);
+    out
 }
 
 pub fn take_recording(g: &mut crate::gamemgr::Game) -> Option<Replay> {
@@ -738,6 +863,81 @@ mod tests {
             F_SPELL_PRACTICE | F_REPLAY
         );
         assert_eq!(g.card, 5);
+    }
+
+    // 15 §3.5 / §3.6 (impl69): a saved replay parses back with the same header fields, USER section appended.
+    #[test]
+    fn save_parses_back() {
+        let mut g = crate::gamemgr::Game::default();
+        g.shot = 3;
+        g.difficulty = 2;
+        g.clear_nc[3][1] |= 0x4000;
+        let st = crate::player::Stats {
+            d0b0: 7,
+            ..Default::default()
+        };
+        record_stage_start(&mut g, &st);
+        let rec = g.rpy.as_mut().unwrap().stages[0].as_mut().unwrap();
+        rec.inputs.extend([1, 2, 3]);
+        g.stats.score10 = 123_456;
+        let f = build_save(&mut g, b"TESTER  ", &mut crate::rng::Rng::seeded(5)).unwrap();
+        assert!(g.rpy.is_none());
+        let r = Replay::parse(&f).unwrap();
+        assert_eq!((r.shot(), r.difficulty()), (3, 2));
+        assert_eq!(r.name(), "TESTER  ");
+        assert_eq!(r.date(), crate::supervisor::date_md());
+        assert_eq!(r.score(), 123_456);
+        assert!(!r.practice());
+        assert_eq!(r.spell_id(), -1);
+        assert_eq!(r.clear_status(), 2);
+        assert_eq!(r.config(), g.cfg_bytes());
+        assert_eq!(r.slowdown(), 0.0);
+        assert_eq!(
+            r.info[0x114 - HEADER..0x118 - HEADER],
+            1.12f32.to_le_bytes()
+        );
+        assert_eq!(r.info[0x120 - HEADER], 30);
+        assert_eq!(&r.info[0x12C - HEADER..0x131 - HEADER], b"0100d");
+        let s = r.stages[0].as_ref().unwrap();
+        assert_eq!(s.b20, 7);
+        assert_eq!(s.score, 123_456);
+        assert_eq!(s.inputs, [0, 1, 2, 3, 0, 0xCDCD, 0xCDCD]);
+        // USER: "USER", total length, type 0; Shift-JIS lines, NUL-terminated, even length.
+        let u = &r.user;
+        assert_eq!(&u[..4], b"USER");
+        assert_eq!(u32_at(u, 4) as usize, u.len());
+        assert_eq!((u[8], u.len() % 2, *u.last().unwrap()), (0, 0, 0));
+        let text = crate::text::decode_sjis(&u[12..]);
+        assert!(text.starts_with("プレイヤー名\tTESTER  \r\n"));
+        assert!(text.contains("スコア\t1234560\r\n"));
+        assert!(text.contains("ゲームのバージョン\t1.00d\r\n"));
+    }
+
+    // 15 §3.6: spell practice fills the card name +0x7E; a changed config (normal game, E–L) or a recorded slow mode
+    // skips the save.
+    #[test]
+    fn save_card_name_and_skips() {
+        use crate::gamemgr::*;
+        let mut g = Game::default();
+        g.flags = F_PRACTICE | F_SPELL_PRACTICE;
+        g.card = 5;
+        g.score.catk[5].name[..4].copy_from_slice(b"Card");
+        record_stage_start(&mut g, &Default::default());
+        let r = Replay::parse(&build_save(&mut g, b"A       ", &mut Default::default()).unwrap())
+            .unwrap();
+        assert_eq!((r.spell_id(), r.card_name()), (5, &b"Card"[..]));
+        assert!(crate::text::decode_sjis(&r.user).contains("カード名\tNo.  6 Card\r\n"));
+
+        let mut g = Game::default();
+        record_stage_start(&mut g, &Default::default());
+        g.cfg.slow ^= 1;
+        assert!(build_save(&mut g, b"A       ", &mut Default::default()).is_none());
+
+        let mut g = Game::default();
+        g.difficulty = 4;
+        record_stage_start(&mut g, &Default::default());
+        g.rpy.as_mut().unwrap().info[0xD9 - HEADER] = 1;
+        assert!(build_save(&mut g, b"A       ", &mut Default::default()).is_none());
     }
 
     #[test]

@@ -69,6 +69,7 @@
 ## .rpy — source: specs/15 §3, 11 §6 (src/replay.rs)
 - Header 0x68: "T8RP", u16 6, u8 debug, +0xC size w/o USER, +0x10 checksum 0x3F000318 + Σ plain bytes from 0x15, +0x15 key; bytes 0x18.. encrypted `b += key; key += 7`; +0x18 compressed size, +0x1C image size − 0x68, +0x20/+0x44 u32[9] stage / fps offsets (image coordinates).
 - Image = header + info (0x68..0x134) + per stage: 0x24-byte record + u16 input words (dummy 0 first) + fps bytes. USER text section after the compressed body.
+- USER: "USER", u32 length incl. the 12-byte head, u8 type 0, 3 bytes; Shift-JIS `key\tvalue\r\n` lines (name, time, character, score, difficulty, last stage / card, misses, bombs, slowdown, human rate, version), NUL, padded to even. Info +0x11C clear status (route byte), +0x7E card name, +0x114/+0x118 slowdown + 1.12 / slowdown.
 
 ## .end (ending / staff scripts) — source: specs/16_endings_result.md §1.3 (src/ending.rs)
 - Shift-JIS text. `@` lines are commands: one command byte, then NUL-separated arguments (`@w120\0120\0\n`); ints by `atol`, strings up to the NUL; the reader then skips to the end of the line and over CR/LF. Other lines are text, copied 2 bytes at a time (≤ 0x44-byte buffer).

@@ -49,7 +49,7 @@ const STAGES: [&str; 9] = [
     "StageEX",
 ];
 // Replay list character / difficulty columns, tables 0x4C86C0 / 0x4C86F0 (12 §2.8).
-const CHARS: [&str; 12] = [
+pub(crate) const CHARS: [&str; 12] = [
     "Rm & Yk", "Ms & Al", "Sk & Rr", "Ym & Yy", "Reimu  ", "Yukari ", "Marisa ", "Alice  ",
     "Sakuya ", "Remilia", "Youmu  ", "Yuyuko ",
 ];
