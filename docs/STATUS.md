@@ -390,6 +390,10 @@
   spell practice (GameFlags bit 14, `Stage::sparkle_due`, 06 §5); a billboard appends a sparkle point only when it is
   drawn (0 ≤ z ≤ 1), `v < fog_near` quirk in `sparkle_point_ok` (06 §11.1). Unit tests for all three. Traces not run
   (cloud). SPEC-GAP 148 → 145. No questions.
+- impl58 (audit A.32, cloud, 2026-10-20): a player bullet entering its hit state follows the exact 09 §4.5 order:
+  rotation z saved → `AnmFile_SetScript` (new `AnmManager::file_set_script`, VM pos / pos offset kept) → rotation z
+  restored → effect 5 → pos z 0.1 → state 2; flag 0x2000 is no longer re-set (only the hit script sets it). Unit test.
+  Traces not run (cloud). SPEC-GAP 115 → 114. No questions.
 - impl57 (audit A.29, A.30, A.31, cloud, 2026-10-20): Yukari's option always runs the animation test after the attack
   test, on the sub-state the frame entered with, so it can overwrite sub 3 / interrupt 3 while the aimed pointer stays
   (14 §3.1); a shot origin reads the option pos whatever the option's state (09 §4.3); laser init 4 and update 5 both

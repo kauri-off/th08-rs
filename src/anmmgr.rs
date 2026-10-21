@@ -194,6 +194,12 @@ impl AnmManager {
         self.start_script(vm, slot, index);
     }
 
+    // AnmFile_SetScript 0x4069F0 (09 §4.5): like `set_script` but keeps the VM pos / pos offset.
+    pub fn file_set_script(&mut self, vm: &mut AnmVm, slot: usize, index: usize) {
+        vm.script_index = index as i16;
+        self.start_script(vm, slot, index);
+    }
+
     // AnmFile_StartScript 0x45E580 (05 §8): a missing script zeroes the whole VM; otherwise init and run once (frame 0).
     pub fn start_script(&mut self, vm: &mut AnmVm, slot: usize, index: usize) {
         if self.script(slot, index).is_none() {

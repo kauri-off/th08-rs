@@ -844,20 +844,17 @@ impl Player {
                 }
             }
             let b = &mut self.bullets[i];
-            // SPEC-GAP: effect 5 before the VM restart (09 §4.5 has it after); VM pos / flag 0x2000 re-set.
+            // 09 §4.5 order: rotation z saved → AnmFile_SetScript (VM pos kept, flag 0x2000 only if the
+            // hit script sets it) → rotation z restored → effect 5 at the bullet → pos z 0.1 → state 2.
             if !(4..=6).contains(&b.kind) && b.state == 1 {
-                b.state = 2;
+                let rot = b.vm.rotation[2];
+                anm.file_set_script(&mut b.vm, ANM_SLOT, (b.script + 11).max(0) as usize);
+                b.vm.rotation[2] = rot;
                 let pos = b.pos;
                 crate::effect::spawn(anm, 5, pos, 1, 0xFFFFFFFF);
                 let b = &mut self.bullets[i];
-                // Quirk kept (09 §4.5): rotation z survives the VM restart.
-                let rot = b.vm.rotation[2];
-                anm.set_script(&mut b.vm, ANM_SLOT, (b.script + 11).max(0) as usize);
-                b.vm.rotation[2] = rot;
-                b.vm.flags |= anmvm::F_ROT_DIRTY;
-                b.vm.pos = pos;
-                b.vm.flags |= anmvm::F_ZWRITE_OFF;
                 b.pos[2] = 0.1;
+                b.state = 2;
                 if b.kind != 3 {
                     b.vel = [b.vel[0] / 8.0, b.vel[1] / 8.0];
                 }
@@ -1040,5 +1037,82 @@ mod tests {
         let b = &p.bullets[0];
         assert_eq!((b.vm.pending_interrupt, b.update), (1, 0));
         assert!(p.laser_slots[0].owner.is_none());
+    }
+
+    // Player anm slot with 12 scripts: 10 (flight) sets zwrite_off; 11 (hit) sets it only if asked.
+    fn hit_scripts(anm: &mut AnmManager, hit_zwrite: bool) {
+        let ins = |op: i16, args: &[u32]| {
+            let mut v = Vec::new();
+            v.extend(op.to_le_bytes());
+            v.extend(((8 + 4 * args.len()) as u16).to_le_bytes());
+            v.extend(0i16.to_le_bytes());
+            v.extend(0u16.to_le_bytes());
+            args.iter().for_each(|a| v.extend(a.to_le_bytes()));
+            v
+        };
+        let end = ins(-1, &[]);
+        let scripts = (0..12)
+            .map(|k| {
+                let mut data = Vec::new();
+                if k == 10 || k == 11 && hit_zwrite {
+                    data.extend(ins(30, &[1]));
+                }
+                data.extend(&end);
+                crate::anm::Script { id: k, data }
+            })
+            .collect();
+        let chunk = crate::anm::Chunk {
+            name: "p".into(),
+            width: 256,
+            height: 256,
+            sprites: Vec::new(),
+            scripts,
+            texture: None,
+        };
+        anm.insert(ANM_SLOT, "p", vec![chunk], |_| 0);
+    }
+
+    // 09 §4.5: entering state 2 keeps the VM pos and rotation z, z 0.1, flag 0x2000 only from the hit script.
+    #[test]
+    fn hit_restart_keeps_pos_and_does_not_reset_zwrite() {
+        for hit_zwrite in [false, true] {
+            let mut anm = AnmManager::default();
+            hit_scripts(&mut anm, hit_zwrite);
+            let mut p = Player::default();
+            p.pos = [192.0, 400.0, 0.0];
+            let e = ShotEntry {
+                size: [8.0, 8.0],
+                speed: 8.0,
+                angle: -std::f32::consts::FRAC_PI_2,
+                damage: 10,
+                kind: 1,
+                ..ShotEntry::default()
+            };
+            p.spawn_bullet(&mut anm, 0, &e);
+            let b = &mut p.bullets[0];
+            assert_ne!(b.vm.flags & anmvm::F_ZWRITE_OFF, 0);
+            b.vm.pos = [11.0, 22.0, 0.0];
+            b.vm.rotation[2] = 1.25;
+            let (mut acc, mut by_bomb) = (0, false);
+            let dmg = p.damage_against(
+                &mut anm,
+                None,
+                [192.0, 400.0, 0.0],
+                [32.0, 32.0],
+                &mut acc,
+                &mut by_bomb,
+            );
+            assert_eq!(dmg, 10);
+            let b = &p.bullets[0];
+            assert_eq!((b.state, b.pos[2]), (2, 0.1));
+            assert_eq!(b.vm.script_index, 11);
+            assert_eq!(b.vm.pos, [11.0, 22.0, 0.0]);
+            assert_eq!(b.vm.rotation[2], 1.25);
+            assert_eq!(b.vm.flags & anmvm::F_ZWRITE_OFF != 0, hit_zwrite);
+            assert_eq!(
+                b.vel,
+                [polar(e.angle, 8.0)[0] / 8.0, polar(e.angle, 8.0)[1] / 8.0]
+            );
+        }
     }
 }
