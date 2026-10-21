@@ -605,13 +605,17 @@ left→idle or right→idle script.
    entry[0] = current final pos, velocity, angle. A phase-change re-run therefore shifts twice that frame. Data: n 15
    (21 uses) and 90 (1 use).
 5. Run main ANM VM and the two sub VMs (a finished sub VM is disabled).
-6. Unless bits 4/5/11 (and the player-state exception): contact test with the player (bit 2, 0x42C290, box
+6. Unless flags A bit 4, 5 or 11 is set, **or bit 31 is set while the player is bombing** (player +0xFDC ≠ 0; VERIFIED
+   0x42C6A0, RE-Q29 — this is the whole "player-state exception"): contact test with the player (bit 2, 0x42C290, box
    = hitbox e+0x2D70): (a) if flag A bit 7 and the enemy timer e+0x2E14 advanced and is a multiple of 6:
    `Player_GrazeTest` with box = hitbox / 0.7 (larger; grazes the player every 6 frames); (b) unless shot type
    0/4 and the enemy is a chained child: `Player_HitTestNoBomb` 0x44A360 with box = hitbox / 1.5 (smaller):
    kills the player in state 0; result 1 (also for an invulnerable player) on a non-boss without bit 7 →
    enemy life −= 10 (every frame of contact). Then, if bit 6, shot damage `d` = `Player_DamageAgainst`(hitbox,
-   …, &hitByBomb). hitByBomb is initialised to "player is bombing" (player +0xFDC, set for the whole bomb), but
+   …, &hitByBomb) — **except** when a spell card is active (g_Gui flag bit 0), the enemy has a parent (e+0x2DA4 ≠ 0,
+   `Enemy_HasParent` 0x41FD20) and the player is bombing (+0xFDC ≠ 0): then the first call is **not made** (d = 0,
+   no bullet hits, no hit sparks, no orb, hitByBomb keeps its initial value) (VERIFIED, RE-Q29; golden row 23298, demo 2
+   frame 4660). The extra-box call below has no such gate. hitByBomb is initialised to "player is bombing" (player +0xFDC, set for the whole bomb), but
    `Player_DamageAgainst` overwrites it: when the player's state timer (+0xE2AF4) has advanced (current ≠
    previous, i.e. every normal frame) it writes 0 at entry and 1 only when a damage area of the first 192
    (+0xB8834) **overlaps the enemy box on this call while life % period == 0** and +0xFDC ≠ 0 (changelog/answers_impl18.md
@@ -711,7 +715,7 @@ if chained; `Enemy_KillChildren(e, with drops)`; gauge ±200 (below).
 |---|---|
 | 0 | add score; enemy dead (alive cleared); aura told to end (interrupt 3, then e+0x53C8 := 0); then as "0–1" and "0–2" |
 | 1 | add score; flags A bit 23 set, bits 2, 3, 6 cleared (stays alive, e.g. scripted death animation); then as "0–1" and "0–2" |
-| 0–1 | if boss: HUD boss display off (Hud +0x2C := 0) and op 128 effects released. No death mode clears the boss table entry (0xF54CC0[slot]) or flags A bit 1: only op 127 −1 and `Enemy_Free` (op 1 delete, off-screen free) do. Mode 0 clears only the alive bit (no `Enemy_Free`), so a mode-0 boss stays in the boss table; timeline op 10 still stops waiting because it also tests the alive bit (changelog/answers_impl20.md §Q2) |
+| 0–1 | if boss: HUD boss display off (Hud +0x2C := 0) and op 128 effects released. No death mode clears the boss table entry (0xF54CC0[slot]) or flags A bit 1: only op 127 −1 and `Enemy_Free` (op 1 delete, off-screen free) do. Mode 0 clears only the alive bit (no `Enemy_Free`), so a mode-0 boss stays in the boss table; timeline op 10 still stops waiting because it also tests the alive bit (changelog/answers_impl20.md §Q2). The table holds **enemy pointers** into the fixed slot array (op 127 stores the enemy itself), and no spawn path clears or checks it, so a later enemy spawned into that freed slot (alive bit clear) **is** seen through the stale entry as boss n (env boss flag, `pull`, op 128 reads, …) until op 127 −1 or `Enemy_Free` clears it — a slot index is therefore an exact model (VERIFIED: writers are only `Ecl_Run` op 127 and `Enemy_Free`, RE-Q29) |
 | 2 | no score; stays alive; only "0–2" |
 | 0–2 | item drops (§10.4); if boss and **no** card active: `BulletMgr_CancelBonus(8000, 1)` + `EnemyMgr_KillAll(8000)`, sum → score + `Hud_ShowBonus`; life := 0; replay-stats word (0x18B8A28)+0xDA \|= 0x20 |
 | 3 | life := 1; flags A bit 3 (loses life) and death-mode bits 20–22 cleared (the latch B bit 3 stays until life > 0 again); HUD boss display off (Hud +0x2C := 0) for **every** mode-3 enemy, boss or not (no flag A bit 1 test, unlike "0–1"; VERIFIED 0x42D6AF case 3, RE-Q24); stats \|= 0x20; death effect e+0x3310 ×3 if ≥ 0; aura interrupt 3 and aura pointer e+0x53C8 := 0 (as mode 0); player state 0 → 3 with timer **90**; flags A bits 30 and 31 cleared. No drops, no bullet cancel, no score |
@@ -873,6 +877,14 @@ clears bits 0 and 4 and calls `Gui_ShowBossSpellName(face −1, fixed exe string
 decay in `Spell_Calc` 0x416B90 and time-orb +8000 in `Spell_AddBonus` 0x416B10 ignored; all 82 uses are
 `spell_ex 1` at the start of boss death subs). Both cleared by `Spell_Start`; bit 11 also by `Spell_End`.
 Bit 6 is set by op 164 (`Spell_SetFlag6` 0x41F0B0): while set, the start ring stops following the boss (below). Bonus +0xFC.
+Lifetime of the spell object (VERIFIED RE-Q29): `Gui_Register` → `Gui_LoadFaces` 0x414590 zero-fills the whole object
+(0x991 dwords, +0..+0x2643) at **every** stage start, fresh or not, so no flag, bonus, payout (+0x10, bit 8) or ring
+pointer survives into the next stage or a retry (scene 11). Bit 9 (captured) is set only on the captured path of
+`Spell_End` and cleared only by `Spell_Start` and that zero-fill. +0xC is written only by `Spell_Start` (:= the boss's
+e+0x2E0C); step 1.1 below compares against it.
+`Spell_AddBonus` 0x416B10 (time orbs, 08 §8.5) tests **only** bit 11: it also changes +0xFC (+= n, capped to +0x2638) and
++0x100 (+= n/120 while below the cap) when no card is active (bit 0 clear), e.g. for orbs collected after `Spell_End`;
+those values are overwritten by the next `Spell_Start`.
 
 **Start ring at `Spell_Start`** (VERIFIED 0x4152A0, RE-Q27): fixed effect slot 1, type 39 (52 when GameFlags bits 7–8 ≠ 0)
 at the boss pos e+0x2D34 (ring init: centre +0x2E0 := that pos), pointer in g_Gui +0xF4. Then: VM pos slot 0
@@ -886,7 +898,8 @@ flag A bit 27), decay per second +0x100 := (bonus − bonus/7) / (e+0x3378 / 60)
 freeze byte 0x160F534 is set. Otherwise, in this order:
 1. Card active (bit 0):
    1. if the boss (g_Gui +4) is not alive (flags A bit 0) or its slot index e+0x2E0C ≠ g_Gui +0xC: bit 0 := 0 and
-      `Spell_HideName` (the card ends silently: no `Spell_End`, no capture);
+      `Spell_HideName` (the card ends silently: no `Spell_End`, no capture). Steps 2–7 still run in the **same** call
+      (only this call is conditional; VERIFIED 0x416B90, RE-Q29), so step 7 sees bit 0 already clear on that frame;
    2. bonus-line tint alpha (byte +0x2623): if player x < 64 or player y ≥ 64: += 4 while < 0x80; else −= 4 while
       > 0x20 (fades the line when the player is in the top band x ≥ 64, y < 64);
    3. if bit 2 (capture possible) is clear: if the ring's sprite +0x214 is 0xDD → `AnmVm_SetSprite`(ring, 0xDE),
@@ -907,7 +920,9 @@ freeze byte 0x160F534 is set. Otherwise, in this order:
 **Capture ring** (`Spell_End`, captured; VERIFIED 0x4161B0, RE-Q27): bit 8; GameFlags bits 7–8 → bit 8 only if ≠ 0;
 ring VM pos slot 0: elapsed 0, duration 30, mode 6, from (radius +0x314, +0x32C) to (256, 0), VM pos := (+0x314,
 +0x32C); colour slot 1 (+0x5C/+0xB0): elapsed 0, duration 60, mode 3, colour_start := VM colour, colour_end :=
-D3DCOLOR 0x20D080A0 (alpha 0x20, R 0xD0, G 0x80, B 0xA0); wave count +0x334 := 6; **age timer +0x338 := 0**; +0xF8 :=
+D3DCOLOR 0x20D080A0 (alpha 0x20, R 0xD0, G 0x80, B 0xA0) — the colour slot lerps only R, G, B (05 §6); the dword
+write puts 0x20 into the alpha slot's end byte +0x27F, which matters only if the alpha slot is started later, so the
+ring's alpha does **not** fade here (VERIFIED RE-Q29); wave count +0x334 := 6; **age timer +0x338 := 0**; +0xF8 :=
 +0xF4, +0xF4 := 0; SE 0x23. Not captured: ring freed (active := 0), +0xF4 := 0, HUD message 5/6.
 On op 123 with the card active: bit 0 off; if not timed out → `CancelBonus(8000, 1)` + `KillAll(8000)` →
 score + `Hud_ShowBonus`; if capture still possible → captured: payout value = +0xFC, time reward 700 (flag A

@@ -574,3 +574,27 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - demos: 0 4629 DropAttracted missing (F) → 5246; 1 3880 single-kill gauge via GaugeAdd (G) → 4155; 2 4036 graze 3rd orb nested
   (H) → 4641 → (I bit-10 EnemyMgr skip) → 4660; 3 6665 bit 10 (I) → 6684.
 - selftest1 1540: frame counter := 0 in GameMgr_OnRemove (D) → 1922 = exit save inside the frame (E) → full match.
+
+# RE-Q29 (2026-10-21) — replay frame hook vs traces, next divergences, IMPL35–40 — IN PROGRESS
+- Runs re/work/runs/q29/ (portfix = current src + PR #29 + fixes; portfix_src_base = master src; run_all.sh <tag>;
+  old stale scratch src kept in portfix_old_src). Changelog specs/changelog/answers_re_q29.md.
+- Q1 DONE: hook is linked (record always, playback iff hdr+6) and zeroes g_Rng+4 every frame — but g_Rng+4 is never read
+  and the traces' rng_ctr = probe g_rng_calls (hook.c cb_rng, since process start). PlayCalcDebug never forces RNG
+  (reads input word via +0x78, stride 6). Port fix: separate never-reset Rng::calls for trace → PR29 back to master numbers.
+- IMPL73 Q3/Q4 DONE: slow counter GM+0x3DE08 shared with playback speed 1, never reset (n<128 → 0); gm+0x2D cleared at
+  step 10 / StageStart / OnRemove; skip after score roll; OR-accumulation touches only the raw word.
+- Q2 fixes on scratch (tags A–E in runs/q29 *_X.log): A Hud_Calc = Hud_Update then Msg_Run (12 §5.1b, bonus +1 frame) →
+  golden 10902; B trigger before clock step, no 60-frame gate (12 §5.6) → 11911; C rank sub-counter 0x164D340 := 0 every
+  stage start (11 §3.1) → golden 23298; D GameFlags bits 7/8/13 kept in Player::gflags (trace column) → fullrun 11251;
+  E msg op 11 trigger only stage idx 6–8 (10 §5) → fullrun 16164. Open: golden 23298 (port hits sub49 enemies on the
+  flags_on(1) frame t=60; orig no RNG) — orig scan running into runs/q29/golden_scan; demo2 4660 (+40 draws hit sparks),
+  demo3 6682 (orig 8 draws, port 4: one graze effect).
+- Q2 more (tags F–I): F Timer_Sub slow path prev:=cur (05 §2, no session change); G EnemyMgr step 6 bomb gates (bit31&&bombing
+  skip; card&&parent&&bombing → no 1st DamageAgainst) → golden FULL, demo2 sync; H item collect f32 box edges → fullrun 29948;
+  I ScreenEffect_Register duration is EDX (Ghidra hides it!): Sakuya 120/4/1, SakuyaLS 50/4/1, Alice 24 → demo3 sync.
+  Remaining: fullrun 29948 (bullets count ±1 one row, rng ok) and 48756 (rng/score +4) — orig scans fr_scan2/fr_scan3 running.
+- Q3 done except IMPL39 Q7 (dirty counters, skipped). Changelog specs/changelog/answers_re_q29.md written (fill fullrun rows).
+- Lesson: for any __fastcall-ish register arg Ghidra drops (in_EDX), read the call-site `mov edx` (structxref also misses
+  `this+off` reads, e.g. GameMgr_Calc step 4 gm+0x2D).
+- CHECKPOINT 2026-10-21: re/work/runs/q29/CHECKPOINT.md (status, open items fullrun 29948 / 48756, CODE BUG list 1–14).
+  fr_scan3 (48753–48757) was interrupted before its window — rerun the second half of scripts/fr2.sh.

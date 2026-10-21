@@ -491,7 +491,15 @@ The object is 0xDC bytes, pointer at 0x18B8A28. `Replay_Register(mode)` 0x451F90
 | mode | calc entries |
 |---|---|
 | 0 record | `Replay_RecordCalc` 0x452310, prio 17. On-register `Replay_RecordStageStart` 0x452830; on-remove 0x453080. Also `Replay_FrameHook` 0x4522A0, prio 7 (11 §1.4). |
-| 1 play | `Replay_PlayCalc` 0x452550, prio 6. On-register `Replay_PlayStageLoad` 0x452D60. Also `Replay_FastForward` 0x452490, prio 18. If header+6 (debug flag) ≠ 0, `Replay_PlayCalcDebug` 0x4526C0 is used instead: 6-byte frames {input u16, flag u16, RNG state u16}, the RNG state is forced every frame. Retail files have 0. |
+| 1 play | `Replay_PlayCalc` 0x452550, prio 6. On-register `Replay_PlayStageLoad` 0x452D60. Also `Replay_FastForward` 0x452490, prio 18. If header+6 (debug flag) ≠ 0: `Replay_PlayCalcDebug` 0x4526C0 replaces PlayCalc, and `Replay_FrameHook` is linked at prio 7 (11 §1.4). The recorder always writes header+6 = 0, so retail and self-recorded files never take this path. |
+
+`Replay_PlayCalcDebug` (VERIFIED 0x4526C0, RE-Q29) is PlayCalc (§3.3) with exactly one difference: the input word is
+read from a second cursor +0x78, which then steps by **6** bytes (PlayCalc: cursor +0x50, step 2). `Replay_PlayStageLoad`
+sets +0x78 := +0x50 = record+0x24 at every stage, so the debug calc reads the words at record+0x24, +0x2A, +0x30, … of
+the normal stream. The other two words of each 6-byte step are **never read**: the RNG state is **not** forced and
+there is no flag word with a meaning (the {input, 0, RNG} layout survives only as the recorder's dummy frame, §3.2).
+Everything else is identical and in the same order: the flags-bit-2 / slow-mode / bit-9 gates, g_InputPrev,
+key-repeat emulation, the fps byte every 30 frames, frame += 1.
 
 Object fields:
 
@@ -502,9 +510,15 @@ Object fields:
 | +8 | info pointer (0x134-byte header block) |
 | +0x50 | input cursor |
 | +0x54[9] | input end per stage |
-| +0x78 | stream start |
+| +0x78 | debug-format cursor: := +0x50 (record+0x24) at every stage start of both modes; the recorder writes its dummy {0, 0, RNG} frame through it (§3.2); in playback only `Replay_PlayCalcDebug` reads/advances it |
 | +0xA0 | fps cursor |
 | +0xA4[9] | fps end per stage |
+| +0x10 / +0x14 | mode (0 record, 1 play) / file path (playback) passed to `Replay_Register` |
+| +0xC8 | main calc node (RecordCalc / PlayCalc / PlayCalcDebug) |
+| +0xD0 | `Replay_FastForward` node (playback only; 0 when recording) |
+| +0xD4 | `Replay_FrameHook` node (recording always; playback only with header+6 ≠ 0; else 0); +0xD0/+0xD4 are unlinked by `Replay_OnRemove` 0x453080 |
+| +0xD8 | u16 RNG state snapshot written by the hook (11 §1.4); never read |
+| +0xDA | u16 statistics word (08 §9); never read |
 
 ### 3.2 Recording, per frame (calc prio 17, after the game objects)
 

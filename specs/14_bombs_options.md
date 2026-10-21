@@ -5,7 +5,10 @@ Sources: bomb table 0x4C7AD0 (09 §7), `Bomb_Start` 0x40BE30, `Player_SpawnInvul
 0x4117B0 / 0x413070, option functions (tables 0x4C7D40 / 0x4C7E10), laser 0x44FE20 / 0x450840 / 0x450AD0,
 player draw 0x44D530 / 0x44D630 (bullets 0x4512F0 / 0x451400). VERIFIED unless marked.
 Positions written to VMs are playfield coordinates plus the playfield origin (globals 0x164D2DC/0x164D2E0 = 32, 16); the
-screen-shake offset (AnmManager +0x1C/+0x20) is added later by the draw routines (05 §9). Notation: T = bomb timer (player +0xFF4, 0 on the first frame), "at T = n" = on the frame the timer
+screen-shake offset (AnmManager +0x1C/+0x20) is added later by the draw routines (05 §9). Screen effects are written (type: p0, p1, p2[, p3]) in `ScreenEffect_Register` order: type in ECX, **p0 (duration) in EDX**, p1–p3
+on the stack, then the draw prio (0x15 everywhere here); a decompiler shows only the stack arguments, so p0 must be read from
+the `mov edx` before each call (VERIFIED for every call site, RE-Q29: Alice shakes are 24 frames, Sakuya 120 / Sakuya LS 50).
+Notation: T = bomb timer (player +0xFF4, 0 on the first frame), "at T = n" = on the frame the timer
 changes to n (the code tests "timer advanced and == n", so nothing fires twice in slow motion); p = player
 position; R = `Rng_Float` (game RNG); areas: C = cancel area, D = damage area (09 §8: circle(pos, r, dr, …),
 rect(pos, w, h, …); "life 0" = exists for one frame); effects = 13 §2.6; screen effects (type: p0, p1, p2) =
@@ -112,8 +115,8 @@ timer +0x6EC). Draw: tint only.
 - T ≥ 60: rotation 0, doll at (192, 224); T ≥ 150: doll alpha 0. Events: T = 60, 64, 68, 72, 76: effect 0x28
   colours 0xFFFFFFFF, 0xFFFFD0D0, 0xFFFFB0B0, 0xFFFF8080, 0xFFFF4040. T = 90: SE 0xF; effects 0x2A, 0x2B,
   0x2C; C circle(doll, r 1, dr 5, life 110); D circle(doll, r 1, dr 5, dmg 70, life 110, period 5); shake
-  (1: 16, 8, 0); flash (3: 8, 1, 0x8FFFFFFF). T = 100, 110, 120, 130: effect 0x2D colours 0xFFFFFFFF,
-  0xFFFFD0D0, 0xFFFF8080, 0xFFFF0000. T = 150: flash (3: 8, 1, 0x8FFFFFFF), shake (1: 16, 8, 0), SE 0x19.
+  (1: 24, 8, 0); flash (3: 8, 1, 0x8FFFFFFF). T = 100, 110, 120, 130: effect 0x2D colours 0xFFFFFFFF,
+  0xFFFFD0D0, 0xFFFF8080, 0xFFFF0000. T = 150: flash (3: 8, 1, 0x8FFFFFFF), shake (1: 24, 8, 0), SE 0x19.
   T = 209: option state := 1, option timer 0 (the doll re-initialises).
 - Ring effects 0x2A–0x2D (k = 1 − (1 − t/40)², so they expand for 40 frames then collapse; life 80): all
   spawned with colour 0xFFFFFFFF (also in 2.4, except the four coloured 0x2D); script 83 (etama sprite 224, normal
@@ -128,7 +131,7 @@ As 2.3 but: start S = **p** (no SE 6); doll alpha 0 from T ≥ 128; events: T = 
 T = 120: SE 0xF, effects 0x2A–0x2C at the doll and effect 0x2D at (64, 96) 0xFF0000F0, (64, 352) 0xFFF00000,
 (320, 352) 0xFF00F000, (320, 96) 0xFF00F0F0; C circle(doll, r 1, dr 5, life 110); D circle(doll, r 1, dr 5,
 dmg 70, life 110, period 5) (no shake/flash); T = 130, 140, 150, 160: effect 0x2D colours as 2.3; T = 180:
-flash (3: 8, 1, 0xFFFFFFFF), shake, SE 0x19; T = 229: doll re-initialises.
+flash (3: 8, 1, 0xFFFFFFFF), shake (1: 24, 8, 0), SE 0x19; T = 229: doll re-initialises.
 Draw: T < 90 tint 0x802020D0; 90 ≤ T ≤ 120: c = (T − 90)·208/30, tint (A 0x80, R (c/5 − 48) mod 256,
 G c + 32, B c + 32) plus a white playfield rectangle with alpha (T − 90)·255/30; 120 < T ≤ 220: white
 playfield rectangle alpha 0x70 (no tint call); T > 220: tint 0x802020D0.
@@ -153,7 +156,7 @@ alpha 0.)
 ### 2.7 Sakuya — 幻符「殺人ドール」 (0x40FCD0 / 0x410300), dur 250, invuln 290
 - T = 0: knives (objects 0–95) state 0; speed multipliers 0.5; effect 20 at p (kept; follows p while T ≤ 60);
   SE 5.
-- 20 ≤ T < 116, every frame: SE 6 and shake (1: 4, 1, 0). For each knife k in index order: at T =
+- 20 ≤ T < 116, every frame: SE 6 and shake (1: 120, 4, 1). For each knife k in index order: at T =
   (k % 48)·2 + 20: if the knife is already active the whole function **returns** for this frame (QUIRK);
   else activate: VM script 0x16; angle = k·2π/96 − π; speed (+0xC) = R + 0.5; accel (+8) = R·0.1 + 0.03;
   spin = (Rng_Range16(1) == 0 ? −π/20 : +π/20) — always −π/20 (QUIRK; one RNG draw) (**3 RNG calls per knife**);
@@ -169,7 +172,7 @@ alpha 0.)
 - Draw: active knives 0–95, rotation z = angle, Draw2DRot.
 
 ### 2.8 Sakuya LS — 幻葬「夜霧の幻影殺人鬼」 (0x4103F0 / 0x410AC0), dur 320, invuln 350
-As 2.7 but 128 knives; shake (1: 4, 1, 0) only once at T = 0 (SE 6 is still played every window frame that
+As 2.7 but 128 knives; shake (1: 50, 4, 1) only once at T = 0 (SE 6 is still played every window frame that
 does not return early; effect 20 at p is kept and follows p while T ≤ 60 as in 2.7); window 20 ≤ T < 148; knife k at
 T = (k % 64)·2 + 20 with angle = wrap(k·2π/64 − π) and VM script 0x14; damage 30; at age 70 additionally
 effect 0x2E (ring: radius +8/frame, 12 segments, width 32; script 84: alpha 255, from t = 8 → 0 over 7,

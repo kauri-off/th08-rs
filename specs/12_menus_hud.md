@@ -426,7 +426,19 @@ the texture of ANM slot `slot` entry 0 (`Anm_CaptureToTexture` 0x466F20, D3DX su
 so a size mismatch is filtered). All four callers (pause menu, continue menu, `Hud_StageTransition`, `Msg_Run`
 stage-end) pass slot 3 (`capture.anm`), source (32, 16, 384, 448) = the playfield, and as destination the capture
 VM's current sprite rectangle truncated to int: (sprite +0x08 u0, +0x0C v0 in texture pixels, +0x34 width, +0x30
-height) (structs.md AnmSprite). The capture therefore shows the frame presented just before the request.
+height) (structs.md AnmSprite).
+Timing (VERIFIED RE-Q29): `Frame_Present` 0x442060 calls `ApplyPendingCaptures` right after `IDirect3DDevice8::Present`
+of the **same** `Frame_Run` whose calc made the request, so the copy happens after that frame's draw. What the back buffer
+then holds depends on the swap effect chosen by `Window_InitD3D` 0x4424C0: windowed → COPY (3); full screen with the
+60 Hz refresh → FLIP (2) when the frame-skip byte 0x17CE893 is 0, else COPY_VSYNC (4); the other full-screen variant →
+COPY (3). With the COPY effects the back buffer keeps the image just presented, so the capture shows **frame N**
+(the frame drawn right after the requesting calc; this is the case of every recorded session, all windowed). With
+FLIP it holds the previous buffer, i.e. frame N−1 (INFERRED from the D3D8 swap semantics). A request fails (−1) only if
+one is already pending, which cannot happen because every Present applies it.
+Capture VMs (VERIFIED RE-Q29): pause menu +0x1A70 and continue menu +0xFE0 both get `capture.anm` (slot 3) **script 0**
+via `AnmFile_SetScript`, then pos := (32, 16, 0) written directly; nothing ever interrupts either VM (it is simply no
+longer run/drawn when the menu closes). The pause menu draws a stack copy of its VM each frame. Capture option bit
+0x17CE8FC bit 1 is set unconditionally by `Window_InitD3D` and never cleared, so it is always set.
 VMs: `ascii.anm` scripts 12–21 on 10 menu VMs (title, items "resume / quit / retry", confirm "yes/no" …).
 Colours: selected 0xFFFFFFFF, others 0xFF505050 (confirm screen: selected 0xFFFF8080); the selected item is
 offset (−4, −4).
@@ -455,6 +467,15 @@ Flow and side effects: 11 §4.2. UI: `ascii.anm` scripts 22–24 on three VMs ("
 `times.anm` script 1 with sprite = clock counter (the night clock, advanced by one at frame 15 of a continue);
 selected item colour 0xFFFF8080, other 0xFF505050; default cursor "No" (state 2) in normal games and Extra; "Yes"
 (state 1) only in spell practice when the card was not captured (spell flag bit 9 clear) (VERIFIED 0x404890, corrected Phase 5). Input from frame 30 (state 2) / frame 4 (state 1); UP/DOWN toggle with sfx 0; confirm sfx 10.
+**Opening timing** (VERIFIED RE-Q29): game_over 0x164D0BB := 1 is written only by `Player_DyingUpdate` (calc prio 9, real
+death with no lives left) and the timeline op of `EclTimeline_Run` (enemy manager, prio 11). The ASCII calc (prio 1)
+therefore first runs `ContinueMenu_Update` on the **next** frame. (The same frame's ASCII draw already runs
+`ContinueMenu_Draw` with state 0, frame 0, so its "state ≠ 0 or frame > 2" items are not drawn yet.) That first call
+does all of state 0 (the early-exit tests, sound, VM setup, capture request, capture VM `SetScript` = one VM step), then
+state := 2 (or 1, see above) with frame := 0 and falls through into the state-2/1 body **in the same call**. The capture
+VM is run once more at the end of every call, and frame += 1. So state 0 never lasts a whole frame: the first drawn
+frame shows the menu VMs and the capture VM at script time 2. (State 0 also has a `frame > 8 → stay` exit that cannot
+happen, because frame is 0 on entry.)
 
 **Draw** (`ContinueMenu_Draw` 0x4052B0, from the ASCII manager draw, only while game_over 0x164D0BB ≠ 0; VERIFIED):
 flush the sprite batch, set the D3D viewport to the playfield (x 32, y 16, w 384, h 448 from 0x164D2DC…0x164D2E8,
@@ -496,6 +517,27 @@ stage-title VM 0 colour (impl+0x2A44 + 0x1F3 = `stgNtxt.anm` script 0) is ≠ 0;
 VM 0 starts its fade-in: demo 1 (stg4atxt script 0 fades in at 130) → clock first drawn at gameplay frame 369;
 demo 0 (stg5txt script 0 fades in at 730) → 969. When the title VM's alpha returns to 0 the clock VM stops where
 it is (stage 4A: last clock draw at frame 547 with alpha 4, exactly at the end of its own fade-out).
+
+### 5.1b Per-frame order (`Hud_Calc` 0x4338CA / `Hud_Update` 0x435900) — VERIFIED (RE-Q29)
+`Hud_Calc` does nothing while the freeze byte 0x160F534 (GM+0x2C) is set. Otherwise, in this order:
+1. `Hud_Update`:
+   1. boss bar (only while no dialogue script runs, impl+0x2181C < 0): show/hide interrupts on VM impl+0x1FB0,
+      alpha +0x1C ±4, displayed life +0x34 moves towards +0x30 (§5.1, §5.4);
+   2. run front VMs (16), stage-title VMs (4), the stage-start clock impl+0x34D4 (§5.1 condition), the stage-clear VM
+      impl+0x212C8, the night clock impl+0x2156C;
+   3. night-clock player-overlap fade (§5.7);
+   4. run VMs impl+0x5484 and impl+0x22E14; while impl+0x398C ≥ 0 the spell-name VMs impl+0x3778 / impl+0x3CC0 and the
+      8 VMs at impl+0x3F64; the 168 stage-start transition VMs while impl+0x21810 ≠ 0;
+   5. popup timers impl+0x22D9C / +0x22DBC / +0x22DDC (§5.5);
+   6. **clear bonus** when impl+0x22D84 = 1 (§5.6), then impl+0x22D84 := 2;
+   7. **clear trigger** test, then the **clock animation** step (§5.6).
+2. `Msg_Run` (10 §5): the dialogue interpreter, including op 9, which sets impl+0x22D84 := 1 and flags bit 9.
+3. If the raw input has SKIP (0x100) and 0x17CE8CC < 8: 0x17CE8CC := 8 (§4).
+4. HUD frame counter +0 += 1.
+
+Because `Hud_Update` runs **before** `Msg_Run`, whatever a msg op sets this frame is acted on by `Hud_Update` the
+next frame. In particular, the clear bonus of op 9 is added to the score on the frame **after** op 9 (and after
+flags bit 9 appears). The trigger and animation also start one frame later.
 
 ### 5.2 front.anm layout (positions are sprite centres) — VERIFIED from the anm data
 | VM / script | sprite | pos | role (INFERRED from position) |
@@ -589,7 +631,13 @@ cleared every frame), only relevant for draw-log parity.
 - 0: `Supervisor_Init`.
 A port that redraws the whole screen every frame can ignore it.
 
-### 5.4 Boss UI (`Hud_DrawBoss` 0x43741D; only when no dialogue runs and the bar is shown or fading) — VERIFIED
+### 5.4 Boss UI (`Hud_DrawBoss` 0x43741D; the bar part only when no dialogue runs and the bar is shown or fading) — VERIFIED
+`Hud_DrawBoss` order (VERIFIED RE-Q29): **always**: the 4 stage-title VMs, the stage-start clock impl+0x34D4 and the night
+clock impl+0x2156C (`Draw2DRot`); while impl+0x398C ≥ 0 the spell-name VMs (impl+0x3778 `Draw2DSnap`, impl+0x3CC0 and the
+8 VMs at impl+0x3F64 `Draw3DQuad`, and, while impl+0x3C30 ≥ 0, impl+0x3A1C with its pos +0x208 := (304, 448, 0) first, `Draw2DSnap`); the 168
+stage-start transition VMs while impl+0x21810 ≠ 0. **Guarded** (no dialogue script, impl+0x2181C < 0, and bar requested
++0x2C + bar state impl+0x2A40 ≠ 0): life bar, markers, "Enemy" label VM impl+0x1FB0, remaining-bars gauge, timer, and the
+chain-count popup below. **Always, last**: the stage-clear VM impl+0x212C8 (`Draw2DSnap`).
 - Life bar quad x 64 … 64 + 320·displayed_fraction, y 19..23, colour alpha|0xFFFFFF (top) / alpha|0x202060.
 - Markers k (8 slots, enabled when end ≠ 0 and start < displayed): x 64 + 320·start … 64 + 320·min(end,
   displayed), colour alpha|colour, bottom alpha|((colour >> 2) & 0x3F3F3F).
@@ -618,7 +666,7 @@ the playfield viewport (§2.9).
 (15 §3.5, the practice flag recorded at record start). Replay playback never sets GM flag bit 0 (15 §3.8), so practice
 replays are recognised only through +0x7B. `P` = GM flag bit 0 (practice).
 
-**Bonus computation** (`Hud_Calc`, once, on the first frame after op 9; all integer arithmetic):
+**Bonus computation** (`Hud_Update`, once, on the first frame after op 9, §5.1b; all integer arithmetic):
 1. `t = clear_bonus + graze·50 + point_items·5000 + time·100` (values stored by op 9, 10 §9).
 2. Stage idx ≥ 6 and not `P`: `t += lives·2 500 000 + bombs·500 000` (replays included, even practice replays).
 3. Stage idx 7 (6B): `t += (12 − clock)·2 000 000` — no practice test.
@@ -630,7 +678,7 @@ replays are recognised only through +0x7B. `P` = GM flag bit 0 (practice).
 **Draw** (ASCII strings, clip flag 0 = full screen; pen starts at (120, 96); "y +n" = advance before the next line):
 | step | condition | text | colour |
 |---|---|---|---|
-| title | stage < 6: "Stage Clear"; else "All Clear!" — for stage idx > 6 (6B, Extra) the title is at y 80 | | 0xFFFFFF40 |
+| title | stage < 6: "Stage Clear"; else "All Clear!" — for stage idx > 6 (6B, Extra) the pen y is lowered by 16 **before** the title and every later line keeps that offset, i.e. the whole panel starts at y 80 ("Clear" at 112) (VERIFIED 0x43826B, RE-Q29) | | 0xFFFFFF40 |
 | | | y +32: "Clear = %8d0" | 0xFFFFFFFF |
 | | | y +16: "Point = %8d0" (points·5000) | 0xFFE0E0FF |
 | | | y +16: "Graze = %8d0" (graze·50) | 0xFFD0D0FF |
@@ -644,12 +692,29 @@ replays are recognised only through +0x7B. `P` = GM flag bit 0 (practice).
 | total | | y +16: "Total = %8d0" (stored t) | 0xFFFFFFFF |
 | clock | stage < 6 | y +40, x 120: "%s%2d:%.2d" of the old minutes (impl+0x22E04) in 0xFFDFDFDF; x +99: ">>" in 0xFFAFAFAF; x +34: the animated minutes (impl+0x22E0C) in 0xFFFF8F8F. Prefix "PM" while minutes/60 < 12, else "AM"; hours shown (minutes/60) % 12 | |
 
+Draw-time values (VERIFIED 0x43826B, RE-Q29): Clear / Point / Graze / Time / Total and the clock minutes come from the
+values stored by op 9 and the bonus step (impl+0x22DEC…, +0x22D88, +0x22E04/08/0C), but the "Player" / "Bomb" lines and
+the 6B "Night Bonus" amount call `GameMgr_GetLives` / `GetBombs` / `GetClock` **every draw** (live values; "Last Time"
+uses the stored +0x22E08). The percentage lines divide by 0x164D31C with `idiv` and no zero test: f = 0 would raise an
+integer divide fault (no handler; the game would crash). Retail data never reaches it (every op 9 follows counted
+gameplay frames), so a port may treat f = 0 as unreachable. impl+0x22D88 (Total) is written only by the bonus step; the
+HUD impl block is reallocated and zero-filled only on a fresh start (`Hud_Register` / `Hud_Load`), so on a continuing
+stage the previous stage's total stays until the next op 9 (impl+0x22D84 is reset to 0 by `Hud_Load` every stage).
 So the lines shown and the bonus actually added differ: practice replays add the lives/bombs bonus without showing
 it, practice games and practice replays add the 6B night bonus without showing it, and the lives-option penalty is
 applied in every game but shown only below Extra outside practice.
-Clock animation (impl+0x22E10 frame counter): after 60 frames the displayed minutes rise by 1 per frame (+3 more while
-SHOT or SKIP held, clamped to the target); when reached (stages 1–5, GM flags bits 5–6 clear) GM flags := bits 5–6 = 2
-(the stage-clear trigger, 11 §4.1).
+Clear trigger and clock animation (VERIFIED 0x4360F7–0x43625B, RE-Q29). `shown` = impl+0x22E0C (op 9 sets it to the
+old minutes, always ≥ 660, so ≠ 0; 0 before any op 9), `target` = impl+0x22E08, `timer` = impl+0x22E10 (op 9 := 0).
+Each `Hud_Update`, after the bonus step, in this order:
+1. **Trigger**: if stage idx < 6, `shown` ≠ 0, `shown` ≥ `target` and GM flags bits 5–6 = 0 → bits 5–6 := 2 (the
+   stage-clear trigger, 11 §4). There is **no** 60-frame gate here: when the clock did not advance (`shown` =
+   `target` from op 9 on), the trigger fires on the first `Hud_Update` after op 9 (the same frame as the bonus).
+2. **Animation**, only if `shown` ≠ 0 and `shown` ≠ `target`: if `timer` < 60 → `timer` += 1; else if `shown` <
+   `target` → `shown` += 1, then += 3 more if the game input (g_Input 0x164D52C) has SHOT (1) or SKIP (0x100),
+   then clamp to `target`; else (`shown` > `target`) `timer` += 1.
+
+Because the trigger is tested before the step, it fires on the frame **after** the step that makes `shown` reach
+`target`.
 Counters for the percentage lines: 0x164D31C counts this stage's non-dialogue player frames, 0x164D32C / 0x164D328 the
 frames at human / youkai max gauge; reset at stage start, incremented in `Player_Calc` together with **+100 points per
 frame** at either max.
@@ -666,6 +731,9 @@ frame** at either max.
   (impl+0x2156C, `times.anm` script 2, ECL ops 179/181; op 180 = 0x4390D6 sets it to 0 = hidden). While the
   alpha is ≠ 0: if the player is at x ≥ 64 and y < 128 it drops by 4 per frame down to 64 (0x40); otherwise
   it rises by 4 per frame up to 255 (values ≥ 0xFC snap to 0xFF; 0xFF stays).
+  Order (VERIFIED RE-Q29, §5.1b): the fade runs **after** `Hud_Update` has run the night-clock VM in the same call, so a
+  script alpha change made by the VM this frame is then adjusted by the fade. The player position is the player object's
+  pos (0x17D61AC/0x17D61B0), i.e. playfield coordinates (0..384, 0..448), compared against x 64 / y 128.
 - Score/hiscore and the boss UI use the same ASCII manager queue (256 strings per frame, drawn at prio 14/20).
 
 ### 5.8 Spell-name plates, cut-ins, spell-bonus line (`g_Gui` 0x4EA670) — VERIFIED (changelog/answers_impl11.md §13)

@@ -91,8 +91,9 @@ direct effect of an opcode/draw routine, INFERRED for names of owner-only fields
 - `Set(v)`: current = v, fraction = 0, previous = −999.
 - `Tick()`: previous = current; if game_speed > 0.99 → current += 1; else fraction += game_speed and if
   fraction ≥ 1 → current += 1, fraction −= 1. (Game speed is 1.0 in normal play; slow-down effects set 1/N.)
-- `Decrement()` (`Timer_Sub(1)`): if game_speed > 0.99 → current −= 1; else fraction −= speed, borrowing
-  from current while fraction < 0. (There is an extra unconditional decrement when Supervisor flag 0x20 is set;
+- `Decrement()` (`Timer_Sub(1)`): if game_speed > 0.99 → current −= 1 and **previous is not touched** (after a `Set` it
+  stays −999, so "current ≠ previous" stays true); else previous := current, then fraction −= speed, borrowing
+  from current while fraction < 0 (so on a slow frame without a borrow current = previous) (VERIFIED 0x44735B, RE-Q29). (There is an extra unconditional decrement when Supervisor flag 0x20 is set;
   that flag is set only by the slow-down effect restore — a later-phase detail.)
 - `GetF()` = current + fraction.
 
@@ -287,6 +288,9 @@ Notes:
    - pos: `p = (end − start)·t + start` per component, into pos (or pos_offset if bit 8).
    - colour / alpha / colour2 / alpha2: per byte `b = trunc((end − start)·t + start)` computed in floating point
      from the integer bytes, stored as a byte.
+     The colour slots write **only R, G, B** (vm+0x1F0..0x1F2 from start +0x278..0x27A / end +0x27C..0x27E); the alpha
+     byte (+0x1F3) is written only by the alpha slots, whose start/end are the 4th bytes +0x27B / +0x27F of the same
+     dwords (VERIFIED `AnmVm_Run` POST and `AnmVm_InterpColour` 0x40ECA0 / `AnmVm_InterpAlpha` 0x40ED50, RE-Q29).
    - rotation: per axis `rotation = wrap(start + (end − start)·t)`; set bit 2.
    - scale: `s = (end − start)·t + start` for x and y; set bit 3.
    Because the instruction that starts a slot runs before POST in the same frame, the first update happens in

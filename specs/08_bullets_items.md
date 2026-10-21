@@ -417,7 +417,10 @@ For each item (count += 1):
   vel.y = 3 else vel.y += 0.03·m; then collection test. Else (fell out): **rank −3** and the item is freed.
 - **collection test**: skipped in state 3; `Player_ItemCollectTest` (player state 0/3/4; item box of size
   (C, C) vs the player's collect box player+0x3BC..+0x3CC). Both boxes are centred: item ±C/2, player ±collect/2 (09 §3, sht +0x18 / 2, recomputed
-  in the player calc after movement), inclusive overlap, i.e. |dx| ≤ (C + collect)/2 and |dy| ≤ (C + collect)/2 (= 24 for C = collect = 24). On collection: statistics bit 0x40, type handler
+  in the player calc after movement), inclusive overlap of **f32 box edges**: item min = pos − C/2, max = pos + C/2 (C/2 via a ÷ 2.0), player min/max = the
+  values stored by `Player_Move` (pos ∓ +0x3EC); not collected iff item max.x < player min.x or player max.x < item min.x
+  (same for y). Each edge is rounded to f32 **before** the comparison, so this is not the same as |dx| ≤ (C + collect)/2:
+  fullrun_noclip row 16164, item x 127.99999 + 12 rounds to 140.0 = player min.x → collected (VERIFIED 0x44A5A0, RE-Q29). On collection: statistics bit 0x40, type handler
   (§8.5), sound choice (0x15, or 0x2C if the item's max-value flag is set), item freed. Else tick timer and run
   the VM.
 After the loop: play the chosen collection sound once; timer 0x18B89D4 (= player +0xE2ADC, "time-orb gauge

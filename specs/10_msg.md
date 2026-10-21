@@ -177,7 +177,7 @@ Arguments are given in file order. `str` = XOR-0x77 string (§2). Count = occurr
 | 8 | boss_card | i16, i16, str | starts script 1 of face file 2 on `boss_card` (the boss name plate, `face_stNN_name`), wait_count = 0. **The arguments are ignored** (the string is the boss name) | 35 |
 | 9 | stage_end | i32 (always 0, ignored) | stage-clear: computes and shows the clear bonus, advances the clock counter, sets GM flag 0x200 (§7, 11/12) | 37 |
 | 10 | halt | — | **stall forever** (ip is not advanced; the game manager ends the stage) | 37 |
-| 11 | halt_final | — | stages 6A/6B/Extra: GM flags = flags & ~0x60 \| 0x40 (game-clear trigger); then stall like op 10 | 36 |
+| 11 | halt_final | — | only when stage idx is 6, 7 or 8 (6A/6B/Extra): GM flags = flags & ~0x60 \| 0x40 (game-clear trigger), re-applied on every stalled frame; in **any other stage** it does nothing but stall like op 10 (the stage 1–5 clear trigger comes only from the HUD clock animation, 12 §5.6; VERIFIED 0x433DB3 case 0xB, RE-Q29: msg1 uses op 11 after op 9) | 36 |
 | 12 | bgm_fade | — | `Music_Fade(4.0 s)` (0x4480F8; WAV mode: 4 s divided by game speed when slowed) | 37 |
 | 13 | skippable | u8 b, pad×3 | `skippable = b` | 204 |
 | 14 | flash | — | full-screen ScreenEffect type 4: colour 0xFFFFFF, duration 442 frames, alpha = 255·t/442 (fade to white), draw prio 21; HUD full-repaint counter (0x17CE8CC) = 442 | 12 |

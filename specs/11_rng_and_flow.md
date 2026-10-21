@@ -10,7 +10,7 @@ Global objects: `g_Rng` 0x164D520, `g_GameManager` (GM) 0x160F508, `g_Supervisor
 | off | type | meaning |
 |---|---|---|
 | +0 | u16 | state `s` |
-| +4 | u32 | call counter (incremented by every Next16; reset to 0 every frame by the replay hook §1.4; never influences values) |
+| +4 | u32 | call counter (incremented by every Next16; reset to 0 by the replay hook §1.4 on every frame the hook node is linked; never read by any code; **not** the traces' `rng_ctr` column, §1.4) |
 
 ```
 next16():  t = (s XOR 0x9630) − 0x6553         (mod 2^16)
@@ -68,9 +68,30 @@ are made from that thread.
   RNG saved and restored around it, and captures `stage_seed` — identical to the recorded state.
 - Practice / spell practice use the same path (no special seed).
 
-### 1.4 Per-frame hook
-Replay calc node at priority 7 (`Replay_FrameHook` 0x4522A0; always while recording, during playback only when
-the replay header byte +6 ≠ 0): stores `s` into the replay object (+0xD8) and resets the counter.
+### 1.4 Per-frame hook — VERIFIED (RE-Q29)
+`Replay_FrameHook` 0x4522A0 is a calc node at priority 7. `Replay_Register` (called by `GameManager_StageStart`
+after `Gui_Register`, 11 §3) creates and links it only when it creates the replay object, i.e. at the first stage
+of a game; later stages reuse the object and node. While **recording** (mode 0) it is always linked; during
+**playback** (mode 1) only when the replay header byte +6 ≠ 0 (debug format, 15 §3.1; every recorder writes 0, so
+never for retail or self-recorded files). On linking, `Replay_Register` also calls the hook once directly. The
+node has no gate of its own (no GM-flag, pause or bit-9 test): it runs on every frame the calc chain reaches
+priority 7. Each run, in this order:
+1. replay object +0xDA (statistics word, 08 §9) := 0;
+2. replay object +0xD8 := `s` (u16 RNG state);
+3. RNG call counter (g_Rng+4) := 0;
+4. if `GM+0x3DB98` (0x164D0A0) ≠ 0: +0xDA |= 0x100; then `GM+0x3DB98` := 0. `GM+0x3DB98` is set to 1 only by the
+   pause entry (11 §4 step 4, 0x43A153).
+
+**None of these values is ever read** (VERIFIED by byte search for 0x164D524 / 0x164D0A0 and every replay-object
+access): g_Rng+4 is written only by `Rng_Next16` (+1) and `Rng_ResetCounter` 0x453C00 (:= 0, called only by the
+hook); +0xD8 and +0xDA have no readers. The hook therefore has **no observable effect** on gameplay, files or
+display; a port may implement it or omit it.
+
+The `rng_ctr` column of every recorded trace (sessions, demo traces; specs/data/README.md,
+specs/data/drawlog/README.md) is **not** g_Rng+4: it is the probe's own count of all `Rng_Next16` calls since
+process start, which nothing resets. In those traces it therefore grows through gameplay even though the
+hook zeroes g_Rng+4 every recorded frame. A port that resets its counter in the hook must keep a separate,
+never-reset count for that trace column.
 
 ### 1.5 RNG consumers (all VERIFIED call sites; "draws" = Next16 calls)
 
@@ -165,6 +186,9 @@ game_speed = 1.0; flags &= ~0x400
 [3.2 new game | 3.3 continuing]
 playfield/clamp rects (0x43C686)
 0x164D340 = 0; stats.point_items_stage = 0 (+0x2C); stats.graze_stage = 0 (+0x04)
+    # 0x164D340 = GM+0x3DE38 = the rank sub-counter (§2): reset at **every** stage start, after both the 3.2 and the
+    # 3.3 branch, while rank / min / max are set only by GameMgr_InitRank (fresh start, replay playback) — a
+    # continuing stage keeps the rank but restarts the sub-counter at 0 (VERIFIED 0x43B1B1, RE-Q29)
 paused = 0; flags &= ~0x2180; counters 0x164D31C/328/32C = 0
 stats.gauge_start (+0x20) = stats.gauge (+0x22)
 stats.time (+0x3C) = 0; stats.time_parity (+0x44) = 0
@@ -243,8 +267,9 @@ stats.max_point_value (+0x24) = E 60000, N 100000, H 200000, L 300000, Extra 300
 stats.extends (+0x34) = 0; next_extend (+0x38) = EXTEND_THR (08 §8)
 GameMgr_LoadScoreData 0x43BBE1: first flushes score.dat via Result_Register(2) = save (RNG 2 draws, 15 §2.2); then load score.dat → hiscore for (shot, difficulty) (practice: practice hiscore table; play counters +1)
 rank = RANK[d].init, min, max (table 0x4C7880: E/N 10, 8, 16; H/L 8, 8, 12; Extra 16, 15, 16)
+  (`GameMgr_InitRank` 0x43B936 writes rank, min, max only — **not** the sub-counter, which §3.1 zeroes at every stage start)
   (rank changes: RankAdd/RankSub 0x43BFC3/0x43C03F via sub-counter GM+0x3DE38, ±1 rank per 100,
-   clamped; deltas: power item +1, point item +3 if v < max else +10, bomb item +5, graze +6, extend +200, item fell off
+   clamped — RankAdd only to max, RankSub only to min (VERIFIED RE-Q29; the same as a two-sided clamp while rank is in range); deltas: power item +1, point item +3 if v < max else +10, bomb item +5, graze +6, extend +200, item fell off
    the bottom −3, bomb −200, death −1600; +100 every 2400 − 240·lives frames of the enemy-manager clock outside
    dialogue, 0x42C3B0)
 stats.deaths (+0x64/+0x68) = 0 (checksum); stats.bombs_used (+0x84/+0x88) = 0 (checksum)
@@ -305,8 +330,12 @@ Per frame (after `0x164D09C += 1`):
 4. **Pause**: if not paused, no game-over menu, not demo, `gm+0x2D == 0`, and ESC newly pressed (raw input):
    paused = 1, sound command "Pause", sfx 0x22 (`se_pause`), music paused, pauses++, checksum with RNG saved
    and restored.
-5. Playfield viewport set; replay-playback frame skipping when the playback speed setting is active
-   (0x164D0BD = 1; uses the recorded per-30-frame FPS byte; INFERRED purpose: emulate recorded slowdown).
+5. Playfield viewport set; replay-playback frame skipping (VERIFIED 0x43A24A, RE-Q29). Only when replay playback
+   (flags bit 3), playback speed byte 0x164D0BD = 1 **and** no dialogue is active (`Msg_IsActive` 0x4358BB = 0):
+   the shared skip counter `c` = GM+0x3DE08 += 1, then with `f` = fps_now (0x17CE8F0, from the replay's fps stream,
+   15 §3.3) the frame runs only if all of: (f ≥ 20 or c % 3 = 0), (f < 20 or f ≥ 30 or c % 2 = 0),
+   (f < 30 or f ≥ 40 or c % 3 ≠ 0), (f < 40 or f ≥ 50 or c % 6 ≠ 0); otherwise **return 3** at once (steps 6–11
+   skipped, frame counter not advanced, `gm+0x2D` unchanged). Purpose (INFERRED): emulate the recorded slowdown.
 6. Demo mode: any newly pressed key → `scene = 1`; demo timer limits per demo index 0–3: music fade +
    ScreenEffect type 2 at 6000/4800/4920/6900 frames, `scene = 1` and return 3 at 6120/4920/5040/7020.
    Exact calls (0x43A3FA, VERIFIED): `ScreenEffect_Register(type 2, p0 = 120 frames, colour 0 = black, 0, 0,
@@ -325,8 +354,24 @@ Per frame (after `0x164D09C += 1`):
    score` then `step = score − disp`; `disp += step`; when `disp ≥ score`: `disp = score, step = 0`; score
    capped at 999 999 999 (×10 displayed). `hiscore = max(hiscore, disp)`; on update hiscore-continues byte
    (+0x18) = continues.
-10. Slow mode (config +0x25): skip every 3rd frame with ≥ 320 live bullets, every 4th with ≥ 224, every 5th
-    with ≥ 128 (sets `gm+0x2D = 1`, return 3).
+10. Slow mode (config +0x25 ≠ 0; VERIFIED 0x43A92D–0x43A9DC, RE-Q29). Runs after step 9 (the score roll and the anti-tamper
+    checks have already run this frame). `gm+0x2D` (0x160F535) := 0; `c` = GM+0x3DE08 += 1; with `n` = live-bullet
+    count 0x160F3C8 (08 §4.3a, from the last bullet calc): if (n ≥ 320 and c % 3 = 0) or (224 ≤ n < 320 and
+    c % 4 = 0) or (128 ≤ n < 224 and c % 5 = 0) → `gm+0x2D` := 1 and **return 3** (step 11 and the
+    `GameMgr_IsTampered` call skipped; frame_counter not advanced). Otherwise, if n < 128: `c` := 0.
+    - `c` is the same counter step 5 uses (both only increment it; step 5 never resets it). Its only other writer is
+      the GM static constructor (zero), so it is **never reset** by game start, stage start or GM removal: its phase
+      carries over between games, between replay playback and live play (VERIFIED: the 12 byte-pattern sites of offset
+      0x3DE08 are all in `GameMgr_Calc`; the only struct-base fill covering it is the constructor's).
+    - `gm+0x2D` is cleared only here (every frame that reaches step 10 with slow mode on), by `GameManager_StageStart`
+      (0x43B835) and by `GameMgr_OnRemove` (0x43BF5C). A frame that returns before step 10 (loading, pause, game-over
+      menu, playback skip of step 5) leaves it as it is. Readers: step 4 (through `this`), `Supervisor_Calc` input
+      poll (§7) and `Fps_Update` 0x446F53 (a flagged frame is not counted by the fps meter).
+    - Because the Supervisor (prio 0) runs before the GM (prio 2), a skip on frame k makes the poll of frame k+1
+      OR-accumulate (§7), and step 4 of frame k+1 sees `gm+0x2D` = 1, so ESC cannot pause on the frame right after a
+      skip.
+    - In slow mode the recorder stores nothing (15 §3.2 step 2) and playback reads nothing (15 §3.3), so slow mode
+      changes only the live game's speed.
 11. `frame_counter += 1`; return 1.
 
 ### 4.1 Stage routing (`Stage_Advance` 0x43C4B3) — VERIFIED
@@ -439,8 +484,10 @@ A second per-stage stream holds one byte per 30 frames: FPS value (bit 7 = flag)
 
 Fields: `+0x158` current scene, `+0x15C` requested scene (0x17CE8B4, written by everyone), `+0x160` previous.
 Every frame (before the scene logic): reset some ANM manager state, run Supervisor VMs, poll input (raw word
-0x164D528, previous 0x164D530, key-repeat flag 0x164D538), unless `gm+0x2D` (slow-mode skipped frame), in which
-case input is OR-accumulated (no repeat update). Key repeat (VERIFIED 0x445453, the same rule as the replay emulation
+0x164D528, previous 0x164D530, key-repeat flag 0x164D538), unless `gm+0x2D` (slow-mode skipped frame, §4 step 10), in which
+case input is OR-accumulated: raw word |= Input_Poll(), and **nothing else** changes: previous word, repeat flag
+0x164D538 (keeps its value from the last normal poll) and repeat counter 0x164D53C are left as they are (VERIFIED
+0x4455D5, RE-Q29). Key repeat (VERIFIED 0x445453, the same rule as the replay emulation
 15 §3.3): repeat := 0; if the new raw word equals the previous one: **test first** — if the counter 0x164D53C > 29,
 repeat := (counter % 8 == 0), and if the counter > 37 it is reset to 30 — **then** counter += 1; else counter := 0.
 The tested value runs 0, 1, …, 32 (repeat), 33 … 38 (reset to 30, stored 31), 31, 32 (repeat), …, so repeat is set
