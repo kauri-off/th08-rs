@@ -2255,8 +2255,16 @@ impl EnemyManager {
             }
         }
         // 0x164D30C play-time counter: top of EnemyMgr_Calc outside dialogue, before the bit-10 test (11 §2).
+        // Human-rate counters (15 §2.3) in the same block, only while the manager clock (+0x9DCED0) is > 15;
+        // human = player byte +3 == 0.
         if !self.dialogue_active() {
-            self.player.borrow_mut().stats.rec.progress += 1;
+            let mut p = self.player.borrow_mut();
+            p.stats.rec.progress += 1;
+            if self.frame > 15 {
+                let human = (p.focus == 0) as u32;
+                p.stats.rec.total += 1;
+                p.stats.rec.human += human;
+            }
         }
         // Step 0: GameFlags bit 10 (spell-card death freeze) returns here; the draw lists keep last frame's
         // enemies, the manager clock and Spell_Calc's card timer hold (07 §10.1 step 0, §11.1).
@@ -2417,6 +2425,31 @@ mod tests {
         m.step(&mut anm);
         assert_eq!((m.frame, m.draw_lists[0].len()), (1, 0));
         assert_eq!(player.borrow().stats.rec.progress, 2);
+    }
+
+    // Human rate (15 §2.3): counted by EnemyMgr_Calc only while its clock reads > 15; human = player +3 == 0.
+    #[test]
+    fn human_rate_after_clock_15() {
+        let mut anm = AnmManager::default();
+        let player = crate::player::Player::new_ref();
+        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player.clone())));
+        let ecl = ecl::Ecl {
+            data: Vec::new(),
+            subs: Vec::new(),
+            timelines: Vec::new(),
+        };
+        let mut m = EnemyManager::new(ecl, bullets, 1);
+        player.borrow_mut().focus = 0;
+        for _ in 0..16 {
+            m.step(&mut anm);
+        }
+        let r = player.borrow().stats.rec.clone();
+        assert_eq!((m.frame, r.progress, r.total, r.human), (16, 16, 0, 0));
+        m.step(&mut anm);
+        player.borrow_mut().focus = 1;
+        m.step(&mut anm);
+        let r = player.borrow().stats.rec.clone();
+        assert_eq!((r.progress, r.total, r.human), (18, 2, 1));
     }
 
     // Scripted input per shot type through a stage: shooting, moving, focusing, bombing.

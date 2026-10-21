@@ -109,16 +109,6 @@ impl Config {
             se_volume: b[0x28],
         })
     }
-
-    // The gameplay copy during playback takes the replay's recorded config (11 §3.4, info +0xB4).
-    // SPEC-GAP: only lives / effect level / slow are copied, and the effect level is clamped to 2.
-    pub fn apply_gameplay(&mut self, b: &[u8]) {
-        if b.len() >= 0x26 {
-            self.lives = b[0x1C];
-            self.effect_level = b[0x24].min(2);
-            self.slow = b[0x25];
-        }
-    }
 }
 
 // SE volume curve (13 §1.3, 0x45DFE7): k = 1 − (1 − v/100)³, result = trunc((table + 5000)·k) − 5000 (1/100 dB);

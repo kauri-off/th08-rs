@@ -342,6 +342,18 @@
   Supervisor decrement); type 7 is removed while the gameplay frame counter < 2. Ring init 0x4272E0: 24 segments,
   crossed param copy (13 §2.6). List C draws as `DrawBillboard` through `Camera_Set2D` on the playfield (13 §2.4).
   Unit test for the ring init. Traces not run (cloud). SPEC-GAP 148 → 145. Questions: `docs/briefs/IMPL62_QUESTIONS.md`.
+- impl61 (audit A.40, A.44, A.47, cloud, 2026-10-20): the HSCR human-rate counters (15 §2.3) moved from the player to
+  the top of `EnemyMgr_Calc`, in the play-time block (outside dialogue, also during the bit-10 freeze), counted only
+  while the manager clock is > 15; human = player byte +3 (`focus`) == 0. StageStart registers Effects before HUD
+  (11 §3.1) and only loads BGM (`Audio::load_bgm` = `Music_Play`, 02 §4): slot 0 and slots 1/2 whose STD name does not
+  start with ' ' (spell practice: slot 0 from table 0x4C7670 by card id); slot 0 is played by the deferred music start
+  in `GameMgr_Calc` step 3 (`Audio::play_slot`); MSG op 7 plays the preloaded slot n. New `Game::cfg_game` = the
+  60-byte gameplay copy `*(GM+4)`: set at a fresh start (11 §3.2: lives 2/8 for Extra/practice, slow 0 for
+  Extra/practice/spell practice) and overwritten with all 60 replay bytes by `play_stage_load` (11 §3.4); lives
+  (fresh start, continue, HUD penalty), the PLST play-count test and the replay record/playback slow tests read it.
+  The Supervisor config `cfg` is no longer touched by playback (`cfg_live` removed), so SE, volumes and the effect
+  level (13 §2 reads 0x17CE894) stay the player's. Unit tests: human rate, config copy, spell BGM table. Traces not
+  run (cloud). SPEC-GAP 115 → 114. Questions: `docs/briefs/IMPL61_QUESTIONS.md`.
 - impl66 (audit A.62, A.63, A.64, A.67, cloud, 2026-10-20): `msg::face_files` follows the 10 §3 tables (stage faces
   per index; in spell practice no player faces and slot 18 = the `…sp` cut-in chosen by card id, Ex: none outside its
   card ranges). `Ending_Init` step 1 resets the AnmManager texture caches and runs `Ctx::clear_present_twice` (two

@@ -156,8 +156,8 @@ pub struct Stats {
     pub rec: Record,
 }
 
-// In-game HSCR record counters (15 §2.3; GM+0x3DA2C), zeroed with the stats at a new game. human/total: frames
-// outside dialogue (human rate = human·10000/total).
+// In-game HSCR record counters (15 §2.3; GM+0x3DA2C), zeroed with the stats at a new game. human/total: counted by
+// EnemyMgr_Calc (human rate = human·10000/total).
 #[derive(Clone, Debug, Default)]
 pub struct Record {
     pub frames: u32,
@@ -1216,9 +1216,6 @@ impl Player {
         }
         if !self.env.dialogue {
             let st = &mut self.stats;
-            // SPEC-GAP: human-rate frames (15 §2.3) counted here; EnemyMgr_Calc's timer > 15 test is not applied.
-            st.rec.total += 1;
-            st.rec.human += (self.mode == 0) as u32;
             st.stage_frames += 1;
             if st.human_max() {
                 st.human_frames += 1;

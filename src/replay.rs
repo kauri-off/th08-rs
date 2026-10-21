@@ -425,21 +425,14 @@ pub fn start_playback(
     } else {
         g.demo_shot_bias = 0;
     }
-    if g.cfg_live.is_none() {
-        g.cfg_live = Some(g.cfg);
-    }
-    g.cfg.apply_gameplay(r.config());
     g.rpy = Some(r);
     g.fresh_start = true;
     g.request(SCENE_GAME);
     true
 }
 
-// Back to the menu after playback: the live config returns, replay state is dropped (port bookkeeping).
+// Back to the menu after playback: replay state is dropped (port bookkeeping).
 pub fn end_playback(g: &mut crate::gamemgr::Game) {
-    if let Some(c) = g.cfg_live.take() {
-        g.cfg = c;
-    }
     if g.replay() {
         g.rpy = None;
         g.watched_replay = g.flags & crate::gamemgr::F_DEMO == 0;
@@ -462,6 +455,8 @@ pub fn play_stage_load(
     let Some(r) = g.rpy.as_ref() else {
         bail!("no replay loaded")
     };
+    // 11 §3.4: all 60 bytes of info +0xB4 over the gameplay copy *(GM+4), as stored (no field selection, no clamp).
+    g.cfg_game.copy_from_slice(r.config());
     let Some(rec) = r.stages[stage].as_ref() else {
         bail!("replay has no record for stage {stage}")
     };
@@ -550,7 +545,8 @@ impl ReplayTask {
         i.game_prev = i.game;
         i.game = i.held;
         // Step 2: slow mode records nothing (Supervisor+0x1A4 bit 3 is never set in retail code).
-        if g.cfg.slow != 0 {
+        // SPEC-GAP: 15 §3.2 does not say which config copy holds this slow byte; the gameplay copy is read.
+        if g.game_slow() != 0 {
             return;
         }
         // Step 3: at most 3 frames are recorded during the stage-clear bonus (flags bit 9).
@@ -581,8 +577,9 @@ impl ReplayTask {
     // The first word read is the dummy 0, matching the one-frame latency of recording.
     fn play(&mut self, ctx: &mut crate::game::Ctx) {
         let g = &ctx.game;
+        // SPEC-GAP: 15 §3.3 does not say which config copy holds this slow byte; the gameplay copy is read.
         if g.flags & crate::gamemgr::F_RUNNING == 0
-            || g.cfg.slow != 0
+            || g.game_slow() != 0
             || g.flags & crate::gamemgr::F_CLEAR_PANEL != 0
         {
             return;
@@ -705,6 +702,24 @@ mod tests {
                 None
             ]
         );
+    }
+
+    // 11 §3.4 (audit A.47): all 60 config bytes go over the gameplay copy unclamped; the Supervisor config is untouched.
+    #[test]
+    fn stage_load_copies_config() {
+        let mut g = crate::gamemgr::Game::default();
+        let mut st = crate::player::Stats::default();
+        let mut rng = crate::rng::Rng::default();
+        let mut r = Replay::default();
+        r.stages[0] = Some(StageRecord::default());
+        let cfg: Vec<u8> = (0..60u8).map(|i| i.wrapping_mul(37) ^ 0xA5).collect();
+        r.info[0xB4 - HEADER..0xF0 - HEADER].copy_from_slice(&cfg);
+        g.rpy = Some(r);
+        g.stage = 0;
+        let live = g.cfg;
+        play_stage_load(&mut g, &mut st, &mut rng).unwrap();
+        assert_eq!(g.cfg_game[..], cfg[..]);
+        assert_eq!(g.cfg, live);
     }
 
     // 15 §3.8 (audit A.49): a spell-practice replay starts with bit 14 and bit 3, bit 0 clear.

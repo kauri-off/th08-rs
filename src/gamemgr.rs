@@ -37,6 +37,32 @@ const RANK: [[i32; 3]; 5] = [
     [16, 15, 16],
 ];
 
+// Spell-practice BGM (02 §4, table 0x4C7670): the first record whose max spell id >= the card id.
+const SPELL_BGM: [(i16, &str); 18] = [
+    (1, "bgm/th08_00.mid"),
+    (12, "bgm/th08_03.mid"),
+    (16, "bgm/th08_04.mid"),
+    (31, "bgm/th08_05.mid"),
+    (35, "bgm/th08_06.mid"),
+    (53, "bgm/th08_07.mid"),
+    (76, "bgm/th08_09.mid"),
+    (99, "bgm/th08_10.mid"),
+    (118, "bgm/th08_12.mid"),
+    (122, "bgm/th08_13.mid"),
+    (142, "bgm/th08_14.mid"),
+    (146, "bgm/th08_13b.mid"),
+    (150, "bgm/th08_13.mid"),
+    (170, "bgm/th08_15.mid"),
+    (190, "bgm/th08_13b.mid"),
+    (193, "bgm/th08_18.mid"),
+    (204, "bgm/th08_19.mid"),
+    (222, "bgm/th08_20.mid"),
+];
+
+fn spell_bgm(card: i16) -> Option<&'static str> {
+    SPELL_BGM.iter().find(|r| r.0 >= card).map(|r| r.1)
+}
+
 // Demo music-fade and end frames per demo index (11 §4 step 6).
 const DEMO_LIMITS: [(i32, i32); 4] = [(6000, 6120), (4800, 4920), (4920, 5040), (6900, 7020)];
 
@@ -84,6 +110,9 @@ pub struct Game {
     // 0x164D2C8 = GM +0x3DDC0 gameplay frame counter (11 §2).
     pub frame_counter: u32,
     pub cfg: crate::config::Config,
+    // *(GM+4): the 60-byte gameplay config copy (11 §3.2, 15 §1); +0x1C lives, +0x25 slow mode. The rest of the
+    // game (SE, volumes, effect level) reads the Supervisor config `cfg`.
+    pub cfg_game: [u8; 60],
     pub stats: Stats,
     // Clear masks per shot (12 = union) and difficulty: no-continue / any (11 §4 step 1, 15 CLRD).
     pub clear_nc: [[u16; 5]; 13],
@@ -101,7 +130,6 @@ pub struct Game {
     // 0x164D0BD playback speed setting (1 = slowdown reproduction, 15 §3.3).
     pub replay_speed: u8,
     pub rpy: Option<crate::replay::Replay>,
-    pub cfg_live: Option<crate::config::Config>,
     pub replay_ff: bool,
     pub dialogue_skippable: bool,
     pub replay_fps: u8,
@@ -154,6 +182,7 @@ impl Default for Game {
             loading_wait: 0,
             frame_counter: 0,
             cfg: Default::default(),
+            cfg_game: crate::config::Config::default().to_bytes(),
             stats: Stats::default(),
             clear_nc: [[1; 5]; 13],
             clear_any: [[1; 5]; 13],
@@ -168,7 +197,6 @@ impl Default for Game {
             demo_shot_bias: 0,
             replay_speed: 0,
             rpy: None,
-            cfg_live: None,
             replay_ff: true,
             dialogue_skippable: false,
             replay_fps: 60,
@@ -342,14 +370,19 @@ impl Game {
         }
     }
 
-    // The cfg copy's slow byte is forced to 0 for Extra and practice (15 §2.9).
+    // Gameplay copy +0x1C starting lives (11 §3.2, 12 §5).
+    pub fn game_lives(&self) -> u8 {
+        self.cfg_game[0x1C]
+    }
+
+    // Gameplay copy +0x25 slow mode; forced to 0 at a fresh start for Extra and (spell) practice (11 §3.2).
+    pub fn game_slow(&self) -> u8 {
+        self.cfg_game[0x25]
+    }
+
+    // PLST play counters read the cfg copy's slow byte (15 §2.9).
     pub fn counts_plays(&self) -> bool {
-        let slow = if self.difficulty >= 4 || self.practice() {
-            0
-        } else {
-            self.cfg.slow
-        };
-        !self.replay() && !self.spell_practice() && slow == 0
+        !self.replay() && !self.spell_practice() && self.game_slow() == 0
     }
 
     // Supervisor_UpdatePlayTime (15 §2.9): adds the time since the mark, then clears it.
@@ -471,6 +504,8 @@ pub struct GameManager {
     gauge_at: Option<(u32, i32, i32)>,
     // Port-only: loading calcs of this stage start (11 §3.1 "Loading frame count").
     loading_total: u32,
+    // gm+0x3DE28 deferred music start (11 §4 step 3): plays BGM slot 0 on the first calc after loading.
+    music_pending: bool,
     // Port-only: the stage-clear frame has run (11 §4 step 1 loading := 1 with no loader behind it).
     cleared: bool,
 }
@@ -486,6 +521,7 @@ impl GameManager {
             tasks: Vec::new(),
             gauge_at: None,
             loading_total: 31,
+            music_pending: false,
             cleared: false,
         }));
         gm.borrow().player.borrow_mut().debug_invuln |= ctx.game.noclip;
@@ -518,13 +554,17 @@ impl GameManager {
         };
         st.gauge = 0;
         st.clock = if g.stage % 9 == 8 { 6 } else { 0 };
-        let lives = if d >= 4 {
-            2
+        // Config copy = current config (60 bytes), then lives and slow mode overridden (11 §3.2).
+        g.cfg_game = g.cfg.to_bytes();
+        if d >= 4 {
+            g.cfg_game[0x1C] = 2;
         } else if g.practice() {
-            8
-        } else {
-            g.cfg.lives as i32
-        };
+            g.cfg_game[0x1C] = 8;
+        }
+        if d >= 4 || g.practice() || g.spell_practice() {
+            g.cfg_game[0x25] = 0;
+        }
+        let lives = g.game_lives() as i32;
         if !g.replay() {
             st.lives = lives as f32;
             Stats::checksum(rng);
@@ -565,7 +605,7 @@ impl GameManager {
     }
 
     // GameManager_StageStart 0x43ABD7 (11 §3.1) with the subsystems registered synchronously (no loader thread).
-    // Not implemented: spell-practice power (11 §3.1), the spell-practice stage overlay base 2, BGM by spell id.
+    // Not implemented: spell-practice power (11 §3.1), the spell-practice stage overlay base 2.
     fn stage_start(&mut self, ctx: &mut Ctx) -> Result<()> {
         let entries0 = ctx.anm.entries_loaded;
         let g = &mut ctx.game;
@@ -677,7 +717,7 @@ impl GameManager {
         );
         let first = g.stages_started == 0;
         g.stages_started += 1;
-        // SPEC-GAP: 11 §3.1 registers Effects before HUD; the port registers HUD first.
+        // Register order Stage, Bullets, Enemies, Effects, HUD, Gui (11 §3.1, 0x43ABD7).
         let stage_t = Stage::register(ctx, stage, Some(self.player.clone()))?;
         let bullets = BulletManager::register(ctx, self.player.clone())?;
         let enemies =
@@ -686,8 +726,8 @@ impl GameManager {
             stage_t.borrow_mut().fast_forward = 0;
             enemies.borrow_mut().fast_forward = 0;
         }
-        let hud = Hud::register(ctx, self.player.clone(), enemies.clone(), stage_t.clone())?;
         let effects = crate::effect::EffectManager::register(ctx)?;
+        let hud = Hud::register(ctx, self.player.clone(), enemies.clone(), stage_t.clone())?;
         let gui = crate::gui::Gui::register(ctx, self.player.clone(), enemies.clone())?;
         enemies.borrow_mut().msg = Some(hud.borrow().msg.clone());
         if fresh && !ctx.game.replay() {
@@ -695,10 +735,23 @@ impl GameManager {
         }
         let st = self.player.borrow().stats.clone();
         let replay_t = crate::replay::register(ctx, ctx.game.replay(), &st)?;
-        // SPEC-GAP: only BGM slot 0 is started; 11 §3.1 starts slots 0..2 from the STD names.
+        // 11 §3.1 / 06 §2 +0x290: load (not play) BGM slot 0, and slots 1/2 unless their name starts with ' ';
+        // spell practice loads slot 0 only, chosen by card id. Slot 0 is played by GameMgr_Calc step 3.
         if !ctx.game.reload_same {
-            let bgm = stage_t.borrow().std.bgm[0].clone();
-            ctx.audio.play_bgm(&bgm);
+            let names = stage_t.borrow().std.bgm.clone();
+            if ctx.game.spell_practice() {
+                ctx.audio
+                    .load_bgm(0, spell_bgm(ctx.game.card).unwrap_or(&names[0]));
+            } else {
+                ctx.audio.load_bgm(0, &names[0]);
+                for (k, name) in names.iter().enumerate().take(3).skip(1) {
+                    if !name.starts_with(' ') {
+                        ctx.audio.load_bgm(k, name);
+                    }
+                }
+            }
+            // SPEC-GAP: what sets gm+0x3DE28 is not specified; set here whenever slot 0 was loaded.
+            self.music_pending = true;
         }
         ctx.game.reload_same = false;
         let g = &mut ctx.game;
@@ -710,8 +763,8 @@ impl GameManager {
             stage_t.clone(),
             bullets.clone(),
             enemies.clone(),
-            hud.clone(),
             effects,
+            hud.clone(),
             gui,
             replay_t,
         ];
@@ -808,7 +861,7 @@ impl GameManager {
             st.score10 = st.continues as i64;
             st.score_disp = st.score10;
             st.graze = 0;
-            st.lives = g.cfg.lives as f32;
+            st.lives = g.game_lives() as f32;
             Stats::checksum(rng);
             st.bombs = bombs;
             st.point_items = 0;
@@ -882,7 +935,7 @@ impl Task<Ctx> for GameManager {
     }
 
     // GameMgr_Calc 0x439BC7 (11 §4); Ret::StopFrame = return 3 (the rest of the calc chain does not run).
-    // Not implemented: deferred music start (step 3), slow mode (step 10).
+    // Not implemented: slow mode (step 10).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // 0x164D09C += 1 at the top of GameMgr_Calc (11 §4): HSCR play time in frames.
         self.player.borrow_mut().stats.rec.frames += 1;
@@ -942,6 +995,10 @@ impl Task<Ctx> for GameManager {
                 }
             }
             return Ret::StopFrame;
+        }
+        // Step 3: deferred music start (gm+0x3DE28), Music_PlaySlot of slot 0.
+        if std::mem::take(&mut self.music_pending) {
+            ctx.audio.play_slot(0);
         }
         {
             let mut p = self.player.borrow_mut();
@@ -1075,6 +1132,26 @@ fn loading_total(g: &Game, entries: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 02 §4 table 0x4C7670: first record with max spell id >= the card id.
+    #[test]
+    fn spell_practice_bgm() {
+        let names = [0, 1, 2, 12, 13, 146, 147, 222, 223].map(spell_bgm);
+        assert_eq!(
+            names,
+            [
+                Some("bgm/th08_00.mid"),
+                Some("bgm/th08_00.mid"),
+                Some("bgm/th08_03.mid"),
+                Some("bgm/th08_03.mid"),
+                Some("bgm/th08_04.mid"),
+                Some("bgm/th08_13b.mid"),
+                Some("bgm/th08_13.mid"),
+                Some("bgm/th08_20.mid"),
+                None
+            ]
+        );
+    }
 
     #[test]
     fn routing() {

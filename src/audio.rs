@@ -191,6 +191,8 @@ pub struct Audio {
     // Sound command 5 queued by Music_Fade (whole seconds), started by Sound_Update.
     fade_req: Option<i32>,
     fade: Option<Fade>,
+    // Music slots 0..15 (02 §3 preload): the name queued by sound command 1 (`Music_Play`), started by `play_slot`.
+    slots: [Option<String>; 16],
 }
 
 impl Audio {
@@ -209,6 +211,7 @@ impl Audio {
             fade_p: 0,
             fade_req: None,
             fade: None,
+            slots: Default::default(),
         }
     }
 
@@ -268,6 +271,21 @@ impl Audio {
                 Err(e) => log::warn!("bgm {}: {e:#}", t.name),
             }
         });
+    }
+
+    // Music_Play(slot, name) 0x447D56, WAV mode (02 §4): sound command 1 only prepares the slot; nothing is heard.
+    pub fn load_bgm(&mut self, slot: usize, name: &str) {
+        if let Some(s) = self.slots.get_mut(slot) {
+            *s = Some(name.to_owned());
+        }
+    }
+
+    // Music_PlaySlot 0x447E47 (02 §4): command 2 starts a loaded slot; the music-room heard flags are set by callers.
+    pub fn play_slot(&mut self, slot: usize) {
+        match self.slots.get(slot).cloned().flatten() {
+            Some(name) => self.play_bgm(&name),
+            None => log::warn!("bgm slot {slot} not loaded"),
+        }
     }
 
     // Sound_LoadSE 0x45D3F0 (13 §1.1): one buffer per SE id, each a copy of its wave file; the table volume is not
