@@ -1026,14 +1026,6 @@ impl Task<Ctx> for GameManager {
         if std::mem::take(&mut self.music_pending) {
             ctx.audio.play_slot(0);
         }
-        {
-            let mut p = self.player.borrow_mut();
-            if std::mem::take(&mut p.game_over) {
-                ctx.game.game_over = 1;
-                ctx.game.add_play_time();
-                log::info!("game over at frame {}", ctx.frame);
-            }
-        }
         let g = &mut ctx.game;
         // Step 4 pause: sfx 0x22, music paused, pauses + 1, checksum with the RNG saved and restored.
         if g.paused == 0

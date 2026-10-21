@@ -588,6 +588,12 @@
   3600-frame idle exit, return 5 → `Game::device_reset` (the app applies +0x22 as fullscreen). Unit tests: mapping,
   ShotSlow counter, key swap. Traces not run (cloud). SPEC-GAP 111 → 113 (src). Questions:
   `docs/briefs/IMPL68_QUESTIONS.md`.
+- impl77 (audit 81–82, cloud, 2026-10-21): bomb shakes take the EDX duration (14 header note): Sakuya (1: 120, 4, 1)
+  every window frame, Sakuya LS (1: 50, 4, 1) at T = 0, Alice / Alice LS (1: 24, 8, 0) (§2.3, §2.4, §2.7, §2.8).
+  Continue menu (12 §4): the player (prio 9) / enemy (prio 11, timeline op 16) calc writes `Game::game_over` itself
+  (was relayed by the next `GameMgr_Calc`), so the ASCII calc opens the menu on the next frame; play time is added on
+  menu entry (15 §2.9); the player sprite is hidden while game_over ≠ 0 (14 §5). Unit tests: shake arguments, menu
+  first call. Traces not run (cloud). SPEC-GAP 115 → 115 (src). Questions: `docs/briefs/IMPL77_QUESTIONS.md`.
 - impl74 (audit 72–74, cloud, 2026-10-21): `Hud::calc` follows 12 §5.1b — `Hud_Update` (boss bar; front, title,
   stage-start clock, stage-clear and night-clock VMs; night-clock fade; difficulty VM; popup timers; clear bonus;
   clear trigger + clock animation) first, then `Msg_Run`, then the frame counter, so op 9's bonus lands the next

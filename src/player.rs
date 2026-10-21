@@ -441,7 +441,7 @@ pub struct Player {
     pub env: GrazeEnv,
     // 0x164D2C8 gameplay frame counter copy.
     pub frames: i32,
-    // GM +0x3DBB3 game-over / continue menu.
+    // Pending write of GM +0x3DBB3 (game over), stored into `Game::game_over` by the player / enemy calc that set it.
     pub game_over: bool,
     // GameFlags bit 10 bullet freeze (09 §6.1).
     pub freeze_bullets: bool,
@@ -1262,12 +1262,17 @@ impl Player {
         self.frame(anm, inp, None);
     }
 
-    // 14 §5 (3): sprite at pos + playfield origin, z 0.1, Draw2DSnap; hidden while the continue menu is up.
-    fn draw_sprite(&mut self, anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx) {
-        if self.vm.script.is_none() {
-            return;
+    // 0x164D0BB := 1 is written in the same calc (prio 9 death, prio 11 timeline op 16), so later tasks of this frame
+    // see it and the ASCII calc (prio 1) opens the continue menu on the next frame (12 §4).
+    pub fn store_game_over(&mut self, g: &mut crate::gamemgr::Game) {
+        if std::mem::take(&mut self.game_over) {
+            g.game_over = 1;
         }
-        if self.game_over {
+    }
+
+    // 14 §5 (3): sprite at pos + playfield origin, z 0.1, Draw2DSnap; hidden while the continue menu is up.
+    fn draw_sprite(&mut self, anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, game_over: bool) {
+        if self.vm.script.is_none() || game_over {
             return;
         }
         self.vm.pos = [self.pos[0] + 32.0, self.pos[1] + 16.0, 0.0];
@@ -1312,6 +1317,7 @@ impl Task<Ctx> for Player {
         }
         crate::effect::set_player(self.pos);
         crate::effect::set_frozen(self.freeze_bullets);
+        self.store_game_over(&mut ctx.game);
         Ret::Next
     }
 
@@ -1323,7 +1329,7 @@ impl Task<Ctx> for Player {
         if tag == 0 {
             self.draw_bullets(anm, gfx, 1);
             self.draw_bomb(anm, gfx);
-            self.draw_sprite(anm, gfx);
+            self.draw_sprite(anm, gfx, ctx.game.game_over != 0);
             self.draw_options(anm, gfx);
         } else {
             self.draw_bullets(anm, gfx, 2);

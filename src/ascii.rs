@@ -977,10 +977,14 @@ struct ContinueMenu {
 impl ContinueMenu {
     fn update(&mut self, ctx_anm: &mut crate::anmmgr::AnmManager, g: &mut Game, inp: &Input) {
         if !self.open {
+            // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
+            // below in the same call. Play time is added on continue-menu entry (15 §2.9).
             *self = ContinueMenu {
                 open: true,
                 ..ContinueMenu::default()
             };
+            g.add_play_time();
+            log::info!("continue menu opened");
             if g.practice() && !g.spell_practice() {
                 g.request(gamemgr::SCENE_RESULT);
                 return;
@@ -1209,6 +1213,23 @@ impl Task<Ctx> for AsciiManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 12 §4: game_over is written in the player calc (prio 9); the next ASCII calc (prio 1) opens the menu, does
+    // state 0 and the state-2 body in that one call, so after it the menu counts frame 1 with the cursor on "No".
+    #[test]
+    fn continue_menu_opens_next_calc() {
+        let mut anm = crate::anmmgr::AnmManager::default();
+        let mut g = Game::default();
+        let mut p = crate::player::Player::default();
+        p.game_over = true;
+        p.store_game_over(&mut g);
+        assert!(g.game_over == 1 && !p.game_over);
+        let mut m = ContinueMenu::default();
+        m.update(&mut anm, &mut g, &Input::default());
+        assert!(m.open && !m.yes && m.capture);
+        assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
+        assert_eq!(g.requested, gamemgr::SCENE_BOOT);
+    }
 
     #[test]
     fn popup_digits_and_life() {

@@ -247,7 +247,8 @@ fn len(v: [f32; 2]) -> f32 {
     (v[0] * v[0] + v[1] * v[1]).sqrt()
 }
 
-// Screen effects (13 §3): shake (1: p0, p1, p2), flash (3: p0, p1, colour).
+// Screen effects (13 §3): shake (1: p0, p1, p2), flash (3: p0, p1, colour). p0 is the duration the
+// original passes in EDX (14 header note).
 fn shake(dur: i32, a0: i32, a1: i32) {
     effect::screen(1, dur, a0, a1, 0, SCREEN_PRIO);
 }
@@ -891,7 +892,7 @@ impl Player {
             let _ = c;
             self.dc(xy(q), 1.0, 5.0, 70, 110, 5, 0, false);
             if !ls {
-                shake(16, 8, 0);
+                shake(24, 8, 0);
                 flash(8, 1, 0x8FFFFFFF);
             }
         }
@@ -900,7 +901,7 @@ impl Player {
         }
         if Self::at(b, end) {
             flash(8, 1, if ls { 0xFFFFFFFF } else { 0x8FFFFFFF });
-            shake(16, 8, 0);
+            shake(24, 8, 0);
             sound::play(0x19);
         }
         if Self::at(b, self.bomb.duration - 1) {
@@ -999,7 +1000,7 @@ impl Player {
             self.bomb.fx = effect::spawn(anm, 20, p, 1, 0xFFFFFFFF);
             sound::play(5);
             if ls {
-                shake(4, 1, 0);
+                shake(50, 4, 1);
             }
         }
         if b.t <= 60 {
@@ -1008,7 +1009,7 @@ impl Player {
         if (20..window).contains(&b.t) {
             if !ls {
                 sound::play(6);
-                shake(4, 1, 0);
+                shake(120, 4, 1);
             }
             for k in 0..count {
                 if !Self::at(b, (k % per) as i32 * 2 + 20) {
@@ -1563,6 +1564,56 @@ mod tests {
         };
         p.stats.bombs = 3.0;
         (p, AnmManager::default())
+    }
+
+    fn shakes_at(p: &mut Player, anm: &mut AnmManager, ls: bool, t: i32) -> Vec<[i32; 4]> {
+        effect::take_screen();
+        let b = Bf {
+            t,
+            adv: true,
+            ls,
+            gs: 1.0,
+        };
+        match p.bomb.ch {
+            3 => p.bomb_alice(anm, b),
+            _ => p.bomb_sakuya(anm, b),
+        }
+        effect::take_screen()
+            .into_iter()
+            .filter(|s| s.0 == 1)
+            .map(|s| s.1)
+            .collect()
+    }
+
+    // 14 header note, §2.7 / §2.8: the shake duration is the EDX argument: Sakuya (1: 120, 4, 1) every window frame,
+    // Sakuya LS (1: 50, 4, 1) once at T = 0.
+    #[test]
+    fn sakuya_shakes() {
+        let (mut p, mut anm) = ready(8);
+        p.bomb.ch = 4;
+        assert!(shakes_at(&mut p, &mut anm, false, 0).is_empty());
+        assert_eq!(shakes_at(&mut p, &mut anm, false, 21), [[120, 4, 1, 0]]);
+        let (mut p, mut anm) = ready(8);
+        p.bomb.ch = 4;
+        assert_eq!(shakes_at(&mut p, &mut anm, true, 0), [[50, 4, 1, 0]]);
+        assert!(shakes_at(&mut p, &mut anm, true, 21).is_empty());
+    }
+
+    // 14 §2.3 / §2.4: Alice shakes (1: 24, 8, 0) at T = 90 and 150; Alice LS only at T = 180.
+    #[test]
+    fn alice_shakes() {
+        let (mut p, mut anm) = ready(7);
+        p.bomb.ch = 3;
+        p.bomb.duration = 210;
+        for (t, n) in [(90, 1), (150, 1)] {
+            assert_eq!(
+                shakes_at(&mut p, &mut anm, false, t),
+                vec![[24, 8, 0, 0]; n]
+            );
+        }
+        p.bomb.duration = 230;
+        assert!(shakes_at(&mut p, &mut anm, true, 120).is_empty());
+        assert_eq!(shakes_at(&mut p, &mut anm, true, 180), [[24, 8, 0, 0]]);
     }
 
     #[test]

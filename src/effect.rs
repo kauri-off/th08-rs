@@ -1320,6 +1320,15 @@ pub fn screen(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
     });
 }
 
+// Test-only: drain the pending screen effects as (type, p0–p3).
+#[cfg(test)]
+pub fn take_screen() -> Vec<(u8, [i32; 4])> {
+    with(|e| std::mem::take(&mut e.screen))
+        .into_iter()
+        .map(|s| (s.kind, s.p))
+        .collect()
+}
+
 // ScreenEffect_Register from a calc node below prio 3 (`GameMgr_Calc`): the nodes are linked at once, so the first
 // calc runs in the same frame (13 §3).
 pub fn screen_now(ctx: &mut Ctx, kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {

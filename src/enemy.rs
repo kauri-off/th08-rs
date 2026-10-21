@@ -2578,6 +2578,8 @@ impl Task<Ctx> for EnemyManager {
             b.borrow_mut().step(&mut ctx.anm);
         }
         self.step(&mut ctx.anm);
+        // Timeline op 16 sets the game-over byte during this calc (11 §4.2).
+        self.player.borrow_mut().store_game_over(&mut ctx.game);
         Ret::Next
     }
 
