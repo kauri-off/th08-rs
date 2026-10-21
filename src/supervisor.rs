@@ -419,8 +419,8 @@ impl Task<Ctx> for Supervisor {
         Ok(())
     }
 
-    // Supervisor_Calc 0x445453 (11 §7): input poll, loading VMs, then the scene switch.
-    // SPEC-GAP: the slow-mode OR-accumulation of input (gm+0x2D) is not done.
+    // Supervisor_Calc 0x445453 (11 §7): input poll (OR-accumulated on a slow-mode skipped frame), loading VMs, then
+    // the scene switch.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         ctx.audio.tick_fade();
         if let Some(s) = &self.script {
@@ -430,7 +430,11 @@ impl Task<Ctx> for Supervisor {
             ctx.input.poll_joystick(&ctx.game.cfg, pad);
         }
         self.frame += 1;
-        ctx.input.tick();
+        if ctx.game.slow_skip != 0 {
+            ctx.input.accumulate();
+        } else {
+            ctx.input.tick();
+        }
         self.replay_fps(ctx);
         // Loading_Begin from the result screen (16 §2.1 state 2): requested in its calc (prio 16), so the VMs
         // catch up the frame they missed.

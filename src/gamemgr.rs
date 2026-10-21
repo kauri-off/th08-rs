@@ -136,8 +136,12 @@ pub struct Game {
     pub replay_fps_red: bool,
     pub noclip: bool,
     pub watched_replay: bool,
-    // Port-only phase of the slowdown-reproduction pattern.
-    slow_phase: u32,
+    // GM+0x3DE08 frame-skip counter shared by playback slowdown (11 §4 step 5) and slow mode (step 10). Zeroed only
+    // by the GM static constructor, so its phase carries over between games and between playback and live play.
+    skip_ctr: u32,
+    // gm+0x2D slow-mode skipped frame (11 §4 step 10): while set the Supervisor OR-accumulates input (11 §7) and
+    // ESC does not pause (step 4). Cleared by step 10, StageStart and the GM on-remove.
+    pub slow_skip: u8,
     // 0x164D2C4 RNG state captured at stage start (11 §1.3).
     pub stage_seed: u16,
     pub stages_started: u32,
@@ -205,7 +209,8 @@ impl Default for Game {
             replay_fps_red: false,
             noclip: false,
             watched_replay: false,
-            slow_phase: 0,
+            skip_ctr: 0,
+            slow_skip: 0,
             stage_seed: 0,
             stages_started: 0,
             frame_skip: false,
@@ -495,6 +500,21 @@ pub fn current() -> Option<Rc<RefCell<GameManager>>> {
     CURRENT.with_borrow(std::rc::Weak::upgrade)
 }
 
+// 11 §4 step 5: whether a slowdown-reproduction frame runs, from the recorded fps `f` and the counter after += 1.
+fn playback_runs(f: u8, c: u32) -> bool {
+    (f >= 20 || c % 3 == 0)
+        && (f < 20 || f >= 30 || c % 2 == 0)
+        && (f < 30 || f >= 40 || c % 3 != 0)
+        && (f < 40 || f >= 50 || c % 6 != 0)
+}
+
+// 11 §4 step 10: whether slow mode skips this frame, from `n` live bullets and the counter after += 1.
+fn slow_skips(n: usize, c: u32) -> bool {
+    (n >= 320 && c % 3 == 0)
+        || ((224..320).contains(&n) && c % 4 == 0)
+        || ((128..224).contains(&n) && c % 5 == 0)
+}
+
 pub struct GameManager {
     pub player: PlayerRef,
     pub stage: Option<Rc<RefCell<Stage>>>,
@@ -620,6 +640,8 @@ impl GameManager {
         }
         ctx.anm.speed = 1.0;
         g.flags &= !F_DEATH;
+        // gm+0x2D := 0 (0x43B835, 11 §4 step 10).
+        g.slow_skip = 0;
         let fresh = g.fresh_start || g.practice() || g.spell_practice() || g.difficulty >= 4;
         let mut st = std::mem::take(&mut ctx.game.stats);
         if fresh {
@@ -933,12 +955,13 @@ impl Task<Ctx> for GameManager {
         ctx.game.flags &= !F_RUNNING;
         ctx.game.paused = 0;
         ctx.game.game_over = 0;
+        // gm+0x2D := 0 (0x43BF5C, 11 §4 step 10).
+        ctx.game.slow_skip = 0;
         // 0x164D2C8 := 0 as the last statement (0x43BE2C), so the menus after a pause-quit read 0 (11 §2).
         ctx.game.frame_counter = 0;
     }
 
     // GameMgr_Calc 0x439BC7 (11 §4); Ret::StopFrame = return 3 (the rest of the calc chain does not run).
-    // Not implemented: slow mode (step 10).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // 0x164D09C += 1 at the top of GameMgr_Calc (11 §4): HSCR play time in frames.
         self.player.borrow_mut().stats.rec.frames += 1;
@@ -1016,6 +1039,7 @@ impl Task<Ctx> for GameManager {
         if g.paused == 0
             && g.game_over == 0
             && g.flags & F_DEMO == 0
+            && g.slow_skip == 0
             && ctx.input.pressed(crate::input::PAUSE)
         {
             g.paused = 1;
@@ -1028,18 +1052,16 @@ impl Task<Ctx> for GameManager {
             Stats::checksum(&mut ctx.anm.rng);
             ctx.anm.rng.state = s;
         }
+        let msg_active = self
+            .hud
+            .as_ref()
+            .is_some_and(|h| h.borrow().msg.borrow().active());
         let g = &mut ctx.game;
-        // Replay "slowdown reproduction" (15 §3.3): run a frame only on a pattern given by the recorded fps.
-        if g.replay() && g.replay_speed == 1 {
-            let (run, of) = match g.replay_fps {
-                0..20 => (1, 3),
-                20..30 => (1, 2),
-                30..40 => (2, 3),
-                40..50 => (5, 6),
-                _ => (1, 1),
-            };
-            g.slow_phase = (g.slow_phase + 1) % of;
-            if g.slow_phase >= run {
+        // Step 5 (0x43A24A): replay "slowdown reproduction" (15 §3.3) runs a frame only on a pattern of the recorded
+        // fps, never while dialogue is active; a skipped frame leaves gm+0x2D as it is.
+        if g.replay() && g.replay_speed == 1 && !msg_active {
+            g.skip_ctr = g.skip_ctr.wrapping_add(1);
+            if !playback_runs(g.replay_fps, g.skip_ctr) {
                 return Ret::StopFrame;
             }
         }
@@ -1082,6 +1104,19 @@ impl Task<Ctx> for GameManager {
         if let Some(e) = &self.enemies {
             let mut e = e.borrow_mut();
             e.g.player_char = g.shot as i32;
+        }
+        // Step 10 slow mode (0x43A92D): skip on a pattern of the live-bullet count from the last bullet calc.
+        if g.game_slow() != 0 {
+            g.slow_skip = 0;
+            g.skip_ctr = g.skip_ctr.wrapping_add(1);
+            let n = self.bullets.as_ref().map_or(0, |b| b.borrow().live);
+            if slow_skips(n, g.skip_ctr) {
+                g.slow_skip = 1;
+                return Ret::StopFrame;
+            }
+            if n < 128 {
+                g.skip_ctr = 0;
+            }
         }
         g.frame_counter += 1;
         // Port-only debug: TH08_SCREEN_FX=<frame>:<type>,<p0>,<p1>,<p2>,<p3>.
@@ -1135,6 +1170,34 @@ fn loading_total(g: &Game, entries: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 11 §4 step 5: fps < 20 runs 1 of 3, 20–29 1 of 2, 30–39 2 of 3, 40–49 5 of 6, ≥ 50 every frame.
+    #[test]
+    fn playback_slowdown_pattern() {
+        let runs = |f| (1..=6).filter(|&c| playback_runs(f, c)).count();
+        assert_eq!(
+            [runs(10), runs(25), runs(35), runs(45), runs(60)],
+            [2, 3, 4, 5, 6]
+        );
+        assert!(!playback_runs(10, 1) && playback_runs(10, 3));
+    }
+
+    // 11 §4 step 10: every 3rd / 4th / 5th frame at ≥ 320 / 224 / 128 live bullets, never below 128.
+    #[test]
+    fn slow_mode_pattern() {
+        let skips = |n| (1..=60).filter(|&c| slow_skips(n, c)).count();
+        assert_eq!(
+            [
+                skips(320),
+                skips(319),
+                skips(224),
+                skips(223),
+                skips(128),
+                skips(127)
+            ],
+            [20, 15, 15, 12, 12, 0]
+        );
+    }
 
     // 02 §4 table 0x4C7670: first record with max spell id >= the card id.
     #[test]

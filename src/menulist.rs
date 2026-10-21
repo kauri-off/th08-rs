@@ -992,13 +992,14 @@ impl MainMenu {
         } else if inp.pressed_or_repeat(DOWN) {
             c = (c + 1).rem_euclid(count);
             sound::play(sound::SELECT);
-        // Page keys only when count > 15 (16 §6.2). SPEC-GAP: the sound flush on Left is not done.
+        // Page keys only when count > 15 (16 §6.2); Left also flushes the sound queue (Sound_Update, 13 §1.3).
         } else if count > 15 && inp.pressed_or_repeat(LEFT) {
             c -= 15;
             if c < 0 {
                 c = count - 1;
             }
             sound::play(sound::SELECT);
+            ctx.sound_update();
         } else if count > 15 && inp.pressed_or_repeat(RIGHT) {
             if count % 15 < count - c {
                 c = (c + 15).min(count - 1);

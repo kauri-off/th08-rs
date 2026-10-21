@@ -159,6 +159,12 @@ impl Input {
         }
     }
 
+    // Supervisor_Calc on a slow-mode skipped frame (gm+0x2D, 11 §7): the raw word is OR-ed into the polled word;
+    // previous word, repeat counter and flag are not updated.
+    pub fn accumulate(&mut self) {
+        self.held |= self.raw;
+    }
+
     // The view gameplay objects read (player, dialogue, HUD): g_Input as both raw and held.
     pub fn game_view(&self) -> Input {
         Input {
@@ -310,5 +316,26 @@ mod tests {
             })
             .collect();
         assert_eq!(fired, [33, 41, 49]);
+    }
+
+    // 11 §7: on a slow-mode skipped frame the raw word is OR-ed in; previous word and repeat state stay.
+    #[test]
+    fn slow_skip_accumulates() {
+        use super::{BOMB, Input, SHOT};
+        let mut i = Input {
+            raw: SHOT,
+            ..Input::default()
+        };
+        i.tick();
+        i.tick();
+        let (prev, n) = (i.prev, i.same_frames);
+        i.raw = BOMB;
+        i.accumulate();
+        assert_eq!((i.held, i.prev, i.same_frames), (SHOT | BOMB, prev, n));
+        i.raw = 0;
+        i.accumulate();
+        assert_eq!(i.held, SHOT | BOMB);
+        i.tick();
+        assert_eq!((i.held, i.prev), (0, SHOT | BOMB));
     }
 }

@@ -59,7 +59,7 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     row[1] = g.demo_frame as i64;
     row[2] = ctx.input.game as i64;
     row[3] = ctx.anm.rng.state as i64;
-    row[4] = ctx.anm.rng.counter.wrapping_sub(rng_base) as i64;
+    row[4] = ctx.anm.rng.total.wrapping_sub(rng_base) as i64;
     row[18] = crate::gamemgr::rank() as i64;
     row[21] = g.flags as i64;
     let Some(gm) = crate::gamemgr::current() else {
@@ -162,7 +162,7 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
         guard += 1;
         let before = ctx.game.demo_frame;
         if out.is_empty() {
-            rng_base = ctx.anm.rng.counter;
+            rng_base = ctx.anm.rng.total;
             rng_before = ctx.anm.rng.state;
         }
         if ctx.calc() != crate::task::Flow::Continue {

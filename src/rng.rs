@@ -7,11 +7,17 @@ pub struct Rng {
     pub state: u16,
     // +4 Next16 call counter; reset every frame by the replay hook (11 §1.4).
     pub counter: u32,
+    // Port-only: every Next16 since seeding, never reset; the traces' `rng_ctr` column (11 §1.4).
+    pub total: u32,
 }
 
 impl Rng {
     pub fn seeded(state: u16) -> Self {
-        Self { state, counter: 0 }
+        Self {
+            state,
+            counter: 0,
+            total: 0,
+        }
     }
 
     // Boot seed (11 §1.3, 0x4464C8): (u16) timeGetTime(); `TH08_SEED` fixes it for reproducible runs.
@@ -38,6 +44,7 @@ impl Rng {
         let t = (self.state ^ 0x9630).wrapping_sub(0x6553);
         self.state = t.rotate_left(2);
         self.counter = self.counter.wrapping_add(1);
+        self.total = self.total.wrapping_add(1);
         self.state
     }
 

@@ -521,9 +521,10 @@ impl MainMenu {
                 Err(e) => log::warn!("demorpy{n}.rpy: {e:#}"),
             }
         }
-        // Confirm actions of the 12 §2.2 item table. SPEC-GAP: the sound flush after sfx 10 is not done.
+        // Confirm actions of the 12 §2.2 item table: sfx 10, then a sound flush (Sound_Update in place, 13 §1.3).
         if ctx.input.pressed(CONFIRM) {
             sound::play(sound::OK);
+            ctx.sound_update();
             let g = &mut ctx.game;
             match self.cursor {
                 0 => {

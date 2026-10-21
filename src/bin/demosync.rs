@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
     loop {
         let before = ctx.game.demo_frame;
         if !started {
-            base = ctx.anm.rng.counter;
+            base = ctx.anm.rng.total;
         }
         let tr = rng_frame == Some(before + 1);
         th08::rng::TRACE.set(tr);

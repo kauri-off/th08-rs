@@ -126,9 +126,9 @@
 
 | # | где | спецификация | код | сер. |
 |---|---|---|---|---|
-| 69 | `demosync.rs` / `session.rs` колонка `rng_ctr` (PR #29) | 11 §1.4: колонка трассы — счётчик всех `Next16` с запуска процесса, никогда не сбрасывается; `Rng::counter` обнуляет хук | PR #29 пишет в колонку `Rng::counter` | S |
-| 70 | `replay.rs` отладочное проигрывание (PR #29) | 15 §3.1: `Replay_PlayCalcDebug` читает только слово ввода, курсор +0x78, шаг 6; RNG не форсируется | PR #29 форсирует RNG третьим словом | S |
-| 71 | `gamemgr.rs` шаг 10 (slow mode) | 11 §4 шаги 5 и 10: общий счётчик GM+0x3DE08, точки сброса gm+0x2D | не реализован | U |
+| 69 | `demosync.rs` / `session.rs` колонка `rng_ctr` (PR #29) | 11 §1.4: колонка трассы — счётчик всех `Next16` с запуска процесса, никогда не сбрасывается; `Rng::counter` обнуляет хук | PR #29 пишет в колонку `Rng::counter` | S | ✅ impl73
+| 70 | `replay.rs` отладочное проигрывание (PR #29) | 15 §3.1: `Replay_PlayCalcDebug` читает только слово ввода, курсор +0x78, шаг 6; RNG не форсируется | PR #29 форсирует RNG третьим словом | S | ✅ impl73
+| 71 | `gamemgr.rs` шаг 10 (slow mode) | 11 §4 шаги 5 и 10: общий счётчик GM+0x3DE08, точки сброса gm+0x2D | не реализован | U | ✅ impl73
 | 72 | `hud.rs` `Hud_Calc` | 12 §5.1b: сначала `Hud_Update` (бонус, триггер, часы, VM, fade, попапы), потом `Msg_Run` | диалог раньше | S |
 | 73 | `hud.rs` триггер очистки стадии | 12 §5.6: триггер проверяется до шага часов, без 60-кадрового ожидания | после часов, с ожиданием | S |
 | 74 | `hud.rs` панель Clear для stage idx > 6 | 12 §5.6: вся панель сдвигается вверх на 16 | сдвигается только заголовок | V |
@@ -143,21 +143,15 @@
 
 ## B. Части спецификации, которые не реализованы (помечены в коде)
 
-Natives 4, 7, 9, 11, 13, 16, 21, 25 (`eclvm.rs:1098`); timeline op 9 (0 использований); spell-practice guard для ops
-129/130/133/134; комната музыки ✅ impl70 (16 §5, `musicroom.rs`); диалог сохранения replay (16 §2.6 / 15 §3.6, `result.rs:378`,
 Natives 4, 7, 9, 11, 13, 16, 21, 25 ✅ impl72 (`eclvm.rs:1098`); timeline op 9 (0 использований); spell-practice guard для ops
-129/130/133/134; комната музыки (16 §5, `supervisor.rs:571`); диалог сохранения replay (16 §2.6 / 15 §3.6, `result.rs:378`,
-`replay.rs:493`) ✅ impl69; hidden unlock code (15 §2.12, `result.rs:295`) ✅ impl71; D → score.txt (16 §2.7) ✅ impl71; key config (15 §1.3);
-MIDI и «music off» (`audio.rs:212`); джойстик и ShotSlow (`input.rs:24`); чтение и запись th08.cfg (`game.rs:43`,
-`replay.rs:493`); hidden unlock code (15 §2.12, `result.rs:295`); D → score.txt (16 §2.7); key config (15 §1.3) ✅ impl68;
-MIDI и «music off» (`audio.rs:212`); джойстик и ShotSlow ✅ impl68 (`input.rs:24`); чтение и запись th08.cfg (`game.rs:43`,
-`config.rs:88`) ✅ impl67; frame skip cfg+0x23 (`game.rs:135`) ✅ impl67; проверка VRSM / exe (15 §2.10); `Replay_FrameHook` prio 7
-MIDI и «music off» (`audio.rs:212`; music off ✅ impl70, MIDI открыт); джойстик и ShotSlow ✅ impl68 (`input.rs:24`); чтение и запись th08.cfg (`game.rs:43`,
-`config.rs:88`); frame skip cfg+0x23 (`game.rs:135`); проверка VRSM / exe (15 §2.10); `Replay_FrameHook` prio 7
-(`replay.rs:287`); USER-секция replay ✅ impl69; уведомления info00–02.jpg (16 §4, `menu.rs:810`) ✅ impl71; 3600-кадровый idle-выход
-и return 5 из опций (`menu.rs:623`); slow-mode OR-накопление ввода (`supervisor.rs:419`).
-(`replay.rs:287`); USER-секция replay; уведомления info00–02.jpg (16 §4, `menu.rs:810`); 3600-кадровый idle-выход
-и return 5 из опций ✅ impl68 (`menu.rs:623`); slow-mode OR-накопление ввода (`supervisor.rs:419`).
+129/130/133/134; комната музыки ✅ impl70 (16 §5, `musicroom.rs`); диалог сохранения replay (16 §2.6 / 15 §3.6, `result.rs:378`,
+`replay.rs:493`) ✅ impl69; hidden unlock code (15 §2.12, `result.rs:295`) ✅ impl71; D → score.txt (16 §2.7) ✅ impl71;
+key config (15 §1.3) ✅ impl68; MIDI и «music off» (`audio.rs:212`; music off ✅ impl70, MIDI открыт); джойстик и ShotSlow
+✅ impl68 (`input.rs:24`); чтение и запись th08.cfg (`game.rs:43`, `config.rs:88`) ✅ impl67; frame skip cfg+0x23
+(`game.rs:135`) ✅ impl67; проверка VRSM / exe (15 §2.10); `Replay_FrameHook` prio 7 ✅ impl73 (11 §1.4, 15 §3.1,
+`replay.rs`); USER-секция replay ✅ impl69; уведомления info00–02.jpg (16 §4, `menu.rs:810`) ✅ impl71; 3600-кадровый
+idle-выход и return 5 из опций ✅ impl68 (`menu.rs:623`); slow-mode OR-накопление ввода ✅ impl73 (11 §7, `supervisor.rs`);
+sound flush после SE 10 в главном меню и на Left в списке карт ✅ impl73 (12 §2.2, 16 §6.2, `menu.rs`, `menulist.rs`).
 
 ## C. Устаревшие SPEC-GAP: спецификация теперь отвечает, код уже соответствует
 

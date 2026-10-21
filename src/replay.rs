@@ -290,11 +290,17 @@ fn cstr(b: &[u8]) -> String {
     String::from_utf8_lossy(&b[..end]).into_owned()
 }
 
-// Replay_PlayCalc 0x452550 prio 6, Replay_RecordCalc 0x452310 prio 17, Replay_FastForward 0x452490 prio 18 (15 §3.1).
-// SPEC-GAP: Replay_FrameHook (prio 7, 11 §1.4) and the debug playback calc are not registered.
+// Replay_PlayCalc 0x452550 prio 6, Replay_FrameHook 0x4522A0 prio 7, Replay_RecordCalc 0x452310 prio 17,
+// Replay_FastForward 0x452490 prio 18 (15 §3.1, 11 §1.4).
 pub const PLAY_PRIO: u16 = 6;
+pub const HOOK_PRIO: u16 = 7;
 pub const RECORD_PRIO: u16 = 17;
 pub const FF_PRIO: u16 = 18;
+
+// Calc tags of the replay task's nodes.
+const TAG_MAIN: u8 = 0;
+const TAG_FF: u8 = 1;
+const TAG_HOOK: u8 = 2;
 
 // Runtime replay object (15 §3.1): mode 0 records, mode 1 plays back. The data lives in `Game::rpy`.
 pub struct ReplayTask {
@@ -309,6 +315,10 @@ pub struct ReplayTask {
     repeat_ctr: u32,
     // Dialogue fast-forward phase (15 §3.3).
     ff: u32,
+    // Header +6 ≠ 0: Replay_PlayCalcDebug 0x4526C0 with 6-byte frames (15 §3.1).
+    debug: bool,
+    // +0xD8 RNG state stored by Replay_FrameHook (11 §1.4).
+    rng_snap: u16,
 }
 
 pub fn register(
@@ -320,7 +330,8 @@ pub fn register(
     // Replay_Register 0x451F90 sets g_Input and g_InputPrev to 0 (15 §3.1).
     ctx.input.game = 0;
     ctx.input.game_prev = 0;
-    let t = task::task(ReplayTask {
+    let debug = play && ctx.game.rpy.as_ref().is_some_and(|r| r.debug != 0);
+    let mut rt = ReplayTask {
         play,
         stage: ctx.game.stage % 9,
         cursor: 0,
@@ -329,13 +340,24 @@ pub fn register(
         fps_q: 0,
         repeat_ctr: 0,
         ff: 0,
-    });
+        debug,
+        rng_snap: 0,
+    };
+    if !play || debug {
+        rt.frame_hook(&mut ctx.anm.rng);
+    }
+    let t = task::task(rt);
     if play {
-        task::add(ctx, Chain::Calc, PLAY_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Calc, FF_PRIO, 1, t.clone())?;
+        task::add(ctx, Chain::Calc, PLAY_PRIO, TAG_MAIN, t.clone())?;
+        task::add(ctx, Chain::Calc, FF_PRIO, TAG_FF, t.clone())?;
     } else {
         record_stage_start(&mut ctx.game, st);
-        task::add(ctx, Chain::Calc, RECORD_PRIO, 0, t.clone())?;
+        task::add(ctx, Chain::Calc, RECORD_PRIO, TAG_MAIN, t.clone())?;
+    }
+    // Replay_FrameHook: always while recording, during playback only with the debug flag; Replay_Register also
+    // calls it once on linking (above, 11 §1.4).
+    if !play || debug {
+        task::add(ctx, Chain::Calc, HOOK_PRIO, TAG_HOOK, t.clone())?;
     }
     Ok(t)
 }
@@ -658,6 +680,13 @@ fn boss_active() -> bool {
         .is_some_and(|e| e.borrow().bosses.iter().any(Option::is_some))
 }
 
+// One playback frame from the input words at `cursor`: (input, next cursor). PlayCalc steps 1 word; PlayCalcDebug
+// (header +6 ≠ 0) steps 3 words and never reads the other two (15 §3.1). Past the end the input is 0.
+fn next_frame(words: &[u16], cursor: usize, debug: bool) -> (u16, usize) {
+    let w = words.get(cursor).copied().unwrap_or(0);
+    (w, cursor + if debug { 3 } else { 1 })
+}
+
 impl ReplayTask {
     // Replay_RecordCalc 0x452310 (15 §3.2): runs after the game objects, so frame n's input is the raw word sampled at
     // the end of frame n − 1.
@@ -698,8 +727,16 @@ impl ReplayTask {
         self.frame += 1;
     }
 
+    // Replay_FrameHook 0x4522A0 (11 §1.4): +0xD8 := RNG state, RNG call counter := 0. Nothing reads either; the
+    // statistics word +0xDA and GM+0x3DB98 it also clears are never read either and not kept.
+    fn frame_hook(&mut self, rng: &mut crate::rng::Rng) {
+        self.rng_snap = rng.state;
+        rng.counter = 0;
+    }
+
     // Replay_PlayCalc 0x452550 (15 §3.3): input substitution and the key-repeat emulation; not during the clear bonus.
     // The first word read is the dummy 0, matching the one-frame latency of recording.
+    // Replay_PlayCalcDebug 0x4526C0 (15 §3.1) is the same with the input read through cursor +0x78 in 6-byte steps.
     fn play(&mut self, ctx: &mut crate::game::Ctx) {
         let g = &ctx.game;
         // SPEC-GAP: 15 §3.3 does not say which config copy holds this slow byte; the gameplay copy is read.
@@ -709,13 +746,13 @@ impl ReplayTask {
         {
             return;
         }
-        let w = g
+        let words = g
             .rpy
             .as_ref()
             .and_then(|r| r.stages[self.stage].as_ref())
-            .and_then(|s| s.inputs.get(self.cursor).copied())
-            .unwrap_or(0);
-        self.cursor += 1;
+            .map_or(&[][..], |s| &s.inputs[..]);
+        let (w, next) = next_frame(words, self.cursor, self.debug);
+        self.cursor = next;
         let i = &mut ctx.input;
         i.game_prev = i.game;
         i.game = w;
@@ -752,8 +789,9 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
     fn calc(&mut self, ctx: &mut crate::game::Ctx, tag: u8) -> crate::task::Ret {
         use crate::task::Ret;
         match (self.play, tag) {
+            (_, TAG_HOOK) => self.frame_hook(&mut ctx.anm.rng),
             (false, _) => self.record(ctx),
-            (true, 0) => self.play(ctx),
+            (true, TAG_MAIN) => self.play(ctx),
             // Replay_FastForward 0x452490 (15 §3.3); `replay_ff` = false is a tool switch that disables both restarts.
             // While skippable dialogue is shown the chain is restarted on 2 of every 3 frames (15 §3.3).
             (true, _) => {
@@ -783,6 +821,44 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 11 §1.4: the hook stores the RNG state at +0xD8 and resets the call counter, leaving the state.
+    #[test]
+    fn frame_hook_snapshots_rng() {
+        let mut t = ReplayTask {
+            play: false,
+            stage: 0,
+            cursor: 0,
+            frame: 0,
+            bonus_frames: 0,
+            fps_q: 0,
+            repeat_ctr: 0,
+            ff: 0,
+            debug: false,
+            rng_snap: 0,
+        };
+        let mut rng = crate::rng::Rng::seeded(0x1234);
+        rng.next_u32();
+        let s = rng.state;
+        t.frame_hook(&mut rng);
+        // The trace count (`total`) is not reset by the hook.
+        assert_eq!(
+            (t.rng_snap, rng.state, rng.counter, rng.total),
+            (s, s, 0, 2)
+        );
+    }
+
+    // 15 §3.1: PlayCalc reads every word; PlayCalcDebug reads only the first word of each 6-byte step.
+    #[test]
+    fn playback_frame_words() {
+        let w = [0, 0, 0x55, 0x11, 9, 0x66];
+        assert_eq!(next_frame(&w, 0, false), (0, 1));
+        assert_eq!(next_frame(&w, 3, false), (0x11, 4));
+        assert_eq!(next_frame(&w, 0, true), (0, 3));
+        assert_eq!(next_frame(&w, 3, true), (0x11, 6));
+        assert_eq!(next_frame(&w, 6, true), (0, 9));
+        assert_eq!(next_frame(&w, 6, false), (0, 7));
+    }
 
     // 15 §3.2 (audit A.48): a stage start sets +0 := score only on the highest recorded stage below it.
     #[test]
