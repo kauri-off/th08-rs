@@ -1248,6 +1248,27 @@ impl BulletManager {
         }
     }
 
+    // ECL natives 4 / 7 / 21 (07 §12): zones are (x0, x1, y0, y1); a bullet outside `outer` is scaled about the
+    // common centre into `inner` (per axis, inner/outer half size) and its direction reversed.
+    // SPEC-GAP: crossing direction, bullet selection and the reversal (vel and angle) are inferred (IMPL72 Q1).
+    pub fn warp(&mut self, inner: [f32; 4], outer: [f32; 4]) {
+        let c = [(outer[0] + outer[1]) / 2.0, (outer[2] + outer[3]) / 2.0];
+        let k = [
+            (inner[1] - inner[0]) / (outer[1] - outer[0]),
+            (inner[3] - inner[2]) / (outer[3] - outer[2]),
+        ];
+        for b in self.bullets[..MAX_BULLETS].iter_mut().filter(|b| !b.free()) {
+            let [x, y] = [b.pos[0], b.pos[1]];
+            if x >= outer[0] && x <= outer[1] && y >= outer[2] && y <= outer[3] {
+                continue;
+            }
+            b.pos[0] = c[0] + (x - c[0]) * k[0];
+            b.pos[1] = c[1] + (y - c[1]) * k[1];
+            b.vel = [-b.vel[0], -b.vel[1], b.vel[2]];
+            b.angle = anmvm::wrap_add(b.angle, PI);
+        }
+    }
+
     // ECL native 28 (07 §12): velocities × `k` (the new game speed 1/arg), sprites 0x60–0x6F → 0x6F with the
     // old sprite saved in +0x218.
     pub fn slow_down(&mut self, anm: &mut AnmManager, k: f32) {

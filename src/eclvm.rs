@@ -1160,7 +1160,19 @@ impl Exec<'_> {
                 });
             }
             23 => crate::gui::request(crate::gui::Req::BossHide),
-            // SPEC-GAP: natives 4, 7, 9, 11, 13, 16, 21, 25 (effect objects, bullet warps, hit rectangles) are not implemented.
+            // Bullet warp zones (x0, x1, y0, y1): inner, outer, both centred on one point (07 §12).
+            4 => self.warp([124.0, 260.0, 140.0, 276.0], [56.0, 328.0, 72.0, 344.0]),
+            7 => self.warp([56.0, 328.0, 88.0, 360.0], [-32.0, 416.0, 0.0, 448.0]),
+            21 => self.warp([112.0, 271.0, 128.0, 287.0], [33.0, 350.0, 49.0, 366.0]),
+            // Player-hit rectangles 590 × h at the boss after a 12-frame warning (07 §12).
+            // SPEC-GAP: the first height of each pair (160/240/288) has no stated use; the second is the hit box (IMPL72 Q2).
+            9 => self.hit_rect(t, 128.0),
+            11 => self.hit_rect(t, 192.0),
+            25 => self.hit_rect(t, 224.0),
+            // Stage tint request 0xFFC03030 (07 §12, 06 §10.2 step 3).
+            // SPEC-GAP: whether native 13 also sets the "bomb drew" flag +0x646C is not stated; it does not (IMPL72 Q3).
+            13 => self.anm.request_tint(0xFFC03030),
+            16 => self.mark_children(t),
             _ => {
                 let _ = gs;
                 self.m.g.misc_calls += 1;
@@ -1173,6 +1185,53 @@ impl Exec<'_> {
     fn stage_interrupt(&mut self, k: u16) {
         if let Some(st) = &self.m.stage {
             st.borrow_mut().spell_interrupt(k);
+        }
+    }
+
+    fn warp(&mut self, inner: [f32; 4], outer: [f32; 4]) {
+        self.m.bullets.borrow_mut().warp(inner, outer);
+    }
+
+    // Natives 9 / 11 / 25 (07 §12): 590 × `h` box centred on the caller's pos; no hit while warning.
+    // SPEC-GAP: the 12-frame warning is counted on the calling context's clock (IMPL72 Q2).
+    fn hit_rect(&mut self, t: &Thread, h: f32) {
+        if t.ctx.clock.cur < 12 {
+            return;
+        }
+        let pos = self.e.pos;
+        self.m
+            .player
+            .borrow_mut()
+            .hit_test(pos, [590.0, h], &mut self.anm.rng);
+    }
+
+    // Native 16 (07 §12): a chained child with var 10038 == 0 and a flag-0x100000 bullet within 64 px of its
+    // pos gets var 10038 = 60 and var 10019.
+    // SPEC-GAP: "copy var 10019" is read as the caller's var 10019; distance < 64 strict (IMPL72 Q4).
+    fn mark_children(&mut self, t: &Thread) {
+        let f = t.ctx.flt(V_FLT0 + 3);
+        let near: Vec<[f32; 3]> = self.m.bullets.borrow().bullets[..crate::bullet::MAX_BULLETS]
+            .iter()
+            .filter(|b| !b.free() && b.flags & 0x100000 != 0)
+            .map(|b| b.pos)
+            .collect();
+        let mut c = self.e.chain_next;
+        let mut guard = 0;
+        while let Some(i) = c
+            && guard <= MAX_ENEMIES
+        {
+            guard += 1;
+            let x = &mut self.m.enemies[i];
+            if x.main.ctx.int(V_INT1 + 2) == 0
+                && near.iter().any(|p| {
+                    let (dx, dy) = (p[0] - x.pos[0], p[1] - x.pos[1]);
+                    dx * dx + dy * dy < 64.0 * 64.0
+                })
+            {
+                x.main.ctx.set_int(V_INT1 + 2, 60);
+                x.main.ctx.set_flt(V_FLT0 + 3, f);
+            }
+            c = x.chain_next;
         }
     }
 
@@ -2239,6 +2298,82 @@ mod tests {
                 .collect();
             assert_eq!(kinds, [kind], "bombing {bombing}");
         }
+    }
+
+    // 07 §12 native 4: a bullet outside the outer zone is scaled about (192, 208) into the inner one, reversed.
+    #[test]
+    fn native4_warp() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[4, 0])]]);
+        {
+            let mut b = m.bullets.borrow_mut();
+            for (k, pos) in [[400.0, 108.0, 0.0], [300.0, 208.0, 0.0]]
+                .into_iter()
+                .enumerate()
+            {
+                let x = &mut b.bullets[k];
+                (x.state, x.pos, x.vel, x.angle) = (1, pos, [2.0, -1.0, 0.0], 0.0);
+            }
+        }
+        spawn(&mut m, 0, 0, -1, 0);
+        ecl_run(&mut m, &mut anm, 0);
+        let b = m.bullets.borrow();
+        assert_eq!(b.bullets[0].pos, [296.0, 158.0, 0.0]);
+        assert_eq!(b.bullets[0].vel, [-2.0, 1.0, 0.0]);
+        assert!((b.bullets[0].angle - PI).abs() < 1e-6);
+        assert_eq!(b.bullets[1].pos, [300.0, 208.0, 0.0]);
+        assert_eq!(b.bullets[1].vel, [2.0, -1.0, 0.0]);
+    }
+
+    // 07 §12 native 9: 590 × 128 box at the caller; no hit before clock 12.
+    #[test]
+    fn native9_hit_rect() {
+        for (clock, dy, hit) in [(11, 0.0, false), (12, 60.0, true), (12, 70.0, false)] {
+            let (mut anm, mut m) = manager(&[&[ins(clock, 136, &[9, 0])]]);
+            spawn(&mut m, 0, 0, -1, 0);
+            m.enemies[0].pos = [192.0, 100.0, 0.0];
+            m.enemies[0].main.ctx.clock.cur = clock;
+            m.player.borrow_mut().pos = [-90.0, 100.0 + dy, 0.0];
+            ecl_run(&mut m, &mut anm, 0);
+            assert_eq!(m.player.borrow().state == 2, hit, "clock {clock} dy {dy}");
+        }
+    }
+
+    // 07 §12 native 13: stage tint request 0xFFC03030.
+    #[test]
+    fn native13_tint() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[13, 0])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        ecl_run(&mut m, &mut anm, 0);
+        assert_eq!(anm.stage_tint, Some(0xFFC03030));
+    }
+
+    // 07 §12 native 16: chained children near a flag-0x100000 bullet with var 10038 == 0 get 60 and var 10019.
+    #[test]
+    fn native16_marks_children() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[16, 0])], &[]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].main.ctx.set_flt(V_FLT0 + 3, 1.5);
+        m.enemies[0].chain_next = Some(1);
+        for (k, x, tag) in [(1, 100.0, 0), (2, 100.0, 7), (3, 250.0, 0)] {
+            spawn(&mut m, k, 1, -1, 0);
+            m.enemies[k].pos = [x, 100.0, 0.0];
+            m.enemies[k].main.ctx.set_int(V_INT1 + 2, tag);
+            m.enemies[k].chain_next = (k < 3).then_some(k + 1);
+        }
+        {
+            let mut b = m.bullets.borrow_mut();
+            (b.bullets[0].state, b.bullets[0].pos, b.bullets[0].flags) =
+                (1, [140.0, 100.0, 0.0], 0x100000);
+            (b.bullets[1].state, b.bullets[1].pos) = (1, [250.0, 100.0, 0.0]);
+        }
+        ecl_run(&mut m, &mut anm, 0);
+        let got: Vec<_> = (1..4)
+            .map(|k| {
+                let c = &m.enemies[k].main.ctx;
+                (c.int(V_INT1 + 2), c.flt(V_FLT0 + 3))
+            })
+            .collect();
+        assert_eq!(got, [(60, 1.5), (7, 0.0), (0, 0.0)]);
     }
 
     // 07 §7 op 181: below 12 sfx 0x2D and clock + 1; at 12 nothing, no sfx.
