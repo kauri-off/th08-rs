@@ -385,6 +385,11 @@
   the bomb active flag +0xE2A7C is no longer cleared at the bomb end but by the next failed normal start test (09 §1.1);
   game over leaves lives and bombs unchanged (09 §6.2). Unit tests for all three. Traces not run (cloud).
   SPEC-GAP 134 → 132. Question: IMPL54_QUESTIONS.md.
+- impl55 (audit A.24, A.25, A.27, cloud, 2026-10-20): `Player::frame` step 1: while the freeze byte 0x160F534 is set
+  the youkai aura (fixed slot 2) and gauge-max aura (slot 8) get VM flag 0x80000 and the calc returns, else the flag is
+  cleared (09 §1); the focus-switch +0xE2A9C := 0 now only on the team sprite reset (09 §3); spell practice (bit 14):
+  load timer 10, respawn leaves the invulnerability timer at 30 (09 §6.3, §6.4). Unit tests for A.24 and A.27 (A.25
+  needs ANM scripts). Traces not run (cloud). SPEC-GAP 115 → 111. No questions.
 - impl59 (audit A.34, A.35, A.36, cloud, 2026-10-20): `Stage::step` returns at once while GameFlags bit 10 (player
   `freeze_bullets`): no script, camera, clock, sparkle flag or frame counter (06 §5); sparkles spawn from frame 0 in
   spell practice (GameFlags bit 14, `Stage::sparkle_due`, 06 §5); a billboard appends a sparkle point only when it is

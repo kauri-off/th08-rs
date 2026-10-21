@@ -568,8 +568,7 @@ impl Player {
     }
 
     // Player_Load 0x44D650 (09 §2, §6.4): sht files, gauge limits, initial script 0 / 5, solo options, state 1
-    // with timer 120.
-    // SPEC-GAP: timer 10 when GameFlags bit 14 (09 §6.4) is not applied.
+    // with timer 120, or 10 in spell practice (GM +0x3DBAC bit 14, mirrored in `gflags` by `register`).
     pub fn load(&mut self, anm: &mut AnmManager, human: Sht, youkai: Sht, shot: u8) {
         self.shot_type = shot;
         self.sht = human;
@@ -579,7 +578,12 @@ impl Player {
         let script = if self.solo_youkai() { 5 } else { 0 };
         anm.set_script(&mut self.vm, ANM_SLOT, script);
         self.state = 1;
-        self.state_timer.set(120);
+        let t = if self.gflags & GF_SPELL_PRACTICE != 0 {
+            10
+        } else {
+            120
+        };
+        self.state_timer.set(t);
         self.focus = 2;
         if self.solo() {
             self.spawn_options(anm, true);
@@ -591,7 +595,11 @@ impl Player {
         let human = crate::sht::parse(&ctx.archive.read(&a)?)?;
         let youkai = crate::sht::parse(&ctx.archive.read(&s)?)?;
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &anm)?;
-        p.borrow_mut().load(&mut ctx.anm, human, youkai, shot);
+        {
+            let mut p = p.borrow_mut();
+            p.gflags = p.gflags & !GF_SPELL_PRACTICE | ctx.game.flags & GF_SPELL_PRACTICE;
+            p.load(&mut ctx.anm, human, youkai, shot);
+        }
         let t: task::TaskRef<Ctx> = p;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
@@ -889,6 +897,9 @@ impl Player {
                     };
                     crate::effect::spawn(anm, kind, self.pos, 1, colour);
                 }
+                // 09 §3: the team sprite reset also sets +0xE2A9C := 0, so moving on the switch frame replays the
+                // start-move script; solos keep it.
+                self.last_v[0] = 0.0;
             }
             // Hitbox marker: effect 22 in fixed slot 2 on every switch to focused, all shot types (14 §5).
             if f == 1 {
@@ -900,9 +911,6 @@ impl Player {
             }
             self.focus_age = 0;
             self.gauge_c.set(0);
-            // 09 §3: the switch resets +0xE2A9C := 0, so moving on the switch frame replays the start-move script.
-            // SPEC-GAP: 09 §3 ties this to the team sprite reset; the port also does it for solos.
-            self.last_v[0] = 0.0;
         } else {
             self.focus_age += 1;
         }
@@ -1093,7 +1101,7 @@ impl Player {
     }
 
     // Player_RespawnUpdate 0x44D180 (09 §6.3): clear timer := 60 on every call, 30-frame grow from scale 3.
-    // SPEC-GAP: the invulnerability timer 240 is set even with GameFlags bit 14 (09 §6.3 skips it).
+    // Spell practice (GameFlags bit 14): the invulnerability timer is not set and keeps its value 30.
     fn respawn_update(&mut self) {
         self.respawn_clear = 60;
         let t = self.state_timer.cur;
@@ -1110,7 +1118,9 @@ impl Player {
         self.vm.scale = [1.0, 1.0];
         self.vm.flags |= anmvm::F_SCALE_DIRTY;
         self.vm.color = [255; 4];
-        self.state_timer.set(240);
+        if self.gflags & GF_SPELL_PRACTICE == 0 {
+            self.state_timer.set(240);
+        }
         self.deathbomb = self.sht.deathbomb;
     }
 
@@ -1147,14 +1157,28 @@ impl Player {
         }
     }
 
-    // Player_Calc (09 §1 steps 2–10); `items` is the item manager when the bullet manager exists.
-    // SPEC-GAP: step 1 (freeze byte 0x160F534 → set aura VM flag 0x80000 and return) is not done.
+    // Player_Calc 0x44C390 (09 §1); `items` is the item manager when the bullet manager exists.
     pub fn frame(
         &mut self,
         anm: &mut AnmManager,
         inp: &input::Input,
         mut items: Option<&mut ItemManager>,
     ) {
+        // Step 1: freeze byte 0x160F534 (ECL native 26) pauses the youkai aura (+0xBE834, fixed slot 2) and the
+        // gauge-max aura (+0xE2B24, slot 8) with VM flag 0x80000 and skips the rest of the calc.
+        let freeze = crate::enemy::timer_pause() != 0;
+        for k in [crate::effect::FIX_AURA, crate::effect::FIX_GAUGE] {
+            crate::effect::get(crate::effect::FIXED_BASE + k, |e| {
+                if freeze {
+                    e.vm.flags |= anmvm::F_PAUSED;
+                } else {
+                    e.vm.flags &= !anmvm::F_PAUSED;
+                }
+            });
+        }
+        if freeze {
+            return;
+        }
         let gs = anm.speed;
         // Port-only: areas queued by effects (bomb-owned rings) during the last frame.
         self.take_queued_areas();
@@ -1455,6 +1479,45 @@ mod tests {
         }
         assert_eq!((p.state, p.deathbomb), (3, p.sht.deathbomb));
         for _ in 0..240 {
+            p.step(&mut anm, &input(0));
+        }
+        assert_eq!(p.state, 0);
+    }
+
+    #[test]
+    fn freeze_byte_pauses_auras_and_skips_calc() {
+        crate::effect::clear();
+        let (mut p, mut anm) = ready();
+        let aura = crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE;
+        crate::effect::spawn_fixed(&mut anm, 25, p.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
+        let paused = || crate::effect::peek(aura, |e| e.vm.flags & anmvm::F_PAUSED != 0);
+        crate::enemy::set_timer_pause(1);
+        let (pos, t) = (p.pos, p.state_timer.cur);
+        p.step(&mut anm, &input(input::LEFT));
+        assert!(paused());
+        assert_eq!((p.pos, p.state_timer.cur, p.frames), (pos, t, 0));
+        crate::enemy::set_timer_pause(0);
+        p.step(&mut anm, &input(input::LEFT));
+        assert!(!paused() && p.pos[0] < pos[0] && p.frames == 1);
+        crate::effect::clear();
+    }
+
+    #[test]
+    fn spell_practice_timers() {
+        let (mut p, mut anm) = ready();
+        p.gflags = GF_SPELL_PRACTICE;
+        p.load(&mut anm, Sht::default(), Sht::default(), 0);
+        assert_eq!((p.state, p.state_timer.cur), (1, 10));
+        let (mut q, _) = ready();
+        q.load(&mut anm, Sht::default(), Sht::default(), 0);
+        assert_eq!(q.state_timer.cur, 120);
+        // Respawn: state 3 at t = 30; the timer keeps 30 instead of 240.
+        p.state_timer.set(0);
+        for _ in 0..31 {
+            p.step(&mut anm, &input(0));
+        }
+        assert_eq!((p.state, p.state_timer.cur), (3, 29));
+        for _ in 0..29 {
             p.step(&mut anm, &input(0));
         }
         assert_eq!(p.state, 0);
