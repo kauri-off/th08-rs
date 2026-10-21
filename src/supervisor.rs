@@ -425,6 +425,9 @@ impl Task<Ctx> for Supervisor {
         ctx.audio.tick_fade();
         if let Some(s) = &self.script {
             ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);
+        } else {
+            let pad = ctx.pad.poll();
+            ctx.input.poll_joystick(&ctx.game.cfg, pad);
         }
         self.frame += 1;
         ctx.input.tick();

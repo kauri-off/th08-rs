@@ -561,6 +561,17 @@
   the first menu after boot. Unit tests: score.txt byte-identical to `specs/data/drawlog/menu_mopup1.score.txt`,
   code sequence + effect, notice order and fade bytes. Traces not run (cloud). SPEC-GAP 110 → 113 (src).
   Questions: `docs/briefs/IMPL71_QUESTIONS.md`.
+- impl68 (audit §B, cloud, 2026-10-21): key config screen 3 (15 §1.3, `menu.rs` `key_config`): 12 rows in screen
+  order (Skip 4th), working copy of the 9 pad fields with the live Up/Down at −1 while open, assigning from the first
+  new raw pad button with swap + SE 10, ShotSlow Left/Right toggle, Reset (table 0x4C78C8, +0x26 := 1), Quit / 3600 idle
+  frames write the copy back (SE 11, screen 2 cursor 8). Rows are printed with the ASCII queue (VM layout not in the
+  spec). Joystick (15 §1.1): `input::joystick_bits` (pad fields → bits 0x1…0x100, lX/lY vs. +0x18/+0x1A, ShotSlow
+  counter) ORed into the raw word; `src/joystick.rs` polls the first gilrs gamepad (browser Gamepad API on wasm; on
+  Linux behind the `gamepad-linux` feature because gilrs needs libudev-dev). Option screen: cursor from the first call,
+  Left/Right/confirm/cancel from frame 4, leaving = SE 11 / top cursor 7, snapshot taken by the top-menu switch,
+  3600-frame idle exit, return 5 → `Game::device_reset` (the app applies +0x22 as fullscreen). Unit tests: mapping,
+  ShotSlow counter, key swap. Traces not run (cloud). SPEC-GAP 111 → 113 (src). Questions:
+  `docs/briefs/IMPL68_QUESTIONS.md`.
 ## Run
 WebGPU in Playwright: headless Chromium only has SwiftShader and loses the device on the first canvas present (even a bare JS triangle); use a headed launch with `--enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist --ozone-platform=x11 --force-device-scale-factor=1` (on Wayland at 1.25 scale `devicePixelContentBoxSize` makes the canvas 800x600 even with an emulated DPR of 1).
 Web: `web/build.sh`, serve `web/dist` (e.g. `python3 -m http.server -d web/dist 8087`). Verified in Playwright Chromium (WebGL2 fallback, OPFS cache works).

@@ -242,6 +242,21 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                     }
                 }
+                // Option menu return 5 (15 §1.3): the port has no device to recreate; window mode +0x22 is applied as
+                // the port's fullscreen setting.
+                if std::mem::take(&mut r.ctx.game.device_reset) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.fullscreen = r.ctx.game.cfg.windowed == 0;
+                        r.window.set_fullscreen(
+                            self.fullscreen.then_some(Fullscreen::Borderless(None)),
+                        );
+                        crate::settings::save_port_cfg(
+                            "fullscreen",
+                            if self.fullscreen { "on" } else { "off" },
+                        );
+                    }
+                }
                 let size = r.window.inner_size();
                 r.ctx.gfx.resize(size.width, size.height);
                 r.ctx.draw();

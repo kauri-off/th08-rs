@@ -15,6 +15,8 @@ pub struct Ctx {
     pub archive: Archive,
     pub audio: Audio,
     pub input: Input,
+    // Joystick device polled by the Supervisor (15 §1.1).
+    pub pad: crate::joystick::Joystick,
     pub anm: AnmManager,
     pub tasks: Tasks<Ctx>,
     // Port count of executed calc steps (debug tools, TH08_SHOT); not an original counter.
@@ -68,6 +70,11 @@ impl Ctx {
             archive,
             audio,
             input: Input::default(),
+            pad: if persist {
+                crate::joystick::Joystick::new()
+            } else {
+                Default::default()
+            },
             anm: AnmManager::default(),
             tasks: Tasks::default(),
             frame: 0,

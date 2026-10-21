@@ -13,3 +13,6 @@
 - RE tool = Ghidra headless (Hopper proved unreliable). Workspace re/ (helpers re/tools, scripts re/ghidra_scripts).
 - REA MCP registered for claude_code (~/.claude.json, backup .rea.backup) and opencode, both with JAVA_HOME=/usr/lib/jvm/java-21-openjdk
   + GHIDRA_INSTALL_DIR=/opt/ghidra. Before that REA's ghidra provider was unavailable (system default Java 17) — agents only had Hopper.
+- Joystick (impl68) = gilrs (browser Gamepad API on wasm). On Linux gilrs needs libudev-dev at build time, so it is
+  behind the `gamepad-linux` feature (`cargo build --release --features gamepad-linux`); the default Linux build and the
+  AppImage CI have no joystick until libudev-dev is added there.

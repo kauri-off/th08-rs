@@ -47,6 +47,25 @@ const VM_DIFF: usize = 131;
 const VM_DIFF_EXTRA: usize = 135;
 const VM_OPTION: usize = 10;
 const OPTION_ITEMS: i32 = 10;
+// Option / key-config idle exit (15 §1.3).
+const IDLE_EXIT: u32 = 3600;
+
+// Key config rows 0–8 (15 §1.3): label and the pad field (file order, +0x00…+0x10) each row edits; Skip is 4th.
+const KEY_ROWS: [(&str, usize); 9] = [
+    ("Shot", 0),
+    ("Bomb", 1),
+    ("Slow", 2),
+    ("Skip", 8),
+    ("Pause", 3),
+    ("Up", 4),
+    ("Down", 5),
+    ("Left", 6),
+    ("Right", 7),
+];
+const KEY_ITEMS: i32 = 12;
+const KEY_SHOT_SLOW: i32 = 9;
+const KEY_RESET: i32 = 10;
+const KEY_QUIT: i32 = 11;
 
 // Top-menu item descriptions (12 §2.2 table).
 const DESCRIPTIONS: [&str; ITEMS] = [
@@ -277,6 +296,10 @@ pub struct MainMenu {
     pub(crate) again: bool,
     // Config snapshot taken on entering the option screen (12 §2.2 item 7).
     pub(crate) snapshot: Config,
+    // Key config working copy of the 9 pad fields (menu +0x14440…+0x14451, file order) and the button found on the
+    // previous frame (global 0x4C868C, 15 §1.3).
+    pub(crate) keys: [i16; 9],
+    pub(crate) last_button: i16,
     // Practice stages available on screen 11 (12 §2.5).
     pub(crate) stages: [bool; 8],
     pub(crate) replays: Vec<(String, crate::replay::Replay)>,
@@ -305,6 +328,8 @@ impl MainMenu {
             back: 0,
             again: false,
             snapshot: Config::default(),
+            keys: crate::config::PAD_DEFAULT,
+            last_button: -1,
             stages: [false; 8],
             replays: Vec::new(),
             lists: Default::default(),
@@ -760,25 +785,39 @@ impl MainMenu {
     }
 
     // Option screen 2, MainMenu_Option 0x46837B (12 §2.7, 15 §1.3).
-    // SPEC-GAP: the return value 5 (device recreate on colour/window change) and the 3600-frame idle exit are not done.
+    // The cursor is set by the switch that enters it (0 from the top menu, 8 from key config).
     fn option(&mut self, ctx: &mut Ctx) {
         if self.frames == 0 {
             self.interrupt_all(3);
-            self.cursor = 0;
-            self.snapshot = ctx.game.cfg;
+            self.idle = 0;
         }
         for i in 0..OPTION_ITEMS {
             self.highlight(ctx, VM_OPTION + i as usize, i == self.cursor);
         }
         self.option_values(ctx);
-        if self.frames < 8 || self.pending.is_some() {
+        if self.pending.is_some() {
             return;
         }
+        // After 3600 idle frames back to the top menu (15 §1.3).
+        // SPEC-GAP: the idle counter, SE and top cursor of this exit are not given; any input resets it, leaves as Quit.
+        self.idle = if ctx.input.held != 0 {
+            0
+        } else {
+            self.idle + 1
+        };
+        if self.idle >= IDLE_EXIT {
+            self.option_leave(ctx);
+            return;
+        }
+        // The cursor moves from the first call; Left/Right/confirm/cancel from +0x1442C ≥ 4 (12 §2 input start).
         self.move_cursor(ctx, OPTION_ITEMS, UP, DOWN, |_| true);
         let item = self.cursor;
         // Volume preview (15 §1.3): SE 0x1D whenever the screen frame counter +0x1442C is a multiple of 50.
         if matches!(item, 3 | 4) && self.frames % 50 == 0 {
             sound::play(sound::TIMEOUT);
+        }
+        if self.frames < 4 {
+            return;
         }
         let inp = ctx.input;
         let lmax = lives_max(&ctx.game);
@@ -832,22 +871,114 @@ impl MainMenu {
                     sound::play(sound::OK);
                     self.set_screen(KEY_CONFIG);
                 }
-                9 => {
-                    sound::play(sound::OK);
-                    self.set_screen(TOP);
-                    self.cursor = 7;
-                }
+                9 => self.option_leave(ctx),
                 _ => {}
             }
         } else if ctx.input.pressed(CANCEL) {
-            // SPEC-GAP: cancel on the option screen is not described in 12 §2.7 / 15 §1.3.
-            sound::play(sound::CANCEL);
+            // Bomb/ESC moves the cursor to Quit (SE 11), on Quit it leaves (15 §1.3).
             if self.cursor == OPTION_ITEMS - 1 {
-                self.set_screen(TOP);
-                self.cursor = 7;
+                self.option_leave(ctx);
             } else {
+                sound::play(sound::CANCEL);
                 self.cursor = OPTION_ITEMS - 1;
             }
+        }
+    }
+
+    // Leaving the option menu (15 §1.3): SE 11, top cursor 7, screen 0 at once; return 5 when the colour depth or
+    // window mode differs from the snapshot taken on entry (12 §2.2 item 7).
+    // SPEC-GAP: 00 §3 makes calc return 5 an error exit; the port keeps running and only flags the device reset.
+    fn option_leave(&mut self, ctx: &mut Ctx) {
+        sound::play(sound::CANCEL);
+        self.set_screen(TOP);
+        self.cursor = 7;
+        let (a, b) = (&self.snapshot, &ctx.game.cfg);
+        if a.colour_mode != b.colour_mode || a.windowed != b.windowed {
+            ctx.game.device_reset = true;
+        }
+    }
+
+    // Key config, screen 3, MainMenu_KeyConfig 0x469636 (15 §1.3).
+    fn key_config(&mut self, ctx: &mut Ctx) {
+        let cfg = &mut ctx.game.cfg;
+        // Entry: working copy of the 9 fields; the live Up/Down are −1 while the screen is open.
+        if self.frames == 0 {
+            self.cursor = 0;
+            self.keys = cfg.pad;
+            cfg.pad[4] = -1;
+            cfg.pad[5] = -1;
+            self.idle = 0;
+        }
+        self.move_cursor(ctx, KEY_ITEMS, UP, DOWN, |_| true);
+        let inp = ctx.input;
+        // Assigning (joystick only): a new first-down raw button on rows 0–8 swaps with any row holding it, SE 10.
+        let b = inp.pad.first_button();
+        if b >= 0 && b != self.last_button && self.cursor < KEY_ROWS.len() as i32 {
+            assign_key(&mut self.keys, self.cursor as usize, b);
+            sound::play(sound::OK);
+        }
+        // SPEC-GAP: 15 §1.3 does not say whether 0x4C868C is also written (−1) on frames with no button down.
+        self.last_button = b;
+        let cfg = &mut ctx.game.cfg;
+        if self.cursor == KEY_SHOT_SLOW && (inp.pressed(LEFT) || inp.pressed(RIGHT)) {
+            cfg.shot_slow ^= 1;
+        }
+        // SPEC-GAP: "raw input" for the idle exit is taken as the polled word or any raw pad button.
+        self.idle = if inp.held != 0 || inp.pad.buttons != 0 {
+            0
+        } else {
+            self.idle + 1
+        };
+        if inp.pressed(CONFIRM) && self.cursor == KEY_RESET {
+            sound::play(sound::OK);
+            self.keys = crate::config::PAD_DEFAULT;
+            cfg.shot_slow = 1;
+        } else if inp.pressed(CONFIRM) && self.cursor == KEY_QUIT || self.idle >= IDLE_EXIT {
+            // Quit (or 3600 idle frames): SE 11, screen 2 cursor 8, the working copy written back (restores Up/Down).
+            sound::play(sound::CANCEL);
+            cfg.pad = self.keys;
+            self.set_screen(OPTION);
+            self.cursor = 8;
+            return;
+        }
+        self.key_config_text(ctx);
+    }
+
+    // SPEC-GAP: the key-config VMs 43–76 (12 §2.1) have no row/digit layout in the spec; the port prints the rows
+    // with the ASCII queue.
+    fn key_config_text(&self, ctx: &mut Ctx) {
+        let cfg = &ctx.game.cfg;
+        let row = |i: i32| {
+            let (label, value) = match i {
+                0..9 => {
+                    let (l, f) = KEY_ROWS[i as usize];
+                    let n = self.keys[f];
+                    (
+                        l,
+                        if n < 0 {
+                            String::new()
+                        } else {
+                            format!("{n:02}")
+                        },
+                    )
+                }
+                KEY_SHOT_SLOW => (
+                    "ShotSlow",
+                    ["Off", "On"][(cfg.shot_slow != 0) as usize].into(),
+                ),
+                KEY_RESET => ("Reset", String::new()),
+                _ => ("Quit", String::new()),
+            };
+            format!("{label:<10}{value}")
+        };
+        for i in 0..KEY_ITEMS {
+            let c = if i == self.cursor {
+                0xFFFFFFFF
+            } else {
+                0xFF808080
+            };
+            ctx.ascii
+                .push(Text::new(224.0, 144.0 + 16.0 * i as f32, row(i)).argb(c));
         }
     }
 
@@ -893,25 +1024,6 @@ impl MainMenu {
                 vm.set_flag(anmvm::F_VISIBLE, !hidden && vm.color[anmvm::A] > 0);
             }
             self.highlight(ctx, first + 3, self.cursor == item);
-        }
-    }
-
-    // SPEC-GAP: key config (screen 3, 15 §1.3) is a later task; the screen returns on any confirm/cancel.
-    fn stub(&mut self, ctx: &mut Ctx, name: &str, back: i32, cursor: i32) {
-        ctx.ascii.push(Text::new(
-            200.0,
-            220.0,
-            format!("{name}: not implemented yet"),
-        ));
-        ctx.ascii
-            .push(Text::new(200.0, 244.0, "Press Shot or Bomb").argb(0xFF808080));
-        if self.frames >= 10 && ctx.input.pressed(CONFIRM | CANCEL) {
-            sound::play(sound::CANCEL);
-            self.set_screen(back);
-            self.cursor = cursor;
-            if back == TOP {
-                ctx.game.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
-            }
         }
     }
 }
@@ -1032,6 +1144,10 @@ impl Task<Ctx> for MainMenu {
                 self.pending = None;
                 self.set_screen(s);
                 self.cursor = c;
+                // Top item 7: after 30 frames screen 2, config snapshot saved (12 §2.2).
+                if s == OPTION {
+                    self.snapshot = ctx.game.cfg;
+                }
             } else {
                 p.frames -= 1;
             }
@@ -1046,7 +1162,7 @@ impl Task<Ctx> for MainMenu {
                 DIFF | DIFF_PRACTICE | DIFF_EXTRA => self.difficulty(ctx),
                 CHAR | CHAR_PRACTICE | CHAR_EXTRA | CHAR_SPELL => self.character(ctx),
                 PRACTICE_STAGE => self.practice_stage(ctx),
-                KEY_CONFIG => self.stub(ctx, "Key config", OPTION, 8),
+                KEY_CONFIG => self.key_config(ctx),
                 REPLAY => self.replay(ctx),
                 SPELL_PRACTICE => self.spell_char(ctx),
                 SPELL_CARD => self.spell_card(ctx),
@@ -1147,6 +1263,16 @@ fn volume_step(v: u8, inp: &Input) -> u8 {
     v as u8
 }
 
+// Key config assign (15 §1.3): rows holding `b` get the row's old button, then the row gets `b`.
+fn assign_key(keys: &mut [i16; 9], row: usize, b: i16) {
+    let field = KEY_ROWS[row].1;
+    let old = keys[field];
+    for k in keys.iter_mut().filter(|k| **k == b) {
+        *k = old;
+    }
+    keys[field] = b;
+}
+
 // Loader thread 0x470E10 (00 §3.2): title music unless music is off or the previous scene was 5 (result screen).
 fn title_music(g: &gamemgr::Game) -> bool {
     g.cfg.music != 0 && g.previous != gamemgr::SCENE_RESULT_MENU
@@ -1154,7 +1280,7 @@ fn title_music(g: &gamemgr::Game) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{final_notice, info_fade_alpha, info_files, title_music, volume_step};
+    use super::{assign_key, final_notice, info_fade_alpha, info_files, title_music, volume_step};
     use crate::gamemgr::{self, Game};
 
     // 16 §4: notice order info00 (bit 15), info02 (16), info01 (17); only bits not yet in the flags.
@@ -1177,6 +1303,20 @@ mod tests {
         assert_eq!(info_fade_alpha(5999), Some(242));
     }
     use crate::input::{Input, LEFT, RIGHT};
+
+    // 15 §1.3: rows in screen order (Skip 4th); assigning swaps with every row holding the button.
+    #[test]
+    fn key_config_assign() {
+        let mut k = crate::config::PAD_DEFAULT;
+        assign_key(&mut k, 3, 0);
+        assert_eq!(k, [3, 1, 2, 4, -1, -1, -1, -1, 0]);
+        assign_key(&mut k, 5, 7);
+        assert_eq!(k[4], 7);
+        assign_key(&mut k, 6, 7);
+        assert_eq!((k[4], k[5]), (-1, 7));
+        assign_key(&mut k, 1, 1);
+        assert_eq!(k, [3, 1, 2, 4, -1, 7, -1, -1, 0]);
+    }
 
     #[test]
     fn volume_press_and_hold() {

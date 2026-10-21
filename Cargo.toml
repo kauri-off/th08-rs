@@ -22,6 +22,16 @@ web-time = "1.1.0"
 wgpu = { version = "30", features = ["webgl"] }
 winit = "0.30"
 
+[features]
+# Joystick on Linux: gilrs needs libudev (libudev-dev) at build time, so it is opt-in there.
+gamepad-linux = ["dep:gilrs"]
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+gilrs = "0.11.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gilrs = { version = "0.11.2", optional = true }
+
 [build-dependencies]
 winresource = { version = "0.1.34", default-features = false }
 

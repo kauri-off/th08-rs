@@ -29,6 +29,7 @@ pub mod gui;
 pub mod hud;
 pub mod input;
 pub mod item;
+pub mod joystick;
 pub mod launcher;
 pub mod menu;
 pub mod menulist;
