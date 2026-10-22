@@ -431,6 +431,8 @@ struct Painter {
     model: Model,
     ctx: egui::Context,
     renderer: egui_wgpu::Renderer,
+    // Texture updates not yet uploaded (a pass whose frame was skipped keeps them for the next paint).
+    pending: egui::TexturesDelta,
 }
 
 // The launcher in the game window. Dropped before the game loads, freeing its GPU objects.
@@ -519,17 +521,19 @@ impl Painter {
             model,
             ctx,
             renderer,
+            pending: egui::TexturesDelta::default(),
         }
     }
 
     fn pass(&mut self, raw: egui::RawInput) -> (egui::FullOutput, Option<Action>) {
         let mut act = None;
         let model = &mut self.model;
-        let out = self.ctx.run_ui(raw, |ui| {
+        let mut out = self.ctx.run_ui(raw, |ui| {
             if let Some(a) = model.ui(ui) {
                 act = Some(a);
             }
         });
+        self.pending.append(std::mem::take(&mut out.textures_delta));
         (out, act)
     }
 
@@ -545,10 +549,9 @@ impl Painter {
             size_in_pixels: [w, h],
             pixels_per_point: out.pixels_per_point,
         };
-        for (id, deltas) in &out.textures_delta.set {
-            for d in deltas {
-                self.renderer
-                    .update_texture(&gfx.device, &gfx.queue, *id, d);
+        for (id, deltas) in self.pending.set.drain() {
+            for d in &deltas {
+                self.renderer.update_texture(&gfx.device, &gfx.queue, id, d);
             }
         }
         let mut enc = gfx.device.create_command_encoder(&Default::default());
@@ -576,8 +579,8 @@ impl Painter {
                 .forget_lifetime();
             self.renderer.render(&mut pass, &jobs, &desc);
         }
-        for id in &out.textures_delta.free {
-            self.renderer.free_texture(id);
+        for id in self.pending.free.drain() {
+            self.renderer.free_texture(&id);
         }
         enc
     }
