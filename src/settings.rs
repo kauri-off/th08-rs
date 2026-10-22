@@ -928,7 +928,13 @@ impl Settings {
             if let (Some(i), Some(v)) = (m.index_of(e.key), m.get_one::<String>(e.key)) {
                 cli.push((i, e, v.clone()));
             }
-            if let Some(i) = m.index_of(&no_id(e)).filter(|_| m.get_flag(&no_id(e))) {
+            // Only booleans have a `--no-x` arg; clap's debug build panics on an unknown id.
+            if let Some(i) = e
+                .is_bool()
+                .then(|| m.index_of(&no_id(e)))
+                .flatten()
+                .filter(|_| m.get_flag(&no_id(e)))
+            {
                 cli.push((i, e, "off".into()));
             }
         }
