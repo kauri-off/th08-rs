@@ -16,11 +16,13 @@ fn main() -> anyhow::Result<()> {
         1usize,
         usize::MAX,
     );
+    let mut port_only = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--out" => out = it.next().map(PathBuf::from).unwrap_or(out),
             "--no-drawlog" => drawlog_on = false,
+            "--port-drawlog" => port_only = true,
             "--from" => from = it.next().and_then(|v| v.parse().ok()).unwrap_or(1).max(1),
             "--to" => to = it.next().and_then(|v| v.parse().ok()).unwrap_or(to),
             _ => dir = Some(PathBuf::from(a)),
@@ -28,7 +30,7 @@ fn main() -> anyhow::Result<()> {
     }
     let dir = dir.ok_or_else(|| {
         anyhow::anyhow!(
-            "usage: session <session dir> [--out DIR] [--no-drawlog] [--from N] [--to N]"
+            "usage: session <session dir> [--out DIR] [--no-drawlog] [--port-drawlog] [--from N] [--to N]"
         )
     })?;
     let s = Session::load(&dir)?;
@@ -68,7 +70,9 @@ fn main() -> anyhow::Result<()> {
         None => None,
     };
     let port_log = out.join("draw.drawlog.xz");
-    let mut xz = if drawlog_on {
+    // `--port-drawlog`: the port's own log of rows from..to, also for sessions without a reference log.
+    let port_only = port_only && !drawlog_on;
+    let mut xz = if drawlog_on || port_only {
         Some(th08::xz::create(&port_log)?)
     } else {
         None
@@ -81,6 +85,14 @@ fn main() -> anyhow::Result<()> {
     let t0 = std::time::Instant::now();
     {
         let mut on_draw = |text: String| {
+            let present = text
+                .split_whitespace()
+                .nth(1)
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0);
+            if port_only && !(range.0..=range.1 + 1).contains(&present) {
+                return;
+            }
             if let Some(w) = &mut xz {
                 let _ = w.write_all(text.as_bytes());
             }
@@ -90,8 +102,11 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         };
-        let draw: Option<&mut dyn FnMut(String)> =
-            if drawlog_on { Some(&mut on_draw) } else { None };
+        let draw: Option<&mut dyn FnMut(String)> = if drawlog_on || port_only {
+            Some(&mut on_draw)
+        } else {
+            None
+        };
         s.run(
             &mut ctx,
             to,
