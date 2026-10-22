@@ -269,7 +269,7 @@
   no GTK); th08.dat checked case-insensitively, error dialog + retry, cancel exits 0, an invalid dir given on the
   command line / TH08_DIR exits 1; a picked folder is saved. port.cfg at `$XDG_CONFIG_HOME/th08` /
   `%APPDATA%\th08` / `~/Library/Application Support/th08` (also the default save dir now, so Windows/macOS saves move
-  there from next to the binary). Display: `scale` 1–4, `fullscreen` (Alt+Enter toggles + saves; the Enter press is
+  there from next to the binary). Display: `scale` 1–4, `fullscreen` (F11 or Alt+Enter toggles + saves; the Enter press is
   not passed to the game), `vsync` (AutoVsync / AutoNoVsync); web ignores scale/fullscreen. Game files are looked up
   case-insensitively natively too (`assets::find_file`).
   - Behaviour unchanged: golden trace and draw log byte-identical (8104, 25.14 %), fullrun_noclip 7552, selftest1

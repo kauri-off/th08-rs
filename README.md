@@ -75,7 +75,7 @@ and replays. It is written only when you press Play on the launcher screen, pick
 
 Display settings (port only, they never affect the game logic):
 - `scale = 1..4`: window size 640×480 × scale (default 1);
-- `fullscreen = on|off`: Alt+Enter toggles it and saves the choice;
+- `fullscreen = on|off`: F11 or Alt+Enter toggles it and saves the choice;
 - `vsync = on|off` (default on).
 The web build ignores `scale` and `fullscreen`.
 

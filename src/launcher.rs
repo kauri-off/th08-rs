@@ -129,6 +129,17 @@ impl Model {
         Self { rows, folder }
     }
 
+    // F11 / Alt+Enter on the launcher: flips the fullscreen box.
+    pub fn toggle_fullscreen(&mut self) {
+        let on = self.settings().fullscreen;
+        let r = self
+            .rows
+            .iter_mut()
+            .find(|r| r.e.key == "fullscreen")
+            .unwrap();
+        r.value = if on { "off" } else { "on" }.into();
+    }
+
     fn row(&self, key: &str) -> &Row {
         self.rows.iter().find(|r| r.e.key == key).unwrap()
     }
@@ -463,6 +474,10 @@ impl Screen {
 
     pub fn model(&self) -> &Model {
         &self.p.model
+    }
+
+    pub fn model_mut(&mut self) -> &mut Model {
+        &mut self.p.model
     }
 
     // Returns whether the window needs a redraw.

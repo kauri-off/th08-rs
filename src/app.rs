@@ -178,15 +178,11 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Resized(s) => r.ctx.gfx.resize(s.width, s.height),
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::ModifiersChanged(m) => self.alt = m.state().alt_key(),
-            // Port-only Alt+Enter: toggle fullscreen and save it; the Enter press does not reach the game.
+            // Port-only F11 / Alt+Enter: toggle fullscreen and save it; the key press does not reach the game.
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::KeyboardInput { event, .. }
-                if self.alt
-                    && event.state == ElementState::Pressed
-                    && matches!(
-                        event.physical_key,
-                        PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter)
-                    ) =>
+                if event.state == ElementState::Pressed
+                    && is_fullscreen_key(self.alt, event.physical_key) =>
             {
                 if !event.repeat {
                     self.fullscreen = !self.fullscreen;
@@ -352,9 +348,23 @@ impl App {
                     }
                 }
             },
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed
+                    && is_fullscreen_key(self.alt, event.physical_key) =>
+            {
+                if !event.repeat {
+                    screen.model_mut().toggle_fullscreen();
+                    l.window.request_redraw();
+                }
+            }
             ev => {
                 if let WindowEvent::Resized(s) = ev {
                     gfx.resize(s.width, s.height);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if let WindowEvent::ModifiersChanged(m) = &ev {
+                    self.alt = m.state().alt_key();
                 }
                 if screen.on_event(&l.window, &ev) {
                     l.window.request_redraw();
@@ -404,6 +414,16 @@ impl App {
                 Err(e) => log::error!("startup failed: {e:#}"),
             }
         });
+    }
+}
+
+// Port-only fullscreen toggle keys: F11, or Enter / keypad Enter with Alt held.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_fullscreen_key(alt: bool, key: PhysicalKey) -> bool {
+    match key {
+        PhysicalKey::Code(KeyCode::F11) => true,
+        PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => alt,
+        _ => false,
     }
 }
 

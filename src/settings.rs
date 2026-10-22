@@ -331,7 +331,7 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Display,
-        help: "start fullscreen (native; Alt+Enter toggles and saves)",
+        help: "start fullscreen (native; F11 or Alt+Enter toggles and saves)",
         set: |s, v| {
             s.fullscreen = parse_bool(v)?;
             Ok(())
