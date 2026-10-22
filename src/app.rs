@@ -331,7 +331,26 @@ impl App {
             WindowEvent::RedrawRequested => match screen.redraw(&l.window, gfx) {
                 Some(crate::launcher::Action::Play) => self.play(el),
                 Some(crate::launcher::Action::Quit) => el.exit(),
-                None => {}
+                None => {
+                    // The fullscreen box applies at once, not only on Play.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let s = screen.model().settings();
+                        if s.fullscreen != self.fullscreen {
+                            self.fullscreen = s.fullscreen;
+                            l.window.set_fullscreen(
+                                s.fullscreen.then_some(Fullscreen::Borderless(None)),
+                            );
+                            if !s.fullscreen {
+                                let k = s.scale as f64;
+                                let _ = l.window.request_inner_size(winit::dpi::LogicalSize::new(
+                                    640.0 * k,
+                                    480.0 * k,
+                                ));
+                            }
+                        }
+                    }
+                }
             },
             ev => {
                 if let WindowEvent::Resized(s) = ev {
