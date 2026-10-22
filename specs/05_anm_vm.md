@@ -59,7 +59,7 @@ direct effect of an opcode/draw routine, INFERRED for names of owner-only fields
 | 0x208 | f32[3] | pos | position x, y, z |
 | 0x214 | i16 | sprite_index | index into the file's sprite table |
 | 0x216 | i16 | anm_slot | ANM slot of the file |
-| 0x218 | i16 | saved_sprite | base sprite copy of sprite_index: written by `AnmManager_SetScriptRange` 0x462360 (after each script start), the bullet template load (0x433070) and ECL native 28 (bullets); read by native 29 (restores the bullet sprite) and 0x469FA9 (digit sprite = base + 2·digit). No other reader (VERIFIED RE-Q26) |
+| 0x218 | i16 | saved_sprite | base sprite copy of sprite_index: written by `AnmManager_SetScriptRange` 0x462360 (after each script start), the bullet template load (0x433070: template VM0 +0x218 := its +0x214 right after the template's script start, i.e. the **base** sprite of colour 0) and ECL native 28 (bullets); not by `AnmVm_SetSprite`, so a spawned bullet keeps the template's base value through `AnmVm_Copy` and the colour `SetSprite` of 08 §3.2 (VERIFIED RE-Q30); read by native 29 (restores the bullet sprite) and 0x469FA9 (digit sprite = base + 2·digit). No other reader (VERIFIED RE-Q26) |
 | 0x21A | i16 | script_index | < 0 = no script (range runner skips it) |
 | 0x21C | ptr | script_start | |
 | 0x220 | ptr | ip | current instruction; NULL = script finished |
@@ -384,7 +384,11 @@ With this camera, world (x, y, 0) projects to viewport pixel (x, y) (relative to
   arithmetic above is therefore IEEE float32 arithmetic, one rounding per operation.
 - Exception: loader threads (stage start, menu loader) run with **0x027F (53-bit)**, see 11 §1.2.
 - float → int conversions (`crt_ftol`) truncate toward zero (VERIFIED from its code).
-- sin/cos in draw code are x87 `fsin/fcos` (`FSINCOS`). Their results are rounded to 24 bits under this CW.
+- sin/cos are x87 `fsin`/`fcos`. Precision control does **not** apply to them (it only affects FADD/FSUB/FMUL/FDIV/
+  FSQRT), so their results stay extended; the following `fmul` rounds once to 24 bits. Bit-exact model of
+  `Vec3_FromPolar` 0x4286E0: x = f32(cos(a)·r), y = f32(sin(a)·r) with cos/sin and the product in (at least) double
+  precision — not f32(f32(cos a)·r) (VERIFIED RE-Q30: ~190 bullet velocities in fullrun_noclip at poll 51706 differ by
+  1 ulp under the double-rounding model and match under this one). (Corrects "rounded to 24 bits".)
 
 ## 11. Verification
 

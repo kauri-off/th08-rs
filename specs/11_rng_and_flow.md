@@ -271,7 +271,10 @@ rank = RANK[d].init, min, max (table 0x4C7880: E/N 10, 8, 16; H/L 8, 8, 12; Extr
   (rank changes: RankAdd/RankSub 0x43BFC3/0x43C03F via sub-counter GM+0x3DE38, ±1 rank per 100,
    clamped — RankAdd only to max, RankSub only to min (VERIFIED RE-Q29; the same as a two-sided clamp while rank is in range); deltas: power item +1, point item +3 if v < max else +10, bomb item +5, graze +6, extend +200, item fell off
    the bottom −3, bomb −200, death −1600; +100 every 2400 − 240·lives frames of the enemy-manager clock outside
-   dialogue, 0x42C3B0)
+   dialogue, 0x42C3B0 — called at the **start** of `EnemyMgr_Calc` (inside the bit-10 gate, right after the op-176
+   box, before the timelines and the slot loop: enemies firing in that frame already see the new rank; 07 §10.1
+   step 1; the test is enemy-manager timer +0x9DCED0 advanced this frame and timer % period == 0; VERIFIED call
+   0x42C77E, RE-Q30, fullrun_noclip poll 51632))
 stats.deaths (+0x64/+0x68) = 0 (checksum); stats.bombs_used (+0x84/+0x88) = 0 (checksum)
 stats.spells_captured (+0x1C) = 0; 0x164D318/320/324 = 0
 play counters in the score data incremented unless replay / spell practice / slow mode

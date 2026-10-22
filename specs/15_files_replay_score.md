@@ -234,10 +234,15 @@ Write order (VERIFIED from the saver):
 - mode 2 (flush only: load, then immediately save) from:
   - the pause menu "quit" (0x4045AC);
   - GameMgr_LoadScoreData (0x43BBF3, at game start);
-  - WinMain exit (0x441B95): after the main loop has left (`Frame_Run` returned non-zero, i.e. after that frame's
-    calc, draw and Present), and only if the PLST block tag 0x164CD0C ≠ 0 (always after boot); then the chains are
-    torn down (0x43CE30), which removes the Result and saves. So the 2 save draws (11 §1.5) come after the last
-    frame's post-calc state, never inside a frame (VERIFIED WinMain, RE-Q28).
+  - WinMain exit (0x441B95): after the main loop has left (`Frame_Run` returned non-zero: the quitting frame runs
+    its calc chain and `Sound_Update`, then `Supervisor_JoinLoader` and returns — **no draw and no Present** for that
+    frame, 00 §2; corrected RE-Q30), and only if the PLST block tag 0x164CD0C ≠ 0 (always after boot); then the chains
+    are torn down (0x43CE30: `Supervisor_JoinLoader`, then both chain lists, head +0 first, then +0x20), which removes the Result and
+    saves; then `Sound_Update` is called until it returns 0. So the 2 save draws (11 §1.5) come after the last frame's
+    post-calc state, never inside a frame (VERIFIED WinMain, RE-Q28). The loop also ends (same exit path) when the
+    device reset after a lost device fails. Closing the window does **not** end it: the window procedure 0x442390
+    answers WM_CLOSE by setting 0x17CE8FC bit 7 and returning 1 (no `DefWindowProc`, the window stays), and no code
+    reads bit 7; the loop flag 0x17CE704 is only ever written 0 (VERIFIED RE-Q30).
 - mode 1 from Supervisor scene 6 (after a game).
 - mode 0 from scene 5 (result viewer from the menu).
 

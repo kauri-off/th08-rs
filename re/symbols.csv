@@ -755,3 +755,9 @@ addr,kind,name,signature,confidence,note
 0x00472840,func,Bgm_SetVolume,,VERIFIED,k=1-(1-v/100)^2
 0x0042b370,func,Enemy_ForwardDamageToRoot,void __thiscall(Enemy*,int d),VERIFIED,RE-Q28: not bombing; rd=d/2; root dmg timer -> rd/9 boss else 0; floor max(0 thr)
 0x004b49a0,global,g_EffBurstRandomBelow,double,VERIFIED,-990.0: EffInit_Burst random angle iff param.x <= this
+0x00451ce0,func,Box_FromCenterSize,,VERIFIED,this=min out; EDX=max out; min=c-s*0.5 max=s*0.5+c (RE-Q30)
+0x00442390,func,Window_Proc,,VERIFIED,WM_CLOSE -> 0x17CE8FC|=0x80 return 1 (never read) (RE-Q30)
+0x00472750,func,Bgm_StreamPlay,,VERIFIED,fade mode/n/N:=0 SetVolume(0) play (RE-Q30)
+0x004728e0,func,Bgm_StreamStop,,VERIFIED,stops buffers; fade mode:=0 (RE-Q30)
+0x00423d70,func,Vec3_Scale,,VERIFIED,v*=s in place (RE-Q30)
+0x00449c79,func,Supervisor_GetFlag13,,VERIFIED,Supervisor+0x150 bit 13 (RE-Q30)

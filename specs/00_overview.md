@@ -46,7 +46,7 @@ anm_manager.begin_frame()
 SetViewport(0, 0, 640, 480)
 r = run(calc_chain)                          # all update callbacks
 sound.update()
-if r == 0  -> quit normally ; if r == -1 -> quit with error
+if r == 0  -> JoinLoader; return 1 (quit) ; if r == -1 -> JoinLoader; return 2 (error)   # no draw, no Present (RE-Q30)
 skip_counter += 1
 if skip_counter >= config.frame_skip:        # VERIFIED cfg+0x23: 0 and 1 both draw every frame, 2 every 2nd
     BeginScene; anm_manager.reset_render_state;   # no Clear here (Stage_DrawLow / GameMgr_Calc / 0x45B020 clear)

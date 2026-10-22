@@ -77,6 +77,14 @@ the loop end is not shipped); a reimplementation must never read past `loop_end`
   `0x472840`: BGM volume v (0..100, cfg +0x27 copy 0x18BDC80) = 0 → −10000; else f = 1 − v/100,
   `SetVolume(trunc((p + 5000)·(1 − f²)) − 5000)`. Fade modes 2/3 (same tick, volume −n·5000/N resp. −n·1000/N,
   no stop) belong to other commands (INFERRED fade-ins; not used by `Music_Fade`).
+- Play during a fade (VERIFIED `Sound_Update` 0x45D790 case 2, RE-Q30): `Sound_Update` handles the queue head; a
+  play command is staged, one stage per call (head stage counter +8 += 1), and leaves the queue when done. Usual path
+  (Supervisor +0x150 bit 13 clear, or slot < 0): stage 0 **stop** the buffers (`0x4728E0`, also fade mode := 0, so a
+  running `Music_Fade` is cancelled as soon as the play command reaches the head), 1 recreate (repeated while the
+  stream is locked), 2 reopen the track, 3 fill the buffer, 4 **play** (`0x472750`: fade mode := 0, n := N := 0,
+  `Bgm_SetVolume(0)` — attenuation back to 0 — then start), done after stage 6. With bit 13 set (preloaded slots):
+  0 `Bgm_LoadPreloaded`, 2 reset, 5 fill, 7 play (same `0x472750`); there is no stop stage, so the old fade keeps
+  ticking in `Supervisor_Calc` (and may stop the buffer) until stage 7. Commands 3/4 also stop the buffers at stage 0.
 - `Bgm_FindTrack` (0x45C6B0): takes the basename (after last `/` or `\`), compares it with the
   record names case-sensitively; **if no record matches, index 0 (`th08_01.wav`) is used**.
 

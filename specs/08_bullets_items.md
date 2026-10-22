@@ -135,8 +135,10 @@ After a bullet's update (any state except when freed this frame) it is pushed on
 ### 3.2 PlaceBullet
 Slot search: from the cursor, up to 1536 slots, skipping non-free ones; reaching the sentinel wraps to slot 0.
 No free slot → failure. Speed and angle: 07 §9.3 (mode table). Then:
-- state 1; +0xDBC = 1, grazed = 0, timers reset, intangible = 0; speed, angle = wrap(angle);
-  pos = desc origin with z = 0.1; vel = (cos a, sin a, ·) × speed × gs.
+- state 1; +0xDBC = 1, grazed = 0, timers reset, intangible = 0; speed; stored angle +0xD74 = wrap(a)
+  (`Angle_AddNormalize`); pos = desc origin with z = 0.1; vel = (cos a, sin a, 0) × (speed × gs) with the
+  **unwrapped** pattern angle a, not the stored one (VERIFIED 0x42F97E pushes the local angle to `Vec3_FromPolar`,
+  RE-Q30): for a ≈ 4π/3 the f32 velocity differs in the last bits from polar(wrap(a)) (fullrun_noclip row 29948).
 - VM0 and VM4 copied from the template; hitbox, +0xD3C..+0xD42 copied; ex sfx = desc+0x204; offscreen
   grace 0.
 - Colour: if VM0's sprite index ≠ template sprite + colour, VM0 sprite := template sprite + colour.

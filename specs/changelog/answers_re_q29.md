@@ -62,3 +62,35 @@ Skipped as already answered by RE-Q27/Q28 or this run: IMPL35 Q3, IMPL36, IMPL37
 | IMPL40 Q4 capture frame | copied after `Present` of the same `Frame_Run`; COPY swap effects (windowed, every recorded session) → frame N; FLIP → N−1 (INFERRED). 12 §3 "frame presented just before the request" corrected | SPEC FIXED | 12 §3 |
 | IMPL40 Q5 0x17CE8FC bit 1 | set unconditionally by `Window_InitD3D`, never cleared (port right) | NEW FACT | 12 §3 |
 | IMPL40 Q6 continue menu first frame | game_over set at prio 9/11 → ASCII sees it the next frame; first `ContinueMenu_Update` does state 0 and falls into state 2/1 in the same call; capture VM at script time 2 on the first drawn frame. The port opens one calc later | NEW FACT + CODE BUG | 12 §4 |
+
+## 4. Remaining fullrun_noclip divergences (closed by RE-Q30)
+
+Scratch `re/work/runs/q30/portfix/` = master 3a3e354 src + RE-Q29 fixes C, D, E (not yet merged at that commit) +
+the RE-Q30 fixes; tags in `re/work/runs/q30/<session>_<tag>.log`. Original scans `re/work/runs/q30/fr_scan48/`,
+`fr_scan51/` (TH08_SCAN + TH08_SCANBUL + TH08_RNGSITE).
+
+| divergence | cause | label | spec § | after the fix (scratch) |
+|---|---|---|---|---|
+| fullrun 29948 (bullets 181/180) | `PlaceBullet` computes the velocity from the **unwrapped** pattern angle and stores the wrapped one (0x42F97E); the port took polar(wrapped). Ring bullet slot 1061 (angle ≈ 4π/3): original vel.x 0xBEFFFFFD, port 0xBF000001 → off screen one frame early (RE-Q30 fix J) | SPEC FIXED + CODE BUG | 08 §3.2, 07 §9.3 | fullrun 48756 |
+| fullrun 48756 (rng +8, score +4) | shot pb25 hits child e3 of the stage-4B boss one frame early: the familiar-ring children e3–e6 (sub21, `native_cb 8`) had wrong orbit angles because native 8 was specified wrongly (parent walk, int vars 10005–10007, leader orbit-velocity term, own angle + velocity; RE-Q30 fix L). e2 (the leader) matched | SPEC FIXED + CODE BUG | 07 §12 native 8 | fullrun 51708 (RE-Q30 §1) |
+
+## 5. Final CODE BUG list (RE-Q29)
+
+1. Trace column `rng_ctr` must use a never-reset `Next16` count; PR #29 zeroes `Rng::counter` (11 §1.4).
+2. PR #29 debug playback forces the RNG; it reads only the input word, cursor +0x78, stride 6 (15 §3.1).
+3. Slow mode step 10 not implemented: counter GM+0x3DE08 shared with step 5, never reset; gm+0x2D clear points (11 §4).
+4. `Hud_Calc` order: `Hud_Update` before `Msg_Run` (12 §5.1b) — golden 10782. (merged, impl74)
+5. Clear trigger before the clock step, no 60-frame gate (12 §5.6) — golden 10902. (merged, impl74)
+6. Rank sub-counter 0x164D340 := 0 at every stage start (11 §3.1) — golden 11911. (impl75)
+7. GameFlags bits 7/8/13 in the flags word, not `Player::gflags` (11 §2.1) — fullrun 9408. (impl75)
+8. Msg op 11 trigger only for stage idx 6–8 (10 §5) — fullrun 11251. (impl75)
+9. `Timer_Sub` slow path previous := current (05 §2). (merged, impl76)
+10. EnemyMgr step 6 bomb gates (07 §10.1 step 6) — golden 23298, demo 2 4660. (merged, impl76)
+11. Item collection with f32 box edges (08 §8.4) — fullrun 16164. (merged, impl76)
+12. Shake durations from EDX (14 §2.3/2.4/2.7/2.8) — demo 3 6682. (merged, impl77)
+13. Clear panel for stage idx > 6: whole panel up 16 (12 §5.6). (merged, impl74)
+14. Continue menu opens one calc late (12 §4) — gameover_save. (merged, impl77)
+15. `PlaceBullet` velocity from the unwrapped angle (08 §3.2) — fullrun 29948 (found in RE-Q30).
+16. Native 8 familiar ring (07 §12) — fullrun 48756 (found in RE-Q30).
+
+RE-Q29 is closed; follow-up divergences are in `answers_re_q30.md`.

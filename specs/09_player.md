@@ -69,10 +69,12 @@ manager is re-registered without reloading). Calc priority 9 (runs before enemie
 | +0xBE838 | 128 × 0x484 | player bullets | §4.3 |
 | +0xE2A38 | 3 × 0x10 | laser slots | {Timer, bullet ptr} for laser-type shots |
 | +0xE2A68 | i32 | deathbomb counter | §6 |
-| +0xE2A6C | i32 | bomb cooldown | := 16 by `Spell_End` (07 §11.1, absolute 0x18B8964) — its only writer; decremented while ≠ 0 at the top of `Player_UpdateBomb` (once per `Player_Calc`; skipped on a forced-start call: +6 set and +0xE2A68 == 1); a normal bomb start needs 0 (VERIFIED 0x4161B0, 0x44C650, RE-Q24) |
+| +0xE2A6C | i32 | bomb cooldown | := 16 by `Spell_End` (07 §11.1, absolute 0x18B8964) — its only writer; decremented while ≠ 0 at the top of `Player_UpdateBomb` (once per `Player_Calc`; skipped on a forced-start call: +6 set and +0xE2A68 == 1 jumps straight to the bomb start, past the decrement, the bombing branch and the start tests — re-VERIFIED RE-Q30); a normal bomb start needs 0 (VERIFIED 0x4161B0, 0x44C650, RE-Q24) |
 | +0xE2A70 | i32 | respawn clear frames | §6.3 |
 | +0xE2A74 / +0xE2A78 | ptr | sht human / sht youkai | (also globals 0x18B896C / 0x18B8970) |
-| +0xE2A7C | i32 | bomb active flag | := 1 at bomb start; := 0 by every non-bombing `Player_UpdateBomb` call whose normal start test fails (no press, tampered, dialogue, counter 0, bombs < 1, cooldown ≠ 0), so it stays 1 through the bomb and its end frame and drops on the next non-bombing call. Readers (absolute 0x18B8974): `ItemMgr_Calc` 0x440500 and `Item_CollectTimeOrb` 0x4412B0 (VERIFIED, RE-Q24) |
+| +0xE2A7C | i32 | bomb active flag | := 1 at bomb start; := 0 by every non-bombing `Player_UpdateBomb` call whose normal start test fails (no press, tampered, dialogue, counter 0, bombs < 1, cooldown ≠ 0), so it stays 1 through the bomb and its end frame and drops on the next non-bombing call. A press that passes those
+tests in the special mode (GameFlags bits 7–8 or bit 14; only sound 0x29, §7) returns before both writes: +0xE2A7C
+is **kept** (VERIFIED 0x44C650, RE-Q30). Readers (absolute 0x18B8974): `ItemMgr_Calc` 0x440500 and `Item_CollectTimeOrb` 0x4412B0 (VERIFIED, RE-Q24) |
 | +0xE2A80 | ptr[4] | laser entry per slot | |
 | +0xE2A90 | i32 | cancel item type | set by bomb-area hits (08 §4.1), reset to 6 by every test |
 | +0xE2A94 | u8 | effect counter | |
@@ -229,7 +231,9 @@ speed < 10: speed += 1/3 and v rescaled. angle = atan2(v) every frame.
 Called by the enemy manager with an enemy box (pos, size), an accumulator (the boss time-orb counter) and an
 optional "hit by bomb" output. Returns 0 if the player state timer did not advance this frame. Else:
 - every bullet that is active and (state 1 or type 3), overlaps the box, (types 4/5: timer even), and whose hit
-  filter (if any) returns 0: damage += bombing ? max(1, dmg/5) : dmg; while accumulator ≥ +0xE2B2C:
+  filter (if any) returns 0 ("overlaps": both boxes are built as f32 edges by helper 0x451CE0, min = c − s·0.5,
+  max = s·0.5 + c, then bullet min.y ≤ box max.y, bullet min.x ≤ box max.x, box min.y ≤ bullet max.y, box min.x ≤
+  bullet max.x, inclusive; not |d| ≤ sum of halves — VERIFIED 0x451670, RE-Q30): damage += bombing ? max(1, dmg/5) : dmg; while accumulator ≥ +0xE2B2C:
   accumulator −= step and, at human max gauge with a human-side shot, a time orb (type 7) spawns at the bullet;
   unless types 4/5/6 the bullet enters state 2 and (not type 3) vel /= 8. Entering state 2 (only if it was in
   state 1): save VM rotation z (vm+0x08); restart the VM with script (entry script + 11) on the player ANM

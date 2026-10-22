@@ -58,8 +58,9 @@ is in the exe); the wave files are ordinary PCM RIFF files.
 shot sound sht +0x26 is played only when ≥ 0, 09 §2), so out-of-range ids never reach them (RE-Q25).
 
 ### 1.3 Flush (`Sound_Update`, once per frame after all calc callbacks, also while paused)
-Skipped entirely when config "SE on" (cfg byte 0x17CE890, default 1) is 0 — the queue is then left as is, not
-cleared (VERIFIED RE-Q26): new ids are dropped once 12 distinct ids are queued, and the stale queue plays once when SE
+The whole call returns at once only when there is no DirectSound object (SoundManager +0x610 = 0). Config "SE on"
+(cfg byte 0x17CE890, default 1) = 0 skips **only this SE flush**: the BGM command queue (below) is still processed
+(VERIFIED 0x45D790, RE-Q30), and the SE queue is left as is, not cleared (VERIFIED RE-Q26): new ids are dropped once 12 distinct ids are queued, and the stale queue plays once when SE
 is switched back on. Otherwise for each queued slot in order: clear the slot; stop the id's buffer,
 rewind to 0 (so a still-playing instance restarts), set pan = integer average of its pan list, set volume
 (below), play once (non-looping).
@@ -67,7 +68,7 @@ Volume: v = cfg SE volume (byte 0x17CE898, 0–100, default 80). v = 0 → −10
 k = 1 − (1 − v/100)³ and volume = trunc((tableVolume + 5000) × k) − 5000. (The table volume set at load is
 overwritten by this every time.) Music uses a **different** curve: k = 1 − (1 − v/100)² with the BGM volume
 (02 §4 `0x472840`; SE cubic VERIFIED 0x45DFE7, BGM square VERIFIED 0x472849, RE-Q25).
-The BGM command queue (+0x1F88) is processed in the same call (02_bgm).
+The BGM command queue (+0x1F88) is processed in the same call, **before** the SE flush and independent of "SE on" (02 §4).
 
 ### 1.4 Call sites (VERIFIED; `@x` = panned at that x)
 | event | id | where |
@@ -227,7 +228,7 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 38 | 71 (20) | — (script: sprite 219, additive, scale frand+1.1 → 0 over 20, alpha irand 64+48, colour 3 × irand 64+128) | `Enemy_ReactPlayerMode` (07 §10.1 step 3): bit-8 enemies with flags B bit 1 (op 83) in human state, every 2nd frame of the enemy timer, at the final pos. **10 RNG draws per spawn** |
 
 R = `Rng_Float` from the game RNG (consumes replay-relevant RNG: every type with an RNG init draws during
-gameplay). Exact per-type RNG draw counts: types 3–11 two draws, 17/18/27 one, 21/26 two (one if param > 0),
+gameplay). Exact per-type RNG draw counts: types 3–11 two draws, 17/18/27 one, 21/26 one (param.x > −990) or two (param.x ≤ −990, the random-angle case of the row below),
 19 ten, 51/63 eight. **Plus** the RNG ops (`frand` 2 draws, `irand` 2 draws) that the type's script executes at
 t = 0, because `AnmFile_StartScript` runs the VM once when the script is set (05, StartScript). Inside
 `Effect_Spawn` the script is set at +0x10B and the init fn is called at +0x188, so **script draws come before

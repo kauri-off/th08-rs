@@ -74,7 +74,10 @@ After decryption the three dwords `a, b, c` give:
 | `c - 567891` (0x8AA53) | decompressed size of the file table | 9063 |
 
 Validation done by the engine: magic must match, entry count must be > 0, and table offset must be
-< file size; otherwise the archive open fails.
+< file size; otherwise the archive open fails. Entry offsets are **not** validated (VERIFIED `PbgArchive_ParseTable`
+0x474FA0 / `PbgArchive_ReadFile` 0x474AF0, RE-Q30): a read takes stored size = next entry offset − own offset (the last
+entry uses the table offset), seeks and reads; it fails (log "info : %s error", null buffer) only if the seek or
+the read fails.
 
 ## 5. File table
 
