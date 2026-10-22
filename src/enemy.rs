@@ -1558,9 +1558,9 @@ impl EnemyManager {
             p.state = 3;
             p.state_timer.set(70);
         }
-        use crate::player::{GF_LAST_CAPTURED, GF_LAST_SPELL};
+        use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL, flags, set_flags};
         if !s.capture || p.deaths != s.deaths0 || p.bombs_started != s.bombs0 {
-            p.gflags &= !(GF_LAST_SPELL | GF_LAST_CAPTURED);
+            set_flags(flags() & !(F_LAST_SPELL | F_LAST_CAPTURED));
             // Not captured: the start ring is freed, +0xF4 := 0 (07 §11.1).
             crate::effect::free(crate::effect::FIX_SPELL_INDEX);
             p.stats
@@ -1568,8 +1568,8 @@ impl EnemyManager {
                 .push(crate::player::Popup::Message(5 + s.last as u8, 0));
             return;
         }
-        if p.gflags & (GF_LAST_SPELL | GF_LAST_CAPTURED) != 0 {
-            p.gflags = p.gflags & !GF_LAST_SPELL | GF_LAST_CAPTURED;
+        if flags() & (F_LAST_SPELL | F_LAST_CAPTURED) != 0 {
+            set_flags(flags() & !F_LAST_SPELL | F_LAST_CAPTURED);
         }
         // Spell flag bit 9 "captured" is set by `Spell_End` (07 §11.1).
         self.g.spell_captured = true;
@@ -2479,7 +2479,7 @@ impl EnemyManager {
         let Some(boss) = self.bosses[0] else {
             return;
         };
-        if self.player.borrow().gflags & crate::player::GF_13 == 0 {
+        if crate::gamemgr::flags() & crate::gamemgr::F_13 == 0 {
             return;
         }
         let mut acc = self.enemies[boss].orb_acc;
@@ -2685,7 +2685,7 @@ mod tests {
             let acc0 = m.enemies[0].orb_acc;
             {
                 let mut p = player.borrow_mut();
-                p.gflags = if bit13 { crate::player::GF_13 } else { 0 };
+                crate::gamemgr::set_flags(if bit13 { crate::gamemgr::F_13 } else { 0 });
                 p.state_timer.set(5);
                 let b = &mut p.bullets[0];
                 (b.state, b.kind, b.damage) = (1, 1, 10);

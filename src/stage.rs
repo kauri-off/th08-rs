@@ -683,10 +683,7 @@ impl Stage {
 
     // 06 §5: every 3rd frame, from frame 700 (from frame 0 in spell practice, GameFlags bit 14), while +0xB24 < 2.
     fn sparkle_due(&self) -> bool {
-        let practice = self
-            .player
-            .as_ref()
-            .is_some_and(|p| p.borrow().gflags & crate::player::GF_SPELL_PRACTICE != 0);
+        let practice = crate::gamemgr::flags() & crate::gamemgr::F_SPELL_PRACTICE != 0;
         self.frame % 3 == 0 && (self.frame > 699 || practice) && self.spell_state < 2
     }
 
@@ -1200,9 +1197,7 @@ mod tests {
         assert!(due(&st));
         st.frame = 703;
         assert!(!due(&st));
-        let player = crate::player::Player::new_ref();
-        player.borrow_mut().gflags = crate::player::GF_SPELL_PRACTICE;
-        st.player = Some(player);
+        crate::gamemgr::set_flags(crate::gamemgr::F_SPELL_PRACTICE);
         st.frame = 0;
         assert!(due(&st));
         st.frame = 1;

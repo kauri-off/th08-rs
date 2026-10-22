@@ -1,10 +1,11 @@
 //! Player bullets, shot functions, options and the player laser (09 §4–§5, 14 §3–§5).
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::gamemgr::F_13;
 use crate::gfx::Gfx;
 use crate::input;
 use crate::item::ItemManager;
-use crate::player::{ANM_SLOT, GF_13, Player};
+use crate::player::{ANM_SLOT, Player};
 use crate::sht::ShotEntry;
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -559,7 +560,7 @@ impl Player {
             // entry (level change) ends the old one.
             4 => {
                 let s = (e.phase.max(0) as usize).min(LASER_SLOTS - 1);
-                if self.bombing || self.gflags & GF_13 != 0 {
+                if self.bombing || crate::gamemgr::flags() & F_13 != 0 {
                     return false;
                 }
                 let ls = self.laser_slots[s];
@@ -671,7 +672,7 @@ impl Player {
             || self.shot_timer.cur < 0
             || self.state == 2
             || self.bombing
-            || self.gflags & GF_13 != 0
+            || crate::gamemgr::flags() & F_13 != 0
         {
             let b = &mut self.bullets[i];
             b.vm.pending_interrupt = 1;
@@ -1015,10 +1016,10 @@ mod tests {
         let mut anm = AnmManager::default();
         let mut p = Player::default();
         let e = laser_entry();
-        p.gflags = GF_13;
+        crate::gamemgr::set_flags(F_13);
         assert!(!p.init_bullet(&mut anm, 0, 0, &e));
         assert!(p.laser_slots[0].owner.is_none());
-        p.gflags = 0;
+        crate::gamemgr::set_flags(0);
         assert!(p.init_bullet(&mut anm, 0, 0, &e));
         assert_eq!(p.laser_slots[0].owner, Some(0));
     }
@@ -1032,7 +1033,7 @@ mod tests {
         p.options[0].state = 2;
         assert!(p.init_bullet(&mut anm, 0, 0, &e));
         p.shot_timer.set(0);
-        p.gflags = GF_13;
+        crate::gamemgr::set_flags(F_13);
         assert!(!p.laser_update(0));
         let b = &p.bullets[0];
         assert_eq!((b.vm.pending_interrupt, b.update), (1, 0));

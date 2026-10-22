@@ -480,8 +480,8 @@ mod tests {
     // Leading identical trace rows per session (raise as divergences get fixed).
     const MIN_LEADING: [(&str, usize); 3] = [
         ("selftest1", 1922),
-        ("golden", 11910),
-        ("fullrun_noclip", 9407),
+        ("golden", 25634),
+        ("fullrun_noclip", 29947),
     ];
 
     #[test]
@@ -584,6 +584,8 @@ mod tests {
         s.start(&mut ctx).unwrap();
         let t0 = std::time::Instant::now();
         let (mut port, mut port_hits) = (Vec::new(), Vec::new());
+        // The recorded count runs over the whole game; `Player::hits` restarts with each stage's GameMgr.
+        let (mut hit_base, mut hit_prev) = (0, 0);
         s.run(
             &mut ctx,
             rec.len(),
@@ -592,7 +594,11 @@ mod tests {
                     port.push(*r);
                     let h =
                         crate::gamemgr::current().map_or(0, |g| g.borrow().player.borrow().hits);
-                    port_hits.push((r[24], h));
+                    if h < hit_prev {
+                        hit_base += hit_prev;
+                    }
+                    hit_prev = h;
+                    port_hits.push((r[24], hit_base + h));
                 }
                 true
             },

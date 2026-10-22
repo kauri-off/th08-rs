@@ -73,7 +73,7 @@ pub fn setup_new_game(g: &mut Game, s: &Settings, stage: usize) {
     g.difficulty = s.rank.unwrap_or(default_diff);
     g.shot = shot;
     g.stage = stage;
-    g.flags = 0;
+    g.flags.set(0);
     g.fresh_start = true;
     g.request(gamemgr::SCENE_GAME);
 }
@@ -90,16 +90,16 @@ pub fn setup_ending(g: &mut Game, s: &Settings, e: &Ending) {
     g.stats.continues = s.continues;
     match kind {
         'a' => {
-            g.flags = 0;
+            g.flags.set(0);
             g.stage = 4;
             g.stats.clock = 12;
         }
         'c' => {
-            g.flags = gamemgr::F_ENDING_OK;
+            g.flags.set(gamemgr::F_ENDING_OK);
             g.stage = 7;
         }
         _ => {
-            g.flags = gamemgr::F_ENDING_OK;
+            g.flags.set(gamemgr::F_ENDING_OK);
             g.stage = 6;
         }
     }

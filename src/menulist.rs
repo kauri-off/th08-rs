@@ -499,7 +499,7 @@ impl MainMenu {
             let g = &mut ctx.game;
             g.difficulty = g.cfg.difficulty.min(3) as i32;
             g.stage = self.cursor as usize;
-            g.flags = g.flags & !F_REPLAY | F_PRACTICE;
+            g.flags.set(g.flags & !F_REPLAY | F_PRACTICE);
             g.fresh_start = true;
             ctx.audio.stop_bgm();
             g.request(gamemgr::SCENE_GAME);

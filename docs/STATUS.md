@@ -588,6 +588,13 @@
   3600-frame idle exit, return 5 → `Game::device_reset` (the app applies +0x22 as fullscreen). Unit tests: mapping,
   ShotSlow counter, key swap. Traces not run (cloud). SPEC-GAP 111 → 113 (src). Questions:
   `docs/briefs/IMPL68_QUESTIONS.md`.
+- impl75 (audit 75–77, cloud, 2026-10-21): rank sub-counter GM+0x3DE38 zeroed at every stage start after the
+  fresh / continuing branch; `GameMgr_InitRank` (`init_rank`) writes rank / min / max only (11 §3.1, §3.2). GameFlags
+  word (11 §2.1) is one thread-local in `gamemgr.rs` (`flags()` / `set_flags()`, `Game::flags` is a `GameFlags`
+  handle on it); `Player::gflags` removed, bits 7 / 8 / 13 / 14 read and written there by ECL op 176, `Spell_End`,
+  bombs, shots, the last-spell box and stage sparkles. Msg op 11 sets the clear trigger only in stage idx 6–8, else
+  it only stalls (10 §5). Unit tests: rank init / sub reset, flags word, op 11 by stage. Traces not run (cloud).
+  SPEC-GAP 111 → 111 (src). Questions: `docs/briefs/IMPL75_QUESTIONS.md`.
 - impl77 (audit 81–82, cloud, 2026-10-21): bomb shakes take the EDX duration (14 header note): Sakuya (1: 120, 4, 1)
   every window frame, Sakuya LS (1: 50, 4, 1) at T = 0, Alice / Alice LS (1: 24, 8, 0) (§2.3, §2.4, §2.7, §2.8).
   Continue menu (12 §4): the player (prio 9) / enemy (prio 11, timeline op 16) calc writes `Game::game_over` itself

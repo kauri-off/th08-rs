@@ -1319,7 +1319,7 @@ impl Exec<'_> {
             capture: true,
             timed_out: false,
             bombed: false,
-            last: self.m.player.borrow().gflags & crate::player::GF_LAST_SPELL != 0,
+            last: crate::gamemgr::flags() & crate::gamemgr::F_LAST_SPELL != 0,
         };
         log::info!(
             "spell card {} ({} bytes name, bonus {}) at enemy frame {}",
@@ -1349,9 +1349,7 @@ impl Exec<'_> {
             st.borrow_mut().start_spell_bg(self.anm);
         }
         // Ring at the boss pos e+0x2D34 (not the final pos); type 52 while GameFlags bits 7–8 ≠ 0 (07 §11.1).
-        let special = self.m.player.borrow().gflags
-            & (crate::player::GF_LAST_SPELL | crate::player::GF_LAST_CAPTURED)
-            != 0;
+        let special = self.m.player.borrow().special();
         crate::effect::spell_ring(self.anm, self.e.pos, special);
         self.cancel_all(1);
         self.e.reset_rank_ranges();
@@ -2143,20 +2141,21 @@ impl Exec<'_> {
             175 => self.m.g.spawn_disabled = self.ai(t, ins, 0),
             // GameFlags 0x164D0B4: clear 7, 8, 13, set 7; bit 13 by stage / practice card (07 §7 op 176).
             176 => {
-                use crate::player::{GF_13, GF_LAST_CAPTURED, GF_LAST_SPELL, GF_SPELL_PRACTICE};
-                let mut p = self.m.player.borrow_mut();
-                p.gflags &= !(GF_LAST_SPELL | GF_LAST_CAPTURED | GF_13);
-                p.gflags |= GF_LAST_SPELL;
+                use crate::gamemgr::{
+                    F_13, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE, flags,
+                };
+                let mut f = flags() & !(F_LAST_SPELL | F_LAST_CAPTURED | F_13) | F_LAST_SPELL;
                 let card = self.m.g.card;
-                let bit13 = if p.gflags & GF_SPELL_PRACTICE == 0 {
+                let bit13 = if f & F_SPELL_PRACTICE == 0 {
                     matches!(self.m.stage_index, 6 | 7)
                 } else {
                     (0x8F..=0x92).contains(&card) || (0xAB..=0xBE).contains(&card)
                 };
                 // Bit 13's whole-playfield Player_DamageAgainst runs in EnemyMgr_Calc (`last_spell_box`).
                 if bit13 {
-                    p.gflags |= GF_13;
+                    f |= F_13;
                 }
+                crate::gamemgr::set_flags(f);
                 self.e.flags |= A_LAST_SPELL;
             }
             177 => self.e.hud_life = self.ai(t, ins, 0),

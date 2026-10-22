@@ -3,6 +3,7 @@ use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::BulletManager;
 use crate::game::Ctx;
+use crate::gamemgr::{self, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
 use crate::gfx::PLAYFIELD;
 use crate::input;
 use crate::item::ItemManager;
@@ -18,11 +19,6 @@ pub use crate::sht::Sht;
 
 // Player_Calc 0x44C390 (09 §1).
 pub const CALC_PRIO: u16 = 9;
-// GameFlags (0x164D0B4) bits mirrored in the player: last spell running / captured, bit 13, spell practice.
-pub const GF_LAST_SPELL: u32 = 1 << 7;
-pub const GF_LAST_CAPTURED: u32 = 1 << 8;
-pub const GF_13: u32 = 1 << 13;
-pub const GF_SPELL_PRACTICE: u32 = 1 << 14;
 // Requests for the enemy manager: dissolve spell started / ended.
 pub const DISSOLVE_BEGIN: u8 = 1;
 pub const DISSOLVE_END: u8 = 2;
@@ -365,8 +361,6 @@ pub struct Player {
     pub mode: u8,
     // +6 forced bomb (dissolve spell, 09 §6.1).
     pub forced_bomb: u8,
-    // Port copy of GameFlags 0x164D0B4 (11 §2.1).
-    pub gflags: u32,
     pub dissolve_req: u8,
     // +8 frames since the last focus change.
     pub focus_age: i32,
@@ -468,7 +462,6 @@ impl Default for Player {
             last_spell: 0,
             mode: 0,
             forced_bomb: 0,
-            gflags: 0,
             dissolve_req: 0,
             focus_age: 0,
             gauge_aura: false,
@@ -575,7 +568,7 @@ impl Player {
     }
 
     // Player_Load 0x44D650 (09 §2, §6.4): sht files, gauge limits, initial script 0 / 5, solo options, state 1
-    // with timer 120, or 10 in spell practice (GM +0x3DBAC bit 14, mirrored in `gflags` by `register`).
+    // with timer 120, or 10 in spell practice (GM +0x3DBAC bit 14, 11 §2.1).
     pub fn load(&mut self, anm: &mut AnmManager, human: Sht, youkai: Sht, shot: u8) {
         self.shot_type = shot;
         self.sht = human;
@@ -586,7 +579,7 @@ impl Player {
         anm.set_script(&mut self.vm, ANM_SLOT, script);
         self.pos = START;
         self.state = 1;
-        let t = if self.gflags & GF_SPELL_PRACTICE != 0 {
+        let t = if gamemgr::flags() & F_SPELL_PRACTICE != 0 {
             10
         } else {
             120
@@ -605,7 +598,6 @@ impl Player {
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &anm)?;
         {
             let mut p = p.borrow_mut();
-            p.gflags = p.gflags & !GF_SPELL_PRACTICE | ctx.game.flags & GF_SPELL_PRACTICE;
             p.load(&mut ctx.anm, human, youkai, shot);
         }
         let t: task::TaskRef<Ctx> = p;
@@ -760,7 +752,7 @@ impl Player {
 
     // GameFlags bits 7–8: a boss last spell runs or was captured (the dissolve-spell mode, 11 §2.1).
     pub fn special(&self) -> bool {
-        self.gflags & (GF_LAST_SPELL | GF_LAST_CAPTURED) != 0
+        gamemgr::flags() & (F_LAST_SPELL | F_LAST_CAPTURED) != 0
     }
 
     // Player_OnGraze 0x44A930 (09 §9.2); returns how many time orbs (item type 10, mode 5) to drop at `p`.
@@ -1136,7 +1128,7 @@ impl Player {
         self.vm.scale = [1.0, 1.0];
         self.vm.flags |= anmvm::F_SCALE_DIRTY;
         self.vm.color = [255; 4];
-        if self.gflags & GF_SPELL_PRACTICE == 0 {
+        if gamemgr::flags() & F_SPELL_PRACTICE == 0 {
             self.state_timer.set(240);
         }
         self.deathbomb = self.sht.deathbomb;
@@ -1454,7 +1446,7 @@ mod tests {
         p.die(&mut rng);
         assert!(p.drop_attracted);
         let (mut p, _) = ready();
-        p.gflags |= GF_LAST_SPELL;
+        gamemgr::set_flags(F_LAST_SPELL);
         p.die(&mut rng);
         assert!(p.drop_attracted);
     }
@@ -1542,12 +1534,14 @@ mod tests {
     #[test]
     fn spell_practice_timers() {
         let (mut p, mut anm) = ready();
-        p.gflags = GF_SPELL_PRACTICE;
+        gamemgr::set_flags(F_SPELL_PRACTICE);
         p.load(&mut anm, Sht::default(), Sht::default(), 0);
         assert_eq!((p.state, p.state_timer.cur), (1, 10));
         let (mut q, _) = ready();
+        gamemgr::set_flags(0);
         q.load(&mut anm, Sht::default(), Sht::default(), 0);
         assert_eq!(q.state_timer.cur, 120);
+        gamemgr::set_flags(F_SPELL_PRACTICE);
         // Respawn: state 3 at t = 30; the timer keeps 30 instead of 240.
         p.state_timer.set(0);
         for _ in 0..31 {

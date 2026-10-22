@@ -2,13 +2,11 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::effect;
+use crate::gamemgr::{self, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
 use crate::gfx::{Gfx, PLAYFIELD};
 use crate::input;
 use crate::item::ItemManager;
-use crate::player::{
-    ANM_SLOT, DISSOLVE_BEGIN, DISSOLVE_END, GF_LAST_CAPTURED, GF_LAST_SPELL, GF_SPELL_PRACTICE,
-    Player, Stats,
-};
+use crate::player::{ANM_SLOT, DISSOLVE_BEGIN, DISSOLVE_END, Player, Stats};
 use crate::sound;
 use std::cell::RefCell;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -433,7 +431,7 @@ impl Player {
                 self.bomb_active = false;
             }
             // SPEC-GAP: 09 §1.1 does not list the special-mode block among the tests that clear +0xE2A7C; kept.
-            if pressed && (self.special() || self.gflags & GF_SPELL_PRACTICE != 0) {
+            if pressed && (self.special() || gamemgr::flags() & F_SPELL_PRACTICE != 0) {
                 sound::play(0x29);
                 pressed = false;
             }
@@ -458,7 +456,7 @@ impl Player {
             anm.tint_off();
             crate::gui::request(crate::gui::Req::PlayerHide);
             if self.bomb.index == 4 {
-                self.gflags &= !(GF_LAST_SPELL | GF_LAST_CAPTURED);
+                gamemgr::set_flags(gamemgr::flags() & !(F_LAST_SPELL | F_LAST_CAPTURED));
                 self.dissolve_req |= DISSOLVE_END;
                 flash(30, 1, 0xFFFFFFFF);
             }
@@ -547,7 +545,7 @@ impl Player {
         let ls = self.bomb.index & 2 != 0;
         if self.bomb.index == 4 {
             if t == 0 && adv {
-                let practice = self.gflags & GF_SPELL_PRACTICE != 0;
+                let practice = gamemgr::flags() & F_SPELL_PRACTICE != 0;
                 self.bomb_begin(
                     anm,
                     if practice {
@@ -1384,7 +1382,7 @@ impl Player {
     // 14 §2.17 「ディゾルブスペル」 0x40D100: boss flag clearing is done by the enemy manager on DISSOLVE_BEGIN.
     fn dissolve_start(&mut self, anm: &mut AnmManager) {
         let p = self.pos;
-        let practice = self.gflags & GF_SPELL_PRACTICE != 0;
+        let practice = gamemgr::flags() & F_SPELL_PRACTICE != 0;
         effect::spawn(anm, 12, p, 1, 0xFF4040FF);
         let i = effect::spawn_fixed(anm, 0x32, p, 4, 0xFF4040FF);
         effect::get(i, |e| {

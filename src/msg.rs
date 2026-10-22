@@ -462,8 +462,9 @@ impl Dialogue {
             // Op 10 halt stalls forever; the game manager ends the stage.
             10 => return Exec::Stall,
             11 => {
-                // Op 11 sets GM flags & ~0x60 | 0x40 every stalled frame; one event is enough.
-                if !self.events.contains(&Event::HaltFinal) {
+                // Op 11 sets GM flags & ~0x60 | 0x40 every stalled frame (one event is enough), but only in stage idx
+                // 6–8; in stages 1–5 it only stalls like op 10 (10 §5).
+                if matches!(self.info.stage, 6..=8) && !self.events.contains(&Event::HaltFinal) {
                     self.events.push(Event::HaltFinal);
                 }
                 return Exec::Stall;
@@ -681,6 +682,26 @@ mod tests {
         assert!(ops.iter().all(|&c| c > 0), "unused opcodes: {ops:?}");
         let f = parse(ar.read("msg1a.dat").unwrap()).unwrap();
         assert_eq!(f.entries.len(), 2);
+    }
+
+    // 10 §5 op 11: the game-clear trigger only in stage idx 6–8; elsewhere it only stalls like op 10.
+    #[test]
+    fn halt_final_trigger_by_stage() {
+        let f = parse(vec![1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 11, 0]).unwrap();
+        let mut anm = AnmManager::default();
+        for stage in 0..9 {
+            let mut d = Dialogue::default();
+            d.info.stage = stage;
+            let ins = f.ins(8).unwrap();
+            for _ in 0..2 {
+                assert!(matches!(
+                    d.exec(&f, &mut anm, &Input::default(), ins),
+                    Exec::Stall
+                ));
+            }
+            let n = d.events.iter().filter(|e| **e == Event::HaltFinal).count();
+            assert_eq!(n, usize::from(stage >= 6), "stage {stage}");
+        }
     }
 
     // Wait: Shot advances only after min_wait frames; timeout after n; skip is instant.

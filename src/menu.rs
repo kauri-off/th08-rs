@@ -544,7 +544,7 @@ impl MainMenu {
                     self.set_screen(SPELL_PRACTICE);
                 }
                 3 => {
-                    g.flags = g.flags & !F_SPELL_PRACTICE | F_PRACTICE;
+                    g.flags.set(g.flags & !F_SPELL_PRACTICE | F_PRACTICE);
                     self.interrupt_all(5);
                     self.set_screen(DIFF_PRACTICE);
                     self.cursor = last_difficulty(g);
@@ -1078,9 +1078,9 @@ impl Task<Ctx> for MainMenu {
             // Unlock notices (16 §4): a condition now true whose flag bit is still clear. The port loads CLRD at boot,
             // where the original's in-memory CLRD is still empty, so the first menu after boot shows none.
             if g.previous != gamemgr::SCENE_BOOT {
-                ctx.info.queue.extend(info_files(bits, g.flags));
+                ctx.info.queue.extend(info_files(bits, g.flags.get()));
             }
-            g.flags = g.flags & !(7 << 15) | bits;
+            g.flags.set(g.flags & !(7 << 15) | bits);
         }
         crate::menulist::compute_last_word_unlocks(&mut ctx.game);
         // A replay was being watched → straight to the replay screen (12 §2.2).

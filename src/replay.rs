@@ -367,7 +367,7 @@ pub fn register(
 fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
     let stage = g.stage % 9;
     if g.rpy.is_none() {
-        let mut r = new_recording(g.shot, g.difficulty, g.flags, g.card, &g.cfg_bytes());
+        let mut r = new_recording(g.shot, g.difficulty, g.flags.get(), g.card, &g.cfg_bytes());
         r.info[0x11C - HEADER] = clear_status(g);
         g.rpy = Some(r);
     }
@@ -445,7 +445,7 @@ pub fn start_playback(
     g.difficulty = r.difficulty().min(4) as i32;
     g.shot = r.shot() % 12;
     g.stage = stage;
-    g.flags = g.flags & (7 << 15) | F_REPLAY;
+    g.flags.set(g.flags & (7 << 15) | F_REPLAY);
     let id = r.spell_id();
     if id >= 0 {
         // Only bit 14: bit 0 stays clear in a spell-practice replay (15 §3.8).
@@ -928,7 +928,7 @@ mod tests {
     fn spell_practice_playback_flags() {
         use crate::gamemgr::*;
         let mut g = Game::default();
-        g.flags = F_PRACTICE;
+        g.flags.set(F_PRACTICE);
         let mut r = Replay::default();
         r.stages[0] = Some(StageRecord::default());
         r.info[0x7C - HEADER..0x7E - HEADER].copy_from_slice(&5i16.to_le_bytes());
@@ -995,7 +995,7 @@ mod tests {
     fn save_card_name_and_skips() {
         use crate::gamemgr::*;
         let mut g = Game::default();
-        g.flags = F_PRACTICE | F_SPELL_PRACTICE;
+        g.flags.set(F_PRACTICE | F_SPELL_PRACTICE);
         g.card = 5;
         g.score.catk[5].name[..4].copy_from_slice(b"Card");
         record_stage_start(&mut g, &Default::default());
