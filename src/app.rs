@@ -174,7 +174,15 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         };
         match ev {
-            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::CloseRequested => {
+                // Tool `replay_save`: closing the window mid-game still writes the recording.
+                if r.ctx.settings.replay_save.is_some()
+                    && r.ctx.game.scene == crate::gamemgr::SCENE_GAME
+                {
+                    crate::replay::finish(&mut r.ctx);
+                }
+                el.exit()
+            }
             WindowEvent::Resized(s) => r.ctx.gfx.resize(s.width, s.height),
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::ModifiersChanged(m) => self.alt = m.state().alt_key(),
