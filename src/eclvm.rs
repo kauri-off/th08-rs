@@ -7,6 +7,9 @@ use crate::ecl::Ins;
 use crate::enemy::*;
 use std::f32::consts::PI;
 
+// Card bonus cap g_Gui +0x2638 for flag A bit 27 / op 155 (07 §11.1, op 155).
+const FIXED_BONUS_CAP: i32 = 99_999_990;
+
 // What an opcode does to the §5.2 EXEC loop.
 enum Flow {
     Next,
@@ -159,6 +162,10 @@ pub(crate) fn var_f(
 ) -> f32 {
     // Float variable ids are float literals (e.g. 10016.0), truncated before lookup (07 §6).
     let id = lit as i32;
+    // 07 §6: the getter reads the final pos e+0x2D88; only the destination (FRef::Pos) is the pos e+0x2D34.
+    if let 10042..=10044 = id {
+        return e.final_pos[(id - 10042) as usize];
+    }
     if let Some(r) = flt_ref(id) {
         return read_f(m, e, c, &r);
     }
@@ -181,7 +188,8 @@ pub(crate) fn var_f(
         10088..=10091 => e.thresholds[(id - 10088) as usize] as f32,
         10096 => chain_count(m, e) as f32,
         10097 => m.g.player_mode as f32,
-        10099 => m.g.spell.is_some() as i32 as f32,
+        // 07 §6: card active (bit 0) ? bit 2 capture possible : bit 9 last card captured.
+        10099 => m.g.spell.as_ref().map_or(m.g.spell_captured, |s| s.capture) as i32 as f32,
         _ => lit,
     }
 }
@@ -315,8 +323,8 @@ fn rd_i16(b: &[u8], o: usize) -> i16 {
 
 impl Exec<'_> {
     // One context of Ecl_Run (07 §5.2): LOOP / EXEC / POST.
+    // Game speed is read live at each Decrement/Tick (07 §5.2): a native 18 earlier in this run already applies.
     fn run_thread(&mut self, t: &mut Thread) -> End {
-        let gs = self.anm.speed;
         'outer: loop {
             // SPEC-GAP: interrupts are dispatched in the main context only; 07 §5.2 tests in every context (IMPL24 Q5).
             if self.e.pending_interrupt >= 0 && self.e.running_thread.is_none() {
@@ -327,8 +335,8 @@ impl Exec<'_> {
                 self.e.final_pos = add3(self.e.pos, self.e.pos_offset);
                 // Wait: the clock is decremented so POST's Tick nets zero.
                 if t.ctx.wait.cur > 0 {
-                    t.ctx.wait.dec(gs);
-                    t.ctx.clock.dec(gs);
+                    t.ctx.wait.dec(self.anm.speed);
+                    t.ctx.clock.dec(self.anm.speed);
                     break 'outer;
                 }
                 let Some(ins) = self.m.ecl.ins(t.ctx.ip) else {
@@ -362,7 +370,7 @@ impl Exec<'_> {
             }
             self.run_interp(t);
         }
-        t.ctx.clock.tick(gs);
+        t.ctx.clock.tick(self.anm.speed);
         End::Post
     }
 
@@ -471,6 +479,15 @@ impl Exec<'_> {
             FRef::OrbitAngle => e.orbit_angle = v,
             FRef::OrbitAv => e.orbit_av = v,
             FRef::Delta(k) => e.interp_delta[k] = v,
+        }
+    }
+
+    // Destination read of an in-place float op (07 §6 `Ecl_FloatVarRef`): 10042–10044 are the pos, not the final pos.
+    fn af_dst(&mut self, t: &Thread, ins: &Ins, k: usize) -> f32 {
+        let raw = f32::from_bits(self.raw(ins, k)) as i32;
+        match flt_ref(raw).filter(|_| ins.mask & (1 << k) != 0) {
+            Some(r) => read_f(self.m, self.e, &t.ctx, &r),
+            None => self.af(t, ins, k),
         }
     }
 
@@ -1336,15 +1353,16 @@ impl Exec<'_> {
         let bonus = rd_u32(b, 0x10);
         // Rate R = (bonus − bonus/7) / (timeout/60), unsigned; op 134 precedes op 122 in all data.
         let secs = (self.e.timeout / 60).max(1) as u32;
+        // 07 §11.1: +0xFC := card bonus; cap +0x2638 := card bonus, or 99 999 990 if flag A bit 27 is already set.
         let max = if self.e.flags & A_FIXED_BONUS != 0 {
-            99_999_990
+            FIXED_BONUS_CAP
         } else {
             bonus as i32
         };
         let spell = Spell {
             face: rd_i16(b, 0x0C) as i32,
             id: rd_i16(b, 0x0E) as i32,
-            bonus: max,
+            bonus: bonus as i32,
             max,
             decay: ((bonus - bonus / 7) / secs) as i32,
             boss: self.idx,
@@ -1460,7 +1478,7 @@ impl Exec<'_> {
             }
             15..=19 | 25..=29 => {
                 let (a, b) = if op < 25 {
-                    (self.af(t, ins, 0), self.af(t, ins, 1))
+                    (self.af_dst(t, ins, 0), self.af(t, ins, 1))
                 } else {
                     (self.af(t, ins, 1), self.af(t, ins, 2))
                 };
@@ -1536,7 +1554,7 @@ impl Exec<'_> {
                 }
             }
             37 => {
-                let a = self.af(t, ins, 0);
+                let a = self.af_dst(t, ins, 0);
                 self.set_f(t, ins, 0, anmvm::wrap_add(a, 0.0));
             }
             // 38 wraps the angle and writes x first; 166 does not wrap and writes y first.
@@ -2115,6 +2133,10 @@ impl Exec<'_> {
                 let on = self.raw(ins, 0) & 0xFF != 0;
                 self.e.set_flag(A_FIXED_BONUS, on);
                 self.m.g.fixed_bonus = on;
+                // 07 op 155: whatever the byte, 0x4ECCA8 = g_Gui +0x2638 (running card's cap) := 99 999 990.
+                if let Some(s) = &mut self.m.g.spell {
+                    s.max = FIXED_BONUS_CAP;
+                }
             }
             156 => {
                 self.e
@@ -2322,6 +2344,77 @@ mod tests {
         assert_eq!(e.flags & (A_SHOT_HIT | A_CONTACT), A_SHOT_HIT);
         // Flags B bit 6 spares an enemy.
         assert_eq!((m.enemies[0].life, m.enemies[0].death_sub), (100, 1));
+    }
+
+    fn with_mask(mut v: Vec<u8>, mask: u16) -> Vec<u8> {
+        v[10..12].copy_from_slice(&mask.to_le_bytes());
+        v
+    }
+
+    // 07 §6: a source read of 10042 is the final pos e+0x2D88; the fadd destination read and write use e+0x2D34.
+    #[test]
+    fn var_10042_source_vs_destination() {
+        let f = |x: f32| x.to_bits() as i32;
+        let (mut anm, mut m) = manager(&[&[
+            with_mask(ins(0, 7, &[f(10016.0), f(10042.0)]), 3),
+            with_mask(ins(0, 6, &[10000, 10042]), 3),
+            with_mask(ins(0, 15, &[f(10042.0), f(1.0)]), 1),
+        ]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].pos = [-5.5, 2.0, 0.0];
+        m.enemies[0].pos_offset = [100.0, 20.0, 0.0];
+        ecl_run(&mut m, &mut anm, 0);
+        let e = &m.enemies[0];
+        assert_eq!(e.main.ctx.flt(V_FLT0), 94.5);
+        assert_eq!(e.main.ctx.int(V_INT0), 94);
+        assert_eq!(e.pos[0], -4.5);
+    }
+
+    // 07 §6 var 10099: card active ? spell bit 2 : spell bit 9 (captured).
+    #[test]
+    fn var_10099_spell_state() {
+        let (mut anm, mut m) = manager(&[&[]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        let mut read = |m: &mut EnemyManager| {
+            let e = m.enemies[0].clone();
+            var_i(m, &mut anm, &e, &e.main.ctx, 10099)
+        };
+        m.g.spell_captured = true;
+        assert_eq!(read(&mut m), 1);
+        m.g.spell = Some(Spell {
+            capture: false,
+            ..Default::default()
+        });
+        assert_eq!(read(&mut m), 0);
+        m.g.spell.as_mut().unwrap().capture = true;
+        m.g.spell_captured = false;
+        assert_eq!(read(&mut m), 1);
+    }
+
+    // 07 op 155: the running card's cap +0x2638 := 99 999 990 whatever the byte; +0xFC untouched.
+    #[test]
+    fn op155_raises_card_cap() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 155, &[0])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.g.spell = Some(Spell {
+            bonus: 33_000_000,
+            max: 33_000_000,
+            ..Default::default()
+        });
+        ecl_run(&mut m, &mut anm, 0);
+        let s = m.g.spell.as_ref().unwrap();
+        assert_eq!((s.bonus, s.max), (33_000_000, FIXED_BONUS_CAP));
+    }
+
+    // 07 §5.2: native 18 at time 0 slows this frame's clock tick (live game speed).
+    #[test]
+    fn native18_slows_same_frame_tick() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[18, 4])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        anm.speed = 1.0;
+        ecl_run(&mut m, &mut anm, 0);
+        let c = &m.enemies[0].main.ctx.clock;
+        assert_eq!((c.cur, c.frac), (0, 0.25));
     }
 
     // 07 §5 ops 129/130/133/134 under the spell-practice guard (GameFlags bit 14 + bit 7 or 8).

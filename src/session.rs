@@ -476,7 +476,7 @@ mod tests {
     const MIN_LEADING: [(&str, usize); 3] = [
         ("selftest1", 1922),
         ("golden", 25634),
-        ("fullrun_noclip", 98806),
+        ("fullrun_noclip", 124707),
     ];
 
     #[test]
