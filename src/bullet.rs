@@ -57,7 +57,7 @@ pub fn hitbox_class(h: f32, s: usize) -> (f32, u8) {
     } else if h > 8.0 {
         // s = 5 falls through to the next case in the original; the net result is the same (08 §2.1).
         match s {
-            2 | 4 | 5 | 6 | 106 | 107 | 108 => (4.0, 4),
+            2 | 4 | 5 | 6 | 106 | 107 | 108 | 111 | 112 => (4.0, 4),
             _ => (6.0, 3),
         }
     } else {
@@ -531,7 +531,8 @@ impl BulletManager {
         b.speed = speed;
         b.angle = anmvm::wrap_add(angle, 0.0);
         b.pos = [d.origin[0], d.origin[1], 0.1];
-        b.vel = polar(b.angle, speed * gs);
+        // 08 §3.2: velocity from the unwrapped pattern angle; only the stored angle is wrapped (f32 last bits).
+        b.vel = polar(angle, speed * gs);
         b.vms[0] = t.vms[0].clone();
         b.hitbox = t.hitbox;
         b.class = t.class;
@@ -542,8 +543,8 @@ impl BulletManager {
         if b.vms[0].sprite_index != t.vms[0].sprite_index + d.colour {
             b.vms[0].set_sprite(anm, t.vms[0].sprite_index as i32 + d.colour as i32);
         }
-        // SPEC-GAP: 05 §2 has the template load write +0x218 (base sprite, colour offset not stated); here the final sprite.
-        b.saved_sprite = b.vms[0].sprite_index;
+        // +0x218 (05 §2): the template's base (colour 0) sprite; the colour SetSprite above does not write it.
+        b.saved_sprite = t.vms[0].sprite_index;
         let k = effect_color(t.height, d.colour);
         Self::recolor(anm, &mut b.vms[4], &t.vms[4], k);
         let eff = if d.flags & 2 != 0 {
@@ -1134,18 +1135,18 @@ impl BulletManager {
     }
 
     // Laser part of the cancels (08 §7): fade from state 2, one item per 32 px tail → head; `items` false
-    // skips them, `at_origin` adds the CancelBonus item at the origin.
+    // skips them. `bonus` (CancelBonus) drops the flag-bit-2 test and adds an item at the origin.
     fn cancel_lasers(
         &mut self,
         anm: &mut AnmManager,
         p: &Player,
         mode: i32,
         items: bool,
-        at_origin: bool,
+        bonus: bool,
     ) {
         for k in 0..MAX_LASERS {
             let l = &mut self.lasers[k];
-            if !l.alive || (l.flags & 4 != 0 && mode != 4) {
+            if !l.alive || (!bonus && l.flags & 4 != 0 && mode != 4) {
                 continue;
             }
             if l.state < 2 {
@@ -1156,7 +1157,7 @@ impl BulletManager {
                 if items {
                     let (o, a, tail, head) = (l.origin, l.angle, l.tail, l.head);
                     let (s, c) = a.sin_cos();
-                    if at_origin {
+                    if bonus {
                         self.items.spawn(anm, p, o, CANCEL_ITEM, 1);
                     }
                     let mut d = tail;
@@ -1195,7 +1196,7 @@ impl BulletManager {
     }
 
     // BulletMgr_CancelBonus 0x430AA0 (08 §7): popups from 2000, +20 per bullet, capped at `max_value`;
-    // returns their sum.
+    // returns their sum. Every alive laser is cancelled (no flag-bit-2 test); sets the cancel guard.
     pub fn cancel_bonus(
         &mut self,
         anm: &mut AnmManager,
@@ -1229,6 +1230,7 @@ impl BulletManager {
             v = (v + 20).min(max_value);
         }
         self.cancel_lasers(anm, p, 1, lasers_too, true);
+        self.cancel_guard = 10;
         sum
     }
 
@@ -1822,6 +1824,69 @@ mod tests {
         let xs: Vec<f32> = b.items.live().map(|i| i.pos[0]).collect();
         assert_eq!(xs, vec![50.0, 82.0, 114.0, 146.0]);
         assert!(b.spawn_laser(&mut anm, &l, [0.0; 3]).is_none());
+    }
+
+    // 08 §7: CancelBonus cancels flag-4 lasers too (CancelAll skips them) and sets the cancel guard.
+    #[test]
+    fn cancel_bonus_flag4_laser() {
+        let l = LaserDesc {
+            fixed: true,
+            head: 40.0,
+            max_len: 200.0,
+            width: 16.0,
+            duration: 100,
+            fade: 10,
+            flags: 4,
+            origin: [50.0, 50.0, 0.0],
+            ..LaserDesc::default()
+        };
+        let (mut anm, mut b) = mgr();
+        let pl = b.player.clone();
+        let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
+        let st = b.lasers[k].state;
+        b.cancel_all(&mut anm, &mut pl.borrow_mut(), 1);
+        assert!(st < 2 && b.lasers[k].state == st);
+
+        let (mut anm, mut b) = mgr();
+        let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
+        b.cancel_bonus(&mut anm, &mut pl.borrow_mut(), 2030, true);
+        assert_eq!(b.lasers[k].state, 2);
+        let xs: Vec<f32> = b.items.live().map(|i| i.pos[0]).collect();
+        assert_eq!(xs, vec![50.0, 50.0, 82.0]);
+        assert_eq!(b.cancel_guard, 10);
+    }
+
+    // 08 §3.2: vel = polar(unwrapped a); the stored angle is wrapped.
+    #[test]
+    fn place_velocity_unwrapped_angle() {
+        let (mut anm, mut b) = mgr();
+        let a = 4.0 * PI / 3.0;
+        let i = spawn(&mut anm, &mut b, &desc(a, 3.0, 0, &[]));
+        let x = &b.bullets[i];
+        assert_eq!(x.vel, polar(a, 3.0 * anm.speed));
+        assert_eq!(x.angle, anmvm::wrap_add(a, 0.0));
+        assert!(x.angle < PI);
+    }
+
+    // 08 §2.1: scripts 111 / 112 (types 16 / 17, 16×16) → hitbox 4, class 4.
+    #[test]
+    fn types_16_17_hitbox() {
+        assert_eq!(hitbox_class(16.0, 111), (4.0, 4));
+        assert_eq!(hitbox_class(16.0, 112), (4.0, 4));
+        assert_eq!(hitbox_class(16.0, 1), (6.0, 3));
+    }
+
+    // 05 §2: +0x218 at spawn is the template's base sprite, not the coloured one.
+    #[test]
+    fn saved_sprite_is_base() {
+        let (mut anm, mut b) = mgr();
+        let mut d = desc(0.0, 1.0, 0, &[]);
+        d.colour = 3;
+        let i = spawn(&mut anm, &mut b, &d);
+        assert_eq!(
+            b.bullets[i].saved_sprite,
+            b.templates[0].vms[0].sprite_index
+        );
     }
 
     #[test]
