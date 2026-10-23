@@ -761,3 +761,6 @@ addr,kind,name,signature,confidence,note
 0x004728e0,func,Bgm_StreamStop,,VERIFIED,stops buffers; fade mode:=0 (RE-Q30)
 0x00423d70,func,Vec3_Scale,,VERIFIED,v*=s in place (RE-Q30)
 0x00449c79,func,Supervisor_GetFlag13,,VERIFIED,Supervisor+0x150 bit 13 (RE-Q30)
+0x0041f110,func,Ecl_SpawnEnemyAbs,,VERIFIED,ops 90/92 spawn helper: pos (x y 0) as given; fails (0xF54E18=1) if life<1 or flag A bit 10 (RE-Q31)
+0x0041f280,func,Ecl_SpawnEnemyRel,,VERIFIED,op 91 spawn helper: pos (x y 0) + spawner final pos 0x2D88 (RE-Q31)
+0x00433880,func,Math_SinCosF32,,VERIFIED,fsincos; ECX=out sin f32 EDX=out cos f32; laser draw/cancel (RE-Q31)

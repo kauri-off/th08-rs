@@ -327,7 +327,7 @@ Laser test result: hit (player state 0 → player death, 09 §7); otherwise when
 rectangle grown by 48 on each side overlaps and the player state is not 1/2 → graze (`Player_OnGraze` with the
 laser flag, 09 §6).
 
-Draw: body at origin + (cos, sin)·(tail + L/2), z 0.06; emitter at origin + (cos, sin)·tail, z 0.05, drawn only
+Draw: body at origin + (cos, sin)·(tail + L/2) (cos/sin rounded to f32 first by `Math_SinCosF32` 0x433880, then f32 products — 05 §10 trig sites; the laser cancel positions of `BulletMgr_CancelAll`/`CancelBonus` use the same helper), z 0.06; emitter at origin + (cos, sin)·tail, z 0.05, drawn only
 when (tail < 16 or speed == 0) and (+0x599 == 0 or state ≠ 0); emitter scale = (16 − tail)/16 × width/10
 (≤ 0 → width/10), colour = body colour with alpha 255.
 

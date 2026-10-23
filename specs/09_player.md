@@ -196,6 +196,7 @@ starts (§4.2) if no dialogue and not blocked. Gauge drift (§9.3). Trail shifte
 Boxes (half sizes from the human sht): hitbox ±(hit/2) — e.g. Reimu 0.825 → a 1.65 px square; graze ±(graze/2)
 (the bullet box is additionally enlarged by 20 px each side in the graze test, lasers by 48); item box
 ±(collect/2).
+Writers of the hit / graze boxes +0x38C…+0x3B8 (VERIFIED RE-Q31, byte scan for every displacement/`add` of these offsets): only `Player_Move` (0x44BC0A…0x44BCA9) at runtime, plus the zeroing in `Player_Register` (`rep stosd`; the static constructor 0x449CA0 runs no-op Vec3 constructors). No respawn, stage-start or bomb code writes them: before the first `Player_Move` of a stage they are 0, and in states 1/2 (no `Player_Move`) they keep the box of the last moved frame (the death position), even though the respawn sets a new pos.
 
 ## 4. Shooting
 

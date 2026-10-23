@@ -242,6 +242,7 @@ after all contexts: Enemy_UpdateMoveMode (§8), Enemy_AutoFireAndDirAnim (§9.3)
 - **Exact time match**: an instruction only runs on the frame the clock equals its time. Jumps set the clock
   to the target time explicitly. An instruction whose time is already past is never reached (the sub stalls).
 - Threads created this frame by the main context run in the same frame (they are visited after main).
+- **Game speed is read live** (VERIFIED RE-Q31, `Timer_Tick` 0x406640 → Supervisor helper 0x447421 reads g_GameSpeed 0x17CE8E0 at each call): `ctx.wait.Decrement`, `ctx.clock.Decrement` and `ctx.clock.Tick` use the game speed current at that moment, so a native 18 (game speed := 1/arg) executed earlier in the same `Ecl_Run` already slows this frame's clock tick (fullrun_noclip row 120058: ecldata7 sub44 `native 18, 4` at time 0 → clock 0.25 after that frame, its time-1 `effect_dir` runs 4 frames later, not on the next).
 
 ### 5.3 Clock
 `Timer` semantics as in 05_anm_vm.md §2 (game-speed aware Tick/Decrement).
@@ -313,7 +314,7 @@ own argument slot in the loaded file** (shared by all enemies; e.g. op 5 with a 
 | 10036–10039 | ctx ints | int | (10038 also = laser test result, op 120) |
 | 10040 | difficulty | int | global 0x160F538 |
 | 10041 | rank (GM+0x3DE2C; per-difficulty range, e.g. 8–16; changed via a 1/100 sub-counter, 11 §3.2) | int | global 0x164D334 (§9.2) |
-| 10042–10044 | enemy pos x, y, z | float | |
+| 10042–10044 | **read** (as a source operand, float or int — `Ecl_GetFloatArg` 0x420120 / `Ecl_GetIntArg` 0x41F89D): the **final** pos e+0x2D88/8C/90 (int read: truncated); **written** (destination, also the destination read of in-place ops such as `fadd`, `normangle`, through `Ecl_FloatVarRef` 0x420950): pos e+0x2D34/38/3C. They differ for a follower (op 92: pos = offset from the parent) (VERIFIED RE-Q31; fullrun_noclip row 98807: ecldata7 sub32 snaps `$10042 + 16 + rand·32` to a 16 grid with `iset`/`idiv`, the familiars are op-92 followers, so reading the offset (negative x, truncation toward zero) shifted their bullets by 16 px). This is the only variable whose getter and destination differ (all other enemy fields map to the same offset in both tables) | float | |
 | 10045–10047 | player pos x, y, z | float (!) | global 0x17D61AC |
 | 10048 | angle enemy final pos → player (π/2 if coincident) | — | |
 | 10049 | e+0x2E1C | int | |
@@ -338,7 +339,7 @@ own argument slot in the loaded file** (shared by all enemies; e.g. op 5 with a 
 | 10096 | chain count (`Enemy_ChainChildCount` 0x41FD40): if the enemy is a chain root (no parent +0x2DA4 and +8 ≠ 0) = number of enemies reached by following +8 from it; else if it has a parent = the same count evaluated on the **parent** (+0x2DA4, the enemy that spawned it with op 90–92), which is 0 unless that parent is a root; else 0. No alive test: every death, `Enemy_Free`, kill-all and chain kill unlinks the enemy (`Enemy_ChainUnlink`), so the walk only meets live members. The walk also passes through the enemy whose ECL is running (it stays linked while it runs), so siblings read the same count: e.g. 3 children of a root all read 3, not 2/1/0 (golden 8298, RE-Q28). VERIFIED code + demo 3 runtime (changelog/answers_impl19.md §Q3, changelog/answers_impl21.md §Q1) | — | |
 | 10097 | player mode byte (0x17D5EF8+5) | — | |
 | 10098 | (int only) **2 if a + b + c ≥ d, else 0** — a = stage time (stats +0x3C), b = pending time reward of a captured card not yet paid (spell object g_Gui +0x10), c = number of time-orb items (type 7) currently in the item list, d = stage time threshold (stats +0x40 = `TIME_THR`[stage][difficulty], 11 §3.1). Read by the Last Spell host sub of each stage boss (ecldata1–5: `≠ 2 → delete`). VERIFIED code + runtime (changelog/answers_impl20.md §Q1) | — | |
-| 10099 | spell-card state (bomb-allowed / running) | — | |
+| 10099 | spell-card state: while a card is active (g_Gui flags bit 0) = spell flag bit 2 (capture still possible, `0x41FD90`); otherwise = spell flag bit 9 (the **last** card was captured, set by `Spell_End`) — so right after op 123 of a captured card it reads 1, not 0 (VERIFIED `Ecl_GetIntArg`/`GetFloatArg` case 10099, RE-Q31; fullrun_noclip row 113831: ecldata7 sub45 `ijne $10099, 0, t=80` after `spellcard_end` jumps to `boss −1` in the same frame) | — | |
 | 10100 | (int only) spell-card timer | — | |
 
 ## 7. Opcode table — VERIFIED (switch in `Ecl_Run`; uses = count in all files)
@@ -365,7 +366,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 35 | flerp | W a, f b, f c, f d | a = (b − c)·d + c | 0 |
 | 36 | interp | target var id stored as a **float** (e.g. 10016.0; the raw dword is kept in the slot and compared as a float, all 37 uses), i dur, i fn, i mode, f a, b, c, d | start interpolation slot (§5.6) | 97 |
 | 37 | normangle | W a | a = wrap(a) into [−π, π] | 1708 |
-| 38 | polar | W x, W y, f ang, f r | x = cos(wrap ang)·r; y = sin(wrap ang)·r | 110 |
+| 38 | polar | W x, W y, f ang, f r | x = cos(wrap ang)·r; y = sin(wrap ang)·r, each product rounded once (f32(cos·r), 05 §10 trig sites) | 110 |
 | 39 | fdist | W a, f x1, y1, x2, y2 | a = √((x1−x2)² + (y1−y2)²) | 2 |
 | 40–51 | ije fje ijne fjne ijl fjl ijle fjle ijg fjg ijge fjge | a, b, T t, O off | if a (==, ≠, <, ≤, >, ≥) b: clock = t; ip = this + off | 93 0 94 0 28 11 35 31 95 6 70 139 |
 | 52 | call | S sub | §5.4 | 614 |
@@ -378,7 +379,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 63 | set_pos | f x, f y | pos = (x, y, 0); clamp (§8) | 96 |
 | 64 | move_to | i dur, i ease, f x, f y | mode2: delta = (x, y, 0) − final pos, start = pos, timer = dur, velocity 0 (delta.x negated if mirrored) | 342 |
 | 65 | set_dir | f ang, f spd | mode1: angle = wrap(ang), speed = spd, duration 0 | 171 |
-| 66 | move_dir | i dur, i ease, f ang, f spd | dur < 1: as 65. Else mode2 with delta = (cos a·spd·dur, sin a·spd·dur, 0), start = final pos; **delta.x negated if mirrored** (bit 18; `Ecl_OpMoveDir` 0x420D10, VERIFIED changelog/answers_impl16.md §8) | 188 |
+| 66 | move_dir | i dur, i ease, f ang, f spd | dur < 1: as 65. Else mode2 with delta = (cos a·spd·dur, sin a·spd·dur, 0) = f32(f32(cos a·spd)·dur) (05 §10 trig sites), start = final pos; **delta.x negated if mirrored** (bit 18; `Ecl_OpMoveDir` 0x420D10, VERIFIED changelog/answers_impl16.md §8) | 188 |
 | 67 | move_rand | i dur, i ease, f spd | random direction (§8.3) then as 65/66 | 270 |
 | 68 | set_dir_aim | f off, f spd | angle = wrap(angle_to_player(pos) + off); speed = spd (mode unchanged) | 0 |
 | 69 | move_dir_aim | i dur, i ease, f off, f spd | dur < 1: aimed mode1 with movement duration dur. dur ≥ 1: **same as 66 (not aimed)** | 0 |
@@ -393,10 +394,10 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 81 | flags_on | i m | inverse of 80 | 535 |
 | 82 | nofire_radius | f r | no-fire radius² = r·r | 76 |
 | 83 | flagB1 | i b | flags B bit 1 = b & 1 | 195 |
-| 86 / 87 | iget_boss / fget_boss | V/W a, i var, i slot | a = value of variable `var` evaluated on boss[slot] (87: only if it exists) | 0 / 2 |
+| 86 / 87 | iget_boss / fget_boss | V/W a, i var, i slot | a = value of variable `var` evaluated on boss[slot] (87: only if it exists). If `var` is a literal (param flag bit 1 clear) a := the literal (87: its raw f32 bits) and the slot is not read. **Op 86 has no existence test** (VERIFIED 0x41ACEE, RE-Q31): with an empty boss entry the variable is read through a null enemy pointer (`Ecl_GetIntArg` with e = 0) — an access violation for every enemy/context variable; unreachable (0 uses) | 0 / 2 |
 | 88 | call_boss | i slot, S sub | call sub in boss[slot]'s context | 2 |
 | 89 | interrupt_boss | i slot, i k | boss[slot].pending_interrupt = k (if exists) | 0 |
-| 90 / 91 / 92 | child / child_rel / child_follow | S sub, f x, f y, i life, i item, i score | §10.4 | 214 / 377 / 425 |
+| 90 / 91 / 92 | child / child_rel / child_follow | S sub, f x, f y, i life, i item, i score | §10.5 (90 and 92 spawn at (x, y) as given, 91 at parent final pos + (x, y)) | 214 / 377 / 425 |
 | 93 / 94 | spawn / spawn_rel | S sub, f x, y, z, i life, i item, i score | spawn independent enemy at (x,y,z) (94: + pos), vars copied | 9 / 152 |
 | 95 | kill_all | — | every alive non-boss enemy without flags B bit 6: life = 0 (dies in its own update), jumps to its death sub if any; enemies with flag A bit 7 also drop item type 6 and a score popup (2000, +30 per enemy, capped at 8000) (0x42EFB0). Exact order per enemy in slot order (VERIFIED `EnemyMgr_KillAll`(max, base) 0x42EFB0, RE-Q30): life := 0; if flag A bit 7: final pos e+0x2D88 := pos + offset, `ItemMgr_Spawn`(final pos, 6, mode 1), popup v (v = 2000 for the **first** popup, then v := min(v + 30, max) after each popup), sum += v; if the trail is on (u8 e+0x534C ≠ 0) the same item + popup for trail entries k = 0, 6, 12, … < n (e+0x534E; entry pos = e+0x3394 + k·0x1C); then **`Enemy_ChainUnlink`(e)** (§10.3a; a root only clears its own +4/+8, a child is spliced out and loses its parent); then the death-sub jump. Returns base + sum (op 95: max 8000, base 0). Because every killed member is unlinked, a root killed by `KillAll` has no children left when it dies at step 6, so no chain-kill orbs (fullrun_noclip row 72571). **No self test**: the calling enemy is included unless it is a boss or has flags B bit 6 (same for the `KillAll` of op 123 / death modes 0–2) (VERIFIED, RE-Q24). The death-sub jump is `Ecl_SetSub` on the main context only (ip, clock 0, wait 0; §10.6 "Death subs"). **QUIRK when the caller hits itself** (VERIFIED `Ecl_Run` 0x4184B0, RE-Q30): `Ecl_Run` runs a context on a local copy of the ip and writes it back when the context stops. In the caller's **main** context the op then advances the local ip past op 95 in the old sub; the next instruction runs only if its time equals the reset clock (0); when the context stops, ctx ip := that old-sub position (overwriting the death sub start) and the clock ticks to 1. The death sub is consumed (−1) and never runs for the caller; the caller dies at its step 6 (life 0) without a death-sub jump. From a **thread**: threads are not freed; the thread finishes its frame normally, the main context (already run this frame) keeps the death sub and the death at step 6 then frees the threads as usual | 157 |
 | 96–104 | bullets | bullet block | §9 (aim mode = op − 96) | 352 546 241 802 10 1 0 0 56 |
@@ -446,7 +447,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 152 | rank_params | f s0, f s1, i c1a, i c1b, i c2a, i c2b | bullet rank ranges (§9.2) | 34 |
 | 153 | timeout_sub_from_death | — | timeout sub = death sub; timer = 0 | 153 |
 | 154 | laser_clear | — | forget all 32 laser slots | 0 |
-| 155 | fixed_bonus | raw byte | flag A bit 27; global 0x4ECCA8 = 99 999 990 | 19 |
+| 155 | fixed_bonus | raw byte | flag A bit 27 := byte & 1; then **always** (whatever the byte) 0x4ECCA8 := 99 999 990 — 0x4ECCA8 is g_Gui +0x2638, the card bonus **cap** (§11.1), not a separate global: in the data op 155 follows op 122 (e.g. ecldata7 sub77), so `Spell_Start` set the cap to the card bonus and op 155 raises it, and time orbs (`Spell_AddBonus`) push the bonus above the declared value (VERIFIED `Ecl_Run` case 0x9B, RE-Q31; fullrun_noclip row 113961: payout 34 904 000 for a 33 000 000 card). +0xFC itself is never set to 99 999 990 | 19 |
 | 156 | flagA7 | raw byte | bit 7; layer byte = 2 | 0 |
 | 157 | trail | raw flags, i n, i a, i b | afterimage trail settings (e+0x534C..0x5352; flags & 8 allocates history) | 22 |
 | 158 | hp_marker | i k, i a, i b, i c | HUD life-bar marker k at a/max, b/max, style c | 244 |
@@ -457,7 +458,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 163 | g_f54cec | i n | global 0xF54CEC | 0 |
 | 164 | spell_mode | i n, f a, f b, f c | spell flag bit 6 := n & 1 (`Spell_SetFlag6` 0x41F0B0); n == 0: 0x41F040(a, b, c) | 0 |
 | 165 | anm_rot_z | f a | main VM rotation.z = a | 28 |
-| 166 | polar_ys | W x, W y, f ang, f r | y = sin(ang)·r, x = cos(ang)·r (no wrap) | 0 |
+| 166 | polar_ys | W x, W y, f ang, f r | y = sin(ang)·r, x = cos(ang)·r (no wrap; single rounding as op 38) | 0 |
 | 168 | item_burst1 | i n | n items of type 1 at random offsets | 22 |
 | 169 | rand_away_angle | W a | if (pos.x > player.x and pos.x > 96) or pos.x > 288: a = wrap(R·π/2 + 3π/4) (leftward cone) else a = R·π/2 − π/4 (rightward cone); one Rng_Float | 0 |
 | 170–172 | laser fields | i k, … | laser +0x599 byte / +0x560 / +0x558,+0x55C | 0 |
@@ -603,6 +604,7 @@ left→idle or right→idle script.
    pass); once bit 24 is set and bit 28 is clear, the enemy is freed (`Enemy_Free`, no drops) when it is off
    screen — for an enemy with an after-image trail (e+0x534C ≠ 0) only when both the current pos and the
     oldest trail pos (entry n − 1) are off screen (same sprite box).
+   Aura position (VERIFIED 0x42CAC9, RE-Q31): on every pass, right after the final pos is computed (before the trail shift and the screen check), the aura VM e+0x53C8 (if any) gets pos := final pos (x, y, z). So it is also written in a frame in which the screen check frees the enemy, and by the last pass of a phase-change re-run; it is not written after step 4 (no update in steps 5–7).
    Trail ring (VERIFIED code, changelog/answers_impl21.md §Q7): 96 entries × 0x1C at e+0x3394 = {final pos x, y, z; velocity
    x, y, z; angle}. The template sets every entry's x to −999 (others 0) and every spawn copies the template, so
    unwritten entries are off screen. On every pass of this loop, after movement and before the screen check, while
@@ -646,11 +648,11 @@ left→idle or right→idle script.
    an invulnerable or damage-reduced enemy; VERIFIED RE-Q27, flag set at 0x42D367 inside `if (d > 0)`, tested at 0x42DB62) → colour2 = (R 0xFF, G 0x60, B 0x80, alpha = current), VM colour2 flag on,
    sfx 0x14 (0x25 when the low-life warning level ≥ 2), counter := 1; else if the counter ≠ 0 → counter −= 1 and
    flag off (no sfx even if hit); else flag off. Continuous hits therefore flash every 2nd frame; in youkai mode the enemy is drawn with colour2
-   (0x20, 0x20, 0xC0, alpha/2) permanently. Then boss HUD life bar, effect followers, timer 0x2E14 tick
+   (0x20, 0x20, 0xC0, alpha/2) permanently. Then boss HUD life bar and boss marker, the op 128 effect update (`Enemy_UpdateOrbitEffects` 0x42E010, 13 §2.6b — this is the only "effect follower" in the tail; a boss death in mode 0/1 at step 6 has already released them and set their count e+0x53C0 to 0, so they get **no** update in their release frame), timer 0x2E14 tick
    (unless global 0x160F534), damage-reduction timer decrement, add to draw list (layer e+0x332F) if still alive
    (bit 0) and bit 4 clear: **prepend** (e+0 next := head; head := e). The 4 heads are cleared at the start of
    every `EnemyMgr_Calc` (before the timelines). Paths that skip the link: inactive slot, `Ecl_Run` −1 / screen
-   free (`Enemy_Free`), death mode 0 (alive cleared). Timeline spawns happen before the slot loop, so they are
+   free (`Enemy_Free`), death mode 0 (alive cleared). The rest of the tail (hit flash, boss HUD/marker, op 128 effects, timer tick, damage-timer decrement) runs for **every** enemy that reaches step 6, also one that died there in any death mode (mode 0 included: its switch case falls through to the drop code and leaves the switch normally; VERIFIED switch 0x42D6AF, tail 0x42DB0B, RE-Q31); only the link tests alive. Timeline spawns happen before the slot loop, so they are
    processed (their timer reads 1 after the spawn frame) and linked in the spawn frame; an enemy spawned by
    another enemy's ECL (ops 90–92, child) into a higher slot is processed and linked the same frame, into a
    lower slot only from the next frame.
@@ -777,7 +779,7 @@ Chain-kill path (e has children):
      +0x2D40;
    - `Player_AddCancelCircle`(pos, 32.0, 2.0, 8, type);
    - c times: r = `Rng_FloatRange(2c)`, then a = `Rng_SignedRange(π)` (**2 RNG draws**, r first); orb at pos +
-     (cos a·r, sin a·r), z 0; `ItemMgr_Spawn`(type 7 time orb, mode 3);
+     `Vec3_FromPolar`(a, r) (05 §10), z 0; `ItemMgr_Spawn`(type 7 time orb, mode 3);
    - if !0x42F1F0(EnemyMgr) or a spell card is active (0x4178A0): child +0x3304 := 8 and `Enemy_DropItems`(child, 0);
    - `Sound_PlayAt`(2 + (k & 1), pos).
 4. Always for each child: +0x330C = +0x3308 = 0, +0x3304 = −2.
@@ -813,10 +815,10 @@ bit 8 (reacts to player mode), bit 11 = current mode (player byte +5), layer 2 (
 contact damage off, and — only if it has none yet (e+0x53C8 == 0) — an aura `Effect_SpawnHigh(0x20, pos, 1)`
 (pos e+0x2D34; op 92: e+0x2D88) with `AnmVm_Interrupt` **1 when mode == 0 (human), 2 when youkai**; aura VM flag
 bit 17 := flags A bit 2 (just cleared → 0); if e+0x2E0C bit 0 the aura VM +0x14 is negated (changelog/answers_impl14.md §7,
-VERIFIED 0x41E5ED…). The chain link itself (child +0x2DA4 := spawner, tail +8 := child, child +4 := tail, spawner +0x3380 += 1) is written last, after the aura, so during the spawn-time `Ecl_Run` the child has no parent and is not in the chain (var 10096 reads 0 there, §6); the tail is looked up before the spawn (VERIFIED op 90 code, RE-Q24). Op 91 position relative to the parent's final pos; op 92 additionally makes the
-child follow the parent: **after** the spawn-time `Ecl_Run` (with the other writes above, VERIFIED `Ecl_Run` case 0x5C,
+VERIFIED 0x41E5ED…). The chain link itself (child +0x2DA4 := spawner, tail +8 := child, child +4 := tail, spawner +0x3380 += 1) is written last, after the aura, so during the spawn-time `Ecl_Run` the child has no parent and is not in the chain (var 10096 reads 0 there, §6); the tail is looked up before the spawn (VERIFIED op 90 code, RE-Q24). Spawn position (VERIFIED RE-Q31, helpers 0x41F110 / 0x41F280): ops 90 and 92 spawn through the same helper at (x, y, 0) **as given** (x, y resolved as float args, §6) — op 92 is not relative at spawn; only op 91 adds the parent's final pos e+0x2D88 (`Vec3_AddInPlace`) before the spawn. Op 92 additionally makes the
+child follow the parent (so its e+0x2D34 stays the offset from the parent: fullrun_noclip row 98551, ecldata7 sub33 familiars, e+0x2D34 = (5.85, 0) with final pos = boss pos + that): **after** the spawn-time `Ecl_Run` (with the other writes above, VERIFIED `Ecl_Run` case 0x5C,
 RE-Q30) it sets bits 8/11 and the layer, then follow offset e+0x2D40 := parent pos e+0x2D34, final pos e+0x2D88 :=
-e+0x2D40 + e+0x2D34, clears bit 2, spawns the aura at that final pos, then sets flags A bit 9, then links — so the
+e+0x2D40 + e+0x2D34 (`Vec3_Add`, all three components: z = parent pos z + own z, not 0), clears bit 2, spawns the aura at that final pos, then sets flags A bit 9, then links — so the
 child's time-0 instructions see no follow offset and bit 9 clear. Ops 90–92 never write the rank-mask mode bits
 e+0x3330 (only writer `Enemy_ReactPlayerMode` 0x42C585, dispscan RE-Q30): the spawn-time run uses the spawn value 0,
 so D = difficulty bit only and both human- (0x20) and youkai-masked (0x40) time-0 instructions run; the bits are
@@ -911,8 +913,7 @@ at the boss pos e+0x2D34 (ring init: centre +0x2E0 := that pos), pointer in g_Gu
 (elapsed := 0, duration := 100, mode 6) from (8, 64) to (256, 0), VM pos.y := 64; effect pos := boss pos; segments
 +0x324 := 64, rotation +0x318 := 0, radius +0x314 := 256, width +0x320 := 15, wave count +0x334 := 6. Spell flags:
 bit 5 := GameFlags bit 7, bit 6 := 0, bit 11 := 0. Also g_Gui +0x2620 := 0x80808080 (bonus-line tint, 12 §5.8), timers
-+0x108 (remaining) and +0x114 (duration) := e+0x3378, bonus +0xFC := card bonus, max +0x2638 := bonus (99 999 990 with
-flag A bit 27), decay per second +0x100 := (bonus − bonus/7) / (e+0x3378 / 60) (unsigned integer).
++0x108 (remaining) and +0x114 (duration) := e+0x3378, bonus +0xFC := card bonus, max +0x2638 := bonus (99 999 990 if flag A bit 27 is already set; op 155 later writes the same 99 999 990 into +0x2638, op 155 row), decay per second +0x100 := (bonus − bonus/7) / (e+0x3378 / 60) (unsigned integer).
 
 **`Spell_Calc` 0x416B90 per frame** (Gui calc prio 12; VERIFIED RE-Q27). Nothing at all while GameFlags bit 10 or the
 freeze byte 0x160F534 is set. Otherwise, in this order:

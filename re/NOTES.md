@@ -607,3 +607,17 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - IMPL42–54: all answered (window close = no-op, quitting frame not drawn, SE-off keeps BGM queue, op 95 self-hit
   local-ip quirk, KillAll = Ecl_SetSub, chained-child mode bits/follow setup after run, natives 26/28/29 details).
 - CODE BUG list: changelog §3 (6 scratch-confirmed, 9 spec-only).
+
+# RE-Q31 (2026-10-23) — fullrun from 90010, IMPL78/80/83/84/85 questions (specs/changelog/answers_re_q31.md)
+- Runs re/work/runs/q31/ (portfix = master 1a2cbe5 + A; portfix2 = master after impl85 + A + B; CHECKPOINT.md; PF=<dir> run_all.sh).
+- fullrun 90010 → A enemy mode 3 orbit offset = Vec3_FromPolar → 98550; 98551 (op 92 children pos) already fixed on master
+  (impl84) → 98806. B (mode 1 / ops 38 166 66 67 / time orbs / Reimu orbs single-rounding): no session change.
+- Then (portfix2): C var 10042–44 getter = final pos (setter pos) → 113830; D var 10099 = active ? bit2 : bit9 → 113960;
+  E op 155 0x4ECCA8 = g_Gui+0x2638 cap → 120057; F ECL clock tick reads live game speed → fullrun_noclip FULL (124707).
+  Diff: runs/q31/q31_fixes.diff (B–F vs portfix2_src_A, which holds A).
+- Trig rule (05 §10): Math_Cos/Math_Sin return unrounded st0; `call; fmul` = one rounding, `fstp dword` first = f32 cos.
+  Math_SinCosF32 0x433880 (laser draw/cancel) and Vec2_Rotate round to f32.
+- Answered: op 128 raw words; +0x2CA0 = main ctx outside Ecl_Run; native 8 no-leader UB; op 92 spawns at (x, y) as given
+  (0x41F110, op 91 uses 0x41F280 = + parent final pos); op 86 no null test; aura pos written in step 4, op-128 effect
+  update in step 7 tail; mode-0 death runs the whole tail; player boxes written only by Player_Move.
+- Lesson: I ran `git log/status` once (read-only) despite the no-git rule — don't.

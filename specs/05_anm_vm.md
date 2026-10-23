@@ -389,6 +389,17 @@ With this camera, world (x, y, 0) projects to viewport pixel (x, y) (relative to
   `Vec3_FromPolar` 0x4286E0: x = f32(cos(a)·r), y = f32(sin(a)·r) with cos/sin and the product in (at least) double
   precision — not f32(f32(cos a)·r) (VERIFIED RE-Q30: ~190 bullet velocities in fullrun_noclip at poll 51706 differ by
   1 ulp under the double-rounding model and match under this one). (Corrects "rounded to 24 bits".)
+- **Trig sites** (VERIFIED RE-Q31, byte scan of every `Vec3_FromPolar` / `Math_Cos` 0x408D40 / `Math_Sin` 0x409060 call and
+  every inline `fsin`/`fcos`/`fsincos` in 0x402000–0x4A3000). `Math_Cos`/`Math_Sin` call the CRT (which switches to 53-bit
+  only around `fcos`/`fsin`) and return the **unrounded** result in st0 (their `fst` to a local is dead). So the rule is
+  per site: if the caller multiplies the returned value directly (`call; fmul`), the product is rounded once —
+  f32(cos(a)·r), the same model as `Vec3_FromPolar`; every further x87 op rounds again (e.g. op 66: f32(f32(cos a·spd)·dur));
+  if the caller first stores it (`fstp dword`), cos/sin are rounded to f32 and the later product is f32(f32(cos)·r).
+  | model | sites |
+  |---|---|
+  | `Vec3_FromPolar` (single) | enemy move modes 1 and 3 (`Enemy_UpdateMoveMode` 0x422CED / 0x422E06), `Enemy_KillChildren` time orbs and boss orbs (0x42B01D / 0x42B186), bullet placement and every bullet ex-command that sets a velocity, `Bullet_WallBounce`, `ItemMgr_Calc`, natives 12 / 14, `Spell_Calc`, options (Remilia, Youmu, Yuyuko) and player-shot helpers 0x44FFA0–0x450240, `PlayerBullet_HitExplosion`, Yuyuko bombs, Yukari square effects, `EffDraw_Ring` |
+  | `call; fmul` (single) | ECL ops 38 `polar` and 166 `polar_ys` (0x419635 / 0x41E1BF…), op 66 `move_dir` (`Ecl_OpMoveDir` 0x420DAE: f32(f32(cos·spd)·dur)), op 67 random move (`Ecl_SetMode2Polar` 0x422315, same form), Reimu bomb orbs (`Bomb_Reimu` / `_LS` 0x40C274…: pos = f32(f32(sin a·r) + cx), 14 §2.1), Sakuya bombs (0x40FF33 / 0x410114), `Player_InitShot` velocity (0x44FC87), `Stage_Calc` camera |
+  | rounded to f32 first | `Math_SinCosF32` 0x433880 (`fsincos`, both stored as f32 — used by `BulletMgr_Draw` laser draw and by `BulletMgr_CancelAll` / `CancelBonus` laser cancel positions, 08 §6.3), `Vec2_Rotate` 0x43EE30 (rotated boxes: `Player_LaserTest`, `Player_DamageAgainst`, `Player_InBombArea`), `EffInit_Burst` / `EffInit_Converge` directions (dir = (f32 cos, f32 sin, 0), then scaled: f32(f32(cos)·m), 13 §2), `EffUpd_Orbit13` (op 128 effects), `AnmVm_Run` and the ANM/enemy draw rotations |
 
 ## 11. Verification
 
