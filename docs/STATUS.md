@@ -610,6 +610,13 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl80 (audit 85, 90, 103, cloud, 2026-10-23): native 8 (07 §12) walks the parent's +8 chain with no alive test,
+  writes int var 10037 per member, int vars 10005 / 10006 / 10007 on the caller, and adds the leader's orbit velocity
+  when the 10007 counters differ. Natives 9 / 11 / 25 call the new `Player::laser_test` (`Player_LaserTest`, 09 §6.1,
+  f32 box edges): origin = pos − (float vars 10016, 10017), main VM rotation z, small box with graze when e+0x2E14
+  changed to a multiple of 12, big box every call, no warning phase. Natives 28 / 29: speed and interrupt first,
+  29 scales by 1/speed and restores only sprites 0x60–0x6F. Unit tests for natives 8, 9, 11. Traces not run (cloud).
+  SPEC-GAP 112 → 111 (src). Questions: `docs/briefs/IMPL80_QUESTIONS.md`.
 - impl79 (audit 83, 89, 94, 104, cloud, 2026-10-23): `PlaceBullet` velocity = polar of the unwrapped pattern angle
   (08 §3.2); `CancelBonus` cancels every alive laser without the flag-bit-2 test and sets the cancel guard (08 §7);
   scripts 111 / 112 (types 16 / 17) → hitbox 4, class 4 (08 §2.1); bullet +0x218 at spawn = template base sprite

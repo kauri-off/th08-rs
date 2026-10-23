@@ -1122,23 +1122,24 @@ impl Exec<'_> {
                     }
                 }
             }
-            // Slow-down (07 §12): game speed 1/arg, bullet velocities and sprites 0x60–0x6F → 0x6F, interrupt 2.
-            // SPEC-GAP: 07 §12 says only "velocities scaled / restored"; here × 1/arg, then ÷ the slowed game speed.
+            // Slow-down 0x4251B0 (07 §12): game speed 1/arg first, interrupt 2, then live bullets' velocities ×
+            // the new speed, +0x218 := sprite, sprites 0x60–0x6F → 0x6F (VM0 only).
             28 if arg != 0 => {
                 self.anm.speed = 1.0 / arg as f32;
+                self.stage_interrupt(2);
                 let k = self.anm.speed;
                 self.m.bullets.borrow_mut().slow_down(self.anm, k);
-                self.stage_interrupt(2);
             }
-            // Undo 28: speed 1, velocities and sprites restored, interrupt 1; Supervisor flag 0x20 if arg > 1.
+            // Undo 28 0x425290 (07 §12): velocities × 1/speed, sprites 0x60–0x6F := +0x218; Supervisor flag 0x20
+            // when 1/arg < 1; then speed 1 and interrupt 1.
             29 => {
-                let gs = self.anm.speed;
-                self.anm.speed = 1.0;
-                self.m.bullets.borrow_mut().slow_down_restore(self.anm, gs);
-                self.stage_interrupt(1);
-                if arg > 1 {
+                let f = 1.0 / self.anm.speed;
+                self.m.bullets.borrow_mut().slow_down_restore(self.anm, f);
+                if 1.0 / (arg as f32) < 1.0 {
                     anmvm::set_slowdown_restore(true);
                 }
+                self.anm.speed = 1.0;
+                self.stage_interrupt(1);
             }
             30 => set_load_frames(arg),
             // Type 3 (bomb) while the player is bombing (player +0xFDC = 0x17D6ED4), else 5 (1up) (07 §12).
@@ -1164,11 +1165,10 @@ impl Exec<'_> {
             4 => self.warp([124.0, 260.0, 140.0, 276.0], [56.0, 328.0, 72.0, 344.0]),
             7 => self.warp([56.0, 328.0, 88.0, 360.0], [-32.0, 416.0, 0.0, 448.0]),
             21 => self.warp([112.0, 271.0, 128.0, 287.0], [33.0, 350.0, 49.0, 366.0]),
-            // Player-hit rectangles 590 × h at the boss after a 12-frame warning (07 §12).
-            // SPEC-GAP: the first height of each pair (160/240/288) has no stated use; the second is the hit box (IMPL72 Q2).
-            9 => self.hit_rect(t, 128.0),
-            11 => self.hit_rect(t, 192.0),
-            25 => self.hit_rect(t, 224.0),
+            // Rotated 590-long player-hit boxes, heights big / small (07 §12); native 11 starts at pos, not final pos.
+            9 => self.laser_box(t, self.e.final_pos, 160.0, 128.0),
+            11 => self.laser_box(t, self.e.pos, 240.0, 192.0),
+            25 => self.laser_box(t, self.e.final_pos, 288.0, 224.0),
             // Stage tint request 0xFFC03030 (07 §12, 06 §10.2 step 3).
             // SPEC-GAP: whether native 13 also sets the "bomb drew" flag +0x646C is not stated; it does not (IMPL72 Q3).
             13 => self.anm.request_tint(0xFFC03030),
@@ -1192,17 +1192,32 @@ impl Exec<'_> {
         self.m.bullets.borrow_mut().warp(inner, outer);
     }
 
-    // Natives 9 / 11 / 25 (07 §12): 590 × `h` box centred on the caller's pos; no hit while warning.
-    // SPEC-GAP: the 12-frame warning is counted on the calling context's clock (IMPL72 Q2).
-    fn hit_rect(&mut self, t: &Thread, h: f32) {
-        if t.ctx.clock.cur < 12 {
-            return;
+    // Natives 9 / 11 / 25 0x424730 / 0x424820 / 0x424910 (07 §12): Player_LaserTest from origin
+    // o = p − (float vars 10016, 10017) along main VM rotation z; small box with graze when the e+0x2E14 timer
+    // changed to a multiple of 12, then the big box without graze on every call.
+    fn laser_box(&mut self, t: &Thread, p: [f32; 3], big: f32, small: f32) {
+        let o = [p[0] - t.ctx.flt(V_FLT0), p[1] - t.ctx.flt(V_FLT0 + 1)];
+        let a = self.e.vm.rotation[2];
+        let c = [590.0 / 2.0 + o[0], o[1]];
+        let bt = &self.e.boss_timer;
+        let graze = bt.cur != bt.prev && bt.cur % 12 == 0;
+        let mut pl = self.m.player.borrow_mut();
+        let env = pl.env;
+        let mut orbs = 0;
+        if graze {
+            orbs = pl
+                .laser_test(c, [590.0, small], o, a, true, &env, &mut self.anm.rng)
+                .1;
         }
-        let pos = self.e.pos;
-        self.m
-            .player
-            .borrow_mut()
-            .hit_test(pos, [590.0, h], &mut self.anm.rng);
+        pl.laser_test(c, [590.0, big], o, a, false, &env, &mut self.anm.rng);
+        let mut b = self.m.bullets.borrow_mut();
+        if std::mem::take(&mut pl.drop_attracted) {
+            b.items.drop_attracted();
+        }
+        // Player_OnGraze drops its time orbs (item type 10) at the point it was given: the player pos.
+        for _ in 0..orbs {
+            b.items.spawn(self.anm, &pl, pl.pos, 10, 0);
+        }
     }
 
     // Native 16 (07 §12): a chained child with var 10038 == 0 and a flag-0x100000 bullet within 64 px of its
@@ -1235,47 +1250,70 @@ impl Exec<'_> {
         }
     }
 
-    // Native 8 (INFERRED reading of 07 §12): chain members sharing var 10038 get index var 10037, count
-    // var 10018, change flag var 10017, and turn their orbit angle 2 % toward leader + index·2π/count.
+    // Native 8 `EclNative_8` 0x4244F0 (07 §12): familiar ring. Members are the parent's +8 chain (caller
+    // included, no alive test) whose int var 10038 equals the caller's; each gets int var 10037 := its index.
+    // Caller's int vars: 10005 count-changed flag, 10006 count, 10007 call counter. Non-leaders turn their orbit
+    // angle 2 % toward leader angle + idx·2π/k (+ leader orbit velocity when the 10007 counters differ).
     fn familiar_ring(&mut self, t: &mut Thread) {
+        const TWO_PI: f32 = 6.2831855;
+        let Some(parent) = self.e.root else {
+            return;
+        };
         let tag = t.ctx.int(V_INT1 + 2);
-        let root = self.e.root;
-        let mut members = Vec::new();
-        let mut n = root.and_then(|r| {
-            if r == self.idx {
-                self.e.chain_next
-            } else {
-                self.m.enemies[r].chain_next
-            }
-        });
+        let mut k = 0;
+        let mut leader = None;
+        let mut n = self.m.enemies[parent].chain_next;
         let mut guard = 0;
-        while let Some(i) = n {
+        while let Some(i) = n
+            && guard <= MAX_ENEMIES
+        {
             guard += 1;
-            if guard > MAX_ENEMIES {
-                break;
-            }
             if i == self.idx {
-                members.push((i, self.e.orbit_angle));
+                t.ctx.set_int(V_INT1 + 1, k);
+                leader.get_or_insert(i);
+                k += 1;
                 n = self.e.chain_next;
                 continue;
             }
-            let c = &self.m.enemies[i];
-            if c.alive() && c.main.ctx.int(V_INT1 + 2) == tag {
-                members.push((i, c.orbit_angle));
+            // SPEC-GAP: e+0x2CA0 of an enemy that is not running is taken to be its main context.
+            let c = &mut self.m.enemies[i].main.ctx;
+            if c.int(V_INT1 + 2) == tag {
+                c.set_int(V_INT1 + 1, k);
+                leader.get_or_insert(i);
+                k += 1;
             }
-            n = c.chain_next;
+            n = self.m.enemies[i].chain_next;
         }
-        let Some(index) = members.iter().position(|&(i, _)| i == self.idx) else {
+        t.ctx.set_int(V_INT0 + 5, 0);
+        let count = t.ctx.int(V_INT0 + 6);
+        if count != k {
+            if count != 0 {
+                t.ctx.set_int(V_INT0 + 5, 1);
+            }
+            t.ctx.set_int(V_INT0 + 6, k);
+        }
+        let calls = t.ctx.int(V_INT0 + 7).wrapping_add(1);
+        t.ctx.set_int(V_INT0 + 7, calls);
+        let idx = t.ctx.int(V_INT1 + 1);
+        // SPEC-GAP: a caller outside the ring keeps a stale 10037; with no member there is no leader, so nothing.
+        let Some(l) = leader.filter(|_| idx != 0) else {
             return;
         };
-        let count = members.len() as f32;
-        let changed = t.ctx.flt(V_FLT0 + 2) != count;
-        t.ctx.set_int(V_INT1 + 1, index as i32);
-        t.ctx.set_flt(V_FLT0 + 2, count);
-        t.ctx.set_flt(V_FLT0 + 1, if changed { 1.0 } else { 0.0 });
-        let target = members[0].1 + index as f32 * 2.0 * PI / count;
-        let diff = anmvm::wrap_add(target - self.e.orbit_angle, 0.0);
-        self.e.orbit_angle = anmvm::wrap_add(self.e.orbit_angle, diff * 0.02);
+        let (l_angle, l_av, l_calls) = if l == self.idx {
+            (self.e.orbit_angle, self.e.orbit_av, calls)
+        } else {
+            let e = &self.m.enemies[l];
+            (e.orbit_angle, e.orbit_av, e.main.ctx.int(V_INT0 + 7))
+        };
+        let mut target = anmvm::wrap_add(l_angle, idx as f32 * TWO_PI / k as f32);
+        if l_calls != calls {
+            target = anmvm::wrap_add(target, l_av);
+        }
+        let mut d = target - anmvm::wrap_add(self.e.orbit_angle, self.e.orbit_av);
+        if d.abs() > PI {
+            d += if d > 0.0 { -TWO_PI } else { TWO_PI };
+        }
+        self.e.orbit_angle = anmvm::wrap_add(self.e.orbit_angle, d * 0.02);
     }
 
     // Op 122 spell block (07 §11): decoded strings, bonus / max / decay rate, pending payout paid first
@@ -2324,18 +2362,105 @@ mod tests {
         assert_eq!(b.bullets[1].vel, [2.0, -1.0, 0.0]);
     }
 
-    // 07 §12 native 9: 590 × 128 box at the caller; no hit before clock 12.
+    // 07 §12 native 9: box from o = final pos − (vars 10016, 10017), 590 along main VM rotation z, big box
+    // height 160 hits on every call (no warning phase).
     #[test]
-    fn native9_hit_rect() {
-        for (clock, dy, hit) in [(11, 0.0, false), (12, 60.0, true), (12, 70.0, false)] {
-            let (mut anm, mut m) = manager(&[&[ins(clock, 136, &[9, 0])]]);
+    fn native9_laser_box() {
+        let cases = [
+            (0.0, [150.0, 100.0], false),
+            (0.0, [200.0, 179.0], true),
+            (0.0, [200.0, 181.0], false),
+            (0.0, [779.0, 100.0], true),
+            (PI / 2.0, [190.0, 300.0], true),
+            (PI / 2.0, [300.0, 110.0], false),
+        ];
+        for (rot, pp, hit) in cases {
+            let (mut anm, mut m) = manager(&[&[ins(0, 136, &[9, 0])]]);
             spawn(&mut m, 0, 0, -1, 0);
-            m.enemies[0].pos = [192.0, 100.0, 0.0];
-            m.enemies[0].main.ctx.clock.cur = clock;
-            m.player.borrow_mut().pos = [-90.0, 100.0 + dy, 0.0];
+            let e = &mut m.enemies[0];
+            e.pos = [200.0, 100.0, 0.0];
+            e.vm.rotation[2] = rot;
+            e.main.ctx.set_flt(V_FLT0, 10.0);
+            m.player.borrow_mut().pos = [pp[0], pp[1], 0.0];
             ecl_run(&mut m, &mut anm, 0);
-            assert_eq!(m.player.borrow().state == 2, hit, "clock {clock} dy {dy}");
+            assert_eq!(m.player.borrow().state == 2, hit, "rot {rot} at {pp:?}");
         }
+    }
+
+    // 07 §12 native 11: small box (192 + 48 per side) grazes only when timer e+0x2E14 changed to a multiple
+    // of 12; the big box (240) still misses there.
+    #[test]
+    fn native11_graze_every_12() {
+        for (cur, prev, grazed) in [(12, 11, 1), (12, 12, 0), (13, 12, 0)] {
+            let (mut anm, mut m) = manager(&[&[ins(0, 136, &[11, 0])]]);
+            spawn(&mut m, 0, 0, -1, 0);
+            let e = &mut m.enemies[0];
+            e.pos = [100.0, 100.0, 0.0];
+            e.boss_timer.cur = cur;
+            e.boss_timer.prev = prev;
+            m.player.borrow_mut().pos = [300.0, 100.0 + 130.0, 0.0];
+            ecl_run(&mut m, &mut anm, 0);
+            let p = m.player.borrow();
+            assert_eq!((p.grazes, p.state), (grazed, 0), "timer {cur}/{prev}");
+        }
+    }
+
+    // 07 §12 native 8: parent 0 → 1 → 2 → 3; caller 3 and enemy 1 share var 10038, enemy 1 leads. Counters in
+    // int vars 10005–10007; the caller turns 2 % toward leader + π + leader orbit velocity.
+    #[test]
+    fn native8_familiar_ring() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[8, 0])], &[]]);
+        for (k, tag) in [(0, 0), (1, 5), (2, 6), (3, 5)] {
+            spawn(&mut m, k, if k == 3 { 0 } else { 1 }, -1, 0);
+            m.enemies[k].main.ctx.set_int(V_INT1 + 2, tag);
+            m.enemies[k].main.ctx.set_int(V_INT1 + 1, -1);
+            if k > 0 {
+                m.enemies[k].root = Some(0);
+                m.enemies[k - 1].chain_next = Some(k);
+            }
+        }
+        m.enemies[1].orbit_av = 0.1;
+        ecl_run(&mut m, &mut anm, 3);
+        let v = |m: &EnemyManager, k: usize, id: usize| m.enemies[k].main.ctx.int(id);
+        assert_eq!(
+            (
+                v(&m, 1, V_INT1 + 1),
+                v(&m, 2, V_INT1 + 1),
+                v(&m, 3, V_INT1 + 1)
+            ),
+            (0, -1, 1)
+        );
+        assert_eq!(
+            (
+                v(&m, 3, V_INT0 + 5),
+                v(&m, 3, V_INT0 + 6),
+                v(&m, 3, V_INT0 + 7)
+            ),
+            (0, 2, 1)
+        );
+        let t = anmvm::wrap_add(anmvm::wrap_add(0.0, 6.2831855 / 2.0), 0.1);
+        assert!((m.enemies[3].orbit_angle - t * 0.02).abs() < 1e-6);
+        // A changed count sets the flag 10005 when the old count was not 0.
+        m.enemies[3].main.ctx.set_int(V_INT0 + 6, 3);
+        m.enemies[3].main.ctx.enter(&m.ecl, 0);
+        ecl_run(&mut m, &mut anm, 3);
+        assert_eq!(
+            (
+                v(&m, 3, V_INT0 + 5),
+                v(&m, 3, V_INT0 + 6),
+                v(&m, 3, V_INT0 + 7)
+            ),
+            (1, 2, 2)
+        );
+    }
+
+    // 07 §12 native 8 does nothing without a parent.
+    #[test]
+    fn native8_needs_parent() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[8, 0])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        ecl_run(&mut m, &mut anm, 0);
+        assert_eq!(m.enemies[0].main.ctx.int(V_INT0 + 7), 0);
     }
 
     // 07 §12 native 13: stage tint request 0xFFC03030.

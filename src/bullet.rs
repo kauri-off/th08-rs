@@ -1271,8 +1271,8 @@ impl BulletManager {
         }
     }
 
-    // ECL native 28 (07 §12): velocities × `k` (the new game speed 1/arg), sprites 0x60–0x6F → 0x6F with the
-    // old sprite saved in +0x218.
+    // ECL native 28 (07 §12): every live bullet's velocity × `k` (the new game speed 1/arg) and VM0 +0x218 :=
+    // its sprite; only sprites 0x60–0x6F become 0x6F.
     pub fn slow_down(&mut self, anm: &mut AnmManager, k: f32) {
         for b in self.bullets[..MAX_BULLETS].iter_mut().filter(|b| !b.free()) {
             for v in b.vel.iter_mut() {
@@ -1286,15 +1286,14 @@ impl BulletManager {
         }
     }
 
-    // ECL native 29 (07 §12): undo native 28; `gs` is the game speed native 28 set (1/arg).
-    pub fn slow_down_restore(&mut self, anm: &mut AnmManager, gs: f32) {
+    // ECL native 29 (07 §12): every live bullet's velocity × `f` (1 / the slowed game speed); only sprites
+    // 0x60–0x6F are set back to +0x218, so a bullet spawned while slowed gets its template's base sprite.
+    pub fn slow_down_restore(&mut self, anm: &mut AnmManager, f: f32) {
         for b in self.bullets[..MAX_BULLETS].iter_mut().filter(|b| !b.free()) {
-            if gs != 0.0 {
-                for v in b.vel.iter_mut() {
-                    *v /= gs;
-                }
+            for v in b.vel.iter_mut() {
+                *v *= f;
             }
-            if b.vms[0].sprite_index != b.saved_sprite {
+            if (0x60..=0x6F).contains(&b.vms[0].sprite_index) {
                 b.vms[0].set_sprite(anm, b.saved_sprite as i32);
             }
         }
@@ -1565,7 +1564,7 @@ mod tests {
         b.slow_down(&mut anm, 0.5);
         assert!((speed(&b.bullets[i]) - 2.0).abs() < 1e-5);
         assert_eq!(b.bullets[i].saved_sprite, 0x64);
-        b.slow_down_restore(&mut anm, 0.5);
+        b.slow_down_restore(&mut anm, 2.0);
         assert!((speed(&b.bullets[i]) - 4.0).abs() < 1e-5);
     }
 

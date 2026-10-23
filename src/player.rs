@@ -848,6 +848,44 @@ impl Player {
         true
     }
 
+    // Player_LaserTest 0x44A6A0 (09 §6.1): box centre `c`, size `s` in the frame rotated by `a` about origin `o`.
+    // Returns (0 miss, 1 hit, 2 graze; time orbs to drop at the player). No bomb-area test, no +0xE2A90 write;
+    // f32 box edges, touching counts as overlap.
+    #[allow(clippy::too_many_arguments)]
+    pub fn laser_test(
+        &mut self,
+        c: [f32; 2],
+        s: [f32; 2],
+        o: [f32; 2],
+        a: f32,
+        graze: bool,
+        env: &GrazeEnv,
+        rng: &mut Rng,
+    ) -> (u8, u8) {
+        // Vec2_Rotate by −a: sin/cos rounded to f32.
+        let (sn, cs) = (-a).sin_cos();
+        let (dx, dy) = (self.pos[0] - o[0], self.pos[1] - o[1]);
+        let q = [o[0] + (cs * dx - sn * dy), o[1] + (sn * dx + cs * dy)];
+        let ph = self.hit_half();
+        let (pmin, pmax) = ([q[0] - ph[0], q[1] - ph[1]], [q[0] + ph[0], q[1] + ph[1]]);
+        let hit = |g: f32| {
+            let lmin = [c[0] - s[0] / 2.0 - g, c[1] - s[1] / 2.0 - g];
+            let lmax = [c[0] + s[0] / 2.0 + g, c[1] + s[1] / 2.0 + g];
+            !(lmax[0] < pmin[0] || pmax[0] < lmin[0] || lmax[1] < pmin[1] || pmax[1] < lmin[1])
+        };
+        if hit(0.0) {
+            // Step 5: state ≠ 0 returns 0 here, before the scramble.
+            let alive = self.state == 0;
+            self.die(rng);
+            return (alive as u8, 0);
+        }
+        if graze && hit(48.0) && !matches!(self.state, 1 | 2) {
+            let p = self.pos;
+            return (2, self.on_graze(p, true, env, rng));
+        }
+        (0, 0)
+    }
+
     // Restarts the sprite VM keeping its position (the player sprite is placed at draw time).
     pub(crate) fn set_script(&mut self, anm: &mut AnmManager, s: usize) {
         let pos = self.vm.pos;
