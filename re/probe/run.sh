@@ -6,5 +6,5 @@ pgrep -x Xvfb >/dev/null || (Xvfb :77 -screen 0 1024x768x24 >/dev/null 2>&1 &)
 cp /home/anon/Projects/th_08/re/work/hook/d3d8.dll /home/anon/Projects/th_08/re/work/game/
 cd /home/anon/Projects/th_08/re/work/game
 timeout ${1:-60} $WINE th08.exe > ../wine.log 2>&1
-$(dirname $WINE)/wineserver -k 2>/dev/null
+wineserver -k 2>/dev/null
 exit 0
