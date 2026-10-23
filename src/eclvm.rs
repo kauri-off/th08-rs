@@ -686,16 +686,9 @@ impl Exec<'_> {
         let youkai = self.m.g.player_mode != 0;
         {
             let c = &mut self.m.enemies[ci];
+            // Ops 90–92 never write the mode bits e+0x3330 (07 §10.5): the spawn-time run sees 0, so both human-
+            // and youkai-masked time-0 instructions run; Enemy_ReactPlayerMode sets them at the first step 3.
             c.main.ctx.vars = vars;
-            if chained {
-                // SPEC-GAP: 07 §10.5 does not say whether op 90–92 write mode bits e+0x3330; set before the run (IMPL51 Q1).
-                c.mode_bits = if youkai { 0x40 } else { 0x20 };
-                // SPEC-GAP: when op 92 writes the follow offset and bit 9 is not in 07 §10.5; before the run (IMPL51 Q2).
-                if op == 92 {
-                    c.pos_offset = self.e.pos;
-                    c.flags |= A_FOLLOW;
-                }
-            }
         }
         if self
             .m
@@ -710,6 +703,11 @@ impl Exec<'_> {
         c.flags |= A_MODE_REACT;
         c.set_flag(A_YOUKAI, youkai);
         c.layer = if youkai { 0 } else { 2 };
+        // Op 92 (07 §10.5): follow offset := parent pos and final pos, after the run, so time 0 saw neither.
+        if op == 92 {
+            c.pos_offset = self.e.pos;
+            c.final_pos = add3(c.pos_offset, c.pos);
+        }
         c.flags &= !A_CONTACT;
         // Aura 0x20 only if it has none yet, at pos (op 92: final pos); interrupt 1 human / 2 youkai.
         if c.fx_aura == crate::effect::NONE {
@@ -727,6 +725,10 @@ impl Exec<'_> {
                 }
             });
             c.fx_aura = fx;
+        }
+        // Op 92: bit 9 (follow) after the aura, before the link (07 §10.5).
+        if op == 92 {
+            c.flags |= A_FOLLOW;
         }
         // The chain link is written last (07 §10.5): during the spawn-time run the child has no parent.
         c.root = Some(self.idx);
@@ -2537,6 +2539,26 @@ mod tests {
 
     fn child_op(op: i16, sub: i32) -> Vec<u8> {
         ins(0, op, &[sub, 0, 0, 10, 0, 100])
+    }
+
+    // 07 §10.5: ops 90–92 leave the mode bits e+0x3330 at 0, so a youkai-only time-0 instruction runs in human
+    // mode; op 92 writes the follow offset, final pos and bit 9 only after the spawn-time run.
+    #[test]
+    fn op92_follow_and_mode_bits_after_spawn_run() {
+        let mut youkai_only = ins_v(0, 6, 1, &[10000, 7]);
+        youkai_only[9] = 0x4F;
+        let (x, y) = (5.0f32.to_bits() as i32, 6.0f32.to_bits() as i32);
+        let op92 = ins(0, 92, &[1, x, y, 10, 0, 100]);
+        let (mut anm, mut m) = manager(&[&[op92], &[youkai_only], &[]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].pos = [100.0, 50.0, 0.0];
+        ecl_run(&mut m, &mut anm, 0);
+        let c = &m.enemies[1];
+        assert_eq!(c.main.ctx.vars[V_INT0], 7);
+        assert_eq!(c.mode_bits, 0);
+        assert_eq!(c.pos_offset, [100.0, 50.0, 0.0]);
+        assert_eq!(c.final_pos, [105.0, 56.0, 0.0]);
+        assert_eq!(c.flags & (A_FOLLOW | A_CONTACT), A_FOLLOW);
     }
 
     // 07 §10.5: bit 8, bit 11, layer, contact off and aura override the child's time-0 ops; the link is written
