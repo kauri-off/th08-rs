@@ -439,8 +439,9 @@ impl Effects {
             22..=25 => e.pos = player,
             // pos += polar(param.x, 256); rotation z = param.x + π/2.
             60 | 61 => {
-                e.pos[0] += param[0].cos() * 256.0;
-                e.pos[1] += param[0].sin() * 256.0;
+                let d = crate::bullet::polar(param[0], 256.0);
+                e.pos[0] += d[0];
+                e.pos[1] += d[1];
                 e.spin = param[0] + PI / 2.0;
             }
             _ => {}
@@ -1090,7 +1091,8 @@ fn boundary_sides(centre: [f32; 3], r: &Ring, d_life: i32, period: i32, c_life: 
     let s = r.radius * 0.70711;
     let mut a = r.start + PI / 4.0;
     for _ in 0..4 {
-        let c = [centre[0] + a.cos() * s, centre[1] + a.sin() * s];
+        let d = crate::bullet::polar(a, s);
+        let c = [centre[0] + d[0], centre[1] + d[1]];
         let rot = a + PI / 2.0;
         let d = crate::bomb::Area {
             pos: c,

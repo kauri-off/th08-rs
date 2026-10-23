@@ -610,6 +610,13 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl83 (audit 86, 91, 93): `bullet::polar` (Vec3_FromPolar, 05 §10) takes cos/sin and the product in f64 with one
+  rounding to f32; used at every spec `polar(...)` site (bullets, ex-cmds, natives, player shots, bombs, item
+  attract, effects 60/61, boundary sides, boss chain-kill and time-orb rings). Lasers collide through
+  `Player_LaserTest` (08 §6.3, 09 §6.1). `Player_HitTest` / `HitTestNoBomb` / `GrazeTest` compare f32 edges
+  (p − s/2) − e … (s/2 + p) + e with the hit / graze boxes +0x38C / +0x3A4, stored by `Player_Move` with the item box
+  (08 §4.1 step 6, 09 §1.1, §3). Unit tests; golden 25634, fullrun_noclip 90009, selftest1 1922, demos in sync.
+  SPEC-GAP 108 → 108 (src). Questions: `docs/briefs/IMPL83_QUESTIONS.md`.
 - impl82 (audit 84, 97, 98): player shot vs enemy uses f32 box edges (helper 0x451CE0, min = c − s·0.5,
   max = s·0.5 + c, inclusive; 09 §4.5). The quitting frame runs calc + Sound_Update only, no draw and no Present
   (`Ctx::run_frame`, app loop; 15 §2.2, 00 §2). A forced bomb start jumps past the +0xE2A6C decrement, the bombing

@@ -233,8 +233,10 @@ const DOLL_FLASH: [u32; 5] = [0xFFFFFFFF, 0xFFFFD0D0, 0xFFFFB0B0, 0xFFFF8080, 0x
 const DOLL_OCTAGON: [u32; 4] = [0xFFFFFFFF, 0xFFFFD0D0, 0xFFFF8080, 0xFFFF0000];
 const BOUNDARY_ANGLES: [f32; 4] = [PI / 4.0, 3.0 * PI / 8.0, PI / 2.0, 5.0 * PI / 8.0];
 
+// Vec3_FromPolar (05 §10).
 fn polar(a: f32, r: f32) -> [f32; 2] {
-    [a.cos() * r, a.sin() * r]
+    let v = crate::bullet::polar(a, r);
+    [v[0], v[1]]
 }
 
 fn xy(p: [f32; 3]) -> [f32; 2] {

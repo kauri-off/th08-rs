@@ -77,8 +77,11 @@ fn effect_color(h: u8, colour: i16) -> i32 {
     }
 }
 
-fn polar(a: f32, r: f32) -> [f32; 3] {
-    [a.cos() * r, a.sin() * r, 0.0]
+// Vec3_FromPolar 0x4286E0 (05 §10): fcos/fsin stay extended and the fmul rounds once to f32,
+// so the product is taken in f64, not as f32(cos a)·r.
+pub fn polar(a: f32, r: f32) -> [f32; 3] {
+    let (a, r) = (a as f64, r as f64);
+    [(a.cos() * r) as f32, (a.sin() * r) as f32, 0.0]
 }
 
 // Player_AngleFrom (08 §3.1): π/2 when both differences are exactly 0.
@@ -309,8 +312,8 @@ pub struct Laser {
 }
 
 impl Laser {
-    // Rotated-rectangle collision (08 §6.3 step 2 with the per-state size); hit kills the player, else graze
-    // with the box grown by 48 when enabled and the player state is not 1/2.
+    // Collision (08 §6.3 step 2) through `Player_LaserTest` (09 §6.1) with c = (origin.x + tail + L/2, origin.y);
+    // returns the time orbs of a graze.
     fn test(
         &self,
         p: &mut Player,
@@ -320,26 +323,9 @@ impl Laser {
         rng: &mut crate::rng::Rng,
     ) -> u8 {
         let len = self.head - self.tail;
-        let centre = [self.origin[0] + self.tail + len / 2.0, self.origin[1]];
-        let (dx, dy) = (p.pos[0] - self.origin[0], p.pos[1] - self.origin[1]);
-        let (s, c) = (-self.angle).sin_cos();
-        let q = [
-            dx * c - dy * s + self.origin[0],
-            dx * s + dy * c + self.origin[1],
-        ];
-        let half = [size[0] / 2.0, size[1] / 2.0];
-        let ph = p.hit_half();
-        let over = |h: [f32; 2]| {
-            (q[0] - centre[0]).abs() <= h[0] + ph[0] && (q[1] - centre[1]).abs() <= h[1] + ph[1]
-        };
-        if over(half) {
-            p.die(rng);
-            return 0;
-        }
-        if graze && over([half[0] + 48.0, half[1] + 48.0]) && !matches!(p.state, 1 | 2) {
-            return p.on_graze(p.pos, true, env, rng);
-        }
-        0
+        let c = [self.origin[0] + self.tail + len / 2.0, self.origin[1]];
+        let o = [self.origin[0], self.origin[1]];
+        p.laser_test(c, size, o, self.angle, graze, env, rng).1
     }
 }
 
@@ -1484,6 +1470,7 @@ mod tests {
         let mut anm = AnmManager::default();
         let p = Player::new_ref();
         p.borrow_mut().pos = [-1000.0, -1000.0, 0.0];
+        p.borrow_mut().update_boxes();
         let b = BulletManager::new(&mut anm, p);
         (anm, b)
     }
@@ -1950,7 +1937,7 @@ mod tests {
         let (mut anm, mut b) = mgr();
         let pl = b.player.clone();
         pl.borrow_mut().pos = [100.0, 300.0, 0.0];
-        pl.borrow_mut().update_item_box();
+        pl.borrow_mut().update_boxes();
         b.items.spawn(
             &mut anm,
             &pl.borrow(),
@@ -1969,6 +1956,44 @@ mod tests {
             "line {line} score {}",
             p.stats.score()
         );
+    }
+
+    // 05 §10: one rounding of the extended product, not f32(cos a)·r.
+    #[test]
+    fn polar_rounds_once() {
+        let mut differs = 0;
+        for i in 0..1000 {
+            let (a, r) = (i as f32 * 0.0123 - 6.0, 1.0 + i as f32 * 0.37);
+            let v = polar(a, r);
+            assert_eq!(v[0], ((a as f64).cos() * r as f64) as f32);
+            assert_eq!(v[1], ((a as f64).sin() * r as f64) as f32);
+            differs += (v[0] != a.cos() * r || v[1] != a.sin() * r) as u32;
+        }
+        assert!(differs > 0);
+    }
+
+    // 08 §6.3 through Player_LaserTest (09 §6.1): laser box c ± s/2 with f32 edges; touching overlaps.
+    #[test]
+    fn laser_hits_through_player_laser_test() {
+        let (mut anm, _) = mgr();
+        let mut p = Player {
+            state: 0,
+            debug_invuln: true,
+            ..Player::default()
+        };
+        p.sht.hitbox = 2.0;
+        let l = Laser {
+            origin: [100.0, 100.0, 0.0],
+            head: 100.0,
+            ..Laser::default()
+        };
+        let env = GrazeEnv::default();
+        p.pos = [150.0, 105.0, 0.0];
+        l.test(&mut p, [100.0, 8.0], false, &env, &mut anm.rng);
+        assert_eq!(p.hits, 1);
+        p.pos = [150.0, 105.001, 0.0];
+        l.test(&mut p, [100.0, 8.0], false, &env, &mut anm.rng);
+        assert_eq!(p.hits, 1);
     }
 }
 

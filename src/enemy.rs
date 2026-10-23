@@ -1447,9 +1447,10 @@ impl EnemyManager {
             for _ in 0..2 * count {
                 let r = anm.rng.next_f32() * 128.0;
                 let a = anm.rng.next_signed() * std::f32::consts::PI;
+                let d = crate::bullet::polar(a, r);
                 self.spawn_item(
                     anm,
-                    [pos[0] + a.cos() * r, pos[1] + a.sin() * r, 0.0],
+                    [pos[0] + d[0], pos[1] + d[1], 0.0],
                     crate::item::TIME_ORB as i32,
                     1,
                 );
@@ -1773,11 +1774,8 @@ impl EnemyManager {
                 let k = left.min(7);
                 // Quirk kept (07 §11.1): the second burst always spawns 6, whatever k is.
                 let spawns = n.unwrap_or(k);
-                let pos = [
-                    centre[0] + ang.cos() * 128.0,
-                    centre[1] + ang.sin() * 128.0,
-                    centre[2],
-                ];
+                let d = crate::bullet::polar(ang, 128.0);
+                let pos = [centre[0] + d[0], centre[1] + d[1], centre[2]];
                 for _ in 0..spawns {
                     self.spawn_item(anm, pos, 10, 0);
                 }

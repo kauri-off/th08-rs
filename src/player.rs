@@ -337,8 +337,13 @@ impl Stats {
 }
 
 // Centred boxes, inclusive overlap (08 §8.4).
-fn overlap(a: [f32; 2], ah: [f32; 2], b: [f32; 2], bh: [f32; 2]) -> bool {
-    (a[0] - b[0]).abs() <= ah[0] + bh[0] && (a[1] - b[1]).abs() <= ah[1] + bh[1]
+// Box test of HitTest / HitTestNoBomb / GrazeTest (08 §4.1 step 6): object min = (p − s/2) − e,
+// max = (s/2 + p) + e, each edge an f32, against a stored player box [min x, min y, max x, max y]; touching overlaps.
+fn box_overlap(p: [f32; 3], size: [f32; 2], e: f32, b: [f32; 4]) -> bool {
+    let h = [size[0] / 2.0, size[1] / 2.0];
+    let min = [(p[0] - h[0]) - e, (p[1] - h[1]) - e];
+    let max = [(h[0] + p[0]) + e, (h[1] + p[1]) + e];
+    !(max[0] < b[0] || b[2] < min[0] || max[1] < b[1] || b[3] < min[1])
 }
 
 // Facts the player needs from other managers (bosses, spell card, dialogue).
@@ -407,6 +412,9 @@ pub struct Player {
     pub drop_attracted: bool,
     // +0x3BC..+0x3D0 item box min x, min y, max x, max y = pos ∓ collect/2, stored by `Player_Move` (09 §1.1, §3).
     pub item_box: [f32; 4],
+    // +0x38C / +0x3A4 hit and graze boxes, same layout, also stored only by `Player_Move` (09 §1.1).
+    pub hit_box: [f32; 4],
+    pub graze_box: [f32; 4],
     // +0xE2A98 direction code (09 §3).
     pub direction: u8,
     // +0xE2A9C / +0xE2AA0 last vx / vy before gs.
@@ -486,6 +494,8 @@ impl Default for Player {
             cancel_item: 6,
             drop_attracted: false,
             item_box: [0.0; 4],
+            hit_box: [0.0; 4],
+            graze_box: [0.0; 4],
             direction: 0,
             last_v: [0.0; 2],
             targets: [[-999.0, -999.0, 0.0]; 2],
@@ -663,9 +673,7 @@ impl Player {
         if self.in_bomb_area(p) {
             return (2, 0);
         }
-        let half = [size[0] / 2.0 + 20.0, size[1] / 2.0 + 20.0];
-        if matches!(self.state, 1 | 2) || !overlap([p[0], p[1]], half, self.xy(), self.graze_half())
-        {
+        if matches!(self.state, 1 | 2) || !box_overlap(p, size, 20.0, self.graze_box) {
             return (0, 0);
         }
         (1, self.on_graze(p, false, env, rng))
@@ -677,12 +685,7 @@ impl Player {
         if self.in_bomb_area(p) {
             return 2;
         }
-        if !overlap(
-            [p[0], p[1]],
-            [size[0] / 2.0, size[1] / 2.0],
-            self.xy(),
-            self.hit_half(),
-        ) {
+        if !box_overlap(p, size, 0.0, self.hit_box) {
             return 0;
         }
         self.die(rng);
@@ -799,15 +802,13 @@ impl Player {
         orbs
     }
 
-    // Item box min/max = pos ∓ collect/2 (09 §3), as `Player_Move` stores it after the clamp.
-    pub fn update_item_box(&mut self) {
-        let h = self.item_half();
-        self.item_box = [
-            self.pos[0] - h[0],
-            self.pos[1] - h[1],
-            self.pos[0] + h[0],
-            self.pos[1] + h[1],
-        ];
+    // Hit / graze / item boxes = pos ∓ half size (09 §3), as `Player_Move` stores them after the clamp.
+    pub fn update_boxes(&mut self) {
+        let pos = self.pos;
+        let b = |h: [f32; 2]| [pos[0] - h[0], pos[1] - h[1], pos[0] + h[0], pos[1] + h[1]];
+        self.hit_box = b(self.hit_half());
+        self.graze_box = b(self.graze_half());
+        self.item_box = b(self.item_half());
     }
 
     // Player_ItemCollectTest 0x44A5A0 (08 §8.4): player states 0/3/4; item box (c, c) vs the stored collect box.
@@ -836,12 +837,7 @@ impl Player {
     // Player_HitTestNoBomb 0x44A360 (09 §6.1): no bomb-area test; true on overlap in every state; only state 0 dies.
     pub fn contact_test(&mut self, p: [f32; 3], size: [f32; 2], rng: &mut Rng) -> bool {
         self.cancel_item = 6;
-        if !overlap(
-            [p[0], p[1]],
-            [size[0] / 2.0, size[1] / 2.0],
-            self.xy(),
-            self.hit_half(),
-        ) {
+        if !box_overlap(p, size, 0.0, self.hit_box) {
             return false;
         }
         self.die(rng);
@@ -1007,7 +1003,7 @@ impl Player {
         self.last_disp = [vx * gs, vy * gs];
         self.pos[0] = (self.pos[0] + vx * gs).clamp(CLAMP[0], CLAMP[2]);
         self.pos[1] = (self.pos[1] + vy * gs).clamp(CLAMP[1], CLAMP[3]);
-        self.update_item_box();
+        self.update_boxes();
         self.update_options(anm, inp.down(input::SHOT));
         if inp.down(input::SHOT) && self.shot_timer.cur < 0 && !self.env.dialogue {
             self.shot_timer.set(0);
@@ -1401,6 +1397,40 @@ mod tests {
         assert!(p.collect_test([212.0, 112.0, 0.0], 24.0));
         p.state = 1;
         assert!(!p.collect_test([150.0, 50.0, 0.0], 24.0));
+    }
+
+    #[test]
+    fn hit_and_graze_use_stored_f32_boxes() {
+        let (mut p, _) = ready();
+        let mut rng = Rng::default();
+        p.state = 1;
+        p.pos = [170.0, 50.0, 0.0];
+        p.hit_box = [140.0, 0.0, 200.0, 100.0];
+        // 12 + 127.99999 rounds to 140.0 in f32: touching edges overlap (08 §4.1 step 6).
+        assert_eq!(
+            p.hit_test([127.99999, 50.0, 0.0], [24.0, 24.0], &mut rng),
+            1
+        );
+        assert_eq!(p.hit_test([127.9999, 50.0, 0.0], [24.0, 24.0], &mut rng), 0);
+        assert!(p.contact_test([212.0, 112.0, 0.0], [24.0, 24.0], &mut rng));
+        // The boxes are only refreshed by Player_Move: a moved position is not seen until then.
+        p.pos = [0.0, 0.0, 0.0];
+        assert_eq!(p.hit_test([170.0, 50.0, 0.0], [2.0, 2.0], &mut rng), 1);
+        p.sht.graze = 10.0;
+        p.update_boxes();
+        assert_eq!(p.graze_box, [-5.0, -5.0, 5.0, 5.0]);
+        assert!(box_overlap(
+            [-37.0, 0.0, 0.0],
+            [24.0, 24.0],
+            20.0,
+            p.graze_box
+        ));
+        assert!(!box_overlap(
+            [-37.001, 0.0, 0.0],
+            [24.0, 24.0],
+            20.0,
+            p.graze_box
+        ));
     }
 
     #[test]

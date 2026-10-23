@@ -12,8 +12,10 @@ use std::f32::consts::{FRAC_PI_2, PI};
 // 128 × 0x484 at player +0xBE838 (09 §4.1).
 pub const MAX_BULLETS: usize = 128;
 
+// Vec3_FromPolar (05 §10).
 fn polar(a: f32, r: f32) -> [f32; 2] {
-    [a.cos() * r, a.sin() * r]
+    let v = crate::bullet::polar(a, r);
+    [v[0], v[1]]
 }
 
 // Option calc fn (14 §3 table): Yukari 0x44E3A0, Alice 0x44EA40, Remilia 0x44EB70, Yuyuko 0x44F930,
