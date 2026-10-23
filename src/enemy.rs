@@ -1138,8 +1138,12 @@ impl EnemyManager {
                     self.enemies[b].pending_interrupt = ai(1);
                 }
             }
-            // SPEC-GAP: set_power (GameMgr_SetPower) not done; 0 uses in data.
-            9 => self.g.misc_calls += 1,
+            // GameMgr_SetPower 0x406FA0: power := n, checksum (4 RNG draws) (07 timeline op 9, 09 §9.4).
+            9 => self
+                .player
+                .borrow_mut()
+                .stats
+                .set_power(ai(0) as f32, &mut anm.rng),
             // A mode-0 boss stays in the table, so the alive bit is tested too (07 §10.3).
             10 => {
                 return self.boss(ai(0)).is_none_or(|b| !self.enemies[b].alive());

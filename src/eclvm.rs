@@ -288,6 +288,13 @@ fn chain_count(m: &EnemyManager, e: &Enemy) -> i32 {
 }
 
 // Rank lerps (07 §9.2): rank = var 10041 (8–16), integer division truncates toward 0.
+// Spell practice (GameFlags bit 14) with a last spell running or captured (bits 7–8) (07 §5 ops 129–134, 11 §2.1).
+fn practice_guard() -> bool {
+    use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE, flags};
+    let f = flags();
+    f & F_SPELL_PRACTICE != 0 && f & (F_LAST_SPELL | F_LAST_CAPTURED) != 0
+}
+
 fn lerp_i(a: i32, b: i32, rank: i32) -> i32 {
     a + ((b - a) * rank) / 32
 }
@@ -1977,12 +1984,13 @@ impl Exec<'_> {
                     0xFFFFFFFF,
                 );
             }
-            // Not implemented: the spell-practice guard (0x164D0B4 bits 7–8) of ops 129/130/133/134.
-            129 => {
+            // Spell-practice guard (0x164D0B4 bit 14 and bits 7–8 ≠ 0): 129/130 ignored, 133/134 keep the sub (07 §5).
+            129 if !practice_guard() => {
                 let m = self.raw(ins, 0) & 0xFF;
                 self.e.flags = (self.e.flags & !(7 << A_DEATH_SHIFT)) | ((m & 7) << A_DEATH_SHIFT);
             }
-            130 => self.e.death_sub = self.raw(ins, 0) as i16 as i32,
+            130 if !practice_guard() => self.e.death_sub = self.raw(ins, 0) as i16 as i32,
+            129 | 130 => {}
             // life = max = HUD life; boss slot 0 resets the 8 HUD markers.
             131 => {
                 let n = self.ai(t, ins, 0);
@@ -1999,13 +2007,18 @@ impl Exec<'_> {
                 let (k, life, sub) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.ai(t, ins, 2));
                 if let Some(k) = usize::try_from(k).ok().filter(|&k| k < 4) {
                     self.e.thresholds[k] = life;
-                    self.e.threshold_subs[k] = sub;
+                    if !practice_guard() {
+                        self.e.threshold_subs[k] = sub;
+                    }
                 }
             }
             // Timer 0 here, so op 134 on frame F times out on frame F + timeout (07 §10.2).
             134 => {
                 self.e.timeout = self.ai(t, ins, 0);
-                self.e.timeout_sub = self.ai(t, ins, 1);
+                let sub = self.ai(t, ins, 1);
+                if !practice_guard() {
+                    self.e.timeout_sub = sub;
+                }
                 self.e.boss_timer.set(0);
             }
             // Free thread slot k; sub ≥ 0 creates it with the current context's 30 var dwords, clock 0 (07 §5.4).
@@ -2309,6 +2322,44 @@ mod tests {
         assert_eq!(e.flags & (A_SHOT_HIT | A_CONTACT), A_SHOT_HIT);
         // Flags B bit 6 spares an enemy.
         assert_eq!((m.enemies[0].life, m.enemies[0].death_sub), (100, 1));
+    }
+
+    // 07 §5 ops 129/130/133/134 under the spell-practice guard (GameFlags bit 14 + bit 7 or 8).
+    #[test]
+    fn spell_practice_guard() {
+        use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE, set_flags};
+        let sub = [
+            ins(0, 129, &[2]),
+            ins(0, 130, &[3]),
+            ins(0, 133, &[0, 40, 4]),
+            ins(0, 134, &[600, 5]),
+        ];
+        for (f, guarded) in [
+            (F_SPELL_PRACTICE, false),
+            (F_LAST_SPELL, false),
+            (F_SPELL_PRACTICE | F_LAST_SPELL, true),
+            (F_SPELL_PRACTICE | F_LAST_CAPTURED, true),
+        ] {
+            let (mut anm, mut m) = manager(&[&sub]);
+            spawn(&mut m, 0, 0, -1, 0);
+            set_flags(f);
+            ecl_run(&mut m, &mut anm, 0);
+            set_flags(0);
+            let e = &m.enemies[0];
+            assert_eq!((e.thresholds[0], e.timeout), (40, 600));
+            let got = (
+                (e.flags >> A_DEATH_SHIFT) & 7,
+                e.death_sub,
+                e.threshold_subs[0],
+                e.timeout_sub,
+            );
+            let want = if guarded {
+                (0, -1, -1, -1)
+            } else {
+                (2, 3, 4, 5)
+            };
+            assert_eq!(got, want, "flags {f:#x}");
+        }
     }
 
     // Audit D.4 (07 §5.4 op 88): op 88 on the caller from a thread calls the sub in its main context.
