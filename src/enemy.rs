@@ -2249,10 +2249,12 @@ impl EnemyManager {
         }
         self.run_vms(idx, anm);
         let e = &self.enemies[idx];
-        let (p, d, hidden) = (e.final_pos, e.orbit_target, e.flags & A_HIDDEN != 0);
+        // 13 §2.6b: orbit effects centre on the base pos e+0x2D34, not the final pos.
+        let (c, d, hidden) = (e.pos, e.orbit_target, e.flags & A_HIDDEN != 0);
         for &i in &e.fx_attached {
-            crate::effect::get(i, |x| x.orbit_follow(p, d, hidden));
+            crate::effect::get(i, |x| x.orbit_follow(c, d, hidden));
         }
+        let p = e.final_pos;
         crate::effect::get(e.fx_aura, |x| x.pos = p);
         // Step 6 is skipped for flag A bits 4/5/11, and for bit 31 while the player is bombing (07 §10.1 step 6).
         let flags = self.enemies[idx].flags;

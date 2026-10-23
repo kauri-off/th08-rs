@@ -1,6 +1,6 @@
 //! Task system "funcChain" (00 §3, `FuncChain_*` 0x43C760…0x43CF50): priority-sorted calc and draw chains.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -106,8 +106,8 @@ impl<C> Tasks<C> {
     }
 }
 
-// FuncChain_AddCalc / AddDraw (00 §3): inserted after nodes of equal priority; the on-register hook runs immediately.
-// SPEC-GAP: 00 §3 runs on-register first, then links on any result; the port links first, unlinks on Err (audit D.1).
+// FuncChain_AddCalc / AddDraw (00 §3): on-register runs first, then the node is linked after nodes of equal
+// priority whatever it returned (a node it registers with the same priority lands before this one); no unlink on Err.
 pub fn add<C: TaskCtx>(
     ctx: &mut C,
     chain: Chain,
@@ -117,6 +117,12 @@ pub fn add<C: TaskCtx>(
 ) -> Result<NodeId> {
     let id = NodeId(ctx.tasks().next_id);
     ctx.tasks().next_id += 1;
+    let r = match task.try_borrow_mut() {
+        Ok(mut t) => t.on_register(ctx, chain, tag),
+        Err(_) => Err(anyhow::anyhow!(
+            "task registered while its own callback is running"
+        )),
+    };
     let list = ctx.tasks().list(chain);
     let at = list
         .iter()
@@ -128,23 +134,10 @@ pub fn add<C: TaskCtx>(
             id,
             prio,
             tag,
-            task: task.clone(),
+            task,
         },
     );
-    let r = match task.try_borrow_mut() {
-        Ok(mut t) => t.on_register(ctx, chain, tag),
-        Err(_) => Err(anyhow::anyhow!(
-            "task registered while its own callback is running"
-        )),
-    };
-    if let Err(e) = r {
-        let list = ctx.tasks().list(chain);
-        if let Some(p) = list.iter().position(|n| n.id == id) {
-            list.remove(p);
-        }
-        bail!(e);
-    }
-    Ok(id)
+    r.map(|()| id)
 }
 
 // FuncChain_Remove 0x43CF50 (00 §3.1): unlinks exactly one node and calls its on-remove once.
@@ -323,5 +316,23 @@ mod tests {
         remove_task(&mut c, &t);
         assert_eq!(c.log.join(" "), "+x0 +x2 -x0 -x2");
         assert!(c.tasks.priorities(Chain::Draw).is_empty());
+    }
+
+    struct Nest;
+
+    impl Task<T> for Nest {
+        fn on_register(&mut self, ctx: &mut T, chain: Chain, _: u8) -> Result<()> {
+            add(ctx, chain, 5, 7, s("inner", &[]))?;
+            anyhow::bail!("fail")
+        }
+    }
+
+    // 00 §3: a node registered by on-register with the same priority lands first; the outer node stays on Err.
+    #[test]
+    fn add_runs_on_register_before_linking() {
+        let mut c = T::default();
+        assert!(add(&mut c, Chain::Calc, 5, 1, task(Nest)).is_err());
+        let tags: Vec<u8> = c.tasks.calc.iter().map(|n| n.tag).collect();
+        assert_eq!(tags, [7, 1]);
     }
 }

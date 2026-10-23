@@ -1790,13 +1790,18 @@ impl Exec<'_> {
                 if let Some(b) = self.m.boss(slot)
                     && self.m.ecl.sub_start(sub).is_some()
                 {
-                    if b == self.idx {
+                    // Audit D.4: on the caller itself the sub still goes to the main context, also from a thread.
+                    if b == self.idx && self.e.running_thread.is_none() {
                         self.call(t, next, sub);
                         return Flow::Jumped;
                     }
                     let args = self.m.g.args;
                     let ecl = &self.m.ecl;
-                    let o = &mut self.m.enemies[b];
+                    let o = if b == self.idx {
+                        &mut *self.e
+                    } else {
+                        &mut self.m.enemies[b]
+                    };
                     if o.flags & A_NO_PUSH == 0 {
                         o.main.push();
                     }
@@ -1930,12 +1935,14 @@ impl Exec<'_> {
                 }
             }
             // Effect 13 (0xFF6060D0) kept in e+0x5360[] and updated every frame (follow, grow to d, spin).
+            // 07 §5 op 128, 13 §2.6b: a, b, c, d are copied raw (mask ignored, d = f32 bits into e+0x53C4) and
+            // the effect spawns at the base pos e+0x2D34, not the final pos.
             128 => {
                 self.e.effects += 1;
-                let axis = [self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3)];
-                // SPEC-GAP: 07 op 128 types d as i32, but the data words are f32 bits (96.0 / 128.0); read as f32 bits.
-                self.e.orbit_target = f32::from_bits(self.ai(t, ins, 4) as u32);
-                let i = crate::effect::spawn(self.anm, 13, self.e.final_pos, 1, 0xFF6060D0);
+                let w = |k| f32::from_bits(self.raw(ins, k));
+                let axis = [w(1), w(2), w(3)];
+                self.e.orbit_target = w(4);
+                let i = crate::effect::spawn(self.anm, 13, self.e.pos, 1, 0xFF6060D0);
                 if i != crate::effect::NONE {
                     crate::effect::get(i, |x| x.dir = axis);
                     self.e.fx_attached.push(i);
@@ -2302,6 +2309,39 @@ mod tests {
         assert_eq!(e.flags & (A_SHOT_HIT | A_CONTACT), A_SHOT_HIT);
         // Flags B bit 6 spares an enemy.
         assert_eq!((m.enemies[0].life, m.enemies[0].death_sub), (100, 1));
+    }
+
+    // Audit D.4 (07 §5.4 op 88): op 88 on the caller from a thread calls the sub in its main context.
+    #[test]
+    fn call_boss_self_from_thread_uses_main() {
+        let (mut anm, mut m) = manager(&[
+            &[ins(0, 135, &[0, 2]), ins(100, 81, &[1])],
+            &[],
+            &[ins(0, 88, &[0, 1]), ins(100, 81, &[1])],
+        ]);
+        spawn(&mut m, 0, 0, 1, 0);
+        m.bosses[0] = Some(0);
+        ecl_run(&mut m, &mut anm, 0);
+        let e = &m.enemies[0];
+        assert_eq!((e.main.ctx.sub, e.main.depth), (1, 1));
+        assert_eq!(e.main.stack[0].sub, 0);
+        let t = e.threads[0].as_ref().unwrap();
+        assert_eq!((t.ctx.sub, t.depth), (2, 0));
+    }
+
+    // 07 §5 op 128: a, b, c, d are raw words whatever the mask (d = f32 bits).
+    #[test]
+    fn op128_words_are_raw() {
+        let mut i = ins(
+            0,
+            128,
+            &[6, 0.5f32.to_bits() as i32, 0, 0, 96.0f32.to_bits() as i32],
+        );
+        i[10] = 0x1F;
+        let (mut anm, mut m) = manager(&[&[i, ins(100, 81, &[1])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        ecl_run(&mut m, &mut anm, 0);
+        assert_eq!(m.enemies[0].orbit_target, 96.0);
     }
 
     // Op 95 in a thread: the main context takes the death sub, the threads are kept (07 §7 op 95).

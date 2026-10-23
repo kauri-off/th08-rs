@@ -610,6 +610,11 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl86 (RE-Q31, audit D.1, D.4): ECL op 128 (07 §5, 13 §2.6b) copies a, b, c, d raw (mask ignored, d = f32 bits
+  into e+0x53C4) and spawns / centres effect 13 at the base pos e+0x2D34. `task::add` (00 §3) runs on-register
+  first, then links the node whatever it returned (no unlink on Err). Op 88 on the caller from a thread calls the sub
+  in the main context (07 §5.4). Unit tests; golden 25634, fullrun_noclip 90011, selftest1 1922, demos in sync.
+  SPEC-GAP 107 → 105 (src). Questions: `docs/briefs/IMPL86_QUESTIONS.md`.
 - impl85 (audit 105, D.2, D.3): `kill_non_bosses` (threshold / timeout kill, 07 §10.2, §10.6) jumps to the death
   sub with `Ecl_SetSub` only (threads, thresholds, timeout, descriptor kept; death sub consumed). ECL ops 86 / 87
   (07 §7) call one getter, so 10032–10035 / 10082 draw once; op 87 tests the boss entry, op 86 does not (empty entry
