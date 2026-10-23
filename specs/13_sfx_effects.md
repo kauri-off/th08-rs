@@ -184,6 +184,9 @@ inner edge u1 (+ uv_off_u); WRAP addressing, so a 16×768 sprite in a 128-px tex
 ring (`Anm_RingSetUV` 0x464B00; changelog/answers_impl9.md §P2). Geometry:
 n = segments (+0x324), r = radius (+0x314, from VM pos.x), w = half width = (+0x320, VM scale.x) /
 sin((π − 2π/n)/2), start angle +0x318 (VM rotation z), step 2π/n, centre +0x2E0 (+ playfield origin).
+Vertex z (VERIFIED 0x427450, RE-Q32): plain ring = 0 + centre z (the polar helper writes x, y; the centre add includes
+z, which is 0 for every spawner), ellipse and wavy ring := 0 after the add; rhw 1. So ring vertices are at z 0, not
+the 0.07 of the list-A/E sprites.
 - +0x32C (VM pos.y) = 0 → plain ring: outer r + w, inner r − w.
 - else if +0x334 = 0 → rotated **ellipse**: vertex = rotate((cos θ·(r ± w), sin θ·(a ± w)), +0x330) with
   a = +0x32C, θ = 0, 2π/n, … (used by effects 0x2B/0x2C and the Youmu slash 0x30, 14 §2).
@@ -444,12 +447,21 @@ Small popups: 720 + 3 slots × 0x38 at Ascii +0xB4DC: digits[≤12] (least signi
 sign used for negative arguments), +0xC pos (+ playfield origin at spawn, i.e. screen coords), +0x18 colour, +0x1C Timer, +0x30 active,
 +0x31 digit count. `Popup_Number` 0x403200(pos, value, colour) uses slots 0–719 round robin; 0x403330 uses
 the 3 slots 720–722 (round robin).
-Per frame (`Ascii_Calc`, not while paused/continue, not while bullets frozen): y −= 0.5·gs; age ticks; freed at
-age ≥ 60. Draw: text centred (x − 4·digits, 8 px per glyph, ascii.anm sprites: digit glyph g → sprite g for
-age < 52, g + 11 for age 52–55, g + 21 from 56), alpha by squared distance d to the player: d ≤ 1024 → 0x50,
-1024 < d ≤ 4096 → 0x50 + (d − 1024)·128/3072, else 0xD0 (popups near the player are faded).
-Glyph 10 (negative value) is sprite 10 (48×8) drawn left-anchored at x − 4 (Ascii VM anchor 0x1800), fading
-through sprites 21 / 31 (faithful quirk). Colours per caller (VERIFIED):
+Per frame (`Ascii_Calc`, not while paused/continue, not while bullets frozen): y −= 0.5·gs; age (Timer) ticks; freed
+when age **> 60** (`Timer_Greater`(60): drawn with ages 0..60, i.e. 61 frames; VERIFIED 0x402200, RE-Q32).
+Draw (`Ascii_DrawPopups` 0x405420, VERIFIED RE-Q32): one VM, ASCII manager +0x2A4, per glyph: VM pos.x starts at
+pos.x − 4·digits and advances 8 per glyph (glyphs from the last stored = most significant first), pos.y = pos.y,
+pos.z = **0.1** (set once by `Ascii_InitVms` 0x402450); sprite = digit glyph g for age < 52, g + 11 for age 52–55,
+g + 21 from 56; only the sprite **width** (VM +0x28) is copied from the new sprite, the height stays the init
+sprite's (sprite 0); scale = manager +0x826C/+0x8270; colour = slot colour with the alpha byte replaced by the
+distance rule; drawn with `Draw2DSnap` (05 §9), **centred** on the VM pos: `Ascii_InitVms` ORs 0x1800 (anchor bits)
+into the VM flags and then calls `AnmVm_Init`, which resets the flags to 7, so the anchor never takes effect
+(QUIRK). The VM has default render state (alpha blend, z-write on). Alpha by squared distance d (truncated to int)
+between the **player position (playfield coordinates, +0x2B4)** and the popup position (**screen** coordinates,
+playfield origin already added) — the origin is not subtracted (QUIRK, so the fade centre is 32/16 px up-left of
+the player): d ≤ 1024 → 0x50, 1024 < d ≤ 4096 → 0x50 + (d − 1024)·128/3072 (integer), else 0xD0.
+Glyph 10 (negative value) is sprite 10 (48×8), centred like the digits, fading through sprites 21 / 31 (faithful
+quirk). Colours per caller (VERIFIED):
 
 | caller | value | colour |
 |---|---|---|
@@ -469,7 +481,8 @@ Large popups: 128 slots at +0x15304 (`Popup_Large` 0x403460 / `Popup_LargeStatic
 LSB first: [0xF, p4 digits, 0xE,] p3 digits, 0xD; ascii glyphs 0xD '+', 0xE '(', 0xF ')' → text "+p3" or
 "+p3(p4)"; the "(p4)" part is written only when p4 > 0, and p3 < 1 is written as a single '0' ("+0") (VERIFIED
 0x403460 / 0x403600, RE-Q25); scale from the manager; sprite = glyph + 0x88), life 90 frames (0x403600 starts at age 88 = a
-two-frame display). Callers (VERIFIED):
+two-frame display: issued in `Hud_DrawBoss` after the popup draw, ticked to 89 and 90 by the next two
+`Ascii_Calc`s, freed when > 90). Callers (VERIFIED):
 
 `Popup_Large` 0x403460 (life 90), callers in `Enemy_KillChildren` 0x42ADB0:
 
@@ -503,13 +516,16 @@ Chain child colour (n = `FUN_0041FD40` = number of chained children):
 
  Small-popup callers: items (08 §8.5), cancel bonuses (08 §6), kill_all.
 Large popup details (changelog/answers_impl10.md §1, VERIFIED): spawn pos = given pos + playfield origin (32, 16); count
-(+0x31) = glyphs + 1; `Popup_LargeStatic` adds count·3.5 to x (so its text starts at pos.x + 32); 128 slots
+(+0x31) = the number of stored glyphs **including** the '+' (0xD) and the parentheses (both functions write the
+'+' at index n − 1 and then store n; the old "glyphs + 1" wording counted the digits only; VERIFIED 0x403460 /
+0x403600, RE-Q32: "+1" has count 2, x0 = pos.x − 7); `Popup_LargeStatic` adds count·3.5 to x (so its text starts at pos.x + 32); 128 slots
 round robin (+0x8298); scale copied from manager +0x826C/+0x8270 into slot +0x28/+0x2C at spawn.
 Per frame (`Ascii_Calc`, same pause/continue/bit-10 gating as small popups): **no motion** (y unchanged), age
-ticks, freed at age ≥ 90. Draw (0x405420, after the small popups): x0 = pos.x − count·3.5 (unscaled), glyphs
-drawn from the last stored to the first, advance 7·scale.x, anchor top-left (VM +0x548 anchor 0x1800), sprite
-0x88 + glyph (no age-based sprite change), RGB from the colour, alpha **replaced** by the player-distance
-rule of the small popups (0x50 / ramp / 0xD0).
+ticks, freed when age **> 90**. Draw (0x405420, after the small popups): VM +0x548 (pos.z 0, centred — the 0x1800
+OR is undone by `AnmVm_Init` as above, QUIRK), VM pos.x starts at x0 = pos.x − count·3.5 (unscaled), glyphs
+drawn from the last stored to the first, advance 7·scale.x, VM scale := slot scale (+0x28/+0x2C), sprite
+0x88 + glyph (only the width copied; no age-based sprite change), `Draw2DSnap`, RGB from the colour, alpha
+**replaced** by the player-distance rule of the small popups (0x50 / ramp / 0xD0).
 
 ## 5. Spell-card background
 `Spell_Start` calls `Stage_StartSpellBg` 0x415CE0 (stage +0xB24 = 1, +0xB28 = 0) and sets the stage's spell

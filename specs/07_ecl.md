@@ -149,7 +149,7 @@ sub-ANM VMs disabled; e+0x3330 = 0.
 | 0x2DC4 / 0x2DD0 | f32[3] | interpolation delta / start (or orbit centre) |
 | 0x2DDC / 0x2DE8 | Timer / i32 | movement timer / duration |
 | 0x2DEC–0x2DFA | f32,f32,i16×4 | bullet rank ranges (op 152) |
-| 0x2DFC / 0x2E00 / 0x2E04 | i32 | life / max life / life for HUD |
+| 0x2DFC / 0x2E00 / 0x2E04 | i32 | life / max life / "life for HUD" (written by ops 131/177, spawn and the threshold switch, but **never read**: the boss bar uses life/max, 12 §5.1; VERIFIED RE-Q32, no reader in the code) |
 | 0x2E08 | i32 | score |
 | 0x2E0C | i32 | slot index |
 | 0x2E10 | i32 | time-orb damage accumulator (passed to `Player_DamageAgainst`, 09 §4.5). Starts at the **step** (40, 27 solo human): `Player_Load` writes the template's copy (0x57AD30 = template+0x2E10) and `EnemyMgr_Ctor` copies player+0xE2B2C into it; every spawn copies the template, so a fresh enemy's first hitting bullet spawns an orb at human max gauge. Per enemy, never shared, never reset (VERIFIED runtime, changelog/answers_impl16.md §2) |
@@ -390,8 +390,8 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 75 / 76 | clamp_rect / clamp_off | f x0, y0, x1, y1 / — | flag A bit 19 on/off | 157 / 34 |
 | 77 / 78 | hitbox / shotbox | f w, f h | e+0x2D70 / e+0x2D7C (x, y) | 363 / 33 |
 | 79 | flags_set | i m | bit6 = !(m&1), bit2 = !(m&2), bit3 = !(m&4), bit4 = (m&8), bit28 = (m&16), B bit6 = (m&32) | 16 |
-| 80 | flags_off | i m | for each set bit of m: 1 → no shot collision, 2 → no contact damage (aura colour off), 4 → no life loss, 8 → invisible, 16 → keep off-screen, 32 → cannot die | 702 |
-| 81 | flags_on | i m | inverse of 80 | 535 |
+| 80 | flags_off | i m | for each set bit of m: 1 → no shot collision, 2 → no contact damage **and**, if the enemy has an aura (e+0x53C8 ≠ 0), aura VM flag bit 17 (colour2) := 0, 4 → no life loss, 8 → invisible, 16 → keep off-screen, 32 → cannot die | 702 |
+| 81 | flags_on | i m | inverse of 80; bit 1 sets the aura VM's colour2 flag (bit 17), so the aura shows its `color2_time` colour (e.g. etama scripts 48–50: (255, 92, 92), the "contact hurts" red) — VERIFIED 0x4184B0 case 0x51, RE-Q32 | 535 |
 | 82 | nofire_radius | f r | no-fire radius² = r·r | 76 |
 | 83 | flagB1 | i b | flags B bit 1 = b & 1 | 195 |
 | 86 / 87 | iget_boss / fget_boss | V/W a, i var, i slot | a = value of variable `var` evaluated on boss[slot] (87: only if it exists). If `var` is a literal (param flag bit 1 clear) a := the literal (87: its raw f32 bits) and the slot is not read. **Op 86 has no existence test** (VERIFIED 0x41ACEE, RE-Q31): with an empty boss entry the variable is read through a null enemy pointer (`Ecl_GetIntArg` with e = 0) — an access violation for every enemy/context variable; unreachable (0 uses) | 0 / 2 |
@@ -420,7 +420,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 125 | interrupt_now | i k | pending = k and dispatch immediately (§5.5) | 0 |
 | 126 | set_interrupt | S sub, i k | interrupt_table[k] = sub | 52 |
 | 127 | boss | i slot | slot < 0: unregister this enemy as boss. Else boss[slot] = e, boss flag, e.boss_slot = slot, no-fire radius 0; slot 0 also turns on the HUD boss display | 307 |
-| 128 | effect13 | raw a, b, c, d (4 words) | spawn effect 13 (colour 0xFF6060D0) at pos e+0x2D34 (not the final pos) with axis a,b,c; e+0x53C4 = d; kept in e+0x5360[] and updated every frame (follow pos, grow radius to d, spin). All four words are **copied raw**: the handler never calls `Ecl_GetIntArg`/`Ecl_GetFloatArg`, so the mask bits are ignored, and d lands in the f32 field +0x53C4 as its bit pattern (data: 0x42C00000 = 96.0, 0x43000000 = 128.0) (VERIFIED `Ecl_Run` case 0x80, reader `Enemy_UpdateOrbitEffects` 0x42E010 compares it as f32, RE-Q31) | 210 |
+| 128 | effect13 | raw w0 (unused), a, b, c, d (5 words) | **word 0 is ignored** (the handler reads words 1–4: a, b, c = axis +0x2EC/+0x2F0/+0x2F4, d = e+0x53C4; VERIFIED case 0x80, RE-Q32 — every op 128 in the data has 5 words, e.g. ecldata1 `6, 0.3, 0.7, 0.3, 0x43000000`); spawn effect 13 (colour 0xFF6060D0) at pos e+0x2D34 (not the final pos) with axis a,b,c; e+0x53C4 = d; kept in e+0x5360[] and updated every frame (follow pos, grow radius to d, spin). All four words are **copied raw**: the handler never calls `Ecl_GetIntArg`/`Ecl_GetFloatArg`, so the mask bits are ignored, and d lands in the f32 field +0x53C4 as its bit pattern (data: 0x42C00000 = 96.0, 0x43000000 = 128.0) (VERIFIED `Ecl_Run` case 0x80, reader `Enemy_UpdateOrbitEffects` 0x42E010 compares it as f32, RE-Q31) | 210 |
 | 129 | death_mode | raw byte | flag A bits 20–22 (§10.3); ignored in spell practice when 0x164D0B4 bits 7–8 ≠ 0 | 368 |
 | 130 | death_sub | raw i16 | e+0x2CEE (same guard) | 357 |
 | 131 | set_life | i n | life = max = HUD life = n; boss slot 0: reset 8 HUD markers | 252 |
@@ -450,7 +450,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 155 | fixed_bonus | raw byte | flag A bit 27 := byte & 1; then **always** (whatever the byte) 0x4ECCA8 := 99 999 990 — 0x4ECCA8 is g_Gui +0x2638, the card bonus **cap** (§11.1), not a separate global: in the data op 155 follows op 122 (e.g. ecldata7 sub77), so `Spell_Start` set the cap to the card bonus and op 155 raises it, and time orbs (`Spell_AddBonus`) push the bonus above the declared value (VERIFIED `Ecl_Run` case 0x9B, RE-Q31; fullrun_noclip row 113961: payout 34 904 000 for a 33 000 000 card). +0xFC itself is never set to 99 999 990 | 19 |
 | 156 | flagA7 | raw byte | bit 7; layer byte = 2 | 0 |
 | 157 | trail | raw flags, i n, i a, i b | afterimage trail settings (e+0x534C..0x5352; flags & 8 allocates history) | 22 |
-| 158 | hp_marker | i k, i a, i b, i c | HUD life-bar marker k at a/max, b/max, style c | 244 |
+| 158 | hp_marker | i k, i a, i b, i c | HUD life-bar marker k (12 §5.1): start +0x5C[k] := f32(a)/f32(max), end +0x3C[k] := f32(b)/f32(max), colour +0x7C[k] := c; max = **this** enemy's max life e+0x2E00 at op time (the fraction is stored, not recomputed at draw) — VERIFIED 0x4184B0 case 0x9E, RE-Q32 | 244 |
 | 159 | draw_layer | i n | e+0x332F | 38 |
 | 160 | dmg_timer | i n | damage-reduction timer (§10.2) | 538 |
 | 161 | cancel_radius | f r | bullet manager 0x430D30(final pos, r) (later phase) | 0 |
@@ -463,7 +463,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 169 | rand_away_angle | W a | if (pos.x > player.x and pos.x > 96) or pos.x > 288: a = wrap(R·π/2 + 3π/4) (leftward cone) else a = R·π/2 − π/4 (rightward cone); one Rng_Float | 0 |
 | 170–172 | laser fields | i k, … | laser +0x599 byte / +0x560 / +0x558,+0x55C | 0 |
 | 173 | flagA30 | i b | bit 30 | 118 |
-| 174 | aura | i n | (re)create aura effect 0x20+n at final pos | 38 |
+| 174 | aura | i n | if an aura exists: its effect byte +0x350 := 0 (released, not freed here); new aura `Effect_SpawnHigh`(0x20 + n, final pos e+0x2D88, 1, 0xFFFFFFFF) → e+0x53C8; interrupt (player mode ≠ 0) + 1 (1 human, 2 youkai); if slot index e+0x2E0C is odd, VM +0x14 (z angular velocity) := −(+0x14). Colour2 flag not touched (ops 80/81) — VERIFIED 0x4184B0 case 0xAE, RE-Q32 | 38 |
 | 175 | spawn_disable | i n | global 0xF54E2C (timeline spawns suppressed if ≠ 0) | 5 |
 | 176 | last_spell | (ignored arg) | GameFlags (0x164D0B4): clear bits 7, 8, 13, set bit 7; also bit 13 when (not spell practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); sets flag A bit 30. `Spell_Start` copies bit 7 into spell flag bit 5 (changelog/answers_impl10.md §7, VERIFIED). While bit 13 is set and boss 0 exists, `EnemyMgr_Calc` calls `Player_DamageAgainst` with the whole playfield box (centre (192, 224), size (384, 448), accumulator boss+0x2E10) and discards the damage: all shots count as hits (changelog/answers_impl12.md §5); the call is the first thing inside the bit-10 gate, before the timelines and the slot loop (§10.1 step 1, VERIFIED RE-Q30) | 41 |
 | 177 | set_hud_life | i n | e+0x2E04 | 6 |
@@ -647,8 +647,10 @@ left→idle or right→idle script.
    flag-A-bit-3 reductions; the flag is set even when the reduced damage is 0, so the flash and sfx 0x14/0x25 also fire on
    an invulnerable or damage-reduced enemy; VERIFIED RE-Q27, flag set at 0x42D367 inside `if (d > 0)`, tested at 0x42DB62) → colour2 = (R 0xFF, G 0x60, B 0x80, alpha = current), VM colour2 flag on,
    sfx 0x14 (0x25 when the low-life warning level ≥ 2), counter := 1; else if the counter ≠ 0 → counter −= 1 and
-   flag off (no sfx even if hit); else flag off. Continuous hits therefore flash every 2nd frame; in youkai mode the enemy is drawn with colour2
-   (0x20, 0x20, 0xC0, alpha/2) permanently. Then boss HUD life bar and boss marker, the op 128 effect update (`Enemy_UpdateOrbitEffects` 0x42E010, 13 §2.6b — this is the only "effect follower" in the tail; a boss death in mode 0/1 at step 6 has already released them and set their count e+0x53C0 to 0, so they get **no** update in their release frame), timer 0x2E14 tick
+   flag off (no sfx even if hit); else flag off. Continuous hits therefore flash every 2nd frame. **Before all of
+   this**: if flags A bit 11 (the stored youkai state of a mode-reacting enemy, step 3) is set, the hit-flash logic is
+   skipped entirely (no counter change, no sfx) and colour2 := (R 0x20, G 0x20, B 0xC0, alpha = primary alpha / 2
+   (integer)), colour2 flag on — every frame while bit 11 stays set (VERIFIED 0x42DB0B–0x42DC5B, RE-Q32; golden 2768). Then boss HUD life bar and boss marker, the op 128 effect update (`Enemy_UpdateOrbitEffects` 0x42E010, 13 §2.6b — this is the only "effect follower" in the tail; a boss death in mode 0/1 at step 6 has already released them and set their count e+0x53C0 to 0, so they get **no** update in their release frame), timer 0x2E14 tick
    (unless global 0x160F534), damage-reduction timer decrement, add to draw list (layer e+0x332F) if still alive
    (bit 0) and bit 4 clear: **prepend** (e+0 next := head; head := e). The 4 heads are cleared at the start of
    every `EnemyMgr_Calc` (before the timelines). Paths that skip the link: inactive slot, `Ecl_Run` −1 / screen

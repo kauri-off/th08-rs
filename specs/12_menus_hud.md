@@ -495,10 +495,10 @@ Extra. Positions and fades come from the VMs' scripts (ascii.anm 22–24, times.
 | +0x0C / 0x10 / 0x14 / 0x18 | `front.anm` (slot 10), `stgNtxt.anm` (13), `times.anm` (14), `loadingNN.anm` (12) |
 | +0x1C | boss bar alpha 0–255 (+4/frame while shown, −4 while hiding) |
 | +0x20 | boss "remaining bars" count (ECL op 148) |
-| +0x24 / +0x28 | boss timer seconds / last value shown |
+| +0x24 / +0x28 | boss timer seconds / last value shown. +0x24 is written only by `Enemy_CheckTimeout` 0x42B930 (07 §10.1 step 4, called while timeout ≥ 0): for a boss (flags A bit 1) in boss slot 0 (e+0x3313 = 0) := (timeout e+0x3378 − timer e+0x2E14) / 60 (integer), i.e. with the timer value **before** that frame's step-7 tick; the HUD draws the stored value (VERIFIED RE-Q32, golden 19329: the digit changes one frame after the timer crosses the second) |
 | +0x2C | boss bar requested (byte; ECL) |
-| +0x30 / +0x34 | target life fraction (enemy calc: life/max) / displayed (moves +0.01 up, −0.02 down per frame) |
-| +0x3C[8], +0x5C[8], +0x7C[8] | life-bar markers: end, start, colour (ECL op 158) |
+| +0x30 / +0x34 | target life fraction / displayed (moves +0.01 up, −0.02 down per frame). +0x30 := f32(life e+0x2DFC) / f32(max life e+0x2E00), no clamp, written by `EnemyMgr_Calc` for a boss (flags A bit 1) in slot 0 only while no dialogue runs (`Msg_IsActive` = 0); ECL op 127 with a = 0 sets it to 1.0 (VERIFIED 0x42C660, RE-Q32). The HUD life e+0x2E04 (op 177 etc.) is never read by the bar |
+| +0x3C[8], +0x5C[8], +0x7C[8] | life-bar markers: end, start (f32 fractions of the bar), colour (ECL op 158: word 1 / e+0x2E00 → start +0x5C, word 2 / e+0x2E00 → end +0x3C, word 3 → colour; e = the enemy running the op, its max life at op time; VERIFIED 0x4230E0 / 0x423110, RE-Q32) |
 
 Impl VMs: `front.anm` scripts 0–15 → VMs impl+i·0x2A4 (i = 0..15); `stgNtxt.anm` scripts 0–3 → impl+0x2A44
 (stage title; in spell practice only script 3 with sprite = song id + 3); `ascii.anm` script 3 → impl+0x212C8
@@ -517,6 +517,25 @@ stage-title VM 0 colour (impl+0x2A44 + 0x1F3 = `stgNtxt.anm` script 0) is ≠ 0;
 VM 0 starts its fade-in: demo 1 (stg4atxt script 0 fades in at 130) → clock first drawn at gameplay frame 369;
 demo 0 (stg5txt script 0 fades in at 730) → 969. When the title VM's alpha returns to 0 the clock VM stops where
 it is (stage 4A: last clock draw at frame 547 with alpha 4, exactly at the end of its own fade-out).
+
+### 5.1a `Hud_Load` 0x4390EE — fresh start vs continuing stage (VERIFIED RE-Q32)
+Branch on the fresh-start flag 0x17CE8BC (11 §3):
+- **Continuing stage** (flag 0, i.e. stage 2+ of a run, 11 §7): the impl block is **not** cleared and front.anm,
+  times.anm and loadingNN.anm are **not** reloaded. impl+0x398C / +0x3C30 / +0x3ED4 (script-index shorts of the VMs
+  impl+0x3778, +0x3A1C, +0x3CC0) := −1, impl+0x21810 := 0; then VM impl+0x3CC0 := `capture.anm` script 1 with its
+  +0x214 short := 1, the 168 stage-start transition VMs impl+0x5728 + (r·12 + c)·0x2A4 (r = 0..13, c = 0..11) :=
+  `capture.anm` script 3 + ((r + c) & 1), their I0 (+0x120) := r + 2c, pos (+0x208) := (32c − 0.5 + 16, 32r − 0.5 +
+  16, 0), uv offset (+0x30, +0x34) := (32c/512, 32r/512); impl+0x21810 := 168 (0xA8).
+- **Fresh start**: the whole impl block (0x8C2E dwords) is zeroed; front.anm (slot 10), times.anm (14) and the
+  shot's loadingNN.anm (12) are loaded; the same three shorts := −1 and +0x21810 := 0; VM impl+0x5484 := `ascii.anm`
+  script 0x1A, VM impl+0x22E14 := `ascii.anm` script 0x19 with its difficulty sprite (§5.1 table).
+- Both: night clock hidden; clock VM impl+0x34D4 := `times.anm` script 0, sprite = clock counter; msg file (not in
+  spell practice); stgNtxt.anm (unless the reload-same-stage flag 0x17CE8C4); **only on a fresh start** the 16
+  front VMs impl + i·0x2A4 := front.anm script i (so on a continuing stage VMs 0–15 keep their state: VM 13 has
+  stopped, the panel VMs 0–9 stay fully faded in); HUD +0 := 0, +0x2C := 0, impl+0x2A40 := 0, +0x30 := +0x34 := 0;
+  stage-title VMs (stgNtxt scripts 0–3, or script 3 only in spell practice); impl+0x2181C := −1, +0x22D84 := 0,
+  popup timers +0x22D9C / +0x22DBC / +0x22DDC := 0; all six dirty fields := 2; stage-clear VM impl+0x212C8 :=
+  `ascii.anm` script 3; 0x17CE8CC := 0x10; impl+0x22E0C := 0.
 
 ### 5.1b Per-frame order (`Hud_Calc` 0x4338CA / `Hud_Update` 0x435900) — VERIFIED (RE-Q29)
 `Hud_Calc` does nothing while the freeze byte 0x160F534 (GM+0x2C) is set. Otherwise, in this order:
@@ -594,13 +613,56 @@ bit 4 (Supervisor+0x150 bit 4, never set by the shipped cfg): (480, 40) and (480
 each dirty row: y 88 (dirty bits 0–1), 104 (2–3), 136 (4–5), 152 (6–7), 168 (8–9), 184 (10–11); and **always (512, 464) at
 z 0.48** (bottom-right corner under the fps text).
 **Full repaint condition** (tiles, strips, VMs): cfg+0x38 bit 12, **or tile VM 13 (impl+0x2254) still has a running
-script (ip ≠ NULL)** — front.anm script 13 ends with `stop` at time 200, so the first 200 HUD run frames after `Hud_Load`
-always repaint (golden: 199 consecutive full-repaint frames from the stage start) — or the counter 0x17CE8CC ≠ 0. The
-full repaint draws VMs 0 (snap), 1 (rot), 2–9 (snap) and the difficulty VM, then sets all six dirty fields to 2.
-The original only repaints changed rows (dirty counters / full repaint counter 0x17CE8CC, writers below; the back buffer is kept between frames, see `specs/data/drawlog/FORMAT.md` §4); a reimplementation
-may redraw everything every frame. Full repaint: tile 13 over x = 0 (y 0..464 step 32) and x 416..624 ×
-y 16..464 (step 32); strip 14 at y 0 and 464 for x 0..624 step 128; then VMs 0–9 and the difficulty VM.
-Each frame strip 14 is also drawn along y = 464 for x 32..368 (step 128).
+script (ip ≠ NULL)** — front.anm script 13 ends with `stop` at time 200, so the first 200 HUD run frames after a
+**fresh-start** `Hud_Load` always repaint (golden: 199 consecutive full-repaint frames from the stage-1 start; on a
+continuing stage VM 13 is not restarted, §5.1 `Hud_Load`, so only the counter repaints: 61 frames at the stage-2 start)
+— or the counter 0x17CE8CC ≠ 0. The full repaint draws VMs 0 (snap), 1 (rot), 2–9 (snap) and the difficulty VM
+impl+0x22E14 (snap), then sets all six dirty fields to 2.
+The original only repaints changed rows (dirty counters / full repaint counter 0x17CE8CC, writers below; the back
+buffer is kept between frames, see `specs/data/drawlog/FORMAT.md` §4). A port that wants draw-log parity must follow
+these rules exactly and keep its back buffer (present by copy, clear only what the original clears); a port that does
+not care may redraw everything every frame. Full repaint loop bounds (all `<`, step 32 unless noted, VERIFIED
+0x43625D, RE-Q32): tile 13 at x = 0 for y = 0, 32, … < 464 (0..448); tile 13 for x = 416, 448, … < 624 (416..592) ×
+y = 16, 48, … < 464 (16..432); strip 14 (VM impl+0x24F8) at y 0 and y 464 for x = 0, 128, … < 624 (0..512); then the
+VMs. Each frame strip 14 is also drawn along y = 464 for x = 32, 160, 288 (x < 368).
+
+**Per-frame order of `Hud_DrawPanel`** (VERIFIED 0x43625D, RE-Q32; `dirty(f)` = the 2-bit field f of HUD +0x04 ≠ 0,
+`cfg4` = cfg+0x38 bit 4):
+1. flush; viewport (0, 0, 640, 480);
+2. unless cfg4: blank patches (480, 40), (480, 56), the dirty-row patches, (512, 464) (above);
+3. full repaint (above) if its condition holds — it sets all six fields to 2, so everything below draws;
+4. if dirty(lives): life icons; if dirty(bombs): bomb icons; if (dirty(bombs) or dirty(lives)) and GameFlags bits
+   7–8 = 1 and a spell card is active (g_Gui +0 bit 0): `Draw2DSnap` VM impl+0x5484 (`ascii.anm` script 0x1A);
+5. strip 14 along y = 464 (x 32, 160, 288);
+6. ASCII strings, queued in this order: **score row y 56** (`%.9d` displayed score, then x +117 = 605 continues
+   used), **hiscore row y 40** (`%.9d` hiscore, x 605 hiscore continues), scale reset to 1; then, each only if
+   its field is dirty or cfg4: graze (y 152), point items (y 168: value, "/" at 0.5 × scale, value), time (y 184,
+   whole row 0xFFFFF0C0 when time ≥ threshold, colour reset to white after);
+7. flush; if dirty(power) or cfg4: the gauge quad **only when power > 0**, then the power text ("MAX" at ≥ 128,
+   else `%d`);
+8. every non-zero dirty field −1 (order lives, power, bombs, graze, point, time).
+So the score/hiscore rows are queued every frame, the other rows only for 2 frames after a change (a field set to 2
+is drawn in two consecutive frames = both back buffers).
+
+**Dirty-field writers** (HUD +0x04 = 0x160F42C; "→ 2" = field := 2; VERIFIED RE-Q32, every direct reference in
+globals_xref plus `Hud_Load`):
+| writer | fields |
+|---|---|
+| `Hud_Load` (every stage) | all six → 2 |
+| `Hud_DrawPanel` full repaint | all six → 2 |
+| `Spell_Start` 0x4152A0, `Spell_End` 0x4161B0 | +0x04 \|= 0xF (lives and bombs fields := 3) |
+| `GameMgr_Extend` 0x439B29 | lives → 2 (life added), else bombs → 2 (bomb added) |
+| msg op 9 (10 §9, stages 1–5, shots 3/10/11 below 3 bombs) | bombs → 2 |
+| `ItemMgr_Calc` bomb item (bombs < 8 only) | bombs → 2 |
+| `ItemMgr_Calc` full-power item (always) | power → 2 |
+| `Item_CollectPowerSmall` / `Item_CollectPowerBig` (only when power < 128) | power → 2 |
+| `Item_CollectPoint` 0x440E40 | point → 2 |
+| `Item_CollectTimeOrb` 0x4412B0 | time → 2 |
+| `Player_OnGraze` 0x44A930 | graze → 2 (also while bombing, when the graze count is not raised) |
+| `Player_UpdateBomb` bomb start | bombs → 2 |
+| `Player_UpdateBomb` while a bomb runs (+0xFDC ≠ 0): bomb timer +0xFF4 changed (current ≠ previous) | point → 2 (QUIRK: the point row, every bomb frame) |
+| `Player_DyingUpdate` respawn with lives > 0 | lives → 2, bombs → 2 |
+| `Player_DyingUpdate` real death (deathbomb window over) | time → 2, power → 2 |
 
 ASCII text (`ascii.anm` glyph = sprite (char − 1), advance 13 px × scale, '\n' = +16 px):
 
@@ -627,7 +689,7 @@ cleared every frame), only relevant for draw-log parity.
   `Hud_ShowSpellBonus`, `Frame_Present` after a failed Present + device reset; 
 - 3: WinMain after a device reset; 
 - 8: `ContinueMenu_Update`; `Hud_Calc` raises it to 8 while the Skip key (input 0x100) is held; 
-- 0x10: `Hud_Load`; 0x3C: `GameManager_StageStart`; 0x1BA: `Msg_Run` (one dialogue op); 
+- 0x10: `Hud_Load`; 0x3C: `GameManager_StageStart` (after the loader wait, with `_g_GmLoading` := 0); 0x1BA: `Msg_Run` op 14 (10 §5.1, the white flash); 
 - 0: `Supervisor_Init`.
 A port that redraws the whole screen every frame can ignore it.
 
@@ -638,12 +700,15 @@ clock impl+0x2156C (`Draw2DRot`); while impl+0x398C ≥ 0 the spell-name VMs (im
 stage-start transition VMs while impl+0x21810 ≠ 0. **Guarded** (no dialogue script, impl+0x2181C < 0, and bar requested
 +0x2C + bar state impl+0x2A40 ≠ 0): life bar, markers, "Enemy" label VM impl+0x1FB0, remaining-bars gauge, timer, and the
 chain-count popup below. **Always, last**: the stage-clear VM impl+0x212C8 (`Draw2DSnap`).
+- All bar quads (life bar, markers, remaining-bars gauge) are `Screen_FillRect3` 0x45B490 untextured quads (z 0, rhw 1,
+  vertex 0–1 = first colour, 2–3 = second) at the **exact** coordinates below — no −0.5 pixel shift and no snapping
+  (golden: `Q 64 19 …`, VERIFIED RE-Q32).
 - Life bar quad x 64 … 64 + 320·displayed_fraction, y 19..23, colour alpha|0xFFFFFF (top) / alpha|0x202060.
 - Markers k (8 slots, enabled when end ≠ 0 and start < displayed): x 64 + 320·start … 64 + 320·min(end,
   displayed), colour alpha|colour, bottom alpha|((colour >> 2) & 0x3F3F3F).
 - "Enemy" label VM 12 at (80, 26).
 - Remaining-bars gauge: `n = +0x20` segments between x 35 and 61 (segment i: 35 + 26·i/n … 35 + 26·(i+1)/n −
-  gap, gap 2 if n < 6 else 1), y 19..23, colour alpha|(0xFFFFFF − i·255/9).
+  gap, gap 2 if n < 6 else 1), y 19..23, top colour alpha|(0xFFFFFF − i·255/9), bottom alpha|0x202020 (VERIFIED RE-Q32).
 - Timer `%.2d` (≤ 99) at (384, 16) coloured by value: ≥ 20 0xA0D0FF, ≥ 10 0xA080FF, ≥ 5 0xE080C0, < 5 0xFF4040
   (RGB, alpha = bar alpha); when the value changes: < 3 sfx 0x26 `se_timeout2`, < 10 sfx 0x1D `se_timeout`.
 - Every frame when not paused, no continue menu, bullets not frozen (bit 10) and boss slot 0 (0xF54CC0) ≠ 0:

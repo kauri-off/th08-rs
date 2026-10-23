@@ -104,7 +104,18 @@ C <t|z|tz> <colour> [<x>,<y>,<w>,<h> ...]
   rectangle list.
 
 Records are written in submission order. The original batches sprites with equal state. The log still lists the
-quads one by one in draw order, so batching is invisible.
+quads one by one in draw order, so batching is invisible — **except for one probe limit** (VERIFIED RE-Q32,
+`re/probe/drawlog.inc` `dl_draw`): one draw call is logged with at most **4096 vertices**. A batch of more than 682
+sprite quads (`AnmManager_Flush` 0x462E40 submits each batch as one triangle-list `DrawPrimitiveUP`, 6 vertices per
+quad, 05 §9) appears in the reference logs as its first 682 quads followed by `P list 4` (the 4 leftover vertices);
+the rest of the batch is drawn by the game but missing from the log. It happens with mass score popups (e.g. a
+`BulletMgr_CancelBonus` of ~200 bullets: the reference never shows more than 683 ASCII popup quads, golden 8060,
+17852) and big bullet batches. A comparator should count such frames as "reference truncated", or a writer can
+emulate it by splitting its sprite stream at the original's flush points (texture change, render-state change,
+explicit flushes) and cutting each batch at 682 quads.
+In the reference, untextured draws (`c=col a=col`) are preceded by whatever `T` texture is still bound (the game
+never unbinds); the tools group them under `-` from their `-` UVs, so the `T` label of an untextured draw does not
+matter.
 
 ## 4. Persistence (important when rendering or comparing)
 

@@ -420,7 +420,7 @@ sets flags bits 5–6 = 2 (stages 1–5); stages 6A/6B/Extra are triggered by ms
 | 0x0C | i32 | graze total (cap 999 999) | VERIFIED |
 | 0x10 | u32 | score-roll step | VERIFIED |
 | 0x14 | u32 | high score | VERIFIED |
-| 0x18 | u8 | continues used when the high score was set | VERIFIED |
+| 0x18 | u8 | continues shown next to the high score: set by `GameMgr_LoadScoreData` (`ScoreDat_GetHiscore` param 4 = continues byte +0x26 of the top HSCR entry of (shot, difficulty), 0 when the file has none; also in practice, where only +0x14 is replaced; VERIFIED 0x43BBE1 / 0x45A950, RE-Q32), then by the score roll when the displayed score passes the hiscore (§2 step 9) | VERIFIED |
 | 0x1C | i32 | spell cards captured | VERIFIED (+1 per capture) |
 | 0x20 | i16 | gauge at stage start | VERIFIED |
 | 0x22 | i16 | human/youkai gauge (09) | VERIFIED |

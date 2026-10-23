@@ -465,8 +465,13 @@ two collects = 4 + 4 + 4 = 12 draws), if no
   timer 0x18B89D4 is 0: gauge += −111 (human) / +111 (youkai, player byte +3).
 
 ### 8.6 Item draw
-At pos + (32, 16), z 0.15. If pos.y < −8: drawn at y = 8 + 16 with the arrow sprite (0xB6 + type), alpha =
-max(64, 255 − trunc((8 − y)·255/128)); else normal sprite (0xAC + type), alpha 255.
+At pos + (32, 16), z 0.15, `Draw2DRot`, in list order (VERIFIED `ItemMgr_Draw` 0x4415A0, RE-Q32). Item byte +0x2D6 =
+"normal sprite shown" (set to 1 with colour 0xFFFFFFFF and z-write off by `ItemMgr_Spawn`). If pos.y < −8: drawn at
+y = 8 + 16; if +0x2D6 = 1 → arrow sprite (0xB6 + type), +0x2D6 := 0, z-write off; then **every** such frame the
+alpha byte := max(64, 255 − trunc((8 − y)·255/128)) (RGB kept). Else (y ≥ −8): only if +0x2D6 = 0 → normal sprite
+(0xAC + type), +0x2D6 := 1, colour := 0xFFFFFFFF, z-write off. So an on-screen item is **not** reset each frame:
+its ANM script's colour/alpha animation shows (time orb script 68: `color_time` 20 → (128, 128, 128) and
+`alpha_time` 20 → 192 from t = 30), and returning from above the screen restores colour 0xFFFFFFFF once.
 
 ## 9. Open points
 - Popup function 0x403200 / 0x403330 colour semantics and the effect manager are not specified here.

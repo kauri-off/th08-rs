@@ -294,7 +294,13 @@ viewport, and sets fog start/end to 1000/2000.
 6. ZFUNC = LESSEQUAL; fog colour/near/far; fog on.
 7. Unless +0xB24 ≥ 2 or the HUD condition: `Stage_DrawLayer(0)`, `Stage_DrawLayer(1)`.
 
-`Stage_DrawHigh` (prio 7): layers 2 and 3 (same condition); fog off; effects draw; ZFUNC = ALWAYS; extra
+`Stage_DrawHigh` (prio 7; VERIFIED 0x409640, RE-Q32): **only while +0xB24 < 2 and the HUD condition is false**
+(`FUN_00437d87`: impl+0x398C ≥ 0 and VM impl+0x3778 has flag bit 14 "waiting for interrupt", 12 §5.1a): layers 2
+and 3, fog off, the list-B background effects (`EffectMgr_DrawBackground`, 13 §2.4), and while +0xB24 = 1 a
+fade rectangle: flush, ZFUNC = ALWAYS, fog off, `Screen_FillRect` 0x45B1E0 over (32, 16)–(416, 464) with colour
+(+0xB28·255/60) << 24 (black, alpha rising over the 60 spell-start frames; untextured, z 0, z-write off). So once
++0xB24 = 2 the background particles are no longer drawn either (golden: no type-51/63 particles during spell
+cards). Then always: flush, ZFUNC = ALWAYS, fog off; extra
 spell-background VMs when +0xB24 > 0; disable "stage camera" render path; default 2D camera; viewport; at the
 end: if the "bomb drew last frame" flag +0x646C (0x4EA49C) is 0 → global tint off (`AnmMgr_TintOff` 0x40BAB0:
 AnmManager+4 := 0, colour 0x80808080); then +0x646C := 0 and +0x647C := 0.
