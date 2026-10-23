@@ -553,8 +553,10 @@ impl Enemy {
                 self.orbit_angle = anmvm::wrap_add(self.orbit_angle, gs * self.orbit_av);
                 self.radius += gs * self.radius_vel;
                 let c = self.interp_start;
-                self.vel[0] = c[0] + self.orbit_angle.cos() * self.radius - self.pos[0];
-                self.vel[1] = c[1] + self.orbit_angle.sin() * self.radius - self.pos[1];
+                // Vec3_FromPolar (05 §10): cos/sin·r in double, one f32 rounding.
+                let o = crate::bullet::polar(self.orbit_angle, self.radius);
+                self.vel[0] = c[0] + o[0] - self.pos[0];
+                self.vel[1] = c[1] + o[1] - self.pos[1];
                 self.angle = self.vel[1].atan2(self.vel[0]);
                 self.tick_duration(gs);
             }

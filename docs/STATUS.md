@@ -610,6 +610,9 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl87 (RE-Q31 fix A): enemy move mode 3 (07 §10 movement table) takes the orbit offset from `Vec3_FromPolar`
+  (05 §10, `bullet::polar`: cos / sin·r in double, one f32 rounding). Golden 25634, fullrun_noclip 90011 → 98806
+  (`MIN_LEADING` raised), selftest1 1922, demos in sync. No questions.
 - impl86 (RE-Q31, audit D.1, D.4): ECL op 128 (07 §5, 13 §2.6b) copies a, b, c, d raw (mask ignored, d = f32 bits
   into e+0x53C4) and spawns / centres effect 13 at the base pos e+0x2D34. `task::add` (00 §3) runs on-register
   first, then links the node whatever it returned (no unlink on Err). Op 88 on the caller from a thread calls the sub
