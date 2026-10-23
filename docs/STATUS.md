@@ -610,6 +610,13 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl85 (audit 105, D.2, D.3): `kill_non_bosses` (threshold / timeout kill, 07 §10.2, §10.6) jumps to the death
+  sub with `Ecl_SetSub` only (threads, thresholds, timeout, descriptor kept; death sub consumed). ECL ops 86 / 87
+  (07 §7) call one getter, so 10032–10035 / 10082 draw once; op 87 tests the boss entry, op 86 does not (empty entry
+  skipped, SPEC-GAP). `EnemyManager::update` runs step 6's death before the step-7 tail (07 §10.1, §10.3): the death
+  bonus seconds read the un-ticked timer and a mode-0 death skips the draw-list link. Unit tests; golden 25634,
+  fullrun_noclip 90009, selftest1 1922, demos in sync. SPEC-GAP 106 → 107 (src). Questions:
+  `docs/briefs/IMPL85_QUESTIONS.md`.
 - impl84 (audit 96, 101, 102): ECL ops 90–92 (07 §10.5) no longer write the mode bits e+0x3330, so the spawn-time
   run sees 0 (human- and youkai-masked time-0 ops both run; `Enemy_ReactPlayerMode` sets them at the first step 3).
   Op 92 writes the follow offset := parent pos, final pos and flag A bit 9 after the spawn-time run (bit 9 after the

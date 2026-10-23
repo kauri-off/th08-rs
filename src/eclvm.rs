@@ -1764,26 +1764,23 @@ impl Exec<'_> {
                 let b = self.ai(t, ins, 0);
                 self.e.set_flag_b(1 << 1, b & 1 != 0);
             }
-            // Variable `var` evaluated on boss[slot]'s main context.
+            // Variable `var` evaluated once, with the op's own getter, on boss[slot]'s main context (07 §7):
+            // 87 only if the boss exists; 86 has no such test.
             86 | 87 => {
                 let (var, slot) = (self.ai(t, ins, 1), self.ai(t, ins, 2));
+                // SPEC-GAP: op 86 on an empty boss entry (no existence test; unused in data) — skipped.
                 if let Some(b) = self.m.boss(slot) {
-                    let (v_i, v_f) = if b == self.idx {
-                        (
-                            var_i(self.m, self.anm, self.e, &t.ctx, var),
-                            var_f(self.m, self.anm, self.e, &t.ctx, var as f32),
-                        )
-                    } else {
-                        let other = self.m.enemies[b].clone();
-                        (
-                            var_i(self.m, self.anm, &other, &other.main.ctx, var),
-                            var_f(self.m, self.anm, &other, &other.main.ctx, var as f32),
-                        )
+                    let other = (b != self.idx).then(|| self.m.enemies[b].clone());
+                    let (e, ctx) = match &other {
+                        Some(o) => (&**o, &o.main.ctx),
+                        None => (&*self.e, &t.ctx),
                     };
                     if op == 86 {
-                        self.set_i(t, ins, 0, v_i);
+                        let v = var_i(self.m, self.anm, e, ctx, var);
+                        self.set_i(t, ins, 0, v);
                     } else {
-                        self.set_f(t, ins, 0, v_f);
+                        let v = var_f(self.m, self.anm, e, ctx, var as f32);
+                        self.set_f(t, ins, 0, v);
                     }
                 }
             }
@@ -2535,6 +2532,26 @@ mod tests {
         let mut v = ins(time, op, args);
         v[10..12].copy_from_slice(&mask.to_le_bytes());
         v
+    }
+
+    // 07 §7 ops 86 / 87: one getter call (one RNG draw for 10082 / 10032), on self or another boss.
+    #[test]
+    fn boss_var_single_getter() {
+        let op87 = ins_v(0, 87, 1, &[10016.0f32.to_bits() as i32, 10082, 0]);
+        let op86 = ins_v(0, 86, 1, &[10000, 10032, 1]);
+        let (mut anm, mut m) = manager(&[&[op87, op86]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        spawn(&mut m, 1, 0, -1, 0);
+        m.bosses = [Some(0), Some(1), None, None];
+        let mut rng = anm.rng.clone();
+        let (f, i) = (
+            rng.next_f32() * 2.0 * PI - PI,
+            (rng.next_u32() & 0x7FFF_FFFF) as i32,
+        );
+        ecl_run(&mut m, &mut anm, 0);
+        let ctx = &m.enemies[0].main.ctx;
+        assert_eq!((ctx.flt(V_FLT0), ctx.vars[V_INT0] as i32), (f, i));
+        assert_eq!(anm.rng.state, rng.state);
     }
 
     fn child_op(op: i16, sub: i32) -> Vec<u8> {

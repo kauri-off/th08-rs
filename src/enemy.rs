@@ -1864,16 +1864,19 @@ impl EnemyManager {
         }
     }
 
-    // Every alive non-boss enemy: life 0 and a jump to its death sub (07 §10.2). No self test: a non-boss
-    // switching enemy also dies, its new phase sub replaced by its death sub.
+    // Every alive non-boss enemy: life 0 and an `Ecl_SetSub` jump to its death sub, consumed (07 §10.2, §10.6:
+    // ip/clock/wait only). No self test: a non-boss switching enemy also dies, its new sub replaced by the death sub.
     fn kill_non_bosses(&mut self) {
         for j in 0..self.enemies.len() {
-            let e = &self.enemies[j];
+            let e = &mut self.enemies[j];
             if !e.alive() || e.flags & A_BOSS != 0 {
                 continue;
             }
-            self.enemies[j].life = 0;
-            self.jump_to_death_sub(j);
+            e.life = 0;
+            if e.death_sub >= 0 {
+                let sub = std::mem::replace(&mut e.death_sub, -1);
+                self.jump_main(j, sub);
+            }
         }
     }
 
@@ -2208,7 +2211,6 @@ impl EnemyManager {
         } else if !self.update_body(idx, anm) {
             return;
         }
-        self.update_tail(idx, gs);
         // Death latch cleared when life > 0, only on frames the script block ran (07 §10.3).
         if !held {
             let e = &mut self.enemies[idx];
@@ -2217,6 +2219,8 @@ impl EnemyManager {
             }
             self.death(idx, anm);
         }
+        // Step 7 after step 6's death: the death bonus seconds read the un-ticked timer (07 §10.1, §10.3).
+        self.update_tail(idx, gs);
     }
 
     // 07 §10.1 steps 3–6; false when the enemy was freed (op 1 delete, off screen).
@@ -2311,8 +2315,8 @@ impl EnemyManager {
         if e.dmg_timer.cur > 0 {
             e.dmg_timer.dec(gs);
         }
-        // Linked before the death test; a mode-0 death clears alive, and the draw skips it (07 §10.1 step 7).
-        if e.flags & A_HIDDEN == 0 {
+        // Linked only if still alive: a mode-0 death this frame skips the link (07 §10.1 step 7).
+        if e.alive() && e.flags & A_HIDDEN == 0 {
             self.draw_lists[e.layer.min(3) as usize].push(idx);
         }
     }
@@ -2679,6 +2683,50 @@ mod tests {
             assert_eq!(e.flags_b & B_DEATH_LATCH, 0);
             assert_eq!(m.draw_lists[0].pop(), Some(0));
         }
+    }
+
+    // 07 §10.2 / §10.6: threshold-kill victims jump to their death sub with `Ecl_SetSub` only; threads, thresholds
+    // and timeout are kept, the death sub is consumed.
+    #[test]
+    fn kill_non_bosses_sets_sub_only() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        m.ecl.subs = vec![0, 40];
+        for k in 0..2 {
+            let e = &mut m.enemies[k];
+            (e.flags, e.life, e.death_sub) = (A_ALIVE, 100, 1);
+            (e.thresholds, e.timeout) = ([50, -1, -1, -1], 300);
+            e.threads[0] = Some(Box::default());
+            e.main.ctx.clock.set(7);
+        }
+        m.enemies[1].flags |= A_BOSS;
+        m.kill_non_bosses();
+        let e = &m.enemies[0];
+        assert_eq!(
+            (e.life, e.death_sub, e.main.ctx.ip, e.main.ctx.sub),
+            (0, -1, 40, 1)
+        );
+        assert_eq!(e.main.ctx.clock.cur, 0);
+        assert!(e.threads[0].is_some());
+        assert_eq!((e.thresholds[0], e.timeout), (50, 300));
+        assert_eq!((m.enemies[1].life, m.enemies[1].death_sub), (100, 1));
+    }
+
+    // 07 §10.1 / §10.3: death (step 6) reads the timer before step 7 ticks it; a mode-0 death skips the link.
+    #[test]
+    fn death_before_timer_tick() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        let e = &mut m.enemies[0];
+        (e.flags, e.life, e.timeout) = (A_ALIVE | A_ON_SCREEN, 0, 600);
+        (e.vm.has_sprite, e.vm.sprite_w, e.vm.sprite_h) = (true, 32.0, 32.0);
+        e.pos = [100.0, 100.0, 0.0];
+        e.boss_timer.set(60);
+        m.update(0, &mut anm);
+        let e = &m.enemies[0];
+        assert!(!e.alive());
+        assert_eq!((e.bonus_seconds, e.boss_timer.cur), (9, 61));
+        assert!(m.draw_lists[0].is_empty());
     }
 
     // 07 §7 op 95: popups 2000, then +30 each, at the final pos and every 6th trail entry; every victim unlinked.
