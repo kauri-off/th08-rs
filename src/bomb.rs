@@ -415,9 +415,15 @@ impl Player {
         inp: &input::Input,
         items: &mut Option<&mut ItemManager>,
     ) {
-        // +0xE2A6C decrement at the top, skipped on a forced-start call (09 §1.1).
-        let forced = self.forced_bomb != 0 && self.deathbomb == 1;
-        if !forced && self.bomb_cooldown != 0 {
+        // 09 §1.1: a forced-start call (+6 set, +0xE2A68 == 1) jumps straight to the bomb start, past the
+        // +0xE2A6C decrement, the bombing branch and the start tests.
+        if self.forced_bomb != 0 && self.deathbomb == 1 {
+            self.start_bomb(anm, true);
+            self.bomb_calc(anm, items);
+            self.bomb.timer.tick(anm.speed);
+            return;
+        }
+        if self.bomb_cooldown != 0 {
             self.bomb_cooldown -= 1;
         }
         if !self.bombing {
@@ -436,11 +442,11 @@ impl Player {
                 pressed = false;
             }
             // State 1 test is redundant: the counter is 0 throughout state 1 (09 §6.3).
-            if !(forced || pressed) || matches!(self.state, 1) {
+            if !pressed || matches!(self.state, 1) {
                 return;
             }
             // The bomb calc fn runs immediately on the start frame; that branch returns before the gauge add.
-            self.start_bomb(anm, forced);
+            self.start_bomb(anm, false);
             self.bomb_calc(anm, items);
             self.bomb.timer.tick(anm.speed);
             return;
@@ -1681,6 +1687,13 @@ mod tests {
         p.deathbomb = 1;
         p.update_bomb(&mut anm, &press(0), &mut None);
         assert!(p.bombing && p.bomb_cooldown == 16);
+        // Forced start also bypasses the bombing branch: the running bomb restarts at timer 0.
+        p.update_bomb(&mut anm, &press(0), &mut None);
+        assert!(p.bomb.timer.cur > 0 && p.bomb_cooldown == 15);
+        (p.forced_bomb, p.deathbomb) = (1, 1);
+        p.update_bomb(&mut anm, &press(0), &mut None);
+        assert!(p.bombing && p.forced_bomb == 0 && p.bomb_cooldown == 15);
+        assert_eq!(p.bomb.timer.cur, 1);
     }
 
     // 09 §4.5: circle = point test on the enemy centre, `≤ r²`; rectangles overlap the box inclusively.

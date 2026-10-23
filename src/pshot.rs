@@ -814,15 +814,19 @@ impl Player {
             return 0;
         }
         *by_bomb = false;
-        let half = [size[0] / 2.0, size[1] / 2.0];
+        let (emin, emax) = box_edges(pos, size);
         let mut shot = 0;
         for i in 0..MAX_BULLETS {
             let b = &self.bullets[i];
             if b.state == 0 || !(b.state == 1 || b.kind == 3) {
                 continue;
             }
-            if (b.pos[0] - pos[0]).abs() > half[0] + b.size[0] / 2.0
-                || (b.pos[1] - pos[1]).abs() > half[1] + b.size[1] / 2.0
+            // 09 §4.5: inclusive f32 edge tests (y first), not |d| ≤ sum of halves.
+            let (bmin, bmax) = box_edges(b.pos, b.size);
+            if !(bmin[1] <= emax[1]
+                && bmin[0] <= emax[0]
+                && emin[1] <= bmax[1]
+                && emin[0] <= bmax[0])
             {
                 continue;
             }
@@ -951,6 +955,14 @@ impl Player {
         }
         b.vm.color = colour;
     }
+}
+
+// Box edges helper 0x451CE0 (09 §4.5): min = c − s·0.5, max = s·0.5 + c, in f32 (operand order kept).
+fn box_edges(c: [f32; 3], s: [f32; 2]) -> ([f32; 2], [f32; 2]) {
+    (
+        [c[0] - s[0] * 0.5, c[1] - s[1] * 0.5],
+        [s[0] * 0.5 + c[0], s[1] * 0.5 + c[1]],
+    )
 }
 
 #[cfg(test)]
@@ -1114,6 +1126,37 @@ mod tests {
                 b.vel,
                 [polar(e.angle, 8.0)[0] / 8.0, polar(e.angle, 8.0)[1] / 8.0]
             );
+        }
+    }
+
+    // 09 §4.5: f32 edges, inclusive. Bullet x 3.688634 w 24 vs enemy x 23.688635 w 16: the edges
+    // miss by rounding although |d| ≤ sum of halves; exactly touching edges hit.
+    #[test]
+    fn damage_uses_f32_box_edges() {
+        let bx = 3.688_634_f32;
+        for (ex, hit) in [(23.688_635_f32, false), (bx + 20.0, true)] {
+            let mut anm = AnmManager::default();
+            hit_scripts(&mut anm, false);
+            let mut p = Player::default();
+            let e = ShotEntry {
+                size: [24.0, 8.0],
+                damage: 10,
+                kind: 1,
+                ..ShotEntry::default()
+            };
+            p.spawn_bullet(&mut anm, 0, &e);
+            p.bullets[0].pos = [bx, 100.0, 0.0];
+            p.bullets[0].size = [24.0, 8.0];
+            let (mut acc, mut by_bomb) = (0, false);
+            let dmg = p.damage_against(
+                &mut anm,
+                None,
+                [ex, 100.0, 0.0],
+                [16.0, 16.0],
+                &mut acc,
+                &mut by_bomb,
+            );
+            assert_eq!(dmg, if hit { 10 } else { 0 }, "enemy x {ex}");
         }
     }
 }

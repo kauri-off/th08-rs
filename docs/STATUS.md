@@ -610,6 +610,10 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl82 (audit 84, 97, 98): player shot vs enemy uses f32 box edges (helper 0x451CE0, min = c − s·0.5,
+  max = s·0.5 + c, inclusive; 09 §4.5). The quitting frame runs calc + Sound_Update only, no draw and no Present
+  (`Ctx::run_frame`, app loop; 15 §2.2, 00 §2). A forced bomb start jumps past the +0xE2A6C decrement, the bombing
+  branch and the start tests (09 §1.1). Unit tests; traces not run (cloud). SPEC-GAP 112 → 112 (src). No questions.
 - impl81 (audit 87, 88, 92, 95, 99, 100, cloud, 2026-10-23): `EnemyMgr_Calc` (07 §10.1 step 1) runs the op-176
   whole-playfield box, then `EnemyMgr_TimeRank`, then the list resets and timelines. Held enemies (step 2: flags B
   bit 7, or A bit 30 while bombing / player state ≠ 0) skip react, ECL, movement, screen check, VMs, collision and

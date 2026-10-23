@@ -228,17 +228,16 @@ impl ApplicationHandler<UserEvent> for App {
                 let frozen =
                     cfg!(target_arch = "wasm32") && self.shot.is_some_and(|f| r.ctx.frame >= f);
                 // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
-                let mut quit = false;
                 for _ in 0..self.turbo.max(1) {
                     if self.shot.is_some_and(|f| r.ctx.frame >= f) && self.turbo > 0 {
                         break;
                     }
                     match if frozen { Flow::Continue } else { r.ctx.calc() } {
                         Flow::Continue => {}
-                        // Frame_Run still draws and presents the quitting frame (15 §2.2).
+                        // Frame_Run returns after the calc chain and Sound_Update: no draw, no Present (15 §2.2, 00 §2).
                         Flow::Quit => {
-                            quit = true;
-                            break;
+                            r.ctx.exit_save();
+                            return el.exit();
                         }
                         Flow::Error => {
                             log::error!("calc chain requested error exit");
@@ -275,10 +274,6 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
                 r.ctx.gfx.present();
-                if quit {
-                    r.ctx.exit_save();
-                    return el.exit();
-                }
                 r.window.request_redraw();
             }
             _ => {}

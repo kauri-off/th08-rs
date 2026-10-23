@@ -1466,9 +1466,7 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
 
 // One calc + draw + present; returns the logged frame text.
 pub fn step(ctx: &mut crate::game::Ctx) -> Option<(crate::task::Flow, Vec<String>)> {
-    let f = ctx.calc();
-    ctx.draw();
-    ctx.gfx.present();
+    let f = ctx.run_frame();
     let frames = ctx.drawlog.as_mut().map(|w| w.take_frames())?;
     Some((f, frames))
 }

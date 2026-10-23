@@ -266,7 +266,7 @@ impl Supervisor {
         }
         g.previous = cur;
         if req < 0 {
-            // The score.dat flush comes after this frame's draw and Present (`Ctx::exit_save`, 15 §2.2).
+            // The quitting frame is not drawn or presented; the score.dat flush follows it (`Ctx::exit_save`, 15 §2.2).
             // SPEC-GAP: 6 → −1 also finishes the replay in 11 §7; the port does not.
             return Ok(Some(Ret::Quit));
         }

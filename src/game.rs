@@ -167,6 +167,17 @@ impl Ctx {
         }
     }
 
+    // One Frame_Run (00 §2): calc, then draw and Present only if the calc chain did not return quit/error (no
+    // draw and no Present on the quitting frame, 15 §2.2).
+    pub fn run_frame(&mut self) -> Flow {
+        let f = self.calc();
+        if f == Flow::Continue {
+            self.draw();
+            self.gfx.present();
+        }
+        f
+    }
+
     // Frame_Run second half (00 §2); Frame_Run only checks the calc runner's result. The draw chain runs when the
     // counter reaches cfg +0x23 (so 0 and 1 both draw every frame); Present follows either way.
     pub fn draw(&mut self) {
@@ -200,7 +211,7 @@ impl Ctx {
         }
     }
 
-    // WinMain exit 0x441B95 (15 §2.2): once the main loop has left (after the last frame's calc, draw and Present),
+    // WinMain exit 0x441B95 (15 §2.2): once the main loop has left (after the last frame's calc; no draw, no Present),
     // Result_Register(2) and the chain teardown flush score.dat (2 RNG draws, 11 §1.5); th08.cfg is written again at
     // WinMain exit (15 §1.2).
     pub fn exit_save(&mut self) {

@@ -407,12 +407,7 @@ mod native {
                         frames.into_iter().for_each(|f| out(f));
                         flow
                     }
-                    None => {
-                        let f = ctx.calc();
-                        ctx.draw();
-                        ctx.gfx.present();
-                        f
-                    }
+                    None => ctx.run_frame(),
                 };
                 crate::rng::TRACE.set(false);
                 if tr {
