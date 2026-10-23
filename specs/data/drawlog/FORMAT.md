@@ -60,7 +60,7 @@ attributed is written `?<hex> 0 0`. No such label appears in the reference logs.
 | `zwrite` | 1/0: depth is written when depth testing is enabled (ztest ≠ off) |
 | `c` | colour combine: `tex*col` (texture × vertex colour), `tex`, `col`, `tex+col`, `off` |
 | `a` | alpha combine, same names |
-| `fog` | present only when vertex fog is on: `<AARRGGBB colour>,<start>,<end>`. Linear stage fog (06 §8, VERIFIED): per **pixel** f = clamp((end − d)/(end − start), 0, 1), rgb = f·rgb + (1−f)·fog rgb, alpha unchanged. d = the pixel's eye-space depth: interpolate d perspective-correctly after clipping to 0 ≤ z ≤ w, and clamp after interpolating, not per vertex. Only stage quads carry fog. For them d = 1/rhw = 30·1800/(1800 − 1770·z). Use the z form when reading a log: rhw is rounded to 4 decimals, which is too coarse (±4 % of d) |
+| `fog` | present only when vertex fog is on: `<AARRGGBB colour>,<start>,<end>`; start/end are printed like C `%g` (6 significant digits, e.g. `294.583`), so a writer must use the same precision or the state line differs (RE-Q32). Linear stage fog (06 §8, VERIFIED): per **pixel** f = clamp((end − d)/(end − start), 0, 1), rgb = f·rgb + (1−f)·fog rgb, alpha unchanged. d = the pixel's eye-space depth: interpolate d perspective-correctly after clipping to 0 ≤ z ≤ w, and clamp after interpolating, not per vertex. Only stage quads carry fog. For them d = 1/rhw = 30·1800/(1800 − 1770·z). Use the z form when reading a log: rhw is rounded to 4 decimals, which is too coarse (±4 % of d) |
 
 `col` is the effective vertex colour after the game's colour path. The original has two paths (05 §12.4).
 One puts the colour in each vertex. The other uses one constant "texture factor" colour for the whole draw.

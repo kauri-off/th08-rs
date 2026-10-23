@@ -259,7 +259,15 @@ after all contexts: Enemy_UpdateMoveMode (§8), Enemy_AutoFireAndDirAnim (§9.3)
   vars …) and continue.
 - **thread (op 135 slot, sub)**: free thread slot; if sub ≥ 0 create it (copy of the current context's 30
   var dwords, clock 0).
-- Op 88 calls a sub *in another enemy's* (boss slot) main context the same way.
+- Op 88 calls a sub *in another enemy's* (boss slot) context through the same `Ecl_CallSub`, with one difference
+  (VERIFIED call sites 0x4197EF / 0x41AE91, RE-Q32): `Ecl_CallSub` gets the "current instruction" in EDX (Ghidra
+  hides it). Op 52 passes the running instruction, so ip := the caller's next instruction. **Op 88 passes the
+  target's own stored ip** `*(target e+0x2CA0)` (its current context, 0x2CA0 row of §4 — the main context outside
+  its `Ecl_Run`), so the target context's ip := that ip + the size of the instruction stored there: the instruction
+  the target would execute next is **skipped** when the call returns (the same quirk as interrupts, §5.5). That
+  advanced ip is what gets pushed (unless the target's flag A bit 26), at index target e+0x2CEA (its working depth,
+  which `Ecl_Run` re-seeds from e+0x2CE8 at entry), and the target's 0x2CEA += 1. The caller's own ip and stack are
+  not touched. Data: 2 uses (ecldata6 sub50 / ecldata6sp sub38, `call_boss 1, sub51/sub39`, on the other boss slot); neither target sub executes `return`, so the depth detail never matters in the data.
 - **Depth storage** (VERIFIED code + runtime, changelog/answers_boss_phases.md §3): the main context's depth lives in e+0x2CE8; e+0x2CEA is
   only the working depth. `Ecl_Run` starts with 0x2CEA := 0x2CE8, swaps in each thread's own depth (thread +6) while
   running it, and writes 0x2CEA back to 0x2CE8 (main) or thread +6 after each context. The "depth := 0" written by the
@@ -300,6 +308,13 @@ If a mask bit is set the argument is a variable id (ints as int32, floats as flo
 truncated to int before lookup). Int read of a float variable truncates; float read of an int variable converts.
 Destination arguments that are not a valid writable variable of the right type write **into the instruction's
 own argument slot in the loaded file** (shared by all enemies; e.g. op 5 with a literal counter).
+**In-place ops** (op 5 loop counter, int ops 10–14, 30/31; float ops likewise with the float reference) read **and**
+write through the one pointer returned by the reference function (`Ecl_IntVarRef` 0x41FE10 / `Ecl_FloatVarRef`
+0x420950): `*ref = *ref op v`. They never call the getter for the destination. So an int in-place op on a
+destination that is not an int reference (e.g. the float vars 10042–10044) reads and writes the instruction's own
+argument slot (whose initial content is the id word itself), not the final position (VERIFIED cases 5, 0xA–0xE,
+0x1E/0x1F, RE-Q32). Unreachable in the shipped data: no int in-place op has a 10042–10044 destination (scan of
+ecl_dis, 0 uses).
 
 | id | int / float read | writable as | meaning |
 |---|---|---|---|
@@ -447,7 +462,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 152 | rank_params | f s0, f s1, i c1a, i c1b, i c2a, i c2b | bullet rank ranges (§9.2) | 34 |
 | 153 | timeout_sub_from_death | — | timeout sub = death sub; timer = 0 | 153 |
 | 154 | laser_clear | — | forget all 32 laser slots | 0 |
-| 155 | fixed_bonus | raw byte | flag A bit 27 := byte & 1; then **always** (whatever the byte) 0x4ECCA8 := 99 999 990 — 0x4ECCA8 is g_Gui +0x2638, the card bonus **cap** (§11.1), not a separate global: in the data op 155 follows op 122 (e.g. ecldata7 sub77), so `Spell_Start` set the cap to the card bonus and op 155 raises it, and time orbs (`Spell_AddBonus`) push the bonus above the declared value (VERIFIED `Ecl_Run` case 0x9B, RE-Q31; fullrun_noclip row 113961: payout 34 904 000 for a 33 000 000 card). +0xFC itself is never set to 99 999 990 | 19 |
+| 155 | fixed_bonus | raw byte | flag A bit 27 := byte & 1; then **always** (whatever the byte) 0x4ECCA8 := 99 999 990 — 0x4ECCA8 is g_Gui +0x2638, the card bonus **cap** (§11.1), not a separate global: in the data op 155 follows op 122 (e.g. ecldata7 sub77), so `Spell_Start` set the cap to the card bonus and op 155 raises it, and time orbs (`Spell_AddBonus`) push the bonus above the declared value (VERIFIED `Ecl_Run` case 0x9B, RE-Q31; fullrun_noclip row 113961: payout 34 904 000 for a 33 000 000 card). +0xFC itself is never set to 99 999 990. The cap is written whether or not a card is active, and `Spell_AddBonus` 0x416B10 has no card-active test (only spell flag bit 11): it adds to +0xFC and clamps to +0x2638 whenever bit 11 is clear. Op 155 without an active card is unreachable in the data: all 19 uses (stages 4A/4B practice, 6, 7, 8, Extra yk) come after an op 122 earlier in the same sub at the same time (scan of ecl_dis, RE-Q32), so a port may keep the raised cap with the card | 19 |
 | 156 | flagA7 | raw byte | bit 7; layer byte = 2 | 0 |
 | 157 | trail | raw flags, i n, i a, i b | afterimage trail settings (e+0x534C..0x5352; flags & 8 allocates history) | 22 |
 | 158 | hp_marker | i k, i a, i b, i c | HUD life-bar marker k (12 §5.1): start +0x5C[k] := f32(a)/f32(max), end +0x3C[k] := f32(b)/f32(max), colour +0x7C[k] := c; max = **this** enemy's max life e+0x2E00 at op time (the fraction is stored, not recomputed at draw) — VERIFIED 0x4184B0 case 0x9E, RE-Q32 | 244 |
@@ -578,7 +593,7 @@ left→idle or right→idle script.
    every shot it marks (state 2) is already out of the slot loop's step-6 tests this frame (VERIFIED call at 0x42C773, RE-Q30).
    Then `EnemyMgr_TimeRank`, timelines (§3), then for each enemy slot in index order (alive only):
 2. If flag A bit 10 (being chain-killed): only position follow + death processing. Else:
-   **Held** (flags B bit 7, or flags A bit 30 while the player is bombing (0x17D6ED4 ≠ 0) or player byte 0x17D5EF8 ≠ 0): steps 3–6 and the death test are skipped entirely — no `Enemy_ReactPlayerMode`, no `Ecl_Run`, **no movement**, no screen check (so a held enemy is never freed off screen), no VM runs, no effect follow, no contact/shot tests, no death processing; only `Timer_Decrement(e+0x2E14)`, then the common tail of step 7 (hit flash, timer tick, damage timer, draw-list add) (VERIFIED 0x42C660 else-branch → tail 0x42DB0B, RE-Q30; fullrun_noclip 82059: native-12-paused familiars of the stage-5 boss stop moving).
+   **Held** (flags B bit 7, or flags A bit 30 while the player is bombing (0x17D6ED4 ≠ 0) or player byte 0x17D5EF8 ≠ 0): steps 3–6 and the death test are skipped entirely — no `Enemy_ReactPlayerMode`, no `Ecl_Run`, **no movement**, no screen check (so a held enemy is never freed off screen), no VM runs, no effect follow, no contact/shot tests, no death processing; only `Timer_Decrement(e+0x2E14)`, then the **whole** common tail of step 7 — youkai colour2 / hit flash, boss HUD target (+0x30) and ENEMY marker, the op-128 effect update `Enemy_UpdateOrbitEffects` 0x42E010 (an unconditional call at 0x42DDA7 inside the tail, so a held enemy's op-128 effects **are** updated; "no effect follow" above means step 4's aura position only), timer tick, damage timer, draw-list add (VERIFIED tail 0x42DB0B–0x42DE44, RE-Q32) (VERIFIED 0x42C660 else-branch → tail 0x42DB0B, RE-Q30; fullrun_noclip 82059: native-12-paused familiars of the stage-5 boss stop moving).
 3. If bit 8: `Enemy_ReactPlayerMode` 0x42C420 (changelog/answers_impl14.md §1, VERIFIED at runtime). Player mode = player
    byte +5 (0x17D5EFD, `FUN_0040bc40`). Using the stored mode bit 11 **at entry**:
    - bit 11 clear (enemy in human state): if mode ≠ 0 → effect 0x1F at final pos (count 1, colour 0x80303080),

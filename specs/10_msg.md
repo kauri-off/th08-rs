@@ -289,7 +289,8 @@ Only when `entry ≥ 0`:
 1. Portraits: pair (face[0], face[1]) drawn back-to-front by `pos.z` (larger z first), then pair
    (face[2], face[3]) the same way, with `AnmManager_Draw2DSnap`; flush.
 2. If `textbox`: one untextured quad (triangle strip, XYZRHW|DIFFUSE, z-write off) from
-   (x0+16, 384) – (x0+368, 384+h) where x0 = playfield screen x (32): top vertices colour 0xD0000000,
+   (x0+16, 384) – (x0+368, 384+h) where x0 = playfield screen x (32), at these exact D3D coordinates (no −0.5 shift;
+   golden `Q 48 384 …`, RE-Q32): top vertices colour 0xD0000000,
    bottom 0x90000000 (black, alpha 208 → 144). `h = 48` once the clock is ≥ 60, else `h = clock·48/60`
    (box grows down during the first second).
 3. line[0], line[1], boss_card, VM 0x22AB0 (Draw2DSnap).
