@@ -315,9 +315,10 @@ C = camera (0x4EA3C4), F = facing (0x4EA3D0), both the values current at spawn t
 
 #### Spawn (op 128, in `Ecl_Run`)
 
-`Effect_Spawn(13, enemy pos, 1, 0xFF6060D0)`, then:
+`Effect_Spawn(13, enemy pos e+0x2D34, 1, 0xFF6060D0)` (the base pos, not the final pos +0x2D88), then:
 - axis (+0x2EC) = (a, b, c);
-- enemy +0x53C4 = d (target radius);
+- enemy +0x53C4 = d (target radius, f32);
+- a, b, c, d are the raw instruction words: no variable resolution whatever the mask (VERIFIED RE-Q31);
 - the effect pointer is appended to enemy +0x5360[], count +0x53C0.
 
 #### Init `EffInit_Orbit13` 0x425FE0
@@ -332,7 +333,7 @@ The spawn then overwrites the axis.
 
 For each handle:
 - visible bit = !(enemy flag A bit 4);
-- centre (+0x2E0) = enemy pos;
+- centre (+0x2E0) = enemy pos e+0x2D34 (base pos, not the final pos);
 - radius: if d ≤ radius then radius = d, else radius += 0.3;
 - angle (+0x318) = normalise(angle + 0.0314159).
 
