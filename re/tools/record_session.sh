@@ -9,8 +9,8 @@ REPO=${0:A:h:h:h}
 GAME=$REPO/re/work/game
 HOOK=$REPO/re/work/hook
 PROBE=$REPO/re/probe
-WINE=${TH08_WINE:-$HOME/PortProton/data/dist/WINE_LG_11-1/bin/wine}
-export WINEPREFIX=${TH08_PREFIX:-$HOME/PortProton/data/prefixes/DEFAULT}
+WINE=${TH08_WINE:-wine}
+export WINEPREFIX=${TH08_PREFIX:-$REPO/re/work/wine}
 
 noclip=0 score="" drawlog=1 sound=on disp=${DISPLAY:-:0} chunk=1800 name=""
 while (( $# )); do
@@ -31,7 +31,7 @@ done
 SESS=$REPO/sessions/$name
 
 die() { print -u2 "record_session: $*"; exit 1 }
-[[ -x $WINE ]] || die "wine not found: $WINE"
+command -v $WINE >/dev/null || die "wine not found: $WINE"
 [[ -d $WINEPREFIX ]] || die "wine prefix not found: $WINEPREFIX"
 [[ -f $GAME/th08.exe && -f $GAME/th08.dat ]] || die "game copy missing in $GAME"
 [[ -e $SESS ]] && die "session $SESS already exists"

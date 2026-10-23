@@ -4,7 +4,7 @@ import sys, struct, os
 sys.path.insert(0, os.path.dirname(__file__))
 from th08dat import decrypt, lzss
 
-DEFAULT = "/home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/score.dat"
+DEFAULT = "/home/anon/Games/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/score.dat"
 CHUNKS = {b'TH8K': (0xC, 1), b'HSCR': (0x168, 4), b'CLRD': (0x24, 4), b'CATK': (0x22C, 3),
           b'PSCR': (0x178, 2), b'LSNM': (0x18, 1), b'FLSP': (0x20, 1), b'PLST': (0x228, 2), b'VRSM': (0x1C, 1)}
 

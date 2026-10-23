@@ -20,10 +20,9 @@ screen, or close the window. The script then copies the results and prints `done
 the terminal while the game runs. Ctrl-C stops the game, and the part played so far is still saved.
 
 What the script uses and changes:
-- wine `~/PortProton/data/dist/WINE_LG_11-1/bin/wine`, prefix `~/PortProton/data/prefixes/DEFAULT` (override with
-  `TH08_WINE` / `TH08_PREFIX`). The renderer is wine's own d3d8 (wined3d). The prefix's DXVK d3d8 is bypassed for
-  this process only, through `WINEDLLOVERRIDES`, so the prefix is not modified.
-- the game copy `re/work/game` (never the folder in ~/Downloads). The probe `d3d8.dll` is copied there and rebuilt
+- system `wine`, prefix `re/work/wine` (override with `TH08_WINE` / `TH08_PREFIX`). The renderer is wine's own d3d8
+  (wined3d), forced for this process through `WINEDLLOVERRIDES`, so the prefix is not modified.
+- the game copy `re/work/game` (never the game folder in ~/Games). The probe `d3d8.dll` is copied there and rebuilt
   from `re/probe/` when its sources change (needs `i686-w64-mingw32-gcc`).
 - `th08.cfg` of the game copy: `+0x22` windowed = 1, always. With the default `--sound on`, also `+0x1F` music = 1
   (WAV from thbgm.dat) and `+0x20` sound effects = 1. `--sound off` sets both to 0; `--sound keep` leaves them as

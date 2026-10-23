@@ -87,7 +87,7 @@ Wine runs the original th08.exe headless. Game logic runs at 60 fps on wined3d w
 ### Layout (`re/work/`, not in git)
 | path | content |
 |---|---|
-| `env.sh` | `WINEPREFIX=re/work/prefix` (own win64 prefix), `WINE=~/PortProton/data/dist/WINE_LG_11-1/bin/wine` |
+| `env.sh` | `WINEPREFIX=re/work/wine` (own win64 prefix), `WINE=wine` (system wine 11.x) |
 | `game/` | a COPY of th08.exe, th08.dat, thbgm.dat, score.dat, th08.cfg. The cfg is patched: +0x22 window = 1, +0x1F music = 0, +0x20 SE = 0. The thcrap/vpatch files are not copied. |
 | `hook/hook.c`, `hook/d3d8.def` | the probe, a proxy `d3d8.dll` (build command below) |
 | `run.sh <secs>` | starts Xvfb :77 if it is not running, copies the probe into game/, runs `wine th08.exe` with `WINEDLLOVERRIDES=d3d8=n,b` for <secs>, then `wineserver -k` |
@@ -256,7 +256,7 @@ speed (+0x238) and pos_offset. Decode with `python3 -I re/tools/effdump.py probe
 ## 9. Session recorder (SESSION brief, 2026-10-18)
 
 - `re/tools/record_session.sh [--score F] [--no-drawlog] [--sound on|off|keep] [--display D] [--chunk N] [name]` —
-  user-facing, real display, DEFAULT PortProton prefix, game copy `re/work/game`, output `sessions/<name>/`.
+  user-facing, real display, prefix `re/work/wine`, game copy `re/work/game`, output `sessions/<name>/`.
 - `re/tools/play_session.sh <name> [--display D] [--drawlog|--no-drawlog] [--sound keep|off] [--out DIR]` — replays the
   session in the original (Xvfb :77 by default, null audio sink), then `session.py finalize` + `compare`.
 - `re/tools/session.py finalize <dir>` (polls → input.txt, meta, xz) / `compare <rec> <play>` (trace rows aligned at

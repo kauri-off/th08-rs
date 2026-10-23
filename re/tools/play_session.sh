@@ -10,8 +10,8 @@ REPO=${0:A:h:h:h}
 GAME=$REPO/re/work/game
 PGAME=$REPO/re/work/sessplay/game
 HOOK=$REPO/re/work/hook
-WINE=${TH08_WINE:-$HOME/PortProton/data/dist/WINE_LG_11-1/bin/wine}
-export WINEPREFIX=${TH08_PREFIX:-$HOME/PortProton/data/prefixes/DEFAULT}
+WINE=${TH08_WINE:-wine}
+export WINEPREFIX=${TH08_PREFIX:-$REPO/re/work/wine}
 
 disp=:77 drawlog="" out="" sound=keep name=""
 while (( $# )); do

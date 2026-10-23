@@ -1,5 +1,5 @@
 import struct, sys
-EXE = "/home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/th08.exe"
+EXE = "/home/anon/Games/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/th08.exe"
 
 class PE:
     def __init__(self, path=EXE):

@@ -2,7 +2,7 @@
 """th08.dat (PBGZ) extractor. Usage: th08dat.py [list|extract] [dat] [outdir]"""
 import os, struct, sys
 
-DAT = "/home/anon/Downloads/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/th08.dat"
+DAT = "/home/anon/Games/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/th08.dat"
 
 CRYPT = {
     ord('M'): (0x1b, 0x37, 0x40, 0x2800),
