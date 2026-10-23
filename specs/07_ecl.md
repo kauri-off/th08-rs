@@ -483,7 +483,7 @@ After the scripts each frame (gs = game speed):
 | 0 | nothing (velocity unchanged) |
 | 1 polar | angle = wrap(angle + gs·angvel); speed += gs·accel; velocity = (cos angle·speed, sin angle·speed, 0); if duration > 0: timer.Decrement(); when timer ≤ 0 → mode 0 (velocity kept) |
 | 2 interpolate | timer.Decrement(); t = max(0, 1 − timer/dur); t = ease(bits 14–16; same table as §5.6); velocity = (start + delta·t) − pos (x negated if mirrored); angle = atan2(vel); when timer ≤ 0: mode 0, pos = start + delta exactly, velocity 0 |
-| 3 orbit | orbit angle = wrap(+ gs·orbit av); radius += gs·rv; velocity.xy = centre + (cos·r, sin·r) − pos; angle = atan2(vel); duration as mode 1 |
+| 3 orbit | orbit angle = wrap(+ gs·orbit av); radius += gs·rv; velocity.xy = centre + `Vec3_FromPolar`(orbit angle, r) − pos (the offset is f32(cos·r), f32(sin·r) with cos/sin and the product in double, 05 §10 — not f32(f32(cos)·r); VERIFIED RE-Q31, fullrun_noclip row 90010: a familiar's angle +0x2D94 was 2 ulp off under the f32 model); angle = atan2(vel); duration as mode 1 |
 
 Then in the enemy update (unless flag A bit 29): clamp; `displacement = pos − prev; prev = pos;
 pos.x += gs·vel.x (−= if mirrored); pos.y += gs·vel.y; pos.z += gs·vel.z`; clamp again; followers take the
