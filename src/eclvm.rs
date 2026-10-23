@@ -1902,7 +1902,8 @@ impl Exec<'_> {
             128 => {
                 self.e.effects += 1;
                 let axis = [self.af(t, ins, 1), self.af(t, ins, 2), self.af(t, ins, 3)];
-                self.e.orbit_target = self.ai(t, ins, 4) as f32;
+                // SPEC-GAP: 07 op 128 types d as i32, but the data words are f32 bits (96.0 / 128.0); read as f32 bits.
+                self.e.orbit_target = f32::from_bits(self.ai(t, ins, 4) as u32);
                 let i = crate::effect::spawn(self.anm, 13, self.e.final_pos, 1, 0xFF6060D0);
                 if i != crate::effect::NONE {
                     crate::effect::get(i, |x| x.dir = axis);
