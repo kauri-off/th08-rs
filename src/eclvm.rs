@@ -559,8 +559,9 @@ impl Exec<'_> {
         if dur < 1 {
             self.mode1(ang, spd, 0);
         } else {
-            let d = spd * dur as f32;
-            let mut delta = [ang.cos() * d, ang.sin() * d, 0.0];
+            // 05 §10 trig sites (0x420DAE / 0x422315): f32(f32(cos a·spd)·dur), cos·spd rounded once.
+            let v = crate::bullet::polar(ang, spd);
+            let mut delta = [v[0] * dur as f32, v[1] * dur as f32, 0.0];
             if mirror && self.e.flags & A_MIRROR != 0 {
                 delta[0] = -delta[0];
             }
@@ -1565,12 +1566,14 @@ impl Exec<'_> {
                 } else {
                     ang
                 };
+                // `call; fmul` (05 §10 trig sites): f32(cos·r), one rounding.
+                let v = crate::bullet::polar(ang, r);
                 if op == 38 {
-                    self.set_f(t, ins, 0, ang.cos() * r);
-                    self.set_f(t, ins, 1, ang.sin() * r);
+                    self.set_f(t, ins, 0, v[0]);
+                    self.set_f(t, ins, 1, v[1]);
                 } else {
-                    self.set_f(t, ins, 1, ang.sin() * r);
-                    self.set_f(t, ins, 0, ang.cos() * r);
+                    self.set_f(t, ins, 1, v[1]);
+                    self.set_f(t, ins, 0, v[0]);
                 }
             }
             // Even ops int, odd ops float compares (NaN taken as Greater).

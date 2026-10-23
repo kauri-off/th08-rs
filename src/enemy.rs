@@ -524,11 +524,8 @@ impl Enemy {
             1 => {
                 self.angle = anmvm::wrap_add(self.angle, gs * self.angvel);
                 self.speed += gs * self.accel;
-                self.vel = [
-                    self.angle.cos() * self.speed,
-                    self.angle.sin() * self.speed,
-                    0.0,
-                ];
+                // Vec3_FromPolar 0x422CED (05 §10 trig sites): one f32 rounding of cos·speed.
+                self.vel = crate::bullet::polar(self.angle, self.speed);
                 self.tick_duration(gs);
             }
             2 => {
@@ -1424,9 +1421,11 @@ impl EnemyManager {
                 for _ in 0..orbs {
                     let r = anm.rng.next_f32() * (2 * orbs) as f32;
                     let a = anm.rng.next_signed() * std::f32::consts::PI;
+                    // Vec3_FromPolar 0x42B01D (05 §10 trig sites).
+                    let d = crate::bullet::polar(a, r);
                     self.spawn_item(
                         anm,
-                        [pos[0] + a.cos() * r, pos[1] + a.sin() * r, 0.0],
+                        [pos[0] + d[0], pos[1] + d[1], 0.0],
                         crate::item::TIME_ORB as i32,
                         3,
                     );
@@ -2226,7 +2225,7 @@ impl EnemyManager {
             self.death(idx, anm);
         }
         // Step 7 after step 6's death: the death bonus seconds read the un-ticked timer (07 §10.1, §10.3).
-        self.update_tail(idx, gs);
+        self.update_tail(idx, gs, held);
     }
 
     // 07 §10.1 steps 3–6; false when the enemy was freed (op 1 delete, off screen).
@@ -2242,6 +2241,10 @@ impl EnemyManager {
                 return false;
             }
             self.move_enemy(idx, gs);
+            // Aura VM pos (07 §10.1 step 4, 0x42CAC9): every pass, before the trail shift and the screen check.
+            let e = &self.enemies[idx];
+            let p = e.final_pos;
+            crate::effect::get(e.fx_aura, |x| x.pos = p);
             if self.enemies[idx].trail[0] != 0 {
                 self.enemies[idx].push_trail();
             }
@@ -2254,14 +2257,6 @@ impl EnemyManager {
             }
         }
         self.run_vms(idx, anm);
-        let e = &self.enemies[idx];
-        // 13 §2.6b: orbit effects centre on the base pos e+0x2D34, not the final pos.
-        let (c, d, hidden) = (e.pos, e.orbit_target, e.flags & A_HIDDEN != 0);
-        for &i in &e.fx_attached {
-            crate::effect::get(i, |x| x.orbit_follow(c, d, hidden));
-        }
-        let p = e.final_pos;
-        crate::effect::get(e.fx_aura, |x| x.pos = p);
         // Step 6 is skipped for flag A bits 4/5/11, and for bit 31 while the player is bombing (07 §10.1 step 6).
         let flags = self.enemies[idx].flags;
         if flags & (A_HIDDEN | 1 << 5 | A_YOUKAI) == 0
@@ -2281,7 +2276,7 @@ impl EnemyManager {
     }
 
     // Common tail of 07 §10.1 step 7: hit flash, boss marker, timers, draw-list link.
-    fn update_tail(&mut self, idx: usize, gs: f32) {
+    fn update_tail(&mut self, idx: usize, gs: f32, held: bool) {
         let pause = timer_pause() != 0;
         let e = &mut self.enemies[idx];
         // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
@@ -2316,6 +2311,15 @@ impl EnemyManager {
                 (e.vm.flags & anmvm::F_COLOR2 != 0) as u8
             };
             crate::ascii::marker_track(e.boss_slot as usize, x, mode);
+        }
+        // Enemy_UpdateOrbitEffects 0x42E010 (07 §10.1 step 7): after the marker; a boss mode-0/1 death has
+        // already drained them. 13 §2.6b: centred on the base pos e+0x2D34, not the final pos.
+        // SPEC-GAP: held enemies skip it (step 2 "no effect follow") though they enter the same tail 0x42DB0B.
+        if !held {
+            let (c, d, hidden) = (e.pos, e.orbit_target, e.flags & A_HIDDEN != 0);
+            for &i in &e.fx_attached {
+                crate::effect::get(i, |x| x.orbit_follow(c, d, hidden));
+            }
         }
         if !pause {
             e.boss_timer.tick(gs);

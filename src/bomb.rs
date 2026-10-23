@@ -239,6 +239,15 @@ fn polar(a: f32, r: f32) -> [f32; 2] {
     [v[0], v[1]]
 }
 
+// Reimu orbs `call; fmul` (05 §10 trig sites, 14 §2.1): sin/cos·r rounded once, then + centre.
+fn sin_r(a: f32, r: f32) -> f32 {
+    ((a as f64).sin() * r as f64) as f32
+}
+
+fn cos_r(a: f32, r: f32) -> f32 {
+    ((a as f64).cos() * r as f64) as f32
+}
+
 fn xy(p: [f32; 3]) -> [f32; 2] {
     [p[0], p[1]]
 }
@@ -681,8 +690,8 @@ impl Player {
                 o.angle += if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 };
                 let prev = o.pos;
                 o.pos = [
-                    o.centre[0] + o.angle.sin() * o.f8,
-                    o.centre[1] + o.angle.cos() * o.f8,
+                    o.centre[0] + sin_r(o.angle, o.f8),
+                    o.centre[1] + cos_r(o.angle, o.f8),
                     o.pos[2],
                 ];
                 o.f8 += 3.2;
@@ -760,8 +769,8 @@ impl Player {
             }
             o.angle += if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 };
             o.pos = [
-                o.centre[0] + o.angle.sin() * o.f8,
-                o.centre[1] + o.angle.cos() * o.f8,
+                o.centre[0] + sin_r(o.angle, o.f8),
+                o.centre[1] + cos_r(o.angle, o.f8),
                 o.pos[2],
             ];
             if b.t < 40 {

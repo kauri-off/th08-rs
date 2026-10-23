@@ -610,6 +610,12 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl90 (RE-Q31 B, bug 8): trig rounding per 05 §10 trig-site table — enemy move mode 1 velocity and chain-kill
+  time orbs via `Vec3_FromPolar` (f32(f64 cos·r)); ops 38 / 166 f32(cos·r) single rounding; ops 66 / 67 / 178
+  mode-2 delta f32(f32(cos·spd)·dur); Reimu / Reimu LS orbs f32(f32(sin·r) + cx) (14 §2.1–2.2). Aura VM pos now
+  written inside the step-4 loop after each final pos (07 §10.1 step 4); op-128 effect update moved to the step-7
+  tail after the boss marker (07 §10.1 step 7), not for held enemies (SPEC-GAP). SPEC-GAP 104 → 105. Golden 25634,
+  fullrun_noclip 124707, selftest1 1922, demos in sync. Questions: `docs/briefs/IMPL90_QUESTIONS.md`.
 - impl89 (RE-Q31 C–F): ECL var 10042–10044 read as a source = final pos e+0x2D88, destination and in-place
   destination read (ops 15–19, 37) = pos e+0x2D34 (07 §6); var 10099 = card active ? spell bit 2 : bit 9 (07 §6);
   `Spell_Start` sets +0xFC := card bonus, cap := bonus or 99 999 990 (07 §11.1), op 155 always raises the running
