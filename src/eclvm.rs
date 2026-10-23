@@ -847,19 +847,20 @@ impl Exec<'_> {
     }
 
     // Runs a manager-wide op (KillAll, Spell_End) with the running enemy and its running main context back in
-    // its slot, so the loop sees the caller in slot order (07 §7 op 95, §10.2: no self test). If the caller's
-    // death sub was taken: from the main context it runs now; from a thread, that thread is freed (as op 135).
-    // SPEC-GAP: whether the caller's ip still advances past op 95/123 after its own death-sub jump.
+    // its slot, so the loop sees the caller in slot order (07 §7 op 95, §10.2: no self test).
+    // Quirk kept (07 §7 op 95): Ecl_Run steps a local copy of the ip, so a death-sub `Ecl_SetSub` on the caller's
+    // own main context keeps only clock/wait 0 and the sub id; the old sub continues and the death sub never runs.
+    // From a thread the main context keeps the death sub and the thread goes on.
     fn with_self_in_slot(
         &mut self,
         t: &mut Thread,
         f: impl FnOnce(&mut EnemyManager, &mut AnmManager),
     ) -> Flow {
         let in_main = self.e.running_thread.is_none();
+        let local_ip = t.ctx.ip;
         if in_main {
             std::mem::swap(t, &mut self.e.main);
         }
-        let had_death_sub = self.e.death_sub >= 0;
         std::mem::swap(self.e, &mut *self.m.enemies[self.idx]);
         f(self.m, self.anm);
         std::mem::swap(self.e, &mut *self.m.enemies[self.idx]);
@@ -869,15 +870,8 @@ impl Exec<'_> {
         if in_main {
             std::mem::swap(t, &mut self.e.main);
         }
-        if !(had_death_sub && self.e.death_sub < 0) {
-            return Flow::Next;
-        }
-        if in_main {
-            Flow::Jumped
-        } else {
-            self.e.kill_running_thread = true;
-            Flow::Next
-        }
+        t.ctx.ip = local_ip;
+        Flow::Next
     }
 
     fn item(&mut self, pos: [f32; 3], kind: i32) {
@@ -2275,28 +2269,43 @@ mod tests {
         e.main.ctx.enter(&m.ecl, sub);
     }
 
-    // 07 §7 op 95: no self test, the calling non-boss dies and its main context jumps to its death sub.
+    // 07 §7 op 95: no self test. Another enemy gets `Ecl_SetSub` to its death sub (threads, thresholds kept); the
+    // caller's own main context keeps its local ip in the old sub (time-0 ops after op 95 still run), only the sub
+    // id, clock and wait are taken, and its death sub is consumed without running.
     #[test]
     fn kill_all_includes_caller() {
-        let (mut anm, mut m) = manager(&[&[ins(0, 95, &[])], &[], &[ins(5, 0, &[])]]);
+        let k95 = ins(0, 95, &[]);
+        let (mut anm, mut m) = manager(&[
+            &[k95.clone(), ins(0, 81, &[1]), ins(1, 81, &[2])],
+            &[],
+            &[ins(5, 0, &[])],
+        ]);
         spawn(&mut m, 0, 2, 1, B_CANNOT_DIE);
         spawn(&mut m, 1, 0, 1, 0);
         spawn(&mut m, 2, 2, 1, 0);
+        m.enemies[2].threads[0] = Some(Box::default());
+        m.enemies[2].thresholds = [50, -1, -1, -1];
         assert_eq!(ecl_run(&mut m, &mut anm, 1), 0);
-        let death = m.ecl.subs[1];
-        for k in [1, 2] {
-            let e = &m.enemies[k];
-            assert_eq!(
-                (e.life, e.death_sub, e.main.ctx.ip),
-                (0, -1, death),
-                "slot {k}"
-            );
-        }
+        let e = &m.enemies[2];
+        assert_eq!(
+            (e.life, e.death_sub, e.main.ctx.ip, e.main.ctx.clock.cur),
+            (0, -1, m.ecl.subs[1], 0)
+        );
+        assert!(e.threads[0].is_some());
+        assert_eq!(e.thresholds[0], 50);
+        let e = &m.enemies[1];
+        let after_95 = m.ecl.subs[0] + k95.len() + ins(0, 81, &[1]).len();
+        assert_eq!(
+            (e.life, e.death_sub, e.main.ctx.ip, e.main.ctx.sub),
+            (0, -1, after_95, 1)
+        );
+        assert_eq!(e.main.ctx.clock.cur, 1);
+        assert_eq!(e.flags & (A_SHOT_HIT | A_CONTACT), A_SHOT_HIT);
         // Flags B bit 6 spares an enemy.
         assert_eq!((m.enemies[0].life, m.enemies[0].death_sub), (100, 1));
     }
 
-    // Op 95 in a thread: the main context takes the death sub and the threads are freed (07 §10.3 reset).
+    // Op 95 in a thread: the main context takes the death sub, the threads are kept (07 §7 op 95).
     #[test]
     fn kill_all_from_thread() {
         let (mut anm, mut m) = manager(&[&[ins(0, 135, &[0, 2])], &[], &[ins(0, 95, &[])]]);
@@ -2304,7 +2313,7 @@ mod tests {
         ecl_run(&mut m, &mut anm, 0);
         let e = &m.enemies[0];
         assert_eq!((e.life, e.death_sub, e.main.ctx.ip), (0, -1, m.ecl.subs[1]));
-        assert!(e.threads.iter().all(Option::is_none));
+        assert!(e.threads[0].is_some());
     }
 
     // The caller is spared like any other enemy by flags B bit 6.

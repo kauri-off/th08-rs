@@ -610,6 +610,15 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl81 (audit 87, 88, 92, 95, 99, 100, cloud, 2026-10-23): `EnemyMgr_Calc` (07 §10.1 step 1) runs the op-176
+  whole-playfield box, then `EnemyMgr_TimeRank`, then the list resets and timelines. Held enemies (step 2: flags B
+  bit 7, or A bit 30 while bombing / player state ≠ 0) skip react, ECL, movement, screen check, VMs, collision and
+  death; only the e+0x2E14 decrement and the step-7 tail run. `kill_all` (op 95): final pos recomputed, popups
+  2000 then +30, items/popups also at every 6th trail entry, `Enemy_ChainUnlink` (original semantics, §10.3a: a
+  root only clears its own links) on every victim, death sub via `Ecl_SetSub` only. Op 95 / 123 on the caller's
+  own main context keep the local ip in the old sub (death sub consumed, never run); from a thread the threads are
+  kept. Unit tests for all of it. Traces not run (cloud). SPEC-GAP 112 → 110 (src).
+  Questions: `docs/briefs/IMPL81_QUESTIONS.md`.
 - impl80 (audit 85, 90, 103, cloud, 2026-10-23): native 8 (07 §12) walks the parent's +8 chain with no alive test,
   writes int var 10037 per member, int vars 10005 / 10006 / 10007 on the caller, and adds the leader's orbit velocity
   when the 10007 counters differ. Natives 9 / 11 / 25 call the new `Player::laser_test` (`Player_LaserTest`, 09 §6.1,

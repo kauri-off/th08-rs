@@ -1255,34 +1255,44 @@ impl EnemyManager {
         }
     }
 
-    // EnemyMgr_KillAll 0x42EFB0 (07 §7 op 95): non-boss enemies without flags B bit 6 get life 0 and jump to
-    // their death sub (consumed); flag A bit 7 also drops item 6 and a popup 2000 + 30·n, capped at 8000.
+    // EnemyMgr_KillAll(8000, 0) 0x42EFB0 (07 §7 op 95): per alive non-boss enemy without flags B bit 6, in slot
+    // order: life 0; flag A bit 7 → item 6 + popup at the recomputed final pos and at every 6th trail entry
+    // (v = 2000 first, then min(v + 30, 8000)); `Enemy_ChainUnlink`; `Ecl_SetSub` to the death sub (consumed).
     // No self test: an ECL caller must be back in its slot (`Exec::with_self_in_slot`) to be included.
     pub(crate) fn kill_all(&mut self, anm: &mut AnmManager) -> i32 {
-        let (mut n, mut sum) = (0, 0);
+        const MAX: i32 = 8000;
+        let (mut v, mut sum) = (2000, 0);
         for j in 0..self.enemies.len() {
-            let e = &self.enemies[j];
+            let e = &mut self.enemies[j];
             if !e.alive() || e.flags & A_BOSS != 0 || e.flags_b & B_CANNOT_DIE != 0 {
                 continue;
             }
+            e.life = 0;
             if e.flags & A_CANCEL_BONUS != 0 {
-                n += 1;
-                let p = e.final_pos;
-                self.spawn_item(anm, p, 6, 1);
-                let v = (2000 + 30 * n).min(8000);
-                crate::ascii::popup(
-                    p,
-                    v,
-                    if v >= 8000 {
+                e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
+                let mut at = vec![e.final_pos];
+                // u8 e+0x534C trail on: entries k = 0, 6, 12, … < n.
+                if e.trail[0] as u8 != 0 {
+                    at.extend((0..e.trail_n()).step_by(6).map(|k| e.trail_ring[k].pos));
+                }
+                for p in at {
+                    self.spawn_item(anm, p, 6, 1);
+                    let colour = if v >= MAX {
                         crate::item::POPUP_MAX
                     } else {
                         crate::item::POPUP_NORMAL
-                    },
-                );
-                sum += v;
+                    };
+                    crate::ascii::popup(p, v, colour);
+                    sum += v;
+                    v = (v + 30).min(MAX);
+                }
             }
-            self.enemies[j].life = 0;
-            self.jump_to_death_sub(j);
+            self.unlink(j);
+            let e = &mut self.enemies[j];
+            if e.death_sub >= 0 {
+                let sub = std::mem::replace(&mut e.death_sub, -1);
+                self.jump_main(j, sub);
+            }
         }
         self.add_score(sum);
         sum
@@ -1476,19 +1486,20 @@ impl EnemyManager {
         self.unlink(idx);
     }
 
-    // Enemy_ChainUnlink 0x42B2F0 (07 §6 var 10096): removes an enemy from its parent's chain.
+    // Enemy_ChainUnlink 0x42B2F0 (07 §10.3a). Quirk kept: without a parent only e+4/e+8 are zeroed, so the
+    // first child keeps prev = e and its own unlink later re-attaches the rest of the chain to e.
     fn unlink(&mut self, idx: usize) {
-        let (prev, next) = (
-            self.enemies[idx].chain_prev.take(),
-            self.enemies[idx].chain_next.take(),
-        );
+        let e = &mut self.enemies[idx];
+        let (prev, next) = (e.chain_prev.take(), e.chain_next.take());
+        if e.root.take().is_none() {
+            return;
+        }
         if let Some(p) = prev {
             self.enemies[p].chain_next = next;
         }
         if let Some(n) = next {
             self.enemies[n].chain_prev = prev;
         }
-        self.enemies[idx].root = None;
     }
 
     // Yukari's aimed enemy (14 §3.1): a persistent pick, replaced by a higher parentless enemy in the 64-px column.
@@ -2186,26 +2197,41 @@ impl EnemyManager {
             self.death(idx, anm);
             return;
         }
-        if self.enemies[idx].flags & A_MODE_REACT != 0 {
-            self.react_player_mode(idx, anm);
-        }
-        // Flags B bit 7, or bit 30 while bombing / player state ≠ 0: no ECL, script time held (07 §4.4).
+        // Held (07 §10.1 step 2): flags B bit 7, or flags A bit 30 while bombing / player state ≠ 0. Steps 3–6 and
+        // the death test are skipped (no movement, never freed off screen); the e+0x2E14 decrement nets the tick.
         let held = {
             let p = self.player.borrow();
             let e = &self.enemies[idx];
             e.flags_b & B_PAUSED != 0
                 || (e.flags & A_LAST_SPELL != 0 && (p.bombing || p.state != 0))
         };
-        let mut first = true;
+        if held {
+            self.enemies[idx].boss_timer.dec(gs);
+        } else if !self.update_body(idx, anm) {
+            return;
+        }
+        self.update_tail(idx, gs);
+        // Death latch cleared when life > 0, only on frames the script block ran (07 §10.3).
+        if !held {
+            let e = &mut self.enemies[idx];
+            if e.life > 0 {
+                e.flags_b &= !B_DEATH_LATCH;
+            }
+            self.death(idx, anm);
+        }
+    }
+
+    // 07 §10.1 steps 3–6; false when the enemy was freed (op 1 delete, off screen).
+    fn update_body(&mut self, idx: usize, anm: &mut AnmManager) -> bool {
+        let gs = anm.speed;
+        if self.enemies[idx].flags & A_MODE_REACT != 0 {
+            self.react_player_mode(idx, anm);
+        }
         // 07 §10.1 step 4: a threshold or timeout switch re-runs the whole body in the same frame.
         loop {
-            if held {
-                if std::mem::take(&mut first) {
-                    self.enemies[idx].boss_timer.dec(gs);
-                }
-            } else if crate::eclvm::ecl_run(self, anm, idx) == -1 {
+            if crate::eclvm::ecl_run(self, anm, idx) == -1 {
                 self.free(idx);
-                return;
+                return false;
             }
             self.move_enemy(idx, gs);
             if self.enemies[idx].trail[0] != 0 {
@@ -2213,7 +2239,7 @@ impl EnemyManager {
             }
             if self.screen_check(idx) {
                 self.free(idx);
-                return;
+                return false;
             }
             if !(self.check_thresholds(anm, idx) || self.check_timeout(anm, idx)) {
                 break;
@@ -2241,6 +2267,11 @@ impl EnemyManager {
         {
             self.damage(idx, self.debug_damage, false);
         }
+        true
+    }
+
+    // Common tail of 07 §10.1 step 7: hit flash, boss marker, timers, draw-list link.
+    fn update_tail(&mut self, idx: usize, gs: f32) {
         let pause = timer_pause() != 0;
         let e = &mut self.enemies[idx];
         // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
@@ -2286,11 +2317,6 @@ impl EnemyManager {
         if e.flags & A_HIDDEN == 0 {
             self.draw_lists[e.layer.min(3) as usize].push(idx);
         }
-        // Death latch cleared when life > 0, only on frames the script block ran (07 §10.3).
-        if !held && e.life > 0 {
-            e.flags_b &= !B_DEATH_LATCH;
-        }
-        self.death(idx, anm);
     }
 
     // EnemyMgr_Calc 0x42C660 (07 §10.1).
@@ -2338,6 +2364,9 @@ impl EnemyManager {
         if self.player.borrow().freeze_bullets {
             return;
         }
+        // Step 1: the op-176 box, then EnemyMgr_TimeRank, then the resets and the timelines (07 §10.1 step 1).
+        self.last_spell_box(anm);
+        self.time_rank();
         self.full = false;
         self.draw_lists.iter_mut().for_each(Vec::clear);
         self.run_timelines(anm);
@@ -2349,7 +2378,6 @@ impl EnemyManager {
                 self.player.borrow_mut().aimed = None;
             }
         }
-        self.last_spell_box(anm);
         {
             let mut p = self.player.borrow_mut();
             if let Some(a) = p.aimed {
@@ -2368,18 +2396,23 @@ impl EnemyManager {
         b.env.boss = self.bosses.iter().any(Option::is_some);
         b.env.spell = self.g.spell.is_some();
         b.env.dialogue = self.dialogue_active();
-        // 0x42C3B0 (11 §3.2): rank +100 every 2400 − 240·lives enemy-manager frames outside dialogue.
-        if !b.env.dialogue {
-            let lives = self.player.borrow().stats.lives.max(0.0) as u32;
-            let period = 2400u32.saturating_sub(240 * lives).max(1);
-            if self.frame > 0 && self.frame % period == 0 {
-                self.player.borrow_mut().stats.rank(100);
-            }
-        }
         let env = b.env;
         drop(b);
         self.player.borrow_mut().env = env;
         self.frame += 1;
+    }
+
+    // EnemyMgr_TimeRank 0x42C3B0 (11 §3.2): rank +100 every 2400 − 240·lives enemy-manager frames outside
+    // dialogue; reads the manager clock before this frame's increment.
+    fn time_rank(&mut self) {
+        if self.dialogue_active() {
+            return;
+        }
+        let lives = self.player.borrow().stats.lives.max(0.0) as u32;
+        let period = 2400u32.saturating_sub(240 * lives).max(1);
+        if self.frame > 0 && self.frame % period == 0 {
+            self.player.borrow_mut().stats.rank(100);
+        }
     }
 
     // After-image trail (07 §10.6, op 157), drawn before the main VM; the main VM's scale and colour are restored.
@@ -2474,7 +2507,6 @@ impl EnemyManager {
 
     // GameFlags bit 13 with boss slot 0 set (07 §7 op 176): Player_DamageAgainst over the whole playfield with the
     // boss's time-orb accumulator; the damage and hitByBomb are discarded, so every shot only counts as a hit.
-    // SPEC-GAP: position of this call inside EnemyMgr_Calc (port: after the slot loop).
     fn last_spell_box(&mut self, anm: &mut AnmManager) {
         let Some(boss) = self.bosses[0] else {
             return;
@@ -2626,6 +2658,80 @@ mod tests {
             timelines: Vec::new(),
         };
         (EnemyManager::new(ecl, bullets, 1), player)
+    }
+
+    // 07 §10.1 step 2: a held enemy does not move, is not freed off screen, does not die; its timer nets zero.
+    #[test]
+    fn held_enemy_skips_body() {
+        let mut anm = AnmManager::default();
+        let (mut m, player) = empty_manager(&mut anm);
+        for (b7, bombing) in [(true, false), (false, true)] {
+            player.borrow_mut().bombing = bombing;
+            let e = &mut m.enemies[0];
+            **e = Enemy::default();
+            e.flags = A_ALIVE | A_ON_SCREEN | if b7 { 0 } else { A_LAST_SPELL };
+            e.flags_b = if b7 { B_PAUSED } else { 0 };
+            (e.vm.has_sprite, e.vm.sprite_w, e.vm.sprite_h) = (true, 32.0, 32.0);
+            (e.pos, e.vel, e.life) = ([-100.0, 100.0, 0.0], [3.0, 0.0, 0.0], 0);
+            e.boss_timer.set(10);
+            m.update(0, &mut anm);
+            let e = &m.enemies[0];
+            assert!(e.alive());
+            assert_eq!((e.pos[0], e.boss_timer.cur), (-100.0, 10));
+            assert_eq!(e.flags_b & B_DEATH_LATCH, 0);
+            assert_eq!(m.draw_lists[0].pop(), Some(0));
+        }
+    }
+
+    // 07 §7 op 95: popups 2000, then +30 each, at the final pos and every 6th trail entry; every victim unlinked.
+    #[test]
+    fn kill_all_popups_and_unlink() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        for k in 0..4 {
+            m.enemies[k].flags = A_ALIVE;
+            m.enemies[k].life = 100;
+        }
+        let e = &mut m.enemies[0];
+        e.flags |= A_CANCEL_BONUS;
+        (e.pos, e.pos_offset, e.trail) = ([10.0, 20.0, 0.0], [1.0, 2.0, 0.0], [1, 15, 0, 1]);
+        m.enemies[1].flags |= A_CANCEL_BONUS;
+        m.enemies[3].flags |= A_BOSS | A_CANCEL_BONUS;
+        (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(1), Some(2));
+        (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(0), Some(1));
+        (m.enemies[1].root, m.enemies[2].root) = (Some(0), Some(0));
+        // Slot 0: final pos + entries 0, 6, 12; slot 1: one more popup.
+        assert_eq!(m.kill_all(&mut anm), 2000 + 2030 + 2060 + 2090 + 2120);
+        assert_eq!(m.enemies[0].final_pos, [11.0, 22.0, 0.0]);
+        for k in 0..3 {
+            let e = &m.enemies[k];
+            assert_eq!(e.life, 0);
+            assert_eq!(
+                (e.root, e.chain_prev, e.chain_next),
+                (None, None, None),
+                "slot {k}"
+            );
+        }
+        assert_eq!(m.enemies[3].life, 100);
+    }
+
+    // 07 §10.3a Enemy_ChainUnlink: a root keeps its first child's +4, whose unlink re-attaches the rest to the root.
+    #[test]
+    fn chain_unlink_root_quirk() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(1), Some(2));
+        (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(0), Some(1));
+        (m.enemies[1].root, m.enemies[2].root) = (Some(0), Some(0));
+        m.unlink(0);
+        assert_eq!(m.enemies[0].chain_next, None);
+        assert_eq!(
+            (m.enemies[1].chain_prev, m.enemies[1].root),
+            (Some(0), Some(0))
+        );
+        m.unlink(1);
+        assert_eq!(m.enemies[0].chain_next, Some(2));
+        assert_eq!(m.enemies[2].chain_prev, Some(0));
     }
 
     // 07 §10.1 step 4: the ring shifts n − 1 entries, entry 0 = final pos, velocity, angle; the rest untouched.
