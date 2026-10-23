@@ -64,7 +64,7 @@ VM4 cancel animation (+0xA90). All 5 get VM flag 0x2000. Template extras:
 Hitbox / class from the main sprite height h and the type's main script number s:
 - h > 32: box 24, class 0.
 - 16 < h ≤ 32: s ∈ {8, 113, 114, 115} → box 5, class 2; s ∈ {9, 109, 110} → box 8, class 1; else box 10, class 1.
-- 8 < h ≤ 16: s ∈ {2, 4, 5, 6, 106, 107, 108} → box 4, class 4 (s = 5 falls through to the next case in the
+- 8 < h ≤ 16: s ∈ {2, 4, 5, 6, 106, 107, 108, 111, 112} → box 4, class 4 (111/112 were missing here; the table below was right — VERIFIED 0x433070, RE-Q30, fullrun_noclip 78238) (s = 5 falls through to the next case in the
   original; net result box 4 class 4); else box 6, class 3.
 - h ≤ 8: box 4, class 5.
 
@@ -168,6 +168,7 @@ No free slot → failure. Speed and angle: 07 §9.3 (mode table). Then:
      state 1 or 2, graze allowed in states 0 and 3). g == 1: grazed := 1 (the graze handler already ran, 09 §6), continue to the hit test.
      g == 2 (inside a bomb area): if flags lacks 0x1000 → state 5 + bomb drop (below); no hit test.
      g == 0: no hit test this frame.
+   - Box arithmetic of both tests (VERIFIED 0x44A230 / 0x44A360 / 0x44A470, RE-Q30): object box min = (p − s/2) − e, max = (s/2 + p) + e (e = 20 for the graze test, 0 otherwise; f32), compared with the player's stored box (hit box +0x38C/+0x398, graze box +0x3A4/+0x3B0, 09 §1.1): miss iff obj max < player min or player max < obj min on x or y (touching edges overlap). `Player_HitTestNoBomb` (enemy contact) uses the same form with e = 0.
    - hit test h = `Player_HitTest` (hitbox vs the player's hitbox): h == 1 → state 5 (the player is hit, 09 §7);
      h == 2 → if flags lacks 0x1000: state 5 + bomb drop.
    - Bomb drop: item type = player+0xE2A90: 9 → two items of type 7; ≥ 0 → one item of that type; −1 → none.
@@ -338,8 +339,11 @@ when (tail < 16 or speed == 0) and (+0x599 == 0 or state ≠ 0); emitter scale =
   one item per 32 px from tail to head along the laser. Fade-collision := 0. Cancel guard := 10.
 - `BulletMgr_CancelBonus(maxValue, lasersToo)` 0x430AA0 (boss defeat, 07 §10.3): every non-free bullet →
   item (bomb-area item or type 6, mode 1), score popup value v starting at 2000, +20 per bullet, capped at
-  maxValue (popup colour differs when capped); state 5. Returns the sum of popup values. Lasers as above,
-  items only when lasersToo (also one at the origin).
+  maxValue (popup colour differs when capped); state 5. Returns the sum of popup values. Lasers: every alive
+  laser — **no flag-bit-2 test** (unlike `CancelAll`, a flag-4 laser is cancelled too) — if state < 2: state 2,
+  timer 0, width := current width; items only when lasersToo: first one at the origin, then one per 32 px from
+  tail to head. Fade-collision := 0 for every alive laser. Cancel guard := 10 (VERIFIED 0x430AA0, RE-Q30; fullrun
+  60112: five flag-4 lasers at a stage-6 card end give 50 extra type-6 items).
 - `BulletMgr_CancelRadius(pos, r)` 0x430D30: bullets (not free/5) with |pos − p|² ≤ r² → item type 6 mode 1,
   slot zeroed.
 - ECL natives 12 / 14 (0x424A20 / 0x424C40) — VERIFIED. Parameters come from the calling context: mask =

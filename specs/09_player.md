@@ -308,6 +308,8 @@ Before this, the hit test itself calls `GameMgr_ScrambleDecoys` (5 × Rng_Range(
 6. State 0: `GameMgr_ScrambleDecoys` (5 Rng_Range + 3 Rng_FloatRange = 11 draws), then `Player_Die`, return 1.
    No caller uses the LaserTest return value.
 
+`Player_LaserTest`(centre c, size s, origin o, angle a, graze flag) geometry (VERIFIED 0x44A6A0, RE-Q30): q = o + (player pos − o) rotated by −a (`Vec2_Rotate`: sin/cos of −a rounded to f32; x' = cos·x − sin·y, y' = sin·x + cos·y); player box q ± hit half-extents (+0x3D4); laser box c ± s/2. Miss when lmax.x < pmin.x or pmax.x < lmin.x or lmax.y < pmin.y or pmax.y < lmin.y (f32 edges, touching counts as overlap). Overlap → statistics bit, then step 5/6 (state 0: scramble, `Player_Die`, return 1; else return 0). Miss and graze flag set: laser box grown by 48 on every side, tested again; overlap and player state not 1/2 → `Player_OnGraze`(player pos, laser flag), return 2; else 0. Callers: lasers (08 §6.3, c = (origin.x + tail + L/2, origin.y)) and ECL natives 9/11/25 (07 §12).
+
 `Player_Die` itself starts with a debug print, then freeze byte 0x160F534 := 0, then `GameMgr_UpdateChecksum` (4 draws).
 So an invulnerability cheat that "returns at the start of `Player_Die`" keeps steps 1–6, including the 11 decoy draws,
 and skips everything in this section's first paragraph. That is what the noclip session mode does (probe: `Player_Die`

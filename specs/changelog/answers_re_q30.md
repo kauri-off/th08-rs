@@ -19,6 +19,12 @@ Start (scratch tag CDE = master + RE-Q29 C/D/E): golden full (25 634), selftest1
 | fullrun 48756 (rng +8, score +4) | not the shot test: children e3–e6 of the stage-4B boss (sub21, `native_cb 8`) had different orbit angles (e2, the leader, matched), so shot pb25 hit e3 one frame early. `EclNative_8` 0x4244F0 walks from the **parent**, writes int vars 10037 / 10005 / 10006, counts calls in int var 10007 and adds the leader's orbit velocity when the counters differ; the port followed the old spec wording (root walk, float vars 10017/10018, no velocity terms) (L) | SPEC FIXED + CODE BUG | 07 §12 native 8 | fullrun 51708 |
 | (found at 51708) | `Vec3_FromPolar` 0x4286E0: `fcos`/`fsin` results are extended precision (precision control does not apply to them), × r rounded once; the port rounded cos to f32 first (1-ulp velocity differences in ~190 bullets) (M) | SPEC FIXED + CODE BUG | 05 §10 | no change of the first row |
 | fullrun 51708 (bullets 405/404) | volley of the 4B familiars (sub23, fires every 10 frames) at poll 51632, the frame rank goes 15 → 16 by time rank: `EnemyMgr_TimeRank` runs at the **start** of `EnemyMgr_Calc` (0x42C77E, before the timelines and the slot loop), so the volley already uses rank 16 (lerp_f(−0.15, 0.15) = 0 → speed 1.1); the port ran it at the end (rank 15 → 1.090625) (N). The op-176 box was moved to its place too (O, no session change) | CODE BUG | 07 §10.1 step 1, 11 §3.2 | fullrun 60112 |
+| fullrun 60112 (score +222/frame) | at a stage-6 card end (`CancelBonus`(8000, lasers)) the original gives 50 more type-6 items: `BulletMgr_CancelBonus` 0x430AA0 cancels **every** alive laser, with no flag-bit-2 test (only `CancelAll` has it); five flag-4 lasers → 5 × (origin + 9) items; it also sets the cancel guard (P) | SPEC FIXED + CODE BUG | 08 §7 | fullrun 61822 |
+| fullrun 61822 (port +16 draws: a noclip hit) | natives 9 / 11 / 25 are not centred 590 × h `HitTest` boxes with a warning phase: they call `Player_LaserTest` with origin = pos − (float vars 10016, 10017), angle = main VM rotation z, a 590-long box starting at the origin; graze test with the small box when timer e+0x2E14 changed and % 12 == 0, then the hit test with the big box every call (Q). `Player_LaserTest` geometry (f32 edges) added; lasers moved onto it (R, no session change) | SPEC FIXED + CODE BUG | 07 §12, 09 §6.1 | fullrun 72571 |
+| fullrun 72571 (port +390 draws) | `EnemyMgr_KillAll` 0x42EFB0 calls `Enemy_ChainUnlink` on every enemy it kills, so a root killed by op 95 has no children left at its death (the port chain-killed 3 children: 48 + 6 orbs). Also: first popup 2000 (port 2030), final pos recomputed, trail items every 6th entry (S). `Enemy_ChainUnlink` semantics written down | SPEC FIXED + CODE BUG | 07 §7 op 95, §10.3a | fullrun 78238 |
+| (checked at 78238) | `Player_HitTest` / `HitTestNoBomb` / `GrazeTest` compare f32 box edges ((p − s/2) − 20 … s/2 + p + 20) with the player boxes +0x38C / +0x3A4 (T); no session change | CODE BUG | 08 §4 step 6, 09 §1.1 | — |
+| fullrun 78238 (graze one frame early) | bullet hitbox for 16×16 types 16 / 17 (scripts 111 / 112) is 4, not 6: the 08 §2.1 rule list omitted 111 / 112 (the table was right); the port followed the rule (U) | SPEC FIXED + CODE BUG | 08 §2.1 | fullrun 82059 |
+| fullrun 82059 (enemies 13/12) | a held enemy (flags B bit 7 from native 12, or A bit 30 while bombing / player state ≠ 0) skips the whole update — ECL, **movement**, screen check, VMs, collision, death — and only gets `Timer_Decrement(e+0x2E14)` plus the common tail; the port still moved it, so paused familiars drifted off screen and were freed (V) | SPEC FIXED + CODE BUG | 07 §10.1 step 2 | fullrun 90010 |
 
 ## 2. Question 2 — IMPL42–54 open questions
 
@@ -51,3 +57,39 @@ question), IMPL45 Q1–Q4 (notes), IMPL46 Q3 (citation note), IMPL47 Q1 (propose
 | IMPL53 Q3 native 28/29 sprites | 28: +0x218 := sprite for every live bullet, sprite := 0x6F only for 0x60–0x6F; 29: restore only if the current sprite is in 0x60–0x6F. VM0 only. Port restores every bullet whose sprite differs | SPEC FIXED + CODE BUG | 07 §12 |
 | IMPL53 Q4 +0x218 at spawn | template load writes the template's **base** sprite; `AnmVm_Copy` carries it, the colour `SetSprite` does not touch it → a spawned bullet holds the uncoloured template sprite. Port stores the coloured sprite | SPEC FIXED + CODE BUG | 05 §2 +0x218 |
 | IMPL54 Q1 +0xE2A7C on a special-mode press | kept: the special-mode branch returns before both writes (port right; `SPEC-GAP` can go) | NEW FACT | 09 §1.1 |
+
+Coverage check (RE-Q30 resumed run): every question in `IMPL42_QUESTIONS.md` … `IMPL54_QUESTIONS.md` is either in the
+table above or in the skip list; each answer is in the numbered spec section given (re-checked by grep in 00, 01, 02,
+05, 07, 09, 13, 15). Nothing missing.
+
+## 3. Final CODE BUG list (RE-Q30)
+
+Scratch-confirmed (in `re/work/runs/q30/q30_fixes.diff`, tags `// q30 X`):
+1. J — `PlaceBullet` velocity = polar(**unwrapped** pattern angle), stored angle wrapped (08 §3.2, 07 §9.3) — fullrun 29948.
+2. K — player-shot vs enemy overlap with f32 box edges (min = c − s·0.5, max = s·0.5 + c, inclusive) (09 §4.5) — no session change.
+3. L — native 8 familiar ring: walk from the parent, int vars 10037 / 10005 / 10006 / 10007, leader orbit-velocity term (07 §12 native 8) — fullrun 48756.
+4. M — `Vec3_FromPolar`: extended-precision cos/sin × r, one rounding (05 §10) — no change of the first differing row (1-ulp velocities).
+5. N — `EnemyMgr_TimeRank` at the **start** of `EnemyMgr_Calc`, before timelines and slots (07 §10.1 step 1, 11 §3.2) — fullrun 51708.
+6. O — op-176 whole-playfield `Player_DamageAgainst` first inside the bit-10 gate, before TimeRank (07 §7 op 176, §10.1 step 1; IMPL52 Q1) — no session change.
+7. P — `BulletMgr_CancelBonus`: cancel every alive laser (no flag-bit-2 test) and set the cancel guard 10 (08 §7) — fullrun 60112.
+8. Q — natives 9 / 11 / 25 = `Player_LaserTest` boxes (origin pos − vars 10016/10017, angle main VM rotation z, graze small box every 12 timer ticks, hit big box every call; no warning phase) (07 §12, 09 §6.1) — fullrun 61822.
+9. R — laser collision through `Player_LaserTest` f32 box edges (09 §6.1, 08 §6.3) — no session change.
+10. S — `EnemyMgr_KillAll`: first popup 2000 then +30, final pos recomputed, trail items every 6th entry, `Enemy_ChainUnlink` per killed enemy with the original unlink semantics (07 §7 op 95, §10.3a) — fullrun 72571.
+11. T — `Player_HitTest` / `HitTestNoBomb` / `GrazeTest` with f32 box edges against the player boxes (08 §4 step 6) — no session change.
+12. U — bullet types 16 / 17 (scripts 111 / 112): hitbox 4, class 4 (08 §2.1) — fullrun 78238.
+13. V — held enemies (flags B bit 7 / A bit 30 condition) skip react, ECL, movement, screen check, VMs, collision and death; only the e+0x2E14 decrement and the step-7 tail run (07 §10.1 step 2) — fullrun 82059.
+
+Spec-only (not applied on scratch; no session row known to depend on them):
+14. Ops 90–92: a chained child that spawns links the new enemy directly after itself (07 §10.5; IMPL42 Q2) — no session change known.
+15. Quitting frame: no draw and no Present after the calc chain returns quit (15 §2.2, 00 §2; IMPL45 Q6) — no session change (traces end before).
+16. Bomb cooldown +0xE2A6C decremented inside `update_bomb`, skipped on a forced start (09 §1.1; IMPL46 Q2) — no session change known.
+17. Op 95 / `KillAll` hitting its own main context: local ip continues in the old sub, write-back overwrites the death-sub ip, the death sub never runs for the caller (07 §7 op 95; IMPL50 Q1) — no session change known.
+18. `KillAll` death-sub jump = `Ecl_SetSub` (ip, clock 0, wait 0, sub id only), not `reset_for_jump` (07 §10.6, §7 op 95; IMPL50 Q3) — no session change known.
+19. Ops 90–92 never write e+0x3330: the spawn-time run sees mode bits 0 (07 §10.5; IMPL51 Q1) — no session change known.
+20. Op 92 follow offset +0x2D40 / +0x2D88, aura and bit 9 written after the spawn-time run (07 §10.5; IMPL51 Q2) — no session change known.
+21. Natives 28 / 29: +0x218 := sprite for every live bullet, sprite := 0x6F only for 0x60–0x6F; 29 restores only sprites in 0x60–0x6F (07 §12; IMPL53 Q3) — no session change known.
+22. Bullet +0x218 at spawn = the template's base (uncoloured) sprite (05 §2, 08 §3; IMPL53 Q4) — no session change known.
+
+Not a CODE BUG, coordinator's decision: closing the window does nothing in the original (WM_CLOSE only sets an unread
+bit, 15 §2.2; IMPL45 Q5). The port quitting on close is a usability deviation; keep it, but run the same exit path
+(save → teardown) as a normal quit.

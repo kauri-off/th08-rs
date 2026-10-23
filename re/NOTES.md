@@ -598,3 +598,12 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   `this+off` reads, e.g. GameMgr_Calc step 4 gm+0x2D).
 - CHECKPOINT 2026-10-21: re/work/runs/q29/CHECKPOINT.md (status, open items fullrun 29948 / 48756, CODE BUG list 1–14).
   fr_scan3 (48753–48757) was interrupted before its window — rerun the second half of scripts/fr2.sh.
+
+# RE-Q30 (2026-10-21/22) — fullrun divergences, IMPL42–54 — DONE (specs/changelog/answers_re_q30.md)
+- Runs re/work/runs/q30/ (portfix = master 3a3e354 + q29 C/D/E + q30 J–O; q30_fixes.diff; CHECKPOINT.md).
+- fullrun 29948 → J PlaceBullet polar(unwrapped angle) → 48756 → L native 8 (parent walk, int vars 10037/10005–10007,
+  leader orbit velocity) → 51708 → N EnemyMgr_TimeRank at the top of EnemyMgr_Calc → 60112. K shot box f32 edges,
+  M Vec3_FromPolar extended cos/sin, O op-176 box first: no session change.
+- IMPL42–54: all answered (window close = no-op, quitting frame not drawn, SE-off keeps BGM queue, op 95 self-hit
+  local-ip quirk, KillAll = Ecl_SetSub, chained-child mode bits/follow setup after run, natives 26/28/29 details).
+- CODE BUG list: changelog §3 (6 scratch-confirmed, 9 spec-only).
