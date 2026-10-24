@@ -43,6 +43,8 @@ fn run_enemy(m: &mut EnemyManager, anm: &mut AnmManager, e: &mut Enemy, idx: usi
     if r == End::Delete {
         return -1;
     }
+    // 0x2CEA is written back after each context, so it keeps the last one's depth (07 §5.4 depth storage).
+    e.work_depth = e.main.depth;
     // Threads in slot order after main; one created this frame by main runs this frame (07 §5.2).
     for k in 0..4 {
         let Some(mut t) = e.threads[k].take() else {
@@ -55,6 +57,11 @@ fn run_enemy(m: &mut EnemyManager, anm: &mut AnmManager, e: &mut Enemy, idx: usi
         if r == End::Delete {
             return -1;
         }
+        e.work_depth = if r == End::Finished {
+            e.main.depth
+        } else {
+            t.depth
+        };
         if r != End::Finished && !e.kill_running_thread && e.threads[k].is_none() {
             e.threads[k] = Some(t);
         }
@@ -1825,13 +1832,23 @@ impl Exec<'_> {
                     }
                     let args = self.m.g.args;
                     let ecl = &self.m.ecl;
-                    let o = if b == self.idx {
-                        &mut *self.e
-                    } else {
-                        &mut self.m.enemies[b]
-                    };
+                    if b == self.idx {
+                        // SPEC-GAP: op 88 on the caller from its own thread (stored ip / 0x2CEA mid-run; unused in data).
+                        let o = &mut *self.e;
+                        if o.flags & A_NO_PUSH == 0 {
+                            o.main.push();
+                        }
+                        o.main.ctx.enter(ecl, sub);
+                        o.main.ctx.vars[V_ARGI..V_ARGI + 8].copy_from_slice(&args);
+                        return Flow::Next;
+                    }
+                    let o = &mut self.m.enemies[b];
+                    // 07 §5.4: Ecl_CallSub gets the target's stored ip, so the instruction it would run next is
+                    // skipped on return; the push goes to the working depth 0x2CEA, the main depth 0x2CE8 stays.
+                    let ip = o.main.ctx.ip;
+                    o.main.ctx.ip = ip + ecl.ins(ip).map_or(0, |i| i.size);
                     if o.flags & A_NO_PUSH == 0 {
-                        o.main.push();
+                        o.work_depth = o.main.push_at(o.work_depth);
                     }
                     o.main.ctx.enter(ecl, sub);
                     o.main.ctx.vars[V_ARGI..V_ARGI + 8].copy_from_slice(&args);
@@ -2474,6 +2491,26 @@ mod tests {
         assert_eq!(e.main.stack[0].sub, 0);
         let t = e.threads[0].as_ref().unwrap();
         assert_eq!((t.ctx.sub, t.depth), (2, 0));
+    }
+
+    // 07 §5.4 op 88: the target's stored ip is advanced past its next instruction before the push, at the
+    // target's working depth; its main depth stays.
+    #[test]
+    fn call_boss_skips_target_next_ins() {
+        let (mut anm, mut m) = manager(&[
+            &[ins(0, 88, &[0, 2])],
+            &[ins(5, 81, &[1]), ins(6, 81, &[2])],
+            &[ins(100, 81, &[1])],
+        ]);
+        spawn(&mut m, 0, 0, -1, 0);
+        spawn(&mut m, 1, 1, -1, 0);
+        m.bosses[0] = Some(1);
+        let ip = m.enemies[1].main.ctx.ip;
+        m.enemies[1].work_depth = 3;
+        ecl_run(&mut m, &mut anm, 0);
+        let o = &m.enemies[1];
+        assert_eq!((o.main.ctx.sub, o.main.depth, o.work_depth), (2, 0, 4));
+        assert_eq!(o.main.stack[3].ip, ip + m.ecl.ins(ip).unwrap().size);
     }
 
     // 07 §5 op 128: a, b, c, d are raw words whatever the mask (d = f32 bits).

@@ -176,12 +176,16 @@ pub struct Thread {
 impl Thread {
     // Push a copy of the whole context at stack[depth]; depth max 15 (07 §5.4).
     pub fn push(&mut self) {
+        self.depth = self.push_at(self.depth);
+    }
+
+    // Push at stack[d] and return the new depth (max 15).
+    pub fn push_at(&mut self, d: i32) -> i32 {
         if self.stack.len() < 16 {
             self.stack.resize(16, Context::default());
         }
-        let d = self.depth.clamp(0, 15) as usize;
-        self.stack[d] = self.ctx.clone();
-        self.depth = (self.depth + 1).min(15);
+        self.stack[d.clamp(0, 15) as usize] = self.ctx.clone();
+        (d + 1).min(15)
     }
 }
 
@@ -193,6 +197,9 @@ pub struct Enemy {
     pub sub_vms: [AnmVm; 2],
     // e+0x7F8 main context + e+0xA20 call stack.
     pub main: Thread,
+    // e+0x2CEA working depth as left by the last `Ecl_Run` (the last context run) or a phase-change reset;
+    // only op 88 from another enemy reads it outside `Ecl_Run` (07 §5.4).
+    pub work_depth: i32,
     // e+0x3384 op 135 threads.
     pub threads: [Option<Box<Thread>>; 4],
     // e+0x2CA8 vars 10008–15, e+0x2CC8 vars 10024–31.
@@ -358,6 +365,7 @@ impl Default for Enemy {
             vm: AnmVm::default(),
             sub_vms: [AnmVm::default(), AnmVm::default()],
             main: Thread::default(),
+            work_depth: 0,
             threads: Default::default(),
             ivars: [0; 8],
             fvars: [0.0; 8],
@@ -573,6 +581,7 @@ impl Enemy {
 
     // Phase-change cleanup; the depth := 0 only hits the working depth, so the main depth stays (07 §5.4).
     pub fn reset_for_jump(&mut self) {
+        self.work_depth = 0;
         self.threads = Default::default();
         self.desc = BulletDesc::default();
         self.autofire_interval = 0;
@@ -2039,13 +2048,13 @@ impl EnemyManager {
         }
     }
 
-    // Enemy-owned effects: op 128 effects fade out, the op 174 aura ends.
+    // Enemy-owned effects: op 128 effects fade out; the op 174 aura gets interrupt 3 and plays its own end, it is
+    // not freed (07 §10.3b).
     fn release_effects(&mut self, idx: usize) {
-        let e = &mut self.enemies[idx];
-        for i in e.fx_attached.drain(..) {
+        for i in self.enemies[idx].fx_attached.drain(..) {
             crate::effect::get(i, |x| x.fade = true);
         }
-        crate::effect::free(std::mem::replace(&mut e.fx_aura, crate::effect::NONE));
+        self.end_aura(idx);
     }
 
     // Death processing (07 §10.3): runs after this frame's Ecl_Run, so the death sub starts next frame.
@@ -2225,7 +2234,7 @@ impl EnemyManager {
             self.death(idx, anm);
         }
         // Step 7 after step 6's death: the death bonus seconds read the un-ticked timer (07 §10.1, §10.3).
-        self.update_tail(idx, gs, held);
+        self.update_tail(idx, gs);
     }
 
     // 07 §10.1 steps 3–6; false when the enemy was freed (op 1 delete, off screen).
@@ -2276,7 +2285,7 @@ impl EnemyManager {
     }
 
     // Common tail of 07 §10.1 step 7: hit flash, boss marker, timers, draw-list link.
-    fn update_tail(&mut self, idx: usize, gs: f32, held: bool) {
+    fn update_tail(&mut self, idx: usize, gs: f32) {
         let pause = timer_pause() != 0;
         let e = &mut self.enemies[idx];
         // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
@@ -2314,12 +2323,10 @@ impl EnemyManager {
         }
         // Enemy_UpdateOrbitEffects 0x42E010 (07 §10.1 step 7): after the marker; a boss mode-0/1 death has
         // already drained them. 13 §2.6b: centred on the base pos e+0x2D34, not the final pos.
-        // SPEC-GAP: held enemies skip it (step 2 "no effect follow") though they enter the same tail 0x42DB0B.
-        if !held {
-            let (c, d, hidden) = (e.pos, e.orbit_target, e.flags & A_HIDDEN != 0);
-            for &i in &e.fx_attached {
-                crate::effect::get(i, |x| x.orbit_follow(c, d, hidden));
-            }
+        // A held enemy runs it too (unconditional call in the shared tail, 07 §10.1 step 2).
+        let (c, d, hidden) = (e.pos, e.orbit_target, e.flags & A_HIDDEN != 0);
+        for &i in &e.fx_attached {
+            crate::effect::get(i, |x| x.orbit_follow(c, d, hidden));
         }
         if !pause {
             e.boss_timer.tick(gs);
@@ -2695,6 +2702,40 @@ mod tests {
             assert_eq!(e.flags_b & B_DEATH_LATCH, 0);
             assert_eq!(m.draw_lists[0].pop(), Some(0));
         }
+    }
+
+    // 07 §10.1 step 2: the shared tail runs Enemy_UpdateOrbitEffects for a held enemy too (13 §2.6b).
+    #[test]
+    fn held_enemy_updates_orbit_effects() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        crate::effect::clear();
+        let mut rng = crate::rng::Rng::seeded(0);
+        let i = crate::effect::spawn_rng(&mut rng, 4, [0.0; 3], 1, 0);
+        let e = &mut m.enemies[0];
+        **e = Enemy::default();
+        (e.flags, e.flags_b, e.life) = (A_ALIVE, B_PAUSED, 10);
+        (e.pos, e.orbit_target) = ([5.0, 6.0, 0.0], 96.0);
+        e.fx_attached.push(i);
+        m.update(0, &mut anm);
+        assert_eq!(crate::effect::peek(i, |x| x.centre), [5.0, 6.0, 0.0]);
+    }
+
+    // 07 §10.3b: Enemy_Free sends the aura interrupt 3 and drops the pointer; the aura stays live.
+    #[test]
+    fn free_ends_aura_without_freeing() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        crate::effect::clear();
+        let mut rng = crate::rng::Rng::seeded(0);
+        let i = crate::effect::spawn_rng(&mut rng, 4, [0.0; 3], 1, 0);
+        let e = &mut m.enemies[0];
+        **e = Enemy::default();
+        (e.flags, e.fx_aura) = (A_ALIVE, i);
+        m.free(0);
+        assert_eq!(m.enemies[0].fx_aura, crate::effect::NONE);
+        assert!(crate::effect::peek(i, |x| x.active));
+        assert_eq!(crate::effect::peek(i, |x| x.vm.pending_interrupt), 3);
     }
 
     // 07 §10.2 / §10.6: threshold-kill victims jump to their death sub with `Ecl_SetSub` only; threads, thresholds

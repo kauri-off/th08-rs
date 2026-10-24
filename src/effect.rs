@@ -285,16 +285,27 @@ impl Effect {
 }
 
 impl Effects {
-    // Effect_Spawn slot choice (13 §2.2): from the cursor, wrapping at 512, at most 512 slots searched.
-    fn slot_ring(&mut self) -> Option<usize> {
+    // Effect_Spawn / Effect_SpawnWithParam loop (13 §2.2): one 512-slot search budget for the whole call, every
+    // examined slot advances the cursor; count is decremented per spawn and the loop ends at exactly 0, so
+    // count ≤ 0 fills free slots until the budget ends. Returns the last slot taken (even if its init freed it),
+    // or the dummy (NONE) when the budget runs out.
+    fn spawn_ring(&mut self, count: i32, mut init: impl FnMut(&mut Self, usize) -> bool) -> usize {
+        let mut n = count;
         for _ in 0..RING_POOL {
             let i = self.cursor;
             self.cursor = (i + 1) % RING_POOL;
-            if !self.fx[i].active {
-                return Some(i);
+            if self.fx[i].active {
+                continue;
+            }
+            if !init(self, i) {
+                self.fx[i].active = false;
+            }
+            n = n.wrapping_sub(1);
+            if n == 0 {
+                return i;
             }
         }
-        None
+        NONE
     }
 
     // Effect_SpawnHigh 0x425B70: first inactive among 512–639, no cursor.
@@ -563,16 +574,9 @@ impl Effects {
         count: i32,
         colour: u32,
     ) -> usize {
-        let mut last = NONE;
-        for _ in 0..count.max(1) {
-            let Some(i) = self.slot_ring() else { break };
-            if self.init(rng, 1.0, i, kind, pos, [0.0; 3], colour, true) {
-                last = i;
-            } else {
-                self.fx[i].active = false;
-            }
-        }
-        last
+        self.spawn_ring(count, |s, i| {
+            s.init(rng, 1.0, i, kind, pos, [0.0; 3], colour, true)
+        })
     }
 
     // Effect_SpawnFixed 0x425870 without an AnmManager (death ring).
@@ -600,16 +604,9 @@ impl Effects {
         colour: u32,
         zoff: bool,
     ) -> usize {
-        let mut last = NONE;
-        for _ in 0..count.max(1) {
-            let Some(i) = self.slot_ring() else { break };
-            if self.init_start(anm, i, kind, pos, param, colour, zoff) {
-                last = i;
-            } else {
-                self.fx[i].active = false;
-            }
-        }
-        last
+        self.spawn_ring(count, |s, i| {
+            s.init_start(anm, i, kind, pos, param, colour, zoff)
+        })
     }
 
     // Effect_SpawnHigh 0x425B70: layer 0.
@@ -1568,5 +1565,35 @@ mod tests {
         assert!(fx.init(&mut rng, 1.0, i, 35, pos, [1.0, 2.0, 3.0], 0, true));
         let r = fx.fx[i].ring;
         assert_eq!((r.start, r.radius, r.width), (1.0, 2.0, 3.0));
+    }
+
+    // 13 §2.2: one 512-slot budget per call; exhausted → dummy and the cursor is back where it started (+ extra).
+    #[test]
+    fn spawn_shares_budget() {
+        let mut fx = Effects::default();
+        let mut rng = crate::rng::Rng::seeded(0);
+        for x in &mut fx.fx[..RING_POOL - 3] {
+            x.active = true;
+        }
+        fx.cursor = 100;
+        assert_eq!(fx.spawn_rng(&mut rng, 4, [0.0; 3], 4, 0), NONE);
+        assert_eq!(fx.cursor, 100);
+        assert_eq!(
+            fx.fx[RING_POOL - 3..RING_POOL]
+                .iter()
+                .filter(|x| x.active)
+                .count(),
+            3
+        );
+        // count ≤ 0 fills every free slot until the budget ends.
+        let mut fx = Effects::default();
+        fx.cursor = 7;
+        assert_eq!(fx.spawn_rng(&mut rng, 4, [0.0; 3], 0, 0), NONE);
+        assert!(fx.fx[..RING_POOL].iter().all(|x| x.active));
+        assert_eq!(fx.cursor, 7);
+        // Success returns the last slot taken.
+        let mut fx = Effects::default();
+        assert_eq!(fx.spawn_rng(&mut rng, 4, [0.0; 3], 3, 0), 2);
+        assert_eq!(fx.cursor, 3);
     }
 }

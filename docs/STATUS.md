@@ -610,6 +610,14 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl91 (RE-Q32 §3 14–15, RE-Q33 §3 4–5): op 88 on another enemy advances the target's stored ip past its next
+  instruction before the push (07 §5.4) and pushes at the target's working depth 0x2CEA (`Enemy::work_depth`, written
+  back after each context of `Ecl_Run`, 0 on phase-change resets); the main depth stays. Held enemies run the op-128
+  effect update in the shared tail (07 §10.1 step 2). `Enemy_Free` sends the aura interrupt 3 instead of freeing it
+  (07 §10.3b). `Effect_Spawn` / `_SpawnWithParam`: one 512-slot budget per call, count ≤ 0 fills until the budget
+  ends, dummy on exhaustion, else the last slot taken (13 §2.2). SPEC-GAP 105 → 105. Golden 25634, fullrun_noclip
+  124707, selftest1 1922, demos in sync; golden draw same 87.91 % → 87.92 %, reordered 755633 → 437041. Questions:
+  `docs/briefs/IMPL91_QUESTIONS.md`.
 - impl90 (RE-Q31 B, bug 8): trig rounding per 05 §10 trig-site table — enemy move mode 1 velocity and chain-kill
   time orbs via `Vec3_FromPolar` (f32(f64 cos·r)); ops 38 / 166 f32(cos·r) single rounding; ops 66 / 67 / 178
   mode-2 delta f32(f32(cos·spd)·dur); Reimu / Reimu LS orbs f32(f32(sin·r) + cx) (14 §2.1–2.2). Aura VM pos now
