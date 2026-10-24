@@ -1,0 +1,17 @@
+src/enemy.rs:878  // SPEC-GAP: whether the homing-target pick is also skipped with the gated first call (IMPL76 Q1).
+src/enemy.rs:1635  // SPEC-GAP: whether colour slot 1 also moves alpha (colour_end alpha 0x20) is not in 05 §6; RGB only.
+src/enemy.rs:2530  // SPEC-GAP: coordinate A steps per walked entry, also across skipped ones.
+src/eclvm.rs:239  // SPEC-GAP: whether an int read of 10033 consumes a random number is not stated (assumed not).
+src/eclvm.rs:360  // SPEC-GAP: interrupts are dispatched in the main context only; 07 §5.2 tests in every context (IMPL24 Q5).
+src/eclvm.rs:414  // SPEC-GAP: an interrupt index without a registered sub is ignored.
+src/eclvm.rs:724  // SPEC-GAP: op 92 places the child at (x, y) relative to its follow offset (parent pos), not added twice.
+src/eclvm.rs:1130  // SPEC-GAP: game value at (0x160F510)+0x1C belongs to a later phase; reads 0.
+src/eclvm.rs:1217  // SPEC-GAP: native 22's face argument is not given; no boss cut-in is started.
+src/eclvm.rs:1239  // SPEC-GAP: whether native 13 also sets the "bomb drew" flag +0x646C is not stated; it does not (IMPL72 Q3).
+src/eclvm.rs:1250  // SPEC-GAP: 07 §12 does not name the stage VMs; the two spell-background VMs of native 12 are used.
+src/eclvm.rs:1291  // SPEC-GAP: "copy var 10019" is read as the caller's var 10019; distance < 64 strict (IMPL72 Q4).
+src/eclvm.rs:1344  // SPEC-GAP: e+0x2CA0 of an enemy that is not running is taken to be its main context.
+src/eclvm.rs:1364  // SPEC-GAP: a caller outside the ring keeps a stale 10037; with no member there is no leader, so nothing.
+src/eclvm.rs:1415  // SPEC-GAP: 07 §11.1 does not say where g_Gui +0xC is written; the boss slot index at Spell_Start.
+src/eclvm.rs:1439  // SPEC-GAP: 07 §11.1 lists bits 5, 6, 11 written by Spell_Start but not bit 9; cleared here (IMPL46 Q1).
+src/eclvm.rs:1851  // SPEC-GAP: op 86 on an empty boss entry (no existence test; unused in data) — skipped.
