@@ -310,6 +310,9 @@ impl Hud {
         self.load_vm.script_index = -1;
         self.cap_vm.script_index = -1;
         self.tiles_live = 0;
+        // +0x30 := +0x34 := 0 (12 §5.1a).
+        self.enemies.borrow_mut().g.hud_bar_target = 0.0;
+        self.bar_disp = 0.0;
         let kept = KEPT.with_borrow_mut(Option::take).filter(|_| !self.fresh);
         if let Some(k) = kept {
             // Continuing stage: no VM-13 repaint, no panel fade-in; the stage-start transition over the old capture.
@@ -536,15 +539,7 @@ impl Hud {
             self.bar_shown = show;
             self.front[12].pending_interrupt = if show { 1 } else { 2 };
         }
-        // Target fraction life/max from the enemy calc (12 §5.1); hud_life overrides max when set.
-        if let Some(b) = boss {
-            let max = if b.hud_life > 0 {
-                b.hud_life
-            } else {
-                b.max_life.max(1)
-            };
-            self.bar_target = (b.life.max(0) as f32 / max as f32).clamp(0.0, 1.0);
-        }
+        self.bar_target = e.g.hud_bar_target;
         drop(e);
         self.bar_alpha = if self.bar_shown {
             (self.bar_alpha + 4).min(255)
@@ -591,14 +586,7 @@ impl Hud {
             // Text box (10 §7 step 2): top colour 0xD0000000, bottom 0x90000000; grows down over the first 60 clock frames.
             let (x0, x1, y0) = (PLAYFIELD.x + 16.0, PLAYFIELD.x + 368.0, 384.0);
             let (top, bot) = ([0, 0, 0, 0xD0], [0, 0, 0, 0x90]);
-            let uv = [0.0, 0.0];
-            let v = [
-                Vertex::screen(x0, y0, 0.0, uv, top),
-                Vertex::screen(x1, y0, 0.0, uv, top),
-                Vertex::screen(x0, y0 + h, 0.0, uv, bot),
-                Vertex::screen(x1, y0 + h, 0.0, uv, bot),
-            ];
-            gfx.strip(gfx.white(), Blend::Alpha, false, v);
+            Self::bar_quad(gfx, x0, x1, y0, y0 + h, top, bot);
         }
         let d = &mut *d;
         for vm in d.lines.iter_mut().chain(std::iter::once(&mut d.boss_card)) {
@@ -608,8 +596,10 @@ impl Hud {
         }
     }
 
+    // Screen_FillRect3 0x45B490 (12 §5.4, 10 §7): untextured quad at exact D3D coordinates (+0.5 for wgpu).
     fn bar_quad(gfx: &mut Gfx, x0: f32, x1: f32, y0: f32, y1: f32, top: [u8; 4], bot: [u8; 4]) {
         let uv = [0.0, 0.0];
+        let (x0, x1, y0, y1) = (x0 + 0.5, x1 + 0.5, y0 + 0.5, y1 + 0.5);
         let v = [
             Vertex::screen(x0, y0, 0.0, uv, top),
             Vertex::screen(x1, y0, 0.0, uv, top),
@@ -680,18 +670,9 @@ impl Hud {
             Self::rgb(0x202060, a),
         );
         let e = self.enemies.borrow();
-        let max = e.boss(0).map(|i| &e.enemies[i]).map_or(1, |b| {
-            if b.hud_life > 0 {
-                b.hud_life
-            } else {
-                b.max_life.max(1)
-            }
-        }) as f32;
         // ECL op 158 markers: drawn when end ≠ 0 and start < displayed; bottom colour (c >> 2) & 0x3F3F3F.
-        for [end, start, col] in e.g.hud_markers {
-            let (end, start) = (end as f32 / max, start as f32 / max);
+        for (end, start, c) in e.g.hud_markers {
             if end != 0.0 && start < disp {
-                let c = col as u32;
                 Self::bar_quad(
                     gfx,
                     64.0 + 320.0 * start,
@@ -710,13 +691,14 @@ impl Hud {
             let x0 = 35.0 + 26.0 * i as f32 / n as f32;
             let x1 = 35.0 + 26.0 * (i + 1) as f32 / n as f32 - gap;
             let c = Self::rgb(0xFFFFFF - (i as u32 * 255 / 9), a);
-            Self::bar_quad(gfx, x0, x1, 19.0, 23.0, c, c);
+            Self::bar_quad(gfx, x0, x1, 19.0, 23.0, c, Self::rgb(0x202020, a));
         }
+        // HUD +0x24 as stored by Enemy_CheckTimeout (12 §5.1), shown as min(·, 99).
+        // SPEC-GAP: when the timer is drawn (12 §5.4 has no condition); kept: slot-0 boss with timeout > 0.
         let secs = e
             .boss(0)
-            .map(|i| &e.enemies[i])
-            .filter(|b| b.timeout > 0)
-            .map(|b| ((b.timeout - b.boss_timer.cur) / 60).clamp(0, 99));
+            .filter(|&i| e.enemies[i].timeout > 0)
+            .map(|_| e.g.hud_timer.min(99));
         drop(e);
         ctx.anm.draw_mode(&mut ctx.gfx, &mut self.front[12], 0);
         if let Some(s) = secs {

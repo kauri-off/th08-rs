@@ -672,8 +672,12 @@ pub struct Globals {
     // 0xF54CEC (op 163), 0x4E4B60 (native 5).
     pub g_f54cec: i32,
     pub g_4e4b60: i32,
-    // HUD life-bar markers (op 158).
-    pub hud_markers: [[i32; 3]; 8],
+    // HUD +0x3C / +0x5C / +0x7C life-bar markers [end, start, colour]: fractions stored by op 158 (12 §5.1).
+    pub hud_markers: [(f32, f32, u32); 8],
+    // HUD +0x30 boss bar target life / max life, no clamp (12 §5.1); written in the step-7 tail and by op 127.
+    pub hud_bar_target: f32,
+    // HUD +0x24 boss timer seconds, written only by Enemy_CheckTimeout (12 §5.1, 07 §10.2).
+    pub hud_timer: i32,
     // 0x4ECCA8 = 99 999 990 (op 155).
     pub fixed_bonus: bool,
     // Spell flag bit 6 (op 164: the start ring stops following the boss) and bit 11 (op 184: bonus frozen), 07 §11.1.
@@ -1957,6 +1961,10 @@ impl EnemyManager {
     // Enemy_CheckTimeout 0x42B930 (07 §10.2): the largest active threshold becomes life; timeout sub := death sub.
     fn check_timeout(&mut self, anm: &mut AnmManager, idx: usize) -> bool {
         let e = &mut self.enemies[idx];
+        // Every call on a slot-0 boss, before the fire test and before this frame's step-7 tick (07 §10.2).
+        if e.flags & A_BOSS != 0 && e.boss_slot == 0 {
+            self.g.hud_timer = (e.timeout - e.boss_timer.cur) / 60;
+        }
         if e.timeout < 0 || e.boss_timer.cur < e.timeout {
             return false;
         }
@@ -2288,6 +2296,7 @@ impl EnemyManager {
     // Common tail of 07 §10.1 step 7: hit flash, boss marker, timers, draw-list link.
     fn update_tail(&mut self, idx: usize, gs: f32) {
         let pause = timer_pause() != 0;
+        let dialogue = self.dialogue_active();
         let e = &mut self.enemies[idx];
         // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
         let hit = std::mem::take(&mut e.hit);
@@ -2313,6 +2322,10 @@ impl EnemyManager {
             // Both the counter-decrement and the idle branch turn the flag off.
             e.flash = false;
             e.vm.flags &= !anmvm::F_COLOR2;
+        }
+        // Boss HUD target +0x30 (12 §5.1): slot-0 boss, no dialogue; the enemy's own max life e+0x2E00.
+        if e.flags & A_BOSS != 0 && e.boss_slot == 0 && !dialogue {
+            self.g.hud_bar_target = e.life as f32 / e.max_life as f32;
         }
         // ENEMY marker (12 §5.10): x + 32 (−999 while not drawn); mode = warning level + 1, else 1 on a hit flash.
         if e.flags & A_BOSS != 0 && (0..4).contains(&e.boss_slot) {
@@ -2809,6 +2822,24 @@ mod tests {
         assert!(!e.alive());
         assert_eq!((e.bonus_seconds, e.boss_timer.cur), (9, 61));
         assert!(m.draw_lists[0].is_empty());
+    }
+
+    // 12 §5.1: HUD +0x24 from Enemy_CheckTimeout before the tick; +0x30 = life / max life e+0x2E00, no clamp.
+    #[test]
+    fn boss_hud_timer_and_target() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        let e = &mut m.enemies[0];
+        (e.flags, e.boss_slot, e.timeout) = (A_ALIVE | A_BOSS, 0, 600);
+        (e.life, e.max_life, e.hud_life) = (500, 400, 100);
+        e.boss_timer.set(125);
+        assert!(!m.check_timeout(&mut anm, 0));
+        m.update_tail(0, 1.0);
+        assert_eq!((m.g.hud_timer, m.g.hud_bar_target), (7, 1.25));
+        m.enemies[0].boss_slot = 1;
+        m.enemies[0].boss_timer.set(0);
+        m.check_timeout(&mut anm, 0);
+        assert_eq!(m.g.hud_timer, 7);
     }
 
     // 07 §7 op 95: popups 2000, then +30 each, at the final pos and every 6th trail entry; every victim unlinked.

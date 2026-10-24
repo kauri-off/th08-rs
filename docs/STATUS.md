@@ -636,6 +636,15 @@
   Bonus line: no advance after the captures units digit (12 §5.8). Golden 25634, fullrun_noclip 124707, selftest1
   1922, demos 0–3 in sync; golden draw same 92.51 % → 96.80 %, changed 571165 → 229112, missing 33907 → 29647, extra
   4204288 → 4160688, reordered 379188 → 38029. Questions: `docs/briefs/IMPL96_QUESTIONS.md`.
+- impl98 (RE-Q32 §3 10, 11, 13): ECL op 158 stores start (word 1) / end (word 2) as f32 fractions of the op enemy's
+  max life e+0x2E00 (07 op 158); HUD +0x30 bar target = life / max life (no clamp, no HUD life) written in the
+  step-7 tail for the slot-0 boss outside dialogue, op 127 slot 0 sets 1.0, `Hud_Load` zeroes it (12 §5.1, §5.1a);
+  HUD +0x24 timer written by `Enemy_CheckTimeout` before the tick (07 §10.2); remaining-bars bottom 0x202020;
+  `Screen_FillRect3` quads (boss bar, markers, remaining bars, dialogue box) at exact D3D coordinates (12 §5.4,
+  10 §7). SPEC-GAP 107 → 108. Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync; golden draw
+  same 97.03 % → 97.45 %, changed 221433 → 205914, missing 18823 → 255, extra 4161309 → 4157187, reordered 37207 →
+  37193; `-` group same 5191 → 39039, missing 18610 → 42, extra 28772 → 24650, changed 16375 → 1095.
+  Questions: `docs/briefs/IMPL98_QUESTIONS.md`.
 - impl97 (RE-Q33 §3 8, 10, 13): darkness mask drawn by `Ascii_DrawPopups` between the small and large popups while
   alpha > 0 — four black `Screen_FillRect` rects around the player plus etama.anm script 105 (scale r / 63) set every
   frame (`ascii::darkness_draw`, 13 §4.1); ECL native 0 stores alpha / radius (`ascii::set_darkness`, 07 §12),

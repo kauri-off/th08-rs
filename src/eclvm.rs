@@ -1983,6 +1983,8 @@ impl Exec<'_> {
                     self.e.nofire_r2 = 0.0;
                     if slot == 0 {
                         self.m.g.hud_boss = true;
+                        // HUD +0x30 := 1.0 (12 §5.1).
+                        self.m.g.hud_bar_target = 1.0;
                     }
                 }
             }
@@ -2189,10 +2191,13 @@ impl Exec<'_> {
                 ];
             }
             158 => {
+                // 07 op 158: word 1 → start +0x5C, word 2 → end +0x3C, as fractions of this enemy's max life.
                 let k = self.ai(t, ins, 0);
-                let v = [self.ai(t, ins, 1), self.ai(t, ins, 2), self.ai(t, ins, 3)];
+                let max = self.e.max_life as f32;
+                let (a, b) = (self.ai(t, ins, 1) as f32, self.ai(t, ins, 2) as f32);
+                let c = self.ai(t, ins, 3) as u32;
                 if let Some(s) = self.m.g.hud_markers.get_mut(k as usize) {
-                    *s = v;
+                    *s = (b / max, a / max, c);
                 }
             }
             159 => self.e.layer = self.ai(t, ins, 0) as u8,
@@ -2440,6 +2445,18 @@ mod tests {
         ecl_run(&mut m, &mut anm, 0);
         let s = m.g.spell.as_ref().unwrap();
         assert_eq!((s.bonus, s.max), (33_000_000, FIXED_BONUS_CAP));
+    }
+
+    // 07 op 158: word 1 → start, word 2 → end, stored as fractions of the op enemy's max life; op 127 0 → target 1.0.
+    #[test]
+    fn op158_marker_fractions() {
+        let (mut anm, mut m) =
+            manager(&[&[ins(0, 158, &[2, 500, 1500, 0xFF8040]), ins(0, 127, &[0])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].max_life = 2000;
+        ecl_run(&mut m, &mut anm, 0);
+        assert_eq!(m.g.hud_markers[2], (0.75, 0.25, 0xFF8040));
+        assert_eq!(m.g.hud_bar_target, 1.0);
     }
 
     // 07 §5.2: native 18 at time 0 slows this frame's clock tick (live game speed).
