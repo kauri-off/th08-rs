@@ -1567,7 +1567,10 @@ impl EnemyManager {
 
     // Spell_End 0x4161B0 (07 §11.1); the payout is queued and made 130 frames later in `step`.
     pub fn finish_spell(&mut self, anm: &mut AnmManager) {
+        // 0x4E3D28 (darkness mask alpha) := 0 first, every call; then, with the card active, Spell_HideName.
+        self.g.native_globals[0] = 0;
         let Some(s) = self.g.spell.take() else { return };
+        crate::gui::request(crate::gui::Req::BossHide);
         self.g.bonus_frozen = false;
         let (total, remaining) = (s.duration, (s.duration - s.frames).max(0));
         crate::sound::play(crate::sound::TAN00_LOUD);
@@ -2933,13 +2936,16 @@ mod tests {
         }
     }
 
-    // Spell_End (07 §11.1): bomb cooldown +0xE2A6C := 16 whether or not the card was captured.
+    // Spell_End (07 §11.1): bomb cooldown +0xE2A6C := 16 whether or not the card was captured; 0x4E3D28 := 0.
     #[test]
     fn spell_end_sets_bomb_cooldown() {
         let mut anm = AnmManager::default();
         let (mut m, player) = empty_manager(&mut anm);
+        m.g.native_globals[0] = 200;
         m.finish_spell(&mut anm);
         assert_eq!(player.borrow().bomb_cooldown, 0);
+        // 0x4E3D28 := 0 even with no card active.
+        assert_eq!(m.g.native_globals[0], 0);
         m.g.spell = Some(Spell {
             timed_out: true,
             duration: 600,

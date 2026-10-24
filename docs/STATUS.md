@@ -610,6 +610,14 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl94 (RE-Q32 §3 4–5, RE-Q33 §3 7): `Stage_DrawHigh` draws layers 2–3, the list-B effects and (while +0xB24 = 1)
+  the black spell-start fade rect (alpha +0xB28·255/60, 32,16–416,464, ZFUNC always) only while +0xB24 < 2 and the
+  HUD cover is off; the same gate covers `Stage_DrawLow` steps 4/7 (`Stage::layers_hidden`, 06 §10.2). The HUD cover
+  (`Stage::hud_cover`, FUN_00437d87) is never set yet: VM impl+0x3778 (msg op 9, RE-Q32 CODE BUG 12) is not ported.
+  `ItemMgr_Draw` changes sprite / colour / z-write only when +0x2D6 (`Item::shown`) flips (08 §8.6). `Spell_End`
+  zeroes 0x4E3D28 first, then `Spell_HideName` when the card was active (07 §11.1, 12 §5.8). SPEC-GAP 105 → 105.
+  Golden 25634, fullrun_noclip 124707, selftest1 1922, demos in sync; golden draw same 89.79 % → 92.16 %, changed
+  759669 → 571287, missing 65046 → 62209, extra 4667780 → 4232501, reordered 393333 → 380593. No questions.
 - impl93 (RE-Q33 §3 1–3, 6; RE-Q32 §3 7): list-B/C billboards use +0x63C4 = normalise(cross(raw facing, up))
   (`StageCamera::right`), written only in `Stage_DrawLayer` (stale while the layers are skipped); half size
   ((len·0.5)·sprite_w)·scale.x with the 3D projected length, no snapping (`AnmManager::draw_billboard`, 13 §2.6c,

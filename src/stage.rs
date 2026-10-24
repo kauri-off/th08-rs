@@ -303,6 +303,9 @@ pub struct Stage {
     spell_vms: Vec<AnmVm>,
     // +0x625C mask callback 0x4235A0 set (07 §12.1).
     pub spell_mask: bool,
+    // HUD cover FUN_00437d87 (06 §10.2): impl+0x398C ≥ 0 and VM impl+0x3778 waiting for an interrupt.
+    // Set by the HUD once VM impl+0x3778 (msg op 9 stage-clear capture, RE-Q32 CODE BUG 12) is ported.
+    pub hud_cover: bool,
     // +0x6480 sparkle points: count, screen positions (06 §11.1).
     sparkles: RefCell<(usize, [Vec3; 32])>,
     // +0x647C sparkle flag, cleared at the end of Stage_DrawHigh (06 §10.2).
@@ -353,6 +356,7 @@ impl Stage {
             spell_first: 0,
             spell_vms: Vec::new(),
             spell_mask: false,
+            hud_cover: false,
             sparkles: RefCell::new((0, [[0.0; 3]; 32])),
             sparkle_on: false,
             fast_forward: 0,
@@ -685,6 +689,11 @@ impl Stage {
         // Sparkle flag +0x647C (06 §5); cleared at the end of Stage_DrawHigh.
         self.sparkle_on = true;
         self.frame += 1;
+    }
+
+    // 06 §10.2: stage layers, list-B effects and the fade rect are skipped while +0xB24 ≥ 2 or the HUD cover is on.
+    fn layers_hidden(&self) -> bool {
+        self.spell_state >= 2 || self.hud_cover
     }
 
     // 06 §5: every 3rd frame, from frame 700 (from frame 0 in spell practice, GameFlags bit 14), while +0xB24 < 2.
@@ -1022,7 +1031,7 @@ impl Task<Ctx> for Stage {
     }
 
     // Tag 0 = Stage_DrawLow, tag 1 = Stage_DrawHigh (06 §10.2).
-    // Not implemented: DrawLow step 2 (+0xB2C clear) and the HUD condition of steps 4/7.
+    // Not implemented: DrawLow step 2 (+0xB2C clear).
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         if tag == 0 {
@@ -1037,7 +1046,7 @@ impl Task<Ctx> for Stage {
             if let Some(c) = anm.stage_tint.take() {
                 (anm.tint, anm.tint_on) = (c, true);
             }
-            let hide = self.spell_state >= 2;
+            let hide = self.layers_hidden();
             for vm in [&mut self.vm_a, &mut self.vm_b] {
                 if vm.sprite_index > 0 && !hide {
                     anm.draw_mode(gfx, vm, 2);
@@ -1060,12 +1069,19 @@ impl Task<Ctx> for Stage {
                 self.draw_layer(anm, gfx, 1);
             }
         } else {
-            if self.spell_state < 2 {
+            if !self.layers_hidden() {
                 self.draw_layer(anm, gfx, 2);
                 self.draw_layer(anm, gfx, 3);
+                let level = self.effect_level;
+                crate::effect::with(|e| e.draw_background(anm, gfx, level));
+                if self.spell_state == 1 {
+                    // Spell-start fade: black, alpha +0xB28·255/60, ZFUNC ALWAYS (Screen_FillRect 0x45B1E0).
+                    anm.reset_render_state();
+                    gfx.set_depth_test(false);
+                    let a = (self.spell_frames * 255 / 60) as u8;
+                    gfx.rect(32.0, 16.0, 384.0, 448.0, [0, 0, 0, a]);
+                }
             }
-            let level = self.effect_level;
-            crate::effect::with(|e| e.draw_background(anm, gfx, level));
             gfx.set_depth_test(false);
             gfx.set_viewport(PLAYFIELD);
             for vm in &mut self.spell_vms {
@@ -1223,6 +1239,20 @@ mod tests {
         st.spell_state = 2;
         st.frame = 0;
         assert!(!due(&st));
+    }
+
+    // 06 §10.2: layers / list B / fade rect hidden while +0xB24 ≥ 2 or the HUD cover is on.
+    #[test]
+    fn draw_gates() {
+        let mut st = synthetic(vec![rec(-1, 0, [0; 3])]);
+        assert!(!st.layers_hidden());
+        st.spell_state = 1;
+        assert!(!st.layers_hidden());
+        st.hud_cover = true;
+        assert!(st.layers_hidden());
+        st.hud_cover = false;
+        st.spell_state = 2;
+        assert!(st.layers_hidden());
     }
 
     #[test]

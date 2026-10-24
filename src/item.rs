@@ -44,6 +44,8 @@ pub struct Item {
     // +0x2D4 type (08 §8.2).
     pub kind: u8,
     pub alive: bool,
+    // +0x2D6 normal sprite shown (08 §8.6); set by spawn, flipped by the draw.
+    pub shown: bool,
     // +0x2D7: 0 fall, 1 attracted, 2 fly to target, 3/5 time-orb rise (08 §8.4).
     pub state: u8,
     // +0x2D8 max-value flag (point items collected at full value).
@@ -182,6 +184,7 @@ impl ItemManager {
             vel: [0.0, -2.2, 0.0],
             kind,
             alive: true,
+            shown: true,
             state: mode,
             ..Item::default()
         };
@@ -522,13 +525,22 @@ impl ItemManager {
             }
             let y = it.pos[1];
             // Above the playfield: arrow sprite at y 8, alpha fading with distance (08 §8.6).
+            // Sprite / colour / z-write change only when +0x2D6 flips, so the script's colour animation shows.
             if y < -8.0 {
-                it.vm.set_sprite(anm, 0xB6 + it.kind as i32);
+                if it.shown {
+                    it.vm.set_sprite(anm, 0xB6 + it.kind as i32);
+                    it.shown = false;
+                    it.vm.flags |= anmvm::F_ZWRITE_OFF;
+                }
                 it.vm.color[anmvm::A] = (255 - ((8.0 - y) * 255.0 / 128.0) as i32).max(64) as u8;
                 it.vm.pos = [it.pos[0] + 32.0, 8.0 + 16.0, 0.0];
             } else {
-                it.vm.set_sprite(anm, 0xAC + it.kind as i32);
-                it.vm.color[anmvm::A] = 255;
+                if !it.shown {
+                    it.vm.set_sprite(anm, 0xAC + it.kind as i32);
+                    it.shown = true;
+                    it.vm.color = [0xFF; 4];
+                    it.vm.flags |= anmvm::F_ZWRITE_OFF;
+                }
                 it.vm.pos = [it.pos[0] + 32.0, y + 16.0, 0.0];
             }
             // Draw2DRot at z 0.15 (08 §8.6).
