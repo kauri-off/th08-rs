@@ -2289,7 +2289,12 @@ impl EnemyManager {
         let pause = timer_pause() != 0;
         let e = &mut self.enemies[idx];
         // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
-        if std::mem::take(&mut e.hit) && !e.flash {
+        let hit = std::mem::take(&mut e.hit);
+        if e.flags & A_YOUKAI != 0 {
+            // Youkai state skips the hit flash entirely (no counter change, no sfx); BGRA (0x20, 0x20, 0xC0, a / 2).
+            e.vm.flags |= anmvm::F_COLOR2;
+            e.vm.color2 = [0xC0, 0x20, 0x20, e.vm.color[anmvm::A] / 2];
+        } else if hit && !e.flash {
             let low = (e.flags_b >> 4) & 3 >= 2;
             crate::sound::play_at(
                 if low {
@@ -2303,7 +2308,9 @@ impl EnemyManager {
             // BGRA: R 0xFF, G 0x60, B 0x80, current alpha.
             e.vm.color2 = [0x80, 0x60, 0xFF, e.vm.color[anmvm::A]];
             e.flash = true;
-        } else if std::mem::take(&mut e.flash) {
+        } else {
+            // Both the counter-decrement and the idle branch turn the flag off.
+            e.flash = false;
             e.vm.flags &= !anmvm::F_COLOR2;
         }
         // ENEMY marker (12 §5.10): x + 32 (−999 while not drawn); mode = warning level + 1, else 1 on a hit flash.
@@ -2469,7 +2476,7 @@ impl EnemyManager {
                         0.3,
                     ];
                     vm.pos_offset = [0.0; 3];
-                    anm.draw_mode_z(gfx, vm, 2, 0.0);
+                    anm.draw_mode_z(gfx, vm, 2, 0.3);
                     vm.pos_offset = saved_off;
                 }
                 i -= b;
@@ -2606,7 +2613,8 @@ impl EnemyManager {
                 let saved_off = vm.pos_offset;
                 vm.pos = [p[0] + off[0], p[1] + off[1], z];
                 vm.pos_offset = [0.0; 3];
-                ctx_anm.draw_mode_z(gfx, vm, 2, 0.0);
+                // Draw2DRot carries the VM z (0.25 main / 0.3 sub) as the vertex depth (07 §10.6, 05 §9).
+                ctx_anm.draw_mode_z(gfx, vm, 2, z);
                 vm.pos_offset = saved_off;
             }
         }
@@ -2679,6 +2687,26 @@ mod tests {
             timelines: Vec::new(),
         };
         (EnemyManager::new(ecl, bullets, 1), player)
+    }
+
+    // 07 §10.1 step 7: youkai state sets colour2 (0x20, 0x20, 0xC0, a / 2) and skips the flash; otherwise the flag
+    // is turned off on every frame without a new flash.
+    #[test]
+    fn tail_youkai_colour2_and_flag_off() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        let e = &mut m.enemies[0];
+        e.flags = A_ALIVE | A_YOUKAI;
+        e.vm.color = [0xFF, 0xFF, 0xFF, 0x81];
+        e.hit = true;
+        m.update_tail(0, 1.0);
+        let e = &mut m.enemies[0];
+        assert_eq!(e.vm.color2, [0xC0, 0x20, 0x20, 0x40]);
+        assert_ne!(e.vm.flags & anmvm::F_COLOR2, 0);
+        assert!(!e.flash && !e.hit);
+        e.flags = A_ALIVE;
+        m.update_tail(0, 1.0);
+        assert_eq!(m.enemies[0].vm.flags & anmvm::F_COLOR2, 0);
     }
 
     // 07 §10.1 step 2: a held enemy does not move, is not freed off screen, does not die; its timer nets zero.

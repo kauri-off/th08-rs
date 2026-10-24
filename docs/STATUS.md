@@ -618,6 +618,14 @@
   ends, dummy on exhaustion, else the last slot taken (13 §2.2). SPEC-GAP 105 → 105. Golden 25634, fullrun_noclip
   124707, selftest1 1922, demos in sync; golden draw same 87.91 % → 87.92 %, reordered 755633 → 437041. Questions:
   `docs/briefs/IMPL91_QUESTIONS.md`.
+- impl92 (RE-Q32 §3 6, 8; RE-Q33 §3 11, 12): step-7 tail (07 §10.1 step 7) — flags A bit 11 sets colour2
+  (0x20, 0x20, 0xC0, alpha / 2) and skips the hit flash; the colour2 flag is turned off on every frame without a new
+  flash. Enemy VMs drawn with vertex depth 0.25 (main) / 0.3 (subs, trail) (07 §10.6). Ops 80/81 bit 1 switch the
+  aura's colour2 flag; op 174 sends interrupt (player mode ≠ 0) + 1 and negates the spin for odd slots (07 §7). Ops
+  54/57/58/61/62 and the direction animations start scripts with `AnmFile_SetScript` (pos / pos offset kept, 07 §7,
+  §9.3). SPEC-GAP 105 → 105. Golden 25634, fullrun_noclip 124707, selftest1 1922, demos in sync; golden draw same
+  87.92 % → 88.46 %, reordered 437041 → 429779; enemy.anm 25037 changed → identical, stg1enm 1623 → 51, stg2enm
+  3621 → 302 changed. Questions: `docs/briefs/IMPL92_QUESTIONS.md`.
 - impl90 (RE-Q31 B, bug 8): trig rounding per 05 §10 trig-site table — enemy move mode 1 velocity and chain-kill
   time orbs via `Vec3_FromPolar` (f32(f64 cos·r)); ops 38 / 166 f32(cos·r) single rounding; ops 66 / 67 / 178
   mode-2 delta f32(f32(cos·spd)·dur); Reimu / Reimu LS orbs f32(f32(sin·r) + cx) (14 §2.1–2.2). Aura VM pos now

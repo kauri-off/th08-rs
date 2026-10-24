@@ -641,17 +641,19 @@ impl Exec<'_> {
     }
 
     // --- ANM ---
-    // Main VM script from enemy.anm or stgNenm.anm by flags B bit 2 (07 §7 ops 54/58).
+    // Main VM script from enemy.anm or stgNenm.anm by flags B bit 2 (07 §7 ops 54/58/62, §9.3 direction scripts);
+    // started the AnmFile_SetScript way, so VM pos and pos offset are kept.
     fn start_main(&mut self, script: i32) {
         let slot = self.e.anm_slot();
         if script < 0 {
             self.e.vm = AnmVm::default();
             return;
         }
-        self.anm.set_script(&mut self.e.vm, slot, script as usize);
+        self.anm
+            .file_set_script(&mut self.e.vm, slot, script as usize);
     }
 
-    // Ops 57/61: script < 0 disables the sub VM.
+    // Ops 57/61: script < 0 disables the sub VM; else AnmFile_SetScript (pos / pos offset kept, 07 §7).
     fn start_sub(&mut self, k: usize, script: i32) {
         let slot = self.e.anm_slot();
         let Some(vm) = self.e.sub_vms.get_mut(k) else {
@@ -660,7 +662,7 @@ impl Exec<'_> {
         if script < 0 {
             *vm = AnmVm::default();
         } else {
-            self.anm.set_script(vm, slot, script as usize);
+            self.anm.file_set_script(vm, slot, script as usize);
         }
     }
 
@@ -1777,6 +1779,11 @@ impl Exec<'_> {
                 }
                 if m & 2 != 0 {
                     e.set_flag(A_CONTACT, on);
+                    // The aura VM's colour2 flag (bit 17) follows contact damage (07 §7 ops 80/81).
+                    crate::effect::get(e.fx_aura, |x| {
+                        x.vm.flags =
+                            (x.vm.flags & !anmvm::F_COLOR2) | if on { anmvm::F_COLOR2 } else { 0 };
+                    });
                 }
                 if m & 4 != 0 {
                     e.set_flag(A_LOSES_LIFE, on);
@@ -2021,6 +2028,15 @@ impl Exec<'_> {
                     self.e.final_pos,
                     0xFFFFFFFF,
                 );
+                // Interrupt (player mode ≠ 0) + 1; odd slot negates VM +0x14; colour2 untouched (07 §7 op 174).
+                let interrupt = (self.m.g.player_mode != 0) as u16 + 1;
+                let odd = self.e.slot & 1 != 0;
+                crate::effect::get(self.e.fx_aura, |x| {
+                    x.vm.pending_interrupt = interrupt;
+                    if odd {
+                        x.vm.angular_vel[2] = -x.vm.angular_vel[2];
+                    }
+                });
             }
             // Spell-practice guard (0x164D0B4 bit 14 and bits 7–8 ≠ 0): 129/130 ignored, 133/134 keep the sub (07 §5).
             129 if !practice_guard() => {
@@ -2874,6 +2890,40 @@ mod tests {
         crate::effect::get(c.fx_aura, |x| {
             assert!(x.vm.angular_vel[2].is_sign_negative())
         });
+    }
+
+    // 07 §7 op 174: interrupt (player mode ≠ 0) + 1, odd slot negates the spin, colour2 untouched; ops 80/81 bit 1
+    // switch the aura's colour2 flag.
+    #[test]
+    fn aura_op174_and_contact_flag() {
+        let (mut anm, mut m) = manager(&[
+            &[ins(0, 174, &[0]), ins(1, 81, &[2]), ins(2, 80, &[2])],
+            &[],
+        ]);
+        spawn(&mut m, 1, 0, -1, 0);
+        m.enemies[1].slot = 1;
+        m.g.player_mode = 1;
+        ecl_run(&mut m, &mut anm, 1);
+        let fx = m.enemies[1].fx_aura;
+        assert_ne!(fx, crate::effect::NONE);
+        let spin = |m: &EnemyManager| {
+            let mut r = (0, 0.0, 0);
+            crate::effect::get(m.enemies[1].fx_aura, |x| {
+                r = (
+                    x.vm.pending_interrupt,
+                    x.vm.angular_vel[2],
+                    x.vm.flags & anmvm::F_COLOR2,
+                )
+            });
+            r
+        };
+        let (int, w, c2) = spin(&m);
+        assert_eq!((int, c2), (2, 0));
+        assert!(w.is_sign_negative());
+        ecl_run(&mut m, &mut anm, 1);
+        assert_eq!(spin(&m).2, anmvm::F_COLOR2);
+        ecl_run(&mut m, &mut anm, 1);
+        assert_eq!(spin(&m).2, 0);
     }
 
     // 07 §4.1 step 3: only pos is written; prev pos stays (0, 0, 0), final pos is recomputed by the run.
