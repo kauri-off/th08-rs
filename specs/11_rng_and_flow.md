@@ -131,7 +131,7 @@ Pause must not consume RNG: the only RNG use on pausing is the checksum update, 
 | +0x3DA9C | — | i32 | deaths (this game) | VERIFIED |
 | +0x3DAA8 | — | i32 | pauses | VERIFIED |
 | +0x3DAAC | — | i32 | total time added | VERIFIED |
-| +0x3DBA8 | 0x164D0B0 | u8 | (reset at new game / death; replay record +0x20) | VERIFIED storage |
+| +0x3DBA8 | 0x164D0B0 | u8 | (meaning unknown). Writers (VERIFIED RE-Q36, byte scan of every absolute reference + decomp): `GameManager_StageStart` := 0 in the fresh-start branch (§3.2); `Item_CollectPowerSmall` 0x440CF0 := 0 when power < 128, before `GameMgr_AddPower`; `Player_DyingUpdate` := 0 at the **real death** (deathbomb counter reaching 0, 09 §6.2) — not `Player_Die`, so a hit saved by a deathbomb leaves it unchanged; `Replay_PlayStageLoad` := stage record +0x20. Only reader: `Replay_RecordStageStart` → record +0x20. So it is always 0 in a live game and only a played-back record can make it non-zero | VERIFIED |
 | +0x3DBA9 | 0x164D0B1 | u8 | shot type 0–11 (04) | VERIFIED |
 | +0x3DBAA | 0x164D0B2 | u8 | added to shot type into +0x3DBAB (+0x3DBAB has no reader). 0 except during attract demos, where it is shot % 2 (changelog/answers_phase7.md §3) | VERIFIED |
 | +0x3DBAC | 0x164D0B4 | u32 | **game flags** (§2.1) | VERIFIED |
@@ -146,7 +146,7 @@ Pause must not consume RNG: the only RNG use on pausing is the checksum update, 
 | +0x3DDD0 | 0x164D2D8 | u16 | 1 << stage (clear-mask bit) | VERIFIED |
 | +0x3DDD4..+0x3DDF0 | 0x164D2DC.. | f32×8 | playfield rect (32, 16, 384, 448) and player clamp rect (8, 16, 376, 432) | VERIFIED (0x43C686) |
 | +0x3DDF8.. | — | i16 | gauge thresholds (09) | VERIFIED |
-| +0x3DE28 | — | i32 | deferred music start (1 = play stage BGM 0) | VERIFIED |
+| +0x3DE28 | 0x164D330 | i32 | deferred music start, see §4 step 3. Only writer `GameManager_StageStart` (every stage start, **including** reload-same-stage, after the BGM loads of §3.1): := 2 when the reload-same flag 0x17CE8C4 ≠ 0 **and** spell practice (GameFlags bit 14) **and** the card's BGM-table flag (table 0x4C7670 record +0x10, `FUN_00439916`) is 0; else := 1 (VERIFIED 0x43ABD7, RE-Q36) | VERIFIED |
 | +0x3DE2C/30/34/38 | — | i32 | rank, max, min, sub-counter (07/09); boot values **0, 0, 0, 0**: `GameMgr_Ctor` 0x43C5E1 (static init) zeroes GM +0..+0x3DE3B, then sets only the playfield rect +0x3DDD4..+0x3DDE0 = (32, 16, 384, 448) and demo index +0x3DBB4 = 3; the first `GameMgr_InitRank` (§3) writes the real values (RE-Q24) | VERIFIED |
 
 Gameplay frame counter 0x164D2C8 (GM+0x3DDC0): += 1 near the end of `GameMgr_Calc` (not on its early returns: loading, pause/game-over, slow-mode skip); := 0 by `GameManager_Register` and `GameMgr_OnRemove` (its last statement, after the subsystem teardown and `Ascii_InitVms`; VERIFIED 0x43BE2C, RE-Q28), so it reads 0 in the menus after a pause-quit (changelog/answers_impl21.md §Q3). Globals next to it: 0x164D30C play-time counter (frames: += 1 at the top of every `EnemyMgr_Calc` call while no dialogue is active (`Msg_IsActive` == 0), before the bit-10 test, in the same block as the human-rate counters (15 §2.3) — so not on paused / game-over-menu / loading / post-clear frames, where `GameMgr_Calc` returns 3 before the enemy manager's calc, but yes during the bit-10 death freeze; + 1800 per ECL op 148; := 0 by StageStart; VERIFIED 0x42C6A0, RE-Q24); 0x164D318/0x164D31C per-frame
@@ -173,7 +173,13 @@ counters not advanced during dialogue.
 ## 3. New game and stage start (`GameManager_StageStart`, loader thread) — VERIFIED
 
 `GameManager_Register` (0x43AA5C) adds calc node prio 2 (`GameMgr_Calc` 0x439BC7, on-register 0x43AAF4,
-on-remove 0x43BE2C) and draw node prio 5 (0x43AA03). The on-register callback sets `loading = 1`, decides
+on-remove 0x43BE2C) and draw node prio 5 (`GameMgr_Draw` 0x43AA03). **`GameMgr_Draw`** (VERIFIED RE-Q36): if the
+paused byte +0x3DBB2 ≠ 0 it := 2; then it returns **3** (stop the draw chain for this frame, 00 §3: nothing of draw
+prio > 5 is drawn — stage, enemies, player, effects, bullets, ASCII, dialogue, Supervisor 16, HUD) when the scene
+(0x17CE8B4) ≠ 2, or GameFlags bits 5–6 == 1, or loading (+0x38) ≠ 0; else 1. So on every loading frame — including
+the post-clear frames of the old GM, where loading stays 1 until the scene switch (§4 step 1) — only the Supervisor's
+draw prios 0 and 2 run (golden present 10917, the frame after the stage-1 clear confirm: 0 primitives). The
+on-register callback sets `loading = 1`, decides
 whether this is a **fresh start** (`0x17CE8BC = 1` unless the requested scene was 3/11/12), sets up the
 loading screen, forces flags bits 5–6 to 1 if they were ≥ 2 (stage cleared → wait), and starts
 `StageStart` on a **separate thread**.
@@ -330,7 +336,16 @@ Per frame (after `0x164D09C += 1`):
      frame itself. Because loading was set to 1, every path then takes the loading branch of step 2 (loading_frames
      += 1, return 3) on this and all later frames until a loader clears it: no gameplay calc after the clear frame.
 2. If loading → §3.1 (return 3 or 4).
-3. Deferred music start (`gm+0x3DE28`).
+3. Deferred music start (`gm+0x3DE28`; VERIFIED 0x439BC7, RE-Q36): if it is ≠ 0 (only reached when loading = 0):
+   `Hud_SetStageNamePlate` (12 §5.2), `Anm_ReleaseSurface(8)`, global 0x17CEA54 := 0; then if it is **1**:
+   `Music_PlaySlot(0, track)` (02 §4) with track = word 0 of table 0x4C7240[stage idx] (12-byte records; word 0 by
+   stage idx 0–8 = 1, 3, 5, 7, 7, 10, 12, 12, 16) outside spell practice, or in spell practice record +4 of the first
+   0x4C7670 record whose max card id ≥ the card id (the same record as the BGM name, 02 "Where each track is used"); value 2 plays nothing;
+   then := 0. Table 0x4C7670 record +0x10 is 1 only for the two `th08_13b` records (card ids 143–146 and 171–190),
+   else 0. Consequences: a stage-practice / Extra retry or continue (scene 11)
+   **does** restart BGM slot 0 (the slots are not reloaded, but the play command is sent; the pause-menu retry
+   stopped the music, 12 §3 state 10); a spell-practice retry plays it again only for a 0x4C7670 record with flag 1
+   (exactly the cards whose pause retry calls `Music_Stop`), otherwise the music keeps playing untouched.
 4. **Pause**: if not paused, no game-over menu, not demo, `gm+0x2D == 0`, and ESC newly pressed (raw input):
    paused = 1, sound command "Pause", sfx 0x22 (`se_pause`), music paused, pauses++, checksum with RNG saved
    and restored.

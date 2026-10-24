@@ -238,6 +238,10 @@ Arg letters: `i` int, `f` float, `V` int var dest, `W` float var dest, `O` byte 
 | 53/54 | imul3/fmul3 | a, b, c | a = b · c | 0/0 |
 | 55/56 | idiv3/fdiv3 | a, b, c | a = b / c | 2/4 |
 | 57/58 | imod3/fmod3 | a, b, c | a = b % c / fmod(b, c) | 0/0 |
+
+Integer division / remainder (45, 47, 55, 57) are x86 `idiv`: a divisor of 0 (or INT_MIN / −1) raises an unhandled
+divide fault (the game crashes). Unreachable in the data: the only integer division in any shipped script is `idiv3 $I4, 300, 2`
+/ `idiv3 $I4, 50, 2` (constant divisor 2; no op 45/47/57 at all) (VERIFIED anm_dis, RE-Q36).
 | 59 | irand | V a, i n | a = n == 0 ? 0 : (Rng_Next32() mod n) (unsigned) | 11 |
 | 60 | frand | W a, f x | a = Rng_NextFloat() · x, with Rng_NextFloat = u32 / 2^32 ∈ [0,1) | 22 |
 | 61–65 | fsin / fcos / ftan / facos / fatan | W a, f x | a = sin/cos/tan/acos/atan(x) | 0 |

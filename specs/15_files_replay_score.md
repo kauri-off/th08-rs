@@ -230,6 +230,12 @@ Write order (VERIFIED from the saver):
 | GameMgr_LoadScoreData 0x43BBE1 (new game) | Hiscore for (shot, difficulty) → stats+0x14; CATK, CLRD, PSCR. In practice the hiscore is PSCR[shot].hiscore[stage][diff] and that play count is incremented. Then backs up CATK, clears the in-game HSCR record (§2.3) and copies the config into it. |
 | Result_OnRegister 0x45964D | Builds the 5×12 ranking lists and LSNM. In viewer mode (Result mode 0) also loads CATK, CLRD, PSCR. |
 
+Equivalence note (INFERRED from this table and the save paths below, RE-Q36): the blocks in memory change only through
+gameplay / menu code, and every path from such a change to the next re-take of the same blocks (main menu, new game,
+result) passes a save (game start flush, pause quit, after-game result, exit) — the only exception is the slow-mode
+CATK reload of mode 2 (below) — so an implementation that loads every block once at boot and keeps them in memory
+reaches the same state, provided it applies that slow-mode CATK restore.
+
 `Result_Register(mode)` 0x4582A0 is the only path to a save. Its on-remove handler 0x459FD2 calls `ScoreDat_Save`. The call sites are:
 - mode 2 (flush only: load, then immediately save) from:
   - the pause menu "quit" (0x4045AC);

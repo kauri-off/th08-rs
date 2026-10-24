@@ -779,3 +779,13 @@ addr,kind,name,signature,confidence,note
 0x0040ba70,func,AnmMgr_ResetCameraCache,,VERIFIED,AnmManager +0x24C4 := 0xFF (RE-Q34)
 0x018b899c,global,g_PlayerHomingTarget,float[3],VERIFIED,player +0xE2AA4 homing target written by EnemyMgr_Calc 0x42D390 (RE-Q35)
 0x018b89b8,global,g_PlayerBossTargetSet,int,VERIFIED,player +0xE2AC0 boss offered as target this frame (RE-Q35)
+0x004501b0,func,ShotInit_Random,,VERIFIED,RE-Q36 shot init 7: phase test then Rng_Signed only on fire
+0x00439916,func,Spell_BgmRestartFlag,,VERIFIED,RE-Q36 card table 0x4C7670 record +0x10 for card 0x164D0B8
+0x0164d330,global,g_GmMusicPending,,VERIFIED,RE-Q36 gm+0x3DE28: 1 play slot 0 / 2 no play; only writer StageStart
+0x00427a60,func,EffUpd_DissolveRing,,VERIFIED,RE-Q36 type 50: segments := 32 every frame
+0x00406700,func,AnmVm_ClearVisible,,VERIFIED,RE-Q36 vm+0x1F8 &= ~1
+0x0043f980,func,Text_CreateWorkSurface,,VERIFIED,RE-Q36 CreateImageSurface(1024,64,A1R5G5B5) -> 0x1653620
+0x0043f10d,func,TextDib_Create,,VERIFIED,RE-Q36 top-down BI_BITFIELDS DIB section by D3D format table 0x4C7948
+0x0043f31c,func,TextDib_AlphaPass,,VERIFIED,RE-Q36 invert alpha; A1R5G5B5 vertical gradient on opaque pixels
+0x0043f898,func,TextDib_CopyToSurface,,VERIFIED,RE-Q36 row memcpy into the work surface
+0x0047abab,func,D3DXLoadSurfaceFromSurface,,INFERRED,RE-Q36 static D3DX8 (dst,pal,rect,src,pal,rect,filter,colorkey)

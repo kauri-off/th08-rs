@@ -135,7 +135,7 @@ in `.end` files, and literals in the exe.
 | Extra | `th08_18`, `th08_19` |
 | Endings (`end0??.end`) | `th08_16` |
 | Staff roll (`staff00*.end`) | `th08_17` |
-| Spell-card practice mode | from a table in the exe (0x4C7670, 20-byte records `{max_spell_id, ?, name*, ?, ?}`); the first record whose `max_spell_id >= current spell id` is used. Thresholds: ≤1 th08_00, ≤12 03, ≤16 04, ≤31 05, ≤35 06, ≤53 07, ≤76 09, ≤99 10, ≤118 12, ≤122 13, ≤142 14, ≤146 13b, ≤150 13, ≤170 15, ≤190 13b, ≤193 18, ≤204 19, ≤222 **th08_20** (Last Words). (Table VERIFIED; "spell practice" meaning INFERRED from the gate flag and spell index.) |
+| Spell-card practice mode | from a table in the exe (0x4C7670, 20-byte records `{max_spell_id, music-room track, name*, ?, retry-restart flag}`: +4 is the `Music_PlaySlot` track of 11 §4 step 3; +0x10 = 1 only for the two th08_13b records, read by `FUN_00439916` for the retry music rules of 11 §4 step 3 and 12 §3 state 10, VERIFIED RE-Q36); the first record whose `max_spell_id >= current spell id` is used. Thresholds: ≤1 th08_00, ≤12 03, ≤16 04, ≤31 05, ≤35 06, ≤53 07, ≤76 09, ≤99 10, ≤118 12, ≤122 13, ≤142 14, ≤146 13b, ≤150 13, ≤170 15, ≤190 13b, ≤193 18, ≤204 19, ≤222 **th08_20** (Last Words). (Table VERIFIED; "spell practice" meaning INFERRED from the gate flag and spell index.) |
 | Music room | all 21, in `musiccmt.txt` order |
 
 Notes:

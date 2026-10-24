@@ -448,6 +448,12 @@ frame; `PauseMenu_Update` "retry" (state 10, practice / spell practice / Extra �
 and on the clear (confirm) frame (golden presents 10796 / 10918 and 24986 / 25108); the second copy, applied after
 that frame's Present, overwrites the first and is what the continuing stage's 168 transition tiles show (§5.7).
 VMs: `ascii.anm` scripts 12–21 on 10 menu VMs (title, items "resume / quit / retry", confirm "yes/no" …).
+State 0 starts **all ten** scripts (VM i := script 12 + i), sends interrupt 1 to VMs 0–3 only, then clears VM flag bit 0
+(`0x406700`, not visible) on VM 8 (script 20, sprite 290 at (344, 428): practice label) when not stage practice, and on
+VM 9 (script 21, sprite 289 at (344, 412): slow-mode label) when the gameplay config copy's slow byte (`*(GM+4)`
++0x25, 15 §1; forced 0 for difficulty ≥ 4, practice and spell practice at game start, 11 §3.2) is 0 (VERIFIED 0x4037B0,
+RE-Q36). Neither script sets the flag again and the close / quit / retry interrupts go only to visible VMs, so a hidden
+VM is never seen; with slow mode on, script 21 runs and shows in normal games.
 Colours: selected 0xFFFFFFFF, others 0xFF505050 (confirm screen: selected 0xFFFF8080); the selected item is
 offset (−4, −4).
 **Draw** (0x404750, ASCII manager draw, only while paused 0x164D0BA ≠ 0; VERIFIED): flush the batch, viewport =
@@ -465,7 +471,7 @@ capture VM (+0x1A70) with VM flag bit 13 set (z-write off) via `Draw2DSnap`; the
 | 7 / 8 | retry: "yes" / "no" | confirm on 7 → 10, on 8 → back to 3 |
 | 4 | closing | after 20 frames: paused = 0, sound resumes |
 | 9 | quit | after 20 frames: scene 1, paused = 0, `Result_Register(2)` (save) |
-| 10 | retry | after 20 frames: spell practice / practice / Extra → stop music (or restart spell BGM), scene 11; else scene 10 |
+| 10 | retry | after 20 frames: spell practice / practice / Extra → music: outside spell practice, or in spell practice when the card's 0x4C7670 record flag +0x10 = 1, `Music_Stop`; else sound command 7 "UnPause" and `0x406AC0(2.0)` on the BGM stream (state 2, volume −10000: a 2 s fade-in, INFERRED) — the music is not stopped; then scene 11 (the new GM replays slot 0 only in the `Music_Stop` cases, 11 §4 step 3; VERIFIED 0x4037B0, RE-Q36); else scene 10 |
 
 Shortcut keys at any time: ESC → close (4); Q → quit (9); R → retry (10, not in replay). All confirms play
 sfx 10, cursor moves sfx 0 (`se_plst00`).

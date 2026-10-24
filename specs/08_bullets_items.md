@@ -110,7 +110,7 @@ The first 0xD44 bytes are a copy of the template (5 VMs + extras); then:
 | +0xDBD | u8 | grazed | |
 | +0xDBE | u8 | cancel-after-spawn | set while in a bomb area during a spawn effect |
 | +0xDC0 | ptr | draw list link | |
-| +0xDC4 | i32 | 0 | |
+| +0xDC4 | i32 | warp cooldown | 0 at spawn; := 2 by a warp of ECL natives 4 / 7 / 21 and decremented by each later call of those natives while ≠ 0 (07 §12; its only readers/writers, VERIFIED RE-Q36) |
 | +0xDC8 | i32 | ex sfx | sound played by ex commands (descriptor +0x204; −1 = none) |
 | +0xDCC | i32 | ex index | next ex command slot (descriptor +0x208, normally 0) |
 | +0xDD0 | 18 × 24 | ex commands | copy of the descriptor's command slots (§5) |

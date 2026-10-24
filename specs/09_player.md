@@ -163,11 +163,11 @@ Function indexes (all values used by the 8 files are in range):
 | | 4 | 0x44FE20 | laser: not while bombing nor when 0x164D0B4 bit 13; one live laser per slot (phase = slot); slot timer = 999 |
 | | 5 | 0x44FFA0 | default, then aim at +0xE2AB0 if its x > −100 (speed × 1.5) |
 | | 6 | 0x450080 | angle = wrap(option base angle +0xE2B0C + entry angle + π/2), speed |
-| | 7 | 0x4501B0 | angle = Rng_Signed × π/48 − π/2 (**RNG**) |
+| | 7 | 0x4501B0 | phase test as init 0; **only when it fires**: `Player_InitShot`, then angle (+0x450) = Rng_Signed × π/48 − π/2 (**RNG**, one draw per fired bullet; no draw on a non-matching frame), vel = polar(angle, entry speed) (VERIFIED 0x4501B0, RE-Q36) |
 | | 8 | 0x450110 | not while bombing; angle = wrap(option angle (+0xCD0) + entry angle) |
 | update | 1 | 0x450320 | homing (§4.4) |
 | | 3 | 0x450580 | only while the bullet state (+0x462) == 1 (flying): vy (+0x440) −= `Rng_FloatRange`(0.1) + 0.27 (**RNG**); in any other state (hit animation) nothing, no draw (VERIFIED, RE-Q24) |
-| | 4 | 0x4505D0 | laser body (follows the option/emitter, length from timer) |
+| | 4 | 0x4505D0 | laser body (follows the option/emitter, length from timer). **No shipped entry uses update 4** (sht_dump of all 8 files: update indexes used are 0, 1, 3, 5 only; VERIFIED RE-Q36), so it is unreachable |
 | | 5 | 0x450840 | laser that follows option 0 with a 32-segment trail and creates damage rectangles |
 | draw | 1 | 0x450AD0 | trail draw |
 | hit | 1 | 0x450C50 | explosion: first hit → hitbox enlarged by sprite (48–128 px), vel = polar(Rng × π/2 − 3π/4, 6) (**RNG**); in hit state only every 2nd frame (4th during a spell card) damages, damage /= 3 (min 1), vel × 0.88. The RNG draw happens on the first hit regardless of the sprite. After either branch, on non-filtered frames only: bullet timer % 6 == 0 → `Effect_Spawn(5, enemy pos, 1, 0xFFFFFFFF)` (so effectively every 6th frame, every 12th during a spell card) (changelog/answers_impl10.md §8, VERIFIED) |
@@ -329,7 +329,9 @@ untampered run, so this matches a port that ignores the anti-tamper checks (13 �
 ### 6.2 Dying state (state 2, `Player_DyingUpdate`)
 While n > 0 (every frame): time −15 (0x418220), n −= 1, last-spell request (+4) := 1. A bomb pressed now
 (§7) becomes a last spell and saves the player (the bomb sets state 3). When n reaches 0 (the real death):
-effects + sound 0xF; bullets unfrozen; spell-card failure notified; miss counter; time −= min(time/10, 500)
+effects + sound 0xF; bullets unfrozen (GameFlags bit 10 off, `AnmMgr_TintOff`); byte 0x164D0B0 := 0 (here, after the
+statistics bit +0xDA |= 4 — not in `Player_Die`, so a deathbomb leaves it unchanged; 11 §2, VERIFIED 0x44CBF0, RE-Q36);
+spell-card failure notified; miss counter; time −= min(time/10, 500)
 (as −(time)/10 when time ≤ 5000); drops: lives < 1 → power := 0 and 5 full-power items; else power :=
 0 if ≤ 16 else power − 16, 1 big + 5 small power items, and for shot types 2, 8, 9 with bombs > 0 a bomb
 item (all mode 2); attracted items fall; **rank −1600**.
@@ -358,10 +360,19 @@ states the timer just ticks. Bombs set state 3 with their own invulnerability ti
 §6.2); state 1 and timer 120, or 10 in spell practice (game-manager flag +0x3DBAC bit 14).
 
 ## 7. Bombs (`Player_UpdateBomb` 0x44C650)
-Start conditions (when not bombing): forced (+6 set and counter == 1), or: bomb pressed (input bit 1), not
+Start conditions (when not bombing): forced (+6 set and counter == 1), or: bomb **held** (bit 1 set in the current
+game input word g_Input 0x164D52C — a level test with **no** edge test against the previous word, VERIFIED asm
+0x44C85A, RE-Q36; so holding the bomb button starts a new bomb on the first non-bombing call whose other tests pass,
+e.g. the frame after a bomb ends, or the first frame of a deathbomb window when it was already held at the hit), not
 blocked by game manager / dialogue, counter (+0xE2A68) ≠ 0, bombs ≥ 1, cooldown 0. In the special mode
-(0x164D0B4 bits 7–8 or bit 14) a new press only plays sound 0x29.
-Start: statistics bit; +6 := 0; normal mode: bullets unfrozen, ring effect removed; index = focus; if +4 (last
+(0x164D0B4 bits 7–8 or bit 14), a call that passes those tests only plays sound 0x29, and only when bit 1 is newly
+set (g_Input bit 1 ≠ g_InputPrev 0x164D534 bit 1: the only edge test of the function); it returns either way.
+Start: statistics bit; +6 := 0; then the cost block runs **only in normal mode** (GameFlags bits 7–8 clear; bit 14 is
+not tested here). In special mode (bits 7–8 set: reachable only through the forced start after a hit, §6.1, e.g. a
+death during a boss last spell) the whole block is skipped: index := 4 and nothing else — no bomb cost, no
+`SetBombs`/`AddBombs` (so none of their checksum RNG draws), no counter 0x164CFA8 / 0x164CFAC, no
+`GameMgr_AddBombCount` 0x44E2E0 (no checksum draws), no unfreeze / ring removal / tint off, +0xFEC unchanged
+(VERIFIED 0x44C650, RE-Q36). Normal mode: bullets unfrozen, ring effect removed; index = focus; if +4 (last
 spell) index = 1 − focus; no last spell: bombs −= 1 (counter 0x164CFA8); last spell: index += 2, uses all bombs
 if forced or bombs < 2 (count kept in +0xFEC, bombs := 0) else 2 bombs; counter 0x164CFAC; game-manager
 0x44E2E0(1). Special mode: index 4. Then +4 := 0; bombing := 1; +0xE2A7C := 1; timer 0; duration := 999 (the bomb

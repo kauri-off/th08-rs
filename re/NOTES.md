@@ -666,3 +666,13 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   < 0 still skips/pushes); interrupts in thread contexts (07 §5.5).
 - New spec facts: 07 §4.2/§5.5 (table default, no registration test), §6 10033, §10.1 step 6 homing pick placement, §12
   rows 13/16/24, op 86 global ids; 11 §5 +0x1C.
+
+# RE-Q36 (2026-10-24) — SPEC-GAP batch 2, rest of gameplay (23 markers) — DONE (specs/changelog/answers_re_q36.md)
+- Code + data scans + the golden reference draw log only (re/work/runs/q36/CHECKPOINT.md; scenes.py / gf.py scan
+  golden F lines). 15 of 23 right (most already in a spec), 1 open (D3DX TRIANGLE filter).
+- Reachable CODE BUGs: bomb start is a HELD test (no edge); special-mode (bits 7–8) forced start skips the whole cost
+  block (port charges bombs + checksum RNG); natives 4/7/21 warp (cooldown +0xDC4, pos vs pos−vel zones, ×kO/kI scale,
+  vel/angle reversal; stage 4A); gm+0x3DE28 set on reload-same too (retry BGM); pause script 21 (slow mode);
+  GameMgr_Draw returns 3 on loading frames (golden present 10917 = 0 prims); text DIB 1-bit alpha + vertical gradient.
+- Unobservable: 0x164D0B0 reset place (Player_DyingUpdate real death, Item_CollectPowerSmall).
+- Open: D3DX8 is statically linked (0x47ABAB) → TRIANGLE filter reversible (own task).

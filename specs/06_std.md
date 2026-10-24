@@ -353,7 +353,8 @@ for each instance in list order:
   `Stage_DrawLayer` 0x40A1B0, RE-Q24): v is the distance variable after the fog step, i.e. v = dist when
   dist ≤ fog_near, but v = the fog factor f when dist > fog_near (the code overwrites it); since f < 1 there
   (f ≥ 1 skips the quad) the test is true for every drawn quad whenever fog_near > 1. Only quads that pass the
-  0 ≤ z ≤ 1 test (are drawn) can append (no bounds check; the 32-entry
+  0 ≤ z ≤ 1 test (are drawn) can append. The append test itself has no +0xB24 term (VERIFIED 0x40A1B0, RE-Q36): it is
+  implied, because `Stage_DrawLayer` is only called while +0xB24 < 2 (§10.2 `Stage_DrawLow` step 7, `Stage_DrawHigh`) (no bounds check; the 32-entry
   array is never exceeded by the shipped data — at most 15 points per frame, changelog/answers_impl10.md §3, VERIFIED).
 - Note: vm.pos is left at the projected screen position; it is recomputed every draw.
 

@@ -252,17 +252,38 @@ rasteriser with the sprite's texture, its rect (x = u0, y = v0 in texture pixels
 font size bytes `vm+0x298/0x299` (both = font_size = 15) and the sprite's scale factors; finally sets VM flag bit 0.
 
 Rasteriser (font size > 8 path, always taken for dialogue, 0x43F9C8):
-- Work surface: 1024×64 A1R5G5B5 off-screen surface (`0x1653620`), cleared to transparent over
-  (0, 0, 2w, 2·size+6). Text is drawn at **2× resolution** and then downsampled.
+- Work surface: 1024×64 A1R5G5B5 image surface `0x1653620` (`CreateImageSurface(1024, 64, 0x19)`, 0x43F980). Text is
+  drawn at **2× resolution** into a GDI DIB and then copied and downsampled (VERIFIED 0x43F9C8, RE-Q36):
+  1. A **fresh DIB section** per call, in the surface's format (table 0x4C7948 by D3D format: A1R5G5B5 → 16 bpp
+     `BI_BITFIELDS`, masks A 0x8000, R 0x7C00, G 0x03E0, B 0x001F), width 1024, **top-down** (height −65), zero-filled.
+  2. Pre-pass (`0x43F31C`, flag 0) over the region (below): every pixel's alpha bit is inverted, so the region
+     becomes 0x8000 (opaque black); the gradient of step 4 then changes nothing (all colour 0).
+  3. GDI `TextOut` calls (outline, then colour, as below) into the DIB. GDI writes 15-bit colour and **bit 15 = 0** in
+     every pixel it touches (antialiased edge pixels are blends with the black background, still bit 15 = 0).
+  4. Post-pass (`0x43F31C`, flag = (outline == −1)): every pixel's alpha bit is inverted again, so untouched pixels
+     become alpha 0 and every GDI-touched pixel alpha 1 (**1-bit alpha**: no partial coverage). Then per pixel, in
+     memory order, with c = its byte offset from the region start and N = the region size in bytes: alpha 0 → colour
+     := 0; alpha 1 → a **vertical gradient** (5-bit channels R, G, B, integer arithmetic, each result clamped to ≤ 31):
+     if B > R: B −= ⌊⌊B·c/N⌋/2⌋, then G −= ⌊⌊G·c/N⌋/2⌋ (flag set: /4 instead of /2); else R −= ⌊⌊R·c·2/N⌋/3⌋, then
+     G −= ⌊⌊G·c·2/N⌋/3⌋ (flag set: R −= ⌊⌊R·c/N⌋/4⌋, G −= ⌊⌊G·c/N⌋/4⌋). So the bottom of the strip loses up to
+     ½ (B, G) or ⅔ (R, G) of the channel; the black outline stays black.
+     Region: the first 2w·(2·size + 6) pixels of the DIB in memory order with N = 2·that; DIB rows are 1024 pixels,
+     so for a 512-wide texture (text.anm, w = 512) it is exactly rows 0 … 2·size+5 and c/N ≈ row / (2·size+6)
+     (narrower w would cover a row-major prefix only, INFERRED unused).
+     (Other formats, not used by th08: A8R8G8B8 inverts the alpha byte, A4R4G4B4 the alpha nibble, no gradient.)
+  5. The DIB rows are copied (`0x43F898`, `memcpy` per row, only when the formats match) into the work surface.
 - Font: GDI `CreateFont(height = 2·size − 2 = 28, weight 600, charset SHIFTJIS, quality ANTIALIASED,
   pitch FIXED|FF_ROMAN, face "ＭＳ ゴシック")` → ~14 px glyphs at 1×.
 - Background mode transparent. Outline: text drawn in black at four offsets, then in `colour` at the centre
   `(2·x + 2, 2)`. With `outline == −1` the offsets are ±1 px (2× space); otherwise (dialogue, outline = 0) ±2 px:
   `(2x+4,2) (2x,2) (2x+2,0) (2x+2,4)`.
-- Copy: `D3DXLoadSurfaceFromSurface` from src rect (0, 0, min(2w,1024), 2·size) to the texture's dest rect
+- Copy: `D3DXLoadSurfaceFromSurface` (statically linked D3DX8, 0x47ABAB, colour key 0) from src rect (0, 0, min(2w,1024), 2·size) to the texture's dest rect
   (0, y, w, y + size·scale_y) with filter TRIANGLE (4) → 2:1 box-like downsample. The whole row strip is
   replaced (anything left of x is cleared too).
-- (Font size ≤ 8 path 0x43FCE9: weight 400, height 16 at 2×; used by other callers.)
+- (Font size ≤ 8 path 0x43FCE9: weight 400, height 16 at 2×; used by other callers. Same DIB passes, with the region width = the full 1024-pixel DIB row.)
+- The TRIANGLE filter is code inside th08.exe (static D3DX8, 0x47ABAB → 0x47A586 / 0x47BA21 / 0x48104D…; also used by the
+  playfield captures and THTX texture loads), so its exact arithmetic is reversible from the exe; not yet specified
+  (open, RE-Q36). The glyph pixels themselves come from the platform's GDI font and are not reproducible.
 
 Text colours (`tbl 0x4C7180`, identical for all 12 shot types), COLORREF 0x00BBGGRR:
 
