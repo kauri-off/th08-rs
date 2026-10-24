@@ -1,0 +1,13 @@
+src/musicroom.rs:28  // SPEC-GAP: 16 §5.3 gives only the first two of the seven lines; the rest are left empty.
+src/musicroom.rs:100  // SPEC-GAP: 16 §5.2 does not say whether the colours are 0xRRGGBB or a GDI COLORREF (0xBBGGRR); 0xRRGGBB assumed.
+src/musicroom.rs:138  // SPEC-GAP: the outline offset mode of the music-room text calls is not given; the ±2 px (outline 0) path is used.
+src/musicroom.rs:179  // SPEC-GAP: the initial playing entry is not given; 0 (the title theme the menu was playing).
+src/musicroom.rs:217  // SPEC-GAP: whether flag 0 is also marked in music mode 0 is not given; it is here.
+src/musicroom.rs:230  // SPEC-GAP: the comment colours are not given in 16 §5.3; Text_RenderToVm white with a black outline.
+src/musicroom.rs:247  // SPEC-GAP: whether the sub-frame restarts on entering state 1 is not given; it keeps counting.
+src/musicroom.rs:262  // State 1 keys (16 §5.3). SPEC-GAP: the order of the key tests is not given; the table order, one per frame.
+src/musicroom.rs:296  // SPEC-GAP: 16 §5.3 does not say whether Ctrl is an edge or held; edge here (held would restart the fade).
+src/musicroom.rs:335  // SPEC-GAP: the comment VMs' state before the first reveal is not given; started and hidden like an empty line.
+src/musicroom.rs:358  // Calc 0x449399 (16 §5.3). SPEC-GAP: the VM run order is not given; after the state, as Result_Calc.
+src/musicroom.rs:373  // Draw 0x449487 (16 §5.2). SPEC-GAP: the draw order of the parts is not given.
+src/musicroom.rs:388  // SPEC-GAP: the cursor marker string is not given.
