@@ -1,0 +1,16 @@
+src/ending.rs:326  // SPEC-GAP: a script running off its end without `@z` is treated as `@z`.
+src/ending.rs:425  // SPEC-GAP: 16 §1.3 says 16 VMs; the object has 15 text VMs, the 16th write is not modelled.
+src/ending.rs:446  // SPEC-GAP: a page with more than 15 lines is not handled by 16 §1.3; extra lines are dropped.
+src/ending.rs:467  // SPEC-GAP: whether the counter steps before or after the alpha is computed is not given; after here.
+src/ending.rs:554  // SPEC-GAP: the float source offset is truncated to whole pixels (integer copy rectangle).
+src/result.rs:152  // SPEC-GAP: initial alpha of the 28 text VMs is not given; 0 until a page renders them (alpha 255).
+src/result.rs:329  // SPEC-GAP: whether the code is tested before or after the page input is not given (before).
+src/result.rs:454  // SPEC-GAP: the order of the D test and the cursor/confirm input in sub-state 1 is not given (D first).
+src/result.rs:579  // Result_CursorUpDown2 0x45A1F3 on +0x30. SPEC-GAP: SE 12 assumed as for the other cursors.
+src/result.rs:888  // SPEC-GAP: who sends VM 71 interrupt 18 is not given; sent on entering state 0xF.
+src/result.rs:949  // SPEC-GAP: the slide-in of the ranking (VM 40), the difficulty plate (41–46) and the title (48) is
+src/result.rs:1041  // SPEC-GAP: the header colour is not given (white), nor the shot-name table 0x4C8010 (0x4C86C0 is used).
+src/result.rs:1303  // SPEC-GAP: pos_offset (op 24/6, the selected item's (−4, −4)) is added by the owner (05 §2 +0x288, INFERRED).
+src/result.rs:1335  // SPEC-GAP: the rows print info fields (+0x6A..+0xB0) that sit in the compressed body; the file is decoded for them.
+src/result.rs:1386  // SPEC-GAP: 15 §2.12 does not say what a wrong key or releasing Focus/Skip does (a wrong code-key press restarts).
+src/result.rs:1406  // SPEC-GAP: "attempt counter" is taken as the story all-shot count [12] of present CATK records, checksum refreshed.
