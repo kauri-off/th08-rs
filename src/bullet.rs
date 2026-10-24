@@ -255,10 +255,80 @@ pub struct Bullet {
     pub st: ExState,
     // +0x10B4: no graze/hit (natives 12/14, §7).
     pub intangible: bool,
+    // +0xDC4 warp cooldown of natives 4 / 7 / 21 (08 §2.2, 07 §12): 0 at spawn, 2 after a warp.
+    pub warp_cooldown: i32,
     // VM0 +0x218 saved_sprite (05 §2): set at spawn and by native 28, restored by native 29 (07 §12).
     pub saved_sprite: i16,
     // Index of the spawn-effect VM (1–3) for states 2–4.
     effect: usize,
+}
+
+// Warp constants of natives 4 / 7 / 21 (07 §12); rectangles are (x0, x1, y0, y1), tested strictly.
+pub struct Warp {
+    pub c: [f32; 2],
+    pub inner: [f32; 4],
+    pub outer: [f32; 4],
+    // Outer rectangle for the previous position; differs only for native 7 (x0 −31.1, QUIRK).
+    pub outer_prev: [f32; 4],
+    pub k_inner: f32,
+    pub k_outer: f32,
+}
+
+impl Warp {
+    // Zone 0 inner, 1 outer, 2 outside.
+    fn zone(&self, x: f32, y: f32, outer: [f32; 4]) -> u8 {
+        let within = |r: [f32; 4]| r[0] < x && x < r[1] && r[2] < y && y < r[3];
+        if within(self.inner) {
+            0
+        } else if within(outer) {
+            1
+        } else {
+            2
+        }
+    }
+
+    // Native 4: c (192, 208).
+    pub fn native4() -> Warp {
+        let outer = f32s([0x4260F124, 0x43A3E1DC, 0x42907892, 0x43ABE1DC]);
+        Warp {
+            c: [192.0, 208.0],
+            inner: f32s([0x42F83C49, 0x4381F0EE, 0x430C1E24, 0x4389F0EE]),
+            outer,
+            outer_prev: outer,
+            k_inner: f32::from_bits(0x4287C3B7),
+            k_outer: f32::from_bits(0x4307C3B7),
+        }
+    }
+
+    // Native 7: c (192, 224).
+    pub fn native7() -> Warp {
+        let outer = [-32.0, 416.0, 0.0, 448.0];
+        Warp {
+            c: [192.0, 224.0],
+            inner: f32s([0x4260F124, 0x43A3E1DC, 0x42B07892, 0x43B3E1DC]),
+            outer,
+            outer_prev: [f32::from_bits(0xC1F8CCD0), 416.0, 0.0, 448.0],
+            k_inner: f32::from_bits(0x4307C3B7),
+            k_outer: 224.0,
+        }
+    }
+
+    // Native 21: c (192, 208).
+    pub fn native21() -> Warp {
+        let outer = f32s([0x42066EAA, 0x43AF322B, 0x42466EAA, 0x43B7322B]);
+        Warp {
+            c: [192.0, 208.0],
+            inner: f32s([0x42E19BAA, 0x43879915, 0x4300CDD5, 0x438F9915]),
+            outer,
+            outer_prev: outer,
+            k_inner: f32::from_bits(0x429E6456),
+            k_outer: f32::from_bits(0x431E6456),
+        }
+    }
+}
+
+fn f32s(b: [u32; 4]) -> [f32; 4] {
+    b.map(f32::from_bits)
 }
 
 impl Bullet {
@@ -514,6 +584,7 @@ impl BulletManager {
         b.state_timer = Timer::default();
         b.age = Timer::default();
         b.intangible = false;
+        b.warp_cooldown = 0;
         b.speed = speed;
         b.angle = anmvm::wrap_add(angle, 0.0);
         b.pos = [d.origin[0], d.origin[1], 0.1];
@@ -1236,23 +1307,32 @@ impl BulletManager {
         }
     }
 
-    // ECL natives 4 / 7 / 21 (07 §12): zones are (x0, x1, y0, y1); a bullet outside `outer` is scaled about the
-    // common centre into `inner` (per axis, inner/outer half size) and its direction reversed.
-    // SPEC-GAP: crossing direction, bullet selection and the reversal (vel and angle) are inferred (IMPL72 Q1).
-    pub fn warp(&mut self, inner: [f32; 4], outer: [f32; 4]) {
-        let c = [(outer[0] + outer[1]) / 2.0, (outer[2] + outer[3]) / 2.0];
-        let k = [
-            (inner[1] - inner[0]) / (outer[1] - outer[0]),
-            (inner[3] - inner[2]) / (outer[3] - outer[2]),
-        ];
+    // EclNative_4 / _7 / _21 (07 §12): a bullet whose pos and previous pos (pos − vel) lie in different zones is
+    // reversed and scaled about the centre across the ring between the inner and outer rectangles.
+    pub fn warp(&mut self, w: &Warp) {
         for b in self.bullets[..MAX_BULLETS].iter_mut().filter(|b| !b.free()) {
-            let [x, y] = [b.pos[0], b.pos[1]];
-            if x >= outer[0] && x <= outer[1] && y >= outer[2] && y <= outer[3] {
+            if b.warp_cooldown != 0 {
+                b.warp_cooldown -= 1;
                 continue;
             }
-            b.pos[0] = c[0] + (x - c[0]) * k[0];
-            b.pos[1] = c[1] + (y - c[1]) * k[1];
-            b.vel = [-b.vel[0], -b.vel[1], b.vel[2]];
+            let p = b.pos;
+            let q = [p[0] - b.vel[0], p[1] - b.vel[1]];
+            let (zp, zq) = (
+                w.zone(p[0], p[1], w.outer),
+                w.zone(q[0], q[1], w.outer_prev),
+            );
+            if zp == zq {
+                continue;
+            }
+            b.warp_cooldown = 2;
+            b.vel = b.vel.map(|v| v * -1.0);
+            let (a, d) = if zp == 0 || zq == 0 {
+                (w.k_outer, w.k_inner)
+            } else {
+                (w.k_inner, w.k_outer)
+            };
+            b.pos[0] = (p[0] - w.c[0]) * a / d + w.c[0];
+            b.pos[1] = (p[1] - w.c[1]) * a / d + w.c[1];
             b.angle = anmvm::wrap_add(b.angle, PI);
         }
     }

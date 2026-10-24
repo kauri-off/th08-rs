@@ -925,7 +925,7 @@ impl ResultScreen {
         h.put_u32(0x64, r.frames);
         h.put_u32(0x68, r.points);
         h.put_u32(0x70, st.deaths.max(0) as u32);
-        h.put_u32(0x74, st.bombs_used.max(0) as u32);
+        h.put_u32(0x74, r.bombs);
         h.put_u32(0x78, r.last_spells);
         h.put_u32(0x7C, r.pauses);
         h.put_u32(0x80, r.orbs as u32);

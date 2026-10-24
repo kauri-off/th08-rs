@@ -438,22 +438,26 @@ impl Player {
             self.bomb_cooldown -= 1;
         }
         if !self.bombing {
-            let mut pressed = inp.pressed(input::BOMB)
+            // 09 §7: a level test on the held bomb bit (no edge), so holding bomb chains bombs.
+            let start = inp.down(input::BOMB)
                 && !self.env.dialogue
                 && self.deathbomb != 0
                 && self.stats.bombs >= 1.0
                 && self.bomb_cooldown == 0;
             // +0xE2A7C drops on a failed normal start test, so it stays 1 through the end frame (09 §1.1).
-            if !pressed {
+            if !start {
                 self.bomb_active = false;
+                return;
             }
-            // SPEC-GAP: 09 §1.1 does not list the special-mode block among the tests that clear +0xE2A7C; kept.
-            if pressed && (self.special() || gamemgr::flags() & F_SPELL_PRACTICE != 0) {
-                sound::play(0x29);
-                pressed = false;
+            // Special mode: SE 0x29 only on a new press (the function's only edge test); +0xE2A7C kept (09 §1.1, §7).
+            if self.special() || gamemgr::flags() & F_SPELL_PRACTICE != 0 {
+                if inp.pressed(input::BOMB) {
+                    sound::play(0x29);
+                }
+                return;
             }
             // State 1 test is redundant: the counter is 0 throughout state 1 (09 §6.3).
-            if !pressed || matches!(self.state, 1) {
+            if matches!(self.state, 1) {
                 return;
             }
             // The bomb calc fn runs immediately on the start frame; that branch returns before the gauge add.
@@ -491,32 +495,34 @@ impl Player {
     fn start_bomb(&mut self, anm: &mut AnmManager, forced: bool) {
         let rng = &mut anm.rng;
         self.forced_bomb = 0;
-        let special = self.special();
-        if !special {
+        let mut index = 4;
+        // 09 §7: in special mode (bits 7–8) the whole cost block is skipped: no unfreeze, bombs, counters or checksums.
+        if !self.special() {
             self.freeze_bullets = false;
             effect::free(effect::FIXED_BASE + effect::FIX_DEATH);
-        }
-        let mut index = self.focus.min(1) as usize;
-        if self.last_spell != 0 {
-            index = 1 - index + 2;
-            // SPEC-GAP: HSCR +0x78 (Last Spells used) counted here, at the bomb start.
-            self.stats.rec.last_spells += 1;
-            let b = self.stats.bombs;
-            let used = if forced || b < 2.0 { b } else { 2.0 };
-            self.bomb.used = used as i32;
-            self.stats.add_bombs(-used, rng);
-        } else {
-            self.stats.add_bombs(-1.0, rng);
-        }
-        if special {
-            index = 4;
+            // SPEC-GAP: 09 §7 lists "tint off" among the skipped special-mode steps but not in the normal-mode list.
+            index = self.focus.min(1) as usize;
+            if self.last_spell != 0 {
+                index = 1 - index + 2;
+                let b = self.stats.bombs;
+                let used = if forced || b < 2.0 { b } else { 2.0 };
+                self.bomb.used = used as i32;
+                self.stats.add_bombs(-used, rng);
+                // HSCR +0x78, 0x164CFAC (15 §2.3).
+                self.stats.rec.last_spells += 1;
+            } else {
+                self.stats.add_bombs(-1.0, rng);
+                // HSCR +0x74, 0x164CFA8 (15 §2.3).
+                self.stats.rec.bombs += 1;
+            }
+            // GameMgr_AddBombCount 0x44E2E0(1): stats +0x84 and a checksum.
+            self.stats.bombs_used += 1;
+            Stats::checksum(rng);
         }
         // Port-only debug override.
         if let Some(i) = forced_index() {
             index = i;
         }
-        self.stats.bombs_used += 1;
-        Stats::checksum(rng);
         self.last_spell = 0;
         self.bombing = true;
         self.bomb_active = true;
@@ -1705,6 +1711,41 @@ mod tests {
         p.update_bomb(&mut anm, &press(0), &mut None);
         assert!(p.bombing && p.forced_bomb == 0 && p.bomb_cooldown == 15);
         assert_eq!(p.bomb.timer.cur, 1);
+    }
+
+    // 09 §7: the start test reads the held bit, so a bomb held since before the call still starts one.
+    #[test]
+    fn bomb_start_on_held() {
+        let (mut p, mut anm) = ready(4);
+        let mut held = press(input::BOMB);
+        held.tick();
+        assert!(!held.pressed(input::BOMB));
+        p.update_bomb(&mut anm, &held, &mut None);
+        assert!(p.bombing && p.stats.bombs == 2.0);
+        assert_eq!((p.stats.rec.bombs, p.stats.bombs_used), (1, 1));
+    }
+
+    // 09 §7: special mode (bits 7–8) skips the cost block: index 4, no bombs, counters or RNG draws.
+    #[test]
+    fn special_mode_bomb_is_free() {
+        let (mut p, mut anm) = ready(4);
+        (p.forced_bomb, p.deathbomb, p.last_spell) = (1, 1, 1);
+        gamemgr::set_flags(F_LAST_SPELL);
+        let rng = anm.rng.clone();
+        p.start_bomb(&mut anm, true);
+        gamemgr::set_flags(0);
+        assert_eq!(p.bomb.index, 4);
+        assert_eq!(p.stats.bombs, 3.0);
+        assert_eq!(
+            (
+                p.stats.rec.bombs,
+                p.stats.rec.last_spells,
+                p.stats.bombs_used
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(format!("{:?}", anm.rng), format!("{rng:?}"));
+        assert!(p.bombing && p.last_spell == 0 && p.forced_bomb == 0);
     }
 
     // 09 §4.5: circle = point test on the enemy centre, `≤ r²`; rectangles overlap the box inclusively.

@@ -2,7 +2,7 @@
 
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
-use crate::bullet::{BulletDesc, ExCmd, LaserDesc, angle_from};
+use crate::bullet::{BulletDesc, ExCmd, LaserDesc, Warp, angle_from};
 use crate::ecl::Ins;
 use crate::enemy::*;
 use std::f32::consts::PI;
@@ -1238,10 +1238,10 @@ impl Exec<'_> {
                 });
             }
             23 => crate::gui::request(crate::gui::Req::BossHide),
-            // Bullet warp zones (x0, x1, y0, y1): inner, outer, both centred on one point (07 §12).
-            4 => self.warp([124.0, 260.0, 140.0, 276.0], [56.0, 328.0, 72.0, 344.0]),
-            7 => self.warp([56.0, 328.0, 88.0, 360.0], [-32.0, 416.0, 0.0, 448.0]),
-            21 => self.warp([112.0, 271.0, 128.0, 287.0], [33.0, 350.0, 49.0, 366.0]),
+            // Bullet warp (07 §12).
+            4 => self.warp(&Warp::native4()),
+            7 => self.warp(&Warp::native7()),
+            21 => self.warp(&Warp::native21()),
             // Rotated 590-long player-hit boxes, heights big / small (07 §12); native 11 starts at pos, not final pos.
             9 => self.laser_box(t, self.e.final_pos, 160.0, 128.0),
             11 => self.laser_box(t, self.e.pos, 240.0, 192.0),
@@ -1265,8 +1265,8 @@ impl Exec<'_> {
         }
     }
 
-    fn warp(&mut self, inner: [f32; 4], outer: [f32; 4]) {
-        self.m.bullets.borrow_mut().warp(inner, outer);
+    fn warp(&mut self, w: &Warp) {
+        self.m.bullets.borrow_mut().warp(w);
     }
 
     // Natives 9 / 11 / 25 0x424730 / 0x424820 / 0x424910 (07 §12): Player_LaserTest from origin
@@ -2689,28 +2689,50 @@ mod tests {
         }
     }
 
-    // 07 §12 native 4: a bullet outside the outer zone is scaled about (192, 208) into the inner one, reversed.
+    // 07 §12 native 4: zone change between pos and pos − vel reverses the bullet and scales it across the ring
+    // (inward on an outer crossing, outward on an inner one); cooldown 2 then skips the next two calls.
     #[test]
     fn native4_warp() {
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[4, 0])]]);
+        let cases = [
+            ([330.0, 208.0, 0.0], [3.0, 0.0, 0.0]),
+            ([250.0, 208.0, 0.0], [-20.0, 0.0, 0.0]),
+            ([400.0, 108.0, 0.0], [2.0, -1.0, 0.0]),
+        ];
         {
             let mut b = m.bullets.borrow_mut();
-            for (k, pos) in [[400.0, 108.0, 0.0], [300.0, 208.0, 0.0]]
-                .into_iter()
-                .enumerate()
-            {
+            for (k, (pos, vel)) in cases.into_iter().enumerate() {
                 let x = &mut b.bullets[k];
-                (x.state, x.pos, x.vel, x.angle) = (1, pos, [2.0, -1.0, 0.0], 0.0);
+                (x.state, x.pos, x.vel, x.angle) = (1, pos, vel, 0.0);
             }
         }
         spawn(&mut m, 0, 0, -1, 0);
         ecl_run(&mut m, &mut anm, 0);
         let b = m.bullets.borrow();
-        assert_eq!(b.bullets[0].pos, [296.0, 158.0, 0.0]);
-        assert_eq!(b.bullets[0].vel, [-2.0, 1.0, 0.0]);
-        assert!((b.bullets[0].angle - PI).abs() < 1e-6);
-        assert_eq!(b.bullets[1].pos, [300.0, 208.0, 0.0]);
-        assert_eq!(b.bullets[1].vel, [2.0, -1.0, 0.0]);
+        let [b0, b1, b2] = [&b.bullets[0], &b.bullets[1], &b.bullets[2]];
+        assert!((b0.pos[0] - 261.0).abs() < 1e-3 && b0.pos[1] == 208.0);
+        assert_eq!((b0.vel, b0.warp_cooldown), ([-3.0, -0.0, -0.0], 2));
+        assert!((b0.angle - PI).abs() < 1e-6);
+        assert!((b1.pos[0] - 308.0).abs() < 1e-3);
+        assert_eq!((b1.vel[0], b1.warp_cooldown), (20.0, 2));
+        assert_eq!(
+            (b2.pos, b2.vel, b2.warp_cooldown),
+            (cases[2].0, cases[2].1, 0)
+        );
+    }
+
+    // 07 §12 native 7: Q's outer x0 is −31.1, so pos −31.0 / prev −31.5 is a zone change (1 vs 2).
+    #[test]
+    fn native7_prev_bound_quirk() {
+        let (_, m) = manager(&[&[]]);
+        let mut bm = m.bullets.borrow_mut();
+        let x = &mut bm.bullets[0];
+        (x.state, x.pos, x.vel) = (1, [-31.0, 224.0, 0.0], [0.5, 0.0, 0.0]);
+        bm.warp(&Warp::native7());
+        assert_eq!(bm.bullets[0].warp_cooldown, 2);
+        assert_eq!(bm.bullets[0].vel[0], -0.5);
+        bm.warp(&Warp::native7());
+        assert_eq!(bm.bullets[0].warp_cooldown, 1);
     }
 
     // 07 §12 native 9: box from o = final pos − (vars 10016, 10017), 590 along main VM rotation z, big box

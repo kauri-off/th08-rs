@@ -655,6 +655,14 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl103 (RE-Q36 CODE BUG 1–3): the bomb start tests the held bomb bit (holding bomb chains bombs / fires on the
+  first deathbomb frame); only the special-mode SE 0x29 uses the press edge (09 §7, §1.1). A special-mode start
+  (bits 7–8) skips the whole cost block: index 4, no bombs, counters 0x164CFA8 / 0x164CFAC, `AddBombCount` or
+  checksum draws; HSCR +0x74 now counts 0x164CFA8 (normal non-LS starts, 15 §2.3), stats +0x84 stays the
+  `AddBombCount` counter. Natives 4 / 7 / 21 (07 §12, 08 §2.2): `bullet::Warp` with the spec's hex constants, per
+  bullet cooldown +0xDC4, zones of pos and pos − vel, vel × −1, angle + π, outward / inward scale, native 7's −31.1
+  previous-pos bound. Unit tests for each. SPEC-GAP 89 → 87 (one new: normal-mode tint off). Golden 25634,
+  fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync. Questions: `docs/briefs/IMPL103_QUESTIONS.md`.
 - impl102 (SPEC-GAP batch 1, RE-Q35): native 24 := stats +0x1C spell cards captured (07 §12 row 24, the Extra
   boss gate of ecldata8 sub84); native 16 copies the caller's int var 10007 (not float 10019) per bullet, 3D strict
   distance² < 4096 (07 §12 row 16). Int read of 10033 draws one Next32 and truncates (07 §6). Interrupt table
