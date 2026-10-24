@@ -108,7 +108,13 @@ At boot the game reads `th08.cfg` from disk. The whole file is reset to defaults
 - the version is wrong;
 - any byte field is out of its valid range.
 
-When that happens it logs "コンフィグデータが異常". After the music-mode probe it writes the file back straight away. It writes the file again when WinMain exits.
+When that happens it logs "コンフィグデータが異常でしたので再初期化しました" (a missing file logs
+"コンフィグデータが見つからないので初期化しました" instead). After the music-mode probe it writes the file back straight away. It writes the file again when WinMain exits.
+
+In the defaults path a missing `./thbgm.dat` sets music mode 2 (MIDI) and passes the text "wave データが無いので、midi
+にします" to 0x437CDD, which is an **empty function** (a compiled-out debug print; the scene-switch trace "scene %d -> %d"
+goes there too): nothing is shown and nothing is logged (VERIFIED 0x4477B1 / 0x437CDD, RE-Q40). A thbgm.dat that exists
+with a bad header ("ZWAV", 1, 0x800) logs "BGM データのバージョンが違います" and fails the start-up, in both paths.
 
 ### 1.3 Option menu (`MainMenu_Option` 0x46837B) — VERIFIED
 
@@ -319,6 +325,11 @@ The file's HSCR entries are then inserted into these lists in order. `ScoreList_
 
 `ScoreDat_GetHiscore` 0x45A950 returns max(top entry of (shot, difficulty), 100000), in ÷10 units. That value is the HUD "HiScore" at game start. It builds a fresh list from the file's HSCR entries of (shot, difficulty) only (no defaults; `ScoreList_Insert` order, so of equal scores the **later** file entry is on top), and when its 4th argument is non-NULL writes the top entry's continues byte (+0x26) there (0 when the list is empty): `GameMgr_LoadScoreData` passes stats+0x18, the HUD's hiscore-continues digit (11 §5, 12 §5.3) (VERIFIED RE-Q32).
 
+Save (VERIFIED `ScoreDat_Save` 0x453D0D, RE-Q40): for each written entry the saver first rewrites, **in the in-memory
+entry itself**, +0x14 := shot, +0x15 := difficulty (from the list it walks), +4 / +6 := 0x168, +8 := 4 and **+9 := 0**,
+then copies the 0x168 bytes. Byte +9 is the Result screen's "new entry" mark (16 §2.3); it is therefore 0 in every saved
+file and also 0 in memory after any save.
+
 ### 2.4 CLRD (0x24 × 13) — clear flags
 
 The in-memory copy is at GM+0x3C490 (0x164B998). Entries 0..11 are per shot; entry 12 is the union over all shots.
@@ -478,26 +489,55 @@ Inside each 17-word block:
 - Music flags are set by `Music_PlaySlot`/`Music_PlayFile` unless in replay or demo. The ending sets flag 18, and 19 on a good ending.
 - The parser checks block 6 == Σ blocks 0..5.
 
-### 2.10 VRSM (0x1C) and the exe check
+### 2.10 VRSM (0x1C) and the exe check — VERIFIED (RE-Q40)
 
 | off | type | field |
 |---|---|---|
-| 0x0C | char[8] | version tag "0100d" |
+| 0x09 | u8 | 0 (written by the saver); +0x0A/+0x0B are not initialised (stack garbage) |
+| 0x0C | char[8] | version tag "0100d" (strcpy of 0x4B660C; bytes after the NUL are garbage) |
 | 0x14 | u32 | exe size |
 | 0x18 | u32 | exe sum = Σ u32 words of th08.exe, count = size/4 − 1 (0x443730) |
 
-`ExeCheck` 0x44858D passes when any of these hold:
-- no file `th08_%.4x%c.ver` exists;
-- the tag is "debug";
-- a line "tag size sum" in that file matches.
+**The version list.** At boot (`Supervisor_OnRegister`, 0x4461A0, after opening th08.dat) the game loads
+`th08_%.4x%c.ver` formatted with (0x100, 'd') = **`th08_0100d.ver` from the archive only** (`FileSystem_OpenFile`
+flag 0, no disk fallback) into Supervisor+0x360 (buffer) / +0x35C (size). If it is missing, start-up fails with the log
+"error : データのバージョンが違います" (0x4B668C), so in retail the list is always present. The shipped file is 15 lines
+`tag size sum\n` (LF only, the last line ends with LF):
 
-The same check is applied to replays (§3.7).
+```
+0009_ 566784 993132091      0009a 596992 489076697      0010_ 596992 3478009099
+0011_ 596992 3545283257     0001_ 800256 1644916963     0001a 807424 256801575
+0002_ 809984 1745855920     0003_ 825344 922048924      0003a 825344 2460321175
+0100_ 840192 3552390786     0100a 841216 3000360128     0100b 841216 4189886502
+0100c 840704 1605176696     0100c 840704 1588396223     0100d 840704 2724749753
+```
+
+**`ExeCheck(tag, size, sum)` 0x44858D** returns 0 (pass) or −1 (fail):
+1. list buffer null → pass (unreachable in retail, see above);
+2. `strncmp(tag, "debug", 5) == 0` → pass;
+3. the build tag "0100d" (0x4B660C) equal to "debug" (0x4B6D08) → pass (never: a debug-build switch);
+4. walk the lines with `remaining` = file size: if the first 5 bytes of the line equal the first 5 of `tag`, parse the
+   rest from line start + 6 with `sscanf("%d %d")` and pass if both equal `size` and `sum` (32-bit compare; the
+   CRT's `%d` wraps, so "2724749753" gives 0xA26861B9 — VERIFIED: demo 0 (tag "0100a", sum 3000360128) is accepted and
+   the periodic check below never quits); then advance to after the next LF and subtract the bytes advanced from
+   `remaining`; stop when `remaining` == 0 → fail.
+   QUIRK: on a line whose tag matches but whose numbers do not, the 6 skipped bytes are not subtracted, so `remaining`
+   never reaches 0 at the end of the buffer and the walk reads past it (undefined behaviour: a crash or a fail). A
+   matching later line (the two "0100c" lines) still passes first. A port may treat the over-run as a fail.
+
+Callers:
+- `ScoreDat_Load` (§2.1): in the chunk walk, for every chunk with magic VRSM **and version 1**, before that chunk's
+  size-0 test: fail → log "warning : score.dat exesumcheck error", file rejected (defaults).
+- `Replay_Load` (§3.7 step 5): tag info+0x12C, size +0x124, sum +0x128; fail → load fails (empty / invalid slot). The
+  demos pass: demo 0 has tag "0100a" with the 1.00a size/sum (listed), demos 1–3 have tag "debug".
+- `Supervisor_Calc` (11 §7): every 4000th counted frame, with the running exe's tag/size/sum; fail → return 4 (quit).
 
 Values written (`ScoreDat_Save` and `Replay_RecordStageStart`): tag = string 0x4B660C "0100d", size/sum =
 0x17CEAB0/0x17CEAAC computed once at boot by 0x443730 over the running exe (`GetModuleFileNameA`): sum =
 Σ (u32 LE words 0 .. size/4 − 2), wrapping. For the shipped th08.exe: **size 840704 (0xCD400), sum
 0xA26861B9** (computed from the exe and matching an original-written score.dat, changelog/answers_impl14.md §10). A port
-may write these constants; the check itself passes anyway when no `th08_*.ver` file exists.
+writes these constants, uses them as the "running exe" values (so the periodic check always passes), and applies the
+check to loaded score.dat and replay files with the list read from th08.dat.
 
 ### 2.11 Slowdown % (stored in HSCR and replays) — VERIFIED
 
@@ -573,7 +613,7 @@ Object fields:
 
 Only while flags bit 2 (gameplay running):
 1. `g_InputPrev = g_Input; g_Input = raw input`.
-2. If slow mode (cfg+0x25) or Supervisor+0x1A4 bit 3 is set, nothing is recorded. VERIFIED: no retail code sets bit 3, except the anti-tamper fill that writes 0xFFFFFFFF over the whole Supervisor (changelog/answers_phase7.md §2).
+2. If slow mode (byte +0x25 of the **gameplay config copy** `*(GM+4)`, VERIFIED 0x452310 RE-Q40) or Supervisor+0x1A4 bit 3 is set, nothing is recorded. VERIFIED: no retail code sets bit 3, except the anti-tamper fill that writes 0xFFFFFFFF over the whole Supervisor (changelog/answers_phase7.md §2).
 3. While flags bit 9 (stage-clear bonus): if counter+4 > 2, return; else counter+4 += 1. So at most 3 frames are recorded during the bonus.
 4. `p += 2; end[stage] = p + 2; *(u16*)p = raw`.
 5. If `frame % 30 == 0`:
@@ -581,6 +621,15 @@ Only while flags bit 2 (gameplay running):
    - `fpsEnd[stage] = q + 2`; `q += 1`.
 
    fps_now is u8 0x17CE8F0. The flag is the u32 0x17CEA90, = Supervisor+0x338; its only writer stores 0 (MainMenu_OnRegister), so it is always 0. VERIFIED (changelog/answers_phase7.md §1).
+
+   fps_now writers (VERIFIED RE-Q40): 0 at boot; `Fps_Update` (§3.3) := trunc(measured fps) when a meter window closes
+   while flags bit 2 is set and not in playback; `Replay_PlayCalc` := the byte it reads (below). Nothing resets it, so
+   it carries across scenes and games. The record calc of a stage's frame 0 runs before any window of that stage can
+   close (the meter runs at draw prio 16, after the calc chain), so **sample 0 = the carried value**: 0 in the first
+   game after boot, the last byte read by a preceding playback (e.g. an attract demo), else the last measured value.
+   At a steady 60 fps the meter gives 60 (an original-recorded replay, game over in stage 1 under wine: sample 0 = 0,
+   all 49 others 60). A port without a meter writes 60 for samples ≥ 1 and the carried value for sample 0. Sample 0
+   is never read back by playback (QUIRK below), so it only shows in the file bytes.
 6. `frame += 1`.
 
 The game objects ran earlier in the same frame using `g_Input` from the previous frame. So the input of frame n is the raw input sampled at the end of frame n−1.
@@ -602,7 +651,7 @@ touched. Record +0 is therefore the **score at the end of that stage**. For the 
 
 ### 3.3 Playback, per frame (calc prio 6, before the game objects)
 
-Only while flags bit 2, not slow mode, and **not** flags bit 9:
+Only while flags bit 2, not slow mode (gameplay config copy `*(GM+4)` +0x25, VERIFIED 0x452550 RE-Q40), and **not** flags bit 9:
 - `g_InputPrev = g_Input; g_Input = *p; p += 2`.
   - The first read is the dummy 0 word. This matches the one-frame latency of recording, so frame n sees the same value it saw when recorded.
 - Key repeat is emulated (normally done by the input poller):
@@ -625,10 +674,13 @@ Playback speed byte 0x164D0BD (chosen in the replay menu, §3.8):
 | 2 | fast. `Replay_FastForward` (prio 18) returns 6 ("restart the calc chain") on every frame except `frame % 5 == 4`, only when no boss is active (0x42F1F0). |
 
 In any playback mode, while skippable dialogue is shown (HUD impl+0x22D7C), the chain is restarted on 2 of every 3 frames (= 3× speed).
-Both rules are one function (`Replay_FastForward` 0x452490, calc prio 18, registered only for playback; VERIFIED RE-Q25):
+Both rules are one function (`Replay_FastForward` 0x452490, calc prio 18, registered only for playback; VERIFIED RE-Q25, re-checked RE-Q40):
 only while GM flags bit 2 is set and bit 9 clear: (1) dialogue active and skippable and `frame % 3 ≠ 2` → return 6;
 (2) otherwise, speed byte 2, no boss (0x42F1F0) and `frame % 5 ≠ 4` → return 6; else return 1. `frame` = the replay
-object's frame counter (+0).
+object's frame counter (+0) in **both** tests — there is no separate dialogue counter; +0 advances once per PlayCalc
+run, and a restart re-runs PlayCalc, so the dialogue test sees consecutive values. The dialogue test comes first: with
+fast playback during skippable dialogue, `frame % 3 ≠ 2` restarts, and only on `frame % 3 == 2` is the fast test made.
+Outside bit 2, or with bit 9 set, neither test is made (return 1).
 
 The HUD shows the playback fps in yellow (0xFFFFFFD0), or red (0xFFFF4040) when the flag is set.
 Exact behaviour (`Fps_Update` 0x446F53, VERIFIED changelog/answers_impl17.md §5.3; this is the attract demos' "2-digit text at the
@@ -645,6 +697,14 @@ bottom right of the playfield"):
   60, 16, 60, 60, … → frame 0 reads 16 (QUIRK, byte q+1); the original showed "60" for gameplay frames 1–4 (old
   text), "16" for frames 5–34 and "60" afterwards. A port without a real-time meter should refresh the text every
   30 frames; the exact refresh frame cannot be reproduced bit-exactly.
+- The meter (VERIFIED 0x446F53, RE-Q40): runs once per drawn frame from Supervisor draw prio 16 (0x445BC0), also once
+  (with no draw and no slowdown accounting) from `GameManager_StageStart` on the loader thread, and does nothing on
+  slow-mode skipped frames (gm+0x2D). Each run adds 1 + cfg frame-skip byte (+0x23) to a frame count; when ≥ 500 ms
+  (`timeGetTime`; with a performance counter: ≥ freq/2 ticks) have passed since the window start, fps = count / elapsed
+  seconds, the "%.02ffps" text is formatted, the count is reset and the window restarts at now. The window start is
+  taken at the first run after boot and is **never reset by scenes, stage starts or demos** (only when the clock goes
+  backwards), so the refresh phase inside a demo depends on everything since boot (boot and menu load times are host
+  thread times, 12 §1). Model for a port at 60 Hz: one window per 30 drawn frames counted continuously from boot.
 
 ### 3.4 Stage record (0x24 header + streams)
 
@@ -710,10 +770,16 @@ USER section:
 - Then Shift-JIS lines `key\tvalue\r\n`:
   - プレイヤー名 (name)
   - プレイ時刻 (`%Y/%m/%d %H:%M:%S`)
-  - キャラ名
+  - キャラ名 = `Shot_Name(g_ShotType)`, table 0x4C7F4C[shot] (VERIFIED RE-Q40), printed whole **including the
+    trailing U+3000 padding** (each name is 10 full-width characters: 霊夢＆紫　　　　 / 魔理沙＆アリス　 /
+    咲夜＆レミリア　 / 妖夢＆幽々子　　 / 博麗　霊夢　　　 / 八雲　紫　　　　 / 霧雨　魔理沙　　 / アリス・Ｍ　　　 /
+    十六夜　咲夜　　 / レミリア・Ｓ　　 / 魂魄　妖夢　　　 / 西行寺　幽々子　; demo 0's USER text shows the padding)
   - スコア (`%d0`)
-  - 難易度
-  - 最終ステージ (stage name, or "Clear"), or in spell practice カード名 `No.%3d %s`
+  - 難易度 = table 0x4C7F30[GM difficulty]: Easy / Normal / Hard / Lunatic / Extra (index 5 "LastWord" unused here)
+  - 最終ステージ: "Clear" when GM flags bit 4 is set, else `0x453CD1(g_StageIdx)` = table 0x4C7FAC[stage] for
+    stage < 9 (Stage 1 / Stage 2 / Stage 3 / Stage 4-uncanny / Stage 4-powerful / Stage 5 / Stage 6-Eirin /
+    Stage 6-Kaguya / Extra Stage), "Clear" for ≥ 9; or in spell practice (info +0x7C ≥ 0) カード名 `No.%3d %s` with
+    id + 1 and the info card name +0x7E
   - ミス回数
   - ボム回数
   - 処理落ち率 (`%f%%`)
@@ -729,7 +795,9 @@ The save is skipped (nothing written) when any of these hold:
 - the recorded slow mode ≠ 0.
 
 Otherwise:
-1. Fill date, name, score, slowdown and card name.
+1. Fill date, name, score, slowdown and card name. Card name (spell practice, id = info +0x7C ≥ 0): 48 bytes copied
+   from the in-memory CATK entry of that card, `0x160F558 + id·0x22C` = CATK[id] +0x10 (§2.5; GM+0x40 = 0x160F548 is
+   the array) (VERIFIED 0x4531F0, RE-Q40).
 2. Draw 3 RNG values.
 3. Build the image and compress it.
 4. Compute the checksum, then encrypt.

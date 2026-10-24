@@ -502,7 +502,14 @@ A second per-stage stream holds one byte per 30 frames: FPS value (bit 7 = flag)
 ## 7. Supervisor scenes (`Supervisor_Calc` 0x445453, calc prio 0) — VERIFIED
 
 Fields: `+0x158` current scene, `+0x15C` requested scene (0x17CE8B4, written by everyone), `+0x160` previous.
-Every frame (before the scene logic): reset some ANM manager state, run Supervisor VMs, poll input (raw word
+Early exits at the top (VERIFIED 0x445453, RE-Q40), in order: +0x1A4 bit 7 with no loader thread → return 4; reset of
+the ANM manager state and the Supervisor (loading) VMs run (`AnmManager_RunRange`, so the loading VMs tick on every
+frame); a failed post-load → return 4; **boot loader wait**: while +0x294 ≠ 0 (set to 1 only by `Supervisor_OnRegister`
+when it starts the `Supervisor_Init` thread): +0x294 = 2 (thread failed) → return 4; thread still running (+0x290 ≠ 0)
+→ **return 1**, i.e. no input poll, no scene switch, no counters; once the thread has cleared +0x290 (it also clears
++0x294 on success) the calc goes on. So the boot hold ends on the first Supervisor calc after `Supervisor_Init` has
+finished — host thread time, not a frame count (12 §1).
+Then every frame (before the scene logic): reset some ANM manager state, run Supervisor VMs, poll input (raw word
 0x164D528, previous 0x164D530, key-repeat flag 0x164D538), unless `gm+0x2D` (slow-mode skipped frame, §4 step 10), in which
 case input is OR-accumulated: raw word |= Input_Poll(), and **nothing else** changes: previous word, repeat flag
 0x164D538 (keeps its value from the last normal poll) and repeat counter 0x164D53C are left as they are (VERIFIED
@@ -533,15 +540,19 @@ When `requested ≠ current`: `previous = current`, then by `(current, requested
 | 2 | 11 | `requested = 3`, reload-same-stage flag (0x17CE8C4) = 1; unregister GM; register GM; `requested = 2` |
 | 2 | 12 | `requested = 3`; unregister GM; `Stage_Advance`; register GM; `requested = 2` (never requested in the code) |
 | 5 result | −1 / 1 | quit / register MainMenu |
-| 6 result (after a game) | −1 | replay finish, quit |
+| 6 result (after a game) | −1 | replay finish, quit — unreachable: while scene 6 runs only `Result_Calc` writes the request, and only 1 (VERIFIED: the −1 writers are `Supervisor_Register`'s initial value, `MainMenu_Top` and `MainMenu_Replay`, RE-Q40) |
 | 6 | 1 | replay finish; register MainMenu |
 | 8 music room | −1 / 1 | quit / MainMenu |
 | 9 ending | −1 / 1 | quit / MainMenu |
 | 9 | 6 | `Result_Register(1)` |
 
 Afterwards the raw input words are cleared (so the new scene sees no "held" keys), `current = requested`,
-the frame counter `+0x154` increments (every 4000 frames a periodic check of the config file may quit),
-and the "frames since load" counter 0x18B8A2C decrements.
+the frame counter `+0x154` increments, and then (VERIFIED 0x445AFF, RE-Q40): if `+0x154 % 4000 == 3999`,
+`ExeCheck("0100d", exe size, exe sum)` (15 §2.10) with the boot-time values of the running exe → fail: return 4 (quit,
+the counter 0x18B8A2C is not decremented); otherwise the "frames since load" counter 0x18B8A2C decrements if ≠ 0 and the
+calc returns 1. This runs on every frame that reaches the end, with or without a switch (not on the early exits above).
+For the shipped exe the check passes ("0100d 840704 2724749753" is listed), so a port that uses those constants as
+the running-exe values does nothing here. (Older text called this a "config file" check — wrong.)
 Unregistering the GM (0x43BF6E) also clamps the score to 999 999 999, sets displayed score = score and resets
 game speed to 1. The GM on-remove callback stops music (unless spell practice reload), waits for sounds,
 unregisters Gui, Stage, HUD, Player, Enemies, Effects, Bullets, Replay (recording) and saves score data.

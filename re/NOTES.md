@@ -704,3 +704,12 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   Shot resets the reveal; exit returns 0 from Calc (node removed, no draw); title VM drawn forced white at (320,52);
   cursor = ASCII 0x7F (▶) in the row VM colour; Music_PlayFile marks nothing in music mode 0.
 - New spec: 02 §4 Music_PlayFile, 16 §5.2/§5.3 rewritten, structs.md MusicRoom.
+
+# RE-Q40 (2026-10-24) — SPEC-GAP batch 6, replay / score.dat / supervisor / config (14 markers) — DONE (specs/changelog/answers_re_q40.md)
+- Code + data only (re/work/runs/q40/CHECKPOINT.md). 9 right, 5 CODE BUG (exe check ×2, USER char-name padding,
+  fps sample 0, FastForward order/gate).
+- Key facts: th08_0100d.ver is an archive member (boot fails without it); ExeCheck line walk with `%d` wrap (demo 0 tag
+  0100a passes) and a 6-byte over-run quirk; Supervisor +0x154 = ExeCheck every 4000 frames (not config); boot hold =
+  Supervisor_Calc returns 1 while Supervisor_Init runs, menu hold = MainMenu+0x14434; Fps_Update window never reset
+  (phase from boot); 0x437CDD is an empty debug print; ScoreDat_Save clears HSCR +9 in place; fps_now carried into
+  sample 0 (q22 original replay: 0 then 60s).

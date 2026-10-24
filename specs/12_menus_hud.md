@@ -30,6 +30,16 @@ Loading-screen state = Supervisor+0x2FC:
 
 - Boot: the logo stays visible until the main-menu loader thread (0x470E10) has loaded `title01.anm` /
   `resulttext.anm` / `title00.png` and calls `Loading_End`; then the menu takes over. (00 §3.2 for title BGM.)
+- What ends each hold (VERIFIED, RE-Q40): (1) **boot**: `Supervisor_Calc` returns 1 at its top while the
+  `Supervisor_Init` loader thread runs (11 §7); the first calc after the thread has finished does the 0 → 1 switch and
+  registers the main menu, whose on-register starts `MainMenu_LoaderThread` and sets MainMenu+0x14434 := 1;
+  (2) **menu load**: while +0x14434 = 1 `MainMenu_Calc` returns 1 and runs nothing (no screen, no VMs; 2 = load
+  failed → return 4); the thread, after loading, starts the title BGM (when not in demo mode and the previous scene
+  0x17CE8B8 ≠ 5 result viewer), registers the fade-in ScreenEffect, sets +0x14434 := 0 and calls `Loading_End`; the next menu calc runs
+  the top screen. Both lengths are host thread times (file decode + texture creation), with no frame count in the
+  code; a reference run under wine measured 13 boot calc frames and the menu loader ending at scene frame 34 (33 when
+  the menu is entered again). A port that loads synchronously may use any fixed counts; these change only the number
+  of logo / loading frames, not the game logic.
 - Stage loading (GM on-register 0x43AAF4): when the previous scene was the main menu (1), `Loading_Begin` at
   (500, 440) and the full-screen surface-8 view is enabled; otherwise (next stage, retry) `Loading_Begin` at
   (280, 430). The loader thread calls `Loading_Wait` after the stage is ready; after a stage clear it

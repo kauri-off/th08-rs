@@ -289,7 +289,7 @@ to x 640. Let A = VM 40's raw pos (steady state (32, 112)). List = [diff +0x44][
 head at Result+0x1144C + 0x90·diff + 0xC·shot).
 - Header `No  Name       Score(Stage)   Date   Slow` at (A.x + 24, A.y + 18), colour 0xFFE0E0EF.
 - Rows i = 0..9 at y = A.y + 36 + 18i, pen x starts at A.x + 24:
-  - colour: state 9 → the new entry (entry byte +9 ≠ 0) 0xFFF0F0FF, others 0xC0FFC0C0; other states 0xFFFFC0C0;
+  - colour: state 9 → the new entry (entry byte +9 ≠ 0; every score.dat save clears +9 in memory and in the file, 15 §2.3) 0xFFF0F0FF, others 0xC0FFC0C0; other states 0xFFFFC0C0;
   - `%2d` rank at x; x += 48;
   - state 9, new entry: `"%8s"` of 8 spaces with `_` at min(pos, 7) at x (the cursor underline);
   - `"%8s %9d%1d(%d)"` / `"%8s %9d%1d(C)"` (§2.2 values) at x; x += 320. Arguments: name (+0x17), score (+0x0C), min(continues +0x26, 9), and for the `(%d)` form (stage byte +0x16 < 99) the **shown stage number = table 0x4C7F80[stage byte]** = (1, 2, 3, 4, 4, 5, 6, 6, 1) for bytes 0..8 (4A/4B both 4, 6A/6B both 6, Extra 1), not the raw byte; byte ≥ 99 → `(C)`. So default entries (stage byte 0, 15 §2.3) print `(1)` (VERIFIED `Result_Draw` 0x4586B4, table 0x4C7F80; RE-Q24);
