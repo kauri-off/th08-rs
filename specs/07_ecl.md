@@ -116,7 +116,9 @@ alive (bit 0), bits 2, 3, 6 set; life 1; score 100; hit box (e+0x2D70) = (24, 24
 accel, angular velocity 0; move mode 0; no mirror; death sub −1; pending interrupt −1; life thresholds −1;
 timeout −1; directional anims −1; shot offset 0; auto-fire interval 0; bullet-rank ranges speed −0.15…0.15,
 counts 0; bullet sfx 7, desc+0x204 = 25; **no-fire radius² 1024** (no bullets within 32 px of the player);
-sub-ANM VMs disabled; e+0x3330 = 0.
+sub-ANM VMs disabled; e+0x3330 = 0. Everything else is the constructor's zero-fill (`rep stosd` over the manager), so the
+interrupt table e+0x2CF0 is all **0** (sub 0), not −1; only the pending index e+0x2D30 is set to −1 (VERIFIED 0x429E00,
+RE-Q35).
 
 ### 4.3 Field map (main ones)
 
@@ -309,6 +311,13 @@ the main context gets the interrupt sub (clock, wait 0); the thread's depth += 1
 pending = −1; then the **thread** keeps executing this frame and the main context starts the interrupt sub next
 frame. Unreachable with the shipped data: pending is set only by op 125 (0 uses), op 89 (0 uses) and timeline op 8
 (runs before all enemies, §10.1 step 1, so the main context, visited first, always takes it).
+**No registration test** (VERIFIED handler 0x41C88A–0x41C93C and `Ecl_SetSub` 0x418450, RE-Q35): sub := e+0x2CF0[k]
+is passed straight to `Ecl_SetSub`, with no range test on k. An index never set by op 126 holds the template's 0, so the
+main context enters **sub 0**. `Ecl_SetSub` with sub < 0 returns without touching the context, but the rest of the
+handler still runs: the current instruction is skipped, the push (unless bit 26), depth += 1, pending := −1; the main
+context keeps its ip and clock. Unreachable with the shipped data: every op 126 registers index 1, and every
+timeline op 8 sends index 1 to a boss whose sub has registered it (ecl_dis scan; the sessions stay in sync with a port
+that ignores unregistered indices).
 
 ### 5.6 Variable interpolation slots (op 36) — VERIFIED
 Slot = {fn, Timer elapsed, dur, fn index, easing mode, a, b, c, d, target var id}. Op 36 reuses the slot whose
@@ -341,7 +350,7 @@ ecl_dis, 0 uses).
 | 10016–10023 | ctx floats | float | context local floats |
 | 10024–10031 | enemy floats | float | per-enemy floats |
 | 10032 | Rng_Next32 & 0x7FFFFFFF | — | random |
-| 10033 | Rng_Float ∈ [0,1) | — | random (int read: 0) |
+| 10033 | Rng_Float ∈ [0,1) | — | random. **Int read** (`Ecl_GetIntArg` 0x41F5E7, VERIFIED RE-Q35): calls `Rng_NextFloat` (consumes one `Rng_Next32`, i.e. two 16-bit draws) and truncates the st0 result (`ftol`): 0, or 1 when the u32 ≥ 0xFFFFFF80 (the divide runs at 24-bit precision, 11 §1.2, and rounds to 1.0). No int read of 10033 exists in the data (all 120 reads are `fmul3` float operands) |
 | 10034 | Rng_Next32 (signed) | — | random |
 | 10035 | Rng_Next32/2³¹ − 1 ∈ [−1,1) | — | random |
 | 10036–10039 | ctx ints | int | (10038 also = laser test result, op 120) |
@@ -427,7 +436,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 81 | flags_on | i m | inverse of 80; bit 1 sets the aura VM's colour2 flag (bit 17), so the aura shows its `color2_time` colour (e.g. etama scripts 48–50: (255, 92, 92), the "contact hurts" red) — VERIFIED 0x4184B0 case 0x51, RE-Q32 | 535 |
 | 82 | nofire_radius | f r | no-fire radius² = r·r | 76 |
 | 83 | flagB1 | i b | flags B bit 1 = b & 1 | 195 |
-| 86 / 87 | iget_boss / fget_boss | V/W a, i var, i slot | a = value of variable `var` evaluated on boss[slot] (87: only if it exists). If `var` is a literal (param flag bit 1 clear) a := the literal (87: its raw f32 bits) and the slot is not read. **Op 86 has no existence test** (VERIFIED 0x41ACEE, RE-Q31): with an empty boss entry the variable is read through a null enemy pointer (`Ecl_GetIntArg` with e = 0) — an access violation for every enemy/context variable; unreachable (0 uses) | 0 / 2 |
+| 86 / 87 | iget_boss / fget_boss | V/W a, i var, i slot | a = value of variable `var` evaluated on boss[slot] (87: only if it exists). If `var` is a literal (param flag bit 1 clear) a := the literal (87: its raw f32 bits) and the slot is not read. **Op 86 has no existence test** (VERIFIED 0x41ACEE, RE-Q31): with an empty boss entry the variable is read through a null enemy pointer (`Ecl_GetIntArg` with e = 0) — an access violation for every enemy/context variable; ids whose getter case does not touch the enemy (10032–10035 random, 10040 difficulty, 10041 rank, 10052 shot type, the argument globals 10061–10064, 10097–10099) are read normally and written to a (VERIFIED getter 0x41F420, RE-Q35); unreachable (0 uses) | 0 / 2 |
 | 88 | call_boss | i slot, S sub | call sub in boss[slot]'s context | 2 |
 | 89 | interrupt_boss | i slot, i k | boss[slot].pending_interrupt = k (if exists) | 0 |
 | 90 / 91 / 92 | child / child_rel / child_follow | S sub, f x, f y, i life, i item, i score | §10.5 (90 and 92 spawn at (x, y) as given, 91 at parent final pos + (x, y)) | 214 / 377 / 425 |
@@ -677,6 +686,13 @@ interpolation start/end values (beyond the 0x208 bytes `AnmVm_Init` clears) are 
      rd = rd/9 if the root has flag A bit 1 (boss), else 0 — i.e. trunc(trunc(d/2)/9), not d/9; floor = max(0,
      the root's 4 thresholds +0x3358) (unused −1 entries count as 0); only if rd ≠ 0: root life −= rd, and if
      root life ≤ floor then root life := floor.
+   Homing target (09 §1.1 player +0xE2AA4 = 0x18B899C; VERIFIED 0x42D390–0x42D46A, RE-Q35): still inside the bit-6
+   branch, **after** both damage calls and the `d > 0` block, and **not** affected by the spell/parent/bomb gate of the
+   first call (a gated enemy is still offered as a target): if flag A bit 1 (boss): target := final pos e+0x2D88 when no
+   boss has been offered yet this frame (player +0xE2AC0 = 0x18B89B8 == 0) or |e.x − player.x| < |target.x − player.x|
+   (strict), then +0xE2AC0 := 1. Then, if +0xE2AC0 is still 0 (no boss offered so far this frame): target := final pos when
+   target.y < e.y (the lowest enemy). Then the aimed-enemy update (below, 14 §3.1). `Player_DamageAgainst` never reads
+   +0xE2AA4, so doing the pick before the damage calls gives the same result.
 7. Hit flash (counter byte e+0x3314, changelog/answers_impl18.md §Q3, VERIFIED code): if the counter is 0 and the enemy took
    damage this frame (d > 0 at step 6 — the **raw** `Player_DamageAgainst` result, before the spell-card, damage-timer and
    flag-A-bit-3 reductions; the flag is set even when the reduced damage is 0, so the flash and sfx 0x14/0x25 also fire on
@@ -1037,13 +1053,13 @@ Called with the enemy and the instruction; `arg` = second operand (instr +0x10).
 | 9, 11, 25 | rotated player-hit boxes through `Player_LaserTest` 0x44A6A0 (09 §6.1, 08 §6.3 geometry) (VERIFIED 0x424730 / 0x424820 / 0x424910, RE-Q30). Origin o = P − (float var 10016, float var 10017) of the **current** context (e+0x2CA0 +0x38 / +0x3C), P = final pos e+0x2D88 (natives 9, 25) or pos e+0x2D34 (native 11), z 0; angle = main VM rotation z (e+0x14); box centre = (590/2 + o.x, o.y), i.e. the box starts at the origin and runs 590 along the angle. Heights (big / small): 9 → 160 / 128, 11 → 240 / 192, 25 → 288 / 224. Each call: (1) if timer e+0x2E14 changed and is a multiple of 12 (`Timer_ChangedMultiple`, cur ≠ prev and cur % 12 == 0): `LaserTest`(small box, graze on); (2) always `LaserTest`(big box, graze off). There is no warning phase (no hit-free first frames): the old "12-frame warning" was the graze period. `LaserTest` has no bomb-area test and does not write +0xE2A90. fullrun_noclip row 61822 |
 | 10 | flash (type 3: duration 30, 5 repeats, 0x40FFFFFF) + shake (type 7: amplitude 4, ramp 120, hold 190, out 60) (13 §3) |
 | 12, 14 | toggle bullets whose flags match var 10000 between two states (sprite ±16, speed from var 10016/10017); 12 also walks the calling enemy's child chain (e+8 = next: parent+8 → first child → child+8 …, e+4 = prev): var 10001 == 0 → set flags B bit 7 on every chained child and send interrupt 2 to the two spell-background VMs (0x4E4B68 / 0x4E4E0C); else clear bit 7 and send interrupt 1 (changelog/answers_impl10.md §4, VERIFIED) |
-| 13 | stage tint colour 0xFFC03030 |
+| 13 | stage tint colour 0xFFC03030: only `Stage_RequestTint` 0x409160 (stores the colour when no request is pending, i.e. +0x646B = 0, else averages it byte-wise into +0x6468); it does **not** write the "bomb drew" flag +0x646C (06 §10.2), which only `Bomb_DrawTint` sets (VERIFIED 0x424E00, RE-Q35). Used only as an op-137 callback (4 uses) |
 | 15 | shake (type 7: amplitude 16, ramp 20, hold 20, out 20) (13 §3) |
-| 16 | bullets with flag 0x100000 within 64 px of a child whose var 10038 == 0 set its var 10038 = 60 and copy var 10019 |
+| 16 | mark children (`EclNative_16` 0x424E50, VERIFIED RE-Q35): for each of the 1536 bullets with state +0xDB8 ≠ 0 and flag +0xDB0 & 0x100000, in slot order, walk the **caller's** chain from caller+8 along +8; a member whose int var 10038 (its e+0x2CA0 = main context, ctx+0x60) is 0 and whose pos e+0x2D34 is within the bullet pos +0xD44 by `Vec3_LengthSq`(bullet pos − member pos) < 4096.0 (strict; all three components, z·z + y·y + x·x at 24-bit precision; bullet and chained-child z are 0 in the data) gets int var 10038 := 60 and **int var 10007** (ctx+0x34) := the caller's int var 10007 (caller e+0x2CA0 +0x34). Not float var 10019. Data: ecldata6 sub73 / ecldata6sp sub61 (time 270, the caller cycles 10007 through 5, 1, 3, …), whose sub-77 children then fire `bul_fan col=$10007`: the copied 10007 is the bullet colour |
 | 18 | game speed = 1/arg |
 | 19 | var 10000 = current spell id |
 | 22 / 23 | 22: name-only spell declaration (spell flag bit 10, name banner of the string at 0x4B495C 「リザレクション」, §11.1); 23: hide the name banner (0x416160) |
-| 24 | var 10000 = game value at (0x160F510)+0x1C |
+| 24 | int var 10000 (current context, e+0x2CA0 +0x18) := stats block +0x1C = **spell cards captured** in this game (11 §5; `*(GM+8)` = 0x160F510; +1 per capture in `Spell_End`, reset to 0 at a new game) (VERIFIED 0x425040, RE-Q35). Data: ecldata8 sub84 (Extra stage timeline, frame 9678) `native 24` then `ijge $10000, 7`: with fewer than 7 captures the enemy deletes itself (op 1) at once, else it continues as a boss (last spell flag, life 6000) |
 | 26 | global byte 0x160F534 = low byte of arg (pauses enemy timers); then the two spell-background VMs g_Stage +0xB38 / +0xDDC (0x4E4B68 / 0x4E4E0C, the same pair as native 12) get interrupt 2 if that byte ≠ 0, else 1 (VERIFIED 0x425070, RE-Q30) |
 | 27 | each bullet with flag 0x100000 spawns enemy sub = var 10038 at its position (life 800, item −2, score 10, var 10016 = bullet angle); flag cleared |
 | 28 | slow-down (VERIFIED 0x4251B0, RE-Q30): game speed := 1.0 / f32(arg) **first**; spell-background VMs 0x4E4B68 / 0x4E4E0C interrupt 2; then for each of the 1536 bullets with state ≠ 0: vel (+0xD50, x, y, z) ×= the **new** game speed (speed +0xD68 and the ex-command state untouched); VM0 saved sprite +0x218 := VM0 sprite +0x214 (every live bullet); if that sprite is in 0x60–0x6F: `AnmVm_SetSprite`(VM0, 0x6F). Only VM0 |

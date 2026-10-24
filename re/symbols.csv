@@ -777,3 +777,5 @@ addr,kind,name,signature,confidence,note
 0x00438fe9,func,GameMgr_FreshStartFlag,,VERIFIED,returns 0x17CE8BC (RE-Q34)
 0x0040ba90,func,AnmMgr_SetCameraCache,,VERIFIED,AnmManager +0x24C4 := arg (RE-Q34)
 0x0040ba70,func,AnmMgr_ResetCameraCache,,VERIFIED,AnmManager +0x24C4 := 0xFF (RE-Q34)
+0x018b899c,global,g_PlayerHomingTarget,float[3],VERIFIED,player +0xE2AA4 homing target written by EnemyMgr_Calc 0x42D390 (RE-Q35)
+0x018b89b8,global,g_PlayerBossTargetSet,int,VERIFIED,player +0xE2AC0 boss offered as target this frame (RE-Q35)

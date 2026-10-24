@@ -656,3 +656,13 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Scratch: A popup height → golden same 97.45 → 99.78 %; B–E bar/timer → 99.80 %, timer/bar frames all equal.
 - Lesson: implementer frame numbers can be game frames (gm column), not presents — check both.
 - Open: continue-menu capture one present later in the ref (D3DX filtered path); panel repaint (master).
+
+# RE-Q35 (2026-10-24) — SPEC-GAP batch 1, ECL/enemy (17 markers) — DONE (specs/changelog/answers_re_q35.md)
+- Code + ecl_dis only, no session runs (re/work/runs/q35/CHECKPOINT.md). 11 of 17 were already answered by a spec section
+  (port right or known-unreachable deviation).
+- Reachable CODE BUGs: native 24 = stats+0x1C spells captured (Extra boss gate ecldata8 sub84 `ijge $10000, 7`);
+  native 16 copies the caller's INT var 10007 (ctx+0x34), not float 10019 (ecldata6 sub77 bullet colour).
+- Unreachable CODE BUGs: int read 10033 consumes Rng_NextFloat; interrupt table zero-filled (unregistered → sub 0, entry
+  < 0 still skips/pushes); interrupts in thread contexts (07 §5.5).
+- New spec facts: 07 §4.2/§5.5 (table default, no registration test), §6 10033, §10.1 step 6 homing pick placement, §12
+  rows 13/16/24, op 86 global ids; 11 §5 +0x1C.
