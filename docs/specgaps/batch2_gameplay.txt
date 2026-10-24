@@ -1,0 +1,23 @@
+src/item.rs:267  // SPEC-GAP: 08 §8.5 does not say whether the message shares the spell-card test (IMPL97 Q2).
+src/pshot.rs:607  // SPEC-GAP: the random angle is drawn only when the entry actually fires.
+src/pshot.rs:663  // SPEC-GAP: update 4 (type-4 laser) is not used by any shipped entry; not implemented.
+src/player.rs:714  // SPEC-GAP: 11 §2 says 0x164D0B0 is reset at death but not by which function or where; done here.
+src/bullet.rs:1241  // SPEC-GAP: crossing direction, bullet selection and the reversal (vel and angle) are inferred (IMPL72 Q1).
+src/game.rs:102  // SPEC-GAP: the whole file is loaded here; at boot the original takes only PLST (15 §2.2).
+src/game.rs:152  // SPEC-GAP: whether "SE off" also skips the BGM command queue (02 §4 command 5) is unclear; it does not here.
+src/bomb.rs:450  // SPEC-GAP: 09 §1.1 does not list the special-mode block among the tests that clear +0xE2A7C; kept.
+src/bomb.rs:502  // SPEC-GAP: HSCR +0x78 (Last Spells used) counted here, at the bomb start.
+src/bomb.rs:787  // SPEC-GAP: 14 §2.2 sets the VM script before the RNG point; the port draws the point first.
+src/gamemgr.rs:864  // SPEC-GAP: what sets gm+0x3DE28 is not specified; set here whenever slot 0 was loaded.
+src/gamemgr.rs:1072  // SPEC-GAP: GM draw 0x43AA03 on the post-clear loading frames is not in 11/12; the port keeps drawing the stage.
+src/text.rs:2  //! SPEC-GAP: GDI "ＭＳ ゴシック" pixels are not reproducible; a system Japanese font (native) or the browser's canvas font (web) is used.
+src/text.rs:196  // SPEC-GAP: D3DX filter TRIANGLE is approximated by an alpha-weighted 2×2 box.
+src/ascii.rs:839  // SPEC-GAP: slow mode is not configurable yet, so script 21 never runs.
+src/ascii.rs:1023  // SPEC-GAP: 12 §3 / §4 name neither the capture VM's script nor its position; capture.anm script 0 (sprite 0,
+src/hud.rs:755  // SPEC-GAP: no spec names a caller of types 2–4 (IMPL97 Q1).
+src/hud.rs:831  // SPEC-GAP: f = 0 (no counted frame) is a division by zero in 12 §5.6; the port divides by 1.
+src/hud.rs:1133  // SPEC-GAP: 12 §5.7 only says +0x21810 counts the live tiles; decremented here when a tile's script ends.
+src/anmvm.rs:912  // SPEC-GAP: integer division/remainder by zero is undefined (crash in the original); yields 0.
+src/effect.rs:467  // SPEC-GAP: 13 §2.6 has both `Bomb_Dissolve` writing 64 and the type-50 update writing 32 every frame.
+src/stage.rs:371  // SPEC-GAP: the overlay VM (step 4) is started before the quad scripts (step 3).
+src/stage.rs:815  // SPEC-GAP: the +0xB24 ≤ 1 condition for collecting sparkle points is not in 06 §11.1.
