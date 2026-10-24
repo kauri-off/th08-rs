@@ -386,11 +386,11 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 40–51 | ije fje ijne fjne ijl fjl ijle fjle ijg fjg ijge fjge | a, b, T t, O off | if a (==, ≠, <, ≤, >, ≥) b: clock = t; ip = this + off | 93 0 94 0 28 11 35 31 95 6 70 139 |
 | 52 | call | S sub | §5.4 | 614 |
 | 53 | return | — | §5.4 | 250 |
-| 54 / 58 | anm / anm_stg | i script | main VM: start script from `enemy.anm` (54, clears flags B bit 2) or `stgNenm.anm` (58, sets bit 2) | 291 / 73 |
+| 54 / 58 | anm / anm_stg | i script | main VM: start script from `enemy.anm` (54, clears flags B bit 2) or `stgNenm.anm` (58, sets bit 2) with `AnmFile_SetScript` (VM pos and pos offset kept, VERIFIED Ecl_Run case 0x36/0x3A, RE-Q33) | 291 / 73 |
 | 55 / 59 | anm_dir / anm_dir_stg | i base | direction scripts = base … base+5 (§9.3); same file/flag rule | 12 / 138 |
 | 56 / 60 | anm_dir6 / _stg | i×6 | direction scripts explicit (idle, left, right, left→idle, right→idle, replay) | 0 / 0 |
-| 57 / 61 | subanm / _stg | i vm (0/1), i script | sub VM: script < 0 → disable it, else start script (file by flags B bit 2; 57 clears, 61 sets it) | 46 / 76 |
-| 62 | anm_replay | — | restart the "replay" direction script (e+0x333C) on the main VM | 201 |
+| 57 / 61 | subanm / _stg | i vm (0/1), i script | sub VM: script < 0 → disable it, else start script with `AnmFile_SetScript` (pos / pos offset kept; 0x421E50, RE-Q33) (file by flags B bit 2; 57 clears, 61 sets it) | 46 / 76 |
+| 62 | anm_replay | — | restart the "replay" direction script (e+0x333C) on the main VM (`AnmFile_SetScript`, file by flags B bit 2; RE-Q33) | 201 |
 | 63 | set_pos | f x, f y | pos = (x, y, 0); clamp (§8) | 96 |
 | 64 | move_to | i dur, i ease, f x, f y | mode2: delta = (x, y, 0) − final pos, start = pos, timer = dur, velocity 0 (delta.x negated if mirrored) | 342 |
 | 65 | set_dir | f ang, f spd | mode1: angle = wrap(ang), speed = spd, duration 0 | 171 |
@@ -573,7 +573,9 @@ Auto-fire (`Enemy_AutoFireAndDirAnim` 0x423150, only while life > 0): if interva
 timer ≥ interval: fire the stored instruction, timer = 0.
 Direction animation (when the "left" script ≥ 0): dir = vel.x < −0.01 → 1 (left), > 0.01 → 2 (right), else 0
 (swapped when mirrored). On change: to 1/2 start left/right script; back to 0 start idle (if previous −1),
-left→idle or right→idle script.
+left→idle or right→idle script. Every one of these starts goes through `AnmFile_SetScript` 0x4069F0 on the main VM e+0xC
+(VERIFIED 0x423150, RE-Q33): the VM pos and **pos offset** (+0x288, the op-24/32 bob of the stage enemy scripts) and the
+interpolation start/end values (beyond the 0x208 bytes `AnmVm_Init` clears) are kept, unlike `AnmManager_SetScript`.
 
 ### 9.4 Laser block (ops 114/115, 64-byte instruction) — VERIFIED field mapping
 +0x0C i16 type, +0x0E i16 colour (mask bit 1), +0x10 angle (bit 2), +0x14 speed (bit 3), +0x18–0x24 four floats
@@ -813,6 +815,17 @@ unlinked from the chain (0x42B2F0).
 Callers: `EnemyMgr_Calc` death (reward 1), `Enemy_CheckLifeThresholds` (1), `Enemy_CheckTimeout` (0),
 `Enemy_Free` (0), `Player_UpdateBomb` dissolve end (0).
 
+### 10.3b `Enemy_Free(e)` 0x42BCF0 — VERIFIED (RE-Q33)
+Called for op 1 (delete) and the off-screen free (§10.1). In order: `Enemy_KillChildren(e, 0)` (§10.3a); if the
+death-mode bits 20–22 are 0, alive bit cleared; if boss (flags A bit 1) and slot byte e+0x3313 < 4: HUD boss display
+off (`FUN_00422c20(&g_Hud, 0)`), boss table entry cleared, bit 1 cleared, boss marker interrupt 2 and position
+(−999, −999, 0) (12 §5); if op-128 effects exist (e+0x53C0 ≠ 0) `Enemy_ReleaseOrbitEffects` (fade request, 13 §2.6b);
+boss table entry cleared again if bit 1 is still set; replay-stats word +0xDA |= 0x20; **aura** (e+0x53C8 ≠ 0):
+`AnmVm_Interrupt(aura, 3)` and e+0x53C8 := 0 — the aura effect is **not** freed or deactivated, its script plays
+its end (interrupt-3 label) and ends it like the death-mode case (§10.3 mode 0); e+0x3358..0x3364 := −1,
+e+0x3378 := −1, `FUN_0042bc90(e)`; the aimed-enemy pointer 0x18B89B4 := 0 if it is e. (Golden runtime ring dump,
+RE-Q33 fix Y: four type-32 auras of freed enemies stay live in the original.)
+
 ### 10.4 Drops (`Enemy_DropItems` 0x42BEA0)
 item ≥ 0: `Effect_Spawn(e+0x3311 + 4, final pos, 3)` (3 sparks), then spawn item `item` at final pos.
 item == −1: if counter (u16 mgr+0x9DCDC0 = 0xF54CE0) % 3 == 0 → `Effect_Spawn(e+0x3311 + 4, final pos, **6**)`
@@ -962,7 +975,7 @@ D3DCOLOR 0x20D080A0 (alpha 0x20, R 0xD0, G 0x80, B 0xA0) — the colour slot ler
 write puts 0x20 into the alpha slot's end byte +0x27F, which matters only if the alpha slot is started later, so the
 ring's alpha does **not** fade here (VERIFIED RE-Q29); wave count +0x334 := 6; **age timer +0x338 := 0**; +0xF8 :=
 +0xF4, +0xF4 := 0; SE 0x23. Not captured: ring freed (active := 0), +0xF4 := 0, HUD message 5/6.
-On op 123 with the card active: bit 0 off; if not timed out → `CancelBonus(8000, 1)` + `KillAll(8000)` →
+On op 123: global 0x4E3D28 := 0 first (always); with the card active: bit 0 off, then **`Spell_HideName`** (12 §5.8 boss hide: VM 7 interrupt 1, VM 11 and VM 13 interrupt 2, so the boss name plate, label and bonus line leave on the card's last frame; VERIFIED 0x4161B0, RE-Q33 golden: the plate block is gone from the frame after the end, ~11 quads/frame for the rest of the boss fight in a port without it); if not timed out → `CancelBonus(8000, 1)` + `KillAll(8000)` →
 score + `Hud_ShowBonus`; if capture still possible → captured: payout value = +0xFC, time reward 700 (flag A
 bit 27) or from the remaining card time: D = card timer +0x114 (the duration at start), thr = D − D/7, r = remaining +0x108; r ≥ thr → 1000, r < 180 → 100, else (r − 180)·900/(thr − 180) + 100 (integer), captures counter, score-file
 stats, checksum (RNG), start-ring recoloured, SE 0x23, bits 8 and 9; the ring pointer moves from +0xF4 to +0xF8.
@@ -996,7 +1009,7 @@ spell background off.
 Called with the enemy and the instruction; `arg` = second operand (instr +0x10).
 | n | behaviour |
 |---|---|
-| 0 | globals 0x4E3D28 = var 10000, 0x4E3D24 = var 10016 |
+| 0 | globals 0x4E3D28 = var 10000, 0x4E3D24 = var 10016: the **darkness mask** alpha and radius (Ascii +0x16F08 / +0x16F04, drawn by `Ascii_DrawPopups`, 13 §4.1; alpha also zeroed by `Spell_End`, `GameManager_StageStart`, `GameMgr_OnRemove`) |
 | 1, 17 | screen flash (type 3: duration 60 (native 1) / 180 (native 17), 1 repeat, 0xFFFFFFFF; prio 0x15; 13 §3) |
 | 2 | bounce: vel.x negated at x ≤ 0 / ≥ 384; vel.y += var 10022 while vel.y < var 10023; vel.y negated when y < −64; clears bit 28 when y ≥ 480; angle = atan2(vel) when changed |
 | 3, 6, 20 | create two effects of the same type (native 3: 0x38, 6: 0x3A, 20: 0x41; colour 0xFFFFFFFF at the enemy) in fixed slots 9 and 10; the slot-10 effect then gets etama script 0x61 / 0x65 / 99; set the stage callback 0x4235A0 (§12.1). Native 5 ends both |

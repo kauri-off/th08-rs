@@ -153,8 +153,8 @@ then table[type].init runs (ECX = effect); init returning ≠ 0 frees the slot i
 bit 0x400 of the replay statistics word (0x18B8A28)+0xDA, which nothing reads (08 §8 end; VERIFIED RE-Q26).
 | function | args | slot choice |
 |---|---|---|
-| `Effect_Spawn` 0x425430 | type, pos, count, colour | ring pool: advance cursor (wraps 512 → 0), take the first inactive slot; repeat for count effects (consecutive slots after the cursor); search at most 512 slots |
-| `Effect_SpawnWithParam` 0x425650 | type, pos, param, count, colour | same, also param → +0x2B0 (VM flag 0x2000 not set) |
+| `Effect_Spawn` 0x425430 | type, pos, count, colour | ring pool: examine the slot at the cursor, then advance the cursor (wraps 512 → 0) — every examined slot advances it, free or not; an inactive slot is taken; repeat for count effects. **The 512-slot search budget is shared by the whole call** (one loop counter for all `count` effects): when it runs out, the call ends and returns the dummy effect (+0x89BFC) even if some effects were spawned, and the cursor has advanced by exactly 512 (back where it started) plus the slots examined before. The count is decremented after each spawn (also when the init frees the slot) and the loop stops when it reaches 0, so count ≤ 0 fills every free slot until the budget is used. Otherwise the return value is the last slot taken (even if its init freed it). VERIFIED 0x425430 + golden runtime ring dump (RE-Q33 fix X: with 509/512 live slots a count-4 spawn leaves the cursor unchanged; a per-effect budget moved it 18 slots and changed the draw order of every list) |
+| `Effect_SpawnWithParam` 0x425650 | type, pos, param, count, colour | same (shared budget, return value), also param → +0x2B0 (VM flag 0x2000 not set) |
 | `Effect_SpawnHigh` 0x425B70 | type, pos, count, colour | first inactive among 512–639 (no cursor); age timer 0; layer 0 |
 | `Effect_SpawnFixed` 0x425870 | type, pos, slot k, colour | always slot 640 + k (overwrites); skips the script when table script < 0 |
 | `Effect_SpawnFixedParam` 0x4259E0 | type, pos, param, slot k, colour | same with param |
@@ -204,7 +204,7 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 12 | 44 (40) | — | death burst at the **real** death (fixed slot 3, `Player_DyingUpdate` when the deathbomb window reaches 0); also bomb starts (pool, 3 bomb fns). Colour 0xFF4040FF. Script 44 (= etama entry 1 script 19): sprite 214 (63×63, etama2.png), additive, alpha 255 → 0 over 40 frames, scale 0.5 growing +0.3/frame, `hide_stop` at 40 → the effect manager frees it (runtime: freed on age 40). Nothing else frees it |
 | 13–15 | 45 (∞) | layer 2 (init zeroes axis/angle); update: pos = centre (+0x2E0) + offset rotated about the normalised axis (+0x2EC) by angle (+0x318) (VERIFIED RE-Q26, 0x426030 with the D3DX helpers 0x4791BC normalize, 0x4781CD rotation-from-quaternion, 0x4792E8 transform-coord): n = normalize(axis); q = (n·sin a, cos a) with a = angle — **not** a/2, so the rotation is by 2a about n; offset v = normalize(n × (0, 0, 1)) = normalize(n.y, −n.x, 0) scaled by the radius +0x314, rotated by q; pos = centre + v; then z := 0. QUIRK: when |n × z|² < 1e−5 (axis along z) the fallback (1, 0, 0) is written into n, not v, so v stays the tiny unnormalised cross product × radius (effect ≈ at the centre); when +0x352 is set: +0x353 counts up, alpha = 255·(1 − n/16)… freed after 15 frames, scale grows | ECL op 128 (enemy-attached; the enemy writes axis/angle/centre every frame, 07 op 128) |
 | 16 | 0 | — | — |
-| 17, 27 | 32 (60), 34 (120) | converge: centre = pos, dir = unit at random angle (**RNG**; (f32 cos, f32 sin, 0), `EffInit_Converge` 0x426B20, 05 §10 trig sites); pos = centre + dir·(256 − 256·t/60) | ECL op 139 (charge-up) |
+| 17, 27 | 32 (60), 34 (120) | converge: centre = pos with centre z := 0, dir = unit at angle a = f32(Rng_FloatRange(2π) − π) (**RNG**, 1 draw; the −π is constant 0x4B4334, VERIFIED RE-Q33: without it every particle is point-reflected about the centre, golden etama.anm#1 12.9 k quads) as (f32 cos a, f32 sin a, 0) (`EffInit_Converge` 0x426B20, 05 §10 trig sites); pos = centre + dir·(256 − 256·t/60) | ECL op 139 (charge-up) |
 | 18 | 33 (240) | as 17 with 240 frames, keeps z | — |
 | 19 | 51 (300) | 3D background petal/leaf: spawned at camera + facing/2 + random (**RNG**: 10 draws, §2.6a), drifts with velocity + accel, z-rotation spin; freed when outside the view cone (dot(normalised dir from camera, facing) < 0.94) or when z ≥ 0 (kept only while z < 0) | — |
 | 20 | 56 | — | — |
@@ -374,7 +374,28 @@ Fade, when +0x352 is set:
 - Half-size = 0.5·|project(pos + right) − s|·sprite_w·scale.x, and the same with sprite_h·scale.y.
 - right = `g_Stage`+0x63C4 (0x4EA3F4) = normalise(cross(facing, up)). **`Stage_SetCamera` 0x40B6D0
   writes it every frame.** Correction to 05 §9 / NOTES: the vector is not zero and the billboard is not
-  degenerate.
+  degenerate. Exactly (VERIFIED asm 0x40B7AE, `Vec3_Cross` 0x40B7F0, RE-Q33): a = the camera's **raw facing
+  vector +0x63A0** (not at − eye, so the eye offset +0x63D0 does not enter), b = up +0x63AC,
+  right = normalise((a.y·b.z − a.z·b.y, a.z·b.x − a.x·b.z, a.x·b.y − a.y·b.x)). It is **not** the view-matrix
+  row 0 that the stage's own billboards use (06 §11): with a non-zero eye offset or non-orthogonal facing/up the two
+  differ, and the list-B sizes then differ by ~1 % (golden: etama.anm#1 particle sizes, 73 k quads, RE-Q33 fix V).
+  The length |project(pos + right) − s| is `Vec3_Length` of the projected difference (x, y and depth).
+- **+0x63C4 is only as fresh as the last `Stage_SetCamera` call** (VERIFIED: its callers are `Stage_DrawLayer` and
+  `AnmManager_SetRenderState` when a drawn VM's flag bit 15 (stage camera) differs from the cached state +0x24C4;
+  golden runtime dump RE-Q33: during a stage-1 spell the stored right stayed (−0.99788, 0, −0.06508) while facing.x
+  moved 4.8 → 7.8). While the stage layers are not drawn (06 §10.2: +0xB24 ≥ 2 or the HUD cover) and no
+  stage-camera VM is drawn, the list-C billboards (op-128 orbit effects, 2D camera) are therefore sized with the
+  stale vector of the last drawn frame. Order inside a frame: `Stage_DrawLow`/`High` layers (prio 6/7) write it
+  before `EffectMgr_Draw` (prio 12) reads it. (RE-Q33 fix Z: etama.anm#1 changed 34.7 k → 13.0 k.)
+- **Projection arithmetic (D3DX8, VERIFIED RE-Q33).** `D3DXVec3Project` is the statically linked D3DX8 one
+  (0x4793B3, slot 14 of the dispatch table 0x4C8710, initialised by 0x47B944 from CPU features: 3DNow → 0x486AC5,
+  a CPUID test 0x47B89F → 0x4868D0, else SSE → 0x4867B0; the reference machine (AMD, no 3DNow) uses the SSE table). It computes
+  M = (world · view) · proj with the SSE `D3DXMatrixMultiply` (0x48D280: each element a sequential f32 sum
+  ((a0·b0 + a1·b1) + a2·b2) + a3·b3), then `D3DXVec3TransformCoord` (SSE 0x48EDF0, 16-byte aligned path:
+  (x·m0 + y·m1) + (z·m2 + m3), 1/w = `rcpps` refined by one Newton step r' = (r + r) − (r·w)·r, result · r'),
+  then the viewport map on the x87 at 24-bit precision: x = ((x' + 1)·W)·0.5 + X, y = ((1 − y')·H)·0.5 + Y,
+  z = (MaxZ − MinZ)·z' + MinZ. Effect on the golden draw log: below the 0.01 px print resolution in nearly all
+  quads (no measurable count change); a port may use f32 division.
 - The rotation is VM rotation.z; the vertex z is s.z.
 
 **Callback 0x428310 for types 51 / 63.** It moves the projected point s in screen space; skipped while
@@ -526,6 +547,26 @@ OR is undone by `AnmVm_Init` as above, QUIRK), VM pos.x starts at x0 = pos.x −
 drawn from the last stored to the first, advance 7·scale.x, VM scale := slot scale (+0x28/+0x2C), sprite
 0x88 + glyph (only the width copied; no age-based sprite change), `Draw2DSnap`, RGB from the colour, alpha
 **replaced** by the player-distance rule of the small popups (0x50 / ramp / 0xD0).
+
+### 4.1 Darkness mask (Ascii +0x16F04 radius, +0x16F08 alpha) — VERIFIED 0x405420 (RE-Q33)
+Drawn by `Ascii_DrawPopups` **between the small and the large popups** (so after the small popups, before the
+large ones) whenever the int a = Ascii +0x16F08 (absolute 0x4E3D28) is > 0; r = f32 Ascii +0x16F04 (0x4E3D24).
+Writers (byte-pattern search of both absolute addresses, RE-Q33): ECL native 0 (07 §12: a := var 10000,
+r := var 10016 of the calling context), and a := 0 in `Spell_End` (first statement, every call, 07 §11.1),
+`GameManager_StageStart` and `GameMgr_OnRemove`. P = player pos 0x17D61AC/0x17D61B0 (playfield), s = AnmManager
++0x1C/+0x20 (screen shake, §3 type 1; zeroed at the end of this same function). Colour of all four rects =
+D3DCOLOR(alpha = low byte of a, 0, 0, 0) via `Screen_FillRect` 0x45B1E0 (untextured, ZFUNC unchanged, z 0, rhw 1).
+In order (all coordinates f32, screen space):
+1. left: (32, 16)–(P.x + 32 − r + s.x, 464), only if that right edge > 32;
+2. right: (P.x + 32 + r + s.x, 16)–(416, 464), only if that left edge < 416;
+3. x0 = P.x + 32 − r + s.x clamped to ≥ 32, x1 = P.x + 32 + r + s.x clamped to ≤ 416 (the clamps replace the
+   value only when it is beyond the bound); top: (x0, 16)–(x1, P.y + 16 − r + s.y), only if that bottom > 16;
+4. bottom: (x0, P.y + 16 + r + s.y)–(x1, 464), only if that top < 464 (same x0/x1);
+5. VM Ascii +0x16F0C: `AnmFile_SetScript`(etama.anm (0x577EB4), VM, script 105) **every frame** (entry 4, sprite 229 =
+   etama5.png 128×128, script: sprite 229, loop), scale x = y = r / 63, pos := (P.x + 32, P.y + 16, P.z) (player
+   z 0x17D61B4), colour alpha byte := low byte of a, `Draw2DSnap` (05 §9 mode 0; the hole sprite is 128·r/63 wide,
+   centred on the player). Golden: stage-2 boss card, a = 255, r = 288 → quad (−2.5, 144.5)–(582.5, 729.5) z 0.2,
+   2329 frames (presents 22413…) never drawn by a port without it.
 
 ## 5. Spell-card background
 `Spell_Start` calls `Stage_StartSpellBg` 0x415CE0 (stage +0xB24 = 1, +0xB28 = 0) and sets the stage's spell

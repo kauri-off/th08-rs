@@ -271,7 +271,8 @@ stage camera (`Stage_SetCamera` 0x40B6D0):
 - View = LookAtLH(eye = position + eye_offset, at = position + facing, up = up).
 - Projection = PerspectiveFovLH(fovY = fov (+0x63DC), aspect = 384/448 (viewport w/h), near = **30**,
   far = **1800**).
-- (It also stores cross(…, up) normalised at +0x63C4 — unused by the stage draw.)
+- It also stores normalise(cross(facing +0x63A0, up +0x63AC)) at +0x63C4 (the raw facing, not at − eye) — unused by the
+  stage draw (which takes view row 0, §11), read by the list-B effect billboards (13 §2.6c).
 
 After layers 2–3 `Stage_DrawHigh` switches back to the default 2D camera (`Camera_Set2D`, 05 §9) for the same
 viewport, and sets fog start/end to 1000/2000.

@@ -402,7 +402,7 @@ excess ignored): text (≤ 64 bytes copied), position (x, y, z), and a **copy of
 | +0x826C / +0x8270 | 0x4D508C / 0x4D5090 | 1.0 / 1.0 | glyph scale x / y (`Ascii_SetScale` 0x42F2F0) |
 | +0x8274 | 0x4D5094 | 0 | 1 = clip to the playfield viewport while drawing |
 | +0x8278 | 0x4D5098 | 0 | **highlight**: stored only when cfg+0x38 bit 0 or bit 8 is set. Bit 0 is always forced to 1 (15 §1.1), so in practice it always takes effect |
-| +0x8280 | | 13 | advance per glyph in px (×scale x) |
+| +0x8280 | | 13 | advance per glyph in px (×scale x). **Read at draw time** by `Ascii_DrawStrings` (0x402B20) for every queued string — it is not stored in the entry (scale is, entry +0x50/+0x54). A caller that sets it and resets it to 13 before the draw pass has no effect (`Hud_DrawPopups` messages 2/4/5/6: advance stays 13·0.9 = 11.7; VERIFIED RE-Q33) |
 
 Drawing (`Ascii_DrawStrings`, ASCII draw pass, after everything drawn by the menu/result object): one VM is
 reused, anchor top-left. Pen = entry position. '\n' → y += 16·scale y, x = start; ' ' → x += advance; any other
@@ -723,7 +723,12 @@ the playfield viewport (§2.9).
 | trigger | text | pos / duration |
 |---|---|---|
 | `Hud_ShowBonus(n)` 0x437DDD (spell-end bullet/enemy bonus, boss kill) | " BONUS %8d" colour 0xFFFFFF80 | starts (416, 48); x slides by −312 over 30 frames (to 104); 250 frames |
-| `Hud_ShowMessage(v, type)` 0x437E5D | 1 "Full Power Mode!" (power items at max), 4 "Border Bonus %7d", 5 "Spell Bonus Failed", 6 "Last Spell Failed" (types 4–6 at 0.9 scale, advance 11) | (416, 168) sliding like above; 180 frames |
+Timing (VERIFIED `Hud_Update` 0x435900, RE-Q33): the show call sets x = 416 and the timer t := 0. Each `Hud_Update`:
+if t < 30: x := f32(t·(−312)/30 + 416) with t the timer **before** this frame's tick, else x := 104; then if t ≥ 250
+(bonus) / 180 (message) / 280 (spell bonus) the popup is switched off; then the tick. A popup shown before the
+same frame's `Hud_Update` is therefore drawn at 416 on its first frame, at 405.6 on the second, and drawn for
+250/180/280 frames. (RE-Q33 golden: a port one tick ahead drew the rows 10.4 px left for 30 frames.)
+| `Hud_ShowMessage(v, type)` 0x437E5D | 1 "Full Power Mode!" (power items at max) and 3 "CherryPoint Max!": colour 0xFFC0B0FF, scale 1; 2 "Supernatural Border!!", 4 "Border Bonus %7d", 5 "Spell Bonus Failed", 6 "Last Spell Failed": scale **x 0.9, y 1.0**, colour **0xFFE0B0FF**, `Ascii_SetAdvance(11)` that is reset to 13 before the draw, so the effective advance is 13·0.9 (§2.9) (VERIFIED 0x438A89, RE-Q33) | (416, 168) sliding like above; 180 frames |
 | `Hud_ShowSpellBonus(n)` 0x437EDC (capture) | "Spell Card Bonus!" red 0xFFFF0000 at x = (384 − 17·14)/2 + 32 = 105, y 80 (scale 1, advance 13); then "+%d" at y 96, x = (384 − len·28)/2 + 32, 2× scale, colour 0xFFFF8080 (VERIFIED 0x438A89, RE-Q25) | 280 frames |
 
 ### 5.6 Stage-clear panel (`Hud_DrawClearPanel` 0x43826B, while msg op 9 state is set) — VERIFIED (rewritten RE-Q25)
@@ -837,7 +842,7 @@ pending interrupt 1, VM 10 interrupt 2.
 via 0x415D10): VM 1 if face ≥ 0; VM 2 script 1, VM 4 script 3 (sprite 0); VM 7 (and 8/9) scripts; name
 rendered **right-aligned** (0x4664A0: x = strip.x + strip.w − len·size/2, size 15) in COLORREF 0x00FFF0F0 =
 RGB (240, 240, 255), outline 0; +0x261C := len·15/2 + 16 (never read); VM 11 interrupt 1; VM 13 interrupt 1
-unless spell flag bit 10 (name only); SE 0xE. **Boss hide** `Spell_HideName` (native 23): VM 7 pending
+unless spell flag bit 10 (name only); SE 0xE. **Boss hide** `Spell_HideName` 0x416160 (native 23, `Spell_End` 07 §11.1, `Spell_Calc` step 1.1): VM 7 pending
 interrupt 1, VM 11 interrupt 2, VM 13 interrupt 2 (unless bit 10). Nothing else interrupts VM 7, so the boss
 name stays parked at its top position until native 23 or the next show.
 
@@ -859,10 +864,13 @@ Draw (`Spell_Draw`):
    VM 7 pos; VM 11 Draw2DSnap; VM 7, 8, 9 Draw2DRot; VM 13 Draw2DSnap; then unless spell flag bit 10 the
    bonus line: start = VM 13 pos + (−40, +1); bonus = +0xFC if spell flag bit 2 (still capturable) else 0,
    8 digits from 10 000 000 with leading zeros suppressed (units always), each digit = VM 12 with sprite
-   0x88 + d (`ascii.anm` 8×12 digits), advance 7; then x += 32: captures of this card (+8) for the current
-   shot type (CATK story +0x158 / practice +0x1F4, capped 999), 3 digits, leading zeros suppressed, advance 7;
-   then x += 13: attempts (CATK +0x124 / +0x1C0, capped 999) the same way, except that its tens digit is also
-   forced when the captures had a hundreds digit. Finally the global tint is turned off.
+   0x88 + d (`ascii.anm` 8×12 digits), x += 7 after **every** one of the 8 slots (suppressed ones too); then
+   x += 32: captures of this card (+8) for the current shot type (CATK story +0x158 / practice +0x1F4, capped
+   999) as 3 slots — hundreds (drawn if ≠ 0), x += 7, tens (drawn if ≠ 0 or hundreds drawn), x += 7, units
+   (always) — **no advance after the units**; then x += 13: attempts (CATK +0x124 / +0x1C0, capped 999) the
+   same way, except that its tens digit is also forced when the captures had a hundreds digit. So the attempts
+   hundreds slot is 13 px (not 20) right of the captures units (VERIFIED 0x4178C0, RE-Q33: golden y 334.5/338.5
+   attempts digit at x 392.5, a port with a trailing advance draws it at 399.5). Finally the global tint is turned off.
 
 Scripts (all positions are screen coordinates):
 - Player cut-in (all 8 `face_XX00.anm` script 0): top-left anchor, pos (48, 144) → (48, −112) linear over 180

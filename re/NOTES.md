@@ -634,3 +634,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   unreachable without card; held enemies run the op-128 update; op 178 uses Ecl_SetMode2Polar).
 - Lesson: a python `open(p,'w').write(open(p).read())` truncated a scratch file — keep scratch patches as scripts.
 - Remaining groups: CHECKPOINT.md "Remaining".
+
+# RE-Q33 (2026-10-24) — golden draw parity remainder — DONE (specs/changelog/answers_re_q33.md)
+- Runs re/work/runs/q33/ (portfix = q32 portfix + `// q33 X` fixes; rungolden.sh <tag>; q33_fixes.diff vs q32).
+- Golden draw 98.06 % → 99.85 % same quads, identical frames 7426 → 19204 (tag AH); logic traces all full, demos in sync.
+- Causes: billboard right vector cross(facing, up) and stale unless Stage_SetCamera ran; Effect_Spawn shared 512 budget;
+  Enemy_Free aura interrupt 3; converge angle −π; Spell_End → Spell_HideName; darkness mask (native 0 globals) in
+  Ascii_DrawPopups; bonus-line digit advance; HUD message colours/scale/advance-at-draw + slide timing; AnmFile_SetScript
+  for ECL anim ops; step-7 colour2 off; "Full Power Mode!" message.
+- Tooling: scratch probe q33/probe (TH08_SCANEFF ring/camera dump), drawdiff Q33TEX per-frame counts. D3DX8 uses the SSE
+  dispatch table on the reference machine (rcpps+Newton 1/w) — sub-print in the log.
+- Remaining: CHECKPOINT.md "Remaining" (q33).

@@ -441,7 +441,7 @@ Notation: `stats` = game-manager stats block (09 §9), score is stored /10 (`Add
 **4 RNG draws**); if power ≥ 128: power = 128 through `GameMgr_SetPower` 0x406FA0 (also checksummed: **+4 draws**,
 so a collect that reaches full power costs 8; changelog/answers_impl18.md §IMPL19-Q1, VERIFIED code + runtime demo 3 frame 1059:
 two collects = 4 + 4 + 4 = 12 draws), if no
-  spell card is running cancel all bullets to items (mode 1), HUD message, convert all other type 0/2 items to
+  spell card is running cancel all bullets to items (mode 1), HUD message (`Hud_ShowMessage(0, 1)` "Full Power Mode!", 12 §5.5 — it also sets the panel full-repaint counter 0x17CE8CC := 2; VERIFIED 0x440CF0 / 0x441170, RE-Q33), convert all other type 0/2 items to
   type 8 (vel = (0, −0.5, 0) if vel.y > −0.5; effect; script 0x45). AddScore(10). Popup "10", or a power-up popup +
   sound 0x1F if the level changed. Type 0 additionally rank +1 (always, even at full power).
 - **Point (1)**: max = stats+0x24. If item.y < collection line or the item's max-value flag: v = max; else
@@ -454,7 +454,7 @@ two collects = 4 + 4 + 4 = 12 draws), if no
 - **Converted point (8)**: like point but with max/10 and v/10 each rounded down to a multiple of 10, no counters,
   no rank.
 - **Bomb (3)**: if bombs < 8: bombs += 1, HUD.
-- **Full power (4)**: if power < 128: cancel to items (**unconditionally**, no spell-card test), HUD, sound 0x1F,
+- **Full power (4)**: if power < 128: cancel to items (**unconditionally**, no spell-card test), HUD message 1 (`Hud_ShowMessage(0, 1)`, VERIFIED `ItemMgr_Calc` case 4, RE-Q33), sound 0x1F,
   popup, convert items. Always (even when already at 128): power := 128 via `GameMgr_SetPower` (checksum, 4 RNG
   draws), AddScore(1000), popup 1000.
 - **1up (5) / extend**: if lives < 8: lives += 1, sound 0x1C, rank +200; else if bombs < 8: bombs += 1, sound
