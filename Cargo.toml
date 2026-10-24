@@ -4,6 +4,7 @@ version = "0.1.0"
 license = "GPL-3.0-or-later"
 edition = "2024"
 description = "Clean-room reimplementation of Touhou 8: Imperishable Night"
+default-run = "th08"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
