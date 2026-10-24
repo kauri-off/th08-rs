@@ -1,0 +1,8 @@
+src/input.rs:23:// SPEC-GAP: the specs name only Z, Ctrl, ESC, Enter, Q, S, Home/P, D, R; arrows, X and Shift are assumed.
+src/audio.rs:237:    // SPEC-GAP: MIDI mode (cfg +0x1F = 2) is not implemented; it plays the WAV track.
+src/audio.rs:247:        // SPEC-GAP: whether a new track cancels a running fade / resets its attenuation is not specified (it does here).
+src/sound.rs:97:        // SPEC-GAP: out-of-range ids (e.g. sht +0x26 = −1) are ignored; 13 §1.2 does not say what the original does.
+src/eclvm.rs:414:        // SPEC-GAP: k ≥ 32 reads past the i16[32] table in the original (no range test); sub 0 here.
+src/text.rs:196:        // SPEC-GAP: D3DX filter TRIANGLE is approximated by an alpha-weighted 2×2 box.
+src/ascii.rs:957:                                    // SPEC-GAP: the 2 s fade-in `0x406AC0(2.0)` (INFERRED in 12 §3) is not ported.
+src/joystick.rs:58:                // SPEC-GAP: 15 §1.1 gives the lX/lY thresholds (600) but not the DIPROP_RANGE; ±1000 is assumed.

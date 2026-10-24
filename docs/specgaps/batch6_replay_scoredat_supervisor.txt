@@ -1,0 +1,14 @@
+src/scoredat.rs:357:    // SPEC-GAP: the VRSM exe check (15 §2.10) is not made.
+src/scoredat.rs:590:    // SPEC-GAP: the "new entry" byte +9 is 0 in every saved file read so far; cleared before saving.
+src/supervisor.rs:36:// SPEC-GAP: the holds were measured on the original's draw log: 13 boot frames, then the menu loader until scene
+src/supervisor.rs:112:    // SPEC-GAP: fixed rule here, every 30 gameplay calcs on the 3rd of each (demo 0 / 2 phase, from traces).
+src/supervisor.rs:270:            // SPEC-GAP: 6 → −1 also finishes the replay in 11 §7; the port does not.
+src/supervisor.rs:377:        // SPEC-GAP: the +0x154 counter's "config re-check every 4000 frames" (11 §7) has no condition or action in the spec.
+src/config.rs:166:        // SPEC-GAP: the message box 0x437CDD shown here has no text in the spec; the port logs a warning.
+src/replay.rs:172:    // SPEC-GAP: the exe check of step 5 (info +0x124/+0x128/+0x12C, 15 §2.10) is not made.
+src/replay.rs:571:        // SPEC-GAP: 15 §3.6 does not name the source of the card name +0x7E; CATK[id] +0x10 is used.
+src/replay.rs:580:// SPEC-GAP: the string tables of キャラ名 / 難易度 / 最終ステージ are not given; 0x4C7F4C, 0x4C7FD4, 0x4C7FAC are used.
+src/replay.rs:702:        // SPEC-GAP: 15 §3.2 does not say which config copy holds this slow byte; the gameplay copy is read.
+src/replay.rs:721:            // SPEC-GAP: the port has no fps meter; fps_now is written as 60.
+src/replay.rs:742:        // SPEC-GAP: 15 §3.3 does not say which config copy holds this slow byte; the gameplay copy is read.
+src/replay.rs:799:                // SPEC-GAP: 15 §3.3 does not say whether the fast and dialogue tests share one call; here fast wins.
