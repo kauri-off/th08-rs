@@ -99,7 +99,7 @@ impl Ctx {
         ctx.anm.rng = crate::rng::Rng::boot();
         if persist {
             // The port's own save first; else import the original's score.dat (read-only).
-            // SPEC-GAP: the whole file is loaded here; at boot the original takes only PLST (15 §2.2).
+            // The whole file is loaded once; equivalent to the original's boot PLST take (15 §2.2, INFERRED).
             let file = match crate::scoredat::storage_read("score.dat") {
                 Some(f) => Some(f),
                 None => source.read("score.dat").await.ok(),
@@ -149,7 +149,7 @@ impl Ctx {
     // ("sound flush", 12 §2.2, 16 §6.2).
     pub fn sound_update(&mut self) {
         let cfg = self.game.cfg;
-        // SPEC-GAP: whether "SE off" also skips the BGM command queue (02 §4 command 5) is unclear; it does not here.
+        // The BGM command queue runs before the SE flush, also with "SE off" (13 §1.3).
         self.audio.start_fade();
         if cfg.se_on == 0 || !crate::sound::pending() {
             return;

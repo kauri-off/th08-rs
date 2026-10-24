@@ -790,7 +790,7 @@ impl Player {
         }
         if b.t >= 40 && b.t % 20 == 0 && b.adv {
             // Quirk kept: the first blast uses object 16, every later one reuses object 17.
-            // SPEC-GAP: 14 §2.2 sets the VM script before the RNG point; the port draws the point first.
+            // 14 §2.2 sets the VM script before the RNG point; no player*.anm script draws RNG at time 0, so order is moot.
             let k = 16 + self.bomb.n as usize;
             self.bomb.n = 1;
             let colour = BLAST_COLOURS[((b.t / 20) % 7) as usize];

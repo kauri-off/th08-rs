@@ -143,7 +143,7 @@ pub struct Stats {
     // +0x28 night clock 0–12, +0x29 continues used.
     pub clock: i32,
     pub continues: u8,
-    // GM byte 0x164D0B0: reset at new game / death, kept in replay record +0x20 (11 §2 table, §3.4, §6).
+    // GM byte 0x164D0B0: := 0 at a fresh start, the real death, a small power item < 128; record +0x20 (11 §2).
     pub d0b0: u8,
     // +0x1C spell cards captured.
     pub spells: i32,
@@ -712,8 +712,6 @@ impl Player {
         }
         // Freeze byte 0x160F534 := 0.
         crate::enemy::set_timer_pause(0);
-        // SPEC-GAP: 11 §2 says 0x164D0B0 is reset at death but not by which function or where; done here.
-        self.stats.d0b0 = 0;
         Stats::checksum(rng);
         crate::sound::play_at(crate::sound::PLDEAD, self.pos[0]);
         crate::effect::spawn_rng(rng, 6, self.pos, 16, 0xFFFFFFFF);
@@ -1115,6 +1113,8 @@ impl Player {
             0xFF4040FF,
         );
         self.freeze_bullets = false;
+        // 0x164D0B0 := 0 here, not in Player_Die: a deathbomb leaves it unchanged (09 §6.2, 11 §2).
+        self.stats.d0b0 = 0;
         self.last_spell = 0;
         let rng = &mut anm.rng;
         self.stats.deaths += 1;
@@ -1549,6 +1549,7 @@ mod tests {
         p.stats.power = 40.0;
         p.stats.time = 1000;
         p.stats.time_threshold = 5000;
+        p.stats.d0b0 = 7;
         let mut rng = Rng::default();
         p.die(&mut rng);
         assert_eq!((p.state, p.deathbomb), (2, 15 * 9 / 5));
@@ -1557,9 +1558,12 @@ mod tests {
         p.die(&mut rng);
         assert_eq!(p.deathbomb, 15);
         for k in 0..15 {
+            // 09 §6.2: 0x164D0B0 is kept through the window and reset at the real death.
+            assert_eq!(p.stats.d0b0, 7, "frame {k}");
             p.step(&mut anm, &input(0));
             assert_eq!(p.state, 2, "frame {k}");
         }
+        assert_eq!(p.stats.d0b0, 0);
         assert_eq!(
             (p.deaths, p.stats.power, p.stats.rank_delta),
             (1, 24.0, -1600)

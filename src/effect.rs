@@ -464,7 +464,7 @@ impl Effects {
             (e.ring.start, e.ring.radius, e.ring.width) = (param[0], param[1], param[2]);
             e.ring.segments = match kind {
                 41 => 48,
-                // SPEC-GAP: 13 §2.6 has both `Bomb_Dissolve` writing 64 and the type-50 update writing 32 every frame.
+                // `Bomb_Dissolve` writes 64, but the type-50 update writes 32 before the first draw (13 §2.6).
                 50 => 32,
                 _ => 24,
             };

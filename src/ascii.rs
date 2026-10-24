@@ -811,6 +811,7 @@ const P_YES: usize = 5;
 const P_NO: usize = 6;
 const P_DIFF: usize = 7;
 const P_PRACTICE: usize = 8;
+const P_SLOW: usize = 9;
 
 impl PauseMenu {
     fn show(&mut self, k: usize, on: bool) {
@@ -835,18 +836,21 @@ impl PauseMenu {
     ) {
         let replay = g.replay();
         if self.state == 0 {
-            // The practice / slow-mode labels (scripts 20, 21) fade in on start, so they only run when they apply.
-            // SPEC-GAP: slow mode is not configurable yet, so script 21 never runs.
-            let practice = g.practice();
+            // All ten scripts start; then VM 8 (practice label) is hidden unless practice and VM 9 (slow label)
+            // unless the gameplay copy's slow byte ≠ 0 (12 §3, 0x406700 clears flag bit 0).
             self.vms = (12..22)
                 .map(|s| {
                     let mut vm = AnmVm::default();
-                    if s < 20 || (s == 20 && practice) {
-                        ctx_anm.set_script(&mut vm, ANM_SLOT, s);
-                    }
+                    ctx_anm.set_script(&mut vm, ANM_SLOT, s);
                     vm
                 })
                 .collect();
+            if !g.practice() {
+                self.vms[P_PRACTICE].flags &= !anmvm::F_VISIBLE;
+            }
+            if g.game_slow() == 0 {
+                self.vms[P_SLOW].flags &= !anmvm::F_VISIBLE;
+            }
             self.shown = [false; 10];
             start_capture(ctx_anm, &mut self.cap_vm);
             self.capture = true;
@@ -861,6 +865,8 @@ impl PauseMenu {
             if g.practice() {
                 self.show(P_PRACTICE, true);
             }
+            // Visible without an interrupt (dispatch would set it visible); the close interrupts reach it (12 §3).
+            self.shown[P_SLOW] = g.game_slow() != 0;
             self.goto(1);
         }
         let pressed = |b: u16| self.frame >= 4 && inp.pressed(b);
@@ -943,6 +949,14 @@ impl PauseMenu {
                             // State 10: spell practice / practice / Extra reload the stage (scene 11) after
                             // Hud_StageTransition, else scene 10 (12 §3).
                             if g.practice() || g.spell_practice() || g.difficulty >= 4 {
+                                // Music_Stop outside spell practice or for a card whose record flag is 1; else
+                                // "UnPause" and the music keeps playing (12 §3 state 10).
+                                if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
+                                    audio.stop_bgm();
+                                } else {
+                                    // SPEC-GAP: the 2 s fade-in `0x406AC0(2.0)` (INFERRED in 12 §3) is not ported.
+                                    audio.pause_bgm(false);
+                                }
                                 stage_transition(ctx_anm);
                                 g.request(gamemgr::SCENE_RELOAD)
                             } else {
@@ -1020,8 +1034,7 @@ pub(crate) fn difficulty_sprite(g: &Game) -> i32 {
     }
 }
 
-// SPEC-GAP: 12 §3 / §4 name neither the capture VM's script nor its position; capture.anm script 0 (sprite 0,
-// scale 3 × 3.5 = 384×448) placed on the playfield origin (32, 16).
+// Capture VM: capture.anm script 0 (sprite 0, scale 3 × 3.5 = 384×448), then pos := (32, 16, 0) (12 §3).
 fn start_capture(anm: &mut crate::anmmgr::AnmManager, vm: &mut AnmVm) {
     *vm = AnmVm::default();
     anm.set_script(vm, CAPTURE_SLOT, 0);

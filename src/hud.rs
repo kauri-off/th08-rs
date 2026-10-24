@@ -752,7 +752,7 @@ impl Hud {
                 Popup::Message(t, v) => {
                     let (s, small) = match t {
                         1 => ("Full Power Mode!".to_string(), false),
-                        // SPEC-GAP: no spec names a caller of types 2–4 (IMPL97 Q1).
+                        // Types 2–4 have no caller and are never shown (12 §5.5 Hud_ShowMessage).
                         2 => ("Supernatural Border!!".to_string(), true),
                         3 => ("CherryPoint Max!".to_string(), false),
                         4 => (format!("Border Bonus {v:7}"), true),
@@ -828,7 +828,7 @@ impl Hud {
             0xFFD0D0FF,
         );
         // Integer percentages (h·100)/f and ((h·10000)/f) % 100, truncated.
-        // SPEC-GAP: f = 0 (no counted frame) is a division by zero in 12 §5.6; the port divides by 1.
+        // f = 0 is an unguarded idiv in the original, unreachable (12 §5.6); the port divides by 1.
         let f = st.stage_frames.max(1) as i32;
         let pct = |h: u32| {
             let h = h as i32;
@@ -1130,7 +1130,7 @@ impl Task<Ctx> for Hud {
         }
         if self.tiles_live != 0 {
             for vm in &mut self.tiles {
-                // SPEC-GAP: 12 §5.7 only says +0x21810 counts the live tiles; decremented here when a tile's script ends.
+                // +0x21810 = tiles still running (12 §5.7): a finished VM returns 1 every later call, so decrementing once matches.
                 if vm.ip.is_some() && vm.run(&mut ctx.anm) {
                     self.tiles_live -= 1;
                 }

@@ -42,30 +42,46 @@ const RANK: [[i32; 3]; 5] = [
     [16, 15, 16],
 ];
 
-// Spell-practice BGM (02 §4, table 0x4C7670): the first record whose max spell id >= the card id.
-const SPELL_BGM: [(i16, &str); 18] = [
-    (1, "bgm/th08_00.mid"),
-    (12, "bgm/th08_03.mid"),
-    (16, "bgm/th08_04.mid"),
-    (31, "bgm/th08_05.mid"),
-    (35, "bgm/th08_06.mid"),
-    (53, "bgm/th08_07.mid"),
-    (76, "bgm/th08_09.mid"),
-    (99, "bgm/th08_10.mid"),
-    (118, "bgm/th08_12.mid"),
-    (122, "bgm/th08_13.mid"),
-    (142, "bgm/th08_14.mid"),
-    (146, "bgm/th08_13b.mid"),
-    (150, "bgm/th08_13.mid"),
-    (170, "bgm/th08_15.mid"),
-    (190, "bgm/th08_13b.mid"),
-    (193, "bgm/th08_18.mid"),
-    (204, "bgm/th08_19.mid"),
-    (222, "bgm/th08_20.mid"),
+// Spell-practice BGM (02 §4, table 0x4C7670): the first record whose max spell id >= the card id; the flag is
+// record +0x10, 1 only for the two th08_13b records (retry music rule, 11 §4 step 3, 12 §3 state 10).
+const SPELL_BGM: [(i16, &str, bool); 18] = [
+    (1, "bgm/th08_00.mid", false),
+    (12, "bgm/th08_03.mid", false),
+    (16, "bgm/th08_04.mid", false),
+    (31, "bgm/th08_05.mid", false),
+    (35, "bgm/th08_06.mid", false),
+    (53, "bgm/th08_07.mid", false),
+    (76, "bgm/th08_09.mid", false),
+    (99, "bgm/th08_10.mid", false),
+    (118, "bgm/th08_12.mid", false),
+    (122, "bgm/th08_13.mid", false),
+    (142, "bgm/th08_14.mid", false),
+    (146, "bgm/th08_13b.mid", true),
+    (150, "bgm/th08_13.mid", false),
+    (170, "bgm/th08_15.mid", false),
+    (190, "bgm/th08_13b.mid", true),
+    (193, "bgm/th08_18.mid", false),
+    (204, "bgm/th08_19.mid", false),
+    (222, "bgm/th08_20.mid", false),
 ];
 
 fn spell_bgm(card: i16) -> Option<&'static str> {
     SPELL_BGM.iter().find(|r| r.0 >= card).map(|r| r.1)
+}
+
+// `FUN_00439916`: the card's 0x4C7670 record +0x10 retry-restart flag (02 §4).
+pub fn spell_bgm_restarts(card: i16) -> bool {
+    SPELL_BGM.iter().find(|r| r.0 >= card).is_some_and(|r| r.2)
+}
+
+// gm+0x3DE28 at every stage start, reloads included: 2 (play nothing) only for a spell-practice reload whose card
+// record flag is 0, else 1 (11 §2, VERIFIED 0x43ABD7).
+fn music_start(g: &Game) -> u8 {
+    if g.reload_same && g.spell_practice() && !spell_bgm_restarts(g.card) {
+        2
+    } else {
+        1
+    }
 }
 
 // Demo music-fade and end frames per demo index (11 §4 step 6).
@@ -602,8 +618,8 @@ pub struct GameManager {
     gauge_at: Option<(u32, i32, i32)>,
     // Port-only: loading calcs of this stage start (11 §3.1 "Loading frame count").
     loading_total: u32,
-    // gm+0x3DE28 deferred music start (11 §4 step 3): plays BGM slot 0 on the first calc after loading.
-    music_pending: bool,
+    // gm+0x3DE28 deferred music start (11 §4 step 3): 1 plays BGM slot 0 on the first calc after loading, 2 nothing.
+    music_start: u8,
     // Port-only: the stage-clear frame has run (11 §4 step 1 loading := 1 with no loader behind it).
     cleared: bool,
 }
@@ -619,7 +635,7 @@ impl GameManager {
             tasks: Vec::new(),
             gauge_at: None,
             loading_total: 31,
-            music_pending: false,
+            music_start: 0,
             cleared: false,
         }));
         gm.borrow().player.borrow_mut().debug_invuln |= ctx.game.noclip;
@@ -646,6 +662,7 @@ impl GameManager {
         }
         let g = &mut ctx.game;
         let d = g.diff();
+        // Also 0x164D0B0 := 0, the fresh-start writer of 11 §2.
         *st = Stats {
             difficulty: d as i32,
             ..Stats::default()
@@ -861,9 +878,8 @@ impl GameManager {
                     }
                 }
             }
-            // SPEC-GAP: what sets gm+0x3DE28 is not specified; set here whenever slot 0 was loaded.
-            self.music_pending = true;
         }
+        self.music_start = music_start(&ctx.game);
         ctx.game.reload_same = false;
         let g = &mut ctx.game;
         g.flags |= F_RUNNING;
@@ -1069,7 +1085,6 @@ impl Task<Ctx> for GameManager {
             return r;
         }
         let g = &mut ctx.game;
-        // SPEC-GAP: GM draw 0x43AA03 on the post-clear loading frames is not in 11/12; the port keeps drawing the stage.
         g.loading_shown = g.loading != 0 && !self.cleared;
         if g.loading != 0 {
             g.loading_frames += 1;
@@ -1117,8 +1132,8 @@ impl Task<Ctx> for GameManager {
             }
             return Ret::StopFrame;
         }
-        // Step 3: deferred music start (gm+0x3DE28), Music_PlaySlot of slot 0.
-        if std::mem::take(&mut self.music_pending) {
+        // Step 3: deferred music start (gm+0x3DE28), Music_PlaySlot of slot 0 on 1.
+        if std::mem::take(&mut self.music_start) == 1 {
             ctx.audio.play_slot(0);
         }
         let g = &mut ctx.game;
@@ -1222,11 +1237,17 @@ impl Task<Ctx> for GameManager {
         Ret::Next
     }
 
-    // While loading only the Supervisor's loading screen (draw prio 0–2) and the darken overlay are drawn;
-    // in Loading_Wait "Press Shot Button" from the 5th frame, alpha pulsing with a 59-frame loop (12 §1).
+    // GameMgr_Draw 0x43AA03 (11 §3): return 3 (nothing above prio 5) when the requested scene 0x17CE8B4 ≠ 2,
+    // bits 5–6 == 1 or loading ≠ 0, post-clear frames included. The port's in-calc release stands for the loader
+    // thread's after this frame, so `loading_shown` keeps that frame a loading one. In Loading_Wait "Press Shot
+    // Button" from the 5th frame, alpha pulsing with a 59-frame loop (12 §1).
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        if !ctx.game.loading_shown {
+        let g = &ctx.game;
+        if g.requested == SCENE_GAME && g.end_state() != 1 && g.loading == 0 && !g.loading_shown {
             return Ret::Next;
+        }
+        if !g.loading_shown {
+            return Ret::StopFrame;
         }
         let w = ctx.game.loading_wait;
         if w >= 5 {
@@ -1362,6 +1383,28 @@ mod tests {
         set_rank_state([14, 16, 8, 70]);
         clear_rank_sub();
         assert_eq!(rank_state(), [14, 16, 8, 0]);
+    }
+
+    // 11 §2 gm+0x3DE28: 2 only for a spell-practice reload of a card whose 0x4C7670 flag is 0 (th08_13b ones are 1).
+    #[test]
+    fn deferred_music_value() {
+        let mut g = Game::default();
+        set_flags(0);
+        g.card = 10;
+        assert_eq!(music_start(&g), 1);
+        g.reload_same = true;
+        assert_eq!(music_start(&g), 1);
+        g.flags |= F_SPELL_PRACTICE;
+        assert_eq!(music_start(&g), 2);
+        for c in [143, 146, 171, 190] {
+            g.card = c;
+            assert_eq!(music_start(&g), 1);
+        }
+        g.card = 147;
+        assert_eq!(music_start(&g), 2);
+        g.reload_same = false;
+        assert_eq!(music_start(&g), 1);
+        set_flags(0);
     }
 
     // 11 §2.1: bits 7 / 8 / 13 written outside the GM are in the one flags word `Game::flags` reads.

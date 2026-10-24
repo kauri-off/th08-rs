@@ -368,7 +368,7 @@ impl Stage {
     }
 
     // Stage_Load steps 1, 3 and 4 (06 §2; files already loaded).
-    // SPEC-GAP: the overlay VM (step 4) is started before the quad scripts (step 3).
+    // The overlay VM (step 4) is started before the quad scripts (step 3): no script draws RNG, order is moot (06 §2).
     pub fn start(&mut self, anm: &mut AnmManager) {
         anm.set_script(&mut self.overlay, OVERLAY_SLOT, OVERLAY_SCRIPT);
         self.overlay.pending_interrupt = 2;
@@ -812,7 +812,7 @@ impl Stage {
         anm.cam_right = self.cam.right();
         let m = cam.view.0;
         let right = normalize([m[0][0], m[0][1], m[0][2]]);
-        // SPEC-GAP: the +0xB24 ≤ 1 condition for collecting sparkle points is not in 06 §11.1.
+        // +0xB24 ≤ 1 is redundant: Stage_DrawLayer runs only while +0xB24 < 2 (06 §11.1, §10.2).
         let points = if self.sparkle_on && self.spell_state <= 1 {
             Some(&self.sparkles)
         } else {

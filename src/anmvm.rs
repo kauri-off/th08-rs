@@ -909,7 +909,7 @@ impl AnmVm {
                         39 => x.wrapping_add(b),
                         41 => x.wrapping_sub(b),
                         43 => x.wrapping_mul(b),
-                        // SPEC-GAP: integer division/remainder by zero is undefined (crash in the original); yields 0.
+                        // Divide by zero crashes the original; unreachable in the data (05 §5 ops 45–58), yields 0 here.
                         45 => x.checked_div(b).unwrap_or(0),
                         47 => x.checked_rem(b).unwrap_or(0),
                         49 => b.wrapping_add(c),

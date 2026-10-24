@@ -604,7 +604,7 @@ impl Player {
                 self.set_dir(slot, self.option_angle + e.angle + FRAC_PI_2, e.speed);
                 true
             }
-            // SPEC-GAP: the random angle is drawn only when the entry actually fires.
+            // The random angle is drawn only on a firing frame, after Player_InitShot (09 §2.1 init 7).
             7 => {
                 if !self.default_init(anm, slot, t, e) {
                     return false;
@@ -660,7 +660,7 @@ impl Player {
                 false
             }
             5 => self.laser_update(i),
-            // SPEC-GAP: update 4 (type-4 laser) is not used by any shipped entry; not implemented.
+            // Update 4 is used by no shipped sht entry (09 §2.1): unreachable, not implemented.
             _ => false,
         }
     }

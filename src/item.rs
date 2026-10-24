@@ -255,6 +255,10 @@ impl ItemManager {
         match kind {
             POWER | BIG_POWER => {
                 if st.power < 128.0 {
+                    // Item_CollectPowerSmall 0x440CF0 (type 0 only): 0x164D0B0 := 0 before GameMgr_AddPower (11 §2).
+                    if kind == POWER {
+                        st.d0b0 = 0;
+                    }
                     let level = power_level(st.power);
                     st.power += if kind == POWER { 1.0 } else { 8.0 };
                     // GameMgr_AddPower 0x441850 checksum (4 draws); reaching 128 adds SetPower's 4 (08 §8.5).
@@ -264,7 +268,7 @@ impl ItemManager {
                         out.cancel = !spell;
                         // Hud_ShowMessage(0, 1) "Full Power Mode!"; its panel repaint 0x17CE8CC := 2 is moot, the
                         // port repaints the panel every frame.
-                        // SPEC-GAP: 08 §8.5 does not say whether the message shares the spell-card test (IMPL97 Q2).
+                        // The message is outside the spell-card test (08 §8.5, VERIFIED RE-Q34).
                         st.popups.push(Popup::Message(1, 0));
                         self.convert_power_items(anm, idx);
                     }

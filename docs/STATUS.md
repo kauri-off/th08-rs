@@ -655,6 +655,17 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl104 (RE-Q36 CODE BUG 4–6, 8 + "right" markers): gm+0x3DE28 set at every stage start, reloads included
+  (`gamemgr::music_start`: 2 for a spell-practice reload whose 0x4C7670 record flag +0x10 is 0, else 1; step 3 plays
+  slot 0 only on 1; `SPELL_BGM` carries the flag, `spell_bgm_restarts`). Pause retry (state 10) stops the music
+  outside spell practice / for flag-1 cards, else unpauses (12 §3). `GameMgr_Draw` returns 3 while the requested
+  scene ≠ 2, bits 5–6 == 1 or loading ≠ 0, post-clear frames included (11 §3). Pause state 0 starts all ten
+  scripts and hides VM 8 unless practice, VM 9 (slow label, script 21) unless the gameplay copy's slow byte ≠ 0.
+  0x164D0B0 := 0 at the real death (`Player::real_death`, not `Player_Die`) and in `Item_CollectPowerSmall`
+  (power < 128); fresh start via the stats reset. 14 markers RE-Q36 answered "right" closed with spec refs.
+  SPEC-GAP 87 → 70 (one new: retry fade-in). Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync;
+  golden draw same 8070147 (99.87 %), extra 18 (impl101: 99), identical frames 19799 (impl101: 19796).
+  Questions: `docs/briefs/IMPL104_QUESTIONS.md`.
 - impl103 (RE-Q36 CODE BUG 1–3): the bomb start tests the held bomb bit (holding bomb chains bombs / fires on the
   first deathbomb frame); only the special-mode SE 0x29 uses the press edge (09 §7, §1.1). A special-mode start
   (bits 7–8) skips the whole cost block: index 4, no bombs, counters 0x164CFA8 / 0x164CFAC, `AddBombCount` or
