@@ -174,6 +174,7 @@ impl Ctx {
         if f == Flow::Continue {
             self.draw();
             self.gfx.present();
+            crate::ascii::apply_pending_captures(&mut self.anm, &mut self.gfx);
         }
         f
     }

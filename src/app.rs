@@ -274,6 +274,7 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
                 r.ctx.gfx.present();
+                crate::ascii::apply_pending_captures(&mut r.ctx.anm, &mut r.ctx.gfx);
                 r.window.request_redraw();
             }
             _ => {}

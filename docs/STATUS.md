@@ -655,6 +655,16 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl101 (RE-Q34 CODE BUG 4–7): ascii queue glyphs with alpha 0 are not drawn, the pen still advances (05 §9,
+  `ascii::Queue::draw`). HUD +0x24 / +0x28 carried across continuing stages in `hud::Kept` (0 only after a fresh
+  start, 12 §5.1). `Hud::stage_transition` (`Hud_StageTransition`, 12 §3 / §5.7, 11 §4): capture VM := capture.anm
+  script 1 and a queued playfield capture (`ascii::queue_capture` → `AnmManager::capture_req`, applied right after
+  Present by `ascii::apply_pending_captures`); called on the clear frame when `next_scene_after` < 0, on pause retry
+  (scene 11) and continue "yes" (scene 11). Op 88 on the calling enemy: running context, own stack and depth, pushed
+  ip = stored ip (`Exec::loaded_ip`) + size, sub not run (07 §5.4); impl91 SPEC-GAP removed (106 → 105). Golden
+  25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync; golden draw same 8070147 (99.87 %), changed 10053,
+  missing 249, extra 112 → 99, reordered 30597, identical frames 19792 → 19796; clear-frame captures at presents
+  10918 / 25108 now match. No questions.
 - impl100 (RE-Q34 CODE BUG 1–3): large-popup VM +0x548 initialised with sprite 0x88 (12 px glyphs, 13 §4). Boss bar
   `Hud_Update` step 1 as the 12 §5.1b state machine (`hud::bar_step`: states 0–3 from the label VM's wait flag,
   alpha := 0 on the request frame, instant hide while the label waits, fill only in state ≥ 2, request = +0x2C alone,

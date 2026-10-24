@@ -1057,6 +1057,13 @@ impl Task<Ctx> for GameManager {
         let cleared = ctx.game.end_state() == 2;
         let confirm = ctx.input.pressed(crate::input::SHOT | crate::input::ENTER);
         let r = Self::stage_end(&mut ctx.game, &mut self.player.borrow_mut().stats, confirm);
+        // Clear frame with next_scene_after < 0 (stage 1–5 advance, replay next stage): Hud_StageTransition (11 §4 step 1).
+        if cleared
+            && ctx.game.next_scene_after < 0
+            && let Some(h) = &self.hud
+        {
+            h.borrow_mut().stage_transition(&mut ctx.anm);
+        }
         self.cleared |= cleared;
         if let Some(r) = r {
             return r;

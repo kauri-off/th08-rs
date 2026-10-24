@@ -38,7 +38,14 @@ pub fn ecl_run(m: &mut EnemyManager, anm: &mut AnmManager, idx: usize) -> i32 {
 
 fn run_enemy(m: &mut EnemyManager, anm: &mut AnmManager, e: &mut Enemy, idx: usize) -> i32 {
     let mut main = std::mem::take(&mut e.main);
-    let r = Exec { m, anm, e, idx }.run_thread(&mut main);
+    let r = Exec {
+        m,
+        anm,
+        e,
+        idx,
+        loaded_ip: 0,
+    }
+    .run_thread(&mut main);
     e.main = main;
     if r == End::Delete {
         return -1;
@@ -52,7 +59,14 @@ fn run_enemy(m: &mut EnemyManager, anm: &mut AnmManager, e: &mut Enemy, idx: usi
         };
         e.running_thread = Some(k);
         e.kill_running_thread = false;
-        let r = Exec { m, anm, e, idx }.run_thread(&mut t);
+        let r = Exec {
+            m,
+            anm,
+            e,
+            idx,
+            loaded_ip: 0,
+        }
+        .run_thread(&mut t);
         e.running_thread = None;
         if r == End::Delete {
             return -1;
@@ -69,7 +83,14 @@ fn run_enemy(m: &mut EnemyManager, anm: &mut AnmManager, e: &mut Enemy, idx: usi
     // After all contexts: Enemy_UpdateMoveMode, then Enemy_AutoFireAndDirAnim (07 §5.2).
     e.update_move_mode(anm.speed);
     let mut main = std::mem::take(&mut e.main);
-    Exec { m, anm, e, idx }.autofire_and_dir_anim(&mut main);
+    Exec {
+        m,
+        anm,
+        e,
+        idx,
+        loaded_ip: 0,
+    }
+    .autofire_and_dir_anim(&mut main);
     e.main = main;
     0
 }
@@ -87,6 +108,8 @@ pub(crate) struct Exec<'a> {
     anm: &'a mut AnmManager,
     e: &'a mut Enemy,
     idx: usize,
+    // ctx.ip as stored while the context runs: the ip Ecl_Run last loaded into its local copy (07 §5.4 op 88).
+    loaded_ip: usize,
 }
 
 // Writable int variables (07 §6 "writable as int").
@@ -332,10 +355,12 @@ impl Exec<'_> {
     // One context of Ecl_Run (07 §5.2): LOOP / EXEC / POST.
     // Game speed is read live at each Decrement/Tick (07 §5.2): a native 18 earlier in this run already applies.
     fn run_thread(&mut self, t: &mut Thread) -> End {
+        self.loaded_ip = t.ctx.ip;
         'outer: loop {
             // SPEC-GAP: interrupts are dispatched in the main context only; 07 §5.2 tests in every context (IMPL24 Q5).
             if self.e.pending_interrupt >= 0 && self.e.running_thread.is_none() {
                 self.interrupt(t);
+                self.loaded_ip = t.ctx.ip;
                 continue;
             }
             loop {
@@ -1622,6 +1647,7 @@ impl Exec<'_> {
                 let sub = self.ai(t, ins, 0);
                 if self.m.ecl.sub_start(sub).is_some() {
                     self.call(t, next, sub);
+                    self.loaded_ip = t.ctx.ip;
                     return Flow::Jumped;
                 }
             }
@@ -1640,6 +1666,7 @@ impl Exec<'_> {
                     Some(c) => t.ctx = c.clone(),
                     None => return Flow::Post,
                 }
+                self.loaded_ip = t.ctx.ip;
                 return Flow::Jumped;
             }
             54 | 58 => {
@@ -1843,21 +1870,20 @@ impl Exec<'_> {
                 if let Some(b) = self.m.boss(slot)
                     && self.m.ecl.sub_start(sub).is_some()
                 {
-                    // Audit D.4: on the caller itself the sub still goes to the main context, also from a thread.
-                    if b == self.idx && self.e.running_thread.is_none() {
-                        self.call(t, next, sub);
-                        return Flow::Jumped;
-                    }
                     let args = self.m.g.args;
                     let ecl = &self.m.ecl;
                     if b == self.idx {
-                        // SPEC-GAP: op 88 on the caller from its own thread (stored ip / 0x2CEA mid-run; unused in data).
-                        let o = &mut *self.e;
-                        if o.flags & A_NO_PUSH == 0 {
-                            o.main.push();
+                        // 07 §5.4 on the caller itself: the running context, its own stack and working depth; the
+                        // pushed ip is the stored ip + its size. Ecl_Run then writes its local ip (past op 88) back
+                        // over the sub start, so the sub never runs; clock, wait, sub id, args and the push stay.
+                        let cur = t.ctx.ip;
+                        t.ctx.ip = self.loaded_ip + ecl.ins(self.loaded_ip).map_or(0, |i| i.size);
+                        if self.e.flags & A_NO_PUSH == 0 {
+                            t.push();
                         }
-                        o.main.ctx.enter(ecl, sub);
-                        o.main.ctx.vars[V_ARGI..V_ARGI + 8].copy_from_slice(&args);
+                        t.ctx.enter(ecl, sub);
+                        t.ctx.vars[V_ARGI..V_ARGI + 8].copy_from_slice(&args);
+                        t.ctx.ip = cur;
                         return Flow::Next;
                     }
                     let o = &mut self.m.enemies[b];
@@ -2519,22 +2545,59 @@ mod tests {
         }
     }
 
-    // Audit D.4 (07 §5.4 op 88): op 88 on the caller from a thread calls the sub in its main context.
+    // 07 §5.4 op 88 on the caller (main context): the frame pushed holds the stored ip (first instruction this frame)
+    // + its size; the sub never runs, the caller goes on with clock 0, sub id 1 and depth + 1.
     #[test]
-    fn call_boss_self_from_thread_uses_main() {
+    fn call_boss_self_main_skips_sub() {
         let (mut anm, mut m) = manager(&[
-            &[ins(0, 135, &[0, 2]), ins(100, 81, &[1])],
-            &[],
-            &[ins(0, 88, &[0, 1]), ins(100, 81, &[1])],
+            &[
+                ins(0, 0, &[]),
+                ins(0, 88, &[0, 1]),
+                ins(0, 0, &[]),
+                ins(5, 0, &[]),
+            ],
+            &[ins(0, 83, &[1])],
         ]);
-        spawn(&mut m, 0, 0, 1, 0);
+        spawn(&mut m, 0, 0, -1, 0);
         m.bosses[0] = Some(0);
+        let s0 = m.ecl.sub_start(0).unwrap();
         ecl_run(&mut m, &mut anm, 0);
         let e = &m.enemies[0];
-        assert_eq!((e.main.ctx.sub, e.main.depth), (1, 1));
-        assert_eq!(e.main.stack[0].sub, 0);
+        assert_eq!(e.flags_b & 2, 0);
+        assert_eq!(
+            (e.main.ctx.sub, e.main.ctx.ip, e.main.ctx.clock.cur),
+            (1, s0 + 44, 1)
+        );
+        assert_eq!((e.main.depth, e.work_depth), (1, 1));
+        assert_eq!((e.main.stack[0].sub, e.main.stack[0].ip), (0, s0 + 12));
+    }
+
+    // 07 §5.4 op 88 on the caller from a thread: the thread's own context, stack and depth; main is untouched.
+    #[test]
+    fn call_boss_self_from_thread_uses_thread() {
+        let (mut anm, mut m) = manager(&[
+            &[ins(0, 135, &[0, 2]), ins(100, 0, &[])],
+            &[ins(0, 83, &[1])],
+            &[
+                ins(0, 0, &[]),
+                ins(0, 88, &[0, 1]),
+                ins(0, 0, &[]),
+                ins(5, 0, &[]),
+            ],
+        ]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.bosses[0] = Some(0);
+        let s2 = m.ecl.sub_start(2).unwrap();
+        ecl_run(&mut m, &mut anm, 0);
+        let e = &m.enemies[0];
+        assert_eq!(e.flags_b & 2, 0);
+        assert_eq!((e.main.ctx.sub, e.main.depth), (0, 0));
         let t = e.threads[0].as_ref().unwrap();
-        assert_eq!((t.ctx.sub, t.depth), (2, 0));
+        assert_eq!(
+            (t.ctx.sub, t.ctx.ip, t.depth, e.work_depth),
+            (1, s2 + 44, 1, 1)
+        );
+        assert_eq!((t.stack[0].sub, t.stack[0].ip), (2, s2 + 12));
     }
 
     // 07 §5.4 op 88: the target's stored ip is advanced past its next instruction before the push, at the

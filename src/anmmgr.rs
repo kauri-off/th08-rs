@@ -55,6 +55,8 @@ pub struct AnmManager {
     bound_tex: Option<TextureId>,
     // Port-only: texture entries loaded so far; paces the loading screen (gamemgr `loading_total`).
     pub entries_loaded: u32,
+    // Pending AnmManager_QueueCapture request +0x2A252C (12 §3): the destination sprite rect at queue time.
+    pub capture_req: Option<SlotSprite>,
 }
 
 // Linear vertex fog (06 §10.1): f = clamp((far − z) / (far − near), 0, 1) on eye-space z (no range fog); RGB bytes.
@@ -83,6 +85,7 @@ impl Default for AnmManager {
             last_tex_matrix: None,
             bound_tex: None,
             entries_loaded: 0,
+            capture_req: None,
         }
     }
 }

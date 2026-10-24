@@ -153,7 +153,7 @@ pub struct Hud {
     // +0x30 / +0x34 target and displayed life fraction (+0.01 up, −0.02 down per frame).
     bar_target: f32,
     bar_disp: f32,
-    // +0x28 raw boss timer value last drawn (12 §5.4); 0 after Hud_Register.
+    // +0x28 raw boss timer value last drawn (12 §5.4); 0 after a fresh start, kept across stages (12 §5.1).
     timer_last: i32,
     // Bonus / message / spell-bonus popups (12 §5.5).
     popups: [Option<ActivePopup>; 3],
@@ -174,11 +174,14 @@ pub struct Hud {
     tiles_live: u32,
 }
 
-// The HUD impl block survives a continuing stage (12 §5.1a): front VMs 0–15, the difficulty VM, the stored total.
+// The HUD impl block survives a continuing stage (12 §5.1a): front VMs 0–15, the difficulty VM, the stored total;
+// HUD +0x24 / +0x28 are zeroed only by Hud_Register's fresh-start fill, so they carry over too (12 §5.1).
 struct Kept {
     front: Vec<AnmVm>,
     diff_vm: AnmVm,
     clear_total: i32,
+    timer: i32,
+    timer_last: i32,
 }
 
 thread_local! {
@@ -254,6 +257,13 @@ impl Hud {
         Ok(h)
     }
 
+    // Hud_StageTransition 0x438F58 (12 §3, §5.7): VM impl+0x3CC0 := capture.anm script 1, then a playfield capture into
+    // its sprite rect (the return value is ignored); overwrites the op-9 image that the next stage's tiles show.
+    pub fn stage_transition(&mut self, anm: &mut AnmManager) {
+        anm.file_set_script(&mut self.cap_vm, crate::ascii::CAPTURE_SLOT, 1);
+        crate::ascii::queue_capture(anm, &self.cap_vm);
+    }
+
     // Hud_Load + Gui_LoadFaces 0x414590 + Msg_Load 0x439710 (12 §5.1, 10 §1, §3); no msg file in spell practice.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
         let g = &ctx.game;
@@ -324,6 +334,8 @@ impl Hud {
             self.front = k.front;
             self.diff_vm = k.diff_vm;
             self.clear_total = k.clear_total;
+            self.enemies.borrow_mut().g.hud_timer = k.timer;
+            self.timer_last = k.timer_last;
             anm.set_script(&mut self.cap_vm, crate::ascii::CAPTURE_SLOT, 1);
             self.cap_vm.sprite_index = 1;
             self.tiles = stage_start_tiles(anm);
@@ -1027,6 +1039,8 @@ impl Task<Ctx> for Hud {
                 front: std::mem::take(&mut self.front),
                 diff_vm: std::mem::take(&mut self.diff_vm),
                 clear_total: self.clear_total,
+                timer: self.enemies.borrow().g.hud_timer,
+                timer_last: self.timer_last,
             }));
             for s in [FRONT_SLOT, TIMES_SLOT, TXT_SLOT, LOADING_SLOT]
                 .into_iter()

@@ -129,7 +129,9 @@ impl Queue {
                 } else {
                     (c.wrapping_sub(1) as usize, t.color)
                 };
-                if let Some(sp) = ctx_anm.sprite(ANM_SLOT, idx).filter(|_| c > b' ') {
+                // Draw2DSnap draws nothing for alpha 0 (05 §9); the pen still advances.
+                let drawn = c > b' ' && col[3] != 0;
+                if let Some(sp) = ctx_anm.sprite(ANM_SLOT, idx).filter(|_| drawn) {
                     // Glyph VM: z 0, z-write on (12 §5.3 depth values).
                     let [u0, v0, u1, v1] = sp.uv;
                     let (w, h) = (sp.w * t.scale, sp.h * t.scale_y);
@@ -938,12 +940,14 @@ impl PauseMenu {
                             g.request(gamemgr::SCENE_MENU)
                         }
                         _ => {
-                            // State 10: spell practice / practice / Extra reload the stage (scene 11), else scene 10 (12 §3).
-                            g.request(if g.practice() || g.spell_practice() || g.difficulty >= 4 {
-                                gamemgr::SCENE_RELOAD
+                            // State 10: spell practice / practice / Extra reload the stage (scene 11) after
+                            // Hud_StageTransition, else scene 10 (12 §3).
+                            if g.practice() || g.spell_practice() || g.difficulty >= 4 {
+                                stage_transition(ctx_anm);
+                                g.request(gamemgr::SCENE_RELOAD)
                             } else {
-                                gamemgr::SCENE_RETRY
-                            })
+                                g.request(gamemgr::SCENE_RETRY)
+                            }
                         }
                     }
                     g.paused = 0;
@@ -1028,9 +1032,12 @@ fn start_capture(anm: &mut crate::anmmgr::AnmManager, vm: &mut AnmVm) {
 // (u0, v0 in texture pixels, width, height, truncated). The port copies at once from the last presented frame, so no
 // request is ever pending and the "close at once" failure path cannot happen.
 pub fn apply_capture(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, vm: &AnmVm) {
-    let Some(sp) = anm.sprite(CAPTURE_SLOT, vm.sprite_index.max(0) as usize) else {
-        return;
-    };
+    if let Some(sp) = anm.sprite(CAPTURE_SLOT, vm.sprite_index.max(0) as usize) {
+        capture_into(gfx, sp);
+    }
+}
+
+fn capture_into(gfx: &mut crate::gfx::Gfx, sp: &crate::anmmgr::SlotSprite) {
     let t = gfx.texture(sp.tex);
     let to = [
         (sp.uv[0] * t.width as f32) as u32,
@@ -1038,6 +1045,33 @@ pub fn apply_capture(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx,
     ];
     let tex = sp.tex;
     gfx.capture_rect(tex, [32, 16], [384, 448], to, [sp.w as u32, sp.h as u32]);
+}
+
+// AnmManager_QueueCapture 0x406A30 (12 §3): stores the request only if none is pending (else −1); the destination is
+// the VM's sprite rect at queue time. Applied by `apply_pending_captures` after the next Present.
+pub fn queue_capture(anm: &mut crate::anmmgr::AnmManager, vm: &AnmVm) -> i32 {
+    if anm.capture_req.is_some() {
+        return -1;
+    }
+    let Some(&sp) = anm.sprite(CAPTURE_SLOT, vm.sprite_index.max(0) as usize) else {
+        return -1;
+    };
+    anm.capture_req = Some(sp);
+    0
+}
+
+// Hud_StageTransition on the registered game's HUD (pause / continue retry paths, 12 §3).
+fn stage_transition(anm: &mut crate::anmmgr::AnmManager) {
+    if let Some(h) = gamemgr::current().and_then(|m| m.borrow().hud.clone()) {
+        h.borrow_mut().stage_transition(anm);
+    }
+}
+
+// AnmManager_ApplyPendingCaptures 0x443B60 (12 §3): right after Present, the playfield (32, 16, 384, 448) is copied.
+pub fn apply_pending_captures(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
+    if let Some(sp) = anm.capture_req.take() {
+        capture_into(gfx, &sp);
+    }
 }
 
 // Continue / game-over menu (11 §4.2, 12 §4): ascii scripts 22–24 and times.anm script 1 (night clock).
@@ -1128,11 +1162,13 @@ impl ContinueMenu {
                 }
             }
             1 | 2 if self.phase_frame >= 20 => {
-                g.request(if self.phase == 1 {
-                    gamemgr::SCENE_RESULT
+                if self.phase == 1 {
+                    g.request(gamemgr::SCENE_RESULT);
                 } else {
-                    gamemgr::SCENE_RELOAD
-                });
+                    // "Yes" in spell practice / Extra: Hud_StageTransition, scene 11 (12 §3).
+                    stage_transition(ctx_anm);
+                    g.request(gamemgr::SCENE_RELOAD);
+                }
                 self.open = false;
                 return;
             }
