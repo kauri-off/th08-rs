@@ -655,6 +655,14 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl102 (SPEC-GAP batch 1, RE-Q35): native 24 := stats +0x1C spell cards captured (07 §12 row 24, the Extra
+  boss gate of ecldata8 sub84); native 16 copies the caller's int var 10007 (not float 10019) per bullet, 3D strict
+  distance² < 4096 (07 §12 row 16). Int read of 10033 draws one Next32 and truncates (07 §6). Interrupt table
+  zero-filled (unregistered index → sub 0, 07 §4.2); a negative entry still skips / pushes / increments depth;
+  interrupts are taken in thread contexts too (main pushed on the thread's stack, 07 §5.5; `Thread::push_copy`).
+  The 12 markers RE-Q35 answered "right" closed with spec refs. Unit tests for each. SPEC-GAP 105 → 89 (one new:
+  interrupt index ≥ 32). Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync.
+  Questions: `docs/briefs/IMPL102_QUESTIONS.md`.
 - impl101 (RE-Q34 CODE BUG 4–7): ascii queue glyphs with alpha 0 are not drawn, the pen still advances (05 §9,
   `ascii::Queue::draw`). HUD +0x24 / +0x28 carried across continuing stages in `hud::Kept` (0 only after a fresh
   start, 12 §5.1). `Hud::stage_transition` (`Hud_StageTransition`, 12 §3 / §5.7, 11 §4): capture VM := capture.anm

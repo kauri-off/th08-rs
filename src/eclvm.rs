@@ -236,8 +236,8 @@ pub(crate) fn var_i(
         return read_i(m, e, c, &r);
     }
     match id {
-        // SPEC-GAP: whether an int read of 10033 consumes a random number is not stated (assumed not).
-        10033 => 0,
+        // 07 §6 (0x41F5E7): Rng_Float truncated, one Next32; 1 only when it rounds up to 1.0.
+        10033 => anm.rng.next_f32() as i32,
         10032 => (anm.rng.next_u32() & 0x7FFF_FFFF) as i32,
         10034 => anm.rng.next_u32() as i32,
         // 07 §6: 2 if stage time + pending capture time + live time orbs ≥ TIME_THR (11 §3.1).
@@ -357,8 +357,8 @@ impl Exec<'_> {
     fn run_thread(&mut self, t: &mut Thread) -> End {
         self.loaded_ip = t.ctx.ip;
         'outer: loop {
-            // SPEC-GAP: interrupts are dispatched in the main context only; 07 §5.2 tests in every context (IMPL24 Q5).
-            if self.e.pending_interrupt >= 0 && self.e.running_thread.is_none() {
+            // 07 §5.2 / §5.5: the pending test sits at the LOOP of every context, threads included.
+            if self.e.pending_interrupt >= 0 {
                 self.interrupt(t);
                 self.loaded_ip = t.ctx.ip;
                 continue;
@@ -406,24 +406,32 @@ impl Exec<'_> {
         End::Post
     }
 
-    // 07 §5.5: the pending (not yet executed) instruction is skipped when the interrupt returns.
+    // Interrupt handler 0x41C88A (07 §5.5): the current context's pending (not yet executed) instruction is
+    // skipped; the main context is pushed onto the current stack at the working depth and enters table[k].
     fn interrupt(&mut self, t: &mut Thread) {
         let k = self.e.pending_interrupt;
         self.e.pending_interrupt = -1;
-        let sub = self.e.interrupts.get(k as usize).copied().unwrap_or(-1);
-        // SPEC-GAP: an interrupt index without a registered sub is ignored.
-        if self.m.ecl.sub_start(sub).is_none() {
-            return;
-        }
+        // SPEC-GAP: k ≥ 32 reads past the i16[32] table in the original (no range test); sub 0 here.
+        let sub = self.e.interrupts.get(k as usize).copied().unwrap_or(0);
         let size = self.m.ecl.ins(t.ctx.ip).map_or(0, |i| i.size);
         t.ctx.ip += size;
         // Unless flag A bit 26 push; depth += 1 either way (≤ 15).
+        let main = if self.e.running_thread.is_some() {
+            self.e.main.ctx.clone()
+        } else {
+            t.ctx.clone()
+        };
         if self.e.flags & A_NO_PUSH == 0 {
-            t.push();
+            t.depth = t.push_copy(t.depth, main);
         } else {
             t.depth = (t.depth + 1).min(15);
         }
-        t.ctx.enter(&self.m.ecl, sub);
+        // Ecl_SetSub with sub < 0 returns at once: the main context keeps its ip and clock.
+        if self.e.running_thread.is_some() {
+            self.e.main.ctx.enter(&self.m.ecl, sub);
+        } else {
+            t.ctx.enter(&self.m.ecl, sub);
+        }
     }
 
     // Ecl_CallSub 0x421BD0 (07 §5.4): push unless flag A bit 26, then copy the global args 10061–68 into
@@ -721,7 +729,7 @@ impl Exec<'_> {
             self.m.full = true;
             return;
         }
-        // SPEC-GAP: op 92 places the child at (x, y) relative to its follow offset (parent pos), not added twice.
+        // 07 §10.5: ops 90/92 spawn at (x, y, 0) as given; op 92's follow offset is written after the spawn run.
         let pos = match op {
             91 => [self.e.final_pos[0] + x, self.e.final_pos[1] + y, 0.0],
             94 => [self.e.pos[0] + x, self.e.pos[1] + y, self.e.pos[2] + z],
@@ -1127,8 +1135,11 @@ impl Exec<'_> {
             19 => t
                 .ctx
                 .set_int(V_INT0, self.m.g.spell.as_ref().map_or(0, |s| s.id)),
-            // SPEC-GAP: game value at (0x160F510)+0x1C belongs to a later phase; reads 0.
-            24 => t.ctx.set_int(V_INT0, 0),
+            // 07 §12 row 24: stats +0x1C, spell cards captured in this game (11 §5).
+            24 => {
+                let n = self.m.player.borrow().stats.spells;
+                t.ctx.set_int(V_INT0, n);
+            }
             // Freeze byte 0x160F534 := arg; stage VMs get interrupt 2, or 1 when arg is 0 (07 §12).
             26 => {
                 set_timer_pause(arg);
@@ -1214,7 +1225,7 @@ impl Exec<'_> {
                 self.item(self.e.pos, kind);
             }
             22 => {
-                // SPEC-GAP: native 22's face argument is not given; no boss cut-in is started.
+                // 07 §11.1 bit 10: Spell_ShowNameOnly passes face −1 (sprite 1): no portrait, no cut-in.
                 let name = encoding_rs::SHIFT_JIS
                     .encode("「リザレクション」")
                     .0
@@ -1236,7 +1247,7 @@ impl Exec<'_> {
             11 => self.laser_box(t, self.e.pos, 240.0, 192.0),
             25 => self.laser_box(t, self.e.final_pos, 288.0, 224.0),
             // Stage tint request 0xFFC03030 (07 §12, 06 §10.2 step 3).
-            // SPEC-GAP: whether native 13 also sets the "bomb drew" flag +0x646C is not stated; it does not (IMPL72 Q3).
+            // Only Stage_RequestTint; +0x646C is not written (07 §12 row 13).
             13 => self.anm.request_tint(0xFFC03030),
             16 => self.mark_children(t),
             _ => {
@@ -1247,7 +1258,7 @@ impl Exec<'_> {
     }
 
     // Natives 26 / 28 / 29 "stage VMs interrupt k" (07 §12).
-    // SPEC-GAP: 07 §12 does not name the stage VMs; the two spell-background VMs of native 12 are used.
+    // 07 §12 rows 26/28/29: g_Stage +0xB38 / +0xDDC, the spell-background pair of native 12.
     fn stage_interrupt(&mut self, k: u16) {
         if let Some(st) = &self.m.stage {
             st.borrow_mut().spell_interrupt(k);
@@ -1286,33 +1297,34 @@ impl Exec<'_> {
         }
     }
 
-    // Native 16 (07 §12): a chained child with var 10038 == 0 and a flag-0x100000 bullet within 64 px of its
-    // pos gets var 10038 = 60 and var 10019.
-    // SPEC-GAP: "copy var 10019" is read as the caller's var 10019; distance < 64 strict (IMPL72 Q4).
+    // Native 16 `EclNative_16` 0x424E50 (07 §12 row 16): per flag-0x100000 bullet in slot order, a member of the
+    // caller's chain with int var 10038 == 0 and pos within 64 px (3D, strict) gets 10038 := 60 and the caller's
+    // int var 10007 (bullet colour of ecldata6 sub77).
     fn mark_children(&mut self, t: &Thread) {
-        let f = t.ctx.flt(V_FLT0 + 3);
+        let col = t.ctx.int(V_INT0 + 7);
         let near: Vec<[f32; 3]> = self.m.bullets.borrow().bullets[..crate::bullet::MAX_BULLETS]
             .iter()
             .filter(|b| !b.free() && b.flags & 0x100000 != 0)
             .map(|b| b.pos)
             .collect();
-        let mut c = self.e.chain_next;
-        let mut guard = 0;
-        while let Some(i) = c
-            && guard <= MAX_ENEMIES
-        {
-            guard += 1;
-            let x = &mut self.m.enemies[i];
-            if x.main.ctx.int(V_INT1 + 2) == 0
-                && near.iter().any(|p| {
-                    let (dx, dy) = (p[0] - x.pos[0], p[1] - x.pos[1]);
-                    dx * dx + dy * dy < 64.0 * 64.0
-                })
+        for p in near {
+            let mut c = self.e.chain_next;
+            let mut guard = 0;
+            while let Some(i) = c
+                && guard <= MAX_ENEMIES
             {
-                x.main.ctx.set_int(V_INT1 + 2, 60);
-                x.main.ctx.set_flt(V_FLT0 + 3, f);
+                guard += 1;
+                let x = &mut self.m.enemies[i];
+                let d = [p[0] - x.pos[0], p[1] - x.pos[1], p[2] - x.pos[2]];
+                // Vec3_LengthSq order z·z + y·y + x·x.
+                if x.main.ctx.int(V_INT1 + 2) == 0
+                    && d[2] * d[2] + d[1] * d[1] + d[0] * d[0] < 4096.0
+                {
+                    x.main.ctx.set_int(V_INT1 + 2, 60);
+                    x.main.ctx.set_int(V_INT0 + 7, col);
+                }
+                c = x.chain_next;
             }
-            c = x.chain_next;
         }
     }
 
@@ -1341,7 +1353,7 @@ impl Exec<'_> {
                 n = self.e.chain_next;
                 continue;
             }
-            // SPEC-GAP: e+0x2CA0 of an enemy that is not running is taken to be its main context.
+            // e+0x2CA0 outside its own Ecl_Run is the main context (07 §4.3, §12 row 8).
             let c = &mut self.m.enemies[i].main.ctx;
             if c.int(V_INT1 + 2) == tag {
                 c.set_int(V_INT1 + 1, k);
@@ -1361,7 +1373,7 @@ impl Exec<'_> {
         let calls = t.ctx.int(V_INT0 + 7).wrapping_add(1);
         t.ctx.set_int(V_INT0 + 7, calls);
         let idx = t.ctx.int(V_INT1 + 1);
-        // SPEC-GAP: a caller outside the ring keeps a stale 10037; with no member there is no leader, so nothing.
+        // 07 §12 row 8: a caller outside the ring keeps its old 10037; k = 0 is UB in the original (unreachable), nothing here.
         let Some(l) = leader.filter(|_| idx != 0) else {
             return;
         };
@@ -1412,7 +1424,7 @@ impl Exec<'_> {
             max,
             decay: ((bonus - bonus / 7) / secs) as i32,
             boss: self.idx,
-            // SPEC-GAP: 07 §11.1 does not say where g_Gui +0xC is written; the boss slot index at Spell_Start.
+            // g_Gui +0xC := boss e+0x2E0C, written only by Spell_Start (07 §11.1).
             slot: self.e.slot,
             name: dec(0x14, 48, 0xAA),
             owner: dec(0x44, 48, 0xBB),
@@ -1436,7 +1448,7 @@ impl Exec<'_> {
         self.m.pay_capture(self.anm, false);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
         (self.m.g.spell_flag6, self.m.g.bonus_frozen) = (false, false);
-        // SPEC-GAP: 07 §11.1 lists bits 5, 6, 11 written by Spell_Start but not bit 9; cleared here (IMPL46 Q1).
+        // Bit 9 := 0 is Spell_Start's first statement (07 §11.1).
         self.m.g.spell_captured = false;
         crate::gui::request(crate::gui::Req::BossShow {
             face: spell.face,
@@ -1848,7 +1860,7 @@ impl Exec<'_> {
             // 87 only if the boss exists; 86 has no such test.
             86 | 87 => {
                 let (var, slot) = (self.ai(t, ins, 1), self.ai(t, ins, 2));
-                // SPEC-GAP: op 86 on an empty boss entry (no existence test; unused in data) — skipped.
+                // 07 §7 op 86: an empty entry faults in the original for enemy/context ids (0 uses); skipped as a stand-in.
                 if let Some(b) = self.m.boss(slot) {
                     let other = (b != self.idx).then(|| self.m.enemies[b].clone());
                     let (e, ctx) = match &other {
@@ -2816,13 +2828,20 @@ mod tests {
     fn native16_marks_children() {
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[16, 0])], &[]]);
         spawn(&mut m, 0, 0, -1, 0);
-        m.enemies[0].main.ctx.set_flt(V_FLT0 + 3, 1.5);
+        m.enemies[0].main.ctx.set_int(V_INT0 + 7, 5);
         m.enemies[0].chain_next = Some(1);
-        for (k, x, tag) in [(1, 100.0, 0), (2, 100.0, 7), (3, 250.0, 0)] {
+        // 4: 3D distance² = 40² + 50² = 4100 ≥ 4096; 5: exactly 64 px (strict test).
+        for (k, x, z, tag) in [
+            (1, 100.0, 0.0, 0),
+            (2, 100.0, 0.0, 7),
+            (3, 250.0, 0.0, 0),
+            (4, 100.0, 50.0, 0),
+            (5, 76.0, 0.0, 0),
+        ] {
             spawn(&mut m, k, 1, -1, 0);
-            m.enemies[k].pos = [x, 100.0, 0.0];
+            m.enemies[k].pos = [x, 100.0, z];
             m.enemies[k].main.ctx.set_int(V_INT1 + 2, tag);
-            m.enemies[k].chain_next = (k < 3).then_some(k + 1);
+            m.enemies[k].chain_next = (k < 5).then_some(k + 1);
         }
         {
             let mut b = m.bullets.borrow_mut();
@@ -2831,13 +2850,90 @@ mod tests {
             (b.bullets[1].state, b.bullets[1].pos) = (1, [250.0, 100.0, 0.0]);
         }
         ecl_run(&mut m, &mut anm, 0);
-        let got: Vec<_> = (1..4)
+        let got: Vec<_> = (1..6)
             .map(|k| {
                 let c = &m.enemies[k].main.ctx;
-                (c.int(V_INT1 + 2), c.flt(V_FLT0 + 3))
+                (c.int(V_INT1 + 2), c.int(V_INT0 + 7))
             })
             .collect();
-        assert_eq!(got, [(60, 1.5), (7, 0.0), (0, 0.0)]);
+        assert_eq!(got, [(60, 5), (7, 0), (0, 0), (0, 0), (0, 0)]);
+    }
+
+    // 07 §12 row 24: var 10000 := spell cards captured this game (stats +0x1C).
+    #[test]
+    fn native24_captured_cards() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[24, 0])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.player.borrow_mut().stats.spells = 7;
+        ecl_run(&mut m, &mut anm, 0);
+        assert_eq!(m.enemies[0].main.ctx.int(V_INT0), 7);
+    }
+
+    // 07 §6: an int read of 10033 draws one Next32 and truncates Rng_Float.
+    #[test]
+    fn int_read_10033_draws() {
+        let (mut anm, mut m) = manager(&[&[]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        let mut r = anm.rng.clone();
+        r.next_u32();
+        let e = m.enemies[0].clone();
+        assert_eq!(var_i(&mut m, &mut anm, &e, &e.main.ctx, 10033), 0);
+        assert_eq!(anm.rng.next_u16(), r.next_u16());
+    }
+
+    // 07 §4.2 / §5.5: an unregistered index enters sub 0 (table zero-filled); a negative entry still skips the
+    // current instruction, pushes and increments the depth, but leaves the main context in its sub.
+    #[test]
+    fn interrupt_table_default_and_negative() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 0, &[])], &[ins(5, 0, &[]), ins(5, 0, &[])]]);
+        spawn(&mut m, 0, 1, -1, 0);
+        m.enemies[0].pending_interrupt = 3;
+        ecl_run(&mut m, &mut anm, 0);
+        let e = &m.enemies[0];
+        assert_eq!(
+            (e.main.ctx.sub, e.main.depth, e.pending_interrupt),
+            (0, 1, -1)
+        );
+        let s1 = m.ecl.sub_start(1).unwrap();
+        assert_eq!(e.main.stack[0].ip, s1 + 12);
+
+        let (mut anm, mut m) = manager(&[&[ins(5, 0, &[]), ins(5, 0, &[])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].interrupts[2] = -1;
+        m.enemies[0].pending_interrupt = 2;
+        let s0 = m.ecl.sub_start(0).unwrap();
+        ecl_run(&mut m, &mut anm, 0);
+        let e = &m.enemies[0];
+        assert_eq!(
+            (e.main.ctx.sub, e.main.ctx.ip, e.main.depth),
+            (0, s0 + 12, 1)
+        );
+        assert_eq!((e.main.ctx.clock.cur, e.pending_interrupt), (1, -1));
+    }
+
+    // 07 §5.5 thread contexts: taken in a thread, the thread's ip skips, main is pushed on the thread's stack at
+    // the thread's depth, main enters the sub, the thread's depth += 1 and the main depth stays.
+    #[test]
+    fn interrupt_in_thread_context() {
+        let (mut anm, mut m) = manager(&[
+            &[ins(0, 135, &[0, 1]), ins(100, 0, &[])],
+            &[ins(0, 125, &[1]), ins(0, 83, &[1]), ins(5, 0, &[])],
+            &[ins(50, 0, &[])],
+        ]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].interrupts[1] = 2;
+        let (s0, s1) = (m.ecl.sub_start(0).unwrap(), m.ecl.sub_start(1).unwrap());
+        ecl_run(&mut m, &mut anm, 0);
+        let e = &m.enemies[0];
+        assert_eq!(
+            (e.main.ctx.sub, e.main.depth, e.pending_interrupt),
+            (2, 0, -1)
+        );
+        let t = e.threads[0].as_ref().unwrap();
+        // Op 83 (the instruction after 125) still runs in the thread this frame.
+        assert_eq!((t.ctx.sub, t.ctx.ip, t.depth), (1, s1 + 16 + 16, 1));
+        assert_eq!((t.stack[0].sub, t.stack[0].ip), (0, s0 + 20));
+        assert_eq!(e.flags_b & 2, 2);
     }
 
     // 07 §7 op 181: below 12 sfx 0x2D and clock + 1; at 12 nothing, no sfx.

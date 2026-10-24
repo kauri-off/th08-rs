@@ -181,10 +181,15 @@ impl Thread {
 
     // Push at stack[d] and return the new depth (max 15).
     pub fn push_at(&mut self, d: i32) -> i32 {
+        self.push_copy(d, self.ctx.clone())
+    }
+
+    // Push `c` at stack[d] and return the new depth (max 15); an interrupt in a thread pushes main (07 §5.5).
+    pub fn push_copy(&mut self, d: i32, c: Context) -> i32 {
         if self.stack.len() < 16 {
             self.stack.resize(16, Context::default());
         }
-        self.stack[d.clamp(0, 15) as usize] = self.ctx.clone();
+        self.stack[d.clamp(0, 15) as usize] = c;
         (d + 1).min(15)
     }
 }
@@ -370,7 +375,8 @@ impl Default for Enemy {
             ivars: [0; 8],
             fvars: [0.0; 8],
             death_sub: -1,
-            interrupts: [-1; 32],
+            // 07 §4.2: zero-filled by the constructor, so an unregistered index enters sub 0.
+            interrupts: [0; 32],
             pending_interrupt: -1,
             pos: [0.0; 3],
             pos_offset: [0.0; 3],
@@ -875,7 +881,7 @@ impl EnemyManager {
             let d = {
                 let mut b = self.bullets.borrow_mut();
                 let mut p = self.player.borrow_mut();
-                // SPEC-GAP: whether the homing-target pick is also skipped with the gated first call (IMPL76 Q1).
+                // Homing-target pick, not gated (07 §10.1 step 6); the original runs it after the damage calls, which do not read it.
                 p.offer_target(pos, boss);
                 // The first call is not made for a parented enemy during a card while bombing (07 §10.1 step 6).
                 let skip = self.g.spell.is_some() && self.enemies[idx].root.is_some() && p.bombing;
@@ -1632,7 +1638,7 @@ impl EnemyManager {
             e.vm.pos = p;
             let c = u32::from_le_bytes(e.vm.color);
             e.vm.interp_color_from(60, 3, c, 0x20D0_80A0);
-            // SPEC-GAP: whether colour slot 1 also moves alpha (colour_end alpha 0x20) is not in 05 §6; RGB only.
+            // The colour slot lerps RGB only; 0x20 goes into alpha_end, alpha_start := current alpha (07 §11.1, 05 §6).
             e.vm.color_start[crate::anmvm::A] = e.vm.color[crate::anmvm::A];
             e.vm.color_end[crate::anmvm::A] = 0x20;
             e.ring.waves = 6.0;
@@ -2527,7 +2533,7 @@ impl EnemyManager {
                     }
                 }
                 prev = Some(th);
-                // SPEC-GAP: coordinate A steps per walked entry, also across skipped ones.
+                // Coordinate A steps per walked entry, skipped ones included (07 §10.6).
                 let ua = u1 + vm.uv_off[0] - step * j as f32;
                 let mut h = vm.scale[1] * vm.sprite_h / 2.0;
                 if f & 2 != 0 {
