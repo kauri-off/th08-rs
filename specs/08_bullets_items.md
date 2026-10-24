@@ -441,7 +441,7 @@ Notation: `stats` = game-manager stats block (09 §9), score is stored /10 (`Add
 **4 RNG draws**); if power ≥ 128: power = 128 through `GameMgr_SetPower` 0x406FA0 (also checksummed: **+4 draws**,
 so a collect that reaches full power costs 8; changelog/answers_impl18.md §IMPL19-Q1, VERIFIED code + runtime demo 3 frame 1059:
 two collects = 4 + 4 + 4 = 12 draws), if no
-  spell card is running cancel all bullets to items (mode 1), HUD message (`Hud_ShowMessage(0, 1)` "Full Power Mode!", 12 §5.5 — it also sets the panel full-repaint counter 0x17CE8CC := 2; VERIFIED 0x440CF0 / 0x441170, RE-Q33), convert all other type 0/2 items to
+  spell card is running cancel all bullets to items (mode 1); then, **outside** that test (VERIFIED 0x440B0F / 0x440D91, RE-Q34: the call follows the closing of the `if`), HUD message (`Hud_ShowMessage(0, 1)` "Full Power Mode!", 12 §5.5 — it also sets the panel full-repaint counter 0x17CE8CC := 2; VERIFIED 0x440CF0 / 0x441170, RE-Q33), convert all other type 0/2 items to
   type 8 (vel = (0, −0.5, 0) if vel.y > −0.5; effect; script 0x45). AddScore(10). Popup "10", or a power-up popup +
   sound 0x1F if the level changed. Type 0 additionally rank +1 (always, even at full power).
 - **Point (1)**: max = stats+0x24. If item.y < collection line or the item's max-value flag: v = max; else

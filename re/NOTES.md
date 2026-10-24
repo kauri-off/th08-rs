@@ -645,3 +645,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Tooling: scratch probe q33/probe (TH08_SCANEFF ring/camera dump), drawdiff Q33TEX per-frame counts. D3DX8 uses the SSE
   dispatch table on the reference machine (rcpps+Newton 1/w) — sub-print in the log.
 - Remaining: CHECKPOINT.md "Remaining" (q33).
+
+# RE-Q34 (2026-10-24) — IMPL91–98 questions — DONE (specs/changelog/answers_re_q34.md)
+- Runs re/work/runs/q34/ (portfix = master src copy + `// q34 A–E`; q34_fixes.diff; rungolden.sh; tim.py boss timer/bar
+  counts per frame; kl.py capture K lines; tools/calls.py = rel32/abs reference byte scan).
+- Answers: op 88 self-call (running ctx, stored ip, sub never runs); thread return → main depth; op 174 old aura not drawn;
+  SetRenderState only under Stage_DrawLayer; +0x21810 = tiles still running; +0x120 = I4; Hud_StageTransition = 2nd
+  capture; large popup sprite 0x88; message types 2–4 unused; boss-bar state machine (impl+0x2A40, label VM bit 14);
+  timer clamp/no gate; +0x24/+0x28 kept across continuing stages.
+- Scratch: A popup height → golden same 97.45 → 99.78 %; B–E bar/timer → 99.80 %, timer/bar frames all equal.
+- Lesson: implementer frame numbers can be game frames (gm column), not presents — check both.
+- Open: continue-menu capture one present later in the ref (D3DX filtered path); panel repaint (master).

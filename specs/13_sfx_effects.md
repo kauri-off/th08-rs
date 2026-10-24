@@ -382,6 +382,11 @@ Fade, when +0x352 is set:
   The length |project(pos + right) − s| is `Vec3_Length` of the projected difference (x, y and depth).
 - **+0x63C4 is only as fresh as the last `Stage_SetCamera` call** (VERIFIED: its callers are `Stage_DrawLayer` and
   `AnmManager_SetRenderState` when a drawn VM's flag bit 15 (stage camera) differs from the cached state +0x24C4;
+  `AnmManager_SetRenderState` 0x4623C0 has one call site, `AnmManager_Draw3DWorld` 0x464470, which itself is called only
+  from `Stage_DrawLayer` (byte scan RE-Q34), and `Stage_DrawLayer` calls `Stage_SetCamera` first and sets +0x24C4 := 1,
+  so the second path only recomputes the same value inside a layer draw and is **never** reached while the layers are
+  skipped; data: bit 15 (anm op 31 `stage_camera 1`) is set only by the stgNbg.anm scripts and etama.anm script 51
+  (effect type 19, drawn by the effect lists, not through `Draw3DWorld`);
   golden runtime dump RE-Q33: during a stage-1 spell the stored right stayed (−0.99788, 0, −0.06508) while facing.x
   moved 4.8 → 7.8). While the stage layers are not drawn (06 §10.2: +0xB24 ≥ 2 or the HUD cover) and no
   stage-camera VM is drawn, the list-C billboards (op-128 orbit effects, 2D camera) are therefore sized with the
@@ -474,7 +479,8 @@ Draw (`Ascii_DrawPopups` 0x405420, VERIFIED RE-Q32): one VM, ASCII manager +0x2A
 pos.x − 4·digits and advances 8 per glyph (glyphs from the last stored = most significant first), pos.y = pos.y,
 pos.z = **0.1** (set once by `Ascii_InitVms` 0x402450); sprite = digit glyph g for age < 52, g + 11 for age 52–55,
 g + 21 from 56; only the sprite **width** (VM +0x28) is copied from the new sprite, the height stays the init
-sprite's (sprite 0); scale = manager +0x826C/+0x8270; colour = slot colour with the alpha byte replaced by the
+sprite's (`Ascii_InitVms` 0x402450 gives VM +0x2A4 sprite 0 = 8×8, VM +0x548 sprite 0x88 = 8×12 (glyph '0' of the large
+set), the string VM +0x000 sprite 0x20; VERIFIED RE-Q34); scale = manager +0x826C/+0x8270; colour = slot colour with the alpha byte replaced by the
 distance rule; drawn with `Draw2DSnap` (05 §9), **centred** on the VM pos: `Ascii_InitVms` ORs 0x1800 (anchor bits)
 into the VM flags and then calls `AnmVm_Init`, which resets the flags to 7, so the anchor never takes effect
 (QUIRK). The VM has default render state (alpha blend, z-write on). Alpha by squared distance d (truncated to int)
@@ -545,7 +551,8 @@ Per frame (`Ascii_Calc`, same pause/continue/bit-10 gating as small popups): **n
 ticks, freed when age **> 90**. Draw (0x405420, after the small popups): VM +0x548 (pos.z 0, centred — the 0x1800
 OR is undone by `AnmVm_Init` as above, QUIRK), VM pos.x starts at x0 = pos.x − count·3.5 (unscaled), glyphs
 drawn from the last stored to the first, advance 7·scale.x, VM scale := slot scale (+0x28/+0x2C), sprite
-0x88 + glyph (only the width copied; no age-based sprite change), `Draw2DSnap`, RGB from the colour, alpha
+0x88 + glyph (only the width copied, the height 12 is the init sprite 0x88's — golden 3760: `R 36.5 38.5 44.5 50.5`, i.e.
+12 px tall; uv from the glyph sprite; no age-based sprite change), `Draw2DSnap`, RGB from the colour, alpha
 **replaced** by the player-distance rule of the small popups (0x50 / ramp / 0xD0).
 
 ### 4.1 Darkness mask (Ascii +0x16F04 radius, +0x16F08 alpha) — VERIFIED 0x405420 (RE-Q33)

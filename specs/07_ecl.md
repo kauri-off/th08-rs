@@ -268,6 +268,21 @@ after all contexts: Enemy_UpdateMoveMode (§8), Enemy_AutoFireAndDirAnim (§9.3)
   advanced ip is what gets pushed (unless the target's flag A bit 26), at index target e+0x2CEA (its working depth,
   which `Ecl_Run` re-seeds from e+0x2CE8 at entry), and the target's 0x2CEA += 1. The caller's own ip and stack are
   not touched. Data: 2 uses (ecldata6 sub50 / ecldata6sp sub38, `call_boss 1, sub51/sub39`, on the other boss slot); neither target sub executes `return`, so the depth detail never matters in the data.
+  Exact `Ecl_CallSub` 0x421BD0(e = ECX, ins = EDX, sub) (VERIFIED disassembly RE-Q34): ctx = *(e+0x2CA0); ctx.ip := ins +
+  size(ins); unless flag A bit 26: copy ctx (0x228 bytes) to *(e+0x2CA4) + e+0x2CEA·0x228; `Ecl_SetSub`(ctx, sub) (ip :=
+  sub start, clock +4 := 0, wait +0x90 := 0, sub id +0x224); ctx+0x70 := the 8 argument globals; if not bit 26 and
+  e+0x2CEA < 15: e+0x2CEA += 1. For another enemy (outside its `Ecl_Run`) ctx / stack are its main context / main stack
+  (`Ecl_Run` resets +0x2CA0 / +0x2CA4 to main before returning), but e+0x2CEA is the depth of the **last context it ran**
+  (its last live thread, else main; `Ecl_Run` does not reset it on exit) and the += 1 is lost at its next `Ecl_Run`
+  entry (0x2CEA := 0x2CE8).
+  **Op 88 on the caller itself** (boss[slot] = the running enemy; not in the data): ctx = the **running** context (a
+  thread while a thread runs, +0x2CA0), the stack its own (+0x2CA4: main e+0xA20, thread slot +0x230), the index its
+  working depth e+0x2CEA. EDX = ctx.ip as stored, i.e. the ip `Ecl_Run` last loaded into its local copy (the context's
+  first instruction this frame, or the sub start after an op 52 / op 53 reload in this run), so the pushed ip is that
+  instruction + its size. After the call `Ecl_Run` advances its **local** ip past op 88 and keeps executing the caller's
+  code; when the context stops it writes the local ip back to ctx.ip, overwriting the sub start: the called sub never
+  runs, but the context keeps the call's other effects (clock 0, wait 0, sub id, vars 10053–10060 := the argument
+  globals, the pushed frame, working depth + 1, written back to e+0x2CE8 / thread +6).
 - **Depth storage** (VERIFIED code + runtime, changelog/answers_boss_phases.md §3): the main context's depth lives in e+0x2CE8; e+0x2CEA is
   only the working depth. `Ecl_Run` starts with 0x2CEA := 0x2CE8, swaps in each thread's own depth (thread +6) while
   running it, and writes 0x2CEA back to 0x2CE8 (main) or thread +6 after each context. The "depth := 0" written by the
@@ -276,6 +291,9 @@ after all contexts: Enemy_UpdateMoveMode (§8), Enemy_AutoFireAndDirAnim (§9.3)
   phase had at that moment (e.g. 1 after interrupt entry, 2 if the change happened inside a called sub), and its calls
   push from there. Stale frames below are never popped in the data (no threshold/timeout/death/interrupt target sub
   executes `return`; checked over all 305 targets), but the 15-push cap (§5.4 call) is reached earlier.
+  A thread that returns from its first sub (op 53, depth < 0, `Ecl_Return` 0x421CB0) frees its slot, sets +0x2CA0 /
+  +0x2CA4 to main and e+0x2CEA := e+0x2CE8, and `Ecl_Run` goes straight to the next live thread (no write-back for the
+  freed one); with no later thread, `Ecl_Run` returns with e+0x2CEA = the main depth (VERIFIED RE-Q34).
 
 ### 5.5 Interrupts — VERIFIED
 `e.pending_interrupt = k` (set by op 125 immediately, op 89 / timeline op 8 on another enemy). At the next
@@ -478,7 +496,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 169 | rand_away_angle | W a | if (pos.x > player.x and pos.x > 96) or pos.x > 288: a = wrap(R·π/2 + 3π/4) (leftward cone) else a = R·π/2 − π/4 (rightward cone); one Rng_Float | 0 |
 | 170–172 | laser fields | i k, … | laser +0x599 byte / +0x560 / +0x558,+0x55C | 0 |
 | 173 | flagA30 | i b | bit 30 | 118 |
-| 174 | aura | i n | if an aura exists: its effect byte +0x350 := 0 (released, not freed here); new aura `Effect_SpawnHigh`(0x20 + n, final pos e+0x2D88, 1, 0xFFFFFFFF) → e+0x53C8; interrupt (player mode ≠ 0) + 1 (1 human, 2 youkai); if slot index e+0x2E0C is odd, VM +0x14 (z angular velocity) := −(+0x14). Colour2 flag not touched (ops 80/81) — VERIFIED 0x4184B0 case 0xAE, RE-Q32 | 38 |
+| 174 | aura | i n | if an aura exists: its effect byte +0x350 := 0 (released, not freed here); new aura `Effect_SpawnHigh`(0x20 + n, final pos e+0x2D88, 1, 0xFFFFFFFF) → e+0x53C8; interrupt (player mode ≠ 0) + 1 (1 human, 2 youkai); if slot index e+0x2E0C is odd, VM +0x14 (z angular velocity) := −(+0x14). Colour2 flag not touched (ops 80/81) — VERIFIED 0x4184B0 case 0xAE, RE-Q32. Nothing else of the old aura is written; it is not drawn in the release frame: `EffectMgr_Calc` (prio 13, after the ECL) links only active slots into the draw lists (13 §2.3), and `Effect_SpawnHigh` may reuse the released slot at once (first inactive of 512–639). `Enemy_ReactPlayerMode` writes only the aura's interrupt (1/2) plus the enemy fields of 07 §10.1 step 3 (VERIFIED RE-Q34) | 38 |
 | 175 | spawn_disable | i n | global 0xF54E2C (timeline spawns suppressed if ≠ 0) | 5 |
 | 176 | last_spell | (ignored arg) | GameFlags (0x164D0B4): clear bits 7, 8, 13, set bit 7; also bit 13 when (not spell practice and stage idx 6/7) or (practice and card id 0x8F–0x92 or 0xAB–0xBE); sets flag A bit 30. `Spell_Start` copies bit 7 into spell flag bit 5 (changelog/answers_impl10.md §7, VERIFIED). While bit 13 is set and boss 0 exists, `EnemyMgr_Calc` calls `Player_DamageAgainst` with the whole playfield box (centre (192, 224), size (384, 448), accumulator boss+0x2E10) and discards the damage: all shots count as hits (changelog/answers_impl12.md §5); the call is the first thing inside the bit-10 gate, before the timelines and the slot loop (§10.1 step 1, VERIFIED RE-Q30) | 41 |
 | 177 | set_hud_life | i n | e+0x2E04 | 6 |

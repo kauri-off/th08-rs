@@ -439,6 +439,14 @@ Capture VMs (VERIFIED RE-Q29): pause menu +0x1A70 and continue menu +0xFE0 both 
 via `AnmFile_SetScript`, then pos := (32, 16, 0) written directly; nothing ever interrupts either VM (it is simply no
 longer run/drawn when the menu closes). The pause menu draws a stack copy of its VM each frame. Capture option bit
 0x17CE8FC bit 1 is set unconditionally by `Window_InitD3D` and never cleared, so it is always set.
+`Hud_StageTransition` 0x438F58 (VERIFIED RE-Q34): VM impl+0x3CC0 := `capture.anm` script 1 (`AnmFile_SetScript`),
+then `AnmManager_QueueCapture`(3, 32, 16, 384, 448, dst = that VM's sprite rect) — the same rect msg op 9 captures into
+(golden: `K screen capture.anm#0 32 16 384 448 128 0`). The return value is ignored. Callers (all three): `GameMgr_Calc`
+stage-end handling when `next_scene_after` < 0 (11 §4 step 1: stage 1–5 advance or replay next stage), on the clear
+frame; `PauseMenu_Update` "retry" (state 10, practice / spell practice / Extra → scene 11); `ContinueMenu_Update`
+"yes" in spell practice or Extra (scene 11). So a normal stage advance captures the playfield **twice**: at msg op 9
+and on the clear (confirm) frame (golden presents 10796 / 10918 and 24986 / 25108); the second copy, applied after
+that frame's Present, overwrites the first and is what the continuing stage's 168 transition tiles show (§5.7).
 VMs: `ascii.anm` scripts 12–21 on 10 menu VMs (title, items "resume / quit / retry", confirm "yes/no" …).
 Colours: selected 0xFFFFFFFF, others 0xFF505050 (confirm screen: selected 0xFFFF8080); the selected item is
 offset (−4, −4).
@@ -493,10 +501,10 @@ Extra. Positions and fades come from the VMs' scripts (ascii.anm 22–24, times.
 | +0x04 | dirty counters, 2 bits each: 0–1 lives, 2–3 bombs, 4–5 power, 6–7 graze, 8–9 point items, 10–11 time (set to 2 = redraw in both back buffers) |
 | +0x08 | impl block (VMs, dialogue 10, bonus panel) |
 | +0x0C / 0x10 / 0x14 / 0x18 | `front.anm` (slot 10), `stgNtxt.anm` (13), `times.anm` (14), `loadingNN.anm` (12) |
-| +0x1C | boss bar alpha 0–255 (+4/frame while shown, −4 while hiding) |
+| +0x1C | boss bar alpha 0–255 (i32; state machine §5.1b step 1) |
 | +0x20 | boss "remaining bars" count (ECL op 148) |
-| +0x24 / +0x28 | boss timer seconds / last value shown. +0x24 is written only by `Enemy_CheckTimeout` 0x42B930 (07 §10.1 step 4, called while timeout ≥ 0): for a boss (flags A bit 1) in boss slot 0 (e+0x3313 = 0) := (timeout e+0x3378 − timer e+0x2E14) / 60 (integer), i.e. with the timer value **before** that frame's step-7 tick; the HUD draws the stored value (VERIFIED RE-Q32, golden 19329: the digit changes one frame after the timer crosses the second) |
-| +0x2C | boss bar requested (byte; ECL) |
+| +0x24 / +0x28 | boss timer seconds / last value shown. +0x24 is written only by `Enemy_CheckTimeout` 0x42B930 (07 §10.1 step 4, called while timeout ≥ 0): for a boss (flags A bit 1) in boss slot 0 (e+0x3313 = 0) := (timeout e+0x3378 − timer e+0x2E14) / 60 (integer), i.e. with the timer value **before** that frame's step-7 tick; the HUD draws the stored value (VERIFIED RE-Q32, golden 19329: the digit changes one frame after the timer crosses the second). +0x28 is written only by `Hud_DrawBoss` (§5.4). **Lifetime** (VERIFIED RE-Q34: the only other writer of either field is the 0x27-dword (+0x00…+0x9B) zero fill of `Hud_Register` 0x437AD0, which runs from `GameManager_StageStart` only when the fresh-start flag 0x17CE8BC is set; `Hud_Load` writes neither): both are 0 after a fresh start and **keep their values** across a continuing stage (11 §7) and a continue (11 §4.2), so the first guarded `Hud_DrawBoss` of the next stage shows the previous stage's last value until `Enemy_CheckTimeout` writes a new one |
+| +0x2C | boss bar requested (byte). Writers (VERIFIED RE-Q34, every `FUN_00422C20(&g_Hud, ·)` call): ECL op 127 slot 0 → 1 (and +0x30 := 1.0), op 127 slot < 0 → 0 when the caller's boss slot e+0x3313 < 4; `Enemy_Free` of a boss (flags A bit 1, slot < 4) → 0; `EnemyMgr_Calc` death: modes 0/1 when flags A bit 1 → 0, mode 3 → 0 unconditionally (07 §10.3); `Hud_Load` → 0. It is a plain request: the bar does not test whether boss slot 0 exists |
 | +0x30 / +0x34 | target life fraction / displayed (moves +0.01 up, −0.02 down per frame). +0x30 := f32(life e+0x2DFC) / f32(max life e+0x2E00), no clamp, written by `EnemyMgr_Calc` for a boss (flags A bit 1) in slot 0 only while no dialogue runs (`Msg_IsActive` = 0); ECL op 127 with a = 0 sets it to 1.0 (VERIFIED 0x42C660, RE-Q32). The HUD life e+0x2E04 (op 177 etc.) is never read by the bar |
 | +0x3C[8], +0x5C[8], +0x7C[8] | life-bar markers: end, start (f32 fractions of the bar), colour (ECL op 158: word 1 / e+0x2E00 → start +0x5C, word 2 / e+0x2E00 → end +0x3C, word 3 → colour; e = the enemy running the op, its max life at op time; VERIFIED 0x4230E0 / 0x423110, RE-Q32) |
 
@@ -524,7 +532,7 @@ Branch on the fresh-start flag 0x17CE8BC (11 §3):
   times.anm and loadingNN.anm are **not** reloaded. impl+0x398C / +0x3C30 / +0x3ED4 (script-index shorts of the VMs
   impl+0x3778, +0x3A1C, +0x3CC0) := −1, impl+0x21810 := 0; then VM impl+0x3CC0 := `capture.anm` script 1 with its
   +0x214 short := 1, the 168 stage-start transition VMs impl+0x5728 + (r·12 + c)·0x2A4 (r = 0..13, c = 0..11) :=
-  `capture.anm` script 3 + ((r + c) & 1), their I0 (+0x120) := r + 2c, pos (+0x208) := (32c − 0.5 + 16, 32r − 0.5 +
+  `capture.anm` script 3 + ((r + c) & 1), their I4 (+0x120, var 10008; 05 §2) := r + 2c, pos (+0x208) := (32c − 0.5 + 16, 32r − 0.5 +
   16, 0), uv offset (+0x30, +0x34) := (32c/512, 32r/512); impl+0x21810 := 168 (0xA8).
 - **Fresh start**: the whole impl block (0x8C2E dwords) is zeroed; front.anm (slot 10), times.anm (14) and the
   shot's loadingNN.anm (12) are loaded; the same three shorts := −1 and +0x21810 := 0; VM impl+0x5484 := `ascii.anm`
@@ -540,8 +548,22 @@ Branch on the fresh-start flag 0x17CE8BC (11 §3):
 ### 5.1b Per-frame order (`Hud_Calc` 0x4338CA / `Hud_Update` 0x435900) — VERIFIED (RE-Q29)
 `Hud_Calc` does nothing while the freeze byte 0x160F534 (GM+0x2C) is set. Otherwise, in this order:
 1. `Hud_Update`:
-   1. boss bar (only while no dialogue script runs, impl+0x2181C < 0): show/hide interrupts on VM impl+0x1FB0,
-      alpha +0x1C ±4, displayed life +0x34 moves towards +0x30 (§5.1, §5.4);
+   1. boss bar (only while no dialogue script runs, impl+0x2181C < 0). State byte impl+0x2A40 (0 off, 1 fading in,
+      2 shown, 3 fading out); L = "Enemy" label VM impl+0x1FB0 (front.anm script 12); W = L's flag bit 14 (set while L
+      waits in `wait_interrupt` / `hide_wait_interrupt`, cleared when L takes an interrupt in its run, 05 op 20).
+      This step runs **before** L is run in step 2, so W is the value left by L's run of the previous frame
+      (VERIFIED 0x435900, RE-Q34):
+      - +0x2C = 0: if state ≠ 0: { if state < 3: interrupt L 2, state := 3. If alpha ≠ 0: alpha −= 4. If W: state := 0,
+        displayed +0x34 := 0, alpha := 0 }. So hiding a fully shown bar (L waiting at its t 30, W = 1) ends at once:
+        nothing of the guarded part is drawn from that frame on (no fade-out; golden presents 4432–4494 = game frames
+        3697–3759 after the stage-1 boss, while L's own 30-frame fade-out runs undrawn). Hiding during the fade-in
+        (W = 0) fades alpha down by 4 until L reaches its `hide_wait_interrupt` 30 frames later.
+      - +0x2C ≠ 0: state 0 → interrupt L 1, state := 1, **alpha := 0** (the request frame draws the bar with alpha 0,
+        i.e. nothing: 05 §9 alpha-0 rule; golden 3671). Else: if W: state := 2; alpha := alpha + 4 if alpha < 0xFC
+        (unsigned) else 0xFF.
+      - Then, if state ≥ 2 (never in states 0/1, so the fill stays at 0 during the 30-frame fade-in): displayed +0x34
+        moves to target +0x30: += 0.01 (f32 0x4B48D4) capped at the target if below it, −= 0.02 (0x4B4950) floored at
+        the target if above it.
    2. run front VMs (16), stage-title VMs (4), the stage-start clock impl+0x34D4 (§5.1 condition), the stage-clear VM
       impl+0x212C8, the night clock impl+0x2156C;
    3. night-clock player-overlap fade (§5.7);
@@ -709,8 +731,17 @@ chain-count popup below. **Always, last**: the stage-clear VM impl+0x212C8 (`Dra
 - "Enemy" label VM 12 at (80, 26).
 - Remaining-bars gauge: `n = +0x20` segments between x 35 and 61 (segment i: 35 + 26·i/n … 35 + 26·(i+1)/n −
   gap, gap 2 if n < 6 else 1), y 19..23, top colour alpha|(0xFFFFFF − i·255/9), bottom alpha|0x202020 (VERIFIED RE-Q32).
-- Timer `%.2d` (≤ 99) at (384, 16) coloured by value: ≥ 20 0xA0D0FF, ≥ 10 0xA080FF, ≥ 5 0xE080C0, < 5 0xFF4040
-  (RGB, alpha = bar alpha); when the value changes: < 3 sfx 0x26 `se_timeout2`, < 10 sfx 0x1D `se_timeout`.
+- Timer at (384, 16): drawn on **every** guarded `Hud_DrawBoss` call, with no further condition (no boss / timeout test;
+  VERIFIED 0x43741D RE-Q34, golden 3690–3760: the reference draws it during the bar fade-in). Value v = min(+0x24, 99)
+  (clamped, not skipped: +0x24 ≥ 100 shows "99"), printed with `%.2d` (two digits; a negative +0x24 would print
+  "-01" etc.). Colour from the **unclamped** +0x24: ≥ 20 0xA0D0FF, ≥ 10 0xA080FF, ≥ 5 0xE080C0, < 5 0xFF4040 (RGB,
+  alpha = bar alpha). Sound: if +0x28 ≠ +0x24 (raw values): v < 3 sfx 0x26 `se_timeout2`, else v < 10 sfx 0x1D
+  `se_timeout`; then +0x28 := +0x24 (after the print). +0x28 is 0 after a fresh start (§5.1), so a first value < 10
+  plays the sound. The glyphs are `Draw2DSnap` VMs, so with bar alpha 0 nothing is drawn (05 §9 alpha ≠ 0 rule;
+  golden 3671 / 6097–6098: the life-bar quad is drawn with alpha 0, the timer is not).
+- The guard reads +0x2C **live** at draw time: when the request is set after that frame's `Hud_Calc`, the guarded part
+  is drawn in state 0 with the old alpha 0 and `Hud_Update` starts the fade-in on the next frame (golden 6097: two
+  alpha-0 frames before alpha 4) (VERIFIED RE-Q34, scratch fix E).
 - Every frame when not paused, no continue menu, bullets not frozen (bit 10) and boss slot 0 (0xF54CC0) ≠ 0:
   `Popup_LargeStatic`(pos (2, 29) → screen (34, 45), p3 = number of chained children of the boss
   (`Enemy_ChainChildCount`), p4 = boss +0x3380, colour 0xFFF0F00F, manager scale (1, 1)) — a 2-frame large
@@ -728,7 +759,7 @@ if t < 30: x := f32(t·(−312)/30 + 416) with t the timer **before** this frame
 (bonus) / 180 (message) / 280 (spell bonus) the popup is switched off; then the tick. A popup shown before the
 same frame's `Hud_Update` is therefore drawn at 416 on its first frame, at 405.6 on the second, and drawn for
 250/180/280 frames. (RE-Q33 golden: a port one tick ahead drew the rows 10.4 px left for 30 frames.)
-| `Hud_ShowMessage(v, type)` 0x437E5D | 1 "Full Power Mode!" (power items at max) and 3 "CherryPoint Max!": colour 0xFFC0B0FF, scale 1; 2 "Supernatural Border!!", 4 "Border Bonus %7d", 5 "Spell Bonus Failed", 6 "Last Spell Failed": scale **x 0.9, y 1.0**, colour **0xFFE0B0FF**, `Ascii_SetAdvance(11)` that is reset to 13 before the draw, so the effective advance is 13·0.9 (§2.9) (VERIFIED 0x438A89, RE-Q33) | (416, 168) sliding like above; 180 frames |
+| `Hud_ShowMessage(v, type)` 0x437E5D | Callers (VERIFIED RE-Q34, byte scan of every `call` rel32 / absolute reference: exactly 4 sites): `Item_CollectPowerSmall` 0x440B0F and `Item_CollectPowerBig` 0x440D91 (type 1, 08 §8.5), `ItemMgr_Calc` 0x44120A (type 1, full-power item), `Spell_End` 0x416823 (type 5/6, 07 §11.1); no code writes the type field +0x22DBC except these, `Hud_Load` and the expiry, so **types 2, 3 and 4 are never shown** (unused text). 1 "Full Power Mode!" (power items at max) and 3 "CherryPoint Max!": colour 0xFFC0B0FF, scale 1; 2 "Supernatural Border!!", 4 "Border Bonus %7d", 5 "Spell Bonus Failed", 6 "Last Spell Failed": scale **x 0.9, y 1.0**, colour **0xFFE0B0FF**, `Ascii_SetAdvance(11)` that is reset to 13 before the draw, so the effective advance is 13·0.9 (§2.9) (VERIFIED 0x438A89, RE-Q33) | (416, 168) sliding like above; 180 frames |
 | `Hud_ShowSpellBonus(n)` 0x437EDC (capture) | "Spell Card Bonus!" red 0xFFFF0000 at x = (384 − 17·14)/2 + 32 = 105, y 80 (scale 1, advance 13); then "+%d" at y 96, x = (384 − len·28)/2 + 32, 2× scale, colour 0xFFFF8080 (VERIFIED 0x438A89, RE-Q25) | 280 frames |
 
 ### 5.6 Stage-clear panel (`Hud_DrawClearPanel` 0x43826B, while msg op 9 state is set) — VERIFIED (rewritten RE-Q25)
@@ -791,7 +822,14 @@ frame** at either max.
 
 ### 5.7 Other HUD elements
 - Stage-start transition: 168 VMs (14 × 12 grid of 32-px `capture.anm` tiles, script 3/4 alternating,
-  staggered by `row + 2·col`) drawn as 3D quads while active (impl+0x21810 counts live ones).
+  staggered by `row + 2·col`) drawn as 3D quads while active. impl+0x21810 (VERIFIED RE-Q34: written only by
+  `Hud_Load` (§5.1a: 0 / 168) and `Hud_Update`): while it is ≠ 0, `Hud_Update` runs **all** 168 VMs and then stores
+  168 − (number of `AnmVm_Run` calls that returned 1); `AnmVm_Run` returns 1 on the frame a script ends **and** on every
+  later call of a VM with no script (+0x220 = 0), so the value is the number of tiles still running, recomputed every
+  frame (a VM paused by flag bit 19 returns 0 and counts as live). At 0 the tiles are neither run nor drawn
+  (`Hud_DrawBoss` §5.4). The tiles sample the `capture.anm` texture rect of script 1, i.e. the **latest** capture into it:
+  on a normal stage advance that is the `Hud_StageTransition` capture of the clear frame (§3 capture callers), not the
+  msg op 9 one.
 - Night clock VM impl+0x2156C (`times.anm`, VERIFIED RE-Q25): ECL op 179 (0x439007) starts script 2 on it with
   sprite = clock counter; op 181 sets sprite = clock and interrupt 1 (2 when the clock reaches 12) (07 §7); op 180 and
   `Hud_Load` (0x4390D6) set its alpha byte to 0. It is run every `Hud_Update` (after the stage-clear VM) and drawn

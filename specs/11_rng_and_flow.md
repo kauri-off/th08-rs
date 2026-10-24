@@ -317,7 +317,8 @@ Per frame (after `0x164D09C += 1`):
      - stage 1–5, not replay: if `clock > 11` → `next_scene_after = 9` (ending), flags &= ~0x10, return 3
        (night ran out); else `Stage_Advance` (0x43C4B3) and `scene = 3` (reload GM for the next stage).
      - stage 1–5, replay: next stage = first later stage that has a record → `scene = 3`, none → `scene = 7`.
-     - if `next_scene_after < 0`: HUD 0x438F58 (stage-transition display).
+     - if `next_scene_after < 0`: `Hud_StageTransition` 0x438F58: capture.anm VM impl+0x3CC0 := script 1 and a playfield
+       capture into its sprite rect (12 §3), applied after this frame's Present (VERIFIED RE-Q34).
    - Any state ≠ 0: if (SHOT|ENTER newly pressed on the raw input) or replay playback or stage ≥ 6:
      clear bits 5–6 and, if `next_scene_after ≥ 0`, `scene = next_scene_after`.
      (So after a stage-1–5 clear, the next stage's loader thread waits on the clear screen until the player
