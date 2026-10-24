@@ -34,6 +34,19 @@ register the **Supervisor** task (§4) → message loop.
 Message loop: `PeekMessage`; when idle: `TestCooperativeLevel`; if OK run `Frame_Run`, if the device is
 lost-but-resettable, `Reset` and re-init render states.
 
+**Leaving the message loop / restart** (VERIFIED WinMain 0x4418C0, RE-Q37). A non-zero `Frame_Run` result (1 quit,
+2 error) or the quit flag 0x17CE704 ends the message loop. Then: clear both func chains (0x43CE30: `Supervisor_JoinLoader`, every node
+removed with its on-remove callback), run `Sound_Update` until it returns 0, `Sleep(1000)`, release the sound manager,
+the ANM manager, the D3D device, D3D and the window. Result ≠ 2: write `th08.cfg`, stop MIDI, write the log (below),
+restore the accessibility settings, exit. Result **2** (calc/draw return 5, i.e. the option menu left with a changed
+colour depth or window mode, 15 §1.3): no cfg write; reset the log buffer, 60 × PeekMessage, then create the window
+and the D3D device again (with the live config), sound, a new ANM manager, and `Supervisor_Register` exactly as at start-up
+→ the game boots again through the Supervisor's start sequence (logo / loading). INFERRED: in-memory state outside
+the re-created objects (live config, globals) is kept, since nothing on this path clears it.
+Log: buffer 0x164D540 (0x2000 bytes, write pointer +0x2000). 0x43EA00 appends a formatted line; 0x43EB60 appends an
+**error** line and sets +0x2004 := 1. At exit (0x4439C0), if anything was logged: a separator line, an error
+MessageBox (MB_ICONERROR) with the whole log when +0x2004 ≠ 0, and `./log.txt`.
+
 `Frame_Run` (per call) — VERIFIED:
 
 ```

@@ -533,12 +533,22 @@ At every main-menu registration, before score.dat is reloaded, the game checks t
 
 The flags are then set again from the reloaded score.dat. So each notice appears once, right after the run that unlocked it. At the first menu after boot the in-memory CLRD is still empty, so nothing is shown. `Supervisor_OnRegister` also checks condition 3 at boot, but it is always false there.
 
-`Info_Show(file)` 0x471181 is a **blocking loop** with its own BeginScene/Present and input polling, for up to 6000 frames. Per frame t:
-- draw the picture full-screen;
-- for t < 20: black quad with alpha byte = trunc((60 − t)·255/20) & 0xFF (QUIRK: starts at 253 and falls to 23, then vanishes);
-- for t > 5940: alpha byte = trunc((t − 5980)·255/20) & 0xFF (QUIRK: wraps for t < 5980);
-- from t ≥ 180, a press of Shot, Bomb or Enter (edge, 0x1003) jumps to t = 5980 and plays SE 10;
-- `Sound_Update` runs each frame.
+`Info_Show(file)` 0x471181 is a **blocking loop** with its own BeginScene/Present and input polling, for up to 6000 frames.
+Each iteration with counter t (0 at start), in this order (VERIFIED 0x471181, RE-Q37):
+1. reset the ANM render state, `BeginScene`, copy the picture (surface 0) full-screen;
+2. t < 20: black quad (`Screen_FillRect`, vertices (0, 0)–(639, 479), so the right column x = 639 and the bottom row
+   y = 479 are not covered) with alpha byte = trunc((60 − t)·255/20) & 0xFF (QUIRK: 253, 240, … falling to 23 at t = 18
+   and 10 at t = 19, then none); t > 5940: same quad with alpha byte = trunc((t − 5980)·255/20) & 0xFF (QUIRK: wraps for
+   t < 5980);
+3. g_InputRawCur := `Input_Poll()`; `EndScene`, `Present` (on failure `Reset`);
+4. if 179 < t < 5980 and (g_InputRawCur & 0x1003) ≠ 0 and ≠ (0x164D530 & 0x1003): t := 5980, SE 10.
+   0x164D530 (previous input) is written only by `Supervisor_Calc`, so inside the loop it keeps the value of the
+   frame that registered the menu: the test compares with that frozen word, not with the previous iteration (a key
+   that was up in that frame and is held at t = 180 counts as a press at once; any masked word equal to the frozen
+   one never does; a press during the fade-out is ignored);
+5. t += 1; `Sound_Update`.
+So a press shows on screen one iteration later: the press iteration still draws its own t, the next one draws
+t = 5981 (5980 is never drawn).
 
 After the loop, surface 0 is released.
 

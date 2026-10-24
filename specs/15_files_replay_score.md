@@ -132,17 +132,42 @@ When that happens it logs "コンフィグデータが異常". After the music-m
   fields (+0x08/+0x0A) are set to −1 while the screen is open.
 - Cursor: `Menu_CursorUpDown(12)`.
 - **Assigning** works only from the joystick: each frame the raw DirectInput button array (`Input_PollJoystickRaw`,
-  32 bytes) is scanned for the first button with bit 7 set. If one is found, differs from the button found on the
-  previous frame (global 0x4C868C, i.e. an edge), and the cursor is on rows 0–8: every row of the working copy
+  32 bytes) is scanned for the first button with bit 7 set (index 0–31, or 32 when none is down). If one is found,
+  differs from the button found on the previous frame (global i16 0x4C868C, i.e. an edge), and the cursor is on rows
+  0–8: every row of the working copy
   that already holds that button gets the row's old button (swap), the row gets the new button, SE 10.
-  Keyboard keys cannot change a binding.
+  Keyboard keys cannot change a binding. 0x4C868C := the scan result (0–31, or **32** when no button is down) on every
+  key-config call, whatever the cursor; it is a static initialised to 32 and never reset, so it carries over between
+  key-config visits and main-menu registrations (VERIFIED 0x469636, RE-Q37).
 - ShotSlow row: Left or Right edge toggles +0x26 (live, not the working copy).
 - Confirm (Shot/Enter edge, mask 0x1001) on Reset: SE 10, working copy := table 0x4C78C8 (0, 1, 2, 4, −1, −1, −1, −1,
   3), +0x26 := 1. On Quit: SE 11, screen 2 with cursor 8, working copy written back to +0x00…+0x11 (this also
   restores Up/Down). Bomb/ESC do nothing here.
-- After 3600 frames without raw input the screen quits the same way.
+- After 3600 frames without input the screen quits the same way (idle rule below).
 
-When leaving the menu, if +0x1E or +0x22 changed, the function returns 5. That makes the Supervisor recreate the D3D device. After 3600 idle frames the menu falls back to the top menu.
+**Key config VMs** (title01 VMs 44–76, all with label 4 = range interrupt 4 sent by the entry block; VERIFIED 0x469636 +
+anm dump, RE-Q37). Positions come from the scripts; the handler only sets sprites and the enabled bit (flag bit 1):
+- VM 44 heading (sprite 33).
+- VMs 45–56 = rows 0–11 (Shot … Quit, the order above): selected = the script's sprite, others sprite + 1; set in the
+  entry block (all + 1, cursor row base) and again on every cursor move.
+- VMs 57–74 = 9 digit pairs (tens VM 57 + 2r, ones VM 58 + 2r) for rows r = 0–8, from the **working copy** fields
+  Shot, Bomb, Slow, Skip, Pause, Up, Down, Left, Right (menu +0x14440, +0x14442, +0x14444, +0x14450, +0x14446, +0x14448,
+  +0x1444A, +0x1444C, +0x1444E). Every call, per pair (0x469FA9): value < 0 → both VMs disabled; else tens sprite =
+  script sprite + 2·(v / 10), ones sprite = script sprite + 2·(v mod 10), both enabled. The number shown is the
+  0-based button index.
+- VMs 75 / 76 = ShotSlow Off / On: every call both get sprite + 1, then VM 75 + cfg +0x26 its base sprite.
+- Description VMs: 12 §2.2 (12 strings, pointer to the cursor row's VM on every cursor change).
+
+**Idle exit** (option and key config; VERIFIED 0x46837B / 0x469636, RE-Q37). Counter menu +0xC294: zeroed by
+`Menu_SetScreen` (and by the top menu's manual switch to screen 2), += 1 at the end of every call. Each call, before
+the confirm/cancel tests (in the option menu after the value changes and the SE 0x1D preview): g_InputRawCur ≠ 0 →
++0xC294 := 0 (only the polled input word counts, not raw pad buttons that no binding maps); then +0xC294 ≥ 3600 →
+exit. So the exit comes in call 3600 after the last call with input (call 3600 after the entry when there was none).
+The option menu skips the reset and the test while +0x1442C < 4 (the counter still counts). The exit is the Quit
+path: option = SE 11, cursor 7, screen 0, return 1 / 5; key config = SE 11, write-back, screen 2, cursor 8.
+
+When leaving the menu, if +0x1E or +0x22 changed, the function returns 5: the whole program restarts with the new
+mode (00 §2 "Restart").
 
 ---
 
@@ -727,7 +752,10 @@ Error message: "リプレイデータが異常".
 
 Listing:
 - Loads slots 01..15, then up to 45 `th8_ud????.rpy` files (shown as "User ").
-- 15 rows per page; Left/Right moves ±15 rows.
+- 15 rows per page; Left/Right (edge or repeat flag) moves ±15 rows **only when there are more than 15 files**, and
+  wraps: −15 < 0 → + count, +15 ≥ count → − count; SE 12 on every such press (VERIFIED 0x46E136, RE-Q37). Input
+  start: 12 §2 (cursor from call 9, confirm/cancel from call 18). Entry block: surface `select00.png` (unless the
+  previous screen was 7), range interrupt 14, cursor 0, +0xC2BC := 0, file scan. Confirm with 0 files does nothing.
 - Row format: `"%s %8s  %6s %7s  %8s"` = No., name (+0x72), date (+0x6C), character (table 0x4C86C0[shot]), difficulty (0x4C86F0[diff]). For spell practice the last column is `Spell No.%3d`.
 
 Detail view after choosing a file:
@@ -736,7 +764,11 @@ Detail view after choosing a file:
 
 The user then:
 - picks one of the recorded stages (sub-state 2). On the file confirm (sub-state 1) the stage cursor (+0) is set to
-  the **first stage with a record** (scan from 0; none → error message, scene −1). Sub-state 2: `Menu_CursorUpDown(9)`,
+  the **first stage with a record** (scan from 0 over the listing copy +0x7A50 + 0x134·row + 0x20 + 4k). None
+  (k > 8) → error log line `リプレイデータが異常` (0x43EB60: appended to the log buffer 0x164D540 and its error flag
+  +0x2004 := 1, so at program exit `log.txt` is written and the log is shown in an error MessageBox, 00 §2), scene −1
+  (program exit), the handler returns 0 (VERIFIED 0x46E136, RE-Q37). Files written by the game always hold a stage.
+  The same confirm sets up the card-name scratch VM of 12 §2.8 (for every file; drawn only for spell replays). Sub-state 2: `Menu_CursorUpDown(9)`,
   then while the cursor's stage has no record it keeps moving in the same direction (wrapping 0 ↔ 8), then the
   displayed stage row +0xC290 := cursor. +0xC290 is written **only** there, and the draw highlights +0xC290, so on the
   confirm frame the table shows the previous +0xC290 (0 after the menu was entered, else the last chosen row) and the

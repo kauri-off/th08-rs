@@ -676,3 +676,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   GameMgr_Draw returns 3 on loading frames (golden present 10917 = 0 prims); text DIB 1-bit alpha + vertical gradient.
 - Unobservable: 0x164D0B0 reset place (Player_DyingUpdate real death, Item_CollectPowerSmall).
 - Open: D3DX8 is statically linked (0x47ABAB) → TRIANGLE filter reversible (own task).
+
+# RE-Q37 (2026-10-24) — SPEC-GAP batch 3, menus (17 markers) — DONE (specs/changelog/answers_re_q37.md)
+- Code + anm dump + options_cfg trace + one original run (re/work/runs/q37/sess_top → play_top: copy of options_cfg
+  with crafted polls after the return to the top menu; play_session.sh accepts a session path + --out).
+- 5 right, 12 CODE BUG. Reachable: Info_Show order (jump shows next iteration as 5981; frozen prev input; t < 5980),
+  return 5 = full program restart (WinMain), char-screen cancel stores g_ShotType, description VM pointer rule +
+  option / key-config descriptions (0x4C8664 / 0x4C8690), key-config VMs 44–76, replay input start (call 9 / 18),
+  card-name VM not drawn. Minor: idle exits (one call early, raw pad), VM 141 slide round trip, no-stage error path.
+- New outside the markers: top menu cursor from call 9 / confirm from call 19 (VERIFIED by run), option item 7 opens at
+  P + 30 (in-place MainMenu_Option call increments counters), replay paging only > 15 files and wrapping.
+- Symbols +10 (Log_*, FuncChain_Clear, KeyConfig_*), redump done.

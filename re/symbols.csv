@@ -789,3 +789,13 @@ addr,kind,name,signature,confidence,note
 0x0043f31c,func,TextDib_AlphaPass,,VERIFIED,RE-Q36 invert alpha; A1R5G5B5 vertical gradient on opaque pixels
 0x0043f898,func,TextDib_CopyToSurface,,VERIFIED,RE-Q36 row memcpy into the work surface
 0x0047abab,func,D3DXLoadSurfaceFromSurface,,INFERRED,RE-Q36 static D3DX8 (dst,pal,rect,src,pal,rect,filter,colorkey)
+0x0043ea00,func,Log_Printf,,VERIFIED,RE-Q37 append formatted line to log buffer 0x164D540
+0x0043eb60,func,Log_Error,,VERIFIED,RE-Q37 append line + error flag +0x2004 (MessageBox at exit)
+0x004439c0,func,Log_Flush,,VERIFIED,RE-Q37 at exit: separator; MessageBox if error flag; ./log.txt
+0x0043ce30,func,FuncChain_Clear,,VERIFIED,RE-Q37 JoinLoader + remove all calc/draw nodes
+0x0043cc60,func,FuncChain_RemoveAll,,INFERRED,RE-Q37 per list
+0x0043c317,func,GameMgr_ReturnsZero,,VERIFIED,RE-Q37 returns 0 (Extra difficulty entry test)
+0x00469fa9,func,KeyConfig_SetDigits,,VERIFIED,RE-Q37 two digit VMs from a button index (<0 hides)
+0x0046950b,func,KeyConfig_ReplaceButton,,VERIFIED,RE-Q37 every working-copy field == old := new
+0x0164d540,global,g_Log,,VERIFIED,RE-Q37 0x2000-byte log buffer; +0x2000 write ptr; +0x2004 error flag
+0x004c868c,global,g_KeyCfgLastButton,,VERIFIED,RE-Q37 i16 static init 32; first-down raw joystick button

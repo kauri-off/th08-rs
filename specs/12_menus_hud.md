@@ -108,10 +108,17 @@ switches show the new screen on the press frame in the draw logs.
 screen counter +0x1442C at the end of each call; a press zeroes +0x10 in its own call. A test "+0x10 > 19" (> 29,
 > 59) is therefore true in the call P + 20 (P + 30, P + 60) after the press on frame P, which calls `Menu_SetScreen`
 (return 1), and the next screen first runs on P + 21 (P + 31). Uses: difficulty / spell-practice-char cancel 20,
-character cancel 30, replay leave 30 (top cursor 4), option item 7 → 30, Quit 60. Input start: screens 4/8/12, 5/9/13/15,
+character cancel 30, replay leave 30 (top cursor 4), Quit 60. **Exception, option item 7** (VERIFIED 0x4674E0 +
+`options_cfg` trace rows 327 → 357, RE-Q37): the confirm sets sub-state 3, zeroes +0x10 and calls `MainMenu_Option`
+in place; with sub-state ≠ 0/1 that call only increments +0xC294/+0x10/+0x1442C, and the top handler increments them
+again at its end, so +0x10 = 2 after the press call: the switch to screen 2 happens in call P + 29 and the option
+screen first runs on P + 30. Input start: screens 4/8/12, 5/9/13/15,
 11, 16, 17 switch to their input sub-state in the call where +0x1442C == 8 (input from that call on); the replay
 screen leaves sub-state 0 when +0x1442C > 7 and accepts confirm/cancel when +0x10 > 9; the option screen moves the
-cursor from its first call and accepts Left/Right/confirm/cancel from +0x1442C ≥ 4; the top menu from frame 10.
+cursor from its first call and accepts Left/Right/confirm/cancel from +0x1442C ≥ 4; the top menu: see §2.2 "Input
+timing" (cursor from call 9, confirm/cancel from call 19 of each entry). Replay screen in call numbers (call 0 = the
+entry call): sub-state 1 starts in call 8 (+0x10 := 0 there), its first call is call 9 (cursor Up/Down and Left/Right
+paging from call 9), confirm/cancel from call 18 (+0x10 > 9) (VERIFIED 0x46E136, RE-Q37).
 
 ### 2.1 title01.anm VM map (script index = VM index) — VERIFIED from the anm dump
 
@@ -119,8 +126,8 @@ cursor from its first call and accepts Left/Right/confirm/cancel from +0x1442C �
 |---|---|
 | 0 | background (`title02.png`) at x 384 |
 | 1–9 | top-menu items 0–8 at (64, 180 + 28·i); each item has two sprites: **selected = the script's own sprite, unselected = sprite + 1** |
-| 10–42 | option menu labels/values |
-| 43–76 | key-config labels |
+| 10–43 | option menu labels/values (VM 43 = SlowMode "On", label 3) |
+| 44–76 | key config (label 4; layout 15 §1.3 "Key config VMs") |
 | 77–110 | replay list (77 header, 78–107 thirty rows, 108–110 headers) |
 | 111–118 | character portraits (`sl_pl00h`, `sl_pl00a`, `sl_pl01a`, `sl_pl01h`, `sl_pl02h`, `sl_pl02a`, `sl_pl03a`, `sl_pl03h`) at (416, 240) |
 | 119–130 | character description texts `sl_pltxt0..11` at (480, 352) |
@@ -133,7 +140,12 @@ cursor from its first call and accepts Left/Right/confirm/cancel from +0x1442C �
   the range interrupt for that VM.
 - A VM without a label for the id takes its catch-all label (−1). In every title01 script the catch-all is followed by
   `hide_wait_interrupt`. In script 141 it is followed by `pos 640,320`, so any interrupt other than 18/6 resets VM 141
-  to (640, 320), hidden.
+  to (640, 320), hidden. Every way into screens 11/16 passes such an interrupt first (top 2/5, screen 9/15 entry 8,
+  screen 17 entry 26), so VM 141 starts its label-18 slide (`pos_time` 20 frames, mode 4) from (640, 320); the screen
+  handlers never write its pos. Exception (VERIFIED from 05 §4/§6, RE-Q37): the catch-all's `pos` does not stop a
+  running pos interpolation, which overwrites pos again in the same POST. A screen 16 → 17 → 16 (or 11 → 9 → 11)
+  round trip within the 20 frames of the label-18 slide therefore keeps sliding towards (256, 320) while hidden, and
+  the next interrupt 18 starts its slide from that position, not from (640, 320).
 - Handlers hide VMs instantly by clearing flag bit 1 (enabled, 05 §2.1); the script's fade label still runs undrawn.
 
 Screens drive the VMs with interrupts sent to the whole range (`AnmManager_InterruptRange`): 2 = show top menu,
@@ -172,7 +184,7 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
 | 4 Replay | リプレイを鑑賞できます | screen 7 (interrupt 13) |
 | 5 Result | 過去のスコアやスペルカードの取得歴を見られます | scene 5 |
 | 6 Music Room | 音楽を聴けます | scene 8 |
-| 7 Option | 各種設定できます | after 30 frames: screen 2, config snapshot saved |
+| 7 Option | 各種設定できます | cursor 0, sub-state 3; screen 2 in call P + 29 (first runs P + 30, §2 intro), config snapshot (+0x14454, 0x3C bytes) saved |
 | 8 Quit | いろいろと終了します | range interrupt 1, sub-state 2; **no music change in WAV mode** (MIDI mode only: `Midi_Stop`, `Midi_Open(…, 30)`, `Midi_Play`; there is no fade, VERIFIED 0x4674E0, RE-Q25); in the call 60 frames later free VMs, scene −1 |
 
 - Cursor (`Menu_CursorUpDown` 0x47030B, wraps, sfx 12; held keys repeat with the repeat flag); locked items 1
@@ -198,14 +210,42 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
   - 2/3/6 (game) → 1 if the last difficulty was Extra, else 0;
   - otherwise 0;
   - then practice flags override: practice → 3, spell practice → 2, with +0x6C = 1/2.
-- **The current description VM is run and drawn on every screen** (menu calc/draw, after VMs 0–141), at (320, 448).
-  Leaving the top menu sends it interrupt 2 (fade 60 frames, then hidden), so it stays visible for ~60 frames on the next
-  screen.
+- **The current description VM is run and drawn on every screen while the pointer +0xC2BC ≠ 0** (menu calc/draw,
+  after VMs 0–141, only while quit state +0x14434 = 0), at (320, 448). Leaving the top menu sends it interrupt 2 (fade
+  60 frames, then hidden). Complete list of pointer writers (VERIFIED: every access to +0xC2BC, RE-Q37):
+  - `MainMenu_LoaderThread` 0x470E10: description VM 0;
+  - top menu, sub-state 1, every call: cursor ≠ +0x08 → description VM [cursor], interrupt 1;
+  - difficulty screen entry block (0x46A071) and replay screen entry block (0x46E136): **:= 0** — so after Start /
+    Extra / Practice / Replay the description is drawn only in the press frame (its interrupt 2 already took one
+    step) and is gone from the new screen's first call on;
+  - option screen (0x46837B) and key config (0x469636): entry block sets +0x08 := −1; then every call, cursor ≠ +0x08 →
+    description VM [cursor], interrupt 1. The option entry call (sub-state 0 → 1 in the same call) renders the 10
+    option descriptions (table 0x4C8664) into description VMs 0–9, key config renders its 12 (table 0x4C8690) into
+    VMs 0–11, both with `Text_RenderCentered` as for the top menu (colour 0xFFF0E0, flags 0x300000). Texts:
+    option 0 プレイヤーの初期数を変更します。（初期設定　３）, 1 画面の色数を変更します。３２ＢＩＴだと最も綺麗に表示されます。,
+    2 ＢＧＭの再生方法を変更します。（初期設定　ＷＡＶ）, 3 ＢＧＭの音量を調整します, 4 効果音の音量を調整します,
+    5 ウィンドウかフルスクリーンか選択します, 6 弾が多い場面でわざと処理落ちさせます(スコア、リプレイ記録不可),
+    7 全て初期設定にします, 8 パッド操作のボタン配置を変更します, 9 おいそれと終了します; key config 0 ショット、決定ボタンを設定します,
+    1 ボム、キャンセルボタンを設定します, 2 低速移動ボタンを設定します, 3 メッセージスキップボタンを設定します, 4 ポーズボタンを設定します,
+    5 上移動ボタンを設定します, 6 下移動ボタンを設定します, 7 左移動ボタンを設定します, 8 右移動ボタンを設定します,
+    9 ショット押しっぱなしで低速移動になるようにします, 10 初期設定に戻します, 11 おおよそ終了します.
+  - No other handler writes it: the character screens, practice stage select and screens 16/17 keep the old VM
+    (after Spell Practice it fades out over its 60 frames on screen 16).
+  Consequences: during Option's wait (sub-state 3) and Quit's 60 frames the top description stays drawn unchanged;
+  back on the top menu the previous screen's description VM (option / key-config row) stays drawn during the 9
+  render calls of sub-state 0, until the change test of call 9 picks VM [cursor] (whose strip the top menu has just
+  re-rendered; strips 9–13 keep option / key-config text).
   Exact senders (VERIFIED `MainMenu_Top` 0x4674E0, RE-Q24): the pending interrupt 2 is written into the current description VM (pointer menu+0xC2BC; it is **not** in the title01 range, so range interrupts never reach it) by every confirm that leaves to another screen or scene — Start/Extra/Practice/Spell Practice (with their range interrupt 5/7/…), Replay (range 13), Result viewer (scene 5), Music Room (scene 8) — and by the entry redirects (returning to the replay screen after a replay, range 13; returning to practice / spell practice, range 5). **Option (item 7) and Quit (item 8) send nothing to it**: Option sets sub-state 3 and calls `MainMenu_Option` 0x46837B in place, Quit (sub-state 2) only sends range interrupt 1, so on those the current description keeps its state.
   - Description strips are text.anm sprites 21+k = the same rows as the screen-17 info VMs. Screen 17 entry overwrites
     strips 0–6.
   - The top menu re-renders all 9 descriptions on each entry.
-- Input accepted from frame 10 on. Confirm: sfx 10 (+ sound flush). Cancel: cursor jumps to Quit (sfx 11).
+- **Input timing** (VERIFIED 0x4674E0 and the RE-Q37 run `re/work/runs/q37/play_top`: Up in call 9 moved the
+  cursor, Shot in call 18 was ignored, Shot in call 20 started the item). Each entry (+0x0C = 0, +0x1442C = 0):
+  calls 0–8 are sub-state 0 and only render description k = +0x1442C (+ the entry block in call 0) and return 1 —
+  no cursor, no change test, no demo counter. Call 9: +0x1442C := 0, +0x10 := 0, +0x08 := −1, sub-state 1,
+  +0x14430 := 0, and the sub-state-1 code runs in the same call: cursor (`Menu_CursorUpDown`), highlight, demo
+  counter and the change test from call 9; confirm/cancel only when +0x1442C ≥ 10, i.e. from call 19.
+  Confirm: sfx 10 (+ sound flush). Cancel: cursor jumps to Quit (sfx 11).
 - **Demo**: idle counter +1 per frame, reset by any raw input; after 1500 frames load
   `demo/demorpy((n+1) mod 4).rpy`; on success: flags = replay | demo (bits 3, 1), difficulty/shot from the
   replay header (+0x6B / +0x6A), byte 0x164D0B2 = shot % 2 (changelog/answers_phase7.md §3), stage = first stage with a record, scene 2. (Demo exit: 11 §4.)
@@ -234,7 +274,14 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
 ### 2.3 Difficulty select (screens 4/8/12) — VERIFIED
 Enter: load surface 0 = `title/select00.png` (unless coming back from character select), interrupt 7 (12 for
 Extra; Extra always selects the single Extra entry, VM 135). Cursor = config +0x21 (last difficulty; > 3 → 1), set in the entry block (this is the value that counts; the top
-menu's > 3 → 2 store is overwritten, RE-Q25). Extra (12): cursor = +0x21 − 4 (≥ 0).
+menu's > 3 → 2 store is overwritten, RE-Q25). Extra (12): the entry tests 0x43C317, which always returns 0, so it
+always sends range interrupt 12 and sets cursor := 4; then cursor −= 4 (clamped ≥ 0) → always 0; VM 135 gets its base
+sprite (VERIFIED 0x46A071, RE-Q37).
+Entry block order (call 0, VERIFIED RE-Q37): surface load (unless the previous screen is 5/9/13; a failed load
+returns 0), cursor := config +0x21, range interrupt 7/12, clamp, VMs 131–134 sprite + 1 and interrupt 25, VM 131 +
+cursor base sprite and 24, then +0x0C := 0, +0x10 := 0 and **+0xC2BC := 0** (§2.2). The +0x6C forward of §2.2 is
+tested after this block in every sub-state-0 call: +0x6C ≠ 0 → `Menu_SetScreen(9)` (9 for every difficulty screen),
+cursor 0, return 1, skipping the end-of-call counter increments. So the whole entry work is done before the forward.
 Interactive from frame 8: up/down over 4 entries (VMs 131–134; selected gets interrupt 24 and its base sprite,
 others 25 and sprite+1). Confirm → store config +0x21 (Extra: 4 + cursor), sfx 10, screen 5 / 9 (practice) /
 13 (Extra). Cancel → store, sfx 11, interrupt 6, after 20 frames back to screen 0 (cursor 0 / 3 practice /
@@ -274,7 +321,11 @@ Choices = 4 teams, or 12 (teams + 8 solos) when Extra is unlocked for all four t
   description, stays disabled and disappears at once. The portraits get 9/23, which replaces the range interrupt 18.
 Confirm: shot = cursor, sfx 10; practice → screen 11; spell practice → screen 16; else
 `difficulty = config+0x21`, `stage = 0` (Extra: `difficulty + 4` = 8), flags &= ~replay, stop music,
-**scene 2** (new game). Cancel: back to the difficulty screen (spell practice: fade back to the top menu).
+**scene 2** (new game). Cancel (Bomb/ESC edge, VERIFIED 0x46A625, RE-Q37): SE 11 + flush, **g_ShotType := cursor**
+(so the next character-screen entry starts on the last highlighted character), then screens 5/9/13 → 4 / 8 (flags
+bit 0) / 12 at once (cursor 0, return 1, no interrupt); screen 15 plays SE 11 a second time (same frame: one sound,
+13 §1.2), sub-state 3, +0x10 := 0, range interrupt 6, and the call with +0x10 > 29 goes to screen 0 with cursor 2,
+flags &= ~1.
 
 **Difficulty plate** (VERIFIED, changelog/answers_bugs2.md §C2; ref `c2_charsel_team0_normal_*.png`). On the first frame of
 screens 5/9/13 (not 15), right after the range interrupt 8, VM `131 + config+0x21` (Easy 131 … Lunatic 134;
