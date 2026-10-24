@@ -192,6 +192,18 @@ pub(crate) fn difficulty_of(id: usize) -> usize {
     }
 }
 
+// Replay list paging (15 §3.8), only called with more than 15 files: ±15 rows, −15 < 0 → + count,
+// +15 ≥ count → − count.
+fn rpy_page(cur: i32, n: i32, left: bool) -> i32 {
+    if left {
+        let c = cur - 15;
+        if c < 0 { c + n } else { c }
+    } else {
+        let c = cur + 15;
+        if c >= n { c - n } else { c }
+    }
+}
+
 // Replay sub-state 2 (15 §3.8): Menu_CursorUpDown(9) (wraps), then keep moving the same way while the stage has
 // no record.
 fn rpy_stage_step(have: &[bool; 9], cur: usize, d: i32) -> usize {
@@ -312,10 +324,12 @@ pub struct Lists {
     // stage row +0xC290 (15 §3.8), speed, loaded file +0xC280.
     rpy_sub: u8,
     rpy_cur: usize,
-    // SPEC-GAP: 15 §3.8 "0 after the menu was entered" read as menu creation; the replay screen entry keeps it.
+    // Zeroed with the menu object (memset at MainMenu_Register); the replay screen entry keeps it (15 §3.8).
     rpy_stage: usize,
     rpy_speed: i32,
     rpy_loaded: Option<usize>,
+    // Sub-state counter +0x10 of the list (sub-state 1): zeroed in call 8 and by a press, += 1 per call (12 §2).
+    rpy_t: u32,
 }
 
 fn catk(ctx: &Ctx, id: usize) -> Catk {
@@ -574,8 +588,6 @@ impl MainMenu {
             self.lists.sp_input = false;
             self.set_surface(ctx, "select00.png");
             ctx.game.flags |= F_PRACTICE | F_SPELL_PRACTICE;
-            // SPEC-GAP: VM 141's catch-all should reset it to (640, 320); the port's interrupt path misses a case (mopup1).
-            self.vms[VM_ANCHOR].pos = [640.0, 320.0, 0.0];
             self.interrupt_all(18);
             let mut c = (ctx.game.shot as i32).min(n - 1);
             for _ in 0..n {
@@ -1169,9 +1181,14 @@ impl MainMenu {
         self.vms[v].pending_interrupt = 17;
     }
 
-    // Screen 7, MainMenu_Replay 0x46E136 (12 §2.8, 15 §3.8).
-    // SPEC-GAP: no input start frame in 12 §2.8 / 15 §3.8 (8 used).
-    pub(crate) fn replay(&mut self, ctx: &mut Ctx) {
+    // Screen 7, MainMenu_Replay 0x46E136 (12 §2.8, 15 §3.8). Returns false for the handler's return 0.
+    pub(crate) fn replay(&mut self, ctx: &mut Ctx) -> bool {
+        let r = self.replay_run(ctx);
+        self.lists.rpy_t += 1;
+        r
+    }
+
+    fn replay_run(&mut self, ctx: &mut Ctx) -> bool {
         if self.frames == 0 {
             self.set_surface(ctx, "select00.png");
             self.interrupt_all(14);
@@ -1183,8 +1200,13 @@ impl MainMenu {
             }
             self.cursor = self.cursor.clamp(0, (self.replays.len() as i32 - 1).max(0));
         }
-        if self.frames < 8 || self.pending.is_some() {
-            return;
+        // Sub-state 0 in calls 0–7; sub-state 1 starts in call 8 with +0x10 := 0, so the list moves from call 9 and
+        // takes confirm / cancel from call 18 (+0x10 > 9) (12 §2 intro, 15 §3.8).
+        if self.frames == 8 {
+            self.lists.rpy_t = 0;
+        }
+        if self.frames < 9 || self.pending.is_some() {
+            return true;
         }
         let n = self.replays.len() as i32;
         let inp = ctx.input;
@@ -1192,24 +1214,34 @@ impl MainMenu {
             1 => {
                 if n > 0 {
                     self.move_cursor(ctx, n, UP, DOWN, |_| true);
-                    if inp.pressed_or_repeat(LEFT) || inp.pressed_or_repeat(RIGHT) {
-                        let d = if inp.pressed_or_repeat(LEFT) { -15 } else { 15 };
-                        self.cursor = (self.cursor + d).clamp(0, n - 1);
-                        sound::play(sound::SELECT);
-                    }
+                }
+                // Left / Right page by 15 only with more than 15 files, wrapping by the count; SE 12 (15 §3.8).
+                if n > 15 && (inp.pressed_or_repeat(LEFT) || inp.pressed_or_repeat(RIGHT)) {
+                    self.cursor = rpy_page(self.cursor, n, inp.pressed_or_repeat(LEFT));
+                    sound::play(sound::SELECT);
+                }
+                if self.lists.rpy_t <= 9 {
+                    return true;
                 }
                 if inp.pressed(CONFIRM) && n > 0 {
                     sound::play(sound::OK);
+                    self.lists.rpy_t = 0;
                     let i = self.cursor as usize;
-                    self.lists.rpy_loaded = Some(i);
-                    // Stage cursor = first stage with a record; +0xC290 keeps its old value until sub-state 2 (15 §3.8).
-                    // SPEC-GAP: no recorded stage → error message and scene −1 (15 §3.8) are not done; stage 0 is used.
+                    // Stage cursor = first stage with a record; +0xC290 keeps its old value until sub-state 2. None:
+                    // error log line, scene −1, return 0 (15 §3.8, 00 §2).
                     let st = &self.replays[i].1.stages;
-                    self.lists.rpy_cur = (0..9).find(|&s| st[s].is_some()).unwrap_or(0);
+                    let Some(first) = (0..9).find(|&s| st[s].is_some()) else {
+                        log::error!("リプレイデータが異常");
+                        ctx.game.request(-1);
+                        return false;
+                    };
+                    self.lists.rpy_loaded = Some(i);
+                    self.lists.rpy_cur = first;
                     self.lists.rpy_sub = 2;
                     self.rpy_choose();
                 } else if inp.pressed(CANCEL) {
                     sound::play(sound::CANCEL);
+                    self.lists.rpy_t = 0;
                     self.interrupt_all(16);
                     // Replay leave: top menu (cursor 4) after 30 frames (12 §2).
                     self.pending = Some(Pending {
@@ -1221,7 +1253,7 @@ impl MainMenu {
             }
             2 => {
                 let Some(i) = self.lists.rpy_loaded else {
-                    return;
+                    return true;
                 };
                 let have: [bool; 9] =
                     std::array::from_fn(|s| self.replays[i].1.stages[s].is_some());
@@ -1248,6 +1280,7 @@ impl MainMenu {
                     self.rpy_speed_vms();
                 } else if inp.pressed(CANCEL) {
                     sound::play(sound::CANCEL);
+                    self.lists.rpy_t = 0;
                     self.lists.rpy_sub = 1;
                     self.lists.rpy_loaded = None;
                     self.interrupt_all(14);
@@ -1255,7 +1288,7 @@ impl MainMenu {
             }
             _ => {
                 let Some(i) = self.lists.rpy_loaded else {
-                    return;
+                    return true;
                 };
                 let spell = self.replays[i].1.spell_id() >= 0;
                 let m = if spell { 2 } else { 3 };
@@ -1276,7 +1309,8 @@ impl MainMenu {
                 if inp.pressed(CONFIRM) {
                     sound::play(sound::OK);
                     ctx.game.replay_speed = self.lists.rpy_speed as u8;
-                    let (_, r) = self.replays.swap_remove(i);
+                    // The loaded replay stays listed: this frame's draw still shows its detail rows.
+                    let r = self.replays[i].1.clone();
                     let st = Some(self.lists.rpy_stage);
                     if crate::replay::start_playback(&mut ctx.game, r, st, None) {
                         ctx.audio.stop_bgm();
@@ -1288,6 +1322,7 @@ impl MainMenu {
                 }
             }
         }
+        true
     }
 
     // MainMenu_ReplayDraw 0x46EF8D (12 §2.8 draw steps 1–3); text anchors are the VMs' raw positions.
@@ -1413,5 +1448,15 @@ mod tests {
         assert_eq!(rpy_stage_step(&have, 8, 1), 1);
         assert_eq!(rpy_stage_step(&have, 1, -1), 8);
         assert_eq!(rpy_stage_step(&[false; 9], 0, 1), 0);
+    }
+
+    // 15 §3.8: ±15 rows, wrapping by the file count.
+    #[test]
+    fn replay_paging() {
+        assert_eq!(rpy_page(3, 20, true), 8);
+        assert_eq!(rpy_page(16, 20, true), 1);
+        assert_eq!(rpy_page(3, 20, false), 18);
+        assert_eq!(rpy_page(7, 20, false), 2);
+        assert_eq!(rpy_page(0, 16, true), 1);
     }
 }

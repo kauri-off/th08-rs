@@ -222,6 +222,29 @@ impl Ctx {
         }
     }
 
+    // WinMain on Frame_Run result 2 (00 §2 "Restart"): chain teardown, Sound_Update, sound / ANM manager released,
+    // then Supervisor_Register as at start-up, so the game boots again through logo and loading. The live config and
+    // the other globals (RNG, input words, GM fields) are kept; no th08.cfg write. Port: the window and device stay
+    // (the app applies the window mode), the 1 s sleep and the 60 PeekMessage calls are skipped.
+    pub fn restart(&mut self) -> anyhow::Result<()> {
+        task::clear(self);
+        self.sound_update();
+        self.audio.stop_bgm();
+        for slot in 0..crate::anmmgr::SLOTS {
+            self.anm.unload(&mut self.gfx, slot);
+        }
+        let rng = std::mem::take(&mut self.anm.rng);
+        self.anm = AnmManager::default();
+        self.anm.rng = rng;
+        self.info = Default::default();
+        self.ascii = Default::default();
+        self.skip_counter = 0;
+        // SPEC-GAP: 00 §2 does not say which Supervisor fields Supervisor_Register resets; the scene goes back to boot.
+        self.game.scene = crate::gamemgr::SCENE_BOOT;
+        self.game.requested = crate::gamemgr::SCENE_BOOT;
+        crate::supervisor::register(self)
+    }
+
     // Debug tool. TH08_DRAWLOG: one F record per presented frame, sampled after the draw.
     fn log_frame(&mut self) {
         let recs = self.gfx.take_log();
@@ -247,5 +270,36 @@ impl Ctx {
     pub fn log_to_memory(&mut self) {
         self.drawlog = Some(crate::drawlog::Writer::memory());
         self.gfx.enable_log();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::gamemgr::{SCENE_BOOT, SCENE_MENU};
+
+    fn ctx() -> Option<super::Ctx> {
+        let dir = crate::settings::test_game_dir()?;
+        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
+        let src = crate::assets::Source::native(dir.into());
+        Some(pollster::block_on(super::Ctx::load_with(src, gfx, false)).unwrap())
+    }
+
+    // 00 §2 restart: back to the boot scene, then logo and loading reach the menu again with the live config kept.
+    #[test]
+    fn restart_boots_again() {
+        let Some(mut c) = ctx() else {
+            return;
+        };
+        let to_menu = |c: &mut super::Ctx| {
+            (0..2000)
+                .any(|_| c.run_frame().eq(&super::Flow::Continue) && c.game.scene == SCENE_MENU)
+        };
+        assert!(to_menu(&mut c));
+        c.game.cfg.windowed ^= 1;
+        let mode = c.game.cfg.windowed;
+        c.restart().unwrap();
+        assert_eq!(c.game.scene, SCENE_BOOT);
+        assert!(to_menu(&mut c));
+        assert_eq!(c.game.cfg.windowed, mode);
     }
 }

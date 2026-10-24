@@ -655,6 +655,22 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl105 (RE-Q37 CODE BUG 2, 3, 6, 8–13 + "right" markers): top menu cursor / demo counter / change test from call 9,
+  confirm / cancel from call 19; Option (item 7) sets cursor 0 and first runs at P + 30; delayed switches
+  (`Pending`) now call `set_screen` at the end of the call whose counter runs out (12 §2), so the trace samples the
+  new screen on its first call. Item 2 sets cursor := g_ShotType. Option / key-config idle exit: counter +0xC294 +1
+  at the end of every call, reset only by a non-zero polled word, option tests only from +0x1442C ≥ 4, exit in call
+  3600 (15 §1.3). Replay screen: sub-state 1 from call 8, list moves from call 9, confirm / cancel from call 18
+  (+0x10 > 9); Left / Right paging only with > 15 files and wrapping (`rpy_page`); no recorded stage → error log,
+  scene −1, handler return 0 (menu calc node removed, draw node then draws nothing); the chosen replay is cloned
+  (fixes the gameover_save panic in the replay draw). VM 141's direct pos reset removed (catch-all label does it,
+  12 §2.1). Character-screen cancel: SE 11 + flush, g_ShotType := cursor; screen 15 plays SE 11 twice (12 §2.4).
+  Option return 5 → `Ret::ErrorQuit` → `Ctx::restart` (00 §2): `task::clear`, Sound_Update, BGM stop, ANM manager
+  re-created (g_Rng kept), Supervisor registered again → logo and loading; the app applies the window mode
+  (`device_reset` removed). Tests: `task::clear_all_chains`, `game::restart_boots_again`, `menulist::replay_paging`.
+  SPEC-GAP 70 → 60. Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync; golden draw unchanged
+  (same 8070147, extra 18, identical frames 19799). options_cfg 314 → 1887, musicroom_practice 3095 → 3505,
+  gameover_save panic → 4214, noclip_test1 4284 (full). Questions: `docs/briefs/IMPL105_QUESTIONS.md`.
 - impl104 (RE-Q36 CODE BUG 4–6, 8 + "right" markers): gm+0x3DE28 set at every stage start, reloads included
   (`gamemgr::music_start`: 2 for a spell-practice reload whose 0x4C7670 record flag +0x10 is 0, else 1; step 3 plays
   slot 0 only on 1; `SPELL_BGM` carries the flag, `spell_bgm_restarts`). Pause retry (state 10) stops the music

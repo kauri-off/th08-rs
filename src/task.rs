@@ -167,6 +167,16 @@ pub fn remove_task<C: TaskCtx>(ctx: &mut C, task: &TaskRef<C>) {
     reap(ctx);
 }
 
+// Chain teardown 0x43CE30 at the main loop's exit (00 §2): every node of both chains removed with its on-remove.
+pub fn clear<C: TaskCtx>(ctx: &mut C) {
+    for chain in [Chain::Calc, Chain::Draw] {
+        while !ctx.tasks().list(chain).is_empty() {
+            unlink(ctx, chain, 0);
+        }
+    }
+    reap(ctx);
+}
+
 fn unlink<C: TaskCtx>(ctx: &mut C, chain: Chain, pos: usize) {
     let n = ctx.tasks().list(chain).remove(pos);
     ctx.tasks().dead.push((n.task, chain, n.tag));
@@ -305,6 +315,19 @@ mod tests {
         assert_eq!(run(&mut c, Chain::Calc), Flow::Error);
         assert_eq!(run(&mut c, Chain::Calc), Flow::Continue);
         assert_eq!(c.tasks.priorities(Chain::Calc), [5, 5, 9]);
+    }
+
+    // 00 §2 restart / exit: both chains emptied, every node's on-remove called (calc chain first).
+    #[test]
+    fn clear_all_chains() {
+        let mut c = T::default();
+        add(&mut c, Chain::Calc, 4, 0, s("m", &[])).unwrap();
+        add(&mut c, Chain::Draw, 3, 3, s("n", &[])).unwrap();
+        c.log.clear();
+        clear(&mut c);
+        assert_eq!(c.log.join(" "), "-m0 -n3");
+        assert!(c.tasks.priorities(Chain::Calc).is_empty());
+        assert!(c.tasks.priorities(Chain::Draw).is_empty());
     }
 
     #[test]

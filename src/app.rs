@@ -239,25 +239,27 @@ impl ApplicationHandler<UserEvent> for App {
                             r.ctx.exit_save();
                             return el.exit();
                         }
+                        // Result 2 (00 §2): the program restarts in the live config's mode; this frame has no
+                        // draw and no Present. Port: window mode +0x22 is applied as the port's fullscreen setting.
                         Flow::Error => {
-                            log::error!("calc chain requested error exit");
-                            return el.exit();
+                            if let Err(e) = r.ctx.restart() {
+                                log::error!("restart failed: {e:#}");
+                                return el.exit();
+                            }
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                self.fullscreen = r.ctx.game.cfg.windowed == 0;
+                                r.window.set_fullscreen(
+                                    self.fullscreen.then_some(Fullscreen::Borderless(None)),
+                                );
+                                crate::settings::save_port_cfg(
+                                    "fullscreen",
+                                    if self.fullscreen { "on" } else { "off" },
+                                );
+                            }
+                            r.window.request_redraw();
+                            return;
                         }
-                    }
-                }
-                // Option menu return 5 (15 §1.3): the port has no device to recreate; window mode +0x22 is applied as
-                // the port's fullscreen setting.
-                if std::mem::take(&mut r.ctx.game.device_reset) {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        self.fullscreen = r.ctx.game.cfg.windowed == 0;
-                        r.window.set_fullscreen(
-                            self.fullscreen.then_some(Fullscreen::Borderless(None)),
-                        );
-                        crate::settings::save_port_cfg(
-                            "fullscreen",
-                            if self.fullscreen { "on" } else { "off" },
-                        );
                     }
                 }
                 let size = r.window.inner_size();

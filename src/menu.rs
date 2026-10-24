@@ -49,6 +49,9 @@ const VM_OPTION: usize = 10;
 const OPTION_ITEMS: i32 = 10;
 // Option / key-config idle exit (15 §1.3).
 const IDLE_EXIT: u32 = 3600;
+// Top menu: sub-state 1 from call 9, confirm / cancel from call 19 of each entry (12 §2.2 "Input timing").
+const TOP_INPUT: u32 = 9;
+const TOP_CONFIRM: u32 = 19;
 
 // Key config rows 0–8 (15 §1.3): label and the pad field (file order, +0x00…+0x10) each row edits; Skip is 4th.
 const KEY_ROWS: [(&str, usize); 9] = [
@@ -193,7 +196,7 @@ fn info_files(bits: u32, flags: u32) -> impl Iterator<Item = &'static str> {
 
 // Black-quad alpha byte of notice frame t (16 §4). QUIRK: the fade-in byte starts at 253 and falls (wrapping) before the
 // quad vanishes; the fade-out byte wraps for t < 5980.
-// SPEC-GAP: 16 §4 says the fade-in ends at 23, its formula gives 23 at t = 18 and 10 at t = 19 (formula kept).
+// The fade-in ends at 10 (t = 19), 16 §4.
 fn info_fade_alpha(t: i32) -> Option<u8> {
     if t < 20 {
         Some(((60 - t) * 255 / 20) as u8)
@@ -294,6 +297,8 @@ pub struct MainMenu {
     pub(crate) back: u8,
     // The handler returned 2: MainMenu_Calc runs again in the same frame (12 §2 screen-entry exception).
     pub(crate) again: bool,
+    // The option handler returned 5 (15 §1.3).
+    restart: bool,
     // Config snapshot taken on entering the option screen (12 §2.2 item 7).
     pub(crate) snapshot: Config,
     // Key config working copy of the 9 pad fields (menu +0x14440…+0x14451, file order) and the button found on the
@@ -327,6 +332,7 @@ impl MainMenu {
             pending: None,
             back: 0,
             again: false,
+            restart: false,
             snapshot: Config::default(),
             keys: crate::config::PAD_DEFAULT,
             last_button: -1,
@@ -453,8 +459,27 @@ impl MainMenu {
             self.set_surface(ctx, "title00.png");
             self.interrupt_all(2);
         }
+        // One description VM per item (sprite 21 + i, 12 §2.2). The loader leaves VM 0 running; on the 9th frame the
+        // handler sets +0x08 = −1 and enters sub-state 1, so the change test switches to the cursor's VM (12 §2.2).
+        if self.frames == 0 {
+            self.desc_on = self.desc_first;
+            if self.desc_first {
+                ctx.anm.set_script(&mut self.desc_vm, 0, 9);
+                self.desc_vm.set_sprite(&ctx.anm, 21);
+                self.render_description(ctx, 0);
+            }
+        }
+        // Calls 0–8 are sub-state 0; call 9 enters sub-state 1 (+0x08 := −1, +0x14430 := 0), and cursor, demo counter
+        // and change test run from that call on (12 §2.2 "Input timing"). The port keeps counting `frames` instead of
+        // the original's +0x1442C := 0 in call 9. Option's wait (sub-state 3) runs none of them.
+        // SPEC-GAP: "Input timing" leaves the highlight out of calls 0–8, "Every frame" has it; every call kept.
+        let input = self.frames >= TOP_INPUT && self.pending.is_none();
+        if self.frames == TOP_INPUT {
+            self.prev_cursor = -1;
+            self.idle = 0;
+        }
         // The cursor moves before the highlight, so a press shows in its own frame.
-        if self.frames >= 10 && self.pending.is_none() && self.quitting.is_none() {
+        if input && self.quitting.is_none() {
             let locked: Vec<bool> = (0..ITEMS).map(|i| Self::item_locked(ctx, i)).collect();
             self.move_cursor(ctx, ITEMS as i32, UP, DOWN, |c| !locked[c as usize]);
         }
@@ -467,17 +492,10 @@ impl MainMenu {
                 self.vms[1 + i].color[..3].fill(0xFF);
             }
         }
-        // One description VM per item (sprite 21 + i, 12 §2.2). The loader leaves VM 0 running; on the 9th frame the
-        // handler sets +0x08 = −1 and enters sub-state 1, so the change test switches to the cursor's VM (12 §2.2).
-        if self.frames == 0 {
-            self.desc_on = self.desc_first;
-            if self.desc_first {
-                ctx.anm.set_script(&mut self.desc_vm, 0, 9);
-                self.desc_vm.set_sprite(&ctx.anm, 21);
-                self.render_description(ctx, 0);
-            }
+        if !input {
+            return;
         }
-        if self.frames >= 9 && self.cursor != self.prev_cursor {
+        if self.cursor != self.prev_cursor {
             self.prev_cursor = self.cursor;
             self.desc_first = false;
             self.desc_on = true;
@@ -493,9 +511,6 @@ impl MainMenu {
             if *f >= 60 {
                 ctx.game.request(-1);
             }
-            return;
-        }
-        if self.frames < 10 || self.pending.is_some() {
             return;
         }
         self.idle = if ctx.input.held != 0 {
@@ -521,6 +536,10 @@ impl MainMenu {
                 Err(e) => log::warn!("demorpy{n}.rpy: {e:#}"),
             }
         }
+        // Confirm / cancel only while +0x1442C ≥ 10 after its reset in call 9, i.e. from call 19 (12 §2.2).
+        if self.frames < TOP_CONFIRM {
+            return;
+        }
         // Confirm actions of the 12 §2.2 item table: sfx 10, then a sound flush (Sound_Update in place, 13 §1.3).
         if ctx.input.pressed(CONFIRM) {
             sound::play(sound::OK);
@@ -542,6 +561,7 @@ impl MainMenu {
                     g.flags |= F_SPELL_PRACTICE | F_PRACTICE;
                     self.interrupt_all(5);
                     self.set_screen(SPELL_PRACTICE);
+                    self.cursor = g.shot as i32;
                 }
                 3 => {
                     g.flags.set(g.flags & !F_SPELL_PRACTICE | F_PRACTICE);
@@ -556,9 +576,11 @@ impl MainMenu {
                 5 => g.request(gamemgr::SCENE_RESULT_MENU),
                 6 => g.request(gamemgr::SCENE_MUSIC_ROOM),
                 7 => {
+                    // The in-place MainMenu_Option call adds one to +0x10, so screen 2 first runs on P + 30 (12 §2).
                     self.interrupt_all(5);
+                    self.cursor = 0;
                     self.pending = Some(Pending {
-                        frames: 30,
+                        frames: 29,
                         screen: OPTION,
                         cursor: 0,
                     });
@@ -606,7 +628,7 @@ impl MainMenu {
             }
         }
         // Back from a practice game: 8 → 9 (cursor 0) at once, return 1 (12 §2.2).
-        // SPEC-GAP: 12 §2.2 does not say which parts of the handler run before a +0x6C forward (entry work assumed).
+        // The whole entry block runs before the forward, which skips the counter increments (12 §2.3).
         if self.back != 0 {
             self.set_screen(self.screen + 1);
             self.cursor = 0;
@@ -753,10 +775,14 @@ impl MainMenu {
                 }
             }
         } else if ctx.input.pressed(CANCEL) {
+            // Cancel (12 §2.4): SE 11 + sound flush, g_ShotType := cursor on every character screen.
             sound::play(sound::CANCEL);
+            ctx.sound_update();
+            ctx.game.shot = self.cursor as u8;
             if self.screen == CHAR_SPELL {
-                // Spell practice fades back to the top menu (12 §2.4), cursor 2 (16 §6.1), after 30 frames (12 §2).
-                // SPEC-GAP: 12 §2.4 names no range interrupt for the screen-15 cancel (6 used, as on screen 16).
+                // Screen 15: SE 11 again (the flush restarts the same buffer: one sound), range interrupt 6, top menu
+                // cursor 2 after 30 frames (12 §2.4).
+                sound::play(sound::CANCEL);
                 self.interrupt_all(6);
                 ctx.game.flags &= !F_PRACTICE;
                 self.pending = Some(Pending {
@@ -788,6 +814,16 @@ impl MainMenu {
     // Option screen 2, MainMenu_Option 0x46837B (12 §2.7, 15 §1.3).
     // The cursor is set by the switch that enters it (0 from the top menu, 8 from key config).
     fn option(&mut self, ctx: &mut Ctx) {
+        self.option_run(ctx);
+        // Idle counter +0xC294: += 1 at the end of every call; a switch zeroes it (15 §1.3 idle exit).
+        self.idle = if self.screen == OPTION {
+            self.idle + 1
+        } else {
+            0
+        };
+    }
+
+    fn option_run(&mut self, ctx: &mut Ctx) {
         if self.frames == 0 {
             self.interrupt_all(3);
             self.idle = 0;
@@ -797,17 +833,6 @@ impl MainMenu {
         }
         self.option_values(ctx);
         if self.pending.is_some() {
-            return;
-        }
-        // After 3600 idle frames back to the top menu (15 §1.3).
-        // SPEC-GAP: the idle counter, SE and top cursor of this exit are not given; any input resets it, leaves as Quit.
-        self.idle = if ctx.input.held != 0 {
-            0
-        } else {
-            self.idle + 1
-        };
-        if self.idle >= IDLE_EXIT {
-            self.option_leave(ctx);
             return;
         }
         // The cursor moves from the first call; Left/Right/confirm/cancel from +0x1442C ≥ 4 (12 §2 input start).
@@ -861,6 +886,15 @@ impl MainMenu {
                 }
             }
         }
+        // Idle exit (15 §1.3), from +0x1442C ≥ 4 only: a non-zero polled word g_InputRawCur resets the counter, then
+        // ≥ 3600 leaves as Quit, so the exit comes in call 3600 after the last call with input.
+        if ctx.input.held != 0 {
+            self.idle = 0;
+        }
+        if self.idle >= IDLE_EXIT {
+            self.option_leave(ctx);
+            return;
+        }
         if ctx.input.pressed(CONFIRM) {
             match item {
                 7 => {
@@ -887,22 +921,32 @@ impl MainMenu {
     }
 
     // Leaving the option menu (15 §1.3): SE 11, top cursor 7, screen 0 at once; return 5 when the colour depth or
-    // window mode differs from the snapshot taken on entry (12 §2.2 item 7).
-    // SPEC-GAP: 00 §3 makes calc return 5 an error exit; the port keeps running and only flags the device reset.
+    // window mode differs from the snapshot taken on entry (12 §2.2 item 7); return 5 restarts the program (00 §2).
     fn option_leave(&mut self, ctx: &mut Ctx) {
         sound::play(sound::CANCEL);
         self.set_screen(TOP);
         self.cursor = 7;
         let (a, b) = (&self.snapshot, &ctx.game.cfg);
         if a.colour_mode != b.colour_mode || a.windowed != b.windowed {
-            ctx.game.device_reset = true;
+            self.restart = true;
         }
     }
 
     // Key config, screen 3, MainMenu_KeyConfig 0x469636 (15 §1.3).
     fn key_config(&mut self, ctx: &mut Ctx) {
+        self.key_config_run(ctx);
+        // Idle counter +0xC294 += 1 at the end of every call (15 §1.3 idle exit).
+        self.idle = if self.screen == KEY_CONFIG {
+            self.idle + 1
+        } else {
+            0
+        };
+    }
+
+    fn key_config_run(&mut self, ctx: &mut Ctx) {
         let cfg = &mut ctx.game.cfg;
         // Entry: working copy of the 9 fields; the live Up/Down are −1 while the screen is open.
+        // SPEC-GAP: 15 §1.3 does not say where key-config cursor 0 is set (entry here; option item 8 confirm?).
         if self.frames == 0 {
             self.cursor = 0;
             self.keys = cfg.pad;
@@ -918,18 +962,16 @@ impl MainMenu {
             assign_key(&mut self.keys, self.cursor as usize, b);
             sound::play(sound::OK);
         }
-        // SPEC-GAP: 15 §1.3 does not say whether 0x4C868C is also written (−1) on frames with no button down.
+        // 0x4C868C := scan result every call (15 §1.3; the port's −1 for "none" stands for the original's 32).
         self.last_button = b;
         let cfg = &mut ctx.game.cfg;
         if self.cursor == KEY_SHOT_SLOW && (inp.pressed(LEFT) || inp.pressed(RIGHT)) {
             cfg.shot_slow ^= 1;
         }
-        // SPEC-GAP: "raw input" for the idle exit is taken as the polled word or any raw pad button.
-        self.idle = if inp.held != 0 || inp.pad.buttons != 0 {
-            0
-        } else {
-            self.idle + 1
-        };
+        // Idle exit: only the polled word g_InputRawCur resets the counter, not unmapped pad buttons (15 §1.3).
+        if inp.held != 0 {
+            self.idle = 0;
+        }
         if inp.pressed(CONFIRM) && self.cursor == KEY_RESET {
             sound::play(sound::OK);
             self.keys = crate::config::PAD_DEFAULT;
@@ -1054,7 +1096,7 @@ impl Task<Ctx> for MainMenu {
             crate::menulist::RT_SLOT,
             "resulttext.anm",
         )?;
-        // SPEC-GAP: gauge readout limits are reset on menu load; no spec section names this call.
+        // MainMenu_OnRegister → Ascii_SetupGaugeVms; hidden in the menu, redone at StageStart (12 §5.9).
         let l = crate::player::GaugeLimits::default();
         crate::ascii::gauge_setup(&mut ctx.anm, l.min, l.max);
         for i in 0..VM_COUNT {
@@ -1128,6 +1170,9 @@ impl Task<Ctx> for MainMenu {
         }
         ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
         ctx.anm.unload(&mut ctx.gfx, crate::menulist::RT_SLOT);
+        // The draw node can outlive a calc node removed by return 0 (00 §3.1); it then draws nothing.
+        self.vms.clear();
+        self.desc_on = false;
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
@@ -1137,21 +1182,10 @@ impl Task<Ctx> for MainMenu {
         if ctx.game.menu_loading > 0 {
             return Ret::Next;
         }
-        // Delayed switch: the new screen starts on the frame after the counter ran out.
-        // "+0x10 > 19" is true in the call P + 20 after a press on P, so the new screen first runs on P + 21 (12 §2).
+        // Delayed switch: "+0x10 > 19" is true in the call P + 20 after a press on P, which calls Menu_SetScreen
+        // after the handler's early return; the new screen first runs on P + 21 (12 §2).
         if let Some(p) = &mut self.pending {
-            if p.frames == 0 {
-                let (s, c) = (p.screen, p.cursor);
-                self.pending = None;
-                self.set_screen(s);
-                self.cursor = c;
-                // Top item 7: after 30 frames screen 2, config snapshot saved (12 §2.2).
-                if s == OPTION {
-                    self.snapshot = ctx.game.cfg;
-                }
-            } else {
-                p.frames -= 1;
-            }
+            p.frames = p.frames.saturating_sub(1);
         }
         // A handler that returns 2 makes the chain call this node again at once (00 §3), so the new screen's
         // handler, RunRange and the description VM run a second time in this frame (12 §2 entry exception).
@@ -1164,10 +1198,28 @@ impl Task<Ctx> for MainMenu {
                 CHAR | CHAR_PRACTICE | CHAR_EXTRA | CHAR_SPELL => self.character(ctx),
                 PRACTICE_STAGE => self.practice_stage(ctx),
                 KEY_CONFIG => self.key_config(ctx),
-                REPLAY => self.replay(ctx),
+                // Replay with no recorded stage: the handler returns 0, which removes the menu's calc node (15 §3.8).
+                REPLAY => {
+                    if !self.replay(ctx) {
+                        return Ret::Remove;
+                    }
+                }
                 SPELL_PRACTICE => self.spell_char(ctx),
                 SPELL_CARD => self.spell_card(ctx),
                 _ => {}
+            }
+            // Option left with a changed colour depth / window mode: return 5, the program restarts (15 §1.3, 00 §2).
+            if std::mem::take(&mut self.restart) {
+                return Ret::ErrorQuit;
+            }
+            let left_top = screen == TOP && self.screen != TOP;
+            if let Some(p) = self.pending.take_if(|p| p.frames == 0) {
+                self.set_screen(p.screen);
+                self.cursor = p.cursor;
+                // Top item 7: screen 2 with the config snapshot (12 §2.2).
+                if p.screen == OPTION {
+                    self.snapshot = ctx.game.cfg;
+                }
             }
             if self.screen == screen {
                 self.frames += 1;
@@ -1178,7 +1230,7 @@ impl Task<Ctx> for MainMenu {
                 vm.run(&mut ctx.anm);
             }
             // Leaving the top menu fades the description out (script 9 interrupt 2).
-            if screen == TOP && self.screen != TOP {
+            if left_top {
                 self.desc_vm.pending_interrupt = 2;
             }
             if self.desc_on {
@@ -1193,7 +1245,7 @@ impl Task<Ctx> for MainMenu {
     // Menu draw 0x47087F (12 §2.2): surface 0 on its own earlier node (SURFACE_PRIO), VMs 0–141 in order, the
     // description VM, then the per-screen text and the final-route notice.
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        if ctx.game.menu_loading > 0 {
+        if ctx.game.menu_loading > 0 || self.vms.is_empty() {
             return Ret::Next;
         }
         ctx.gfx.set_viewport(FULLSCREEN);
@@ -1213,12 +1265,7 @@ impl Task<Ctx> for MainMenu {
         if self.desc_on && top && self.quitting.is_none() && self.pending.is_none() {
             ctx.anm.draw(&mut ctx.gfx, &mut self.desc_vm);
         }
-        // A delayed switch whose counter ran out has already set the new screen in the original.
-        let screen = match &self.pending {
-            Some(p) if p.frames == 0 => p.screen,
-            _ => self.screen,
-        };
-        match screen {
+        match self.screen {
             PRACTICE_STAGE => self.practice_stage_draw(ctx),
             REPLAY => self.replay_draw(ctx),
             SPELL_PRACTICE => self.spell_char_draw(ctx),
@@ -1383,7 +1430,7 @@ mod tests {
 }
 
 // Cursor on the difficulty screen: config +0x21, Extra values → Normal (12 §2.3).
-// SPEC-GAP: 12 §2.2 item 0 says "clamp ≤ 3 → 2", 12 §2.3 says "> 3 → 1"; the latter is used.
+// The top menu's > 3 → 2 store is dead; the difficulty entry's > 3 → 1 counts (12 §2.2 item 0, §2.3).
 fn last_difficulty(g: &gamemgr::Game) -> i32 {
     match g.cfg.difficulty as i32 {
         d if d > 3 => 1,

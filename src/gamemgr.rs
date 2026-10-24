@@ -239,8 +239,6 @@ pub struct Game {
     pub lsnm_found: bool,
     // Loading_Begin requested by the result screen (16 §2.1 state 2).
     pub loading_req: bool,
-    // The option menu returned 5: colour or window mode changed, the device is recreated (15 §1.3).
-    pub device_reset: bool,
 }
 
 impl Default for Game {
@@ -303,7 +301,6 @@ impl Default for Game {
             rec_cards: vec![0; crate::scoredat::CARDS],
             lsnm_found: false,
             loading_req: false,
-            device_reset: false,
         }
     }
 }
