@@ -350,20 +350,20 @@ fn popup_alpha(pos: [f32; 2], player: [f32; 3]) -> u8 {
     }
 }
 
-// Popup VMs Ascii +0x2A4 / +0x548 after Ascii_InitVms 0x402450: sprite 0, then AnmVm_Init resets the flags to 7,
-// so the 0x1800 anchor bits ORed in before are lost and the glyphs are centred (QUIRK, 13 §4).
-fn popup_vm(anm: &crate::anmmgr::AnmManager, z: f32) -> AnmVm {
+// Popup VMs Ascii +0x2A4 (sprite 0, 8×8) / +0x548 (sprite 0x88, 8×12) after Ascii_InitVms 0x402450; AnmVm_Init
+// resets the flags to 7, so the 0x1800 anchor bits ORed in before are lost and the glyphs are centred (QUIRK, 13 §4).
+fn popup_vm(anm: &crate::anmmgr::AnmManager, sprite: i32, z: f32) -> AnmVm {
     let mut vm = AnmVm {
         anm_slot: ANM_SLOT as _,
         ..AnmVm::default()
     };
     vm.init();
-    vm.set_sprite(anm, 0);
+    vm.set_sprite(anm, sprite);
     vm.pos[2] = z;
     vm
 }
 
-// Per glyph only the sprite width is copied; the height stays sprite 0's (13 §4).
+// Per glyph only the sprite width is copied; the height stays the init sprite's (13 §4).
 fn popup_glyph(anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm, idx: usize) -> bool {
     let Some(sp) = anm.sprite(ANM_SLOT, idx) else {
         return false;
@@ -377,9 +377,8 @@ fn popup_glyph(anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm, idx: usize) -> b
 fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
     gfx.set_viewport(crate::gfx::PLAYFIELD);
     let pl = crate::effect::with(|e| e.player);
-    let mut small = popup_vm(anm, 0.1);
-    // SPEC-GAP: 13 §4 names the init sprite (sprite 0) only for VM +0x2A4; assumed the same for +0x548.
-    let mut large = popup_vm(anm, 0.0);
+    let mut small = popup_vm(anm, 0, 0.1);
+    let mut large = popup_vm(anm, 0x88, 0.0);
     POPUPS.with_borrow(|p| {
         for q in p.slots.iter().flatten() {
             set_rgb(&mut small, q.colour);

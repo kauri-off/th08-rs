@@ -147,13 +147,13 @@ pub struct Hud {
     night_vm: AnmVm,
     start_clock_vm: AnmVm,
     raster: crate::text::Raster,
-    // +0x1C boss bar alpha 0–255, ±4 per frame (12 §5.1).
+    // +0x1C boss bar alpha (i32) and impl+0x2A40 bar state: 0 off, 1 fading in, 2 shown, 3 fading out (12 §5.1b).
     bar_alpha: i32,
-    bar_shown: bool,
+    bar_state: u8,
     // +0x30 / +0x34 target and displayed life fraction (+0.01 up, −0.02 down per frame).
     bar_target: f32,
     bar_disp: f32,
-    // +0x28 boss timer value last shown; −1 = none yet.
+    // +0x28 raw boss timer value last drawn (12 §5.4); 0 after Hud_Register.
     timer_last: i32,
     // Bonus / message / spell-bonus popups (12 §5.5).
     popups: [Option<ActivePopup>; 3],
@@ -233,10 +233,10 @@ impl Hud {
             start_clock_vm: AnmVm::default(),
             raster: crate::text::Raster::default(),
             bar_alpha: 0,
-            bar_shown: false,
+            bar_state: 0,
             bar_target: 0.0,
             bar_disp: 0.0,
-            timer_last: -1,
+            timer_last: 0,
             popups: [None, None, None],
             clear: None,
             clear_total: 0,
@@ -310,8 +310,13 @@ impl Hud {
         self.load_vm.script_index = -1;
         self.cap_vm.script_index = -1;
         self.tiles_live = 0;
-        // +0x30 := +0x34 := 0 (12 §5.1a).
-        self.enemies.borrow_mut().g.hud_bar_target = 0.0;
+        // +0x2C := 0, impl+0x2A40 := 0, +0x30 := +0x34 := 0 (12 §5.1a).
+        {
+            let mut e = self.enemies.borrow_mut();
+            e.g.hud_boss = false;
+            e.g.hud_bar_target = 0.0;
+        }
+        self.bar_state = 0;
         self.bar_disp = 0.0;
         let kept = KEPT.with_borrow_mut(Option::take).filter(|_| !self.fresh);
         if let Some(k) = kept {
@@ -530,31 +535,27 @@ impl Hud {
         }
     }
 
-    // Boss bar bookkeeping (12 §5.1, §5.4).
-    fn boss_calc(&mut self, anm: &mut AnmManager, dialogue: bool) {
-        let e = self.enemies.borrow();
-        let boss = e.boss(0).map(|i| &e.enemies[i]);
-        let show = e.g.hud_boss && boss.is_some();
-        if show != self.bar_shown {
-            self.bar_shown = show;
-            self.front[12].pending_interrupt = if show { 1 } else { 2 };
-        }
-        self.bar_target = e.g.hud_bar_target;
-        drop(e);
-        self.bar_alpha = if self.bar_shown {
-            (self.bar_alpha + 4).min(255)
-        } else {
-            (self.bar_alpha - 4).max(0)
+    // Hud_Update step 1 (12 §5.1b): boss-bar state machine; the caller skips it while a dialogue runs.
+    fn boss_calc(&mut self) {
+        let (req, target) = {
+            let e = self.enemies.borrow();
+            (e.g.hud_boss, e.g.hud_bar_target)
         };
-        // The life-bar refresh is skipped while a dialogue runs (10 §8.2).
-        if !dialogue {
-            if self.bar_disp < self.bar_target {
-                self.bar_disp = (self.bar_disp + 0.01).min(self.bar_target);
-            } else {
-                self.bar_disp = (self.bar_disp - 0.02).max(self.bar_target);
-            }
-        }
-        let _ = anm;
+        self.bar_target = target;
+        let label = &mut self.front[12];
+        // W: L's wait-for-interrupt flag as left by its run of the previous frame (L runs after this step).
+        let waiting = label.flags & anmvm::F_WAIT_INT != 0;
+        (self.bar_state, self.bar_alpha, self.bar_disp) = bar_step(
+            req,
+            waiting,
+            (
+                self.bar_state,
+                self.bar_alpha,
+                self.bar_disp,
+                self.bar_target,
+            ),
+            &mut label.pending_interrupt,
+        );
     }
 
     // Msg_Draw 0x43542B (10 §7): portrait pairs back-to-front by pos.z, text box, lines, boss card (Draw2DSnap).
@@ -651,9 +652,9 @@ impl Hud {
         }
     }
 
-    // Guarded part of Hud_DrawBoss (12 §5.4): no dialogue, bar requested or fading.
+    // Guarded part of Hud_DrawBoss (12 §5.4): no dialogue, +0x2C (read live) + bar state ≠ 0.
     fn draw_bar(&mut self, ctx: &mut Ctx) {
-        if self.bar_alpha == 0 && !self.bar_shown {
+        if !self.enemies.borrow().g.hud_boss && self.bar_state == 0 {
             return;
         }
         let a = self.bar_alpha as u8;
@@ -693,33 +694,22 @@ impl Hud {
             let c = Self::rgb(0xFFFFFF - (i as u32 * 255 / 9), a);
             Self::bar_quad(gfx, x0, x1, 19.0, 23.0, c, Self::rgb(0x202020, a));
         }
-        // HUD +0x24 as stored by Enemy_CheckTimeout (12 §5.1), shown as min(·, 99).
-        // SPEC-GAP: when the timer is drawn (12 §5.4 has no condition); kept: slot-0 boss with timeout > 0.
-        let secs = e
-            .boss(0)
-            .filter(|&i| e.enemies[i].timeout > 0)
-            .map(|_| e.g.hud_timer.min(99));
+        // Timer (12 §5.4): every guarded draw, HUD +0x24 as stored by Enemy_CheckTimeout, shown as min(·, 99).
+        let raw = e.g.hud_timer;
         drop(e);
         ctx.anm.draw_mode(&mut ctx.gfx, &mut self.front[12], 0);
-        if let Some(s) = secs {
-            let c = match s {
-                20.. => 0xA0D0FF,
-                10..=19 => 0xA080FF,
-                5..=9 => 0xE080C0,
-                _ => 0xFF4040,
-            };
-            ctx.ascii
-                .push(Text::new(384.0, 16.0, format!("{s:02}")).color(Self::rgb(c, a)));
-            // On a change of the shown value: < 3 se_timeout2 (0x26), < 10 se_timeout (0x1D) (12 §5.4).
-            if s != self.timer_last && self.timer_last >= 0 {
-                if s < 3 {
-                    crate::sound::play(crate::sound::TIMEOUT2);
-                } else if s < 10 {
-                    crate::sound::play(crate::sound::TIMEOUT);
-                }
+        let v = raw.min(99);
+        ctx.ascii
+            .push(Text::new(384.0, 16.0, fmt_02d(v)).color(Self::rgb(timer_colour(raw), a)));
+        // Sound on a change of the raw value: v < 3 se_timeout2 (0x26), else v < 10 se_timeout (0x1D).
+        if self.timer_last != raw {
+            if v < 3 {
+                crate::sound::play(crate::sound::TIMEOUT2);
+            } else if v < 10 {
+                crate::sound::play(crate::sound::TIMEOUT);
             }
-            self.timer_last = s;
         }
+        self.timer_last = raw;
         // Popup_LargeStatic (12 §5.4, 13 §4): re-issued every guarded draw, "+0" without children too.
         let g = &ctx.game;
         let e = self.enemies.borrow();
@@ -1078,8 +1068,9 @@ impl Task<Ctx> for Hud {
             }
         }
         // Hud_Update 0x435900, steps 1–7 of 12 §5.1b.
-        let dialogue = self.msg.borrow().active();
-        self.boss_calc(&mut ctx.anm, dialogue);
+        if !self.msg.borrow().active() {
+            self.boss_calc();
+        }
         // Front VMs, stage-title VMs, the stage-start clock, the stage-clear VM, the night clock.
         let anm = &mut ctx.anm;
         for vm in self.front.iter_mut().chain(self.title.iter_mut()) {
@@ -1190,6 +1181,73 @@ impl Task<Ctx> for Hud {
         self.draw_panel(ctx, &st);
         self.draw_popups(ctx);
         Ret::Next
+    }
+}
+
+// Hud_Update step 1 body (12 §5.1b) on (state, alpha, displayed, target); `irq` is the label VM's interrupt.
+fn bar_step(
+    req: bool,
+    waiting: bool,
+    (mut state, mut alpha, mut disp, target): (u8, i32, f32, f32),
+    irq: &mut u16,
+) -> (u8, i32, f32) {
+    if !req {
+        if state != 0 {
+            if state < 3 {
+                *irq = 2;
+                state = 3;
+            }
+            if alpha != 0 {
+                alpha -= 4;
+            }
+            // A fully shown bar (L waiting at its t 30) hides at once, no fade-out.
+            if waiting {
+                state = 0;
+                disp = 0.0;
+                alpha = 0;
+            }
+        }
+    } else if state == 0 {
+        *irq = 1;
+        state = 1;
+        alpha = 0;
+    } else {
+        if waiting {
+            state = 2;
+        }
+        alpha = if (alpha as u32) < 0xFC {
+            alpha + 4
+        } else {
+            0xFF
+        };
+    }
+    // The fill moves only once the bar is shown: +0.01 up, −0.02 down, clamped at the target.
+    if state >= 2 {
+        if disp < target {
+            disp = (disp + 0.01).min(target);
+        } else if disp > target {
+            disp = (disp - 0.02).max(target);
+        }
+    }
+    (state, alpha, disp)
+}
+
+// Timer colour from the unclamped +0x24 (12 §5.4).
+fn timer_colour(raw: i32) -> u32 {
+    match raw {
+        20.. => 0xA0D0FF,
+        10..=19 => 0xA080FF,
+        5..=9 => 0xE080C0,
+        _ => 0xFF4040,
+    }
+}
+
+// C `%.2d`: at least two digits, the sign not counted ("-01").
+fn fmt_02d(v: i32) -> String {
+    if v < 0 {
+        format!("-{:02}", v.unsigned_abs())
+    } else {
+        format!("{v:02}")
     }
 }
 
@@ -1340,5 +1398,51 @@ mod tests {
         assert_eq!(t.ivars[4], 13 + 22);
         assert_eq!(t.pos, [32.0 * 11.0 + 15.5, 32.0 * 13.0 + 15.5, 0.0]);
         assert_eq!(t.uv_off, [352.0 / 512.0, 416.0 / 512.0]);
+    }
+
+    // 12 §5.1b step 1: request → alpha 0, fill frozen until shown; hide while L waits ends at once.
+    #[test]
+    fn boss_bar_states() {
+        let mut irq = 0;
+        let r = bar_step(true, false, (0, 40, 0.0, 1.0), &mut irq);
+        assert_eq!((r, irq), ((1, 0, 0.0), 1));
+        let r = bar_step(true, false, (1, 116, 0.0, 1.0), &mut irq);
+        assert_eq!(r, (1, 120, 0.0));
+        let r = bar_step(true, true, (1, 120, 0.0, 1.0), &mut irq);
+        assert_eq!(r, (2, 124, 0.01));
+        assert_eq!(
+            bar_step(true, true, (2, 0xFC, 0.5, 0.4), &mut irq),
+            (2, 0xFF, 0.48)
+        );
+        irq = 0;
+        assert_eq!(
+            bar_step(false, true, (2, 0xFF, 0.5, 0.4), &mut irq),
+            (0, 0, 0.0)
+        );
+        assert_eq!(irq, 2);
+        assert_eq!(
+            bar_step(false, false, (1, 8, 0.0, 1.0), &mut irq),
+            (3, 4, 0.01)
+        );
+        assert_eq!(
+            bar_step(false, false, (3, 4, 0.0, 1.0), &mut irq),
+            (3, 0, 0.01)
+        );
+        assert_eq!(
+            bar_step(false, false, (0, 0, 0.0, 1.0), &mut irq),
+            (0, 0, 0.0)
+        );
+    }
+
+    // 12 §5.4: %.2d and the colour from the unclamped value.
+    #[test]
+    fn boss_timer_text() {
+        assert_eq!(fmt_02d(7), "07");
+        assert_eq!(fmt_02d(99), "99");
+        assert_eq!(fmt_02d(-1), "-01");
+        assert_eq!(timer_colour(150), 0xA0D0FF);
+        assert_eq!(timer_colour(10), 0xA080FF);
+        assert_eq!(timer_colour(5), 0xE080C0);
+        assert_eq!(timer_colour(-3), 0xFF4040);
     }
 }

@@ -655,6 +655,14 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl100 (RE-Q34 CODE BUG 1–3): large-popup VM +0x548 initialised with sprite 0x88 (12 px glyphs, 13 §4). Boss bar
+  `Hud_Update` step 1 as the 12 §5.1b state machine (`hud::bar_step`: states 0–3 from the label VM's wait flag,
+  alpha := 0 on the request frame, instant hide while the label waits, fill only in state ≥ 2, request = +0x2C alone,
+  whole step skipped during dialogue); `Hud_Load` zeroes +0x2C and the state (12 §5.1a). Timer drawn on every guarded
+  draw (guard reads +0x2C live), colour from the raw +0x24, `%.2d`, sound when +0x28 ≠ +0x24, then +0x28 := +0x24,
+  +0x28 starts at 0 (12 §5.4). SPEC-GAP 108 → 106. Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in
+  sync; golden draw same 97.52 % → 99.87 %, changed 199986 → 10053, missing 255 → 249, extra 2949 → 112, reordered
+  37193 → 30597, identical frames 6074 → 19792; ascii.anm#0 changed 195960 → 6920. No questions.
 - impl97 (RE-Q33 §3 8, 10, 13): darkness mask drawn by `Ascii_DrawPopups` between the small and large popups while
   alpha > 0 — four black `Screen_FillRect` rects around the player plus etama.anm script 105 (scale r / 63) set every
   frame (`ascii::darkness_draw`, 13 §4.1); ECL native 0 stores alpha / radius (`ascii::set_darkness`, 07 §12),
