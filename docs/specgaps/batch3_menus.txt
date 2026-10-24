@@ -1,0 +1,17 @@
+src/menulist.rs:315  // SPEC-GAP: 15 §3.8 "0 after the menu was entered" read as menu creation; the replay screen entry keeps it.
+src/menulist.rs:577  // SPEC-GAP: VM 141's catch-all should reset it to (640, 320); the port's interrupt path misses a case (mopup1).
+src/menulist.rs:1173  // SPEC-GAP: no input start frame in 12 §2.8 / 15 §3.8 (8 used).
+src/menulist.rs:1206  // SPEC-GAP: no recorded stage → error message and scene −1 (15 §3.8) are not done; stage 0 is used.
+src/menulist.rs:1354  // SPEC-GAP: the card-name scratch VM (resulttext sprite 11) under the spell row is not drawn.
+src/menu.rs:136  // SPEC-GAP: 16 §4 lists the per-frame steps without the place of t += 1; here the jump is drawn on its own frame.
+src/menu.rs:196  // SPEC-GAP: 16 §4 says the fade-in ends at 23, its formula gives 23 at t = 18 and 10 at t = 19 (formula kept).
+src/menu.rs:609  // SPEC-GAP: 12 §2.2 does not say which parts of the handler run before a +0x6C forward (entry work assumed).
+src/menu.rs:759  // SPEC-GAP: 12 §2.4 names no range interrupt for the screen-15 cancel (6 used, as on screen 16).
+src/menu.rs:803  // SPEC-GAP: the idle counter, SE and top cursor of this exit are not given; any input resets it, leaves as Quit.
+src/menu.rs:891  // SPEC-GAP: 00 §3 makes calc return 5 an error exit; the port keeps running and only flags the device reset.
+src/menu.rs:921  // SPEC-GAP: 15 §1.3 does not say whether 0x4C868C is also written (−1) on frames with no button down.
+src/menu.rs:927  // SPEC-GAP: "raw input" for the idle exit is taken as the polled word or any raw pad button.
+src/menu.rs:948  // SPEC-GAP: the key-config VMs 43–76 (12 §2.1) have no row/digit layout in the spec; the port prints the rows
+src/menu.rs:1057  // SPEC-GAP: gauge readout limits are reset on menu load; no spec section names this call.
+src/menu.rs:1210  // SPEC-GAP: 12 §2.2 draws it on every screen, but the port's VM misses the fade-out interrupts off the top menu.
+src/menu.rs:1386  // SPEC-GAP: 12 §2.2 item 0 says "clamp ≤ 3 → 2", 12 §2.3 says "> 3 → 1"; the latter is used.
