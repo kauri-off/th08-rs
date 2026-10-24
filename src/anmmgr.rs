@@ -472,14 +472,9 @@ impl AnmManager {
                     return;
                 }
                 let r = self.cam_right;
-                let s2 = cam.project([px + r[0], py + r[1], pz + r[2]], vp);
-                let len = ((s2[0] - s[0]).powi(2) + (s2[1] - s[1]).powi(2)).sqrt();
-                let (hw, hh) = (hw * len, hh * len);
+                let len = length3(sub3(cam.project([px + r[0], py + r[1], pz + r[2]], vp), s));
                 depth = [s[2]; 4];
-                let (sn, cs) = vm.rotation[2].sin_cos();
-                let c = [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
-                    .map(|(dx, dy)| [dx * cs - dy * sn + s[0], dx * sn + dy * cs + s[1]]);
-                (c, false)
+                (billboard_corners(vm, s, len), false)
             }
             // 5 Draw3DQuad 0x464070; the anchor shift uses the absolute half size (05 §12.7).
             5 => {
@@ -504,6 +499,42 @@ impl AnmManager {
             }
             _ => return,
         };
+        self.emit_quad(gfx, vm, spr, corners, depth, snap);
+    }
+
+    // DrawBillboard 0x463CF0 (05 §9 mode 4, 13 §2.6c) from an already projected point `s` and the 3D length `len` of
+    // project(pos + right) − s; list B moves `s` in screen space (callback 0x428310) between the two.
+    pub fn draw_billboard(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, s: [f32; 3], len: f32) {
+        use anmvm::*;
+        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
+            || vm.color[A] == 0
+            || !vm.has_sprite
+        {
+            return;
+        }
+        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+            return;
+        };
+        self.emit_quad(
+            gfx,
+            vm,
+            spr,
+            billboard_corners(vm, s, len),
+            [s[2]; 4],
+            false,
+        );
+    }
+
+    fn emit_quad(
+        &mut self,
+        gfx: &mut Gfx,
+        vm: &AnmVm,
+        spr: SlotSprite,
+        corners: [[f32; 2]; 4],
+        depth: [f32; 4],
+        snap: bool,
+    ) {
+        use anmvm::*;
         // AnmManager_EmitQuad 0x4628B0 (05 §9): global offset, optional snapping, then D3D pixel-centre convention (+0.5) for wgpu.
         let corners = corners.map(|[x, y]| {
             let (mut x, mut y) = (x + self.screen_offset[0], y + self.screen_offset[1]);
@@ -537,5 +568,39 @@ impl AnmManager {
         });
         self.bound_tex = Some(spr.tex);
         gfx.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
+    }
+}
+
+// Billboard corners (05 §9 mode 4, 13 §2.6c): half size ((len·0.5)·sprite_w)·scale.x, rotated by rotation.z about s.
+fn billboard_corners(vm: &AnmVm, s: [f32; 3], len: f32) -> [[f32; 2]; 4] {
+    let hw = ((len * 0.5) * vm.sprite_w) * vm.scale[0];
+    let hh = ((len * 0.5) * vm.sprite_h) * vm.scale[1];
+    let (sn, cs) = vm.rotation[2].sin_cos();
+    [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
+        .map(|(dx, dy)| [dx * cs - dy * sn + s[0], dx * sn + dy * cs + s[1]])
+}
+
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+// Vec3_Length: the projected difference includes the depth (13 §2.6c).
+pub fn length3(a: [f32; 3]) -> f32 {
+    (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 13 §2.6c: half size ((len·0.5)·sprite_w)·scale.x around the projected point, unrotated.
+    #[test]
+    fn billboard_half_size() {
+        let mut vm = AnmVm::default();
+        (vm.sprite_w, vm.sprite_h, vm.scale) = (32.0, 16.0, [2.0, 0.5]);
+        let c = billboard_corners(&vm, [100.0, 50.0, 0.5], 1.5);
+        assert_eq!(c[0], [100.0 - 48.0, 50.0 - 6.0]);
+        assert_eq!(c[3], [100.0 + 48.0, 50.0 + 6.0]);
+        assert_eq!(length3([3.0, 0.0, 4.0]), 5.0);
     }
 }

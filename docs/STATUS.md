@@ -610,6 +610,13 @@
 - impl78 (user report, 2026-10-23): boss orbit squares (effect 13, ECL op 128, 13 §2.6b) drifted off the playfield:
   op 128's target radius d holds f32 bits (96.0 / 128.0) but was converted as an integer (≈ 1.1e9), so the radius
   grew forever. Now read as f32 bits (SPEC-GAP). Questions: `docs/briefs/IMPL78_QUESTIONS.md`.
+- impl93 (RE-Q33 §3 1–3, 6; RE-Q32 §3 7): list-B/C billboards use +0x63C4 = normalise(cross(raw facing, up))
+  (`StageCamera::right`), written only in `Stage_DrawLayer` (stale while the layers are skipped); half size
+  ((len·0.5)·sprite_w)·scale.x with the 3D projected length, no snapping (`AnmManager::draw_billboard`, 13 §2.6c,
+  05 §9 mode 4). `EffInit_Converge` angle R·2π − π (13 §2.6). Ring vertices at z 0 (13 §2.5). Not ported: the
+  `AnmManager_SetRenderState` stage-camera switch that also refreshes +0x63C4 (no render-state cache in the port).
+  Golden 25634, fullrun_noclip 124707, selftest1 1922, demos in sync; golden draw same 88.46 % → 89.79 %, changed
+  867129 → 759669, reordered 429779 → 393333. Questions: `docs/briefs/IMPL93_QUESTIONS.md`.
 - impl91 (RE-Q32 §3 14–15, RE-Q33 §3 4–5): op 88 on another enemy advances the target's stored ip past its next
   instruction before the push (07 §5.4) and pushes at the target's working depth 0x2CEA (`Enemy::work_depth`, written
   back after each context of `Ecl_Run`, 0 on phase-change resets); the main depth stays. Held enemies run the op-128

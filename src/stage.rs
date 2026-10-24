@@ -160,6 +160,13 @@ fn scale(a: Vec3, s: f32) -> Vec3 {
 fn dot(a: Vec3, b: Vec3) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
+fn cross(a: Vec3, b: Vec3) -> Vec3 {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
 fn normalize(a: Vec3) -> Vec3 {
     let l = dot(a, a).sqrt();
     if l == 0.0 { a } else { scale(a, 1.0 / l) }
@@ -223,6 +230,11 @@ impl StageCamera {
 
     pub fn eye(&self) -> Vec3 {
         add(self.v[POS], self.eye_offset)
+    }
+
+    // Stage_SetCamera's +0x63C4 (06 §10.1, 13 §2.6c): normalise(cross(raw facing +0x63A0, up +0x63AC)), not view row 0.
+    pub fn right(&self) -> Vec3 {
+        normalize(cross(self.v[FACING], self.v[UP]))
     }
 
     // Stage_SetCamera 0x40B6D0 (06 §10.1): LookAtLH(eye, pos + facing, up), PerspectiveFovLH(fov, w/h, 30, 1800).
@@ -644,17 +656,11 @@ impl Stage {
             }
         }
         // Port-only hand-off: camera and overlay colour for the effect manager (13 §2.6a, §2.6c).
-        let cam = self.cam.camera(PLAYFIELD);
-        let m = cam.view.0;
-        let right = normalize([m[0][0], m[0][1], m[0][2]]);
-        // Stage_SetCamera's camera-right vector 0x4EA3F4, used by DrawBillboard (05 §9 mode 4).
-        anm.cam_right = right;
         crate::effect::set_view(crate::effect::View {
-            cam: Some(cam),
+            cam: Some(self.cam.camera(PLAYFIELD)),
             pos: self.cam.v[POS],
             eye: self.cam.eye(),
             facing: self.cam.v[FACING],
-            right,
         });
         let overlay = self.overlay.color;
         crate::effect::with(|e| e.overlay = overlay);
@@ -793,6 +799,8 @@ impl Stage {
         let vp = gfx.viewport();
         let cam = self.cam.camera(vp);
         anm.stage_camera = Some(cam);
+        // Only Stage_SetCamera writes 0x4EA3F4: while the layers are skipped it keeps the last drawn frame's value.
+        anm.cam_right = self.cam.right();
         let m = cam.view.0;
         let right = normalize([m[0][0], m[0][1], m[0][2]]);
         // SPEC-GAP: the +0xB24 ≤ 1 condition for collecting sparkle points is not in 06 §11.1.
@@ -1081,6 +1089,16 @@ impl Task<Ctx> for Stage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 13 §2.6c: right = normalise(cross(raw facing, up)), independent of the eye offset.
+    #[test]
+    fn camera_right_from_raw_facing() {
+        let mut c = StageCamera::default();
+        c.v[FACING] = [0.0, 500.0, 300.0];
+        c.v[UP] = [0.0, 0.0, 1.0];
+        c.eye_offset = [40.0, 0.0, 0.0];
+        assert_eq!(c.right(), [1.0, 0.0, 0.0]);
+    }
 
     fn rec(time: i32, op: i16, a: [u32; 3]) -> Record {
         Record { time, op, args: a }

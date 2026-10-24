@@ -1,6 +1,6 @@
 //! Effect manager g_EffectMgr 0x4ECE60 and screen effects ScreenEffect_Register 0x45B8B0 (13 §2–§3).
 
-use crate::anmmgr::AnmManager;
+use crate::anmmgr::{self, AnmManager};
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::game::Ctx;
 use crate::gfx::{Camera, FULLSCREEN, Gfx, PLAYFIELD, Vertex};
@@ -107,14 +107,13 @@ pub struct Effect {
     death_ring: i32,
 }
 
-// Port-only copy of the stage camera (06 §3) for the 3D effects: camera position, eye, facing, right axis.
+// Port-only copy of the stage camera (06 §3) for the 3D effects: camera position, eye, facing.
 #[derive(Clone, Copy, Default)]
 pub struct View {
     pub cam: Option<Camera>,
     pub pos: [f32; 3],
     pub eye: [f32; 3],
     pub facing: [f32; 3],
-    pub right: [f32; 3],
 }
 
 pub struct Effects {
@@ -380,9 +379,10 @@ impl Effects {
                 e.dir = [0.0; 3];
                 e.ring.radius = 0.0;
             }
+            // EffInit_Converge 0x426B20 (13 §2.6): angle = Rng_FloatRange(2π) − π, one draw.
             17 | 18 | 27 => {
                 e.centre = pos;
-                let a = rng.next_f32() * 2.0 * PI;
+                let a = rng.next_f32() * (2.0 * PI) - PI;
                 e.dir = [a.cos(), a.sin(), 0.0];
                 e.life = match kind {
                     17 => 60,
@@ -885,7 +885,8 @@ impl Effects {
             return;
         }
         let Some(cam) = self.view.cam else { return };
-        let right = self.view.right;
+        // 0x4EA3F4 as last written by Stage_SetCamera (this frame's layers 2/3 just before, 13 §2.6c).
+        let right = anm.cam_right;
         let player = self.player;
         for k in 0..self.lists[1].len() {
             let i = self.lists[1][k];
@@ -910,7 +911,7 @@ impl Effects {
                 ],
                 PLAYFIELD,
             );
-            let sc = ((s2[0] - s[0]).powi(2) + (s2[1] - s[1]).powi(2)).sqrt();
+            let len = anmmgr::length3([s2[0] - s[0], s2[1] - s[1], s2[2] - s[2]]);
             // Callback 0x428310 (13 §2.6c): boss pull within 160 px, player push within 88 px; skipped while paused.
             if matches!(e.kind, 51 | 63) && !self.paused {
                 let p = [s[0] + e.disp[0], s[1] + e.disp[1]];
@@ -930,14 +931,7 @@ impl Effects {
                 s[0] += e.disp[0];
                 s[1] += e.disp[1];
             }
-            let (pos, scale) = (e.vm.pos, e.vm.scale);
-            e.vm.pos = s;
-            e.vm.scale = [scale[0] * sc, scale[1] * sc];
-            e.vm.flags |= anmvm::F_SCALE_DIRTY;
-            anm.draw_mode_z(gfx, &mut e.vm, 2, s[2]);
-            e.vm.pos = pos;
-            e.vm.scale = scale;
-            e.vm.flags |= anmvm::F_SCALE_DIRTY;
+            anm.draw_billboard(gfx, &mut e.vm, s, len);
         }
     }
 }
@@ -1000,7 +994,8 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
             point(k + 1, false),
         ];
         let uv = [[u0, vk(k)], [u1, vk(k)], [u0, vk(k + 1)], [u1, vk(k + 1)]];
-        let v = std::array::from_fn(|i| Vertex::screen(p[i][0], p[i][1], 0.07, uv[i], rgba));
+        // Ring vertices are at z 0 (13 §2.5): centre z is 0 for every spawner, ellipse/wavy force 0.
+        let v = std::array::from_fn(|i| Vertex::screen(p[i][0], p[i][1], 0.0, uv[i], rgba));
         gfx.strip(spr.tex, blend, false, v);
     }
 }
@@ -1565,6 +1560,23 @@ mod tests {
         assert!(fx.init(&mut rng, 1.0, i, 35, pos, [1.0, 2.0, 3.0], 0, true));
         let r = fx.fx[i].ring;
         assert_eq!((r.start, r.radius, r.width), (1.0, 2.0, 3.0));
+    }
+
+    // EffInit_Converge (13 §2.6): angle = R·2π − π, so dir lies on the unit circle at that angle.
+    #[test]
+    fn converge_angle_minus_pi() {
+        for kind in [17, 18, 27] {
+            let mut fx = Effects::default();
+            let mut rng = crate::rng::Rng::seeded(0x1234);
+            let mut probe = crate::rng::Rng::seeded(0x1234);
+            let i = fx.spawn_rng(&mut rng, kind, [0.0; 3], 1, 0);
+            // The type's script runs first and may draw; replay exactly as many draws before the init's one.
+            let mut a = 0.0;
+            while probe.state != rng.state {
+                a = probe.next_f32() * (2.0 * PI) - PI;
+            }
+            assert_eq!(fx.fx[i].dir, [a.cos(), a.sin(), 0.0], "type {kind}");
+        }
     }
 
     // 13 §2.2: one 512-slot budget per call; exhausted → dummy and the cursor is back where it started (+ extra).
