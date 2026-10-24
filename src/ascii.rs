@@ -3,7 +3,7 @@
 use crate::anmvm::{self, AnmVm};
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
-use crate::gfx::{Blend, FULLSCREEN, Rect};
+use crate::gfx::{Blend, FULLSCREEN};
 use crate::input::{self, Input};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
@@ -185,7 +185,8 @@ const LARGE_LIFE: f32 = 90.0;
 pub struct Popup {
     pub digits: Vec<u8>,
     pub pos: [f32; 2],
-    pub colour: [u8; 3],
+    // D3DCOLOR 0xAARRGGBB; only RGB is used, the alpha byte is replaced by the distance fade.
+    pub colour: u32,
     pub age: f32,
 }
 
@@ -194,7 +195,7 @@ pub struct Popup {
 pub struct LargePopup {
     pub glyphs: Vec<u8>,
     pub pos: [f32; 2],
-    pub colour: [u8; 4],
+    pub colour: u32,
     pub scale: f32,
     pub age: f32,
 }
@@ -229,10 +230,6 @@ fn digits(value: i32) -> Vec<u8> {
     }
 }
 
-fn argb3(c: u32) -> [u8; 3] {
-    [(c >> 16) as u8, (c >> 8) as u8, c as u8]
-}
-
 // Popup_Number 0x403200: slots 0–719 round robin; pos in playfield coordinates; a negative value shows "PowerUp".
 pub fn popup(pos: [f32; 3], value: i32, colour: u32) {
     POPUPS.with_borrow_mut(|p| {
@@ -241,7 +238,7 @@ pub fn popup(pos: [f32; 3], value: i32, colour: u32) {
         p.slots[i] = Some(Popup {
             digits: digits(value),
             pos: [pos[0] + 32.0, pos[1] + 16.0],
-            colour: argb3(colour),
+            colour,
             age: 0.0,
         });
     });
@@ -255,14 +252,14 @@ pub fn popup_special(pos: [f32; 3], value: i32, colour: u32) {
         p.slots[i] = Some(Popup {
             digits: digits(value),
             pos: [pos[0] + 32.0, pos[1] + 16.0],
-            colour: argb3(colour),
+            colour,
             age: 0.0,
         });
     });
 }
 
 // Large popup glyphs, least significant first: [0xF, p4 digits, 0xE,] p3 digits, 0xD → "+p3" / "+p3(p4)".
-// SPEC-GAP: 13 §4 does not say when the "(p4)" part is added; the port adds it for p4 > 0.
+// The "(p4)" part only when p4 > 0; p3 < 1 is a single '0' (13 §4).
 fn large_glyphs(p3: i32, p4: i32) -> Vec<u8> {
     let mut g = Vec::new();
     if p4 > 0 {
@@ -277,32 +274,30 @@ fn large_glyphs(p3: i32, p4: i32) -> Vec<u8> {
 
 // Popup_Large 0x403460 (life 90); `pos` in playfield coordinates.
 pub fn popup_large(pos: [f32; 3], p3: i32, p4: i32, colour: u32, scale: f32) {
-    let c = colour.to_be_bytes();
     POPUPS.with_borrow_mut(|p| {
         let i = p.large_next;
         p.large_next = (i + 1) % LARGE_SLOTS;
         p.large[i] = Some(LargePopup {
             glyphs: large_glyphs(p3, p4),
             pos: [pos[0] + 32.0, pos[1] + 16.0],
-            colour: [c[1], c[2], c[3], c[0]],
+            colour,
             scale,
             age: 0.0,
         });
     });
 }
 
-// Popup_LargeStatic 0x403600: starts at age 88 (a two-frame display), x += count · 3.5.
+// Popup_LargeStatic 0x403600: starts at age 88 (a two-frame display), x += count · 3.5 (count includes the '+').
 pub fn popup_large_static(pos: [f32; 2], p3: i32, p4: i32, colour: u32) {
-    let c = colour.to_be_bytes();
     let glyphs = large_glyphs(p3, p4);
-    let x = pos[0] + 32.0 + (glyphs.len() + 1) as f32 * 3.5;
+    let x = pos[0] + 32.0 + glyphs.len() as f32 * 3.5;
     POPUPS.with_borrow_mut(|p| {
         let i = p.large_next;
         p.large_next = (i + 1) % LARGE_SLOTS;
         p.large[i] = Some(LargePopup {
             glyphs,
             pos: [x, pos[1] + 16.0],
-            colour: [c[1], c[2], c[3], c[0]],
+            colour,
             scale: 1.0,
             age: 88.0,
         });
@@ -323,7 +318,8 @@ fn popups_calc(gs: f32) {
             if let Some(q) = s {
                 q.pos[1] -= 0.5 * gs;
                 q.age += gs;
-                if q.age >= POPUP_LIFE {
+                // Timer_Greater(60): drawn with ages 0..60 (13 §4).
+                if q.age > POPUP_LIFE {
                     *s = None;
                 }
             }
@@ -340,27 +336,55 @@ fn popups_calc(gs: f32) {
     });
 }
 
-// Popups and the gauge readout are drawn in the playfield viewport (12 §5.3, 13 §4 draw 0x405420).
-fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
+// Squared player distance d (truncated to int) → alpha 0x50 / ramp / 0xD0 (13 §4). The player is in playfield
+// coordinates and the popup in screen coordinates; the origin is not subtracted (QUIRK).
+fn popup_alpha(pos: [f32; 2], player: [f32; 3]) -> u8 {
+    let (dx, dy) = (pos[0] - player[0], pos[1] - player[1]);
+    let d = (dx * dx + dy * dy) as i32;
+    if d <= 1024 {
+        0x50
+    } else if d <= 4096 {
+        (0x50 + (d - 1024) * 128 / 3072) as u8
+    } else {
+        0xD0
+    }
+}
+
+// Popup VMs Ascii +0x2A4 / +0x548 after Ascii_InitVms 0x402450: sprite 0, then AnmVm_Init resets the flags to 7,
+// so the 0x1800 anchor bits ORed in before are lost and the glyphs are centred (QUIRK, 13 §4).
+fn popup_vm(anm: &crate::anmmgr::AnmManager, z: f32) -> AnmVm {
+    let mut vm = AnmVm {
+        anm_slot: ANM_SLOT as _,
+        ..AnmVm::default()
+    };
+    vm.init();
+    vm.set_sprite(anm, 0);
+    vm.pos[2] = z;
+    vm
+}
+
+// Per glyph only the sprite width is copied; the height stays sprite 0's (13 §4).
+fn popup_glyph(anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm, idx: usize) -> bool {
+    let Some(sp) = anm.sprite(ANM_SLOT, idx) else {
+        return false;
+    };
+    vm.sprite_index = idx as i16;
+    vm.sprite_w = sp.w;
+    true
+}
+
+// Ascii_DrawPopups 0x405420 popup part (13 §4): small popups, then large ones, all Draw2DSnap in the playfield viewport.
+fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
     gfx.set_viewport(crate::gfx::PLAYFIELD);
     let pl = crate::effect::with(|e| e.player);
-    let o = anm.screen_offset;
+    let mut small = popup_vm(anm, 0.1);
+    // SPEC-GAP: 13 §4 names the init sprite (sprite 0) only for VM +0x2A4; assumed the same for +0x548.
+    let mut large = popup_vm(anm, 0.0);
     POPUPS.with_borrow(|p| {
-        // Alpha by squared distance to the player (13 §4): ≤ 1024 → 0x50, ramp to 4096, else 0xD0.
-        let fade = |pos: [f32; 2]| {
-            let (dx, dy) = (pos[0] - 32.0 - pl[0], pos[1] - 16.0 - pl[1]);
-            let d = dx * dx + dy * dy;
-            if d <= 1024.0 {
-                0x50
-            } else if d <= 4096.0 {
-                0x50 + ((d - 1024.0) * 128.0 / 3072.0) as i32
-            } else {
-                0xD0
-            }
-        };
         for q in p.slots.iter().flatten() {
-            let alpha = fade(q.pos);
-            // Digit glyph g → sprite g (age < 52), g + 11 (52–55), g + 21 (≥ 56) (13 §4).
+            set_rgb(&mut small, q.colour);
+            small.color[anmvm::A] = popup_alpha(q.pos, pl);
+            // Digit glyph g → sprite g (age < 52), g + 11 (52–55), g + 21 (≥ 56).
             let shift = if q.age < 52.0 {
                 0
             } else if q.age < 56.0 {
@@ -368,38 +392,28 @@ fn popups_draw(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
             } else {
                 21
             };
-            let n = q.digits.len() as f32;
-            let colour = [q.colour[0], q.colour[1], q.colour[2], alpha as u8];
+            // x starts at pos.x − 4·digits, advance 8, most significant (last stored) first.
+            let x0 = q.pos[0] - 4.0 * q.digits.len() as f32;
             for (k, &g) in q.digits.iter().rev().enumerate() {
-                let Some(sp) = anm.sprite(ANM_SLOT, (g + shift) as usize) else {
-                    continue;
-                };
-                let x = q.pos[0] - 4.0 * n + 8.0 * k as f32 + o[0];
-                gfx.sprite(
-                    sp.tex,
-                    Blend::Alpha,
-                    Rect::new(x, q.pos[1] + o[1], sp.w, sp.h),
-                    sp.uv,
-                    colour,
-                );
+                if popup_glyph(anm, &mut small, (g + shift) as usize) {
+                    small.pos[0] = x0 + 8.0 * k as f32;
+                    small.pos[1] = q.pos[1];
+                    anm.draw_mode(gfx, &mut small, 0);
+                }
             }
         }
         for q in p.large.iter().flatten() {
-            let colour = [q.colour[0], q.colour[1], q.colour[2], fade(q.pos) as u8];
-            // x0 = pos.x − count·3.5 (count = glyphs + 1), glyphs from the last stored, advance 7·scale, sprite 0x88 + glyph.
-            let x0 = q.pos[0] - (q.glyphs.len() + 1) as f32 * 3.5 + o[0];
+            set_rgb(&mut large, q.colour);
+            large.color[anmvm::A] = popup_alpha(q.pos, pl);
+            large.scale = [q.scale; 2];
+            // x0 = pos.x − count·3.5 (count = stored glyphs incl. '+', unscaled), advance 7·scale.x, sprite 0x88 + glyph.
+            let x0 = q.pos[0] - q.glyphs.len() as f32 * 3.5;
             for (k, &g) in q.glyphs.iter().rev().enumerate() {
-                let Some(sp) = anm.sprite(ANM_SLOT, 0x88 + g as usize) else {
-                    continue;
-                };
-                let x = x0 + 7.0 * q.scale * k as f32;
-                gfx.sprite(
-                    sp.tex,
-                    Blend::Alpha,
-                    Rect::new(x, q.pos[1] + o[1], sp.w * q.scale, sp.h * q.scale),
-                    sp.uv,
-                    colour,
-                );
+                if popup_glyph(anm, &mut large, 0x88 + g as usize) {
+                    large.pos[0] = x0 + 7.0 * q.scale * k as f32;
+                    large.pos[1] = q.pos[1];
+                    anm.draw_mode(gfx, &mut large, 0);
+                }
             }
         }
     });
@@ -1196,7 +1210,7 @@ impl Task<Ctx> for AsciiManager {
             }
         }
         if !high {
-            popups_draw(&ctx.anm, &mut ctx.gfx);
+            popups_draw(&mut ctx.anm, &mut ctx.gfx);
             // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
             ctx.anm.screen_offset = [0.0; 2];
             gauge_draw(&mut ctx.anm, &mut ctx.gfx, &ctx.game.stats);
@@ -1239,12 +1253,25 @@ mod tests {
         assert_eq!(digits(-1), vec![10]);
         clear_popups();
         popup([100.0, 200.0, 0.0], 500, 0xFFFFFFFF);
-        for _ in 0..59 {
+        for _ in 0..60 {
             popups_calc(1.0);
         }
         let y = POPUPS.with_borrow(|p| p.slots[0].as_ref().map(|q| q.pos[1]));
-        assert_eq!(y, Some(216.0 - 29.5));
+        assert_eq!(y, Some(216.0 - 30.0));
         popups_calc(1.0);
         assert!(POPUPS.with_borrow(|p| p.slots[0].is_none()));
+    }
+
+    // 13 §4: fade by squared distance, screen pos vs playfield player (no origin correction).
+    #[test]
+    fn popup_fade_and_large_count() {
+        assert_eq!(popup_alpha([132.0, 216.0], [100.0, 216.0, 0.0]), 0x50);
+        assert_eq!(popup_alpha([164.0, 216.0], [100.0, 216.0, 0.0]), 0xD0);
+        assert_eq!(
+            popup_alpha([148.0, 216.0], [100.0, 216.0, 0.0]),
+            (0x50 + 1280 * 128 / 3072) as u8
+        );
+        assert_eq!(large_glyphs(1, 0).len(), 2);
+        assert_eq!(large_glyphs(12, 3), vec![0xF, 3, 0xE, 2, 1, 0xD]);
     }
 }

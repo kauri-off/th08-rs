@@ -302,7 +302,8 @@ impl Gui {
                 stamp(anm, gfx, x + 7.0 * k as f32, c / div % 10);
             }
         }
-        x += 21.0 + 13.0;
+        // Two advances between the three slots, none after the units; then x += 13 (12 §5.8).
+        x += 14.0 + 13.0;
         let a = attempts.min(999);
         for (k, div) in [100, 10, 1].into_iter().enumerate() {
             if a >= div || div == 1 || (div == 10 && hundreds) {

@@ -501,6 +501,19 @@ impl ScoreDat {
             .max(100_000)
     }
 
+    // ScoreDat_GetHiscore 4th argument: continues byte +0x26 of the top entry of (shot, difficulty), 0 when there is
+    // none; of equal scores the later file entry is on top (15 §2.3).
+    pub fn hiscore_continues(&self, shot: usize, diff: usize) -> u8 {
+        self.hscr
+            .iter()
+            .filter(|h| h.shot() == shot && h.difficulty() == diff)
+            .fold(None, |top: Option<&Hscr>, h| match top {
+                Some(t) if t.score() > h.score() => Some(t),
+                _ => Some(h),
+            })
+            .map_or(0, Hscr::continues)
+    }
+
     // One ranking list [diff][shot] as it stands in memory (15 §2.3): `hscr` holds the list's stored entries in list
     // order, each one above the default rows of equal score.
     pub fn ranking(&self, shot: usize, diff: usize) -> Vec<Hscr> {
@@ -766,6 +779,21 @@ pub fn storage_list(prefix: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 15 §2.3: the continues digit comes from the top entry; equal scores → the later file entry.
+    #[test]
+    fn hiscore_continues_top_entry() {
+        let mut s = ScoreDat::default();
+        assert_eq!(s.hiscore_continues(0, 1), 0);
+        for (score, cont) in [(300, 1), (500, 2), (500, 3), (400, 4)] {
+            let mut h = Hscr::new();
+            h.set(score, 0, 1, 1, b"A", "10/24");
+            h.0[0x26] = cont;
+            s.hscr.push(h);
+        }
+        assert_eq!(s.hiscore_continues(0, 1), 3);
+        assert_eq!(s.hiscore_continues(1, 1), 0);
+    }
 
     #[test]
     fn round_trip() {

@@ -627,6 +627,15 @@
   `Hud_DrawBoss` (12 §5.4). Golden 25634, fullrun_noclip 124707, selftest1 1922, demos in sync; golden draw same
   92.16 % → 92.51 %, changed 571287 → 571165, missing 62209 → 33907, extra 4232501 → 4204288, reordered 380593 →
   379188 (capture.anm and loading00.anm now fully same). Questions: `docs/briefs/IMPL95_QUESTIONS.md`.
+- impl96 (RE-Q32 §3 2–3, RE-Q33 §3 9): small/large score popups drawn through ascii VMs (`popup_vm`, sprite 0, flags 7
+  after `AnmVm_Init`, so centred) with `Draw2DSnap`, small at z 0.1, large at z 0, per glyph only the sprite width
+  copied; colour via the VM (BGRA) and global tint; alpha from the int squared distance between screen popup pos and
+  playfield player pos (no origin correction); small popups freed at age > 60; large x0 = pos.x − 3.5·(stored glyphs
+  incl. '+'), `Popup_LargeStatic` x += 3.5·count (13 §4). Score row (y 56) queued before the hiscore row (y 40)
+  (12 §5.3); stats+0x18 from the top HSCR entry's continues byte (`ScoreDat::hiscore_continues`, 11 §5, 15 §2.3).
+  Bonus line: no advance after the captures units digit (12 §5.8). Golden 25634, fullrun_noclip 124707, selftest1
+  1922, demos 0–3 in sync; golden draw same 92.51 % → 96.80 %, changed 571165 → 229112, missing 33907 → 29647, extra
+  4204288 → 4160688, reordered 379188 → 38029. Questions: `docs/briefs/IMPL96_QUESTIONS.md`.
 - impl93 (RE-Q33 §3 1–3, 6; RE-Q32 §3 7): list-B/C billboards use +0x63C4 = normalise(cross(raw facing, up))
   (`StageCamera::right`), written only in `Stage_DrawLayer` (stale while the layers are skipped); half size
   ((len·0.5)·sprite_w)·scale.x with the 3D projected length, no snapping (`AnmManager::draw_billboard`, 13 §2.6c,

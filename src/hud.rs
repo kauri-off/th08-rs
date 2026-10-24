@@ -921,6 +921,13 @@ impl Hud {
         }
         anm.draw_mode(gfx, &mut self.diff_vm, 0);
         let q = &mut ctx.ascii;
+        // Score row (y 56) queued before the hiscore row (y 40) (12 §5.3 step 6).
+        q.push(Text::new(
+            488.0,
+            56.0,
+            format!("{:09}", st.score_disp.min(999_999_999)),
+        ));
+        q.push(Text::new(605.0, 56.0, format!("{}", st.continues.min(9))));
         q.push(Text::new(
             488.0,
             40.0,
@@ -931,12 +938,6 @@ impl Hud {
             40.0,
             format!("{}", st.hiscore_cont.min(9)),
         ));
-        q.push(Text::new(
-            488.0,
-            56.0,
-            format!("{:09}", st.score_disp.min(999_999_999)),
-        ));
-        q.push(Text::new(605.0, 56.0, format!("{}", st.continues.min(9))));
         for (row, n, vm) in [(88.0, st.lives as i32, 10), (104.0, st.bombs as i32, 11)] {
             for i in 0..n.clamp(0, 8) {
                 let v = &mut self.front[vm];

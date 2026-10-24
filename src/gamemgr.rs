@@ -681,6 +681,8 @@ impl GameManager {
         // GameMgr_LoadScoreData: flush (Result mode 2), hiscore, practice play count, CATK backup.
         g.save_score(rng, true);
         let shot = g.shot as usize % 12;
+        // Hiscore-continues digit stats+0x18 from the top HSCR entry, also in practice (11 §5, 15 §2.3).
+        st.hiscore_cont = g.score.hiscore_continues(shot, d);
         if g.practice() && !g.spell_practice() {
             let counts = g.counts_plays();
             let p = &mut g.score.pscr[shot];
