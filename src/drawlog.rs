@@ -20,6 +20,39 @@ pub fn num(v: f32, dec: usize) -> String {
     if s == "-0" { "0".into() } else { s }
 }
 
+// C `printf("%g")` (6 significant digits, trailing zeros removed), as the probe prints fog start / end (FORMAT.md §2).
+pub fn num_g(v: f32) -> String {
+    let v = v as f64;
+    if !v.is_finite() {
+        return if v.is_nan() {
+            "nan".into()
+        } else if v > 0.0 {
+            "inf".into()
+        } else {
+            "-inf".into()
+        };
+    }
+    if v == 0.0 {
+        return if v.is_sign_negative() { "-0" } else { "0" }.into();
+    }
+    let sci = format!("{v:.5e}");
+    let (mant, exp) = sci.split_once('e').unwrap();
+    let exp: i32 = exp.parse().unwrap();
+    let strip = |s: &str| {
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            s.to_string()
+        }
+    };
+    if !(-4..6).contains(&exp) {
+        let sign = if exp < 0 { '-' } else { '+' };
+        format!("{}e{sign}{:02}", strip(mant), exp.abs())
+    } else {
+        strip(&format!("{v:.*}", (5 - exp) as usize))
+    }
+}
+
 fn argb(c: [u8; 4]) -> u32 {
     u32::from_be_bytes([c[3], c[0], c[1], c[2]])
 }
@@ -84,7 +117,7 @@ pub fn format_frame(h: &Header, recs: &[LogRec]) -> String {
                 );
                 if let Some(f) = fog {
                     let c = argb([f.color[0], f.color[1], f.color[2], 255]);
-                    let _ = write!(sl, " fog={c:08x},{},{}", num(f.start, 2), num(f.end, 2));
+                    let _ = write!(sl, " fog={c:08x},{},{}", num_g(f.start), num_g(f.end));
                 }
                 set(&mut body, &mut t, tl);
                 set(&mut body, &mut s, sl);
@@ -676,6 +709,10 @@ pub struct LabelDiff {
     pub extra: usize,
     pub changed: usize,
     pub why: [usize; 6],
+    // Port quads beyond a reference batch cut at 682 quads (FORMAT.md §3): not counted as extra.
+    pub truncated: usize,
+    // Port side-panel quads the reference did not repaint (PARITY_POLICY, RE-Q32 CODE BUG 1): not counted as extra.
+    pub accepted: usize,
 }
 
 impl LabelDiff {
@@ -684,6 +721,8 @@ impl LabelDiff {
         self.missing += o.missing;
         self.extra += o.extra;
         self.changed += o.changed;
+        self.truncated += o.truncated;
+        self.accepted += o.accepted;
         for k in 0..6 {
             self.why[k] += o.why[k];
         }
@@ -703,6 +742,8 @@ pub struct FrameDiff {
     pub sprites_extra: Vec<SpriteKey>,
     pub other_missing: Vec<String>,
     pub other_extra: Vec<String>,
+    // `P list 4` markers in the reference frame: batches the probe cut at 682 quads (FORMAT.md §3).
+    pub cuts: usize,
 }
 
 impl FrameDiff {
@@ -721,6 +762,13 @@ impl FrameDiff {
             "quads ref {} port {}: same {} changed {} missing {} extra {} reordered {}",
             self.ref_quads, self.port_quads, t.same, t.changed, t.missing, t.extra, self.reordered
         );
+        if t.truncated + t.accepted > 0 {
+            let _ = write!(
+                s,
+                " [ref truncated {}, accepted {}]",
+                t.truncated, t.accepted
+            );
+        }
         if t.why.iter().any(|&x| x > 0) {
             s.push_str(" (");
             s.push_str(&why_str(&t.why));
@@ -816,6 +864,28 @@ fn in_playfield(q: &[Vtx; 4]) -> bool {
     x1 > PLAYFIELD[0] && x0 < PLAYFIELD[2] && y1 > PLAYFIELD[1] && y0 < PLAYFIELD[3]
 }
 
+// The probe's 4 leftover vertices of a sprite batch cut at 682 quads (FORMAT.md §3).
+fn is_cut(kind: &str, v: &[Vtx]) -> bool {
+    kind == "list" && v.len() == 4
+}
+
+// Side panel repaint (PARITY_POLICY): the reference repaints the panel only for dirty rows (12 §5.3), the port
+// every gameplay frame; unmatched full-screen-viewport port quads that cover no playfield pixel are accepted.
+// Coverage by pixel centres (§3: centres on integers), so a tile edge at 415.5 does not reach playfield pixel 415.
+fn panel_repaint(fr: &Frame, p: &Prim, q: &[Vtx; 4]) -> bool {
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for v in q {
+        x0 = x0.min(v.x);
+        x1 = x1.max(v.x);
+        y0 = y0.min(v.y);
+        y1 = y1.max(v.y);
+    }
+    let [px0, py0, px1, py1] = PLAYFIELD;
+    fr.scene == 2
+        && p.vp == [0.0, 0.0, 640.0, 480.0]
+        && (x1 <= px0 || x0 >= px1 - 0.5 || y1 <= py0 || y0 >= py1 - 0.5)
+}
+
 // Comparable quads of a frame (strips split into quads); clears, copies and other polygons go to `others` as text.
 fn items<'a>(fr: &'a Frame, o: &Opts, others: &mut Vec<String>) -> Vec<Item<'a>> {
     let mut out = Vec::new();
@@ -843,6 +913,7 @@ fn items<'a>(fr: &'a Frame, o: &Opts, others: &mut Vec<String>) -> Vec<Item<'a>>
                     push(p, [v[i], v[i + 1], v[i + 2], v[i + 3]], &mut out);
                 }
             }
+            Kind::Poly(k, v) if is_cut(k, v) => {}
             Kind::Poly(k, v) => others.push(format!("P {k} {} ({})", v.len(), p.tex)),
             Kind::Clear(w, c) => {
                 let vp = format!("{} {} {} {}", p.vp[0], p.vp[1], p.vp[2], p.vp[3]);
@@ -936,9 +1007,16 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
     let (mut ro, mut po) = (Vec::new(), Vec::new());
     let ri = items(r, o, &mut ro);
     let pi = items(p, o, &mut po);
+    let cuts: Vec<(&str, &str)> = r
+        .prims
+        .iter()
+        .filter(|p| matches!(&p.kind, Kind::Poly(k, v) if is_cut(k, v)))
+        .map(|p| (&*p.tex, &*p.state))
+        .collect();
     let mut d = FrameDiff {
         ref_quads: ri.len(),
         port_quads: pi.len(),
+        cuts: cuts.len(),
         ..Default::default()
     };
     let mut rmatch: Vec<Option<usize>> = vec![None; ri.len()];
@@ -1025,6 +1103,9 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
     for (j, it) in pi.iter().enumerate() {
         let l = d.by_label.entry(it.prim.tex.clone()).or_default();
         match pmatch[j] {
+            // The cut part of a batch is not identified: any unmatched port quad with a cut batch's texture and state.
+            None if cuts.contains(&(&*it.prim.tex, &*it.prim.state)) => l.truncated += 1,
+            None if panel_repaint(p, it.prim, &it.q) => l.accepted += 1,
             None => l.extra += 1,
             Some((_, w)) => {
                 if w & !D_HIDDEN == 0 {
@@ -1116,6 +1197,9 @@ pub struct Report {
     pub ref_sprites: BTreeMap<(String, [i32; 4]), (i64, usize)>,
     pub port_sprites: BTreeMap<(String, [i32; 4]), (i64, usize)>,
     pub worst_n: usize,
+    // Frames with a reference batch cut / with accepted panel quads.
+    pub cut_frames: usize,
+    pub accepted_frames: usize,
     // (ref present, port present, ref game frame, score) of every compared frame.
     pub pairs: Vec<(i64, i64, i64, usize)>,
 }
@@ -1145,6 +1229,8 @@ impl Report {
             self.identical += 1;
         }
         self.total.add(&d.total);
+        self.cut_frames += (d.cuts > 0) as usize;
+        self.accepted_frames += (d.total.accepted > 0) as usize;
         self.reordered += d.reordered;
         self.ref_quads += d.ref_quads;
         for (l, x) in &d.by_label {
@@ -1221,6 +1307,30 @@ impl Report {
         );
         if t.why.iter().any(|&x| x > 0) {
             let _ = writeln!(s, "changed by: {}", why_str(&t.why));
+        }
+        let _ = writeln!(
+            s,
+            "reference truncated (FORMAT.md §3): {} frames with a 682-quad cut, {} port quads beyond the cut\n\
+             accepted (PARITY_POLICY, side-panel repaint, RE-Q32 CODE BUG 1): {} port quads in {} frames\n\
+             extra incl. truncated + accepted: {}",
+            self.cut_frames,
+            t.truncated,
+            t.accepted,
+            self.accepted_frames,
+            t.extra + t.truncated + t.accepted
+        );
+        let mut acc: Vec<_> = self
+            .by_label
+            .iter()
+            .filter(|(_, d)| d.accepted + d.truncated > 0)
+            .collect();
+        acc.sort_by_key(|(_, d)| std::cmp::Reverse(d.accepted + d.truncated));
+        for (l, d) in acc {
+            let _ = writeln!(
+                s,
+                "  {l:24} accepted {:7} truncated {:7}",
+                d.accepted, d.truncated
+            );
         }
         match &self.first {
             Some(n) => {
@@ -1572,6 +1682,25 @@ mod tests {
     use super::*;
     use crate::gfx::{LogTex, Rect};
 
+    // FORMAT.md §2 fog: C %g, 6 significant digits.
+    #[test]
+    fn fog_num_like_printf_g() {
+        let cases = [
+            (294.58334, "294.583"),
+            (1800.0, "1800"),
+            (0.5, "0.5"),
+            (1234567.0, "1.23457e+06"),
+            (0.0001, "0.0001"),
+            (0.00001, "1e-05"),
+            (-12.25, "-12.25"),
+            (999999.6, "1e+06"),
+            (0.0, "0"),
+        ];
+        for (v, s) in cases {
+            assert_eq!(num_g(v), s, "{v}");
+        }
+    }
+
     // Current match level per reference (raise as differences get fixed): (identical frames, % same quads).
     const MENU_BASE: (usize, f64) = (1930, 73.9);
     const MENU_CLR: (usize, f64) = (900, 97.7);
@@ -1644,6 +1773,30 @@ mod tests {
         assert_eq!(f[0].prims.len(), 2);
         let d = diff_frame(&f[0], &f[0], &Opts { playfield: false });
         assert_eq!((d.score(), d.total.same), (0, 2));
+    }
+
+    // FORMAT.md §3 cut batches and the accepted side-panel repaint are reported apart from extra quads.
+    #[test]
+    fn cut_batch_and_panel_repaint_not_extra() {
+        let st = "T etama.anm#0 256 256\nS blend=alpha atest=ge4 ztest=always zwrite=0 c=tex*col a=tex*col\nV 0 0 640 480\n";
+        let r = |x: i32| format!("R {x} 100 {} 116 0 0 0.0625 0.0625 ffffffff\n", x + 16);
+        let cut = "P list 4 0 0 0 1 0 0 ffffffff 0 0 0 1 0 0 ffffffff 0 0 0 1 0 0 ffffffff 0 0 0 1 0 0 ffffffff\n";
+        let rtext = format!("F 1 2 1 1 -1 0 0 2\n{st}{}{}{cut}", r(100), r(140));
+        let ptext = format!(
+            "F 1 2 1 1 -1 0 0 4\n{st}{}{}{}T front.anm#0 256 256\n{}",
+            r(100),
+            r(140),
+            r(180),
+            r(500)
+        );
+        let (rf, pf) = (parse_str(&rtext), parse_str(&ptext));
+        let d = diff_frame(&rf[0], &pf[0], &Opts { playfield: false });
+        let t = &d.total;
+        assert_eq!(
+            (t.same, t.extra, t.truncated, t.accepted, d.cuts),
+            (2, 0, 1, 1, 1)
+        );
+        assert_eq!(d.score(), 0);
     }
 
     fn menu(name: &str, clr: bool, min: (usize, f64)) {

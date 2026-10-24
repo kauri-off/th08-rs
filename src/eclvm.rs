@@ -489,12 +489,23 @@ impl Exec<'_> {
         }
     }
 
-    // Destination read of an in-place float op (07 §6 `Ecl_FloatVarRef`): 10042–10044 are the pos, not the final pos.
-    fn af_dst(&mut self, t: &Thread, ins: &Ins, k: usize) -> f32 {
-        let raw = f32::from_bits(self.raw(ins, k)) as i32;
-        match flt_ref(raw).filter(|_| ins.mask & (1 << k) != 0) {
+    // Destination read of an in-place int op (07 §6 `Ecl_IntVarRef` 0x41FE10): through the reference, never the
+    // getter; anything but a writable int variable reads the instruction's own argument slot (e.g. 10042–10044).
+    fn ai_dst(&self, t: &Thread, ins: &Ins, k: usize) -> i32 {
+        let raw = self.raw(ins, k) as i32;
+        match int_ref(raw).filter(|_| ins.mask & (1 << k) != 0) {
+            Some(r) => read_i(self.m, self.e, &t.ctx, &r),
+            None => raw,
+        }
+    }
+
+    // Destination read of an in-place float op (07 §6 `Ecl_FloatVarRef` 0x420950): 10042–10044 are the pos, not the
+    // final pos; anything but a writable float variable reads the argument slot.
+    fn af_dst(&self, t: &Thread, ins: &Ins, k: usize) -> f32 {
+        let bits = self.raw(ins, k);
+        match flt_ref(f32::from_bits(bits) as i32).filter(|_| ins.mask & (1 << k) != 0) {
             Some(r) => read_f(self.m, self.e, &t.ctx, &r),
-            None => self.af(t, ins, k),
+            None => f32::from_bits(bits),
         }
     }
 
@@ -1437,7 +1448,7 @@ impl Exec<'_> {
             }
             4 => return self.jump(t, ins, 0),
             5 => {
-                let c = self.ai(t, ins, 2) - 1;
+                let c = self.ai_dst(t, ins, 2).wrapping_sub(1);
                 self.set_i(t, ins, 2, c);
                 if c > 0 {
                     return self.jump(t, ins, 0);
@@ -1472,7 +1483,7 @@ impl Exec<'_> {
             }
             10..=14 | 20..=24 => {
                 let (a, b) = if op < 20 {
-                    (self.ai(t, ins, 0), self.ai(t, ins, 1))
+                    (self.ai_dst(t, ins, 0), self.ai(t, ins, 1))
                 } else {
                     (self.ai(t, ins, 1), self.ai(t, ins, 2))
                 };
@@ -1502,7 +1513,7 @@ impl Exec<'_> {
                 self.set_f(t, ins, 0, v);
             }
             30 | 31 => {
-                let a = self.ai(t, ins, 0);
+                let a = self.ai_dst(t, ins, 0);
                 self.set_i(
                     t,
                     ins,
@@ -2789,6 +2800,32 @@ mod tests {
         let mut v = ins(time, op, args);
         v[10..12].copy_from_slice(&mask.to_le_bytes());
         v
+    }
+
+    // 07 §6 in-place ops: the destination is read and written through the reference; a non-int destination
+    // (10042–10044) and an int variable under a float op use the instruction's own argument slot.
+    #[test]
+    fn in_place_ops_use_reference() {
+        let iadd = ins_v(0, 10, 1, &[10042, 5]);
+        let inc = ins_v(0, 30, 1, &[10043]);
+        let fadd = ins_v(
+            0,
+            15,
+            1,
+            &[10000.0f32.to_bits() as i32, 2.0f32.to_bits() as i32],
+        );
+        let iadd_ctx = ins_v(0, 10, 1, &[10000, 3]);
+        let (mut anm, mut m) = manager(&[&[iadd, inc, fadd, iadd_ctx]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].main.ctx.set_int(V_INT0, 4);
+        (m.enemies[0].pos, m.enemies[0].pos_offset) = ([7.0, 8.0, 0.0], [93.0, 92.0, 0.0]);
+        ecl_run(&mut m, &mut anm, 0);
+        let i = |o: usize| m.ecl.ins(m.ecl.subs[0] + o).unwrap();
+        assert_eq!(m.ecl.arg(&i(0), 0) as i32, 10047);
+        assert_eq!(m.ecl.arg(&i(20), 0) as i32, 10044);
+        assert_eq!(f32::from_bits(m.ecl.arg(&i(36), 0)), 10002.0);
+        assert_eq!(m.enemies[0].pos, [7.0, 8.0, 0.0]);
+        assert_eq!(m.enemies[0].main.ctx.int(V_INT0), 7);
     }
 
     // 07 §7 ops 86 / 87: one getter call (one RNG draw for 10082 / 10032), on self or another boss.

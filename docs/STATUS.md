@@ -645,6 +645,16 @@
   same 97.03 % → 97.45 %, changed 221433 → 205914, missing 18823 → 255, extra 4161309 → 4157187, reordered 37207 →
   37193; `-` group same 5191 → 39039, missing 18610 → 42, extra 28772 → 24650, changed 16375 → 1095.
   Questions: `docs/briefs/IMPL98_QUESTIONS.md`.
+- impl99 (RE-Q32 §3 16–17): in-place int ops (5, 10–14, 30/31) read the destination through the int reference
+  (`Exec::ai_dst`), in-place float ops (15–19, 37) through the float reference (`Exec::af_dst`); any other
+  destination reads the instruction's own argument slot, never the getter (07 §6). Draw-log fog start/end printed like
+  C `%g` (`drawlog::num_g`, FORMAT.md §2). Comparator: unmatched port quads with the texture/state of a reference
+  batch cut at 682 quads (`P list 4`) count as "reference truncated", the marker is not an "other" record; unmatched
+  full-viewport gameplay quads covering no playfield pixel count as "accepted" (side-panel repaint, PARITY_POLICY);
+  both are listed apart and excluded from extra / frame score (FORMAT.md §3). Golden 25634, fullrun_noclip 124707,
+  selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
+  extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
+  and truncated quads are scored).
 - impl97 (RE-Q33 §3 8, 10, 13): darkness mask drawn by `Ascii_DrawPopups` between the small and large popups while
   alpha > 0 — four black `Screen_FillRect` rects around the player plus etama.anm script 105 (scale r / 63) set every
   frame (`ascii::darkness_draw`, 13 §4.1); ECL native 0 stores alpha / radius (`ascii::set_darkness`, 07 §12),
