@@ -618,6 +618,15 @@
   zeroes 0x4E3D28 first, then `Spell_HideName` when the card was active (07 §11.1, 12 §5.8). SPEC-GAP 105 → 105.
   Golden 25634, fullrun_noclip 124707, selftest1 1922, demos in sync; golden draw same 89.79 % → 92.16 %, changed
   759669 → 571287, missing 65046 → 62209, extra 4667780 → 4232501, reordered 393333 → 380593. No questions.
+- impl95 (RE-Q32 §3 9, 12): msg op 9 on stages 1–5 starts VM impl+0x3778 (loadingNN script 0, Draw2DSnap), the
+  capture VM impl+0x3CC0 (capture.anm script 1) and the 8 ghosts (script 2, I4 = 4k + 3, alpha 64 − 2k, Draw3DQuad),
+  run/drawn while +0x398C ≥ 0; the playfield capture is copied after the next Present (10 §9, 12 §3, §5.1b, §5.4).
+  `Stage::hud_cover` = FUN_00437d87 (+0x398C ≥ 0 and VM +0x3778 waiting for an interrupt, 06 §10.2). `Hud_Load` on a
+  continuing stage keeps front VMs 0–15, the difficulty VM and the stored total (no VM-13 repaint, no fade-in) and
+  starts the 168 stage-start tiles (12 §5.1a). Chain-count `Popup_LargeStatic` only in the guarded part of
+  `Hud_DrawBoss` (12 §5.4). Golden 25634, fullrun_noclip 124707, selftest1 1922, demos in sync; golden draw same
+  92.16 % → 92.51 %, changed 571287 → 571165, missing 62209 → 33907, extra 4232501 → 4204288, reordered 380593 →
+  379188 (capture.anm and loading00.anm now fully same). Questions: `docs/briefs/IMPL95_QUESTIONS.md`.
 - impl93 (RE-Q33 §3 1–3, 6; RE-Q32 §3 7): list-B/C billboards use +0x63C4 = normalise(cross(raw facing, up))
   (`StageCamera::right`), written only in `Stage_DrawLayer` (stale while the layers are skipped); half size
   ((len·0.5)·sprite_w)·scale.x with the 3D projected length, no snapping (`AnmManager::draw_billboard`, 13 §2.6c,

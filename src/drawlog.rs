@@ -1235,14 +1235,19 @@ impl Report {
             }
             None => s.push_str("no divergence\n"),
         }
+        // Debug: `TH08_DIFF_LABELS=<n>` lists up to n textures, identical ones included.
+        let all: Option<usize> = std::env::var("TH08_DIFF_LABELS")
+            .ok()
+            .and_then(|v| v.parse().ok());
         let mut labels: Vec<_> = self
             .by_label
             .iter()
-            .filter(|(_, d)| d.missing + d.extra + d.changed > 0)
+            .filter(|(_, d)| all.is_some() || d.missing + d.extra + d.changed > 0)
             .collect();
         labels.sort_by_key(|(_, d)| std::cmp::Reverse(d.missing + d.extra + d.changed));
         s.push_str("by texture (missing / extra / changed):\n");
-        for (l, d) in labels.iter().take(25) {
+        let n = all.unwrap_or(25);
+        for (l, d) in labels.iter().take(n) {
             let _ = write!(
                 s,
                 "  {l:24} same {:7} missing {:7} extra {:7} changed {:7}",

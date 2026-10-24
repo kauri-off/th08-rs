@@ -742,6 +742,8 @@ impl GameManager {
         }
         g.retrying = false;
         g.mark_play_time();
+        // Hud_Load branches on the raw flag 0x17CE8BC, not on the StageStart fresh test (12 §5.1a).
+        let hud_fresh = g.fresh_start;
         g.fresh_start = false;
         let (stage, shot, d) = (g.stage, g.shot, g.diff());
         Player::register(ctx, self.player.clone(), shot)?;
@@ -826,7 +828,13 @@ impl GameManager {
             enemies.borrow_mut().fast_forward = 0;
         }
         let effects = crate::effect::EffectManager::register(ctx)?;
-        let hud = Hud::register(ctx, self.player.clone(), enemies.clone(), stage_t.clone())?;
+        let hud = Hud::register(
+            ctx,
+            self.player.clone(),
+            enemies.clone(),
+            stage_t.clone(),
+            hud_fresh,
+        )?;
         let gui = crate::gui::Gui::register(ctx, self.player.clone(), enemies.clone())?;
         enemies.borrow_mut().msg = Some(hud.borrow().msg.clone());
         if fresh && !ctx.game.replay() {

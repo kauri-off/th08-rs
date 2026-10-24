@@ -118,6 +118,55 @@ pub struct Hud {
     clear: Option<ClearPanel>,
     // impl+0x22D88: stored clear-panel total (12 §5.6).
     clear_total: i32,
+    // Raw fresh-start flag 0x17CE8BC at registration (12 §5.1a).
+    fresh: bool,
+    // Msg op 9 stage-clear VMs (10 §9): impl+0x3778 loadingNN.anm (its script index +0x398C ≥ 0 gates all of them),
+    // impl+0x3CC0 capture.anm script 1 and the 8 ghosts impl+0x3F64 + k·0x2A4.
+    load_vm: AnmVm,
+    cap_vm: AnmVm,
+    ghosts: Vec<AnmVm>,
+    // Capture queued by op 9; applied after the next Present (12 §3).
+    capture_pending: bool,
+    // 168 stage-start tiles impl+0x5728 (r·12 + c) and the live count impl+0x21810 (12 §5.1a, §5.7).
+    tiles: Vec<AnmVm>,
+    tiles_live: u32,
+}
+
+// The HUD impl block survives a continuing stage (12 §5.1a): front VMs 0–15, the difficulty VM, the stored total.
+struct Kept {
+    front: Vec<AnmVm>,
+    diff_vm: AnmVm,
+    clear_total: i32,
+}
+
+thread_local! {
+    static KEPT: RefCell<Option<Kept>> = const { RefCell::new(None) };
+}
+
+// FUN_00437d87 HUD cover (06 §10.2): impl+0x398C ≥ 0 and VM impl+0x3778 waits for an interrupt (flag bit 14).
+fn hud_cover(load_vm: &AnmVm) -> bool {
+    load_vm.script_index >= 0 && load_vm.flags & anmvm::F_WAIT_INT != 0
+}
+
+// Hud_Load continuing branch (12 §5.1a): tile (r, c) = capture.anm script 3 + ((r + c) & 1), I4 (+0x120) := r + 2c,
+// pos (32c − 0.5 + 16, 32r − 0.5 + 16, 0), uv offset (32c/512, 32r/512).
+fn stage_start_tiles(anm: &mut AnmManager) -> Vec<AnmVm> {
+    let mut tiles = Vec::with_capacity(168);
+    for r in 0..14 {
+        for c in 0..12 {
+            let mut vm = AnmVm::default();
+            anm.set_script(&mut vm, crate::ascii::CAPTURE_SLOT, 3 + ((r + c) & 1));
+            vm.ivars[4] = (r + 2 * c) as i32;
+            vm.pos = [
+                32.0 * c as f32 - 0.5 + 16.0,
+                32.0 * r as f32 - 0.5 + 16.0,
+                0.0,
+            ];
+            vm.uv_off = [32.0 * c as f32 / 512.0, 32.0 * r as f32 / 512.0];
+            tiles.push(vm);
+        }
+    }
+    tiles
 }
 
 impl Hud {
@@ -126,6 +175,7 @@ impl Hud {
         player: PlayerRef,
         enemies: Rc<RefCell<EnemyManager>>,
         stage: Rc<RefCell<Stage>>,
+        fresh: bool,
     ) -> Result<Rc<RefCell<Hud>>> {
         let h = Rc::new(RefCell::new(Hud {
             msg: Rc::new(RefCell::new(Dialogue::default())),
@@ -148,6 +198,13 @@ impl Hud {
             popups: Vec::new(),
             clear: None,
             clear_total: 0,
+            fresh,
+            load_vm: AnmVm::default(),
+            cap_vm: AnmVm::default(),
+            ghosts: Vec::new(),
+            capture_pending: false,
+            tiles: Vec::new(),
+            tiles_live: 0,
         }));
         let t: task::TaskRef<Ctx> = h.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -207,13 +264,32 @@ impl Hud {
         };
         drop(d);
         let anm = &mut ctx.anm;
-        self.front = (0..16)
-            .map(|i| {
-                let mut vm = AnmVm::default();
-                anm.set_script(&mut vm, FRONT_SLOT, i);
-                vm
-            })
-            .collect();
+        // The script-index shorts of VMs impl+0x3778 / +0x3A1C / +0x3CC0 := −1 and impl+0x21810 := 0 in both branches.
+        self.load_vm.script_index = -1;
+        self.cap_vm.script_index = -1;
+        self.tiles_live = 0;
+        let kept = KEPT.with_borrow_mut(Option::take).filter(|_| !self.fresh);
+        if let Some(k) = kept {
+            // Continuing stage: no VM-13 repaint, no panel fade-in; the stage-start transition over the old capture.
+            self.front = k.front;
+            self.diff_vm = k.diff_vm;
+            self.clear_total = k.clear_total;
+            anm.set_script(&mut self.cap_vm, crate::ascii::CAPTURE_SLOT, 1);
+            self.cap_vm.sprite_index = 1;
+            self.tiles = stage_start_tiles(anm);
+            self.tiles_live = self.tiles.len() as u32;
+        } else {
+            self.front = (0..16)
+                .map(|i| {
+                    let mut vm = AnmVm::default();
+                    anm.set_script(&mut vm, FRONT_SLOT, i);
+                    vm
+                })
+                .collect();
+            anm.set_script(&mut self.diff_vm, crate::ascii::ANM_SLOT, 0x19);
+            self.diff_vm
+                .set_sprite(anm, crate::ascii::difficulty_sprite(g));
+        }
         self.title = (0..4)
             .map(|i| {
                 let mut vm = AnmVm::default();
@@ -223,9 +299,6 @@ impl Hud {
                 vm
             })
             .collect();
-        anm.set_script(&mut self.diff_vm, crate::ascii::ANM_SLOT, 0x19);
-        self.diff_vm
-            .set_sprite(anm, crate::ascii::difficulty_sprite(g));
         // Hud_Load 0x4390D6: the night-clock VM starts hidden with alpha 0 (12 §5.7).
         self.night_vm = AnmVm::default();
         self.night_vm.color[anmvm::A] = 0;
@@ -312,6 +385,22 @@ impl Hud {
             self.clear_vm.script = None;
         }
         self.clear_vm.pending_interrupt = 1;
+        // Stages 1–5: loading VM, capture VM, 8 ghosts (I4 := 4k + 3, alpha := 64 − 2k) and the playfield capture.
+        if stage < 6 {
+            let anm = &mut ctx.anm;
+            anm.set_script(&mut self.load_vm, LOADING_SLOT, 0);
+            anm.set_script(&mut self.cap_vm, crate::ascii::CAPTURE_SLOT, 1);
+            self.ghosts = (0..8)
+                .map(|k| {
+                    let mut vm = AnmVm::default();
+                    anm.set_script(&mut vm, crate::ascii::CAPTURE_SLOT, 2);
+                    vm.ivars[4] = 4 * k + 3;
+                    vm.color[anmvm::A] = (64 - 2 * k) as u8;
+                    vm
+                })
+                .collect();
+            self.capture_pending = true;
+        }
         let rng = &mut ctx.anm.rng;
         let st = &mut p.stats;
         let from = st.clock * 30 + 660;
@@ -397,7 +486,7 @@ impl Hud {
     }
 
     // Boss bar bookkeeping (12 §5.1, §5.4).
-    fn boss_calc(&mut self, anm: &mut AnmManager, dialogue: bool, paused: bool) {
+    fn boss_calc(&mut self, anm: &mut AnmManager, dialogue: bool) {
         let e = self.enemies.borrow();
         let boss = e.boss(0).map(|i| &e.enemies[i]);
         let show = e.g.hud_boss && boss.is_some();
@@ -413,18 +502,6 @@ impl Hud {
                 b.max_life.max(1)
             };
             self.bar_target = (b.life.max(0) as f32 / max as f32).clamp(0.0, 1.0);
-        }
-        // Popup_LargeStatic from Hud_DrawBoss (12 §5.4, 13 §4): re-issued every frame, "+0" without children too.
-        if let Some(i) = e.boss(0)
-            && !paused
-            && !self.player.borrow().freeze_bullets
-        {
-            crate::ascii::popup_large_static(
-                [2.0, 29.0],
-                e.chain_count(i),
-                e.enemies[i].children,
-                0xFFF0F00F,
-            );
         }
         drop(e);
         self.bar_alpha = if self.bar_shown {
@@ -505,8 +582,45 @@ impl Hud {
         [(c >> 16) as u8, (c >> 8) as u8, c as u8, a]
     }
 
-    // Hud_DrawBoss (12 §5.4).
+    // Hud_DrawBoss 0x43741D (12 §5.4): unguarded VMs, the guarded bar part, the stage-clear VM last.
     fn draw_boss(&mut self, ctx: &mut Ctx) {
+        let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
+        gfx.set_viewport(PLAYFIELD);
+        // Stage title VMs, the stage-start clock, then the night clock with Draw2DRot (12 §5.1, §5.7).
+        for vm in self
+            .title
+            .iter_mut()
+            .chain(std::iter::once(&mut self.start_clock_vm))
+        {
+            if vm.script.is_some() {
+                anm.draw_mode(gfx, vm, 0);
+            }
+        }
+        if self.night_vm.script.is_some() {
+            anm.draw_mode(gfx, &mut self.night_vm, 2);
+        }
+        // Op 9 VMs: loading picture Draw2DSnap, capture and ghosts Draw3DQuad; impl+0x3A1C is never started (10 §9).
+        if self.load_vm.script_index >= 0 {
+            anm.draw_mode(gfx, &mut self.load_vm, 0);
+            for vm in std::iter::once(&mut self.cap_vm).chain(self.ghosts.iter_mut()) {
+                anm.draw_mode(gfx, vm, 5);
+            }
+        }
+        if self.tiles_live != 0 {
+            for vm in &mut self.tiles {
+                anm.draw_mode(gfx, vm, 5);
+            }
+        }
+        if !self.msg.borrow().active() {
+            self.draw_bar(ctx);
+        }
+        if self.clear_vm.script.is_some() {
+            ctx.anm.draw_mode(&mut ctx.gfx, &mut self.clear_vm, 0);
+        }
+    }
+
+    // Guarded part of Hud_DrawBoss (12 §5.4): no dialogue, bar requested or fading.
+    fn draw_bar(&mut self, ctx: &mut Ctx) {
         if self.bar_alpha == 0 && !self.bar_shown {
             return;
         }
@@ -581,6 +695,21 @@ impl Hud {
                 }
             }
             self.timer_last = s;
+        }
+        // Popup_LargeStatic (12 §5.4, 13 §4): re-issued every guarded draw, "+0" without children too.
+        let g = &ctx.game;
+        let e = self.enemies.borrow();
+        if let Some(i) = e.boss(0)
+            && g.paused == 0
+            && g.game_over == 0
+            && !self.player.borrow().freeze_bullets
+        {
+            crate::ascii::popup_large_static(
+                [2.0, 29.0],
+                e.chain_count(i),
+                e.enemies[i].children,
+                0xFFF0F00F,
+            );
         }
     }
 
@@ -874,6 +1003,11 @@ impl Task<Ctx> for Hud {
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
+            KEPT.set(Some(Kept {
+                front: std::mem::take(&mut self.front),
+                diff_vm: std::mem::take(&mut self.diff_vm),
+                clear_total: self.clear_total,
+            }));
             for s in [FRONT_SLOT, TIMES_SLOT, TXT_SLOT, LOADING_SLOT]
                 .into_iter()
                 .chain(msg::FACE_SLOTS)
@@ -886,6 +1020,11 @@ impl Task<Ctx> for Hud {
     // Hud_Calc 0x4338CA (12 §5.1b): Hud_Update, then Msg_Run, then the frame counter. Hud_Update runs first, so what
     // a msg op sets this frame (op 9 bonus, trigger, clock animation) is acted on the next frame.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        // AnmManager_ApplyPendingCaptures runs right after the Present that follows op 9's calc (12 §3); the port
+        // copies from that presented frame at the next calc.
+        if std::mem::take(&mut self.capture_pending) {
+            crate::ascii::apply_capture(&ctx.anm, &mut ctx.gfx, &self.cap_vm);
+        }
         let inp = ctx.input.game_view();
         // HUD requests queued by ECL ops this frame (ECL runs before the HUD).
         let reqs = std::mem::take(&mut self.enemies.borrow_mut().g.hud_requests);
@@ -910,11 +1049,7 @@ impl Task<Ctx> for Hud {
         }
         // Hud_Update 0x435900, steps 1–7 of 12 §5.1b.
         let dialogue = self.msg.borrow().active();
-        self.boss_calc(
-            &mut ctx.anm,
-            dialogue,
-            ctx.game.paused != 0 || ctx.game.game_over != 0,
-        );
+        self.boss_calc(&mut ctx.anm, dialogue);
         // Front VMs, stage-title VMs, the stage-start clock, the stage-clear VM, the night clock.
         let anm = &mut ctx.anm;
         for vm in self.front.iter_mut().chain(self.title.iter_mut()) {
@@ -948,6 +1083,23 @@ impl Task<Ctx> for Hud {
         // Difficulty name VM impl+0x22E14.
         if self.diff_vm.script.is_some() {
             self.diff_vm.run(&mut ctx.anm);
+        }
+        if self.load_vm.script_index >= 0 {
+            let anm = &mut ctx.anm;
+            for vm in [&mut self.load_vm, &mut self.cap_vm]
+                .into_iter()
+                .chain(self.ghosts.iter_mut())
+            {
+                vm.run(anm);
+            }
+        }
+        if self.tiles_live != 0 {
+            for vm in &mut self.tiles {
+                // SPEC-GAP: 12 §5.7 only says +0x21810 counts the live tiles; decremented here when a tile's script ends.
+                if vm.ip.is_some() && vm.run(&mut ctx.anm) {
+                    self.tiles_live -= 1;
+                }
+            }
         }
         for p in self.player.borrow_mut().stats.popups.drain(..) {
             self.popups.push(ActivePopup { kind: p, frame: 0 });
@@ -993,6 +1145,7 @@ impl Task<Ctx> for Hud {
         self.flush_texts(ctx);
         self.handle_events(ctx, events);
         self.flush_texts(ctx);
+        self.stage.borrow_mut().hud_cover = hud_cover(&self.load_vm);
         self.frame += 1;
         Ret::Next
     }
@@ -1006,28 +1159,7 @@ impl Task<Ctx> for Hud {
         self.draw_clear(ctx);
         ctx.gfx.set_viewport(PLAYFIELD);
         self.draw_msg(&mut ctx.anm, &mut ctx.gfx);
-        // Hud_DrawBoss 0x43741D: the bar and timer only while no dialogue runs (12 §5.4).
-        if !self.msg.borrow().active() {
-            self.draw_boss(ctx);
-        }
-        ctx.gfx.set_viewport(PLAYFIELD);
-        // Stage title VMs, the stage-start clock, then the night clock with Draw2DRot (12 §5.1, §5.7).
-        for vm in self
-            .title
-            .iter_mut()
-            .chain(std::iter::once(&mut self.start_clock_vm))
-        {
-            if vm.script.is_some() {
-                ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
-            }
-        }
-        if self.night_vm.script.is_some() {
-            ctx.anm.draw_mode(&mut ctx.gfx, &mut self.night_vm, 2);
-        }
-        // SPEC-GAP: the draw site of the stage-clear VM impl+0x212C8 is not in 10 §9 / 12 §5; drawn here, playfield viewport.
-        if self.clear_vm.script.is_some() {
-            ctx.anm.draw_mode(&mut ctx.gfx, &mut self.clear_vm, 0);
-        }
+        self.draw_boss(ctx);
         let st = self.player.borrow().stats.clone();
         self.draw_panel(ctx, &st);
         self.draw_popups(ctx);
@@ -1142,5 +1274,28 @@ mod tests {
         c.timer = 60;
         assert!(c.step(0, false));
         assert_eq!((c.shown, c.timer), (700, 61));
+    }
+
+    // 06 §10.2 FUN_00437d87: the cover needs both the started VM impl+0x3778 and its wait-for-interrupt flag.
+    #[test]
+    fn hud_cover_condition() {
+        let mut vm = AnmVm::default();
+        vm.flags |= anmvm::F_WAIT_INT;
+        assert!(!hud_cover(&vm));
+        vm.script_index = 0;
+        assert!(hud_cover(&vm));
+        vm.flags &= !anmvm::F_WAIT_INT;
+        assert!(!hud_cover(&vm));
+    }
+
+    // 12 §5.1a: 14 × 12 tiles, I4 = r + 2c, pos (32c + 15.5, 32r + 15.5), uv offset (32c/512, 32r/512).
+    #[test]
+    fn stage_start_tile_layout() {
+        let tiles = stage_start_tiles(&mut AnmManager::default());
+        assert_eq!(tiles.len(), 168);
+        let t = &tiles[13 * 12 + 11];
+        assert_eq!(t.ivars[4], 13 + 22);
+        assert_eq!(t.pos, [32.0 * 11.0 + 15.5, 32.0 * 13.0 + 15.5, 0.0]);
+        assert_eq!(t.uv_off, [352.0 / 512.0, 416.0 / 512.0]);
     }
 }

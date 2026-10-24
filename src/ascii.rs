@@ -331,7 +331,8 @@ fn popups_calc(gs: f32) {
         for s in p.large.iter_mut() {
             if let Some(q) = s {
                 q.age += gs;
-                if q.age >= LARGE_LIFE {
+                // Freed when age > 90 (13 §4): a static popup issued at 88 is drawn at 89 and 90.
+                if q.age > LARGE_LIFE {
                     *s = None;
                 }
             }
@@ -945,7 +946,7 @@ fn start_capture(anm: &mut crate::anmmgr::AnmManager, vm: &mut AnmVm) {
 // AnmManager_QueueCapture 0x406A30 (12 §3): playfield (32, 16, 384, 448) into slot 3 entry 0 at the VM's sprite rect
 // (u0, v0 in texture pixels, width, height, truncated). The port copies at once from the last presented frame, so no
 // request is ever pending and the "close at once" failure path cannot happen.
-fn apply_capture(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, vm: &AnmVm) {
+pub fn apply_capture(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, vm: &AnmVm) {
     let Some(sp) = anm.sprite(CAPTURE_SLOT, vm.sprite_index.max(0) as usize) else {
         return;
     };
