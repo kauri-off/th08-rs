@@ -696,3 +696,11 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   bomb-start AnmMgr_TintOff (and no tint-off at bomb end / only at real death — 06 §10.2 wording fixed).
 - New: result pages test cancel before confirm; Player_Die white silhouette (colour2 + VM bit 17, 09 §6.1).
 - Symbols +3 (shot-name tables 0x4C8010/0x4C86C0, charset ptr 0x4C7F48), redump done.
+
+# RE-Q39 (2026-10-24) — SPEC-GAP batch 5, music room (13 markers) — DONE (specs/changelog/answers_re_q39.md)
+- Code + data only (re/work/runs/q39/CHECKPOINT.md; glyph7f.png). 4 right (179, 296, 335, 358 order), 9 CODE BUG.
+- Key facts: Text_RenderToVm colour = COLORREF, 4th arg only the −1 mode flag (outline always black, 10 §6);
+  sub-frame +2/frame in state 1 (StateInput and Calc both step it), reset on state change; independent key tests,
+  Shot resets the reveal; exit returns 0 from Calc (node removed, no draw); title VM drawn forced white at (320,52);
+  cursor = ASCII 0x7F (▶) in the row VM colour; Music_PlayFile marks nothing in music mode 0.
+- New spec: 02 §4 Music_PlayFile, 16 §5.2/§5.3 rewritten, structs.md MusicRoom.

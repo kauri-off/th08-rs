@@ -277,6 +277,10 @@ Rasteriser (font size > 8 path, always taken for dialogue, 0x43F9C8):
 - Background mode transparent. Outline: text drawn in black at four offsets, then in `colour` at the centre
   `(2·x + 2, 2)`. With `outline == −1` the offsets are ±1 px (2× space); otherwise (dialogue, outline = 0) ±2 px:
   `(2x+4,2) (2x,2) (2x+2,0) (2x+2,4)`.
+  The outline is **always black** (`SetTextColor(0)`): the `outline` argument of `Text_RenderToVm` is only this mode
+  flag (compared with −1, also the gradient flag of the post-pass); callers that pass a colour-looking value (music room
+  0x302080 / 0x100040 / 0x300000, 16 §5) get the ±2 px black outline (VERIFIED 0x43F9C8, RE-Q39). The `colour` argument
+  goes to `SetTextColor`, a COLORREF 0x00BBGGRR.
 - Copy: `D3DXLoadSurfaceFromSurface` (statically linked D3DX8, 0x47ABAB, colour key 0) from src rect (0, 0, min(2w,1024), 2·size) to the texture's dest rect
   (0, y, w, y + size·scale_y) with filter TRIANGLE (4) → 2:1 box-like downsample. The whole row strip is
   replaced (anything left of x is cleared too).

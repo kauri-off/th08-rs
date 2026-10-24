@@ -67,6 +67,11 @@ the loop end is not shipped); a reimplementation must never read past `loop_end`
   command **2 = play** (slot); MIDI: stop, open slot, play. Both mark music-room track `track` as heard
   (0x164CF14[track] := 1) unless replay playback or demo (VERIFIED, RE-Q24).
   - mode 0: no music.
+- `Music_PlayFile(name, track)` (0x447F21, music room, VERIFIED RE-Q39) plays a file directly: mode 2 = MIDI: if a MIDI
+  object exists (0x17CE8E4 ≠ 0) stop, open `name`, play; mode 1 = WAV: copy the name, text after the last `.` := `wav`,
+  queue sound command **2** with slot −1 and that name. In both modes 0x164CF14[track] := 1 unless replay playback
+  (GameFlags bit 3) or demo (bit 1) — in mode 2 even without a MIDI object. Any other mode (0 = off): returns −1 and
+  marks **nothing**.
 - `Music_Fade(secs)` (0x4480F8, VERIFIED RE-Q25 for WAV mode): MIDI mode → `Midi_Fade` (argument INFERRED); WAV mode: if the game
   speed (Supervisor+0x188) is ≠ 0 and ≤ 1, secs := secs / speed; queues sound command **5** with the integer
   `trunc(secs)`. The sound thread (`Sound_Update`, after the calc chain) starts the fade on the streaming object:

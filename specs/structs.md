@@ -57,3 +57,22 @@
 | 0x338..0x34C | 0x17CEA90.. | u32×5 | zeroed by MainMenu_OnRegister; +0x338 = replay fps flag (always 0), +0x33C (0x17CEA94) = playback fps-red flag | VERIFIED |
 | 0x350 | 0x17CEAA8 | u32 | fog state cache | VERIFIED |
 Whole object is overwritten with 0xFFFFFFFF on anti-tamper detection (changelog/answers_phase7.md).
+
+## MusicRoom 0x17CF4C8 (0x6A28 bytes, 16 §5) — VERIFIED (RE-Q39)
+
+| off | size | type | name | meaning |
+|---|---|---|---|---|
+| 0x00 | 4 | ptr | calc node | |
+| 0x04 | 4 | ptr | draw node | removed by on-remove |
+| 0x08 | 4 | ptr | anm file | music00.anm (slot 0x17) |
+| 0x0C | 4·32 | i32[] | heard | copy of PLST+0x208 (signed byte) at init |
+| 0x6C | 4 | i32 | sub-frame | +2 per frame in state 1 (16 §5.3) |
+| 0x70 | 4 | i32 | state | 0 intro, 1 input |
+| 0x74 | 4 | i32 | cursor | |
+| 0x78 | 4 | i32 | playing | 0 at init |
+| 0x7C | 4 | i32 | top row | |
+| 0x80 | 4 | i32 | count | entries parsed |
+| 0x84 | 4 | ptr | entries | 32 × 0x292 (16 §5.1) |
+| 0x88 | 0x2A4 | AnmVm | bg | music00 script 0 |
+| 0x32C | 31 × 0x2A4 | AnmVm[] | rows | music00 script i + 1 |
+| 0x5508 | 8 × 0x2A4 | AnmVm[] | comments 0–6, title (+0x6784) | text.anm 10 + k / 0x11 |

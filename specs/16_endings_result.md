@@ -624,40 +624,105 @@ The entry index is the "heard" flag index: PLST+0x208[i] (0x164CF14 + i). It is 
 
 Comment display copies only **64 bytes** of a line into a zeroed 0x42 buffer. Twenty-three retail lines are 64–68 bytes; the ones over 64 are shown cut. QUIRK; `musiccmt.py` lists them.
 
-### 5.2 Title list
+### 5.2 Title list and draw
 
-For each entry i, VM (0x32C + i·0x2A4) gets `music00.anm` script i + 1 and flags |= 0x1800. Its text:
-- heard: the title, colour 0xC0E0FF, outline 0x302080;
-- not heard: `？？？？？？？？`, colour 0x80A0C0, outline 0x100040.
+Object state (VERIFIED, RE-Q39): `MusicRoom_Register` memsets the whole object to 0 after the VM constructors, so every
+VM starts all-zero (ip NULL → `AnmVm_Run` returns at once, flags 0 → never drawn; an interrupt sent to it is inert)
+until a script is set. Init sets +0x78 (playing entry) := 0, +0x6C := 0, +0x80 = entry count. The comment VMs
+(0x5508 + k·0x2A4, k = 0..6) and the title VM (+0x6784 = the 8th VM of that array) get no script at init.
 
-The draw shows 10 rows from top (+0x7C):
-- row y = 18·(i − top + 1) + 104 − 20, title x = 93;
-- number `%2d.` at x 48;
-- the cursor marker is an ASCII string at x 33.
+For each entry i, VM (0x32C + i·0x2A4) gets `music00.anm` script i + 1 (`AnmFile_SetScript`, pos kept) and flags |= 0x1800
+(anchor top-left), pos := (93, 18·(i + 1) + 104 − 20, 0). Its text (`Text_RenderToVm`):
+- heard: the title (+0x40), colour COLORREF 0xC0E0FF = RGB (255, 224, 192), mode arg 0x302080;
+- not heard: `？？？？？？？？`, colour COLORREF 0x80A0C0 = RGB (192, 160, 128), mode arg 0x100040.
 
-"Now Playing" is printed at (320, 32) and the playing-title VM (+0x6784) at (320, 52).
+All `Text_RenderToVm` colours in the music room are GDI COLORREFs (0x00BBGGRR, 10 §6). The 4th argument is not an outline
+colour: it is only compared with −1 (10 §6), so these values all take the ±2 px path with the **black** outline.
+The text is a `vsprintf` format (10 §6); the retail musiccmt.txt contains no `%`.
+
+Row scripts (music00.anm 1–21): sprite, alpha 0, hidden until an interrupt; interrupt 1 → alpha 0→255 and colour →
+(255,255,255) over 8 frames; interrupt 2 → alpha →224, colour → (128,128,128) over 8 frames.
+
+Draw 0x449487 (prio 3), in this order (VERIFIED):
+1. AnmManager+0x24BC := 0 (texture cache, 05 §12.8); surface 0 (`music.jpg`) at (0, 0); bg VM (+0x88) `Draw2DSnap`.
+2. For each row i = top (+0x7C) … min(top + 10, count) − 1:
+   - `Ascii_SetColor(row VM colour)` (VM +0x1F0, the ARGB colour the script animates);
+   - row VM pos := (93, 18·(i − top + 1) + 104 − 20, 0), `Draw2DSnap`;
+   - if i == cursor: queue the one-byte string 0x7F at (pos.x − 60, pos.y, pos.z) = (33, y): ascii.anm sprite 126, a
+     right-pointing triangle (▶) glyph (12 §2.9: sprite = byte − 1);
+   - `Ascii_Printf("%2d.", i + 1)` at (48, y).
+   Both ASCII strings carry the row VM's colour (so the selected row is white, the others grey 128 at alpha 224,
+   and all fade in with their row).
+3. The 7 comment VMs, `Draw2DSnap`, k = 0..6.
+4. `Ascii_SetColor(0xFFFFFFFF)`; "Now Playing" at (320, 32).
+5. Title VM (+0x6784): pos and colour saved, pos := (320, 52, 0), colour := 0xFFFFFFFF, `Draw2DSnap`, both restored.
+   So the title is drawn at full alpha and white regardless of its script's alpha fade.
+
+The ASCII strings are drawn later by the ASCII pass (12 §2.9), above all VMs.
 
 ### 5.3 Calc
 
-| state (+0x70) | behaviour |
+`MusicRoom_Calc` 0x449399 (prio 4), VERIFIED RE-Q39:
+1. s0 = state (+0x70). Run the state function: state 0 → `MusicRoom_StateIntro` 0x448A65 (returns 0); state 1 →
+   `MusicRoom_StateInput` 0x448B16; if that returns 1 (exit), **Calc returns 0 at once**: the calc node is removed
+   (on-remove 0x449C0A: frees the comment data, releases surface 0 and ANM slot 0x17, removes the draw node), so
+   nothing below runs and the music room is not drawn on the exit frame (00 §3).
+2. If state ≠ s0: sub-frame (+0x6C) := 0; else sub-frame += 1.
+3. `AnmVm_Run`: bg VM, the 31 row VMs, the 8 VMs at 0x5508 (7 comments + title).
+
+State 0 (intro): at sub-frame 0, row VM i gets interrupt 1 if i == cursor else 2 (all 31), the 7 comment VMs interrupt 1
+(inert: no script yet). When sub-frame > 7 (i.e. the 9th call, sub-frame 8) state := 1; step 2 then resets the
+sub-frame to 0.
+
+State 1 (`MusicRoom_StateInput`), all tests on the raw input word (`g_InputRawCur` 0x164D528, prev 0x164D530,
+repeat flag 0x164D538), **in this order, each independent** (not else-if):
+1. **Up** (0x10): edge or (held and repeat flag) → cursor −= 1; if < 0: cursor := count − 1, top := max(count − 10, 0);
+   else if cursor < top: top := cursor. Rows interrupted (1 selected, 2 others), the 7 comment VMs interrupt 2,
+   sub-frame := 0.
+2. **Down** (0x20): same test → cursor += 1; if cursor ≥ count: cursor := 0, top := 0; else if top ≤ cursor − 10:
+   top := cursor − 9. Same interrupts, sub-frame := 0. (Up and Down in one frame both run.)
+3. **Comment reveal**, if sub-frame < 30: sub-frame 10, 12, 14, …, 22 → line k = 0..6:
+   `AnmFile_SetScript(text.anm, comment VM k, 10 + k)`, interrupt 1; text buffer = 0x42 zero bytes, then 64 bytes copied
+   from the comment line (entry +0x82 + k·0x42) if playing (+0x78) == cursor or heard[cursor] (+0xC, the init copy),
+   else from warning line k (table 0x4C7AAC, below). Empty (first byte 0) → VM flag bit 1 cleared, nothing rendered;
+   otherwise flag bit 1 set and `Text_RenderToVm(colour COLORREF 0xFFE0C0 = RGB (192, 224, 255), mode arg 0x300000)`.
+4. **Shot | Enter** (mask 0x1001, multi-bit edge: `(cur & m) ≠ 0 && (cur & m) ≠ (prev & m)`, so pressing or releasing
+   one while holding the other also fires): playing := cursor; if Supervisor flag 13 (0x449C79): restart the BGM
+   stream from `thbgm.dat` (`Bgm_StreamStart`); `Music_PlayFile(entry[playing].file, 0)` (02 §4); sub-frame := 0;
+   title VM: `AnmFile_SetScript(text.anm, 0x11)`, interrupt 1, text = comment line 0 of entry[cursor] (64 bytes into a
+   zeroed 0x42 buffer), colour 0xFFE0C0, mode 0x300000.
+5. **Bomb | ESC** (mask 0xA, multi-bit edge): requested scene (0x17CE8B4) := 1; `Loading_BeginCapture((500, 440, 0))`
+   (0x44886F, 12 §1); return 1 (Ctrl, R and the sub-frame step are skipped).
+6. Otherwise: **Ctrl** (0x100, edge) → `Music_Fade(8.0)`; **R** (0x4000, edge) → (Bgm_StreamStart if flag 13)
+   `Music_PlayFile(entry[playing].file, 0)` (the title VM is not touched); sub-frame += 1; return 0.
+
+So in state 1 the sub-frame advances by **2 per frame** (step 6 + Calc step 2) and is always even when tested. After
+entering state 1, or after an Up/Down/Shot press (sub-frame := 0 → 2 at the end of that call), the next calls see
+2, 4, 6, 8, 10 …: comment line 0 is revealed on the 5th call after the press (the 6th state-1 call after the intro),
+line k on the call after line k − 1, one line per frame. A Shot press restarts the reveal, so the newly playing
+entry's real comment replaces the warning.
+
+Comment scripts text.anm 10–16 (line k): sprite 21 + k, anchor top-left, pos (64, 320 + 16k, 0), hidden until an interrupt;
+interrupt 1 → alpha 0, wait 2k frames, alpha → 255 over 20; interrupt 2 → alpha → 128 over 20; any other → wait 2k,
+alpha → 0 over 30, hide. Title script 0x11: sprite 28, the same shape with wait 14 (its alpha is overridden by the draw).
+
+Warning table 0x4C7AAC (7 Shift-JIS strings, shown for line k of an entry neither heard nor playing; U+3000 =
+ideographic space, part of the string):
+
+| k | text |
 |---|---|
-| 0 | at sub-frame 0: selected row VM interrupt 1, others 2; the 7 comment VMs interrupt 1. After 8 frames → state 1. |
-| 1 | input (below) |
+| 0 | `＊＊＊注意＊＊＊` |
+| 1 | `　この曲はまだ、ゲーム中で流れておりません` |
+| 2 | `　自分でプレイする前に聴きたくない、コメントを見たくない、` |
+| 3 | `　という方は一刻も早くここから立ち去る事をお奨めします。` |
+| 4 | `　` (one ideographic space: not empty, so rendered and enabled) |
+| 5 | `　（なお、ここで決定ボタンを押せば、他の曲と同様、` |
+| 6 | `　　曲の再生とコメント表示が行われますので、注意）` |
 
-| key | effect |
-|---|---|
-| Up / Down (edge or repeat) | cursor (+0x74) ∓/± 1, wrapping; the 10-row window follows; rows re-interrupted; comment VMs interrupt 2; sub-frame (+0x6C) = 0 |
-| Shot / Enter | playing = cursor. If music mode is WAV (0x449C79), restart the stream from `thbgm.dat`. `Music_PlayFile(entry.file, 0)`; title VM: `text.anm` script 0x11, interrupt 1, text = comment line 0 (colour 0xFFE0C0, outline 0x300000). |
-| Ctrl | `Music_Fade(8.0)` |
-| R | replay the playing track |
-| Bomb / ESC | scene 1 with the loading banner (0x44886F: `Loading_Begin` + capture of the current screen into surface slot 8 after the next Present, which the loading screen then shows instead of the logo; 12 §1) |
+All are shorter than 64 bytes.
 
-Comment reveal: at sub-frame 10, 12, …, 22, comment line k = 0..6 is drawn on VM 0x5508 + k·0x2A4 (`text.anm` script 10 + k, interrupt 1).
-- The text is the real comment if the entry is heard or is the one playing.
-- Otherwise it is the warning text from table 0x4C7AAC: "＊＊＊注意＊＊＊ / この曲はまだ、ゲーム中で流れておりません …" (seven lines).
-- Empty lines clear VM flag bit 1 (hidden).
-
-`Music_PlayFile(.., 0)` marks flag 0 (title theme) heard, not the chosen track. Playing a track in the music room does **not** unlock it. VERIFIED.
+`Music_PlayFile(.., 0)` marks flag 0 (title theme) heard, not the chosen track, and only in music mode 1 or 2 (02 §4;
+mode 0 marks nothing). Playing a track in the music room does **not** unlock it. VERIFIED.
 
 ---
 

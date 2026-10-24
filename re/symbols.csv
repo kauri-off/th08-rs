@@ -802,3 +802,5 @@ addr,kind,name,signature,confidence,note
 0x004c8010,global,g_ShotNamesShort,,VERIFIED,RE-Q38 char*[12] "Rm & Yk".."Yuyuko " (replay-save rows; same strings as 0x4C86C0)
 0x004c86c0,global,g_ShotNamesShort2,,VERIFIED,RE-Q38 char*[12] same strings as 0x4C8010
 0x004c7f48,global,g_NameCharset,,VERIFIED,RE-Q38 ptr to 96-cell name-entry charset 0x4B7340
+0x004c7aac,global,g_MusicRoomWarningLines,,VERIFIED,char*[7] music-room warning comment (16 §5.3)
+0x0045e1e0,func,Sound_QueueCommand,,VERIFIED,SoundManager+0x1F88 queue 31x0x10C (02 §4)
