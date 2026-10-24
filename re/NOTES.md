@@ -687,3 +687,12 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - New outside the markers: top menu cursor from call 9 / confirm from call 19 (VERIFIED by run), option item 7 opens at
   P + 30 (in-place MainMenu_Option call increments counters), replay paging only > 15 files and wrapping.
 - Symbols +10 (Log_*, FuncChain_Clear, KeyConfig_*), redump done.
+
+# RE-Q38 (2026-10-24) — SPEC-GAP batch 4, result + ending (16 markers + IMPL103 Q1) — DONE (specs/changelog/answers_re_q38.md)
+- Code only (decompile + disasm, result00 anm dump, .end fade args); no run (result-after-game not in any draw log).
+- 9 right (4 stale: CursorUpDown2 SE, pos_offset, fade order, picture trunc; ending 326/425/446 already in 16 §1.3),
+  8 CODE BUG: hidden code (order, reset rule, effect = 13 attempt counters × 222, no cap/checksum), VM 71 int 18
+  every frame 0–30 (fade 30→60), rank > 9 finish path, state-13 header colour, failed Replay_Load = empty slot,
+  bomb-start AnmMgr_TintOff (and no tint-off at bomb end / only at real death — 06 §10.2 wording fixed).
+- New: result pages test cancel before confirm; Player_Die white silhouette (colour2 + VM bit 17, 09 §6.1).
+- Symbols +3 (shot-name tables 0x4C8010/0x4C86C0, charset ptr 0x4C7F48), redump done.

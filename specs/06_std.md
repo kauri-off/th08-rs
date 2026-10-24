@@ -311,7 +311,10 @@ on for everything drawn until something turns it off: stage layers 0–3, backgr
 spell-background VMs, the prio-8 enemy pass (layers 0–1) and the player's flying bullets (prio 9, drawn before
 the bomb draw fn) are tinted; `Bomb_DrawTint` itself turns it off first thing. The prio-11 enemy pass,
 `BulletMgr_Draw` (13) and `Spell_Draw` (15) set/clear the tint themselves (on with 0xFFF01010 only while GameFlags
-bit 10, then off). `Player_UpdateBomb` (bomb end) and `Player_DyingUpdate` also turn it off (calc). Edge frames:
+bit 10, then off). `Player_UpdateBomb` (only at a normal-mode bomb **start**, 09 §7; the bomb end does not) and `Player_DyingUpdate`
+(only at the real death, 09 §6.2) also turn it off (calc) (VERIFIED: the only `AnmMgr_TintOff` callers are
+`Bomb_DrawTint`, `BulletMgr_Draw`, 0x42EB90, `Player_DyingUpdate`, `Player_UpdateBomb`, `Spell_Draw`, `Stage_DrawHigh`;
+RE-Q38). Edge frames:
 first bomb frame → no request yet, no stage tint; frame after the last bomb draw → the pending request still
 tints that frame's stage and +0x646C (set by the last bomb draw) keeps it on through prio 8/9 (the calc-time
 tint-off of the bomb end happens before the draw, so it does not prevent this); the frame after that is clean.

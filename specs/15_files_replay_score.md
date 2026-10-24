@@ -511,9 +511,22 @@ At the result: x = clamp((A/B − 0.5)·2, 0, 1), and slowdown % = (1 − x)·10
 
 While holding Focus or Skip, enter Right ×4, Left ×1, D ×2, Q ×3.
 
+Exact rule (VERIFIED 0x4550FC, RE-Q38). Counter = Result+0x4C (0 at registration; `Result_SetState` does not clear
+it). It is stepped once per state-3 call, after the page input (16 §2.4), in this order:
+1. Neither Focus (0x4) nor Skip (0x100) held in g_InputRawCur → counter := 0, done.
+2. Counter < 10: the wanted key is Right (0x80) for counter 0–3, Left (0x40) for 4, D (0x2000) for 5–6, Q (0x200) for
+   7–9. A press of it (edge: `cur & k ≠ 0` and `≠ prev & k`) → counter += 1. Otherwise an edge on the mask 0x160B
+   (Shot, Bomb, Pause/ESC, Q, S, Enter; `(cur & m) ≠ 0` and `(cur & m) ≠ (prev & m)`) → counter := 0. Other keys
+   (wrong arrows, D in the Right phase, Up/Down …) change nothing.
+3. Counter ≥ 10 (so the effect comes on the call **after** the tenth key, and only if Focus/Skip is still held):
+   the effect below, counter := 0.
+
 Effect:
-- every CLRD mask becomes 0xFFFF;
-- every card's attempt counter +1;
+- every CLRD mask becomes 0xFFFF: no-continue (+0x0C) and any-clear (+0x16) masks, all 5 difficulties, all 13
+  entries (0..11 and the union entry 12);
+- all 222 in-memory CATK records (whether or not the record has the `CATK` magic): the 13 story attempt counters
+  (+0x124, shots 0..11 and the all-shot total 12) += 1 each — **no 9999 cap and no checksum update** (QUIRK: the
+  stored byte +0x0E no longer matches, so the next `Spell_Start` of that card zeroes its counters first, §2.5);
 - plays SE 0x1C.
 
 ---

@@ -293,7 +293,9 @@ Freeze byte 0x160F534 := 0; checksum update (RNG, §9.4); effect; state 2, state
 Normal mode (0x164D0B4 bits 7–8 clear): gauge := 0; deathbomb counter n:
 - bombs < 1: n = 2 ("Miss");
 - else n = bombs × 6, +7 if time (stats+0x3C) ≥ stats+0x40, cap 15; during a boss spell card n × 2 (cap 30);
-  shot types 0, 4, 5: n = n × 9 / 5; a ring effect is shown; during a spell card bullets are frozen (0x164D0B4
+  shot types 0, 4, 5: n = n × 9 / 5; the player VM's colour2 := (R, G, B) 0xFFFFFF with A = the VM colour's
+  alpha and VM flags bit 17 set (draw with colour2, 05 §2.1; cleared at a normal bomb start §7 and at the real
+  death §6.2; VERIFIED 0x44AB40, RE-Q38); a ring effect is shown (`Effect_SpawnFixed` 0x3B, pointer kept in +0xE2B28); during a spell card bullets are frozen (0x164D0B4
   bit 10 → `BulletMgr_Calc` skipped).
 Special mode (bits 7–8 set): n = 2 and forced bomb (+6 = 1, §7 "dissolve spell").
 All items in state 1 fall again: `ItemMgr_DropAttracted` 0x441530, called as the last step of `Player_Die` (both modes) and again at the real death (`Player_DyingUpdate`, after the death drops, §6.2), walks the active item list and for every item with state +0x2D7 == 1 sets state := 0 and vel (+0x2B0) := (0, −0.9, 0). This is not the −0.7 of the `ItemMgr_Calc` player-dying branch (08 §8.4), which only applies to items still in state 1 when the calc runs (VERIFIED 0x441530, RE-Q24; runtime: attract demo 0, player hit at 4547 above the collection line with the auto-collect condition true, point item 428 stops at x 174.3 instead of drifting to 300, RE-Q28).
@@ -329,7 +331,8 @@ untampered run, so this matches a port that ignores the anti-tamper checks (13 �
 ### 6.2 Dying state (state 2, `Player_DyingUpdate`)
 While n > 0 (every frame): time −15 (0x418220), n −= 1, last-spell request (+4) := 1. A bomb pressed now
 (§7) becomes a last spell and saves the player (the bomb sets state 3). When n reaches 0 (the real death):
-effects + sound 0xF; bullets unfrozen (GameFlags bit 10 off, `AnmMgr_TintOff`); byte 0x164D0B0 := 0 (here, after the
+ring effect +0xE2B28 ended (byte +0x350 := 0, pointer 0), effects + sound 0xF; bullets unfrozen (GameFlags bit 10 off,
+`AnmMgr_TintOff` — the only tint-off of `Player_DyingUpdate`, not every dying frame); player VM flags bit 17 cleared; byte 0x164D0B0 := 0 (here, after the
 statistics bit +0xDA |= 4 — not in `Player_Die`, so a deathbomb leaves it unchanged; 11 §2, VERIFIED 0x44CBF0, RE-Q36);
 spell-card failure notified; miss counter; time −= min(time/10, 500)
 (as −(time)/10 when time ≤ 5000); drops: lives < 1 → power := 0 and 5 full-power items; else power :=
@@ -372,7 +375,10 @@ not tested here). In special mode (bits 7–8 set: reachable only through the fo
 death during a boss last spell) the whole block is skipped: index := 4 and nothing else — no bomb cost, no
 `SetBombs`/`AddBombs` (so none of their checksum RNG draws), no counter 0x164CFA8 / 0x164CFAC, no
 `GameMgr_AddBombCount` 0x44E2E0 (no checksum draws), no unfreeze / ring removal / tint off, +0xFEC unchanged
-(VERIFIED 0x44C650, RE-Q36). Normal mode: bullets unfrozen, ring effect removed; index = focus; if +4 (last
+(VERIFIED 0x44C650, RE-Q36). Normal mode, in this order (VERIFIED 0x44C650, RE-Q38): player VM (+0x10) flags
+bit 17 cleared (the colour2 silhouette of §6.1 off); deathbomb ring effect +0xE2B28, if any: its byte +0x350 := 0
+(effect ends) and the pointer := 0; GameFlags bit 10 cleared (bullets unfrozen); **`AnmMgr_TintOff`** 0x40BAB0
+(AnmManager+4 := 0, tint colour 0x80808080; 06 §10.2); then index = focus; if +4 (last
 spell) index = 1 − focus; no last spell: bombs −= 1 (counter 0x164CFA8); last spell: index += 2, uses all bombs
 if forced or bombs < 2 (count kept in +0xFEC, bombs := 0) else 2 bombs; counter 0x164CFAC; game-manager
 0x44E2E0(1). Special mode: index 4. Then +4 := 0; bombing := 1; +0xE2A7C := 1; timer 0; duration := 999 (the bomb

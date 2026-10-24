@@ -799,3 +799,6 @@ addr,kind,name,signature,confidence,note
 0x0046950b,func,KeyConfig_ReplaceButton,,VERIFIED,RE-Q37 every working-copy field == old := new
 0x0164d540,global,g_Log,,VERIFIED,RE-Q37 0x2000-byte log buffer; +0x2000 write ptr; +0x2004 error flag
 0x004c868c,global,g_KeyCfgLastButton,,VERIFIED,RE-Q37 i16 static init 32; first-down raw joystick button
+0x004c8010,global,g_ShotNamesShort,,VERIFIED,RE-Q38 char*[12] "Rm & Yk".."Yuyuko " (replay-save rows; same strings as 0x4C86C0)
+0x004c86c0,global,g_ShotNamesShort2,,VERIFIED,RE-Q38 char*[12] same strings as 0x4C8010
+0x004c7f48,global,g_NameCharset,,VERIFIED,RE-Q38 ptr to 96-cell name-entry charset 0x4B7340

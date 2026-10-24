@@ -216,7 +216,7 @@ Each frame `Result_Calc` runs the current state, then the 72 VMs, then frame cou
 | 9 | normal game: name entry (§2.2) |
 | 0x11 | stage practice: store the practice hiscore (15 §2.6); goes to 10 |
 | 0x16 | spell practice: goes to 10 |
-| 0xF | VM 71 (interrupt 18) shows the end banner (stats panel 16 §2.5). `Result_EndBanner` 0x4577E2 itself writes VM 71's pending interrupt := 18 on **every** state-0xF call while the state frame (+4) ≤ 30 (frames 0–30, so the label-18 entry is re-triggered each of those frames); from frame 90 (> 89), a Shot/Enter edge (0x1001) → VM 71 **only** gets interrupt 2, frame := 0, state 0x10. State 0x10: at frame > 29 → frame := 9, state 10 (VERIFIED RE-Q24). |
+| 0xF | VM 71 (interrupt 18) shows the end banner (stats panel 16 §2.5). `Result_EndBanner` 0x4577E2 itself writes VM 71's pending interrupt := 18 on **every** state-0xF call while the state frame (+4) ≤ 30 (frames 0–30, so the label-18 entry is re-triggered each of those frames: every call restarts VM 71 at its label (alpha 0, `alpha_fade 255, 30` from the start), the VMs running after the state code in the same `Result_Calc`; the panel therefore stays at alpha ≈ 0 through frame 30 and its 30-frame fade-in runs from frame 30, fully opaque at frame 60 — VERIFIED code 0x4577E2 + 05 §4 dispatch, RE-Q38); from frame 90 (> 89), a Shot/Enter edge (0x1001) → VM 71 **only** gets interrupt 2, frame := 0, state 0x10. State 0x10: at frame > 29 → frame := 9, state 10 (VERIFIED RE-Q24). |
 | 0x10 | after 30 frames → state 10 with frame counter 9 |
 | 10–14 | replay save (15 §3.6, 16 §2.6) |
 | 2 | at frame 1, begin the loading screen and send interrupt 2 to all VMs. After 20 frames, **scene 1 (title/main menu)**, return 0 (object removed → score.dat saved). |
@@ -236,8 +236,8 @@ In slow mode (or Supervisor+0x1A4 bit 3, set only by the anti-tamper fill), stat
 - slowdown % (15 §2.11).
 
 It then inserts the entry into list [diff][shot] (`ScoreList_Insert`):
-- If the rank > 9, it goes straight to state 0xF (no entry).
-- Otherwise the write position = 0. The cursor starts on 0x5F (END) if an LSNM chunk was found in the file, else on 0 ('A').
+- If the rank > 9, it jumps in the same call to the finishing code below (VERIFIED 0x45621E, RE-Q38): state 0xF, frame 0, **all 72 VMs interrupt 2** (this overwrites the pending d + 3 written at the start of the call before any VM ran, so nothing slides in), +0x58 := the entry's name (= LSNM, so the replay-save name entry of §2.6 starts with it), LSNM := +0x58; **no SE**.
+- Otherwise the write position = 0. The cursor starts on 0x5F (END) if an LSNM chunk was found in the file, else on 0 ('A'); +0x58 := "" (empty string 0x4B6CFF; typing edits the entry's name +0x17 in the list, +0x58 is filled at the finish).
 
 Input is accepted from frame 10. Every key below (directions, Shot/Enter, Bomb/ESC-cancel) accepts an edge press **or** key repeat (0x164D538), so holding Shot types repeatedly; only the ESC (0x08) finish is edge-only. In one frame the order is Up, Down, Left, Right, type, backspace, ESC-finish (typing and backspace can both happen in the same frame).
 
@@ -321,6 +321,10 @@ i) at +0x1A0; interrupt k to VM i = pending interrupt at VM+0x1FE.
 page gets interrupt 22, is run once, then 20 (selected) or 21 (others). After N sub-frames (N = 20 in state 1,
 6 elsewhere) sub-state 1 — exact timing (VERIFIED 0x454CB2, 0x45567D, RE-Q24): the sub-frame +0x18 is incremented at the end of each sub-state-0 call that is still waiting; on the call where it reads N at the test, sub-state := 1, sub-frame := 0 and the sub-state-1 input code below runs **in that same call**, so input is accepted on sub-frame N: Up/Down (edge or repeat, wrap, SE 12, `Result_CursorUpDown` 0x45A0F4) → resend
 20/21. Confirm (Shot/Enter edge): selected VM 23, others 1, SE 10. Cancel (Bomb/ESC edge): SE 11.
+Order inside sub-state 1 (VERIFIED 0x454CB2, 0x4550FC, 0x45567D, 0x455A33, 0x455CB0, RE-Q38): cursor move →
+(top only: D) → **cancel** (0x0A) → confirm (0x1001). On every page but the top, cancel leaves the state and returns,
+so a cancel and a confirm on the same frame cancel. Top: cancel on cursor ≠ 3 sets cursor 3 (SE 11, VMs 20/21) and
+does not return, so a confirm edge in the same call then exits through item 3 (state 2, SE 11 again).
 
 | state | VMs | count | confirm | cancel |
 |---|---|---|---|---|
@@ -333,7 +337,8 @@ page gets interrupt 22, is run once, then 20 (selected) or 21 (others). After N 
 State 1 additionally: on entering (sub-frame 0) all 72 VMs get interrupt 1 first. **D** (edge, input bit
 0x2000) in sub-state 1 writes score.txt (§2.7), no sound. State 1 is entered from state 0 (the initial state)
 and when the play-data page ends.
-State 3: the hidden code (15 §2.12) runs every frame including sub-state 0.
+State 3: the hidden code (15 §2.12) runs every frame including sub-state 0, **after** the page input; a call
+that confirms or cancels returns before it, so the code is not stepped on that call (VERIFIED 0x4550FC, RE-Q38).
 Card groups (table 0x4C67D0 / counts 0x4C67E8): 0 Easy (42 cards), 1 Normal 49, 2 Hard 50, 3 Lunatic 50,
 4 Extra 14, 5 all 222 (ids 0–221).
 
@@ -356,7 +361,11 @@ is off-screen, so the list swap is invisible.) Draw: §2.3.
 Captured counts (Result_OnRegister): for group g and character s = 0..12, count of cards of the group whose
 CATK magic is `CATK`, byte +8 = 3, and (story captures[s] ≠ 0 or practice captures[s] ≠ 0).
 
-Text VMs (Result_OnRegister): 28 VMs at Result+0xBFC0 + 0x2A4·k, each set up by `AnmVm_Init` + `AnmVm_SetSprite` (0x4068A0: no script runs, so the VM keeps the `AnmVm_Init` defaults — colour/alpha as initialised there, not hidden), pos := (0, 0, 0), flags |= 0x1800 (anchor top-left), font bytes +0x298/+0x299 := 15 (VERIFIED 0x45964D, RE-Q24); a text VM that `Result_Draw` draws without positioning it first therefore appears at (0, 0): k = 0..13 use
+Text VMs (Result_OnRegister): 28 VMs at Result+0xBFC0 + 0x2A4·k, each set up by `AnmVm_Init` + `AnmVm_SetSprite` (0x4068A0: no script runs, so the VM keeps the `AnmVm_Init` defaults — colour/alpha as initialised there, not hidden), pos := (0, 0, 0), flags |= 0x1800 (anchor top-left), font bytes +0x298/+0x299 := 15 (VERIFIED 0x45964D, RE-Q24); so the initial
+colour is 0xFFFFFFFF (alpha 255) and the flags 7 | 0x1800 (visible). The initial alpha is never seen: the text VMs are
+drawn only in state 8 (each row / header VM is rendered at frame 10 of the state, which is also the first frame VM 40
+is back below x 640, and +0x40 := −1 on every entry forces that render) and in states 0x13–0x15 (alpha written every
+frame from frame 0) (RE-Q38); a text VM that `Result_Draw` draws without positioning it first therefore appears at (0, 0): k = 0..13 use
 `text.anm` sprites 21..34, k = 14..27 `resulttext.anm` sprites 2..15 (512×17 strips). Card list: k = 0..9
 rows, k = 10 header. Play data: k = 0..19. Plus VM +0x1119C = `result00.anm` sprite 32 (256×16 separator bar,
 default centred anchor).
@@ -439,7 +448,12 @@ name +0x58 (9 bytes), char cursor +0x2C.
   interrupt 2, frame 0. Confirm on cursor 0 → SE 10 (sound flushed), state 12, all VMs interrupt 12, frame 0.
 - **11 message** (cannot save): from frame 20, confirm or cancel → SE 11, state 2, VMs interrupt 2.
 - **12 slot list**: at frame 0: create directory `replay`, read the 15 headers `./replay/th8_%.2d.rpy` into
-  Result+0x46470 + 0x134·i. From frame 20: Up/Down over 15 (edge/repeat, wrap, SE 12), +0x28 := cursor.
+  Result+0x46470 + 0x134·i: each existing file is loaded with `Replay_Load` (15 §3.7: magic/version, decrypt,
+  checksum, decompress, slow-mode and exe checks) and, when that succeeds, the first 0x134 bytes of the **decoded**
+  file are copied (so the info fields +0x6A shot, +0x6C date, +0x72 name, +0xB0 score are the decompressed ones) and
+  the buffer is freed. A missing file or a failed load leaves that entry as it was (all zero from the object's
+  memset at registration, or the previous read when state 12 is re-entered). "Valid" below tests this copy, so a
+  file that fails `Replay_Load` counts as empty: no overwrite question, `-----` row (VERIFIED 0x45696F, RE-Q38). From frame 20: Up/Down over 15 (edge/repeat, wrap, SE 12), +0x28 := cursor.
   Confirm: SE 10, +0x28 := cursor, frame 0, date → +0x476E8, score (stats+8) → +0x4772C; if the slot holds a
   valid replay (magic `T8RP` 0x50523854 and version & 0xFFF = 6) → all VMs 13, VM (56 + slot) 16, state 14;
   else all VMs 17, VM (56 + slot) 16, state 13. Then name pos +0x1C := 0, char cursor := 0x5F if an LSNM
@@ -452,9 +466,13 @@ name +0x58 (9 bytes), char cursor +0x2C.
   repeat), writing into +0x58. Choosing END: `Replay_Finish("./replay/th8_%.2d.rpy", slot + 1)`, state 2,
   all VMs 2, LSNM := name. ESC (edge) → SE 10, back to state 12. Typing SE 10 is followed by a sound flush.
 - **Draw** (states 10–14): VMs 49–54 drawn a second time on top; `No.   Name     Date   Player Score` at
-  VM 55; rows i = 0..14 at VM 56 + i, colour 0xFFFF8080 for i = slot, else 0xFF808080:
+  VM 55, in the ASCII colour left by the code before it (no colour set for it; VERIFIED disasm 0x4586B4, RE-Q38):
+  white in states 10, 11, 12, 14 (the end of every `Result_Draw` resets it to 0xFFFFFFFF; the ranking is not drawn
+  there because VM 40 is at x 640); in state 13 the grid is drawn first, so the header takes the colour of the last
+  grid cell (0x5F END): 0xC0C0C0C0, or 0xFFFFFFC0 while the cursor is on END (scale is reset to 1 after the grid); rows i = 0..14 at VM 56 + i, colour 0xFFFF8080 for i = slot, else 0xFF808080:
   - state 13: every row prints the new entry `"No.%.2d %8s %5s  %7s %9d0"` (i + 1, name, date, shot name
-    0x4C8010[shot + 0x164D0B2], score), then colour 0xFFF0F0FF `"      %8s"` with `_` at min(pos, 7) (only the
+    0x4C8010[shot + 0x164D0B2], score; table 0x4C8010 = `Rm & Yk`, `Ms & Al`, `Sk & Rr`, `Ym & Yy`, `Reimu  `,
+    `Yukari `, `Marisa `, `Alice  `, `Sakuya `, `Remilia`, `Youmu  `, `Yuyuko `, the same strings as 0x4C86C0), then colour 0xFFF0F0FF `"      %8s"` with `_` at min(pos, 7) (only the
     chosen row VM is on screen: the others were sent away by interrupt 17);
   - else valid slot: `"No.%.2d %8s %5s  %7s %9d0"` with the file's name (+0x72), date (+0x6C), shot (+0x6A),
     score (+0xB0); invalid/empty: `"No.%.2d -------- --/--  -------          0"`.
