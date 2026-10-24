@@ -716,6 +716,8 @@ impl GameManager {
         }
         ctx.anm.speed = 1.0;
         g.flags &= !F_DEATH;
+        // Darkness-mask alpha 0x4E3D28 := 0 (13 §4.1).
+        crate::ascii::clear_darkness();
         // gm+0x2D := 0 (0x43B835, 11 §4 step 10).
         g.slow_skip = 0;
         let fresh = g.fresh_start || g.practice() || g.spell_practice() || g.difficulty >= 4;
@@ -1019,6 +1021,8 @@ impl Task<Ctx> for GameManager {
         }
         // 0x18B8A2C := 1 (13 §3).
         crate::enemy::set_load_frames(1);
+        // Darkness-mask alpha 0x4E3D28 := 0 (13 §4.1).
+        crate::ascii::clear_darkness();
         let mut st = self.player.borrow().stats.clone();
         st.score10 = st.score10.min(999_999_999);
         st.score_disp = st.score10;

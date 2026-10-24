@@ -40,10 +40,51 @@ const RANK_TEXT: [&str; 6] = [
     "Phantasm Rank*2.0",
 ];
 
-// Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus popup with its age in frames (12 §5.5).
+// Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus popup: timer t (frames) and slide x (12 §5.5).
 struct ActivePopup {
     kind: Popup,
-    frame: u32,
+    t: u32,
+    x: f32,
+}
+
+impl ActivePopup {
+    // The show call: x := 416, t := 0.
+    fn show(kind: Popup) -> Self {
+        Self {
+            kind,
+            t: 0,
+            x: 416.0,
+        }
+    }
+
+    // Popup slot = one of the three timers impl+0x22D9C / +0x22DBC / +0x22DDC.
+    fn slot(kind: Popup) -> usize {
+        match kind {
+            Popup::Bonus(_) => 0,
+            Popup::Message(..) => 1,
+            Popup::SpellBonus(_) => 2,
+        }
+    }
+
+    // Hud_Update step 5: x from the timer before its tick, then the lifetime test (250 / 180 / 280), then the tick.
+    // Returns false when the popup is switched off.
+    fn update(&mut self) -> bool {
+        self.x = if self.t < 30 {
+            self.t as f32 * -312.0 / 30.0 + 416.0
+        } else {
+            104.0
+        };
+        let life = match self.kind {
+            Popup::Bonus(_) => 250,
+            Popup::Message(..) => 180,
+            Popup::SpellBonus(_) => 280,
+        };
+        if self.t >= life {
+            return false;
+        }
+        self.t += 1;
+        true
+    }
 }
 
 // Stage-clear panel state (10 §9, 12 §5.6).
@@ -114,7 +155,8 @@ pub struct Hud {
     bar_disp: f32,
     // +0x28 boss timer value last shown; −1 = none yet.
     timer_last: i32,
-    popups: Vec<ActivePopup>,
+    // Bonus / message / spell-bonus popups (12 §5.5).
+    popups: [Option<ActivePopup>; 3],
     clear: Option<ClearPanel>,
     // impl+0x22D88: stored clear-panel total (12 §5.6).
     clear_total: i32,
@@ -195,7 +237,7 @@ impl Hud {
             bar_target: 0.0,
             bar_disp: 0.0,
             timer_last: -1,
-            popups: Vec::new(),
+            popups: [None, None, None],
             clear: None,
             clear_total: 0,
             fresh,
@@ -714,28 +756,33 @@ impl Hud {
     }
 
     // Hud_DrawPopups 0x438A89 (12 §5.5): every string with the clip flag (playfield viewport); bonus / message
-    // popups slide from x 416 by −312 over 30 frames.
+    // popups at the slide x of the last Hud_Update.
     fn draw_popups(&mut self, ctx: &mut Ctx) {
-        for p in &self.popups {
-            let slide = |f: u32| 416.0 - 312.0 * (f.min(30) as f32 / 30.0);
+        for p in self.popups.iter().flatten() {
             match p.kind {
                 Popup::Bonus(n) => ctx.ascii.push(
-                    Text::new(slide(p.frame), 48.0, format!(" BONUS {n:8}"))
+                    Text::new(p.x, 48.0, format!(" BONUS {n:8}"))
                         .argb(0xFFFFFF80)
                         .clip(),
                 ),
                 Popup::Message(t, v) => {
                     let (s, small) = match t {
                         1 => ("Full Power Mode!".to_string(), false),
+                        // SPEC-GAP: no spec names a caller of types 2–4 (IMPL97 Q1).
+                        2 => ("Supernatural Border!!".to_string(), true),
+                        3 => ("CherryPoint Max!".to_string(), false),
                         4 => (format!("Border Bonus {v:7}"), true),
                         5 => ("Spell Bonus Failed".to_string(), true),
                         _ => ("Last Spell Failed".to_string(), true),
                     };
-                    let mut tx = Text::new(slide(p.frame), 168.0, s).clip();
-                    if small {
-                        tx = tx.scale(0.9).advance(11.0);
-                    }
-                    ctx.ascii.push(tx);
+                    // Types 2/4–6 set Ascii_SetAdvance(11) but reset it to 13 before the draw pass reads it
+                    // (12 §2.9), so only the 0.9 x scale narrows them.
+                    let tx = Text::new(p.x, 168.0, s).clip();
+                    ctx.ascii.push(if small {
+                        tx.scale_xy(0.9, 1.0).argb(0xFFE0B0FF)
+                    } else {
+                        tx.argb(0xFFC0B0FF)
+                    });
                 }
                 // "Spell Card Bonus!" at x (384 − 17·14)/2 + 32 = 105 (14 px per glyph, not the 13 px advance), y 80;
                 // "+%d" 2× at y 96, x (384 − len·28)/2 + 32.
@@ -1102,19 +1149,15 @@ impl Task<Ctx> for Hud {
                 }
             }
         }
+        // Show calls made earlier this frame restart their slot; then the popup timers (12 §5.1b step 5).
         for p in self.player.borrow_mut().stats.popups.drain(..) {
-            self.popups.push(ActivePopup { kind: p, frame: 0 });
+            self.popups[ActivePopup::slot(p)] = Some(ActivePopup::show(p));
         }
-        // Popup lifetimes 250 / 180 / 280 frames (12 §5.5).
-        self.popups.retain_mut(|p| {
-            p.frame += 1;
-            p.frame
-                < match p.kind {
-                    Popup::Bonus(_) => 250,
-                    Popup::Message(..) => 180,
-                    Popup::SpellBonus(_) => 280,
-                }
-        });
+        for slot in &mut self.popups {
+            if slot.as_mut().is_some_and(|p| !p.update()) {
+                *slot = None;
+            }
+        }
         self.clear_bonus(&ctx.game);
         self.clear_calc(&mut ctx.game, &inp);
         // Msg_Run (10 §5), including op 9.
@@ -1287,6 +1330,23 @@ mod tests {
         assert!(hud_cover(&vm));
         vm.flags &= !anmvm::F_WAIT_INT;
         assert!(!hud_cover(&vm));
+    }
+
+    // 12 §5.5: x from the timer before its tick, lifetime test before the tick.
+    #[test]
+    fn popup_slide_and_lifetime() {
+        let mut p = ActivePopup::show(Popup::Message(1, 0));
+        let mut xs = Vec::new();
+        while p.update() {
+            xs.push(p.x);
+        }
+        // Drawn for 180 frames: 416 on the first, 405.6 on the second, 104 from frame 31.
+        assert_eq!(xs.len(), 180);
+        assert_eq!(xs[0], 416.0);
+        assert_eq!(xs[1], 1.0 * -312.0 / 30.0 + 416.0);
+        assert_eq!(xs[30], 104.0);
+        let mut b = ActivePopup::show(Popup::Bonus(5));
+        assert_eq!(std::iter::from_fn(|| b.update().then_some(())).count(), 250);
     }
 
     // 12 §5.1a: 14 × 12 tiles, I4 = r + 2c, pos (32c + 15.5, 32r + 15.5), uv offset (32c/512, 32r/512).

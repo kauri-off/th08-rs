@@ -4,7 +4,7 @@ use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::ANM_SLOT;
 use crate::gfx::Gfx;
-use crate::player::{Player, Stats};
+use crate::player::{Player, Popup, Stats};
 
 // 08 §8.1: 2096 slots × 0x2E4.
 pub const MAX_ITEMS: usize = 2096;
@@ -262,6 +262,10 @@ impl ItemManager {
                     if st.power >= 128.0 {
                         st.set_power(128.0, &mut anm.rng);
                         out.cancel = !spell;
+                        // Hud_ShowMessage(0, 1) "Full Power Mode!"; its panel repaint 0x17CE8CC := 2 is moot, the
+                        // port repaints the panel every frame.
+                        // SPEC-GAP: 08 §8.5 does not say whether the message shares the spell-card test (IMPL97 Q2).
+                        st.popups.push(Popup::Message(1, 0));
                         self.convert_power_items(anm, idx);
                     }
                     st.add_score(10);
@@ -315,6 +319,7 @@ impl ItemManager {
                     crate::sound::play(crate::sound::POWERUP);
                     popup(-1, POPUP_POWER);
                     out.cancel = true;
+                    st.popups.push(Popup::Message(1, 0));
                     self.convert_power_items(anm, idx);
                 }
                 st.set_power(128.0, &mut anm.rng);

@@ -373,7 +373,7 @@ fn popup_glyph(anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm, idx: usize) -> b
     true
 }
 
-// Ascii_DrawPopups 0x405420 popup part (13 §4): small popups, then large ones, all Draw2DSnap in the playfield viewport.
+// Ascii_DrawPopups 0x405420 popup part (13 §4): small popups, the darkness mask (§4.1), then large ones, all Draw2DSnap in the playfield viewport.
 fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
     gfx.set_viewport(crate::gfx::PLAYFIELD);
     let pl = crate::effect::with(|e| e.player);
@@ -402,6 +402,7 @@ fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
                 }
             }
         }
+        darkness_draw(anm, gfx, pl);
         for q in p.large.iter().flatten() {
             set_rgb(&mut large, q.colour);
             large.color[anmvm::A] = popup_alpha(q.pos, pl);
@@ -416,6 +417,73 @@ fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
                 }
             }
         }
+    });
+}
+
+// Darkness mask (13 §4.1): alpha Ascii +0x16F08 (int, 0x4E3D28), radius +0x16F04 (f32, 0x4E3D24), hole VM +0x16F0C.
+#[derive(Default)]
+struct Darkness {
+    alpha: i32,
+    radius: f32,
+    vm: AnmVm,
+}
+
+thread_local! {
+    static DARKNESS: std::cell::RefCell<Darkness> = std::cell::RefCell::new(Darkness::default());
+}
+
+// ECL native 0 (07 §12): alpha := int var 10000, radius := float var 10016.
+pub fn set_darkness(alpha: i32, radius: f32) {
+    DARKNESS.with_borrow_mut(|d| (d.alpha, d.radius) = (alpha, radius));
+}
+
+// Alpha := 0 by `Spell_End`, `GameManager_StageStart` and `GameMgr_OnRemove` (13 §4.1); the radius is kept.
+pub fn clear_darkness() {
+    DARKNESS.with_borrow_mut(|d| d.alpha = 0);
+}
+
+pub fn darkness_alpha() -> i32 {
+    DARKNESS.with_borrow(|d| d.alpha)
+}
+
+// The four black rects (x0, y0, x1, y1) around the player P (playfield) with radius r and shake offset s (13 §4.1).
+fn darkness_rects(p: [f32; 2], r: f32, s: [f32; 2]) -> Vec<[f32; 4]> {
+    let (left, right) = (p[0] + 32.0 - r + s[0], p[0] + 32.0 + r + s[0]);
+    let (top, bottom) = (p[1] + 16.0 - r + s[1], p[1] + 16.0 + r + s[1]);
+    let mut out = Vec::with_capacity(4);
+    if left > 32.0 {
+        out.push([32.0, 16.0, left, 464.0]);
+    }
+    if right < 416.0 {
+        out.push([right, 16.0, 416.0, 464.0]);
+    }
+    let (x0, x1) = (left.max(32.0), right.min(416.0));
+    if top > 16.0 {
+        out.push([x0, 16.0, x1, top]);
+    }
+    if bottom < 464.0 {
+        out.push([x0, bottom, x1, 464.0]);
+    }
+    out
+}
+
+// Drawn by Ascii_DrawPopups between the small and large popups while alpha > 0: Screen_FillRect rects (untextured,
+// z 0, ZFUNC unchanged), then etama.anm script 105 (sprite 229, 128×128) set every frame, scale r / 63, Draw2DSnap.
+fn darkness_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, player: [f32; 3]) {
+    DARKNESS.with_borrow_mut(|d| {
+        if d.alpha <= 0 {
+            return;
+        }
+        let a = d.alpha as u8;
+        for [x0, y0, x1, y1] in darkness_rects([player[0], player[1]], d.radius, anm.screen_offset)
+        {
+            gfx.rect(x0, y0, x1 - x0, y1 - y0, [0, 0, 0, a]);
+        }
+        anm.file_set_script(&mut d.vm, crate::effect::SCRIPT_SLOT, 105);
+        d.vm.scale = [d.radius / 63.0; 2];
+        d.vm.pos = [player[0] + 32.0, player[1] + 16.0, player[2]];
+        d.vm.color[anmvm::A] = a;
+        anm.draw_mode(gfx, &mut d.vm, 0);
     });
 }
 
@@ -1273,5 +1341,30 @@ mod tests {
         );
         assert_eq!(large_glyphs(1, 0).len(), 2);
         assert_eq!(large_glyphs(12, 3), vec![0xF, 3, 0xE, 2, 1, 0xD]);
+    }
+
+    // 13 §4.1: left/right rects only when inside the playfield; top/bottom between the clamped x0/x1.
+    #[test]
+    fn darkness_mask_rects() {
+        let r = darkness_rects([192.0, 300.0], 50.0, [0.0, 0.0]);
+        assert_eq!(
+            r,
+            vec![
+                [32.0, 16.0, 174.0, 464.0],
+                [274.0, 16.0, 416.0, 464.0],
+                [174.0, 16.0, 274.0, 266.0],
+                [174.0, 366.0, 274.0, 464.0],
+            ]
+        );
+        // Golden stage-2 card radius 288: only the top rect (clamped) and nothing that is out of range.
+        let r = darkness_rects([258.0, 400.0], 288.0, [0.0, 0.0]);
+        assert_eq!(r, vec![[32.0, 16.0, 416.0, 128.0]]);
+        // The shake offset moves the hole.
+        let r = darkness_rects([192.0, 300.0], 50.0, [2.0, -3.0]);
+        assert_eq!(r[0], [32.0, 16.0, 176.0, 464.0]);
+        assert_eq!(r[2], [176.0, 16.0, 276.0, 263.0]);
+        set_darkness(255, 288.0);
+        clear_darkness();
+        assert_eq!(darkness_alpha(), 0);
     }
 }

@@ -636,6 +636,16 @@
   Bonus line: no advance after the captures units digit (12 §5.8). Golden 25634, fullrun_noclip 124707, selftest1
   1922, demos 0–3 in sync; golden draw same 92.51 % → 96.80 %, changed 571165 → 229112, missing 33907 → 29647, extra
   4204288 → 4160688, reordered 379188 → 38029. Questions: `docs/briefs/IMPL96_QUESTIONS.md`.
+- impl97 (RE-Q33 §3 8, 10, 13): darkness mask drawn by `Ascii_DrawPopups` between the small and large popups while
+  alpha > 0 — four black `Screen_FillRect` rects around the player plus etama.anm script 105 (scale r / 63) set every
+  frame (`ascii::darkness_draw`, 13 §4.1); ECL native 0 stores alpha / radius (`ascii::set_darkness`, 07 §12),
+  `Spell_End`, `GameManager_StageStart` and `GameMgr_OnRemove` zero the alpha. HUD popups are three slots (bonus,
+  message, spell bonus); x from the timer before its tick, lifetime test before the tick (`ActivePopup::update`,
+  12 §5.5). Messages: colours 0xFFC0B0FF (1, 3) / 0xFFE0B0FF (2, 4–6), types 2/4–6 scale (0.9, 1.0) with advance 13
+  (12 §2.9); types 2 / 3 texts added (no issue site in the specs). "Full Power Mode!" when power items reach 128 and
+  on the full-power item below 128 (08 §8.5). SPEC-GAP 105 → 107. Golden 25634, fullrun_noclip 124707, selftest1
+  1922, demos 0–3 in sync; golden draw same 96.80 % → 97.03 %, changed 229112 → 221433, missing 29647 → 18823, extra
+  4160688 → 4161309, reordered 38029 → 37207 (etama.anm#4 fully same). Questions: `docs/briefs/IMPL97_QUESTIONS.md`.
 - impl93 (RE-Q33 §3 1–3, 6; RE-Q32 §3 7): list-B/C billboards use +0x63C4 = normalise(cross(raw facing, up))
   (`StageCamera::right`), written only in `Stage_DrawLayer` (stale while the layers are skipped); half size
   ((len·0.5)·sprite_w)·scale.x with the 3D projected length, no snapping (`AnmManager::draw_billboard`, 13 §2.6c,

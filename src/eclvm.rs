@@ -1034,7 +1034,7 @@ impl Exec<'_> {
     fn native(&mut self, t: &mut Thread, n: i32, arg: i32) {
         let gs = self.anm.speed;
         match n {
-            0 => self.m.g.native_globals = [t.ctx.int(V_INT0), t.ctx.flt(V_FLT0).to_bits() as i32],
+            0 => crate::ascii::set_darkness(t.ctx.int(V_INT0), t.ctx.flt(V_FLT0)),
             // Bounce: vars 10022 / 10023 are the gravity step and the fall-speed cap.
             2 => {
                 let e = &mut *self.e;

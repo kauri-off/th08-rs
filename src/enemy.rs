@@ -667,8 +667,6 @@ pub struct Globals {
     // mgr+0x9DCDC0 / +0x9DCDC2 (07 §10.4).
     pub drop_counter: u16,
     pub drop_index: u16,
-    // 0x4E3D28 / 0x4E3D24 (native 0, 07 §12).
-    pub native_globals: [i32; 2],
     // Byte 0x164D0BB (timeline op 16).
     pub flag_164d0bb: bool,
     // 0xF54CEC (op 163), 0x4E4B60 (native 5).
@@ -1568,7 +1566,7 @@ impl EnemyManager {
     // Spell_End 0x4161B0 (07 §11.1); the payout is queued and made 130 frames later in `step`.
     pub fn finish_spell(&mut self, anm: &mut AnmManager) {
         // 0x4E3D28 (darkness mask alpha) := 0 first, every call; then, with the card active, Spell_HideName.
-        self.g.native_globals[0] = 0;
+        crate::ascii::clear_darkness();
         let Some(s) = self.g.spell.take() else { return };
         crate::gui::request(crate::gui::Req::BossHide);
         self.g.bonus_frozen = false;
@@ -2941,11 +2939,11 @@ mod tests {
     fn spell_end_sets_bomb_cooldown() {
         let mut anm = AnmManager::default();
         let (mut m, player) = empty_manager(&mut anm);
-        m.g.native_globals[0] = 200;
+        crate::ascii::set_darkness(200, 288.0);
         m.finish_spell(&mut anm);
         assert_eq!(player.borrow().bomb_cooldown, 0);
         // 0x4E3D28 := 0 even with no card active.
-        assert_eq!(m.g.native_globals[0], 0);
+        assert_eq!(crate::ascii::darkness_alpha(), 0);
         m.g.spell = Some(Spell {
             timed_out: true,
             duration: 600,
