@@ -805,3 +805,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   init 4). Specs 14 §4, 09 §2 / §2.1. Original scan run re/work/runs/q50/orig_52104 (TH08_SCAN 600–660).
 - Scratch port copy re/work/runs/q50/portcopy (target/re50) with A–C: 52104 → row 690; Bu08/JS06/Nd115 → ~32 rows
   before the end (frame / flags bit 2 at replay end) — next candidates, not analysed.
+
+# RE-Q51 (2026-10-25) — replay pilot: ff group, replay-end flags, 52104 r690 — DONE (specs/changelog/answers_re_q51.md)
+- Q1: `ff` = calc-chain pass. Skippable-dialogue `Replay_FastForward` returns 6 → chain restart from the head inside one
+  Frame_Run → Supervisor_Calc polls once per pass (polls.txt per pass, input.txt per present = lossy). Port gameplay
+  right; session runner wrong (CODE BUG D: per-poll input from polls.txt, poll index per pass, row per pass). Fast mode
+  ruled out (re/work/runs/q51/normal_Tt16, 60 fps: same rows). Specs 00 §3, 15 §3.3, drawlog README.
+- Q2: ContinueMenu early exits clear game_over (+ displayed score := score) → last gameplay frame still runs (BUG E);
+  bit 3 survives into the menu, Top entry block redirects to screen 7 after loading (BUG F). Specs 11 §4.2, 12 §2.2, §4, 15 §2.9.
+- Q3: ShotUpd_AliceLaser end branch falls through (no return): the ended laser follows option 0 once more (BUG G). 14 §4.
+- Scratch port re/work/runs/q51/portcopy (target/re51, IMPL117 WIP A–C + D–G): Bu08/JS06/Nd115/Tt16/F128 0 diffs;
+  remaining first diffs listed in the changelog (bit-10 group Ar02/Dn14/Ro168/53373 is the next candidate).

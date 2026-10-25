@@ -523,7 +523,7 @@ Inside each 17-word block:
 - Play time (`Supervisor_UpdatePlayTime` 0x448418) adds `timeGetTime() − mark` (mark = Supervisor+0x1AC;
   mark := 0 if the clock went backwards) split into h/m/s/ms with carries, then mark := now. Mark set: top of
   every `GameManager_StageStart`, on leaving the pause menu (resume/retry/quit paths) and the continue menu.
-  Added: on pause entry (GameMgr_Calc), on continue-menu entry, and in `GameMgr_OnRemove` unless replay
+  Added: on pause entry (GameMgr_Calc), when the continue prompt opens (not on its early exits, 11 §4.2), and in `GameMgr_OnRemove` unless replay
   (then mark := 0). So play time = wall time with a GM in a stage, excluding pause and continue menus,
   replays/demos not counted at removal.
 - Music flags are set by `Music_PlaySlot`/`Music_PlayFile` unless in replay or demo. The ending sets flag 18, and 19 on a good ending.
@@ -723,6 +723,10 @@ object's frame counter (+0) in **both** tests — there is no separate dialogue 
 run, and a restart re-runs PlayCalc, so the dialogue test sees consecutive values. The dialogue test comes first: with
 fast playback during skippable dialogue, `frame % 3 ≠ 2` restarts, and only on `frame % 3 == 2` is the fast test made.
 Outside bit 2, or with bit 9 set, neither test is made (return 1).
+Each restart is a full extra calc pass (00 §3, VERIFIED RE-Q51): `Supervisor_Calc` runs again and polls input again,
+`Replay_PlayCalc` reads the next input word and the GM runs the next gameplay frame. Nothing is drawn between passes.
+Example (gensokyou udAr02, skippable dialogue): presents 5170–5172 run gameplay frames 4963–4964, 4965–4967,
+4968–4969 (2, 3, 2 passes).
 
 The HUD shows the playback fps in yellow (0xFFFFFFD0), or red (0xFFFF4040) when the flag is set.
 Exact behaviour (`Fps_Update` 0x446F53, VERIFIED changelog/answers_impl17.md §5.3; this is the attract demos' "2-digit text at the

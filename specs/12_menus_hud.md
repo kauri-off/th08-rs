@@ -182,7 +182,7 @@ quads after it (flushed by the next state change, i.e. the first title01 quad): 
 top of** the background. A port must draw surface 0 before the prio-2 loading VMs (or emulate the deferred batch).
 Entering: request title BGM slot 8 if coming from a non-menu scene; load surface 0 = `title/title00.png` when
 coming from the title/difficulty/replay screens; create the 142 VMs once; interrupt 2. If a replay was being
-watched → go straight to the replay screen. If `+0x6C` ≠ 0 (back from a practice game; 2 =
+watched (flags bit 3 still set, see below) → go straight to the replay screen. If `+0x6C` ≠ 0 (back from a practice game; 2 =
 spell practice, which also sets flags bit 14) → screen 8 + 7·(flags bit 14), i.e. **8** (practice difficulty) or **15**
 (character select, spell-practice variant), range interrupt 5. Each of these screens forwards at once while +0x6C ≠ 0
 (VERIFIED code; `musicroom_practice` trace shows menu 0 → 15 → 17 on consecutive frames 7887–7889):
@@ -234,6 +234,16 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
   - During the 9 render frames of sub-state 0 the drawn description is therefore item 0, whatever the cursor.
   - On the 9th frame the handler sets +0x08 = −1 and enters sub-state 1 in the same call. The change test then switches
     to VM[cursor] with interrupt 1 (fade-in from 0).
+- **Back from a replay** (VERIFIED `MainMenu_OnRegister` 0x470A6C, `MainMenu_Top` 0x4674E0, RE-Q51): flags bit 3
+  (replay) is **not** cleared by the scene switch (2 → 7 or 2 → 1) or the GM removal. `MainMenu_OnRegister`: bit 3 set
+  → shot := 0; bit 1 (demo) set → bit 3 := 0; after the cursor rule below, flags &= ~0x4001 (bits 0 and 14); bit 1 :=
+  0 later in the same function. So after watching a replay bit 3 stays set through the whole menu loading (trace
+  flags 0x38008), screen +0x14428 = 0 and the cursor is the previous-scene value (a spell-practice replay has bit 0
+  clear, so no practice override: udJS06, an Extra card, gives cursor 1). The Top handler's entry block (call 0, the
+  loader's release frame, after surface load / VM creation / interrupt 2) then tests bit 3: +0x68 := current screen
+  (0), screen := 7, +0x10, +0x1442C, +0x0C, +0xC294 := 0, range interrupt 13 on the 142 VMs, the current
+  description VM gets interrupt 2, bit 3 := 0, return 1. The replay screen's own entry block runs on the next frame
+  (cursor 0, 15 §3.8). Demos clear bit 3 at register (bit 1), so they return to the top menu.
 - **Cursor on menu load** (`MainMenu_OnRegister`, by previous scene):
   - 5 (result viewer) → 5;
   - 8 (music room) → 6;
@@ -576,7 +586,7 @@ selected item colour 0xFFFF8080, other 0xFF505050; default cursor "No" (state 2)
 death with no lives left) and the timeline op of `EclTimeline_Run` (enemy manager, prio 11). The ASCII calc (prio 1)
 therefore first runs `ContinueMenu_Update` on the **next** frame. (The same frame's ASCII draw already runs
 `ContinueMenu_Draw` with state 0, frame 0, so its "state ≠ 0 or frame > 2" items are not drawn yet.) That first call
-does all of state 0 (the early-exit tests, sound, VM setup, capture request, capture VM `SetScript` = one VM step), then
+does all of state 0 (the early-exit tests, which clear game_over and return before anything else, 11 §4.2; sound, VM setup, capture request, capture VM `SetScript` = one VM step), then
 state := 2 (or 1, see above) with frame := 0 and falls through into the state-2/1 body **in the same call**. The capture
 VM is run once more at the end of every call, and frame += 1. So state 0 never lasts a whole frame: the first drawn
 frame shows the menu VMs and the capture VM at script time 2. (State 0 also has a `frame > 8 → stay` exit that cannot

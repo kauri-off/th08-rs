@@ -383,8 +383,12 @@ init 4, update 5, draw "trail", hit filter 2. Laser slots: **3** × {Timer, bull
   focus released at stage-1 frame 403 → new laser, timer 0 at frame 404, hits at 432/434).
 - Update 5 (0x450840), every frame: if the bullet no longer owns the slot, or a dialogue runs, or the shot
   timer < 0 (not shooting), or player state 2, or bombing, or bit 13: interrupt 1, slot cleared, update fn
-  removed (the bullet then just flies with its velocity, is not culled and is freed when its VM ends).
-  If option 0 is gone (state 0) → slot cleared, bullet freed. Otherwise: for i < n where trail[2i].x ≥ −900:
+  removed (from the next frame on the bullet just flies with its velocity, is not culled and is freed when its VM
+  ends). **QUIRK: this branch does not return** (VERIFIED 0x450840, RE-Q51): it falls through into the rest of the
+  update, so on its last frame the laser still adds its trail rects, shifts the trail and moves to option 0, and is
+  kept. Example (silentselene 52104, frame 490): the laser ended by the frame-489 focus change still follows the
+  player to x 82.6 in frame 490 and keeps hitting from there.
+  Then (every frame, including that last one): if option 0 is gone (state 0) → slot cleared, bullet freed. Otherwise: for i < n where trail[2i].x ≥ −900:
   one-frame D rect(trail[2i], 16 × 448, dmg 1, no hit effect); shift the trail (trail[i] = trail[i − 1] and
   y −= 1, i = 31..1); trail[0] = pos; pos = option-0 pos, z 0.44; hitbox height 448; pos.y −= 208; colour
   (R 0xFF, G 0xD0, B 0xB0) at youkai-max gauge else white; then the generic bullet step adds velocity (y −10),

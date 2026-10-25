@@ -133,8 +133,11 @@ a 4284-frame noclip session with 78 absorbed hits replays with 0 trace and 0 dra
   frame of the main menu** (scene 1, scene_frame 1), the same convention as `menu_*.input.txt`. Frame k is the word
   polled during the calc of the frame presented at `menu_base_present + k − 1` (`meta.txt`). Boot frames before it
   never poll input. Header comments count frames without a poll (the previous word is repeated) and presents with
-  more than one poll (the last one is written); both were 0 in all test sessions. During normal play there is
-  exactly one poll per presented frame. The blocking unlock notice (`Info_Show` 0x471181) polls once per present
+  more than one poll (the last one is written). During normal play there is exactly one poll per presented frame.
+  **Exception: calc-chain restarts** (00 §3, only `Replay_FastForward`, 15 §3.3: skippable dialogue or fast speed
+  during replay playback) run `Supervisor_Calc` once per pass, so such a present has 2–5 polls and `input.txt`
+  loses all but the last. A port must take the raw input per `Supervisor_Calc` poll from `polls.txt` (`S` rows, in
+  order), not per present from `input.txt`; the loader sync points below are poll indices too (RE-Q51). The blocking unlock notice (`Info_Show` 0x471181) polls once per present
   outside Frame_Run, marked `I` in polls.txt.
 - `polls.txt`: `poll present scene src mask` per call, exact. `present` = number of the presented frame the poll
   belongs to (draw-log `F` field 1), `scene` = scene id at the moment of the poll (before this frame's scene switch),
@@ -170,7 +173,10 @@ row with loading = 0.
 
 ### Trace: `trace.txt.xz`
 One row per calc pass from boot to exit, plus a row (`ff` = −1) for presents without a Frame_Run calc (boot,
-`Info_Show`). Columns 1–23 are those of `specs/data/demo*_trace.txt` (frame demo_frame input rng rng_ctr px py
+`Info_Show`). `ff` = pass number: a Frame_Run calc whose chain restarted n times (00 §3) writes n + 1 rows, the
+pass rows with ff = 1 … n (written when the restart happens, i.e. the state after pass k) and the final row with
+ff = n; without a restart one row with ff = 0. `calc` increments only on the final row; `poll` counts every pass;
+`present` is the same on all rows of the frame (RE-Q51). Columns 1–23 are those of `specs/data/demo*_trace.txt` (frame demo_frame input rng rng_ctr px py
 pstate score graze points lives bombs power gauge time bullets enemies rank spell boss flags ff), with
 `rng_ctr` = all `Rng_Next16` calls since process start (main and loader thread), and the gameplay stats are zero
 outside scene 2 and while loading. Then:

@@ -137,6 +137,13 @@ inserted after existing nodes with the same priority):
 | 5 | stop, runner returns −1 → exit with error |
 | 6 | (calc only) restart the chain from the head |
 
+**Restart (6)** (VERIFIED 0x43CA50, RE-Q51): the runner jumps back to the head of the calc chain inside the same
+`FuncChain_RunCalc` call, so every calc node runs again before the frame's single draw and present. That includes
+`Supervisor_Calc` (prio 0): each pass polls input again (one `Input_Poll` per pass, 11 §7) and repeats its per-call
+work. A restarted frame is therefore several game frames (and several input polls) in one presented frame. The only
+callback that returns 6 is `Replay_FastForward` (15 §3.3; byte search of all calc callbacks). The session format
+records one poll and one trace row per pass (specs/data/drawlog/README.md "Trace").
+
 **Adding a node** (`FuncChain_AddCalc` 0x43C880 / `AddDraw` 0x43C960, VERIFIED RE-Q25): if the node has an
 on-register callback it is called first and then cleared; **whatever it returns, the node is linked** (under the
 chain lock) after the last node whose priority is ≤ the new one (so equal priorities keep insertion order); the

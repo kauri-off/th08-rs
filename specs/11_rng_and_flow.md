@@ -423,10 +423,16 @@ sets flags bits 5–6 = 2 (stages 1–5); stages 6A/6B/Extra are triggered by ms
 ### 4.2 Death, game over, continue — VERIFIED
 - Respawn after a death (`Player_DyingUpdate` 0x44CBF0): if lives > 0: `AddLives(−1)` (checksum),
   bombs = trunc(human sht +4); else `game_over = 1` (GM+0x3DBB3). Timeline op 16 also sets `game_over = 1`.
-- Game-over menu (ASCII manager, 0x404890), first frame:
-  - stage practice (not spell practice) → `scene = 6` (result); replay → `scene = 7`.
+- Game-over menu (ASCII manager, 0x404890), first frame. Early exits, tested in this order; each one sets
+  game_over := 0 and displayed score (stats +0) := score (stats +8), writes the request and returns, with no sound,
+  VM setup, capture or play-time update (VERIFIED 0x404890, RE-Q51):
+  - stage practice (`GameMgr_IsPractice`, not spell practice) → `scene = 6` (result); replay → `scene = 7`.
   - normal difficulty, not spell practice, and (`clock > 10` or stage == 6B): no continue →
     flags &= ~0x10, `scene = 9` (ending). (Extra/other → `scene = 6`.)
+  - Because game_over is 0 again and `GameMgr_Calc` runs later in the same chain pass, that frame's step 7 sets
+    flags bit 2 and the gameplay frame runs normally (one more frame of objects, replay input, frame counter); the
+    scene switch happens on the next frame's `Supervisor_Calc`. E.g. a spell-practice replay ends with the frame after
+    the timeline op 16 frame, gameplay frame 725 of 725 in udJS06.
   - otherwise the continue prompt (Yes/No, 12). "No" → after 20 frames `scene = 6` (result).
     "Yes" in spell practice / Extra → retry: `scene = 11`. "Yes" in a normal game → continue sequence:
     frame 15: clock += 1 (HUD clock sprite updated); frame 60: interrupts; frame 90: menu closes,
