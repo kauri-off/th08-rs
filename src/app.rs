@@ -186,6 +186,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Resized(s) => r.ctx.gfx.resize(s.width, s.height),
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::ModifiersChanged(m) => self.alt = m.state().alt_key(),
+            WindowEvent::Focused(f) => r.ctx.input.set_focus(f),
             // Port-only F11 / Alt+Enter: toggle fullscreen and save it; the key press does not reach the game.
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::KeyboardInput { event, .. }

@@ -655,6 +655,17 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl111 (RE-Q41 CODE BUG 1, 4, 5): DIK key table (15 §1.1, `input::KEYS`): keypad 8/2/4/6, keypad 7/9/1/3
+  diagonals 0x50/0x90/0x60/0xA0, keypad Enter unmapped; the raw word is rebuilt from the held-key set (so releasing one
+  of two keys with the same bit keeps it); a failed keyboard read (port: window focus loss, `Input::set_focus`) gives
+  the joystick bits only. BGM fades (02 §4, `audio::Fade` modes 1–4): `start_fade_in` (0x406AC0, −10000 at once,
+  −trunc(n·5000/N), ends at −41 with no write) on the spell-practice pause retry (12 §3 state 10);
+  `start_dip` / `start_fade_in_from_dip` (0x406B40 / 0x406BB0) in the continue menu (12 §4 "Music"): opening pauses the
+  BGM or, in spell practice with a non-restarting card, dips it; "Yes" in spell practice / Extra → `Music_Stop`, or
+  game_over := 0 + UnPause + fade-in from the dip. RE-Q41 "right" markers (audio play-during-fade, sound bad id, ECL
+  k ≥ 32, joystick DIPROP_RANGE) closed with spec refs. Tests `input::key_table`, `failed_read_joystick_only`,
+  `audio::fade_in_and_dip`. SPEC-GAP 19 → 13. Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync.
+  Questions: `docs/briefs/IMPL111_QUESTIONS.md`.
 - impl110 (RE-Q40 CODE BUG 1–5, RE-Q43 Q3): ExeCheck (15 §2.10) — `th08_0100d.ver` read from th08.dat at boot
   (missing → start-up error), `scoredat::exe_check` (debug tag, line walk, wrapping `%d`, over-run = fail); every VRSM
   v1 chunk of score.dat (before the size-0 test) and the replay info +0x12C/+0x124/+0x128 (15 §3.7 step 5) go through

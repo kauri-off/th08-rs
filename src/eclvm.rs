@@ -411,7 +411,7 @@ impl Exec<'_> {
     fn interrupt(&mut self, t: &mut Thread) {
         let k = self.e.pending_interrupt;
         self.e.pending_interrupt = -1;
-        // SPEC-GAP: k ≥ 32 reads past the i16[32] table in the original (no range test); sub 0 here.
+        // k ≥ 32 would read the pending word / later enemy fields (07 §5.5); unreachable, the data sends k = 1 only.
         let sub = self.e.interrupts.get(k as usize).copied().unwrap_or(0);
         let size = self.m.ecl.ins(t.ctx.ip).map_or(0, |i| i.size);
         t.ctx.ip += size;

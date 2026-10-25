@@ -116,22 +116,46 @@ struct Mixer {
     paused: bool,
 }
 
-// Music_Fade on the streaming object (02 §4): `n` counts down from N = trunc(secs·60) once per Supervisor calc.
+// Streaming-object fade (02 §4): `mode` 1 `Music_Fade`, 2 `Bgm_StartFadeIn`, 3 `Bgm_StartFadeInFromDip`,
+// 4 `Bgm_StartDip`; `n` counts down from N = trunc(secs·60) once per Supervisor calc.
 struct Fade {
+    mode: u8,
     n: i32,
     total: i32,
 }
 
+// One fade tick: a new attenuation (1/100 dB), the end (mode 0, last value stays), or stop the buffer (mode 1).
+#[derive(Debug, PartialEq)]
+enum FadeTick {
+    Volume(i32),
+    End,
+    Stop,
+}
+
 impl Fade {
-    fn new(secs: i32) -> Self {
-        let total = (secs as f32 * 60.0) as i32;
-        Self { n: total, total }
+    fn new(mode: u8, secs: f32) -> Self {
+        let total = (secs * 60.0) as i32;
+        Self {
+            mode,
+            n: total,
+            total,
+        }
     }
 
-    // One tick (0x447764): the attenuation p = n·5000/N − 5000 (1/100 dB, linear in dB), or None = stop the buffer.
-    fn tick(&mut self) -> Option<i32> {
+    // `Sound_TickBgmFades` 0x447764: n −= 1, n < 1 ends; p is linear in dB (integer division).
+    fn tick(&mut self) -> FadeTick {
         self.n -= 1;
-        (self.n >= 1).then(|| self.n * 5000 / self.total - 5000)
+        let (n, t) = (self.n, self.total);
+        match self.mode {
+            _ if n >= 1 => FadeTick::Volume(match self.mode {
+                1 => n * 5000 / t - 5000,
+                2 => -(n * 5000 / t),
+                3 => -(n * 1000 / t),
+                _ => n * 1000 / t - 1000,
+            }),
+            1 => FadeTick::Stop,
+            _ => FadeTick::End,
+        }
     }
 }
 
@@ -244,7 +268,7 @@ impl Audio {
             log::warn!("no bgm {name}");
             return;
         };
-        // SPEC-GAP: whether a new track cancels a running fade / resets its attenuation is not specified (it does here).
+        // Sound_Update play stages 0 (stop: fade mode 0) and 4 (`Bgm_SetVolume(0)`), 02 §4 (RE-Q30); done at once here.
         (self.fade_req, self.fade, self.fade_p) = (None, None, 0);
         self.apply_volume();
         let generation = {
@@ -357,23 +381,44 @@ impl Audio {
     // Sound_Update (13 §1.3) handling command 5: mode 1, N = n = trunc(secs·60); no volume write yet.
     pub fn start_fade(&mut self) {
         if let Some(secs) = self.fade_req.take() {
-            self.fade = Some(Fade::new(secs));
+            self.fade = Some(Fade::new(1, secs as f32));
         }
     }
 
-    // 0x447764, every Supervisor calc before the input poll (02 §4): fade tick; n < 1 stops the buffer.
+    // `Bgm_StartFadeIn` 0x406AC0 (02 §4): immediate, mode 2, volume −10000 at once (−50 dB → ≈ 0).
+    pub fn start_fade_in(&mut self, secs: f32) {
+        self.fade = Some(Fade::new(2, secs));
+        self.set_fade_p(-10000);
+    }
+
+    // `Bgm_StartDip` 0x406B40 (02 §4): mode 4, no initial write (0 → −10 dB); the music keeps playing.
+    pub fn start_dip(&mut self, secs: f32) {
+        self.fade = Some(Fade::new(4, secs));
+    }
+
+    // `Bgm_StartFadeInFromDip` 0x406BB0 (02 §4): mode 3, volume −1000 first (−10 dB → ≈ 0).
+    pub fn start_fade_in_from_dip(&mut self, secs: f32) {
+        self.fade = Some(Fade::new(3, secs));
+        self.set_fade_p(-1000);
+    }
+
+    // 0x447764, every Supervisor calc before the input poll (02 §4): fade tick; mode 1 stops the buffer at the end.
     pub fn tick_fade(&mut self) {
         let Some(f) = &mut self.fade else { return };
         match f.tick() {
-            Some(p) => {
-                self.fade_p = p;
-                self.apply_volume();
-            }
-            None => {
+            FadeTick::Volume(p) => self.set_fade_p(p),
+            FadeTick::End => self.fade = None,
+            FadeTick::Stop => {
                 self.fade = None;
                 self.stop_bgm();
             }
         }
+    }
+
+    // `Bgm_SetVolume` 0x472840: every write goes through the BGM-volume scaling (02 §4).
+    fn set_fade_p(&mut self, p: i32) {
+        self.fade_p = p;
+        self.apply_volume();
     }
 
     // Music mode cfg +0x1F, and the BGM volume through the square curve of 0x472840 (02 §4) with cfg +0x27; SE
@@ -483,8 +528,8 @@ mod tests {
     #[test]
     fn fade_linear_in_db() {
         // Music_Fade(4): N = 240; first tick n = 239, middle n = 120, last audible n = 1, then stop.
-        let mut f = Fade::new(4);
-        let p: Vec<i32> = std::iter::from_fn(|| f.tick()).collect();
+        let mut f = Fade::new(1, 4.0);
+        let p = ticks(&mut f);
         assert_eq!(p.len(), 239);
         assert_eq!([p[0], p[119], p[238]], [-21, -2500, -4980]);
         let bgm = |p, v| crate::config::bgm_volume_curve(p, v);
@@ -497,7 +542,42 @@ mod tests {
             [bgm(p[0], 50), bgm(p[119], 50), bgm(p[238], 50)],
             [-1266, -3125, -4985]
         );
-        assert_eq!(Fade::new(0).tick(), None);
+        assert_eq!(Fade::new(1, 0.0).tick(), FadeTick::Stop);
+    }
+
+    fn ticks(f: &mut Fade) -> Vec<i32> {
+        std::iter::from_fn(|| match f.tick() {
+            FadeTick::Volume(p) => Some(p),
+            _ => None,
+        })
+        .collect()
+    }
+
+    // 02 §4 modes 2/3/4: last values −41 (N 120), −16 and −984 (N 60), then mode 0 with no write.
+    #[test]
+    fn fade_in_and_dip() {
+        let mut f = Fade::new(2, 2.0);
+        let p = ticks(&mut f);
+        assert_eq!((p.len(), p[0], p[118]), (119, -4958, -41));
+        assert_eq!(f.tick(), FadeTick::End);
+        let p = ticks(&mut Fade::new(3, 1.0));
+        assert_eq!((p.len(), p[0], p[58]), (59, -983, -16));
+        let p = ticks(&mut Fade::new(4, 1.0));
+        assert_eq!((p.len(), p[0], p[58]), (59, -17, -984));
+
+        let mut a = Audio::new(Source::native(std::env::temp_dir()), &[]);
+        a.start_fade_in(2.0);
+        assert_eq!(a.fade_p, -10000);
+        (0..119).for_each(|_| a.tick_fade());
+        assert_eq!(a.fade_p, -41);
+        a.tick_fade();
+        assert!(a.fade.is_none() && a.fade_p == -41);
+        a.start_dip(1.0);
+        assert_eq!(a.fade_p, -41);
+        a.tick_fade();
+        assert_eq!(a.fade_p, -17);
+        a.start_fade_in_from_dip(1.0);
+        assert_eq!(a.fade_p, -1000);
     }
 
     #[test]

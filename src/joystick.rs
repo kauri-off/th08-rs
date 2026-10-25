@@ -55,7 +55,7 @@ impl Joystick {
                     .enumerate()
                     .filter(|(_, b)| pad.is_pressed(**b))
                     .fold(0u32, |m, (i, _)| m | 1 << i);
-                // SPEC-GAP: 15 §1.1 gives the lX/lY thresholds (600) but not the DIPROP_RANGE; ±1000 is assumed.
+                // DIPROP_RANGE ±1000 on every axis (15 §1.1, EnumObjects callback 0x445E3D).
                 // gilrs Y is up-positive, DirectInput lY down-positive.
                 let axis = [
                     (pad.value(gilrs::Axis::LeftStickX) * 1000.0) as i32,

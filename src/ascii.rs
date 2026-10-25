@@ -954,8 +954,9 @@ impl PauseMenu {
                                 if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
                                     audio.stop_bgm();
                                 } else {
-                                    // SPEC-GAP: the 2 s fade-in `0x406AC0(2.0)` (INFERRED in 12 §3) is not ported.
+                                    // Command 7 "UnPause", then `Bgm_StartFadeIn(2.0)`: 120 frames from −10000.
                                     audio.pause_bgm(false);
+                                    audio.start_fade_in(2.0);
                                 }
                                 stage_transition(ctx_anm);
                                 g.request(gamemgr::SCENE_RELOAD)
@@ -1104,7 +1105,13 @@ struct ContinueMenu {
 }
 
 impl ContinueMenu {
-    fn update(&mut self, ctx_anm: &mut crate::anmmgr::AnmManager, g: &mut Game, inp: &Input) {
+    fn update(
+        &mut self,
+        ctx_anm: &mut crate::anmmgr::AnmManager,
+        g: &mut Game,
+        inp: &Input,
+        audio: &mut crate::audio::Audio,
+    ) {
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
             // below in the same call. Play time is added on continue-menu entry (15 §2.9).
@@ -1126,6 +1133,13 @@ impl ContinueMenu {
                 g.flags &= !gamemgr::F_ENDING_OK;
                 g.request(gamemgr::SCENE_ENDING);
                 return;
+            }
+            // Music on opening (12 §4): spell practice with a non-restarting card dips to −10 dB and keeps
+            // playing; otherwise command 6 "Pause".
+            if g.spell_practice() && !gamemgr::spell_bgm_restarts(g.card) {
+                audio.start_dip(1.0);
+            } else {
+                audio.pause_bgm(true);
             }
             self.vms = (22..25)
                 .map(|s| {
@@ -1178,7 +1192,16 @@ impl ContinueMenu {
                 if self.phase == 1 {
                     g.request(gamemgr::SCENE_RESULT);
                 } else {
-                    // "Yes" in spell practice / Extra: Hud_StageTransition, scene 11 (12 §3).
+                    // "Yes" in spell practice / Extra (12 §4 "Music"): `Music_Stop`, or for a non-restarting
+                    // spell-practice card game_over := 0, "UnPause" and `Bgm_StartFadeInFromDip(1.0)`; then
+                    // Hud_StageTransition and scene 11.
+                    if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
+                        audio.stop_bgm();
+                    } else {
+                        g.game_over = 0;
+                        audio.pause_bgm(false);
+                        audio.start_fade_in_from_dip(1.0);
+                    }
                     stage_transition(ctx_anm);
                     g.request(gamemgr::SCENE_RELOAD);
                 }
@@ -1271,7 +1294,8 @@ impl Task<Ctx> for AsciiManager {
                 apply_capture(&ctx.anm, &mut ctx.gfx, &self.pause.cap_vm);
             }
         } else if ctx.game.game_over != 0 {
-            self.cont.update(&mut ctx.anm, &mut ctx.game, &inp);
+            self.cont
+                .update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
             if std::mem::take(&mut self.cont.capture) {
                 apply_capture(&ctx.anm, &mut ctx.gfx, &self.cont.cap_vm);
             }
@@ -1356,7 +1380,9 @@ mod tests {
         p.store_game_over(&mut g);
         assert!(g.game_over == 1 && !p.game_over);
         let mut m = ContinueMenu::default();
-        m.update(&mut anm, &mut g, &Input::default());
+        let mut audio =
+            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
         assert!(m.open && !m.yes && m.capture);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
         assert_eq!(g.requested, gamemgr::SCENE_BOOT);

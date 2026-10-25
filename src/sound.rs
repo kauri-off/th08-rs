@@ -94,7 +94,7 @@ pub struct Queue {
 
 impl Queue {
     pub fn push(&mut self, id: i32, pan: i32) {
-        // SPEC-GAP: out-of-range ids (e.g. sht +0x26 = −1) are ignored; 13 §1.2 does not say what the original does.
+        // No range check in the original, but no caller passes an invalid id (13 §1.2); this guard is never taken.
         if !(0..TABLE.len() as i32).contains(&id) {
             return;
         }

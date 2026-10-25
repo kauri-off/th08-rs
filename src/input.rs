@@ -20,26 +20,47 @@ pub const KEY_HOME: u16 = 1 << 11;
 pub const KEY_D: u16 = 1 << 13;
 pub const KEY_R: u16 = 1 << 14;
 
-// SPEC-GAP: the specs name only Z, Ctrl, ESC, Enter, Q, S, Home/P, D, R; arrows, X and Shift are assumed.
+// Input_Poll 0x43D970 DIK table, the default path (15 §1.1): physical keys = DIK scan codes. Keypad 7/9/1/3 give the
+// diagonals; only the main Enter (0x1C) is mapped, keypad Enter (0x9C) is not.
+const KEYS: [(KeyCode, u16); 26] = [
+    (KeyCode::ArrowUp, UP),
+    (KeyCode::ArrowDown, DOWN),
+    (KeyCode::ArrowLeft, LEFT),
+    (KeyCode::ArrowRight, RIGHT),
+    (KeyCode::Numpad8, UP),
+    (KeyCode::Numpad2, DOWN),
+    (KeyCode::Numpad4, LEFT),
+    (KeyCode::Numpad6, RIGHT),
+    (KeyCode::Numpad7, UP | LEFT),
+    (KeyCode::Numpad9, UP | RIGHT),
+    (KeyCode::Numpad1, DOWN | LEFT),
+    (KeyCode::Numpad3, DOWN | RIGHT),
+    (KeyCode::KeyZ, SHOT),
+    (KeyCode::KeyX, BOMB),
+    (KeyCode::ShiftLeft, FOCUS),
+    (KeyCode::ShiftRight, FOCUS),
+    (KeyCode::Escape, PAUSE),
+    (KeyCode::ControlLeft, SKIP),
+    (KeyCode::ControlRight, SKIP),
+    (KeyCode::KeyQ, KEY_Q),
+    (KeyCode::KeyS, KEY_S),
+    (KeyCode::KeyR, KEY_R),
+    (KeyCode::Home, KEY_HOME),
+    (KeyCode::KeyP, KEY_HOME),
+    (KeyCode::Enter, ENTER),
+    (KeyCode::KeyD, KEY_D),
+];
+
 pub fn map_key(k: KeyCode) -> u16 {
-    match k {
-        KeyCode::ArrowUp => UP,
-        KeyCode::ArrowDown => DOWN,
-        KeyCode::ArrowLeft => LEFT,
-        KeyCode::ArrowRight => RIGHT,
-        KeyCode::KeyZ => SHOT,
-        KeyCode::KeyX => BOMB,
-        KeyCode::ShiftLeft | KeyCode::ShiftRight => FOCUS,
-        KeyCode::Escape => PAUSE,
-        KeyCode::ControlLeft | KeyCode::ControlRight => SKIP,
-        KeyCode::Enter | KeyCode::NumpadEnter => ENTER,
-        KeyCode::KeyQ => KEY_Q,
-        KeyCode::KeyS => KEY_S,
-        KeyCode::Home | KeyCode::KeyP => KEY_HOME,
-        KeyCode::KeyD => KEY_D,
-        KeyCode::KeyR => KEY_R,
-        _ => 0,
-    }
+    KEYS.iter().find(|e| e.0 == k).map_or(0, |e| e.1)
+}
+
+// The raw keyboard word from the held-key set (bit i = KEYS[i] down): each held key ORs its bits in (15 §1.1).
+fn keyboard_word(keys: u32) -> u16 {
+    KEYS.iter()
+        .enumerate()
+        .filter(|(i, _)| keys >> i & 1 != 0)
+        .fold(0, |w, (_, e)| w | e.1)
 }
 
 // One joystick poll (DirectInput DIJOYSTATE, 15 §1.1): `buttons` bit n = rgbButtons[n] & 0x80 (32 buttons, the raw
@@ -107,6 +128,9 @@ pub fn joystick_bits(cfg: &crate::config::Config, pad: &PadState, counter: &mut 
 
 #[derive(Default, Clone, Copy)]
 pub struct Input {
+    // Held keys (bit i = KEYS[i]); `raw` is their word. `kb_failed`: the keyboard read fails (15 §1.1).
+    pub keys: u32,
+    pub kb_failed: bool,
     // Keyboard state; `held` / `prev` are the polled raw word 0x164D528 / previous 0x164D530 (12 intro, 11 §7).
     pub raw: u16,
     // Joystick bits of this poll, ORed into the raw word after the keyboard (15 §1.1), and the raw button array.
@@ -126,12 +150,29 @@ pub struct Input {
 
 impl Input {
     pub fn key(&mut self, k: KeyCode, down: bool) {
-        let b = map_key(k);
+        let Some(i) = KEYS.iter().position(|e| e.0 == k) else {
+            return;
+        };
         if down {
-            self.raw |= b;
+            self.keys |= 1 << i;
         } else {
-            self.raw &= !b;
+            self.keys &= !(1 << i);
         }
+        self.raw = keyboard_word(self.keys);
+    }
+
+    // Port: winit has no device read, so focus loss stands in for a failing GetDeviceState (keys released).
+    pub fn set_focus(&mut self, focused: bool) {
+        self.kb_failed = !focused;
+        if !focused {
+            self.keys = 0;
+            self.raw = 0;
+        }
+    }
+
+    // A failed GetDeviceState zeroes the word, so the poll returns the joystick bits only (15 §1.1, 0x43DD3C).
+    fn keyboard(&self) -> u16 {
+        if self.kb_failed { 0 } else { self.raw }
     }
 
     // The joystick half of Input_Poll (15 §1.1), run before `tick`.
@@ -142,7 +183,7 @@ impl Input {
 
     pub fn tick(&mut self) {
         self.prev = self.held;
-        self.held = self.raw | self.joy;
+        self.held = self.keyboard() | self.joy;
         // Key repeat (11 §7, same rule as 15 §3.3): the counter is tested before it is incremented, and reset to 30
         // after 37, so the flag is set on the 33rd, 41st, … unchanged frame.
         self.repeat = false;
@@ -162,7 +203,7 @@ impl Input {
     // Supervisor_Calc on a slow-mode skipped frame (gm+0x2D, 11 §7): the raw word is OR-ed into the polled word;
     // previous word, repeat counter and flag are not updated.
     pub fn accumulate(&mut self) {
-        self.held |= self.raw;
+        self.held |= self.keyboard();
     }
 
     // The view gameplay objects read (player, dialogue, HUD): g_Input as both raw and held.
@@ -291,6 +332,46 @@ mod tests {
         i.tick();
         assert_eq!(i.held, SHOT | BOMB);
     }
+    // 15 §1.1 DIK table: keypad directions and diagonals, both Shift/Ctrl, Home/P; keypad Enter unmapped.
+    #[test]
+    fn key_table() {
+        assert_eq!(map_key(KeyCode::Numpad8), UP);
+        assert_eq!(map_key(KeyCode::Numpad3), DOWN | RIGHT);
+        assert_eq!(map_key(KeyCode::Numpad7), 0x50);
+        assert_eq!(map_key(KeyCode::Numpad9), 0x90);
+        assert_eq!(map_key(KeyCode::Numpad1), 0x60);
+        assert_eq!(map_key(KeyCode::Numpad3), 0xA0);
+        assert_eq!(map_key(KeyCode::NumpadEnter), 0);
+        assert_eq!(map_key(KeyCode::Enter), ENTER);
+        let mut i = Input::default();
+        i.key(KeyCode::Numpad7, true);
+        i.key(KeyCode::ArrowUp, true);
+        i.key(KeyCode::Numpad7, false);
+        assert_eq!(i.raw, UP);
+        i.key(KeyCode::KeyP, true);
+        i.key(KeyCode::Home, true);
+        i.key(KeyCode::Home, false);
+        assert_eq!(i.raw, UP | KEY_HOME);
+    }
+
+    // 15 §1.1: a failed keyboard read gives the joystick bits only.
+    #[test]
+    fn failed_read_joystick_only() {
+        let mut i = Input::default();
+        i.key(KeyCode::KeyX, true);
+        i.poll_joystick(&Config::default(), pad(1, 0, 0));
+        i.kb_failed = true;
+        i.tick();
+        assert_eq!(i.held, SHOT);
+        i.kb_failed = false;
+        i.tick();
+        assert_eq!(i.held, SHOT | BOMB);
+        i.set_focus(false);
+        i.set_focus(true);
+        i.tick();
+        assert_eq!(i.held, SHOT);
+    }
+
     #[test]
     fn script() {
         assert_eq!(
