@@ -1,4 +1,4 @@
-//! Text_RenderToVm 0x4663B0 rasteriser (10 §6): 2× work surface, 4-offset black outline, colour at the centre, 2:1 box downsample.
+//! Text_RenderToVm 0x4663B0 rasteriser (10 §6): 2× work surface, 4-offset black outline, colour at the centre, exact D3DX TRIANGLE 2:1 into A4R4G4B4.
 //! SPEC-GAP: GDI "ＭＳ ゴシック" pixels are not reproducible; a system Japanese font (native) or the browser's canvas font (web) is used.
 
 // Msg strings and spell names are Shift-JIS (cp932) (10 §2).
@@ -165,55 +165,203 @@ impl Raster {
         outline: i32,
     ) -> Vec<u8> {
         let o = if outline == -1 { 1 } else { 2 };
-        // 1024×64 work surface, cleared over (0, 0, 2w, 2·size + 6) (10 §6).
-        let (w2, h2) = ((2 * w).min(1024), 2 * size + 6);
+        // Fresh 1024-wide A1R5G5B5 DIB per call; the copied source rect is (0, 0, min(2w, 1024), 2·size) (10 §6).
+        let (w2, h2) = ((2 * w).min(DIB_W), 2 * size + 6);
         let mask = self.mask(s, (2 * size - 2) as f32, 2.0 * x, 0.0, w2, h2);
-        let mut work = vec![[0f32; 4]; w2 * h2];
-        let edge = edge.map(|c| c as f32 / 255.0);
-        let col = color.map(|c| c as f32 / 255.0);
+        let mut dib = vec![Px::default(); w2 * h2];
         // Outline colour (black for Text_RenderToVm) at (2x+2±o, 2), (2x+2, 2±o), then the colour at the centre (2x+2, 2) (10 §6).
         for (dx, dy, c) in [
             (2 + o, 2, edge),
             (2 - o, 2, edge),
             (2, 2 - o, edge),
             (2, 2 + o, edge),
-            (2, 2, col),
+            (2, 2, color),
         ] {
             for y in 0..h2 - dy {
                 for x in 0..w2 - dx {
-                    let a = mask[y * w2 + x] as f32 / 255.0;
-                    if a == 0.0 {
-                        continue;
+                    let a = mask[y * w2 + x];
+                    if a != 0 {
+                        dib[(y + dy) * w2 + x + dx].text_out(c, a);
                     }
-                    let d = &mut work[(y + dy) * w2 + x + dx];
-                    for k in 0..3 {
-                        d[k] = c[k] * a + d[k] * (1.0 - a);
-                    }
-                    d[3] = a + d[3] * (1.0 - a);
                 }
             }
         }
-        // SPEC-GAP: D3DX filter TRIANGLE is approximated by an alpha-weighted 2×2 box.
-        let mut out = vec![0u8; w * size * 4];
+        gradient(&mut dib, w2, h2, outline == -1);
+        let out = triangle_2to1(&dib, w2, 2 * size);
+        let mut rgba = vec![0u8; w * size * 4];
         for y in 0..size {
-            for x in 0..w.min(w2 / 2) {
-                let mut acc = [0f32; 4];
-                for (sx, sy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                    let p = work[(2 * y + sy) * w2 + 2 * x + sx];
-                    for k in 0..3 {
-                        acc[k] += p[k] * p[3];
-                    }
-                    acc[3] += p[3];
-                }
-                if acc[3] > 0.0 {
-                    let o = &mut out[(y * w + x) * 4..][..4];
-                    for k in 0..3 {
-                        o[k] = (acc[k] / acc[3] * 255.0).round() as u8;
-                    }
-                    o[3] = (acc[3] / 4.0 * 255.0).round() as u8;
+            for x in 0..w2 / 2 {
+                let p = out[y * (w2 / 2) + x];
+                let d = &mut rgba[(y * w + x) * 4..][..4];
+                // A4R4G4B4 texel as sampled: 4-bit channels widened by ×17.
+                for (k, v) in [p >> 8 & 15, p >> 4 & 15, p & 15, p >> 12]
+                    .into_iter()
+                    .enumerate()
+                {
+                    d[k] = (v * 17) as u8;
                 }
             }
         }
-        out
+        rgba
+    }
+}
+
+// Rasteriser DIB row width in pixels (10 §6 step 1).
+const DIB_W: usize = 1024;
+
+// One A1R5G5B5 DIB pixel: 5-bit R, G, B and the alpha bit (10 §6 steps 1–4).
+#[derive(Clone, Copy, Default)]
+struct Px {
+    rgb: [u32; 3],
+    alpha: bool,
+}
+
+impl Px {
+    // A GDI antialiased TextOut sample: blend over the pixel, 15-bit result. The two alpha-bit inversions (steps 2, 4)
+    // leave exactly the GDI-touched pixels opaque (1-bit alpha). Coverage and blend are platform, like the glyphs.
+    fn text_out(&mut self, c: [u8; 3], a: u8) {
+        let a = a as u32;
+        for (d, c) in self.rgb.iter_mut().zip(c) {
+            let d8 = *d << 3 | *d >> 2;
+            *d = (c as u32 * a + d8 * (255 - a)) / 255 >> 3;
+        }
+        self.alpha = true;
+    }
+}
+
+// Post-pass 0x43F31C (10 §6 step 4): alpha 0 → colour 0; alpha 1 → vertical gradient in 5-bit integer arithmetic.
+// c / N are byte offsets in the 1024-pixel-row DIB over the region rows 0 … h−1 (exact for the 512-wide text
+// textures; a narrower strip gets the left part of that region).
+fn gradient(dib: &mut [Px], w: usize, h: usize, flag: bool) {
+    let n = (2 * DIB_W * h) as u32;
+    for y in 0..h {
+        for x in 0..w {
+            let p = &mut dib[y * w + x];
+            if !p.alpha {
+                p.rgb = [0; 3];
+                continue;
+            }
+            let c = (2 * (y * DIB_W + x)) as u32;
+            let [r, g, b] = &mut p.rgb;
+            if *b > *r {
+                let d = if flag { 4 } else { 2 };
+                *b -= *b * c / n / d;
+                *g -= *g * c / n / d;
+            } else if flag {
+                *r -= *r * c / n / 4;
+                *g -= *g * c / n / 4;
+            } else {
+                *r -= *r * c * 2 / n / 3;
+                *g -= *g * c * 2 / n / 3;
+            }
+            p.rgb = p.rgb.map(|v| v.min(31));
+        }
+    }
+}
+
+// D3DX filter TRIANGLE at exactly 2:1 (10 §6 "TRIANGLE 2:1"): source rows 0 … sh−1 of the w-wide DIB into A4R4G4B4
+// (returned as u16 0xARGB). Unweighted channels, taps 2j−1 … 2j+2 with weights 1/16, 7/16, 7/16, 1/16 wrapping in the
+// source rect, f32 sums in source (row, column) order, trunc(acc·15 + 0.5).
+fn triangle_2to1(src: &[Px], w: usize, sh: usize) -> Vec<u16> {
+    const W: [f32; 4] = [1.0 / 16.0, 7.0 / 16.0, 7.0 / 16.0, 1.0 / 16.0];
+    let taps = |j: usize, n: usize| {
+        let mut t: [(usize, f32); 4] = std::array::from_fn(|k| ((2 * j + n + k - 1) % n, W[k]));
+        t.sort_by_key(|&(i, _)| i);
+        t
+    };
+    let k31 = 1.0f32 / 31.0;
+    let (dw, dh) = (w / 2, sh / 2);
+    let mut out = vec![0u16; dw * dh];
+    for j in 0..dh {
+        let ty = taps(j, sh);
+        for i in 0..dw {
+            let tx = taps(i, w);
+            let mut acc = [0f32; 4];
+            for &(sy, wy) in &ty {
+                for &(sx, wx) in &tx {
+                    let p = src[sy * w + sx];
+                    let wt = wy * wx;
+                    for k in 0..3 {
+                        acc[k] += wt * (p.rgb[k] as f32 * k31);
+                    }
+                    acc[3] += wt * if p.alpha { 1.0 } else { 0.0 };
+                }
+            }
+            let q = acc.map(|a| (a * 15.0 + 0.5) as u16);
+            out[j * dw + i] = q[3] << 12 | q[0] << 8 | q[1] << 4 | q[2];
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn white() -> Px {
+        Px {
+            rgb: [31; 3],
+            alpha: true,
+        }
+    }
+
+    // 10 §6: one white opaque source pixel → 0x3333 in its destination pixel, nothing elsewhere.
+    #[test]
+    fn triangle_impulse() {
+        let (w, h) = (16, 8);
+        let mut src = vec![Px::default(); w * h];
+        src[2 * w + 3] = white();
+        let out = triangle_2to1(&src, w, h);
+        for (k, &v) in out.iter().enumerate() {
+            assert_eq!(v, if k == w / 2 + 1 { 0x3333 } else { 0 }, "{k}");
+        }
+    }
+
+    // Unweighted channels: an alpha-0 white pixel still adds colour; taps wrap at the rect edges.
+    #[test]
+    fn triangle_unweighted_wrap() {
+        let (w, h) = (8, 4);
+        let src = vec![
+            Px {
+                rgb: [31; 3],
+                alpha: false
+            };
+            w * h
+        ];
+        assert!(triangle_2to1(&src, w, h).iter().all(|&v| v == 0x0FFF));
+        // Source column 0 feeds destination column dw−1 with 1/16 (wrap) and column 0 with 7/16.
+        let mut src = vec![Px::default(); w * h];
+        for y in 0..h {
+            src[y * w] = Px {
+                rgb: [0; 3],
+                alpha: true,
+            };
+        }
+        let out = triangle_2to1(&src, w, h);
+        for row in out.chunks_exact(w / 2) {
+            assert_eq!(row, [0x7000, 0, 0, 0x1000]);
+        }
+    }
+
+    // 10 §6 step 4: gradient on opaque pixels only; B > R loses up to ½ of B and G at the region bottom.
+    #[test]
+    fn gradient_rows() {
+        let (w, h) = (1024, 36);
+        let mut dib = vec![Px::default(); w * h];
+        dib[0] = white();
+        dib[(h - 1) * w] = Px {
+            rgb: [0, 31, 31],
+            alpha: true,
+        };
+        dib[(h - 1) * w + 1] = Px {
+            rgb: [31, 31, 0],
+            alpha: true,
+        };
+        dib[1].rgb = [5; 3];
+        gradient(&mut dib, w, h, false);
+        assert_eq!(dib[0].rgb, [31; 3]);
+        assert_eq!(dib[1].rgb, [0; 3]);
+        assert_eq!(dib[(h - 1) * w].rgb, [0, 16, 16]);
+        assert_eq!(dib[(h - 1) * w + 1].rgb, [11, 11, 0]);
     }
 }

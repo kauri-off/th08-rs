@@ -741,8 +741,12 @@ impl Player {
             }
             n
         };
-        // Ring 59 (fixed slot 11) only with a bomb in stock (09 §6.1 "else" branch).
+        // Silhouette and ring 59 (fixed slot 11) only with a bomb in stock (09 §6.1 "else" branch): colour2 :=
+        // white with the VM colour's alpha, drawn via VM flag bit 17 (05 §2.1).
         if st.bombs >= 1.0 {
+            let a = self.vm.color[anmvm::A];
+            self.vm.color2 = [0xFF, 0xFF, 0xFF, a];
+            self.vm.flags |= anmvm::F_COLOR2;
             crate::effect::death_ring(rng, self.pos, n);
         }
         if self.env.spell {
@@ -1057,9 +1061,8 @@ impl Player {
         }
     }
 
-    // Player_DyingUpdate 0x44CBF0 (09 §6.2); true when the respawn starts. The global tint goes off (06 §10.2).
+    // Player_DyingUpdate 0x44CBF0 (09 §6.2); true when the respawn starts.
     fn dying_update(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) -> bool {
-        anm.tint_off();
         if self.deathbomb > 0 {
             self.stats.add_time(-15, &mut anm.rng);
             self.deathbomb -= 1;
@@ -1112,7 +1115,10 @@ impl Player {
             crate::effect::FIX_DEATH_BURST,
             0xFF4040FF,
         );
+        // Unfreeze, then the only tint-off of Player_DyingUpdate (06 §10.2), then the silhouette off (09 §6.2).
         self.freeze_bullets = false;
+        anm.tint_off();
+        self.vm.flags &= !anmvm::F_COLOR2;
         // 0x164D0B0 := 0 here, not in Player_Die: a deathbomb leaves it unchanged (09 §6.2, 11 §2).
         self.stats.d0b0 = 0;
         self.last_spell = 0;
@@ -1518,6 +1524,29 @@ mod tests {
         gamemgr::set_flags(F_LAST_SPELL);
         p.die(&mut rng);
         assert!(p.drop_attracted);
+    }
+
+    // 09 §6.1/§6.2: with a bomb in stock the hit sets the white colour2 silhouette; the dying frames keep the tint,
+    // the real death turns both off.
+    #[test]
+    fn die_silhouette() {
+        let (mut p, mut anm) = ready();
+        let mut rng = Rng::default();
+        p.stats.bombs = 1.0;
+        p.vm.color = [0x20, 0x40, 0x60, 0x80];
+        p.die(&mut rng);
+        assert!(p.vm.flags & anmvm::F_COLOR2 != 0);
+        assert_eq!(p.vm.color2, [0xFF, 0xFF, 0xFF, 0x80]);
+        anm.tint_on = true;
+        p.deathbomb = 2;
+        p.dying_update(&mut anm, &mut None);
+        assert!(anm.tint_on && p.vm.flags & anmvm::F_COLOR2 != 0);
+        p.dying_update(&mut anm, &mut None);
+        assert!(!anm.tint_on && p.vm.flags & anmvm::F_COLOR2 == 0);
+        let (mut p, _) = ready();
+        p.stats.bombs = 0.0;
+        p.die(&mut rng);
+        assert!(p.vm.flags & anmvm::F_COLOR2 == 0);
     }
 
     // 09 §9.2: the third time orb only inside the bullet-and-card branch.

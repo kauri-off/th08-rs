@@ -470,11 +470,10 @@ impl Player {
             self.bomb_calc(anm, items);
             self.bomb.timer.tick(anm.speed);
         } else {
-            // End: speed multipliers 1, bombing 0, tint off (06 §10.2); index 4 per 14 §2.17.
+            // End: speed multipliers 1, bombing 0; no tint-off here (06 §10.2); index 4 per 14 §2.17.
             // +0xE2A7C is not cleared here (09 §1.1).
             self.speed_mult = [1.0; 2];
             self.bombing = false;
-            anm.tint_off();
             crate::gui::request(crate::gui::Req::PlayerHide);
             if self.bomb.index == 4 {
                 gamemgr::set_flags(gamemgr::flags() & !(F_LAST_SPELL | F_LAST_CAPTURED));
@@ -493,14 +492,16 @@ impl Player {
     // Bomb start (09 §7): index from focus / last-spell request, bomb cost, checksum (0x44E2E0), rank −200,
     // counter += 6 (cap sht +8). Not implemented: statistics bit.
     fn start_bomb(&mut self, anm: &mut AnmManager, forced: bool) {
-        let rng = &mut anm.rng;
         self.forced_bomb = 0;
         let mut index = 4;
         // 09 §7: in special mode (bits 7–8) the whole cost block is skipped: no unfreeze, bombs, counters or checksums.
         if !self.special() {
-            self.freeze_bullets = false;
+            // 09 §7 order: silhouette (VM bit 17) off, deathbomb ring ended, bullets unfrozen, AnmMgr_TintOff.
+            self.vm.flags &= !anmvm::F_COLOR2;
             effect::free(effect::FIXED_BASE + effect::FIX_DEATH);
-            // SPEC-GAP: 09 §7 lists "tint off" among the skipped special-mode steps but not in the normal-mode list.
+            self.freeze_bullets = false;
+            anm.tint_off();
+            let rng = &mut anm.rng;
             index = self.focus.min(1) as usize;
             if self.last_spell != 0 {
                 index = 1 - index + 2;
@@ -1635,6 +1636,21 @@ mod tests {
         p.bomb.duration = 230;
         assert!(shakes_at(&mut p, &mut anm, true, 120).is_empty());
         assert_eq!(shakes_at(&mut p, &mut anm, true, 180), [[24, 8, 0, 0]]);
+    }
+
+    // 09 §7: a normal-mode start clears the silhouette (VM bit 17) and the global tint; the end does not tint off.
+    #[test]
+    fn bomb_start_tint_off() {
+        let (mut p, mut anm) = ready(4);
+        p.vm.flags |= anmvm::F_COLOR2;
+        anm.tint_on = true;
+        p.step(&mut anm, &press(input::BOMB));
+        assert!(p.bombing && !anm.tint_on && p.vm.flags & anmvm::F_COLOR2 == 0);
+        anm.tint_on = true;
+        for _ in 0..200 {
+            p.step(&mut anm, &press(0));
+        }
+        assert!(!p.bombing && anm.tint_on);
     }
 
     #[test]

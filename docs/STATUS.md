@@ -655,6 +655,15 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl108 (RE-Q38, RE-Q36, RE-Q41): normal-mode bomb start clears player VM bit 17, ends the deathbomb ring,
+  unfreezes bullets, then `AnmMgr_TintOff`; the bomb end no longer tints off; `Player_DyingUpdate` tints off only at
+  the real death (`Player::real_death`, also clears bit 17) (09 §6.2, §7, 06 §10.2). `Player_Die` with bombs ≥ 1
+  sets the white colour2 silhouette (alpha = VM alpha) + VM bit 17 (09 §6.1). Text rasteriser (10 §6): fresh
+  A1R5G5B5 DIB model (`text::Px`, 5-bit GDI blend, 1-bit alpha), post-pass vertical gradient (`text::gradient`),
+  exact D3DX TRIANGLE 2:1 into A4R4G4B4 (`text::triangle_2to1`, widened ×17 for the RGBA8 upload); native and web.
+  Tests: `text::tests::*`, `bomb::tests::bomb_start_tint_off`, `player::tests::die_silhouette`. SPEC-GAP 48 → 46.
+  Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 full; golden draw same 8070207, extra 19, identical
+  frames 19857 — identical with and without the tint/silhouette changes (the impl107 HEAD already gave these numbers).
 - impl107 (RE-Q38, result screen): hidden code (15 §2.12) — `HiddenCode::step` after the state-3 page input (a
   confirm / cancel call skips it), release of Focus+Skip → 0, wrong key = edge on mask 0x160B → 0, arrows / D never
   reset, effect one call after the 10th key; `hidden_unlock` adds 1 to all 13 story attempt counters of all 222 CATK
