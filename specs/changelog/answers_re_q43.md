@@ -1,0 +1,9 @@
+# RE-Q43 — IMPL107 questions 1–3 (result screen, spell records)
+
+Code only (decompile + capstone disasm of th08.exe); no runs.
+
+| # | question | original | spec | port |
+|---|---|---|---|---|
+| 1 | state 9: slow-mode skip before or after the frame-0 interrupt d + 3 | `Result_NameEntry` 0x45621E tests `FUN_004481af` (cfg copy +0x25) / `Supervisor_NoRecordFlag` first, on every call: state 0xF + frame 0 written directly, CATK backup memcpy, return 0. No interrupt at all, +0x3C/+0x44 not written. | 16 §2.1, §2.2 | right (interrupt skipped; `set_state` extra fields unused by 0xF; rank_shot/diff set early, unobservable) |
+| 2 | states 12 / 14: confirm vs cancel order | 12: confirm block (0x456E3B–0x457016) does not return, cancel test 0x457016 follows → both run, cancel wins (SE 10 + SE 11, all VMs 2). 14: cancel/ESC edge (0x4576C4) tested first → back to the list. Shared back-to-list code 0x456BBB (state 10 confirm, 14 cancel / confirm cursor 1, 13 ESC): SE 10 + flush, state 12, all 72 VMs interrupt 12, frame 0, headers re-read in the same call. | 16 §2.6 | CODE BUG ×3: state 12 `else if` (cancel must also run after confirm); state 14 confirm-on-cursor-0 tested before cancel; 14→12 and 13 ESC→12 send no interrupt 12 |
+| 3 | `Spell_Start` checksum test on records without the `CATK` magic | 0x4152A0 has no magic test; it writes the name/owner first and tests the checksum (name summed up to the NUL) on the new name. `GameMgr_LoadScoreData` 0x43BBE1 zeroes the whole CATK block and stamps all 222 records (magic, size, ver 3, id) before loading score.dat, so at `Spell_Start` every record has the magic; a no-magic record's hidden-code +1 is dropped at game start (and never saved). First attempt of such a card = 1. | 15 §2.2, §2.5, §2.12 | CODE BUG: port keeps non-present records' counters across game start (→ 2) and does not stamp all 222 (score.dat then lacks the zero records); also checksum must be tested after writing the new name |

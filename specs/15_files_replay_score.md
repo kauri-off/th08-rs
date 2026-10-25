@@ -281,7 +281,7 @@ Write order (VERIFIED from the saver):
 |---|---|
 | Supervisor_OnRegister 0x445FA3 (boot) | PLST only. The block is zeroed first. |
 | MainMenu_OnRegister 0x470A6C | CLRD, PSCR, CATK, FLSP, PLST. Then sets GM flags bit 15/16/17 (16 §4). These two functions are the only writers of bits 15–17 (all `g_GameFlags` stores checked); nothing clears them in game, replay or demo, so playback keeps them (changelog/answers_impl14.md §11). |
-| GameMgr_LoadScoreData 0x43BBE1 (new game) | Hiscore for (shot, difficulty) → stats+0x14; CATK, CLRD, PSCR. In practice the hiscore is PSCR[shot].hiscore[stage][diff] and that play count is incremented. Then backs up CATK, clears the in-game HSCR record (§2.3) and copies the config into it. |
+| GameMgr_LoadScoreData 0x43BBE1 (new game) | After the mode-2 flush (save), the whole in-memory CATK block (0x1E228 bytes) is **zeroed**, and all 222 records are stamped: magic `CATK`, size 0x22C (+4 and +6), version 3, id +0x0C = index (counters, name, owner, comments, checksum +0x0E, difficulty +0x0F all 0); only then the file is loaded (VERIFIED 0x43BBE1, RE-Q43). So after any game start all 222 records have the magic (and the next save writes all 222): a record that had no magic in memory (not in the file) loses whatever was added to it in memory (e.g. the hidden code's +1, §2.12), and if the load fails the card history is all zero. Then: hiscore for (shot, difficulty) → stats+0x14; CATK, CLRD, PSCR. In practice the hiscore is PSCR[shot].hiscore[stage][diff] and that play count is incremented. Then backs up CATK, clears the in-game HSCR record (§2.3) and copies the config into it. |
 | Result_OnRegister 0x45964D | Builds the 5×12 ranking lists and LSNM. In viewer mode (Result mode 0) also loads CATK, CLRD, PSCR. |
 
 Equivalence note (INFERRED from this table and the save paths below, RE-Q36): the blocks in memory change only through
@@ -391,7 +391,7 @@ The in-memory copy is GM+0x40 (0x160F548). There is a backup at 0x162D770 (0x1E2
 | off | type | field |
 |---|---|---|
 | 0x0C | u16 | card id |
-| 0x0E | u8 | checksum = (Σ signed name bytes [48] + Σ all 78 u32 counters) & 0xFF |
+| 0x0E | u8 | checksum = (Σ signed name bytes up to the NUL + Σ all 78 u32 counters) & 0xFF (bytes after the NUL are not summed) |
 | 0x0F | u8 | difficulty of the last attempt |
 | 0x10 | char[48] | card name (decoded from ECL with XOR 0xAA) |
 | 0x40 | char[48] | owner (XOR 0xBB) |
@@ -407,6 +407,17 @@ The in-memory copy is GM+0x40 (0x160F548). There is a backup at 0x162D770 (0x1E2
 Counters are capped at 9999.
 
 - Attempts are counted in `Spell_Start` 0x4152A0 (ECL op 122 → 0x421280). If the stored checksum is wrong at that moment, all counters of that card are zeroed first.
+  Exact order (VERIFIED 0x4152A0, RE-Q43), all skipped in replay playback:
+  1. card name → +0x10 (`strcpy` from the Spell object; bytes after the NUL keep their old value);
+  2. owner: 48 ECL bytes XOR 0xBB into a zeroed 0x80 buffer, `strcpy` → +0x40;
+  3. (spell practice, flags bit 14: the two comment lines go into the Spell object +0x74/+0xB4, not CATK);
+  4. n = Σ signed name bytes from +0x10 **up to the NUL** (of the name just written); test (n + Σ all 78 u32
+     counters) & 0xFF against +0x0E; if different, zero all 78 counters. There is **no magic / version test**:
+     the test runs on whatever is at CATK[id]. In practice every record has the magic here, because the game
+     start stamps all 222 (§2.2, `GameMgr_LoadScoreData`);
+  5. story (bit 14 clear): attempts[shot] and attempts[12] += 1, each capped at 9999 (`< 9999` test); spell
+     practice: the practice attempt row (+0x1C0) instead;
+  6. +0x0F := difficulty (0x160F538); +0x0E := (n + Σ 78 counters) & 0xFF.
 - Captures and max bonus are counted in `Spell_End` 0x4161B0.
 - Neither happens in replay playback.
 
@@ -590,6 +601,8 @@ Effect:
 - all 222 in-memory CATK records (whether or not the record has the `CATK` magic): the 13 story attempt counters
   (+0x124, shots 0..11 and the all-shot total 12) += 1 each — **no 9999 cap and no checksum update** (QUIRK: the
   stored byte +0x0E no longer matches, so the next `Spell_Start` of that card zeroes its counters first, §2.5);
+  records without the magic (not loaded from the file) are not saved, and the next game start zeroes and re-stamps
+  them (§2.2), so their +1 never reaches `Spell_Start` (RE-Q43);
 - plays SE 0x1C.
 
 ---

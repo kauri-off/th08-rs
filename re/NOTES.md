@@ -730,3 +730,10 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   replay +0x10 gate armed once, none in sub-states 2/3; key-config digits before assign (one-call lag, runs in exit call);
   restart: requested −1, +0x154 0, skip counter byte 0x17CE710 := −4 at every start, Result(2) flush, ASCII zeroed, RNG reseed.
 - Text_RenderCentered sets VM flag bit 0 (visible) on every render.
+
+# RE-Q43 (2026-10-25) — implementer questions IMPL107 1–3 (result screen, spell records) — DONE (specs/changelog/answers_re_q43.md)
+- Code only (decompile + disx.py), no runs. 1 right (state 9 slow-mode test first, no interrupt), 2 CODE BUG items.
+- Key facts: Result_SaveReplay state 12 = confirm then cancel in the same call (both SEs, cancel wins); state 14 cancel
+  first; shared back-to-list 0x456BBB = SE 10 + flush, state 12, all VMs int 12, headers re-read same call.
+- GameMgr_LoadScoreData zeroes + stamps all 222 CATK records (magic, ver 3, id) before the file load → every record has
+  the magic at Spell_Start (which has no magic test); checksum tested after writing the new name, name summed to NUL.

@@ -221,11 +221,11 @@ Each frame `Result_Calc` runs the current state, then the 72 VMs, then frame cou
 | 10–14 | replay save (15 §3.6, 16 §2.6) |
 | 2 | at frame 1, begin the loading screen and send interrupt 2 to all VMs. After 20 frames, **scene 1 (title/main menu)**, return 0 (object removed → score.dat saved). |
 
-In slow mode (or Supervisor+0x1A4 bit 3, set only by the anti-tamper fill), state 9 skips the entry: it restores the CATK backup and goes straight to 0xF.
+In slow mode (or Supervisor+0x1A4 bit 3, set only by the anti-tamper fill), state 9 skips the entry. This test is the **first** thing `Result_NameEntry` does on every call, before the frame-0 work of §2.2: it writes state := 0xF and frame (+4) := 0 directly (not `Result_SetState`: +0x0C/+0x10/+0x14/+0x18/+0x54 are untouched), restores the CATK backup (0x162D770 → 0x160F548, 0x1E228 bytes) and returns. **No interrupt is sent** (no d + 3, no 2: nothing slides in), +0x3C/+0x44 are not written, no text is rendered and no entry is built; `Result_Calc` then runs the 72 VMs and increments the frame, so the first state-0xF call sees frame 1 (VERIFIED 0x45621E, RE-Q43).
 
 ### 2.2 Name entry (`Result_NameEntry` 0x45621E)
 
-**Frame 0** first sends interrupt **difficulty + 3** (difficulty = 0x160F538, stored in Result+0x44; shot index `shot + byte 0x164D0B2` in Result+0x3C) to **all 72** result00 VMs (Result+0x1A0, stride 0x2A4: pending interrupt +0x1FE := d + 3 — no other interrupt is sent at state 9 entry; VM 40's slide-in and the plate/title VMs react to that interrupt in their own scripts), renders the shot title text into the text VM at +0xBFC0 (`Text_RenderCentered`, white, string table 0x4C7F4C[shot index]) and sets byte +0xC1B3 := 0xFF (VERIFIED 0x45621E, RE-Q24). Then it builds the entry from the in-game record (15 §2.3):
+**Frame 0** (after the slow-mode test of §2.1, which returns before any of this) first sends interrupt **difficulty + 3** (difficulty = 0x160F538, stored in Result+0x44; shot index `shot + byte 0x164D0B2` in Result+0x3C) to **all 72** result00 VMs (Result+0x1A0, stride 0x2A4: pending interrupt +0x1FE := d + 3 — no other interrupt is sent at state 9 entry; VM 40's slide-in and the plate/title VMs react to that interrupt in their own scripts), renders the shot title text into the text VM at +0xBFC0 (`Text_RenderCentered`, white, string table 0x4C7F4C[shot index]) and sets byte +0xC1B3 := 0xFF (VERIFIED 0x45621E, RE-Q24). Then it builds the entry from the in-game record (15 §2.3):
 - play time = 0x164D09C;
 - human rate = human·10000/total;
 - score = stats+8, continues = stats+0x29;
@@ -458,13 +458,24 @@ name +0x58 (9 bytes), char cursor +0x2C.
   valid replay (magic `T8RP` 0x50523854 and version & 0xFFF = 6) → all VMs 13, VM (56 + slot) 16, state 14;
   else all VMs 17, VM (56 + slot) 16, state 13. Then name pos +0x1C := 0, char cursor := 0x5F if an LSNM
   chunk was loaded (+0x50) else 0. Cancel: SE 11, state 10, all VMs 2, frame 0 (state 10 runs again from
-  frame 0).
-- **14 overwrite?** VMs 50/51 colours as in state 10. From frame 20: Left/Right. Confirm on cursor 0 → frame
-  0, all VMs 17, VM (56 + slot) 16, state 13. Cancel, ESC, or confirm on cursor 1 → SE 10, state 12 (back to
-  the list, frame 0).
+  frame 0). **Order: confirm is tested first and does not return; the cancel test (Bomb/ESC 0x0A edge) follows in
+  the same call** (VERIFIED disasm 0x456E16–0x45709B, RE-Q43). So a confirm and a cancel edge on the same frame do
+  both: SE 10, +0x28/date/score written, interrupts 13 or 17 + 16, +0x1C := 0, +0x2C set — then SE 11, state 10,
+  all 72 VMs interrupt 2 (overwriting the 13/17/16 before any VM runs), frame 0. Net: cancel, with both SEs played.
+  (Up/Down and +0x28 := cursor come before both tests.)
+- **14 overwrite?** VMs 50/51 colours as in state 10. From frame 20: Left/Right. Then **cancel first**: a Bomb/ESC
+  (0x0A) or ESC (0x08) edge → back to the list (below) without looking at confirm; else a confirm edge (0x1001) →
+  frame := 0, and on cursor 0 → all VMs 17, VM (56 + slot) 16, state 13 (no SE); on cursor 1 → back to the list
+  (VERIFIED disasm 0x4576B6–0x4577D7, RE-Q43). So cancel + confirm on the same frame = back to the list, whatever
+  the cursor.
+- **Back to the list** (shared code 0x456BBB, used by state 10 confirm on cursor 0, state 14 cancel / confirm on
+  cursor 1, and state 13 ESC): SE 10, sound flush (`Sound_Update` until 0), state 12, **all 72 VMs interrupt 12**,
+  frame 0, then it jumps into the state-12 code **in the same call**: since frame = 0 the `replay` directory is
+  created and the 15 headers are re-read now (state 12 frame ≥ 20 input is not reached). `Result_Calc` then makes
+  the frame 1, so the next state-12 call does not read again. +0x1C (cursor) is not reset on this path.
 - **13 name entry**: from frame 30; same grid, cursor movement and edit rules as §2.2 (all keys edge or
   repeat), writing into +0x58. Choosing END: `Replay_Finish("./replay/th8_%.2d.rpy", slot + 1)`, state 2,
-  all VMs 2, LSNM := name. ESC (edge) → SE 10, back to state 12. Typing SE 10 is followed by a sound flush.
+  all VMs 2, LSNM := name. ESC (edge, tested after backspace, VERIFIED 0x4575E7 RE-Q43) → back to the list (shared path above: SE 10, flush, all VMs 12, headers re-read). Typing SE 10 is followed by a sound flush.
 - **Draw** (states 10–14): VMs 49–54 drawn a second time on top; `No.   Name     Date   Player Score` at
   VM 55, in the ASCII colour left by the code before it (no colour set for it; VERIFIED disasm 0x4586B4, RE-Q38):
   white in states 10, 11, 12, 14 (the end of every `Result_Draw` resets it to 0xFFFFFFFF; the ranking is not drawn
