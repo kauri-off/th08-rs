@@ -145,7 +145,21 @@ with a bad header ("ZWAV", 1, 0x800) logs "BGM データのバージョンが違
   file order: Skip comes 4th. Each button row shows its pad button number as two digits; no number for −1.
 - On entry the 9 button fields are copied to a working copy (menu +0x14440…+0x14451), and the **live** Up/Down
   fields (+0x08/+0x0A) are set to −1 while the screen is open.
-- Cursor: `Menu_CursorUpDown(12)`.
+- Cursor: `Menu_CursorUpDown(12)`. Cursor 0 is set by the option menu's item-8 confirm (cursor := 0, then
+  `Menu_SetScreen(3)`, SE 10, return 1); the key-config entry block does not write the cursor (VERIFIED 0x46837B /
+  0x469636, RE-Q42). Likewise the option screen's cursor 0 from top item 7 is written by the top handler (at the
+  confirm, before and after its in-place `MainMenu_Option` call, and again in the switch call P + 29, 12 §2.2); the
+  option entry block does not write it.
+- **Call order** (every call, VERIFIED 0x469636, RE-Q42). There is no +0x1442C input gate: input works from the entry
+  call. 1) Sub-state 0 only: entry block (call 0: range interrupt 4, row sprites, working copy, live Up/Down := −1,
+  digit pairs once, +0x08 := −1), sub-state := 1, render the 12 descriptions; then in the same call:
+  2) `Menu_CursorUpDown(12)`, row highlight if it moved; 3) change test (description VM); 4) the 9 digit pairs
+  (0x469FA9) from the working copy; 5) ShotSlow VMs 75/76 from cfg +0x26; 6) joystick scan + assign (SE 10);
+  7) 0x4C868C := scan result; 8) Left / Right toggles of +0x26 on row 9; 9) input resets the idle counter +0xC294;
+  10) +0xC294 ≥ 3600 → exit; 11) confirm: Reset (working copy := defaults, +0x26 := 1) or Quit → exit;
+  12) counter increments, return 1. So the digits / ShotSlow plates show an assign, a toggle or a Reset **one call
+  later** (the next call's steps 4–5), and steps 1–5 also run in the Quit / idle-exit call (the exit itself is after
+  them, at steps 10/11).
 - **Assigning** works only from the joystick: each frame the raw DirectInput button array (`Input_PollJoystickRaw`,
   32 bytes) is scanned for the first button with bit 7 set (index 0–31, or 32 when none is down). If one is found,
   differs from the button found on the previous frame (global i16 0x4C868C, i.e. an edge), and the cursor is on rows
@@ -844,7 +858,8 @@ Listing:
 - Loads slots 01..15, then up to 45 `th8_ud????.rpy` files (shown as "User ").
 - 15 rows per page; Left/Right (edge or repeat flag) moves ±15 rows **only when there are more than 15 files**, and
   wraps: −15 < 0 → + count, +15 ≥ count → − count; SE 12 on every such press (VERIFIED 0x46E136, RE-Q37). Input
-  start: 12 §2 (cursor from call 9, confirm/cancel from call 18). Entry block: surface `select00.png` (unless the
+  start: 12 §2 (cursor from call 9, confirm/cancel from call 18; the +0x10 > 9 gate is armed only once per visit
+  and sub-states 2/3 have none, RE-Q42). Entry block: surface `select00.png` (unless the
   previous screen was 7), range interrupt 14, cursor 0, +0xC2BC := 0, file scan. Confirm with 0 files does nothing.
 - Row format: `"%s %8s  %6s %7s  %8s"` = No., name (+0x72), date (+0x6C), character (table 0x4C86C0[shot]), difficulty (0x4C86F0[diff]). For spell practice the last column is `Spell No.%3d`.
 

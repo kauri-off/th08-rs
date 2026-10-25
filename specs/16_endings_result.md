@@ -558,7 +558,12 @@ Each iteration with counter t (0 at start), in this order (VERIFIED 0x471181, RE
    y = 479 are not covered) with alpha byte = trunc((60 − t)·255/20) & 0xFF (QUIRK: 253, 240, … falling to 23 at t = 18
    and 10 at t = 19, then none); t > 5940: same quad with alpha byte = trunc((t − 5980)·255/20) & 0xFF (QUIRK: wraps for
    t < 5980);
-3. g_InputRawCur := `Input_Poll()`; `EndScene`, `Present` (on failure `Reset`);
+3. g_InputRawCur := `Input_Poll()`; `EndScene`, `Present` (on failure `Reset`). This is the same `Input_Poll`
+   0x43D970 as `Supervisor_Calc`'s (15 §1.1): keyboard bits, then `Input_PollJoystick` ORs the pad bits in and steps
+   the ShotSlow counter 0x164D51C once per iteration (when cfg +0x26 ≠ 0). Only g_InputRawCur is written: the previous
+   word 0x164D530, the unchanged-input counter 0x164D53C and the repeat flag 0x164D538 are not touched (they are
+   updated only in `Supervisor_Calc`), nor the gameplay words 0x164D52C/0x164D534. The next `Supervisor_Calc` after
+   the loop copies the last loop poll into 0x164D530 as usual (VERIFIED 0x471181 / 0x445453, RE-Q42);
 4. if 179 < t < 5980 and (g_InputRawCur & 0x1003) ≠ 0 and ≠ (0x164D530 & 0x1003): t := 5980, SE 10.
    0x164D530 (previous input) is written only by `Supervisor_Calc`, so inside the loop it keeps the value of the
    frame that registered the menu: the test compares with that frozen word, not with the previous iteration (a key

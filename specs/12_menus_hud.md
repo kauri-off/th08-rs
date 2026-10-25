@@ -115,7 +115,8 @@ Every other switch (all difficulty-screen transitions, the character screen's ca
 menu, replay, option) returns 1 and follows the next-frame rule. This is why the practice stage screen and the 16 ↔ 17
 switches show the new screen on the press frame in the draw logs.
 **Delayed switches and input start (VERIFIED, RE-Q25).** Every handler increments the sub-state counter +0x10 and the
-screen counter +0x1442C at the end of each call; a press zeroes +0x10 in its own call. A test "+0x10 > 19" (> 29,
+screen counter +0x1442C at the end of each call; a press that starts a delayed switch zeroes +0x10 in its own call
+(not every press: e.g. the replay screen's file confirm and its inner cancels leave +0x10 alone, see below). A test "+0x10 > 19" (> 29,
 > 59) is therefore true in the call P + 20 (P + 30, P + 60) after the press on frame P, which calls `Menu_SetScreen`
 (return 1), and the next screen first runs on P + 21 (P + 31). Uses: difficulty / spell-practice-char cancel 20,
 character cancel 30, replay leave 30 (top cursor 4), Quit 60. **Exception, option item 7** (VERIFIED 0x4674E0 +
@@ -128,7 +129,12 @@ screen leaves sub-state 0 when +0x1442C > 7 and accepts confirm/cancel when +0x1
 cursor from its first call and accepts Left/Right/confirm/cancel from +0x1442C ≥ 4; the top menu: see §2.2 "Input
 timing" (cursor from call 9, confirm/cancel from call 19 of each entry). Replay screen in call numbers (call 0 = the
 entry call): sub-state 1 starts in call 8 (+0x10 := 0 there), its first call is call 9 (cursor Up/Down and Left/Right
-paging from call 9), confirm/cancel from call 18 (+0x10 > 9) (VERIFIED 0x46E136, RE-Q37).
+paging from call 9), confirm/cancel from call 18 (+0x10 > 9) (VERIFIED 0x46E136, RE-Q37). The +0x10 > 9 gate exists only in sub-state 1 and is armed
+once: after sub-state 1 starts, +0x10 is zeroed again only by the list's cancel (→ sub-state 4, leave). The file
+confirm (→ 2) leaves +0x10 counting, and the cancels 2 → 1 and 3 → 2 zero +0x1442C, not +0x10; so back on the list
+the gate is already open and confirm/cancel work from the first call. Sub-states 2 and 3 have no gate of their own:
+cursor, confirm and cancel from their first call (the call after the press). Sub-state 4 leaves when +0x10 > 29
+(VERIFIED 0x46E136, RE-Q42).
 
 ### 2.1 title01.anm VM map (script index = VM index) — VERIFIED from the anm dump
 
@@ -194,13 +200,22 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
 | 4 Replay | リプレイを鑑賞できます | screen 7 (interrupt 13) |
 | 5 Result | 過去のスコアやスペルカードの取得歴を見られます | scene 5 |
 | 6 Music Room | 音楽を聴けます | scene 8 |
-| 7 Option | 各種設定できます | cursor 0, sub-state 3; screen 2 in call P + 29 (first runs P + 30, §2 intro), config snapshot (+0x14454, 0x3C bytes) saved |
+| 7 Option | 各種設定できます | cursor 0, sub-state 3, +0x10 := 0, in-place `MainMenu_Option` call, cursor 0 again; **no range interrupt and no highlight** (the items slide out only on the option entry's range interrupt 3, call P + 30). The press call then falls through to the cancel test (a Bomb/ESC edge in the same call moves the cursor to Quit with SE 11) and the counter increments. Sub-state 3 calls run nothing but the test +0x10 > 29 and the counter increments (no cursor, highlight, change test, demo counter, description render or confirm/cancel). In call P + 29 the test switches inline (not via `Menu_SetScreen`): +0x68 := 0, screen 2, +0x10/+0x1442C/+0x0C/+0xC294 := 0, cursor := 0, config snapshot (+0x14454 := the 0x3C bytes at 0x17CE870), return 1; screen 2 first runs P + 30 (§2 intro) (VERIFIED 0x4674E0 + `options_cfg` draw log: items static and item 7 lit in presents 328–356, sliding from 357, RE-Q42) |
 | 8 Quit | いろいろと終了します | range interrupt 1, sub-state 2; **no music change in WAV mode** (MIDI mode only: `Midi_Stop`, `Midi_Open(…, 30)`, `Midi_Play`; there is no fade, VERIFIED 0x4674E0, RE-Q25); in the call 60 frames later free VMs, scene −1 |
 
 - Cursor (`Menu_CursorUpDown` 0x47030B, wraps, sfx 12; held keys repeat with the repeat flag); locked items 1
   and 2 are skipped and drawn with colour 0xFF404040.
-- Every frame: all item VMs get the unselected sprite, the cursor item its base sprite; when the cursor
-  changes the new description VM gets interrupt 1.
+- **Highlight** (VERIFIED 0x4674E0 + `options_cfg` draw log presents 327–366, RE-Q42): "all 9 item VMs get the
+  unselected sprite (base + 1), the cursor item its base sprite, then locked items 1/2 get colour 0xFF404040" runs
+  only (a) in the entry block of call 0, (b) in sub-state 1 when `Menu_CursorUpDown` returned non-zero (the cursor
+  moved; after the locked-item skip loop), and (c) on cancel (old cursor item base + 1, cursor := 8, Quit base
+  sprite). Not in calls 1–8, not in sub-states 2 (Quit) and 3 (Option wait), and not on a confirm. The colour is
+  never written back to white (an unlocked item keeps its script colour). Consequence: Option's confirm sets cursor
+  0 without a highlight, so item 7 stays lit through the wait and the slide-out (the option screen never touches
+  VMs 1–9), and back on the top menu call 0 highlights cursor 7. Because the call-0 colour write also sets alpha
+  0xFF before the items' label-2 `alpha_fade` starts (start = current alpha), locked items appear at once at full
+  alpha instead of fading in.
+- When the cursor changes the new description VM gets interrupt 1 (change test, sub-state 1 every call).
 - **Description VM timing** (changelog/answers_impl17.md §Q4, VERIFIED, mopup1 presents 2866–2875):
   - The menu loader ends by setting +0xC2BC = description VM 0. All 14 description VMs start text.anm script 9, which
     fades in by itself (alpha 255·t/20).
@@ -246,6 +261,16 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
   render calls of sub-state 0, until the change test of call 9 picks VM [cursor] (whose strip the top menu has just
   re-rendered; strips 9–13 keep option / key-config text).
   Exact senders (VERIFIED `MainMenu_Top` 0x4674E0, RE-Q24): the pending interrupt 2 is written into the current description VM (pointer menu+0xC2BC; it is **not** in the title01 range, so range interrupts never reach it) by every confirm that leaves to another screen or scene — Start/Extra/Practice/Spell Practice (with their range interrupt 5/7/…), Replay (range 13), Result viewer (scene 5), Music Room (scene 8) — and by the entry redirects (returning to the replay screen after a replay, range 13; returning to practice / spell practice, range 5). **Option (item 7) and Quit (item 8) send nothing to it**: Option sets sub-state 3 and calls `MainMenu_Option` 0x46837B in place, Quit (sub-state 2) only sends range interrupt 1, so on those the current description keeps its state.
+  - **Loader set-up** (`MainMenu_LoaderThread` 0x470E10, only when 0x17CE9E4 = 0; VERIFIED RE-Q42): for i = 0..13,
+    description VM i (menu +0xC2C0 + i·0x2A4): +0x204 := text.anm, +0x21A := 9, `AnmFile_StartScript(text.anm,
+    VM, script 9)` (AnmVm_Init + one run: sprite 21, pos (320, 448), alpha 0, alpha_time 20 → 255), then
+    `AnmVm_SetSprite(VM, VM.sprite + i)` = text.anm sprite **21 + i**. The same loop sets screen-17 info VM i
+    (menu +0x11F2C + i·0x2A4) to text.anm sprite 21 + i with its own pos and flags (16 §6). Nothing else ever writes a
+    description VM outside its script except: the pending interrupt +0x1FE (1 / 2, by the handlers listed above),
+    and `Text_RenderCentered` 0x466650, which on every render reads the font bytes +0x298/+0x299 (0 → 15; StartScript
+    leaves them 0) and **sets flag bit 0 (visible)**. No position, colour or other field is written. So a description
+    VM hidden by its fade-out (`hide_wait_interrupt` after interrupt 2) is made visible again (alpha still 0, so it
+    draws nothing) when its strip is re-rendered (top menu calls 0–8, option / key-config entry).
   - Description strips are text.anm sprites 21+k = the same rows as the screen-17 info VMs. Screen 17 entry overwrites
     strips 0–6.
   - The top menu re-renders all 9 descriptions on each entry.
@@ -253,8 +278,8 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
   cursor, Shot in call 18 was ignored, Shot in call 20 started the item). Each entry (+0x0C = 0, +0x1442C = 0):
   calls 0–8 are sub-state 0 and only render description k = +0x1442C (+ the entry block in call 0) and return 1 —
   no cursor, no change test, no demo counter. Call 9: +0x1442C := 0, +0x10 := 0, +0x08 := −1, sub-state 1,
-  +0x14430 := 0, and the sub-state-1 code runs in the same call: cursor (`Menu_CursorUpDown`), highlight, demo
-  counter and the change test from call 9; confirm/cancel only when +0x1442C ≥ 10, i.e. from call 19.
+  +0x14430 := 0, and the sub-state-1 code runs in the same call: cursor (`Menu_CursorUpDown`), highlight (only when
+  the cursor moved, see "Highlight"), demo counter and the change test from call 9; confirm/cancel only when +0x1442C ≥ 10, i.e. from call 19.
   Confirm: sfx 10 (+ sound flush). Cancel: cursor jumps to Quit (sfx 11).
 - **Demo**: idle counter +1 per frame, reset by any raw input; after 1500 frames load
   `demo/demorpy((n+1) mod 4).rpy`; on success: flags = replay | demo (bits 3, 1), difficulty/shot from the

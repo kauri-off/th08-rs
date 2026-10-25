@@ -723,3 +723,10 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Key facts: TRIANGLE 2:1 = per-axis (1,7,7,1)/16, wrap, unweighted channels, f32 v·(1/31), acc in source order,
   trunc(x·q+0.5); text textures A4R4G4B4 512 wide → always 2:1. BGM fade modes 1–4 (0x472B50…0x472CC0), setters
   0x406AC0 (mode 2) / 0x406B40 (4) / 0x406BB0 (3); MIDI player fully decoded (02 §5; CC2/CC4 loop in all .mid).
+
+# RE-Q42 (2026-10-25) — implementer questions IMPL105 1–5, IMPL106 1–3 (menus, key config, restart, Info) — DONE (specs/changelog/answers_re_q42.md)
+- Code only + options_cfg draw log as a check (presents 327–366). 3 right (KC cursor 0, Info poll, desc VM sprites), 5 CODE BUG.
+- Key facts: top highlight only call 0 / cursor moved / cancel; item 7 sends no range interrupt (slide on option entry int 3);
+  replay +0x10 gate armed once, none in sub-states 2/3; key-config digits before assign (one-call lag, runs in exit call);
+  restart: requested −1, +0x154 0, skip counter byte 0x17CE710 := −4 at every start, Result(2) flush, ASCII zeroed, RNG reseed.
+- Text_RenderCentered sets VM flag bit 0 (visible) on every render.

@@ -41,8 +41,34 @@ the ANM manager, the D3D device, D3D and the window. Result ≠ 2: write `th08.c
 restore the accessibility settings, exit. Result **2** (calc/draw return 5, i.e. the option menu left with a changed
 colour depth or window mode, 15 §1.3): no cfg write; reset the log buffer, 60 × PeekMessage, then create the window
 and the D3D device again (with the live config), sound, a new ANM manager, and `Supervisor_Register` exactly as at start-up
-→ the game boots again through the Supervisor's start sequence (logo / loading). INFERRED: in-memory state outside
-the re-created objects (live config, globals) is kept, since nothing on this path clears it.
+→ the game boots again through the Supervisor's start sequence (logo / loading).
+**What the restart re-initialises** (VERIFIED WinMain 0x4418C0, `Supervisor_Register` 0x445EA7, `Supervisor_OnRegister`
+0x445FA3, `Supervisor_Init` 0x4464C8, RE-Q42). The Supervisor object itself is not re-constructed. In order:
+1. leaving the loop (both exit and restart): `Result_Register(2)` if the PLST tag 0x164CD0C ≠ 0, then the chain
+   teardown, which saves score.dat (15 §2.2), then `Sound_Update` until 0;
+2. after the device: `FUN_0043D0C0` (winmm joystick caps), `FUN_0043E160` (`GetKeyboardState`, clear bit 7 of all 256
+   bytes, `SetKeyboardState`; affects only the VK input path), new ANM manager;
+3. `Supervisor_Register`: current scene +0x158 := 0, requested +0x15C := **−1**, +0x154 (ExeCheck frame counter) := 0;
+   the previous scene +0x160 is kept until the boot → menu switch writes +0x160 := 0 (so `MainMenu_OnRegister` sees
+   previous scene 0: cursor 0, unless GameFlags bit 0 is set, 12 §2.2). Any requested value ≠ 0 makes the first
+   `Supervisor_Calc` after `Supervisor_Init` switch scene 0 → menu (requested := 1);
+4. WinMain after a successful register: Frame_Run skip counter (byte 0x17CE710) := **0xFC (−4)** and the timer fields
+   0x17CE72C…0x17CE740 (last time, deadline) := 0. This also happens at the first start;
+5. `Supervisor_OnRegister`: g_GameSpeed := 1.0; score.dat reloaded (PLST block re-zeroed and re-read, CLRD, PSCR, CATK,
+   FLSP); GameFlags bits 15–17 recomputed from it; archive + `th08_0100d.ver` reopened; logo; nowloading.anm; the
+   refresh-rate test 0x446232 again unless it failed before (0x17CE8D4); `Loading_Begin`; loader thread
+   `Supervisor_Init`;
+6. `Supervisor_Init`: 0x17CE8D0 := 0, HUD repaint counter 0x17CE8CC := 0, g_Rng state (u16) := low 16 bits of
+   `timeGetTime()` (the RNG call counter +4 is not touched, 11 §1), DirectInput devices created again
+   (`FUN_00446A37`), SE reload, text.anm, `AsciiManager_Register` (its on-register `AsciiManager_Load` zeroes the whole
+   ASCII object, 0x5C6C dwords: string queue, popups, pause/continue state), thbgm.fmt, BGM volumes, …
+Not touched on this path: the input words g_InputRawCur 0x164D528 / prev 0x164D530, the unchanged-input counter
+0x164D53C and repeat flag 0x164D538 (written only by `Supervisor_Calc`, which polls again from the first frame), the
+ShotSlow counter 0x164D51C, the key-config button 0x4C868C, GameFlags other than bits 15–17, the live config, the
+Fps window, and every other global.
+**Skip counter start** (applies to every start, VERIFIED 0x441A70 + `Frame_Run`): the counter is an i8 compared signed
+with cfg +0x23, so from −4 the first draw happens in frame 4 after the start (counter −3, −2, −1 → no draw chain, no
+BeginScene; `Present` still runs every frame); with frame skip 1 in frame 5, with 2 in frame 6.
 Log: buffer 0x164D540 (0x2000 bytes, write pointer +0x2000). 0x43EA00 appends a formatted line; 0x43EB60 appends an
 **error** line and sets +0x2004 := 1. At exit (0x4439C0), if anything was logged: a separator line, an error
 MessageBox (MB_ICONERROR) with the whole log when +0x2004 ≠ 0, and `./log.txt`.
@@ -60,7 +86,7 @@ SetViewport(0, 0, 640, 480)
 r = run(calc_chain)                          # all update callbacks
 sound.update()
 if r == 0  -> JoinLoader; return 1 (quit) ; if r == -1 -> JoinLoader; return 2 (error)   # no draw, no Present (RE-Q30)
-skip_counter += 1
+skip_counter += 1                            # i8, starts at −4 after every (re)start (§2 "Skip counter start")
 if skip_counter >= config.frame_skip:        # VERIFIED cfg+0x23: 0 and 1 both draw every frame, 2 every 2nd
     BeginScene; anm_manager.reset_render_state;   # no Clear here (Stage_DrawLow / GameMgr_Calc / 0x45B020 clear)
     run(draw_chain)
