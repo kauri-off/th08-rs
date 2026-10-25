@@ -78,7 +78,8 @@ static void blk_seen(int kind, uint32_t v) {
 }
 static void __cdecl cb_gm_calc(uint32_t *sp) { blk_seen(1, U32(sp[7] + 0x38)); }
 static int g_mm_screen, g_mm_cursor;
-static void __cdecl cb_mm_calc(uint32_t *sp) { g_mm_screen = (int)U32(sp[7] + 0x14428); g_mm_cursor = (int)U32(sp[7]); g_mm_hit = 1; blk_seen(2, U32(sp[7] + 0x14434)); }
+static uint32_t g_mm_obj;
+static void __cdecl cb_mm_calc(uint32_t *sp) { g_mm_obj = sp[7]; g_mm_screen = (int)U32(sp[7] + 0x14428); g_mm_cursor = (int)U32(sp[7]); g_mm_hit = 1; blk_seen(2, U32(sp[7] + 0x14434)); }
 
 static FILE *sess_open(const char *dir, const char *name, const char *mode) {
     char p[MAX_PATH * 2]; snprintf(p, sizeof p, "%s\\%s", dir, name);
@@ -90,6 +91,35 @@ static void sess_open_chunk(void) {
     g_draw = sess_open(g_sess_out, n, "w");
     if (g_draw) setvbuf(g_draw, NULL, _IOFBF, 1 << 22);
     g_chunk_frames = 0;
+}
+
+/* TH08_AUTOKEY=replay (record mode, run_rpy.sh): Input_Poll returns scripted keys that open Replay (top item 4) ->
+   the only listed file -> its first recorded stage -> speed 0, then nothing; exits 30 polls after the replay leaves
+   scene 2. Menu fields 12 §2: +0x00 cursor, +0x0C sub-state, +0x10 sub-state frames, +0x14428 screen; replay screen
+   +0xC288 file count (files failing Replay_Load are not listed, 15 §3.8). Keys are 1-poll pulses every 6 polls. */
+static int g_autokey, g_ak_started; static uint32_t g_ak_tick, g_ak_end = 0xFFFFFFFF;
+static void ak_exit(const char *why) {
+    lg("# autokey: exit (%s) at poll %u present %u\n", why, g_poll_n, g_present_n + 1);
+    if (g_sev) { fprintf(g_sev, "autokey_exit %s poll %u present %u\n", why, g_poll_n, g_present_n + 1); }
+    sess_flush(); ExitProcess(0);
+}
+static uint16_t autokey(uint8_t scene, uint32_t i) {
+    int pulse = (++g_ak_tick % 6) == 0;
+    if (g_ak_started) {
+        if (scene != 2 && g_ak_end == 0xFFFFFFFF) { g_ak_end = i; lg("# autokey: replay end, scene %u at poll %u present %u\n", scene, i, g_present_n + 1); }
+        if (g_ak_end != 0xFFFFFFFF && i >= g_ak_end + 30) ak_exit("end");
+        return 0;
+    }
+    if (scene == 2) { g_ak_started = 1; lg("# autokey: replay start at poll %u present %u\n", i, g_present_n + 1); return 0; }
+    if (scene != 1) { g_mm_obj = 0; return 0; }
+    uint32_t mm = g_mm_obj;
+    if (!mm) return 0;
+    uint32_t scr = U32(mm + 0x14428), sub = U32(mm + 0xC), cur = U32(mm);
+    if (scr == 0) return pulse ? (cur == 4 ? 0x1 : 0x20) : 0;
+    if (scr != 7) return 0;
+    if (sub == 1 && U32(mm + 0x10) > 9 && U32(mm + 0xC288) == 0) ak_exit("rejected");
+    if (sub == 3 && cur != 0) return pulse ? 0x10 : 0;
+    return (sub >= 1 && sub <= 3 && pulse) ? 0x1 : 0;
 }
 
 /* frames: present number of the frame being computed (its Present has not happened yet) */
@@ -113,7 +143,10 @@ static uint16_t __cdecl w_input_poll(void) {
             lg("# PLAY MISMATCH poll %u (rec %u): scene %u/%u src %c/%c present %u\n", i, k, scene, g_rp[k].scene, src, g_rp[k].src, g_present_n + 1);
         if (k == g_nrp) lg("# play: recorded input exhausted at poll %u present %u\n", i, g_present_n + 1);
         if (k >= g_nrp + 600) { lg("# play: exit, 600 polls past the recording\n"); sess_flush(); ExitProcess(0); }
-    } else m = ((uint16_t(*)(void))g_tramp_poll)();
+    } else {
+        m = ((uint16_t(*)(void))g_tramp_poll)();
+        if (g_autokey) m = autokey(scene, i);
+    }
     if (g_spoll) fprintf(g_spoll, "%u %u %u %c %04x\n", i, g_present_n + 1, scene, src, m);
     return m;
 }
@@ -307,6 +340,17 @@ volatile uint32_t g_noclip_hits;
 static uint32_t g_noclip_on, g_noclip_logged;
 __asm__(".globl _noclip_die\n_noclip_die:\n\tlock incl _g_noclip_hits\n\tret\n");
 extern void noclip_die(void);
+/* TH08_FAST: virtual Timer_Now (thiscall, no args, result in ST0). +25 ms per call (2 calls per frame, so every
+   Frame_Run is past its deadline), but real elapsed time while a loader thread runs (Supervisor+0x284 0x17CE9DC != 0):
+   the loaders sleep in 17 ms steps and wait for main-thread frames, so loading keeps the normal 60 Hz pace. */
+static int64_t g_fast_us, g_fast_qpc, g_fast_freq;
+static double __cdecl fast_now(void) {
+    LARGE_INTEGER q; QueryPerformanceCounter(&q);
+    if (U32(0x17CE9DC)) g_fast_us += (q.QuadPart - g_fast_qpc) * 1000000 / g_fast_freq;
+    else g_fast_us += 25000;
+    g_fast_qpc = q.QuadPart;
+    return (double)g_fast_us * 1e-6;
+}
 static void __cdecl cb_sess_postcalc(void) {
     uint16_t cw = fpu_cw();
     g_calc_n++;
@@ -404,6 +448,7 @@ static int sess_init(void) {
     { const char *sc = getenv("TH08_SCAN"); if (sc) sscanf(sc, "%d %d", &g_scan0, &g_scan1); }
     { const char *sc = getenv("TH08_RNGSITE"); if (sc) sscanf(sc, "%d %d", &g_srs0, &g_srs1); }
     { const char *sc = getenv("TH08_BOSS"); if (sc) sscanf(sc, "%d %d", &g_boss0, &g_boss1); }
+    { const char *ak = getenv("TH08_AUTOKEY"); g_autokey = g_sess == 1 && ak && !strcmp(ak, "replay"); }
     CreateDirectoryA(g_sess_out, NULL);
     g_log = sess_open(g_sess_out, "probe_log.txt", "w");
     g_spoll = sess_open(g_sess_out, "polls.txt", "w");
@@ -442,6 +487,12 @@ static int sess_init(void) {
     inline_hook_sp(0x465860, cb_anm_preload, 6);
     inline_hook_sp(0x4667C0, cb_surf_load, 6);
     { const char *e = getenv("TH08_LDLOG"); if (e && atoi(e)) inline_hook_sp(0x465BA0, cb_postload, 6); }
+    { const char *fa = getenv("TH08_FAST");
+      if (fa && atoi(fa)) {
+          /* fast mode: Timer_Now 0x442190 (only caller Frame_Run) returns the virtual clock fast_now */
+          LARGE_INTEGER q; QueryPerformanceFrequency(&q); g_fast_freq = q.QuadPart; QueryPerformanceCounter(&q); g_fast_qpc = q.QuadPart;
+          jmp_patch(0x442190, (void *)fast_now, 5);
+          lg("# fast: Timer_Now 0x442190 -> virtual clock\n"); } }
     { const char *nc = getenv("TH08_NOCLIP");
       if (nc && atoi(nc)) {
           /* skipping Player_Die skips its GameMgr_UpdateChecksum after the caller's ScrambleDecoys, so the decoy check

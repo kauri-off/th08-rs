@@ -771,3 +771,15 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   +0x64 (skip if write cursor inside it); StreamStop keeps ring/+0x64/file pos → UnPause after Stop = seamless
   continuation from t + ((16−P) mod 16)/4 s. Reachable via msg6*/7* entry 4 `bgm −1` + pause. GameMgr_OnRemove drains
   the BGM queue (Sound_Update until 0) and never queues UnPause. Cfg bit 13 + cmd 6/7 = null deref.
+
+# RE-REPLAY-PILOT (2026-10-25) — third-party .rpy in the original, fast, as sessions — DONE (re/work/runs/replay_pilot/REPORT.md)
+- Probe TH08_FAST=1: Timer_Now 0x442190 → virtual clock (+25 ms/call), but real time while a loader thread runs
+  (0x17CE9DC ≠ 0). The loaders Sleep(17) until GM+0x3C ≥ 30, and a fully virtual clock broke the Loading_Wait sync.
+  golden/fullrun_noclip fast: 0 trace diffs; ~630 fps solo without draw log, ~500 with; 60 fps normal.
+  One fast draw-log run (of 5) had the ENEMY marker blink 1 frame out of phase (unexplained, not reproduced).
+- Probe TH08_AUTOKEY=replay (record mode): menu-state-driven key pulses (Replay → file → first stage → speed 0); exits on
+  return from scene 2, or on file count 0 (`rejected`). re/tools/run_rpy.sh: slot dirs re/work/runs/rpy/slotN (own game,
+  prefix copy, Xvfb :1N), no audio driver. play_session.sh: --fast, --game DIR, --sound off = no audio device.
+- Pilot: 22 replays, all accepted (incl. tags 0100_/0100a/0100b/debug: ExeCheck passes them). Original desyncs: Ro168
+  (Ultra TAS), Ar02 (1.00), Tt16 (1.00d stage practice 6B, also at 60 fps). Port: full games diverge at menu frame 190
+  (stage-1 loading ends one frame early, rng_ctr −4); all others at menu frame 97 (replay stage cursor stays 0).
