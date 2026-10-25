@@ -714,7 +714,7 @@ impl Player {
             if owned {
                 self.laser_slots[s] = LaserSlot::default();
             }
-            return false;
+            // QUIRK (14 §4, RE-Q51): no return; the last frame still follows option 0 and adds its trail rects.
         }
         if self.options[0].state == 0 {
             self.laser_slots[s] = LaserSlot::default();
@@ -1111,10 +1111,15 @@ mod tests {
         assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default()));
         p.shot_timer.set(0);
         crate::gamemgr::set_flags(F_13);
+        p.options[0].pos = [80.0, 300.0, 0.0];
         assert!(!p.laser_update(0));
         let b = &p.bullets[0];
         assert_eq!((b.vm.pending_interrupt, b.update), (1, 0));
         assert!(p.laser_slots[0].owner.is_none());
+        // The end branch falls through: this frame the laser still moves to option 0 (14 §4).
+        assert_eq!(b.pos, [80.0, 300.0 - 208.0, 0.44]);
+        p.options[0].state = 0;
+        assert!(p.laser_update(0));
     }
 
     // Player anm slot with 12 scripts: 10 (flight) sets zwrite_off; 11 (hit) sets it only if asked.

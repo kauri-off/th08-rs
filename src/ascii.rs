@@ -1104,6 +1104,18 @@ struct ContinueMenu {
     capture: bool,
 }
 
+// 0x404890 early exits (11 §4.2, RE-Q51): game_over := 0 and displayed score := score, no sound / VMs / capture /
+// play time; GameMgr_Calc later in the same pass then runs one more gameplay frame.
+fn early_exit(g: &mut Game, scene: i32) {
+    g.game_over = 0;
+    if let Some(gm) = gamemgr::current() {
+        let gm = gm.borrow();
+        let st = &mut gm.player.borrow_mut().stats;
+        st.score_disp = st.score10;
+    }
+    g.request(scene);
+}
+
 impl ContinueMenu {
     fn update(
         &mut self,
@@ -1114,26 +1126,27 @@ impl ContinueMenu {
     ) {
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
-            // below in the same call. Play time is added on continue-menu entry (15 §2.9).
+            // below in the same call.
             *self = ContinueMenu {
                 open: true,
                 ..ContinueMenu::default()
             };
-            g.add_play_time();
             log::info!("continue menu opened");
             if g.practice() && !g.spell_practice() {
-                g.request(gamemgr::SCENE_RESULT);
+                early_exit(g, gamemgr::SCENE_RESULT);
                 return;
             }
             if g.replay() {
-                g.request(gamemgr::SCENE_REPLAY_END);
+                early_exit(g, gamemgr::SCENE_REPLAY_END);
                 return;
             }
             if g.difficulty < 4 && !g.spell_practice() && (g.clock > 10 || g.stage % 9 == 7) {
                 g.flags &= !gamemgr::F_ENDING_OK;
-                g.request(gamemgr::SCENE_ENDING);
+                early_exit(g, gamemgr::SCENE_ENDING);
                 return;
             }
+            // Play time is added only when the prompt opens, not on the early exits (15 §2.9).
+            g.add_play_time();
             // Music on opening (12 §4): spell practice with a non-restarting card dips to −10 dB and keeps
             // playing; otherwise command 6 "Pause".
             if g.spell_practice() && !gamemgr::spell_bgm_restarts(g.card) {
@@ -1386,6 +1399,22 @@ mod tests {
         assert!(m.open && !m.yes && m.capture);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
         assert_eq!(g.requested, gamemgr::SCENE_BOOT);
+    }
+
+    // 11 §4.2 / 15 §2.9: the replay early exit clears game_over, requests scene 7, opens nothing, adds no play time.
+    #[test]
+    fn continue_menu_replay_early_exit() {
+        let mut anm = crate::anmmgr::AnmManager::default();
+        let mut g = Game::default();
+        g.flags |= gamemgr::F_REPLAY;
+        g.game_over = 1;
+        g.mark_play_time();
+        let mut m = ContinueMenu::default();
+        let mut audio =
+            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_REPLAY_END));
+        assert!(g.play_clock.is_some() && !m.capture && m.vms.is_empty());
     }
 
     #[test]

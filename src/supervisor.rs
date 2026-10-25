@@ -425,6 +425,10 @@ impl Task<Ctx> for Supervisor {
         if let Some(s) = &self.script {
             ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);
         } else {
+            // Session tool: Input_Poll's recorded return for this poll index (polls.txt; one poll per calc pass, 00 §3).
+            if let Some(s) = &ctx.game.sched {
+                ctx.input.raw = s.raw(s.poll);
+            }
             let pad = ctx.pad.poll();
             ctx.input.poll_joystick(&ctx.game.cfg, pad);
         }

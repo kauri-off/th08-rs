@@ -44,6 +44,9 @@ impl TaskCtx for Ctx {
     fn tasks(&mut self) -> &mut Tasks<Self> {
         &mut self.tasks
     }
+    fn on_restart(&mut self) {
+        crate::session::on_restart(self);
+    }
 }
 
 impl Ctx {
@@ -234,6 +237,7 @@ impl Ctx {
                 self.log_frame();
             }
             self.gfx.present();
+            crate::session::on_extra_present(self);
         }
     }
 

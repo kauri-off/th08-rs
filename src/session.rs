@@ -11,8 +11,63 @@ pub struct Sched {
     pub menu: VecDeque<i64>,
     // (gauge setup, Loading_Wait, release) per stage start.
     pub stages: VecDeque<[i64; 3]>,
-    // Poll index of the frame being calculated (−1 during boot).
+    // Poll index of the calc pass being run (negative during boot); advances on every chain restart (00 §3).
     pub poll: i64,
+    // Recorded Input_Poll return per poll index (polls.txt `S`/`I` rows).
+    pub input: std::rc::Rc<[u16]>,
+    // Rows written inside this frame's calc (restarted passes, in-calc presents with ff −1), taken by `Session::run`.
+    pub pass_rows: Vec<Row>,
+}
+
+impl Sched {
+    // Raw input of poll `poll`; boot frames before the first menu frame never poll (0).
+    pub fn raw(&self, poll: i64) -> u16 {
+        usize::try_from(poll)
+            .ok()
+            .and_then(|p| self.input.get(p).copied())
+            .unwrap_or(0)
+    }
+}
+
+// FuncChain_RunCalc restart (00 §3, README "Trace"): the probe writes a row per pass, and the next pass polls again.
+pub fn on_restart(ctx: &mut crate::game::Ctx) {
+    let Some(poll) = ctx.game.sched.as_ref().map(|s| s.poll) else {
+        return;
+    };
+    let r = sample(ctx, 0, poll, 0);
+    if let Some(s) = &mut ctx.game.sched {
+        s.pass_rows.push(r);
+        s.poll += 1;
+    }
+}
+
+// Device_ClearPresentTwice (16 §1.2): a present inside a calc gets its own trace row, ff = −1 (README "Trace").
+pub fn on_extra_present(ctx: &mut crate::game::Ctx) {
+    let Some(poll) = ctx.game.sched.as_ref().map(|s| s.poll) else {
+        return;
+    };
+    let mut r = sample(ctx, 0, poll, 0);
+    r[22] = -1;
+    if let Some(s) = &mut ctx.game.sched {
+        s.pass_rows.push(r);
+    }
+}
+
+// `polls.txt`: `poll present scene src mask` per Input_Poll call; the mask by poll index.
+pub fn parse_polls(text: &str) -> Option<Vec<u16>> {
+    let mut v = Vec::new();
+    for l in text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+    {
+        let t: Vec<&str> = l.split_whitespace().collect();
+        let (poll, mask) = (t.first()?.parse::<usize>().ok()?, t.get(4)?);
+        if poll != v.len() {
+            return None;
+        }
+        v.push(u16::from_str_radix(mask, 16).ok()?);
+    }
+    Some(v)
 }
 
 pub const COLUMNS: [&str; 36] = [
@@ -139,7 +194,7 @@ pub fn parse_events(text: &str) -> anyhow::Result<(u32, Sched)> {
     Ok((seed, s))
 }
 
-// The port's state in trace column order, after the calc of present `present`.
+// The port's state in trace column order, after the calc of present `present`; `calc` (col 24) is the caller's.
 pub fn sample(ctx: &mut crate::game::Ctx, present: i64, poll: i64, scene_frame: i64) -> Row {
     let mut r = [0i64; 36];
     let d = crate::demosync::sample(ctx, 0);
@@ -149,7 +204,6 @@ pub fn sample(ctx: &mut crate::game::Ctx, present: i64, poll: i64, scene_frame: 
     let g2 = &ctx.game;
     r[22] = 0;
     r[23] = present;
-    r[24] = present - 2;
     r[25] = poll + 1;
     r[26] = g2.scene as i64;
     r[27] = scene_frame;
@@ -311,9 +365,15 @@ mod native {
         pub fn load(dir: &Path) -> anyhow::Result<Self> {
             let events = std::fs::read_to_string(dir.join("events.txt"))?;
             let (seed, sched) = parse_events(&events)?;
-            let input = std::fs::read_to_string(dir.join("input.txt"))?;
-            let input = crate::input::parse_script(&input)
-                .ok_or_else(|| anyhow::anyhow!("bad input.txt"))?;
+            // Raw input per poll (README: polls.txt, not the per-present input.txt, which loses restart polls).
+            let input = match std::fs::read_to_string(dir.join("polls.txt")) {
+                Ok(t) => parse_polls(&t).ok_or_else(|| anyhow::anyhow!("bad polls.txt"))?,
+                Err(_) => {
+                    let t = std::fs::read_to_string(dir.join("input.txt"))?;
+                    crate::input::parse_script(&t)
+                        .ok_or_else(|| anyhow::anyhow!("bad input.txt"))?
+                }
+            };
             let noclip = std::fs::read_to_string(dir.join("meta.txt"))
                 .is_ok_and(|m| m.lines().any(|l| l.trim() == "noclip: 1"));
             Ok(Self {
@@ -362,13 +422,16 @@ mod native {
             }
             crate::scoredat::set_save_dir(Some(save));
             ctx.anm.rng = crate::rng::Rng::seeded(self.seed as u16);
-            ctx.game.sched = Some(self.sched.clone());
+            ctx.game.sched = Some(Sched {
+                input: self.input.as_slice().into(),
+                ..self.sched.clone()
+            });
             ctx.game.noclip = self.noclip;
             Ok(())
         }
 
-        // Runs the session up to poll row `to` (1-based); `row` gets every trace row (boot rows too) and returns
-        // false to stop; `draw` gets the draw-log text of every present.
+        // Runs the session up to poll row `to` (1-based); `row` gets every trace row (boot rows too, one per calc
+        // pass) and returns false to stop; `draw` gets the draw-log text of every present.
         pub fn run(
             &self,
             ctx: &mut crate::game::Ctx,
@@ -384,19 +447,21 @@ mod native {
             let boot = self.sched.boot_calc as i64;
             let (mut scene, mut scene_frame) = (i32::MIN, 0i64);
             let to = to.min(self.input.len()) as i64;
-            for present in 1i64.. {
-                let poll = present - boot;
+            // Poll index of the next frame's first pass (restarted passes take one each, 00 §3).
+            let mut next_poll = 0i64;
+            // Presents made inside a calc (Device_ClearPresentTwice) so far; `n` counts Frame_Runs.
+            let mut extra = 0i64;
+            for n in 1i64.. {
+                let poll = if n < boot { n - boot } else { next_poll };
                 if poll >= to {
                     break;
                 }
                 if let Some(s) = &mut ctx.game.sched {
                     s.poll = poll;
+                    s.pass_rows.clear();
                 }
-                ctx.input.raw = if poll >= 0 {
-                    self.input[poll as usize]
-                } else {
-                    0
-                };
+                // Info_Show polls outside the chain; Supervisor_Calc takes its own word from the schedule.
+                ctx.input.raw = ctx.game.sched.as_ref().map_or(0, |s| s.raw(poll));
                 let tr = rng_row == Some(poll + 1);
                 crate::rng::TRACE.set(tr);
                 let flow = match &mut draw {
@@ -413,16 +478,52 @@ mod native {
                 if tr {
                     print_rng_calls(poll + 1);
                 }
-                if ctx.game.scene != scene {
-                    (scene, scene_frame) = (ctx.game.scene, 0);
+                let (last, rows) = match &mut ctx.game.sched {
+                    Some(s) => (s.poll, std::mem::take(&mut s.pass_rows)),
+                    None => (poll, Vec::new()),
+                };
+                if n >= boot {
+                    next_poll = last + 1;
                 }
-                scene_frame += 1;
-                let r = sample(ctx, present, poll.max(-1), scene_frame);
+                // Rows written inside this calc (README "Trace"): pass rows ff = 1…k before the final row ff = k,
+                // ff = −1 rows for in-calc presents; `calc` (Frame_Runs) increments only on the final row; present and
+                // scene_frame count presents, the in-calc ones included.
+                let base = n + extra;
+                let sf_base = scene_frame + 1;
+                let k_in = rows.iter().filter(|r| r[22] < 0).count() as i64;
+                let present = base + k_in;
+                let (mut passes, mut ins, mut stop) = (0, 0, false);
+                for mut r in rows {
+                    if r[22] < 0 {
+                        ins += 1;
+                        r[23] = base + ins;
+                        r[27] = sf_base + ins;
+                    } else {
+                        passes += 1;
+                        r[22] = passes;
+                        r[23] = present;
+                        r[27] = sf_base + k_in;
+                    }
+                    r[24] = n - 3;
+                    if !row(&r) {
+                        stop = true;
+                        break;
+                    }
+                }
+                extra += k_in;
+                if ctx.game.scene != scene {
+                    (scene, scene_frame) = (ctx.game.scene, 1);
+                } else {
+                    scene_frame = sf_base + k_in;
+                }
+                let mut r = sample(ctx, present, last.max(-1), scene_frame);
+                r[22] = passes;
+                r[24] = n - 2;
                 // The exit save follows the quitting frame's sample (15 §2.2).
                 if flow == crate::task::Flow::Quit {
                     ctx.exit_save();
                 }
-                if !row(&r) || flow != crate::task::Flow::Continue {
+                if stop || !row(&r) || flow != crate::task::Flow::Continue {
                     break;
                 }
             }
@@ -489,6 +590,11 @@ mod tests {
         assert_eq!((seed, s.boot_calc), (0x1afaed, 14));
         assert_eq!(s.menu, [32]);
         assert_eq!(s.stages, [[10918, 10935, 10968]]);
+        let polls = parse_polls(
+            "# poll present scene src mask\n0 17 0 S 0000\n1 18 1 S 0020\n2 18 2 S 0001\n",
+        );
+        assert_eq!(polls.as_deref(), Some(&[0, 0x20, 1][..]));
+        assert!(parse_polls("0 17 0 S 0000\n2 18 1 S 0020\n").is_none());
         let r = parse_trace(
             "0 0 0001 4037 0 3f800000 00000000 0 0 0 0 00000000 00000000 00000000 0 0 0 0 0 0 0 10000 0 15 13 1 1 1 0 0 -1 0 0001 0 0 -1\n",
         );

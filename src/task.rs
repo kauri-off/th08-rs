@@ -52,6 +52,8 @@ pub type TaskRef<C> = Rc<RefCell<dyn Task<C>>>;
 
 pub trait TaskCtx: Sized + 'static {
     fn tasks(&mut self) -> &mut Tasks<Self>;
+    // Called when a calc node returns 6, before the walk restarts from the head (session tool: one row per pass).
+    fn on_restart(&mut self) {}
 }
 
 pub fn task<C, T: Task<C> + 'static>(t: T) -> TaskRef<C> {
@@ -232,7 +234,11 @@ pub fn run<C: TaskCtx>(ctx: &mut C, chain: Chain) -> Flow {
             Ret::StopFrame => return Flow::Continue,
             Ret::Quit => return Flow::Quit,
             Ret::ErrorQuit => return Flow::Error,
-            Ret::Restart if chain == Chain::Calc => i = 0,
+            // Restart (00 §3): every calc node runs again in the same Frame_Run, Supervisor_Calc's input poll included.
+            Ret::Restart if chain == Chain::Calc => {
+                ctx.on_restart();
+                i = 0;
+            }
             // Code 6 is only special in the calc runner; the draw runner treats it like 1.
             Ret::Next | Ret::Restart => i = pos.map_or(i, |p| p + 1),
         }
@@ -252,6 +258,9 @@ mod tests {
     impl TaskCtx for T {
         fn tasks(&mut self) -> &mut Tasks<Self> {
             &mut self.tasks
+        }
+        fn on_restart(&mut self) {
+            self.log.push("R".into());
         }
     }
 
@@ -309,7 +318,7 @@ mod tests {
         assert_eq!(c.tasks.priorities(Chain::Calc), [1, 5, 5, 9]);
         c.log.clear();
         assert_eq!(run(&mut c, Chain::Calc), Flow::Continue);
-        assert_eq!(c.log.join(" "), "a0 a0 b0 c1 a0 -a0 b0 c1 d0");
+        assert_eq!(c.log.join(" "), "a0 a0 b0 c1 R a0 -a0 b0 c1 d0");
         c.log.clear();
         assert_eq!(run(&mut c, Chain::Calc), Flow::Quit);
         assert_eq!(run(&mut c, Chain::Calc), Flow::Error);
