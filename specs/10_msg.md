@@ -173,7 +173,7 @@ Arguments are given in file order. `str` = XOR-0x77 string (§2). Count = occurr
 | 4 | wait | i32 n | **stall** handling, see §5.2 | 1565 |
 | 5 | face_interrupt | i16 k, u8 i, pad | `face[k].pending_interrupt = i` | 177 |
 | 6 | release_timeline | — | `release_counter += 1` → `Msg_IsBlocking` is false for this frame, so a timeline op 7 waiting on the dialogue passes (used to spawn a boss mid-dialogue) | 40 |
-| 7 | bgm | i32 n | n < 0: stop music (`Music_Stop` 0x448081). Else: HUD VM (HudImpl+0x3230) runs script 3 of `stgNtxt.anm` with sprite n+3 (song-title card); play preloaded BGM slot n (the 3 STD names, 02 §4); mark music-room entry `tbl0x4C7240[stage*3+n]` as heard (`0x164CF14[idx] = 1`) unless replay/flag bit 1 | 49 |
+| 7 | bgm | i32 n | n < 0: stop music (`Music_Stop` 0x448081; used only by msg6a–d / msg7a–d entry 4; a pause before the next `bgm n` resumes the stopped WAV song, 02 §4 "UnPause after `Music_Stop`", RE-Q48). Else: HUD VM (HudImpl+0x3230) runs script 3 of `stgNtxt.anm` with sprite n+3 (song-title card); play preloaded BGM slot n (the 3 STD names, 02 §4); mark music-room entry `tbl0x4C7240[stage*3+n]` as heard (`0x164CF14[idx] = 1`) unless replay/flag bit 1 | 49 |
 | 8 | boss_card | i16, i16, str | starts script 1 of face file 2 on `boss_card` (the boss name plate, `face_stNN_name`), wait_count = 0. **The arguments are ignored** (the string is the boss name) | 35 |
 | 9 | stage_end | i32 (always 0, ignored) | stage-clear: computes and shows the clear bonus, advances the clock counter, sets GM flag 0x200 (§7, 11/12) | 37 |
 | 10 | halt | — | **stall forever** (ip is not advanced; the game manager ends the stage) | 37 |

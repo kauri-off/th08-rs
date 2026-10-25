@@ -554,7 +554,9 @@ calc returns 1. This runs on every frame that reaches the end, with or without a
 For the shipped exe the check passes ("0100d 840704 2724749753" is listed), so a port that uses those constants as
 the running-exe values does nothing here. (Older text called this a "config file" check — wrong.)
 Unregistering the GM (0x43BF6E) also clamps the score to 999 999 999, sets displayed score = score and resets
-game speed to 1. The GM on-remove callback stops music (unless spell practice reload), waits for sounds,
+game speed to 1. The GM on-remove callback stops music (unless spell practice reload; `Music_Stop` only, it never queues command 7
+"UnPause"), waits for sounds (calls `Sound_Update` until the BGM queue is empty, so the stop and anything queued before
+it run at once; VERIFIED 0x43BE2C, RE-Q48),
 unregisters Gui, Stage, HUD, Player, Enemies, Effects, Bullets, Replay (recording) and saves score data.
 
 Exit / fresh-start flags (VERIFIED, changelog/answers_impl13.md §2): `GameMgr_OnRemove` first sets the full-exit flag

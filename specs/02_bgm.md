@@ -51,7 +51,19 @@ the loop end is not shipped); a reimplementation must never read past `loop_end`
   track start.
 - Streaming uses a DirectSound buffer of 16 notification chunks, each
   `nSamplesPerSec * 4 * nBlockAlign / 16` bytes rounded down to a multiple of `nBlockAlign`
-  (= 44100 bytes ≈ 0.25 s per chunk) (INFERRED meaning of the arithmetic).
+  (= 44100 bytes = 0.25 s per chunk, ring = 705 600 bytes = 4.0 s) (VERIFIED RE-Q48: `Bgm_StreamStart` 0x45CC70
+  `FUN_004718D0(…, 16, chunk, event)`, stream object +8 ring size, +0x6C chunk size; one notification per chunk at
+  offset k·chunk + chunk − 1, all on one auto-reset event).
+- **Streaming ring** (VERIFIED RE-Q48, thread 0x45E0F0, handler 0x472D30, fill 0x4723B0, reset 0x473120): the play
+  command's fill stage rewinds the track and fills the whole ring (the first 4.0 s), sets the refill offset +0x64 := 0,
+  and plays the buffer looping from 0. A dedicated thread waits on the notification event; on each event it does
+  nothing unless the playing flag (+0x30) is 1. Else (lock flag +0x74 := 1 around it): if the buffer's **write
+  cursor** lies inside the chunk at +0x64 (+0x64 < write ≤ +0x64 + chunk, unsigned) it logs "Stream Skip" and does
+  nothing; otherwise it reads the next chunk of the track (looping as above) into the chunk at +0x64 and advances
+  +0x64 by one chunk (mod ring). In normal playback the event fires as the play cursor leaves chunk k, and +0x64 = k:
+  the chunk just played is refilled with the data 4.0 s ahead, and +0x64 always names the chunk being played. So the
+  file read position runs 4.0 s (16 chunks) ahead of the chunk start being played, and the ring holds, from +0x64 on,
+  the next 4.0 s of the song in order. Nothing but a play command's fill stage rewinds the file or resets +0x64.
 - Preload mode: a track can be read fully into memory (`0x14` bytes requested) in a slot (0–15) and
   later started from memory; same loop rules apply to the memory copy.
 
@@ -64,9 +76,11 @@ the loop end is not shipped); a reimplementation must never read past `loop_end`
     nothing is heard yet.
   - mode **2 = MIDI**: opens `bgm/<name>.mid` for the slot (MIDI loader 0x4441A0).
 - `Music_PlaySlot(slot, track)` (0x447E47) starts a loaded slot: WAV: (if config +0x38 (0x17CE8A8, debug/driver flags, 15 §1) bit 13: command 4 first) then
-  command **2 = play** (slot); MIDI: stop, open slot, play. Both mark music-room track `track` as heard
-  (0x164CF14[track] := 1) unless replay playback or demo (VERIFIED, RE-Q24).
-  - mode 0: no music.
+  command **2 = play** (slot); MIDI: if a MIDI object exists (0x17CE8E4 ≠ 0) stop, open slot, play. Both mark
+  music-room track `track` as heard (0x164CF14[track] := 1) unless replay playback (GameFlags bit 3) or demo (bit 1)
+  (VERIFIED, RE-Q24) — in mode 2 even without a MIDI object.
+  - mode 0 (or any other value): returns 0, queues nothing and marks **nothing** (VERIFIED RE-Q48: 0x447EB2 `cmp 1;
+    jne 0x447F1B` → `xor eax, eax; leave`; the only stores to 0x164CF14 are at 0x447EA7 (mode 2) and the mode-1 branch).
 - `Music_PlayFile(name, track)` (0x447F21, music room, VERIFIED RE-Q39) plays a file directly: mode 2 = MIDI: if a MIDI
   object exists (0x17CE8E4 ≠ 0) stop, open `name`, play; mode 1 = WAV: copy the name, text after the last `.` := `wav`,
   queue sound command **2** with slot −1 and that name. In both modes 0x164CF14[track] := 1 unless replay playback
@@ -112,7 +126,10 @@ the loop end is not shipped); a reimplementation must never read past `loop_end`
   handles and **deletes the streaming object** (SoundManager +0x5208 := 0), done after stage 10 (also queued directly by
   the Supervisor teardown 0x446D06). Commands 3/4 do nothing when +0x5208 is 0.
 - Streaming object (+0x5208) fields used above: +0x14 fade counter n, +0x18 fade length N, +0x1C fade mode (0–4),
-  +0x20/+0x24 the last play's arguments, +0x30 playing flag (VERIFIED 0x472750 / 0x4728E0 / 0x472990 / 0x4729E0 / 0x472B50).
+  +0x20/+0x24 the last play's arguments, +0x30 playing flag (VERIFIED 0x472750 / 0x4728E0 / 0x472990 / 0x4729E0 / 0x472B50);
+  +4 buffer array, +8 ring bytes, +0xC wave file, +0x10 buffer count (1), +0x5C last play cursor, +0x60 bytes played,
+  +0x64 refill offset, +0x68 end-of-data flag (non-looping only), +0x6C chunk bytes, +0x70 event, +0x74 lock flag
+  (VERIFIED RE-Q48, 0x472AA0 / 0x4718D0 / 0x472D30 / 0x473120).
 - Command 6 "Pause" / 7 "UnPause" (`Sound_Update` 0x45D790, VERIFIED RE-Q46) act only in music mode 1; in any other
   mode they leave the queue doing nothing (no MIDI function is called: in mode 2 the song keeps playing while the game
   is paused). Mode 1: while the stream is locked (object +0x74 ≠ 0) the command stays at the head and is retried next
@@ -121,6 +138,27 @@ the loop end is not shipped); a reimplementation must never read past `loop_end`
   and sets mode 0, leaving the n = 1 volume p = trunc(5000/N) − 5000). 7 → `0x4729E0`: playing flag := 1, `Play` with the
   stored arguments at the current position, no volume write — after a mode-1 fade that ended during the pause the
   music resumes at that last, near-silent volume (p = −4980 for N = 240) and stays there until the next volume write.
+- **UnPause after `Music_Stop`** (VERIFIED RE-Q48, code; §3 "Streaming ring"): command 3 keeps the streaming object
+  (only command 4 deletes it), so a later command 7 finds it: playing flag := 1, `Play` (looping) at position 0 — the
+  ring is **not** silent and is not refilled first. `Bgm_StreamStop` changes neither the ring, the refill offset
+  +0x64 (= P, the chunk that was playing at the stop) nor the file position (4.0 s past the start of chunk P), and no
+  volume. So the music comes back at once, at the last written volume, as a continuation of the stopped song: let
+  t = song time at the start of chunk P. Chunks 0…P−1 hold t + (16 − P)·0.25 s … t + 3.75 s (P = 0: the whole ring,
+  starting at t, i.e. it repeats up to 0.25 s already heard); the restarted thread refills chunk P, P+1, … with
+  t + 4.0 s, t + 4.25 s, … one per event, so playback is seamless from t + ((16 − P) mod 16)·0.25 s on (it skips
+  0–3.75 s of the song, depending on where the ring stood) and streaming carries on normally. P = 1 is the exception:
+  the first event finds the write cursor inside chunk 1 = +0x64 ("Stream Skip"), so chunk 0 plays t + 3.75 s, then
+  chunk 1 plays its old t, and from the next event the refill trails the play cursor as usual: heard is 0.25 s of
+  t + 3.75 s, then the song from t on, seamless. It lasts until the next play command (its stage 0 stops it).
+  Reachable sites: no code path queues 7 right after its own `Music_Stop` (pause-menu retry and continue-menu retry
+  choose one or the other, 12 §3 state 10 / §4; `GameMgr_OnRemove` queues `Music_Stop` only and then runs
+  `Sound_Update` until the queue is empty, 11 §7). The case arises when the game is paused (command 6, then 7 on
+  close, 12 §3 state 4) or a continue is accepted (12 §4) after a dialogue `bgm −1` (10 §5 op 7) stopped the music and
+  before the next play: msg6a–d / msg7a–d entry 4 (`bgm −1`, run by the stage-6/7 timeline right after the first boss
+  falls) and entry 3, whose `bgm 2` comes at the end of its dialogue — pausing during that dialogue brings the first
+  boss theme back from about where it stopped until `bgm 2`. With cfg +0x38 bit 13 (command 4, object deleted)
+  commands 6/7 read the object's +0x74 through a null pointer before their null test (0x45D790 case 6/7) — a crash in
+  the original; that flag is a debug setting (15 §1).
 - `Bgm_FindTrack` (0x45C6B0): takes the basename (after last `/` or `\`), compares it with the
   record names case-sensitively; **if no record matches, index 0 (`th08_01.wav`) is used**.
 

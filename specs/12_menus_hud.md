@@ -560,7 +560,7 @@ capture VM (+0x1A70) with VM flag bit 13 set (z-write off) via `Draw2DSnap`; the
 | 3 | cursor on **Retry** (hidden in replay) | UP → 2, DOWN → 1; confirm → 8 |
 | 5 / 6 | quit: "yes" / "no" | UP/DOWN toggle; confirm on 5 → 9, on 6 → back to 2 |
 | 7 / 8 | retry: "yes" / "no" | confirm on 7 → 10, on 8 → back to 3 |
-| 4 | closing | after 20 frames: paused = 0, sound resumes |
+| 4 | closing | after 20 frames: paused = 0, sound command 7 "UnPause" (`0x406C50`; WAV mode: also after a `Music_Stop`, 02 §4 "UnPause after `Music_Stop`", RE-Q48) |
 | 9 | quit | after 20 frames: scene 1, paused = 0, `Result_Register(2)` (save) |
 | 10 | retry | after 20 frames: spell practice / practice / Extra → music: outside spell practice, or in spell practice when the card's 0x4C7670 record flag +0x10 = 1, `Music_Stop`; else sound command 7 "UnPause" (`0x406C50`, queued) and then `Bgm_StartFadeIn(2.0)` 0x406AC0 (immediate: a 2 s = 120-frame fade-in from −10000, 02 §4 "Fade-in", VERIFIED RE-Q41) — the music is not stopped; then scene 11 (the new GM replays slot 0 only in the `Music_Stop` cases, 11 §4 step 3; VERIFIED 0x4037B0, RE-Q36); else scene 10 |
 
@@ -587,7 +587,7 @@ BGM-restart flag (`Spell_BgmRestartFlag` 0x439916 on card 0x164D0B8, the 0x4C767
 "Pause" (WAV mode: the buffer is paused at its position). Confirming "Yes" in spell practice or Extra (difficulty > 3):
 not spell practice, or restart flag ≠ 0 → `Music_Stop`; else game_over := 0, command 7 "UnPause" and
 `Bgm_StartFadeInFromDip(1.0)` (−10 dB → 0 over 60 frames); then scene 11 and `Hud_StageTransition`. Confirming "Yes"
-for a normal continue: command 7 "UnPause" (no fade; the paused music resumes).
+for a normal continue: command 7 "UnPause" (no fade; the paused music resumes — in WAV mode even when a `Music_Stop` came before, 02 §4 "UnPause after `Music_Stop`").
 
 **Draw** (`ContinueMenu_Draw` 0x4052B0, from the ASCII manager draw, only while game_over 0x164D0BB ≠ 0; VERIFIED):
 flush the sprite batch, set the D3D viewport to the playfield (x 32, y 16, w 384, h 448 from 0x164D2DC…0x164D2E8,

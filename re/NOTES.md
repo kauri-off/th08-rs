@@ -764,3 +764,10 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Key facts: replay entry block is inside the sub-state-0 case (cancels zeroing +0x1442C never re-run it; nothing in
   sub-states 1–4 reads it); nothing after the back-to-list flush plays an SE in that call; PLST tag 0x164CD0C is set by
   every Supervisor_OnRegister and zeroed only by the CRT-time GameMgr_Ctor → WinMain's Result_Register(2) test is always true.
+
+# RE-Q48 (2026-10-25) — implementer questions IMPL114 1–2 (UnPause after Music_Stop, PlaySlot heard flag) — DONE (specs/changelog/answers_re_q48.md)
+- Code only (re/work/runs/q48/CHECKPOINT.md). 1 right (PlaySlot mode 0 marks nothing), 1 CODE BUG (stop_wav drops stream).
+- Key facts: stream ring 16 × 44100 B, notification per chunk end −1, thread 0x45E0F0 → handler 0x472D30 refills chunk
+  +0x64 (skip if write cursor inside it); StreamStop keeps ring/+0x64/file pos → UnPause after Stop = seamless
+  continuation from t + ((16−P) mod 16)/4 s. Reachable via msg6*/7* entry 4 `bgm −1` + pause. GameMgr_OnRemove drains
+  the BGM queue (Sound_Update until 0) and never queues UnPause. Cfg bit 13 + cmd 6/7 = null deref.
