@@ -1282,7 +1282,7 @@ impl MainMenu {
                     self.rpy_speed_vms();
                 } else if inp.pressed(CANCEL) {
                     sound::play(sound::CANCEL);
-                    // SPEC-GAP: the cancels 2 → 1 / 3 → 2 zero +0x1442C; whether its entry block then reruns is not given.
+                    // The cancels zero +0x1442C, which only sub-state 0 reads, so the entry block never reruns (12 §2, 15 §3.8).
                     self.lists.rpy_sub = 1;
                     self.lists.rpy_loaded = None;
                     self.interrupt_all(14);
