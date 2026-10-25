@@ -354,8 +354,12 @@ polar(orbit, 8), z 0. Facing target from the direction code (09 §3): 1 up +π/2
 4 right π, 5 up-left π/4, 6 up-right 3π/4, 7 down-left −π/4, 8 down-right −3π/4 (i.e. pointing away from the
 motion); code 0 → unchanged. If |facing − target| > π, target is shifted by 2π toward facing; if the
 remaining difference ≤ π/2 → facing = wrap(facing + (target − facing)·0.07), else facing = target.
-Team version: effect 0x2F (0x80405080) every frame. Solo version: unfocused → colour white, facing tracks,
-effect 0x80405080; focused → colour 0xFFFF8080, facing frozen, effect 0xFFF05080.
+Team version: effect 0x2F (0x80405080) every frame, spawned **before** the facing step, so also on direction code 0.
+Solo version: colour 0xFFFF8080 is written first; unfocused → colour white, then the facing step, then effect 0x80405080
+— but on direction code **0** the function returns right after the white colour write (jump table 0x44F90A[0] →
+0x44F76A → epilogue 0x44F904, skipping both `Effect_Spawn` calls 0x44F885 / 0x44F8A4): **no effect 0x2F and no RNG**
+while the unfocused solo Youmu stands still; focused → colour 0xFFFF8080, facing frozen, effect 0xFFF05080 every frame
+(any direction). (VERIFIED 0x44F5E0 / 0x44F2D0, RE-Q49; silentselene 51852 stage 1: no draws on frames 1, 3, 4.)
 Shot init 8 (`option angle`) fires along option 2's facing (player +0xCD0 = option 2 +0x2DC).
 
 ## 4. Player laser (Alice's focused shot, `ply01as.sht`, the only data using lasers)

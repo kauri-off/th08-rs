@@ -783,3 +783,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Pilot: 22 replays, all accepted (incl. tags 0100_/0100a/0100b/debug: ExeCheck passes them). Original desyncs: Ro168
   (Ultra TAS), Ar02 (1.00), Tt16 (1.00d stage practice 6B, also at 60 fps). Port: full games diverge at menu frame 190
   (stage-1 loading ends one frame early, rng_ctr −4); all others at menu frame 97 (replay stage cursor stays 0).
+
+# RE-Q49 (2026-10-25) — replay pilot divergences — DONE (specs/changelog/answers_re_q49.md)
+- Q1 replay-screen cursor: original menu +0x00 is shared (list row / stage row / speed); port keeps file row → CODE
+  BUG menulist.rs replay_run (trace only). 15 §3.8 extended (+ up-wrap −1 → 9 quirk, invisible for written files).
+- Q2 "early loading": not real — the port clears loading at the end of calc P−1, the loader between calcs; same skew
+  in golden. 11 §3.1 note. Real first diff: rng_ctr −4 = missing save/restore checksum after Replay_Register(1)
+  (gamemgr.rs on_register; counter only). Same at 60 fps (re/work/runs/q49/normal_Nd115).
+- 51852: Option_YoumuSolo returns on unfocused + dir 0 before Effect_Spawn → port's pshot.rs place_option spawns
+  extra sparkles (gameplay RNG). 14 §3.3 corrected.
+- Later divergences (not analysed) listed in the changelog; Bu08/JS06 (spell practice frame 2) and Nd115 (boss at
+  frame 31) are the earliest.

@@ -92,6 +92,9 @@ specs/data/drawlog/README.md) is **not** g_Rng+4: it is the probe's own count of
 process start, which nothing resets. In those traces it therefore grows through gameplay even though the
 hook zeroes g_Rng+4 every recorded frame. A port that resets its counter in the hook must keep a separate,
 never-reset count for that trace column.
+That count also includes draws whose state is restored afterwards (pause checksum, the replay-playback checksum of
+§3.1), so such a call cannot be dropped as "no effect" without the column falling behind by 4 (RE-Q49: every
+replay playback showed `rng_ctr` −4 from its first stage start).
 
 ### 1.5 RNG consumers (all VERIFIED call sites; "draws" = Next16 calls)
 
@@ -244,6 +247,11 @@ spans** — 0 for small files, 1–2 for large images (selftest1: stg1bg 1, face
 stage start (ECL/MSG/STD, gauge setup, `Loading_Wait`) finished within the frame after the last upload.
 A port should use max(31 | 81, entries_to_upload + host-dependent gaps; 6 reproduces the recorded fresh stage-1
 starts of Reimu & Yukari) and, for session comparison, the recorded `release stage poll`.
+`release stage poll P` (events.txt) is the input-poll index of the **first calc that sees loading = 0**: the loader
+thread clears GM+0x38 between two calcs, so the trace rows sampled after calcs show loading = 1 up to the row of poll
+P − 1 and frame 1 on the row of poll P (row = poll index + 1). A port that clears loading at the end of the calc of
+poll P − 1 starts gameplay on the same calc; only that one row's sampled `loading` value differs (golden stage 1:
+release 722, original row 722 loading 1, row 723 frame 1; same in every replay session; RE-Q49).
 
 **Per-frame depth clear.** `GameMgr_Calc` itself issues `Clear(Z only, 1.0)` on the device's current viewport
 (left full-screen 0,0,640,480 by the previous frame's draw — every logged frame shows `C z` with V 0 0 640 480) on

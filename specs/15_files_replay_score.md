@@ -902,6 +902,18 @@ The user then:
   the replay, back to the list (cursor = file row);
 - picks the speed (sub-state 3): 3 options (normal / slowdown reproduction / fast), or 2 in spell practice.
 
+**One cursor field for all three sub-states** (menu +0x00, the session trace's `cursor` column; VERIFIED 0x46E136,
+RE-Q49). There is no separate stage or speed cursor: +0x00 is the list row in sub-state 1 (copied into +0xC28C
+every sub-state-1 frame, after the paging), the stage row in sub-state 2 and the speed in sub-state 3. Writes:
+file confirm → +0x00 := first recorded stage (above); stage confirm → +0x00 := 0 (speed 0); speed cancel (3 → 2) →
++0x00 := +0xC290; stage cancel (2 → 1) → +0x00 := +0xC28C (the file row); speed confirm → playback speed byte
+0x164D0BD := +0x00. So after a file confirm the trace's `cursor` shows the stage row, not the file row, and after the
+stage confirm 0. Stage-skip quirk: in the **up** direction the skip loop wraps −1 → **9** (the down loop and
+`Menu_CursorUpDown(9)` wrap to 8 / 0) and then tests "record 9" = listing copy +0x20 + 9·4 = header +0x44, the stage-0
+fps-stream offset. That loop only passes below 0 when stage 0 has no record, and then +0x44 is 0 in any written file,
+so it continues 9 → 8 → … and the result equals a plain 0 ↔ 8 wrap. (A crafted file with record 0 = 0 but +0x44 ≠ 0
+would stop on stage row 9, which becomes g_StageIdx.)
+
 Start:
 - flags |= 8 (replay);
 - the path is copied to 0x164D0C4;
