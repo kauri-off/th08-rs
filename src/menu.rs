@@ -4,7 +4,7 @@
 use crate::anmvm::{self, AnmVm};
 use crate::config::Config;
 use crate::game::Ctx;
-use crate::gamemgr::{self, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
+use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::gfx::{FULLSCREEN, TextureId};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
@@ -535,6 +535,14 @@ impl MainMenu {
         if self.frames == 0 {
             self.set_surface(ctx, "title00.png");
             self.interrupt_all(2);
+            // Back from a watched replay: the entry block switches to the replay screen and returns 1 (12 §2.2).
+            if ctx.game.replay() {
+                self.set_screen(REPLAY);
+                self.interrupt_all(13);
+                self.desc_fade_out();
+                ctx.game.flags &= !F_REPLAY;
+                return;
+            }
         }
         // Calls 0–8 render description k = +0x1442C into strip k; the pointer keeps its VM until the change test of
         // call 9 (12 §2.2), so a previous screen's description stays drawn meanwhile.
@@ -1228,15 +1236,22 @@ impl Task<Ctx> for MainMenu {
             })
             .collect();
         self.desc_cur = Some(0);
-        // A replay was being watched → straight to the replay screen (12 §2.2).
-        if std::mem::take(&mut ctx.game.watched_replay) {
-            self.screen = REPLAY;
-            self.desc_fade_out();
+        // Back from a replay (12 §2.2): bit 3 → shot := 0; a demo also clears bit 3, so only a watched replay keeps it
+        // for the Top entry block's switch to the replay screen.
+        {
+            let g = &mut ctx.game;
+            if g.replay() {
+                g.shot = 0;
+            }
+            if g.flags & F_DEMO != 0 {
+                g.flags &= !F_REPLAY;
+            }
         }
         let g = &ctx.game;
         if g.previous == gamemgr::SCENE_GAME || g.previous == gamemgr::SCENE_RETRY {
             // +0x6C ≠ 0 → screen 8 + 7·(flags bit 14), range interrupt 5; the screens forward to 11 / 17 (12 §2.2).
-            if g.spell_practice() {
+            // Both need bit 0: a spell-practice replay has bit 14 without bit 0 and gets no override (12 §2.2).
+            if g.practice() && g.spell_practice() {
                 self.back = 2;
                 self.screen = CHAR_SPELL;
                 self.interrupt_all(5);
@@ -1252,7 +1267,7 @@ impl Task<Ctx> for MainMenu {
         self.cursor = if self.screen == TOP {
             let g = &ctx.game;
             match g.previous {
-                _ if g.spell_practice() => 2,
+                _ if g.practice() && g.spell_practice() => 2,
                 _ if g.practice() => 3,
                 gamemgr::SCENE_GAME | gamemgr::SCENE_NEXT_STAGE | gamemgr::SCENE_RESULT => {
                     (g.difficulty > 3) as i32
@@ -1264,6 +1279,9 @@ impl Task<Ctx> for MainMenu {
         } else {
             ctx.game.cfg.difficulty.min(3) as i32
         };
+        // After the cursor rule: flags &= ~0x4001, later bit 1 := 0 (12 §2.2).
+        ctx.game.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
+        ctx.game.flags &= !F_DEMO;
         Ok(())
     }
 
@@ -1431,6 +1449,41 @@ mod tests {
         title_music, volume_step,
     };
     use crate::gamemgr::{self, Game};
+
+    fn ctx() -> Option<crate::game::Ctx> {
+        let dir = crate::settings::test_game_dir()?;
+        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
+        let src = crate::assets::Source::native(dir.into());
+        Some(pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap())
+    }
+
+    // 12 §2.2 "Back from a replay": bit 3 survives register (screen 0, previous-scene cursor), the Top entry block
+    // switches to screen 7 and clears it; a demo clears bit 3 at register and stays on the top menu.
+    #[test]
+    fn back_from_replay() {
+        use crate::task::{Chain, Task};
+        let Some(mut c) = ctx() else {
+            return;
+        };
+        for demo in [false, true] {
+            c.game.previous = gamemgr::SCENE_GAME;
+            c.game.difficulty = 4;
+            c.game.shot = 5;
+            let f = gamemgr::F_REPLAY
+                | gamemgr::F_SPELL_PRACTICE
+                | if demo { gamemgr::F_DEMO } else { 0 };
+            c.game.flags.set(f);
+            let mut m = super::MainMenu::new();
+            m.on_register(&mut c, Chain::Calc, 0).unwrap();
+            let kept = if demo { 0 } else { gamemgr::F_REPLAY };
+            assert_eq!(c.game.flags & 0xFFFF, kept);
+            assert_eq!((m.screen, m.cursor, c.game.shot), (super::TOP, 1, 0));
+            m.top(&mut c);
+            let screen = if demo { super::TOP } else { super::REPLAY };
+            assert_eq!((m.screen, m.prev_screen, m.frames), (screen, super::TOP, 0));
+            assert_eq!(c.game.flags & 0xFFFF, 0);
+        }
+    }
 
     // 16 §4: notice order info00 (bit 15), info02 (16), info01 (17); only bits not yet in the flags.
     #[test]

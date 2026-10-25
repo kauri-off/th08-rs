@@ -475,16 +475,10 @@ pub fn start_playback(
     true
 }
 
-// Back to the menu after playback: replay state is dropped (port bookkeeping).
+// Back to the menu after playback: the replay record is dropped (port bookkeeping). GameFlags are left alone: bit 3
+// survives the 2 → 7 / 2 → 1 switch, `MainMenu_OnRegister` clears bits 0, 1, 14 and (demos only) 3 (12 §2.2).
 pub fn end_playback(g: &mut crate::gamemgr::Game) {
-    if g.replay() {
-        g.rpy = None;
-        g.watched_replay = g.flags & crate::gamemgr::F_DEMO == 0;
-    }
-    g.flags &= !(crate::gamemgr::F_REPLAY
-        | crate::gamemgr::F_DEMO
-        | crate::gamemgr::F_PRACTICE
-        | crate::gamemgr::F_SPELL_PRACTICE);
+    g.rpy = None;
 }
 
 // Replay_PlayStageLoad 0x452D60 (11 §3.4, 15 §3.4): stats, rank and seed from the record of the stage being started;
@@ -850,6 +844,18 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 12 §2.2: the switch back to the menu keeps every GameFlags bit (bit 3 is cleared by the menu).
+    #[test]
+    fn end_playback_keeps_flags() {
+        let mut g = crate::gamemgr::Game::default();
+        let f =
+            crate::gamemgr::F_REPLAY | crate::gamemgr::F_SPELL_PRACTICE | crate::gamemgr::F_DEMO;
+        crate::gamemgr::set_flags(f);
+        end_playback(&mut g);
+        assert_eq!((g.flags.get(), g.rpy.is_none()), (f, true));
+        crate::gamemgr::set_flags(0);
+    }
 
     // 11 §1.4: the hook stores the RNG state at +0xD8 and resets the call counter, leaving the state.
     #[test]

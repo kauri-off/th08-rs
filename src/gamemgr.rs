@@ -212,7 +212,6 @@ pub struct Game {
     pub replay_fps: u8,
     pub replay_fps_red: bool,
     pub noclip: bool,
-    pub watched_replay: bool,
     // GM+0x3DE08 frame-skip counter shared by playback slowdown (11 §4 step 5) and slow mode (step 10). Zeroed only
     // by the GM static constructor, so its phase carries over between games and between playback and live play.
     skip_ctr: u32,
@@ -285,7 +284,6 @@ impl Default for Game {
             replay_fps: 0,
             replay_fps_red: false,
             noclip: false,
-            watched_replay: false,
             skip_ctr: 0,
             slow_skip: 0,
             stage_seed: 0,
