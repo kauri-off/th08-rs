@@ -359,7 +359,7 @@ Per frame (after `0x164D09C += 1`):
    ScreenEffect type 2 at 6000/4800/4920/6900 frames, `scene = 1` and return 3 at 6120/4920/5040/7020.
    Exact calls (0x43A3FA, VERIFIED): `ScreenEffect_Register(type 2, p0 = 120 frames, colour 0 = black, 0, 0,
    draw prio 0x15)` (fade the playfield to black over 120 frames) then `Music_Fade(3.0 s)` (WAV mode: ÷ game
-   speed when 0 < speed ≤ 1; MIDI: Midi_Fade(3)). Demo index GM+0x3DBB4 (0x164D0BC): the GameManager static
+   speed when 0 < speed ≤ 1; MIDI: `Midi_Fade(trunc(1000·3.0))` = 3000 ms, 02 §4 — VERIFIED 0x448115 `fld [0x4B6778]=1000.0; fmul`, RE-Q46). Demo index GM+0x3DBB4 (0x164D0BC): the GameManager static
    constructor 0x43C5E1 sets it to **3**; `MainMenu_Top` does `n = (n + 1) % 4` before loading
    `demorpy<n>.rpy`, so the first attract demo after boot is demorpy0, then 1, 2, 3, 0 …
 7. Anti-tamper checks of the decoy values (only affect a debug float 0x164D2FC; not needed). In the middle of them

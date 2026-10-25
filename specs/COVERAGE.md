@@ -47,7 +47,7 @@ ids, sounds and file effects are all in a numbered spec; PARTIAL lists exactly w
 saved file was verified or corrected — changelog/answers_re_q26.md §2. What is left is naming, purpose or platform):
 - 00: back-buffer format choice (16-bit); subsystem / scene-id names; game coordinates wording for non-bullet objects.
 - 01: reserved table field; `out_size` includes the 4 wrapper bytes (no caller depends on it).
-- 02: MIDI fade argument and MIDI-only paths; DirectSound chunk-size meaning; BGM slot 1/2 role names; spell-practice
+- 02: MIDI-only paths (fade argument VERIFIED RE-Q46); DirectSound chunk-size meaning; BGM slot 1/2 role names; spell-practice
   BGM table field names.
 - 03: texture resource priority meaning (D3D `SetPriority`, no rendering effect); reduced-colour option name.
 - 04: character name order; loading-picture `h`/`a` variants; `a`/`as` sht naming; `face_*sp`, `face_cdbg`, `msg4dm`,
@@ -58,7 +58,7 @@ saved file was verified or corrected — changelog/answers_re_q26.md §2. What i
 - 11: difficulty / GameFlags bit 4 names; purpose of slowdown replay playback.
 - 12: cause of the empty boot presents 3–5 (the observable is VERIFIED); front.anm VM roles by position.
 - 13: SE buffer caps bit; unused SE ids.
-- 15: joystick-only bits after a failed keyboard `GetDeviceState` (platform).
+- 15: joystick-only bits after a failed keyboard `GetDeviceState` (platform; cooperative level 0x16 = FOREGROUND, RE-Q46).
 
 ## 0. Method and numbers
 

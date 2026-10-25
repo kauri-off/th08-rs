@@ -60,6 +60,12 @@ the raw word is zeroed after the call and passed to `Input_PollJoystick` with no
 RE-Q41). No other keys are mapped; in particular the DIK path maps only the main Enter (0x1C), not keypad Enter (0x9C),
 while the VK path's `VK_RETURN` 0x0D covers both, and VK Shift/Ctrl (0x10/0x11) cover both sides
 (full table re-verified from the disassembly, RE-Q41).
+Device set-up (`FUN_00446A37`, VERIFIED RE-Q46): `DirectInput8Create`, `CreateDevice(GUID_SysKeyboard)`,
+`SetDataFormat(c_dfDIKeyboard)`, `SetCooperativeLevel(hwnd, 0x16 = DISCL_NONEXCLUSIVE | DISCL_FOREGROUND |
+DISCL_NOWINKEY)`, one `Acquire`; the joystick (if enumerated) gets `SetCooperativeLevel(hwnd, 0x0A = NONEXCLUSIVE |
+BACKGROUND)`. With FOREGROUND the keyboard is unacquired while the window is not the foreground window, so
+`GetDeviceState` fails (and the poll's `Acquire` fails) every poll until the window is active again: keys read as
+none, pad bits still count.
 
 | bits | VK path | DIK path |
 |---|---|---|
@@ -131,11 +137,11 @@ with a bad header ("ZWAV", 1, 0x800) logs "BGM データのバージョンが違
 |---|---|
 | 0 Player (lives) | Cycles +0x1C. The maximum depends on the total play count (PLST total block [0], 0x164CED0): < 30 → 0..4, < 60 → 0..5, otherwise 0..6. |
 | 1 Color | Toggles +0x1E. |
-| 2 BGM | Cycles +0x1F. Any change restarts `bgm/th08_01.mid` (title music). |
+| 2 BGM | Cycles +0x1F (VERIFIED 0x46837B, RE-Q46). Left: `Music_Stop` (in the **old** mode, 02 §4), then if the old mode is 2 `Midi_Stop`, `Midi_Open(30)`, `Midi_Play` (init.mid), then mode − 1 (0 → 2). Right: `Music_Stop` (old mode), mode + 1 (2 → 0), no init.mid. Both then `Music_Play(8, "bgm/th08_01.mid")` + `Music_PlaySlot(8, 0)` in the new mode (title music; nothing in mode 0). So the old mode's music is always stopped (WAV: queued command 3/4; MIDI: at once). |
 | 3 BGM volume, 4 SE volume | Two steps run in this order every frame (VERIFIED code + `options_cfg` session). (a) Left/Right **edge**: value ∓/± 4, clamped to 0..100. (b) Left/Right edge, **or** that direction held while the unchanged-input counter 0x164D53C > 29 (not the every-8th-frame repeat flag): value ∓/± 1 if it is still above 0 / below 100. So one press steps ±5 (e.g. 80 → 75 → 70 → 65; 98 → 100), and a held key adds ±1 on every frame from the 30th unchanged frame on. Every step sends the set-volume command. While the cursor is on item 3 or 4, SE 0x1D plays whenever the menu frame counter (+0x1442C) is a multiple of 50 (volume preview). |
 | 5 Mode | Toggles window mode +0x22. |
 | 6 Slow | Toggles +0x25. |
-| 7 Reset | Sets lives 2, +0x1D 3, music 1, SE 1, slow 0. |
+| 7 Reset | Sets lives 2, +0x1D 3, music 1, SE 1, slow 0; no music call (VERIFIED RE-Q46): a MIDI song playing in mode 2 keeps playing (the WAV-mode paths never call a MIDI function, so it keeps looping under any WAV music until a mode-2 `Midi_Stop`, e.g. the next BGM change back to MIDI, or exit). |
 | 8 KeyConfig | Opens key config (`MainMenu_KeyConfig` 0x469636, screen 3; details below). |
 | 9 Quit | Leaves the option menu (confirm). Bomb/ESC on any other item moves the cursor to Quit (SE 11); Bomb/ESC on Quit leaves. Leaving: SE 11, top-menu cursor 7, screen 0 at once (return 1, or 5 when colour depth or window mode changed). The cursor moves from the first call; Left/Right/confirm/cancel are accepted from screen frame 4 (VERIFIED 0x46837B, RE-Q25). |
 

@@ -59,7 +59,7 @@ for later phases; only identification and headers are given here.
 | `result00.anm`, `resulttext.anm`, `result.jpg` | 3 | A/J | result / high-score screen (slots 21, 22) | Result 0x45964D | VERIFIED |
 | `music00.anm`, `music.jpg`, `musiccmt.txt` | 3 | A/J/T | music room: graphics, background, track titles & comments (Shift-JIS text, `@bgm/…mid` entries) | MusicRoom 0x44970F | VERIFIED |
 | `thbgm.fmt` | 1 | - | BGM track table for thbgm.dat | `Bgm_LoadFmt` | VERIFIED |
-| `th08_NN.mid`, `init.mid` | 22 | - | MIDI versions of the BGM (used in MIDI music mode); `init.mid` = MIDI reset sequence played at start | `Music_Play`, startup | VERIFIED |
+| `th08_NN.mid`, `init.mid` | 22 | - | MIDI versions of the BGM (used in MIDI music mode); `init.mid` = MIDI reset sequence, loaded into slot 30 at boot (not played there) and played at the 4 sites of 02 §5 | `Music_Play`, startup | VERIFIED |
 | `se_*.wav` | 39 | W | sound effects: RIFF PCM (e.g. 22050 Hz mono 8-bit). 36 are named in the exe SFX table (0x4B7EA0…); `se_bonus`, `se_bonus2`, `se_border` are not in that table | sound init | VERIFIED |
 | `demorpyN.rpy` (0–3) | 4 | - | attract-mode demo replays; magic `T8RP` | replay system, demo start (11 §4) | VERIFIED |
 | `th08_0100d.ver` | 1 | - | text table of known exe versions: `<version> <exe size> <checksum>`; last line `0100d 840704 …` matches th08.exe (840 704 bytes) | 0x4461A0 (`th08_%.4x%c.ver`) | VERIFIED name/size, role INFERRED |

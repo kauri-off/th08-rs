@@ -750,3 +750,11 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Key facts: Centered x is x87 float then ftol (len 5 → 237); `@` textures = D3DXCreateTexture MANAGED, no fill, observed
   zero; strip rows 15–16 never written (pitch 18/17, write 15); reveal = exact compares 10…22; shot names 16 bytes.
 - Still open from RE-Q44: render_strip W = sprite width.
+
+# RE-Q46 (2026-10-25) — implementer questions IMPL111 1–2, IMPL112 1–11 (Music_Stop, keyboard, MIDI) — DONE (specs/changelog/answers_re_q46.md)
+- Code + .mid scans only (re/work/runs/q46/midiscan.py, sysex.py; CHECKPOINT.md). 8 right, CODE BUGs: 3 reachable, 3 state-only.
+- Key facts: MIDI tempo meta = tempo·257 + b per byte (0x444D97, original bug, songs ≈ 0.75 % slow); Music_Stop WAV = cmd 3
+  (cmd 4 if cfg bit 13: also deletes the stream object); stream +0x1C fade mode, +0x30 playing; Pause 0x472990 keeps the
+  fade; cmd 6/7 mode 1 only; Midi_Ctor +0x2CC = 0, channel state never reset; option BGM item stops the old mode (Left
+  from Midi plays init.mid), Reset item sets mode 1 with no music call; keyboard coop level 0x16 (FOREGROUND).
+- 11 §4 demo fade = Midi_Fade(3000); init.mid only loaded at boot (4 play sites).

@@ -427,7 +427,7 @@ id (0x4144D0, Normal for some), stage index derived from the id for last words; 
 10 items, top to bottom: Player, Graphic, BGM, Vol, S.E.Vol, Mode, SlowMode, Reset, KeyConfig, Quit (logic: 15 §1.3).
 Values in the live config (0x17CE870 + off): +0x1C starting lives (shown as 1..7 = lives + 1; 0..`max`, max limited
 by the play count 0x164CED0 < 30 / < 60), +0x1E Graphic 32Bit/16Bit, +0x1F music mode (Off, Wav, Midi; changing it
-restarts `bgm/th08_01.mid` in slot 8), +0x27 BGM volume and +0x28 SE volume (0–100; a press steps ±5, holding ±1
+restarts `bgm/th08_01.mid` in slot 8, details 15 §1.3), +0x27 BGM volume and +0x28 SE volume (0–100; a press steps ±5, holding ±1
 per frame after 30 frames: 15 §1.3), +0x22 Mode FullScreen/Window, +0x25 SlowMode Off/On, Reset (lives 2, +0x1D 3,
 music 1, +0x20 1, slow 0), KeyConfig (screen 3), Quit. SE 0x1D plays every 50 frames while the cursor is on Vol or
 S.E.Vol. Value display = one VM per value, lit = VM base sprite, dim = base + 1:

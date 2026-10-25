@@ -104,6 +104,23 @@ the loop end is not shipped); a reimplementation must never read past `loop_end`
   `Bgm_SetVolume(0)` — attenuation back to 0 — then start), done after stage 6. With bit 13 set (preloaded slots):
   0 `Bgm_LoadPreloaded`, 2 reset, 5 fill, 7 play (same `0x472750`); there is no stop stage, so the old fade keeps
   ticking in `Supervisor_Calc` (and may stop the buffer) until stage 7. Commands 3/4 also stop the buffers at stage 0.
+- `Music_Stop` 0x448081 (VERIFIED RE-Q46): mode 2 → `Midi_Stop` if the MIDI object exists; mode 1 → queues sound command
+  **3** "Stop" (cfg +0x38 / Supervisor +0x150 bit 13 clear, the normal case) or **4** (bit 13 set), name "dummy"; any
+  other mode returns −1. Command 3: stage 0 `Bgm_StreamStop` 0x4728E0 (every buffer `Stop` + position 0, fade mode
+  +0x1C := 0, playing flag +0x30 := 0, so a running fade of any mode is cancelled), done after stage 1. Command 4: the
+  same stage 0, then stops the streaming thread (stages 1–2, `PostThreadMessage` 0x12 + wait), stage 3 closes the
+  handles and **deletes the streaming object** (SoundManager +0x5208 := 0), done after stage 10 (also queued directly by
+  the Supervisor teardown 0x446D06). Commands 3/4 do nothing when +0x5208 is 0.
+- Streaming object (+0x5208) fields used above: +0x14 fade counter n, +0x18 fade length N, +0x1C fade mode (0–4),
+  +0x20/+0x24 the last play's arguments, +0x30 playing flag (VERIFIED 0x472750 / 0x4728E0 / 0x472990 / 0x4729E0 / 0x472B50).
+- Command 6 "Pause" / 7 "UnPause" (`Sound_Update` 0x45D790, VERIFIED RE-Q46) act only in music mode 1; in any other
+  mode they leave the queue doing nothing (no MIDI function is called: in mode 2 the song keeps playing while the game
+  is paused). Mode 1: while the stream is locked (object +0x74 ≠ 0) the command stays at the head and is retried next
+  call; else 6 → `0x472990`: playing flag := 0, `Stop` of buffer 0 (the position is kept); the fade mode is **not**
+  touched, so a running fade keeps ticking in `Sound_TickBgmFades` during the pause (mode 1 at its end calls `Stop` again
+  and sets mode 0, leaving the n = 1 volume p = trunc(5000/N) − 5000). 7 → `0x4729E0`: playing flag := 1, `Play` with the
+  stored arguments at the current position, no volume write — after a mode-1 fade that ended during the pause the
+  music resumes at that last, near-silent volume (p = −4980 for N = 240) and stays there until the next volume write.
 - `Bgm_FindTrack` (0x45C6B0): takes the basename (after last `/` or `\`), compares it with the
   record names case-sensitively; **if no record matches, index 0 (`th08_01.wav`) is used**.
 
@@ -181,13 +198,29 @@ header slots +0x14 with ring index +0x94, per-channel state +0x154 + ch·0x17 (1
 bank CC 0, +0x12 pan CC 10, +0x13 CC 91, +0x14 CC 93, +0x15 raw CC 7, +0x16 sent CC 7), key offset +0x2C4 (u8, always
 0), volume factor +0x2C8 (f32), last trunc(factor·128) +0x2CC, CC 7 refresh disable +0x2D4 (always 0), fade on +0x2E0,
 fade length +0x2E4 / counter +0x2E8 (timer ticks), loop-start copies of tempo/T/B +0x2EC…+0x2FC.
+`Midi_Ctor` (VERIFIED RE-Q46) writes only: open slot −1, the 32 file and 32 SysEx slots 0, SysEx index 0, +0x118,
++0x120, +0x124, +0x138 := 0, +0x2C4 := 0, +0x2C8…+0x2E0 := 0 (factor 0.0, **last value +0x2CC = 0**), device 0. The
+per-channel state (+0x154…), the fade length/counter and the loop-start copies +0x2EC…+0x2FC are left as the heap
+content of `operator new(0x300)` (indeterminate). +0x2CC is written only by `Midi_Tick` step 2 and the channel state
+only by `Midi_Event`; `Midi_Open`, `Midi_Play`/`Midi_Rewind`, `Midi_Fade` and `Midi_Stop` reset neither, so both carry
+over from fade to fade and from song to song (a raw CC 7 byte is the channel's last CC 7 value of any song since boot).
 
 **Calls.** Boot: `Midi_LoadSlot(30, "bgm/init.mid")`. `Music_Play(slot, name)` mode 2 → `Midi_LoadSlot(slot, name)`.
 `Music_PlaySlot` mode 2 → `Midi_Stop`, `Midi_Open(slot)`, `Midi_Play`. `Music_PlayFile` mode 2 → `Midi_Stop`,
 `Midi_PlayFileOnce(name)` 0x444510 (load into slot 31, `Midi_Open(31)`, free slot 31's file — the parsed copy stays),
 `Midi_Play`. `Music_Stop` mode 2 → `Midi_Stop`. In mode 2, `Midi_Stop`, `Midi_Open(30)`, `Midi_Play` (init.mid = the reset sequence: SysEx and
 controller set-up, then a 2-tick CC 2/CC 4 loop that holds the device silent) run at: main-menu Quit (12 §2),
-`GameMgr_OnRemove` 0x43BE2C right after its `Music_Stop` (run unless spell practice (GameFlags bit 14) and the next scene is 3, 11 or 12), and 0x446D06 (Supervisor teardown).
+`GameMgr_OnRemove` 0x43BE2C right after its `Music_Stop` (run unless spell practice (GameFlags bit 14) and the next scene is 3, 11 or 12), 0x446D06 (Supervisor teardown), and the option menu's BGM item on Left when the old mode is 2 (15 §1.3). At boot
+init.mid is only loaded, not played (VERIFIED RE-Q46: these four sites are the only `Midi_Open(30)` callers).
+- `Midi_LoadSlot(slot, name)` 0x4441A0 (VERIFIED RE-Q46): `Midi_Stop` if `slot` is the open slot, free the slot's old
+  file (0x444220), `FileSystem_OpenFile(name, 0)` (archive only, 01 §5); not found (e.g. `th08_02.mid`, `th08_13_b.mid`
+  named by `stage1_s.std` / `stage5_s.std`) → log line, slot := null, return −1.
+- A null slot: `Midi_Open` first frees the parsed tracks (+0x138 := 0, count 0), then logs and returns −1 with the open
+  slot unchanged; `Midi_Play` and `Midi_Stop` return −1 at once when +0x138 = 0 (no rewind, no timer). So
+  `Music_Play` + `Music_PlaySlot` with a missing file are silent (the old song was stopped by `PlaySlot`'s `Midi_Stop`).
+  `Midi_PlayFileOnce` returns −1 **without** `Midi_Open` when the load fails, so `Music_PlayFile`'s `Midi_Play` then
+  restarts the previously opened song from the top (`Midi_Stop` does not free the parsed tracks); unreachable with the
+  shipped music room (every `musiccmt.txt` file exists).
 - `Midi_Open(slot)` 0x4442E0: frees the parsed tracks, reads the header (big-endian format, track count, division at
   file +8 after the `MThd` length), copies every `MTrk` body into its own buffer, tempo := 1 000 000, open slot := slot.
 - `Midi_Play` 0x444620: `Midi_Rewind` 0x444550 (factor := 1.0, fade off, T := B := 0, every track active, read pointer
@@ -195,7 +228,7 @@ controller set-up, then a 2-tick CC 2/CC 4 loop that holds the device silent) ru
   `timeSetEvent(1 ms, resolution = timeGetDevCaps wPeriodMin, periodic)` after `timeBeginPeriod`.
 - `Midi_Stop` 0x444680: unprepares/frees the SysEx headers, kills the timer, `midiOutReset` + `midiOutClose`, open slot
   := −1.
-- `Midi_Fade(N)` 0x4447D0: factor := 0, fade length := N, counter := 0, fade on.
+- `Midi_Fade(N)` 0x4447D0: factor := 0, fade length := N, counter := 0, +0x2DC := 0, fade on (+0x2CC untouched).
 
 **Timer tick** `Midi_Tick` 0x444820 (every 1 ms timer callback; time is counted in callbacks, not wall time):
 1. pos := B + trunc(T·division·1000 / tempo) (unsigned 64-bit).
@@ -206,16 +239,29 @@ controller set-up, then a 2-tick CC 2/CC 4 loop that holds the device silent) ru
 3. For each active track in order, while it is active and its next time ≤ pos: run one event (below), then recompute
    pos as in step 1 (a tempo event changes it).
 4. T += 1. If no track was active at step 3 (all ended), `Midi_Rewind` (the song restarts from the top; the fade is
-   cancelled and the factor reset to 1).
+   cancelled and the factor reset to 1). "Active" is tested when step 3 reaches the track, before its events run
+   (VERIFIED RE-Q46, flag set at 0x444982 after the +0 test at 0x444978): a track whose end-of-track event runs in tick k still counts in tick k, so
+   the rewind happens in tick k + 1, the first tick that finds no active track.
 
 **Event** `Midi_Event` 0x444A90: status byte (< 0x80 → running status +0xC); 0x8n/0x9n/0xAn/0xBn/0xEn read 2 data
 bytes, 0xCn/0xDn one. 0xF0 SysEx: length VLQ, data copied behind an 0xF0 byte into a fresh header in the ring slot
 (old one unprepared first), `midiOutPrepareHeader` + `midiOutLongMsg`. 0xFF meta: type, length VLQ; 0x2F end of track
-→ track inactive, return; 0x51 tempo → B := current pos (step 1), T := 0, tempo := the big-endian data bytes; other
-metas skipped. Bookkeeping: note on (velocity ≠ 0) / off set / clear the note bit (key + offset 0); CC 0/10/91/93 and
+→ track inactive, return; 0x51 tempo → B := current pos (step 1), T := 0, tempo := 0, then for each data byte b
+**tempo := tempo·256 + b + tempo** (= tempo·257 + b; VERIFIED disassembly 0x444D97–0x444DB7: `shl 8`, `add byte`,
+`add [+0x124]` — an original bug: 3 bytes b0 b1 b2 give 66049·b0 + 257·b1 + b2, not 65536·b0 + 256·b1 + b2, so every
+song runs ≈ 0.75 % slower than its file tempo, e.g. th08_01 431655 → 434883 µs per quarter); then 60 000 000 / tempo is
+computed into an unused local. Other metas skipped. Status bytes 0xF1–0xFE (0xF7 included) read **no** data bytes and
+send nothing (not present in the shipped files); a SysEx buffer is 0xF0 plus the `length` file bytes, which include the
+file's closing 0xF7. Bookkeeping: note on (velocity ≠ 0) / off set / clear the note bit (key + offset 0); CC 0/10/91/93 and
 program are recorded; CC 7 stores the raw value and **sends** clamp(trunc(raw · factor), 0, 127) instead; **CC 2**
 saves every track's read pointer and next time and the tempo, T and B (loop start); **CC 4** restores them (loop end:
-playback continues with the event after the CC 2, with the CC 2's time and timing state). Every channel message
-(status < 0xF0, CC 2/CC 4 included) is sent with `midiOutShortMsg`. Then running status := status, next time += the
-following delta.
+playback continues with the event after the CC 2, with the CC 2's time and timing state). The copies: `Midi_Rewind` sets
+every track's +0x18 := its start (at the first delta) but leaves +0x1C; `Midi_Open` zeroes the track array (+0x1C = 0);
+tempo/T/B copies are written only by CC 2. So a CC 4 with no CC 2 since `Midi_Play` (not in the shipped files) puts each
+track back at its start with next time +0x1C (0 unless a CC 2 ran since `Midi_Open`) — the CC 4's own delta read then
+lands on the first event — and loads tempo/T/B from the last CC 2 of any song since boot (indeterminate before the first). Every channel message
+(status < 0xF0, CC 2/CC 4 included) is sent with `midiOutShortMsg`. Then running status := status (for every status, 0xF0/0xFF/0xFn included), next time += the
+following delta. The shipped songs (not only init.mid) also carry Roland GS SysEx — the GS reset `41 10 42 12 00 00 7F
+00 01` in every file, reverb/chorus/insertion-effect parameters (`40 01 xx`, `40 03 xx`) and part settings (`40 1x xx`,
+`40 4x xx`); all are sent unchanged with `midiOutLongMsg` to the MIDI mapper, so what they do is up to the device.
 
