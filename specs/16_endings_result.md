@@ -697,7 +697,8 @@ repeat flag 0x164D538), **in this order, each independent** (not else-if):
    sub-frame := 0.
 2. **Down** (0x20): same test → cursor += 1; if cursor ≥ count: cursor := 0, top := 0; else if top ≤ cursor − 10:
    top := cursor − 9. Same interrupts, sub-frame := 0. (Up and Down in one frame both run.)
-3. **Comment reveal**, if sub-frame < 30: sub-frame 10, 12, 14, …, 22 → line k = 0..6:
+3. **Comment reveal**, if sub-frame < 30: line k = 0..6 only when sub-frame **equals** 10, 12, 14, …, 22 (an if/else-if
+   chain of exact compares, VERIFIED RE-Q45; any other value, odd or even, reveals nothing):
    `AnmFile_SetScript(text.anm, comment VM k, 10 + k)`, interrupt 1; text buffer = 0x42 zero bytes, then 64 bytes copied
    from the comment line (entry +0x82 + k·0x42) if playing (+0x78) == cursor or heard[cursor] (+0xC, the init copy),
    else from warning line k (table 0x4C7AAC, below). Empty (first byte 0) → VM flag bit 1 cleared, nothing rendered;

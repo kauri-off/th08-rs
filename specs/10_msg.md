@@ -258,11 +258,20 @@ and `Text_RenderToVm`/`Right`/`Centered` are the only callers of the rasterisers
 wide, so for **every caller** W = 512, the copied source is the full 1024-pixel DIB row and the destination is the
 whole 512-texel row strip (0, Y)–(512, Y + 15): columns right of the sprite (e.g. 320…511 of a 320-wide strip) are
 overwritten (cleared) too, and rows Y + 15, Y + 16 of a 17-high sprite are never written by the text path.
+They keep the texture's creation content for its whole lifetime: `@` entries are created by `Anm_CreateBlankTexture`
+0x4657C0 → D3DXCreateTexture 0x47AA8D (1 level, usage 0, MANAGED pool) with no fill and nothing else writes them, and
+no text write reaches them from another strip (strip pitch 18 in text/resulttext.anm, 17 in music00.anm, write height
+15). Observed all zero (= alpha 0, transparent) in the original at creation and after the top-menu descriptions (rows
+15–17, 33–35, … of text.anm; RE-Q45 texture dump). So a 17-row text sprite draws two transparent bottom rows, and
+writing zeros there is equivalent.
 - `Text_RenderToVm` 0x4663B0: x = trunc(u0) = 0; font byte passed raw (0 → 15 in `Text_Render`).
 - `Text_RenderToVmRight` 0x4664A0 (128-byte buffer): x = trunc((u0 + sw·sx) − len·fs·sx/2), with sw = sprite width
   (+0x34), sx = sprite +0x38, len = `strlen` of the formatted string in **bytes** (a Shift-JIS full-width char = 2),
   fs = byte +0x298 (0 → 15); x87 arithmetic, then truncation toward 0 (so an odd len gives …​.5 → dropped).
-- `Text_RenderCentered` 0x466650 (72-byte buffer): x = trunc((u0 + sw·sx/2) − len·fs·sx/4), same terms.
+- `Text_RenderCentered` 0x466650 (72-byte buffer): x = trunc((u0 + sw·sx/2) − len·fs·sx/4), same terms. All in x87
+  (`fld sw; fmul sx; fdiv 2.0; fadd u0`, then `fild` len as a 64-bit integer, `fimul` fs, `fmul sx`, `fdiv 4.0`, `fsubp`,
+  `ftol` 0x4A3E70 = truncation toward 0; VERIFIED RE-Q45 0x4666E3–0x466719): the quotient keeps its fraction, e.g.
+  len 5 → 256 − 18.75 = 237.25 → 237 (integer `len·15/4` would give 238). Values are exact in f32 as well.
   The result can be negative (text wider than the sprite); it is used as is (`TextOut` at 2x + 2 etc.).
 
 | caller | entry | VM text texture / sprite w | colour (COLORREF) | outline arg |

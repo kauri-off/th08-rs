@@ -187,7 +187,8 @@ practice 8 → 9 (cursor 0) → 11 (cursor = g_StageIdx), one screen per frame (
 15 → 16 (cursor = g_StageIdx, return 1) on one frame, then 16 → 17 (cursor 0; g_StageIdx := 9 if the last card id
 > 204) **and** screen 17's first call on the next frame (16 returns 2, see the screen-entry exception above). Only
 screens 11 and 17 clear +0x6C (in their entry blocks). Then for 9 frames render one description per frame into the 9 description VMs
-(`Text_RenderCentered` 0x466650: x = trunc(256 − len·15/4) with len = byte length, W = 512, 10 §6; text colour COLORREF
+(`Text_RenderCentered` 0x466650: x = trunc(256 − len·15/4) with len = byte length, computed in x87 floating point and
+truncated toward 0, e.g. len 5 → 237.25 → 237, not integer `len·15/4` (RE-Q45); W = 512, 10 §6; text colour COLORREF
 0x00FFF0E0 = RGB(224, 240, 255), 2-px black outline, font 15; RE-Q44).
 The 14 description VMs use text.anm script 9 (sprite 21 + i, centred at (320, 448); interrupt 1 = fade in 20
 frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn (changelog/answers_impl9.md §15):

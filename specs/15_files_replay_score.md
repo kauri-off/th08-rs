@@ -807,9 +807,10 @@ USER section:
   - プレイヤー名 (name)
   - プレイ時刻 (`%Y/%m/%d %H:%M:%S`)
   - キャラ名 = `Shot_Name(g_ShotType)`, table 0x4C7F4C[shot] (VERIFIED RE-Q40), printed whole **including the
-    trailing U+3000 padding** (each name is 10 full-width characters: 霊夢＆紫　　　　 / 魔理沙＆アリス　 /
+    trailing U+3000 padding** (each name is 8 full-width characters = 16 Shift-JIS bytes, VERIFIED RE-Q45 all 12 entries:
+    霊夢＆紫　　　　 / 魔理沙＆アリス　 /
     咲夜＆レミリア　 / 妖夢＆幽々子　　 / 博麗　霊夢　　　 / 八雲　紫　　　　 / 霧雨　魔理沙　　 / アリス・Ｍ　　　 /
-    十六夜　咲夜　　 / レミリア・Ｓ　　 / 魂魄　妖夢　　　 / 西行寺　幽々子　; demo 0's USER text shows the padding)
+    十六夜　咲夜　　 / レミリア・Ｓ　　 / 魂魄　妖夢　　　 / 西行寺　幽々子　 (one trailing U+3000); demo 0's USER text shows the padding)
   - スコア (`%d0`)
   - 難易度 = table 0x4C7F30[GM difficulty]: Easy / Normal / Hard / Lunatic / Extra (index 5 "LastWord" unused here)
   - 最終ステージ: "Clear" when GM flags bit 4 is set, else `0x453CD1(g_StageIdx)` = table 0x4C7FAC[stage] for

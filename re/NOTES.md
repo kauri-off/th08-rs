@@ -743,3 +743,10 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Key facts: 3 text wrappers → Text_Render, all with W = sprite+0x1C (texture width 512), all text sprites u0 = 0;
   Right x = trunc(u0+sw·sx−len·fs·sx/2), Centered x = trunc(u0+sw·sx/2−len·fs·sx/4), len = byte strlen; 54 call sites
   tabulated in 10 §6. Menu description colour is COLORREF 0x00FFF0E0 = RGB(224,240,255). 06 §10.2 bomb-end wording fixed.
+
+# RE-Q45 (2026-10-25) — implementer questions IMPL109 1–3, IMPL110 1 — DONE (specs/changelog/answers_re_q45.md)
+- Code + one original run (re/work/runs/q45/tex/: proxy d3d8.dll hooking CreateTexture (vtbl 20) + Present, dumps 512-wide
+  A4R4G4B4 textures at creation and every 100 presents; run.sh under Xvfb :77). 4 right, no new CODE BUG.
+- Key facts: Centered x is x87 float then ftol (len 5 → 237); `@` textures = D3DXCreateTexture MANAGED, no fill, observed
+  zero; strip rows 15–16 never written (pitch 18/17, write 15); reveal = exact compares 10…22; shot names 16 bytes.
+- Still open from RE-Q44: render_strip W = sprite width.
