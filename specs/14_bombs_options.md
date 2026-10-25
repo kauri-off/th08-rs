@@ -372,6 +372,15 @@ init 4, update 5, draw "trail", hit filter 2. Laser slots: **3** × {Timer, bull
   at bullet +0x2B0) x = −999; pos.x = −999; slot entry = entry; slot taken. Slot owned by a different entry
   (power level changed) → the old bullet's VM gets interrupt 1 and the slot is cleared (no new laser this
   frame). Same entry → nothing.
+  **"Different entry" is a pointer comparison** (slot entry +0xE2A80[slot] ≠ the entry being fired), not a content
+  comparison (VERIFIED 0x44FE20, RE-Q50). `Player_Load` loads the human and the youkai sht with two separate
+  `Sht_Load` calls into +0xE2A74 / +0xE2A78, each `FileSystem_OpenFile` call decoding into its own buffer, so even
+  when both are the same file (solo shot types, 09 §2: solo Alice = shot 7 uses `ply01as.sht` for both) the
+  focused and unfocused entries are different objects. A **focus change therefore ends the laser** like a level
+  change: on the first firing frame with the other sht the old laser gets interrupt 1 and the slot is cleared (no
+  bullet this frame); on the next firing frame (entry interval 2 at power < 8, …) a new laser is created with
+  bullet timer 0. The new timer phase decides the even-frame hits of 09 §4.5 (data: silentselene 52104, Alice solo,
+  focus released at stage-1 frame 403 → new laser, timer 0 at frame 404, hits at 432/434).
 - Update 5 (0x450840), every frame: if the bullet no longer owns the slot, or a dialogue runs, or the shot
   timer < 0 (not shooting), or player state 2, or bombing, or bit 13: interrupt 1, slot cleared, update fn
   removed (the bullet then just flies with its velocity, is not culled and is freed when its VM ends).
@@ -380,7 +389,7 @@ init 4, update 5, draw "trail", hit filter 2. Laser slots: **3** × {Timer, bull
   y −= 1, i = 31..1); trail[0] = pos; pos = option-0 pos, z 0.44; hitbox height 448; pos.y −= 208; colour
   (R 0xFF, G 0xD0, B 0xB0) at youkai-max gauge else white; then the generic bullet step adds velocity (y −10),
   runs the VM and ticks the timer. The bullet itself hits enemies only on even bullet-timer frames (09 §4.5).
-  End condition: release shot / dialogue / bomb / death / option lost / level change (above).
+  End condition: release shot / dialogue / bomb / death / option lost / level change / focus change (above).
 - Trail draw (0x450AD0): a0 = VM alpha·3/4; for c = 0, 2, 4, … < 2n while trail[c].x ≠ −999: draw the VM at
   trail[c] + playfield origin with alpha = original (c = 0) or a0 − (a0/2)·c/n; at youkai max colour (0xFF, 0x40, 0x40);
   alpha restored afterwards.

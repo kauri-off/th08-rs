@@ -204,6 +204,9 @@ stats.time (+0x3C) = 0; stats.time_parity (+0x44) = 0
 stats.time_threshold (+0x40) = spell practice ? 0 : TIME_THR[stage][difficulty]
 practice: power = stage 0: 0, stage 1: 112, else 128            (checksum)
 spell practice: power = id < 2: 30, id < 13: 80, else 128       (checksum)
+    # both lines are inside `if GameFlags bit 0` (practice); bit 14 then picks the spell-practice values. A replay
+    # (stage- or spell-practice) plays with bit 0 clear (15 §3.8), so neither runs and the power comes only from the
+    # stage record (VERIFIED 0x43ABD7, RE-Q50)
 replay playback: rank init; Replay_Register(1) (loads stage record, sets seed); checksum (RNG preserved)
 stage_seed = rng.s
 register: Stage(stage), Bullets("etama.anm"), Enemies, Effects, HUD, Gui; Replay_Register(0) if recording

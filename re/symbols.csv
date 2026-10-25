@@ -185,7 +185,7 @@ addr,kind,name,signature,confidence,note
 0x00424e50,func,EclNative_16,,VERIFIED,op136/137 table 0x4c6cb0 index 16
 0x00424f60,func,EclNative_17,,VERIFIED,op136/137 table 0x4c6cb0 index 17
 0x00424f90,func,EclNative_18,,VERIFIED,op136/137 table 0x4c6cb0 index 18
-0x00424fc0,func,EclNative_19,,VERIFIED,op136/137 table 0x4c6cb0 index 19
+0x00424fc0,func,EclNative_19,,VERIFIED,op136/137 table 0x4c6cb0 index 19; var 10000 := i16 0x164D0B8 spell-practice card id (07 §12)
 0x00423db0,func,EclNative_20,,VERIFIED,op136/137 table 0x4c6cb0 index 20
 0x00423e20,func,EclNative_21,,VERIFIED,op136/137 table 0x4c6cb0 index 21
 0x00424ff0,func,EclNative_22,,VERIFIED,op136/137 table 0x4c6cb0 index 22
@@ -804,3 +804,5 @@ addr,kind,name,signature,confidence,note
 0x004c7f48,global,g_NameCharset,,VERIFIED,RE-Q38 ptr to 96-cell name-entry charset 0x4B7340
 0x004c7aac,global,g_MusicRoomWarningLines,,VERIFIED,char*[7] music-room warning comment (16 §5.3)
 0x0045e1e0,func,Sound_QueueCommand,,VERIFIED,SoundManager+0x1F88 queue 31x0x10C (02 §4)
+0x004c73f0,global,g_EclSpNames,,VERIFIED,char*[9] ecldataNsp.ecl by g_StageIdx when GameFlags bit 14 (07 §1)
+0x004c7340,global,g_StdSpNames,,VERIFIED,char*[9] stageN_s.std by g_StageIdx when GameFlags bit 14 (06 §2)

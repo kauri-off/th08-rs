@@ -12,7 +12,8 @@ for later phases; only identification and headers are given here.
   4 = 4B ("powerful"), 5 = 5, 6 = 6A (Eirin, files `*6*`), 7 = 6B (Kaguya, files `*7*`),
   8 = Extra (files `*8*`) (VERIFIED from tables 0x4C72F8/0x4C731C/0x4C7364/0x4C73CC/0x4C745C;
   names of 4A/4B/6A/6B from replay stage strings `Stage 4-uncanny`, `Stage 4-powerful`, `Stage 6-Eirin`,
-  `Stage 6-Kaguya`). Indices 9–17 select the `_s.std` / `*sp.ecl` variants of the same stage.
+  `Stage 6-Kaguya`). The `_s.std` / `*sp.ecl` variants are the table entries 9–17 (table base + 9), indexed by the
+  same stage index 0–8 when GameFlags bit 14 (spell practice) is set; the stage index itself never exceeds 8 (07 §1, VERIFIED RE-Q50).
 - **Shot type / character index** (12 values): 0–3 teams (`Rm & Yk`, `Ms & Al`, `Sk & Rr`,
   `Ym & Yy`), 4–11 solo characters in pair order (Reimu, Yukari, Marisa, Alice, Sakuya, Remilia, Youmu,
   Yuyuko) (VERIFIED table layout 0x4C7CB0/0x4C7CE0 and 12-entry msg tables; name order INFERRED from the
@@ -34,13 +35,13 @@ for later phases; only identification and headers are given here.
 | `stgNtxt.anm` (1,2,3,4a,4b,5,6,7,8) | 9 | A | stage title / name cards (slot 13) | `Hud_Load` via 0x4C745C | VERIFIED |
 | `stgNbg.anm` (4B reuses `stg4abg`) | 8 | A | 3D background textures (slot 4) | `Stage_Load` via 0x4C72F8 | VERIFIED |
 | `stageN.std` | 9 | - | stage background script: 3D geometry, camera script, 3 BGM names at 0x290/0x310/0x390 | `Stage_Load` via 0x4C731C | VERIFIED |
-| `stageN_s.std` | 9 | - | variant stage scripts selected by stage index 9–17, i.e. spell practice (07 §1, 16 §6) | same table | VERIFIED |
+| `stageN_s.std` | 9 | - | spell-practice stage scripts: used when GameFlags bit 14 is set, indexed by the stage index 0–8 (07 §1, 16 §6) | `Stage_Load` via 0x4C7340 (= 0x4C731C + 9 entries) | VERIFIED |
 | `enemy.anm` | 1 | A | common enemy sprites (fairies etc.) (slot 7) | `EnemyManager_Load` | VERIFIED |
 | `stgNenm.anm` | 9 | A | stage-specific enemy/boss sprites (slot 8) | `EnemyManager_Load` via 0x4C7364 | VERIFIED |
-| `stgenm_{sk,ym,al,rm,yy,yk}.anm` | 6 | A | per-character boss sprites for the Last Word cards (spell ids ≥ 205) in spell practice (slot 8; 07 §1) | table continuation 0x4C73AC | VERIFIED |
+| `stgenm_{sk,ym,al,rm,yy,yk}.anm` | 6 | A | per-character boss sprites for the six character Last Words (card ids 216–221) in spell practice (slot 8; 07 §1) | dword at 0x4C7054 + 4·card (card ≥ 205; 205–215 give `stgNenm.anm`) | VERIFIED |
 | `ecldataN.ecl` | 9 | E | enemy/boss behaviour scripts (ECL) per stage | `EnemyManager_Load` via 0x4C73CC | VERIFIED |
-| `ecldataNsp.ecl` | 9 | E | spell-practice variants (stage index 9–17; 07 §1) | same table | VERIFIED |
-| `ecldata_{al,rm,sk,yk,ym,yy}.ecl` | 6 | E | Last Word scripts (spell ids ≥ 205 in spell practice, table 0x4C70E4 indexed by spell id; pair with `stgenm_xx.anm`) | names at 0x4B545C | VERIFIED (07 §1) |
+| `ecldataNsp.ecl` | 9 | E | spell-practice scripts: GameFlags bit 14 and card id < 205, indexed by the stage index 0–8; also Last Words 205–215 via the card table (07 §1) | 0x4C73F0 (= 0x4C73CC + 9 entries) | VERIFIED |
+| `ecldata_{al,rm,sk,yk,ym,yy}.ecl` | 6 | E | Last Word scripts of the six character Last Words (card ids 216–221; card ids ≥ 205 read the dword at 0x4C70E4 + 4·card, 205–215 give an `ecldataNsp.ecl`; pair with `stgenm_xx.anm`) | names at 0x4B545C | VERIFIED (07 §1, RE-Q50) |
 | `etama.anm` | 1 | A | bullets (shared bullet sheet, slot 6) | `BulletManager_Load` | VERIFIED |
 | `effNN.anm` (01–08, 04a/04b) | 9 | A | per-stage special effects (slot 9) | `EffectManager` via 0x4C7480 | VERIFIED |
 | `eff09{sk,ym,al,rm,yy,yk}.anm` | 6 | A | per-character effects (index 9–14 of the same table / per-spell table 0x4C7144) | `EffectManager` | VERIFIED table, role INFERRED |

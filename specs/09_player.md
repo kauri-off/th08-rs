@@ -100,6 +100,11 @@ and odd (0x42F270).
 | 0–3 (teams) | playerNN.anm | plyNNa.sht | plyNNas.sht |
 | 4/5, 6/7, 8/9, 10/11 | player00/01/02/03.anm | ply0Na.sht (human) / ply0Nas.sht (youkai) | same file as human |
 
+The two sht pointers (+0xE2A74 human, +0xE2A78 youkai) are filled by two `Sht_Load` calls, each decoding the file into
+its own buffer (`FileSystem_OpenFile` allocates per call): for solos they hold equal bytes but distinct entry
+addresses, which matters where entries are compared by address (laser init, 14 §4) (VERIFIED 0x44D650 / 0x44DD70 /
+0x43E660, RE-Q50).
+
 Initial sprite script: 0 (human) or 5 (solo youkai).
 
 ### 2.1 `.sht` format (VERIFIED, `tools/shtdump.py`)
@@ -160,7 +165,7 @@ Function indexes (all values used by the 8 files are in range):
 | init | 0 | 0x44FD80 | default: fire on phase match |
 | | 1 | 0x450240 | default, then if an aimed enemy exists (+0xE2ABC): angle = atan2 to its position (+0x2D34) + entry angle + π/2; vel = polar(angle, speed × 1.5) |
 | | 2, 3 | 0x44FDD0 | default, but not while bombing |
-| | 4 | 0x44FE20 | laser: not while bombing nor when 0x164D0B4 bit 13; one live laser per slot (phase = slot); slot timer = 999 |
+| | 4 | 0x44FE20 | laser: not while bombing nor when 0x164D0B4 bit 13; one live laser per slot (phase = slot); slot timer = 999; a slot owned by another entry **pointer** (level change, or focus change: human/youkai sht are separate buffers even for solos) ends the old laser (14 §4, VERIFIED RE-Q50) |
 | | 5 | 0x44FFA0 | default, then aim at +0xE2AB0 if its x > −100 (speed × 1.5) |
 | | 6 | 0x450080 | angle = wrap(option base angle +0xE2B0C + entry angle + π/2), speed |
 | | 7 | 0x4501B0 | phase test as init 0; **only when it fires**: `Player_InitShot`, then angle (+0x450) = Rng_Signed × π/48 − π/2 (**RNG**, one draw per fired bullet; no draw on a non-matching frame), vel = polar(angle, entry speed) (VERIFIED 0x4501B0, RE-Q36) |

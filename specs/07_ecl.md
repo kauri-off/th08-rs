@@ -17,6 +17,27 @@ Normal play: `ecldataN.ecl` by stage index (04_file_index.md). Spell-practice mo
 bit 14): `ecldataNsp.ecl`, except spell ids ≥ 205 (last words) which use per-character files
 `ecldata_{xx}.ecl` from the table at 0x4C70E4 indexed by spell id. (`stgNenm.anm` likewise.)
 
+Exact selection (VERIFIED `EnemyManager_Load` 0x42EBF0 and `Stage_Load`, RE-Q50). The mode is chosen by **GameFlags
+(0x164D0B4) bit 14 alone**; the stage index g_StageIdx (0x164D2CC) stays 0–8 in spell practice (the `*sp` / `_s`
+names are the second half of each name table, i.e. the table base + 9 entries, still indexed by g_StageIdx). Card
+id c = i16 0x164D0B8 (GM +0x3DBB0).
+
+| file | bit 14 clear | bit 14 set, c < 205 (0xCD) | bit 14 set, c ≥ 205 |
+|---|---|---|---|
+| ECL | 0x4C73CC[stage] `ecldataN.ecl` | 0x4C73F0[stage] `ecldataNsp.ecl` | dword at 0x4C70E4 + 4c |
+| stage enemy ANM (slot 8) | 0x4C7364[stage] `stgNenm.anm` | same as bit 14 clear | dword at 0x4C7054 + 4c |
+| stage script (`Stage_Load`, test `GameMgr_IsSpellPractice` 0x406C70 = bit 14) | 0x4C731C[stage] `stageN.std` | 0x4C7340[stage] `stageN_s.std` | same as c < 205 |
+
+The card-indexed entries (c = 205…221): ECL `ecldata1sp, 2sp, 3sp, 5sp, 6sp, 7sp, 8sp, 5sp, 8sp, 4asp, 4bsp`
+(205–215), then `ecldata_sk, _ym, _al, _rm, _yy, _yk` (216–221); ANM `stg1enm, stg2enm, stg3enm, stg5enm,
+stg6enm, stg7enm, stg8enm, stg5enm, stg8enm, stg4aenm, stg4benm` (205–215), then `stgenm_sk, _ym, _al, _rm, _yy,
+_yk` (216–221). So only the six character Last Words use the `_xx` files; the other Last Words reuse a stage's
+`sp` script. `stgNbg.anm` and `enemy.anm` never depend on the mode. Every spell-practice file has the same
+timeline shape (data, `ecl_dis`): time 1 spawn of a short effect enemy (the "enemy at gameplay frame 2" of a spell
+practice), time 30 spawn of the boss sub, `wait_boss 0`, then timeline op 16 (0x164D0BB := 1) at time 60
+(`ecldata1–7sp`) or 70 (`ecldata8sp`, `ecldata_xx`); `ecldata_yk` instead spawns a second boss (time 30, `wait_boss
+3`). The boss subs run native 19 (§12) and pick the card with an `ijg $10000, …` chain.
+
 ## 2. File layout (VERIFIED, loader 0x418330)
 
 | off | type | meaning |
@@ -1061,7 +1082,7 @@ Called with the enemy and the instruction; `arg` = second operand (instr +0x10).
 | 15 | shake (type 7: amplitude 16, ramp 20, hold 20, out 20) (13 §3) |
 | 16 | mark children (`EclNative_16` 0x424E50, VERIFIED RE-Q35): for each of the 1536 bullets with state +0xDB8 ≠ 0 and flag +0xDB0 & 0x100000, in slot order, walk the **caller's** chain from caller+8 along +8; a member whose int var 10038 (its e+0x2CA0 = main context, ctx+0x60) is 0 and whose pos e+0x2D34 is within the bullet pos +0xD44 by `Vec3_LengthSq`(bullet pos − member pos) < 4096.0 (strict; all three components, z·z + y·y + x·x at 24-bit precision; bullet and chained-child z are 0 in the data) gets int var 10038 := 60 and **int var 10007** (ctx+0x34) := the caller's int var 10007 (caller e+0x2CA0 +0x34). Not float var 10019. Data: ecldata6 sub73 / ecldata6sp sub61 (time 270, the caller cycles 10007 through 5, 1, 3, …), whose sub-77 children then fire `bul_fan col=$10007`: the copied 10007 is the bullet colour |
 | 18 | game speed = 1/arg |
-| 19 | var 10000 = current spell id |
+| 19 | int var 10000 (current context) := the **spell-practice card id** i16 0x164D0B8 (GM +0x3DBB0), sign-extended — a global set by the card-list confirm (16 §6) or the replay header (15 §3.8), **not** the id of the running Spell object (no card is active when the boss sub calls it at time 0) (VERIFIED `EclNative_19` 0x424FC0, RE-Q50). Used only by the spell-practice files (`ecldataNsp`, `ecldata_xx`: one call each, first instruction of the boss sub) |
 | 22 / 23 | 22: name-only spell declaration (spell flag bit 10, name banner of the string at 0x4B495C 「リザレクション」, §11.1); 23: hide the name banner (0x416160) |
 | 24 | int var 10000 (current context, e+0x2CA0 +0x18) := stats block +0x1C = **spell cards captured** in this game (11 §5; `*(GM+8)` = 0x160F510; +1 per capture in `Spell_End`, reset to 0 at a new game) (VERIFIED 0x425040, RE-Q35). Data: ecldata8 sub84 (Extra stage timeline, frame 9678) `native 24` then `ijge $10000, 7`: with fewer than 7 captures the enemy deletes itself (op 1) at once, else it continues as a boss (last spell flag, life 6000) |
 | 26 | global byte 0x160F534 = low byte of arg (pauses enemy timers); then the two spell-background VMs g_Stage +0xB38 / +0xDDC (0x4E4B68 / 0x4E4E0C, the same pair as native 12) get interrupt 2 if that byte ≠ 0, else 1 (VERIFIED 0x425070, RE-Q30) |

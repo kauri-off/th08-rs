@@ -73,7 +73,9 @@ After the terminator 16 of 18 files contain another 20 bytes of 0xFF (ignored).
 `Stage_Load` (on-register callback of the stage calc node):
 1. Script clock (Timer at +0x80C) = 0; instruction index (+0x818) = 0; origin (+0x824) = (0,0,0).
 2. Load `stgNbg.anm` into ANM slot 4 (04_file_index.md) and `stageN.std` (or `stageN_s.std` in the
-   alternative mode, 04_file_index.md).
+   alternative mode, 04_file_index.md). The alternative mode is spell practice, `GameMgr_IsSpellPractice` 0x406C70 =
+   GameFlags bit 14; both names come from g_StageIdx 0–8 (tables 0x4C731C / 0x4C7340); `stgNbg.anm` is the same in
+   both modes (VERIFIED `Stage_Load`, RE-Q50; 07 §1).
 3. Allocate `quad_count` ANM VMs. For every object (in order) set flag bit 0 = 1; for every quad in order
    (every record up to the type −1 terminator, **whatever its type** — no 0/1 filter; the shipped files contain only
    types 0 and 1, 552 quads; VERIFIED `Stage_LoadStd` 0x409CE0, RE-Q24) assign the next VM index `k`, store k into the quad's +6 field and start the quad's ANM script on VM k

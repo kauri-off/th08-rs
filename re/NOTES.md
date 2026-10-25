@@ -794,3 +794,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   extra sparkles (gameplay RNG). 14 §3.3 corrected.
 - Later divergences (not analysed) listed in the changelog; Bu08/JS06 (spell practice frame 2) and Nd115 (boss at
   frame 31) are the earliest.
+
+# RE-Q50 (2026-10-25) — replay pilot: spell-practice + next practice divergence — DONE (specs/changelog/answers_re_q50.md)
+- Q1/Q2 (Bu08/JS06 frame 2, Nd115 boss frame 31): spell-practice files chosen by GameFlags bit 14 with g_StageIdx 0–8
+  (sp tables = base + 9); card ≥ 205 via 0x4C70E4 / 0x4C7054 (205–215 stage sp, 216–221 _xx). Port passes g.stage 0–8 →
+  normal files (CODE BUG A gamemgr/stage/enemy files). Native 19 = i16 0x164D0B8 card id, port uses active spell (BUG B).
+  Specs 07 §1 (table), §12 row 19, 04 rows, 06 §2, 11 §3.1 power-gate note.
+- Q3 (52104 Alice solo frame 432 score): laser init compares entry pointer; human/youkai sht are separate buffers even
+  for solos → focus change restarts the laser (timer 0) → even-frame hit phase. Port compares by value (BUG C pshot.rs
+  init 4). Specs 14 §4, 09 §2 / §2.1. Original scan run re/work/runs/q50/orig_52104 (TH08_SCAN 600–660).
+- Scratch port copy re/work/runs/q50/portcopy (target/re50) with A–C: 52104 → row 690; Bu08/JS06/Nd115 → ~32 rows
+  before the end (frame / flags bit 2 at replay end) — next candidates, not analysed.
