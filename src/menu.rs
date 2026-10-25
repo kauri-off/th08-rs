@@ -967,8 +967,7 @@ impl MainMenu {
                     if item == 2 {
                         ctx.audio.load_bgm(8, "bgm/th08_01.mid");
                         ctx.audio.play_slot(8);
-                        // Music_PlaySlot marks track 0 heard unless replay playback or demo (02 §4).
-                        // SPEC-GAP: whether PlaySlot also marks in mode 0 is not given; modes 1/2 only, like PlayFile.
+                        // Music_PlaySlot marks track 0 heard unless replay playback or demo; mode 0 marks nothing (02 §4).
                         let g = &mut ctx.game;
                         if matches!(g.cfg.music, 1 | 2)
                             && g.flags & (gamemgr::F_REPLAY | gamemgr::F_DEMO) == 0

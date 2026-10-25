@@ -49,12 +49,78 @@ fn find_track<'a>(tracks: &'a [Track], name: &str) -> Option<&'a Track> {
     tracks.iter().find(|t| t.name == wav).or(tracks.first())
 }
 
-// The playing BGM: whole stored track in memory; after the end it loops from loop_start (02 §3).
-#[derive(Default)]
+// Streaming ring (02 §3): 16 notification chunks of 44100 bytes = 11025 stereo frames (0.25 s), 4.0 s in all.
+const CHUNK: usize = 11025;
+const RING: usize = 16 * CHUNK;
+
+// The playing BGM: the whole stored track in memory, heard through a model of the DirectSound streaming ring
+// (02 §3) so that `Bgm_StreamStop` + UnPause replays what the ring still holds (02 §4).
 struct Music {
     samples: Vec<[f32; 2]>,
     loop_start: usize,
-    pos: f64,
+    // Per ring chunk: the stream frame its data starts at (frames read since the play command's rewind).
+    chunks: [u64; 16],
+    // Refill offset +0x64 as a chunk index, and the file position as a stream frame.
+    refill: usize,
+    file: u64,
+    // Play cursor in ring frames (fractional for resampling).
+    cursor: f64,
+}
+
+impl Music {
+    // Play command fill stage (02 §3): rewind, fill the whole ring with the first 4.0 s, +0x64 := 0, play from 0.
+    fn new(samples: Vec<[f32; 2]>, loop_start: usize) -> Self {
+        Self {
+            samples,
+            loop_start,
+            chunks: std::array::from_fn(|k| (k * CHUNK) as u64),
+            refill: 0,
+            file: RING as u64,
+            cursor: 0.0,
+        }
+    }
+
+    // Stream frame → track frame: `loop_end` frames first, then loop_start..loop_end forever (02 §3).
+    fn track_frame(&self, s: u64) -> usize {
+        let n = self.samples.len() as u64;
+        if s < n {
+            return s as usize;
+        }
+        let ls = (self.loop_start as u64).min(n - 1);
+        (ls + (s - n) % (n - ls)) as usize
+    }
+
+    fn ring_sample(&self, r: usize) -> [f32; 2] {
+        let r = r % RING;
+        self.samples[self.track_frame(self.chunks[r / CHUNK] + (r % CHUNK) as u64)]
+    }
+
+    // Notification as the play cursor leaves a chunk (handler 0x472D30, 02 §3). The write cursor then lies in the
+    // chunk the play cursor entered; if that is the refill chunk → "Stream Skip", else refill it and advance.
+    fn notify(&mut self, entered: usize) {
+        if entered == self.refill {
+            return;
+        }
+        self.chunks[self.refill] = self.file;
+        self.file += CHUNK as u64;
+        self.refill = (self.refill + 1) % 16;
+    }
+
+    // One output frame at `step` ring frames per output frame (port: linear resampling to the device rate).
+    fn next(&mut self, step: f64) -> (f32, f32) {
+        let i = self.cursor as usize;
+        let t = (self.cursor - i as f64) as f32;
+        let (a, b) = (self.ring_sample(i), self.ring_sample(i + 1));
+        self.cursor += step;
+        let k = self.cursor as usize / CHUNK;
+        if k != i / CHUNK {
+            self.notify(k % 16);
+        }
+        if self.cursor >= RING as f64 {
+            self.cursor -= RING as f64;
+        }
+        (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+    }
 }
 
 // One se_*.wav PCM wave file (RIFF, 8/16-bit, mono/stereo; 04 file index, 13 §1.1).
@@ -204,22 +270,8 @@ impl Mixer {
             None => None,
         };
         for (k, fr) in out.chunks_exact_mut(channels).enumerate() {
-            // Port mixer: linear resampling to the device rate; WaveStream_* chunking (02 §3) is platform detail.
             let (l, r) = match &mut self.music {
-                Some(m) if !m.samples.is_empty() && !self.stopped => {
-                    let n = m.samples.len();
-                    let i = m.pos as usize;
-                    let t = (m.pos - i as f64) as f32;
-                    let a = m.samples[i];
-                    let j = if i + 1 >= n { m.loop_start } else { i + 1 };
-                    let b = m.samples[j];
-                    m.pos += step;
-                    // 02 §3: after loop_end, continue from loop_start (track start when loop_start is 0).
-                    if m.pos >= n as f64 {
-                        m.pos -= (n - m.loop_start) as f64;
-                    }
-                    (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
-                }
+                Some(m) if !m.samples.is_empty() && !self.stopped => m.next(step),
                 _ => (0.0, 0.0),
             };
             let (mut l, mut r) = (l * self.volume, r * self.volume);
@@ -499,11 +551,7 @@ impl Audio {
                         .collect();
                     let mut m = mixer.lock().unwrap();
                     if m.generation == generation {
-                        m.music = Some(Music {
-                            samples,
-                            loop_start: t.loop_start,
-                            pos: 0.0,
-                        });
+                        m.music = Some(Music::new(samples, t.loop_start));
                     }
                 }
                 Err(e) => log::warn!("bgm {}: {e:#}", t.name),
@@ -686,8 +734,18 @@ impl Audio {
         }
     }
 
-    // SPEC-GAP: UnPause after Music_Stop plays the buffer at position 0 (02 §4); what it holds is not given; silent here.
+    // `Bgm_StreamStop` 0x4728E0 (02 §4): `Stop` + position 0, playing flag 0; the object, ring, +0x64 and file
+    // position stay, so a later UnPause plays the ring on from position 0 (02 §4 "UnPause after `Music_Stop`").
     fn stop_wav(&mut self) {
+        let mut m = self.mixer.lock().unwrap();
+        m.stopped = true;
+        if let Some(music) = &mut m.music {
+            music.cursor = 0.0;
+        }
+    }
+
+    // Sound manager release on restart (00 §2): the streaming object is gone; nothing is left to UnPause.
+    pub fn release_bgm(&mut self) {
         let mut m = self.mixer.lock().unwrap();
         m.generation += 1;
         m.music = None;
@@ -850,11 +908,9 @@ mod tests {
     #[test]
     fn wav_pause_and_fade() {
         let mut a = Audio::new(Source::native(std::env::temp_dir()), &[]);
-        a.mixer.lock().unwrap().music = Some(Music {
-            samples: vec![[0.5, 0.5]; 10],
-            loop_start: 0,
-            pos: 3.0,
-        });
+        let mut music = Music::new(vec![[0.5, 0.5]; 10], 0);
+        music.cursor = 3.0;
+        a.mixer.lock().unwrap().music = Some(music);
         a.fade_bgm(4.0, 1.0);
         a.start_fade();
         a.pause_bgm(true);
@@ -863,20 +919,107 @@ mod tests {
         a.pause_bgm(false);
         {
             let m = a.mixer.lock().unwrap();
-            assert!(!m.stopped && m.music.as_ref().unwrap().pos == 3.0);
+            assert!(!m.stopped && m.music.as_ref().unwrap().cursor == 3.0);
         }
         a.fade_bgm(4.0, 1.0);
         a.start_fade();
         a.stop_bgm();
-        assert!(a.fade.is_none() && a.mixer.lock().unwrap().music.is_none());
+        {
+            let m = a.mixer.lock().unwrap();
+            assert!(a.fade.is_none() && m.stopped && m.music.as_ref().unwrap().cursor == 0.0);
+        }
         a.fade_bgm(4.0, 1.0);
         a.stop_bgm();
         assert!(a.fade_req.is_none());
         let mut cfg = crate::config::Config::default();
         cfg.music = 0;
         a.set_volumes(&cfg);
-        a.pause_bgm(true);
+        a.pause_bgm(false);
+        assert!(a.mixer.lock().unwrap().stopped);
+    }
+
+    // Renders `frames` at 44.1 kHz (step 1, no interpolation) and decodes the track frame each sample encodes.
+    fn heard(m: &mut Mixer, frames: usize) -> Vec<usize> {
+        let mut out = vec![0.0; 2 * frames];
+        m.render(&mut out, 2);
+        out.chunks_exact(2)
+            .map(|f| (f[0] * 1e6).round() as usize)
+            .collect()
+    }
+
+    fn ring_mixer(len: usize, loop_start: usize) -> Mixer {
+        let samples = (0..len).map(|i| [i as f32 / 1e6; 2]).collect();
+        Mixer {
+            volume: 1.0,
+            out_rate: BGM_RATE,
+            music: Some(Music::new(samples, loop_start)),
+            ..Default::default()
+        }
+    }
+
+    // 02 §3 ring + 02 §4 "UnPause after `Music_Stop`": stop in chunk P at song time t (start of chunk P), UnPause plays
+    // from ring position 0 and the song continues seamlessly from t + ((16 − P) mod 16)·0.25 s; P = 1 plays 0.25 s of
+    // t + 3.75 s, then t on.
+    #[test]
+    fn unpause_after_stop_resumes_ring() {
+        for (played, p) in [
+            (37 * CHUNK + 500, 5),
+            (32 * CHUNK + 9, 0),
+            (17 * CHUNK + 3000, 1),
+        ] {
+            let mut m = ring_mixer(300_000, 50_000);
+            let before = heard(&mut m, played);
+            assert!(
+                before
+                    .windows(2)
+                    .all(|w| w[1] == w[0] + 1 || w[1] == 50_000)
+            );
+            assert_eq!(m.music.as_ref().unwrap().refill, p);
+            let t = m
+                .music
+                .as_ref()
+                .unwrap()
+                .track_frame((played - played % CHUNK) as u64);
+            // Command 3 then command 7.
+            m.stopped = true;
+            m.music.as_mut().unwrap().cursor = 0.0;
+            assert!(heard(&mut m, 100).iter().all(|&v| v == 0));
+            m.stopped = false;
+            let after = heard(&mut m, 3 * RING);
+            let mm = m.music.as_ref().unwrap();
+            let song = |s: usize| mm.track_frame((played - played % CHUNK + s) as u64);
+            if p == 1 {
+                assert_eq!(after[0], song(15 * CHUNK));
+                assert_eq!(after[CHUNK - 1], song(16 * CHUNK - 1));
+                assert!((CHUNK..3 * RING).all(|i| after[i] == song(i - CHUNK)));
+            } else {
+                let s0 = (16 - p) % 16 * CHUNK;
+                assert_eq!(after[0], song(s0));
+                assert!((0..3 * RING).all(|i| after[i] == song(s0 + i)));
+            }
+            assert_eq!(
+                after[0],
+                mm.track_frame(t as u64 + ((16 - p) % 16 * CHUNK) as u64)
+            );
+        }
+    }
+
+    // The ring keeps streaming through the loop point (02 §3) and `Audio::stop_bgm` keeps the stream object.
+    #[test]
+    fn ring_loops_and_stop_keeps_object() {
+        let mut m = ring_mixer(200_000, 150_000);
+        let v = heard(&mut m, 260_000);
+        assert_eq!(
+            (v[199_999], v[200_000], v[249_999], v[250_000]),
+            (199_999, 150_000, 199_999, 150_000)
+        );
+        let mut a = Audio::new(Source::native(std::env::temp_dir()), &[]);
+        a.mixer.lock().unwrap().music = m.music.take();
+        a.stop_bgm();
+        a.pause_bgm(false);
         assert!(!a.mixer.lock().unwrap().stopped);
+        a.release_bgm();
+        assert!(a.mixer.lock().unwrap().music.is_none());
     }
 
     #[test]

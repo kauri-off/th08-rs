@@ -655,6 +655,13 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl115 (RE-Q48 CODE BUG 1, 2026-10-25): `audio.rs` `Music` models the WAV streaming ring (02 §3: 16 chunks of
+  11025 frames, per-chunk stream frame, refill offset +0x64, file position, notification on leaving a chunk with the
+  "Stream Skip" test against the entered chunk); `stop_wav` (command 3) = `Stop` + position 0 keeping the object, so
+  UnPause resumes the ring (02 §4 "UnPause after `Music_Stop`": seamless from t + ((16 − P) mod 16)·0.25 s, P = 1 case
+  included, last volume); `release_bgm` drops the stream on restart (sound manager release, 00 §2). `menu.rs` item-2
+  marker closed (RE-Q48 Q2). Sessions: golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 full.
+  SPEC-GAP 3 → 1 (text.rs). No questions.
 - impl114 (RE-Q46 CODE BUG 1–6, MIDI / BGM, 2026-10-25): `midi.rs` tempo meta 0x51 = v·257 + b per byte (02 §5
   original bug, songs ≈ 0.75 % slower); one `Sequencer` per run (`Midi_Ctor`: +0x2CC = 0, raw CC 7 kept across
   `Midi_Open` / songs), `open(None)` for a null slot (Play/Stop then do nothing, open slot unchanged); per-track CC 2

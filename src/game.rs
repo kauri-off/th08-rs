@@ -259,6 +259,7 @@ impl Ctx {
         task::clear(self);
         self.sound_update();
         self.audio.stop_bgm();
+        self.audio.release_bgm();
         // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
         self.audio.midi_reset();
         for slot in 0..crate::anmmgr::SLOTS {
