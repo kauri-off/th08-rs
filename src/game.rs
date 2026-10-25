@@ -7,6 +7,7 @@ use crate::audio::Audio;
 use crate::gfx::Gfx;
 use crate::input::Input;
 use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
+use anyhow::Context as _;
 
 // The original's globals that every subsystem reaches (device, archive, sound manager, input words, SprtCtrlInf,
 // funcChain); `game` holds GM / Supervisor fields (11 §2, §7).
@@ -48,6 +49,11 @@ impl Ctx {
     // Supervisor task. `persist` = read/write the port's save files (off for tests).
     pub async fn load_with(source: Source, gfx: Gfx, persist: bool) -> anyhow::Result<Self> {
         let archive = Archive::from_bytes(source.read("th08.dat").await?)?;
+        // Supervisor_OnRegister 0x4461A0: the exe-check version list, archive only; missing fails start-up (15 §2.10).
+        let ver = archive
+            .read(crate::scoredat::VER_LIST_NAME)
+            .context("error : データのバージョンが違います")?;
+        crate::scoredat::set_ver_list(ver);
         let settings = crate::settings::get();
         let mut audio = Audio::new(source.clone(), &archive.read("thbgm.fmt")?);
         audio.load_se(&archive);

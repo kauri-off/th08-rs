@@ -12,6 +12,101 @@ const PLST_CAP: u32 = 999_999;
 // VRSM values of the shipped th08.exe (15 §2.10).
 pub const EXE_SIZE: u32 = 840_704;
 pub const EXE_SUM: u32 = 0xA268_61B9;
+// Version list file, read from th08.dat only at boot (15 §2.10: `th08_%.4x%c.ver` with 0x100, 'd').
+pub const VER_LIST_NAME: &str = "th08_0100d.ver";
+
+// Supervisor+0x360 / +0x35C: the version list buffer (15 §2.10); unset → ExeCheck step 1 (pass).
+static VER_LIST: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+
+// Supervisor_OnRegister 0x4461A0: keeps the list for the whole run (the archive copy is the same for every caller).
+pub fn set_ver_list(list: Vec<u8>) {
+    let _ = VER_LIST.set(list);
+}
+
+// ExeCheck 0x44858D (15 §2.10) against the boot-loaded list: true = pass (0), false = fail (−1).
+pub fn exe_check(tag: &[u8], size: u32, sum: u32) -> bool {
+    exe_check_in(VER_LIST.get().map(Vec::as_slice), tag, size, sum)
+}
+
+// C `strncmp(a, b, n) == 0` on byte strings (missing bytes read as NUL).
+fn strneq(a: &[u8], b: &[u8], n: usize) -> bool {
+    for i in 0..n {
+        let (x, y) = (
+            a.get(i).copied().unwrap_or(0),
+            b.get(i).copied().unwrap_or(0),
+        );
+        if x != y {
+            return false;
+        }
+        if x == 0 {
+            return true;
+        }
+    }
+    true
+}
+
+// CRT `%d`: leading white space, optional sign, digits accumulated with 32-bit wrap ("2724749753" → 0xA26861B9).
+fn scan_d(b: &[u8]) -> Option<(u32, &[u8])> {
+    let mut i = b.iter().take_while(|c| c.is_ascii_whitespace()).count();
+    let neg = match b.get(i) {
+        Some(b'-') => {
+            i += 1;
+            true
+        }
+        Some(b'+') => {
+            i += 1;
+            false
+        }
+        _ => false,
+    };
+    let n = b[i..].iter().take_while(|c| c.is_ascii_digit()).count();
+    if n == 0 {
+        return None;
+    }
+    let v = b[i..i + n].iter().fold(0u32, |a, &c| {
+        a.wrapping_mul(10).wrapping_add((c - b'0') as u32)
+    });
+    Some((if neg { v.wrapping_neg() } else { v }, &b[i + n..]))
+}
+
+// ExeCheck steps 1–4 (15 §2.10) over the `tag size sum\n` lines; `tag` is the 8-byte field (NUL-terminated).
+// QUIRK: a tag-matching line with other numbers makes the original walk past the buffer end unless a later line
+// matches; that over-run is treated as a fail, as the spec allows.
+pub fn exe_check_in(list: Option<&[u8]>, tag: &[u8], size: u32, sum: u32) -> bool {
+    let Some(list) = list else { return true };
+    if strneq(tag, b"debug", 5) {
+        return true;
+    }
+    let mut line = list;
+    while !line.is_empty() {
+        if line.len() >= 5 && strneq(&line[..5], tag, 5) {
+            let nums = line.get(6..).unwrap_or(&[]);
+            if let Some((a, rest)) = scan_d(nums)
+                && let Some((b, _)) = scan_d(rest)
+                && a == size
+                && b == sum
+            {
+                return true;
+            }
+        }
+        line = match line.iter().position(|&c| c == b'\n') {
+            Some(p) => &line[p + 1..],
+            None => &[],
+        };
+    }
+    false
+}
+
+// C `strcpy` into a fixed field: the bytes up to the source's NUL (at most len − 1) plus a NUL; the rest is kept.
+fn strcpy(dst: &mut [u8], src: &[u8]) {
+    let n = src
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(src.len())
+        .min(dst.len() - 1);
+    dst[..n].copy_from_slice(&src[..n]);
+    dst[n] = 0;
+}
 
 fn u16_at(b: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([b[o], b[o + 1]])
@@ -140,7 +235,7 @@ impl Default for Clrd {
 // CATK chunk v3, 0x22C bytes (15 §2.5); in memory at GM+0x40.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Catk {
-    // The chunk is saved only when its magic is set.
+    // `CATK` magic set (loaded or stamped at game start); the chunk is saved only when set.
     pub present: bool,
     pub difficulty: u8,
     pub checksum: u8,
@@ -172,9 +267,14 @@ impl Default for Catk {
 }
 
 impl Catk {
-    // +0x0E = (Σ signed name bytes [48] + Σ all 78 u32 counters) & 0xFF (15 §2.5).
+    // +0x0E = (Σ signed name bytes up to the NUL + Σ all 78 u32 counters) & 0xFF (15 §2.5).
     pub fn compute_checksum(&self) -> u8 {
-        let n: i32 = self.name.iter().map(|&c| c as i8 as i32).sum();
+        let n: i32 = self
+            .name
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as i8 as i32)
+            .sum();
         let c: u32 = self
             .counters
             .iter()
@@ -354,7 +454,6 @@ pub fn encode_container(body: &[u8], r: [u8; 2]) -> Vec<u8> {
 impl ScoreDat {
     // Chunk walk of ScoreDat_Get* (15 §2.1): only chunks with matching magic and version are taken; a size-0 chunk or no
     // TH8K v1 rejects the file.
-    // SPEC-GAP: the VRSM exe check (15 §2.10) is not made.
     pub fn parse(file: &[u8]) -> Result<Self> {
         let d = decode_container(file)?;
         let mut s = Self::default();
@@ -362,6 +461,15 @@ impl ScoreDat {
         let mut p = 0x1C;
         while p + 12 <= d.len() {
             let size = u16_at(&d, p + 4) as usize;
+            // Every VRSM v1 chunk goes through ExeCheck (tag +0x0C, size +0x14, sum +0x18) before the size-0 test (15 §2.10).
+            if &d[p..p + 4] == b"VRSM" && d[p + 8] == 1 {
+                let ok = d
+                    .get(p + 0x0C..p + 0x1C)
+                    .is_some_and(|v| exe_check(&v[..8], u32_at(v, 8), u32_at(v, 12)));
+                if !ok {
+                    bail!("score.dat exesumcheck error");
+                }
+            }
             if size == 0 {
                 bail!("score.dat: empty chunk");
             }
@@ -587,15 +695,28 @@ impl ScoreDat {
         self.hscr.iter_mut().find(|h| h.0[9] != 0)
     }
 
-    // SPEC-GAP: the "new entry" byte +9 is 0 in every saved file read so far; cleared before saving.
+    // ScoreDat_Save sets the in-memory entry's +9 := 0 before copying it (15 §2.3, 16 §2.3).
     pub fn clear_new_flags(&mut self) {
         for h in &mut self.hscr {
             h.0[9] = 0;
         }
     }
 
-    // Spell_Start 0x4152A0 attempt (15 §2.5): a bad checksum zeroes all counters first, then attempts of this shot and of
-    // all shots (index 12), capped at 9999; difficulty +0x0F = this attempt's.
+    // GameMgr_LoadScoreData 0x43BBE1 (15 §2.2): the CATK block is zeroed and all 222 records stamped (magic, size,
+    // version 3, id) before the file is loaded. With the blocks kept in memory, a record that is in the file
+    // (`present`) already equals its file copy; the others become zero records with the magic.
+    pub fn stamp_catk(&mut self) {
+        for c in self.catk.iter_mut().filter(|c| !c.present) {
+            *c = Catk {
+                present: true,
+                ..Default::default()
+            };
+        }
+    }
+
+    // Spell_Start 0x4152A0 attempt (15 §2.5 steps 1–6): name and owner are written first (`strcpy`, bytes after the
+    // NUL keep their old value), then the checksum of the new name is tested with no magic test; a mismatch zeroes all
+    // counters. Attempts of this shot and of all shots (index 12) are capped at 9999.
     pub fn card_attempt(
         &mut self,
         id: usize,
@@ -608,19 +729,19 @@ impl ScoreDat {
         let Some(c) = self.catk.get_mut(id) else {
             return;
         };
-        if c.present && c.compute_checksum() != c.checksum {
+        strcpy(&mut c.name, name);
+        strcpy(&mut c.owner, owner);
+        if c.compute_checksum() != c.checksum {
             c.counters = [[0; 13]; 6];
         }
         c.present = true;
-        c.difficulty = diff;
-        c.name = [0; 48];
-        c.name[..name.len().min(47)].copy_from_slice(&name[..name.len().min(47)]);
-        c.owner = [0; 48];
-        c.owner[..owner.len().min(47)].copy_from_slice(&owner[..owner.len().min(47)]);
         let row = &mut c.counters[if practice { C_PRACTICE } else { 0 } + C_ATTEMPTS];
         for k in [shot % 12, 12] {
-            row[k] = (row[k] + 1).min(CAP);
+            if row[k] < CAP {
+                row[k] += 1;
+            }
         }
+        c.difficulty = diff;
         c.checksum = c.compute_checksum();
     }
 
@@ -873,6 +994,81 @@ mod tests {
         h.set(95_000, 3, 2, 4, b"X", "10/20");
         assert_eq!(s.insert_hscr(h), Some(1));
         assert_eq!(s.hscr.len(), 1);
+    }
+
+    // 15 §2.10: ExeCheck over the shipped list; `%d` wraps, the duplicate "0100c" tag passes on its second line.
+    #[test]
+    fn exe_check_list() {
+        let list = b"0100c 840704 1605176696\n0100c 840704 1588396223\n0100d 840704 2724749753\n";
+        let chk = |tag: &[u8], size, sum| exe_check_in(Some(list), tag, size, sum);
+        assert!(chk(b"0100d\0\xCC\xCC", EXE_SIZE, EXE_SUM));
+        assert!(chk(b"0100c\0\0\0", 840_704, 1_588_396_223));
+        assert!(!chk(b"0100d\0\0\0", EXE_SIZE, EXE_SUM ^ 1));
+        assert!(!chk(b"0100e\0\0\0", EXE_SIZE, EXE_SUM));
+        assert!(!chk(b"0100\0\0\0\0", EXE_SIZE, EXE_SUM));
+        assert!(chk(b"debug\0\0\0", 0, 0));
+        assert!(exe_check_in(None, b"xxxxx\0\0\0", 0, 0));
+        assert_eq!(scan_d(b" -5 x"), Some((-5i32 as u32, &b" x"[..])));
+
+        let Some(ar) = crate::archive::test_archive() else {
+            return;
+        };
+        let ver = ar.read(VER_LIST_NAME).unwrap();
+        assert_eq!(ver.iter().filter(|&&c| c == b'\n').count(), 15);
+        assert!(exe_check_in(Some(&ver), b"0100d\0\0\0", EXE_SIZE, EXE_SUM));
+        assert!(exe_check_in(
+            Some(&ver),
+            b"0100a\0\0\0",
+            841_216,
+            3_000_360_128
+        ));
+        set_ver_list(ver);
+        // A VRSM v1 chunk failing the check rejects the whole file (15 §2.1).
+        let mut s = ScoreDat::default();
+        let mut rng = crate::rng::Rng::seeded(1);
+        assert!(ScoreDat::parse(&s.encode(&mut rng)).is_ok());
+        s.vrsm[12] ^= 1;
+        assert!(ScoreDat::parse(&s.encode(&mut rng)).is_err());
+    }
+
+    // 15 §2.2 / §2.5 (RE-Q43): game start stamps all 222 records; Spell_Start writes the name, then tests the checksum
+    // against it, with no magic test.
+    #[test]
+    fn stamp_and_attempt() {
+        let mut s = ScoreDat::default();
+        // Hidden code +1 on a record without the magic (§2.12) is dropped by the stamp: first attempt = 1.
+        s.catk[7].counters[C_ATTEMPTS] = [1; 13];
+        s.catk[8].present = true;
+        s.catk[8].counters[C_ATTEMPTS][0] = 5;
+        s.catk[8].name[..2].copy_from_slice(b"ab");
+        s.catk[8].checksum = s.catk[8].compute_checksum();
+        s.stamp_catk();
+        assert!(s.catk.iter().all(|c| c.present));
+        assert_eq!(
+            s.catk[7],
+            Catk {
+                present: true,
+                ..Default::default()
+            }
+        );
+        s.card_attempt(7, 0, 1, false, b"card", b"owner");
+        assert_eq!(s.catk[7].counters[C_ATTEMPTS][0], 1);
+        assert_eq!(s.catk[7].counters[C_ATTEMPTS][12], 1);
+        // Same name: checksum holds, counters kept.
+        s.card_attempt(8, 0, 1, false, b"ab", b"o");
+        assert_eq!(s.catk[8].counters[C_ATTEMPTS][0], 6);
+        // A new name changes the sum: counters zeroed first; bytes after the NUL keep their old value and are not summed.
+        s.card_attempt(8, 0, 2, false, b"x", b"o");
+        assert_eq!(s.catk[8].counters[C_ATTEMPTS][0], 1);
+        assert_eq!(&s.catk[8].name[..3], b"x\0\0");
+        s.card_attempt(8, 0, 2, false, b"abc", b"o");
+        s.card_attempt(8, 0, 2, false, b"a", b"o");
+        assert_eq!(&s.catk[8].name[..3], b"a\0c");
+        assert_eq!(s.catk[8].difficulty, 2);
+        assert_eq!(s.catk[8].checksum, s.catk[8].compute_checksum());
+        // All 222 records are saved after a stamp.
+        let n = s.body().windows(4).filter(|w| w == b"CATK").count();
+        assert_eq!(n, CARDS);
     }
 
     #[test]

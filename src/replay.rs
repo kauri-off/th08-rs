@@ -168,8 +168,8 @@ impl Replay {
         self.stages.iter().position(Option::is_some)
     }
 
-    // Replay_Load 0x451D90 (15 §3.7): magic + version 6, decrypt from 0x18 with key +0x15, checksum, LZSS, slow-mode reject.
-    // SPEC-GAP: the exe check of step 5 (info +0x124/+0x128/+0x12C, 15 §2.10) is not made.
+    // Replay_Load 0x451D90 (15 §3.7): magic + version 6, decrypt from 0x18 with key +0x15, checksum, LZSS, then the
+    // slow-mode and exe-check rejects (step 5: ExeCheck of info +0x12C tag, +0x124 size, +0x128 sum, 15 §2.10).
     pub fn parse(file: &[u8]) -> Result<Self> {
         if file.len() < HEADER || &file[..4] != b"T8RP" || u16_at(file, 4) != 6 {
             bail!("not a th08 replay");
@@ -196,6 +196,13 @@ impl Replay {
         let info = img[HEADER..INFO].to_vec();
         if info[0xD9 - HEADER] != 0 {
             bail!("replay recorded in slow mode");
+        }
+        if !crate::scoredat::exe_check(
+            &info[0x12C - HEADER..0x134 - HEADER],
+            u32_at(&info, 0x124 - HEADER),
+            u32_at(&info, 0x128 - HEADER),
+        ) {
+            bail!("replay exe check");
         }
         // Header +0x20[9] record offsets and +0x44[9] fps offsets, in image coordinates (0 = stage not played).
         let offs: Vec<usize> = (0..9)
@@ -313,8 +320,6 @@ pub struct ReplayTask {
     fps_q: usize,
     // Playback's key-repeat emulation counter (0x164D53C, 15 §3.3).
     repeat_ctr: u32,
-    // Dialogue fast-forward phase (15 §3.3).
-    ff: u32,
     // Header +6 ≠ 0: Replay_PlayCalcDebug 0x4526C0 with 6-byte frames (15 §3.1).
     debug: bool,
     // +0xD8 RNG state stored by Replay_FrameHook (11 §1.4).
@@ -339,7 +344,6 @@ pub fn register(
         bonus_frames: 0,
         fps_q: 0,
         repeat_ctr: 0,
-        ff: 0,
         debug,
         rng_snap: 0,
     };
@@ -568,7 +572,7 @@ pub fn build_save(
     r.info[0x118 - HEADER..0x11C - HEADER].copy_from_slice(&slow.to_le_bytes());
     let id = r.spell_id();
     if id >= 0 {
-        // SPEC-GAP: 15 §3.6 does not name the source of the card name +0x7E; CATK[id] +0x10 is used.
+        // 48 bytes of the in-memory CATK[id] +0x10 (15 §3.6 step 1).
         let c = &g.score.catk[id as usize % crate::scoredat::CARDS].name;
         r.info[0x7E - HEADER..0xAE - HEADER].copy_from_slice(c);
     }
@@ -576,8 +580,8 @@ pub fn build_save(
     Some(r.encode(rng))
 }
 
-// USER lines `key\tvalue` (15 §3.5).
-// SPEC-GAP: the string tables of キャラ名 / 難易度 / 最終ステージ are not given; 0x4C7F4C, 0x4C7FD4, 0x4C7FAC are used.
+// USER lines `key\tvalue` (15 §3.5): キャラ名 table 0x4C7F4C with its U+3000 padding, 難易度 table 0x4C7F30,
+// 最終ステージ table 0x4C7FAC (0x453CD1, "Clear" from stage 9 on or with flags bit 4).
 fn user_lines(g: &crate::gamemgr::Game, r: &Replay, slow: f32) -> Vec<(&'static str, String)> {
     const DIFF: [&str; 5] = ["Easy", "Normal", "Hard", "Lunatic", "Extra"];
     const STAGE: [&str; 9] = [
@@ -605,7 +609,10 @@ fn user_lines(g: &crate::gamemgr::Game, r: &Replay, slow: f32) -> Vec<(&'static 
     } else if g.flags & crate::gamemgr::F_ENDING_OK != 0 {
         ("最終ステージ", "Clear".into())
     } else {
-        ("最終ステージ", STAGE[g.stage % 9].into())
+        (
+            "最終ステージ",
+            STAGE.get(g.stage).copied().unwrap_or("Clear").into(),
+        )
     };
     // HSCR +0x84 = human·10000/total (16 §2.2), printed ÷ 100.
     let human = (st.rec.human as u64 * 10000)
@@ -616,9 +623,7 @@ fn user_lines(g: &crate::gamemgr::Game, r: &Replay, slow: f32) -> Vec<(&'static 
         ("プレイ時刻", crate::supervisor::datetime_now()),
         (
             "キャラ名",
-            crate::menulist::SHOT_NAMES[r.shot() as usize % 12]
-                .trim_end_matches('　')
-                .into(),
+            crate::menulist::SHOT_NAMES[r.shot() as usize % 12].into(),
         ),
         ("スコア", format!("{}0", r.score())),
         ("難易度", DIFF[r.difficulty().min(4) as usize].into()),
@@ -680,6 +685,24 @@ fn boss_active() -> bool {
         .is_some_and(|e| e.borrow().bosses.iter().any(Option::is_some))
 }
 
+// Replay_FastForward 0x452490 (15 §3.3): true = restart the calc chain (6). The boss test 0x42F1F0 is made last.
+fn fast_forward(
+    flags: u32,
+    dialogue: bool,
+    speed: u8,
+    frame: u32,
+    boss: impl FnOnce() -> bool,
+) -> bool {
+    use crate::gamemgr::{F_CLEAR_PANEL, F_RUNNING};
+    if flags & F_RUNNING == 0 || flags & F_CLEAR_PANEL != 0 {
+        return false;
+    }
+    if dialogue && frame % 3 != 2 {
+        return true;
+    }
+    speed == 2 && frame % 5 != 4 && !boss()
+}
+
 // One playback frame from the input words at `cursor`: (input, next cursor). PlayCalc steps 1 word; PlayCalcDebug
 // (header +6 ≠ 0) steps 3 words and never reads the other two (15 §3.1). Past the end the input is 0.
 fn next_frame(words: &[u16], cursor: usize, debug: bool) -> (u16, usize) {
@@ -691,15 +714,17 @@ impl ReplayTask {
     // Replay_RecordCalc 0x452310 (15 §3.2): runs after the game objects, so frame n's input is the raw word sampled at
     // the end of frame n − 1.
     fn record(&mut self, ctx: &mut crate::game::Ctx) {
-        let g = &mut ctx.game;
+        self.record_game(&mut ctx.game, &mut ctx.input);
+    }
+
+    fn record_game(&mut self, g: &mut crate::gamemgr::Game, i: &mut crate::input::Input) {
         if g.flags & crate::gamemgr::F_RUNNING == 0 {
             return;
         }
-        let i = &mut ctx.input;
         i.game_prev = i.game;
         i.game = i.held;
         // Step 2: slow mode records nothing (Supervisor+0x1A4 bit 3 is never set in retail code).
-        // SPEC-GAP: 15 §3.2 does not say which config copy holds this slow byte; the gameplay copy is read.
+        // The slow byte is +0x25 of the gameplay config copy `*(GM+4)` (15 §3.2 step 2).
         if g.game_slow() != 0 {
             return;
         }
@@ -717,11 +742,15 @@ impl ReplayTask {
         s.inputs.push(raw);
         if self.frame % 30 == 0 {
             let q = self.fps_q;
-            // Overlapping two-byte write: fps[q] = fps | flag, fps[q+1] = fps (15 §3.2 step 5).
-            // SPEC-GAP: the port has no fps meter; fps_now is written as 60.
+            // Overlapping two-byte write: fps[q] = fps_now | flag (always 0), fps[q+1] = fps_now (15 §3.2 step 5).
+            // No fps meter: sample 0 is the carried fps_now, later samples 60, which a meter window at 60 fps
+            // has stored into fps_now by then (15 §3.2).
+            if q > 0 {
+                g.replay_fps = 60;
+            }
             s.fps.resize(q + 2, 0);
-            s.fps[q] = 60;
-            s.fps[q + 1] = 60;
+            s.fps[q] = g.replay_fps;
+            s.fps[q + 1] = g.replay_fps;
             self.fps_q += 1;
         }
         self.frame += 1;
@@ -739,7 +768,7 @@ impl ReplayTask {
     // Replay_PlayCalcDebug 0x4526C0 (15 §3.1) is the same with the input read through cursor +0x78 in 6-byte steps.
     fn play(&mut self, ctx: &mut crate::game::Ctx) {
         let g = &ctx.game;
-        // SPEC-GAP: 15 §3.3 does not say which config copy holds this slow byte; the gameplay copy is read.
+        // The slow byte is +0x25 of the gameplay config copy `*(GM+4)` (15 §3.3).
         if g.flags & crate::gamemgr::F_RUNNING == 0
             || g.game_slow() != 0
             || g.flags & crate::gamemgr::F_CLEAR_PANEL != 0
@@ -793,24 +822,20 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
             (false, _) => self.record(ctx),
             (true, TAG_MAIN) => self.play(ctx),
             // Replay_FastForward 0x452490 (15 §3.3); `replay_ff` = false is a tool switch that disables both restarts.
-            // While skippable dialogue is shown the chain is restarted on 2 of every 3 frames (15 §3.3).
+            // Only with flags bit 2 set and bit 9 clear; both tests use the replay frame counter +0: skippable dialogue
+            // first, the fast test (speed byte 2) only when it does not restart.
             (true, _) => {
-                // Fast playback (speed byte 0x164D0BD = 2): restart on every frame except frame % 5 == 4 while no boss is active.
-                // SPEC-GAP: 15 §3.3 does not say whether the fast and dialogue tests share one call; here fast wins.
-                if ctx.game.replay_ff
-                    && ctx.game.replay_speed == 2
-                    && self.frame % 5 != 4
-                    && !boss_active()
+                let g = &ctx.game;
+                if g.replay_ff
+                    && fast_forward(
+                        g.flags.get(),
+                        g.dialogue_skippable,
+                        g.replay_speed,
+                        self.frame,
+                        boss_active,
+                    )
                 {
                     return Ret::Restart;
-                }
-                if ctx.game.replay_ff && ctx.game.dialogue_skippable {
-                    self.ff += 1;
-                    if self.ff % 3 != 0 {
-                        return Ret::Restart;
-                    }
-                } else {
-                    self.ff = 0;
                 }
             }
         }
@@ -833,7 +858,6 @@ mod tests {
             bonus_frames: 0,
             fps_q: 0,
             repeat_ctr: 0,
-            ff: 0,
             debug: false,
             rng_snap: 0,
         };
@@ -1016,11 +1040,87 @@ mod tests {
         assert!(build_save(&mut g, b"A       ", &mut Default::default()).is_none());
     }
 
+    // 15 §3.3: Replay_FastForward gate (bit 2 set, bit 9 clear), dialogue test first, fast test only otherwise.
+    #[test]
+    fn fast_forward_order() {
+        use crate::gamemgr::{F_CLEAR_PANEL, F_RUNNING};
+        let no_boss = || false;
+        assert!(!fast_forward(0, true, 2, 0, no_boss));
+        assert!(!fast_forward(
+            F_RUNNING | F_CLEAR_PANEL,
+            true,
+            2,
+            0,
+            no_boss
+        ));
+        // Dialogue: restart unless frame % 3 == 2; the boss test is not made then.
+        assert!(fast_forward(F_RUNNING, true, 0, 0, || panic!(
+            "boss tested"
+        )));
+        assert!(!fast_forward(F_RUNNING, true, 0, 2, no_boss));
+        // frame 2: dialogue lets it through (2 % 3 == 2), fast restarts (2 % 5 ≠ 4); frame 29: neither.
+        assert!(fast_forward(F_RUNNING, true, 2, 2, no_boss));
+        assert!(!fast_forward(F_RUNNING, true, 2, 29, no_boss));
+        assert!(fast_forward(F_RUNNING, false, 2, 3, no_boss));
+        assert!(!fast_forward(F_RUNNING, false, 2, 4, no_boss));
+        assert!(!fast_forward(F_RUNNING, false, 2, 3, || true));
+        assert!(!fast_forward(F_RUNNING, false, 1, 3, no_boss));
+    }
+
+    // 15 §3.5: キャラ名 keeps its U+3000 padding, as in demo 0's USER text; stage ≥ 9 prints "Clear".
+    #[test]
+    fn user_chara_padding() {
+        let mut g = crate::gamemgr::Game::default();
+        g.stage = 9;
+        record_stage_start(&mut g, &Default::default());
+        let r = g.rpy.clone().unwrap();
+        let l = user_lines(&g, &r, 0.0);
+        assert_eq!(l[2], ("キャラ名", "霊夢＆紫　　　　".into()));
+        assert_eq!(l[5], ("最終ステージ", "Clear".into()));
+        let Some(ar) = crate::archive::test_archive() else {
+            return;
+        };
+        crate::scoredat::set_ver_list(ar.read(crate::scoredat::VER_LIST_NAME).unwrap());
+        let d = Replay::parse(&ar.read("demorpy0.rpy").unwrap()).unwrap();
+        let text = crate::text::decode_sjis(&d.user);
+        let want = crate::menulist::SHOT_NAMES[d.shot() as usize % 12];
+        assert!(text.contains(&format!("キャラ名\t{want}\r\n")), "{text}");
+    }
+
+    // 15 §3.2: fps sample 0 is the carried fps_now (0 after boot), later samples 60; the next stage carries 60.
+    #[test]
+    fn fps_sample0_carried() {
+        let mut g = crate::gamemgr::Game::default();
+        assert_eq!(g.replay_fps, 0);
+        record_stage_start(&mut g, &Default::default());
+        let mut t = ReplayTask {
+            play: false,
+            stage: 0,
+            cursor: 0,
+            frame: 0,
+            bonus_frames: 0,
+            fps_q: 0,
+            repeat_ctr: 0,
+            debug: false,
+            rng_snap: 0,
+        };
+        g.flags.set(crate::gamemgr::F_RUNNING);
+        let mut input = crate::input::Input::default();
+        for _ in 0..61 {
+            t.record_game(&mut g, &mut input);
+        }
+        let s = g.rpy.as_ref().unwrap().stages[0].as_ref().unwrap();
+        assert_eq!(s.fps, [0, 60, 60, 60]);
+        assert_eq!(g.replay_fps, 60);
+    }
+
     #[test]
     fn demos() {
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
+        // Demo 0 has the listed 1.00a tag/size/sum, demos 1–3 the tag "debug": all pass ExeCheck (15 §2.10).
+        crate::scoredat::set_ver_list(ar.read(crate::scoredat::VER_LIST_NAME).unwrap());
         let frames = [11083, 0, 0, 0];
         for n in 0..4 {
             let f = ar.read(&format!("demorpy{n}.rpy")).unwrap();

@@ -208,6 +208,7 @@ pub struct Game {
     pub rpy: Option<crate::replay::Replay>,
     pub replay_ff: bool,
     pub dialogue_skippable: bool,
+    // fps_now u8 0x17CE8F0 (15 §3.2): 0 at boot, carried across scenes and games; red flag 0x17CEA94.
     pub replay_fps: u8,
     pub replay_fps_red: bool,
     pub noclip: bool,
@@ -281,7 +282,7 @@ impl Default for Game {
             rpy: None,
             replay_ff: true,
             dialogue_skippable: false,
-            replay_fps: 60,
+            replay_fps: 0,
             replay_fps_red: false,
             noclip: false,
             watched_replay: false,
@@ -692,8 +693,9 @@ impl GameManager {
         st.max_point = crate::player::MAX_POINT[d];
         st.extends = 0;
         st.next_extend = crate::item::next_extend(d as i32, 0);
-        // GameMgr_LoadScoreData: flush (Result mode 2), hiscore, practice play count, CATK backup.
+        // GameMgr_LoadScoreData: flush (Result mode 2), CATK stamp, hiscore, practice play count, CATK backup.
         g.save_score(rng, true);
+        g.score.stamp_catk();
         let shot = g.shot as usize % 12;
         // Hiscore-continues digit stats+0x18 from the top HSCR entry, also in practice (11 §5, 15 §2.3).
         st.hiscore_cont = g.score.hiscore_continues(shot, d);

@@ -65,10 +65,12 @@
 - Whole file: archive block cipher (key 0x59, step 0x79, block 0x100, limit 0xC00); then from byte 1 a rolling XOR (`acc = rotl8(acc + plain[i], 3); b[i+1] ^= acc`).
 - Header 0x1C: u8 0, u8 random, u16 checksum (Σ bytes 4.. of the decoded file), u16 version 1, u8 random, u32 0x1C, u32 ptr, u32 total size, u32 body size, u32 compressed size; body LZSS.
 - Chunks {magic, u16 size ×2, u8 version, 3 pad}: TH8K 0xC/1, HSCR 0x168/4, CLRD 0x24/4 ×13, CATK 0x22C/3, PSCR 0x178/2, LSNM 0x18/1, FLSP 0x20/1, PLST 0x228/2, VRSM 0x1C/1 (written in this order). Verified: the real file's body re-encodes byte-identically.
+- VRSM +0x0C tag char[8] "0100d", +0x14 exe size 840704, +0x18 exe sum 0xA26861B9; on load every VRSM v1 chunk must pass ExeCheck against `th08_0100d.ver` (th08.dat member: 15 lines `tag size sum\n`, numbers read as wrapping 32-bit `%d`; tag "debug" always passes) (15 §2.10).
 
 ## .rpy — source: specs/15 §3, 11 §6 (src/replay.rs)
 - Header 0x68: "T8RP", u16 6, u8 debug, +0xC size w/o USER, +0x10 checksum 0x3F000318 + Σ plain bytes from 0x15, +0x15 key; bytes 0x18.. encrypted `b += key; key += 7`; +0x18 compressed size, +0x1C image size − 0x68, +0x20/+0x44 u32[9] stage / fps offsets (image coordinates).
 - Image = header + info (0x68..0x134) + per stage: 0x24-byte record + u16 input words (dummy 0 first) + fps bytes. USER text section after the compressed body.
+- Load also rejects info +0xD9 ≠ 0 and an ExeCheck fail of info +0x12C tag / +0x124 size / +0x128 sum (15 §3.7).
 - USER: "USER", u32 length incl. the 12-byte head, u8 type 0, 3 bytes; Shift-JIS `key\tvalue\r\n` lines (name, time, character, score, difficulty, last stage / card, misses, bombs, slowdown, human rate, version), NUL, padded to even. Info +0x11C clear status (route byte), +0x7E card name, +0x114/+0x118 slowdown + 1.12 / slowdown.
 
 ## .end (ending / staff scripts) — source: specs/16_endings_result.md §1.3 (src/ending.rs)

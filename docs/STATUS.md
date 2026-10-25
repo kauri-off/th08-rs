@@ -655,6 +655,18 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl110 (RE-Q40 CODE BUG 1–5, RE-Q43 Q3): ExeCheck (15 §2.10) — `th08_0100d.ver` read from th08.dat at boot
+  (missing → start-up error), `scoredat::exe_check` (debug tag, line walk, wrapping `%d`, over-run = fail); every VRSM
+  v1 chunk of score.dat (before the size-0 test) and the replay info +0x12C/+0x124/+0x128 (15 §3.7 step 5) go through
+  it, a fail rejects the file. Replay: USER キャラ名 keeps its U+3000 padding, 最終ステージ "Clear" from stage 9 (15
+  §3.5); fps sample 0 = carried fps_now (`Game::replay_fps`, 0 at boot, last playback byte, else 60) (15 §3.2);
+  `Replay_FastForward` gated on bit 2 / !bit 9, dialogue test first on the replay frame counter (`frame % 3 ≠ 2`), fast
+  test only otherwise (15 §3.3). CATK (15 §2.2, §2.5): game start stamps all 222 records (`ScoreDat::stamp_catk`, so
+  saves write all 222); `card_attempt` strcpy's name/owner first, tests the checksum (name summed up to the NUL) with
+  no magic guard, `< 9999` cap. RE-Q40 "right" markers closed with spec refs. Tests `scoredat::exe_check_list`,
+  `stamp_and_attempt`, `replay::fast_forward_order`, `user_chara_padding`, `fps_sample0_carried`. SPEC-GAP 33 → 19.
+  Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync; gameover_save 4214, options_cfg 1887,
+  musicroom_practice 3505 (unchanged). Questions: `docs/briefs/IMPL110_QUESTIONS.md`.
 - impl109 (RE-Q39 CODE BUG 1–10, IMPL108 Q1, music room 16 §5.2/§5.3, 02 §4, 10 §6): COLORREF colours, black
   outline always (4th arg = mode only, `Raster::render_coloured` removed), full 7-line warning table, comments
   0xFFE0C0, cursor = byte 0x7F (ascii sprite 126) and numbers in the row VM colour; Calc: state, sub-frame reset on a

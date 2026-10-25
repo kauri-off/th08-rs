@@ -178,7 +178,7 @@ Natives 4, 7, 9, 11, 13, 16, 21, 25 ✅ impl72 (`eclvm.rs:1098`); timeline op 9 
 `replay.rs:493`) ✅ impl69; hidden unlock code (15 §2.12, `result.rs:295`) ✅ impl71; D → score.txt (16 §2.7) ✅ impl71;
 key config (15 §1.3) ✅ impl68; MIDI и «music off» (`audio.rs:212`; music off ✅ impl70, MIDI открыт); джойстик и ShotSlow
 ✅ impl68 (`input.rs:24`); чтение и запись th08.cfg (`game.rs:43`, `config.rs:88`) ✅ impl67; frame skip cfg+0x23
-(`game.rs:135`) ✅ impl67; проверка VRSM / exe (15 §2.10); `Replay_FrameHook` prio 7 ✅ impl73 (11 §1.4, 15 §3.1,
+(`game.rs:135`) ✅ impl67; проверка VRSM / exe (15 §2.10) ✅ impl110; `Replay_FrameHook` prio 7 ✅ impl73 (11 §1.4, 15 §3.1,
 `replay.rs`); USER-секция replay ✅ impl69; уведомления info00–02.jpg (16 §4, `menu.rs:810`) ✅ impl71; 3600-кадровый
 idle-выход и return 5 из опций ✅ impl68 (`menu.rs:623`); slow-mode OR-накопление ввода ✅ impl73 (11 §7, `supervisor.rs`);
 sound flush после SE 10 в главном меню и на Left в списке карт ✅ impl73 (12 §2.2, 16 §6.2, `menu.rs`, `menulist.rs`).

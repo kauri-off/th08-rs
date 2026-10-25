@@ -163,7 +163,7 @@ impl Config {
         log::warn!("th08.cfg: コンフィグデータが異常; using defaults");
         let mut c = Self::default();
         // A missing thbgm.dat only matters when the defaults are applied (02 §1); a valid cfg keeps its mode.
-        // SPEC-GAP: the message box 0x437CDD shown here has no text in the spec; the port logs a warning.
+        // The original calls the empty function 0x437CDD here: nothing is shown (15 §1.2); the log line is the port's.
         if bgm_header.is_none() {
             log::warn!("thbgm.dat missing; music mode 2 (MIDI)");
             c.music = 2;

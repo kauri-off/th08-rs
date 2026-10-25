@@ -32,9 +32,9 @@ pub struct Supervisor {
     fps_frames: u32,
 }
 
-// The logo stays up while the loader threads run (12 §1: no fixed time).
-// SPEC-GAP: the holds were measured on the original's draw log: 13 boot frames, then the menu loader until scene
-// frame 34 (33 when the menu is entered again).
+// The boot and menu-load holds end when the loader threads finish (Supervisor_Calc returns 1 until then; MainMenu
+// +0x14434), host-timed (12 §1, 11 §7), so any fixed count is allowed: 13 boot frames, then the menu loader until
+// scene frame 34 (33 when the menu is entered again).
 const BOOT_FRAMES: u32 = 14;
 const MENU_LOAD_BOOT: u32 = 34;
 const MENU_LOAD: u32 = 33;
@@ -108,8 +108,8 @@ pub fn setup_ending(g: &mut Game, s: &Settings, e: &Ending) {
 
 impl Supervisor {
     // Fps_Update 0x446F53 playback text (15 §3.3): "%2d" of fps_now at (384, 448), yellow or red with the flag.
-    // The original refreshes on a host-timed 500 ms window, which 15 §3.3 says cannot be reproduced.
-    // SPEC-GAP: fixed rule here, every 30 gameplay calcs on the 3rd of each (demo 0 / 2 phase, from traces).
+    // The original refreshes on a 500 ms meter window continuous since boot, whose phase cannot be reproduced
+    // (15 §3.3); the port refreshes every 30 gameplay calcs, on the 3rd of each.
     fn replay_fps(&mut self, ctx: &mut Ctx) {
         let g = &ctx.game;
         if g.loading != 0 || g.scene != gamemgr::SCENE_GAME {
@@ -267,7 +267,7 @@ impl Supervisor {
         g.previous = cur;
         if req < 0 {
             // The quitting frame is not drawn or presented; the score.dat flush follows it (`Ctx::exit_save`, 15 §2.2).
-            // SPEC-GAP: 6 → −1 also finishes the replay in 11 §7; the port does not.
+            // 6 → −1 (Replay_Finish(0), then quit) is unreachable: no −1 request can happen in scene 6 (11 §7).
             return Ok(Some(Ret::Quit));
         }
         log::info!("scene {cur} -> {req} (calc {})", ctx.frame);
@@ -374,7 +374,8 @@ impl Supervisor {
             _ => log::warn!("unhandled scene switch {cur} -> {req}"),
         }
         // The raw input words are cleared so the new scene sees no held keys (11 §7).
-        // SPEC-GAP: the +0x154 counter's "config re-check every 4000 frames" (11 §7) has no condition or action in the spec.
+        // +0x154: ExeCheck of the running exe every 4000 frames (11 §7); with the 1.00d constants it always passes
+        // (15 §2.10), so the port does not count it.
         ctx.input.held = 0;
         ctx.input.prev = 0;
         ctx.game.scene = ctx.game.requested;
