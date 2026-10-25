@@ -713,3 +713,13 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   Supervisor_Calc returns 1 while Supervisor_Init runs, menu hold = MainMenu+0x14434; Fps_Update window never reset
   (phase from boot); 0x437CDD is an empty debug print; ScoreDat_Save clears HSCR +9 in place; fps_now carried into
   sample 0 (q22 original replay: 0 then 60s).
+
+# RE-Q41 (2026-10-25) — SPEC-GAP batch 7, input / audio / misc (8 markers) — DONE (specs/changelog/answers_re_q41.md)
+- Code + one runtime harness (re/work/runs/q41/CHECKPOINT.md). 4 right (audio 247, sound 97, eclvm 414, joystick 58),
+  4 CODE BUG (input keypad, MIDI missing, TRIANGLE filter, retry fade-in) + continue-menu music.
+- NEW HARNESS re/work/runs/q41/tri/: tri.c = minimal proxy d3d8.dll calling an exe function (0x47ABAB) from Present on
+  synthetic surfaces (game dir = symlinks + copied exe/cfg; run.sh with TRI_FMT). Pattern reusable for any pure exe
+  routine (D3DX conversions, filters). Model scat2.py: 0 mismatches.
+- Key facts: TRIANGLE 2:1 = per-axis (1,7,7,1)/16, wrap, unweighted channels, f32 v·(1/31), acc in source order,
+  trunc(x·q+0.5); text textures A4R4G4B4 512 wide → always 2:1. BGM fade modes 1–4 (0x472B50…0x472CC0), setters
+  0x406AC0 (mode 2) / 0x406B40 (4) / 0x406BB0 (3); MIDI player fully decoded (02 §5; CC2/CC4 loop in all .mid).

@@ -313,7 +313,11 @@ frame. Unreachable with the shipped data: pending is set only by op 125 (0 uses)
 (runs before all enemies, §10.1 step 1, so the main context, visited first, always takes it).
 **No registration test** (VERIFIED handler 0x41C88A–0x41C93C and `Ecl_SetSub` 0x418450, RE-Q35): sub := e+0x2CF0[k]
 is passed straight to `Ecl_SetSub`, with no range test on k. An index never set by op 126 holds the template's 0, so the
-main context enters **sub 0**. `Ecl_SetSub` with sub < 0 returns without touching the context, but the rest of the
+main context enters **sub 0**. The test at the LOOP is `movsx` i16 e+0x2D30 ≥ 0 (negative = none), and the handler reads
+`word [e + 0x2CF0 + 2k]` for any k 0…32767 (VERIFIED 0x418510, 0x41C8E2, RE-Q41): k = 32 reads the pending word itself
+(sub := 32), k ≥ 33 reads the following enemy fields as i16 (e+0x2D32 + 2(k − 33): e+0x2D32 padding, then the halves of
+the position f32s at e+0x2D34…). The writers store a 16-bit word (e.g. `Ecl_Run` 0x41AF4F);
+the shipped data only ever sends k = 1. `Ecl_SetSub` with sub < 0 returns without touching the context, but the rest of the
 handler still runs: the current instruction is skipped, the push (unless bit 26), depth += 1, pending := −1; the main
 context keeps its ip and clock. Unreachable with the shipped data: every op 126 registers index 1, and every
 timeline op 8 sends index 1 to a boss whose sub has registered it (ecl_dis scan; the sessions stay in sync with a port

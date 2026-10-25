@@ -30,14 +30,14 @@ ids, sounds and file effects are all in a numbered spec; PARTIAL lists exactly w
 | score.dat (all chunks, load/save, unlocks) | 15 §2 | COVERED |
 | th08.cfg + option menu + key config | 15 §1.1–1.3, 12 §2.7 | COVERED (pad-button assignment needs a joystick; rule in 15 §1.3) |
 | Endings + staff roll | 16 §1, §3 | COVERED |
-| Music room | 16 §5 | COVERED for WAV mode; **PARTIAL**: MIDI mode (cfg +0x1F = 2) playback is MISSING (§2 row) — in WAV mode nothing is missing |
+| Music room | 16 §5 | COVERED (MIDI mode playback: 02 §5, RE-Q41) |
 | Spell practice + Last Word | 12 §2.6, 16 §6, 11 §3.2 | COVERED |
 | Stage practice | 12 §2.5, 11 §3.2, 15 §2.6 | COVERED |
 | Result viewer (main menu "Result"), score.txt | 16 §2.4, §2.7 | COVERED |
 
 **PARTIAL / MISSING (complete list):**
-- MISSING: MIDI music mode (SMF player 0x443C60–0x445440: timing, loop, fade, volume, `init.mid`). Only reachable when
-  the option BGM = Midi or `thbgm.dat` is invalid.
+- (was MISSING) MIDI music mode: specified in 02 §5 (RE-Q41). Only reachable when the option BGM = Midi or
+  `thbgm.dat` is invalid.
 - PARTIAL: LZSS encoder (any valid stream decodes; byte-identical score.dat/replays not required, INFERRED).
 - PARTIAL by nature: GDI text pixels (10 §6; a 7/14 px monospace font reproduces the layout).
 - PARTIAL: Screenshot 16-bit back-buffer branch (00 §2; 24-bit path specified).
@@ -124,7 +124,7 @@ Most of the 45 KB is covered by behaviour, not by address: ECL natives 07 §12, 
 | Spell-card background, natives 3/6/20 mask | 13 §5, 07 §12.1 | COVERED | `Stage_SpellMaskCallback` 0x4235A0 |
 | Sound effects | 13 §1 | COVERED | `Sound_LoadSE` 0x45D3F0, `Sound_Play` 0x45D550, `Sound_Update` 0x45D790 |
 | BGM: WAV streaming (thbgm.dat) | 02 | COVERED (DirectSound streaming internals 0x4718D0…0x473790 are platform) | `Music_Play` 0x447D56, `Music_PlaySlot` 0x447E47, `Music_PlayFile` 0x447F21, `Music_Fade` 0x4480F8, `Bgm_*` 0x45C6B0…0x45D2D0, `WaveStream_*` 0x4733E0 / 0x473530 |
-| BGM: **MIDI mode** (cfg +0x1F = 2) | 02 (mentions only) | **MISSING**: SMF player, timer, loop, fade, volume, init.mid | 0x443C60…0x445440 (midiOut*, timeSetEvent; main 0x444820 / 0x444A90 / 0x445340, open 0x4442E0, play 0x444620, stop 0x444680, fade 0x4447D0) |
+| BGM: **MIDI mode** (cfg +0x1F = 2) | 02 §5 | COVERED (RE-Q41): SMF player, 1 ms timer, CC 2/CC 4 loop, fade, CC 7 scaling, init.mid | 0x443C60…0x445440 (midiOut*, timeSetEvent; main 0x444820 / 0x444A90 / 0x445340, open 0x4442E0, play 0x444620, stop 0x444680, fade 0x4447D0) |
 
 ## 3. Gameplay
 
@@ -181,7 +181,7 @@ quoting its addresses.
 | range | size | what it is | status |
 |---|---|---|---|
 | 0x475270 | 6.8 KB | LZSS encoder (writer side) | PARTIAL, not needed (see §1) |
-| 0x443C60–0x445440 | ~5 KB | MIDI player | MISSING |
+| 0x443C60–0x445440 | ~5 KB | MIDI player | COVERED 02 §5 (RE-Q41) |
 | 0x4718D0–0x473790 | ~6 KB | DirectSound buffers, streaming thread, sound-manager ctor (0x45C190 / 0x45C4B0, SetTimer) | platform; behaviour covered by 02 / 13 |
 | 0x423400–0x425300 | ~5 KB | ECL natives 2, 4, 7, 8, 9, 11, 16, 21, 25, 27, 28 | behaviour covered, 07 §12 |
 | 0x46F429–0x47052D, 0x46FDC2, 0x464EC0 | ~5 KB | main-menu list draws | COVERED |
@@ -196,5 +196,5 @@ quoting its addresses.
 
 ## 6. What the port still needs from RE
 
-As of RE-Q23 (see §A): only the MIDI music mode is unspecified. Runtime traces, menu/result layouts, score.txt and
+As of RE-Q41 the MIDI music mode is specified too (02 §5); as of RE-Q23 (see §A) it was the only unspecified part. Runtime traces, menu/result layouts, score.txt and
 the small-helper mop-up are done. Open implementer questions go through `docs/briefs/IMPLn_QUESTIONS.md`.

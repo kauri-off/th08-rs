@@ -532,7 +532,7 @@ capture VM (+0x1A70) with VM flag bit 13 set (z-write off) via `Draw2DSnap`; the
 | 7 / 8 | retry: "yes" / "no" | confirm on 7 → 10, on 8 → back to 3 |
 | 4 | closing | after 20 frames: paused = 0, sound resumes |
 | 9 | quit | after 20 frames: scene 1, paused = 0, `Result_Register(2)` (save) |
-| 10 | retry | after 20 frames: spell practice / practice / Extra → music: outside spell practice, or in spell practice when the card's 0x4C7670 record flag +0x10 = 1, `Music_Stop`; else sound command 7 "UnPause" and `0x406AC0(2.0)` on the BGM stream (state 2, volume −10000: a 2 s fade-in, INFERRED) — the music is not stopped; then scene 11 (the new GM replays slot 0 only in the `Music_Stop` cases, 11 §4 step 3; VERIFIED 0x4037B0, RE-Q36); else scene 10 |
+| 10 | retry | after 20 frames: spell practice / practice / Extra → music: outside spell practice, or in spell practice when the card's 0x4C7670 record flag +0x10 = 1, `Music_Stop`; else sound command 7 "UnPause" (`0x406C50`, queued) and then `Bgm_StartFadeIn(2.0)` 0x406AC0 (immediate: a 2 s = 120-frame fade-in from −10000, 02 §4 "Fade-in", VERIFIED RE-Q41) — the music is not stopped; then scene 11 (the new GM replays slot 0 only in the `Music_Stop` cases, 11 §4 step 3; VERIFIED 0x4037B0, RE-Q36); else scene 10 |
 
 Shortcut keys at any time: ESC → close (4); Q → quit (9); R → retry (10, not in replay). All confirms play
 sfx 10, cursor moves sfx 0 (`se_plst00`).
@@ -551,6 +551,13 @@ state := 2 (or 1, see above) with frame := 0 and falls through into the state-2/
 VM is run once more at the end of every call, and frame += 1. So state 0 never lasts a whole frame: the first drawn
 frame shows the menu VMs and the capture VM at script time 2. (State 0 also has a `frame > 8 → stay` exit that cannot
 happen, because frame is 0 on entry.)
+**Music** (VERIFIED 0x404890, RE-Q41). Opening (state 0, after the early exits): in spell practice when the card's
+BGM-restart flag (`Spell_BgmRestartFlag` 0x439916 on card 0x164D0B8, the 0x4C7670 record flag of 12 §3 state 10) is 0,
+`Bgm_StartDip(1.0)` (02 §4: the music **keeps playing** and drops to −10 dB over 60 frames); otherwise sound command 6
+"Pause" (WAV mode: the buffer is paused at its position). Confirming "Yes" in spell practice or Extra (difficulty > 3):
+not spell practice, or restart flag ≠ 0 → `Music_Stop`; else game_over := 0, command 7 "UnPause" and
+`Bgm_StartFadeInFromDip(1.0)` (−10 dB → 0 over 60 frames); then scene 11 and `Hud_StageTransition`. Confirming "Yes"
+for a normal continue: command 7 "UnPause" (no fade; the paused music resumes).
 
 **Draw** (`ContinueMenu_Draw` 0x4052B0, from the ASCII manager draw, only while game_over 0x164D0BB ≠ 0; VERIFIED):
 flush the sprite batch, set the D3D viewport to the playfield (x 32, y 16, w 384, h 448 from 0x164D2DC…0x164D2E8,

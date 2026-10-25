@@ -282,12 +282,30 @@ Rasteriser (font size > 8 path, always taken for dialogue, 0x43F9C8):
   0x302080 / 0x100040 / 0x300000, 16 §5) get the ±2 px black outline (VERIFIED 0x43F9C8, RE-Q39). The `colour` argument
   goes to `SetTextColor`, a COLORREF 0x00BBGGRR.
 - Copy: `D3DXLoadSurfaceFromSurface` (statically linked D3DX8, 0x47ABAB, colour key 0) from src rect (0, 0, min(2w,1024), 2·size) to the texture's dest rect
-  (0, y, w, y + size·scale_y) with filter TRIANGLE (4) → 2:1 box-like downsample. The whole row strip is
-  replaced (anything left of x is cleared too).
+  (0, y, w, y + size·scale_y) with filter TRIANGLE (4), no dither. Exactly: src = (0, 0, min(2W, 1024), 2·trunc(fs1·sx)),
+  dst = (0, Y, W, Y + trunc(fs2·sy)) with W = texture-row width, fs1/fs2 = VM bytes +0x298/+0x299 (< 1 → 15) and
+  sx/sy = the sprite's texture scale (sprite +0x38/+0x3C) (VERIFIED `Text_Render` 0x466310, 0x43FC44–0x43FCB5, RE-Q41).
+  All four text textures (`@` entries of text/music00/resulttext.anm) are 512 wide, A4R4G4B4 (format 5), created at
+  their header size, so sx = sy = 1 and the copy is always an exact **2:1 in both axes** (1024×2s → 512×s). The whole
+  row strip is replaced (anything left of x is cleared too). Filter arithmetic below ("TRIANGLE 2:1").
 - (Font size ≤ 8 path 0x43FCE9: weight 400, height 16 at 2×; used by other callers. Same DIB passes, with the region width = the full 1024-pixel DIB row.)
-- The TRIANGLE filter is code inside th08.exe (static D3DX8, 0x47ABAB → 0x47A586 / 0x47BA21 / 0x48104D…; also used by the
-  playfield captures and THTX texture loads), so its exact arithmetic is reversible from the exe; not yet specified
-  (open, RE-Q36). The glyph pixels themselves come from the platform's GDI font and are not reproducible.
+- **TRIANGLE 2:1** (static D3DX8 in th08.exe, 0x47ABAB → 0x47A586 → 0x480F33; VERIFIED RE-Q41 by calling 0x47ABAB inside
+  the running original on synthetic A1R5G5B5 1024×{30,32}/640×30 sources into A4R4G4B4 and A8R8G8B8 512×256
+  textures: the model below reproduces all 482 048 channel values (4 channels) of 16 random cases exactly in both formats, and every
+  impulse response). For a source of size Sw×Sh and destination Dw = Sw/2, Dh = Sh/2:
+  1. Each channel is filtered independently, **not** alpha-weighted (an alpha-0 white pixel still adds white):
+     value = v · f32(1/31) for the 5-bit R, G, B, and the alpha bit as 0.0 / 1.0 (all f32).
+  2. Per axis, destination index j takes the source taps 2j−1, 2j, 2j+1, 2j+2 with weights 1/16, 7/16, 7/16, 1/16; the
+     tap indices **wrap** modulo the source rect size (column 0 also feeds destination column Dw−1, column Sw−1 feeds
+     column 0; likewise rows: source row 0 adds 1/16 to the strip's last row and row Sh−1 to its first). Nothing
+     outside the source rect is read.
+  3. acc (f32, starts 0) += f32(wy·wx) · value over the 16 taps, ordered by **source row index, then source column
+     index** (so at a wrapped edge the wrapped tap comes first or last). The order only matters for exact ties.
+  4. Output channel = trunc(acc·q + 0.5) with q = 15 for A4R4G4B4 (the text textures), 255 for 8-bit formats.
+  Example: one white opaque source pixel gives 0x3333 in its destination pixel and nothing elsewhere in A4R4G4B4
+  (49/7/7/1 out of 255 in A8R8G8B8 over the 2×2 destination pixels it touches). Filter 4 without the dither flag
+  never dithers. Other ratios are never used by the text path (not specified).
+  The glyph pixels themselves come from the platform's GDI font and are not reproducible.
 
 Text colours (`tbl 0x4C7180`, identical for all 12 shot types), COLORREF 0x00BBGGRR:
 

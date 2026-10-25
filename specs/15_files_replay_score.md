@@ -53,8 +53,13 @@ Pad buttons are DirectInput button indices; −1 means no button.
 **Keyboard mapping** (`Input_Poll` 0x43D970, VERIFIED disassembly, RE-Q25). The raw word starts at 0; each mapped key
 whose state byte has bit 7 set ORs its bits in; then the joystick bits are ORed (below). With the DirectInput keyboard
 (device 0x17CE768 ≠ 0) the state comes from `GetDeviceState` (DIK scan codes); when the device pointer is null,
-from `GetKeyboardState` (VK codes). A failed `GetDeviceState` re-acquires the device and
-returns the joystick bits only (INFERRED).
+from `GetKeyboardState` (VK codes). The DirectInput keyboard is created at boot (`FUN_00446A37`) unless config +0x38
+bit 11 (Supervisor +0x150, "DirectInput off") is set or creation fails, so the **DIK path is the normal one**. A failed
+`GetDeviceState` (any non-zero result, `DIERR_INPUTLOST` included) calls `Acquire` and returns the joystick bits only:
+the raw word is zeroed after the call and passed to `Input_PollJoystick` with no key bits (VERIFIED 0x43DD3C–0x43DD99,
+RE-Q41). No other keys are mapped; in particular the DIK path maps only the main Enter (0x1C), not keypad Enter (0x9C),
+while the VK path's `VK_RETURN` 0x0D covers both, and VK Shift/Ctrl (0x10/0x11) cover both sides
+(full table re-verified from the disassembly, RE-Q41).
 
 | bits | VK path | DIK path |
 |---|---|---|
@@ -78,7 +83,11 @@ VERIFIED, changelog/answers_phase7.md §5):
 - Directions, winmm: q = range/4 around the axis centre (JOYCAPS read at 0x164D388: wXmin/wXmax 0x164D3AC/0x164D3B0,
   wYmin/wYmax 0x164D3B4/0x164D3B8); x > centre + q → Right, x < centre − q → Left, y > centre + q → Down,
   y < centre − q → Up. DirectInput (DIJOYSTATE): lX > +0x18 → Right, lX < −(+0x18) → Left, lY > +0x1A → Down,
-  lY < −(+0x1A) → Up (defaults 600).
+  lY < −(+0x1A) → Up (defaults 600). Axis range: at device creation (`FUN_00446A37`: `SetDataFormat(c_dfDIJoystick)`,
+  `SetCooperativeLevel(hwnd, 10)`, `GetCapabilities`, `EnumObjects(0x445E3D, 0, DIDFT_ALL)`) the callback sets
+  `DIPROP_RANGE` {lMin −1000, lMax +1000} (`DIPH_BYID`, dwObj = the object's dwType) on **every** object whose type has
+  bit 0 or 1 set (relative or absolute axis); a failing `SetProperty` stops the enumeration. So the default threshold
+  600 = 60 % deflection (VERIFIED 0x445E3D, RE-Q41).
 - **+0x26 ≠ 0 "shot also focuses"** (0x43EF50): u16 counter 0x164D51C, once per poll. Shot button down: counter += 1
   if < 20; if counter > 9 add Focus. Shot button up: counter < 11 → counter := 0, else counter −= 10 and add Focus.
   So holding the pad's shot button for 10 polls also focuses, and focus stays for one poll after release. Keyboard
