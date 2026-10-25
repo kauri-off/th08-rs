@@ -43,27 +43,21 @@ pub fn parse(file: &[u8]) -> Result<Song> {
 }
 
 // Track record (0x20 bytes at +0x138): +0 active, +4 next event time, +0xC running status, +0x14 read pointer (at
-// the next event's status byte, its delta already added to `next`).
+// the next event's status byte, its delta already added to `next`), +0x18/+0x1C CC 2 copies of +0x14/+4.
 #[derive(Clone, Debug, Default)]
 struct Track {
     active: bool,
     next: u64,
     running: u8,
     pos: usize,
+    loop_pos: usize,
+    loop_next: u64,
 }
 
-// CC 2 loop-start copies: per-track +0x18/+0x1C and tempo/T/B +0x2EC…+0x2FC.
-#[derive(Clone, Debug)]
-struct LoopStart {
-    tracks: Vec<(usize, u64)>,
-    tempo: u32,
-    t: u64,
-    b: u64,
-}
-
-// The MIDI object's playback state (02 §5 "Object"); the per-channel bookkeeping other than CC 7 (note bitmap, program,
-// bank, pan, CC 91/93) has no reader in 02 §5 and is not kept.
+// The MIDI object (02 §5 "Object"), one per run: +0x2CC and the raw CC 7 bytes carry over between songs. The
+// per-channel bookkeeping other than CC 7 (note bitmap, program, bank, pan, CC 91/93) has no reader in 02 §5.
 pub struct Sequencer {
+    // Parsed tracks of the open file; none after `Midi_Open` of a null slot (+0x138 = 0).
     song: Song,
     tracks: Vec<Track>,
     // +0x124 µs per quarter note, +0x128 elapsed timer ticks T, +0x130 tick base B.
@@ -79,7 +73,8 @@ pub struct Sequencer {
     fade_counter: u32,
     // Per-channel raw CC 7 (+0x15).
     cc7: [u8; 16],
-    loop_start: Option<LoopStart>,
+    // CC 2 copies of tempo/T/B (+0x2EC…+0x2FC); None = no CC 2 since boot (heap content in the original).
+    loop_timing: Option<(u32, u64, u64)>,
 }
 
 // Byte reader over one track body; reading past the end yields None (a truncated track then ends).
@@ -115,30 +110,54 @@ impl Reader<'_> {
     }
 }
 
+impl Default for Sequencer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Sequencer {
-    // Midi_Open: tempo := 1 000 000; Midi_Play then rewinds.
-    pub fn new(song: Song) -> Self {
-        let mut s = Self {
-            tracks: vec![Track::default(); song.tracks.len()],
-            song,
-            tempo: OPEN_TEMPO,
+    // Midi_Ctor 0x443FA0: no tracks, tempo 0, factor 0.0, +0x2CC = 0. The raw CC 7 bytes are heap content in the
+    // original (02 §5), 0 here.
+    pub fn new() -> Self {
+        Self {
+            song: Song {
+                format: 0,
+                division: 0,
+                tracks: Vec::new(),
+            },
+            tracks: Vec::new(),
+            tempo: 0,
             t: 0,
             b: 0,
-            factor: 1.0,
-            // SPEC-GAP: Midi_Ctor's initial +0x2CC and raw CC 7 values are not given; 128 (= factor 1) and 0 assumed.
-            last_q: 128,
+            factor: 0.0,
+            last_q: 0,
             fade: false,
             fade_len: 0,
             fade_counter: 0,
             cc7: [0; 16],
-            loop_start: None,
-        };
-        s.rewind();
-        s
+            loop_timing: None,
+        }
+    }
+
+    // Midi_Open 0x4442E0: the parsed tracks are freed first; a null slot leaves none. Else the track array is zeroed
+    // (+0x1C = 0) and tempo := 1 000 000. +0x2CC, the channel state and the tempo/T/B copies are kept.
+    pub fn open(&mut self, song: Option<Song>) {
+        self.tracks.clear();
+        self.song.tracks.clear();
+        let Some(song) = song else { return };
+        self.tracks = vec![Track::default(); song.tracks.len()];
+        self.song = song;
+        self.tempo = OPEN_TEMPO;
+    }
+
+    // +0x138 ≠ 0: `Midi_Play` / `Midi_Stop` return −1 at once without it.
+    pub fn has_tracks(&self) -> bool {
+        !self.tracks.is_empty()
     }
 
     // Midi_Rewind 0x444550: factor 1, fade off, T = B = 0, every track active, read pointer := start, next time :=
-    // first delta. Tempo is not reset.
+    // first delta, +0x18 := start (at the first delta); +0x1C and tempo are not reset.
     pub fn rewind(&mut self) {
         self.factor = 1.0;
         self.fade = false;
@@ -155,6 +174,8 @@ impl Sequencer {
                 next: first.unwrap_or(0) as u64,
                 running: 0,
                 pos: r.pos,
+                loop_pos: 0,
+                loop_next: self.tracks[i].loop_next,
             };
         }
     }
@@ -199,10 +220,11 @@ impl Sequencer {
             self.last_q = q;
             self.fade_counter += 1;
         }
-        // SPEC-GAP: "no track was active at step 3" read as: none active when step 3 starts (rewind one tick later).
-        let any = self.tracks.iter().any(|t| t.active);
+        // Step 4's "active" flag is set when step 3 reaches an active track, before its events run (02 §5).
+        let mut any = false;
         let mut pos = self.pos();
         for i in 0..self.tracks.len() {
+            any |= self.tracks[i].active;
             while self.tracks[i].active && self.tracks[i].next <= pos {
                 if self.event(i, out).is_none() {
                     self.tracks[i].active = false;
@@ -272,16 +294,15 @@ impl Sequencer {
                     0x51 => {
                         self.b = self.pos();
                         self.t = 0;
-                        self.tempo = data.iter().fold(0, |v, &b| (v << 8) | b as u32);
+                        // Original bug kept (02 §5): tempo := tempo·256 + b + tempo per byte, i.e. ·257, ≈ 0.75 % slow.
+                        self.tempo = data.iter().fold(0u32, |v, &b| {
+                            (v << 8).wrapping_add(b as u32).wrapping_add(v)
+                        });
                     }
                     _ => {}
                 }
             }
-            // SPEC-GAP: 0xF7 / 0xF1–0xFE are not in 02 §5; skipped as length-prefixed (F7) or bare (others).
-            0xF7 => {
-                let n = r.vlq()? as usize;
-                r.bytes(n)?;
-            }
+            // 0xF1–0xFE (0xF7 included) read no data bytes and send nothing (02 §5 Event).
             _ => {}
         }
         // Running status := status, next time += the following delta (after a CC 4: the delta after the CC 2).
@@ -294,31 +315,24 @@ impl Sequencer {
 
     // CC 2: every track's read pointer and next time (the current one: past this event, at its time), and tempo, T, B.
     fn save_loop(&mut self, cur: usize, end: usize) {
-        let tracks = self
-            .tracks
-            .iter()
-            .enumerate()
-            .map(|(k, t)| (if k == cur { end } else { t.pos }, t.next))
-            .collect();
-        self.loop_start = Some(LoopStart {
-            tracks,
-            tempo: self.tempo,
-            t: self.t,
-            b: self.b,
-        });
+        for (k, t) in self.tracks.iter_mut().enumerate() {
+            t.loop_pos = if k == cur { end } else { t.pos };
+            t.loop_next = t.next;
+        }
+        self.loop_timing = Some((self.tempo, self.t, self.b));
     }
 
-    // CC 4: restores the CC 2 copies; `pos` is the current track's read position.
+    // CC 4: restores the copies; `pos` is the current track's read position. Without a CC 2 since `Midi_Play` the
+    // tracks go back to their start (+0x18) with next time +0x1C, and tempo/T/B to the last CC 2 since boot (02 §5);
+    // before the first CC 2 since boot they are heap content in the original and are kept here.
     fn restore_loop(&mut self, cur: usize, pos: &mut usize) {
-        // SPEC-GAP: CC 4 before any CC 2 (copies never written) is not described; treated as a plain controller.
-        let Some(ls) = self.loop_start.clone() else {
-            return;
-        };
-        for (k, (p, next)) in ls.tracks.into_iter().enumerate() {
-            (self.tracks[k].pos, self.tracks[k].next) = (p, next);
+        for t in &mut self.tracks {
+            (t.pos, t.next) = (t.loop_pos, t.loop_next);
         }
         *pos = self.tracks[cur].pos;
-        (self.tempo, self.t, self.b) = (ls.tempo, ls.t, ls.b);
+        if let Some((tempo, t, b)) = self.loop_timing {
+            (self.tempo, self.t, self.b) = (tempo, t, b);
+        }
     }
 }
 
@@ -377,7 +391,7 @@ impl Out for Synth {
 #[cfg(not(target_arch = "wasm32"))]
 pub struct Player {
     pub synth: Synth,
-    pub seq: Option<Sequencer>,
+    pub seq: Sequencer,
     // Timer running (between Midi_Play and Midi_Stop).
     pub playing: bool,
     rate: u32,
@@ -392,7 +406,7 @@ impl Player {
     pub fn new(font: &Arc<rustysynth::SoundFont>, rate: u32) -> Result<Self> {
         Ok(Self {
             synth: Synth::new(font, rate)?,
-            seq: None,
+            seq: Sequencer::new(),
             playing: false,
             rate,
             acc: 0,
@@ -422,10 +436,8 @@ impl Player {
             // The first callback comes 1 ms after timeSetEvent.
             if self.acc >= self.rate as u64 {
                 self.acc -= self.rate as u64;
-                if self.playing
-                    && let Some(seq) = &mut self.seq
-                {
-                    seq.tick(&mut self.synth);
+                if self.playing {
+                    self.seq.tick(&mut self.synth);
                 }
             }
         }
@@ -527,6 +539,14 @@ pub(crate) mod tests {
         f
     }
 
+    // Midi_Open + Midi_Play on a fresh object.
+    fn played(song: Song) -> Sequencer {
+        let mut s = Sequencer::new();
+        s.open(Some(song));
+        s.rewind();
+        s
+    }
+
     fn run(seq: &mut Sequencer, log: &mut Log, ms: u64) {
         for _ in 0..ms {
             seq.tick(log);
@@ -534,13 +554,14 @@ pub(crate) mod tests {
         }
     }
 
-    // Division 480, tempo 500 000 µs: one tick = 500 000/480 µs, so tick 480 is due at T where T·480 000/500 000 ≥ 480.
+    // Division 480, tempo bytes 07 C9 00 → 7·66049 + 201·257 = 514 000 µs (02 §5 ·257 quirk): tick 480 is due at
+    // T = 514.
     #[test]
     fn timing_tempo_and_loop() {
         let f = smf(
             480,
             &[
-                (0, &[0xFF, 0x51, 3, 0x07, 0xA1, 0x20]),
+                (0, &[0xFF, 0x51, 3, 0x07, 0xC9, 0x00]),
                 (0, &[0xB0, 7, 100]),
                 (480, &[0xB0, 2, 0]),
                 (480, &[0x90, 60, 64]),
@@ -550,21 +571,90 @@ pub(crate) mod tests {
         );
         let song = parse(&f).unwrap();
         assert_eq!((song.format, song.division, song.tracks.len()), (0, 480, 1));
-        let mut seq = Sequencer::new(song);
+        let mut seq = played(song);
         let mut log = Log::default();
         run(&mut seq, &mut log, 2100);
+        assert_eq!(seq.tempo, 514_000);
         let at: Vec<_> = log.short.iter().map(|(t, m)| (*t, m[0], m[1])).collect();
-        // CC 2 at 500 ms, note at 1000, CC 4 at 1500 → back to 500 ms state: note again 500 ms later (2000).
+        // CC 2 at 514 ms, note at 1028, CC 4 at 1542 → back to the CC 2 state: note again 514 ms later (2056).
         assert_eq!(
             &at[..5],
             &[
                 (0, 0xB0, 7),
-                (500, 0xB0, 2),
-                (1000, 0x90, 60),
-                (1500, 0xB0, 4),
-                (2000, 0x90, 60)
+                (514, 0xB0, 2),
+                (1028, 0x90, 60),
+                (1542, 0xB0, 4),
+                (2056, 0x90, 60)
             ]
         );
+    }
+
+    // 02 §5 example: th08_01's file tempo 0x069627 = 431 655 µs plays as 434 883.
+    #[test]
+    fn tempo_times_257() {
+        let f = smf(
+            480,
+            &[
+                (0, &[0xFF, 0x51, 3, 0x06, 0x96, 0x27]),
+                (0, &[0xFF, 0x2F, 0]),
+            ],
+        );
+        let mut seq = played(parse(&f).unwrap());
+        run(&mut seq, &mut Log::default(), 1);
+        assert_eq!(seq.tempo, 434_883);
+    }
+
+    // 0xF7 reads no length (02 §5 Event): its next byte is the following delta. CC 4 with no CC 2 since boot puts the
+    // track at its start with next time +0x1C = 0; the CC 4's delta read then lands on the first event.
+    #[test]
+    fn f7_and_cc4_without_cc2() {
+        let f = smf(
+            480,
+            &[
+                (0, &[0x90, 60, 64]),
+                (0, &[0xF7]),
+                (480, &[0xB0, 4, 0]),
+                (0, &[0xFF, 0x2F, 0]),
+            ],
+        );
+        let mut seq = played(parse(&f).unwrap());
+        let mut log = Log::default();
+        // Tempo 1 000 000: the CC 4 (tick 480) is due at T = 1000. (Running it in a tick would loop forever there, as
+        // in the original: the replayed events are all due again.)
+        run(&mut seq, &mut log, 1000);
+        assert_eq!((log.short.len(), seq.tracks[0].next), (1, 480));
+        seq.event(0, &mut log).unwrap();
+        assert_eq!((seq.tracks[0].pos, seq.tracks[0].next), (1, 0));
+        assert_eq!(seq.tempo, OPEN_TEMPO);
+    }
+
+    // Midi_Ctor +0x2CC = 0 and the raw CC 7 bytes carry over Midi_Open / Midi_Play (02 §5 Object); a null slot leaves no
+    // tracks.
+    #[test]
+    fn object_state_carries_across_songs() {
+        let mut seq = Sequencer::new();
+        assert_eq!((seq.last_q, seq.has_tracks()), (0, false));
+        let a = smf(480, &[(0, &[0xB3, 7, 90]), (4800, &[0xFF, 0x2F, 0])]);
+        seq.open(Some(parse(&a).unwrap()));
+        seq.rewind();
+        let mut log = Log::default();
+        // First fade tick after boot: trunc(1·128) = 128 ≠ 0 → CC 7 resent (factor 1) on all channels.
+        seq.fade(10);
+        run(&mut seq, &mut log, 1);
+        assert_eq!((log.short.len(), log.short[16].1), (17, [0xB3, 7, 90]));
+        run(&mut seq, &mut log, 20);
+        let q = seq.last_q;
+        seq.open(None);
+        assert!(!seq.has_tracks());
+        let b = smf(480, &[(0, &[0x90, 60, 64]), (4800, &[0xFF, 0x2F, 0])]);
+        seq.open(Some(parse(&b).unwrap()));
+        seq.rewind();
+        assert_eq!((seq.last_q, seq.cc7[3], seq.tempo), (q, 90, OPEN_TEMPO));
+        log.short.clear();
+        seq.fade(10);
+        run(&mut seq, &mut log, 1);
+        // Channel 3 is rescaled from the previous song's raw CC 7.
+        assert!(log.short.contains(&(log.now - 1, [0xB3, 7, 90])));
     }
 
     #[test]
@@ -578,7 +668,7 @@ pub(crate) mod tests {
                 (0, &[0xFF, 0x2F, 0]),
             ],
         );
-        let mut seq = Sequencer::new(parse(&f).unwrap());
+        let mut seq = played(parse(&f).unwrap());
         let mut log = Log::default();
         run(&mut seq, &mut log, 1);
         seq.fade(100);
@@ -590,14 +680,23 @@ pub(crate) mod tests {
         // Frozen after 100 ticks: the note at 1 s (tempo 1 000 000: 480 ticks per s) never plays.
         assert!(log.short.iter().all(|(_, m)| m[0] != 0x90));
         assert_eq!(seq.factor(), 0.0);
-        // CC 7 is resent only when trunc(factor·128) changes: counter 0 (factor 1) sends nothing.
-        assert!(log.short.iter().all(|(t, _)| *t != 1));
+        // +0x2CC starts at 0, so the first fade tick after boot (counter 0, factor 1) resends CC 7 unscaled.
+        let first: Vec<_> = log
+            .short
+            .iter()
+            .filter(|(t, _)| *t == 1)
+            .map(|m| m.1)
+            .collect();
+        assert_eq!(
+            (first.len(), first[0], first[1]),
+            (16, [0xB0, 7, 100], [0xB1, 7, 127])
+        );
     }
 
     #[test]
     fn end_of_track_rewinds() {
         let f = smf(480, &[(0, &[0x90, 60, 64]), (480, &[0xFF, 0x2F, 0])]);
-        let mut seq = Sequencer::new(parse(&f).unwrap());
+        let mut seq = played(parse(&f).unwrap());
         let mut log = Log::default();
         run(&mut seq, &mut log, 1003);
         // Tempo 1 000 000: end of track at 1000 ms; tick 1001 finds no active track and rewinds; note again at 1002.
@@ -625,7 +724,7 @@ pub(crate) mod tests {
                 (0, 480, 1),
                 "{n}"
             );
-            let mut seq = Sequencer::new(song);
+            let mut seq = played(song);
             let mut log = Log::default();
             run(&mut seq, &mut log, 400_000);
             let cc = |c: u8| {
@@ -648,7 +747,7 @@ pub(crate) mod tests {
             return;
         };
         let song = parse(&a.read("th08_01.mid").unwrap()).unwrap();
-        let mut seq = Sequencer::new(song);
+        let mut seq = played(song);
         let mut log = Log::default();
         run(&mut seq, &mut log, 400_000);
         let c4: Vec<_> = log
@@ -817,9 +916,10 @@ pub(crate) mod tests {
         };
         let font = Arc::new(rustysynth::SoundFont::new(&mut &tiny_sf2()[..]).unwrap());
         let mut p = Player::new(&font, 44100).unwrap();
-        let mut seq = Sequencer::new(parse(&a.read("th08_01.mid").unwrap()).unwrap());
-        seq.rewind();
-        (p.seq, p.playing) = (Some(seq), true);
+        p.seq
+            .open(Some(parse(&a.read("th08_01.mid").unwrap()).unwrap()));
+        p.seq.rewind();
+        p.playing = true;
         let rms = |p: &mut Player, frames: usize| {
             let (l, r) = p.render(frames);
             (l.iter().chain(r).map(|x| x * x).sum::<f32>() / (2 * frames) as f32).sqrt()
@@ -830,10 +930,10 @@ pub(crate) mod tests {
         }
         assert!(loud > 1e-3, "{loud}");
         // 1 s = 1000 timer ticks per 44100 frames.
-        assert_eq!(p.seq.as_ref().unwrap().t_for_test(), 10_000);
-        p.seq.as_mut().unwrap().fade(500);
+        assert_eq!(p.seq.t_for_test(), 10_000);
+        p.seq.fade(500);
         let _ = rms(&mut p, 44100);
-        assert_eq!(p.seq.as_ref().unwrap().factor(), 0.0);
+        assert_eq!(p.seq.factor(), 0.0);
         p.playing = false;
         p.synth.reset_notes();
         let _ = rms(&mut p, 44100);

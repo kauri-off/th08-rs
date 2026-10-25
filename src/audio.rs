@@ -115,7 +115,8 @@ struct Mixer {
     generation: u32,
     out_rate: f64,
     volume: f32,
-    paused: bool,
+    // Streaming object +0x30 playing flag cleared by `Stop` with the position kept (command 6, mode-1 fade end, 02 §4).
+    stopped: bool,
     // MIDI mode (02 §5): the sequencer + synth, driven by the output sample clock; not scaled by the BGM volume.
     #[cfg(not(target_arch = "wasm32"))]
     midi: Option<crate::midi::Player>,
@@ -205,7 +206,7 @@ impl Mixer {
         for (k, fr) in out.chunks_exact_mut(channels).enumerate() {
             // Port mixer: linear resampling to the device rate; WaveStream_* chunking (02 §3) is platform detail.
             let (l, r) = match &mut self.music {
-                Some(m) if !m.samples.is_empty() && !self.paused => {
+                Some(m) if !m.samples.is_empty() && !self.stopped => {
                     let n = m.samples.len();
                     let i = m.pos as usize;
                     let t = (m.pos - i as f64) as f32;
@@ -366,7 +367,8 @@ impl Audio {
         false
     }
 
-    // Midi_LoadSlot 0x4441A0: the open slot is stopped first; the name's basename is the archive lookup (01 §5).
+    // Midi_LoadSlot 0x4441A0: the open slot is stopped first; the name's basename is the archive lookup (01 §5); not
+    // found → null slot (02 §5).
     fn midi_load_slot(&mut self, slot: usize, name: &str) {
         if slot as i32 == self.midi_open {
             self.midi_stop();
@@ -374,7 +376,6 @@ impl Audio {
         let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
         let data = self.midi_files.get(&base.to_ascii_lowercase()).cloned();
         if data.is_none() {
-            // SPEC-GAP: Midi_LoadSlot / Midi_Open with a missing file (std names th08_02, th08_13_b) not described; silent.
             log::warn!("midi: {name} not in archive");
         }
         if let Some(s) = self.midi_slots.get_mut(slot) {
@@ -382,37 +383,43 @@ impl Audio {
         }
     }
 
-    // Midi_Open 0x4442E0: parses the slot's file (tempo 1 000 000), open slot := slot.
+    // Midi_Open 0x4442E0: parses the slot's file (tempo 1 000 000), open slot := slot; a null slot frees the tracks
+    // and leaves the open slot unchanged (02 §5).
     fn midi_open(&mut self, slot: usize) {
         let song = self.midi_slots.get(slot).cloned().flatten().and_then(|d| {
             crate::midi::parse(&d)
                 .map_err(|e| log::warn!("midi slot {slot}: {e:#}"))
                 .ok()
         });
-        self.midi_open = slot as i32;
+        if song.is_some() {
+            self.midi_open = slot as i32;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(p) = self.mixer.lock().unwrap().midi() {
-            p.seq = song.map(crate::midi::Sequencer::new);
+            p.seq.open(song);
         }
         #[cfg(target_arch = "wasm32")]
         let _ = song;
     }
 
-    // Midi_Play 0x444620: Midi_Rewind, then the 1 ms timer starts.
+    // Midi_Play 0x444620: Midi_Rewind, then the 1 ms timer starts; nothing without parsed tracks.
     fn midi_play(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(p) = self.mixer.lock().unwrap().midi() {
-            if let Some(seq) = &mut p.seq {
-                seq.rewind();
-            }
+        if let Some(p) = self.mixer.lock().unwrap().midi()
+            && p.seq.has_tracks()
+        {
+            p.seq.rewind();
             p.playing = true;
         }
     }
 
-    // Midi_Stop 0x444680: timer killed, midiOutReset (all notes off), open slot := −1.
+    // Midi_Stop 0x444680: timer killed, midiOutReset (all notes off), open slot := −1; nothing without parsed tracks.
     fn midi_stop(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(p) = self.mixer.lock().unwrap().midi.as_mut() {
+            if !p.seq.has_tracks() {
+                return;
+            }
             p.playing = false;
             p.synth.reset_notes();
         }
@@ -420,7 +427,7 @@ impl Audio {
     }
 
     // init.mid reset (02 §5): `Midi_Stop`, `Midi_Open(30)`, `Midi_Play` in mode 2 at main-menu Quit, GameMgr_OnRemove
-    // after its Music_Stop, and the Supervisor teardown.
+    // after its Music_Stop, the Supervisor teardown and the option BGM item's Left from mode 2 (15 §1.3).
     pub fn midi_reset(&mut self) {
         if self.path() == Path::Midi {
             self.midi_stop();
@@ -451,9 +458,8 @@ impl Audio {
         match self.path() {
             Path::Off => {}
             Path::Wav => self.play_wav(name),
+            // MIDI calls only; a WAV buffer is not touched (02 §4/§5).
             Path::Midi => {
-                // SPEC-GAP: whether a WAV / MIDI track left over from the other mode keeps playing is not given; stopped.
-                self.stop_wav();
                 self.midi_stop();
                 self.midi_load_slot(31, name);
                 self.midi_open(31);
@@ -463,8 +469,8 @@ impl Audio {
         }
     }
 
+    // WAV paths never call a MIDI function: after option Reset from mode 2 the MIDI song keeps playing (15 §1.3).
     fn play_wav(&mut self, name: &str) {
-        self.midi_stop();
         let Some(t) = find_track(&self.tracks, name).cloned() else {
             log::warn!("no bgm {name}");
             return;
@@ -476,7 +482,7 @@ impl Audio {
             let mut m = self.mixer.lock().unwrap();
             m.generation += 1;
             m.music = None;
-            m.paused = false;
+            m.stopped = false;
             m.generation
         };
         let (source, mixer) = (self.source.clone(), self.mixer.clone());
@@ -529,7 +535,6 @@ impl Audio {
                 None => log::warn!("bgm slot {slot} not loaded"),
             },
             Path::Midi => {
-                self.stop_wav();
                 self.midi_stop();
                 self.midi_open(slot);
                 self.midi_play();
@@ -579,10 +584,12 @@ impl Audio {
         v.playing = v.wave.is_some();
     }
 
-    // Sound commands 6 "Pause" / 7 "UnPause" act on the WAV buffer only (02 §4, 12 §4).
-    // SPEC-GAP: 02/12 give no MIDI-mode effect for command 6; the MIDI song keeps playing while paused.
+    // Sound commands 6 "Pause" (`Stop`, position kept) / 7 "UnPause" (`Play` at the position, no volume write) act in
+    // music mode 1 only; the MIDI song keeps playing (02 §4). The fade is not touched.
     pub fn pause_bgm(&mut self, on: bool) {
-        self.mixer.lock().unwrap().paused = on;
+        if self.path() == Path::Wav {
+            self.mixer.lock().unwrap().stopped = on;
+        }
     }
 
     // Music_Fade 0x4480F8 (10 §5 op 12, 11 §4, 16 §1.3 `@M`), 02 §4: MIDI `Midi_Fade(trunc(1000·secs))` ms, no
@@ -599,16 +606,11 @@ impl Audio {
                 };
                 self.fade_req = Some(secs as i32);
             }
-            Path::Midi => {
+            Path::Midi =>
+            {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(seq) = self
-                    .mixer
-                    .lock()
-                    .unwrap()
-                    .midi()
-                    .and_then(|p| p.seq.as_mut())
-                {
-                    seq.fade((1000.0 * secs) as u32);
+                if let Some(p) = self.mixer.lock().unwrap().midi() {
+                    p.seq.fade((1000.0 * secs) as u32);
                 }
             }
         }
@@ -638,7 +640,8 @@ impl Audio {
         self.set_fade_p(-1000);
     }
 
-    // 0x447764, every Supervisor calc before the input poll (02 §4): fade tick; mode 1 stops the buffer at the end.
+    // 0x447764, every Supervisor calc before the input poll, also while paused (02 §4): fade tick; mode 1 `Stop`s the
+    // buffer at the end with its position and last volume kept, so a later UnPause resumes it near-silent.
     pub fn tick_fade(&mut self) {
         let Some(f) = &mut self.fade else { return };
         match f.tick() {
@@ -646,7 +649,7 @@ impl Audio {
             FadeTick::End => self.fade = None,
             FadeTick::Stop => {
                 self.fade = None;
-                self.stop_wav();
+                self.mixer.lock().unwrap().stopped = true;
             }
         }
     }
@@ -670,12 +673,20 @@ impl Audio {
         self.mixer.lock().unwrap().volume = db_gain(db);
     }
 
-    // Music_Stop 0x448081: the WAV buffer, or `Midi_Stop` in mode 2 (02 §5); the port stops both.
+    // Music_Stop 0x448081 (02 §4): mode 2 `Midi_Stop`; mode 1 command 3 `Bgm_StreamStop` (buffer stopped, fade mode 0,
+    // so a queued command 5 ahead of it is cancelled too); mode 0 nothing.
     pub fn stop_bgm(&mut self) {
-        self.stop_wav();
-        self.midi_stop();
+        match self.path() {
+            Path::Off => {}
+            Path::Wav => {
+                (self.fade_req, self.fade) = (None, None);
+                self.stop_wav();
+            }
+            Path::Midi => self.midi_stop(),
+        }
     }
 
+    // SPEC-GAP: UnPause after Music_Stop plays the buffer at position 0 (02 §4); what it holds is not given; silent here.
     fn stop_wav(&mut self) {
         let mut m = self.mixer.lock().unwrap();
         m.generation += 1;
@@ -819,6 +830,53 @@ mod tests {
         assert!(!playing(&a));
         a.midi_reset();
         assert!(playing(&a) && a.midi_open == 30);
+        // A null slot (th08_02.mid missing): Midi_Open frees the tracks, open slot unchanged; Play / Stop do nothing.
+        a.play_slot(2);
+        assert!(!playing(&a) && a.midi_open == -1);
+        a.midi_open = 5;
+        a.stop_bgm();
+        assert_eq!(a.midi_open, 5);
+        // Option Reset from mode 2 (15 §1.3 row 7): mode 1 with no music call; WAV plays never stop the MIDI song.
+        a.play_slot(1);
+        cfg.music = 1;
+        a.set_volumes(&cfg);
+        a.play_bgm("bgm/th08_01.mid");
+        a.stop_bgm();
+        assert!(playing(&a) && a.midi_open == 1);
+    }
+
+    // 02 §4 Music_Stop clears the fade; command 6 keeps it ticking, a mode-1 fade end stops the buffer (position and
+    // last volume kept) and command 7 resumes it there. Mode 2 ignores 6/7.
+    #[test]
+    fn wav_pause_and_fade() {
+        let mut a = Audio::new(Source::native(std::env::temp_dir()), &[]);
+        a.mixer.lock().unwrap().music = Some(Music {
+            samples: vec![[0.5, 0.5]; 10],
+            loop_start: 0,
+            pos: 3.0,
+        });
+        a.fade_bgm(4.0, 1.0);
+        a.start_fade();
+        a.pause_bgm(true);
+        (0..240).for_each(|_| a.tick_fade());
+        assert!(a.fade.is_none() && a.fade_p == -4980);
+        a.pause_bgm(false);
+        {
+            let m = a.mixer.lock().unwrap();
+            assert!(!m.stopped && m.music.as_ref().unwrap().pos == 3.0);
+        }
+        a.fade_bgm(4.0, 1.0);
+        a.start_fade();
+        a.stop_bgm();
+        assert!(a.fade.is_none() && a.mixer.lock().unwrap().music.is_none());
+        a.fade_bgm(4.0, 1.0);
+        a.stop_bgm();
+        assert!(a.fade_req.is_none());
+        let mut cfg = crate::config::Config::default();
+        cfg.music = 0;
+        a.set_volumes(&cfg);
+        a.pause_bgm(true);
+        assert!(!a.mixer.lock().unwrap().stopped);
     }
 
     #[test]

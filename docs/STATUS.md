@@ -655,6 +655,17 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl114 (RE-Q46 CODE BUG 1–6, MIDI / BGM, 2026-10-25): `midi.rs` tempo meta 0x51 = v·257 + b per byte (02 §5
+  original bug, songs ≈ 0.75 % slower); one `Sequencer` per run (`Midi_Ctor`: +0x2CC = 0, raw CC 7 kept across
+  `Midi_Open` / songs), `open(None)` for a null slot (Play/Stop then do nothing, open slot unchanged); per-track CC 2
+  copies +0x18/+0x1C (Rewind sets +0x18 = start, Open zeroes +0x1C) so a CC 4 without CC 2 goes back to the start;
+  0xF1–0xFE read no bytes; step-4 active flag per track. `audio.rs`: WAV paths never call MIDI (option Reset from
+  mode 2 leaves the song playing), MIDI paths never touch the WAV buffer, `stop_bgm` per mode and clears the fade
+  (+ queued command 5), Pause/UnPause only in mode 1 as `Stop` / `Play` at the kept position, a mode-1 fade end stops
+  with position and last volume kept (UnPause resumes there). `menu.rs` option item 2: `Music_Stop` in the old mode,
+  Left from 2 the init.mid reset, then `Music_Play(8)` + `Music_PlaySlot(8)` (track 0 heard) in the new mode
+  (15 §1.3). Sessions: golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 full. SPEC-GAP 9 → 3 (src;
+  one other marker outside these files disappeared meanwhile). Questions: `docs/briefs/IMPL114_QUESTIONS.md`.
 - impl113 (RE-Q42 CODE BUG 1–5, RE-Q43 CODE BUG 1–3, RE-Q44 CODE BUG 1–2, 2026-10-25): top menu highlight only in
   call 0, on a cursor move and on cancel (`menu.rs` `top` / `highlight_items`, 12 §2.2); Option press sends no range
   interrupt, keeps item 7 lit and falls through to the cancel test; key-config cursor 0 set by option item 8, digits /

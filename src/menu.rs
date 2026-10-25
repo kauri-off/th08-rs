@@ -955,13 +955,26 @@ impl MainMenu {
                 *v = (*v as i32 + dir).rem_euclid(max + 1) as u8;
                 if *v != old {
                     sound::play(sound::TIMEOUT);
-                    let music = cfg.music;
+                    // Item 2 (15 §1.3): `Music_Stop` in the old mode, Left from mode 2 also the init.mid reset, then
+                    // `Music_Play(8, th08_01)` + `Music_PlaySlot(8, 0)` in the new mode (nothing in mode 0).
+                    if item == 2 {
+                        ctx.audio.stop_bgm();
+                        if dir < 0 && old == 2 {
+                            ctx.audio.midi_reset();
+                        }
+                    }
                     ctx.audio.set_volumes(&ctx.game.cfg);
-                    // Item 2: any change restarts bgm/th08_01.mid in slot 8 (15 §1.3); music off simply stops it.
-                    match item {
-                        2 if music == 0 => ctx.audio.stop_bgm(),
-                        2 => ctx.audio.play_bgm("bgm/th08_01.mid"),
-                        _ => {}
+                    if item == 2 {
+                        ctx.audio.load_bgm(8, "bgm/th08_01.mid");
+                        ctx.audio.play_slot(8);
+                        // Music_PlaySlot marks track 0 heard unless replay playback or demo (02 §4).
+                        // SPEC-GAP: whether PlaySlot also marks in mode 0 is not given; modes 1/2 only, like PlayFile.
+                        let g = &mut ctx.game;
+                        if matches!(g.cfg.music, 1 | 2)
+                            && g.flags & (gamemgr::F_REPLAY | gamemgr::F_DEMO) == 0
+                        {
+                            g.score.plst.music[0] = 1;
+                        }
                     }
                 }
             }
