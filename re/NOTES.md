@@ -816,3 +816,15 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Q3: ShotUpd_AliceLaser end branch falls through (no return): the ended laser follows option 0 once more (BUG G). 14 §4.
 - Scratch port re/work/runs/q51/portcopy (target/re51, IMPL117 WIP A–C + D–G): Bu08/JS06/Nd115/Tt16/F128 0 diffs;
   remaining first diffs listed in the changelog (bit-10 group Ar02/Dn14/Ro168/53373 is the next candidate).
+
+# RE-Q52 (2026-10-25) — replay pilot: bit-10 group, Reimu LS areas, D3DX normalise — DONE (specs/changelog/answers_re_q52.md)
+- Q1 bit 10: `Player_Die` sets it in the bombs ≥ 1 branch while a card is active. Port freeze is right but lives in
+  `freeze_bullets` (not in GameFlags → trace flags) and is also set on 0-bomb deaths (88234) → BUG H. 09 §6.1, 11 §2.1.
+- Dn14/53373 next: `Bomb_ReimuLS` impact C circle lands in the freed slot and the same-frame follow write moves it to
+  the orb; growth 64/15 / 128/15 exact (spec had 4.267/8.533) → BUG I. 14 §2 / §2.2.
+- Q2 80406 r2822: type-51 cull uses stored facing +0x63B8; D3DXVec3Normalize runs the SSE variant 0x48EFB0
+  (rsqrtss + Newton, CPU-specific) → port's exact normalise 1 ulp off, particle lives a frame longer, death sparks
+  find no ring slot → BUG J. New 05 §10 "Vector normalise", 06 §3, 13 §2.6a.
+- Probe: TH08_SCANEFF / _ONLY / TH08_SCANEFFSLOT (effect ring + one slot). Poll index of a frame varies ±10 between
+  re-records: use wide scan windows. Scratch port re/work/runs/q52/portcopy (target/re52), diff q52_scratch.diff.
+- fixJ: Ar02/Ro168 0 diffs; Dn14 → 7339, 53373 → 50932, 80406 → 76752, 88234 → 62194; others unchanged (list in changelog).

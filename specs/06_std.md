@@ -118,7 +118,7 @@ After the terminator 16 of 18 files contain another 20 bytes of 0xFF (ignored).
 | 0x6394 | f32[3] | camera position (current) |
 | 0x63A0 | f32[3] | camera facing vector (look-at point = position + facing) |
 | 0x63AC | f32[3] | camera up vector |
-| 0x63B8 | f32[3] | normalised facing (recomputed every frame) |
+| 0x63B8 | f32[3] | normalised facing, recomputed every frame by `Stage_Calc` with the D3DX SSE normalise (05 §10 "Vector normalise"; not facing / |facing|, RE-Q52) |
 | 0x63D0 | f32[3] | eye offset (op 32 and sway): eye = position + eye offset |
 | 0x63DC | f32 | vertical field of view (radians) |
 | 0x63E0 | i32[4] | interpolation durations: 0 pos, 1 facing, 2 up, 3 fov (0 = inactive) |

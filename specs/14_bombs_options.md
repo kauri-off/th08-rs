@@ -69,6 +69,10 @@ write the VM interpolation fields directly (05 §2/§6).
 
 ## 2. Bombs (calc function / draw function)
 
+Float constants in this section are exact f32 values unless written as hex: the growth rates 64/15 and 128/15
+are the exe's 0x40888889 (4.2666669) and 0x41088889 (8.5333338), not the decimals 4.267 / 8.533 (which are other
+floats and change the radii after a few frames; RE-Q52).
+
 ### 2.1 Reimu — 霊符「夢想妙珠」 (0x40C010 / 0x40C820), dur 200, invuln 260
 - T = 0: effect 12 at p (0xFF4040FF); 16 orbs (objects 0–15): VM script 0x13, angle_i = −π + i·π/8,
   position = centre = p, radius (+8) = 0, state 1; per orb C circle(p, r 96, life 200, item 6) and
@@ -79,7 +83,7 @@ write the VM interpolation fields directly (05 §2/§6).
 - T ≥ 40, state 1, timer advanced: target = homing target (+0xE2AA4) if its x > −100 else p; d = target − pos;
   k = max(1, |d| / (speed/8)); v' = d/k + velocity; speed = clamp(|v'|, 1, 10); velocity = v'·speed/|v'|;
   one-frame C circle(orb, r 128). Impact when the orb's D area has dealt ≥ its max (200) or T ≥ duration − 30:
-  both areas off; C circle(**p**, r 64, dr 4.267, life 30); D circle(orb, r 64, dr 12.8, dmg 500, life 12,
+  both areas off; C circle(**p**, r 64, dr 64/15 (f32 0x40888889), life 30); D circle(orb, r 64, dr 12.8, dmg 500, life 12,
   period 4, unlimited); effect 6 ×8; state 2; VM interrupt 1; SE 0xF @orb; shake (1: 16, 8, 0). (The code
   computes velocity/8 into a temporary and discards it — the orb keeps its speed. QUIRK)
 - T ≥ 40 every frame (state ≠ 0): pos += velocity·gs.
@@ -96,13 +100,22 @@ write the VM interpolation fields directly (05 §2/§6).
   (changelog/answers_impl11.md §2/§4, VERIFIED).
 - Every frame, state-1 orbs: angle ±π/60 as above, pos = centre + (sin, cos)·radius; while T < 40:
   radius += 2.4 (even) / 1.2 (odd). Orb i explodes when T ≥ duration − 40 − i: areas off; C circle(p, r 64,
-  dr 4.267, life 30); D circle(orb, r 64, dr 8.533, dmg 25, life 15, period 5, max 50); effect 6 ×8; state 2
-  (not freed; its VM keeps running); interrupt 1; SE 0xF @orb; shake (1: 16, 8, 0). Areas follow.
+  dr 64/15 (f32 0x40888889), life 30); D circle(orb, r 64, dr 128/15 (f32 0x41088889), dmg 25, life 15, period 5, max 50); effect 6 ×8; state 2
+  (not freed; its VM keeps running); interrupt 1; SE 0xF @orb; shake (1: 16, 8, 0). The new circles are **not**
+  attached to the orb (its +0x16EC/+0x16E8 pointers keep the T = 0 areas), but the orb's area-follow write
+  (C and D pos := orb pos) still runs **after** the impact in the same frame, through those old pointers. The old
+  slots were just switched off, so a new circle that took the first inactive slot of its half (09 §8.1) sits in
+  exactly that slot: normally the impact C circle is moved from p to the orb position (and the D circle written
+  with the position it already has). If a lower slot was free, the write goes to an inactive slot and the C
+  circle stays at p. Later frames (state 2) write nothing. QUIRK, VERIFIED 0x40C910 + Dn14 pilot run
+  (re/work/runs/q52/orig_Dn14, stage 6A frames 5049–5072: cancel areas 192–201 centred on the orbs, growing
+  64 → 128; a port with C at p cancels bullets 985 / 1064 frames later, RE-Q52). 2.1 has no such write: its follow
+  step only handles state-1 orbs, after the impact loop.
 - Blasts: when T ≥ 40 and T % 20 == 0 (T = 40, 60, …, 180): object 16 + (+0xFF0), then +0xFF0 := 1 (so the
   first blast uses object 16 and every later one reuses object 17 — QUIRK); VM script 0x14 (`AnmFile_SetScript` on the player ANM: runs its time-0 instructions now, before the point is drawn; no player*.anm script draws RNG, so the order changes no RNG draw; VERIFIED 0x40C910, RE-Q24); colour =
   table 0x4C6100[(T/20) % 7] = {0x8FFFFFFF, 0x8F0000FF, 0x8FFF00FF, 0x8FFF0000, 0x8FFFFF00, 0x8F00FF00,
   0x8F00FFFF}; point = homing target if x > −100 else (R·320 + 32, R·384 + 32) (**RNG**, x first);
-  effects 0x31 and 0x37 (colour); C circle(point, r 64, dr 4.267, life 30); D circle(point, r 64, dr 8.533,
+  effects 0x31 and 0x37 (colour); C circle(point, r 64, dr 64/15 (f32 0x40888889), life 30); D circle(point, r 64, dr 128/15 (f32 0x41088889),
   dmg 400, life 15, period 2); SE 0xF; shake (1: 16, 8, 0); flash (3: 8, 1, colour).
 - Objects 16–127: areas follow; freed when their VM ends. Draw: all active objects as 2.1.
 

@@ -290,6 +290,12 @@ pos = world
 d = normalise(pos − C)
 if dot(d, normalised facing (+0x63B8 = 0x4EA3E8)) < 0.94: free
 ```
+normalise is the D3DX SSE normalise (05 §10 "Vector normalise"), and the facing is the **stored** +0x63B8 written
+by `Stage_Calc` with the same routine, not a fresh normalisation of +0x63A0. The dot (`Vec3_Dot` 0x40B540) is
+x87 at 24-bit precision in the order (z·z' + y·y') + x·x', stored to f32, then compared with f32 0.94 (0x4B4988).
+VERIFIED RE-Q52 (pilot 80406, stage 1 frame 2632: ring slot 273, type 51, has dot 0x3F70A3D6 < 0.94 with the
+stored facing and is freed at age 131; with the exactly normalised facing the dot rounds to ≥ 0.94, the particle
+lives one more frame, and the 4-spark death spawn of that frame finds no free ring slot).
 
 Then, per type:
 - **Type 19** (`EffUpd_Petal3D` 0x426D70): rotation z = normalise(rotation z + spin). It is kept only

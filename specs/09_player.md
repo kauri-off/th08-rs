@@ -297,11 +297,14 @@ set when focusing and lose it (state 3) when unfocusing; team 3 (Youmu & Yuyuko)
 Freeze byte 0x160F534 := 0; checksum update (RNG, §9.4); effect; state 2, state timer 0; sound 4.
 Normal mode (0x164D0B4 bits 7–8 clear): gauge := 0; deathbomb counter n:
 - bombs < 1: n = 2 ("Miss");
-- else n = bombs × 6, +7 if time (stats+0x3C) ≥ stats+0x40, cap 15; during a boss spell card n × 2 (cap 30);
+- else n = bombs × 6, +7 if time (stats+0x3C) ≥ stats+0x40, cap 15; while a spell card is active (g_Gui spell flags bit 0, 07 §11.1; no boss test) n × 2 (cap 30);
   shot types 0, 4, 5: n = n × 9 / 5; the player VM's colour2 := (R, G, B) 0xFFFFFF with A = the VM colour's
   alpha and VM flags bit 17 set (draw with colour2, 05 §2.1; cleared at a normal bomb start §7 and at the real
-  death §6.2; VERIFIED 0x44AB40, RE-Q38); a ring effect is shown (`Effect_SpawnFixed` 0x3B, pointer kept in +0xE2B28); during a spell card bullets are frozen (0x164D0B4
-  bit 10 → `BulletMgr_Calc` skipped).
+  death §6.2; VERIFIED 0x44AB40, RE-Q38); a ring effect is shown (`Effect_SpawnFixed` 0x3B, pointer kept in +0xE2B28); then, if a spell card is active (same
+  test, read again), GameFlags 0x164D0B4 |= 0x400 (bit 10, the death freeze, 11 §2.1). Bit 10 is set **only in this
+  bombs ≥ 1 branch**: a hit with 0 bombs during a card ("Miss", n = 2) freezes nothing, and neither does special mode
+  (VERIFIED 0x44AB40, RE-Q52). Bit 10 is a GameFlags bit like the others: the trace `flags` column shows 0x400 while it
+  is set (Ar02 / Dn14 / Ro168 / 53373 pilot sessions).
 Special mode (bits 7–8 set): n = 2 and forced bomb (+6 = 1, §7 "dissolve spell").
 All items in state 1 fall again: `ItemMgr_DropAttracted` 0x441530, called as the last step of `Player_Die` (both modes) and again at the real death (`Player_DyingUpdate`, after the death drops, §6.2), walks the active item list and for every item with state +0x2D7 == 1 sets state := 0 and vel (+0x2B0) := (0, −0.9, 0). This is not the −0.7 of the `ItemMgr_Calc` player-dying branch (08 §8.4), which only applies to items still in state 1 when the calc runs (VERIFIED 0x441530, RE-Q24; runtime: attract demo 0, player hit at 4547 above the collection line with the auto-collect condition true, point item 428 stops at x 174.3 instead of drifting to 300, RE-Q28).
 Before this, the hit test itself calls `GameMgr_ScrambleDecoys` (5 × Rng_Range(100000) + 3 × Rng_Float…; 08 §4).

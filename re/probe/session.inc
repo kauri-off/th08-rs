@@ -187,6 +187,17 @@ static void sess_scan(int pass) {
             g_poll_n, pass, U32(G_GMFRAME), U16(G_RNG), g_rng_calls, U32(0x17D61AC), U32(0x17D61B0), U8(P), U8(P + 3), U8(P + 5),
             (int)U32(P + 0xFDC), (int)U32(P + 0xFE4), (int)U32(P + 0xE2A7C), (int)U32(0x18B89BC + 8), aslot, U32(P + 0xE2AA4), U32(P + 0xE2AA8), (int)U32(P + 0xE2AC0),
             st >= 0x10000 ? U32(st + 0x98) : 0, U32(G_BULLETS));
+    if (getenv("TH08_SCANEFF")) {  /* RE-Q52 (from q33): effect ring cursor + live slots slot:type:age */
+        uint32_t M = 0x4ECE60;
+        fprintf(o, "R %u", U32(M));
+        for (int j = 0; j < 653; j++) { uint32_t e = M + 0x1C + j * 0x360; if (U8(e + 0x350)) fprintf(o, " %d:%d:%d", j, U8(e + 0x351), (int)U32(e + 0x338 + 8)); }
+        fprintf(o, "\n");
+        { const char *es = getenv("TH08_SCANEFFSLOT"); if (es) { uint32_t e = M + 0x1C + atoi(es) * 0x360;
+            fprintf(o, "D %08x %08x c %08x %08x %08x\n", U32(0x4C872C), U32(0x4C8728), U32(0x18DA220), U32(0x18DA224), U32(0x18DA228)); fprintf(o, "P %d act %u ty %u age %d world %08x %08x %08x vel %08x %08x %08x acc %08x %08x %08x cam %08x %08x %08x nf %08x %08x %08x\n", atoi(es), U8(e + 0x350), U8(e + 0x351), (int)U32(e + 0x338 + 8),
+                U32(e + 0x2D4), U32(e + 0x2D8), U32(e + 0x2DC), U32(e + 0x2BC), U32(e + 0x2C0), U32(e + 0x2C4), U32(e + 0x2C8), U32(e + 0x2CC), U32(e + 0x2D0),
+                U32(0x4EA3C4), U32(0x4EA3C8), U32(0x4EA3CC), U32(0x4EA3E8), U32(0x4EA3EC), U32(0x4EA3F0)); } }
+        if (getenv("TH08_SCANEFF_ONLY")) { fflush(o); return; }
+    }
     for (int k = 0; k < 4; k++) {
         uint32_t op = P + 0x40C + k * 0x2F4;
         if (!U32(op + 0x2EC)) continue;

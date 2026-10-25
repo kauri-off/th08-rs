@@ -405,6 +405,20 @@ With this camera, world (x, y, 0) projects to viewport pixel (x, y) (relative to
   | `call; fmul` (single) | ECL ops 38 `polar` and 166 `polar_ys` (0x419635 / 0x41E1BF…), op 66 `move_dir` (`Ecl_OpMoveDir` 0x420DAE: f32(f32(cos·spd)·dur)), ops 67 / 178 random move (`Ecl_OpMoveRand` 0x422020 and `Ecl_OpMoveRand2` 0x4224A0 both call `Ecl_SetMode2Polar` 0x4222B0, `call; fmul` at 0x422315, same form; VERIFIED callgraph RE-Q32), Reimu bomb orbs (`Bomb_Reimu` / `_LS` 0x40C274…: pos = f32(f32(sin a·r) + cx), 14 §2.1), Sakuya bombs (0x40FF33 / 0x410114), `Player_InitShot` velocity (0x44FC87), `Stage_Calc` camera |
   | rounded to f32 first | `Math_SinCosF32` 0x433880 (`fsincos`, both stored as f32 — used by `BulletMgr_Draw` laser draw and by `BulletMgr_CancelAll` / `CancelBonus` laser cancel positions, 08 §6.3), `Vec2_Rotate` 0x43EE30 (rotated boxes: `Player_LaserTest`, `Player_DamageAgainst`, `Player_InBombArea`), `EffInit_Burst` / `EffInit_Converge` directions (dir = (f32 cos, f32 sin, 0), then scaled: f32(f32(cos)·m), 13 §2), `EffUpd_Orbit13` (op 128 effects), `AnmVm_Run` and the ANM/enemy draw rotations |
 
+- **Vector normalise (`D3DXVec3Normalize`, VERIFIED RE-Q52).** The exe calls it through a D3DX CPU-dispatch table
+  (thunk 0x476E9F → pointer 0x4C872C; the first call runs the selector 0x47B944, which installs the variant for the
+  CPU). On the reference machine (AMD Ryzen 9 7945HX, wine; runtime read of 0x4C872C) the **SSE** variant 0x48EFB0
+  runs, not the x87 one 0x4791BC. For v = (x, y, z), all f32 SSE arithmetic (no 24-bit x87 rule):
+  s = (x·x + y·y) + z·z; if s < 2⁻⁴⁶ (f32 0x28800000) → (0, 0, 0); else r = `rsqrtss`(s),
+  m = (0.5·r)·(3 − (s·r)·r) (one Newton step), result = (m·x, m·y, m·z). This is **not** v / sqrt(s): it is often
+  1 ulp off the exact quotient (example: (0, 500, 460) → (0, 0x3F3C65F9, 0x3F2D5393); exact division gives
+  0x3F3C65FA / 0x3F2D5394). `rsqrtss` is a hardware approximation whose bits are vendor-specific; the sessions
+  were recorded on the CPU above, so a port reproduces them with the native `rsqrtss` on x86 (or an exact model of
+  that CPU's table elsewhere). Logic users: `Stage_Calc` (the normalised facing +0x63B8, 06 §3), the view-cone
+  cull of effects 19 / 51 / 63 (13 §2.6a) and `EffUpd_Orbit13` (13 §2.6b); draw users: `Stage_DrawLayer`,
+  `Stage_SetCamera`. A different last bit flips cull decisions at the 0.94 edge, which changes the effect ring
+  occupancy and with it the RNG of later spawns (13 §2.2 shared spawn budget; pilot 80406 frame 2632, RE-Q52).
+
 ## 11. Verification
 
 - `python3 -I tools/anmdis.py extracted/dat -q` → coverage line lists ops −1..89 actually used, "unknown

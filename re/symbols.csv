@@ -806,3 +806,8 @@ addr,kind,name,signature,confidence,note
 0x0045e1e0,func,Sound_QueueCommand,,VERIFIED,SoundManager+0x1F88 queue 31x0x10C (02 §4)
 0x004c73f0,global,g_EclSpNames,,VERIFIED,char*[9] ecldataNsp.ecl by g_StageIdx when GameFlags bit 14 (07 §1)
 0x004c7340,global,g_StdSpNames,,VERIFIED,char*[9] stageN_s.std by g_StageIdx when GameFlags bit 14 (06 §2)
+0x00476e9f,func,D3DX_Vec3Normalize,,VERIFIED,thunk via dispatch table 0x4C872C (RE-Q52; 05 §10)
+0x0048efb0,func,D3DX_Vec3Normalize_SSE,,VERIFIED,rsqrtss + 1 Newton step; installed on the reference CPU (RE-Q52)
+0x004791bc,func,D3DX_Vec3Normalize_x87,,INFERRED,non-SSE variant; default stub target
+0x0047b944,func,D3DX_SelectCpuImpl,,INFERRED,patches the D3DX dispatch table on first call
+0x004c872c,global,g_D3DX_Vec3NormalizeFn,,VERIFIED,runtime value 0x48EFB0 on the reference machine
