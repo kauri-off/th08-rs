@@ -252,6 +252,22 @@ fn info_fade_alpha(t: i32) -> Option<u8> {
 }
 
 // Unlock checks (15 §2.4) on the score.dat clear masks; debug `TH08_UNLOCK=1` unlocks everything.
+// Text_RenderCentered start x (12 §2.2): trunc(256 − len·15/4), len = the Shift-JIS byte length (ASCII and
+// half-width katakana 1 byte, the rest 2).
+fn centred_x(s: &str) -> f32 {
+    let len: usize = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii() || ('\u{FF61}'..='\u{FF9F}').contains(&c) {
+                1
+            } else {
+                2
+            }
+        })
+        .sum();
+    (256.0 - len as f32 * 15.0 / 4.0).trunc()
+}
+
 pub(crate) fn unlock_all() -> bool {
     crate::settings::get().unlock
 }
@@ -423,32 +439,24 @@ impl MainMenu {
         }
     }
 
-    // Text_RenderCentered 0x466650 (12 §2.2): `text` into description strip `i` (text.anm sprite 21 + i), centred,
-    // colour 0xFFF0E0.
+    // Text_RenderCentered 0x466650 (12 §2.2, 10 §6): `text` into description strip `i` (text.anm sprite 21 + i) at
+    // x = trunc(256 − len·15/4), len = Shift-JIS byte length; W = 512, font 15, COLORREF 0x00FFF0E0, ±2 px outline.
     fn render_description(&mut self, ctx: &mut Ctx, i: usize, text: &str) {
         let Some(sp) = ctx.anm.sprite(0, 21 + i).copied() else {
             return;
         };
         let t = ctx.gfx.texture(sp.tex);
-        let (tx, ty) = (
-            (sp.uv[0] * t.width as f32).round() as u32,
-            (sp.uv[1] * t.height as f32).round() as u32,
+        let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
+        let size = 15;
+        let rgba = self.raster.render_outline(
+            text,
+            [224, 240, 255],
+            w as usize,
+            size,
+            centred_x(text),
+            0x300000,
         );
-        let (w, h) = (sp.w as usize, sp.h as usize);
-        let mut rgba = self.raster.render(text, [0xFF, 0xF0, 0xE0], w, h);
-        let width = (0..w)
-            .rev()
-            .find(|&x| (0..h).any(|y| rgba[(y * w + x) * 4 + 3] != 0))
-            .map_or(0, |x| x + 1);
-        let shift = (w - width) / 2;
-        if shift > 0 {
-            for row in rgba.chunks_exact_mut(w * 4) {
-                row.copy_within(0..width * 4, shift * 4);
-                row[..shift * 4].fill(0);
-            }
-        }
-        ctx.gfx
-            .write_texture(sp.tex, tx, ty, w as u32, h as u32, &rgba);
+        ctx.gfx.write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
     }
 
     // Change test of the top menu, option and key config (12 §2.2): cursor ≠ +0x08 → +0xC2BC := description VM
@@ -1389,7 +1397,7 @@ fn title_music(g: &gamemgr::Game) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        INFO_FADE_OUT, assign_key, final_notice, info_fade_alpha, info_files, info_step,
+        INFO_FADE_OUT, assign_key, centred_x, final_notice, info_fade_alpha, info_files, info_step,
         title_music, volume_step,
     };
     use crate::gamemgr::{self, Game};
@@ -1477,6 +1485,14 @@ mod tests {
             v = next;
         }
         assert_eq!(v, 44);
+    }
+
+    #[test]
+    fn description_x() {
+        // 12 §2.2: trunc(256 − len·15/4) over Shift-JIS bytes.
+        assert_eq!(centred_x("abcd"), 241.0);
+        assert_eq!(centred_x("あいう"), 233.0);
+        assert_eq!(centred_x(""), 256.0);
     }
 
     #[test]

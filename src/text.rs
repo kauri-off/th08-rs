@@ -149,27 +149,13 @@ impl Raster {
         x: f32,
         outline: i32,
     ) -> Vec<u8> {
-        self.render_coloured(s, color, [0; 3], w, size, x, outline)
-    }
-
-    // As `render_outline` with the outline drawn in `edge` instead of black (music room titles, 16 §5.2).
-    #[allow(clippy::too_many_arguments)]
-    pub fn render_coloured(
-        &mut self,
-        s: &str,
-        color: [u8; 3],
-        edge: [u8; 3],
-        w: usize,
-        size: usize,
-        x: f32,
-        outline: i32,
-    ) -> Vec<u8> {
         let o = if outline == -1 { 1 } else { 2 };
         // Fresh 1024-wide A1R5G5B5 DIB per call; the copied source rect is (0, 0, min(2w, 1024), 2·size) (10 §6).
         let (w2, h2) = ((2 * w).min(DIB_W), 2 * size + 6);
         let mask = self.mask(s, (2 * size - 2) as f32, 2.0 * x, 0.0, w2, h2);
         let mut dib = vec![Px::default(); w2 * h2];
-        // Outline colour (black for Text_RenderToVm) at (2x+2±o, 2), (2x+2, 2±o), then the colour at the centre (2x+2, 2) (10 §6).
+        // Outline always black at (2x+2±o, 2), (2x+2, 2±o), then the colour at the centre (2x+2, 2) (10 §6).
+        let edge = [0; 3];
         for (dx, dy, c) in [
             (2 + o, 2, edge),
             (2 - o, 2, edge),

@@ -24,17 +24,22 @@ const ROWS: i32 = 10;
 const COMMENT_SCRIPT: usize = 10;
 const TITLE_SCRIPT: usize = 0x11;
 const UNHEARD: &str = "？？？？？？？？";
-// Warning table 0x4C7AAC, shown for a comment of a track not yet heard (16 §5.3).
-// SPEC-GAP: 16 §5.3 gives only the first two of the seven lines; the rest are left empty.
+// Warning table 0x4C7AAC, shown for a comment of a track neither heard nor playing (16 §5.3); U+3000 is part of the
+// strings, line 4 is a single U+3000 (not empty, so rendered).
 const WARNING: [&str; COMMENT_LINES] = [
     "＊＊＊注意＊＊＊",
-    "この曲はまだ、ゲーム中で流れておりません",
-    "",
-    "",
-    "",
-    "",
-    "",
+    "　この曲はまだ、ゲーム中で流れておりません",
+    "　自分でプレイする前に聴きたくない、コメントを見たくない、",
+    "　という方は一刻も早くここから立ち去る事をお奨めします。",
+    "　",
+    "　（なお、ここで決定ボタンを押せば、他の曲と同様、",
+    "　　曲の再生とコメント表示が行われますので、注意）",
 ];
+// Comment / title text colour, COLORREF 0xFFE0C0 = RGB (192, 224, 255), and mode arg 0x300000 (16 §5.3).
+const COMMENT_COLOUR: u32 = 0xFFE0C0;
+const COMMENT_MODE: i32 = 0x300000;
+// The one-byte cursor string 0x7F: ascii.anm sprite 126, a ▶ glyph (16 §5.2, 12 §2.9).
+const CURSOR: &str = "\u{7f}";
 
 // One musiccmt.txt entry (0x292 bytes, 16 §5.1): Shift-JIS bytes as stored.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -96,9 +101,8 @@ fn heard_flags(plst: &[u8; MAX_ENTRIES]) -> [bool; MAX_ENTRIES] {
     plst.map(|f| f != 0)
 }
 
-// Title-list text of entry i (16 §5.2): (text, colour, outline), colours 0xRRGGBB.
-// SPEC-GAP: 16 §5.2 does not say whether the colours are 0xRRGGBB or a GDI COLORREF (0xBBGGRR); 0xRRGGBB assumed.
-fn row_text(e: &Entry, heard: bool) -> (String, u32, u32) {
+// Title-list text of entry i (16 §5.2): (text, COLORREF colour, mode arg).
+fn row_text(e: &Entry, heard: bool) -> (String, u32, i32) {
     if heard {
         (crate::text::decode_sjis(&e.title), 0xC0E0FF, 0x302080)
     } else {
@@ -117,32 +121,58 @@ fn comment_text(e: &Entry, heard: bool, playing: bool, k: usize) -> String {
     }
 }
 
-// Up / Down (16 §5.3): cursor ∓/± 1 wrapping over n entries; the 10-row window follows. Returns (cursor, top).
-fn move_cursor(cursor: i32, top: i32, n: i32, d: i32) -> (i32, i32) {
-    let c = (cursor + d).rem_euclid(n.max(1));
-    let top = if c < top {
-        c
-    } else if c >= top + ROWS {
-        c - ROWS + 1
+// Up (16 §5.3 state 1 step 1): cursor − 1; below 0 → last entry with the last 10 rows shown. Returns (cursor, top).
+fn cursor_up(cursor: i32, top: i32, n: i32) -> (i32, i32) {
+    let c = cursor - 1;
+    if c < 0 {
+        (n - 1, (n - ROWS).max(0))
+    } else if c < top {
+        (c, c)
     } else {
-        top
-    };
-    (c, top)
+        (c, top)
+    }
 }
 
-fn rgb(c: u32) -> [u8; 3] {
-    [(c >> 16) as u8, (c >> 8) as u8, c as u8]
+// Down (16 §5.3 state 1 step 2): cursor + 1; past the end → 0 / top 0; top follows when cursor − 10 ≥ top.
+fn cursor_down(cursor: i32, top: i32, n: i32) -> (i32, i32) {
+    let c = cursor + 1;
+    if c >= n {
+        (0, 0)
+    } else if top <= c - ROWS {
+        (c, c - ROWS + 1)
+    } else {
+        (c, top)
+    }
 }
 
-// Text render into the VM's current sprite strip (10 §6 rasteriser, font 15), then visible.
-// SPEC-GAP: the outline offset mode of the music-room text calls is not given; the ±2 px (outline 0) path is used.
+// Multi-bit edge of the music-room key masks (16 §5.3): (cur & m) ≠ 0 and ≠ (prev & m).
+fn mask_edge(inp: &crate::input::Input, m: u16) -> bool {
+    inp.held & m != 0 && inp.held & m != inp.prev & m
+}
+
+// GDI COLORREF 0x00BBGGRR → RGB (10 §6).
+fn colorref(c: u32) -> [u8; 3] {
+    [c as u8, (c >> 8) as u8, (c >> 16) as u8]
+}
+
+// VM +0x1F0 colour as D3DCOLOR 0xAARRGGBB, for `Ascii_SetColor`.
+fn vm_argb(vm: &AnmVm) -> u32 {
+    let c = vm.color;
+    (c[anmvm::A] as u32) << 24
+        | (c[anmvm::R] as u32) << 16
+        | (c[anmvm::G] as u32) << 8
+        | c[anmvm::B] as u32
+}
+
+// Text_RenderToVm (10 §6), font 15: the rasteriser gets x = u0 and the texture-row width and replaces the whole
+// 15-row strip; the outline is always black, `mode` only selects ±1 (−1) / ±2 px. Sets VM flag bit 0.
 fn render_vm(
     ctx: &mut Ctx,
     raster: &mut crate::text::Raster,
     vm: &mut AnmVm,
     s: &str,
     colour: u32,
-    edge: u32,
+    mode: i32,
 ) {
     let slot = vm.anm_slot.max(0) as usize;
     let Some(sp) = ctx
@@ -153,42 +183,43 @@ fn render_vm(
         return;
     };
     let t = ctx.gfx.texture(sp.tex);
-    let (tx, ty) = (
-        (sp.uv[0] * t.width as f32).round() as u32,
+    let (w, tx, ty) = (
+        t.width,
+        (sp.uv[0] * t.width as f32).round(),
         (sp.uv[1] * t.height as f32).round() as u32,
     );
-    let (w, h) = (sp.w as usize, sp.h as usize);
-    let mut rgba = raster.render_coloured(s, rgb(colour), rgb(edge), w, 15, 0.0, 0);
-    rgba.resize(w * h * 4, 0);
-    ctx.gfx
-        .write_texture(sp.tex, tx, ty, w as u32, h as u32, &rgba);
+    let size = 15;
+    let rgba = raster.render_outline(s, colorref(colour), w as usize, size, tx, mode);
+    ctx.gfx.write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
     vm.flags |= anmvm::F_VISIBLE;
 }
 
-// The 0x6A28-byte music-room object at 0x17CF4C8 (16 §5).
+// The 0x6A28-byte music-room object at 0x17CF4C8 (16 §5, structs.md). Zeroed at register: every VM is inert until
+// a script is set (16 §5.2).
 #[derive(Default)]
 pub struct MusicRoom {
     entries: Vec<Entry>,
     // +0xC + 4i: heard flags copied from PLST+0x208 at init (15 §2, 16 §5.1).
     heard: [bool; MAX_ENTRIES],
-    // +0x6C sub-frame, +0x70 state, +0x74 cursor, +0x7C top row.
+    // +0x6C sub-frame, +0x70 state, +0x74 cursor, +0x78 playing entry (0 at init), +0x7C top row.
     sub_frame: i32,
     state: i32,
     cursor: i32,
-    top: i32,
-    // SPEC-GAP: the initial playing entry is not given; 0 (the title theme the menu was playing).
     playing: i32,
+    top: i32,
     // VM +0x88: music00.anm script 0.
     bg: AnmVm,
     // VM 0x32C + i·0x2A4: music00.anm script i + 1, one per entry.
     rows: Vec<AnmVm>,
-    // VM 0x5508 + k·0x2A4: text.anm script 10 + k.
-    comments: Vec<AnmVm>,
-    // VM +0x6784: playing title, text.anm script 0x11.
+    // VM 0x5508 + k·0x2A4: text.anm script 10 + k from the first reveal.
+    comments: [AnmVm; COMMENT_LINES],
+    // VM +0x6784 (8th VM of that array): playing title, text.anm script 0x11.
     title: AnmVm,
     raster: crate::text::Raster,
     // Surface slot 0: music.jpg.
     surface: Option<TextureId>,
+    // Calc returned 0 on the exit frame; the on-remove also removes the draw node (16 §5.3 step 1).
+    removed: bool,
 }
 
 impl MusicRoom {
@@ -207,18 +238,28 @@ impl MusicRoom {
         }
     }
 
-    // Music_PlayFile(entry.file, 0) (02 §4, 16 §5.3): marks flag 0 heard, not the chosen track. If music mode is WAV the
-    // stream is restarted from thbgm.dat, which `play_bgm` always does.
+    fn interrupt_comments(&mut self, n: u16) {
+        for vm in &mut self.comments {
+            vm.pending_interrupt = n;
+        }
+    }
+
+    // Music_PlayFile(entry[playing].file, 0) 0x447F21 (02 §4): marks flag 0 heard, not the chosen track, only in
+    // music mode 1/2 and not in replay playback or demo. The Supervisor flag 13 `Bgm_StreamStart` restart is part of
+    // `play_bgm`, which always restarts the stream.
     fn play(&mut self, ctx: &mut Ctx) {
         let Some(e) = self.entries.get(self.playing as usize) else {
             return;
         };
         ctx.audio.play_bgm(&String::from_utf8_lossy(&e.file));
-        // SPEC-GAP: whether flag 0 is also marked in music mode 0 is not given; it is here.
-        ctx.game.score.plst.music[0] = 1;
+        let g = &mut ctx.game;
+        if matches!(g.cfg.music, 1 | 2) && g.flags & (gamemgr::F_REPLAY | gamemgr::F_DEMO) == 0 {
+            g.score.plst.music[0] = 1;
+        }
     }
 
-    // Comment line k = 0..6 on its VM: text.anm script 10 + k, interrupt 1; empty lines clear VM flag bit 1 (16 §5.3).
+    // Comment line k = 0..6 (16 §5.3 state 1 step 3): AnmFile_SetScript(text.anm 10 + k), interrupt 1; empty →
+    // flag bit 1 cleared and nothing rendered, else bit 1 set and rendered.
     fn reveal(&mut self, ctx: &mut Ctx, k: usize) {
         let Some(e) = self.entries.get(self.cursor as usize) else {
             return;
@@ -226,82 +267,80 @@ impl MusicRoom {
         let c = self.cursor as usize;
         let s = comment_text(e, self.heard[c], self.cursor == self.playing, k);
         let vm = &mut self.comments[k];
-        ctx.anm.set_script(vm, 0, COMMENT_SCRIPT + k);
-        // SPEC-GAP: the comment colours are not given in 16 §5.3; Text_RenderToVm white with a black outline.
-        render_vm(ctx, &mut self.raster, vm, &s, 0xFFFFFF, 0);
+        ctx.anm.file_set_script(vm, 0, COMMENT_SCRIPT + k);
         vm.pending_interrupt = 1;
         if s.is_empty() {
             vm.flags &= !anmvm::F_ENABLED;
+        } else {
+            vm.flags |= anmvm::F_ENABLED;
+            render_vm(ctx, &mut self.raster, vm, &s, COMMENT_COLOUR, COMMENT_MODE);
         }
     }
 
-    fn calc_state(&mut self, ctx: &mut Ctx) {
-        match self.state {
-            0 => {
-                if self.sub_frame == 0 {
-                    self.interrupt_rows();
-                    for vm in &mut self.comments {
-                        vm.pending_interrupt = 1;
-                    }
-                }
-                // SPEC-GAP: whether the sub-frame restarts on entering state 1 is not given; it keeps counting.
-                if self.sub_frame + 1 >= 8 {
-                    self.state = 1;
-                }
-            }
-            _ => self.input(ctx),
+    // MusicRoom_StateIntro 0x448A65 (16 §5.3).
+    fn state_intro(&mut self) {
+        if self.sub_frame == 0 {
+            self.interrupt_rows();
+            self.interrupt_comments(1);
         }
-        // Comment reveal at sub-frames 10, 12, …, 22 (16 §5.3).
+        if self.sub_frame > 7 {
+            self.state = 1;
+        }
+    }
+
+    // MusicRoom_StateInput 0x448B16 (16 §5.3): independent tests on the raw input word in this order; returns true on
+    // exit (Ctrl, R and the sub-frame step are skipped).
+    fn state_input(&mut self, ctx: &mut Ctx) -> bool {
+        let inp = ctx.input;
+        if inp.pressed_or_repeat(UP) {
+            (self.cursor, self.top) = cursor_up(self.cursor, self.top, self.n());
+            self.interrupt_rows();
+            self.interrupt_comments(2);
+            self.sub_frame = 0;
+        }
+        if inp.pressed_or_repeat(DOWN) {
+            (self.cursor, self.top) = cursor_down(self.cursor, self.top, self.n());
+            self.interrupt_rows();
+            self.interrupt_comments(2);
+            self.sub_frame = 0;
+        }
+        // Reveal at sub-frames 10, 12, …, 22; the sub-frame is always even here.
         let sf = self.sub_frame;
-        if (10..=22).contains(&sf) && sf % 2 == 0 {
+        if sf < 30 && (10..=22).contains(&sf) && sf % 2 == 0 {
             self.reveal(ctx, (sf - 10) as usize / 2);
         }
-        self.sub_frame += 1;
-    }
-
-    // State 1 keys (16 §5.3). SPEC-GAP: the order of the key tests is not given; the table order, one per frame.
-    fn input(&mut self, ctx: &mut Ctx) {
-        let inp = ctx.input;
-        let d = if inp.pressed_or_repeat(UP) {
-            -1
-        } else if inp.pressed_or_repeat(DOWN) {
-            1
-        } else {
-            0
-        };
-        if d != 0 {
-            (self.cursor, self.top) = move_cursor(self.cursor, self.top, self.n(), d);
-            self.interrupt_rows();
-            for vm in &mut self.comments {
-                vm.pending_interrupt = 2;
-            }
-            self.sub_frame = 0;
-        } else if inp.pressed(SHOT | ENTER) {
+        if mask_edge(&inp, SHOT | ENTER) {
             self.playing = self.cursor;
             self.play(ctx);
-            if let Some(e) = self.entries.get(self.playing as usize) {
+            self.sub_frame = 0;
+            if let Some(e) = self.entries.get(self.cursor as usize) {
                 let l = e.comments.first().map(Vec::as_slice).unwrap_or_default();
                 let s = crate::text::decode_sjis(&l[..l.len().min(COMMENT_SHOWN)]);
-                ctx.anm.set_script(&mut self.title, 0, TITLE_SCRIPT);
+                ctx.anm.file_set_script(&mut self.title, 0, TITLE_SCRIPT);
+                self.title.pending_interrupt = 1;
                 render_vm(
                     ctx,
                     &mut self.raster,
                     &mut self.title,
                     &s,
-                    0xFFE0C0,
-                    0x300000,
+                    COMMENT_COLOUR,
+                    COMMENT_MODE,
                 );
-                self.title.pending_interrupt = 1;
             }
-        // SPEC-GAP: 16 §5.3 does not say whether Ctrl is an edge or held; edge here (held would restart the fade).
-        } else if inp.pressed(SKIP) {
-            ctx.audio.fade_bgm(8.0);
-        } else if inp.pressed(KEY_R) {
-            self.play(ctx);
-        } else if inp.pressed(BOMB | PAUSE) {
+        }
+        if mask_edge(&inp, BOMB | PAUSE) {
             // The loading banner and screen capture (0x44886F) are done by the Supervisor's 8 → 1 switch.
             ctx.game.request(gamemgr::SCENE_MENU);
+            return true;
         }
+        if mask_edge(&inp, SKIP) {
+            ctx.audio.fade_bgm(8.0);
+        }
+        if mask_edge(&inp, KEY_R) {
+            self.play(ctx);
+        }
+        self.sub_frame += 1;
+        false
     }
 }
 
@@ -326,21 +365,13 @@ impl Task<Ctx> for MusicRoom {
         ctx.anm.set_script(&mut self.bg, ANM_SLOT, 0);
         for i in 0..self.entries.len() {
             let mut vm = AnmVm::default();
-            ctx.anm.set_script(&mut vm, ANM_SLOT, i + 1);
+            ctx.anm.file_set_script(&mut vm, ANM_SLOT, i + 1);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
-            let (s, c, o) = row_text(&self.entries[i], self.heard[i]);
-            render_vm(ctx, &mut self.raster, &mut vm, &s, c, o);
+            vm.pos = [93.0, (18 * (i as i32 + 1) + 104 - 20) as f32, 0.0];
+            let (s, c, m) = row_text(&self.entries[i], self.heard[i]);
+            render_vm(ctx, &mut self.raster, &mut vm, &s, c, m);
             self.rows.push(vm);
         }
-        // SPEC-GAP: the comment VMs' state before the first reveal is not given; started and hidden like an empty line.
-        self.comments = (0..COMMENT_LINES)
-            .map(|k| {
-                let mut vm = AnmVm::default();
-                ctx.anm.set_script(&mut vm, 0, COMMENT_SCRIPT + k);
-                vm.flags &= !anmvm::F_ENABLED;
-                vm
-            })
-            .collect();
         Ok(())
     }
 
@@ -355,9 +386,20 @@ impl Task<Ctx> for MusicRoom {
         ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
     }
 
-    // Calc 0x449399 (16 §5.3). SPEC-GAP: the VM run order is not given; after the state, as Result_Calc.
+    // MusicRoom_Calc 0x449399 (16 §5.3): state, sub-frame step, then the VMs. On exit Calc returns 0 at once.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        self.calc_state(ctx);
+        let s0 = self.state;
+        if s0 == 0 {
+            self.state_intro();
+        } else if self.state_input(ctx) {
+            self.removed = true;
+            return Ret::Remove;
+        }
+        if self.state != s0 {
+            self.sub_frame = 0;
+        } else {
+            self.sub_frame += 1;
+        }
         self.bg.run(&mut ctx.anm);
         for vm in self
             .rows
@@ -370,8 +412,11 @@ impl Task<Ctx> for MusicRoom {
         Ret::Next
     }
 
-    // Draw 0x449487 (16 §5.2). SPEC-GAP: the draw order of the parts is not given.
+    // MusicRoom_Draw 0x449487 (16 §5.2).
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        if self.removed {
+            return Ret::Remove;
+        }
         ctx.gfx.set_viewport(FULLSCREEN);
         if let Some(t) = self.surface {
             ctx.gfx.image(t, 0.0, 0.0);
@@ -381,20 +426,26 @@ impl Task<Ctx> for MusicRoom {
         for i in self.top..end {
             let y = (18 * (i - self.top + 1) + 104 - 20) as f32;
             let vm = &mut self.rows[i as usize];
+            let argb = vm_argb(vm);
             vm.pos = [93.0, y, 0.0];
             ctx.anm.draw(&mut ctx.gfx, vm);
-            ctx.ascii.push(Text::new(48.0, y, format!("{:2}.", i + 1)));
             if i == self.cursor {
-                // SPEC-GAP: the cursor marker string is not given.
-                ctx.ascii.push(Text::new(33.0, y, ">"));
+                ctx.ascii.push(Text::new(93.0 - 60.0, y, CURSOR).argb(argb));
             }
+            ctx.ascii
+                .push(Text::new(48.0, y, format!("{:2}.", i + 1)).argb(argb));
         }
-        ctx.ascii.push(Text::new(320.0, 32.0, "Now Playing"));
-        self.title.pos = [320.0, 52.0, 0.0];
-        ctx.anm.draw(&mut ctx.gfx, &mut self.title);
         for vm in &mut self.comments {
             ctx.anm.draw(&mut ctx.gfx, vm);
         }
+        ctx.ascii
+            .push(Text::new(320.0, 32.0, "Now Playing").argb(0xFFFF_FFFF));
+        // The title is drawn at a forced pos and colour 0xFFFFFFFF, both restored after.
+        let (pos, color) = (self.title.pos, self.title.color);
+        self.title.pos = [320.0, 52.0, 0.0];
+        self.title.color = [255; 4];
+        ctx.anm.draw(&mut ctx.gfx, &mut self.title);
+        (self.title.pos, self.title.color) = (pos, color);
         Ret::Next
     }
 }
@@ -450,11 +501,47 @@ mod tests {
 
     #[test]
     fn cursor_window() {
-        // Wraps both ways; the 10-row window follows.
-        assert_eq!(move_cursor(0, 0, 21, -1), (20, 11));
-        assert_eq!(move_cursor(20, 11, 21, 1), (0, 0));
-        assert_eq!(move_cursor(9, 0, 21, 1), (10, 1));
-        assert_eq!(move_cursor(5, 1, 21, -1), (4, 1));
-        assert_eq!(move_cursor(1, 1, 21, -1), (0, 0));
+        // Up below 0 → last entry with the last 10 rows shown; Down past the end → 0 / 0 (16 §5.3).
+        assert_eq!(cursor_up(0, 0, 21), (20, 11));
+        assert_eq!(cursor_up(0, 0, 5), (4, 0));
+        assert_eq!(cursor_down(20, 11, 21), (0, 0));
+        assert_eq!(cursor_down(9, 0, 21), (10, 1));
+        assert_eq!(cursor_down(8, 0, 21), (9, 0));
+        assert_eq!(cursor_up(5, 1, 21), (4, 1));
+        assert_eq!(cursor_up(1, 1, 21), (0, 0));
+    }
+
+    #[test]
+    fn key_edges_and_colours() {
+        let inp = |held, prev| crate::input::Input {
+            held,
+            prev,
+            ..Default::default()
+        };
+        // Multi-bit edge: releasing Enter while Shot is held also fires; holding both does not.
+        assert!(mask_edge(&inp(SHOT, SHOT | ENTER), SHOT | ENTER));
+        assert!(mask_edge(&inp(SHOT | ENTER, SHOT), SHOT | ENTER));
+        assert!(!mask_edge(&inp(SHOT | ENTER, SHOT | ENTER), SHOT | ENTER));
+        assert!(!mask_edge(&inp(0, SHOT), SHOT | ENTER));
+        // COLORREF 0x00BBGGRR.
+        assert_eq!(colorref(COMMENT_COLOUR), [192, 224, 255]);
+        assert_eq!(colorref(0xC0E0FF), [255, 224, 192]);
+        // Warning line 4 is one U+3000, not empty.
+        assert_eq!(WARNING[4], "\u{3000}");
+        assert!(WARNING[1..7].iter().all(|l| l.starts_with('\u{3000}')));
+    }
+
+    #[test]
+    fn intro_and_input_sub_frames() {
+        // Intro: state 1 on the 9th call (sub-frame 8), then the sub-frame restarts at 0 (16 §5.3).
+        let mut m = MusicRoom::new();
+        let mut calls = 0;
+        while m.state == 0 {
+            let s0 = m.state;
+            m.state_intro();
+            m.sub_frame = if m.state != s0 { 0 } else { m.sub_frame + 1 };
+            calls += 1;
+        }
+        assert_eq!((calls, m.sub_frame), (9, 0));
     }
 }

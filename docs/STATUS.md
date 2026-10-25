@@ -655,6 +655,16 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl109 (RE-Q39 CODE BUG 1–10, IMPL108 Q1, music room 16 §5.2/§5.3, 02 §4, 10 §6): COLORREF colours, black
+  outline always (4th arg = mode only, `Raster::render_coloured` removed), full 7-line warning table, comments
+  0xFFE0C0, cursor = byte 0x7F (ascii sprite 126) and numbers in the row VM colour; Calc: state, sub-frame reset on a
+  state change / +1, intro → state 1 at sub-frame 8, state 1 +2 per frame; independent key tests Up, Down, reveal,
+  Shot|Enter (sub-frame := 0), Bomb|ESC (exit: Calc returns 0, no VM run, no draw), Ctrl, R with multi-bit edges;
+  draw order bg, rows, 7 comments, "Now Playing", title at (320, 52) forced white; `AnmFile_SetScript` (pos kept);
+  VMs inert until scripted; `Music_PlayFile` marks flag 0 only in music modes 1/2 outside replay/demo. Text strips
+  are rendered with W = texture width, x = u0, 15 rows (10 §6). Also `menu.rs` `render_description` per 12 §2.2
+  (RE-Q44: x = trunc(256 − len·15/4), font 15, COLORREF 0x00FFF0E0) — its 17-row writes left junk in the music-room
+  strips. musicroom_practice 3505 → 3505 rows, draw-identical frames 1988 → 4081. SPEC-GAP 46 → 33.
 - impl108 (RE-Q38, RE-Q36, RE-Q41): normal-mode bomb start clears player VM bit 17, ends the deathbomb ring,
   unfreezes bullets, then `AnmMgr_TintOff`; the bomb end no longer tints off; `Player_DyingUpdate` tints off only at
   the real death (`Player::real_death`, also clears bit 17) (09 §6.2, §7, 06 §10.2). `Player_Die` with bombs ≥ 1

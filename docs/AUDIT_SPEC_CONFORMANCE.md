@@ -174,7 +174,7 @@
 ## B. Части спецификации, которые не реализованы (помечены в коде)
 
 Natives 4, 7, 9, 11, 13, 16, 21, 25 ✅ impl72 (`eclvm.rs:1098`); timeline op 9 ✅ impl88 (0 использований); spell-practice guard для ops
-129/130/133/134 ✅ impl88; комната музыки ✅ impl70 (16 §5, `musicroom.rs`); диалог сохранения replay (16 §2.6 / 15 §3.6, `result.rs:378`,
+129/130/133/134 ✅ impl88; комната музыки ✅ impl70, RE-Q39 ✅ impl109 (16 §5, `musicroom.rs`); диалог сохранения replay (16 §2.6 / 15 §3.6, `result.rs:378`,
 `replay.rs:493`) ✅ impl69; hidden unlock code (15 §2.12, `result.rs:295`) ✅ impl71; D → score.txt (16 §2.7) ✅ impl71;
 key config (15 §1.3) ✅ impl68; MIDI и «music off» (`audio.rs:212`; music off ✅ impl70, MIDI открыт); джойстик и ShotSlow
 ✅ impl68 (`input.rs:24`); чтение и запись th08.cfg (`game.rs:43`, `config.rs:88`) ✅ impl67; frame skip cfg+0x23
