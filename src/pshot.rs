@@ -104,7 +104,16 @@ pub const LASER_SLOTS: usize = 3;
 pub struct LaserSlot {
     pub owner: Option<usize>,
     pub timer: i32,
-    pub entry: Option<ShotEntry>,
+    pub entry: Option<EntryId>,
+}
+
+// Stands in for the entry pointer at +0xE2A80 (14 §4): the human and youkai sht are separate buffers (09 §2), so
+// the same entry of a solo's shared file differs by copy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EntryId {
+    pub youkai: bool,
+    pub level: usize,
+    pub index: usize,
 }
 
 // Effect 0x2F colour of Youmu's half / solo (14 §3.3). Solo, unfocused, direction 0: the original returns before both
@@ -487,19 +496,25 @@ impl Player {
         } else {
             &self.sht
         };
-        let Some(level) = sht.level(self.stats.power, self.forced_level()) else {
+        let Some(level) = sht.level_index(self.stats.power, self.forced_level()) else {
             return;
         };
-        let entries = level.entries.clone();
+        let entries = sht.levels[level].entries.clone();
+        let youkai = self.focus == 1;
         let mut slot = 0;
-        for e in &entries {
+        for (index, e) in entries.iter().enumerate() {
+            let id = EntryId {
+                youkai,
+                level,
+                index,
+            };
             while slot < MAX_BULLETS && self.bullets[slot].state != 0 {
                 slot += 1;
             }
             if slot >= MAX_BULLETS {
                 break;
             }
-            if self.init_bullet(anm, slot, t, e) {
+            if self.init_bullet(anm, slot, t, e, id) {
                 slot += 1;
             }
         }
@@ -553,7 +568,14 @@ impl Player {
     }
 
     // Init functions (table 0x4C7EE0, 09 §2.1); true when the slot was used.
-    fn init_bullet(&mut self, anm: &mut AnmManager, slot: usize, t: i32, e: &ShotEntry) -> bool {
+    fn init_bullet(
+        &mut self,
+        anm: &mut AnmManager,
+        slot: usize,
+        t: i32,
+        e: &ShotEntry,
+        id: EntryId,
+    ) -> bool {
         match e.init {
             1 => {
                 if !self.default_init(anm, slot, t, e) {
@@ -569,7 +591,7 @@ impl Player {
             }
             2 | 3 => !self.bombing && self.default_init(anm, slot, t, e),
             // Laser 0x44FE20 (14 §4): refused while bombing or GameFlags bit 13; one live laser per slot; a different
-            // entry (level change) ends the old one.
+            // entry (level or focus change, compared by identity) ends the old one.
             4 => {
                 let s = (e.phase.max(0) as usize).min(LASER_SLOTS - 1);
                 if self.bombing || crate::gamemgr::flags() & F_13 != 0 {
@@ -577,7 +599,7 @@ impl Player {
                 }
                 let ls = self.laser_slots[s];
                 if let Some(old) = ls.owner {
-                    if ls.entry != Some(*e) {
+                    if ls.entry != Some(id) {
                         self.bullets[old].vm.pending_interrupt = 1;
                         self.laser_slots[s] = LaserSlot::default();
                     }
@@ -592,7 +614,7 @@ impl Player {
                 self.laser_slots[s] = LaserSlot {
                     owner: Some(slot),
                     timer: 999,
-                    entry: Some(*e),
+                    entry: Some(id),
                 };
                 true
             }
@@ -1051,11 +1073,32 @@ mod tests {
         let mut p = Player::default();
         let e = laser_entry();
         crate::gamemgr::set_flags(F_13);
-        assert!(!p.init_bullet(&mut anm, 0, 0, &e));
+        assert!(!p.init_bullet(&mut anm, 0, 0, &e, EntryId::default()));
         assert!(p.laser_slots[0].owner.is_none());
         crate::gamemgr::set_flags(0);
-        assert!(p.init_bullet(&mut anm, 0, 0, &e));
+        assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default()));
         assert_eq!(p.laser_slots[0].owner, Some(0));
+    }
+
+    // 14 §4: the same entry from the other sht copy (solo focus change) ends the laser; no new laser that frame.
+    #[test]
+    fn laser_focus_change_restarts() {
+        let mut anm = AnmManager::default();
+        let mut p = Player::default();
+        let e = laser_entry();
+        let human = EntryId::default();
+        let youkai = EntryId {
+            youkai: true,
+            ..human
+        };
+        assert!(p.init_bullet(&mut anm, 0, 0, &e, human));
+        assert!(!p.init_bullet(&mut anm, 1, 2, &e, human));
+        assert_eq!(p.laser_slots[0].owner, Some(0));
+        assert!(!p.init_bullet(&mut anm, 1, 2, &e, youkai));
+        assert_eq!(p.bullets[0].vm.pending_interrupt, 1);
+        assert!(p.laser_slots[0].owner.is_none());
+        assert!(p.init_bullet(&mut anm, 1, 4, &e, youkai));
+        assert_eq!(p.laser_slots[0].entry, Some(youkai));
     }
 
     // 14 §4: laser update 5 ends the laser (interrupt 1, slot cleared, update removed) on bit 13.
@@ -1065,7 +1108,7 @@ mod tests {
         let mut p = Player::default();
         let e = laser_entry();
         p.options[0].state = 2;
-        assert!(p.init_bullet(&mut anm, 0, 0, &e));
+        assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default()));
         p.shot_timer.set(0);
         crate::gamemgr::set_flags(F_13);
         assert!(!p.laser_update(0));

@@ -90,11 +90,15 @@ impl Default for Sht {
 impl Sht {
     // First level whose threshold > trunc(power) (09 §2.1); `forced` picks bomb level 6/7 (shot types 2/9).
     pub fn level(&self, power: f32, forced: Option<usize>) -> Option<&Level> {
+        self.level_index(power, forced).map(|k| &self.levels[k])
+    }
+
+    pub fn level_index(&self, power: f32, forced: Option<usize>) -> Option<usize> {
         if let Some(k) = forced.filter(|&k| k < self.levels.len()) {
-            return self.levels.get(k);
+            return Some(k);
         }
         let p = power as i32;
-        self.levels.iter().find(|l| l.threshold > p)
+        self.levels.iter().position(|l| l.threshold > p)
     }
 }
 

@@ -32,28 +32,23 @@ const BG_NAMES: [&str; 9] = [
     "stg1bg", "stg2bg", "stg3bg", "stg4abg", "stg4abg", "stg5bg", "stg6bg", "stg7bg", "stg8bg",
 ];
 
-// Stage index 0..17 (9..17 = `_s` variants) → (.std, bg .anm) (06 §2, 04_file_index).
-pub fn files(index: usize) -> (String, String) {
-    let k = index % 9;
-    let s = if index >= 9 { "_s" } else { "" };
+// Stage index 0..8 → (.std, bg .anm); spell practice (GameFlags bit 14) takes `stageN_s.std` (07 §1, 06 §2, 04).
+pub fn files(index: usize, spell_practice: bool) -> (String, String) {
+    let s = if spell_practice { "_s" } else { "" };
     (
-        format!("{}{s}.std", STD_NAMES[k]),
-        format!("{}.anm", BG_NAMES[k]),
+        format!("{}{s}.std", STD_NAMES[index]),
+        format!("{}.anm", BG_NAMES[index]),
     )
 }
 
-// Accepts 1, 2, 3, 4a, 4b, 5, 6a, 6b, ex (also 6/7/8 = file digits), stageN[_s][.std], or `idx:<n>`.
+// Accepts 1, 2, 3, 4a, 4b, 5, 6a, 6b, ex (also 6/7/8 = file digits), stageN[.std], or `idx:<n>`.
 pub fn parse_stage_arg(a: &str) -> Option<usize> {
     let a = a.trim().to_ascii_lowercase();
     if let Some(n) = a.strip_prefix("idx:") {
-        return n.parse().ok().filter(|&n| n < 18);
+        return n.parse().ok().filter(|&n| n < 9);
     }
     let a = a.trim_end_matches(".std");
     let a = a.strip_prefix("stage").unwrap_or(a);
-    let (a, alt) = match a.strip_suffix("_s") {
-        Some(b) => (b, 9),
-        None => (a, 0),
-    };
     let k = match a {
         "1" => 0,
         "2" => 1,
@@ -66,7 +61,7 @@ pub fn parse_stage_arg(a: &str) -> Option<usize> {
         "8" | "ex" | "extra" => 8,
         _ => return None,
     };
-    Some(k + alt)
+    Some(k)
 }
 
 // Fog near/far (eye-space z) and colour (D3DCOLOR); current at +0xAEC (06 §3, §8).
@@ -248,7 +243,7 @@ impl StageCamera {
 
 // g_Stage 0x4E4030 (06 §3).
 pub struct Stage {
-    // Stage index 0..8 (+9 for `_s`).
+    // Stage index 0..8 (g_StageIdx; also 0..8 in spell practice, 07 §1).
     pub index: usize,
     pub std: Std,
     // Object +3 runtime flags (06 §1.1): bit 0 script running, bit 1 drawn.
@@ -387,7 +382,7 @@ impl Stage {
         index: usize,
         player: Option<PlayerRef>,
     ) -> Result<Rc<RefCell<Stage>>> {
-        let (std_name, bg) = files(index);
+        let (std_name, bg) = files(index, ctx.game.spell_practice());
         let std = stdfile::parse(&ctx.archive.read(&std_name)?)?;
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &bg)?;
         let mut st = Stage::new(index, std);
@@ -1274,9 +1269,14 @@ mod tests {
     fn stage_args() {
         assert_eq!(parse_stage_arg("4b"), Some(4));
         assert_eq!(parse_stage_arg("6B"), Some(7));
-        assert_eq!(parse_stage_arg("stage7_s.std"), Some(16));
+        assert_eq!(parse_stage_arg("stage7.std"), Some(7));
+        assert_eq!(parse_stage_arg("stage7_s.std"), None);
         assert_eq!(parse_stage_arg("ex"), Some(8));
-        assert_eq!(files(4), ("stage4b.std".into(), "stg4abg.anm".into()));
+        assert_eq!(
+            files(4, false),
+            ("stage4b.std".into(), "stg4abg.anm".into())
+        );
+        assert_eq!(files(7, true), ("stage7_s.std".into(), "stg7bg.anm".into()));
     }
 
     #[test]
@@ -1284,8 +1284,8 @@ mod tests {
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        for index in 0..18 {
-            let (std_name, bg) = files(index);
+        for (index, sp) in (0..9).flat_map(|i| [(i, false), (i, true)]) {
+            let (std_name, bg) = files(index, sp);
             let std = stdfile::parse(&ar.read(&std_name).unwrap()).unwrap();
             let mut anm = AnmManager::default();
             anm.insert(

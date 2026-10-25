@@ -417,7 +417,7 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Enum(&["1", "2", "3", "4a", "4b", "5", "6a", "6b", "ex"]),
         default: "",
         group: Group::StartGame,
-        help: "start a game at that stage (also stageN[_s][.std], idx:N)",
+        help: "start a game at that stage (also stageN[.std], idx:N)",
         set: |s, v| {
             s.stage = Some(crate::stage::parse_stage_arg(v).ok_or("unknown stage")?);
             Ok(())

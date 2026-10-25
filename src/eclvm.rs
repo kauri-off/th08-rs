@@ -1132,9 +1132,8 @@ impl Exec<'_> {
             }
             8 => self.familiar_ring(t),
             18 if arg != 0 => self.anm.speed = 1.0 / arg as f32,
-            19 => t
-                .ctx
-                .set_int(V_INT0, self.m.g.spell.as_ref().map_or(0, |s| s.id)),
+            // 07 §12 row 19: the spell-practice card id (i16 0x164D0B8, sign-extended), not the running Spell's id.
+            19 => t.ctx.set_int(V_INT0, self.m.g.card as i32),
             // 07 §12 row 24: stats +0x1C, spell cards captured in this game (11 §5).
             24 => {
                 let n = self.m.player.borrow().stats.spells;

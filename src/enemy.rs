@@ -67,11 +67,28 @@ const DROP_TABLE: [i32; 32] = [
 
 const ECL_NAMES: [&str; 9] = ["1", "2", "3", "4a", "4b", "5", "6", "7", "8"];
 
-// ECL and stage-enemy ANM file names (07 §1): index ≥ 9 = spell practice (`…sp.ecl`).
-pub fn files(index: usize) -> (String, String) {
-    let k = ECL_NAMES[index % 9];
-    let sp = if index >= 9 { "sp" } else { "" };
-    (format!("ecldata{k}{sp}.ecl"), format!("stg{k}enm.anm"))
+// Card tables 0x4C70E4 / 0x4C7054 for cards 205–221 (07 §1): 205–215 reuse a stage's `sp` ECL and `stgNenm`,
+// 216–221 use the per-character `_xx` files.
+const LAST_WORD_STAGE: [usize; 11] = [0, 1, 2, 5, 6, 7, 8, 5, 8, 3, 4];
+const LAST_WORD_CHAR: [&str; 6] = ["sk", "ym", "al", "rm", "yy", "yk"];
+
+// ECL and slot-8 stage-enemy ANM file names (07 §1 table): `spell` = card id when GameFlags bit 14 is set.
+pub fn files(index: usize, spell: Option<i16>) -> (String, String) {
+    let k = ECL_NAMES[index];
+    let Some(c) = spell else {
+        return (format!("ecldata{k}.ecl"), format!("stg{k}enm.anm"));
+    };
+    match c - 205 {
+        n @ 0..=10 => {
+            let k = ECL_NAMES[LAST_WORD_STAGE[n as usize]];
+            (format!("ecldata{k}sp.ecl"), format!("stg{k}enm.anm"))
+        }
+        n @ 11..=16 => {
+            let x = LAST_WORD_CHAR[n as usize - 11];
+            (format!("ecldata_{x}.ecl"), format!("stgenm_{x}.anm"))
+        }
+        _ => (format!("ecldata{k}sp.ecl"), format!("stg{k}enm.anm")),
+    }
 }
 
 // Variable interpolation slot, ctx+0x9C + 0x30·k (07 §5.6, op 36).
@@ -806,7 +823,8 @@ impl EnemyManager {
         bullets: Rc<RefCell<BulletManager>>,
         diff: i32,
     ) -> Result<Rc<RefCell<EnemyManager>>> {
-        let (ecl_name, enm) = files(index);
+        let spell = ctx.game.spell_practice().then_some(ctx.game.card);
+        let (ecl_name, enm) = files(index, spell);
         let ecl = ecl::parse(ctx.archive.read(&ecl_name)?)?;
         ctx.anm
             .load(&mut ctx.gfx, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
@@ -3024,7 +3042,7 @@ mod tests {
         let frames = crate::settings::get().test_frames;
         for shot in 0..12u8 {
             let index = [0, 1, 2, 4][shot as usize % 4];
-            let (ecl_name, enm) = files(index);
+            let (ecl_name, enm) = files(index, None);
             let ecl = ecl::parse(ar.read(&ecl_name).unwrap()).unwrap();
             let mut anm = AnmManager::default();
             anm.insert(
@@ -3128,10 +3146,11 @@ mod tests {
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        for index in 0..18 {
+        let all = (0..9).flat_map(|i| [(i, None), (i, Some(0))]);
+        for (index, spell) in all.chain((205..=221).map(|c| (0, Some(c)))) {
             let mut fired = 0;
             for diff in [0, 3] {
-                let (ecl_name, enm) = files(index);
+                let (ecl_name, enm) = files(index, spell);
                 let ecl = ecl::parse(ar.read(&ecl_name).unwrap()).unwrap();
                 let mut anm = AnmManager::default();
                 anm.insert(
@@ -3208,8 +3227,34 @@ mod tests {
                     p.stats.score()
                 );
             }
-            assert!(index >= 9 || fired > 0, "{}: nothing fired", files(index).0);
+            assert!(
+                spell.is_some() || fired > 0,
+                "{}: nothing fired",
+                files(index, spell).0
+            );
         }
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::files;
+
+    // 07 §1 selection table and card tables 0x4C70E4 / 0x4C7054.
+    #[test]
+    fn spell_practice_files() {
+        let f = |i, c| {
+            let (e, a) = files(i, c);
+            format!("{e} {a}")
+        };
+        assert_eq!(f(7, None), "ecldata7.ecl stg7enm.anm");
+        assert_eq!(f(7, Some(171)), "ecldata7sp.ecl stg7enm.anm");
+        assert_eq!(f(2, Some(54)), "ecldata3sp.ecl stg3enm.anm");
+        assert_eq!(f(8, Some(205)), "ecldata1sp.ecl stg1enm.anm");
+        assert_eq!(f(8, Some(208)), "ecldata5sp.ecl stg5enm.anm");
+        assert_eq!(f(8, Some(215)), "ecldata4bsp.ecl stg4benm.anm");
+        assert_eq!(f(8, Some(216)), "ecldata_sk.ecl stgenm_sk.anm");
+        assert_eq!(f(0, Some(221)), "ecldata_yk.ecl stgenm_yk.anm");
     }
 }
 
@@ -3225,7 +3270,7 @@ mod laser_tests {
         };
         let mut total = 0;
         for index in [2, 4, 6, 7, 8] {
-            let (ecl_name, enm) = files(index);
+            let (ecl_name, enm) = files(index, None);
             let mut anm = AnmManager::default();
             for (slot, name) in [
                 (ANM_ENEMY, "enemy.anm"),
