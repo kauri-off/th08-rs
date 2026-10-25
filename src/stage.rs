@@ -220,7 +220,8 @@ impl StageCamera {
             let t = cam_ease(self.mode[FOV], t);
             self.fov = self.start.fov + (self.target.fov - self.start.fov) * t;
         }
-        self.facing_norm = normalize(self.v[FACING]);
+        // +0x63B8 (06 §3): D3DX SSE normalise, not facing / |facing| (05 §10).
+        self.facing_norm = crate::d3dx::vec3_normalize(self.v[FACING]);
     }
 
     pub fn eye(&self) -> Vec3 {
@@ -625,7 +626,7 @@ impl Stage {
         if self
             .player
             .as_ref()
-            .is_some_and(|p| p.borrow().freeze_bullets)
+            .is_some_and(|p| p.borrow().freeze_bullets())
         {
             return;
         }
@@ -660,6 +661,7 @@ impl Stage {
             pos: self.cam.v[POS],
             eye: self.cam.eye(),
             facing: self.cam.v[FACING],
+            facing_norm: self.cam.facing_norm,
         });
         let overlay = self.overlay.color;
         crate::effect::with(|e| e.overlay = overlay);
@@ -1204,13 +1206,13 @@ mod tests {
     fn frozen_bullets_skip_calc() {
         let mut st = synthetic(vec![rec(0, 13, [7, 0, 0]), rec(-1, 0, [0; 3])]);
         let player = crate::player::Player::new_ref();
-        player.borrow_mut().freeze_bullets = true;
+        player.borrow_mut().set_freeze_bullets(true);
         st.player = Some(player.clone());
         let mut anm = AnmManager::default();
         st.step(&mut anm);
         assert_eq!((st.ip, st.frame, st.clear_color), (0, 0, 0));
         assert!(!st.sparkle_on);
-        player.borrow_mut().freeze_bullets = false;
+        player.borrow_mut().set_freeze_bullets(false);
         st.step(&mut anm);
         assert_eq!((st.ip, st.frame, st.clear_color), (1, 1, 7));
         assert!(st.sparkle_on);

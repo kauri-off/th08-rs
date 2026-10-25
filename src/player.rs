@@ -453,8 +453,6 @@ pub struct Player {
     pub frames: i32,
     // Pending write of GM +0x3DBB3 (game over), stored into `Game::game_over` by the player / enemy calc that set it.
     pub game_over: bool,
-    // GameFlags bit 10 bullet freeze (09 §6.1).
-    pub freeze_bullets: bool,
     // Port-only counters (hits, grazes, deaths, bombs started; spell failure reads deaths / bombs_started).
     pub hits: u32,
     // +0xE2A94 effect counter (13 §2.6 type 3).
@@ -524,7 +522,6 @@ impl Default for Player {
             env: GrazeEnv::default(),
             frames: 0,
             game_over: false,
-            freeze_bullets: false,
             hits: 0,
             spark_counter: 0,
             invuln_ring: false,
@@ -740,7 +737,7 @@ impl Player {
                 n += 7;
             }
             n = n.min(15);
-            if self.env.spell && self.env.boss {
+            if self.env.spell {
                 n = (n * 2).min(30);
             }
             if matches!(self.shot_type, 0 | 4 | 5) {
@@ -755,12 +752,23 @@ impl Player {
             self.vm.color2 = [0xFF, 0xFF, 0xFF, a];
             self.vm.flags |= anmvm::F_COLOR2;
             crate::effect::death_ring(rng, self.pos, n);
-        }
-        if self.env.spell {
-            self.freeze_bullets = true;
+            // GameFlags bit 10 only in the bombs ≥ 1 branch: a 0-bomb "Miss" during a card freezes nothing (09 §6.1).
+            if self.env.spell {
+                self.set_freeze_bullets(true);
+            }
         }
         self.deathbomb = n;
         self.drop_attracted = true;
+    }
+
+    // GameFlags bit 10, the spell-card death freeze (09 §6.1, 11 §2.1).
+    pub fn freeze_bullets(&self) -> bool {
+        gamemgr::flags() & gamemgr::F_DEATH != 0
+    }
+
+    pub fn set_freeze_bullets(&mut self, on: bool) {
+        let f = gamemgr::flags() & !gamemgr::F_DEATH;
+        gamemgr::set_flags(if on { f | gamemgr::F_DEATH } else { f });
     }
 
     // GameFlags bits 7–8: a boss last spell runs or was captured (the dissolve-spell mode, 11 §2.1).
@@ -1123,7 +1131,7 @@ impl Player {
             0xFF4040FF,
         );
         // Unfreeze, then the only tint-off of Player_DyingUpdate (06 §10.2), then the silhouette off (09 §6.2).
-        self.freeze_bullets = false;
+        self.set_freeze_bullets(false);
         anm.tint_off();
         self.vm.flags &= !anmvm::F_COLOR2;
         // 0x164D0B0 := 0 here, not in Player_Die: a deathbomb leaves it unchanged (09 §6.2, 11 §2).
@@ -1259,7 +1267,7 @@ impl Player {
             self.vm.run(anm);
         }
         // 09 §4.4: skipped while GameFlags bit 10.
-        if !self.freeze_bullets {
+        if !self.freeze_bullets() {
             self.update_bullets(anm);
         }
         self.update_shot_timer(anm, inp);
@@ -1356,7 +1364,7 @@ impl Task<Ctx> for Player {
             None => self.frame(&mut ctx.anm, &inp, None),
         }
         crate::effect::set_player(self.pos);
-        crate::effect::set_frozen(self.freeze_bullets);
+        crate::effect::set_frozen(self.freeze_bullets());
         self.store_game_over(&mut ctx.game);
         Ret::Next
     }
@@ -1629,6 +1637,26 @@ mod tests {
             p.step(&mut anm, &input(0));
         }
         assert_eq!(p.state, 0);
+    }
+
+    // 09 §6.1: card doubling without a boss test; GameFlags bit 10 only with bombs ≥ 1.
+    #[test]
+    fn spell_death_freeze_flag() {
+        let mut rng = Rng::default();
+        let (mut p, _) = ready();
+        p.shot_type = 2;
+        p.env.spell = true;
+        p.stats.time_threshold = 5000;
+        gamemgr::set_flags(0);
+        p.stats.bombs = 0.0;
+        p.die(&mut rng);
+        assert_eq!((p.deathbomb, gamemgr::flags()), (2, 0));
+        p.state = 0;
+        p.stats.bombs = 1.0;
+        p.die(&mut rng);
+        assert_eq!((p.deathbomb, gamemgr::flags()), (12, gamemgr::F_DEATH));
+        assert!(p.freeze_bullets());
+        gamemgr::set_flags(0);
     }
 
     #[test]

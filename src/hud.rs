@@ -728,7 +728,7 @@ impl Hud {
         if let Some(i) = e.boss(0)
             && g.paused == 0
             && g.game_over == 0
-            && !self.player.borrow().freeze_bullets
+            && !self.player.borrow().freeze_bullets()
         {
             crate::ascii::popup_large_static(
                 [2.0, 29.0],

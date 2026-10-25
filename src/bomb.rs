@@ -499,7 +499,7 @@ impl Player {
             // 09 §7 order: silhouette (VM bit 17) off, deathbomb ring ended, bullets unfrozen, AnmMgr_TintOff.
             self.vm.flags &= !anmvm::F_COLOR2;
             effect::free(effect::FIXED_BASE + effect::FIX_DEATH);
-            self.freeze_bullets = false;
+            self.set_freeze_bullets(false);
             anm.tint_off();
             let rng = &mut anm.rng;
             index = self.focus.min(1) as usize;
@@ -660,14 +660,14 @@ impl Player {
         }
     }
 
-    // Orb impact (14 §2.1 / §2.2). Quirk kept: the C circle is centred on the player, not the orb.
+    // Orb impact (14 §2.1 / §2.2), rates 64/15 and 128/15 exact. Quirk kept: the C circle is centred on the player, not the orb.
     fn orb_explode(&mut self, anm: &mut AnmManager, i: usize, ls: bool) {
         self.areas_off(i);
         let p = xy(self.pos);
         let q = self.bomb.objs[i].pos;
-        self.cancel_circle(p, 64.0, 4.267, 30, 6);
+        self.cancel_circle(p, 64.0, 64.0 / 15.0, 30, 6);
         if ls {
-            self.dc(xy(q), 64.0, 8.533, 25, 15, 5, 50, false);
+            self.dc(xy(q), 64.0, 128.0 / 15.0, 25, 15, 5, 50, false);
         } else {
             self.dc(xy(q), 64.0, 12.8, 500, 12, 4, 0, false);
         }
@@ -784,7 +784,17 @@ impl Player {
                 o.f8 += if i % 2 == 0 { 2.4 } else { 1.2 };
             }
             if b.t >= self.bomb.duration - 40 - i as i32 {
+                // Quirk kept (14 §2.2): the follow write still runs through the old slots, so the impact C circle
+                // that reused the just-freed slot moves from p to the orb.
+                let (c, d) = (o.carea, o.darea);
                 self.orb_explode(anm, i, true);
+                let q = xy(self.bomb.objs[i].pos);
+                if let Some(a) = d {
+                    self.damage_areas[a].pos = q;
+                }
+                if let Some(a) = c {
+                    self.cancel_areas[a].pos = q;
+                }
             } else {
                 self.follow(i);
             }
@@ -805,8 +815,8 @@ impl Player {
             let pt = [point[0], point[1], 0.0];
             effect::spawn(anm, 0x31, pt, 1, colour);
             effect::spawn(anm, 0x37, pt, 1, colour);
-            let c = self.cancel_circle(point, 64.0, 4.267, 30, 6);
-            let d = self.dc(point, 64.0, 8.533, 400, 15, 2, 0, false);
+            let c = self.cancel_circle(point, 64.0, 64.0 / 15.0, 30, 6);
+            let d = self.dc(point, 64.0, 128.0 / 15.0, 400, 15, 2, 0, false);
             let o = &mut self.bomb.objs[k];
             Self::obj_script(anm, o, 0x14);
             o.vm.color = colour.to_le_bytes();
@@ -1651,6 +1661,34 @@ mod tests {
             p.step(&mut anm, &press(0));
         }
         assert!(!p.bombing && anm.tint_on);
+    }
+
+    // 14 §2 / §2.2: exact 64/15 and 128/15; the LS impact C circle reuses the freed slot and is moved to the orb.
+    #[test]
+    fn reimu_ls_impact_follow_write() {
+        assert_eq!(
+            ((64.0f32 / 15.0).to_bits(), (128.0f32 / 15.0).to_bits()),
+            (0x40888889, 0x41088889)
+        );
+        let (mut p, mut anm) = ready(0);
+        p.bomb.ch = 0;
+        p.bomb.duration = 200;
+        let bf = |t| Bf {
+            t,
+            adv: true,
+            ls: true,
+            gs: 1.0,
+        };
+        p.bomb_reimu_ls(&mut anm, bf(0));
+        let old_c = p.bomb.objs[15].carea.unwrap();
+        p.bomb.objs[15].f8 = 50.0;
+        p.bomb_reimu_ls(&mut anm, bf(145));
+        let o = &p.bomb.objs[15];
+        assert_eq!((o.state, o.carea), (2, None));
+        let c = &p.cancel_areas[old_c];
+        assert!(c.active && c.dr == 64.0 / 15.0);
+        assert_eq!(c.pos, xy(o.pos));
+        assert_ne!(c.pos, xy(p.pos));
     }
 
     #[test]

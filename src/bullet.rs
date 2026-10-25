@@ -1419,7 +1419,7 @@ impl BulletManager {
     pub fn step(&mut self, anm: &mut AnmManager) {
         // Port plumbing: bomb areas registered by other tasks this frame become visible here.
         self.player.borrow_mut().take_queued_areas();
-        if self.frozen || self.player.borrow().freeze_bullets {
+        if self.frozen || self.player.borrow().freeze_bullets() {
             return;
         }
         let pl = self.player.clone();
@@ -1489,7 +1489,7 @@ impl BulletManager {
     pub fn draw(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         gfx.set_viewport(PLAYFIELD);
         // Tint 0xFFF01010 only while bullets are frozen, then off (06 §10.2).
-        if self.player.borrow().freeze_bullets {
+        if self.player.borrow().freeze_bullets() {
             (anm.tint, anm.tint_on) = (0xFFF01010, true);
         }
         self.items.draw(anm, gfx);

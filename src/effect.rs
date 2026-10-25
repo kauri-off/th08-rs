@@ -2,6 +2,7 @@
 
 use crate::anmmgr::{self, AnmManager};
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::d3dx;
 use crate::game::Ctx;
 use crate::gfx::{Camera, FULLSCREEN, Gfx, PLAYFIELD, Vertex};
 use crate::task::{self, Chain, Ret, Task};
@@ -114,6 +115,8 @@ pub struct View {
     pub pos: [f32; 3],
     pub eye: [f32; 3],
     pub facing: [f32; 3],
+    // Stage +0x63B8: facing normalised by Stage_Calc (06 §3).
+    pub facing_norm: [f32; 3],
 }
 
 pub struct Effects {
@@ -254,15 +257,6 @@ fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn norm(a: [f32; 3]) -> [f32; 3] {
-    let l = dot(a, a).sqrt();
-    if l > 0.0 {
-        [a[0] / l, a[1] / l, a[2] / l]
-    } else {
-        a
-    }
 }
 
 impl Effect {
@@ -658,12 +652,12 @@ impl Effects {
             }
             // EffUpd_Orbit13 0x426030 (13 §2.6b): the quaternion (n·sin a, cos a) rotates by 2a about n.
             13..=15 => {
-                let n = norm(e.dir);
+                let n = d3dx::vec3_normalize(e.dir);
                 let th = 2.0 * e.ring.start;
                 let mut p = [n[1], -n[0], 0.0];
                 // Quirk kept: below 1e-5 p stays ≈ 0 (the original writes (1, 0, 0) into the wrong variable).
                 if dot(p, p) >= 1e-5 {
-                    p = norm(p);
+                    p = d3dx::vec3_normalize(p);
                 }
                 p = p.map(|x| x * e.ring.radius);
                 let (s, c) = th.sin_cos();
@@ -702,8 +696,10 @@ impl Effects {
                     e.vel[k] += e.acc[k];
                     e.pos[k] += e.vel[k];
                 }
-                let d = norm(sub(e.pos, view.pos));
-                if dot(d, norm(view.facing)) < 0.94 {
+                // Stored facing; Vec3_Dot 0x40B540 sums (z·z' + y·y') + x·x' (13 §2.6a).
+                let d = d3dx::vec3_normalize(sub(e.pos, view.pos));
+                let f = view.facing_norm;
+                if (d[2] * f[2] + d[1] * f[1]) + d[0] * f[0] < 0.94 {
                     return false;
                 }
                 if e.kind == 19 {

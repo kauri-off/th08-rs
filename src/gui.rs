@@ -339,7 +339,7 @@ impl Task<Ctx> for Gui {
                 ctx.game.spell_practice(),
             );
         }
-        let frozen = self.player.borrow().freeze_bullets || crate::enemy::timer_pause() != 0;
+        let frozen = self.player.borrow().freeze_bullets() || crate::enemy::timer_pause() != 0;
         // Nothing runs while bullets are frozen (GameFlags bit 10) or the freeze byte 0x160F534 is set (07 §11.1).
         if !frozen {
             // Steps 1 (card active) and 2 (capture ring) run before the VMs (07 §11.1).
@@ -385,7 +385,7 @@ impl Task<Ctx> for Gui {
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         gfx.set_viewport(PLAYFIELD);
         // Tint 0xFFF01010 only while GameFlags bit 10, off at the end (06 §10.2).
-        if self.player.borrow().freeze_bullets {
+        if self.player.borrow().freeze_bullets() {
             (anm.tint, anm.tint_on) = (0xFFF01010, true);
         }
         let v = &mut self.vms;

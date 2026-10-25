@@ -2427,7 +2427,7 @@ impl EnemyManager {
         }
         // Step 0: GameFlags bit 10 (spell-card death freeze) returns here; the draw lists keep last frame's
         // enemies, the manager clock and Spell_Calc's card timer hold (07 §10.1 step 0, §11.1).
-        if self.player.borrow().freeze_bullets {
+        if self.player.borrow().freeze_bullets() {
             return;
         }
         // Step 1: the op-176 box, then EnemyMgr_TimeRank, then the resets and the timelines (07 §10.1 step 1).
@@ -2601,7 +2601,7 @@ impl EnemyManager {
     fn draw_layer(&mut self, ctx_anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, high: bool) {
         gfx.set_viewport(PLAYFIELD);
         // Prio 11 draws with tint 0xFFF01010 while bullets are frozen (07 §10.6).
-        let frozen = self.player.borrow().freeze_bullets;
+        let frozen = self.player.borrow().freeze_bullets();
         if high && frozen {
             (ctx_anm.tint, ctx_anm.tint_on) = (0xFFF01010, true);
         }
@@ -2706,11 +2706,11 @@ mod tests {
         };
         let mut m = EnemyManager::new(ecl, bullets, 1);
         m.draw_lists[0].push(5);
-        player.borrow_mut().freeze_bullets = true;
+        player.borrow_mut().set_freeze_bullets(true);
         m.step(&mut anm);
         assert_eq!((m.frame, m.draw_lists[0].len()), (0, 1));
         assert_eq!(player.borrow().stats.rec.progress, 1);
-        player.borrow_mut().freeze_bullets = false;
+        player.borrow_mut().set_freeze_bullets(false);
         m.step(&mut anm);
         assert_eq!((m.frame, m.draw_lists[0].len()), (1, 0));
         assert_eq!(player.borrow().stats.rec.progress, 2);
