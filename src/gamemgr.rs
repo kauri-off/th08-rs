@@ -821,11 +821,12 @@ impl GameManager {
                 s.power = pw.clamp(0.0, 128.0);
             }
         }
-        // Replay playback: rank init, stage record load (seed set), checksum with RNG preserved (11 §3.4).
+        // Replay playback: rank init, stage record load (seed set), checksum with RNG preserved (11 §3.1, §3.4).
         if ctx.game.replay() {
             init_rank(d);
             let mut p = self.player.borrow_mut();
             crate::replay::play_stage_load(&mut ctx.game, &mut p.stats, &mut ctx.anm.rng)?;
+            Stats::checksum_restored(&mut ctx.anm.rng);
         }
         let g = &mut ctx.game;
         g.paused = 0;

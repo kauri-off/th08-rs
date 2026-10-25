@@ -206,14 +206,24 @@ fn rpy_page(cur: i32, n: i32, left: bool) -> i32 {
 
 // Replay sub-state 2 (15 §3.8): Menu_CursorUpDown(9) (wraps), then keep moving the same way while the stage has
 // no record.
-fn rpy_stage_step(have: &[bool; 9], cur: usize, d: i32) -> usize {
-    let mut c = cur as i32;
-    if d == 0 || !have.contains(&true) {
+fn rpy_stage_step(have: &[bool; 10], cur: usize, d: i32) -> usize {
+    if d == 0 || !have[..9].contains(&true) {
         return cur;
     }
-    c = (c + d).rem_euclid(9);
+    // Menu_CursorUpDown(9) wraps 0 ↔ 8; the skip loop wraps up −1 → 9 (have[9] = header +0x44), down 9 → 0.
+    let mut c = cur as i32 + d;
+    if c < 0 {
+        c = 8;
+    } else if c >= 9 {
+        c = 0;
+    }
     while !have[c as usize] {
-        c = (c + d).rem_euclid(9);
+        c += d;
+        if c < 0 {
+            c = 9;
+        } else if c > 8 && d > 0 {
+            c = 0;
+        }
     }
     c as usize
 }
@@ -320,13 +330,12 @@ pub struct Lists {
     prev_card: i32,
     // Info refresh counter +0xC29C (16 §6.3).
     info_counter: u32,
-    // Replay screen sub-state +0x0C (1 list, 2 stage, 3 speed), stage cursor (+0 in sub-state 2), displayed / chosen
-    // stage row +0xC290 (15 §3.8), speed, loaded file +0xC280.
+    // Replay screen sub-state +0x0C (1 list, 2 stage, 3 speed), list row +0xC28C, displayed / chosen stage row
+    // +0xC290, loaded file +0xC280. The cursor +0x00 is shared by all three sub-states (15 §3.8).
     rpy_sub: u8,
-    rpy_cur: usize,
+    rpy_file: i32,
     // Zeroed with the menu object (memset at MainMenu_Register); the replay screen entry keeps it (15 §3.8).
     rpy_stage: usize,
-    rpy_speed: i32,
     rpy_loaded: Option<usize>,
     // Sub-state counter +0x10 of the list (sub-state 1): zeroed in call 8 and by a press, += 1 per call (12 §2).
     rpy_t: u32,
@@ -1158,7 +1167,7 @@ impl MainMenu {
 
     // The list-row VM 80 + (row mod 15) (12 §2.8).
     fn rpy_row_vm(&self) -> usize {
-        80 + (self.cursor.max(0) % 15) as usize
+        80 + (self.lists.rpy_file.max(0) % 15) as usize
     }
 
     // Speed plates VMs 108–110: 21 = not selected, 20 = selected (12 §2.8).
@@ -1166,7 +1175,7 @@ impl MainMenu {
         for k in 0..3 {
             self.vms[108 + k].pending_interrupt = 21;
         }
-        self.vms[108 + self.lists.rpy_speed as usize].pending_interrupt = 20;
+        self.vms[108 + self.cursor.clamp(0, 2) as usize].pending_interrupt = 20;
     }
 
     // Choosing a file: 15 to all, then 17 to the chosen row's VM (12 §2.8).
@@ -1216,6 +1225,8 @@ impl MainMenu {
                     self.cursor = rpy_page(self.cursor, n, inp.pressed_or_repeat(LEFT));
                     sound::play(sound::SELECT);
                 }
+                // +0xC28C := cursor every sub-state-1 frame, after the paging (15 §3.8).
+                self.lists.rpy_file = self.cursor;
                 // The +0x10 > 9 gate is armed once per visit: only the list cancel zeroes +0x10 again; the file
                 // confirm and the cancels 2 → 1 / 3 → 2 leave it counting (12 §2 intro, 15 §3.8).
                 if self.lists.rpy_t <= 9 {
@@ -1238,7 +1249,7 @@ impl MainMenu {
                     let name = sjis(self.replays[i].1.card_name());
                     self.notice = scratch(ctx, RT_SLOT, 11, false);
                     self.render_vm(ctx, RT_SLOT, 11, &name);
-                    self.lists.rpy_cur = first;
+                    self.cursor = first as i32;
                     self.lists.rpy_sub = 2;
                     self.rpy_choose();
                 } else if inp.pressed(CANCEL) {
@@ -1257,8 +1268,10 @@ impl MainMenu {
                 let Some(i) = self.lists.rpy_loaded else {
                     return true;
                 };
-                let have: [bool; 9] =
-                    std::array::from_fn(|s| self.replays[i].1.stages[s].is_some());
+                // Index 9 = header +0x44, read by the up-direction skip loop's −1 → 9 wrap (15 §3.8).
+                let r = &self.replays[i].1;
+                let have: [bool; 10] =
+                    std::array::from_fn(|s| r.stages.get(s).map_or(r.fps0 != 0, |x| x.is_some()));
                 let d = if inp.pressed_or_repeat(UP) {
                     -1
                 } else if inp.pressed_or_repeat(DOWN) {
@@ -1270,12 +1283,12 @@ impl MainMenu {
                     sound::play(sound::SELECT);
                 }
                 // +0xC290 is written only here, so the row shown on the file-confirm frame lags by one (15 §3.8).
-                self.lists.rpy_cur = rpy_stage_step(&have, self.lists.rpy_cur, d);
-                self.lists.rpy_stage = self.lists.rpy_cur;
+                self.cursor = rpy_stage_step(&have, self.cursor.max(0) as usize, d) as i32;
+                self.lists.rpy_stage = self.cursor as usize;
                 if inp.pressed(CONFIRM) {
                     sound::play(sound::OK);
                     self.lists.rpy_sub = 3;
-                    self.lists.rpy_speed = 0;
+                    self.cursor = 0;
                     self.interrupt_all(19);
                     let v = self.rpy_row_vm();
                     self.vms[v].pending_interrupt = 17;
@@ -1284,6 +1297,7 @@ impl MainMenu {
                     sound::play(sound::CANCEL);
                     // The cancels zero +0x1442C, which only sub-state 0 reads, so the entry block never reruns (12 §2, 15 §3.8).
                     self.lists.rpy_sub = 1;
+                    self.cursor = self.lists.rpy_file;
                     self.lists.rpy_loaded = None;
                     self.interrupt_all(14);
                 }
@@ -1294,13 +1308,13 @@ impl MainMenu {
                 };
                 let spell = self.replays[i].1.spell_id() >= 0;
                 let m = if spell { 2 } else { 3 };
-                let old = self.lists.rpy_speed;
+                let old = self.cursor;
                 if inp.pressed_or_repeat(UP) {
-                    self.lists.rpy_speed = (old - 1).rem_euclid(m);
+                    self.cursor = (old - 1).rem_euclid(m);
                 } else if inp.pressed_or_repeat(DOWN) {
-                    self.lists.rpy_speed = (old + 1).rem_euclid(m);
+                    self.cursor = (old + 1).rem_euclid(m);
                 }
-                if self.lists.rpy_speed != old {
+                if self.cursor != old {
                     sound::play(sound::SELECT);
                     self.rpy_speed_vms();
                 }
@@ -1310,7 +1324,7 @@ impl MainMenu {
                 }
                 if inp.pressed(CONFIRM) {
                     sound::play(sound::OK);
-                    ctx.game.replay_speed = self.lists.rpy_speed as u8;
+                    ctx.game.replay_speed = self.cursor as u8;
                     // The loaded replay stays listed: this frame's draw still shows its detail rows.
                     let r = self.replays[i].1.clone();
                     let st = Some(self.lists.rpy_stage);
@@ -1320,6 +1334,7 @@ impl MainMenu {
                 } else if inp.pressed(CANCEL) {
                     sound::play(sound::CANCEL);
                     self.lists.rpy_sub = 2;
+                    self.cursor = self.lists.rpy_stage as i32;
                     self.rpy_choose();
                 }
             }
@@ -1339,7 +1354,8 @@ impl MainMenu {
             false,
         ));
         let n = self.replays.len();
-        let page = (self.cursor.max(0) / 15 * 15) as usize;
+        // Page and highlight follow +0xC28C, not the shared cursor (12 §2.8 draw step 2).
+        let page = (self.lists.rpy_file.max(0) / 15 * 15) as usize;
         for j in 0..15 {
             let i = page + j;
             if i >= n {
@@ -1364,7 +1380,7 @@ impl MainMenu {
             } else {
                 format!("{:>8}", DIFFS[r.difficulty().min(4) as usize])
             };
-            let cur = i as i32 == self.cursor;
+            let cur = i as i32 == self.lists.rpy_file;
             let (x, y) = at(self, 80 + j);
             ctx.ascii.push(text(
                 x,
@@ -1443,7 +1459,7 @@ mod tests {
     // 15 §3.8: Menu_CursorUpDown(9) wraps, then skips stages without a record in the same direction.
     #[test]
     fn replay_stage_cursor() {
-        let mut have = [false; 9];
+        let mut have = [false; 10];
         have[1] = true;
         have[4] = true;
         have[8] = true;
@@ -1452,7 +1468,14 @@ mod tests {
         assert_eq!(rpy_stage_step(&have, 4, 1), 8);
         assert_eq!(rpy_stage_step(&have, 8, 1), 1);
         assert_eq!(rpy_stage_step(&have, 1, -1), 8);
-        assert_eq!(rpy_stage_step(&[false; 9], 0, 1), 0);
+        assert_eq!(rpy_stage_step(&[false; 10], 0, 1), 0);
+        // Up from the first record wraps −1 → 9 and tests header +0x44: 0 → on to 8, ≠ 0 → stops on row 9.
+        assert_eq!(rpy_stage_step(&have, 1, -1), 8);
+        have[0] = false;
+        have[9] = true;
+        assert_eq!(rpy_stage_step(&have, 1, -1), 9);
+        assert_eq!(rpy_stage_step(&have, 9, 1), 1);
+        assert_eq!(rpy_stage_step(&have, 8, 1), 1);
     }
 
     // 15 §3.8: ±15 rows, wrapping by the file count.

@@ -107,6 +107,16 @@ pub struct LaserSlot {
     pub entry: Option<ShotEntry>,
 }
 
+// Effect 0x2F colour of Youmu's half / solo (14 §3.3). Solo, unfocused, direction 0: the original returns before both
+// spawns (jump table 0x44F90A[0]), so no effect and no RNG.
+fn youmu_sparkle(solo: bool, unfocused: bool, dir: u8) -> Option<u32> {
+    match (solo, unfocused) {
+        (true, true) if dir == 0 => None,
+        (true, false) => Some(0xFFF05080),
+        _ => Some(0x80405080),
+    }
+}
+
 // Remilia anchor offsets, orbit speeds (rad/frame) and start angles by index (14 §3, §3.2).
 const REMILIA_ANCHOR: [[f32; 2]; 4] =
     [[-30.0, -16.0], [-10.0, -32.0], [10.0, -32.0], [30.0, -16.0]];
@@ -375,7 +385,7 @@ impl Player {
                         target
                     };
                 }
-                sparkle = Some(if tracks { 0x80405080 } else { 0xFFF05080 });
+                sparkle = youmu_sparkle(o.kind == OptKind::YoumuSolo, unfocused, dir);
             }
             OptKind::None => {}
         }
@@ -999,6 +1009,16 @@ mod tests {
         p.place_option(&mut anm, 0, true);
         let o = &p.options[0];
         assert_eq!((o.sub, o.vm.pending_interrupt), (3, 3));
+    }
+
+    // 14 §3.3: unfocused solo Youmu on direction 0 spawns no effect 0x2F (no RNG); the team half always does.
+    #[test]
+    fn youmu_solo_idle_no_sparkle() {
+        assert_eq!(youmu_sparkle(true, true, 0), None);
+        assert_eq!(youmu_sparkle(true, true, 3), Some(0x80405080));
+        assert_eq!(youmu_sparkle(true, false, 0), Some(0xFFF05080));
+        assert_eq!(youmu_sparkle(false, true, 0), Some(0x80405080));
+        assert_eq!(youmu_sparkle(false, false, 0), Some(0x80405080));
     }
 
     // 09 §4.3: the origin is the option's stored pos whatever its state.

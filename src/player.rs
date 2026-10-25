@@ -258,6 +258,13 @@ impl Stats {
         rng.range(100000);
     }
 
+    // `s = g_Rng; GameMgr_UpdateChecksum; g_Rng = s`: state kept, the 4 draws still count in `rng_ctr` (11 §1.4).
+    pub fn checksum_restored(rng: &mut Rng) {
+        let s = rng.state;
+        Self::checksum(rng);
+        rng.state = s;
+    }
+
     // GameMgr_ScrambleDecoys 0x44E160: 5 × Range + 3 × Float, draws only (11 §1.5).
     pub fn scramble(rng: &mut Rng) {
         for _ in 0..5 {
@@ -1374,6 +1381,15 @@ impl Task<Ctx> for Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 11 §3.1 / §1.4: replay stage start checksum keeps the RNG state but counts 4 Next16 draws.
+    #[test]
+    fn checksum_restored_counts_draws() {
+        let mut rng = Rng::seeded(0x1234);
+        let t = rng.total;
+        Stats::checksum_restored(&mut rng);
+        assert_eq!((rng.state, rng.total - t), (0x1234, 4));
+    }
 
     fn ready() -> (Player, AnmManager) {
         let mut p = Player {

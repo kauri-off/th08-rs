@@ -98,6 +98,8 @@ pub struct Replay {
     // Info block 0x68..0x134 of the image (date, name, card, config copy, slowdown, …).
     pub info: Vec<u8>,
     pub stages: [Option<StageRecord>; 9],
+    // Header +0x44, the stage-0 fps-stream offset; also read by the replay menu's stage-skip quirk (15 §3.8).
+    pub fps0: u32,
     // Raw "USER" section after the file size (15 §3.5), kept as read.
     pub user: Vec<u8>,
 }
@@ -115,6 +117,7 @@ impl Default for Replay {
             debug: 0,
             info,
             stages: Default::default(),
+            fps0: 0,
             user: Vec::new(),
         }
     }
@@ -236,6 +239,7 @@ impl Replay {
             debug: file[6],
             info,
             stages,
+            fps0: fps[0] as u32,
             user: file[size..].to_vec(),
         })
     }
