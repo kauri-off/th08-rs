@@ -432,6 +432,8 @@ pub struct Player {
     // +0xE2ABC aimed enemy (index) and its position.
     pub aimed: Option<usize>,
     pub aimed_pos: [f32; 3],
+    // Copy of the aimed enemy's e+0x2D34 pos (an op-92 follower's parent offset), shot init 1's target (09 §2.1).
+    pub aimed_base: [f32; 3],
     // Port-only: target 0 holds a boss.
     pub boss_target: bool,
     // +0xE2AC4: −1 idle, 0..19 firing cycle (09 §4.2).
@@ -507,6 +509,7 @@ impl Default for Player {
             targets: [[-999.0, -999.0, 0.0]; 2],
             aimed: None,
             aimed_pos: [0.0; 3],
+            aimed_base: [0.0; 3],
             boss_target: false,
             shot_timer: Timer {
                 cur: -1,

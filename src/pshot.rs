@@ -342,7 +342,8 @@ impl Player {
             OptKind::Remilia | OptKind::RemiliaSolo => {
                 // `Timer_Greater`(t, 12): strictly > 12, first turn at t = 13 (14 §3 table, §3.2).
                 if t > 12 {
-                    o.angle += REMILIA_SPIN[k];
+                    // Orbit steps wrap to [−π, π] (`Angle_AddNormalize`, 14 §3 "Orbit wrap").
+                    o.angle = anmvm::wrap_add(o.angle, REMILIA_SPIN[k]);
                 }
                 // Solo (14 §3.2): colour by focus, anchor follows only while unfocused, sparkle 0x2F.
                 if o.kind == OptKind::RemiliaSolo {
@@ -362,13 +363,13 @@ impl Player {
                 let tx = if k == 0 { px - 32.0 } else { px + 32.0 };
                 o.anchor[0] += (tx - o.anchor[0]) * 0.09;
                 o.anchor[1] += (py - o.anchor[1]) * 0.09;
-                o.angle += if k == 0 { PI / 60.0 } else { -PI / 60.0 };
+                o.angle = anmvm::wrap_add(o.angle, if k == 0 { PI / 60.0 } else { -PI / 60.0 });
                 let d = polar(o.angle, 6.0);
                 o.pos = [o.anchor[0] + d[0], o.anchor[1] + d[1], 0.0];
                 sparkle = Some(0x80602050);
             }
             OptKind::YoumuHalf | OptKind::YoumuSolo => {
-                o.angle += PI / 60.0;
+                o.angle = anmvm::wrap_add(o.angle, PI / 60.0);
                 o.anchor[0] += (trail[0] - o.anchor[0]) * 0.05;
                 o.anchor[1] += (trail[1] - o.anchor[1]) * 0.05;
                 let d = polar(o.angle, 8.0);
@@ -581,10 +582,12 @@ impl Player {
                 if !self.default_init(anm, slot, t, e) {
                     return false;
                 }
+                // 0x450240: aims at e+0x2D34 (not the final pos); entry angle + π/2 is summed first (09 §2.1).
                 if self.aimed.is_some() {
-                    let a = self.aimed_pos;
+                    let a = self.aimed_base;
                     let p = self.bullets[slot].pos;
-                    let ang = (a[1] - p[1]).atan2(a[0] - p[0]) + e.angle + FRAC_PI_2;
+                    let ang =
+                        anmvm::wrap_add((a[1] - p[1]).atan2(a[0] - p[0]), e.angle + FRAC_PI_2);
                     self.set_dir(slot, ang, e.speed * 1.5);
                 }
                 true
@@ -1227,6 +1230,46 @@ mod tests {
                 &mut by_bomb,
             );
             assert_eq!(dmg, if hit { 10 } else { 0 }, "enemy x {ex}");
+        }
+    }
+
+    // 09 §2.1 init 1: Yukari's aimed shot targets e+0x2D34 (`aimed_base`), not the final pos.
+    #[test]
+    fn yukari_aim_uses_base_pos() {
+        let mut anm = AnmManager::default();
+        let mut p = Player::default();
+        p.pos = [192.0, 400.0, 0.0];
+        p.aimed = Some(6);
+        p.aimed_pos = [300.0, 400.0, 0.0];
+        p.aimed_base = [-6.0, 400.0, 0.0];
+        let e = ShotEntry {
+            interval: 1,
+            init: 1,
+            speed: 10.0,
+            angle: -FRAC_PI_2,
+            sound: -1,
+            ..ShotEntry::default()
+        };
+        assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default()));
+        let b = &p.bullets[0];
+        assert!(b.vel[0] < 0.0, "aims left at the base pos: {:?}", b.vel);
+        assert!((-PI..=PI).contains(&b.angle));
+    }
+
+    // 14 §3 "Orbit wrap": every orbit step wraps, so the angle stays in [−π, π].
+    #[test]
+    fn orbit_angle_wraps() {
+        let mut anm = AnmManager::default();
+        for kind in [OptKind::Yuyuko, OptKind::RemiliaSolo, OptKind::YoumuSolo] {
+            let mut p = Player::default();
+            p.options[0].kind = kind;
+            p.options[0].state = 2;
+            p.options[0].timer.set(20);
+            for _ in 0..1000 {
+                p.place_option(&mut anm, 0, false);
+                let a = p.options[0].angle;
+                assert!((-PI..=PI).contains(&a), "{kind:?} {a}");
+            }
         }
     }
 }

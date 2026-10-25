@@ -865,6 +865,9 @@ impl EnemyManager {
 
     // Player collision (07 §10.1 step 6): graze box hitbox/0.7, contact box hitbox/1.5, shot/bomb damage.
     fn player_collision(&mut self, idx: usize, anm: &mut AnmManager) {
+        // Graze, contact death and the explosion hit filter read the card flag live (09 §2.1 hit 1, §9.2): a card
+        // ended earlier in this calc (step 4) already counts as none.
+        self.player.borrow_mut().env.spell = self.g.spell.is_some();
         let e = &self.enemies[idx];
         let (flags, pos, hb, sb) = (e.flags, e.final_pos, e.hitbox, e.shotbox);
         let boss = flags & A_BOSS != 0;
@@ -2448,6 +2451,7 @@ impl EnemyManager {
             let mut p = self.player.borrow_mut();
             if let Some(a) = p.aimed {
                 p.aimed_pos = self.enemies[a].final_pos;
+                p.aimed_base = self.enemies[a].pos;
             }
         }
         let pull = self.bosses[0]
@@ -2585,6 +2589,7 @@ impl EnemyManager {
         {
             let mut b = self.bullets.borrow_mut();
             let mut p = self.player.borrow_mut();
+            p.env.spell = self.g.spell.is_some();
             p.damage_against(
                 anm,
                 Some(&mut b.items),

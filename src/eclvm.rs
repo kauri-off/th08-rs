@@ -820,20 +820,21 @@ impl Exec<'_> {
 
     // --- bullets (07 §9) ---
     // Bullet block (07 §9.1): fields over the enemy's current descriptor; mask bits 0–7, flags raw.
+    // Read order of 07 §9.1 step 3 (each variable read may draw); colour is read last (step 5).
     fn decode_bullet(&mut self, t: &Thread, b: &[u8]) -> BulletDesc {
         let mask = u16::from_le_bytes([b[10], b[11]]);
         let mb = |k: u32| mask & (1 << k) != 0;
         let mut d = self.e.desc.clone();
         d.kind = self.vi(t, rd_i16(b, 0x0C) as i32, mb(0)) as i16;
-        d.colour = self.vi(t, rd_i16(b, 0x0E) as i32, mb(1)) as i16;
         d.count1 = self.vi(t, rd_u32(b, 0x10) as i32, mb(2)) as i16;
         d.count2 = self.vi(t, rd_u32(b, 0x14) as i32, mb(3)) as i16;
-        d.speed1 = self.vf(t, f32::from_bits(rd_u32(b, 0x18)), mb(4));
-        d.speed2 = self.vf(t, f32::from_bits(rd_u32(b, 0x1C)), mb(5));
         d.angle1 = self.vf(t, f32::from_bits(rd_u32(b, 0x20)), mb(6));
+        d.speed1 = self.vf(t, f32::from_bits(rd_u32(b, 0x18)), mb(4));
         d.angle2 = self.vf(t, f32::from_bits(rd_u32(b, 0x24)), mb(7));
-        d.flags = rd_u32(b, 0x28);
+        d.speed2 = self.vf(t, f32::from_bits(rd_u32(b, 0x1C)), mb(5));
         d.aim_mode = rd_i16(b, 4) - 96;
+        d.flags = rd_u32(b, 0x28);
+        d.colour = self.vi(t, rd_i16(b, 0x0E) as i32, mb(1)) as i16;
         d
     }
 
@@ -847,16 +848,35 @@ impl Exec<'_> {
             self.e.stored_fire = Some(bytes);
             return;
         }
-        self.e.desc = self.decode_bullet(t, &bytes);
+        self.fire_bullets(t, &bytes);
+    }
+
+    // Ecl_FireBullets body (07 §9.1 steps 1–5), shared by the op and the auto-fire copy.
+    // The filters test the raw instruction before any argument is read: a skipped instruction draws no RNG.
+    fn fire_bullets(&mut self, t: &Thread, b: &[u8]) {
+        let flags = rd_u32(b, 0x28);
+        // Mode filter on the enemy's flag A bit 11, not the player's mode (07 §9.1 step 1).
+        let youkai = self.e.flags & A_YOUKAI != 0;
+        if (flags & 0x8000 != 0 && !youkai) || (flags & 0x10000 != 0 && youkai) {
+            return;
+        }
+        let p = self.m.g.player;
+        let e = &*self.e;
+        let dd = (e.final_pos[0] - p[0]).powi(2) + (e.final_pos[1] - p[1]).powi(2);
+        if e.nofire_r2 > 0.0 && dd < e.nofire_r2 {
+            return;
+        }
+        self.e.desc = self.decode_bullet(t, b);
         self.fire_desc();
     }
 
-    // Filters, origin and rank scaling (07 §9.1–9.2), then BulletMgr_SpawnPattern.
-    fn fire_desc(&mut self) {
+    // Op 109 fire_stored (07 §7): fires the stored descriptor; keeps the pre-RE-Q53 filters on the stored flags.
+    // SPEC-GAP: does op 109 run the mode / no-fire filters and the rank add (IMPL121 Q1).
+    fn fire_stored(&mut self) {
         let e = &*self.e;
-        let mut d = e.desc.clone();
+        let flags = e.desc.flags;
         let youkai = self.m.g.player_mode != 0;
-        if (d.flags & 0x8000 != 0 && !youkai) || (d.flags & 0x10000 != 0 && youkai) {
+        if (flags & 0x8000 != 0 && !youkai) || (flags & 0x10000 != 0 && youkai) {
             return;
         }
         let p = self.m.g.player;
@@ -864,6 +884,13 @@ impl Exec<'_> {
         if e.nofire_r2 > 0.0 && dd < e.nofire_r2 {
             return;
         }
+        self.fire_desc();
+    }
+
+    // Origin and rank scaling (07 §9.1–9.2), then BulletMgr_SpawnPattern.
+    fn fire_desc(&mut self) {
+        let e = &*self.e;
+        let mut d = e.desc.clone();
         d.origin = add3(e.final_pos, e.shot_offset);
         if self.m.g.spell.is_none() {
             let rank = crate::gamemgr::rank();
@@ -871,11 +898,12 @@ impl Exec<'_> {
             let [s0, s1] = e.rank_speed;
             d.count1 = (d.count1 as i32 + lerp_i(c1a, c1b, rank)).max(1) as i16;
             d.count2 = (d.count2 as i32 + lerp_i(c2a, c2b, rank)).max(1) as i16;
+            let s = lerp_f(s0, s1, rank);
             if d.speed1 != 0.0 {
-                let s = lerp_f(s0, s1, rank);
                 d.speed1 = (d.speed1 + s).max(0.3);
-                d.speed2 = (d.speed2 + s / 2.0).max(0.3);
             }
+            // 07 §9.2: speed2's add is unconditional (the speed1 == 0 branch jumps to it).
+            d.speed2 = (d.speed2 + s / 2.0).max(0.3);
         }
         let p = self.m.g.player;
         self.m.bullets.borrow_mut().spawn_pattern(self.anm, &d, p);
@@ -996,8 +1024,7 @@ impl Exec<'_> {
             self.e.autofire_timer.tick(gs);
             if self.e.autofire_timer.cur >= self.e.autofire_interval {
                 if let Some(b) = self.e.stored_fire.clone() {
-                    self.e.desc = self.decode_bullet(t, &b);
-                    self.fire_desc();
+                    self.fire_bullets(t, &b);
                 }
                 self.e.autofire_timer.set(0);
             }
@@ -1934,7 +1961,7 @@ impl Exec<'_> {
             }
             107 => self.e.flags |= A_STORE_FIRE,
             108 => self.e.flags &= !A_STORE_FIRE,
-            109 => self.fire_desc(),
+            109 => self.fire_stored(),
             110 => self.e.shot_offset = [self.af(t, ins, 0), self.af(t, ins, 1), 0.0],
             // Ex slot k = {e, f, c, d, a, b}; ints stored raw, every argument variable-capable (07 §7).
             111 => {
@@ -3168,5 +3195,37 @@ mod tests {
         let e = &m.enemies[i.unwrap()];
         assert_eq!(e.prev_pos, [0.0; 3]);
         assert_eq!(e.final_pos, [100.0, 50.0, 0.0]);
+    }
+
+    // 07 §9.1 step 1: the filters run on the raw instruction before any argument read, so a skipped bullet op
+    // with a `$rand` angle draws nothing; the mode filter tests the enemy's flag A bit 11, not the player's mode.
+    #[test]
+    fn bullet_filters_before_decode() {
+        let f = |x: f32| x.to_bits() as i32;
+        let op = |flags: u32| {
+            ins_v(
+                0,
+                96,
+                1 << 6,
+                &[0, 3, 1, f(2.0), f(1.0), f(10033.0), 0, flags as i32],
+            )
+        };
+        for (flags, youkai, r2) in [
+            (0x8000, false, 0.0),
+            (0x10000, true, 0.0),
+            (0, false, 1024.0),
+        ] {
+            let (mut anm, mut m) = manager(&[&[op(flags)]]);
+            spawn(&mut m, 0, 0, -1, 0);
+            m.g.player_mode = 1 - youkai as i32;
+            m.enemies[0].set_flag(A_YOUKAI, youkai);
+            m.enemies[0].nofire_r2 = r2;
+            m.enemies[0].pos = [10.0, 20.0, 0.0];
+            m.enemies[0].final_pos = [10.0, 20.0, 0.0];
+            m.g.player = [30.0, 20.0, 0.0];
+            let before = anm.rng.counter;
+            ecl_run(&mut m, &mut anm, 0);
+            assert_eq!(anm.rng.counter, before, "flags {flags:#x}");
+        }
     }
 }
