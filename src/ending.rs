@@ -323,7 +323,7 @@ impl Ending {
     // Commands and text until something waits (text line, `@r`, `@w`) or the script ends (16 §1.3).
     fn run_commands(&mut self, ctx: &mut Ctx) -> Result<Step> {
         loop {
-            // SPEC-GAP: a script running off its end without `@z` is treated as `@z`.
+            // No end test in the original; every retail file ends with `@z` (16 §1.3), so this is unreachable.
             if self.ip >= self.script.len() {
                 return Ok(Step::End);
             }
@@ -422,7 +422,7 @@ impl Ending {
     }
 
     // `@R`: script index := 0 on the VMs.
-    // SPEC-GAP: 16 §1.3 says 16 VMs; the object has 15 text VMs, the 16th write is not modelled.
+    // 16 §1.2–§1.3: VM 15 is never run or drawn, so the `@R` write to it is unobservable and not modelled.
     fn reset_scripts(&mut self) {
         for vm in &mut self.vms {
             vm.script_index = 0;
@@ -443,7 +443,7 @@ impl Ending {
             self.ip += 2;
         }
         let text = crate::text::decode_sjis(&buf);
-        // SPEC-GAP: a page with more than 15 lines is not handled by 16 §1.3; extra lines are dropped.
+        // Line 15 would hit the invisible VM 15 (≥ 16 corrupts); retail pages have ≤ 4 lines, extras dropped (16 §1.3).
         if let Some(vm) = self.vms.get_mut(self.line) {
             let rgb = [
                 (self.text_rgb >> 16) as u8,
@@ -464,7 +464,7 @@ impl Ending {
     }
 
     // Fade overlay 0x428910 (16 §1.5): one step per draw call; returns the overlay colour.
-    // SPEC-GAP: whether the counter steps before or after the alpha is computed is not given; after here.
+    // Colour from t, then t += 1 (16 §1.5); `max(1)` differs only for n = 0, which no retail file uses.
     fn fade_step(&mut self) -> u32 {
         if self.fade_mode == 0 {
             return 0;
@@ -551,7 +551,7 @@ impl Task<Ctx> for Ending {
         }
         ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
         if let Some(t) = self.picture {
-            // SPEC-GAP: the float source offset is truncated to whole pixels (integer copy rectangle).
+            // The float source offset is truncated (ftol) to whole pixels (16 §1.5).
             let (sx, sy) = (self.pic_x.max(0.0) as u32, self.pic_y.max(0.0) as u32);
             ctx.gfx.image_rect(t, sx, sy, 640, 480, 0.0, 0.0);
         }

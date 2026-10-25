@@ -393,7 +393,7 @@ impl Game {
     }
 
     // ScoreDat_Save (Result removal): 2 RNG draws. `flush` = Result mode 2 (slow mode drops this run's card credit).
-    pub fn save_score(&mut self, rng: &mut crate::rng::Rng, flush: bool) {
+    pub fn save_score(&mut self, rng: &mut crate::rng::Rng, flush: bool) -> Vec<u8> {
         // Result mode 2 registers and is removed at once: its Result_OnRegister list build runs first (15 §2.3).
         if flush {
             self.score.rebuild_lists();
@@ -411,6 +411,7 @@ impl Game {
         if self.persist {
             crate::scoredat::storage_write("score.dat", &bytes);
         }
+        bytes
     }
 
     // CATK backup taken at game start (15 §2.5): slow mode drops this run's card credit.

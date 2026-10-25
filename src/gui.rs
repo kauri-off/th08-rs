@@ -204,8 +204,9 @@ impl Gui {
                 } else {
                     anm.set_script(&mut v[7], TEXT_SLOT, 5);
                 }
-                // Right-aligned (0x4664A0): x = strip.x + strip.w − len·size/2, size 15, colour 0x00FFF0F0.
-                let x = 320.0 - name.len() as f32 * 15.0 / 2.0;
+                // Text_RenderToVmRight 0x4664A0 (10 §6): x = trunc(u0 + sw − len·15/2), u0 0, sw 320, len in
+                // Shift-JIS bytes; colour 0x00FFF0F0.
+                let x = (320.0 - name.len() as f32 * 15.0 / 2.0).trunc();
                 self.texts
                     .push((7, crate::text::decode_sjis(&name), [240, 240, 255], x));
                 v[11].pending_interrupt = 1;
@@ -240,14 +241,11 @@ impl Gui {
             else {
                 continue;
             };
+            // 10 §6: W = texture-row width (512), the whole 15-row strip at (0, v0) is replaced.
             let t = ctx.gfx.texture(sp.tex);
-            let (tx, ty) = (
-                (sp.uv[0] * t.width as f32).round() as u32,
-                (sp.uv[1] * t.height as f32).round() as u32,
-            );
-            let w = sp.w as u32;
+            let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
             let rgba = self.raster.render_at(&s, colour, w as usize, 15, x);
-            ctx.gfx.write_texture(sp.tex, tx, ty, w, 15, &rgba);
+            ctx.gfx.write_texture(sp.tex, 0, ty, w, 15, &rgba);
         }
     }
 

@@ -128,6 +128,8 @@ pub struct ResultScreen {
     entry_score: u32,
     // +0x4C hidden-code counter (15 §2.12).
     hidden: HiddenCode,
+    // Port: the back-to-list Sound_Update flush, run by calc_state after the state code (no SE follows it).
+    flush: bool,
 }
 
 // Name-entry outcome of one frame (16 §2.2): END chosen, ESC edge.
@@ -199,6 +201,7 @@ impl ResultScreen {
             entry_date: String::new(),
             entry_score: 0,
             hidden: HiddenCode::default(),
+            flush: false,
         }
     }
 
@@ -445,6 +448,9 @@ impl ResultScreen {
             }
             S_PLAY | S_PLAY_WAIT | S_PLAY_OUT => self.play_data(ctx),
             _ => {}
+        }
+        if std::mem::take(&mut self.flush) {
+            ctx.sound_update();
         }
     }
 
@@ -792,10 +798,17 @@ impl ResultScreen {
         if inp.pressed(CANCEL) || inp.pressed(CONFIRM) && self.cursor == 1 {
             self.leave_save();
         } else if inp.pressed(CONFIRM) {
-            sound::play(sound::OK);
-            self.enter_slot_list();
-            self.interrupt_all(12);
+            self.back_to_list();
         }
+    }
+
+    // Shared back-to-list code 0x456BBB (16 §2.6; state 10 confirm, 14 cancel / "no", 13 ESC): SE 10, sound flush,
+    // state 12, all 72 VMs interrupt 12, frame 0, headers re-read in the same call; +0x1C is not reset.
+    fn back_to_list(&mut self) {
+        sound::play(sound::OK);
+        self.flush = true;
+        self.enter_slot_list();
+        self.interrupt_all(12);
     }
 
     // Entry to state 12 (from 10, 13 and 14): create `replay` and read the 15 slot headers (16 §2.6 "at frame 0").
@@ -829,7 +842,7 @@ impl ResultScreen {
             sound::play(sound::SELECT);
         }
         self.slot = self.cursor.clamp(0, 14);
-        // SPEC-GAP: 16 §2.6 does not give the confirm / cancel order of states 12 and 14 (confirm first).
+        // Confirm does not return: the cancel test follows in the same call and wins (16 §2.6, both SEs play).
         if inp.pressed(CONFIRM) {
             sound::play(sound::OK);
             self.entry_date = crate::supervisor::date_md();
@@ -842,7 +855,8 @@ impl ResultScreen {
             self.cursor = 0;
             self.name_pos = 0;
             self.char_cursor = if g.lsnm_found { CELL_END } else { 0 };
-        } else if inp.pressed(CANCEL) {
+        }
+        if inp.pressed(CANCEL) {
             sound::play(sound::CANCEL);
             self.set_state(S_SAVE);
             self.interrupt_all(2);
@@ -857,13 +871,18 @@ impl ResultScreen {
         }
         self.yes_no_keys(ctx.input);
         let inp = ctx.input;
-        if inp.pressed(CONFIRM) && self.cursor == 0 {
-            self.interrupt_all(17);
-            self.vms[56 + self.slot as usize].pending_interrupt = 16;
-            self.set_state(S_SAVE_NAME);
-        } else if inp.pressed(CANCEL) || inp.pressed(CONFIRM) {
-            sound::play(sound::OK);
-            self.enter_slot_list();
+        // Cancel / ESC first, without looking at confirm (16 §2.6).
+        if inp.pressed(CANCEL) {
+            self.back_to_list();
+        } else if inp.pressed(CONFIRM) {
+            self.frame = 0;
+            if self.cursor == 0 {
+                self.interrupt_all(17);
+                self.vms[56 + self.slot as usize].pending_interrupt = 16;
+                self.set_state(S_SAVE_NAME);
+            } else {
+                self.back_to_list();
+            }
         }
     }
 
@@ -882,8 +901,7 @@ impl ResultScreen {
             self.set_state(S_LEAVE);
             self.interrupt_all(2);
         } else if k.esc {
-            sound::play(sound::OK);
-            self.enter_slot_list();
+            self.back_to_list();
             // QUIRK: name pos and list cursor are both +0x1C, so the list resumes on row = name length.
             self.cursor = self.name_pos;
         }
@@ -913,7 +931,7 @@ impl ResultScreen {
         let d = g.difficulty.clamp(0, 4) as usize;
         (self.rank_shot, self.rank_diff) = (shot as i32, d as i32);
         // Slow mode skips the entry (16 §2.1). The cfg copy's slow byte is 0 for Extra (15 §2.9).
-        // SPEC-GAP: whether the slow-mode skip comes before the frame-0 interrupt d + 3 is not given (before).
+        // The skip is tested first on every call: no interrupt d + 3 is sent (16 §2.1, §2.2).
         if g.cfg.slow != 0 && g.difficulty < 4 {
             g.restore_catk_backup();
             self.enter_panel();
@@ -1939,6 +1957,40 @@ mod tests {
     // 16 §2.6 (PR #27 review): state 12 entered from state 10 has its slot list before the first input frame (20), so
     // a confirm there picks slot 0 instead of indexing an empty list.
     #[cfg(not(target_arch = "wasm32"))]
+    // 16 §2.6: state 10 confirm takes the shared back-to-list path (all VMs 12, flush); in state 12 a confirm and a
+    // cancel on the same frame both run and the cancel wins.
+    #[test]
+    fn save_slot_confirm_then_cancel() {
+        let dir = crate::settings::temp_dir().join(format!("th08_slot_cc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::scoredat::set_save_dir(Some(dir.clone()));
+        let g = gamemgr::Game::default();
+        let mut r = ResultScreen::new(1);
+        r.vms = vec![AnmVm::default(); VM_COUNT];
+        r.text_vms = vec![AnmVm::default(); 28];
+        let confirm = Input {
+            held: SHOT,
+            ..Default::default()
+        };
+        r.set_state(S_SAVE);
+        r.frame = 12;
+        r.save_ask(confirm, &g);
+        assert_eq!((r.state, r.frame), (S_SAVE_SLOT, 0));
+        assert!(r.flush);
+        assert!(r.vms.iter().all(|v| v.pending_interrupt == 12));
+        r.frame = 20;
+        let both = Input {
+            held: SHOT | BOMB,
+            ..Default::default()
+        };
+        r.save_slot(both, &g);
+        assert_eq!((r.state, r.frame), (S_SAVE, 0));
+        assert!(r.vms.iter().all(|v| v.pending_interrupt == 2));
+        assert_eq!(r.char_cursor, 0);
+        crate::scoredat::set_save_dir(None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn save_slot_confirm_first_frame() {
         let dir =

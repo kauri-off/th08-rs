@@ -9,6 +9,9 @@ use crate::input::Input;
 use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
 use anyhow::Context as _;
 
+// WinMain 0x441A70: skip counter byte := 0xFC at the first start and every restart (00 §2), first draw in frame 4.
+const SKIP_START: i8 = -4;
+
 // The original's globals that every subsystem reaches (device, archive, sound manager, input words, SprtCtrlInf,
 // funcChain); `game` holds GM / Supervisor fields (11 §2, §7).
 pub struct Ctx {
@@ -28,8 +31,11 @@ pub struct Ctx {
     pub se_log: bool,
     pub settings: &'static crate::settings::Settings,
     pub drawlog: Option<crate::drawlog::Writer>,
-    // Frame_Run frame-skip counter (i8, 00 §2), compared with cfg +0x23.
+    // Frame_Run frame-skip counter (i8, 00 §2), compared with cfg +0x23; SKIP_START after every (re)start.
     pub skip_counter: i8,
+    // Port: Window_InitD3D's two clear + Present (12 §1 boot presents 1–2) run as the first two port frames, outside
+    // Frame_Run, so they neither run the draw chain nor step the skip counter (presents 3–5 are its −3…−1).
+    init_presents: u8,
     // Unlock notices (16 §4), shown in place of the frame's chains.
     pub info: crate::menu::InfoNotices,
 }
@@ -90,7 +96,8 @@ impl Ctx {
             se_log: settings.se_log,
             settings,
             drawlog: None,
-            skip_counter: 0,
+            skip_counter: SKIP_START,
+            init_presents: 2,
             info: Default::default(),
         };
         ctx.game.cfg = cfg;
@@ -191,6 +198,15 @@ impl Ctx {
     // Frame_Run second half (00 §2); Frame_Run only checks the calc runner's result. The draw chain runs when the
     // counter reaches cfg +0x23 (so 0 and 1 both draw every frame); Present follows either way.
     pub fn draw(&mut self) {
+        if self.init_presents > 0 && self.game.scene == crate::gamemgr::SCENE_BOOT {
+            self.init_presents -= 1;
+            self.gfx.set_viewport(crate::gfx::FULLSCREEN);
+            self.gfx.clear_depth(Some([0, 0, 0, 255]));
+            if self.drawlog.is_some() {
+                self.log_frame();
+            }
+            return;
+        }
         if self.info.showing() {
             crate::menu::InfoNotices::draw(self);
             if self.drawlog.is_some() {
@@ -233,11 +249,13 @@ impl Ctx {
         }
     }
 
-    // WinMain on Frame_Run result 2 (00 §2 "Restart"): chain teardown, Sound_Update, sound / ANM manager released,
-    // then Supervisor_Register as at start-up, so the game boots again through logo and loading. The live config and
-    // the other globals (RNG, input words, GM fields) are kept; no th08.cfg write. Port: the window and device stay
-    // (the app applies the window mode), the 1 s sleep and the 60 PeekMessage calls are skipped.
+    // WinMain on Frame_Run result 2 (00 §2 "What the restart re-initialises"): Result(2) score.dat flush, chain
+    // teardown, Sound_Update, sound / ANM manager released, then Supervisor_Register as at start-up, so the game boots
+    // again through logo and loading. The live config, input words and GM fields are kept; no th08.cfg write. Port:
+    // the window and device stay (the app applies the window mode), the 1 s sleep and 60 PeekMessage calls are skipped.
     pub fn restart(&mut self) -> anyhow::Result<()> {
+        // Step 1: Result_Register(2) + teardown save score.dat; step 5 reloads it (the written bytes = the file).
+        let score = self.game.save_score(&mut self.anm.rng, true);
         task::clear(self);
         self.sound_update();
         self.audio.stop_bgm();
@@ -246,13 +264,20 @@ impl Ctx {
         for slot in 0..crate::anmmgr::SLOTS {
             self.anm.unload(&mut self.gfx, slot);
         }
-        let rng = std::mem::take(&mut self.anm.rng);
+        // New ANM manager; g_GameSpeed := 1.0 (step 5; the port keeps it in the manager). Step 6: g_Rng state :=
+        // (u16) timeGetTime(), the call counter +4 is kept (11 §1); AsciiManager_Load zeroes the ASCII object.
+        let mut rng = std::mem::take(&mut self.anm.rng);
+        rng.state = crate::rng::Rng::boot().state;
         self.anm = AnmManager::default();
+        self.anm.speed = 1.0;
         self.anm.rng = rng;
         self.info = Default::default();
         self.ascii = Default::default();
-        self.skip_counter = 0;
-        // SPEC-GAP: 00 §2 does not say which Supervisor fields Supervisor_Register resets; the scene goes back to boot.
+        self.skip_counter = SKIP_START;
+        self.init_presents = 2;
+        self.game.load_score(Some(&score));
+        // Step 3: scene +0x158 := 0; the original's request −1 (switch to the menu on the first calc) is the port's
+        // boot request of Supervisor_Init; +0x160 stays until the boot → menu switch writes it.
         self.game.scene = crate::gamemgr::SCENE_BOOT;
         self.game.requested = crate::gamemgr::SCENE_BOOT;
         crate::supervisor::register(self)

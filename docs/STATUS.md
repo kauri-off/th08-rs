@@ -655,6 +655,19 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl113 (RE-Q42 CODE BUG 1–5, RE-Q43 CODE BUG 1–3, RE-Q44 CODE BUG 1–2, 2026-10-25): top menu highlight only in
+  call 0, on a cursor move and on cancel (`menu.rs` `top` / `highlight_items`, 12 §2.2); Option press sends no range
+  interrupt, keeps item 7 lit and falls through to the cancel test; key-config cursor 0 set by option item 8, digits /
+  ShotSlow (0x469FA9) before assign / toggle / Reset / exit and in the exit call (15 §1.3); replay +0x10 gate armed
+  once per visit (`menulist.rs` `replay_run`, 12 §2, 15 §3.8). Boot / restart (00 §2): skip counter starts at −4
+  (`game.rs` `SKIP_START`; Window_InitD3D's 2 presents now outside Frame_Run, the supervisor's present-3–5 hack
+  removed), restart flushes score.dat (Result mode 2) before teardown and reloads it, g_Rng reseeded (counter kept),
+  game speed 1. Save dialogue (16 §2.6, `result.rs`): state 12 confirm then cancel in the same call, state 14 cancel
+  first, shared back-to-list path (SE 10, flush, state 12, all VMs 12, headers re-read). Text strips (10 §6):
+  `gui.rs flush_texts` and `menulist.rs render_strip` write the full 512-wide 15-row strip at x 0, boss card name x
+  truncated. Stale ending.rs / result.rs markers closed (RE-Q38, RE-Q43). Sessions: golden 25634, fullrun_noclip
+  124707, selftest1 1922, demos 0–3 full; options_cfg 1887 → 4743 (full), musicroom_practice 3505, gameover_save 4214
+  (unchanged); menu_clr draw test 903 identical. SPEC-GAP 19 → 9. Questions: `docs/briefs/IMPL113_QUESTIONS.md`.
 - impl112 (RE-Q41 CODE BUG 2, MIDI music mode): `src/midi.rs` — the original's SMF sequencer (02 §5): 1 ms
   `Midi_Tick` (pos = B + trunc(T·division·1000/tempo)), tempo meta resets B/T, CC 2 saves / CC 4 restores every
   track's read pointer + next time + tempo/T/B, CC 7 sent × the fade factor, `Midi_Fade` in ms then freeze, end of

@@ -26,7 +26,6 @@ pub struct Supervisor {
     stage_load: bool,
     // Pending post-present capture into surface 8 (0x44886F, 12 §1).
     capture_req: bool,
-    presents: u32,
     // Playback fps text buffer 0x17CF2B8 (15 §3.3) and the port's refresh counter.
     fps_text: String,
     fps_frames: u32,
@@ -55,7 +54,6 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
         load_pos: [500.0, 440.0],
         stage_load: false,
         capture_req: false,
-        presents: 0,
         fps_text: String::new(),
         fps_frames: 0,
     });
@@ -526,15 +524,6 @@ impl Task<Ctx> for Supervisor {
     // Draw prio 0 `Supervisor_DrawLoading` 0x445BD4 (surface 8), prio 2 loading VMs 0x445D3E (12 §1); prio 16 debug only.
     // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        // Boot: presents 1–2 clear to black, presents 3–5 draw nothing (loader thread start-up, 12 §1).
-        if tag == 0 && self.presents < 5 && ctx.game.scene == gamemgr::SCENE_BOOT {
-            self.presents += 1;
-            if self.presents <= 2 {
-                ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
-                ctx.gfx.clear_depth(Some([0, 0, 0, 255]));
-            }
-            return Ret::StopFrame;
-        }
         match (tag, self.logo) {
             (0, Some(t)) => {
                 ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);

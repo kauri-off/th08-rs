@@ -508,6 +508,19 @@ impl MainMenu {
         }
     }
 
+    // All 9 items unselected (base + 1), the cursor item its base sprite, then locked items 0xFF404040; the colour is
+    // never written back to white (12 §2.2 "Highlight").
+    fn highlight_items(&mut self, ctx: &Ctx) {
+        for i in 0..ITEMS {
+            self.highlight(ctx, 1 + i, i as i32 == self.cursor);
+        }
+        for i in 0..ITEMS {
+            if Self::item_locked(ctx, i) {
+                self.vms[1 + i].color = [0x40, 0x40, 0x40, 0xFF];
+            }
+        }
+    }
+
     // Items 1 (Extra) and 2 (Spell Practice) are skipped and drawn 0xFF404040 while locked (12 §2.2).
     fn item_locked(ctx: &Ctx, i: usize) -> bool {
         match i {
@@ -532,24 +545,21 @@ impl MainMenu {
         // Calls 0–8 are sub-state 0; call 9 enters sub-state 1 (+0x08 := −1, +0x14430 := 0), and cursor, demo counter
         // and change test run from that call on (12 §2.2 "Input timing"). The port keeps counting `frames` instead of
         // the original's +0x1442C := 0 in call 9. Option's wait (sub-state 3) runs none of them.
-        // SPEC-GAP: "Input timing" leaves the highlight out of calls 0–8, "Every frame" has it; every call kept.
         let input = self.frames >= TOP_INPUT && self.pending.is_none();
         if self.frames == TOP_INPUT {
             self.prev_cursor = -1;
             self.idle = 0;
         }
-        // The cursor moves before the highlight, so a press shows in its own frame.
+        // Highlight only in the call-0 entry block and when the cursor moved (12 §2.2 "Highlight").
+        if self.frames == 0 {
+            self.highlight_items(ctx);
+        }
         if input && self.quitting.is_none() {
             let locked: Vec<bool> = (0..ITEMS).map(|i| Self::item_locked(ctx, i)).collect();
+            let old = self.cursor;
             self.move_cursor(ctx, ITEMS as i32, UP, DOWN, |c| !locked[c as usize]);
-        }
-        for i in 0..ITEMS {
-            let on = i as i32 == self.cursor;
-            self.highlight(ctx, 1 + i, on);
-            if Self::item_locked(ctx, i) {
-                self.vms[1 + i].color = [0x40, 0x40, 0x40, 0xFF];
-            } else {
-                self.vms[1 + i].color[..3].fill(0xFF);
+            if self.cursor != old {
+                self.highlight_items(ctx);
             }
         }
         if !input {
@@ -633,7 +643,7 @@ impl MainMenu {
                 6 => g.request(gamemgr::SCENE_MUSIC_ROOM),
                 7 => {
                     // The in-place MainMenu_Option call adds one to +0x10, so screen 2 first runs on P + 30 (12 §2).
-                    self.interrupt_all(5);
+                    // No range interrupt and no highlight: item 7 stays lit until the option entry's interrupt 3.
                     self.cursor = 0;
                     self.pending = Some(Pending {
                         frames: 29,
@@ -648,8 +658,16 @@ impl MainMenu {
                     self.quitting = Some(0);
                 }
             }
-        } else if ctx.input.pressed(CANCEL) && self.cursor != ITEM_QUIT {
+            // Only the Option press falls through to the cancel test (12 §2.2 item 7).
+            if self.pending.is_none() {
+                return;
+            }
+        }
+        if ctx.input.pressed(CANCEL) && self.cursor != ITEM_QUIT {
+            // Cancel highlight: old item base + 1, cursor := Quit, Quit base sprite (12 §2.2 "Highlight" (c)).
+            self.highlight(ctx, 1 + self.cursor as usize, false);
             self.cursor = ITEM_QUIT;
+            self.highlight(ctx, 1 + ITEM_QUIT as usize, true);
             sound::play(sound::CANCEL);
         }
     }
@@ -965,6 +983,8 @@ impl MainMenu {
                     ctx.audio.set_volumes(&ctx.game.cfg);
                 }
                 8 => {
+                    // Key-config cursor 0 is set here, not by its entry block (15 §1.3).
+                    self.cursor = 0;
                     sound::play(sound::OK);
                     self.set_screen(KEY_CONFIG);
                 }
@@ -1007,10 +1027,8 @@ impl MainMenu {
 
     fn key_config_run(&mut self, ctx: &mut Ctx) {
         // Entry: range interrupt 4, row sprites, the 12 description strips, working copy of the 9 fields; the live
-        // Up/Down are −1 while the screen is open.
-        // SPEC-GAP: 15 §1.3 does not say where key-config cursor 0 is set (entry here; option item 8 confirm?).
+        // Up/Down are −1 while the screen is open (15 §1.3 "Call order" step 1).
         if self.frames == 0 {
-            self.cursor = 0;
             self.interrupt_all(4);
             self.key_rows(ctx);
             for (k, t) in KEY_DESCRIPTIONS.iter().enumerate() {
@@ -1028,6 +1046,8 @@ impl MainMenu {
             self.key_rows(ctx);
         }
         self.desc_follow_cursor();
+        // Steps 4–5 (0x469FA9 + ShotSlow) before assign / toggle / Reset / exit: changes show one call later.
+        self.key_values(ctx);
         let inp = ctx.input;
         // Assigning (joystick only): a new first-down raw button on rows 0–8 swaps with any row holding it, SE 10.
         let b = inp.pad.first_button();
@@ -1055,9 +1075,7 @@ impl MainMenu {
             cfg.pad = self.keys;
             self.set_screen(OPTION);
             self.cursor = 8;
-            return;
         }
-        self.key_values(ctx);
     }
 
     // Row VMs 45–56: cursor row = script sprite, others sprite + 1 (15 §1.3).
@@ -1069,7 +1087,6 @@ impl MainMenu {
 
     // 0x469FA9, every call (15 §1.3): digit pairs 57 + 2r / 58 + 2r of the working copy (both disabled for −1, else
     // script sprite + 2·digit), then ShotSlow VMs 75 / 76.
-    // SPEC-GAP: 15 §1.3 does not place 0x469FA9 in the call; here after Reset, so a reset shows in its own frame.
     fn key_values(&mut self, ctx: &Ctx) {
         for (r, &f) in KEY_ROWS.iter().enumerate() {
             let v = self.keys[f] as i32;

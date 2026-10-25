@@ -435,16 +435,11 @@ pub(crate) fn render_strip(
     let Some(sp) = ctx.anm.sprite(slot, sprite.max(0) as usize).copied() else {
         return;
     };
+    // 10 §6: x = u0 = 0, W = texture-row width (512), 15 rows from v0; rows 15–16 of a 17-high sprite stay untouched.
     let t = ctx.gfx.texture(sp.tex);
-    let (tx, ty) = (
-        (sp.uv[0] * t.width as f32).round() as u32,
-        (sp.uv[1] * t.height as f32).round() as u32,
-    );
-    let (w, h) = (sp.w as usize, sp.h as usize);
-    let mut rgba = raster.render(s, [255, 255, 255], w, 15);
-    rgba.resize(w * h * 4, 0);
-    ctx.gfx
-        .write_texture(sp.tex, tx, ty, w as u32, h as u32, &rgba);
+    let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
+    let rgba = raster.render(s, [255, 255, 255], w as usize, 15);
+    ctx.gfx.write_texture(sp.tex, 0, ty, w, 15, &rgba);
 }
 
 impl MainMenu {
@@ -1221,12 +1216,13 @@ impl MainMenu {
                     self.cursor = rpy_page(self.cursor, n, inp.pressed_or_repeat(LEFT));
                     sound::play(sound::SELECT);
                 }
+                // The +0x10 > 9 gate is armed once per visit: only the list cancel zeroes +0x10 again; the file
+                // confirm and the cancels 2 → 1 / 3 → 2 leave it counting (12 §2 intro, 15 §3.8).
                 if self.lists.rpy_t <= 9 {
                     return true;
                 }
                 if inp.pressed(CONFIRM) && n > 0 {
                     sound::play(sound::OK);
-                    self.lists.rpy_t = 0;
                     let i = self.cursor as usize;
                     // Stage cursor = first stage with a record; +0xC290 keeps its old value until sub-state 2. None:
                     // error log line, scene −1, return 0 (15 §3.8, 00 §2).
@@ -1286,7 +1282,7 @@ impl MainMenu {
                     self.rpy_speed_vms();
                 } else if inp.pressed(CANCEL) {
                     sound::play(sound::CANCEL);
-                    self.lists.rpy_t = 0;
+                    // SPEC-GAP: the cancels 2 → 1 / 3 → 2 zero +0x1442C; whether its entry block then reruns is not given.
                     self.lists.rpy_sub = 1;
                     self.lists.rpy_loaded = None;
                     self.interrupt_all(14);
