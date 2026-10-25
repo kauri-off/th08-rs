@@ -163,7 +163,7 @@ Function indexes (all values used by the 8 files are in range):
 | table | idx | addr | behaviour |
 |---|---|---|---|
 | init | 0 | 0x44FD80 | default: fire on phase match |
-| | 1 | 0x450240 | default, then if an aimed enemy exists (+0xE2ABC): angle = atan2 to its position (+0x2D34) + entry angle + π/2; vel = polar(angle, speed × 1.5) |
+| | 1 | 0x450240 | default, then if an aimed enemy exists (+0xE2ABC): angle = `Angle_AddNormalize`(atan2(e.y − b.y, e.x − b.x), f32(entry angle + π/2)) where e = the aimed enemy's **position +0x2D34/+0x2D38**, not its final position +0x2D88 (for an op-92 follower +0x2D34 is the offset from the parent, so the shot aims at that offset as if it were a playfield point), b = the bullet's spawn pos; vel = polar(angle, speed × 1.5), +0x450 = angle (VERIFIED 0x450240, RE-Q53: silentselene 51842 stage 1 frame 2702, aimed enemy = an op-92 follower, Yukari's shots fly up-left) |
 | | 2, 3 | 0x44FDD0 | default, but not while bombing |
 | | 4 | 0x44FE20 | laser: not while bombing nor when 0x164D0B4 bit 13; one live laser per slot (phase = slot); slot timer = 999; a slot owned by another entry **pointer** (level change, or focus change: human/youkai sht are separate buffers even for solos) ends the old laser (14 §4, VERIFIED RE-Q50) |
 | | 5 | 0x44FFA0 | default, then aim at +0xE2AB0 if its x > −100 (speed × 1.5) |
@@ -175,7 +175,7 @@ Function indexes (all values used by the 8 files are in range):
 | | 4 | 0x4505D0 | laser body (follows the option/emitter, length from timer). **No shipped entry uses update 4** (sht_dump of all 8 files: update indexes used are 0, 1, 3, 5 only; VERIFIED RE-Q36), so it is unreachable |
 | | 5 | 0x450840 | laser that follows option 0 with a 32-segment trail and creates damage rectangles |
 | draw | 1 | 0x450AD0 | trail draw |
-| hit | 1 | 0x450C50 | explosion: first hit → hitbox enlarged by sprite (48–128 px), vel = polar(Rng × π/2 − 3π/4, 6) (**RNG**); in hit state only every 2nd frame (4th during a spell card) damages, damage /= 3 (min 1), vel × 0.88. The RNG draw happens on the first hit regardless of the sprite. After either branch, on non-filtered frames only: bullet timer % 6 == 0 → `Effect_Spawn(5, enemy pos, 1, 0xFFFFFFFF)` (so effectively every 6th frame, every 12th during a spell card) (changelog/answers_impl10.md §8, VERIFIED) |
+| hit | 1 | 0x450C50 | explosion: first hit → hitbox enlarged by sprite (48–128 px), vel = polar(Rng × π/2 − 3π/4, 6) (**RNG**); in hit state only every 2nd frame (4th during a spell card) damages — "during a spell card" is the `g_Gui` card flag read **at the call** (0x4178A0, inside `EnemyMgr_Calc`'s step 6), so a card ended earlier in the same `EnemyMgr_Calc` (e.g. by the boss's own `Ecl_Run`, step 4) already counts as no card (VERIFIED 0x450C50, RE-Q53: silentselene 53084 Extra frame 6794) — damage /= 3 (min 1), vel × 0.88. The RNG draw happens on the first hit regardless of the sprite. After either branch, on non-filtered frames only: bullet timer % 6 == 0 → `Effect_Spawn(5, enemy pos, 1, 0xFFFFFFFF)` (so effectively every 6th frame, every 12th during a spell card) (changelog/answers_impl10.md §8, VERIFIED) |
 | | 2 | 0x450EE0 | u8 counter player +0xE2A94 (shared with the damage-area hit effect, §4.5) += 1 per call; when it is ≡ 0 mod 8: effect type 5 at (bullet pos.x, enemy pos.y, enemy pos.z); returns 0, so it never filters (VERIFIED, RE-Q24) |
 
 ## 3. Input and movement (`Player_Move`)

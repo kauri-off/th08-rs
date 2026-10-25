@@ -319,9 +319,9 @@ state 3 and team 3 slot 2 becomes 0x44F2D0 (trail reset to p).
 |---|---|---|
 | 0x44E3A0 | Yukari (shot 0 focused, 5) | §3.1 |
 | 0x44EA40 | Alice (shot 1 focused, 7) | init: script 0x1D. Each frame while not bombing: pos = p − (0, 32) (bombs move it, §2.3). Leaving: pos = p − (0, 32) |
-| 0x44EB70 | Remilia team ×4 | init: script 0x18; anchor = p + offset with the solo offsets (0 (−30, −16), 1 (−10, −32), 2 (+10, −32), 3 (+30, −16)), then **fixed**; orbit angle 0, π, 0, π. Each frame: option timer (+0x2E0 current) **> 12** → orbit += +π/120, −π/90, +π/90, −π/120 (by index); pos = anchor + polar(orbit, 8). The timer is ticked after the calc fn and the VM run (09 §5) and the init call (state 1 → 2) also runs the orbit step with t = 0, so the first rotation happens on the 14th calc of the option (t = 13); SPEC FIXED RE-Q27 (`Timer_Greater`(t, 12) 0x44EB70; was "≥ 12"; attract demo 3: the original's options rotate from frame 1590, one frame after the old rule). No colour change, **no effect 0x2F** (changelog/answers_impl11.md §9, VERIFIED) |
+| 0x44EB70 | Remilia team ×4 | init: script 0x18; anchor = p + offset with the solo offsets (0 (−30, −16), 1 (−10, −32), 2 (+10, −32), 3 (+30, −16)), then **fixed**; orbit angle 0, π, 0, π. Each frame: option timer (+0x2E0 current) **> 12** → orbit := `Angle_AddNormalize`(orbit, +π/120, −π/90, +π/90, −π/120 by index) (wrapped to [−π, π], 05 §6.3); pos = anchor + polar(orbit, 8). The timer is ticked after the calc fn and the VM run (09 §5) and the init call (state 1 → 2) also runs the orbit step with t = 0, so the first rotation happens on the 14th calc of the option (t = 13); SPEC FIXED RE-Q27 (`Timer_Greater`(t, 12) 0x44EB70; was "≥ 12"; attract demo 3: the original's options rotate from frame 1590, one frame after the old rule). No colour change, **no effect 0x2F** (changelog/answers_impl11.md §9, VERIFIED) |
 | 0x44EE70 | Remilia solo ×4 | §3.2 |
-| 0x44F930 | Yuyuko ×2 (shot 3 focused, 11) | init: script 0x15; anchor = p; orbit 0 (index 0) / −π (index 1). Each frame: target = p − (32, 0) (index 0, orbit += π/60) or p + (32, 0) (index 1, orbit −= π/60); anchor += (target − anchor)·0.09; pos = anchor + polar(orbit, 6), z 0; effect 0x2F at pos, colour **0x80602050**, every frame (changelog/answers_impl11.md §9, VERIFIED) |
+| 0x44F930 | Yuyuko ×2 (shot 3 focused, 11) | init: script 0x15; anchor = p; orbit 0 (index 0) / −π (index 1). Each frame: target = p − (32, 0) (index 0, orbit := `Angle_AddNormalize`(orbit, π/60)) or p + (32, 0) (index 1, `Angle_AddNormalize`(orbit, −π/60)); anchor += (target − anchor)·0.09; pos = anchor + polar(orbit, 6), z 0; effect 0x2F at pos, colour **0x80602050**, every frame (changelog/answers_impl11.md §9, VERIFIED) |
 | 0x44F2D0 | Youmu's half (team 3 unfocused) | §3.3 |
 | 0x44F5E0 | Youmu solo (slot 2) | §3.3 |
 
@@ -336,7 +336,8 @@ sub-state 3 just set (and its interrupt 3 with interrupt 2/1), while the aimed p
 starts on the next frame (golden 1462–1464, changelog/answers_impl21.md §Q2). Animation: sub 0 → v.x > 0:
 interrupt 2, sub 2, scale.x negative (mirrored); v.x < 0: interrupt 2, sub 1, scale.x positive; subs 1/2 →
 v.x = 0: interrupt 1, sub 0, scale.x positive; v.x of the other sign: interrupt 2 and switch.
-Sub 3 (attack): while an aimed enemy exists: same smoothing toward enemy pos (+0x2D88) + (0, 32) (y ≥ 32);
+Sub 3 (attack): while an aimed enemy exists: same smoothing toward enemy pos (+0x2D88) + (0, 32) (y ≥ 32) — the
+option chases the **final** position, while Yukari's aimed shots (shot init 1, 09 §2.1) aim at the enemy's +0x2D34;
 leaves to sub 0 (interrupt 1, aimed := 0) when not shooting and the shot button is released, or no enemy.
 Aimed enemy (player +0xE2ABC = 0x18B89B4, VERIFIED, changelog/answers_impl11.md §12): a persistent pointer, never re-picked
 from scratch. Each frame `EnemyMgr_Calc`, for every live enemy with flag A bits 4, 5, 11 clear and (bit 31 clear
@@ -355,14 +356,14 @@ and clears the pointer, and the frame after the option leaves sub-state 3 (inter
 
 ### 3.2 Remilia solo (0x44EE70)
 Init: script 0x18; anchor = p + offset, offsets by index: 0 (−30, −16), 1 (−10, −32), 2 (+10, −32),
-3 (+30, −16); orbit angle 0, π, 0, π. Each frame: option timer **> 12** (as the team version, §3 table; SPEC FIXED RE-Q27) → orbit angle += +π/120, −π/90, +π/90,
-−π/120 (by index). Colour 0xFFFF8080; when the player is unfocused (+3 = 0): colour 0xFF80FFFF and
+3 (+30, −16); orbit angle 0, π, 0, π. Each frame: option timer **> 12** (as the team version, §3 table; SPEC FIXED RE-Q27) → orbit angle :=
+`Angle_AddNormalize`(orbit, +π/120, −π/90, +π/90, −π/120 by index). Colour 0xFFFF8080; when the player is unfocused (+3 = 0): colour 0xFF80FFFF and
 anchor += (p + offset − anchor)·0.2 (focused: anchor frozen). pos = anchor + polar(orbit, 8), z 0; effect 0x2F
 (0x80602050) at the option every frame.
 
 ### 3.3 Youmu's half (0x44F2D0) and Youmu solo (0x44F5E0)
 Init: script 0x15; anchor = trail[15] (player +0x380, the oldest of the 16 stored positions); orbit 0;
-facing (+0x2DC) = −π/2. Each frame: orbit += π/60; anchor += (trail[15] − anchor)·0.05; pos = anchor +
+facing (+0x2DC) = −π/2. Each frame: orbit := `Angle_AddNormalize`(orbit, π/60); anchor += (trail[15] − anchor)·0.05; pos = anchor +
 polar(orbit, 8), z 0. Facing target from the direction code (09 §3): 1 up +π/2, 2 down −π/2, 3 left 0,
 4 right π, 5 up-left π/4, 6 up-right 3π/4, 7 down-left −π/4, 8 down-right −3π/4 (i.e. pointing away from the
 motion); code 0 → unchanged. If |facing − target| > π, target is shifted by 2π toward facing; if the
@@ -374,6 +375,14 @@ Solo version: colour 0xFFFF8080 is written first; unfocused → colour white, th
 while the unfocused solo Youmu stands still; focused → colour 0xFFFF8080, facing frozen, effect 0xFFF05080 every frame
 (any direction). (VERIFIED 0x44F5E0 / 0x44F2D0, RE-Q49; silentselene 51852 stage 1: no draws on frames 1, 3, 4.)
 Shot init 8 (`option angle`) fires along option 2's facing (player +0xCD0 = option 2 +0x2DC).
+
+**Orbit wrap (all orbiting options, VERIFIED 0x44EB70 / 0x44EE70 / 0x44F2D0 / 0x44F5E0 / 0x44F930, RE-Q53).** Every orbit step
+above is `Angle_AddNormalize`(orbit, step) (05 §6.3) stored back to +0x2D8, so the orbit angle stays in [−π, π]; the
+steps are the f32 constants π/120 = 0x3CD67750, π/90 = 0x3D0EFA35, π/60 = 0x3D567750 and the init angles π / −π
+(0x40490FDB / 0xC0490FDB). pos = polar(orbit, r) then uses the wrapped angle. An unwrapped running sum (e.g. 16.755
+instead of −2.0944 after a few hundred frames) gives cos/sin results a few ulps apart, which moves the option and
+every shot spawned from it (`Player_InitShot`: pos = option pos + entry offset) and flips box-edge hits by a frame
+(silentselene 50715 Yuyuko frame 3491, 80412 Remilia solo frame 3822, 51852 Youmu solo frame 4528).
 
 ## 4. Player laser (Alice's focused shot, `ply01as.sht`, the only data using lasers)
 Entries (one per power level): interval 2/4/6/8/12/16 (also used as trail length n), phase 0 (= laser

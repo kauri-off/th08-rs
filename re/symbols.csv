@@ -811,3 +811,7 @@ addr,kind,name,signature,confidence,note
 0x004791bc,func,D3DX_Vec3Normalize_x87,,INFERRED,non-SSE variant; default stub target
 0x0047b944,func,D3DX_SelectCpuImpl,,INFERRED,patches the D3DX dispatch table on first call
 0x004c872c,global,g_D3DX_Vec3NormalizeFn,,VERIFIED,runtime value 0x48EFB0 on the reference machine
+0x00450240,func,ShotInit_AimEnemy,,VERIFIED,shot init 1: aims at aimed enemy +0x2D34 (RE-Q53)
+0x004178a0,func,Gui_IsCardActive,,VERIFIED,g_Gui spell flag bit 0
+0x00421ba0,func,GameMgr_RankLerpI,,VERIFIED,a + ((b-a)*rank)/32 (int, trunc)
+0x00422b80,func,GameMgr_RankLerpF,,VERIFIED,a + ((b-a)*rank)/32 (float)

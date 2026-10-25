@@ -210,7 +210,7 @@ RE-Q35).
 Flags A (e+0x3324): 0 alive · 1 boss · 2 contact hurts player · 3 loses life when hit · 4 not drawn, no screen check, no collision · 6 collides
 with player shots · 7 bonus on cancel (item 6 + popup in kill_all; special player interaction) · 8 reacts to
 player human/youkai mode · 9 follows parent position · 10 chained child being killed · 11 player in youkai
-mode (copied) · 12–13 movement mode · 14–16 movement easing · 17 store bullets for auto-fire · 18 mirror X ·
+mode (copied; written only for bit-8 enemies, §10.1 step 3 / §10.5; read by the bullet mode filters §9.1) · 12–13 movement mode · 14–16 movement easing · 17 store bullets for auto-fire · 18 mirror X ·
 19 clamp to rect · 20–22 death mode · 23 dead-but-continuing · 24 has been on screen · 25, 30, 31 (op 145,
 173, 183; later phase) · 26 calls do not push the stack · 27 spell bonus fixed at 99 999 990 · 28 not deleted
 when leaving the screen · 29 skip movement step. (VERIFIED as bit usage; names of 23/25/30/31 INFERRED.)
@@ -592,14 +592,31 @@ sin a·spd·dur, 0) (not mirrored), start = final pos, timer = dur, ease bits = 
 | +0x24 | f32 | 7 | angle2 |
 | +0x28 | u32 | — | flags (0x200 play sfx; 2/4/8 spawn-effect styles; 0x8000/0x10000 mode filters; others: 08 spec) |
 
-Firing (only if life > 0): if flag A bit 17 is set the instruction is stored for auto-fire instead. Skipped
-if flags & 0x8000 and player not in youkai mode, or flags & 0x10000 and in youkai mode, or if no-fire radius²
-> 0 and squared distance (final pos ↔ player) < radius². Origin = final pos + shot offset; aim mode = op − 96.
+Firing (only if life > 0, tested by `Ecl_Run` and by the auto-fire path `Enemy_AutoFireAndDirAnim` 0x423150): if
+flag A bit 17 is set the instruction is stored for auto-fire instead (11 dwords copied raw to e+0x3034; auto-fire
+re-runs `Ecl_FireBullets` on that copy, so its variable arguments are re-read each time).
+`Ecl_FireBullets` (VERIFIED 0x422720, RE-Q53), in this order:
+1. **Filters, on the raw instruction, before any argument is read** — a skipped instruction reads no variable and so
+   draws no RNG for random-variable arguments: skipped if flags (+0x28) & 0x8000 and the **enemy's flag A bit 11**
+   is clear, or flags & 0x10000 and bit 11 is set (bit 11 is the stored youkai state of a mode-reacting enemy,
+   §10.1 step 3 / §10.5 — it is *not* the player's mode: an enemy without flag A bit 8 keeps whatever bit 11 it
+   has); or if no-fire radius² e+0x3350 > 0 and (e.y − p.y)² + (e.x − p.x)² < radius² (final pos ↔ player
+   0x17D61AC/B0).
+2. Origin = final pos + shot offset (e+0x2DB8).
+3. Arguments, in this order (each a variable when its mask bit is set): type (bit 0), count1 (bit 2), count2
+   (bit 3), angle1 (bit 6), speed1 (bit 4), angle2 (bit 7), speed2 (bit 5); aim mode = op − 96.
+4. Rank adjustment (§9.2), unless a card is active (g_Gui flag bit 0).
+5. Flags raw; **colour (bit 1) last**; then `BulletMgr_SpawnPattern`.
+The order matters when several fields read random variables (each read draws). Data: gensokyou Bi01 stage 6A frame
+7227 — an enemy inside its 32-px no-fire radius reads no `$rand` argument in the original (silentselene 51842,
+80412 moved too).
 
 ### 9.2 Rank adjustment (unless a spell card is active)
 `lerp_i(a, b) = a + trunc((b − a)·rank / 32)`, `lerp_f(a, b) = a + (b − a)·rank / 32.0`, rank = var 10041 (actual range 8–16 by difficulty, so the lerp only covers the middle of [a, b]; integer division truncates toward 0)
 (var 10041). count1 += lerp_i(c1a, c1b) (min 1); count2 += lerp_i(c2a, c2b) (min 1); if speed1 ≠ 0:
-speed1 += lerp_f(s0, s1) (min 0.3); speed2 += lerp_f(s0, s1)/2 (min 0.3).
+speed1 += lerp_f(s0, s1) (min 0.3); then **always** (whether or not speed1 is 0): speed2 += lerp_f(s0, s1)/2
+(min 0.3) (VERIFIED disassembly 0x422A6C–0x422AC3: the speed1 == 0 branch jumps to the speed2 code, RE-Q53).
+"min 0.3" is `if (v < 0.3) v = 0.3` (0x3E99999A).
 
 ### 9.3 Pattern placement (`BulletMgr_SpawnPattern` 0x430E10 / `PlaceBullet` 0x42F5F0)
 If live bullets < 1536: `aim = angle(origin → player)`; for j in 0..count2−1, i in 0..count1−1 (stop when no

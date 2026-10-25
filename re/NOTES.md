@@ -828,3 +828,15 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Probe: TH08_SCANEFF / _ONLY / TH08_SCANEFFSLOT (effect ring + one slot). Poll index of a frame varies ±10 between
   re-records: use wide scan windows. Scratch port re/work/runs/q52/portcopy (target/re52), diff q52_scratch.diff.
 - fixJ: Ar02/Ro168 0 diffs; Dn14 → 7339, 53373 → 50932, 80406 → 76752, 88234 → 62194; others unchanged (list in changelog).
+
+# RE-Q53 (2026-10-25) — replay pilot: 51842 / 50715 / 80412 / 51852 / Bi01 / 53084 — DONE (specs/changelog/answers_re_q53.md)
+- K 51842: shot init 1 aims at aimed enemy +0x2D34 (pos; offset for op-92 followers), not final pos; angle =
+  AddNormalize(atan2, angle + π/2). 09 §2.1, 14 §3.1.
+- L 50715 / 80412 / 51852: all option orbits are Angle_AddNormalize-wrapped; port's unwrapped sum drifts polar() by
+  ulps → option / shot spawn pos → box-edge hit a frame off. 14 §3 "Orbit wrap".
+- M Bi01: Ecl_FireBullets filters (mode vs enemy flag A bit 11, no-fire radius) run before any arg read (no RNG when
+  skipped); arg order type,c1,c2,a1,s1,a2,s2,(rank),colour; speed2 rank add unconditional. 07 §9.1/§9.2.
+- N 53084: explosion hit filter reads the card flag live (card ended by the boss's own Ecl_Run the same frame);
+  port reads last frame's env.spell. 09 §2.1 hit 1.
+- Scratch re/work/runs/q53/portcopy (target/re53), q53_scratch.diff. fixN all 22: 7 still 0 diffs, 12 moved, 3 unchanged
+  (53373 50932, 80406 76752, 88234 62194). Probe E lines now carry acc/step; TH08_RNGSITE file lands in the slot game dir.

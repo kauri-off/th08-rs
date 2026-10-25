@@ -220,9 +220,9 @@ static void sess_scan(int pass) {
     for (int j = 0; j < 480; j++) {
         uint32_t e = 0x577F20 + 0x53D0 + j * 0x53D0;
         if (!(U32(e + 0x3324) & 1)) continue;
-        fprintf(o, "E %d fl %08x %08x pos %08x %08x base %08x %08x hb %08x %08x life %d item %d t %d par %08x sub %d\n", j, U32(e + 0x3324), U32(e + 0x3328),
+        fprintf(o, "E %d fl %08x %08x pos %08x %08x base %08x %08x hb %08x %08x life %d item %d t %d par %08x sub %d acc %d step %d\n", j, U32(e + 0x3324), U32(e + 0x3328),
                 U32(e + 0x2D88), U32(e + 0x2D8C), U32(e + 0x2D34), U32(e + 0x2D38), U32(e + 0x2D70), U32(e + 0x2D74), (int)U32(e + 0x2DFC), (int)U32(e + 0x3304),
-                (int)U32(e + 0x2E14 + 8), U32(e + 0x2DA4), (int)U32(e + 0x2DF8));
+                (int)U32(e + 0x2E14 + 8), U32(e + 0x2DA4), (int)U32(e + 0x2DF8), (int)U32(e + 0x2E10), (int)U32(0x18B8A24));  /* RE-Q53: time-orb acc */
         { uint32_t spr = U32(e + 0x230); fprintf(o, "S %d spr %08x %08x\n", j, spr ? U32(spr + 0x34) : 0, spr ? U32(spr + 0x30) : 0); }
     }
     for (int j = 0; j < 384; j++) {
