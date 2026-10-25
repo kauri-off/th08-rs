@@ -655,6 +655,19 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl106 (RE-Q37 CODE BUG 1, 4, 5, 7): `Info_Show` loop (16 §4) — `InfoNotices::calc` runs one iteration's logic
+  (own poll g_InputRawCur = raw | joy, press test 179 < t < 5980 on the masked word against the frozen 0x164D530 of
+  the registering frame, t := 5980, t += 1; `info_step`), the draw shows the iteration's t, so a press shows as
+  t = 5981 one frame later; quad (0, 0)–(639, 479). Description VMs (12 §2.2): 14 text.anm script-9 VMs created by the
+  loader, pointer +0xC2BC (`desc_cur`) run / drawn on every screen while set; writers: loader (VM 0), top / option /
+  key-config change test (interrupt 1), difficulty / replay entry := 0; interrupt 2 from top confirms 0–6 and the entry
+  redirects only (Option / Quit keep it drawn). Strips: top renders text k in call k (0–8), option entry its 10
+  (0x4C8664), key config its 12 (0x4C8690). Key config (15 §1.3): range interrupt 4, row VMs 45–56 (entry + cursor
+  move), digit pairs 57–74 from the working copy and ShotSlow 75 / 76 every call — the ASCII rows are gone. Replay
+  (12 §2.8 step 3): card-name scratch VM (resulttext sprite 11, header +0x7E) set up on the file confirm, drawn at VM
+  97 + (0, 16) for spell replays. Test `menu::info_loop_press`. SPEC-GAP 60 → 57. Golden 25634, fullrun_noclip
+  124707, selftest1 1922, demos 0–3 in sync; options_cfg 1887, musicroom_practice 3505, gameover_save 4214
+  (unchanged). Questions: `docs/briefs/IMPL106_QUESTIONS.md`.
 - impl105 (RE-Q37 CODE BUG 2, 3, 6, 8–13 + "right" markers): top menu cursor / demo counter / change test from call 9,
   confirm / cancel from call 19; Option (item 7) sets cursor 0 and first runs at P + 30; delayed switches
   (`Pending`) now call `set_screen` at the end of the call whose counter runs out (12 §2), so the trace samples the

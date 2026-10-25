@@ -2,7 +2,6 @@
 //! practice, replay and spell-practice screens are in menulist.rs.
 
 use crate::anmvm::{self, AnmVm};
-use crate::ascii::Text;
 use crate::config::Config;
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
@@ -53,22 +52,19 @@ const IDLE_EXIT: u32 = 3600;
 const TOP_INPUT: u32 = 9;
 const TOP_CONFIRM: u32 = 19;
 
-// Key config rows 0–8 (15 §1.3): label and the pad field (file order, +0x00…+0x10) each row edits; Skip is 4th.
-const KEY_ROWS: [(&str, usize); 9] = [
-    ("Shot", 0),
-    ("Bomb", 1),
-    ("Slow", 2),
-    ("Skip", 8),
-    ("Pause", 3),
-    ("Up", 4),
-    ("Down", 5),
-    ("Left", 6),
-    ("Right", 7),
-];
+// Key config rows 0–8 (15 §1.3): the pad field (file order, +0x00…+0x10) each row edits; Skip is 4th.
+const KEY_ROWS: [usize; 9] = [0, 1, 2, 8, 3, 4, 5, 6, 7];
+// Key-config VMs (15 §1.3 "Key config VMs"): rows 45–56, digit pairs from 57, ShotSlow Off / On 75 / 76.
+const VM_KEY_ROW: usize = 45;
+const VM_KEY_DIGITS: usize = 57;
+const VM_KEY_SHOT_SLOW: usize = 75;
 const KEY_ITEMS: i32 = 12;
 const KEY_SHOT_SLOW: i32 = 9;
 const KEY_RESET: i32 = 10;
 const KEY_QUIT: i32 = 11;
+
+// Description VMs (12 §2.2): text.anm script 9, sprite 21 + i; 14 strips shared by the top menu, option and key config.
+const DESC_VMS: usize = 14;
 
 // Top-menu item descriptions (12 §2.2 table).
 const DESCRIPTIONS: [&str; ITEMS] = [
@@ -81,6 +77,36 @@ const DESCRIPTIONS: [&str; ITEMS] = [
     "音楽を聴けます",
     "各種設定できます",
     "いろいろと終了します",
+];
+
+// Option descriptions, table 0x4C8664 (12 §2.2).
+const OPTION_DESCRIPTIONS: [&str; 10] = [
+    "プレイヤーの初期数を変更します。（初期設定　３）",
+    "画面の色数を変更します。３２ＢＩＴだと最も綺麗に表示されます。",
+    "ＢＧＭの再生方法を変更します。（初期設定　ＷＡＶ）",
+    "ＢＧＭの音量を調整します",
+    "効果音の音量を調整します",
+    "ウィンドウかフルスクリーンか選択します",
+    "弾が多い場面でわざと処理落ちさせます(スコア、リプレイ記録不可)",
+    "全て初期設定にします",
+    "パッド操作のボタン配置を変更します",
+    "おいそれと終了します",
+];
+
+// Key-config descriptions, table 0x4C8690 (12 §2.2).
+const KEY_DESCRIPTIONS: [&str; 12] = [
+    "ショット、決定ボタンを設定します",
+    "ボム、キャンセルボタンを設定します",
+    "低速移動ボタンを設定します",
+    "メッセージスキップボタンを設定します",
+    "ポーズボタンを設定します",
+    "上移動ボタンを設定します",
+    "下移動ボタンを設定します",
+    "左移動ボタンを設定します",
+    "右移動ボタンを設定します",
+    "ショット押しっぱなしで低速移動になるようにします",
+    "初期設定に戻します",
+    "おおよそ終了します",
 ];
 
 // Character select VMs per shot (table 0x4B8CD8): shown VMs, then the VM that gets interrupt 23.
@@ -118,12 +144,17 @@ fn final_notice(g: &gamemgr::Game, c: usize, d: usize) -> Option<i32> {
 #[derive(Default)]
 pub struct InfoNotices {
     pub(crate) queue: std::collections::VecDeque<&'static str>,
-    // Surface 0 (title/infoNN.jpg) and the loop frame t.
+    // 0x164D530 as of the registering frame: only Supervisor_Calc writes it, so it stays frozen in the loop.
+    pub(crate) frozen_prev: u16,
+    // Surface 0 (title/infoNN.jpg), the loop counter t and the t drawn by this iteration.
     cur: Option<(TextureId, i32)>,
+    drawn: i32,
 }
 
 const INFO_FRAMES: i32 = 6000;
 const INFO_FADE_OUT: i32 = 5980;
+// Shot | Bomb | Enter.
+const INFO_KEYS: u16 = 0x1003;
 
 impl InfoNotices {
     pub fn active(&self) -> bool {
@@ -135,8 +166,8 @@ impl InfoNotices {
         self.cur.is_some()
     }
 
-    // Input part of loop frame t; false once no notice is left (the frame then runs normally).
-    // SPEC-GAP: 16 §4 lists the per-frame steps without the place of t += 1; here the jump is drawn on its own frame.
+    // Logic of one loop iteration (16 §4): the draw of t, poll, the press test, t := 5980, t += 1. So a press shows one
+    // iteration later as t = 5981. False once no notice is left (the frame then runs normally).
     pub fn calc(ctx: &mut Ctx) -> bool {
         loop {
             match ctx.info.cur {
@@ -161,29 +192,42 @@ impl InfoNotices {
                 }
             }
         }
+        // g_InputRawCur := Input_Poll(); the previous word and the repeat counter are left alone.
+        let pad = ctx.pad.poll();
+        ctx.input.poll_joystick(&ctx.game.cfg, pad);
+        ctx.input.held = ctx.input.raw | ctx.input.joy;
+        let (held, frozen) = (ctx.input.held, ctx.info.frozen_prev);
         let Some((_, t)) = &mut ctx.info.cur else {
             return false;
         };
-        // From t ≥ 180 Shot, Bomb or Enter (edge, 0x1003) jumps to the fade-out, SE 10.
-        if *t >= 180 && ctx.input.pressed(SHOT | BOMB | ENTER) {
-            *t = INFO_FADE_OUT;
+        ctx.info.drawn = *t;
+        let (next, pressed) = info_step(*t, held, frozen);
+        if pressed {
             sound::play(sound::OK);
         }
+        *t = next;
         true
     }
 
-    // Draw part of loop frame t: the picture full-screen and the black fade quad; then t += 1.
+    // Draw of the iteration: the picture full-screen and the black quad (0, 0)–(639, 479).
     pub fn draw(ctx: &mut Ctx) {
-        let Some((tex, t)) = ctx.info.cur else {
+        let Some((tex, _)) = ctx.info.cur else {
             return;
         };
         ctx.gfx.set_viewport(FULLSCREEN);
         ctx.gfx.image(tex, 0.0, 0.0);
-        if let Some(a) = info_fade_alpha(t) {
-            ctx.gfx.rect(0.0, 0.0, 640.0, 480.0, [0, 0, 0, a]);
+        if let Some(a) = info_fade_alpha(ctx.info.drawn) {
+            ctx.gfx.rect(0.0, 0.0, 639.0, 479.0, [0, 0, 0, a]);
         }
-        ctx.info.cur = Some((tex, t + 1));
     }
+}
+
+// Press test and counter step of one notice iteration (16 §4): 179 < t < 5980 and the masked word non-zero and unlike
+// the frozen previous word → t := 5980 (SE 10); then t += 1.
+fn info_step(t: i32, held: u16, frozen: u16) -> (i32, bool) {
+    let (h, f) = (held & INFO_KEYS, frozen & INFO_KEYS);
+    let pressed = 179 < t && t < INFO_FADE_OUT && h != 0 && h != f;
+    (if pressed { INFO_FADE_OUT } else { t } + 1, pressed)
 }
 
 // Notices of the unlock bits `bits` (GM flags 15–17) not yet set in `flags`, in the 16 §4 table order.
@@ -274,11 +318,9 @@ pub struct MainMenu {
     // Surface slot 0 (title00.png / select00.png), copied before everything (12 §2.2).
     pub(crate) surface: Option<(TextureId, &'static str)>,
     pub(crate) raster: crate::text::Raster,
-    // Current description VM +0xC2BC (text.anm script 9, sprite 21 + item).
-    // Port: one VM re-rendered per item instead of the original's 14 pre-rendered strips.
-    pub(crate) desc_vm: AnmVm,
-    pub(crate) desc_on: bool,
-    pub(crate) desc_first: bool,
+    // The 14 description VMs and the current one, pointer +0xC2BC (None = 0), run and drawn while set (12 §2.2).
+    pub(crate) desc: Vec<AnmVm>,
+    pub(crate) desc_cur: Option<usize>,
     // Scratch VM menu+0xE7B8 (final-route notice, replay card name).
     pub(crate) notice: AnmVm,
     // +0x14428 screen, +0x68 previous screen, +0x1442C frames on this screen.
@@ -318,9 +360,8 @@ impl MainMenu {
             base: Vec::new(),
             surface: None,
             raster: Default::default(),
-            desc_vm: AnmVm::default(),
-            desc_on: false,
-            desc_first: true,
+            desc: Vec::new(),
+            desc_cur: None,
             notice: AnmVm::default(),
             screen: TOP,
             prev_screen: TOP,
@@ -382,11 +423,10 @@ impl MainMenu {
         }
     }
 
-    // Text_RenderCentered 0x466650 (12 §2.2): description `i` into the VM's text.anm sprite rect, centred, colour
-    // 0xFFF0E0.
-    fn render_description(&mut self, ctx: &mut Ctx, i: usize) {
-        let vm = &self.desc_vm;
-        let Some(sp) = ctx.anm.sprite(0, vm.sprite_index.max(0) as usize).copied() else {
+    // Text_RenderCentered 0x466650 (12 §2.2): `text` into description strip `i` (text.anm sprite 21 + i), centred,
+    // colour 0xFFF0E0.
+    fn render_description(&mut self, ctx: &mut Ctx, i: usize, text: &str) {
+        let Some(sp) = ctx.anm.sprite(0, 21 + i).copied() else {
             return;
         };
         let t = ctx.gfx.texture(sp.tex);
@@ -395,9 +435,7 @@ impl MainMenu {
             (sp.uv[1] * t.height as f32).round() as u32,
         );
         let (w, h) = (sp.w as usize, sp.h as usize);
-        let mut rgba = self
-            .raster
-            .render(DESCRIPTIONS[i], [0xFF, 0xF0, 0xE0], w, h);
+        let mut rgba = self.raster.render(text, [0xFF, 0xF0, 0xE0], w, h);
         let width = (0..w)
             .rev()
             .find(|&x| (0..h).any(|y| rgba[(y * w + x) * 4 + 3] != 0))
@@ -411,6 +449,24 @@ impl MainMenu {
         }
         ctx.gfx
             .write_texture(sp.tex, tx, ty, w as u32, h as u32, &rgba);
+    }
+
+    // Change test of the top menu, option and key config (12 §2.2): cursor ≠ +0x08 → +0xC2BC := description VM
+    // [cursor], interrupt 1.
+    fn desc_follow_cursor(&mut self) {
+        if self.cursor != self.prev_cursor {
+            self.prev_cursor = self.cursor;
+            let i = (self.cursor.max(0) as usize).min(DESC_VMS - 1);
+            self.desc_cur = Some(i);
+            self.desc[i].pending_interrupt = 1;
+        }
+    }
+
+    // Interrupt 2 (fade out over 60 frames) to the current description VM; range interrupts never reach it (12 §2.2).
+    pub(crate) fn desc_fade_out(&mut self) {
+        if let Some(i) = self.desc_cur {
+            self.desc[i].pending_interrupt = 2;
+        }
     }
 
     // Menu_CursorUpDown 0x47030B / Menu_CursorLeftRight 0x470424: wraps, skips locked entries, held keys use the
@@ -459,15 +515,11 @@ impl MainMenu {
             self.set_surface(ctx, "title00.png");
             self.interrupt_all(2);
         }
-        // One description VM per item (sprite 21 + i, 12 §2.2). The loader leaves VM 0 running; on the 9th frame the
-        // handler sets +0x08 = −1 and enters sub-state 1, so the change test switches to the cursor's VM (12 §2.2).
-        if self.frames == 0 {
-            self.desc_on = self.desc_first;
-            if self.desc_first {
-                ctx.anm.set_script(&mut self.desc_vm, 0, 9);
-                self.desc_vm.set_sprite(&ctx.anm, 21);
-                self.render_description(ctx, 0);
-            }
+        // Calls 0–8 render description k = +0x1442C into strip k; the pointer keeps its VM until the change test of
+        // call 9 (12 §2.2), so a previous screen's description stays drawn meanwhile.
+        if self.frames < TOP_INPUT {
+            let k = self.frames as usize;
+            self.render_description(ctx, k, DESCRIPTIONS[k]);
         }
         // Calls 0–8 are sub-state 0; call 9 enters sub-state 1 (+0x08 := −1, +0x14430 := 0), and cursor, demo counter
         // and change test run from that call on (12 §2.2 "Input timing"). The port keeps counting `frames` instead of
@@ -495,15 +547,7 @@ impl MainMenu {
         if !input {
             return;
         }
-        if self.cursor != self.prev_cursor {
-            self.prev_cursor = self.cursor;
-            self.desc_first = false;
-            self.desc_on = true;
-            ctx.anm.set_script(&mut self.desc_vm, 0, 9);
-            self.desc_vm.set_sprite(&ctx.anm, 21 + self.cursor);
-            self.desc_vm.pending_interrupt = 1;
-            self.render_description(ctx, self.cursor as usize);
-        }
+        self.desc_follow_cursor();
 
         if let Some(f) = &mut self.quitting {
             // Item 8: after 60 frames free the VMs, scene −1 (12 §2.2).
@@ -544,6 +588,10 @@ impl MainMenu {
         if ctx.input.pressed(CONFIRM) {
             sound::play(sound::OK);
             ctx.sound_update();
+            // Every confirm that leaves to another screen or scene fades the description out; Option and Quit do not.
+            if self.cursor < 7 {
+                self.desc_fade_out();
+            }
             let g = &mut ctx.game;
             match self.cursor {
                 0 => {
@@ -606,6 +654,7 @@ impl MainMenu {
             }
             self.interrupt_all(if extra { 12 } else { 7 });
             self.cursor = if extra { 0 } else { last_difficulty(&ctx.game) };
+            self.desc_cur = None;
         }
         let active = self.frames >= 8 && self.pending.is_none();
         if !extra {
@@ -827,6 +876,9 @@ impl MainMenu {
         if self.frames == 0 {
             self.interrupt_all(3);
             self.idle = 0;
+            for (k, t) in OPTION_DESCRIPTIONS.iter().enumerate() {
+                self.render_description(ctx, k, t);
+            }
         }
         for i in 0..OPTION_ITEMS {
             self.highlight(ctx, VM_OPTION + i as usize, i == self.cursor);
@@ -837,6 +889,7 @@ impl MainMenu {
         }
         // The cursor moves from the first call; Left/Right/confirm/cancel from +0x1442C ≥ 4 (12 §2 input start).
         self.move_cursor(ctx, OPTION_ITEMS, UP, DOWN, |_| true);
+        self.desc_follow_cursor();
         let item = self.cursor;
         // Volume preview (15 §1.3): SE 0x1D whenever the screen frame counter +0x1442C is a multiple of 50.
         if matches!(item, 3 | 4) && self.frames % 50 == 0 {
@@ -944,17 +997,28 @@ impl MainMenu {
     }
 
     fn key_config_run(&mut self, ctx: &mut Ctx) {
-        let cfg = &mut ctx.game.cfg;
-        // Entry: working copy of the 9 fields; the live Up/Down are −1 while the screen is open.
+        // Entry: range interrupt 4, row sprites, the 12 description strips, working copy of the 9 fields; the live
+        // Up/Down are −1 while the screen is open.
         // SPEC-GAP: 15 §1.3 does not say where key-config cursor 0 is set (entry here; option item 8 confirm?).
         if self.frames == 0 {
             self.cursor = 0;
+            self.interrupt_all(4);
+            self.key_rows(ctx);
+            for (k, t) in KEY_DESCRIPTIONS.iter().enumerate() {
+                self.render_description(ctx, k, t);
+            }
+            let cfg = &mut ctx.game.cfg;
             self.keys = cfg.pad;
             cfg.pad[4] = -1;
             cfg.pad[5] = -1;
             self.idle = 0;
         }
+        let old = self.cursor;
         self.move_cursor(ctx, KEY_ITEMS, UP, DOWN, |_| true);
+        if self.cursor != old {
+            self.key_rows(ctx);
+        }
+        self.desc_follow_cursor();
         let inp = ctx.input;
         // Assigning (joystick only): a new first-down raw button on rows 0–8 swaps with any row holding it, SE 10.
         let b = inp.pad.first_button();
@@ -984,44 +1048,34 @@ impl MainMenu {
             self.cursor = 8;
             return;
         }
-        self.key_config_text(ctx);
+        self.key_values(ctx);
     }
 
-    // SPEC-GAP: the key-config VMs 43–76 (12 §2.1) have no row/digit layout in the spec; the port prints the rows
-    // with the ASCII queue.
-    fn key_config_text(&self, ctx: &mut Ctx) {
-        let cfg = &ctx.game.cfg;
-        let row = |i: i32| {
-            let (label, value) = match i {
-                0..9 => {
-                    let (l, f) = KEY_ROWS[i as usize];
-                    let n = self.keys[f];
-                    (
-                        l,
-                        if n < 0 {
-                            String::new()
-                        } else {
-                            format!("{n:02}")
-                        },
-                    )
-                }
-                KEY_SHOT_SLOW => (
-                    "ShotSlow",
-                    ["Off", "On"][(cfg.shot_slow != 0) as usize].into(),
-                ),
-                KEY_RESET => ("Reset", String::new()),
-                _ => ("Quit", String::new()),
-            };
-            format!("{label:<10}{value}")
-        };
+    // Row VMs 45–56: cursor row = script sprite, others sprite + 1 (15 §1.3).
+    fn key_rows(&mut self, ctx: &Ctx) {
         for i in 0..KEY_ITEMS {
-            let c = if i == self.cursor {
-                0xFFFFFFFF
-            } else {
-                0xFF808080
-            };
-            ctx.ascii
-                .push(Text::new(224.0, 144.0 + 16.0 * i as f32, row(i)).argb(c));
+            self.highlight(ctx, VM_KEY_ROW + i as usize, i == self.cursor);
+        }
+    }
+
+    // 0x469FA9, every call (15 §1.3): digit pairs 57 + 2r / 58 + 2r of the working copy (both disabled for −1, else
+    // script sprite + 2·digit), then ShotSlow VMs 75 / 76.
+    // SPEC-GAP: 15 §1.3 does not place 0x469FA9 in the call; here after Reset, so a reset shows in its own frame.
+    fn key_values(&mut self, ctx: &Ctx) {
+        for (r, &f) in KEY_ROWS.iter().enumerate() {
+            let v = self.keys[f] as i32;
+            for (k, d) in [v / 10, v % 10].into_iter().enumerate() {
+                let i = VM_KEY_DIGITS + 2 * r + k;
+                let vm = &mut self.vms[i];
+                vm.set_flag(anmvm::F_ENABLED, v >= 0);
+                if v >= 0 && self.base[i] >= 0 {
+                    vm.set_sprite(&ctx.anm, self.base[i] + 2 * d);
+                }
+            }
+        }
+        let on = (ctx.game.cfg.shot_slow != 0) as usize;
+        for k in 0..2 {
+            self.highlight(ctx, VM_KEY_SHOT_SLOW + k, k == on);
         }
     }
 
@@ -1121,13 +1175,25 @@ impl Task<Ctx> for MainMenu {
             // where the original's in-memory CLRD is still empty, so the first menu after boot shows none.
             if g.previous != gamemgr::SCENE_BOOT {
                 ctx.info.queue.extend(info_files(bits, g.flags.get()));
+                ctx.info.frozen_prev = ctx.input.prev;
             }
             g.flags.set(g.flags & !(7 << 15) | bits);
         }
         crate::menulist::compute_last_word_unlocks(&mut ctx.game);
+        // The 14 description VMs start script 9 (fade-in by itself); the loader ends with +0xC2BC := VM 0 (12 §2.2).
+        self.desc = (0..DESC_VMS)
+            .map(|i| {
+                let mut vm = AnmVm::default();
+                ctx.anm.set_script(&mut vm, 0, 9);
+                vm.set_sprite(&ctx.anm, 21 + i as i32);
+                vm
+            })
+            .collect();
+        self.desc_cur = Some(0);
         // A replay was being watched → straight to the replay screen (12 §2.2).
         if std::mem::take(&mut ctx.game.watched_replay) {
             self.screen = REPLAY;
+            self.desc_fade_out();
         }
         let g = &ctx.game;
         if g.previous == gamemgr::SCENE_GAME || g.previous == gamemgr::SCENE_RETRY {
@@ -1136,10 +1202,12 @@ impl Task<Ctx> for MainMenu {
                 self.back = 2;
                 self.screen = CHAR_SPELL;
                 self.interrupt_all(5);
+                self.desc_fade_out();
             } else if g.practice() {
                 self.back = 1;
                 self.screen = DIFF_PRACTICE;
                 self.interrupt_all(5);
+                self.desc_fade_out();
             }
         }
         // Cursor on menu load by previous scene (12 §2.2), practice flags override.
@@ -1172,7 +1240,7 @@ impl Task<Ctx> for MainMenu {
         ctx.anm.unload(&mut ctx.gfx, crate::menulist::RT_SLOT);
         // The draw node can outlive a calc node removed by return 0 (00 §3.1); it then draws nothing.
         self.vms.clear();
-        self.desc_on = false;
+        self.desc_cur = None;
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
@@ -1212,7 +1280,6 @@ impl Task<Ctx> for MainMenu {
             if std::mem::take(&mut self.restart) {
                 return Ret::ErrorQuit;
             }
-            let left_top = screen == TOP && self.screen != TOP;
             if let Some(p) = self.pending.take_if(|p| p.frames == 0) {
                 self.set_screen(p.screen);
                 self.cursor = p.cursor;
@@ -1229,12 +1296,8 @@ impl Task<Ctx> for MainMenu {
             for vm in self.vms.iter_mut().filter(|v| v.script.is_some()) {
                 vm.run(&mut ctx.anm);
             }
-            // Leaving the top menu fades the description out (script 9 interrupt 2).
-            if left_top {
-                self.desc_vm.pending_interrupt = 2;
-            }
-            if self.desc_on {
-                self.desc_vm.run(&mut ctx.anm);
+            if let Some(i) = self.desc_cur {
+                self.desc[i].run(&mut ctx.anm);
             }
             if !std::mem::take(&mut self.again) {
                 return Ret::Next;
@@ -1258,12 +1321,9 @@ impl Task<Ctx> for MainMenu {
         for vm in &mut self.vms {
             ctx.anm.draw(&mut ctx.gfx, vm);
         }
-        // Description VM: text.anm script 9 at (320, 448), centred (12 §2.2).
-        // SPEC-GAP: 12 §2.2 draws it on every screen, but the port's VM misses the fade-out interrupts off the top menu.
-        let top = self.screen == TOP
-            || (self.prev_screen == TOP && (self.frames == 0 || self.screen == SPELL_PRACTICE));
-        if self.desc_on && top && self.quitting.is_none() && self.pending.is_none() {
-            ctx.anm.draw(&mut ctx.gfx, &mut self.desc_vm);
+        // The current description VM (text.anm script 9 at (320, 448)) on every screen while +0xC2BC ≠ 0 (12 §2.2).
+        if let Some(i) = self.desc_cur {
+            ctx.anm.draw(&mut ctx.gfx, &mut self.desc[i]);
         }
         match self.screen {
             PRACTICE_STAGE => self.practice_stage_draw(ctx),
@@ -1313,7 +1373,7 @@ fn volume_step(v: u8, inp: &Input) -> u8 {
 
 // Key config assign (15 §1.3): rows holding `b` get the row's old button, then the row gets `b`.
 fn assign_key(keys: &mut [i16; 9], row: usize, b: i16) {
-    let field = KEY_ROWS[row].1;
+    let field = KEY_ROWS[row];
     let old = keys[field];
     for k in keys.iter_mut().filter(|k| **k == b) {
         *k = old;
@@ -1328,7 +1388,10 @@ fn title_music(g: &gamemgr::Game) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{assign_key, final_notice, info_fade_alpha, info_files, title_music, volume_step};
+    use super::{
+        INFO_FADE_OUT, assign_key, final_notice, info_fade_alpha, info_files, info_step,
+        title_music, volume_step,
+    };
     use crate::gamemgr::{self, Game};
 
     // 16 §4: notice order info00 (bit 15), info02 (16), info01 (17); only bits not yet in the flags.
@@ -1349,6 +1412,22 @@ mod tests {
         assert_eq!(info_fade_alpha(5941), Some(15));
         assert_eq!(info_fade_alpha(5980), Some(0));
         assert_eq!(info_fade_alpha(5999), Some(242));
+    }
+
+    // 16 §4: the press iteration still advances t by one from its own value; the jump shows as 5981 one iteration
+    // later. Only 179 < t < 5980 and a masked word unlike the frozen previous one count.
+    #[test]
+    fn info_loop_press() {
+        use crate::input::{BOMB, ENTER, SHOT, UP};
+        assert_eq!(info_step(179, SHOT, 0), (180, false));
+        assert_eq!(info_step(180, SHOT, 0), (INFO_FADE_OUT + 1, true));
+        assert_eq!(info_step(500, ENTER | UP, 0), (5981, true));
+        assert_eq!(info_step(500, UP, 0), (501, false));
+        // Held since the registering frame: equal to the frozen word, never a press.
+        assert_eq!(info_step(500, SHOT, SHOT | UP), (501, false));
+        assert_eq!(info_step(500, SHOT | BOMB, SHOT), (5981, true));
+        assert_eq!(info_step(5979, SHOT, 0), (5981, true));
+        assert_eq!(info_step(5980, SHOT, 0), (5981, false));
     }
     use crate::input::{Input, LEFT, RIGHT};
 

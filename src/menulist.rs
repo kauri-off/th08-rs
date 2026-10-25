@@ -1192,6 +1192,7 @@ impl MainMenu {
         if self.frames == 0 {
             self.set_surface(ctx, "select00.png");
             self.interrupt_all(14);
+            self.desc_cur = None;
             self.load_replays();
             self.lists.rpy_sub = 1;
             self.lists.rpy_loaded = None;
@@ -1236,6 +1237,11 @@ impl MainMenu {
                         return false;
                     };
                     self.lists.rpy_loaded = Some(i);
+                    // Card-name scratch VM menu+0xE7B8 (12 §2.8 step 3): header +0x7E into resulttext sprite 11, set up
+                    // for every file, drawn only for spell replays.
+                    let name = sjis(self.replays[i].1.card_name());
+                    self.notice = scratch(ctx, RT_SLOT, 11, false);
+                    self.render_vm(ctx, RT_SLOT, 11, &name);
                     self.lists.rpy_cur = first;
                     self.lists.rpy_sub = 2;
                     self.rpy_choose();
@@ -1386,7 +1392,6 @@ impl MainMenu {
             ctx.ascii
                 .push(text(x, y, "Stage    LastScore", 0xFFFFFFFF, false));
             if r.spell_id() >= 0 {
-                // SPEC-GAP: the card-name scratch VM (resulttext sprite 11) under the spell row is not drawn.
                 let (x, y) = at(self, 97);
                 ctx.ascii.push(text(
                     x,
@@ -1395,6 +1400,10 @@ impl MainMenu {
                     0xFFFFFFFF,
                     false,
                 ));
+                // The card name under the row: scratch VM at VM 97's pos + (0, 16), top-left, white (12 §2.8).
+                let mut vm = std::mem::take(&mut self.notice);
+                draw_at(ctx, &mut vm, x, y + 16.0);
+                self.notice = vm;
             } else {
                 for s in 0..9 {
                     let line = match &r.stages[s] {
