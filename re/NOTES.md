@@ -737,3 +737,9 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   first; shared back-to-list 0x456BBB = SE 10 + flush, state 12, all VMs int 12, headers re-read same call.
 - GameMgr_LoadScoreData zeroes + stamps all 222 CATK records (magic, ver 3, id) before the file load → every record has
   the magic at Spell_Start (which has no magic test); checksum tested after writing the new name, name summed to NUL.
+
+# RE-Q44 (2026-10-25) — implementer questions IMPL108 1–3 (text copy width, bomb tint wording) — DONE (specs/changelog/answers_re_q44.md)
+- Code + anm sprite dump only (re/work/runs/q44/CHECKPOINT.md, callers_raw.txt). 2 right (music room outline, bomb end), 1 CODE BUG item.
+- Key facts: 3 text wrappers → Text_Render, all with W = sprite+0x1C (texture width 512), all text sprites u0 = 0;
+  Right x = trunc(u0+sw·sx−len·fs·sx/2), Centered x = trunc(u0+sw·sx/2−len·fs·sx/4), len = byte strlen; 54 call sites
+  tabulated in 10 §6. Menu description colour is COLORREF 0x00FFF0E0 = RGB(224,240,255). 06 §10.2 bomb-end wording fixed.

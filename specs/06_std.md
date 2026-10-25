@@ -316,8 +316,9 @@ bit 10, then off). `Player_UpdateBomb` (only at a normal-mode bomb **start**, 09
 `Bomb_DrawTint`, `BulletMgr_Draw`, 0x42EB90, `Player_DyingUpdate`, `Player_UpdateBomb`, `Spell_Draw`, `Stage_DrawHigh`;
 RE-Q38). Edge frames:
 first bomb frame → no request yet, no stage tint; frame after the last bomb draw → the pending request still
-tints that frame's stage and +0x646C (set by the last bomb draw) keeps it on through prio 8/9 (the calc-time
-tint-off of the bomb end happens before the draw, so it does not prevent this); the frame after that is clean.
+tints that frame's stage and +0x646C (set by the last bomb draw) keeps it on through prio 8/9 (the bomb end has
+no tint-off at all: `Player_UpdateBomb`'s only `AnmMgr_TintOff` is in the bomb-start block, 09 §7, VERIFIED RE-Q44);
+the frame after that is clean.
 
 ### 10.3 `Stage_DrawLayer(layer)` — VERIFIED
 

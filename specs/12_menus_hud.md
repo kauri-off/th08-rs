@@ -187,7 +187,8 @@ practice 8 → 9 (cursor 0) → 11 (cursor = g_StageIdx), one screen per frame (
 15 → 16 (cursor = g_StageIdx, return 1) on one frame, then 16 → 17 (cursor 0; g_StageIdx := 9 if the last card id
 > 204) **and** screen 17's first call on the next frame (16 returns 2, see the screen-entry exception above). Only
 screens 11 and 17 clear +0x6C (in their entry blocks). Then for 9 frames render one description per frame into the 9 description VMs
-(`Text_RenderCentered` 0x466650: centred in the sprite, text colour 0xFFF0E0, 2-px black outline, font 15).
+(`Text_RenderCentered` 0x466650: x = trunc(256 − len·15/4) with len = byte length, W = 512, 10 §6; text colour COLORREF
+0x00FFF0E0 = RGB(224, 240, 255), 2-px black outline, font 15; RE-Q44).
 The 14 description VMs use text.anm script 9 (sprite 21 + i, centred at (320, 448); interrupt 1 = fade in 20
 frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn (changelog/answers_impl9.md §15):
 
@@ -246,7 +247,7 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
   - option screen (0x46837B) and key config (0x469636): entry block sets +0x08 := −1; then every call, cursor ≠ +0x08 →
     description VM [cursor], interrupt 1. The option entry call (sub-state 0 → 1 in the same call) renders the 10
     option descriptions (table 0x4C8664) into description VMs 0–9, key config renders its 12 (table 0x4C8690) into
-    VMs 0–11, both with `Text_RenderCentered` as for the top menu (colour 0xFFF0E0, flags 0x300000). Texts:
+    VMs 0–11, both with `Text_RenderCentered` as for the top menu (COLORREF 0x00FFF0E0 = RGB(224, 240, 255), flags 0x300000). Texts:
     option 0 プレイヤーの初期数を変更します。（初期設定　３）, 1 画面の色数を変更します。３２ＢＩＴだと最も綺麗に表示されます。,
     2 ＢＧＭの再生方法を変更します。（初期設定　ＷＡＶ）, 3 ＢＧＭの音量を調整します, 4 効果音の音量を調整します,
     5 ウィンドウかフルスクリーンか選択します, 6 弾が多い場面でわざと処理落ちさせます(スコア、リプレイ記録不可),

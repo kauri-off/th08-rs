@@ -1,0 +1,10 @@
+# RE-Q44 — IMPL108 questions 1–3 (text copy width, bomb tint wording)
+
+Code only (decompile + capstone disasm of th08.exe, text/music00/resulttext.anm sprite dump); no runs.
+Call-site argument dump: re/work/runs/q44/callers_raw.txt.
+
+| # | question | original | spec | port |
+|---|---|---|---|---|
+| 1 | music room still passes an `edge` colour to the rasteriser | Rasteriser 0x43F9C8 only compares the outline argument with −1 (±1 / ±2 px, gradient flag); outline always `SetTextColor(0)`. Music-room sites 0x448FBE/0x449118 (0x00FFE0C0, 0x300000), 0x449B0C (0x00C0E0FF, 0x302080), 0x449B3F (0x0080A0C0, 0x100040). | 10 §6 (caller table) | right in the working-tree `musicroom.rs` (`render_outline(…, tx, mode)`, edge black, W = texture width) |
+| 2 | callers rasterise with w = sprite width + x offset; spec says W = texture-row width | Only `Text_RenderToVm` 0x4663B0, `…Right` 0x4664A0, `…Centered` 0x466650 call `Text_Render` 0x466310 (the only caller of 0x43F9C8/0x43FCE9). All pass W = trunc(sprite +0x1C) = texture width (512 for all four `@` textures), y = v0, x = u0 (= 0 for every text sprite) / Right trunc(u0 + sw·sx − len·fs·sx/2) / Centered trunc(u0 + sw·sx/2 − len·fs·sx/4), len = byte strlen, fs 15. So every copy replaces the full 512-wide 15-row strip; 54 call sites tabulated. Menu descriptions colour COLORREF 0x00FFF0E0 = RGB(224, 240, 255). | 10 §6 (new caller table + formulas), 12 §2.2 colour wording | CODE BUG: `gui.rs` flush_texts (w = sprite w 320; Right x not truncated: 320 − len·7.5); `menulist.rs` render_strip (w = sprite w, writes sprite h = 17 rows; also used by `result.rs`); `menu.rs` render_description (w = sprite w, font size = sprite h 17 instead of 15, centring by measured ink instead of trunc(256 − len·15/4), colour RGB(255,240,224) instead of RGB(224,240,255)). Right: `hud.rs` (msg), `ending.rs`, `musicroom.rs`. |
+| 3 | 06 §10.2 "calc-time tint-off of the bomb end" vs 09 §7 | `Player_UpdateBomb` 0x44C650 has exactly one `AnmMgr_TintOff` call, in the normal-mode start block; none at the bomb end. | 06 §10.2 reworded | right (implemented per 09 §7) |

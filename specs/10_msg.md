@@ -251,6 +251,37 @@ character.
 rasteriser with the sprite's texture, its rect (x = u0, y = v0 in texture pixels, w = texture-row width), the
 font size bytes `vm+0x298/0x299` (both = font_size = 15) and the sprite's scale factors; finally sets VM flag bit 0.
 
+The three text entry points and their callers (VERIFIED RE-Q44: every `call 0x466310` in .text is from these three,
+and `Text_RenderToVm`/`Right`/`Centered` are the only callers of the rasterisers 0x43F9C8/0x43FCE9). All three pass
+**the same rect**: x as below, y = trunc(v0), **W = trunc(sprite +0x1C) = the texture-row width**, H = trunc(sprite
++0x18); never the sprite width. Every sprite of the four `@` text textures has u0 = 0 and every such texture is 512
+wide, so for **every caller** W = 512, the copied source is the full 1024-pixel DIB row and the destination is the
+whole 512-texel row strip (0, Y)–(512, Y + 15): columns right of the sprite (e.g. 320…511 of a 320-wide strip) are
+overwritten (cleared) too, and rows Y + 15, Y + 16 of a 17-high sprite are never written by the text path.
+- `Text_RenderToVm` 0x4663B0: x = trunc(u0) = 0; font byte passed raw (0 → 15 in `Text_Render`).
+- `Text_RenderToVmRight` 0x4664A0 (128-byte buffer): x = trunc((u0 + sw·sx) − len·fs·sx/2), with sw = sprite width
+  (+0x34), sx = sprite +0x38, len = `strlen` of the formatted string in **bytes** (a Shift-JIS full-width char = 2),
+  fs = byte +0x298 (0 → 15); x87 arithmetic, then truncation toward 0 (so an odd len gives …​.5 → dropped).
+- `Text_RenderCentered` 0x466650 (72-byte buffer): x = trunc((u0 + sw·sx/2) − len·fs·sx/4), same terms.
+  The result can be negative (text wider than the sprite); it is used as is (`TextOut` at 2x + 2 etc.).
+
+| caller | entry | VM text texture / sprite w | colour (COLORREF) | outline arg |
+|---|---|---|---|---|
+| `Gui_ShowPlayerSpellName` 0x415D60 | ToVm | text.anm (script 4 → sprite 4, 320) | 0x00F0F0FF | 0 |
+| `Gui_ShowBossSpellName` 0x415F00 | Right ×1, ×3 for cards 0xCD–0xDD (VMs +0x1640, +0x18E4, +0x139C; scripts 6/7/8 all show sprite 5) | text.anm sprite 5 (320) | 0x00FFF0F0 | 0 |
+| `Ending_RunScript` 0x428B80 | ToVm | text.anm | per script | −1 |
+| `Msg_Run` 0x433DB3 (6 sites) | ToVm | text.anm sprites 0/1 (320) | §6 table | 0 |
+| `MusicRoom_StateInput` 0x448B16 (2) | ToVm | music00 `@` (512) | 0x00FFE0C0 | 0x300000 |
+| `MusicRoom_Init` 0x44970F (2) | ToVm | music00 `@` (512) | 0x00C0E0FF / 0x0080A0C0 | 0x302080 / 0x100040 |
+| `Result_CardList` 0x455F6B (3) | ToVm | text / resulttext | 0x00FFFFFF | 0 |
+| `Result_NameEntry` 0x45621E | Centered | text.anm | 0x00FFFFFF | 0 |
+| `Result_PlayStats` 0x4578AA (9) | ToVm | text / resulttext | 0x00FFFFFF | 0 |
+| `MainMenu_Top` 0x4674E0, `MainMenu_Option` 0x46837B, `MainMenu_KeyConfig` 0x469636 | Centered | text.anm sprites 21 + i (512) | 0x00FFF0E0 = RGB(224, 240, 255) | 0x300000 |
+| `MainMenu_SpellPracticeChar` 0x46B174 (2), `…Card` 0x46BBC0 (7), `SpellPractice_DrawInfo` 0x46D7F9 (12), `MainMenu_Replay` 0x46E136 | ToVm | text.anm | 0x00FFFFFF | 0 |
+
+(Call-site argument dump: re/work/runs/q44/callers_raw.txt.) So the description strips are x = trunc(256 − len·15/4),
+the boss card name x = trunc(320 − len·15/2), everything else x = 0, all with W = 512 and font 15.
+
 Rasteriser (font size > 8 path, always taken for dialogue, 0x43F9C8):
 - Work surface: 1024×64 A1R5G5B5 image surface `0x1653620` (`CreateImageSurface(1024, 64, 0x19)`, 0x43F980). Text is
   drawn at **2× resolution** into a GDI DIB and then copied and downsampled (VERIFIED 0x43F9C8, RE-Q36):
@@ -269,7 +300,7 @@ Rasteriser (font size > 8 path, always taken for dialogue, 0x43F9C8):
      ½ (B, G) or ⅔ (R, G) of the channel; the black outline stays black.
      Region: the first 2w·(2·size + 6) pixels of the DIB in memory order with N = 2·that; DIB rows are 1024 pixels,
      so for a 512-wide texture (text.anm, w = 512) it is exactly rows 0 … 2·size+5 and c/N ≈ row / (2·size+6)
-     (narrower w would cover a row-major prefix only, INFERRED unused).
+     (w is always 512 for every caller, see the caller table above, RE-Q44).
      (Other formats, not used by th08: A8R8G8B8 inverts the alpha byte, A4R4G4B4 the alpha nibble, no gradient.)
   5. The DIB rows are copied (`0x43F898`, `memcpy` per row, only when the formats match) into the work surface.
 - Font: GDI `CreateFont(height = 2·size − 2 = 28, weight 600, charset SHIFTJIS, quality ANTIALIASED,
