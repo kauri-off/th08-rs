@@ -132,7 +132,10 @@ entry call): sub-state 1 starts in call 8 (+0x10 := 0 there), its first call is 
 paging from call 9), confirm/cancel from call 18 (+0x10 > 9) (VERIFIED 0x46E136, RE-Q37). The +0x10 > 9 gate exists only in sub-state 1 and is armed
 once: after sub-state 1 starts, +0x10 is zeroed again only by the list's cancel (→ sub-state 4, leave). The file
 confirm (→ 2) leaves +0x10 counting, and the cancels 2 → 1 and 3 → 2 zero +0x1442C, not +0x10; so back on the list
-the gate is already open and confirm/cancel work from the first call. Sub-states 2 and 3 have no gate of their own:
+the gate is already open and confirm/cancel work from the first call. The replay screen's entry block sits **inside
+the sub-state-0 case** (guard = sub-state 0 and +0x1442C == 0), so zeroing +0x1442C in sub-states 2/3 never re-runs it;
+no code reads +0x1442C in sub-states 1–4 (only those two cancels zero it and the common tail increments it), so its
+value there is unobservable (VERIFIED disasm 0x46E156/0x46E19E, dispscan +0x1442C, RE-Q47). Sub-states 2 and 3 have no gate of their own:
 cursor, confirm and cancel from their first call (the call after the press). Sub-state 4 leaves when +0x10 > 29
 (VERIFIED 0x46E136, RE-Q42).
 

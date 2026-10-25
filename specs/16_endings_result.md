@@ -472,7 +472,10 @@ name +0x58 (9 bytes), char cursor +0x2C.
   cursor 1, and state 13 ESC): SE 10, sound flush (`Sound_Update` until 0), state 12, **all 72 VMs interrupt 12**,
   frame 0, then it jumps into the state-12 code **in the same call**: since frame = 0 the `replay` directory is
   created and the 15 headers are re-read now (state 12 frame ≥ 20 input is not reached). `Result_Calc` then makes
-  the frame 1, so the next state-12 call does not read again. +0x1C (cursor) is not reset on this path.
+  the frame 1, so the next state-12 call does not read again. +0x1C (cursor) is not reset on this path. Nothing after
+  the flush in that call plays an SE or queues a BGM command (header re-read, frame 0 < 20 so no state-12 input, return 0;
+  `Result_Calc` then runs the 72 VMs — `AnmVm_Run` has no sound callee — and frame += 1), so a flush at the end of the
+  call is equivalent (VERIFIED 0x456BBB–0x45709B, 0x4584B0, RE-Q47).
 - **13 name entry**: from frame 30; same grid, cursor movement and edit rules as §2.2 (all keys edge or
   repeat), writing into +0x58. Choosing END: `Replay_Finish("./replay/th8_%.2d.rpy", slot + 1)`, state 2,
   all VMs 2, LSNM := name. ESC (edge, tested after backspace, VERIFIED 0x4575E7 RE-Q43) → back to the list (shared path above: SE 10, flush, all VMs 12, headers re-read). Typing SE 10 is followed by a sound flush.

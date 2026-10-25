@@ -758,3 +758,9 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   fade; cmd 6/7 mode 1 only; Midi_Ctor +0x2CC = 0, channel state never reset; option BGM item stops the old mode (Left
   from Midi plays init.mid), Reset item sets mode 1 with no music call; keyboard coop level 0x16 (FOREGROUND).
 - 11 §4 demo fade = Midi_Fade(3000); init.mid only loaded at boot (4 play sites).
+
+# RE-Q47 (2026-10-25) — implementer questions IMPL113 1–3 — DONE (specs/changelog/answers_re_q47.md)
+- Code only (re/work/runs/q47/CHECKPOINT.md, replay.c, saverpy.c). 3 right, no CODE BUG.
+- Key facts: replay entry block is inside the sub-state-0 case (cancels zeroing +0x1442C never re-run it; nothing in
+  sub-states 1–4 reads it); nothing after the back-to-list flush plays an SE in that call; PLST tag 0x164CD0C is set by
+  every Supervisor_OnRegister and zeroed only by the CRT-time GameMgr_Ctor → WinMain's Result_Register(2) test is always true.

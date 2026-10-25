@@ -45,7 +45,12 @@ and the D3D device again (with the live config), sound, a new ANM manager, and `
 **What the restart re-initialises** (VERIFIED WinMain 0x4418C0, `Supervisor_Register` 0x445EA7, `Supervisor_OnRegister`
 0x445FA3, `Supervisor_Init` 0x4464C8, RE-Q42). The Supervisor object itself is not re-constructed. In order:
 1. leaving the loop (both exit and restart): `Result_Register(2)` if the PLST tag 0x164CD0C ≠ 0, then the chain
-   teardown, which saves score.dat (15 §2.2), then `Sound_Update` until 0;
+   teardown, which saves score.dat (15 §2.2), then `Sound_Update` until 0. The tag test is **always true** here: the tag
+   is zeroed only by `GameMgr_Ctor` 0x43C5E1 (CRT static init 0x4B37A3, before WinMain) and set to `PLST` by
+   `Supervisor_OnRegister` right after `ScoreDat_Load` (before any failure return; `ScoreDat_GetPLST` copies only a
+   chunk tagged `PLST`); `FuncChain_AddCalc` always calls the on-register, and the test 0x441B87 is reached only after
+   `Supervisor_Register` (window/D3D failures skip it). So `Result_Register(2)` runs at every exit and restart
+   (VERIFIED dispscan 0x164CD0C, RE-Q47);
 2. after the device: `FUN_0043D0C0` (winmm joystick caps), `FUN_0043E160` (`GetKeyboardState`, clear bit 7 of all 256
    bytes, `SetKeyboardState`; affects only the VK input path), new ANM manager;
 3. `Supervisor_Register`: current scene +0x158 := 0, requested +0x15C := **−1**, +0x154 (ExeCheck frame counter) := 0;

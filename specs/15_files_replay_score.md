@@ -879,7 +879,8 @@ Listing:
 - 15 rows per page; Left/Right (edge or repeat flag) moves ±15 rows **only when there are more than 15 files**, and
   wraps: −15 < 0 → + count, +15 ≥ count → − count; SE 12 on every such press (VERIFIED 0x46E136, RE-Q37). Input
   start: 12 §2 (cursor from call 9, confirm/cancel from call 18; the +0x10 > 9 gate is armed only once per visit
-  and sub-states 2/3 have none, RE-Q42). Entry block: surface `select00.png` (unless the
+  and sub-states 2/3 have none, RE-Q42). Entry block (only in sub-state 0 with +0x1442C == 0; the cancels 3 → 2 / 2 → 1
+  zero +0x1442C but do not re-run it, 12 §2 intro, RE-Q47): surface `select00.png` (unless the
   previous screen was 7), range interrupt 14, cursor 0, +0xC2BC := 0, file scan. Confirm with 0 files does nothing.
 - Row format: `"%s %8s  %6s %7s  %8s"` = No., name (+0x72), date (+0x6C), character (table 0x4C86C0[shot]), difficulty (0x4C86F0[diff]). For spell practice the last column is `Spell No.%3d`.
 
