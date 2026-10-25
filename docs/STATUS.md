@@ -655,6 +655,20 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl112 (RE-Q41 CODE BUG 2, MIDI music mode): `src/midi.rs` — the original's SMF sequencer (02 §5): 1 ms
+  `Midi_Tick` (pos = B + trunc(T·division·1000/tempo)), tempo meta resets B/T, CC 2 saves / CC 4 restores every
+  track's read pointer + next time + tempo/T/B, CC 7 sent × the fade factor, `Midi_Fade` in ms then freeze, end of
+  all tracks → rewind (tempo kept). Hand-written event reader (midly only splits MThd/MTrk: it rejects the shipped
+  files' 0-length key-signature metas). Output: rustysynth (native only) with a General MIDI SoundFont from the
+  `soundfont` setting / `TH08_SOUNDFONT` or the system soundfont dirs; none found or web → logged once, WAV path.
+  `audio.rs`: mode 2 dispatch in `play_bgm` (PlayFileOnce slot 31) / `load_bgm` (Midi_LoadSlot, open slot stopped
+  first) / `play_slot` / `fade_bgm` (now takes the game speed: WAV ÷ speed in (0, 1], MIDI not) / `stop_bgm`;
+  init.mid reset (`midi_reset`) at main-menu Quit, GameMgr on-remove after Music_Stop and the Supervisor teardown;
+  boot loads all .mid + slot 30 = init.mid and applies cfg +0x1F / +0x27 (was only applied by the options menu).
+  Tests `midi::tests::*` (synthetic timing/loop/fade/rewind, all 22 shipped files, th08_01 CC 2 3840 / CC 4 77762 /
+  end 81610, render into a buffer with an in-memory SF2), `audio::midi_mode_calls`, `wav_fade_speed_and_midi_fallback`.
+  SPEC-GAP 13 → 19. Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync.
+  Questions: `docs/briefs/IMPL112_QUESTIONS.md`.
 - impl111 (RE-Q41 CODE BUG 1, 4, 5): DIK key table (15 §1.1, `input::KEYS`): keypad 8/2/4/6, keypad 7/9/1/3
   diagonals 0x50/0x90/0x60/0xA0, keypad Enter unmapped; the raw word is rebuilt from the held-key set (so releasing one
   of two keys with the same bit keeps it); a failed keyboard read (port: window focus loss, `Input::set_focus`) gives

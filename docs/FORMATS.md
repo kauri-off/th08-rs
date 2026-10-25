@@ -46,6 +46,12 @@
 - Strings: bytes XOR 0x77, terminated by a byte decoding to 0, padded to 4; Shift-JIS. Op 3 = i16 speaker, i16 line, str; ops 15/17 = u32 who + i32 sprites (< 0 keep).
 - Files: msgN{a,b,c,d} by team (solos use their team), 4A/4B: msg4ab/4ac/4ba/4bd, impossible combos → msg4dm; 6A = msg6*, 6B = msg7*, Extra = msg8*.
 
+## MIDI (bgm/*.mid, init.mid) — source: specs/02_bgm.md §5 (src/midi.rs)
+- 22 archive members, SMF format 0, one track, division 480; loop = CC 2 (start) / CC 4 (end); init.mid = GS SysEx +
+  controller set-up, CC 2 on ch 0 and CC 4 on ch 2 two ticks apart. th08_07 has two CC 2 (the later one wins).
+- Some files carry metas with lengths that strict SMF parsers reject (th08_01: key signature `FF 59 00`); metas are
+  skipped by their length. Every channel with notes sets CC 7.
+
 ## WAV (SE) — source: specs/13_sfx_effects.md §1 (src/audio.rs)
 - `se_*.wav` in th08.dat: RIFF/WAVE, `fmt ` PCM (format 1), 8-bit unsigned or 16-bit signed, mono or stereo; `data` chunk; other chunks skipped.
 - SE table (src/sound.rs): 46 ids → 36 waves, volume in 1/100 dB (DirectSound attenuation, gain = 10^(dB/2000)); pan −1000..1000 = (x − 192)·1000/192.

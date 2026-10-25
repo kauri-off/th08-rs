@@ -57,6 +57,7 @@ impl Ctx {
         let settings = crate::settings::get();
         let mut audio = Audio::new(source.clone(), &archive.read("thbgm.fmt")?);
         audio.load_se(&archive);
+        audio.load_midi(&archive);
         // Config_Load (15 §1.2): th08.cfg and the thbgm.dat header probe (02 §1), then the file is written back.
         // The port's own save first; else import the original's th08.cfg (read-only).
         let bgm_header = source.read_range("thbgm.dat", 0, 16).await.ok();
@@ -93,6 +94,8 @@ impl Ctx {
             info: Default::default(),
         };
         ctx.game.cfg = cfg;
+        // Music mode cfg +0x1F and BGM volume +0x27 (02 §4) from the loaded config.
+        ctx.audio.set_volumes(&ctx.game.cfg);
         if persist {
             ctx.drawlog = settings
                 .drawlog
@@ -222,6 +225,8 @@ impl Ctx {
     // Result_Register(2) and the chain teardown flush score.dat (2 RNG draws, 11 §1.5); th08.cfg is written again at
     // WinMain exit (15 §1.2).
     pub fn exit_save(&mut self) {
+        // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
+        self.audio.midi_reset();
         self.game.save_score(&mut self.anm.rng, true);
         if self.game.persist {
             crate::scoredat::storage_write("th08.cfg", &self.game.cfg.to_bytes());
@@ -236,6 +241,8 @@ impl Ctx {
         task::clear(self);
         self.sound_update();
         self.audio.stop_bgm();
+        // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
+        self.audio.midi_reset();
         for slot in 0..crate::anmmgr::SLOTS {
             self.anm.unload(&mut self.gfx, slot);
         }

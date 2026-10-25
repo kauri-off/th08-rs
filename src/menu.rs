@@ -642,7 +642,8 @@ impl MainMenu {
                     });
                 }
                 _ => {
-                    // 12 §2.2: no music change in WAV mode (only MIDI mode restarts its track).
+                    // 12 §2.2: no music change in WAV mode; MIDI mode plays the init.mid reset (02 §5), no fade.
+                    ctx.audio.midi_reset();
                     self.interrupt_all(1);
                     self.quitting = Some(0);
                 }

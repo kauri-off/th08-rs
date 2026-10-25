@@ -149,6 +149,7 @@ pub struct Settings {
     pub launcher: bool,
     pub save_dir: Option<PathBuf>,
     pub font: Option<String>,
+    pub soundfont: Option<PathBuf>,
     pub seed: Option<u16>,
     pub stage: Option<usize>,
     pub stage_frame: u32,
@@ -211,6 +212,7 @@ impl Settings {
             launcher: true,
             save_dir: None,
             font: None,
+            soundfont: None,
             seed: None,
             stage: None,
             stage_frame: 0,
@@ -382,6 +384,18 @@ pub const ENTRIES: &[Entry] = &[
         help: "Japanese font for dialogue text (native)",
         set: |s, v| {
             s.font = Some(v.to_string());
+            Ok(())
+        },
+    },
+    Entry {
+        key: "soundfont",
+        env: "TH08_SOUNDFONT",
+        kind: Kind::File,
+        default: "",
+        group: Group::GameData,
+        help: "General MIDI SoundFont (.sf2) for music mode MIDI (native; default: system soundfonts dirs)",
+        set: |s, v| {
+            s.soundfont = Some(PathBuf::from(v));
             Ok(())
         },
     },

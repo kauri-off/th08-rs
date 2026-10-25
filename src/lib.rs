@@ -33,6 +33,7 @@ pub mod joystick;
 pub mod launcher;
 pub mod menu;
 pub mod menulist;
+pub mod midi;
 pub mod msg;
 pub mod musicroom;
 pub mod player;

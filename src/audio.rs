@@ -1,8 +1,10 @@
-//! Port audio back end (cpal): thbgm.dat BGM streaming (02 §1–§4) and the SE voices DirectSound plays (13 §1.1, §1.3).
+//! Port audio back end (cpal): thbgm.dat BGM streaming (02 §1–§4), MIDI music mode (02 §5, `midi.rs`) and the SE
+//! voices DirectSound plays (13 §1.1, §1.3).
 
 use crate::assets::{Source, spawn};
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 // thbgm.fmt WAVEFORMATEX: 44100 Hz, stereo, 16-bit for every track (02 §2).
@@ -114,6 +116,11 @@ struct Mixer {
     out_rate: f64,
     volume: f32,
     paused: bool,
+    // MIDI mode (02 §5): the sequencer + synth, driven by the output sample clock; not scaled by the BGM volume.
+    #[cfg(not(target_arch = "wasm32"))]
+    midi: Option<crate::midi::Player>,
+    #[cfg(not(target_arch = "wasm32"))]
+    font: Option<Arc<rustysynth::SoundFont>>,
 }
 
 // Streaming-object fade (02 §4): `mode` 1 `Music_Fade`, 2 `Bgm_StartFadeIn`, 3 `Bgm_StartFadeInFromDip`,
@@ -160,9 +167,42 @@ impl Fade {
 }
 
 impl Mixer {
+    // The MIDI player at the current output rate, (re)created from the SoundFont when the rate changed.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn midi(&mut self) -> Option<&mut crate::midi::Player> {
+        let rate = self.out_rate as u32;
+        if self.midi.as_ref().is_none_or(|p| p.rate() != rate) {
+            let font = self.font.as_ref()?;
+            let mut p = match crate::midi::Player::new(font, rate) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("midi synth: {e:#}");
+                    self.font = None;
+                    return None;
+                }
+            };
+            if let Some(old) = self.midi.take() {
+                (p.seq, p.playing) = (old.seq, old.playing);
+            }
+            self.midi = Some(p);
+        }
+        self.midi.as_mut()
+    }
+
     fn render(&mut self, out: &mut [f32], channels: usize) {
         let step = BGM_RATE / self.out_rate;
-        for fr in out.chunks_exact_mut(channels) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let n = out.len() / channels;
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.midi.is_some() {
+            self.midi();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let midi = match &mut self.midi {
+            Some(p) => Some(p.render(n)),
+            None => None,
+        };
+        for (k, fr) in out.chunks_exact_mut(channels).enumerate() {
             // Port mixer: linear resampling to the device rate; WaveStream_* chunking (02 §3) is platform detail.
             let (l, r) = match &mut self.music {
                 Some(m) if !m.samples.is_empty() && !self.paused => {
@@ -182,6 +222,13 @@ impl Mixer {
                 _ => (0.0, 0.0),
             };
             let (mut l, mut r) = (l * self.volume, r * self.volume);
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some((ml, mr)) = midi {
+                l += ml[k];
+                r += mr[k];
+            }
+            #[cfg(target_arch = "wasm32")]
+            let _ = k;
             for vc in self.voices.iter_mut().filter(|v| v.playing) {
                 let Some(w) = &vc.wave else { continue };
                 let i = vc.pos as usize;
@@ -219,6 +266,21 @@ pub struct Audio {
     slots: [Option<String>; 16],
     // Music mode cfg +0x1F (02 §4): 0 off, 1 WAV, 2 MIDI.
     music: u8,
+    // MIDI object (02 §5): the archive's .mid members by lower-case basename, the 32 file slots +0x98 and the open
+    // slot +0x10 (−1 none).
+    midi_files: HashMap<String, Arc<[u8]>>,
+    midi_slots: [Option<Arc<[u8]>>; 32],
+    midi_open: i32,
+    // Port: SoundFont lookup done (MIDI mode needs one; none found → the WAV path, logged once).
+    midi_probed: bool,
+}
+
+// Effective music path: mode 2 without a usable synth falls back to the WAV track (port).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Path {
+    Off,
+    Wav,
+    Midi,
 }
 
 impl Audio {
@@ -239,6 +301,131 @@ impl Audio {
             fade: None,
             slots: Default::default(),
             music: 1,
+            midi_files: HashMap::new(),
+            midi_slots: Default::default(),
+            midi_open: -1,
+            midi_probed: false,
+        }
+    }
+
+    // The archive's `bgm/*.mid` members (02 §5), then the boot `Midi_LoadSlot(30, "bgm/init.mid")`.
+    pub fn load_midi(&mut self, archive: &crate::archive::Archive) {
+        for n in archive.names().iter().filter(|n| n.ends_with(".mid")) {
+            match archive.read(n) {
+                Ok(d) => {
+                    self.midi_files.insert(n.to_ascii_lowercase(), d.into());
+                }
+                Err(e) => log::warn!("{n}: {e:#}"),
+            }
+        }
+        self.midi_load_slot(30, "bgm/init.mid");
+    }
+
+    fn path(&mut self) -> Path {
+        match self.music {
+            0 => Path::Off,
+            2 => {
+                if self.midi_ready() {
+                    Path::Midi
+                } else {
+                    Path::Wav
+                }
+            }
+            _ => Path::Wav,
+        }
+    }
+
+    // Port: the SoundFont is looked up and loaded on the first MIDI-mode use.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn midi_ready(&mut self) -> bool {
+        if !self.midi_probed {
+            self.midi_probed = true;
+            let configured = crate::settings::get().soundfont.clone();
+            match crate::midi::find_soundfont(configured.as_deref()) {
+                Some(p) => match crate::midi::load_soundfont(&p) {
+                    Ok(f) => {
+                        log::info!("midi: soundfont {}", p.display());
+                        self.mixer.lock().unwrap().font = Some(f);
+                    }
+                    Err(e) => log::warn!("midi: {e:#}; playing the WAV tracks"),
+                },
+                None => log::warn!(
+                    "midi: no SoundFont found (set soundfont / TH08_SOUNDFONT); playing the WAV tracks"
+                ),
+            }
+        }
+        self.mixer.lock().unwrap().font.is_some()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn midi_ready(&mut self) -> bool {
+        if !self.midi_probed {
+            self.midi_probed = true;
+            log::warn!("midi: no synth in the web build; playing the WAV tracks");
+        }
+        false
+    }
+
+    // Midi_LoadSlot 0x4441A0: the open slot is stopped first; the name's basename is the archive lookup (01 §5).
+    fn midi_load_slot(&mut self, slot: usize, name: &str) {
+        if slot as i32 == self.midi_open {
+            self.midi_stop();
+        }
+        let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+        let data = self.midi_files.get(&base.to_ascii_lowercase()).cloned();
+        if data.is_none() {
+            // SPEC-GAP: Midi_LoadSlot / Midi_Open with a missing file (std names th08_02, th08_13_b) not described; silent.
+            log::warn!("midi: {name} not in archive");
+        }
+        if let Some(s) = self.midi_slots.get_mut(slot) {
+            *s = data;
+        }
+    }
+
+    // Midi_Open 0x4442E0: parses the slot's file (tempo 1 000 000), open slot := slot.
+    fn midi_open(&mut self, slot: usize) {
+        let song = self.midi_slots.get(slot).cloned().flatten().and_then(|d| {
+            crate::midi::parse(&d)
+                .map_err(|e| log::warn!("midi slot {slot}: {e:#}"))
+                .ok()
+        });
+        self.midi_open = slot as i32;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = self.mixer.lock().unwrap().midi() {
+            p.seq = song.map(crate::midi::Sequencer::new);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = song;
+    }
+
+    // Midi_Play 0x444620: Midi_Rewind, then the 1 ms timer starts.
+    fn midi_play(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = self.mixer.lock().unwrap().midi() {
+            if let Some(seq) = &mut p.seq {
+                seq.rewind();
+            }
+            p.playing = true;
+        }
+    }
+
+    // Midi_Stop 0x444680: timer killed, midiOutReset (all notes off), open slot := −1.
+    fn midi_stop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = self.mixer.lock().unwrap().midi.as_mut() {
+            p.playing = false;
+            p.synth.reset_notes();
+        }
+        self.midi_open = -1;
+    }
+
+    // init.mid reset (02 §5): `Midi_Stop`, `Midi_Open(30)`, `Midi_Play` in mode 2 at main-menu Quit, GameMgr_OnRemove
+    // after its Music_Stop, and the Supervisor teardown.
+    pub fn midi_reset(&mut self) {
+        if self.path() == Path::Midi {
+            self.midi_stop();
+            self.midi_open(30);
+            self.midi_play();
         }
     }
 
@@ -256,14 +443,28 @@ impl Audio {
         }
     }
 
-    // Music_Play + Music_PlaySlot (02 §4) in one step: loads the stored part (never past loop_end) and plays; music
-    // mode 0 plays nothing. The music-room heard flags are set by callers.
-    // SPEC-GAP: MIDI mode (cfg +0x1F = 2) is not implemented; it plays the WAV track.
-    // Accepts script names like "bgm/th08_00.mid"; unknown names fall back to track 0.
+    // Music_Play + Music_PlaySlot / Music_PlayFile (02 §4) in one step; music mode 0 plays nothing. The music-room
+    // heard flags are set by callers. MIDI: `Midi_Stop`, `Midi_PlayFileOnce(name)` (slot 31), `Midi_Play` (02 §5).
+    // WAV: loads the stored part (never past loop_end) and plays; script names like "bgm/th08_00.mid" are renamed and
+    // unknown names fall back to track 0.
     pub fn play_bgm(&mut self, name: &str) {
-        if self.music == 0 {
-            return;
+        match self.path() {
+            Path::Off => {}
+            Path::Wav => self.play_wav(name),
+            Path::Midi => {
+                // SPEC-GAP: whether a WAV / MIDI track left over from the other mode keeps playing is not given; stopped.
+                self.stop_wav();
+                self.midi_stop();
+                self.midi_load_slot(31, name);
+                self.midi_open(31);
+                self.midi_slots[31] = None;
+                self.midi_play();
+            }
         }
+    }
+
+    fn play_wav(&mut self, name: &str) {
+        self.midi_stop();
         let Some(t) = find_track(&self.tracks, name).cloned() else {
             log::warn!("no bgm {name}");
             return;
@@ -304,21 +505,35 @@ impl Audio {
         });
     }
 
-    // Music_Play(slot, name) 0x447D56, WAV mode (02 §4): sound command 1 only prepares the slot; nothing is heard.
+    // Music_Play(slot, name) 0x447D56 (02 §4): WAV sound command 1 only prepares the slot, nothing is heard; MIDI
+    // `Midi_LoadSlot(slot, name)`.
     pub fn load_bgm(&mut self, slot: usize, name: &str) {
-        if self.music == 0 {
-            return;
-        }
-        if let Some(s) = self.slots.get_mut(slot) {
-            *s = Some(name.to_owned());
+        match self.path() {
+            Path::Off => {}
+            Path::Wav => {
+                if let Some(s) = self.slots.get_mut(slot) {
+                    *s = Some(name.to_owned());
+                }
+            }
+            Path::Midi => self.midi_load_slot(slot, name),
         }
     }
 
-    // Music_PlaySlot 0x447E47 (02 §4): command 2 starts a loaded slot; the music-room heard flags are set by callers.
+    // Music_PlaySlot 0x447E47 (02 §4): WAV command 2 starts a loaded slot; MIDI `Midi_Stop`, `Midi_Open(slot)`,
+    // `Midi_Play`. The music-room heard flags are set by callers.
     pub fn play_slot(&mut self, slot: usize) {
-        match self.slots.get(slot).cloned().flatten() {
-            Some(name) => self.play_bgm(&name),
-            None => log::warn!("bgm slot {slot} not loaded"),
+        match self.path() {
+            Path::Off => {}
+            Path::Wav => match self.slots.get(slot).cloned().flatten() {
+                Some(name) => self.play_wav(&name),
+                None => log::warn!("bgm slot {slot} not loaded"),
+            },
+            Path::Midi => {
+                self.stop_wav();
+                self.midi_stop();
+                self.midi_open(slot);
+                self.midi_play();
+            }
         }
     }
 
@@ -364,18 +579,39 @@ impl Audio {
         v.playing = v.wave.is_some();
     }
 
+    // Sound commands 6 "Pause" / 7 "UnPause" act on the WAV buffer only (02 §4, 12 §4).
+    // SPEC-GAP: 02/12 give no MIDI-mode effect for command 6; the MIDI song keeps playing while paused.
     pub fn pause_bgm(&mut self, on: bool) {
         self.mixer.lock().unwrap().paused = on;
     }
 
-    // Music_Fade 0x4480F8 (10 §5 op 12, 11 §4, 16 §1.3 `@M`), WAV mode: queues command 5 with trunc(secs); callers
-    // have already divided by the game speed. Linear in dB from 0 to −50 dB over trunc(secs)·60 frames, then stop.
-    // Music mode 0 queues nothing.
-    pub fn fade_bgm(&mut self, secs: f32) {
-        if self.music == 0 {
-            return;
+    // Music_Fade 0x4480F8 (10 §5 op 12, 11 §4, 16 §1.3 `@M`), 02 §4: MIDI `Midi_Fade(trunc(1000·secs))` ms, no
+    // game-speed division. WAV: secs / `speed` (Supervisor+0x188) when 0 < speed ≤ 1, then command 5 with trunc(secs):
+    // linear in dB from 0 to −50 dB over trunc(secs)·60 frames, then stop. Music mode 0 queues nothing.
+    pub fn fade_bgm(&mut self, secs: f32, speed: f32) {
+        match self.path() {
+            Path::Off => {}
+            Path::Wav => {
+                let secs = if speed != 0.0 && speed <= 1.0 {
+                    secs / speed
+                } else {
+                    secs
+                };
+                self.fade_req = Some(secs as i32);
+            }
+            Path::Midi => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(seq) = self
+                    .mixer
+                    .lock()
+                    .unwrap()
+                    .midi()
+                    .and_then(|p| p.seq.as_mut())
+                {
+                    seq.fade((1000.0 * secs) as u32);
+                }
+            }
         }
-        self.fade_req = Some(secs as i32);
     }
 
     // Sound_Update (13 §1.3) handling command 5: mode 1, N = n = trunc(secs·60); no volume write yet.
@@ -410,7 +646,7 @@ impl Audio {
             FadeTick::End => self.fade = None,
             FadeTick::Stop => {
                 self.fade = None;
-                self.stop_bgm();
+                self.stop_wav();
             }
         }
     }
@@ -434,7 +670,13 @@ impl Audio {
         self.mixer.lock().unwrap().volume = db_gain(db);
     }
 
+    // Music_Stop 0x448081: the WAV buffer, or `Midi_Stop` in mode 2 (02 §5); the port stops both.
     pub fn stop_bgm(&mut self) {
+        self.stop_wav();
+        self.midi_stop();
+    }
+
+    fn stop_wav(&mut self) {
         let mut m = self.mixer.lock().unwrap();
         m.generation += 1;
         m.music = None;
@@ -516,13 +758,67 @@ mod tests {
         cfg.music = 0;
         a.set_volumes(&cfg);
         a.load_bgm(0, "bgm/th08_00.mid");
-        a.fade_bgm(4.0);
+        a.fade_bgm(4.0, 1.0);
         assert!(a.slots[0].is_none() && a.fade_req.is_none());
         cfg.music = 1;
         a.set_volumes(&cfg);
         a.load_bgm(0, "bgm/th08_00.mid");
-        a.fade_bgm(4.0);
+        a.fade_bgm(4.0, 1.0);
         assert!(a.slots[0].is_some() && a.fade_req == Some(4));
+    }
+
+    // 02 §4: WAV fades divide by a game speed in (0, 1]; MIDI mode without a SoundFont takes the WAV path.
+    #[test]
+    fn wav_fade_speed_and_midi_fallback() {
+        let mut a = Audio::new(Source::native(std::env::temp_dir()), &[]);
+        a.fade_bgm(4.0, 0.5);
+        assert_eq!(a.fade_req, Some(8));
+        a.fade_bgm(4.0, 2.0);
+        assert_eq!(a.fade_req, Some(4));
+        let mut cfg = crate::config::Config::default();
+        cfg.music = 2;
+        a.set_volumes(&cfg);
+        a.midi_probed = true;
+        a.load_bgm(0, "bgm/th08_00.mid");
+        assert!(a.slots[0].is_some() && a.midi_slots[0].is_none());
+    }
+
+    // 02 §5 calls in mode 2: Midi_LoadSlot, PlaySlot (stop, open, play), Midi_Fade in ms without speed division,
+    // Music_Stop, and the init.mid reset from slot 30.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn midi_mode_calls() {
+        let Some(arc) = crate::archive::test_archive() else {
+            return;
+        };
+        let mut a = Audio::new(Source::native(std::env::temp_dir()), &[]);
+        a.load_midi(&arc);
+        assert!(a.midi_slots[30].is_some());
+        let sf = crate::midi::tests::tiny_sf2();
+        a.mixer.lock().unwrap().font =
+            Some(Arc::new(rustysynth::SoundFont::new(&mut &sf[..]).unwrap()));
+        a.midi_probed = true;
+        let mut cfg = crate::config::Config::default();
+        cfg.music = 2;
+        a.set_volumes(&cfg);
+        a.load_bgm(1, "bgm/th08_03.mid");
+        a.load_bgm(2, "bgm/th08_02.mid");
+        assert!(a.midi_slots[1].is_some() && a.midi_slots[2].is_none() && a.slots[1].is_none());
+        a.play_slot(1);
+        assert_eq!(a.midi_open, 1);
+        let playing = |a: &Audio| a.mixer.lock().unwrap().midi.as_ref().unwrap().playing;
+        assert!(playing(&a));
+        a.fade_bgm(3.0, 0.5);
+        assert!(a.fade_req.is_none());
+        // Loading the open slot stops it first.
+        a.load_bgm(1, "bgm/th08_04.mid");
+        assert!(!playing(&a) && a.midi_open == -1);
+        a.play_bgm("bgm/th08_01.mid");
+        assert!(playing(&a) && a.midi_open == 31 && a.midi_slots[31].is_none());
+        a.stop_bgm();
+        assert!(!playing(&a));
+        a.midi_reset();
+        assert!(playing(&a) && a.midi_open == 30);
     }
 
     #[test]

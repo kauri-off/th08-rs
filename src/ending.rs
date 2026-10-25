@@ -356,7 +356,7 @@ impl Ending {
                 b'R' => self.reset_scripts(),
                 b'M' => {
                     let n = self.int_arg();
-                    ctx.audio.fade_bgm(n as f32);
+                    ctx.audio.fade_bgm(n as f32, ctx.anm.speed);
                 }
                 b'V' => {
                     let a = self.int_arg();

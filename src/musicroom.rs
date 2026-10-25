@@ -334,7 +334,7 @@ impl MusicRoom {
             return true;
         }
         if mask_edge(&inp, SKIP) {
-            ctx.audio.fade_bgm(8.0);
+            ctx.audio.fade_bgm(8.0, ctx.anm.speed);
         }
         if mask_edge(&inp, KEY_R) {
             self.play(ctx);

@@ -1045,6 +1045,8 @@ impl Task<Ctx> for GameManager {
         ctx.anm.speed = 1.0;
         if !ctx.game.reload_same {
             ctx.audio.stop_bgm();
+            // Mode 2: the init.mid reset right after Music_Stop (02 §5).
+            ctx.audio.midi_reset();
         }
         ctx.audio.pause_bgm(false);
         for t in std::mem::take(&mut self.tasks) {
@@ -1174,9 +1176,7 @@ impl Task<Ctx> for GameManager {
                 g.request(SCENE_MENU);
             }
             if g.demo_frame == fade {
-                let gs = ctx.anm.speed;
-                ctx.audio
-                    .fade_bgm(if gs > 0.0 && gs <= 1.0 { 3.0 / gs } else { 3.0 });
+                ctx.audio.fade_bgm(3.0, ctx.anm.speed);
                 crate::effect::screen_now(ctx, 2, end - fade, 0, 0, 0, 0x15);
             }
             let g = &mut ctx.game;

@@ -408,7 +408,7 @@ impl Hud {
                     vm.set_sprite(&ctx.anm, n + 3);
                     ctx.audio.play_slot(n as usize);
                 }
-                Event::BgmFade => ctx.audio.fade_bgm(4.0),
+                Event::BgmFade => ctx.audio.fade_bgm(4.0, ctx.anm.speed),
                 // Msg op 14 (10 §5.1, 13 §3): ScreenEffect type 4, 442 frames to white, draw prio 0x15.
                 // The full-repaint counter 0x17CE8CC := 442 is moot: the port repaints the panel every frame.
                 Event::Flash => crate::effect::screen(4, 442, 0xFFFFFF, 0, 0, 0x15),

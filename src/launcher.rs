@@ -395,7 +395,9 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
             #[cfg(not(target_arch = "wasm32"))]
             if ui.button("Browse…").clicked() {
                 let d = rfd::FileDialog::new().set_title(r.e.help);
-                let picked = if r.e.kind == Kind::File {
+                let picked = if r.e.key == "soundfont" {
+                    d.add_filter("SoundFont", &["sf2"]).pick_file()
+                } else if r.e.kind == Kind::File {
                     d.add_filter("fonts", &["ttf", "otf", "ttc"]).pick_file()
                 } else {
                     d.pick_folder()
