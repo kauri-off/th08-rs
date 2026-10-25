@@ -655,6 +655,16 @@
   selftest1 1922, demos 0–3 in sync; golden draw same 97.45 % → 97.52 %, changed 205914 → 199986, missing 255,
   extra 4157187 → 2949 (+ 10825 truncated + 4143413 accepted = 4157187), identical frames 6074 (723 when accepted
   and truncated quads are scored).
+- impl107 (RE-Q38, result screen): hidden code (15 §2.12) — `HiddenCode::step` after the state-3 page input (a
+  confirm / cancel call skips it), release of Focus+Skip → 0, wrong key = edge on mask 0x160B → 0, arrows / D never
+  reset, effect one call after the 10th key; `hidden_unlock` adds 1 to all 13 story attempt counters of all 222 CATK
+  records (no cap, no checksum). VM 71 interrupt 18 on every state-0xF call with frame ≤ 30 (panel fades in over
+  30–60, 16 §2.1). State 9 frame 0 sends d + 3 before the insert; rank > 9 overwrites it with interrupt 2 in the same
+  call, +0x58 := LSNM (16 §2.2). Result pages test cancel before confirm; top cancel off item 3 falls through to a
+  same-frame confirm (16 §2.4). Save dialogue: state-13 header colour = last grid cell (grid drawn first), slot headers
+  only from a successful `Replay_Load`, a failed read keeps the previous entry (16 §2.6). Text VMs start white
+  (AnmVm_Init). SPEC-GAP 57 → 48. Golden 25634, fullrun_noclip 124707, selftest1 1922, demos 0–3 in sync;
+  gameover_save 4214, options_cfg 1887, musicroom_practice 3505 (unchanged). Questions: `docs/briefs/IMPL107_QUESTIONS.md`.
 - impl106 (RE-Q37 CODE BUG 1, 4, 5, 7): `Info_Show` loop (16 §4) — `InfoNotices::calc` runs one iteration's logic
   (own poll g_InputRawCur = raw | joy, press test 179 < t < 5980 on the masked word against the frozen 0x164D530 of
   the registering frame, t := 5980, t += 1; `info_step`), the draw shows the iteration's t, so a press shows as

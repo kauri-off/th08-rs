@@ -7,7 +7,7 @@ use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::gfx::{FULLSCREEN, TextureId};
 use crate::input::{
-    BOMB, DOWN, ENTER, FOCUS, Input, KEY_D, KEY_Q, LEFT, PAUSE, RIGHT, SHOT, SKIP, UP,
+    BOMB, DOWN, ENTER, FOCUS, Input, KEY_D, KEY_Q, KEY_S, LEFT, PAUSE, RIGHT, SHOT, SKIP, UP,
 };
 use crate::menu::{CANCEL, CONFIRM};
 use crate::scoredat::{C_ATTEMPTS, C_BONUS, C_CAPTURES, C_PRACTICE, CARDS, Hscr};
@@ -149,13 +149,6 @@ fn text_vm(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     vm
 }
 
-// SPEC-GAP: initial alpha of the 28 text VMs is not given; 0 until a page renders them (alpha 255).
-fn text_vm_hidden(ctx: &Ctx, slot: usize, sprite: i32) -> AnmVm {
-    let mut vm = text_vm(ctx, slot, sprite, false);
-    vm.color[anmvm::A] = 0;
-    vm
-}
-
 fn draw_at(ctx: &mut Ctx, vm: &mut AnmVm, x: f32, y: f32) {
     vm.pos = [x, y, 0.0];
     ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
@@ -273,18 +266,23 @@ impl ResultScreen {
             sound::play(sound::SELECT);
             self.highlight(first, n);
         }
-        if inp.pressed(CONFIRM) {
-            for i in 0..n {
-                self.vms[first + i as usize].pending_interrupt =
-                    if i == self.cursor { 23 } else { 1 };
-            }
-            return Some(true);
-        }
+        // Every page tests cancel before confirm (16 §2.4), so both on one frame cancel.
         if inp.pressed(CANCEL) {
             sound::play(sound::CANCEL);
             return Some(false);
         }
+        if inp.pressed(CONFIRM) {
+            self.confirm_vms(first, n);
+            return Some(true);
+        }
         None
+    }
+
+    // Confirm: selected VM interrupt 23, the others 1 (16 §2.4).
+    fn confirm_vms(&mut self, first: usize, n: i32) {
+        for i in 0..n {
+            self.vms[first + i as usize].pending_interrupt = if i == self.cursor { 23 } else { 1 };
+        }
     }
 
     fn highlight(&mut self, first: usize, n: i32) {
@@ -326,11 +324,7 @@ impl ResultScreen {
             }
             // State 3, Result_CheatUnlock 0x4550FC (16 §2.4); the hidden code runs every frame, sub-state 0 included.
             S_DIFF => {
-                // SPEC-GAP: whether the code is tested before or after the page input is not given (before).
-                if self.hidden.step(ctx.input) {
-                    hidden_unlock(&mut ctx.game);
-                    sound::play(sound::EXTEND);
-                }
+                // The code steps after the page input; a confirm / cancel call returns before it (16 §2.4).
                 match self.page(ctx, 4, 5, self.rank_diff, 6) {
                     Some(true) => {
                         sound::play(sound::OK);
@@ -343,7 +337,12 @@ impl ResultScreen {
                         self.set_state(S_TOP);
                         self.cursor = 0;
                     }
-                    None => {}
+                    None => {
+                        if self.hidden.step(ctx.input) {
+                            hidden_unlock(&mut ctx.game);
+                            sound::play(sound::EXTEND);
+                        }
+                    }
                 }
             }
             // State 4 (0x45567D).
@@ -399,8 +398,12 @@ impl ResultScreen {
             },
             S_CARDS => self.cards(ctx),
             S_NAME => self.name_entry(ctx),
-            // State 0xF: end banner; after 90 frames Shot/Enter → interrupt 2, state 0x10 (16 §2.1).
+            // State 0xF, Result_EndBanner 0x4577E2 (16 §2.1): VM 71 interrupt 18 on every call with frame ≤ 30, each
+            // restarting its fade, so the panel fades in over frames 30–60; after 90 frames Shot/Enter → state 0x10.
             S_PANEL => {
+                if self.frame <= 30 {
+                    self.vms[VM_PANEL].pending_interrupt = 18;
+                }
                 if self.frame >= 90 && ctx.input.pressed(SHOT | ENTER) {
                     self.vms[VM_PANEL].pending_interrupt = 2;
                     self.set_state(S_PANEL_OUT);
@@ -451,7 +454,7 @@ impl ResultScreen {
             self.interrupt_all(1);
         }
         // D in sub-state 1 dumps score.txt, no sound (16 §2.7). Port: written next to score.dat (web: localStorage).
-        // SPEC-GAP: the order of the D test and the cursor/confirm input in sub-state 1 is not given (D first).
+        // Order cursor → D → cancel → confirm (16 §2.4); the dump does not depend on the cursor, so D goes first here.
         if self.sub == 1 && ctx.input.pressed(KEY_D) {
             ctx.game.update_run_time();
             let stamp = crate::supervisor::datetime_now();
@@ -484,8 +487,14 @@ impl ResultScreen {
                 if self.cursor == 3 {
                     self.set_state(S_LEAVE);
                 } else {
+                    // Cancel off item 3 does not return (16 §2.4): a confirm edge in the same call exits via item 3.
                     self.cursor = 3;
                     self.highlight(0, 4);
+                    if ctx.input.pressed(CONFIRM) {
+                        self.confirm_vms(0, 4);
+                        sound::play(sound::CANCEL);
+                        self.set_state(S_LEAVE);
+                    }
                 }
             }
             None => {}
@@ -576,7 +585,7 @@ impl ResultScreen {
             self.frame = 0;
             self.vms[VM_ANCHOR].pending_interrupt = 10;
         } else {
-            // Result_CursorUpDown2 0x45A1F3 on +0x30. SPEC-GAP: SE 12 assumed as for the other cursors.
+            // Result_CursorUpDown2 0x45A1F3 on +0x30: Up first, then Down, SE 12 (16 §2.4).
             let ud = if inp.pressed_or_repeat(UP) {
                 -1
             } else if inp.pressed_or_repeat(DOWN) {
@@ -794,7 +803,13 @@ impl ResultScreen {
     fn enter_slot_list(&mut self) {
         self.set_state(S_SAVE_SLOT);
         crate::scoredat::storage_mkdir("replay");
-        self.slots = (1..=15).map(read_slot).collect();
+        // A missing or failed file leaves the entry as it was: empty, or the previous read on re-entry.
+        self.slots.resize(15, (false, None));
+        for (i, e) in self.slots.iter_mut().enumerate() {
+            if let Some(r) = read_slot(i + 1) {
+                *e = (true, Some(r));
+            }
+        }
     }
 
     // State 12 (16 §2.6): the 15 slots, cursor from frame 20.
@@ -814,6 +829,7 @@ impl ResultScreen {
             sound::play(sound::SELECT);
         }
         self.slot = self.cursor.clamp(0, 14);
+        // SPEC-GAP: 16 §2.6 does not give the confirm / cancel order of states 12 and 14 (confirm first).
         if inp.pressed(CONFIRM) {
             sound::play(sound::OK);
             self.entry_date = crate::supervisor::date_md();
@@ -885,10 +901,9 @@ impl ResultScreen {
         sound::play(sound::OK);
     }
 
-    // SPEC-GAP: who sends VM 71 interrupt 18 is not given; sent on entering state 0xF.
+    // VM 71's interrupt 18 is written by state 0xF itself (16 §2.1).
     fn enter_panel(&mut self) {
         self.set_state(S_PANEL);
-        self.vms[VM_PANEL].pending_interrupt = 18;
     }
 
     // Frame 0 of state 9: the HSCR entry from the in-game record (16 §2.2, 15 §2.3). False = no entry.
@@ -898,11 +913,15 @@ impl ResultScreen {
         let d = g.difficulty.clamp(0, 4) as usize;
         (self.rank_shot, self.rank_diff) = (shot as i32, d as i32);
         // Slow mode skips the entry (16 §2.1). The cfg copy's slow byte is 0 for Extra (15 §2.9).
+        // SPEC-GAP: whether the slow-mode skip comes before the frame-0 interrupt d + 3 is not given (before).
         if g.cfg.slow != 0 && g.difficulty < 4 {
             g.restore_catk_backup();
             self.enter_panel();
             return false;
         }
+        // Frame 0 first sends interrupt d + 3 to all 72 VMs; VM 40, the plates and the title slide in from their
+        // own scripts (16 §2.2).
+        self.interrupt_all((3 + d) as u16);
         let st = &g.stats;
         let r = &st.rec;
         let mut h = Hscr::new();
@@ -939,6 +958,10 @@ impl ResultScreen {
         // Port marker for the entry being named (Result list node byte +9, 16 §2.3); rank > 9 → state 0xF.
         h.0[9] = 1;
         if g.score.insert_hscr(h).is_none() {
+            // Rank > 9 (16 §2.2): the finish in the same call, no SE; interrupt 2 overwrites the pending d + 3 before
+            // any VM ran. +0x58 := the entry's name (LSNM), and LSNM := +0x58 leaves it unchanged.
+            self.interrupt_all(2);
+            self.name.copy_from_slice(&lsnm[..8]);
             self.enter_panel();
             return false;
         }
@@ -946,9 +969,6 @@ impl ResultScreen {
         self.name_pos = 0;
         // The cursor starts on END if an LSNM chunk was found in the file, else on 'A'.
         self.char_cursor = if g.lsnm_found { CELL_END } else { 0 };
-        // SPEC-GAP: the slide-in of the ranking (VM 40), the difficulty plate (41–46) and the title (48) is
-        // not specified for state 9; interrupt 3 + difficulty is sent to all VMs as in the viewer's state 5.
-        self.interrupt_all((3 + d) as u16);
         true
     }
 
@@ -1038,18 +1058,25 @@ impl ResultScreen {
     }
 
     // Save dialogue draw (16 §2.6, states 10–14): VMs 49–54 again on top, header at VM 55, slot rows at VM 56 + i.
-    // SPEC-GAP: the header colour is not given (white), nor the shot-name table 0x4C8010 (0x4C86C0 is used).
+    // Shot names 0x4C8010 hold the same strings as 0x4C86C0 (menulist::CHARS).
     fn draw_save(&mut self, ctx: &mut Ctx) {
         for vm in &mut self.vms[49..55] {
             ctx.anm.draw(&mut ctx.gfx, vm);
         }
+        // QUIRK: no colour is set for the header; it keeps the one left by the previous text: white, or in state 13
+        // the last grid cell's (END), as the grid is drawn first.
+        let header = match self.state {
+            S_SAVE_NAME if self.char_cursor == CELL_END => 0xFFFFFFC0,
+            S_SAVE_NAME => 0xC0C0C0C0,
+            _ => 0xFFFFFFFF,
+        };
         let h = self.vms[55].pos;
         put(
             ctx,
             h[0],
             h[1],
             "No.   Name     Date   Player Score",
-            0xFFFFFFFF,
+            header,
         );
         let g = &ctx.game;
         let shot = (g.shot as usize + g.demo_shot_bias as usize) % 12;
@@ -1235,10 +1262,11 @@ impl Task<Ctx> for ResultScreen {
         }
         self.text_vms = (0..28)
             .map(|k| {
+                // AnmVm_Init colour 0xFFFFFFFF; never seen before a page renders or fades them (16 §2.4).
                 if k < 14 {
-                    text_vm_hidden(ctx, 0, 21 + k)
+                    text_vm(ctx, 0, 21 + k, false)
                 } else {
-                    text_vm_hidden(ctx, RT_SLOT, 2 + k - 14)
+                    text_vm(ctx, RT_SLOT, 2 + k - 14, false)
                 }
             })
             .collect();
@@ -1300,7 +1328,7 @@ impl Task<Ctx> for ResultScreen {
         if let Some(t) = self.surface {
             ctx.gfx.image(t, 0.0, 0.0);
         }
-        // SPEC-GAP: pos_offset (op 24/6, the selected item's (−4, −4)) is added by the owner (05 §2 +0x288, INFERRED).
+        // pos + pos_offset (+0x288, op 24/6, e.g. the selected item's (−4, −4)), pos restored after the draw (16 §2.4).
         for vm in &mut self.vms {
             let p = vm.pos;
             for k in 0..3 {
@@ -1321,29 +1349,22 @@ impl Task<Ctx> for ResultScreen {
                 ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
             }
         }
-        if (S_SAVE..=S_SAVE_OVER).contains(&self.state) {
-            self.draw_save(ctx);
-        }
+        // The grid comes before the save dialogue (16 §2.6 header colour).
         if matches!(self.state, S_NAME | S_SAVE_NAME) {
             self.draw_grid(ctx);
+        }
+        if (S_SAVE..=S_SAVE_OVER).contains(&self.state) {
+            self.draw_save(ctx);
         }
         Ret::Next
     }
 }
 
-// Slot n's header (16 §2.6 state 12): valid = magic T8RP and version & 0xFFF = 6.
-// SPEC-GAP: the rows print info fields (+0x6A..+0xB0) that sit in the compressed body; the file is decoded for them.
-fn read_slot(n: usize) -> (bool, Option<crate::replay::Replay>) {
-    let Some(f) = crate::scoredat::storage_read(&format!("replay/th8_{n:02}.rpy")) else {
-        return (false, None);
-    };
-    let valid = f.len() >= 6 && &f[..4] == b"T8RP" && u16::from_le_bytes([f[4], f[5]]) & 0xFFF == 6;
-    (
-        valid,
-        valid
-            .then(|| crate::replay::Replay::parse(&f).ok())
-            .flatten(),
-    )
+// Slot n's header (16 §2.6 state 12): the decoded copy of a file that passes Replay_Load (15 §3.7); None = missing
+// or failed. A loaded copy is always valid (T8RP, version 6 checked by the load).
+fn read_slot(n: usize) -> Option<crate::replay::Replay> {
+    let f = crate::scoredat::storage_read(&format!("replay/th8_{n:02}.rpy"))?;
+    crate::replay::Replay::parse(&f).ok()
 }
 
 // Name-entry cursor (16 §2.2): Up, Down, Left, Right are four independent tests in that order, each skipping the
@@ -1377,41 +1398,48 @@ const HIDDEN_KEYS: [u16; 10] = [
     RIGHT, RIGHT, RIGHT, RIGHT, LEFT, KEY_D, KEY_D, KEY_Q, KEY_Q, KEY_Q,
 ];
 
-// Result +0x4C: keys of the code entered so far.
+// Result +0x4C: keys of the code entered so far; Result_SetState does not clear it (15 §2.12).
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 struct HiddenCode(usize);
 
+// Wrong-key mask 0x160B: Shot, Bomb, ESC, Q, S, Enter (15 §2.12).
+const HIDDEN_RESET: u16 = SHOT | BOMB | PAUSE | KEY_Q | KEY_S | ENTER;
+
 impl HiddenCode {
-    // One frame of input; true when the last key of the code was entered.
-    // SPEC-GAP: 15 §2.12 does not say what a wrong key or releasing Focus/Skip does (a wrong code-key press restarts).
+    // One state-3 step (0x4550FC, 15 §2.12); true = the effect runs. It comes one call after the tenth key, and only
+    // if Focus/Skip is still held then.
     fn step(&mut self, inp: Input) -> bool {
         if !inp.down(FOCUS | SKIP) {
+            self.0 = 0;
             return false;
         }
-        let want = HIDDEN_KEYS[self.0];
-        if inp.pressed(want) {
+        if self.0 >= HIDDEN_KEYS.len() {
+            self.0 = 0;
+            return true;
+        }
+        if inp.pressed(HIDDEN_KEYS[self.0]) {
             self.0 += 1;
-            if self.0 == HIDDEN_KEYS.len() {
+        } else {
+            // Mask edge: (cur & m) ≠ 0 and ≠ (prev & m); arrows and D never reset.
+            let m = HIDDEN_RESET;
+            if inp.held & m != 0 && inp.held & m != inp.prev & m {
                 self.0 = 0;
-                return true;
             }
-        } else if inp.pressed(RIGHT | LEFT | KEY_D | KEY_Q) {
-            self.0 = (inp.pressed(HIDDEN_KEYS[0])) as usize;
         }
         false
     }
 }
 
-// Effect of the hidden code (15 §2.12): every CLRD mask := 0xFFFF, every card's attempt counter +1 (SE by the caller).
-// SPEC-GAP: "attempt counter" is taken as the story all-shot count [12] of present CATK records, checksum refreshed.
+// Effect of the hidden code (15 §2.12): every CLRD mask := 0xFFFF; in all 222 CATK records (magic or not) the 13
+// story attempt counters (+0x124) += 1. QUIRK: no 9999 cap and no checksum update. SE by the caller.
 fn hidden_unlock(g: &mut gamemgr::Game) {
     for m in g.clear_nc.iter_mut().chain(g.clear_any.iter_mut()) {
         *m = [0xFFFF; 5];
     }
-    for c in g.score.catk.iter_mut().filter(|c| c.present) {
-        let a = &mut c.counters[C_ATTEMPTS][12];
-        *a = (*a + 1).min(9999);
-        c.checksum = c.compute_checksum();
+    for c in g.score.catk.iter_mut() {
+        for a in &mut c.counters[C_ATTEMPTS] {
+            *a = a.wrapping_add(1);
+        }
     }
 }
 
@@ -1656,16 +1684,16 @@ mod tests {
     // 15 §2.12: Right ×4, Left, D ×2, Q ×3 as edge presses while Focus (or Skip) is held.
     #[test]
     fn hidden_code_sequence() {
+        // Each key: a press call, then a release call (mods still held).
         let feed = |c: &mut HiddenCode, mods: u16, keys: &[u16]| {
             let mut fired = 0;
             for &k in keys {
-                for held in [mods | k, mods] {
-                    let inp = Input {
-                        prev: if held == mods { mods | k } else { mods },
+                for (held, prev) in [(mods | k, mods), (mods, mods | k)] {
+                    fired += c.step(Input {
                         held,
+                        prev,
                         ..Default::default()
-                    };
-                    fired += c.step(inp) as u32;
+                    }) as u32;
                 }
             }
             fired
@@ -1674,17 +1702,37 @@ mod tests {
         assert_eq!(feed(&mut c, FOCUS, &HIDDEN_KEYS), 1);
         assert_eq!(c, HiddenCode(0));
         assert_eq!(feed(&mut c, SKIP, &HIDDEN_KEYS), 1);
-        // Without Focus/Skip nothing counts.
         assert_eq!(feed(&mut c, 0, &HIDDEN_KEYS), 0);
         assert_eq!(c, HiddenCode(0));
-        // A fifth Right restarts the code at its first key.
-        let mut keys = vec![RIGHT; 5];
+        // Wrong arrows, Up/Down and D in the Right phase change nothing.
+        let mut keys = vec![RIGHT, RIGHT, UP, KEY_D, LEFT, DOWN, RIGHT, RIGHT];
         keys.extend(&HIDDEN_KEYS[4..]);
-        assert_eq!(feed(&mut c, FOCUS, &keys), 0);
-        assert_eq!(feed(&mut c, FOCUS, &HIDDEN_KEYS), 1);
+        assert_eq!(feed(&mut c, FOCUS, &keys), 1);
+        // A key of the mask 0x160B resets, also Q before the Q phase.
+        for bad in [SHOT, BOMB, PAUSE, KEY_Q, KEY_S, ENTER] {
+            assert_eq!(feed(&mut c, FOCUS, &[RIGHT, RIGHT, bad]), 0);
+            assert_eq!(c, HiddenCode(0));
+        }
+        // Releasing Focus/Skip resets.
+        feed(&mut c, FOCUS, &HIDDEN_KEYS[..3]);
+        c.step(Input::default());
+        assert_eq!(c, HiddenCode(0));
+        // The effect comes on the call after the tenth key, and only if Focus/Skip is still held.
+        feed(&mut c, FOCUS, &HIDDEN_KEYS[..9]);
+        assert!(!c.step(Input {
+            held: FOCUS | KEY_Q,
+            prev: FOCUS,
+            ..Default::default()
+        }));
+        assert_eq!(c, HiddenCode(10));
+        assert!(!c.step(Input::default()));
+        assert_eq!(c, HiddenCode(0));
 
         let mut g = gamemgr::Game::default();
         g.score.catk[3].present = true;
+        g.score.catk[3].counters[C_ATTEMPTS][0] = 9999;
+        let sum = g.score.catk[3].compute_checksum();
+        g.score.catk[3].checksum = sum;
         hidden_unlock(&mut g);
         assert!(
             g.clear_nc
@@ -1692,8 +1740,14 @@ mod tests {
                 .chain(&g.clear_any)
                 .all(|m| *m == [0xFFFF; 5])
         );
-        assert_eq!(g.score.catk[3].counters[C_ATTEMPTS][12], 1);
-        assert_eq!(g.score.catk[3].checksum, g.score.catk[3].compute_checksum());
+        // All 222 records, all 13 story attempt counters, no cap, checksum not refreshed.
+        assert!(g.score.catk.iter().enumerate().all(|(id, r)| {
+            r.counters[C_ATTEMPTS]
+                .iter()
+                .enumerate()
+                .all(|(k, &a)| a == if id == 3 && k == 0 { 10000 } else { 1 })
+        }));
+        assert_eq!(g.score.catk[3].checksum, sum);
     }
 
     // 16 §2.7 against its reference dump (written from the same score.dat by the original).
@@ -1891,6 +1945,11 @@ mod tests {
             crate::settings::temp_dir().join(format!("th08_slot_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         crate::scoredat::set_save_dir(Some(dir.clone()));
+        // A T8RP v6 file that fails Replay_Load counts as empty (16 §2.6): no overwrite question.
+        std::fs::create_dir_all(dir.join("replay")).unwrap();
+        let mut bad = b"T8RP\x06\x00".to_vec();
+        bad.resize(0x200, 0x55);
+        std::fs::write(dir.join("replay/th8_01.rpy"), bad).unwrap();
         let g = gamemgr::Game::default();
         let mut r = ResultScreen::new(1);
         r.vms = vec![AnmVm::default(); VM_COUNT];
@@ -1905,6 +1964,7 @@ mod tests {
         r.save_ask(confirm, &g);
         assert_eq!(r.state, S_SAVE_SLOT);
         assert_eq!(r.slots.len(), 15);
+        assert!(r.slots.iter().all(|e| !e.0));
         r.frame += 1;
         while r.frame < 20 {
             r.save_slot(Input::default(), &g);
