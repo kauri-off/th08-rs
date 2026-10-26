@@ -526,11 +526,18 @@ impl BulletManager {
                 if i % 2 == 1 {
                     k = -k;
                 }
-                k + a1 + if d.aim_mode == 0 { aim } else { 0.0 }
+                // 07 §9.3 op 96: (k + aim) + a1, aim before a1 (f32 rounding per step, RE-Q54).
+                if d.aim_mode == 0 {
+                    (k + aim) + a1
+                } else {
+                    k + a1
+                }
             }
-            2 => aim + ring,
+            // 07 §9.3 op 98: aim added last.
+            2 => ring + aim,
             3 => ring,
-            4 => aim + i as f32 * tau / c1 as f32 + PI / c1 as f32 + a1,
+            // 07 §9.3 op 100: ((i·2π)/c1 + π/c1) + aim, then + a1.
+            4 => ((i as f32 * tau / c1 as f32 + PI / c1 as f32) + aim) + a1,
             5 => i as f32 * tau / c1 as f32 + PI / c1 as f32 + a1,
             6 => anm.rng.next_f32() * (a1 - a2) + a2,
             7 => {
@@ -1591,6 +1598,35 @@ mod tests {
 
     fn speed(b: &Bullet) -> f32 {
         (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt()
+    }
+
+    // 07 §9.3 ops 96/100: aim is added before a1, left to right (RE-Q54 AB).
+    #[test]
+    fn pattern_angle_add_order() {
+        let mut anm = AnmManager::default();
+        let (aim, a1, a2) = (2.3456789f32, 0.123456f32, 0.0711f32);
+        let mut d = BulletDesc {
+            aim_mode: 0,
+            count1: 4,
+            count2: 1,
+            angle1: a1,
+            angle2: a2,
+            ..BulletDesc::default()
+        };
+        for i in 0..4 {
+            let mut k = a2 / 2.0 + (i / 2) as f32 * a2;
+            if i % 2 == 1 {
+                k = -k;
+            }
+            let (_, a) = BulletManager::pattern_angle(&mut anm, &d, i, 0, aim);
+            assert_eq!(a.to_bits(), ((k + aim) + a1).to_bits());
+        }
+        d.aim_mode = 4;
+        for i in 0..4 {
+            let x = i as f32 * (2.0 * PI) / 4.0 + PI / 4.0;
+            let (_, a) = BulletManager::pattern_angle(&mut anm, &d, i, 0, aim);
+            assert_eq!(a.to_bits(), ((x + aim) + a1).to_bits());
+        }
     }
 
     #[test]

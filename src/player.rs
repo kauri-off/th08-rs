@@ -1216,6 +1216,8 @@ impl Player {
             }
             if t < 1 {
                 self.state = 0;
+                // 09 §6.4: timer := 0 when state 3 ends.
+                self.state_timer.set(0);
                 self.vm.color = [0xFF; 4];
                 if std::mem::take(&mut self.invuln_ring) {
                     crate::effect::free(ring);
@@ -1419,6 +1421,21 @@ mod tests {
         };
         i.tick();
         i
+    }
+
+    // 09 §6.4: leaving state 3 sets the timer to exactly 0 (RE-Q54 Z).
+    #[test]
+    fn invuln_end_resets_timer() {
+        let (mut p, _) = ready();
+        p.state = 3;
+        p.state_timer.set(1);
+        p.state_timer.prev = 5;
+        p.update_invuln(0.5);
+        assert_eq!(p.state, 0);
+        assert_eq!(
+            (p.state_timer.cur, p.state_timer.prev, p.state_timer.frac),
+            (0, -999, 0.0)
+        );
     }
 
     #[test]
