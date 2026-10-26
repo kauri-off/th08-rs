@@ -324,6 +324,8 @@ pub(crate) struct Pending {
     pub(crate) frames: u32,
     pub(crate) screen: i32,
     pub(crate) cursor: i32,
+    // GameFlags bits cleared together with the switch (spell-practice cancel clears bit 0 here, 16 §6.1).
+    pub(crate) clear_flags: u32,
 }
 
 // The 0x14490-byte menu object, global 0x18BDE08 (12 §2 field table).
@@ -543,6 +545,21 @@ impl MainMenu {
                 ctx.game.flags &= !F_REPLAY;
                 return;
             }
+            // Back from a practice game (+0x6C ≠ 0): bit 14 set again for 2, screen 8 + 7·bit 14, range interrupt 5,
+            // description interrupt 2, return 1; trace shows screen 0 on the release frame (12 §2.2, RE-Q55).
+            if self.back != 0 {
+                if self.back == 2 {
+                    ctx.game.flags |= F_SPELL_PRACTICE;
+                }
+                self.set_screen(if ctx.game.spell_practice() {
+                    CHAR_SPELL
+                } else {
+                    DIFF_PRACTICE
+                });
+                self.interrupt_all(5);
+                self.desc_fade_out();
+                return;
+            }
         }
         // Calls 0–8 render description k = +0x1442C into strip k; the pointer keeps its VM until the change test of
         // call 9 (12 §2.2), so a previous screen's description stays drawn meanwhile.
@@ -657,6 +674,7 @@ impl MainMenu {
                         frames: 29,
                         screen: OPTION,
                         cursor: 0,
+                        clear_flags: 0,
                     });
                 }
                 _ => {
@@ -742,6 +760,7 @@ impl MainMenu {
                 frames: 20,
                 screen: TOP,
                 cursor,
+                clear_flags: 0,
             });
         }
     }
@@ -873,6 +892,7 @@ impl MainMenu {
                     frames: 30,
                     screen: TOP,
                     cursor: 2,
+                    clear_flags: 0,
                 });
             } else {
                 // No interrupt here (12 §2.4): the difficulty screen's enter interrupt 7 does the transition.
@@ -1247,37 +1267,24 @@ impl Task<Ctx> for MainMenu {
                 g.flags &= !F_REPLAY;
             }
         }
+        // +0x6C := 1 + (flags bit 14) whenever flags bit 0 is set, whatever the previous scene; screen stays 0 and the
+        // Top entry block does the switch to 8/15 (12 §2.2, RE-Q55). A spell-practice replay has bit 14 without bit 0.
         let g = &ctx.game;
-        if g.previous == gamemgr::SCENE_GAME || g.previous == gamemgr::SCENE_RETRY {
-            // +0x6C ≠ 0 → screen 8 + 7·(flags bit 14), range interrupt 5; the screens forward to 11 / 17 (12 §2.2).
-            // Both need bit 0: a spell-practice replay has bit 14 without bit 0 and gets no override (12 §2.2).
-            if g.practice() && g.spell_practice() {
-                self.back = 2;
-                self.screen = CHAR_SPELL;
-                self.interrupt_all(5);
-                self.desc_fade_out();
-            } else if g.practice() {
-                self.back = 1;
-                self.screen = DIFF_PRACTICE;
-                self.interrupt_all(5);
-                self.desc_fade_out();
-            }
-        }
-        // Cursor on menu load by previous scene (12 §2.2), practice flags override.
-        self.cursor = if self.screen == TOP {
-            let g = &ctx.game;
-            match g.previous {
-                _ if g.practice() && g.spell_practice() => 2,
-                _ if g.practice() => 3,
-                gamemgr::SCENE_GAME | gamemgr::SCENE_NEXT_STAGE | gamemgr::SCENE_RESULT => {
-                    (g.difficulty > 3) as i32
-                }
-                gamemgr::SCENE_RESULT_MENU => 5,
-                gamemgr::SCENE_MUSIC_ROOM => 6,
-                _ => 0,
-            }
+        self.back = if g.practice() {
+            1 + g.spell_practice() as u8
         } else {
-            ctx.game.cfg.difficulty.min(3) as i32
+            0
+        };
+        // Cursor on menu load by previous scene, then the practice override 3 / 2 (12 §2.2).
+        self.cursor = match g.previous {
+            _ if g.practice() && g.spell_practice() => 2,
+            _ if g.practice() => 3,
+            gamemgr::SCENE_GAME | gamemgr::SCENE_NEXT_STAGE | gamemgr::SCENE_RESULT => {
+                (g.difficulty > 3) as i32
+            }
+            gamemgr::SCENE_RESULT_MENU => 5,
+            gamemgr::SCENE_MUSIC_ROOM => 6,
+            _ => 0,
         };
         // After the cursor rule: flags &= ~0x4001, later bit 1 := 0 (12 §2.2).
         ctx.game.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
@@ -1339,6 +1346,7 @@ impl Task<Ctx> for MainMenu {
             if let Some(p) = self.pending.take_if(|p| p.frames == 0) {
                 self.set_screen(p.screen);
                 self.cursor = p.cursor;
+                ctx.game.flags &= !p.clear_flags;
                 // Top item 7: screen 2 with the config snapshot (12 §2.2).
                 if p.screen == OPTION {
                     self.snapshot = ctx.game.cfg;
@@ -1482,6 +1490,36 @@ mod tests {
             let screen = if demo { super::TOP } else { super::REPLAY };
             assert_eq!((m.screen, m.prev_screen, m.frames), (screen, super::TOP, 0));
             assert_eq!(c.game.flags & 0xFFFF, 0);
+        }
+    }
+
+    // 12 §2.2 (RE-Q55): +0x6C from flags bit 0 for any previous scene, bits 0/14 cleared, screen stays 0; the Top
+    // entry block sets bit 14 again for +0x6C == 2 and switches to 15 (8 for plain practice).
+    #[test]
+    fn back_from_practice() {
+        use crate::task::{Chain, Task};
+        let Some(mut c) = ctx() else {
+            return;
+        };
+        for spell in [false, true] {
+            c.game.previous = gamemgr::SCENE_RESULT;
+            let f = gamemgr::F_PRACTICE | if spell { gamemgr::F_SPELL_PRACTICE } else { 0 };
+            c.game.flags.set(f);
+            let mut m = super::MainMenu::new();
+            m.on_register(&mut c, Chain::Calc, 0).unwrap();
+            assert_eq!(
+                (m.screen, m.back, m.cursor),
+                (super::TOP, 1 + spell as u8, 3 - spell as i32)
+            );
+            assert_eq!(c.game.flags & 0xFFFF, 0);
+            m.top(&mut c);
+            let screen = if spell {
+                super::CHAR_SPELL
+            } else {
+                super::DIFF_PRACTICE
+            };
+            assert_eq!((m.screen, m.prev_screen, m.frames), (screen, super::TOP, 0));
+            assert_eq!(c.game.spell_practice(), spell);
         }
     }
 

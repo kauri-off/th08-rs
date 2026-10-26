@@ -674,11 +674,12 @@ impl MainMenu {
             // Bomb also stores the row into g_StageIdx (16 §6.1).
             ctx.game.stage = self.lists.sp_row as usize;
             self.interrupt_all(6);
-            ctx.game.flags &= !F_PRACTICE;
+            // flags &= ~1 only with the switch to the top menu at P+20, after cursor := 2 (16 §6.1, RE-Q55).
             self.pending = Some(Pending {
                 frames: 20,
                 screen: crate::menu::TOP,
                 cursor: 2,
+                clear_flags: F_PRACTICE,
             });
         }
     }
@@ -1261,6 +1262,7 @@ impl MainMenu {
                         frames: 30,
                         screen: crate::menu::TOP,
                         cursor: 4,
+                        clear_flags: 0,
                     });
                 }
             }

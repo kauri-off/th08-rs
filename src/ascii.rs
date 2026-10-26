@@ -1089,7 +1089,7 @@ pub fn apply_pending_captures(anm: &mut crate::anmmgr::AnmManager, gfx: &mut cra
 }
 
 // Continue / game-over menu (11 §4.2, 12 §4): ascii scripts 22–24 and times.anm script 1 (night clock).
-// ContinueMenu_Update 0x404890 (12 §4); phase 1 = no, 2 = yes in Extra / spell practice, 3 = continue (11 §4.2).
+// ContinueMenu_Update 0x404890 (12 §4); phase 1 = no, 3 = continue (11 §4.2).
 #[derive(Default)]
 struct ContinueMenu {
     open: bool,
@@ -1187,37 +1187,39 @@ impl ContinueMenu {
                 }
                 if inp.pressed(input::SHOT | input::ENTER) {
                     crate::sound::play(crate::sound::OK);
-                    self.phase = if !self.yes {
-                        1
-                    } else if g.difficulty >= 4 || g.spell_practice() {
-                        2
-                    } else {
-                        3
-                    };
+                    if self.yes && (g.difficulty >= 4 || g.spell_practice()) {
+                        // "Yes" in spell practice / Extra acts in the press call (12 §4 "Music", "Confirm timing"):
+                        // `Music_Stop`, or for a non-restarting spell-practice card "UnPause" and
+                        // `Bgm_StartFadeInFromDip(1.0)`; scene 11, Hud_StageTransition, game_over := 0 on both
+                        // branches, play-time timestamp; return with no VM run and no frame += 1.
+                        if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
+                            audio.stop_bgm();
+                        } else {
+                            audio.pause_bgm(false);
+                            audio.start_fade_in_from_dip(1.0);
+                        }
+                        g.request(gamemgr::SCENE_RELOAD);
+                        stage_transition(ctx_anm);
+                        g.game_over = 0;
+                        g.mark_play_time();
+                        self.open = false;
+                        return;
+                    }
+                    self.phase = if self.yes { 3 } else { 1 };
                     self.phase_frame = 0;
-                    if self.phase != 3 {
+                    if self.phase == 1 {
                         self.vms.iter_mut().for_each(|v| v.pending_interrupt = 2);
                         self.clock_vm.pending_interrupt = 2;
                     }
                 }
             }
-            1 | 2 if self.phase_frame >= 20 => {
-                if self.phase == 1 {
-                    g.request(gamemgr::SCENE_RESULT);
-                } else {
-                    // "Yes" in spell practice / Extra (12 §4 "Music"): `Music_Stop`, or for a non-restarting
-                    // spell-practice card game_over := 0, "UnPause" and `Bgm_StartFadeInFromDip(1.0)`; then
-                    // Hud_StageTransition and scene 11.
-                    if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
-                        audio.stop_bgm();
-                    } else {
-                        g.game_over = 0;
-                        audio.pause_bgm(false);
-                        audio.start_fade_in_from_dip(1.0);
-                    }
-                    stage_transition(ctx_anm);
-                    g.request(gamemgr::SCENE_RELOAD);
+            1 if self.phase_frame >= 20 => {
+                // "No" at P+20 (12 §4 "Confirm timing"): game_over := 0, scene 6, the 4 VMs hidden, displayed
+                // score := score; GameMgr_Calc then runs one more gameplay frame (11 §4.2).
+                for vm in self.vms.iter_mut().chain([&mut self.clock_vm]) {
+                    vm.flags &= !crate::anmvm::F_VISIBLE;
                 }
+                early_exit(g, gamemgr::SCENE_RESULT);
                 self.open = false;
                 return;
             }
@@ -1415,6 +1417,51 @@ mod tests {
         m.update(&mut anm, &mut g, &Input::default(), &mut audio);
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_REPLAY_END));
         assert!(g.play_clock.is_some() && !m.capture && m.vms.is_empty());
+    }
+
+    fn press(b: u16) -> Input {
+        Input {
+            held: b,
+            ..Input::default()
+        }
+    }
+
+    // 12 §4 "Confirm timing": Extra "Yes" acts in the press call (scene 11, game_over := 0, no frame += 1); "No"
+    // clears game_over and sets displayed score := score in the call 20 frames after the press.
+    #[test]
+    fn continue_menu_confirm_timing() {
+        let mut anm = crate::anmmgr::AnmManager::default();
+        let mut audio =
+            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        let mut g = Game::default();
+        g.difficulty = 4;
+        g.game_over = 1;
+        let mut m = ContinueMenu::default();
+        for _ in 0..30 {
+            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        }
+        m.update(&mut anm, &mut g, &press(input::UP), &mut audio);
+        assert!(m.yes);
+        let frame = m.frame;
+        m.update(&mut anm, &mut g, &press(input::SHOT), &mut audio);
+        assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RELOAD));
+        assert!(!m.open && m.frame == frame);
+
+        let mut g = Game::default();
+        g.difficulty = 4;
+        g.game_over = 1;
+        let mut m = ContinueMenu::default();
+        for _ in 0..30 {
+            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        }
+        m.update(&mut anm, &mut g, &press(input::SHOT), &mut audio);
+        for _ in 0..19 {
+            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+            assert_eq!(g.game_over, 1);
+        }
+        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RESULT));
+        assert!(!m.open && m.vms.iter().all(|v| !v.visible()));
     }
 
     #[test]
