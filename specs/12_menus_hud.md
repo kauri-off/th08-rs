@@ -184,7 +184,13 @@ Entering: request title BGM slot 8 if coming from a non-menu scene; load surface
 coming from the title/difficulty/replay screens; create the 142 VMs once; interrupt 2. If a replay was being
 watched (flags bit 3 still set, see below) → go straight to the replay screen. If `+0x6C` ≠ 0 (back from a practice game; 2 =
 spell practice, which also sets flags bit 14) → screen 8 + 7·(flags bit 14), i.e. **8** (practice difficulty) or **15**
-(character select, spell-practice variant), range interrupt 5. Each of these screens forwards at once while +0x6C ≠ 0
+(character select, spell-practice variant), range interrupt 5. Where (VERIFIED `MainMenu_OnRegister` 0x470A6C,
+`MainMenu_Top` 0x4674E0, RE-Q55): `MainMenu_OnRegister` sets +0x6C := 1 + (flags bit 14) whenever flags bit 0 is
+set — **whatever the previous scene** (game, retry, or the result screen after a practice game over), screen := 0 —
+and then clears flags bits 0 and 14. The switch itself is done by the **Top handler's entry block** (call 0, after
+surface / VMs / interrupt 2 and after the bit-3 replay test): if +0x6C == 2 flags |= 0x4000; +0x68 := screen,
+screen := 8 + 7·bit 14, +0x10 / +0x1442C / +0x0C / +0xC294 := 0, range interrupt 5, description VM interrupt 2,
+return 1. So the trace shows screen 0 on the loader's release frame (with bit 14 set again) and 8/15 from the next. Each of these screens forwards at once while +0x6C ≠ 0
 (VERIFIED code; `musicroom_practice` trace shows menu 0 → 15 → 17 on consecutive frames 7887–7889):
 practice 8 → 9 (cursor 0) → 11 (cursor = g_StageIdx), one screen per frame (each forward returns 1); spell practice
 15 → 16 (cursor = g_StageIdx, return 1) on one frame, then 16 → 17 (cursor 0; g_StageIdx := 9 if the last card id
@@ -596,7 +602,15 @@ BGM-restart flag (`Spell_BgmRestartFlag` 0x439916 on card 0x164D0B8, the 0x4C767
 `Bgm_StartDip(1.0)` (02 §4: the music **keeps playing** and drops to −10 dB over 60 frames); otherwise sound command 6
 "Pause" (WAV mode: the buffer is paused at its position). Confirming "Yes" in spell practice or Extra (difficulty > 3):
 not spell practice, or restart flag ≠ 0 → `Music_Stop`; else game_over := 0, command 7 "UnPause" and
-`Bgm_StartFadeInFromDip(1.0)` (−10 dB → 0 over 60 frames); then scene 11 and `Hud_StageTransition`. Confirming "Yes"
+`Bgm_StartFadeInFromDip(1.0)` (−10 dB → 0 over 60 frames); then scene 11 and `Hud_StageTransition`.
+**Confirm timing and game_over** (VERIFIED 0x404890 cases 1/2/4, RE-Q55): "Yes" in spell practice or Extra acts
+**in the press call** — SE 10, the music branch above, scene := 11, `Hud_StageTransition`, game_over := 0 (on
+**both** music branches), play-time timestamp, return (no VM run, no frame += 1); there is no 20-frame wait.
+"Yes" in a normal game: clock VM pending interrupt 1, state 3 (continue sequence, 11 §4.2). "No" (state 2 confirm):
+SE 10, the 4 VMs get interrupt 2, state 4, frame := 0; in the call where frame > 19 (P+20): game_over := 0,
+scene := 6, the 4 VMs hidden, displayed score (stats +0) := score (+8), return. Because game_over is cleared before
+`GameMgr_Calc` runs in the same pass, each of these exits lets **one more gameplay frame** run (11 §4.2 early-exit
+rule). Data: `gameover_save` row 4215 ("No"), `musicroom_practice` row 5077 (spell-practice "Yes"). Confirming "Yes"
 for a normal continue: command 7 "UnPause" (no fade; the paused music resumes — in WAV mode even when a `Music_Stop` came before, 02 §4 "UnPause after `Music_Stop`").
 
 **Draw** (`ContinueMenu_Draw` 0x4052B0, from the ASCII manager draw, only while game_over 0x164D0BB ≠ 0; VERIFIED):

@@ -470,7 +470,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 96–104 | bullets | bullet block | §9 (aim mode = op − 96) | 352 546 241 802 10 1 0 0 56 |
 | 105 / 106 | autofire / autofire_rand | i n | interval = n + lerp_i(n/5, −n/5) (§9.2); timer = 0 (106: Rng_Range(interval)) | 165 / 44 |
 | 107 / 108 | autofire_store on / off | — | flag A bit 17 | 25 / 25 |
-| 109 | fire_stored | — | fire the descriptor as currently stored, origin = final pos + shot offset | 0 |
+| 109 | fire_stored | — | origin (desc +4) := **pos e+0x2D34** + shot offset e+0x2DB8 (not final pos), then `BulletMgr_SpawnPattern`(e+0x2E24) directly: **no** life test, **no** flag A bit 17 store test, **no** `Ecl_FireBullets` filters (mode flags, no-fire radius) and **no** §9.2 rank add. It fires the descriptor exactly as the last executed `Ecl_FireBullets` left it — its counts/speeds already rank-adjusted in place (§9.1 step 4), plus later in-place edits by ops 111/113 (VERIFIED `Ecl_Run` case 0x6D, 0x41B8A0–0x41B8E7, RE-Q55); unreachable (0 uses) | 0 |
 | 110 | shot_offset | f x, f y | (x, y, 0) | 423 |
 | 111 | bullet_ex | i k, i a, i b, i c, i d, f e, f f | descriptor extra slot k (e+0x2E44 + 24k) = {f32 e, f32 f, i32 c, i32 d, u32 a, i32 b} (ints stored raw, no float conversion; every argument is variable-capable: mask bit 0 → k, bit 1 → a, bit 2 → b, bit 3 → c, bit 4 → d via the int getter, bits 5/6 → e/f via the float getter — VERIFIED 0x41B565) — per-bullet behaviour commands (08 spec §4) | 1269 |
 | 112 | cancel_bullets | — | cancel all bullets/lasers to items (mode 1), 08 §7 | 10 |
@@ -607,6 +607,11 @@ re-runs `Ecl_FireBullets` on that copy, so its variable arguments are re-read ea
    (bit 3), angle1 (bit 6), speed1 (bit 4), angle2 (bit 7), speed2 (bit 5); aim mode = op − 96.
 4. Rank adjustment (§9.2), unless a card is active (g_Gui flag bit 0).
 5. Flags raw; **colour (bit 1) last**; then `BulletMgr_SpawnPattern`.
+
+Steps 2–5 write **in place** into the enemy's descriptor e+0x2E24 (origin, type, count1/2, speeds, angles, aim mode
++0x1F8, +0x1FA := 0, flags, colour): after a fire it holds the rank-adjusted values. A filtered-out instruction leaves
+the descriptor untouched (origin included). Op 109 re-fires that stored state without any of steps 1–4 (§7 row 109;
+VERIFIED 0x422720, RE-Q55).
 The order matters when several fields read random variables (each read draws). Data: gensokyou Bi01 stage 6A frame
 7227 — an enemy inside its 32-px no-fire radius reads no `$rand` argument in the original (silentselene 51842,
 80412 moved too).

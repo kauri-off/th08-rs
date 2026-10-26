@@ -853,3 +853,13 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   last-spell SetBombs no RNG (P).
 - Probe: `TH08_SCANECL` (C lines: ctx sub/ip/clock/ivars/chain), `TH08_SCANRANK[_ONLY]` (K lines: mgr clock 0xF54DF8,
   rank, sub-counter). Original self-replays all 0 differ except one run of 53373 (1 row, not reproduced/needed).
+
+# RE-Q55 (2026-10-26) — op 109; gameover_save / musicroom_practice — DONE (specs/changelog/answers_re_q55.md)
+- Q1: op 109 = origin pos e+0x2D34 + offset, SpawnPattern(e+0x2E24) direct; no life/store test, filters or rank add;
+  FireBullets leaves rank-adjusted values in the descriptor. 07 §7 row 109, §9.1. Unreachable (0 uses).
+- Q2 (re/work/runs/q55, scratch portcopy target/re55, q55_scratch.diff): A/B session trace sampling (menu column per
+  MainMenu_Calc entry; +0x00 = stage row on 16, card row on 17); C spell-practice power by card id; D/E continue-menu
+  "Yes" (sp/Extra) immediate and "No" at P+20 both clear game_over → one more gameplay frame; F Result state 2 returns 0
+  → OnRemove/ScoreDat_Save in the same pass; G +0x6C from flags bit 0 for any previous scene, switch in Top entry block;
+  H screen-16 Bomb clears bit 0 at P+20. With A–H both sessions 0 diffs; golden/fullrun/noclip_test1/options/selftest1
+  and the 22 pilots unchanged.

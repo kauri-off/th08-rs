@@ -313,7 +313,11 @@ i) at +0x1A0; interrupt k to VM i = pending interrupt at VM+0x1FE.
 **Exit** (changelog/answers_impl17.md §Q4, VERIFIED with mopup1): X/confirm on item 3 at frame P → state 2.
 - P+1: `Loading_Begin(500, 440)`, all VMs interrupt 2.
 - P+20: next scene 1, object removed (score.dat saved; surface slot 0 `result.jpg` moved to slot 8 = the loading
-  background).
+  background). Order (VERIFIED `Result_Calc` 0x4584B0 case 2, 00 §3.1, RE-Q55): state 2 with frame > 19 writes the
+  scene request and **returns 0** — no VM run, no frame += 1 — so the runner removes the calc node at once and
+  `Result_OnRemove` 0x459FD2 runs **inside this calc pass**: `ScoreDat_Save` and its 2 RNG draws (15 §2.1) land on
+  frame P+20 (the last scene-5/6 trace row), not in the next frame's scene switch. States 0x11, 0x12 (no request)
+  and 0x16 also return 0 the same way. Data: `gameover_save` row 7700, `musicroom_practice` row 7854 (rng_ctr +2).
 - P+21: first menu frame. The loading VMs are already 20 frames old there; in scene 5 they were covered by the result
   background.
 
@@ -759,7 +763,12 @@ Controls:
 - Left/Right change the shot, skipping locked ones.
 - Up/Down move over 10 stage rows (`Menu_CursorUpDown(10)`): 0..8 = stages 1, 2, 3, 4A, 4B, 5, 6A, 6B, Extra; 9 = Last Word.
 - Confirm: g_StageIdx = row, screen 17.
-- Bomb/ESC: back to the top menu (cursor 2), flags &= ~1.
+- Bomb/ESC: SE 11, sub-state 3, +0x10 := 0, g_StageIdx := row, range interrupt 6; in the call where +0x10 > 19
+  (P+20) `Menu_SetScreen(0)`, cursor := 2 **and only then** flags &= ~1 (bit 0 stays set during the 20 frames;
+  VERIFIED 0x46B174 sub-state 3, RE-Q55, `musicroom_practice` rows 9169 → 9189).
+- Cursor field: menu +0x00 holds the **stage row** on this screen. The shot lives in g_ShotType; Left/Right copy it
+  into +0x00 for `Menu_CursorLeftRight` and the skip loop, store it back to g_ShotType and restore the row
+  (VERIFIED 0x46B174, RE-Q55). The forward / confirm write +0x00 := 0 before `Menu_SetScreen(17)`.
 
 Returning from a spell-practice game (+0x6C ≠ 0) arrives through screen 15 (12 §2.2): screen 16 runs for one frame and
 forwards to 17 (cursor 0), returning 2 so screen 17 runs in the same frame. If the last card id is ≥ 205, g_StageIdx := 9.
@@ -797,7 +806,9 @@ On entry:
   140 fades in. VM 141 has no label 26 → catch-all → reset to (640, 320) and hidden, so the next screen-16 entry slides
   it in again;
 - `LastWord_ComputeUnlocks` runs (15 §2.8);
-- the cursor is placed on the previously played id (0x164D0B8);
+- the cursor (menu +0x00, the card row) is placed on the previously played id (0x164D0B8): +0x00 := 0, then the
+  index of 0x164D0B8 in the row's list if found; card-list cancel sets +0x00 := g_StageIdx before
+  `Menu_SetScreen(16)` (VERIFIED 0x46BBC0, RE-Q55);
 - the list is shown 15 rows per page.
 
 Row text:

@@ -433,8 +433,10 @@ sets flags bits 5–6 = 2 (stages 1–5); stages 6A/6B/Extra are triggered by ms
     flags bit 2 and the gameplay frame runs normally (one more frame of objects, replay input, frame counter); the
     scene switch happens on the next frame's `Supervisor_Calc`. E.g. a spell-practice replay ends with the frame after
     the timeline op 16 frame, gameplay frame 725 of 725 in udJS06.
-  - otherwise the continue prompt (Yes/No, 12). "No" → after 20 frames `scene = 6` (result).
-    "Yes" in spell practice / Extra → retry: `scene = 11`. "Yes" in a normal game → continue sequence:
+  - otherwise the continue prompt (Yes/No, 12). "No" → after 20 frames `scene = 6` (result), game_over := 0 and
+    displayed score := score in that call. "Yes" in spell practice / Extra → retry: `scene = 11` and game_over := 0
+    **in the press call**. Both exits clear game_over before `GameMgr_Calc`, so one more gameplay frame runs, as for
+    the early exits (12 §4 "Confirm timing", VERIFIED RE-Q55). "Yes" in a normal game → continue sequence:
     frame 15: clock += 1 (HUD clock sprite updated); frame 60: interrupts; frame 90: menu closes,
     `continues += 1`, **score = score_display = continues** (so the last digit shows the continue count),
     graze_stage = 0, lives = config.lives (checksum), bombs = trunc(human sht +4), point items (stage and

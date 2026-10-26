@@ -188,8 +188,8 @@ outside scene 2 and while loading. Then:
 | 26 | poll | polls so far (= poll index of this frame + 1) |
 | 27 | scene | Supervisor scene after this calc |
 | 28 | scene_frame | as draw-log `F` field 3 |
-| 29 | menu | MainMenu screen (+0x14428) at the start of MainMenu_Calc this frame, −1 if it did not run |
-| 30 | cursor | MainMenu +0x00 at the same point, −1 if not run |
+| 29 | menu | MainMenu screen (+0x14428) at the start of MainMenu_Calc this frame, −1 if it did not run. Sampled at **every** entry: when a handler returns 2 the chain calls `MainMenu_Calc` again in the same pass (12 §2 "Screen entry rule" exception) and the second call's value is the one written (e.g. 16 → 17 shows 17 on the press frame; RE-Q55) |
+| 30 | cursor | MainMenu +0x00 at the same point, −1 if not run. +0x00 is the screen's own row: the stage row on screen 16, the card row on screen 17 (16 §6.1/§6.2), the shared list/stage/speed row on the replay screen (15 §3.8) |
 | 31 | result | Result object state (+0x08) after Result_Calc this frame, −1 if not run |
 | 32 | pause | pause byte 0x164D0BA |
 | 33 | rawinput | `g_InputRawCur` 0x164D528 after this calc |
