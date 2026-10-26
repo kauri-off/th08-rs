@@ -372,6 +372,9 @@ impl Task<Ctx> for Gui {
                     vm.script = None;
                 }
             }
+            // Step 3: Timer_Decrement(+0x108) at game speed after the VMs, also while no card is active (07 §11.1).
+            let speed = ctx.anm.speed;
+            self.enemies.borrow_mut().g.spell_remaining.dec(speed);
         }
         if let Some(s) = &self.enemies.borrow().g.spell {
             (self.bonus, self.capturable) = (s.bonus, s.capture);

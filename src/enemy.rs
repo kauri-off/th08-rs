@@ -629,7 +629,7 @@ pub struct Spell {
     // g_Gui +4: the boss that started the card (enemy slot); g_Gui +0xC: its slot index e+0x2E0C (07 §11.1 step 1.1).
     pub boss: usize,
     pub slot: i32,
-    pub frames: i32,
+    // g_Gui +0x114 card duration (07 §11.1); the remaining time +0x108 is `Globals::spell_remaining`.
     pub duration: i32,
     // Port: death / bomb counters at card start.
     pub deaths0: u32,
@@ -682,6 +682,9 @@ pub struct Globals {
     // Player byte +5 (var 10097).
     pub player_mode: i32,
     pub spell: Option<Spell>,
+    // g_Gui +0x108 remaining card time (var 10100, 07 §6): set at Spell_Start, decremented at game speed by every
+    // Spell_Calc, also after the card; zero-filled at stage start (07 §11.1).
+    pub spell_remaining: Timer,
     // 0xF54E2C (op 175).
     pub spawn_disabled: i32,
     // HUD +0x2C boss display byte (07 §3 timeline op 0).
@@ -781,6 +784,11 @@ impl EnemyManager {
             difficulty,
             rank: 16,
             player: player.borrow().pos,
+            spell_remaining: Timer {
+                prev: 0,
+                frac: 0.0,
+                cur: 0,
+            },
             ..Default::default()
         };
         Self {
@@ -1601,7 +1609,8 @@ impl EnemyManager {
         let Some(s) = self.g.spell.take() else { return };
         crate::gui::request(crate::gui::Req::BossHide);
         self.g.bonus_frozen = false;
-        let (total, remaining) = (s.duration, (s.duration - s.frames).max(0));
+        // Time reward from +0x114 and the remaining-time timer +0x108 (07 §11.1).
+        let (total, remaining) = (s.duration, self.g.spell_remaining.cur);
         crate::sound::play(crate::sound::TAN00_LOUD);
         if let Some(st) = &self.stage {
             st.borrow_mut().end_spell_bg();
@@ -2459,9 +2468,6 @@ impl EnemyManager {
             .filter(|e| e.flags & A_LOSES_LIFE != 0)
             .map(|e| e.final_pos);
         crate::effect::with(|fx| fx.boss = pull);
-        if let Some(s) = &mut self.g.spell {
-            s.frames += 1;
-        }
         let mut b = self.bullets.borrow_mut();
         b.env.boss = self.bosses.iter().any(Option::is_some);
         b.env.spell = self.g.spell.is_some();

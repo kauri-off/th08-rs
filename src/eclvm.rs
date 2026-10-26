@@ -251,7 +251,8 @@ pub(crate) fn var_i(
                 0
             }
         }
-        10100 => m.g.spell.as_ref().map_or(0, |s| s.frames),
+        // Remaining card time Timer_Get(g_Gui +0x108), also after the card and without one (07 §6).
+        10100 => m.g.spell_remaining.cur,
         // Int read of 10079–10081 gives the literal; 10082 is float only.
         10079..=10082 => id,
         _ if flt_ref(id).is_some()
@@ -713,6 +714,23 @@ impl Exec<'_> {
     // --- spawning (ops 90–94, 07 §4.1 / §10.5) ---
     fn spawn_child(&mut self, t: &mut Thread, ins: &Ins) {
         let op = ins.op;
+        if op <= 92 {
+            // 07 §10.5: fails (manager flag) if the parent's life < 1 or it is being chain-killed, tested before
+            // any argument is read; SE 0x24 at the spawner pos plays after the spawn block either way.
+            if self.e.life < 1 || self.e.flags & A_CHAIN_KILLED != 0 {
+                self.m.full = true;
+            } else {
+                self.spawn_block(t, ins);
+            }
+            crate::sound::play_at(crate::sound::OPTION, self.e.pos[0]);
+        } else if self.e.life > 0 {
+            // Ops 93/94 (07 op table): nothing at all while the spawner's life ≤ 0, before any argument read.
+            self.spawn_block(t, ins);
+        }
+    }
+
+    fn spawn_block(&mut self, t: &mut Thread, ins: &Ins) {
+        let op = ins.op;
         let sub = self.ai(t, ins, 0);
         let (x, y) = (self.af(t, ins, 1), self.af(t, ins, 2));
         let (z, base) = if op >= 93 {
@@ -724,11 +742,6 @@ impl Exec<'_> {
         let item = self.ai(t, ins, base + 1);
         let score = self.ai(t, ins, base + 2);
         let chained = op <= 92;
-        // 07 §10.5: fails (manager flag) if the parent's life < 1 or it is being chain-killed.
-        if chained && (self.e.life < 1 || self.e.flags & A_CHAIN_KILLED != 0) {
-            self.m.full = true;
-            return;
-        }
         // 07 §10.5: ops 90/92 spawn at (x, y, 0) as given; op 92's follow offset is written after the spawn run.
         let pos = match op {
             91 => [self.e.final_pos[0] + x, self.e.final_pos[1] + y, 0.0],
@@ -755,10 +768,6 @@ impl Exec<'_> {
         let Some(ci) = self.m.spawn_prepare(sub, pos, life, false) else {
             return;
         };
-        // Sound 0x24 (07 §10.5).
-        if chained {
-            crate::sound::play_at(crate::sound::OPTION, self.e.final_pos[0]);
-        }
         // 07 §4.1 step 3: the 30 variable dwords of the spawning context.
         let vars = t.ctx.vars;
         let youkai = self.m.g.player_mode != 0;
@@ -1108,21 +1117,25 @@ impl Exec<'_> {
             0 => crate::ascii::set_darkness(t.ctx.int(V_INT0), t.ctx.flt(V_FLT0)),
             // Bounce: vars 10022 / 10023 are the gravity step and the fall-speed cap.
             2 => {
+                // EclNative_2 (07 §12 row 2): no direction tests, so an enemy still past an edge flips back next
+                // frame; the angle is recomputed when any branch ran, the gravity add included.
                 let e = &mut *self.e;
-                let before = e.vel;
-                if (e.pos[0] <= 0.0 && e.vel[0] < 0.0) || (e.pos[0] >= 384.0 && e.vel[0] > 0.0) {
+                let mut ran = false;
+                if e.pos[0] <= 0.0 || e.pos[0] >= 384.0 {
                     e.vel[0] = -e.vel[0];
+                    ran = true;
                 }
                 if e.vel[1] < t.ctx.flt(V_FLT0 + 7) {
                     e.vel[1] += t.ctx.flt(V_FLT0 + 6);
+                    ran = true;
                 }
-                if e.pos[1] < -64.0 && e.vel[1] < 0.0 {
+                if e.pos[1] < -64.0 {
                     e.vel[1] = -e.vel[1];
-                }
-                if e.pos[1] >= 480.0 {
+                    ran = true;
+                } else if e.pos[1] >= 480.0 {
                     e.flags &= !A_KEEP_OFFSCREEN;
                 }
-                if e.vel != before {
+                if ran {
                     e.angle = e.vel[1].atan2(e.vel[0]);
                 }
             }
@@ -1455,7 +1468,6 @@ impl Exec<'_> {
             name: dec(0x14, 48, 0xAA),
             owner: dec(0x44, 48, 0xBB),
             comment: [dec(0x74, 64, 0xDD), dec(0xB4, 64, 0xEE)],
-            frames: 0,
             duration: self.e.timeout.max(0),
             deaths0: self.m.player.borrow().deaths,
             bombs0: self.m.player.borrow().bombs_started,
@@ -1488,6 +1500,8 @@ impl Exec<'_> {
             owner: spell.owner.clone(),
         });
         self.m.g.spell = Some(spell);
+        // Timer +0x108 (remaining) := e+0x3378 (07 §11.1).
+        self.m.g.spell_remaining.set(self.e.timeout);
         if let Some(st) = &self.m.stage {
             st.borrow_mut().start_spell_bg(self.anm);
         }
@@ -3053,6 +3067,77 @@ mod tests {
         let ctx = &m.enemies[0].main.ctx;
         assert_eq!((ctx.flt(V_FLT0), ctx.vars[V_INT0] as i32), (f, i));
         assert_eq!(anm.rng.state, rng.state);
+    }
+
+    // 07 op 93/94 and §10.5: a spawner with life ≤ 0 reads no argument (no RNG draw from var 10032); ops 90–92 set
+    // the manager flag, ops 93/94 leave it alone.
+    #[test]
+    fn spawn_ops_life_gate() {
+        let rx = 10032.0f32.to_bits() as i32;
+        for op in [90i16, 94] {
+            let args: &[i32] = if op == 94 {
+                &[1, rx, 0, 0, 10, 0, 100]
+            } else {
+                &[1, rx, 0, 10, 0, 100]
+            };
+            for life in [0, 100] {
+                let (mut anm, mut m) = manager(&[&[ins_v(0, op, 2, args)], &[]]);
+                spawn(&mut m, 0, 0, -1, 0);
+                m.enemies[0].life = life;
+                let mut r = anm.rng.clone();
+                ecl_run(&mut m, &mut anm, 0);
+                if life == 0 {
+                    assert_eq!(anm.rng.next_u16(), r.next_u16());
+                    assert!(!m.enemies[1].alive());
+                    assert_eq!(m.full, op == 90);
+                } else {
+                    r.next_u32();
+                    assert_eq!(anm.rng.next_u16(), r.next_u16());
+                    assert!(m.enemies[1].alive());
+                }
+            }
+        }
+    }
+
+    // 07 §12 native 2: edge flips without direction tests; angle only when a branch ran (gravity included).
+    #[test]
+    fn native2_bounce_no_direction_test() {
+        let run = |pos: [f32; 3], vel: [f32; 3], cap: f32| {
+            let (mut anm, mut m) = manager(&[&[ins(0, 136, &[2, 0])]]);
+            spawn(&mut m, 0, 0, -1, 0);
+            let e = &mut m.enemies[0];
+            (e.pos, e.vel, e.angle) = (pos, vel, 9.0);
+            e.main.ctx.vars[V_FLT0 + 6] = 0.5f32.to_bits();
+            e.main.ctx.vars[V_FLT0 + 7] = cap.to_bits();
+            ecl_run(&mut m, &mut anm, 0);
+            (m.enemies[0].vel, m.enemies[0].angle)
+        };
+        let (v, a) = run([-1.0, 100.0, 0.0], [2.0, 1.0, 0.0], 0.0);
+        assert_eq!((v[0], v[1]), (-2.0, 1.0));
+        assert_eq!(a, 1.0f32.atan2(-2.0));
+        let (v, a) = run([100.0, -65.0, 0.0], [0.0, 3.0, 0.0], 0.0);
+        assert_eq!((v[1], a), (-3.0, (-3.0f32).atan2(0.0)));
+        let (v, a) = run([100.0, 100.0, 0.0], [1.0, 1.0, 0.0], 2.0);
+        assert_eq!((v[1], a), (1.5, 1.5f32.atan2(1.0)));
+        let (_, a) = run([100.0, 100.0, 0.0], [1.0, 1.0, 0.0], 0.0);
+        assert_eq!(a, 9.0);
+    }
+
+    // 07 §6 var 10100: the remaining-time timer +0x108, also with no card active.
+    #[test]
+    fn var_10100_remaining_timer() {
+        let (mut anm, mut m) = manager(&[&[]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        assert_eq!(m.g.spell_remaining.cur, 0);
+        m.g.spell_remaining.set(764);
+        m.g.spell_remaining.dec(1.0);
+        let e = m.enemies[0].clone();
+        assert!(m.g.spell.is_none());
+        assert_eq!(var_i(&mut m, &mut anm, &e, &e.main.ctx, 10100), 763);
+        for _ in 0..4 {
+            m.g.spell_remaining.dec(0.25);
+        }
+        assert_eq!(var_i(&mut m, &mut anm, &e, &e.main.ctx, 10100), 762);
     }
 
     fn child_op(op: i16, sub: i32) -> Vec<u8> {
