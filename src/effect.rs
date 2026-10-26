@@ -1365,9 +1365,10 @@ impl ScreenEffect {
         ctx.anm.screen_offset = [x, y];
     }
 
-    // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set (13 §3).
+    // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set (13 §3); both read
+    // live, not the end-of-Player_Calc mirror `Effects::frozen`.
     fn frozen() -> bool {
-        with(|e| e.frozen) || crate::enemy::timer_pause() != 0
+        crate::gamemgr::flags() & crate::gamemgr::F_DEATH != 0 || crate::enemy::timer_pause() != 0
     }
 }
 
@@ -1535,6 +1536,20 @@ pub fn invuln_ring(anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 13 §3 type 1/7: the shake freeze reads GameFlags bit 10 live, not the end-of-Player_Calc mirror.
+    #[test]
+    fn shake_frozen_reads_flags_live() {
+        let f = crate::gamemgr::flags();
+        set_frozen(false);
+        crate::gamemgr::set_flags(f | crate::gamemgr::F_DEATH);
+        assert!(ScreenEffect::frozen());
+        crate::gamemgr::set_flags(f & !crate::gamemgr::F_DEATH);
+        set_frozen(true);
+        assert_eq!(ScreenEffect::frozen(), crate::enemy::timer_pause() != 0);
+        set_frozen(false);
+        crate::gamemgr::set_flags(f);
+    }
 
     // Ring init 0x4272E0 (13 §2.6): 24 segments by default, centre = spawn pos, crossed param copy.
     #[test]

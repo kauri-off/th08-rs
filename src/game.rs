@@ -45,6 +45,8 @@ impl TaskCtx for Ctx {
         &mut self.tasks
     }
     fn on_restart(&mut self) {
+        // ScreenEffect_Register links at once: the restarted pass already runs effects queued in this one (13 §3).
+        crate::effect::register_pending(self);
         crate::session::on_restart(self);
     }
 }
@@ -344,5 +346,17 @@ mod tests {
         assert_eq!(c.game.scene, SCENE_BOOT);
         assert!(to_menu(&mut c));
         assert_eq!(c.game.cfg.windowed, mode);
+    }
+
+    // 13 §3: a screen effect queued in a fast-forward pass is linked before the restarted pass.
+    #[test]
+    fn restart_links_pending_screen_effects() {
+        use crate::task::TaskCtx;
+        let Some(mut c) = ctx() else {
+            return;
+        };
+        crate::effect::screen(1, 10, 2, 0, 0, 0x10);
+        c.on_restart();
+        assert!(crate::effect::take_screen().is_empty());
     }
 }

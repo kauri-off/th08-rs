@@ -309,7 +309,7 @@ impl Hud {
             stage,
             shot,
             continues: g.stats.continues,
-            replay_route: None,
+            replay_route: replay_route(g),
             cleared_6a: g.cleared(true, 6),
             cleared_6b: g.cleared(false, 7),
             clock: 0,
@@ -1307,9 +1307,33 @@ pub fn set_boss_plate(anm: &AnmManager, gfx: &mut Gfx, n: usize) {
     }
 }
 
+// Msg_Start's route byte during playback (GM flag bit 3): replay header byte +0x11C (10 §4 step 3).
+fn replay_route(g: &crate::gamemgr::Game) -> Option<u8> {
+    if g.replay() {
+        g.rpy.as_ref().map(|r| r.clear_status())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 10 §4 step 3: the route byte +0x11C is offered only during replay playback.
+    #[test]
+    fn replay_route_from_header() {
+        let mut g = crate::gamemgr::Game::default();
+        let mut r = crate::replay::Replay::default();
+        r.info[0x11C - 0x68] = 2;
+        g.rpy = Some(r);
+        let f = crate::gamemgr::flags();
+        crate::gamemgr::set_flags(f & !crate::gamemgr::F_REPLAY);
+        assert_eq!(replay_route(&g), None);
+        crate::gamemgr::set_flags(f | crate::gamemgr::F_REPLAY);
+        assert_eq!(replay_route(&g), Some(2));
+        crate::gamemgr::set_flags(f);
+    }
 
     fn panel(stage: usize, from: i32, to: i32) -> ClearPanel {
         ClearPanel {
