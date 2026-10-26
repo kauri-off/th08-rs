@@ -506,9 +506,14 @@ impl Player {
             if self.last_spell != 0 {
                 index = 1 - index + 2;
                 let b = self.stats.bombs;
-                let used = if forced || b < 2.0 { b } else { 2.0 };
-                self.bomb.used = used as i32;
-                self.stats.add_bombs(-used, rng);
+                // Forced or < 2 bombs: GameMgr_SetBombs(0) 0x406F30, no RNG; 2 bombs: AddBombs(−2), 4 draws.
+                if forced || b < 2.0 {
+                    self.bomb.used = b as i32;
+                    self.stats.bombs = 0.0;
+                } else {
+                    self.bomb.used = 2;
+                    self.stats.add_bombs(-2.0, rng);
+                }
                 // HSCR +0x78, 0x164CFAC (15 §2.3).
                 self.stats.rec.last_spells += 1;
             } else {
@@ -1396,7 +1401,7 @@ impl Player {
                 continue;
             }
             o.v[0] += o.v[1];
-            o.angle += o.f8;
+            o.angle = anmvm::wrap_add(o.angle, o.f8);
             let prev = o.pos;
             let d = polar(o.angle, o.v[0]);
             o.pos = [o.centre[0] + d[0], o.centre[1] + d[1], 0.0];
@@ -1408,7 +1413,9 @@ impl Player {
                     self.areas_off(k);
                 }
             } else {
+                // 14 §2.15: freed and both areas switched off.
                 o.state = 0;
+                self.areas_off(k);
             }
         }
     }
@@ -1800,6 +1807,48 @@ mod tests {
         );
         assert_eq!(format!("{:?}", anm.rng), format!("{rng:?}"));
         assert!(p.bombing && p.last_spell == 0 && p.forced_bomb == 0);
+    }
+
+    // 09 §7: last-spell bomb with < 2 bombs (or forced) → SetBombs(0), no RNG; 2 bombs → AddBombs(−2), 4 draws.
+    // GameMgr_AddBombCount adds 4 draws either way.
+    #[test]
+    fn last_spell_bomb_cost() {
+        for (bombs, forced, left, used, draws) in [
+            (1.0, false, 0.0, 1, 4),
+            (2.0, false, 0.0, 2, 8),
+            (3.0, false, 1.0, 2, 8),
+            (3.0, true, 0.0, 3, 4),
+        ] {
+            let (mut p, mut anm) = ready(4);
+            (p.stats.bombs, p.last_spell) = (bombs, 1);
+            let t = anm.rng.total;
+            p.start_bomb(&mut anm, forced);
+            assert_eq!((p.stats.bombs, p.bomb.used), (left, used));
+            assert_eq!(anm.rng.total - t, draws);
+        }
+    }
+
+    // 14 §2.15: a butterfly reaching radius 500 is freed with both areas off; its angle is wrapped.
+    #[test]
+    fn yuyuko_butterfly_end_areas_off() {
+        let (mut p, mut anm) = ready(6);
+        let bf = |t| Bf {
+            t,
+            adv: true,
+            ls: false,
+            gs: 1.0,
+        };
+        let d = p.dc([0.0; 2], 24.0, 0.0, 50, 500, 1, 800, false);
+        let c = p.cancel_circle([0.0; 2], 24.0, 0.0, 500, 6);
+        let o = &mut p.bomb.objs[0];
+        (o.state, o.v, o.angle, o.f8) = (1, [499.0, 2.0, 0.0], PI - 0.001, PI / 240.0);
+        (o.darea, o.carea) = (Some(d), Some(c));
+        p.bomb_yuyuko(&mut anm, bf(1));
+        let o = &p.bomb.objs[0];
+        assert_eq!(o.state, 0);
+        assert!(!p.damage_areas[d].active && !p.cancel_areas[c].active);
+        assert_eq!(o.angle, anmvm::wrap_add(PI - 0.001, PI / 240.0));
+        assert!(o.angle < 0.0);
     }
 
     // 09 §4.5: circle = point test on the enemy centre, `≤ r²`; rectangles overlap the box inclusively.

@@ -435,7 +435,7 @@ impl Effects {
                 let a = if param[0] <= -990.0 {
                     rng.next_f32() * (2.0 * PI) - PI
                 } else {
-                    crate::anmvm::wrap_add(param[0], 0.0)
+                    anmvm::wrap_add(param[0], 0.0)
                 };
                 let m = 1.0 + rng.next_f32() * 1.5;
                 e.dir = [a.cos() * m, a.sin() * m, 0.0];
@@ -1024,7 +1024,7 @@ fn bomb_ring_update(e: &mut Effect, slot: usize) -> (Vec<ScreenEffect>, bool) {
         }
         // Yukari LS 0x4117B0 (14 §2.14): spin ±π/80 by slot parity; sides at t = 50.
         37 => {
-            r.start += if slot % 2 == 0 { -PI / 80.0 } else { PI / 80.0 };
+            r.start = anmvm::wrap_add(r.start, if slot % 2 == 0 { -PI / 80.0 } else { PI / 80.0 });
             let n = slot as f32 - 4.0;
             if t < 50 {
                 let k = 1.0 - tf / 50.0;
@@ -1074,14 +1074,18 @@ fn bomb_ring_update(e: &mut Effect, slot: usize) -> (Vec<ScreenEffect>, bool) {
     (fx, true)
 }
 
-// The four side rectangles of a finished boundary (D rect 8s × 4w, C rect 4s × 4w, rotated a + π/2).
+// The four side rectangles of a finished boundary (14 §2.13): D rect 8s × 4w, C rect 4s × 4w.
+// s uses f32 0x3F3504F2 (1 ulp below √2/2); a wraps at the top of each side and chains from the last rotation.
 fn boundary_sides(centre: [f32; 3], r: &Ring, d_life: i32, period: i32, c_life: i32) {
-    let s = r.radius * 0.70711;
+    let s = r.radius * f32::from_bits(0x3F3504F2);
     let mut a = r.start + PI / 4.0;
     for _ in 0..4 {
+        if a >= PI {
+            a -= 2.0 * PI;
+        }
         let d = crate::bullet::polar(a, s);
         let c = [centre[0] + d[0], centre[1] + d[1]];
-        let rot = a + PI / 2.0;
+        let rot = anmvm::wrap_add(a, PI / 2.0);
         let d = crate::bomb::Area {
             pos: c,
             size: [8.0 * s, 4.0 * r.width],
@@ -1105,7 +1109,7 @@ fn boundary_sides(centre: [f32; 3], r: &Ring, d_life: i32, period: i32, c_life: 
             ..Default::default()
         };
         crate::bomb::queue_area(false, k);
-        a += PI / 2.0;
+        a = rot;
     }
 }
 
@@ -1603,5 +1607,33 @@ mod tests {
         let mut fx = Effects::default();
         assert_eq!(fx.spawn_rng(&mut rng, 4, [0.0; 3], 3, 0), 2);
         assert_eq!(fx.cursor, 3);
+    }
+
+    // 14 §2.13: s = radius · f32 0x3F3504F2; a wraps at ≥ π per side; rotations chain via Angle_AddNormalize.
+    #[test]
+    fn boundary_sides_wrap_and_chain() {
+        let r = Ring {
+            radius: 100.0,
+            start: 3.0 * PI / 4.0,
+            width: 4.0,
+            ..Ring::default()
+        };
+        boundary_sides([192.0, 224.0, 0.0], &r, 70, 4, 100);
+        let mut p = crate::player::Player::default();
+        p.take_queued_areas();
+        let s = 100.0 * f32::from_bits(0x3F3504F2);
+        let d: Vec<_> = p.damage_areas.iter().filter(|a| a.active).collect();
+        assert_eq!(d.len(), 4);
+        let mut a = 3.0 * PI / 4.0 + PI / 4.0;
+        for area in d {
+            if a >= PI {
+                a -= 2.0 * PI;
+            }
+            let rot = anmvm::wrap_add(a, PI / 2.0);
+            assert_eq!(area.rot.to_bits(), rot.to_bits());
+            assert!((-PI..=PI).contains(&area.rot));
+            assert_eq!(area.size, [8.0 * s, 16.0]);
+            a = rot;
+        }
     }
 }
