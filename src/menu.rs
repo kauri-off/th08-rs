@@ -402,6 +402,15 @@ impl MainMenu {
     }
 
     // Menu_SetScreen 0x4694C3 (12 §2 entry rule): the new handler runs from the next calc with frames = 0.
+    // Menu +0x00 as the original holds it: the stage row on screen 16, the card row on screen 17 (16 §6.1/§6.2).
+    fn trace_cursor(&self) -> i32 {
+        match self.screen {
+            SPELL_PRACTICE => self.lists.sp_row,
+            SPELL_CARD => self.lists.card,
+            _ => self.cursor,
+        }
+    }
+
     pub(crate) fn set_screen(&mut self, s: i32) {
         self.prev_screen = self.screen;
         self.screen = s;
@@ -653,6 +662,8 @@ impl MainMenu {
                     self.interrupt_all(5);
                     self.set_screen(SPELL_PRACTICE);
                     self.cursor = g.shot as i32;
+                    // +0x00 := shot until the screen-16 entry writes the stage row (12 §2.2 item 2).
+                    self.lists.sp_row = self.cursor;
                 }
                 3 => {
                     g.flags.set(g.flags & !F_SPELL_PRACTICE | F_PRACTICE);
@@ -842,6 +853,7 @@ impl MainMenu {
                 PRACTICE_STAGE
             });
             self.cursor = ctx.game.stage as i32;
+            self.lists.sp_row = self.cursor;
             return;
         }
         if self.frames < 8 || self.pending.is_some() {
@@ -861,6 +873,8 @@ impl MainMenu {
                 }
                 CHAR_SPELL => {
                     self.set_screen(SPELL_PRACTICE);
+                    // +0x00 still holds the shot row at the re-call, before the screen-16 entry (16 §6.1).
+                    self.lists.sp_row = self.cursor;
                     self.again = true;
                 }
                 _ => {
@@ -1307,8 +1321,8 @@ impl Task<Ctx> for MainMenu {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        // Session tool hook: screen/cursor at calc entry, as the trace samples them.
-        ctx.game.trace_menu = Some((self.screen, self.cursor));
+        // Session tool hook: screen/+0x00 at every MainMenu_Calc entry (drawlog README cols 29/30).
+        ctx.game.trace_menu = Some((self.screen, self.trace_cursor()));
         // The menu starts when its loader has finished (Supervisor loading screen, 12 §1).
         if ctx.game.menu_loading > 0 {
             return Ret::Next;
@@ -1321,6 +1335,8 @@ impl Task<Ctx> for MainMenu {
         // A handler that returns 2 makes the chain call this node again at once (00 §3), so the new screen's
         // handler, RunRange and the description VM run a second time in this frame (12 §2 entry exception).
         loop {
+            // A return-2 re-call is a new MainMenu_Calc entry: the last call's values are the row's (RE-Q55).
+            ctx.game.trace_menu = Some((self.screen, self.trace_cursor()));
             let screen = self.screen;
             match self.screen {
                 TOP => self.top(ctx),
@@ -1521,6 +1537,18 @@ mod tests {
             assert_eq!((m.screen, m.prev_screen, m.frames), (screen, super::TOP, 0));
             assert_eq!(c.game.spell_practice(), spell);
         }
+    }
+
+    // Drawlog README col 30: +0x00 is the stage row on screen 16, the card row on 17, else the cursor (16 §6.1/§6.2).
+    #[test]
+    fn trace_cursor_rows() {
+        let mut m = super::MainMenu::new();
+        (m.cursor, m.lists.sp_row, m.lists.card) = (5, 3, 11);
+        assert_eq!(m.trace_cursor(), 5);
+        m.screen = super::SPELL_PRACTICE;
+        assert_eq!(m.trace_cursor(), 3);
+        m.screen = super::SPELL_CARD;
+        assert_eq!(m.trace_cursor(), 11);
     }
 
     // 16 §4: notice order info00 (bit 15), info02 (16), info01 (17); only bits not yet in the flags.

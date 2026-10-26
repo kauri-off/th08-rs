@@ -325,7 +325,7 @@ pub struct Lists {
     // Screen 16 in its input sub-state (16 §6.1).
     sp_input: bool,
     // Screen-17 cursor (index in the row's card list), page = card / 15.
-    card: i32,
+    pub card: i32,
     page: i32,
     prev_card: i32,
     // Info refresh counter +0xC29C (16 §6.3).
@@ -577,6 +577,8 @@ impl MainMenu {
                 ctx.game.stage = 9;
             }
             self.lists.sp_row = ctx.game.stage.min(9) as i32;
+            // +0x00 := 0 before Menu_SetScreen(17) (16 §6.1).
+            self.lists.card = 0;
             self.set_screen(crate::menu::SPELL_CARD);
             self.again = true;
             return;
@@ -666,7 +668,8 @@ impl MainMenu {
         if inp.pressed(CONFIRM) {
             sound::play(sound::OK);
             ctx.game.stage = self.lists.sp_row as usize;
-            // 16 → 17 returns 2: screen 17 runs in this frame (12 §2).
+            // +0x00 := 0 before Menu_SetScreen(17); 16 → 17 returns 2: screen 17 runs in this frame (12 §2, 16 §6.1).
+            self.lists.card = 0;
             self.set_screen(crate::menu::SPELL_CARD);
             self.again = true;
         } else if inp.pressed(CANCEL) {
@@ -1078,7 +1081,8 @@ impl MainMenu {
         } else if inp.pressed(CANCEL) {
             sound::play(sound::CANCEL);
             ctx.game.card = id as i16;
-            // 17 → 16 returns 2: screen 16 runs in this frame (12 §2).
+            // +0x00 := g_StageIdx before Menu_SetScreen(16) (16 §6.2); 17 → 16 returns 2: screen 16 runs in this frame (12 §2).
+            self.lists.sp_row = ctx.game.stage.min(9) as i32;
             self.set_screen(crate::menu::SPELL_PRACTICE);
             self.again = true;
         }

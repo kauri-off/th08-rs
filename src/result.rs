@@ -45,10 +45,18 @@ const S_SAVE_OVER: i32 = 14;
 const S_PANEL: i32 = 0xF;
 const S_PANEL_OUT: i32 = 0x10;
 const S_PRACTICE: i32 = 0x11;
+// State 0x12: no handler in the specs; only its Result_Calc exit is known (16 §2.4 exit).
+const S_12: i32 = 0x12;
 const S_PLAY: i32 = 0x13;
 const S_PLAY_WAIT: i32 = 0x14;
 const S_PLAY_OUT: i32 = 0x15;
 const S_SPELL: i32 = 0x16;
+
+// Result_Calc return 0 (16 §2.4 exit): state 2 after its scene request; 0x11, 0x12 (no request) and 0x16 the same way.
+// SPEC-GAP: 16 §2.4 does not say whether 0x11/0x12/0x16 share the frame > 19 test or when 0x12 is entered.
+fn exits(state: i32, frame: i32) -> bool {
+    matches!(state, S_LEAVE | S_PRACTICE | S_12 | S_SPELL) && frame > 19
+}
 
 // Name-entry charset 0x4B7340, 6 rows × 16 (16 §2.2). 0x5D is the only unselectable cell; 0x5E / 0x5F are
 // drawn as the "SP" / "END" glyphs 0x80 / 0x81.
@@ -1335,7 +1343,7 @@ impl Task<Ctx> for ResultScreen {
         ctx.game.trace_result = Some(self.state);
         // 16 §2.4 exit: state 2 at frame > 19 returns 0 before the VMs and frame += 1, so Result_OnRemove (score.dat
         // save, 2 RNG draws) runs in this calc pass.
-        if self.state == S_LEAVE && self.frame > 19 {
+        if exits(self.state, self.frame) {
             return Ret::Remove;
         }
         for vm in &mut self.vms {
@@ -1707,6 +1715,17 @@ pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 16 §2.4 exit: Result_Calc returns 0 for states 2, 0x11, 0x12 and 0x16 at frame > 19.
+    #[test]
+    fn calc_exit_states() {
+        for st in [S_LEAVE, S_PRACTICE, S_12, S_SPELL] {
+            assert!(!exits(st, 19));
+            assert!(exits(st, 20));
+        }
+        assert!(!exits(S_SAVE, 20));
+        assert!(!exits(S_TOP, 20));
+    }
 
     // 15 §2.12: Right ×4, Left, D ×2, Q ×3 as edge presses while Focus (or Skip) is held.
     #[test]
