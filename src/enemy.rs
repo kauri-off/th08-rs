@@ -749,7 +749,8 @@ pub struct EnemyManager {
     pub full: bool,
     // Draw lists by layer, linked at the end of each enemy's calc (07 §10.1 step 7).
     draw_lists: [Vec<usize>; 4],
-    pub frame: u32,
+    // mgr+0x9DCED0 manager clock (11 §3.2): a Timer ticked at game speed, zero-filled at construction.
+    pub clock: Timer,
     // Debug: `TH08_ENEMY_DMG`, `TH08_STAGE_FRAME`.
     pub debug_damage: i32,
     pub fast_forward: u32,
@@ -816,7 +817,11 @@ impl EnemyManager {
             stage: None,
             full: false,
             draw_lists: Default::default(),
-            frame: 0,
+            clock: Timer {
+                prev: 0,
+                frac: 0.0,
+                cur: 0,
+            },
             debug_damage: 0,
             fast_forward: 0,
             msg: None,
@@ -947,6 +952,8 @@ impl EnemyManager {
                 }
                 d
             };
+            // Aimed-enemy offer only for shootable enemies, after both damage calls (14 §3.1, 0x42D46A, RE-Q54).
+            self.offer_aimed(idx);
             self.enemies[idx].orb_acc = acc;
             self.enemies[idx].bomb_hit = by_bomb;
             self.damage(idx, d, by_bomb);
@@ -2249,7 +2256,6 @@ impl EnemyManager {
 
     // EnemyMgr_Calc per enemy (07 §10.1).
     fn update(&mut self, idx: usize, anm: &mut AnmManager) {
-        let gs = anm.speed;
         if self.enemies[idx].flags & A_CHAIN_KILLED != 0 {
             let e = &mut self.enemies[idx];
             e.life = 0;
@@ -2266,7 +2272,7 @@ impl EnemyManager {
                 || (e.flags & A_LAST_SPELL != 0 && (p.bombing || p.state != 0))
         };
         if held {
-            self.enemies[idx].boss_timer.dec(gs);
+            self.enemies[idx].boss_timer.dec(anm.speed);
         } else if !self.update_body(idx, anm) {
             return;
         }
@@ -2279,12 +2285,12 @@ impl EnemyManager {
             self.death(idx, anm);
         }
         // Step 7 after step 6's death: the death bonus seconds read the un-ticked timer (07 §10.1, §10.3).
-        self.update_tail(idx, gs);
+        // Game speed read live (07 §5): a native 18 run by this frame's Ecl_Run already slows these ticks.
+        self.update_tail(idx, anm.speed);
     }
 
     // 07 §10.1 steps 3–6; false when the enemy was freed (op 1 delete, off screen).
     fn update_body(&mut self, idx: usize, anm: &mut AnmManager) -> bool {
-        let gs = anm.speed;
         if self.enemies[idx].flags & A_MODE_REACT != 0 {
             self.react_player_mode(idx, anm);
         }
@@ -2294,7 +2300,8 @@ impl EnemyManager {
                 self.free(idx);
                 return false;
             }
-            self.move_enemy(idx, gs);
+            // Live game speed (07 §5): set by this pass's Ecl_Run.
+            self.move_enemy(idx, anm.speed);
             // Aura VM pos (07 §10.1 step 4, 0x42CAC9): every pass, before the trail shift and the screen check.
             let e = &self.enemies[idx];
             let p = e.final_pos;
@@ -2316,7 +2323,6 @@ impl EnemyManager {
         if flags & (A_HIDDEN | 1 << 5 | A_YOUKAI) == 0
             && !(flags & 1 << 31 != 0 && self.player.borrow().bombing)
         {
-            self.offer_aimed(idx);
             self.player_collision(idx, anm);
         }
         // Debug: `TH08_ENEMY_DMG` damage per frame.
@@ -2431,7 +2437,7 @@ impl EnemyManager {
         if !self.dialogue_active() {
             let mut p = self.player.borrow_mut();
             p.stats.rec.progress += 1;
-            if self.frame > 15 {
+            if self.clock.cur > 15 {
                 let human = (p.focus == 0) as u32;
                 p.stats.rec.total += 1;
                 p.stats.rec.human += human;
@@ -2475,18 +2481,21 @@ impl EnemyManager {
         let env = b.env;
         drop(b);
         self.player.borrow_mut().env = env;
-        self.frame += 1;
+        // Timer_Tick at the end of EnemyMgr_Calc with the live game speed (11 §3.2).
+        self.clock.tick(anm.speed);
     }
 
-    // EnemyMgr_TimeRank 0x42C3B0 (11 §3.2): rank +100 every 2400 − 240·lives enemy-manager frames outside
-    // dialogue; reads the manager clock before this frame's increment.
+    // EnemyMgr_TimeRank 0x42C3B0 (11 §3.2): rank +100 outside dialogue when the manager clock (before this frame's
+    // tick) advanced and cur % (2400 − 240·lives) == 0, signed.
     fn time_rank(&mut self) {
         if self.dialogue_active() {
             return;
         }
-        let lives = self.player.borrow().stats.lives.max(0.0) as u32;
-        let period = 2400u32.saturating_sub(240 * lives).max(1);
-        if self.frame > 0 && self.frame % period == 0 {
+        let lives = self.player.borrow().stats.lives as i32;
+        // Port-only guard: lives ≤ 8 keeps the period positive.
+        let period = (2400 - 240 * lives).max(1);
+        let c = self.clock;
+        if c.cur != c.prev && c.cur % period == 0 {
             self.player.borrow_mut().stats.rank(100);
         }
     }
@@ -2719,11 +2728,11 @@ mod tests {
         m.draw_lists[0].push(5);
         player.borrow_mut().set_freeze_bullets(true);
         m.step(&mut anm);
-        assert_eq!((m.frame, m.draw_lists[0].len()), (0, 1));
+        assert_eq!((m.clock.cur, m.draw_lists[0].len()), (0, 1));
         assert_eq!(player.borrow().stats.rec.progress, 1);
         player.borrow_mut().set_freeze_bullets(false);
         m.step(&mut anm);
-        assert_eq!((m.frame, m.draw_lists[0].len()), (1, 0));
+        assert_eq!((m.clock.cur, m.draw_lists[0].len()), (1, 0));
         assert_eq!(player.borrow().stats.rec.progress, 2);
     }
 
@@ -3019,6 +3028,41 @@ mod tests {
         assert_eq!(player.borrow().bomb_cooldown, 16);
     }
 
+    // 14 §3.1 (RE-Q54 U): only an enemy with flag A bit 6 is offered as the aimed enemy.
+    #[test]
+    fn aimed_offer_needs_shot_flag() {
+        let mut anm = AnmManager::default();
+        let (mut m, player) = empty_manager(&mut anm);
+        player.borrow_mut().pos = [192.0, 400.0, 0.0];
+        for (f, want) in [(A_ALIVE, None), (A_ALIVE | A_SHOT_HIT, Some(0))] {
+            player.borrow_mut().aimed = None;
+            let e = &mut m.enemies[0];
+            (e.flags, e.life, e.final_pos) = (f, 100, [200.0, 100.0, 0.0]);
+            m.player_collision(0, &mut anm);
+            assert_eq!(player.borrow().aimed, want);
+        }
+    }
+
+    // 11 §3.2 (RE-Q54 V): the time-rank tick follows the game-speed clock and fires once per clock value.
+    #[test]
+    fn time_rank_on_slowed_clock() {
+        let mut anm = AnmManager::default();
+        let (mut m, player) = empty_manager(&mut anm);
+        player.borrow_mut().stats.lives = 8.0;
+        anm.speed = 0.5;
+        let delta = |n: usize, m: &mut EnemyManager, anm: &mut AnmManager| {
+            for _ in 0..n {
+                m.step(anm);
+            }
+            player.borrow().stats.rank_delta
+        };
+        let r0 = player.borrow().stats.rank_delta;
+        assert_eq!(delta(960, &mut m, &mut anm), r0);
+        assert_eq!(m.clock.cur, 480);
+        assert_eq!(delta(1, &mut m, &mut anm), r0 + 100);
+        assert_eq!(delta(1, &mut m, &mut anm), r0 + 100);
+    }
+
     // Human rate (15 §2.3): counted by EnemyMgr_Calc only while its clock reads > 15; human = player +3 == 0.
     #[test]
     fn human_rate_after_clock_15() {
@@ -3036,7 +3080,7 @@ mod tests {
             m.step(&mut anm);
         }
         let r = player.borrow().stats.rec.clone();
-        assert_eq!((m.frame, r.progress, r.total, r.human), (16, 16, 0, 0));
+        assert_eq!((m.clock.cur, r.progress, r.total, r.human), (16, 16, 0, 0));
         m.step(&mut anm);
         player.borrow_mut().focus = 1;
         m.step(&mut anm);

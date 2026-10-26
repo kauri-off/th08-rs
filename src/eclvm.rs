@@ -1481,7 +1481,7 @@ impl Exec<'_> {
             spell.id,
             spell.name.len(),
             spell.bonus,
-            self.m.frame
+            self.m.clock.cur
         );
         self.m.pay_capture(self.anm, false);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
@@ -2557,6 +2557,20 @@ mod tests {
         ecl_run(&mut m, &mut anm, 0);
         let c = &m.enemies[0].main.ctx.clock;
         assert_eq!((c.cur, c.frac), (0, 0.25));
+    }
+
+    // 07 §5 (RE-Q54 Y): the step-7 boss timer and the manager clock tick at the speed set by this frame's native 18.
+    #[test]
+    fn native18_slows_same_frame_boss_timer() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[18, 4])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].pos = [192.0, 100.0, 0.0];
+        m.enemies[0].boss_timer.set(10);
+        anm.speed = 1.0;
+        m.step(&mut anm);
+        let t = m.enemies[0].boss_timer;
+        assert_eq!((t.cur, t.frac), (10, 0.25));
+        assert_eq!((m.clock.cur, m.clock.frac), (0, 0.25));
     }
 
     // 07 §5 ops 129/130/133/134 under the spell-practice guard (GameFlags bit 14 + bit 7 or 8).
