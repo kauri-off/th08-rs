@@ -48,9 +48,9 @@ if [[ ! -f $HOOK/d3d8.dll || $HOOK/hook.c -nt $HOOK/d3d8.dll || $HOOK/drawlog.in
 fi
 rmdir $SLOTS/build.lock
 
-# slot: first free of 0..9
+# slot: first free of 0..TH08_SLOTS-1 (default 10)
 slot=""
-for n in {0..9}; do mkdir $SLOTS/slot$n.lock 2>/dev/null && { slot=$n; break }; done
+for n in {0..$(( ${TH08_SLOTS:-10} - 1 ))}; do mkdir $SLOTS/slot$n.lock 2>/dev/null && { slot=$n; break }; done
 [[ -n $slot ]] || die "no free slot in $SLOTS"
 SD=$SLOTS/slot$slot PG=$SLOTS/slot$slot/game PFX=$SLOTS/slot$slot/pfx disp=:1$slot
 xvfb_pid=""

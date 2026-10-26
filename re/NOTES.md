@@ -863,3 +863,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   → OnRemove/ScoreDat_Save in the same pass; G +0x6C from flags bit 0 for any previous scene, switch in Top entry block;
   H screen-16 Bomb clears bit 0 at P+20. With A–H both sessions 0 diffs; golden/fullrun/noclip_test1/options/selftest1
   and the 22 pilots unchanged.
+
+# RE-BATCH500 (2026-10-26) — 490 third-party replays recorded in the original + port table — DONE (re/work/runs/batch500/REPORT.md)
+- Selection 490 (md5-dedup, no pilot files): full 288 (12 shots × 4 diff × 6A/6B × 3), extra 72, stage 40, spell 40,
+  tas 30 (gensokyou TAS/UTAS icons), debug tag 20. Outputs th08_ext_replays/ref500/<source>_<id>/ (20 with draw log).
+- re/tools/run_rpy_batch.sh (resumable, -j N, largest first, limit 600+size/8 s, LP_NUM_THREADS=2 = best fps/core,
+  trace unaffected); run_rpy.sh slot count TH08_SLOTS. -j 14: 10.1 h, ~83 fps per slot.
+- Original: 490/490 accepted; self-sync 472, end reached with other score 10 (9 = 6A/6B practice clear bonus, 53972
+  +11 330), ended early 8 (Ea84/Zf03 Ultra, Kt15 1.00a, Cl89, 79835, 79603, 54657, 54193).
+- Port (target/re500 = HEAD + implementer WIP eclvm/enemy at 09:08): 120 identical (all spell, 33/40 stage, 14/72 Ex,
+  only 3 full = desynced ones), 370 diverge, all in gameplay. Biggest groups: flags 0x800 stage 5 (172), rng Extra (51),
+  bullets stage 1 (29), rng 4B (24), rng 3 (15); full list groups.tsv / REPORT.md. Not analysed.
