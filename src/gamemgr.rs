@@ -505,6 +505,18 @@ pub fn set_rank_state(r: [i32; 4]) {
     RANK_STATE.set(r);
 }
 
+// Practice start power (11 §3.1): stage practice by stage, spell practice by card id.
+fn practice_power(spell: bool, stage: usize, card: i16) -> f32 {
+    match (spell, stage) {
+        (true, _) if card < 2 => 30.0,
+        (true, _) if card < 13 => 80.0,
+        (true, _) => 128.0,
+        (false, 0) => 0.0,
+        (false, 1) => 112.0,
+        _ => 128.0,
+    }
+}
+
 pub fn rank() -> i32 {
     RANK_STATE.get()[0]
 }
@@ -806,12 +818,9 @@ impl GameManager {
                     .get(stage % 9)
                     .map_or(10, |r| r[d.min(3)])
             };
+            // 11 §3.1: both inside practice (flags bit 0); bit 14 picks the spell-practice power by card id.
             if ctx.game.practice() {
-                let pw = match stage {
-                    0 => 0.0,
-                    1 => 112.0,
-                    _ => 128.0,
-                };
+                let pw = practice_power(ctx.game.spell_practice(), stage, ctx.game.card);
                 s.set_power(pw, &mut ctx.anm.rng);
             }
             // Port-only debug override.
@@ -1277,6 +1286,26 @@ fn loading_total(g: &Game, entries: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 11 §3.1: practice start power by stage, spell practice by card id.
+    #[test]
+    fn practice_start_power() {
+        let pw = |sp, st, c| practice_power(sp, st, c);
+        assert_eq!(
+            [pw(false, 0, 50), pw(false, 1, 0), pw(false, 6, 0)],
+            [0.0, 112.0, 128.0]
+        );
+        assert_eq!(
+            [
+                pw(true, 0, 1),
+                pw(true, 0, 2),
+                pw(true, 1, 12),
+                pw(true, 0, 13),
+                pw(true, 0, 221)
+            ],
+            [30.0, 80.0, 80.0, 128.0, 128.0]
+        );
+    }
 
     // 11 §4 step 5: fps < 20 runs 1 of 3, 20–29 1 of 2, 30–39 2 of 3, 40–49 5 of 6, ≥ 50 every frame.
     #[test]

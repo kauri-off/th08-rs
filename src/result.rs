@@ -116,6 +116,8 @@ pub struct ResultScreen {
     raster: crate::text::Raster,
     // Surface slot 0: result/result.jpg.
     surface: Option<TextureId>,
+    // Calc node removed (16 §2.4 exit, P+20): the draw node stays until the scene switch and draws nothing.
+    removed: bool,
     // +0x64: captured-card counts [group][character] (Result_OnRegister).
     captured: [[u32; 13]; 6],
     // Run-time seconds kept at Result+0x19C (play-data page, 16 §2.4).
@@ -194,6 +196,7 @@ impl ResultScreen {
             bar: AnmVm::default(),
             raster: Default::default(),
             surface: None,
+            removed: false,
             captured: [[0; 13]; 6],
             run_secs: 0,
             slot: 0,
@@ -1315,6 +1318,7 @@ impl Task<Ctx> for ResultScreen {
         if chain != Chain::Calc {
             return;
         }
+        self.removed = true;
         ctx.game.score.clear_new_flags();
         ctx.game.save_score(&mut ctx.anm.rng, false);
         if let Some(t) = self.surface.take() {
@@ -1329,6 +1333,11 @@ impl Task<Ctx> for ResultScreen {
         self.calc_state(ctx);
         // Session tool hook.
         ctx.game.trace_result = Some(self.state);
+        // 16 §2.4 exit: state 2 at frame > 19 returns 0 before the VMs and frame += 1, so Result_OnRemove (score.dat
+        // save, 2 RNG draws) runs in this calc pass.
+        if self.state == S_LEAVE && self.frame > 19 {
+            return Ret::Remove;
+        }
         for vm in &mut self.vms {
             vm.run(&mut ctx.anm);
         }
@@ -1339,7 +1348,7 @@ impl Task<Ctx> for ResultScreen {
     // Result_Draw 0x4586B4.
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The object is removed by the calc that requested scene 1 (16 §2.4 exit, P+20): nothing drawn then.
-        if self.state == S_LEAVE && self.frame > 20 {
+        if self.removed {
             return Ret::Next;
         }
         ctx.gfx.set_viewport(FULLSCREEN);

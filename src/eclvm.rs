@@ -876,35 +876,14 @@ impl Exec<'_> {
             return;
         }
         self.e.desc = self.decode_bullet(t, b);
-        self.fire_desc();
-    }
-
-    // Op 109 fire_stored (07 §7): fires the stored descriptor; keeps the pre-RE-Q53 filters on the stored flags.
-    // SPEC-GAP: does op 109 run the mode / no-fire filters and the rank add (IMPL121 Q1).
-    fn fire_stored(&mut self) {
-        let e = &*self.e;
-        let flags = e.desc.flags;
-        let youkai = self.m.g.player_mode != 0;
-        if (flags & 0x8000 != 0 && !youkai) || (flags & 0x10000 != 0 && youkai) {
-            return;
-        }
-        let p = self.m.g.player;
-        let dd = (e.final_pos[0] - p[0]).powi(2) + (e.final_pos[1] - p[1]).powi(2);
-        if e.nofire_r2 > 0.0 && dd < e.nofire_r2 {
-            return;
-        }
-        self.fire_desc();
-    }
-
-    // Origin and rank scaling (07 §9.1–9.2), then BulletMgr_SpawnPattern.
-    fn fire_desc(&mut self) {
-        let e = &*self.e;
-        let mut d = e.desc.clone();
-        d.origin = add3(e.final_pos, e.shot_offset);
+        let e = &mut *self.e;
+        e.desc.origin = add3(e.final_pos, e.shot_offset);
+        // Rank adjustment (07 §9.2) is written in place: op 109 re-fires the adjusted values (§9.1).
         if self.m.g.spell.is_none() {
             let rank = crate::gamemgr::rank();
             let [c1a, c1b, c2a, c2b] = e.rank_counts;
             let [s0, s1] = e.rank_speed;
+            let d = &mut e.desc;
             d.count1 = (d.count1 as i32 + lerp_i(c1a, c1b, rank)).max(1) as i16;
             d.count2 = (d.count2 as i32 + lerp_i(c2a, c2b, rank)).max(1) as i16;
             let s = lerp_f(s0, s1, rank);
@@ -914,8 +893,24 @@ impl Exec<'_> {
             // 07 §9.2: speed2's add is unconditional (the speed1 == 0 branch jumps to it).
             d.speed2 = (d.speed2 + s / 2.0).max(0.3);
         }
+        self.spawn_desc();
+    }
+
+    // Op 109 fire_stored (07 §7 row 109): origin := base pos e+0x2D34 + shot offset, then spawns the descriptor
+    // as left by the last Ecl_FireBullets; no life test, no filters, no rank add.
+    fn fire_stored(&mut self) {
+        let e = &mut *self.e;
+        e.desc.origin = add3(e.pos, e.shot_offset);
+        self.spawn_desc();
+    }
+
+    // BulletMgr_SpawnPattern on the enemy's descriptor e+0x2E24 (07 §9.3).
+    fn spawn_desc(&mut self) {
         let p = self.m.g.player;
-        self.m.bullets.borrow_mut().spawn_pattern(self.anm, &d, p);
+        self.m
+            .bullets
+            .borrow_mut()
+            .spawn_pattern(self.anm, &self.e.desc, p);
     }
 
     // Laser block (07 §9.4, 64 bytes) → laser slot[current]; +0x34/+0x38/+0x3C raw.
@@ -2721,6 +2716,36 @@ mod tests {
         let e = &m.enemies[3];
         assert_eq!((e.life, e.death_sub), (100, 1));
         assert_ne!(e.main.ctx.ip, m.ecl.subs[1]);
+    }
+
+    // 07 §7 row 109: the stored descriptor fires from base pos + shot offset with no life test, no mode / no-fire
+    // filters and no rank add.
+    #[test]
+    fn op109_fires_stored_descriptor_raw() {
+        let (mut anm, mut m) = manager(&[&[ins(0, 109, &[])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        let e = &mut m.enemies[0];
+        e.life = 0;
+        e.pos = [100.0, 50.0, 0.0];
+        e.final_pos = [300.0, 300.0, 0.0];
+        e.shot_offset = [4.0, -2.0, 0.0];
+        e.nofire_r2 = 1.0e9;
+        e.rank_counts = [5, 5, 5, 5];
+        e.desc.count1 = 3;
+        e.desc.count2 = 1;
+        e.desc.speed1 = 2.0;
+        e.desc.aim_mode = 1;
+        e.desc.flags = 0x8000;
+        ecl_run(&mut m, &mut anm, 0);
+        assert_eq!(m.enemies[0].desc.origin, [104.0, 48.0, 0.0]);
+        let b = m.bullets.borrow();
+        let live: Vec<_> = b
+            .bullets
+            .iter()
+            .filter(|x| x.state == 1)
+            .map(|x| x.pos)
+            .collect();
+        assert_eq!(live, [[104.0, 48.0, 0.1]; 3]);
     }
 
     // 07 §12 native 31: item type 3 while the player is bombing, else 5.
