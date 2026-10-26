@@ -250,9 +250,13 @@ Return dash 150 ≤ T < 180; speed 1 at T = 180. Draw as 2.11 but the rectangle 
   and freed at **t = 140** (the side rectangles keep their own area lifetimes) (changelog/answers_impl11.md §11, VERIFIED).
 - Update 0x4114E0 (shrinking square): t < 40: k = 1 − t/40; width = 88 − 2t; radius = 192 − 384k²; segments
   −= 1 per frame (44 → 4: the ring becomes a square). At t = 40: flash (3: 8, 1, 0x8FF08080);
-  s = radius·0.70711, a = angle + π/4; for each of 4 sides: c = centre + polar(a, s); D rect(c, 8s × 4·width,
-  dmg 60, life 70, period 4, rotation a + π/2); C rect(c, 4s × 4·width, item 6, life 100, same rotation);
-  a += π/2.
+  s = f32(radius · f32 0x3F3504F2) (0.70710671, 1 ulp below √2/2 — not 0.70711), a = f32(angle + π/4); for each of
+  4 sides, in this order: if a ≥ π (f32 0x40490FDB): a −= 2π (f32 0x40C90FDB) (tested at the top of every side);
+  c = centre + polar(a, s) (`Vec3_FromPolar`, 05 §10); D rect(c, 8s × 4·width, dmg 60, life 70, period 4);
+  rotation r = `Angle_AddNormalize`(a, π/2) stored in the D rect; C rect(c, 4s × 4·width, item 6, life 100,
+  rotation r); next a := r (so a stays in [−π, π]; an unwrapped a + kπ/2 gives polar() / sin/cos of −rotation a
+  few ulps off and moves the rect edges: Dn14 bullet 1017 at 271.19 vs half-length 271.1895). (VERIFIED
+  `EffUpd_YukariSquare` 0x4114E0, constant 0x4B4520, RE-Q54.)
 
 ### 2.14 Yukari LS — 境界「永夜四重結界」 (0x410FE0 / 0x4113A0), dur 250, invuln 300
 - T = 0: SE 0xD; object 0 pos = p; object-0 VMs scripts 0x15 and 0x16 (player ANM; run every frame; drawn at
@@ -263,9 +267,9 @@ Return dash 150 ≤ T < 180; speed 1 at T = 180. Draw as 2.11 but the rectangle 
   turns slot 4 into script **88** (life 140, QUIRK: not 0x5C) while slots 5–7 get 0x5D–0x5F (etama entry 2
   scripts 17–19: alpha 0 → 255 over 20, at t = 160 → 0 over 60, freed at **t = 220**). The update never frees
   (changelog/answers_impl11.md §11, VERIFIED).
-- Update 0x4117B0: angle += −π/80 (even slot) / +π/80 (odd) every frame; t < 50: k = 1 − t/50, width =
+- Update 0x4117B0: angle := `Angle_AddNormalize`(angle, −π/80 (even slot) / +π/80 (odd); f32 0xBD20D97C / 0x3D20D97C) every frame, first thing (also at t ≥ 50); t < 50: k = 1 − t/50, width =
   88 − 80t/50, radius = (slot − 4)·32 + 192 − ((slot − 4)·32 + 384)·k², segments −= 1; at t = 50: shake
-  (1: 16, 8, 0), flash (3: 8, 1, 0x8F6060F0), four side rectangles as 2.13 with D dmg 60 life 100 period 2,
+  (1: 16, 8, 0), flash (3: 8, 1, 0x8F6060F0), four side rectangles as 2.13 (same s constant, side wrap and rotation chain; VERIFIED 0x4117B0, RE-Q54) with D dmg 60 life 100 period 2,
   C life 150.
 - Draw: tint 0x802020D0, then the two object-0 VMs (Draw2DRot).
 
@@ -274,8 +278,13 @@ Return dash 150 ≤ T < 180; speed 1 at T = 180. Draw as 2.11 but the rectangle 
   centre = p (fixed), radius (+0x1A0) 0; group (VM script, angular speed, radial speed): (0x12, +π/240, 2),
   (0x13, −π/240, 2), (0x12, +π/200, 1.5), (0x13, −π/200, 1.5); each with D circle(r 24, dmg 50, life 500,
   max 800) and C circle(r 24, life 500). Speed multipliers 0.8; effect 20 at p; SE 5; shake (1: 120, 12, 0).
-- Every frame: radius += radial speed; angle += angular speed; pos = centre + polar(angle, radius);
-  displacement kept; radius < 500: areas follow, VM run (VM end → freed, areas off); radius ≥ 500 → freed.
+- Every frame: radius += radial speed; angle := `Angle_AddNormalize`(angle, angular speed) (wrapped, not a
+  plain sum); pos = centre + polar(angle, radius); displacement kept; radius < 500: areas follow, VM run (VM end →
+  freed, areas off); radius ≥ 500 → freed **and both areas off** (active byte +0x3C := 0 through the object's D/C
+  area pointers, which are not cleared). (VERIFIED `Bomb_Yuyuko` 0x413140 / `Bomb_YuyukoLS` 0x413990, RE-Q54.) Areas
+  left on keep their slots, so later areas (`Player_AddCancelCircle` takes the first free slot) land in higher slots
+  and `Player_InBombArea` (first hit in slot order) returns another area's item (50715: item 6 instead of a time
+  orb's 7).
 - Draw: objects 0–95, rotation z = atan2(displacement).
 
 ### 2.16 Yuyuko LS — 死蝶「華胥の永眠」 (0x413990 / 0x4142C0), dur 300, invuln 350
@@ -341,7 +350,10 @@ option chases the **final** position, while Yukari's aimed shots (shot init 1, 0
 leaves to sub 0 (interrupt 1, aimed := 0) when not shooting and the shot button is released, or no enemy.
 Aimed enemy (player +0xE2ABC = 0x18B89B4, VERIFIED, changelog/answers_impl11.md §12): a persistent pointer, never re-picked
 from scratch. Each frame `EnemyMgr_Calc`, for every live enemy with flag A bits 4, 5, 11 clear and (bit 31 clear
-or not bombing), replaces it when |enemy final x − p.x| < 64 and the enemy has no parent (+0x2DA4 = 0) and
+or not bombing) **and flag A bit 6 set** (the update sits inside step 6's "collides with shots" branch, after both
+damage calls and the homing-target pick, 07 §10.1 step 6; VERIFIED 0x42D46A, RE-Q54: an intangible boss — flag A
+bit 6 cleared during a declaration — is never offered, so Yukari's option drops it and returns to the player;
+Dn14 row 20208), replaces it when |enemy final x − p.x| < 64 and the enemy has no parent (+0x2DA4 = 0) and
 (pointer = 0 or enemy **final** y (+0x2D8C) < aimed enemy's **base** y (+0x2D38); mixed fields, QUIRK). It is
 cleared only when the aimed enemy's slot is found inactive or freed (`Enemy_Free`), or by the option itself
 (sub-states 0–2 when not attacking, leaving sub 3). So in sub-state 3 Yukari keeps chasing the same enemy

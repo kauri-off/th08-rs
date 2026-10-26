@@ -288,7 +288,7 @@ rank = RANK[d].init, min, max (table 0x4C7880: E/N 10, 8, 16; H/L 8, 8, 12; Extr
   (rank changes: RankAdd/RankSub 0x43BFC3/0x43C03F via sub-counter GM+0x3DE38, ±1 rank per 100,
    clamped — RankAdd only to max, RankSub only to min (VERIFIED RE-Q29; the same as a two-sided clamp while rank is in range); deltas: power item +1, point item +3 if v < max else +10, bomb item +5, graze +6, extend +200, item fell off
    the bottom −3, bomb −200, death −1600; +100 every 2400 − 240·lives frames of the enemy-manager clock outside
-   dialogue, 0x42C3B0 — called at the **start** of `EnemyMgr_Calc` (inside the bit-10 gate, right after the op-176
+   dialogue (`EnemyMgr_TimeRank` 0x42C3B0, VERIFIED RE-Q54: the clock +0x9DCED0 is a `Timer` ticked by `Timer_Tick` at the end of `EnemyMgr_Calc`, i.e. at **game speed** (g_GameSpeed, native 18 slowdowns make it advance by fractions); the test is `cur ≠ prev` (`FUN_0040D3D0`) **and** `cur % (2400 − 240·lives) == 0` (signed int, lives = `GameMgr_GetLives`); the timer is zero-filled at construction, prev = cur = 0, so frame 0 does not fire. A plain frame counter fires early after a slowdown — Dn14 row 22098, 0x42C3B0 — called at the **start** of `EnemyMgr_Calc` (inside the bit-10 gate, right after the op-176
    box, before the timelines and the slot loop: enemies firing in that frame already see the new rank; 07 §10.1
    step 1; the test is enemy-manager timer +0x9DCED0 advanced this frame and timer % period == 0; VERIFIED call
    0x42C77E, RE-Q30, fullrun_noclip poll 51632))

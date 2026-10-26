@@ -187,6 +187,7 @@ static void sess_scan(int pass) {
             g_poll_n, pass, U32(G_GMFRAME), U16(G_RNG), g_rng_calls, U32(0x17D61AC), U32(0x17D61B0), U8(P), U8(P + 3), U8(P + 5),
             (int)U32(P + 0xFDC), (int)U32(P + 0xFE4), (int)U32(P + 0xE2A7C), (int)U32(0x18B89BC + 8), aslot, U32(P + 0xE2AA4), U32(P + 0xE2AA8), (int)U32(P + 0xE2AC0),
             st >= 0x10000 ? U32(st + 0x98) : 0, U32(G_BULLETS));
+    if (getenv("TH08_SCANRANK")) { fprintf(o, "K mclk %d rank %d sub %d min %d max %d graze %d\n", (int)U32(0xF54DF8), (int)U32(0x164D334), (int)U32(0x164D340), (int)U32(0x164D338), (int)U32(0x164D33C), (int)U32(st >= 0x10000 ? st + 0x0C : 0x164D334)); if (getenv("TH08_SCANRANK_ONLY")) { fflush(o); return; } }  /* RE-Q54 */
     if (getenv("TH08_SCANEFF")) {  /* RE-Q52 (from q33): effect ring cursor + live slots slot:type:age */
         uint32_t M = 0x4ECE60;
         fprintf(o, "R %u", U32(M));
@@ -224,6 +225,14 @@ static void sess_scan(int pass) {
                 U32(e + 0x2D88), U32(e + 0x2D8C), U32(e + 0x2D34), U32(e + 0x2D38), U32(e + 0x2D70), U32(e + 0x2D74), (int)U32(e + 0x2DFC), (int)U32(e + 0x3304),
                 (int)U32(e + 0x2E14 + 8), U32(e + 0x2DA4), (int)U32(e + 0x2DF8), (int)U32(e + 0x2E10), (int)U32(0x18B8A24));  /* RE-Q53: time-orb acc */
         { uint32_t spr = U32(e + 0x230); fprintf(o, "S %d spr %08x %08x\n", j, spr ? U32(spr + 0x34) : 0, spr ? U32(spr + 0x30) : 0); }
+        if (getenv("TH08_SCANECL")) {  /* RE-Q54: main ctx sub/ip/clock, ctx ints 10000-07 / 10036-39, chain links */
+            uint32_t c = e + 0x7F8, subs = U32(0x4ECCB8 + 4); int sub = (int16_t)U16(c + 0x224);
+            fprintf(o, "C %d sub %d ip %x clk %d dsub %d chain %08x %08x nch %d iv", j, sub, (sub >= 0 && subs) ? U32(c) - U32(subs + sub * 4) : U32(c),
+                    (int)U32(c + 4 + 8), (int16_t)U16(e + 0x2CEE), U32(e + 4), U32(e + 8), (int)U32(e + 0x3380));
+            for (int q = 0; q < 8; q++) fprintf(o, " %d", (int)U32(c + 0x18 + q * 4));
+            for (int q = 16; q < 20; q++) fprintf(o, " %d", (int)U32(c + 0x18 + q * 4));
+            fprintf(o, "\n");
+        }
     }
     for (int j = 0; j < 384; j++) {
         uint32_t a = P + 0xB8834 + j * 0x40;

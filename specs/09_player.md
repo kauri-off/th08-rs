@@ -388,8 +388,10 @@ bit 17 cleared (the colour2 silhouette of §6.1 off); deathbomb ring effect +0xE
 (effect ends) and the pointer := 0; GameFlags bit 10 cleared (bullets unfrozen); **`AnmMgr_TintOff`** 0x40BAB0
 (AnmManager+4 := 0, tint colour 0x80808080; 06 §10.2); then index = focus; if +4 (last
 spell) index = 1 − focus; no last spell: bombs −= 1 (counter 0x164CFA8); last spell: index += 2, uses all bombs
-if forced or bombs < 2 (count kept in +0xFEC, bombs := 0) else 2 bombs; counter 0x164CFAC; game-manager
-0x44E2E0(1). Special mode: index 4. Then +4 := 0; bombing := 1; +0xE2A7C := 1; timer 0; duration := 999 (the bomb
+if forced or bombs < 2 (count kept in +0xFEC, bombs := 0 via `GameMgr_SetBombs` 0x406F30 — **no RNG**, it only
+refreshes the checksum copy fields) else 2 bombs (+0xFEC := 2, `GameMgr_AddBombs`(−2) 0x439883 → `UpdateChecksum`,
+4 draws); the no-last-spell path also uses `AddBombs`(−1) (4 draws); counter 0x164CFAC; game-manager
+0x44E2E0(1) (`GameMgr_AddBombCount`: stats +0x84/+0x88 += 1, checksum, 4 draws) (VERIFIED 0x44C650, RE-Q54). Special mode: index 4. Then +4 := 0; bombing := 1; +0xE2A7C := 1; timer 0; duration := 999 (the bomb
 function sets the real value on its first frame via 0x40BE30); bomb calc fn runs immediately; **rank −200**;
 spell manager notified; counter += 6 (cap sht +8).
 Each frame while bombing: if timer < duration: bomb calc fn, tick. Else end: spell manager notified, speed

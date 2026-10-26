@@ -840,3 +840,16 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   port reads last frame's env.spell. 09 §2.1 hit 1.
 - Scratch re/work/runs/q53/portcopy (target/re53), q53_scratch.diff. fixN all 22: 7 still 0 diffs, 12 moved, 3 unchanged
   (53373 50932, 80406 76752, 88234 62194). Probe E lines now carry acc/step; TH08_RNGSITE file lands in the slot game dir.
+
+# RE-Q54 (2026-10-26) — replay pilot: next earliest divergences after K–N — DONE (specs/changelog/answers_re_q54.md)
+- 14 causes O–AB, all CODE BUG (re/work/runs/q54/CHECKPOINT.md, q54_scratch.diff). With H–AB the scratch port replays
+  **all 22 pilot sessions with 0 differing rows** (fixAB); golden / fullrun_noclip / noclip_test1 / options_cfg /
+  selftest1 still 0; gameover_save 4215 and musicroom_practice 3506 differ as before (pre-existing, not analysed).
+- Recurring themes: angle wrap (`Angle_AddNormalize`) and f32 evaluation order (O Yukari sides, R Yuyuko, AB fan
+  angles (k + aim) + a1); timers read at game speed / live (T g_Gui+0x108 remaining card time = var 10100, V manager
+  clock for time rank, Y step-7 boss timer after a slowdown started in Ecl_Run, Z invuln timer Set(0)); live global
+  flags (AA shake freeze, W effects linked before a fast-forward restart); missing gates (Q spawn needs life > 0,
+  U aimed update only with flag A bit 6); replay route byte +0x11C (S); native 2 bounce without direction tests (X);
+  last-spell SetBombs no RNG (P).
+- Probe: `TH08_SCANECL` (C lines: ctx sub/ip/clock/ivars/chain), `TH08_SCANRANK[_ONLY]` (K lines: mgr clock 0xF54DF8,
+  rank, sub-counter). Original self-replays all 0 differ except one run of 53373 (1 row, not reproduced/needed).

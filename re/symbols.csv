@@ -815,3 +815,8 @@ addr,kind,name,signature,confidence,note
 0x004178a0,func,Gui_IsCardActive,,VERIFIED,g_Gui spell flag bit 0
 0x00421ba0,func,GameMgr_RankLerpI,,VERIFIED,a + ((b-a)*rank)/32 (int, trunc)
 0x00422b80,func,GameMgr_RankLerpF,,VERIFIED,a + ((b-a)*rank)/32 (float)
+0x0041fdd0,func,Gui_GetSpellTimeLeft,,VERIFIED,Timer_Get(g_Gui+0x108) remaining card time; ECL var 10100 (RE-Q54)
+0x0045bdc0,func,ScreenEffect_CalcShake,,VERIFIED,type 1 shake calc (13 §3)
+0x0045bf10,func,ScreenEffect_CalcShakeEnv,,VERIFIED,type 7 shake envelope calc; bit 10 / 0x160F534 tested live (RE-Q54)
+0x0040d3d0,func,Timer_Changed,,VERIFIED,cur (+8) != prev (+0)
+0x0040d410,func,Timer_Mod,,VERIFIED,cur % n
