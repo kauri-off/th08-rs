@@ -231,6 +231,9 @@ static void sess_scan(int pass) {
                 U32(e + 0x2D88), U32(e + 0x2D8C), U32(e + 0x2D34), U32(e + 0x2D38), U32(e + 0x2D70), U32(e + 0x2D74), (int)U32(e + 0x2DFC), (int)U32(e + 0x3304),
                 (int)U32(e + 0x2E14 + 8), U32(e + 0x2DA4), (int)U32(e + 0x2DF8), (int)U32(e + 0x2E10), (int)U32(0x18B8A24));  /* RE-Q53: time-orb acc */
         { uint32_t spr = U32(e + 0x230); fprintf(o, "S %d spr %08x %08x\n", j, spr ? U32(spr + 0x34) : 0, spr ? U32(spr + 0x30) : 0); }
+        if (getenv("TH08_SCANORB"))  /* RE-Q57: mode-3 orbit angle/av/radius/rv, centre, vel, game speed */
+            fprintf(o, "M %d ang %08x av %08x r %08x rv %08x c %08x %08x vel %08x %08x gs %08x mm %08x\n", j, U32(e + 0x2D9C), U32(e + 0x2DA0), U32(e + 0x2DB0), U32(e + 0x2DB4),
+                    U32(e + 0x2DD0), U32(e + 0x2DD4), U32(e + 0x2D4C), U32(e + 0x2D50), U32(0x17CE8E0), U32(e + 0x3324));
         if (getenv("TH08_SCANECL")) {  /* RE-Q54: main ctx sub/ip/clock, ctx ints 10000-07 / 10036-39, chain links */
             uint32_t c = e + 0x7F8, subs = U32(0x4ECCB8 + 4); int sub = (int16_t)U16(c + 0x224);
             fprintf(o, "C %d sub %d ip %x clk %d dsub %d chain %08x %08x nch %d iv", j, sub, (sub >= 0 && subs) ? U32(c) - U32(subs + sub * 4) : U32(c),

@@ -229,9 +229,13 @@ side > 0 and gauge ≥ youkai max.
 ### 4.4 Player bullet update (0x451150, skipped when 0x164D0B4 bit 10)
 For each non-free bullet: update fn (if any) returning ≠ 0 → free. Else pos += vel × gs; unless types 4/5:
 off-screen (sprite box, 08 §4.3) → free; run VM, free when it ends; tick timer.
-Homing (update 1): while state 1, a target exists (x > −100), timer ≤ 39 and the timer advanced: d = target −
-pos; k = max(1, |d| / (speed/4)); v' = v + d/k; speed = clamp(|v'|, 1, 10); v = v'·speed/|v'|. Otherwise if
-speed < 10: speed += 1/3 and v rescaled. angle = atan2(v) every frame.
+Homing (update 1, 0x450320; VERIFIED disasm 0x450320–0x450563, RE-Q57 AM). Everything except the angle runs only
+while state == 1 (flying); in state 2 (hit animation) neither the steering nor the speed-up runs.
+- state 1, a target exists (x > −100), timer ≤ 39 and the timer advanced: d = target − pos; k = max(1, |d| /
+  (speed/4)); v' = v + d/k; speed = clamp(|v'|, 1, 10); v = v'·speed/|v'|.
+- state 1, otherwise, if speed < 10: speed += 1/3, then v = v·speed / sqrt(vx² + vy²) — the divisor is the
+  current |v| (computed after the speed write), not the old speed field.
+- every state: angle = atan2(vy, vx).
 
 ### 4.5 Damage dealt to enemies (`Player_DamageAgainst` 0x451670)
 Called by the enemy manager with an enemy box (pos, size), an accumulator (the boss time-orb counter) and an
@@ -283,7 +287,7 @@ set when focusing and lose it (state 3) when unfocusing; team 3 (Youmu & Yuyuko)
 | shot | options |
 |---|---|
 | 0, 5 (Yukari) | 1 × 0x44E3A0: appears above the player (y − C, min 32), follows / attacks the aimed enemy (helpers 0x44E770 / 0x44E8D0) |
-| 1, 7 (Alice) | 1 × 0x44EA40: at (player.x, player.y − 32), stays put while bombing |
+| 1, 7 (Alice) | 1 × 0x44EA40: at (player.x, player.y − 32), stays put while bombing; created while bombing she stays at (0, 0) until the bomb ends (14 §3) |
 | 2 (team, Remilia) | 4 × 0x44EB70: anchor fixed at spawn: (−30,−16), (−10,−32), (+10,−32), (+30,−16) from the player; after 12 frames angle += +π/120, −π/90, +π/90, −π/120 per frame; pos = anchor + polar(angle, 8) |
 | 9 (Remilia solo) | 4 × 0x44EE70 (not detailed) |
 | 3, 11 (Yuyuko) | 2 × 0x44F930: anchor += (target − anchor) × 0.09 with target = player ∓ (32, 0); angle ±π/60 per frame (start 0 / −π); pos = anchor + polar(angle, 6); effect 0x2F every frame |

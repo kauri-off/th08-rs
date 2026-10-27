@@ -705,6 +705,14 @@ Only while flags bit 2, not slow mode (gameplay config copy `*(GM+4)` +0x25, VER
   - QUIRK: playback reads byte q+1, so it shows the sample one step ahead (and the first byte is never read). The record's overlapping two-byte writes make the stream one byte longer than the sample count. Reproduce it exactly if bit-exact display matters.
 - `frame += 1`.
 
+No bound check (QUIRK, VERIFIED 0x452550 and `Replay_PlayStageLoad`, RE-Q57 AP): p starts at the stage record +
+0x24 inside the decompressed image (§3.5) and only ever advances, so when playback runs more frames than were
+recorded (e.g. 3× dialogue restarts after the stage-5 boss, or any other extra passes) the reads continue into the
+image bytes after the stage's input words — taken as little-endian u16 in order (the rest of this stage's data,
+then the next stage's record header: in 54320 stage 5 the words 0x0105, 0x05BD, 0x0470 are stage 6's +0 / +4).
+These words are real inputs (shot, bomb, movement…), not 0. Past the end of the image the heap content is
+undefined (a port may use 0). The fps-byte pointer q has no bound check either (display only).
+
 Frames during the stage-clear bonus (bit 9) are not read. The ≤ 3 frames recorded there sit after the frames used and are harmless.
 
 Playback speed byte 0x164D0BD (chosen in the replay menu, §3.8):

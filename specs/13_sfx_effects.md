@@ -283,6 +283,8 @@ Types 51 and 63 also set:
 
 #### Per frame (all three)
 
+World (+0x2D4) and pos (+0x2A4) are separate fields; pos is overwritten from world every frame, so an outside
+write to +0x2A4 (Sakuya bomb follow, 14 §2.7) has no effect on these types (VERIFIED RE-Q57 AO).
 ```
 v += a
 world += v

@@ -338,7 +338,7 @@ when (tail < 16 or speed == 0) and (+0x599 == 0 or state ≠ 0); emitter scale =
 - `BulletMgr_CancelAll(mode)` 0x430830 (mode 1 via 0x415C60 = ECL op 112, item collection etc.): every bullet
   not free and not in state 5: `Player_InBombArea` is called **twice** (first result discarded; a hit counts 2 on
   the area's hit counter, 09 §8); if the second call hits → `ItemMgr_Spawn`(pos, **raw** player+0xE2A90, mode 1) —
-  no 9 → two time orbs / −1 → none mapping as in §4.1 (a type-9 cancel circle, e.g. `Enemy_KillChildren`, gives one
+  no 9 → two time orbs / −1 → none mapping as in §4.1 (−1 spawns a type-0xFF item, §8.3; a type-9 cancel circle, e.g. `Enemy_KillChildren`, gives one
   type-9 item: mode 1, no RNG, no collection effect) — and the slot is zeroed;
   else if mode == 4 → state 5; else item type 6 (mgr+0x6BA570) with item mode = `mode`, slot zeroed. Lasers
   (alive, and flag bit 2 clear unless mode 4): if state < 2: state 2, timer 0, width (+0x564) := current width (+0x568) so the fade shrinks from the current size; unless mode 4,
@@ -395,6 +395,7 @@ Item object: +0 AnmVm; +0x2A4 pos[3]; +0x2B0 vel[3] (mode 2: start pos); +0x2BC 
 | 7 | time orb | §8.5 |
 | 8 | converted point | point value / 10 |
 | 10 | (spawn alias) | spawned as type 7 with mode 5 |
+| −1 (byte 0xFF) | "none" from a cancel area (§8.3) | nothing: no case in the switch; only the stats bit, the sound choice 0x15 and the free |
 
 ### 8.3 Spawn `ItemMgr_Spawn(pos, type, mode)`
 - pos.x < −64 or > 448 → nothing (dummy).
@@ -406,6 +407,14 @@ Item object: +0 AnmVm; +0x2A4 pos[3]; +0x2B0 vel[3] (mode 2: start pos); +0x2BC 
   - mode 3 / 5: vel.y = −2 − Rng_Float·0.2; vel.x = 0.6 · (Next32/2³¹ − 1) (RNG in that order); if the player
     state is 2: state 0, vel = (0, −0.9, 0).
 - VM: script 0x3D + type, colour 0xFFFFFFFF, flag 0x2000; max-value flag 0; normal-sprite flag 1; appended.
+- **No type check** (VERIFIED 0x4400A0 disasm, RE-Q57 Q1): a negative type is spawned like any other. Type −1
+  (the raw bomb-area item of an area with item −1, e.g. the post-respawn clear rectangle 09 §6.3, passed by the
+  cancels of §7) takes a slot from the normal search, stores type byte 0xFF, uses the given mode (1 for the cancels:
+  no RNG) and VM script −1 + 0x3D = **0x3C** (int add at 0x4403BC; etama.anm script 0x3C = sprite 193, additive,
+  alpha 0 → 96 and scale 5 → 0.4 over 10 frames, then `hide_stop`). The item then lives like any item: attracted,
+  collected with no effect (§8.2), or falls out (rank −3). The draw uses the type byte **sign-extended**
+  (`movsx` at 0x441644 / 0x4416F4): arrow sprite 0xB5, normal sprite 0xAB (whether a hidden VM shows them is
+  INFERRED not to matter: display only). The occupied slot shifts the item slot layout (type-7 one-slot probe).
 
 Spawners: enemy drops (07 §10.4; mode 0, or 1 when the drop is "auto-collected"), random power/point extras
 (offset Rng·128 − 64 on x then y; type 0 if power < 128 else 1; extra point items type 1; mode 0), bullet
@@ -467,7 +476,7 @@ two collects = 4 + 4 + 4 = 12 draws), if no
   else 99999. Counter 0x164CF9C += 1.
 - **Converted point (8)**: like point but with max/10 and v/10 each rounded down to a multiple of 10, no counters,
   no rank.
-- **Bomb (3)**: if bombs < 8: bombs += 1, HUD.
+- **Bomb (3)**: if bombs < 8: bombs += 1, HUD; then rank +5 always (VERIFIED `ItemMgr_Calc` case 3, RE-Q57).
 - **Full power (4)**: if power < 128: cancel to items (**unconditionally**, no spell-card test), HUD message 1 (`Hud_ShowMessage(0, 1)`, VERIFIED `ItemMgr_Calc` case 4, RE-Q33), sound 0x1F,
   popup, convert items. Always (even when already at 128): power := 128 via `GameMgr_SetPower` (checksum, 4 RNG
   draws), AddScore(1000), popup 1000.

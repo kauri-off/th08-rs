@@ -888,3 +888,16 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   (16 §2.1 "Initial state"); state 10 → 11 keeps the frame counter (16 §2.6).
 - Result: 180/208 diverging non-flags-0x800 replays identical (Ex 53/53, s1 27/28, 6A gauge 22/22, 6B 9/9, 6A rng
   14/14). Open: fixAL_left.tsv (28, incl. 54656 r72127).
+
+# RE-Q57 (2026-10-27) — batch500 leftovers after AC–AL (specs/changelog/answers_re_q57.md)
+- Runs re/work/runs/q57 (CHECKPOINT.md; scratch portcopy = q56 portcopy + AM–AP, target/re57; prun.sh, pbatch.sh;
+  bcmp.py / icmp.py / eb2.py; probe TH08_SCANORB in re/probe/session.inc).
+- AM homing update 1 (0x450320): steering + speed-up only in state 1, rescale by current |v| (09 §4.4).
+- AN Option_Alice init falls through to the not-bombing pos write; created while bombing → stays (0,0) (14 §3).
+- AO Sakuya bomb T ≤ 60 writes p into +0x2A4 of the saved (possibly reused) effect slot; 3D particles 19/51/63
+  recompute pos from world +0x2D4 → no effect on them (14 §2.7, 13 §2.6a).
+- AP Replay_PlayCalc has no bound check: past the stream it reads the following image words (15 §3.3).
+- IMPL130 Q1: ItemMgr_Spawn type −1 → item byte 0xFF, script 0x3C, no collect effect (08 §8.3). Side: bomb item
+  rank +5 (08 §8.5); AddScore has no cap (11 §5) — likely udKa49 r120959.
+- Result: 19/28 identical, ok set 160/160. Open (9): 51477 (st3), 54656 / udPn85 / 51759 (4A), udCs13 / 52339 /
+  54010 / 79317 (4B), udKa49 (6B score cap, unverified).

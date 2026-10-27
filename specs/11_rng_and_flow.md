@@ -492,7 +492,7 @@ checksum; otherwise time += n, **time_parity +0x44 += n for every n, negative on
 checksum (4 draws), and for n > 0 `max_point_value += ((n + (time_parity & 1)) / 2) · 10` using the updated parity.
 So the −15 per frame of a death-bomb window and the death penalty change the parity too: attract demo 1 frames
 3844–3854 (11 × −15) flip it, and the point items at 3870 (and demo 2 at 3082) depend on it; VERIFIED 0x418220, RE-Q27), AddScore 0x4181F0
-(`score += n/10`), Extend 0x439B29 (lives < 8 → +1 life else bombs < 8 → +1 bomb; sfx 0x1C; rank +200).
+(`score += n/10`, signed int division, **no cap**: the 999 999 999 cap is only the GM calc step 9 and the GM unregister, §4; VERIFIED 0x4181F0, RE-Q57), Extend 0x439B29 (lives < 8 → +1 life else bombs < 8 → +1 bomb; sfx 0x1C; rank +200).
 A reimplementation can drop all decoys/checksums **but must still consume the RNG** exactly where
 `UpdateChecksum` / `ScrambleDecoys` run.
 

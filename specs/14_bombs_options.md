@@ -167,8 +167,13 @@ T % 10 == 0: ring effect 0x35 at p in fixed slot 4 + (n % 4) (n = counter +0xFF0
 alpha 0.)
 
 ### 2.7 Sakuya — 幻符「殺人ドール」 (0x40FCD0 / 0x410300), dur 250, invuln 290
-- T = 0: knives (objects 0–95) state 0; speed multipliers 0.5; effect 20 at p (kept; follows p while T ≤ 60);
+- T = 0: knives (objects 0–95) state 0; speed multipliers 0.5; effect 20 at p, its pointer saved (bomb +0x1724);
   SE 5.
+- 0 ≤ T ≤ 60: effect +0x2A4..+0x2AC (pos) := p through the saved pointer, with **no alive/type check** (QUIRK).
+  Effect 20 ends at age 39, so from then on the write hits whatever reuses that slot: a 2D effect gets its pos
+  moved to p; the 3D particles 19/51/63 are unaffected because their update recomputes +0x2A4 from the world
+  position +0x2D4 every frame (13 §2.6a) — the write must not reach their world position (VERIFIED 0x40FCD0 and
+  0x4103F0, RE-Q57 AO: 54691 stage 4, a type-51 particle in the old effect-20 slot).
 - 20 ≤ T < 116, every frame: SE 6 and shake (1: 120, 4, 1). For each knife k in index order: at T =
   (k % 48)·2 + 20: if the knife is already active the whole function **returns** for this frame (QUIRK);
   else activate: VM script 0x16; angle = k·2π/96 − π; speed (+0xC) = R + 0.5; accel (+8) = R·0.1 + 0.03;
@@ -186,7 +191,7 @@ alpha 0.)
 
 ### 2.8 Sakuya LS — 幻葬「夜霧の幻影殺人鬼」 (0x4103F0 / 0x410AC0), dur 320, invuln 350
 As 2.7 but 128 knives; shake (1: 50, 4, 1) only once at T = 0 (SE 6 is still played every window frame that
-does not return early; effect 20 at p is kept and follows p while T ≤ 60 as in 2.7); window 20 ≤ T < 148; knife k at
+does not return early; effect 20 at p and the unchecked pos write while T ≤ 60 as in 2.7); window 20 ≤ T < 148; knife k at
 T = (k % 64)·2 + 20 with angle = wrap(k·2π/64 − π) and VM script 0x14; damage 30; at age 70 additionally
 effect 0x2E (ring: radius +8/frame, 12 segments, width 32; script 84: alpha 255, from t = 8 → 0 over 7,
 `hide_stop` at 23 → freed after 23 frames; the update never frees it) at the knife; on hit: every knife with k % 3 == 0
@@ -327,7 +332,7 @@ state 3 and team 3 slot 2 becomes 0x44F2D0 (trail reset to p).
 | fn | used by | behaviour |
 |---|---|---|
 | 0x44E3A0 | Yukari (shot 0 focused, 5) | §3.1 |
-| 0x44EA40 | Alice (shot 1 focused, 7) | init: script 0x1D. Each frame while not bombing: pos = p − (0, 32) (bombs move it, §2.3). Leaving: pos = p − (0, 32) |
+| 0x44EA40 | Alice (shot 1 focused, 7) | init (state 1): script 0x1D, state 2, then falls through to the state-2 code. State 2 (also the init call): only while not bombing (player +0xFDC == 0): pos = p − (0, 32) (bombs move it, §2.3). Leaving: pos = p − (0, 32). The slot is zeroed (0xBD dwords) by `Player_Move` before init, so an Alice created while a bomb runs (e.g. focusing during a bomb or a respawn with the bomb still active) keeps pos = (0, 0, 0) until the bomb ends; her laser (update 5) follows that pos (VERIFIED 0x44EA40 + `Player_Move` slot clear, RE-Q57 AN) |
 | 0x44EB70 | Remilia team ×4 | init: script 0x18; anchor = p + offset with the solo offsets (0 (−30, −16), 1 (−10, −32), 2 (+10, −32), 3 (+30, −16)), then **fixed**; orbit angle 0, π, 0, π. Each frame: option timer (+0x2E0 current) **> 12** → orbit := `Angle_AddNormalize`(orbit, +π/120, −π/90, +π/90, −π/120 by index) (wrapped to [−π, π], 05 §6.3); pos = anchor + polar(orbit, 8). The timer is ticked after the calc fn and the VM run (09 §5) and the init call (state 1 → 2) also runs the orbit step with t = 0, so the first rotation happens on the 14th calc of the option (t = 13); SPEC FIXED RE-Q27 (`Timer_Greater`(t, 12) 0x44EB70; was "≥ 12"; attract demo 3: the original's options rotate from frame 1590, one frame after the old rule). No colour change, **no effect 0x2F** (changelog/answers_impl11.md §9, VERIFIED) |
 | 0x44EE70 | Remilia solo ×4 | §3.2 |
 | 0x44F930 | Yuyuko ×2 (shot 3 focused, 11) | init: script 0x15; anchor = p; orbit 0 (index 0) / −π (index 1). Each frame: target = p − (32, 0) (index 0, orbit := `Angle_AddNormalize`(orbit, π/60)) or p + (32, 0) (index 1, `Angle_AddNormalize`(orbit, −π/60)); anchor += (target − anchor)·0.09; pos = anchor + polar(orbit, 6), z 0; effect 0x2F at pos, colour **0x80602050**, every frame (changelog/answers_impl11.md §9, VERIFIED) |
