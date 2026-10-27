@@ -709,6 +709,9 @@ pub struct Globals {
     // Spell flag bit 6 (op 164: the start ring stops following the boss) and bit 11 (op 184: bonus frozen), 07 §11.1.
     pub spell_flag6: bool,
     pub bonus_frozen: bool,
+    // g_Gui +4 boss pointer (enemy slot): set by Spell_Start, kept after a silent end (step 1.1), cleared by the
+    // Spell_End tail (07 §11.1).
+    pub spell_boss: Option<usize>,
     // Spell flag bit 9 "captured" (07 §11.1); read by the continue menu default (12 §4).
     pub spell_captured: bool,
     // Port: op 148 argument, HUD requests (ops 148/179–181) handled by the HUD, unimplemented-op counter.
@@ -1613,9 +1616,20 @@ impl EnemyManager {
     pub fn finish_spell(&mut self, anm: &mut AnmManager) {
         // 0x4E3D28 (darkness mask alpha) := 0 first, every call; then, with the card active, Spell_HideName.
         crate::ascii::clear_darkness();
+        self.end_active_spell(anm);
+        // Tail of every op 123 (07 §11.1, RE-Q56): after the time-reward test, the boss loses flag A bit 27,
+        // g_Gui +4 := 0, spell flag bit 11 := 0.
+        if let Some(b) = self.g.spell_boss.take() {
+            self.enemies[b].flags &= !A_FIXED_BONUS;
+            self.g.fixed_bonus = false;
+        }
+        self.g.bonus_frozen = false;
+    }
+
+    // Card-active block of Spell_End 0x4161B0 (07 §11.1).
+    fn end_active_spell(&mut self, anm: &mut AnmManager) {
         let Some(s) = self.g.spell.take() else { return };
         crate::gui::request(crate::gui::Req::BossHide);
-        self.g.bonus_frozen = false;
         // Time reward from +0x114 and the remaining-time timer +0x108 (07 §11.1).
         let (total, remaining) = (s.duration, self.g.spell_remaining.cur);
         crate::sound::play(crate::sound::TAN00_LOUD);
@@ -3007,6 +3021,22 @@ mod tests {
             assert_eq!(e.orb_acc - acc0, if bit13 { 10 } else { 0 });
             assert_eq!(e.life, 1000);
         }
+    }
+
+    // 07 §11.1 tail of every op 123 (RE-Q56): the card's boss loses flag A bit 27, g_Gui +4 and bit 11 := 0,
+    // also after a silent end (no card active).
+    #[test]
+    fn spell_end_tail_clears_fixed_bonus() {
+        let mut anm = AnmManager::default();
+        let (mut m, _player) = empty_manager(&mut anm);
+        m.enemies[2].flags |= A_FIXED_BONUS;
+        m.g.spell_boss = Some(2);
+        m.g.fixed_bonus = true;
+        m.g.bonus_frozen = true;
+        m.finish_spell(&mut anm);
+        assert_eq!(m.enemies[2].flags & A_FIXED_BONUS, 0);
+        assert_eq!(m.g.spell_boss, None);
+        assert!(!m.g.fixed_bonus && !m.g.bonus_frozen);
     }
 
     // Spell_End (07 §11.1): bomb cooldown +0xE2A6C := 16 whether or not the card was captured; 0x4E3D28 := 0.

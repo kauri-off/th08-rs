@@ -1477,6 +1477,7 @@ impl Exec<'_> {
         );
         self.m.pay_capture(self.anm, false);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
+        self.m.g.spell_boss = Some(self.idx);
         (self.m.g.spell_flag6, self.m.g.bonus_frozen) = (false, false);
         // Bit 9 := 0 is Spell_Start's first statement (07 §11.1).
         self.m.g.spell_captured = false;

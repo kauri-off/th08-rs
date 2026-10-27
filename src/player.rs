@@ -1043,11 +1043,13 @@ impl Player {
         }
         let st = &mut self.stats;
         if self.shot_timer.cur >= 0 {
+            // 09 §9.3 (RE-Q56): B falls by Timer_Decrement 0x418110 (game speed); n from c = Timer_GetF(C), f32,
+            // > 300.0 → 21, else ftol(c / 15).
             if self.gauge_b.cur > 0 {
-                self.gauge_b.cur -= 1;
+                self.gauge_b.dec(gs);
             } else {
-                let c = self.gauge_c.cur;
-                let mut n = if c > 300 { 21 } else { (c / 15).min(21) };
+                let c = self.gauge_c.getf();
+                let mut n = if c > 300.0 { 21 } else { (c / 15.0) as i32 };
                 if self.focus != 1 {
                     n = -n;
                 }
@@ -1794,6 +1796,28 @@ mod tests {
         let before = rng.counter;
         s.add_time(-5, &mut rng);
         assert_eq!((s.time, rng.counter), (0, before));
+    }
+
+    // 09 §9.3 (RE-Q56): timer B decrements at game speed; n = ftol(Timer_GetF(C) / 15), 21 above 300.0.
+    #[test]
+    fn gauge_timers_use_game_speed() {
+        let mut p = Player::default();
+        p.focus_age = 30;
+        p.focus = 1;
+        p.shot_timer.set(0);
+        p.gauge_b.set(1);
+        p.gauge_drift(0.25);
+        assert_eq!(p.gauge_b.cur, 0);
+        assert_eq!(p.gauge_b.frac, 0.75);
+        p.gauge_b.set(0);
+        p.gauge_c.set(29);
+        p.gauge_c.frac = 0.5;
+        p.gauge_drift(1.0);
+        assert_eq!(p.stats.gauge, 1);
+        p.gauge_c.set(300);
+        p.gauge_c.frac = 0.5;
+        p.gauge_drift(1.0);
+        assert_eq!(p.stats.gauge, 22);
     }
 
     #[test]

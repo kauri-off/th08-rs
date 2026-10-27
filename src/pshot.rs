@@ -320,16 +320,15 @@ impl Player {
                     }
                     o.vm.flags |= anmvm::F_SCALE_DIRTY;
                 } else {
-                    // Sub 3 attack: chase the aimed enemy's final pos + (0, 32), y ≥ 32.
-                    match aimed {
-                        Some(_) if shooting || shot_held => {
-                            smooth(o, [aimed_pos[0], (aimed_pos[1] + 32.0).max(32.0)])
-                        }
-                        _ => {
-                            o.vm.pending_interrupt = 1;
-                            o.sub = 0;
-                            aimed = None;
-                        }
+                    // Sub 3 attack (14 §3.1, RE-Q56): chase the aimed enemy's final pos + (0, 32), y ≥ 32, whenever the
+                    // pointer is set; then the exit test, so the option still moves on the exit frame.
+                    if aimed.is_some() {
+                        smooth(o, [aimed_pos[0], (aimed_pos[1] + 32.0).max(32.0)]);
+                    }
+                    if aimed.is_none() || !(shooting || shot_held) {
+                        o.vm.pending_interrupt = 1;
+                        o.sub = 0;
+                        aimed = None;
                     }
                 }
             }
@@ -1034,6 +1033,29 @@ mod tests {
         p.place_option(&mut anm, 0, true);
         let o = &p.options[0];
         assert_eq!((o.sub, o.vm.pending_interrupt), (3, 3));
+    }
+
+    // 14 §3.1 (RE-Q56): sub 3 chases whenever the pointer is set, then exits; the exit frame still moves.
+    #[test]
+    fn yukari_sub3_moves_on_exit_frame() {
+        let mut anm = AnmManager::default();
+        let mut p = Player::default();
+        yukari(&mut p);
+        p.options[0].sub = 3;
+        p.shot_timer.set(-1);
+        p.aimed = Some(3);
+        p.aimed_pos = [100.0, 200.0, 0.0];
+        p.place_option(&mut anm, 0, false);
+        let o = &p.options[0];
+        assert_eq!((o.sub, o.vm.pending_interrupt), (0, 1));
+        assert_eq!(p.aimed, None);
+        assert_ne!(o.pos[1], 304.0);
+        // No pointer: no move.
+        p.options[0].sub = 3;
+        let before = p.options[0].pos;
+        p.place_option(&mut anm, 0, true);
+        assert_eq!(p.options[0].pos, before);
+        assert_eq!(p.options[0].sub, 0);
     }
 
     // 14 §3.3: unfocused solo Youmu on direction 0 spawns no effect 0x2F (no RNG); the team half always does.
