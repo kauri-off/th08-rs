@@ -171,7 +171,8 @@ No free slot → failure. Speed and angle: 07 §9.3 (mode table). Then:
    - Box arithmetic of both tests (VERIFIED 0x44A230 / 0x44A360 / 0x44A470, RE-Q30): object box min = (p − s/2) − e, max = (s/2 + p) + e (e = 20 for the graze test, 0 otherwise; f32), compared with the player's stored box (hit box +0x38C/+0x398, graze box +0x3A4/+0x3B0, 09 §1.1): miss iff obj max < player min or player max < obj min on x or y (touching edges overlap). `Player_HitTestNoBomb` (enemy contact) uses the same form with e = 0.
    - hit test h = `Player_HitTest` (hitbox vs the player's hitbox): h == 1 → state 5 (the player is hit, 09 §7);
      h == 2 → if flags lacks 0x1000: state 5 + bomb drop.
-   - Bomb drop: item type = player+0xE2A90: 9 → two items of type 7; ≥ 0 → one item of that type; −1 → none.
+   - Bomb drop (this state-1 / state 2–4 path only): item type = player+0xE2A90: 9 → two items of type 7; ≥ 0 → one item of that type; −1 → none.
+     The cancels of §7 do **not** use this mapping: they pass the raw value to `ItemMgr_Spawn` (§7, RE-Q56).
      Item mode 1 (attracted). **+0xE2A90 has exactly 4 writers** (VERIFIED RE-Q27, displacement scan):
      `Player_InBombArea` 0x449FF0 writes the area's item **only on a hit**; `Player_HitTest` 0x44A230,
      `Player_HitTestNoBomb` and `Player_GrazeTest` 0x44A470 write 6 at their start, before their own bomb-area test.
@@ -183,7 +184,9 @@ No free slot → failure. Speed and angle: 07 §9.3 (mode table). Then:
 8. Tick state timer and age; push on class list.
 
 ### 4.2 States 2, 3, 4 (spawn effect)
-age.Decrement (so the age does not advance net); pos += vel / 2 (state 2), / 2.5 (state 3), / 3 (state 4);
+age.Decrement (so the age does not advance net); pos += vel / 2 (state 2), / 2.5 (state 3), / 3 (state 4) —
+computed as pos += vel × r with r = f32(1/d) rounded first (`Vec3_DivScalar` 0x40C7D0 multiplies by the
+reciprocal; for d = 3, vel × f32(1/3) differs from vel / 3 by 1 ulp for some vel; VERIFIED RE-Q56);
 if flags lacks 0x1000 and `Player_InBombArea(pos)` → +0xDBE = 1 (sticky: tested on every spawn-effect frame and
 never cleared). Run the effect VM. When it finishes:
 if +0xDBE: bomb drop as above (the state is set to 5 but immediately overwritten — the bullet survives; faithful
@@ -333,19 +336,27 @@ when (tail < 16 or speed == 0) and (+0x599 == 0 or state ≠ 0); emitter scale =
 
 ## 7. Cancels and conversions
 - `BulletMgr_CancelAll(mode)` 0x430830 (mode 1 via 0x415C60 = ECL op 112, item collection etc.): every bullet
-  not free and not in state 5: if inside a bomb area → item (player+0xE2A90, mode 1) and the slot is zeroed;
+  not free and not in state 5: `Player_InBombArea` is called **twice** (first result discarded; a hit counts 2 on
+  the area's hit counter, 09 §8); if the second call hits → `ItemMgr_Spawn`(pos, **raw** player+0xE2A90, mode 1) —
+  no 9 → two time orbs / −1 → none mapping as in §4.1 (a type-9 cancel circle, e.g. `Enemy_KillChildren`, gives one
+  type-9 item: mode 1, no RNG, no collection effect) — and the slot is zeroed;
   else if mode == 4 → state 5; else item type 6 (mgr+0x6BA570) with item mode = `mode`, slot zeroed. Lasers
   (alive, and flag bit 2 clear unless mode 4): if state < 2: state 2, timer 0, width (+0x564) := current width (+0x568) so the fade shrinks from the current size; unless mode 4,
   one item per 32 px from tail to head along the laser. Fade-collision := 0. Cancel guard := 10.
 - `BulletMgr_CancelBonus(maxValue, lasersToo)` 0x430AA0 (boss defeat, 07 §10.3): every non-free bullet →
   item (bomb-area item or type 6, mode 1), score popup value v starting at 2000, +20 per bullet, capped at
-  maxValue (popup colour differs when capped); state 5. Returns the sum of popup values. Lasers: every alive
+  maxValue (popup colour differs when capped); state 5. One `Player_InBombArea` call per bullet; the bomb-area item
+  is the raw player+0xE2A90 as in `CancelAll` (VERIFIED 0x430AA0, RE-Q56). Returns the sum of popup values. Lasers: every alive
   laser — **no flag-bit-2 test** (unlike `CancelAll`, a flag-4 laser is cancelled too) — if state < 2: state 2,
   timer 0, width := current width; items only when lasersToo: first one at the origin, then one per 32 px from
   tail to head. Fade-collision := 0 for every alive laser. Cancel guard := 10 (VERIFIED 0x430AA0, RE-Q30; fullrun
   60112: five flag-4 lasers at a stage-6 card end give 50 extra type-6 items).
 - `BulletMgr_CancelRadius(pos, r)` 0x430D30: bullets (not free/5) with |pos − p|² ≤ r² → item type 6 mode 1,
   slot zeroed.
+- "Slot zeroed" (`CancelAll`, `CancelRadius`) = the whole 0x10B8-byte bullet (memset of 0x42E dwords), unlike
+  `Bullet_Free` 0x432170 (state and two timers only). Every field is 0 afterwards, including the off-screen counter
+  +0xDBA (§4.3): a slot reused after a cancel starts with counter 0, a slot reused after a normal free keeps its old
+  counter (VERIFIED 0x430830 / 0x430D30 / 0x432170, RE-Q56; silentselene_82314 slot 1170).
 - ECL natives 12 / 14 (0x424A20 / 0x424C40) — VERIFIED. Parameters come from the calling context: mask =
   var 10000 (ctx+0x18), mode = var 10001 (ctx+0x1C, native 12 only), angle = var 10016 (ctx+0x38), speed =
   var 10017 (ctx+0x3C). For every bullet slot with state ≠ 0 and (descriptor flags +0xDB0 & mask) ≠ 0, by
@@ -427,7 +438,10 @@ For each item (count += 1):
   values stored by `Player_Move` (pos ∓ +0x3EC); not collected iff item max.x < player min.x or player max.x < item min.x
   (same for y). Each edge is rounded to f32 **before** the comparison, so this is not the same as |dx| ≤ (C + collect)/2:
   fullrun_noclip row 16164, item x 127.99999 + 12 rounds to 140.0 = player min.x → collected (VERIFIED 0x44A5A0, RE-Q29). On collection: statistics bit 0x40, type handler
-  (§8.5), sound choice (0x15, or 0x2C if the item's max-value flag is set), item freed. Else tick timer and run
+  (§8.5), sound choice (0x15, or 0x2C if the item's max-value flag is set), item freed — **after** the handler
+  (`ItemMgr_Calc` 0x440500: the type switch, then 0x441770 frees/unlinks). While a handler cancels bullets to items
+  (types 0/2 reaching full power, type 4) the collected item's slot is still occupied, so the cancel items skip it
+  (VERIFIED RE-Q56, silentselene_53174: freeing first shifts the slot layout and a later type-7 one-slot probe). Else tick timer and run
   the VM.
 After the loop: play the chosen collection sound once; timer 0x18B89D4 (= player +0xE2ADC, "time-orb gauge
 lock"): if > 0, decrement and clamp at 0. It is set to 50 by `Enemy_KillChildren` 0x42ADB0 when a chain is

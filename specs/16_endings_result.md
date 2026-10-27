@@ -214,12 +214,25 @@ Each frame `Result_Calc` runs the current state, then the 72 VMs, then frame cou
 | state | screen |
 |---|---|
 | 9 | normal game: name entry (§2.2) |
-| 0x11 | stage practice: store the practice hiscore (15 §2.6); goes to 10 |
-| 0x16 | spell practice: goes to 10 |
+| 0x11 | stage practice: store the practice hiscore (15 §2.6); goes to 10 — done by `Result_OnRegister`, before any `Result_Calc` (below) |
+| 0x16 | spell practice: goes to 10 — likewise in `Result_OnRegister` |
 | 0xF | VM 71 (interrupt 18) shows the end banner (stats panel 16 §2.5). `Result_EndBanner` 0x4577E2 itself writes VM 71's pending interrupt := 18 on **every** state-0xF call while the state frame (+4) ≤ 30 (frames 0–30, so the label-18 entry is re-triggered each of those frames: every call restarts VM 71 at its label (alpha 0, `alpha_fade 255, 30` from the start), the VMs running after the state code in the same `Result_Calc`; the panel therefore stays at alpha ≈ 0 through frame 30 and its 30-frame fade-in runs from frame 30, fully opaque at frame 60 — VERIFIED code 0x4577E2 + 05 §4 dispatch, RE-Q38); from frame 90 (> 89), a Shot/Enter edge (0x1001) → VM 71 **only** gets interrupt 2, frame := 0, state 0x10. State 0x10: at frame > 29 → frame := 9, state 10 (VERIFIED RE-Q24). |
 | 0x10 | after 30 frames → state 10 with frame counter 9 |
 | 10–14 | replay save (15 §3.6, 16 §2.6) |
 | 2 | at frame 1, begin the loading screen and send interrupt 2 to all VMs. After 20 frames, **scene 1 (title/main menu)**, return 0 (object removed → score.dat saved). |
+
+**Initial state** (VERIFIED `Result_Register` 0x4582A0, `Result_OnRegister` 0x45964D, RE-Q56). `Result_Register(mode)`
+writes +8 directly: mode 1 → 9 (not practice), 0x11 (practice, GameFlags bit 14 clear), 0x16 (bit 14 set = spell
+practice); mode 2 → 0x12. Mode 2 is the score.dat loader (`GameMgr_LoadScoreData` 0x43BBE1, `push 2; pop ecx`, at
+stage start): it calls `Result_OnRegister` directly (state 0x12 skips the result.jpg/ANM loads) and returns
+**without** creating calc or draw nodes, so `Result_Calc` never runs in state 0x12. For modes 0/1
+`FuncChain_AddCalc` calls `Result_OnRegister` before linking the node; there, state 0x11: practice hiscore
+[shot + 0x164D0B2][stage][difficulty] := max(·, score), then +8 := 10 (direct write: frame +4, prev +0xC and
+sub-counters stay 0), +0x58 := the LSNM name +0x4645C (8 spaces without an LSNM chunk), and if slow mode or the no-record flag → CATK backup restored
+(0x162D770 → 0x160F548, 0x1E228 bytes); state 0x16: the same without the hiscore. So the **first** `Result_Calc`
+after a practice game already runs state 10 at frame 0. Byte scan: the only immediate stores of 0x11 / 0x12 / 0x16
+to +8 are 0x458354 / 0x458366 / 0x458348 in `Result_Register` (0x4AAB4E is CRT code), and no `Result_SetState`
+call passes them.
 
 In slow mode (or Supervisor+0x1A4 bit 3, set only by the anti-tamper fill), state 9 skips the entry. This test is the **first** thing `Result_NameEntry` does on every call, before the frame-0 work of §2.2: it writes state := 0xF and frame (+4) := 0 directly (not `Result_SetState`: +0x0C/+0x10/+0x14/+0x18/+0x54 are untouched), restores the CATK backup (0x162D770 → 0x160F548, 0x1E228 bytes) and returns. **No interrupt is sent** (no d + 3, no 2: nothing slides in), +0x3C/+0x44 are not written, no text is rendered and no entry is built; `Result_Calc` then runs the 72 VMs and increments the frame, so the first state-0xF call sees frame 1 (VERIFIED 0x45621E, RE-Q43).
 
@@ -316,8 +329,10 @@ i) at +0x1A0; interrupt k to VM i = pending interrupt at VM+0x1FE.
   background). Order (VERIFIED `Result_Calc` 0x4584B0 case 2, 00 §3.1, RE-Q55): state 2 with frame > 19 writes the
   scene request and **returns 0** — no VM run, no frame += 1 — so the runner removes the calc node at once and
   `Result_OnRemove` 0x459FD2 runs **inside this calc pass**: `ScoreDat_Save` and its 2 RNG draws (15 §2.1) land on
-  frame P+20 (the last scene-5/6 trace row), not in the next frame's scene switch. States 0x11, 0x12 (no request)
-  and 0x16 also return 0 the same way. Data: `gameover_save` row 7700, `musicroom_practice` row 7854 (rng_ctr +2).
+  frame P+20 (the last scene-5/6 trace row), not in the next frame's scene switch. The switch also has cases
+  0x11 / 0x16 (scene request 1, return 0) and 0x12 (return 0, no request), tested on the state at entry with **no**
+  frame test — but they are unreachable: 0x11 / 0x16 become 10 in `Result_OnRegister` and 0x12 objects have no
+  calc node (§2.1 "Initial state"; VERIFIED 0x4584B0, RE-Q56). Data: `gameover_save` row 7700, `musicroom_practice` row 7854 (rng_ctr +2).
 - P+21: first menu frame. The loading VMs are already 20 frames old there; in scene 5 they were covered by the result
   background.
 
@@ -446,7 +461,9 @@ Complements 15 §3.6. Uses the frame counter +4 (state 10 is entered with +4 = 9
 name +0x58 (9 bytes), char cursor +0x2C.
 - **10 Save?** At frame 10: i = 0x13 if slow mode / no-record flag, else 0xE if continues ≠ 0, else 0xB; that
   interrupt goes to 72 VMs starting at **VM 4** (QUIRK: VMs 4–71 and the first 4 text VMs; VMs 0–3 are
-  skipped); if i ≠ 0xB → state 11; cursor 0. Every frame: VM 50 RGB := 0xFF6060 if cursor 0 (はい) else
+  skipped); if i ≠ 0xB → state 11 by a direct write (frame +4 **not** reset: state 11 starts at frame 10, so its
+  "from frame 20" test opens 10 frames later; the rest of this call still runs — VM 50/51 colours, then frame < 12
+  returns; VERIFIED 0x45696F, RE-Q56); cursor 0. Every frame: VM 50 RGB := 0xFF6060 if cursor 0 (はい) else
   0x606060, VM 51 the opposite (alpha kept). From frame 12: Left/Right toggles (2 entries, edge or repeat,
   SE 12). Cancel (Bomb/ESC 0x0A edge) or ESC (0x08 edge), or confirm on cursor 1 → SE 11, state 2, all VMs
   interrupt 2, frame 0. Confirm on cursor 0 → SE 10 (sound flushed), state 12, all VMs interrupt 12, frame 0.

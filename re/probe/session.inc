@@ -187,6 +187,12 @@ static void sess_scan(int pass) {
             g_poll_n, pass, U32(G_GMFRAME), U16(G_RNG), g_rng_calls, U32(0x17D61AC), U32(0x17D61B0), U8(P), U8(P + 3), U8(P + 5),
             (int)U32(P + 0xFDC), (int)U32(P + 0xFE4), (int)U32(P + 0xE2A7C), (int)U32(0x18B89BC + 8), aslot, U32(P + 0xE2AA4), U32(P + 0xE2AA8), (int)U32(P + 0xE2AC0),
             st >= 0x10000 ? U32(st + 0x98) : 0, U32(G_BULLETS));
+    if (getenv("TH08_SCANGAUGE")) {  /* RE-Q56: gauge, timers B (+0xE2AD0) / C (+0xE2AE8) / shot (+0xE2AC4) as prev frac cur, game speed, focus age */
+        fprintf(o, "G gauge %d B %d %08x %d C %d %08x %d shot %d %08x %d gs %08x fa %d bomb %d\n", st >= 0x10000 ? (int)(int16_t)U16(st + 0x22) : 0,
+                (int)U32(P + 0xE2AD0), U32(P + 0xE2AD4), (int)U32(P + 0xE2AD8), (int)U32(P + 0xE2AE8), U32(P + 0xE2AEC), (int)U32(P + 0xE2AF0),
+                (int)U32(P + 0xE2AC4), U32(P + 0xE2AC8), (int)U32(P + 0xE2ACC), U32(0x17CE8E0), (int)U32(P + 8), (int)U32(P + 0xFDC));
+        if (getenv("TH08_SCANGAUGE_ONLY")) { fflush(o); return; }
+    }
     if (getenv("TH08_SCANRANK")) { fprintf(o, "K mclk %d rank %d sub %d min %d max %d graze %d\n", (int)U32(0xF54DF8), (int)U32(0x164D334), (int)U32(0x164D340), (int)U32(0x164D338), (int)U32(0x164D33C), (int)U32(st >= 0x10000 ? st + 0x0C : 0x164D334)); if (getenv("TH08_SCANRANK_ONLY")) { fflush(o); return; } }  /* RE-Q54 */
     if (getenv("TH08_SCANEFF")) {  /* RE-Q52 (from q33): effect ring cursor + live slots slot:type:age */
         uint32_t M = 0x4ECE60;

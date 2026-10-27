@@ -346,8 +346,8 @@ For each handle:
 - radius: if d ≤ radius then radius = d, else radius += 0.3;
 - angle (+0x318) = normalise(angle + 0.0314159).
 
-When the enemy dies, `Enemy_ReleaseOrbitEffects` 0x42A820 sets each effect's fade request (+0x352 = 1) and
-clears the list.
+When the enemy dies (or is freed, or runs op 127 with slot < 0, 07 §7), `Enemy_ReleaseOrbitEffects` 0x42A820 sets each effect's fade request (+0x352 = 1) and
+clears the list (callers: `Ecl_Run`, `EnemyMgr_Calc`, `Enemy_Free`; VERIFIED RE-Q56).
 
 #### Effect update `EffUpd_Orbit13` 0x426030
 

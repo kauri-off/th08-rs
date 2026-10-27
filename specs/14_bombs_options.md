@@ -348,6 +348,9 @@ v.x = 0: interrupt 1, sub 0, scale.x positive; v.x of the other sign: interrupt 
 Sub 3 (attack): while an aimed enemy exists: same smoothing toward enemy pos (+0x2D88) + (0, 32) (y ≥ 32) — the
 option chases the **final** position, while Yukari's aimed shots (shot init 1, 09 §2.1) aim at the enemy's +0x2D34;
 leaves to sub 0 (interrupt 1, aimed := 0) when not shooting and the shot button is released, or no enemy.
+Order inside sub 3 (VERIFIED 0x44E3A0 case 3 + `Option_YukariChase` 0x44E8D0, RE-Q56): first the chase step,
+whenever the aimed pointer ≠ 0; **then** the exit test ((shot timer < 0 and shot button up) or pointer = 0). So on
+the exit frame the option still makes its chase move (silentselene_53098: skipping it moves the Yukari shot origin).
 Aimed enemy (player +0xE2ABC = 0x18B89B4, VERIFIED, changelog/answers_impl11.md §12): a persistent pointer, never re-picked
 from scratch. Each frame `EnemyMgr_Calc`, for every live enemy with flag A bits 4, 5, 11 clear and (bit 31 clear
 or not bombing) **and flag A bit 6 set** (the update sits inside step 6's "collides with shots" branch, after both

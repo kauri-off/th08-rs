@@ -874,3 +874,17 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Port (target/re500 = HEAD + implementer WIP eclvm/enemy at 09:08): 120 identical (all spell, 33/40 stage, 14/72 Ex,
   only 3 full = desynced ones), 370 diverge, all in gameplay. Biggest groups: flags 0x800 stage 5 (172), rng Extra (51),
   bullets stage 1 (29), rng 4B (24), rng 3 (15); full list groups.tsv / REPORT.md. Not analysed.
+
+# RE-Q56 (2026-10-27) — batch500 groups Ex rng / stage 1 bullets / 6A-6B gauge (specs/changelog/answers_re_q56.md)
+- Runs re/work/runs/q56 (CHECKPOINT.md; scratch portcopy = master dfc6e03 + AC–AK, target/re56; prun.sh, pbatch.sh).
+- AC CancelAll/CancelBonus bomb-area item = raw +0xE2A90 (no 9/−1 mapping), CancelAll InBombArea ×2 (08 §7);
+  AD Spell_End tail clears boss bit 27 (07 §11.1); AE ItemMgr_Calc frees after the handler (08 §8.4); AF Yukari sub 3
+  chase before exit test (14 §3.1); AG gauge B Timer_Decrement by gs, n from GetF(C) (09 §9.3); AH states 2–4
+  vel × f32(1/d) (08 §4.2); AI op 36 fn 7 product order (07 §5.6); AJ PlaceBullet modes 2/4 order (07 §9.3, corrects
+  RE-Q54); AK cancels zero the whole slot incl. off-count (08 §7).
+- AL op 127 slot < 0 → Enemy_ReleaseOrbitEffects (07 §7 row 127, 13 §2.6b): port kept the orbits → effect ring full
+  at the 6A last card end (−26/−60 draws). Tools: TH08_SCANEFF orig vs port Q56EFF ring dump, q56/effcmp.py.
+- Q4: Result 0x11/0x16 → 10 in Result_OnRegister, 0x12 = score loader without calc node; Result_Calc cases unreachable
+  (16 §2.1 "Initial state"); state 10 → 11 keeps the frame counter (16 §2.6).
+- Result: 180/208 diverging non-flags-0x800 replays identical (Ex 53/53, s1 27/28, 6A gauge 22/22, 6B 9/9, 6A rng
+  14/14). Open: fixAL_left.tsv (28, incl. 54656 r72127).

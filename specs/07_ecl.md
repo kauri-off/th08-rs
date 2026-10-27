@@ -349,7 +349,9 @@ Slot = {fn, Timer elapsed, dur, fn index, easing mode, a, b, c, d, target var id
 target equals the new target, else the first free slot (8 max; ignored when full). Each POST:
 `elapsed.Tick(); if elapsed ≥ dur: elapsed = dur; t = elapsed/dur; t = ease(mode, t)` (1 t², 2 t³, 3 t⁴,
 4 1−(1−t)², 5 1−(1−t)³, 6 1−(1−t)⁴, else t); `fn(t)`; slot freed when elapsed ≥ dur.
-fn index 0–6: `var = a + (b − a)·t`; 7: Hermite `var = (2t+1)(t−1)²·a + (3−2t)t²·b + t(1−t)²·c + (t−1)t²·d`.
+fn index 0–6: `var = a + (b − a)·t`; 7: Hermite with this f32 evaluation order (VERIFIED `EclInterp_Fn7` 0x421180
+disasm, RE-Q56; another order is 1 ulp off and moves stage-1 familiars, ecldata1 sub36): h0 = ((t−1)·(t−1))·(2t+1),
+h1 = (t·t)·(3−2t), h2 = ((1−t)·(1−t))·t, h3 = ((t−1)·t)·t; `var = ((h0·a + h1·b) + h2·c) + h3·d`.
 **a–d are resolved once, by op 36**: an operand whose mask bit is set (bits 4–7 for a–d; bits 1–3 for dur, fn, mode, read as ints) is read through the variable getter at op time, and the resulting float is stored in the slot (bit copy). At every evaluation the fns pass the stored floats through the float getter again, but the getter returns its argument unchanged unless it truncates to a variable id; no shipped op 36 has a stored a–d in the variable range, so in practice later writes to the source variables (e.g. 10018/10019 changed by op 27/op 9 in another slot's thread) do not affect a running interpolation (VERIFIED 0x4213F0, 0x421120, 0x421180, getter default 0x420120; RE-Q24; corrects the earlier "re-read at every evaluation"). If any slot targets
 10042/10043/10044 (enemy position), after all slots: velocity.xy = new pos − old pos, angle =
 atan2(vel.y, vel.x), and the position is restored (the movement step then applies the velocity).
@@ -486,7 +488,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 124 | sfx | i id | play sound effect id at pos | 422 |
 | 125 | interrupt_now | i k | pending = k and dispatch immediately (§5.5) | 0 |
 | 126 | set_interrupt | S sub, i k | interrupt_table[k] = sub | 52 |
-| 127 | boss | i slot | slot < 0: unregister this enemy as boss. Else boss[slot] = e, boss flag, e.boss_slot = slot, no-fire radius 0; slot 0 also turns on the HUD boss display | 307 |
+| 127 | boss | i slot | slot < 0, in this order (VERIFIED `Ecl_Run` case 0x7F, RE-Q56): if e+0x3313 (own boss slot) < 4 → `Hud_SetBarRequested(0)`; boss table 0xF54CC0[e+0x3313] := 0; flags A bit 1 (boss) := 0; ENEMY marker e+0x3313 interrupt 2; **`Enemy_ReleaseOrbitEffects` 0x42A820** (every op-128 effect of e+0x5360[] gets its fade request +0x352 := 1, list cleared, 13 §2.6b — the orbits fade out over 16 frames and free their ring slots, which changes later ring searches; silentselene_51844); marker pos := (−999, −999). Else boss[slot] = e, boss flag, e.boss_slot = slot, no-fire radius 0; slot 0 also turns on the HUD boss display | 307 |
 | 128 | effect13 | raw w0 (unused), a, b, c, d (5 words) | **word 0 is ignored** (the handler reads words 1–4: a, b, c = axis +0x2EC/+0x2F0/+0x2F4, d = e+0x53C4; VERIFIED case 0x80, RE-Q32 — every op 128 in the data has 5 words, e.g. ecldata1 `6, 0.3, 0.7, 0.3, 0x43000000`); spawn effect 13 (colour 0xFF6060D0) at pos e+0x2D34 (not the final pos) with axis a,b,c; e+0x53C4 = d; kept in e+0x5360[] and updated every frame (follow pos, grow radius to d, spin). All four words are **copied raw**: the handler never calls `Ecl_GetIntArg`/`Ecl_GetFloatArg`, so the mask bits are ignored, and d lands in the f32 field +0x53C4 as its bit pattern (data: 0x42C00000 = 96.0, 0x43000000 = 128.0) (VERIFIED `Ecl_Run` case 0x80, reader `Enemy_UpdateOrbitEffects` 0x42E010 compares it as f32, RE-Q31) | 210 |
 | 129 | death_mode | raw byte | flag A bits 20–22 (§10.3); ignored in spell practice when 0x164D0B4 bits 7–8 ≠ 0 | 368 |
 | 130 | death_sub | raw i16 | e+0x2CEE (same guard) | 357 |
@@ -631,9 +633,9 @@ free bullet): speed = (count2 < 2) ? speed1 : speed1 − (speed1 − speed2)·j/
 |---|---|---|
 | 96 | 0 fan aimed | k = count1 even ? a2·0.5 + (i/2)·a2 : ((i+1)/2)·a2 (integer i/2); k += 0; if i odd k = k·(−1); angle = **(k + aim) + a1** — aim is added before a1 (each step an f32 rounding; (k + a1) + aim is 1 ulp off for some angles: silentselene 51842 ecldata5 sub58, VERIFIED `BulletMgr_PlaceBullet` 0x42F5F0, RE-Q54) |
 | 97 | 1 fan | same without aim |
-| 98 | 2 ring aimed | ((j·a2 + a1) + (i·2π)/count1) + aim (aim added last; VERIFIED 0x42F5F0, RE-Q54) |
+| 98 | 2 ring aimed | (j·a2 + a1) + ((i·2π)/count1 + (0 + aim)) — the ring term and aim are summed first, then added to the j term (VERIFIED disasm 0x42F775–0x42F807, the accumulator starts at 0.0 at 0x42F675; corrects RE-Q54 "aim added last", RE-Q56; silentselene_78212 ecldata1 sub34) |
 | 99 | 3 ring | j·a2 + a1 + i·2π/count1 |
-| 100 | 4 ring offset aimed | ((i·2π)/count1 + π/count1) + aim, then + a1 (left to right in this order, VERIFIED 0x42F5F0, RE-Q54) |
+| 100 | 4 ring offset aimed | ((i·2π)/count1 + (π/count1 + (0 + aim))) + a1 (VERIFIED disasm 0x42F775–0x42F807, RE-Q56; corrects the RE-Q54 order) |
 | 101 | 5 ring offset | i·2π/count1 + π/count1 + a1 |
 | 102 | 6 random angle | Rng_Float·(a1 − a2) + a2 |
 | 103 | 7 random speed | speed = Rng_Float·(s1 − s2) + s2; angle as mode 3 |
@@ -1082,6 +1084,11 @@ Payout at t == 130: ring freed, +0xF8 := 0, `Hud_ShowSpellBonus`(+0x104), AddSco
 +0x10 > 0 still: AddTime(+0x10), stats+0x24 (max point) += +0x10·10, +0x10 := 0 (normally +0x10 is already 0).
 Or, if bit 8 is still set at the next `Spell_Start`: +0xF8 := 0 (the ring is not freed), ShowSpellBonus, AddScore,
 bit 8 off, and if +0x10 > 0: AddTime(+0x10) (no max-point add), +0x10 := 0.
+**Tail of every op 123** (after the card-active block, whether or not a card was active; VERIFIED 0x4161B0, RE-Q56):
+if the boss pointer g_Gui +4 ≠ 0 → that boss's flags A bit 27 (fixed bonus, op 155) := 0; then g_Gui +4 := 0 and
+spell flags bit 11 := 0. The time-reward test above reads bit 27 before this clear. So bit 27 lasts only until the
+end of the card that set it: the next card of the same boss without its own op 155 gets the formula reward (Extra
+card 202 has op 155, card 203 does not → 203 pays e.g. 805, not 700; silentselene_80322).
 GameFlags bits 7–8 (last-spell / dissolve mode): captured → if bits 7–8 ≠ 0 they become "bit 8 only"; not captured → cleared. Not captured → HUD message 5 "Spell Bonus Failed" / 6 "Last Spell Failed" (5 + bit 5). Always: player bomb cooldown +0xE2A6C := 16 (09 §1.1; no normal bomb for 16 player frames); player in state 0 → state 3 for 70 frames; SE 0xF; stage
 spell background off.
 

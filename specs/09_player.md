@@ -496,8 +496,10 @@ Limits/thresholds (game manager +0x3DDF8.., set at player load):
 Queries: "human max" gauge ≤ human-max, "human" ≤ human, "youkai max" ≥ youkai-max, "youkai" ≥ youkai.
 `GaugeAdd(n, force)` clamps to [min, max] and is ignored while bombing unless forced.
 Per frame (in `Player_Move`, no dialogue, focus age ≥ 30, not bombing):
-- shot timer ≥ 0 (shooting): timer B (+0xE2AD0) > 0 → B −= 1; else n = trunc(min(C/15, 21)) with C = timer
-  +0xE2AE8 (C > 300 → 21), negative when unfocused (human); gauge += trunc(n × gs); C ticks.
+- shot timer ≥ 0 (shooting): timer B (+0xE2AD0) > 0 → `Timer_Decrement`(B) (0x418110: by game speed, so B falls
+  0.25 per frame under a 1/4 slowdown, not 1); else n from c = `Timer_GetF`(C) (current + fraction, f32), C = timer
+  +0xE2AE8: c > 300.0 → 21, else n = ftol(c / 15.0); negative when unfocused (human); gauge += trunc(n × gs); C ticks
+  (VERIFIED `Player_Move` 0x44BE40–0x44BEF4, RE-Q56; silentselene_50763).
 - not shooting: B ≥ 4 → C := 0; B ≥ 30 → if |gauge| ≤ 9: gauge := 0, else drift toward 0 by 5 (beyond the
   max thresholds), 3 (beyond human/youkai), 2 (otherwise) × gs; else B ticks.
 Bomb: ±26000/duration per frame (§7). Graze in youkai mode +100. Time orbs −111/+111 (08 §8.5). Death → 0.
