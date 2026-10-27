@@ -79,12 +79,8 @@ impl Default for ItemManager {
     }
 }
 
-// Collection side effects that reach outside the item manager.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Collected {
-    // Mode-1 cancel of all bullets (08 §8.5 full power).
-    pub cancel: bool,
-}
+// Mode-1 cancel of all bullets to items (08 §8.5 full power), run by the bullet manager.
+type Cancel<'a> = dyn FnMut(&mut ItemManager, &mut AnmManager, &mut Player) + 'a;
 
 // Number of POWER_LEVELS entries ≤ power (08 §8.5).
 pub fn power_level(p: f32) -> usize {
@@ -241,8 +237,8 @@ impl ItemManager {
         anm: &mut AnmManager,
         p: &mut Player,
         spell: bool,
-    ) -> Collected {
-        let mut out = Collected::default();
+        cancel: &mut Cancel,
+    ) {
         let (kind, y, max_flag) = (
             self.items[idx].kind,
             self.items[idx].pos[1],
@@ -265,13 +261,16 @@ impl ItemManager {
                     Stats::checksum(&mut anm.rng);
                     if st.power >= 128.0 {
                         st.set_power(128.0, &mut anm.rng);
-                        out.cancel = !spell;
+                        if !spell {
+                            cancel(self, anm, p);
+                        }
                         // Hud_ShowMessage(0, 1) "Full Power Mode!"; its panel repaint 0x17CE8CC := 2 is moot, the
                         // port repaints the panel every frame.
                         // The message is outside the spell-card test (08 §8.5, VERIFIED RE-Q34).
-                        st.popups.push(Popup::Message(1, 0));
+                        p.stats.popups.push(Popup::Message(1, 0));
                         self.convert_power_items(anm, idx);
                     }
+                    let st = &mut p.stats;
                     st.add_score(10);
                     if power_level(st.power) != level {
                         crate::sound::play(crate::sound::POWERUP);
@@ -282,7 +281,7 @@ impl ItemManager {
                 }
                 // 08 §8.5: type 0 always adds rank +1, even at full power.
                 if kind == POWER {
-                    st.rank(1);
+                    p.stats.rank(1);
                 }
             }
             POINT => {
@@ -320,12 +319,13 @@ impl ItemManager {
             FULL_POWER => {
                 // 08 §8.5: this cancel has no spell-card test, unlike the power-item one.
                 if st.power < 128.0 {
+                    cancel(self, anm, p);
+                    p.stats.popups.push(Popup::Message(1, 0));
                     crate::sound::play(crate::sound::POWERUP);
                     popup(-1, POPUP_POWER);
-                    out.cancel = true;
-                    st.popups.push(Popup::Message(1, 0));
                     self.convert_power_items(anm, idx);
                 }
+                let st = &mut p.stats;
                 st.set_power(128.0, &mut anm.rng);
                 popup(1000, POPUP_NORMAL);
                 st.add_score(1000);
@@ -372,7 +372,6 @@ impl ItemManager {
             _ => {}
         }
         self.collected += 1;
-        out
     }
 
     // ItemMgr_Calc 0x440500 (08 §8.4), in list order. `cancel` runs a mode-1 cancel of all bullets in the
@@ -492,7 +491,8 @@ impl ItemManager {
                 }
             }
             if step == 1 && it.state != 3 && p.collect_test(it.pos, c) {
-                let out = self.collect(i, anm, p, spell);
+                // 08 §8.4: the handler (and its cancel to items) runs while the item still occupies its slot.
+                self.collect(i, anm, p, spell, &mut cancel);
                 // One sound per calc after the loop: 0x2C once any max-value item was collected, else 0x15.
                 if sound != Some(crate::sound::ITEM1) {
                     sound = Some(if self.items[i].max_flag {
@@ -503,9 +503,6 @@ impl ItemManager {
                 }
                 self.items[i].alive = false;
                 self.order[k - 1] = DEAD;
-                if out.cancel {
-                    cancel(self, anm, p);
-                }
                 continue;
             }
             let it = &mut self.items[i];
@@ -597,6 +594,25 @@ mod tests {
         assert_eq!(power_level(8.0), 1);
         assert_eq!(power_level(127.0), 4);
         assert_eq!(power_level(128.0), 5);
+    }
+
+    // 08 §8.4 (RE-Q56 AE): the full-power cancel runs while the collected item still occupies its slot.
+    #[test]
+    fn collected_item_occupied_during_cancel() {
+        let mut anm = AnmManager::default();
+        let pr = Player::new_ref();
+        let mut p = pr.borrow_mut();
+        p.update_boxes();
+        let mut m = ItemManager::default();
+        let pos = p.pos;
+        assert_eq!(m.spawn(&mut anm, &p, pos, FULL_POWER as i32, 0), Some(0));
+        let mut got = None;
+        m.calc(&mut anm, &mut p, false, |m, anm, p| {
+            m.cursor = 0;
+            got = m.spawn(anm, p, [100.0, 100.0, 0.0], STAR as i32, 1);
+        });
+        assert_eq!(got, Some(1));
+        assert!(!m.items[0].alive);
     }
 
     #[test]

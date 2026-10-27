@@ -243,7 +243,7 @@ pub struct Bullet {
     pub colour: i16,
     // +0xDB8: 0 free, 1 normal, 2/3/4 spawn effect, 5 cancelling, 6 sentinel.
     pub state: i16,
-    // +0xDBA off-screen counter (§4.3); not reset on slot reuse.
+    // +0xDBA off-screen counter (§4.3); kept by spawn and a normal free, zeroed by the cancels (§7).
     pub off_count: i16,
     pub grazed: bool,
     // +0xDBE: sticky "in a bomb area during the spawn effect".
@@ -1237,26 +1237,40 @@ impl BulletManager {
     }
 
     // BulletMgr_CancelAll 0x430830 (08 §7): mode 4 → state 5 without items; else item type 6 with item mode
-    // `mode`; bomb-area bullets always drop the bomb item. Sets the 10-frame cancel guard.
+    // `mode`; bomb-area bullets drop the raw bomb item. Sets the 10-frame cancel guard.
     pub fn cancel_all(&mut self, anm: &mut AnmManager, p: &mut Player, mode: i32) {
         for i in 0..MAX_BULLETS {
-            let b = &mut self.bullets[i];
+            let b = &self.bullets[i];
             if b.free() || b.state == 5 {
                 continue;
             }
             let pos = b.pos;
+            // 08 §7: the original calls Player_InBombArea twice and drops the first result (hit counter +2).
+            p.in_bomb_area(pos);
             if p.in_bomb_area(pos) {
-                b.state = 0;
-                Self::bomb_drop(&mut self.items, anm, p, pos);
+                Self::cancel_drop(&mut self.items, anm, p, pos);
+                self.zero_slot(i);
             } else if mode == 4 {
-                b.state = 5;
+                self.bullets[i].state = 5;
             } else {
-                b.state = 0;
                 self.items.spawn(anm, p, pos, CANCEL_ITEM, mode as u8);
+                self.zero_slot(i);
             }
         }
         self.cancel_lasers(anm, p, mode, mode != 4, false);
         self.cancel_guard = 10;
+    }
+
+    // Bomb-area item of the cancels (08 §7): the raw player+0xE2A90 with mode 1, without the §4.1 9/−1 mapping.
+    fn cancel_drop(items: &mut ItemManager, anm: &mut AnmManager, p: &Player, pos: [f32; 3]) {
+        // SPEC-GAP: ItemMgr_Spawn with a raw −1 (area item "none") is unspecified; the port's spawn rejects it.
+        items.spawn(anm, p, pos, p.cancel_item, 1);
+    }
+
+    // "Slot zeroed" (08 §7): CancelAll / CancelRadius memset the whole 0x10B8-byte bullet, off-screen counter
+    // +0xDBA included; a normal Bullet_Free 0x432170 resets only state and two timers.
+    fn zero_slot(&mut self, i: usize) {
+        self.bullets[i] = Bullet::default();
     }
 
     // BulletMgr_CancelBonus 0x430AA0 (08 §7): popups from 2000, +20 per bullet, capped at `max_value`;
@@ -1277,7 +1291,7 @@ impl BulletManager {
             b.state = 5;
             let pos = b.pos;
             if p.in_bomb_area(pos) {
-                Self::bomb_drop(&mut self.items, anm, p, pos);
+                Self::cancel_drop(&mut self.items, anm, p, pos);
             } else {
                 self.items.spawn(anm, p, pos, CANCEL_ITEM, 1);
             }
@@ -1307,9 +1321,9 @@ impl BulletManager {
             }
             let (dx, dy) = (b.pos[0] - c[0], b.pos[1] - c[1]);
             if dx * dx + dy * dy <= r * r {
-                b.state = 0;
                 let pos = b.pos;
                 self.items.spawn(anm, p, pos, CANCEL_ITEM, 1);
+                self.zero_slot(i);
             }
         }
     }
@@ -1929,6 +1943,29 @@ mod tests {
     }
 
     // 08 §7: CancelBonus cancels flag-4 lasers too (CancelAll skips them) and sets the cancel guard.
+    // 08 §7 (RE-Q56 AC, AK): the bomb-area item is the raw +0xE2A90 (type 9 stays one item), InBombArea runs
+    // twice per bullet, and the cancel zeroes the whole slot including the off-screen counter.
+    #[test]
+    fn cancel_all_raw_item_and_zeroed_slot() {
+        let (mut anm, mut b) = mgr();
+        let pl = b.player.clone();
+        let d = desc(PI, 0.0, 0, &[]);
+        let i = spawn(&mut anm, &mut b, &d);
+        let j = spawn(&mut anm, &mut b, &d);
+        b.bullets[j].pos = [50.0, 50.0, 0.1];
+        b.bullets[i].off_count = 5;
+        b.bullets[j].off_count = 7;
+        let a = pl
+            .borrow_mut()
+            .cancel_rect([192.0, 224.0], [40.0, 40.0], 9, 10);
+        b.cancel_all(&mut anm, &mut pl.borrow_mut(), 1);
+        let kinds: Vec<u8> = b.items.live().map(|it| it.kind).collect();
+        assert_eq!(kinds, vec![9, CANCEL_ITEM as u8]);
+        assert_eq!(pl.borrow().cancel_areas[a].total, 2);
+        assert!(b.bullets[i].free() && b.bullets[j].free());
+        assert_eq!((b.bullets[i].off_count, b.bullets[j].off_count), (0, 0));
+    }
+
     #[test]
     fn cancel_bonus_flag4_laser() {
         let l = LaserDesc {
