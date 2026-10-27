@@ -1085,10 +1085,7 @@ impl Exec<'_> {
             let tt = ease(sl.mode, tt);
             let v = sl.abcd;
             let val = if sl.func == 7 {
-                (2.0 * tt + 1.0) * (tt - 1.0) * (tt - 1.0) * v[0]
-                    + (3.0 - 2.0 * tt) * tt * tt * v[1]
-                    + tt * (1.0 - tt) * (1.0 - tt) * v[2]
-                    + (tt - 1.0) * tt * tt * v[3]
+                hermite(tt, v)
             } else {
                 v[0] + (v[1] - v[0]) * tt
             };
@@ -2385,12 +2382,44 @@ impl Exec<'_> {
     }
 }
 
+// EclInterp_Fn7 0x421180 (07 §5.6): f32 product/sum order as in the disasm; any other order is 1 ulp off.
+fn hermite(t: f32, v: [f32; 4]) -> f32 {
+    let h0 = ((t - 1.0) * (t - 1.0)) * (2.0 * t + 1.0);
+    let h1 = (t * t) * (3.0 - 2.0 * t);
+    let h2 = ((1.0 - t) * (1.0 - t)) * t;
+    let h3 = ((t - 1.0) * t) * t;
+    ((h0 * v[0] + h1 * v[1]) + h2 * v[2]) + h3 * v[3]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bullet::BulletManager;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[test]
+    fn hermite_eval_order() {
+        let v = [12.3f32, -45.6, 7.89, 101.1];
+        assert_eq!(hermite(0.0, v), v[0]);
+        assert_eq!(hermite(1.0, v), v[1]);
+        let mut differs = false;
+        for k in 1..1000 {
+            let t = k as f32 / 1000.0;
+            let h0 = ((t - 1.0) * (t - 1.0)) * (2.0 * t + 1.0);
+            let h1 = (t * t) * (3.0 - 2.0 * t);
+            let h2 = ((1.0 - t) * (1.0 - t)) * t;
+            let h3 = ((t - 1.0) * t) * t;
+            let want = ((h0 * v[0] + h1 * v[1]) + h2 * v[2]) + h3 * v[3];
+            assert_eq!(hermite(t, v).to_bits(), want.to_bits());
+            let old = (2.0 * t + 1.0) * (t - 1.0) * (t - 1.0) * v[0]
+                + (3.0 - 2.0 * t) * t * t * v[1]
+                + t * (1.0 - t) * (1.0 - t) * v[2]
+                + (t - 1.0) * t * t * v[3];
+            differs |= old.to_bits() != want.to_bits();
+        }
+        assert!(differs);
+    }
 
     // Sub instruction (07 §2.1): time, op, size, rank mask 0xFF, then i32 args.
     fn ins(time: i32, op: i16, args: &[i32]) -> Vec<u8> {

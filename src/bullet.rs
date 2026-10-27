@@ -533,11 +533,11 @@ impl BulletManager {
                     k + a1
                 }
             }
-            // 07 §9.3 op 98: aim added last.
-            2 => ring + aim,
+            // 07 §9.3 op 98: (j·a2 + a1) + (ring term + (0 + aim)); accumulator starts at 0.0 (RE-Q56).
+            2 => (j as f32 * a2 + a1) + (i as f32 * tau / c1 as f32 + (0.0 + aim)),
             3 => ring,
-            // 07 §9.3 op 100: ((i·2π)/c1 + π/c1) + aim, then + a1.
-            4 => ((i as f32 * tau / c1 as f32 + PI / c1 as f32) + aim) + a1,
+            // 07 §9.3 op 100: ((i·2π)/c1 + (π/c1 + (0 + aim))) + a1 (RE-Q56).
+            4 => (i as f32 * tau / c1 as f32 + (PI / c1 as f32 + (0.0 + aim))) + a1,
             5 => i as f32 * tau / c1 as f32 + PI / c1 as f32 + a1,
             6 => anm.rng.next_f32() * (a1 - a2) + a2,
             7 => {
@@ -1003,9 +1003,10 @@ impl BulletManager {
             2..=4 => {
                 let b = &mut self.bullets[idx];
                 b.age.dec(gs);
-                let div = [2.0, 2.5, 3.0][(b.state - 2) as usize];
+                // 08 §4.2: Vec3_DivScalar multiplies by f32(1/d), not vel / d (1 ulp apart for d = 3).
+                let r = 1.0f32 / [2.0f32, 2.5, 3.0][(b.state - 2) as usize];
                 for a in 0..3 {
-                    b.pos[a] += b.vel[a] / div;
+                    b.pos[a] += b.vel[a] * r;
                 }
                 if b.flags & F_NO_CANCEL == 0 && p.in_bomb_area(b.pos) {
                     b.cancel_after_spawn = true;
@@ -1637,9 +1638,21 @@ mod tests {
         }
         d.aim_mode = 4;
         for i in 0..4 {
-            let x = i as f32 * (2.0 * PI) / 4.0 + PI / 4.0;
+            let x = i as f32 * (2.0 * PI) / 4.0;
             let (_, a) = BulletManager::pattern_angle(&mut anm, &d, i, 0, aim);
-            assert_eq!(a.to_bits(), ((x + aim) + a1).to_bits());
+            assert_eq!(a.to_bits(), ((x + (PI / 4.0 + (0.0 + aim))) + a1).to_bits());
+        }
+        d.aim_mode = 2;
+        d.count2 = 3;
+        for i in 0..4 {
+            for j in 0..3 {
+                let x = i as f32 * (2.0 * PI) / 4.0;
+                let (_, a) = BulletManager::pattern_angle(&mut anm, &d, i, j, aim);
+                assert_eq!(
+                    a.to_bits(),
+                    ((j as f32 * a2 + a1) + (x + (0.0 + aim))).to_bits()
+                );
+            }
         }
     }
 
