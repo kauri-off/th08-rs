@@ -45,17 +45,15 @@ const S_SAVE_OVER: i32 = 14;
 const S_PANEL: i32 = 0xF;
 const S_PANEL_OUT: i32 = 0x10;
 const S_PRACTICE: i32 = 0x11;
-// State 0x12: no handler in the specs; only its Result_Calc exit is known (16 §2.4 exit).
-const S_12: i32 = 0x12;
 const S_PLAY: i32 = 0x13;
 const S_PLAY_WAIT: i32 = 0x14;
 const S_PLAY_OUT: i32 = 0x15;
 const S_SPELL: i32 = 0x16;
 
-// Result_Calc return 0 (16 §2.4 exit): state 2 after its scene request; 0x11, 0x12 (no request) and 0x16 the same way.
-// SPEC-GAP: 16 §2.4 does not say whether 0x11/0x12/0x16 share the frame > 19 test or when 0x12 is entered.
+// Result_Calc return 0 (16 §2.4 exit): state 2 at frame > 19 after its scene request. Its 0x11 / 0x12 / 0x16 cases
+// are unreachable (0x11 / 0x16 become 10 in OnRegister, 0x12 objects have no calc node), so they are not ported.
 fn exits(state: i32, frame: i32) -> bool {
-    matches!(state, S_LEAVE | S_PRACTICE | S_12 | S_SPELL) && frame > 19
+    state == S_LEAVE && frame > 19
 }
 
 // Name-entry charset 0x4B7340, 6 rows × 16 (16 §2.2). 0x5D is the only unselectable cell; 0x5E / 0x5F are
@@ -217,6 +215,37 @@ impl ResultScreen {
     }
 
     // Result_SetState 0x4550B7: the frame and sub counters restart (the original also stores prev = state).
+    // Mode 1 (16 §2.1 "Initial state"): `Result_Register` writes 9 / 0x11 / 0x16, and `Result_OnRegister` turns
+    // 0x11 / 0x16 into 10 by a direct write (frame stays 0), so the first Result_Calc already runs state 10.
+    fn register_state(&mut self, g: &mut gamemgr::Game) {
+        if self.mode != 1 {
+            return;
+        }
+        self.state = if g.spell_practice() {
+            S_SPELL
+        } else if g.practice() {
+            S_PRACTICE
+        } else {
+            S_NAME
+        };
+        if self.state == S_NAME {
+            return;
+        }
+        // Slow mode drops this run's card credit (15 §2.5, modes 0x11 / 0x16).
+        if g.cfg.slow != 0 {
+            g.restore_catk_backup();
+        }
+        if self.state == S_PRACTICE {
+            // 15 §2.6: practice hiscore [shot + 0x164D0B2][stage][difficulty] := max.
+            let shot = (g.shot as usize + g.demo_shot_bias as usize) % 12;
+            let d = g.difficulty.clamp(0, 4) as usize;
+            let score = g.stats.score10.clamp(0, 999_999_999) as u32;
+            let h = &mut g.score.pscr[shot].hiscore[g.stage % 9][d];
+            *h = (*h).max(score);
+        }
+        self.state = S_SAVE;
+    }
+
     fn set_state(&mut self, s: i32) {
         self.state = s;
         self.frame = 0;
@@ -307,19 +336,6 @@ impl ResultScreen {
 
     fn calc_state(&mut self, ctx: &mut Ctx) {
         match self.state {
-            // Mode 1 (16 §2.1): name entry, or 0x11 / 0x16 for stage / spell practice.
-            S_INIT if self.mode == 1 => {
-                let g = &ctx.game;
-                let s = if g.spell_practice() {
-                    S_SPELL
-                } else if g.practice() {
-                    S_PRACTICE
-                } else {
-                    S_NAME
-                };
-                self.state = s;
-                self.calc_state(ctx);
-            }
             S_INIT => {
                 // State 0 continues as state 1 in the same frame (16 §2.4 play data exit).
                 self.set_state(S_TOP);
@@ -441,22 +457,6 @@ impl ResultScreen {
             S_SAVE_SLOT => self.save_slot(ctx.input, &ctx.game),
             S_SAVE_NAME => self.save_name(ctx),
             S_SAVE_OVER => self.save_overwrite(ctx),
-            S_PRACTICE | S_SPELL => {
-                let g = &mut ctx.game;
-                // Slow mode drops this run's card credit (15 §2.5, modes 0x11 / 0x16).
-                if g.cfg.slow != 0 {
-                    g.restore_catk_backup();
-                }
-                if self.state == S_PRACTICE {
-                    // 15 §2.6: practice hiscore [shot + 0x164D0B2][stage][difficulty] := max.
-                    let shot = (g.shot as usize + g.demo_shot_bias as usize) % 12;
-                    let d = g.difficulty.clamp(0, 4) as usize;
-                    let score = g.stats.score10.clamp(0, 999_999_999) as u32;
-                    let h = &mut g.score.pscr[shot].hiscore[g.stage % 9][d];
-                    *h = (*h).max(score);
-                }
-                self.set_state(S_SAVE);
-            }
             S_PLAY | S_PLAY_WAIT | S_PLAY_OUT => self.play_data(ctx),
             _ => {}
         }
@@ -796,9 +796,9 @@ impl ResultScreen {
             };
             self.interrupt_from4(i);
             self.cursor = 0;
+            // State 11 by a direct write: frame kept (10), and the rest of this call still runs (16 §2.6, RE-Q56).
             if i != 0xB {
-                self.set_state(S_SAVE_MSG);
-                return;
+                self.state = S_SAVE_MSG;
             }
         }
         self.yes_no_colours();
@@ -1302,6 +1302,7 @@ impl Task<Ctx> for ResultScreen {
         self.bar = text_vm(ctx, ANM_SLOT, 32, true);
         // +0x58, the replay name, starts as LSNM (15 §3.6 "pre-filled from LSNM"; state 9 overwrites it).
         self.name.copy_from_slice(&ctx.game.score.lsnm[..8]);
+        self.register_state(&mut ctx.game);
         // Captured counts +0x64 per group and character: CATK present (v3) and a story or practice capture (16 §2.4).
         let catk = &ctx.game.score.catk;
         for g in 0..6 {
@@ -1716,14 +1717,44 @@ pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    // 16 §2.4 exit: Result_Calc returns 0 for states 2, 0x11, 0x12 and 0x16 at frame > 19.
+    // 16 §2.1 "Initial state": practice / spell practice enter state 10 at frame 0; a story game enters 9.
+    #[test]
+    fn register_practice_state() {
+        for (flags, st) in [
+            (0, S_NAME),
+            (gamemgr::F_PRACTICE, S_SAVE),
+            (gamemgr::F_SPELL_PRACTICE, S_SAVE),
+        ] {
+            let mut g = gamemgr::Game::default();
+            gamemgr::set_flags(flags);
+            let mut r = ResultScreen::new(1);
+            r.register_state(&mut g);
+            assert_eq!((r.state, r.frame), (st, 0));
+        }
+    }
+
+    // 16 §2.6: state 10 → 11 keeps frame 10, so state 11 takes input 10 frames later.
+    #[test]
+    fn save_msg_keeps_frame() {
+        let mut g = gamemgr::Game::default();
+        g.stats.continues = 1;
+        let mut r = ResultScreen::new(1);
+        r.vms = vec![AnmVm::default(); VM_COUNT];
+        r.text_vms = vec![AnmVm::default(); 28];
+        r.state = S_SAVE;
+        r.frame = 10;
+        r.save_ask(Input::default(), &g);
+        assert_eq!((r.state, r.frame), (S_SAVE_MSG, 10));
+    }
+
+    // 16 §2.4 exit: Result_Calc returns 0 for state 2 at frame > 19 only.
     #[test]
     fn calc_exit_states() {
-        for st in [S_LEAVE, S_PRACTICE, S_12, S_SPELL] {
-            assert!(!exits(st, 19));
-            assert!(exits(st, 20));
+        assert!(!exits(S_LEAVE, 19));
+        assert!(exits(S_LEAVE, 20));
+        for st in [S_PRACTICE, 0x12, S_SPELL, S_SAVE] {
+            assert!(!exits(st, 20));
         }
-        assert!(!exits(S_SAVE, 20));
         assert!(!exits(S_TOP, 20));
     }
 

@@ -2055,6 +2055,10 @@ impl Exec<'_> {
                     if (0..4).contains(&self.e.boss_slot) {
                         crate::ascii::marker_release(self.e.boss_slot as usize);
                     }
+                    // `Enemy_ReleaseOrbitEffects` 0x42A820 (13 §2.6b, RE-Q56 AL): op-128 effects fade and free.
+                    for i in self.e.fx_attached.drain(..) {
+                        crate::effect::get(i, |x| x.fade = true);
+                    }
                 } else if let Some(b) = self.m.bosses.get_mut(slot as usize) {
                     if slot < 4 {
                         crate::ascii::marker_interrupt(slot as usize, 1);
