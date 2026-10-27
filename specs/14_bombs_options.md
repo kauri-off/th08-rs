@@ -74,10 +74,13 @@ are the exe's 0x40888889 (4.2666669) and 0x41088889 (8.5333338), not the decimal
 floats and change the radii after a few frames; RE-Q52).
 
 ### 2.1 Reimu — 霊符「夢想妙珠」 (0x40C010 / 0x40C820), dur 200, invuln 260
-- T = 0: effect 12 at p (0xFF4040FF); 16 orbs (objects 0–15): VM script 0x13, angle_i = −π + i·π/8,
+- T = 0: effect 12 at p (0xFF4040FF); 16 orbs (objects 0–15): VM script 0x13, start angle from a **running f32
+  sum**: a := −π (f32 −3.1415927); per orb angle_i = a, then a := f32(a + π/8) (constant 0x4B439C = 0.3926991) — not
+  −π + i·π/8, which is 1–5 ulp off for i = 2–5, 7–12, 14 (VERIFIED 0x40C0F0 fld/fadd/fstp, RE-Q58 AR; same loop in 2.2),
   position = centre = p, radius (+8) = 0, state 1; per orb C circle(p, r 96, life 200, item 6) and
   D circle(orb, r 64, dmg 5, life 200, period 2, max 200, no hit effect) attached; SE 0xD.
-- T < 40 (spin-out): angle += −π/60 (even i) / +π/60 (odd i); pos = centre + (sin a, cos a)·radius;
+- T < 40 (spin-out): angle := `Angle_AddNormalize`(angle, −π/60 (even i) / +π/60 (odd i); f32 0xBD567750 /
+  0x3D567750) (05 §6.3, wrapped into [−π, π]; VERIFIED call 0x40C24B, RE-Q58 AQ); pos = centre + (sin a, cos a)·radius;
   radius += 3.2; velocity = pos − previous pos.
 - T = 40: +0xC = |velocity|, angle = atan2(velocity), counter 0, speed (+8) = 8.
 - T ≥ 40, state 1, timer advanced: target = homing target (+0xE2AA4) if its x > −100 else p; d = target − pos;
@@ -98,7 +101,7 @@ floats and change the radii after a few frames; RE-Q52).
 - T = 0: effect 12 at p (0xFF4040FF) and the same 16 orbs and areas as 2.1 (D orb circles with +0x3D);
   blast index (+0xFF0) = 0; SE 0xD. The impact circles (dmg 25) and the blasts (dmg 400) do **not** set +0x3D
   (changelog/answers_impl11.md §2/§4, VERIFIED).
-- Every frame, state-1 orbs: angle ±π/60 as above, pos = centre + (sin, cos)·radius; while T < 40:
+- Every frame, state-1 orbs: angle := `Angle_AddNormalize`(angle, ±π/60) as above (VERIFIED call 0x40CB4C, RE-Q58 AQ), pos = centre + (sin, cos)·radius; while T < 40:
   radius += 2.4 (even) / 1.2 (odd). Orb i explodes when T ≥ duration − 40 − i: areas off; C circle(p, r 64,
   dr 64/15 (f32 0x40888889), life 30); D circle(orb, r 64, dr 128/15 (f32 0x41088889), dmg 25, life 15, period 5, max 50); effect 6 ×8; state 2
   (not freed; its VM keeps running); interrupt 1; SE 0xF @orb; shake (1: 16, 8, 0). The new circles are **not**

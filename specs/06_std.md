@@ -229,6 +229,10 @@ fov uses the same formula with modes 0–6 (no Hermite).
 | 3 | 4800 | up.x = sin φ; up.z = cos φ | 4800 |
 
 After computing, `sway_clock.Tick()`; if clock ≥ wrap value it is Set(0). Mode 0 = off.
+Rounding (VERIFIED disasm 0x40869F–0x40880A, RE-Q58): every entry is `Math_Sin`/`Math_Cos` (extended, 05 §10) then
+`fmul` by the f32 constant (40, 70, 0.1, and 1.0 for mode 3; up.x of mode 2 is `fchs` then ·0.1) and one `fstp`: each
+value is f32(sin φ · k) rounded once from the extended product, e.g. eye_offset.x = f32(sin(φ)·40) — not
+f32(sinf(φ))·40; mode 3 up.z = f32(cos φ).
 
 ## 8. Fog — VERIFIED
 

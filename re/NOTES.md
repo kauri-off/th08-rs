@@ -901,3 +901,12 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   rank +5 (08 §8.5); AddScore has no cap (11 §5) — likely udKa49 r120959.
 - Result: 19/28 identical, ok set 160/160. Open (9): 51477 (st3), 54656 / udPn85 / 51759 (4A), udCs13 / 52339 /
   54010 / 79317 (4B), udKa49 (6B score cap, unverified).
+
+# RE-Q58 (2026-10-27) — last 9 batch500 leftovers (specs/changelog/answers_re_q58.md)
+- Runs re/work/runs/q58 (CHECKPOINT.md; scratch portcopy = q57 portcopy + Q1/AQ/AR/AS, target/re58; prun.sh, pbatch.sh).
+- Q1 AddScore no cap (11 §5) confirmed by run: udKa49.
+- AQ Reimu bomb orb spin uses Angle_AddNormalize (wrap), 14 §2.1/§2.2: 51477, 52339, 54010, 79317.
+- AR Reimu bomb orb start angle = running f32 sum a += π/8 from −π (14 §2.1): udCs13.
+- AS ECL ops 32/33 = f32 of extended fsin/fcos, not sinf/cosf (07, 05 §10 rule); sway rounding written in 06 §7;
+  list of all port single-precision trig sites in the changelog: 54656, udPn85.
+- Result: 8/9 identical, ok set + fixed 168/168. Open: 51759 r68154 rank +1 (4A).

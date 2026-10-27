@@ -430,7 +430,7 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 20–24 | iadd3 … imod3 | V a, i b, i c | a = b op c | 2 14 2 28 64 |
 | 25–29 | fadd3 … fmod3 | W a, f b, f c | a = b op c | 355 263 499 128 0 |
 | 30 / 31 | inc / dec | V a | a ± 1 | 81 / 25 |
-| 32 / 33 | fsin / fcos | W a, f b | a = sin b / cos b | 136 / 131 |
+| 32 / 33 | fsin / fcos | W a, f b | a = f32(sin b) / f32(cos b): x87 result rounded once by the `fstp` (05 §10 trig sites; not single-precision `sinf`/`cosf`, VERIFIED RE-Q58 AS) | 136 / 131 |
 | 34 | fatan2 | W a, f x1, y1, x2, y2 | a = atan2(y2 − y1, x2 − x1) | 38 |
 | 35 | flerp | W a, f b, f c, f d | a = (b − c)·d + c | 0 |
 | 36 | interp | target var id stored as a **float** (e.g. 10016.0; the raw dword is kept in the slot and compared as a float, all 37 uses), i dur, i fn, i mode, f a, b, c, d | start interpolation slot (§5.6) | 97 |
