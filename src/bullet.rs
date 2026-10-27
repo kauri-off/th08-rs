@@ -84,6 +84,19 @@ pub fn polar(a: f32, r: f32) -> [f32; 3] {
     [(a.cos() * r) as f32, (a.sin() * r) as f32, 0.0]
 }
 
+// Math_Sin / Math_Cos / Math_SinCosF32 (05 §10): extended fsin/fcos rounded once to f32, never libm sinf/cosf.
+pub fn sin_f(a: f32) -> f32 {
+    (a as f64).sin() as f32
+}
+
+pub fn cos_f(a: f32) -> f32 {
+    (a as f64).cos() as f32
+}
+
+pub fn sin_cos_f(a: f32) -> (f32, f32) {
+    (sin_f(a), cos_f(a))
+}
+
 // Player_AngleFrom (08 §3.1): π/2 when both differences are exactly 0.
 pub fn angle_from(o: [f32; 3], p: [f32; 3]) -> f32 {
     let (dx, dy) = (p[0] - o[0], p[1] - o[1]);
@@ -1221,7 +1234,7 @@ impl BulletManager {
                 l.width = l.cur_width;
                 if items {
                     let (o, a, tail, head) = (l.origin, l.angle, l.tail, l.head);
-                    let (s, c) = a.sin_cos();
+                    let (s, c) = sin_cos_f(a);
                     if bonus {
                         self.items.spawn(anm, p, o, CANCEL_ITEM, 1);
                     }
@@ -1567,6 +1580,12 @@ mod tests {
     use super::*;
     use crate::item;
     use crate::player::Player;
+
+    // 05 §10 (RE-Q58 AS): f32 of the extended cos, not libm cosf (0xC0045DCE → 0xBEF44F55, cosf gives …54).
+    #[test]
+    fn trig_rounded_once() {
+        assert_eq!(cos_f(f32::from_bits(0xC0045DCE)).to_bits(), 0xBEF44F55);
+    }
 
     fn mgr() -> (AnmManager, BulletManager) {
         let mut anm = AnmManager::default();

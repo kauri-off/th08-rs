@@ -960,8 +960,9 @@ impl AnmVm {
                     };
                     let v = match ins.op {
                         60 => anm.rng.next_f32() * x,
-                        61 => x.sin(),
-                        62 => x.cos(),
+                        // Rounded once from the extended fsin/fcos (05 §10).
+                        61 => crate::bullet::sin_f(x),
+                        62 => crate::bullet::cos_f(x),
                         63 => x.tan(),
                         64 => x.acos(),
                         65 => x.atan(),

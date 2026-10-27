@@ -879,8 +879,8 @@ impl Player {
         env: &GrazeEnv,
         rng: &mut Rng,
     ) -> (u8, u8) {
-        // Vec2_Rotate by −a: sin/cos rounded to f32.
-        let (sn, cs) = (-a).sin_cos();
+        // Vec2_Rotate by −a: sin/cos rounded once to f32 (05 §10).
+        let (sn, cs) = crate::bullet::sin_cos_f(-a);
         let (dx, dy) = (self.pos[0] - o[0], self.pos[1] - o[1]);
         let q = [o[0] + (cs * dx - sn * dy), o[1] + (sn * dx + cs * dy)];
         let ph = self.hit_half();

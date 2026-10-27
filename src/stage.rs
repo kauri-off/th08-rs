@@ -535,16 +535,17 @@ impl Stage {
             _ => return,
         };
         let phi = (c * PI + c * PI) / p - PI;
-        let s = phi.sin();
+        // Each value is f32(sin φ · k) rounded once from the extended product (06 §7, RE-Q58 AS).
+        let s = |k: f64| ((phi as f64).sin() * k) as f32;
         match self.sway_mode {
-            1 => self.cam.eye_offset[0] = s * 40.0,
+            1 => self.cam.eye_offset[0] = s(40.0),
             2 => {
-                self.cam.eye_offset[0] = s * 70.0;
-                self.cam.v[UP][0] = -s * 0.1;
+                self.cam.eye_offset[0] = s(70.0);
+                self.cam.v[UP][0] = -s(0.1);
             }
             _ => {
-                self.cam.v[UP][0] = s;
-                self.cam.v[UP][2] = phi.cos();
+                self.cam.v[UP][0] = s(1.0);
+                self.cam.v[UP][2] = crate::bullet::cos_f(phi);
             }
         }
         self.sway_clock.tick(speed);

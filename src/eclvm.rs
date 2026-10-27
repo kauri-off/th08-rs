@@ -1597,7 +1597,16 @@ impl Exec<'_> {
             }
             32 | 33 => {
                 let b = self.af(t, ins, 1);
-                self.set_f(t, ins, 0, if op == 32 { b.sin() } else { b.cos() });
+                self.set_f(
+                    t,
+                    ins,
+                    0,
+                    if op == 32 {
+                        crate::bullet::sin_f(b)
+                    } else {
+                        crate::bullet::cos_f(b)
+                    },
+                );
             }
             34 | 39 => {
                 let (x1, y1, x2, y2) = (

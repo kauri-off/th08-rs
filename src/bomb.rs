@@ -70,7 +70,7 @@ impl Area {
                 && min[1] <= h2 + self.pos[1];
         }
         let (dx, dy) = (p[0] - self.pos[0], p[1] - self.pos[1]);
-        let (sn, c) = (-self.rot).sin_cos();
+        let (sn, c) = crate::bullet::sin_cos_f(-self.rot);
         let d = [dx * c - dy * sn, dx * sn + dy * c];
         -w2 <= s[0] / 2.0 + d[0]
             && d[0] - s[0] / 2.0 <= w2
@@ -84,7 +84,7 @@ impl Area {
         if self.r > 0.0 {
             return dx * dx + dy * dy < self.r * self.r;
         }
-        let (s, c) = (-self.rot).sin_cos();
+        let (s, c) = crate::bullet::sin_cos_f(-self.rot);
         let (rx, ry) = (dx * c - dy * s, dx * s + dy * c);
         rx.abs() <= self.size[0] / 2.0 && ry.abs() <= self.size[1] / 2.0
     }
@@ -654,12 +654,15 @@ impl Player {
     // Shared orb setup of Reimu's bombs (14 §2.1).
     fn reimu_orbs(&mut self, anm: &mut AnmManager) {
         let p = self.pos;
+        // Start angles are a running f32 sum (0x40C0F0 fld/fadd/fstp), not −π + i·π/8 (14 §2.1, RE-Q58 AR).
+        let mut a = -PI;
         for i in 0..16 {
             let c = self.cancel_circle(xy(p), 96.0, 0.0, 200, 6);
             let d = self.dc(xy(p), 64.0, 0.0, 5, 200, 2, 200, true);
             let o = &mut self.bomb.objs[i];
             Self::obj_script(anm, o, 0x13);
-            o.angle = -PI + i as f32 * PI / 8.0;
+            o.angle = a;
+            a += PI / 8.0;
             (o.pos, o.centre, o.f8, o.state) = (p, p, 0.0, 1);
             (o.carea, o.darea) = (Some(c), Some(d));
         }
@@ -699,7 +702,7 @@ impl Player {
                 .enumerate()
                 .filter(|(_, o)| o.state == 1)
             {
-                o.angle += if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 };
+                o.angle = anmvm::wrap_add(o.angle, if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 });
                 let prev = o.pos;
                 o.pos = [
                     o.centre[0] + sin_r(o.angle, o.f8),
@@ -779,7 +782,7 @@ impl Player {
             if o.state != 1 {
                 continue;
             }
-            o.angle += if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 };
+            o.angle = anmvm::wrap_add(o.angle, if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 });
             o.pos = [
                 o.centre[0] + sin_r(o.angle, o.f8),
                 o.centre[1] + cos_r(o.angle, o.f8),
@@ -1636,6 +1639,30 @@ mod tests {
         p.bomb.ch = 4;
         assert_eq!(shakes_at(&mut p, &mut anm, true, 0), [[50, 4, 1, 0]]);
         assert!(shakes_at(&mut p, &mut anm, true, 21).is_empty());
+    }
+
+    // 14 §2.1 (RE-Q58 AR, AQ): start angles are a running f32 sum; the ±π/60 spin wraps into [−π, π].
+    #[test]
+    fn reimu_orb_angles() {
+        let (mut p, mut anm) = ready(0);
+        p.bomb.duration = 200;
+        let b = Bf {
+            t: 0,
+            adv: true,
+            ls: false,
+            gs: 1.0,
+        };
+        p.bomb_reimu(&mut anm, b);
+        let mut a = -PI;
+        let mut differs = 0;
+        for i in 0..16 {
+            let d = if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 };
+            assert_eq!(p.bomb.objs[i].angle, anmvm::wrap_add(a, d), "orb {i}");
+            differs += (a != -PI + i as f32 * PI / 8.0) as u32;
+            a += PI / 8.0;
+        }
+        assert!(differs > 0);
+        assert!(p.bomb.objs[0].angle > 0.0);
     }
 
     // 14 §2.3 / §2.4: Alice shakes (1: 24, 8, 0) at T = 90 and 150; Alice LS only at T = 180.

@@ -2,6 +2,7 @@
 
 use crate::anmmgr::{self, AnmManager};
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::bullet::{cos_f, sin_cos_f, sin_f};
 use crate::d3dx;
 use crate::game::Ctx;
 use crate::gfx::{Camera, FULLSCREEN, Gfx, PLAYFIELD, Vertex};
@@ -389,7 +390,7 @@ impl Effects {
             17 | 18 | 27 => {
                 e.centre = pos;
                 let a = rng.next_f32() * (2.0 * PI) - PI;
-                e.dir = [a.cos(), a.sin(), 0.0];
+                e.dir = [cos_f(a), sin_f(a), 0.0];
                 e.life = match kind {
                     17 => 60,
                     18 => 240,
@@ -450,7 +451,7 @@ impl Effects {
                     anmvm::wrap_add(param[0], 0.0)
                 };
                 let m = 1.0 + rng.next_f32() * 1.5;
-                e.dir = [a.cos() * m, a.sin() * m, 0.0];
+                e.dir = [cos_f(a) * m, sin_f(a) * m, 0.0];
             }
             // 13 §2.6: no init; the spawners pass the player pos +0x2B4.
             22..=25 => e.pos = player,
@@ -672,7 +673,7 @@ impl Effects {
                     p = d3dx::vec3_normalize(p);
                 }
                 p = p.map(|x| x * e.ring.radius);
-                let (s, c) = th.sin_cos();
+                let (s, c) = sin_cos_f(th);
                 let nxp = [
                     n[1] * p[2] - n[2] * p[1],
                     n[2] * p[0] - n[0] * p[2],
@@ -1626,7 +1627,7 @@ mod tests {
             while probe.state != rng.state {
                 a = probe.next_f32() * (2.0 * PI) - PI;
             }
-            assert_eq!(fx.fx[i].dir, [a.cos(), a.sin(), 0.0], "type {kind}");
+            assert_eq!(fx.fx[i].dir, [cos_f(a), sin_f(a), 0.0], "type {kind}");
         }
     }
 
