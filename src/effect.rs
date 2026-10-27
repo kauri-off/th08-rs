@@ -186,6 +186,18 @@ pub fn get(idx: usize, f: impl FnOnce(&mut Effect)) {
     })
 }
 
+// Raw +0x2A4 write through a stale pointer, no alive/type check (Sakuya bomb follow, 14 §2.7, RE-Q57 AO).
+// The port's pos is the world +0x2D4 for live 19/51/63, whose update recomputes +0x2A4 anyway: skip them.
+pub fn write_pos_unchecked(idx: usize, pos: [f32; 3]) {
+    with(|e| {
+        if let Some(x) = e.fx.get_mut(idx) {
+            if !(x.active && matches!(x.kind, 19 | 51 | 63)) {
+                x.pos = pos;
+            }
+        }
+    })
+}
+
 // Reads a slot even after it was freed (the original reads stale slot data).
 pub fn peek<R>(idx: usize, f: impl FnOnce(&Effect) -> R) -> R {
     with(|e| f(&e.fx[idx]))
@@ -1536,6 +1548,30 @@ pub fn invuln_ring(anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 14 §2.7 (RE-Q57 AO): the Sakuya follow write moves 2D/freed slots, never a live 3D particle's world pos.
+    #[test]
+    fn sakuya_follow_write_skips_3d_particles() {
+        let i = 3;
+        let old = with(|e| e.fx[i].clone());
+        with(|e| {
+            e.fx[i] = Effect {
+                active: true,
+                kind: 51,
+                pos: [1.0, 2.0, -3.0],
+                ..Effect::default()
+            }
+        });
+        write_pos_unchecked(i, [100.0, 200.0, 0.0]);
+        assert_eq!(peek(i, |x| x.pos), [1.0, 2.0, -3.0]);
+        with(|e| e.fx[i].kind = 20);
+        write_pos_unchecked(i, [100.0, 200.0, 0.0]);
+        assert_eq!(peek(i, |x| x.pos), [100.0, 200.0, 0.0]);
+        with(|e| (e.fx[i].kind, e.fx[i].active) = (51, false));
+        write_pos_unchecked(i, [5.0, 6.0, 0.0]);
+        assert_eq!(peek(i, |x| x.pos), [5.0, 6.0, 0.0]);
+        with(|e| e.fx[i] = old);
+    }
 
     // 13 §3 type 1/7: the shake freeze reads GameFlags bit 10 live, not the end-of-Player_Calc mirror.
     #[test]

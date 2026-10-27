@@ -206,6 +206,7 @@ impl Player {
     fn init_option(&mut self, anm: &mut AnmManager, k: usize) {
         let p = self.pos;
         let trail = self.trail[15];
+        let bombing = self.bombing;
         let o = &mut self.options[k];
         let script = match o.kind {
             OptKind::Yukari => 0x12,
@@ -223,7 +224,12 @@ impl Player {
                 o.pos = [p[0], (p[1] - 96.0).max(32.0), 0.0];
                 self.aimed = None;
             }
-            OptKind::Alice => o.pos = [p[0], p[1] - 32.0, 0.0],
+            // 14 §3 0x44EA40 (RE-Q57 AN): created during a bomb she keeps the zeroed slot pos (0, 0, 0).
+            OptKind::Alice => {
+                if !bombing {
+                    o.pos = [p[0], p[1] - 32.0, 0.0];
+                }
+            }
             OptKind::Remilia | OptKind::RemiliaSolo => {
                 o.anchor = [
                     p[0] + REMILIA_ANCHOR[k][0],
@@ -677,10 +683,11 @@ impl Player {
                     let vl = (v[0] * v[0] + v[1] * v[1]).sqrt().max(1e-6);
                     b.speed = vl.clamp(1.0, 10.0);
                     b.vel = [v[0] * b.speed / vl, v[1] * b.speed / vl];
-                } else if b.speed < 10.0 {
-                    let old = b.speed.max(1e-6);
+                } else if b.state == 1 && b.speed < 10.0 {
+                    // 09 §4.4 (RE-Q57 AM): rescale by the current |v|, not the old speed field.
                     b.speed += 1.0 / 3.0;
-                    b.vel = [b.vel[0] * b.speed / old, b.vel[1] * b.speed / old];
+                    let vl = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt().max(1e-6);
+                    b.vel = [b.vel[0] * b.speed / vl, b.vel[1] * b.speed / vl];
                 }
                 b.angle = b.vel[1].atan2(b.vel[0]);
                 false
@@ -1066,6 +1073,41 @@ mod tests {
         assert_eq!(youmu_sparkle(true, false, 0), Some(0xFFF05080));
         assert_eq!(youmu_sparkle(false, true, 0), Some(0x80405080));
         assert_eq!(youmu_sparkle(false, false, 0), Some(0x80405080));
+    }
+
+    // 09 §4.4 (RE-Q57 AM): state 2 only sets the angle; the speed-up divides by the current |v|.
+    #[test]
+    fn homing_speed_up_only_in_state1_by_current_v() {
+        let mut anm = AnmManager::default();
+        let mut p = Player::default();
+        p.targets[0] = [-999.0; 3];
+        let b = &mut p.bullets[0];
+        (b.update, b.state, b.speed, b.vel) = (1, 2, 4.0, [0.0, -0.5]);
+        p.bullet_update_fn(&mut anm, 0);
+        let b = &p.bullets[0];
+        assert_eq!((b.speed, b.vel), (4.0, [0.0, -0.5]));
+        assert_eq!(b.angle, (-0.5f32).atan2(0.0));
+        p.bullets[0].state = 1;
+        p.bullet_update_fn(&mut anm, 0);
+        let b = &p.bullets[0];
+        assert_eq!(b.speed, 4.0 + 1.0 / 3.0);
+        assert_eq!(b.vel, [0.0, -0.5 * b.speed / 0.5]);
+    }
+
+    // 14 §3 0x44EA40 (RE-Q57 AN): Alice created during a bomb keeps the zeroed pos.
+    #[test]
+    fn alice_init_while_bombing_stays_at_origin() {
+        let mut anm = AnmManager::default();
+        let mut p = Player::default();
+        p.pos = [192.0, 400.0, 0.0];
+        p.bombing = true;
+        p.set_option(0, OptKind::Alice);
+        p.init_option(&mut anm, 0);
+        assert_eq!((p.options[0].state, p.options[0].pos), (2, [0.0; 3]));
+        p.bombing = false;
+        p.set_option(0, OptKind::Alice);
+        p.init_option(&mut anm, 0);
+        assert_eq!(p.options[0].pos, [192.0, 368.0, 0.0]);
     }
 
     // 09 §4.3: the origin is the option's stored pos whatever its state.

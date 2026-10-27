@@ -1041,7 +1041,7 @@ impl Player {
             }
         }
         if b.t <= 60 {
-            effect::get(self.bomb.fx, |e| e.pos = p);
+            effect::write_pos_unchecked(self.bomb.fx, p);
         }
         if (20..window).contains(&b.t) {
             if !ls {
