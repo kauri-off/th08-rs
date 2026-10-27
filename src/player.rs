@@ -237,9 +237,9 @@ pub const TIME_THR: [[i32; 4]; 8] = [
 ];
 
 impl Stats {
-    // AddScore 0x4181F0: score += n/10 (11 §5).
+    // AddScore 0x4181F0: score += n/10 (11 §5). No cap here (RE-Q57): only GM calc step 9 and the GM unregister cap.
     pub fn add_score(&mut self, v: i32) {
-        self.score10 = (self.score10 + (v / 10) as i64).min(999_999_999);
+        self.score10 += (v / 10) as i64;
     }
 
     pub fn score(&self) -> i64 {
@@ -1404,6 +1404,17 @@ mod tests {
         let t = rng.total;
         Stats::checksum_restored(&mut rng);
         assert_eq!((rng.state, rng.total - t), (0x1234, 4));
+    }
+
+    // 11 §5 (RE-Q57): AddScore adds n/10 with no cap.
+    #[test]
+    fn add_score_uncapped() {
+        let mut st = Stats {
+            score10: 999_999_990,
+            ..Default::default()
+        };
+        st.add_score(1000);
+        assert_eq!(st.score10, 1_000_000_090);
     }
 
     fn ready() -> (Player, AnmManager) {

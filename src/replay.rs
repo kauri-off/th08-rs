@@ -45,6 +45,8 @@ pub struct StageRecord {
     // Input words from the dummy word on (15 §3.2); fps bytes as stored (one per 30 frames, bit 7 = flag).
     pub inputs: Vec<u16>,
     pub fps: Vec<u8>,
+    // Image bytes after the input words to the end of the decompressed image; playback reads on into them (15 §3.3).
+    pub tail: Vec<u8>,
 }
 
 impl StageRecord {
@@ -67,6 +69,7 @@ impl StageRecord {
             clock: b[0x22] as i8,
             inputs: b[REC..].chunks_exact(2).map(|c| u16_at(c, 0)).collect(),
             fps: Vec::new(),
+            tail: Vec::new(),
         }
     }
 
@@ -233,6 +236,7 @@ impl Replay {
             }
             let mut r = StageRecord::parse(&img[o..f]);
             r.fps = img[f..next].to_vec();
+            r.tail = img[o + REC + 2 * r.inputs.len()..].to_vec();
             stages[i] = Some(r);
         }
         Ok(Self {
@@ -402,6 +406,7 @@ fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
         clock: st.clock as i8,
         inputs: vec![0],
         fps: Vec::new(),
+        tail: Vec::new(),
     });
 }
 
@@ -702,9 +707,14 @@ fn fast_forward(
 }
 
 // One playback frame from the input words at `cursor`: (input, next cursor). PlayCalc steps 1 word; PlayCalcDebug
-// (header +6 ≠ 0) steps 3 words and never reads the other two (15 §3.1). Past the end the input is 0.
-fn next_frame(words: &[u16], cursor: usize, debug: bool) -> (u16, usize) {
-    let w = words.get(cursor).copied().unwrap_or(0);
+// (header +6 ≠ 0) steps 3 words and never reads the other two (15 §3.1).
+// QUIRK (15 §3.3, RE-Q57 AP): no bound check, past the input words the read goes on through the following image bytes
+// (`tail`, LE u16); past the end of the image (undefined heap in the original) the input is 0.
+fn next_frame(words: &[u16], tail: &[u8], cursor: usize, debug: bool) -> (u16, usize) {
+    let w = words.get(cursor).copied().unwrap_or_else(|| {
+        let o = 2 * (cursor - words.len());
+        tail.get(o..o + 2).map_or(0, |b| u16_at(b, 0))
+    });
     (w, cursor + if debug { 3 } else { 1 })
 }
 
@@ -773,12 +783,12 @@ impl ReplayTask {
         {
             return;
         }
-        let words = g
+        let (words, tail) = g
             .rpy
             .as_ref()
             .and_then(|r| r.stages[self.stage].as_ref())
-            .map_or(&[][..], |s| &s.inputs[..]);
-        let (w, next) = next_frame(words, self.cursor, self.debug);
+            .map_or((&[][..], &[][..]), |s| (&s.inputs[..], &s.tail[..]));
+        let (w, next) = next_frame(words, tail, self.cursor, self.debug);
         self.cursor = next;
         let i = &mut ctx.input;
         i.game_prev = i.game;
@@ -886,12 +896,17 @@ mod tests {
     #[test]
     fn playback_frame_words() {
         let w = [0, 0, 0x55, 0x11, 9, 0x66];
-        assert_eq!(next_frame(&w, 0, false), (0, 1));
-        assert_eq!(next_frame(&w, 3, false), (0x11, 4));
-        assert_eq!(next_frame(&w, 0, true), (0, 3));
-        assert_eq!(next_frame(&w, 3, true), (0x11, 6));
-        assert_eq!(next_frame(&w, 6, true), (0, 9));
-        assert_eq!(next_frame(&w, 6, false), (0, 7));
+        assert_eq!(next_frame(&w, &[], 0, false), (0, 1));
+        assert_eq!(next_frame(&w, &[], 3, false), (0x11, 4));
+        assert_eq!(next_frame(&w, &[], 0, true), (0, 3));
+        assert_eq!(next_frame(&w, &[], 3, true), (0x11, 6));
+        assert_eq!(next_frame(&w, &[], 6, true), (0, 9));
+        assert_eq!(next_frame(&w, &[], 6, false), (0, 7));
+        // 15 §3.3 (RE-Q57 AP): past the words the read continues into the following image bytes, then 0.
+        let t = [0x05, 0x01, 0xBD, 0x05, 0x70];
+        assert_eq!(next_frame(&w, &t, 6, false), (0x0105, 7));
+        assert_eq!(next_frame(&w, &t, 7, false), (0x05BD, 8));
+        assert_eq!(next_frame(&w, &t, 8, false), (0, 9));
     }
 
     // 15 §3.2 (audit A.48): a stage start sets +0 := score only on the highest recorded stage below it.

@@ -1264,7 +1264,7 @@ impl BulletManager {
 
     // Bomb-area item of the cancels (08 §7): the raw player+0xE2A90 with mode 1, without the §4.1 9/−1 mapping.
     fn cancel_drop(items: &mut ItemManager, anm: &mut AnmManager, p: &Player, pos: [f32; 3]) {
-        // SPEC-GAP: ItemMgr_Spawn with a raw −1 (area item "none") is unspecified; the port's spawn rejects it.
+        // A raw −1 (area item "none") is spawned as type 0xFF (08 §8.3).
         items.spawn(anm, p, pos, p.cancel_item, 1);
     }
 

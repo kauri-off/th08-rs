@@ -140,6 +140,7 @@ impl ItemManager {
     }
 
     // ItemMgr_Spawn 0x4400A0 (08 §8.3). RNG: mode 2 x then y; mode 3/5 vel.y (Float) then vel.x (Signed).
+    // No type check (RE-Q57 Q1): type −1 is stored as byte 0xFF, script 0x3C, collected with no effect (08 §8.2).
     pub fn spawn(
         &mut self,
         anm: &mut AnmManager,
@@ -148,7 +149,7 @@ impl ItemManager {
         kind: i32,
         mode: u8,
     ) -> Option<usize> {
-        if pos[0] < -64.0 || pos[0] > 448.0 || kind < 0 {
+        if pos[0] < -64.0 || pos[0] > 448.0 {
             return None;
         }
         let (mut kind, mut mode) = (kind as u8, mode);
@@ -201,7 +202,7 @@ impl ItemManager {
             }
             _ => {}
         }
-        anm.set_script(&mut it.vm, ANM_SLOT, 0x3D + kind as usize);
+        anm.set_script(&mut it.vm, ANM_SLOT, (0x3D + kind as i8 as i32) as usize);
         it.vm.color = [0xFF; 4];
         it.vm.flags |= anmvm::F_ZWRITE_OFF;
         self.items[i] = it;
@@ -534,7 +535,8 @@ impl ItemManager {
             // Sprite / colour / z-write change only when +0x2D6 flips, so the script's colour animation shows.
             if y < -8.0 {
                 if it.shown {
-                    it.vm.set_sprite(anm, 0xB6 + it.kind as i32);
+                    // The type byte is sign-extended (`movsx`, 08 §8.3): type 0xFF → arrow sprite 0xB5.
+                    it.vm.set_sprite(anm, 0xB6 + it.kind as i8 as i32);
                     it.shown = false;
                     it.vm.flags |= anmvm::F_ZWRITE_OFF;
                 }
@@ -542,7 +544,7 @@ impl ItemManager {
                 it.vm.pos = [it.pos[0] + 32.0, 8.0 + 16.0, 0.0];
             } else {
                 if !it.shown {
-                    it.vm.set_sprite(anm, 0xAC + it.kind as i32);
+                    it.vm.set_sprite(anm, 0xAC + it.kind as i8 as i32);
                     it.shown = true;
                     it.vm.color = [0xFF; 4];
                     it.vm.flags |= anmvm::F_ZWRITE_OFF;
@@ -613,6 +615,23 @@ mod tests {
         });
         assert_eq!(got, Some(1));
         assert!(!m.items[0].alive);
+    }
+
+    // 08 §8.3 (RE-Q57 Q1): type −1 takes a slot as byte 0xFF; its collection changes nothing but frees the slot.
+    #[test]
+    fn negative_type_spawned() {
+        let mut anm = AnmManager::default();
+        let pr = Player::new_ref();
+        let mut p = pr.borrow_mut();
+        p.update_boxes();
+        let mut m = ItemManager::default();
+        let pos = p.pos;
+        assert_eq!(m.spawn(&mut anm, &p, pos, -1, 1), Some(0));
+        assert_eq!((m.items[0].kind, m.cursor), (0xFF, 1));
+        let st = p.stats.clone();
+        m.calc(&mut anm, &mut p, false, |_, _, _| {});
+        assert!(!m.items[0].alive);
+        assert_eq!((p.stats.score10, p.stats.power), (st.score10, st.power));
     }
 
     #[test]
