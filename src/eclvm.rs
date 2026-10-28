@@ -1314,10 +1314,10 @@ impl Exec<'_> {
         let mut orbs = 0;
         if graze {
             orbs = pl
-                .laser_test(c, [590.0, small], o, a, true, &env, &mut self.anm.rng)
+                .laser_test(c, [590.0, small], o, a, true, &env, self.anm)
                 .1;
         }
-        pl.laser_test(c, [590.0, big], o, a, false, &env, &mut self.anm.rng);
+        pl.laser_test(c, [590.0, big], o, a, false, &env, self.anm);
         let mut b = self.m.bullets.borrow_mut();
         if std::mem::take(&mut pl.drop_attracted) {
             b.items.drop_attracted();

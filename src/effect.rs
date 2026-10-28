@@ -93,10 +93,6 @@ pub struct Effect {
     pub keep_frozen: bool,
     // Port-only: script life of types 17/18/27 (60 / 240 / 120 frames).
     pub life: i32,
-    // Port-only: deferred common-init values (colour, flag 0x2000) for `start_script`.
-    colour: u32,
-    zoff: bool,
-    pending: bool,
     // Type 19 spin (VM rotation.x in the original) and start rotation z; types 60/61 rotation z.
     spin: f32,
     rot: f32,
@@ -105,8 +101,6 @@ pub struct Effect {
     pull: [f32; 3],
     disp: [f32; 3],
     pull_speed: f32,
-    // Port-only: deathbomb-window frames for the type-59 radius interpolation.
-    death_ring: i32,
 }
 
 // Port-only copy of the stage camera (06 §3) for the 3D effects: camera position, eye, facing.
@@ -268,8 +262,9 @@ fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+// Vec3_Dot 0x40B540: (x·x' + y·y') + z·z' in f32 (13 §2.6a).
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    (a[0] * b[0] + a[1] * b[1]) + a[2] * b[2]
 }
 
 impl Effect {
@@ -319,41 +314,13 @@ impl Effects {
         (RING_POOL..RING_POOL + HIGH_POOL).find(|&i| !self.fx[i].active)
     }
 
-    // Common init (13 §2.2) and the per-type init; false = init asked to free the slot.
-    // The VM script is started by `start` (at once with an AnmManager, else at the next calc).
-    fn init(
-        &mut self,
-        rng: &mut crate::rng::Rng,
-        gs: f32,
-        i: usize,
-        kind: u8,
-        pos: [f32; 3],
-        param: [f32; 3],
-        colour: u32,
-        zoff: bool,
-    ) -> bool {
-        self.reset(i, kind, pos, param, colour, zoff);
-        self.type_init(rng, gs, i)
-    }
-
-    fn reset(
-        &mut self,
-        i: usize,
-        kind: u8,
-        pos: [f32; 3],
-        param: [f32; 3],
-        colour: u32,
-        zoff: bool,
-    ) {
+    fn reset(&mut self, i: usize, kind: u8, pos: [f32; 3], param: [f32; 3]) {
         let e = &mut self.fx[i];
         *e = Effect {
             active: true,
             kind,
             pos,
             param,
-            colour,
-            zoff,
-            pending: true,
             ..Effect::default()
         };
         e.age.set(0);
@@ -504,39 +471,23 @@ impl Effects {
         true
     }
 
-    // Common init's script part (13 §2.2), then the VM fields the type init sets (port split of the init).
-    fn start(&mut self, anm: &mut AnmManager, i: usize) {
-        if self.start_script(anm, i) {
-            self.start_post(i);
-        }
-    }
-
     // The script runs its t = 0 step here, so its RNG draws precede the type init's (13 §2.6).
-    fn start_script(&mut self, anm: &mut AnmManager, i: usize) -> bool {
+    fn start_script(&mut self, anm: &mut AnmManager, i: usize, colour: u32, zoff: bool) {
         let e = &mut self.fx[i];
-        if !std::mem::take(&mut e.pending) {
-            return false;
-        }
         let script = SCRIPTS.get(e.kind as usize).copied().unwrap_or(-1);
         if script >= 0 {
             anm.set_script(&mut e.vm, SCRIPT_SLOT, script as usize);
         }
-        if e.zoff {
+        if zoff {
             e.vm.flags |= anmvm::F_ZWRITE_OFF;
         }
-        e.vm.color = e.colour.to_le_bytes();
+        e.vm.color = colour.to_le_bytes();
         e.vm.pos_offset = [0.0; 3];
-        true
     }
 
-    // VM fields written by the inits after the script start: death ring radius 128 → 8 (ease 4, 13 §2.7),
-    // type 19 / 60 / 61 rotation z.
+    // VM fields written by the inits after the script start: type 19 / 60 / 61 rotation z.
     fn start_post(&mut self, i: usize) {
         let e = &mut self.fx[i];
-        if e.death_ring > 0 {
-            e.vm.pos = [128.0, 32.0, 0.0];
-            e.vm.interp_pos(e.death_ring, 4, [8.0, 32.0, 0.0]);
-        }
         match e.kind {
             19 => {
                 e.vm.rotation[2] = e.rot;
@@ -560,44 +511,15 @@ impl Effects {
         colour: u32,
         zoff: bool,
     ) -> bool {
+        // 13 §2.2 "Spawn-time game speed": the t = 0 script run and the type init use the speed at the spawn.
         let gs = anm.speed;
-        self.reset(i, kind, pos, param, colour, zoff);
-        self.start_script(anm, i);
+        self.reset(i, kind, pos, param);
+        self.start_script(anm, i, colour, zoff);
         let ok = self.type_init(&mut anm.rng, gs, i);
         if ok {
             self.start_post(i);
         }
         ok
-    }
-
-    // Spawn from code that only holds the RNG (Player_Die, graze); the script starts at the next calc.
-    // Port-only deferral: the types spawned this way have no t = 0 script RNG draws (13 §2.6), so the draw
-    // order is unchanged.
-    pub fn spawn_rng(
-        &mut self,
-        rng: &mut crate::rng::Rng,
-        kind: u8,
-        pos: [f32; 3],
-        count: i32,
-        colour: u32,
-    ) -> usize {
-        self.spawn_ring(count, |s, i| {
-            s.init(rng, 1.0, i, kind, pos, [0.0; 3], colour, true)
-        })
-    }
-
-    // Effect_SpawnFixed 0x425870 without an AnmManager (death ring).
-    pub fn spawn_fixed_rng(
-        &mut self,
-        rng: &mut crate::rng::Rng,
-        kind: u8,
-        pos: [f32; 3],
-        k: usize,
-        colour: u32,
-    ) -> usize {
-        let i = FIXED_BASE + k.min(FIXED - 1);
-        self.init(rng, 1.0, i, kind, pos, [0.0; 3], colour, true);
-        i
     }
 
     // Effect_Spawn 0x425430 / Effect_SpawnWithParam 0x425650 (`zoff` false: no VM flag 0x2000).
@@ -709,10 +631,9 @@ impl Effects {
                     e.vel[k] += e.acc[k];
                     e.pos[k] += e.vel[k];
                 }
-                // Stored facing; Vec3_Dot 0x40B540 sums (z·z' + y·y') + x·x' (13 §2.6a).
+                // Stored facing; Vec3_Dot order (13 §2.6a).
                 let d = d3dx::vec3_normalize(sub(e.pos, view.pos));
-                let f = view.facing_norm;
-                if (d[2] * f[2] + d[1] * f[1]) + d[0] * f[0] < 0.94 {
+                if dot(d, view.facing_norm) < 0.94 {
                     return false;
                 }
                 if e.kind == 19 {
@@ -802,8 +723,6 @@ impl Effects {
                 continue;
             }
             self.live += 1;
-            // Port-only: deferred script start of `spawn_rng` effects.
-            self.start(anm, i);
             if !self.frozen || self.fx[i].keep_frozen {
                 if !self.update(i) {
                     self.fx[i].active = false;
@@ -1130,14 +1049,11 @@ fn screen_fx(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32) -> ScreenEffect {
     ScreenEffect {
         kind,
         p: [p0, p1, p2, p3],
-        prio: 0x15,
         // Draw prio 0x15: every code call passes it except the loading darken (1) (13 §3).
-        // A draw before the first calc shows the t = 0 alpha.
-        alpha: match kind {
-            0 => 255.0,
-            3 => (p2 as u32 >> 24) as f32,
-            _ => 0.0,
-        },
+        prio: 0x15,
+        // ScreenEffect_Register 0x45B8B0 zero-fills the object: a draw before the first calc shows alpha 0 (13 §3
+        // "Initial alpha").
+        alpha: 0.0,
         release: false,
         loading: false,
         timer: Timer::default(),
@@ -1158,16 +1074,6 @@ pub fn spawn_param(
     colour: u32,
 ) -> usize {
     with(|e| e.spawn_at(anm, kind, pos, param, count, colour, false))
-}
-
-pub fn spawn_rng(
-    rng: &mut crate::rng::Rng,
-    kind: u8,
-    pos: [f32; 3],
-    count: i32,
-    colour: u32,
-) -> usize {
-    with(|e| e.spawn_rng(rng, kind, pos, count, colour))
 }
 
 pub fn spawn_high(anm: &mut AnmManager, kind: u8, pos: [f32; 3], colour: u32) -> usize {
@@ -1528,11 +1434,13 @@ impl ScreenEffect {
 // Player death ring (type 59, slot 11, colour 0xFFF0404F): radius 128 → 8 over the deathbomb window (ease 4,
 // 13 §2.7).
 // +0x357 (keeps running while bullets are frozen): set only for this ring (13 §2.1).
-pub fn death_ring(rng: &mut crate::rng::Rng, pos: [f32; 3], frames: i32) {
+pub fn death_ring(anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
     with(|e| {
-        let i = e.spawn_fixed_rng(rng, 59, pos, FIX_DEATH, 0xFFF0404F);
+        let i = e.spawn_fixed(anm, 59, pos, [0.0; 3], FIX_DEATH, 0xFFF0404F);
         let x = &mut e.fx[i];
-        x.death_ring = frames.max(1);
+        // Radius VM pos.x 128 → 8 over the deathbomb window, ease 4 (13 §3 player hit).
+        x.vm.pos = [128.0, 32.0, 0.0];
+        x.vm.interp_pos(frames.max(1), 4, [8.0, 32.0, 0.0]);
         x.keep_frozen = true;
         x.ring.segments = 64;
         x.ring.waves = 6.0;
@@ -1592,7 +1500,7 @@ mod tests {
     #[test]
     fn ring_init_defaults() {
         let mut fx = Effects::default();
-        let mut rng = crate::rng::Rng::seeded(0);
+        let mut anm = AnmManager::default();
         let pos = [10.0, 20.0, 0.0];
         for (kind, n) in [
             (35, 24),
@@ -1604,12 +1512,12 @@ mod tests {
             (41, 48),
             (42, 64),
         ] {
-            let i = fx.spawn_rng(&mut rng, kind, pos, 1, 0);
+            let i = fx.spawn_at(&mut anm, kind, pos, [0.0; 3], 1, 0, true);
             assert_eq!(fx.fx[i].ring.segments, n, "type {kind}");
             assert_eq!(fx.fx[i].centre, pos);
         }
         let i = FIXED_BASE;
-        assert!(fx.init(&mut rng, 1.0, i, 35, pos, [1.0, 2.0, 3.0], 0, true));
+        assert!(fx.init_start(&mut anm, i, 35, pos, [1.0, 2.0, 3.0], 0, true));
         let r = fx.fx[i].ring;
         assert_eq!((r.start, r.radius, r.width), (1.0, 2.0, 3.0));
     }
@@ -1619,9 +1527,11 @@ mod tests {
     fn converge_angle_minus_pi() {
         for kind in [17, 18, 27] {
             let mut fx = Effects::default();
-            let mut rng = crate::rng::Rng::seeded(0x1234);
+            let mut anm = AnmManager::default();
+            anm.rng = crate::rng::Rng::seeded(0x1234);
             let mut probe = crate::rng::Rng::seeded(0x1234);
-            let i = fx.spawn_rng(&mut rng, kind, [0.0; 3], 1, 0);
+            let i = fx.spawn_at(&mut anm, kind, [0.0; 3], [0.0; 3], 1, 0, true);
+            let rng = &anm.rng;
             // The type's script runs first and may draw; replay exactly as many draws before the init's one.
             let mut a = 0.0;
             while probe.state != rng.state {
@@ -1631,16 +1541,51 @@ mod tests {
         }
     }
 
+    // 13 §2.2 "Spawn-time game speed": the spark init scales v and a by the speed at the spawn.
+    #[test]
+    fn spark_init_uses_spawn_speed() {
+        let spark = |gs: f32| {
+            let mut fx = Effects::default();
+            let mut anm = AnmManager::default();
+            anm.rng = crate::rng::Rng::seeded(0x59);
+            anm.speed = gs;
+            let i = fx.spawn_at(&mut anm, 8, [0.0; 3], [0.0; 3], 1, 0, true);
+            (fx.fx[i].vel, fx.fx[i].acc)
+        };
+        let ((v1, a1), (v, a)) = (spark(1.0), spark(0.25));
+        assert_eq!((v, a), (v1.map(|x| x * 0.25), a1.map(|x| x * 0.25)));
+    }
+
+    // 13 §2.6a: Vec3_Dot sums (x·x' + y·y') + z·z'; the udOa25 values are freed (< 0.94).
+    #[test]
+    fn vec3_dot_order() {
+        let d = [0x3EC704B9, 0x3F451123, 0x3F019BF1].map(f32::from_bits);
+        let f = [0x3D9A5339, 0x3F40E808, 0x3F272F7E].map(f32::from_bits);
+        assert_eq!(dot(d, f).to_bits(), 0x3F70A3D6);
+        assert!(dot(d, f) < 0.94);
+    }
+
+    // 13 §3 "Initial alpha": the registered object is zero-filled, so alpha is 0 before the first calc.
+    #[test]
+    fn screen_effect_starts_at_alpha_zero() {
+        for kind in [0, 3] {
+            assert_eq!(screen_fx(kind, 70, 0xFFFFFF, -1, 0).alpha, 0.0);
+        }
+    }
+
     // 13 §2.2: one 512-slot budget per call; exhausted → dummy and the cursor is back where it started (+ extra).
     #[test]
     fn spawn_shares_budget() {
         let mut fx = Effects::default();
-        let mut rng = crate::rng::Rng::seeded(0);
+        let mut anm = AnmManager::default();
         for x in &mut fx.fx[..RING_POOL - 3] {
             x.active = true;
         }
         fx.cursor = 100;
-        assert_eq!(fx.spawn_rng(&mut rng, 4, [0.0; 3], 4, 0), NONE);
+        assert_eq!(
+            fx.spawn_at(&mut anm, 4, [0.0; 3], [0.0; 3], 4, 0, true),
+            NONE
+        );
         assert_eq!(fx.cursor, 100);
         assert_eq!(
             fx.fx[RING_POOL - 3..RING_POOL]
@@ -1652,12 +1597,15 @@ mod tests {
         // count ≤ 0 fills every free slot until the budget ends.
         let mut fx = Effects::default();
         fx.cursor = 7;
-        assert_eq!(fx.spawn_rng(&mut rng, 4, [0.0; 3], 0, 0), NONE);
+        assert_eq!(
+            fx.spawn_at(&mut anm, 4, [0.0; 3], [0.0; 3], 0, 0, true),
+            NONE
+        );
         assert!(fx.fx[..RING_POOL].iter().all(|x| x.active));
         assert_eq!(fx.cursor, 7);
         // Success returns the last slot taken.
         let mut fx = Effects::default();
-        assert_eq!(fx.spawn_rng(&mut rng, 4, [0.0; 3], 3, 0), 2);
+        assert_eq!(fx.spawn_at(&mut anm, 4, [0.0; 3], [0.0; 3], 3, 0, true), 2);
         assert_eq!(fx.cursor, 3);
     }
 

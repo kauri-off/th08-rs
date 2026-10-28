@@ -403,12 +403,12 @@ impl Laser {
         size: [f32; 2],
         graze: bool,
         env: &GrazeEnv,
-        rng: &mut crate::rng::Rng,
+        anm: &mut AnmManager,
     ) -> u8 {
         let len = self.head - self.tail;
         let c = [self.origin[0] + self.tail + len / 2.0, self.origin[1]];
         let o = [self.origin[0], self.origin[1]];
-        p.laser_test(c, size, o, self.angle, graze, env, rng).1
+        p.laser_test(c, size, o, self.angle, graze, env, anm).1
     }
 }
 
@@ -961,7 +961,7 @@ impl BulletManager {
             let mut hit_test = true;
             // 08 §4.1 step 6: graze 1 → hit test; 2 (bomb area) → cancel, no hit test; 0 → no hit test.
             if !b.grazed && b.age.cur > 15 {
-                let (g, orbs) = p.graze_test(pos, size, &self.env, &mut anm.rng);
+                let (g, orbs) = p.graze_test(pos, size, &self.env, anm);
                 match g {
                     1 => {
                         self.bullets[idx].grazed = true;
@@ -981,7 +981,7 @@ impl BulletManager {
                 }
             }
             if hit_test {
-                match p.hit_test(pos, size, &mut anm.rng) {
+                match p.hit_test(pos, size, anm) {
                     1 => {
                         self.bullets[idx].state = 5;
                         if std::mem::take(&mut p.drop_attracted) {
@@ -1153,7 +1153,7 @@ impl BulletManager {
                 size[0] = l.cur_width / 2.0;
             }
             if t >= l.hit_start {
-                orbs += l.test(p, size, false, &env, &mut anm.rng);
+                orbs += l.test(p, size, false, &env, anm);
             }
             // State 1 runs in the same frame (08 §6.3).
             if t >= l.startup {
@@ -1165,7 +1165,7 @@ impl BulletManager {
         if l.state == 1 {
             let t = l.timer.cur;
             // Graze only every 20th frame (08 §6.3 step 5).
-            orbs += l.test(p, size, t % 20 == 0, &env, &mut anm.rng);
+            orbs += l.test(p, size, t % 20 == 0, &env, anm);
             if t >= l.duration {
                 l.timer = Timer::default();
                 l.state = 2;
@@ -1189,7 +1189,7 @@ impl BulletManager {
                 size[0] = l.cur_width / 2.0;
             }
             if t < l.fade_hit {
-                orbs += l.test(p, size, false, &env, &mut anm.rng);
+                orbs += l.test(p, size, false, &env, anm);
             }
             if t >= l.fade {
                 l.alive = false;
@@ -2174,10 +2174,10 @@ mod tests {
         };
         let env = GrazeEnv::default();
         p.pos = [150.0, 105.0, 0.0];
-        l.test(&mut p, [100.0, 8.0], false, &env, &mut anm.rng);
+        l.test(&mut p, [100.0, 8.0], false, &env, &mut anm);
         assert_eq!(p.hits, 1);
         p.pos = [150.0, 105.001, 0.0];
-        l.test(&mut p, [100.0, 8.0], false, &env, &mut anm.rng);
+        l.test(&mut p, [100.0, 8.0], false, &env, &mut anm);
         assert_eq!(p.hits, 1);
     }
 }

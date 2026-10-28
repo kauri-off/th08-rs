@@ -165,7 +165,9 @@ impl Supervisor {
         if let Some(t) = self.logo.take() {
             ctx.gfx.free_texture(t);
         }
-        crate::effect::screen(0, 70, 0xFFFFFF, 0, 0, 0x15);
+        // Title fade (13 §3 "Title fade"): linked at once from the Supervisor calc (prio 0), so its first calc precedes
+        // its first draw (alphas 255, 251, …).
+        crate::effect::screen_now(ctx, 0, 70, 0xFFFFFF, 0, 0, 0x15);
         for vm in &mut self.boot_vms {
             vm.pending_interrupt = 1;
         }

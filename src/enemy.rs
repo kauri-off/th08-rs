@@ -898,10 +898,10 @@ impl EnemyManager {
             let mut p = self.player.borrow_mut();
             if graze {
                 let env = p.env;
-                p.graze_test(pos, [hb[0] / 0.7, hb[1] / 0.7], &env, &mut anm.rng);
+                p.graze_test(pos, [hb[0] / 0.7, hb[1] / 0.7], &env, anm);
             }
             let touched = !(child && matches!(p.shot_type, 0 | 4))
-                && p.contact_test(pos, [hb[0] / 1.5, hb[1] / 1.5], &mut anm.rng);
+                && p.contact_test(pos, [hb[0] / 1.5, hb[1] / 1.5], anm);
             let drop_attracted = std::mem::take(&mut p.drop_attracted);
             drop(p);
             if drop_attracted {
@@ -2810,8 +2810,7 @@ mod tests {
         let mut anm = AnmManager::default();
         let (mut m, _) = empty_manager(&mut anm);
         crate::effect::clear();
-        let mut rng = crate::rng::Rng::seeded(0);
-        let i = crate::effect::spawn_rng(&mut rng, 4, [0.0; 3], 1, 0);
+        let i = crate::effect::spawn(&mut anm, 4, [0.0; 3], 1, 0);
         let e = &mut m.enemies[0];
         **e = Enemy::default();
         (e.flags, e.flags_b, e.life) = (A_ALIVE, B_PAUSED, 10);
@@ -2827,8 +2826,7 @@ mod tests {
         let mut anm = AnmManager::default();
         let (mut m, _) = empty_manager(&mut anm);
         crate::effect::clear();
-        let mut rng = crate::rng::Rng::seeded(0);
-        let i = crate::effect::spawn_rng(&mut rng, 4, [0.0; 3], 1, 0);
+        let i = crate::effect::spawn(&mut anm, 4, [0.0; 3], 1, 0);
         let e = &mut m.enemies[0];
         **e = Enemy::default();
         (e.flags, e.fx_aura) = (A_ALIVE, i);

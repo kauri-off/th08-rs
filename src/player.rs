@@ -675,7 +675,7 @@ impl Player {
         p: [f32; 3],
         size: [f32; 2],
         env: &GrazeEnv,
-        rng: &mut Rng,
+        anm: &mut AnmManager,
     ) -> (u8, u8) {
         self.cancel_item = 6;
         if self.in_bomb_area(p) {
@@ -684,11 +684,11 @@ impl Player {
         if matches!(self.state, 1 | 2) || !box_overlap(p, size, 20.0, self.graze_box) {
             return (0, 0);
         }
-        (1, self.on_graze(p, false, env, rng))
+        (1, self.on_graze(p, false, env, anm))
     }
 
     // Player_HitTest 0x44A230 (09 §6.1 steps 1–6): 0 miss, 1 hit, 2 inside a bomb area.
-    pub fn hit_test(&mut self, p: [f32; 3], size: [f32; 2], rng: &mut Rng) -> u8 {
+    pub fn hit_test(&mut self, p: [f32; 3], size: [f32; 2], anm: &mut AnmManager) -> u8 {
         self.cancel_item = 6;
         if self.in_bomb_area(p) {
             return 2;
@@ -696,32 +696,32 @@ impl Player {
         if !box_overlap(p, size, 0.0, self.hit_box) {
             return 0;
         }
-        self.die(rng);
+        self.die(anm);
         1
     }
 
     // Hit path of bullets/lasers/enemies (09 §6.1 steps 5–6): state check, ScrambleDecoys, then Player_Die.
     // Quirk kept: the state ≠ 0 return comes before the scramble, so invulnerable hits draw no RNG.
-    pub fn die(&mut self, rng: &mut Rng) {
+    pub fn die(&mut self, anm: &mut AnmManager) {
         if self.state != 0 {
             return;
         }
-        Stats::scramble(rng);
+        Stats::scramble(&mut anm.rng);
         self.hits += 1;
-        self.player_die(rng);
+        self.player_die(anm);
     }
 
     // Player_Die 0x44AB40 (09 §6.1); `debug_invuln` returns at its start like the noclip probe.
     // Both paths end with ItemMgr_DropAttracted, requested through `drop_attracted`.
-    fn player_die(&mut self, rng: &mut Rng) {
+    fn player_die(&mut self, anm: &mut AnmManager) {
         if self.debug_invuln {
             return;
         }
         // Freeze byte 0x160F534 := 0.
         crate::enemy::set_timer_pause(0);
-        Stats::checksum(rng);
+        Stats::checksum(&mut anm.rng);
         crate::sound::play_at(crate::sound::PLDEAD, self.pos[0]);
-        crate::effect::spawn_rng(rng, 6, self.pos, 16, 0xFFFFFFFF);
+        crate::effect::spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
         self.state = 2;
         self.state_timer.set(0);
         if self.special() {
@@ -754,7 +754,7 @@ impl Player {
             let a = self.vm.color[anmvm::A];
             self.vm.color2 = [0xFF, 0xFF, 0xFF, a];
             self.vm.flags |= anmvm::F_COLOR2;
-            crate::effect::death_ring(rng, self.pos, n);
+            crate::effect::death_ring(anm, self.pos, n);
             // GameFlags bit 10 only in the bombs ≥ 1 branch: a 0-bomb "Miss" during a card freezes nothing (09 §6.1).
             if self.env.spell {
                 self.set_freeze_bullets(true);
@@ -781,11 +781,17 @@ impl Player {
 
     // Player_OnGraze 0x44A930 (09 §9.2); returns how many time orbs (item type 10, mode 5) to drop at `p`.
     // Not implemented: HUD flag and statistics bit 0x2000.
-    pub fn on_graze(&mut self, p: [f32; 3], laser: bool, env: &GrazeEnv, _rng: &mut Rng) -> u8 {
+    pub fn on_graze(
+        &mut self,
+        p: [f32; 3],
+        laser: bool,
+        env: &GrazeEnv,
+        anm: &mut AnmManager,
+    ) -> u8 {
         self.grazes += 1;
         crate::sound::play_at(crate::sound::GRAZE, p[0]);
-        crate::effect::spawn_rng(
-            _rng,
+        crate::effect::spawn(
+            anm,
             8,
             [(p[0] + self.pos[0]) / 2.0, (p[1] + self.pos[1]) / 2.0, 0.0],
             1,
@@ -856,12 +862,12 @@ impl Player {
     }
 
     // Player_HitTestNoBomb 0x44A360 (09 §6.1): no bomb-area test; true on overlap in every state; only state 0 dies.
-    pub fn contact_test(&mut self, p: [f32; 3], size: [f32; 2], rng: &mut Rng) -> bool {
+    pub fn contact_test(&mut self, p: [f32; 3], size: [f32; 2], anm: &mut AnmManager) -> bool {
         self.cancel_item = 6;
         if !box_overlap(p, size, 0.0, self.hit_box) {
             return false;
         }
-        self.die(rng);
+        self.die(anm);
         true
     }
 
@@ -877,7 +883,7 @@ impl Player {
         a: f32,
         graze: bool,
         env: &GrazeEnv,
-        rng: &mut Rng,
+        anm: &mut AnmManager,
     ) -> (u8, u8) {
         // Vec2_Rotate by −a: sin/cos rounded once to f32 (05 §10).
         let (sn, cs) = crate::bullet::sin_cos_f(-a);
@@ -893,12 +899,12 @@ impl Player {
         if hit(0.0) {
             // Step 5: state ≠ 0 returns 0 here, before the scramble.
             let alive = self.state == 0;
-            self.die(rng);
+            self.die(anm);
             return (alive as u8, 0);
         }
         if graze && hit(48.0) && !matches!(self.state, 1 | 2) {
             let p = self.pos;
-            return (2, self.on_graze(p, true, env, rng));
+            return (2, self.on_graze(p, true, env, anm));
         }
         (0, 0)
     }
@@ -1466,7 +1472,7 @@ mod tests {
     #[test]
     fn hit_and_graze_use_stored_f32_boxes() {
         let (mut p, _) = ready();
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         p.state = 1;
         p.pos = [170.0, 50.0, 0.0];
         p.hit_box = [140.0, 0.0, 200.0, 100.0];
@@ -1537,7 +1543,7 @@ mod tests {
     fn collisions() {
         let (mut p, mut anm) = ready();
         p.step(&mut anm, &input(0));
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         let env = GrazeEnv::default();
         let q = p.pos;
         assert_eq!(
@@ -1574,7 +1580,7 @@ mod tests {
     #[test]
     fn die_requests_drop_attracted() {
         let (mut p, _) = ready();
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         p.die(&mut rng);
         assert!(p.drop_attracted);
         let (mut p, _) = ready();
@@ -1588,7 +1594,7 @@ mod tests {
     #[test]
     fn die_silhouette() {
         let (mut p, mut anm) = ready();
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         p.stats.bombs = 1.0;
         p.vm.color = [0x20, 0x40, 0x60, 0x80];
         p.die(&mut rng);
@@ -1610,7 +1616,7 @@ mod tests {
     #[test]
     fn graze_orbs() {
         let (mut p, _) = ready();
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         let env = |spell| GrazeEnv {
             boss: true,
             spell,
@@ -1636,7 +1642,7 @@ mod tests {
         p.stats.time = 1000;
         p.stats.time_threshold = 5000;
         p.stats.d0b0 = 7;
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         p.die(&mut rng);
         assert_eq!((p.state, p.deathbomb), (2, 15 * 9 / 5));
         p.shot_type = 2;
@@ -1675,7 +1681,7 @@ mod tests {
     // 09 §6.1: card doubling without a boss test; GameFlags bit 10 only with bombs ≥ 1.
     #[test]
     fn spell_death_freeze_flag() {
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         let (mut p, _) = ready();
         p.shot_type = 2;
         p.env.spell = true;
@@ -1740,7 +1746,7 @@ mod tests {
         crate::effect::clear();
         let (mut p, mut anm) = ready();
         p.stats.bombs = 1.0;
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         p.die(&mut rng);
         let n = p.deathbomb;
         for _ in 0..n - 1 {
@@ -1762,7 +1768,7 @@ mod tests {
         p.shot_type = 2;
         p.deathbomb = 10;
         p.stats.bombs = 2.0;
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         p.die(&mut rng);
         p.step(&mut anm, &input(0));
         p.step(&mut anm, &input(input::BOMB));
@@ -1778,7 +1784,7 @@ mod tests {
         let (mut p, mut anm) = ready();
         p.stats.lives = 0.0;
         p.stats.power = 100.0;
-        let mut rng = Rng::default();
+        let mut rng = AnmManager::default();
         p.stats.bombs = 0.0;
         p.die(&mut rng);
         assert_eq!(p.deathbomb, 2);
@@ -1802,11 +1808,11 @@ mod tests {
             bombs: 7.0,
             ..Stats::default()
         };
-        s.extend(&mut rng);
+        s.extend(&mut rng.rng);
         assert_eq!((s.lives, s.bombs), (8.0, 8.0));
-        let before = rng.counter;
-        s.add_time(-5, &mut rng);
-        assert_eq!((s.time, rng.counter), (0, before));
+        let before = rng.rng.counter;
+        s.add_time(-5, &mut rng.rng);
+        assert_eq!((s.time, rng.rng.counter), (0, before));
     }
 
     // 09 §9.3 (RE-Q56): timer B decrements at game speed; n = ftol(Timer_GetF(C) / 15), 21 above 300.0.
