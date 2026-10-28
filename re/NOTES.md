@@ -910,3 +910,16 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - AS ECL ops 32/33 = f32 of extended fsin/fcos, not sinf/cosf (07, 05 §10 rule); sway rounding written in 06 §7;
   list of all port single-precision trig sites in the changelog: 54656, udPn85.
 - Result: 8/9 identical, ok set + fixed 168/168. Open: 51759 r68154 rank +1 (4A).
+
+# RE-BATCH2 (2026-10-27/28) — second 500 third-party replays + draw-log check — DONE (re/work/runs/batch2/REPORT.md)
+- Selection 500 (no pilot/batch500 md5): full 250, extra 120, tas 40, stage 40, spell 20, nonver 30 (gensokyou
+  1.00/1.00a/1.00b/0.03a). Outputs th08_ext_replays/ref_b2/ (7.2 GB, 20 with draw log). -j 12, ~10 h, 90 fps/slot.
+- Original: 498 accepted + 2 crash (udRo01, 53859: wine page fault FFFFFFC4 @7ABE692F in the final stage, reproducible);
+  all 30 nonver pass the exe check (12 desync). Self-sync 450, end-score 11, ended early 39.
+- Port (target/reb2 = master b93b569): 498/500 identical (crash files identical up to the crash). Diverging: udOa25
+  (full, rng, stage 2, row 30456), udBu09 (nonver 1.00b spell, rng, 4A, row 8492). Not analysed.
+- Draw-log check (20 batch500 draw recordings): trace identical, draw log matches in none. First difference in all
+  20: main-menu fade quad colour fbffffff/ffffffff (present 57–62, call 15). First gameplay playfield groups: Extra
+  bg stg8bg vertex colours (5), 2 extra ascii quads at gm 3 (4), depth-clear colour (5), etama#3 R vs rotated Q (2),
+  singles (4). drawcheck/SUMMARY.md.
+- Long batches: run as `systemd-run --user` units; a T3 restart kills nohup children of the agent.
