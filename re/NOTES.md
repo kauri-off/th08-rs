@@ -923,3 +923,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   bg stg8bg vertex colours (5), 2 extra ascii quads at gm 3 (4), depth-clear colour (5), etama#3 R vs rotated Q (2),
   singles (4). drawcheck/SUMMARY.md.
 - Long batches: run as `systemd-run --user` units; a T3 restart kills nohup children of the agent.
+
+# RE-Q59 (2026-10-28) — batch2 udBu09 / udOa25 + menu fade quad (specs/changelog/answers_re_q59.md)
+- Runs re/work/runs/q59 (CHECKPOINT.md; scratch portcopy = master b93b569 + AT/AU/AV, target/re59; prun.sh (ref_b2, ref500,
+  ref), pbatch.sh, effcmp.py (orig SCANEFF vs port Q59EFF), rsite.py / addr2fn.py (TH08_RNGSITE probe_rng.txt by row)).
+- AT effect script starts inside the spawn: time-0 VM run ticks by the spawn-time game speed, spark init scales by it;
+  port `spawn_rng` defers the start to the next EffectMgr_Calc at that frame's speed (13 §2.2): udBu09.
+- AV `Vec3_Dot` 0x40B540 sums (x·x' + y·y') + z·z' (13 §2.6a, corrects RE-Q52): type-51 cull at dot = f32 0.94 boundary: udOa25.
+- AU ScreenInf zero-filled (alpha 0 before the first calc); title fade's first calc precedes its first draw → 255, 251, …
+  (13 §3, 12 §1); port drew t = 0 twice (all 20 drawcheck first differences).
+- Both rng divergences = effect ring full at a spawn, freed one frame apart; different causes.
+- Not analysed: next draw divergence at menu present 120–127 (port extra title01.anm#2 quad).

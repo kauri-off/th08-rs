@@ -151,6 +151,15 @@ Common init: slot zeroed (heap buffer freed), active = 1, type, pos, VM script =
 file, VM flag 0x2000 (z-write off), VM colour = the colour argument, pos offset = 0, update = table[type].update;
 then table[type].init runs (ECX = effect); init returning ≠ 0 frees the slot immediately. Every spawn also sets
 bit 0x400 of the replay statistics word (0x18B8A28)+0xDA, which nothing reads (08 §8 end; VERIFIED RE-Q26).
+**Spawn-time game speed** (VERIFIED RE-Q59, 0x425430 / 0x425650 + 05 §4/§8): the script is started inside the spawn
+call, so its time-0 run (`AnmFile_StartScript`) already advances the VM clock by the game speed (0x17CE8E0) current
+**at the spawn**, and inits that scale by game speed (`EffInit_Spark` 0x425D70: v and a × g_GameSpeed; §2.6a) use the
+same value. The next VM run is the next `EffectMgr_Calc` (same frame for spawners before calc prio 13, next frame for
+`BulletMgr_Calc` prio 14, e.g. graze sparks type 8). When the speed changes between the spawn frame and that calc
+(ECL slow-down start/end, 07), the free frame depends on this: gensokyou udBu09 4A card 221, graze spark (type 8,
+script 40, life 30) spawned at speed 0.25 in frame 8191, speed 1 in 8192 → clock 0.25 + 1 + …, freed at frame 8302;
+starting the script at the 8192 calc instead (clock 1 + 1 + …) frees it at 8299, and the ECL op-140 effect of frame
+8303 then finds the ring full (no spawn, −8 RNG).
 | function | args | slot choice |
 |---|---|---|
 | `Effect_Spawn` 0x425430 | type, pos, count, colour | ring pool: examine the slot at the cursor, then advance the cursor (wraps 512 → 0) — every examined slot advances it, free or not; an inactive slot is taken; repeat for count effects. **The 512-slot search budget is shared by the whole call** (one loop counter for all `count` effects): when it runs out, the call ends and returns the dummy effect (+0x89BFC) even if some effects were spawned, and the cursor has advanced by exactly 512 (back where it started) plus the slots examined before. The count is decremented after each spawn (also when the init frees the slot) and the loop stops when it reaches 0, so count ≤ 0 fills every free slot until the budget is used. Otherwise the return value is the last slot taken (even if its init freed it). VERIFIED 0x425430 + golden runtime ring dump (RE-Q33 fix X: with 509/512 live slots a count-4 spawn leaves the cursor unchanged; a per-effect budget moved it 18 slots and changed the draw order of every list) |
@@ -293,9 +302,14 @@ d = normalise(pos − C)
 if dot(d, normalised facing (+0x63B8 = 0x4EA3E8)) < 0.94: free
 ```
 normalise is the D3DX SSE normalise (05 §10 "Vector normalise"), and the facing is the **stored** +0x63B8 written
-by `Stage_Calc` with the same routine, not a fresh normalisation of +0x63A0. The dot (`Vec3_Dot` 0x40B540) is
-x87 at 24-bit precision in the order (z·z' + y·y') + x·x', stored to f32, then compared with f32 0.94 (0x4B4988).
-VERIFIED RE-Q52 (pilot 80406, stage 1 frame 2632: ring slot 273, type 51, has dot 0x3F70A3D6 < 0.94 with the
+by `Stage_Calc` with the same routine, not a fresh normalisation of +0x63A0. The dot (`Vec3_Dot` 0x40B540, ECX = the
+stored facing, EDX = d) is x87 at 24-bit precision in the order **(x·x' + y·y') + z·z'** (disasm 0x40B552–0x40B570:
+x product, + y product, + z product), stored to f32, then compared with f32 0.94 (0x4B4988, `fcomp dword`; freed
+when dot < 0.94). VERIFIED RE-Q59 (corrects the order (z·z' + y·y') + x·x' written by RE-Q52): gensokyou udOa25
+stage 2 frame 14071, ring slot 176 type 51 age 127, d = (0x3EC704B9, 0x3F451123, 0x3F019BF1), facing
+(0x3D9A5339, 0x3F40E808, 0x3F272F7E): (x + y) + z = 0x3F70A3D6 < 0.94 → freed (the original's ring dump);
+(z + y) + x = 0x3F70A3D7 = f32 0.94 → kept one more frame, and that frame's graze spark finds no free ring slot.
+Stored facing VERIFIED RE-Q52 (pilot 80406, stage 1 frame 2632: ring slot 273, type 51, has dot 0x3F70A3D6 < 0.94 with the
 stored facing and is freed at age 131; with the exactly normalised facing the dot rounds to ≥ 0.94, the particle
 lives one more frame, and the 4-spark death spawn of that frame finds no free ring slot).
 
@@ -449,6 +463,18 @@ s += D
 Call: ECX = type, EDX = p0, stack: p1 (+0x18), p2 (+0x1C), p3 (+0x20), draw priority. Object: +0 type,
 +0x10 current alpha (or amplitude), +0x14 p0, +0x18 p1, +0x1C p2, +0x20 p3, +0x24 release flag, +0x28 Timer.
 Calc returning 0 removes the effect (on-remove frees it).
+**Initial alpha** (VERIFIED RE-Q59, 0x45B8B0): the object is zero-filled at registration (all 0xD dwords, timer
+included), so +0x10 = 0 until the first calc writes it. Every draw fn builds its colour as +0x10 << 24 | colour
+(0x45BB50 type 0/4, 0x45BC40 type 2/6, 0x45BD70 type 3), so a draw node reached before the effect's first calc (a
+registration after calc prio 3 in the same frame) draws alpha 0, not the t = 0 alpha. Type 0 calc 0x45B160: if
+p0 ≠ 0, alpha = ftol(255 − (t·255)/p0) with t = `Timer_GetF` (x87, 255.0 at 0x4B4978), < 0 → 0; then t ≥ p0 →
+return 0 (removed), else tick and return 1.
+**Title fade** (type 0, p0 = 70, colour 0xFFFFFF, draw prio 0x15, registered by `MainMenu_LoaderThread` 0x470E10 with
++0x14434 := 0 and `Loading_End`, 12 §1): the thread is not a calc node; its first calc runs before its first draw
+(INFERRED from the 20 batch500 draw-log recordings: first fade quad ffffffff, second fbffffff, never an alpha-0
+frame), so the drawn alphas are 255, 251, 247, 244, …, 3 (t = 0…69) and the effect is removed at
+t = 70. A port that registers it synchronously from the Supervisor calc (prio 0) links it at once (first calc in the
+same frame).
 **Linking (RE-Q25, VERIFIED 0x43C880):** the calc node (prio 3) and draw node are linked **immediately** by
 `FuncChain_AddCalc`/`AddDraw` (inserted after the last node with prio ≤ its own), even in the middle of a chain
 walk. Registrations made by a calc node with prio < 3 therefore get their **first calc in the same frame**:

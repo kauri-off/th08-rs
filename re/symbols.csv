@@ -820,3 +820,7 @@ addr,kind,name,signature,confidence,note
 0x0045bf10,func,ScreenEffect_CalcShakeEnv,,VERIFIED,type 7 shake envelope calc; bit 10 / 0x160F534 tested live (RE-Q54)
 0x0040d3d0,func,Timer_Changed,,VERIFIED,cur (+8) != prev (+0)
 0x0040d410,func,Timer_Mod,,VERIFIED,cur % n
+0x0045b160,func,ScreenEffect_CalcFadeFrom,,VERIFIED,type 0 calc: alpha = ftol(255 - t*255/p0) >= 0; t >= p0 -> 0 else tick (RE-Q59)
+0x0045bb50,func,ScreenEffect_DrawFullRect,,VERIFIED,types 0/4 draw: full-screen rect colour +0x10<<24 | +0x18 (RE-Q59)
+0x0045bc40,func,ScreenEffect_DrawPlayfieldRect,,VERIFIED,types 2/6 draw: playfield rect colour +0x10<<24 | +0x18 (RE-Q59)
+0x0045bd70,func,ScreenEffect_DrawFlash,,VERIFIED,type 3 draw: playfield rect colour +0x10<<24 | colour (RE-Q59)

@@ -35,7 +35,8 @@ Loading-screen state = Supervisor+0x2FC:
   registers the main menu, whose on-register starts `MainMenu_LoaderThread` and sets MainMenu+0x14434 := 1;
   (2) **menu load**: while +0x14434 = 1 `MainMenu_Calc` returns 1 and runs nothing (no screen, no VMs; 2 = load
   failed → return 4); the thread, after loading, starts the title BGM (when not in demo mode and the previous scene
-  0x17CE8B8 ≠ 5 result viewer), registers the fade-in ScreenEffect, sets +0x14434 := 0 and calls `Loading_End`; the next menu calc runs
+  0x17CE8B8 ≠ 5 result viewer), registers the title fade-from-white ScreenEffect (type 0, 70 frames; its first calc precedes its first draw, so
+  the first two frames draw alpha 255 then 251, 13 §3 "Title fade", RE-Q59), sets +0x14434 := 0 and calls `Loading_End`; the next menu calc runs
   the top screen. Both lengths are host thread times (file decode + texture creation), with no frame count in the
   code; a reference run under wine measured 13 boot calc frames and the menu loader ending at scene frame 34 (33 when
   the menu is entered again). A port that loads synchronously may use any fixed counts; these change only the number
