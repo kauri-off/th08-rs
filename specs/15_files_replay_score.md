@@ -743,6 +743,12 @@ bottom right of the playfield"):
   (ending): `Ascii_QueueString` at (384, 448) (ASCII queue, 12 §2.9: 16 × 16 `ascii.anm#0` glyphs, advance 13 →
   quads (383.5, 447.5)–(399.5, 463.5) and (396.5, 447.5)–(412.5, 463.5)), colour as above, then the queue colour
   is reset to white. The normal fps string ("%.02ffps" at (512, 464), white) is queued just before it.
+- The buffer 0x17CF2B8 is zero after boot and is written only in the window-close branch while GameFlags bits 2 and 3
+  are set (and only from the draw-time call, `this` ≠ 0): until the first window closes during replay gameplay the
+  queued string is empty and nothing is drawn. In the session recordings (the probe's fast mode virtualises only
+  `Timer_Now`, not `timeGetTime` / the performance counter) the first refresh after boot falls on gameplay frames 1–15
+  (udg342 1, 50948 11, 52233 13, udSe43 14, 54723 14, 79090 15): real host time, not reproducible; draw-log comparisons
+  skip these quads like the "%.02ffps" counter (VERIFIED 0x446F53, RE-Q60).
 - The text is a separate buffer (0x17CF2B8) formatted with **"%2d" of fps_now (0x17CE8F0)** only when the fps meter
   closes a measuring window (≥ 500 ms of host time, `timeGetTime`, or the performance counter when present) — i.e.
   about every 30 frames at 60 fps, with a host-dependent phase. Between refreshes the old text stays; the buffer
@@ -934,7 +940,9 @@ Start:
   both clear (its practice nature is only in info +0x7B, 12 §5.6) (VERIFIED 0x4674E0 / 0x46E136, RE-Q25);
 - difficulty, shot and spell practice (spell id ≥ 0 → flags bit 14, id → 0x164D0B8) come from the header;
 - stage = the chosen stage;
-- scene 2.
+- scene 2, `Music_Stop`, and the handler **returns 0** (before the counter increments): the menu calc node is removed and
+  its on-remove callback removes the draw node, so nothing of the menu is drawn in the confirm frame (12 §2 "Handlers
+  that return 0", VERIFIED 0x46E136, RE-Q60).
 
 Demo play uses the same loader with `demo/demorpy%d.rpy` (12 §2.4).
 

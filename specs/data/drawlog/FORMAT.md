@@ -100,6 +100,8 @@ C <t|z|tz> <colour> [<x>,<y>,<w>,<h> ...]
 - **K**: a pixel copy to or from the screen, with no filtering or blending (`Anm_DrawSurface`, the main-menu
   background, 12 §2.2; screen captures). `src`/`dst` = image file name of the surface slot (`title00.png`,
   `th08logo.jpg`, `select00.png`, …), `screen`, or a texture label. `K <src> <dst> full` = whole surface.
+  Texture-to-texture copies through `D3DXLoadSurfaceFromSurface` (0x467040, e.g. the boss name plate 12 §5.2) are not
+  device calls and never appear in reference logs; a port must not log them (RE-Q60).
 - **C**: clear of the current viewport (a `V` line is written before it if the viewport changed). `t` = colour, `z` = depth (depth clears to 1.0), with an optional
   rectangle list.
 

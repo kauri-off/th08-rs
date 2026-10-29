@@ -298,6 +298,8 @@ viewport, and sets fog start/end to 1000/2000.
    sprite index > 0), stage 6B special effect.
 5. Clear: if clear colour alpha == 0xFF → Clear(target + z, colour, z = 1); if clear colour == 0 → Clear(z only);
    otherwise fill the playfield rectangle (32,16)–(416,464) with the colour (alpha-blended) and Clear(z only).
+   Both z-only clears pass the clear colour +0x830 as the (ignored) colour argument: draw logs show `C z 00000000` for
+   stages without op 13 (VERIFIED 0x409200, RE-Q60).
 6. ZFUNC = LESSEQUAL; fog colour/near/far; fog on.
 7. Unless +0xB24 ≥ 2 or the HUD condition: `Stage_DrawLayer(0)`, `Stage_DrawLayer(1)`.
 

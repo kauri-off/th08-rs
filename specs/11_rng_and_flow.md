@@ -256,7 +256,10 @@ P − 1 and frame 1 on the row of poll P (row = poll index + 1). A port that cle
 poll P − 1 starts gameplay on the same calc; only that one row's sampled `loading` value differs (golden stage 1:
 release 722, original row 722 loading 1, row 723 frame 1; same in every replay session; RE-Q49).
 
-**Per-frame depth clear.** `GameMgr_Calc` itself issues `Clear(Z only, 1.0)` on the device's current viewport
+**Per-frame depth clear.** `GameMgr_Calc` itself issues `Clear(Z only, colour = g_Stage +0xAF4 = current fog colour
+(06 §3; global 0x4E4B24; the load default 0xFF000000 (06 §2) until the stage's first fog op, e.g. udFn15 gm 1 ff000000,
+gm 2 ff404060), 1.0)` — the colour argument is ignored by a Z-only clear and shows only in draw logs as `C z <colour>`
+(VERIFIED 0x439BC7, RE-Q60) — on the device's current viewport
 (left full-screen 0,0,640,480 by the previous frame's draw — every logged frame shows `C z` with V 0 0 640 480) on
 every calc that passes the loading test (loading = 0), after the attract-demo end check and before the pause /
 game-over / slow-mode early returns: it runs also while paused and on the game-over menu. It is skipped on: loading

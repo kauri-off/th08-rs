@@ -96,6 +96,18 @@ Screen dispatch (0x467399):
 | 16 | 0x46B174 | spell practice: character/stage |
 | 17 | 0x46BBC0 | spell practice: card list |
 
+**Handlers that return 0 — the menu is not drawn in that frame** (VERIFIED `MainMenu_Calc` 0x467399, on-remove 0x471662,
+draw logs golden present 686, gensokyou udg342 present 126, RE-Q60). `MainMenu_Calc` runs `RunRange` and the description
+VM after the handler whatever it returned, then returns the handler's value. A 0 removes the menu calc node (00 §3); its
+on-remove callback 0x471662 releases anm slots 0x14 and 0x16 and surface 0, **removes the draw node** (prio 3), frees the
+VM array and the object. So in the frame of the return nothing of the menu is drawn — no surface copy, no VMs, no
+description, no per-screen text (only the fps counter remains in the log). Handlers returning 0: every **game-start
+confirm** — character select confirm of screens 5/13 (Start / Extra, scene 2, §2.4), practice stage confirm (screen 11,
+§2.5), spell-card confirm (screen 17, 16 §6.2), replay speed confirm (screen 7 sub-state 3, 15 §3.8) — the replay file
+with no recorded stage (15 §3.8), and a failed `title/select00.png` load in the entry blocks of screens 4/8/12, 15 and 16.
+The returns come before the handler's counter increments (+0xC294, +0x10, +0x1442C). Next frame the Supervisor switches
+the scene (loading screen).
+
 After the screen function, all 142 VMs are run every frame (and the description VM). A screen switch
 (`Menu_SetScreen` 0x4694C3) resets cursor timers/sub-state and stores the previous screen.
 
@@ -470,11 +482,11 @@ Interrupts sent by the screen (title01 VMs 77–110, positions from the anm scri
 |---|---|---|
 | enter (frame 0) and back to the list | 14 to all | VM 79 → (24, 128); VM 80 + k → (24, 160 + 17k), k = 0..14 |
 | choose a file | 15 to all, then 17 to VM 80 + (row mod 15) | the other rows leave to y −32; the chosen row VM moves to (24, 160); VM 78 → (24, 192); VM 95 + j → (24, 256 + 17j) |
-| stage chosen → speed | 19 to all, 17 to the row VM, then 21 to VMs 108/109/110 and 20 to VM 108 + cursor | 108/109/110 = speed plates (replay00.png sprites 111/112/113) at (384, 256/304/352); 20 = selected (moves to −4,−4, alpha → 255 over 10 frames), 21 = not selected (alpha → 96). In spell replays VM 110's alpha byte is set to 0 (hidden) |
+| stage chosen → speed | 19 to all, 17 to the row VM, then 21 to VMs 108 and 109; VM 110: 21 for a normal replay, but for a spell replay (header +0x7C ≥ 0) **no interrupt**, only its colour alpha byte (+0x1F3) := 0; then 20 to VM 108 + cursor | 108/109/110 = speed plates (replay00.png sprites 111/112/113) at (384, 256/304/352); 20 = selected (moves to −4,−4, alpha → 255 over 10 frames), 21 = not selected (alpha → 96). In spell replays VM 110 keeps alpha 0 (its label 19 only moves it; nothing else sends it 20/21), so it is never visible (VERIFIED 0x46E136 + udg342 presents 120–125, RE-Q60). The alpha write happens only where the interrupts are sent, not every frame |
 | leave | 16 to all | |
 
 Sub-state 3 cursor: `Menu_CursorUpDown(3)`, or 2 for spell replays; on every change the 21/20 interrupts above
-are resent.
+are resent (with the same VM 110 rule: 21 or alpha byte 0).
 
 **Draw** (`MainMenu_ReplayDraw` 0x46EF8D, ref `menu_ref/mopup1_rep_list.png`, `…_rep_detail.png`,
 `…_rep_speed.png`). Every string uses the ASCII queue (§2.9); "at VM k" = VM k's current raw pos.

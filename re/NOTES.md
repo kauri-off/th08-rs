@@ -934,3 +934,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   (13 §3, 12 §1); port drew t = 0 twice (all 20 drawcheck first differences).
 - Both rng divergences = effect ring full at a spawn, freed one frame apart; different causes.
 - Not analysed: next draw divergence at menu present 120–127 (port extra title01.anm#2 quad).
+
+# RE-Q60 (2026-10-29) — draw-log differences part 1 (specs/changelog/answers_re_q60.md)
+- Runs re/work/runs/q60 (CHECKPOINT.md; scratch portcopy = q59 portcopy + Q1a/Q1b/Q2/K/Q3-tool, target/re60; dc.sh copies the
+  binary per tag (rebuilding mid-run broke the first base run), -j 8 max (≈1 GB per session, 30 GB RAM; -j 20 OOM); sum.py; fr.py).
+- Q1a spell replays: VM 110 gets no interrupt 21, only alpha byte 0, at the send points (12 §2.8). Q1b every game-start
+  confirm returns 0 → menu calc node removed, on-remove 0x471662 removes the draw node → no menu draw that frame (12 §2).
+- K copy: 0x467040 D3DXLoadSurfaceFromSurface (boss plate) is invisible to the probe; port must not log it (FORMAT.md).
+- Q2 z-only clear colour arg: GameMgr_Calc = fog colour g_Stage+0xAF4, Stage_DrawLow = +0x830 (11 §3.1, 06 §3); log only.
+- Q3 replay fps text: first refresh is host real time (fast mode does not virtualise timeGetTime/QPC): not reproducible.
+- Result: all 20 first differences move to gameplay frame 1; trace identical everywhere. Next: side-panel ascii glyph
+  width 8/16 at (500.5,167.5) (12 recordings + golden 736), stg8bg (6), stg4abg, stg7bg strip.

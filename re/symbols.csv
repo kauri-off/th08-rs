@@ -824,3 +824,7 @@ addr,kind,name,signature,confidence,note
 0x0045bb50,func,ScreenEffect_DrawFullRect,,VERIFIED,types 0/4 draw: full-screen rect colour +0x10<<24 | +0x18 (RE-Q59)
 0x0045bc40,func,ScreenEffect_DrawPlayfieldRect,,VERIFIED,types 2/6 draw: playfield rect colour +0x10<<24 | +0x18 (RE-Q59)
 0x0045bd70,func,ScreenEffect_DrawFlash,,VERIFIED,type 3 draw: playfield rect colour +0x10<<24 | colour (RE-Q59)
+0x00471662,func,MainMenu_OnRemove,,VERIFIED,calc-node on-remove: release anm 0x14/0x16 + surface 0; remove draw node; free (RE-Q60)
+0x00471651,func,MainMenu_OnRegisterThunk,,VERIFIED,calc-node on-register: MainMenu_OnRegister (RE-Q60)
+0x00467040,func,Anm_CopySpriteRect,,VERIFIED,flush + D3DXLoadSurfaceFromSurface between two anm textures; not a device call (RE-Q60)
+0x004e4b24,global,g_StageFogColor,,VERIFIED,g_Stage+0xAF4 fog colour; GameMgr_Calc z-clear colour arg (RE-Q60)
