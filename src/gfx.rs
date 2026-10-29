@@ -138,9 +138,11 @@ pub enum LogRec {
         fog: Option<LogFog>,
         v: [Vertex; 4],
     },
+    // `arg`: the D3DCOLOR argument of a z-only clear, ignored by D3D but logged (11 §3.1, 06 §3 step 5).
     Clear {
         vp: Rect,
         color: Option<[u8; 4]>,
+        arg: u32,
     },
     Copy {
         src: String,
@@ -838,16 +840,8 @@ impl Gfx {
         if w == 0 || h == 0 {
             return;
         }
-        if self.log.is_some() {
-            let rec = LogRec::Copy {
-                src: self.label_name(src),
-                dst: self.label_name(dst),
-                from,
-                size: [w, h],
-                to,
-            };
-            self.log.as_mut().unwrap().push(rec);
-        }
+        // No K record: the original's texture-to-texture copy (D3DXLoadSurfaceFromSurface) makes no device call
+        // (specs/data/drawlog/FORMAT.md §3 K).
         let mut enc = self.device.create_command_encoder(&Default::default());
         fn info(t: &wgpu::Texture, p: [u32; 2]) -> wgpu::TexelCopyTextureInfo<'_> {
             wgpu::TexelCopyTextureInfo {
@@ -993,6 +987,15 @@ impl Gfx {
 
     // D3D Clear on the current viewport: colour (if given) and z = 1.
     pub fn clear_depth(&mut self, color: Option<[u8; 4]>) {
+        self.clear(color, 0xff00_0000);
+    }
+
+    // Z-only D3D Clear passing colour `arg` (D3DCOLOR), which has no pixel effect (11 §3.1, 06 §3 step 5).
+    pub fn clear_z(&mut self, arg: u32) {
+        self.clear(None, arg);
+    }
+
+    fn clear(&mut self, color: Option<[u8; 4]>, arg: u32) {
         let Rect { x, y, w, h } = self.viewport;
         let c = color.unwrap_or([0; 4]);
         let uv = [0.0, 0.0];
@@ -1007,6 +1010,7 @@ impl Gfx {
             log.push(LogRec::Clear {
                 vp: self.viewport,
                 color,
+                arg,
             });
         }
         self.push(

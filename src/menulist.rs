@@ -521,6 +521,7 @@ impl MainMenu {
             g.fresh_start = true;
             ctx.audio.stop_bgm();
             g.request(gamemgr::SCENE_GAME);
+            self.remove = true;
         } else if ctx.input.pressed(CANCEL) {
             sound::play(sound::CANCEL);
             // 11 → 9 returns 2: screen 9 runs in this frame (12 §2).
@@ -1078,6 +1079,7 @@ impl MainMenu {
             g.fresh_start = true;
             ctx.audio.stop_bgm();
             g.request(gamemgr::SCENE_GAME);
+            self.remove = true;
         } else if inp.pressed(CANCEL) {
             sound::play(sound::CANCEL);
             ctx.game.card = id as i16;
@@ -1175,10 +1177,15 @@ impl MainMenu {
         80 + (self.lists.rpy_file.max(0) % 15) as usize
     }
 
-    // Speed plates VMs 108–110: 21 = not selected, 20 = selected (12 §2.8).
-    fn rpy_speed_vms(&mut self) {
+    // Speed plates VMs 108–110: 21 = not selected, 20 = selected (12 §2.8). Spell replays: VM 110 gets no interrupt,
+    // only its alpha byte := 0, here and not every frame, so it never shows.
+    fn rpy_speed_vms(&mut self, spell: bool) {
         for k in 0..3 {
-            self.vms[108 + k].pending_interrupt = 21;
+            if spell && k == 2 {
+                set_alpha(&mut self.vms[110], 0);
+            } else {
+                self.vms[108 + k].pending_interrupt = 21;
+            }
         }
         self.vms[108 + self.cursor.clamp(0, 2) as usize].pending_interrupt = 20;
     }
@@ -1293,12 +1300,13 @@ impl MainMenu {
                 self.lists.rpy_stage = self.cursor as usize;
                 if inp.pressed(CONFIRM) {
                     sound::play(sound::OK);
+                    let spell = r.spell_id() >= 0;
                     self.lists.rpy_sub = 3;
                     self.cursor = 0;
                     self.interrupt_all(19);
                     let v = self.rpy_row_vm();
                     self.vms[v].pending_interrupt = 17;
-                    self.rpy_speed_vms();
+                    self.rpy_speed_vms(spell);
                 } else if inp.pressed(CANCEL) {
                     sound::play(sound::CANCEL);
                     // The cancels zero +0x1442C, which only sub-state 0 reads, so the entry block never reruns (12 §2, 15 §3.8).
@@ -1322,11 +1330,7 @@ impl MainMenu {
                 }
                 if self.cursor != old {
                     sound::play(sound::SELECT);
-                    self.rpy_speed_vms();
-                }
-                // Spell replays: 2 speeds, VM 110's alpha byte 0 (12 §2.8).
-                if spell {
-                    set_alpha(&mut self.vms[110], 0);
+                    self.rpy_speed_vms(spell);
                 }
                 if inp.pressed(CONFIRM) {
                     sound::play(sound::OK);
@@ -1337,6 +1341,8 @@ impl MainMenu {
                     if crate::replay::start_playback(&mut ctx.game, r, st, None) {
                         ctx.audio.stop_bgm();
                     }
+                    // Return 0: nothing of the menu is drawn in the confirm frame (15 §3.8 Start).
+                    self.remove = true;
                 } else if inp.pressed(CANCEL) {
                     sound::play(sound::CANCEL);
                     self.lists.rpy_sub = 2;
@@ -1460,6 +1466,21 @@ mod tests {
         assert!(lw.iter().all(|&(d, _)| d == 1));
         let st: Vec<usize> = lw.iter().map(|&(_, s)| s.unwrap()).collect();
         assert_eq!(st, [0, 1, 2, 5, 6, 7, 8, 5, 8, 3, 4, 3, 3, 3, 3, 3, 3]);
+    }
+
+    // 12 §2.8: spell replays send VM 110 no interrupt, only alpha 0; normal replays send it 21.
+    #[test]
+    fn speed_plates_spell_replay() {
+        let mut m = crate::menu::MainMenu::new();
+        m.vms = (0..142).map(|_| AnmVm::default()).collect();
+        m.vms[110].color[anmvm::A] = 96;
+        m.cursor = 1;
+        m.rpy_speed_vms(true);
+        let ints: Vec<_> = (108..111).map(|k| m.vms[k].pending_interrupt).collect();
+        assert_eq!(ints, [21, 20, 0]);
+        assert_eq!(m.vms[110].color[anmvm::A], 0);
+        m.rpy_speed_vms(false);
+        assert_eq!(m.vms[110].pending_interrupt, 21);
     }
 
     // 15 §3.8: Menu_CursorUpDown(9) wraps, then skips stages without a record in the same direction.

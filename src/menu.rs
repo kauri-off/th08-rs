@@ -359,6 +359,8 @@ pub struct MainMenu {
     pub(crate) again: bool,
     // The option handler returned 5 (15 §1.3).
     restart: bool,
+    // The handler returned 0 (game-start confirm): calc node removed after the VMs ran (12 §2 "Handlers that return 0").
+    pub(crate) remove: bool,
     // Config snapshot taken on entering the option screen (12 §2.2 item 7).
     pub(crate) snapshot: Config,
     // Key config working copy of the 9 pad fields (menu +0x14440…+0x14451, file order) and the button found on the
@@ -392,6 +394,7 @@ impl MainMenu {
             back: 0,
             again: false,
             restart: false,
+            remove: false,
             snapshot: Config::default(),
             keys: crate::config::PAD_DEFAULT,
             last_button: -1,
@@ -889,6 +892,7 @@ impl MainMenu {
                     g.fresh_start = true;
                     ctx.audio.stop_bgm();
                     g.request(gamemgr::SCENE_GAME);
+                    self.remove = true;
                 }
             }
         } else if ctx.input.pressed(CANCEL) {
@@ -1348,12 +1352,18 @@ impl Task<Ctx> for MainMenu {
                 // Replay with no recorded stage: the handler returns 0, which removes the menu's calc node (15 §3.8).
                 REPLAY => {
                     if !self.replay(ctx) {
-                        return Ret::Remove;
+                        self.remove = true;
                     }
                 }
                 SPELL_PRACTICE => self.spell_char(ctx),
                 SPELL_CARD => self.spell_card(ctx),
                 _ => {}
+            }
+            // Return 0: RunRange and the description VM still run, then the calc node is removed; its on-remove
+            // clears the VMs, so the menu draws nothing in this frame (12 §2 "Handlers that return 0", 00 §3).
+            if std::mem::take(&mut self.remove) {
+                run_vms(self, ctx);
+                return Ret::Remove;
             }
             // Option left with a changed colour depth / window mode: return 5, the program restarts (15 §1.3, 00 §2).
             if std::mem::take(&mut self.restart) {
@@ -1372,13 +1382,7 @@ impl Task<Ctx> for MainMenu {
                 self.frames += 1;
             }
 
-            // After the screen handler all 142 VMs run, then the description VM (12 §2).
-            for vm in self.vms.iter_mut().filter(|v| v.script.is_some()) {
-                vm.run(&mut ctx.anm);
-            }
-            if let Some(i) = self.desc_cur {
-                self.desc[i].run(&mut ctx.anm);
-            }
+            run_vms(self, ctx);
             if !std::mem::take(&mut self.again) {
                 return Ret::Next;
             }
@@ -1464,6 +1468,16 @@ fn assign_key(keys: &mut [i16; 9], row: usize, b: i16) {
 // Loader thread 0x470E10 (00 §3.2): title music unless music is off or the previous scene was 5 (result screen).
 fn title_music(g: &gamemgr::Game) -> bool {
     g.cfg.music != 0 && g.previous != gamemgr::SCENE_RESULT_MENU
+}
+
+// After the screen handler all 142 VMs run, then the description VM (12 §2).
+fn run_vms(m: &mut MainMenu, ctx: &mut Ctx) {
+    for vm in m.vms.iter_mut().filter(|v| v.script.is_some()) {
+        vm.run(&mut ctx.anm);
+    }
+    if let Some(i) = m.desc_cur {
+        m.desc[i].run(&mut ctx.anm);
+    }
 }
 
 #[cfg(test)]

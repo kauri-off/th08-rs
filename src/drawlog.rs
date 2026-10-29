@@ -156,14 +156,12 @@ pub fn format_frame(h: &Header, recs: &[LogRec]) -> String {
                 }
                 body.push('\n');
             }
-            LogRec::Clear { vp, color } => {
+            LogRec::Clear { vp, color, arg } => {
                 set(&mut body, &mut v, vp_line(vp));
-                match color {
-                    Some(c) => {
-                        let _ = writeln!(body, "C tz {:08x}", argb(*c));
-                    }
-                    None => body.push_str("C z ff000000\n"),
-                }
+                let _ = match color {
+                    Some(c) => writeln!(body, "C tz {:08x}", argb(*c)),
+                    None => writeln!(body, "C z {arg:08x}"),
+                };
             }
             LogRec::Copy {
                 src,
@@ -848,9 +846,16 @@ fn sprite_rect(p: &Prim, q: &[Vtx; 4]) -> [i32; 4] {
     ]
 }
 
-// The fps counter at (512, 464) (15 §3.3) depends on host timing, so it is never compared.
+// The fps counter at (512, 464) and the replay fps text "%2d" at (384, 448) (15 §3.3) depend on host timing, so
+// they are never compared.
 fn is_fps(p: &Prim, q: &[Vtx; 4]) -> bool {
-    p.tex.starts_with("ascii.anm") && q.iter().all(|v| v.x >= 496.0 && v.y >= 456.0)
+    p.tex.starts_with("ascii.anm")
+        && (q.iter().all(|v| v.x >= 496.0 && v.y >= 456.0)
+            || q.iter().all(|v| {
+                (383.0..=413.0).contains(&v.x)
+                    && (447.0..=464.0).contains(&v.y)
+                    && (v.col == 0xffff_ffd0 || v.col == 0xffff_4040)
+            }))
 }
 
 fn in_playfield(q: &[Vtx; 4]) -> bool {
@@ -1773,6 +1778,62 @@ mod tests {
         assert_eq!(f[0].prims.len(), 2);
         let d = diff_frame(&f[0], &f[0], &Opts { playfield: false });
         assert_eq!((d.score(), d.total.same), (0, 2));
+    }
+
+    // 11 §3.1 / 06 §3 step 5: a z-only clear logs its ignored colour argument; a target clear its colour.
+    #[test]
+    fn clear_logs_colour_argument() {
+        let h = Header {
+            present: 1,
+            scene: 2,
+            scene_frame: 1,
+            game_frame: 1,
+            demo: 0,
+            demo_frame: 0,
+            input: 0,
+        };
+        let vp = Rect::new(0.0, 0.0, 640.0, 480.0);
+        let recs = [
+            LogRec::Clear {
+                vp,
+                color: None,
+                arg: 0xff40_4060,
+            },
+            LogRec::Clear {
+                vp,
+                color: Some([1, 2, 3, 255]),
+                arg: 0xff00_0000,
+            },
+        ];
+        let text = format_frame(&h, &recs);
+        assert!(text.contains("\nC z ff404060\n"), "{text}");
+        assert!(text.contains("\nC tz ff010203\n"), "{text}");
+    }
+
+    // 15 §3.3: the replay fps text near (384, 448) in white / red is skipped like the fps counter, other text is not.
+    #[test]
+    fn replay_fps_text_skipped() {
+        let p = Prim {
+            tex: "ascii.anm#0".into(),
+            tw: 256,
+            th: 256,
+            state: "".into(),
+            vp: [0.0, 0.0, 640.0, 480.0],
+            kind: Kind::Quad([Vtx::default(); 4]),
+        };
+        let q = |x: f32, y: f32, col: u32| -> [Vtx; 4] {
+            [(0.0, 0.0), (14.0, 0.0), (0.0, 16.0), (14.0, 16.0)].map(|(dx, dy)| Vtx {
+                x: x + dx,
+                y: y + dy,
+                col,
+                ..Vtx::default()
+            })
+        };
+        assert!(is_fps(&p, &q(383.5, 447.5, 0xffff_ffd0)));
+        assert!(is_fps(&p, &q(397.5, 447.5, 0xffff_4040)));
+        assert!(!is_fps(&p, &q(383.5, 447.5, 0xffff_ffff)));
+        assert!(!is_fps(&p, &q(300.5, 447.5, 0xffff_ffd0)));
+        assert!(is_fps(&p, &q(512.5, 464.5, 0xffff_ffff)));
     }
 
     // FORMAT.md §3 cut batches and the accepted side-panel repaint are reported apart from extra quads.

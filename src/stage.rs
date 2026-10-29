@@ -1059,7 +1059,8 @@ impl Task<Ctx> for Stage {
                 if self.clear_color != 0 {
                     gfx.clear_viewport(rgba);
                 }
-                gfx.clear_depth(None);
+                // The z-only clear passes clear_color (+0x830) as its ignored colour argument.
+                gfx.clear_z(self.clear_color);
             }
             gfx.set_depth_test(true);
             if !hide {

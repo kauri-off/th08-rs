@@ -1196,7 +1196,12 @@ impl Task<Ctx> for GameManager {
         }
         // GameMgr_Calc's own z clear (11 §3.1), the previous frame left the viewport full-screen.
         ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
-        ctx.gfx.clear_depth(None);
+        // Its ignored colour argument is the stage fog colour g_Stage+0xAF4 (0xFF000000 before the first fog op).
+        let arg = self
+            .stage
+            .as_ref()
+            .map_or(0xff00_0000, |st| st.borrow().fog.color);
+        ctx.gfx.clear_z(arg);
         let g = &mut ctx.game;
         // Step 7 (0x43A5BC): bit 2 := not paused and no game-over menu, so it is already 0 on the ESC frame (11 §2.1).
         if g.paused == 0 && g.game_over == 0 {

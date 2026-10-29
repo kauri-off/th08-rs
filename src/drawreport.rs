@@ -140,12 +140,12 @@ impl Renderer {
                     .step_by(2)
                     .map(|i| [v[i], v[i + 1], v[i + 2], v[i + 3]])
                     .collect(),
-                Kind::Clear(what, c) => {
-                    let c = rgba(*c);
+                Kind::Clear(what, arg) => {
+                    let c = rgba(*arg);
                     if what.contains('t') {
                         self.gfx.clear_depth(Some(c));
                     } else {
-                        self.gfx.clear_depth(None);
+                        self.gfx.clear_z(*arg);
                     }
                     continue;
                 }
