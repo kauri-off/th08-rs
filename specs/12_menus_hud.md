@@ -678,7 +678,7 @@ Branch on the fresh-start flag 0x17CE8BC (11 §3):
 - **Fresh start**: the whole impl block (0x8C2E dwords) is zeroed; front.anm (slot 10), times.anm (14) and the
   shot's loadingNN.anm (12) are loaded; the same three shorts := −1 and +0x21810 := 0; VM impl+0x5484 := `ascii.anm`
   script 0x1A, VM impl+0x22E14 := `ascii.anm` script 0x19 with its difficulty sprite (§5.1 table).
-- Both: night clock hidden; clock VM impl+0x34D4 := `times.anm` script 0, sprite = clock counter; msg file (not in
+- Both: night clock hidden; clock VM impl+0x34D4 := `times.anm` script 0, sprite = clock counter (`GameMgr_GetClock`, stats+0x28 as it is when the HUD registers: after the fresh-start value — 6 in Extra, 11 §3.2 — and after a replay's stage record, 11 §3.4, since `Replay_Register(1)` runs before the subsystems register, 11 §3.1; Extra therefore shows sprite 6 = [0, 192, 128, 224]; VERIFIED 0x4390EE, RE-Q62); msg file (not in
   spell practice); stgNtxt.anm (unless the reload-same-stage flag 0x17CE8C4); **only on a fresh start** the 16
   front VMs impl + i·0x2A4 := front.anm script i (so on a continuing stage VMs 0–15 keep their state: VM 13 has
   stopped, the panel VMs 0–9 stay fully faded in); HUD +0 := 0, +0x2C := 0, impl+0x2A40 := 0, +0x30 := +0x34 := 0;

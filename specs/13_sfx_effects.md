@@ -223,7 +223,7 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 20 | 56 | — | — |
 | 21, 26 | 52 (90), 53 (90) | burst (`EffInit_Burst` 0x4270C0, VERIFIED RE-Q28): if param.x (+0x2B0) ≤ −990.0 (x87 compare with the double at 0x4B49A0; ECL passes −999.0 as "random") angle = `Rng_FloatRange(2π)` − π (**RNG**), else angle = `Angle_AddNormalize`(param.x, 0) (no RNG; 0 and negative angles are kept); dir = (cos a, sin a, 0) × (1 + `Rng_FloatRange(1.5)`) (**RNG**, always; cos/sin are stored as f32 first, so dir = f32(f32(cos a)·m), 05 §10 trig sites); plain `Effect_Spawn` leaves param 0 → angle 0; pos = centre + dir·128·(1 − (1 − t/90)²) | — |
 | 22 | 54 (50) | no init (table init 0; pos = the spawn pos, i.e. the player pos +0x2B4 passed by `Player_Move`); follows the player while its script runs | youkai aura (fixed slot 2, created on focus) |
-| 23, 24 | 104 (I0 + 1; script sets I0 = 32, the spawner overwrites it) | no-op update (keep) | invulnerability ring (fixed slot 0, `Bomb_Start` → 0x40BF00; no init, pos = player pos +0x2B4 at the spawn): I0 := invulnerability frames, scale interpolates (slot 4, linear) from current to 1/16 over the invulnerability time (current is always (1, 1): script 104 sets `scale 1.0, 1.0` at time 0; VERIFIED 0x40BF00, RE-Q24), z spin × const, colour R 0xFF G 0x40 B 0x40, fades in to alpha 160 over 30 frames |
+| 23, 24 | 104 (I0 + 1; script sets I0 = 32, the spawner overwrites it) | no-op update (keep) | invulnerability ring (fixed slot 0, `Bomb_Start` → 0x40BF00; no init, pos = player pos +0x2B4 at the spawn): I0 := invulnerability frames, scale interpolates (slot 4, linear) from current to 1/16 over the invulnerability time — a plain VM interpolation slot advanced by `AnmVm_Run` (05 §6), not by the effect update: elapsed +0x80 := 0, duration +0xD4 := copy of the player timer +0xE2AF4, mode +0xFC := 0, start +0x268 := VM scale, end +0x270 := (1/16, 1/16) (VERIFIED 0x40BF00, RE-Q62, silentselene_50948 present 227) (current is always (1, 1): script 104 sets `scale 1.0, 1.0` at time 0; VERIFIED 0x40BF00, RE-Q24), VM angular_vel.z (+0x14) *= −1.0 (0x4B438C) — the spawn's `AnmFile_SetScript` already ran script time 0 with the script's +0.003142, so the rotation goes +v, 0, −v, −2v, … (the first drawn frame is unrotated; VERIFIED 0x40BF00, RE-Q62, silentselene_50948 present 226), colour R 0xFF G 0x40 B 0x40, fades in to alpha 160 over 30 frames |
 | 25 | 35 (∞) | no init, no update; pos = the spawn pos (player pos +0x2B4 from `Player_Move`) | gauge-max aura (fixed slot 8) |
 | 28, 29 | 57, 58 (10) | — | focus-switch flashes (human 0x808080FF / youkai 0x80FF8080) |
 | 30, 31 | 59, 60 (10) | — | enemy mode reaction (→ human 0x80803030 / → youkai 0x80303080) |
@@ -426,7 +426,8 @@ Fade, when +0x352 is set:
   (x·m0 + y·m1) + (z·m2 + m3), 1/w = `rcpps` refined by one Newton step r' = (r + r) − (r·w)·r, result · r'),
   then the viewport map on the x87 at 24-bit precision: x = ((x' + 1)·W)·0.5 + X, y = ((1 − y')·H)·0.5 + Y,
   z = (MaxZ − MinZ)·z' + MinZ. Effect on the golden draw log: below the 0.01 px print resolution in nearly all
-  quads (no measurable count change); a port may use f32 division.
+  quads (no measurable count change); a port may use f32 division, **except** that a hard threshold on the projected point
+  (the 0x428310 push/pull edges below) can then flip on a 1-ulp difference (RE-Q62, golden present 4439).
 - The rotation is VM rotation.z; the vertex z is s.z.
 
 **Callback 0x428310 for types 51 / 63.** It moves the projected point s in screen space; skipped while
@@ -444,6 +445,14 @@ if |d2|² < 88²:
     D += d2·0.02     # pushed away from the player
 s += D
 ```
+Arithmetic (VERIFIED disasm 0x428310–0x4284A2, RE-Q62): p = `Vec3_Add`(s, D) and d = `Vec3_Sub` results are stored to
+f32 per component; the ±(32, 16) adds/subtracts are separate f32 stores and d.z / d2.z := 0 before `Vec3_LengthSq`
+0x40B500 (x87, z² + y² + x²), compared with the f32 constants 25600 (0x4B49BC) / 7744 (0x4B49B4), strictly less.
+The push is a hard edge: golden present 4439 (scene 2 frame 3753) a type-51 particle has d2 = (−7.045929, −87.7175)
+in the port, |d2|² = 7744.0047 even exactly, so it is not pushed, while the original pushes it on that frame (its p.y
+is ≥ 1 ulp smaller — INFERRED, not observed at runtime) and the particle is drawn 1.75 px apart for one frame (0.03 px after). The 1-ulp difference comes
+from the projection of s (D3DX8 SSE path above, `rcpps` + one Newton step); an f32-division projection is therefore
+**not** enough at this edge — see the open question in changelog/answers_re_q62.md.
 
 ### 2.7 Main spawn sites (VERIFIED)
 | event | effect |

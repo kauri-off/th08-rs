@@ -358,7 +358,7 @@ Every emitted quad then goes through `AnmManager_EmitQuad` (0x4628B0):
 2. UVs: `u0 = sprite.u0n + uv_off_u`, `u1 = sprite.u1n + uv_off_u`, `v0 = sprite.v0n + uv_off_v`,
    `v1 = sprite.v1n + uv_off_v` (normalised sprite rect, 03_images.md); v0 gets (u0,v0), v1 (u1,v0),
    v2 (u0,v1), v3 (u1,v1).
-3. Cull: draw only if the quad's bounding box intersects the current viewport rectangle.
+3. Cull: draw only if the quad's bounding box intersects the current viewport rectangle: vp.X ≤ max x, vp.Y ≤ max y, min x ≤ vp.X + W, min y ≤ vp.Y + H (f32, touching counts; VERIFIED 0x4628B0, RE-Q62). A quad that only touches the far edge (e.g. min y = 464 on the playfield viewport) is drawn but covers no pixel, so f32 rounding of a projected billboard there changes the draw list, not the picture.
 4. Texture of the sprite's entry; colour = colour (or colour2 if bit 17), optionally multiplied by a global
    tint (AnmManager+4 ≠ 0: per channel `min(255, c·tint >> 7)`), written to all four vertices
    (or to D3DRS_TEXTUREFACTOR in the texture-factor colour path chosen by a config flag).

@@ -956,3 +956,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Tool: alpha-0 vertex colours compared as equal (stack residue, 06 §11.3).
 - Result: golden 736 → 3677; traces identical. Next: etama#1/#2/#3 single-quad diffs, spell-replay frame-1 player/ascii,
   uddo18 stg7bg#0 at 386, 54723 ascii pos.
+
+# RE-Q62 (2026-10-29) — draw-log differences part 3 (specs/changelog/answers_re_q62.md)
+- Runs re/work/runs/q62 (CHECKPOINT.md; portcopy = q61 portcopy + Q62 fixes, target/re62; dc.sh/sum.py/qd.py from q61,
+  ch.py (chunk of a present), lz.py (ring/strip vertex deltas)). Keep -j ≤ 6 while the implementer runs batches (OOM: exit 1, wall 2).
+- Q1 spell replays frame 1: time threshold 0 in spell practice is overwritten by the port's EnemyManager stage start (11 §3.1);
+  player respawn/dying sprite: scale x = t/30 / y = 3 − 2t/30 (respawn), additive blend, white RGB, float timer (09 §6.2/6.3).
+- Q2 Extra gm 450: HUD clock sprite = stats clock (6 in Extra); port read the emptied GameManager stats copy (12 §5.1a).
+- Q3 invuln ring angular_vel.z × −1 after spawn and its scale is a VM slot-4 interpolation, not the effect update (13 §2.6); spell start ring writes VM pos.y only (07 §11.1); EmitQuad cull
+  edge (05 §9) + far-vertex precision → tool rules.
+- Result (fix4): golden 3677 → 4439, every recording later; traces identical.
+- Next: list-B particle player push |d2|² vs 88² edge = 1-ulp projection difference (13 §2.6c): golden 4439, 52233 3826.

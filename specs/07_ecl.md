@@ -1023,7 +1023,7 @@ those values are overwritten by the next `Spell_Start`.
 
 **Start ring at `Spell_Start`** (VERIFIED 0x4152A0, RE-Q27): fixed effect slot 1, type 39 (52 when GameFlags bits 7–8 ≠ 0)
 at the boss pos e+0x2D34 (ring init: centre +0x2E0 := that pos), pointer in g_Gui +0xF4. Then: VM pos slot 0
-(elapsed := 0, duration := 100, mode 6) from (8, 64) to (256, 0), VM pos.y := 64; effect pos := boss pos; segments
+(elapsed := 0, duration := 100, mode 6) from (8, 64) to (256, 0), VM pos.y := 64 — **only y**: VM pos.x keeps the spawn value 0, so on the first frame the type-39/52 update copies radius := 0 before the VM run interpolates (VERIFIED 0x4152A0 writes +0x20C only, RE-Q62; silentselene_79090 present 3699); effect pos := boss pos; segments
 +0x324 := 64, rotation +0x318 := 0, radius +0x314 := 256, width +0x320 := 15, wave count +0x334 := 6. Spell flags:
 bit 5 := GameFlags bit 7, bit 6 := 0, bit 11 := 0. Also g_Gui +0x2620 := 0x80808080 (bonus-line tint, 12 §5.8), timers
 +0x108 (remaining) and +0x114 (duration) := e+0x3378, bonus +0xFC := card bonus, max +0x2638 := bonus (99 999 990 if flag A bit 27 is already set; op 155 later writes the same 99 999 990 into +0x2638, op 155 row), decay per second +0x100 := (bonus − bonus/7) / (e+0x3378 / 60) (unsigned integer).

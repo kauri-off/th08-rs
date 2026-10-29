@@ -350,7 +350,7 @@ spell-card failure notified; miss counter; time −= min(time/10, 500)
 (as −(time)/10 when time ≤ 5000); drops: lives < 1 → power := 0 and 5 full-power items; else power :=
 0 if ≤ 16 else power − 16, 1 big + 5 small power items, and for shot types 2, 8, 9 with bombs > 0 a bomb
 item (all mode 2); attracted items fall; **rank −1600**.
-When n == 0 at entry (after death): shrink animation (scale y = 1 + 3t/30, x = 1 − t/30, t = the state timer +0xE2AF4; **that timer is not reset at the real death**: it was set to 0 by `Player_Die` and has ticked once per `Player_Calc` ever since (`Player_UpdateInvuln` ticks it in every state except 3), so t counts from the hit, the shrink only covers what is left of the 30 frames after the window, and when the deathbomb window lasted ≥ 30 frames the respawn happens on the first frame with n == 0 at entry, with no visible shrink. Example (attract demo 2): hit → state 2 at frame 2907, real death 2922, state 1 at 2938 (VERIFIED 0x44CBF0, 0x44D2C0, runtime rngsite demo 2, RE-Q24); every such frame
+When n == 0 at entry (after death): shrink animation (q = f32(t/30) with t = `Timer_GetF` (current + fraction); VM scale y (+0x1C) = 3q + 1, scale x (+0x18) = 1 − q; VM colour (+0x1F0) := (ftol(255 − t·255/30) << 24) | 0xFFFFFF (x87, the float timer again), i.e. a fade-out with white RGB; VM blend bits 4–5 := 1, additive (`0x44E0F0`); all of this is written every such frame, before the t > 29 test; VERIFIED 0x44CF5C–0x44CFD9, RE-Q62; t = the state timer +0xE2AF4; **that timer is not reset at the real death**: it was set to 0 by `Player_Die` and has ticked once per `Player_Calc` ever since (`Player_UpdateInvuln` ticks it in every state except 3), so t counts from the hit, the shrink only covers what is left of the 30 frames after the window, and when the deathbomb window lasted ≥ 30 frames the respawn happens on the first frame with n == 0 at entry, with no visible shrink. Example (attract demo 2): hit → state 2 at frame 2907, real death 2922, state 1 at 2938 (VERIFIED 0x44CBF0, 0x44D2C0, runtime rngsite demo 2, RE-Q24); every such frame
 also last vx/vy +0xE2A9C/+0xE2AA0 := 0); at t > 29:
 state 1, pos = (192, 448 − 64), timer 0, scale 3, idle script; if lives > 0: lives −= 1, bombs :=
 trunc(sht bombs) (3); respawn starts (returns 1); else game over (0x164D0BB = 1) — lives and **bombs are not
@@ -360,7 +360,12 @@ changed** on game over (VERIFIED 0x44CBF0, RE-Q24).
 Clear area for 60 frames (+0xE2A70 := 60 on **every** `Player_RespawnUpdate` call, so it counts down from 60 only after
 the respawn ends; `Player_UpdateInvuln` decrements it while ≠ 0 and adds, each frame a full-screen cancel rectangle 768 × 896 at the player
 with item −1, i.e. bullets vanish without items). Grow animation over 30 frames, speed multipliers 1, alpha =
-t × 255 / 30, deathbomb counter 0. At t > 29: state 3, scale 1, colour white; invulnerability timer = 240
+t × 255 / 30, deathbomb counter 0. Every call, before the t > 29 test (VERIFIED 0x44D180, RE-Q62): f = f32(1 −
+`Timer_GetF`/30); VM scale x (+0x18) := 1 − 1·f (= t/30, grows 0 → 1), scale y (+0x1C) := 2f + 1 (3 → 1, so the sprite
+starts as a tall thin line); colour := ((`Timer_Get`·255)/30 << 24) | 0xFFFFFF (integer timer; white RGB); VM blend
+bits 4–5 := 1 (additive, `0x44E0F0`). In spell practice the player starts in state 1 with timer 10 (§6.4 load), so the
+first gameplay frame already shows this sprite at t ≈ 10. At t > 29: state 3, scale 1, colour white, blend bits := 0
+(alpha, `0x44E120`); invulnerability timer = 240
 (with 0x164D0B4 bit 14, spell practice, the timer is not set and keeps its value 30, so the invulnerability lasts
 30 frames; VERIFIED 0x44D180); counter := sht +8 (bombing allowed). Since `Player_UpdateBomb` runs before the state update in `Player_Calc` and the counter is 0 throughout state 1 (it reached 0 in state 2 and the respawn rewrites 0 every frame), **no bomb can start in state 1**; the first possible start is the first state-3 frame (VERIFIED 0x44C390, 0x44D180, RE-Q24).
 
