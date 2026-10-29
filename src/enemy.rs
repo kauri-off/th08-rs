@@ -864,9 +864,15 @@ impl EnemyManager {
     pub fn stage_start(&mut self, anm: &mut AnmManager, index: usize) {
         let d = self.g.difficulty.clamp(0, 4) as usize;
         let mut p = self.player.borrow_mut();
-        p.stats.time_threshold = crate::player::TIME_THR
-            .get(index % 9)
-            .map_or(10, |r| r[d.min(3)]);
+        // 11 §3.1: 0 in spell practice (GameFlags bit 14), else TIME_THR[stage][difficulty].
+        p.stats.time_threshold = if crate::gamemgr::flags() & crate::gamemgr::F_SPELL_PRACTICE != 0
+        {
+            0
+        } else {
+            crate::player::TIME_THR
+                .get(index % 9)
+                .map_or(10, |r| r[d.min(3)])
+        };
         p.stats.time = 0;
         p.stats.time_added = 0;
         (

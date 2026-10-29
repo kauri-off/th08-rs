@@ -891,11 +891,25 @@ fn panel_repaint(fr: &Frame, p: &Prim, q: &[Vtx; 4]) -> bool {
         && (x1 <= px0 || x0 >= px1 - 0.5 || y1 <= py0 || y0 >= py1 - 0.5)
 }
 
+// A quad ≥ 0.5 px outside the viewport covers no pixel centre; whether the cull (05 §9 step 3) keeps it depends on
+// f32 rounding at the edge, so it is dropped on both sides.
+fn off_vp(vp: [f32; 4], q: &[Vtx; 4]) -> bool {
+    let [vx, vy, vw, vh] = vp;
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for v in q {
+        x0 = x0.min(v.x);
+        x1 = x1.max(v.x);
+        y0 = y0.min(v.y);
+        y1 = y1.max(v.y);
+    }
+    x1 < vx - 0.5 || y1 < vy - 0.5 || x0 > vx + vw - 0.5 || y0 > vy + vh - 0.5
+}
+
 // Comparable quads of a frame (strips split into quads); clears, copies and other polygons go to `others` as text.
 fn items<'a>(fr: &'a Frame, o: &Opts, others: &mut Vec<String>) -> Vec<Item<'a>> {
     let mut out = Vec::new();
     let push = |p: &'a Prim, q: [Vtx; 4], out: &mut Vec<Item<'a>>| {
-        if is_fps(p, &q) || (o.playfield && !in_playfield(&q)) {
+        if is_fps(p, &q) || (o.playfield && !in_playfield(&q)) || off_vp(p.vp, &q) {
             return;
         }
         let c = [
@@ -960,7 +974,16 @@ fn col_close(a: u32, b: u32) -> bool {
 fn compare(a: &Item, b: &Item) -> u8 {
     let mut d = 0;
     for (x, y) in a.q.iter().zip(&b.q) {
-        if !close(x.x, y.x, tol(x.x)) || !close(x.y, y.y, tol(x.y)) {
+        // A vertex outside the depth range is a near-singular projection (13 §2.6c): 1e-3 relative.
+        let far = !(0.0..=1.0).contains(&x.z) || !(0.0..=1.0).contains(&y.z);
+        let ptol = |v: f32| {
+            if far {
+                tol(v).max(1e-3 * v.abs())
+            } else {
+                tol(v)
+            }
+        };
+        if !close(x.x, y.x, ptol(x.x)) || !close(x.y, y.y, ptol(x.y)) {
             d |= D_POS;
         }
         if !close(x.u, y.u, 1e-4) || !close(x.v, y.v, 1e-4) {
@@ -970,7 +993,12 @@ fn compare(a: &Item, b: &Item) -> u8 {
             d |= D_COL;
         }
         let rt = 2e-3 + 0.02 * x.rhw.abs();
-        if !close(x.z, y.z, 2e-3) || !close(x.rhw, y.rhw, rt) {
+        let zt = if far {
+            2e-3f32.max(1e-3 * x.z.abs())
+        } else {
+            2e-3
+        };
+        if !close(x.z, y.z, zt) || !close(x.rhw, y.rhw, rt) {
             d |= D_Z;
         }
     }
@@ -1693,6 +1721,46 @@ mod tests {
 
     // FORMAT.md §2 fog: C %g, 6 significant digits.
     // 06 §11.3: alpha-0 colours compare equal whatever their RGB; otherwise ±1 per channel.
+    // 05 §9 step 3: quads ≥ 0.5 px outside the viewport are not compared; 13 §2.6c: z ∉ [0, 1] gets 1e-3 relative.
+    #[test]
+    fn off_viewport_and_far_vertices() {
+        let quad = |x: f32, y: f32, z: f32| -> [Vtx; 4] {
+            [(0.0, 0.0), (8.0, 0.0), (0.0, 8.0), (8.0, 8.0)].map(|(dx, dy)| Vtx {
+                x: x + dx,
+                y: y + dy,
+                z,
+                ..Vtx::default()
+            })
+        };
+        let vp = [32.0, 16.0, 384.0, 448.0];
+        assert!(off_vp(vp, &quad(100.0, 464.0, 0.0)));
+        assert!(!off_vp(vp, &quad(100.0, 463.0, 0.0)));
+        assert!(off_vp(vp, &quad(23.0, 100.0, 0.0)));
+        assert!(!off_vp(vp, &quad(24.0, 100.0, 0.0)));
+        let p = Prim {
+            tex: "stg7bg.anm#0".into(),
+            tw: 256,
+            th: 256,
+            state: "".into(),
+            vp,
+            kind: Kind::Quad([Vtx::default(); 4]),
+        };
+        let item = |q: [Vtx; 4]| Item {
+            order: 0,
+            prim: &p,
+            key: Default::default(),
+            q,
+            c: [0.0; 2],
+        };
+        let (a, b) = (
+            quad(-1.42e6, 100.0, -201.0),
+            quad(-1.42e6 + 200.0, 100.0, -201.0),
+        );
+        assert_eq!(compare(&item(a), &item(b)) & D_POS, 0);
+        let (a, b) = (quad(-1.42e6, 100.0, 0.5), quad(-1.42e6 + 200.0, 100.0, 0.5));
+        assert_ne!(compare(&item(a), &item(b)) & D_POS, 0);
+    }
+
     #[test]
     fn alpha_zero_colours_equal() {
         assert!(col_close(0x0091_0D20, 0x0000_0000));
@@ -1764,7 +1832,7 @@ mod tests {
             blend: Blend::Add,
             test: false,
             write: true,
-            vp: Rect::new(32.0, 16.0, 384.0, 448.0),
+            vp: Rect::new(0.0, 0.0, 640.0, 480.0),
             fog: None,
             v,
         };

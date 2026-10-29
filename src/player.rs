@@ -1101,9 +1101,15 @@ impl Player {
         // 09 §6.2: t counts from the hit (not reset at the real death); last vx/vy := 0 every frame here.
         self.last_v = [0.0; 2];
         let t = self.state_timer.cur;
+        // 09 §6.2: shrink + additive fade written every call before the t > 29 test; x87 on the float timer.
+        let tf = self.state_timer.getf() as f64;
+        let q = (tf / 30.0) as f32;
+        self.vm.scale = [1.0 - q, (3.0 * q as f64 + 1.0) as f32];
+        self.vm.flags |= anmvm::F_SCALE_DIRTY;
+        let a = (255.0 - tf * 255.0 / 30.0) as i32;
+        self.vm.color = [0xFF, 0xFF, 0xFF, a as u8];
+        self.set_blend(1);
         if t <= 29 {
-            self.vm.scale = [1.0 - t as f32 / 30.0, 1.0 + 3.0 * t as f32 / 30.0];
-            self.vm.flags |= anmvm::F_SCALE_DIRTY;
             return false;
         }
         self.state = 1;
@@ -1184,21 +1190,30 @@ impl Player {
         let t = self.state_timer.cur;
         self.speed_mult = [1.0; 2];
         self.deathbomb = 0;
+        // 09 §6.3: every call before the t > 29 test: x grows 0 → 1, y 3 → 1, additive, integer-timer alpha.
+        let f = (1.0 - self.state_timer.getf() as f64 / 30.0) as f32;
+        self.vm.scale = [1.0 - f, (2.0 * f as f64 + 1.0) as f32];
+        self.vm.flags |= anmvm::F_SCALE_DIRTY;
+        self.vm.color = [0xFF, 0xFF, 0xFF, (t * 255 / 30) as u8];
+        self.set_blend(1);
         if t <= 29 {
-            let s = 3.0 - 2.0 * t as f32 / 30.0;
-            self.vm.scale = [s, s];
-            self.vm.flags |= anmvm::F_SCALE_DIRTY;
-            self.vm.color[anmvm::A] = (t * 255 / 30) as u8;
             return;
         }
         self.state = 3;
         self.vm.scale = [1.0, 1.0];
         self.vm.flags |= anmvm::F_SCALE_DIRTY;
         self.vm.color = [255; 4];
+        self.set_blend(0);
         if gamemgr::flags() & F_SPELL_PRACTICE == 0 {
             self.state_timer.set(240);
         }
         self.deathbomb = self.sht.deathbomb;
+    }
+
+    // VM blend bits 4–5 (0x44E0F0 := 1 additive, 0x44E120 := 0 alpha; 09 §6.2, §6.3).
+    fn set_blend(&mut self, b: u32) {
+        self.vm.flags =
+            (self.vm.flags & !(3 << anmvm::F_BLEND_SHIFT)) | (b << anmvm::F_BLEND_SHIFT);
     }
 
     // Player_UpdateInvuln 0x44D2C0 (09 §6.4): colour 0xFFF02020 when t mod 8 < 2; the ring follows the player.
@@ -1610,6 +1625,29 @@ mod tests {
         p.stats.bombs = 0.0;
         p.die(&mut rng);
         assert!(p.vm.flags & anmvm::F_COLOR2 == 0);
+    }
+
+    // 09 §6.2, §6.3: shrink (1 − q, 3q + 1) and grow (1 − f, 2f + 1) with an additive white fade; alpha blend at the end.
+    #[test]
+    fn dying_and_respawn_sprite() {
+        let (mut p, mut anm) = ready();
+        let blend = |p: &Player| (p.vm.flags >> anmvm::F_BLEND_SHIFT) & 3;
+        p.deathbomb = 0;
+        p.state_timer.set(15);
+        assert!(!p.dying_update(&mut anm, &mut None));
+        assert_eq!(p.vm.scale, [0.5, 2.5]);
+        assert_eq!((p.vm.color, blend(&p)), ([0xFF, 0xFF, 0xFF, 127], 1));
+        p.state_timer.set(10);
+        p.respawn_update();
+        let f = (1.0 - 10.0f64 / 30.0) as f32;
+        assert_eq!(p.vm.scale, [1.0 - f, (2.0 * f as f64 + 1.0) as f32]);
+        assert_eq!((p.vm.color, blend(&p)), ([0xFF, 0xFF, 0xFF, 85], 1));
+        p.state_timer.set(30);
+        p.respawn_update();
+        assert_eq!(
+            (p.state, p.vm.scale, p.vm.color, blend(&p)),
+            (3, [1.0, 1.0], [0xFF; 4], 0)
+        );
     }
 
     // 09 §9.2: the third time orb only inside the bullet-and-card branch.

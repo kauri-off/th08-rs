@@ -669,14 +669,7 @@ impl Effects {
                 ];
             }
             22 => e.pos = player,
-            // Invulnerability ring (13 §2.6): scale → 1/16 over I0 frames (the script fades it in).
-            // 13 §2.6: interpolates from the current scale, always (1, 1) (script 104 sets it at time 0).
-            23 | 24 => {
-                let n = e.vm.ivars[0].max(1) as f32;
-                let s = 1.0 + (1.0 / 16.0 - 1.0) * (t / n).min(1.0);
-                e.vm.scale = [s, s];
-                e.vm.flags |= anmvm::F_SCALE_DIRTY;
-            }
+            // 23 / 24 invulnerability ring: no-op update; the scale runs in VM slot 4 (13 §2.6 row 23, `invuln_ring`).
             _ => {}
         }
         if bomb_ring(e.kind) {
@@ -1116,7 +1109,8 @@ pub fn spell_ring(anm: &mut AnmManager, pos: [f32; 3], special: bool) {
     );
     get(i, |e| {
         e.vm.interp_pos_from(100, 6, [8.0, 64.0, 0.0], [256.0, 0.0, 0.0]);
-        e.vm.pos = [8.0, 64.0, 0.0];
+        // 07 §11.1: Spell_Start writes only pos.y; pos.x stays 0, so the first update copies radius 0.
+        e.vm.pos[1] = 64.0;
         e.pos = pos;
         e.ring = Ring {
             segments: 64,
@@ -1468,15 +1462,40 @@ pub fn death_ring(anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
 }
 
 // Invulnerability ring at bomb start (Player_SpawnInvulnRing 0x40BF00, type 23, slot 0): I0 := invulnerability
-// frames (13 §2.6, 14 §1.2).
+// frames (13 §2.6, 14 §1.2). `frames` is the player timer +0xE2AF4 just set by Bomb_Start.
 pub fn invuln_ring(anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
     let i = spawn_fixed(anm, 23, pos, FIX_INVULN, 0xFFFF4040);
-    get(i, |e| e.vm.ivars[0] = frames);
+    get(i, |e| {
+        e.vm.ivars[0] = frames;
+        // 13 §2.6 row 23: the spawn already ran script time 0, so the rotation goes +v, 0, −v, … (0x4B438C).
+        e.vm.angular_vel[2] *= -1.0;
+        // Scale slot 4, linear, current scale → 1/16 over the invulnerability time, advanced by AnmVm_Run (05 §6).
+        let sc = e.vm.scale;
+        e.vm.interp_scale_from(frames, 0, sc, [1.0 / 16.0; 2]);
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 13 §2.6 row 23: the invulnerability ring scales in VM slot 4 (linear, current → 1/16 over the timer);
+    // 07 §11.1: the spell ring start writes only VM pos.y.
+    #[test]
+    fn invuln_and_spell_ring_spawn() {
+        clear();
+        let mut anm = AnmManager::default();
+        invuln_ring(&mut anm, [1.0, 2.0, 0.0], 90);
+        peek(FIXED_BASE + FIX_INVULN, |e| {
+            assert_eq!((e.vm.ivars[0], e.vm.interp_duration[4].cur), (90, 90));
+            assert_eq!((e.vm.interp_mode[4], e.vm.scale_end), (0, [1.0 / 16.0; 2]));
+        });
+        spell_ring(&mut anm, [1.0, 2.0, 0.0], false);
+        peek(FIXED_BASE + FIX_SPELL, |e| {
+            assert_eq!(e.vm.pos, [0.0, 64.0, 0.0])
+        });
+        clear();
+    }
 
     // 14 §2.7 (RE-Q57 AO): the Sakuya follow write moves 2D/freed slots, never a live 3D particle's world pos.
     #[test]

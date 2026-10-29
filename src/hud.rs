@@ -364,10 +364,11 @@ impl Hud {
         // Hud_Load 0x4390D6: the night-clock VM starts hidden with alpha 0 (12 §5.7).
         self.night_vm = AnmVm::default();
         self.night_vm.color[anmvm::A] = 0;
-        // Clock sprite = clock counter stats+0x28 (12 §5.1); the clamp is a port guard.
+        // Clock sprite = clock counter stats+0x28 as it is now (12 §5.1a): the live player stats, since the
+        // game-manager copy was taken at the stage start. The clamp is a port guard.
         anm.set_script(&mut self.start_clock_vm, TIMES_SLOT, 0);
-        self.start_clock_vm
-            .set_sprite(anm, g.stats.clock.clamp(0, 15));
+        let clock = self.player.borrow().stats.clock;
+        self.start_clock_vm.set_sprite(anm, clock.clamp(0, 15));
         Ok(())
     }
 
