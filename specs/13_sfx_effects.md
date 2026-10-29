@@ -453,6 +453,10 @@ in the port, |d2|² = 7744.0047 even exactly, so it is not pushed, while the ori
 is ≥ 1 ulp smaller — INFERRED, not observed at runtime) and the particle is drawn 1.75 px apart for one frame (0.03 px after). The 1-ulp difference comes
 from the projection of s (D3DX8 SSE path above, `rcpps` + one Newton step); an f32-division projection is therefore
 **not** enough at this edge — see the open question in changelog/answers_re_q62.md.
+The same arithmetic difference shows away from any edge as sub-pixel noise on large software-projected quads, e.g.
+ref500 udKe02 present 214: three 70–140 px rotating `etama.anm#1` quads (z ≈ 0.79, ztest LESSEQUAL) differ by up to
+0.04 px with alternating sign and no drift (RE-Q63); draw-log comparisons give such quads a position tolerance of
+4·10⁻⁴ of the quad size.
 
 ### 2.7 Main spawn sites (VERIFIED)
 | event | effect |

@@ -165,7 +165,11 @@ frame). A session pins it:
 - `loader gauge poll B`, `loader lwait poll B`, `release stage poll P`: the stage loader set up the gauge VMs
   (`Ascii_InitVms`/`Ascii_SetupGaugeVms`), called `Loading_Wait` (needs GM+0x3C ≥ 30 loading frames) and cleared
   GM+0x38 (0x160F540) before the calc of the frame with poll index B / B / P. GameMgr_Calc runs the first gameplay
-  frame in frame P.
+  frame in frame P. The `present` field of a `loader` line is the next present at that moment (`g_present_n + 1`,
+  `lk_park`): when it equals the present of poll B in `polls.txt` the loader ran between frames; when it is one less,
+  it ran inside the frame of poll B − 1 after that frame's input poll, and for the gauge setup it is not recorded
+  whether that was before or after `Ascii_Calc` (12 §5.9, RE-Q63: a ±1-frame gauge readout difference there is the
+  race). A future probe should also log the ASCII manager's calc count at the `loader gauge` event.
 A port that loads synchronously should reproduce these frame counts, not its own loading time: e.g. stay on the
 loading screen until poll P, then run gameplay frame 1. Stage loading rows of `trace.txt` (loading column ≠ 0) show
 the loader's progress (player position, rank, flags bit 2) at timing-dependent points. Compare only from the first

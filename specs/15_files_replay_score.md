@@ -742,7 +742,8 @@ bottom right of the playfield"):
 - Drawn every frame while replay playback (GameFlags bit 3) **and** gameplay running (bit 2), unless 0x17CE8D0 ≠ 0
   (ending): `Ascii_QueueString` at (384, 448) (ASCII queue, 12 §2.9: 16 × 16 `ascii.anm#0` glyphs, advance 13 →
   quads (383.5, 447.5)–(399.5, 463.5) and (396.5, 447.5)–(412.5, 463.5)), colour as above, then the queue colour
-  is reset to white. The normal fps string ("%.02ffps" at (512, 464), white) is queued just before it.
+  is reset to white. "%2d" gives **three** glyphs (third quad (409.5, 447.5)–(425.5, 463.5)) when the stored fps byte
+  is ≥ 100 (replays recorded at 120 fps, e.g. ref500 51890 "120"; RE-Q63). The normal fps string ("%.02ffps" at (512, 464), white) is queued just before it.
 - The buffer 0x17CF2B8 is zero after boot and is written only in the window-close branch while GameFlags bits 2 and 3
   are set (and only from the draw-time call, `this` ≠ 0): until the first window closes during replay gameplay the
   queued string is empty and nothing is drawn. In the session recordings (the probe's fast mode virtualises only

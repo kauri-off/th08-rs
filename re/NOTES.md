@@ -967,3 +967,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   edge (05 §9) + far-vertex precision → tool rules.
 - Result (fix4): golden 3677 → 4439, every recording later; traces identical.
 - Next: list-B particle player push |d2|² vs 88² edge = 1-ulp projection difference (13 §2.6c): golden 4439, 52233 3826.
+
+# RE-Q63 (2026-10-29) — draw-log differences part 4 (specs/changelog/answers_re_q63.md)
+- Runs re/work/runs/q63 (CHECKPOINT.md; portcopy = q62 portcopy + Q63 scratch, target/re63; tools from q62 + spr.py (presents
+  drawing a sprite), g0.py (gauge readout G0/G1), dig.py (8×12 digit strings), col.py/gq.py (quad colours per present)).
+  Max 3 processes (implementer runs batches). drawdiff (target/re63/release/drawdiff ref.xz port.xz a-b --key present --full)
+  re-compares old logs with new tool rules in seconds — use it before re-running sessions.
+- CODE BUGs: last-spell label VM impl+0x5484 never drawn (12 §5.3); time-orb +8000 shown a frame late (08 §8.5); Youmu bomb
+  double tint (14 §2.11); ribbons must not be tinted (06 §11.3); Alice laser trail z / red kept (14 §4).
+- TOOL: 3-digit replay fps, near-plane vertex matching centre, cull-edge touching, viewport for inside quads, projected-quad
+  precision. Gauge ±1 frame = loader sub-frame race (12 §5.9, README).
+- Result (q63 fix): every recording same or later except the 2 loader-race ones (215/213) and the gm-173 spell-practice group (306, next = boss effects); traces identical; golden 4439.

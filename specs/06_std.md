@@ -414,7 +414,10 @@ translation(point) and input `pv`, §11.4), and fog colour as in §11.1
 v0 = (sA.x + dir.y·wA, sA.y − dir.x·wA), v1 = (sA.x − dir.y·wA, sA.y + dir.x·wA),
 v2 = (sB.x + dir.y·wB, sB.y − dir.x·wB), v3 = (sB.x − dir.y·wB, sB.y + dir.x·wB);
 UV: v0 (u0,v0), v1 (u1,v0), v2 (u0,v1), v3 (u1,v1) (sprite rect + uv offset); colours: v0,v1 from A's fog,
-v2,v3 from B's fog. Drawn through the 2D batch (fog off).
+v2,v3 from B's fog. Drawn through the 2D batch (fog off) by `AnmManager_DrawCustomQuad` 0x464DD0: draw-skip test
+(05 §12.2), texture, `SetRenderState2D`, then the four vertices are pushed **as given** — the global tint (05 §12.1)
+is not applied to ribbon vertex colours (only `EmitQuad` multiplies vertex colours), so a bomb tint leaves ribbons
+untinted while the stage's 3D quads and billboards are tinted (VERIFIED 0x464DD0, RE-Q63, ref500 53406 present 4659).
 Details (VERIFIED, changelog/answers_impl17.md §5.1, demo 1 draw log):
 - `wP` uses the **3D** length (`Vec3_Length` of the projected x, y, depth difference), like §11.1.
 - Point colour by distance d = |P − (cam.position + eye_offset)|: d ≤ fog_near → the VM colour (+0x1F0, colour 1, not

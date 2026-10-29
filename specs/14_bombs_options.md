@@ -234,8 +234,12 @@ re-initialise at T = 279.
   T = 150: speed multipliers 1.
 - Effect 0x30 (ring type 48, life 60): t < 30: thin vertical line (ellipse radius 192 × 0.0001 rotated π/2,
   48 segments, width 3); t ≥ 30: f = ((t − 30)/30)⁴, minor axis 192f, width 80f + 3.
-- Draw: tint; from T = 70 tint 0x80000030 and a white playfield rectangle, alpha 255 until T = 100 then
-  255 − (T − 100)·255/60 until T = 160.
+- Draw: tint 0x80404040 every frame; from T = 70 (`Timer_GreaterEq` 70) a **second** tint call 0x80000030 in the
+  same frame (EDX constants at 0x412314 / 0x412336), so the stage request is the byte-wise average of both ramped
+  colours (06 §10.2 step 3), e.g. (0x20, 0x20, 0x38) on the plateau — not 0x80000030 alone (VERIFIED RE-Q63, ref500
+  54840 present 286); then a white playfield rectangle, alpha 255 until T = 100 then 255 − (T − 100)·255/60 until
+  T = 160. Youmu and Youmu LS are the only bomb draws with two tint calls in one frame (Alice LS and the dissolve
+  spell call it on exclusive branches).
 
 ### 2.12 Youmu LS — 人鬼「未来永劫斬」 (0x4123D0 / 0x412FA0), dur 250, invuln 300
 Passes isLastSpell = 0 to `Bomb_Start` (QUIRK). Same dash (T < 40) and effect 0x28 (0xFFFF8080) at T = 40.
@@ -243,7 +247,8 @@ T = 70: y := 32; centre: C rect life 60, D rect dmg 500 **life 0**, D rect dmg 1
 0x30 (0xFFFF8080); flash 0xEFFFFFFF; SE 0x2A. Pairs (C rect life 60, D rect life 40, periods 2/3, effect
 0x30 each): T = 80 ∓32 dmg 100 (flash 0xCF…), T = 90 ∓64 dmg 100 (0xAF…), T = 100 ∓96 dmg 80 (0x8F…),
 T = 110 ∓128 dmg 60 (0x6F…), T = 120 ∓160 dmg 50 (0x5F…), T = 130 ∓192 dmg 40 (0x5F…) and Q := p.
-Return dash 150 ≤ T < 180; speed 1 at T = 180. Draw as 2.11 but the rectangle is red (0xFF0000).
+Return dash 150 ≤ T < 180; speed 1 at T = 180. Draw as 2.11 (the same two tint calls 0x80404040 / 0x80000030 from
+T = 70, 0x412FB4 / 0x412FD6) but the rectangle is red (0xFF0000).
 
 ### 2.13 Yukari — 境符「四重結界」 (0x410C40 / 0x40D950), dur 150, invuln 200
 - At T = 0, 10, 20, 30: C circle(p, r 100, dr 1, life 40); D circle(p, r 100, dr 1, dmg 70, life 40,
@@ -439,9 +444,12 @@ init 4, update 5, draw "trail", hit filter 2. Laser slots: **3** × {Timer, bull
   (R 0xFF, G 0xD0, B 0xB0) at youkai-max gauge else white; then the generic bullet step adds velocity (y −10),
   runs the VM and ticks the timer. The bullet itself hits enemies only on even bullet-timer frames (09 §4.5).
   End condition: release shot / dialogue / bomb / death / option lost / level change / focus change (above).
-- Trail draw (0x450AD0): a0 = VM alpha·3/4; for c = 0, 2, 4, … < 2n while trail[c].x ≠ −999: draw the VM at
-  trail[c] + playfield origin with alpha = original (c = 0) or a0 − (a0/2)·c/n; at youkai max colour (0xFF, 0x40, 0x40);
-  alpha restored afterwards.
+- Trail draw (0x450AD0): a0 = VM alpha·3/4; for c = 0, 2, 4, … < 2n while trail[c].x ≠ −999: VM pos (x, y, **z**)
+  := trail[c] (all three floats, so z = the stored bullet z, 0.44 after update 5, not the 0.4 of the main draw),
+  x/y += playfield origin, alpha = original (c = 0) or a0 − (a0/2)·c/n; at youkai max (`Gauge_IsYoukaiMax` at draw
+  time) VM colour RGB := (0xFF, 0x40, 0x40); `Draw2DRot`. Afterwards **only the alpha byte** is restored: the red RGB
+  stays in the VM colour, so a laser whose update 5 no longer rewrites the colour (update fn removed, see above) is
+  drawn red by the next frame's main draw (VERIFIED 0x450AD0, RE-Q63, ref500 udLi14 presents 983–985).
 - Update 4 (0x4505D0) is not referenced by any shipped entry (a type-4 laser: lifetime from the slot timer,
   capped at 20 during dialogue/bomb, freed at 0; interrupt 1 when ≤ 70 and VM flag bit 14; scale.y = pos.y/14,
   hitbox height = pos.y, pos.y halved).

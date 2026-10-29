@@ -484,7 +484,11 @@ two collects = 4 + 4 + 4 = 12 draws), if no
   0x1C, rank +200.
 - **Star (6)**: v = 100 if player+0xE2A7C ≠ 0, else (stats+0xC / 40)·10 + 300 (< 1 → 10); popup + AddScore(v).
 - **Time orb (7)**: v = 100 if player+0xE2A7C ≠ 0, else stats+0x2C < 2000 ? max(100, (stats+0x30 / 2)·10) :
-  10000; popup; AddScore(v); game-manager time counter +1 (0x418220); spell bonus +8000 (0x416B10); if the
+  10000; popup; AddScore(v); game-manager time counter +1 (0x418220); spell bonus +8000 (0x416B10, at once: the item
+  calc runs inside `BulletMgr_Calc`, calc prio 14, after that frame's `Spell_Calc` decay in `Gui_Calc`, prio 12, so
+  the decay with the raised R starts next frame, and the bonus line drawn this frame (`Spell_Draw`, draw prio 15,
+  reads g_Gui +0xFC) already shows the +8000 (VERIFIED RE-Q63, ref500 53020 present 5854, 79090 3702: two orbs
+  +16000)); if the
   timer 0x18B89D4 is 0: gauge += −111 (human) / +111 (youkai, player byte +3).
 
 ### 8.6 Item draw

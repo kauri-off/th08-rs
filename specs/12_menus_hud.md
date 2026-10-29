@@ -796,6 +796,15 @@ VMs. Each frame strip 14 is also drawn along y = 464 for x = 32, 160, 288 (x < 3
 3. full repaint (above) if its condition holds — it sets all six fields to 2, so everything below draws;
 4. if dirty(lives): life icons; if dirty(bombs): bomb icons; if (dirty(bombs) or dirty(lives)) and GameFlags bits
    7–8 = 1 and a spell card is active (g_Gui +0 bit 0): `Draw2DSnap` VM impl+0x5484 (`ascii.anm` script 0x1A);
+   that script (entry 2 script 14) is static: sprite 282 = `pause.png` (0, 224)–(160, 256), top-left anchor, pos
+   (488, 88), i.e. a 160 × 32 last-spell label over the lives/bombs rows (draw-log quad (487.5, 87.5)–(647.5, 119.5),
+   clipped at x 640). It is loaded only on a fresh start (§5.1a) and run every frame by `Hud_Update` (§5.1b step 1.4),
+   so it survives a continuing stage. The label is drawn only on frames with dirty lives/bombs rows (or a full
+   repaint, e.g. the first 200 frames while tile VM 13 runs: spell practice gm 173–281 draw it every frame), and
+   stays in the back buffer until those rows are repainted. A port that repaints the panel every frame shows it
+   while a latch is set: on every frame where the original would repaint the lives or bombs row (field ≠ 0 or full
+   repaint), latch := (GameFlags bits 7–8 = 1 and card active) (VERIFIED 0x43625D, RE-Q63; ref500 udSi123 /
+   udI811 / udGu02 / udSr22 present 305–414, 54723 from present 11593);
 5. strip 14 along y = 464 (x 32, 160, 288);
 6. ASCII strings, queued in this order: **score row y 56** (`%.9d` displayed score, then x +117 = 605 continues
    used), **hiscore row y 40** (`%.9d` hiscore, x 605 hiscore continues), scale reset to 1; then, each only if
@@ -1116,6 +1125,13 @@ prio 1 and keeps running during loading (GM prio 2 returns 3), so label 1 is alr
 k depends on the loader race: 28 / 27 / 29 / 33 in the demo 0 / 1 / 2 / 3 reference logs (slide ends at gm 12/13/11/7,
 人/妖/▼ appear at k = 61). Port: run the setup at loading frame 81 − k (replay loading lasts 81 frames); k = 28 if one
 constant is wanted.
+Session recordings pin the setup to a poll (`loader gauge poll B present P`, `specs/data/drawlog/README.md`): the
+setup is visible from the `Ascii_Calc` of the frame with poll index B when it ran between frames (P = the present of
+poll B in `polls.txt`). When P is one less (the loader ran inside the frame of poll B − 1, after its input poll), it
+may have run before that frame's `Ascii_Calc` (calc prio 1) or after it, so the readout is one frame earlier
+(visible from poll B − 1) or not; the recording does not say which (ref500: 54723 and udg342 earlier, udSi123 not;
+the 17 recordings with P = present(B) all match poll B). This ±1 frame of the G0 slide / G1–G3 fade-in is the loader
+race, not a port difference (INFERRED from the probe code `re/probe/session.inc` `lk_park`, RE-Q63).
 
 **Interrupts** (`Ascii_GaugeInterrupt` 0x4070B0 sends to G0–G3 and stores the id in +0x827C):
 - 1 = show: `Player_Load` on a fresh start (0x17CE8BC ≠ 0, 11 §3). It is sent before the limits are written,
