@@ -945,3 +945,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Q3 replay fps text: first refresh is host real time (fast mode does not virtualise timeGetTime/QPC): not reproducible.
 - Result: all 20 first differences move to gameplay frame 1; trace identical everywhere. Next: side-panel ascii glyph
   width 8/16 at (500.5,167.5) (12 recordings + golden 736), stg8bg (6), stg4abg, stg7bg strip.
+
+# RE-Q61 (2026-10-29) — draw-log differences part 2 (specs/changelog/answers_re_q61.md)
+- Runs re/work/runs/q61 (CHECKPOINT.md; portcopy = q60 portcopy + Q61 fixes, target/re61; dc.sh/sum.py from q60; qd.py
+  per-quad vertex deltas, pc.py strip colours per present).
+- Q1 side-panel "/" (point/time rows) is queued at Ascii scale (0.5, 1) → 8 px (12 §5.3).
+- Q2/Q3a Stage_DrawLayer projection input vector = stale previous ribbon direction (06 §11.4): fixes stg8bg + stg4abg pos.
+- Q3b stage 6B ring effect (fixed slot 12, type 0x40, stg7bg scripts 11/12, Stage_DrawLow step 4) was unimplemented (06 §5.1);
+  ring renderer must not apply the global tint and uses the VM z-write flag (13 §2.5).
+- Tool: alpha-0 vertex colours compared as equal (stack residue, 06 §11.3).
+- Result: golden 736 → 3677; traces identical. Next: etama#1/#2/#3 single-quad diffs, spell-replay frame-1 player/ascii,
+  uddo18 stg7bg#0 at 386, 54723 ascii pos.

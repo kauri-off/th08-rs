@@ -799,7 +799,7 @@ VMs. Each frame strip 14 is also drawn along y = 464 for x = 32, 160, 288 (x < 3
 5. strip 14 along y = 464 (x 32, 160, 288);
 6. ASCII strings, queued in this order: **score row y 56** (`%.9d` displayed score, then x +117 = 605 continues
    used), **hiscore row y 40** (`%.9d` hiscore, x 605 hiscore continues), scale reset to 1; then, each only if
-   its field is dirty or cfg4: graze (y 152), point items (y 168: value, "/" at 0.5 × scale, value), time (y 184,
+   its field is dirty or cfg4: graze (y 152), point items (y 168: value, "/" with scale x 0.5, y 1 (8 px glyph), value; table below), time (y 184,
    whole row 0xFFFFF0C0 when time ≥ threshold, colour reset to white after);
 7. flush; if dirty(power) or cfg4: the gauge quad **only when power > 0**, then the power text ("MAX" at ≥ 128,
    else `%d`);
@@ -837,8 +837,8 @@ ASCII text (`ascii.anm` glyph = sprite (char − 1), advance 13 px × scale, '\n
 | bombs | 104 | bomb icons (VM 11) at x 488 + 16·i, i < bombs |
 | power | 136 | gauge quad x 488 … 488 + power, y 136..152, colours 0xE0E0E0FF (left) / 0x80E0E0FF, then `%d` power, or "MAX" at 128 |
 | graze | 152 | `%d` graze total |
-| point | 168 | `%d` point items total, "/" at half width (+6 px), `%d` next extend |
-| time | 184 | `%d` time, "/", `%d` time threshold; whole row colour 0xFFFFF0C0 when time ≥ threshold |
+| point | 168 | `%d` point items total; "/" queued at x + 13·digits (digits = `Ascii_Printf` return 0x402A80) with `Ascii_SetScale(0.5, 1.0)` (0x4B847C), so its glyph quad is 8 × 16 px (sprite 16 wide × 0.5), scale reset to (1, 1) after; `%d` next extend at the "/" x + 6.0 (0x4B497C) at scale 1 (VERIFIED `Hud_DrawPanel` 0x436D37, RE-Q61 golden present 736) |
+| time | 184 | the same layout: `%d` time, "/" at scale (0.5, 1), `%d` time threshold at "/" x + 6; whole row colour 0xFFFFF0C0 when time ≥ threshold |
 
 (Score digits have an implicit trailing 0: the internal score is ÷10.)
 

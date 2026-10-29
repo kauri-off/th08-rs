@@ -828,3 +828,4 @@ addr,kind,name,signature,confidence,note
 0x00471651,func,MainMenu_OnRegisterThunk,,VERIFIED,calc-node on-register: MainMenu_OnRegister (RE-Q60)
 0x00467040,func,Anm_CopySpriteRect,,VERIFIED,flush + D3DXLoadSurfaceFromSurface between two anm textures; not a device call (RE-Q60)
 0x004e4b24,global,g_StageFogColor,,VERIFIED,g_Stage+0xAF4 fog colour; GameMgr_Calc z-clear colour arg (RE-Q60)
+0x00427b50,func,EffUpd_StageRing,,VERIFIED,type 0x40 update: I0 segs I1 waves scale.x width F1 radius rot.z start rot.y phase centre:=VM pos (RE-Q61)

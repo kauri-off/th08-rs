@@ -186,7 +186,11 @@ finished frees; else age ticks. Survivors are linked (in slot order) into a draw
 | B | `Stage_DrawHigh` (after stage layers 2/3, stage camera, fog already off) | only at cfg effect level (byte 0x17CE894) 2: levels 0 **and 1** draw nothing (the parity test returns on the first element, asm 0x428224); layer 4 → 2D rotated, layer 1 → billboard (types 0x33/0x3F through the screen-space boss-pull / player-push helper 0x428310, §2.6c), else 3D quad (unreachable: the only writers of +0x354 set 0 (`Effect_SpawnHigh`), 1 (`EffInit_Particle51` 0x426280, `EffInit_Particle63` 0x426720, `EffInit_Petal3D` 0x426E70), 2 (`EffInit_Orbit13` 0x425FE0) and 4 (`Stage_Calc` 0x407400), so no shipped effect has layer 3 or ≥ 5; VERIFIED RE-Q24) |
 
 ### 2.5 Ring renderer (custom draw 0x427450; ring types, §2.6)
-The ring is a triangle strip of 2(n+1) pre-transformed vertices (FVF XYZRHW|DIFFUSE|TEX1, colour = VM colour)
+The ring is a triangle strip of 2(n+1) pre-transformed vertices (FVF XYZRHW|DIFFUSE|TEX1, colour = VM colour +0x1F0
+as-is: `Anm_RingSetUV` 0x464B00 writes it into every vertex, **no global ANM tint** (the tint of 06 §10.2 step 3 is
+applied only by the sprite batch paths); render state from `AnmManager_SetRenderState2D` (blend, **z-write on unless
+VM flag bit 13**: the spawn sets bit 13 but a later script start re-inits the flags, e.g. the 6B ring of 06 §5.1 is
+drawn with z-write on), drawn by `Anm_DrawRingStrip` 0x464C60 only if visible, flag bit 1 and alpha ≠ 0; VERIFIED RE-Q61)
 rebuilt whenever +0x356 is set (the ring updates set it each frame). **Texture: v runs along the ring** from
 sprite.v1 to sprite.v0 (normalised, + uv_off_v; k-th pair v = v1 − k·(v1−v0)/n), **u across**: outer edge u0,
 inner edge u1 (+ uv_off_u); WRAP addressing, so a 16×768 sprite in a 128-px texture repeats 6× around the
@@ -235,7 +239,7 @@ see `extracted/anm_dis.txt` — NOTE: anm_dis numbers scripts per entry; global 
 | 56, 58, 65 | 96, 100, 98 | ring (init 0x427970 = ring + over-bullets), update 0x4279D0 | boss natives 3 / 6 / 20 (slots 9/10) |
 | 57, 62 | 55, 75 | — | stage (0x3E sparkles, `Stage_Calc`) |
 | 60, 61 | 102, 103 (110) | init: pos += polar(param.x, 256); rotation z = param.x + π/2 | ECL op 140 (directional) |
-| 64 (0x40) | 77 | ring-like params copied from the VM each frame; centre = VM pos; never put in a draw list | stage (fixed slot 12, `Stage_Calc`) |
+| 64 (0x40) | 77 (replaced by stg7bg.anm script 11 right after the spawn) | ring (init 0x4272E0); update 0x427B50 (always returns 1) every frame: segments +0x324 := I0, waves +0x334 := f32(I1), width +0x320 := scale.x, **radius +0x314 := F1** (VM +0x114, not pos.x), start angle +0x318 := rotation z, phase +0x330 := rotation y, rebuild flag := 1, **centre +0x2E0 := VM pos** (x, y, z); amplitude +0x32C is not written (stays 0 from the init → plain ring). Never put in a draw list (§2.3); drawn by `Stage_DrawLow` (06 §5.1) (VERIFIED RE-Q61) | stage 6B (fixed slot 12, `Stage_Calc`, 06 §5.1) |
 | 47 | 72 | — | option sparkles (Remilia/Youmu/Yuyuko options, colours 0x80602050 / 0x80405080) |
 | 38 | 71 (20) | — (script: sprite 219, additive, scale frand+1.1 → 0 over 20, alpha irand 64+48, colour 3 × irand 64+128) | `Enemy_ReactPlayerMode` (07 §10.1 step 3): bit-8 enemies with flags B bit 1 (op 83) in human state, every 2nd frame of the enemy timer, at the final pos. **10 RNG draws per spawn** |
 

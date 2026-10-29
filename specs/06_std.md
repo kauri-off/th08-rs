@@ -104,6 +104,7 @@ After the terminator 16 of 18 files contain another 20 bytes of 0xFF (ignored).
 | 0x824 | f32[3] | origin (op 0), subtracted from every world position |
 | 0x830 | u32 | clear colour (op 13; overwritten every frame by VM C's colour while VM C runs) |
 | 0x844 | AnmVm | overlay/tint VM |
+| 0xAE8 | ptr | stage 6B ring effect (fixed slot 12; 0 = none; only g_StageIdx 7, §5.1) |
 | 0xAEC / 0xAF0 | f32 | fog near / far (current) |
 | 0xAF4 | u32 | fog colour (current, D3DCOLOR) |
 | 0xAF8, 0xAFC, 0xB00 | f32, f32, u32 | fog start values (near, far, colour) for interpolation |
@@ -167,13 +168,13 @@ Any other opcode is ignored (index just advances).
 At the start of `Stage_Calc`, if `section_request ≠ 0`: scan the script from record 0 for an op 31 whose arg
 equals the request. If found: instruction index = (found index + 1), script clock = that record's time,
 request = 0. If not found the request stays pending. (ECL opcode 147 = 0x93 writes the request, 07 §7.)
-Stage index 7 (6B) additionally drives a special effect VM on requests 1–4 (later phase).
+Stage index 7 (6B) additionally drives its ring effect on requests 1–4 before this scan (§5.1).
 
 ## 5. Per-frame update (`Stage_Calc`) — VERIFIED, in this order
 
 ```
 if no std loaded or (global flag 0x164D0B4 bit 10): return
-(stage 6B special effect handling)
+if g_StageIdx == 7: stage 6B ring effect (§5.1)
 handle section request (§4.1)
 loop:
    rec = script[index]
@@ -203,6 +204,29 @@ frame's draw and sets the flag → `Stage_DrawLow` clears 16 points and the coun
 +0xB24 > 1 count reset has no visible effect (the draw clears the list anyway and no sparkle spawns then).
 
 Note: VM A/B/C are run/drawn only when their **sprite index** (vm+0x214) is > 0 — i.e. after the script has executed an op 3 with a sprite other than 0; disabling sets it to −1.
+
+
+### 5.1 Stage 6B ring effect (`Stage_Calc` 0x407400 head, `Stage_DrawLow` step 4) — VERIFIED RE-Q61
+Only when g_StageIdx = 7, every `Stage_Calc` that passes the std/bit-10 test, **before** the section request scan
+of §4.1 (so it sees the request of this frame; the scan clears it afterwards when the op-31 label exists — stage7.std
+has labels 1–5). The effect pointer is `g_Stage`+0xAE8 (0 at stage load):
+1. +0xAE8 = 0: `Effect_SpawnFixed`(type 0x40, pos (0, 0, 0), fixed slot 12, colour 0xFFFFFFFF) (13 §2.2/§2.6),
+   store it in +0xAE8, then `AnmFile_SetScript`(stgNbg.anm file +0x7F0, effect VM, script 11) (keeps the VM pos,
+   runs time 0; replaces the type's own script 77). Nothing else this frame (the request is not looked at).
+2. else request 1: `AnmFile_SetScript`(…, script 11) again.
+3. else request 2: copy the whole VM (0x2A4 bytes), `AnmFile_SetScript`(…, script 12), `AnmVm_Interrupt` 2 (pending
+   +0x1FE := 2), then restore from the copy: pos_end +0x244, pos_start +0x238, interpolation slot 0 (pos) elapsed
+   timer +0x50, duration +0xA4, mode +0xF8, colour +0x1F0 — so the position interpolation of script 11 and the
+   current colour/alpha carry over into script 12.
+4. else request 3 / 4: the same copy, `AnmVm_Interrupt` 3 / 4 (no script change) and the same restore (a no-op,
+   since only +0x1FE changed).
+The effect runs in `EffectMgr_Calc` like every fixed slot (update 0x427B50, then the VM; never linked into a draw
+list, 13 §2.3) and is drawn only here: `Stage_DrawLow` step 4, inside the "+0xB24 < 2 and no HUD cover" block after
+VMs A and B, calls the effect's custom draw fn (+0x34C = the ring renderer 0x427450, ECX = effect) whenever
++0xAE8 ≠ 0, i.e. before the step-5 clear, on the playfield viewport. Data: stg7bg.anm script 11 = sprite 8, additive,
+alpha 0 → 170 over 15 frames, colour (128, 32, 255), I0 = 120 segments, I1 = 1, F1 = 188 radius, scale.x 180 width,
+pos (128, 180) → (192, 180) over 4000 frames, angular velocity z −0.000785; script 12 = sprite 9 with labels 2/3/4.
+Reference: uddo18 present 216 (first 6B frame) `P strip 242` on stg7bg.anm#2, centre (160, 196), outer radius 368.
 
 ## 6. Camera interpolation — VERIFIED (0x408D60 for vectors, inline for fov)
 
@@ -295,7 +319,7 @@ viewport, and sets fog start/end to 1000/2000.
    request in the same frame averages each channel with the stored one. So the tint drawn in frame N is the
    request made by the bomb draw of frame N − 1 (VERIFIED, changelog/answers_impl11.md §1).
 4. Unless stage state +0xB24 ≥ 2 or a HUD condition: draw VM A and VM B (draw mode "2D rotated" 05 §9, if
-   sprite index > 0), stage 6B special effect.
+   sprite index > 0), then the stage 6B ring effect if +0xAE8 ≠ 0 (§5.1).
 5. Clear: if clear colour alpha == 0xFF → Clear(target + z, colour, z = 1); if clear colour == 0 → Clear(z only);
    otherwise fill the playfield rectangle (32,16)–(416,464) with the colour (alpha-blended) and Clear(z only).
    Both z-only clears pass the clear colour +0x830 as the (ignored) colour argument: draw logs show `C z 00000000` for
@@ -352,8 +376,9 @@ for each instance in list order:
 ```
 
 ### 11.1 Billboard sprite (tag & 0xF == 2) — VERIFIED
-- `s = project(vm.pos)` (D3DXVec3Project with the stage viewport/projection/view, world = identity).
-- `W` = quad.w if ≠ 0 else sprite width; `s2 = project(vm.pos + right·W·scale.x)`;
+- `s = project(vm.pos)`: D3DXVec3Project(input = the call's projection vector `pv`, viewport, stage projection, view,
+  world = translation(vm.pos)), i.e. the projection of vm.pos + pv (`pv` QUIRK: §11.4).
+- `W` = quad.w if ≠ 0 else sprite width; `s2 = project(vm.pos + right·W·scale.x)` (world translation, same `pv`);
   `scale.x = scale.y = |s2 − s| / W`; if W < 0, scale.y = −scale.y.
 - Distance `dist = |vm.pos − (cam.position + eye_offset)|`. If dist > fog_near:
   `f = (near − dist)/(near − far)`; if f ≥ 1 the quad is skipped; else per colour channel c (B, G, R):
@@ -382,7 +407,8 @@ unchanged sprite keeps the previous texture matrix). Geometry: the unit quad
 
 ### 11.3 Ribbon (type 1) — VERIFIED
 Points A = quad.A + instance.pos − origin, B likewise. For each point P: `sP = project(P)`,
-`wP = |project(P + right·W) − sP| / 2` (W = quad width or sprite width), and fog colour as in §11.1
+`wP = |project(P + right·W) − sP| / 2` (W = quad width or sprite width; all four projections use world =
+translation(point) and input `pv`, §11.4), and fog colour as in §11.1
 (f ≥ 1 → alpha 0). With `dir = normalize(sB.xy − sA.xy)` (skipped if length < 1e-5) and both depths in
 [0,1], four pre-transformed vertices (rhw 1):
 v0 = (sA.x + dir.y·wA, sA.y − dir.x·wA), v1 = (sA.x − dir.y·wA, sA.y + dir.x·wA),
@@ -404,6 +430,20 @@ Details (VERIFIED, changelog/answers_impl17.md §5.1, demo 1 draw log):
   changes the stale values.
 - Stage 4A (`stg4abg.anm` script 1, sprite 1 = 16 × 512 at (496, 0), tag 2) is the only stage using ribbons in the
   demos; in demo 1 ≈ 68 ribbons per frame, A end usually fully fogged (alpha 0), B end alpha 0…0x60.
+
+### 11.4 Projection input vector `pv` (QUIRK) — VERIFIED RE-Q61
+`Stage_DrawLayer` keeps one vec3 local (ebp−0x9C) that it passes as the **input vector** of every D3DXVec3Project
+of §11.1 and §11.3 (world matrix = translation(point), so the result is project(point + pv)). It is set to
+(0, 0, 0) once at the start of the call (`Vec3_Set` 0x40A201) and is **overwritten by every ribbon** (0x40B16B):
+`pv = sB − sA` (projected x, y **and depth** difference, after the four projections of that ribbon), then, if
+`len = sqrt(pv.x² + pv.y²)` (f32 sum) ≥ 1e-5, `pv = pv · (1/len)` (`Vec3_ScaleInv` 0x40B470: one reciprocal, three
+multiplies, all three components) — the ribbon's normalised screen direction `dir` with the depth difference / len
+as z. When len < 1e-5 the raw difference stays in `pv`. This happens before the depth and `DrawCustomQuad`
+visibility checks, so invisible and depth-culled ribbons still update it; skipped objects (cull, fog f ≥ 1 of a
+billboard) do not. So every billboard and ribbon after the first ribbon of the call (layer by layer, across objects
+and instances) is projected about one world unit off along the previous ribbon's screen direction. Draw3DWorld quads
+(§11.2) are not affected (GPU transform). Effect: stg8bg / stg4abg layer-1 quads move by up to ~7 px (RE-Q61:
+udGu02 present 215, 57 of 58 quads; with `pv` all positions equal the reference to 0.01 px).
 
 ## 12. Open points
 - The 5 text fields at 0x10 are unused; the instance field +2 (always 256) is unused.
