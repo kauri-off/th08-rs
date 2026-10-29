@@ -1006,22 +1006,17 @@ impl Hud {
             },
         ));
         q.push(Text::new(488.0, 152.0, format!("{}", st.graze_total)));
-        // "/" at half a glyph width (+6 px) after the value (12 §5.3).
-        let pt = format!("{}", st.point_items2);
-        q.push(Text::new(488.0, 168.0, pt.clone()));
-        let x = 488.0 + 13.0 * pt.len() as f32;
-        q.push(Text::new(x, 168.0, "/"));
-        q.push(Text::new(x + 6.0, 168.0, format!("{}", st.next_extend)));
+        for t in ratio_row(168.0, st.point_items2, st.next_extend, 0xFFFFFFFF) {
+            q.push(t);
+        }
         let col = if st.time >= st.time_threshold {
             0xFFFFF0C0
         } else {
             0xFFFFFFFF
         };
-        let tt = format!("{}", st.time);
-        q.push(Text::new(488.0, 184.0, tt.clone()).argb(col));
-        let x = 488.0 + 13.0 * tt.len() as f32;
-        q.push(Text::new(x, 184.0, "/").argb(col));
-        q.push(Text::new(x + 6.0, 184.0, format!("{}", st.time_threshold)).argb(col));
+        for t in ratio_row(184.0, st.time, st.time_threshold, col) {
+            q.push(t);
+        }
     }
 }
 
@@ -1244,6 +1239,18 @@ fn bar_step(
         }
     }
     (state, alpha, disp)
+}
+
+// Point / time row (12 §5.3 step 6): value, "/" at scale (0.5, 1) (8 px glyph) 13 px per digit later, the second
+// value 6 px after the "/".
+fn ratio_row(y: f32, a: impl std::fmt::Display, b: impl std::fmt::Display, col: u32) -> [Text; 3] {
+    let a = a.to_string();
+    let x = 488.0 + 13.0 * a.len() as f32;
+    [
+        Text::new(488.0, y, a).argb(col),
+        Text::new(x, y, "/").scale_xy(0.5, 1.0).argb(col),
+        Text::new(x + 6.0, y, b.to_string()).argb(col),
+    ]
 }
 
 // Timer colour from the unclamped +0x24 (12 §5.4).
@@ -1470,6 +1477,16 @@ mod tests {
             bar_step(false, false, (0, 0, 0.0, 1.0), &mut irq),
             (0, 0, 0.0)
         );
+    }
+
+    // 12 §5.3 step 6: "/" at scale (0.5, 1) after 13 px per digit, second value +6 px.
+    #[test]
+    fn ratio_row_slash_half_width() {
+        let [a, sl, b] = ratio_row(184.0, 123, 400, 0xFFFFF0C0);
+        assert_eq!((a.x, a.s.as_str()), (488.0, "123"));
+        assert_eq!((sl.x, sl.y, sl.scale, sl.scale_y), (527.0, 184.0, 0.5, 1.0));
+        assert_eq!((b.x, b.s.as_str()), (533.0, "400"));
+        assert_eq!(b.color, sl.color);
     }
 
     // 12 §5.4: %.2d and the colour from the unclamped value.

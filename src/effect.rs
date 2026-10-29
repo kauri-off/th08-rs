@@ -685,6 +685,18 @@ impl Effects {
             self.screen.extend(screen);
             return keep;
         }
+        // Stage 6B ring update 0x427B50 (13 §2.6 row 64): radius := F1, centre := VM pos, amplitude untouched.
+        if e.kind == 64 {
+            let r = &mut e.ring;
+            r.segments = e.vm.ivars[0];
+            r.waves = e.vm.ivars[1] as f32;
+            r.width = e.vm.scale[0];
+            r.radius = e.vm.fvars[1];
+            r.start = e.vm.rotation[2];
+            r.tilt = e.vm.rotation[1];
+            e.centre = e.vm.pos;
+            return true;
+        }
         // Ring updates 0x427990 (35/39/49/52/59: width, radius only) and 0x4279D0 (also amplitude, angle, phase;
         // 40/55/56/58/65 also segments := I0, waves := I1); 53/54 free at alpha 0 (0x427AE0); 50 ends at 120.
         if is_ring(e.kind) {
@@ -864,6 +876,12 @@ impl Effects {
     }
 }
 
+// Stage 6B ring draw from `Stage_DrawLow` step 4 (06 §5.1): calls the slot's draw fn through the stored pointer,
+// with no active check.
+pub fn draw_ring_at(anm: &mut AnmManager, gfx: &mut Gfx, idx: usize) {
+    with(|s| draw_ring(anm, gfx, &s.fx[idx]));
+}
+
 // Ring renderer 0x427450 (13 §2.5): strip of 2(n+1) vertices, v along the ring, u across the band, WRAP sampling.
 fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
     let vm = &e.vm;
@@ -882,8 +900,9 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
     let w = r.width / ((PI - step) / 2.0).sin();
     // Half width w = width / sin((π − 2π/n)/2); +0.5 is the port's D3D → wgpu pixel-centre offset.
     let (cx, cy) = (e.centre[0] + 32.0 + 0.5, e.centre[1] + 16.0 + 0.5);
+    // Raw VM colour: `Anm_RingSetUV` 0x464B00 skips the global ANM tint (13 §2.5).
     let c = vm.color;
-    let rgba = anm.tinted([c[anmvm::R], c[anmvm::G], c[anmvm::B], c[anmvm::A]]);
+    let rgba = [c[anmvm::R], c[anmvm::G], c[anmvm::B], c[anmvm::A]];
     let wrap = |a: f32| if a >= PI { a - 2.0 * PI } else { a };
     let point = |k: i32, outer: bool| -> [f32; 2] {
         let th = wrap(r.start + k as f32 * step);
@@ -924,7 +943,8 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
         let uv = [[u0, vk(k)], [u1, vk(k)], [u0, vk(k + 1)], [u1, vk(k + 1)]];
         // Ring vertices are at z 0 (13 §2.5): centre z is 0 for every spawner, ellipse/wavy force 0.
         let v = std::array::from_fn(|i| Vertex::screen(p[i][0], p[i][1], 0.0, uv[i], rgba));
-        gfx.strip(spr.tex, blend, false, v);
+        // z-write on unless VM flag bit 13 (`AnmManager_SetRenderState2D`, 13 §2.5).
+        gfx.strip(spr.tex, blend, vm.flags & anmvm::F_ZWRITE_OFF == 0, v);
     }
 }
 
@@ -1480,6 +1500,29 @@ mod tests {
         write_pos_unchecked(i, [5.0, 6.0, 0.0]);
         assert_eq!(peek(i, |x| x.pos), [5.0, 6.0, 0.0]);
         with(|e| e.fx[i] = old);
+    }
+
+    // 13 §2.6 row 64: update 0x427B50 takes radius from F1 and the centre from the VM pos, amplitude stays 0.
+    #[test]
+    fn stage_6b_ring_update() {
+        let mut fx = Effects::default();
+        let i = FIXED_BASE + 12;
+        let e = &mut fx.fx[i];
+        (e.active, e.kind) = (true, 64);
+        e.vm.ivars[..2].copy_from_slice(&[120, 1]);
+        e.vm.fvars[1] = 188.0;
+        e.vm.scale = [180.0, 1.0];
+        e.vm.pos = [128.0, 180.0, 0.0];
+        e.vm.rotation = [0.0, 0.25, -0.5];
+        assert!(fx.update(i));
+        let e = &fx.fx[i];
+        let r = e.ring;
+        assert_eq!(
+            (r.segments, r.waves, r.width, r.radius),
+            (120, 1.0, 180.0, 188.0)
+        );
+        assert_eq!((r.start, r.tilt, r.amp), (-0.5, 0.25, 0.0));
+        assert_eq!(e.centre, [128.0, 180.0, 0.0]);
     }
 
     // 13 §3 type 1/7: the shake freeze reads GameFlags bit 10 live, not the end-of-Player_Calc mirror.

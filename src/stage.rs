@@ -264,6 +264,8 @@ pub struct Stage {
     origin: Vec3,
     // +0x830 D3DCOLOR (op 13; VM C's colour while VM C runs).
     pub clear_color: u32,
+    // +0xAE8 stage 6B ring effect (fixed slot 12, 06 §5.1); None = 0.
+    ring_6b: Option<usize>,
     // +0xAEC current, +0xAF8 start, +0xB04 target, +0xB10 duration, +0xB14 elapsed (06 §8).
     pub fog: FogState,
     fog_start: FogState,
@@ -334,6 +336,7 @@ impl Stage {
             frame: 0,
             origin: [0.0; 3],
             clear_color: 0,
+            ring_6b: None,
             fog,
             fog_start: fog,
             fog_target: fog,
@@ -509,6 +512,39 @@ impl Stage {
         true
     }
 
+    // Stage_Calc head for g_StageIdx 7 (06 §5.1): spawn the ring, else drive it with section requests 1–4.
+    fn ring_6b_step(&mut self, anm: &mut AnmManager) {
+        let Some(i) = self.ring_6b else {
+            let i = crate::effect::spawn_fixed(anm, 0x40, [0.0; 3], 12, 0xFFFF_FFFF);
+            crate::effect::with(|e| anm.file_set_script(&mut e.fx[i].vm, ANM_SLOT, 11));
+            self.ring_6b = Some(i);
+            return;
+        };
+        let req = self.section_request;
+        if !(1..=4).contains(&req) {
+            return;
+        }
+        // Writes through the stored pointer, no active check.
+        crate::effect::with(|e| {
+            let vm = &mut e.fx[i].vm;
+            if req == 1 {
+                anm.file_set_script(vm, ANM_SLOT, 11);
+                return;
+            }
+            // Requests 2–4: copy the VM, (2: script 12), interrupt, restore pos interpolation slot 0 and colour.
+            let k = vm.clone();
+            if req == 2 {
+                anm.file_set_script(vm, ANM_SLOT, 12);
+            }
+            vm.pending_interrupt = req as u16;
+            (vm.pos_end, vm.pos_start) = (k.pos_end, k.pos_start);
+            vm.interp_elapsed[0] = k.interp_elapsed[0];
+            vm.interp_duration[0] = k.interp_duration[0];
+            vm.interp_mode[0] = k.interp_mode[0];
+            vm.color = k.color;
+        });
+    }
+
     // 06 §4.1: jump past the op 31 whose arg matches; an unmatched request stays pending.
     fn handle_section_request(&mut self) {
         if self.section_request == 0 {
@@ -621,7 +657,6 @@ impl Stage {
     }
 
     // Stage_Calc body (06 §5).
-    // Not implemented: the stage 6B special-effect VM (06 §4.1, §5).
     pub fn step(&mut self, anm: &mut AnmManager) {
         // GameFlags bit 10 (bullets frozen): nothing runs, the sparkle flag is not set and the frame counter holds.
         if self
@@ -632,6 +667,9 @@ impl Stage {
             return;
         }
         let speed = anm.speed;
+        if self.index == 7 {
+            self.ring_6b_step(anm);
+        }
         self.handle_section_request();
         while let Some(&r) = self.std.script.get(self.ip) {
             if r.time == -1 || self.clock.cur < r.time || !self.exec(anm, r) {
@@ -816,13 +854,14 @@ impl Stage {
         } else {
             None
         };
-        let view = View {
+        let mut view = View {
             cam,
             vp,
             right,
             eye: self.cam.eye(),
             fog: self.fog,
             points,
+            pv: [0.0; 3],
         };
         let fog = self.fog_params(anm);
         // Reused vertex-colour slots; initial values = stack residue (06 §11.3, INFERRED constant).
@@ -882,9 +921,17 @@ struct View<'a> {
     eye: Vec3,
     fog: FogState,
     points: Option<&'a RefCell<(usize, [Vec3; 32])>>,
+    // Local ebp−0x9C: D3DXVec3Project input vector of every projection, (0,0,0) per call, set by each ribbon
+    // (06 §11.4 QUIRK).
+    pv: Vec3,
 }
 
 impl View<'_> {
+    // D3DXVec3Project with world = translation(p) and input `pv`: project(p + pv) (06 §11.4).
+    fn project(&self, p: Vec3) -> Vec3 {
+        self.cam.project(add(p, self.pv), self.vp)
+    }
+
     // Software fog (06 §11.1), D3DCOLOR byte order: c −= trunc((c − fog)·f), alpha ·= 1 − f; None when f ≥ 1.
     fn soft_fog(&self, color: [u8; 4], dist: f32) -> Option<[u8; 4]> {
         let (near, far) = (self.fog.near, self.fog.far);
@@ -911,12 +958,10 @@ impl View<'_> {
 
     // Billboard sprite, tag & 0xF == 2 (06 §11.1).
     fn billboard(&self, anm: &mut AnmManager, gfx: &mut Gfx, vm: &mut AnmVm, w: f32) {
-        let s = self.cam.project(vm.pos, self.vp);
+        let s = self.project(vm.pos);
         let ww = if w != 0.0 { w } else { vm.sprite_w };
         // Quirk kept (06 §13): uses the previous frame's billboard scale.x (feedback); 3D length of s2 − s.
-        let s2 = self
-            .cam
-            .project(add(vm.pos, scale(self.right, ww * vm.scale[0])), self.vp);
+        let s2 = self.project(add(vm.pos, scale(self.right, ww * vm.scale[0])));
         let d = sub(s2, s);
         let sc = dot(d, d).sqrt() / ww;
         vm.scale = [sc, if ww < 0.0 { -sc } else { sc }];
@@ -947,10 +992,11 @@ impl View<'_> {
         vm.color = saved;
     }
 
-    // Colours go to the call's reused slots first; f ≥ 1 clears only alpha (06 §11.3). Then the DrawCustomQuad checks.
+    // Colours go to the call's reused slots first; f ≥ 1 clears only alpha (06 §11.3). The projections and the `pv`
+    // update (06 §11.4) come before the depth and DrawCustomQuad checks.
     #[allow(clippy::too_many_arguments)]
     fn ribbon(
-        &self,
+        &mut self,
         anm: &mut AnmManager,
         gfx: &mut Gfx,
         vm: &mut AnmVm,
@@ -969,6 +1015,18 @@ impl View<'_> {
                 }
             }
         }
+        let ww = if w != 0.0 { w } else { vm.sprite_w };
+        let point = |p: Vec3| {
+            let sp = self.project(p);
+            let e = sub(self.project(add(p, scale(self.right, ww))), sp);
+            (sp, dot(e, e).sqrt() / 2.0)
+        };
+        let (sa, wa) = point(a);
+        let (sb, wb) = point(b);
+        let d = sub(sb, sa);
+        let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        // `Vec3_ScaleInv` 0x40B470: one reciprocal, three multiplies; len < 1e-5 keeps the raw difference.
+        self.pv = if len >= 1e-5 { scale(d, 1.0 / len) } else { d };
         if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
             || vm.color[A] == 0
             || !vm.has_sprite
@@ -978,22 +1036,12 @@ impl View<'_> {
         let Some(&spr) = anm.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
             return;
         };
-        let ww = if w != 0.0 { w } else { vm.sprite_w };
-        let point = |p: Vec3| {
-            let sp = self.cam.project(p, self.vp);
-            let e = sub(self.cam.project(add(p, scale(self.right, ww)), self.vp), sp);
-            (sp, dot(e, e).sqrt() / 2.0)
-        };
         let col = |c: [u8; 4]| anm.tinted([c[R], c[G], c[B], c[A]]);
         let (c0, c1, c2, c3) = (col(slots[0]), col(slots[1]), col(slots[2]), col(slots[3]));
-        let (sa, wa) = point(a);
-        let (sb, wb) = point(b);
-        let (dx, dy) = (sb[0] - sa[0], sb[1] - sa[1]);
-        let len = (dx * dx + dy * dy).sqrt();
         if len < 1e-5 || !(0.0..=1.0).contains(&sa[2]) || !(0.0..=1.0).contains(&sb[2]) {
             return;
         }
-        let (dx, dy) = (dx / len, dy / len);
+        let (dx, dy) = (d[0] / len, d[1] / len);
         let (u0, v0) = (spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]);
         let (u1, v1) = (spr.uv[2] + vm.uv_off[0], spr.uv[3] + vm.uv_off[1]);
         let o = anm.screen_offset;
@@ -1049,6 +1097,9 @@ impl Task<Ctx> for Stage {
                 if vm.sprite_index > 0 && !hide {
                     anm.draw_mode(gfx, vm, 2);
                 }
+            }
+            if let Some(i) = self.ring_6b.filter(|_| !hide) {
+                crate::effect::draw_ring_at(anm, gfx, i);
             }
             // Step 5: alpha 0xFF → clear target + z; 0 → z only; else blend-fill the playfield, then z.
             let c = self.clear_color.to_le_bytes();
@@ -1155,6 +1206,80 @@ mod tests {
         }
         assert_eq!(st.clock.cur, 20);
         assert_eq!(st.ip, 3);
+    }
+
+    // 06 §11.4: every ribbon (even an invisible one) sets `pv` to its normalised screen direction, used as the
+    // input vector of the next projections.
+    #[test]
+    fn ribbon_sets_projection_vector() {
+        let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
+            return;
+        };
+        let mut anm = AnmManager::default();
+        let mut c = StageCamera::default();
+        c.v[FACING] = [0.0, 500.0, -100.0];
+        c.v[UP] = [0.0, 0.0, 1.0];
+        let vp = PLAYFIELD;
+        let cam = c.camera(vp);
+        let mut view = View {
+            cam,
+            vp,
+            right: [1.0, 0.0, 0.0],
+            eye: c.eye(),
+            fog: FogState::default(),
+            points: None,
+            pv: [0.0; 3],
+        };
+        let mut vm = AnmVm::default();
+        vm.sprite_w = 16.0;
+        let mut slots = [[0; 4]; 4];
+        let (a, b) = ([0.0, 300.0, 0.0], [50.0, 400.0, 0.0]);
+        view.ribbon(&mut anm, &mut gfx, &mut vm, &mut slots, a, b, 0.0);
+        let d = sub(cam.project(b, vp), cam.project(a, vp));
+        let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        let pv = scale(d, 1.0 / len);
+        assert_eq!(view.pv, pv);
+        view.ribbon(&mut anm, &mut gfx, &mut vm, &mut slots, a, b, 0.0);
+        let d = sub(cam.project(add(b, pv), vp), cam.project(add(a, pv), vp));
+        let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        assert_eq!(view.pv, scale(d, 1.0 / len));
+    }
+
+    // 06 §5.1: stage 7 spawns the type-0x40 ring in slot 12 on its first calc; request 3 interrupts and keeps
+    // the colour; request 2 (script 12) restores the pos interpolation slot 0 and the colour.
+    #[test]
+    fn stage_6b_ring_requests() {
+        let mut st = synthetic(vec![rec(-1, 0, [0; 3])]);
+        st.index = 7;
+        let mut anm = AnmManager::default();
+        st.section_request = 3;
+        st.step(&mut anm);
+        let i = st.ring_6b.unwrap();
+        assert_eq!(i, crate::effect::FIXED_BASE + 12);
+        crate::effect::peek(i, |e| assert_eq!((e.active, e.kind), (true, 0x40)));
+        // The spawn frame does not look at the request.
+        assert_eq!(st.section_request, 3);
+        crate::effect::with(|e| {
+            let vm = &mut e.fx[i].vm;
+            vm.color = [1, 2, 3, 4];
+            vm.pos_end = [5.0, 6.0, 7.0];
+            vm.interp_mode[0] = 4;
+        });
+        st.step(&mut anm);
+        crate::effect::peek(i, |e| {
+            assert_eq!(e.vm.pending_interrupt, 3);
+            assert_eq!(e.vm.color, [1, 2, 3, 4]);
+        });
+        st.section_request = 2;
+        st.step(&mut anm);
+        crate::effect::peek(i, |e| {
+            assert_eq!(e.vm.pending_interrupt, 2);
+            assert_eq!(
+                (e.vm.color, e.vm.pos_end, e.vm.interp_mode[0]),
+                ([1, 2, 3, 4], [5.0, 6.0, 7.0], 4)
+            );
+        });
+        crate::effect::free(i);
     }
 
     #[test]

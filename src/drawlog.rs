@@ -950,6 +950,10 @@ fn close(a: f32, b: f32, t: f32) -> bool {
 }
 
 fn col_close(a: u32, b: u32) -> bool {
+    // Alpha-0 ribbon ends keep stack-residue RGB (06 §11.3, accepted approximation): two alpha-0 colours are equal.
+    if a >> 24 == 0 && b >> 24 == 0 {
+        return true;
+    }
     (0..4).all(|k| ((a >> (k * 8)) as u8).abs_diff((b >> (k * 8)) as u8) <= 1)
 }
 
@@ -1688,6 +1692,15 @@ mod tests {
     use crate::gfx::{LogTex, Rect};
 
     // FORMAT.md §2 fog: C %g, 6 significant digits.
+    // 06 §11.3: alpha-0 colours compare equal whatever their RGB; otherwise ±1 per channel.
+    #[test]
+    fn alpha_zero_colours_equal() {
+        assert!(col_close(0x0091_0D20, 0x0000_0000));
+        assert!(col_close(0x8010_2030, 0x8111_2131));
+        assert!(!col_close(0x0110_2030, 0x0310_2030));
+        assert!(!col_close(0x0010_2030, 0x0190_2030));
+    }
+
     #[test]
     fn fog_num_like_printf_g() {
         let cases = [
