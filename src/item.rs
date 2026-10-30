@@ -265,8 +265,7 @@ impl ItemManager {
                         if !spell {
                             cancel(self, anm, p);
                         }
-                        // Hud_ShowMessage(0, 1) "Full Power Mode!"; its panel repaint 0x17CE8CC := 2 is moot, the
-                        // port repaints the panel every frame.
+                        // Hud_ShowMessage(0, 1) "Full Power Mode!" (0x17CE8CC := 2 when the HUD takes the popup).
                         // The message is outside the spell-card test (08 §8.5, VERIFIED RE-Q34).
                         p.stats.popups.push(Popup::Message(1, 0));
                         self.convert_power_items(anm, idx);
@@ -313,6 +312,7 @@ impl ItemManager {
             BOMB => {
                 if st.bombs < 8.0 {
                     st.add_bombs(1.0, &mut anm.rng);
+                    crate::hud::mark_bombs(2);
                 }
                 // Bomb item rank +5 (11 §3.2 rank deltas).
                 st.rank(5);
@@ -363,7 +363,7 @@ impl ItemManager {
                 );
                 st.add_score(v);
                 st.add_time(1, &mut anm.rng);
-                // Spell_AddBonus 0x416B10 +8000 (07 §11), applied by the enemy manager.
+                // Spell_AddBonus 0x416B10 +8000 (08 §8.5), applied by the bullet manager calc right after this.
                 st.spell_bonus_orbs += 1;
                 // ±111 by player byte +3; a non-forced GaugeAdd is skipped while bombing (07 §10.3).
                 if self.collect_timer == 0 && !p.bombing {

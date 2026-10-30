@@ -823,6 +823,8 @@ struct Item<'a> {
     q: [Vtx; 4],
     key: [i32; 4],
     c: [f32; 2],
+    // Within the viewport-edge band of `off_vp`: not counted when unmatched.
+    edge: bool,
 }
 
 // Texel rect of a textured quad: the matching key between reference and port items (untextured → 0).
@@ -852,7 +854,8 @@ fn is_fps(p: &Prim, q: &[Vtx; 4]) -> bool {
     p.tex.starts_with("ascii.anm")
         && (q.iter().all(|v| v.x >= 496.0 && v.y >= 456.0)
             || q.iter().all(|v| {
-                (383.0..=413.0).contains(&v.x)
+                // x to 426: a stored fps ≥ 100 prints three glyphs.
+                (383.0..=426.0).contains(&v.x)
                     && (447.0..=464.0).contains(&v.y)
                     && (v.col == 0xffff_ffd0 || v.col == 0xffff_4040)
             }))
@@ -892,8 +895,17 @@ fn panel_repaint(fr: &Frame, p: &Prim, q: &[Vtx; 4]) -> bool {
 }
 
 // A quad ≥ 0.5 px outside the viewport covers no pixel centre; whether the cull (05 §9 step 3) keeps it depends on
-// f32 rounding at the edge, so it is dropped on both sides.
-fn off_vp(vp: [f32; 4], q: &[Vtx; 4]) -> bool {
+// f32 rounding at the edge, so it is dropped on both sides. Touching the near edges (or within 1 px of the far ones,
+// top-left rule) also covers no pixel. The log rounds to 2 decimals, so a quad within 0.05 px of that coverage edge
+// (16.00 vs 16.01, 16.05 vs 16.06) is `Edge`: matched normally, not counted when unmatched.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum VpSide {
+    In,
+    Edge,
+    Off,
+}
+
+fn off_vp(vp: [f32; 4], q: &[Vtx; 4]) -> VpSide {
     let [vx, vy, vw, vh] = vp;
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for v in q {
@@ -902,26 +914,47 @@ fn off_vp(vp: [f32; 4], q: &[Vtx; 4]) -> bool {
         y0 = y0.min(v.y);
         y1 = y1.max(v.y);
     }
-    x1 < vx - 0.5 || y1 < vy - 0.5 || x0 > vx + vw - 0.5 || y0 > vy + vh - 0.5
+    let off =
+        |m: f32| x1 <= vx + m || y1 <= vy + m || x0 > vx + vw - 1.0 - m || y0 > vy + vh - 1.0 - m;
+    if off(-0.05) {
+        VpSide::Off
+    } else if off(0.05) {
+        VpSide::Edge
+    } else {
+        VpSide::In
+    }
 }
 
 // Comparable quads of a frame (strips split into quads); clears, copies and other polygons go to `others` as text.
 fn items<'a>(fr: &'a Frame, o: &Opts, others: &mut Vec<String>) -> Vec<Item<'a>> {
     let mut out = Vec::new();
     let push = |p: &'a Prim, q: [Vtx; 4], out: &mut Vec<Item<'a>>| {
-        if is_fps(p, &q) || (o.playfield && !in_playfield(&q)) || off_vp(p.vp, &q) {
+        let side = off_vp(p.vp, &q);
+        if is_fps(p, &q) || (o.playfield && !in_playfield(&q)) || side == VpSide::Off {
             return;
         }
-        let c = [
-            (q[0].x + q[1].x + q[2].x + q[3].x) / 4.0,
-            (q[0].y + q[1].y + q[2].y + q[3].y) / 4.0,
-        ];
+        // Matching centre from the vertices with z in [0, 1] when only some are: a near-plane vertex (~1e6 px, 13 §2.6c)
+        // would move it out of the matching window although compare() accepts it.
+        let inr: Vec<&Vtx> = q.iter().filter(|v| (0.0..=1.0).contains(&v.z)).collect();
+        let c = if !inr.is_empty() && inr.len() < 4 {
+            let n = inr.len() as f32;
+            [
+                inr.iter().map(|v| v.x).sum::<f32>() / n,
+                inr.iter().map(|v| v.y).sum::<f32>() / n,
+            ]
+        } else {
+            [
+                (q[0].x + q[1].x + q[2].x + q[3].x) / 4.0,
+                (q[0].y + q[1].y + q[2].y + q[3].y) / 4.0,
+            ]
+        };
         out.push(Item {
             order: out.len(),
             prim: p,
             key: sprite_rect(p, &q),
             q,
             c,
+            edge: side == VpSide::Edge,
         });
     };
     for p in &fr.prims {
@@ -973,15 +1006,25 @@ fn col_close(a: u32, b: u32) -> bool {
 
 fn compare(a: &Item, b: &Item) -> u8 {
     let mut d = 0;
+    let size = {
+        let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+        for v in &a.q {
+            (x0, x1, y0, y1) = (x0.min(v.x), x1.max(v.x), y0.min(v.y), y1.max(v.y));
+        }
+        (x1 - x0).max(y1 - y0).min(4096.0)
+    };
+    // Software-projected 3D quads (ztest=le): D3DXVec3Project precision, 4e-4 of the quad size (13 §2.6c).
+    let proj = a.prim.state.contains("ztest=le");
     for (x, y) in a.q.iter().zip(&b.q) {
         // A vertex outside the depth range is a near-singular projection (13 §2.6c): 1e-3 relative.
         let far = !(0.0..=1.0).contains(&x.z) || !(0.0..=1.0).contains(&y.z);
         let ptol = |v: f32| {
-            if far {
+            let t = if far {
                 tol(v).max(1e-3 * v.abs())
             } else {
                 tol(v)
-            }
+            };
+            if proj { t.max(4e-4 * size) } else { t }
         };
         if !close(x.x, y.x, ptol(x.x)) || !close(x.y, y.y, ptol(x.y)) {
             d |= D_POS;
@@ -1018,7 +1061,12 @@ fn compare(a: &Item, b: &Item) -> u8 {
             D_STATE
         };
     }
-    if a.prim.vp != b.prim.vp {
+    // Pre-transformed vertices use the viewport only for clipping: a quad inside both viewports is unaffected.
+    let inside = |vp: [f32; 4]| {
+        a.q.iter()
+            .all(|v| v.x >= vp[0] && v.y >= vp[1] && v.x <= vp[0] + vp[2] && v.y <= vp[1] + vp[3])
+    };
+    if a.prim.vp != b.prim.vp && !(inside(a.prim.vp) && inside(b.prim.vp)) {
         d |= D_STATE;
     }
     if both_2d && d & D_Z != 0 {
@@ -1133,7 +1181,7 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
     }
     for (i, it) in ri.iter().enumerate() {
         let l = d.by_label.entry(it.prim.tex.clone()).or_default();
-        if rmatch[i].is_none() {
+        if rmatch[i].is_none() && !it.edge {
             l.missing += 1;
         }
     }
@@ -1143,6 +1191,7 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
             // The cut part of a batch is not identified: any unmatched port quad with a cut batch's texture and state.
             None if cuts.contains(&(&*it.prim.tex, &*it.prim.state)) => l.truncated += 1,
             None if panel_repaint(p, it.prim, &it.q) => l.accepted += 1,
+            None if it.edge => {}
             None => l.extra += 1,
             Some((_, w)) => {
                 if w & !D_HIDDEN == 0 {
@@ -1733,10 +1782,15 @@ mod tests {
             })
         };
         let vp = [32.0, 16.0, 384.0, 448.0];
-        assert!(off_vp(vp, &quad(100.0, 464.0, 0.0)));
-        assert!(!off_vp(vp, &quad(100.0, 463.0, 0.0)));
-        assert!(off_vp(vp, &quad(23.0, 100.0, 0.0)));
-        assert!(!off_vp(vp, &quad(24.0, 100.0, 0.0)));
+        use VpSide::*;
+        assert_eq!(off_vp(vp, &quad(100.0, 464.0, 0.0)), Off);
+        assert_eq!(off_vp(vp, &quad(100.0, 462.0, 0.0)), In);
+        assert_eq!(off_vp(vp, &quad(100.0, 463.0, 0.0)), Edge);
+        assert_eq!(off_vp(vp, &quad(23.0, 100.0, 0.0)), Off);
+        assert_eq!(off_vp(vp, &quad(24.0, 100.0, 0.0)), Edge);
+        assert_eq!(off_vp(vp, &quad(100.0, 8.01, 0.0)), Edge);
+        assert_eq!(off_vp(vp, &quad(100.0, 8.06, 0.0)), In);
+        assert_eq!(off_vp(vp, &quad(25.0, 100.0, 0.0)), In);
         let p = Prim {
             tex: "stg7bg.anm#0".into(),
             tw: 256,
@@ -1751,6 +1805,7 @@ mod tests {
             key: Default::default(),
             q,
             c: [0.0; 2],
+            edge: false,
         };
         let (a, b) = (
             quad(-1.42e6, 100.0, -201.0),
@@ -1759,6 +1814,46 @@ mod tests {
         assert_eq!(compare(&item(a), &item(b)) & D_POS, 0);
         let (a, b) = (quad(-1.42e6, 100.0, 0.5), quad(-1.42e6 + 200.0, 100.0, 0.5));
         assert_ne!(compare(&item(a), &item(b)) & D_POS, 0);
+    }
+
+    // 13 §2.6c: ztest=le quads get 4e-4 × size; a viewport mismatch is ignored for a quad inside both viewports.
+    #[test]
+    fn projected_tolerance_and_viewport() {
+        let quad = |x: f32, s: f32| -> [Vtx; 4] {
+            [(0.0, 0.0), (s, 0.0), (0.0, s), (s, s)].map(|(dx, dy)| Vtx {
+                x: x + dx,
+                y: 100.0 + dy,
+                z: 0.5,
+                ..Vtx::default()
+            })
+        };
+        let prim = |state: &str, vp: [f32; 4]| Prim {
+            tex: "etama.anm#1".into(),
+            tw: 256,
+            th: 256,
+            state: state.into(),
+            vp,
+            kind: Kind::Quad([Vtx::default(); 4]),
+        };
+        fn item(p: &Prim, q: [Vtx; 4]) -> Item<'_> {
+            Item {
+                order: 0,
+                prim: p,
+                key: Default::default(),
+                q,
+                c: [0.0; 2],
+                edge: false,
+            }
+        }
+        let full = [0.0, 0.0, 640.0, 480.0];
+        let (le, plain) = (prim("ztest=le", full), prim("", full));
+        let (a, b) = (quad(100.0, 140.0), quad(100.04, 140.0));
+        assert_eq!(compare(&item(&le, a), &item(&le, b)) & D_POS, 0);
+        assert_ne!(compare(&item(&plain, a), &item(&plain, b)) & D_POS, 0);
+        let pf = prim("", [32.0, 16.0, 384.0, 448.0]);
+        assert_eq!(compare(&item(&plain, a), &item(&pf, a)) & D_STATE, 0);
+        let edge = quad(10.0, 20.0);
+        assert_ne!(compare(&item(&plain, edge), &item(&pf, edge)) & D_STATE, 0);
     }
 
     #[test]
@@ -1915,6 +2010,7 @@ mod tests {
         assert!(!is_fps(&p, &q(383.5, 447.5, 0xffff_ffff)));
         assert!(!is_fps(&p, &q(300.5, 447.5, 0xffff_ffd0)));
         assert!(is_fps(&p, &q(512.5, 464.5, 0xffff_ffff)));
+        assert!(is_fps(&p, &q(409.5, 447.5, 0xffff_ffd0)));
     }
 
     // FORMAT.md §3 cut batches and the accepted side-panel repaint are reported apart from extra quads.

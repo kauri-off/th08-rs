@@ -1036,7 +1036,8 @@ impl View<'_> {
         let Some(&spr) = anm.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
             return;
         };
-        let col = |c: [u8; 4]| anm.tinted([c[R], c[G], c[B], c[A]]);
+        // `AnmManager_DrawCustomQuad` 0x464DD0 pushes the colours as given: no global tint (06 §11.3, 05 §12.1).
+        let col = |c: [u8; 4]| [c[R], c[G], c[B], c[A]];
         let (c0, c1, c2, c3) = (col(slots[0]), col(slots[1]), col(slots[2]), col(slots[3]));
         if len < 1e-5 || !(0.0..=1.0).contains(&sa[2]) || !(0.0..=1.0).contains(&sb[2]) {
             return;

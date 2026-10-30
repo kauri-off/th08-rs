@@ -1124,6 +1124,9 @@ impl ContinueMenu {
         inp: &Input,
         audio: &mut crate::audio::Audio,
     ) {
+        // 0x17CE8CC := 8 (12 §5.3).
+        // SPEC-GAP: whether every call or only some phases write it (IMPL141 Q2).
+        crate::hud::set_repaint(8);
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
             // below in the same call.

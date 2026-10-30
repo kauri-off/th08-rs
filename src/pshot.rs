@@ -975,7 +975,7 @@ impl Player {
     // Trail draw 0x450AD0 (14 §4): every second trail point, alpha fading from 3/4 of the VM alpha.
     fn draw_trail(anm: &mut AnmManager, gfx: &mut Gfx, b: &mut PBullet, youkai_max: bool) {
         let n = b.trail_n.max(1);
-        let (alpha, colour) = (b.vm.color[anmvm::A], b.vm.color);
+        let alpha = b.vm.color[anmvm::A];
         let a0 = alpha as i32 * 3 / 4;
         let mut c = 0;
         while c < 2 * n && c < 32 && b.trail[c as usize][0] != -999.0 {
@@ -992,11 +992,13 @@ impl Player {
                     b.vm.color[anmvm::B],
                 ) = (0xFF, 0x40, 0x40);
             }
-            b.vm.pos = [p[0] + 32.0, p[1] + 16.0, 0.0];
-            anm.draw_mode_z(gfx, &mut b.vm, 2, 0.4);
+            b.vm.pos = [p[0] + 32.0, p[1] + 16.0, p[2]];
+            // VM pos z := trail[c].z (14 §4), not the 0.4 of the main draw.
+            anm.draw_mode_z(gfx, &mut b.vm, 2, p[2]);
             c += 2;
         }
-        b.vm.color = colour;
+        // Only the alpha byte is restored: the youkai-max red stays in the VM colour (14 §4).
+        b.vm.color[anmvm::A] = alpha;
     }
 }
 

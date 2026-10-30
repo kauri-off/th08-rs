@@ -420,6 +420,8 @@ pub struct BulletManager {
     // Updated from inside the bullet calc and drawn from its draw (08 §1).
     pub items: ItemManager,
     pub player: PlayerRef,
+    // Port link to the spell state g_Gui, held by the enemy manager; time orbs add their bonus through it (08 §8.5).
+    pub enemies: std::rc::Weak<RefCell<crate::enemy::EnemyManager>>,
     // +0x6BA538 = 0x160F3C8 live-bullet count from the last calc (08 §4.3a).
     pub live: usize,
     // +0x6BA53C, frames: set to 10 by every mass cancel (08 §2).
@@ -469,6 +471,7 @@ impl BulletManager {
             lasers: vec![Laser::default(); MAX_LASERS],
             items: ItemManager::default(),
             player,
+            enemies: std::rc::Weak::new(),
             live: 0,
             cancel_guard: 0,
             timer: Timer::default(),
@@ -1566,6 +1569,13 @@ impl Task<Ctx> for BulletManager {
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.step(&mut ctx.anm);
+        // Item_CollectTimeOrb: Spell_AddBonus(8000) per orb inside this calc, so this frame's Spell_Draw shows it (08 §8.5).
+        let orbs = std::mem::take(&mut self.player.borrow_mut().stats.spell_bonus_orbs);
+        if let Some(e) = self.enemies.upgrade() {
+            for _ in 0..orbs {
+                e.borrow_mut().spell_add_bonus(8000);
+            }
+        }
         Ret::Next
     }
 

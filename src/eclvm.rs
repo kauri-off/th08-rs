@@ -1481,6 +1481,9 @@ impl Exec<'_> {
         (self.m.g.spell_flag6, self.m.g.bonus_frozen) = (false, false);
         // Bit 9 := 0 is Spell_Start's first statement (07 §11.1).
         self.m.g.spell_captured = false;
+        // HUD +0x04 |= 0xF: lives and bombs fields := 3 (12 §5.3).
+        crate::hud::mark_lives(3);
+        crate::hud::mark_bombs(3);
         crate::gui::request(crate::gui::Req::BossShow {
             face: spell.face,
             name: spell.name.clone(),

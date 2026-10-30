@@ -493,6 +493,8 @@ impl Player {
     // counter += 6 (cap sht +8). Not implemented: statistics bit.
     fn start_bomb(&mut self, anm: &mut AnmManager, forced: bool) {
         self.forced_bomb = 0;
+        // HUD bombs field := 2 (12 §5.3 writers).
+        crate::hud::mark_bombs(2);
         let mut index = 4;
         // 09 §7: in special mode (bits 7–8) the whole cost block is skipped: no unfreeze, bombs, counters or checksums.
         if !self.special() {
@@ -1555,7 +1557,11 @@ impl Player {
             }
             5 => self.tint(anm, if ls { 0x80F00000 } else { 0x80D02020 }),
             6 => {
-                self.tint(anm, if t >= 70 { 0x80000030 } else { 0x80404040 });
+                // Two `Bomb_DrawTint` calls from T 70, averaged by the stage request (14 §2.11/§2.12).
+                self.tint(anm, 0x80404040);
+                if t >= 70 {
+                    self.tint(anm, 0x80000030);
+                }
                 if (70..160).contains(&t) {
                     let a = if t <= 100 {
                         255

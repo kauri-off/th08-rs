@@ -301,10 +301,12 @@ impl Stats {
     pub fn extend(&mut self, rng: &mut Rng) {
         if self.lives < 8.0 {
             self.add_lives(1.0, rng);
+            crate::hud::mark_lives(2);
             self.rank(200);
             crate::sound::play(crate::sound::EXTEND);
         } else if self.bombs < 8.0 {
             self.add_bombs(1.0, rng);
+            crate::hud::mark_bombs(2);
             self.rank(200);
             crate::sound::play(crate::sound::EXTEND);
         }
@@ -1123,6 +1125,8 @@ impl Player {
         if self.stats.lives >= 1.0 {
             self.stats.add_lives(-1.0, &mut anm.rng);
             self.stats.bombs = self.sht.bombs.trunc();
+            crate::hud::mark_lives(2);
+            crate::hud::mark_bombs(2);
         } else {
             // Game over: the ASCII manager opens the continue menu (12 §4).
             // Lives and bombs are not changed on game over (09 §6.2).

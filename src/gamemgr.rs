@@ -1127,6 +1127,8 @@ impl Task<Ctx> for GameManager {
             if wait_due || release_due {
                 if release_due && g.end_state() == 0 {
                     g.loading = 0;
+                    // StageStart after the loader wait: 0x17CE8CC := 0x3C (12 §5.3).
+                    crate::hud::set_repaint(0x3C);
                     g.loading_wait = 0;
                     g.flags &= !F_CLEAR_PANEL;
                     crate::effect::release_loading_overlay();

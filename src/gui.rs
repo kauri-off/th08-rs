@@ -171,7 +171,8 @@ impl Gui {
                 v[2].set_sprite(anm, last as i32);
                 anm.set_script(&mut v[4], CDBG_SLOT, 2);
                 v[4].set_sprite(anm, last as i32);
-                // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 is not needed (full redraw).
+                // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 (12 §5.3).
+                crate::hud::set_repaint(2);
                 anm.set_script(&mut v[6], TEXT_SLOT, 4);
                 self.texts.push((6, name.to_string(), [255, 240, 240], 0.0));
                 v[10].pending_interrupt = 1;
@@ -215,6 +216,8 @@ impl Gui {
                     self.card = card;
                 }
                 self.name_only = name_only;
+                // 0x17CE8CC := 2 (12 §5.3).
+                crate::hud::set_repaint(2);
                 crate::sound::play(0xE);
             }
             // Spell_HideName 0x416160 (native 23).
@@ -384,6 +387,10 @@ impl Task<Ctx> for Gui {
 
     // Spell_Draw 0x4178C0 (12 §5.8 draw steps 1–4).
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
+        if let Some(s) = &self.enemies.borrow().g.spell {
+            (self.bonus, self.capturable) = (s.bonus, s.capture);
+        }
         self.flush_texts(ctx);
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         gfx.set_viewport(PLAYFIELD);

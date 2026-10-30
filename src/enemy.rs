@@ -853,6 +853,7 @@ impl EnemyManager {
         m.debug_damage = ctx.settings.enemy_dmg;
         m.stage_start(&mut ctx.anm, index);
         let m = Rc::new(RefCell::new(m));
+        m.borrow().bullets.borrow_mut().enemies = Rc::downgrade(&m);
         let t: task::TaskRef<Ctx> = m.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
@@ -1622,6 +1623,10 @@ impl EnemyManager {
     pub fn finish_spell(&mut self, anm: &mut AnmManager) {
         // 0x4E3D28 (darkness mask alpha) := 0 first, every call; then, with the card active, Spell_HideName.
         crate::ascii::clear_darkness();
+        // HUD +0x04 |= 0xF: lives and bombs fields := 3 (12 §5.3).
+        // SPEC-GAP: whether Spell_End's dirty write is inside its card-active block (IMPL141 Q1).
+        crate::hud::mark_lives(3);
+        crate::hud::mark_bombs(3);
         self.end_active_spell(anm);
         // Tail of every op 123 (07 §11.1, RE-Q56): after the time-reward test, the boss loses flag A bit 27,
         // g_Gui +4 := 0, spell flag bit 11 := 0.
@@ -2431,16 +2436,11 @@ impl EnemyManager {
             self.g.player_mode = p.mode as i32;
         }
         self.dissolve_requests();
-        let orbs = std::mem::take(&mut self.player.borrow_mut().stats.spell_bonus_orbs);
         let (deaths, bombs) = {
             let p = self.player.borrow();
             (p.deaths, p.bombs_started)
         };
         // Port: spell flag bits 2/7 from the player's bomb/death counters (07 §11.1: 0x44CBA0, 0x44D150).
-        // Port: the orbs' Spell_AddBonus calls are applied here, before anything reads the bonus.
-        for _ in 0..orbs {
-            self.spell_add_bonus(8000);
-        }
         if let Some(s) = &mut self.g.spell {
             if bombs != s.bombs0 && !s.bombed {
                 s.bombed = true;
