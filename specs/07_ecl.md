@@ -441,8 +441,8 @@ Arg letters: `i` int, `f` float, `V`/`W` int/float variable destination, `T` tim
 | 52 | call | S sub | §5.4 | 614 |
 | 53 | return | — | §5.4 | 250 |
 | 54 / 58 | anm / anm_stg | i script | main VM: start script from `enemy.anm` (54, clears flags B bit 2) or `stgNenm.anm` (58, sets bit 2) with `AnmFile_SetScript` (VM pos and pos offset kept, VERIFIED Ecl_Run case 0x36/0x3A, RE-Q33) | 291 / 73 |
-| 55 / 59 | anm_dir / anm_dir_stg | i base | direction scripts = base … base+5 (§9.3); same file/flag rule | 12 / 138 |
-| 56 / 60 | anm_dir6 / _stg | i×6 | direction scripts explicit (idle, left, right, left→idle, right→idle, replay) | 0 / 0 |
+| 55 / 59 | anm_dir / anm_dir_stg | i base | direction scripts = base … base+5 (§9.3), current dir := −1; same file/flag rule | 12 / 138 |
+| 56 / 60 | anm_dir6 / _stg | i×6 | direction scripts explicit (idle, left, right, left→idle, right→idle, replay); like 55/59 also current dir := −1 (§9.3) | 0 / 0 |
 | 57 / 61 | subanm / _stg | i vm (0/1), i script | sub VM: script < 0 → disable it, else start script with `AnmFile_SetScript` (pos / pos offset kept; 0x421E50, RE-Q33) (file by flags B bit 2; 57 clears, 61 sets it) | 46 / 76 |
 | 62 | anm_replay | — | restart the "replay" direction script (e+0x333C) on the main VM (`AnmFile_SetScript`, file by flags B bit 2; RE-Q33) | 201 |
 | 63 | set_pos | f x, f y | pos = (x, y, 0); clamp (§8) | 96 |
@@ -645,10 +645,13 @@ Bullet start: position (origin.x, origin.y, 0.1), stored angle wrapped, velocity
 speed·gs) (08 §3.2, VERIFIED RE-Q30). After the
 pattern, flags & 0x200 plays desc sfx at the origin. (Bullet state machine: 08 spec.)
 
-Auto-fire (`Enemy_AutoFireAndDirAnim` 0x423150, only while life > 0): if interval > 0: timer.Tick(); when
+Auto-fire (`Enemy_AutoFireAndDirAnim` 0x423150; the whole function, auto-fire **and** direction animation, runs only while
+life > 0): if interval > 0: timer.Tick(); when
 timer ≥ interval: fire the stored instruction, timer = 0.
 Direction animation (when the "left" script ≥ 0): dir = vel.x < −0.01 → 1 (left), > 0.01 → 2 (right), else 0
-(swapped when mirrored). On change: to 1/2 start left/right script; back to 0 start idle (if previous −1),
+(swapped when mirrored). Ops 55/56/59/60 store the six scripts through 0x421DE0, which also sets the current direction
+e+0x332E := −1, so the next call (same frame, after `Ecl_Run`) restarts the idle script even when dir stays 0 — a
+boss whose spell sub re-issues `anm_dir` restarts its idle bob there, pos offset kept (VERIFIED 0x421DE0, RE-Q64). On change: to 1/2 start left/right script; back to 0 start idle (if previous −1),
 left→idle or right→idle script. Every one of these starts goes through `AnmFile_SetScript` 0x4069F0 on the main VM e+0xC
 (VERIFIED 0x423150, RE-Q33): the VM pos and **pos offset** (+0x288, the op-24/32 bob of the stage enemy scripts) and the
 interpolation start/end values (beyond the 0x208 bytes `AnmVm_Init` clears) are kept, unlike `AnmManager_SetScript`.
@@ -1139,7 +1142,7 @@ Called with the enemy and the instruction; `arg` = second operand (instr +0x10).
   3. Restore texture stage 0 to MODULATE / TEXTURE, invalidate the ANM state caches, and set ZFUNC
      LESSEQUAL.
   4. Redraw spell-background VM 0 (`g_Stage`+0xB38) mirrored:
-     - scale (−1.5, −1.75), pos (416, 464, 0.7), colour 0xFFE0C0C0, `Draw2DRot`;
+     - scale (−1.5, −1.75), pos (416, 464, 0.7), colour 0xFFE0C0C0 (D3DCOLOR: A FF, **R E0**, G C0, B C0; draw log `ffe0c0c0`), `Draw2DRot`;
      - then restore scale (1.5, 1.75), pos (32, 16, 0.5) and the colour.
   5. Redraw VM 1 (+0xDDC):
      - rotation z negated, pos.z 0.6, colour 0xFFE0C0C0, `DrawRotFlush`;

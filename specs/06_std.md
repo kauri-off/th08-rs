@@ -334,7 +334,7 @@ fade rectangle: flush, ZFUNC = ALWAYS, fog off, `Screen_FillRect` 0x45B1E0 over 
 (+0xB28·255/60) << 24 (black, alpha rising over the 60 spell-start frames; untextured, z 0, z-write off). So once
 +0xB24 = 2 the background particles are no longer drawn either (golden: no type-51/63 particles during spell
 cards). Then always: flush, ZFUNC = ALWAYS, fog off; extra
-spell-background VMs when +0xB24 > 0; disable "stage camera" render path; default 2D camera; viewport; at the
+spell-background VMs when +0xB24 > 0 (each `AnmManager_DrawRotFlush` = Draw2DRot, 13 §5), then the mask callback +0x625C if set; disable "stage camera" render path; default 2D camera; viewport; at the
 end: if the "bomb drew last frame" flag +0x646C (0x4EA49C) is 0 → global tint off (`AnmMgr_TintOff` 0x40BAB0:
 AnmManager+4 := 0, colour 0x80808080); then +0x646C := 0 and +0x647C := 0.
 Tint lifetime while a bomb runs (VERIFIED, changelog/answers_impl11.md §1): `Bomb_DrawTint` sets +0x646C := 1 at player
@@ -418,6 +418,9 @@ v2,v3 from B's fog. Drawn through the 2D batch (fog off) by `AnmManager_DrawCust
 (05 §12.2), texture, `SetRenderState2D`, then the four vertices are pushed **as given** — the global tint (05 §12.1)
 is not applied to ribbon vertex colours (only `EmitQuad` multiplies vertex colours), so a bomb tint leaves ribbons
 untinted while the stage's 3D quads and billboards are tinted (VERIFIED 0x464DD0, RE-Q63, ref500 53406 present 4659).
+Likewise **no screen-shake offset** (AnmManager +0x1C/+0x20) is added to ribbon vertices (neither the ribbon builder nor
+`DrawCustomQuad`/`AnmManager_PushQuad` read it), while 3D world quads (§11.2) and billboards (`EmitQuad`) shake (VERIFIED
+0x464DD0, RE-Q64, ref500 53406 present 4679: stg8bg ribbons steady while the player sprite shakes ±3.98).
 Details (VERIFIED, changelog/answers_impl17.md §5.1, demo 1 draw log):
 - `wP` uses the **3D** length (`Vec3_Length` of the projected x, y, depth difference), like §11.1.
 - Point colour by distance d = |P − (cam.position + eye_offset)|: d ≤ fog_near → the VM colour (+0x1F0, colour 1, not

@@ -169,7 +169,9 @@ frame). A session pins it:
   `lk_park`): when it equals the present of poll B in `polls.txt` the loader ran between frames; when it is one less,
   it ran inside the frame of poll B − 1 after that frame's input poll, and for the gauge setup it is not recorded
   whether that was before or after `Ascii_Calc` (12 §5.9, RE-Q63: a ±1-frame gauge readout difference there is the
-  race). A future probe should also log the ASCII manager's calc count at the `loader gauge` event.
+  race). Since RE-Q64 the probe appends `asciicalc C` to the `loader gauge` line: C = the ASCII frame counter +0x8284
+  (0x4D50A4, incremented at the end of every `Ascii_Calc`, 12 §5.10) when the setup ran, so a new recording shows
+  whether the setup came before or after that frame's `Ascii_Calc` (older recordings lack the field).
 A port that loads synchronously should reproduce these frame counts, not its own loading time: e.g. stay on the
 loading screen until poll P, then run gameplay frame 1. Stage loading rows of `trace.txt` (loading column ≠ 0) show
 the loader's progress (player position, rank, flags bit 2) at timing-dependent points. Compare only from the first

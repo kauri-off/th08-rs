@@ -282,7 +282,7 @@ k5 wait timer (+0x105C); k6 wrap timer (+0x1088). Timers are the 0xC-byte Timer 
 | off | type | meaning |
 |---|---|---|
 | +0 | AnmVm | body (script = laser type + 10, sprite += colour) |
-| +0x2A4 | AnmVm | emitter glow (script 0x92 + table 0x4C70F8[colour]; VM flags bits 4–5 := 1) |
+| +0x2A4 | AnmVm | emitter glow: `AnmVm_InitWithSprite` 0x4068A0 = `AnmVm_Init` + **sprite** (not script) 0x92 + table 0x4C70F8[colour] (etama sprites 146–150, 30×30), no script ever runs on it; then VM flags bits 4–5 := 1 (additive) (VERIFIED 0x430F20, RE-Q64) |
 | +0x548 | f32[3] | origin |
 | +0x554 | f32 | angle |
 | +0x558 / +0x55C | f32 | tail / head distance from origin |

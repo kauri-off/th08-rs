@@ -524,7 +524,8 @@ Small popups: 720 + 3 slots × 0x38 at Ascii +0xB4DC: digits[≤12] (least signi
 sign used for negative arguments), +0xC pos (+ playfield origin at spawn, i.e. screen coords), +0x18 colour, +0x1C Timer, +0x30 active,
 +0x31 digit count. `Popup_Number` 0x403200(pos, value, colour) uses slots 0–719 round robin; 0x403330 uses
 the 3 slots 720–722 (round robin).
-Per frame (`Ascii_Calc`, not while paused/continue, not while bullets frozen): y −= 0.5·gs; age (Timer) ticks; freed
+Per frame (`Ascii_Calc`, not while paused/continue, not while bullets frozen — GameFlags bit 10 read **live** at calc prio 1,
+so on the frame after a hit in the bullet calc (prio 14) no popup ages, VERIFIED 0x402200, RE-Q64 ref500 udFa11 present 7094): y −= 0.5·gs; age (Timer) ticks; freed
 when age **> 60** (`Timer_Greater`(60): drawn with ages 0..60, i.e. 61 frames; VERIFIED 0x402200, RE-Q32).
 Draw (`Ascii_DrawPopups` 0x405420, VERIFIED RE-Q32): one VM, ASCII manager +0x2A4, per glyph: VM pos.x starts at
 pos.x − 4·digits and advances 8 per glyph (glyphs from the last stored = most significant first), pos.y = pos.y,
@@ -633,6 +634,12 @@ on-register loads slot 9: `effNN.anm` by stage index (table 0x4C7480), or in spe
 the per-character `eff09xx.anm` (table 0x4C7144); it sets count = 2, first script = 0 (ECL native 5 resets the
 count to 2). Each `Stage_Calc`: if +0xB24 > 0 → when +0xB28 == 60, +0xB24 = 2 (stage background layers no
 longer drawn, 06 §7); +0xB28 += 1; run the spell VMs. `Spell_End` (0x416AD0) sets +0xB24 = 0.
+Draw (`Stage_DrawHigh`, 06 §10.2): each spell VM i < +0xB30 with `AnmManager_DrawRotFlush` 0x40BAF0 = `Draw2DRot`
+(05 §9 mode 2) + flush, **whatever the VM's own draw mode**, so `angular_vel` z rotates the quad (eff04a–eff08 script 1
+(−π/400 per frame, VERIFIED 0x409640, RE-Q64). Writers of the first script +0xB34: `EffectMgr_OnRegister` := 0;
+`Msg_Start` entry 0 in 6A/6B/Ex := 2 (10 §4); `GameManager_StageStart` in spell practice := 2 for stage idx 6 unless
+card id 0x77–0x7A, idx 7 unless 0x93–0x96, idx 8 unless 0xBF–0xC1 or 0xD5 (stage idx 5 and others: unchanged) (11 §3.1,
+VERIFIED 0x43ABD7, RE-Q64).
 
 ## 6. Open points
 - (closed) Large popup glyphs 0xD/0xE/0xF = '+', '(', ')' — VERIFIED (changelog/answers_phase6.md, changelog/answers_impl9.md §14).

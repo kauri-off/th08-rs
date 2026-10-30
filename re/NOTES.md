@@ -978,3 +978,16 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - TOOL: 3-digit replay fps, near-plane vertex matching centre, cull-edge touching, viewport for inside quads, projected-quad
   precision. Gauge ±1 frame = loader sub-frame race (12 §5.9, README).
 - Result (q63 fix): every recording same or later except the 2 loader-race ones (215/213) and the gm-173 spell-practice group (306, next = boss effects); traces identical; golden 4439.
+
+# RE-Q64 (2026-10-30) — draw-log differences part 5 (specs/changelog/answers_re_q64.md)
+- Runs re/work/runs/q64 (CHECKPOINT.md; portcopy = q63 portcopy + Q64 scratch behind `Q64NO*`, target/re64; dc.sh takes
+  LIST=<file> and re-copies bin_<tag> when release/session is newer; lag.py = median Q-vertex delta ref(p)−port(p+k)).
+  Debug env in the scratch port: Q64E (boss VM / dir anim), Q64L (laser emitter), Q64R (ring params).
+- CODE BUGs: spell-bg VMs not Draw2DRot (13 §5); spell-practice bg base 2 missing (11 §3.1); anm_dir ops don't reset the
+  current dir to −1 (07 §9.3); spell-practice Hud_Load title VM / stg8txt (12 §5.1a); mask colour R/B swap (07 §12.1);
+  laser emitter is a sprite, not a script (08 §6.1) — emitters were never drawn; slash ring minor axis +0.0001 (14 §2.11);
+  ribbons don't shake (06 §11.3); post-card time-orb bonus (07 §11.1); Ascii_Calc freeze read live (13 §4).
+- drawdiff on a partial range / session --to can report a spurious etama#2 "extra 1" for a P-strip ring (udLi14 6705); use full runs.
+- Probe: `loader gauge … asciicalc C` (re/work/hook/d3d8.dll rebuilt; old one d3d8_v11_pre_q64.dll).
+- Result (q64/fix2 + fix2_golden.txt): all 20 + golden T=; golden 4439 (accepted, 7996/8000 identical); first differences
+  e.g. udSi123 306 → 3395, 54840 316 → 2171, udLi14 7299 → 15470, 53020 6942 → 15778 (table in the changelog).

@@ -25,7 +25,9 @@ static RecSync g_rs_ev[4096]; static uint32_t g_nrs_ev, g_rs_next;
 static int g_blk[3]; static uint32_t g_mm_hit;
 
 static void lk_park(int kind) {
-    if (g_sev) { fprintf(g_sev, "loader %s poll %u present %u\n", g_lk_name[kind], g_poll_n, g_present_n + 1); fflush(g_sev); }
+    /* RE-Q64: gauge setup also logs the ASCII calc counter +0x8284 (0x4D50A4, 12 §5.10) to pin the 12 §5.9 race */
+    if (g_sev && kind == 3) { fprintf(g_sev, "loader %s poll %u present %u asciicalc %u\n", g_lk_name[kind], g_poll_n, g_present_n + 1, *(volatile uint32_t *)0x4D50A4); fflush(g_sev); }
+    else if (g_sev) { fprintf(g_sev, "loader %s poll %u present %u\n", g_lk_name[kind], g_poll_n, g_present_n + 1); fflush(g_sev); }
     if (g_sess != 2) return;
     g_lk_tid[kind] = GetCurrentThreadId();
     InterlockedExchange(&g_lk_parked[kind], 1);

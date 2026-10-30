@@ -214,7 +214,8 @@ register: Stage(stage), Bullets("etama.anm"), Enemies, Effects, HUD, Gui; Replay
     # (manager clear, eff anm load, no RNG) and HUD's (Hud_Load: ANM loads + script starts, Msg_Load; no effect spawn)
     # do not touch each other's state, and the calc/draw priorities (13/12 vs 15/17) are distinct, so swapping them
     # changes no logic or RNG (only the ANM load order). RE-Q24
-spell practice in 6A/6B/Ex outside the last-word ranges: stage overlay base (0x4E4B64) = 2
+spell practice in 6A/6B/Ex outside the last-word ranges: spell-background first script g_Stage+0xB34 (0x4E4B64) := 2
+    (idx 6 unless card 0x77–0x7A; idx 7 unless 0x93–0x96; idx 8 unless 0xBF–0xC1 or 0xD5; 13 §5; VERIFIED RE-Q64)
 unless reloading the same stage (0x17CE8C4): load (not play: `Music_Play` = sound command 1, 02 §4) BGM slot 0 and
     slots 1/2 whose name does not start with ' ' from the STD names (spell practice: slot 0 only,
     BGM chosen from table 0x4C7670 by spell id)

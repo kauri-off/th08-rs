@@ -679,10 +679,13 @@ Branch on the fresh-start flag 0x17CE8BC (11 §3):
   shot's loadingNN.anm (12) are loaded; the same three shorts := −1 and +0x21810 := 0; VM impl+0x5484 := `ascii.anm`
   script 0x1A, VM impl+0x22E14 := `ascii.anm` script 0x19 with its difficulty sprite (§5.1 table).
 - Both: night clock hidden; clock VM impl+0x34D4 := `times.anm` script 0, sprite = clock counter (`GameMgr_GetClock`, stats+0x28 as it is when the HUD registers: after the fresh-start value — 6 in Extra, 11 §3.2 — and after a replay's stage record, 11 §3.4, since `Replay_Register(1)` runs before the subsystems register, 11 §3.1; Extra therefore shows sprite 6 = [0, 192, 128, 224]; VERIFIED 0x4390EE, RE-Q62); msg file (not in
-  spell practice); stgNtxt.anm (unless the reload-same-stage flag 0x17CE8C4); **only on a fresh start** the 16
+  spell practice); stgNtxt.anm (unless the reload-same-stage flag 0x17CE8C4; by stage idx from 0x4C745C, but `stg8txt.anm` in
+  spell practice with card id ≥ 0xCD, VERIFIED RE-Q64); **only on a fresh start** the 16
   front VMs impl + i·0x2A4 := front.anm script i (so on a continuing stage VMs 0–15 keep their state: VM 13 has
   stopped, the panel VMs 0–9 stay fully faded in); HUD +0 := 0, +0x2C := 0, impl+0x2A40 := 0, +0x30 := +0x34 := 0;
-  stage-title VMs (stgNtxt scripts 0–3, or script 3 only in spell practice); impl+0x2181C := −1, +0x22D84 := 0,
+  stage-title VMs: outside spell practice VMs 0–3 := stgNtxt scripts 0–3; in spell practice, only when the reload-same flag
+  is 0 or the card's 0x4C7670 record flag +0x10 is set: **VM 0** (impl+0x2A44, not VM 3) := script 3 with sprite
+  (record +0xC) + 3 (song-title card of the card's BGM; 02 §4 table), VMs 1–3 untouched (VERIFIED 0x4390EE, RE-Q64); impl+0x2181C := −1, +0x22D84 := 0,
   popup timers +0x22D9C / +0x22DBC / +0x22DDC := 0; all six dirty fields := 2; stage-clear VM impl+0x212C8 :=
   `ascii.anm` script 3; 0x17CE8CC := 0x10; impl+0x22E0C := 0.
 

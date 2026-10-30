@@ -233,7 +233,9 @@ re-initialise at T = 279.
 - 120 ≤ T < 150: player pos = Q + (S − Q)·(1 − (1 − (T − 120)/30)²) (returns; the function exits early).
   T = 150: speed multipliers 1.
 - Effect 0x30 (ring type 48, life 60): t < 30: thin vertical line (ellipse radius 192 × 0.0001 rotated π/2,
-  48 segments, width 3); t ≥ 30: f = ((t − 30)/30)⁴, minor axis 192f, width 80f + 3.
+  48 segments, width 3); t ≥ 30 (`EffUpd_Slash` 0x413070): x = (t − 30)/30, f = (x²)² (each square rounded to f32), minor
+  axis **192f + 0.0001** (never 0, so the ring stays on the ellipse path of 13 §2.5 even at t = 30 where f = 0 —
+  with minor axis 0 it would draw as a full plain ring), width 80f + 3; the update always returns 1 (VERIFIED, RE-Q64).
 - Draw: tint 0x80404040 every frame; from T = 70 (`Timer_GreaterEq` 70) a **second** tint call 0x80000030 in the
   same frame (EDX constants at 0x412314 / 0x412336), so the stage request is the byte-wise average of both ramped
   colours (06 §10.2 step 3), e.g. (0x20, 0x20, 0x38) on the plateau — not 0x80000030 alone (VERIFIED RE-Q63, ref500
