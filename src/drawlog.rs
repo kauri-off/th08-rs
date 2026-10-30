@@ -729,6 +729,35 @@ impl LabelDiff {
 
 pub type SpriteKey = (Rc<str>, [i32; 4]);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum QuadKind {
+    Changed,
+    Missing,
+    Extra,
+}
+
+impl QuadKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            QuadKind::Changed => "changed",
+            QuadKind::Missing => "missing",
+            QuadKind::Extra => "extra",
+        }
+    }
+}
+
+// One non-same quad of a frame (truncated / accepted / edge quads excluded); `why` = D_* mask for changed.
+// Clears, copies and other polygons come as `tex` = their text with rect 0 and no quads.
+#[derive(Clone, Debug)]
+pub struct QuadDiff {
+    pub tex: Rc<str>,
+    pub rect: [i32; 4],
+    pub kind: QuadKind,
+    pub why: u8,
+    pub r: Option<[Vtx; 4]>,
+    pub p: Option<[Vtx; 4]>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct FrameDiff {
     pub total: LabelDiff,
@@ -742,6 +771,7 @@ pub struct FrameDiff {
     pub other_extra: Vec<String>,
     // `P list 4` markers in the reference frame: batches the probe cut at 682 quads (FORMAT.md §3).
     pub cuts: usize,
+    pub quads: Vec<QuadDiff>,
 }
 
 impl FrameDiff {
@@ -1183,6 +1213,14 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
         let l = d.by_label.entry(it.prim.tex.clone()).or_default();
         if rmatch[i].is_none() && !it.edge {
             l.missing += 1;
+            d.quads.push(QuadDiff {
+                tex: it.prim.tex.clone(),
+                rect: it.key,
+                kind: QuadKind::Missing,
+                why: 0,
+                r: Some(it.q),
+                p: None,
+            });
         }
     }
     for (j, it) in pi.iter().enumerate() {
@@ -1192,12 +1230,30 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
             None if cuts.contains(&(&*it.prim.tex, &*it.prim.state)) => l.truncated += 1,
             None if panel_repaint(p, it.prim, &it.q) => l.accepted += 1,
             None if it.edge => {}
-            None => l.extra += 1,
-            Some((_, w)) => {
+            None => {
+                l.extra += 1;
+                d.quads.push(QuadDiff {
+                    tex: it.prim.tex.clone(),
+                    rect: it.key,
+                    kind: QuadKind::Extra,
+                    why: 0,
+                    r: None,
+                    p: Some(it.q),
+                });
+            }
+            Some((i, w)) => {
                 if w & !D_HIDDEN == 0 {
                     l.same += 1;
                 } else {
                     l.changed += 1;
+                    d.quads.push(QuadDiff {
+                        tex: ri[i].prim.tex.clone(),
+                        rect: ri[i].key,
+                        kind: QuadKind::Changed,
+                        why: w,
+                        r: Some(ri[i].q),
+                        p: Some(it.q),
+                    });
                 }
                 for k in 0..6 {
                     if w & (1 << k) != 0 {
@@ -1243,6 +1299,21 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
         }
     }
     d.other_extra = po_left;
+    for (v, kind) in [
+        (&d.other_missing, QuadKind::Missing),
+        (&d.other_extra, QuadKind::Extra),
+    ] {
+        for o in v {
+            d.quads.push(QuadDiff {
+                tex: o.as_str().into(),
+                rect: [0; 4],
+                kind,
+                why: 0,
+                r: None,
+                p: None,
+            });
+        }
+    }
     d
 }
 
@@ -1266,6 +1337,85 @@ pub struct FrameNote {
     pub demo: i32,
 }
 
+pub type GroupKey = (Rc<str>, [i32; 4], QuadKind, u8);
+
+// All non-same quads of one GroupKey over a run (IMPL142); presents are reference presents.
+#[derive(Clone, Debug)]
+pub struct Group {
+    pub first_present: i64,
+    pub first_port_present: i64,
+    pub first_scene: i32,
+    pub first_scene_frame: i64,
+    pub frames: usize,
+    pub quads: usize,
+    last_present: i64,
+    // Contiguous present ranges: the first GROUP_RANGES of them, plus the count of all.
+    pub ranges: Vec<(i64, i64)>,
+    pub n_ranges: usize,
+    pub ex_ref: Option<[Vtx; 4]>,
+    pub ex_port: Option<[Vtx; 4]>,
+}
+
+pub const GROUP_RANGES: usize = 8;
+// Groups listed in the text summary; index.html and groups.tsv list all.
+pub const GROUPS_TEXT_N: usize = 40;
+
+// "pos+colour" for a changed group's D_* mask, "-" otherwise; no spaces (groups.tsv).
+pub fn fields_str(kind: QuadKind, why: u8) -> String {
+    if kind != QuadKind::Changed {
+        return "-".into();
+    }
+    (0..6)
+        .filter(|&k| why & (1 << k) != 0)
+        .map(|k| D_NAMES[k].replace(' ', "_"))
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+pub fn quad_str(q: &Option<[Vtx; 4]>) -> String {
+    let Some(q) = q else {
+        return "-".into();
+    };
+    q.iter()
+        .map(|v| {
+            format!(
+                "{},{},{},{},{},{},{:08x}",
+                num(v.x, 2),
+                num(v.y, 2),
+                num_g(v.z),
+                num_g(v.rhw),
+                num_g(v.u),
+                num_g(v.v),
+                v.col
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+impl Group {
+    pub fn ranges_str(&self) -> String {
+        let mut s: Vec<String> = self
+            .ranges
+            .iter()
+            .map(|&(a, b)| {
+                if a == b {
+                    format!("{a}")
+                } else {
+                    format!("{a}-{b}")
+                }
+            })
+            .collect();
+        if self.n_ranges > self.ranges.len() {
+            s.push(format!("+{}", self.n_ranges - self.ranges.len()));
+        }
+        s.join(",")
+    }
+}
+
+pub const GROUPS_TSV_HEADER: &str = "texture\trect\tkind\tfields\tfirst_present\tfirst_port_present\tfirst_scene\t\
+    first_scene_frame\tframes\tquads\tn_ranges\tranges\tex_ref\tex_port";
+
 #[derive(Debug, Default)]
 pub struct Report {
     pub compared: usize,
@@ -1288,6 +1438,7 @@ pub struct Report {
     pub accepted_frames: usize,
     // (ref present, port present, ref game frame, score) of every compared frame.
     pub pairs: Vec<(i64, i64, i64, usize)>,
+    pub groups: HashMap<GroupKey, Group>,
 }
 
 impl Report {
@@ -1328,6 +1479,7 @@ impl Report {
         for o in &d.other_extra {
             *self.others_extra.entry(o.clone()).or_default() += 1;
         }
+        self.add_groups(r, p, d);
         let note = || FrameNote {
             key: key.clone(),
             ref_present: r.present,
@@ -1357,6 +1509,107 @@ impl Report {
             }
             self.worst.sort_by_key(|w| std::cmp::Reverse(w.score));
         }
+    }
+
+    fn add_groups(&mut self, r: &Frame, p: &Frame, d: &FrameDiff) {
+        for q in &d.quads {
+            let g = self
+                .groups
+                .entry((q.tex.clone(), q.rect, q.kind, q.why))
+                .or_insert_with(|| Group {
+                    first_present: r.present,
+                    first_port_present: p.present,
+                    first_scene: r.scene,
+                    first_scene_frame: r.scene_frame,
+                    frames: 0,
+                    quads: 0,
+                    last_present: i64::MIN,
+                    ranges: Vec::new(),
+                    n_ranges: 0,
+                    ex_ref: q.r,
+                    ex_port: q.p,
+                });
+            g.quads += 1;
+            if g.last_present == r.present {
+                continue;
+            }
+            g.frames += 1;
+            if g.last_present != i64::MIN && r.present == g.last_present + 1 {
+                if g.ranges.len() == g.n_ranges {
+                    g.ranges.last_mut().unwrap().1 = r.present;
+                }
+            } else {
+                g.n_ranges += 1;
+                if g.ranges.len() < GROUP_RANGES {
+                    g.ranges.push((r.present, r.present));
+                }
+            }
+            g.last_present = r.present;
+        }
+    }
+
+    // Groups sorted by first present (then key).
+    pub fn sorted_groups(&self) -> Vec<(&GroupKey, &Group)> {
+        let mut v: Vec<_> = self.groups.iter().collect();
+        v.sort_by_key(|(k, g)| (g.first_present, (*k).clone()));
+        v
+    }
+
+    pub fn groups_text(&self, n: usize) -> String {
+        let v = self.sorted_groups();
+        let mut s = format!(
+            "difference groups: {} (by first present, top {n})\n",
+            v.len()
+        );
+        for (k, g) in v.iter().take(n) {
+            let _ = writeln!(
+                s,
+                "  {} [{},{},{},{}] {} {}: first present {} (scene {} frame {}), {} frames, {} quads, presents {}",
+                k.0,
+                k.1[0],
+                k.1[1],
+                k.1[2],
+                k.1[3],
+                k.2.name(),
+                fields_str(k.2, k.3),
+                g.first_present,
+                g.first_scene,
+                g.first_scene_frame,
+                g.frames,
+                g.quads,
+                g.ranges_str()
+            );
+        }
+        s
+    }
+
+    pub fn groups_tsv(&self) -> String {
+        let mut s = format!("{GROUPS_TSV_HEADER}\n");
+        let clean = |t: &str| t.replace(['\t', '\n'], " ");
+        for (k, g) in self.sorted_groups() {
+            let _ = writeln!(
+                s,
+                "{}\t{},{},{},{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                clean(&k.0),
+                k.1[0],
+                k.1[1],
+                k.1[2],
+                k.1[3],
+                k.2.name(),
+                fields_str(k.2, k.3),
+                g.first_present,
+                g.first_port_present,
+                g.first_scene,
+                g.first_scene_frame,
+                g.frames,
+                g.quads,
+                g.n_ranges,
+                g.ranges_str(),
+                quad_str(&g.ex_ref),
+                quad_str(&g.ex_port)
+            );
+        }
+        s
     }
 
     pub fn note_sprites(&mut self, fr: &Frame, port: bool, o: &Opts) {
@@ -1485,6 +1738,7 @@ impl Report {
                 let _ = writeln!(s, "  {x}");
             }
         }
+        s.push_str(&self.groups_text(GROUPS_TEXT_N));
         s
     }
 }
@@ -2035,6 +2289,56 @@ mod tests {
             (2, 0, 1, 1, 1)
         );
         assert_eq!(d.score(), 0);
+    }
+
+    // IMPL142: non-same quads grouped by (texture, rect, kind, fields) with frames, quads and present ranges.
+    #[test]
+    fn difference_groups() {
+        let st = "T etama.anm#0 256 256\nS blend=alpha atest=ge4 ztest=always zwrite=0 c=tex*col a=tex*col\nV 0 0 640 480\n";
+        let q = |x: i32, u: f32| {
+            format!(
+                "R {x} 100 {} 116 {u} 0 {} 0.0625 ffffffff\n",
+                x + 16,
+                u + 0.0625
+            )
+        };
+        let frame = |n: i64, body: String| format!("F {n} 2 {n} {n} -1 0 0 2\n{st}{body}");
+        let mut rep = Report::new(0);
+        let o = Opts { playfield: false };
+        for n in 1..=4 {
+            let rt = frame(n, q(100, 0.0) + &q(200, 0.0625));
+            let pt = if n == 3 {
+                rt.clone()
+            } else {
+                frame(n, q(102, 0.0) + &q(300, 0.125))
+            };
+            let (rf, pf) = (parse_str(&rt), parse_str(&pt));
+            let d = diff_frame(&rf[0], &pf[0], &o);
+            rep.add(format!("{n}"), &rf[0], &pf[0], &d);
+        }
+        assert_eq!(rep.identical, 1);
+        let g = rep.sorted_groups();
+        let keys: Vec<_> = g
+            .iter()
+            .map(|(k, _)| (k.1, k.2, fields_str(k.2, k.3)))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ([0, 0, 16, 16], QuadKind::Changed, "pos".to_string()),
+                ([16, 0, 32, 16], QuadKind::Missing, "-".to_string()),
+                ([32, 0, 48, 16], QuadKind::Extra, "-".to_string()),
+            ]
+        );
+        for (_, x) in &g {
+            assert_eq!((x.first_present, x.frames, x.quads), (1, 3, 3));
+            assert_eq!(x.ranges_str(), "1-2,4");
+        }
+        assert!(g[0].1.ex_ref.is_some() && g[0].1.ex_port.is_some());
+        assert!(g[1].1.ex_port.is_none() && g[2].1.ex_ref.is_none());
+        let tsv = rep.groups_tsv();
+        assert_eq!(tsv.lines().count(), 4);
+        assert!(tsv.lines().all(|l| l.split('\t').count() == 14));
     }
 
     fn menu(name: &str, clr: bool, min: (usize, f64)) {

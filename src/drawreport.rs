@@ -292,7 +292,7 @@ where
     };
     let mut html = String::from(
         "<!doctype html><meta charset=utf-8><title>drawdiff</title><style>body{font:13px monospace;background:#222;color:#ddd}\
-         img{width:480px;image-rendering:pixelated;margin:2px}pre{white-space:pre-wrap}h2{color:#fc6}</style>",
+         img{width:480px;image-rendering:pixelated;margin:2px}td{padding:0 6px}pre{white-space:pre-wrap}h2{color:#fc6}</style>",
     );
     let _ = write!(
         html,
@@ -301,6 +301,40 @@ where
         esc(names.1),
         esc(&rep.summary())
     );
+    std::fs::write(out.join("groups.tsv"), rep.groups_tsv())?;
+    let groups = rep.sorted_groups();
+    let _ = write!(
+        html,
+        "<h2>difference groups: {} (<a href='groups.tsv'>groups.tsv</a>)</h2><table>\
+         <tr><th>texture<th>rect<th>kind<th>fields<th>first present<th>scene<th>frame<th>frames<th>quads<th>presents</tr>",
+        groups.len()
+    );
+    for (k, g) in &groups {
+        let ex = format!(
+            "ref: {}\nport: {}",
+            crate::drawlog::quad_str(&g.ex_ref),
+            crate::drawlog::quad_str(&g.ex_port)
+        );
+        let _ = write!(
+            html,
+            "<tr title='{}'><td>{}<td>{},{},{},{}<td>{}<td>{}<td>{}<td>{}<td>{}<td>{}<td>{}<td>{}</tr>",
+            esc(&ex).replace('\'', "&#39;"),
+            esc(&k.0),
+            k.1[0],
+            k.1[1],
+            k.1[2],
+            k.1[3],
+            k.2.name(),
+            crate::drawlog::fields_str(k.2, k.3),
+            g.first_present,
+            g.first_scene,
+            g.first_scene_frame,
+            g.frames,
+            g.quads,
+            g.ranges_str()
+        );
+    }
+    html.push_str("</table><p>hover a row for its example ref / port quad</p>");
     for (i, e) in entries.iter().enumerate() {
         let _ = write!(
             html,
