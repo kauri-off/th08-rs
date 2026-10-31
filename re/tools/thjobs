@@ -17,7 +17,7 @@ def sh(*a):
 
 def unit_props(unit):
     out = sh("systemctl", "--user", "show", unit, "-p", "ActiveState", "-p", "SubState", "-p", "MemoryCurrent",
-             "-p", "CPUUsageNSec", "-p", "ActiveEnterTimestampMonotonic", "-p", "ExecMainStartTimestamp", "-p", "Description")
+             "-p", "CPUUsageNSec", "-p", "ActiveEnterTimestampMonotonic", "-p", "InactiveEnterTimestampMonotonic", "-p", "ExecMainStartTimestamp", "-p", "Description")
     return dict(l.split("=", 1) for l in out.splitlines() if "=" in l)
 
 
@@ -74,7 +74,12 @@ def render():
         elif j["exit"] is not None or p.get("ActiveState") == "failed":
             state = Text(f"failed {j['exit'] if j['exit'] is not None else ''}".strip(), "bold red")
         else:
-            state = Text(p.get("ActiveState", "?"), "dim")
+            # stopped from outside (systemctl stop / kill): the wrapper wrote no exit code; record when it ended
+            state = Text("stopped", "magenta")
+            if not j.get("legacy") and j["end"] is None:
+                mono = int(p.get("InactiveEnterTimestampMonotonic", "0") or 0)
+                j["end"] = now - (time.monotonic() - mono / 1e6) if mono else now
+                open(os.path.join(STATE, j["name"] + ".end"), "w").write(str(j["end"]))
         start = j["start"]
         if start is None and active:
             mono = int(p.get("ActiveEnterTimestampMonotonic", "0") or 0)
@@ -89,7 +94,7 @@ def render():
             for g in globs:
                 pat, cnt, w = (g.split("|") + ["", ""])[:3]
                 st.append((len(globmod.glob(os.path.join(j["dir"], pat))), int(cnt) if cnt else 0, float(w) if w else 1.0))
-            done = sum(d for d, _, _ in st)
+            done = sum(min(d, c) if c else d for d, c, _ in st)
             total = j["total"] or sum(c for _, c, _ in st)
             if total:
                 if all(c for _, c, _ in st):
@@ -122,7 +127,7 @@ def render():
     head = Text.assemble(("th08 jobs  ", "bold cyan"), f"load {la[0]:.1f}/{os.cpu_count()}  ",
                          f"mem avail {mem['MemAvailable'] / 2**20:.1f}G/{mem['MemTotal'] / 2**20:.0f}G  ",
                          f"disk free {du.free / 2**30:.0f}G  ", (time.strftime("%H:%M:%S"), "dim"))
-    return Group(head, t, Text("thjobs log NAME — follow a job's log · thjobs clean — forget finished jobs", "dim"))
+    return Group(head, t, Text("thjobs log NAME — follow a job's log · thjobs clean — forget finished / stopped jobs", "dim"))
 
 
 def main():
@@ -133,7 +138,7 @@ def main():
         os.execvp("journalctl", ["journalctl", "--user", "-u", unit, "-f", "-n", "200", "-o", "short-iso"])
     if a[:1] == ["clean"]:
         for j in jobs():
-            if j.get("legacy") or j["exit"] is None:
+            if j.get("legacy") or (j["exit"] is None and j["end"] is None):
                 continue
             for ext in (".json", ".exit", ".end"):
                 p = os.path.join(STATE, j["name"] + ext)
