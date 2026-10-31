@@ -1044,3 +1044,16 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   boss cut-in ffff1f1f vs c0ffffff during a death freeze (12 §5.8).
 - TOOL: stg5bg/6bg/7bg near-plane vertices compared in clip space (06 §11.2); centre / off_vp ignore z<0 / rhw<=0 vertices.
 - Worst dl3 recordings: only skipped classes remain (orbit stars, glyph snap ties, loader race).
+
+# RE-Q69 (2026-10-31) — close-out audit of the remaining draw groups (specs/changelog/answers_re_q69.md)
+- Runs re/work/runs/q69 (CHECKPOINT.md; portcopy = master a29585a src unchanged, target/re69). Tools: dump.py/ex.py (rows with
+  example deltas), cls.py (classifier → classes.tsv / totals.tsv / rowcls.tsv; edit the two dirs for the next compare),
+  fd.py (all records of one present), rc.py (playfield-rect colours), sel.py (pause cursor), rn.sh (q68 copy, golden from sessions/golden).
+- CODE BUGs: "Press Shot Button" = draw-time counter 0x17CEA54, 3rd draw, period 60, alpha leaks into the ASCII colour,
+  cleared by GM step 3 (12 §1); game-over DyingUpdate returns 0 → no same-frame respawn clear (09 §6.2); queued ASCII
+  strings get the global tint (12 §2.9); fps text queued once per present from the draw (15 §3.3); pause/continue colour
+  writes are whole ARGB before input + VM run, (−4,−4) is the undrawn pos_offset (12 §3/§4). INFERRED: port's bomb tint
+  request one present late when the bomb ends inside a fast-forward pass (06 §10.2, verify after the fixes).
+- Open: 78684 9771 replay loader wait (no prompt, no interrupt 2); udfl24 87251 Youmu rect 0xFF06060A in the ref log (54840
+  shows the coded white fade); single fast-forward presents with sub-pixel camera offsets (57 presents, 1 248 rec×frames).
+- Result: 99.9 % of rec×frames in both sets accepted (precision / race); after the 5 CODE BUGs ≈ 1 440 rec×frames open.

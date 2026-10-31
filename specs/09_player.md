@@ -355,6 +355,13 @@ also last vx/vy +0xE2A9C/+0xE2AA0 := 0); at t > 29:
 state 1, pos = (192, 448 − 64), timer 0, scale 3, sprite script 0 if (shot < 4 and focus +3 = 0) or shot even, else 5 (**QUIRK**, VERIFIED 0x44CBF0, RE-Q65: the team test is not a focus test — teams 0 and 2 respawn with the human script 0 even when focused (+3 ≠ 0, incl. 2), teams 1 and 3 get 5 when focused; solos by parity; the sprite stays until the next focus change or horizontal start/stop script, §3; ref_b2 54194 present 29484, udL917 12629: Sakuya sprite while Remilia is focused); if lives > 0: lives −= 1, bombs :=
 trunc(sht bombs) (3); respawn starts (returns 1); else game over (0x164D0BB = 1) — lives and **bombs are not
 changed** on game over (VERIFIED 0x44CBF0, RE-Q24).
+**Return value and the same-frame respawn** (VERIFIED RE-Q69, 0x44CBF0 + caller `Player_Calc` 0x44C48F): `Player_DyingUpdate`
+returns 1 **only** in the lives > 0 branch; the game-over branch (and every other path) returns 0. `Player_Calc` runs
+`Player_RespawnUpdate` in the same frame only when the dying update returned 1 (or the player was already in state 1).
+So on the game-over frame the player is in state 1 with the values above, but no `Player_RespawnUpdate` runs: +0xE2A70
+stays 0, so `Player_UpdateInvuln` adds **no** respawn cancel rectangle that frame and the bullets keep flying (gensokyou
+udLR08 present 25756, the last gameplay frame of a game-over replay: the original still draws the 564 bullets normally).
+The respawn update runs from the next `Player_Calc` that reaches it (after a continue).
 
 ### 6.3 Respawn (state 1, `Player_RespawnUpdate`)
 Clear area for 60 frames (+0xE2A70 := 60 on **every** `Player_RespawnUpdate` call, so it counts down from 60 only after

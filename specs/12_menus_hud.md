@@ -25,8 +25,31 @@ Loading-screen state = Supervisor+0x2FC:
 |---|---|---|
 | 0 | none | surface 8 released if loaded |
 | 1 | loading | surface slot 8 drawn full screen (logo at boot); three VMs run `nowloading.anm` scripts 0, 1, 2 at the given position (draw prio 2, 0x445D3E): "now loading" pulse, text sliding in, rotating ring |
-| 2 | loaded, waiting (`Loading_Wait` 0x448972, interrupt 2 to the VMs) | as 1 plus, from the 5th frame, the ASCII text "Press Shot Button" at (288, 454), scale 0.5, alpha pulsing (frames 5–34: 255 − (t−5)·128/30, then rising back, period loop at 64 → 5) |
-| → 0 | `Loading_End` 0x44881A: interrupt 1 to the VMs (fade out), state 0 | |
+| ≥ 2 | loaded, waiting (`Loading_Wait` 0x448972: only when the state is 1 → interrupt 2 to the VMs (script label 2 = `hide_stop`, so the nowloading VMs vanish at once), state := 2) | surface 8 plus, from the counter value 5 on, the ASCII text "Press Shot Button" (exact rules below) |
+| → 0 | `Loading_End` 0x44881A: **only when the state is 1**: interrupt 1 to the VMs (fade out), state 0. A state ≥ 2 is left alone | |
+
+**"Press Shot Button" prompt** (`Supervisor_DrawLoading` 0x445BD4, VERIFIED RE-Q69; the state +0x2FC = 0x17CEA54 is
+also the prompt counter):
+1. Every Supervisor draw (prio 0) with state > 1 first does state += 1, then draws the prompt only if state > 4. So
+   with `Loading_Wait` between frames F − 1 and F, frame F draws with 3, F + 1 with 4, and **F + 2 (the third draw) is
+   the first prompt frame** (golden: `loader lwait` before present 10949 → prompt from 10951; 25139 → 25141).
+2. Alpha byte with c = the incremented state: c < 35 → 255 − trunc((c − 5)·128/30), else 255 − trunc((65 − c)·128/30)
+   (integer division, then `-1 - (char)x` = 255 − x as a byte): 255, 251, 247, … 127 (c = 35), 132, … 251 (c = 64),
+   255 (c = 65). After the draw, c > 64 → state := 5, so the next draw has c = 6: the period is 60 frames (c = 6 … 65).
+3. Drawing: `Ascii_SetScale` (0.5, 0.5) via the globals, the alpha written into the **alpha byte of the ASCII queue
+   colour** 0x4D508B (RGB keep whatever an earlier caller left, normally white), `Ascii_Printf` at (288, 454) — glyph
+   quads (287.5, 453.5)–(295.5, 461.5), advance 6.5 —, scale reset to 1.0, then `Ascii_DrawStrings` at once (all queued
+   entries, here only the prompt) and the queue count +0x8264 := 0. The colour is **not** restored: the next strings
+   queued (the HUD side panel on the first gameplay frame: score / hiscore / point rows, until a caller sets the
+   colour) use the last prompt alpha (golden present 10982: panel digits 0x7FFFFFFF after the last prompt alpha 0x7F;
+   25196: 0xE6).
+4. End: nothing in the loader clears a state ≥ 2 (`Loading_End` acts on 1 only). It is cleared by `GameMgr_Calc` step 3
+   (11 §4, `0x17CEA54 := 0` with the deferred music start), i.e. by the first gameplay calc after the release. So the
+   prompt is still drawn on the frame of the confirming SHOT press (golden 10981, alpha 0x7F) and is gone on the first
+   gameplay frame.
+In replay playback the loader normally calls `Loading_Wait` and releases before the same calc (no prompt). One
+reference (silentselene 78684 present 9771) waited 11 frames after `loader lwait` without either the prompt or the
+interrupt-2 hide (the nowloading VMs keep looping); the code above does not explain it (SPEC-GAP, RE-Q69 open).
 
 - Boot: the logo stays visible until the main-menu loader thread (0x470E10) has loaded `title01.anm` /
   `resulttext.anm` / `title00.png` and calls `Loading_End`; then the menu takes over. (00 §3.2 for title BGM.)
@@ -539,6 +562,12 @@ byte c:
   glyph set), colour forced to 0xFFFFFFFF (the entry colour is ignored);
 - `Draw2DSnap`, x += advance.
 Glyphs are 16×16 cells drawn 13 px apart (scaled). Scale applies to both the quad and the advance.
+The glyph quads go through the normal `EmitQuad` path, so the **global ANM tint** (05 §12.1, per channel
+min(255, c·tint >> 7)) applies to them like to any other VM quad when it is on during the ASCII draw pass — the
+whole-frame tint of the frame after the last bomb draw (06 §10.2) covers every queued string (HUD panel digits,
+popup messages, the fps texts). VERIFIED RE-Q69 (dl3 udM401 present 16850, udSs12 56241 / 74263: all strings
+0xFFF9F9FB-scaled, e.g. 0xFFE0B0FF → 0xFFDAABFF, 0x80 → 0x7E, while the bomb's last drawn tint was ≈ (0x7D, 0x7D, 0x7E));
+these presents are in replay fast-forward, where the bomb ramp is sampled off its identity end value.
 `Ascii_DrawGaugePercent` (§5.9) is **not** queued: it draws immediately in the caller's draw pass.
 
 ## 3. Pause menu (ASCII manager, `PauseMenu_Update` 0x4037B0, runs while paused) — VERIFIED
@@ -581,8 +610,20 @@ VM 9 (script 21, sprite 289 at (344, 412): slow-mode label) when the gameplay co
 +0x25, 15 §1; forced 0 for difficulty ≥ 4, practice and spell practice at game start, 11 §3.2) is 0 (VERIFIED 0x4037B0,
 RE-Q36). Neither script sets the flag again and the close / quit / retry interrupts go only to visible VMs, so a hidden
 VM is never seen; with slow mode on, script 21 runs and shows in normal games.
-Colours: selected 0xFFFFFFFF, others 0xFF505050 (confirm screen: selected 0xFFFF8080); the selected item is
-offset (−4, −4).
+Colours: selected 0xFFFFFFFF, others 0xFF505050 (confirm screen: selected 0xFFFF8080). Exact writes (VERIFIED
+0x4037B0, RE-Q69, golden presents 25316–25471):
+- They are **whole-dword** stores into VM +0x1F0, alpha byte 0xFF included. Each state's case writes them at its
+  **top, before** its input test, and `PauseMenu_Update` runs all ten VMs at its end. State 0 falls through into
+  case 1, so the item VMs 1–3 already hold alpha 0xFF when their interrupt-1 `alpha_time 20, 0, 255` starts on the
+  first run. That slot (op 34 `alpha_time`) starts from the current alpha (05 §5 op table), so the items are **fully opaque from the first menu
+  frame**. Only the title VM 0 and the labels, which get no colour write, fade in from 0 (golden 25316: title
+  0x0CFFFFFF, items 0xFFFFFFFF / 0xFF505050).
+- Because the colours come before the input test, a cursor move shows its new colours on the **next** frame
+  (golden: UP pressed in the frame of present 25353, Retry white from 25354).
+- The "(−4, −4) for the selected item" is a store into VM +0x288 `pos_offset` (0 for the others). Neither the item
+  scripts (no flag bit 8) nor the pause draw 0x404750 (`Draw2DSnap`, which does not add `pos_offset`, 05 §2 +0x288 / §9) use it,
+  so **no offset is visible**: the selected item is drawn at its script position (golden 25316: Resume at
+  (173.5, 239.5), not (169.5, 235.5)).
 **Draw** (0x404750, ASCII manager draw, only while paused 0x164D0BA ≠ 0; VERIFIED): flush the batch, viewport =
 playfield (32, 16, 384, 448); if the capture option bit is set and the pause state ≠ 0, draw a temporary copy of the
 capture VM (+0x1A70) with VM flag bit 13 set (z-write off) via `Draw2DSnap`; then `Draw2DSnap` each visible menu VM
@@ -606,7 +647,9 @@ sfx 10, cursor moves sfx 0 (`se_plst00`).
 ## 4. Continue / game-over menu (`ContinueMenu_Update` 0x404890) — VERIFIED
 Flow and side effects: 11 §4.2. UI: `ascii.anm` scripts 22–24 on three VMs ("continue?", "yes", "no"),
 `times.anm` script 1 with sprite = clock counter (the night clock, advanced by one at frame 15 of a continue);
-selected item colour 0xFFFF8080, other 0xFF505050; default cursor "No" (state 2) in normal games and Extra; "Yes"
+selected item colour 0xFFFF8080, other 0xFF505050 (whole-dword stores incl. alpha 0xFF at the top of states 1 / 2,
+before the input test, plus the same invisible (−4, −4) `pos_offset` store as the pause menu, §3; VERIFIED RE-Q69);
+default cursor "No" (state 2) in normal games and Extra; "Yes"
 (state 1) only in spell practice when the card was not captured (spell flag bit 9 clear) (VERIFIED 0x404890, corrected Phase 5). Input from frame 30 (state 2) / frame 4 (state 1); UP/DOWN toggle with sfx 0; confirm sfx 10.
 **Opening timing** (VERIFIED RE-Q29): game_over 0x164D0BB := 1 is written only by `Player_DyingUpdate` (calc prio 9, real
 death with no lives left) and the timeline op of `EclTimeline_Run` (enemy manager, prio 11). The ASCII calc (prio 1)
