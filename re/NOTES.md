@@ -1035,3 +1035,12 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Formulas from Timer_GetF must be f32 per operation (24-bit x87 PC, 05 §10): an f64 slide formula produced 1-px Draw2DSnap ties.
 - Effect (run g): udSr22 61.7 % → 99.6 %, 50948 86.9 % → 98.2 %, 53406 80.4 % → 92.2 %; the rest is orbit-star precision. thjob
   (systemd-run) does not pass env vars like LIST= — put them inside the command (bash -c / a wrapper script).
+
+# RE-Q68 (2026-10-31) — stage 5/6 3D background, boss portrait tint, worst dl3 (specs/changelog/answers_re_q68.md)
+- Runs re/work/runs/q68 (CHECKPOINT.md; portcopy = q67 portcopy + `Q68NOA` (cut-in tint) + `Q68NOTOOL` (draw compare rules),
+  target/re68; rn.sh <tag> <j> <list "name to"> (session cut, draw log kept; ENVX=... passes env), b.sh, old.sh; debug env Q68DBG
+  prints clip-space vertex pairs that fail). `session --to` counts menu-relative rows (≈ present + 2400 in stage 5), not presents.
+- CODE BUG A: port Spell draw sets the 0xFFF01010 freeze tint; original Spell_Draw's only TintOn is +0x2620 (0x417A53) →
+  boss cut-in ffff1f1f vs c0ffffff during a death freeze (12 §5.8).
+- TOOL: stg5bg/6bg/7bg near-plane vertices compared in clip space (06 §11.2); centre / off_vp ignore z<0 / rhw<=0 vertices.
+- Worst dl3 recordings: only skipped classes remain (orbit stars, glyph snap ties, loader race).

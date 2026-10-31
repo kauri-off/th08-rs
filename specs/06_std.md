@@ -410,6 +410,14 @@ factor, z-write, …). Texture matrix = vm.tex_matrix with its third row's first
 **or uv_off_u ≠ 0** (the code tests uv_off_u twice and never uv_off_v — quirk: a pure-v scroll with an
 unchanged sprite keeps the previous texture matrix). Geometry: the unit quad
 (−128,−128,0)…(128,128,0) with UV (0,0)…(1,1) as a triangle strip.
+The vertices go through the D3D pipeline, which clips each triangle in homogeneous space (0 ≤ z ≤ w, §8 step 1) before
+the divide. Ground and wall quads of stg5bg / stg6bg / stg7bg often have a vertex in front of the near plane (eye z < 30)
+or on/behind the camera plane (w ≈ 0 or < 0): only the clipped polygon is drawn, so such a vertex matters through its
+clip coordinates (x, y, z, w), never through its projected screen position, which f32 rounding of the eye-space z
+(≈ 3·10⁻⁵ at w ≈ 0.002) moves by millions of pixels or flips in sign (VERIFIED RE-Q68: dl3 54440 presents 44000–49882,
+all differing stg5bg vertices agree with the reference in clip space to 2·10⁻⁴ of the quad's extent; the draw-log hook
+writes the viewport centre with z = rhw = 0 for w exactly 0). A port must clip the same way (homogeneous clipping, no
+screen-space culling of quads with such a vertex).
 
 ### 11.3 Ribbon (type 1) — VERIFIED
 Points A = quad.A + instance.pos − origin, B likewise. For each point P: `sP = project(P)`,

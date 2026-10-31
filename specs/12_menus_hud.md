@@ -1052,7 +1052,11 @@ native 22's name-only declaration, which clears bit 0), and are followed by the 
 card is active its alpha byte +0x2623 moves by 4 per frame between 0x20 and 0x80: down while the player is at
 x ≥ 64 and y < 64 (playfield coordinates), up otherwise (07 §11.1 step 1.2) — the boss name, plate, label and bonus
 line fade to alpha 0x20 when the player is under them.
-Draw (`Spell_Draw`):
+Draw (`Spell_Draw`). Its only tint call is the `AnmMgr_TintOn(+0x2620)` of step 4 (0x417A53, the single call in the
+function; VERIFIED RE-Q68): `Spell_Draw` never turns on the 0xFFF01010 freeze tint of the enemy pass / `BulletMgr_Draw`
+(06 §10.2). While GameFlags bit 10 (death freeze) is set, `BulletMgr_Draw` (prio 13) has already turned that tint off
+again, so the cut-ins of steps 1–2 are drawn untinted, e.g. a boss cut-in at alpha 0xC0 stays 0xC0FFFFFF (a 0xFFF01010
+tint would give 0xFFFF1F1F; ref500 50948 present 76517, 54840 59454, dl3 udTh03 55198).
 1. If VM 0 is visible: VM 0 Draw2DSnap, VM 2 Draw2DSnap, VM 4 Draw2DRot. The boss strips (VM 2/4 scripts 1/3)
    are therefore **only drawn while a player cut-in is visible** (QUIRK; matches the runtime ref
    `spell54_cutin_f134.png`: no strips behind the boss cut-in).
