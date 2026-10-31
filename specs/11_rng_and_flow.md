@@ -532,7 +532,15 @@ when it starts the `Supervisor_Init` thread): +0x294 = 2 (thread failed) → ret
 → **return 1**, i.e. no input poll, no scene switch, no counters; once the thread has cleared +0x290 (it also clears
 +0x294 on success) the calc goes on. So the boot hold ends on the first Supervisor calc after `Supervisor_Init` has
 finished — host thread time, not a frame count (12 §1).
-Then every frame (before the scene logic): reset some ANM manager state, run Supervisor VMs, poll input (raw word
+**AnmManager reset at the top of every calc pass** (VERIFIED 0x44548A, straight-line code right after the first early
+exit, RE-Q70; the same block is inlined in `Info_Show` 0x471181): +0x24C2 := 0xFF (vertex path), +0x24C8 := 0
+(texture-matrix sprite), +0x24BC := 0 (texture), +0x24C1 := 0xFF and +0x24C3 := 0xFF (z-write), +0x24C0 := 3 (blend),
++0x0C / +0x10 / +0x14 / +0x18 := 0, +0x24C4 := 0xFF (camera), **+4 := 0 and +0 := 0x80808080 (global tint off, 05
+§12.1)**, **+0x1C / +0x20 := 0 (screen-shake offset, 13 §3 type 1)**. It runs on every pass, so also on each restarted
+pass of a replay fast-forward frame (00 §3): a tint switched on by a draw never survives into the next frame's calc,
+and the shake offset seen by a draw is the one written by the effect calc of the **last** pass of that frame (0 when
+the shake ended or was not running in that pass). Consequences: 06 §10.2 (bomb-end tint), 13 §3 (shake).
+Then every frame (before the scene logic): the reset above, run Supervisor VMs, poll input (raw word
 0x164D528, previous 0x164D530, key-repeat flag 0x164D538), unless `gm+0x2D` (slow-mode skipped frame, §4 step 10), in which
 case input is OR-accumulated: raw word |= Input_Poll(), and **nothing else** changes: previous word, repeat flag
 0x164D538 (keeps its value from the last normal poll) and repeat counter 0x164D53C are left as they are (VERIFIED

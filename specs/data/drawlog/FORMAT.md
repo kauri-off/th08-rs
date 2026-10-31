@@ -103,7 +103,9 @@ C <t|z|tz> <colour> [<x>,<y>,<w>,<h> ...]
   A playfield capture (`Anm_CaptureToTexture` 0x466F20: `D3DXLoadSurfaceFromSurface` from the back buffer, 12 §3) appears
   in reference logs as `K screen capture.anm#0 …` followed by `K screen ? full` (or only `K screen ? full` when the
   rects differ in size, e.g. the continue menu): the D3DX load's own copy of the whole back buffer to a temporary surface
-  in the recording environment, not a game draw. A port logs only the first form; comparators ignore a missing
+  in the recording environment, not a game draw. A port logs only the first form, and **nothing** when the source
+  and destination rects differ in size (pause menu 384×448 → its 128×128 sprite rect; the reference then has only
+  `K screen ? full`, golden present 25317; RE-Q70); comparators ignore a missing
   `K screen ? full` (INFERRED from the probe's CopyRects hook, `surf_label` = `?` for a surface no slot owns; RE-Q65).
   Texture-to-texture copies through `D3DXLoadSurfaceFromSurface` (0x467040, e.g. the boss name plate 12 §5.2) are not
   device calls and never appear in reference logs; a port must not log them (RE-Q60).

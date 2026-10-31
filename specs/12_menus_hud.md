@@ -47,9 +47,20 @@ also the prompt counter):
    (11 §4, `0x17CEA54 := 0` with the deferred music start), i.e. by the first gameplay calc after the release. So the
    prompt is still drawn on the frame of the confirming SHOT press (golden 10981, alpha 0x7F) and is gone on the first
    gameplay frame.
-In replay playback the loader normally calls `Loading_Wait` and releases before the same calc (no prompt). One
-reference (silentselene 78684 present 9771) waited 11 frames after `loader lwait` without either the prompt or the
-interrupt-2 hide (the nowloading VMs keep looping); the code above does not explain it (SPEC-GAP, RE-Q69 open).
+5. Timing against a session recording (`loader lwait poll B`, data/drawlog README): `Loading_Wait` ran between frames,
+   before the calc of the frame with poll index B, so the **draw of frame B is the first one with state 3** and the
+   prompt starts with the draw of frame B + 2. The state must not change before the prio-0 draw of frame B − 1 has run
+   (golden: B = 10935 = present 10949, prompt from 10951; a state set in the calc of poll B − 1 shows it from 10950
+   with every alpha one step ahead — VERIFIED RE-Q70).
+In replay playback `GameManager_StageStart` waits for ≥ 80 loading frames (GameFlags bit 3; else ≥ 30), calls
+`Loading_Wait`, then sleeps while GameFlags bits 5–6 ≠ 0 before the release (VERIFIED 0x43B84A–0x43B8A8, RE-Q70);
+normally `lwait` and `release stage` share one poll (no prompt). One reference (silentselene 78684) logs `lwait` at
+poll 9818 (present 9771) but `stage`/`release` at poll 9829 (present 9782), and its draw log shows neither the
+interrupt-2 hide nor the prompt in presents 9771–9781 (the nowloading VMs keep looping). Since `Loading_Wait` with
+state 1 always hides the VMs on the next VM run, its body cannot have run before the frame of poll 9829: the probe
+logs `lwait` at the hook on the function **entry** (0x448972, before the body), so the loader thread was delayed
+between the log and the body. INFERRED host/probe artefact (loader thread timing, like §5.9), not game behaviour; a
+port replaying that recording at poll 9818 hides the VMs and shows the prompt (accepted, class L).
 
 - Boot: the logo stays visible until the main-menu loader thread (0x470E10) has loaded `title01.anm` /
   `resulttext.anm` / `title00.png` and calls `Loading_End`; then the menu takes over. (00 §3.2 for title BGM.)
@@ -624,6 +635,22 @@ Colours: selected 0xFFFFFFFF, others 0xFF505050 (confirm screen: selected 0xFFFF
   scripts (no flag bit 8) nor the pause draw 0x404750 (`Draw2DSnap`, which does not add `pos_offset`, 05 §2 +0x288 / §9) use it,
   so **no offset is visible**: the selected item is drawn at its script position (golden 25316: Resume at
   (173.5, 239.5), not (169.5, 235.5)).
+- **Interrupts** (VERIFIED 0x4037B0, RE-Q70). State 0: interrupt 1 to VMs 0–3 **only** (VM 3 also in replay);
+  VMs 7 (difficulty, script 19), 8 and 9 get none — their scripts have no `hide_wait_interrupt`, so they start
+  their `alpha_time 20, 0, 255` on the first run (golden 25316: label alpha 25, 38, 51, … = 255·t/20 from t = 2;
+  an extra interrupt 1 one frame later restarts it from 12 and gives 24, 36, 48, …). The close interrupts are sent
+  **in the branch that changes the state**, in the same call, and the VMs run at the end of that call:
+  confirm on Resume (state 1) → interrupt 2 to VMs 0–3 and interrupt 1 to the capture VM (+0x1A70 +0x1FE; capture.anm
+  script 0 label 1 = `alpha_fade 0, 30`), state 4; confirm on "yes" (states 5 / 7) → interrupt 2 to VMs 4–6 only,
+  state 9 / 10 (the difficulty / practice / slow labels stay); "no" (6 / 8) → interrupt 1 to VMs 0–3, interrupt 2 to
+  4–6; the shortcuts (checked before the state switch, any state but the target) ESC → state 4, interrupt 2 to every
+  **visible** VM (flag bit 0) and interrupt 1 to the capture VM; Q → 9 and R → 10 (not in replay), interrupt 2 to every
+  visible VM. States 4 / 9 / 10 themselves send nothing (golden 25452–25470: after "yes" the three confirm VMs fade
+  f2, e5, … 0c and are gone at 25471; the difficulty label stays 0xFFFFFFFF).
+- **Capture timing**: state 0 only **queues** the capture (`AnmManager_QueueCapture`, above); it is copied after the
+  Present of that frame. The capture VM is drawn from that same frame on (state ≠ 0 after the call), so the first menu
+  frame shows the **previous** content of the capture.anm texture (alpha 0x11), and from the next frame on the texture
+  holds that first menu frame's playfield, menu VMs included. Same for the continue menu (§4).
 **Draw** (0x404750, ASCII manager draw, only while paused 0x164D0BA ≠ 0; VERIFIED): flush the batch, viewport =
 playfield (32, 16, 384, 448); if the capture option bit is set and the pause state ≠ 0, draw a temporary copy of the
 capture VM (+0x1A70) with VM flag bit 13 set (z-write off) via `Draw2DSnap`; then `Draw2DSnap` each visible menu VM
@@ -828,6 +855,10 @@ sets the full-screen viewport (0, 0, 640, 480) as its first action; the ASCII st
 bit 4 (Supervisor+0x150 bit 4, never set by the shipped cfg): (480, 40) and (480, 56) at z 0.49; (480, y) at z 0.48 for
 each dirty row: y 88 (dirty bits 0–1), 104 (2–3), 136 (4–5), 152 (6–7), 168 (8–9), 184 (10–11); and **always (512, 464) at
 z 0.48** (bottom-right corner under the fps text).
+All panel sprites (blank patches, tiles 13, strips 14, VMs 0–11, label) go through `Draw2DSnap`/`Draw2DRot` →
+`EmitQuad`, so they get the **global ANM tint** like every VM (05 §12.1): on a whole-frame bomb-tint present
+(06 §10.2) the panel quads are tinted too (udSe43 present 32812: front.anm 0xFFF9F9FF; VERIFIED RE-Q70). Only the
+power gauge quad (raw untextured vertices) is not tinted.
 **Full repaint condition** (tiles, strips, VMs): cfg+0x38 bit 12, **or tile VM 13 (impl+0x2254) still has a running
 script (ip ≠ NULL)** — front.anm script 13 ends with `stop` at time 200, so the first 200 HUD run frames after a
 **fresh-start** `Hud_Load` always repaint (golden: 199 consecutive full-repaint frames from the stage-1 start; on a
@@ -862,9 +893,13 @@ VMs. Each frame strip 14 is also drawn along y = 464 for x = 32, 160, 288 (x < 3
 6. ASCII strings, queued in this order: **score row y 56** (`%.9d` displayed score, then x +117 = 605 continues
    used), **hiscore row y 40** (`%.9d` hiscore, x 605 hiscore continues), scale reset to 1; then, each only if
    its field is dirty or cfg4: graze (y 152), point items (y 168: value, "/" with scale x 0.5, y 1 (8 px glyph), value; table below), time (y 184,
-   whole row 0xFFFFF0C0 when time ≥ threshold, colour reset to white after);
+   whole row 0xFFFFF0C0 when time ≥ threshold; `Ascii_SetColor(0xFFFFFFFF)` at the end of the time-row block,
+   i.e. **whenever the time row is drawn, independent of the threshold**, and not at all on frames where it is not
+   drawn — VERIFIED 0x43625D, RE-Q70; golden 10982: the leaked prompt alpha 0x7F covers score … time rows incl. the
+   time "/", the power text after it is white);
 7. flush; if dirty(power) or cfg4: the gauge quad **only when power > 0**, then the power text ("MAX" at ≥ 128,
-   else `%d`);
+   else `%d`) at (488, 136) — queued **after** all step-6 rows, so it is the last panel string in the ASCII queue and
+   takes the queue colour left by step 6 (white after a drawn time row; VERIFIED 0x43625D, RE-Q70);
 8. every non-zero dirty field −1 (order lives, power, bombs, graze, point, time).
 So the score/hiscore rows are queued every frame, the other rows only for 2 frames after a change (a field set to 2
 is drawn in two consecutive frames = both back buffers).

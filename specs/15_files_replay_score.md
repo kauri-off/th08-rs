@@ -769,7 +769,10 @@ bottom right of the playfield"):
   seconds, the "%.02ffps" text is formatted, the count is reset and the window restarts at now. The window start is
   taken at the first run after boot and is **never reset by scenes, stage starts or demos** (only when the clock goes
   backwards), so the refresh phase inside a demo depends on everything since boot (boot and menu load times are host
-  thread times, 12 §1). Model for a port at 60 Hz: one window per 30 drawn frames counted continuously from boot.
+  thread times, 12 §1). Model for a port at 60 Hz: one window per 30 drawn frames counted continuously from boot. In a replay
+  fast-forward present the host time per present is that of several calc passes, so the refresh lands on a different
+  present than in a port counting drawn frames (udSe43: "58" from present 32811 in the original, the port still shows
+  "60" at 32814; RE-Q70): an accepted host-timing difference, like the first refresh after boot.
 
 ### 3.4 Stage record (0x24 header + streams)
 

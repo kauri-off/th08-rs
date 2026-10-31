@@ -242,6 +242,11 @@ re-initialise at T = 279.
   54840 present 286); then a white playfield rectangle, alpha 255 until T = 100 then 255 − (T − 100)·255/60 until
   T = 160. Youmu and Youmu LS are the only bomb draws with two tint calls in one frame (Alice LS and the dissolve
   spell call it on exclusive branches).
+  The rectangle is `Screen_FillRect` 0x45B1E0 with the colour in EDX (0xAAFFFFFF from the stack bytes FF FF FF A at
+  0x41235F–0x4123C0); the function stores EDX into all four vertex colours (0x45B2E5–0x45B2FD) and draws untextured
+  (COLOROP/ALPHAOP SELECTARG1 DIFFUSE), no global tint (VERIFIED RE-Q70). The dl3 log of gensokyou udfl24 presents
+  87251–87322 records this quad as 0xFF06060A (= that frame's stage-quad colour), which this code cannot produce;
+  INFERRED probe/log artefact (ref500 54840 logs the coded white fade); a port draws the white fade.
 
 ### 2.12 Youmu LS — 人鬼「未来永劫斬」 (0x4123D0 / 0x412FA0), dur 250, invuln 300
 Passes isLastSpell = 0 to `Bomb_Start` (QUIRK). Same dash (T < 40) and effect 0x28 (0xFFFF8080) at T = 40.

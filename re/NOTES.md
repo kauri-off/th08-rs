@@ -1057,3 +1057,15 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Open: 78684 9771 replay loader wait (no prompt, no interrupt 2); udfl24 87251 Youmu rect 0xFF06060A in the ref log (54840
   shows the coded white fade); single fast-forward presents with sub-pixel camera offsets (57 presents, 1 248 rec×frames).
 - Result: 99.9 % of rec×frames in both sets accepted (precision / race); after the 5 CODE BUGs ≈ 1 440 rec×frames open.
+
+# RE-Q70 (2026-11-01) — IMPL148 questions, last open draw items (specs/changelog/answers_re_q70.md)
+- Runs re/work/runs/q70 (CHECKPOINT.md, scratch.diff, cls.py → totals_148.tsv; portcopy = master ebe04ae + scratch
+  fixes, target/re70; `Q70=1` env = debug prints of bomb calc/draw, tint request/consume, restarts).
+- Key find: `Supervisor_Calc` 0x44548A resets AnmManager at the top of every calc pass: tint off (+4/+0), shake offset
+  +0x1C/+0x20 := 0, render caches (11 §7). That explains the FF-only bomb-end tint lag (C) and the FF sub-pixel shifts
+  (C2). Also: panel sprites are tinted (12 §5.3); the power text is queued after the time row; the time-row white reset
+  happens only when the row is drawn (Q1); the prompt counter must start with the draw of frame B (session lwait);
+  pause: state-0 interrupt set, close interrupts in the transition branch, capture VM interrupt 1, queued capture.
+- Accepted: 78684 lwait gap = probe hook at the `Loading_Wait` entry + loader delay (L); udfl24 Youmu rect colour = log
+  artefact (`Screen_FillRect` EDX path); fps digits in FF presents (host time).
+- CODE BUGs 1–7 for IMPL149; after them only accepted classes + 10 rec×frames of single-present U remain.

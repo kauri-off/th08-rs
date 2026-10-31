@@ -357,6 +357,16 @@ HUD, ascii, dialogue text — up to `Spell_Draw`'s own on/off when a boss card n
 no tint-off at all: `Player_UpdateBomb`'s only `AnmMgr_TintOff` is in the bomb-start block, 09 §7, VERIFIED RE-Q44;
 whole-frame tint VERIFIED RE-Q65, ref_b2 udLe29 present 1902: last frame of a 40-frame spell-practice dissolve,
 every quad incl. HUD at 0xFFABABAB = tint 0x56); the frame after that is clean.
+**Per-calc reset (VERIFIED RE-Q70).** Besides those callers, `Supervisor_Calc` (calc prio 0) switches the tint off
+inline at the top of **every calc pass** (AnmManager +4 := 0, +0 := 0x80808080, 11 §7). The tint therefore never lives
+longer than the draw pass that turned it on: Stage_DrawLow's `AnmMgr_TintOn` covers that frame's draws only, and the
+next frame starts untinted until its own Stage_DrawLow. That is why "the frame after that is clean": with no new
+request, the next Stage_DrawLow turns nothing on. At normal speed this is invisible (the last bomb draw, timer =
+duration, requests 0x80808080 = neutral), but in a **replay fast-forward present** (several calc passes, 00 §3) the
+last bomb draw can fall before the ramp end (udSe43 presents 32811–32813: the last bomb draw at timer 198 requests
+0x807D7D82; present 32812 = whole frame tinted 0xFFF9F9FF incl. HUD and ASCII; present 32813 completely untinted).
+A port must reset the tint (and the shake offset, 13 §3) at the start of every calc pass, not only per presented frame.
+The bomb draw fn itself is called from `Player_Draw` 0x44D530 iff Player +0xFDC (bomb active) ≠ 0 (VERIFIED RE-Q70).
 
 ### 10.3 `Stage_DrawLayer(layer)` — VERIFIED
 

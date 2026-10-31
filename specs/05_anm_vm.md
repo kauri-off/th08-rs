@@ -440,6 +440,8 @@ enable flag** (≠ 0 → tint active). When enabled, every channel **including a
 Both colour paths do it (vertex colour in `AnmManager_EmitQuad`, texture-factor colour in
 `AnmManager_SetRenderState` 0x4623C0). `AnmManager_DrawCustomQuad` 0x464DD0 (stage ribbons, 06 §11.3) pushes the
 caller's vertex colours unchanged: no tint (VERIFIED RE-Q63).
+The tint is switched off (+4 := 0, +0 := 0x80808080) at the top of every `Supervisor_Calc` pass together with the
+cache reset below (11 §7, VERIFIED RE-Q70), so a tint never carries over into the next frame's draws (06 §10.2).
 
 ### 12.2 Draw-skip test and colour2
 All draw entries (modes 0–5, `Draw3DWorld`, `DrawCustomQuad`) skip the VM when flag bit 0 (enabled) or bit 1
@@ -476,7 +478,10 @@ in the original too (06 §seams).
 ### 12.5 Render state at frame start
 The per-frame "reset" (0x462E00, called right after BeginScene) only empties the vertex batch; it does **not**
 touch any D3D state or the caches. So each frame starts with whatever blend / z-write / camera / texture the
-last draw of the previous frame left (the caches still describe it correctly). Blend bits 4–5 of a VM:
+last draw of the previous frame left (the caches still describe it correctly). The caches are invalidated instead by `Supervisor_Calc` at the
+start of every calc pass (blend +0x24C0 := 3, z-write +0x24C1/+0x24C3 := 0xFF, vertex path +0x24C2 := 0xFF, texture
++0x24BC := 0, texture-matrix sprite +0x24C8 := 0, camera +0x24C4 := 0xFF; 11 §7, VERIFIED RE-Q70): the D3D state
+itself is kept, the first draw of the frame just sets it again. Blend bits 4–5 of a VM:
 0 → DESTBLEND INVSRCALPHA, 1 → DESTBLEND ONE (additive); 2 and 3 set nothing (the previous blend stays).
 Fog is switched off by the frame loop before the draw chain (`Supervisor_FogOff`).
 
