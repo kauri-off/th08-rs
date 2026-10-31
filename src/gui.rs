@@ -408,10 +408,7 @@ impl Task<Ctx> for Gui {
         self.flush_texts(ctx);
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         gfx.set_viewport(PLAYFIELD);
-        // Tint 0xFFF01010 only while GameFlags bit 10 (06 §10.2).
-        if self.player.borrow().freeze_bullets() {
-            (anm.tint, anm.tint_on) = (0xFFF01010, true);
-        }
+        // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4 (12 §5.8, RE-Q68).
         let v = &mut self.vms;
         // Boss strips (VM 2/4) are drawn only while the player cut-in VM 0 is visible: original quirk (12 §5.8 step 1).
         if Self::shown(&v[0]) {

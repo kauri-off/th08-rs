@@ -956,29 +956,63 @@ fn off_vp(vp: [f32; 4], q: &[Vtx; 4]) -> VpSide {
     }
 }
 
+// A vertex in front of the near plane (z < 0) or on/behind the camera plane (rhw <= 0): its screen position is f32
+// noise around w ≈ 0, D3D clips it in homogeneous space (06 §11.2, RE-Q68 tool rule).
+fn clip_vertex(v: &Vtx) -> bool {
+    v.z < 0.0 || v.rhw <= 0.0
+}
+
+// `off_vp`, except that a quad with a clip-space vertex is never dropped: its screen bbox is not its visible extent (06 §11.2).
+fn quad_side(vp: [f32; 4], q: &[Vtx; 4]) -> VpSide {
+    if q.iter().any(clip_vertex) {
+        VpSide::In
+    } else {
+        off_vp(vp, q)
+    }
+}
+
+// Matching centre from the vertices with z in [0, 1] and rhw > 0 when only some are: a near-plane vertex (~1e6 px,
+// 13 §2.6c) or a camera-plane one (06 §11.2) would move it out of the matching window although compare() accepts it.
+fn match_centre(q: &[Vtx; 4]) -> [f32; 2] {
+    let inr: Vec<&Vtx> = q
+        .iter()
+        .filter(|v| (0.0..=1.0).contains(&v.z) && v.rhw > 0.0)
+        .collect();
+    if !inr.is_empty() && inr.len() < 4 {
+        let n = inr.len() as f32;
+        [
+            inr.iter().map(|v| v.x).sum::<f32>() / n,
+            inr.iter().map(|v| v.y).sum::<f32>() / n,
+        ]
+    } else {
+        [
+            (q[0].x + q[1].x + q[2].x + q[3].x) / 4.0,
+            (q[0].y + q[1].y + q[2].y + q[3].y) / 4.0,
+        ]
+    }
+}
+
+// Homogeneous clip coordinates (x·w, y·w, z·w, w) of a logged vertex, w = 1/rhw (0 for rhw 0) (06 §11.2).
+fn clip_coords(v: &Vtx, vp: [f32; 4]) -> [f64; 4] {
+    let w = if v.rhw == 0.0 {
+        0.0
+    } else {
+        1.0 / v.rhw as f64
+    };
+    let nx = (v.x as f64 - vp[0] as f64) / (vp[2] as f64 * 0.5) - 1.0;
+    let ny = 1.0 - (v.y as f64 - vp[1] as f64) / (vp[3] as f64 * 0.5);
+    [nx * w, ny * w, v.z as f64 * w, w]
+}
+
 // Comparable quads of a frame (strips split into quads); clears, copies and other polygons go to `others` as text.
 fn items<'a>(fr: &'a Frame, o: &Opts, others: &mut Vec<String>) -> Vec<Item<'a>> {
     let mut out = Vec::new();
     let push = |p: &'a Prim, q: [Vtx; 4], out: &mut Vec<Item<'a>>| {
-        let side = off_vp(p.vp, &q);
+        let side = quad_side(p.vp, &q);
         if is_fps(p, &q) || (o.playfield && !in_playfield(&q)) || side == VpSide::Off {
             return;
         }
-        // Matching centre from the vertices with z in [0, 1] when only some are: a near-plane vertex (~1e6 px, 13 §2.6c)
-        // would move it out of the matching window although compare() accepts it.
-        let inr: Vec<&Vtx> = q.iter().filter(|v| (0.0..=1.0).contains(&v.z)).collect();
-        let c = if !inr.is_empty() && inr.len() < 4 {
-            let n = inr.len() as f32;
-            [
-                inr.iter().map(|v| v.x).sum::<f32>() / n,
-                inr.iter().map(|v| v.y).sum::<f32>() / n,
-            ]
-        } else {
-            [
-                (q[0].x + q[1].x + q[2].x + q[3].x) / 4.0,
-                (q[0].y + q[1].y + q[2].y + q[3].y) / 4.0,
-            ]
-        };
+        let c = match_centre(&q);
         out.push(Item {
             order: out.len(),
             prim: p,
@@ -1046,7 +1080,37 @@ fn compare(a: &Item, b: &Item) -> u8 {
     };
     // Software-projected 3D quads (ztest=le): D3DXVec3Project precision, 4e-4 of the quad size (13 §2.6c).
     let proj = a.prim.state.contains("ztest=le");
-    for (x, y) in a.q.iter().zip(&b.q) {
+    let ha = a.q.map(|v| clip_coords(&v, a.prim.vp));
+    let hb = b.q.map(|v| clip_coords(&v, b.prim.vp));
+    let hmax = ha
+        .iter()
+        .chain(&hb)
+        .flatten()
+        .fold(0f64, |m, h| m.max(h.abs().min(1e4)));
+    for (i, (x, y)) in a.q.iter().zip(&b.q).enumerate() {
+        // 3D-quad vertex in front of / behind the camera plane: compared in clip space, no z/rhw bit (06 §11.2, RE-Q68).
+        if proj && (clip_vertex(x) || clip_vertex(y)) {
+            let (p, r) = (ha[i], hb[i]);
+            let (nx, ny) = if p[3] == 0.0 {
+                (0.0, 0.0)
+            } else {
+                (p[0] / p[3], p[1] / p[3])
+            };
+            // 2e-4 of the clip extent plus two 4-decimal roundings of the logged rhw (Δw = w²·1e-4).
+            let t = 1e-3 + 2e-4 * hmax + 1e-4 * p[3] * p[3] * (1.0 + nx.abs() + ny.abs());
+            // rhw 0 = w exactly 0, the hook loses x/y/z: only w is compared.
+            let k0 = if x.rhw == 0.0 || y.rhw == 0.0 { 3 } else { 0 };
+            if !(k0..4).all(|k| (p[k] - r[k]).abs() <= t) {
+                d |= D_POS;
+            }
+            if !close(x.u, y.u, 1e-4) || !close(x.v, y.v, 1e-4) {
+                d |= D_UV;
+            }
+            if !col_close(x.col, y.col) {
+                d |= D_COL;
+            }
+            continue;
+        }
         // A vertex outside the depth range is a near-singular projection (13 §2.6c): 1e-3 relative.
         let far = !(0.0..=1.0).contains(&x.z) || !(0.0..=1.0).contains(&y.z);
         let ptol = |v: f32| {
@@ -2077,6 +2141,88 @@ mod tests {
         assert_eq!(compare(&item(a), &item(b)) & D_POS, 0);
         let (a, b) = (quad(-1.42e6, 100.0, 0.5), quad(-1.42e6 + 200.0, 100.0, 0.5));
         assert_ne!(compare(&item(a), &item(b)) & D_POS, 0);
+    }
+
+    // 06 §11.2 (RE-Q68): clip-space compare of near/camera-plane vertices, matching centre without them, no off-viewport drop.
+    #[test]
+    fn clip_space_vertices() {
+        let vp = [32.0, 16.0, 384.0, 448.0];
+        let v = |x: f32, y: f32, z: f32, rhw: f32| Vtx {
+            x,
+            y,
+            z,
+            rhw,
+            ..Vtx::default()
+        };
+        let inside = [v(100.0, 100.0, 0.5, 0.01); 4];
+        let mut q = [v(-50.0, 100.0, 0.5, 0.01); 4];
+        q[3] = v(-3.0e6, 100.0, -5.0, -400.0);
+        assert_eq!(off_vp(vp, &q), VpSide::Off);
+        assert_eq!(quad_side(vp, &q), VpSide::In);
+        q[3] = v(-3.0e6, 100.0, 0.5, 0.0);
+        assert_eq!(quad_side(vp, &q), VpSide::In);
+        let q = [
+            v(100.0, 100.0, 0.5, 0.01),
+            v(110.0, 100.0, 0.5, 0.01),
+            v(100.0, 120.0, 0.5, 0.01),
+            v(5e6, 5e6, 0.5, -1.0),
+        ];
+        assert_eq!(match_centre(&q), [310.0 / 3.0, 320.0 / 3.0]);
+        assert_eq!(
+            quad_side(vp, &[v(-3.0e6, 100.0, 0.5, 0.01); 4]),
+            VpSide::Off
+        );
+        let p = Prim {
+            tex: "stg5bg.anm#0".into(),
+            tw: 256,
+            th: 256,
+            state: "ztest=le".into(),
+            vp,
+            kind: Kind::Quad([Vtx::default(); 4]),
+        };
+        let item = |q: [Vtx; 4]| Item {
+            order: 0,
+            prim: &p,
+            key: Default::default(),
+            q,
+            c: [0.0; 2],
+            edge: false,
+        };
+        // Same clip point (w ≈ −0.00235 vs −0.00232, clip x −380.5): screen x differs by millions of px, z/rhw too.
+        let at = |w: f64| {
+            let nx = -380.5 / w;
+            v(
+                (32.0 + (nx + 1.0) * 192.0) as f32,
+                100.0,
+                -0.01,
+                (1.0 / w) as f32,
+            )
+        };
+        let (mut a, mut b) = (inside, inside);
+        (a[0], b[0]) = (at(-0.0023498), at(-0.0023193));
+        assert_eq!(compare(&item(a), &item(b)) & (D_POS | D_Z), 0);
+        b[0] = at(-0.0030);
+        let mut b2 = b;
+        b2[0].x = a[0].x;
+        assert_ne!(compare(&item(a), &item(b2)) & D_POS, 0);
+        // rhw 0 on one side: only w is compared.
+        let (mut a, mut b) = (inside, inside);
+        (a[0], b[0]) = (v(224.0, 240.0, 0.0, 0.0), v(-1e7, 3e6, -2.0, 1e5));
+        assert_eq!(compare(&item(a), &item(b)) & (D_POS | D_Z), 0);
+        b[0] = v(224.0, 240.0, -2.0, 0.1);
+        assert_ne!(compare(&item(a), &item(b)) & D_POS, 0);
+        // Not a ztest=le quad: the old screen-space rules apply.
+        let p2 = Prim {
+            state: "ztest=always".into(),
+            ..p.clone()
+        };
+        let item2 = |q: [Vtx; 4]| Item {
+            prim: &p2,
+            ..item(q)
+        };
+        let (mut a, mut b) = (inside, inside);
+        (a[0], b[0]) = (at(-0.0023498), at(-0.0023193));
+        assert_ne!(compare(&item2(a), &item2(b)) & D_POS, 0);
     }
 
     // 13 §2.6c: ztest=le quads get 4e-4 × size; a viewport mismatch is ignored for a quad inside both viewports.
