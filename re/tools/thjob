@@ -1,11 +1,11 @@
 #!/bin/bash
-# usage: thjob NAME [-t TOTAL] [-g GLOB]... [-C DIR] -- CMD...  — run CMD as systemd user unit th-NAME (output in the journal);
+# usage: thjob NAME [-t TOTAL] [-g GLOB]... [-e VAR=VAL]... [-C DIR] -- CMD...  — run CMD as systemd user unit th-NAME (output in the journal);
 # progress = files matching the GLOBs (relative to DIR, summed) out of TOTAL; a GLOB may be 'PATTERN|COUNT|WEIGHT' (per-stage count + cost for the ETA, TOTAL then optional); view with thjobs, logs with `thjobs log NAME`
 set -e
 S=${XDG_STATE_HOME:-$HOME/.local/state}/th08-jobs; mkdir -p "$S"
-name=$1; shift; total=0; globs=(); dir=$PWD
+name=$1; shift; total=0; globs=(); envs=(); dir=$PWD
 while [[ $# -gt 0 && $1 != -- ]]; do case $1 in
-  -t) total=$2; shift 2;; -g) globs+=("$2"); shift 2;; -C) dir=$(realpath "$2"); shift 2;;
+  -t) total=$2; shift 2;; -g) globs+=("$2"); shift 2;; -C) dir=$(realpath "$2"); shift 2;; -e) envs+=(--setenv="$2"); shift 2;;
   *) echo "thjob: unknown option $1" >&2; exit 2;; esac; done
 [[ $1 == -- ]] && shift; [[ -n $name && $# -gt 0 ]] || { sed -n 2,4p "$0"; exit 2; }
 systemctl --user reset-failed "th-$name" 2>/dev/null || true
@@ -17,5 +17,5 @@ p, name, d, total, glob, *cmd = sys.argv[1:]
 json.dump({"name": name, "dir": d, "total": int(total), "glob": [g for g in glob.split("\n") if g], "cmd": cmd, "start": time.time()}, open(p, "w"))
 EOF
 q=$(printf '%q ' "$@")
-systemd-run --user --unit "th-$name" --working-directory="$dir" --description="th08 job $name" \
+systemd-run --user --unit "th-$name" --working-directory="$dir" --description="th08 job $name" "${envs[@]}" \
   bash -c "$q; rc=\$?; echo \$rc > '$S/$name.exit'; date +%s > '$S/$name.end'; exit \$rc"
