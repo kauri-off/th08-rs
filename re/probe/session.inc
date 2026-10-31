@@ -233,6 +233,13 @@ static void sess_scan(int pass) {
                 U32(e + 0x2D88), U32(e + 0x2D8C), U32(e + 0x2D34), U32(e + 0x2D38), U32(e + 0x2D70), U32(e + 0x2D74), (int)U32(e + 0x2DFC), (int)U32(e + 0x3304),
                 (int)U32(e + 0x2E14 + 8), U32(e + 0x2DA4), (int)U32(e + 0x2DF8), (int)U32(e + 0x2E10), (int)U32(0x18B8A24));  /* RE-Q53: time-orb acc */
         { uint32_t spr = U32(e + 0x230); fprintf(o, "S %d spr %08x %08x\n", j, spr ? U32(spr + 0x34) : 0, spr ? U32(spr + 0x30) : 0); }
+        if (getenv("TH08_SCANVM")) {  /* RE-Q66: main VM colour / colour2 / flags / script / sprite, raw +0x38..+0x104, e+0x2E20 */
+            uint32_t v = e + 0xC;
+            fprintf(o, "V %d col %08x c2 %08x fl %08x scr %d spr %d e2e20 %08x raw", j, U32(v + 0x1F0), U32(v + 0x1F4), U32(v + 0x1F8),
+                    (int16_t)U16(v + 0x21A), (int16_t)U16(v + 0x214), U32(e + 0x2E20));
+            for (int q = 0x38; q < 0x104; q += 4) fprintf(o, " %08x", U32(v + q));
+            fprintf(o, "\n");
+        }
         if (getenv("TH08_SCANORB"))  /* RE-Q57: mode-3 orbit angle/av/radius/rv, centre, vel, game speed */
             fprintf(o, "M %d ang %08x av %08x r %08x rv %08x c %08x %08x vel %08x %08x gs %08x mm %08x\n", j, U32(e + 0x2D9C), U32(e + 0x2DA0), U32(e + 0x2DB0), U32(e + 0x2DB4),
                     U32(e + 0x2DD0), U32(e + 0x2DD4), U32(e + 0x2D4C), U32(e + 0x2D50), U32(0x17CE8E0), U32(e + 0x3324));

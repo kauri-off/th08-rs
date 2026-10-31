@@ -258,8 +258,14 @@ T = 70, 0x412FB4 / 0x412FD6) but the rectangle is red (0xFF0000).
   (angle, 1, 4), angle = π/4, 3π/8, π/2, 5π/8 (slot 4 at the start position, the others at p); slots 5–7 get
   VM scripts 0x59 / 0x5A / 0x5B (slot 4 keeps 88). SE 0xD at T = 0. Draw: tint only.
 - Effect 0x24 init (0x411720) re-spawns its own fixed slot as a type-0x23 ring (angle = param.x, radius
-  = param.y, width = param.z) and then sets update 0x4114E0, 44 segments, width 4. The re-spawn leaves the slot
-  with type 0x23 and **script 88** (type 0x23's); slots 5–7 then get 0x59–0x5B from the bomb.
+  = param.y, width = param.z, `Effect_SpawnFixedParam` colour 0xFFFFFFFF) and then sets update 0x4114E0, 44 segments,
+  width 4. The re-spawn leaves the slot with type 0x23 and **script 88** (type 0x23's); slots 5–7 then get 0x59–0x5B
+  from the bomb. **Colour**: the spawn writes its colour argument into VM colour +0x1F0 **after** `AnmFile_SetScript`
+  (VERIFIED 0x425870 / 0x4259E0), so the script's t = 0 `color` op is overwritten: slot 4 (no second script start)
+  draws white RGB (script 88's `color 128, 128, 255` never shows), slots 5–7 get the colours of 0x59–0x5B
+  (192, 128, 255 / 255, 128, 255 / 255, 128, 128) because the bomb's own `AnmFile_SetScript` runs after the spawn
+  (VERIFIED RE-Q66, silentselene 54214 present 6300: slot 4 ffffff, slot 5 c080ff, slot 6 ff80ff). The same holds for
+  0x25 (§2.14). Ring z = the player z (13 §2.5).
 - Lifetime: the update always returns 1 (never frees); the effect is freed when its VM reaches `hide_stop`:
   scripts 88–91 (etama entry 2 scripts 12–15): additive, alpha 0 → 255 over 20, at t = 80 → 0 over 60, hidden
   and freed at **t = 140** (the side rectangles keep their own area lifetimes) (changelog/answers_impl11.md §11, VERIFIED).

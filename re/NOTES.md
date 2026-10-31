@@ -1005,3 +1005,18 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
   list-B `s += D` always (13 §2.6c).
 - Restart 2026-10-31 after a poweroff: runs d (classification, A–G) and g (final, A–N; golden_g) in re/work/runs/q65.
 - Precision (skip): list-B push flips (udXu01 3285, 50404 1866, udEL01 2500); spark snap ties (udCz17 2200, 51394 4222).
+
+# RE-Q66 (2026-10-31) — draw-log groups on the 36 dl3 recordings (specs/changelog/answers_re_q66.md)
+- Runs re/work/runs/q66 (CHECKPOINT.md; portcopy = q65 portcopy + Q66 scratch behind `Q66NO{A,B,C,D,F,H}` and the session
+  tool switch `Q66NOTOOL`, target/re66). Tools: drawdiff_src (= src drawdiff snapshot, writes groups.tsv), dcf.sh (session +
+  groups per recording), gr.sh, cut.sh / qs.py (present windows / records), run_rpy_cmd.sh. Debug env Q66E (enemy draw print).
+- Probe: `TH08_SCANVM=1` (with TH08_SCAN) adds `V` lines (enemy main VM colour / colour2 / flags / script / sprite, raw
+  +0x38..+0x104, e+0x2E20) to scan.txt (re/probe/session.inc). Session mode ignores probe_cmd.txt (no `peek` there).
+- CODE BUGs: effect freeze reads GameFlags bit 10 live (13 §2.3); plain ring z = centre z (13 §2.5); Yukari boundary
+  slot 4 white (14 §2.13); ScreenEffect alpha / amplitude from Timer_GetF (13 §3); Hud_ShowBonus only when ≠ 0 (12 §5.5);
+  enemy main VM colour round-trips through e+0x2E20 (07 §10.1 step 5). TOOL: ASCII counter boot offset (12 §5.10).
+- Precision classes seen (not fixed): op-128 orbit stars 0.03 px (billboard projection), two stars at one centre mis-paired,
+  0.9-scaled message glyph snap ties, loader race at present ~240 (12 §5.9).
+- Effect (run f, 36 dl3, all T=): identical 90.66 % (dl3 base) / 94.77 % (IMPL144) → 96.58 %, merged groups 3864 / 3159 → 517.
+  Golden 25333 in the scratch port = same without the Q66 fixes (scratch-base menu-after-game code); next open item: stage-5
+  playfield flash `-` [32,16,416,464] alpha 0x3E vs 0x40, 4 presents too long (12 recordings).

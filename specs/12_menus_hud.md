@@ -913,7 +913,7 @@ All popup strings are queued with the ASCII clip flag +0x8274 = 1 (set at the st
 the playfield viewport (§2.9).
 | trigger | text | pos / duration |
 |---|---|---|
-| `Hud_ShowBonus(n)` 0x437DDD (spell-end bullet/enemy bonus, boss kill) | " BONUS %8d" colour 0xFFFFFF80 | starts (416, 48); x slides by −312 over 30 frames (to 104); 250 frames |
+| `Hud_ShowBonus(n)` 0x437DDD (spell-end bullet/enemy bonus, boss kill; both callers — `EnemyMgr_Calc` death modes 0–2 of a boss with no card active, and `Spell_End` unless spell flag bit 3 — call it, and add the score, **only when n = CancelBonus + KillAll ≠ 0**: a boss killed with nothing left to cancel keeps the previous popup running; VERIFIED `EnemyMgr_Calc` 0x42C660 death switch / `Spell_End` 0x4161B0, RE-Q66, silentselene 54440 present 22953) | " BONUS %8d" colour 0xFFFFFF80 | starts (416, 48); x slides by −312 over 30 frames (to 104); 250 frames |
 Timing (VERIFIED `Hud_Update` 0x435900, RE-Q33): the show call sets x = 416 and the timer t := 0. Each `Hud_Update`:
 if t < 30: x := f32(t·(−312)/30 + 416) with t the timer **before** this frame's tick, else x := 104; then if t ≥ 250
 (bonus) / 180 (message) / 280 (spell bonus) the popup is switched off; then the tick. A popup shown before the
@@ -1225,6 +1225,14 @@ else 1 if the enemy's main VM colour2 flag (bit 17, the hit flash) is set, else 
 counter equals the main-menu-relative frame number: 1 after the calc of the first menu frame, N after menu frame N, through
 menus, loading screens, pauses and gameplay (golden: counter == poll on every row checked up to 4400). A port that counts
 from its own boot registration is 13 ahead (13 mod 4 = 1: the mode-3 blink one frame early).
+**Slow boots** (RE-Q66): the registration happens when the boot loader thread gets there, so when the boot takes longer
+than usual the boot calc passes after the registration do call `Ascii_Calc` and the counter runs ahead of the menu
+frame number by that many passes — host timing, not replay data. The session probe records the counter at the first
+gauge setup (`loader gauge poll B … asciicalc C`, data/drawlog/README): offset = C − B. dl3 recordings: offset 0 or −1
+(the same-frame setup race) when the boot took ≤ 32 calc passes; 30 / 31 / 34 / 34 / 2 for gensokyou udM401 (45 boot
+calcs), udRo09 (46), silentselene 52279 (49), 78684 (48), 80415 (20) — exactly the five recordings whose marker blink
+(mode 2, % 8) is out of phase with a port counting from the menu (VERIFIED RE-Q66). A session comparison must start the
+port's counter at that offset; a live port has no such offset (the visible effect is only the blink phase).
 Then `Draw2DSnap(M_k)` (still subject to the VM's visible bit and alpha ≠ 0). The colour bytes are overwritten by the
 draw every frame, so after the 30-frame fade-in the script alpha no longer matters. Golden draw log: `ascii.anm#0`
 quad (199.5, 463.5)–(247.5, 479.5), uv (0, 0.9375)–(0.1875, 1), colour 0x60FFFFFF / 0x80FF4040 during the stage-1 boss.

@@ -173,7 +173,13 @@ Fixed slots in use: 0 invulnerability ring, 1 spell-card start ring, 2 youkai au
 
 ### 2.3 Per frame (`EffectMgr_Calc`, calc prio 13)
 For all 653 slots: inactive → free its heap buffer. Active: count it; if bullets are frozen (0x164D0B4 bit 10)
-and +0x357 = 0 → not updated (still drawn). Else: update fn (if any) → 0 frees; then `AnmVm_Run` → script
+and +0x357 = 0 → not updated (still drawn). Bit 10 is read **live** from GameFlags for every slot (VERIFIED 0x427BF0,
+RE-Q66), not from a copy taken at the end of `Player_Calc`: a spell-card death in the enemy calc (prio 11:
+`Enemy_ContactTest` → `Player_HitTestNoBomb`, or the laser tests of ECL natives 9 / 11 / 25 → `Player_LaserTest`)
+sets bit 10 before `EffectMgr_Calc` (prio 13), so that frame's effect update, `AnmVm_Run` and age tick are already
+skipped (gensokyou udVn17 present 27576: the op-128 orbit stars hold from the hit frame on; one extra update leaves
+every live effect VM one frame ahead — rotation / alpha — for the rest of its life). A hit in `BulletMgr_Calc`
+(prio 14) freezes the effects from the next frame. Else: update fn (if any) → 0 frees; then `AnmVm_Run` → script
 finished frees; else age ticks. Survivors are linked (in slot order) into a draw list unless type = 0x40:
 - layer 1 or ≥ 3 → list B (background); layer 2 → list C; layer 0: +0x355 → list D (over bullets),
   else VM blend additive → list E, else list A.
@@ -197,9 +203,12 @@ inner edge u1 (+ uv_off_u); WRAP addressing, so a 16×768 sprite in a 128-px tex
 ring (`Anm_RingSetUV` 0x464B00; changelog/answers_impl9.md §P2). Geometry:
 n = segments (+0x324), r = radius (+0x314, from VM pos.x), w = half width = (+0x320, VM scale.x) /
 sin((π − 2π/n)/2), start angle +0x318 (VM rotation z), step 2π/n, centre +0x2E0 (+ playfield origin).
-Vertex z (VERIFIED 0x427450, RE-Q32): plain ring = 0 + centre z (the polar helper writes x, y; the centre add includes
-z, which is 0 for every spawner), ellipse and wavy ring := 0 after the add; rhw 1. So ring vertices are at z 0, not
-the 0.07 of the list-A/E sprites.
+Vertex z (VERIFIED 0x427450, RE-Q32, RE-Q66): plain ring = 0 + centre z (the polar helper writes x, y; the centre add
+includes z), ellipse and wavy ring := 0 after the add; rhw 1. The centre is the spawn position, so a plain ring
+spawned at the player position carries the player z: 0.49 from `Player_Load`, 0.2 after a respawn (09 §6). Seen on
+the Yukari boundary rings (14 §2.13, silentselene 54214 present 6277 z 0.49, 7251 / 17112 z 0.2) and in YmYy
+(gensokyou udM401: strips at z 0.49 and 0.2); every other ring strip in the dl3 logs has z 0. Not the 0.07 of the
+list-A/E sprites.
 - +0x32C (VM pos.y) = 0 → plain ring: outer r + w, inner r − w.
 - else if +0x334 = 0 → rotated **ellipse**: vertex = rotate((cos θ·(r ± w), sin θ·(a ± w)), +0x330) with
   a = +0x32C, θ = 0, 2π/n, … (used by effects 0x2B/0x2C and the Youmu slash 0x30, 14 §2).
@@ -481,6 +490,11 @@ ref500 udKe02 present 214: three 70–140 px rotating `etama.anm#1` quads (z ≈
 ## 3. Screen effects (`ScreenEffect_Register` 0x45B8B0, object "ScreenInf" 0x34 bytes, calc prio 3)
 Call: ECX = type, EDX = p0, stack: p1 (+0x18), p2 (+0x1C), p3 (+0x20), draw priority. Object: +0 type,
 +0x10 current alpha (or amplitude), +0x14 p0, +0x18 p1, +0x1C p2, +0x20 p3, +0x24 release flag, +0x28 Timer.
+**Time t in every formula of the table below is `Timer_GetF` = cur + frac** (x87, the tick adds game speed), not
+the integer cur; the end / range tests (`Timer_Less`, `Timer_GreaterEq`, `Timer_LessEq`) compare the integer cur
+(VERIFIED 0x45B160, 0x45B760, 0x45BC90, 0x45B800, 0x45BDC0, 0x45BF10, RE-Q66). At game speed 1 frac stays 0; under a
+slowdown the alpha / amplitude changes every frame: silentselene 77236 present 39707 (Extra boss defeat, speed 0.25),
+flash (3: 30, 1, 0xFFFFFFFF) draws alpha 255, 247, 245, 243, 241, 238, … (t = 0, 1, 1.25, 1.5, …).
 Calc returning 0 removes the effect (on-remove frees it).
 **Initial alpha** (VERIFIED RE-Q59, 0x45B8B0): the object is zero-filled at registration (all 0xD dwords, timer
 included), so +0x10 = 0 until the first calc writes it. Every draw fn builds its colour as +0x10 << 24 | colour
@@ -507,7 +521,7 @@ Draw priority: **every** code call passes 0x15 (bombs, Yukari square updates, EC
 | 0 | dur / colour RGB | fade **from** colour: alpha = trunc(255 − 255·t/dur); ends t ≥ dur | full screen 640×480 (resets the viewport) |
 | 1 | dur / amp start / amp end | **shake**: a = p1 + t·(p2 − p1)/dur; screen offset x and y each = one of {0, +a, −a} chosen by `Rng_Range(3)` (**2 RNG draws/frame**, x first); per calc, in this order (VERIFIED 0x45BDC0, RE-Q24): GameFlags bit 10 (11 §2.1) or freeze byte 0x160F534 set → **frozen** (return 1: no tick, no RNG, effect kept); else 0x18B8A2C ≠ 0 (written by ECL native 30 (data: 1 then 0 a few frames later), 2 at the end of `StageStart`, 1 by `GameMgr_OnRemove`, 0 by Result/MainMenu register; `Supervisor_Calc` decrements it once per frame while ≠ 0) → return 0: the effect is **removed** at once (no RNG, it does not resume); else tick, then t ≥ dur → removed (no RNG on that frame), else a and the 2 draws; ends t ≥ dur (offset left as is, but the popup draw 0x405420 at draw prio 14 zeroes AnmManager +0x1C/+0x20 every frame, so draws after prio 14 — HUD, ASCII strings — never shake) | none |
 | 2 | dur / colour | fade **to** colour (0x45B760): 0x18B8A2C ≠ 0 → return 0 (removed) before anything else; else alpha = trunc(255·t/dur) (if dur ≠ 0, ≥ 0), then t ≥ dur → removed, else tick unless paused (0x164D0BA) or game-over menu (0x164D0BB) | playfield (32,16)–(416,464) |
-| 3 | dur / repeats / ARGB | **flash**: alpha = A − trunc(t·A/dur) (A = colour alpha); at dur: repeats −= 1, restart; ends at 0 repeats | playfield, colour = p2 RGB |
+| 3 | dur / repeats / ARGB | **flash** (0x45BC90): 0x18B8A2C ≠ 0 → removed; cur < dur: alpha = A − ftol(A·t/dur) (A = colour alpha, x87, ≥ 0); else alpha := 0, repeats −= 1, repeats < 1 → removed, else timer := 0; then tick | playfield, colour = p2 RGB |
 | 4 | dur / colour | as 2 (fade to colour) | full screen |
 | 5, 6 | dur / colour | darken: alpha = trunc(128·t/dur) up to dur then held; when +0x24 is set: alpha = 128 − 128·t/8, ends after 8 frames | 5 full screen, 6 playfield |
 | | | **used at loading** (changelog/answers_impl15.md §Q6): `0x4489CA(0)` registers type 5, p0 = 60, colour 0, draw prio 1 (global 0x17CE750) from `GameMgr_OnRegister` when the previous scene is 1 and from `MainMenu_OnRegister`; its calc (prio 3) does not run during stage loading, so alpha stays 0; `Loading_Wait` / `Loading_End` release it (timer 0) → game frames 1..9 draw alpha 0x80, 0x70 … 0x00, removed at frame 10 | |

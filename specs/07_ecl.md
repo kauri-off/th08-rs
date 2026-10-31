@@ -707,7 +707,14 @@ interpolation start/end values (beyond the 0x208 bytes `AnmVm_Init` clears) are 
    e+0x534C ≠ 0: entries shift up (for i = n − 1 down to 1: entry[i] = entry[i − 1], n = e+0x534E), then
    entry[0] = current final pos, velocity, angle. A phase-change re-run therefore shifts twice that frame. Data: n 15
    (21 uses) and 90 (1 use).
-5. Run main ANM VM and the two sub VMs (a finished sub VM is disabled).
+5. Run main ANM VM and the two sub VMs (a finished sub VM is disabled). **Colour copy** (VERIFIED `EnemyMgr_Calc`
+   0x42C660, RE-Q66): right before `AnmVm_Run` of the main VM, VM colour +0x1F0 (e+0x1FC) := e+0x2E20, and right after
+   it e+0x2E20 := VM colour. e+0x2E20 is first written at the spawn (§4.1 step 5). So the colour (alpha included) that the
+   main VM's own script reached survives every later script start (`AnmFile_SetScript` / `AnmVm_Init` reset it to
+   0xFFFFFFFF: direction animation §9.3, ECL anm ops): the new script starts from the old colour, and only its `color` /
+   `alpha` ops and interpolations change it. Example: silentselene 77236 present 39707, Extra boss script id 12 had
+   faded to alpha 0x80; the direction-animation restart (script id 7) keeps drawing at 0x80FFFFFF (session probe
+   `TH08_SCANVM`: VM colour and e+0x2E20 both 0x80FFFFFF after the restart). Sub VMs have no such copy.
 6. Unless flags A bit 4, 5 or 11 is set, **or bit 31 is set while the player is bombing** (player +0xFDC ≠ 0; VERIFIED
    0x42C6A0, RE-Q29 — this is the whole "player-state exception"): contact test with the player (bit 2, 0x42C290, box
    = hitbox e+0x2D70): (a) if flag A bit 7 and the enemy timer e+0x2E14 advanced and is a multiple of 6:
