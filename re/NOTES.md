@@ -1020,3 +1020,18 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Effect (run f, 36 dl3, all T=): identical 90.66 % (dl3 base) / 94.77 % (IMPL144) → 96.58 %, merged groups 3864 / 3159 → 517.
   Golden 25333 in the scratch port = same without the Q66 fixes (scratch-base menu-after-game code); next open item: stage-5
   playfield flash `-` [32,16,416,464] alpha 0x3E vs 0x40, 4 presents too long (12 recordings).
+
+# RE-Q67 (2026-10-31) — worst batch500 draw-log recordings, stage-5 flash, IMPL141 questions (specs/changelog/answers_re_q67.md)
+- Runs re/work/runs/q67 (CHECKPOINT.md; portcopy = q66 portcopy + Q67 scratch behind `Q67NO{A..D}`, target/re67). Tools: dc.sh
+  (LIST of ref500 names or E=dl3; session + drawdiff_src groups → q67/<tag>_g/), dd.sh (groups only), fl.sh (playfield flash
+  alphas per present), final.sh.
+- Common theme: Timer-based values under a slowdown. The original computes formulas from `Timer_GetF` (cur + frac) and tests
+  on the integer cur; the port had int cur in formulas (laser width/alpha, HUD popup slide) or f32 in tests (popup life).
+- CODE BUGs: flash type 3 ticks after the repeat reset (13 §3); popup life on int cur (13 §4); laser width/alpha from GetF
+  (08 §6.3, also hit-box → logic); HUD popup timers tick at game speed (12 §5.5); Spell_End dirty write only with a card,
+  ContinueMenu 0x17CE8CC := 8 only at the resume (12 §5.3, IMPL141 Q1/Q2).
+- Remaining in the 6 worst after Q66+Q67: orbit-star precision / mis-pairs, message glyph snap ties, menu after a game.
+  Open (not analysed): face_st05/04a/04b cut-in portrait colour ffff1f1f vs c0ffffff (~25 frames, 3 recordings).
+- Formulas from Timer_GetF must be f32 per operation (24-bit x87 PC, 05 §10): an f64 slide formula produced 1-px Draw2DSnap ties.
+- Effect (run g): udSr22 61.7 % → 99.6 %, 50948 86.9 % → 98.2 %, 53406 80.4 % → 92.2 %; the rest is orbit-star precision. thjob
+  (systemd-run) does not pass env vars like LIST= — put them inside the command (bash -c / a wrapper script).

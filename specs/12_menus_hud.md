@@ -832,7 +832,7 @@ globals_xref plus `Hud_Load`):
 |---|---|
 | `Hud_Load` (every stage) | all six → 2 |
 | `Hud_DrawPanel` full repaint | all six → 2 |
-| `Spell_Start` 0x4152A0, `Spell_End` 0x4161B0 | +0x04 \|= 0xF (lives and bombs fields := 3) |
+| `Spell_Start` 0x4152A0 (every call), `Spell_End` 0x4161B0 (only inside its card-active block, spell flag bit 0 set: after the bonus / capture part, before sfx 0xF and `Stage_EndSpellBg`; a call with no active card writes nothing) | +0x04 \|= 0xF (lives and bombs fields := 3) (VERIFIED RE-Q67, IMPL141 Q1) |
 | `GameMgr_Extend` 0x439B29 | lives → 2 (life added), else bombs → 2 (bomb added) |
 | msg op 9 (10 §9, stages 1–5, shots 3/10/11 below 3 bombs) | bombs → 2 |
 | `ItemMgr_Calc` bomb item (bombs < 8 only) | bombs → 2 |
@@ -870,7 +870,7 @@ cleared every frame), only relevant for draw-log parity.
 - 2: `Gui_ShowPlayerSpellName` / `Gui_ShowBossSpellName` (spell-name plates), `Hud_ShowBonus`, `Hud_ShowMessage`, 
   `Hud_ShowSpellBonus`, `Frame_Present` after a failed Present + device reset; 
 - 3: WinMain after a device reset; 
-- 8: `ContinueMenu_Update`; `Hud_Calc` raises it to 8 while the Skip key (input 0x100) is held; 
+- 8: `ContinueMenu_Update` **only** in state 3 (continue accepted) on the call where its counter +4 > 0x59 — the resume call that closes the menu and resets lives / bombs / power (0x40512A, the function's only write; VERIFIED RE-Q67 byte scan of every 0x17CE8CC reference, IMPL141 Q2); `Hud_Calc` raises it to 8 while the Skip key (input 0x100) is held; 
 - 0x10: `Hud_Load`; 0x3C: `GameManager_StageStart` (after the loader wait, with `_g_GmLoading` := 0); 0x1BA: `Msg_Run` op 14 (10 §5.1, the white flash); 
 - 0: `Supervisor_Init`.
 A port that redraws the whole screen every frame can ignore it.
@@ -916,7 +916,7 @@ the playfield viewport (§2.9).
 | `Hud_ShowBonus(n)` 0x437DDD (spell-end bullet/enemy bonus, boss kill; both callers — `EnemyMgr_Calc` death modes 0–2 of a boss with no card active, and `Spell_End` unless spell flag bit 3 — call it, and add the score, **only when n = CancelBonus + KillAll ≠ 0**: a boss killed with nothing left to cancel keeps the previous popup running; VERIFIED `EnemyMgr_Calc` 0x42C660 death switch / `Spell_End` 0x4161B0, RE-Q66, silentselene 54440 present 22953) | " BONUS %8d" colour 0xFFFFFF80 | starts (416, 48); x slides by −312 over 30 frames (to 104); 250 frames |
 Timing (VERIFIED `Hud_Update` 0x435900, RE-Q33): the show call sets x = 416 and the timer t := 0. Each `Hud_Update`:
 if t < 30: x := f32(t·(−312)/30 + 416) with t the timer **before** this frame's tick, else x := 104; then if t ≥ 250
-(bonus) / 180 (message) / 280 (spell bonus) the popup is switched off; then the tick. A popup shown before the
+(bonus) / 180 (message) / 280 (spell bonus) the popup is switched off; then the tick. The three timers (impl +0x22DA0 / +0x22DC0 / +0x22DE0) are `Timer`s ticked by `Timer_Tick`, i.e. at **game speed**: the x formula uses `Timer_GetF` (cur + frac; (t·(−312))/30 + 416 with each x87 operation rounded to f32 — 24-bit precision control, 05 §10: f64 arithmetic gives 1-px `Draw2DSnap` differences, ref500 udFa11 present 7222), the `t < 30` and lifetime tests the integer cur. Under a slowdown the slide is smooth and the popup lives 250/gs frames (speed 0.5: the " BONUS" row stays ~500 frames; VERIFIED `Hud_Update` 0x435900, ref500 udSr22 present 7659–7956, RE-Q67). A popup shown before the
 same frame's `Hud_Update` is therefore drawn at 416 on its first frame, at 405.6 on the second, and drawn for
 250/180/280 frames. (RE-Q33 golden: a port one tick ahead drew the rows 10.4 px left for 30 frames.)
 | `Hud_ShowMessage(v, type)` 0x437E5D | Callers (VERIFIED RE-Q34, byte scan of every `call` rel32 / absolute reference: exactly 4 sites): `Item_CollectPowerSmall` 0x440B0F and `Item_CollectPowerBig` 0x440D91 (type 1, 08 §8.5), `ItemMgr_Calc` 0x44120A (type 1, full-power item), `Spell_End` 0x416823 (type 5/6, 07 §11.1); no code writes the type field +0x22DBC except these, `Hud_Load` and the expiry, so **types 2, 3 and 4 are never shown** (unused text). 1 "Full Power Mode!" (power items at max) and 3 "CherryPoint Max!": colour 0xFFC0B0FF, scale 1; 2 "Supernatural Border!!", 4 "Border Bonus %7d", 5 "Spell Bonus Failed", 6 "Last Spell Failed": scale **x 0.9, y 1.0**, colour **0xFFE0B0FF**, `Ascii_SetAdvance(11)` that is reset to 13 before the draw, so the effective advance is 13·0.9 (§2.9) (VERIFIED 0x438A89, RE-Q33) | (416, 168) sliding like above; 180 frames |

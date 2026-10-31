@@ -315,7 +315,8 @@ The laser pointer is stored in the enemy's laser slot (07 §9.4).
    size = (L × 0.7 if tail > 0 else L, width/2), L = head − tail. The player position is rotated by −angle about
    the origin; then box overlap with the player hitbox (half-extents player+0x3D4) using **half** the size above.
 3. Body VM: scale_x = width / sprite width, scale_y = L / sprite height, rotation = wrap(angle + π/2).
-4. State 0: if flag bit 0: VM alpha = min(255, trunc(t·255/startup)). Else current width = t·width/startup when
+4. (Timer +0x588; in steps 4 and 6 the alpha and width **formulas** use `Timer_GetF` = cur + frac, computed in the order t·width/startup, width − t·width/fade, t·255/startup with every x87 operation rounded to f32 (24-bit precision control, 05 §10; alpha truncated by ftol), every test — `t > startup − min(startup, 30)`, `t ≥ collision start`, `t ≥ startup`, `t % 20`, `t ≥ duration`, `t < fade-collision`, `t ≥ fade` — uses the integer cur. Under a slowdown the width therefore changes every frame (speed 0.5: 4.8, 4.4, 4.0, …), not every second frame (VERIFIED `BulletMgr_Calc` 0x431240 laser part, ref500 udSr22 present 4837, RE-Q67).)
+   State 0: if flag bit 0: VM alpha = min(255, trunc(t·255/startup)). Else current width = t·width/startup when
    t > startup − min(startup, 30), else 1.2; scale_x = current/16; **size.x := current/2** (original quirk: the
    along-axis extent is replaced, not the width). Test collision (no graze) when t ≥ collision start. When
    t ≥ startup: timer 0, state 1, current width = width, and state 1 runs this frame.
