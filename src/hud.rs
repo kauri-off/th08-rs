@@ -40,21 +40,20 @@ const RANK_TEXT: [&str; 6] = [
     "Phantasm Rank*2.0",
 ];
 
-// Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus popup: timer t (frames) and slide x (12 §5.5).
+// Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus popup: timer t and slide x (12 §5.5).
 struct ActivePopup {
     kind: Popup,
-    t: u32,
+    // Timer impl+0x22DA0 / +0x22DC0 / +0x22DE0, ticked at game speed (12 §5.5).
+    t: anmvm::Timer,
     x: f32,
 }
 
 impl ActivePopup {
     // The show call: x := 416, t := 0.
     fn show(kind: Popup) -> Self {
-        Self {
-            kind,
-            t: 0,
-            x: 416.0,
-        }
+        let mut t = anmvm::Timer::default();
+        t.set(0);
+        Self { kind, t, x: 416.0 }
     }
 
     // Popup slot = one of the three timers impl+0x22D9C / +0x22DBC / +0x22DDC.
@@ -67,10 +66,10 @@ impl ActivePopup {
     }
 
     // Hud_Update step 5: x from the timer before its tick, then the lifetime test (250 / 180 / 280), then the tick.
-    // Returns false when the popup is switched off.
-    fn update(&mut self) -> bool {
-        self.x = if self.t < 30 {
-            self.t as f32 * -312.0 / 30.0 + 416.0
+    // x from Timer_GetF in f32 per operation (05 §10); the tests on the integer cur. False = switched off.
+    fn update(&mut self, gs: f32) -> bool {
+        self.x = if self.t.cur < 30 {
+            self.t.getf() * -312.0 / 30.0 + 416.0
         } else {
             104.0
         };
@@ -79,10 +78,10 @@ impl ActivePopup {
             Popup::Message(..) => 180,
             Popup::SpellBonus(_) => 280,
         };
-        if self.t >= life {
+        if self.t.cur >= life {
             return false;
         }
-        self.t += 1;
+        self.t.tick(gs);
         true
     }
 }
@@ -1243,8 +1242,9 @@ impl Task<Ctx> for Hud {
             set_repaint(2);
             self.popups[ActivePopup::slot(p)] = Some(ActivePopup::show(p));
         }
+        let gs = ctx.anm.speed;
         for slot in &mut self.popups {
-            if slot.as_mut().is_some_and(|p| !p.update()) {
+            if slot.as_mut().is_some_and(|p| !p.update(gs)) {
                 *slot = None;
             }
         }
@@ -1557,7 +1557,7 @@ mod tests {
     fn popup_slide_and_lifetime() {
         let mut p = ActivePopup::show(Popup::Message(1, 0));
         let mut xs = Vec::new();
-        while p.update() {
+        while p.update(1.0) {
             xs.push(p.x);
         }
         // Drawn for 180 frames: 416 on the first, 405.6 on the second, 104 from frame 31.
@@ -1566,7 +1566,19 @@ mod tests {
         assert_eq!(xs[1], 1.0 * -312.0 / 30.0 + 416.0);
         assert_eq!(xs[30], 104.0);
         let mut b = ActivePopup::show(Popup::Bonus(5));
-        assert_eq!(std::iter::from_fn(|| b.update().then_some(())).count(), 250);
+        assert_eq!(
+            std::iter::from_fn(|| b.update(1.0).then_some(())).count(),
+            250
+        );
+        // RE-Q67: at speed 0.5 the slide moves every frame (GetF) and the popup lives 500 frames.
+        let mut b = ActivePopup::show(Popup::Bonus(5));
+        let mut xs = Vec::new();
+        while b.update(0.5) {
+            xs.push(b.x);
+        }
+        assert_eq!(xs.len(), 500);
+        assert_eq!(xs[1], 0.5f32 * -312.0 / 30.0 + 416.0);
+        assert_eq!(xs[60], 104.0);
     }
 
     // 12 §5.1a: 14 × 12 tiles, I4 = r + 2c, pos (32c + 15.5, 32r + 15.5), uv offset (32c/512, 32r/512).

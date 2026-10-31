@@ -1383,9 +1383,13 @@ impl ScreenEffect {
                     return Ret::Next;
                 }
             }
+            // 0x45BC90 (13 §3 type 3): 0x18B8A2C ≠ 0 → removed before anything else.
             3 => {
+                if crate::enemy::load_frames() != 0 {
+                    return Ret::Remove;
+                }
                 let a = (p2 as u32 >> 24) as i32;
-                // 0x45BC90: cur < dur → A − ftol(A·t/dur) (≥ 0), else 0.
+                // cur < dur → A − ftol(A·t/dur) (≥ 0), else 0.
                 self.alpha = if t < dur {
                     (a - (tf * a as f64 / dur as f64).trunc() as i32).max(0) as f32
                 } else {
@@ -1396,8 +1400,8 @@ impl ScreenEffect {
                     if self.p[1] <= 0 {
                         return Ret::Remove;
                     }
+                    // The common tick also runs on the reset call: t = 0 (alpha A) is drawn only on the first repeat.
                     self.timer.set(0);
-                    return Ret::Next;
                 }
             }
             5 | 6 => {
@@ -1685,8 +1689,13 @@ mod tests {
         assert_eq!(seen, [255, 247, 245, 243, 241, 238]);
         f.timer.set(30);
         f.p[1] = 2;
+        ctx.anm.speed = 1.0;
         f.step(&mut ctx);
         assert_eq!(f.alpha, 0.0);
+        // 13 §3 type 3: the reset call ticks too, so the next repeat starts at t = 1.
+        assert_eq!(f.timer.cur, 1);
+        f.step(&mut ctx);
+        assert_eq!(f.alpha, (255 - 255 / 30) as f32);
     }
 
     // 13 §2.2: one 512-slot budget per call; exhausted → dummy and the cursor is back where it started (+ extra).

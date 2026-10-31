@@ -1141,16 +1141,18 @@ impl BulletManager {
         l.body.rotation[2] = anmvm::wrap_add(l.angle, PI / 2.0);
         l.body.flags |= anmvm::F_ROT_DIRTY | anmvm::F_SCALE_DIRTY;
         if l.state == 0 {
+            // 08 §6.3 step 4: formulas from Timer_GetF in f32 per operation (05 §10), tests on the integer cur.
             let t = l.timer.cur;
+            let tf = l.timer.getf();
             if l.flags & 1 != 0 {
                 l.body.color[anmvm::A] = if l.startup > 0 {
-                    (t * 255 / l.startup).min(255) as u8
+                    laser_alpha(tf, l.startup)
                 } else {
                     255
                 };
             } else {
                 l.cur_width = if t > l.startup - l.startup.min(30) {
-                    t as f32 * l.width / l.startup as f32
+                    tf * l.width / l.startup as f32
                 } else {
                     1.2
                 };
@@ -1182,15 +1184,16 @@ impl BulletManager {
         }
         if l.alive && l.state == 2 {
             let t = l.timer.cur;
+            let tf = l.timer.getf();
             // Quirk kept (08 §6.3 step 6): the fade-out alpha divides by `startup`, not `fade`.
             if l.flags & 1 != 0 {
                 l.body.color[anmvm::A] = if l.startup > 0 {
-                    (t * 255 / l.startup).min(255) as u8
+                    laser_alpha(tf, l.startup)
                 } else {
                     255
                 };
             } else if l.fade > 0 {
-                l.cur_width = l.width - t as f32 * l.width / l.fade as f32;
+                l.cur_width = l.width - tf * l.width / l.fade as f32;
                 l.body.scale[0] = l.cur_width / 16.0;
                 size[0] = l.cur_width / 2.0;
             }
@@ -1590,6 +1593,11 @@ impl Task<Ctx> for BulletManager {
         BulletManager::draw(self, &mut ctx.anm, &mut ctx.gfx);
         Ret::Next
     }
+}
+
+// Laser alpha min(255, ftol(t·255/startup)) from Timer_GetF, f32 per operation (08 §6.3 steps 4 / 6).
+fn laser_alpha(tf: f32, startup: i32) -> u8 {
+    ((tf * 255.0 / startup as f32) as i32).min(255) as u8
 }
 
 #[cfg(test)]
@@ -2013,6 +2021,34 @@ mod tests {
         assert_eq!(pl.borrow().cancel_areas[a].total, 2);
         assert!(b.bullets[i].free() && b.bullets[j].free());
         assert_eq!((b.bullets[i].off_count, b.bullets[j].off_count), (0, 0));
+    }
+
+    // 08 §6.3 step 4 (RE-Q67): at speed 0.5 the startup width follows cur + frac every frame; the test is on cur.
+    #[test]
+    fn laser_startup_width_uses_timer_getf() {
+        let l = LaserDesc {
+            fixed: true,
+            head: 40.0,
+            max_len: 200.0,
+            width: 16.0,
+            startup: 30,
+            hit_start: 1000,
+            duration: 100,
+            fade: 10,
+            origin: [-300.0, -300.0, 0.0],
+            ..LaserDesc::default()
+        };
+        let (mut anm, mut b) = mgr();
+        let pl = b.player.clone();
+        let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
+        anm.speed = 0.5;
+        let mut w = Vec::new();
+        for _ in 0..4 {
+            b.update_laser(&mut anm, k, &mut pl.borrow_mut());
+            w.push(b.lasers[k].cur_width);
+        }
+        assert_eq!(w, [1.2, 1.2, 16.0 / 30.0, 1.5f32 * 16.0 / 30.0]);
+        assert_eq!(laser_alpha(1.5, 30), 12);
     }
 
     #[test]

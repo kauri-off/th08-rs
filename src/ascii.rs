@@ -178,9 +178,9 @@ pub fn draw_now(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, t: T
 
 // Small popups: slots 0–719 plus 3 special slots 720–722, life 60; large popups: 128 slots, life 90 (13 §4).
 pub const POPUP_SLOTS: usize = 720;
-const POPUP_LIFE: f32 = 60.0;
+const POPUP_LIFE: i32 = 60;
 const LARGE_SLOTS: usize = 128;
-const LARGE_LIFE: f32 = 90.0;
+const LARGE_LIFE: i32 = 90;
 
 // Small score popup (13 §4): digits least significant first, glyph 10 = the "PowerUp" sign.
 #[derive(Clone, Default, Debug)]
@@ -189,7 +189,8 @@ pub struct Popup {
     pub pos: [f32; 2],
     // D3DCOLOR 0xAARRGGBB; only RGB is used, the alpha byte is replaced by the distance fade.
     pub colour: u32,
-    pub age: f32,
+    // Timer ticked at game speed (13 §4); every test reads the integer cur.
+    pub age: anmvm::Timer,
 }
 
 // Large popup (13 §4): glyphs LSB first, pos in screen coordinates, scale copied from the manager at spawn.
@@ -199,7 +200,7 @@ pub struct LargePopup {
     pub pos: [f32; 2],
     pub colour: u32,
     pub scale: f32,
-    pub age: f32,
+    pub age: anmvm::Timer,
 }
 
 // Popup arrays at Ascii +0xB4DC (small) and +0x15304 (large) with their round-robin cursors (+0x8298 for large).
@@ -241,7 +242,7 @@ pub fn popup(pos: [f32; 3], value: i32, colour: u32) {
             digits: digits(value),
             pos: [pos[0] + 32.0, pos[1] + 16.0],
             colour,
-            age: 0.0,
+            age: anmvm::Timer::default(),
         });
     });
 }
@@ -255,7 +256,7 @@ pub fn popup_special(pos: [f32; 3], value: i32, colour: u32) {
             digits: digits(value),
             pos: [pos[0] + 32.0, pos[1] + 16.0],
             colour,
-            age: 0.0,
+            age: anmvm::Timer::default(),
         });
     });
 }
@@ -284,7 +285,7 @@ pub fn popup_large(pos: [f32; 3], p3: i32, p4: i32, colour: u32, scale: f32) {
             pos: [pos[0] + 32.0, pos[1] + 16.0],
             colour,
             scale,
-            age: 0.0,
+            age: anmvm::Timer::default(),
         });
     });
 }
@@ -301,9 +302,15 @@ pub fn popup_large_static(pos: [f32; 2], p3: i32, p4: i32, colour: u32) {
             pos: [x, pos[1] + 16.0],
             colour,
             scale: 1.0,
-            age: 88.0,
+            age: timer_at(88),
         });
     });
+}
+
+fn timer_at(v: i32) -> anmvm::Timer {
+    let mut t = anmvm::Timer::default();
+    t.set(v);
+    t
 }
 
 pub fn clear_popups() {
@@ -319,18 +326,18 @@ fn popups_calc(gs: f32) {
         for s in p.slots.iter_mut() {
             if let Some(q) = s {
                 q.pos[1] -= 0.5 * gs;
-                q.age += gs;
-                // Timer_Greater(60): drawn with ages 0..60 (13 §4).
-                if q.age > POPUP_LIFE {
+                q.age.tick(gs);
+                // Timer_Greater(60) 0x4066C0 compares the integer cur: drawn with ages 0..60 (13 §4).
+                if q.age.cur > POPUP_LIFE {
                     *s = None;
                 }
             }
         }
         for s in p.large.iter_mut() {
             if let Some(q) = s {
-                q.age += gs;
-                // Freed when age > 90 (13 §4): a static popup issued at 88 is drawn at 89 and 90.
-                if q.age > LARGE_LIFE {
+                q.age.tick(gs);
+                // Freed when cur > 90 (13 §4): a static popup issued at 88 is drawn at 89 and 90.
+                if q.age.cur > LARGE_LIFE {
                     *s = None;
                 }
             }
@@ -386,9 +393,9 @@ fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
             set_rgb(&mut small, q.colour);
             small.color[anmvm::A] = popup_alpha(q.pos, pl);
             // Digit glyph g → sprite g (age < 52), g + 11 (52–55), g + 21 (≥ 56).
-            let shift = if q.age < 52.0 {
+            let shift = if q.age.cur < 52 {
                 0
-            } else if q.age < 56.0 {
+            } else if q.age.cur < 56 {
                 11
             } else {
                 21
@@ -1129,9 +1136,6 @@ impl ContinueMenu {
         inp: &Input,
         audio: &mut crate::audio::Audio,
     ) {
-        // 0x17CE8CC := 8 (12 §5.3).
-        // SPEC-GAP: whether every call or only some phases write it (IMPL141 Q2).
-        crate::hud::set_repaint(8);
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
             // below in the same call.
@@ -1242,6 +1246,8 @@ impl ContinueMenu {
                     self.vms.iter_mut().for_each(|v| v.pending_interrupt = 2);
                     self.clock_vm.pending_interrupt = 2;
                 } else if self.phase_frame >= 90 {
+                    // Resume (counter > 0x59): the only 0x17CE8CC := 8 of 0x404890 (0x40512A, 12 §5.3).
+                    crate::hud::set_repaint(8);
                     g.continue_apply = true;
                     g.game_over = 0;
                     g.mark_play_time();
@@ -1487,6 +1493,22 @@ mod tests {
         assert_eq!(y, Some(216.0 - 30.0));
         popups_calc(1.0);
         assert!(POPUPS.with_borrow(|p| p.slots[0].is_none()));
+    }
+
+    // 13 §4 (RE-Q67): Timer_Greater on the integer cur, so at speed 0.5 a small popup lives 122 calcs, a static
+    // large popup (age 88) 6.
+    #[test]
+    fn popup_life_on_integer_cur() {
+        clear_popups();
+        popup([100.0, 200.0, 0.0], 500, 0xFFFFFFFF);
+        popup_large_static([100.0, 200.0], 1, 0, 0xFFFFFFFF);
+        let live = |p: &Popups| (p.slots[0].is_some(), p.large[0].is_some());
+        for n in 1..=122 {
+            popups_calc(0.5);
+            let (small, large) = POPUPS.with_borrow(live);
+            assert_eq!(small, n < 122, "small {n}");
+            assert_eq!(large, n < 6, "large {n}");
+        }
     }
 
     // 13 §4: fade by squared distance, screen pos vs playfield player (no origin correction).

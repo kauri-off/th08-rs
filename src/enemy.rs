@@ -1638,10 +1638,6 @@ impl EnemyManager {
     pub fn finish_spell(&mut self, anm: &mut AnmManager) {
         // 0x4E3D28 (darkness mask alpha) := 0 first, every call; then, with the card active, Spell_HideName.
         crate::ascii::clear_darkness();
-        // HUD +0x04 |= 0xF: lives and bombs fields := 3 (12 §5.3).
-        // SPEC-GAP: whether Spell_End's dirty write is inside its card-active block (IMPL141 Q1).
-        crate::hud::mark_lives(3);
-        crate::hud::mark_bombs(3);
         self.end_active_spell(anm);
         // Tail of every op 123 (07 §11.1, RE-Q56): after the time-reward test, the boss loses flag A bit 27,
         // g_Gui +4 := 0, spell flag bit 11 := 0.
@@ -1659,6 +1655,9 @@ impl EnemyManager {
         crate::gui::request(crate::gui::Req::BossHide);
         // Time reward from +0x114 and the remaining-time timer +0x108 (07 §11.1).
         let (total, remaining) = (s.duration, self.g.spell_remaining.cur);
+        // HUD +0x04 |= 0xF (lives and bombs fields := 3) only with a card active, before sfx 0xF (12 §5.3).
+        crate::hud::mark_lives(3);
+        crate::hud::mark_bombs(3);
         crate::sound::play(crate::sound::TAN00_LOUD);
         if let Some(st) = &self.stage {
             st.borrow_mut().end_spell_bg();
