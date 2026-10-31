@@ -116,7 +116,8 @@ Speakers 0/1 are the player side (left), 2/3 the opponent side (right).
      sprite 10 (the boss name plate, 12 §5.x), i.e. the plate switches from Tewi (0x15) to **Reisen** (0x16);
    - 6A (idx 6): spell-background script base `g_Stage+0xB34 (0x4E4B64) = 2` — the two spell-background VMs
      (0x4E4B68 / 0x4E4E0C) then use slot-9 scripts 2, 3 instead of 0, 1 (`Spell_Start` sets script +0xB34 + i);
-   - 6B (idx 7) and Extra (idx 8): swap face files of slots 2 and 3 (0x4ECC9C ↔ 0x4ECCA0), spell-background base
+   - 6B (idx 7) and Extra (idx 8): swap face files of slots 2 and 3 (0x4ECC9C ↔ 0x4ECCA0; every later reader of the
+     pointer follows the swap: dialogue portraits, boss card op, and the boss spell cut-in 12 §5.8 k = 1), spell-background base
      = 2, and plate 0x18 (**Kaguya**) / 0x19 (**Mokou**).
    (changelog/answers_impl10.md §5–6, VERIFIED. Other writers of +0xB34: `EffectMgr_OnRegister` = 0, `StageStart` = 2 in
    spell practice, 06, changelog/answers_impl10.md §5.)

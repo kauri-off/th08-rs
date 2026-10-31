@@ -352,7 +352,7 @@ spell-card failure notified; miss counter; time −= min(time/10, 500)
 item (all mode 2); attracted items fall; **rank −1600**.
 When n == 0 at entry (after death): shrink animation (q = f32(t/30) with t = `Timer_GetF` (current + fraction); VM scale y (+0x1C) = 3q + 1, scale x (+0x18) = 1 − q; VM colour (+0x1F0) := (ftol(255 − t·255/30) << 24) | 0xFFFFFF (x87, the float timer again), i.e. a fade-out with white RGB; VM blend bits 4–5 := 1, additive (`0x44E0F0`); all of this is written every such frame, before the t > 29 test; VERIFIED 0x44CF5C–0x44CFD9, RE-Q62; t = the state timer +0xE2AF4; **that timer is not reset at the real death**: it was set to 0 by `Player_Die` and has ticked once per `Player_Calc` ever since (`Player_UpdateInvuln` ticks it in every state except 3), so t counts from the hit, the shrink only covers what is left of the 30 frames after the window, and when the deathbomb window lasted ≥ 30 frames the respawn happens on the first frame with n == 0 at entry, with no visible shrink. Example (attract demo 2): hit → state 2 at frame 2907, real death 2922, state 1 at 2938 (VERIFIED 0x44CBF0, 0x44D2C0, runtime rngsite demo 2, RE-Q24); every such frame
 also last vx/vy +0xE2A9C/+0xE2AA0 := 0); at t > 29:
-state 1, pos = (192, 448 − 64), timer 0, scale 3, idle script; if lives > 0: lives −= 1, bombs :=
+state 1, pos = (192, 448 − 64), timer 0, scale 3, sprite script 0 if (shot < 4 and focus +3 = 0) or shot even, else 5 (**QUIRK**, VERIFIED 0x44CBF0, RE-Q65: the team test is not a focus test — teams 0 and 2 respawn with the human script 0 even when focused (+3 ≠ 0, incl. 2), teams 1 and 3 get 5 when focused; solos by parity; the sprite stays until the next focus change or horizontal start/stop script, §3; ref_b2 54194 present 29484, udL917 12629: Sakuya sprite while Remilia is focused); if lives > 0: lives −= 1, bombs :=
 trunc(sht bombs) (3); respawn starts (returns 1); else game over (0x164D0BB = 1) — lives and **bombs are not
 changed** on game over (VERIFIED 0x44CBF0, RE-Q24).
 
@@ -512,7 +512,14 @@ Per frame (in `Player_Move`, no dialogue, focus age ≥ 30, not bombing):
 - not shooting: B ≥ 4 → C := 0; B ≥ 30 → if |gauge| ≤ 9: gauge := 0, else drift toward 0 by 5 (beyond the
   max thresholds), 3 (beyond human/youkai), 2 (otherwise) × gs; else B ticks.
 Bomb: ±26000/duration per frame (§7). Graze in youkai mode +100. Time orbs −111/+111 (08 §8.5). Death → 0.
-At human max or youkai max an aura effect follows the player.
+At human max or youkai max an aura effect follows the player. Exact rule (VERIFIED `Player_Move` 0x44AEC0, RE-Q65): at the
+end of the gauge code, (a) if `Gauge_IsHumanMax` or `Gauge_IsYoukaiMax` and +0xE2B24 = 0: +0xE2B24 :=
+`Effect_SpawnFixed`(type 25, player pos +0x2B4, fixed slot 8, colour 0xFFFFFFFF) (13 §2.6); (b) if +0xE2B24 ≠ 0: effect
+pos := player pos (+0x2B4..+0x2BC), and if neither max holds now, effect active byte +0x350 := 0 and +0xE2B24 := 0.
+Because this is inside `Player_Move` (§1 step 6, skipped in states 1 and 2), a death leaves the aura where it was:
+it is neither moved nor freed while dying / respawning, although the death lowers the gauge, and disappears on the
+first `Player_Move` after that (state 3) (ref_b2 udL917 presents 6662–6680: the aura stays drawn at the death spot,
+frozen by the bit-10 freeze).
 
 ### 9.4 RNG side effects (important for replays)
 `GameMgr_UpdateChecksum` 0x406E50 = 2 × Rng_Range(100000) (writes two decoy values and a checksum); it runs

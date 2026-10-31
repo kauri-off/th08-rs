@@ -57,6 +57,13 @@ Loading-screen state = Supervisor+0x2FC:
   (0x45A3FD: release slot 8, move both surface pointers and the size record, clear slot 0). The loading screen of the
   following menu load shows the plain `result.jpg` (no capture). The result viewer already started the loading state, so
   the menu's `Loading_Begin` is a no-op and the banner animation continues (it started at result frame P+1).
+- Menu load after a game (VERIFIED `MainMenu_OnRegister`, RE-Q65): previous scene (0x17CE8B8) = 2 → `Loading_BeginCapture`
+  0x44886F (loading VMs + capture of the back buffer into surface slot 8 after the **next** Present) **and**
+  `Loading_StartDarken(0)` (ScreenEffect type 5, 60 frames, black, draw prio 1, 13 §3); any other previous scene ≠ 0 →
+  plain `Loading_Begin` (no capture, no darken). So the first menu frame after a game / replay end draws no surface 8
+  (none is loaded yet; the frame is not cleared, the back buffer still holds the last game frame) but the darken quad
+  at alpha 0, then the capture; from the second frame surface 8 is shown under the darken quad (alpha 2, 4, …
+  = trunc(128·t/60)) (ref_b2 udKa45 present 14622–14623, udRr19 10918+).
 - Stage start from the main menu also creates the loading darken overlay (ScreenEffect type 5, 13 §3): full-screen
   black, alpha 0 while loading, 0x80 → 0x00 over game frames 1–9, drawn at draw prio 1 (first in the frame).
 
@@ -644,7 +651,7 @@ Extra. Positions and fades come from the VMs' scripts (ascii.anm 22–24, times.
 | +0x0C / 0x10 / 0x14 / 0x18 | `front.anm` (slot 10), `stgNtxt.anm` (13), `times.anm` (14), `loadingNN.anm` (12) |
 | +0x1C | boss bar alpha 0–255 (i32; state machine §5.1b step 1) |
 | +0x20 | boss "remaining bars" count (ECL op 148) |
-| +0x24 / +0x28 | boss timer seconds / last value shown. +0x24 is written only by `Enemy_CheckTimeout` 0x42B930 (07 §10.1 step 4, called while timeout ≥ 0): for a boss (flags A bit 1) in boss slot 0 (e+0x3313 = 0) := (timeout e+0x3378 − timer e+0x2E14) / 60 (integer), i.e. with the timer value **before** that frame's step-7 tick; the HUD draws the stored value (VERIFIED RE-Q32, golden 19329: the digit changes one frame after the timer crosses the second). +0x28 is written only by `Hud_DrawBoss` (§5.4). **Lifetime** (VERIFIED RE-Q34: the only other writer of either field is the 0x27-dword (+0x00…+0x9B) zero fill of `Hud_Register` 0x437AD0, which runs from `GameManager_StageStart` only when the fresh-start flag 0x17CE8BC is set; `Hud_Load` writes neither): both are 0 after a fresh start and **keep their values** across a continuing stage (11 §7) and a continue (11 §4.2), so the first guarded `Hud_DrawBoss` of the next stage shows the previous stage's last value until `Enemy_CheckTimeout` writes a new one |
+| +0x24 / +0x28 | boss timer seconds / last value shown. +0x24 is written only by `Enemy_CheckTimeout` 0x42B930 (07 §10.1 step 4, called while timeout ≥ 0): for a boss (flags A bit 1) in boss slot 0 (e+0x3313 = 0) := (timeout e+0x3378 − timer e+0x2E14) / 60 (integer), i.e. with the timer value **before** that frame's step-7 tick; the HUD draws the stored value (VERIFIED RE-Q32, golden 19329: the digit changes one frame after the timer crosses the second). Because the call is skipped while timeout < 0, a threshold switch, a death or a timeout (each sets timeout := −1) freezes the shown value: the boss timer keeps its last digits (colour from that value) until the next op 134 starts a new count; a port must not write (−1 − timer)/60 there (VERIFIED `EnemyMgr_Calc` test `−1 < e+0x3378` before 0x42B930, RE-Q65, ref_b2 54576 4702 / 54194 5148). +0x28 is written only by `Hud_DrawBoss` (§5.4). **Lifetime** (VERIFIED RE-Q34: the only other writer of either field is the 0x27-dword (+0x00…+0x9B) zero fill of `Hud_Register` 0x437AD0, which runs from `GameManager_StageStart` only when the fresh-start flag 0x17CE8BC is set; `Hud_Load` writes neither): both are 0 after a fresh start and **keep their values** across a continuing stage (11 §7) and a continue (11 §4.2), so the first guarded `Hud_DrawBoss` of the next stage shows the previous stage's last value until `Enemy_CheckTimeout` writes a new one |
 | +0x2C | boss bar requested (byte). Writers (VERIFIED RE-Q34, every `FUN_00422C20(&g_Hud, ·)` call): ECL op 127 slot 0 → 1 (and +0x30 := 1.0), op 127 slot < 0 → 0 when the caller's boss slot e+0x3313 < 4; `Enemy_Free` of a boss (flags A bit 1, slot < 4) → 0; `EnemyMgr_Calc` death: modes 0/1 when flags A bit 1 → 0, mode 3 → 0 unconditionally (07 §10.3); `Hud_Load` → 0. It is a plain request: the bar does not test whether boss slot 0 exists |
 | +0x30 / +0x34 | target life fraction / displayed (moves +0.01 up, −0.02 down per frame). +0x30 := f32(life e+0x2DFC) / f32(max life e+0x2E00), no clamp, written by `EnemyMgr_Calc` for a boss (flags A bit 1) in slot 0 only while no dialogue runs (`Msg_IsActive` = 0); ECL op 127 with a = 0 sets it to 1.0 (VERIFIED 0x42C660, RE-Q32). The HUD life e+0x2E04 (op 177 etc.) is never read by the bar |
 | +0x3C[8], +0x5C[8], +0x7C[8] | life-bar markers: end, start (f32 fractions of the bar), colour (ECL op 158: word 1 / e+0x2E00 → start +0x5C, word 2 / e+0x2E00 → end +0x3C, word 3 → colour; e = the enemy running the op, its max life at op time; VERIFIED 0x4230E0 / 0x423110, RE-Q32) |
@@ -1004,7 +1011,7 @@ The spell manager object is `g_Gui`; `Gui_Calc` (calc prio 12) = `Spell_Calc` 0x
 | k | offset | file / script (set by) | role |
 |---|---|---|---|
 | 0 | +0x120 | player face file slot 16 (human, EDX 0) / 17 (youkai, EDX 1), script 0, sprite 0 (`Gui_ShowPlayerSpellName`) | player cut-in |
-| 1 | +0x3C4 | spell face file slot 18, script 0, sprite = face index (only if ≥ 0) (`Gui_ShowBossSpellName`) | boss cut-in |
+| 1 | +0x3C4 | face file pointer g_Gui+0x262C (0x4ECC9C, portrait k = 2, 10 §3: slot 18's file, but `Msg_Start(0)` in 6B / Extra swaps it with k = 3, slot 19, 10 §4 — so after the pre-boss dialogue the cut-in comes from the swapped file, e.g. Extra `face_st08` instead of `face_st08m`; VERIFIED 0x415F00, RE-Q65, ref_b2 51394 present 16136), script 0, sprite = face index (only if ≥ 0) (`Gui_ShowBossSpellName`) | boss cut-in |
 | 2 | +0x668 | `face_cdbg.anm` (slot 15) script 0 (player) / 1 (boss), sprite = isLastSpell (player) / 0 (boss) | vertical streak strip |
 | 4 | +0xBB0 | `face_cdbg.anm` script 2 (player) / 3 (boss), same sprite | horizontal streak strip |
 | 6 | +0x10F8 | `text.anm` script 4 (load and every player show) | player card name |
@@ -1053,7 +1060,10 @@ Draw (`Spell_Draw`):
 3. If VM 6 is visible: VM 10 pos := VM 6 pos − (32, 0); VM 10 Draw2DSnap; VM 6 Draw2DRot.
 4. If VM 7 is visible: global tint on with +0x2620 (= 0x80808080 from `Spell_Start`, neutral); VM 11 pos :=
    VM 7 pos; VM 11 Draw2DSnap; VM 7, 8, 9 Draw2DRot; VM 13 Draw2DSnap; then unless spell flag bit 10 the
-   bonus line: start = VM 13 pos + (−40, +1); bonus = +0xFC if spell flag bit 2 (still capturable) else 0,
+   bonus line: start = VM 13 pos + (−40, +1); bonus = +0xFC if spell flag bit 2 (still capturable) else 0 (both
+   read live from g_Gui at draw time, also after `Spell_End`: they are g_Gui fields, not a copy of the card, so a
+   timeout (07 §10.2: bit 2 cleared, +0xFC := 0) whose op 123 ends the card in the same frame shows "0" while the
+   line fades out; VERIFIED 0x42BC50 / 0x4178C0, RE-Q65, ref_b2 53044 present 9413),
    8 digits from 10 000 000 with leading zeros suppressed (units always), each digit = VM 12 with sprite
    0x88 + d (`ascii.anm` 8×12 digits), x += 7 after **every** one of the 8 slots (suppressed ones too); then
    x += 32: captures of this card (+8) for the current shot type (CATK story +0x158 / practice +0x1F4, capped

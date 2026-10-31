@@ -342,15 +342,21 @@ draw prio 9 every bomb frame, so at the next frame's `Stage_DrawHigh` the tint i
 on for everything drawn until something turns it off: stage layers 0–3, background effects (list B) and the
 spell-background VMs, the prio-8 enemy pass (layers 0–1) and the player's flying bullets (prio 9, drawn before
 the bomb draw fn) are tinted; `Bomb_DrawTint` itself turns it off first thing. The prio-11 enemy pass,
-`BulletMgr_Draw` (13) and `Spell_Draw` (15) set/clear the tint themselves (on with 0xFFF01010 only while GameFlags
-bit 10, then off). `Player_UpdateBomb` (only at a normal-mode bomb **start**, 09 §7; the bomb end does not) and `Player_DyingUpdate`
+`BulletMgr_Draw` (13) and `Spell_Draw` (15) set/clear the tint themselves, but only conditionally (VERIFIED 0x42EB90,
+0x432B50, `Spell_Draw` 0x4178C0, RE-Q65): the prio-11 enemy pass and `BulletMgr_Draw` turn it on with 0xFFF01010 **and
+off again only while GameFlags bit 10** (`BulletMgr_Draw` after `EffectMgr_DrawOverBullets`); without bit 10 they leave
+the tint state alone. `Spell_Draw` turns it on with +0x2620 and off only inside its "VM 7 visible" block (12 §5.8 step 4);
+otherwise it does not touch it. `Player_UpdateBomb` (only at a normal-mode bomb **start**, 09 §7; the bomb end does not) and `Player_DyingUpdate`
 (only at the real death, 09 §6.2) also turn it off (calc) (VERIFIED: the only `AnmMgr_TintOff` callers are
 `Bomb_DrawTint`, `BulletMgr_Draw`, 0x42EB90, `Player_DyingUpdate`, `Player_UpdateBomb`, `Spell_Draw`, `Stage_DrawHigh`;
 RE-Q38). Edge frames:
 first bomb frame → no request yet, no stage tint; frame after the last bomb draw → the pending request still
-tints that frame's stage and +0x646C (set by the last bomb draw) keeps it on through prio 8/9 (the bomb end has
-no tint-off at all: `Player_UpdateBomb`'s only `AnmMgr_TintOff` is in the bomb-start block, 09 §7, VERIFIED RE-Q44);
-the frame after that is clean.
+tints that frame's stage and +0x646C (set by the last bomb draw) keeps it on; with no bomb draw that frame and bit 10
+clear nothing turns it off, so it covers the **whole** frame — prio 8–11 enemies, player, items, bullets, effects,
+HUD, ascii, dialogue text — up to `Spell_Draw`'s own on/off when a boss card name is visible (the bomb end has
+no tint-off at all: `Player_UpdateBomb`'s only `AnmMgr_TintOff` is in the bomb-start block, 09 §7, VERIFIED RE-Q44;
+whole-frame tint VERIFIED RE-Q65, ref_b2 udLe29 present 1902: last frame of a 40-frame spell-practice dissolve,
+every quad incl. HUD at 0xFFABABAB = tint 0x56); the frame after that is clean.
 
 ### 10.3 `Stage_DrawLayer(layer)` — VERIFIED
 

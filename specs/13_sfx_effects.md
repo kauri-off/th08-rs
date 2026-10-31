@@ -430,8 +430,10 @@ Fade, when +0x352 is set:
   (the 0x428310 push/pull edges below) can then flip on a 1-ulp difference (RE-Q62, golden present 4439).
 - The rotation is VM rotation.z; the vertex z is s.z.
 
-**Callback 0x428310 for types 51 / 63.** It moves the projected point s in screen space; skipped while
-paused or in the continue menu (0x164D0BA / 0x164D0BB):
+**Callback 0x428310 for types 51 / 63.** It moves the projected point s in screen space. While paused or in the
+continue menu (0x164D0BA / 0x164D0BB ≠ 0) only the two D updates are skipped; the final `s += D` runs **always**, so
+the particles keep their accumulated displacement on game-over / pause frames (VERIFIED 0x428310, RE-Q65, ref_b2
+udDe13 present 1645, udCr33 3360: spell-practice game-over frame, no jump):
 
 ```
 p = s + D            # D = VM pos_end (+0x244), accumulated displacement
@@ -443,7 +445,7 @@ if pos_offset.x > −9999 (boss pull active):
 d2 = p − player pos (0x17D61AC) − (32, 16)
 if |d2|² < 88²:
     D += d2·0.02     # pushed away from the player
-s += D
+s += D               # outside the pause / game-over test
 ```
 Arithmetic (VERIFIED disasm 0x428310–0x4284A2, RE-Q62): p = `Vec3_Add`(s, D) and d = `Vec3_Sub` results are stored to
 f32 per component; the ±(32, 16) adds/subtracts are separate f32 stores and d.z / d2.z := 0 before `Vec3_LengthSq`
@@ -631,7 +633,7 @@ In order (all coordinates f32, screen space):
 `Spell_Start` calls `Stage_StartSpellBg` 0x415CE0 (stage +0xB24 = 1, +0xB28 = 0) and sets the stage's spell
 VMs (stage +0xB38 + i × 0x2A4, i < count +0xB30) to scripts +0xB34 + i of the slot-9 file. The effect manager
 on-register loads slot 9: `effNN.anm` by stage index (table 0x4C7480), or in spell practice for card ids ≥ 0xD8
-the per-character `eff09xx.anm` (table 0x4C7144); it sets count = 2, first script = 0 (ECL native 5 resets the
+the per-character `eff09xx.anm` (table 0x4C7144 indexed by card id: 0xD8 `eff09sk`, 0xD9 `eff09ym`, 0xDA `eff09al`, 0xDB `eff09rm`, 0xDC `eff09yy`, 0xDD `eff09yk` — these six pointers are entries 9–14 right after the 9-entry stage table; VERIFIED 0x4284B0 + exe bytes 0x4C74A4, RE-Q65, ref_b2 udGu03 present 305: `eff09yk.anm` spell background); it sets count = 2, first script = 0 (ECL native 5 resets the
 count to 2). Each `Stage_Calc`: if +0xB24 > 0 → when +0xB28 == 60, +0xB24 = 2 (stage background layers no
 longer drawn, 06 §7); +0xB28 += 1; run the spell VMs. `Spell_End` (0x416AD0) sets +0xB24 = 0.
 Draw (`Stage_DrawHigh`, 06 §10.2): each spell VM i < +0xB30 with `AnmManager_DrawRotFlush` 0x40BAF0 = `Draw2DRot`

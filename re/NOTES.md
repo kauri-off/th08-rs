@@ -991,3 +991,17 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Probe: `loader gauge … asciicalc C` (re/work/hook/d3d8.dll rebuilt; old one d3d8_v11_pre_q64.dll).
 - Result (q64/fix2 + fix2_golden.txt): all 20 + golden T=; golden 4439 (accepted, 7996/8000 identical); first differences
   e.g. udSi123 306 → 3395, 54840 316 → 2171, udLi14 7299 → 15470, 53020 6942 → 15778 (table in the changelog).
+
+# RE-Q65 (2026-10-30) — draw-log differences on the 20 ref_b2 recordings (specs/changelog/answers_re_q65.md)
+- Runs re/work/runs/q65 (CHECKPOINT.md; portcopy = q64 portcopy + Q65 scratch behind `Q65NO{A..N}` (no H), target/re65; dc.sh now
+  ref_b2 / batch2 list; tools dr.py (index diff), um.py (unmatched records), cutcmp.py (positional compare at a 682-cut)).
+- Tool env in the scratch drawdiff/session: `Q65SKIP=1` (pos-only precision changes not scored: list-B particle sprite
+  etama#1 [16,96,32,112] ≤ 3 px, any quad ≤ 1.01 px), `Q65DBG=1` (pass-2 pairs); missing `K screen ? full` ignored.
+- CODE BUGs A–N (list in the changelog): HUD timer while timeout < 0 (07 §10.1); trail leaves the main VM at the last
+  copy (07 §10.6); replay-end clear-frame capture (11 §4); gauge-max aura only in Player_Move (09 §9.3); bonus line after a
+  same-frame timeout + end (12 §5.8); dissolve ring segments 32 / width field (13 §2.6, 14 §2.17); menu load after a game
+  = capture + darken (12 §1); Ex boss cut-in follows the face swap (12 §5.8); respawn script team quirk (09 §6.2); start
+  ring restart reads the live timeout (07 §11.1); eff09xx spell backgrounds (13 §5); conditional tint-offs (06 §10.2);
+  list-B `s += D` always (13 §2.6c).
+- Restart 2026-10-31 after a poweroff: runs d (classification, A–G) and g (final, A–N; golden_g) in re/work/runs/q65.
+- Precision (skip): list-B push flips (udXu01 3285, 50404 1866, udEL01 2500); spark snap ties (udCz17 2200, 51394 4222).

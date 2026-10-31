@@ -969,7 +969,12 @@ bullets are frozen (0x164D0B4 bit 10). Each list is walked from its head, i.e. i
      before the vertex walk (pre-skip), and coordinate A steps down at the end of **every** walked entry, skipped ones
      included (VERIFIED RE-Q30).
      **Unreachable with retail data**: op 157 is used 22 times with flags 0 or 5 (bits 0 and 2); F bit 3 never occurs.
-   - The main VM itself is then drawn unless F bit 4 (0x10) or flag A bit 5.
+   - The main VM itself is then drawn unless F bit 4 (0x10) or flag A bit 5. **QUIRK** (VERIFIED 0x42E140, RE-Q65): the
+     main VM's draw pos (+0x208, final pos + offset + origin, z 0.25) and rotation are written **before** the trail and
+     only scale x/y and colour are restored after it, so when at least one sprite copy was drawn the main VM is drawn at
+     the **last drawn copy's** pos (the smallest drawn index i ≥ 1: E[i].pos + offset + origin), z 0.3, with that copy's
+     rotation (if flag A bit 25), not at its current position (ref_b2 udMu09 present 11473: the stage-4 boss
+     sprite lags one trail step, z 0.3). With no copy drawn (or with the F bit 3 strip) it stays at the current pos, z 0.25.
    skipped when flag A bit 5 (invisible) or trail flag 0x10;
 3. sub VM 1 (e+0x554): as sub 0 but rotation = −angle.
 Death subs: e+0x2CEE is consumed (set −1) by every jump: normal death (with full context reset), `EnemyMgr_KillAll`
@@ -1046,7 +1051,11 @@ freeze byte 0x160F534 is set. Otherwise, in this order:
       amplitude 64 → 0 over the first 100 frames, then a plain ring, 13 §2.5);
    5. if the ring VM's pos-slot duration (+0xA4 current) is 0 (the 100-frame grow-in has ended, 05 §6): restart slot
       0: elapsed := 0, duration := e+0x3378 − 100, mode 0 (linear), from (256, 0) to (8, 0) — the ring shrinks over
-      the rest of the card time;
+      the rest of the card time. e+0x3378 is read **live** from the boss (g_Gui +4), not the card duration +0x114: the
+      test repeats every frame, so when the shrink ends (duration 0) while the card is still active and the timeout is
+      already −1 (timeout reached / threshold, §10.1), the restart writes duration −101 (slot inactive, 05 §6) and the
+      ring stays at radius 8 for the rest of the card; it never restarts at 256 (VERIFIED 0x416B90, RE-Q65, ref_b2
+      54576 present 11756);
    6. unless bit 6: centre +0x2E0 += (boss pos e+0x2D34 + offset e+0x2D40 − centre) / 16, then centre z := 0
       (the ring follows the boss);
    7. rotation +0x318 := `Angle_AddNormalize`(+0x318, d) with d = −0.031415928 if (bit 0 and bit 5, i.e. last spell)

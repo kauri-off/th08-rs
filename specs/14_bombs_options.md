@@ -312,7 +312,7 @@ examined object), shake (1: 30, 8, 0), flash (3: 8, 1, 0xE0F0F0F0). Draw: all 12
 
 ### 2.17 Dissolve spell 「ディゾルブスペル」 (0x40D100 / 0x40D310)
 `Bomb_Start(dur 120, or 40 in spell practice; invuln 200; 0)`; effect 12 at p (0xFF4040FF); ring effect 0x32 in
-fixed slot 4 (0xFF4040FF): 64 segments, radius 8, width 15, 6 waves, VM pos interpolation over 90 frames
+fixed slot 4 (0xFF4040FF): ring fields (not VM fields) segments +0x324 := 64, radius +0x314 := 8, start angle +0x318 := 0, width +0x320 := 15, waves +0x334 := 6 — the VM scale is **not** written: the type-50 update 0x427A60 copies width := VM scale.x, radius := VM pos.x, amplitude := VM pos.y and segments := 32 before the first draw (13 §2.6), so the drawn width follows script 80 (scale 128 → 15 over 30 frames) from the first frame (VERIFIED 0x40D100, RE-Q65, ref_b2 udMu09 present 19319: ring half width 124.8 on the first frame); VM pos interpolation over 90 frames
 (30 in spell practice) mode 5 from (8, 64) to (128, 0) (radius 8 → 128, amplitude 64 → 0); SE 0xD; speed
 multipliers 0; flag A bit 6 of all 8 boss slots (0xF54CC0[0..7]) cleared. End handling in 09 §7.
 Trigger (changelog/answers_impl11.md §14, VERIFIED): bomb index 4 is chosen at bomb start whenever GameFlags (0x164D0B4) bits
