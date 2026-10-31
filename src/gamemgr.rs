@@ -189,6 +189,8 @@ pub struct Game {
     // Port-only: loading screen drawn this frame; frames in Loading_Wait (12 §1 "Press Shot Button").
     pub loading_shown: bool,
     pub loading_wait: u32,
+    // Supervisor+0x2FC 0x17CEA54 values ≥ 2: the "Press Shot Button" counter (12 §1); 0 stands for states 0 and 1.
+    pub load_prompt: u32,
     // 0x164D2C8 = GM +0x3DDC0 gameplay frame counter (11 §2).
     pub frame_counter: u32,
     pub cfg: crate::config::Config,
@@ -268,6 +270,7 @@ impl Default for Game {
             loading_frames: 0,
             loading_shown: false,
             loading_wait: 0,
+            load_prompt: 0,
             frame_counter: 0,
             cfg: Default::default(),
             cfg_game: crate::config::Config::default().to_bytes(),
@@ -743,6 +746,8 @@ impl GameManager {
         let g = &mut ctx.game;
         g.loading = 1;
         g.loading_frames = 0;
+        // Loading_Begin: state 1 (12 §1).
+        g.load_prompt = 0;
         // GM on-register: a cleared stage (bits 5–6 ≥ 2) waits for the confirm press.
         if g.end_state() >= 2 {
             g.set_end_state(1);
@@ -1160,13 +1165,18 @@ impl Task<Ctx> for GameManager {
                 } else {
                     if g.loading_wait == 0 {
                         crate::effect::release_loading_overlay();
+                        // Loading_Wait 0x448972 acts on state 1 only: state := 2 (12 §1).
+                        if g.load_prompt < 2 {
+                            g.load_prompt = 2;
+                        }
                     }
                     g.loading_wait += 1;
                 }
             }
             return Ret::StopFrame;
         }
-        // Step 3: deferred music start (gm+0x3DE28), Music_PlaySlot of slot 0 on 1.
+        // Step 3: 0x17CEA54 := 0 (ends the prompt, 12 §1), deferred music start (gm+0x3DE28), Music_PlaySlot of slot 0 on 1.
+        ctx.game.load_prompt = 0;
         if std::mem::take(&mut self.music_start) == 1 {
             ctx.audio.play_slot(0);
         }
@@ -1276,31 +1286,11 @@ impl Task<Ctx> for GameManager {
 
     // GameMgr_Draw 0x43AA03 (11 §3): return 3 (nothing above prio 5) when the requested scene 0x17CE8B4 ≠ 2,
     // bits 5–6 == 1 or loading ≠ 0, post-clear frames included. The port's in-calc release stands for the loader
-    // thread's after this frame, so `loading_shown` keeps that frame a loading one. In Loading_Wait "Press Shot
-    // Button" from the 5th frame, alpha pulsing with a 59-frame loop (12 §1).
+    // thread's after this frame, so `loading_shown` keeps that frame a loading one.
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let g = &ctx.game;
         if g.requested == SCENE_GAME && g.end_state() != 1 && g.loading == 0 && !g.loading_shown {
             return Ret::Next;
-        }
-        if !g.loading_shown {
-            return Ret::StopFrame;
-        }
-        let w = ctx.game.loading_wait;
-        if w >= 5 {
-            let t = (w - 5) % 59;
-            let a = if t < 30 {
-                255 - t * 128 / 30
-            } else {
-                127 + (t - 30) * 128 / 29
-            };
-            crate::ascii::draw_now(
-                &ctx.anm,
-                &mut ctx.gfx,
-                crate::ascii::Text::new(288.0, 454.0, "Press Shot Button")
-                    .scale(0.5)
-                    .color([255, 255, 255, a as u8]),
-            );
         }
         Ret::StopFrame
     }

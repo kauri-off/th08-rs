@@ -95,9 +95,19 @@ impl Text {
 }
 
 // Per-frame string queue, at most 256 entries, excess ignored (12 §2.9).
-#[derive(Default)]
 pub struct Queue {
     items: Vec<Text>,
+    // Current queue colour 0x4D5088 (RGBA here); only the callers that take "the current colour" read it (12 §1, §5.3).
+    pub color: [u8; 4],
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            color: [255; 4],
+        }
+    }
 }
 
 impl Queue {
@@ -107,10 +117,29 @@ impl Queue {
         }
     }
 
-    // Ascii_DrawStrings 0x402B20 (12 §2.9): '\n' → y += 16·scale y, ' ' → advance only, other bytes Draw2DSnap.
+    // A string in the current queue colour (12 §2.9 state copy).
+    pub fn text(&self, x: f32, y: f32, s: impl Into<String>) -> Text {
+        Text::new(x, y, s).color(self.color)
+    }
+
     fn draw(&mut self, ctx_anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, high: bool) {
+        self.draw_where(ctx_anm, gfx, Some(high));
+    }
+
+    // Ascii_DrawStrings 0x402B20 (12 §2.9): '\n' → y += 16·scale y, ' ' → advance only, other bytes Draw2DSnap.
+    // `pass` None draws every entry in queue order (the loading prompt's direct call, 12 §1).
+    fn draw_where(
+        &mut self,
+        ctx_anm: &crate::anmmgr::AnmManager,
+        gfx: &mut crate::gfx::Gfx,
+        pass: Option<bool>,
+    ) {
         let o = ctx_anm.screen_offset;
-        for t in self.items.iter().filter(|t| t.high == high) {
+        for t in self
+            .items
+            .iter()
+            .filter(|t| pass.is_none_or(|h| t.high == h))
+        {
             let vp = if t.clip {
                 crate::gfx::PLAYFIELD
             } else {
@@ -131,6 +160,8 @@ impl Queue {
                 };
                 // Draw2DSnap draws nothing for alpha 0 (05 §9); the pen still advances.
                 let drawn = c > b' ' && col[3] != 0;
+                // Glyphs are EmitQuad quads: the global ANM tint applies (12 §2.9, 05 §12.1).
+                let col = ctx_anm.tinted(col);
                 if let Some(sp) = ctx_anm.sprite(ANM_SLOT, idx).filter(|_| drawn) {
                     // Glyph VM: z 0, z-write on (12 §5.3 depth values).
                     let [u0, v0, u1, v1] = sp.uv;
@@ -165,14 +196,63 @@ impl Queue {
                 x += t.advance * t.scale;
             }
         }
-        self.items.retain(|t| t.high != high);
+        match pass {
+            Some(h) => self.items.retain(|t| t.high != h),
+            None => self.items.clear(),
+        }
     }
+}
+
+// Supervisor_DrawLoading 0x445BD4 "Press Shot Button" (12 §1): state (`Game::load_prompt`) += 1 per draw while > 1;
+// prompt from c > 4, alpha written into the queue colour and left there, then the whole queue drawn and emptied.
+pub fn loading_prompt(
+    anm: &crate::anmmgr::AnmManager,
+    gfx: &mut crate::gfx::Gfx,
+    q: &mut Queue,
+    state: &mut u32,
+) {
+    let Some(a) = prompt_step(state) else {
+        return;
+    };
+    q.color[anmvm::A] = a;
+    let t = q.text(288.0, 454.0, "Press Shot Button").scale(0.5);
+    q.push(t);
+    q.draw_where(anm, gfx, None);
+}
+
+// The counter part of the prompt (12 §1): alpha when this draw shows it; c > 64 → state 5 after the draw (period 60).
+fn prompt_step(state: &mut u32) -> Option<u8> {
+    if *state <= 1 {
+        return None;
+    }
+    *state += 1;
+    let c = *state as i32;
+    if c <= 4 {
+        return None;
+    }
+    if c > 64 {
+        *state = 5;
+    }
+    Some(prompt_alpha(c))
+}
+
+// 12 §1: c < 35 → 255 − trunc((c − 5)·128/30), else 255 − trunc((65 − c)·128/30), as a byte.
+fn prompt_alpha(c: i32) -> u8 {
+    let x = if c < 35 {
+        (c - 5) * 128 / 30
+    } else {
+        (65 - c) * 128 / 30
+    };
+    (255 - x) as u8
 }
 
 // Draws one string at once (outside the queue), in the caller's draw pass (like Ascii_DrawGaugePercent, 12 §2.9).
 pub fn draw_now(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, t: Text) {
     let high = t.high;
-    let mut q = Queue { items: vec![t] };
+    let mut q = Queue {
+        items: vec![t],
+        ..Queue::default()
+    };
     q.draw(anm, gfx, high);
 }
 
@@ -803,6 +883,12 @@ fn set_rgb(vm: &mut AnmVm, argb: u32) {
     vm.color[anmvm::B] = argb as u8;
 }
 
+// Whole-dword store into VM +0x1F0, alpha included (12 §3, §4).
+fn set_argb(vm: &mut AnmVm, argb: u32) {
+    set_rgb(vm, argb);
+    vm.color[anmvm::A] = (argb >> 24) as u8;
+}
+
 // Pause menu (12 §3); VM i runs ascii.anm script 12 + i.
 // PauseMenu_Update 0x4037B0 state machine (12 §3 table); `shown` = interrupt 1 (show) / 2 (hide) last sent per VM.
 #[derive(Default)]
@@ -881,6 +967,7 @@ impl PauseMenu {
             self.shown[P_SLOW] = g.game_slow() != 0;
             self.goto(1);
         }
+        self.write_colours();
         let pressed = |b: u16| self.frame >= 4 && inp.pressed(b);
         let confirm = pressed(input::SHOT | input::ENTER);
         let (up, down) = (pressed(input::UP), pressed(input::DOWN));
@@ -987,26 +1074,6 @@ impl PauseMenu {
             }
             _ => {}
         }
-        // Selected 0xFFFFFFFF, others 0xFF505050; confirm screen selected 0xFFFF8080 (12 §3).
-        for (i, &k) in P_ITEMS.iter().enumerate() {
-            set_rgb(
-                &mut self.vms[k],
-                if self.state as usize == i + 1 {
-                    0xFFFFFFFF
-                } else {
-                    0xFF505050
-                },
-            );
-        }
-        let yes_sel = matches!(self.state, 5 | 7);
-        set_rgb(
-            &mut self.vms[P_YES],
-            if yes_sel { 0xFFFF8080 } else { 0xFF505050 },
-        );
-        set_rgb(
-            &mut self.vms[P_NO],
-            if !yes_sel { 0xFFFF8080 } else { 0xFF505050 },
-        );
         for vm in self
             .vms
             .iter_mut()
@@ -1018,21 +1085,32 @@ impl PauseMenu {
         self.frame += 1;
     }
 
+    // Whole-dword colour stores at the top of the cursor states, before the input test (12 §3): selected
+    // 0xFFFFFFFF, others 0xFF505050; confirm screen selected 0xFFFF8080.
+    fn write_colours(&mut self) {
+        match self.state {
+            1..=3 => {
+                for (i, &k) in P_ITEMS.iter().enumerate() {
+                    let sel = self.state as usize == i + 1;
+                    set_argb(&mut self.vms[k], if sel { 0xFFFFFFFF } else { 0xFF505050 });
+                }
+            }
+            5..=8 => {
+                let yes_sel = matches!(self.state, 5 | 7);
+                let (on, off) = (0xFFFF8080, 0xFF505050);
+                set_argb(&mut self.vms[P_YES], if yes_sel { on } else { off });
+                set_argb(&mut self.vms[P_NO], if yes_sel { off } else { on });
+            }
+            _ => {}
+        }
+    }
+
     fn confirm_screen(&mut self, on: bool) {
         for k in [P_TITLE, 1, 2, 3] {
             self.show(k, !on);
         }
         for k in [P_REALLY, P_YES, P_NO] {
             self.show(k, on);
-        }
-    }
-
-    fn selected(&self, k: usize) -> bool {
-        match k {
-            1..=3 => self.state as usize == k,
-            P_YES => matches!(self.state, 5 | 7),
-            P_NO => matches!(self.state, 6 | 8),
-            _ => false,
         }
     }
 }
@@ -1191,6 +1269,14 @@ impl ContinueMenu {
             } else {
                 30
             };
+        // States 1 / 2: whole ARGB writes at the top, before the input test and the VM run (12 §4).
+        if self.phase == 0
+            && let [_, y, n] = &mut self.vms[..]
+        {
+            let (on, off) = (0xFFFF8080, 0xFF505050);
+            set_argb(y, if self.yes { on } else { off });
+            set_argb(n, if self.yes { off } else { on });
+        }
         match self.phase {
             0 if ready => {
                 if inp.pressed(input::UP) || inp.pressed(input::DOWN) {
@@ -1256,11 +1342,6 @@ impl ContinueMenu {
                 }
             }
             _ => {}
-        }
-        let (on, off) = (0xFFFF8080, 0xFF505050);
-        if let [_, y, n] = &mut self.vms[..] {
-            set_rgb(y, if self.yes { on } else { off });
-            set_rgb(n, if self.yes { off } else { on });
         }
         for vm in self
             .vms
@@ -1352,16 +1433,9 @@ impl Task<Ctx> for AsciiManager {
                 v.flags |= anmvm::F_ZWRITE_OFF;
                 ctx.anm.draw_mode(&mut ctx.gfx, &mut v, 0);
             }
-            let sel: Vec<bool> = (0..self.pause.vms.len())
-                .map(|k| self.pause.selected(k))
-                .collect();
-            for (vm, sel) in self.pause.vms.iter_mut().zip(sel) {
-                let pos = vm.pos;
-                if sel {
-                    vm.pos = [pos[0] - 4.0, pos[1] - 4.0, pos[2]];
-                }
+            // The selected item's (−4, −4) goes to the undrawn pos_offset: no visible shift (12 §3).
+            for vm in &mut self.pause.vms {
                 ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
-                vm.pos = pos;
             }
         }
         // ContinueMenu_Draw 0x4052B0 (12 §4): playfield viewport, capture VM, then VMs 0..3 (clock VM 3 only in a
@@ -1398,6 +1472,46 @@ impl Task<Ctx> for AsciiManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 12 §1: Loading_Wait sets 2; the third draw (c = 5) is the first prompt frame; alpha 255 … 127 (c 35) … 251
+    // (c 64), 255 (c 65); then c restarts at 6, a 60-frame period.
+    #[test]
+    fn press_shot_prompt_counter() {
+        let mut st = 0;
+        assert_eq!(prompt_step(&mut st), None);
+        assert_eq!(st, 0);
+        st = 2;
+        assert_eq!(prompt_step(&mut st), None);
+        assert_eq!(prompt_step(&mut st), None);
+        let a: Vec<u8> = (0..62).map(|_| prompt_step(&mut st).unwrap()).collect();
+        assert_eq!(&a[..3], &[255, 251, 247]);
+        assert_eq!(a[30], 127);
+        assert_eq!(a[31], 132);
+        assert_eq!((a[59], a[60]), (251, 255));
+        assert_eq!(a[61], 251);
+        assert_eq!(st, 6);
+    }
+
+    // 12 §4: whole-dword colours (alpha 0xFF) written before the input test, so a cursor move shows a frame later.
+    #[test]
+    fn continue_menu_colours_before_input() {
+        let mut anm = crate::anmmgr::AnmManager::default();
+        let mut audio =
+            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        let mut g = Game::default();
+        g.game_over = 1;
+        let mut m = ContinueMenu::default();
+        for _ in 0..30 {
+            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        }
+        assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
+        assert_eq!(m.vms[1].color, [0x50, 0x50, 0x50, 0xFF]);
+        m.update(&mut anm, &mut g, &press(input::UP), &mut audio);
+        assert!(m.yes);
+        assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
+        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        assert_eq!(m.vms[1].color, [0x80, 0x80, 0xFF, 0xFF]);
+    }
 
     // 12 §4: game_over is written in the player calc (prio 9); the next ASCII calc (prio 1) opens the menu, does
     // state 0 and the state-2 body in that one call, so after it the menu counts frame 1 with the cursor on "No".

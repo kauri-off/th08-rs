@@ -105,9 +105,8 @@ pub fn setup_ending(g: &mut Game, s: &Settings, e: &Ending) {
 }
 
 impl Supervisor {
-    // Fps_Update 0x446F53 playback text (15 §3.3): "%2d" of fps_now at (384, 448), yellow or red with the flag.
-    // The original refreshes on a 500 ms meter window continuous since boot, whose phase cannot be reproduced
-    // (15 §3.3); the port refreshes every 30 gameplay calcs, on the 3rd of each.
+    // Fps_Update 0x446F53 playback text refresh (15 §3.3). The original refreshes on a 500 ms meter window continuous
+    // since boot, whose phase cannot be reproduced (15 §3.3); the port refreshes every 30 gameplay calcs, on the 3rd.
     fn replay_fps(&mut self, ctx: &mut Ctx) {
         let g = &ctx.game;
         if g.loading != 0 || g.scene != gamemgr::SCENE_GAME {
@@ -121,6 +120,19 @@ impl Supervisor {
         if self.fps_frames % 30 == 3 {
             self.fps_text = format!("{:2}", g.replay_fps);
         }
+    }
+
+    // Draw-time Fps_Update (Supervisor draw prio 16, 0x445BC0; 15 §3.3): "%2d" at (384, 448), yellow or red with the
+    // flag, queued once per presented frame, then the queue colour reset to white.
+    fn replay_fps_draw(&mut self, ctx: &mut Ctx) {
+        let g = &ctx.game;
+        if g.loading != 0
+            || g.scene != gamemgr::SCENE_GAME
+            || !g.replay()
+            || g.flags & gamemgr::F_RUNNING == 0
+        {
+            return;
+        }
         let c = if g.replay_fps_red {
             0xFFFF4040
         } else {
@@ -128,6 +140,7 @@ impl Supervisor {
         };
         ctx.ascii
             .push(crate::ascii::Text::new(384.0, 448.0, self.fps_text.clone()).argb(c));
+        ctx.ascii.color = [255; 4];
     }
 
     // Loading_Begin 0x448790 (12 §1): surface 8 (the logo) full screen + nowloading.anm scripts 0–2 at (500, 440).
@@ -543,9 +556,15 @@ impl Task<Ctx> for Supervisor {
     // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         match (tag, self.logo) {
-            (0, Some(t)) => {
-                ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
-                ctx.gfx.image(t, 0.0, 0.0);
+            (0, logo) => {
+                if let Some(t) = logo {
+                    ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
+                    ctx.gfx.image(t, 0.0, 0.0);
+                }
+                // Then the "Press Shot Button" counter and prompt (12 §1).
+                let mut st = ctx.game.load_prompt;
+                crate::ascii::loading_prompt(&ctx.anm, &mut ctx.gfx, &mut ctx.ascii, &mut st);
+                ctx.game.load_prompt = st;
             }
             (2, _) => {
                 // The scripts' own positions (slide-in, z) are relative to the loading position.
@@ -562,6 +581,7 @@ impl Task<Ctx> for Supervisor {
                     vm.pos = p;
                 }
             }
+            (16, _) => self.replay_fps_draw(ctx),
             _ => {}
         }
         let (Some(slot), 16) = (self.debug_sprites, tag) else {

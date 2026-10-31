@@ -1037,23 +1037,16 @@ impl Hud {
         }
         anm.draw_mode(gfx, &mut self.diff_vm, 0);
         let q = &mut ctx.ascii;
-        // Score row (y 56) queued before the hiscore row (y 40) (12 §5.3 step 6).
-        q.push(Text::new(
+        // Score row (y 56) queued before the hiscore row (y 40) (12 §5.3 step 6). The panel strings take the current
+        // queue colour, so a "Press Shot Button" alpha leaks into them on the first gameplay frame (12 §1).
+        q.push(q.text(
             488.0,
             56.0,
             format!("{:09}", st.score_disp.min(999_999_999)),
         ));
-        q.push(Text::new(605.0, 56.0, format!("{}", st.continues.min(9))));
-        q.push(Text::new(
-            488.0,
-            40.0,
-            format!("{:09}", st.hiscore.min(999_999_999)),
-        ));
-        q.push(Text::new(
-            605.0,
-            40.0,
-            format!("{}", st.hiscore_cont.min(9)),
-        ));
+        q.push(q.text(605.0, 56.0, format!("{}", st.continues.min(9))));
+        q.push(q.text(488.0, 40.0, format!("{:09}", st.hiscore.min(999_999_999))));
+        q.push(q.text(605.0, 40.0, format!("{}", st.hiscore_cont.min(9))));
         for (row, n, vm) in [(88.0, st.lives as i32, 10), (104.0, st.bombs as i32, 11)] {
             for i in 0..n.clamp(0, 8) {
                 let v = &mut self.front[vm];
@@ -1097,7 +1090,7 @@ impl Hud {
                 Vertex::screen(488.5 + pw, 152.5, 0.1, uv, r),
             ],
         );
-        q.push(Text::new(
+        q.push(q.text(
             488.0,
             136.0,
             if pw >= 128.0 {
@@ -1106,18 +1099,20 @@ impl Hud {
                 format!("{}", pw as i32)
             },
         ));
-        q.push(Text::new(488.0, 152.0, format!("{}", st.graze_total)));
-        for t in ratio_row(168.0, st.point_items2, st.next_extend, 0xFFFFFFFF) {
+        q.push(q.text(488.0, 152.0, format!("{}", st.graze_total)));
+        for t in ratio_row(168.0, st.point_items2, st.next_extend, q.color) {
             q.push(t);
         }
         let col = if st.time >= st.time_threshold {
-            0xFFFFF0C0
+            [0xFF, 0xF0, 0xC0, 0xFF]
         } else {
-            0xFFFFFFFF
+            q.color
         };
         for t in ratio_row(184.0, st.time, st.time_threshold, col) {
             q.push(t);
         }
+        // SPEC-GAP: 12 §5.3 "colour reset to white after" the time row, taken as unconditional (IMPL148 Q1).
+        q.color = [255; 4];
     }
 }
 
@@ -1355,13 +1350,18 @@ fn bar_step(
 
 // Point / time row (12 §5.3 step 6): value, "/" at scale (0.5, 1) (8 px glyph) 13 px per digit later, the second
 // value 6 px after the "/".
-fn ratio_row(y: f32, a: impl std::fmt::Display, b: impl std::fmt::Display, col: u32) -> [Text; 3] {
+fn ratio_row(
+    y: f32,
+    a: impl std::fmt::Display,
+    b: impl std::fmt::Display,
+    col: [u8; 4],
+) -> [Text; 3] {
     let a = a.to_string();
     let x = 488.0 + 13.0 * a.len() as f32;
     [
-        Text::new(488.0, y, a).argb(col),
-        Text::new(x, y, "/").scale_xy(0.5, 1.0).argb(col),
-        Text::new(x + 6.0, y, b.to_string()).argb(col),
+        Text::new(488.0, y, a).color(col),
+        Text::new(x, y, "/").scale_xy(0.5, 1.0).color(col),
+        Text::new(x + 6.0, y, b.to_string()).color(col),
     ]
 }
 
@@ -1629,7 +1629,7 @@ mod tests {
     // 12 §5.3 step 6: "/" at scale (0.5, 1) after 13 px per digit, second value +6 px.
     #[test]
     fn ratio_row_slash_half_width() {
-        let [a, sl, b] = ratio_row(184.0, 123, 400, 0xFFFFF0C0);
+        let [a, sl, b] = ratio_row(184.0, 123, 400, [0xFF, 0xF0, 0xC0, 0xFF]);
         assert_eq!((a.x, a.s.as_str()), (488.0, "123"));
         assert_eq!((sl.x, sl.y, sl.scale, sl.scale_y), (527.0, 184.0, 0.5, 1.0));
         assert_eq!((b.x, b.s.as_str()), (533.0, "400"));

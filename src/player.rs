@@ -1136,12 +1136,13 @@ impl Player {
             self.stats.bombs = self.sht.bombs.trunc();
             crate::hud::mark_lives(2);
             crate::hud::mark_bombs(2);
-        } else {
-            // Game over: the ASCII manager opens the continue menu (12 §4).
-            // Lives and bombs are not changed on game over (09 §6.2).
-            self.game_over = true;
+            return true;
         }
-        true
+        // Game over: the ASCII manager opens the continue menu (12 §4).
+        // Lives and bombs are not changed on game over (09 §6.2).
+        self.game_over = true;
+        // 09 §6.2: returns 0 here, so no Player_RespawnUpdate (no respawn clear) on the game-over frame.
+        false
     }
 
     // The real death when the deathbomb window runs out (09 §6.2): effects, sound 0xF, unfreeze, miss counter
@@ -1680,6 +1681,22 @@ mod tests {
             (p.state, p.vm.scale, p.vm.color, blend(&p)),
             (3, [1.0, 1.0], [0xFF; 4], 0)
         );
+    }
+
+    // 09 §6.2: the game-over branch returns false, so the same frame runs no respawn update (no clear rectangle).
+    #[test]
+    fn dying_game_over_no_respawn() {
+        let (mut p, mut anm) = ready();
+        p.deathbomb = 0;
+        p.state_timer.set(30);
+        p.stats.lives = 0.0;
+        assert!(!p.dying_update(&mut anm, &mut None));
+        assert!(p.game_over && p.state == 1 && p.respawn_clear == 0);
+        let (mut p, mut anm) = ready();
+        p.deathbomb = 0;
+        p.state_timer.set(30);
+        p.stats.lives = 2.0;
+        assert!(p.dying_update(&mut anm, &mut None));
     }
 
     // 09 §9.2: the third time orb only inside the bullet-and-card branch.
