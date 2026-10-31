@@ -919,6 +919,16 @@ impl Player {
     }
 
     // Sprite script base: 0 human / 5 youkai; teams by focus, solos by parity (09 §3).
+    // Respawn sprite script (09 §6.2). QUIRK: a team test, not a focus test — focused teams 0 / 2 respawn with the
+    // human script 0, teams 1 / 3 get 5 when focused; solos by parity.
+    fn respawn_script(&self) -> usize {
+        if (self.shot_type < 4 && self.focus == 0) || self.shot_type & 1 == 0 {
+            0
+        } else {
+            5
+        }
+    }
+
     fn sprite_base(&self, focus: u8) -> usize {
         let youkai = if self.solo() {
             self.shot_type % 2 == 1
@@ -1119,8 +1129,7 @@ impl Player {
         self.state_timer.set(0);
         self.vm.scale = [3.0, 3.0];
         self.vm.flags |= anmvm::F_SCALE_DIRTY;
-        let base = self.sprite_base(self.focus.min(1));
-        self.set_script(anm, base);
+        self.set_script(anm, self.respawn_script());
         self.vm.scale = [3.0, 3.0];
         if self.stats.lives >= 1.0 {
             self.stats.add_lives(-1.0, &mut anm.rng);
@@ -1292,7 +1301,8 @@ impl Player {
             _ => {}
         }
         self.update_invuln(gs);
-        if !matches!(self.state, 1 | 2) {
+        let moved = !matches!(self.state, 1 | 2);
+        if moved {
             self.move_player(anm, inp);
         }
         if self.vm.script.is_some() {
@@ -1318,9 +1328,10 @@ impl Player {
                 st.add_score(100);
             }
         }
-        // Gauge-max aura: effect 25 in fixed slot 8 follows the player (09 §9.3, 13 §2.6).
+        // Gauge-max aura: effect 25 in fixed slot 8 follows the player (09 §9.3, 13 §2.6). Part of Player_Move, so
+        // in states 1 / 2 it is neither moved nor freed: the aura stays at the death spot.
         let at_max = self.stats.youkai_max() || self.stats.human_max();
-        if at_max != self.gauge_aura {
+        if moved && at_max != self.gauge_aura {
             self.gauge_aura = at_max;
             if at_max {
                 crate::effect::spawn_fixed(anm, 25, self.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
@@ -1328,7 +1339,7 @@ impl Player {
                 crate::effect::free(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE);
             }
         }
-        if self.gauge_aura {
+        if moved && self.gauge_aura {
             let p = self.pos;
             crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE, |e| {
                 e.pos = p
@@ -1421,6 +1432,24 @@ impl Task<Ctx> for Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 09 §6.2 (RE-Q65 J): respawn script by team / parity, not by focus.
+    #[test]
+    fn respawn_script_team_quirk() {
+        let script = |shot_type, focus| {
+            Player {
+                shot_type,
+                focus,
+                ..Player::default()
+            }
+            .respawn_script()
+        };
+        assert_eq!(
+            (script(0, 1), script(2, 2), script(1, 1), script(3, 0)),
+            (0, 0, 5, 0)
+        );
+        assert_eq!((script(4, 0), script(5, 0), script(7, 1)), (0, 5, 5));
+    }
 
     // 11 §3.1 / §1.4: replay stage start checksum keeps the RNG state but counts 4 Next16 draws.
     #[test]

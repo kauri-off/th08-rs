@@ -1178,12 +1178,14 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
                 .push(i);
         }
     }
+    // Pass 2: candidate pairs within 64 px assigned globally by ascending cost (ties in port order), so a far port quad
+    // cannot take a ref quad whose own near port quad comes later in draw order.
+    let mut cand: Vec<(f32, usize, usize)> = Vec::new();
     for (j, it) in pi.iter().enumerate() {
         if pmatch[j].is_some() {
             continue;
         }
         let (gx, gy) = (gc(it.c[0]), gc(it.c[1]));
-        let mut best: Option<(f32, usize)> = None;
         for dx in -2..=2 {
             for dy in -2..=2 {
                 let Some(c) = near.get(&(&*it.prim.tex, gx + dx, gy + dy)) else {
@@ -1198,17 +1200,18 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
                     if dist > 64.0 {
                         continue;
                     }
-                    let cost = dist + if a.key != it.key { 50.0 } else { 0.0 };
-                    if best.is_none_or(|b| cost < b.0) {
-                        best = Some((cost, i));
-                    }
+                    cand.push((dist + if a.key != it.key { 50.0 } else { 0.0 }, i, j));
                 }
             }
         }
-        if let Some((_, i)) = best {
-            rmatch[i] = Some(j);
-            pmatch[j] = Some((i, compare(&ri[i], it)));
+    }
+    cand.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.cmp(&b.2)));
+    for (_, i, j) in cand {
+        if rmatch[i].is_some() || pmatch[j].is_some() {
+            continue;
         }
+        rmatch[i] = Some(j);
+        pmatch[j] = Some((i, compare(&ri[i], &pi[j])));
     }
     for (i, it) in ri.iter().enumerate() {
         let l = d.by_label.entry(it.prim.tex.clone()).or_default();
@@ -1295,6 +1298,9 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
     for x in &ro {
         if let Some(k) = po_left.iter().position(|y| y == x) {
             po_left.remove(k);
+        } else if x.contains("K screen ? full") {
+            // The D3DX surface load inside Anm_CaptureToTexture copies the whole back buffer in the recording
+            // environment; not a game draw (FORMAT.md §3).
         } else {
             d.other_missing.push(x.clone());
         }

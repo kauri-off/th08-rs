@@ -168,6 +168,8 @@ impl Supervisor {
         // Title fade (13 §3 "Title fade"): linked at once from the Supervisor calc (prio 0), so its first calc precedes
         // its first draw (alphas 255, 251, …).
         crate::effect::screen_now(ctx, 0, 70, 0xFFFFFF, 0, 0, 0x15);
+        // Loading_End releases a loading darken overlay (13 §3 type 5); only the menu load after a game has one.
+        crate::effect::release_loading_overlay();
         for vm in &mut self.boot_vms {
             vm.pending_interrupt = 1;
         }
@@ -194,6 +196,16 @@ impl Supervisor {
                 vm.run(&mut ctx.anm);
             }
             MENU_LOAD - 1
+        } else if from == gamemgr::SCENE_GAME {
+            // MainMenu_OnRegister, previous scene 2: Loading_BeginCapture 0x44886F (capture after the next Present, no
+            // logo) + Loading_StartDarken(0); the first frame draws no surface 8 but the darken quad (12 §1).
+            if let Some(t) = self.logo.take() {
+                ctx.gfx.free_texture(t);
+            }
+            self.start_vms(ctx, [500.0, 440.0]);
+            self.capture_req = true;
+            crate::effect::loading_overlay(ctx);
+            MENU_LOAD
         } else {
             self.begin_loading(ctx)?;
             MENU_LOAD

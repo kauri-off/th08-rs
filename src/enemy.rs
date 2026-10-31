@@ -731,6 +731,8 @@ pub struct SpellBonus {
     pub bonus: i32,
     pub max: i32,
     pub decay: i32,
+    // Spell flag bit 2 (still capturable) as the card left it; the bonus line reads it live (12 §5.8 step 4).
+    pub capture: bool,
 }
 
 // Capture payout pending in the spell object (07 §11.1, bit 8): paid at ring timer 130 or at the next card start.
@@ -1767,6 +1769,7 @@ impl EnemyManager {
             bonus: s.bonus,
             max: s.max,
             decay: s.decay,
+            capture: s.capture,
         });
     }
 
@@ -1797,7 +1800,9 @@ impl EnemyManager {
             let b = (s.bonus as u32).wrapping_sub(d);
             s.bonus = (b - b % 10) as i32;
         }
-        let duration = s.duration;
+        // Step 1.5 reads the boss's live timeout e+0x3378: after a timeout (−1) the restart gets −101 and the slot
+        // stays inactive, so the ring stays at radius 8 (07 §11.1 step 5).
+        let duration = boss.timeout;
         let follow = (!self.g.spell_flag6)
             .then(|| -> [f32; 3] { std::array::from_fn(|k| boss.pos[k] + boss.pos_offset[k]) });
         let d = if active && s.last {
@@ -2055,6 +2060,10 @@ impl EnemyManager {
     // Enemy_CheckTimeout 0x42B930 (07 §10.2): the largest active threshold becomes life; timeout sub := death sub.
     fn check_timeout(&mut self, anm: &mut AnmManager, idx: usize) -> bool {
         let e = &mut self.enemies[idx];
+        // EnemyMgr_Calc calls 0x42B930 only while timeout ≥ 0, so the HUD timer is frozen after −1 (07 §10.1, 12 §5.1).
+        if e.timeout < 0 {
+            return false;
+        }
         // Every call on a slot-0 boss, before the fire test and before this frame's step-7 tick (07 §10.2).
         if e.flags & A_BOSS != 0 && e.boss_slot == 0 {
             self.g.hud_timer = (e.timeout - e.boss_timer.cur) / 60;
@@ -2547,7 +2556,13 @@ impl EnemyManager {
     }
 
     // After-image trail (07 §10.6, op 157), drawn before the main VM; the main VM's scale and colour are restored.
-    fn draw_trail(anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, e: &mut Enemy) {
+    // Returns the last drawn sprite copy's draw pos (07 §10.6 QUIRK), None when no copy was drawn.
+    fn draw_trail(
+        anm: &mut AnmManager,
+        gfx: &mut crate::gfx::Gfx,
+        e: &mut Enemy,
+    ) -> Option<[f32; 3]> {
+        let mut last = None;
         let (f, n) = (e.trail[0], e.trail_n() as i32);
         // Port-only bound: a step b ≤ 0 would never end the walk (data: b ≥ 1).
         let b = e.trail[3].max(1);
@@ -2581,6 +2596,7 @@ impl EnemyManager {
                     vm.pos_offset = [0.0; 3];
                     anm.draw_mode_z(gfx, vm, 2, 0.3);
                     vm.pos_offset = saved_off;
+                    last = Some(vm.pos);
                 }
                 i -= b;
             }
@@ -2634,6 +2650,7 @@ impl EnemyManager {
             }
         }
         (e.vm.scale, e.vm.color) = (scale, color);
+        last
     }
 
     // GameFlags bit 13 with boss slot 0 set (07 §7 op 176): Player_DamageAgainst over the whole playfield with the
@@ -2687,9 +2704,13 @@ impl EnemyManager {
             let shared = e.flags_b & (1 << 8) != 0;
             for k in [0usize, 2, 1] {
                 let main = k == 2;
-                if main && e.trail[0] != 0 {
-                    Self::draw_trail(ctx_anm, gfx, e);
-                }
+                // QUIRK (07 §10.6): only scale/colour are restored after the trail, so the main VM keeps the last
+                // drawn copy's pos (z 0.3) and rotation.
+                let trail_pos = if main && e.trail[0] != 0 {
+                    Self::draw_trail(ctx_anm, gfx, e)
+                } else {
+                    None
+                };
                 let vm = if main { &mut e.vm } else { &mut e.sub_vms[k] };
                 // Main VM skipped when flag A bit 5 (invisible) or trail flag 0x10.
                 if vm.script.is_none()
@@ -2702,8 +2723,14 @@ impl EnemyManager {
                 } else {
                     vm.pos_offset
                 };
-                let z = if main { 0.25 } else { 0.3 };
-                let rot = if main {
+                let z = if main && trail_pos.is_none() {
+                    0.25
+                } else {
+                    0.3
+                };
+                let rot = if main && trail_pos.is_some() {
+                    None
+                } else if main {
                     (e.flags & (1 << 25) != 0).then_some(angle)
                 } else {
                     (vm.tag != 0).then_some(if k == 0 { angle } else { -angle })
@@ -2715,14 +2742,15 @@ impl EnemyManager {
                     vm.flags |= anmvm::F_ROT_DIRTY;
                 }
                 let saved_off = vm.pos_offset;
-                vm.pos = [p[0] + off[0], p[1] + off[1], z];
+                vm.pos = trail_pos.unwrap_or([p[0] + off[0], p[1] + off[1], z]);
                 vm.pos_offset = [0.0; 3];
                 // Draw2DRot carries the VM z (0.25 main / 0.3 sub) as the vertex depth (07 §10.6, 05 §9).
                 ctx_anm.draw_mode_z(gfx, vm, 2, z);
                 vm.pos_offset = saved_off;
             }
         }
-        if high {
+        // Tint off only while bit 10, the condition it was turned on under (06 §10.2).
+        if high && frozen {
             ctx_anm.tint_off();
         }
     }
@@ -2928,6 +2956,40 @@ mod tests {
         m.enemies[0].boss_timer.set(0);
         m.check_timeout(&mut anm, 0);
         assert_eq!(m.g.hud_timer, 7);
+    }
+
+    // 07 §10.1 step 4 / 12 §5.1 (RE-Q65 A): no Enemy_CheckTimeout while timeout < 0, so +0x24 keeps its value.
+    #[test]
+    fn hud_timer_frozen_after_timeout() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        m.g.hud_timer = 5;
+        let e = &mut m.enemies[0];
+        (e.flags, e.boss_slot, e.timeout) = (A_ALIVE | A_BOSS, 0, -1);
+        e.boss_timer.set(300);
+        assert!(!m.check_timeout(&mut anm, 0));
+        assert_eq!(m.g.hud_timer, 5);
+    }
+
+    // 12 §5.8 step 4 (RE-Q65 E): the card's bit 2 survives Spell_End for the bonus line.
+    #[test]
+    fn spell_left_keeps_capture_flag() {
+        let mut anm = AnmManager::default();
+        let (mut m, _player) = empty_manager(&mut anm);
+        m.g.spell = Some(Spell {
+            bonus: 0,
+            max: 110_000,
+            capture: false,
+            timed_out: true,
+            duration: 600,
+            ..Spell::default()
+        });
+        m.finish_spell(&mut anm);
+        m.spell_add_bonus(8000);
+        assert_eq!(
+            m.g.spell_left.map(|l| (l.bonus, l.capture)),
+            Some((8000, false))
+        );
     }
 
     // 07 §7 op 95: popups 2000, then +30 each, at the final pos and every 6th trail entry; every victim unlinked.

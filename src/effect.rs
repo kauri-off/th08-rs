@@ -708,6 +708,10 @@ impl Effects {
             if matches!(e.kind, 53 | 54) && e.vm.color[anmvm::A] == 0 {
                 return false;
             }
+            // EffUpd_DissolveRing 0x427A60: segments := 32 every update (13 §2.6 type 50).
+            if e.kind == 50 {
+                r.segments = 32;
+            }
             if e.kind == 50 && t >= 120.0 {
                 return false;
             }
@@ -845,7 +849,8 @@ impl Effects {
                 PLAYFIELD,
             );
             let len = anmmgr::length3([s2[0] - s[0], s2[1] - s[1], s2[2] - s[2]]);
-            // Callback 0x428310 (13 §2.6c): boss pull within 160 px, player push within 88 px; skipped while paused.
+            // Callback 0x428310 (13 §2.6c): boss pull within 160 px, player push within 88 px; only these D updates
+            // are skipped while paused / game over, `s += D` always runs.
             if matches!(e.kind, 51 | 63) && !self.paused {
                 let p = [s[0] + e.disp[0], s[1] + e.disp[1]];
                 if e.pull[0] > -9999.0 {
@@ -861,6 +866,8 @@ impl Effects {
                     e.disp[0] += d2[0] * 0.02;
                     e.disp[1] += d2[1] * 0.02;
                 }
+            }
+            if matches!(e.kind, 51 | 63) {
                 s[0] += e.disp[0];
                 s[1] += e.disp[1];
             }
@@ -1129,9 +1136,19 @@ pub struct EffectManager {
     pub level: u8,
 }
 
-pub fn bg_file(stage: usize) -> &'static str {
-    // Table 0x4C7480 by stage index (13 §5).
-    // Not implemented: the spell-practice eff09xx.anm files (table 0x4C7144).
+// Slot-9 file (13 §5): table 0x4C7480 by stage index, or in spell practice for cards 0xD8–0xDD the eff09xx.anm entries
+// 9–14 of table 0x4C7144.
+pub fn bg_file(stage: usize, practice_card: Option<i16>) -> &'static str {
+    if let Some(c @ 0xD8..=0xDD) = practice_card {
+        return [
+            "eff09sk.anm",
+            "eff09ym.anm",
+            "eff09al.anm",
+            "eff09rm.anm",
+            "eff09yy.anm",
+            "eff09yk.anm",
+        ][(c - 0xD8) as usize];
+    }
     [
         "eff01.anm",
         "eff02.anm",
@@ -1162,8 +1179,10 @@ impl Task<Ctx> for EffectManager {
         if chain == Chain::Calc {
             clear();
             crate::ascii::clear_popups();
-            ctx.anm
-                .load(&mut ctx.gfx, &ctx.archive, BG_SLOT, bg_file(ctx.game.stage))?;
+            ctx.anm.load(&mut ctx.gfx, &ctx.archive, BG_SLOT, {
+                let card = ctx.game.spell_practice().then_some(ctx.game.card);
+                bg_file(ctx.game.stage, card)
+            })?;
         }
         Ok(())
     }
@@ -1479,6 +1498,15 @@ pub fn invuln_ring(anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 13 §5 (RE-Q65 L): spell practice cards 0xD8–0xDD load eff09xx.anm; other cards the stage file.
+    #[test]
+    fn spell_bg_file_table() {
+        assert_eq!(bg_file(3, None), "eff04a.anm");
+        assert_eq!(bg_file(3, Some(0xD7)), "eff04a.anm");
+        assert_eq!(bg_file(3, Some(0xD8)), "eff09sk.anm");
+        assert_eq!(bg_file(0, Some(0xDD)), "eff09yk.anm");
+    }
 
     // 13 §2.6 row 23: the invulnerability ring scales in VM slot 4 (linear, current → 1/16 over the timer);
     // 07 §11.1: the spell ring start writes only VM pos.y.

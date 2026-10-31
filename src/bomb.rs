@@ -1432,9 +1432,10 @@ impl Player {
         effect::spawn(anm, 12, p, 1, 0xFF4040FF);
         let i = effect::spawn_fixed(anm, 0x32, p, 4, 0xFF4040FF);
         effect::get(i, |e| {
+            // Ring fields, not the VM scale: the type-50 update copies VM scale.x into the width (14 §2.17).
             e.ring.segments = 64;
             e.ring.waves = 6.0;
-            e.vm.scale[0] = 15.0;
+            (e.ring.width, e.ring.radius, e.ring.start) = (15.0, 8.0, 0.0);
             e.vm.pos = [8.0, 64.0, 0.0];
             e.vm.interp_pos_from(
                 if practice { 30 } else { 90 },

@@ -975,7 +975,9 @@ impl GameManager {
                         g.stage = s;
                         g.request(SCENE_NEXT_STAGE);
                     }
-                    None => g.next_scene_after = SCENE_REPLAY_END,
+                    // 0x439BC7 writes scene := 7 directly; next_scene_after stays −1, so `Hud_StageTransition`
+                    // still captures on this clear frame (11 §4 step 1).
+                    None => g.request(SCENE_REPLAY_END),
                 }
             } else if st.clock > 11 {
                 g.next_scene_after = SCENE_ENDING;

@@ -1529,8 +1529,9 @@ impl BulletManager {
     // visiting order), then the effect manager.
     pub fn draw(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         gfx.set_viewport(PLAYFIELD);
-        // Tint 0xFFF01010 only while bullets are frozen, then off (06 §10.2).
-        if self.player.borrow().freeze_bullets() {
+        // Tint 0xFFF01010 only while bullets are frozen (06 §10.2).
+        let frozen = self.player.borrow().freeze_bullets();
+        if frozen {
             (anm.tint, anm.tint_on) = (0xFFF01010, true);
         }
         self.items.draw(anm, gfx);
@@ -1558,8 +1559,11 @@ impl BulletManager {
                 anm.draw_mode_z(gfx, vm, 2, 0.05);
             }
         }
-        anm.tint_off();
         crate::effect::with(|e| e.draw_over_bullets(anm, gfx));
+        // Off only while bit 10, after the over-bullet effects; otherwise the tint state is left alone (06 §10.2).
+        if frozen {
+            anm.tint_off();
+        }
     }
 }
 

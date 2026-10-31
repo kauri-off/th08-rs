@@ -71,7 +71,7 @@ pub struct Gui {
     name_only: bool,
     card: i32,
     shot: u8,
-    // Spell +0xFC bonus and spell flag bit 2 (still capturable), copied from the running spell (12 §5.8 draw step 4).
+    // Spell +0xFC bonus and spell flag bit 2 (still capturable), read live from the card or what it left (12 §5.8 step 4).
     bonus: i32,
     capturable: bool,
     // Captures / attempts of the card for this shot type (CATK story +0x158 / +0x124, practice +0x1F4 / +0x1C0).
@@ -191,7 +191,14 @@ impl Gui {
                 name_only,
             } => {
                 if face >= 0 {
-                    anm.set_script(&mut v[1], SPELL_FACE_SLOT, 0);
+                    // File pointer g_Gui+0x262C = portrait k = 2, swapped by Msg_Start(0) in 6B / Ex (12 §5.8, 10 §4).
+                    let slot = self
+                        .enemies
+                        .borrow()
+                        .msg
+                        .as_ref()
+                        .map_or(SPELL_FACE_SLOT, |m| m.borrow().face_slot[2]);
+                    anm.set_script(&mut v[1], slot, 0);
                     v[1].set_sprite(anm, face);
                 }
                 anm.set_script(&mut v[2], CDBG_SLOT, 1);
@@ -272,7 +279,8 @@ impl Gui {
         if let Some(s) = &en.g.spell {
             (self.bonus, self.capturable) = (s.bonus, s.capture);
         } else if let Some(l) = &en.g.spell_left {
-            self.bonus = l.bonus;
+            // Also after Spell_End: a same-frame timeout + op 123 left bit 2 clear and +0xFC 0 (12 §5.8 step 4).
+            (self.bonus, self.capturable) = (l.bonus, l.capture);
         }
     }
 
@@ -400,7 +408,7 @@ impl Task<Ctx> for Gui {
         self.flush_texts(ctx);
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         gfx.set_viewport(PLAYFIELD);
-        // Tint 0xFFF01010 only while GameFlags bit 10, off at the end (06 §10.2).
+        // Tint 0xFFF01010 only while GameFlags bit 10 (06 §10.2).
         if self.player.borrow().freeze_bullets() {
             (anm.tint, anm.tint_on) = (0xFFF01010, true);
         }
@@ -439,9 +447,9 @@ impl Task<Ctx> for Gui {
             if !self.name_only {
                 self.draw_bonus(anm, gfx);
             }
+            // Spell_Draw turns the tint off only inside its VM-7 block (06 §10.2).
             anm.tint_off();
         }
-        anm.tint_off();
         Ret::Next
     }
 }
