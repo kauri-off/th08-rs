@@ -17,6 +17,9 @@ pub struct Sched {
     pub input: std::rc::Rc<[u16]>,
     // Rows written inside this frame's calc (restarted passes, in-calc presents with ff −1), taken by `Session::run`.
     pub pass_rows: Vec<Row>,
+    // Start value of the ASCII frame counter +0x8284 (12 §5.10 slow boots): `asciicalc − poll` of the first
+    // `loader gauge` line when positive, else 0.
+    pub ascii_offset: u32,
 }
 
 impl Sched {
@@ -172,6 +175,7 @@ pub fn parse_events(text: &str) -> anyhow::Result<(u32, Sched)> {
         ..Default::default()
     };
     let (mut gauge, mut wait) = (None, None);
+    let mut first_gauge = true;
     for l in text.lines() {
         let t: Vec<&str> = l.split_whitespace().collect();
         let num = |i: usize| t.get(i).and_then(|v| v.parse::<i64>().ok());
@@ -179,7 +183,19 @@ pub fn parse_events(text: &str) -> anyhow::Result<(u32, Sched)> {
             ["seed", h, ..] => seed = u32::from_str_radix(h, 16).ok(),
             ["release", "boot", "calc", ..] => s.boot_calc = num(3).unwrap_or(12) as u32 + 2,
             ["release", "menu", "poll", ..] => s.menu.extend(num(3)),
-            ["loader", "gauge", "poll", ..] => gauge = num(3),
+            ["loader", "gauge", "poll", ..] => {
+                gauge = num(3);
+                let calc = t
+                    .iter()
+                    .position(|w| *w == "asciicalc")
+                    .and_then(|i| num(i + 1));
+                if std::mem::take(&mut first_gauge)
+                    && let (Some(b), Some(c)) = (gauge, calc)
+                    && c > b
+                {
+                    s.ascii_offset = (c - b) as u32;
+                }
+            }
             ["loader", "lwait", "poll", ..] => wait = num(3),
             ["release", "stage", "poll", ..] => {
                 let p = num(3).unwrap_or(0);
@@ -422,6 +438,7 @@ mod native {
             }
             crate::scoredat::set_save_dir(Some(save));
             ctx.anm.rng = crate::rng::Rng::seeded(self.seed as u16);
+            crate::ascii::set_frame_counter(self.sched.ascii_offset);
             ctx.game.sched = Some(Sched {
                 input: self.input.as_slice().into(),
                 ..self.sched.clone()
@@ -590,6 +607,7 @@ mod tests {
         assert_eq!((seed, s.boot_calc), (0x1afaed, 14));
         assert_eq!(s.menu, [32]);
         assert_eq!(s.stages, [[10918, 10935, 10968]]);
+        assert_eq!(s.ascii_offset, 0);
         let polls = parse_polls(
             "# poll present scene src mask\n0 17 0 S 0000\n1 18 1 S 0020\n2 18 2 S 0001\n",
         );
@@ -602,6 +620,23 @@ mod tests {
             format_row(&r[0]),
             "0 0 0001 4037 0 3f800000 00000000 0 0 0 0 00000000 00000000 00000000 0 0 0 0 0 0 0 10000 0 15 13 1 1 1 0 0 -1 0 0001 0 0 -1"
         );
+    }
+
+    // 12 §5.10 slow boots: offset = asciicalc − poll of the first gauge line, only when positive.
+    #[test]
+    fn events_ascii_offset() {
+        let ev = |g: &str| {
+            parse_events(&format!(
+                "seed 1 present 3 poll 0\nrelease boot calc 12 present 14\n{g}\
+                 loader gauge poll 900 present 1 asciicalc 950\n"
+            ))
+            .unwrap()
+            .1
+            .ascii_offset
+        };
+        assert_eq!(ev("loader gauge poll 722 present 736 asciicalc 756\n"), 34);
+        assert_eq!(ev("loader gauge poll 722 present 736 asciicalc 721\n"), 0);
+        assert_eq!(ev("loader gauge poll 722 present 736\n"), 0);
     }
 
     #[test]

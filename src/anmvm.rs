@@ -73,6 +73,11 @@ impl Timer {
         };
     }
 
+    // Timer_GetF (13 §3): cur + frac, computed on the x87 (f64 here).
+    pub fn get_f(&self) -> f64 {
+        self.cur as f64 + self.frac as f64
+    }
+
     // Timer_Tick (05 §2): one step per frame at full speed, else accumulates the fraction; not affected by flag 0x20.
     pub fn tick(&mut self, speed: f32) {
         self.prev = self.cur;

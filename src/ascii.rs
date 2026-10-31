@@ -507,6 +507,11 @@ thread_local! {
     static GAUGE: std::cell::RefCell<Gauge> = std::cell::RefCell::new(Gauge::default());
 }
 
+// Session tool (12 §5.10 slow boots): starts +0x8284 at the recording's boot offset; a live port keeps 0.
+pub fn set_frame_counter(v: u32) {
+    GAUGE.with_borrow_mut(|g| g.frame = v);
+}
+
 const G_BAR: usize = 0;
 const G_HUMAN: usize = 1;
 const G_YOUKAI: usize = 2;

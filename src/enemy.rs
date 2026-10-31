@@ -1387,9 +1387,12 @@ impl EnemyManager {
         let kills = self.kill_all(anm);
         let mut p = self.player.borrow_mut();
         p.stats.add_score(sum);
-        p.stats
-            .popups
-            .push(crate::player::Popup::Bonus(sum + kills));
+        // Hud_ShowBonus only when CancelBonus + KillAll ≠ 0 (12 §5.5): else the previous popup keeps running.
+        if sum + kills != 0 {
+            p.stats
+                .popups
+                .push(crate::player::Popup::Bonus(sum + kills));
+        }
     }
 
     // Enemy_ChainChildCount 0x41FD40 (07 §6 var 10096), walked from `idx` via +8. The original has no alive
@@ -1612,7 +1615,7 @@ impl EnemyManager {
         }
     }
 
-    // Hud_StartMsg: Msg_Start plus its playfield side effects (10 §4.6).
+    // Hud_StartMsg: Msg_Start plus its playfield side effects (10 §4 step 6).
     pub fn start_msg(&mut self, anm: &mut AnmManager, n: i32) {
         let Some(m) = self.msg.clone() else { return };
         let mut m = m.borrow_mut();
@@ -1624,7 +1627,7 @@ impl EnemyManager {
         }
     }
 
-    // Msg_Start side effects (10 §4.6): cancel bullets, KillAll, attract items.
+    // Msg_Start side effects (10 §4 step 6): cancel bullets, KillAll, attract items.
     pub fn msg_side_effects(&mut self, anm: &mut AnmManager) {
         self.cancel_all(anm, 1);
         self.kill_all(anm);
@@ -2277,9 +2280,13 @@ impl EnemyManager {
     // 07 §10.1 step 5: a finished sub VM is disabled.
     fn run_vms(&mut self, idx: usize, anm: &mut AnmManager) {
         let e = &mut self.enemies[idx];
+        // Colour copy (07 §10.1 step 5): the main VM runs with colour := e+0x2E20 and saves it back, so its colour
+        // survives later script starts; sub VMs have no copy.
+        e.vm.color = e.main_color;
         if e.vm.script.is_some() {
             e.vm.run(anm);
         }
+        e.main_color = e.vm.color;
         for vm in &mut e.sub_vms {
             if vm.script.is_some() && vm.run(anm) {
                 *vm = AnmVm::default();
@@ -3174,6 +3181,31 @@ mod tests {
         m.g.bonus_frozen = true;
         m.spell_add_bonus(8000);
         assert_eq!(m.g.spell_left.map(|l| l.bonus), Some(110_000));
+    }
+
+    // 12 §5.5 (RE-Q66): no bonus popup when CancelBonus + KillAll = 0.
+    #[test]
+    fn zero_bonus_shows_no_popup() {
+        let mut anm = AnmManager::default();
+        let (mut m, player) = empty_manager(&mut anm);
+        m.cancel_and_kill_bonus(&mut anm);
+        assert!(player.borrow().stats.popups.is_empty());
+    }
+
+    // 07 §10.1 step 5 (RE-Q66): the main VM colour round-trips through e+0x2E20; sub VMs are not touched.
+    #[test]
+    fn main_vm_colour_through_main_color() {
+        let mut anm = AnmManager::default();
+        let (mut m, _) = empty_manager(&mut anm);
+        let e = &mut m.enemies[0];
+        e.main_color = [0xFF, 0xFF, 0xFF, 0x80];
+        e.vm.color = [0xFF; 4];
+        m.run_vms(0, &mut anm);
+        let e = &m.enemies[0];
+        assert_eq!(
+            (e.vm.color, e.main_color),
+            ([0xFF, 0xFF, 0xFF, 0x80], [0xFF, 0xFF, 0xFF, 0x80])
+        );
     }
 
     // 14 §3.1 (RE-Q54 U): only an enemy with flag A bit 6 is offered as the aimed enemy.

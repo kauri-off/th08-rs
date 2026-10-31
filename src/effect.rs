@@ -120,8 +120,6 @@ pub struct Effects {
     cursor: usize,
     // +8 live count, recomputed every calc.
     pub live: usize,
-    // GameFlags bit 10 (bullets frozen).
-    pub frozen: bool,
     // Port-only mirrors: player position, stage camera, boss 0 position (flag A bit 3), stage overlay colour,
     // pause / continue menu.
     pub player: [f32; 3],
@@ -141,7 +139,6 @@ impl Default for Effects {
             fx: vec![Effect::default(); TOTAL],
             cursor: 0,
             live: 0,
-            frozen: false,
             player: [192.0, 384.0, 0.0],
             view: View::default(),
             boss: None,
@@ -163,10 +160,6 @@ pub fn with<R>(f: impl FnOnce(&mut Effects) -> R) -> R {
 
 pub fn set_player(pos: [f32; 3]) {
     with(|e| e.player = pos);
-}
-
-pub fn set_frozen(on: bool) {
-    with(|e| e.frozen = on);
 }
 
 pub fn set_view(v: View) {
@@ -732,7 +725,10 @@ impl Effects {
                 continue;
             }
             self.live += 1;
-            if !self.frozen || self.fx[i].keep_frozen {
+            // Bit 10 read live per slot (13 §2.3): a spell-card death in the enemy calc (prio 11) already freezes
+            // this frame's effects (prio 13).
+            let frozen = crate::gamemgr::flags() & crate::gamemgr::F_DEATH != 0;
+            if !frozen || self.fx[i].keep_frozen {
                 if !self.update(i) {
                     self.fx[i].active = false;
                     continue;
@@ -941,8 +937,9 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
             point(k + 1, false),
         ];
         let uv = [[u0, vk(k)], [u1, vk(k)], [u0, vk(k + 1)], [u1, vk(k + 1)]];
-        // Ring vertices are at z 0 (13 §2.5): centre z is 0 for every spawner, ellipse/wavy force 0.
-        let v = std::array::from_fn(|i| Vertex::screen(p[i][0], p[i][1], 0.0, uv[i], rgba));
+        // Vertex z (13 §2.5): plain ring = 0 + centre z (the spawn position z); ellipse / wavy := 0 after the add.
+        let z = if r.amp == 0.0 { e.centre[2] } else { 0.0 };
+        let v = std::array::from_fn(|i| Vertex::screen(p[i][0], p[i][1], z, uv[i], rgba));
         // z-write on unless VM flag bit 13 (`AnmManager_SetRenderState2D`, 13 §2.5).
         gfx.strip(spr.tex, blend, vm.flags & anmvm::F_ZWRITE_OFF == 0, v);
     }
@@ -1318,8 +1315,7 @@ impl ScreenEffect {
         ctx.anm.screen_offset = [x, y];
     }
 
-    // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set (13 §3); both read
-    // live, not the end-of-Player_Calc mirror `Effects::frozen`.
+    // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set (13 §3); both read live.
     fn frozen() -> bool {
         crate::gamemgr::flags() & crate::gamemgr::F_DEATH != 0 || crate::enemy::timer_pause() != 0
     }
@@ -1343,15 +1339,16 @@ impl Task<Ctx> for ScreenEffect {
 }
 
 impl ScreenEffect {
-    // Per-type calc (13 §3 table).
+    // Per-type calc (13 §3 table): alpha / amplitude from Timer_GetF (cur + frac), end / range tests on the integer cur.
     fn step(&mut self, ctx: &mut Ctx) -> Ret {
         let t = self.timer.cur;
+        let tf = self.timer.get_f();
         let gs = ctx.anm.speed;
         let [p0, p1, p2, p3] = self.p;
         let dur = p0.max(1);
         match self.kind {
             0 => {
-                self.alpha = (255.0 - 255.0 * t as f32 / dur as f32).max(0.0).trunc();
+                self.alpha = (255.0 - tf * 255.0 / dur as f64).trunc().max(0.0) as f32;
                 if t >= dur {
                     return Ret::Remove;
                 }
@@ -1369,7 +1366,7 @@ impl ScreenEffect {
                 if t >= dur {
                     return Ret::Remove;
                 }
-                let a = p1 as f32 + t as f32 * (p2 - p1) as f32 / dur as f32;
+                let a = (p1 as f64 + self.timer.get_f() * (p2 - p1) as f64 / dur as f64) as f32;
                 self.shake(ctx, a);
                 return Ret::Next;
             }
@@ -1378,7 +1375,7 @@ impl ScreenEffect {
                 if crate::enemy::load_frames() != 0 {
                     return Ret::Remove;
                 }
-                self.alpha = (255 * t.min(dur) / dur) as f32;
+                self.alpha = (tf * 255.0 / dur as f64).trunc().max(0.0) as f32;
                 if t >= dur {
                     return Ret::Remove;
                 }
@@ -1388,7 +1385,12 @@ impl ScreenEffect {
             }
             3 => {
                 let a = (p2 as u32 >> 24) as i32;
-                self.alpha = (a - t * a / dur) as f32;
+                // 0x45BC90: cur < dur → A − ftol(A·t/dur) (≥ 0), else 0.
+                self.alpha = if t < dur {
+                    (a - (tf * a as f64 / dur as f64).trunc() as i32).max(0) as f32
+                } else {
+                    0.0
+                };
                 if t >= dur {
                     self.p[1] -= 1;
                     if self.p[1] <= 0 {
@@ -1408,9 +1410,9 @@ impl ScreenEffect {
                     if t > 8 {
                         return Ret::Remove;
                     }
-                    self.alpha = (128 - t * 128 / 8) as f32;
+                    self.alpha = (128 - (self.timer.get_f() * 128.0 / 8.0).trunc() as i32) as f32;
                 } else if t <= dur {
-                    self.alpha = (t * 128 / dur) as f32;
+                    self.alpha = (self.timer.get_f() * 128.0 / dur as f64).trunc() as f32;
                 }
             }
             // 0x45BF10: frozen → hold; gameplay frame counter 0x164D2C8 < 2 → removed (no 0x18B8A2C test); else
@@ -1428,13 +1430,13 @@ impl ScreenEffect {
                 if t >= i + h + o {
                     return Ret::Remove;
                 }
-                let tf = t as f32;
+                let tf = self.timer.get_f();
                 let env = if t < i {
-                    tf / i as f32
+                    (tf / i as f64) as f32
                 } else if t < i + h {
                     1.0
                 } else {
-                    ((i + h + o - t) as f32 / o as f32).max(0.0)
+                    (((i + h + o) as f64 - tf) / o as f64) as f32
                 };
                 self.shake(ctx, amp * env);
                 return Ret::Next;
@@ -1573,17 +1575,14 @@ mod tests {
         assert_eq!(e.centre, [128.0, 180.0, 0.0]);
     }
 
-    // 13 §3 type 1/7: the shake freeze reads GameFlags bit 10 live, not the end-of-Player_Calc mirror.
+    // 13 §3 type 1/7: the shake freeze reads GameFlags bit 10 live.
     #[test]
     fn shake_frozen_reads_flags_live() {
         let f = crate::gamemgr::flags();
-        set_frozen(false);
         crate::gamemgr::set_flags(f | crate::gamemgr::F_DEATH);
         assert!(ScreenEffect::frozen());
         crate::gamemgr::set_flags(f & !crate::gamemgr::F_DEATH);
-        set_frozen(true);
         assert_eq!(ScreenEffect::frozen(), crate::enemy::timer_pause() != 0);
-        set_frozen(false);
         crate::gamemgr::set_flags(f);
     }
 
@@ -1662,6 +1661,32 @@ mod tests {
         for kind in [0, 3] {
             assert_eq!(screen_fx(kind, 70, 0xFFFFFF, -1, 0).alpha, 0.0);
         }
+    }
+
+    // 13 §3 (RE-Q66): the flash alpha uses Timer_GetF; silentselene 77236 present 39707 at speed 0.25 draws
+    // 255, 247, 245, 243, 241, 238; alpha 0 once cur ≥ dur.
+    #[test]
+    fn flash_alpha_uses_timer_getf() {
+        let Some(dir) = crate::settings::test_game_dir() else {
+            return;
+        };
+        let Some(gfx) = pollster::block_on(crate::gfx::Gfx::headless()).ok() else {
+            return;
+        };
+        let src = crate::assets::Source::native(dir.into());
+        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
+        let mut f = screen_fx(3, 30, 1, 0xFFFFFFFFu32 as i32, 0);
+        let mut seen = Vec::new();
+        for speed in [1.0, 0.25, 0.25, 0.25, 0.25, 0.25] {
+            ctx.anm.speed = speed;
+            f.step(&mut ctx);
+            seen.push(f.alpha as i32);
+        }
+        assert_eq!(seen, [255, 247, 245, 243, 241, 238]);
+        f.timer.set(30);
+        f.p[1] = 2;
+        f.step(&mut ctx);
+        assert_eq!(f.alpha, 0.0);
     }
 
     // 13 §2.2: one 512-slot budget per call; exhausted → dummy and the cursor is back where it started (+ extra).

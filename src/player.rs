@@ -1407,7 +1407,6 @@ impl Task<Ctx> for Player {
             None => self.frame(&mut ctx.anm, &inp, None),
         }
         crate::effect::set_player(self.pos);
-        crate::effect::set_frozen(self.freeze_bullets());
         self.store_game_over(&mut ctx.game);
         Ret::Next
     }

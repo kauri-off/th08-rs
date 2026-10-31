@@ -281,12 +281,12 @@ fn forced_index() -> Option<usize> {
 }
 
 impl Player {
-    // First inactive slot of the half; index 191 reused when full (09 §8.1).
+    // First inactive slot of the half; index 191 reused when full (09 §8, creators).
     fn free_slot(v: &[Area]) -> usize {
         v.iter().position(|a| !a.active).unwrap_or(AREAS - 1)
     }
 
-    // Creators 0x44DF00 / 0x44DE60 / 0x44E040 / 0x44DFA0 (09 §8.1).
+    // Creators 0x44DF00 / 0x44DE60 / 0x44E040 / 0x44DFA0 (09 §8).
     pub fn cancel_circle(&mut self, pos: [f32; 2], r: f32, dr: f32, life: i32, item: i32) -> usize {
         let i = Self::free_slot(&self.cancel_areas);
         self.cancel_areas[i] = Area {
@@ -399,7 +399,7 @@ impl Player {
         }
     }
 
-    // 09 §8.1, start of Player_Calc: an area created with life 0 exists for exactly one pass.
+    // 09 §8 update, start of Player_Calc: an area created with life 0 exists for exactly one pass.
     pub fn update_areas(&mut self) {
         for a in self
             .damage_areas
@@ -1333,6 +1333,11 @@ impl Player {
                 0x58 + k
             };
             effect::with(|e| anm.set_script(&mut e.fx[i].vm, effect::SCRIPT_SLOT, script));
+            // 14 §2.13: the re-spawn writes colour 0xFFFFFFFF after its SetScript and slot 4 gets no second script
+            // start, so it draws white (script 88's t = 0 `color` is overwritten); slots 5–7 keep their scripts' colour.
+            if k == 0 {
+                effect::with(|e| e.fx[i].vm.color = [0xFF; 4]);
+            }
         }
         if ls {
             for vm in self.bomb.vms[..2].iter_mut().filter(|v| v.script.is_some()) {
