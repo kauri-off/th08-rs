@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""th08 background jobs: `thjobs` table, `thjobs -w` live view, `thjobs log NAME` follow the journal, `thjobs clean` drop finished."""
+import glob as globmod, json, os, re, shutil, subprocess, sys, time
+from rich.console import Console, Group
+from rich.live import Live
+from rich.progress_bar import ProgressBar
+from rich.table import Table
+from rich.text import Text
+
+STATE = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")), "th08-jobs")
+LEGACY = re.compile(r"^(q\d+\w*|dg-[\w-]+|lc-[\w-]+|dl3[\w-]*|rb2[\w-]*|dl-[\w-]+)\.service$")
+prev_cpu = {}
+
+
+def sh(*a):
+    return subprocess.run(a, capture_output=True, text=True).stdout
+
+
+def unit_props(unit):
+    out = sh("systemctl", "--user", "show", unit, "-p", "ActiveState", "-p", "SubState", "-p", "MemoryCurrent",
+             "-p", "CPUUsageNSec", "-p", "ActiveEnterTimestampMonotonic", "-p", "ExecMainStartTimestamp", "-p", "Description")
+    return dict(l.split("=", 1) for l in out.splitlines() if "=" in l)
+
+
+def last_line(unit):
+    lines = [l for l in sh("journalctl", "--user", "-u", unit, "-n", "5", "-o", "cat", "--no-pager").splitlines() if l.strip()]
+    return lines[-1] if lines else ""
+
+
+def jobs():
+    res = []
+    for p in sorted(globmod.glob(os.path.join(STATE, "*.json"))):
+        j = json.load(open(p))
+        n = j["name"]
+        ex = os.path.join(STATE, n + ".exit")
+        j["exit"] = int(open(ex).read()) if os.path.exists(ex) else None
+        en = os.path.join(STATE, n + ".end")
+        j["end"] = float(open(en).read()) if os.path.exists(en) else None
+        j["unit"] = f"th-{n}.service"
+        res.append(j)
+    known = {j["unit"] for j in res}
+    for l in sh("systemctl", "--user", "list-units", "--all", "--plain", "--no-legend", "*.service").splitlines():
+        u = l.split()[0] if l.split() else ""
+        if LEGACY.match(u) and u not in known:
+            res.append({"name": u[:-8], "unit": u, "total": 0, "glob": "", "dir": "", "start": None, "exit": None, "end": None, "legacy": True})
+    return res
+
+
+def fmt_dur(s):
+    s = int(s)
+    return f"{s // 3600}:{s % 3600 // 60:02}:{s % 60:02}" if s >= 3600 else f"{s // 60}:{s % 60:02}"
+
+
+def fmt_mem(b):
+    try:
+        b = int(b)
+    except ValueError:
+        return ""
+    return f"{b / 2**30:.1f}G" if b >= 2**30 else f"{b / 2**20:.0f}M"
+
+
+def render():
+    now = time.time()
+    t = Table(expand=True, header_style="bold", box=None, padding=(0, 1))
+    for c, kw in [("job", {}), ("state", {}), ("time", {"justify": "right"}), ("progress", {"ratio": 1}),
+                  ("cpu", {"justify": "right"}), ("mem", {"justify": "right"}), ("last log line", {"ratio": 2, "no_wrap": True, "overflow": "ellipsis"})]:
+        t.add_column(c, **kw)
+    for j in jobs():
+        p = unit_props(j["unit"])
+        active = p.get("ActiveState") in ("active", "activating", "deactivating")
+        if active:
+            state = Text("running", "bold yellow")
+        elif j["exit"] == 0:
+            state = Text("done", "green")
+        elif j["exit"] is not None or p.get("ActiveState") == "failed":
+            state = Text(f"failed {j['exit'] if j['exit'] is not None else ''}".strip(), "bold red")
+        else:
+            state = Text(p.get("ActiveState", "?"), "dim")
+        start = j["start"]
+        if start is None and active:
+            mono = int(p.get("ActiveEnterTimestampMonotonic", "0") or 0)
+            if mono:
+                start = now - (time.monotonic() - mono / 1e6)
+        dur = fmt_dur((j["end"] or now) - start) if start else ""
+        prog = Text("")
+        if j.get("glob"):
+            done = len(globmod.glob(os.path.join(j["dir"], j["glob"])))
+            if j["total"]:
+                bar = ProgressBar(total=j["total"], completed=min(done, j["total"]), width=None,
+                                  complete_style="green" if not active else "yellow")
+                prog = Group(bar, Text(f"{done}/{j['total']}", "dim"))
+            else:
+                prog = Text(f"{done} files")
+        cpu = ""
+        if active:
+            ns = int(p.get("CPUUsageNSec", "0") or 0)
+            if j["unit"] in prev_cpu:
+                pns, pt = prev_cpu[j["unit"]]
+                if now > pt:
+                    cpu = f"{(ns - pns) / 1e9 / (now - pt) * 100:.0f}%"
+            prev_cpu[j["unit"]] = (ns, now)
+        name = Text(j["name"], "dim" if j.get("legacy") else "bold")
+        t.add_row(name, state, dur, prog, cpu, fmt_mem(p.get("MemoryCurrent", "")) if active else "", last_line(j["unit"]))
+    la = os.getloadavg()
+    mem = dict((l.split(":")[0], int(l.split()[1])) for l in open("/proc/meminfo"))
+    du = shutil.disk_usage("/")
+    head = Text.assemble(("th08 jobs  ", "bold cyan"), f"load {la[0]:.1f}/{os.cpu_count()}  ",
+                         f"mem avail {mem['MemAvailable'] / 2**20:.1f}G/{mem['MemTotal'] / 2**20:.0f}G  ",
+                         f"disk free {du.free / 2**30:.0f}G  ", (time.strftime("%H:%M:%S"), "dim"))
+    return Group(head, t, Text("thjobs log NAME — follow a job's log · thjobs clean — forget finished jobs", "dim"))
+
+
+def main():
+    a = sys.argv[1:]
+    if a[:1] == ["log"] and len(a) > 1:
+        n = a[1]
+        unit = n if n.endswith(".service") else (f"th-{n}" if os.path.exists(os.path.join(STATE, n + ".json")) else n)
+        os.execvp("journalctl", ["journalctl", "--user", "-u", unit, "-f", "-n", "200", "-o", "short-iso"])
+    if a[:1] == ["clean"]:
+        for j in jobs():
+            if j.get("legacy") or j["exit"] is None:
+                continue
+            for ext in (".json", ".exit", ".end"):
+                p = os.path.join(STATE, j["name"] + ext)
+                if os.path.exists(p):
+                    os.remove(p)
+        return
+    c = Console()
+    if a[:1] in (["-w"], ["watch"]):
+        render()
+        with Live(render(), console=c, refresh_per_second=1, screen=True) as live:
+            try:
+                while True:
+                    time.sleep(2)
+                    live.update(render())
+            except KeyboardInterrupt:
+                pass
+    else:
+        render()
+        time.sleep(1)
+        c.print(render())
+
+
+if __name__ == "__main__":
+    main()
