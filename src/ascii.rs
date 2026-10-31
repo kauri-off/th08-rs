@@ -1320,7 +1320,8 @@ impl Task<Ctx> for AsciiManager {
         } else {
             self.cont.open = false;
             self.pause.state = 0;
-            if !crate::effect::with(|e| e.frozen) {
+            // Ascii_Calc 0x402200 (calc prio 1) reads GameFlags bit 10 live, not the end-of-Player_Calc mirror (13 §4).
+            if crate::gamemgr::flags() & crate::gamemgr::F_DEATH == 0 {
                 popups_calc(ctx.anm.speed);
             }
         }

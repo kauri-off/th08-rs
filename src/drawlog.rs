@@ -927,7 +927,8 @@ fn panel_repaint(fr: &Frame, p: &Prim, q: &[Vtx; 4]) -> bool {
 // A quad ≥ 0.5 px outside the viewport covers no pixel centre; whether the cull (05 §9 step 3) keeps it depends on
 // f32 rounding at the edge, so it is dropped on both sides. Touching the near edges (or within 1 px of the far ones,
 // top-left rule) also covers no pixel. The log rounds to 2 decimals, so a quad within 0.05 px of that coverage edge
-// (16.00 vs 16.01, 16.05 vs 16.06) is `Edge`: matched normally, not counted when unmatched.
+// (16.00 vs 16.01) is dropped only from -0.05; a quad reaching at most 0.25 px past it (16.05 vs 16.06 moved between
+// builds) is `Edge`: matched normally, not counted when unmatched (05 §9 step 3, RE-Q64 tool rule).
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum VpSide {
     In,
@@ -948,7 +949,7 @@ fn off_vp(vp: [f32; 4], q: &[Vtx; 4]) -> VpSide {
         |m: f32| x1 <= vx + m || y1 <= vy + m || x0 > vx + vw - 1.0 - m || y0 > vy + vh - 1.0 - m;
     if off(-0.05) {
         VpSide::Off
-    } else if off(0.05) {
+    } else if off(0.25) {
         VpSide::Edge
     } else {
         VpSide::In
@@ -2043,7 +2044,9 @@ mod tests {
         assert_eq!(off_vp(vp, &quad(23.0, 100.0, 0.0)), Off);
         assert_eq!(off_vp(vp, &quad(24.0, 100.0, 0.0)), Edge);
         assert_eq!(off_vp(vp, &quad(100.0, 8.01, 0.0)), Edge);
-        assert_eq!(off_vp(vp, &quad(100.0, 8.06, 0.0)), In);
+        assert_eq!(off_vp(vp, &quad(100.0, 8.06, 0.0)), Edge);
+        assert_eq!(off_vp(vp, &quad(100.0, 8.26, 0.0)), In);
+        assert_eq!(off_vp(vp, &quad(100.0, 462.8, 0.0)), Edge);
         assert_eq!(off_vp(vp, &quad(25.0, 100.0, 0.0)), In);
         let p = Prim {
             tex: "stg7bg.anm#0".into(),

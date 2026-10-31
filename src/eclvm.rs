@@ -1023,8 +1023,12 @@ impl Exec<'_> {
 
     // Enemy_AutoFireAndDirAnim 0x423150 (07 §9.3).
     fn autofire_and_dir_anim(&mut self, t: &mut Thread) {
+        // The whole function (auto-fire and direction animation) runs only while life > 0.
+        if self.e.life <= 0 {
+            return;
+        }
         let gs = self.anm.speed;
-        if self.e.life > 0 && self.e.autofire_interval > 0 {
+        if self.e.autofire_interval > 0 {
             self.e.autofire_timer.tick(gs);
             if self.e.autofire_timer.cur >= self.e.autofire_interval {
                 if let Some(b) = self.e.stored_fire.clone() {
@@ -1496,6 +1500,7 @@ impl Exec<'_> {
             owner: spell.owner.clone(),
         });
         self.m.g.spell = Some(spell);
+        self.m.g.spell_left = None;
         // Timer +0x108 (remaining) := e+0x3378 (07 §11.1).
         self.m.g.spell_remaining.set(self.e.timeout);
         if let Some(st) = &self.m.stage {
@@ -1735,12 +1740,15 @@ impl Exec<'_> {
                 self.e.set_flag_b(B_STAGE_ANM, op == 59);
                 let base = self.ai(t, ins, 0);
                 self.e.dir_scripts = std::array::from_fn(|k| base + k as i32);
+                // Stored through 0x421DE0, which also sets the current direction e+0x332E := -1 (07 §9.3).
+                self.e.dir = -1;
             }
             56 | 60 => {
                 self.e.set_flag_b(B_STAGE_ANM, op == 60);
                 for k in 0..6 {
                     self.e.dir_scripts[k] = self.ai(t, ins, k);
                 }
+                self.e.dir = -1;
             }
             57 | 61 => {
                 self.e.set_flag_b(B_STAGE_ANM, op == 61);

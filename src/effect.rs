@@ -1009,7 +1009,8 @@ fn bomb_ring_update(e: &mut Effect, slot: usize) -> (Vec<ScreenEffect>, bool) {
         _ => {
             if t >= 30 {
                 let f = ((tf - 30.0) / 30.0).powi(4);
-                (r.amp, r.width) = (192.0 * f, 80.0 * f + 3.0);
+                // EffUpd_Slash 0x413070: minor axis 192·f + 0.0001, never 0.
+                (r.amp, r.width) = (192.0 * f + 0.0001, 80.0 * f + 3.0);
             }
             if t >= 60 {
                 return (fx, false);

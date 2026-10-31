@@ -721,6 +721,16 @@ pub struct Globals {
     // Spell-practice card id.
     pub card: i16,
     pub payout: Option<Payout>,
+    // Bonus +0xFC / max +0x2638 / rate +0x100 left by the last card after it ended: `Spell_AddBonus` still changes them
+    // (07 §11.1); overwritten by the next `Spell_Start`, zero-filled at stage start.
+    pub spell_left: Option<SpellBonus>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SpellBonus {
+    pub bonus: i32,
+    pub max: i32,
+    pub decay: i32,
 }
 
 // Capture payout pending in the spell object (07 §11.1, bit 8): paid at ring timer 130 or at the next card start.
@@ -1640,6 +1650,7 @@ impl EnemyManager {
     // Card-active block of Spell_End 0x4161B0 (07 §11.1).
     fn end_active_spell(&mut self, anm: &mut AnmManager) {
         let Some(s) = self.g.spell.take() else { return };
+        self.keep_bonus(&s);
         crate::gui::request(crate::gui::Req::BossHide);
         // Time reward from +0x114 and the remaining-time timer +0x108 (07 §11.1).
         let (total, remaining) = (s.duration, self.g.spell_remaining.cur);
@@ -1732,18 +1743,31 @@ impl EnemyManager {
     }
 
     // Spell_AddBonus 0x416B10 (07 §11): ignored while bit 11; below the max (unsigned) R += n/120, else bonus := max.
+    // No card-active test: after the card ended it changes the values the card left (07 §11.1).
     pub fn spell_add_bonus(&mut self, n: i32) {
         if self.g.bonus_frozen {
             return;
         }
-        if let Some(s) = &mut self.g.spell {
-            s.bonus = s.bonus.wrapping_add(n);
-            if (s.bonus as u32) < s.max as u32 {
-                s.decay += n / 120;
-            } else {
-                s.bonus = s.max;
-            }
+        let (bonus, max, decay) = match (&mut self.g.spell, &mut self.g.spell_left) {
+            (Some(s), _) => (&mut s.bonus, s.max, &mut s.decay),
+            (None, Some(l)) => (&mut l.bonus, l.max, &mut l.decay),
+            (None, None) => return,
+        };
+        *bonus = bonus.wrapping_add(n);
+        if (*bonus as u32) < max as u32 {
+            *decay += n / 120;
+        } else {
+            *bonus = max;
         }
+    }
+
+    // The spell object keeps +0xFC / +0x2638 / +0x100 after the card ends (07 §11.1).
+    fn keep_bonus(&mut self, s: &Spell) {
+        self.g.spell_left = Some(SpellBonus {
+            bonus: s.bonus,
+            max: s.max,
+            decay: s.decay,
+        });
     }
 
     // Card-active part of Spell_Calc 0x416B90 (07 §11.1 steps 1.1 and 1.3–1.7); the caller skips it while bit 10 /
@@ -1805,6 +1829,8 @@ impl EnemyManager {
         });
         if active {
             self.g.spell = Some(s);
+        } else {
+            self.keep_bonus(&s);
         }
         !active
     }
@@ -3060,6 +3086,32 @@ mod tests {
         });
         m.finish_spell(&mut anm);
         assert_eq!(player.borrow().bomb_cooldown, 16);
+    }
+
+    // 07 §11.1 (RE-Q64): time orbs after Spell_End still add to +0xFC (capped to +0x2638); bit 11 still blocks them.
+    #[test]
+    fn bonus_outlives_spell_end() {
+        let mut anm = AnmManager::default();
+        let (mut m, _player) = empty_manager(&mut anm);
+        m.g.spell = Some(Spell {
+            bonus: 100_000,
+            max: 110_000,
+            timed_out: true,
+            duration: 600,
+            ..Spell::default()
+        });
+        m.finish_spell(&mut anm);
+        assert!(m.g.spell.is_none());
+        m.spell_add_bonus(8000);
+        assert_eq!(
+            m.g.spell_left.map(|l| (l.bonus, l.decay)),
+            Some((108_000, 66))
+        );
+        m.spell_add_bonus(8000);
+        assert_eq!(m.g.spell_left.map(|l| l.bonus), Some(110_000));
+        m.g.bonus_frozen = true;
+        m.spell_add_bonus(8000);
+        assert_eq!(m.g.spell_left.map(|l| l.bonus), Some(110_000));
     }
 
     // 14 §3.1 (RE-Q54 U): only an enemy with flag A bit 6 is offered as the aimed enemy.

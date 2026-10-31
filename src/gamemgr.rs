@@ -43,26 +43,27 @@ const RANK: [[i32; 3]; 5] = [
 ];
 
 // Spell-practice BGM (02 §4, table 0x4C7670): the first record whose max spell id >= the card id; the flag is
-// record +0x10, 1 only for the two th08_13b records (retry music rule, 11 §4 step 3, 12 §3 state 10).
-const SPELL_BGM: [(i16, &str, bool); 18] = [
-    (1, "bgm/th08_00.mid", false),
-    (12, "bgm/th08_03.mid", false),
-    (16, "bgm/th08_04.mid", false),
-    (31, "bgm/th08_05.mid", false),
-    (35, "bgm/th08_06.mid", false),
-    (53, "bgm/th08_07.mid", false),
-    (76, "bgm/th08_09.mid", false),
-    (99, "bgm/th08_10.mid", false),
-    (118, "bgm/th08_12.mid", false),
-    (122, "bgm/th08_13.mid", false),
-    (142, "bgm/th08_14.mid", false),
-    (146, "bgm/th08_13b.mid", true),
-    (150, "bgm/th08_13.mid", false),
-    (170, "bgm/th08_15.mid", false),
-    (190, "bgm/th08_13b.mid", true),
-    (193, "bgm/th08_18.mid", false),
-    (204, "bgm/th08_19.mid", false),
-    (222, "bgm/th08_20.mid", false),
+// record +0x10, 1 only for the two th08_13b records (retry music rule, 11 §4 step 3, 12 §3 state 10); the last
+// field is record +0xC, the song-title sprite − 3 in stgNtxt.anm (12 §5.1a).
+const SPELL_BGM: [(i16, &str, bool, i32); 18] = [
+    (1, "bgm/th08_00.mid", false, 0),
+    (12, "bgm/th08_03.mid", false, 1),
+    (16, "bgm/th08_04.mid", false, 0),
+    (31, "bgm/th08_05.mid", false, 1),
+    (35, "bgm/th08_06.mid", false, 0),
+    (53, "bgm/th08_07.mid", false, 1),
+    (76, "bgm/th08_09.mid", false, 1),
+    (99, "bgm/th08_10.mid", false, 1),
+    (118, "bgm/th08_12.mid", false, 1),
+    (122, "bgm/th08_13.mid", false, 0),
+    (142, "bgm/th08_14.mid", false, 1),
+    (146, "bgm/th08_13b.mid", true, 2),
+    (150, "bgm/th08_13.mid", false, 0),
+    (170, "bgm/th08_15.mid", false, 1),
+    (190, "bgm/th08_13b.mid", true, 2),
+    (193, "bgm/th08_18.mid", false, 0),
+    (204, "bgm/th08_19.mid", false, 1),
+    (222, "bgm/th08_20.mid", false, 2),
 ];
 
 fn spell_bgm(card: i16) -> Option<&'static str> {
@@ -72,6 +73,11 @@ fn spell_bgm(card: i16) -> Option<&'static str> {
 // `FUN_00439916`: the card's 0x4C7670 record +0x10 retry-restart flag (02 §4).
 pub fn spell_bgm_restarts(card: i16) -> bool {
     SPELL_BGM.iter().find(|r| r.0 >= card).is_some_and(|r| r.2)
+}
+
+// The card's 0x4C7670 record +0xC song-title sprite (12 §5.1a, 02 §4); 0 past the table.
+pub fn spell_title_sprite(card: i16) -> i32 {
+    SPELL_BGM.iter().find(|r| r.0 >= card).map_or(0, |r| r.3)
 }
 
 // gm+0x3DE28 at every stage start, reloads included: 2 (play nothing) only for a spell-practice reload whose card
@@ -865,6 +871,20 @@ impl GameManager {
             hud_fresh,
         )?;
         let gui = crate::gui::Gui::register(ctx, self.player.clone(), enemies.clone())?;
+        // Spell practice in 6A/6B/Extra outside the last-word card ranges: spell-background first script +0xB34 := 2
+        // (11 §3.1, 13 §5).
+        if ctx.game.spell_practice() {
+            let c = ctx.game.card as i32;
+            let base2 = match ctx.game.stage {
+                6 => !(0x77..=0x7A).contains(&c),
+                7 => !(0x93..=0x96).contains(&c),
+                8 => !(0xBF..=0xC1).contains(&c) && c != 0xD5,
+                _ => false,
+            };
+            if base2 {
+                stage_t.borrow_mut().spell_first = 2;
+            }
+        }
         enemies.borrow_mut().msg = Some(hud.borrow().msg.clone());
         if fresh && !ctx.game.replay() {
             ctx.game.rpy = None;
@@ -1293,6 +1313,15 @@ fn loading_total(g: &Game, entries: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 12 §5.1a / 02 §4 (RE-Q64): record +0xC song-title sprite by card id.
+    #[test]
+    fn spell_title_sprites() {
+        let got: Vec<i32> = [0, 12, 13, 146, 147, 190, 193, 222]
+            .map(spell_title_sprite)
+            .to_vec();
+        assert_eq!(got, [0, 1, 0, 2, 0, 2, 0, 2]);
+    }
 
     // 11 §3.1: practice start power by stage, spell practice by card id.
     #[test]

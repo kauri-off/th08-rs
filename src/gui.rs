@@ -266,6 +266,16 @@ impl Gui {
     }
 
     // Bonus line: 8 digits of the bonus, captures and attempts (3 digits each), leading zeros suppressed.
+    // Live +0xFC: the card's, or after the card ended the value time orbs keep changing (07 §11.1).
+    fn read_bonus(&mut self) {
+        let en = self.enemies.borrow();
+        if let Some(s) = &en.g.spell {
+            (self.bonus, self.capturable) = (s.bonus, s.capture);
+        } else if let Some(l) = &en.g.spell_left {
+            self.bonus = l.bonus;
+        }
+    }
+
     // 12 §5.8 draw step 4: VM 12 stamps sprite 0x88 + d from VM 13 pos + (−40, +1), advance 7.
     fn draw_bonus(&mut self, anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx) {
         let (captures, attempts) = self.history;
@@ -379,18 +389,14 @@ impl Task<Ctx> for Gui {
             let speed = ctx.anm.speed;
             self.enemies.borrow_mut().g.spell_remaining.dec(speed);
         }
-        if let Some(s) = &self.enemies.borrow().g.spell {
-            (self.bonus, self.capturable) = (s.bonus, s.capture);
-        }
+        self.read_bonus();
         Ret::Next
     }
 
     // Spell_Draw 0x4178C0 (12 §5.8 draw steps 1–4).
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
-        if let Some(s) = &self.enemies.borrow().g.spell {
-            (self.bonus, self.capturable) = (s.bonus, s.capture);
-        }
+        self.read_bonus();
         self.flush_texts(ctx);
         let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
         gfx.set_viewport(PLAYFIELD);

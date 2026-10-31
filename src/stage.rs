@@ -787,8 +787,8 @@ impl Stage {
         }
         anm.reset_render_state();
         gfx.set_depth_test(true);
-        let tint = 0xFFE0C0C0u32.to_le_bytes();
-        let grey = [tint[2], tint[1], tint[0], tint[3]];
+        // vm.color is stored B,G,R,A (D3DCOLOR little-endian), so the bytes are used as they are (07 §12.1).
+        let grey = 0xFFE0C0C0u32.to_le_bytes();
         if let Some(vm) = self.spell_vms.get_mut(0) {
             let col = vm.color;
             vm.scale = [-1.5, -1.75];
@@ -1045,9 +1045,9 @@ impl View<'_> {
         let (dx, dy) = (d[0] / len, d[1] / len);
         let (u0, v0) = (spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]);
         let (u1, v1) = (spr.uv[2] + vm.uv_off[0], spr.uv[3] + vm.uv_off[1]);
-        let o = anm.screen_offset;
+        // DrawCustomQuad / PushQuad add no screen-shake offset (06 §11.3).
         let vx = |x: f32, y: f32, z: f32, uv: [f32; 2], c: [u8; 4]| {
-            Vertex::screen(x + o[0] + 0.5, y + o[1] + 0.5, z, uv, c)
+            Vertex::screen(x + 0.5, y + 0.5, z, uv, c)
         };
         let v = [
             vx(sa[0] + dy * wa, sa[1] - dx * wa, sa[2], [u0, v0], c0),
@@ -1135,8 +1135,9 @@ impl Task<Ctx> for Stage {
             }
             gfx.set_depth_test(false);
             gfx.set_viewport(PLAYFIELD);
+            // AnmManager_DrawRotFlush 0x40BAF0 = Draw2DRot (mode 2) whatever the VM's draw mode (13 §5).
             for vm in &mut self.spell_vms {
-                anm.draw(gfx, vm);
+                anm.draw_mode(gfx, vm, 2);
             }
             if self.spell_mask && self.spell_state > 0 {
                 self.draw_spell_mask(anm, gfx);

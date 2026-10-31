@@ -340,7 +340,15 @@ impl Hud {
             gfx,
             ar,
             TXT_SLOT,
-            &format!("stg{}txt.anm", TXT_NAMES[stage]),
+            // stg8txt.anm in spell practice with card id >= 0xCD (12 §5.1a).
+            &format!(
+                "stg{}txt.anm",
+                TXT_NAMES[if g.spell_practice() && g.card >= 0xCD {
+                    8
+                } else {
+                    stage
+                }]
+            ),
         )?;
         let team = crate::sht::team(shot);
         let variant = match shot {
@@ -420,11 +428,16 @@ impl Hud {
             self.diff_vm
                 .set_sprite(anm, crate::ascii::difficulty_sprite(g));
         }
+        let title_on = !g.reload_same || crate::gamemgr::spell_bgm_restarts(g.card);
         self.title = (0..4)
             .map(|i| {
                 let mut vm = AnmVm::default();
-                if !g.spell_practice() || i == 3 {
+                if !g.spell_practice() {
                     anm.set_script(&mut vm, TXT_SLOT, i);
+                } else if i == 0 && title_on {
+                    // Spell practice: VM 0 (not VM 3) := script 3 with the card's song-title sprite; VMs 1–3 untouched.
+                    anm.set_script(&mut vm, TXT_SLOT, 3);
+                    vm.set_sprite(anm, crate::gamemgr::spell_title_sprite(g.card) + 3);
                 }
                 vm
             })

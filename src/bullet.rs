@@ -1099,10 +1099,13 @@ impl BulletManager {
         anm.set_script(&mut l.body, ANM_SLOT, (d.kind as i32 + 10).max(0) as usize);
         let sp = l.body.sprite_index as i32 + d.colour as i32;
         l.body.set_sprite(anm, sp);
-        anm.set_script(
-            &mut l.emitter,
-            ANM_SLOT,
-            0x92 + COLOR_SMALL.get(d.colour as usize).copied().unwrap_or(0) as usize,
+        // Emitter: AnmVm_InitWithSprite 0x4068A0 = AnmVm_Init + sprite 0x92 + n, no script (08 §6.1).
+        l.emitter = AnmVm::default();
+        l.emitter.init();
+        l.emitter.anm_slot = ANM_SLOT as _;
+        l.emitter.set_sprite(
+            anm,
+            0x92 + COLOR_SMALL.get(d.colour as usize).copied().unwrap_or(0),
         );
         l.emitter.flags =
             (l.emitter.flags & !(3 << anmvm::F_BLEND_SHIFT)) | (1 << anmvm::F_BLEND_SHIFT);
