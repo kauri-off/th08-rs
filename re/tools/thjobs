@@ -3,7 +3,6 @@
 import glob as globmod, json, os, re, shutil, subprocess, sys, time
 from rich.console import Console, Group
 from rich.live import Live
-from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
 
@@ -62,7 +61,7 @@ def fmt_mem(b):
 def render():
     now = time.time()
     t = Table(expand=True, header_style="bold", box=None, padding=(0, 1))
-    for c, kw in [("job", {}), ("state", {}), ("time", {"justify": "right"}), ("progress", {"ratio": 1}),
+    for c, kw in [("job", {}), ("state", {}), ("time", {"justify": "right"}), ("progress", {"no_wrap": True, "min_width": 40}),
                   ("cpu", {"justify": "right"}), ("mem", {"justify": "right"}), ("last log line", {"ratio": 2, "no_wrap": True, "overflow": "ellipsis"})]:
         t.add_column(c, **kw)
     for j in jobs():
@@ -83,12 +82,14 @@ def render():
                 start = now - (time.monotonic() - mono / 1e6)
         dur = fmt_dur((j["end"] or now) - start) if start else ""
         prog = Text("")
-        if j.get("glob"):
-            done = len(globmod.glob(os.path.join(j["dir"], j["glob"])))
+        globs = [j["glob"]] if isinstance(j.get("glob"), str) and j["glob"] else (j.get("glob") or [])
+        if globs:
+            done = sum(len(globmod.glob(os.path.join(j["dir"], g))) for g in globs)
             if j["total"]:
-                bar = ProgressBar(total=j["total"], completed=min(done, j["total"]), width=None,
-                                  complete_style="green" if not active else "yellow")
-                prog = Group(bar, Text(f"{done}/{j['total']}", "dim"))
+                f = min(done / j["total"], 1.0)
+                n = round(f * 24)
+                prog = Text.assemble(("━" * n, "green" if not active else "yellow"), ("━" * (24 - n), "grey30"),
+                                     f" {done}/{j['total']} ", (f"{f * 100:.0f}%", "bold"))
             else:
                 prog = Text(f"{done} files")
         cpu = ""
