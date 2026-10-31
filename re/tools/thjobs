@@ -91,9 +91,17 @@ def render():
         if globs:
             # a glob may be "PATTERN|COUNT|WEIGHT": its own expected count and relative cost per file (for the ETA)
             st = []
-            for g in globs:
+            for k, g in enumerate(globs):
                 pat, cnt, w = (g.split("|") + ["", ""])[:3]
-                st.append((len(globmod.glob(os.path.join(j["dir"], pat))), int(cnt) if cnt else 0, float(w) if w else 1.0))
+                # a finished job keeps the counts it had when it ended (its output may be cleaned up later)
+                d = j["final"][k] if "final" in j else len(globmod.glob(os.path.join(j["dir"], pat)))
+                st.append((d, int(cnt) if cnt else 0, float(w) if w else 1.0))
+            if not active and j["end"] is not None and "final" not in j:
+                j["final"] = [d for d, _, _ in st]
+                jp = os.path.join(STATE, j["name"] + ".json")
+                saved = json.load(open(jp))
+                saved["final"] = j["final"]
+                json.dump(saved, open(jp, "w"))
             done = sum(min(d, c) if c else d for d, c, _ in st)
             total = j["total"] or sum(c for _, c, _ in st)
             if total:
