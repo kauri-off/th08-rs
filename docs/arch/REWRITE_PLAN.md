@@ -24,6 +24,17 @@ previous step's, when a step intentionally changes draw); **B** ref500 490/490 +
 | 11 | idiomatic pass per module (types, VM Op enums, clippy subset, dead paths) | A D6 | T D per module, B weekly | |
 | 12 | optional renderer rewrite | — | image diff | |
 
+Mobile (ARCH_D_MOBILE.md; Android APK + mobile web, no iOS) adds to the steps above:
+- every step: W also builds `th08-core`/`th08-formats` for `aarch64-linux-android`;
+- 7b (after IMPL158): one merged app-side input source (keyboard/gamepad/touch → input word); save + settings dirs
+  passed in by the entry point; frame pacing split from the window code (suspend/resume, no sleep loop);
+- 8: GPU device separate from the surface (drop/recreate); texture provenance list; touch overlay drawn after scaling,
+  never into the 640×480 frame;
+- 8b: game data through an app-side source trait (folder / APK / web);
+- 9: saves outside the original's save points use a World clone (score.dat write uses the RNG);
+- 10: app crate builds as cdylib with desktop/Android/web entries; rfd/clap/env_logger desktop-only;
+- after 10: Android runs (≈6) then mobile web (≈2); local APK script with bundled assets.
+
 New tests introduced along the way: emit-off run (logic traces identical with emit disabled, after 8); World
 clone/restore round trip (after 9); wasm trace under node equals native (after 10, see IMPL150_QUESTIONS.md);
 chaos pack (after 8b).
