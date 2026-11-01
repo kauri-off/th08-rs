@@ -3,9 +3,9 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::{BulletDesc, BulletManager, LaserDesc};
+use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::ecl::{self, Ecl};
 use crate::game::{Ctx, Sys};
-use crate::gfx::PLAYFIELD;
 use crate::player::PlayerRef;
 use crate::stage::Stage;
 use crate::task::{self, Chain, Ret, Task};
@@ -829,8 +829,9 @@ impl EnemyManager {
         let (ecl_name, enm) = files(index, spell);
         let ecl = ecl::parse(ctx.archive.read(&ecl_name)?)?;
         ctx.anm
-            .load(&mut ctx.gfx, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
-        ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_STAGE, &enm)?;
+            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
+        ctx.anm
+            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_STAGE, &enm)?;
         // EnemyManager init clears the freeze byte 0x160F534.
         ctx.timer_pause = 0;
         let mut m = EnemyManager::new(ecl, bullets, diff);
@@ -2570,11 +2571,7 @@ impl EnemyManager {
 
     // After-image trail (07 §10.6, op 157), drawn before the main VM; the main VM's scale and colour are restored.
     // Returns the last drawn sprite copy's draw pos (07 §10.6 QUIRK), None when no copy was drawn.
-    fn draw_trail(
-        anm: &mut AnmManager,
-        gfx: &mut crate::gfx::Gfx,
-        e: &mut Enemy,
-    ) -> Option<[f32; 3]> {
+    fn draw_trail(anm: &mut AnmManager, rec: &mut Recorder, e: &mut Enemy) -> Option<[f32; 3]> {
         let mut last = None;
         let (f, n) = (e.trail[0], e.trail_n() as i32);
         // Port-only bound: a step b ≤ 0 would never end the walk (data: b ≥ 1).
@@ -2607,7 +2604,7 @@ impl EnemyManager {
                         0.3,
                     ];
                     vm.pos_offset = [0.0; 3];
-                    anm.draw_mode_z(gfx, vm, 2, 0.3);
+                    anm.draw_mode_z(rec, vm, 2, 0.3);
                     vm.pos_offset = saved_off;
                     last = Some(vm.pos);
                 }
@@ -2659,7 +2656,7 @@ impl EnemyManager {
                 v.push(([x + sn * h, y - cs * h], [ua, vb], al));
             }
             if v.len() > 2 {
-                anm.draw_ring_strip(gfx, vm, &v);
+                anm.draw_ring_strip(rec, vm, &v);
             }
         }
         (e.vm.scale, e.vm.color) = (scale, color);
@@ -2695,14 +2692,8 @@ impl EnemyManager {
     }
 
     // Enemy drawing (07 §10.6): sub VM 0, main VM, sub VM 1, all Draw2DRot.
-    fn draw_layer(
-        &mut self,
-        ctx_anm: &mut AnmManager,
-        gfx: &mut crate::gfx::Gfx,
-        high: bool,
-        flags: u32,
-    ) {
-        gfx.set_viewport(PLAYFIELD);
+    fn draw_layer(&mut self, ctx_anm: &mut AnmManager, rec: &mut Recorder, high: bool, flags: u32) {
+        rec.set_viewport(PLAYFIELD);
         // Prio 11 draws with tint 0xFFF01010 while bullets are frozen (07 §10.6).
         let frozen = self.player.borrow().freeze_bullets(flags);
         if high && frozen {
@@ -2727,7 +2718,7 @@ impl EnemyManager {
                 // QUIRK (07 §10.6): only scale/colour are restored after the trail, so the main VM keeps the last
                 // drawn copy's pos (z 0.3) and rotation.
                 let trail_pos = if main && e.trail[0] != 0 {
-                    Self::draw_trail(ctx_anm, gfx, e)
+                    Self::draw_trail(ctx_anm, rec, e)
                 } else {
                     None
                 };
@@ -2765,7 +2756,7 @@ impl EnemyManager {
                 vm.pos = trail_pos.unwrap_or([p[0] + off[0], p[1] + off[1], z]);
                 vm.pos_offset = [0.0; 3];
                 // Draw2DRot carries the VM z (0.25 main / 0.3 sub) as the vertex depth (07 §10.6, 05 §9).
-                ctx_anm.draw_mode_z(gfx, vm, 2, z);
+                ctx_anm.draw_mode_z(rec, vm, 2, z);
                 vm.pos_offset = saved_off;
             }
         }
@@ -2779,8 +2770,8 @@ impl EnemyManager {
 impl Task<Ctx> for EnemyManager {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.gfx, ANM_ENEMY);
-            ctx.anm.unload(&mut ctx.gfx, ANM_STAGE);
+            ctx.anm.unload(&mut ctx.gfx.rec, ANM_ENEMY);
+            ctx.anm.unload(&mut ctx.gfx.rec, ANM_STAGE);
         }
     }
 
@@ -2798,7 +2789,7 @@ impl Task<Ctx> for EnemyManager {
 
     // Draw prio 8 → layers 0–1, prio 11 → layers 2–3 (07 §10.6).
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        self.draw_layer(&mut ctx.anm, &mut ctx.gfx, tag == 1, ctx.game.flags);
+        self.draw_layer(&mut ctx.anm, &mut ctx.gfx.rec, tag == 1, ctx.game.flags);
         Ret::Next
     }
 }

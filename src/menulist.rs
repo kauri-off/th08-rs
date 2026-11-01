@@ -3,9 +3,9 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
+use crate::drawlist::{Blend, Vertex};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
-use crate::gfx::{Blend, Vertex};
 use crate::input::{DOWN, LEFT, RIGHT, UP};
 use crate::menu::{CANCEL, CONFIRM, MainMenu, Pending};
 use crate::scoredat::Catk;
@@ -391,7 +391,7 @@ fn scratch(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
 
 fn draw_at(ctx: &mut Ctx, vm: &mut AnmVm, x: f32, y: f32) {
     vm.pos = [x, y, 0.0];
-    ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
+    ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 0);
 }
 
 fn set_alpha(vm: &mut AnmVm, a: u8) {
@@ -431,7 +431,7 @@ fn pie(ctx: &mut Ctx, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
         let a = -std::f32::consts::FRAC_PI_2 + k as f32 * step;
         verts.push(p(c[0] + r * a.cos(), c[1] + r * a.sin()));
     }
-    ctx.gfx.fan(Blend::Alpha, &verts);
+    ctx.gfx.rec.fan(Blend::Alpha, &verts);
 }
 
 // Text_RenderToVm (white, outline 0, font 15, 16 §6.3 / §6.5) into the sprite's texture strip.
@@ -446,10 +446,11 @@ pub(crate) fn render_strip(
         return;
     };
     // 10 §6: x = u0 = 0, W = texture-row width (512), 15 rows from v0; rows 15–16 of a 17-high sprite stay untouched.
-    let t = ctx.gfx.texture(sp.tex);
+    let t = ctx.gfx.rec.texture(sp.tex);
     let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
     let rgba = raster.render(s, [255, 255, 255], w as usize, 15);
-    ctx.gfx.write_texture(sp.tex, 0, ty, w, 15, &rgba);
+    // TODO(step 8 text): CPU raster upload; becomes a text output command (decision 7).
+    ctx.gfx.rec.write_texture(sp.tex, 0, ty, w, 15, &rgba);
 }
 
 impl MainMenu {

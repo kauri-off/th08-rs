@@ -104,3 +104,11 @@ Per file: `gfx: &mut Gfx` → `rec: &mut Recorder`, `gfx.x(` → `rec.x(`, calle
 - Text raster: hud / gui / menu / menulist / musicroom / ending rasterise on the CPU and `write_texture`; hud does it
   in calc. Decision 7 (text as an output command) is a later run.
 - Device-loss rebuild from `ResTable` provenance (`TexSource`) is recorded but not implemented.
+
+## 5. Status after IMPL162–166
+
+All core file groups converted (stage, gamemgr, effect, enemy, player, pshot, bomb, bullet, ascii, supervisor, result,
+menu, menulist, musicroom, ending, hud, gui). Left: game.rs/anmdebug; `Ctx.gfx.rec` → `Ctx`; bullet.rs
+`BulletManager::draw` still takes `&mut Gfx` for `fx.draw_over_bullets`; ascii public fns take
+`impl AsMut<Recorder>` (callers in app.rs/game.rs still pass Gfx); result.rs test helper `shot` reads back via
+`Gfx::capture`; text raster (`TODO(step 8 text)`: hud in calc, gui, menu, menulist, musicroom, ending).

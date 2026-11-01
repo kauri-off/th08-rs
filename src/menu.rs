@@ -3,9 +3,9 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::config::Config;
+use crate::drawlist::{FULLSCREEN, TexId};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
-use crate::gfx::{FULLSCREEN, TextureId};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
 use crate::task::{Chain, Ret, Task};
@@ -147,7 +147,7 @@ pub struct InfoNotices {
     // 0x164D530 as of the registering frame: only Supervisor_Calc writes it, so it stays frozen in the loop.
     pub(crate) frozen_prev: u16,
     // Surface 0 (title/infoNN.jpg), the loop counter t and the t drawn by this iteration.
-    cur: Option<(TextureId, i32)>,
+    cur: Option<(TexId, i32)>,
     drawn: i32,
 }
 
@@ -173,7 +173,7 @@ impl InfoNotices {
             match ctx.info.cur {
                 Some((t, f)) if f >= INFO_FRAMES => {
                     // After the loop, surface 0 is released.
-                    ctx.gfx.free_texture(t);
+                    ctx.gfx.rec.free_texture(t);
                     ctx.info.cur = None;
                 }
                 Some(_) => break,
@@ -185,7 +185,7 @@ impl InfoNotices {
                         .archive
                         .read(file)
                         .map_err(anyhow::Error::from)
-                        .and_then(|b| ctx.gfx.load_image(file, &b))
+                        .and_then(|b| ctx.gfx.rec.load_image(file, &b))
                     {
                         Ok(t) => ctx.info.cur = Some((t, 0)),
                         Err(e) => log::warn!("{file}: {e:#}"),
@@ -215,10 +215,10 @@ impl InfoNotices {
         let Some((tex, _)) = ctx.info.cur else {
             return;
         };
-        ctx.gfx.set_viewport(FULLSCREEN);
-        ctx.gfx.image(tex, 0.0, 0.0);
+        ctx.gfx.rec.set_viewport(FULLSCREEN);
+        ctx.gfx.rec.image(tex, 0.0, 0.0);
         if let Some(a) = info_fade_alpha(ctx.info.drawn) {
-            ctx.gfx.rect(0.0, 0.0, 639.0, 479.0, [0, 0, 0, a]);
+            ctx.gfx.rec.rect(0.0, 0.0, 639.0, 479.0, [0, 0, 0, a]);
         }
     }
 }
@@ -331,7 +331,7 @@ pub struct MainMenu {
     pub(crate) vms: Vec<AnmVm>,
     pub(crate) base: Vec<i32>,
     // Surface slot 0 (title00.png / select00.png), copied before everything (12 §2.2).
-    pub(crate) surface: Option<(TextureId, &'static str)>,
+    pub(crate) surface: Option<(TexId, &'static str)>,
     pub(crate) raster: crate::text::Raster,
     // The 14 description VMs and the current one, pointer +0xC2BC (None = 0), run and drawn while set (12 §2.2).
     pub(crate) desc: Vec<AnmVm>,
@@ -431,13 +431,13 @@ impl MainMenu {
             return;
         }
         if let Some((t, _)) = self.surface.take() {
-            ctx.gfx.free_texture(t);
+            ctx.gfx.rec.free_texture(t);
         }
         match ctx
             .archive
             .read(name)
             .map_err(anyhow::Error::from)
-            .and_then(|b| ctx.gfx.load_image(name, &b))
+            .and_then(|b| ctx.gfx.rec.load_image(name, &b))
         {
             Ok(t) => self.surface = Some((t, name)),
             Err(e) => log::warn!("{name}: {e:#}"),
@@ -458,7 +458,7 @@ impl MainMenu {
         let Some(sp) = ctx.anm.sprite(0, 21 + i).copied() else {
             return;
         };
-        let t = ctx.gfx.texture(sp.tex);
+        let t = ctx.gfx.rec.texture(sp.tex);
         let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
         let size = 15;
         let rgba = self.raster.render_outline(
@@ -469,7 +469,10 @@ impl MainMenu {
             centred_x(text),
             0x300000,
         );
-        ctx.gfx.write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
+        // TODO(step 8 text): CPU raster upload; becomes a text output command (decision 7).
+        ctx.gfx
+            .rec
+            .write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
     }
 
     // Change test of the top menu, option and key config (12 §2.2): cursor ≠ +0x08 → +0xC2BC := description VM
@@ -1235,9 +1238,9 @@ impl Task<Ctx> for MainMenu {
             ctx.bgm.play_bgm("bgm/th08_01.mid");
         }
         ctx.anm
-            .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "title01.anm")?;
+            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, "title01.anm")?;
         ctx.anm.load(
-            &mut ctx.gfx,
+            &mut ctx.gfx.rec,
             &ctx.archive,
             crate::menulist::RT_SLOT,
             "resulttext.anm",
@@ -1326,10 +1329,10 @@ impl Task<Ctx> for MainMenu {
             return;
         }
         if let Some((t, _)) = self.surface.take() {
-            ctx.gfx.free_texture(t);
+            ctx.gfx.rec.free_texture(t);
         }
-        ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
-        ctx.anm.unload(&mut ctx.gfx, crate::menulist::RT_SLOT);
+        ctx.anm.unload(&mut ctx.gfx.rec, ANM_SLOT);
+        ctx.anm.unload(&mut ctx.gfx.rec, crate::menulist::RT_SLOT);
         // The draw node can outlive a calc node removed by return 0 (00 §3.1); it then draws nothing.
         self.vms.clear();
         self.desc_cur = None;
@@ -1406,19 +1409,19 @@ impl Task<Ctx> for MainMenu {
         if ctx.game.menu_loading > 0 || self.vms.is_empty() {
             return Ret::Next;
         }
-        ctx.gfx.set_viewport(FULLSCREEN);
+        ctx.gfx.rec.set_viewport(FULLSCREEN);
         if tag == SURFACE_PRIO as u8 {
             if let Some((t, _)) = self.surface {
-                ctx.gfx.image(t, 0.0, 0.0);
+                ctx.gfx.rec.image(t, 0.0, 0.0);
             }
             return Ret::Next;
         }
         for vm in &mut self.vms {
-            ctx.anm.draw(&mut ctx.gfx, vm);
+            ctx.anm.draw(&mut ctx.gfx.rec, vm);
         }
         // The current description VM (text.anm script 9 at (320, 448)) on every screen while +0xC2BC ≠ 0 (12 §2.2).
         if let Some(i) = self.desc_cur {
-            ctx.anm.draw(&mut ctx.gfx, &mut self.desc[i]);
+            ctx.anm.draw(&mut ctx.gfx.rec, &mut self.desc[i]);
         }
         match self.screen {
             PRACTICE_STAGE => self.practice_stage_draw(ctx),
@@ -1442,7 +1445,7 @@ impl Task<Ctx> for MainMenu {
             vm.set_sprite(&ctx.anm, spr);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
             vm.pos = [400.0, 170.0, 0.0];
-            ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
+            ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 0);
         }
         Ret::Next
     }

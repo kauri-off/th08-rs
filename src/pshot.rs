@@ -1,10 +1,10 @@
 //! Player bullets, shot functions, options and the player laser (09 §4–§5, 14 §3–§5).
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::drawlist::Recorder;
 use crate::fmath;
 use crate::game::Sys;
 use crate::gamemgr::F_13;
-use crate::gfx::Gfx;
 use crate::input;
 use crate::item::ItemManager;
 use crate::player::{ANM_SLOT, Player};
@@ -449,14 +449,14 @@ impl Player {
     }
 
     // Option draw fn 0x44E9E0: VM at pos + playfield origin, z 0.49, Draw2DRot.
-    pub fn draw_options(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
+    pub fn draw_options(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
         for o in self
             .options
             .iter_mut()
             .filter(|o| o.state != 0 && o.vm.script.is_some())
         {
             o.vm.pos = [o.pos[0] + 32.0, o.pos[1] + 16.0, 0.0];
-            anm.draw_mode_z(gfx, &mut o.vm, 2, 0.49);
+            anm.draw_mode_z(rec, &mut o.vm, 2, 0.49);
         }
     }
 
@@ -975,7 +975,7 @@ impl Player {
     }
 
     // Player draw (14 §5): flying bullets (state 1) at z 0.4 with their extra draw fn, or hit bullets (state 2) at z 0.2.
-    pub fn draw_bullets(&mut self, anm: &mut AnmManager, gfx: &mut Gfx, state: u8) {
+    pub fn draw_bullets(&mut self, anm: &mut AnmManager, rec: &mut Recorder, state: u8) {
         let youkai_max = self.stats.youkai_max();
         for b in self
             .bullets
@@ -996,18 +996,18 @@ impl Player {
             b.vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.0];
             if state == 2 {
                 let mode = b.vm.draw_mode;
-                anm.draw_mode_z(gfx, &mut b.vm, mode, 0.2);
+                anm.draw_mode_z(rec, &mut b.vm, mode, 0.2);
                 continue;
             }
-            anm.draw_mode_z(gfx, &mut b.vm, 2, 0.4);
+            anm.draw_mode_z(rec, &mut b.vm, 2, 0.4);
             if b.draw == 1 {
-                Self::draw_trail(anm, gfx, b, youkai_max);
+                Self::draw_trail(anm, rec, b, youkai_max);
             }
         }
     }
 
     // Trail draw 0x450AD0 (14 §4): every second trail point, alpha fading from 3/4 of the VM alpha.
-    fn draw_trail(anm: &mut AnmManager, gfx: &mut Gfx, b: &mut PBullet, youkai_max: bool) {
+    fn draw_trail(anm: &mut AnmManager, rec: &mut Recorder, b: &mut PBullet, youkai_max: bool) {
         let n = b.trail_n.max(1);
         let alpha = b.vm.color[anmvm::A];
         let a0 = alpha as i32 * 3 / 4;
@@ -1028,7 +1028,7 @@ impl Player {
             }
             b.vm.pos = [p[0] + 32.0, p[1] + 16.0, p[2]];
             // VM pos z := trail[c].z (14 §4), not the 0.4 of the main draw.
-            anm.draw_mode_z(gfx, &mut b.vm, 2, p[2]);
+            anm.draw_mode_z(rec, &mut b.vm, 2, p[2]);
             c += 2;
         }
         // Only the alpha byte is restored: the youkai-max red stays in the VM colour (14 §4).

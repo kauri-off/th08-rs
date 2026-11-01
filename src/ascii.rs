@@ -1,6 +1,7 @@
 //! ASCII manager 0x4CCE20: string queue, score popups, gauge readout, boss markers, pause and continue menus (12 §2.9, §3, §4, §5.9, §5.10; 13 §4).
 
 use crate::anmvm::{self, AnmVm};
+use crate::drawlist::Recorder;
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
 use crate::gfx::{Blend, FULLSCREEN};
@@ -122,8 +123,8 @@ impl Queue {
         Text::new(x, y, s).color(self.color)
     }
 
-    fn draw(&mut self, ctx_anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, high: bool) {
-        self.draw_where(ctx_anm, gfx, Some(high));
+    fn draw(&mut self, ctx_anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, high: bool) {
+        self.draw_where(ctx_anm, rec, Some(high));
     }
 
     // Ascii_DrawStrings 0x402B20 (12 §2.9): '\n' → y += 16·scale y, ' ' → advance only, other bytes Draw2DSnap.
@@ -131,7 +132,7 @@ impl Queue {
     fn draw_where(
         &mut self,
         ctx_anm: &crate::anmmgr::AnmManager,
-        gfx: &mut crate::gfx::Gfx,
+        rec: &mut Recorder,
         pass: Option<bool>,
     ) {
         let o = ctx_anm.screen_offset;
@@ -145,7 +146,7 @@ impl Queue {
             } else {
                 FULLSCREEN
             };
-            gfx.set_viewport(vp);
+            rec.set_viewport(vp);
             let (mut x, mut y) = (t.x + o[0], t.y + o[1]);
             // Chars U+0000-U+00FF are glyph bytes (U+0080 / U+0081 = the "SP" / "END" cells, 16 §2.2).
             for c in t.s.chars().map(|c| c as u32 as u8) {
@@ -181,7 +182,7 @@ impl Queue {
                             col,
                         )
                     };
-                    gfx.strip(
+                    rec.strip(
                         sp.tex,
                         Blend::Alpha,
                         true,
@@ -207,7 +208,7 @@ impl Queue {
 // prompt from c > 4, alpha written into the queue colour and left there, then the whole queue drawn and emptied.
 pub fn loading_prompt(
     anm: &crate::anmmgr::AnmManager,
-    gfx: &mut crate::gfx::Gfx,
+    rec: &mut Recorder,
     q: &mut Queue,
     state: &mut u32,
 ) {
@@ -217,7 +218,7 @@ pub fn loading_prompt(
     q.color[anmvm::A] = a;
     let t = q.text(288.0, 454.0, "Press Shot Button").scale(0.5);
     q.push(t);
-    q.draw_where(anm, gfx, None);
+    q.draw_where(anm, rec, None);
 }
 
 // The counter part of the prompt (12 §1): alpha when this draw shows it; c > 64 → state 5 after the draw (period 60).
@@ -247,13 +248,13 @@ fn prompt_alpha(c: i32) -> u8 {
 }
 
 // Draws one string at once (outside the queue), in the caller's draw pass (like Ascii_DrawGaugePercent, 12 §2.9).
-pub fn draw_now(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, t: Text) {
+pub fn draw_now(anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, t: Text) {
     let high = t.high;
     let mut q = Queue {
         items: vec![t],
         ..Queue::default()
     };
-    q.draw(anm, gfx, high);
+    q.draw(anm, rec, high);
 }
 
 // Small popups: slots 0–719 plus 3 special slots 720–722, life 60; large popups: 128 slots, life 90 (13 §4).
@@ -497,10 +498,10 @@ fn popups_draw(
     ov: &mut Overlays,
     anm: &mut crate::anmmgr::AnmManager,
     rng: &mut crate::rng::Rng,
-    gfx: &mut crate::gfx::Gfx,
+    rec: &mut Recorder,
     pl: [f32; 3],
 ) {
-    gfx.set_viewport(crate::gfx::PLAYFIELD);
+    rec.set_viewport(crate::gfx::PLAYFIELD);
     let mut small = popup_vm(anm, 0, 0.1);
     let mut large = popup_vm(anm, 0x88, 0.0);
     {
@@ -522,11 +523,11 @@ fn popups_draw(
                 if popup_glyph(anm, &mut small, (g + shift) as usize) {
                     small.pos[0] = x0 + 8.0 * k as f32;
                     small.pos[1] = q.pos[1];
-                    anm.draw_mode(gfx, &mut small, 0);
+                    anm.draw_mode(rec, &mut small, 0);
                 }
             }
         }
-        darkness_draw(&mut ov.darkness, anm, rng, gfx, pl);
+        darkness_draw(&mut ov.darkness, anm, rng, rec, pl);
         for q in p.large.iter().flatten() {
             set_rgb(&mut large, q.colour);
             large.color[anmvm::A] = popup_alpha(q.pos, pl);
@@ -537,7 +538,7 @@ fn popups_draw(
                 if popup_glyph(anm, &mut large, 0x88 + g as usize) {
                     large.pos[0] = x0 + 7.0 * q.scale * k as f32;
                     large.pos[1] = q.pos[1];
-                    anm.draw_mode(gfx, &mut large, 0);
+                    anm.draw_mode(rec, &mut large, 0);
                 }
             }
         }
@@ -595,7 +596,7 @@ fn darkness_draw(
     d: &mut Darkness,
     anm: &mut crate::anmmgr::AnmManager,
     rng: &mut crate::rng::Rng,
-    gfx: &mut crate::gfx::Gfx,
+    rec: &mut Recorder,
     player: [f32; 3],
 ) {
     {
@@ -605,13 +606,13 @@ fn darkness_draw(
         let a = d.alpha as u8;
         for [x0, y0, x1, y1] in darkness_rects([player[0], player[1]], d.radius, anm.screen_offset)
         {
-            gfx.rect(x0, y0, x1 - x0, y1 - y0, [0, 0, 0, a]);
+            rec.rect(x0, y0, x1 - x0, y1 - y0, [0, 0, 0, a]);
         }
         anm.file_set_script(rng, &mut d.vm, crate::effect::SCRIPT_SLOT, 105);
         d.vm.scale = [d.radius / 63.0; 2];
         d.vm.pos = [player[0] + 32.0, player[1] + 16.0, player[2]];
         d.vm.color[anmvm::A] = a;
-        anm.draw_mode(gfx, &mut d.vm, 0);
+        anm.draw_mode(rec, &mut d.vm, 0);
     }
 }
 
@@ -759,7 +760,7 @@ impl Overlays {
 }
 
 // Tail of Ascii_DrawStrings (prio 20, full-screen viewport, 12 §5.10); the colour is rewritten every frame.
-fn markers_draw(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
+fn markers_draw(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager, rec: &mut Recorder) {
     {
         let px = g
             .player
@@ -767,7 +768,7 @@ fn markers_draw(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager, gfx: &mut cr
             .and_then(|p| p.try_borrow().ok().map(|p| p.pos[0]));
         let px = px.unwrap_or(0.0);
         let frame = g.frame;
-        gfx.set_viewport(FULLSCREEN);
+        rec.set_viewport(FULLSCREEN);
         for k in 0..g.markers.len() {
             let m = &mut g.markers[k];
             if !(56.0..=392.0).contains(&m.pos[0]) {
@@ -787,7 +788,7 @@ fn markers_draw(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager, gfx: &mut cr
             };
             set_rgb(m, argb);
             m.color[anmvm::A] = (argb >> 24) as u8;
-            anm.draw_mode(gfx, m, 0);
+            anm.draw_mode(rec, m, 0);
         }
     }
 }
@@ -797,7 +798,7 @@ fn markers_draw(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager, gfx: &mut cr
 fn gauge_draw(
     g: &mut Gauge,
     anm: &mut crate::anmmgr::AnmManager,
-    gfx: &mut crate::gfx::Gfx,
+    rec: &mut Recorder,
     fallback: &crate::player::Stats,
 ) {
     {
@@ -812,7 +813,7 @@ fn gauge_draw(
         let m = &mut g.vms[G_MARKER];
         m.pos[0] = bx + 64.0 + gv as f32 * 56.0 / 10000.0;
         // Marker G3 with Draw2DRotNoSnap (12 §5.9 step 1).
-        anm.draw_mode(gfx, m, 3);
+        anm.draw_mode(rec, m, 3);
         let rgb: u32 = if st.human_max() {
             0x7070FF
         } else if st.human() {
@@ -828,13 +829,13 @@ fn gauge_draw(
         set_rgb(&mut g.vms[G_BAR], rgb);
         let colour = g.vms[G_BAR].color;
         for k in [G_BAR, G_HUMAN, G_YOUKAI] {
-            anm.draw_mode(gfx, &mut g.vms[k], 0);
+            anm.draw_mode(rec, &mut g.vms[k], 0);
         }
         let my = g.vms[G_MARKER].pos[1];
         let vm = &mut g.vms[G_GLYPH];
         draw_percent(
             anm,
-            gfx,
+            rec,
             vm,
             gv,
             bx + 64.0 + gv as f32 * 40.0 / 10000.0,
@@ -848,7 +849,7 @@ fn gauge_draw(
                 vm.set_sprite(anm, 136 + glyph);
                 vm.pos = [x, y, 0.0];
                 vm.scale = [scale, scale];
-                anm.draw_mode(gfx, vm, 0);
+                anm.draw_mode(rec, vm, 0);
             };
         // Max point value stats+0x24 (12 §5.9 step 4): a digit is drawn once the running digit sum is ≠ 0.
         let (mut x, y) = (bx + 62.0 - 14.0, by + 3.0 + 8.0);
@@ -871,7 +872,7 @@ fn gauge_draw(
 #[allow(clippy::too_many_arguments)]
 pub fn draw_percent(
     anm: &mut crate::anmmgr::AnmManager,
-    gfx: &mut crate::gfx::Gfx,
+    rec: &mut impl AsMut<Recorder>,
     vm: &mut AnmVm,
     value: i32,
     cx: f32,
@@ -879,6 +880,7 @@ pub fn draw_percent(
     z: f32,
     colour: [u8; 4],
 ) {
+    let rec = rec.as_mut();
     vm.color = colour;
     let a = value.abs();
     let n = 4
@@ -912,7 +914,7 @@ pub fn draw_percent(
         vm.set_sprite(anm, 136 + glyph);
         vm.pos = [x, yy, z];
         vm.scale = [sc, sc];
-        anm.draw_mode(gfx, vm, 0);
+        anm.draw_mode(rec, vm, 0);
         x += adv;
     }
     vm.scale = [1.0, 1.0];
@@ -1204,20 +1206,21 @@ fn start_capture(anm: &mut crate::anmmgr::AnmManager, rng: &mut crate::rng::Rng,
 // AnmManager_QueueCapture 0x406A30 (12 §3): playfield (32, 16, 384, 448) into slot 3 entry 0 at the VM's sprite rect
 // (u0, v0 in texture pixels, width, height, truncated). The port copies at once from the last presented frame, so no
 // request is ever pending and the "close at once" failure path cannot happen.
-pub fn apply_capture(anm: &crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, vm: &AnmVm) {
+pub fn apply_capture(anm: &crate::anmmgr::AnmManager, rec: &mut impl AsMut<Recorder>, vm: &AnmVm) {
+    let rec = rec.as_mut();
     if let Some(sp) = anm.sprite(CAPTURE_SLOT, vm.sprite_index.max(0) as usize) {
-        capture_into(gfx, sp);
+        capture_into(rec, sp);
     }
 }
 
-fn capture_into(gfx: &mut crate::gfx::Gfx, sp: &crate::anmmgr::SlotSprite) {
-    let t = gfx.texture(sp.tex);
+fn capture_into(rec: &mut Recorder, sp: &crate::anmmgr::SlotSprite) {
+    let t = rec.texture(sp.tex);
     let to = [
         (sp.uv[0] * t.width as f32) as u32,
         (sp.uv[1] * t.height as f32) as u32,
     ];
     let tex = sp.tex;
-    gfx.capture_rect(tex, [32, 16], [384, 448], to, [sp.w as u32, sp.h as u32]);
+    rec.capture_rect(tex, [32, 16], [384, 448], to, [sp.w as u32, sp.h as u32]);
 }
 
 // AnmManager_QueueCapture 0x406A30 (12 §3): stores the request only if none is pending (else −1); the destination is
@@ -1241,9 +1244,10 @@ fn stage_transition(anm: &mut crate::anmmgr::AnmManager, rng: &mut crate::rng::R
 }
 
 // AnmManager_ApplyPendingCaptures 0x443B60 (12 §3): right after Present, the playfield (32, 16, 384, 448) is copied.
-pub fn apply_pending_captures(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
+pub fn apply_pending_captures(anm: &mut crate::anmmgr::AnmManager, rec: &mut impl AsMut<Recorder>) {
+    let rec = rec.as_mut();
     if let Some(sp) = anm.capture_req.take() {
-        capture_into(gfx, &sp);
+        capture_into(rec, &sp);
     }
 }
 
@@ -1451,9 +1455,9 @@ impl Task<Ctx> for AsciiManager {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             ctx.anm
-                .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "ascii.anm")?;
+                .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, "ascii.anm")?;
             ctx.anm
-                .load(&mut ctx.gfx, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
+                .load(&mut ctx.gfx.rec, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
             let l = crate::player::GaugeLimits::default();
             ctx.overlays
                 .gauge_setup(&mut ctx.anm, &mut ctx.rng, l.min, l.max);
@@ -1512,21 +1516,21 @@ impl Task<Ctx> for AsciiManager {
         // Pause draw 0x404750 (12 §3): playfield viewport; the capture VM (temporary copy, z-write off) while
         // the state ≠ 0; then menu VMs 0..9, all Draw2DSnap.
         if high && ctx.game.paused != 0 {
-            ctx.gfx.set_viewport(crate::gfx::PLAYFIELD);
+            ctx.gfx.rec.set_viewport(crate::gfx::PLAYFIELD);
             if self.pause.state != 0 && self.pause.cap_vm.script.is_some() {
                 let mut v = self.pause.cap_vm.clone();
                 v.flags |= anmvm::F_ZWRITE_OFF;
-                ctx.anm.draw_mode(&mut ctx.gfx, &mut v, 0);
+                ctx.anm.draw_mode(&mut ctx.gfx.rec, &mut v, 0);
             }
             // The selected item's (−4, −4) goes to the undrawn pos_offset: no visible shift (12 §3).
             for vm in &mut self.pause.vms {
-                ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
+                ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 0);
             }
         }
         // ContinueMenu_Draw 0x4052B0 (12 §4): playfield viewport, capture VM, then VMs 0..3 (clock VM 3 only in a
         // normal game below Extra), all Draw2DSnap. The port's menu is past state 0 after its first calc.
         if high && ctx.game.game_over != 0 && self.cont.open {
-            ctx.gfx.set_viewport(crate::gfx::PLAYFIELD);
+            ctx.gfx.rec.set_viewport(crate::gfx::PLAYFIELD);
             let g = &ctx.game;
             let clock = g.difficulty < 4 && !g.spell_practice();
             let c = &mut self.cont;
@@ -1535,7 +1539,7 @@ impl Task<Ctx> for AsciiManager {
                 .chain(c.vms.iter_mut())
                 .chain(clock.then_some(&mut c.clock_vm))
             {
-                ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
+                ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 0);
             }
         }
         if !high {
@@ -1543,7 +1547,7 @@ impl Task<Ctx> for AsciiManager {
                 &mut ctx.overlays,
                 &mut ctx.anm,
                 &mut ctx.rng,
-                &mut ctx.gfx,
+                &mut ctx.gfx.rec,
                 ctx.effects.player,
             );
             // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
@@ -1551,15 +1555,15 @@ impl Task<Ctx> for AsciiManager {
             gauge_draw(
                 &mut ctx.overlays.gauge,
                 &mut ctx.anm,
-                &mut ctx.gfx,
+                &mut ctx.gfx.rec,
                 &ctx.game.stats,
             );
         }
         let mut q = std::mem::take(&mut ctx.ascii);
-        q.draw(&ctx.anm, &mut ctx.gfx, high);
+        q.draw(&ctx.anm, &mut ctx.gfx.rec, high);
         ctx.ascii = q;
         if high {
-            markers_draw(&mut ctx.overlays.gauge, &mut ctx.anm, &mut ctx.gfx);
+            markers_draw(&mut ctx.overlays.gauge, &mut ctx.anm, &mut ctx.gfx.rec);
         }
         Ret::Next
     }

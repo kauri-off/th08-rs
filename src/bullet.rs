@@ -2,9 +2,10 @@
 
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::fmath::{self, polar, sin_cos_f};
 use crate::game::{Ctx, Sys};
-use crate::gfx::{Gfx, PLAYFIELD};
+use crate::gfx::Gfx;
 use crate::item::ItemManager;
 use crate::player::{GrazeEnv, Player, PlayerRef};
 use crate::task::{self, Chain, Ret, Task};
@@ -468,7 +469,7 @@ impl BulletManager {
 
     pub fn register(ctx: &mut Ctx, player: PlayerRef) -> Result<Rc<RefCell<BulletManager>>> {
         ctx.anm
-            .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "etama.anm")?;
+            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, "etama.anm")?;
         let b = Rc::new(RefCell::new(BulletManager::new(
             &mut ctx.anm,
             &mut ctx.rng,
@@ -1546,7 +1547,7 @@ impl BulletManager {
     }
 
     // Laser draw (08 §6.3): body z 0.06 at the middle, emitter z 0.05 at the tail; +(32, 16) playfield origin.
-    fn draw_lasers(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
+    fn draw_lasers(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
         for l in self.lasers.iter_mut().filter(|l| l.alive) {
             // Math_SinCosF32 (05 §10, 08 §6.3).
             let (s, c) = sin_cos_f(l.angle);
@@ -1557,7 +1558,7 @@ impl BulletManager {
                 l.origin[1] + s * mid + 16.0,
                 0.0,
             ];
-            anm.draw_mode_z(gfx, &mut l.body, 2, 0.06);
+            anm.draw_mode_z(rec, &mut l.body, 2, 0.06);
             if (l.tail < 16.0 || l.speed == 0.0) && (l.hide_emitter == 0 || l.state != 0) {
                 let mut sc = (16.0 - l.tail) / 16.0 * l.width / 10.0;
                 if sc <= 0.0 {
@@ -1571,7 +1572,7 @@ impl BulletManager {
                     l.origin[1] + s * l.tail + 16.0,
                     0.0,
                 ];
-                anm.draw_mode_z(gfx, &mut l.emitter, 2, 0.05);
+                anm.draw_mode_z(rec, &mut l.emitter, 2, 0.05);
             }
         }
     }
@@ -1585,14 +1586,15 @@ impl BulletManager {
         fx: &mut crate::effect::Effects,
         flags: u32,
     ) {
-        gfx.set_viewport(PLAYFIELD);
+        let rec = &mut gfx.rec;
+        rec.set_viewport(PLAYFIELD);
         // Tint 0xFFF01010 only while bullets are frozen (06 §10.2).
         let frozen = self.player.borrow().freeze_bullets(flags);
         if frozen {
             (anm.tint, anm.tint_on) = (0xFFF01010, true);
         }
-        self.items.draw(anm, &mut gfx.rec);
-        self.draw_lasers(anm, gfx);
+        self.items.draw(anm, rec);
+        self.draw_lasers(anm, rec);
         for c in 0..6 {
             for k in (0..self.lists[c].len()).rev() {
                 let b = &mut self.bullets[self.lists[c][k] as usize];
@@ -1613,9 +1615,10 @@ impl BulletManager {
                     }
                 }
                 vm.color[..3].fill(255);
-                anm.draw_mode_z(gfx, vm, 2, 0.05);
+                anm.draw_mode_z(rec, vm, 2, 0.05);
             }
         }
+        // TODO(step 8): Gfx kept only for effect.rs draw_over_bullets (other group); pass the Recorder once converted.
         fx.draw_over_bullets(anm, gfx);
         // Off only while bit 10, after the over-bullet effects; otherwise the tint state is left alone (06 §10.2).
         if frozen {
@@ -1627,7 +1630,7 @@ impl BulletManager {
 impl Task<Ctx> for BulletManager {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
+            ctx.anm.unload(&mut ctx.gfx.rec, ANM_SLOT);
         }
     }
 

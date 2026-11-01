@@ -3,9 +3,10 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
+use crate::drawlist::TexId;
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
-use crate::gfx::{FULLSCREEN, TextureId};
+use crate::gfx::FULLSCREEN;
 use crate::input::{
     BOMB, DOWN, ENTER, FOCUS, Input, KEY_D, KEY_Q, KEY_S, LEFT, PAUSE, RIGHT, SHOT, SKIP, UP,
 };
@@ -121,7 +122,7 @@ pub struct ResultScreen {
     bar: AnmVm,
     raster: crate::text::Raster,
     // Surface slot 0: result/result.jpg.
-    surface: Option<TextureId>,
+    surface: Option<TexId>,
     // Calc node removed (16 §2.4 exit, P+20): the draw node stays until the scene switch and draws nothing.
     removed: bool,
     // +0x64: captured-card counts [group][character] (Result_OnRegister).
@@ -161,7 +162,7 @@ fn text_vm(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
 
 fn draw_at(ctx: &mut Ctx, vm: &mut AnmVm, x: f32, y: f32) {
     vm.pos = [x, y, 0.0];
-    ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
+    ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 0);
 }
 
 fn vm_argb(vm: &AnmVm) -> u32 {
@@ -1116,7 +1117,7 @@ impl ResultScreen {
     // Shot names 0x4C8010 hold the same strings as 0x4C86C0 (menulist::CHARS).
     fn draw_save(&mut self, ctx: &mut Ctx) {
         for vm in &mut self.vms[49..55] {
-            ctx.anm.draw(&mut ctx.gfx, vm);
+            ctx.anm.draw(&mut ctx.gfx.rec, vm);
         }
         // QUIRK: no colour is set for the header; it keeps the one left by the previous text: white, or in state 13
         // the last grid cell's (END), as the grid is drawn first.
@@ -1302,15 +1303,15 @@ impl Task<Ctx> for ResultScreen {
             .archive
             .read("result.jpg")
             .map_err(anyhow::Error::from)
-            .and_then(|b| ctx.gfx.load_image("result.jpg", &b))
+            .and_then(|b| ctx.gfx.rec.load_image("result.jpg", &b))
         {
             Ok(t) => self.surface = Some(t),
             Err(e) => log::warn!("result.jpg: {e:#}"),
         }
         ctx.anm
-            .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "result00.anm")?;
+            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, "result00.anm")?;
         ctx.anm
-            .load(&mut ctx.gfx, &ctx.archive, RT_SLOT, "resulttext.anm")?;
+            .load(&mut ctx.gfx.rec, &ctx.archive, RT_SLOT, "resulttext.anm")?;
         for i in 0..VM_COUNT {
             let mut vm = AnmVm::default();
             ctx.anm.set_script(&mut ctx.rng, &mut vm, ANM_SLOT, i);
@@ -1358,10 +1359,10 @@ impl Task<Ctx> for ResultScreen {
         ctx.game.score.clear_new_flags();
         ctx.game.save_score(&mut ctx.rng, false, &mut *ctx.host);
         if let Some(t) = self.surface.take() {
-            ctx.gfx.free_texture(t);
+            ctx.gfx.rec.free_texture(t);
         }
-        ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
-        ctx.anm.unload(&mut ctx.gfx, RT_SLOT);
+        ctx.anm.unload(&mut ctx.gfx.rec, ANM_SLOT);
+        ctx.anm.unload(&mut ctx.gfx.rec, RT_SLOT);
     }
 
     // Result_Calc 0x4584B0: state, then the 72 VMs, then frame += 1.
@@ -1387,9 +1388,9 @@ impl Task<Ctx> for ResultScreen {
         if self.removed {
             return Ret::Next;
         }
-        ctx.gfx.set_viewport(FULLSCREEN);
+        ctx.gfx.rec.set_viewport(FULLSCREEN);
         if let Some(t) = self.surface {
-            ctx.gfx.image(t, 0.0, 0.0);
+            ctx.gfx.rec.image(t, 0.0, 0.0);
         }
         // pos + pos_offset (+0x288, op 24/6, e.g. the selected item's (−4, −4)), pos restored after the draw (16 §2.4).
         for vm in &mut self.vms {
@@ -1397,7 +1398,7 @@ impl Task<Ctx> for ResultScreen {
             for k in 0..3 {
                 vm.pos[k] += vm.pos_offset[k];
             }
-            ctx.anm.draw(&mut ctx.gfx, vm);
+            ctx.anm.draw(&mut ctx.gfx.rec, vm);
             vm.pos = p;
         }
         match self.state {
@@ -1409,7 +1410,7 @@ impl Task<Ctx> for ResultScreen {
         }
         if matches!(self.state, S_PLAY | S_PLAY_WAIT | S_PLAY_OUT) {
             for vm in &mut self.text_vms[..20] {
-                ctx.anm.draw_mode(&mut ctx.gfx, vm, 0);
+                ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 0);
             }
         }
         // The grid comes before the save dialogue (16 §2.6 header colour).
@@ -2053,6 +2054,7 @@ mod tests {
     fn shot(ctx: &mut Ctx, on: bool, k: u32, tag: &str) {
         let want = crate::settings::get().result_shots.contains(&k);
         if on && want {
+            // TODO(step 8): screenshot readback (pixels back to the CPU) and the Present sync point stay on `Gfx`.
             let img = ctx.gfx.capture(None);
             let _ = img.save(format!("/tmp/th08_result_{tag}_{k}.png"));
         }

@@ -3,9 +3,10 @@
 
 use crate::anmvm::AnmVm;
 use crate::coreconfig::{CoreConfig, Ending};
+use crate::drawlist::TexId;
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game, GameManager};
-use crate::gfx::{Blend, PLAYFIELD, Rect, TextureId};
+use crate::gfx::{Blend, PLAYFIELD, Rect};
 use crate::task::{self, Chain, Ret, Task, TaskRef};
 use anyhow::{Context, Result};
 
@@ -17,7 +18,7 @@ pub struct Supervisor {
     // The registered scene object (GM, MainMenu, Result, Ending, MusicRoom).
     scene_task: Option<TaskRef<Ctx>>,
     // Full-screen surface slot 8 (logo, captured frame or result.jpg), drawn at prio 0 while loading (12 §1).
-    logo: Option<TextureId>,
+    logo: Option<TexId>,
     // The three nowloading.anm VMs (scripts 0–2) and their screen position (12 §1 state 1).
     boot_vms: Vec<AnmVm>,
     boot_frames: u32,
@@ -147,7 +148,7 @@ impl Supervisor {
     fn begin_loading(&mut self, ctx: &mut Ctx) -> Result<()> {
         if self.logo.is_none() {
             let b = ctx.archive.read("th08logo.jpg")?;
-            self.logo = Some(ctx.gfx.load_image("th08logo.jpg", &b)?);
+            self.logo = Some(ctx.gfx.rec.load_image("th08logo.jpg", &b)?);
         }
         self.start_vms(ctx, [500.0, 440.0]);
         Ok(())
@@ -167,16 +168,16 @@ impl Supervisor {
     // Surface 8 := the last presented frame (post-present capture of 0x44886F).
     fn capture(&mut self, ctx: &mut Ctx) {
         if let Some(t) = self.logo.take() {
-            ctx.gfx.free_texture(t);
+            ctx.gfx.rec.free_texture(t);
         }
-        self.logo = Some(ctx.gfx.capture_screen("th08logo.jpg"));
+        self.logo = Some(ctx.gfx.rec.capture_screen("th08logo.jpg"));
     }
 
     // Menu loader done: title fade-from-white (ScreenEffect type 0, 70 frames, 13 §3), Loading_End 0x44881A (interrupt 1
     // fades the VMs out, surface released, 12 §1).
     fn end_loading(&mut self, ctx: &mut Ctx) {
         if let Some(t) = self.logo.take() {
-            ctx.gfx.free_texture(t);
+            ctx.gfx.rec.free_texture(t);
         }
         // Title fade (13 §3 "Title fade"): linked at once from the Supervisor calc (prio 0), so its first calc precedes
         // its first draw (alphas 255, 251, …).
@@ -196,11 +197,11 @@ impl Supervisor {
             // Loading_Begin already ran at result state 2 frame 1; Result_OnRemove moved result.jpg into surface 8,
             // so the menu loader shows it without a capture (16 §2.4 exit).
             if let Some(t) = self.logo.take() {
-                ctx.gfx.free_texture(t);
+                ctx.gfx.rec.free_texture(t);
             }
             // Labelled by its surface slot's file name, as the draw log names surface 8.
             let b = ctx.archive.read("result.jpg")?;
-            self.logo = Some(ctx.gfx.load_image("th08logo.jpg", &b)?);
+            self.logo = Some(ctx.gfx.rec.load_image("th08logo.jpg", &b)?);
             MENU_LOAD
         } else if from == gamemgr::SCENE_MUSIC_ROOM {
             // The music room calls 0x44886F itself on the exit press, one frame before the scene switch.
@@ -213,7 +214,7 @@ impl Supervisor {
             // MainMenu_OnRegister, previous scene 2: Loading_BeginCapture 0x44886F (capture after the next Present, no
             // logo) + Loading_StartDarken(0); the first frame draws no surface 8 but the darken quad (12 §1).
             if let Some(t) = self.logo.take() {
-                ctx.gfx.free_texture(t);
+                ctx.gfx.rec.free_texture(t);
             }
             self.start_vms(ctx, [500.0, 440.0]);
             self.capture_req = true;
@@ -250,7 +251,7 @@ impl Supervisor {
         let from_menu =
             ctx.game.previous == gamemgr::SCENE_MENU || ctx.game.flags & gamemgr::F_DEMO != 0;
         if let Some(t) = self.logo.take() {
-            ctx.gfx.free_texture(t);
+            ctx.gfx.rec.free_texture(t);
         }
         self.start_vms(
             ctx,
@@ -413,9 +414,10 @@ impl Task<Ctx> for Supervisor {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             // ANM slots 0 text.anm and 2 nowloading.anm (00 §4).
-            ctx.anm.load(&mut ctx.gfx, &ctx.archive, 0, "text.anm")?;
             ctx.anm
-                .load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
+                .load(&mut ctx.gfx.rec, &ctx.archive, 0, "text.anm")?;
+            ctx.anm
+                .load(&mut ctx.gfx.rec, &ctx.archive, 2, "nowloading.anm")?;
             // Boot loading screen (12 §1): th08logo.jpg full screen + nowloading.anm scripts 0–2 at (500, 440).
             self.begin_loading(ctx)?;
             let st = ctx.core.clone();
@@ -476,7 +478,7 @@ impl Task<Ctx> for Supervisor {
         // Surface 8 stays empty until the result object's removal moves result.jpg into it.
         if std::mem::take(&mut ctx.game.loading_req) {
             if let Some(t) = self.logo.take() {
-                ctx.gfx.free_texture(t);
+                ctx.gfx.rec.free_texture(t);
             }
             self.start_vms(ctx, [500.0, 440.0]);
             for vm in &mut self.boot_vms {
@@ -492,7 +494,7 @@ impl Task<Ctx> for Supervisor {
                 self.stage_load = false;
                 self.boot_vms.clear();
                 if let Some(t) = self.logo.take() {
-                    ctx.gfx.free_texture(t);
+                    ctx.gfx.rec.free_texture(t);
                 }
             } else if ctx.game.loading_wait == 1 {
                 for vm in &mut self.boot_vms {
@@ -563,12 +565,12 @@ impl Task<Ctx> for Supervisor {
         match (tag, self.logo) {
             (0, logo) => {
                 if let Some(t) = logo {
-                    ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
-                    ctx.gfx.image(t, 0.0, 0.0);
+                    ctx.gfx.rec.set_viewport(crate::gfx::FULLSCREEN);
+                    ctx.gfx.rec.image(t, 0.0, 0.0);
                 }
                 // Then the "Press Shot Button" counter and prompt (12 §1).
                 let mut st = ctx.game.load_prompt;
-                crate::ascii::loading_prompt(&ctx.anm, &mut ctx.gfx, &mut ctx.ascii, &mut st);
+                crate::ascii::loading_prompt(&ctx.anm, &mut ctx.gfx.rec, &mut ctx.ascii, &mut st);
                 ctx.game.load_prompt = st;
             }
             (2, _) => {
@@ -582,7 +584,7 @@ impl Task<Ctx> for Supervisor {
                         p[2] + o[2],
                     ];
                     // 0x445D3E: pos += pos_offset, Draw2DRot, pos −= pos_offset (12 §1).
-                    ctx.anm.draw_mode(&mut ctx.gfx, vm, 2);
+                    ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 2);
                     vm.pos = p;
                 }
             }
@@ -596,14 +598,14 @@ impl Task<Ctx> for Supervisor {
             return Ret::Next;
         };
         let sprites = anm.sprites.clone();
-        ctx.gfx.set_viewport(PLAYFIELD);
-        ctx.gfx.clear_viewport([0, 0, 64, 255]);
+        ctx.gfx.rec.set_viewport(PLAYFIELD);
+        ctx.gfx.rec.clear_viewport([0, 0, 64, 255]);
         let (mut x, mut y, mut row) = (0.0, 0.0, 0.0f32);
         for s in sprites {
             if x + s.w > 640.0 {
                 (x, y, row) = (0.0, y + row, 0.0);
             }
-            ctx.gfx.sprite(
+            ctx.gfx.rec.sprite(
                 s.tex,
                 Blend::Alpha,
                 Rect::new(x, y, s.w, s.h),
@@ -613,7 +615,7 @@ impl Task<Ctx> for Supervisor {
             x += s.w;
             row = row.max(s.h);
         }
-        ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
+        ctx.gfx.rec.set_viewport(crate::gfx::FULLSCREEN);
         Ret::Next
     }
 }

@@ -1,10 +1,10 @@
 //! Bombs: Player_UpdateBomb, Bomb_Start, the 16 bombs + dissolve spell, tint (09 §7, 14 §1–§2); areas (09 §8).
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::effect;
 use crate::game::Sys;
 use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
-use crate::gfx::{Gfx, PLAYFIELD};
 use crate::input;
 use crate::item::ItemManager;
 use crate::player::{ANM_SLOT, DISSOLVE_BEGIN, DISSOLVE_END, Player, Stats};
@@ -849,7 +849,7 @@ impl Player {
     fn draw_objs(
         &mut self,
         anm: &mut AnmManager,
-        gfx: &mut Gfx,
+        rec: &mut Recorder,
         n: usize,
         mode: i32,
         rot: impl Fn(&BombObj) -> Option<f32>,
@@ -866,7 +866,7 @@ impl Player {
                 o.pos[1] + o.offset[1] + ORIGIN[1],
                 0.0,
             ];
-            anm.draw_mode_z(gfx, &mut o.vm, mode, 0.0);
+            anm.draw_mode_z(rec, &mut o.vm, mode, 0.0);
         }
     }
 
@@ -1505,9 +1505,9 @@ impl Player {
     }
 
     // Alpha-blended playfield rectangle (Alice LS, Youmu draw fns).
-    fn playfield_rect(gfx: &mut Gfx, rgb: u32, a: i32) {
+    fn playfield_rect(rec: &mut Recorder, rgb: u32, a: i32) {
         let r = PLAYFIELD;
-        gfx.rect(
+        rec.rect(
             r.x,
             r.y,
             r.w,
@@ -1523,7 +1523,7 @@ impl Player {
 
     // Bomb draw functions (table 0x4C7AD0 fns 5–9), called from the player draw (prio 9, 14 §5).
     // Quirk kept: Sakuya LS draws only knives 0–95 (96–127 are invisible but damage).
-    pub fn draw_bomb(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
+    pub fn draw_bomb(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
         if !self.bombing {
             return;
         }
@@ -1543,7 +1543,7 @@ impl Player {
         match self.bomb.ch {
             0 => {
                 self.tint(anm, if ls { 0x802020D0 } else { 0x80404040 });
-                self.draw_objs(anm, gfx, if ls { OBJS } else { 16 }, 0, |_| None);
+                self.draw_objs(anm, rec, if ls { OBJS } else { 16 }, 0, |_| None);
             }
             1 => {
                 self.tint(anm, if ls { 0x802020D0 } else { 0x80404040 });
@@ -1555,7 +1555,7 @@ impl Player {
                             o[1] + ORIGIN[1] + vm.pos_offset[1],
                             0.0,
                         ];
-                        anm.draw_mode_z(gfx, vm, 2, z);
+                        anm.draw_mode_z(rec, vm, 2, z);
                     }
                 }
             }
@@ -1569,7 +1569,7 @@ impl Player {
                         vm.rotation[2] = a;
                         vm.flags |= anmvm::F_ROT_DIRTY;
                     }
-                    anm.draw_mode_z(gfx, vm, 2, 0.0);
+                    anm.draw_mode_z(rec, vm, 2, 0.0);
                 }
             }
             3 if !ls => self.tint(anm, 0x80404040),
@@ -1580,14 +1580,14 @@ impl Player {
                     let c = ((t - 90) * 208 / 30) as u32;
                     let r = (c / 5).wrapping_sub(48) & 0xFF;
                     self.tint(anm, 0x8000_0000 | r << 16 | (c + 32) << 8 | (c + 32));
-                    Self::playfield_rect(gfx, 0xFFFFFF, (t - 90) * 255 / 30);
+                    Self::playfield_rect(rec, 0xFFFFFF, (t - 90) * 255 / 30);
                 } else {
-                    Self::playfield_rect(gfx, 0xFFFFFF, 0x70);
+                    Self::playfield_rect(rec, 0xFFFFFF, 0x70);
                 }
             }
             4 => {
                 self.tint(anm, if ls { 0x80202080 } else { 0x80404040 });
-                self.draw_objs(anm, gfx, 96, 2, |o| Some(o.angle));
+                self.draw_objs(anm, rec, 96, 2, |o| Some(o.angle));
             }
             5 => self.tint(anm, if ls { 0x80F00000 } else { 0x80D02020 }),
             6 => {
@@ -1602,13 +1602,13 @@ impl Player {
                     } else {
                         255 - (t - 100) * 255 / 60
                     };
-                    Self::playfield_rect(gfx, if ls { 0xFF0000 } else { 0xFFFFFF }, a);
+                    Self::playfield_rect(rec, if ls { 0xFF0000 } else { 0xFFFFFF }, a);
                 }
             }
             _ => {
                 self.tint(anm, if ls { 0x80802020 } else { 0x80404040 });
                 let n = if ls { OBJS } else { 96 };
-                self.draw_objs(anm, gfx, n, 2, |o| {
+                self.draw_objs(anm, rec, n, 2, |o| {
                     Some(crate::fmath::atan2_f(o.disp[1], o.disp[0]))
                 });
             }

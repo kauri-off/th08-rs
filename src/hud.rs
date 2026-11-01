@@ -3,10 +3,10 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
+use crate::drawlist::{Blend, FULLSCREEN, PLAYFIELD, Recorder, TexId, Vertex};
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
-use crate::gfx::{Blend, FULLSCREEN, Gfx, PLAYFIELD, Vertex};
 use crate::msg::{self, Dialogue, Event};
 use crate::player::{PlayerRef, Popup, Stats};
 use crate::stage::Stage;
@@ -316,14 +316,14 @@ impl Hud {
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
         let g = &ctx.game;
         let (stage, shot) = (g.stage % 9, g.shot);
-        let (gfx, ar) = (&mut ctx.gfx, &ctx.archive);
-        ctx.anm.load(gfx, ar, FRONT_SLOT, "front.anm")?;
+        let (rec, ar) = (&mut ctx.gfx.rec, &ctx.archive);
+        ctx.anm.load(rec, ar, FRONT_SLOT, "front.anm")?;
         if let Some(n) = stage_plate(stage, g) {
-            set_boss_plate(&ctx.anm, gfx, n);
+            set_boss_plate(&ctx.anm, rec, n);
         }
-        ctx.anm.load(gfx, ar, TIMES_SLOT, "times.anm")?;
+        ctx.anm.load(rec, ar, TIMES_SLOT, "times.anm")?;
         ctx.anm.load(
-            gfx,
+            rec,
             ar,
             TXT_SLOT,
             // stg8txt.anm in spell practice with card id >= 0xCD (12 §5.1a).
@@ -343,7 +343,7 @@ impl Hud {
             _ => "a",
         };
         if let Err(e) = ctx.anm.load(
-            gfx,
+            rec,
             ar,
             LOADING_SLOT,
             &format!("loading{team:02}{variant}.anm"),
@@ -352,9 +352,9 @@ impl Hud {
         }
         let card = g.spell_practice().then_some(g.card);
         for (k, f) in msg::face_files(stage, shot, card).into_iter().enumerate() {
-            ctx.anm.unload(gfx, msg::FACE_SLOTS[k]);
+            ctx.anm.unload(rec, msg::FACE_SLOTS[k]);
             if let Some(f) = f {
-                ctx.anm.load(gfx, ar, msg::FACE_SLOTS[k], &f)?;
+                ctx.anm.load(rec, ar, msg::FACE_SLOTS[k], &f)?;
             }
         }
         let mut d = self.msg.borrow_mut();
@@ -455,13 +455,9 @@ impl Hud {
     }
 
     // The line VM's strip of the text.anm render target: texture, row width and strip top y in texture pixels.
-    fn line_texture(
-        anm: &AnmManager,
-        gfx: &Gfx,
-        vm: &AnmVm,
-    ) -> Option<(crate::gfx::TextureId, u32, u32)> {
+    fn line_texture(anm: &AnmManager, rec: &Recorder, vm: &AnmVm) -> Option<(TexId, u32, u32)> {
         let sp = anm.sprite(msg::TEXT_SLOT, vm.sprite_index.max(0) as usize)?;
-        let t = gfx.texture(sp.tex);
+        let t = rec.texture(sp.tex);
         Some((sp.tex, t.width, (sp.uv[1] * t.height as f32).round() as u32))
     }
 
@@ -473,19 +469,20 @@ impl Hud {
             // Line 2 renders into boss_card's strip (text.anm sprite 2, 10 §5.1).
             let Some((tex, w, y)) = d
                 .line_vm(line)
-                .and_then(|vm| Self::line_texture(&ctx.anm, &ctx.gfx, vm))
+                .and_then(|vm| Self::line_texture(&ctx.anm, &ctx.gfx.rec, vm))
             else {
                 continue;
             };
+            // TODO(step 8 text): CPU raster + Write in calc; decision 7 moves text to an output command.
             let rgba = self.raster.render(&s, colour, w as usize, size);
-            ctx.gfx.write_texture(tex, 0, y, w, size as u32, &rgba);
+            ctx.gfx.rec.write_texture(tex, 0, y, w, size as u32, &rgba);
         }
     }
 
     fn handle_events(&mut self, ctx: &mut Ctx, events: Vec<Event>) {
         for ev in events {
             match ev {
-                Event::Plate(n) => set_boss_plate(&ctx.anm, &mut ctx.gfx, n),
+                Event::Plate(n) => set_boss_plate(&ctx.anm, &mut ctx.gfx.rec, n),
                 Event::SpellBase(n) => self.stage.borrow_mut().spell_first = n,
                 Event::Bgm(n) if n < 0 => ctx.bgm.stop_bgm(),
                 // Msg op 7 (10 §5.1): song-title card = stgNtxt script 3 with sprite n + 3, then preloaded BGM slot n.
@@ -667,12 +664,12 @@ impl Hud {
     }
 
     // Msg_Draw 0x43542B (10 §7): portrait pairs back-to-front by pos.z, text box, lines, boss card (Draw2DSnap).
-    fn draw_msg(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
+    fn draw_msg(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
         let mut d = self.msg.borrow_mut();
         if !d.active() {
             return;
         }
-        gfx.set_viewport(PLAYFIELD);
+        rec.set_viewport(PLAYFIELD);
         for pair in [[0usize, 1], [2, 3]] {
             let (a, b) = (pair[0], pair[1]);
             let order = if d.faces[a].pos[2] >= d.faces[b].pos[2] {
@@ -682,7 +679,7 @@ impl Hud {
             };
             for k in order {
                 if d.faces[k].script.is_some() {
-                    anm.draw_mode(gfx, &mut d.faces[k], 0);
+                    anm.draw_mode(rec, &mut d.faces[k], 0);
                 }
             }
         }
@@ -695,18 +692,26 @@ impl Hud {
             // Text box (10 §7 step 2): top colour 0xD0000000, bottom 0x90000000; grows down over the first 60 clock frames.
             let (x0, x1, y0) = (PLAYFIELD.x + 16.0, PLAYFIELD.x + 368.0, 384.0);
             let (top, bot) = ([0, 0, 0, 0xD0], [0, 0, 0, 0x90]);
-            Self::bar_quad(gfx, x0, x1, y0, y0 + h, top, bot);
+            Self::bar_quad(rec, x0, x1, y0, y0 + h, top, bot);
         }
         let d = &mut *d;
         for vm in d.lines.iter_mut().chain(std::iter::once(&mut d.boss_card)) {
             if vm.script.is_some() {
-                anm.draw_mode(gfx, vm, 0);
+                anm.draw_mode(rec, vm, 0);
             }
         }
     }
 
     // Screen_FillRect3 0x45B490 (12 §5.4, 10 §7): untextured quad at exact D3D coordinates (+0.5 for wgpu).
-    fn bar_quad(gfx: &mut Gfx, x0: f32, x1: f32, y0: f32, y1: f32, top: [u8; 4], bot: [u8; 4]) {
+    fn bar_quad(
+        rec: &mut Recorder,
+        x0: f32,
+        x1: f32,
+        y0: f32,
+        y1: f32,
+        top: [u8; 4],
+        bot: [u8; 4],
+    ) {
         let uv = [0.0, 0.0];
         let (x0, x1, y0, y1) = (x0 + 0.5, x1 + 0.5, y0 + 0.5, y1 + 0.5);
         let v = [
@@ -715,7 +720,7 @@ impl Hud {
             Vertex::screen(x0, y1, 0.0, uv, bot),
             Vertex::screen(x1, y1, 0.0, uv, bot),
         ];
-        gfx.strip(gfx.white(), Blend::Alpha, false, v);
+        rec.strip(rec.white(), Blend::Alpha, false, v);
     }
 
     // 0xRRGGBB with an explicit alpha → RGBA.
@@ -725,8 +730,8 @@ impl Hud {
 
     // Hud_DrawBoss 0x43741D (12 §5.4): unguarded VMs, the guarded bar part, the stage-clear VM last.
     fn draw_boss(&mut self, ctx: &mut Ctx) {
-        let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
-        gfx.set_viewport(PLAYFIELD);
+        let (anm, rec) = (&mut ctx.anm, &mut ctx.gfx.rec);
+        rec.set_viewport(PLAYFIELD);
         // Stage title VMs, the stage-start clock, then the night clock with Draw2DRot (12 §5.1, §5.7).
         for vm in self
             .title
@@ -734,29 +739,29 @@ impl Hud {
             .chain(std::iter::once(&mut self.start_clock_vm))
         {
             if vm.script.is_some() {
-                anm.draw_mode(gfx, vm, 0);
+                anm.draw_mode(rec, vm, 0);
             }
         }
         if self.night_vm.script.is_some() {
-            anm.draw_mode(gfx, &mut self.night_vm, 2);
+            anm.draw_mode(rec, &mut self.night_vm, 2);
         }
         // Op 9 VMs: loading picture Draw2DSnap, capture and ghosts Draw3DQuad; impl+0x3A1C is never started (10 §9).
         if self.load_vm.script_index >= 0 {
-            anm.draw_mode(gfx, &mut self.load_vm, 0);
+            anm.draw_mode(rec, &mut self.load_vm, 0);
             for vm in std::iter::once(&mut self.cap_vm).chain(self.ghosts.iter_mut()) {
-                anm.draw_mode(gfx, vm, 5);
+                anm.draw_mode(rec, vm, 5);
             }
         }
         if self.tiles_live != 0 {
             for vm in &mut self.tiles {
-                anm.draw_mode(gfx, vm, 5);
+                anm.draw_mode(rec, vm, 5);
             }
         }
         if !self.msg.borrow().active() {
             self.draw_bar(ctx);
         }
         if self.clear_vm.script.is_some() {
-            ctx.anm.draw_mode(&mut ctx.gfx, &mut self.clear_vm, 0);
+            ctx.anm.draw_mode(&mut ctx.gfx.rec, &mut self.clear_vm, 0);
         }
     }
 
@@ -766,11 +771,11 @@ impl Hud {
             return;
         }
         let a = self.bar_alpha as u8;
-        let gfx = &mut ctx.gfx;
-        gfx.set_viewport(PLAYFIELD);
+        let rec = &mut ctx.gfx.rec;
+        rec.set_viewport(PLAYFIELD);
         let disp = self.bar_disp;
         Self::bar_quad(
-            gfx,
+            rec,
             64.0,
             64.0 + 320.0 * disp,
             19.0,
@@ -783,7 +788,7 @@ impl Hud {
         for (end, start, c) in e.g.hud_markers {
             if end != 0.0 && start < disp {
                 Self::bar_quad(
-                    gfx,
+                    rec,
                     64.0 + 320.0 * start,
                     64.0 + 320.0 * end.min(disp),
                     19.0,
@@ -800,12 +805,12 @@ impl Hud {
             let x0 = 35.0 + 26.0 * i as f32 / n as f32;
             let x1 = 35.0 + 26.0 * (i + 1) as f32 / n as f32 - gap;
             let c = Self::rgb(0xFFFFFF - (i as u32 * 255 / 9), a);
-            Self::bar_quad(gfx, x0, x1, 19.0, 23.0, c, Self::rgb(0x202020, a));
+            Self::bar_quad(rec, x0, x1, 19.0, 23.0, c, Self::rgb(0x202020, a));
         }
         // Timer (12 §5.4): every guarded draw, HUD +0x24 as stored by Enemy_CheckTimeout, shown as min(·, 99).
         let raw = e.g.hud_timer;
         drop(e);
-        ctx.anm.draw_mode(&mut ctx.gfx, &mut self.front[12], 0);
+        ctx.anm.draw_mode(&mut ctx.gfx.rec, &mut self.front[12], 0);
         let v = raw.min(99);
         ctx.ascii
             .push(Text::new(384.0, 16.0, fmt_02d(v)).color(Self::rgb(timer_colour(raw), a)));
@@ -999,17 +1004,17 @@ impl Hud {
 
     // Hud_DrawPanel (12 §5.3), redrawn every frame; flushes and sets the full-screen viewport first.
     fn draw_panel(&mut self, ctx: &mut Ctx, st: &Stats) {
-        let gfx = &mut ctx.gfx;
-        gfx.set_viewport(FULLSCREEN);
+        let rec = &mut ctx.gfx.rec;
+        rec.set_viewport(FULLSCREEN);
         let anm = &mut ctx.anm;
         // Tiles (scripts 13–15) keep z-write on; depths 0.49 / 0.48 / 0.46 (12 §5.3).
-        let spr = |anm: &AnmManager, gfx: &mut Gfx, i: usize, x: f32, y: f32, z: f32| {
+        let spr = |anm: &AnmManager, rec: &mut Recorder, i: usize, x: f32, y: f32, z: f32| {
             if let Some(s) = anm.sprite(FRONT_SLOT, i) {
                 let [u0, v0, u1, v1] = s.uv;
                 // Draw2DSnap → EmitQuad: the global tint applies (12 §5.3, 05 §12.1); the gauge quad stays raw.
                 let c = anm.tinted([255; 4]);
                 let v = |x: f32, y: f32, u: f32, vv: f32| Vertex::screen(x, y, z, [u, vv], c);
-                gfx.strip(
+                rec.strip(
                     s.tex,
                     Blend::Alpha,
                     true,
@@ -1023,31 +1028,31 @@ impl Hud {
             }
         };
         for y in [40.0, 56.0] {
-            spr(anm, gfx, 15, 480.0, y, 0.49);
+            spr(anm, rec, 15, 480.0, y, 0.49);
         }
         for y in [88.0, 104.0, 136.0, 152.0, 168.0, 184.0] {
-            spr(anm, gfx, 15, 480.0, y, 0.48);
+            spr(anm, rec, 15, 480.0, y, 0.48);
         }
         // Always: the corner under the fps text.
-        spr(anm, gfx, 15, 512.0, 464.0, 0.48);
+        spr(anm, rec, 15, 512.0, 464.0, 0.48);
         // Full repaint (cfg bit 12, tile VM 13 still running = first 200 frames, or counter 0x17CE8CC ≠ 0) and the
         // dirty rows are not tracked: the port clears the screen every frame, so it repaints in full every frame.
         for y in (0..480).step_by(32) {
-            spr(anm, gfx, 13, 0.0, y as f32, 0.49);
+            spr(anm, rec, 13, 0.0, y as f32, 0.49);
         }
         for x in (416..640).step_by(32) {
             for y in (16..480).step_by(32) {
-                spr(anm, gfx, 13, x as f32, y as f32, 0.49);
+                spr(anm, rec, 13, x as f32, y as f32, 0.49);
             }
         }
         for x in (0..640).step_by(128) {
-            spr(anm, gfx, 14, x as f32, 0.0, 0.49);
-            spr(anm, gfx, 14, x as f32, 464.0, 0.49);
+            spr(anm, rec, 14, x as f32, 0.0, 0.49);
+            spr(anm, rec, 14, x as f32, 464.0, 0.49);
         }
         for vm in self.front.iter_mut().take(10) {
-            anm.draw_mode(gfx, vm, if vm.script_index == 1 { 2 } else { 0 });
+            anm.draw_mode(rec, vm, if vm.script_index == 1 { 2 } else { 0 });
         }
-        anm.draw_mode(gfx, &mut self.diff_vm, 0);
+        anm.draw_mode(rec, &mut self.diff_vm, 0);
         let q = &mut ctx.ascii;
         // Score row (y 56) queued before the hiscore row (y 40) (12 §5.3 step 6). The panel strings take the current
         // queue colour, so a "Press Shot Button" alpha leaks into them on the first gameplay frame (12 §1).
@@ -1063,7 +1068,7 @@ impl Hud {
             for i in 0..n.clamp(0, 8) {
                 let v = &mut self.front[vm];
                 v.pos = [488.0 + 16.0 * i as f32, row, 0.46];
-                anm.draw_mode(gfx, v, 0);
+                anm.draw_mode(rec, v, 0);
             }
         }
         // Step 4 label: the original draws it only when it repaints the lives or bombs row (field ≠ 0 or full
@@ -1080,18 +1085,18 @@ impl Hud {
         ctx.panel = pn;
         self.label_latch = latch;
         if latch {
-            anm.draw_mode(gfx, &mut self.label_vm, 0);
+            anm.draw_mode(rec, &mut self.label_vm, 0);
         }
         // Strip 14 along y = 464 for x 32..368 every frame (12 §5.3).
         for x in [32.0, 160.0, 288.0] {
-            spr(anm, gfx, 14, x, 464.0, 0.49);
+            spr(anm, rec, 14, x, 464.0, 0.49);
         }
         // Power gauge x 488 … 488 + power, y 136..152, left 0xE0E0E0FF / right 0x80E0E0FF (12 §5.3).
         let pw = st.power.trunc();
         let uv = [0.0, 0.0];
         let (l, r) = ([0xE0, 0xE0, 0xFF, 0xE0], [0xE0, 0xE0, 0xFF, 0x80]);
-        gfx.strip(
-            gfx.white(),
+        rec.strip(
+            rec.white(),
             Blend::Alpha,
             false,
             [
@@ -1151,7 +1156,7 @@ impl Task<Ctx> for Hud {
                 .into_iter()
                 .chain(msg::FACE_SLOTS)
             {
-                ctx.anm.unload(&mut ctx.gfx, s);
+                ctx.anm.unload(&mut ctx.gfx.rec, s);
             }
         }
     }
@@ -1162,6 +1167,7 @@ impl Task<Ctx> for Hud {
         // AnmManager_ApplyPendingCaptures runs right after the Present that follows op 9's calc (12 §3); the port
         // copies from that presented frame at the next calc.
         if std::mem::take(&mut self.capture_pending) {
+            // TODO(step 8): ascii.rs (IMPL164) owns apply_capture; pass `&mut ctx.gfx.rec` once it takes a Recorder.
             crate::ascii::apply_capture(&ctx.anm, &mut ctx.gfx, &self.cap_vm);
         }
         let inp = ctx.input.game_view();
@@ -1306,8 +1312,8 @@ impl Task<Ctx> for Hud {
             return Ret::Next;
         }
         self.draw_clear(ctx);
-        ctx.gfx.set_viewport(PLAYFIELD);
-        self.draw_msg(&mut ctx.anm, &mut ctx.gfx);
+        ctx.gfx.rec.set_viewport(PLAYFIELD);
+        self.draw_msg(&mut ctx.anm, &mut ctx.gfx.rec);
         self.draw_boss(ctx);
         let st = self.player.borrow().stats.clone();
         self.draw_panel(ctx, &st);
@@ -1422,17 +1428,17 @@ fn stage_plate(stage: usize, g: &crate::gamemgr::Game) -> Option<usize> {
 }
 
 // Hud_SetBossNamePlate 0x437F5C (12 §5.2): copies front.anm sprite n's pixels into sprite 10's rect (copy 0x467040).
-pub fn set_boss_plate(anm: &AnmManager, gfx: &mut Gfx, n: usize) {
+pub fn set_boss_plate(anm: &AnmManager, rec: &mut Recorder, n: usize) {
     if let (Some(&src), Some(&dst)) = (anm.sprite(FRONT_SLOT, n), anm.sprite(FRONT_SLOT, 10)) {
-        let px = |s: &crate::anmmgr::SlotSprite, gfx: &Gfx| {
-            let t = gfx.texture(s.tex);
+        let px = |s: &crate::anmmgr::SlotSprite, rec: &Recorder| {
+            let t = rec.texture(s.tex);
             [
                 (s.uv[0] * t.width as f32).round() as u32,
                 (s.uv[1] * t.height as f32).round() as u32,
             ]
         };
-        let (a, b) = (px(&src, gfx), px(&dst, gfx));
-        gfx.copy_texture(
+        let (a, b) = (px(&src, rec), px(&dst, rec));
+        rec.copy_texture(
             src.tex,
             a,
             dst.tex,

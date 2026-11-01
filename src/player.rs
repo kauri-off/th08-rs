@@ -2,10 +2,10 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::BulletManager;
+use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::effect::Effects;
 use crate::game::{Ctx, Sys};
 use crate::gamemgr::{self, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
-use crate::gfx::PLAYFIELD;
 use crate::input;
 use crate::item::ItemManager;
 use crate::rng::Rng;
@@ -627,7 +627,8 @@ impl Player {
         let (anm, a, s) = crate::sht::files(shot);
         let human = crate::sht::parse(&ctx.archive.read(&a)?)?;
         let youkai = crate::sht::parse(&ctx.archive.read(&s)?)?;
-        ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &anm)?;
+        ctx.anm
+            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, &anm)?;
         {
             let mut p = p.borrow_mut();
             p.load(
@@ -1428,12 +1429,12 @@ impl Player {
     }
 
     // 14 §5 (3): sprite at pos + playfield origin, z 0.1, Draw2DSnap; hidden while the continue menu is up.
-    fn draw_sprite(&mut self, anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, game_over: bool) {
+    fn draw_sprite(&mut self, anm: &mut AnmManager, rec: &mut Recorder, game_over: bool) {
         if self.vm.script.is_none() || game_over {
             return;
         }
         self.vm.pos = [self.pos[0] + 32.0, self.pos[1] + 16.0, 0.0];
-        anm.draw_mode_z(gfx, &mut self.vm, 0, 0.1);
+        anm.draw_mode_z(rec, &mut self.vm, 0, 0.1);
     }
 }
 
@@ -1446,7 +1447,7 @@ impl Task<Ctx> for Player {
                 // Boss markers M_0..M_2 hidden at once (12 §5.10).
                 (0..3).for_each(|k| ctx.overlays.marker_interrupt(k, 99));
             }
-            ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
+            ctx.anm.unload(&mut ctx.gfx.rec, ANM_SLOT);
         }
     }
 
@@ -1485,15 +1486,15 @@ impl Task<Ctx> for Player {
     // Draw 9 (0x44D530): flying bullets, bomb, sprite, options; draw 10 (0x44D630): bullets in their hit animation
     // (14 §5).
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
-        gfx.set_viewport(PLAYFIELD);
+        let (anm, rec) = (&mut ctx.anm, &mut ctx.gfx.rec);
+        rec.set_viewport(PLAYFIELD);
         if tag == 0 {
-            self.draw_bullets(anm, gfx, 1);
-            self.draw_bomb(anm, gfx);
-            self.draw_sprite(anm, gfx, ctx.game.game_over != 0);
-            self.draw_options(anm, gfx);
+            self.draw_bullets(anm, rec, 1);
+            self.draw_bomb(anm, rec);
+            self.draw_sprite(anm, rec, ctx.game.game_over != 0);
+            self.draw_options(anm, rec);
         } else {
-            self.draw_bullets(anm, gfx, 2);
+            self.draw_bullets(anm, rec, 2);
         }
         Ret::Next
     }

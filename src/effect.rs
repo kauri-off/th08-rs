@@ -3,9 +3,10 @@
 use crate::anmmgr::{self, AnmManager};
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::d3dx;
+use crate::drawlist::Recorder;
 use crate::fmath::{cos_f, sin_cos_f, sin_f};
 use crate::game::Ctx;
-use crate::gfx::{Camera, FULLSCREEN, Gfx, PLAYFIELD, Vertex};
+use crate::gfx::{Camera, FULLSCREEN, PLAYFIELD, Vertex};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 use std::cell::RefCell;
@@ -755,10 +756,10 @@ impl Effects {
     }
 
     // Lists A/D/E (13 §2.4): 2D rotated sprite at pos + playfield origin + pos offset, or the ring renderer.
-    fn draw_one(&mut self, anm: &mut AnmManager, gfx: &mut Gfx, i: usize, z: f32) {
+    fn draw_one(&mut self, anm: &mut AnmManager, rec: &mut Recorder, i: usize, z: f32) {
         let e = &mut self.fx[i];
         if is_ring(e.kind) {
-            draw_ring(anm, gfx, e);
+            draw_ring(anm, rec, e);
             return;
         }
         let saved = e.vm.pos;
@@ -769,21 +770,22 @@ impl Effects {
         ];
         let off = e.vm.pos_offset;
         e.vm.pos_offset = [0.0; 3];
-        anm.draw_mode_z(gfx, &mut e.vm, 2, z);
+        anm.draw_mode_z(rec, &mut e.vm, 2, z);
         e.vm.pos = saved;
         e.vm.pos_offset = off;
     }
 
     // EffectMgr_Draw (prio 12): list A, then C, then E; A/E at z 0.07.
-    pub fn draw_main(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
-        gfx.set_viewport(PLAYFIELD);
+    pub fn draw_main(&mut self, anm: &mut AnmManager, out: &mut impl AsMut<Recorder>) {
+        let rec = out.as_mut();
+        rec.set_viewport(PLAYFIELD);
         for list in [0, 2, 4] {
             for k in 0..self.lists[list].len() {
                 let i = self.lists[list][k];
                 if list == 2 {
-                    self.draw_billboard_c(anm, gfx, i);
+                    self.draw_billboard_c(anm, rec, i);
                 } else {
-                    self.draw_one(anm, gfx, i, 0.07);
+                    self.draw_one(anm, rec, i, 0.07);
                 }
             }
         }
@@ -792,27 +794,28 @@ impl Effects {
     // List C (13 §2.4): `AnmManager_DrawBillboard` (05 §9 mode 4) at the effect pos as-is (no playfield origin, no
     // pos offset), projected through `Camera_Set2D` on the playfield viewport left by `Stage_DrawHigh`, whatever
     // the VM's camera bit; sized by the stage camera's right vector, vertex z = projected z.
-    fn draw_billboard_c(&mut self, anm: &mut AnmManager, gfx: &mut Gfx, i: usize) {
+    fn draw_billboard_c(&mut self, anm: &mut AnmManager, rec: &mut Recorder, i: usize) {
         let e = &mut self.fx[i];
         let (saved, cam) = (e.vm.pos, e.vm.flags & anmvm::F_STAGE_CAM);
         e.vm.pos = e.pos;
         e.vm.flags &= !anmvm::F_STAGE_CAM;
-        anm.draw_mode_z(gfx, &mut e.vm, 4, 0.0);
+        anm.draw_mode_z(rec, &mut e.vm, 4, 0.0);
         e.vm.flags |= cam;
         e.vm.pos = saved;
     }
 
     // List D, drawn at the end of BulletMgr_Draw (prio 13), z 0.04.
-    pub fn draw_over_bullets(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
+    pub fn draw_over_bullets(&mut self, anm: &mut AnmManager, out: &mut impl AsMut<Recorder>) {
+        let rec = out.as_mut();
         for k in 0..self.lists[3].len() {
             let i = self.lists[3][k];
-            self.draw_one(anm, gfx, i, 0.04);
+            self.draw_one(anm, rec, i, 0.04);
         }
     }
 
     // List B from Stage_DrawHigh (13 §2.4, §2.6c): only effect level 2 draws; no fog. Layer 4 at raw coordinates.
     // Layer 3 / ≥ 5 would be a 3D quad, unreachable (13 §2.4: no writer sets them); the port billboards them.
-    pub fn draw_background(&mut self, anm: &mut AnmManager, gfx: &mut Gfx, level: u8) {
+    pub fn draw_background(&mut self, anm: &mut AnmManager, rec: &mut Recorder, level: u8) {
         if level < 2 {
             return;
         }
@@ -826,7 +829,7 @@ impl Effects {
                 let e = &mut self.fx[i];
                 let saved = e.vm.pos;
                 e.vm.pos = e.pos;
-                anm.draw_mode_z(gfx, &mut e.vm, 2, 0.0);
+                anm.draw_mode_z(rec, &mut e.vm, 2, 0.0);
                 e.vm.pos = saved;
                 continue;
             }
@@ -866,19 +869,19 @@ impl Effects {
                 s[0] += e.disp[0];
                 s[1] += e.disp[1];
             }
-            anm.draw_billboard(gfx, &mut e.vm, s, len);
+            anm.draw_billboard(rec, &mut e.vm, s, len);
         }
     }
 }
 
 // Stage 6B ring draw from `Stage_DrawLow` step 4 (06 §5.1): calls the slot's draw fn through the stored pointer,
 // with no active check.
-pub fn draw_ring_at(fx: &Effects, anm: &mut AnmManager, gfx: &mut Gfx, idx: usize) {
-    draw_ring(anm, gfx, &fx.fx[idx]);
+pub fn draw_ring_at(fx: &Effects, anm: &mut AnmManager, rec: &mut Recorder, idx: usize) {
+    draw_ring(anm, rec, &fx.fx[idx]);
 }
 
 // Ring renderer 0x427450 (13 §2.5): strip of 2(n+1) vertices, v along the ring, u across the band, WRAP sampling.
-fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
+fn draw_ring(anm: &mut AnmManager, rec: &mut Recorder, e: &Effect) {
     let vm = &e.vm;
     if vm.flags & (anmvm::F_VISIBLE | anmvm::F_ENABLED) != (anmvm::F_VISIBLE | anmvm::F_ENABLED)
         || vm.color[anmvm::A] == 0
@@ -940,7 +943,7 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
         let z = if r.amp == 0.0 { e.centre[2] } else { 0.0 };
         let v = std::array::from_fn(|i| Vertex::screen(p[i][0], p[i][1], z, uv[i], rgba));
         // z-write on unless VM flag bit 13 (`AnmManager_SetRenderState2D`, 13 §2.5).
-        gfx.strip(spr.tex, blend, vm.flags & anmvm::F_ZWRITE_OFF == 0, v);
+        rec.strip(spr.tex, blend, vm.flags & anmvm::F_ZWRITE_OFF == 0, v);
     }
 }
 
@@ -1208,7 +1211,7 @@ impl Task<Ctx> for EffectManager {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             ctx.effects.clear();
-            ctx.anm.load(&mut ctx.gfx, &ctx.archive, BG_SLOT, {
+            ctx.anm.load(&mut ctx.gfx.rec, &ctx.archive, BG_SLOT, {
                 let card = ctx.game.spell_practice().then_some(ctx.game.card);
                 bg_file(ctx.game.stage, card)
             })?;
@@ -1219,7 +1222,7 @@ impl Task<Ctx> for EffectManager {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
             ctx.effects.clear();
-            ctx.anm.unload(&mut ctx.gfx, BG_SLOT);
+            ctx.anm.unload(&mut ctx.gfx.rec, BG_SLOT);
         }
     }
 
@@ -1237,7 +1240,7 @@ impl Task<Ctx> for EffectManager {
     }
 
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        ctx.effects.draw_main(&mut ctx.anm, &mut ctx.gfx);
+        ctx.effects.draw_main(&mut ctx.anm, &mut ctx.gfx.rec);
         Ret::Next
     }
 }
@@ -1498,8 +1501,9 @@ impl ScreenEffect {
         ];
         let full = matches!(self.kind, 0 | 4 | 5);
         let r = if full { FULLSCREEN } else { PLAYFIELD };
-        ctx.gfx.set_viewport(r);
-        ctx.gfx.rect(r.x, r.y, r.w, r.h, rgba);
+        let rec = &mut ctx.gfx.rec;
+        rec.set_viewport(r);
+        rec.rect(r.x, r.y, r.w, r.h, rgba);
     }
 }
 

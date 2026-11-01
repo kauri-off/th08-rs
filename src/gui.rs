@@ -2,9 +2,9 @@
 
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
+use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
-use crate::gfx::PLAYFIELD;
 use crate::player::PlayerRef;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
@@ -106,7 +106,7 @@ impl Gui {
     // Gui_LoadFaces 0x414590 part (12 §5.8): face_cdbg, VMs 0–7 hidden, the load-time scripts of VMs 6 and 10–13.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
         ctx.anm
-            .load(&mut ctx.gfx, &ctx.archive, CDBG_SLOT, "face_cdbg.anm")?;
+            .load(&mut ctx.gfx.rec, &ctx.archive, CDBG_SLOT, "face_cdbg.anm")?;
         let anm = &mut ctx.anm;
         for vm in &mut self.vms[..8] {
             *vm = AnmVm::default();
@@ -255,20 +255,21 @@ impl Gui {
                 continue;
             };
             // 10 §6: W = texture-row width (512), the whole 15-row strip at (0, v0) is replaced.
-            let t = ctx.gfx.texture(sp.tex);
+            let t = ctx.gfx.rec.texture(sp.tex);
             let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
+            // TODO(step 8 text): CPU raster + Write; decision 7 moves text to an output command.
             let rgba = self.raster.render_at(&s, colour, w as usize, 15, x);
-            ctx.gfx.write_texture(sp.tex, 0, ty, w, 15, &rgba);
+            ctx.gfx.rec.write_texture(sp.tex, 0, ty, w, 15, &rgba);
         }
     }
 
     // Draw2DSnap (mode 0) / Draw2DRot (mode 2) (05 §9).
-    fn snap(anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, vm: &mut AnmVm) {
-        anm.draw_mode(gfx, vm, 0);
+    fn snap(anm: &mut AnmManager, rec: &mut Recorder, vm: &mut AnmVm) {
+        anm.draw_mode(rec, vm, 0);
     }
 
-    fn rot(anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, vm: &mut AnmVm) {
-        anm.draw_mode(gfx, vm, 2);
+    fn rot(anm: &mut AnmManager, rec: &mut Recorder, vm: &mut AnmVm) {
+        anm.draw_mode(rec, vm, 2);
     }
 
     fn shown(vm: &AnmVm) -> bool {
@@ -288,16 +289,16 @@ impl Gui {
     }
 
     // 12 §5.8 draw step 4: VM 12 stamps sprite 0x88 + d from VM 13 pos + (−40, +1), advance 7.
-    fn draw_bonus(&mut self, anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx) {
+    fn draw_bonus(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
         let (captures, attempts) = self.history;
         let base = self.vms[13].pos;
         let mut x = base[0] - 40.0;
         let y = base[1] + 1.0;
         let vm = &mut self.vms[12];
-        let mut stamp = |anm: &mut AnmManager, gfx: &mut crate::gfx::Gfx, x: f32, d: u32| {
+        let mut stamp = |anm: &mut AnmManager, rec: &mut Recorder, x: f32, d: u32| {
             vm.set_sprite(anm, 0x88 + d as i32);
             vm.pos = [x, y, 0.0];
-            anm.draw_mode(gfx, vm, 0);
+            anm.draw_mode(rec, vm, 0);
         };
         let bonus = if self.capturable {
             self.bonus.max(0) as u32
@@ -310,7 +311,7 @@ impl Gui {
             let d = bonus / div % 10;
             on |= d != 0 || div == 1;
             if on {
-                stamp(anm, gfx, x, d);
+                stamp(anm, rec, x, d);
             }
             x += 7.0;
             div /= 10;
@@ -321,7 +322,7 @@ impl Gui {
         let hundreds = c >= 100;
         for (k, div) in [100, 10, 1].into_iter().enumerate() {
             if c >= div || div == 1 {
-                stamp(anm, gfx, x + 7.0 * k as f32, c / div % 10);
+                stamp(anm, rec, x + 7.0 * k as f32, c / div % 10);
             }
         }
         // Two advances between the three slots, none after the units; then x += 13 (12 §5.8).
@@ -329,7 +330,7 @@ impl Gui {
         let a = attempts.min(999);
         for (k, div) in [100, 10, 1].into_iter().enumerate() {
             if a >= div || div == 1 || (div == 10 && hundreds) {
-                stamp(anm, gfx, x + 7.0 * k as f32, a / div % 10);
+                stamp(anm, rec, x + 7.0 * k as f32, a / div % 10);
             }
         }
     }
@@ -345,7 +346,7 @@ impl Task<Ctx> for Gui {
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.gfx, CDBG_SLOT);
+            ctx.anm.unload(&mut ctx.gfx.rec, CDBG_SLOT);
         }
     }
 
@@ -421,43 +422,43 @@ impl Task<Ctx> for Gui {
         // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
         self.read_bonus();
         self.flush_texts(ctx);
-        let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
-        gfx.set_viewport(PLAYFIELD);
+        let (anm, rec) = (&mut ctx.anm, &mut ctx.gfx.rec);
+        rec.set_viewport(PLAYFIELD);
         // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4 (12 §5.8, RE-Q68).
         let v = &mut self.vms;
         // Boss strips (VM 2/4) are drawn only while the player cut-in VM 0 is visible: original quirk (12 §5.8 step 1).
         if Self::shown(&v[0]) {
-            Self::snap(anm, gfx, &mut v[0]);
-            Self::snap(anm, gfx, &mut v[2]);
-            Self::rot(anm, gfx, &mut v[4]);
+            Self::snap(anm, rec, &mut v[0]);
+            Self::snap(anm, rec, &mut v[2]);
+            Self::rot(anm, rec, &mut v[4]);
         }
         if Self::shown(&v[1]) {
             let p = v[1].pos;
             let o = v[1].pos_offset;
             // Boss cut-in drawn at pos + pos_offset, restored afterwards (12 §5.8 step 2).
             v[1].pos = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
-            Self::snap(anm, gfx, &mut v[1]);
+            Self::snap(anm, rec, &mut v[1]);
             v[1].pos = p;
         }
         if Self::shown(&v[6]) {
             let p = v[6].pos;
             v[10].pos = [p[0] - 32.0, p[1], p[2]];
-            Self::snap(anm, gfx, &mut v[10]);
-            Self::rot(anm, gfx, &mut v[6]);
+            Self::snap(anm, rec, &mut v[10]);
+            Self::rot(anm, rec, &mut v[6]);
         }
         if Self::shown(&v[7]) {
             // Tint +0x2620 (12 §5.8 step 4).
             (anm.tint, anm.tint_on) = (self.tint, true);
             v[11].pos = v[7].pos;
-            Self::snap(anm, gfx, &mut v[11]);
+            Self::snap(anm, rec, &mut v[11]);
             for k in [7, 8, 9] {
                 if v[k].script.is_some() {
-                    Self::rot(anm, gfx, &mut v[k]);
+                    Self::rot(anm, rec, &mut v[k]);
                 }
             }
-            Self::snap(anm, gfx, &mut v[13]);
+            Self::snap(anm, rec, &mut v[13]);
             if !self.name_only {
-                self.draw_bonus(anm, gfx);
+                self.draw_bonus(anm, rec);
             }
             // Spell_Draw turns the tint off only inside its VM-7 block (06 §10.2).
             anm.tint_off();
