@@ -455,7 +455,7 @@ impl ItemManager {
                         if !matches!(ps, 1 | 2) {
                             let a = crate::bullet::angle_from(it.pos, p.pos);
                             let s = p.sht.attract_speed;
-                            it.vel = crate::bullet::polar(a, s);
+                            it.vel = crate::fmath::polar(a, s);
                             it.state = 1;
                             for a in 0..3 {
                                 it.pos[a] += it.vel[a] * gs;

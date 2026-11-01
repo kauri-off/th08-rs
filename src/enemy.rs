@@ -556,7 +556,7 @@ impl Enemy {
                 self.angle = anmvm::wrap_add(self.angle, gs * self.angvel);
                 self.speed += gs * self.accel;
                 // Vec3_FromPolar 0x422CED (05 §10 trig sites): one f32 rounding of cos·speed.
-                self.vel = crate::bullet::polar(self.angle, self.speed);
+                self.vel = crate::fmath::polar(self.angle, self.speed);
                 self.tick_duration(gs);
             }
             2 => {
@@ -570,7 +570,7 @@ impl Enemy {
                 if mirror {
                     self.vel[0] = -self.vel[0];
                 }
-                self.angle = self.vel[1].atan2(self.vel[0]);
+                self.angle = crate::fmath::atan2_f(self.vel[1], self.vel[0]);
                 if self.move_timer.cur <= 0 {
                     self.set_move_mode(0);
                     self.pos = std::array::from_fn(|k| self.interp_start[k] + self.interp_delta[k]);
@@ -582,10 +582,10 @@ impl Enemy {
                 self.radius += gs * self.radius_vel;
                 let c = self.interp_start;
                 // Vec3_FromPolar (05 §10): cos/sin·r in double, one f32 rounding.
-                let o = crate::bullet::polar(self.orbit_angle, self.radius);
+                let o = crate::fmath::polar(self.orbit_angle, self.radius);
                 self.vel[0] = c[0] + o[0] - self.pos[0];
                 self.vel[1] = c[1] + o[1] - self.pos[1];
-                self.angle = self.vel[1].atan2(self.vel[0]);
+                self.angle = crate::fmath::atan2_f(self.vel[1], self.vel[0]);
                 self.tick_duration(gs);
             }
             _ => {}
@@ -1500,7 +1500,7 @@ impl EnemyManager {
                     let r = anm.rng.next_f32() * (2 * orbs) as f32;
                     let a = anm.rng.next_signed() * std::f32::consts::PI;
                     // Vec3_FromPolar 0x42B01D (05 §10 trig sites).
-                    let d = crate::bullet::polar(a, r);
+                    let d = crate::fmath::polar(a, r);
                     self.spawn_item(
                         anm,
                         [pos[0] + d[0], pos[1] + d[1], 0.0],
@@ -1530,7 +1530,7 @@ impl EnemyManager {
             for _ in 0..2 * count {
                 let r = anm.rng.next_f32() * 128.0;
                 let a = anm.rng.next_signed() * std::f32::consts::PI;
-                let d = crate::bullet::polar(a, r);
+                let d = crate::fmath::polar(a, r);
                 self.spawn_item(
                     anm,
                     [pos[0] + d[0], pos[1] + d[1], 0.0],
@@ -1894,7 +1894,7 @@ impl EnemyManager {
                 let k = left.min(7);
                 // Quirk kept (07 §11.1): the second burst always spawns 6, whatever k is.
                 let spawns = n.unwrap_or(k);
-                let d = crate::bullet::polar(ang, 128.0);
+                let d = crate::fmath::polar(ang, 128.0);
                 let pos = [centre[0] + d[0], centre[1] + d[1], centre[2]];
                 for _ in 0..spawns {
                     self.spawn_item(anm, pos, 10, 0);
@@ -2646,7 +2646,7 @@ impl EnemyManager {
                 }
                 let al = if f & 4 != 0 { a - a * i / n } else { a } as u8;
                 let p = ring[i as usize].pos;
-                let (sn, cs) = th.sin_cos();
+                let (sn, cs) = crate::fmath::sin_cos_f(th);
                 let (x, y) = (p[0] + 32.0, p[1] + 16.0);
                 v.push(([x - sn * h, y + cs * h], [ua, va], al));
                 v.push(([x + sn * h, y - cs * h], [ua, vb], al));

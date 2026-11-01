@@ -1,4 +1,5 @@
 //! MIDI music mode: the original's own SMF sequencer (02 §5, `Midi_*` 0x443C60–0x445440) and the port's synth output.
+#![allow(clippy::disallowed_methods)]
 
 use anyhow::{Context, Result, ensure};
 use std::sync::Arc;

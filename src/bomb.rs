@@ -70,7 +70,7 @@ impl Area {
                 && min[1] <= h2 + self.pos[1];
         }
         let (dx, dy) = (p[0] - self.pos[0], p[1] - self.pos[1]);
-        let (sn, c) = crate::bullet::sin_cos_f(-self.rot);
+        let (sn, c) = crate::fmath::sin_cos_f(-self.rot);
         let d = [dx * c - dy * sn, dx * sn + dy * c];
         -w2 <= s[0] / 2.0 + d[0]
             && d[0] - s[0] / 2.0 <= w2
@@ -84,7 +84,7 @@ impl Area {
         if self.r > 0.0 {
             return dx * dx + dy * dy < self.r * self.r;
         }
-        let (s, c) = crate::bullet::sin_cos_f(-self.rot);
+        let (s, c) = crate::fmath::sin_cos_f(-self.rot);
         let (rx, ry) = (dx * c - dy * s, dx * s + dy * c);
         rx.abs() <= self.size[0] / 2.0 && ry.abs() <= self.size[1] / 2.0
     }
@@ -235,17 +235,17 @@ const BOUNDARY_ANGLES: [f32; 4] = [PI / 4.0, 3.0 * PI / 8.0, PI / 2.0, 5.0 * PI 
 
 // Vec3_FromPolar (05 §10).
 fn polar(a: f32, r: f32) -> [f32; 2] {
-    let v = crate::bullet::polar(a, r);
+    let v = crate::fmath::polar(a, r);
     [v[0], v[1]]
 }
 
 // Reimu orbs `call; fmul` (05 §10 trig sites, 14 §2.1): sin/cos·r rounded once, then + centre.
 fn sin_r(a: f32, r: f32) -> f32 {
-    ((a as f64).sin() * r as f64) as f32
+    crate::fmath::sin_mul(a, r as f64)
 }
 
 fn cos_r(a: f32, r: f32) -> f32 {
-    ((a as f64).cos() * r as f64) as f32
+    crate::fmath::cos_mul(a, r as f64)
 }
 
 fn xy(p: [f32; 3]) -> [f32; 2] {
@@ -723,7 +723,7 @@ impl Player {
         if Self::at(b, 40) {
             for o in self.bomb.objs[..16].iter_mut() {
                 o.fc = len(xy(o.v));
-                o.angle = o.v[1].atan2(o.v[0]);
+                o.angle = crate::fmath::atan2_f(o.v[1], o.v[0]);
                 (o.counter, o.f8) = (0, 8.0);
             }
         }
@@ -1108,7 +1108,7 @@ impl Player {
             if !(30..=69).contains(&age) {
                 if age == 70 && o.age.prev != 70 {
                     if let Some(t) = target {
-                        o.angle = (t[1] - o.pos[1]).atan2(t[0] - o.pos[0]);
+                        o.angle = crate::fmath::atan2_f(t[1] - o.pos[1], t[0] - o.pos[0]);
                     }
                     o.fc = 14.0;
                     if ls {
@@ -1580,7 +1580,9 @@ impl Player {
             _ => {
                 self.tint(anm, if ls { 0x80802020 } else { 0x80404040 });
                 let n = if ls { OBJS } else { 96 };
-                self.draw_objs(anm, gfx, n, 2, |o| Some(o.disp[1].atan2(o.disp[0])));
+                self.draw_objs(anm, gfx, n, 2, |o| {
+                    Some(crate::fmath::atan2_f(o.disp[1], o.disp[0]))
+                });
             }
         }
     }

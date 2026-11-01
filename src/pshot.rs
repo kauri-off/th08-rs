@@ -1,6 +1,7 @@
 //! Player bullets, shot functions, options and the player laser (09 §4–§5, 14 §3–§5).
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::fmath;
 use crate::gamemgr::F_13;
 use crate::gfx::Gfx;
 use crate::input;
@@ -14,7 +15,7 @@ pub const MAX_BULLETS: usize = 128;
 
 // Vec3_FromPolar (05 §10).
 fn polar(a: f32, r: f32) -> [f32; 2] {
-    let v = crate::bullet::polar(a, r);
+    let v = crate::fmath::polar(a, r);
     [v[0], v[1]]
 }
 
@@ -591,8 +592,10 @@ impl Player {
                 if self.aimed.is_some() {
                     let a = self.aimed_base;
                     let p = self.bullets[slot].pos;
-                    let ang =
-                        anmvm::wrap_add((a[1] - p[1]).atan2(a[0] - p[0]), e.angle + FRAC_PI_2);
+                    let ang = anmvm::wrap_add(
+                        fmath::atan2_f(a[1] - p[1], a[0] - p[0]),
+                        e.angle + FRAC_PI_2,
+                    );
                     self.set_dir(slot, ang, e.speed * 1.5);
                 }
                 true
@@ -633,7 +636,11 @@ impl Player {
                 let tg = self.targets[1];
                 if tg[0] > -100.0 {
                     let p = self.bullets[slot].pos;
-                    self.set_dir(slot, (tg[1] - p[1]).atan2(tg[0] - p[0]), e.speed * 1.5);
+                    self.set_dir(
+                        slot,
+                        fmath::atan2_f(tg[1] - p[1], tg[0] - p[0]),
+                        e.speed * 1.5,
+                    );
                 }
                 true
             }
@@ -689,7 +696,7 @@ impl Player {
                     let vl = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt().max(1e-6);
                     b.vel = [b.vel[0] * b.speed / vl, b.vel[1] * b.speed / vl];
                 }
-                b.angle = b.vel[1].atan2(b.vel[0]);
+                b.angle = fmath::atan2_f(b.vel[1], b.vel[0]);
                 false
             }
             // 0x450580: vy −= Rng_Float × 0.1 + 0.27 (RNG).
@@ -1088,7 +1095,7 @@ mod tests {
         p.bullet_update_fn(&mut anm, 0);
         let b = &p.bullets[0];
         assert_eq!((b.speed, b.vel), (4.0, [0.0, -0.5]));
-        assert_eq!(b.angle, (-0.5f32).atan2(0.0));
+        assert_eq!(b.angle, fmath::atan2_f(-0.5, 0.0));
         p.bullets[0].state = 1;
         p.bullet_update_fn(&mut anm, 0);
         let b = &p.bullets[0];

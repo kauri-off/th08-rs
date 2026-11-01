@@ -1,4 +1,5 @@
 //! Draw log (specs/data/drawlog/FORMAT.md): the port's writer, a reader and a per-frame diff against a reference log.
+#![allow(clippy::disallowed_methods)]
 
 use crate::gfx::{Blend, LogRec, Vertex};
 use std::collections::{BTreeMap, HashMap};

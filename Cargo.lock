@@ -2918,6 +2918,7 @@ dependencies = [
  "image",
  "js-sys",
  "liblzma",
+ "libm",
  "log",
  "midly",
  "pollster 1.0.1",

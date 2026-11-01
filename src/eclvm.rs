@@ -5,6 +5,7 @@ use crate::anmvm::{self, AnmVm};
 use crate::bullet::{BulletDesc, ExCmd, LaserDesc, Warp, angle_from};
 use crate::ecl::Ins;
 use crate::enemy::*;
+use crate::fmath;
 use std::f32::consts::PI;
 
 // Card bonus cap g_Gui +0x2638 for flag A bit 27 / op 155 (07 §11.1, op 155).
@@ -612,7 +613,7 @@ impl Exec<'_> {
             self.mode1(ang, spd, 0);
         } else {
             // 05 §10 trig sites (0x420DAE / 0x422315): f32(f32(cos a·spd)·dur), cos·spd rounded once.
-            let v = crate::bullet::polar(ang, spd);
+            let v = crate::fmath::polar(ang, spd);
             let mut delta = [v[0] * dur as f32, v[1] * dur as f32, 0.0];
             if mirror && self.e.flags & A_MIRROR != 0 {
                 delta[0] = -delta[0];
@@ -1101,7 +1102,7 @@ impl Exec<'_> {
         if moved {
             let e = &mut *self.e;
             e.vel = [e.pos[0] - old[0], e.pos[1] - old[1], e.pos[2] - old[2]];
-            e.angle = e.vel[1].atan2(e.vel[0]);
+            e.angle = fmath::atan2_f(e.vel[1], e.vel[0]);
             e.pos = old;
         }
     }
@@ -1132,7 +1133,7 @@ impl Exec<'_> {
                     e.flags &= !A_KEEP_OFFSCREEN;
                 }
                 if ran {
-                    e.angle = e.vel[1].atan2(e.vel[0]);
+                    e.angle = fmath::atan2_f(e.vel[1], e.vel[0]);
                 }
             }
             // Screen flash / shake parameters (07 §12, 13 §3).
@@ -1610,9 +1611,9 @@ impl Exec<'_> {
                     ins,
                     0,
                     if op == 32 {
-                        crate::bullet::sin_f(b)
+                        crate::fmath::sin_f(b)
                     } else {
-                        crate::bullet::cos_f(b)
+                        crate::fmath::cos_f(b)
                     },
                 );
             }
@@ -1624,7 +1625,7 @@ impl Exec<'_> {
                     self.af(t, ins, 4),
                 );
                 let v = if op == 34 {
-                    (y2 - y1).atan2(x2 - x1)
+                    fmath::atan2_f(y2 - y1, x2 - x1)
                 } else {
                     ((x1 - x2).powi(2) + (y1 - y2).powi(2)).sqrt()
                 };
@@ -1674,7 +1675,7 @@ impl Exec<'_> {
                     ang
                 };
                 // `call; fmul` (05 §10 trig sites): f32(cos·r), one rounding.
-                let v = crate::bullet::polar(ang, r);
+                let v = crate::fmath::polar(ang, r);
                 if op == 38 {
                     self.set_f(t, ins, 0, v[0]);
                     self.set_f(t, ins, 1, v[1]);
@@ -3207,11 +3208,11 @@ mod tests {
         };
         let (v, a) = run([-1.0, 100.0, 0.0], [2.0, 1.0, 0.0], 0.0);
         assert_eq!((v[0], v[1]), (-2.0, 1.0));
-        assert_eq!(a, 1.0f32.atan2(-2.0));
+        assert_eq!(a, fmath::atan2_f(1.0, -2.0));
         let (v, a) = run([100.0, -65.0, 0.0], [0.0, 3.0, 0.0], 0.0);
-        assert_eq!((v[1], a), (-3.0, (-3.0f32).atan2(0.0)));
+        assert_eq!((v[1], a), (-3.0, fmath::atan2_f(-3.0, 0.0)));
         let (v, a) = run([100.0, 100.0, 0.0], [1.0, 1.0, 0.0], 2.0);
-        assert_eq!((v[1], a), (1.5, 1.5f32.atan2(1.0)));
+        assert_eq!((v[1], a), (1.5, fmath::atan2_f(1.5, 1.0)));
         let (_, a) = run([100.0, 100.0, 0.0], [1.0, 1.0, 0.0], 0.0);
         assert_eq!(a, 9.0);
     }

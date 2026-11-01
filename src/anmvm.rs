@@ -965,12 +965,12 @@ impl AnmVm {
                     };
                     let v = match ins.op {
                         60 => anm.rng.next_f32() * x,
-                        // Rounded once from the extended fsin/fcos (05 §10).
-                        61 => crate::bullet::sin_f(x),
-                        62 => crate::bullet::cos_f(x),
-                        63 => x.tan(),
-                        64 => x.acos(),
-                        65 => x.atan(),
+                        // Rounded once from the extended x87 result (05 §10).
+                        61 => crate::fmath::sin_f(x),
+                        62 => crate::fmath::cos_f(x),
+                        63 => crate::fmath::tan_f(x),
+                        64 => crate::fmath::acos_f(x),
+                        65 => crate::fmath::atan_f(x),
                         _ => wrap_add(x, 0.0),
                     };
                     self.write(anm, ip, d, v.to_bits(), true);

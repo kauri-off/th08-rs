@@ -449,7 +449,7 @@ impl AnmManager {
         };
         // Modes 2/3 with rotation z ≠ 0: corners rotated, the anchor shift added afterwards unrotated (05 §9).
         let rotated = || {
-            let (s, c) = vm.rotation[2].sin_cos();
+            let (s, c) = crate::fmath::sin_cos_f(vm.rotation[2]);
             [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
                 .map(|(dx, dy)| [dx * c - dy * s + px + ax, dx * s + dy * c + py + ay])
         };
@@ -578,7 +578,7 @@ impl AnmManager {
 fn billboard_corners(vm: &AnmVm, s: [f32; 3], len: f32) -> [[f32; 2]; 4] {
     let hw = ((len * 0.5) * vm.sprite_w) * vm.scale[0];
     let hh = ((len * 0.5) * vm.sprite_h) * vm.scale[1];
-    let (sn, cs) = vm.rotation[2].sin_cos();
+    let (sn, cs) = crate::fmath::sin_cos_f(vm.rotation[2]);
     [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
         .map(|(dx, dy)| [dx * cs - dy * sn + s[0], dx * sn + dy * cs + s[1]])
 }

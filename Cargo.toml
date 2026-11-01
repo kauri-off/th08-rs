@@ -17,6 +17,7 @@ egui = { version = "0.37", default-features = false, features = ["default_fonts"
 egui-wgpu = { version = "0.37", default-features = false }
 encoding_rs = "0.8"
 hound = "3.5.1"
+libm = "=0.2.16"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 log = "0.4.34"
 midly = { version = "0.5.3", default-features = false, features = ["std"] }

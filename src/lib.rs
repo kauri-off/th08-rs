@@ -1,5 +1,7 @@
 //! th08 port library: one module per ported subsystem plus the debug tools (session, demosync, drawlog,
 //! drawreport, anmdebug).
+// Logic transcendentals go through `fmath` (05 §10); clippy.toml lists the banned std methods.
+#![deny(clippy::disallowed_methods)]
 
 pub mod anm;
 pub mod anmdebug;
@@ -23,6 +25,7 @@ pub mod eclvm;
 pub mod effect;
 pub mod ending;
 pub mod enemy;
+pub mod fmath;
 pub mod game;
 pub mod gamemgr;
 pub mod gfx;

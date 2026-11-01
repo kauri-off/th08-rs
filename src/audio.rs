@@ -1,5 +1,6 @@
 //! Port audio back end (cpal): thbgm.dat BGM streaming (02 §1–§4), MIDI music mode (02 §5, `midi.rs`) and the SE
 //! voices DirectSound plays (13 §1.1, §1.3).
+#![allow(clippy::disallowed_methods)]
 
 use crate::assets::{Source, spawn};
 use anyhow::{Context, Result};

@@ -2,6 +2,7 @@
 
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::fmath::{self, polar, sin_cos_f};
 use crate::game::Ctx;
 use crate::gfx::{Gfx, PLAYFIELD};
 use crate::item::ItemManager;
@@ -77,33 +78,13 @@ fn effect_color(h: u8, colour: i16) -> i32 {
     }
 }
 
-// Vec3_FromPolar 0x4286E0 (05 §10): fcos/fsin stay extended and the fmul rounds once to f32,
-// so the product is taken in f64, not as f32(cos a)·r.
-pub fn polar(a: f32, r: f32) -> [f32; 3] {
-    let (a, r) = (a as f64, r as f64);
-    [(a.cos() * r) as f32, (a.sin() * r) as f32, 0.0]
-}
-
-// Math_Sin / Math_Cos / Math_SinCosF32 (05 §10): extended fsin/fcos rounded once to f32, never libm sinf/cosf.
-pub fn sin_f(a: f32) -> f32 {
-    (a as f64).sin() as f32
-}
-
-pub fn cos_f(a: f32) -> f32 {
-    (a as f64).cos() as f32
-}
-
-pub fn sin_cos_f(a: f32) -> (f32, f32) {
-    (sin_f(a), cos_f(a))
-}
-
 // Player_AngleFrom (08 §3.1): π/2 when both differences are exactly 0.
 pub fn angle_from(o: [f32; 3], p: [f32; 3]) -> f32 {
     let (dx, dy) = (p[0] - o[0], p[1] - o[1]);
     if dx == 0.0 && dy == 0.0 {
         PI / 2.0
     } else {
-        dy.atan2(dx)
+        fmath::atan2_f(dy, dx)
     }
 }
 
@@ -818,7 +799,7 @@ impl BulletManager {
                     b.vel[a] += st.avec[a] * gs;
                 }
                 if b.vel[0].abs() > 0.0001 || b.vel[1].abs() > 0.0001 {
-                    b.angle = b.vel[1].atan2(b.vel[0]);
+                    b.angle = fmath::atan2_f(b.vel[1], b.vel[0]);
                 }
             }
             st.accel_timer.tick(gs);
@@ -1501,7 +1482,8 @@ impl BulletManager {
     // Laser draw (08 §6.3): body z 0.06 at the middle, emitter z 0.05 at the tail; +(32, 16) playfield origin.
     fn draw_lasers(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
         for l in self.lasers.iter_mut().filter(|l| l.alive) {
-            let (s, c) = l.angle.sin_cos();
+            // Math_SinCosF32 (05 §10, 08 §6.3).
+            let (s, c) = sin_cos_f(l.angle);
             let len = l.head - l.tail;
             let mid = l.tail + len / 2.0;
             l.body.pos = [
@@ -1605,12 +1587,6 @@ mod tests {
     use super::*;
     use crate::item;
     use crate::player::Player;
-
-    // 05 §10 (RE-Q58 AS): f32 of the extended cos, not libm cosf (0xC0045DCE → 0xBEF44F55, cosf gives …54).
-    #[test]
-    fn trig_rounded_once() {
-        assert_eq!(cos_f(f32::from_bits(0xC0045DCE)).to_bits(), 0xBEF44F55);
-    }
 
     fn mgr() -> (AnmManager, BulletManager) {
         let mut anm = AnmManager::default();
@@ -2194,20 +2170,6 @@ mod tests {
             "line {line} score {}",
             p.stats.score()
         );
-    }
-
-    // 05 §10: one rounding of the extended product, not f32(cos a)·r.
-    #[test]
-    fn polar_rounds_once() {
-        let mut differs = 0;
-        for i in 0..1000 {
-            let (a, r) = (i as f32 * 0.0123 - 6.0, 1.0 + i as f32 * 0.37);
-            let v = polar(a, r);
-            assert_eq!(v[0], ((a as f64).cos() * r as f64) as f32);
-            assert_eq!(v[1], ((a as f64).sin() * r as f64) as f32);
-            differs += (v[0] != a.cos() * r || v[1] != a.sin() * r) as u32;
-        }
-        assert!(differs > 0);
     }
 
     // 08 §6.3 through Player_LaserTest (09 §6.1): laser box c ± s/2 with f32 edges; touching overlaps.

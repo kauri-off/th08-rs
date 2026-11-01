@@ -2,8 +2,8 @@
 
 use crate::anmmgr::{self, AnmManager};
 use crate::anmvm::{self, AnmVm, Timer};
-use crate::bullet::{cos_f, sin_cos_f, sin_f};
 use crate::d3dx;
+use crate::fmath::{cos_f, sin_cos_f, sin_f};
 use crate::game::Ctx;
 use crate::gfx::{Camera, FULLSCREEN, Gfx, PLAYFIELD, Vertex};
 use crate::task::{self, Chain, Ret, Task};
@@ -417,7 +417,7 @@ impl Effects {
             22..=25 => e.pos = player,
             // pos += polar(param.x, 256); rotation z = param.x + π/2.
             60 | 61 => {
-                let d = crate::bullet::polar(param[0], 256.0);
+                let d = crate::fmath::polar(param[0], 256.0);
                 e.pos[0] += d[0];
                 e.pos[1] += d[1];
                 e.spin = param[0] + PI / 2.0;
@@ -893,7 +893,7 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
     let r = e.ring;
     let n = r.segments.max(3);
     let step = 2.0 * PI / n as f32;
-    let w = r.width / ((PI - step) / 2.0).sin();
+    let w = r.width / sin_f((PI - step) / 2.0);
     // Half width w = width / sin((π − 2π/n)/2); +0.5 is the port's D3D → wgpu pixel-centre offset.
     let (cx, cy) = (e.centre[0] + 32.0 + 0.5, e.centre[1] + 16.0 + 0.5);
     // Raw VM colour: `Anm_RingSetUV` 0x464B00 skips the global ANM tint (13 §2.5).
@@ -906,19 +906,19 @@ fn draw_ring(anm: &mut AnmManager, gfx: &mut Gfx, e: &Effect) {
         // Plain ring / rotated ellipse (θ from 0) / wavy ring (13 §2.5).
         if r.amp == 0.0 {
             let rr = r.radius + sgn * w;
-            [cx + th.cos() * rr, cy + th.sin() * rr]
+            [cx + cos_f(th) * rr, cy + sin_f(th) * rr]
         } else if r.waves == 0.0 {
             let th = wrap(k as f32 * step);
             let (x, y) = (
-                th.cos() * (r.radius + sgn * w),
-                th.sin() * (r.amp + sgn * w),
+                cos_f(th) * (r.radius + sgn * w),
+                sin_f(th) * (r.amp + sgn * w),
             );
-            let (s, co) = r.tilt.sin_cos();
+            let (s, co) = sin_cos_f(r.tilt);
             [cx + x * co - y * s, cy + x * s + y * co]
         } else {
             let phi = r.tilt + k as f32 * 2.0 * PI * r.waves / n as f32;
-            let rr = r.radius + phi.cos() * r.amp + sgn * w;
-            [cx + th.cos() * rr, cy + th.sin() * rr]
+            let rr = r.radius + cos_f(phi) * r.amp + sgn * w;
+            [cx + cos_f(th) * rr, cy + sin_f(th) * rr]
         }
     };
     let blend = anm.blend_for(vm);
@@ -1033,7 +1033,7 @@ fn boundary_sides(centre: [f32; 3], r: &Ring, d_life: i32, period: i32, c_life: 
         if a >= PI {
             a -= 2.0 * PI;
         }
-        let d = crate::bullet::polar(a, s);
+        let d = crate::fmath::polar(a, s);
         let c = [centre[0] + d[0], centre[1] + d[1]];
         let rot = anmvm::wrap_add(a, PI / 2.0);
         let d = crate::bomb::Area {

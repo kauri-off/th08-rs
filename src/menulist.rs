@@ -1,4 +1,5 @@
 //! Main-menu list screens: practice stage select (12 §2.5), spell practice 16/17 (16 §6), replay (12 §2.8, 15 §3.8).
+#![allow(clippy::disallowed_methods)]
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;

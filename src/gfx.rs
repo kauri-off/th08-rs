@@ -1,4 +1,5 @@
 //! wgpu renderer standing in for the D3D8 device state the original sets up (05 §9, §12.4–§12.5; 06 §10).
+#![allow(clippy::disallowed_methods)]
 
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
