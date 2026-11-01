@@ -60,12 +60,6 @@ pub struct Ending {
     done: bool,
 }
 
-impl Default for Ending {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // Team of a shot: solo shots 4,5 → 0, 6,7 → 1, 8,9 → 2, 10,11 → 3 (16 §1.2 step 5).
 pub fn team(shot: u8) -> usize {
     let s = shot as usize % 12;
@@ -100,7 +94,8 @@ fn any_final_a(g: &gamemgr::Game) -> bool {
 }
 
 impl Ending {
-    pub fn new() -> Self {
+    // `font` = `CoreConfig::font` for the text raster.
+    pub fn new(font: Option<&str>) -> Self {
         Self {
             script: end::Script::default(),
             picture: None,
@@ -108,7 +103,7 @@ impl Ending {
             pic_y: 0.0,
             speed: 0.0,
             vms: Vec::new(),
-            raster: crate::text::Raster::default(),
+            raster: crate::text::Raster::new(font),
             skip_allowed: false,
             skip_next: false,
             frame: 0,
@@ -143,14 +138,15 @@ impl Ending {
         self.vms = (0..LINES)
             .map(|i| {
                 let mut vm = AnmVm::default();
-                ctx.anm.set_script(&mut vm, 0, TEXT_SCRIPT + i);
+                ctx.anm
+                    .set_script(&mut ctx.rng, &mut vm, 0, TEXT_SCRIPT + i);
                 vm.pos = [64.0, 16.0 * i as f32 + 400.0, 0.0];
                 vm
             })
             .collect();
         // Debug `TH08_ENDING=<file>.end` loads that script instead of the one chosen by the game state.
-        let name = match &ctx.settings.ending {
-            Some(crate::settings::Ending::File(f)) => f.clone(),
+        let name = match &ctx.core.ending {
+            Some(crate::coreconfig::Ending::File(f)) => f.clone(),
             _ => script_name(&ctx.game),
         };
         log::info!("ending script {name}");
@@ -301,7 +297,8 @@ impl Ending {
                     let script = self.script.int_arg();
                     let sprite = self.script.int_arg();
                     if let Some(v) = self.vms.get_mut(vm.max(0) as usize) {
-                        ctx.anm.set_script(v, STAFF_SLOT, script.max(0) as usize);
+                        ctx.anm
+                            .set_script(&mut ctx.rng, v, STAFF_SLOT, script.max(0) as usize);
                         v.set_sprite(&ctx.anm, sprite);
                     }
                 }
@@ -461,7 +458,7 @@ impl Task<Ctx> for Ending {
             }
             for vm in &mut self.vms {
                 if vm.script_index >= 0 {
-                    vm.run(&mut ctx.anm);
+                    vm.run(&mut ctx.anm, &mut ctx.rng);
                 }
             }
         }
@@ -529,7 +526,7 @@ mod tests {
 
     #[test]
     fn args() {
-        let mut e = Ending::new();
+        let mut e = Ending::new(None);
         e.script = end::Script::new(b"@w120\x00120\x00\n\r\nline\x00\n".to_vec());
         e.script.ip = 2;
         assert_eq!(e.script.int_arg(), 120);
@@ -544,7 +541,7 @@ mod tests {
     // 16 §1.2: Ending_Ctor zero-fills colour and +0x2A94; LoadScript resets only +0x2A90.
     #[test]
     fn start_values() {
-        let mut e = Ending::new();
+        let mut e = Ending::new(None);
         assert_eq!((e.text_rgb, e.line_normal, e.line_fast), (0, 8, 0));
         (e.line_normal, e.line_fast) = (20, 3);
         e.set_script(b"@z\n".to_vec());
@@ -553,7 +550,7 @@ mod tests {
 
     #[test]
     fn fades() {
-        let mut e = Ending::new();
+        let mut e = Ending::new(None);
         (e.fade_mode, e.fade_t, e.fade_n) = (1, 0, 4);
         let a: Vec<u32> = (0..6).map(|_| e.fade_step() >> 24).collect();
         assert_eq!(a, [255, 192, 128, 64, 0, 0]);

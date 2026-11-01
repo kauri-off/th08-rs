@@ -14,7 +14,13 @@ fn main() -> anyhow::Result<()> {
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
     let src = th08::assets::Source::native(dir.into());
-    let mut ctx = pollster::block_on(th08::game::Ctx::load_with(src, gfx, false))?;
+    let mut ctx = pollster::block_on(th08::game::Ctx::load_with(
+        src,
+        gfx,
+        false,
+        th08::settings::get().core(),
+        th08::settings::get().host_io(),
+    ))?;
     let trace = std::fs::read_to_string(format!(
         "{}/specs/data/demo{n}_trace.txt",
         env!("CARGO_MANIFEST_DIR")
@@ -24,7 +30,10 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     let rows = parse_trace(&trace);
-    let r = th08::replay::parse(&ctx.archive.read(&format!("demorpy{n}.rpy"))?)?;
+    let r = th08::replay::parse(
+        &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
+        ctx.host.ver_list(),
+    )?;
     ctx.game.replay_ff = false;
     th08::replay::start_playback(&mut ctx.game, r, None, Some(n));
     let (a, b) = range.unwrap_or((0, 0));
@@ -33,7 +42,7 @@ fn main() -> anyhow::Result<()> {
     loop {
         let before = ctx.game.demo_frame;
         if !started {
-            base = ctx.anm.rng.total;
+            base = ctx.rng.total;
         }
         let tr = rng_frame == Some(before + 1);
         th08::rng::TRACE.set(tr);

@@ -24,6 +24,7 @@ const ASCII_SLOT: usize = crate::ascii::ANM_SLOT;
 const CALC_ORDER: [usize; 13] = [0, 2, 4, 6, 10, 1, 3, 5, 7, 8, 9, 11, 13];
 
 // Calls into g_Gui from Bomb_Start, Player_UpdateBomb, Spell_Start / Spell_End and ECL natives 22/23, queued for Gui_Calc.
+#[derive(Clone, Debug)]
 pub enum Req {
     PlayerShow {
         face: i32,
@@ -50,13 +51,8 @@ pub enum Req {
     },
 }
 
-thread_local! {
-    static QUEUE: RefCell<Vec<Req>> = const { RefCell::new(Vec::new()) };
-}
-
-pub fn request(r: Req) {
-    QUEUE.with_borrow_mut(|q| q.push(r));
-}
+// Port queue of g_Gui calls (`Ctx::gui_queue`, `Sys::gui`), drained by Gui_Calc in arrival order.
+pub type Queue = Vec<Req>;
 
 // g_Gui 0x4EA670.
 pub struct Gui {
@@ -86,12 +82,12 @@ impl Gui {
         player: PlayerRef,
         enemies: Rc<RefCell<EnemyManager>>,
     ) -> Result<Rc<RefCell<Gui>>> {
-        QUEUE.with_borrow_mut(Vec::clear);
+        ctx.gui_queue.clear();
         let g = Rc::new(RefCell::new(Gui {
             player,
             enemies,
             vms: Default::default(),
-            raster: crate::text::Raster::default(),
+            raster: crate::text::Raster::new(ctx.core.font.as_deref()),
             texts: Vec::new(),
             name_only: false,
             card: -1,
@@ -116,10 +112,10 @@ impl Gui {
             *vm = AnmVm::default();
             vm.flags &= !anmvm::F_VISIBLE;
         }
-        anm.set_script(&mut self.vms[6], TEXT_SLOT, 4);
+        anm.set_script(&mut ctx.rng, &mut self.vms[6], TEXT_SLOT, 4);
         self.vms[6].flags &= !anmvm::F_VISIBLE;
         for (k, s) in [(10, 1), (11, 0), (12, 4), (13, 2)] {
-            anm.set_script(&mut self.vms[k], ASCII_SLOT, s);
+            anm.set_script(&mut ctx.rng, &mut self.vms[k], ASCII_SLOT, s);
         }
         Ok(())
     }
@@ -160,6 +156,7 @@ impl Gui {
     fn handle(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         r: Req,
         sound: &mut crate::sound::Queue,
         panel: &mut crate::hud::Panel,
@@ -170,16 +167,16 @@ impl Gui {
             Req::PlayerShow { face, name, last } => {
                 // Face −1 (dissolve spell) skips only VM 0; the strips 2/4 always restart (12 §5.8).
                 if face >= 0 {
-                    anm.set_script(&mut v[0], FACE_SLOT + face as usize, 0);
+                    anm.set_script(rng, &mut v[0], FACE_SLOT + face as usize, 0);
                     v[0].set_sprite(anm, 0);
                 }
-                anm.set_script(&mut v[2], CDBG_SLOT, 0);
+                anm.set_script(rng, &mut v[2], CDBG_SLOT, 0);
                 v[2].set_sprite(anm, last as i32);
-                anm.set_script(&mut v[4], CDBG_SLOT, 2);
+                anm.set_script(rng, &mut v[4], CDBG_SLOT, 2);
                 v[4].set_sprite(anm, last as i32);
                 // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 (12 §5.3).
                 panel.set_repaint(2);
-                anm.set_script(&mut v[6], TEXT_SLOT, 4);
+                anm.set_script(rng, &mut v[6], TEXT_SLOT, 4);
                 self.texts.push((6, name.to_string(), [255, 240, 240], 0.0));
                 v[10].pending_interrupt = 1;
                 sound.play(0xE);
@@ -204,19 +201,19 @@ impl Gui {
                         .msg
                         .as_ref()
                         .map_or(SPELL_FACE_SLOT, |m| m.borrow().face_slot[2]);
-                    anm.set_script(&mut v[1], slot, 0);
+                    anm.set_script(rng, &mut v[1], slot, 0);
                     v[1].set_sprite(anm, face);
                 }
-                anm.set_script(&mut v[2], CDBG_SLOT, 1);
+                anm.set_script(rng, &mut v[2], CDBG_SLOT, 1);
                 v[2].set_sprite(anm, 0);
-                anm.set_script(&mut v[4], CDBG_SLOT, 3);
+                anm.set_script(rng, &mut v[4], CDBG_SLOT, 3);
                 v[4].set_sprite(anm, 0);
                 if (0xCD..=0xDD).contains(&card) {
-                    anm.set_script(&mut v[7], TEXT_SLOT, 6);
-                    anm.set_script(&mut v[8], TEXT_SLOT, 7);
-                    anm.set_script(&mut v[9], TEXT_SLOT, 8);
+                    anm.set_script(rng, &mut v[7], TEXT_SLOT, 6);
+                    anm.set_script(rng, &mut v[8], TEXT_SLOT, 7);
+                    anm.set_script(rng, &mut v[9], TEXT_SLOT, 8);
                 } else {
-                    anm.set_script(&mut v[7], TEXT_SLOT, 5);
+                    anm.set_script(rng, &mut v[7], TEXT_SLOT, 5);
                 }
                 // Text_RenderToVmRight 0x4664A0 (10 §6): x = trunc(u0 + sw − len·15/2), u0 0, sw 320, len in
                 // Shift-JIS bytes; colour 0x00FFF0F0.
@@ -354,9 +351,15 @@ impl Task<Ctx> for Gui {
 
     // Spell_Calc 0x416B90 (VM part, 12 §5.8).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        for r in QUEUE.with_borrow_mut(std::mem::take) {
+        for r in std::mem::take(&mut ctx.gui_queue) {
             Self::record(&mut ctx.game, &r);
-            self.handle(&mut ctx.anm, r, &mut ctx.sound, &mut ctx.panel);
+            self.handle(
+                &mut ctx.anm,
+                &mut ctx.rng,
+                r,
+                &mut ctx.sound,
+                &mut ctx.panel,
+            );
         }
         if self.card >= 0 {
             // Read from score.dat every frame for the bonus line.
@@ -389,19 +392,25 @@ impl Task<Ctx> for Gui {
             drop(e);
             if ended {
                 // Spell_HideName from step 1.1 lands before this frame's VM run.
-                for r in QUEUE.with_borrow_mut(std::mem::take) {
-                    self.handle(&mut ctx.anm, r, &mut ctx.sound, &mut ctx.panel);
+                for r in std::mem::take(&mut ctx.gui_queue) {
+                    self.handle(
+                        &mut ctx.anm,
+                        &mut ctx.rng,
+                        r,
+                        &mut ctx.sound,
+                        &mut ctx.panel,
+                    );
                 }
             }
             for k in CALC_ORDER {
                 let vm = &mut self.vms[k];
-                if vm.script.is_some() && vm.run(&mut ctx.anm) {
+                if vm.script.is_some() && vm.run(&mut ctx.anm, &mut ctx.rng) {
                     vm.script = None;
                 }
             }
             // Step 3: Timer_Decrement(+0x108) at game speed after the VMs, also while no card is active (07 §11.1).
-            let speed = ctx.anm.speed;
-            self.enemies.borrow_mut().g.spell_remaining.dec(speed);
+            let (speed, sr) = (ctx.anm.speed, ctx.anm.slowdown_restore);
+            self.enemies.borrow_mut().g.spell_remaining.dec(speed, sr);
         }
         self.read_bonus();
         Ret::Next

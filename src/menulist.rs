@@ -464,8 +464,12 @@ impl MainMenu {
 
     fn glyph_vm(&mut self, ctx: &mut Ctx) {
         if self.lists.glyph.script.is_none() {
-            ctx.anm
-                .set_script(&mut self.lists.glyph, crate::ascii::ANM_SLOT, 4);
+            ctx.anm.set_script(
+                &mut ctx.rng,
+                &mut self.lists.glyph,
+                crate::ascii::ANM_SLOT,
+                4,
+            );
         }
     }
 
@@ -499,7 +503,7 @@ impl MainMenu {
             self.char_vms_list(ctx.game.shot as i32);
             self.cursor = (ctx.game.stage as i32).clamp(0, 7);
             let m = Self::practice_mask(ctx);
-            self.stages = std::array::from_fn(|i| crate::menu::unlock_all() || m & (1 << i) != 0);
+            self.stages = std::array::from_fn(|i| ctx.core.unlock || m & (1 << i) != 0);
             if !self.stages[self.cursor.clamp(0, 7) as usize] {
                 self.cursor = 0;
             }
@@ -560,11 +564,11 @@ impl MainMenu {
 
     // Screen 16 offers shots whose team has a Final A clear (Clear_TeamFinalA); solo shots always pass (16 §6.1).
     pub(crate) fn sp_shot_ok(ctx: &Ctx, s: i32) -> bool {
-        s >= 4 || crate::menu::team_final_a(&ctx.game, s as usize)
+        s >= 4 || crate::menu::team_final_a(&ctx.game, ctx.core.unlock, s as usize)
     }
 
     pub(crate) fn spell_char(&mut self, ctx: &mut Ctx) {
-        let n = if crate::menu::extra_all(&ctx.game) {
+        let n = if crate::menu::extra_all(&ctx.game, ctx.core.unlock) {
             12
         } else {
             4
@@ -1156,9 +1160,10 @@ impl MainMenu {
     // ---- screen 7 (12 §2.8, 15 §3.8) ----
 
     // Listing (15 §3.8): slots th8_01..15, then up to 45 th8_ud????.rpy files; unreadable files are skipped.
-    fn load_replays(&mut self) {
+    fn load_replays(&mut self, host: &crate::scoredat::HostIo) {
         let mut names: Vec<String> = (1..=15).map(|i| format!("replay/th8_{i:02}.rpy")).collect();
-        let mut ud: Vec<String> = crate::scoredat::storage_list("replay/th8_ud")
+        let mut ud: Vec<String> = host
+            .list("replay/th8_ud")
             .into_iter()
             .filter(|n| n.ends_with(".rpy"))
             .collect();
@@ -1167,7 +1172,7 @@ impl MainMenu {
         self.replays = names
             .into_iter()
             .filter_map(|n| {
-                let r = crate::replay::parse(&crate::scoredat::storage_read(&n)?).ok()?;
+                let r = crate::replay::parse(&host.read(&n)?, host.ver_list()).ok()?;
                 Some((n, r))
             })
             .collect();
@@ -1210,7 +1215,7 @@ impl MainMenu {
             self.set_surface(ctx, "select00.png");
             self.interrupt_all(14);
             self.desc_cur = None;
-            self.load_replays();
+            self.load_replays(&ctx.host);
             self.lists.rpy_sub = 1;
             self.lists.rpy_loaded = None;
             if self.prev_screen == crate::menu::TOP {
@@ -1472,7 +1477,7 @@ mod tests {
     // 12 §2.8: spell replays send VM 110 no interrupt, only alpha 0; normal replays send it 21.
     #[test]
     fn speed_plates_spell_replay() {
-        let mut m = crate::menu::MainMenu::new();
+        let mut m = crate::menu::MainMenu::new(None);
         m.vms = (0..142).map(|_| AnmVm::default()).collect();
         m.vms[110].color[anmvm::A] = 96;
         m.cursor = 1;

@@ -326,9 +326,9 @@ impl Game {
     }
 
     // Boot load (15 §2.2); a missing or invalid file starts from defaults.
-    pub fn load_score(&mut self, file: Option<&[u8]>) {
+    pub fn load_score(&mut self, file: Option<&[u8]>, host: &crate::scoredat::HostIo) {
         self.lsnm_found = false;
-        self.score = match file.map(crate::scoredat::parse) {
+        self.score = match file.map(|f| host.parse(f)) {
             Some(Ok(s)) => {
                 self.lsnm_found = true;
                 s
@@ -347,7 +347,12 @@ impl Game {
     }
 
     // ScoreDat_Save (Result removal): 2 RNG draws. `flush` = Result mode 2 (slow mode drops this run's card credit).
-    pub fn save_score(&mut self, rng: &mut crate::rng::Rng, flush: bool) -> Vec<u8> {
+    pub fn save_score(
+        &mut self,
+        rng: &mut crate::rng::Rng,
+        flush: bool,
+        host: &crate::scoredat::HostIo,
+    ) -> Vec<u8> {
         // Result mode 2 registers and is removed at once: its Result_OnRegister list build runs first (15 §2.3).
         if flush {
             self.score.rebuild_lists();
@@ -363,7 +368,7 @@ impl Game {
         let bytes = self.score.encode(rng);
         self.lsnm_found = true;
         if self.persist {
-            crate::scoredat::storage_write("score.dat", &bytes);
+            host.write("score.dat", &bytes);
         }
         bytes
     }
@@ -583,7 +588,12 @@ impl GameManager {
             music_start: 0,
             cleared: false,
         }));
-        gm.borrow().player.borrow_mut().debug_invuln |= ctx.game.noclip;
+        {
+            let g = gm.borrow();
+            let mut p = g.player.borrow_mut();
+            p.debug_invuln = ctx.core.invuln || ctx.game.noclip;
+            p.debug_bomb = ctx.core.bomb;
+        }
         // GameManager_Register zeroes the gameplay frame counter 0x164D2C8 (11 §2).
         ctx.game.frame_counter = 0;
         CURRENT.with_borrow_mut(|c| *c = Rc::downgrade(&gm));
@@ -597,7 +607,7 @@ impl GameManager {
     // score.dat flush (2), rank, deaths / bombs-used checksums.
     fn fresh_start(ctx: &mut Ctx, st: &mut Stats) {
         // Port rule (11 §1.2): the loader thread's 53-bit precision does not affect these integer/decoy draws.
-        let rng = &mut ctx.anm.rng;
+        let rng = &mut ctx.rng;
         rng.next_u32();
         for _ in 0..21 {
             rng.next_u32();
@@ -641,7 +651,7 @@ impl GameManager {
         st.extends = 0;
         st.next_extend = crate::item::next_extend(d as i32, 0);
         // GameMgr_LoadScoreData: flush (Result mode 2), CATK stamp, hiscore, practice play count, CATK backup.
-        g.save_score(rng, true);
+        g.save_score(rng, true, &ctx.host);
         g.score.stamp_catk();
         let shot = g.shot as usize % 12;
         // Hiscore-continues digit stats+0x18 from the top HSCR entry, also in practice (11 §5, 15 §2.3).
@@ -693,8 +703,8 @@ impl GameManager {
             // 11 §3.3 continuing: score display synced, two decoy checksums.
             st.score_disp = st.score10;
             st.score_step = 0;
-            Stats::checksum(&mut ctx.anm.rng);
-            Stats::checksum(&mut ctx.anm.rng);
+            Stats::checksum(&mut ctx.rng);
+            Stats::checksum(&mut ctx.rng);
         }
         // The rank sub-counter restarts after both branches; a continuing stage keeps the rank (11 §3.1).
         // 0x164D340 = GM+0x3DE38 := 0 at every stage start (11 §3.1).
@@ -760,10 +770,10 @@ impl GameManager {
             // 11 §3.1: both inside practice (flags bit 0); bit 14 picks the spell-practice power by card id.
             if ctx.game.practice() {
                 let pw = practice_power(ctx.game.spell_practice(), stage, ctx.game.card);
-                s.set_power(pw, &mut ctx.anm.rng);
+                s.set_power(pw, &mut ctx.rng);
             }
             // Port-only debug override.
-            if let Some(pw) = ctx.settings.power.filter(|_| ctx.game.stages_started == 0) {
+            if let Some(pw) = ctx.core.power.filter(|_| ctx.game.stages_started == 0) {
                 s.power = pw.clamp(0.0, 128.0);
             }
         }
@@ -771,14 +781,14 @@ impl GameManager {
         if ctx.game.replay() {
             ctx.game.rank.init(d);
             let mut p = self.player.borrow_mut();
-            crate::replay::play_stage_load(&mut ctx.game, &mut p.stats, &mut ctx.anm.rng)?;
-            Stats::checksum_restored(&mut ctx.anm.rng);
+            crate::replay::play_stage_load(&mut ctx.game, &mut p.stats, &mut ctx.rng)?;
+            Stats::checksum_restored(&mut ctx.rng);
         }
         let g = &mut ctx.game;
         g.paused = 0;
         g.flags &= !0x2180;
         // stage_seed is captured before the subsystems register (11 §1.3).
-        g.stage_seed = ctx.anm.rng.state;
+        g.stage_seed = ctx.rng.state;
         log::info!(
             "stage {stage} start at frame {}: shot {shot} difficulty {d} seed {:#06x}",
             ctx.frame,
@@ -943,7 +953,7 @@ impl GameManager {
         }
         if std::mem::take(&mut g.continue_apply) {
             let bombs = p.sht.bombs.trunc();
-            let rng = &mut ctx.anm.rng;
+            let rng = &mut ctx.rng;
             let st = &mut p.stats;
             st.continues += 1;
             if g.counts_plays() {
@@ -1047,7 +1057,7 @@ impl Task<Ctx> for GameManager {
             && ctx.game.next_scene_after < 0
             && let Some(h) = &self.hud
         {
-            h.borrow_mut().stage_transition(&mut ctx.anm);
+            h.borrow_mut().stage_transition(&mut ctx.anm, &mut ctx.rng);
         }
         self.cleared |= cleared;
         if let Some(r) = r {
@@ -1080,7 +1090,8 @@ impl Task<Ctx> for GameManager {
                 && gauge_due
             {
                 self.gauge_at = None;
-                ctx.overlays.gauge_setup(&mut ctx.anm, min, max);
+                ctx.overlays
+                    .gauge_setup(&mut ctx.anm, &mut ctx.rng, min, max);
             }
             let g = &mut ctx.game;
             if wait_due || release_due {
@@ -1127,9 +1138,9 @@ impl Task<Ctx> for GameManager {
             g.add_play_time();
             ctx.sound.play(crate::sound::PAUSE);
             ctx.audio.pause_bgm(true);
-            let s = ctx.anm.rng.state;
-            Stats::checksum(&mut ctx.anm.rng);
-            ctx.anm.rng.state = s;
+            let s = ctx.rng.state;
+            Stats::checksum(&mut ctx.rng);
+            ctx.rng.state = s;
         }
         let msg_active = self
             .hud
@@ -1202,7 +1213,7 @@ impl Task<Ctx> for GameManager {
         }
         g.frame_counter += 1;
         // Port-only debug: TH08_SCREEN_FX=<frame>:<type>,<p0>,<p1>,<p2>,<p3>.
-        if let Some(n) = ctx.settings.screen_fx {
+        if let Some(n) = ctx.core.screen_fx {
             if n[0] == g.frame_counter as i64 {
                 ctx.effects.screen(
                     n[1] as u8,

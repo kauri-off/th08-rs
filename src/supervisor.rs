@@ -2,10 +2,10 @@
 //! draw prios 0 / 2 / 16 (00 §4).
 
 use crate::anmvm::AnmVm;
+use crate::coreconfig::{CoreConfig, Ending};
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game, GameManager};
 use crate::gfx::{Blend, PLAYFIELD, Rect, TextureId};
-use crate::settings::{Ending, Settings};
 use crate::task::{self, Chain, Ret, Task, TaskRef};
 use anyhow::{Context, Result};
 
@@ -40,9 +40,9 @@ const MENU_LOAD: u32 = 33;
 
 pub fn register(ctx: &mut Ctx) -> Result<()> {
     let t = task::task(Supervisor {
-        debug_sprites: ctx.settings.slot_test,
+        debug_sprites: ctx.core.slot_test,
         script: ctx
-            .settings
+            .core
             .input
             .as_deref()
             .and_then(crate::input::load_script),
@@ -65,7 +65,7 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
 }
 
 // Debug tool, not a port. Debug start (`TH08_STAGE`): difficulty `TH08_RANK` (default Normal), shot `TH08_PLAYER` (default 0).
-pub fn setup_new_game(g: &mut Game, s: &Settings, stage: usize) {
+pub fn setup_new_game(g: &mut Game, s: &CoreConfig, stage: usize) {
     let shot = s.player.unwrap_or(0);
     let default_diff = if stage % 9 == 8 { 4 } else { 1 };
     g.difficulty = s.rank.unwrap_or(default_diff);
@@ -78,7 +78,7 @@ pub fn setup_new_game(g: &mut Game, s: &Settings, stage: usize) {
 
 // Debug tool, not a port. `TH08_ENDING=<shot 0–11><a|b|c>` (bad / good 6A / good 6B, e.g. `0b`, `7a`) or a
 // `.end` file name (played as a good 6A ending of `TH08_PLAYER`); difficulty `TH08_RANK`, continues `TH08_CONTINUES`.
-pub fn setup_ending(g: &mut Game, s: &Settings, e: &Ending) {
+pub fn setup_ending(g: &mut Game, s: &CoreConfig, e: &Ending) {
     let (shot, kind) = match e {
         Ending::File(_) => (s.player.unwrap_or(0), 'b'),
         Ending::Kind { shot, kind } => (*shot, *kind),
@@ -158,7 +158,7 @@ impl Supervisor {
         self.boot_vms = (0..3)
             .map(|i| {
                 let mut vm = AnmVm::default();
-                ctx.anm.set_script(&mut vm, 2, i);
+                ctx.anm.set_script(&mut ctx.rng, &mut vm, 2, i);
                 vm
             })
             .collect();
@@ -206,7 +206,7 @@ impl Supervisor {
             // The music room calls 0x44886F itself on the exit press, one frame before the scene switch.
             self.begin_loading(ctx)?;
             for vm in &mut self.boot_vms {
-                vm.run(&mut ctx.anm);
+                vm.run(&mut ctx.anm, &mut ctx.rng);
             }
             MENU_LOAD - 1
         } else if from == gamemgr::SCENE_GAME {
@@ -304,7 +304,7 @@ impl Supervisor {
                 self.drop_scene(ctx);
                 self.set_scene(
                     ctx,
-                    crate::ending::Ending::new(),
+                    crate::ending::Ending::new(ctx.core.font.as_deref()),
                     crate::ending::CALC_PRIO,
                     crate::ending::DRAW_PRIO,
                 )?;
@@ -321,7 +321,7 @@ impl Supervisor {
                 ctx.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
-                    crate::menu::MainMenu::new(),
+                    crate::menu::MainMenu::new(ctx.core.font.as_deref()),
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;
@@ -366,7 +366,7 @@ impl Supervisor {
                 let mode = (req == gamemgr::SCENE_RESULT) as u8;
                 self.set_scene(
                     ctx,
-                    crate::result::ResultScreen::new(mode),
+                    crate::result::ResultScreen::new(mode, ctx.core.font.as_deref()),
                     crate::result::CALC_PRIO,
                     crate::result::DRAW_PRIO,
                 )?;
@@ -375,7 +375,7 @@ impl Supervisor {
                 self.drop_scene(ctx);
                 self.set_scene(
                     ctx,
-                    crate::musicroom::MusicRoom::new(),
+                    crate::musicroom::MusicRoom::new(ctx.core.font.as_deref()),
                     crate::musicroom::CALC_PRIO,
                     crate::musicroom::DRAW_PRIO,
                 )?;
@@ -388,7 +388,7 @@ impl Supervisor {
                 ctx.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
-                    crate::menu::MainMenu::new(),
+                    crate::menu::MainMenu::new(ctx.core.font.as_deref()),
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;
@@ -418,7 +418,7 @@ impl Task<Ctx> for Supervisor {
                 .load(&mut ctx.gfx, &ctx.archive, 2, "nowloading.anm")?;
             // Boot loading screen (12 §1): th08logo.jpg full screen + nowloading.anm scripts 0–2 at (500, 440).
             self.begin_loading(ctx)?;
-            let st = ctx.settings;
+            let st = ctx.core.clone();
             if let Some(spec) = &st.anm {
                 crate::anmdebug::register(ctx, spec)?;
                 return Ok(());
@@ -428,16 +428,16 @@ impl Task<Ctx> for Supervisor {
             if let Some(v) = &st.replay {
                 let bytes = match v.strip_prefix("demo") {
                     Some(n) => ctx.archive.read(&format!("demorpy{n}.rpy"))?,
-                    None => load_file(v).with_context(|| format!("TH08_REPLAY={v}"))?,
+                    None => load_file(&ctx.host, v).with_context(|| format!("TH08_REPLAY={v}"))?,
                 };
-                let r = crate::replay::parse(&bytes)?;
+                let r = crate::replay::parse(&bytes, ctx.host.ver_list())?;
                 ctx.game.replay_speed = st.replay_speed;
                 let demo = v.strip_prefix("demo").and_then(|n| n.parse().ok());
                 crate::replay::start_playback(&mut ctx.game, r, None, demo);
             } else if let Some(e) = &st.ending {
-                setup_ending(&mut ctx.game, st, e);
+                setup_ending(&mut ctx.game, &st, e);
             } else if let Some(index) = st.stage {
-                setup_new_game(&mut ctx.game, st, index);
+                setup_new_game(&mut ctx.game, &st, index);
             } else {
                 ctx.game.request(gamemgr::SCENE_MENU);
             }
@@ -480,7 +480,7 @@ impl Task<Ctx> for Supervisor {
             }
             self.start_vms(ctx, [500.0, 440.0]);
             for vm in &mut self.boot_vms {
-                vm.run(&mut ctx.anm);
+                vm.run(&mut ctx.anm, &mut ctx.rng);
             }
         }
         if std::mem::take(&mut self.capture_req) {
@@ -513,7 +513,7 @@ impl Task<Ctx> for Supervisor {
         // Presents 1–2 come from Window_InitD3D, before the first Frame_Run (12 §1 boot presents).
         if self.frame > 2 || ctx.game.requested != gamemgr::SCENE_MENU {
             for vm in &mut self.boot_vms {
-                vm.run(&mut ctx.anm);
+                vm.run(&mut ctx.anm, &mut ctx.rng);
             }
         }
         if self.logo.is_some() && ctx.game.scene == gamemgr::SCENE_BOOT {
@@ -619,12 +619,12 @@ impl Task<Ctx> for Supervisor {
 }
 
 // Debug: a file from disk natively, or from the save storage (web, and `replay/…` names).
-fn load_file(path: &str) -> Option<Vec<u8>> {
+fn load_file(host: &crate::scoredat::HostIo, path: &str) -> Option<Vec<u8>> {
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(b) = std::fs::read(path) {
         return Some(b);
     }
-    crate::scoredat::storage_read(path)
+    host.read(path)
 }
 
 // Today's "%m/%d" in local time for HSCR +0x20 / replay info +0x6C (15 §2.3, §3.5; 16 §2.2: C `localtime`).

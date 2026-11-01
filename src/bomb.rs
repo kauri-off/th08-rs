@@ -270,11 +270,6 @@ pub fn bomb_char(shot: u8, index: usize) -> u8 {
     }
 }
 
-// TH08_BOMB=<0–4>: forces the bomb index (4 = dissolve spell) for debugging.
-fn forced_index() -> Option<usize> {
-    crate::settings::get().bomb
-}
-
 impl Player {
     // First inactive slot of the half; index 191 reused when full (09 §8, creators).
     fn free_slot(v: &[Area]) -> usize {
@@ -470,7 +465,7 @@ impl Player {
             // +0xE2A7C is not cleared here (09 §1.1).
             self.speed_mult = [1.0; 2];
             self.bombing = false;
-            crate::gui::request(crate::gui::Req::PlayerHide);
+            sys.gui.push(crate::gui::Req::PlayerHide);
             if self.bomb.index == 4 {
                 *sys.flags = *sys.flags & !(F_LAST_SPELL | F_LAST_CAPTURED);
                 self.dissolve_req |= DISSOLVE_END;
@@ -499,7 +494,7 @@ impl Player {
             sys.fx.free(effect::FIXED_BASE + effect::FIX_DEATH);
             self.set_freeze_bullets(sys.flags, false);
             anm.tint_off();
-            let rng = &mut anm.rng;
+            let rng = &mut *sys.rng;
             index = self.focus.min(1) as usize;
             if self.last_spell != 0 {
                 index = 1 - index + 2;
@@ -523,8 +518,8 @@ impl Player {
             self.stats.bombs_used += 1;
             Stats::checksum(rng);
         }
-        // Port-only debug override.
-        if let Some(i) = forced_index() {
+        // Port-only debug override (TH08_BOMB=<0–4>, 4 = dissolve spell).
+        if let Some(i) = self.debug_bomb {
             index = i;
         }
         self.last_spell = 0;
@@ -549,7 +544,7 @@ impl Player {
         } else {
             (self.bomb.ch & 1) as i32
         };
-        crate::gui::request(crate::gui::Req::PlayerShow {
+        sys.gui.push(crate::gui::Req::PlayerShow {
             face,
             name: spec.0,
             last: spec.3,
@@ -557,7 +552,7 @@ impl Player {
         self.bomb.duration = spec.1;
         self.state = 3;
         self.state_timer.set(spec.2);
-        crate::effect::invuln_ring(sys.fx, anm, self.pos, spec.2);
+        crate::effect::invuln_ring(sys.fx, anm, sys.rng, self.pos, spec.2);
         self.invuln_ring = true;
         self.bomb.objs.iter_mut().for_each(|o| o.state = 0);
         self.bomb.attract = true;
@@ -619,8 +614,8 @@ impl Player {
         b.adv && b.t == n
     }
 
-    fn obj_script(anm: &mut AnmManager, o: &mut BombObj, script: usize) {
-        anm.set_script(&mut o.vm, ANM_SLOT, script);
+    fn obj_script(anm: &mut AnmManager, rng: &mut crate::rng::Rng, o: &mut BombObj, script: usize) {
+        anm.set_script(rng, &mut o.vm, ANM_SLOT, script);
     }
 
     // Attached areas follow the object (no-op once the pointers are cleared).
@@ -646,8 +641,8 @@ impl Player {
     }
 
     // Runs an object's VM; true when its script has ended.
-    fn run_obj(anm: &mut AnmManager, o: &mut BombObj) -> bool {
-        o.vm.script.is_none() || o.vm.run(anm)
+    fn run_obj(anm: &mut AnmManager, rng: &mut crate::rng::Rng, o: &mut BombObj) -> bool {
+        o.vm.script.is_none() || o.vm.run(anm, rng)
     }
 
     fn homing_target(&self) -> Option<[f32; 2]> {
@@ -656,7 +651,7 @@ impl Player {
     }
 
     // Shared orb setup of Reimu's bombs (14 §2.1).
-    fn reimu_orbs(&mut self, anm: &mut AnmManager) {
+    fn reimu_orbs(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
         let p = self.pos;
         // Start angles are a running f32 sum (0x40C0F0 fld/fadd/fstp), not −π + i·π/8 (14 §2.1, RE-Q58 AR).
         let mut a = -PI;
@@ -664,7 +659,7 @@ impl Player {
             let c = self.cancel_circle(xy(p), 96.0, 0.0, 200, 6);
             let d = self.dc(xy(p), 64.0, 0.0, 5, 200, 2, 200, true);
             let o = &mut self.bomb.objs[i];
-            Self::obj_script(anm, o, 0x13);
+            Self::obj_script(anm, rng, o, 0x13);
             o.angle = a;
             a += PI / 8.0;
             (o.pos, o.centre, o.f8, o.state) = (p, p, 0.0, 1);
@@ -683,7 +678,7 @@ impl Player {
         } else {
             self.dc(xy(q), 64.0, 12.8, 500, 12, 4, 0, false);
         }
-        sys.fx.spawn(anm, 6, q, 8, 0xFFFFFFFF);
+        sys.fx.spawn(anm, sys.rng, 6, q, 8, 0xFFFFFFFF);
         let o = &mut self.bomb.objs[i];
         o.state = 2;
         o.vm.pending_interrupt = 1;
@@ -695,8 +690,8 @@ impl Player {
     fn bomb_reimu(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let p = self.pos;
         if Self::at(b, 0) {
-            sys.fx.spawn(anm, 12, p, 1, 0xFF4040FF);
-            self.reimu_orbs(anm);
+            sys.fx.spawn(anm, sys.rng, 12, p, 1, 0xFF4040FF);
+            self.reimu_orbs(anm, sys.rng);
             sys.sound.play(0xD);
         }
         // T < 40 spin-out: pos = centre + (sin a, cos a)·radius, radius += 3.2.
@@ -769,15 +764,15 @@ impl Player {
             }
         }
         for o in self.bomb.objs[..16].iter_mut().filter(|o| o.state != 0) {
-            Self::run_obj(anm, o);
+            Self::run_obj(anm, sys.rng, o);
         }
     }
 
     // 14 §2.2 神霊「夢想封印　瞬」 0x40C910: orb i explodes at T ≥ dur − 40 − i; blasts every 20 frames from T = 40.
     fn bomb_reimu_ls(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         if Self::at(b, 0) {
-            sys.fx.spawn(anm, 12, self.pos, 1, 0xFF4040FF);
-            self.reimu_orbs(anm);
+            sys.fx.spawn(anm, sys.rng, 12, self.pos, 1, 0xFF4040FF);
+            self.reimu_orbs(anm, sys.rng);
             self.bomb.n = 0;
             sys.sound.play(0xD);
         }
@@ -820,17 +815,17 @@ impl Player {
             let point = match self.homing_target() {
                 Some(p) => p,
                 None => {
-                    let x = anm.rng.next_f32() * 320.0 + 32.0;
-                    [x, anm.rng.next_f32() * 384.0 + 32.0]
+                    let x = sys.rng.next_f32() * 320.0 + 32.0;
+                    [x, sys.rng.next_f32() * 384.0 + 32.0]
                 }
             };
             let pt = [point[0], point[1], 0.0];
-            sys.fx.spawn(anm, 0x31, pt, 1, colour);
-            sys.fx.spawn(anm, 0x37, pt, 1, colour);
+            sys.fx.spawn(anm, sys.rng, 0x31, pt, 1, colour);
+            sys.fx.spawn(anm, sys.rng, 0x37, pt, 1, colour);
             let c = self.cancel_circle(point, 64.0, 64.0 / 15.0, 30, 6);
             let d = self.dc(point, 64.0, 128.0 / 15.0, 400, 15, 2, 0, false);
             let o = &mut self.bomb.objs[k];
-            Self::obj_script(anm, o, 0x14);
+            Self::obj_script(anm, sys.rng, o, 0x14);
             o.vm.color = colour.to_le_bytes();
             (o.pos, o.state, o.carea, o.darea) = (pt, 1, Some(c), Some(d));
             sys.sound.play(0xF);
@@ -844,7 +839,7 @@ impl Player {
             if k >= 16 {
                 self.follow(k);
             }
-            if Self::run_obj(anm, &mut self.bomb.objs[k]) && k >= 16 {
+            if Self::run_obj(anm, sys.rng, &mut self.bomb.objs[k]) && k >= 16 {
                 self.bomb.objs[k].state = 0;
             }
         }
@@ -914,14 +909,20 @@ impl Player {
         }
         let q = doll.pos;
         if b.adv && (60..=76).contains(&b.t) && b.t % 4 == 0 {
-            sys.fx
-                .spawn(anm, 0x28, q, 1, DOLL_FLASH[(b.t as usize - 60) / 4]);
+            sys.fx.spawn(
+                anm,
+                sys.rng,
+                0x28,
+                q,
+                1,
+                DOLL_FLASH[(b.t as usize - 60) / 4],
+            );
         }
         let (blast, oct0, end) = if ls { (120, 130, 180) } else { (90, 100, 150) };
         if Self::at(b, blast) {
             sys.sound.play(0xF);
             for k in [0x2A, 0x2B, 0x2C] {
-                sys.fx.spawn(anm, k, q, 1, 0xFFFFFFFF);
+                sys.fx.spawn(anm, sys.rng, k, q, 1, 0xFFFFFFFF);
             }
             if ls {
                 for (p, c) in [
@@ -930,7 +931,7 @@ impl Player {
                     ([320.0, 352.0], 0xFF00F000),
                     ([320.0, 96.0], 0xFF00F0F0),
                 ] {
-                    sys.fx.spawn(anm, 0x2D, [p[0], p[1], 0.0], 1, c);
+                    sys.fx.spawn(anm, sys.rng, 0x2D, [p[0], p[1], 0.0], 1, c);
                 }
             }
             let c = self.cancel_circle(xy(q), 1.0, 5.0, 110, 6);
@@ -942,8 +943,14 @@ impl Player {
             }
         }
         if b.adv && (oct0..oct0 + 40).contains(&b.t) && (b.t - oct0) % 10 == 0 {
-            sys.fx
-                .spawn(anm, 0x2D, q, 1, DOLL_OCTAGON[((b.t - oct0) / 10) as usize]);
+            sys.fx.spawn(
+                anm,
+                sys.rng,
+                0x2D,
+                q,
+                1,
+                DOLL_OCTAGON[((b.t - oct0) / 10) as usize],
+            );
         }
         if Self::at(b, end) {
             flash(8, 1, if ls { 0xFFFFFFFF } else { 0x8FFFFFFF }, sys);
@@ -967,7 +974,7 @@ impl Player {
             self.bomb.objs[0].pos = p;
             let base = if b.ls { 0x23 } else { 0x1E };
             for (i, vm) in self.bomb.vms.iter_mut().enumerate() {
-                anm.set_script(vm, ANM_SLOT, base + i);
+                anm.set_script(sys.rng, vm, ANM_SLOT, base + i);
             }
             self.speed_mult = [0.2; 2];
             sys.fx.screen(7, 16, 120, 60, 120, SCREEN_PRIO);
@@ -1002,7 +1009,7 @@ impl Player {
         }
         for vm in &mut self.bomb.vms {
             if vm.script.is_some() {
-                vm.run(anm);
+                vm.run(anm, sys.rng);
             }
         }
     }
@@ -1020,13 +1027,18 @@ impl Player {
         sys: &mut Sys,
     ) {
         let p = self.pos;
-        let i = sys
-            .fx
-            .spawn_fixed(anm, 0x35, p, 4 + n.rem_euclid(4) as usize, 0xFFFFFFFF);
+        let i = sys.fx.spawn_fixed(
+            anm,
+            sys.rng,
+            0x35,
+            p,
+            4 + n.rem_euclid(4) as usize,
+            0xFFFFFFFF,
+        );
         {
             let x = &mut sys.fx.fx[i];
             if alt {
-                anm.set_script(&mut x.vm, effect::SCRIPT_SLOT, 0x5C);
+                anm.set_script(sys.rng, &mut x.vm, effect::SCRIPT_SLOT, 0x5C);
                 x.vm.color = 0xFFFFFFFFu32.to_le_bytes();
             }
             x.ring.segments = 32;
@@ -1041,7 +1053,7 @@ impl Player {
             }
             x.vm.interp_alpha_from(30, 3, 255, 0);
             x.vm.interp_color_from(30, 0, 0xFFFFFF, 0xFF0000);
-            x.vm.run(anm);
+            x.vm.run(anm, sys.rng);
         }
         sys.sound.play_at(0x11, p[0]);
     }
@@ -1054,7 +1066,7 @@ impl Player {
         if Self::at(b, 0) {
             self.bomb.objs[..count].iter_mut().for_each(|o| o.state = 0);
             self.speed_mult = [0.5; 2];
-            self.bomb.fx = sys.fx.spawn(anm, 20, p, 1, 0xFFFFFFFF);
+            self.bomb.fx = sys.fx.spawn(anm, sys.rng, 20, p, 1, 0xFFFFFFFF);
             sys.sound.play(5);
             if ls {
                 shake(50, 4, 1, sys);
@@ -1081,10 +1093,10 @@ impl Player {
                 } else {
                     k as f32 * TAU / 96.0 - PI
                 };
-                let speed = anm.rng.next_f32() + 0.5;
-                let accel = anm.rng.next_f32() * 0.1 + 0.03;
+                let speed = sys.rng.next_f32() + 0.5;
+                let accel = sys.rng.next_f32() * 0.1 + 0.03;
                 // Quirk kept: Rng_Range16(1) is always 0, so the spin is always −π/20 (one draw; 3 per knife).
-                let spin = if anm.rng.range16(1) == 0 {
+                let spin = if sys.rng.range16(1) == 0 {
                     -PI / 20.0
                 } else {
                     PI / 20.0
@@ -1103,7 +1115,7 @@ impl Player {
                     false,
                 );
                 let o = &mut self.bomb.objs[k];
-                Self::obj_script(anm, o, if ls { 0x14 } else { 0x16 });
+                Self::obj_script(anm, sys.rng, o, if ls { 0x14 } else { 0x16 });
                 (o.state, o.angle, o.fc, o.f8, o.spin, o.pos) = (1, angle, speed, accel, spin, pos);
                 o.age.set(0);
                 (o.carea, o.darea) = (Some(c), Some(da));
@@ -1128,7 +1140,7 @@ impl Player {
                     o.fc = 14.0;
                     if ls {
                         let q = o.pos;
-                        sys.fx.spawn(anm, 0x2E, q, 1, 0xFFFFFFFF);
+                        sys.fx.spawn(anm, sys.rng, 0x2E, q, 1, 0xFFFFFFFF);
                     }
                 }
                 let o = &mut self.bomb.objs[k];
@@ -1147,9 +1159,9 @@ impl Player {
                     .is_some_and(|a| self.damage_areas[a].total > 0)
                 {
                     let o = &mut self.bomb.objs[k];
-                    Self::obj_script(anm, o, if ls { 0x15 } else { 0x17 });
+                    Self::obj_script(anm, sys.rng, o, if ls { 0x15 } else { 0x17 });
                     let q = o.pos;
-                    sys.fx.spawn(anm, 0, q, 1, 0xFFFF80FF);
+                    sys.fx.spawn(anm, sys.rng, 0, q, 1, 0xFFFF80FF);
                     self.areas_off(k);
                     sys.sound.play_at(0x2B, q[0]);
                     if ls && k % 3 == 0 {
@@ -1163,7 +1175,7 @@ impl Player {
             let o = &mut self.bomb.objs[k];
             o.pos[0] += o.v[0];
             o.pos[1] += o.v[1];
-            Self::run_obj(anm, o);
+            Self::run_obj(anm, sys.rng, o);
             o.age.tick(b.gs);
         }
     }
@@ -1208,7 +1220,7 @@ impl Player {
         self.cancel_circle(xy(p), 96.0, 0.0, 0, 6);
         if b.adv && b.t % 10 == 0 {
             let n = self.bomb.n;
-            let amp = anm.rng.next_f32() * 128.0;
+            let amp = sys.rng.next_f32() * 128.0;
             let width = Some((64.0, if b.ls { 128.0 } else { 64.0 }));
             self.spark_ring(anm, n, 4, width, [192.0, amp, 0.0], false, sys);
             self.bomb.n += 1;
@@ -1232,7 +1244,7 @@ impl Player {
         if Self::at(b, 0) {
             sys.sound.play(0xD);
             self.speed_mult = [0.0; 2];
-            self.set_script(anm, 0);
+            self.set_script(anm, sys.rng, 0);
             sys.sound.play(6);
             self.bomb.start = self.pos;
             self.bomb.dash = [self.pos[0], 416.0, self.pos[2]];
@@ -1245,7 +1257,7 @@ impl Player {
         }
         let colour = if ls { 0xFFFF8080 } else { 0xFF8080FF };
         if Self::at(b, 40) {
-            sys.fx.spawn(anm, 0x28, self.pos, 1, colour);
+            sys.fx.spawn(anm, sys.rng, 0x28, self.pos, 1, colour);
         }
         if Self::at(b, 70) {
             self.pos[1] = 32.0;
@@ -1258,7 +1270,8 @@ impl Player {
                 self.dr(c, [96.0, 448.0], 300, 10, 1, false);
                 self.dr(c, [96.0, 448.0], 80, 60, 5, false);
             }
-            sys.fx.spawn(anm, 0x30, [c[0], c[1], 0.0], 1, colour);
+            sys.fx
+                .spawn(anm, sys.rng, 0x30, [c[0], c[1], 0.0], 1, colour);
             flash(8, 1, 0xEFFFFFFF, sys);
             sys.sound.play(0x2A);
         }
@@ -1286,7 +1299,8 @@ impl Player {
                 let c = [self.pos[0] + sgn * dx, 224.0];
                 self.cancel_rect(c, [96.0, 448.0], 6, 60);
                 self.dr(c, [96.0, 448.0], dmg, 40, period, false);
-                sys.fx.spawn(anm, 0x30, [c[0], c[1], 0.0], 1, colour);
+                sys.fx
+                    .spawn(anm, sys.rng, 0x30, [c[0], c[1], 0.0], 1, colour);
             }
             flash(8, 1, (a << 24) | 0xFFFFFF, sys);
         }
@@ -1316,7 +1330,7 @@ impl Player {
             if ls {
                 self.bomb.objs[0].pos = p;
                 for (i, s) in [(0, 0x15), (1, 0x16)] {
-                    anm.set_script(&mut self.bomb.vms[i], ANM_SLOT, s);
+                    anm.set_script(sys.rng, &mut self.bomb.vms[i], ANM_SLOT, s);
                 }
             }
         }
@@ -1331,6 +1345,7 @@ impl Player {
             let kind = if ls { 0x25 } else { 0x24 };
             let i = sys.fx.spawn_fixed_param(
                 anm,
+                sys.rng,
                 kind,
                 at_pos,
                 [BOUNDARY_ANGLES[k], 1.0, 4.0],
@@ -1345,7 +1360,7 @@ impl Player {
             } else {
                 0x58 + k
             };
-            anm.set_script(&mut sys.fx.fx[i].vm, effect::SCRIPT_SLOT, script);
+            anm.set_script(sys.rng, &mut sys.fx.fx[i].vm, effect::SCRIPT_SLOT, script);
             // 14 §2.13: the re-spawn writes colour 0xFFFFFFFF after its SetScript and slot 4 gets no second script
             // start, so it draws white (script 88's t = 0 `color` is overwritten); slots 5–7 keep their scripts' colour.
             if k == 0 {
@@ -1354,7 +1369,7 @@ impl Player {
         }
         if ls {
             for vm in self.bomb.vms[..2].iter_mut().filter(|v| v.script.is_some()) {
-                vm.run(anm);
+                vm.run(anm, sys.rng);
             }
         }
     }
@@ -1375,7 +1390,7 @@ impl Player {
                     let d = self.dc(xy(p), 24.0, 0.0, 50, 500, 1, 800, false);
                     let c = self.cancel_circle(xy(p), 24.0, 0.0, 500, 6);
                     let o = &mut self.bomb.objs[g * 16 + i];
-                    Self::obj_script(anm, o, script);
+                    Self::obj_script(anm, sys.rng, o, script);
                     o.angle = i as f32 * PI / 8.0 - PI;
                     (o.centre, o.pos, o.f8, o.state) = (p, p, w, 1);
                     o.v = [0.0, dr, 0.0];
@@ -1383,7 +1398,7 @@ impl Player {
                 }
             }
             self.speed_mult = [0.8; 2];
-            sys.fx.spawn(anm, 20, p, 1, 0xFFFFFFFF);
+            sys.fx.spawn(anm, sys.rng, 20, p, 1, 0xFFFFFFFF);
             sys.sound.play(5);
             if b.ls {
                 shake(60, 16, 0, sys);
@@ -1394,7 +1409,7 @@ impl Player {
         if b.ls && (60..200).contains(&b.t) && b.adv && b.t % 20 == 0 {
             // Rng_SignedRange(π); quirks kept: angle uses the object slot index, the angular speed (f8) is
             // whatever the slot held, SE 0xF is panned at the last examined object.
-            let base = anm.rng.next_signed() * PI;
+            let base = sys.rng.next_signed() * PI;
             let (mut taken, mut last) = (0, OBJS - 1);
             for k in 0..OBJS {
                 last = k;
@@ -1404,7 +1419,7 @@ impl Player {
                 let d = self.dc(xy(p), 64.0, 0.0, 100, 500, 1, 1200, false);
                 let c = self.cancel_circle(xy(p), 64.0, 0.0, 500, 6);
                 let o = &mut self.bomb.objs[k];
-                Self::obj_script(anm, o, 0x14);
+                Self::obj_script(anm, sys.rng, o, 0x14);
                 o.angle = anmvm::wrap_add(k as f32 * PI / 8.0 + base, 0.0);
                 (o.centre, o.pos, o.state) = (p, p, 1);
                 o.v = [0.0, 8.0, 0.0];
@@ -1431,7 +1446,7 @@ impl Player {
             o.disp = [o.pos[0] - prev[0], o.pos[1] - prev[1], 0.0];
             if o.v[0] < 500.0 {
                 self.follow(k);
-                if Self::run_obj(anm, &mut self.bomb.objs[k]) {
+                if Self::run_obj(anm, sys.rng, &mut self.bomb.objs[k]) {
                     self.bomb.objs[k].state = 0;
                     self.areas_off(k);
                 }
@@ -1447,8 +1462,8 @@ impl Player {
     fn dissolve_start(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let p = self.pos;
         let practice = *sys.flags & F_SPELL_PRACTICE != 0;
-        sys.fx.spawn(anm, 12, p, 1, 0xFF4040FF);
-        let i = sys.fx.spawn_fixed(anm, 0x32, p, 4, 0xFF4040FF);
+        sys.fx.spawn(anm, sys.rng, 12, p, 1, 0xFF4040FF);
+        let i = sys.fx.spawn_fixed(anm, sys.rng, 0x32, p, 4, 0xFF4040FF);
         sys.fx.get(i, |e| {
             // Ring fields, not the VM scale: the type-50 update copies VM scale.x into the width (14 §2.17).
             e.ring.segments = 64;
@@ -1876,7 +1891,7 @@ mod tests {
         let (mut p, mut anm) = ready(4);
         (p.forced_bomb, p.deathbomb, p.last_spell) = (1, 1, 1);
         *sys.flags = F_LAST_SPELL;
-        let rng = anm.rng.clone();
+        let rng = sys.rng.clone();
         p.start_bomb(&mut anm, true, sys);
         *sys.flags = 0;
         assert_eq!(p.bomb.index, 4);
@@ -1889,7 +1904,7 @@ mod tests {
             ),
             (0, 0, 0)
         );
-        assert_eq!(format!("{:?}", anm.rng), format!("{rng:?}"));
+        assert_eq!(format!("{:?}", sys.rng), format!("{rng:?}"));
         assert!(p.bombing && p.last_spell == 0 && p.forced_bomb == 0);
     }
 
@@ -1907,10 +1922,10 @@ mod tests {
         ] {
             let (mut p, mut anm) = ready(4);
             (p.stats.bombs, p.last_spell) = (bombs, 1);
-            let t = anm.rng.total;
+            let t = sys.rng.total;
             p.start_bomb(&mut anm, forced, sys);
             assert_eq!((p.stats.bombs, p.bomb.used), (left, used));
-            assert_eq!(anm.rng.total - t, draws);
+            assert_eq!(sys.rng.total - t, draws);
         }
     }
 

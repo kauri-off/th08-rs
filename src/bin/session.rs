@@ -55,7 +55,13 @@ fn main() -> anyhow::Result<()> {
     let tdir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
     let src = th08::assets::Source::native(tdir.into());
-    let mut ctx = pollster::block_on(th08::game::Ctx::load_with(src, gfx, false))?;
+    let mut ctx = pollster::block_on(th08::game::Ctx::load_with(
+        src,
+        gfx,
+        false,
+        th08::settings::get().core(),
+        th08::settings::get().host_io(),
+    ))?;
     s.start(&mut ctx)?;
 
     let boot = s.sched.boot_calc as i64;

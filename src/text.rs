@@ -27,13 +27,20 @@ const FONT_PATHS: &[&str] = &[
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
 ];
 
+// No font (blank text); `Raster::new` does the font search.
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for Raster {
     fn default() -> Self {
-        let font = crate::settings::get()
-            .font
-            .iter()
-            .map(String::as_str)
+        Self { font: None }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Raster {
+    // `font` = TH08_FONT (`CoreConfig::font`), tried before FONT_PATHS.
+    pub fn new(font: Option<&str>) -> Self {
+        let font = font
+            .into_iter()
             .chain(FONT_PATHS.iter().copied())
             .find_map(|p| {
                 let data = std::fs::read(p).ok()?;
@@ -88,6 +95,11 @@ pub struct Raster {
 
 #[cfg(target_arch = "wasm32")]
 impl Raster {
+    // The browser's canvas font; TH08_FONT is native only.
+    pub fn new(_font: Option<&str>) -> Self {
+        Self::default()
+    }
+
     fn mask(&mut self, s: &str, cell: f32, x: f32, y: f32, w: usize, h: usize) -> Vec<u8> {
         use wasm_bindgen::JsCast;
         let mut out = vec![0u8; w * h];

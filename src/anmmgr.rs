@@ -4,7 +4,6 @@ use crate::anm::{self, Script};
 use crate::anmvm::{self, AnmVm};
 use crate::archive::Archive;
 use crate::gfx::{self, Blend, Camera, Gfx, Mat4, TextureId, Vertex};
-use crate::rng::Rng;
 use anyhow::{Result, ensure};
 
 // ANM file slots 0..24; index ≥ 25 is an error (03 §2.4).
@@ -31,8 +30,9 @@ pub struct AnmManager {
     slots: [Option<LoadedAnm>; SLOTS],
     // Global game speed used by the VM timers (05 §2), 1.0 in normal play.
     pub speed: f32,
-    // The global game RNG g_Rng, used by ANM ops 59/60 (05 §5 notes).
-    pub rng: Rng,
+    // Supervisor flag 0x20 (Supervisor+0x1A4, 05 §12.6): set by ECL native 29, never cleared (the Supervisor survives a
+    // restart, 00 §2); every Timer_Sub reads it next to `speed`.
+    pub slowdown_restore: bool,
     pub vm_counter: u32,
     // Global screen offset AnmManager +0x1C/+0x20, written by the screen-shake effect (05 §9 EmitQuad step 1).
     pub screen_offset: [f32; 2],
@@ -72,7 +72,7 @@ impl Default for AnmManager {
         Self {
             slots: std::array::from_fn(|_| None),
             speed: 1.0,
-            rng: Rng::default(),
+            slowdown_restore: false,
             vm_counter: 0,
             screen_offset: [0.0; 2],
             tint: 0x8080_8080,
@@ -190,21 +190,39 @@ impl AnmManager {
     }
 
     // AnmManager_SetScript 0x40B910 (05 §8): pos and pos_offset are zeroed before the frame-0 run.
-    pub fn set_script(&mut self, vm: &mut AnmVm, slot: usize, index: usize) {
+    pub fn set_script(
+        &mut self,
+        rng: &mut crate::rng::Rng,
+        vm: &mut AnmVm,
+        slot: usize,
+        index: usize,
+    ) {
         vm.script_index = index as i16;
         vm.pos = [0.0; 3];
         vm.pos_offset = [0.0; 3];
-        self.start_script(vm, slot, index);
+        self.start_script(rng, vm, slot, index);
     }
 
     // AnmFile_SetScript 0x4069F0 (09 §4.5): like `set_script` but keeps the VM pos / pos offset.
-    pub fn file_set_script(&mut self, vm: &mut AnmVm, slot: usize, index: usize) {
+    pub fn file_set_script(
+        &mut self,
+        rng: &mut crate::rng::Rng,
+        vm: &mut AnmVm,
+        slot: usize,
+        index: usize,
+    ) {
         vm.script_index = index as i16;
-        self.start_script(vm, slot, index);
+        self.start_script(rng, vm, slot, index);
     }
 
     // AnmFile_StartScript 0x45E580 (05 §8): a missing script zeroes the whole VM; otherwise init and run once (frame 0).
-    pub fn start_script(&mut self, vm: &mut AnmVm, slot: usize, index: usize) {
+    pub fn start_script(
+        &mut self,
+        rng: &mut crate::rng::Rng,
+        vm: &mut AnmVm,
+        slot: usize,
+        index: usize,
+    ) {
         if self.script(slot, index).is_none() {
             *vm = AnmVm {
                 script_index: 0,
@@ -218,7 +236,7 @@ impl AnmManager {
         vm.script = Some((slot, index));
         vm.ip = Some(0);
         vm.time.set(0);
-        vm.run(self);
+        vm.run(self, rng);
     }
 
     pub fn draw(&mut self, gfx: &mut Gfx, vm: &mut AnmVm) {

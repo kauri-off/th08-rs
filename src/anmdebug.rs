@@ -30,11 +30,11 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
         let (a, b) = s.split_once('-').unwrap_or((s, s));
         for i in a.parse::<usize>()?..=b.parse::<usize>()? {
             let mut vm = AnmVm::default();
-            ctx.anm.set_script(&mut vm, SLOT, i);
+            ctx.anm.set_script(&mut ctx.rng, &mut vm, SLOT, i);
             vms.push(vm);
         }
     }
-    let pos = &crate::settings::get().anm_pos;
+    let pos = ctx.core.anm_pos.clone();
     if pos.len() >= 2 {
         for (i, vm) in vms.iter_mut().enumerate() {
             vm.pos = [
@@ -44,13 +44,13 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
             ];
         }
     }
-    let interrupts = ctx.settings.anm_int.clone();
+    let interrupts = ctx.core.anm_int.clone();
     let t = task::task(AnmDebug {
         vms,
         playfield,
         interrupts,
         frame: 0,
-        mode: ctx.settings.anm_mode,
+        mode: ctx.core.anm_mode,
     });
     task::add(ctx, Chain::Calc, 4, 0, t.clone())?;
     task::add(ctx, Chain::Draw, 3, 0, t)?;
@@ -66,7 +66,7 @@ impl Task<Ctx> for AnmDebug {
             }
         }
         for vm in &mut self.vms {
-            vm.run(&mut ctx.anm);
+            vm.run(&mut ctx.anm, &mut ctx.rng);
         }
         Ret::Next
     }

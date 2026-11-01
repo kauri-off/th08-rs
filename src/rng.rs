@@ -21,8 +21,8 @@ impl Rng {
     }
 
     // Boot seed (11 §1.3, 0x4464C8): (u16) timeGetTime(); `TH08_SEED` fixes it for reproducible runs.
-    pub fn boot() -> Self {
-        if let Some(s) = crate::settings::get().seed {
+    pub fn boot(seed: Option<u16>) -> Self {
+        if let Some(s) = seed {
             return Self::seeded(s);
         }
         #[cfg(not(target_arch = "wasm32"))]

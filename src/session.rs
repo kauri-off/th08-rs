@@ -419,7 +419,7 @@ mod native {
             std::fs::create_dir_all(save.join("replay"))?;
             let start = self.dir.join("start");
             let score = std::fs::read(start.join("score.dat")).ok();
-            ctx.game.load_score(score.as_deref());
+            ctx.game.load_score(score.as_deref(), &ctx.host);
             if let Some(b) = &score {
                 std::fs::write(save.join("score.dat"), b)?;
             }
@@ -436,8 +436,8 @@ mod native {
             {
                 std::fs::copy(e.path(), save.join("replay").join(e.file_name()))?;
             }
-            crate::scoredat::set_save_dir(Some(save));
-            ctx.anm.rng = crate::rng::Rng::seeded(self.seed as u16);
+            ctx.host.set_save_dir(Some(save));
+            ctx.rng = crate::rng::Rng::seeded(self.seed as u16);
             ctx.overlays.set_frame_counter(self.sched.ascii_offset);
             ctx.game.sched = Some(Sched {
                 input: self.input.as_slice().into(),
@@ -460,7 +460,7 @@ mod native {
                 ctx.log_to_memory();
             }
             // Debug `TH08_SESSION_RNG=<row>`: RNG call sites of that menu frame.
-            let rng_row = ctx.settings.session_rng;
+            let rng_row = crate::settings::get().session_rng;
             let boot = self.sched.boot_calc as i64;
             let (mut scene, mut scene_frame) = (i32::MIN, 0i64);
             let to = to.min(self.input.len()) as i64;
@@ -650,7 +650,14 @@ mod tests {
                 return;
             };
             let src = crate::assets::Source::native(dir.clone().into());
-            let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
+            let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+                src,
+                gfx,
+                false,
+                crate::settings::get().core(),
+                crate::settings::get().host_io(),
+            ))
+            .unwrap();
             let s = Session::load(&data_dir(name)).unwrap();
             let Ok(rec) = s.recorded() else {
                 eprintln!("{name}: reference unreadable, skipped");
@@ -702,7 +709,14 @@ mod tests {
             return;
         };
         let src = crate::assets::Source::native(dir.into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
+        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+            src,
+            gfx,
+            false,
+            crate::settings::get().core(),
+            crate::settings::get().host_io(),
+        ))
+        .unwrap();
         let s = Session::load(&data_dir("fullrun_noclip")).unwrap();
         let Ok(rec) = s.recorded() else {
             eprintln!("fullrun trace unreadable: smoke skipped");

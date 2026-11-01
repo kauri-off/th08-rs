@@ -299,14 +299,14 @@ impl Stats {
     }
 
     // 08 §8.5 1up rule (Extend 0x439B29, 11 §5): life, else bomb; sfx 0x1C, rank +200.
-    pub fn extend(&mut self, rng: &mut Rng, sys: &mut Sys) {
+    pub fn extend(&mut self, sys: &mut Sys) {
         if self.lives < 8.0 {
-            self.add_lives(1.0, rng);
+            self.add_lives(1.0, sys.rng);
             sys.panel.mark_lives(2);
             self.rank(sys.rank, 200);
             sys.sound.play(crate::sound::EXTEND);
         } else if self.bombs < 8.0 {
-            self.add_bombs(1.0, rng);
+            self.add_bombs(1.0, sys.rng);
             sys.panel.mark_bombs(2);
             self.rank(sys.rank, 200);
             sys.sound.play(crate::sound::EXTEND);
@@ -467,9 +467,11 @@ pub struct Player {
     pub grazes: u32,
     pub deaths: u32,
     pub bombs_started: u32,
-    // Port-only debug switches (TH08_INVULN = noclip probe, 09 §6.1).
+    // Port-only debug switches (TH08_INVULN = noclip probe, 09 §6.1; TH08_BOMB forced bomb index), set from
+    // `CoreConfig` by GameManager_Register.
     pub debug_move: bool,
     pub debug_invuln: bool,
+    pub debug_bomb: Option<usize>,
     pub world: Weak<RefCell<BulletManager>>,
 }
 
@@ -535,7 +537,8 @@ impl Default for Player {
             deaths: 0,
             bombs_started: 0,
             debug_move: false,
-            debug_invuln: crate::settings::get().invuln,
+            debug_invuln: false,
+            debug_bomb: None,
             world: Weak::new(),
         }
     }
@@ -590,14 +593,22 @@ impl Player {
 
     // Player_Load 0x44D650 (09 §2, §6.4): sht files, gauge limits, initial script 0 / 5, solo options, state 1
     // with timer 120, or 10 in spell practice (GM +0x3DBAC bit 14, 11 §2.1).
-    pub fn load(&mut self, anm: &mut AnmManager, human: Sht, youkai: Sht, shot: u8, flags: u32) {
+    pub fn load(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        human: Sht,
+        youkai: Sht,
+        shot: u8,
+        flags: u32,
+    ) {
         self.shot_type = shot;
         self.sht = human;
         self.sht_youkai = youkai;
         self.stats.limits = GaugeLimits::for_shot(shot);
         self.orb_step = if self.solo_human() { 27 } else { 40 };
         let script = if self.solo_youkai() { 5 } else { 0 };
-        anm.set_script(&mut self.vm, ANM_SLOT, script);
+        anm.set_script(rng, &mut self.vm, ANM_SLOT, script);
         self.pos = START;
         self.state = 1;
         let t = if flags & F_SPELL_PRACTICE != 0 {
@@ -619,7 +630,14 @@ impl Player {
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &anm)?;
         {
             let mut p = p.borrow_mut();
-            p.load(&mut ctx.anm, human, youkai, shot, ctx.game.flags);
+            p.load(
+                &mut ctx.anm,
+                &mut ctx.rng,
+                human,
+                youkai,
+                shot,
+                ctx.game.flags,
+            );
         }
         let t: task::TaskRef<Ctx> = p;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -716,7 +734,7 @@ impl Player {
         if self.state != 0 {
             return;
         }
-        Stats::scramble(&mut anm.rng);
+        Stats::scramble(sys.rng);
         self.hits += 1;
         self.player_die(anm, sys);
     }
@@ -729,9 +747,9 @@ impl Player {
         }
         // Freeze byte 0x160F534 := 0.
         *sys.timer_pause = 0;
-        Stats::checksum(&mut anm.rng);
+        Stats::checksum(sys.rng);
         sys.sound.play_at(crate::sound::PLDEAD, self.pos[0]);
-        sys.fx.spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
+        sys.fx.spawn(anm, sys.rng, 6, self.pos, 16, 0xFFFFFFFF);
         self.state = 2;
         self.state_timer.set(0);
         if self.special(*sys.flags) {
@@ -764,7 +782,7 @@ impl Player {
             let a = self.vm.color[anmvm::A];
             self.vm.color2 = [0xFF, 0xFF, 0xFF, a];
             self.vm.flags |= anmvm::F_COLOR2;
-            crate::effect::death_ring(sys.fx, anm, self.pos, n);
+            crate::effect::death_ring(sys.fx, anm, sys.rng, self.pos, n);
             // GameFlags bit 10 only in the bombs ≥ 1 branch: a 0-bomb "Miss" during a card freezes nothing (09 §6.1).
             if self.env.spell {
                 self.set_freeze_bullets(sys.flags, true);
@@ -803,6 +821,7 @@ impl Player {
         sys.sound.play_at(crate::sound::GRAZE, p[0]);
         sys.fx.spawn(
             anm,
+            sys.rng,
             8,
             [(p[0] + self.pos[0]) / 2.0, (p[1] + self.pos[1]) / 2.0, 0.0],
             1,
@@ -928,9 +947,9 @@ impl Player {
     }
 
     // Restarts the sprite VM keeping its position (the player sprite is placed at draw time).
-    pub(crate) fn set_script(&mut self, anm: &mut AnmManager, s: usize) {
+    pub(crate) fn set_script(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, s: usize) {
         let pos = self.vm.pos;
-        anm.set_script(&mut self.vm, ANM_SLOT, s);
+        anm.set_script(rng, &mut self.vm, ANM_SLOT, s);
         self.vm.pos = pos;
     }
 
@@ -985,7 +1004,7 @@ impl Player {
             self.focus = f;
             if !self.solo() {
                 self.swap_options(anm, f);
-                self.set_script(anm, self.sprite_base(f));
+                self.set_script(anm, sys.rng, self.sprite_base(f));
                 // Switch flash only when the previous state lasted > 3 frames (09 §3).
                 if self.focus_age > 3 {
                     let (kind, colour) = if f == 1 {
@@ -993,7 +1012,7 @@ impl Player {
                     } else {
                         (28, 0x808080FF)
                     };
-                    sys.fx.spawn(anm, kind, self.pos, 1, colour);
+                    sys.fx.spawn(anm, sys.rng, kind, self.pos, 1, colour);
                 }
                 // 09 §3: the team sprite reset also sets +0xE2A9C := 0, so moving on the switch frame replays the
                 // start-move script; solos keep it.
@@ -1001,8 +1020,14 @@ impl Player {
             }
             // Hitbox marker: effect 22 in fixed slot 2 on every switch to focused, all shot types (14 §5).
             if f == 1 {
-                sys.fx
-                    .spawn_fixed(anm, 22, self.pos, crate::effect::FIX_AURA, 0xFFFFFFFF);
+                sys.fx.spawn_fixed(
+                    anm,
+                    sys.rng,
+                    22,
+                    self.pos,
+                    crate::effect::FIX_AURA,
+                    0xFFFFFFFF,
+                );
             } else {
                 sys.fx
                     .get(crate::effect::FIXED_BASE + crate::effect::FIX_AURA, |e| {
@@ -1054,7 +1079,7 @@ impl Player {
             None
         };
         if let Some(s) = script {
-            self.set_script(anm, base + s);
+            self.set_script(anm, sys.rng, base + s);
         }
         self.last_v = [vx, vy];
         self.last_disp = [vx * gs, vy * gs];
@@ -1065,7 +1090,7 @@ impl Player {
         if inp.down(input::SHOT) && self.shot_timer.cur < 0 && !self.env.dialogue {
             self.shot_timer.set(0);
         }
-        self.gauge_drift(gs);
+        self.gauge_drift(gs, anm.slowdown_restore);
         if vx != 0.0 || vy != 0.0 {
             self.trail.copy_within(0..15, 1);
             self.trail[0] = self.pos;
@@ -1073,7 +1098,7 @@ impl Player {
     }
 
     // Gauge per frame (09 §9.3): shooting → timer C ramp (sign by focus); idle → drift toward 0 after B ≥ 30.
-    fn gauge_drift(&mut self, gs: f32) {
+    fn gauge_drift(&mut self, gs: f32, sr: bool) {
         if self.focus_age < 30 || self.bombing || self.env.dialogue {
             return;
         }
@@ -1082,7 +1107,7 @@ impl Player {
             // 09 §9.3 (RE-Q56): B falls by Timer_Decrement 0x418110 (game speed); n from c = Timer_GetF(C), f32,
             // > 300.0 → 21, else ftol(c / 15).
             if self.gauge_b.cur > 0 {
-                self.gauge_b.dec(gs);
+                self.gauge_b.dec(gs, sr);
             } else {
                 let c = self.gauge_c.getf();
                 let mut n = if c > 300.0 { 21 } else { (c / 15.0) as i32 };
@@ -1125,7 +1150,7 @@ impl Player {
         sys: &mut Sys,
     ) -> bool {
         if self.deathbomb > 0 {
-            self.stats.add_time(-15, &mut anm.rng);
+            self.stats.add_time(-15, sys.rng);
             self.deathbomb -= 1;
             self.last_spell = 1;
             if self.deathbomb == 0 {
@@ -1152,10 +1177,10 @@ impl Player {
         self.state_timer.set(0);
         self.vm.scale = [3.0, 3.0];
         self.vm.flags |= anmvm::F_SCALE_DIRTY;
-        self.set_script(anm, self.respawn_script());
+        self.set_script(anm, sys.rng, self.respawn_script());
         self.vm.scale = [3.0, 3.0];
         if self.stats.lives >= 1.0 {
-            self.stats.add_lives(-1.0, &mut anm.rng);
+            self.stats.add_lives(-1.0, sys.rng);
             self.stats.bombs = self.sht.bombs.trunc();
             sys.panel.mark_lives(2);
             sys.panel.mark_bombs(2);
@@ -1182,9 +1207,10 @@ impl Player {
         sys.sound.play_at(crate::sound::TAN00_LOUD, self.pos[0]);
         sys.fx
             .free(crate::effect::FIXED_BASE + crate::effect::FIX_DEATH);
-        sys.fx.spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
+        sys.fx.spawn(anm, sys.rng, 6, self.pos, 16, 0xFFFFFFFF);
         sys.fx.spawn_fixed(
             anm,
+            sys.rng,
             12,
             self.pos,
             crate::effect::FIX_DEATH_BURST,
@@ -1197,7 +1223,7 @@ impl Player {
         // 0x164D0B0 := 0 here, not in Player_Die: a deathbomb leaves it unchanged (09 §6.2, 11 §2).
         self.stats.d0b0 = 0;
         self.last_spell = 0;
-        let rng = &mut anm.rng;
+        let rng = &mut *sys.rng;
         self.stats.deaths += 1;
         Stats::checksum(rng);
         let t = self.stats.time;
@@ -1218,7 +1244,7 @@ impl Player {
         }
         if let Some(it) = items.as_deref_mut() {
             for k in drops {
-                it.spawn(anm, self, self.pos, k, 2);
+                it.spawn(anm, sys.rng, self, self.pos, k, 2);
             }
             // 09 §6.2 "attracted items fall": ItemMgr_DropAttracted after the death drops.
             it.drop_attracted();
@@ -1260,7 +1286,7 @@ impl Player {
     }
 
     // Player_UpdateInvuln 0x44D2C0 (09 §6.4): colour 0xFFF02020 when t mod 8 < 2; the ring follows the player.
-    fn update_invuln(&mut self, gs: f32, fx: &mut Effects) {
+    fn update_invuln(&mut self, gs: f32, sr: bool, fx: &mut Effects) {
         // 09 §6.3: +0xE2A70 counts down here (60 more frames after the respawn), full-screen clear, item −1.
         // 09 §6.4: the respawn clear runs first, before the state-3 step.
         if self.respawn_clear != 0 {
@@ -1268,7 +1294,7 @@ impl Player {
             self.cancel_rect([self.pos[0], self.pos[1]], [768.0, 896.0], -1, 0);
         }
         if self.state == 3 {
-            self.state_timer.dec(gs);
+            self.state_timer.dec(gs, sr);
             let t = self.state_timer.cur;
             self.vm.color = if t.rem_euclid(8) < 2 {
                 [0x20, 0x20, 0xF0, 0xFF]
@@ -1331,13 +1357,13 @@ impl Player {
             1 => self.respawn_update(*sys.flags),
             _ => {}
         }
-        self.update_invuln(gs, sys.fx);
+        self.update_invuln(gs, anm.slowdown_restore, sys.fx);
         let moved = !matches!(self.state, 1 | 2);
         if moved {
             self.move_player(anm, inp, sys);
         }
         if self.vm.script.is_some() {
-            self.vm.run(anm);
+            self.vm.run(anm, sys.rng);
         }
         // 09 §4.4: skipped while GameFlags bit 10.
         if !self.freeze_bullets(*sys.flags) {
@@ -1365,8 +1391,14 @@ impl Player {
         if moved && at_max != self.gauge_aura {
             self.gauge_aura = at_max;
             if at_max {
-                sys.fx
-                    .spawn_fixed(anm, 25, self.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
+                sys.fx.spawn_fixed(
+                    anm,
+                    sys.rng,
+                    25,
+                    self.pos,
+                    crate::effect::FIX_GAUGE,
+                    0xFFFFFFFF,
+                );
             } else {
                 sys.fx
                     .free(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE);
@@ -1535,7 +1567,7 @@ mod tests {
         p.state = 3;
         p.state_timer.set(1);
         p.state_timer.prev = 5;
-        p.update_invuln(0.5, &mut Effects::default());
+        p.update_invuln(0.5, false, &mut Effects::default());
         assert_eq!(p.state, 0);
         assert_eq!(
             (p.state_timer.cur, p.state_timer.prev, p.state_timer.frac),
@@ -1865,8 +1897,14 @@ mod tests {
         sys.fx.clear();
         let (mut p, mut anm) = ready();
         let aura = crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE;
-        sys.fx
-            .spawn_fixed(&mut anm, 25, p.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
+        sys.fx.spawn_fixed(
+            &mut anm,
+            sys.rng,
+            25,
+            p.pos,
+            crate::effect::FIX_GAUGE,
+            0xFFFFFFFF,
+        );
         let paused = |fx: &Effects| fx.peek(aura, |e| e.vm.flags & anmvm::F_PAUSED != 0);
         *sys.timer_pause = 1;
         let (pos, t) = (p.pos, p.state_timer.cur);
@@ -1885,11 +1923,25 @@ mod tests {
         let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
         *sys.flags = F_SPELL_PRACTICE;
-        p.load(&mut anm, Sht::default(), Sht::default(), 0, *sys.flags);
+        p.load(
+            &mut anm,
+            sys.rng,
+            Sht::default(),
+            Sht::default(),
+            0,
+            *sys.flags,
+        );
         assert_eq!((p.state, p.state_timer.cur), (1, 10));
         let (mut q, _) = ready();
         *sys.flags = 0;
-        q.load(&mut anm, Sht::default(), Sht::default(), 0, *sys.flags);
+        q.load(
+            &mut anm,
+            sys.rng,
+            Sht::default(),
+            Sht::default(),
+            0,
+            *sys.flags,
+        );
         assert_eq!(q.state_timer.cur, 120);
         *sys.flags = F_SPELL_PRACTICE;
         // Respawn: state 3 at t = 30; the timer keeps 30 instead of 240.
@@ -1979,11 +2031,11 @@ mod tests {
             bombs: 7.0,
             ..Stats::default()
         };
-        s.extend(&mut rng.rng, sys);
+        s.extend(sys);
         assert_eq!((s.lives, s.bombs), (8.0, 8.0));
-        let before = rng.rng.counter;
-        s.add_time(-5, &mut rng.rng);
-        assert_eq!((s.time, rng.rng.counter), (0, before));
+        let before = sys.rng.counter;
+        s.add_time(-5, sys.rng);
+        assert_eq!((s.time, sys.rng.counter), (0, before));
     }
 
     // 09 §9.3 (RE-Q56): timer B decrements at game speed; n = ftol(Timer_GetF(C) / 15), 21 above 300.0.
@@ -1994,17 +2046,17 @@ mod tests {
         p.focus = 1;
         p.shot_timer.set(0);
         p.gauge_b.set(1);
-        p.gauge_drift(0.25);
+        p.gauge_drift(0.25, false);
         assert_eq!(p.gauge_b.cur, 0);
         assert_eq!(p.gauge_b.frac, 0.75);
         p.gauge_b.set(0);
         p.gauge_c.set(29);
         p.gauge_c.frac = 0.5;
-        p.gauge_drift(1.0);
+        p.gauge_drift(1.0, false);
         assert_eq!(p.stats.gauge, 1);
         p.gauge_c.set(300);
         p.gauge_c.frac = 0.5;
-        p.gauge_drift(1.0);
+        p.gauge_drift(1.0, false);
         assert_eq!(p.stats.gauge, 22);
     }
 

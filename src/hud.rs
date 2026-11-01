@@ -241,12 +241,12 @@ impl Panel {
 
 // Hud_Load continuing branch (12 §5.1a): tile (r, c) = capture.anm script 3 + ((r + c) & 1), I4 (+0x120) := r + 2c,
 // pos (32c − 0.5 + 16, 32r − 0.5 + 16, 0), uv offset (32c/512, 32r/512).
-fn stage_start_tiles(anm: &mut AnmManager) -> Vec<AnmVm> {
+fn stage_start_tiles(anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> Vec<AnmVm> {
     let mut tiles = Vec::with_capacity(168);
     for r in 0..14 {
         for c in 0..12 {
             let mut vm = AnmVm::default();
-            anm.set_script(&mut vm, crate::ascii::CAPTURE_SLOT, 3 + ((r + c) & 1));
+            anm.set_script(rng, &mut vm, crate::ascii::CAPTURE_SLOT, 3 + ((r + c) & 1));
             vm.ivars[4] = (r + 2 * c) as i32;
             vm.pos = [
                 32.0 * c as f32 - 0.5 + 16.0,
@@ -282,7 +282,7 @@ impl Hud {
             clear_vm: AnmVm::default(),
             night_vm: AnmVm::default(),
             start_clock_vm: AnmVm::default(),
-            raster: crate::text::Raster::default(),
+            raster: crate::text::Raster::new(ctx.core.font.as_deref()),
             bar_alpha: 0,
             bar_state: 0,
             bar_target: 0.0,
@@ -307,8 +307,8 @@ impl Hud {
 
     // Hud_StageTransition 0x438F58 (12 §3, §5.7): VM impl+0x3CC0 := capture.anm script 1, then a playfield capture into
     // its sprite rect (the return value is ignored); overwrites the op-9 image that the next stage's tiles show.
-    pub fn stage_transition(&mut self, anm: &mut AnmManager) {
-        anm.file_set_script(&mut self.cap_vm, crate::ascii::CAPTURE_SLOT, 1);
+    pub fn stage_transition(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
+        anm.file_set_script(rng, &mut self.cap_vm, crate::ascii::CAPTURE_SLOT, 1);
         crate::ascii::queue_capture(anm, &self.cap_vm);
     }
 
@@ -397,20 +397,35 @@ impl Hud {
             self.clear_total = k.clear_total;
             self.enemies.borrow_mut().g.hud_timer = k.timer;
             self.timer_last = k.timer_last;
-            anm.set_script(&mut self.cap_vm, crate::ascii::CAPTURE_SLOT, 1);
+            anm.set_script(
+                &mut ctx.rng,
+                &mut self.cap_vm,
+                crate::ascii::CAPTURE_SLOT,
+                1,
+            );
             self.cap_vm.sprite_index = 1;
-            self.tiles = stage_start_tiles(anm);
+            self.tiles = stage_start_tiles(anm, &mut ctx.rng);
             self.tiles_live = self.tiles.len() as u32;
         } else {
             self.front = (0..16)
                 .map(|i| {
                     let mut vm = AnmVm::default();
-                    anm.set_script(&mut vm, FRONT_SLOT, i);
+                    anm.set_script(&mut ctx.rng, &mut vm, FRONT_SLOT, i);
                     vm
                 })
                 .collect();
-            anm.set_script(&mut self.label_vm, crate::ascii::ANM_SLOT, 0x1A);
-            anm.set_script(&mut self.diff_vm, crate::ascii::ANM_SLOT, 0x19);
+            anm.set_script(
+                &mut ctx.rng,
+                &mut self.label_vm,
+                crate::ascii::ANM_SLOT,
+                0x1A,
+            );
+            anm.set_script(
+                &mut ctx.rng,
+                &mut self.diff_vm,
+                crate::ascii::ANM_SLOT,
+                0x19,
+            );
             self.diff_vm
                 .set_sprite(anm, crate::ascii::difficulty_sprite(g));
         }
@@ -419,10 +434,10 @@ impl Hud {
             .map(|i| {
                 let mut vm = AnmVm::default();
                 if !g.spell_practice() {
-                    anm.set_script(&mut vm, TXT_SLOT, i);
+                    anm.set_script(&mut ctx.rng, &mut vm, TXT_SLOT, i);
                 } else if i == 0 && title_on {
                     // Spell practice: VM 0 (not VM 3) := script 3 with the card's song-title sprite; VMs 1–3 untouched.
-                    anm.set_script(&mut vm, TXT_SLOT, 3);
+                    anm.set_script(&mut ctx.rng, &mut vm, TXT_SLOT, 3);
                     vm.set_sprite(anm, crate::gamemgr::spell_title_sprite(g.card) + 3);
                 }
                 vm
@@ -433,7 +448,7 @@ impl Hud {
         self.night_vm.color[anmvm::A] = 0;
         // Clock sprite = clock counter stats+0x28 as it is now (12 §5.1a): the live player stats, since the
         // game-manager copy was taken at the stage start. The clamp is a port guard.
-        anm.set_script(&mut self.start_clock_vm, TIMES_SLOT, 0);
+        anm.set_script(&mut ctx.rng, &mut self.start_clock_vm, TIMES_SLOT, 0);
         let clock = self.player.borrow().stats.clock;
         self.start_clock_vm.set_sprite(anm, clock.clamp(0, 15));
         Ok(())
@@ -476,7 +491,7 @@ impl Hud {
                 // Msg op 7 (10 §5.1): song-title card = stgNtxt script 3 with sprite n + 3, then preloaded BGM slot n.
                 Event::Bgm(n) => {
                     let vm = &mut self.title[3];
-                    ctx.anm.set_script(vm, TXT_SLOT, 3);
+                    ctx.anm.set_script(&mut ctx.rng, vm, TXT_SLOT, 3);
                     vm.set_sprite(&ctx.anm, n + 3);
                     ctx.audio.play_slot(n as usize);
                 }
@@ -516,7 +531,7 @@ impl Hud {
         // 6A/6B/Ex only clear its ip; interrupt 1 in every case.
         if stage < 6 {
             ctx.anm
-                .set_script(&mut self.clear_vm, crate::ascii::ANM_SLOT, 3);
+                .set_script(&mut ctx.rng, &mut self.clear_vm, crate::ascii::ANM_SLOT, 3);
             self.clear_vm.set_sprite(&ctx.anm, 0x80 + adv);
         } else {
             self.clear_vm.script = None;
@@ -525,12 +540,17 @@ impl Hud {
         // Stages 1–5: loading VM, capture VM, 8 ghosts (I4 := 4k + 3, alpha := 64 − 2k) and the playfield capture.
         if stage < 6 {
             let anm = &mut ctx.anm;
-            anm.set_script(&mut self.load_vm, LOADING_SLOT, 0);
-            anm.set_script(&mut self.cap_vm, crate::ascii::CAPTURE_SLOT, 1);
+            anm.set_script(&mut ctx.rng, &mut self.load_vm, LOADING_SLOT, 0);
+            anm.set_script(
+                &mut ctx.rng,
+                &mut self.cap_vm,
+                crate::ascii::CAPTURE_SLOT,
+                1,
+            );
             self.ghosts = (0..8)
                 .map(|k| {
                     let mut vm = AnmVm::default();
-                    anm.set_script(&mut vm, crate::ascii::CAPTURE_SLOT, 2);
+                    anm.set_script(&mut ctx.rng, &mut vm, crate::ascii::CAPTURE_SLOT, 2);
                     vm.ivars[4] = 4 * k + 3;
                     vm.color[anmvm::A] = (64 - 2 * k) as u8;
                     vm
@@ -538,7 +558,7 @@ impl Hud {
                 .collect();
             self.capture_pending = true;
         }
-        let rng = &mut ctx.anm.rng;
+        let rng = &mut ctx.rng;
         let st = &mut p.stats;
         let from = st.clock * 30 + 660;
         st.clock += adv;
@@ -1153,7 +1173,8 @@ impl Task<Ctx> for Hud {
                 // ECL 179 / 181 (12 §5.7, 07 §7): night clock script 2 with sprite = clock; 181 interrupts 2 at 12,
                 // else 1; 180 hides it with alpha := 0.
                 179 => {
-                    ctx.anm.set_script(&mut self.night_vm, TIMES_SLOT, 2);
+                    ctx.anm
+                        .set_script(&mut ctx.rng, &mut self.night_vm, TIMES_SLOT, 2);
                     self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
                 }
                 180 => self.night_vm.color[anmvm::A] = 0,
@@ -1174,17 +1195,17 @@ impl Task<Ctx> for Hud {
         let anm = &mut ctx.anm;
         for vm in self.front.iter_mut().chain(self.title.iter_mut()) {
             if vm.script.is_some() {
-                vm.run(anm);
+                vm.run(anm, &mut ctx.rng);
             }
         }
         // The clock VM ticks only while stage-title VM 0 has alpha ≠ 0, never in spell practice (12 §5.1).
         let title_on = self.title.first().is_some_and(|v| v.color[anmvm::A] != 0);
         if self.start_clock_vm.script.is_some() && title_on && !ctx.game.spell_practice() {
-            self.start_clock_vm.run(anm);
+            self.start_clock_vm.run(anm, &mut ctx.rng);
         }
         for vm in [&mut self.clear_vm, &mut self.night_vm] {
             if vm.script.is_some() {
-                vm.run(anm);
+                vm.run(anm, &mut ctx.rng);
             }
         }
         // Player-overlap fade of the night clock (12 §5.7): while alpha ≠ 0, −4 down to 0x40 with the player at
@@ -1202,10 +1223,10 @@ impl Task<Ctx> for Hud {
         }
         // Last-spell label VM impl+0x5484, then the difficulty name VM impl+0x22E14 (12 §5.1b step 1.4).
         if self.label_vm.script.is_some() {
-            self.label_vm.run(&mut ctx.anm);
+            self.label_vm.run(&mut ctx.anm, &mut ctx.rng);
         }
         if self.diff_vm.script.is_some() {
-            self.diff_vm.run(&mut ctx.anm);
+            self.diff_vm.run(&mut ctx.anm, &mut ctx.rng);
         }
         if self.load_vm.script_index >= 0 {
             let anm = &mut ctx.anm;
@@ -1213,13 +1234,13 @@ impl Task<Ctx> for Hud {
                 .into_iter()
                 .chain(self.ghosts.iter_mut())
             {
-                vm.run(anm);
+                vm.run(anm, &mut ctx.rng);
             }
         }
         if self.tiles_live != 0 {
             for vm in &mut self.tiles {
                 // +0x21810 = tiles still running (12 §5.7): a finished VM returns 1 every later call, so decrementing once matches.
-                if vm.ip.is_some() && vm.run(&mut ctx.anm) {
+                if vm.ip.is_some() && vm.run(&mut ctx.anm, &mut ctx.rng) {
                     self.tiles_live -= 1;
                 }
             }
@@ -1243,7 +1264,7 @@ impl Task<Ctx> for Hud {
         let (collect, events, side) = {
             let mut d = self.msg.borrow_mut();
             d.info.clock = self.player.borrow().stats.clock;
-            let c = d.run(&mut ctx.anm, &inp, dying);
+            let c = d.run(&mut ctx.anm, &mut ctx.rng, &inp, dying);
             ctx.game.dialogue_skippable = d.skippable_shown();
             (
                 c,
@@ -1579,7 +1600,8 @@ mod tests {
     // 12 §5.1a: 14 × 12 tiles, I4 = r + 2c, pos (32c + 15.5, 32r + 15.5), uv offset (32c/512, 32r/512).
     #[test]
     fn stage_start_tile_layout() {
-        let tiles = stage_start_tiles(&mut AnmManager::default());
+        let mut rng = crate::rng::Rng::default();
+        let tiles = stage_start_tiles(&mut AnmManager::default(), &mut rng);
         assert_eq!(tiles.len(), 168);
         let t = &tiles[13 * 12 + 11];
         assert_eq!(t.ivars[4], 13 + 22);

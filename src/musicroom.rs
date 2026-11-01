@@ -166,8 +166,12 @@ pub struct MusicRoom {
 }
 
 impl MusicRoom {
-    pub fn new() -> Self {
-        Self::default()
+    // `font` = `CoreConfig::font` for the comment raster.
+    pub fn new(font: Option<&str>) -> Self {
+        Self {
+            raster: crate::text::Raster::new(font),
+            ..Self::default()
+        }
     }
 
     fn n(&self) -> i32 {
@@ -210,7 +214,8 @@ impl MusicRoom {
         let c = self.cursor as usize;
         let s = comment_text(e, self.heard[c], self.cursor == self.playing, k);
         let vm = &mut self.comments[k];
-        ctx.anm.file_set_script(vm, 0, COMMENT_SCRIPT + k);
+        ctx.anm
+            .file_set_script(&mut ctx.rng, vm, 0, COMMENT_SCRIPT + k);
         vm.pending_interrupt = 1;
         if s.is_empty() {
             vm.flags &= !anmvm::F_ENABLED;
@@ -259,7 +264,8 @@ impl MusicRoom {
             if let Some(e) = self.entries.get(self.cursor as usize) {
                 let l = e.comments.first().map(|c| c.as_bytes()).unwrap_or_default();
                 let s = crate::text::decode_sjis(&l[..l.len().min(COMMENT_SHOWN)]);
-                ctx.anm.file_set_script(&mut self.title, 0, TITLE_SCRIPT);
+                ctx.anm
+                    .file_set_script(&mut ctx.rng, &mut self.title, 0, TITLE_SCRIPT);
                 self.title.pending_interrupt = 1;
                 render_vm(
                     ctx,
@@ -306,10 +312,11 @@ impl Task<Ctx> for MusicRoom {
             .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "music00.anm")?;
         self.entries = parse_musiccmt(&ctx.archive.read("musiccmt.txt")?);
         self.heard = heard_flags(&ctx.game.score.plst.music);
-        ctx.anm.set_script(&mut self.bg, ANM_SLOT, 0);
+        ctx.anm.set_script(&mut ctx.rng, &mut self.bg, ANM_SLOT, 0);
         for i in 0..self.entries.len() {
             let mut vm = AnmVm::default();
-            ctx.anm.file_set_script(&mut vm, ANM_SLOT, i + 1);
+            ctx.anm
+                .file_set_script(&mut ctx.rng, &mut vm, ANM_SLOT, i + 1);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
             vm.pos = [93.0, (18 * (i as i32 + 1) + 104 - 20) as f32, 0.0];
             let (s, c, m) = row_text(&self.entries[i], self.heard[i]);
@@ -344,14 +351,14 @@ impl Task<Ctx> for MusicRoom {
         } else {
             self.sub_frame += 1;
         }
-        self.bg.run(&mut ctx.anm);
+        self.bg.run(&mut ctx.anm, &mut ctx.rng);
         for vm in self
             .rows
             .iter_mut()
             .chain(&mut self.comments)
             .chain(std::iter::once(&mut self.title))
         {
-            vm.run(&mut ctx.anm);
+            vm.run(&mut ctx.anm, &mut ctx.rng);
         }
         Ret::Next
     }
@@ -457,7 +464,7 @@ mod tests {
     #[test]
     fn intro_and_input_sub_frames() {
         // Intro: state 1 on the 9th call (sub-frame 8), then the sub-frame restarts at 0 (16 §5.3).
-        let mut m = MusicRoom::new();
+        let mut m = MusicRoom::new(None);
         let mut calls = 0;
         while m.state == 0 {
             let s0 = m.state;

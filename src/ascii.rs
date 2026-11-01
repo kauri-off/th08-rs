@@ -496,6 +496,7 @@ fn popup_glyph(anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm, idx: usize) -> b
 fn popups_draw(
     ov: &mut Overlays,
     anm: &mut crate::anmmgr::AnmManager,
+    rng: &mut crate::rng::Rng,
     gfx: &mut crate::gfx::Gfx,
     pl: [f32; 3],
 ) {
@@ -525,7 +526,7 @@ fn popups_draw(
                 }
             }
         }
-        darkness_draw(&mut ov.darkness, anm, gfx, pl);
+        darkness_draw(&mut ov.darkness, anm, rng, gfx, pl);
         for q in p.large.iter().flatten() {
             set_rgb(&mut large, q.colour);
             large.color[anmvm::A] = popup_alpha(q.pos, pl);
@@ -593,6 +594,7 @@ fn darkness_rects(p: [f32; 2], r: f32, s: [f32; 2]) -> Vec<[f32; 4]> {
 fn darkness_draw(
     d: &mut Darkness,
     anm: &mut crate::anmmgr::AnmManager,
+    rng: &mut crate::rng::Rng,
     gfx: &mut crate::gfx::Gfx,
     player: [f32; 3],
 ) {
@@ -605,7 +607,7 @@ fn darkness_draw(
         {
             gfx.rect(x0, y0, x1 - x0, y1 - y0, [0, 0, 0, a]);
         }
-        anm.file_set_script(&mut d.vm, crate::effect::SCRIPT_SLOT, 105);
+        anm.file_set_script(rng, &mut d.vm, crate::effect::SCRIPT_SLOT, 105);
         d.vm.scale = [d.radius / 63.0; 2];
         d.vm.pos = [player[0] + 32.0, player[1] + 16.0, player[2]];
         d.vm.color[anmvm::A] = a;
@@ -646,7 +648,13 @@ impl Overlays {
     // Ascii_SetupGaugeVms 0x402600: restarts the scripts (keeping pos), places 人/妖 from the gauge limits, re-sends the stored interrupt.
     // AnmFile_StartScript does not zero pos (05 §8), so G0/G3 keep theirs; min/max = gauge limits (09 §9.3).
     // The restart of +0x1520 (script 9) is skipped: that VM is run but never drawn (12 §5.9 step 1).
-    pub fn gauge_setup(&mut self, anm: &mut crate::anmmgr::AnmManager, min: i32, max: i32) {
+    pub fn gauge_setup(
+        &mut self,
+        anm: &mut crate::anmmgr::AnmManager,
+        rng: &mut crate::rng::Rng,
+        min: i32,
+        max: i32,
+    ) {
         {
             let g = &mut self.gauge;
             if g.vms.is_empty() {
@@ -660,10 +668,10 @@ impl Overlays {
                 (G_MARKER, 8),
                 (G_GLYPH, 4),
             ] {
-                anm.start_script(&mut g.vms[k], ANM_SLOT, script);
+                anm.start_script(rng, &mut g.vms[k], ANM_SLOT, script);
             }
             for m in g.markers.iter_mut() {
-                anm.start_script(m, ANM_SLOT, MARKER_SCRIPT);
+                anm.start_script(rng, m, ANM_SLOT, MARKER_SCRIPT);
             }
             g.vms[G_HUMAN].pos[0] -= 56.0 * min as f32 / -10000.0;
             g.vms[G_YOUKAI].pos[0] += 56.0 * max as f32 / 10000.0;
@@ -707,14 +715,14 @@ impl Overlays {
 }
 
 // Run every frame by Ascii_Calc, also while paused (12 §5.9, §5.10).
-fn gauge_calc(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager) {
+fn gauge_calc(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager, rng: &mut crate::rng::Rng) {
     {
         g.vms
             .iter_mut()
             .chain(g.markers.iter_mut())
             .filter(|v| v.script.is_some())
             .for_each(|v| {
-                v.run(anm);
+                v.run(anm, rng);
             })
     }
 }
@@ -985,10 +993,12 @@ impl PauseMenu {
     fn update(
         &mut self,
         ctx_anm: &mut crate::anmmgr::AnmManager,
+        rng: &mut crate::rng::Rng,
         g: &mut Game,
         inp: &Input,
         audio: &mut crate::audio::Audio,
         sound: &mut crate::sound::Queue,
+        host: &crate::scoredat::HostIo,
     ) {
         let replay = g.replay();
         if self.state == 0 {
@@ -997,7 +1007,7 @@ impl PauseMenu {
             self.vms = (12..22)
                 .map(|s| {
                     let mut vm = AnmVm::default();
-                    ctx_anm.set_script(&mut vm, ANM_SLOT, s);
+                    ctx_anm.set_script(rng, &mut vm, ANM_SLOT, s);
                     vm
                 })
                 .collect();
@@ -1008,7 +1018,7 @@ impl PauseMenu {
                 self.vms[P_SLOW].flags &= !anmvm::F_VISIBLE;
             }
             self.shown = [false; 10];
-            start_capture(ctx_anm, &mut self.cap_vm);
+            start_capture(ctx_anm, rng, &mut self.cap_vm);
             // Only queued: copied after this frame's Present (12 §3 capture timing). It cannot fail, since every
             // Present applies the pending request, so the "close at once" path is not modelled.
             queue_capture(ctx_anm, &self.cap_vm);
@@ -1100,7 +1110,7 @@ impl PauseMenu {
                         4 => audio.pause_bgm(false),
                         9 => {
                             // State 9: Result_Register(2) (save) and scene 1 (12 §3).
-                            g.save_score(&mut ctx_anm.rng, true);
+                            g.save_score(rng, true, host);
                             g.request(gamemgr::SCENE_MENU)
                         }
                         _ => {
@@ -1116,7 +1126,7 @@ impl PauseMenu {
                                     audio.pause_bgm(false);
                                     audio.start_fade_in(2.0);
                                 }
-                                stage_transition(ctx_anm);
+                                stage_transition(ctx_anm, rng);
                                 g.request(gamemgr::SCENE_RELOAD)
                             } else {
                                 g.request(gamemgr::SCENE_RETRY)
@@ -1139,7 +1149,7 @@ impl PauseMenu {
             .chain(std::iter::once(&mut self.cap_vm))
             .filter(|v| v.script.is_some())
         {
-            vm.run(ctx_anm);
+            vm.run(ctx_anm, rng);
         }
         self.frame += 1;
     }
@@ -1185,9 +1195,9 @@ pub(crate) fn difficulty_sprite(g: &Game) -> i32 {
 }
 
 // Capture VM: capture.anm script 0 (sprite 0, scale 3 × 3.5 = 384×448), then pos := (32, 16, 0) (12 §3).
-fn start_capture(anm: &mut crate::anmmgr::AnmManager, vm: &mut AnmVm) {
+fn start_capture(anm: &mut crate::anmmgr::AnmManager, rng: &mut crate::rng::Rng, vm: &mut AnmVm) {
     *vm = AnmVm::default();
-    anm.set_script(vm, CAPTURE_SLOT, 0);
+    anm.set_script(rng, vm, CAPTURE_SLOT, 0);
     vm.pos = [32.0, 16.0, 0.0];
 }
 
@@ -1224,9 +1234,9 @@ pub fn queue_capture(anm: &mut crate::anmmgr::AnmManager, vm: &AnmVm) -> i32 {
 }
 
 // Hud_StageTransition on the registered game's HUD (pause / continue retry paths, 12 §3).
-fn stage_transition(anm: &mut crate::anmmgr::AnmManager) {
+fn stage_transition(anm: &mut crate::anmmgr::AnmManager, rng: &mut crate::rng::Rng) {
     if let Some(h) = gamemgr::current().and_then(|m| m.borrow().hud.clone()) {
-        h.borrow_mut().stage_transition(anm);
+        h.borrow_mut().stage_transition(anm, rng);
     }
 }
 
@@ -1268,6 +1278,7 @@ impl ContinueMenu {
     fn update(
         &mut self,
         ctx_anm: &mut crate::anmmgr::AnmManager,
+        rng: &mut crate::rng::Rng,
         g: &mut Game,
         inp: &Input,
         audio: &mut crate::audio::Audio,
@@ -1307,14 +1318,14 @@ impl ContinueMenu {
             self.vms = (22..25)
                 .map(|s| {
                     let mut vm = AnmVm::default();
-                    ctx_anm.set_script(&mut vm, ANM_SLOT, s);
+                    ctx_anm.set_script(rng, &mut vm, ANM_SLOT, s);
                     vm.pending_interrupt = 1;
                     vm
                 })
                 .collect();
-            ctx_anm.set_script(&mut self.clock_vm, crate::hud::TIMES_SLOT, 1);
+            ctx_anm.set_script(rng, &mut self.clock_vm, crate::hud::TIMES_SLOT, 1);
             self.clock_vm.set_sprite(ctx_anm, g.clock.clamp(0, 15));
-            start_capture(ctx_anm, &mut self.cap_vm);
+            start_capture(ctx_anm, rng, &mut self.cap_vm);
             // Queued, copied after this frame's Present (12 §3 capture timing, §4).
             queue_capture(ctx_anm, &self.cap_vm);
             // Default "No"; "Yes" only in spell practice with spell flag bit 9 (captured) clear (12 §4).
@@ -1358,7 +1369,7 @@ impl ContinueMenu {
                             audio.start_fade_in_from_dip(1.0);
                         }
                         g.request(gamemgr::SCENE_RELOAD);
-                        stage_transition(ctx_anm);
+                        stage_transition(ctx_anm, rng);
                         g.game_over = 0;
                         g.mark_play_time();
                         self.open = false;
@@ -1410,7 +1421,7 @@ impl ContinueMenu {
             .chain([&mut self.clock_vm, &mut self.cap_vm])
             .filter(|v| v.script.is_some())
         {
-            vm.run(ctx_anm);
+            vm.run(ctx_anm, rng);
         }
         self.frame += 1;
         self.phase_frame += 1;
@@ -1442,7 +1453,8 @@ impl Task<Ctx> for AsciiManager {
             ctx.anm
                 .load(&mut ctx.gfx, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
             let l = crate::player::GaugeLimits::default();
-            ctx.overlays.gauge_setup(&mut ctx.anm, l.min, l.max);
+            ctx.overlays
+                .gauge_setup(&mut ctx.anm, &mut ctx.rng, l.min, l.max);
         }
         Ok(())
     }
@@ -1454,21 +1466,24 @@ impl Task<Ctx> for AsciiManager {
             return Ret::Next;
         }
         let inp = ctx.input;
-        gauge_calc(&mut ctx.overlays.gauge, &mut ctx.anm);
+        gauge_calc(&mut ctx.overlays.gauge, &mut ctx.anm, &mut ctx.rng);
         // The pause menu runs while paused, the continue menu while game_over; popups only otherwise (12 §3, 13 §4).
         if ctx.game.paused != 0 {
             // 11 §2: paused = 2 once the menu was drawn (GameMgr_Calc opened it after this calc).
             ctx.game.paused = 2;
             self.pause.update(
                 &mut ctx.anm,
+                &mut ctx.rng,
                 &mut ctx.game,
                 &inp,
                 &mut ctx.audio,
                 &mut ctx.sound,
+                &ctx.host,
             );
         } else if ctx.game.game_over != 0 {
             self.cont.update(
                 &mut ctx.anm,
+                &mut ctx.rng,
                 &mut ctx.game,
                 &inp,
                 &mut ctx.audio,
@@ -1524,6 +1539,7 @@ impl Task<Ctx> for AsciiManager {
             popups_draw(
                 &mut ctx.overlays,
                 &mut ctx.anm,
+                &mut ctx.rng,
                 &mut ctx.gfx,
                 ctx.effects.player,
             );
@@ -1572,6 +1588,7 @@ mod tests {
     // 12 §4: whole-dword colours (alpha 0xFF) written before the input test, so a cursor move shows a frame later.
     #[test]
     fn continue_menu_colours_before_input() {
+        let mut rng = crate::rng::Rng::default();
         let mut anm = crate::anmmgr::AnmManager::default();
         let mut audio =
             crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
@@ -1581,6 +1598,7 @@ mod tests {
         for _ in 0..30 {
             m.update(
                 &mut anm,
+                &mut rng,
                 &mut g,
                 &Input::default(),
                 &mut audio,
@@ -1592,6 +1610,7 @@ mod tests {
         assert_eq!(m.vms[1].color, [0x50, 0x50, 0x50, 0xFF]);
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &press(input::UP),
             &mut audio,
@@ -1602,6 +1621,7 @@ mod tests {
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &Input::default(),
             &mut audio,
@@ -1615,6 +1635,7 @@ mod tests {
     // state 0 and the state-2 body in that one call, so after it the menu counts frame 1 with the cursor on "No".
     #[test]
     fn continue_menu_opens_next_calc() {
+        let mut rng = crate::rng::Rng::default();
         let mut anm = crate::anmmgr::AnmManager::default();
         let mut g = Game::default();
         let mut p = crate::player::Player::default();
@@ -1626,6 +1647,7 @@ mod tests {
             crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &Input::default(),
             &mut audio,
@@ -1640,6 +1662,7 @@ mod tests {
     // 11 §4.2 / 15 §2.9: the replay early exit clears game_over, requests scene 7, opens nothing, adds no play time.
     #[test]
     fn continue_menu_replay_early_exit() {
+        let mut rng = crate::rng::Rng::default();
         let mut anm = crate::anmmgr::AnmManager::default();
         let mut g = Game::default();
         g.flags |= gamemgr::F_REPLAY;
@@ -1650,6 +1673,7 @@ mod tests {
             crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &Input::default(),
             &mut audio,
@@ -1671,6 +1695,7 @@ mod tests {
     // clears game_over and sets displayed score := score in the call 20 frames after the press.
     #[test]
     fn continue_menu_confirm_timing() {
+        let mut rng = crate::rng::Rng::default();
         let mut anm = crate::anmmgr::AnmManager::default();
         let mut audio =
             crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
@@ -1681,6 +1706,7 @@ mod tests {
         for _ in 0..30 {
             m.update(
                 &mut anm,
+                &mut rng,
                 &mut g,
                 &Input::default(),
                 &mut audio,
@@ -1690,6 +1716,7 @@ mod tests {
         }
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &press(input::UP),
             &mut audio,
@@ -1700,6 +1727,7 @@ mod tests {
         let frame = m.frame;
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &press(input::SHOT),
             &mut audio,
@@ -1716,6 +1744,7 @@ mod tests {
         for _ in 0..30 {
             m.update(
                 &mut anm,
+                &mut rng,
                 &mut g,
                 &Input::default(),
                 &mut audio,
@@ -1725,6 +1754,7 @@ mod tests {
         }
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &press(input::SHOT),
             &mut audio,
@@ -1734,6 +1764,7 @@ mod tests {
         for _ in 0..19 {
             m.update(
                 &mut anm,
+                &mut rng,
                 &mut g,
                 &Input::default(),
                 &mut audio,
@@ -1744,6 +1775,7 @@ mod tests {
         }
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &Input::default(),
             &mut audio,
@@ -1758,6 +1790,7 @@ mod tests {
     // VMs 0–3 and 1 to the capture VM in that call; "yes" sends interrupt 2 to VMs 4–6 only; states 4/9/10 send none.
     #[test]
     fn pause_menu_interrupts() {
+        let mut rng = crate::rng::Rng::default();
         let mut anm = crate::anmmgr::AnmManager::default();
         let mut audio =
             crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
@@ -1773,27 +1806,33 @@ mod tests {
         };
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &Input::default(),
             &mut audio,
             &mut Default::default(),
+            &Default::default(),
         );
         assert_eq!(ints(&m), [1, 1, 1, 1, 0, 0, 0, 0, 0, 0]);
         for _ in 0..4 {
             m.update(
                 &mut anm,
+                &mut rng,
                 &mut g,
                 &Input::default(),
                 &mut audio,
                 &mut Default::default(),
+                &Default::default(),
             );
         }
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &press(input::SHOT),
             &mut audio,
             &mut Default::default(),
+            &Default::default(),
         );
         assert_eq!(m.state, 4);
         assert_eq!(ints(&m), [2, 2, 2, 2, 0, 0, 0, 0, 0, 0]);
@@ -1804,10 +1843,12 @@ mod tests {
         let mut m = PauseMenu::default();
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &Input::default(),
             &mut audio,
             &mut Default::default(),
+            &Default::default(),
         );
         m.state = 5;
         m.frame = 4;
@@ -1816,19 +1857,23 @@ mod tests {
         }
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &press(input::SHOT),
             &mut audio,
             &mut Default::default(),
+            &Default::default(),
         );
         assert_eq!(m.state, 9);
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
         m.update(
             &mut anm,
+            &mut rng,
             &mut g,
             &Input::default(),
             &mut audio,
             &mut Default::default(),
+            &Default::default(),
         );
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
     }

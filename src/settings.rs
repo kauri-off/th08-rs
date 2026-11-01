@@ -5,12 +5,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-// Debug ending start (`TH08_ENDING`): `<shot 0–11><a|b|c>` or a `.end` script name.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Ending {
-    Kind { shot: u8, kind: char },
-    File(String),
-}
+pub use crate::coreconfig::Ending;
 
 // Where a value came from, highest priority last.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -969,6 +964,47 @@ impl Settings {
             s.apply(o, e.key, e, v);
         }
         s
+    }
+
+    // The switches the game core reads (`Ctx::core`); the rest stays host / tool side.
+    pub fn core(&self) -> crate::coreconfig::CoreConfig {
+        crate::coreconfig::CoreConfig {
+            seed: self.seed,
+            stage: self.stage,
+            stage_frame: self.stage_frame,
+            player: self.player,
+            rank: self.rank,
+            power: self.power,
+            continues: self.continues,
+            ending: self.ending.clone(),
+            replay: self.replay.clone(),
+            replay_speed: self.replay_speed,
+            replay_save: self.replay_save,
+            input: self.input.clone(),
+            invuln: self.invuln,
+            unlock: self.unlock,
+            enemy_dmg: self.enemy_dmg,
+            bomb: self.bomb,
+            clrd: self.clrd.clone(),
+            screen_fx: self.screen_fx,
+            slot_test: self.slot_test,
+            anm: self.anm.clone(),
+            anm_int: self.anm_int.clone(),
+            anm_pos: self.anm_pos.clone(),
+            anm_mode: self.anm_mode,
+            se_log: self.se_log,
+            drawlog: self.drawlog.clone(),
+            font: self.font.clone(),
+        }
+    }
+
+    // Port save storage (`Ctx::host`): `TH08_SAVE_DIR`, else the port config dir, else next to the binary.
+    pub fn host_io(&self) -> crate::scoredat::HostIo {
+        #[cfg(not(target_arch = "wasm32"))]
+        let dir = self.save_dir.clone().or_else(config_dir).or_else(exe_dir);
+        #[cfg(target_arch = "wasm32")]
+        let dir = None;
+        crate::scoredat::HostIo::new(dir)
     }
 
     // Scripted / headless runs of the th08 binary (screenshot, draw log, input script, anm viewer, slot test):

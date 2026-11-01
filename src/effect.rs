@@ -447,11 +447,18 @@ impl Effects {
     }
 
     // The script runs its t = 0 step here, so its RNG draws precede the type init's (13 §2.6).
-    fn start_script(&mut self, anm: &mut AnmManager, i: usize, colour: u32, zoff: bool) {
+    fn start_script(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        i: usize,
+        colour: u32,
+        zoff: bool,
+    ) {
         let e = &mut self.fx[i];
         let script = SCRIPTS.get(e.kind as usize).copied().unwrap_or(-1);
         if script >= 0 {
-            anm.set_script(&mut e.vm, SCRIPT_SLOT, script as usize);
+            anm.set_script(rng, &mut e.vm, SCRIPT_SLOT, script as usize);
         }
         if zoff {
             e.vm.flags |= anmvm::F_ZWRITE_OFF;
@@ -479,6 +486,7 @@ impl Effects {
     fn init_start(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         i: usize,
         kind: u8,
         pos: [f32; 3],
@@ -489,8 +497,8 @@ impl Effects {
         // 13 §2.2 "Spawn-time game speed": the t = 0 script run and the type init use the speed at the spawn.
         let gs = anm.speed;
         self.reset(i, kind, pos, param);
-        self.start_script(anm, i, colour, zoff);
-        let ok = self.type_init(&mut anm.rng, gs, i);
+        self.start_script(anm, rng, i, colour, zoff);
+        let ok = self.type_init(rng, gs, i);
         if ok {
             self.start_post(i);
         }
@@ -501,6 +509,7 @@ impl Effects {
     pub fn spawn_at(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         kind: u8,
         pos: [f32; 3],
         param: [f32; 3],
@@ -509,7 +518,7 @@ impl Effects {
         zoff: bool,
     ) -> usize {
         self.spawn_ring(count, |s, i| {
-            s.init_start(anm, i, kind, pos, param, colour, zoff)
+            s.init_start(anm, rng, i, kind, pos, param, colour, zoff)
         })
     }
 
@@ -517,6 +526,7 @@ impl Effects {
     pub fn spawn_high(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         kind: u8,
         pos: [f32; 3],
         colour: u32,
@@ -524,7 +534,7 @@ impl Effects {
         let Some(i) = self.slot_high() else {
             return NONE;
         };
-        self.init_start(anm, i, kind, pos, [0.0; 3], colour, true);
+        self.init_start(anm, rng, i, kind, pos, [0.0; 3], colour, true);
         self.fx[i].layer = 0;
         i
     }
@@ -533,6 +543,7 @@ impl Effects {
     pub fn spawn_fixed_param(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         kind: u8,
         pos: [f32; 3],
         param: [f32; 3],
@@ -540,7 +551,7 @@ impl Effects {
         colour: u32,
     ) -> usize {
         let i = FIXED_BASE + k.min(FIXED - 1);
-        self.init_start(anm, i, kind, pos, param, colour, true);
+        self.init_start(anm, rng, i, kind, pos, param, colour, true);
         i
     }
 
@@ -696,7 +707,13 @@ impl Effects {
 
     // EffectMgr_Calc (13 §2.3): frozen effects (bit 10, +0x357 = 0) skip update/VM/age but are still drawn;
     // survivors are linked in slot order (not spawn order); type 0x40 is never linked.
-    pub fn calc(&mut self, anm: &mut AnmManager, flags: u32, areas: &mut crate::bomb::AreaQueue) {
+    pub fn calc(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        flags: u32,
+        areas: &mut crate::bomb::AreaQueue,
+    ) {
         let gs = anm.speed;
         self.live = 0;
         for l in &mut self.lists {
@@ -716,7 +733,7 @@ impl Effects {
                     continue;
                 }
                 let e = &mut self.fx[i];
-                if e.vm.script.is_some() && e.vm.run(anm) {
+                if e.vm.script.is_some() && e.vm.run(anm, rng) {
                     e.active = false;
                     continue;
                 }
@@ -1076,42 +1093,52 @@ impl Effects {
     pub fn spawn(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         kind: u8,
         pos: [f32; 3],
         count: i32,
         colour: u32,
     ) -> usize {
-        self.spawn_at(anm, kind, pos, [0.0; 3], count, colour, true)
+        self.spawn_at(anm, rng, kind, pos, [0.0; 3], count, colour, true)
     }
 
     pub fn spawn_param(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         kind: u8,
         pos: [f32; 3],
         param: [f32; 3],
         count: i32,
         colour: u32,
     ) -> usize {
-        self.spawn_at(anm, kind, pos, param, count, colour, false)
+        self.spawn_at(anm, rng, kind, pos, param, count, colour, false)
     }
 
     pub fn spawn_fixed(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         kind: u8,
         pos: [f32; 3],
         k: usize,
         colour: u32,
     ) -> usize {
-        self.spawn_fixed_param(anm, kind, pos, [0.0; 3], k, colour)
+        self.spawn_fixed_param(anm, rng, kind, pos, [0.0; 3], k, colour)
     }
 
     // Spell-card start ring at Spell_Start (07 §11.1, 13 §2.7): fixed slot 1, VM pos (8, 64) → (256, 0) over 100
     // frames (ease 6); Spell_Calc turns pos.y into the wave amplitude while waves ≠ 0.
-    pub fn spell_ring(&mut self, anm: &mut AnmManager, pos: [f32; 3], special: bool) {
+    pub fn spell_ring(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        pos: [f32; 3],
+        special: bool,
+    ) {
         let i = self.spawn_fixed(
             anm,
+            rng,
             if special { 52 } else { 39 },
             pos,
             FIX_SPELL,
@@ -1200,7 +1227,12 @@ impl Task<Ctx> for EffectManager {
         let paused = ctx.game.paused != 0 || ctx.game.game_over != 0;
         let e = &mut ctx.effects;
         e.paused = paused;
-        e.calc(&mut ctx.anm, ctx.game.flags, &mut ctx.bomb_areas);
+        e.calc(
+            &mut ctx.anm,
+            &mut ctx.rng,
+            ctx.game.flags,
+            &mut ctx.bomb_areas,
+        );
         Ret::Next
     }
 
@@ -1304,7 +1336,7 @@ fn link(ctx: &mut Ctx, mut s: ScreenEffect) {
 impl ScreenEffect {
     // Offsets x then y, each one of {0, +a, −a} by Rng_Range(3): 2 RNG draws per frame.
     fn shake(&self, ctx: &mut Ctx, a: f32) {
-        let mut pick = || match ctx.anm.rng.range(3) {
+        let mut pick = || match ctx.rng.range(3) {
             0 => 0.0,
             1 => a,
             _ => -a,
@@ -1474,8 +1506,14 @@ impl ScreenEffect {
 // Player death ring (type 59, slot 11, colour 0xFFF0404F): radius 128 → 8 over the deathbomb window (ease 4,
 // 13 §2.7).
 // +0x357 (keeps running while bullets are frozen): set only for this ring (13 §2.1).
-pub fn death_ring(e: &mut Effects, anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
-    let i = e.spawn_fixed(anm, 59, pos, FIX_DEATH, 0xFFF0404F);
+pub fn death_ring(
+    e: &mut Effects,
+    anm: &mut AnmManager,
+    rng: &mut crate::rng::Rng,
+    pos: [f32; 3],
+    frames: i32,
+) {
+    let i = e.spawn_fixed(anm, rng, 59, pos, FIX_DEATH, 0xFFF0404F);
     let x = &mut e.fx[i];
     // Radius VM pos.x 128 → 8 over the deathbomb window, ease 4 (13 §3 player hit).
     x.vm.pos = [128.0, 32.0, 0.0];
@@ -1487,8 +1525,14 @@ pub fn death_ring(e: &mut Effects, anm: &mut AnmManager, pos: [f32; 3], frames: 
 
 // Invulnerability ring at bomb start (Player_SpawnInvulnRing 0x40BF00, type 23, slot 0): I0 := invulnerability
 // frames (13 §2.6, 14 §1.2). `frames` is the player timer +0xE2AF4 just set by Bomb_Start.
-pub fn invuln_ring(fx: &mut Effects, anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
-    let i = fx.spawn_fixed(anm, 23, pos, FIX_INVULN, 0xFFFF4040);
+pub fn invuln_ring(
+    fx: &mut Effects,
+    anm: &mut AnmManager,
+    rng: &mut crate::rng::Rng,
+    pos: [f32; 3],
+    frames: i32,
+) {
+    let i = fx.spawn_fixed(anm, rng, 23, pos, FIX_INVULN, 0xFFFF4040);
     fx.get(i, |e| {
         e.vm.ivars[0] = frames;
         // 13 §2.6 row 23: the spawn already ran script time 0, so the rotation goes +v, 0, −v, … (0x4B438C).
@@ -1516,14 +1560,15 @@ mod tests {
     // 07 §11.1: the spell ring start writes only VM pos.y.
     #[test]
     fn invuln_and_spell_ring_spawn() {
+        let mut rng = crate::rng::Rng::default();
         let mut fx = Effects::default();
         let mut anm = AnmManager::default();
-        invuln_ring(&mut fx, &mut anm, [1.0, 2.0, 0.0], 90);
+        invuln_ring(&mut fx, &mut anm, &mut rng, [1.0, 2.0, 0.0], 90);
         fx.peek(FIXED_BASE + FIX_INVULN, |e| {
             assert_eq!((e.vm.ivars[0], e.vm.interp_duration[4].cur), (90, 90));
             assert_eq!((e.vm.interp_mode[4], e.vm.scale_end), (0, [1.0 / 16.0; 2]));
         });
-        fx.spell_ring(&mut anm, [1.0, 2.0, 0.0], false);
+        fx.spell_ring(&mut anm, &mut rng, [1.0, 2.0, 0.0], false);
         fx.peek(FIXED_BASE + FIX_SPELL, |e| {
             assert_eq!(e.vm.pos, [0.0, 64.0, 0.0])
         });
@@ -1584,6 +1629,7 @@ mod tests {
     // Ring init 0x4272E0 (13 §2.6): 24 segments by default, centre = spawn pos, crossed param copy.
     #[test]
     fn ring_init_defaults() {
+        let mut rng = crate::rng::Rng::default();
         let mut fx = Effects::default();
         let mut anm = AnmManager::default();
         let pos = [10.0, 20.0, 0.0];
@@ -1597,12 +1643,12 @@ mod tests {
             (41, 48),
             (42, 64),
         ] {
-            let i = fx.spawn_at(&mut anm, kind, pos, [0.0; 3], 1, 0, true);
+            let i = fx.spawn_at(&mut anm, &mut rng, kind, pos, [0.0; 3], 1, 0, true);
             assert_eq!(fx.fx[i].ring.segments, n, "type {kind}");
             assert_eq!(fx.fx[i].centre, pos);
         }
         let i = FIXED_BASE;
-        assert!(fx.init_start(&mut anm, i, 35, pos, [1.0, 2.0, 3.0], 0, true));
+        assert!(fx.init_start(&mut anm, &mut rng, i, 35, pos, [1.0, 2.0, 3.0], 0, true));
         let r = fx.fx[i].ring;
         assert_eq!((r.start, r.radius, r.width), (1.0, 2.0, 3.0));
     }
@@ -1613,10 +1659,9 @@ mod tests {
         for kind in [17, 18, 27] {
             let mut fx = Effects::default();
             let mut anm = AnmManager::default();
-            anm.rng = crate::rng::Rng::seeded(0x1234);
+            let mut rng = crate::rng::Rng::seeded(0x1234);
             let mut probe = crate::rng::Rng::seeded(0x1234);
-            let i = fx.spawn_at(&mut anm, kind, [0.0; 3], [0.0; 3], 1, 0, true);
-            let rng = &anm.rng;
+            let i = fx.spawn_at(&mut anm, &mut rng, kind, [0.0; 3], [0.0; 3], 1, 0, true);
             // The type's script runs first and may draw; replay exactly as many draws before the init's one.
             let mut a = 0.0;
             while probe.state != rng.state {
@@ -1632,9 +1677,9 @@ mod tests {
         let spark = |gs: f32| {
             let mut fx = Effects::default();
             let mut anm = AnmManager::default();
-            anm.rng = crate::rng::Rng::seeded(0x59);
+            let mut rng = crate::rng::Rng::seeded(0x59);
             anm.speed = gs;
-            let i = fx.spawn_at(&mut anm, 8, [0.0; 3], [0.0; 3], 1, 0, true);
+            let i = fx.spawn_at(&mut anm, &mut rng, 8, [0.0; 3], [0.0; 3], 1, 0, true);
             (fx.fx[i].vel, fx.fx[i].acc)
         };
         let ((v1, a1), (v, a)) = (spark(1.0), spark(0.25));
@@ -1669,7 +1714,14 @@ mod tests {
             return;
         };
         let src = crate::assets::Source::native(dir.into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
+        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+            src,
+            gfx,
+            false,
+            crate::settings::get().core(),
+            crate::settings::get().host_io(),
+        ))
+        .unwrap();
         let mut f = screen_fx(3, 30, 1, 0xFFFFFFFFu32 as i32, 0);
         let mut seen = Vec::new();
         for speed in [1.0, 0.25, 0.25, 0.25, 0.25, 0.25] {
@@ -1692,6 +1744,7 @@ mod tests {
     // 13 §2.2: one 512-slot budget per call; exhausted → dummy and the cursor is back where it started (+ extra).
     #[test]
     fn spawn_shares_budget() {
+        let mut rng = crate::rng::Rng::default();
         let mut fx = Effects::default();
         let mut anm = AnmManager::default();
         for x in &mut fx.fx[..RING_POOL - 3] {
@@ -1699,7 +1752,7 @@ mod tests {
         }
         fx.cursor = 100;
         assert_eq!(
-            fx.spawn_at(&mut anm, 4, [0.0; 3], [0.0; 3], 4, 0, true),
+            fx.spawn_at(&mut anm, &mut rng, 4, [0.0; 3], [0.0; 3], 4, 0, true),
             NONE
         );
         assert_eq!(fx.cursor, 100);
@@ -1714,14 +1767,17 @@ mod tests {
         let mut fx = Effects::default();
         fx.cursor = 7;
         assert_eq!(
-            fx.spawn_at(&mut anm, 4, [0.0; 3], [0.0; 3], 0, 0, true),
+            fx.spawn_at(&mut anm, &mut rng, 4, [0.0; 3], [0.0; 3], 0, 0, true),
             NONE
         );
         assert!(fx.fx[..RING_POOL].iter().all(|x| x.active));
         assert_eq!(fx.cursor, 7);
         // Success returns the last slot taken.
         let mut fx = Effects::default();
-        assert_eq!(fx.spawn_at(&mut anm, 4, [0.0; 3], [0.0; 3], 3, 0, true), 2);
+        assert_eq!(
+            fx.spawn_at(&mut anm, &mut rng, 4, [0.0; 3], [0.0; 3], 3, 0, true),
+            2
+        );
         assert_eq!(fx.cursor, 3);
     }
 

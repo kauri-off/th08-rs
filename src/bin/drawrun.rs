@@ -12,7 +12,13 @@ fn main() -> anyhow::Result<()> {
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
     let src = th08::assets::Source::native(dir.into());
-    let mut ctx = pollster::block_on(th08::game::Ctx::load_with(src, gfx, false))?;
+    let mut ctx = pollster::block_on(th08::game::Ctx::load_with(
+        src,
+        gfx,
+        false,
+        th08::settings::get().core(),
+        th08::settings::get().host_io(),
+    ))?;
     let (mut xz, mut plain) = if args[0].ends_with(".xz") {
         (Some(th08::xz::create(args[0].as_ref())?), None)
     } else {

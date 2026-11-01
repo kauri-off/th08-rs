@@ -2020,13 +2020,13 @@ pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Resul
     if name == "menu_mopup1" {
         let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/data/drawlog");
         let score = std::fs::read(data.join("menu_mopup1.score.dat"))?;
-        ctx.game.load_score(Some(&score));
+        ctx.game.load_score(Some(&score), &ctx.host);
         for n in 0..4 {
             let r = ctx.archive.read(&format!("demorpy{n}.rpy"))?;
             std::fs::write(dir.join(format!("replay/th8_{:02}.rpy", n + 1)), r)?;
         }
     }
-    crate::scoredat::set_save_dir(Some(dir));
+    ctx.host.set_save_dir(Some(dir));
     Ok(())
 }
 
@@ -2067,7 +2067,10 @@ pub fn run_demo(
     last: i32,
     mut out: impl FnMut(String),
 ) -> anyhow::Result<()> {
-    let r = crate::replay::parse(&ctx.archive.read(&format!("demorpy{n}.rpy"))?)?;
+    let r = crate::replay::parse(
+        &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
+        ctx.host.ver_list(),
+    )?;
     ctx.game.replay_ff = false;
     anyhow::ensure!(
         crate::replay::start_playback(&mut ctx.game, r, None, Some(n)),
@@ -2309,7 +2312,16 @@ mod tests {
         let dir = crate::settings::test_game_dir()?;
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
         let src = crate::assets::Source::native(dir.into());
-        Some(pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap())
+        Some(
+            pollster::block_on(crate::game::Ctx::load_with(
+                src,
+                gfx,
+                false,
+                crate::settings::get().core(),
+                crate::settings::get().host_io(),
+            ))
+            .unwrap(),
+        )
     }
 
     #[test]

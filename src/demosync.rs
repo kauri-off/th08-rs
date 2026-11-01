@@ -58,8 +58,8 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     row[0] = g.frame_counter as i64;
     row[1] = g.demo_frame as i64;
     row[2] = ctx.input.game as i64;
-    row[3] = ctx.anm.rng.state as i64;
-    row[4] = ctx.anm.rng.total.wrapping_sub(rng_base) as i64;
+    row[3] = ctx.rng.state as i64;
+    row[4] = ctx.rng.total.wrapping_sub(rng_base) as i64;
     row[18] = g.rank.rank as i64;
     row[21] = g.flags as i64;
     let Some(gm) = crate::gamemgr::current() else {
@@ -148,7 +148,10 @@ const CHECKED: [usize; 21] = [
 // Runs demo `n` from a freshly loaded context and compares it with `trace`.
 pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
     let rows = parse_trace(trace);
-    let r = crate::replay::parse(&ctx.archive.read(&format!("demorpy{n}.rpy"))?)?;
+    let r = crate::replay::parse(
+        &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
+        ctx.host.ver_list(),
+    )?;
     ctx.game.replay_ff = false;
     anyhow::ensure!(
         crate::replay::start_playback(&mut ctx.game, r, None, Some(n)),
@@ -162,8 +165,8 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
         guard += 1;
         let before = ctx.game.demo_frame;
         if out.is_empty() {
-            rng_base = ctx.anm.rng.total;
-            rng_before = ctx.anm.rng.state;
+            rng_base = ctx.rng.total;
+            rng_before = ctx.rng.state;
         }
         if ctx.calc() != crate::task::Flow::Continue {
             break;
@@ -220,7 +223,14 @@ mod tests {
             return;
         };
         let src = crate::assets::Source::native(dir.clone().into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
+        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+            src,
+            gfx,
+            false,
+            crate::settings::get().core(),
+            crate::settings::get().host_io(),
+        ))
+        .unwrap();
         let g = &mut ctx.game;
         (g.difficulty, g.shot, g.stage, g.fresh_start) = (3, 1, 0, true);
         g.flags = 0;
@@ -242,10 +252,17 @@ mod tests {
         }
         let mut r = ctx.game.rpy.clone().unwrap();
         let mut rng = crate::rng::Rng::seeded(1);
-        let r = crate::replay::parse(&r.encode(&mut rng)).unwrap();
+        let r = crate::replay::parse(&r.encode(&mut rng), ctx.host.ver_list()).unwrap();
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).unwrap();
         let src = crate::assets::Source::native(dir.into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
+        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+            src,
+            gfx,
+            false,
+            crate::settings::get().core(),
+            crate::settings::get().host_io(),
+        ))
+        .unwrap();
         ctx.game.replay_ff = false;
         assert!(crate::replay::start_playback(&mut ctx.game, r, None, None));
         let mut got = 0;
@@ -293,7 +310,14 @@ mod tests {
                 None => pollster::block_on(crate::gfx::Gfx::headless()).unwrap(),
             };
             let src = crate::assets::Source::native(dir.clone().into());
-            let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, g, false)).unwrap();
+            let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+                src,
+                g,
+                false,
+                crate::settings::get().core(),
+                crate::settings::get().host_io(),
+            ))
+            .unwrap();
             let trace = std::fs::read_to_string(format!(
                 "{}/specs/data/demo{n}_trace.txt",
                 env!("CARGO_MANIFEST_DIR")

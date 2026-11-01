@@ -82,7 +82,8 @@ impl Default for ItemManager {
 }
 
 // Mode-1 cancel of all bullets to items (08 §8.5 full power), run by the bullet manager.
-type Cancel<'a> = dyn FnMut(&mut ItemManager, &mut AnmManager, &mut Player) + 'a;
+type Cancel<'a> =
+    dyn FnMut(&mut ItemManager, &mut AnmManager, &mut crate::rng::Rng, &mut Player) + 'a;
 
 // Number of POWER_LEVELS entries ≤ power (08 §8.5).
 pub fn power_level(p: f32) -> usize {
@@ -146,6 +147,7 @@ impl ItemManager {
     pub fn spawn(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         player: &Player,
         pos: [f32; 3],
         kind: i32,
@@ -189,14 +191,14 @@ impl ItemManager {
         };
         match mode {
             2 => {
-                let x = anm.rng.next_f32() * 288.0 + 48.0;
-                let y = anm.rng.next_f32() * 192.0 - 64.0;
+                let x = rng.next_f32() * 288.0 + 48.0;
+                let y = rng.next_f32() * 192.0 - 64.0;
                 it.target = [x, y, 0.0];
                 it.vel = pos;
             }
             3 | 5 => {
-                it.vel[1] = -2.0 - anm.rng.next_f32() * 0.2;
-                it.vel[0] = 0.6 * anm.rng.next_signed();
+                it.vel[1] = -2.0 - rng.next_f32() * 0.2;
+                it.vel[0] = 0.6 * rng.next_signed();
                 if player.state == 2 {
                     it.state = 0;
                     it.vel = [0.0, -0.9, 0.0];
@@ -204,7 +206,12 @@ impl ItemManager {
             }
             _ => {}
         }
-        anm.set_script(&mut it.vm, ANM_SLOT, (0x3D + kind as i8 as i32) as usize);
+        anm.set_script(
+            rng,
+            &mut it.vm,
+            ANM_SLOT,
+            (0x3D + kind as i8 as i32) as usize,
+        );
         it.vm.color = [0xFF; 4];
         it.vm.flags |= anmvm::F_ZWRITE_OFF;
         self.items[i] = it;
@@ -213,7 +220,13 @@ impl ItemManager {
     }
 
     // Power reached 128 (08 §8.5): every other type 0/2 item becomes type 8 (effect 0, script 0x45).
-    fn convert_power_items(&mut self, anm: &mut AnmManager, except: usize, fx: &mut Effects) {
+    fn convert_power_items(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        except: usize,
+        fx: &mut Effects,
+    ) {
         for i in 0..MAX_ITEMS {
             let it = &mut self.items[i];
             if i == except || !it.alive || !(it.kind == POWER || it.kind == BIG_POWER) {
@@ -224,10 +237,10 @@ impl ItemManager {
                 it.vel = [0.0, -0.5, 0.0];
             }
             let p = it.pos;
-            fx.spawn(anm, 0, p, 1, 0xFFFFFFFF);
+            fx.spawn(anm, rng, 0, p, 1, 0xFFFFFFFF);
             let it = &mut self.items[i];
             let mut vm = std::mem::take(&mut it.vm);
-            anm.set_script(&mut vm, ANM_SLOT, 0x45);
+            anm.set_script(rng, &mut vm, ANM_SLOT, 0x45);
             vm.flags |= anmvm::F_ZWRITE_OFF;
             self.items[i].vm = vm;
         }
@@ -262,16 +275,16 @@ impl ItemManager {
                     let level = power_level(st.power);
                     st.power += if kind == POWER { 1.0 } else { 8.0 };
                     // GameMgr_AddPower 0x441850 checksum (4 draws); reaching 128 adds SetPower's 4 (08 §8.5).
-                    Stats::checksum(&mut anm.rng);
+                    Stats::checksum(sys.rng);
                     if st.power >= 128.0 {
-                        st.set_power(128.0, &mut anm.rng);
+                        st.set_power(128.0, sys.rng);
                         if !spell {
-                            cancel(self, anm, p);
+                            cancel(self, anm, sys.rng, p);
                         }
                         // Hud_ShowMessage(0, 1) "Full Power Mode!" (0x17CE8CC := 2 when the HUD takes the popup).
                         // The message is outside the spell-card test (08 §8.5, VERIFIED RE-Q34).
                         p.stats.popups.push(Popup::Message(1, 0));
-                        self.convert_power_items(anm, idx, sys.fx);
+                        self.convert_power_items(anm, sys.rng, idx, sys.fx);
                     }
                     let st = &mut p.stats;
                     st.add_score(10);
@@ -298,13 +311,13 @@ impl ItemManager {
                 st.point_items2 += 1;
                 st.rank(sys.rank, if v >= max { 10 } else { 3 });
                 while st.extends >= 0 && st.point_items2 >= st.next_extend {
-                    st.extend(&mut anm.rng, sys);
+                    st.extend(sys);
                     st.extends += 1;
                     st.next_extend = next_extend(st.difficulty, st.extends);
                 }
                 st.point_counter += 1;
                 // Item_CollectPoint 0x440E40 updates the checksum (11 §1.5).
-                Stats::checksum(&mut anm.rng);
+                Stats::checksum(sys.rng);
             }
             CONVERTED => {
                 let v = point_value(st.max_point, y, line, max_flag, st.human_max(), 10);
@@ -314,7 +327,7 @@ impl ItemManager {
             }
             BOMB => {
                 if st.bombs < 8.0 {
-                    st.add_bombs(1.0, &mut anm.rng);
+                    st.add_bombs(1.0, sys.rng);
                     sys.panel.mark_bombs(2);
                 }
                 // Bomb item rank +5 (11 §3.2 rank deltas).
@@ -323,18 +336,18 @@ impl ItemManager {
             FULL_POWER => {
                 // 08 §8.5: this cancel has no spell-card test, unlike the power-item one.
                 if st.power < 128.0 {
-                    cancel(self, anm, p);
+                    cancel(self, anm, sys.rng, p);
                     p.stats.popups.push(Popup::Message(1, 0));
                     sys.sound.play(crate::sound::POWERUP);
                     popup(-1, POPUP_POWER);
-                    self.convert_power_items(anm, idx, sys.fx);
+                    self.convert_power_items(anm, sys.rng, idx, sys.fx);
                 }
                 let st = &mut p.stats;
-                st.set_power(128.0, &mut anm.rng);
+                st.set_power(128.0, sys.rng);
                 popup(1000, POPUP_NORMAL);
                 st.add_score(1000);
             }
-            LIFE => st.extend(&mut anm.rng, sys),
+            LIFE => st.extend(sys),
             STAR => {
                 let mut v = if p.bomb_active {
                     100
@@ -365,7 +378,7 @@ impl ItemManager {
                     },
                 );
                 st.add_score(v);
-                st.add_time(1, &mut anm.rng);
+                st.add_time(1, sys.rng);
                 // Spell_AddBonus 0x416B10 +8000 (08 §8.5), applied by the bullet manager calc right after this.
                 st.spell_bonus_orbs += 1;
                 // ±111 by player byte +3; a non-forced GaugeAdd is skipped while bombing (07 §10.3).
@@ -385,7 +398,7 @@ impl ItemManager {
         anm: &mut AnmManager,
         p: &mut Player,
         spell: bool,
-        mut cancel: impl FnMut(&mut ItemManager, &mut AnmManager, &mut Player),
+        mut cancel: impl FnMut(&mut ItemManager, &mut AnmManager, &mut crate::rng::Rng, &mut Player),
         sys: &mut Sys,
     ) {
         let gs = anm.speed;
@@ -513,7 +526,7 @@ impl ItemManager {
             let it = &mut self.items[i];
             it.timer.tick(gs);
             if it.vm.script.is_some() {
-                it.vm.run(anm);
+                it.vm.run(anm, sys.rng);
             }
         }
         self.order
@@ -613,15 +626,18 @@ mod tests {
         p.update_boxes();
         let mut m = ItemManager::default();
         let pos = p.pos;
-        assert_eq!(m.spawn(&mut anm, &p, pos, FULL_POWER as i32, 0), Some(0));
+        assert_eq!(
+            m.spawn(&mut anm, sys.rng, &p, pos, FULL_POWER as i32, 0),
+            Some(0)
+        );
         let mut got = None;
         m.calc(
             &mut anm,
             &mut p,
             false,
-            |m, anm, p| {
+            |m, anm, rng, p| {
                 m.cursor = 0;
-                got = m.spawn(anm, p, [100.0, 100.0, 0.0], STAR as i32, 1);
+                got = m.spawn(anm, rng, p, [100.0, 100.0, 0.0], STAR as i32, 1);
             },
             sys,
         );
@@ -640,10 +656,10 @@ mod tests {
         p.update_boxes();
         let mut m = ItemManager::default();
         let pos = p.pos;
-        assert_eq!(m.spawn(&mut anm, &p, pos, -1, 1), Some(0));
+        assert_eq!(m.spawn(&mut anm, sys.rng, &p, pos, -1, 1), Some(0));
         assert_eq!((m.items[0].kind, m.cursor), (0xFF, 1));
         let st = p.stats.clone();
-        m.calc(&mut anm, &mut p, false, |_, _, _| {}, sys);
+        m.calc(&mut anm, &mut p, false, |_, _, _, _| {}, sys);
         assert!(!m.items[0].alive);
         assert_eq!((p.stats.score10, p.stats.power), (st.score10, st.power));
     }

@@ -304,11 +304,18 @@ impl Dialogue {
     }
 
     // Starts text.anm script `line` on the line VM and queues Text_RenderToVm (10 §6).
-    fn render(&mut self, anm: &mut AnmManager, line: usize, s: String, colour: [u8; 3]) {
+    fn render(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        line: usize,
+        s: String,
+        colour: [u8; 3],
+    ) {
         let Some(vm) = self.line_vm_mut(line) else {
             return;
         };
-        anm.set_script(vm, TEXT_SLOT, line);
+        anm.set_script(rng, vm, TEXT_SLOT, line);
         self.texts.push((line, s, colour));
     }
 
@@ -345,7 +352,14 @@ impl Dialogue {
     }
 
     // One instruction of the 10 §5.1 opcode table.
-    fn exec(&mut self, f: &MsgFile, anm: &mut AnmManager, inp: &Input, ins: Ins) -> Exec {
+    fn exec(
+        &mut self,
+        f: &MsgFile,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        inp: &Input,
+        ins: Ins,
+    ) -> Exec {
         let skip = self.skippable && inp.down(input::SKIP);
         match ins.op {
             0 => {
@@ -356,7 +370,7 @@ impl Dialogue {
                 let (k, s) = (f.i16(&ins, 0) as usize, f.i16(&ins, 1));
                 // The pos_offset writes of ops 1/2 are omitted: they have no visible effect (10 §5.1 note).
                 if k < 4 && s >= 0 {
-                    anm.set_script(&mut self.faces[k], self.face_slot[k], s as usize);
+                    anm.set_script(rng, &mut self.faces[k], self.face_slot[k], s as usize);
                 }
             }
             2 => {
@@ -373,7 +387,7 @@ impl Dialogue {
                     self.clear_line1();
                 }
                 let c = self.text_colour[sp.min(3)];
-                self.render(anm, line.min(1), s, c);
+                self.render(anm, rng, line.min(1), s, c);
                 self.wait_count = 0;
             }
             4 => {
@@ -400,7 +414,7 @@ impl Dialogue {
             6 => self.release_counter += 1,
             7 => self.events.push(Event::Bgm(f.i32(&ins, 0))),
             8 => {
-                anm.set_script(&mut self.boss_card, self.face_slot[2], 1);
+                anm.set_script(rng, &mut self.boss_card, self.face_slot[2], 1);
                 self.wait_count = 0;
             }
             9 => {
@@ -440,7 +454,7 @@ impl Dialogue {
                     self.next_line as usize,
                     self.text_colour[self.text_speaker as usize],
                 );
-                self.render(anm, line, s, c);
+                self.render(anm, rng, line, s, c);
                 self.wait_count = 0;
                 self.new_box = false;
                 self.next_line = self.next_line.wrapping_add(1);
@@ -456,7 +470,7 @@ impl Dialogue {
             19 | 20 => {
                 let s = f.string(&ins, 0).decode();
                 let c = self.text_colour[0];
-                self.render(anm, (ins.op - 19) as usize, s, c);
+                self.render(anm, rng, (ins.op - 19) as usize, s, c);
                 self.wait_count = 0;
             }
             21 => {
@@ -495,7 +509,13 @@ impl Dialogue {
     }
 
     // Msg_Run (10 §5); `dying` = player state 2. Returns true when items should be auto-collected.
-    pub fn run(&mut self, anm: &mut AnmManager, inp: &Input, dying: bool) -> bool {
+    pub fn run(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        inp: &Input,
+        dying: bool,
+    ) -> bool {
         if !self.active() {
             return false;
         }
@@ -518,7 +538,7 @@ impl Dialogue {
                 break;
             }
             let f = self.file.take().unwrap();
-            let r = self.exec(&f, anm, inp, ins);
+            let r = self.exec(&f, anm, rng, inp, ins);
             self.file = Some(f);
             match r {
                 Exec::Next => self.ip = ins.at + 4 + ins.size,
@@ -542,7 +562,7 @@ impl Dialogue {
             .chain(std::iter::once(&mut self.boss_card))
         {
             if vm.script.is_some() {
-                vm.run(anm);
+                vm.run(anm, rng);
             }
         }
         if self.clock.cur < 60 && self.skippable && inp.down(input::SKIP) {
@@ -635,6 +655,7 @@ mod tests {
     // 10 §5 op 11: the game-clear trigger only in stage idx 6–8; elsewhere it only stalls like op 10.
     #[test]
     fn halt_final_trigger_by_stage() {
+        let mut rng = crate::rng::Rng::default();
         let f = parse(vec![1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 11, 0]).unwrap();
         let mut anm = AnmManager::default();
         for stage in 0..9 {
@@ -643,7 +664,7 @@ mod tests {
             let ins = f.ins(8).unwrap();
             for _ in 0..2 {
                 assert!(matches!(
-                    d.exec(&f, &mut anm, &Input::default(), ins),
+                    d.exec(&f, &mut anm, &mut rng, &Input::default(), ins),
                     Exec::Stall
                 ));
             }
@@ -655,6 +676,7 @@ mod tests {
     // 10 §5.1 op 16 (RE-Q71): no clamp, so the third line of a box goes to boss_card (line index 2).
     #[test]
     fn op16_third_line_on_boss_card() {
+        let mut rng = crate::rng::Rng::default();
         let text = |c: u8| [0, 0, 16, 2, c ^ 0x77, 0x77];
         let mut data = vec![1, 0, 0, 0, 8, 0, 0, 0];
         for c in [b'a', b'b', b'c'] {
@@ -668,7 +690,7 @@ mod tests {
         };
         for k in 0..3 {
             let ins = f.ins(8 + 6 * k).unwrap();
-            d.exec(&f, &mut anm, &Input::default(), ins);
+            d.exec(&f, &mut anm, &mut rng, &Input::default(), ins);
         }
         let lines: Vec<(usize, String)> = d.texts.iter().map(|t| (t.0, t.1.clone())).collect();
         assert_eq!(lines, [(0, "a".into()), (1, "b".into()), (2, "c".into())]);
@@ -679,6 +701,7 @@ mod tests {
     // Wait: Shot advances only after min_wait frames; timeout after n; skip is instant.
     #[test]
     fn wait_and_release() {
+        let mut rng = crate::rng::Rng::default();
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
@@ -693,7 +716,7 @@ mod tests {
         let mut frames = 0;
         let mut released = false;
         while d.active() && frames < 100_000 {
-            d.run(&mut anm, &idle, false);
+            d.run(&mut anm, &mut rng, &idle, false);
             released |= !d.blocking() && d.active();
             frames += 1;
         }
@@ -709,7 +732,7 @@ mod tests {
         };
         let mut n = 0;
         while d.active() && n < 100_000 {
-            d.run(&mut anm, &skip, false);
+            d.run(&mut anm, &mut rng, &skip, false);
             n += 1;
         }
         assert!(n < frames / 10, "skip: {n} frames vs {frames}");

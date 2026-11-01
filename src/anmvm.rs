@@ -92,9 +92,9 @@ impl Timer {
         }
     }
 
-    // Timer_Sub(1) (05 §2), with the extra step of Supervisor flag 0x20 first (05 §12.6).
-    pub fn dec(&mut self, speed: f32) {
-        if slowdown_restore() {
+    // Timer_Sub(1) (05 §2), with the extra step of Supervisor flag 0x20 (`restore`, AnmManager field) first (05 §12.6).
+    pub fn dec(&mut self, speed: f32, restore: bool) {
+        if restore {
             self.cur -= 1;
             self.frac = 0.0;
             self.prev = -999;
@@ -116,19 +116,6 @@ impl Timer {
     pub fn getf(&self) -> f32 {
         self.cur as f32 + self.frac
     }
-}
-
-thread_local! {
-    static SLOWDOWN_RESTORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-// Supervisor flag 0x20 (05 §12.6): set by ECL native 29, never cleared; Timer_Sub steps once more.
-pub fn set_slowdown_restore(on: bool) {
-    SLOWDOWN_RESTORE.with(|f| f.set(on));
-}
-
-pub fn slowdown_restore() -> bool {
-    SLOWDOWN_RESTORE.with(|f| f.get())
 }
 
 // Angle_AddNormalize 0x43EDB0 (05 §6.3): at most 18 steps each way, float32 π and 2π, so huge angles stay unwrapped.
@@ -618,12 +605,13 @@ impl AnmVm {
     }
 
     // AnmVm_Run 0x45EA00 (05 §4): runs every instruction with time ≤ clock, then POST; returns true when finished.
-    pub fn run(&mut self, anm: &mut AnmManager) -> bool {
+    pub fn run(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> bool {
         let Some(mut ip) = self.ip else { return true };
         if self.flags & F_PAUSED != 0 {
             return false;
         }
         let speed = anm.speed;
+        let sr = anm.slowdown_restore;
         let mut interrupt = self.pending_interrupt != 0;
         loop {
             if interrupt {
@@ -640,7 +628,7 @@ impl AnmVm {
                         continue;
                     }
                     None => {
-                        self.time.dec(speed);
+                        self.time.dec(speed, sr);
                         break;
                     }
                 }
@@ -782,7 +770,7 @@ impl AnmVm {
                     // Yield (05 §4): decrement now, POST ticks again, so the same instruction re-runs next frame.
                     if self.pending_interrupt == 0 {
                         self.flags |= F_WAIT_INT;
-                        self.time.dec(speed);
+                        self.time.dec(speed, sr);
                         Step::Post
                     } else {
                         interrupt = true;
@@ -952,7 +940,7 @@ impl AnmVm {
                     let d = self.idest(&ins);
                     let n = self.ival(a[1], m(1));
                     // Ops 59/60 draw from the global game RNG g_Rng 0x164D520 (05 §5 notes); Rng_Range(0) draws nothing (05 §12.3).
-                    let v = anm.rng.range(n);
+                    let v = rng.range(n);
                     self.write(anm, ip, d, v as u32, false);
                     Step::Next
                 }
@@ -964,7 +952,7 @@ impl AnmVm {
                         self.fval(a[1], m(1))
                     };
                     let v = match ins.op {
-                        60 => anm.rng.next_f32() * x,
+                        60 => rng.next_f32() * x,
                         // Rounded once from the extended x87 result (05 §10).
                         61 => crate::fmath::sin_f(x),
                         62 => crate::fmath::cos_f(x),
@@ -1011,10 +999,10 @@ impl AnmVm {
                     if self.wait_timer.cur == 0 {
                         self.wait_timer.set(self.ival(a[0], m(0)));
                     } else {
-                        self.wait_timer.dec(speed);
+                        self.wait_timer.dec(speed, sr);
                     }
                     if self.wait_timer.cur > 0 {
-                        self.time.dec(speed);
+                        self.time.dec(speed, sr);
                         Step::Post
                     } else {
                         self.wait_timer.set(0);
@@ -1192,16 +1180,17 @@ mod tests {
     fn timer_dec_prev_only_on_slow_path() {
         let mut t = Timer::default();
         t.set(10);
-        t.dec(1.0);
+        t.dec(1.0, false);
         assert_eq!((t.prev, t.cur), (-999, 9));
         t.set(10);
-        t.dec(0.5);
+        t.dec(0.5, false);
         assert_eq!((t.prev, t.cur, t.frac), (10, 9, 0.5));
-        t.dec(0.5);
+        t.dec(0.5, false);
         assert_eq!((t.prev, t.cur, t.frac), (9, 9, 0.0));
     }
 
     fn vm_with(script: Vec<u8>) -> (AnmManager, AnmVm) {
+        let mut rng = crate::rng::Rng::default();
         let mut anm = AnmManager::default();
         let chunk = crate::anm::Chunk {
             name: "t".into(),
@@ -1222,7 +1211,7 @@ mod tests {
         };
         anm.insert(0, "t", vec![chunk], |_| 0);
         let mut vm = AnmVm::default();
-        anm.set_script(&mut vm, 0, 0);
+        anm.set_script(&mut rng, &mut vm, 0, 0);
         (anm, vm)
     }
 
@@ -1242,6 +1231,7 @@ mod tests {
 
     #[test]
     fn timing_interp_and_interrupts() {
+        let mut rng = crate::rng::Rng::default();
         let mut s = Vec::new();
         s.extend(ins(3, 0, 0, &[0]));
         s.extend(ins(34, 0, 0, &[4, 0, 100]));
@@ -1257,18 +1247,18 @@ mod tests {
         assert!(vm.visible() && vm.sprite_w == 32.0);
         // The alpha slot captured 255 before op 8 ran; the first POST already applies t = 1/4.
         assert_eq!(vm.color[A], (255.0 - 155.0 * 0.25) as u8);
-        vm.run(&mut anm);
+        vm.run(&mut anm, &mut rng);
         assert_eq!(vm.pos, [0.0; 3]);
-        vm.run(&mut anm);
+        vm.run(&mut anm, &mut rng);
         assert_eq!(vm.pos, [10.0, 20.0, 0.0]);
         for _ in 0..5 {
-            vm.run(&mut anm);
+            vm.run(&mut anm, &mut rng);
         }
         assert_eq!(vm.time.cur, 3);
         assert!(vm.flags & F_WAIT_INT != 0);
         assert_eq!(vm.color[A], 100);
         vm.pending_interrupt = 7;
-        vm.run(&mut anm);
+        vm.run(&mut anm, &mut rng);
         assert_eq!(vm.pos, [1.0, 2.0, 3.0]);
         assert_eq!(vm.time.cur, 3);
         assert!(vm.ip.is_some());
@@ -1276,6 +1266,7 @@ mod tests {
 
     #[test]
     fn loop_and_wait() {
+        let mut rng = crate::rng::Rng::default();
         let mut s = Vec::new();
         s.extend(ins(37, 0, 1, &[10008, 3]));
         let body = s.len() as u32;
@@ -1285,7 +1276,7 @@ mod tests {
         s.extend(ins(2, 0, 0, &[]));
         let (mut anm, mut vm) = vm_with(s);
         let mut frames = 1;
-        while !vm.run(&mut anm) {
+        while !vm.run(&mut anm, &mut rng) {
             frames += 1;
             assert!(frames < 100);
         }
@@ -1304,6 +1295,7 @@ mod tests {
 
     #[test]
     fn all_game_opcodes_handled() {
+        let mut rng = crate::rng::Rng::default();
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
@@ -1336,12 +1328,12 @@ mod tests {
             anm.insert(0, n, chunks, |_| 0);
             for k in 0..total {
                 let mut vm = AnmVm::default();
-                anm.set_script(&mut vm, 0, k);
+                anm.set_script(&mut rng, &mut vm, 0, k);
                 for frame in 0..600 {
                     if frame % 97 == 50 {
                         vm.pending_interrupt = [1, 2, 3, 4, 5, 7][frame / 97 % 6];
                     }
-                    if vm.run(&mut anm) {
+                    if vm.run(&mut anm, &mut rng) {
                         break;
                     }
                 }

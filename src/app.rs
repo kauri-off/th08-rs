@@ -72,7 +72,8 @@ async fn init(window: Arc<Window>, source: Source, vsync: bool) -> anyhow::Resul
 }
 
 async fn load(window: Arc<Window>, source: Source, gfx: Gfx) -> anyhow::Result<Box<Running>> {
-    let ctx = Ctx::load(source, gfx).await?;
+    let s = crate::settings::get();
+    let ctx = Ctx::load(source, gfx, s.core(), s.host_io()).await?;
     Ok(Box::new(Running {
         window,
         ctx,
@@ -176,7 +177,7 @@ impl ApplicationHandler<UserEvent> for App {
         match ev {
             WindowEvent::CloseRequested => {
                 // Tool `replay_save`: closing the window mid-game still writes the recording.
-                if r.ctx.settings.replay_save.is_some()
+                if r.ctx.core.replay_save.is_some()
                     && r.ctx.game.scene == crate::gamemgr::SCENE_GAME
                 {
                     crate::replay::finish(&mut r.ctx);

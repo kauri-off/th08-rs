@@ -205,7 +205,7 @@ impl Player {
     }
 
     // Calc-fn init per kind (14 §3, §3.1–§3.3): script, start position / anchor, orbit, facing.
-    fn init_option(&mut self, anm: &mut AnmManager, k: usize) {
+    fn init_option(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, k: usize) {
         let p = self.pos;
         let trail = self.trail[15];
         let bombing = self.bombing;
@@ -217,7 +217,7 @@ impl Player {
             OptKind::Yuyuko | OptKind::YoumuHalf | OptKind::YoumuSolo => 0x15,
             OptKind::None => return,
         };
-        anm.set_script(&mut o.vm, ANM_SLOT, script);
+        anm.set_script(rng, &mut o.vm, ANM_SLOT, script);
         o.timer.set(0);
         o.sub = 0;
         o.vel = [0.0; 2];
@@ -409,7 +409,7 @@ impl Player {
         let pos = o.pos;
         self.aimed = aimed;
         if let Some(c) = sparkle {
-            sys.fx.spawn(anm, 0x2F, pos, 1, c);
+            sys.fx.spawn(anm, sys.rng, 0x2F, pos, 1, c);
         }
     }
 
@@ -419,7 +419,7 @@ impl Player {
         for k in 0..4 {
             match self.options[k].state {
                 0 => continue,
-                1 => self.init_option(anm, k),
+                1 => self.init_option(anm, sys.rng, k),
                 // Leaving (14 §3): no motion or sparkle; Alice keeps following the player.
                 3 => {
                     let p = self.pos;
@@ -442,7 +442,7 @@ impl Player {
             }
             let o = &mut self.options[k];
             if o.vm.script.is_some() {
-                o.vm.run(anm);
+                o.vm.run(anm, sys.rng);
             }
             o.timer.tick(gs);
         }
@@ -555,7 +555,12 @@ impl Player {
             ..PBullet::default()
         };
         b.timer.set(0);
-        anm.set_script(&mut b.vm, ANM_SLOT, (e.script + 10).max(0) as usize);
+        anm.set_script(
+            sys.rng,
+            &mut b.vm,
+            ANM_SLOT,
+            (e.script + 10).max(0) as usize,
+        );
         b.vm.flags |= anmvm::F_ZWRITE_OFF;
         self.bullets[slot] = b;
     }
@@ -665,7 +670,7 @@ impl Player {
                 if !self.default_init(anm, slot, t, e, sys) {
                     return false;
                 }
-                let a = anm.rng.next_signed() * PI / 48.0 - FRAC_PI_2;
+                let a = sys.rng.next_signed() * PI / 48.0 - FRAC_PI_2;
                 self.set_dir(slot, a, e.speed);
                 true
             }
@@ -681,7 +686,7 @@ impl Player {
     }
 
     // Update functions (table 0x4C7F04, 09 §2.1); true frees the bullet.
-    fn bullet_update_fn(&mut self, anm: &mut AnmManager, i: usize, sys: &mut Sys) -> bool {
+    fn bullet_update_fn(&mut self, i: usize, sys: &mut Sys) -> bool {
         let tg = self.targets[0];
         let b = &mut self.bullets[i];
         match b.update {
@@ -712,7 +717,7 @@ impl Player {
             // Only while flying (state 1), 09 §2.1.
             3 => {
                 if b.state == 1 {
-                    b.vel[1] -= anm.rng.next_f32() * 0.1 + 0.27;
+                    b.vel[1] -= sys.rng.next_f32() * 0.1 + 0.27;
                 }
                 false
             }
@@ -780,7 +785,7 @@ impl Player {
             if self.bullets[i].state == 0 {
                 continue;
             }
-            if self.bullet_update_fn(anm, i, sys) {
+            if self.bullet_update_fn(i, sys) {
                 self.bullets[i].state = 0;
                 continue;
             }
@@ -798,7 +803,7 @@ impl Player {
                     continue;
                 }
             }
-            if b.vm.script.is_some() && b.vm.run(anm) {
+            if b.vm.script.is_some() && b.vm.run(anm, sys.rng) {
                 b.state = 0;
                 continue;
             }
@@ -825,7 +830,7 @@ impl Player {
             // 0x450C50 explosion: first hit draws the RNG even when the sprite has no size entry.
             1 => {
                 if b.state == 1 {
-                    let a = anm.rng.next_f32() * FRAC_PI_2 - 3.0 * PI / 4.0;
+                    let a = sys.rng.next_f32() * FRAC_PI_2 - 3.0 * PI / 4.0;
                     let size = match b.vm.script_index {
                         0xC => Some(48.0),
                         0xE => Some(64.0),
@@ -846,7 +851,7 @@ impl Player {
                     b.vel = [b.vel[0] * 0.88, b.vel[1] * 0.88];
                 }
                 if self.bullets[i].timer.cur % 6 == 0 {
-                    sys.fx.spawn(anm, 5, enemy, 1, 0xFFFFFFFF);
+                    sys.fx.spawn(anm, sys.rng, 5, enemy, 1, 0xFFFFFFFF);
                 }
                 false
             }
@@ -857,7 +862,8 @@ impl Player {
                 let x = b.pos[0];
                 self.spark_counter = self.spark_counter.wrapping_add(1);
                 if self.spark_counter & 7 == 0 {
-                    sys.fx.spawn(anm, 5, [x, enemy[1], enemy[2]], 1, 0xFFFFFFFF);
+                    sys.fx
+                        .spawn(anm, sys.rng, 5, [x, enemy[1], enemy[2]], 1, 0xFFFFFFFF);
                 }
                 false
             }
@@ -911,7 +917,7 @@ impl Player {
                     && let Some(items) = items.as_deref_mut()
                 {
                     let p = self.bullets[i].pos;
-                    items.spawn(anm, self, p, crate::item::TIME_ORB as i32, 0);
+                    items.spawn(anm, sys.rng, self, p, crate::item::TIME_ORB as i32, 0);
                 }
             }
             let b = &mut self.bullets[i];
@@ -919,10 +925,15 @@ impl Player {
             // hit script sets it) → rotation z restored → effect 5 at the bullet → pos z 0.1 → state 2.
             if !(4..=6).contains(&b.kind) && b.state == 1 {
                 let rot = b.vm.rotation[2];
-                anm.file_set_script(&mut b.vm, ANM_SLOT, (b.script + 11).max(0) as usize);
+                anm.file_set_script(
+                    sys.rng,
+                    &mut b.vm,
+                    ANM_SLOT,
+                    (b.script + 11).max(0) as usize,
+                );
                 b.vm.rotation[2] = rot;
                 let pos = b.pos;
-                sys.fx.spawn(anm, 5, pos, 1, 0xFFFFFFFF);
+                sys.fx.spawn(anm, sys.rng, 5, pos, 1, 0xFFFFFFFF);
                 let b = &mut self.bullets[i];
                 b.pos[2] = 0.1;
                 b.state = 2;
@@ -953,7 +964,7 @@ impl Player {
             if !a.no_spark {
                 self.spark_counter = self.spark_counter.wrapping_add(1);
                 if self.spark_counter & 3 == 0 {
-                    sys.fx.spawn(anm, 3, pos, 1, 0xFFFFFFFF);
+                    sys.fx.spawn(anm, sys.rng, 3, pos, 1, 0xFFFFFFFF);
                 }
             }
         }
@@ -1109,17 +1120,16 @@ mod tests {
     fn homing_speed_up_only_in_state1_by_current_v() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let mut anm = AnmManager::default();
         let mut p = Player::default();
         p.targets[0] = [-999.0; 3];
         let b = &mut p.bullets[0];
         (b.update, b.state, b.speed, b.vel) = (1, 2, 4.0, [0.0, -0.5]);
-        p.bullet_update_fn(&mut anm, 0, sys);
+        p.bullet_update_fn(0, sys);
         let b = &p.bullets[0];
         assert_eq!((b.speed, b.vel), (4.0, [0.0, -0.5]));
         assert_eq!(b.angle, fmath::atan2_f(-0.5, 0.0));
         p.bullets[0].state = 1;
-        p.bullet_update_fn(&mut anm, 0, sys);
+        p.bullet_update_fn(0, sys);
         let b = &p.bullets[0];
         assert_eq!(b.speed, 4.0 + 1.0 / 3.0);
         assert_eq!(b.vel, [0.0, -0.5 * b.speed / 0.5]);
@@ -1128,16 +1138,17 @@ mod tests {
     // 14 §3 0x44EA40 (RE-Q57 AN): Alice created during a bomb keeps the zeroed pos.
     #[test]
     fn alice_init_while_bombing_stays_at_origin() {
+        let mut rng = crate::rng::Rng::default();
         let mut anm = AnmManager::default();
         let mut p = Player::default();
         p.pos = [192.0, 400.0, 0.0];
         p.bombing = true;
         p.set_option(0, OptKind::Alice);
-        p.init_option(&mut anm, 0);
+        p.init_option(&mut anm, &mut rng, 0);
         assert_eq!((p.options[0].state, p.options[0].pos), (2, [0.0; 3]));
         p.bombing = false;
         p.set_option(0, OptKind::Alice);
-        p.init_option(&mut anm, 0);
+        p.init_option(&mut anm, &mut rng, 0);
         assert_eq!(p.options[0].pos, [192.0, 368.0, 0.0]);
     }
 

@@ -22,6 +22,8 @@ pub struct Ctx {
     // Joystick device polled by the Supervisor (15 §1.1).
     pub pad: crate::joystick::Joystick,
     pub anm: AnmManager,
+    // The game RNG g_Rng 0x164D520 (11 §1); every draw site keeps the original's order (future `World.rng`).
+    pub rng: crate::rng::Rng,
     pub tasks: Tasks<Ctx>,
     // Port count of executed calc steps (debug tools, TH08_SHOT); not an original counter.
     pub frame: u64,
@@ -45,9 +47,14 @@ pub struct Ctx {
     // GameMgr_OnRemove, 0 by Result / MainMenu register; Supervisor_Calc decrements it once per frame while ≠ 0.
     // Read by screen effects 1 / 2 / 4, which are removed while it is ≠ 0.
     pub load_frames: i32,
+    // g_Gui calls queued for Gui_Calc (12 §5.8); cleared by Gui_Register.
+    pub gui_queue: crate::gui::Queue,
     // Debug: `TH08_SE_LOG` logs each frame's flushed SE ids.
     pub se_log: bool,
-    pub settings: &'static crate::settings::Settings,
+    // Port debug / start-up switches (`Settings::core`), passed in by the app or tool.
+    pub core: crate::coreconfig::CoreConfig,
+    // Port host IO: save storage and the boot version list (`Settings::host_io`); the `Host` trait in step 7.
+    pub host: crate::scoredat::HostIo,
     pub drawlog: Option<crate::drawlog::Writer>,
     // Frame_Run frame-skip counter (i8, 00 §2), compared with cfg +0x23; SKIP_START after every (re)start.
     pub skip_counter: i8,
@@ -60,8 +67,8 @@ pub struct Ctx {
 
 // Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue
 // (13 §1.2), effect manager (13 §2), GM flags word (11 §2.1), rank (11 §2), ascii overlays (13 §4), HUD dirty fields
-// (12 §5.3), bomb area queue (14 §2.13), freeze byte and frames-since-load (13 §3). Built by `sys!(ctx)`; these become
-// `World` fields in step 9 (ARCH_A §2.3).
+// (12 §5.3), bomb area queue (14 §2.13), freeze byte and frames-since-load (13 §3), g_Gui call queue (12 §5.8),
+// g_Rng (11 §1). Built by `sys!(ctx)`; these become `World` fields in step 9 (ARCH_A §2.3).
 pub struct Sys<'a> {
     pub sound: &'a mut crate::sound::Queue,
     pub fx: &'a mut crate::effect::Effects,
@@ -72,6 +79,8 @@ pub struct Sys<'a> {
     pub areas: &'a mut crate::bomb::AreaQueue,
     pub timer_pause: &'a mut i32,
     pub load_frames: &'a mut i32,
+    pub gui: &'a mut crate::gui::Queue,
+    pub rng: &'a mut crate::rng::Rng,
 }
 
 impl Sys<'_> {
@@ -86,6 +95,8 @@ impl Sys<'_> {
             areas: &mut *self.areas,
             timer_pause: &mut *self.timer_pause,
             load_frames: &mut *self.load_frames,
+            gui: &mut *self.gui,
+            rng: &mut *self.rng,
         }
     }
 }
@@ -103,6 +114,8 @@ macro_rules! sys {
             areas: &mut $c.bomb_areas,
             timer_pause: &mut $c.timer_pause,
             load_frames: &mut $c.load_frames,
+            gui: &mut $c.gui_queue,
+            rng: &mut $c.rng,
         }
     };
 }
@@ -119,6 +132,8 @@ pub struct TestSys {
     pub bomb_areas: crate::bomb::AreaQueue,
     pub timer_pause: i32,
     pub load_frames: i32,
+    pub gui_queue: crate::gui::Queue,
+    pub rng: crate::rng::Rng,
 }
 
 #[cfg(test)]
@@ -147,20 +162,30 @@ impl TaskCtx for Ctx {
 }
 
 impl Ctx {
-    pub async fn load(source: Source, gfx: Gfx) -> anyhow::Result<Self> {
-        Self::load_with(source, gfx, true).await
+    pub async fn load(
+        source: Source,
+        gfx: Gfx,
+        core: crate::coreconfig::CoreConfig,
+        host: crate::scoredat::HostIo,
+    ) -> anyhow::Result<Self> {
+        Self::load_with(source, gfx, true, core, host).await
     }
 
     // WinMain start-up (00 §2): archive, sound (thbgm.fmt 02 §2, SE 13 §1.1), RNG boot seed (11 §1.3), score data, then the
     // Supervisor task. `persist` = read/write the port's save files (off for tests).
-    pub async fn load_with(source: Source, gfx: Gfx, persist: bool) -> anyhow::Result<Self> {
+    pub async fn load_with(
+        source: Source,
+        gfx: Gfx,
+        persist: bool,
+        core: crate::coreconfig::CoreConfig,
+        mut host: crate::scoredat::HostIo,
+    ) -> anyhow::Result<Self> {
         let archive = Archive::from_bytes(source.read("th08.dat").await?)?;
         // Supervisor_OnRegister 0x4461A0: the exe-check version list, archive only; missing fails start-up (15 §2.10).
         let ver = archive
             .read(crate::scoredat::VER_LIST_NAME)
             .context("error : データのバージョンが違います")?;
-        crate::scoredat::set_ver_list(ver);
-        let settings = crate::settings::get();
+        host.set_ver_list(ver);
         let mut audio = Audio::new(source.clone(), &archive.read("thbgm.fmt")?);
         audio.load_se(&archive);
         audio.load_midi(&archive);
@@ -169,14 +194,14 @@ impl Ctx {
         let bgm_header = source.read_range("thbgm.dat", 0, 16).await.ok();
         let mut cfg_file = None;
         if persist {
-            cfg_file = match crate::scoredat::storage_read("th08.cfg") {
+            cfg_file = match host.read("th08.cfg") {
                 Some(f) => Some(f),
                 None => source.read("th08.cfg").await.ok(),
             };
         }
         let cfg = crate::config::load(cfg_file.as_deref(), bgm_header.as_deref())?;
         if persist {
-            crate::scoredat::storage_write("th08.cfg", &cfg.to_bytes());
+            host.write("th08.cfg", &cfg.to_bytes());
         }
         let mut ctx = Self {
             gfx,
@@ -189,6 +214,7 @@ impl Ctx {
                 Default::default()
             },
             anm: AnmManager::default(),
+            rng: Default::default(),
             tasks: Tasks::default(),
             frame: 0,
             game: Default::default(),
@@ -201,8 +227,10 @@ impl Ctx {
             bomb_areas: Vec::new(),
             timer_pause: 0,
             load_frames: 0,
-            se_log: settings.se_log,
-            settings,
+            gui_queue: Vec::new(),
+            se_log: core.se_log,
+            core,
+            host,
             drawlog: None,
             skip_counter: SKIP_START,
             init_presents: 2,
@@ -212,7 +240,8 @@ impl Ctx {
         // Music mode cfg +0x1F and BGM volume +0x27 (02 §4) from the loaded config.
         ctx.audio.set_volumes(&ctx.game.cfg);
         if persist {
-            ctx.drawlog = settings
+            ctx.drawlog = ctx
+                .core
                 .drawlog
                 .as_deref()
                 .and_then(crate::drawlog::Writer::from_spec);
@@ -220,21 +249,21 @@ impl Ctx {
         if ctx.drawlog.is_some() {
             ctx.gfx.enable_log();
         }
-        ctx.anm.rng = crate::rng::Rng::boot();
+        ctx.rng = crate::rng::Rng::boot(ctx.core.seed);
         if persist {
             // The port's own save first; else import the original's score.dat (read-only).
             // The whole file is loaded once; equivalent to the original's boot PLST take (15 §2.2, INFERRED).
-            let file = match crate::scoredat::storage_read("score.dat") {
+            let file = match ctx.host.read("score.dat") {
                 Some(f) => Some(f),
                 None => source.read("score.dat").await.ok(),
             };
-            ctx.game.load_score(file.as_deref());
+            ctx.game.load_score(file.as_deref(), &ctx.host);
             ctx.game.persist = true;
         } else {
-            ctx.game.load_score(None);
+            ctx.game.load_score(None, &ctx.host);
         }
         // Debug: `TH08_CLRD` overrides clear masks.
-        ctx.game.debug_clear_masks(settings.clrd.as_deref());
+        ctx.game.debug_clear_masks(ctx.core.clrd.as_deref());
         crate::supervisor::register(&mut ctx)?;
         Ok(ctx)
     }
@@ -352,9 +381,9 @@ impl Ctx {
     pub fn exit_save(&mut self) {
         // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
         self.audio.midi_reset();
-        self.game.save_score(&mut self.anm.rng, true);
+        self.game.save_score(&mut self.rng, true, &self.host);
         if self.game.persist {
-            crate::scoredat::storage_write("th08.cfg", &self.game.cfg.to_bytes());
+            self.host.write("th08.cfg", &self.game.cfg.to_bytes());
         }
     }
 
@@ -364,7 +393,7 @@ impl Ctx {
     // the window and device stay (the app applies the window mode), the 1 s sleep and 60 PeekMessage calls are skipped.
     pub fn restart(&mut self) -> anyhow::Result<()> {
         // Step 1: Result_Register(2) + teardown save score.dat; step 5 reloads it (the written bytes = the file).
-        let score = self.game.save_score(&mut self.anm.rng, true);
+        let score = self.game.save_score(&mut self.rng, true, &self.host);
         task::clear(self);
         self.sound_update();
         self.audio.stop_bgm();
@@ -376,16 +405,17 @@ impl Ctx {
         }
         // New ANM manager; g_GameSpeed := 1.0 (step 5; the port keeps it in the manager). Step 6: g_Rng state :=
         // (u16) timeGetTime(), the call counter +4 is kept (11 §1); AsciiManager_Load zeroes the ASCII object.
-        let mut rng = std::mem::take(&mut self.anm.rng);
-        rng.state = crate::rng::Rng::boot().state;
+        self.rng.state = crate::rng::Rng::boot(self.core.seed).state;
+        // Supervisor flag 0x20 survives: the Supervisor object is not re-constructed (00 §2).
+        let restore = self.anm.slowdown_restore;
         self.anm = AnmManager::default();
         self.anm.speed = 1.0;
-        self.anm.rng = rng;
+        self.anm.slowdown_restore = restore;
         self.info = Default::default();
         self.ascii = Default::default();
         self.skip_counter = SKIP_START;
         self.init_presents = 2;
-        self.game.load_score(Some(&score));
+        self.game.load_score(Some(&score), &self.host);
         // Step 3: scene +0x158 := 0; the original's request −1 (switch to the menu on the first calc) is the port's
         // boot request of Supervisor_Init; +0x160 stays until the boot → menu switch writes it.
         self.game.scene = crate::gamemgr::SCENE_BOOT;
@@ -429,7 +459,16 @@ mod tests {
         let dir = crate::settings::test_game_dir()?;
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
         let src = crate::assets::Source::native(dir.into());
-        Some(pollster::block_on(super::Ctx::load_with(src, gfx, false)).unwrap())
+        Some(
+            pollster::block_on(super::Ctx::load_with(
+                src,
+                gfx,
+                false,
+                crate::settings::get().core(),
+                crate::settings::get().host_io(),
+            ))
+            .unwrap(),
+        )
     }
 
     // 00 §2 restart: back to the boot scene, then logo and loading reach the menu again with the live config kept.

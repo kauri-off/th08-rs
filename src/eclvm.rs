@@ -91,7 +91,7 @@ fn run_enemy(
         }
     }
     // After all contexts: Enemy_UpdateMoveMode, then Enemy_AutoFireAndDirAnim (07 §5.2).
-    e.update_move_mode(anm.speed);
+    e.update_move_mode(anm.speed, anm.slowdown_restore);
     let mut main = std::mem::take(&mut e.main);
     Exec {
         m,
@@ -197,7 +197,7 @@ fn flt_ref(id: i32) -> Option<FRef> {
 // Variable getters (07 §6) evaluated on any enemy/context (also used for boss queries, ops 86/87).
 pub(crate) fn var_f(
     m: &mut EnemyManager,
-    anm: &mut AnmManager,
+    rng: &mut crate::rng::Rng,
     e: &Enemy,
     c: &Context,
     lit: f32,
@@ -215,7 +215,6 @@ pub(crate) fn var_f(
     if let Some(r) = int_ref(id) {
         return read_i(m, e, c, &r, rank) as f32;
     }
-    let rng = &mut anm.rng;
     match id {
         10032 => (rng.next_u32() & 0x7FFF_FFFF) as f32,
         10033 => rng.next_f32(),
@@ -240,7 +239,7 @@ pub(crate) fn var_f(
 // Int getter 0x41F420 (07 §6): float variables read through the float getter and truncate.
 pub(crate) fn var_i(
     m: &mut EnemyManager,
-    anm: &mut AnmManager,
+    rng: &mut crate::rng::Rng,
     e: &Enemy,
     c: &Context,
     id: i32,
@@ -251,9 +250,9 @@ pub(crate) fn var_i(
     }
     match id {
         // 07 §6 (0x41F5E7): Rng_Float truncated, one Next32; 1 only when it rounds up to 1.0.
-        10033 => anm.rng.next_f32() as i32,
-        10032 => (anm.rng.next_u32() & 0x7FFF_FFFF) as i32,
-        10034 => anm.rng.next_u32() as i32,
+        10033 => rng.next_f32() as i32,
+        10032 => (rng.next_u32() & 0x7FFF_FFFF) as i32,
+        10034 => rng.next_u32() as i32,
         // 07 §6: 2 if stage time + pending capture time + live time orbs ≥ TIME_THR (11 §3.1).
         10098 => {
             let pending = m.g.payout.map_or(0, |c| c.time);
@@ -275,7 +274,7 @@ pub(crate) fn var_i(
                 10035 | 10048 | 10050 | 10052 | 10083..=10091 | 10096 | 10097 | 10099
             ) =>
         {
-            var_f(m, anm, e, c, id as f32, rank) as i32
+            var_f(m, rng, e, c, id as f32, rank) as i32
         }
         _ => id,
     }
@@ -381,8 +380,8 @@ impl Exec<'_> {
                 self.e.final_pos = add3(self.e.pos, self.e.pos_offset);
                 // Wait: the clock is decremented so POST's Tick nets zero.
                 if t.ctx.wait.cur > 0 {
-                    t.ctx.wait.dec(self.anm.speed);
-                    t.ctx.clock.dec(self.anm.speed);
+                    t.ctx.wait.dec(self.anm.speed, self.anm.slowdown_restore);
+                    t.ctx.clock.dec(self.anm.speed, self.anm.slowdown_restore);
                     break 'outer;
                 }
                 let Some(ins) = self.m.ecl.ins(t.ctx.ip) else {
@@ -470,7 +469,14 @@ impl Exec<'_> {
     fn ai(&mut self, t: &Thread, ins: &Ins, k: usize) -> i32 {
         let raw = self.raw(ins, k) as i32;
         if ins.mask & (1 << k) != 0 {
-            var_i(self.m, self.anm, self.e, &t.ctx, raw, self.sys.rank.rank)
+            var_i(
+                self.m,
+                self.sys.rng,
+                self.e,
+                &t.ctx,
+                raw,
+                self.sys.rank.rank,
+            )
         } else {
             raw
         }
@@ -479,7 +485,14 @@ impl Exec<'_> {
     fn af(&mut self, t: &Thread, ins: &Ins, k: usize) -> f32 {
         let raw = f32::from_bits(self.raw(ins, k));
         if ins.mask & (1 << k) != 0 {
-            var_f(self.m, self.anm, self.e, &t.ctx, raw, self.sys.rank.rank)
+            var_f(
+                self.m,
+                self.sys.rng,
+                self.e,
+                &t.ctx,
+                raw,
+                self.sys.rank.rank,
+            )
         } else {
             raw
         }
@@ -488,7 +501,7 @@ impl Exec<'_> {
     // Same with an explicit mask bit (bullet/laser blocks, 07 §9.1, §9.4).
     fn vi(&mut self, t: &Thread, id: i32, var: bool) -> i32 {
         if var {
-            var_i(self.m, self.anm, self.e, &t.ctx, id, self.sys.rank.rank)
+            var_i(self.m, self.sys.rng, self.e, &t.ctx, id, self.sys.rank.rank)
         } else {
             id
         }
@@ -496,7 +509,7 @@ impl Exec<'_> {
 
     fn vf(&mut self, t: &Thread, v: f32, var: bool) -> f32 {
         if var {
-            var_f(self.m, self.anm, self.e, &t.ctx, v, self.sys.rank.rank)
+            var_f(self.m, self.sys.rng, self.e, &t.ctx, v, self.sys.rank.rank)
         } else {
             v
         }
@@ -643,7 +656,7 @@ impl Exec<'_> {
 
     // Random direction 0x422020 (op 67) / 0x4224A0 (op 178), 07 §8.3; one Rng_Float per line, in order.
     fn random_dir(&mut self, op178: bool) -> f32 {
-        let rng = &mut self.anm.rng;
+        let rng = &mut self.sys.rng;
         let e = &*self.e;
         let (x, y) = (e.pos[0], e.pos[1]);
         let px = self.m.g.player[0];
@@ -708,7 +721,7 @@ impl Exec<'_> {
             return;
         }
         self.anm
-            .file_set_script(&mut self.e.vm, slot, script as usize);
+            .file_set_script(self.sys.rng, &mut self.e.vm, slot, script as usize);
     }
 
     // Ops 57/61: script < 0 disables the sub VM; else AnmFile_SetScript (pos / pos offset kept, 07 §7).
@@ -720,7 +733,8 @@ impl Exec<'_> {
         if script < 0 {
             *vm = AnmVm::default();
         } else {
-            self.anm.file_set_script(vm, slot, script as usize);
+            self.anm
+                .file_set_script(self.sys.rng, vm, slot, script as usize);
         }
     }
 
@@ -814,7 +828,10 @@ impl Exec<'_> {
             let at = if op == 92 { c.final_pos } else { c.pos };
             let contact = c.flags & A_CONTACT != 0;
             let odd = c.slot & 1 != 0;
-            let fx = self.sys.fx.spawn_high(self.anm, 0x20, at, 0xFFFFFFFF);
+            let fx = self
+                .sys
+                .fx
+                .spawn_high(self.anm, self.sys.rng, 0x20, at, 0xFFFFFFFF);
             self.sys.fx.get(fx, |x| {
                 x.vm.pending_interrupt = if youkai { 2 } else { 1 };
                 // VM bit 17 := flags A bit 2 (just cleared); odd slot negates VM +0x14 (z angular velocity).
@@ -952,11 +969,11 @@ impl Exec<'_> {
         };
         d.origin = add3(self.e.final_pos, self.e.shot_offset);
         self.e.laser_desc = d.clone();
-        let id = self
-            .m
-            .bullets
-            .borrow_mut()
-            .spawn_laser(self.anm, &d, self.m.g.player);
+        let id =
+            self.m
+                .bullets
+                .borrow_mut()
+                .spawn_laser(self.anm, self.sys.rng, &d, self.m.g.player);
         let cur = self.e.laser_cur.min(31);
         self.e.lasers[cur] = id;
     }
@@ -1005,7 +1022,7 @@ impl Exec<'_> {
             .bullets
             .borrow_mut()
             .items
-            .spawn(self.anm, &p, pos, kind, 0);
+            .spawn(self.anm, self.sys.rng, &p, pos, kind, 0);
     }
 
     fn cancel_all(&mut self, mode: i32) {
@@ -1013,7 +1030,7 @@ impl Exec<'_> {
         self.m
             .bullets
             .borrow_mut()
-            .cancel_all(self.anm, &mut p, mode);
+            .cancel_all(self.anm, self.sys.rng, &mut p, mode);
     }
 
     // Ops 142 / 168 (07 §7): offsets Rng·128 − 64 on x then y; 142 below full power: first type 2, rest 0.
@@ -1021,8 +1038,8 @@ impl Exec<'_> {
         let p = self.e.pos;
         let low = self.m.player.borrow().stats.power < 128.0;
         for i in 0..n.max(0) {
-            let dx = self.anm.rng.next_f32() * 128.0 - 64.0;
-            let dy = self.anm.rng.next_f32() * 128.0 - 64.0;
+            let dx = self.sys.rng.next_f32() * 128.0 - 64.0;
+            let dy = self.sys.rng.next_f32() * 128.0 - 64.0;
             let kind = if all_one || !low {
                 1
             } else if i == 0 {
@@ -1170,11 +1187,16 @@ impl Exec<'_> {
                     _ => (0x41, 99),
                 };
                 let pos = self.e.final_pos;
-                self.sys.fx.spawn_fixed(self.anm, kind, pos, 9, 0xFFFFFFFF);
-                let i = self.sys.fx.spawn_fixed(self.anm, kind, pos, 10, 0xFFFFFFFF);
+                self.sys
+                    .fx
+                    .spawn_fixed(self.anm, self.sys.rng, kind, pos, 9, 0xFFFFFFFF);
+                let i = self
+                    .sys
+                    .fx
+                    .spawn_fixed(self.anm, self.sys.rng, kind, pos, 10, 0xFFFFFFFF);
                 let anm = &mut *self.anm;
                 self.sys.fx.get(i, |e| {
-                    anm.set_script(&mut e.vm, crate::effect::SCRIPT_SLOT, extra)
+                    anm.set_script(self.sys.rng, &mut e.vm, crate::effect::SCRIPT_SLOT, extra)
                 });
             }
             5 => {
@@ -1265,7 +1287,7 @@ impl Exec<'_> {
                 let f = 1.0 / self.anm.speed;
                 self.m.bullets.borrow_mut().slow_down_restore(self.anm, f);
                 if 1.0 / (arg as f32) < 1.0 {
-                    anmvm::set_slowdown_restore(true);
+                    self.anm.slowdown_restore = true;
                 }
                 self.anm.speed = 1.0;
                 self.stage_interrupt(1);
@@ -1282,14 +1304,14 @@ impl Exec<'_> {
                     .encode("「リザレクション」")
                     .0
                     .into_owned();
-                crate::gui::request(crate::gui::Req::BossShow {
+                self.sys.gui.push(crate::gui::Req::BossShow {
                     face: -1,
                     name,
                     card: -1,
                     name_only: true,
                 });
             }
-            23 => crate::gui::request(crate::gui::Req::BossHide),
+            23 => self.sys.gui.push(crate::gui::Req::BossHide),
             // Bullet warp (07 §12).
             4 => self.warp(&Warp::native4()),
             7 => self.warp(&Warp::native7()),
@@ -1345,7 +1367,7 @@ impl Exec<'_> {
         }
         // Player_OnGraze drops its time orbs (item type 10) at the point it was given: the player pos.
         for _ in 0..orbs {
-            b.items.spawn(self.anm, &pl, pl.pos, 10, 0);
+            b.items.spawn(self.anm, self.sys.rng, &pl, pl.pos, 10, 0);
         }
     }
 
@@ -1496,7 +1518,7 @@ impl Exec<'_> {
             spell.bonus,
             self.m.clock.cur
         );
-        self.m.pay_capture(self.anm, false, &mut self.sys);
+        self.m.pay_capture(false, &mut self.sys);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
         self.m.g.spell_boss = Some(self.idx);
         (self.m.g.spell_flag6, self.m.g.bonus_frozen) = (false, false);
@@ -1505,13 +1527,13 @@ impl Exec<'_> {
         // HUD +0x04 |= 0xF: lives and bombs fields := 3 (12 §5.3).
         self.sys.panel.mark_lives(3);
         self.sys.panel.mark_bombs(3);
-        crate::gui::request(crate::gui::Req::BossShow {
+        self.sys.gui.push(crate::gui::Req::BossShow {
             face: spell.face,
             name: spell.name.clone(),
             card: spell.id,
             name_only: false,
         });
-        crate::gui::request(crate::gui::Req::Attempt {
+        self.sys.gui.push(crate::gui::Req::Attempt {
             card: spell.id,
             name: spell.name.clone(),
             owner: spell.owner.clone(),
@@ -1521,11 +1543,13 @@ impl Exec<'_> {
         // Timer +0x108 (remaining) := e+0x3378 (07 §11.1).
         self.m.g.spell_remaining.set(self.e.timeout);
         if let Some(st) = &self.m.stage {
-            st.borrow_mut().start_spell_bg(self.anm);
+            st.borrow_mut().start_spell_bg(self.anm, self.sys.rng);
         }
         // Ring at the boss pos e+0x2D34 (not the final pos); type 52 while GameFlags bits 7–8 ≠ 0 (07 §11.1).
         let special = self.m.player.borrow().special(*self.sys.flags);
-        self.sys.fx.spell_ring(self.anm, self.e.pos, special);
+        self.sys
+            .fx
+            .spell_ring(self.anm, self.sys.rng, self.e.pos, special);
         self.cancel_all(1);
         self.e.reset_rank_ranges();
     }
@@ -1560,7 +1584,7 @@ impl Exec<'_> {
             // Random sign: one Rng_Next16, bit 0.
             8 => {
                 let b = self.ai(t, ins, 1);
-                let v = if self.anm.rng.next_u16() & 1 != 0 {
+                let v = if self.sys.rng.next_u16() & 1 != 0 {
                     b
                 } else {
                     -b
@@ -1569,7 +1593,7 @@ impl Exec<'_> {
             }
             9 => {
                 let b = self.af(t, ins, 1);
-                let v = if self.anm.rng.next_u16() & 1 != 0 {
+                let v = if self.sys.rng.next_u16() & 1 != 0 {
                     b
                 } else {
                     -b
@@ -1938,10 +1962,10 @@ impl Exec<'_> {
                         None => (&*self.e, &t.ctx),
                     };
                     if op == 86 {
-                        let v = var_i(self.m, self.anm, e, ctx, var, self.sys.rank.rank);
+                        let v = var_i(self.m, self.sys.rng, e, ctx, var, self.sys.rank.rank);
                         self.set_i(t, ins, 0, v);
                     } else {
-                        let v = var_f(self.m, self.anm, e, ctx, var as f32, self.sys.rank.rank);
+                        let v = var_f(self.m, self.sys.rng, e, ctx, var as f32, self.sys.rank.rank);
                         self.set_f(t, ins, 0, v);
                     }
                 }
@@ -2000,7 +2024,7 @@ impl Exec<'_> {
                 let n = self.ai(t, ins, 0);
                 let iv = n + lerp_i(n / 5, -n / 5, self.sys.rank.rank);
                 self.e.autofire_interval = iv;
-                let start = if op == 106 { self.anm.rng.range(iv) } else { 0 };
+                let start = if op == 106 { self.sys.rng.range(iv) } else { 0 };
                 self.e.autofire_timer.set(start);
             }
             107 => self.e.flags |= A_STORE_FIRE,
@@ -2122,7 +2146,10 @@ impl Exec<'_> {
                 let w = |k| f32::from_bits(self.raw(ins, k));
                 let axis = [w(1), w(2), w(3)];
                 self.e.orbit_target = w(4);
-                let i = self.sys.fx.spawn(self.anm, 13, self.e.pos, 1, 0xFF6060D0);
+                let i = self
+                    .sys
+                    .fx
+                    .spawn(self.anm, self.sys.rng, 13, self.e.pos, 1, 0xFF6060D0);
                 if i != crate::effect::NONE {
                     self.sys.fx.get(i, |x| x.dir = axis);
                     self.e.fx_attached.push(i);
@@ -2131,17 +2158,28 @@ impl Exec<'_> {
             139 => {
                 self.e.effects += 1;
                 let (id, n, c) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.ai(t, ins, 2));
-                self.sys
-                    .fx
-                    .spawn(self.anm, id as u8, self.e.final_pos, n, c as u32);
+                self.sys.fx.spawn(
+                    self.anm,
+                    self.sys.rng,
+                    id as u8,
+                    self.e.final_pos,
+                    n,
+                    c as u32,
+                );
             }
             140 => {
                 self.e.effects += 1;
                 let (id, n, c) = (self.ai(t, ins, 0), self.ai(t, ins, 1), self.ai(t, ins, 2));
                 let param = [self.af(t, ins, 3), self.af(t, ins, 4), self.af(t, ins, 5)];
-                self.sys
-                    .fx
-                    .spawn_param(self.anm, id as u8, self.e.final_pos, param, n, c as u32);
+                self.sys.fx.spawn_param(
+                    self.anm,
+                    self.sys.rng,
+                    id as u8,
+                    self.e.final_pos,
+                    param,
+                    n,
+                    c as u32,
+                );
             }
             174 => {
                 self.e.effects += 1;
@@ -2149,6 +2187,7 @@ impl Exec<'_> {
                 self.sys.fx.free(self.e.fx_aura);
                 self.e.fx_aura = self.sys.fx.spawn_high(
                     self.anm,
+                    self.sys.rng,
                     (0x20 + n) as u8,
                     self.e.final_pos,
                     0xFFFFFFFF,
@@ -2333,10 +2372,13 @@ impl Exec<'_> {
             161 => {
                 let r = self.af(t, ins, 0);
                 let p = self.m.player.borrow();
-                self.m
-                    .bullets
-                    .borrow_mut()
-                    .cancel_radius(self.anm, &p, self.e.final_pos, r);
+                self.m.bullets.borrow_mut().cancel_radius(
+                    self.anm,
+                    self.sys.rng,
+                    &p,
+                    self.e.final_pos,
+                    r,
+                );
             }
             163 => self.m.g.g_f54cec = self.ai(t, ins, 0),
             // Not implemented: op 164 spell flag bit 6 / 0x41F040 (0 uses in data).
@@ -2352,7 +2394,7 @@ impl Exec<'_> {
             // Leftward / rightward cone from one Rng_Float (07 §7 op 169).
             169 => {
                 let (x, px) = (self.e.pos[0], self.m.g.player[0]);
-                let r = self.anm.rng.next_f32() * (PI / 2.0);
+                let r = self.sys.rng.next_f32() * (PI / 2.0);
                 let a = if x > px && x > 96.0 || x > 288.0 {
                     anmvm::wrap_add(r + 3.0 * PI / 4.0, 0.0)
                 } else {
@@ -2478,6 +2520,7 @@ mod tests {
 
     // Subs placed after a zeroed 0x48-byte header; each ends with an op −1 marker.
     fn manager(subs: &[&[Vec<u8>]]) -> (AnmManager, EnemyManager) {
+        let mut rng = crate::rng::Rng::default();
         let mut data = vec![0u8; 0x48];
         let mut offs = Vec::new();
         for sub in subs {
@@ -2494,7 +2537,7 @@ mod tests {
         };
         let mut anm = AnmManager::default();
         let player = crate::player::Player::new_ref();
-        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, player)));
+        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, &mut rng, player)));
         (anm, EnemyManager::new(ecl, bullets, 1))
     }
 
@@ -2574,11 +2617,12 @@ mod tests {
     // 07 §6 var 10099: card active ? spell bit 2 : spell bit 9 (captured).
     #[test]
     fn var_10099_spell_state() {
-        let (mut anm, mut m) = manager(&[&[]]);
+        let (_, mut m) = manager(&[&[]]);
         spawn(&mut m, 0, 0, -1, 0);
+        let mut rng = crate::rng::Rng::default();
         let mut read = |m: &mut EnemyManager| {
             let e = m.enemies[0].clone();
-            var_i(m, &mut anm, &e, &e.main.ctx, 10099, 0)
+            var_i(m, &mut rng, &e, &e.main.ctx, 10099, 0)
         };
         m.g.spell_captured = true;
         assert_eq!(read(&mut m), 1);
@@ -3091,13 +3135,14 @@ mod tests {
     // 07 §6: an int read of 10033 draws one Next32 and truncates Rng_Float.
     #[test]
     fn int_read_10033_draws() {
-        let (mut anm, mut m) = manager(&[&[]]);
+        let (_, mut m) = manager(&[&[]]);
         spawn(&mut m, 0, 0, -1, 0);
-        let mut r = anm.rng.clone();
+        let mut rng = crate::rng::Rng::default();
+        let mut r = rng.clone();
         r.next_u32();
         let e = m.enemies[0].clone();
-        assert_eq!(var_i(&mut m, &mut anm, &e, &e.main.ctx, 10033, 0), 0);
-        assert_eq!(anm.rng.next_u16(), r.next_u16());
+        assert_eq!(var_i(&mut m, &mut rng, &e, &e.main.ctx, 10033, 0), 0);
+        assert_eq!(rng.next_u16(), r.next_u16());
     }
 
     // 07 §4.2 / §5.5: an unregistered index enters sub 0 (table zero-filled); a negative entry still skips the
@@ -3227,7 +3272,7 @@ mod tests {
         spawn(&mut m, 0, 0, -1, 0);
         spawn(&mut m, 1, 0, -1, 0);
         m.bosses = [Some(0), Some(1), None, None];
-        let mut rng = anm.rng.clone();
+        let mut rng = sys.rng.clone();
         let (f, i) = (
             rng.next_f32() * 2.0 * PI - PI,
             (rng.next_u32() & 0x7FFF_FFFF) as i32,
@@ -3235,7 +3280,7 @@ mod tests {
         ecl_run(&mut m, &mut anm, 0, sys);
         let ctx = &m.enemies[0].main.ctx;
         assert_eq!((ctx.flt(V_FLT0), ctx.vars[V_INT0] as i32), (f, i));
-        assert_eq!(anm.rng.state, rng.state);
+        assert_eq!(sys.rng.state, rng.state);
     }
 
     // 07 op 93/94 and §10.5: a spawner with life ≤ 0 reads no argument (no RNG draw from var 10032); ops 90–92 set
@@ -3255,15 +3300,15 @@ mod tests {
                 let (mut anm, mut m) = manager(&[&[ins_v(0, op, 2, args)], &[]]);
                 spawn(&mut m, 0, 0, -1, 0);
                 m.enemies[0].life = life;
-                let mut r = anm.rng.clone();
+                let mut r = sys.rng.clone();
                 ecl_run(&mut m, &mut anm, 0, sys);
                 if life == 0 {
-                    assert_eq!(anm.rng.next_u16(), r.next_u16());
+                    assert_eq!(sys.rng.next_u16(), r.next_u16());
                     assert!(!m.enemies[1].alive());
                     assert_eq!(m.full, op == 90);
                 } else {
                     r.next_u32();
-                    assert_eq!(anm.rng.next_u16(), r.next_u16());
+                    assert_eq!(sys.rng.next_u16(), r.next_u16());
                     assert!(m.enemies[1].alive());
                 }
             }
@@ -3299,18 +3344,19 @@ mod tests {
     // 07 §6 var 10100: the remaining-time timer +0x108, also with no card active.
     #[test]
     fn var_10100_remaining_timer() {
-        let (mut anm, mut m) = manager(&[&[]]);
+        let (_, mut m) = manager(&[&[]]);
+        let mut rng = crate::rng::Rng::default();
         spawn(&mut m, 0, 0, -1, 0);
         assert_eq!(m.g.spell_remaining.cur, 0);
         m.g.spell_remaining.set(764);
-        m.g.spell_remaining.dec(1.0);
+        m.g.spell_remaining.dec(1.0, false);
         let e = m.enemies[0].clone();
         assert!(m.g.spell.is_none());
-        assert_eq!(var_i(&mut m, &mut anm, &e, &e.main.ctx, 10100, 0), 763);
+        assert_eq!(var_i(&mut m, &mut rng, &e, &e.main.ctx, 10100, 0), 763);
         for _ in 0..4 {
-            m.g.spell_remaining.dec(0.25);
+            m.g.spell_remaining.dec(0.25, false);
         }
-        assert_eq!(var_i(&mut m, &mut anm, &e, &e.main.ctx, 10100, 0), 762);
+        assert_eq!(var_i(&mut m, &mut rng, &e, &e.main.ctx, 10100, 0), 762);
     }
 
     fn child_op(op: i16, sub: i32) -> Vec<u8> {
@@ -3495,9 +3541,9 @@ mod tests {
             m.enemies[0].pos = [10.0, 20.0, 0.0];
             m.enemies[0].final_pos = [10.0, 20.0, 0.0];
             m.g.player = [30.0, 20.0, 0.0];
-            let before = anm.rng.counter;
+            let before = sys.rng.counter;
             ecl_run(&mut m, &mut anm, 0, sys);
-            assert_eq!(anm.rng.counter, before, "flags {flags:#x}");
+            assert_eq!(sys.rng.counter, before, "flags {flags:#x}");
         }
     }
 }

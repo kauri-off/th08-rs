@@ -15,6 +15,7 @@ pub mod audio;
 pub mod bomb;
 pub mod bullet;
 pub mod config;
+pub mod coreconfig;
 pub mod d3dx;
 pub mod demosync;
 pub mod drawlog;

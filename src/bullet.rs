@@ -424,14 +424,14 @@ pub struct BulletManager {
 
 impl BulletManager {
     // BulletManager_Load 0x433070 (08 §2.1): one template per type with its 5 VMs (etama.anm in ANM_SLOT).
-    pub fn new(anm: &mut AnmManager, player: PlayerRef) -> Self {
+    pub fn new(anm: &mut AnmManager, rng: &mut crate::rng::Rng, player: PlayerRef) -> Self {
         let templates = (0..TYPES)
             .map(|t| {
                 let s = MAIN_SCRIPTS[t];
                 let e = effect_scripts(t);
                 let vms = [s, e[0], e[1], e[2], e[3]].map(|sc| {
                     let mut vm = AnmVm::default();
-                    anm.set_script(&mut vm, ANM_SLOT, sc);
+                    anm.set_script(rng, &mut vm, ANM_SLOT, sc);
                     vm.flags |= anmvm::F_ZWRITE_OFF;
                     vm
                 });
@@ -471,6 +471,7 @@ impl BulletManager {
             .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "etama.anm")?;
         let b = Rc::new(RefCell::new(BulletManager::new(
             &mut ctx.anm,
+            &mut ctx.rng,
             player.clone(),
         )));
         player.borrow_mut().world = Rc::downgrade(&b);
@@ -510,7 +511,13 @@ impl BulletManager {
     }
 
     // Speed and angle of bullet (i, j) (07 §9.3). RNG: mode 6 one Float, 7 one, 8 angle first then speed.
-    fn pattern_angle(anm: &mut AnmManager, d: &BulletDesc, i: i32, j: i32, aim: f32) -> (f32, f32) {
+    fn pattern_angle(
+        rng: &mut crate::rng::Rng,
+        d: &BulletDesc,
+        i: i32,
+        j: i32,
+        aim: f32,
+    ) -> (f32, f32) {
         let (c1, c2) = (d.count1 as i32, d.count2 as i32);
         let (a1, a2) = (d.angle1, d.angle2);
         let tau = 2.0 * PI;
@@ -543,14 +550,14 @@ impl BulletManager {
             // 07 §9.3 op 100: ((i·2π)/c1 + (π/c1 + (0 + aim))) + a1 (RE-Q56).
             4 => (i as f32 * tau / c1 as f32 + (PI / c1 as f32 + (0.0 + aim))) + a1,
             5 => i as f32 * tau / c1 as f32 + PI / c1 as f32 + a1,
-            6 => anm.rng.next_f32() * (a1 - a2) + a2,
+            6 => rng.next_f32() * (a1 - a2) + a2,
             7 => {
-                speed = anm.rng.next_f32() * (d.speed1 - d.speed2) + d.speed2;
+                speed = rng.next_f32() * (d.speed1 - d.speed2) + d.speed2;
                 ring
             }
             _ => {
-                let a = anm.rng.next_f32() * (a1 - a2) + a2;
-                speed = anm.rng.next_f32() * (d.speed1 - d.speed2) + d.speed2;
+                let a = rng.next_f32() * (a1 - a2) + a2;
+                speed = rng.next_f32() * (d.speed1 - d.speed2) + d.speed2;
                 a
             }
         };
@@ -586,7 +593,7 @@ impl BulletManager {
             idx += 1;
         }
         let Some(idx) = found else { return false };
-        let (speed, angle) = Self::pattern_angle(anm, d, i, j, aim);
+        let (speed, angle) = Self::pattern_angle(sys.rng, d, i, j, aim);
         let gs = anm.speed;
         let t = &self.templates[(d.kind.max(0) as usize).min(TYPES - 1)];
         let b = &mut self.bullets[idx];
@@ -785,7 +792,7 @@ impl BulletManager {
     }
 
     // Motion handlers for every running extra command (08 §5.3), in the order of 08 §4.1 step 2.
-    fn motion(b: &mut Bullet, gs: f32, ppos: [f32; 3], sys: &mut Sys) {
+    fn motion(b: &mut Bullet, gs: f32, sr: bool, ppos: [f32; 3], sys: &mut Sys) {
         let st = &mut b.st;
         if b.active & 0x1 != 0 {
             // t includes the sub-frame part at game speed < 1.
@@ -880,27 +887,33 @@ impl BulletManager {
             if st.wrap.cur <= 0 {
                 b.active &= !bit;
             } else {
-                st.wrap.dec(gs);
+                st.wrap.dec(gs, sr);
             }
         }
         if b.active & 0x20000 != 0 {
             if st.wait.cur <= 0 {
                 b.active &= !0x20000;
             } else {
-                st.wait.dec(gs);
+                st.wait.dec(gs, sr);
             }
         }
     }
 
     // Bomb drop (08 §4.1): item type player+0xE2A90; 9 → two time orbs, −1 → none; item mode 1.
-    fn bomb_drop(items: &mut ItemManager, anm: &mut AnmManager, p: &Player, pos: [f32; 3]) {
+    fn bomb_drop(
+        items: &mut ItemManager,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        p: &Player,
+        pos: [f32; 3],
+    ) {
         match p.cancel_item {
             9 => {
-                items.spawn(anm, p, pos, 7, 1);
-                items.spawn(anm, p, pos, 7, 1);
+                items.spawn(anm, rng, p, pos, 7, 1);
+                items.spawn(anm, rng, p, pos, 7, 1);
             }
             k if k >= 0 => {
-                items.spawn(anm, p, pos, k, 1);
+                items.spawn(anm, rng, p, pos, k, 1);
             }
             _ => {}
         }
@@ -926,7 +939,7 @@ impl BulletManager {
         let freeze = *sys.timer_pause != 0;
         let b = &mut self.bullets[idx];
         if b.active != 0 {
-            Self::motion(b, gs, p.pos, sys);
+            Self::motion(b, gs, anm.slowdown_restore, p.pos, sys);
         }
         if b.grace > 0 {
             b.grace -= 1;
@@ -965,14 +978,14 @@ impl BulletManager {
                         self.bullets[idx].grazed = true;
                         // Graze time orbs, item type 10 (08 §8.3).
                         for _ in 0..orbs {
-                            self.items.spawn(anm, p, pos, 10, 0);
+                            self.items.spawn(anm, sys.rng, p, pos, 10, 0);
                         }
                     }
                     2 => {
                         hit_test = false;
                         if self.bullets[idx].flags & F_NO_CANCEL == 0 {
                             self.bullets[idx].state = 5;
-                            Self::bomb_drop(&mut self.items, anm, p, pos);
+                            Self::bomb_drop(&mut self.items, anm, sys.rng, p, pos);
                         }
                     }
                     _ => hit_test = false,
@@ -988,7 +1001,7 @@ impl BulletManager {
                     }
                     2 if self.bullets[idx].flags & F_NO_CANCEL == 0 => {
                         self.bullets[idx].state = 5;
-                        Self::bomb_drop(&mut self.items, anm, p, pos);
+                        Self::bomb_drop(&mut self.items, anm, sys.rng, p, pos);
                     }
                     _ => {}
                 }
@@ -996,7 +1009,7 @@ impl BulletManager {
         }
         let b = &mut self.bullets[idx];
         if b.vms[0].script.is_some() {
-            b.vms[0].run(anm);
+            b.vms[0].run(anm, sys.rng);
         }
         b.state_timer.tick(gs);
         b.age.tick(gs);
@@ -1013,7 +1026,7 @@ impl BulletManager {
             // Spawn effect (08 §4.2): the age does not advance net.
             2..=4 => {
                 let b = &mut self.bullets[idx];
-                b.age.dec(gs);
+                b.age.dec(gs, anm.slowdown_restore);
                 // 08 §4.2: Vec3_DivScalar multiplies by f32(1/d), not vel / d (1 ulp apart for d = 3).
                 let r = 1.0f32 / [2.0f32, 2.5, 3.0][(b.state - 2) as usize];
                 for a in 0..3 {
@@ -1023,12 +1036,12 @@ impl BulletManager {
                     b.cancel_after_spawn = true;
                 }
                 let e = b.effect;
-                if b.vms[e].run(anm) {
+                if b.vms[e].run(anm, sys.rng) {
                     // Quirk kept (08 §4.2): the drop's state 5 is overwritten by state 1, the bullet survives
                     // and its same-frame state-1 update can hit the bomb area again (a second drop).
                     if b.cancel_after_spawn {
                         let pos = b.pos;
-                        Self::bomb_drop(&mut self.items, anm, p, pos);
+                        Self::bomb_drop(&mut self.items, anm, sys.rng, p, pos);
                     }
                     let b = &mut self.bullets[idx];
                     b.state = 1;
@@ -1046,7 +1059,7 @@ impl BulletManager {
                 for a in 0..3 {
                     b.pos[a] += b.vel[a] / 2.0;
                 }
-                if b.vms[4].run(anm) {
+                if b.vms[4].run(anm, sys.rng) {
                     b.state = 0;
                 } else {
                     self.push(idx);
@@ -1060,6 +1073,7 @@ impl BulletManager {
     pub fn spawn_laser(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         d: &LaserDesc,
         ppos: [f32; 3],
     ) -> Option<usize> {
@@ -1091,7 +1105,12 @@ impl BulletManager {
             ..Laser::default()
         };
         // Body script = type + 10, emitter 0x92 + 0x4C70F8[colour] with blend bits 4–5 := 1 (08 §6.1).
-        anm.set_script(&mut l.body, ANM_SLOT, (d.kind as i32 + 10).max(0) as usize);
+        anm.set_script(
+            rng,
+            &mut l.body,
+            ANM_SLOT,
+            (d.kind as i32 + 10).max(0) as usize,
+        );
         let sp = l.body.sprite_index as i32 + d.colour as i32;
         l.body.set_sprite(anm, sp);
         // Emitter: AnmVm_InitWithSprite 0x4068A0 = AnmVm_Init + sprite 0x92 + n, no script (08 §6.1).
@@ -1204,7 +1223,7 @@ impl BulletManager {
                 l.alive = false;
             } else {
                 l.timer.tick(gs);
-                l.body.run(anm);
+                l.body.run(anm, sys.rng);
             }
         }
         // A hit's Player_Die ends with DropAttracted; nothing touches the items between it and here.
@@ -1212,7 +1231,7 @@ impl BulletManager {
             self.items.drop_attracted();
         }
         for _ in 0..orbs {
-            self.items.spawn(anm, p, p.pos, 10, 0);
+            self.items.spawn(anm, sys.rng, p, p.pos, 10, 0);
         }
     }
 
@@ -1221,6 +1240,7 @@ impl BulletManager {
     fn cancel_lasers(
         &mut self,
         anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
         p: &Player,
         mode: i32,
         items: bool,
@@ -1240,12 +1260,18 @@ impl BulletManager {
                     let (o, a, tail, head) = (l.origin, l.angle, l.tail, l.head);
                     let (s, c) = sin_cos_f(a);
                     if bonus {
-                        self.items.spawn(anm, p, o, CANCEL_ITEM, 1);
+                        self.items.spawn(anm, rng, p, o, CANCEL_ITEM, 1);
                     }
                     let mut d = tail;
                     while d < head {
-                        self.items
-                            .spawn(anm, p, [o[0] + c * d, o[1] + s * d, 0.0], CANCEL_ITEM, 1);
+                        self.items.spawn(
+                            anm,
+                            rng,
+                            p,
+                            [o[0] + c * d, o[1] + s * d, 0.0],
+                            CANCEL_ITEM,
+                            1,
+                        );
                         d += 32.0;
                     }
                 }
@@ -1256,7 +1282,13 @@ impl BulletManager {
 
     // BulletMgr_CancelAll 0x430830 (08 §7): mode 4 → state 5 without items; else item type 6 with item mode
     // `mode`; bomb-area bullets drop the raw bomb item. Sets the 10-frame cancel guard.
-    pub fn cancel_all(&mut self, anm: &mut AnmManager, p: &mut Player, mode: i32) {
+    pub fn cancel_all(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        p: &mut Player,
+        mode: i32,
+    ) {
         for i in 0..MAX_BULLETS {
             let b = &self.bullets[i];
             if b.free() || b.state == 5 {
@@ -1266,23 +1298,29 @@ impl BulletManager {
             // 08 §7: the original calls Player_InBombArea twice and drops the first result (hit counter +2).
             p.in_bomb_area(pos);
             if p.in_bomb_area(pos) {
-                Self::cancel_drop(&mut self.items, anm, p, pos);
+                Self::cancel_drop(&mut self.items, anm, rng, p, pos);
                 self.zero_slot(i);
             } else if mode == 4 {
                 self.bullets[i].state = 5;
             } else {
-                self.items.spawn(anm, p, pos, CANCEL_ITEM, mode as u8);
+                self.items.spawn(anm, rng, p, pos, CANCEL_ITEM, mode as u8);
                 self.zero_slot(i);
             }
         }
-        self.cancel_lasers(anm, p, mode, mode != 4, false);
+        self.cancel_lasers(anm, rng, p, mode, mode != 4, false);
         self.cancel_guard = 10;
     }
 
     // Bomb-area item of the cancels (08 §7): the raw player+0xE2A90 with mode 1, without the §4.1 9/−1 mapping.
-    fn cancel_drop(items: &mut ItemManager, anm: &mut AnmManager, p: &Player, pos: [f32; 3]) {
+    fn cancel_drop(
+        items: &mut ItemManager,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        p: &Player,
+        pos: [f32; 3],
+    ) {
         // A raw −1 (area item "none") is spawned as type 0xFF (08 §8.3).
-        items.spawn(anm, p, pos, p.cancel_item, 1);
+        items.spawn(anm, rng, p, pos, p.cancel_item, 1);
     }
 
     // "Slot zeroed" (08 §7): CancelAll / CancelRadius memset the whole 0x10B8-byte bullet, off-screen counter
@@ -1310,9 +1348,9 @@ impl BulletManager {
             b.state = 5;
             let pos = b.pos;
             if p.in_bomb_area(pos) {
-                Self::cancel_drop(&mut self.items, anm, p, pos);
+                Self::cancel_drop(&mut self.items, anm, sys.rng, p, pos);
             } else {
-                self.items.spawn(anm, p, pos, CANCEL_ITEM, 1);
+                self.items.spawn(anm, sys.rng, p, pos, CANCEL_ITEM, 1);
             }
             sys.ov.popup(
                 pos,
@@ -1326,13 +1364,20 @@ impl BulletManager {
             sum += v;
             v = (v + 20).min(max_value);
         }
-        self.cancel_lasers(anm, p, 1, lasers_too, true);
+        self.cancel_lasers(anm, sys.rng, p, 1, lasers_too, true);
         self.cancel_guard = 10;
         sum
     }
 
     // BulletMgr_CancelRadius 0x430D30 (08 §7): |pos − c|² ≤ r².
-    pub fn cancel_radius(&mut self, anm: &mut AnmManager, p: &Player, c: [f32; 3], r: f32) {
+    pub fn cancel_radius(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        p: &Player,
+        c: [f32; 3],
+        r: f32,
+    ) {
         for i in 0..MAX_BULLETS {
             let b = &mut self.bullets[i];
             if b.free() || b.state == 5 {
@@ -1341,7 +1386,7 @@ impl BulletManager {
             let (dx, dy) = (b.pos[0] - c[0], b.pos[1] - c[1]);
             if dx * dx + dy * dy <= r * r {
                 let pos = b.pos;
-                self.items.spawn(anm, p, pos, CANCEL_ITEM, 1);
+                self.items.spawn(anm, rng, p, pos, CANCEL_ITEM, 1);
                 self.zero_slot(i);
             }
         }
@@ -1470,9 +1515,9 @@ impl BulletManager {
             anm,
             &mut p,
             spell,
-            |it, anm, p| {
+            |it, anm, rng, p| {
                 std::mem::swap(&mut self.items, it);
-                self.cancel_all(anm, p, 1);
+                self.cancel_all(anm, rng, p, 1);
                 std::mem::swap(&mut self.items, it);
             },
             sys,
@@ -1622,11 +1667,12 @@ mod tests {
     use crate::player::Player;
 
     fn mgr() -> (AnmManager, BulletManager) {
+        let mut rng = crate::rng::Rng::default();
         let mut anm = AnmManager::default();
         let p = Player::new_ref();
         p.borrow_mut().pos = [-1000.0, -1000.0, 0.0];
         p.borrow_mut().update_boxes();
-        let b = BulletManager::new(&mut anm, p);
+        let b = BulletManager::new(&mut anm, &mut rng, p);
         (anm, b)
     }
 
@@ -1671,7 +1717,7 @@ mod tests {
     // 07 §9.3 ops 96/100: aim is added before a1, left to right (RE-Q54 AB).
     #[test]
     fn pattern_angle_add_order() {
-        let mut anm = AnmManager::default();
+        let mut rng = crate::rng::Rng::default();
         let (aim, a1, a2) = (2.3456789f32, 0.123456f32, 0.0711f32);
         let mut d = BulletDesc {
             aim_mode: 0,
@@ -1686,13 +1732,13 @@ mod tests {
             if i % 2 == 1 {
                 k = -k;
             }
-            let (_, a) = BulletManager::pattern_angle(&mut anm, &d, i, 0, aim);
+            let (_, a) = BulletManager::pattern_angle(&mut rng, &d, i, 0, aim);
             assert_eq!(a.to_bits(), ((k + aim) + a1).to_bits());
         }
         d.aim_mode = 4;
         for i in 0..4 {
             let x = i as f32 * (2.0 * PI) / 4.0;
-            let (_, a) = BulletManager::pattern_angle(&mut anm, &d, i, 0, aim);
+            let (_, a) = BulletManager::pattern_angle(&mut rng, &d, i, 0, aim);
             assert_eq!(a.to_bits(), ((x + (PI / 4.0 + (0.0 + aim))) + a1).to_bits());
         }
         d.aim_mode = 2;
@@ -1700,7 +1746,7 @@ mod tests {
         for i in 0..4 {
             for j in 0..3 {
                 let x = i as f32 * (2.0 * PI) / 4.0;
-                let (_, a) = BulletManager::pattern_angle(&mut anm, &d, i, j, aim);
+                let (_, a) = BulletManager::pattern_angle(&mut rng, &d, i, j, aim);
                 assert_eq!(
                     a.to_bits(),
                     ((j as f32 * a2 + a1) + (x + (0.0 + aim))).to_bits()
@@ -1994,7 +2040,7 @@ mod tests {
         };
         b.spawn_pattern(&mut anm, &d, [0.0; 3], sys);
         let pl = b.player.clone();
-        b.cancel_all(&mut anm, &mut pl.borrow_mut(), 1);
+        b.cancel_all(&mut anm, sys.rng, &mut pl.borrow_mut(), 1);
         assert_eq!(b.live_bullets().count(), 0);
         let items: Vec<_> = b.items.live().map(|i| (i.kind, i.state)).collect();
         assert_eq!(items, vec![(6, 1); 5]);
@@ -2003,7 +2049,7 @@ mod tests {
         assert_eq!(b.bullets[i].state, 5);
         let j = spawn(&mut anm, &mut b, &desc(0.0, 1.0, F_NO_CANCEL, &[]), sys);
         assert_eq!(b.bullets[j].state, 1);
-        b.cancel_all(&mut anm, &mut pl.borrow_mut(), 4);
+        b.cancel_all(&mut anm, sys.rng, &mut pl.borrow_mut(), 4);
         assert_eq!(b.bullets[j].state, 5);
         assert_eq!(b.items.live().count(), 5);
 
@@ -2034,12 +2080,12 @@ mod tests {
             origin: [50.0, 50.0, 0.0],
             ..LaserDesc::default()
         };
-        let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
-        b.cancel_all(&mut anm, &mut pl.borrow_mut(), 1);
+        let k = b.spawn_laser(&mut anm, sys.rng, &l, [0.0; 3]).unwrap();
+        b.cancel_all(&mut anm, sys.rng, &mut pl.borrow_mut(), 1);
         assert_eq!(b.lasers[k].state, 2);
         let xs: Vec<f32> = b.items.live().map(|i| i.pos[0]).collect();
         assert_eq!(xs, vec![50.0, 82.0, 114.0, 146.0]);
-        assert!(b.spawn_laser(&mut anm, &l, [0.0; 3]).is_none());
+        assert!(b.spawn_laser(&mut anm, sys.rng, &l, [0.0; 3]).is_none());
     }
 
     // 08 §7: CancelBonus cancels flag-4 lasers too (CancelAll skips them) and sets the cancel guard.
@@ -2060,7 +2106,7 @@ mod tests {
         let a = pl
             .borrow_mut()
             .cancel_rect([192.0, 224.0], [40.0, 40.0], 9, 10);
-        b.cancel_all(&mut anm, &mut pl.borrow_mut(), 1);
+        b.cancel_all(&mut anm, sys.rng, &mut pl.borrow_mut(), 1);
         let kinds: Vec<u8> = b.items.live().map(|it| it.kind).collect();
         assert_eq!(kinds, vec![9, CANCEL_ITEM as u8]);
         assert_eq!(pl.borrow().cancel_areas[a].total, 2);
@@ -2087,7 +2133,7 @@ mod tests {
         };
         let (mut anm, mut b) = mgr();
         let pl = b.player.clone();
-        let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
+        let k = b.spawn_laser(&mut anm, sys.rng, &l, [0.0; 3]).unwrap();
         anm.speed = 0.5;
         let mut w = Vec::new();
         for _ in 0..4 {
@@ -2100,6 +2146,7 @@ mod tests {
 
     #[test]
     fn cancel_bonus_flag4_laser() {
+        let mut rng = crate::rng::Rng::default();
         let l = LaserDesc {
             fixed: true,
             head: 40.0,
@@ -2113,13 +2160,13 @@ mod tests {
         };
         let (mut anm, mut b) = mgr();
         let pl = b.player.clone();
-        let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
+        let k = b.spawn_laser(&mut anm, &mut rng, &l, [0.0; 3]).unwrap();
         let st = b.lasers[k].state;
-        b.cancel_all(&mut anm, &mut pl.borrow_mut(), 1);
+        b.cancel_all(&mut anm, &mut rng, &mut pl.borrow_mut(), 1);
         assert!(st < 2 && b.lasers[k].state == st);
 
         let (mut anm, mut b) = mgr();
-        let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
+        let k = b.spawn_laser(&mut anm, &mut rng, &l, [0.0; 3]).unwrap();
         let mut ts = crate::game::TestSys::default();
         b.cancel_bonus(&mut anm, &mut pl.borrow_mut(), 2030, true, &mut ts.sys());
         assert_eq!(b.lasers[k].state, 2);
@@ -2182,7 +2229,7 @@ mod tests {
             origin: [50.0, 50.0, 0.0],
             ..LaserDesc::default()
         };
-        let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
+        let k = b.spawn_laser(&mut anm, sys.rng, &l, [0.0; 3]).unwrap();
         assert_eq!(b.lasers[k].state, 0);
         for _ in 0..10 {
             b.step(&mut anm, sys);
@@ -2211,12 +2258,12 @@ mod tests {
         pl.borrow_mut().stats.power = 128.0;
         let k = b
             .items
-            .spawn(&mut anm, &pl.borrow(), [100.0, 100.0, 0.0], 0, 0)
+            .spawn(&mut anm, sys.rng, &pl.borrow(), [100.0, 100.0, 0.0], 0, 0)
             .unwrap();
         assert_eq!(b.items.items[k].kind, item::CONVERTED);
         let k = b
             .items
-            .spawn(&mut anm, &pl.borrow(), [100.0, 100.0, 0.0], 10, 0)
+            .spawn(&mut anm, sys.rng, &pl.borrow(), [100.0, 100.0, 0.0], 10, 0)
             .unwrap();
         assert_eq!(
             (b.items.items[k].kind, b.items.items[k].state),
@@ -2224,7 +2271,7 @@ mod tests {
         );
         assert!(
             b.items
-                .spawn(&mut anm, &pl.borrow(), [500.0, 100.0, 0.0], 1, 0)
+                .spawn(&mut anm, sys.rng, &pl.borrow(), [500.0, 100.0, 0.0], 1, 0)
                 .is_none()
         );
 
@@ -2234,6 +2281,7 @@ mod tests {
         pl.borrow_mut().update_boxes();
         b.items.spawn(
             &mut anm,
+            sys.rng,
             &pl.borrow(),
             [100.0, 100.0, 0.0],
             item::POINT as i32,

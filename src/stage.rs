@@ -368,15 +368,15 @@ impl Stage {
 
     // Stage_Load steps 1, 3 and 4 (06 §2; files already loaded).
     // The overlay VM (step 4) is started before the quad scripts (step 3): no script draws RNG, order is moot (06 §2).
-    pub fn start(&mut self, anm: &mut AnmManager) {
-        anm.set_script(&mut self.overlay, OVERLAY_SLOT, OVERLAY_SCRIPT);
+    pub fn start(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
+        anm.set_script(rng, &mut self.overlay, OVERLAY_SLOT, OVERLAY_SCRIPT);
         self.overlay.pending_interrupt = 2;
         self.overlay_mode = 0;
         self.clock.set(0);
         self.ip = 0;
         for q in self.std.objects.iter().flat_map(|o| &o.quads) {
             if let Some(vm) = self.vms.get_mut(q.vm) {
-                anm.set_script(vm, ANM_SLOT, q.script.max(0) as usize);
+                anm.set_script(rng, vm, ANM_SLOT, q.script.max(0) as usize);
             }
         }
     }
@@ -392,8 +392,8 @@ impl Stage {
         let mut st = Stage::new(index, std);
         st.player = player;
         st.effect_level = ctx.game.cfg.effect_level;
-        st.fast_forward = ctx.settings.stage_frame;
-        st.start(&mut ctx.anm);
+        st.fast_forward = ctx.core.stage_frame;
+        st.start(&mut ctx.anm, &mut ctx.rng);
         let st = Rc::new(RefCell::new(st));
         let t: task::TaskRef<Ctx> = st.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -403,14 +403,14 @@ impl Stage {
     }
 
     // Ops 29 / 30 / 34 (06 §4): start a script on VM A / B / C, or disable it (sprite index −1).
-    fn bg_vm(&mut self, anm: &mut AnmManager, which: u8, script: i32) {
+    fn bg_vm(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, which: u8, script: i32) {
         let vm = match which {
             0 => &mut self.vm_a,
             1 => &mut self.vm_b,
             _ => &mut self.vm_c,
         };
         if script >= 0 {
-            anm.set_script(vm, ANM_SLOT, script as usize);
+            anm.set_script(rng, vm, ANM_SLOT, script as usize);
         } else if which == 2 {
             self.vm_c.sprite_index = -1;
         } else {
@@ -498,9 +498,9 @@ impl Stage {
                     }
                 }
             }
-            29 => self.bg_vm(anm, 0, r.i(0)),
-            30 => self.bg_vm(anm, 1, r.i(0)),
-            34 => self.bg_vm(anm, 2, r.i(0)),
+            29 => self.bg_vm(anm, sys.rng, 0, r.i(0)),
+            30 => self.bg_vm(anm, sys.rng, 1, r.i(0)),
+            34 => self.bg_vm(anm, sys.rng, 2, r.i(0)),
             32 => cam.eye_offset = r.v(),
             33 => {
                 self.sway_mode = r.i(0) as u8;
@@ -515,8 +515,10 @@ impl Stage {
     // Stage_Calc head for g_StageIdx 7 (06 §5.1): spawn the ring, else drive it with section requests 1–4.
     fn ring_6b_step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let Some(i) = self.ring_6b else {
-            let i = sys.fx.spawn_fixed(anm, 0x40, [0.0; 3], 12, 0xFFFF_FFFF);
-            anm.file_set_script(&mut sys.fx.fx[i].vm, ANM_SLOT, 11);
+            let i = sys
+                .fx
+                .spawn_fixed(anm, sys.rng, 0x40, [0.0; 3], 12, 0xFFFF_FFFF);
+            anm.file_set_script(sys.rng, &mut sys.fx.fx[i].vm, ANM_SLOT, 11);
             self.ring_6b = Some(i);
             return;
         };
@@ -528,13 +530,13 @@ impl Stage {
         {
             let vm = &mut sys.fx.fx[i].vm;
             if req == 1 {
-                anm.file_set_script(vm, ANM_SLOT, 11);
+                anm.file_set_script(sys.rng, vm, ANM_SLOT, 11);
                 return;
             }
             // Requests 2–4: copy the VM, (2: script 12), interrupt, restore pos interpolation slot 0 and colour.
             let k = vm.clone();
             if req == 2 {
-                anm.file_set_script(vm, ANM_SLOT, 12);
+                anm.file_set_script(sys.rng, vm, ANM_SLOT, 12);
             }
             vm.pending_interrupt = req as u16;
             (vm.pos_end, vm.pos_start) = (k.pos_end, k.pos_start);
@@ -613,7 +615,7 @@ impl Stage {
     }
 
     // Stage_UpdateObjects (06 §9): the overlay VM follows the player mode byte (human blue, youkai white).
-    fn update_objects(&mut self, anm: &mut AnmManager) {
+    fn update_objects(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
         let mode = self.player.as_ref().map_or(0, |p| p.borrow().mode);
         if (mode != 0) != (self.overlay_mode != 0) {
             self.overlay_mode = (mode != 0) as u8;
@@ -621,7 +623,7 @@ impl Stage {
             self.overlay_timer = Timer::default();
         }
         if self.overlay.script.is_some() {
-            self.overlay.run(anm);
+            self.overlay.run(anm, rng);
         }
         self.overlay_timer.tick(anm.speed);
         // Port-only: white when text.anm is not loaded (unit tests).
@@ -636,7 +638,7 @@ impl Stage {
             }
             let mut running = 0;
             for q in &obj.quads {
-                if !self.vms[q.vm].run(anm) {
+                if !self.vms[q.vm].run(anm, rng) {
                     running += 1;
                 }
             }
@@ -683,7 +685,7 @@ impl Stage {
         if self.std.script.get(self.ip).is_none_or(|r| r.op != 3) {
             self.clock.tick(speed);
         }
-        self.update_objects(anm);
+        self.update_objects(anm, sys.rng);
         // 13 §5: spell background; after 60 frames the stage layers are no longer drawn.
         if self.spell_state > 0 {
             if self.spell_frames == 60 {
@@ -691,7 +693,7 @@ impl Stage {
             }
             self.spell_frames += 1;
             for vm in self.spell_vms.iter_mut().filter(|v| v.script.is_some()) {
-                vm.run(anm);
+                vm.run(anm, sys.rng);
             }
         }
         // Port-only hand-off: camera and overlay colour for the effect manager (13 §2.6a, §2.6c).
@@ -705,20 +707,20 @@ impl Stage {
         let overlay = self.overlay.color;
         sys.fx.overlay = overlay;
         if self.vm_a.sprite_index > 0 {
-            self.vm_a.run(anm);
+            self.vm_a.run(anm, sys.rng);
         }
         if self.vm_b.sprite_index > 0 {
-            self.vm_b.run(anm);
+            self.vm_b.run(anm, sys.rng);
         }
         if self.vm_c.sprite_index > 0 {
-            self.vm_c.run(anm);
+            self.vm_c.run(anm, sys.rng);
             self.clear_color = u32::from_le_bytes(self.vm_c.color);
         }
         // 06 §5 quirk kept: sparkles at all 12 points, used or not (unused ones at screen (0, 0)).
         if self.sparkle_due(*sys.flags) {
             let pts = self.sparkles.borrow().1;
             for p in &pts[..12] {
-                let i = sys.fx.spawn(anm, 0x3E, *p, 1, 0x20FFFFFF);
+                let i = sys.fx.spawn(anm, sys.rng, 0x3E, *p, 1, 0x20FFFFFF);
                 sys.fx.get(i, |e| e.layer = 4);
             }
         }
@@ -739,14 +741,14 @@ impl Stage {
     }
 
     // Stage_StartSpellBg 0x415CE0 (13 §5): spell VMs run scripts first..first+count of the slot-9 file.
-    pub fn start_spell_bg(&mut self, anm: &mut AnmManager) {
+    pub fn start_spell_bg(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
         self.spell_state = 1;
         self.spell_frames = 0;
         self.spell_mask = false;
         self.spell_vms = (0..self.spell_count)
             .map(|i| {
                 let mut vm = AnmVm::default();
-                anm.set_script(&mut vm, crate::effect::BG_SLOT, self.spell_first + i);
+                anm.set_script(rng, &mut vm, crate::effect::BG_SLOT, self.spell_first + i);
                 vm
             })
             .collect();
@@ -1446,7 +1448,7 @@ mod tests {
                 |_| 0,
             );
             let mut st = Stage::new(index, std);
-            st.start(&mut anm);
+            st.start(&mut anm, sys.rng);
             for f in 0..6000 {
                 if f == 3000 {
                     st.section_request = 1;

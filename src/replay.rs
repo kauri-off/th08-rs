@@ -16,9 +16,9 @@ fn put_u32(b: &mut [u8], o: usize, v: u32) {
     b[o..o + 4].copy_from_slice(&v.to_le_bytes());
 }
 
-// Replay_Load (15 §3.7) with the boot-loaded version list.
-pub fn parse(file: &[u8]) -> std::result::Result<Replay, ReplayError> {
-    Replay::parse(file, crate::scoredat::ver_list())
+// Replay_Load (15 §3.7) with the boot-loaded version list (`HostIo::ver_list`).
+pub fn parse(file: &[u8], ver: Option<&[u8]>) -> std::result::Result<Replay, ReplayError> {
+    Replay::parse(file, ver)
 }
 
 // Replay_PlayCalc 0x452550 prio 6, Replay_FrameHook 0x4522A0 prio 7, Replay_RecordCalc 0x452310 prio 17,
@@ -72,7 +72,7 @@ pub fn register(
         rng_snap: 0,
     };
     if !play || debug {
-        rt.frame_hook(&mut ctx.anm.rng);
+        rt.frame_hook(&mut ctx.rng);
     }
     let t = task::task(rt);
     if play {
@@ -245,7 +245,7 @@ pub fn play_stage_load(
 // Scene change out of the game or the result (port): a recording the result dialogue did not save is dropped.
 // Tool switch `TH08_REPLAY_SAVE=<1–15>` saves it to that slot with the LSNM name instead.
 pub fn finish(ctx: &mut crate::game::Ctx) {
-    match ctx.settings.replay_save {
+    match ctx.core.replay_save {
         Some(slot) => {
             let mut name = [0; 8];
             name.copy_from_slice(&ctx.game.score.lsnm[..8]);
@@ -257,11 +257,11 @@ pub fn finish(ctx: &mut crate::game::Ctx) {
 
 // Replay_Finish("./replay/th8_%.2d.rpy", slot) 0x4531F0 (15 §3.6), called by Result state 13 (16 §2.6).
 pub fn save(ctx: &mut crate::game::Ctx, slot: usize, name: &[u8; 8]) -> bool {
-    let Some(bytes) = build_save(&mut ctx.game, name, &mut ctx.anm.rng) else {
+    let Some(bytes) = build_save(&mut ctx.game, name, &mut ctx.rng) else {
         return false;
     };
     let path = format!("replay/th8_{slot:02}.rpy");
-    crate::scoredat::storage_write(&path, &bytes);
+    ctx.host.write(&path, &bytes);
     log::info!("replay saved to {path} ({} bytes)", bytes.len());
     true
 }
@@ -536,7 +536,7 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
     fn calc(&mut self, ctx: &mut crate::game::Ctx, tag: u8) -> crate::task::Ret {
         use crate::task::Ret;
         match (self.play, tag) {
-            (_, TAG_HOOK) => self.frame_hook(&mut ctx.anm.rng),
+            (_, TAG_HOOK) => self.frame_hook(&mut ctx.rng),
             (false, _) => self.record(ctx),
             (true, TAG_MAIN) => self.play(ctx),
             // Replay_FastForward 0x452490 (15 §3.3); `replay_ff` = false is a tool switch that disables both restarts.
@@ -717,7 +717,7 @@ mod tests {
         g.stats.score10 = 123_456;
         let f = build_save(&mut g, b"TESTER  ", &mut crate::rng::Rng::seeded(5)).unwrap();
         assert!(g.rpy.is_none());
-        let r = parse(&f).unwrap();
+        let r = parse(&f, None).unwrap();
         assert_eq!((r.shot(), r.difficulty()), (3, 2));
         assert_eq!(r.name(), "TESTER  ");
         assert_eq!(r.date(), crate::supervisor::date_md());
@@ -758,7 +758,11 @@ mod tests {
         g.card = 5;
         g.score.catk[5].name[..4].copy_from_slice(b"Card");
         record_stage_start(&mut g, &Default::default());
-        let r = parse(&build_save(&mut g, b"A       ", &mut Default::default()).unwrap()).unwrap();
+        let r = parse(
+            &build_save(&mut g, b"A       ", &mut Default::default()).unwrap(),
+            None,
+        )
+        .unwrap();
         assert_eq!((r.spell_id(), r.card_name().as_bytes()), (5, &b"Card"[..]));
         assert!(crate::text::decode_sjis(&r.user).contains("カード名\tNo.  6 Card\r\n"));
 
@@ -814,8 +818,8 @@ mod tests {
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
-        crate::scoredat::set_ver_list(ar.read(crate::scoredat::VER_LIST_NAME).unwrap());
-        let d = parse(&ar.read("demorpy0.rpy").unwrap()).unwrap();
+        let ver = ar.read(crate::scoredat::VER_LIST_NAME).unwrap();
+        let d = parse(&ar.read("demorpy0.rpy").unwrap(), Some(&ver)).unwrap();
         let text = crate::text::decode_sjis(&d.user);
         let want = crate::menulist::SHOT_NAMES[d.shot() as usize % 12];
         assert!(text.contains(&format!("キャラ名\t{want}\r\n")), "{text}");
@@ -854,8 +858,13 @@ fn dump_demos() {
     let Some(ar) = crate::archive::test_archive() else {
         return;
     };
+    let ver = ar.read(crate::scoredat::VER_LIST_NAME).ok();
     for n in 0..4 {
-        let r = parse(&ar.read(&format!("demorpy{n}.rpy")).unwrap()).unwrap();
+        let r = parse(
+            &ar.read(&format!("demorpy{n}.rpy")).unwrap(),
+            ver.as_deref(),
+        )
+        .unwrap();
         let st = r.first_stage().unwrap();
         let s = r.stages[st].as_ref().unwrap();
         let mut s2 = s.clone();

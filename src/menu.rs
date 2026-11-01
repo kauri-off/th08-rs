@@ -269,51 +269,47 @@ fn centred_x(s: &str) -> f32 {
     (256.0 - len as f32 * 15.0 / 4.0).trunc()
 }
 
-pub(crate) fn unlock_all() -> bool {
-    crate::settings::get().unlock
-}
-
-// 0x43C15F: a no-continue Final B clear on E–L.
-fn team_final_b(g: &gamemgr::Game, t: usize) -> bool {
-    unlock_all() || t >= 4 || g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0)
+// 0x43C15F: a no-continue Final B clear on E–L. `unlock` = the port's TH08_UNLOCK (`CoreConfig::unlock`).
+fn team_final_b(g: &gamemgr::Game, unlock: bool, t: usize) -> bool {
+    unlock || t >= 4 || g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0)
 }
 
 // 0x43C23B: a Final A clear on E–L.
-pub(crate) fn team_final_a(g: &gamemgr::Game, t: usize) -> bool {
-    unlock_all() || t >= 4 || g.clear_any[t].iter().take(4).any(|m| m & 0x8000 != 0)
+pub(crate) fn team_final_a(g: &gamemgr::Game, unlock: bool, t: usize) -> bool {
+    unlock || t >= 4 || g.clear_any[t].iter().take(4).any(|m| m & 0x8000 != 0)
 }
 
 // Extra character select (screen 13) offers only shots whose team passes 0x43C15F (12 §2.4).
-fn extra_unlocked(g: &gamemgr::Game, shot: usize) -> bool {
-    team_final_b(g, shot % 12)
+fn extra_unlocked(g: &gamemgr::Game, unlock: bool, shot: usize) -> bool {
+    team_final_b(g, unlock, shot % 12)
 }
 
 // 0x43C1E9: Extra unlocked (GM flags bit 15).
-fn extra_any(g: &gamemgr::Game) -> bool {
-    (0..4).any(|t| team_final_b(g, t))
+fn extra_any(g: &gamemgr::Game, unlock: bool) -> bool {
+    (0..4).any(|t| team_final_b(g, unlock, t))
 }
 
 // 0x447D04: all teams → the 8 solo shots are selectable (flags bit 17).
-pub(crate) fn extra_all(g: &gamemgr::Game) -> bool {
-    (0..4).all(|t| team_final_b(g, t))
+pub(crate) fn extra_all(g: &gamemgr::Game, unlock: bool) -> bool {
+    (0..4).all(|t| team_final_b(g, unlock, t))
 }
 
 // 0x43C2C5: some team has a Final A clear (flags bit 16), gating top-menu item 2.
-fn spell_practice_unlocked(g: &gamemgr::Game) -> bool {
-    (0..4).any(|t| team_final_a(g, t))
+fn spell_practice_unlocked(g: &gamemgr::Game, unlock: bool) -> bool {
+    (0..4).any(|t| team_final_a(g, unlock, t))
 }
 
 // PLST total plays (block 6 [0], 0x164CED0); option lives max 4 / 5 / 6 below 30 / 60 plays (15 §1.3).
-fn play_count(g: &gamemgr::Game) -> u32 {
-    if unlock_all() {
+fn play_count(g: &gamemgr::Game, unlock: bool) -> u32 {
+    if unlock {
         60
     } else {
         g.score.plst.total_plays()
     }
 }
 
-fn lives_max(g: &gamemgr::Game) -> i32 {
-    match play_count(g) {
+fn lives_max(g: &gamemgr::Game, unlock: bool) -> i32 {
+    match play_count(g, unlock) {
         ..30 => 4,
         30..60 => 5,
         _ => 6,
@@ -375,12 +371,13 @@ pub struct MainMenu {
 }
 
 impl MainMenu {
-    pub fn new() -> Self {
+    // `font` = `CoreConfig::font` for the description raster.
+    pub fn new(font: Option<&str>) -> Self {
         Self {
             vms: Vec::new(),
             base: Vec::new(),
             surface: None,
-            raster: Default::default(),
+            raster: crate::text::Raster::new(font),
             desc: Vec::new(),
             desc_cur: None,
             notice: AnmVm::default(),
@@ -540,8 +537,8 @@ impl MainMenu {
     // Items 1 (Extra) and 2 (Spell Practice) are skipped and drawn 0xFF404040 while locked (12 §2.2).
     fn item_locked(ctx: &Ctx, i: usize) -> bool {
         match i {
-            1 => !extra_any(&ctx.game),
-            2 => !spell_practice_unlocked(&ctx.game),
+            1 => !extra_any(&ctx.game, ctx.core.unlock),
+            2 => !spell_practice_unlocked(&ctx.game, ctx.core.unlock),
             _ => false,
         }
     }
@@ -627,7 +624,7 @@ impl MainMenu {
                 .archive
                 .read(&format!("demorpy{n}.rpy"))
                 .map_err(anyhow::Error::from)
-                .and_then(|b| Ok(crate::replay::parse(&b)?));
+                .and_then(|b| Ok(crate::replay::parse(&b, ctx.host.ver_list())?));
             match r {
                 Ok(r) => {
                     if crate::replay::start_playback(&mut ctx.game, r, None, Some(n)) {
@@ -816,14 +813,18 @@ impl MainMenu {
 
     fn char_allowed(&self, ctx: &Ctx, c: i32) -> bool {
         match self.screen {
-            CHAR_EXTRA => extra_unlocked(&ctx.game, c as usize),
+            CHAR_EXTRA => extra_unlocked(&ctx.game, ctx.core.unlock, c as usize),
             CHAR_SPELL => Self::sp_shot_ok(ctx, c),
             _ => true,
         }
     }
 
     fn char_cursor(&mut self, ctx: &Ctx) {
-        let n = if extra_all(&ctx.game) { 12 } else { 4 };
+        let n = if extra_all(&ctx.game, ctx.core.unlock) {
+            12
+        } else {
+            4
+        };
         self.cursor = (ctx.game.shot as i32).min(n - 1);
         if !self.char_allowed(ctx, self.cursor) {
             self.cursor = (0..n).find(|&c| self.char_allowed(ctx, c)).unwrap_or(0);
@@ -832,7 +833,11 @@ impl MainMenu {
 
     // Screens 5 / 9 / 13 / 15, 0x46A625 (12 §2.4); input from +0x1442C == 8 (12 §2).
     fn character(&mut self, ctx: &mut Ctx) {
-        let n = if extra_all(&ctx.game) { 12 } else { 4 };
+        let n = if extra_all(&ctx.game, ctx.core.unlock) {
+            12
+        } else {
+            4
+        };
         if self.frames == 0 {
             self.interrupt_all(8);
             // Difficulty plate slides to (16, 384), not on screen 15 (12 §2.4).
@@ -975,7 +980,7 @@ impl MainMenu {
             return;
         }
         let inp = ctx.input;
-        let lmax = lives_max(&ctx.game);
+        let lmax = lives_max(&ctx.game, ctx.core.unlock);
         let cfg = &mut ctx.game.cfg;
         if matches!(item, 3 | 4) {
             let v = Self::option_value(cfg, item).unwrap();
@@ -1182,7 +1187,7 @@ impl MainMenu {
                 self.highlight(ctx, first + k, k == v as usize);
             }
         }
-        let plays = play_count(&ctx.game);
+        let plays = play_count(&ctx.game, ctx.core.unlock);
         for (vm, need) in [(25, 30), (26, 60)] {
             if plays < need {
                 self.vms[vm].set_flag(anmvm::F_VISIBLE, false);
@@ -1214,7 +1219,7 @@ impl MainMenu {
 
 impl Default for MainMenu {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -1241,10 +1246,11 @@ impl Task<Ctx> for MainMenu {
         ctx.overlays.popups.clear();
         // MainMenu_OnRegister → Ascii_SetupGaugeVms; hidden in the menu, redone at StageStart (12 §5.9).
         let l = crate::player::GaugeLimits::default();
-        ctx.overlays.gauge_setup(&mut ctx.anm, l.min, l.max);
+        ctx.overlays
+            .gauge_setup(&mut ctx.anm, &mut ctx.rng, l.min, l.max);
         for i in 0..VM_COUNT {
             let mut vm = AnmVm::default();
-            ctx.anm.set_script(&mut vm, ANM_SLOT, i);
+            ctx.anm.set_script(&mut ctx.rng, &mut vm, ANM_SLOT, i);
             self.base.push(if vm.has_sprite {
                 vm.sprite_index as i32
             } else {
@@ -1273,7 +1279,7 @@ impl Task<Ctx> for MainMenu {
         self.desc = (0..DESC_VMS)
             .map(|i| {
                 let mut vm = AnmVm::default();
-                ctx.anm.set_script(&mut vm, 0, 9);
+                ctx.anm.set_script(&mut ctx.rng, &mut vm, 0, 9);
                 vm.set_sprite(&ctx.anm, 21 + i as i32);
                 vm
             })
@@ -1478,10 +1484,10 @@ fn title_music(g: &gamemgr::Game) -> bool {
 // After the screen handler all 142 VMs run, then the description VM (12 §2).
 fn run_vms(m: &mut MainMenu, ctx: &mut Ctx) {
     for vm in m.vms.iter_mut().filter(|v| v.script.is_some()) {
-        vm.run(&mut ctx.anm);
+        vm.run(&mut ctx.anm, &mut ctx.rng);
     }
     if let Some(i) = m.desc_cur {
-        m.desc[i].run(&mut ctx.anm);
+        m.desc[i].run(&mut ctx.anm, &mut ctx.rng);
     }
 }
 
@@ -1497,7 +1503,16 @@ mod tests {
         let dir = crate::settings::test_game_dir()?;
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
         let src = crate::assets::Source::native(dir.into());
-        Some(pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap())
+        Some(
+            pollster::block_on(crate::game::Ctx::load_with(
+                src,
+                gfx,
+                false,
+                crate::settings::get().core(),
+                crate::settings::get().host_io(),
+            ))
+            .unwrap(),
+        )
     }
 
     // 12 §2.2 "Back from a replay": bit 3 survives register (screen 0, previous-scene cursor), the Top entry block
@@ -1516,7 +1531,7 @@ mod tests {
                 | gamemgr::F_SPELL_PRACTICE
                 | if demo { gamemgr::F_DEMO } else { 0 };
             c.game.flags = f;
-            let mut m = super::MainMenu::new();
+            let mut m = super::MainMenu::new(None);
             m.on_register(&mut c, Chain::Calc, 0).unwrap();
             let kept = if demo { 0 } else { gamemgr::F_REPLAY };
             assert_eq!(c.game.flags & 0xFFFF, kept);
@@ -1540,7 +1555,7 @@ mod tests {
             c.game.previous = gamemgr::SCENE_RESULT;
             let f = gamemgr::F_PRACTICE | if spell { gamemgr::F_SPELL_PRACTICE } else { 0 };
             c.game.flags = f;
-            let mut m = super::MainMenu::new();
+            let mut m = super::MainMenu::new(None);
             m.on_register(&mut c, Chain::Calc, 0).unwrap();
             assert_eq!(
                 (m.screen, m.back, m.cursor),
@@ -1561,7 +1576,7 @@ mod tests {
     // Drawlog README col 30: +0x00 is the stage row on screen 16, the card row on 17, else the cursor (16 §6.1/§6.2).
     #[test]
     fn trace_cursor_rows() {
-        let mut m = super::MainMenu::new();
+        let mut m = super::MainMenu::new(None);
         (m.cursor, m.lists.sp_row, m.lists.card) = (5, 3, 11);
         assert_eq!(m.trace_cursor(), 5);
         m.screen = super::SPELL_PRACTICE;
