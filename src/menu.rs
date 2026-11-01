@@ -1225,7 +1225,7 @@ impl Task<Ctx> for MainMenu {
             return Ok(());
         }
         // 0x18B8A2C := 0 (13 §3).
-        crate::enemy::set_load_frames(0);
+        ctx.load_frames = 0;
         if title_music(&ctx.game) {
             ctx.audio.play_bgm("bgm/th08_01.mid");
         }
@@ -1238,10 +1238,10 @@ impl Task<Ctx> for MainMenu {
             "resulttext.anm",
         )?;
         // MainMenu_OnRegister → Ascii_InitVms (popup slots + small/special cursors, 13 §4).
-        crate::ascii::clear_popups();
+        ctx.overlays.popups.clear();
         // MainMenu_OnRegister → Ascii_SetupGaugeVms; hidden in the menu, redone at StageStart (12 §5.9).
         let l = crate::player::GaugeLimits::default();
-        crate::ascii::gauge_setup(&mut ctx.anm, l.min, l.max);
+        ctx.overlays.gauge_setup(&mut ctx.anm, l.min, l.max);
         for i in 0..VM_COUNT {
             let mut vm = AnmVm::default();
             ctx.anm.set_script(&mut vm, ANM_SLOT, i);

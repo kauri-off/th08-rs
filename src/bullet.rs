@@ -923,7 +923,7 @@ impl BulletManager {
         let gs = anm.speed;
         self.apply_ex(anm, idx, p.pos, sys);
         // Freeze byte 0x160F534 (native 26) stops step 4 only.
-        let freeze = crate::enemy::timer_pause() != 0;
+        let freeze = *sys.timer_pause != 0;
         let b = &mut self.bullets[idx];
         if b.active != 0 {
             Self::motion(b, gs, p.pos, sys);
@@ -1299,6 +1299,7 @@ impl BulletManager {
         p: &mut Player,
         max_value: i32,
         lasers_too: bool,
+        sys: &mut Sys,
     ) -> i32 {
         let (mut v, mut sum) = (2000, 0);
         for i in 0..MAX_BULLETS {
@@ -1313,7 +1314,7 @@ impl BulletManager {
             } else {
                 self.items.spawn(anm, p, pos, CANCEL_ITEM, 1);
             }
-            crate::ascii::popup(
+            sys.ov.popup(
                 pos,
                 v,
                 if v >= max_value {
@@ -1457,7 +1458,7 @@ impl BulletManager {
     // BulletMgr_Calc 0x431240 (08 §1).
     pub fn step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         // Port plumbing: bomb areas registered by other tasks this frame become visible here.
-        self.player.borrow_mut().take_queued_areas();
+        self.player.borrow_mut().take_queued_areas(sys.areas);
         if self.frozen || self.player.borrow().freeze_bullets(*sys.flags) {
             return;
         }
@@ -2017,7 +2018,7 @@ mod tests {
             sys,
         );
         let pl = b.player.clone();
-        let sum = b.cancel_bonus(&mut anm, &mut pl.borrow_mut(), 2030, false);
+        let sum = b.cancel_bonus(&mut anm, &mut pl.borrow_mut(), 2030, false, sys);
         assert_eq!(sum, 2000 + 2020 + 2030);
         assert!(b.live_bullets().all(|x| x.state == 5));
 
@@ -2119,7 +2120,8 @@ mod tests {
 
         let (mut anm, mut b) = mgr();
         let k = b.spawn_laser(&mut anm, &l, [0.0; 3]).unwrap();
-        b.cancel_bonus(&mut anm, &mut pl.borrow_mut(), 2030, true);
+        let mut ts = crate::game::TestSys::default();
+        b.cancel_bonus(&mut anm, &mut pl.borrow_mut(), 2030, true, &mut ts.sys());
         assert_eq!(b.lasers[k].state, 2);
         let xs: Vec<f32> = b.items.live().map(|i| i.pos[0]).collect();
         assert_eq!(xs, vec![50.0, 50.0, 82.0]);

@@ -8,7 +8,6 @@ use crate::gfx::{Gfx, PLAYFIELD};
 use crate::input;
 use crate::item::ItemManager;
 use crate::player::{ANM_SLOT, DISSOLVE_BEGIN, DISSOLVE_END, Player, Stats};
-use std::cell::RefCell;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 // 192 damage + 192 cancel areas, 0x40 each (09 §8).
@@ -90,14 +89,9 @@ impl Area {
     }
 }
 
-thread_local! {
-    static QUEUED: RefCell<Vec<(bool, Area)>> = const { RefCell::new(Vec::new()) };
-}
-
 // Port-only queue: areas created by effect updates (Yukari's boundaries, 14 §2.13); added at the next Player_Calc.
-pub fn queue_area(damage: bool, a: Area) {
-    QUEUED.with_borrow_mut(|q| q.push((damage, a)));
-}
+// (damage, area) pairs; held in `Ctx::bomb_areas` / `Sys::areas`.
+pub type AreaQueue = Vec<(bool, Area)>;
 
 // Bomb object (14 §1.1, 0x16F0 bytes); fields keep their values between bombs.
 #[derive(Clone, Debug, Default)]
@@ -388,8 +382,8 @@ impl Player {
         i
     }
 
-    pub fn take_queued_areas(&mut self) {
-        for (damage, a) in QUEUED.with_borrow_mut(std::mem::take) {
+    pub fn take_queued_areas(&mut self, q: &mut AreaQueue) {
+        for (damage, a) in std::mem::take(q) {
             let v = if damage {
                 &mut self.damage_areas
             } else {
@@ -496,7 +490,7 @@ impl Player {
     fn start_bomb(&mut self, anm: &mut AnmManager, forced: bool, sys: &mut Sys) {
         self.forced_bomb = 0;
         // HUD bombs field := 2 (12 §5.3 writers).
-        crate::hud::mark_bombs(2);
+        sys.panel.mark_bombs(2);
         let mut index = 4;
         // 09 §7: in special mode (bits 7–8) the whole cost block is skipped: no unfreeze, bombs, counters or checksums.
         if !self.special(*sys.flags) {

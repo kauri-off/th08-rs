@@ -641,31 +641,6 @@ pub struct Spell {
     pub last: bool,
 }
 
-thread_local! {
-    static TIMER_PAUSE: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
-    static LOAD_FRAMES: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
-}
-
-// Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
-pub fn timer_pause() -> i32 {
-    TIMER_PAUSE.get()
-}
-
-pub fn set_timer_pause(v: i32) {
-    TIMER_PAUSE.set(v);
-}
-
-// Global 0x18B8A2C "frames since load" (13 §3): ECL native 30 (= arg), 2 at the end of StageStart, 1 by
-// GameMgr_OnRemove, 0 by Result / MainMenu register; Supervisor_Calc decrements it once per frame while ≠ 0.
-// Read by screen effects 1 / 2 / 4, which are removed while it is ≠ 0.
-pub fn load_frames() -> i32 {
-    LOAD_FRAMES.get()
-}
-
-pub fn set_load_frames(v: i32) {
-    LOAD_FRAMES.set(v);
-}
-
 // Globals touched by ECL (difficulty, rank, argument registers, spell state, …).
 #[derive(Clone, Debug, Default)]
 pub struct Globals {
@@ -795,7 +770,6 @@ impl EnemyManager {
         let player = bullets.borrow().player.clone();
         player.borrow_mut().stats.difficulty = difficulty;
         let step = player.borrow().orb_step;
-        set_timer_pause(0);
         let g = Globals {
             difficulty,
             rank: 16,
@@ -857,6 +831,8 @@ impl EnemyManager {
         ctx.anm
             .load(&mut ctx.gfx, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_STAGE, &enm)?;
+        // EnemyManager init clears the freeze byte 0x160F534.
+        ctx.timer_pause = 0;
         let mut m = EnemyManager::new(ecl, bullets, diff);
         m.stage = stage;
         m.stage_index = index;
@@ -1005,7 +981,7 @@ impl EnemyManager {
     pub fn free(&mut self, idx: usize, sys: &mut Sys) {
         let e = &self.enemies[idx];
         if e.flags & A_BOSS != 0 && (0..4).contains(&e.boss_slot) {
-            crate::ascii::marker_release(e.boss_slot as usize);
+            sys.ov.marker_release(e.boss_slot as usize);
         }
         if self.player.borrow().aimed == Some(idx) {
             self.player.borrow_mut().aimed = None;
@@ -1209,7 +1185,7 @@ impl EnemyManager {
                     );
                 }
             }
-            6 => self.start_msg(anm, ai(0)),
+            6 => self.start_msg(anm, ai(0), sys),
             7 => return !self.msg.as_ref().is_some_and(|m| m.borrow().blocking()),
             8 => {
                 if let Some(b) = self.boss(ai(0)) {
@@ -1344,7 +1320,7 @@ impl EnemyManager {
     // order: life 0; flag A bit 7 → item 6 + popup at the recomputed final pos and at every 6th trail entry
     // (v = 2000 first, then min(v + 30, 8000)); `Enemy_ChainUnlink`; `Ecl_SetSub` to the death sub (consumed).
     // No self test: an ECL caller must be back in its slot (`Exec::with_self_in_slot`) to be included.
-    pub(crate) fn kill_all(&mut self, anm: &mut AnmManager) -> i32 {
+    pub(crate) fn kill_all(&mut self, anm: &mut AnmManager, sys: &mut Sys) -> i32 {
         const MAX: i32 = 8000;
         let (mut v, mut sum) = (2000, 0);
         for j in 0..self.enemies.len() {
@@ -1367,7 +1343,7 @@ impl EnemyManager {
                     } else {
                         crate::item::POPUP_NORMAL
                     };
-                    crate::ascii::popup(p, v, colour);
+                    sys.ov.popup(p, v, colour);
                     sum += v;
                     v = (v + 30).min(MAX);
                 }
@@ -1384,14 +1360,14 @@ impl EnemyManager {
     }
 
     // CancelBonus(8000, lasers) + KillAll(8000): score and Hud_ShowBonus (08 §7, 07 §11.1).
-    fn cancel_and_kill_bonus(&mut self, anm: &mut AnmManager) {
+    fn cancel_and_kill_bonus(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let sum = {
             let mut p = self.player.borrow_mut();
             self.bullets
                 .borrow_mut()
-                .cancel_bonus(anm, &mut p, 8000, true)
+                .cancel_bonus(anm, &mut p, 8000, true, sys)
         };
-        let kills = self.kill_all(anm);
+        let kills = self.kill_all(anm, sys);
         let mut p = self.player.borrow_mut();
         p.stats.add_score(sum);
         // Hud_ShowBonus only when CancelBonus + KillAll ≠ 0 (12 §5.5): else the previous popup keeps running.
@@ -1428,7 +1404,7 @@ impl EnemyManager {
         if let Some(anm) = anm.as_deref_mut()
             && self.enemies[idx].root.is_some()
         {
-            self.kill_single(idx, anm);
+            self.kill_single(idx, anm, sys);
             return;
         }
         // A chained child never chain-kills its later siblings; without reward it only unlinks (answers_impl12 §1).
@@ -1502,7 +1478,7 @@ impl EnemyManager {
                     n /= 3;
                 }
                 let e = &mut self.enemies[c];
-                crate::ascii::popup_large(e.final_pos, n, 0, colour, 1.0);
+                sys.ov.popup_large(e.final_pos, n, 0, colour, 1.0);
                 e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
                 let pos = e.final_pos;
                 self.player
@@ -1539,7 +1515,7 @@ impl EnemyManager {
         // Boss chain kill (13 §4): popup of e+0x3380 at scale 2, 2·count time orbs within 128 px.
         if let Some(anm) = anm {
             let (pos, count) = (e.final_pos, e.children);
-            crate::ascii::popup_large(pos, count, 0, 0xFFF0F00F, 2.0);
+            sys.ov.popup_large(pos, count, 0, 0xFFF0F00F, 2.0);
             for _ in 0..2 * count {
                 let r = anm.rng.next_f32() * 128.0;
                 let a = anm.rng.next_signed() * std::f32::consts::PI;
@@ -1559,7 +1535,7 @@ impl EnemyManager {
     }
 
     // Single-kill path of 0x42ADB0 (13 §4, 08 §8.4): gauge −gauge/12, gauge lock 50, one time orb.
-    fn kill_single(&mut self, idx: usize, anm: &mut AnmManager) {
+    fn kill_single(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
         {
             let mut p = self.player.borrow_mut();
             // 07 §10.3a: GaugeAdd(−gauge/12, not forced), so nothing while bombing; clamped.
@@ -1574,7 +1550,7 @@ impl EnemyManager {
         let e = &mut self.enemies[idx];
         e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
         let pos = e.final_pos;
-        crate::ascii::popup_large(pos, 1, 0, 0xFFFFFFFF, 1.0);
+        sys.ov.popup_large(pos, 1, 0, 0xFFFFFFFF, 1.0);
         self.spawn_item(anm, pos, crate::item::TIME_ORB as i32, 1);
         let e = &mut self.enemies[idx];
         e.item = -2;
@@ -1629,28 +1605,28 @@ impl EnemyManager {
     }
 
     // Hud_StartMsg: Msg_Start plus its playfield side effects (10 §4 step 6).
-    pub fn start_msg(&mut self, anm: &mut AnmManager, n: i32) {
+    pub fn start_msg(&mut self, anm: &mut AnmManager, n: i32, sys: &mut Sys) {
         let Some(m) = self.msg.clone() else { return };
         let mut m = m.borrow_mut();
         m.info.clock = self.player.borrow().stats.clock;
         m.start(n);
         if std::mem::take(&mut m.side_effects) {
             drop(m);
-            self.msg_side_effects(anm);
+            self.msg_side_effects(anm, sys);
         }
     }
 
     // Msg_Start side effects (10 §4 step 6): cancel bullets, KillAll, attract items.
-    pub fn msg_side_effects(&mut self, anm: &mut AnmManager) {
+    pub fn msg_side_effects(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         self.cancel_all(anm, 1);
-        self.kill_all(anm);
+        self.kill_all(anm, sys);
         self.bullets.borrow_mut().items.attract_all();
     }
 
     // Spell_End 0x4161B0 (07 §11.1); the payout is queued and made 130 frames later in `step`.
     pub fn finish_spell(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         // 0x4E3D28 (darkness mask alpha) := 0 first, every call; then, with the card active, Spell_HideName.
-        crate::ascii::clear_darkness();
+        sys.ov.clear_darkness();
         self.end_active_spell(anm, sys);
         // Tail of every op 123 (07 §11.1, RE-Q56): after the time-reward test, the boss loses flag A bit 27,
         // g_Gui +4 := 0, spell flag bit 11 := 0.
@@ -1669,14 +1645,14 @@ impl EnemyManager {
         // Time reward from +0x114 and the remaining-time timer +0x108 (07 §11.1).
         let (total, remaining) = (s.duration, self.g.spell_remaining.cur);
         // HUD +0x04 |= 0xF (lives and bombs fields := 3) only with a card active, before sfx 0xF (12 §5.3).
-        crate::hud::mark_lives(3);
-        crate::hud::mark_bombs(3);
+        sys.panel.mark_lives(3);
+        sys.panel.mark_bombs(3);
         sys.sound.play(crate::sound::TAN00_LOUD);
         if let Some(st) = &self.stage {
             st.borrow_mut().end_spell_bg();
         }
         if !s.timed_out {
-            self.cancel_and_kill_bonus(anm);
+            self.cancel_and_kill_bonus(anm, sys);
         }
         let mut p = self.player.borrow_mut();
         // Always: bomb cooldown +0xE2A6C := 16, its only writer (07 §11.1, 09 §1.1).
@@ -2255,7 +2231,7 @@ impl EnemyManager {
         if mode <= 2 {
             self.drop_items(idx, anm, None, sys);
             if boss && self.g.spell.is_none() {
-                self.cancel_and_kill_bonus(anm);
+                self.cancel_and_kill_bonus(anm, sys);
             }
             self.enemies[idx].life = 0;
         }
@@ -2422,7 +2398,7 @@ impl EnemyManager {
 
     // Common tail of 07 §10.1 step 7: hit flash, boss marker, timers, draw-list link.
     fn update_tail(&mut self, idx: usize, gs: f32, sys: &mut Sys) {
-        let pause = timer_pause() != 0;
+        let pause = *sys.timer_pause != 0;
         let dialogue = self.dialogue_active();
         let e = &mut self.enemies[idx];
         // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
@@ -2467,7 +2443,7 @@ impl EnemyManager {
             } else {
                 (e.vm.flags & anmvm::F_COLOR2 != 0) as u8
             };
-            crate::ascii::marker_track(e.boss_slot as usize, x, mode);
+            sys.ov.marker_track(e.boss_slot as usize, x, mode);
         }
         // Enemy_UpdateOrbitEffects 0x42E010 (07 §10.1 step 7): after the marker; a boss mode-0/1 death has
         // already drained them. 13 §2.6b: centred on the base pos e+0x2D34, not the final pos.
@@ -3060,7 +3036,11 @@ mod tests {
         (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(0), Some(1));
         (m.enemies[1].root, m.enemies[2].root) = (Some(0), Some(0));
         // Slot 0: final pos + entries 0, 6, 12; slot 1: one more popup.
-        assert_eq!(m.kill_all(&mut anm), 2000 + 2030 + 2060 + 2090 + 2120);
+        let mut ts = crate::game::TestSys::default();
+        assert_eq!(
+            m.kill_all(&mut anm, &mut ts.sys()),
+            2000 + 2030 + 2060 + 2090 + 2120
+        );
         assert_eq!(m.enemies[0].final_pos, [11.0, 22.0, 0.0]);
         for k in 0..3 {
             let e = &m.enemies[k];
@@ -3192,11 +3172,11 @@ mod tests {
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let (mut m, player) = empty_manager(&mut anm);
-        crate::ascii::set_darkness(200, 288.0);
+        sys.ov.set_darkness(200, 288.0);
         m.finish_spell(&mut anm, sys);
         assert_eq!(player.borrow().bomb_cooldown, 0);
         // 0x4E3D28 := 0 even with no card active.
-        assert_eq!(crate::ascii::darkness_alpha(), 0);
+        assert_eq!(sys.ov.darkness_alpha(), 0);
         m.g.spell = Some(Spell {
             timed_out: true,
             duration: 600,
@@ -3239,7 +3219,8 @@ mod tests {
     fn zero_bonus_shows_no_popup() {
         let mut anm = AnmManager::default();
         let (mut m, player) = empty_manager(&mut anm);
-        m.cancel_and_kill_bonus(&mut anm);
+        let mut ts = crate::game::TestSys::default();
+        m.cancel_and_kill_bonus(&mut anm, &mut ts.sys());
         assert!(player.borrow().stats.popups.is_empty());
     }
 

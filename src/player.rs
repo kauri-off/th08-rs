@@ -302,12 +302,12 @@ impl Stats {
     pub fn extend(&mut self, rng: &mut Rng, sys: &mut Sys) {
         if self.lives < 8.0 {
             self.add_lives(1.0, rng);
-            crate::hud::mark_lives(2);
+            sys.panel.mark_lives(2);
             self.rank(sys.rank, 200);
             sys.sound.play(crate::sound::EXTEND);
         } else if self.bombs < 8.0 {
             self.add_bombs(1.0, rng);
-            crate::hud::mark_bombs(2);
+            sys.panel.mark_bombs(2);
             self.rank(sys.rank, 200);
             sys.sound.play(crate::sound::EXTEND);
         }
@@ -728,7 +728,7 @@ impl Player {
             return;
         }
         // Freeze byte 0x160F534 := 0.
-        crate::enemy::set_timer_pause(0);
+        *sys.timer_pause = 0;
         Stats::checksum(&mut anm.rng);
         sys.sound.play_at(crate::sound::PLDEAD, self.pos[0]);
         sys.fx.spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
@@ -1157,8 +1157,8 @@ impl Player {
         if self.stats.lives >= 1.0 {
             self.stats.add_lives(-1.0, &mut anm.rng);
             self.stats.bombs = self.sht.bombs.trunc();
-            crate::hud::mark_lives(2);
-            crate::hud::mark_bombs(2);
+            sys.panel.mark_lives(2);
+            sys.panel.mark_bombs(2);
             return true;
         }
         // Game over: the ASCII manager opens the continue menu (12 §4).
@@ -1304,7 +1304,7 @@ impl Player {
     ) {
         // Step 1: freeze byte 0x160F534 (ECL native 26) pauses the youkai aura (+0xBE834, fixed slot 2) and the
         // gauge-max aura (+0xE2B24, slot 8) with VM flag 0x80000 and skips the rest of the calc.
-        let freeze = crate::enemy::timer_pause() != 0;
+        let freeze = *sys.timer_pause != 0;
         for k in [crate::effect::FIX_AURA, crate::effect::FIX_GAUGE] {
             sys.fx.get(crate::effect::FIXED_BASE + k, |e| {
                 if freeze {
@@ -1319,7 +1319,7 @@ impl Player {
         }
         let gs = anm.speed;
         // Port-only: areas queued by effects (bomb-owned rings) during the last frame.
-        self.take_queued_areas();
+        self.take_queued_areas(sys.areas);
         self.update_areas();
         self.update_bomb(anm, inp, &mut items, sys);
         match self.state {
@@ -1345,7 +1345,7 @@ impl Player {
         }
         self.update_shot_timer(anm, inp, sys);
         // Step 9 (0x44D420): HUD panel-side switch, then the target reset.
-        crate::ascii::gauge_fade(self.pos);
+        sys.ov.gauge_fade(self.pos);
         self.targets = [[-999.0, -999.0, 0.0]; 2];
         self.boss_target = false;
         if !self.env.dialogue {
@@ -1410,9 +1410,9 @@ impl Task<Ctx> for Player {
         if chain == Chain::Calc {
             // Full exit hides the gauge readout (11 §7, 12 §5.9).
             if !matches!(ctx.game.requested, 3 | 11 | 12) {
-                crate::ascii::gauge_interrupt(99);
+                ctx.overlays.gauge_interrupt(99);
                 // Boss markers M_0..M_2 hidden at once (12 §5.10).
-                (0..3).for_each(|k| crate::ascii::marker_interrupt(k, 99));
+                (0..3).for_each(|k| ctx.overlays.marker_interrupt(k, 99));
             }
             ctx.anm.unload(&mut ctx.gfx, ANM_SLOT);
         }
@@ -1868,12 +1868,12 @@ mod tests {
         sys.fx
             .spawn_fixed(&mut anm, 25, p.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
         let paused = |fx: &Effects| fx.peek(aura, |e| e.vm.flags & anmvm::F_PAUSED != 0);
-        crate::enemy::set_timer_pause(1);
+        *sys.timer_pause = 1;
         let (pos, t) = (p.pos, p.state_timer.cur);
         p.step(&mut anm, &input(input::LEFT), sys);
         assert!(paused(sys.fx));
         assert_eq!((p.pos, p.state_timer.cur, p.frames), (pos, t, 0));
-        crate::enemy::set_timer_pause(0);
+        *sys.timer_pause = 0;
         p.step(&mut anm, &input(input::LEFT), sys);
         assert!(!paused(sys.fx) && p.pos[0] < pos[0] && p.frames == 1);
         sys.fx.clear();

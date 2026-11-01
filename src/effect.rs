@@ -545,7 +545,7 @@ impl Effects {
     }
 
     // Per-type update (13 §2.6); false frees the effect.
-    fn update(&mut self, i: usize) -> bool {
+    fn update(&mut self, i: usize, areas: &mut crate::bomb::AreaQueue) -> bool {
         let player = self.player;
         let view = self.view;
         let boss = self.boss;
@@ -649,7 +649,7 @@ impl Effects {
         }
         if bomb_ring(e.kind) {
             let slot = i.wrapping_sub(FIXED_BASE);
-            let (screen, keep) = bomb_ring_update(e, slot);
+            let (screen, keep) = bomb_ring_update(e, slot, areas);
             self.screen.extend(screen);
             return keep;
         }
@@ -696,7 +696,7 @@ impl Effects {
 
     // EffectMgr_Calc (13 §2.3): frozen effects (bit 10, +0x357 = 0) skip update/VM/age but are still drawn;
     // survivors are linked in slot order (not spawn order); type 0x40 is never linked.
-    pub fn calc(&mut self, anm: &mut AnmManager, flags: u32) {
+    pub fn calc(&mut self, anm: &mut AnmManager, flags: u32, areas: &mut crate::bomb::AreaQueue) {
         let gs = anm.speed;
         self.live = 0;
         for l in &mut self.lists {
@@ -711,7 +711,7 @@ impl Effects {
             // this frame's effects (prio 13); no effect update writes the flags, so the word passed in is live.
             let frozen = flags & crate::gamemgr::F_DEATH != 0;
             if !frozen || self.fx[i].keep_frozen {
-                if !self.update(i) {
+                if !self.update(i, areas) {
                     self.fx[i].active = false;
                     continue;
                 }
@@ -934,7 +934,11 @@ fn bomb_ring(kind: u8) -> bool {
 
 // Bomb-owned ring updates (14 §2): Yukari 0x4114E0 / 0x4117B0, Alice 0x40E040–0x40E2D0, Sakuya LS 0x410BB0,
 // Youmu 0x413070. Returns queued screen effects and whether the effect stays.
-fn bomb_ring_update(e: &mut Effect, slot: usize) -> (Vec<ScreenEffect>, bool) {
+fn bomb_ring_update(
+    e: &mut Effect,
+    slot: usize,
+    areas: &mut crate::bomb::AreaQueue,
+) -> (Vec<ScreenEffect>, bool) {
     let t = e.age.cur;
     let tf = t as f32;
     let at = |n: i32| t == n && e.age.prev != n;
@@ -950,7 +954,7 @@ fn bomb_ring_update(e: &mut Effect, slot: usize) -> (Vec<ScreenEffect>, bool) {
                 r.segments -= 1;
             } else if at(40) {
                 fx.push(screen_fx(3, 8, 1, 0x8FF08080u32 as i32, 0));
-                boundary_sides(e.centre, r, 70, 4, 100);
+                boundary_sides(e.centre, r, 70, 4, 100, areas);
             }
         }
         // Yukari LS 0x4117B0 (14 §2.14): spin ±π/80 by slot parity; sides at t = 50.
@@ -965,7 +969,7 @@ fn bomb_ring_update(e: &mut Effect, slot: usize) -> (Vec<ScreenEffect>, bool) {
             } else if at(50) {
                 fx.push(screen_fx(1, 16, 8, 0, 0));
                 fx.push(screen_fx(3, 8, 1, 0x8F6060F0u32 as i32, 0));
-                boundary_sides(e.centre, r, 100, 2, 150);
+                boundary_sides(e.centre, r, 100, 2, 150, areas);
             }
         }
         // Alice 0x2A–0x2D (14 §2.3): k = 1 − (1 − t/40)², expand 40 frames then collapse; 0x2A amplitude
@@ -1008,7 +1012,14 @@ fn bomb_ring_update(e: &mut Effect, slot: usize) -> (Vec<ScreenEffect>, bool) {
 
 // The four side rectangles of a finished boundary (14 §2.13): D rect 8s × 4w, C rect 4s × 4w.
 // s uses f32 0x3F3504F2 (1 ulp below √2/2); a wraps at the top of each side and chains from the last rotation.
-fn boundary_sides(centre: [f32; 3], r: &Ring, d_life: i32, period: i32, c_life: i32) {
+fn boundary_sides(
+    centre: [f32; 3],
+    r: &Ring,
+    d_life: i32,
+    period: i32,
+    c_life: i32,
+    areas: &mut crate::bomb::AreaQueue,
+) {
     let s = r.radius * f32::from_bits(0x3F3504F2);
     let mut a = r.start + PI / 4.0;
     for _ in 0..4 {
@@ -1029,7 +1040,7 @@ fn boundary_sides(centre: [f32; 3], r: &Ring, d_life: i32, period: i32, c_life: 
             active: true,
             ..Default::default()
         };
-        crate::bomb::queue_area(true, d);
+        areas.push((true, d));
         let k = crate::bomb::Area {
             pos: c,
             size: [4.0 * s, 4.0 * r.width],
@@ -1040,7 +1051,7 @@ fn boundary_sides(centre: [f32; 3], r: &Ring, d_life: i32, period: i32, c_life: 
             active: true,
             ..Default::default()
         };
-        crate::bomb::queue_area(false, k);
+        areas.push((false, k));
         a = rot;
     }
 }
@@ -1189,7 +1200,7 @@ impl Task<Ctx> for EffectManager {
         let paused = ctx.game.paused != 0 || ctx.game.game_over != 0;
         let e = &mut ctx.effects;
         e.paused = paused;
-        e.calc(&mut ctx.anm, ctx.game.flags);
+        e.calc(&mut ctx.anm, ctx.game.flags, &mut ctx.bomb_areas);
         Ret::Next
     }
 
@@ -1304,8 +1315,8 @@ impl ScreenEffect {
     }
 
     // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set (13 §3); both read live.
-    fn frozen(flags: u32) -> bool {
-        flags & crate::gamemgr::F_DEATH != 0 || crate::enemy::timer_pause() != 0
+    fn frozen(flags: u32, timer_pause: i32) -> bool {
+        flags & crate::gamemgr::F_DEATH != 0 || timer_pause != 0
     }
 }
 
@@ -1343,10 +1354,10 @@ impl ScreenEffect {
             }
             // 0x45BDC0: frozen → hold; 0x18B8A2C ≠ 0 → removed; else tick first, then end test, then a and 2 draws.
             1 => {
-                if Self::frozen(ctx.game.flags) {
+                if Self::frozen(ctx.game.flags, ctx.timer_pause) {
                     return Ret::Next;
                 }
-                if crate::enemy::load_frames() != 0 {
+                if ctx.load_frames != 0 {
                     return Ret::Remove;
                 }
                 self.timer.tick(gs);
@@ -1360,7 +1371,7 @@ impl ScreenEffect {
             }
             // 0x45B760 (type 4 "as 2"): 0x18B8A2C ≠ 0 → removed before anything else.
             2 | 4 => {
-                if crate::enemy::load_frames() != 0 {
+                if ctx.load_frames != 0 {
                     return Ret::Remove;
                 }
                 self.alpha = (tf * 255.0 / dur as f64).trunc().max(0.0) as f32;
@@ -1373,7 +1384,7 @@ impl ScreenEffect {
             }
             // 0x45BC90 (13 §3 type 3): 0x18B8A2C ≠ 0 → removed before anything else.
             3 => {
-                if crate::enemy::load_frames() != 0 {
+                if ctx.load_frames != 0 {
                     return Ret::Remove;
                 }
                 let a = (p2 as u32 >> 24) as i32;
@@ -1411,7 +1422,7 @@ impl ScreenEffect {
             // 0x45BF10: frozen → hold; gameplay frame counter 0x164D2C8 < 2 → removed (no 0x18B8A2C test); else
             // tick first, then end test, then the 2 draws.
             7 => {
-                if Self::frozen(ctx.game.flags) {
+                if Self::frozen(ctx.game.flags, ctx.timer_pause) {
                     return Ret::Next;
                 }
                 if ctx.game.frame_counter < 2 {
@@ -1551,7 +1562,7 @@ mod tests {
         e.vm.scale = [180.0, 1.0];
         e.vm.pos = [128.0, 180.0, 0.0];
         e.vm.rotation = [0.0, 0.25, -0.5];
-        assert!(fx.update(i));
+        assert!(fx.update(i, &mut Vec::new()));
         let e = &fx.fx[i];
         let r = e.ring;
         assert_eq!(
@@ -1565,8 +1576,9 @@ mod tests {
     // 13 §3 type 1/7: the shake freeze reads GameFlags bit 10 live.
     #[test]
     fn shake_frozen_reads_flags_live() {
-        assert!(ScreenEffect::frozen(crate::gamemgr::F_DEATH));
-        assert_eq!(ScreenEffect::frozen(0), crate::enemy::timer_pause() != 0);
+        assert!(ScreenEffect::frozen(crate::gamemgr::F_DEATH, 0));
+        assert!(!ScreenEffect::frozen(0, 0));
+        assert!(ScreenEffect::frozen(0, 1));
     }
 
     // Ring init 0x4272E0 (13 §2.6): 24 segments by default, centre = spawn pos, crossed param copy.
@@ -1722,9 +1734,10 @@ mod tests {
             width: 4.0,
             ..Ring::default()
         };
-        boundary_sides([192.0, 224.0, 0.0], &r, 70, 4, 100);
+        let mut q = crate::bomb::AreaQueue::new();
+        boundary_sides([192.0, 224.0, 0.0], &r, 70, 4, 100, &mut q);
         let mut p = crate::player::Player::default();
-        p.take_queued_areas();
+        p.take_queued_areas(&mut q);
         let s = 100.0 * f32::from_bits(0x3F3504F2);
         let d: Vec<_> = p.damage_areas.iter().filter(|a| a.active).collect();
         assert_eq!(d.len(), 4);

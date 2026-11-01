@@ -31,6 +31,20 @@ pub struct Ctx {
     pub sound: crate::sound::Queue,
     // Effect manager g_EffectMgr 0x4ECE60 (13 §2).
     pub effects: crate::effect::Effects,
+    // Ascii manager popups, darkness mask, gauge readout and boss markers (13 §4, 12 §5.9–§5.10).
+    pub overlays: crate::ascii::Overlays,
+    // HUD dirty fields + full-repaint counter 0x17CE8CC (12 §5.3).
+    pub panel: crate::hud::Panel,
+    // HUD impl block kept between Hud_OnRemove and the next Hud_Load (12 §5.1a).
+    pub hud_kept: Option<crate::hud::Kept>,
+    // Port queue of bomb areas created by effects (14 §2.13).
+    pub bomb_areas: crate::bomb::AreaQueue,
+    // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
+    pub timer_pause: i32,
+    // Global 0x18B8A2C "frames since load" (13 §3): ECL native 30 (= arg), 2 at the end of StageStart, 1 by
+    // GameMgr_OnRemove, 0 by Result / MainMenu register; Supervisor_Calc decrements it once per frame while ≠ 0.
+    // Read by screen effects 1 / 2 / 4, which are removed while it is ≠ 0.
+    pub load_frames: i32,
     // Debug: `TH08_SE_LOG` logs each frame's flushed SE ids.
     pub se_log: bool,
     pub settings: &'static crate::settings::Settings,
@@ -45,13 +59,19 @@ pub struct Ctx {
 }
 
 // Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue
-// (13 §1.2), effect manager (13 §2), GM flags word (11 §2.1) and rank (11 §2). Built by `sys!(ctx)`; these become
+// (13 §1.2), effect manager (13 §2), GM flags word (11 §2.1), rank (11 §2), ascii overlays (13 §4), HUD dirty fields
+// (12 §5.3), bomb area queue (14 §2.13), freeze byte and frames-since-load (13 §3). Built by `sys!(ctx)`; these become
 // `World` fields in step 9 (ARCH_A §2.3).
 pub struct Sys<'a> {
     pub sound: &'a mut crate::sound::Queue,
     pub fx: &'a mut crate::effect::Effects,
     pub flags: &'a mut u32,
     pub rank: &'a mut crate::gamemgr::Rank,
+    pub ov: &'a mut crate::ascii::Overlays,
+    pub panel: &'a mut crate::hud::Panel,
+    pub areas: &'a mut crate::bomb::AreaQueue,
+    pub timer_pause: &'a mut i32,
+    pub load_frames: &'a mut i32,
 }
 
 impl Sys<'_> {
@@ -61,6 +81,11 @@ impl Sys<'_> {
             fx: &mut *self.fx,
             flags: &mut *self.flags,
             rank: &mut *self.rank,
+            ov: &mut *self.ov,
+            panel: &mut *self.panel,
+            areas: &mut *self.areas,
+            timer_pause: &mut *self.timer_pause,
+            load_frames: &mut *self.load_frames,
         }
     }
 }
@@ -73,6 +98,11 @@ macro_rules! sys {
             fx: &mut $c.effects,
             flags: &mut $c.game.flags,
             rank: &mut $c.game.rank,
+            ov: &mut $c.overlays,
+            panel: &mut $c.panel,
+            areas: &mut $c.bomb_areas,
+            timer_pause: &mut $c.timer_pause,
+            load_frames: &mut $c.load_frames,
         }
     };
 }
@@ -84,6 +114,11 @@ pub struct TestSys {
     pub sound: crate::sound::Queue,
     pub effects: crate::effect::Effects,
     pub game: TestGame,
+    pub overlays: crate::ascii::Overlays,
+    pub panel: crate::hud::Panel,
+    pub bomb_areas: crate::bomb::AreaQueue,
+    pub timer_pause: i32,
+    pub load_frames: i32,
 }
 
 #[cfg(test)]
@@ -160,6 +195,12 @@ impl Ctx {
             ascii: Default::default(),
             sound: Default::default(),
             effects: Default::default(),
+            overlays: Default::default(),
+            panel: Default::default(),
+            hud_kept: None,
+            bomb_areas: Vec::new(),
+            timer_pause: 0,
+            load_frames: 0,
             se_log: settings.se_log,
             settings,
             drawlog: None,

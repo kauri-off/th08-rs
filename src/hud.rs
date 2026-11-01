@@ -12,7 +12,7 @@ use crate::player::{PlayerRef, Popup, Stats};
 use crate::stage::Stage;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 // Hud_Calc 0x4338CA prio 15, Hud_Draw 0x433927 prio 17; ANM slots front 10, loadingNN 12, stgNtxt 13, times 14 (12 §5.1).
@@ -179,17 +179,14 @@ pub struct Hud {
 
 // The HUD impl block survives a continuing stage (12 §5.1a): front VMs 0–15, the difficulty VM, the stored total;
 // HUD +0x24 / +0x28 are zeroed only by Hud_Register's fresh-start fill, so they carry over too (12 §5.1).
-struct Kept {
+#[derive(Clone)]
+pub struct Kept {
     front: Vec<AnmVm>,
     diff_vm: AnmVm,
     label_vm: AnmVm,
     clear_total: i32,
     timer: i32,
     timer_last: i32,
-}
-
-thread_local! {
-    static KEPT: RefCell<Option<Kept>> = const { RefCell::new(None) };
 }
 
 // FUN_00437d87 HUD cover (06 §10.2): impl+0x398C ≥ 0 and VM impl+0x3778 waits for an interrupt (flag bit 14).
@@ -199,23 +196,11 @@ fn hud_cover(load_vm: &AnmVm) -> bool {
 
 // HUD +0x04 lives / bombs dirty fields and the full-repaint counter 0x17CE8CC (12 §5.3). The port repaints the panel
 // every frame; they only decide on which frames the last-spell label latch is recomputed.
-#[derive(Clone, Copy)]
-struct Panel {
+#[derive(Clone, Copy, Default)]
+pub struct Panel {
     lives: u8,
     bombs: u8,
     repaint: i32,
-}
-
-thread_local! {
-    static PANEL: Cell<Panel> = const { Cell::new(Panel { lives: 0, bombs: 0, repaint: 0 }) };
-}
-
-fn panel_update(f: impl FnOnce(&mut Panel)) {
-    PANEL.with(|c| {
-        let mut p = c.get();
-        f(&mut p);
-        c.set(p);
-    });
 }
 
 // One Hud_DrawPanel frame of the label latch (12 §5.3 steps 3, 4, 8): full repaint (tile VM 13 running or counter
@@ -239,17 +224,19 @@ fn label_step(mut pn: Panel, vm13: bool, cond: bool, latch: bool, paused: bool) 
 }
 
 // Dirty-field writers (12 §5.3 table): `v` = 2, or 3 for `Spell_Start` / `Spell_End` (+0x04 |= 0xF).
-pub fn mark_lives(v: u8) {
-    panel_update(|p| p.lives = v);
-}
+impl Panel {
+    pub fn mark_lives(&mut self, v: u8) {
+        self.lives = v;
+    }
 
-pub fn mark_bombs(v: u8) {
-    panel_update(|p| p.bombs = v);
-}
+    pub fn mark_bombs(&mut self, v: u8) {
+        self.bombs = v;
+    }
 
-// 0x17CE8CC := n (12 §5.3 counter writers).
-pub fn set_repaint(n: i32) {
-    panel_update(|p| p.repaint = n);
+    // 0x17CE8CC := n (12 §5.3 counter writers).
+    pub fn set_repaint(&mut self, n: i32) {
+        self.repaint = n;
+    }
 }
 
 // Hud_Load continuing branch (12 §5.1a): tile (r, c) = capture.anm script 3 + ((r + c) & 1), I4 (+0x120) := r + 2c,
@@ -398,10 +385,10 @@ impl Hud {
         self.bar_state = 0;
         self.bar_disp = 0.0;
         // All six dirty fields := 2, 0x17CE8CC := 0x10 (12 §5.1a).
-        mark_lives(2);
-        mark_bombs(2);
-        set_repaint(0x10);
-        let kept = KEPT.with_borrow_mut(Option::take).filter(|_| !self.fresh);
+        ctx.panel.mark_lives(2);
+        ctx.panel.mark_bombs(2);
+        ctx.panel.set_repaint(0x10);
+        let kept = ctx.hud_kept.take().filter(|_| !self.fresh);
         if let Some(k) = kept {
             // Continuing stage: no VM-13 repaint, no panel fade-in; the stage-start transition over the old capture.
             self.front = k.front;
@@ -498,7 +485,7 @@ impl Hud {
                 // Full-repaint counter 0x17CE8CC := 442 (10 §5.1).
                 Event::Flash => {
                     ctx.effects.screen(4, 442, 0xFFFFFF, 0, 0, 0x15);
-                    set_repaint(442);
+                    ctx.panel.set_repaint(442);
                 }
                 Event::StageEnd => self.stage_end(ctx),
                 // Msg op 11: GM flags & ~0x60 | 0x40 (game-clear trigger).
@@ -564,7 +551,7 @@ impl Hud {
             // Youmu&Yuyuko team and solos: +1 bomb below 3 bombs, stages 1–5 only (10 §9).
             if matches!(shot, 3 | 10 | 11) && st.bombs < 3.0 {
                 st.add_bombs(1.0, rng);
-                mark_bombs(2);
+                ctx.panel.mark_bombs(2);
                 ctx.sound.play(crate::sound::CARDGET);
             }
         }
@@ -819,7 +806,7 @@ impl Hud {
             && g.game_over == 0
             && !self.player.borrow().freeze_bullets(g.flags)
         {
-            crate::ascii::popup_large_static(
+            ctx.overlays.popup_large_static(
                 [2.0, 29.0],
                 e.chain_count(i),
                 e.enemies[i].children,
@@ -1064,13 +1051,13 @@ impl Hud {
         let vm13 = self.front.get(13).is_some_and(|v| v.ip.is_some());
         let cond = ctx.game.flags >> 7 & 3 == 1 && self.enemies.borrow().g.spell.is_some();
         let (pn, latch) = label_step(
-            PANEL.with(Cell::get),
+            ctx.panel,
             vm13,
             cond,
             self.label_latch,
             ctx.game.paused != 0,
         );
-        PANEL.with(|c| c.set(pn));
+        ctx.panel = pn;
         self.label_latch = latch;
         if latch {
             anm.draw_mode(gfx, &mut self.label_vm, 0);
@@ -1132,14 +1119,14 @@ impl Task<Ctx> for Hud {
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            KEPT.set(Some(Kept {
+            ctx.hud_kept = Some(Kept {
                 front: std::mem::take(&mut self.front),
                 diff_vm: std::mem::take(&mut self.diff_vm),
                 label_vm: std::mem::take(&mut self.label_vm),
                 clear_total: self.clear_total,
                 timer: self.enemies.borrow().g.hud_timer,
                 timer_last: self.timer_last,
-            }));
+            });
             for s in [FRONT_SLOT, TIMES_SLOT, TXT_SLOT, LOADING_SLOT]
                 .into_iter()
                 .chain(msg::FACE_SLOTS)
@@ -1240,7 +1227,7 @@ impl Task<Ctx> for Hud {
         // Show calls made earlier this frame restart their slot; then the popup timers (12 §5.1b step 5).
         for p in self.player.borrow_mut().stats.popups.drain(..) {
             // Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus: 0x17CE8CC := 2 (12 §5.3).
-            set_repaint(2);
+            ctx.panel.set_repaint(2);
             self.popups[ActivePopup::slot(p)] = Some(ActivePopup::show(p));
         }
         let gs = ctx.anm.speed;
@@ -1266,7 +1253,9 @@ impl Task<Ctx> for Hud {
         };
         // Msg_Start playfield side effects (10 §4 step 6): cancel bullets, kill killable enemies.
         if side {
-            self.enemies.borrow_mut().msg_side_effects(&mut ctx.anm);
+            self.enemies
+                .borrow_mut()
+                .msg_side_effects(&mut ctx.anm, &mut crate::sys!(ctx));
         }
         // All items auto-collect while a dialogue runs and the player is not dying (10 §5).
         if collect {
@@ -1281,8 +1270,8 @@ impl Task<Ctx> for Hud {
         self.handle_events(ctx, events);
         self.flush_texts(ctx);
         // Step 3: SKIP held raises 0x17CE8CC to 8 (12 §5.1b).
-        if inp.down(crate::input::SKIP) && PANEL.with(Cell::get).repaint < 8 {
-            set_repaint(8);
+        if inp.down(crate::input::SKIP) && ctx.panel.repaint < 8 {
+            ctx.panel.set_repaint(8);
         }
         self.stage.borrow_mut().hud_cover = hud_cover(&self.load_vm);
         self.frame += 1;

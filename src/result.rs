@@ -1269,7 +1269,7 @@ impl Task<Ctx> for ResultScreen {
             return Ok(());
         }
         // 0x18B8A2C := 0 (13 §3).
-        crate::enemy::set_load_frames(0);
+        ctx.load_frames = 0;
         // The 5×12 ranking lists are rebuilt from score.dat (15 §2.2–§2.3).
         ctx.game.score.rebuild_lists();
         match ctx

@@ -438,7 +438,7 @@ mod native {
             }
             crate::scoredat::set_save_dir(Some(save));
             ctx.anm.rng = crate::rng::Rng::seeded(self.seed as u16);
-            crate::ascii::set_frame_counter(self.sched.ascii_offset);
+            ctx.overlays.set_frame_counter(self.sched.ascii_offset);
             ctx.game.sched = Some(Sched {
                 input: self.input.as_slice().into(),
                 ..self.sched.clone()

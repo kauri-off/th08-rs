@@ -284,7 +284,7 @@ pub struct LargePopup {
 }
 
 // Popup arrays at Ascii +0xB4DC (small) and +0x15304 (large) with their round-robin cursors (+0x8298 for large).
-#[derive(Default)]
+#[derive(Clone)]
 pub struct Popups {
     pub slots: Vec<Option<Popup>>,
     next: usize,
@@ -293,8 +293,25 @@ pub struct Popups {
     large_next: usize,
 }
 
-thread_local! {
-    static POPUPS: std::cell::RefCell<Popups> = std::cell::RefCell::new(Popups { slots: vec![None; POPUP_SLOTS + 3], next: 0, special: 0, large: vec![None; LARGE_SLOTS], large_next: 0 });
+impl Default for Popups {
+    fn default() -> Self {
+        Popups {
+            slots: vec![None; POPUP_SLOTS + 3],
+            next: 0,
+            special: 0,
+            large: vec![None; LARGE_SLOTS],
+            large_next: 0,
+        }
+    }
+}
+
+// Ascii manager state that stage subsystems write mid-frame: popups (13 §4), darkness mask (13 §4.1), gauge readout
+// and boss markers (12 §5.9–§5.10). Reached through `Ctx::overlays` / `Sys::ov`.
+#[derive(Clone, Default)]
+pub struct Overlays {
+    pub popups: Popups,
+    darkness: Darkness,
+    gauge: Gauge,
 }
 
 // At most 12 digits, least significant first; a negative value is the single glyph 10 (13 §4).
@@ -313,32 +330,36 @@ fn digits(value: i32) -> Vec<u8> {
     }
 }
 
-// Popup_Number 0x403200: slots 0–719 round robin; pos in playfield coordinates; a negative value shows "PowerUp".
-pub fn popup(pos: [f32; 3], value: i32, colour: u32) {
-    POPUPS.with_borrow_mut(|p| {
-        let i = p.next;
-        p.next = (p.next + 1) % POPUP_SLOTS;
-        p.slots[i] = Some(Popup {
-            digits: digits(value),
-            pos: [pos[0] + 32.0, pos[1] + 16.0],
-            colour,
-            age: anmvm::Timer::default(),
-        });
-    });
-}
+impl Overlays {
+    // Popup_Number 0x403200: slots 0–719 round robin; pos in playfield coordinates; a negative value shows "PowerUp".
+    pub fn popup(&mut self, pos: [f32; 3], value: i32, colour: u32) {
+        {
+            let p = &mut self.popups;
+            let i = p.next;
+            p.next = (p.next + 1) % POPUP_SLOTS;
+            p.slots[i] = Some(Popup {
+                digits: digits(value),
+                pos: [pos[0] + 32.0, pos[1] + 16.0],
+                colour,
+                age: anmvm::Timer::default(),
+            });
+        }
+    }
 
-// 0x403330: the three extra slots 720–722, round robin.
-pub fn popup_special(pos: [f32; 3], value: i32, colour: u32) {
-    POPUPS.with_borrow_mut(|p| {
-        let i = POPUP_SLOTS + p.special;
-        p.special = (p.special + 1) % 3;
-        p.slots[i] = Some(Popup {
-            digits: digits(value),
-            pos: [pos[0] + 32.0, pos[1] + 16.0],
-            colour,
-            age: anmvm::Timer::default(),
-        });
-    });
+    // 0x403330: the three extra slots 720–722, round robin.
+    pub fn popup_special(&mut self, pos: [f32; 3], value: i32, colour: u32) {
+        {
+            let p = &mut self.popups;
+            let i = POPUP_SLOTS + p.special;
+            p.special = (p.special + 1) % 3;
+            p.slots[i] = Some(Popup {
+                digits: digits(value),
+                pos: [pos[0] + 32.0, pos[1] + 16.0],
+                colour,
+                age: anmvm::Timer::default(),
+            });
+        }
+    }
 }
 
 // Large popup glyphs, least significant first: [0xF, p4 digits, 0xE,] p3 digits, 0xD → "+p3" / "+p3(p4)".
@@ -355,36 +376,40 @@ fn large_glyphs(p3: i32, p4: i32) -> Vec<u8> {
     g
 }
 
-// Popup_Large 0x403460 (life 90); `pos` in playfield coordinates.
-pub fn popup_large(pos: [f32; 3], p3: i32, p4: i32, colour: u32, scale: f32) {
-    POPUPS.with_borrow_mut(|p| {
-        let i = p.large_next;
-        p.large_next = (i + 1) % LARGE_SLOTS;
-        p.large[i] = Some(LargePopup {
-            glyphs: large_glyphs(p3, p4),
-            pos: [pos[0] + 32.0, pos[1] + 16.0],
-            colour,
-            scale,
-            age: anmvm::Timer::default(),
-        });
-    });
-}
+impl Overlays {
+    // Popup_Large 0x403460 (life 90); `pos` in playfield coordinates.
+    pub fn popup_large(&mut self, pos: [f32; 3], p3: i32, p4: i32, colour: u32, scale: f32) {
+        {
+            let p = &mut self.popups;
+            let i = p.large_next;
+            p.large_next = (i + 1) % LARGE_SLOTS;
+            p.large[i] = Some(LargePopup {
+                glyphs: large_glyphs(p3, p4),
+                pos: [pos[0] + 32.0, pos[1] + 16.0],
+                colour,
+                scale,
+                age: anmvm::Timer::default(),
+            });
+        }
+    }
 
-// Popup_LargeStatic 0x403600: starts at age 88 (a two-frame display), x += count · 3.5 (count includes the '+').
-pub fn popup_large_static(pos: [f32; 2], p3: i32, p4: i32, colour: u32) {
-    let glyphs = large_glyphs(p3, p4);
-    let x = pos[0] + 32.0 + glyphs.len() as f32 * 3.5;
-    POPUPS.with_borrow_mut(|p| {
-        let i = p.large_next;
-        p.large_next = (i + 1) % LARGE_SLOTS;
-        p.large[i] = Some(LargePopup {
-            glyphs,
-            pos: [x, pos[1] + 16.0],
-            colour,
-            scale: 1.0,
-            age: timer_at(88),
-        });
-    });
+    // Popup_LargeStatic 0x403600: starts at age 88 (a two-frame display), x += count · 3.5 (count includes the '+').
+    pub fn popup_large_static(&mut self, pos: [f32; 2], p3: i32, p4: i32, colour: u32) {
+        let glyphs = large_glyphs(p3, p4);
+        let x = pos[0] + 32.0 + glyphs.len() as f32 * 3.5;
+        {
+            let p = &mut self.popups;
+            let i = p.large_next;
+            p.large_next = (i + 1) % LARGE_SLOTS;
+            p.large[i] = Some(LargePopup {
+                glyphs,
+                pos: [x, pos[1] + 16.0],
+                colour,
+                scale: 1.0,
+                age: timer_at(88),
+            });
+        }
+    }
 }
 
 fn timer_at(v: i32) -> anmvm::Timer {
@@ -393,20 +418,20 @@ fn timer_at(v: i32) -> anmvm::Timer {
     t
 }
 
-// Popup part of `Ascii_InitVms` 0x402450 (13 §4): all slots cleared, small (+0x8290) and special (+0x8294) cursors
-// := 0; the large cursor +0x8298 is kept across stages and games.
-pub fn clear_popups() {
-    POPUPS.with_borrow_mut(|p| {
-        p.slots.iter_mut().for_each(|s| *s = None);
-        p.large.iter_mut().for_each(|s| *s = None);
-        p.next = 0;
-        p.special = 0;
-    });
+impl Popups {
+    // Popup part of `Ascii_InitVms` 0x402450 (13 §4): all slots cleared, small (+0x8290) and special (+0x8294) cursors
+    // := 0; the large cursor +0x8298 is kept across stages and games.
+    pub fn clear(&mut self) {
+        self.slots.iter_mut().for_each(|s| *s = None);
+        self.large.iter_mut().for_each(|s| *s = None);
+        self.next = 0;
+        self.special = 0;
+    }
 }
 
 // Ascii_Calc popup part (13 §4): small popups rise 0.5·gs per frame; large popups do not move.
-fn popups_calc(gs: f32) {
-    POPUPS.with_borrow_mut(|p| {
+fn popups_calc(p: &mut Popups, gs: f32) {
+    {
         for s in p.slots.iter_mut() {
             if let Some(q) = s {
                 q.pos[1] -= 0.5 * gs;
@@ -426,7 +451,7 @@ fn popups_calc(gs: f32) {
                 }
             }
         }
-    });
+    }
 }
 
 // Squared player distance d (truncated to int) → alpha 0x50 / ramp / 0xD0 (13 §4). The player is in playfield
@@ -468,11 +493,17 @@ fn popup_glyph(anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm, idx: usize) -> b
 
 // Ascii_DrawPopups 0x405420 popup part (13 §4): small popups, the darkness mask (§4.1), then large ones, all Draw2DSnap in the playfield viewport.
 // `pl`: the effect manager's player-position mirror.
-fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, pl: [f32; 3]) {
+fn popups_draw(
+    ov: &mut Overlays,
+    anm: &mut crate::anmmgr::AnmManager,
+    gfx: &mut crate::gfx::Gfx,
+    pl: [f32; 3],
+) {
     gfx.set_viewport(crate::gfx::PLAYFIELD);
     let mut small = popup_vm(anm, 0, 0.1);
     let mut large = popup_vm(anm, 0x88, 0.0);
-    POPUPS.with_borrow(|p| {
+    {
+        let p = &ov.popups;
         for q in p.slots.iter().flatten() {
             set_rgb(&mut small, q.colour);
             small.color[anmvm::A] = popup_alpha(q.pos, pl);
@@ -494,7 +525,7 @@ fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, p
                 }
             }
         }
-        darkness_draw(anm, gfx, pl);
+        darkness_draw(&mut ov.darkness, anm, gfx, pl);
         for q in p.large.iter().flatten() {
             set_rgb(&mut large, q.colour);
             large.color[anmvm::A] = popup_alpha(q.pos, pl);
@@ -509,33 +540,31 @@ fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, p
                 }
             }
         }
-    });
+    }
 }
 
 // Darkness mask (13 §4.1): alpha Ascii +0x16F08 (int, 0x4E3D28), radius +0x16F04 (f32, 0x4E3D24), hole VM +0x16F0C.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Darkness {
     alpha: i32,
     radius: f32,
     vm: AnmVm,
 }
 
-thread_local! {
-    static DARKNESS: std::cell::RefCell<Darkness> = std::cell::RefCell::new(Darkness::default());
-}
+impl Overlays {
+    // ECL native 0 (07 §12): alpha := int var 10000, radius := float var 10016.
+    pub fn set_darkness(&mut self, alpha: i32, radius: f32) {
+        (self.darkness.alpha, self.darkness.radius) = (alpha, radius);
+    }
 
-// ECL native 0 (07 §12): alpha := int var 10000, radius := float var 10016.
-pub fn set_darkness(alpha: i32, radius: f32) {
-    DARKNESS.with_borrow_mut(|d| (d.alpha, d.radius) = (alpha, radius));
-}
+    // Alpha := 0 by `Spell_End`, `GameManager_StageStart` and `GameMgr_OnRemove` (13 §4.1); the radius is kept.
+    pub fn clear_darkness(&mut self) {
+        self.darkness.alpha = 0;
+    }
 
-// Alpha := 0 by `Spell_End`, `GameManager_StageStart` and `GameMgr_OnRemove` (13 §4.1); the radius is kept.
-pub fn clear_darkness() {
-    DARKNESS.with_borrow_mut(|d| d.alpha = 0);
-}
-
-pub fn darkness_alpha() -> i32 {
-    DARKNESS.with_borrow(|d| d.alpha)
+    pub fn darkness_alpha(&self) -> i32 {
+        self.darkness.alpha
+    }
 }
 
 // The four black rects (x0, y0, x1, y1) around the player P (playfield) with radius r and shake offset s (13 §4.1).
@@ -561,8 +590,13 @@ fn darkness_rects(p: [f32; 2], r: f32, s: [f32; 2]) -> Vec<[f32; 4]> {
 
 // Drawn by Ascii_DrawPopups between the small and large popups while alpha > 0: Screen_FillRect rects (untextured,
 // z 0, ZFUNC unchanged), then etama.anm script 105 (sprite 229, 128×128) set every frame, scale r / 63, Draw2DSnap.
-fn darkness_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, player: [f32; 3]) {
-    DARKNESS.with_borrow_mut(|d| {
+fn darkness_draw(
+    d: &mut Darkness,
+    anm: &mut crate::anmmgr::AnmManager,
+    gfx: &mut crate::gfx::Gfx,
+    player: [f32; 3],
+) {
+    {
         if d.alpha <= 0 {
             return;
         }
@@ -576,15 +610,16 @@ fn darkness_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx,
         d.vm.pos = [player[0] + 32.0, player[1] + 16.0, player[2]];
         d.vm.color[anmvm::A] = a;
         anm.draw_mode(gfx, &mut d.vm, 0);
-    });
+    }
 }
 
 // Human/youkai gauge readout VMs (12 §5.9): bar, 人, 妖, marker, glyph stamp.
 // VMs G0–G4 at ASCII manager +0x7EC.. and the stored interrupt +0x827C (12 §5.9).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Gauge {
     vms: Vec<AnmVm>,
     id: i32,
+    // TODO(step 9): the player link becomes a World borrow.
     player: std::rc::Weak<std::cell::RefCell<crate::player::Player>>,
     // Boss "ENEMY" markers M_k at +0x17C4 + k·0x2A4, k = boss slot (12 §5.10).
     markers: Vec<AnmVm>,
@@ -594,13 +629,11 @@ struct Gauge {
     frame: u32,
 }
 
-thread_local! {
-    static GAUGE: std::cell::RefCell<Gauge> = std::cell::RefCell::new(Gauge::default());
-}
-
-// Session tool (12 §5.10 slow boots): starts +0x8284 at the recording's boot offset; a live port keeps 0.
-pub fn set_frame_counter(v: u32) {
-    GAUGE.with_borrow_mut(|g| g.frame = v);
+impl Overlays {
+    // Session tool (12 §5.10 slow boots): starts +0x8284 at the recording's boot offset; a live port keeps 0.
+    pub fn set_frame_counter(&mut self, v: u32) {
+        self.gauge.frame = v;
+    }
 }
 
 const G_BAR: usize = 0;
@@ -609,69 +642,73 @@ const G_YOUKAI: usize = 2;
 const G_MARKER: usize = 3;
 const G_GLYPH: usize = 4;
 
-// Ascii_SetupGaugeVms 0x402600: restarts the scripts (keeping pos), places 人/妖 from the gauge limits, re-sends the stored interrupt.
-// AnmFile_StartScript does not zero pos (05 §8), so G0/G3 keep theirs; min/max = gauge limits (09 §9.3).
-// The restart of +0x1520 (script 9) is skipped: that VM is run but never drawn (12 §5.9 step 1).
-pub fn gauge_setup(anm: &mut crate::anmmgr::AnmManager, min: i32, max: i32) {
-    GAUGE.with_borrow_mut(|g| {
-        if g.vms.is_empty() {
-            g.vms = vec![AnmVm::default(); 5];
-            g.markers = vec![AnmVm::default(); 4];
+impl Overlays {
+    // Ascii_SetupGaugeVms 0x402600: restarts the scripts (keeping pos), places 人/妖 from the gauge limits, re-sends the stored interrupt.
+    // AnmFile_StartScript does not zero pos (05 §8), so G0/G3 keep theirs; min/max = gauge limits (09 §9.3).
+    // The restart of +0x1520 (script 9) is skipped: that VM is run but never drawn (12 §5.9 step 1).
+    pub fn gauge_setup(&mut self, anm: &mut crate::anmmgr::AnmManager, min: i32, max: i32) {
+        {
+            let g = &mut self.gauge;
+            if g.vms.is_empty() {
+                g.vms = vec![AnmVm::default(); 5];
+                g.markers = vec![AnmVm::default(); 4];
+            }
+            for (k, script) in [
+                (G_BAR, 5),
+                (G_YOUKAI, 7),
+                (G_HUMAN, 6),
+                (G_MARKER, 8),
+                (G_GLYPH, 4),
+            ] {
+                anm.start_script(&mut g.vms[k], ANM_SLOT, script);
+            }
+            for m in g.markers.iter_mut() {
+                anm.start_script(m, ANM_SLOT, MARKER_SCRIPT);
+            }
+            g.vms[G_HUMAN].pos[0] -= 56.0 * min as f32 / -10000.0;
+            g.vms[G_YOUKAI].pos[0] += 56.0 * max as f32 / 10000.0;
+            let id = g.id;
+            g.vms[..4]
+                .iter_mut()
+                .for_each(|v| v.pending_interrupt = id as _);
         }
-        for (k, script) in [
-            (G_BAR, 5),
-            (G_YOUKAI, 7),
-            (G_HUMAN, 6),
-            (G_MARKER, 8),
-            (G_GLYPH, 4),
-        ] {
-            anm.start_script(&mut g.vms[k], ANM_SLOT, script);
-        }
-        for m in g.markers.iter_mut() {
-            anm.start_script(m, ANM_SLOT, MARKER_SCRIPT);
-        }
-        g.vms[G_HUMAN].pos[0] -= 56.0 * min as f32 / -10000.0;
-        g.vms[G_YOUKAI].pos[0] += 56.0 * max as f32 / 10000.0;
-        let id = g.id;
-        g.vms[..4]
-            .iter_mut()
-            .for_each(|v| v.pending_interrupt = id as _);
-    });
-}
+    }
 
-pub fn gauge_player(p: &std::rc::Rc<std::cell::RefCell<crate::player::Player>>) {
-    GAUGE.with_borrow_mut(|g| g.player = std::rc::Rc::downgrade(p));
-}
+    pub fn gauge_player(&mut self, p: &std::rc::Rc<std::cell::RefCell<crate::player::Player>>) {
+        self.gauge.player = std::rc::Rc::downgrade(p);
+    }
 
-// Ascii_GaugeInterrupt 0x4070B0 (12 §5.9): 1 show, 2/3 fade out/in, 99 hide (catch-all label); sent to G0–G3.
-pub fn gauge_interrupt(id: i32) {
-    GAUGE.with_borrow_mut(|g| {
-        g.id = id;
-        g.vms
-            .iter_mut()
-            .take(4)
-            .for_each(|v| v.pending_interrupt = id as _);
-    });
-}
-
-// Player_UpdateGaugeFade 0x44D420 (12 §5.9), player pos in playfield coordinates.
-// 12 §5.9 interrupts 2/3; the player-side writes to +0xE2AA4 / +0xE2AB0 / +0xE2AC0 are not modelled here.
-pub fn gauge_fade(pos: [f32; 3]) {
-    let cur = GAUGE.with_borrow(|g| g.id);
-    if pos[1] < 400.0 {
-        if cur == 2 {
-            gauge_interrupt(3);
+    // Ascii_GaugeInterrupt 0x4070B0 (12 §5.9): 1 show, 2/3 fade out/in, 99 hide (catch-all label); sent to G0–G3.
+    pub fn gauge_interrupt(&mut self, id: i32) {
+        {
+            let g = &mut self.gauge;
+            g.id = id;
+            g.vms
+                .iter_mut()
+                .take(4)
+                .for_each(|v| v.pending_interrupt = id as _);
         }
-    } else if cur != 2 && pos[0] < 160.0 {
-        gauge_interrupt(2);
-    } else if cur == 2 && pos[0] > 160.0 {
-        gauge_interrupt(3);
+    }
+
+    // Player_UpdateGaugeFade 0x44D420 (12 §5.9), player pos in playfield coordinates.
+    // 12 §5.9 interrupts 2/3; the player-side writes to +0xE2AA4 / +0xE2AB0 / +0xE2AC0 are not modelled here.
+    pub fn gauge_fade(&mut self, pos: [f32; 3]) {
+        let cur = self.gauge.id;
+        if pos[1] < 400.0 {
+            if cur == 2 {
+                self.gauge_interrupt(3);
+            }
+        } else if cur != 2 && pos[0] < 160.0 {
+            self.gauge_interrupt(2);
+        } else if cur == 2 && pos[0] > 160.0 {
+            self.gauge_interrupt(3);
+        }
     }
 }
 
 // Run every frame by Ascii_Calc, also while paused (12 §5.9, §5.10).
-fn gauge_calc(anm: &mut crate::anmmgr::AnmManager) {
-    GAUGE.with_borrow_mut(|g| {
+fn gauge_calc(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager) {
+    {
         g.vms
             .iter_mut()
             .chain(g.markers.iter_mut())
@@ -679,7 +716,7 @@ fn gauge_calc(anm: &mut crate::anmmgr::AnmManager) {
             .for_each(|v| {
                 v.run(anm);
             })
-    });
+    }
 }
 
 // ascii.anm script 10: sprite 157 plate, label 1 fade in over 30, label 2 fade out over 30 then hidden, −1 hidden.
@@ -687,38 +724,35 @@ const MARKER_SCRIPT: usize = 10;
 const MARKER_SPRITE: i16 = 157;
 const MARKER_BLINK_SPRITE: i16 = 158;
 
-// 0x422BB0: interrupt to marker k (12 §5.10).
-pub fn marker_interrupt(k: usize, id: u16) {
-    GAUGE.with_borrow_mut(|g| {
-        if let Some(m) = g.markers.get_mut(k) {
+impl Overlays {
+    // 0x422BB0: interrupt to marker k (12 §5.10).
+    pub fn marker_interrupt(&mut self, k: usize, id: u16) {
+        if let Some(m) = self.gauge.markers.get_mut(k) {
             m.pending_interrupt = id;
         }
-    });
-}
+    }
 
-// Op 127 −1 / Enemy_Free of a boss: interrupt 2 and pos := (−999, −999, 0) (12 §5.10).
-pub fn marker_release(k: usize) {
-    marker_interrupt(k, 2);
-    GAUGE.with_borrow_mut(|g| {
-        if let Some(m) = g.markers.get_mut(k) {
+    // Op 127 −1 / Enemy_Free of a boss: interrupt 2 and pos := (−999, −999, 0) (12 §5.10).
+    pub fn marker_release(&mut self, k: usize) {
+        self.marker_interrupt(k, 2);
+        if let Some(m) = self.gauge.markers.get_mut(k) {
             m.pos = [-999.0, -999.0, 0.0];
         }
-    });
-}
+    }
 
-// Per boss-flag enemy in EnemyMgr_Calc after the hit flash (12 §5.10): pos (x, 472, 0) in screen coordinates.
-pub fn marker_track(k: usize, x: f32, mode: u8) {
-    GAUGE.with_borrow_mut(|g| {
+    // Per boss-flag enemy in EnemyMgr_Calc after the hit flash (12 §5.10): pos (x, 472, 0) in screen coordinates.
+    pub fn marker_track(&mut self, k: usize, x: f32, mode: u8) {
+        let g = &mut self.gauge;
         if let Some(m) = g.markers.get_mut(k) {
             m.pos = [x, 472.0, 0.0];
             g.marker_mode[k] = mode;
         }
-    });
+    }
 }
 
 // Tail of Ascii_DrawStrings (prio 20, full-screen viewport, 12 §5.10); the colour is rewritten every frame.
-fn markers_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
-    GAUGE.with_borrow_mut(|g| {
+fn markers_draw(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
+    {
         let px = g
             .player
             .upgrade()
@@ -747,17 +781,18 @@ fn markers_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) 
             m.color[anmvm::A] = (argb >> 24) as u8;
             anm.draw_mode(gfx, m, 0);
         }
-    });
+    }
 }
 
 // End of Ascii_DrawPopups 0x405420 (draw prio 14): bar, ends, marker, percent text and max point value.
 // Nothing is drawn unless G0 is visible; g = gauge stats+0x22 (12 §5.9 draw steps 1–4).
 fn gauge_draw(
+    g: &mut Gauge,
     anm: &mut crate::anmmgr::AnmManager,
     gfx: &mut crate::gfx::Gfx,
     fallback: &crate::player::Stats,
 ) {
-    GAUGE.with_borrow_mut(|g| {
+    {
         if g.vms.len() < 5 || !g.vms[G_BAR].visible() {
             return;
         }
@@ -820,7 +855,7 @@ fn gauge_draw(
             div /= 10;
         }
         vm.scale = [1.0, 1.0];
-    });
+    }
 }
 
 // Ascii_DrawGaugePercent 0x405E10 (12 §5.9): "%d.%02d%%" of value/100 with glyph VM sprites 136 + (0–9, 10 '%',
@@ -1237,6 +1272,7 @@ impl ContinueMenu {
         inp: &Input,
         audio: &mut crate::audio::Audio,
         sound: &mut crate::sound::Queue,
+        panel: &mut crate::hud::Panel,
     ) {
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
@@ -1358,7 +1394,7 @@ impl ContinueMenu {
                     self.clock_vm.pending_interrupt = 2;
                 } else if self.phase_frame >= 90 {
                     // Resume (counter > 0x59): the only 0x17CE8CC := 8 of 0x404890 (0x40512A, 12 §5.3).
-                    crate::hud::set_repaint(8);
+                    panel.set_repaint(8);
                     g.continue_apply = true;
                     g.game_over = 0;
                     g.mark_play_time();
@@ -1406,7 +1442,7 @@ impl Task<Ctx> for AsciiManager {
             ctx.anm
                 .load(&mut ctx.gfx, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
             let l = crate::player::GaugeLimits::default();
-            gauge_setup(&mut ctx.anm, l.min, l.max);
+            ctx.overlays.gauge_setup(&mut ctx.anm, l.min, l.max);
         }
         Ok(())
     }
@@ -1418,7 +1454,7 @@ impl Task<Ctx> for AsciiManager {
             return Ret::Next;
         }
         let inp = ctx.input;
-        gauge_calc(&mut ctx.anm);
+        gauge_calc(&mut ctx.overlays.gauge, &mut ctx.anm);
         // The pause menu runs while paused, the continue menu while game_over; popups only otherwise (12 §3, 13 §4).
         if ctx.game.paused != 0 {
             // 11 §2: paused = 2 once the menu was drawn (GameMgr_Calc opened it after this calc).
@@ -1437,17 +1473,19 @@ impl Task<Ctx> for AsciiManager {
                 &inp,
                 &mut ctx.audio,
                 &mut ctx.sound,
+                &mut ctx.panel,
             );
         } else {
             self.cont.open = false;
             self.pause.state = 0;
             // Ascii_Calc 0x402200 (calc prio 1) reads GameFlags bit 10 live, not the end-of-Player_Calc mirror (13 §4).
             if ctx.game.flags & crate::gamemgr::F_DEATH == 0 {
-                popups_calc(ctx.anm.speed);
+                popups_calc(&mut ctx.overlays.popups, ctx.anm.speed);
             }
         }
         // +0x8284 is incremented at the very end of Ascii_Calc (12 §5.10).
-        GAUGE.with_borrow_mut(|g| g.frame = g.frame.wrapping_add(1));
+        let g = &mut ctx.overlays.gauge;
+        g.frame = g.frame.wrapping_add(1);
         Ret::Next
     }
 
@@ -1483,16 +1521,26 @@ impl Task<Ctx> for AsciiManager {
             }
         }
         if !high {
-            popups_draw(&mut ctx.anm, &mut ctx.gfx, ctx.effects.player);
+            popups_draw(
+                &mut ctx.overlays,
+                &mut ctx.anm,
+                &mut ctx.gfx,
+                ctx.effects.player,
+            );
             // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
             ctx.anm.screen_offset = [0.0; 2];
-            gauge_draw(&mut ctx.anm, &mut ctx.gfx, &ctx.game.stats);
+            gauge_draw(
+                &mut ctx.overlays.gauge,
+                &mut ctx.anm,
+                &mut ctx.gfx,
+                &ctx.game.stats,
+            );
         }
         let mut q = std::mem::take(&mut ctx.ascii);
         q.draw(&ctx.anm, &mut ctx.gfx, high);
         ctx.ascii = q;
         if high {
-            markers_draw(&mut ctx.anm, &mut ctx.gfx);
+            markers_draw(&mut ctx.overlays.gauge, &mut ctx.anm, &mut ctx.gfx);
         }
         Ret::Next
     }
@@ -1537,6 +1585,7 @@ mod tests {
                 &Input::default(),
                 &mut audio,
                 &mut Default::default(),
+                &mut Default::default(),
             );
         }
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1547,6 +1596,7 @@ mod tests {
             &press(input::UP),
             &mut audio,
             &mut Default::default(),
+            &mut Default::default(),
         );
         assert!(m.yes);
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1555,6 +1605,7 @@ mod tests {
             &mut g,
             &Input::default(),
             &mut audio,
+            &mut Default::default(),
             &mut Default::default(),
         );
         assert_eq!(m.vms[1].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1579,6 +1630,7 @@ mod tests {
             &Input::default(),
             &mut audio,
             &mut Default::default(),
+            &mut Default::default(),
         );
         assert!(m.open && !m.yes);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
@@ -1601,6 +1653,7 @@ mod tests {
             &mut g,
             &Input::default(),
             &mut audio,
+            &mut Default::default(),
             &mut Default::default(),
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_REPLAY_END));
@@ -1632,6 +1685,7 @@ mod tests {
                 &Input::default(),
                 &mut audio,
                 &mut Default::default(),
+                &mut Default::default(),
             );
         }
         m.update(
@@ -1639,6 +1693,7 @@ mod tests {
             &mut g,
             &press(input::UP),
             &mut audio,
+            &mut Default::default(),
             &mut Default::default(),
         );
         assert!(m.yes);
@@ -1648,6 +1703,7 @@ mod tests {
             &mut g,
             &press(input::SHOT),
             &mut audio,
+            &mut Default::default(),
             &mut Default::default(),
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RELOAD));
@@ -1664,6 +1720,7 @@ mod tests {
                 &Input::default(),
                 &mut audio,
                 &mut Default::default(),
+                &mut Default::default(),
             );
         }
         m.update(
@@ -1671,6 +1728,7 @@ mod tests {
             &mut g,
             &press(input::SHOT),
             &mut audio,
+            &mut Default::default(),
             &mut Default::default(),
         );
         for _ in 0..19 {
@@ -1680,6 +1738,7 @@ mod tests {
                 &Input::default(),
                 &mut audio,
                 &mut Default::default(),
+                &mut Default::default(),
             );
             assert_eq!(g.game_over, 1);
         }
@@ -1688,6 +1747,7 @@ mod tests {
             &mut g,
             &Input::default(),
             &mut audio,
+            &mut Default::default(),
             &mut Default::default(),
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RESULT));
@@ -1778,44 +1838,43 @@ mod tests {
         assert_eq!(digits(1230), vec![0, 3, 2, 1]);
         assert_eq!(digits(0), vec![0]);
         assert_eq!(digits(-1), vec![10]);
-        clear_popups();
-        popup([100.0, 200.0, 0.0], 500, 0xFFFFFFFF);
+        let mut ov = Overlays::default();
+        ov.popup([100.0, 200.0, 0.0], 500, 0xFFFFFFFF);
         for _ in 0..60 {
-            popups_calc(1.0);
+            popups_calc(&mut ov.popups, 1.0);
         }
-        let y = POPUPS.with_borrow(|p| p.slots[0].as_ref().map(|q| q.pos[1]));
+        let y = ov.popups.slots[0].as_ref().map(|q| q.pos[1]);
         assert_eq!(y, Some(216.0 - 30.0));
-        popups_calc(1.0);
-        assert!(POPUPS.with_borrow(|p| p.slots[0].is_none()));
+        popups_calc(&mut ov.popups, 1.0);
+        assert!(ov.popups.slots[0].is_none());
     }
 
     // 13 §4 (RE-Q71): Ascii_InitVms resets the small and special cursors, not the large one.
     #[test]
     fn clear_popups_resets_small_cursors() {
-        clear_popups();
-        popup([0.0; 3], 1, 0xFFFFFFFF);
-        popup_special([0.0; 3], 1, 0xFFFFFFFF);
-        popup_large_static([0.0, 0.0], 1, 0, 0xFFFFFFFF);
-        let large0 = POPUPS.with_borrow(|p| p.large_next);
-        clear_popups();
-        POPUPS.with_borrow(|p| {
-            assert_eq!((p.next, p.special, p.large_next), (0, 0, large0));
-            assert!(p.slots.iter().all(Option::is_none));
-            assert!(p.large.iter().all(Option::is_none));
-        });
+        let mut ov = Overlays::default();
+        ov.popup([0.0; 3], 1, 0xFFFFFFFF);
+        ov.popup_special([0.0; 3], 1, 0xFFFFFFFF);
+        ov.popup_large_static([0.0, 0.0], 1, 0, 0xFFFFFFFF);
+        let large0 = ov.popups.large_next;
+        ov.popups.clear();
+        let p = &ov.popups;
+        assert_eq!((p.next, p.special, p.large_next), (0, 0, large0));
+        assert!(p.slots.iter().all(Option::is_none));
+        assert!(p.large.iter().all(Option::is_none));
     }
 
     // 13 §4 (RE-Q67): Timer_Greater on the integer cur, so at speed 0.5 a small popup lives 122 calcs, a static
     // large popup (age 88) 6.
     #[test]
     fn popup_life_on_integer_cur() {
-        clear_popups();
-        popup([100.0, 200.0, 0.0], 500, 0xFFFFFFFF);
-        popup_large_static([100.0, 200.0], 1, 0, 0xFFFFFFFF);
+        let mut ov = Overlays::default();
+        ov.popup([100.0, 200.0, 0.0], 500, 0xFFFFFFFF);
+        ov.popup_large_static([100.0, 200.0], 1, 0, 0xFFFFFFFF);
         let live = |p: &Popups| (p.slots[0].is_some(), p.large[0].is_some());
         for n in 1..=122 {
-            popups_calc(0.5);
-            let (small, large) = POPUPS.with_borrow(live);
+            popups_calc(&mut ov.popups, 0.5);
+            let (small, large) = live(&ov.popups);
             assert_eq!(small, n < 122, "small {n}");
             assert_eq!(large, n < 6, "large {n}");
         }
@@ -1854,8 +1913,9 @@ mod tests {
         let r = darkness_rects([192.0, 300.0], 50.0, [2.0, -3.0]);
         assert_eq!(r[0], [32.0, 16.0, 176.0, 464.0]);
         assert_eq!(r[2], [176.0, 16.0, 276.0, 263.0]);
-        set_darkness(255, 288.0);
-        clear_darkness();
-        assert_eq!(darkness_alpha(), 0);
+        let mut ov = Overlays::default();
+        ov.set_darkness(255, 288.0);
+        ov.clear_darkness();
+        assert_eq!(ov.darkness_alpha(), 0);
     }
 }

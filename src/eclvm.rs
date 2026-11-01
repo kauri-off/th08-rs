@@ -1123,7 +1123,10 @@ impl Exec<'_> {
     fn native(&mut self, t: &mut Thread, n: i32, arg: i32) {
         let gs = self.anm.speed;
         match n {
-            0 => crate::ascii::set_darkness(t.ctx.int(V_INT0), t.ctx.flt(V_FLT0)),
+            0 => self
+                .sys
+                .ov
+                .set_darkness(t.ctx.int(V_INT0), t.ctx.flt(V_FLT0)),
             // Bounce: vars 10022 / 10023 are the gravity step and the fall-speed cap.
             2 => {
                 // EclNative_2 (07 §12 row 2): no direction tests, so an enemy still past an edge flips back next
@@ -1190,7 +1193,7 @@ impl Exec<'_> {
             }
             // Freeze byte 0x160F534 := arg; stage VMs get interrupt 2, or 1 when arg is 0 (07 §12).
             26 => {
-                set_timer_pause(arg);
+                *self.sys.timer_pause = arg;
                 self.stage_interrupt(if arg != 0 { 2 } else { 1 });
             }
             // Bullets with flag 0x100000 spawn enemy sub = var 10038 (life 800, item −2, score 10, var 10016 = angle).
@@ -1267,7 +1270,7 @@ impl Exec<'_> {
                 self.anm.speed = 1.0;
                 self.stage_interrupt(1);
             }
-            30 => set_load_frames(arg),
+            30 => *self.sys.load_frames = arg,
             // Type 3 (bomb) while the player is bombing (player +0xFDC = 0x17D6ED4), else 5 (1up) (07 §12).
             31 => {
                 let kind = if self.m.player.borrow().bombing { 3 } else { 5 };
@@ -1500,8 +1503,8 @@ impl Exec<'_> {
         // Bit 9 := 0 is Spell_Start's first statement (07 §11.1).
         self.m.g.spell_captured = false;
         // HUD +0x04 |= 0xF: lives and bombs fields := 3 (12 §5.3).
-        crate::hud::mark_lives(3);
-        crate::hud::mark_bombs(3);
+        self.sys.panel.mark_lives(3);
+        self.sys.panel.mark_bombs(3);
         crate::gui::request(crate::gui::Req::BossShow {
             face: spell.face,
             name: spell.name.clone(),
@@ -1987,8 +1990,8 @@ impl Exec<'_> {
             }
             90..=94 => self.spawn_child(t, ins),
             95 => {
-                return self.with_self_in_slot(t, |m, anm, _| {
-                    m.kill_all(anm);
+                return self.with_self_in_slot(t, |m, anm, sys| {
+                    m.kill_all(anm, sys);
                 });
             }
             96..=104 => self.bullet_op(t, ins),
@@ -2090,7 +2093,7 @@ impl Exec<'_> {
                     self.e.flags &= !A_BOSS;
                     // ENEMY marker fade-out (12 §5.10).
                     if (0..4).contains(&self.e.boss_slot) {
-                        crate::ascii::marker_release(self.e.boss_slot as usize);
+                        self.sys.ov.marker_release(self.e.boss_slot as usize);
                     }
                     // `Enemy_ReleaseOrbitEffects` 0x42A820 (13 §2.6b, RE-Q56 AL): op-128 effects fade and free.
                     for i in self.e.fx_attached.drain(..) {
@@ -2098,7 +2101,7 @@ impl Exec<'_> {
                     }
                 } else if let Some(b) = self.m.bosses.get_mut(slot as usize) {
                     if slot < 4 {
-                        crate::ascii::marker_interrupt(slot as usize, 1);
+                        self.sys.ov.marker_interrupt(slot as usize, 1);
                     }
                     *b = Some(self.idx);
                     self.e.flags |= A_BOSS;

@@ -682,7 +682,7 @@ impl GameManager {
         ctx.anm.speed = 1.0;
         g.flags &= !F_DEATH;
         // Darkness-mask alpha 0x4E3D28 := 0 (13 §4.1).
-        crate::ascii::clear_darkness();
+        ctx.overlays.clear_darkness();
         // gm+0x2D := 0 (0x43B835, 11 §4 step 10).
         g.slow_skip = 0;
         let fresh = g.fresh_start || g.practice() || g.spell_practice() || g.difficulty >= 4;
@@ -718,14 +718,14 @@ impl GameManager {
         let (stage, shot, d) = (g.stage, g.shot, g.diff());
         Player::register(ctx, self.player.clone(), shot)?;
         // Player_Load fades out boss markers M_0..M_2 (M_3 is never sent this, 12 §5.10).
-        (0..3).for_each(|k| crate::ascii::marker_interrupt(k, 2));
+        (0..3).for_each(|k| ctx.overlays.marker_interrupt(k, 2));
         // Player_Load shows the gauge readout on a fresh start; StageStart re-runs its setup after Player_Load, so
         // it uses the new game's limits (12 §5.9).
         if fresh {
-            crate::ascii::gauge_interrupt(1);
+            ctx.overlays.gauge_interrupt(1);
         }
         let l = self.player.borrow().stats.limits;
-        crate::ascii::gauge_player(&self.player);
+        ctx.overlays.gauge_player(&self.player);
         // The loader thread reaches Ascii_SetupGaugeVms k Ascii_Calc ticks before game frame 1 (12 §5.9 timing).
         let demo = (ctx.game.flags & F_DEMO != 0).then_some(ctx.game.demo);
         let k = match demo {
@@ -847,7 +847,7 @@ impl GameManager {
         g.game_over = 0;
         g.flags &= !F_ENDING_OK;
         // Ascii_InitVms after `flags &= ~0x10`, before the loading wait (11 §3.1, 13 §4).
-        crate::ascii::clear_popups();
+        ctx.overlays.popups.clear();
         self.tasks = vec![
             self.player.clone(),
             stage_t.clone(),
@@ -866,7 +866,7 @@ impl GameManager {
         self.enemies = Some(enemies);
         self.hud = Some(hud);
         // 0x18B8A2C := 2 at the end of StageStart (13 §3).
-        crate::enemy::set_load_frames(2);
+        ctx.load_frames = 2;
         Ok(())
     }
 
@@ -1001,9 +1001,9 @@ impl Task<Ctx> for GameManager {
             return;
         }
         // 0x18B8A2C := 1 (13 §3).
-        crate::enemy::set_load_frames(1);
+        ctx.load_frames = 1;
         // Darkness-mask alpha 0x4E3D28 := 0 (13 §4.1).
-        crate::ascii::clear_darkness();
+        ctx.overlays.clear_darkness();
         let mut st = self.player.borrow().stats.clone();
         st.score10 = st.score10.min(999_999_999);
         st.score_disp = st.score10;
@@ -1019,7 +1019,7 @@ impl Task<Ctx> for GameManager {
             task::remove_task(ctx, &t);
         }
         // Ascii_InitVms after the subsystem teardown (11 §2, 13 §4).
-        crate::ascii::clear_popups();
+        ctx.overlays.popups.clear();
         if ctx.game.replay() {
             ctx.game.play_clock = None;
         } else {
@@ -1080,14 +1080,14 @@ impl Task<Ctx> for GameManager {
                 && gauge_due
             {
                 self.gauge_at = None;
-                crate::ascii::gauge_setup(&mut ctx.anm, min, max);
+                ctx.overlays.gauge_setup(&mut ctx.anm, min, max);
             }
             let g = &mut ctx.game;
             if wait_due || release_due {
                 if release_due && g.end_state() == 0 {
                     g.loading = 0;
                     // StageStart after the loader wait: 0x17CE8CC := 0x3C (12 §5.3).
-                    crate::hud::set_repaint(0x3C);
+                    ctx.panel.set_repaint(0x3C);
                     g.loading_wait = 0;
                     g.flags &= !F_CLEAR_PANEL;
                     ctx.effects.release_loading_overlay();

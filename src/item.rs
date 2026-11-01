@@ -249,7 +249,7 @@ impl ItemManager {
             self.items[idx].max_flag,
         );
         let pos = self.items[idx].pos;
-        let popup = |v: i32, c: u32| crate::ascii::popup(pos, v, c);
+        let mut popup = |v: i32, c: u32| sys.ov.popup(pos, v, c);
         let line = p.sht.poc_line;
         let st = &mut p.stats;
         match kind {
@@ -315,7 +315,7 @@ impl ItemManager {
             BOMB => {
                 if st.bombs < 8.0 {
                     st.add_bombs(1.0, &mut anm.rng);
-                    crate::hud::mark_bombs(2);
+                    sys.panel.mark_bombs(2);
                 }
                 // Bomb item rank +5 (11 §3.2 rank deltas).
                 st.rank(sys.rank, 5);
@@ -344,7 +344,7 @@ impl ItemManager {
                 if v < 1 {
                     v = 10;
                 }
-                crate::ascii::popup_special(pos, v, POPUP_NORMAL);
+                sys.ov.popup_special(pos, v, POPUP_NORMAL);
                 st.add_score(v);
             }
             TIME_ORB => {
@@ -355,7 +355,7 @@ impl ItemManager {
                 } else {
                     10000
                 };
-                crate::ascii::popup_special(
+                sys.ov.popup_special(
                     pos,
                     v,
                     if st.time >= st.time_threshold {

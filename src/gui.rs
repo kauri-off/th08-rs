@@ -157,7 +157,13 @@ impl Gui {
         }
     }
 
-    fn handle(&mut self, anm: &mut AnmManager, r: Req, sound: &mut crate::sound::Queue) {
+    fn handle(
+        &mut self,
+        anm: &mut AnmManager,
+        r: Req,
+        sound: &mut crate::sound::Queue,
+        panel: &mut crate::hud::Panel,
+    ) {
         let v = &mut self.vms;
         match r {
             // Gui_ShowPlayerSpellName 0x415D60 (12 §5.8); face −1 = dissolve spell.
@@ -172,7 +178,7 @@ impl Gui {
                 anm.set_script(&mut v[4], CDBG_SLOT, 2);
                 v[4].set_sprite(anm, last as i32);
                 // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 (12 §5.3).
-                crate::hud::set_repaint(2);
+                panel.set_repaint(2);
                 anm.set_script(&mut v[6], TEXT_SLOT, 4);
                 self.texts.push((6, name.to_string(), [255, 240, 240], 0.0));
                 v[10].pending_interrupt = 1;
@@ -224,7 +230,7 @@ impl Gui {
                 }
                 self.name_only = name_only;
                 // 0x17CE8CC := 2 (12 §5.3).
-                crate::hud::set_repaint(2);
+                panel.set_repaint(2);
                 sound.play(0xE);
             }
             // Spell_HideName 0x416160 (native 23).
@@ -350,7 +356,7 @@ impl Task<Ctx> for Gui {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         for r in QUEUE.with_borrow_mut(std::mem::take) {
             Self::record(&mut ctx.game, &r);
-            self.handle(&mut ctx.anm, r, &mut ctx.sound);
+            self.handle(&mut ctx.anm, r, &mut ctx.sound, &mut ctx.panel);
         }
         if self.card >= 0 {
             // Read from score.dat every frame for the bonus line.
@@ -360,8 +366,7 @@ impl Task<Ctx> for Gui {
                 ctx.game.spell_practice(),
             );
         }
-        let frozen =
-            self.player.borrow().freeze_bullets(ctx.game.flags) || crate::enemy::timer_pause() != 0;
+        let frozen = self.player.borrow().freeze_bullets(ctx.game.flags) || ctx.timer_pause != 0;
         // Nothing runs while bullets are frozen (GameFlags bit 10) or the freeze byte 0x160F534 is set (07 §11.1).
         if !frozen {
             // Steps 1 (card active) and 2 (capture ring) run before the VMs (07 §11.1).
@@ -385,7 +390,7 @@ impl Task<Ctx> for Gui {
             if ended {
                 // Spell_HideName from step 1.1 lands before this frame's VM run.
                 for r in QUEUE.with_borrow_mut(std::mem::take) {
-                    self.handle(&mut ctx.anm, r, &mut ctx.sound);
+                    self.handle(&mut ctx.anm, r, &mut ctx.sound, &mut ctx.panel);
                 }
             }
             for k in CALC_ORDER {
