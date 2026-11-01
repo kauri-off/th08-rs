@@ -33,7 +33,9 @@ Mobile (ARCH_D_MOBILE.md; Android APK + mobile web, no iOS) adds to the steps ab
 - 8b: game data through an app-side source trait (folder / APK / web);
 - 9: saves outside the original's save points use a World clone (score.dat write uses the RNG);
 - 10: app crate builds as cdylib with desktop/Android/web entries; rfd/clap/env_logger desktop-only;
-- after 10: Android runs (≈6) then mobile web (≈2); local APK script with bundled assets.
+- after 10: Android runs (≈6) then mobile web (≈2); local APK script with bundled assets;
+- touch overlay is user-editable like other mobile ports: in-app layout editor (drag/resize each control, opacity,
+  show/hide, per-orientation profiles, reset to default), stored in port settings (+1 run).
 
 New tests introduced along the way: emit-off run (logic traces identical with emit disabled, after 8); World
 clone/restore round trip (after 9); wasm trace under node equals native (after 10, see IMPL150_QUESTIONS.md);
