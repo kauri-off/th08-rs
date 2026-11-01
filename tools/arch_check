@@ -2,6 +2,7 @@
 # usage: tools/arch_check freeze DIR | run DIR — port-vs-port references for the rewrite (REWRITE_PLAN step 0).
 # freeze: build, then write port traces + draw logs of all sessions, demos 0-3 and the pilot replays into DIR.
 # run: fmt, 0-warning build, wasm + android check (tools/android_check), cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
+# run also replays every session + pilot with emit off (`session --no-emit`, ARCH decision 2) and requires its trace = DIR's.
 # Run output of identical items keeps no draw log. Env: J (parallel jobs, default 8), CARGO_TARGET_DIR, RUN_OUT (run output, default $TARGET/arch_run), ONLY (item regex),
 # FAST=1 (run only: traces only, no draw logs — a few GB less RAM, for agents in parallel worktrees; the full run stays the gate before a commit).
 set -u
@@ -31,12 +32,19 @@ items() {
   for d in "$PILOT_SRC"/*/; do echo "p_$(basename "$d")"; done
 }
 
+# Emit-off items (run only): n_<session or pilot item>, trace compared with that item's reference trace.
+noemit_items() {
+  items | grep -E '^(s|p)_' | sed 's/^/n_/'
+}
+
 # One item into $1/$2: trace.txt, report.txt (stdout), draw.drawlog.xz, digest (sha256 of trace, report, unpacked draw).
 run_item() {
   local o=$1/$2 n=${2#?_}
   rm -rf "$o"; mkdir -p "$o"
   local dl=--port-drawlog; [[ -n ${FAST:-} ]] && dl=--no-drawlog
   case $2 in
+    n_*) local r=${2#n_} src=$SESSION_SRC; [[ $r == p_* ]] && src=$PILOT_SRC
+         nice -n 10 "$BIN/$SESSION_BIN" "$src/${r#?_}" --out "$o" --no-emit --no-drawlog > "$o/report.txt" 2> "$o/stderr.txt" ;;
     s_*) nice -n 10 "$BIN/$SESSION_BIN" "$SESSION_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
     p_*) nice -n 10 "$BIN/$SESSION_BIN" "$PILOT_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
     d_*) nice -n 10 "$BIN/$DEMOSYNC_BIN" "$n" 1-9999999 > "$o/trace.txt" 2> /dev/null
@@ -52,7 +60,7 @@ run_item() {
 export -f run_item; export FAST
 
 run_all() {
-  items | grep -E "${ONLY:-.}" | xargs -P "$J" -I{} bash -c 'run_item "$0" "$1"' "$1" {} | sort | tr '\n' ' '; echo
+  ${ITEMS:-items} | grep -E "${ONLY:-.}" | xargs -P "$J" -I{} bash -c 'run_item "$0" "$1"' "$1" {} | sort | tr '\n' ' '; echo
 }
 
 build() {
@@ -93,5 +101,14 @@ while read -r i _ tr _ rp _ dr; do
   [[ -n ${FAST:-} || $dr == "$dr2" ]] || s+=" draw DIFFERS"
   if [[ -n $s ]]; then echo "$i$s"; nd=$((nd + 1)); else echo "$i identical"; rm -f "$out/$i/draw.drawlog.xz"; fi
 done < <(awk -v r="${ONLY:-.}" '$1 ~ r' "$dir/digests.txt")
+ITEMS=noemit_items run_all "$out" > /dev/null
+ne=0
+while read -r i; do
+  ref=$(awk -v r="${i#n_}" '$1 == r {print $3}' "$dir/digests.txt")
+  got=$(awk '$1 == "trace" {print $2}' "$out/$i/digest" 2> /dev/null)
+  [[ -n $ref && $ref == "$got" ]] || { echo "$i emit-off trace DIFFERS"; ne=$((ne + 1)); }
+done < <(noemit_items | grep -E "${ONLY:-.}")
+echo "emit-off items differing: $ne"
+nd=$((nd + ne))
 echo "items differing: $nd${FAST:+ (FAST: traces only)}; total $((SECONDS - t0)) s"
 [[ $nd == 0 && $fail == 0 ]] || exit 1

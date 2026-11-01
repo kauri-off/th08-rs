@@ -2,7 +2,7 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
-use crate::drawlist::{FULLSCREEN, TexId, TextCmd};
+use crate::drawlist::{FULLSCREEN, Recorder, TexId, TextCmd};
 use crate::game::Ctx;
 use crate::gamemgr;
 use crate::input::{BOMB, DOWN, ENTER, KEY_R, PAUSE, SHOT, SKIP, UP};
@@ -168,6 +168,23 @@ pub struct MusicRoom {
 impl MusicRoom {
     fn n(&self) -> i32 {
         self.entries.len() as i32
+    }
+
+    // Rows top..end shown by the draw, at y = 18·(i − top + 1) + 84 (16 §5.2).
+    fn row_end(&self) -> i32 {
+        (self.top + ROWS).min(self.n())
+    }
+
+    fn row_y(top: i32, i: i32) -> f32 {
+        (18 * (i - top + 1) + 104 - 20) as f32
+    }
+
+    // The title is drawn at a forced pos and colour 0xFFFFFFFF, both restored after (16 §5.2).
+    fn shown_title(&self) -> AnmVm {
+        let mut t = self.title.clone();
+        t.pos = [320.0, 52.0, 0.0];
+        t.color = [255; 4];
+        t
     }
 
     // Selected row interrupt 1, the others 2 (16 §5.3).
@@ -349,22 +366,22 @@ impl Task<Ctx> for MusicRoom {
     }
 
     // MusicRoom_Draw 0x449487 (16 §5.2).
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    // Step: row VM positions, the ASCII queue strings and the VMs' draw writes; the emit draws in the same order.
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if self.removed {
             return Ret::Remove;
         }
-        ctx.rec.set_viewport(FULLSCREEN);
-        if let Some(t) = self.surface {
-            ctx.rec.image(t, 0.0, 0.0);
-        }
-        ctx.anm.draw(&mut ctx.rec, &mut self.bg);
-        let end = (self.top + ROWS).min(self.n());
-        for i in self.top..end {
-            let y = (18 * (i - self.top + 1) + 104 - 20) as f32;
+        let prep = |anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm| {
+            let mode = vm.draw_mode;
+            anm.prepare(vm, mode);
+        };
+        prep(&ctx.anm, &mut self.bg);
+        for i in self.top..self.row_end() {
+            let y = Self::row_y(self.top, i);
             let vm = &mut self.rows[i as usize];
             let argb = vm_argb(vm);
             vm.pos = [93.0, y, 0.0];
-            ctx.anm.draw(&mut ctx.rec, vm);
+            prep(&ctx.anm, vm);
             if i == self.cursor {
                 ctx.ascii.push(Text::new(93.0 - 60.0, y, CURSOR).argb(argb));
             }
@@ -372,17 +389,34 @@ impl Task<Ctx> for MusicRoom {
                 .push(Text::new(48.0, y, format!("{:2}.", i + 1)).argb(argb));
         }
         for vm in &mut self.comments {
-            ctx.anm.draw(&mut ctx.rec, vm);
+            prep(&ctx.anm, vm);
         }
         ctx.ascii
             .push(Text::new(320.0, 32.0, "Now Playing").argb(0xFFFF_FFFF));
-        // The title is drawn at a forced pos and colour 0xFFFFFFFF, both restored after.
-        let (pos, color) = (self.title.pos, self.title.color);
-        self.title.pos = [320.0, 52.0, 0.0];
-        self.title.color = [255; 4];
-        ctx.anm.draw(&mut ctx.rec, &mut self.title);
-        (self.title.pos, self.title.color) = (pos, color);
+        let mut title = self.shown_title();
+        prep(&ctx.anm, &mut title);
+        // Only the matrix cache survives the original's pos / colour restore.
+        self.title.world_matrix = title.world_matrix;
+        self.title.flags = title.flags;
         Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+        if self.removed {
+            return;
+        }
+        rec.set_viewport(FULLSCREEN);
+        if let Some(t) = self.surface {
+            rec.image(t, 0.0, 0.0);
+        }
+        ctx.anm.emit(rec, &self.bg);
+        for i in self.top..self.row_end() {
+            ctx.anm.emit(rec, &self.rows[i as usize]);
+        }
+        for vm in &self.comments {
+            ctx.anm.emit(rec, vm);
+        }
+        ctx.anm.emit(rec, &self.shown_title());
     }
 }
 

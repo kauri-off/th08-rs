@@ -757,31 +757,28 @@ impl Effects {
     }
 
     // Lists A/D/E (13 §2.4): 2D rotated sprite at pos + playfield origin + pos offset, or the ring renderer.
-    fn draw_one(&mut self, anm: &mut AnmManager, rec: &mut Recorder, i: usize, z: f32) {
-        let e = &mut self.fx[i];
+    // The original sets pos / pos_offset around the draw and restores them; the emit draws a copy instead.
+    fn draw_one(&self, anm: &AnmManager, rec: &mut Recorder, i: usize, z: f32) {
+        let e = &self.fx[i];
         if is_ring(e.kind) {
             draw_ring(anm, rec, e);
             return;
         }
-        let saved = e.vm.pos;
-        e.vm.pos = [
+        let mut vm = e.vm.clone();
+        vm.pos = [
             e.pos[0] + 32.0 + e.vm.pos_offset[0],
             e.pos[1] + 16.0 + e.vm.pos_offset[1],
             0.0,
         ];
-        let off = e.vm.pos_offset;
-        e.vm.pos_offset = [0.0; 3];
-        anm.draw_mode_z(rec, &mut e.vm, 2, z);
-        e.vm.pos = saved;
-        e.vm.pos_offset = off;
+        vm.pos_offset = [0.0; 3];
+        anm.emit_mode_z(rec, &vm, 2, z);
     }
 
     // EffectMgr_Draw (prio 12): list A, then C, then E; A/E at z 0.07.
-    pub fn draw_main(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
+    pub fn emit_main(&self, anm: &AnmManager, rec: &mut Recorder) {
         rec.set_viewport(PLAYFIELD);
         for list in [0, 2, 4] {
-            for k in 0..self.lists[list].len() {
-                let i = self.lists[list][k];
+            for &i in &self.lists[list] {
                 if list == 2 {
                     self.draw_billboard_c(anm, rec, i);
                 } else {
@@ -794,20 +791,17 @@ impl Effects {
     // List C (13 §2.4): `AnmManager_DrawBillboard` (05 §9 mode 4) at the effect pos as-is (no playfield origin, no
     // pos offset), projected through `Camera_Set2D` on the playfield viewport left by `Stage_DrawHigh`, whatever
     // the VM's camera bit; sized by the stage camera's right vector, vertex z = projected z.
-    fn draw_billboard_c(&mut self, anm: &mut AnmManager, rec: &mut Recorder, i: usize) {
-        let e = &mut self.fx[i];
-        let (saved, cam) = (e.vm.pos, e.vm.flags & anmvm::F_STAGE_CAM);
-        e.vm.pos = e.pos;
-        e.vm.flags &= !anmvm::F_STAGE_CAM;
-        anm.draw_mode_z(rec, &mut e.vm, 4, 0.0);
-        e.vm.flags |= cam;
-        e.vm.pos = saved;
+    fn draw_billboard_c(&self, anm: &AnmManager, rec: &mut Recorder, i: usize) {
+        let e = &self.fx[i];
+        let mut vm = e.vm.clone();
+        vm.pos = e.pos;
+        vm.flags &= !anmvm::F_STAGE_CAM;
+        anm.emit_mode_z(rec, &vm, 4, 0.0);
     }
 
     // List D, drawn at the end of BulletMgr_Draw (prio 13), z 0.04.
-    pub fn draw_over_bullets(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
-        for k in 0..self.lists[3].len() {
-            let i = self.lists[3][k];
+    pub fn draw_over_bullets(&self, anm: &AnmManager, rec: &mut Recorder) {
+        for &i in &self.lists[3] {
             self.draw_one(anm, rec, i, 0.04);
         }
     }
@@ -875,12 +869,12 @@ impl Effects {
 
 // Stage 6B ring draw from `Stage_DrawLow` step 4 (06 §5.1): calls the slot's draw fn through the stored pointer,
 // with no active check.
-pub fn draw_ring_at(fx: &Effects, anm: &mut AnmManager, rec: &mut Recorder, idx: usize) {
+pub fn draw_ring_at(fx: &Effects, anm: &AnmManager, rec: &mut Recorder, idx: usize) {
     draw_ring(anm, rec, &fx.fx[idx]);
 }
 
 // Ring renderer 0x427450 (13 §2.5): strip of 2(n+1) vertices, v along the ring, u across the band, WRAP sampling.
-fn draw_ring(anm: &mut AnmManager, rec: &mut Recorder, e: &Effect) {
+fn draw_ring(anm: &AnmManager, rec: &mut Recorder, e: &Effect) {
     let vm = &e.vm;
     if vm.flags & (anmvm::F_VISIBLE | anmvm::F_ENABLED) != (anmvm::F_VISIBLE | anmvm::F_ENABLED)
         || vm.color[anmvm::A] == 0
@@ -922,7 +916,7 @@ fn draw_ring(anm: &mut AnmManager, rec: &mut Recorder, e: &Effect) {
             [cx + cos_f(th) * rr, cy + sin_f(th) * rr]
         }
     };
-    let blend = anm.blend_for(vm);
+    let blend = AnmManager::blend_for(rec, vm);
     let (u0, v0, u1, v1) = (
         spr.uv[0] + vm.uv_off[0],
         spr.uv[1],
@@ -1238,9 +1232,9 @@ impl Task<Ctx> for EffectManager {
         Ret::Next
     }
 
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        ctx.effects.draw_main(&mut ctx.anm, &mut ctx.rec);
-        Ret::Next
+    // EffectMgr_Draw writes nothing: emit only.
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+        ctx.effects.emit_main(&ctx.anm, rec);
     }
 }
 
@@ -1362,12 +1356,17 @@ impl Task<Ctx> for ScreenEffect {
         r
     }
 
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    fn draw_step(&mut self, _: &mut Ctx, _: u8) -> Ret {
         if self.done {
             return Ret::Remove;
         }
-        self.draw_fx(ctx);
         Ret::Next
+    }
+
+    fn emit(&self, _: &Ctx, rec: &mut Recorder, _: u8) {
+        if !self.done {
+            self.draw_fx(rec);
+        }
     }
 }
 
@@ -1486,7 +1485,7 @@ impl ScreenEffect {
     }
 
     // Types 0/4/5 full screen, 2/3/6 playfield; colour p1 (p2 for the flash).
-    fn draw_fx(&mut self, ctx: &mut Ctx) {
+    fn draw_fx(&self, rec: &mut Recorder) {
         let colour = match self.kind {
             0 | 2 | 4 | 5 | 6 => self.p[1] as u32,
             3 => self.p[2] as u32,
@@ -1500,7 +1499,6 @@ impl ScreenEffect {
         ];
         let full = matches!(self.kind, 0 | 4 | 5);
         let r = if full { FULLSCREEN } else { PLAYFIELD };
-        let rec = &mut ctx.rec;
         rec.set_viewport(r);
         rec.rect(r.x, r.y, r.w, r.h, rgba);
     }

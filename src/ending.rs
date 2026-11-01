@@ -1,7 +1,7 @@
 //! Ending object and `.end` script interpreter (16 §1.2–§1.7): Ending_Register 0x4296A0, calc prio 5, draw prio 4.
 
 use crate::anmvm::{self, AnmVm};
-use crate::drawlist::{TexId, TextCmd};
+use crate::drawlist::{Recorder, TexId, TextCmd};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{ENTER, SHOT, SKIP};
@@ -56,6 +56,8 @@ pub struct Ending {
     fade_t: i32,
     fade_n: i32,
     fade_argb: u32,
+    // Port: this frame's `fade_step` colour, written by the draw step for the emit (0 = no overlay).
+    fade_shown: u32,
     // Port: the object is freed by its on-remove, so the draw node does nothing afterwards.
     done: bool,
 }
@@ -124,6 +126,7 @@ impl Ending {
             fade_t: 0,
             fade_n: 1,
             fade_argb: 0,
+            fade_shown: 0,
             done: false,
         }
     }
@@ -133,7 +136,7 @@ impl Ending {
         // Step 1: AnmManager texture / texture-matrix caches reset (the blend and vertex-path cache resets only force the
         // next state set, the device state the port tracks is unchanged), then two white clear+Presents. The HUD flag
         // 0x17CE8D0 has no effect here because the GM (and its HUD) is already unregistered (11 §7, 2 → 9).
-        ctx.anm.reset_render_state();
+        ctx.rec.anm.reset();
         ctx.clear_present_twice([0xFF; 4]);
         ctx.anm
             .load(&mut ctx.rec, &ctx.archive, STAFF_SLOT, "staff01.anm")?;
@@ -471,25 +474,37 @@ impl Task<Ctx> for Ending {
     }
 
     // Draw 0x4298F0 (16 §1.5): picture, 15 VMs, fade overlay.
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    // Step: the VMs' draw writes and the fade counter (0x428910 runs inside the draw).
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if self.done {
             return Ret::Next;
         }
-        ctx.rec.set_viewport(crate::drawlist::FULLSCREEN);
+        for vm in &mut self.vms {
+            let mode = vm.draw_mode;
+            ctx.anm.prepare(vm, mode);
+        }
+        self.fade_shown = self.fade_step();
+        Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+        if self.done {
+            return;
+        }
+        rec.set_viewport(crate::drawlist::FULLSCREEN);
         if let Some(t) = self.picture {
             // The float source offset is truncated (ftol) to whole pixels (16 §1.5).
             let (sx, sy) = (self.pic_x.max(0.0) as u32, self.pic_y.max(0.0) as u32);
-            ctx.rec.image_rect(t, sx, sy, 640, 480, 0.0, 0.0);
+            rec.image_rect(t, sx, sy, 640, 480, 0.0, 0.0);
         }
-        for vm in &mut self.vms {
-            ctx.anm.draw(&mut ctx.rec, vm);
+        for vm in &self.vms {
+            ctx.anm.emit(rec, vm);
         }
-        let c = self.fade_step();
+        let c = self.fade_shown;
         if c >> 24 != 0 {
             let rgba = [(c >> 16) as u8, (c >> 8) as u8, c as u8, (c >> 24) as u8];
-            ctx.rec.rect(0.0, 0.0, 640.0, 480.0, rgba);
+            rec.rect(0.0, 0.0, 640.0, 480.0, rgba);
         }
-        Ret::Next
     }
 
     // On-remove 0x429D40 (16 §1.6): ANM slot 0x18 and surface 0 released, next scene 6 (result, name entry).

@@ -1230,8 +1230,8 @@ impl Task<Ctx> for GameManager {
 
     // GameMgr_Draw 0x43AA03 (11 §3): return 3 (nothing above prio 5) when the requested scene 0x17CE8B4 ≠ 2,
     // bits 5–6 == 1 or loading ≠ 0, post-clear frames included. The port's in-calc release stands for the loader
-    // thread's after this frame, so `loading_shown` keeps that frame a loading one.
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    // thread's after this frame, so `loading_shown` keeps that frame a loading one. Step only: no write, no emit.
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let g = &ctx.game;
         if g.requested == SCENE_GAME && g.end_state() != 1 && g.loading == 0 && !g.loading_shown {
             return Ret::Next;

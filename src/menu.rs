@@ -1390,7 +1390,8 @@ impl Task<Ctx> for MainMenu {
 
     // Menu draw 0x47087F (12 §2.2): surface 0 on its own earlier node (SURFACE_PRIO), VMs 0–141 in order, the
     // description VM, then the per-screen text and the final-route notice.
-    fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         if ctx.game.menu_loading > 0 || self.vms.is_empty() {
             return Ret::Next;
         }

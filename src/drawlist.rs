@@ -355,6 +355,35 @@ pub struct TextCmd {
     pub outline: i32,
 }
 
+// AnmManager's D3D render-state mirrors: blend +0x24C0 (05 §12.5), bound texture +0x24BC and texture-matrix sprite
+// +0x24C8 (05 §12.8). Only draw paths read them, so they are emit state (ARCH decision 2): with emit off they keep
+// their last emitted values, as on a frame-skipped frame of the original (00 §2), and are never part of the World.
+#[derive(Clone, Copy, Debug)]
+pub struct AnmCache {
+    pub last_blend: Blend,
+    pub bound_tex: Option<TexId>,
+    // (anm slot, sprite index) and the uploaded UV offset.
+    pub last_tex_matrix: Option<((i16, i16), [f32; 2])>,
+}
+
+impl Default for AnmCache {
+    fn default() -> Self {
+        Self {
+            last_blend: Blend::Alpha,
+            bound_tex: None,
+            last_tex_matrix: None,
+        }
+    }
+}
+
+impl AnmCache {
+    // Texture-matrix and texture caches reset (05 §12.8); the blend state carries over between frames (§12.5).
+    pub fn reset(&mut self) {
+        self.last_tex_matrix = None;
+        self.bound_tex = None;
+    }
+}
+
 // Per-frame command recorder (the former `Gfx` draw API). `res` entries carry the `draws` length at record time, so
 // the executor replays both lists in exact call order (log order of K records; GPU order is unchanged either way).
 #[derive(Debug)]
@@ -363,6 +392,10 @@ pub struct Recorder {
     pub res: Vec<(usize, ResCmd)>,
     pub state: DeviceState,
     pub table: ResTable,
+    pub anm: AnmCache,
+    // Emit off (`Ctx::set_emit`): draw / state commands are dropped, mirrors still update; resource commands kept.
+    // TODO(step 8 split): only needed while unconverted draw steps still record.
+    pub mute: bool,
 }
 
 impl Default for Recorder {
@@ -379,6 +412,8 @@ impl Recorder {
             res: Vec::new(),
             state: DeviceState::default(),
             table: ResTable::default(),
+            anm: AnmCache::default(),
+            mute: false,
         };
         let id = r.create_entry(1, 1, TexSource::White, Arc::from([255u8; 4].as_slice()));
         debug_assert_eq!(id, TexId::WHITE);
@@ -394,7 +429,21 @@ impl Recorder {
     }
 
     fn draw(&mut self, c: DrawCmd) {
-        self.draws.push(c);
+        if !self.mute {
+            self.draws.push(c);
+        }
+    }
+
+    // Stand-in left in `Ctx` while a task's emit holds the real recorder (`task::run`); no white entry, no allocation.
+    pub fn detached() -> Self {
+        Self {
+            draws: Vec::new(),
+            res: Vec::new(),
+            state: DeviceState::default(),
+            table: ResTable::default(),
+            anm: AnmCache::default(),
+            mute: true,
+        }
     }
 
     fn res_cmd(&mut self, c: ResCmd) {

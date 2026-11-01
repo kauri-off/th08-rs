@@ -1312,7 +1312,8 @@ impl Task<Ctx> for Hud {
 
     // Hud_Draw (12 §5.3): clear panel strings, Msg_Draw, Hud_DrawBoss, Hud_DrawPanel, Hud_DrawPopups. Everything
     // before Hud_DrawPanel inherits the playfield viewport set by Stage_DrawLow.
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if ctx.game.loading != 0 {
             return Ret::Next;
         }

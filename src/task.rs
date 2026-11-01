@@ -1,5 +1,6 @@
 //! Task system "funcChain" (00 §3, `FuncChain_*` 0x43C760…0x43CF50): priority-sorted calc and draw chains.
 
+use crate::drawlist::Recorder;
 use anyhow::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -39,9 +40,13 @@ pub trait Task<C> {
     fn calc(&mut self, _ctx: &mut C, _tag: u8) -> Ret {
         Ret::Next
     }
-    fn draw(&mut self, _ctx: &mut C, _tag: u8) -> Ret {
+    // Draw node, ARCH decision 2: the draw-phase step makes every state write of the draw callback (logic, VM
+    // caches, ascii queue) and runs whenever the draw chain runs, emit on or off.
+    fn draw_step(&mut self, _ctx: &mut C, _tag: u8) -> Ret {
         Ret::Next
     }
+    // Then emit: records the node's draw commands from the state the step left; reads only, skipped with emit off.
+    fn emit(&self, _ctx: &C, _rec: &mut Recorder, _tag: u8) {}
     fn on_register(&mut self, _ctx: &mut C, _chain: Chain, _tag: u8) -> Result<()> {
         Ok(())
     }
@@ -54,6 +59,10 @@ pub trait TaskCtx: Sized + 'static {
     fn tasks(&mut self) -> &mut Tasks<Self>;
     // Called when a calc node returns 6, before the walk restarts from the head (session tool: one row per pass).
     fn on_restart(&mut self) {}
+    // Emit switch: the recorder emits go to, None = emit off (draw-phase steps only).
+    fn recorder(&mut self) -> Option<&mut Recorder> {
+        None
+    }
 }
 
 pub fn task<C, T: Task<C> + 'static>(t: T) -> TaskRef<C> {
@@ -217,7 +226,18 @@ pub fn run<C: TaskCtx>(ctx: &mut C, chain: Chain) -> Flow {
             let mut t = task.borrow_mut();
             match chain {
                 Chain::Calc => t.calc(ctx, tag),
-                Chain::Draw => t.draw(ctx, tag),
+                Chain::Draw => {
+                    let r = t.draw_step(ctx, tag);
+                    // The recorder leaves the context for the emit, so the emit can take `&C`.
+                    if let Some(rec) = ctx.recorder() {
+                        let mut rec = std::mem::replace(rec, Recorder::detached());
+                        t.emit(ctx, &mut rec, tag);
+                        if let Some(slot) = ctx.recorder() {
+                            *slot = rec;
+                        }
+                    }
+                    r
+                }
             }
         };
         reap(ctx);
@@ -253,6 +273,7 @@ mod tests {
     struct T {
         tasks: Tasks<T>,
         log: Vec<String>,
+        rec: Option<Recorder>,
     }
 
     impl TaskCtx for T {
@@ -261,6 +282,9 @@ mod tests {
         }
         fn on_restart(&mut self) {
             self.log.push("R".into());
+        }
+        fn recorder(&mut self) -> Option<&mut Recorder> {
+            self.rec.as_mut()
         }
     }
 
@@ -348,6 +372,45 @@ mod tests {
         remove_task(&mut c, &t);
         assert_eq!(c.log.join(" "), "+x0 +x2 -x0 -x2");
         assert!(c.tasks.priorities(Chain::Draw).is_empty());
+    }
+
+    struct Drawn(u8);
+
+    impl Task<T> for Drawn {
+        fn draw_step(&mut self, ctx: &mut T, _: u8) -> Ret {
+            ctx.log.push(format!("s{}", self.0));
+            Ret::Next
+        }
+        fn emit(&self, ctx: &T, rec: &mut Recorder, _: u8) {
+            rec.clear_viewport([self.0, ctx.log.len() as u8, 0, 0]);
+        }
+    }
+
+    // Decision 2: each draw node's step, then its emit (seeing that step's writes), in chain order; emit off runs
+    // the same steps and records nothing.
+    #[test]
+    fn draw_step_then_emit() {
+        use crate::drawlist::DrawCmd;
+        let mut c = T {
+            rec: Some(Recorder::new()),
+            ..T::default()
+        };
+        add(&mut c, Chain::Draw, 2, 0, task(Drawn(2))).unwrap();
+        add(&mut c, Chain::Draw, 1, 0, task(Drawn(1))).unwrap();
+        run(&mut c, Chain::Draw);
+        assert_eq!(c.log.join(" "), "s1 s2");
+        let draws = c.rec.as_mut().unwrap().take().0;
+        assert!(matches!(
+            draws[..],
+            [
+                DrawCmd::ClearViewport([1, 1, 0, 0]),
+                DrawCmd::ClearViewport([2, 2, 0, 0])
+            ]
+        ));
+        c.rec = None;
+        c.log.clear();
+        run(&mut c, Chain::Draw);
+        assert_eq!(c.log.join(" "), "s1 s2");
     }
 
     struct Nest;

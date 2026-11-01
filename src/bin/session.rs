@@ -3,6 +3,7 @@
 //! recorded one and the draw log with sessions/<name>/draw_*.drawlog.xz (DIR/index.html). N = main-menu frame.
 //! `--port-drawlog` writes only the port's draw log (no reference compare), e.g. for port-vs-port checks.
 //! `--sound-log` writes DIR/sound.txt, the executed `SoundCmd` stream (MIDI synth treated as absent).
+//! `--no-emit` runs the draw chain's draw-phase steps only, nothing recorded (ARCH decision 2; implies no draw log).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,7 +19,7 @@ fn main() -> anyhow::Result<()> {
         1usize,
         usize::MAX,
     );
-    let (mut port_only, mut sound_log) = (false, false);
+    let (mut port_only, mut sound_log, mut emit) = (false, false, true);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -26,6 +27,7 @@ fn main() -> anyhow::Result<()> {
             "--no-drawlog" => drawlog_on = false,
             "--port-drawlog" => port_only = true,
             "--sound-log" => sound_log = true,
+            "--no-emit" => emit = false,
             "--from" => from = it.next().and_then(|v| v.parse().ok()).unwrap_or(1).max(1),
             "--to" => to = it.next().and_then(|v| v.parse().ok()).unwrap_or(to),
             _ => dir = Some(PathBuf::from(a)),
@@ -33,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     }
     let dir = dir.ok_or_else(|| {
         anyhow::anyhow!(
-            "usage: session <session dir> [--out DIR] [--no-drawlog] [--port-drawlog] [--sound-log] [--from N] [--to N]"
+            "usage: session <session dir> [--out DIR] [--no-drawlog] [--port-drawlog] [--sound-log] [--no-emit] [--from N] [--to N]"
         )
     })?;
     let s = Session::load(&dir)?;
@@ -49,7 +51,8 @@ fn main() -> anyhow::Result<()> {
             .join(name);
         ref_paths = drawlog::expand(&alt.join("draw").to_string_lossy());
     }
-    let drawlog_on = drawlog_on && !port_only && !ref_paths.is_empty();
+    let port_only = port_only && emit;
+    let drawlog_on = drawlog_on && emit && !port_only && !ref_paths.is_empty();
     if !drawlog_on && !port_only {
         eprintln!("draw log: off (no reference draw_*.drawlog.xz or --no-drawlog)");
     }
@@ -65,6 +68,7 @@ fn main() -> anyhow::Result<()> {
         th08::settings::get().tool_host(),
     ))?;
     s.start(&mut ctx)?;
+    ctx.set_emit(emit);
     if sound_log {
         ctx.bgm.midi_ready = false;
         ctx.sound_log = Some(Vec::new());

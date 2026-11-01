@@ -71,6 +71,8 @@ pub struct Ctx {
     init_presents: u8,
     // Unlock notices (16 §4), shown in place of the frame's chains.
     pub info: crate::menu::InfoNotices,
+    // Emit switch (ARCH decision 2): off = draw-phase steps only, no draw command recorded (`set_emit`).
+    emit: bool,
 }
 
 // Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue
@@ -162,6 +164,9 @@ impl TaskCtx for Ctx {
     fn tasks(&mut self) -> &mut Tasks<Self> {
         &mut self.tasks
     }
+    fn recorder(&mut self) -> Option<&mut Recorder> {
+        self.emit.then_some(&mut self.rec)
+    }
     fn on_restart(&mut self) {
         // ScreenEffect_Register links at once: the restarted pass already runs effects queued in this one (13 §3).
         crate::effect::register_pending(self);
@@ -243,6 +248,7 @@ impl Ctx {
             skip_counter: SKIP_START,
             init_presents: 2,
             info: Default::default(),
+            emit: true,
         };
         ctx.game.cfg = cfg;
         ctx.game.ver_list.set(ver);
@@ -488,6 +494,13 @@ impl Ctx {
         self.renderer.submit(&mut self.rec);
     }
 
+    // Emit off: the draw chain runs only the draw-phase steps (rollback re-sim, `session --no-emit`); logic is
+    // unchanged. Draws outside the chain and unconverted steps are dropped by the recorder's mute.
+    pub fn set_emit(&mut self, on: bool) {
+        self.emit = on;
+        self.rec.mute = !on;
+    }
+
     // App and tools: the concrete renderer (`gfx::Gfx`), None for another type.
     pub fn renderer_as<T: 'static>(&mut self) -> Option<&mut T> {
         self.renderer.as_any_mut().downcast_mut()
@@ -531,6 +544,24 @@ mod tests {
         assert_eq!(c.game.scene, SCENE_BOOT);
         assert!(to_menu(&mut c));
         assert_eq!(c.game.cfg.windowed, mode);
+    }
+
+    // ARCH decision 2: with emit off the frames run (boot, logo, menu) and no draw command is recorded.
+    #[test]
+    fn emit_off_records_nothing() {
+        let Some(mut c) = ctx() else {
+            return;
+        };
+        c.set_emit(false);
+        for _ in 0..600 {
+            if c.calc() != super::Flow::Continue {
+                break;
+            }
+            c.draw();
+            assert!(c.rec.draws.is_empty());
+            c.present();
+        }
+        assert_eq!(c.game.scene, SCENE_MENU);
     }
 
     // 13 §3: a screen effect queued in a fast-forward pass is linked before the restarted pass.

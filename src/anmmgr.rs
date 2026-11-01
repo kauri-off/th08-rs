@@ -49,12 +49,7 @@ pub struct AnmManager {
     pub stage_camera: Option<Camera>,
     // 0x4EA3F4 = g_Stage+0x63C4: normalised camera-right vector written by Stage_SetCamera every frame (05 §9 mode 4).
     pub cam_right: [f32; 3],
-    // Blend state cache +0x24C0: blend bits 2/3 keep whatever the previous sprite set (05 §12.5).
-    last_blend: Blend,
-    // +0x24C8: last sprite whose texture matrix Draw3DWorld uploaded, with its UV offset (05 §12.8).
-    last_tex_matrix: Option<((i16, i16), [f32; 2])>,
-    // Texture cache +0x24BC, shared by the 2D paths and Draw3DWorld (05 §12.8).
-    bound_tex: Option<TexId>,
+    // The blend / texture / texture-matrix caches +0x24C0 / +0x24BC / +0x24C8 are emit state: `Recorder::anm`.
     // Port-only: texture entries loaded so far; paces the loading screen (gamemgr `loading_total`).
     pub entries_loaded: u32,
     // Pending AnmManager_QueueCapture request +0x2A252C (12 §3): the destination sprite rect at queue time.
@@ -83,9 +78,6 @@ impl Default for AnmManager {
             bomb_drew: false,
             stage_camera: None,
             cam_right: [0.0; 3],
-            last_blend: Blend::Alpha,
-            last_tex_matrix: None,
-            bound_tex: None,
             entries_loaded: 0,
             capture_req: None,
         }
@@ -182,17 +174,6 @@ impl AnmManager {
         self.vm_counter = 0;
     }
 
-    // Texture-matrix and texture caches reset (05 §12.8); the blend state carries over between frames (§12.5).
-    pub fn reset_render_state(&mut self) {
-        self.last_tex_matrix = None;
-        self.bound_tex = None;
-    }
-
-    // 2D paths (EmitQuad / DrawCustomQuad) update the shared texture cache +0x24BC (05 §12.8).
-    pub fn bind(&mut self, tex: TexId) {
-        self.bound_tex = Some(tex);
-    }
-
     // AnmManager_SetScript 0x40B910 (05 §8): pos and pos_offset are zeroed before the frame-0 run.
     pub fn set_script(
         &mut self,
@@ -243,14 +224,44 @@ impl AnmManager {
         vm.run(self, rng);
     }
 
-    pub fn draw(&mut self, rec: &mut Recorder, vm: &mut AnmVm) {
+    // Draw = `prepare` (draw-phase step) + `emit_mode_z` (ARCH decision 2).
+    pub fn draw(&self, rec: &mut Recorder, vm: &mut AnmVm) {
         self.draw_mode(rec, vm, vm.draw_mode);
     }
 
     // 2D draws carry the VM's z as the vertex depth.
-    pub fn draw_mode(&mut self, rec: &mut Recorder, vm: &mut AnmVm, mode: i32) {
+    pub fn draw_mode(&self, rec: &mut Recorder, vm: &mut AnmVm, mode: i32) {
         let z = vm.pos[2];
         self.draw_mode_z(rec, vm, mode, z);
+    }
+
+    pub fn emit(&self, rec: &mut Recorder, vm: &AnmVm) {
+        self.emit_mode_z(rec, vm, vm.draw_mode, vm.pos[2]);
+    }
+
+    pub fn emit_mode(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32) {
+        self.emit_mode_z(rec, vm, mode, vm.pos[2]);
+    }
+
+    // The VM write of a draw (draw-phase step): DrawByMode mode 5 and Draw3DWorld rebuild the cached world matrix
+    // (05 §9) behind the same visibility / sprite guards; every other mode writes nothing.
+    pub fn prepare(&self, vm: &mut AnmVm, mode: i32) {
+        if mode == 5 && self.drawable(vm).is_some() {
+            Self::update_world_matrix(vm);
+        }
+    }
+
+    // Visible, enabled, primary alpha ≠ 0, has a sprite (05 §12.2), and the sprite exists.
+    fn drawable(&self, vm: &AnmVm) -> Option<SlotSprite> {
+        use anmvm::*;
+        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
+            || vm.color[A] == 0
+            || !vm.has_sprite
+        {
+            return None;
+        }
+        self.sprite(vm.anm_slot as usize, vm.sprite_index as usize)
+            .copied()
     }
 
     // Mode-5 world matrix (05 §9): base (w/256, h/256) × scale, then × RotX × RotY × RotZ (each only if ≠ 0).
@@ -320,36 +331,34 @@ impl AnmManager {
     }
 
     // Blend bits 4–5: 0 alpha, 1 additive, 2/3 set nothing (05 §12.5).
-    pub fn blend_for(&mut self, vm: &AnmVm) -> Blend {
+    pub fn blend_for(rec: &mut Recorder, vm: &AnmVm) -> Blend {
         let blend = match vm.blend() {
             0 => Blend::Alpha,
             1 => Blend::Add,
-            _ => self.last_blend,
+            _ => rec.anm.last_blend,
         };
-        self.last_blend = blend;
+        rec.anm.last_blend = blend;
         blend
     }
 
     // AnmManager_Draw3DWorld 0x464470 (06 §11.2): unit quad ±128 through `cam` with vertex fog; the screen-shake
     // offset is added to the translation.
     pub fn draw_3d_world(
-        &mut self,
+        &self,
         rec: &mut Recorder,
         vm: &mut AnmVm,
         cam: &Camera,
         fog: Option<Fog>,
     ) {
+        self.prepare(vm, 5);
+        self.emit_3d_world(rec, vm, cam, fog);
+    }
+
+    pub fn emit_3d_world(&self, rec: &mut Recorder, vm: &AnmVm, cam: &Camera, fog: Option<Fog>) {
         use anmvm::*;
-        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
-            || vm.color[A] == 0
-            || !vm.has_sprite
-        {
-            return;
-        }
-        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+        let Some(spr) = self.drawable(vm) else {
             return;
         };
-        Self::update_world_matrix(vm);
         let (hw, hh) = (
             (vm.sprite_w * vm.scale[0] / 2.0).abs(),
             (vm.sprite_h * vm.scale[1] / 2.0).abs(),
@@ -366,15 +375,15 @@ impl AnmManager {
         // Texture matrix offset is re-uploaded only for a new sprite or a non-zero u offset (v-only scroll quirk).
         let key = (vm.anm_slot, vm.sprite_index);
         // The texture is re-bound only on the same cache miss, so a 2D draw in between can leave another bound.
-        let (off, tex) = match (self.last_tex_matrix, self.bound_tex) {
+        let (off, tex) = match (rec.anm.last_tex_matrix, rec.anm.bound_tex) {
             (Some((k, o)), Some(t)) if k == key && vm.uv_off[0] == 0.0 => (o, t),
             _ => (
                 [spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]],
                 spr.tex,
             ),
         };
-        self.bound_tex = Some(tex);
-        self.last_tex_matrix = Some((key, off));
+        rec.anm.bound_tex = Some(tex);
+        rec.anm.last_tex_matrix = Some((key, off));
         let (su, sv) = (spr.uv[2] - spr.uv[0], spr.uv[3] - spr.uv[1]);
         let color = self.vm_color(vm);
         let vp = rec.viewport();
@@ -407,7 +416,7 @@ impl AnmManager {
                 fog: f,
             }
         });
-        let blend = self.blend_for(vm);
+        let blend = Self::blend_for(rec, vm);
         rec.set_log_fog(fog.map(|f| drawlist::LogFog {
             color: f.color,
             start: f.near,
@@ -419,12 +428,7 @@ impl AnmManager {
 
     // Anm_DrawRingStrip (07 §10.6 trail, flag 8): one triangle strip of (pos, uv, alpha) vertices with the VM's
     // texture, blend and colour, emitted as consecutive 4-vertex strips.
-    pub fn draw_ring_strip(
-        &mut self,
-        rec: &mut Recorder,
-        vm: &AnmVm,
-        v: &[([f32; 2], [f32; 2], u8)],
-    ) {
+    pub fn draw_ring_strip(&self, rec: &mut Recorder, vm: &AnmVm, v: &[([f32; 2], [f32; 2], u8)]) {
         use anmvm::*;
         let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
             return;
@@ -434,7 +438,7 @@ impl AnmManager {
         } else {
             vm.color
         };
-        let blend = self.blend_for(vm);
+        let blend = Self::blend_for(rec, vm);
         let off = self.screen_offset;
         let vert = |&([x, y], uv, a): &([f32; 2], [f32; 2], u8)| {
             let rgba = self.tinted([c[R], c[G], c[B], a]);
@@ -451,21 +455,20 @@ impl AnmManager {
                 );
             }
         }
-        self.bound_tex = Some(spr.tex);
+        rec.anm.bound_tex = Some(spr.tex);
     }
 
     // `z` is the vertex depth (projected depth for stage billboards, 0 otherwise).
     // AnmManager_DrawByMode 0x45E960 (05 §9); skip unless visible, enabled and primary alpha ≠ 0 (05 §12.2).
-    pub fn draw_mode_z(&mut self, rec: &mut Recorder, vm: &mut AnmVm, mode: i32, z: f32) {
+    pub fn draw_mode_z(&self, rec: &mut Recorder, vm: &mut AnmVm, mode: i32, z: f32) {
+        self.prepare(vm, mode);
+        self.emit_mode_z(rec, vm, mode, z);
+    }
+
+    // Emit half of DrawByMode: reads only; mode 5 uses the world matrix `prepare` left (05 §9).
+    pub fn emit_mode_z(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32) {
         use anmvm::*;
-        let alpha = vm.color[A];
-        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
-            || alpha == 0
-            || !vm.has_sprite
-        {
-            return;
-        }
-        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+        let Some(spr) = self.drawable(vm) else {
             return;
         };
         let (hw, hh) = (
@@ -514,7 +517,6 @@ impl AnmManager {
             }
             // 5 Draw3DQuad 0x464070; the anchor shift uses the absolute half size (05 §12.7).
             5 => {
-                Self::update_world_matrix(vm);
                 let mut w = vm.world_matrix;
                 w.0[3] = [px + ax.abs(), py + ay.abs(), pz, 1.0];
                 let vp = rec.viewport();
@@ -540,15 +542,8 @@ impl AnmManager {
 
     // DrawBillboard 0x463CF0 (05 §9 mode 4, 13 §2.6c) from an already projected point `s` and the 3D length `len` of
     // project(pos + right) − s; list B moves `s` in screen space (callback 0x428310) between the two.
-    pub fn draw_billboard(&mut self, rec: &mut Recorder, vm: &mut AnmVm, s: [f32; 3], len: f32) {
-        use anmvm::*;
-        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
-            || vm.color[A] == 0
-            || !vm.has_sprite
-        {
-            return;
-        }
-        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+    pub fn draw_billboard(&self, rec: &mut Recorder, vm: &AnmVm, s: [f32; 3], len: f32) {
+        let Some(spr) = self.drawable(vm) else {
             return;
         };
         self.emit_quad(
@@ -562,7 +557,7 @@ impl AnmManager {
     }
 
     fn emit_quad(
-        &mut self,
+        &self,
         rec: &mut Recorder,
         vm: &AnmVm,
         spr: SlotSprite,
@@ -597,12 +592,12 @@ impl AnmManager {
         let (u0, v0) = (spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]);
         let (u1, v1) = (spr.uv[2] + vm.uv_off[0], spr.uv[3] + vm.uv_off[1]);
         let rgba = self.vm_color(vm);
-        let blend = self.blend_for(vm);
+        let blend = Self::blend_for(rec, vm);
         let uv = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
         let v = std::array::from_fn(|i| {
             Vertex::screen(corners[i][0], corners[i][1], depth[i], uv[i], rgba)
         });
-        self.bound_tex = Some(spr.tex);
+        rec.anm.bound_tex = Some(spr.tex);
         rec.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
     }
 }

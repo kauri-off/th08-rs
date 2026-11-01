@@ -148,3 +148,9 @@ menu, menulist, musicroom, ending, hud, gui). Left: game.rs/anmdebug; `Ctx.gfx.r
 - Measures: only Text_RenderCentered / Text_RenderToVmRight x (Shift-JIS byte length, pure core: `menu::centred_x`,
   gui); no font metric reaches logic.
 - Left: drawlog writer in `Ctx` (`TODO(step 8)`), device-loss rebuild.
+
+## 8. Status after IMPL169 (step 8e, decision 2: draw = draw-phase step + emit)
+
+See STEP8_DRAWPHASE.md: `Task::draw_step` + `Task::emit`, `Ctx::set_emit`, AnmManager blend / texture caches moved to
+`Recorder::anm` (emit state; §4 above is superseded), `session --no-emit` + arch_check emit-off items. Converted:
+GameMgr, ScreenEffect, EffectMgr, AnmDebug, Ending, MusicRoom; the rest carry `TODO(step 8 split)`.

@@ -1380,7 +1380,8 @@ impl Task<Ctx> for ResultScreen {
     }
 
     // Result_Draw 0x4586B4.
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The object is removed by the calc that requested scene 1 (16 §2.4 exit, P+20): nothing drawn then.
         if self.removed {
             return Ret::Next;

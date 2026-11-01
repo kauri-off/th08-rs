@@ -456,7 +456,7 @@ impl Task<Ctx> for Supervisor {
         // (06 §10.2), shake offset 0 (13 §3), texture caches (05 §12.5); the blend cache models D3D state, kept.
         ctx.anm.tint_off();
         ctx.anm.screen_offset = [0.0; 2];
-        ctx.anm.reset_render_state();
+        ctx.rec.anm.reset();
         ctx.bgm.tick_fade();
         if let Some(s) = &self.script {
             ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);
@@ -560,7 +560,8 @@ impl Task<Ctx> for Supervisor {
 
     // Draw prio 0 `Supervisor_DrawLoading` 0x445BD4 (surface 8), prio 2 loading VMs 0x445D3E (12 §1); prio 16 debug only.
     // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
-    fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         match (tag, self.logo) {
             (0, logo) => {
                 if let Some(t) = logo {

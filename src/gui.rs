@@ -425,7 +425,8 @@ impl Task<Ctx> for Gui {
     }
 
     // Spell_Draw 0x4178C0 (12 §5.8 draw steps 1–4).
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
         self.read_bonus();
         self.flush_texts(ctx);

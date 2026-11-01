@@ -794,7 +794,7 @@ impl Stage {
             });
             rec.strip(white, crate::drawlist::Blend::Alpha, true, v);
         }
-        anm.reset_render_state();
+        rec.anm.reset();
         rec.set_depth_test(true);
         // vm.color is stored B,G,R,A (D3DCOLOR little-endian), so the bytes are used as they are (07 §12.1).
         let grey = 0xFFE0C0C0u32.to_le_bytes();
@@ -1064,8 +1064,8 @@ impl View<'_> {
             vx(sb[0] + dy * wb, sb[1] - dx * wb, sb[2], [u0, v1], c2),
             vx(sb[0] - dy * wb, sb[1] + dx * wb, sb[2], [u1, v1], c3),
         ];
-        let blend = anm.blend_for(vm);
-        anm.bind(spr.tex);
+        let blend = AnmManager::blend_for(rec, vm);
+        rec.anm.bound_tex = Some(spr.tex);
         rec.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
     }
 }
@@ -1088,7 +1088,8 @@ impl Task<Ctx> for Stage {
 
     // Tag 0 = Stage_DrawLow, tag 1 = Stage_DrawHigh (06 §10.2).
     // Not implemented: DrawLow step 2 (+0xB2C clear).
-    fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let (anm, rec, fx) = (&mut ctx.anm, &mut ctx.rec, &mut ctx.effects);
         if tag == 0 {
             {
@@ -1097,7 +1098,7 @@ impl Task<Ctx> for Stage {
                 p.1[..16].fill([0.0; 3]);
             }
             rec.set_viewport(PLAYFIELD);
-            anm.reset_render_state();
+            rec.anm.reset();
             // Step 3: last frame's bomb tint request (14 §1.3) turns the tint on.
             if let Some(c) = anm.stage_tint.take() {
                 (anm.tint, anm.tint_on) = (c, true);
@@ -1136,7 +1137,7 @@ impl Task<Ctx> for Stage {
                 fx.draw_background(anm, rec, level);
                 if self.spell_state == 1 {
                     // Spell-start fade: black, alpha +0xB28·255/60, ZFUNC ALWAYS (Screen_FillRect 0x45B1E0).
-                    anm.reset_render_state();
+                    rec.anm.reset();
                     rec.set_depth_test(false);
                     let a = (self.spell_frames * 255 / 60) as u8;
                     rec.rect(32.0, 16.0, 384.0, 448.0, [0, 0, 0, a]);

@@ -1,7 +1,7 @@
 //! Debug tool: live ANM script viewer (TH08_ANM), not a port of the original.
 
 use crate::anmvm::AnmVm;
-use crate::drawlist::{FULLSCREEN, PLAYFIELD};
+use crate::drawlist::{FULLSCREEN, PLAYFIELD, Recorder};
 use crate::game::Ctx;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::{Context, Result};
@@ -71,18 +71,25 @@ impl Task<Ctx> for AnmDebug {
         Ret::Next
     }
 
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        ctx.rec.set_viewport(if self.playfield {
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        for vm in &mut self.vms {
+            let mode = self.mode.unwrap_or(vm.draw_mode);
+            ctx.anm.prepare(vm, mode);
+        }
+        Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+        rec.set_viewport(if self.playfield {
             PLAYFIELD
         } else {
             FULLSCREEN
         });
-        ctx.rec.clear_viewport([32, 32, 64, 255]);
-        for vm in &mut self.vms {
-            let mode = self.mode.unwrap_or(vm.draw_mode);
-            ctx.anm.draw_mode(&mut ctx.rec, vm, mode);
+        rec.clear_viewport([32, 32, 64, 255]);
+        for vm in &self.vms {
+            ctx.anm
+                .emit_mode(rec, vm, self.mode.unwrap_or(vm.draw_mode));
         }
-        ctx.rec.set_viewport(FULLSCREEN);
-        Ret::Next
+        rec.set_viewport(FULLSCREEN);
     }
 }

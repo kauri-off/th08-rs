@@ -1484,7 +1484,8 @@ impl Task<Ctx> for Player {
 
     // Draw 9 (0x44D530): flying bullets, bomb, sprite, options; draw 10 (0x44D630): bullets in their hit animation
     // (14 §5).
-    fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let (anm, rec) = (&mut ctx.anm, &mut ctx.rec);
         rec.set_viewport(PLAYFIELD);
         if tag == 0 {

@@ -2787,7 +2787,8 @@ impl Task<Ctx> for EnemyManager {
     }
 
     // Draw prio 8 → layers 0–1, prio 11 → layers 2–3 (07 §10.6).
-    fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         self.draw_layer(&mut ctx.anm, &mut ctx.rec, tag == 1, ctx.game.flags);
         Ret::Next
     }

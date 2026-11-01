@@ -1643,7 +1643,8 @@ impl Task<Ctx> for BulletManager {
         Ret::Next
     }
 
-    fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         BulletManager::draw(
             self,
             &mut ctx.anm,
