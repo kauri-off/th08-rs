@@ -1,0 +1,22 @@
+#!/bin/bash
+# usage: tools/android_check — cargo check of the workspace libs for aarch64-linux-android (ARCH_D_MOBILE §1.1, §6.1 item 7).
+# Prints "android ok" / "android FAILED" (exit 1) / "android skipped: …" (exit 0). NDK env is set only here.
+# Env: ANDROID_SDK (default ~/.local/share/android-sdk/Sdk), ANDROID_API (default 26), V=1 shows cargo output.
+set -u
+TRIPLE=aarch64-linux-android
+SDK=${ANDROID_SDK:-$HOME/.local/share/android-sdk/Sdk}
+API=${ANDROID_API:-26}
+rustup target list --installed 2> /dev/null | grep -qx $TRIPLE || { echo "android skipped: rustup target $TRIPLE not installed"; exit 0; }
+NDK=${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/*/ 2> /dev/null | sort -V | tail -1)}
+NDK=${NDK%/}
+BIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+[[ -n $NDK && -x $BIN/$TRIPLE$API-clang ]] || { echo "android skipped: no NDK with $TRIPLE$API-clang under $SDK/ndk"; exit 0; }
+export ANDROID_NDK_HOME=$NDK ANDROID_NDK_ROOT=$NDK
+export CC_aarch64_linux_android=$BIN/$TRIPLE$API-clang CXX_aarch64_linux_android=$BIN/$TRIPLE$API-clang++
+export AR_aarch64_linux_android=$BIN/llvm-ar CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/$TRIPLE$API-clang
+cd "$(dirname "$0")/.." || exit 1
+out=$(cargo check --release --workspace --lib --target $TRIPLE 2>&1); rc=$?
+[[ -n ${V:-} ]] && echo "$out"
+w=$(grep -cE '^(warning|error)' <<< "$out")
+[[ $rc == 0 && $w == 0 ]] && { echo "android ok"; exit 0; }
+echo "android FAILED ($w warnings/errors)"; grep -E '^(warning|error)' <<< "$out" | head -5; exit 1

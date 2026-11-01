@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: tools/arch_check freeze DIR | run DIR — port-vs-port references for the rewrite (REWRITE_PLAN step 0).
 # freeze: build, then write port traces + draw logs of all sessions, demos 0-3 and the pilot replays into DIR.
-# run: fmt, 0-warning build, wasm check, cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
+# run: fmt, 0-warning build, wasm + android check (tools/android_check), cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
 # Run output of identical items keeps no draw log. Env: J (parallel jobs, default 8), CARGO_TARGET_DIR, RUN_OUT (run output, default $TARGET/arch_run), ONLY (item regex),
 # FAST=1 (run only: traces only, no draw logs — a few GB less RAM, for agents in parallel worktrees; the full run stays the gate before a commit).
 set -u
@@ -74,6 +74,7 @@ cargo fmt --all --check > /dev/null 2>&1 && echo "fmt ok" || { echo "fmt FAILED"
 w=$(cargo build --release --workspace 2>&1 | grep -cE '^(warning|error)')
 [[ $w == 0 ]] && echo "build ok, 0 warnings" || { echo "build: $w warnings/errors"; fail=1; }
 cargo check -q --release --workspace --lib --target wasm32-unknown-unknown > /dev/null 2>&1 && echo "wasm ok" || { echo "wasm FAILED"; fail=1; }
+ta=$SECONDS; a=$("$ROOT/tools/android_check"); ar=$?; echo "$a ($((SECONDS - ta)) s)"; [[ $ar == 0 ]] || fail=1
 t=$(cargo test -q --release --workspace 2>&1)
 if grep -qE 'FAILED|panicked|error(\[|:)' <<< "$t"; then echo "cargo test FAILED"; grep -E 'FAILED|panicked' <<< "$t" | head; fail=1
 else echo "cargo test ok ($(grep -oE '[0-9]+ passed' <<< "$t" | awk '{s+=$1} END{print s+0}') passed)"; fi

@@ -135,23 +135,39 @@ fn pick_game_dir(dirs: &settings::PlatformDirs) -> Option<PathBuf> {
             settings::save_port_cfg(dirs, "game_dir", &dir.to_string_lossy());
             return Some(dir);
         }
-        rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Error)
-            .set_title("th08")
-            .set_description(format!(
-                "{} does not contain th08.dat.\nSelect the Imperishable Night folder.",
-                dir.display()
-            ))
-            .set_buttons(rfd::MessageButtons::Ok)
-            .show();
+        not_game_dir_dialog(&dir);
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+fn not_game_dir_dialog(dir: &std::path::Path) {
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("th08")
+        .set_description(format!(
+            "{} does not contain th08.dat.\nSelect the Imperishable Night folder.",
+            dir.display()
+        ))
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn folder_dialog() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .set_title("Select the Touhou 8 (Imperishable Night) game folder")
         .pick_folder()
+}
+
+// Android: no rfd backend; the folder comes from `game_dir` (launcher text field, port.cfg) or the bundled lookup.
+#[cfg(target_os = "android")]
+fn not_game_dir_dialog(dir: &std::path::Path) {
+    log::error!("{} does not contain th08.dat", dir.display());
+}
+
+#[cfg(target_os = "android")]
+fn folder_dialog() -> Option<PathBuf> {
+    None
 }
 
 // Where the game files come from: the `game_dir` row (native) or the files picked in the web page.
@@ -344,7 +360,7 @@ impl Model {
                         .iter_mut()
                         .find(|r| r.e.key == "game_dir")
                         .unwrap();
-                    #[cfg(not(target_arch = "wasm32"))]
+                    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
                     if ui.button("Browse…").clicked()
                         && let Some(d) = folder_dialog()
                     {
@@ -492,7 +508,7 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
                     .hint_text(r.e.hint())
                     .desired_width(220.0),
             );
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
             if ui.button("Browse…").clicked() {
                 let d = rfd::FileDialog::new().set_title(r.e.help);
                 let picked = if r.e.key == "soundfont" {
