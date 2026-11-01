@@ -1,0 +1,93 @@
+#!/bin/bash
+# usage: tools/arch_check freeze DIR | run DIR — port-vs-port references for the rewrite (REWRITE_PLAN step 0).
+# freeze: build, then write port traces + draw logs of all sessions, demos 0-3 and the pilot replays into DIR.
+# run: fmt, 0-warning build, wasm check, cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
+# Run output of identical items keeps no draw log. Env: J (parallel jobs, default 8), CARGO_TARGET_DIR, RUN_OUT (run output, default $TARGET/arch_run), ONLY (item regex).
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
+BIN=$TARGET/release
+# Binary names; step 1+ may move crates, these names (cargo --bin) must stay.
+SESSION_BIN=session DEMOSYNC_BIN=demosync DRAWRUN_BIN=drawrun
+SESSIONS="golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg"
+SESSION_SRC=$ROOT/specs/data/sessions
+PILOT_SRC=/home/anon/Projects/th08_ext_replays/ref
+J=${J:-8}
+export TH08_DIR="/home/anon/Games/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/"
+export XDG_CONFIG_HOME=$ROOT/target/verify-42/cfg
+export CARGO_TARGET_DIR=$TARGET
+export BIN SESSION_BIN DEMOSYNC_BIN DRAWRUN_BIN SESSION_SRC PILOT_SRC
+
+mode=${1:-} dir=${2:-}
+[[ ($mode == freeze || $mode == run) && -n $dir ]] || { sed -n 2,5p "$0"; exit 2; }
+dir=$(realpath -m "$dir")
+cd "$ROOT" || exit 2
+
+items() {
+  for s in $SESSIONS; do echo "s_$s"; done
+  for n in 0 1 2 3; do echo "d_$n"; done
+  for d in "$PILOT_SRC"/*/; do echo "p_$(basename "$d")"; done
+}
+
+# One item into $1/$2: trace.txt, report.txt (stdout), draw.drawlog.xz, digest (sha256 of trace, report, unpacked draw).
+run_item() {
+  local o=$1/$2 n=${2#?_}
+  rm -rf "$o"; mkdir -p "$o"
+  case $2 in
+    s_*) nice -n 10 "$BIN/$SESSION_BIN" "$SESSION_SRC/$n" --out "$o" --port-drawlog > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    p_*) nice -n 10 "$BIN/$SESSION_BIN" "$PILOT_SRC/$n" --out "$o" --port-drawlog > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    d_*) nice -n 10 "$BIN/$DEMOSYNC_BIN" "$n" 1-9999999 > "$o/trace.txt" 2> /dev/null
+         nice -n 10 "$BIN/$DRAWRUN_BIN" "$o/draw.drawlog.xz" demo "$n" > "$o/report.txt" 2> "$o/stderr.txt" ;;
+  esac
+  {
+    echo "trace $(sha256sum < "$o/trace.txt" | cut -c1-64)"
+    echo "report $(sha256sum < "$o/report.txt" | cut -c1-64)"
+    echo "draw $(xz -dc "$o/draw.drawlog.xz" 2> /dev/null | sha256sum | cut -c1-64)"
+  } > "$o/digest"
+  echo "done $2"
+}
+export -f run_item
+
+run_all() {
+  items | grep -E "${ONLY:-.}" | xargs -P "$J" -I{} bash -c 'run_item "$0" "$1"' "$1" {} | sort | tr '\n' ' '; echo
+}
+
+build() {
+  cargo build -q --release --workspace 2>&1 | grep -E '^error' && { echo "BUILD FAILED"; exit 1; }
+}
+
+t0=$SECONDS
+if [[ $mode == freeze ]]; then
+  build
+  mkdir -p "$dir"
+  run_all "$dir"
+  items | grep -E "${ONLY:-.}" | while read -r i; do echo "$i $(tr '\n' ' ' < "$dir/$i/digest")"; done > "$dir/digests.txt"
+  echo "frozen $(wc -l < "$dir/digests.txt") items into $dir ($(du -sh "$dir" | cut -f1)) in $((SECONDS - t0)) s"
+  exit 0
+fi
+
+fail=0
+cargo fmt --all --check > /dev/null 2>&1 && echo "fmt ok" || { echo "fmt FAILED"; fail=1; }
+w=$(cargo build --release --workspace 2>&1 | grep -cE '^(warning|error)')
+[[ $w == 0 ]] && echo "build ok, 0 warnings" || { echo "build: $w warnings/errors"; fail=1; }
+cargo check -q --release --workspace --lib --target wasm32-unknown-unknown > /dev/null 2>&1 && echo "wasm ok" || { echo "wasm FAILED"; fail=1; }
+t=$(cargo test -q --release --workspace 2>&1)
+if grep -qE 'FAILED|panicked|error(\[|:)' <<< "$t"; then echo "cargo test FAILED"; grep -E 'FAILED|panicked' <<< "$t" | head; fail=1
+else echo "cargo test ok ($(grep -oE '[0-9]+ passed' <<< "$t" | awk '{s+=$1} END{print s+0}') passed)"; fi
+echo "checks done in $((SECONDS - t0)) s"
+
+out=${RUN_OUT:-$TARGET/arch_run}
+mkdir -p "$out"
+run_all "$out" > /dev/null
+nd=0
+while read -r i _ tr _ rp _ dr; do
+  [[ -f $out/$i/digest ]] || { echo "$i MISSING"; nd=$((nd + 1)); continue; }
+  read -r _ tr2 _ rp2 _ dr2 <<< "$(tr '\n' ' ' < "$out/$i/digest")"
+  s=""
+  [[ $tr == "$tr2" ]] || s+=" trace DIFFERS ($(LC_ALL=C cmp "$dir/$i/trace.txt" "$out/$i/trace.txt" | head -1 | sed 's/.*, //'))"
+  [[ $rp == "$rp2" ]] || s+=" report DIFFERS"
+  [[ $dr == "$dr2" ]] || s+=" draw DIFFERS"
+  if [[ -n $s ]]; then echo "$i$s"; nd=$((nd + 1)); else echo "$i identical"; rm -f "$out/$i/draw.drawlog.xz"; fi
+done < <(awk -v r="${ONLY:-.}" '$1 ~ r' "$dir/digests.txt")
+echo "items differing: $nd; total $((SECONDS - t0)) s"
+[[ $nd == 0 && $fail == 0 ]] || exit 1

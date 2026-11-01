@@ -1,6 +1,7 @@
 //! Session replay: `session <session dir> [--out DIR] [--no-drawlog] [--from N] [--to N]` runs a recorded session
 //! of the original in the port (headless), writes DIR/trace.txt (+ DIR/draw.drawlog.xz), compares the trace with the
 //! recorded one and the draw log with sessions/<name>/draw_*.drawlog.xz (DIR/index.html). N = main-menu frame.
+//! `--port-drawlog` writes only the port's draw log (no reference compare), e.g. for port-vs-port checks.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -46,8 +47,8 @@ fn main() -> anyhow::Result<()> {
             .join(name);
         ref_paths = drawlog::expand(&alt.join("draw").to_string_lossy());
     }
-    let drawlog_on = drawlog_on && !ref_paths.is_empty();
-    if !drawlog_on {
+    let drawlog_on = drawlog_on && !port_only && !ref_paths.is_empty();
+    if !drawlog_on && !port_only {
         eprintln!("draw log: off (no reference draw_*.drawlog.xz or --no-drawlog)");
     }
 
@@ -70,8 +71,7 @@ fn main() -> anyhow::Result<()> {
         None => None,
     };
     let port_log = out.join("draw.drawlog.xz");
-    // `--port-drawlog`: the port's own log of rows from..to, also for sessions without a reference log.
-    let port_only = port_only && !drawlog_on;
+    // `--port-drawlog`: the port's own log of rows from..to, with or without a reference log.
     let mut xz = if drawlog_on || port_only {
         Some(th08::xz::create(&port_log)?)
     } else {
