@@ -14,20 +14,75 @@ pub fn is_game_dir(dir: &Path) -> bool {
     crate::assets::find_file(dir, "th08.dat").is_file()
 }
 
-// The game folder to run; Ok(None) = dialog cancelled, Err = the folder given on the command line / TH08_DIR is invalid.
+// Bundled game files of a local package (packaging/local): `<exe dir>/game` (Windows install), then
+// `$APPDIR/usr/share/th08/game` (AppImage).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn resolve_game_dir(s: &Settings) -> Result<Option<PathBuf>, String> {
+pub fn bundled_candidates(exe_dir: Option<&Path>, appdir: Option<&Path>) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = exe_dir.map(|d| d.join("game")).into_iter().collect();
+    v.extend(appdir.map(|d| d.join("usr/share/th08/game")));
+    v
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn bundled_game_dir() -> Option<PathBuf> {
+    let appdir = std::env::var_os("APPDIR").map(PathBuf::from);
+    bundled_candidates(settings::exe_dir().as_deref(), appdir.as_deref())
+        .into_iter()
+        .find(|d| is_game_dir(d))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, PartialEq)]
+enum Choice {
+    Configured(PathBuf),
+    Bundled(PathBuf),
+    // Folder given on the command line / TH08_DIR without th08.dat.
+    Invalid(String),
+    Ask,
+}
+
+// Lookup order: valid configured folder; invalid CLI/env folder is an error; bundled folder; folder dialog.
+#[cfg(not(target_arch = "wasm32"))]
+fn choose_game_dir(s: &Settings, bundled: impl FnOnce() -> Option<PathBuf>) -> Choice {
     if let Some(d) = &s.game_dir {
         if is_game_dir(d) {
-            return Ok(Some(d.clone()));
+            return Choice::Configured(d.clone());
         }
         let msg = format!("{}: no th08.dat in this folder", d.display());
         if s.origin("game_dir") > Origin::PortCfg {
-            return Err(msg);
+            return Choice::Invalid(msg);
         }
-        log::warn!("port.cfg {msg}; asking for the folder");
+        log::warn!("port.cfg {msg}");
     }
-    Ok(pick_game_dir())
+    match bundled() {
+        Some(d) => Choice::Bundled(d),
+        None => Choice::Ask,
+    }
+}
+
+// The game folder to run; Ok(None) = dialog cancelled, Err = the folder given on the command line / TH08_DIR is invalid.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resolve_game_dir(s: &Settings) -> Result<Option<PathBuf>, String> {
+    match choose_game_dir(s, bundled_game_dir) {
+        Choice::Configured(d) => Ok(Some(d)),
+        Choice::Bundled(d) => {
+            log::info!("bundled game folder: {}", d.display());
+            Ok(Some(d))
+        }
+        Choice::Invalid(msg) => Err(msg),
+        Choice::Ask => Ok(pick_game_dir()),
+    }
+}
+
+// Launcher screen: show the bundled folder in the `game_dir` row when none is configured; as a default-origin
+// value it is not written to port.cfg.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn prefill_bundled_game_dir(s: &mut Settings) {
+    if let Choice::Bundled(d) = choose_game_dir(s, bundled_game_dir) {
+        log::info!("bundled game folder: {}", d.display());
+        s.set_from(Origin::Default, "game_dir", &d.to_string_lossy())
+            .expect("game_dir accepts any path");
+    }
 }
 
 // Folder dialog until a valid folder is picked (saved as port.cfg `game_dir`) or the dialog is cancelled.
@@ -646,4 +701,60 @@ pub fn render_image(gfx: &Gfx, model: Model, (w, h): (u32, u32)) -> image::RgbaI
         }
     }
     gfx.read_texture(enc.unwrap(), &tex)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    fn game_dir(root: &Path, name: &str) -> PathBuf {
+        let d = root.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("TH08.DAT"), b"").unwrap();
+        d
+    }
+
+    #[test]
+    fn bundled_lookup_order() {
+        let root = std::env::temp_dir().join(format!("th08-bundled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let exe = root.join("exe");
+        let appdir = root.join("appdir");
+        assert_eq!(
+            bundled_candidates(Some(&exe), Some(&appdir)),
+            [exe.join("game"), appdir.join("usr/share/th08/game")]
+        );
+        assert_eq!(bundled_candidates(None, None), Vec::<PathBuf>::new());
+
+        let user = game_dir(&root, "user");
+        let bundled = game_dir(&root, "bundled");
+        let some = || Some(bundled.clone());
+        let mut s = Settings::default();
+        assert_eq!(choose_game_dir(&s, some), Choice::Bundled(bundled.clone()));
+        assert_eq!(choose_game_dir(&s, || None), Choice::Ask);
+        s.set_from(Origin::PortCfg, "game_dir", &user.to_string_lossy())
+            .unwrap();
+        assert_eq!(choose_game_dir(&s, some), Choice::Configured(user.clone()));
+        let missing = root.join("missing").to_string_lossy().into_owned();
+        s.set_from(Origin::PortCfg, "game_dir", &missing).unwrap();
+        assert_eq!(choose_game_dir(&s, some), Choice::Bundled(bundled.clone()));
+        s.set_from(Origin::Cli, "game_dir", &missing).unwrap();
+        assert!(matches!(choose_game_dir(&s, some), Choice::Invalid(_)));
+
+        let mut s = Settings::default();
+        let found = bundled_candidates(Some(&root.join("none")), Some(&root.join("appimage")))
+            .into_iter()
+            .find(|d| is_game_dir(d));
+        assert_eq!(found, None);
+        game_dir(&root, "appimage/usr/share/th08/game");
+        let ex = game_dir(&root, "exe/game");
+        let found = bundled_candidates(Some(&exe), Some(&root.join("appimage")))
+            .into_iter()
+            .find(|d| is_game_dir(d));
+        assert_eq!(found, Some(ex));
+        s.set_from(Origin::Env, "game_dir", &user.to_string_lossy())
+            .unwrap();
+        assert_eq!(choose_game_dir(&s, some), Choice::Configured(user));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

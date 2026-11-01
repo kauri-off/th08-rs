@@ -891,10 +891,14 @@ impl Settings {
 
     // Sets one entry by key (a settings UI); the caller saves it with `save_port_cfg` if wanted.
     pub fn set(&mut self, key: &str, v: &str) -> Result<(), String> {
+        self.set_from(Origin::Cli, key, v)
+    }
+
+    // As `set`, with the given origin.
+    pub fn set_from(&mut self, origin: Origin, key: &str, v: &str) -> Result<(), String> {
         let e = find(key).ok_or_else(|| format!("unknown setting {key}"))?;
         e.parse_into(self, v.trim())?;
-        self.values
-            .insert(e.key, (v.trim().to_string(), Origin::Cli));
+        self.values.insert(e.key, (v.trim().to_string(), origin));
         Ok(())
     }
 

@@ -26,6 +26,7 @@ fn main() {
         Err(e) => e.exit(),
     };
     if s.launcher && !s.is_tool_run() {
+        th08::launcher::prefill_bundled_game_dir(&mut s);
         th08::app::run_launcher(None, s);
         return;
     }
