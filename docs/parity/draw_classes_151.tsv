@@ -1,0 +1,16 @@
+set	class	groups	recordings_x_frames
+b	P1 orbit stars precision (13 2.6c)	2	319536
+b	P2 list-B particle precision (13 2.6c)	6	57821
+b	P3 glyph Draw2DSnap ties (05 10)	9	4388
+b	P5 particle snap ties (13 2.6c)	4	537
+b	L loader race (12 5.9)	10	487
+b	F FPS digits	3	9
+b	H menu after a game (RE-Q65 H)	2	2
+d	P1 orbit stars precision (13 2.6c)	2	1456098
+d	P2 list-B particle precision (13 2.6c)	7	442491
+d	P3 glyph Draw2DSnap ties (05 10)	15	36475
+d	L loader race (12 5.9)	242	5954
+d	P5 particle snap ties (13 2.6c)	5	4208
+d	O2 Youmu rect log artefact (14 2.11, accepted)	1	72
+d	P6 enemy sprite <=0.1 px precision	2	13
+d	X compare artefact: equal-centre aura quads mis-paired (identical logs)	1	6
