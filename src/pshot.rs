@@ -1267,7 +1267,7 @@ mod tests {
             scripts,
             texture: None,
         };
-        anm.insert(ANM_SLOT, "p", vec![chunk], |_| 0);
+        anm.insert(ANM_SLOT, "p", vec![chunk], |_| crate::drawlist::TexId(0));
     }
 
     // 09 §4.5: entering state 2 keeps the VM pos and rotation z, z 0.1, flag 0x2000 only from the hit script.

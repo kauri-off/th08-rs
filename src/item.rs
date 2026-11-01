@@ -3,9 +3,9 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::ANM_SLOT;
+use crate::drawlist::Recorder;
 use crate::effect::Effects;
 use crate::game::Sys;
-use crate::gfx::Gfx;
 use crate::player::{Player, Popup, Stats};
 
 // 08 §8.1: 2096 slots × 0x2E4.
@@ -541,7 +541,7 @@ impl ItemManager {
     }
 
     // Item draw (08 §8.6), in list order.
-    pub fn draw(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
+    pub fn draw(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
         for k in 0..self.order.len() {
             let it = &mut self.items[self.order[k] as usize];
             if !it.alive {
@@ -569,7 +569,7 @@ impl ItemManager {
                 it.vm.pos = [it.pos[0] + 32.0, y + 16.0, 0.0];
             }
             // Draw2DRot at z 0.15 (08 §8.6).
-            anm.draw_mode_z(gfx, &mut it.vm, 2, 0.15);
+            anm.draw_mode_z(rec, &mut it.vm, 2, 0.15);
         }
     }
 }

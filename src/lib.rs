@@ -18,6 +18,7 @@ pub mod config;
 pub mod coreconfig;
 pub mod d3dx;
 pub mod demosync;
+pub mod drawlist;
 pub mod drawlog;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod drawreport;

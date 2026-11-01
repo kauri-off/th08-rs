@@ -3350,26 +3350,26 @@ mod tests {
                 ANM_ENEMY,
                 "enemy.anm",
                 crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(),
-                |_| 0,
+                |_| crate::drawlist::TexId(0),
             );
             anm.insert(
                 ANM_STAGE,
                 &enm,
                 crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(),
-                |_| 0,
+                |_| crate::drawlist::TexId(0),
             );
             anm.insert(
                 crate::bullet::ANM_SLOT,
                 "etama.anm",
                 crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(),
-                |_| 0,
+                |_| crate::drawlist::TexId(0),
             );
             let (pa, a, sa) = crate::sht::files(shot);
             anm.insert(
                 crate::player::ANM_SLOT,
                 &pa,
                 crate::anm::parse(&ar.read(&pa).unwrap()).unwrap(),
-                |_| 0,
+                |_| crate::drawlist::TexId(0),
             );
             let player = crate::player::Player::new_ref();
             {
@@ -3466,19 +3466,19 @@ mod tests {
                     ANM_ENEMY,
                     "enemy.anm",
                     crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(),
-                    |_| 0,
+                    |_| crate::drawlist::TexId(0),
                 );
                 anm.insert(
                     ANM_STAGE,
                     &enm,
                     crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(),
-                    |_| 0,
+                    |_| crate::drawlist::TexId(0),
                 );
                 anm.insert(
                     crate::bullet::ANM_SLOT,
                     "etama.anm",
                     crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(),
-                    |_| 0,
+                    |_| crate::drawlist::TexId(0),
                 );
                 let player = crate::player::Player::new_ref();
                 let bullets = Rc::new(RefCell::new(BulletManager::new(
@@ -3596,7 +3596,7 @@ mod laser_tests {
                     slot,
                     name,
                     crate::anm::parse(&ar.read(name).unwrap()).unwrap(),
-                    |_| 0,
+                    |_| crate::drawlist::TexId(0),
                 );
             }
             let player = crate::player::Player::new_ref();

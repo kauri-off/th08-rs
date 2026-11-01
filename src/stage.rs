@@ -1445,7 +1445,7 @@ mod tests {
                 ANM_SLOT,
                 &bg,
                 crate::anm::parse(&ar.read(&bg).unwrap()).unwrap(),
-                |_| 0,
+                |_| crate::drawlist::TexId(0),
             );
             let mut st = Stage::new(index, std);
             st.start(&mut anm, sys.rng);

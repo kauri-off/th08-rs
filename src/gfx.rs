@@ -4,50 +4,13 @@
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
-// The original renders at 640×480 (05 §12.4); the window is a scaled copy.
-pub const SCREEN_W: f32 = 640.0;
-pub const SCREEN_H: f32 = 480.0;
+pub use crate::drawlist::{
+    Blend, DrawCmd, FULLSCREEN, LogFog, LogTex, PLAYFIELD, Recorder, Rect, ResCmd, SCREEN_H,
+    SCREEN_W, TexId, TexInfo, Vertex, clip_in_viewport,
+};
 
-// `pos` in wgpu clip space; `fog` is the vertex fog factor f of 06 §10.1 (1 = no fog), mixed with `fog_color`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pub pos: [f32; 4],
-    pub uv: [f32; 2],
-    pub color: [u8; 4],
-    pub fog_color: [u8; 4],
-    pub fog: f32,
-}
-
-impl Vertex {
-    // Pre-transformed (D3D rhw = 1) vertex in screen pixels; no fog.
-    pub fn screen(x: f32, y: f32, z: f32, uv: [f32; 2], color: [u8; 4]) -> Self {
-        Self {
-            pos: [x / 320.0 - 1.0, 1.0 - y / 240.0, z, 1.0],
-            uv,
-            color,
-            fog_color: [0; 4],
-            fog: 1.0,
-        }
-    }
-}
-
-// D3D clip coords of viewport `vp` → clip coords of the 640x480 target, with the D3D→wgpu half-pixel shift.
-pub fn clip_in_viewport(c: [f32; 4], vp: Rect) -> [f32; 4] {
-    let (ax, bx) = (vp.w / SCREEN_W, (vp.x + vp.w / 2.0 + 0.5) / 320.0 - 1.0);
-    let (ay, by) = (vp.h / SCREEN_H, 1.0 - (vp.y + vp.h / 2.0 + 0.5) / 240.0);
-    [ax * c[0] + bx * c[3], ay * c[1] + by * c[3], c[2], c[3]]
-}
-
-// SRCBLEND SRCALPHA with DESTBLEND INVSRCALPHA (Alpha) or ONE (Add) (05 §12.4, §2.1 bits 4–5).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Blend {
-    Alpha,
-    Add,
-}
-
-// Port handle; free slots are reused.
-pub type TextureId = usize;
+// TODO(step 8): call sites still name the port handle `TextureId`; rename to `TexId` file by file.
+pub type TextureId = TexId;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -82,47 +45,12 @@ impl PipeKey {
 // Port choice; the D3D8 depth format is not specified.
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-// Viewport / rectangle in 640×480 screen pixels.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Rect {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-}
-
-impl Rect {
-    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
-        Self { x, y, w, h }
-    }
-}
-
-pub const FULLSCREEN: Rect = Rect::new(0.0, 0.0, SCREEN_W, SCREEN_H);
-// Playfield viewport (32,16)–(416,464) (06 §10.2 step 5).
-pub const PLAYFIELD: Rect = Rect::new(32.0, 16.0, 384.0, 448.0);
-
 pub struct Texture {
     pub width: u32,
     pub height: u32,
     bind: wgpu::BindGroup,
     tex: wgpu::Texture,
     label: Option<LogTex>,
-}
-
-// Draw-log attribution of a texture: `<anm file>#<entry>` or an image file name, with the logical size.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LogTex {
-    pub label: Arc<str>,
-    pub w: u32,
-    pub h: u32,
-}
-
-// Fog colour / start / end of the draw (06 §10.1), recorded in the draw log.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LogFog {
-    pub color: [u8; 3],
-    pub start: f32,
-    pub end: f32,
 }
 
 // One recorded draw call (TH08_DRAWLOG); vertices in v0 TL, v1 TR, v2 BL, v3 BR order.
@@ -181,8 +109,8 @@ pub struct Gfx {
     depth_test: bool,
     tex_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    // Executor side of the core `ResTable`: slot `TexId.0` holds that id's texture.
     textures: Vec<Option<Texture>>,
-    free: Vec<TextureId>,
     viewport: Rect,
     verts: Vec<Vertex>,
     indices: Vec<u32>,
@@ -196,6 +124,8 @@ pub struct Gfx {
     log: Option<Vec<LogRec>>,
     log_fog: Option<LogFog>,
     pub persistent: bool,
+    // TODO(step 8): the recorder moves to Ctx / World once every call site records; `Gfx` then only executes.
+    pub rec: Recorder,
 }
 
 // Texture × diffuse (05 §12.4 stage 0 MODULATE), alpha test ALPHAREF 4 / GREATEREQUAL, then 06 §10.1 step 3 fog mix.
@@ -554,12 +484,11 @@ impl Gfx {
             tex_layout,
             sampler,
             textures: Vec::new(),
-            free: Vec::new(),
             viewport: FULLSCREEN,
             verts: Vec::new(),
             indices: Vec::new(),
             batches: Vec::new(),
-            white: 0,
+            white: TexId::WHITE,
             frame,
             frame_bind,
             blit,
@@ -567,8 +496,10 @@ impl Gfx {
             log: None,
             log_fog: None,
             persistent: false,
+            rec: Recorder::new(),
         };
-        g.white = g.create_texture(1, 1, &[255; 4]);
+        // Executes the recorder's white texture (slot 0).
+        g.sync();
         g
     }
 
@@ -625,20 +556,15 @@ impl Gfx {
         }
     }
 
-    // Full-precision RGBA8 upload (03 §3: the reduced-colour option can be ignored).
-    pub fn create_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> TextureId {
-        self.create_texture_fmt(width, height, rgba, wgpu::TextureFormat::Rgba8Unorm)
-    }
-
     // Post-present capture (12 §1, 0x44886F): copies the last presented 640x480 frame into a new surface texture.
-    pub fn capture_screen(&mut self, label: &str) -> TextureId {
+    fn do_capture_screen(&mut self, id: TexId, label: &str) {
         let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
         let fmt = self.config.format;
         let blank = vec![0u8; (w * h * 4) as usize];
-        let id = self.create_texture_fmt(w, h, &blank, fmt);
+        self.create_texture_fmt(id, w, h, &blank, fmt);
         if self.surface.is_some() {
             let mut enc = self.device.create_command_encoder(&Default::default());
-            let dst = &self.textures[id].as_ref().unwrap().tex;
+            let dst = &self.tex(id).tex;
             enc.copy_texture_to_texture(
                 self.frame.as_image_copy(),
                 dst.as_image_copy(),
@@ -650,7 +576,7 @@ impl Gfx {
             );
             self.queue.submit([enc.finish()]);
         }
-        self.set_label(id, label, w, h);
+        self.do_set_label(id, label, w, h);
         if let Some(log) = self.log.as_mut() {
             log.push(LogRec::Copy {
                 src: "screen".into(),
@@ -660,12 +586,11 @@ impl Gfx {
                 to: [0, 0],
             });
         }
-        id
     }
 
     // Anm_CaptureToTexture 0x466F20 (12 §3): the last presented frame's rect `from`/`size` is filtered into the
     // texture rect `to`/`to_size` (D3DX surface load, default filter; the port samples linearly).
-    pub fn capture_rect(
+    fn do_capture_rect(
         &mut self,
         dst: TextureId,
         from: [u32; 2],
@@ -673,7 +598,7 @@ impl Gfx {
         to: [u32; 2],
         to_size: [u32; 2],
     ) {
-        let Some(Some(t)) = self.textures.get(dst) else {
+        let Some(Some(t)) = self.textures.get(dst.index()) else {
             return;
         };
         let (tw, th) = (t.width, t.height);
@@ -736,13 +661,15 @@ impl Gfx {
         self.queue.submit([enc.finish()]);
     }
 
+    // Full-precision RGBA8 upload (03 §3: the reduced-colour option can be ignored) or a capture target, at core id `id`.
     fn create_texture_fmt(
         &mut self,
+        id: TexId,
         width: u32,
         height: u32,
         rgba: &[u8],
         format: wgpu::TextureFormat,
-    ) -> TextureId {
+    ) {
         let tex = self.device.create_texture_with_data(
             &self.queue,
             &wgpu::TextureDescriptor {
@@ -787,33 +714,22 @@ impl Gfx {
             tex,
             label: None,
         });
-        if let Some(id) = self.free.pop() {
-            self.textures[id] = t;
-            id
-        } else {
-            self.textures.push(t);
-            self.textures.len() - 1
+        if self.textures.len() <= id.index() {
+            self.textures.resize_with(id.index() + 1, || None);
         }
+        self.textures[id.index()] = t;
     }
 
-    pub fn free_texture(&mut self, id: TextureId) {
-        if id != self.white && self.textures.get_mut(id).and_then(Option::take).is_some() {
-            self.free.push(id);
+    // The core table already skipped white and double frees.
+    fn do_free_texture(&mut self, id: TexId) {
+        if let Some(t) = self.textures.get_mut(id.index()) {
+            *t = None;
         }
-    }
-
-    // `name` = the image file, used as its draw-log label.
-    // Standalone .jpg / .png images (03 §1).
-    pub fn load_image(&mut self, name: &str, bytes: &[u8]) -> anyhow::Result<TextureId> {
-        let img = image::load_from_memory(bytes)?.to_rgba8();
-        let id = self.create_texture(img.width(), img.height(), &img);
-        self.set_label(id, name, img.width(), img.height());
-        Ok(id)
     }
 
     // Replaces a w×h RGBA region at (x, y); applied before the next submit.
-    pub fn write_texture(&mut self, id: TextureId, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) {
-        let Some(t) = self.textures.get(id).and_then(Option::as_ref) else {
+    fn do_write_texture(&mut self, id: TextureId, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) {
+        let Some(t) = self.textures.get(id.index()).and_then(Option::as_ref) else {
             return;
         };
         let (w, h) = (
@@ -845,7 +761,7 @@ impl Gfx {
     }
 
     // Surface-to-surface copy of a pixel rectangle (submitted at once, before this frame's draws).
-    pub fn copy_texture(
+    fn do_copy_texture(
         &mut self,
         src: TextureId,
         from: [u32; 2],
@@ -853,8 +769,10 @@ impl Gfx {
         to: [u32; 2],
         size: [u32; 2],
     ) {
-        let (Some(Some(a)), Some(Some(b))) = (self.textures.get(src), self.textures.get(dst))
-        else {
+        let (Some(Some(a)), Some(Some(b))) = (
+            self.textures.get(src.index()),
+            self.textures.get(dst.index()),
+        ) else {
             return;
         };
         let w = size[0]
@@ -893,8 +811,8 @@ impl Gfx {
         self.queue.submit([enc.finish()]);
     }
 
-    pub fn set_label(&mut self, id: TextureId, label: &str, w: u32, h: u32) {
-        if let Some(Some(t)) = self.textures.get_mut(id) {
+    fn do_set_label(&mut self, id: TextureId, label: &str, w: u32, h: u32) {
+        if let Some(Some(t)) = self.textures.get_mut(id.index()) {
             t.label = Some(LogTex {
                 label: label.into(),
                 w,
@@ -904,7 +822,7 @@ impl Gfx {
     }
 
     fn label_name(&self, id: TextureId) -> String {
-        match self.textures.get(id).and_then(Option::as_ref) {
+        match self.textures.get(id.index()).and_then(Option::as_ref) {
             Some(Texture { label: Some(l), .. }) => l.label.to_string(),
             _ => format!("?{id:x}"),
         }
@@ -919,44 +837,34 @@ impl Gfx {
     }
 
     pub fn take_log(&mut self) -> Vec<LogRec> {
+        self.sync();
         self.log.as_mut().map(std::mem::take).unwrap_or_default()
     }
 
     // Vertex fog parameters reported for the following draws (the factor itself is per vertex).
-    pub fn set_log_fog(&mut self, fog: Option<LogFog>) {
+    fn do_set_log_fog(&mut self, fog: Option<LogFog>) {
         self.log_fog = fog;
     }
 
-    pub fn texture(&self, id: TextureId) -> &Texture {
-        self.textures[id].as_ref().expect("freed texture")
+    fn tex(&self, id: TexId) -> &Texture {
+        self.textures[id.index()].as_ref().expect("freed texture")
     }
 
     // Subsequent draws are clipped to `r` (screen coords); 2D vertices stay in screen space like D3D pretransformed ones.
-    pub fn set_viewport(&mut self, r: Rect) {
+    fn do_set_viewport(&mut self, r: Rect) {
         self.viewport = r;
     }
 
-    pub fn viewport(&self) -> Rect {
-        self.viewport
-    }
-
-    pub fn clear_viewport(&mut self, color: [u8; 4]) {
+    fn do_clear_viewport(&mut self, color: [u8; 4]) {
         let r = self.viewport;
-        self.rect(r.x, r.y, r.w, r.h, color);
+        self.do_rect(r.x, r.y, r.w, r.h, color);
     }
 
     // Axis-aligned textured rectangle at `dst`, no depth write.
-    pub fn sprite(
-        &mut self,
-        tex: TextureId,
-        blend: Blend,
-        dst: Rect,
-        uv: [f32; 4],
-        color: [u8; 4],
-    ) {
+    fn do_sprite(&mut self, tex: TextureId, blend: Blend, dst: Rect, uv: [f32; 4], color: [u8; 4]) {
         let Rect { x, y, w, h } = dst;
         let [u0, v0, u1, v1] = uv;
-        self.quad(
+        self.do_quad(
             tex,
             blend,
             [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
@@ -965,7 +873,7 @@ impl Gfx {
         );
     }
 
-    pub fn quad(
+    fn do_quad(
         &mut self,
         tex: TextureId,
         blend: Blend,
@@ -985,7 +893,7 @@ impl Gfx {
     }
 
     // D3D vertex order: v0 top-left, v1 top-right, v2 bottom-left, v3 bottom-right; triangles (v0 v1 v2), (v1 v2 v3).
-    pub fn quad_strip(
+    fn do_quad_strip(
         &mut self,
         tex: TextureId,
         blend: Blend,
@@ -994,10 +902,10 @@ impl Gfx {
         color: [u8; 4],
     ) {
         let v = std::array::from_fn(|i| Vertex::screen(pos[i][0], pos[i][1], 0.0, uv[i], color));
-        self.strip(tex, blend, false, v);
+        self.do_strip(tex, blend, false, v);
     }
 
-    pub fn strip(&mut self, tex: TextureId, blend: Blend, zwrite: bool, v: [Vertex; 4]) {
+    fn do_strip(&mut self, tex: TextureId, blend: Blend, zwrite: bool, v: [Vertex; 4]) {
         self.push(
             tex,
             self.key(blend, zwrite, Kind::Draw),
@@ -1007,17 +915,17 @@ impl Gfx {
     }
 
     // ZFUNC: LESSEQUAL when on, ALWAYS when off (the D3D default outside the stage draw).
-    pub fn set_depth_test(&mut self, on: bool) {
+    fn do_set_depth_test(&mut self, on: bool) {
         self.depth_test = on;
     }
 
     // D3D Clear on the current viewport: colour (if given) and z = 1.
-    pub fn clear_depth(&mut self, color: Option<[u8; 4]>) {
+    fn do_clear_depth(&mut self, color: Option<[u8; 4]>) {
         self.clear(color, 0xff00_0000);
     }
 
     // Z-only D3D Clear passing colour `arg` (D3DCOLOR), which has no pixel effect (11 §3.1, 06 §3 step 5).
-    pub fn clear_z(&mut self, arg: u32) {
+    fn do_clear_z(&mut self, arg: u32) {
         self.clear(None, arg);
     }
 
@@ -1069,7 +977,7 @@ impl Gfx {
             } else {
                 v
             };
-            let t = self.textures.get(tex).and_then(Option::as_ref);
+            let t = self.textures.get(tex.index()).and_then(Option::as_ref);
             let rec = LogRec::Quad {
                 tex: t.and_then(|t| t.label.clone()),
                 id: tex,
@@ -1099,15 +1007,11 @@ impl Gfx {
         }
     }
 
-    pub fn white(&self) -> TextureId {
-        self.white
-    }
-
     // Untextured rectangle in D3D screen coordinates (pixel centres on integers).
-    pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
+    fn do_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
         let (x, y) = (x + 0.5, y + 0.5);
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        self.quad(
+        self.do_quad(
             self.white,
             Blend::Alpha,
             [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
@@ -1116,14 +1020,14 @@ impl Gfx {
         );
     }
 
-    pub fn solid_quad(&mut self, blend: Blend, corners: [[f32; 2]; 4], color: [u8; 4]) {
+    fn do_solid_quad(&mut self, blend: Blend, corners: [[f32; 2]; 4], color: [u8; 4]) {
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        self.quad(self.white, blend, corners, uv, color);
+        self.do_quad(self.white, blend, corners, uv, color);
     }
 
     // Full-surface copy to the screen (logged as a K record).
-    pub fn image(&mut self, tex: TextureId, x: f32, y: f32) {
-        let t = self.texture(tex);
+    fn do_image(&mut self, tex: TextureId, x: f32, y: f32) {
+        let t = self.tex(tex);
         let (w, h) = (t.width as f32, t.height as f32);
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         let log = self.log.take();
@@ -1135,7 +1039,7 @@ impl Gfx {
                 size: [w as u32, h as u32],
                 to: [x as u32, y as u32],
             });
-            self.quad(
+            self.do_quad(
                 tex,
                 Blend::Alpha,
                 [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
@@ -1145,7 +1049,7 @@ impl Gfx {
             self.log = Some(log);
             return;
         }
-        self.quad(
+        self.do_quad(
             tex,
             Blend::Alpha,
             [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
@@ -1156,7 +1060,7 @@ impl Gfx {
 
     // Copy of the (sx, sy, w, h) source rectangle to the screen at (dx, dy) (logged as a K record).
     #[allow(clippy::too_many_arguments)]
-    pub fn image_rect(
+    fn do_image_rect(
         &mut self,
         tex: TextureId,
         sx: u32,
@@ -1166,7 +1070,7 @@ impl Gfx {
         dx: f32,
         dy: f32,
     ) {
-        let t = self.texture(tex);
+        let t = self.tex(tex);
         let (tw, th) = (t.width as f32, t.height as f32);
         let (u0, v0) = (sx as f32 / tw, sy as f32 / th);
         let (u1, v1) = ((sx + w) as f32 / tw, (sy + h) as f32 / th);
@@ -1183,7 +1087,7 @@ impl Gfx {
         }
         let log = self.log.take();
         let (w, h) = (w as f32, h as f32);
-        self.quad(
+        self.do_quad(
             tex,
             Blend::Alpha,
             [[dx, dy], [dx + w, dy], [dx + w, dy + h], [dx, dy + h]],
@@ -1286,13 +1190,13 @@ impl Gfx {
                 }
                 pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
                 pass.set_pipeline(&self.pipes[b.key.index()]);
-                pass.set_bind_group(0, &self.texture(b.tex).bind, &[]);
+                pass.set_bind_group(0, &self.tex(b.tex).bind, &[]);
                 pass.draw_indexed(b.start..b.end, 0, 0..1);
             }
         }
     }
 
-    pub fn present(&mut self) {
+    fn do_present(&mut self) {
         let Some(surface) = &self.surface else {
             self.clear_batches();
             return;
@@ -1348,6 +1252,7 @@ impl Gfx {
 
     // Renders the pending batches into the 640x480 frame without presenting (tools).
     pub fn flush(&mut self) {
+        self.sync();
         let mut enc = self.device.create_command_encoder(&Default::default());
         self.render_frame(&mut enc);
         self.queue.submit([enc.finish()]);
@@ -1355,7 +1260,7 @@ impl Gfx {
     }
 
     // Untextured triangle fan (vertex 0 = centre), z-write off; logged as one `P fan` record.
-    pub fn fan(&mut self, blend: Blend, v: &[Vertex]) {
+    fn do_fan(&mut self, blend: Blend, v: &[Vertex]) {
         if v.len() < 3 {
             return;
         }
@@ -1380,7 +1285,7 @@ impl Gfx {
     }
 
     // Raw draw of a pre-built quad (v0 TL, v1 TR, v2 BL, v3 BR) with explicit depth state (draw-log renderer).
-    pub fn draw_raw(
+    fn do_draw_raw(
         &mut self,
         tex: Option<TextureId>,
         blend: Blend,
@@ -1408,6 +1313,7 @@ impl Gfx {
     // Renders the pending batches at 640x480 into memory, optionally scaled to `size` like the window (RGBA).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn capture(&mut self, size: Option<(u32, u32)>) -> image::RgbaImage {
+        self.sync();
         let mut enc = self.device.create_command_encoder(&Default::default());
         self.render_frame(&mut enc);
         let scaled = size.map(|(w, h)| {
@@ -1493,6 +1399,283 @@ impl Gfx {
         self.verts.clear();
         self.indices.clear();
         self.batches.clear();
+    }
+}
+
+// Executor: today's device code run from the recorded lists (REWRITE_PLAN step 8).
+impl Gfx {
+    // Runs everything recorded so far in call order: each `ResCmd` before the draw that followed it.
+    pub fn sync(&mut self) {
+        let (draws, res) = self.rec.take();
+        let mut res = res.into_iter().peekable();
+        for (i, d) in draws.iter().enumerate() {
+            while let Some((_, r)) = res.next_if(|(at, _)| *at <= i) {
+                self.execute_res(&r);
+            }
+            self.execute_one(d);
+        }
+        for (_, r) in res {
+            self.execute_res(&r);
+        }
+    }
+
+    pub fn execute(&mut self, cmds: &[DrawCmd]) {
+        cmds.iter().for_each(|c| self.execute_one(c));
+    }
+
+    fn execute_one(&mut self, c: &DrawCmd) {
+        match *c {
+            DrawCmd::SetViewport(r) => self.do_set_viewport(r),
+            DrawCmd::ClearViewport(color) => self.do_clear_viewport(color),
+            DrawCmd::Sprite {
+                tex,
+                blend,
+                dst,
+                uv,
+                color,
+            } => self.do_sprite(tex, blend, dst, uv, color),
+            DrawCmd::Quad {
+                tex,
+                blend,
+                corners,
+                uv,
+                color,
+            } => self.do_quad(tex, blend, corners, uv, color),
+            DrawCmd::QuadStrip {
+                tex,
+                blend,
+                pos,
+                uv,
+                color,
+            } => self.do_quad_strip(tex, blend, pos, uv, color),
+            DrawCmd::Strip {
+                tex,
+                blend,
+                zwrite,
+                v,
+            } => self.do_strip(tex, blend, zwrite, v),
+            DrawCmd::SetDepthTest(on) => self.do_set_depth_test(on),
+            DrawCmd::ClearDepth(color) => self.do_clear_depth(color),
+            DrawCmd::ClearZ(arg) => self.do_clear_z(arg),
+            DrawCmd::Rect { x, y, w, h, color } => self.do_rect(x, y, w, h, color),
+            DrawCmd::SolidQuad {
+                blend,
+                corners,
+                color,
+            } => self.do_solid_quad(blend, corners, color),
+            DrawCmd::Image { tex, x, y } => self.do_image(tex, x, y),
+            DrawCmd::ImageRect {
+                tex,
+                sx,
+                sy,
+                w,
+                h,
+                dx,
+                dy,
+            } => self.do_image_rect(tex, sx, sy, w, h, dx, dy),
+            DrawCmd::Fan { blend, ref v } => self.do_fan(blend, v),
+            DrawCmd::Raw {
+                tex,
+                blend,
+                test,
+                write,
+                v,
+            } => self.do_draw_raw(tex, blend, test, write, v),
+            DrawCmd::SetLogFog(fog) => self.do_set_log_fog(fog),
+            DrawCmd::Present => self.do_present(),
+        }
+    }
+
+    pub fn execute_res(&mut self, c: &ResCmd) {
+        match c {
+            ResCmd::Create { id, w, h, rgba } => {
+                self.create_texture_fmt(*id, *w, *h, rgba, wgpu::TextureFormat::Rgba8Unorm)
+            }
+            ResCmd::CaptureScreen { id, label } => self.do_capture_screen(*id, label),
+            ResCmd::CaptureRect {
+                dst,
+                from,
+                size,
+                to,
+                to_size,
+            } => self.do_capture_rect(*dst, *from, *size, *to, *to_size),
+            ResCmd::Free(id) => self.do_free_texture(*id),
+            ResCmd::Write {
+                id,
+                x,
+                y,
+                w,
+                h,
+                rgba,
+            } => self.do_write_texture(*id, *x, *y, *w, *h, rgba),
+            ResCmd::Copy {
+                src,
+                from,
+                dst,
+                to,
+                size,
+            } => self.do_copy_texture(*src, *from, *dst, *to, *size),
+            ResCmd::SetLabel { id, label, w, h } => self.do_set_label(*id, label, *w, *h),
+        }
+    }
+}
+
+impl AsMut<Recorder> for Gfx {
+    fn as_mut(&mut self) -> &mut Recorder {
+        &mut self.rec
+    }
+}
+
+// TODO(step 8): facade for unconverted call sites; each forwards to `rec` (same list, so call order is kept).
+impl Gfx {
+    pub fn viewport(&self) -> Rect {
+        self.rec.viewport()
+    }
+
+    pub fn white(&self) -> TexId {
+        self.rec.white()
+    }
+
+    pub fn texture(&self, id: TexId) -> TexInfo {
+        self.rec.texture(id)
+    }
+
+    pub fn set_viewport(&mut self, r: Rect) {
+        self.rec.set_viewport(r)
+    }
+
+    pub fn clear_viewport(&mut self, color: [u8; 4]) {
+        self.rec.clear_viewport(color)
+    }
+
+    pub fn sprite(&mut self, tex: TexId, blend: Blend, dst: Rect, uv: [f32; 4], color: [u8; 4]) {
+        self.rec.sprite(tex, blend, dst, uv, color)
+    }
+
+    pub fn quad(
+        &mut self,
+        tex: TexId,
+        blend: Blend,
+        corners: [[f32; 2]; 4],
+        uv: [[f32; 2]; 4],
+        color: [u8; 4],
+    ) {
+        self.rec.quad(tex, blend, corners, uv, color)
+    }
+
+    pub fn quad_strip(
+        &mut self,
+        tex: TexId,
+        blend: Blend,
+        pos: [[f32; 2]; 4],
+        uv: [[f32; 2]; 4],
+        color: [u8; 4],
+    ) {
+        self.rec.quad_strip(tex, blend, pos, uv, color)
+    }
+
+    pub fn strip(&mut self, tex: TexId, blend: Blend, zwrite: bool, v: [Vertex; 4]) {
+        self.rec.strip(tex, blend, zwrite, v)
+    }
+
+    pub fn set_depth_test(&mut self, on: bool) {
+        self.rec.set_depth_test(on)
+    }
+
+    pub fn clear_depth(&mut self, color: Option<[u8; 4]>) {
+        self.rec.clear_depth(color)
+    }
+
+    pub fn clear_z(&mut self, arg: u32) {
+        self.rec.clear_z(arg)
+    }
+
+    pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
+        self.rec.rect(x, y, w, h, color)
+    }
+
+    pub fn solid_quad(&mut self, blend: Blend, corners: [[f32; 2]; 4], color: [u8; 4]) {
+        self.rec.solid_quad(blend, corners, color)
+    }
+
+    pub fn image(&mut self, tex: TexId, x: f32, y: f32) {
+        self.rec.image(tex, x, y)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_rect(&mut self, tex: TexId, sx: u32, sy: u32, w: u32, h: u32, dx: f32, dy: f32) {
+        self.rec.image_rect(tex, sx, sy, w, h, dx, dy)
+    }
+
+    pub fn fan(&mut self, blend: Blend, v: &[Vertex]) {
+        self.rec.fan(blend, v)
+    }
+
+    pub fn draw_raw(
+        &mut self,
+        tex: Option<TexId>,
+        blend: Blend,
+        test: bool,
+        write: bool,
+        v: [Vertex; 4],
+    ) {
+        self.rec.draw_raw(tex, blend, test, write, v)
+    }
+
+    pub fn set_log_fog(&mut self, fog: Option<LogFog>) {
+        self.rec.set_log_fog(fog)
+    }
+
+    // Records the Present and executes the frame's lists (the only per-frame sync point).
+    pub fn present(&mut self) {
+        self.rec.present();
+        self.sync();
+    }
+
+    pub fn create_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> TexId {
+        self.rec.create_texture(width, height, rgba)
+    }
+
+    pub fn capture_screen(&mut self, label: &str) -> TexId {
+        self.rec.capture_screen(label)
+    }
+
+    pub fn capture_rect(
+        &mut self,
+        dst: TexId,
+        from: [u32; 2],
+        size: [u32; 2],
+        to: [u32; 2],
+        to_size: [u32; 2],
+    ) {
+        self.rec.capture_rect(dst, from, size, to, to_size)
+    }
+
+    pub fn free_texture(&mut self, id: TexId) {
+        self.rec.free_texture(id)
+    }
+
+    pub fn load_image(&mut self, name: &str, bytes: &[u8]) -> anyhow::Result<TexId> {
+        self.rec.load_image(name, bytes)
+    }
+
+    pub fn write_texture(&mut self, id: TexId, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) {
+        self.rec.write_texture(id, x, y, w, h, rgba)
+    }
+
+    pub fn copy_texture(
+        &mut self,
+        src: TexId,
+        from: [u32; 2],
+        dst: TexId,
+        to: [u32; 2],
+        size: [u32; 2],
+    ) {
+        self.rec.copy_texture(src, from, dst, to, size)
+    }
+
+    pub fn set_label(&mut self, id: TexId, label: &str, w: u32, h: u32) {
+        self.rec.set_label(id, label, w, h)
     }
 }
 

@@ -15,7 +15,7 @@ const SKIP_START: i8 = -4;
 // The original's globals that every subsystem reaches (device, archive, sound manager, input words, SprtCtrlInf,
 // funcChain); `game` holds GM / Supervisor fields (11 §2, §7).
 pub struct Ctx {
-    // TODO(step 8): wgpu device calls from logic become DrawList / ResCmd output.
+    // TODO(step 8): device executor; its `rec` (DrawCmd / ResCmd recorder, drawlist.rs) moves here once every site records.
     pub gfx: Gfx,
     // TODO(step 8b): core reads content through a LogicView, not the archive.
     pub archive: Archive,

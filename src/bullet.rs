@@ -1591,7 +1591,7 @@ impl BulletManager {
         if frozen {
             (anm.tint, anm.tint_on) = (0xFFF01010, true);
         }
-        self.items.draw(anm, gfx);
+        self.items.draw(anm, &mut gfx.rec);
         self.draw_lasers(anm, gfx);
         for c in 0..6 {
             for k in (0..self.lists[c].len()).rev() {

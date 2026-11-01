@@ -2347,7 +2347,7 @@ mod tests {
         rot[1].pos[1] += 0.01;
         let quad = |v| LogRec::Quad {
             tex: tex.clone(),
-            id: 3,
+            id: crate::drawlist::TexId(3),
             textured: true,
             blend: Blend::Add,
             test: false,

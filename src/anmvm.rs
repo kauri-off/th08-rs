@@ -1209,7 +1209,7 @@ mod tests {
             }],
             texture: None,
         };
-        anm.insert(0, "t", vec![chunk], |_| 0);
+        anm.insert(0, "t", vec![chunk], |_| crate::drawlist::TexId(0));
         let mut vm = AnmVm::default();
         anm.set_script(&mut rng, &mut vm, 0, 0);
         (anm, vm)
@@ -1325,7 +1325,7 @@ mod tests {
             }
             let mut anm = AnmManager::default();
             let total = chunks.iter().map(|c| c.scripts.len()).sum::<usize>();
-            anm.insert(0, n, chunks, |_| 0);
+            anm.insert(0, n, chunks, |_| crate::drawlist::TexId(0));
             for k in 0..total {
                 let mut vm = AnmVm::default();
                 anm.set_script(&mut rng, &mut vm, 0, k);

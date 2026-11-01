@@ -3,7 +3,10 @@
 use crate::anm::{self, Script};
 use crate::anmvm::{self, AnmVm};
 use crate::archive::Archive;
-use crate::gfx::{self, Blend, Camera, Gfx, Mat4, TextureId, Vertex};
+// Draws and texture uploads go to the core `Recorder` (REWRITE_PLAN step 8); callers pass a `Recorder` or a `Gfx`.
+use crate::drawlist::{self, Blend, Recorder, TexId, Vertex};
+// TODO(step 8): camera math moves out of the renderer module with the crate cut (needs fmath, 05 §10).
+use crate::gfx::{Camera, Mat4};
 use anyhow::{Result, ensure};
 
 // ANM file slots 0..24; index ≥ 25 is an error (03 §2.4).
@@ -12,7 +15,7 @@ pub const SLOTS: usize = 25;
 // Runtime sprite record (03 §5, structs.md), reduced to texture, normalised UV rect (u0, v0, u1, v1) and logical size.
 #[derive(Clone, Copy, Debug)]
 pub struct SlotSprite {
-    pub tex: TextureId,
+    pub tex: TexId,
     pub uv: [f32; 4],
     pub w: f32,
     pub h: f32,
@@ -23,7 +26,7 @@ pub struct LoadedAnm {
     pub name: String,
     pub sprites: Vec<SlotSprite>,
     pub scripts: Vec<Script>,
-    textures: Vec<TextureId>,
+    textures: Vec<TexId>,
 }
 
 pub struct AnmManager {
@@ -52,7 +55,7 @@ pub struct AnmManager {
     // +0x24C8: last sprite whose texture matrix Draw3DWorld uploaded, with its UV offset (05 §12.8).
     last_tex_matrix: Option<((i16, i16), [f32; 2])>,
     // Texture cache +0x24BC, shared by the 2D paths and Draw3DWorld (05 §12.8).
-    bound_tex: Option<TextureId>,
+    bound_tex: Option<TexId>,
     // Port-only: texture entries loaded so far; paces the loading screen (gamemgr `loading_total`).
     pub entries_loaded: u32,
     // Pending AnmManager_QueueCapture request +0x2A252C (12 §3): the destination sprite rect at queue time.
@@ -94,26 +97,29 @@ impl AnmManager {
     // Anm_Preload 0x465860 + Anm_LoadEntryTexture 0x465CC0 (03 §2); the port uploads all entries at once.
     pub fn load(
         &mut self,
-        gfx: &mut Gfx,
+        out: &mut impl AsMut<Recorder>,
         archive: &Archive,
         slot: usize,
         name: &str,
     ) -> Result<()> {
+        let rec = out.as_mut();
         ensure!(slot < SLOTS, "anm slot {slot} out of range");
         let chunks = anm::parse(&archive.read(name)?)?;
-        self.unload(gfx, slot);
+        self.unload(rec, slot);
         let mut entry = 0;
         self.insert(slot, name, chunks, |c| {
             let id = match &c.texture {
-                Some(t) => gfx.create_texture(t.width, t.height, &t.rgba),
+                Some(t) => rec.create_anm_texture(name, entry, t.width, t.height, &t.rgba),
                 // '@' entries are blank render targets (text / capture).
-                None => gfx.create_texture(
+                None => rec.create_anm_texture(
+                    name,
+                    entry,
                     c.width.max(1),
                     c.height.max(1),
                     &vec![0; (c.width.max(1) * c.height.max(1) * 4) as usize],
                 ),
             };
-            gfx.set_label(id, &format!("{name}#{entry}"), c.width, c.height);
+            rec.set_label(id, &format!("{name}#{entry}"), c.width, c.height);
             entry += 1;
             id
         });
@@ -127,7 +133,7 @@ impl AnmManager {
         slot: usize,
         name: &str,
         chunks: Vec<anm::Chunk>,
-        mut make_tex: impl FnMut(&anm::Chunk) -> TextureId,
+        mut make_tex: impl FnMut(&anm::Chunk) -> TexId,
     ) {
         let (mut sprites, mut scripts, mut textures) = (Vec::new(), Vec::new(), Vec::new());
         for c in chunks {
@@ -151,9 +157,10 @@ impl AnmManager {
         });
     }
 
-    pub fn unload(&mut self, gfx: &mut Gfx, slot: usize) {
+    pub fn unload(&mut self, out: &mut impl AsMut<Recorder>, slot: usize) {
+        let rec = out.as_mut();
         if let Some(a) = self.slots.get_mut(slot).and_then(Option::take) {
-            a.textures.into_iter().for_each(|t| gfx.free_texture(t));
+            a.textures.into_iter().for_each(|t| rec.free_texture(t));
         }
     }
 
@@ -185,7 +192,7 @@ impl AnmManager {
     }
 
     // 2D paths (EmitQuad / DrawCustomQuad) update the shared texture cache +0x24BC (05 §12.8).
-    pub fn bind(&mut self, tex: TextureId) {
+    pub fn bind(&mut self, tex: TexId) {
         self.bound_tex = Some(tex);
     }
 
@@ -239,14 +246,16 @@ impl AnmManager {
         vm.run(self, rng);
     }
 
-    pub fn draw(&mut self, gfx: &mut Gfx, vm: &mut AnmVm) {
-        self.draw_mode(gfx, vm, vm.draw_mode);
+    pub fn draw(&mut self, out: &mut impl AsMut<Recorder>, vm: &mut AnmVm) {
+        let rec = out.as_mut();
+        self.draw_mode(rec, vm, vm.draw_mode);
     }
 
     // 2D draws carry the VM's z as the vertex depth.
-    pub fn draw_mode(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, mode: i32) {
+    pub fn draw_mode(&mut self, out: &mut impl AsMut<Recorder>, vm: &mut AnmVm, mode: i32) {
+        let rec = out.as_mut();
         let z = vm.pos[2];
-        self.draw_mode_z(gfx, vm, mode, z);
+        self.draw_mode_z(rec, vm, mode, z);
     }
 
     // Mode-5 world matrix (05 §9): base (w/256, h/256) × scale, then × RotX × RotY × RotZ (each only if ≠ 0).
@@ -328,7 +337,14 @@ impl AnmManager {
 
     // AnmManager_Draw3DWorld 0x464470 (06 §11.2): unit quad ±128 through `cam` with vertex fog; the screen-shake
     // offset is added to the translation.
-    pub fn draw_3d_world(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, cam: &Camera, fog: Option<Fog>) {
+    pub fn draw_3d_world(
+        &mut self,
+        out: &mut impl AsMut<Recorder>,
+        vm: &mut AnmVm,
+        cam: &Camera,
+        fog: Option<Fog>,
+    ) {
+        let rec = out.as_mut();
         use anmvm::*;
         if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
             || vm.color[A] == 0
@@ -367,7 +383,7 @@ impl AnmManager {
         self.last_tex_matrix = Some((key, off));
         let (su, sv) = (spr.uv[2] - spr.uv[0], spr.uv[3] - spr.uv[1]);
         let color = self.vm_color(vm);
-        let vp = gfx.viewport();
+        let vp = rec.viewport();
         let vproj = cam.view_proj();
         let v = [
             [-128.0, -128.0, 0.0, 0.0],
@@ -390,7 +406,7 @@ impl AnmManager {
                 None => ([0; 4], 1.0),
             };
             Vertex {
-                pos: gfx::clip_in_viewport(vproj.transform(p), vp),
+                pos: drawlist::clip_in_viewport(vproj.transform(p), vp),
                 uv: [off[0] + u * su, off[1] + t * sv],
                 color,
                 fog_color,
@@ -398,18 +414,24 @@ impl AnmManager {
             }
         });
         let blend = self.blend_for(vm);
-        gfx.set_log_fog(fog.map(|f| gfx::LogFog {
+        rec.set_log_fog(fog.map(|f| drawlist::LogFog {
             color: f.color,
             start: f.near,
             end: f.far,
         }));
-        gfx.strip(tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
-        gfx.set_log_fog(None);
+        rec.strip(tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
+        rec.set_log_fog(None);
     }
 
     // Anm_DrawRingStrip (07 §10.6 trail, flag 8): one triangle strip of (pos, uv, alpha) vertices with the VM's
     // texture, blend and colour, emitted as consecutive 4-vertex strips.
-    pub fn draw_ring_strip(&mut self, gfx: &mut Gfx, vm: &AnmVm, v: &[([f32; 2], [f32; 2], u8)]) {
+    pub fn draw_ring_strip(
+        &mut self,
+        out: &mut impl AsMut<Recorder>,
+        vm: &AnmVm,
+        v: &[([f32; 2], [f32; 2], u8)],
+    ) {
+        let rec = out.as_mut();
         use anmvm::*;
         let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
             return;
@@ -428,7 +450,7 @@ impl AnmManager {
         let v: Vec<Vertex> = v.iter().map(vert).collect();
         for q in (0..v.len().saturating_sub(2)).step_by(2) {
             if q + 3 < v.len() {
-                gfx.strip(
+                rec.strip(
                     spr.tex,
                     blend,
                     vm.flags & F_ZWRITE_OFF == 0,
@@ -441,7 +463,14 @@ impl AnmManager {
 
     // `z` is the vertex depth (projected depth for stage billboards, 0 otherwise).
     // AnmManager_DrawByMode 0x45E960 (05 §9); skip unless visible, enabled and primary alpha ≠ 0 (05 §12.2).
-    pub fn draw_mode_z(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, mode: i32, z: f32) {
+    pub fn draw_mode_z(
+        &mut self,
+        out: &mut impl AsMut<Recorder>,
+        vm: &mut AnmVm,
+        mode: i32,
+        z: f32,
+    ) {
+        let rec = out.as_mut();
         use anmvm::*;
         let alpha = vm.color[A];
         if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
@@ -486,7 +515,7 @@ impl AnmManager {
             2 | 3 => (rotated(), false),
             // 4 DrawBillboard 0x463CF0: never reached through the dispatch (05 §9 reachability), kept for completeness.
             4 => {
-                let vp = gfx.viewport();
+                let vp = rec.viewport();
                 let cam = cam(self, vp);
                 let s = cam.project([px, py, pz], vp);
                 if !(0.0..=1.0).contains(&s[2]) {
@@ -502,7 +531,7 @@ impl AnmManager {
                 Self::update_world_matrix(vm);
                 let mut w = vm.world_matrix;
                 w.0[3] = [px + ax.abs(), py + ay.abs(), pz, 1.0];
-                let vp = gfx.viewport();
+                let vp = rec.viewport();
                 let cam = cam(self, vp);
                 let projected = [
                     [-128.0, -128.0],
@@ -520,12 +549,19 @@ impl AnmManager {
             }
             _ => return,
         };
-        self.emit_quad(gfx, vm, spr, corners, depth, snap);
+        self.emit_quad(rec, vm, spr, corners, depth, snap);
     }
 
     // DrawBillboard 0x463CF0 (05 §9 mode 4, 13 §2.6c) from an already projected point `s` and the 3D length `len` of
     // project(pos + right) − s; list B moves `s` in screen space (callback 0x428310) between the two.
-    pub fn draw_billboard(&mut self, gfx: &mut Gfx, vm: &mut AnmVm, s: [f32; 3], len: f32) {
+    pub fn draw_billboard(
+        &mut self,
+        out: &mut impl AsMut<Recorder>,
+        vm: &mut AnmVm,
+        s: [f32; 3],
+        len: f32,
+    ) {
+        let rec = out.as_mut();
         use anmvm::*;
         if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
             || vm.color[A] == 0
@@ -537,7 +573,7 @@ impl AnmManager {
             return;
         };
         self.emit_quad(
-            gfx,
+            rec,
             vm,
             spr,
             billboard_corners(vm, s, len),
@@ -548,7 +584,7 @@ impl AnmManager {
 
     fn emit_quad(
         &mut self,
-        gfx: &mut Gfx,
+        rec: &mut Recorder,
         vm: &AnmVm,
         spr: SlotSprite,
         corners: [[f32; 2]; 4],
@@ -566,7 +602,7 @@ impl AnmManager {
             }
             [x + 0.5, y + 0.5]
         });
-        let vp = gfx.viewport();
+        let vp = rec.viewport();
         let (minx, maxx) = corners
             .iter()
             .fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c[0]), b.max(c[0])));
@@ -588,7 +624,7 @@ impl AnmManager {
             Vertex::screen(corners[i][0], corners[i][1], depth[i], uv[i], rgba)
         });
         self.bound_tex = Some(spr.tex);
-        gfx.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
+        rec.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
     }
 }
 
