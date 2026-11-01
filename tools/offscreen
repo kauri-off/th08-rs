@@ -1,0 +1,3 @@
+#!/bin/bash
+# Run a windowed binary off-screen: xvfb with Wayland hidden (winit prefers WAYLAND_DISPLAY over xvfb's DISPLAY).
+exec env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET xvfb-run -a "$@"
