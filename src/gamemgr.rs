@@ -381,7 +381,7 @@ impl Game {
     // Boot load (15 §2.2); a missing or invalid file starts from defaults.
     pub fn load_score(&mut self, file: Option<&[u8]>) {
         self.lsnm_found = false;
-        self.score = match file.map(crate::scoredat::ScoreDat::parse) {
+        self.score = match file.map(crate::scoredat::parse) {
             Some(Ok(s)) => {
                 self.lsnm_found = true;
                 s

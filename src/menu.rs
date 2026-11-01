@@ -184,6 +184,7 @@ impl InfoNotices {
                     match ctx
                         .archive
                         .read(file)
+                        .map_err(anyhow::Error::from)
                         .and_then(|b| ctx.gfx.load_image(file, &b))
                     {
                         Ok(t) => ctx.info.cur = Some((t, 0)),
@@ -438,6 +439,7 @@ impl MainMenu {
         match ctx
             .archive
             .read(name)
+            .map_err(anyhow::Error::from)
             .and_then(|b| ctx.gfx.load_image(name, &b))
         {
             Ok(t) => self.surface = Some((t, name)),
@@ -624,7 +626,8 @@ impl MainMenu {
             let r = ctx
                 .archive
                 .read(&format!("demorpy{n}.rpy"))
-                .and_then(|b| crate::replay::Replay::parse(&b));
+                .map_err(anyhow::Error::from)
+                .and_then(|b| Ok(crate::replay::parse(&b)?));
             match r {
                 Ok(r) => {
                     if crate::replay::start_playback(&mut ctx.game, r, None, Some(n)) {

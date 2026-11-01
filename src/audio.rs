@@ -11,33 +11,7 @@ use std::sync::{Arc, Mutex};
 // thbgm.fmt WAVEFORMATEX: 44100 Hz, stereo, 16-bit for every track (02 §2).
 const BGM_RATE: f64 = 44100.0;
 
-// thbgm.fmt record (0x34 bytes, 02 §2); positions are in stereo frames (bytes / 4).
-#[derive(Clone, Debug)]
-pub struct Track {
-    pub name: String,
-    pub offset: u64,
-    pub loop_start: usize,
-    // Loop end +0x1C = frames stored in thbgm.dat; +0x14 (full length) is larger and never read (02 §2).
-    pub length: usize,
-}
-
-// 52-byte records up to the one whose name starts with NUL (02 §2).
-pub fn parse_fmt(data: &[u8]) -> Vec<Track> {
-    data.chunks_exact(52)
-        .take_while(|e| e[0] != 0)
-        .map(|e| {
-            let u = |o: usize| u32::from_le_bytes(e[o..o + 4].try_into().unwrap());
-            Track {
-                name: String::from_utf8_lossy(&e[..16])
-                    .trim_end_matches('\0')
-                    .to_string(),
-                offset: u(0x10) as u64,
-                loop_start: u(0x18) as usize / 4,
-                length: u(0x1c) as usize / 4,
-            }
-        })
-        .collect()
-}
+pub use th08_formats::thbgm::{Track, parse_fmt};
 
 // Music_Play's .mid → .wav rename plus Bgm_FindTrack 0x45C6B0 (02 §4): basename, case-sensitive compare,
 // no match → track 0 (th08_01.wav). So the std typos th08_02 / th08_13_b play the title theme.
@@ -602,6 +576,7 @@ impl Audio {
                 None => {
                     let w = archive
                         .read(&format!("{name}.wav"))
+                        .map_err(anyhow::Error::from)
                         .and_then(|d| parse_wav(&d))
                         .map(Arc::new);
                     if let Err(e) = &w {

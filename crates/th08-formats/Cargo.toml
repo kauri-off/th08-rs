@@ -4,3 +4,8 @@ version = "0.1.0"
 license = "GPL-3.0-or-later"
 edition = "2024"
 publish = false
+
+[dependencies]
+encoding_rs = "0.8"
+midly = { version = "0.5.3", default-features = false, features = ["std"] }
+thiserror = "2"

@@ -79,7 +79,7 @@ impl Ctx {
                 None => source.read("th08.cfg").await.ok(),
             };
         }
-        let cfg = crate::config::Config::load(cfg_file.as_deref(), bgm_header.as_deref())?;
+        let cfg = crate::config::load(cfg_file.as_deref(), bgm_header.as_deref())?;
         if persist {
             crate::scoredat::storage_write("th08.cfg", &cfg.to_bytes());
         }

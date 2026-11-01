@@ -2,9 +2,7 @@
 //! SPEC-GAP: GDI "ＭＳ ゴシック" pixels are not reproducible; a system Japanese font (native) or the browser's canvas font (web) is used.
 
 // Msg strings and spell names are Shift-JIS (cp932) (10 §2).
-pub fn decode_sjis(bytes: &[u8]) -> String {
-    encoding_rs::SHIFT_JIS.decode(bytes).0.into_owned()
-}
+pub use th08_formats::sjis::decode as decode_sjis;
 
 // Port font metric, no spec section: baseline of the glyph cell as a fraction of the cell height (MS Gothic ascent ≈ 0.86 em).
 const BASELINE: f32 = 0.86;

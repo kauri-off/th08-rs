@@ -80,6 +80,13 @@ impl Rng {
     }
 }
 
+// The savers' random bytes are Rng_Range16(256) draws (15 §2.1, §3.6).
+impl th08_formats::ByteSource for Rng {
+    fn next_byte(&mut self) -> u8 {
+        self.range16(256) as u8
+    }
+}
+
 // Debug: record a backtrace per draw while enabled (demo sync investigation).
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {

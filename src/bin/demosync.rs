@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     let rows = parse_trace(&trace);
-    let r = th08::replay::Replay::parse(&ctx.archive.read(&format!("demorpy{n}.rpy"))?)?;
+    let r = th08::replay::parse(&ctx.archive.read(&format!("demorpy{n}.rpy"))?)?;
     ctx.game.replay_ff = false;
     th08::replay::start_playback(&mut ctx.game, r, None, Some(n));
     let (a, b) = range.unwrap_or((0, 0));

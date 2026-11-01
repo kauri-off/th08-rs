@@ -148,7 +148,7 @@ const CHECKED: [usize; 21] = [
 // Runs demo `n` from a freshly loaded context and compares it with `trace`.
 pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
     let rows = parse_trace(trace);
-    let r = crate::replay::Replay::parse(&ctx.archive.read(&format!("demorpy{n}.rpy"))?)?;
+    let r = crate::replay::parse(&ctx.archive.read(&format!("demorpy{n}.rpy"))?)?;
     ctx.game.replay_ff = false;
     anyhow::ensure!(
         crate::replay::start_playback(&mut ctx.game, r, None, Some(n)),
@@ -242,7 +242,7 @@ mod tests {
         }
         let mut r = ctx.game.rpy.clone().unwrap();
         let mut rng = crate::rng::Rng::seeded(1);
-        let r = crate::replay::Replay::parse(&r.encode(&mut rng)).unwrap();
+        let r = crate::replay::parse(&r.encode(&mut rng)).unwrap();
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).unwrap();
         let src = crate::assets::Source::native(dir.into());
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();

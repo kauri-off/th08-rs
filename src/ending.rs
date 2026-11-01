@@ -7,6 +7,7 @@ use crate::gfx::TextureId;
 use crate::input::{ENTER, SHOT, SKIP};
 use crate::task::{Chain, Ret, Task};
 use anyhow::Result;
+use th08_formats::end;
 
 pub const CALC_PRIO: u16 = 5;
 pub const DRAW_PRIO: u16 = 4;
@@ -26,8 +27,7 @@ enum Step {
 
 pub struct Ending {
     // Script buffer and read pointer (Ending_LoadScript 0x4295E0).
-    script: Vec<u8>,
-    ip: usize,
+    script: end::Script,
     // Surface slot 0 (`@b` picture); +8 / +0xC source x / y, +0x10 scroll speed (px per frame).
     picture: Option<TextureId>,
     pic_x: f32,
@@ -102,8 +102,7 @@ fn any_final_a(g: &gamemgr::Game) -> bool {
 impl Ending {
     pub fn new() -> Self {
         Self {
-            script: Vec::new(),
-            ip: 0,
+            script: end::Script::default(),
             picture: None,
             pic_x: 0.0,
             pic_y: 0.0,
@@ -198,76 +197,10 @@ impl Ending {
     }
 
     fn set_script(&mut self, data: Vec<u8>) {
-        self.script = data;
-        self.ip = 0;
+        self.script = end::Script::new(data);
         self.line_normal = 8;
         self.line_timer = 0;
         self.frame = 0;
-    }
-
-    fn byte(&self, p: usize) -> u8 {
-        self.script.get(p).copied().unwrap_or(0)
-    }
-
-    // Integer argument: `atol`, then skip to the next NUL and over any NULs (16 §1.3).
-    fn int_arg(&mut self) -> i32 {
-        let mut p = self.ip;
-        while matches!(self.byte(p), b' ' | b'\t') {
-            p += 1;
-        }
-        let neg = match self.byte(p) {
-            b'-' => {
-                p += 1;
-                true
-            }
-            b'+' => {
-                p += 1;
-                false
-            }
-            _ => false,
-        };
-        let mut v: i32 = 0;
-        while self.byte(p).is_ascii_digit() {
-            v = v
-                .wrapping_mul(10)
-                .wrapping_add((self.byte(p) - b'0') as i32);
-            p += 1;
-        }
-        self.ip = p;
-        self.skip_arg();
-        if neg { v.wrapping_neg() } else { v }
-    }
-
-    // String argument up to its NUL terminator.
-    fn str_arg(&mut self) -> String {
-        let start = self.ip;
-        let mut p = start;
-        while p < self.script.len() && !matches!(self.byte(p), 0 | b'\n' | b'\r') {
-            p += 1;
-        }
-        let s = String::from_utf8_lossy(&self.script[start..p]).into_owned();
-        self.ip = p;
-        self.skip_arg();
-        s
-    }
-
-    fn skip_arg(&mut self) {
-        while self.ip < self.script.len() && !matches!(self.byte(self.ip), 0 | b'\n') {
-            self.ip += 1;
-        }
-        while self.ip < self.script.len() && self.byte(self.ip) == 0 {
-            self.ip += 1;
-        }
-    }
-
-    // After a command (and a text line): skip to the end of the line and over all CR/LF.
-    fn skip_line(&mut self) {
-        while self.ip < self.script.len() && self.byte(self.ip) != b'\n' {
-            self.ip += 1;
-        }
-        while self.ip < self.script.len() && matches!(self.byte(self.ip), b'\n' | b'\r') {
-            self.ip += 1;
-        }
     }
 
     // Shot / Enter edge (mask 0x1001), or Ctrl held while skip-allowed (16 §1.4).
@@ -324,26 +257,26 @@ impl Ending {
     fn run_commands(&mut self, ctx: &mut Ctx) -> Result<Step> {
         loop {
             // No end test in the original; every retail file ends with `@z` (16 §1.3), so this is unreachable.
-            if self.ip >= self.script.len() {
+            if self.script.ip >= self.script.len() {
                 return Ok(Step::End);
             }
-            if self.byte(self.ip) != b'@' {
+            if self.script.byte(self.script.ip) != b'@' {
                 self.text_line(ctx);
-                self.skip_line();
+                self.script.skip_line();
                 return Ok(Step::Wait);
             }
-            let cmd = self.byte(self.ip + 1);
-            self.ip += 2;
+            let cmd = self.script.byte(self.script.ip + 1);
+            self.script.ip += 2;
             let mut wait = false;
             match cmd {
                 b'0'..=b'3' => {
-                    let n = self.int_arg();
+                    let n = self.script.int_arg();
                     self.fade_mode = cmd - b'0' + 1;
                     self.fade_t = 0;
                     self.fade_n = n;
                 }
                 b'F' => {
-                    let name = self.str_arg();
+                    let name = self.script.str_arg();
                     match self.load_script(ctx, &name) {
                         Ok(()) => {
                             self.skip_allowed = self.skip_next;
@@ -355,29 +288,30 @@ impl Ending {
                 }
                 b'R' => self.reset_scripts(),
                 b'M' => {
-                    let n = self.int_arg();
+                    let n = self.script.int_arg();
                     ctx.audio.fade_bgm(n as f32, ctx.anm.speed);
                 }
                 b'V' => {
-                    let a = self.int_arg();
-                    let b = self.int_arg();
+                    let a = self.script.int_arg();
+                    let b = self.script.int_arg();
                     self.speed = a as f32 / b as f32;
                 }
                 b'a' => {
-                    let vm = self.int_arg();
-                    let script = self.int_arg();
-                    let sprite = self.int_arg();
+                    let vm = self.script.int_arg();
+                    let script = self.script.int_arg();
+                    let sprite = self.script.int_arg();
                     if let Some(v) = self.vms.get_mut(vm.max(0) as usize) {
                         ctx.anm.set_script(v, STAFF_SLOT, script.max(0) as usize);
                         v.set_sprite(&ctx.anm, sprite);
                     }
                 }
                 b'b' => {
-                    let name = self.str_arg();
+                    let name = self.script.str_arg();
                     let file = base_name(&name).to_string();
                     let tex = ctx
                         .archive
                         .read(&file)
+                        .map_err(anyhow::Error::from)
                         .and_then(|b| ctx.gfx.load_image(&file, &b));
                     match tex {
                         Ok(t) => {
@@ -388,33 +322,33 @@ impl Ending {
                         Err(e) => log::warn!("ending @b {name}: {e:#}"),
                     }
                 }
-                b'c' => self.text_rgb = self.int_arg() as u32 & 0xFFFFFF,
+                b'c' => self.text_rgb = self.script.int_arg() as u32 & 0xFFFFFF,
                 b'm' => {
-                    let name = self.str_arg();
+                    let name = self.script.str_arg();
                     // Music_Play(0, file) + Music_PlaySlot(0, 0), which marks music flag 0 heard.
                     ctx.audio.play_bgm(&name);
                     ctx.game.score.plst.music[0] = 1;
                 }
                 b'r' => {
-                    self.page_timer = self.int_arg();
-                    self.page_min = self.int_arg();
+                    self.page_timer = self.script.int_arg();
+                    self.page_min = self.script.int_arg();
                     self.line_timer = 0;
                     wait = true;
                 }
                 b's' => {
-                    self.line_normal = self.int_arg();
-                    self.line_fast = self.int_arg();
+                    self.line_normal = self.script.int_arg();
+                    self.line_fast = self.script.int_arg();
                 }
-                b'v' => self.pic_y = self.int_arg() as f32,
+                b'v' => self.pic_y = self.script.int_arg() as f32,
                 b'w' => {
-                    self.line_timer = self.int_arg();
-                    self.line_min = self.int_arg();
+                    self.line_timer = self.script.int_arg();
+                    self.line_min = self.script.int_arg();
                     wait = true;
                 }
                 b'z' => return Ok(Step::End),
                 _ => {}
             }
-            self.skip_line();
+            self.script.skip_line();
             if wait {
                 return Ok(Step::Wait);
             }
@@ -432,17 +366,7 @@ impl Ending {
     // Text line (16 §1.3): copied two bytes at a time until 0 / LF / CR at an even position, drawn into
     // VM[line] with Text_RenderToVm(colour, outline −1), interrupt 1, then the per-line wait.
     fn text_line(&mut self, ctx: &mut Ctx) {
-        let mut buf = Vec::new();
-        while buf.len() + 2 < LINE_BYTES {
-            let c = self.byte(self.ip);
-            if self.ip >= self.script.len() || matches!(c, 0 | b'\n' | b'\r') {
-                break;
-            }
-            buf.push(c);
-            buf.push(self.byte(self.ip + 1));
-            self.ip += 2;
-        }
-        let text = crate::text::decode_sjis(&buf);
+        let text = self.script.text_line(LINE_BYTES).decode();
         // Line 15 would hit the invisible VM 15 (≥ 16 corrupts); retail pages have ≤ 4 lines, extras dropped (16 §1.3).
         if let Some(vm) = self.vms.get_mut(self.line) {
             let rgb = [
@@ -575,7 +499,7 @@ impl Task<Ctx> for Ending {
         if let Some(t) = self.picture.take() {
             ctx.gfx.free_texture(t);
         }
-        self.script.clear();
+        self.script.data.clear();
         // Port guard: a removal by a scene switch away from 9 keeps that switch's target.
         if ctx.game.requested == gamemgr::SCENE_ENDING {
             ctx.game.request(gamemgr::SCENE_RESULT);
@@ -606,15 +530,15 @@ mod tests {
     #[test]
     fn args() {
         let mut e = Ending::new();
-        e.script = b"@w120\x00120\x00\n\r\nline\x00\n".to_vec();
-        e.ip = 2;
-        assert_eq!(e.int_arg(), 120);
-        assert_eq!(e.int_arg(), 120);
-        e.skip_line();
-        assert_eq!(e.byte(e.ip), b'l');
-        e.script = b"@Fdata/staff00b.end\x00\n".to_vec();
-        e.ip = 2;
-        assert_eq!(base_name(&e.str_arg()), "staff00b.end");
+        e.script = end::Script::new(b"@w120\x00120\x00\n\r\nline\x00\n".to_vec());
+        e.script.ip = 2;
+        assert_eq!(e.script.int_arg(), 120);
+        assert_eq!(e.script.int_arg(), 120);
+        e.script.skip_line();
+        assert_eq!(e.script.byte(e.script.ip), b'l');
+        e.script = end::Script::new(b"@Fdata/staff00b.end\x00\n".to_vec());
+        e.script.ip = 2;
+        assert_eq!(base_name(&e.script.str_arg()), "staff00b.end");
     }
 
     // 16 §1.2: Ending_Ctor zero-fills colour and +0x2A94; LoadScript resets only +0x2A90.

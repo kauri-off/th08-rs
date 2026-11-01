@@ -7,15 +7,13 @@ use crate::gamemgr;
 use crate::gfx::{FULLSCREEN, TextureId};
 use crate::input::{BOMB, DOWN, ENTER, KEY_R, PAUSE, SHOT, SKIP, UP};
 use crate::task::{Chain, Ret, Task};
+pub use th08_formats::musiccmt::{COMMENT_LINES, Entry, MAX_ENTRIES, parse_musiccmt};
 
 // Calc 0x449399 at prio 4, draw 0x449487 at prio 3 (16 §5).
 pub const CALC_PRIO: u16 = 4;
 pub const DRAW_PRIO: u16 = 3;
 // music00.anm in ANM slot 0x17 (16 §5.1).
 const ANM_SLOT: usize = 23;
-// Entry array 32 × 0x292 (16 §5.1).
-const MAX_ENTRIES: usize = 32;
-const COMMENT_LINES: usize = 7;
 // Comment display copies 64 bytes of a line into a zeroed 0x42 buffer (16 §5.1 QUIRK: longer lines are cut).
 const COMMENT_SHOWN: usize = 64;
 // The draw shows 10 rows (16 §5.2).
@@ -41,61 +39,6 @@ const COMMENT_MODE: i32 = 0x300000;
 // The one-byte cursor string 0x7F: ascii.anm sprite 126, a ▶ glyph (16 §5.2, 12 §2.9).
 const CURSOR: &str = "\u{7f}";
 
-// One musiccmt.txt entry (0x292 bytes, 16 §5.1): Shift-JIS bytes as stored.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Entry {
-    // +0x00 file name after `@` (`bgm/…mid`).
-    pub file: Vec<u8>,
-    // +0x40 title.
-    pub title: Vec<u8>,
-    // +0x82 + k·0x42, up to 7 comment lines.
-    pub comments: Vec<Vec<u8>>,
-}
-
-fn is_eol(c: u8) -> bool {
-    c == b'\r' || c == b'\n'
-}
-
-// musiccmt.txt parsing (16 §5.1): skip to `@`, file name, title line, then up to 7 lines until the next `@`; CR/LF
-// runs after each line are skipped, so blank lines are dropped. The array holds 32 entries; the original's copies
-// are unbounded, extra entries are dropped here.
-pub fn parse_musiccmt(data: &[u8]) -> Vec<Entry> {
-    let mut p = 0;
-    let line = |p: &mut usize| {
-        let start = *p;
-        while *p < data.len() && !is_eol(data[*p]) {
-            *p += 1;
-        }
-        let s = data[start..*p].to_vec();
-        while *p < data.len() && is_eol(data[*p]) {
-            *p += 1;
-        }
-        s
-    };
-    let mut out = Vec::new();
-    while out.len() < MAX_ENTRIES {
-        while p < data.len() && data[p] != b'@' {
-            p += 1;
-        }
-        if p >= data.len() {
-            break;
-        }
-        p += 1;
-        let file = line(&mut p);
-        let title = line(&mut p);
-        let mut comments = Vec::new();
-        while comments.len() < COMMENT_LINES && p < data.len() && data[p] != b'@' {
-            comments.push(line(&mut p));
-        }
-        out.push(Entry {
-            file,
-            title,
-            comments,
-        });
-    }
-    out
-}
-
 // PLST+0x208 heard flags → object +0xC + 4i (16 §5.1); playing in the music room never sets them.
 fn heard_flags(plst: &[u8; MAX_ENTRIES]) -> [bool; MAX_ENTRIES] {
     plst.map(|f| f != 0)
@@ -104,7 +47,7 @@ fn heard_flags(plst: &[u8; MAX_ENTRIES]) -> [bool; MAX_ENTRIES] {
 // Title-list text of entry i (16 §5.2): (text, COLORREF colour, mode arg).
 fn row_text(e: &Entry, heard: bool) -> (String, u32, i32) {
     if heard {
-        (crate::text::decode_sjis(&e.title), 0xC0E0FF, 0x302080)
+        (e.title.decode(), 0xC0E0FF, 0x302080)
     } else {
         (UNHEARD.to_string(), 0x80A0C0, 0x100040)
     }
@@ -114,7 +57,7 @@ fn row_text(e: &Entry, heard: bool) -> (String, u32, i32) {
 // 64 bytes.
 fn comment_text(e: &Entry, heard: bool, playing: bool, k: usize) -> String {
     if heard || playing {
-        let l = e.comments.get(k).map(Vec::as_slice).unwrap_or_default();
+        let l = e.comments.get(k).map(|c| c.as_bytes()).unwrap_or_default();
         crate::text::decode_sjis(&l[..l.len().min(COMMENT_SHOWN)])
     } else {
         WARNING[k].to_string()
@@ -314,7 +257,7 @@ impl MusicRoom {
             self.play(ctx);
             self.sub_frame = 0;
             if let Some(e) = self.entries.get(self.cursor as usize) {
-                let l = e.comments.first().map(Vec::as_slice).unwrap_or_default();
+                let l = e.comments.first().map(|c| c.as_bytes()).unwrap_or_default();
                 let s = crate::text::decode_sjis(&l[..l.len().min(COMMENT_SHOWN)]);
                 ctx.anm.file_set_script(&mut self.title, 0, TITLE_SCRIPT);
                 self.title.pending_interrupt = 1;
@@ -353,6 +296,7 @@ impl Task<Ctx> for MusicRoom {
         match ctx
             .archive
             .read("music.jpg")
+            .map_err(anyhow::Error::from)
             .and_then(|b| ctx.gfx.load_image("music.jpg", &b))
         {
             Ok(t) => self.surface = Some(t),
@@ -455,32 +399,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn musiccmt_parse() {
-        let mut d = b"junk\r\n@bgm/th08_01.mid\r\nTitle A\r\n\r\nc0\r\nc1\r\n".to_vec();
-        d.extend_from_slice(
-            b"@bgm/th08_00.mid\nTitle B\n1\n2\n3\n4\n5\n6\n7\n8\n@bgm/x.mid\r\nT\r\n",
-        );
-        let e = parse_musiccmt(&d);
-        assert_eq!(e.len(), 3);
-        assert_eq!(e[0].file, b"bgm/th08_01.mid");
-        assert_eq!(e[0].title, b"Title A");
-        // The blank line is dropped.
-        assert_eq!(e[0].comments, vec![b"c0".to_vec(), b"c1".to_vec()]);
-        // At most 7 comment lines; the 8th is skipped on the way to the next `@`.
-        assert_eq!(e[1].comments.len(), 7);
-        assert_eq!(e[1].comments[6], b"7");
-        assert_eq!(e[2].file, b"bgm/x.mid");
-        assert!(e[2].comments.is_empty());
-        // The array holds 32 entries.
-        assert_eq!(parse_musiccmt(&b"@f\nt\n".repeat(40)).len(), 32);
-    }
-
-    #[test]
     fn title_list_and_unlock() {
         let e = Entry {
             file: b"bgm/th08_03.mid".to_vec(),
-            title: "蠢々秋月".as_bytes().to_vec(),
-            comments: vec![vec![b'x'; 68], b"second".to_vec()],
+            title: "蠢々秋月".as_bytes().into(),
+            comments: vec![vec![b'x'; 68].into(), b"second".as_slice().into()],
         };
         let mut plst = [0u8; MAX_ENTRIES];
         plst[0] = 1;

@@ -1167,7 +1167,7 @@ impl MainMenu {
         self.replays = names
             .into_iter()
             .filter_map(|n| {
-                let r = crate::replay::Replay::parse(&crate::scoredat::storage_read(&n)?).ok()?;
+                let r = crate::replay::parse(&crate::scoredat::storage_read(&n)?).ok()?;
                 Some((n, r))
             })
             .collect();
@@ -1259,7 +1259,7 @@ impl MainMenu {
                     self.lists.rpy_loaded = Some(i);
                     // Card-name scratch VM menu+0xE7B8 (12 §2.8 step 3): header +0x7E into resulttext sprite 11, set up
                     // for every file, drawn only for spell replays.
-                    let name = sjis(self.replays[i].1.card_name());
+                    let name = sjis(&self.replays[i].1.card_name());
                     self.notice = scratch(ctx, RT_SLOT, 11, false);
                     self.render_vm(ctx, RT_SLOT, 11, &name);
                     self.cursor = first as i32;

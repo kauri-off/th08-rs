@@ -1,7 +1,7 @@
 //! MIDI music mode: the original's own SMF sequencer (02 §5, `Midi_*` 0x443C60–0x445440) and the port's synth output.
 #![allow(clippy::disallowed_methods)]
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use std::sync::Arc;
 
 // Midi_Open's tempo := 1 000 000 µs per quarter note (02 §5).
@@ -14,34 +14,7 @@ pub trait Out {
     fn sysex(&mut self, data: &[u8]);
 }
 
-// Midi_Open 0x4442E0: header fields and every `MTrk` body copied into its own buffer.
-#[derive(Clone, Debug)]
-pub struct Song {
-    pub format: u16,
-    pub division: u16,
-    pub tracks: Vec<Arc<[u8]>>,
-}
-
-pub fn parse(file: &[u8]) -> Result<Song> {
-    let (header, tracks) = midly::parse(file).context("not a MIDI file")?;
-    let midly::Timing::Metrical(division) = header.timing else {
-        anyhow::bail!("SMPTE timing is not used by th08");
-    };
-    let format = match header.format {
-        midly::Format::SingleTrack => 0,
-        midly::Format::Parallel => 1,
-        midly::Format::Sequential => 2,
-    };
-    let tracks = tracks
-        .map(|t| t.map(|e| Arc::<[u8]>::from(e.unread())))
-        .collect::<Result<Vec<_>, _>>()?;
-    ensure!(division.as_int() > 0, "division 0");
-    Ok(Song {
-        format,
-        division: division.as_int(),
-        tracks,
-    })
-}
+pub use th08_formats::midi::{MidiError, Song, parse};
 
 // Track record (0x20 bytes at +0x138): +0 active, +4 next event time, +0xC running status, +0x14 read pointer (at
 // the next event's status byte, its delta already added to `next`), +0x18/+0x1C CC 2 copies of +0x14/+4.

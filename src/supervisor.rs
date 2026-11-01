@@ -430,7 +430,7 @@ impl Task<Ctx> for Supervisor {
                     Some(n) => ctx.archive.read(&format!("demorpy{n}.rpy"))?,
                     None => load_file(v).with_context(|| format!("TH08_REPLAY={v}"))?,
                 };
-                let r = crate::replay::Replay::parse(&bytes)?;
+                let r = crate::replay::parse(&bytes)?;
                 ctx.game.replay_speed = st.replay_speed;
                 let demo = v.strip_prefix("demo").and_then(|n| n.parse().ok());
                 crate::replay::start_playback(&mut ctx.game, r, None, demo);

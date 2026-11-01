@@ -14,6 +14,7 @@ default-run = "th08"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+th08-formats = { path = "crates/th08-formats" }
 anyhow = "1.0.104"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 cpal = "0.18.2"

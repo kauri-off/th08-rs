@@ -3,7 +3,6 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::input::{self, Input};
-use anyhow::{Result, ensure};
 
 // ANM slots of the portrait files face[0..3] (10 §3); text.anm is slot 0 (10 §6).
 pub const FACE_SLOTS: [usize; 4] = [16, 17, 18, 19];
@@ -83,79 +82,7 @@ pub fn face_files(stage: usize, shot: u8, card: Option<i16>) -> [Option<String>;
     [None, None, s2.and_then(face), None]
 }
 
-// File layout (10 §2): u32 count, u32 offset[count] (entries may share an offset), instructions.
-pub struct MsgFile {
-    data: Vec<u8>,
-    pub entries: Vec<usize>,
-}
-
-// Instruction header (10 §2): u16 time, u8 opcode, u8 arg_size; next = at + 4 + arg_size.
-#[derive(Clone, Copy, Debug)]
-pub struct Ins {
-    pub time: u16,
-    pub op: u8,
-    pub size: usize,
-    pub at: usize,
-}
-
-pub fn parse(data: Vec<u8>) -> Result<MsgFile> {
-    ensure!(data.len() >= 4, "msg file too short");
-    let n = u32::from_le_bytes(data[0..4].try_into()?) as usize;
-    ensure!(data.len() >= 4 + 4 * n, "msg entry table truncated");
-    let entries = (0..n)
-        .map(|i| u32::from_le_bytes(data[4 + 4 * i..8 + 4 * i].try_into().unwrap()) as usize)
-        .collect::<Vec<_>>();
-    ensure!(
-        entries.iter().all(|&o| o + 4 <= data.len()),
-        "msg entry offset out of range"
-    );
-    Ok(MsgFile { data, entries })
-}
-
-impl MsgFile {
-    pub fn ins(&self, at: usize) -> Option<Ins> {
-        let h = self.data.get(at..at + 4)?;
-        let size = h[3] as usize;
-        (at + 4 + size <= self.data.len()).then_some(Ins {
-            time: u16::from_le_bytes([h[0], h[1]]),
-            op: h[2],
-            size,
-            at,
-        })
-    }
-
-    pub fn args(&self, i: &Ins) -> &[u8] {
-        &self.data[i.at + 4..i.at + 4 + i.size]
-    }
-
-    pub fn i16(&self, i: &Ins, k: usize) -> i16 {
-        let a = self.args(i);
-        a.get(2 * k..2 * k + 2)
-            .map_or(0, |b| i16::from_le_bytes([b[0], b[1]]))
-    }
-
-    pub fn i32(&self, i: &Ins, k: usize) -> i32 {
-        let a = self.args(i);
-        a.get(4 * k..4 * k + 4)
-            .map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()))
-    }
-
-    pub fn u8(&self, i: &Ins, k: usize) -> u8 {
-        self.args(i).get(k).copied().unwrap_or(0)
-    }
-
-    // XOR-0x77 Shift-JIS string starting at byte `from` of the arguments.
-    pub fn string(&self, i: &Ins, from: usize) -> String {
-        let raw: Vec<u8> = self
-            .args(i)
-            .iter()
-            .skip(from)
-            .map(|b| b ^ 0x77)
-            .take_while(|&b| b != 0)
-            .collect();
-        crate::text::decode_sjis(&raw)
-    }
-}
+pub use th08_formats::msg::{Ins, MsgError, MsgFile, parse};
 
 // Things the HUD / game manager must do after a Msg_Run (10 §5.1).
 // Bgm op 7, BgmFade op 12, Flash op 14, StageEnd op 9, HaltFinal op 11, Route = GM flags bits 11–12 (ops 21/22,
@@ -440,7 +367,7 @@ impl Dialogue {
                 let (sp, line, s) = (
                     f.i16(&ins, 0) as usize,
                     f.i16(&ins, 1) as usize,
-                    f.string(&ins, 4),
+                    f.string(&ins, 4).decode(),
                 );
                 if line == 0 {
                     self.clear_line1();
@@ -504,7 +431,7 @@ impl Dialogue {
                 self.new_box = true;
             }
             16 => {
-                let s = f.string(&ins, 0);
+                let s = f.string(&ins, 0).decode();
                 if self.new_box {
                     self.clear_line1();
                     self.next_line = 0;
@@ -527,7 +454,7 @@ impl Dialogue {
             }
             18 => self.textbox = f.u8(&ins, 0) != 0,
             19 | 20 => {
-                let s = f.string(&ins, 0);
+                let s = f.string(&ins, 0).decode();
                 let c = self.text_colour[0];
                 self.render(anm, (ins.op - 19) as usize, s, c);
                 self.wait_count = 0;
@@ -693,7 +620,7 @@ mod tests {
                     assert!(i.time >= last, "{name}: time goes back at {at:#x}");
                     last = i.time;
                     if matches!(i.op, 3 | 16 | 19 | 20) {
-                        let s = f.string(&i, if i.op == 3 { 4 } else { 0 });
+                        let s = f.string(&i, if i.op == 3 { 4 } else { 0 }).decode();
                         assert!(!s.contains('\u{FFFD}'), "{name}: undecodable text {s:?}");
                     }
                     at += 4 + i.size;

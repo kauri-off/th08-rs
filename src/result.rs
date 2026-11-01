@@ -1275,6 +1275,7 @@ impl Task<Ctx> for ResultScreen {
         match ctx
             .archive
             .read("result.jpg")
+            .map_err(anyhow::Error::from)
             .and_then(|b| ctx.gfx.load_image("result.jpg", &b))
         {
             Ok(t) => self.surface = Some(t),
@@ -1400,7 +1401,7 @@ impl Task<Ctx> for ResultScreen {
 // or failed. A loaded copy is always valid (T8RP, version 6 checked by the load).
 fn read_slot(n: usize) -> Option<crate::replay::Replay> {
     let f = crate::scoredat::storage_read(&format!("replay/th8_{n:02}.rpy"))?;
-    crate::replay::Replay::parse(&f).ok()
+    crate::replay::parse(&f).ok()
 }
 
 // Name-entry cursor (16 §2.2): Up, Down, Left, Right are four independent tests in that order, each skipping the
@@ -1833,7 +1834,7 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/data/drawlog");
         let dat = std::fs::read(dir.join("menu_mopup1.score.dat")).unwrap();
         let want = std::fs::read(dir.join("menu_mopup1.score.txt")).unwrap();
-        let mut s = crate::scoredat::ScoreDat::parse(&dat).unwrap();
+        let mut s = crate::scoredat::parse(&dat).unwrap();
         s.rebuild_lists();
         // Supervisor_UpdateRunTime before the dump added the wall-clock time since boot.
         s.plst.run_time[1..3].copy_from_slice(&[18, 31]);
@@ -1968,14 +1969,14 @@ mod tests {
         assert_eq!(h.score(), 1_234_567);
         assert_eq!(h.0[9], 0);
         let file = std::fs::read(save.join("score.dat")).unwrap();
-        let s = crate::scoredat::ScoreDat::parse(&file).unwrap();
+        let s = crate::scoredat::parse(&file).unwrap();
         assert_eq!(&s.lsnm[..8], b"PP      ");
         assert!(s.hscr.contains(&h));
         assert_eq!(s.hiscore(0, 1), h.score().max(100_000));
         // Save → load → save: identical with the same two random header bytes (15 §2.1).
         let mut r1 = crate::rng::Rng::seeded(3);
         let mut r2 = crate::rng::Rng::seeded(3);
-        let again = crate::scoredat::ScoreDat::parse(&s.encode(&mut r1)).unwrap();
+        let again = crate::scoredat::parse(&s.encode(&mut r1)).unwrap();
         assert_eq!(
             again.encode(&mut r2),
             s.encode(&mut crate::rng::Rng::seeded(3))

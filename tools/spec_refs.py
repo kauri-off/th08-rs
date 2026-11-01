@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check `NN §x.y` spec citations in src/ against the numbered spec headings; exit 1 on broken ones."""
+"""Check `NN §x.y` spec citations in src/ and crates/ against the numbered spec headings; exit 1 on broken ones."""
 import glob, os, re, sys
 
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,7 +14,7 @@ for p in glob.glob(f"{R}/specs/[01][0-9]_*.md"):
         if m:
             s.add(m.group(1))
 bad = []
-for p in sorted(glob.glob(f"{R}/src/**/*.rs", recursive=True)):
+for p in sorted(glob.glob(f"{R}/src/**/*.rs", recursive=True) + glob.glob(f"{R}/crates/**/*.rs", recursive=True)):
     for i, l in enumerate(open(p, encoding="utf-8"), 1):
         for m in CITE.finditer(l):
             n, sec = m.groups()

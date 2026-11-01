@@ -2067,7 +2067,7 @@ pub fn run_demo(
     last: i32,
     mut out: impl FnMut(String),
 ) -> anyhow::Result<()> {
-    let r = crate::replay::Replay::parse(&ctx.archive.read(&format!("demorpy{n}.rpy"))?)?;
+    let r = crate::replay::parse(&ctx.archive.read(&format!("demorpy{n}.rpy"))?)?;
     ctx.game.replay_ff = false;
     anyhow::ensure!(
         crate::replay::start_playback(&mut ctx.game, r, None, Some(n)),
