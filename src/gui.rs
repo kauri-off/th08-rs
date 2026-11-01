@@ -2,7 +2,7 @@
 
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
-use crate::drawlist::{PLAYFIELD, Recorder};
+use crate::drawlist::{PLAYFIELD, Recorder, TextCmd};
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::player::PlayerRef;
@@ -10,6 +10,7 @@ use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
+use th08_formats::sjis::{self, SjisString};
 
 // Gui_Calc = Spell_Calc 0x416B90 at calc prio 12, Gui_Draw = Spell_Draw 0x4178C0 at draw prio 15 (12 §5.8).
 pub const CALC_PRIO: u16 = 12;
@@ -60,9 +61,8 @@ pub struct Gui {
     enemies: Rc<RefCell<EnemyManager>>,
     // VMs at +0x120 + k·0x2A4, roles in the 12 §5.8 table; 3 and 5 never get a script.
     vms: [AnmVm; 14],
-    raster: crate::text::Raster,
-    // Pending Text_RenderToVm requests: (VM, text, colour, x inside the strip).
-    texts: Vec<(usize, String, [u8; 3], f32)>,
+    // Pending Text_RenderToVm requests: (VM, Shift-JIS text, colour, x inside the strip).
+    texts: Vec<(usize, SjisString, [u8; 3], f32)>,
     // Spell flag bit 10: name-only show (native 22), no bonus line and no VM 13 interrupts.
     name_only: bool,
     card: i32,
@@ -87,7 +87,6 @@ impl Gui {
             player,
             enemies,
             vms: Default::default(),
-            raster: crate::text::Raster::new(ctx.core.font.as_deref()),
             texts: Vec::new(),
             name_only: false,
             card: -1,
@@ -177,7 +176,8 @@ impl Gui {
                 // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 (12 §5.3).
                 panel.set_repaint(2);
                 anm.set_script(rng, &mut v[6], TEXT_SLOT, 4);
-                self.texts.push((6, name.to_string(), [255, 240, 240], 0.0));
+                self.texts
+                    .push((6, sjis::encode(name), [255, 240, 240], 0.0));
                 v[10].pending_interrupt = 1;
                 sound.play(0xE);
             }
@@ -219,7 +219,7 @@ impl Gui {
                 // Shift-JIS bytes; colour 0x00FFF0F0.
                 let x = (320.0 - name.len() as f32 * 15.0 / 2.0).trunc();
                 self.texts
-                    .push((7, crate::text::decode_sjis(&name), [240, 240, 255], x));
+                    .push((7, SjisString(name.to_vec()), [240, 240, 255], x));
                 v[11].pending_interrupt = 1;
                 if !name_only {
                     v[13].pending_interrupt = 1;
@@ -257,9 +257,16 @@ impl Gui {
             // 10 §6: W = texture-row width (512), the whole 15-row strip at (0, v0) is replaced.
             let t = ctx.rec.texture(sp.tex);
             let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
-            // TODO(step 8 text): CPU raster + Write; decision 7 moves text to an output command.
-            let rgba = self.raster.render_at(&s, colour, w as usize, 15, x);
-            ctx.rec.write_texture(sp.tex, 0, ty, w, 15, &rgba);
+            ctx.rec.text(TextCmd {
+                dst: sp.tex,
+                y: ty,
+                w,
+                size: 15,
+                text: s,
+                color: colour,
+                x,
+                outline: 0,
+            });
         }
     }
 

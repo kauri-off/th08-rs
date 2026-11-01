@@ -1,8 +1,6 @@
 //! Text_RenderToVm 0x4663B0 rasteriser (10 §6): 2× work surface, 4-offset black outline, colour at the centre, exact D3DX TRIANGLE 2:1 into A4R4G4B4.
+//! Renderer side (ARCH_SUMMARY decision 7): `Gfx` runs it for `ResCmd::Text`; core never rasterises or reads fonts.
 //! SPEC-GAP: GDI "ＭＳ ゴシック" pixels are not reproducible; a system Japanese font (native) or the browser's canvas font (web) is used.
-
-// Msg strings and spell names are Shift-JIS (cp932) (10 §2).
-pub use th08_formats::sjis::decode as decode_sjis;
 
 // Port font metric, no spec section: baseline of the glyph cell as a fraction of the cell height (MS Gothic ascent ≈ 0.86 em).
 const BASELINE: f32 = 0.86;
@@ -37,8 +35,7 @@ impl Default for Raster {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Raster {
-    // `font` = TH08_FONT (`CoreConfig::font`), tried before FONT_PATHS.
-    // TODO(step 8): font files read from disk; text rasterising becomes an output command (`Host::text_raster`).
+    // `font` = TH08_FONT (`CoreConfig::font`, via `Renderer::set_font`), tried before FONT_PATHS.
     pub fn new(font: Option<&str>) -> Self {
         let font = font
             .into_iter()

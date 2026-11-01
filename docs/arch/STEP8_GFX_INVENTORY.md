@@ -129,5 +129,22 @@ menu, menulist, musicroom, ending, hud, gui). Left: game.rs/anmdebug; `Ctx.gfx.r
   `tan` differ from `fmath` for |a| > 2 in an exhaustive f32 check, so fmath waits for step 10).
 - Check: `drawlist::tests::core_has_no_renderer_dependency` (no `crate::gfx` / `wgpu::` / `winit::` / `egui` outside
   app, gfx, launcher, drawreport, platform, main; test modules skipped).
-- Left: text raster (`TODO(step 8 text)`), drawlog writer in `Ctx` (`TODO(step 8)`), device-loss rebuild.
+- Left: ~~text raster~~ (done IMPL168, §7), drawlog writer in `Ctx` (`TODO(step 8)`), device-loss rebuild.
 
+
+## 7. Status after IMPL168 (step 8d, decision 7: text as an output command)
+
+- `ResCmd::Text(TextCmd { dst, y, w, size, text: SjisString, color, x, outline })`, recorded with `Recorder::text`,
+  replayed in call order like `Write`. `Gfx::do_text` decodes Shift-JIS, rasterises (`text::Raster::render_outline`,
+  unchanged) and uploads the strip (`do_write_texture`), so the texture gets the same pixels at the same point.
+- `text.rs` (fonts + raster) is renderer side: one `Raster` owned by `Gfx`, created at the first text command from
+  `Renderer::set_font` (`CoreConfig::font`, called in `Ctx::load_with`). `core_has_no_renderer_dependency` lists `text`
+  as renderer side and forbids `crate::text` in core. `Recorder::write_texture` has no core caller left.
+- Sites: hud dialogue lines (recorded in calc; runs at the next submit before any draw recorded after it), gui spell
+  names, menu descriptions, menulist / result strips (`render_strip`), music room, ending. Core keeps bytes: msg /
+  musiccmt / .end / score.dat / replay text pass through undecoded; port literals and `format!` text go through
+  `sjis::encode` (round-trip tests per module). Data fields are now concatenated as bytes (menulist info lines), as the
+  original's sprintf does.
+- Measures: only Text_RenderCentered / Text_RenderToVmRight x (Shift-JIS byte length, pure core: `menu::centred_x`,
+  gui); no font metric reaches logic.
+- Left: drawlog writer in `Ctx` (`TODO(step 8)`), device-loss rebuild.

@@ -2,12 +2,13 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
-use crate::drawlist::{FULLSCREEN, TexId};
+use crate::drawlist::{FULLSCREEN, TexId, TextCmd};
 use crate::game::Ctx;
 use crate::gamemgr;
 use crate::input::{BOMB, DOWN, ENTER, KEY_R, PAUSE, SHOT, SKIP, UP};
 use crate::task::{Chain, Ret, Task};
 pub use th08_formats::musiccmt::{COMMENT_LINES, Entry, MAX_ENTRIES, parse_musiccmt};
+use th08_formats::sjis::{self, SjisString};
 
 // Calc 0x449399 at prio 4, draw 0x449487 at prio 3 (16 §5).
 pub const CALC_PRIO: u16 = 4;
@@ -45,22 +46,22 @@ fn heard_flags(plst: &[u8; MAX_ENTRIES]) -> [bool; MAX_ENTRIES] {
 }
 
 // Title-list text of entry i (16 §5.2): (text, COLORREF colour, mode arg).
-fn row_text(e: &Entry, heard: bool) -> (String, u32, i32) {
+fn row_text(e: &Entry, heard: bool) -> (SjisString, u32, i32) {
     if heard {
-        (e.title.decode(), 0xC0E0FF, 0x302080)
+        (e.title.clone(), 0xC0E0FF, 0x302080)
     } else {
-        (UNHEARD.to_string(), 0x80A0C0, 0x100040)
+        (sjis::encode(UNHEARD), 0x80A0C0, 0x100040)
     }
 }
 
 // Comment line k of the selected entry (16 §5.3): the real comment if heard or playing, else the warning; cut to
 // 64 bytes.
-fn comment_text(e: &Entry, heard: bool, playing: bool, k: usize) -> String {
+fn comment_text(e: &Entry, heard: bool, playing: bool, k: usize) -> SjisString {
     if heard || playing {
         let l = e.comments.get(k).map(|c| c.as_bytes()).unwrap_or_default();
-        crate::text::decode_sjis(&l[..l.len().min(COMMENT_SHOWN)])
+        SjisString(l[..l.len().min(COMMENT_SHOWN)].to_vec())
     } else {
-        WARNING[k].to_string()
+        sjis::encode(WARNING[k])
     }
 }
 
@@ -109,14 +110,7 @@ fn vm_argb(vm: &AnmVm) -> u32 {
 
 // Text_RenderToVm (10 §6), font 15: the rasteriser gets x = u0 and the texture-row width and replaces the whole
 // 15-row strip; the outline is always black, `mode` only selects ±1 (−1) / ±2 px. Sets VM flag bit 0.
-fn render_vm(
-    ctx: &mut Ctx,
-    raster: &mut crate::text::Raster,
-    vm: &mut AnmVm,
-    s: &str,
-    colour: u32,
-    mode: i32,
-) {
+fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, colour: u32, mode: i32) {
     let slot = vm.anm_slot.max(0) as usize;
     let Some(sp) = ctx
         .anm
@@ -131,10 +125,16 @@ fn render_vm(
         (sp.uv[0] * t.width as f32).round(),
         (sp.uv[1] * t.height as f32).round() as u32,
     );
-    let size = 15;
-    let rgba = raster.render_outline(s, colorref(colour), w as usize, size, tx, mode);
-    // TODO(step 8 text): CPU raster upload; becomes a text output command (decision 7).
-    ctx.rec.write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
+    ctx.rec.text(TextCmd {
+        dst: sp.tex,
+        y: ty,
+        w,
+        size: 15,
+        text: s,
+        color: colorref(colour),
+        x: tx,
+        outline: mode,
+    });
     vm.flags |= anmvm::F_VISIBLE;
 }
 
@@ -159,7 +159,6 @@ pub struct MusicRoom {
     comments: [AnmVm; COMMENT_LINES],
     // VM +0x6784 (8th VM of that array): playing title, text.anm script 0x11.
     title: AnmVm,
-    raster: crate::text::Raster,
     // Surface slot 0: music.jpg.
     surface: Option<TexId>,
     // Calc returned 0 on the exit frame; the on-remove also removes the draw node (16 §5.3 step 1).
@@ -167,14 +166,6 @@ pub struct MusicRoom {
 }
 
 impl MusicRoom {
-    // `font` = `CoreConfig::font` for the comment raster.
-    pub fn new(font: Option<&str>) -> Self {
-        Self {
-            raster: crate::text::Raster::new(font),
-            ..Self::default()
-        }
-    }
-
     fn n(&self) -> i32 {
         self.entries.len() as i32
     }
@@ -222,7 +213,7 @@ impl MusicRoom {
             vm.flags &= !anmvm::F_ENABLED;
         } else {
             vm.flags |= anmvm::F_ENABLED;
-            render_vm(ctx, &mut self.raster, vm, &s, COMMENT_COLOUR, COMMENT_MODE);
+            render_vm(ctx, vm, s, COMMENT_COLOUR, COMMENT_MODE);
         }
     }
 
@@ -264,18 +255,11 @@ impl MusicRoom {
             self.sub_frame = 0;
             if let Some(e) = self.entries.get(self.cursor as usize) {
                 let l = e.comments.first().map(|c| c.as_bytes()).unwrap_or_default();
-                let s = crate::text::decode_sjis(&l[..l.len().min(COMMENT_SHOWN)]);
+                let s = SjisString(l[..l.len().min(COMMENT_SHOWN)].to_vec());
                 ctx.anm
                     .file_set_script(&mut ctx.rng, &mut self.title, 0, TITLE_SCRIPT);
                 self.title.pending_interrupt = 1;
-                render_vm(
-                    ctx,
-                    &mut self.raster,
-                    &mut self.title,
-                    &s,
-                    COMMENT_COLOUR,
-                    COMMENT_MODE,
-                );
+                render_vm(ctx, &mut self.title, s, COMMENT_COLOUR, COMMENT_MODE);
             }
         }
         if mask_edge(&inp, BOMB | PAUSE) {
@@ -321,7 +305,7 @@ impl Task<Ctx> for MusicRoom {
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
             vm.pos = [93.0, (18 * (i as i32 + 1) + 104 - 20) as f32, 0.0];
             let (s, c, m) = row_text(&self.entries[i], self.heard[i]);
-            render_vm(ctx, &mut self.raster, &mut vm, &s, c, m);
+            render_vm(ctx, &mut vm, s, c, m);
             self.rows.push(vm);
         }
         Ok(())
@@ -406,6 +390,17 @@ impl Task<Ctx> for MusicRoom {
 mod tests {
     use super::*;
 
+    // Text commands carry Shift-JIS; every port literal must round-trip so the raster sees the same characters.
+    fn round_trips(s: &str) {
+        assert_eq!(th08_formats::sjis::encode(s).decode(), s);
+    }
+
+    #[test]
+    fn literals_are_sjis() {
+        WARNING.iter().for_each(|s| round_trips(s));
+        round_trips(UNHEARD);
+    }
+
     #[test]
     fn title_list_and_unlock() {
         let e = Entry {
@@ -419,15 +414,16 @@ mod tests {
         let h = heard_flags(&plst);
         assert!(h[0] && !h[2] && h[3]);
         let (s, c, o) = row_text(&e, h[2]);
-        assert_eq!((s.as_str(), c, o), (UNHEARD, 0x80A0C0, 0x100040));
+        assert_eq!((s.decode().as_str(), c, o), (UNHEARD, 0x80A0C0, 0x100040));
         let (_, c, o) = row_text(&e, h[3]);
         assert_eq!((c, o), (0xC0E0FF, 0x302080));
         // Comments: real text if heard or playing (cut to 64 bytes), else the warning table.
-        assert_eq!(comment_text(&e, true, false, 0), "x".repeat(64));
-        assert_eq!(comment_text(&e, false, true, 1), "second");
-        assert_eq!(comment_text(&e, true, false, 5), "");
-        assert_eq!(comment_text(&e, false, false, 0), WARNING[0]);
-        assert_eq!(comment_text(&e, false, false, 1), WARNING[1]);
+        let t = |h, p, k| comment_text(&e, h, p, k).decode();
+        assert_eq!(t(true, false, 0), "x".repeat(64));
+        assert_eq!(t(false, true, 1), "second");
+        assert_eq!(t(true, false, 5), "");
+        assert_eq!(t(false, false, 0), WARNING[0]);
+        assert_eq!(t(false, false, 1), WARNING[1]);
     }
 
     #[test]
@@ -465,7 +461,7 @@ mod tests {
     #[test]
     fn intro_and_input_sub_frames() {
         // Intro: state 1 on the 9th call (sub-frame 8), then the sub-frame restarts at 0 (16 §5.3).
-        let mut m = MusicRoom::new(None);
+        let mut m = MusicRoom::default();
         let mut calls = 0;
         while m.state == 0 {
             let s0 = m.state;

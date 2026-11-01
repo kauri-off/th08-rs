@@ -305,7 +305,7 @@ impl Supervisor {
                 self.drop_scene(ctx);
                 self.set_scene(
                     ctx,
-                    crate::ending::Ending::new(ctx.core.font.as_deref()),
+                    crate::ending::Ending::new(),
                     crate::ending::CALC_PRIO,
                     crate::ending::DRAW_PRIO,
                 )?;
@@ -322,7 +322,7 @@ impl Supervisor {
                 ctx.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
-                    crate::menu::MainMenu::new(ctx.core.font.as_deref()),
+                    crate::menu::MainMenu::new(),
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;
@@ -367,7 +367,7 @@ impl Supervisor {
                 let mode = (req == gamemgr::SCENE_RESULT) as u8;
                 self.set_scene(
                     ctx,
-                    crate::result::ResultScreen::new(mode, ctx.core.font.as_deref()),
+                    crate::result::ResultScreen::new(mode),
                     crate::result::CALC_PRIO,
                     crate::result::DRAW_PRIO,
                 )?;
@@ -376,7 +376,7 @@ impl Supervisor {
                 self.drop_scene(ctx);
                 self.set_scene(
                     ctx,
-                    crate::musicroom::MusicRoom::new(ctx.core.font.as_deref()),
+                    crate::musicroom::MusicRoom::default(),
                     crate::musicroom::CALC_PRIO,
                     crate::musicroom::DRAW_PRIO,
                 )?;
@@ -389,7 +389,7 @@ impl Supervisor {
                 ctx.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
-                    crate::menu::MainMenu::new(ctx.core.font.as_deref()),
+                    crate::menu::MainMenu::new(),
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;

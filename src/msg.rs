@@ -3,6 +3,7 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::input::{self, Input};
+use th08_formats::sjis::SjisString;
 
 // ANM slots of the portrait files face[0..3] (10 §3); text.anm is slot 0 (10 §6).
 pub const FACE_SLOTS: [usize; 4] = [16, 17, 18, 19];
@@ -148,8 +149,8 @@ pub struct Dialogue {
     pub choice: u8,
     // +0x22D84, set by op 9; the HUD then draws the clear bonus panel (10 §9).
     pub stage_end: bool,
-    // Port-only: pending Text_RenderToVm requests (line, text, colour) for the HUD to rasterise (10 §6).
-    pub texts: Vec<(usize, String, [u8; 3])>,
+    // Port-only: pending Text_RenderToVm requests (line, Shift-JIS text, colour) the HUD records as text commands (10 §6).
+    pub texts: Vec<(usize, SjisString, [u8; 3])>,
     pub events: Vec<Event>,
     // Port-only: set by Msg_Start; the caller then performs the playfield side effects of 10 §4 step 6.
     pub side_effects: bool,
@@ -309,7 +310,7 @@ impl Dialogue {
         anm: &mut AnmManager,
         rng: &mut crate::rng::Rng,
         line: usize,
-        s: String,
+        s: SjisString,
         colour: [u8; 3],
     ) {
         let Some(vm) = self.line_vm_mut(line) else {
@@ -322,7 +323,7 @@ impl Dialogue {
     // Renders " " into line 1 if it has a script (ops 3/16).
     fn clear_line1(&mut self) {
         if self.lines[1].script_index >= 0 {
-            self.texts.push((1, " ".into(), [255; 3]));
+            self.texts.push((1, SjisString(b" ".to_vec()), [255; 3]));
         }
     }
 
@@ -381,7 +382,7 @@ impl Dialogue {
                 let (sp, line, s) = (
                     f.i16(&ins, 0) as usize,
                     f.i16(&ins, 1) as usize,
-                    f.string(&ins, 4).decode(),
+                    f.string(&ins, 4),
                 );
                 if line == 0 {
                     self.clear_line1();
@@ -445,7 +446,7 @@ impl Dialogue {
                 self.new_box = true;
             }
             16 => {
-                let s = f.string(&ins, 0).decode();
+                let s = f.string(&ins, 0);
                 if self.new_box {
                     self.clear_line1();
                     self.next_line = 0;
@@ -468,7 +469,7 @@ impl Dialogue {
             }
             18 => self.textbox = f.u8(&ins, 0) != 0,
             19 | 20 => {
-                let s = f.string(&ins, 0).decode();
+                let s = f.string(&ins, 0);
                 let c = self.text_colour[0];
                 self.render(anm, rng, (ins.op - 19) as usize, s, c);
                 self.wait_count = 0;
@@ -692,7 +693,7 @@ mod tests {
             let ins = f.ins(8 + 6 * k).unwrap();
             d.exec(&f, &mut anm, &mut rng, &Input::default(), ins);
         }
-        let lines: Vec<(usize, String)> = d.texts.iter().map(|t| (t.0, t.1.clone())).collect();
+        let lines: Vec<(usize, String)> = d.texts.iter().map(|t| (t.0, t.1.decode())).collect();
         assert_eq!(lines, [(0, "a".into()), (1, "b".into()), (2, "c".into())]);
         assert!(std::ptr::eq(d.line_vm(2).unwrap(), &d.boss_card));
         assert!(d.line_vm(3).is_none());

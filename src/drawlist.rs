@@ -3,6 +3,8 @@
 
 use std::sync::Arc;
 
+use th08_formats::sjis::SjisString;
+
 // The original renders at 640×480 (05 §12.4); the window is a scaled copy.
 pub const SCREEN_W: f32 = 640.0;
 pub const SCREEN_H: f32 = 480.0;
@@ -333,6 +335,24 @@ pub enum ResCmd {
         w: u32,
         h: u32,
     },
+    Text(TextCmd),
+}
+
+// Text_RenderToVm 0x4663B0 family (10 §6) as an output command (ARCH_SUMMARY decision 7): the renderer decodes and
+// rasterises `text` and replaces rows `y .. y+size` of `dst`, `w` texels wide (x = 0), at this point in call order.
+#[derive(Clone, Debug)]
+pub struct TextCmd {
+    pub dst: TexId,
+    pub y: u32,
+    // Texture-row width W and font size (strip height) in texels.
+    pub w: u32,
+    pub size: u32,
+    pub text: SjisString,
+    pub color: [u8; 3],
+    // Pen start x in strip pixels.
+    pub x: f32,
+    // −1 → ±1 px outline offsets (2× space), anything else ±2 px.
+    pub outline: i32,
 }
 
 // Per-frame command recorder (the former `Gfx` draw API). `res` entries carry the `draws` length at record time, so
@@ -644,6 +664,10 @@ impl Recorder {
         });
     }
 
+    pub fn text(&mut self, t: TextCmd) {
+        self.res_cmd(ResCmd::Text(t));
+    }
+
     pub fn copy_texture(
         &mut self,
         src: TexId,
@@ -691,6 +715,8 @@ pub trait Renderer {
     fn enable_log(&mut self);
     // Submits `rec`, then hands over the records executed since the last call.
     fn take_log(&mut self, rec: &mut Recorder) -> Vec<LogRec>;
+    // Port-only: Japanese font file for `ResCmd::Text` (`CoreConfig::font`, TH08_FONT), tried before the search list.
+    fn set_font(&mut self, font: Option<&str>);
     // App / tools: back to the concrete renderer (resize, surface attach, screenshot readback).
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
@@ -700,8 +726,16 @@ mod tests {
     use super::*;
 
     // REWRITE_PLAN step 8c: core reaches the renderer only through `Renderer`. App / renderer / platform modules may
-    // name `gfx`, wgpu and winit; test modules are skipped (they build a headless `Gfx`).
-    const RENDERER_SIDE: &[&str] = &["app", "gfx", "launcher", "drawreport", "platform", "main"];
+    // name `gfx`, `text` (font + raster), wgpu and winit; test modules are skipped (they build a headless `Gfx`).
+    const RENDERER_SIDE: &[&str] = &[
+        "app",
+        "gfx",
+        "launcher",
+        "drawreport",
+        "platform",
+        "main",
+        "text",
+    ];
 
     #[test]
     fn core_has_no_renderer_dependency() {
@@ -724,7 +758,7 @@ mod tests {
                 })
                 .unwrap_or(lines.len());
             for (i, l) in lines[..end].iter().enumerate() {
-                if ["crate::gfx", "wgpu::", "winit::", "egui"]
+                if ["crate::gfx", "crate::text", "wgpu::", "winit::", "egui"]
                     .iter()
                     .any(|p| l.contains(p))
                 {

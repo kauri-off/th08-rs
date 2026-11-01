@@ -3,7 +3,7 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
-use crate::drawlist::{Blend, FULLSCREEN, PLAYFIELD, Recorder, TexId, Vertex};
+use crate::drawlist::{Blend, FULLSCREEN, PLAYFIELD, Recorder, TexId, TextCmd, Vertex};
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
@@ -149,7 +149,6 @@ pub struct Hud {
     // times.anm night clock impl+0x2156C (ECL 179/181) and the stage-start clock impl+0x34D4 (12 §5.1).
     night_vm: AnmVm,
     start_clock_vm: AnmVm,
-    raster: crate::text::Raster,
     // +0x1C boss bar alpha (i32) and impl+0x2A40 bar state: 0 off, 1 fading in, 2 shown, 3 fading out (12 §5.1b).
     bar_alpha: i32,
     bar_state: u8,
@@ -282,7 +281,6 @@ impl Hud {
             clear_vm: AnmVm::default(),
             night_vm: AnmVm::default(),
             start_clock_vm: AnmVm::default(),
-            raster: crate::text::Raster::new(ctx.core.font.as_deref()),
             bar_alpha: 0,
             bar_state: 0,
             bar_target: 0.0,
@@ -473,9 +471,17 @@ impl Hud {
             else {
                 continue;
             };
-            // TODO(step 8 text): CPU raster + Write in calc; decision 7 moves text to an output command.
-            let rgba = self.raster.render(&s, colour, w as usize, size);
-            ctx.rec.write_texture(tex, 0, y, w, size as u32, &rgba);
+            // Recorded in calc; it runs at the next submit, before any draw recorded after it (decision 7).
+            ctx.rec.text(TextCmd {
+                dst: tex,
+                y,
+                w,
+                size: size as u32,
+                text: s,
+                color: colour,
+                x: 0.0,
+                outline: 0,
+            });
         }
     }
 

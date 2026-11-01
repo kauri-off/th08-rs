@@ -3,13 +3,14 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::config::Config;
-use crate::drawlist::{FULLSCREEN, TexId};
+use crate::drawlist::{FULLSCREEN, TexId, TextCmd};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
 use crate::task::{Chain, Ret, Task};
 use anyhow::Result;
+use th08_formats::sjis;
 
 // title01.anm in ANM slot 20; calc prio 4 (0x467399), draw prio 3 (0x47087F) (12 §2, 00 §4).
 pub const ANM_SLOT: usize = 20;
@@ -253,20 +254,9 @@ fn info_fade_alpha(t: i32) -> Option<u8> {
 }
 
 // Unlock checks (15 §2.4) on the score.dat clear masks; debug `TH08_UNLOCK=1` unlocks everything.
-// Text_RenderCentered start x (12 §2.2): trunc(256 − len·15/4), len = the Shift-JIS byte length (ASCII and
-// half-width katakana 1 byte, the rest 2).
-fn centred_x(s: &str) -> f32 {
-    let len: usize = s
-        .chars()
-        .map(|c| {
-            if c.is_ascii() || ('\u{FF61}'..='\u{FF9F}').contains(&c) {
-                1
-            } else {
-                2
-            }
-        })
-        .sum();
-    (256.0 - len as f32 * 15.0 / 4.0).trunc()
+// Text_RenderCentered start x (12 §2.2): trunc(256 − len·15/4), len = the Shift-JIS byte length.
+fn centred_x(s: &[u8]) -> f32 {
+    (256.0 - s.len() as f32 * 15.0 / 4.0).trunc()
 }
 
 // 0x43C15F: a no-continue Final B clear on E–L. `unlock` = the port's TH08_UNLOCK (`CoreConfig::unlock`).
@@ -332,7 +322,6 @@ pub struct MainMenu {
     pub(crate) base: Vec<i32>,
     // Surface slot 0 (title00.png / select00.png), copied before everything (12 §2.2).
     pub(crate) surface: Option<(TexId, &'static str)>,
-    pub(crate) raster: crate::text::Raster,
     // The 14 description VMs and the current one, pointer +0xC2BC (None = 0), run and drawn while set (12 §2.2).
     pub(crate) desc: Vec<AnmVm>,
     pub(crate) desc_cur: Option<usize>,
@@ -371,13 +360,11 @@ pub struct MainMenu {
 }
 
 impl MainMenu {
-    // `font` = `CoreConfig::font` for the description raster.
-    pub fn new(font: Option<&str>) -> Self {
+    pub fn new() -> Self {
         Self {
             vms: Vec::new(),
             base: Vec::new(),
             surface: None,
-            raster: crate::text::Raster::new(font),
             desc: Vec::new(),
             desc_cur: None,
             notice: AnmVm::default(),
@@ -460,17 +447,17 @@ impl MainMenu {
         };
         let t = ctx.rec.texture(sp.tex);
         let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
-        let size = 15;
-        let rgba = self.raster.render_outline(
+        let text = sjis::encode(text);
+        ctx.rec.text(TextCmd {
+            dst: sp.tex,
+            y: ty,
+            w,
+            size: 15,
+            x: centred_x(&text),
             text,
-            [224, 240, 255],
-            w as usize,
-            size,
-            centred_x(text),
-            0x300000,
-        );
-        // TODO(step 8 text): CPU raster upload; becomes a text output command (decision 7).
-        ctx.rec.write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
+            color: [224, 240, 255],
+            outline: 0x300000,
+        });
     }
 
     // Change test of the top menu, option and key config (12 §2.2): cursor ≠ +0x08 → +0xC2BC := description VM
@@ -1220,7 +1207,7 @@ impl MainMenu {
 
 impl Default for MainMenu {
     fn default() -> Self {
-        Self::new(None)
+        Self::new()
     }
 }
 
@@ -1494,10 +1481,25 @@ fn run_vms(m: &mut MainMenu, ctx: &mut Ctx) {
 
 #[cfg(test)]
 mod tests {
+    use super::{DESCRIPTIONS, KEY_DESCRIPTIONS, OPTION_DESCRIPTIONS};
     use super::{
         INFO_FADE_OUT, assign_key, centred_x, final_notice, info_fade_alpha, info_files, info_step,
         title_music, volume_step,
     };
+
+    // Text commands carry Shift-JIS; every port literal must round-trip so the raster sees the same characters.
+    fn round_trips(s: &str) {
+        assert_eq!(th08_formats::sjis::encode(s).decode(), s);
+    }
+
+    #[test]
+    fn descriptions_are_sjis() {
+        DESCRIPTIONS
+            .iter()
+            .chain(&OPTION_DESCRIPTIONS)
+            .chain(&KEY_DESCRIPTIONS)
+            .for_each(|s| round_trips(s));
+    }
     use crate::gamemgr::{self, Game};
 
     fn ctx() -> Option<crate::game::Ctx> {
@@ -1532,7 +1534,7 @@ mod tests {
                 | gamemgr::F_SPELL_PRACTICE
                 | if demo { gamemgr::F_DEMO } else { 0 };
             c.game.flags = f;
-            let mut m = super::MainMenu::new(None);
+            let mut m = super::MainMenu::new();
             m.on_register(&mut c, Chain::Calc, 0).unwrap();
             let kept = if demo { 0 } else { gamemgr::F_REPLAY };
             assert_eq!(c.game.flags & 0xFFFF, kept);
@@ -1556,7 +1558,7 @@ mod tests {
             c.game.previous = gamemgr::SCENE_RESULT;
             let f = gamemgr::F_PRACTICE | if spell { gamemgr::F_SPELL_PRACTICE } else { 0 };
             c.game.flags = f;
-            let mut m = super::MainMenu::new(None);
+            let mut m = super::MainMenu::new();
             m.on_register(&mut c, Chain::Calc, 0).unwrap();
             assert_eq!(
                 (m.screen, m.back, m.cursor),
@@ -1577,7 +1579,7 @@ mod tests {
     // Drawlog README col 30: +0x00 is the stage row on screen 16, the card row on 17, else the cursor (16 §6.1/§6.2).
     #[test]
     fn trace_cursor_rows() {
-        let mut m = super::MainMenu::new(None);
+        let mut m = super::MainMenu::new();
         (m.cursor, m.lists.sp_row, m.lists.card) = (5, 3, 11);
         assert_eq!(m.trace_cursor(), 5);
         m.screen = super::SPELL_PRACTICE;
@@ -1674,9 +1676,10 @@ mod tests {
     #[test]
     fn description_x() {
         // 12 §2.2: trunc(256 − len·15/4) over Shift-JIS bytes.
-        assert_eq!(centred_x("abcd"), 241.0);
-        assert_eq!(centred_x("あいう"), 233.0);
-        assert_eq!(centred_x(""), 256.0);
+        assert_eq!(centred_x(b"abcd"), 241.0);
+        assert_eq!(centred_x(&th08_formats::sjis::encode("あいう")), 233.0);
+        assert_eq!(centred_x(&th08_formats::sjis::encode("ｱ")), 252.0);
+        assert_eq!(centred_x(b""), 256.0);
     }
 
     #[test]

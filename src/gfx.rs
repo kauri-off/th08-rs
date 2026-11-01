@@ -87,6 +87,9 @@ pub struct Gfx {
     log: Option<Vec<LogRec>>,
     log_fog: Option<LogFog>,
     pub persistent: bool,
+    // `ResCmd::Text` rasteriser (10 §6), made with `font` at the first text command.
+    text: Option<crate::text::Raster>,
+    font: Option<String>,
 }
 
 // Texture × diffuse (05 §12.4 stage 0 MODULATE), alpha test ALPHAREF 4 / GREATEREQUAL, then 06 §10.1 step 3 fog mix.
@@ -457,6 +460,8 @@ impl Gfx {
             log: None,
             log_fog: None,
             persistent: false,
+            text: None,
+            font: None,
         };
         // A fresh recorder's white texture (slot 0), so a Gfx without a core recorder (launcher, tools) has it too.
         g.submit(&mut Recorder::new());
@@ -1473,7 +1478,25 @@ impl Gfx {
                 size,
             } => self.do_copy_texture(*src, *from, *dst, *to, *size),
             ResCmd::SetLabel { id, label, w, h } => self.do_set_label(*id, label, *w, *h),
+            ResCmd::Text(t) => self.do_text(t),
         }
+    }
+
+    // Text_RenderToVm 0x4663B0 (10 §6): Shift-JIS decode, CPU raster, upload over the strip.
+    fn do_text(&mut self, t: &crate::drawlist::TextCmd) {
+        let font = self.font.as_deref();
+        let raster = self
+            .text
+            .get_or_insert_with(|| crate::text::Raster::new(font));
+        let rgba = raster.render_outline(
+            &t.text.decode(),
+            t.color,
+            t.w as usize,
+            t.size as usize,
+            t.x,
+            t.outline,
+        );
+        self.do_write_texture(t.dst, 0, t.y, t.w, t.size, &rgba);
     }
 }
 
@@ -1488,6 +1511,11 @@ impl crate::drawlist::Renderer for Gfx {
 
     fn take_log(&mut self, rec: &mut Recorder) -> Vec<LogRec> {
         Gfx::take_log(self, rec)
+    }
+
+    fn set_font(&mut self, font: Option<&str>) {
+        self.font = font.map(str::to_owned);
+        self.text = None;
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

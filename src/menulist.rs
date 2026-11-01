@@ -3,13 +3,14 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
-use crate::drawlist::{Blend, Vertex};
+use crate::drawlist::{Blend, TextCmd, Vertex};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{DOWN, LEFT, RIGHT, UP};
 use crate::menu::{CANCEL, CONFIRM, MainMenu, Pending};
 use crate::scoredat::Catk;
 use crate::sound;
+use th08_formats::sjis::{self, SjisString};
 
 // resulttext.anm ANM slot (00 §3.2 loader thread); text.anm slot 0 (info strips, 16 §6.3).
 pub const RT_SLOT: usize = 22;
@@ -363,9 +364,10 @@ fn selectable(ctx: &Ctx, id: usize) -> bool {
         .is_some_and(|&v| v as usize == id - 205 + 0xCD)
 }
 
-fn sjis(b: &[u8]) -> String {
+// Shift-JIS bytes of a NUL-terminated score.dat / replay field.
+fn sjis(b: &[u8]) -> SjisString {
     let n = b.iter().position(|&c| c == 0).unwrap_or(b.len());
-    crate::text::decode_sjis(&b[..n])
+    SjisString(b[..n].to_vec())
 }
 
 // Three full-width digits with leading zeros (info line 0, 16 §6.3).
@@ -435,22 +437,23 @@ fn pie(ctx: &mut Ctx, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
 }
 
 // Text_RenderToVm (white, outline 0, font 15, 16 §6.3 / §6.5) into the sprite's texture strip.
-pub(crate) fn render_strip(
-    ctx: &mut Ctx,
-    raster: &mut crate::text::Raster,
-    slot: usize,
-    sprite: i32,
-    s: &str,
-) {
+pub(crate) fn render_strip(ctx: &mut Ctx, slot: usize, sprite: i32, s: SjisString) {
     let Some(sp) = ctx.anm.sprite(slot, sprite.max(0) as usize).copied() else {
         return;
     };
     // 10 §6: x = u0 = 0, W = texture-row width (512), 15 rows from v0; rows 15–16 of a 17-high sprite stay untouched.
     let t = ctx.rec.texture(sp.tex);
     let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
-    let rgba = raster.render(s, [255, 255, 255], w as usize, 15);
-    // TODO(step 8 text): CPU raster upload; becomes a text output command (decision 7).
-    ctx.rec.write_texture(sp.tex, 0, ty, w, 15, &rgba);
+    ctx.rec.text(TextCmd {
+        dst: sp.tex,
+        y: ty,
+        w,
+        size: 15,
+        text: s,
+        color: [255, 255, 255],
+        x: 0.0,
+        outline: 0,
+    });
 }
 
 impl MainMenu {
@@ -459,8 +462,8 @@ impl MainMenu {
         [p[0], p[1]]
     }
 
-    fn render_vm(&mut self, ctx: &mut Ctx, slot: usize, sprite: i32, s: &str) {
-        render_strip(ctx, &mut self.raster, slot, sprite, s);
+    fn render_vm(&mut self, ctx: &mut Ctx, slot: usize, sprite: i32, s: SjisString) {
+        render_strip(ctx, slot, sprite, s);
     }
 
     fn glyph_vm(&mut self, ctx: &mut Ctx) {
@@ -623,9 +626,9 @@ impl MainMenu {
                 ctx,
                 RT_SLOT,
                 2,
-                "ステージ    取得/挑戦可能/総数（()内は全キャラ合計）",
+                sjis::encode("ステージ    取得/挑戦可能/総数（()内は全キャラ合計）"),
             );
-            self.render_vm(ctx, RT_SLOT, 3, "取得率　（キャラ別／総合）");
+            self.render_vm(ctx, RT_SLOT, 3, sjis::encode("取得率　（キャラ別／総合）"));
             self.lists.pies = [0.0; 4];
             self.glyph_vm(ctx);
         }
@@ -863,14 +866,14 @@ impl MainMenu {
         ROW_IDS[self.lists.sp_row.clamp(0, 9) as usize]
     }
 
-    fn row_name(ctx: &Ctx, id: usize) -> String {
+    fn row_name(ctx: &Ctx, id: usize) -> SjisString {
         let c = catk(ctx, id);
         if seen(&c, 12) {
             sjis(&c.name)
         } else if id >= 205 && selectable(ctx, id) {
-            "挑戦者歓迎中！".into()
+            sjis::encode("挑戦者歓迎中！")
         } else {
-            UNKNOWN8.into()
+            sjis::encode(UNKNOWN8)
         }
     }
 
@@ -885,7 +888,7 @@ impl MainMenu {
             let i = self.lists.page as usize * 15 + j;
             if a + i < b {
                 let s = Self::row_name(ctx, a + i);
-                self.render_vm(ctx, RT_SLOT, j as i32 + 2, &s);
+                self.render_vm(ctx, RT_SLOT, j as i32 + 2, s);
             }
         }
         self.card_colours();
@@ -906,28 +909,39 @@ impl MainMenu {
     }
 
     // Info panel line k (16 §6.3, 0x46D7F9).
-    fn info_line(&self, ctx: &Ctx, k: usize) -> String {
+    fn info_line(&self, ctx: &Ctx, k: usize) -> SjisString {
         let (a, _) = self.card_ids();
         let id = a + self.lists.card.max(0) as usize;
         let c = catk(ctx, id);
         let s = self.cursor.clamp(0, 11) as usize;
         let att = seen(&c, 12);
         let lw = id >= 205;
+        // Name / owner bytes from score.dat, or the unknown placeholder.
+        let field = |b: &[u8]| {
+            if att { sjis(b) } else { sjis::encode(UNKNOWN8) }
+        };
         match k {
-            0 => format!(
-                "Ｎｏ．{}　　{}",
-                fullwidth_digits(id + 1),
-                if att { sjis(&c.name) } else { UNKNOWN8.into() }
-            ),
-            1 => format!(
-                "使用者  {}　　{} {}",
-                if att { sjis(&c.owner) } else { UNKNOWN8.into() },
-                DIFF_NAMES[difficulty_of(id)],
-                if is_last(id) { "Last" } else { " " }
-            ),
-            2 => format!("取得数/挑戦数[最高点]　{}　全主人公合計", SHOT_NAMES[s]),
+            0 => {
+                let mut t = sjis::encode(&format!("Ｎｏ．{}　　", fullwidth_digits(id + 1)));
+                t.push_bytes(&field(&c.name));
+                t
+            }
+            1 => {
+                let mut t = sjis::encode("使用者  ");
+                t.push_bytes(&field(&c.owner));
+                t.push_str(&format!(
+                    "　　{} {}",
+                    DIFF_NAMES[difficulty_of(id)],
+                    if is_last(id) { "Last" } else { " " }
+                ));
+                t
+            }
+            2 => sjis::encode(&format!(
+                "取得数/挑戦数[最高点]　{}　全主人公合計",
+                SHOT_NAMES[s]
+            )),
             3 => {
-                if !att {
+                let t = if !att {
                     "　　---/---(---/---)[--------]　　---/---(---/---)[--------]".into()
                 } else if lw {
                     let f = |s: usize| {
@@ -949,16 +963,17 @@ impl MainMenu {
                         )
                     };
                     format!("　　{}　　{}", f(s), f(12))
-                }
+                };
+                sjis::encode(&t)
             }
-            4 => "カードの補足".into(),
+            4 => sjis::encode("カードの補足"),
             _ => {
                 if id >= 204 && !att && !selectable(ctx, id) {
-                    HINTS[id - 204][k - 5].into()
+                    sjis::encode(HINTS[id - 204][k - 5])
                 } else if c.counters[PC][12] != 0 {
                     sjis(&c.comment[k - 5])
                 } else {
-                    UNKNOWN9.into()
+                    sjis::encode(UNKNOWN9)
                 }
             }
         }
@@ -966,7 +981,7 @@ impl MainMenu {
 
     fn render_info(&mut self, ctx: &mut Ctx, k: usize) {
         let s = self.info_line(ctx, k);
-        self.render_vm(ctx, TEXT_SLOT, 21 + k as i32, &s);
+        self.render_vm(ctx, TEXT_SLOT, 21 + k as i32, s);
     }
 
     // Screen 17, MainMenu_SpellPracticeCard 0x46BBC0 (16 §6.2); input from +0x1442C == 8 (12 §2).
@@ -999,7 +1014,12 @@ impl MainMenu {
             self.lists.prev_card = self.lists.card;
             self.card_rows(ctx);
             self.lists.header = scratch(ctx, RT_SLOT, 17, false);
-            self.render_vm(ctx, RT_SLOT, 17, "取得数/挑戦数（()内は本編での集計）");
+            self.render_vm(
+                ctx,
+                RT_SLOT,
+                17,
+                sjis::encode("取得数/挑戦数（()内は本編での集計）"),
+            );
             self.lists.info = (0..7)
                 .map(|k| scratch(ctx, TEXT_SLOT, 21 + k, false))
                 .collect();
@@ -1267,7 +1287,7 @@ impl MainMenu {
                     // for every file, drawn only for spell replays.
                     let name = sjis(&self.replays[i].1.card_name());
                     self.notice = scratch(ctx, RT_SLOT, 11, false);
-                    self.render_vm(ctx, RT_SLOT, 11, &name);
+                    self.render_vm(ctx, RT_SLOT, 11, name);
                     self.cursor = first as i32;
                     self.lists.rpy_sub = 2;
                     self.rpy_choose();
@@ -1460,6 +1480,34 @@ impl MainMenu {
 mod tests {
     use super::*;
 
+    // Text commands carry Shift-JIS; every port literal must round-trip so the raster sees the same characters.
+    fn round_trips(s: &str) {
+        assert_eq!(th08_formats::sjis::encode(s).decode(), s);
+    }
+
+    #[test]
+    fn literals_are_sjis() {
+        HINTS.iter().flatten().for_each(|s| round_trips(s));
+        SHOT_NAMES
+            .iter()
+            .chain(&DIFF_NAMES)
+            .for_each(|s| round_trips(s));
+        [
+            UNKNOWN8,
+            UNKNOWN9,
+            "挑戦者歓迎中！",
+            "カードの補足",
+            "Ｎｏ．０１２　　",
+            "使用者  ",
+        ]
+        .into_iter()
+        .for_each(round_trips);
+        round_trips("ステージ    取得/挑戦可能/総数（()内は全キャラ合計）");
+        round_trips("取得率　（キャラ別／総合）");
+        round_trips("取得数/挑戦数（()内は本編での集計）");
+        round_trips("取得数/挑戦数[最高点]　　全主人公合計");
+    }
+
     // 16 §6.2: difficulty = Spell_DifficultyOf(id), not the card's last attempt; Last Words → Normal + table stage.
     #[test]
     fn spell_start_difficulty() {
@@ -1478,7 +1526,7 @@ mod tests {
     // 12 §2.8: spell replays send VM 110 no interrupt, only alpha 0; normal replays send it 21.
     #[test]
     fn speed_plates_spell_replay() {
-        let mut m = crate::menu::MainMenu::new(None);
+        let mut m = crate::menu::MainMenu::new();
         m.vms = (0..142).map(|_| AnmVm::default()).collect();
         m.vms[110].color[anmvm::A] = 96;
         m.cursor = 1;

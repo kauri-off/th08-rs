@@ -14,6 +14,7 @@ use crate::menu::{CANCEL, CONFIRM};
 use crate::scoredat::{C_ATTEMPTS, C_BONUS, C_CAPTURES, C_PRACTICE, CARDS, Hscr};
 use crate::sound;
 use crate::task::{Chain, Ret, Task};
+use th08_formats::sjis::{self, SjisString};
 
 // Result_Calc 0x4584B0 at prio 16, Result_Draw 0x4586B4 at prio 18 (16 §2).
 pub const CALC_PRIO: u16 = 16;
@@ -120,7 +121,6 @@ pub struct ResultScreen {
     text_vms: Vec<AnmVm>,
     // VM +0x1119C: result00.anm sprite 32, the 256×16 separator bar (centred anchor).
     bar: AnmVm,
-    raster: crate::text::Raster,
     // Surface slot 0: result/result.jpg.
     surface: Option<TexId>,
     // Calc node removed (16 §2.4 exit, P+20): the draw node stays until the scene switch and draws nothing.
@@ -178,8 +178,8 @@ fn put(ctx: &mut Ctx, x: f32, y: f32, s: impl Into<String>, argb: u32) {
 }
 
 impl ResultScreen {
-    // Mode 0: viewer (scene 5); mode 1: after a game (scene 6). `font` = `CoreConfig::font`.
-    pub fn new(mode: u8, font: Option<&str>) -> Self {
+    // Mode 0: viewer (scene 5); mode 1: after a game (scene 6).
+    pub fn new(mode: u8) -> Self {
         Self {
             mode,
             state: S_INIT,
@@ -201,7 +201,6 @@ impl ResultScreen {
             vms: Vec::new(),
             text_vms: Vec::new(),
             bar: AnmVm::default(),
-            raster: crate::text::Raster::new(font),
             surface: None,
             removed: false,
             captured: [[0; 13]; 6],
@@ -261,13 +260,13 @@ impl ResultScreen {
     }
 
     // Text_RenderToVm into text VM k (white, outline 0, font 15) and alpha 255.
-    fn render(&mut self, ctx: &mut Ctx, k: usize, s: &str) {
+    fn render(&mut self, ctx: &mut Ctx, k: usize, s: SjisString) {
         let (slot, sprite) = if k < 14 {
             (0, 21 + k as i32)
         } else {
             (RT_SLOT, 2 + k as i32 - 14)
         };
-        crate::menulist::render_strip(ctx, &mut self.raster, slot, sprite, s);
+        crate::menulist::render_strip(ctx, slot, sprite, s);
         self.text_vms[k].color[anmvm::A] = 255;
     }
 
@@ -575,19 +574,17 @@ impl ResultScreen {
                 let Some(&id) = ids.get(idx) else { break };
                 let c = &ctx.game.score.catk[id];
                 let s = if c.counters[C_ATTEMPTS][12] != 0 {
-                    crate::text::decode_sjis(
-                        &c.name[..c.name.iter().position(|&b| b == 0).unwrap_or(48)],
-                    )
+                    SjisString(c.name[..c.name.iter().position(|&b| b == 0).unwrap_or(48)].to_vec())
                 } else {
-                    UNKNOWN5.to_string()
+                    sjis::encode(UNKNOWN5)
                 };
-                self.render(ctx, k as usize, &s);
+                self.render(ctx, k as usize, s);
             }
             let s = format!(
                 "{:3}/{:3}（キャラ切り替え↓↑）",
                 self.captured[self.card_group as usize][self.card_built_char as usize], n
             );
-            self.render(ctx, 10, &s);
+            self.render(ctx, 10, sjis::encode(&s));
         }
         if self.frame < 6 || self.card_leaving {
             return;
@@ -641,7 +638,7 @@ impl ResultScreen {
                     ctx.game.update_run_time(ctx.host.ticks_ms());
                     for k in 0..19 {
                         let s = self.play_line(ctx, k);
-                        self.render(ctx, k, &s);
+                        self.render(ctx, k, sjis::encode(&s));
                     }
                     self.run_secs = ctx.game.score.plst.run_time[2];
                     // x 56; y 64, 81, 98, then +17, one extra +17 gap before k = 16 (16 §2.4).
@@ -663,7 +660,7 @@ impl ResultScreen {
                     if ctx.game.score.plst.run_time[2] != self.run_secs {
                         self.run_secs = ctx.game.score.plst.run_time[2];
                         let s = self.play_line(ctx, 0);
-                        self.render(ctx, 0, &s);
+                        self.render(ctx, 0, sjis::encode(&s));
                     }
                 }
                 if ctx.input.pressed(SHOT | BOMB | PAUSE | ENTER) {
@@ -1749,6 +1746,19 @@ pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    // Text commands carry Shift-JIS; every port literal must round-trip so the raster sees the same characters.
+    fn round_trips(s: &str) {
+        assert_eq!(th08_formats::sjis::encode(s).decode(), s);
+    }
+
+    #[test]
+    fn literals_are_sjis() {
+        round_trips(UNKNOWN5);
+        round_trips(&format!("{:3}/{:3}（キャラ切り替え↓↑）", 1, 2));
+        let p = crate::scoredat::Plst::default();
+        (0..19).for_each(|k| round_trips(&play_line(&p, k, 5)));
+    }
+
     // 16 §2.1 "Initial state": practice / spell practice enter state 10 at frame 0; a story game enters 9.
     #[test]
     fn register_practice_state() {
@@ -1759,7 +1769,7 @@ mod tests {
         ] {
             let mut g = gamemgr::Game::default();
             g.flags = flags;
-            let mut r = ResultScreen::new(1, None);
+            let mut r = ResultScreen::new(1);
             r.register_state(&mut g);
             assert_eq!((r.state, r.frame), (st, 0));
         }
@@ -1770,7 +1780,7 @@ mod tests {
     fn save_msg_keeps_frame() {
         let mut g = gamemgr::Game::default();
         g.stats.continues = 1;
-        let mut r = ResultScreen::new(1, None);
+        let mut r = ResultScreen::new(1);
         r.vms = vec![AnmVm::default(); VM_COUNT];
         r.text_vms = vec![AnmVm::default(); 28];
         r.state = S_SAVE;
@@ -2074,7 +2084,7 @@ mod tests {
         let mut host =
             crate::platform::ToolHost::new(crate::platform::Storage::new(Some(dir.clone())));
         let g = gamemgr::Game::default();
-        let mut r = ResultScreen::new(1, None);
+        let mut r = ResultScreen::new(1);
         r.vms = vec![AnmVm::default(); VM_COUNT];
         r.text_vms = vec![AnmVm::default(); 28];
         let confirm = Input {
@@ -2112,7 +2122,7 @@ mod tests {
         bad.resize(0x200, 0x55);
         std::fs::write(dir.join("replay/th8_01.rpy"), bad).unwrap();
         let g = gamemgr::Game::default();
-        let mut r = ResultScreen::new(1, None);
+        let mut r = ResultScreen::new(1);
         r.vms = vec![AnmVm::default(); VM_COUNT];
         r.text_vms = vec![AnmVm::default(); 28];
         let confirm = Input {

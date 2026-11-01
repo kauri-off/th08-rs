@@ -256,6 +256,7 @@ impl Ctx {
                 .as_deref()
                 .and_then(crate::drawlog::Writer::from_spec);
         }
+        ctx.renderer.set_font(ctx.core.font.as_deref());
         if ctx.drawlog.is_some() {
             ctx.renderer.enable_log();
         }

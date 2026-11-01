@@ -750,7 +750,7 @@ mod tests {
         assert_eq!(&u[..4], b"USER");
         assert_eq!(u32_at(u, 4) as usize, u.len());
         assert_eq!((u[8], u.len() % 2, *u.last().unwrap()), (0, 0, 0));
-        let text = crate::text::decode_sjis(&u[12..]);
+        let text = th08_formats::sjis::decode(&u[12..]);
         assert!(text.starts_with("プレイヤー名\tTESTER  \r\n"));
         assert!(text.contains("スコア\t1234560\r\n"));
         assert!(text.contains("ゲームのバージョン\t1.00d\r\n"));
@@ -778,7 +778,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!((r.spell_id(), r.card_name().as_bytes()), (5, &b"Card"[..]));
-        assert!(crate::text::decode_sjis(&r.user).contains("カード名\tNo.  6 Card\r\n"));
+        assert!(th08_formats::sjis::decode(&r.user).contains("カード名\tNo.  6 Card\r\n"));
 
         let mut g = Game::default();
         record_stage_start(&mut g, &Default::default());
@@ -850,7 +850,7 @@ mod tests {
         };
         let ver = ar.read(crate::scoredat::VER_LIST_NAME).unwrap();
         let d = parse(&ar.read("demorpy0.rpy").unwrap(), Some(&ver)).unwrap();
-        let text = crate::text::decode_sjis(&d.user);
+        let text = th08_formats::sjis::decode(&d.user);
         let want = crate::menulist::SHOT_NAMES[d.shot() as usize % 12];
         assert!(text.contains(&format!("キャラ名\t{want}\r\n")), "{text}");
     }

@@ -27,7 +27,21 @@ impl<'a> SjisStr<'a> {
     }
 }
 
+// Port-built text (literals, numbers) to Shift-JIS; every such string is cp932-representable (checked in debug).
+pub fn encode(s: &str) -> SjisString {
+    let (b, _, bad) = encoding_rs::SHIFT_JIS.encode(s);
+    debug_assert!(!bad, "not Shift-JIS representable: {s:?}");
+    SjisString(b.into_owned())
+}
+
 impl SjisString {
+    // Appends port-built text (`encode`).
+    pub fn push_str(&mut self, s: &str) {
+        self.0.extend_from_slice(&encode(s).0);
+    }
+    pub fn push_bytes(&mut self, b: &[u8]) {
+        self.0.extend_from_slice(b);
+    }
     pub fn as_sjis(&self) -> SjisStr<'_> {
         SjisStr(&self.0)
     }
@@ -102,5 +116,10 @@ mod tests {
         assert_eq!(s.decode(), "プレA");
         assert_eq!(s.as_sjis().len(), 5);
         assert_eq!(format!("{s}"), "プレA");
+        assert_eq!(encode("プレA"), s);
+        let mut t = encode("Ｎｏ．");
+        t.push_bytes(&[0x83, 0x76]);
+        t.push_str("　");
+        assert_eq!(t.decode(), "Ｎｏ．プ　");
     }
 }

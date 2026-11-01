@@ -1629,6 +1629,16 @@ struct Bf {
 mod tests {
     use super::*;
 
+    // Text commands carry Shift-JIS; every port literal must round-trip so the raster sees the same characters.
+    fn round_trips(s: &str) {
+        assert_eq!(th08_formats::sjis::encode(s).decode(), s);
+    }
+
+    #[test]
+    fn spell_names_are_sjis() {
+        SPECS.iter().flatten().for_each(|s| round_trips(s.0));
+    }
+
     fn press(bits: u16) -> input::Input {
         let mut i = input::Input {
             raw: bits,

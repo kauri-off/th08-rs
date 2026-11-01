@@ -1,13 +1,14 @@
 //! Ending object and `.end` script interpreter (16 §1.2–§1.7): Ending_Register 0x4296A0, calc prio 5, draw prio 4.
 
 use crate::anmvm::{self, AnmVm};
-use crate::drawlist::TexId;
+use crate::drawlist::{TexId, TextCmd};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{ENTER, SHOT, SKIP};
 use crate::task::{Chain, Ret, Task};
 use anyhow::Result;
 use th08_formats::end;
+use th08_formats::sjis::SjisString;
 
 pub const CALC_PRIO: u16 = 5;
 pub const DRAW_PRIO: u16 = 4;
@@ -34,7 +35,6 @@ pub struct Ending {
     pic_y: f32,
     speed: f32,
     vms: Vec<AnmVm>,
-    raster: crate::text::Raster,
     // +0x2A58 skip-allowed (Ctrl fast-forward), +0x2A5C skip-allowed for the next `@F` file.
     skip_allowed: bool,
     skip_next: bool,
@@ -93,9 +93,14 @@ fn any_final_a(g: &gamemgr::Game) -> bool {
     (0..4).any(|t| g.clear_any[t][..4].iter().any(|m| m & 0x8000 != 0))
 }
 
+impl Default for Ending {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Ending {
-    // `font` = `CoreConfig::font` for the text raster.
-    pub fn new(font: Option<&str>) -> Self {
+    pub fn new() -> Self {
         Self {
             script: end::Script::default(),
             picture: None,
@@ -103,7 +108,6 @@ impl Ending {
             pic_y: 0.0,
             speed: 0.0,
             vms: Vec::new(),
-            raster: crate::text::Raster::new(font),
             skip_allowed: false,
             skip_next: false,
             frame: 0,
@@ -363,7 +367,7 @@ impl Ending {
     // Text line (16 §1.3): copied two bytes at a time until 0 / LF / CR at an even position, drawn into
     // VM[line] with Text_RenderToVm(colour, outline −1), interrupt 1, then the per-line wait.
     fn text_line(&mut self, ctx: &mut Ctx) {
-        let text = self.script.text_line(LINE_BYTES).decode();
+        let text = self.script.text_line(LINE_BYTES);
         // Line 15 would hit the invisible VM 15 (≥ 16 corrupts); retail pages have ≤ 4 lines, extras dropped (16 §1.3).
         if let Some(vm) = self.vms.get_mut(self.line) {
             let rgb = [
@@ -371,7 +375,7 @@ impl Ending {
                 (self.text_rgb >> 8) as u8,
                 self.text_rgb as u8,
             ];
-            render_vm(ctx, &mut self.raster, vm, &text, rgb);
+            render_vm(ctx, vm, text, rgb);
             vm.pending_interrupt = 1;
         }
         self.line += 1;
@@ -410,22 +414,22 @@ impl Ending {
 }
 
 // Text_RenderToVm (10 §6) into the VM's text.anm strip, font size 15 (VM+0x298), then visible.
-fn render_vm(
-    ctx: &mut Ctx,
-    raster: &mut crate::text::Raster,
-    vm: &mut AnmVm,
-    s: &str,
-    rgb: [u8; 3],
-) {
+fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, rgb: [u8; 3]) {
     let Some(sp) = ctx.anm.sprite(0, vm.sprite_index.max(0) as usize).copied() else {
         return;
     };
     let t = ctx.rec.texture(sp.tex);
     let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
-    let size = 15;
-    let rgba = raster.render_outline(s, rgb, w as usize, size, 0.0, -1);
-    // TODO(step 8 text): CPU raster upload; becomes a text output command (decision 7).
-    ctx.rec.write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
+    ctx.rec.text(TextCmd {
+        dst: sp.tex,
+        y: ty,
+        w,
+        size: 15,
+        text: s,
+        color: rgb,
+        x: 0.0,
+        outline: -1,
+    });
     vm.flags |= anmvm::F_VISIBLE;
 }
 
@@ -527,7 +531,7 @@ mod tests {
 
     #[test]
     fn args() {
-        let mut e = Ending::new(None);
+        let mut e = Ending::new();
         e.script = end::Script::new(b"@w120\x00120\x00\n\r\nline\x00\n".to_vec());
         e.script.ip = 2;
         assert_eq!(e.script.int_arg(), 120);
@@ -542,7 +546,7 @@ mod tests {
     // 16 §1.2: Ending_Ctor zero-fills colour and +0x2A94; LoadScript resets only +0x2A90.
     #[test]
     fn start_values() {
-        let mut e = Ending::new(None);
+        let mut e = Ending::new();
         assert_eq!((e.text_rgb, e.line_normal, e.line_fast), (0, 8, 0));
         (e.line_normal, e.line_fast) = (20, 3);
         e.set_script(b"@z\n".to_vec());
@@ -551,7 +555,7 @@ mod tests {
 
     #[test]
     fn fades() {
-        let mut e = Ending::new(None);
+        let mut e = Ending::new();
         (e.fade_mode, e.fade_t, e.fade_n) = (1, 0, 4);
         let a: Vec<u32> = (0..6).map(|_| e.fade_step() >> 24).collect();
         assert_eq!(a, [255, 192, 128, 64, 0, 0]);
