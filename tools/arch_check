@@ -2,7 +2,8 @@
 # usage: tools/arch_check freeze DIR | run DIR — port-vs-port references for the rewrite (REWRITE_PLAN step 0).
 # freeze: build, then write port traces + draw logs of all sessions, demos 0-3 and the pilot replays into DIR.
 # run: fmt, 0-warning build, wasm check, cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
-# Run output of identical items keeps no draw log. Env: J (parallel jobs, default 8), CARGO_TARGET_DIR, RUN_OUT (run output, default $TARGET/arch_run), ONLY (item regex).
+# Run output of identical items keeps no draw log. Env: J (parallel jobs, default 8), CARGO_TARGET_DIR, RUN_OUT (run output, default $TARGET/arch_run), ONLY (item regex),
+# FAST=1 (run only: traces only, no draw logs — a few GB less RAM, for agents in parallel worktrees; the full run stays the gate before a commit).
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
@@ -19,6 +20,7 @@ export CARGO_TARGET_DIR=$TARGET
 export BIN SESSION_BIN DEMOSYNC_BIN DRAWRUN_BIN SESSION_SRC PILOT_SRC
 
 mode=${1:-} dir=${2:-}
+FAST=${FAST:-}; [[ $mode == freeze ]] && FAST=
 [[ ($mode == freeze || $mode == run) && -n $dir ]] || { sed -n 2,5p "$0"; exit 2; }
 dir=$(realpath -m "$dir")
 cd "$ROOT" || exit 2
@@ -33,11 +35,12 @@ items() {
 run_item() {
   local o=$1/$2 n=${2#?_}
   rm -rf "$o"; mkdir -p "$o"
+  local dl=--port-drawlog; [[ -n ${FAST:-} ]] && dl=--no-drawlog
   case $2 in
-    s_*) nice -n 10 "$BIN/$SESSION_BIN" "$SESSION_SRC/$n" --out "$o" --port-drawlog > "$o/report.txt" 2> "$o/stderr.txt" ;;
-    p_*) nice -n 10 "$BIN/$SESSION_BIN" "$PILOT_SRC/$n" --out "$o" --port-drawlog > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    s_*) nice -n 10 "$BIN/$SESSION_BIN" "$SESSION_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    p_*) nice -n 10 "$BIN/$SESSION_BIN" "$PILOT_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
     d_*) nice -n 10 "$BIN/$DEMOSYNC_BIN" "$n" 1-9999999 > "$o/trace.txt" 2> /dev/null
-         nice -n 10 "$BIN/$DRAWRUN_BIN" "$o/draw.drawlog.xz" demo "$n" > "$o/report.txt" 2> "$o/stderr.txt" ;;
+         [[ -n ${FAST:-} ]] && : > "$o/report.txt" || nice -n 10 "$BIN/$DRAWRUN_BIN" "$o/draw.drawlog.xz" demo "$n" > "$o/report.txt" 2> "$o/stderr.txt" ;;
   esac
   {
     echo "trace $(sha256sum < "$o/trace.txt" | cut -c1-64)"
@@ -46,7 +49,7 @@ run_item() {
   } > "$o/digest"
   echo "done $2"
 }
-export -f run_item
+export -f run_item; export FAST
 
 run_all() {
   items | grep -E "${ONLY:-.}" | xargs -P "$J" -I{} bash -c 'run_item "$0" "$1"' "$1" {} | sort | tr '\n' ' '; echo
@@ -85,9 +88,9 @@ while read -r i _ tr _ rp _ dr; do
   read -r _ tr2 _ rp2 _ dr2 <<< "$(tr '\n' ' ' < "$out/$i/digest")"
   s=""
   [[ $tr == "$tr2" ]] || s+=" trace DIFFERS ($(LC_ALL=C cmp "$dir/$i/trace.txt" "$out/$i/trace.txt" | head -1 | sed 's/.*, //'))"
-  [[ $rp == "$rp2" ]] || s+=" report DIFFERS"
-  [[ $dr == "$dr2" ]] || s+=" draw DIFFERS"
+  [[ -n ${FAST:-} || $rp == "$rp2" ]] || s+=" report DIFFERS"
+  [[ -n ${FAST:-} || $dr == "$dr2" ]] || s+=" draw DIFFERS"
   if [[ -n $s ]]; then echo "$i$s"; nd=$((nd + 1)); else echo "$i identical"; rm -f "$out/$i/draw.drawlog.xz"; fi
 done < <(awk -v r="${ONLY:-.}" '$1 ~ r' "$dir/digests.txt")
-echo "items differing: $nd; total $((SECONDS - t0)) s"
+echo "items differing: $nd${FAST:+ (FAST: traces only)}; total $((SECONDS - t0)) s"
 [[ $nd == 0 && $fail == 0 ]] || exit 1
