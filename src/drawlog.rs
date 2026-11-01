@@ -1,7 +1,7 @@
 //! Draw log (specs/data/drawlog/FORMAT.md): the port's writer, a reader and a per-frame diff against a reference log.
 #![allow(clippy::disallowed_methods)]
 
-use crate::gfx::{Blend, LogRec, Vertex};
+use crate::drawlist::{Blend, LogRec, Vertex};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::io::BufRead;
@@ -185,7 +185,7 @@ pub fn format_frame(h: &Header, recs: &[LogRec]) -> String {
     )
 }
 
-fn vp_line(r: &crate::gfx::Rect) -> String {
+fn vp_line(r: &crate::drawlist::Rect) -> String {
     format!(
         "V {} {} {} {}",
         num(r.x, 2),
@@ -2098,7 +2098,7 @@ pub fn run_demo(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use crate::gfx::{LogTex, Rect};
+    use crate::drawlist::{LogTex, Rect};
 
     // FORMAT.md §2 fog: C %g, 6 significant digits.
     // 06 §11.3: alpha-0 colours compare equal whatever their RGB; otherwise ±1 per channel.

@@ -5,7 +5,6 @@ use crate::anmvm::{self, AnmVm, Timer};
 use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::fmath::{self, polar, sin_cos_f};
 use crate::game::{Ctx, Sys};
-use crate::gfx::Gfx;
 use crate::item::ItemManager;
 use crate::player::{GrazeEnv, Player, PlayerRef};
 use crate::task::{self, Chain, Ret, Task};
@@ -469,7 +468,7 @@ impl BulletManager {
 
     pub fn register(ctx: &mut Ctx, player: PlayerRef) -> Result<Rc<RefCell<BulletManager>>> {
         ctx.anm
-            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, "etama.anm")?;
+            .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "etama.anm")?;
         let b = Rc::new(RefCell::new(BulletManager::new(
             &mut ctx.anm,
             &mut ctx.rng,
@@ -1582,11 +1581,10 @@ impl BulletManager {
     pub fn draw(
         &mut self,
         anm: &mut AnmManager,
-        gfx: &mut Gfx,
+        rec: &mut Recorder,
         fx: &mut crate::effect::Effects,
         flags: u32,
     ) {
-        let rec = &mut gfx.rec;
         rec.set_viewport(PLAYFIELD);
         // Tint 0xFFF01010 only while bullets are frozen (06 §10.2).
         let frozen = self.player.borrow().freeze_bullets(flags);
@@ -1618,8 +1616,7 @@ impl BulletManager {
                 anm.draw_mode_z(rec, vm, 2, 0.05);
             }
         }
-        // TODO(step 8): Gfx kept only for effect.rs draw_over_bullets (other group); pass the Recorder once converted.
-        fx.draw_over_bullets(anm, gfx);
+        fx.draw_over_bullets(anm, rec);
         // Off only while bit 10, after the over-bullet effects; otherwise the tint state is left alone (06 §10.2).
         if frozen {
             anm.tint_off();
@@ -1630,7 +1627,7 @@ impl BulletManager {
 impl Task<Ctx> for BulletManager {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.gfx.rec, ANM_SLOT);
+            ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
         }
     }
 
@@ -1650,7 +1647,7 @@ impl Task<Ctx> for BulletManager {
         BulletManager::draw(
             self,
             &mut ctx.anm,
-            &mut ctx.gfx,
+            &mut ctx.rec,
             &mut ctx.effects,
             ctx.game.flags,
         );

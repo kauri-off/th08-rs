@@ -2,11 +2,12 @@
 
 use crate::anmmgr::{self, AnmManager};
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::camera::Camera;
 use crate::d3dx;
 use crate::drawlist::Recorder;
+use crate::drawlist::{FULLSCREEN, PLAYFIELD, Vertex};
 use crate::fmath::{cos_f, sin_cos_f, sin_f};
 use crate::game::Ctx;
-use crate::gfx::{Camera, FULLSCREEN, PLAYFIELD, Vertex};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 use std::cell::RefCell;
@@ -776,8 +777,7 @@ impl Effects {
     }
 
     // EffectMgr_Draw (prio 12): list A, then C, then E; A/E at z 0.07.
-    pub fn draw_main(&mut self, anm: &mut AnmManager, out: &mut impl AsMut<Recorder>) {
-        let rec = out.as_mut();
+    pub fn draw_main(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
         rec.set_viewport(PLAYFIELD);
         for list in [0, 2, 4] {
             for k in 0..self.lists[list].len() {
@@ -805,8 +805,7 @@ impl Effects {
     }
 
     // List D, drawn at the end of BulletMgr_Draw (prio 13), z 0.04.
-    pub fn draw_over_bullets(&mut self, anm: &mut AnmManager, out: &mut impl AsMut<Recorder>) {
-        let rec = out.as_mut();
+    pub fn draw_over_bullets(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
         for k in 0..self.lists[3].len() {
             let i = self.lists[3][k];
             self.draw_one(anm, rec, i, 0.04);
@@ -1211,7 +1210,7 @@ impl Task<Ctx> for EffectManager {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             ctx.effects.clear();
-            ctx.anm.load(&mut ctx.gfx.rec, &ctx.archive, BG_SLOT, {
+            ctx.anm.load(&mut ctx.rec, &ctx.archive, BG_SLOT, {
                 let card = ctx.game.spell_practice().then_some(ctx.game.card);
                 bg_file(ctx.game.stage, card)
             })?;
@@ -1222,7 +1221,7 @@ impl Task<Ctx> for EffectManager {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
             ctx.effects.clear();
-            ctx.anm.unload(&mut ctx.gfx.rec, BG_SLOT);
+            ctx.anm.unload(&mut ctx.rec, BG_SLOT);
         }
     }
 
@@ -1240,7 +1239,7 @@ impl Task<Ctx> for EffectManager {
     }
 
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        ctx.effects.draw_main(&mut ctx.anm, &mut ctx.gfx.rec);
+        ctx.effects.draw_main(&mut ctx.anm, &mut ctx.rec);
         Ret::Next
     }
 }
@@ -1501,7 +1500,7 @@ impl ScreenEffect {
         ];
         let full = matches!(self.kind, 0 | 4 | 5);
         let r = if full { FULLSCREEN } else { PLAYFIELD };
-        let rec = &mut ctx.gfx.rec;
+        let rec = &mut ctx.rec;
         rec.set_viewport(r);
         rec.rect(r.x, r.y, r.w, r.h, rgba);
     }

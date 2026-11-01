@@ -829,9 +829,8 @@ impl EnemyManager {
         let (ecl_name, enm) = files(index, spell);
         let ecl = ecl::parse(ctx.archive.read(&ecl_name)?)?;
         ctx.anm
-            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
-        ctx.anm
-            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_STAGE, &enm)?;
+            .load(&mut ctx.rec, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
+        ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_STAGE, &enm)?;
         // EnemyManager init clears the freeze byte 0x160F534.
         ctx.timer_pause = 0;
         let mut m = EnemyManager::new(ecl, bullets, diff);
@@ -2770,8 +2769,8 @@ impl EnemyManager {
 impl Task<Ctx> for EnemyManager {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.gfx.rec, ANM_ENEMY);
-            ctx.anm.unload(&mut ctx.gfx.rec, ANM_STAGE);
+            ctx.anm.unload(&mut ctx.rec, ANM_ENEMY);
+            ctx.anm.unload(&mut ctx.rec, ANM_STAGE);
         }
     }
 
@@ -2789,7 +2788,7 @@ impl Task<Ctx> for EnemyManager {
 
     // Draw prio 8 → layers 0–1, prio 11 → layers 2–3 (07 §10.6).
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        self.draw_layer(&mut ctx.anm, &mut ctx.gfx.rec, tag == 1, ctx.game.flags);
+        self.draw_layer(&mut ctx.anm, &mut ctx.rec, tag == 1, ctx.game.flags);
         Ret::Next
     }
 }

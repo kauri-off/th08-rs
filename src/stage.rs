@@ -2,9 +2,10 @@
 
 use crate::anmmgr::{AnmManager, Fog};
 use crate::anmvm::{self, AnmVm, Timer};
+use crate::camera::{Camera, Mat4};
 use crate::drawlist::Recorder;
+use crate::drawlist::{PLAYFIELD, Rect, Vertex};
 use crate::game::{Ctx, Sys};
-use crate::gfx::{Camera, Mat4, PLAYFIELD, Rect, Vertex};
 use crate::player::PlayerRef;
 use crate::stdfile::{self, QuadKind, Record, Std, Vec3};
 use crate::task::{self, Chain, Ret, Task};
@@ -389,8 +390,7 @@ impl Stage {
     ) -> Result<Rc<RefCell<Stage>>> {
         let (std_name, bg) = files(index, ctx.game.spell_practice());
         let std = stdfile::parse(&ctx.archive.read(&std_name)?)?;
-        ctx.anm
-            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, &bg)?;
+        ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &bg)?;
         let mut st = Stage::new(index, std);
         st.player = player;
         st.effect_level = ctx.game.cfg.effect_level;
@@ -792,7 +792,7 @@ impl Stage {
             .map(|((sx, sy), r)| {
                 Vertex::screen(cx + sx * r, cy + sy * r, 0.8, [0.0, 0.0], [0, 0, 0, 255])
             });
-            rec.strip(white, crate::gfx::Blend::Alpha, true, v);
+            rec.strip(white, crate::drawlist::Blend::Alpha, true, v);
         }
         anm.reset_render_state();
         rec.set_depth_test(true);
@@ -1074,7 +1074,7 @@ impl Task<Ctx> for Stage {
     // Port-only: unloads stgNbg.anm when the stage calc node goes away.
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.gfx.rec, ANM_SLOT);
+            ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
         }
     }
 
@@ -1089,7 +1089,7 @@ impl Task<Ctx> for Stage {
     // Tag 0 = Stage_DrawLow, tag 1 = Stage_DrawHigh (06 §10.2).
     // Not implemented: DrawLow step 2 (+0xB2C clear).
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let (anm, rec, fx) = (&mut ctx.anm, &mut ctx.gfx.rec, &mut ctx.effects);
+        let (anm, rec, fx) = (&mut ctx.anm, &mut ctx.rec, &mut ctx.effects);
         if tag == 0 {
             {
                 let mut p = self.sparkles.borrow_mut();

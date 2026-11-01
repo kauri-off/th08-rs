@@ -130,7 +130,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.suspended = true;
         if let Some(r) = self.run.as_mut() {
             r.pacer.suspend();
-            r.ctx.gfx.detach();
+            gfx(&mut r.ctx).detach();
         }
         if let Some(g) = self.launch.as_mut().and_then(|l| l.gfx.as_mut()) {
             g.detach();
@@ -145,7 +145,7 @@ impl ApplicationHandler<UserEvent> for App {
                 r.pacer.start(Instant::now());
                 if self.suspended {
                     r.pacer.suspend();
-                    r.ctx.gfx.detach();
+                    gfx(&mut r.ctx).detach();
                 } else {
                     r.window.request_redraw();
                 }
@@ -201,7 +201,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 el.exit()
             }
-            WindowEvent::Resized(s) => r.ctx.gfx.resize(s.width, s.height),
+            WindowEvent::Resized(s) => gfx(&mut r.ctx).resize(s.width, s.height),
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::ModifiersChanged(m) => self.alt = m.state().alt_key(),
             WindowEvent::Focused(f) => {
@@ -292,20 +292,19 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
                 let size = r.window.inner_size();
-                r.ctx.gfx.resize(size.width, size.height);
+                gfx(&mut r.ctx).resize(size.width, size.height);
                 r.ctx.draw();
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.shot.is_some_and(|f| r.ctx.frame >= f) {
-                    r.ctx
-                        .gfx
-                        .capture(self.shot_size)
+                    let (g, rec) = gfx_rec(&mut r.ctx);
+                    g.capture(rec, self.shot_size)
                         .save("/tmp/th08_shot.png")
                         .expect("save shot");
                     el.exit();
                     return;
                 }
-                r.ctx.gfx.present();
-                crate::ascii::apply_pending_captures(&mut r.ctx.anm, &mut r.ctx.gfx);
+                r.ctx.present();
+                crate::ascii::apply_pending_captures(&mut r.ctx.anm, &mut r.ctx.rec);
                 r.window.request_redraw();
             }
             _ => {}
@@ -321,7 +320,7 @@ impl App {
             return;
         }
         if let Some(r) = self.run.as_mut() {
-            if let Err(e) = r.ctx.gfx.attach(r.window.clone()) {
+            if let Err(e) = gfx(&mut r.ctx).attach(r.window.clone()) {
                 log::error!("surface: {e:#}");
             }
             r.pacer.resume(Instant::now());
@@ -539,4 +538,18 @@ fn run_app(source: Option<Source>, pre: Option<Settings>) {
         use winit::platform::web::EventLoopExtWebSys;
         el.spawn_app(app);
     }
+}
+
+// The app's `Ctx` always runs on a `Gfx` (resize, surface attach / detach, screenshot).
+fn gfx(ctx: &mut Ctx) -> &mut Gfx {
+    gfx_rec(ctx).0
+}
+
+fn gfx_rec(ctx: &mut Ctx) -> (&mut Gfx, &mut crate::drawlist::Recorder) {
+    let g = ctx
+        .renderer
+        .as_any_mut()
+        .downcast_mut()
+        .expect("app renderer is Gfx");
+    (g, &mut ctx.rec)
 }

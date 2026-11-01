@@ -4,7 +4,7 @@ use crate::anmmgr::AnmManager;
 use crate::archive::Archive;
 use crate::assets::Source;
 use crate::audio::Audio;
-use crate::gfx::Gfx;
+use crate::drawlist::{FULLSCREEN, Recorder, Renderer};
 use crate::input::Input;
 use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
 use anyhow::Context as _;
@@ -15,8 +15,10 @@ const SKIP_START: i8 = -4;
 // The original's globals that every subsystem reaches (device, archive, sound manager, input words, SprtCtrlInf,
 // funcChain); `game` holds GM / Supervisor fields (11 §2, §7).
 pub struct Ctx {
-    // TODO(step 8): device executor; its `rec` (DrawCmd / ResCmd recorder, drawlist.rs) moves here once every site records.
-    pub gfx: Gfx,
+    // The frame's DrawCmd / ResCmd lists and device-state mirror (drawlist.rs, future `World` draw output).
+    pub rec: Recorder,
+    // App / tool renderer; core calls it only at the sync points (`Renderer`, drawlist.rs).
+    pub renderer: Box<dyn Renderer>,
     // TODO(step 8b): core reads content through a LogicView, not the archive.
     pub archive: Archive,
     // TODO(step 10): the cpal device leaves core with the crate cut; logic only queues `SoundCmd`s.
@@ -170,18 +172,18 @@ impl TaskCtx for Ctx {
 impl Ctx {
     pub async fn load(
         source: Source,
-        gfx: Gfx,
+        renderer: impl Renderer + 'static,
         core: crate::coreconfig::CoreConfig,
         host: Box<dyn crate::host::Host>,
     ) -> anyhow::Result<Self> {
-        Self::load_with(source, gfx, true, core, host).await
+        Self::load_with(source, renderer, true, core, host).await
     }
 
     // WinMain start-up (00 §2): archive, sound (thbgm.fmt 02 §2, SE 13 §1.1), RNG boot seed (11 §1.3), score data, then the
     // Supervisor task. `persist` = read/write the port's save files (off for tests).
     pub async fn load_with(
         source: Source,
-        gfx: Gfx,
+        renderer: impl Renderer + 'static,
         persist: bool,
         core: crate::coreconfig::CoreConfig,
         mut host: Box<dyn crate::host::Host>,
@@ -212,7 +214,8 @@ impl Ctx {
             host.write("th08.cfg", &cfg.to_bytes());
         }
         let mut ctx = Self {
-            gfx,
+            rec: Recorder::new(),
+            renderer: Box::new(renderer),
             archive,
             audio,
             input: Input::default(),
@@ -254,7 +257,7 @@ impl Ctx {
                 .and_then(crate::drawlog::Writer::from_spec);
         }
         if ctx.drawlog.is_some() {
-            ctx.gfx.enable_log();
+            ctx.renderer.enable_log();
         }
         ctx.rng = crate::rng::Rng::boot(ctx.core.seed, ctx.host.boot_clock_ms());
         if persist {
@@ -346,8 +349,8 @@ impl Ctx {
         let f = self.calc();
         if f == Flow::Continue {
             self.draw();
-            self.gfx.present();
-            crate::ascii::apply_pending_captures(&mut self.anm, &mut self.gfx);
+            self.present();
+            crate::ascii::apply_pending_captures(&mut self.anm, &mut self.rec);
         }
         f
     }
@@ -357,8 +360,8 @@ impl Ctx {
     pub fn draw(&mut self) {
         if self.init_presents > 0 && self.game.scene == crate::gamemgr::SCENE_BOOT {
             self.init_presents -= 1;
-            self.gfx.set_viewport(crate::gfx::FULLSCREEN);
-            self.gfx.clear_depth(Some([0, 0, 0, 255]));
+            self.rec.set_viewport(FULLSCREEN);
+            self.rec.clear_depth(Some([0, 0, 0, 255]));
             if self.drawlog.is_some() {
                 self.log_frame();
             }
@@ -385,12 +388,12 @@ impl Ctx {
     // inside a calc node, so these presents carry no primitives and shift the present numbering by 2.
     pub fn clear_present_twice(&mut self, color: [u8; 4]) {
         for _ in 0..2 {
-            self.gfx.set_viewport(crate::gfx::FULLSCREEN);
-            self.gfx.clear_depth(Some(color));
+            self.rec.set_viewport(FULLSCREEN);
+            self.rec.clear_depth(Some(color));
             if self.drawlog.is_some() {
                 self.log_frame();
             }
-            self.gfx.present();
+            self.present();
             crate::session::on_extra_present(self);
         }
     }
@@ -423,7 +426,7 @@ impl Ctx {
         self.bgm.midi_reset();
         self.flush_sound();
         for slot in 0..crate::anmmgr::SLOTS {
-            self.anm.unload(&mut self.gfx, slot);
+            self.anm.unload(&mut self.rec, slot);
         }
         // New ANM manager; g_GameSpeed := 1.0 (step 5; the port keeps it in the manager). Step 6: g_Rng state :=
         // (u16) timeGetTime(), the call counter +4 is kept (11 §1); AsciiManager_Load zeroes the ASCII object.
@@ -448,7 +451,7 @@ impl Ctx {
 
     // Debug tool. TH08_DRAWLOG: one F record per presented frame, sampled after the draw.
     fn log_frame(&mut self) {
-        let recs = self.gfx.take_log();
+        let recs = self.renderer.take_log(&mut self.rec);
         let g = &self.game;
         let game_frame = if g.scene == crate::gamemgr::SCENE_GAME {
             g.frame_counter
@@ -475,7 +478,18 @@ impl Ctx {
     // Starts an in-memory draw log (tests and tools).
     pub fn log_to_memory(&mut self) {
         self.drawlog = Some(crate::drawlog::Writer::memory());
-        self.gfx.enable_log();
+        self.renderer.enable_log();
+    }
+
+    // Sync point: records the Present and has the renderer execute the lists (frame end, Device_ClearPresentTwice).
+    pub fn present(&mut self) {
+        self.rec.present();
+        self.renderer.submit(&mut self.rec);
+    }
+
+    // App and tools: the concrete renderer (`gfx::Gfx`), None for another type.
+    pub fn renderer_as<T: 'static>(&mut self) -> Option<&mut T> {
+        self.renderer.as_any_mut().downcast_mut()
     }
 }
 

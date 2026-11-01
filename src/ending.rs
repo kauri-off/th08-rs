@@ -132,7 +132,7 @@ impl Ending {
         ctx.anm.reset_render_state();
         ctx.clear_present_twice([0xFF; 4]);
         ctx.anm
-            .load(&mut ctx.gfx.rec, &ctx.archive, STAFF_SLOT, "staff01.anm")?;
+            .load(&mut ctx.rec, &ctx.archive, STAFF_SLOT, "staff01.anm")?;
         self.update_clear_records(&mut ctx.game);
         // Step 4: text VMs i = 0..14 at (64, 16·i + 400); the owner's pos overrides the script's time-0 op 6 (05 §8).
         self.vms = (0..LINES)
@@ -309,11 +309,11 @@ impl Ending {
                         .archive
                         .read(&file)
                         .map_err(anyhow::Error::from)
-                        .and_then(|b| ctx.gfx.rec.load_image(&file, &b));
+                        .and_then(|b| ctx.rec.load_image(&file, &b));
                     match tex {
                         Ok(t) => {
                             if let Some(old) = self.picture.replace(t) {
-                                ctx.gfx.rec.free_texture(old);
+                                ctx.rec.free_texture(old);
                             }
                         }
                         Err(e) => log::warn!("ending @b {name}: {e:#}"),
@@ -420,14 +420,12 @@ fn render_vm(
     let Some(sp) = ctx.anm.sprite(0, vm.sprite_index.max(0) as usize).copied() else {
         return;
     };
-    let t = ctx.gfx.rec.texture(sp.tex);
+    let t = ctx.rec.texture(sp.tex);
     let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
     let size = 15;
     let rgba = raster.render_outline(s, rgb, w as usize, size, 0.0, -1);
     // TODO(step 8 text): CPU raster upload; becomes a text output command (decision 7).
-    ctx.gfx
-        .rec
-        .write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
+    ctx.rec.write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
     vm.flags |= anmvm::F_VISIBLE;
 }
 
@@ -473,19 +471,19 @@ impl Task<Ctx> for Ending {
         if self.done {
             return Ret::Next;
         }
-        ctx.gfx.rec.set_viewport(crate::gfx::FULLSCREEN);
+        ctx.rec.set_viewport(crate::drawlist::FULLSCREEN);
         if let Some(t) = self.picture {
             // The float source offset is truncated (ftol) to whole pixels (16 §1.5).
             let (sx, sy) = (self.pic_x.max(0.0) as u32, self.pic_y.max(0.0) as u32);
-            ctx.gfx.rec.image_rect(t, sx, sy, 640, 480, 0.0, 0.0);
+            ctx.rec.image_rect(t, sx, sy, 640, 480, 0.0, 0.0);
         }
         for vm in &mut self.vms {
-            ctx.anm.draw(&mut ctx.gfx.rec, vm);
+            ctx.anm.draw(&mut ctx.rec, vm);
         }
         let c = self.fade_step();
         if c >> 24 != 0 {
             let rgba = [(c >> 16) as u8, (c >> 8) as u8, c as u8, (c >> 24) as u8];
-            ctx.gfx.rec.rect(0.0, 0.0, 640.0, 480.0, rgba);
+            ctx.rec.rect(0.0, 0.0, 640.0, 480.0, rgba);
         }
         Ret::Next
     }
@@ -495,9 +493,9 @@ impl Task<Ctx> for Ending {
         if chain != Chain::Calc {
             return;
         }
-        ctx.anm.unload(&mut ctx.gfx.rec, STAFF_SLOT);
+        ctx.anm.unload(&mut ctx.rec, STAFF_SLOT);
         if let Some(t) = self.picture.take() {
-            ctx.gfx.rec.free_texture(t);
+            ctx.rec.free_texture(t);
         }
         self.script.data.clear();
         // Port guard: a removal by a scene switch away from 9 keeps that switch's target.

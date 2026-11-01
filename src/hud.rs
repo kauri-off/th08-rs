@@ -316,7 +316,7 @@ impl Hud {
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
         let g = &ctx.game;
         let (stage, shot) = (g.stage % 9, g.shot);
-        let (rec, ar) = (&mut ctx.gfx.rec, &ctx.archive);
+        let (rec, ar) = (&mut ctx.rec, &ctx.archive);
         ctx.anm.load(rec, ar, FRONT_SLOT, "front.anm")?;
         if let Some(n) = stage_plate(stage, g) {
             set_boss_plate(&ctx.anm, rec, n);
@@ -469,20 +469,20 @@ impl Hud {
             // Line 2 renders into boss_card's strip (text.anm sprite 2, 10 §5.1).
             let Some((tex, w, y)) = d
                 .line_vm(line)
-                .and_then(|vm| Self::line_texture(&ctx.anm, &ctx.gfx.rec, vm))
+                .and_then(|vm| Self::line_texture(&ctx.anm, &ctx.rec, vm))
             else {
                 continue;
             };
             // TODO(step 8 text): CPU raster + Write in calc; decision 7 moves text to an output command.
             let rgba = self.raster.render(&s, colour, w as usize, size);
-            ctx.gfx.rec.write_texture(tex, 0, y, w, size as u32, &rgba);
+            ctx.rec.write_texture(tex, 0, y, w, size as u32, &rgba);
         }
     }
 
     fn handle_events(&mut self, ctx: &mut Ctx, events: Vec<Event>) {
         for ev in events {
             match ev {
-                Event::Plate(n) => set_boss_plate(&ctx.anm, &mut ctx.gfx.rec, n),
+                Event::Plate(n) => set_boss_plate(&ctx.anm, &mut ctx.rec, n),
                 Event::SpellBase(n) => self.stage.borrow_mut().spell_first = n,
                 Event::Bgm(n) if n < 0 => ctx.bgm.stop_bgm(),
                 // Msg op 7 (10 §5.1): song-title card = stgNtxt script 3 with sprite n + 3, then preloaded BGM slot n.
@@ -730,7 +730,7 @@ impl Hud {
 
     // Hud_DrawBoss 0x43741D (12 §5.4): unguarded VMs, the guarded bar part, the stage-clear VM last.
     fn draw_boss(&mut self, ctx: &mut Ctx) {
-        let (anm, rec) = (&mut ctx.anm, &mut ctx.gfx.rec);
+        let (anm, rec) = (&mut ctx.anm, &mut ctx.rec);
         rec.set_viewport(PLAYFIELD);
         // Stage title VMs, the stage-start clock, then the night clock with Draw2DRot (12 §5.1, §5.7).
         for vm in self
@@ -761,7 +761,7 @@ impl Hud {
             self.draw_bar(ctx);
         }
         if self.clear_vm.script.is_some() {
-            ctx.anm.draw_mode(&mut ctx.gfx.rec, &mut self.clear_vm, 0);
+            ctx.anm.draw_mode(&mut ctx.rec, &mut self.clear_vm, 0);
         }
     }
 
@@ -771,7 +771,7 @@ impl Hud {
             return;
         }
         let a = self.bar_alpha as u8;
-        let rec = &mut ctx.gfx.rec;
+        let rec = &mut ctx.rec;
         rec.set_viewport(PLAYFIELD);
         let disp = self.bar_disp;
         Self::bar_quad(
@@ -810,7 +810,7 @@ impl Hud {
         // Timer (12 §5.4): every guarded draw, HUD +0x24 as stored by Enemy_CheckTimeout, shown as min(·, 99).
         let raw = e.g.hud_timer;
         drop(e);
-        ctx.anm.draw_mode(&mut ctx.gfx.rec, &mut self.front[12], 0);
+        ctx.anm.draw_mode(&mut ctx.rec, &mut self.front[12], 0);
         let v = raw.min(99);
         ctx.ascii
             .push(Text::new(384.0, 16.0, fmt_02d(v)).color(Self::rgb(timer_colour(raw), a)));
@@ -1004,7 +1004,7 @@ impl Hud {
 
     // Hud_DrawPanel (12 §5.3), redrawn every frame; flushes and sets the full-screen viewport first.
     fn draw_panel(&mut self, ctx: &mut Ctx, st: &Stats) {
-        let rec = &mut ctx.gfx.rec;
+        let rec = &mut ctx.rec;
         rec.set_viewport(FULLSCREEN);
         let anm = &mut ctx.anm;
         // Tiles (scripts 13–15) keep z-write on; depths 0.49 / 0.48 / 0.46 (12 §5.3).
@@ -1156,7 +1156,7 @@ impl Task<Ctx> for Hud {
                 .into_iter()
                 .chain(msg::FACE_SLOTS)
             {
-                ctx.anm.unload(&mut ctx.gfx.rec, s);
+                ctx.anm.unload(&mut ctx.rec, s);
             }
         }
     }
@@ -1167,8 +1167,7 @@ impl Task<Ctx> for Hud {
         // AnmManager_ApplyPendingCaptures runs right after the Present that follows op 9's calc (12 §3); the port
         // copies from that presented frame at the next calc.
         if std::mem::take(&mut self.capture_pending) {
-            // TODO(step 8): ascii.rs (IMPL164) owns apply_capture; pass `&mut ctx.gfx.rec` once it takes a Recorder.
-            crate::ascii::apply_capture(&ctx.anm, &mut ctx.gfx, &self.cap_vm);
+            crate::ascii::apply_capture(&ctx.anm, &mut ctx.rec, &self.cap_vm);
         }
         let inp = ctx.input.game_view();
         // HUD requests queued by ECL ops this frame (ECL runs before the HUD).
@@ -1312,8 +1311,8 @@ impl Task<Ctx> for Hud {
             return Ret::Next;
         }
         self.draw_clear(ctx);
-        ctx.gfx.rec.set_viewport(PLAYFIELD);
-        self.draw_msg(&mut ctx.anm, &mut ctx.gfx.rec);
+        ctx.rec.set_viewport(PLAYFIELD);
+        self.draw_msg(&mut ctx.anm, &mut ctx.rec);
         self.draw_boss(ctx);
         let st = self.player.borrow().stats.clone();
         self.draw_panel(ctx, &st);

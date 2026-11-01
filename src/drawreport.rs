@@ -1,17 +1,20 @@
 //! Draw-log report: renders reference and port logs with the port's renderer and writes an HTML page with the
 //! chosen frames (drawdiff, session).
 
+use crate::drawlist::{Blend, Recorder, Rect, TexId, Vertex};
 use crate::drawlog::{Frame, Kind, Report, Vtx};
-use crate::gfx::{Blend, Gfx, Rect, TextureId, Vertex};
+use crate::gfx::Gfx;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 pub struct Renderer {
     pub gfx: Gfx,
+    // The report's own command recorder, executed by `gfx` at capture / flush.
+    pub rec: Recorder,
     ar: Option<crate::archive::Archive>,
-    anm: HashMap<String, Vec<Option<TextureId>>>,
-    img: HashMap<String, Option<(TextureId, u32, u32)>>,
+    anm: HashMap<String, Vec<Option<TexId>>>,
+    img: HashMap<String, Option<(TexId, u32, u32)>>,
 }
 
 fn rgba(c: u32) -> [u8; 4] {
@@ -42,13 +45,14 @@ impl Renderer {
         };
         Ok(Self {
             gfx,
+            rec: Recorder::new(),
             ar,
             anm: HashMap::new(),
             img: HashMap::new(),
         })
     }
 
-    fn anm_tex(&mut self, label: &str) -> Option<TextureId> {
+    fn anm_tex(&mut self, label: &str) -> Option<TexId> {
         let (file, idx) = label.split_once('#')?;
         let idx: usize = idx.parse().ok()?;
         if !self.anm.contains_key(file) {
@@ -62,7 +66,7 @@ impl Renderer {
                 for c in chunks {
                     v.push(
                         c.texture
-                            .map(|t| self.gfx.create_texture(t.width, t.height, &t.rgba)),
+                            .map(|t| self.rec.create_texture(t.width, t.height, &t.rgba)),
                     );
                 }
             }
@@ -71,15 +75,15 @@ impl Renderer {
         self.anm[file].get(idx).copied().flatten()
     }
 
-    fn image(&mut self, name: &str) -> Option<(TextureId, u32, u32)> {
+    fn image(&mut self, name: &str) -> Option<(TexId, u32, u32)> {
         if !self.img.contains_key(name) {
             let t = self
                 .ar
                 .as_ref()
                 .and_then(|a| a.read(name).ok())
-                .and_then(|b| self.gfx.load_image(name, &b).ok())
+                .and_then(|b| self.rec.load_image(name, &b).ok())
                 .map(|t| {
-                    let x = self.gfx.texture(t);
+                    let x = self.rec.texture(t);
                     (t, x.width, x.height)
                 });
             self.img.insert(name.to_string(), t);
@@ -115,7 +119,7 @@ impl Renderer {
 
     pub fn draw(&mut self, f: &Frame) {
         for p in &f.prims {
-            self.gfx
+            self.rec
                 .set_viewport(Rect::new(p.vp[0], p.vp[1], p.vp[2], p.vp[3]));
             let st = &*p.state;
             let blend = if st.contains("blend=add") {
@@ -143,9 +147,9 @@ impl Renderer {
                 Kind::Clear(what, arg) => {
                     let c = rgba(*arg);
                     if what.contains('t') {
-                        self.gfx.clear_depth(Some(c));
+                        self.rec.clear_depth(Some(c));
                     } else {
-                        self.gfx.clear_z(*arg);
+                        self.rec.clear_z(*arg);
                     }
                     continue;
                 }
@@ -158,7 +162,7 @@ impl Renderer {
                             let (u0, v0) = (n[0] / iw, n[1] / ih);
                             let (u1, v1) = ((n[0] + n[2]) / iw, (n[1] + n[3]) / ih);
                             let (x0, y0, x1, y1) = (n[4], n[5], n[4] + n[2], n[5] + n[3]);
-                            self.gfx.set_viewport(crate::gfx::FULLSCREEN);
+                            self.rec.set_viewport(crate::drawlist::FULLSCREEN);
                             let q = [
                                 (x0, y0, u0, v0),
                                 (x1, y0, u1, v0),
@@ -166,7 +170,7 @@ impl Renderer {
                                 (x1, y1, u1, v1),
                             ]
                             .map(|(x, y, u, v)| Vertex::screen(x, y, 0.0, [u, v], [255; 4]));
-                            self.gfx.draw_raw(Some(id), Blend::Alpha, false, false, q);
+                            self.rec.draw_raw(Some(id), Blend::Alpha, false, false, q);
                         }
                     }
                     continue;
@@ -175,7 +179,7 @@ impl Renderer {
             };
             for q in quads {
                 let v = q.map(|v| Self::vertex(&v, fog));
-                self.gfx.draw_raw(tex, blend, test, write, v);
+                self.rec.draw_raw(tex, blend, test, write, v);
             }
         }
     }
@@ -220,9 +224,9 @@ pub fn render_pass(
         }
         r.draw(&f);
         if want.contains(&f.present) {
-            out.insert(f.present, r.gfx.capture(None));
+            out.insert(f.present, r.gfx.capture(&mut r.rec, None));
         } else {
-            r.gfx.flush();
+            r.gfx.flush(&mut r.rec);
         }
     }
     out

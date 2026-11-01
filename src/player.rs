@@ -627,8 +627,7 @@ impl Player {
         let (anm, a, s) = crate::sht::files(shot);
         let human = crate::sht::parse(&ctx.archive.read(&a)?)?;
         let youkai = crate::sht::parse(&ctx.archive.read(&s)?)?;
-        ctx.anm
-            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, &anm)?;
+        ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &anm)?;
         {
             let mut p = p.borrow_mut();
             p.load(
@@ -1447,7 +1446,7 @@ impl Task<Ctx> for Player {
                 // Boss markers M_0..M_2 hidden at once (12 §5.10).
                 (0..3).for_each(|k| ctx.overlays.marker_interrupt(k, 99));
             }
-            ctx.anm.unload(&mut ctx.gfx.rec, ANM_SLOT);
+            ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
         }
     }
 
@@ -1486,7 +1485,7 @@ impl Task<Ctx> for Player {
     // Draw 9 (0x44D530): flying bullets, bomb, sprite, options; draw 10 (0x44D630): bullets in their hit animation
     // (14 §5).
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let (anm, rec) = (&mut ctx.anm, &mut ctx.gfx.rec);
+        let (anm, rec) = (&mut ctx.anm, &mut ctx.rec);
         rec.set_viewport(PLAYFIELD);
         if tag == 0 {
             self.draw_bullets(anm, rec, 1);

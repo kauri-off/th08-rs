@@ -1,8 +1,8 @@
 //! Debug tool: live ANM script viewer (TH08_ANM), not a port of the original.
 
 use crate::anmvm::AnmVm;
+use crate::drawlist::{FULLSCREEN, PLAYFIELD};
 use crate::game::Ctx;
-use crate::gfx::{FULLSCREEN, PLAYFIELD};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::{Context, Result};
 
@@ -24,7 +24,7 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
     let file = parts.next().context("TH08_ANM: file")?;
     let scripts = parts.next().unwrap_or("0");
     let playfield = parts.next() == Some("pf");
-    ctx.anm.load(&mut ctx.gfx, &ctx.archive, SLOT, file)?;
+    ctx.anm.load(&mut ctx.rec, &ctx.archive, SLOT, file)?;
     let mut vms = Vec::new();
     for s in scripts.split(',') {
         let (a, b) = s.split_once('-').unwrap_or((s, s));
@@ -72,17 +72,17 @@ impl Task<Ctx> for AnmDebug {
     }
 
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        ctx.gfx.set_viewport(if self.playfield {
+        ctx.rec.set_viewport(if self.playfield {
             PLAYFIELD
         } else {
             FULLSCREEN
         });
-        ctx.gfx.clear_viewport([32, 32, 64, 255]);
+        ctx.rec.clear_viewport([32, 32, 64, 255]);
         for vm in &mut self.vms {
             let mode = self.mode.unwrap_or(vm.draw_mode);
-            ctx.anm.draw_mode(&mut ctx.gfx, vm, mode);
+            ctx.anm.draw_mode(&mut ctx.rec, vm, mode);
         }
-        ctx.gfx.set_viewport(FULLSCREEN);
+        ctx.rec.set_viewport(FULLSCREEN);
         Ret::Next
     }
 }

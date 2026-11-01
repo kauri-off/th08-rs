@@ -125,7 +125,7 @@ fn render_vm(
     else {
         return;
     };
-    let t = ctx.gfx.rec.texture(sp.tex);
+    let t = ctx.rec.texture(sp.tex);
     let (w, tx, ty) = (
         t.width,
         (sp.uv[0] * t.width as f32).round(),
@@ -134,9 +134,7 @@ fn render_vm(
     let size = 15;
     let rgba = raster.render_outline(s, colorref(colour), w as usize, size, tx, mode);
     // TODO(step 8 text): CPU raster upload; becomes a text output command (decision 7).
-    ctx.gfx
-        .rec
-        .write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
+    ctx.rec.write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
     vm.flags |= anmvm::F_VISIBLE;
 }
 
@@ -306,13 +304,13 @@ impl Task<Ctx> for MusicRoom {
             .archive
             .read("music.jpg")
             .map_err(anyhow::Error::from)
-            .and_then(|b| ctx.gfx.rec.load_image("music.jpg", &b))
+            .and_then(|b| ctx.rec.load_image("music.jpg", &b))
         {
             Ok(t) => self.surface = Some(t),
             Err(e) => log::warn!("music.jpg: {e:#}"),
         }
         ctx.anm
-            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, "music00.anm")?;
+            .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "music00.anm")?;
         self.entries = parse_musiccmt(&ctx.archive.read("musiccmt.txt")?);
         self.heard = heard_flags(&ctx.game.score.plst.music);
         ctx.anm.set_script(&mut ctx.rng, &mut self.bg, ANM_SLOT, 0);
@@ -335,9 +333,9 @@ impl Task<Ctx> for MusicRoom {
             return;
         }
         if let Some(t) = self.surface.take() {
-            ctx.gfx.rec.free_texture(t);
+            ctx.rec.free_texture(t);
         }
-        ctx.anm.unload(&mut ctx.gfx.rec, ANM_SLOT);
+        ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
     }
 
     // MusicRoom_Calc 0x449399 (16 §5.3): state, sub-frame step, then the VMs. On exit Calc returns 0 at once.
@@ -371,18 +369,18 @@ impl Task<Ctx> for MusicRoom {
         if self.removed {
             return Ret::Remove;
         }
-        ctx.gfx.rec.set_viewport(FULLSCREEN);
+        ctx.rec.set_viewport(FULLSCREEN);
         if let Some(t) = self.surface {
-            ctx.gfx.rec.image(t, 0.0, 0.0);
+            ctx.rec.image(t, 0.0, 0.0);
         }
-        ctx.anm.draw(&mut ctx.gfx.rec, &mut self.bg);
+        ctx.anm.draw(&mut ctx.rec, &mut self.bg);
         let end = (self.top + ROWS).min(self.n());
         for i in self.top..end {
             let y = (18 * (i - self.top + 1) + 104 - 20) as f32;
             let vm = &mut self.rows[i as usize];
             let argb = vm_argb(vm);
             vm.pos = [93.0, y, 0.0];
-            ctx.anm.draw(&mut ctx.gfx.rec, vm);
+            ctx.anm.draw(&mut ctx.rec, vm);
             if i == self.cursor {
                 ctx.ascii.push(Text::new(93.0 - 60.0, y, CURSOR).argb(argb));
             }
@@ -390,7 +388,7 @@ impl Task<Ctx> for MusicRoom {
                 .push(Text::new(48.0, y, format!("{:2}.", i + 1)).argb(argb));
         }
         for vm in &mut self.comments {
-            ctx.anm.draw(&mut ctx.gfx.rec, vm);
+            ctx.anm.draw(&mut ctx.rec, vm);
         }
         ctx.ascii
             .push(Text::new(320.0, 32.0, "Now Playing").argb(0xFFFF_FFFF));
@@ -398,7 +396,7 @@ impl Task<Ctx> for MusicRoom {
         let (pos, color) = (self.title.pos, self.title.color);
         self.title.pos = [320.0, 52.0, 0.0];
         self.title.color = [255; 4];
-        ctx.anm.draw(&mut ctx.gfx.rec, &mut self.title);
+        ctx.anm.draw(&mut ctx.rec, &mut self.title);
         (self.title.pos, self.title.color) = (pos, color);
         Ret::Next
     }

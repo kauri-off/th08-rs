@@ -97,8 +97,8 @@ Per file: `gfx: &mut Gfx` → `rec: &mut Recorder`, `gfx.x(` → `rec.x(`, calle
 
 ## 4. Left as TODO(step 8)
 
-- `Ctx.gfx`: the recorder still lives inside `Gfx` (`gfx.rs` field `rec`).
-- `gfx::TextureId` alias; `Mat4` / `Camera` location.
+- ~~`Ctx.gfx`: the recorder still lives inside `Gfx`~~ (done IMPL167, §6).
+- ~~`gfx::TextureId` alias; `Mat4` / `Camera` location~~ (done IMPL167; camera trig stays std, `TODO(step 10)`).
 - AnmManager's `last_blend` / `bound_tex` / `last_tex_matrix` caches stay in AnmManager (they change emitted
   commands, so they are draw-phase state, not renderer caches).
 - Text raster: hud / gui / menu / menulist / musicroom / ending rasterise on the CPU and `write_texture`; hud does it
@@ -112,3 +112,22 @@ menu, menulist, musicroom, ending, hud, gui). Left: game.rs/anmdebug; `Ctx.gfx.r
 `BulletManager::draw` still takes `&mut Gfx` for `fx.draw_over_bullets`; ascii public fns take
 `impl AsMut<Recorder>` (callers in app.rs/game.rs still pass Gfx); result.rs test helper `shot` reads back via
 `Gfx::capture`; text raster (`TODO(step 8 text)`: hud in calc, gui, menu, menulist, musicroom, ending).
+
+## 6. Status after IMPL167 (step 8c)
+
+- `Ctx.rec: Recorder` and `Ctx.renderer: Box<dyn drawlist::Renderer>`; `Gfx` is no longer a `Ctx` field.
+  `Renderer` = `submit(&mut Recorder)` (execute + drain, a recorded `DrawCmd::Present` presents), `enable_log`,
+  `take_log(&mut Recorder)`, `as_any_mut` (app / tools downcast to `Gfx`). `Ctx::load*` take `impl Renderer`.
+- Sync points in core: `Ctx::present` (frame end in `run_frame` and the app loop; `clear_present_twice` in calc during
+  loading), `log_frame` (`take_log`). Captures are `ResCmd`s recorded after the Present (`apply_pending_captures`)
+  and run at the next submit, as before.
+- Still on `Gfx` directly: app.rs (resize, attach / detach, `TH08_SHOT` capture via `gfx_rec`), launcher /
+  launchershot (egui), drawreport (own `Recorder`; `capture` / `flush`), bins constructing `Gfx::headless()`, and
+  test modules (headless `Gfx`; result.rs `shot` readback).
+- Removed: the `Gfx` forwarding facade, `impl AsMut<Recorder>` (all draw APIs take `&mut Recorder`),
+  `gfx::TextureId`. `LogRec` moved to drawlist.rs; `Mat4` / `Camera` moved unchanged to camera.rs (std `sin_cos` /
+  `tan` differ from `fmath` for |a| > 2 in an exhaustive f32 check, so fmath waits for step 10).
+- Check: `drawlist::tests::core_has_no_renderer_dependency` (no `crate::gfx` / `wgpu::` / `winit::` / `egui` outside
+  app, gfx, launcher, drawreport, platform, main; test modules skipped).
+- Left: text raster (`TODO(step 8 text)`), drawlog writer in `Ctx` (`TODO(step 8)`), device-loss rebuild.
+

@@ -295,7 +295,7 @@ pub struct AnmVm {
     // +0x128, added to uv_off every frame, not scaled by game speed (05 §6 step 4).
     pub uv_scroll: [f32; 2],
     // +0x170 cached mode-5 model matrix (05 §9).
-    pub world_matrix: crate::gfx::Mat4,
+    pub world_matrix: crate::camera::Mat4,
     // +0x1F0 / +0x1F4 D3DCOLOR bytes B, G, R, A.
     pub color: [u8; 4],
     pub color2: [u8; 4],
@@ -355,7 +355,7 @@ impl Default for AnmVm {
             ivars: [0; 6],
             fvars: [0.0; 4],
             uv_scroll: [0.0; 2],
-            world_matrix: crate::gfx::Mat4::IDENTITY,
+            world_matrix: crate::camera::Mat4::IDENTITY,
             color: [0; 4],
             color2: [0; 4],
             flags: 0,

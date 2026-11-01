@@ -3,10 +3,9 @@
 use crate::anm::{self, Script};
 use crate::anmvm::{self, AnmVm};
 use crate::archive::Archive;
-// Draws and texture uploads go to the core `Recorder` (REWRITE_PLAN step 8); callers pass a `Recorder` or a `Gfx`.
+// Draws and texture uploads go to the core `Recorder` (REWRITE_PLAN step 8).
+use crate::camera::{Camera, Mat4};
 use crate::drawlist::{self, Blend, Recorder, TexId, Vertex};
-// TODO(step 8): camera math moves out of the renderer module with the crate cut (needs fmath, 05 §10).
-use crate::gfx::{Camera, Mat4};
 use anyhow::{Result, ensure};
 
 // ANM file slots 0..24; index ≥ 25 is an error (03 §2.4).
@@ -97,12 +96,11 @@ impl AnmManager {
     // Anm_Preload 0x465860 + Anm_LoadEntryTexture 0x465CC0 (03 §2); the port uploads all entries at once.
     pub fn load(
         &mut self,
-        out: &mut impl AsMut<Recorder>,
+        rec: &mut Recorder,
         archive: &Archive,
         slot: usize,
         name: &str,
     ) -> Result<()> {
-        let rec = out.as_mut();
         ensure!(slot < SLOTS, "anm slot {slot} out of range");
         let chunks = anm::parse(&archive.read(name)?)?;
         self.unload(rec, slot);
@@ -157,8 +155,7 @@ impl AnmManager {
         });
     }
 
-    pub fn unload(&mut self, out: &mut impl AsMut<Recorder>, slot: usize) {
-        let rec = out.as_mut();
+    pub fn unload(&mut self, rec: &mut Recorder, slot: usize) {
         if let Some(a) = self.slots.get_mut(slot).and_then(Option::take) {
             a.textures.into_iter().for_each(|t| rec.free_texture(t));
         }
@@ -246,14 +243,12 @@ impl AnmManager {
         vm.run(self, rng);
     }
 
-    pub fn draw(&mut self, out: &mut impl AsMut<Recorder>, vm: &mut AnmVm) {
-        let rec = out.as_mut();
+    pub fn draw(&mut self, rec: &mut Recorder, vm: &mut AnmVm) {
         self.draw_mode(rec, vm, vm.draw_mode);
     }
 
     // 2D draws carry the VM's z as the vertex depth.
-    pub fn draw_mode(&mut self, out: &mut impl AsMut<Recorder>, vm: &mut AnmVm, mode: i32) {
-        let rec = out.as_mut();
+    pub fn draw_mode(&mut self, rec: &mut Recorder, vm: &mut AnmVm, mode: i32) {
         let z = vm.pos[2];
         self.draw_mode_z(rec, vm, mode, z);
     }
@@ -339,12 +334,11 @@ impl AnmManager {
     // offset is added to the translation.
     pub fn draw_3d_world(
         &mut self,
-        out: &mut impl AsMut<Recorder>,
+        rec: &mut Recorder,
         vm: &mut AnmVm,
         cam: &Camera,
         fog: Option<Fog>,
     ) {
-        let rec = out.as_mut();
         use anmvm::*;
         if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
             || vm.color[A] == 0
@@ -427,11 +421,10 @@ impl AnmManager {
     // texture, blend and colour, emitted as consecutive 4-vertex strips.
     pub fn draw_ring_strip(
         &mut self,
-        out: &mut impl AsMut<Recorder>,
+        rec: &mut Recorder,
         vm: &AnmVm,
         v: &[([f32; 2], [f32; 2], u8)],
     ) {
-        let rec = out.as_mut();
         use anmvm::*;
         let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
             return;
@@ -463,14 +456,7 @@ impl AnmManager {
 
     // `z` is the vertex depth (projected depth for stage billboards, 0 otherwise).
     // AnmManager_DrawByMode 0x45E960 (05 §9); skip unless visible, enabled and primary alpha ≠ 0 (05 §12.2).
-    pub fn draw_mode_z(
-        &mut self,
-        out: &mut impl AsMut<Recorder>,
-        vm: &mut AnmVm,
-        mode: i32,
-        z: f32,
-    ) {
-        let rec = out.as_mut();
+    pub fn draw_mode_z(&mut self, rec: &mut Recorder, vm: &mut AnmVm, mode: i32, z: f32) {
         use anmvm::*;
         let alpha = vm.color[A];
         if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
@@ -554,14 +540,7 @@ impl AnmManager {
 
     // DrawBillboard 0x463CF0 (05 §9 mode 4, 13 §2.6c) from an already projected point `s` and the 3D length `len` of
     // project(pos + right) − s; list B moves `s` in screen space (callback 0x428310) between the two.
-    pub fn draw_billboard(
-        &mut self,
-        out: &mut impl AsMut<Recorder>,
-        vm: &mut AnmVm,
-        s: [f32; 3],
-        len: f32,
-    ) {
-        let rec = out.as_mut();
+    pub fn draw_billboard(&mut self, rec: &mut Recorder, vm: &mut AnmVm, s: [f32; 3], len: f32) {
         use anmvm::*;
         if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
             || vm.color[A] == 0

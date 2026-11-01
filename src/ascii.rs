@@ -2,9 +2,9 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::drawlist::Recorder;
+use crate::drawlist::{Blend, FULLSCREEN};
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
-use crate::gfx::{Blend, FULLSCREEN};
 use crate::input::{self, Input};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
@@ -142,7 +142,7 @@ impl Queue {
             .filter(|t| pass.is_none_or(|h| t.high == h))
         {
             let vp = if t.clip {
-                crate::gfx::PLAYFIELD
+                crate::drawlist::PLAYFIELD
             } else {
                 FULLSCREEN
             };
@@ -174,7 +174,7 @@ impl Queue {
                         continue;
                     }
                     let v = |x: f32, y: f32, u: f32, vv: f32| {
-                        crate::gfx::Vertex::screen(
+                        crate::drawlist::Vertex::screen(
                             x.round_ties_even(),
                             y.round_ties_even(),
                             0.0,
@@ -501,7 +501,7 @@ fn popups_draw(
     rec: &mut Recorder,
     pl: [f32; 3],
 ) {
-    rec.set_viewport(crate::gfx::PLAYFIELD);
+    rec.set_viewport(crate::drawlist::PLAYFIELD);
     let mut small = popup_vm(anm, 0, 0.1);
     let mut large = popup_vm(anm, 0x88, 0.0);
     {
@@ -872,7 +872,7 @@ fn gauge_draw(
 #[allow(clippy::too_many_arguments)]
 pub fn draw_percent(
     anm: &mut crate::anmmgr::AnmManager,
-    rec: &mut impl AsMut<Recorder>,
+    rec: &mut Recorder,
     vm: &mut AnmVm,
     value: i32,
     cx: f32,
@@ -880,7 +880,6 @@ pub fn draw_percent(
     z: f32,
     colour: [u8; 4],
 ) {
-    let rec = rec.as_mut();
     vm.color = colour;
     let a = value.abs();
     let n = 4
@@ -1206,8 +1205,7 @@ fn start_capture(anm: &mut crate::anmmgr::AnmManager, rng: &mut crate::rng::Rng,
 // AnmManager_QueueCapture 0x406A30 (12 §3): playfield (32, 16, 384, 448) into slot 3 entry 0 at the VM's sprite rect
 // (u0, v0 in texture pixels, width, height, truncated). The port copies at once from the last presented frame, so no
 // request is ever pending and the "close at once" failure path cannot happen.
-pub fn apply_capture(anm: &crate::anmmgr::AnmManager, rec: &mut impl AsMut<Recorder>, vm: &AnmVm) {
-    let rec = rec.as_mut();
+pub fn apply_capture(anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, vm: &AnmVm) {
     if let Some(sp) = anm.sprite(CAPTURE_SLOT, vm.sprite_index.max(0) as usize) {
         capture_into(rec, sp);
     }
@@ -1244,8 +1242,7 @@ fn stage_transition(anm: &mut crate::anmmgr::AnmManager, rng: &mut crate::rng::R
 }
 
 // AnmManager_ApplyPendingCaptures 0x443B60 (12 §3): right after Present, the playfield (32, 16, 384, 448) is copied.
-pub fn apply_pending_captures(anm: &mut crate::anmmgr::AnmManager, rec: &mut impl AsMut<Recorder>) {
-    let rec = rec.as_mut();
+pub fn apply_pending_captures(anm: &mut crate::anmmgr::AnmManager, rec: &mut Recorder) {
     if let Some(sp) = anm.capture_req.take() {
         capture_into(rec, &sp);
     }
@@ -1455,9 +1452,9 @@ impl Task<Ctx> for AsciiManager {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             ctx.anm
-                .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, "ascii.anm")?;
+                .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "ascii.anm")?;
             ctx.anm
-                .load(&mut ctx.gfx.rec, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
+                .load(&mut ctx.rec, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
             let l = crate::player::GaugeLimits::default();
             ctx.overlays
                 .gauge_setup(&mut ctx.anm, &mut ctx.rng, l.min, l.max);
@@ -1516,21 +1513,21 @@ impl Task<Ctx> for AsciiManager {
         // Pause draw 0x404750 (12 §3): playfield viewport; the capture VM (temporary copy, z-write off) while
         // the state ≠ 0; then menu VMs 0..9, all Draw2DSnap.
         if high && ctx.game.paused != 0 {
-            ctx.gfx.rec.set_viewport(crate::gfx::PLAYFIELD);
+            ctx.rec.set_viewport(crate::drawlist::PLAYFIELD);
             if self.pause.state != 0 && self.pause.cap_vm.script.is_some() {
                 let mut v = self.pause.cap_vm.clone();
                 v.flags |= anmvm::F_ZWRITE_OFF;
-                ctx.anm.draw_mode(&mut ctx.gfx.rec, &mut v, 0);
+                ctx.anm.draw_mode(&mut ctx.rec, &mut v, 0);
             }
             // The selected item's (−4, −4) goes to the undrawn pos_offset: no visible shift (12 §3).
             for vm in &mut self.pause.vms {
-                ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 0);
+                ctx.anm.draw_mode(&mut ctx.rec, vm, 0);
             }
         }
         // ContinueMenu_Draw 0x4052B0 (12 §4): playfield viewport, capture VM, then VMs 0..3 (clock VM 3 only in a
         // normal game below Extra), all Draw2DSnap. The port's menu is past state 0 after its first calc.
         if high && ctx.game.game_over != 0 && self.cont.open {
-            ctx.gfx.rec.set_viewport(crate::gfx::PLAYFIELD);
+            ctx.rec.set_viewport(crate::drawlist::PLAYFIELD);
             let g = &ctx.game;
             let clock = g.difficulty < 4 && !g.spell_practice();
             let c = &mut self.cont;
@@ -1539,7 +1536,7 @@ impl Task<Ctx> for AsciiManager {
                 .chain(c.vms.iter_mut())
                 .chain(clock.then_some(&mut c.clock_vm))
             {
-                ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 0);
+                ctx.anm.draw_mode(&mut ctx.rec, vm, 0);
             }
         }
         if !high {
@@ -1547,7 +1544,7 @@ impl Task<Ctx> for AsciiManager {
                 &mut ctx.overlays,
                 &mut ctx.anm,
                 &mut ctx.rng,
-                &mut ctx.gfx.rec,
+                &mut ctx.rec,
                 ctx.effects.player,
             );
             // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
@@ -1555,15 +1552,15 @@ impl Task<Ctx> for AsciiManager {
             gauge_draw(
                 &mut ctx.overlays.gauge,
                 &mut ctx.anm,
-                &mut ctx.gfx.rec,
+                &mut ctx.rec,
                 &ctx.game.stats,
             );
         }
         let mut q = std::mem::take(&mut ctx.ascii);
-        q.draw(&ctx.anm, &mut ctx.gfx.rec, high);
+        q.draw(&ctx.anm, &mut ctx.rec, high);
         ctx.ascii = q;
         if high {
-            markers_draw(&mut ctx.overlays.gauge, &mut ctx.anm, &mut ctx.gfx.rec);
+            markers_draw(&mut ctx.overlays.gauge, &mut ctx.anm, &mut ctx.rec);
         }
         Ret::Next
     }

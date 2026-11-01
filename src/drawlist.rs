@@ -1,5 +1,5 @@
 //! Core-side draw output: `DrawCmd` / `ResCmd` lists, core-owned `TexId`s and the device-state mirror (ARCH_A §2.2,
-//! REWRITE_PLAN step 8; graphics 12 §1, §3). No wgpu type here; `gfx::Gfx` executes the lists.
+//! REWRITE_PLAN step 8; graphics 12 §1, §3). No wgpu type; the app's `Renderer` runs them.
 
 use std::sync::Arc;
 
@@ -78,6 +78,40 @@ pub struct LogFog {
     pub color: [u8; 3],
     pub start: f32,
     pub end: f32,
+}
+
+// One recorded draw call (TH08_DRAWLOG); vertices in v0 TL, v1 TR, v2 BL, v3 BR order.
+#[derive(Clone, Debug)]
+pub enum LogRec {
+    Quad {
+        tex: Option<LogTex>,
+        id: TexId,
+        textured: bool,
+        blend: Blend,
+        test: bool,
+        write: bool,
+        vp: Rect,
+        fog: Option<LogFog>,
+        v: [Vertex; 4],
+    },
+    // `arg`: the D3DCOLOR argument of a z-only clear, ignored by D3D but logged (11 §3.1, 06 §3 step 5).
+    Clear {
+        vp: Rect,
+        color: Option<[u8; 4]>,
+        arg: u32,
+    },
+    Copy {
+        src: String,
+        dst: String,
+        from: [u32; 2],
+        size: [u32; 2],
+        to: [u32; 2],
+    },
+    Fan {
+        blend: Blend,
+        vp: Rect,
+        v: Vec<Vertex>,
+    },
 }
 
 // Core-owned texture handle (port); slot 0 is the 1×1 white texture, freed slots are reused last-freed first.
@@ -177,7 +211,7 @@ impl Default for DeviceState {
     }
 }
 
-// One device draw / state call, 1:1 with the `Gfx` method of the same name (05 §9, §12; 06 §10; 12 §1).
+// One device draw / state call, 1:1 with the `Recorder` method of the same name (05 §9, §12; 06 §10; 12 §1).
 #[derive(Clone, Debug)]
 pub enum DrawCmd {
     SetViewport(Rect),
@@ -301,7 +335,7 @@ pub enum ResCmd {
     },
 }
 
-// Per-frame command recorder with `Gfx`'s method names. `res` entries carry the `draws` length at record time, so
+// Per-frame command recorder (the former `Gfx` draw API). `res` entries carry the `draws` length at record time, so
 // the executor replays both lists in exact call order (log order of K records; GPU order is unchanged either way).
 #[derive(Debug)]
 pub struct Recorder {
@@ -314,12 +348,6 @@ pub struct Recorder {
 impl Default for Recorder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl AsMut<Recorder> for Recorder {
-    fn as_mut(&mut self) -> &mut Recorder {
-        self
     }
 }
 
@@ -654,9 +682,62 @@ impl Recorder {
     }
 }
 
+// Core's only access to the renderer (ARCH_A §2.2; like `host::Host`), used at the sync points: Present (frame end,
+// Device_ClearPresentTwice in calc), the draw-log sample. Implemented by `gfx::Gfx` for the app, tools and tests.
+pub trait Renderer {
+    // Executes everything recorded so far in call order (a recorded `DrawCmd::Present` presents) and drains `rec`.
+    fn submit(&mut self, rec: &mut Recorder);
+    // Debug draw log (TH08_DRAWLOG): the executor records `LogRec`s from here on.
+    fn enable_log(&mut self);
+    // Submits `rec`, then hands over the records executed since the last call.
+    fn take_log(&mut self, rec: &mut Recorder) -> Vec<LogRec>;
+    // App / tools: back to the concrete renderer (resize, surface attach, screenshot readback).
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // REWRITE_PLAN step 8c: core reaches the renderer only through `Renderer`. App / renderer / platform modules may
+    // name `gfx`, wgpu and winit; test modules are skipped (they build a headless `Gfx`).
+    const RENDERER_SIDE: &[&str] = &["app", "gfx", "launcher", "drawreport", "platform", "main"];
+
+    #[test]
+    fn core_has_no_renderer_dependency() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+        let mut bad = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap() {
+            let path = e.unwrap().path();
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            if path.extension().is_none_or(|x| x != "rs") || RENDERER_SIDE.contains(&name.as_str())
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let lines: Vec<&str> = text.lines().collect();
+            let end = (1..lines.len())
+                .find(|&i| {
+                    lines[i - 1].starts_with("#[cfg(")
+                        && lines[i - 1].contains("test")
+                        && lines[i].starts_with("mod ")
+                })
+                .unwrap_or(lines.len());
+            for (i, l) in lines[..end].iter().enumerate() {
+                if ["crate::gfx", "wgpu::", "winit::", "egui"]
+                    .iter()
+                    .any(|p| l.contains(p))
+                {
+                    bad.push(format!("{name}.rs:{}: {}", i + 1, l.trim()));
+                }
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "renderer paths in core modules:\n{}",
+            bad.join("\n")
+        );
+    }
 
     // Same id order as the device table: white = 0, then push, freed slots reused last-freed first.
     #[test]

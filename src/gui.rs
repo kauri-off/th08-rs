@@ -106,7 +106,7 @@ impl Gui {
     // Gui_LoadFaces 0x414590 part (12 §5.8): face_cdbg, VMs 0–7 hidden, the load-time scripts of VMs 6 and 10–13.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
         ctx.anm
-            .load(&mut ctx.gfx.rec, &ctx.archive, CDBG_SLOT, "face_cdbg.anm")?;
+            .load(&mut ctx.rec, &ctx.archive, CDBG_SLOT, "face_cdbg.anm")?;
         let anm = &mut ctx.anm;
         for vm in &mut self.vms[..8] {
             *vm = AnmVm::default();
@@ -255,11 +255,11 @@ impl Gui {
                 continue;
             };
             // 10 §6: W = texture-row width (512), the whole 15-row strip at (0, v0) is replaced.
-            let t = ctx.gfx.rec.texture(sp.tex);
+            let t = ctx.rec.texture(sp.tex);
             let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
             // TODO(step 8 text): CPU raster + Write; decision 7 moves text to an output command.
             let rgba = self.raster.render_at(&s, colour, w as usize, 15, x);
-            ctx.gfx.rec.write_texture(sp.tex, 0, ty, w, 15, &rgba);
+            ctx.rec.write_texture(sp.tex, 0, ty, w, 15, &rgba);
         }
     }
 
@@ -346,7 +346,7 @@ impl Task<Ctx> for Gui {
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.gfx.rec, CDBG_SLOT);
+            ctx.anm.unload(&mut ctx.rec, CDBG_SLOT);
         }
     }
 
@@ -422,7 +422,7 @@ impl Task<Ctx> for Gui {
         // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
         self.read_bonus();
         self.flush_texts(ctx);
-        let (anm, rec) = (&mut ctx.anm, &mut ctx.gfx.rec);
+        let (anm, rec) = (&mut ctx.anm, &mut ctx.rec);
         rec.set_viewport(PLAYFIELD);
         // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4 (12 §5.8, RE-Q68).
         let v = &mut self.vms;

@@ -173,7 +173,7 @@ impl InfoNotices {
             match ctx.info.cur {
                 Some((t, f)) if f >= INFO_FRAMES => {
                     // After the loop, surface 0 is released.
-                    ctx.gfx.rec.free_texture(t);
+                    ctx.rec.free_texture(t);
                     ctx.info.cur = None;
                 }
                 Some(_) => break,
@@ -185,7 +185,7 @@ impl InfoNotices {
                         .archive
                         .read(file)
                         .map_err(anyhow::Error::from)
-                        .and_then(|b| ctx.gfx.rec.load_image(file, &b))
+                        .and_then(|b| ctx.rec.load_image(file, &b))
                     {
                         Ok(t) => ctx.info.cur = Some((t, 0)),
                         Err(e) => log::warn!("{file}: {e:#}"),
@@ -215,10 +215,10 @@ impl InfoNotices {
         let Some((tex, _)) = ctx.info.cur else {
             return;
         };
-        ctx.gfx.rec.set_viewport(FULLSCREEN);
-        ctx.gfx.rec.image(tex, 0.0, 0.0);
+        ctx.rec.set_viewport(FULLSCREEN);
+        ctx.rec.image(tex, 0.0, 0.0);
         if let Some(a) = info_fade_alpha(ctx.info.drawn) {
-            ctx.gfx.rec.rect(0.0, 0.0, 639.0, 479.0, [0, 0, 0, a]);
+            ctx.rec.rect(0.0, 0.0, 639.0, 479.0, [0, 0, 0, a]);
         }
     }
 }
@@ -431,13 +431,13 @@ impl MainMenu {
             return;
         }
         if let Some((t, _)) = self.surface.take() {
-            ctx.gfx.rec.free_texture(t);
+            ctx.rec.free_texture(t);
         }
         match ctx
             .archive
             .read(name)
             .map_err(anyhow::Error::from)
-            .and_then(|b| ctx.gfx.rec.load_image(name, &b))
+            .and_then(|b| ctx.rec.load_image(name, &b))
         {
             Ok(t) => self.surface = Some((t, name)),
             Err(e) => log::warn!("{name}: {e:#}"),
@@ -458,7 +458,7 @@ impl MainMenu {
         let Some(sp) = ctx.anm.sprite(0, 21 + i).copied() else {
             return;
         };
-        let t = ctx.gfx.rec.texture(sp.tex);
+        let t = ctx.rec.texture(sp.tex);
         let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
         let size = 15;
         let rgba = self.raster.render_outline(
@@ -470,9 +470,7 @@ impl MainMenu {
             0x300000,
         );
         // TODO(step 8 text): CPU raster upload; becomes a text output command (decision 7).
-        ctx.gfx
-            .rec
-            .write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
+        ctx.rec.write_texture(sp.tex, 0, ty, w, size as u32, &rgba);
     }
 
     // Change test of the top menu, option and key config (12 §2.2): cursor ≠ +0x08 → +0xC2BC := description VM
@@ -1238,9 +1236,9 @@ impl Task<Ctx> for MainMenu {
             ctx.bgm.play_bgm("bgm/th08_01.mid");
         }
         ctx.anm
-            .load(&mut ctx.gfx.rec, &ctx.archive, ANM_SLOT, "title01.anm")?;
+            .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "title01.anm")?;
         ctx.anm.load(
-            &mut ctx.gfx.rec,
+            &mut ctx.rec,
             &ctx.archive,
             crate::menulist::RT_SLOT,
             "resulttext.anm",
@@ -1329,10 +1327,10 @@ impl Task<Ctx> for MainMenu {
             return;
         }
         if let Some((t, _)) = self.surface.take() {
-            ctx.gfx.rec.free_texture(t);
+            ctx.rec.free_texture(t);
         }
-        ctx.anm.unload(&mut ctx.gfx.rec, ANM_SLOT);
-        ctx.anm.unload(&mut ctx.gfx.rec, crate::menulist::RT_SLOT);
+        ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
+        ctx.anm.unload(&mut ctx.rec, crate::menulist::RT_SLOT);
         // The draw node can outlive a calc node removed by return 0 (00 §3.1); it then draws nothing.
         self.vms.clear();
         self.desc_cur = None;
@@ -1409,19 +1407,19 @@ impl Task<Ctx> for MainMenu {
         if ctx.game.menu_loading > 0 || self.vms.is_empty() {
             return Ret::Next;
         }
-        ctx.gfx.rec.set_viewport(FULLSCREEN);
+        ctx.rec.set_viewport(FULLSCREEN);
         if tag == SURFACE_PRIO as u8 {
             if let Some((t, _)) = self.surface {
-                ctx.gfx.rec.image(t, 0.0, 0.0);
+                ctx.rec.image(t, 0.0, 0.0);
             }
             return Ret::Next;
         }
         for vm in &mut self.vms {
-            ctx.anm.draw(&mut ctx.gfx.rec, vm);
+            ctx.anm.draw(&mut ctx.rec, vm);
         }
         // The current description VM (text.anm script 9 at (320, 448)) on every screen while +0xC2BC ≠ 0 (12 §2.2).
         if let Some(i) = self.desc_cur {
-            ctx.anm.draw(&mut ctx.gfx.rec, &mut self.desc[i]);
+            ctx.anm.draw(&mut ctx.rec, &mut self.desc[i]);
         }
         match self.screen {
             PRACTICE_STAGE => self.practice_stage_draw(ctx),
@@ -1445,7 +1443,7 @@ impl Task<Ctx> for MainMenu {
             vm.set_sprite(&ctx.anm, spr);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
             vm.pos = [400.0, 170.0, 0.0];
-            ctx.anm.draw_mode(&mut ctx.gfx.rec, vm, 0);
+            ctx.anm.draw_mode(&mut ctx.rec, vm, 0);
         }
         Ret::Next
     }
