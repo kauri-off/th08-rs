@@ -285,7 +285,7 @@ impl Ending {
                 b'R' => self.reset_scripts(),
                 b'M' => {
                     let n = self.script.int_arg();
-                    ctx.audio.fade_bgm(n as f32, ctx.anm.speed);
+                    ctx.bgm.fade_bgm(n as f32, ctx.anm.speed);
                 }
                 b'V' => {
                     let a = self.script.int_arg();
@@ -323,7 +323,7 @@ impl Ending {
                 b'm' => {
                     let name = self.script.str_arg();
                     // Music_Play(0, file) + Music_PlaySlot(0, 0), which marks music flag 0 heard.
-                    ctx.audio.play_bgm(&name);
+                    ctx.bgm.play_bgm(&name);
                     ctx.game.score.plst.music[0] = 1;
                 }
                 b'r' => {

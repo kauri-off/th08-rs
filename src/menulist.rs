@@ -524,7 +524,7 @@ impl MainMenu {
             g.stage = self.cursor as usize;
             g.flags = g.flags & !F_REPLAY | F_PRACTICE;
             g.fresh_start = true;
-            ctx.audio.stop_bgm();
+            ctx.bgm.stop_bgm();
             g.request(gamemgr::SCENE_GAME);
             self.remove = true;
         } else if ctx.input.pressed(CANCEL) {
@@ -1082,7 +1082,7 @@ impl MainMenu {
             // Other cards keep g_StageIdx = the row set by the screen-16 confirm (16 §6.1).
             g.stage = st.unwrap_or(self.lists.sp_row as usize);
             g.fresh_start = true;
-            ctx.audio.stop_bgm();
+            ctx.bgm.stop_bgm();
             g.request(gamemgr::SCENE_GAME);
             self.remove = true;
         } else if inp.pressed(CANCEL) {
@@ -1345,7 +1345,7 @@ impl MainMenu {
                     let r = self.replays[i].1.clone();
                     let st = Some(self.lists.rpy_stage);
                     if crate::replay::start_playback(&mut ctx.game, r, st, None) {
-                        ctx.audio.stop_bgm();
+                        ctx.bgm.stop_bgm();
                     }
                     // Return 0: nothing of the menu is drawn in the confirm frame (15 §3.8 Start).
                     self.remove = true;

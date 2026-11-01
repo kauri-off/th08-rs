@@ -2,6 +2,7 @@
 //! of the original in the port (headless), writes DIR/trace.txt (+ DIR/draw.drawlog.xz), compares the trace with the
 //! recorded one and the draw log with sessions/<name>/draw_*.drawlog.xz (DIR/index.html). N = main-menu frame.
 //! `--port-drawlog` writes only the port's draw log (no reference compare), e.g. for port-vs-port checks.
+//! `--sound-log` writes DIR/sound.txt, the executed `SoundCmd` stream (MIDI synth treated as absent).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -17,13 +18,14 @@ fn main() -> anyhow::Result<()> {
         1usize,
         usize::MAX,
     );
-    let mut port_only = false;
+    let (mut port_only, mut sound_log) = (false, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--out" => out = it.next().map(PathBuf::from).unwrap_or(out),
             "--no-drawlog" => drawlog_on = false,
             "--port-drawlog" => port_only = true,
+            "--sound-log" => sound_log = true,
             "--from" => from = it.next().and_then(|v| v.parse().ok()).unwrap_or(1).max(1),
             "--to" => to = it.next().and_then(|v| v.parse().ok()).unwrap_or(to),
             _ => dir = Some(PathBuf::from(a)),
@@ -31,7 +33,7 @@ fn main() -> anyhow::Result<()> {
     }
     let dir = dir.ok_or_else(|| {
         anyhow::anyhow!(
-            "usage: session <session dir> [--out DIR] [--no-drawlog] [--port-drawlog] [--from N] [--to N]"
+            "usage: session <session dir> [--out DIR] [--no-drawlog] [--port-drawlog] [--sound-log] [--from N] [--to N]"
         )
     })?;
     let s = Session::load(&dir)?;
@@ -63,6 +65,10 @@ fn main() -> anyhow::Result<()> {
         th08::settings::get().host_io(),
     ))?;
     s.start(&mut ctx)?;
+    if sound_log {
+        ctx.bgm.midi_ready = false;
+        ctx.sound_log = Some(Vec::new());
+    }
 
     let boot = s.sched.boot_calc as i64;
     let range = (from as i64 - 1 + boot, (to.min(1 << 40) as i64) + boot - 1);
@@ -133,6 +139,9 @@ fn main() -> anyhow::Result<()> {
     drop(trace);
     if let Some(w) = xz.take() {
         th08::xz::finish(w)?;
+    }
+    if let Some(log) = &ctx.sound_log {
+        std::fs::write(out.join("sound.txt"), th08::sound::format_log(log))?;
     }
     eprintln!(
         "ran {} menu-relative rows in {:.1} s",

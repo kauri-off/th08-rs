@@ -198,7 +198,7 @@ impl MusicRoom {
         let Some(e) = self.entries.get(self.playing as usize) else {
             return;
         };
-        ctx.audio.play_bgm(&String::from_utf8_lossy(&e.file));
+        ctx.bgm.play_bgm(&String::from_utf8_lossy(&e.file));
         let g = &mut ctx.game;
         if matches!(g.cfg.music, 1 | 2) && g.flags & (gamemgr::F_REPLAY | gamemgr::F_DEMO) == 0 {
             g.score.plst.music[0] = 1;
@@ -283,7 +283,7 @@ impl MusicRoom {
             return true;
         }
         if mask_edge(&inp, SKIP) {
-            ctx.audio.fade_bgm(8.0, ctx.anm.speed);
+            ctx.bgm.fade_bgm(8.0, ctx.anm.speed);
         }
         if mask_edge(&inp, KEY_R) {
             self.play(ctx);

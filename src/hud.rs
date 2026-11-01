@@ -487,15 +487,15 @@ impl Hud {
             match ev {
                 Event::Plate(n) => set_boss_plate(&ctx.anm, &mut ctx.gfx, n),
                 Event::SpellBase(n) => self.stage.borrow_mut().spell_first = n,
-                Event::Bgm(n) if n < 0 => ctx.audio.stop_bgm(),
+                Event::Bgm(n) if n < 0 => ctx.bgm.stop_bgm(),
                 // Msg op 7 (10 §5.1): song-title card = stgNtxt script 3 with sprite n + 3, then preloaded BGM slot n.
                 Event::Bgm(n) => {
                     let vm = &mut self.title[3];
                     ctx.anm.set_script(&mut ctx.rng, vm, TXT_SLOT, 3);
                     vm.set_sprite(&ctx.anm, n + 3);
-                    ctx.audio.play_slot(n as usize);
+                    ctx.bgm.play_slot(n as usize);
                 }
-                Event::BgmFade => ctx.audio.fade_bgm(4.0, ctx.anm.speed),
+                Event::BgmFade => ctx.bgm.fade_bgm(4.0, ctx.anm.speed),
                 // Msg op 14 (10 §5.1, 13 §3): ScreenEffect type 4, 442 frames to white, draw prio 0x15.
                 // Full-repaint counter 0x17CE8CC := 442 (10 §5.1).
                 Event::Flash => {

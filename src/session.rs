@@ -698,6 +698,46 @@ mod tests {
         }
     }
 
+    // SoundCmd stream of selftest1 (IMPL157 `session --sound-log`; equal to the pre-SoundCmd `Audio` call stream).
+    #[test]
+    fn sound_log_selftest1() {
+        let Some(dir) = crate::settings::test_game_dir() else {
+            return;
+        };
+        let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
+            eprintln!("no GPU adapter; sound log skipped");
+            return;
+        };
+        let src = crate::assets::Source::native(dir.into());
+        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+            src,
+            gfx,
+            false,
+            crate::settings::get().core(),
+            crate::settings::get().host_io(),
+        ))
+        .unwrap();
+        let s = Session::load(&data_dir("selftest1")).unwrap();
+        s.start(&mut ctx).unwrap();
+        ctx.bgm.midi_ready = false;
+        ctx.sound_log = Some(Vec::new());
+        s.run(&mut ctx, usize::MAX, |_| true, None);
+        let got = crate::sound::format_log(ctx.sound_log.as_deref().unwrap());
+        let want = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/selftest1.sound.txt"),
+        )
+        .unwrap();
+        if let Some((k, (g, w))) = got
+            .lines()
+            .zip(want.lines())
+            .enumerate()
+            .find(|(_, (g, w))| g != w)
+        {
+            panic!("sound log line {}: port {g:?}, expected {w:?}", k + 1);
+        }
+        assert_eq!(got.lines().count(), want.lines().count());
+    }
+
     // Smoke test: the whole 124 705-frame noclip run (stages 1–6, ending) without panics or hangs (~12 s release).
     #[test]
     fn fullrun_smoke() {

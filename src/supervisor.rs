@@ -453,7 +453,7 @@ impl Task<Ctx> for Supervisor {
         ctx.anm.tint_off();
         ctx.anm.screen_offset = [0.0; 2];
         ctx.anm.reset_render_state();
-        ctx.audio.tick_fade();
+        ctx.bgm.tick_fade();
         if let Some(s) = &self.script {
             ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);
         } else {

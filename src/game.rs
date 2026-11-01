@@ -31,6 +31,10 @@ pub struct Ctx {
     pub ascii: crate::ascii::Queue,
     // Sound manager SE queue (13 §1.2), flushed by `sound_update`.
     pub sound: crate::sound::Queue,
+    // Sound manager BGM state + the frame's `SoundCmd` output (02 §4–§5, 13 §1.3), executed by `audio`.
+    pub bgm: crate::sound::Bgm,
+    // Test / tool: every executed `SoundCmd` with its calc frame (`session --sound-log`).
+    pub sound_log: Option<Vec<(u64, crate::sound::SoundCmd)>>,
     // Effect manager g_EffectMgr 0x4ECE60 (13 §2).
     pub effects: crate::effect::Effects,
     // Ascii manager popups, darkness mask, gauge readout and boss markers (13 §4, 12 §5.9–§5.10).
@@ -186,9 +190,11 @@ impl Ctx {
             .read(crate::scoredat::VER_LIST_NAME)
             .context("error : データのバージョンが違います")?;
         host.set_ver_list(ver);
-        let mut audio = Audio::new(source.clone(), &archive.read("thbgm.fmt")?);
+        let mut bgm = crate::sound::Bgm::new(&archive.read("thbgm.fmt")?);
+        let mut audio = Audio::new(source.clone());
         audio.load_se(&archive);
         audio.load_midi(&archive);
+        bgm.midi_ready = audio.midi_available();
         // Config_Load (15 §1.2): th08.cfg and the thbgm.dat header probe (02 §1), then the file is written back.
         // The port's own save first; else import the original's th08.cfg (read-only).
         let bgm_header = source.read_range("thbgm.dat", 0, 16).await.ok();
@@ -220,6 +226,8 @@ impl Ctx {
             game: Default::default(),
             ascii: Default::default(),
             sound: Default::default(),
+            bgm,
+            sound_log: None,
             effects: Default::default(),
             overlays: Default::default(),
             panel: Default::default(),
@@ -238,7 +246,8 @@ impl Ctx {
         };
         ctx.game.cfg = cfg;
         // Music mode cfg +0x1F and BGM volume +0x27 (02 §4) from the loaded config.
-        ctx.audio.set_volumes(&ctx.game.cfg);
+        ctx.bgm.set_volumes(&ctx.game.cfg);
+        ctx.flush_sound();
         if persist {
             ctx.drawlog = ctx
                 .core
@@ -303,8 +312,9 @@ impl Ctx {
     pub fn sound_update(&mut self) {
         let cfg = self.game.cfg;
         // The BGM command queue runs before the SE flush, also with "SE off" (13 §1.3).
-        self.audio.start_fade();
+        self.bgm.start_fade();
         if cfg.se_on == 0 || self.sound.is_empty() {
+            self.flush_sound();
             return;
         }
         let played = self.sound.drain();
@@ -316,7 +326,19 @@ impl Ctx {
                 crate::sound::TABLE[id as usize].1 as i32,
                 cfg.se_volume,
             );
-            self.audio.play_se(id as usize, pan, vol);
+            self.bgm.play_se(id as usize, pan, vol);
+        }
+        self.flush_sound();
+    }
+
+    // Port: the device executes the `SoundCmd`s queued so far, in order, at each Sound_Update and after the
+    // start-up / restart / exit calls; nothing is read back into logic.
+    pub fn flush_sound(&mut self) {
+        for c in self.bgm.out.drain(..) {
+            if let Some(log) = &mut self.sound_log {
+                log.push((self.frame, c.clone()));
+            }
+            self.audio.exec(c);
         }
     }
 
@@ -380,7 +402,8 @@ impl Ctx {
     // WinMain exit (15 §1.2).
     pub fn exit_save(&mut self) {
         // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
-        self.audio.midi_reset();
+        self.bgm.midi_reset();
+        self.flush_sound();
         self.game.save_score(&mut self.rng, true, &self.host);
         if self.game.persist {
             self.host.write("th08.cfg", &self.game.cfg.to_bytes());
@@ -396,10 +419,11 @@ impl Ctx {
         let score = self.game.save_score(&mut self.rng, true, &self.host);
         task::clear(self);
         self.sound_update();
-        self.audio.stop_bgm();
-        self.audio.release_bgm();
+        self.bgm.stop_bgm();
+        self.bgm.release_bgm();
         // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
-        self.audio.midi_reset();
+        self.bgm.midi_reset();
+        self.flush_sound();
         for slot in 0..crate::anmmgr::SLOTS {
             self.anm.unload(&mut self.gfx, slot);
         }

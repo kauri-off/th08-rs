@@ -839,13 +839,13 @@ impl GameManager {
         if !ctx.game.reload_same {
             let names = stage_t.borrow().std.bgm.clone();
             if ctx.game.spell_practice() {
-                ctx.audio
+                ctx.bgm
                     .load_bgm(0, spell_bgm(ctx.game.card).unwrap_or(&names[0]));
             } else {
-                ctx.audio.load_bgm(0, &names[0]);
+                ctx.bgm.load_bgm(0, &names[0]);
                 for (k, name) in names.iter().enumerate().take(3).skip(1) {
                     if !name.starts_with(' ') {
-                        ctx.audio.load_bgm(k, name);
+                        ctx.bgm.load_bgm(k, name);
                     }
                 }
             }
@@ -971,7 +971,7 @@ impl GameManager {
             st.set_power(0.0, rng);
             st.extends = 0;
             st.next_extend = 100;
-            ctx.audio.pause_bgm(false);
+            ctx.bgm.pause_bgm(false);
         }
         g.clock = p.stats.clock;
     }
@@ -1020,11 +1020,11 @@ impl Task<Ctx> for GameManager {
         ctx.game.stats = st;
         ctx.anm.speed = 1.0;
         if !ctx.game.reload_same {
-            ctx.audio.stop_bgm();
+            ctx.bgm.stop_bgm();
             // Mode 2: the init.mid reset right after Music_Stop (02 §5).
-            ctx.audio.midi_reset();
+            ctx.bgm.midi_reset();
         }
-        ctx.audio.pause_bgm(false);
+        ctx.bgm.pause_bgm(false);
         for t in std::mem::take(&mut self.tasks) {
             task::remove_task(ctx, &t);
         }
@@ -1122,7 +1122,7 @@ impl Task<Ctx> for GameManager {
         // Step 3: 0x17CEA54 := 0 (ends the prompt, 12 §1), deferred music start (gm+0x3DE28), Music_PlaySlot of slot 0 on 1.
         ctx.game.load_prompt = 0;
         if std::mem::take(&mut self.music_start) == 1 {
-            ctx.audio.play_slot(0);
+            ctx.bgm.play_slot(0);
         }
         let g = &mut ctx.game;
         // Step 4 pause: sfx 0x22, music paused, pauses + 1, checksum with the RNG saved and restored.
@@ -1137,7 +1137,7 @@ impl Task<Ctx> for GameManager {
             self.player.borrow_mut().stats.rec.pauses += 1;
             g.add_play_time();
             ctx.sound.play(crate::sound::PAUSE);
-            ctx.audio.pause_bgm(true);
+            ctx.bgm.pause_bgm(true);
             let s = ctx.rng.state;
             Stats::checksum(&mut ctx.rng);
             ctx.rng.state = s;
@@ -1163,7 +1163,7 @@ impl Task<Ctx> for GameManager {
                 g.request(SCENE_MENU);
             }
             if g.demo_frame == fade {
-                ctx.audio.fade_bgm(3.0, ctx.anm.speed);
+                ctx.bgm.fade_bgm(3.0, ctx.anm.speed);
                 crate::effect::screen_now(ctx, 2, end - fade, 0, 0, 0, 0x15);
             }
             let g = &mut ctx.game;

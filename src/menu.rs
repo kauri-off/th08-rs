@@ -628,7 +628,7 @@ impl MainMenu {
             match r {
                 Ok(r) => {
                     if crate::replay::start_playback(&mut ctx.game, r, None, Some(n)) {
-                        ctx.audio.stop_bgm();
+                        ctx.bgm.stop_bgm();
                         return;
                     }
                 }
@@ -693,7 +693,7 @@ impl MainMenu {
                 }
                 _ => {
                     // 12 §2.2: no music change in WAV mode; MIDI mode plays the init.mid reset (02 §5), no fade.
-                    ctx.audio.midi_reset();
+                    ctx.bgm.midi_reset();
                     self.interrupt_all(1);
                     self.quitting = Some(0);
                 }
@@ -898,7 +898,7 @@ impl MainMenu {
                     g.stage = if extra { 8 } else { 0 };
                     g.flags &= !F_REPLAY;
                     g.fresh_start = true;
-                    ctx.audio.stop_bgm();
+                    ctx.bgm.stop_bgm();
                     g.request(gamemgr::SCENE_GAME);
                     self.remove = true;
                 }
@@ -987,7 +987,7 @@ impl MainMenu {
             let old = *v;
             *v = volume_step(old, &inp);
             if *v != old {
-                ctx.audio.set_volumes(&ctx.game.cfg);
+                ctx.bgm.set_volumes(&ctx.game.cfg);
             }
         } else {
             let dir = if inp.pressed_or_repeat(LEFT) {
@@ -1012,15 +1012,15 @@ impl MainMenu {
                     // Item 2 (15 §1.3): `Music_Stop` in the old mode, Left from mode 2 also the init.mid reset, then
                     // `Music_Play(8, th08_01)` + `Music_PlaySlot(8, 0)` in the new mode (nothing in mode 0).
                     if item == 2 {
-                        ctx.audio.stop_bgm();
+                        ctx.bgm.stop_bgm();
                         if dir < 0 && old == 2 {
-                            ctx.audio.midi_reset();
+                            ctx.bgm.midi_reset();
                         }
                     }
-                    ctx.audio.set_volumes(&ctx.game.cfg);
+                    ctx.bgm.set_volumes(&ctx.game.cfg);
                     if item == 2 {
-                        ctx.audio.load_bgm(8, "bgm/th08_01.mid");
-                        ctx.audio.play_slot(8);
+                        ctx.bgm.load_bgm(8, "bgm/th08_01.mid");
+                        ctx.bgm.play_slot(8);
                         // Music_PlaySlot marks track 0 heard unless replay playback or demo; mode 0 marks nothing (02 §4).
                         let g = &mut ctx.game;
                         if matches!(g.cfg.music, 1 | 2)
@@ -1046,7 +1046,7 @@ impl MainMenu {
                 7 => {
                     ctx.sound.play(sound::OK);
                     ctx.game.cfg.reset();
-                    ctx.audio.set_volumes(&ctx.game.cfg);
+                    ctx.bgm.set_volumes(&ctx.game.cfg);
                 }
                 8 => {
                     // Key-config cursor 0 is set here, not by its entry block (15 §1.3).
@@ -1232,7 +1232,7 @@ impl Task<Ctx> for MainMenu {
         // 0x18B8A2C := 0 (13 §3).
         ctx.load_frames = 0;
         if title_music(&ctx.game) {
-            ctx.audio.play_bgm("bgm/th08_01.mid");
+            ctx.bgm.play_bgm("bgm/th08_01.mid");
         }
         ctx.anm
             .load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, "title01.anm")?;

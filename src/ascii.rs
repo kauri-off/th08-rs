@@ -996,7 +996,7 @@ impl PauseMenu {
         rng: &mut crate::rng::Rng,
         g: &mut Game,
         inp: &Input,
-        audio: &mut crate::audio::Audio,
+        bgm: &mut crate::sound::Bgm,
         sound: &mut crate::sound::Queue,
         host: &crate::scoredat::HostIo,
     ) {
@@ -1107,7 +1107,7 @@ impl PauseMenu {
             4 | 9 | 10 => {
                 if self.frame >= 20 {
                     match self.state {
-                        4 => audio.pause_bgm(false),
+                        4 => bgm.pause_bgm(false),
                         9 => {
                             // State 9: Result_Register(2) (save) and scene 1 (12 §3).
                             g.save_score(rng, true, host);
@@ -1120,11 +1120,11 @@ impl PauseMenu {
                                 // Music_Stop outside spell practice or for a card whose record flag is 1; else
                                 // "UnPause" and the music keeps playing (12 §3 state 10).
                                 if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
-                                    audio.stop_bgm();
+                                    bgm.stop_bgm();
                                 } else {
                                     // Command 7 "UnPause", then `Bgm_StartFadeIn(2.0)`: 120 frames from −10000.
-                                    audio.pause_bgm(false);
-                                    audio.start_fade_in(2.0);
+                                    bgm.pause_bgm(false);
+                                    bgm.start_fade_in(2.0);
                                 }
                                 stage_transition(ctx_anm, rng);
                                 g.request(gamemgr::SCENE_RELOAD)
@@ -1281,7 +1281,7 @@ impl ContinueMenu {
         rng: &mut crate::rng::Rng,
         g: &mut Game,
         inp: &Input,
-        audio: &mut crate::audio::Audio,
+        bgm: &mut crate::sound::Bgm,
         sound: &mut crate::sound::Queue,
         panel: &mut crate::hud::Panel,
     ) {
@@ -1311,9 +1311,9 @@ impl ContinueMenu {
             // Music on opening (12 §4): spell practice with a non-restarting card dips to −10 dB and keeps
             // playing; otherwise command 6 "Pause".
             if g.spell_practice() && !gamemgr::spell_bgm_restarts(g.card) {
-                audio.start_dip(1.0);
+                bgm.start_dip(1.0);
             } else {
-                audio.pause_bgm(true);
+                bgm.pause_bgm(true);
             }
             self.vms = (22..25)
                 .map(|s| {
@@ -1363,10 +1363,10 @@ impl ContinueMenu {
                         // `Bgm_StartFadeInFromDip(1.0)`; scene 11, Hud_StageTransition, game_over := 0 on both
                         // branches, play-time timestamp; return with no VM run and no frame += 1.
                         if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
-                            audio.stop_bgm();
+                            bgm.stop_bgm();
                         } else {
-                            audio.pause_bgm(false);
-                            audio.start_fade_in_from_dip(1.0);
+                            bgm.pause_bgm(false);
+                            bgm.start_fade_in_from_dip(1.0);
                         }
                         g.request(gamemgr::SCENE_RELOAD);
                         stage_transition(ctx_anm, rng);
@@ -1476,7 +1476,7 @@ impl Task<Ctx> for AsciiManager {
                 &mut ctx.rng,
                 &mut ctx.game,
                 &inp,
-                &mut ctx.audio,
+                &mut ctx.bgm,
                 &mut ctx.sound,
                 &ctx.host,
             );
@@ -1486,7 +1486,7 @@ impl Task<Ctx> for AsciiManager {
                 &mut ctx.rng,
                 &mut ctx.game,
                 &inp,
-                &mut ctx.audio,
+                &mut ctx.bgm,
                 &mut ctx.sound,
                 &mut ctx.panel,
             );
@@ -1590,8 +1590,7 @@ mod tests {
     fn continue_menu_colours_before_input() {
         let mut rng = crate::rng::Rng::default();
         let mut anm = crate::anmmgr::AnmManager::default();
-        let mut audio =
-            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        let mut bgm = crate::sound::Bgm::default();
         let mut g = Game::default();
         g.game_over = 1;
         let mut m = ContinueMenu::default();
@@ -1601,7 +1600,7 @@ mod tests {
                 &mut rng,
                 &mut g,
                 &Input::default(),
-                &mut audio,
+                &mut bgm,
                 &mut Default::default(),
                 &mut Default::default(),
             );
@@ -1613,7 +1612,7 @@ mod tests {
             &mut rng,
             &mut g,
             &press(input::UP),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
         );
@@ -1624,7 +1623,7 @@ mod tests {
             &mut rng,
             &mut g,
             &Input::default(),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
         );
@@ -1643,14 +1642,13 @@ mod tests {
         p.store_game_over(&mut g);
         assert!(g.game_over == 1 && !p.game_over);
         let mut m = ContinueMenu::default();
-        let mut audio =
-            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        let mut bgm = crate::sound::Bgm::default();
         m.update(
             &mut anm,
             &mut rng,
             &mut g,
             &Input::default(),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
         );
@@ -1669,14 +1667,13 @@ mod tests {
         g.game_over = 1;
         g.mark_play_time();
         let mut m = ContinueMenu::default();
-        let mut audio =
-            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        let mut bgm = crate::sound::Bgm::default();
         m.update(
             &mut anm,
             &mut rng,
             &mut g,
             &Input::default(),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
         );
@@ -1697,8 +1694,7 @@ mod tests {
     fn continue_menu_confirm_timing() {
         let mut rng = crate::rng::Rng::default();
         let mut anm = crate::anmmgr::AnmManager::default();
-        let mut audio =
-            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        let mut bgm = crate::sound::Bgm::default();
         let mut g = Game::default();
         g.difficulty = 4;
         g.game_over = 1;
@@ -1709,7 +1705,7 @@ mod tests {
                 &mut rng,
                 &mut g,
                 &Input::default(),
-                &mut audio,
+                &mut bgm,
                 &mut Default::default(),
                 &mut Default::default(),
             );
@@ -1719,7 +1715,7 @@ mod tests {
             &mut rng,
             &mut g,
             &press(input::UP),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
         );
@@ -1730,7 +1726,7 @@ mod tests {
             &mut rng,
             &mut g,
             &press(input::SHOT),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
         );
@@ -1747,7 +1743,7 @@ mod tests {
                 &mut rng,
                 &mut g,
                 &Input::default(),
-                &mut audio,
+                &mut bgm,
                 &mut Default::default(),
                 &mut Default::default(),
             );
@@ -1757,7 +1753,7 @@ mod tests {
             &mut rng,
             &mut g,
             &press(input::SHOT),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
         );
@@ -1767,7 +1763,7 @@ mod tests {
                 &mut rng,
                 &mut g,
                 &Input::default(),
-                &mut audio,
+                &mut bgm,
                 &mut Default::default(),
                 &mut Default::default(),
             );
@@ -1778,7 +1774,7 @@ mod tests {
             &mut rng,
             &mut g,
             &Input::default(),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
         );
@@ -1792,8 +1788,7 @@ mod tests {
     fn pause_menu_interrupts() {
         let mut rng = crate::rng::Rng::default();
         let mut anm = crate::anmmgr::AnmManager::default();
-        let mut audio =
-            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        let mut bgm = crate::sound::Bgm::default();
         let mut g = Game::default();
         g.flags |= gamemgr::F_REPLAY;
         g.paused = 1;
@@ -1809,7 +1804,7 @@ mod tests {
             &mut rng,
             &mut g,
             &Input::default(),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &Default::default(),
         );
@@ -1820,7 +1815,7 @@ mod tests {
                 &mut rng,
                 &mut g,
                 &Input::default(),
-                &mut audio,
+                &mut bgm,
                 &mut Default::default(),
                 &Default::default(),
             );
@@ -1830,7 +1825,7 @@ mod tests {
             &mut rng,
             &mut g,
             &press(input::SHOT),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &Default::default(),
         );
@@ -1846,7 +1841,7 @@ mod tests {
             &mut rng,
             &mut g,
             &Input::default(),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &Default::default(),
         );
@@ -1860,7 +1855,7 @@ mod tests {
             &mut rng,
             &mut g,
             &press(input::SHOT),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &Default::default(),
         );
@@ -1871,7 +1866,7 @@ mod tests {
             &mut rng,
             &mut g,
             &Input::default(),
-            &mut audio,
+            &mut bgm,
             &mut Default::default(),
             &Default::default(),
         );
