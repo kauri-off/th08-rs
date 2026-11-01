@@ -419,30 +419,18 @@ impl Player {
     }
 }
 
-// SoundFont lookup: the `soundfont` setting, then common system locations; the first readable .sf2 is used.
+// SoundFont lookup: the `soundfont` setting, then the entry point's search dirs (`PlatformDirs::soundfonts`); the
+// first readable .sf2 is used.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn find_soundfont(configured: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+pub fn find_soundfont(
+    configured: Option<&std::path::Path>,
+    dirs: &[std::path::PathBuf],
+) -> Option<std::path::PathBuf> {
     if let Some(p) = configured {
         return Some(p.to_path_buf());
     }
-    let mut dirs: Vec<std::path::PathBuf> = [
-        "/usr/share/soundfonts",
-        "/usr/share/sounds/sf2",
-        "/usr/share/sf2",
-        "/usr/local/share/soundfonts",
-        "/usr/local/share/sounds/sf2",
-        "/opt/homebrew/share/soundfonts",
-        "C:\\soundfonts",
-    ]
-    .iter()
-    .map(Into::into)
-    .collect();
-    if let Some(d) = directories::BaseDirs::new() {
-        dirs.push(d.data_dir().join("soundfonts"));
-        dirs.push(d.home_dir().join("Library/Audio/Sounds/Banks"));
-    }
     const PREFERRED: [&str; 3] = ["default.sf2", "FluidR3_GM.sf2", "GeneralUser.sf2"];
-    for d in &dirs {
+    for d in dirs {
         if let Some(p) = PREFERRED.iter().map(|f| d.join(f)).find(|p| p.is_file()) {
             return Some(p);
         }

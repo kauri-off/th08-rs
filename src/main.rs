@@ -21,7 +21,10 @@ fn main() {
     #[cfg(windows)]
     attach_parent_console();
     env_logger::init();
-    let mut s = match th08::settings::Settings::game_from_args(std::env::args().skip(1)) {
+    let mut s = match th08::settings::Settings::game_from_args(
+        th08::launcher::desktop_dirs(),
+        std::env::args().skip(1),
+    ) {
         Ok(s) => s,
         Err(e) => e.exit(),
     };

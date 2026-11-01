@@ -131,10 +131,29 @@ impl Entry {
     }
 }
 
+// Platform directories given by the entry point (ARCH_D §6.1 item 1); settings.rs never looks them up itself.
+// Desktop: `launcher::desktop_dirs`; web: none (port.cfg and saves live in localStorage).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlatformDirs {
+    // Holds port.cfg.
+    pub config: Option<PathBuf>,
+    // score.dat, th08.cfg, replay/ unless the `save_dir` setting overrides it; None = no saves.
+    pub save: Option<PathBuf>,
+    // SoundFont search dirs after the `soundfont` setting, in lookup order.
+    pub soundfonts: Vec<PathBuf>,
+}
+
+impl PlatformDirs {
+    pub fn port_cfg(&self) -> Option<PathBuf> {
+        Some(self.config.as_ref()?.join("port.cfg"))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     // Effective value text and origin of every entry set from a source (defaults included).
     values: std::collections::BTreeMap<&'static str, (String, Origin)>,
+    pub dirs: PlatformDirs,
     pub game_dir: Option<PathBuf>,
     // Window client size 640×480 × scale (1–4); native only.
     pub scale: u32,
@@ -200,6 +219,7 @@ impl Settings {
     fn empty() -> Self {
         Self {
             values: Default::default(),
+            dirs: PlatformDirs::default(),
             game_dir: None,
             scale: 1,
             fullscreen: false,
@@ -914,14 +934,20 @@ impl Settings {
     // Native: CLI args (without the program name) parsed by the clap command built from `ENTRIES`. `Err` = clap's
     // help/version output or a parse error (`Error::exit` prints it with the right exit code).
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, clap::Error> {
-        Self::from_args_over(Self::from_environment(), args)
+    pub fn from_args(
+        dirs: PlatformDirs,
+        args: impl IntoIterator<Item = String>,
+    ) -> Result<Self, clap::Error> {
+        Self::from_args_over(Self::from_environment(dirs), args)
     }
 
     // The `th08` game binary: as `from_args`, with port.cfg under env and command line.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn game_from_args(args: impl IntoIterator<Item = String>) -> Result<Self, clap::Error> {
-        Self::from_args_over(Self::game_environment(), args)
+    pub fn game_from_args(
+        dirs: PlatformDirs,
+        args: impl IntoIterator<Item = String>,
+    ) -> Result<Self, clap::Error> {
+        Self::from_args_over(Self::game_environment(dirs), args)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -929,7 +955,7 @@ impl Settings {
         mut s: Self,
         args: impl IntoIterator<Item = String>,
     ) -> Result<Self, clap::Error> {
-        let m = command().try_get_matches_from(
+        let m = command(&s.dirs).try_get_matches_from(
             std::iter::once("th08".to_string()).chain(join_bool_values(args)),
         )?;
         // The positional folder first, so a `--game-dir` flag beats it.
@@ -961,9 +987,13 @@ impl Settings {
 
     // Defaults, then each (entry, value text, origin); used by the launcher screen after Play.
     pub fn from_values<'a>(
+        dirs: PlatformDirs,
         values: impl IntoIterator<Item = (&'static Entry, &'a str, Origin)>,
     ) -> Self {
-        let mut s = Self::default();
+        let mut s = Self {
+            dirs,
+            ..Self::default()
+        };
         for (e, v, o) in values {
             s.apply(o, e.key, e, v);
         }
@@ -1002,10 +1032,11 @@ impl Settings {
         }
     }
 
-    // Port save storage (`Ctx::host`): `TH08_SAVE_DIR`, else the port config dir, else next to the binary.
+    // Port save storage (`Ctx::host`): `TH08_SAVE_DIR`, else the entry point's save dir (desktop: config dir, else
+    // next to the binary).
     pub fn storage(&self) -> crate::platform::Storage {
         #[cfg(not(target_arch = "wasm32"))]
-        let dir = self.save_dir.clone().or_else(config_dir).or_else(exe_dir);
+        let dir = self.save_dir.clone().or_else(|| self.dirs.save.clone());
         #[cfg(target_arch = "wasm32")]
         let dir = None;
         crate::platform::Storage::new(dir)
@@ -1032,14 +1063,21 @@ impl Settings {
     }
 
     // Defaults < env vars / URL params: tests and tools never read the user's port.cfg / localStorage.
-    pub fn from_environment() -> Self {
-        Self::default().with_env()
+    pub fn from_environment(dirs: PlatformDirs) -> Self {
+        Self {
+            dirs,
+            ..Self::default()
+        }
+        .with_env()
     }
 
     // The game (native binary, web build): defaults < port.cfg (web: localStorage) < env vars / URL params.
-    pub fn game_environment() -> Self {
-        let mut s = Self::default();
-        for (k, v) in read_port_cfg() {
+    pub fn game_environment(dirs: PlatformDirs) -> Self {
+        let mut s = Self {
+            dirs,
+            ..Self::default()
+        };
+        for (k, v) in read_port_cfg(&s.dirs) {
             match find(&k) {
                 Some(sw) => s.apply(Origin::PortCfg, &k, sw, &v),
                 None => log::error!("port.cfg: unknown key {k} ignored"),
@@ -1155,7 +1193,7 @@ fn join_bool_values(args: impl IntoIterator<Item = String>) -> Vec<String> {
 // The `th08` command line, one flag per `ENTRIES` row (`--key`, `--k_e_y` and the URL name as aliases), grouped by
 // `Group` in `--help`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn command() -> clap::Command {
+pub fn command(dirs: &PlatformDirs) -> clap::Command {
     use clap::{Arg, ArgAction, Command};
     let mut cmd = Command::new("th08")
         .about("Touhou 8 (Imperishable Night) engine port")
@@ -1165,7 +1203,7 @@ pub fn command() -> clap::Command {
              `key = value` line in port.cfg. Priority: command line > env > port.cfg > default.\n\
              Booleans take 1/0, true/false or on/off; `--switch` alone means on, `--no-switch` off.\n\
              port.cfg: {}",
-            port_cfg_path().map_or("(no config dir)".into(), |p| p.display().to_string())
+            dirs.port_cfg().map_or("(no config dir)".into(), |p| p.display().to_string())
         ))
         .arg(
             Arg::new(POS_DIR)
@@ -1223,9 +1261,20 @@ pub fn init(s: Settings) {
     }
 }
 
-// The settings, read once (defaults + env / URL, never port.cfg, if the entry point did not call `init`).
+// The settings, read once (defaults + env / URL, never port.cfg, if the entry point did not call `init`). Tools and
+// tests without an `init` get the desktop dirs, as the game binary does.
 pub fn get() -> &'static Settings {
-    SETTINGS.get_or_init(Settings::from_environment)
+    SETTINGS.get_or_init(|| Settings::from_environment(default_dirs()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_dirs() -> PlatformDirs {
+    crate::launcher::desktop_dirs()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn default_dirs() -> PlatformDirs {
+    PlatformDirs::default()
 }
 
 // Tests and tools: the game directory (TH08_DIR only).
@@ -1233,31 +1282,9 @@ pub fn test_game_dir() -> Option<PathBuf> {
     get().game_dir.clone()
 }
 
-// Platform config dir (`directories` BaseDirs): $XDG_CONFIG_HOME/th08 (~/.config/th08), %APPDATA%\th08,
-// ~/Library/Application Support/th08.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn config_dir() -> Option<PathBuf> {
-    Some(directories::BaseDirs::new()?.config_dir().join("th08"))
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn config_dir() -> Option<PathBuf> {
-    None
-}
-
-// Directory of the running binary (save fallback when there is no config dir).
-#[cfg(not(target_arch = "wasm32"))]
-pub fn exe_dir() -> Option<PathBuf> {
-    Some(std::env::current_exe().ok()?.parent()?.to_path_buf())
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 pub fn temp_dir() -> PathBuf {
     std::env::temp_dir()
-}
-
-pub fn port_cfg_path() -> Option<PathBuf> {
-    Some(config_dir()?.join("port.cfg"))
 }
 
 // `key = value` lines; `#` comments and blank lines skipped.
@@ -1277,8 +1304,8 @@ fn parse_port_cfg(text: &str) -> Vec<(String, String)> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_port_cfg() -> Vec<(String, String)> {
-    port_cfg_path()
+fn read_port_cfg(dirs: &PlatformDirs) -> Vec<(String, String)> {
+    dirs.port_cfg()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|t| parse_port_cfg(&t))
         .unwrap_or_default()
@@ -1286,7 +1313,7 @@ fn read_port_cfg() -> Vec<(String, String)> {
 
 // Web: the port.cfg slot is localStorage, one `th08.<key>` item per setting.
 #[cfg(target_arch = "wasm32")]
-fn read_port_cfg() -> Vec<(String, String)> {
+fn read_port_cfg(_: &PlatformDirs) -> Vec<(String, String)> {
     let Some(st) = local_storage() else {
         return Vec::new();
     };
@@ -1308,14 +1335,14 @@ fn storage_key(key: &str) -> String {
 
 // Sets `key = value` in port.cfg (other lines kept, the key appended if new). Called only after a folder pick or
 // an interactive setting change.
-pub fn save_port_cfg(key: &str, value: &str) {
-    write_port_cfg(&[(key, Some(value))]);
+pub fn save_port_cfg(dirs: &PlatformDirs, key: &str, value: &str) {
+    write_port_cfg(dirs, &[(key, Some(value))]);
 }
 
 // Sets (Some) or removes (None) port.cfg keys in one write; web: localStorage items.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn write_port_cfg(changes: &[(&str, Option<&str>)]) {
-    let Some(path) = port_cfg_path() else {
+pub fn write_port_cfg(dirs: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
+    let Some(path) = dirs.port_cfg() else {
         log::error!("no config directory; port.cfg not saved");
         return;
     };
@@ -1340,7 +1367,7 @@ pub fn write_port_cfg(changes: &[(&str, Option<&str>)]) {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn write_port_cfg(changes: &[(&str, Option<&str>)]) {
+pub fn write_port_cfg(_: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
     let Some(st) = local_storage() else {
         log::error!("no localStorage; settings not saved");
         return;
@@ -1391,7 +1418,7 @@ mod tests {
     use super::*;
 
     fn args(a: &[&str]) -> Settings {
-        Settings::from_args(a.iter().map(|s| s.to_string())).unwrap()
+        Settings::from_args(PlatformDirs::default(), a.iter().map(|s| s.to_string())).unwrap()
     }
 
     #[test]
@@ -1416,8 +1443,10 @@ mod tests {
         assert!(s.invuln && !s.unlock);
         assert_eq!(s.shot_size, Some((800, 600)));
         assert_eq!(s.ending, Some(Ending::Kind { shot: 7, kind: 'c' }));
-        assert!(Settings::from_args(["--help".to_string()]).is_err());
-        let bad = |a: &[&str]| Settings::from_args(a.iter().map(|s| s.to_string())).is_err();
+        assert!(Settings::from_args(PlatformDirs::default(), ["--help".to_string()]).is_err());
+        let bad = |a: &[&str]| {
+            Settings::from_args(PlatformDirs::default(), a.iter().map(|s| s.to_string())).is_err()
+        };
         assert!(
             bad(&["--scale", "9"])
                 && bad(&["--bogus"])
@@ -1464,11 +1493,14 @@ mod tests {
     #[test]
     fn from_values() {
         let e = |k| find(k).unwrap();
-        let s = Settings::from_values([
-            (e("stage"), "4a", Origin::Cli),
-            (e("scale"), "3", Origin::PortCfg),
-            (e("vsync"), "off", Origin::Cli),
-        ]);
+        let s = Settings::from_values(
+            PlatformDirs::default(),
+            [
+                (e("stage"), "4a", Origin::Cli),
+                (e("scale"), "3", Origin::PortCfg),
+                (e("vsync"), "off", Origin::Cli),
+            ],
+        );
         assert_eq!((s.stage, s.scale, s.vsync), (Some(3), 3, false));
         assert_eq!(s.origin("scale"), Origin::PortCfg);
         assert_eq!(s.value("fullscreen"), Some("off"));

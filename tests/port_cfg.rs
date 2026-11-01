@@ -14,20 +14,22 @@ fn tools_ignore_port_cfg() {
         std::env::remove_var("TH08_INVULN");
         std::env::remove_var("TH08_SCALE");
     }
-    assert_eq!(settings::port_cfg_path(), Some(home.join("th08/port.cfg")));
+    let dirs = th08::launcher::desktop_dirs();
+    assert_eq!(dirs.port_cfg(), Some(home.join("th08/port.cfg")));
+    assert_eq!(dirs.save, Some(home.join("th08")));
 
-    let game = Settings::game_environment();
+    let game = Settings::game_environment(dirs.clone());
     assert!(game.invuln && game.scale == 3);
     assert_eq!(game.origin("invuln"), Origin::PortCfg);
     assert!(
-        Settings::game_from_args(["--stage".into(), "1".into()])
+        Settings::game_from_args(dirs.clone(), ["--stage".into(), "1".into()])
             .unwrap()
             .invuln
     );
 
     for s in [
-        Settings::from_environment(),
-        Settings::from_args(["--stage".into(), "1".into()]).unwrap(),
+        Settings::from_environment(dirs.clone()),
+        Settings::from_args(dirs.clone(), ["--stage".into(), "1".into()]).unwrap(),
         settings::get().clone(),
     ] {
         assert!(!s.invuln && s.scale == Settings::default().scale);

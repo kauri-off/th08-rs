@@ -14,6 +14,43 @@ pub fn is_game_dir(dir: &Path) -> bool {
     crate::assets::find_file(dir, "th08.dat").is_file()
 }
 
+// Desktop platform dirs (ARCH_D §6.1 item 1), looked up by the entry point and passed to the settings: config =
+// `directories` BaseDirs config dir + th08 ($XDG_CONFIG_HOME/th08 = ~/.config/th08, %APPDATA%\th08,
+// ~/Library/Application Support/th08); saves there, else next to the binary.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn desktop_dirs() -> settings::PlatformDirs {
+    let base = directories::BaseDirs::new();
+    let config = base.as_ref().map(|d| d.config_dir().join("th08"));
+    let save = config.clone().or_else(exe_dir);
+    let mut soundfonts: Vec<PathBuf> = [
+        "/usr/share/soundfonts",
+        "/usr/share/sounds/sf2",
+        "/usr/share/sf2",
+        "/usr/local/share/soundfonts",
+        "/usr/local/share/sounds/sf2",
+        "/opt/homebrew/share/soundfonts",
+        "C:\\soundfonts",
+    ]
+    .iter()
+    .map(Into::into)
+    .collect();
+    if let Some(d) = &base {
+        soundfonts.push(d.data_dir().join("soundfonts"));
+        soundfonts.push(d.home_dir().join("Library/Audio/Sounds/Banks"));
+    }
+    settings::PlatformDirs {
+        config,
+        save,
+        soundfonts,
+    }
+}
+
+// Directory of the running binary (save fallback when there is no config dir; bundled game files).
+#[cfg(not(target_arch = "wasm32"))]
+fn exe_dir() -> Option<PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.to_path_buf())
+}
+
 // Bundled game files of a local package (packaging/local): `<exe dir>/game` (Windows install), then
 // `$APPDIR/usr/share/th08/game` (AppImage).
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,7 +63,7 @@ pub fn bundled_candidates(exe_dir: Option<&Path>, appdir: Option<&Path>) -> Vec<
 #[cfg(not(target_arch = "wasm32"))]
 fn bundled_game_dir() -> Option<PathBuf> {
     let appdir = std::env::var_os("APPDIR").map(PathBuf::from);
-    bundled_candidates(settings::exe_dir().as_deref(), appdir.as_deref())
+    bundled_candidates(exe_dir().as_deref(), appdir.as_deref())
         .into_iter()
         .find(|d| is_game_dir(d))
 }
@@ -70,7 +107,7 @@ pub fn resolve_game_dir(s: &Settings) -> Result<Option<PathBuf>, String> {
             Ok(Some(d))
         }
         Choice::Invalid(msg) => Err(msg),
-        Choice::Ask => Ok(pick_game_dir()),
+        Choice::Ask => Ok(pick_game_dir(&s.dirs)),
     }
 }
 
@@ -87,7 +124,7 @@ pub fn prefill_bundled_game_dir(s: &mut Settings) {
 
 // Folder dialog until a valid folder is picked (saved as port.cfg `game_dir`) or the dialog is cancelled.
 #[cfg(not(target_arch = "wasm32"))]
-fn pick_game_dir() -> Option<PathBuf> {
+fn pick_game_dir(dirs: &settings::PlatformDirs) -> Option<PathBuf> {
     loop {
         let Some(dir) = folder_dialog() else {
             log::info!("folder dialog cancelled or unavailable");
@@ -95,7 +132,7 @@ fn pick_game_dir() -> Option<PathBuf> {
             return None;
         };
         if is_game_dir(&dir) {
-            settings::save_port_cfg("game_dir", &dir.to_string_lossy());
+            settings::save_port_cfg(dirs, "game_dir", &dir.to_string_lossy());
             return Some(dir);
         }
         rfd::MessageDialog::new()
@@ -165,6 +202,7 @@ fn norm(e: &Entry, v: &str) -> String {
 pub struct Model {
     rows: Vec<Row>,
     folder: Folder,
+    dirs: settings::PlatformDirs,
 }
 
 impl Model {
@@ -181,7 +219,11 @@ impl Model {
                 }
             })
             .collect();
-        Self { rows, folder }
+        Self {
+            rows,
+            folder,
+            dirs: s.dirs.clone(),
+        }
     }
 
     // F11 / Alt+Enter on the launcher: flips the fullscreen box.
@@ -218,10 +260,13 @@ impl Model {
 
     // The final settings: unchanged rows keep their origin, edited ones count as set on the command line.
     pub fn settings(&self) -> Settings {
-        Settings::from_values(self.rows.iter().filter(|r| !r.value.is_empty()).map(|r| {
-            let o = if r.changed() { Origin::Cli } else { r.origin };
-            (r.e, r.value.as_str(), o)
-        }))
+        Settings::from_values(
+            self.dirs.clone(),
+            self.rows.iter().filter(|r| !r.value.is_empty()).map(|r| {
+                let o = if r.changed() { Origin::Cli } else { r.origin };
+                (r.e, r.value.as_str(), o)
+            }),
+        )
     }
 
     // port.cfg / localStorage: every row edited on screen, removed when back at its default.
@@ -236,7 +281,7 @@ impl Model {
             })
             .collect();
         if !changes.is_empty() {
-            settings::write_port_cfg(&changes);
+            settings::write_port_cfg(&self.dirs, &changes);
         }
     }
 

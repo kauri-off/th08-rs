@@ -42,6 +42,7 @@ pub mod menulist;
 pub mod midi;
 pub mod msg;
 pub mod musicroom;
+pub mod pacer;
 pub mod platform;
 pub mod player;
 pub mod pshot;
@@ -73,7 +74,8 @@ pub fn start(files: js_sys::Array) {
         .collect();
     let source = assets::Source::web(files);
     // `?launcher=0` (or a saved launcher = off) starts the game directly; `?shot=` runs never show it.
-    let s = settings::Settings::game_environment();
+    // Web dirs: none; port.cfg and saves are localStorage items.
+    let s = settings::Settings::game_environment(settings::PlatformDirs::default());
     if s.launcher && !s.is_tool_run() {
         app::run_launcher(Some(source), s);
     } else {

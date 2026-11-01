@@ -171,6 +171,8 @@ struct Batch {
 // Port-only GPU state: device, pipelines, texture table, pending batches and the 640×480 frame target.
 pub struct Gfx {
     pub surface: Option<wgpu::Surface<'static>>,
+    // Window devices: makes the surface again after a lifecycle detach (ARCH_D §5); None = headless.
+    instance: Option<wgpu::Instance>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -291,7 +293,9 @@ impl Gfx {
             wgpu::PresentMode::AutoNoVsync
         };
         surface.configure(&device, &config);
-        Ok(Self::build(Some(surface), device, queue, config))
+        let mut g = Self::build(Some(surface), device, queue, config);
+        g.instance = Some(instance);
+        Ok(g)
     }
 
     // Offscreen device for tests and tools: renders only into the 640x480 frame.
@@ -540,6 +544,7 @@ impl Gfx {
         });
         let mut g = Self {
             surface,
+            instance: None,
             device,
             queue,
             config,
@@ -575,6 +580,25 @@ impl Gfx {
             wgpu::PresentMode::AutoNoVsync
         };
         self.reconfigure();
+    }
+
+    // App `Suspended` (ARCH_D §5): the native window goes away; the device and textures stay.
+    pub fn detach(&mut self) {
+        self.surface = None;
+    }
+
+    // App `Resumed` again: a surface for the (new) native window on the same device, same format and present mode.
+    pub fn attach(&mut self, window: Arc<winit::window::Window>) -> anyhow::Result<()> {
+        let Some(instance) = &self.instance else {
+            anyhow::bail!("headless device has no window surface");
+        };
+        let size = window.inner_size();
+        let surface = instance.create_surface(window)?;
+        self.config.width = size.width.max(1);
+        self.config.height = size.height.max(1);
+        surface.configure(&self.device, &self.config);
+        self.surface = Some(surface);
+        Ok(())
     }
 
     pub fn reconfigure(&self) {

@@ -263,8 +263,9 @@ impl Audio {
     // music mode 2 plays MIDI; else it takes the WAV path (port).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn midi_available(&mut self) -> bool {
-        let configured = crate::settings::get().soundfont.clone();
-        self.font_path = crate::midi::find_soundfont(configured.as_deref()).filter(|p| p.is_file());
+        let s = crate::settings::get();
+        self.font_path = crate::midi::find_soundfont(s.soundfont.as_deref(), &s.dirs.soundfonts)
+            .filter(|p| p.is_file());
         match &self.font_path {
             Some(p) => log::info!("midi: soundfont {}", p.display()),
             None => log::info!(

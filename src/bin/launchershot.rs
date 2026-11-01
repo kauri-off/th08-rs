@@ -15,7 +15,7 @@ fn main() {
     if size.is_some() {
         args.remove(0);
     }
-    let s = match th08::settings::Settings::from_args(args) {
+    let s = match th08::settings::Settings::from_args(th08::launcher::desktop_dirs(), args) {
         Ok(s) => s,
         Err(e) => e.exit(),
     };

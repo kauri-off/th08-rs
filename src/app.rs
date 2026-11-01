@@ -3,6 +3,7 @@
 use crate::assets::Source;
 use crate::game::Ctx;
 use crate::gfx::Gfx;
+use crate::pacer::{Pacer, Tick};
 use crate::settings::Settings;
 use crate::task::Flow;
 use std::sync::Arc;
@@ -17,15 +18,10 @@ use winit::keyboard::PhysicalKey;
 use winit::window::Fullscreen;
 use winit::window::{Window, WindowId};
 
-// Frame_Run deadline step, 1/60 s (00 §2).
-const FRAME: f64 = 1.0 / 60.0;
-
 struct Running {
     window: Arc<Window>,
     ctx: Ctx,
-    // Frame_Run's next-frame deadline, seconds since `epoch`.
-    deadline: f64,
-    epoch: Instant,
+    pacer: Pacer,
 }
 
 enum UserEvent {
@@ -50,6 +46,8 @@ struct App {
     proxy: EventLoopProxy<UserEvent>,
     run: Option<Box<Running>>,
     started: bool,
+    // Between `Suspended` and the next `Resumed` (no surface, no logic frames).
+    suspended: bool,
     // Launcher mode: settings before Play; then the window (`launch`).
     pre: Option<Settings>,
     launch: Option<Box<Launch>>,
@@ -58,7 +56,6 @@ struct App {
     shot: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     shot_size: Option<(u32, u32)>,
-    turbo: u32,
     // Port display: Alt held, current fullscreen state (Alt+Enter toggles and saves it).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     alt: bool,
@@ -77,15 +74,14 @@ async fn load(window: Arc<Window>, source: Source, gfx: Gfx) -> anyhow::Result<B
     Ok(Box::new(Running {
         window,
         ctx,
-        deadline: 0.0,
-        epoch: Instant::now(),
+        pacer: Pacer::new(s.turbo),
     }))
 }
 
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.started {
-            return;
+            return self.reattach();
         }
         self.started = true;
         let s = self.pre.as_ref().or(self.settings).unwrap();
@@ -129,13 +125,30 @@ impl ApplicationHandler<UserEvent> for App {
         });
     }
 
+    // ARCH_D §5: the native window is gone (Android home / screen off); drop the surface, freeze logic.
+    fn suspended(&mut self, _: &ActiveEventLoop) {
+        self.suspended = true;
+        if let Some(r) = self.run.as_mut() {
+            r.pacer.suspend();
+            r.ctx.gfx.detach();
+        }
+        if let Some(g) = self.launch.as_mut().and_then(|l| l.gfx.as_mut()) {
+            g.detach();
+        }
+    }
+
     fn user_event(&mut self, _: &ActiveEventLoop, ev: UserEvent) {
         match ev {
             UserEvent::Ready(mut r) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 r.ctx.start();
-                r.epoch = Instant::now();
-                r.window.request_redraw();
+                r.pacer.start(Instant::now());
+                if self.suspended {
+                    r.pacer.suspend();
+                    r.ctx.gfx.detach();
+                } else {
+                    r.window.request_redraw();
+                }
                 self.run = Some(r);
             }
             UserEvent::Gfx(gfx) => {
@@ -144,6 +157,10 @@ impl ApplicationHandler<UserEvent> for App {
                 };
                 let model = crate::launcher::Model::new(&l.start, l.folder.take().unwrap());
                 l.screen = Some(crate::launcher::Screen::new(&l.window, &gfx, model));
+                let mut gfx = gfx;
+                if self.suspended {
+                    gfx.detach();
+                }
                 l.gfx = Some(gfx);
                 l.window.request_redraw();
             }
@@ -189,7 +206,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ModifiersChanged(m) => self.alt = m.state().alt_key(),
             WindowEvent::Focused(f) => {
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
-                    h.keyboard.set_focus(f);
+                    h.input.set_focus(f);
                 }
             }
             // Port-only F11 / Alt+Enter: toggle fullscreen and save it; the key press does not reach the game.
@@ -203,6 +220,7 @@ impl ApplicationHandler<UserEvent> for App {
                     r.window
                         .set_fullscreen(self.fullscreen.then_some(Fullscreen::Borderless(None)));
                     crate::settings::save_port_cfg(
+                        &crate::settings::get().dirs,
                         "fullscreen",
                         if self.fullscreen { "on" } else { "off" },
                     );
@@ -215,30 +233,31 @@ impl ApplicationHandler<UserEvent> for App {
                     event.physical_key,
                     r.ctx.host_as::<crate::platform::AppHost>(),
                 ) {
-                    h.keyboard.key(k, event.state == ElementState::Pressed);
+                    h.input
+                        .keyboard
+                        .key(k, event.state == ElementState::Pressed);
                 }
             }
             WindowEvent::RedrawRequested => {
-                // Frame_Run timing (00 §2): one logic step per 1/60 s deadline; late frames are dropped, not caught up.
-                // The monotonic clock never runs backwards, so the timer-wrap reset is not needed; the port sleeps ≤ 1 ms for Sleep(0).
-                let now = r.epoch.elapsed().as_secs_f64();
-                if self.turbo == 0 && now <= r.deadline {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    std::thread::sleep(std::time::Duration::from_secs_f64(
-                        (r.deadline - now).min(0.001),
-                    ));
-                    r.window.request_redraw();
-                    return;
-                }
-                while r.deadline < now {
-                    r.deadline += FRAME;
-                }
+                // Frame_Run timing (00 §2, pacer.rs). Desktop: the port sleeps ≤ 1 ms for Sleep(0) while waiting.
+                let turbo = r.pacer.turbo();
+                let frames = match r.pacer.poll(Instant::now()) {
+                    Tick::Run(n) => n,
+                    Tick::Suspended => return,
+                    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+                    Tick::Wait(left) => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        std::thread::sleep(std::time::Duration::from_secs_f64(left.min(0.001)));
+                        r.window.request_redraw();
+                        return;
+                    }
+                };
                 // Web `?shot=<n>`: logic freezes at frame n so the page can be screenshotted.
                 let frozen =
                     cfg!(target_arch = "wasm32") && self.shot.is_some_and(|f| r.ctx.frame >= f);
                 // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
-                for _ in 0..self.turbo.max(1) {
-                    if self.shot.is_some_and(|f| r.ctx.frame >= f) && self.turbo > 0 {
+                for _ in 0..frames {
+                    if self.shot.is_some_and(|f| r.ctx.frame >= f) && turbo > 0 {
                         break;
                     }
                     match if frozen { Flow::Continue } else { r.ctx.calc() } {
@@ -262,6 +281,7 @@ impl ApplicationHandler<UserEvent> for App {
                                     self.fullscreen.then_some(Fullscreen::Borderless(None)),
                                 );
                                 crate::settings::save_port_cfg(
+                                    &crate::settings::get().dirs,
                                     "fullscreen",
                                     if self.fullscreen { "on" } else { "off" },
                                 );
@@ -294,18 +314,41 @@ impl ApplicationHandler<UserEvent> for App {
 }
 
 impl App {
+    // A second `Resumed` (ARCH_D §5): a new surface for the native window on the same device; the pacer deadline
+    // restarts at now. Audio is not touched here.
+    fn reattach(&mut self) {
+        if !std::mem::take(&mut self.suspended) {
+            return;
+        }
+        if let Some(r) = self.run.as_mut() {
+            if let Err(e) = r.ctx.gfx.attach(r.window.clone()) {
+                log::error!("surface: {e:#}");
+            }
+            r.pacer.resume(Instant::now());
+            r.window.request_redraw();
+        }
+        if let Some(l) = self.launch.as_mut() {
+            if let Some(g) = l.gfx.as_mut()
+                && let Err(e) = g.attach(l.window.clone())
+            {
+                log::error!("surface: {e:#}");
+            }
+            l.window.request_redraw();
+        }
+    }
+
     fn new(el: &EventLoop<UserEvent>, source: Option<Source>, pre: Option<Settings>) -> Self {
         let mut app = App {
             source,
             proxy: el.create_proxy(),
             run: None,
             started: false,
+            suspended: false,
             pre: None,
             launch: None,
             settings: None,
             shot: None,
             shot_size: None,
-            turbo: 0,
             alt: false,
             fullscreen: false,
         };
@@ -325,7 +368,6 @@ impl App {
         self.shot = settings.shot;
         // Debug `TH08_SHOT_SIZE=WxH`: the shot goes through the window's scaling blit.
         self.shot_size = settings.shot_size;
-        self.turbo = settings.turbo;
         self.fullscreen = settings.fullscreen && cfg!(not(target_arch = "wasm32"));
     }
 
