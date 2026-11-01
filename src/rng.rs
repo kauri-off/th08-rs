@@ -20,18 +20,10 @@ impl Rng {
         }
     }
 
-    // Boot seed (11 §1.3, 0x4464C8): (u16) timeGetTime(); `TH08_SEED` fixes it for reproducible runs.
-    pub fn boot(seed: Option<u16>) -> Self {
-        if let Some(s) = seed {
-            return Self::seeded(s);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
-        #[cfg(target_arch = "wasm32")]
-        let ms = js_sys::Date::now() as u64;
-        Self::seeded(ms as u16)
+    // Boot seed (11 §1.3, 0x4464C8): (u16) timeGetTime() = the host's `boot_clock_ms`; `TH08_SEED` fixes it for
+    // reproducible runs.
+    pub fn boot(seed: Option<u16>, clock_ms: u32) -> Self {
+        Self::seeded(seed.unwrap_or(clock_ms as u16))
     }
 
     // Rng_Next16 0x43ECC0 (11 §1.1).
@@ -88,6 +80,7 @@ impl th08_formats::ByteSource for Rng {
 }
 
 // Debug: record a backtrace per draw while enabled (demo sync investigation).
+// TODO(step 10): a thread-local debug hook in core; moves to the tools with the crate cut.
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {
     pub static TRACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

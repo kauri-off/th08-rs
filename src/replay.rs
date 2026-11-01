@@ -57,8 +57,8 @@ pub fn register(
 ) -> anyhow::Result<crate::task::TaskRef<crate::game::Ctx>> {
     use crate::task::{self, Chain};
     // Replay_Register 0x451F90 sets g_Input and g_InputPrev to 0 (15 §3.1).
-    ctx.input.game = 0;
-    ctx.input.game_prev = 0;
+    ctx.input.game = [0; crate::host::MAX_PLAYERS];
+    ctx.input.game_prev = [0; crate::host::MAX_PLAYERS];
     let debug = play && ctx.game.rpy.as_ref().is_some_and(|r| r.debug != 0);
     let mut rt = ReplayTask {
         play,
@@ -251,13 +251,14 @@ pub fn finish(ctx: &mut crate::game::Ctx) {
             name.copy_from_slice(&ctx.game.score.lsnm[..8]);
             save(ctx, slot.clamp(1, 15) as usize, &name);
         }
-        None => drop(take_recording(&mut ctx.game)),
+        None => drop(take_recording(&mut ctx.game, Default::default())),
     }
 }
 
 // Replay_Finish("./replay/th8_%.2d.rpy", slot) 0x4531F0 (15 §3.6), called by Result state 13 (16 §2.6).
 pub fn save(ctx: &mut crate::game::Ctx, slot: usize, name: &[u8; 8]) -> bool {
-    let Some(bytes) = build_save(&mut ctx.game, name, &mut ctx.rng) else {
+    let now = ctx.host.local_time();
+    let Some(bytes) = build_save(&mut ctx.game, name, &mut ctx.rng, now) else {
         return false;
     };
     let path = format!("replay/th8_{slot:02}.rpy");
@@ -267,13 +268,14 @@ pub fn save(ctx: &mut crate::game::Ctx, slot: usize, name: &[u8; 8]) -> bool {
 }
 
 // 15 §3.6: skip tests, then step 1 (date, name, score, slowdown, card name), steps 2–5 (`Replay::encode`) and the
-// USER section (15 §3.5). None = nothing to write.
+// USER section (15 §3.5). None = nothing to write. `now` = the host's local time (date and プレイ時刻).
 pub fn build_save(
     g: &mut crate::gamemgr::Game,
     name: &[u8; 8],
     rng: &mut crate::rng::Rng,
+    now: crate::host::LocalTime,
 ) -> Option<Vec<u8>> {
-    let mut r = take_recording(g)?;
+    let mut r = take_recording(g, now)?;
     // Skipped for a normal game on E–L whose config changed since record start, and for a recorded slow mode (+0xD9).
     if !g.practice() && g.difficulty < 4 && r.config() != g.cfg_bytes() {
         return None;
@@ -293,13 +295,18 @@ pub fn build_save(
         let c = &g.score.catk[id as usize % crate::scoredat::CARDS].name;
         r.info[0x7E - HEADER..0xAE - HEADER].copy_from_slice(c);
     }
-    r.user = user_section(&user_lines(g, &r, slow));
+    r.user = user_section(&user_lines(g, &r, slow, now));
     Some(r.encode(rng))
 }
 
 // USER lines `key\tvalue` (15 §3.5): キャラ名 table 0x4C7F4C with its U+3000 padding, 難易度 table 0x4C7F30,
 // 最終ステージ table 0x4C7FAC (0x453CD1, "Clear" from stage 9 on or with flags bit 4).
-fn user_lines(g: &crate::gamemgr::Game, r: &Replay, slow: f32) -> Vec<(&'static str, String)> {
+fn user_lines(
+    g: &crate::gamemgr::Game,
+    r: &Replay,
+    slow: f32,
+    now: crate::host::LocalTime,
+) -> Vec<(&'static str, String)> {
     const DIFF: [&str; 5] = ["Easy", "Normal", "Hard", "Lunatic", "Extra"];
     const STAGE: [&str; 9] = [
         "Stage 1",
@@ -333,7 +340,7 @@ fn user_lines(g: &crate::gamemgr::Game, r: &Replay, slow: f32) -> Vec<(&'static 
         .unwrap_or(0);
     vec![
         ("プレイヤー名", r.name()),
-        ("プレイ時刻", crate::supervisor::datetime_now()),
+        ("プレイ時刻", now.datetime()),
         (
             "キャラ名",
             crate::menulist::SHOT_NAMES[r.shot() as usize % 12].into(),
@@ -368,7 +375,7 @@ pub fn user_section(lines: &[(&str, String)]) -> Vec<u8> {
     out
 }
 
-pub fn take_recording(g: &mut crate::gamemgr::Game) -> Option<Replay> {
+pub fn take_recording(g: &mut crate::gamemgr::Game, now: crate::host::LocalTime) -> Option<Replay> {
     if g.replay() {
         return None;
     }
@@ -384,7 +391,7 @@ pub fn take_recording(g: &mut crate::gamemgr::Game) -> Option<Replay> {
         s.inputs.extend([0, 0xCDCD, 0xCDCD]);
     }
     put_u32(&mut r.info, 0xB0 - HEADER, score);
-    let date = crate::supervisor::date_md();
+    let date = now.date_md();
     let d = &mut r.info[0x6C - HEADER..0x72 - HEADER];
     d.fill(0);
     d[..date.len().min(5)].copy_from_slice(&date.as_bytes()[..date.len().min(5)]);
@@ -440,7 +447,7 @@ impl ReplayTask {
             return;
         }
         i.game_prev = i.game;
-        i.game = i.held;
+        i.game[0] = i.held;
         // Step 2: slow mode records nothing (Supervisor+0x1A4 bit 3 is never set in retail code).
         // The slow byte is +0x25 of the gameplay config copy `*(GM+4)` (15 §3.2 step 2).
         if g.game_slow() != 0 {
@@ -502,9 +509,9 @@ impl ReplayTask {
         self.cursor = next;
         let i = &mut ctx.input;
         i.game_prev = i.game;
-        i.game = w;
+        i.game[0] = w;
         i.repeat = false;
-        if i.game == i.game_prev {
+        if i.game[0] == i.game_prev[0] {
             if self.repeat_ctr > 29 {
                 i.repeat = self.repeat_ctr & 7 == 0;
                 if self.repeat_ctr > 37 {
@@ -715,12 +722,13 @@ mod tests {
         let rec = g.rpy.as_mut().unwrap().stages[0].as_mut().unwrap();
         rec.inputs.extend([1, 2, 3]);
         g.stats.score10 = 123_456;
-        let f = build_save(&mut g, b"TESTER  ", &mut crate::rng::Rng::seeded(5)).unwrap();
+        let now = crate::platform::Clock::default().local_time();
+        let f = build_save(&mut g, b"TESTER  ", &mut crate::rng::Rng::seeded(5), now).unwrap();
         assert!(g.rpy.is_none());
         let r = parse(&f, None).unwrap();
         assert_eq!((r.shot(), r.difficulty()), (3, 2));
         assert_eq!(r.name(), "TESTER  ");
-        assert_eq!(r.date(), crate::supervisor::date_md());
+        assert_eq!(r.date(), now.date_md());
         assert_eq!(r.score(), 123_456);
         assert!(!r.practice());
         assert_eq!(r.spell_id(), -1);
@@ -759,7 +767,13 @@ mod tests {
         g.score.catk[5].name[..4].copy_from_slice(b"Card");
         record_stage_start(&mut g, &Default::default());
         let r = parse(
-            &build_save(&mut g, b"A       ", &mut Default::default()).unwrap(),
+            &build_save(
+                &mut g,
+                b"A       ",
+                &mut Default::default(),
+                Default::default(),
+            )
+            .unwrap(),
             None,
         )
         .unwrap();
@@ -769,13 +783,29 @@ mod tests {
         let mut g = Game::default();
         record_stage_start(&mut g, &Default::default());
         g.cfg.slow ^= 1;
-        assert!(build_save(&mut g, b"A       ", &mut Default::default()).is_none());
+        assert!(
+            build_save(
+                &mut g,
+                b"A       ",
+                &mut Default::default(),
+                Default::default()
+            )
+            .is_none()
+        );
 
         let mut g = Game::default();
         g.difficulty = 4;
         record_stage_start(&mut g, &Default::default());
         g.rpy.as_mut().unwrap().info[0xD9 - HEADER] = 1;
-        assert!(build_save(&mut g, b"A       ", &mut Default::default()).is_none());
+        assert!(
+            build_save(
+                &mut g,
+                b"A       ",
+                &mut Default::default(),
+                Default::default()
+            )
+            .is_none()
+        );
     }
 
     // 15 §3.3: Replay_FastForward gate (bit 2 set, bit 9 clear), dialogue test first, fast test only otherwise.
@@ -812,7 +842,7 @@ mod tests {
         g.stage = 9;
         record_stage_start(&mut g, &Default::default());
         let r = g.rpy.clone().unwrap();
-        let l = user_lines(&g, &r, 0.0);
+        let l = user_lines(&g, &r, 0.0, Default::default());
         assert_eq!(l[2], ("キャラ名", "霊夢＆紫　　　　".into()));
         assert_eq!(l[5], ("最終ステージ", "Clear".into()));
         let Some(ar) = crate::archive::test_archive() else {

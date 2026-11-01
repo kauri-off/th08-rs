@@ -1160,7 +1160,7 @@ impl MainMenu {
     // ---- screen 7 (12 §2.8, 15 §3.8) ----
 
     // Listing (15 §3.8): slots th8_01..15, then up to 45 th8_ud????.rpy files; unreadable files are skipped.
-    fn load_replays(&mut self, host: &crate::scoredat::HostIo) {
+    fn load_replays(&mut self, ver: &crate::scoredat::VerList, host: &mut dyn crate::host::Host) {
         let mut names: Vec<String> = (1..=15).map(|i| format!("replay/th8_{i:02}.rpy")).collect();
         let mut ud: Vec<String> = host
             .list("replay/th8_ud")
@@ -1172,7 +1172,7 @@ impl MainMenu {
         self.replays = names
             .into_iter()
             .filter_map(|n| {
-                let r = crate::replay::parse(&host.read(&n)?, host.ver_list()).ok()?;
+                let r = crate::replay::parse(&host.read(&n)?, ver.get()).ok()?;
                 Some((n, r))
             })
             .collect();
@@ -1215,7 +1215,7 @@ impl MainMenu {
             self.set_surface(ctx, "select00.png");
             self.interrupt_all(14);
             self.desc_cur = None;
-            self.load_replays(&ctx.host);
+            self.load_replays(&ctx.game.ver_list, &mut *ctx.host);
             self.lists.rpy_sub = 1;
             self.lists.rpy_loaded = None;
             if self.prev_screen == crate::menu::TOP {

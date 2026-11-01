@@ -2020,13 +2020,16 @@ pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Resul
     if name == "menu_mopup1" {
         let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/data/drawlog");
         let score = std::fs::read(data.join("menu_mopup1.score.dat"))?;
-        ctx.game.load_score(Some(&score), &ctx.host);
+        let now = ctx.host.ticks_ms();
+        ctx.game.load_score(Some(&score), now);
         for n in 0..4 {
             let r = ctx.archive.read(&format!("demorpy{n}.rpy"))?;
             std::fs::write(dir.join(format!("replay/th8_{:02}.rpy", n + 1)), r)?;
         }
     }
-    ctx.host.set_save_dir(Some(dir));
+    crate::platform::tool_host(ctx)
+        .storage
+        .set_save_dir(Some(dir));
     Ok(())
 }
 
@@ -2043,7 +2046,7 @@ pub fn run_menu_script(
         if k >= script.len() {
             break;
         }
-        ctx.input.raw = if k > 0 { script[k] } else { 0 };
+        crate::platform::tool_host(ctx).keys[0] = if k > 0 { script[k] } else { 0 };
         if clr && (k + 1 == 100 || k + 1 == 280) {
             clr_pokes(&mut ctx.game);
         }
@@ -2069,7 +2072,7 @@ pub fn run_demo(
 ) -> anyhow::Result<()> {
     let r = crate::replay::parse(
         &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
-        ctx.host.ver_list(),
+        ctx.game.ver_list.get(),
     )?;
     ctx.game.replay_ff = false;
     anyhow::ensure!(
@@ -2318,7 +2321,7 @@ mod tests {
                 gfx,
                 false,
                 crate::settings::get().core(),
-                crate::settings::get().host_io(),
+                crate::settings::get().tool_host(),
             ))
             .unwrap(),
         )

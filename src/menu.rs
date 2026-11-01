@@ -194,8 +194,8 @@ impl InfoNotices {
             }
         }
         // g_InputRawCur := Input_Poll(); the previous word and the repeat counter are left alone.
-        let pad = ctx.pad.poll();
-        ctx.input.poll_joystick(&ctx.game.cfg, pad);
+        let p = ctx.host.poll_input();
+        ctx.input.poll(&ctx.game.cfg, &p);
         ctx.input.held = ctx.input.raw | ctx.input.joy;
         let (held, frozen) = (ctx.input.held, ctx.info.frozen_prev);
         let Some((_, t)) = &mut ctx.info.cur else {
@@ -624,7 +624,7 @@ impl MainMenu {
                 .archive
                 .read(&format!("demorpy{n}.rpy"))
                 .map_err(anyhow::Error::from)
-                .and_then(|b| Ok(crate::replay::parse(&b, ctx.host.ver_list())?));
+                .and_then(|b| Ok(crate::replay::parse(&b, ctx.game.ver_list.get())?));
             match r {
                 Ok(r) => {
                     if crate::replay::start_playback(&mut ctx.game, r, None, Some(n)) {
@@ -1509,7 +1509,7 @@ mod tests {
                 gfx,
                 false,
                 crate::settings::get().core(),
-                crate::settings::get().host_io(),
+                crate::settings::get().tool_host(),
             ))
             .unwrap(),
         )

@@ -1719,7 +1719,7 @@ mod tests {
             gfx,
             false,
             crate::settings::get().core(),
-            crate::settings::get().host_io(),
+            crate::settings::get().tool_host(),
         ))
         .unwrap();
         let mut f = screen_fx(3, 30, 1, 0xFFFFFFFFu32 as i32, 0);

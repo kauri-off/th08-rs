@@ -999,12 +999,22 @@ impl Settings {
     }
 
     // Port save storage (`Ctx::host`): `TH08_SAVE_DIR`, else the port config dir, else next to the binary.
-    pub fn host_io(&self) -> crate::scoredat::HostIo {
+    pub fn storage(&self) -> crate::platform::Storage {
         #[cfg(not(target_arch = "wasm32"))]
         let dir = self.save_dir.clone().or_else(config_dir).or_else(exe_dir);
         #[cfg(target_arch = "wasm32")]
         let dir = None;
-        crate::scoredat::HostIo::new(dir)
+        crate::platform::Storage::new(dir)
+    }
+
+    // The game window's host: winit keyboard, gilrs joystick, the save storage.
+    pub fn app_host(&self) -> Box<dyn crate::host::Host> {
+        Box::new(crate::platform::AppHost::new(self.storage()))
+    }
+
+    // Tools and tests: no devices, scripted / recorded input (`platform::ToolHost`).
+    pub fn tool_host(&self) -> Box<dyn crate::host::Host> {
+        Box::new(crate::platform::ToolHost::new(self.storage()))
     }
 
     // Scripted / headless runs of the th08 binary (screenshot, draw log, input script, anm viewer, slot test):

@@ -151,8 +151,11 @@ pub struct Game {
     pub score: crate::scoredat::ScoreDat,
     pub persist: bool,
     catk_backup: Option<Vec<crate::scoredat::Catk>>,
-    run_clock: Option<web_time::Instant>,
-    pub play_clock: Option<web_time::Instant>,
+    // Supervisor_UpdateRunTime / UpdatePlayTime marks (15 §2.9), in `Host::ticks_ms`.
+    run_clock: Option<u64>,
+    pub play_clock: Option<u64>,
+    // Supervisor+0x360: the boot-loaded version list (15 §2.10).
+    pub ver_list: crate::scoredat::VerList,
     pub retrying: bool,
     // GM +0x3DBB4 demo index (3 at boot, 11 §4 step 6), +0x3DBB8 demo frame counter, +0x3DBAA shot bias.
     pub demo: u8,
@@ -183,7 +186,8 @@ pub struct Game {
     // GM +0x3DBB0 spell id for spell practice.
     pub card: i16,
     pub menu_loading: u32,
-    // Recorded loader timing of a session replay (src/session.rs).
+    // Recorded loader timing of a session replay (src/session.rs). TODO(step 10): a tool hook in core state; leaves with
+    // the tools crate.
     pub sched: Option<crate::session::Sched>,
     pub trace_menu: Option<(i32, i32)>,
     // Result state (+0x08) after Result_Calc, session trace column 31.
@@ -229,6 +233,7 @@ impl Default for Game {
             catk_backup: None,
             run_clock: None,
             play_clock: None,
+            ver_list: Default::default(),
             retrying: false,
             demo: 3,
             demo_frame: 0,
@@ -326,9 +331,10 @@ impl Game {
     }
 
     // Boot load (15 §2.2); a missing or invalid file starts from defaults.
-    pub fn load_score(&mut self, file: Option<&[u8]>, host: &crate::scoredat::HostIo) {
+    // `now` = `Host::ticks_ms`, the run-time mark.
+    pub fn load_score(&mut self, file: Option<&[u8]>, now: u64) {
         self.lsnm_found = false;
-        self.score = match file.map(|f| host.parse(f)) {
+        self.score = match file.map(|f| self.ver_list.parse(f)) {
             Some(Ok(s)) => {
                 self.lsnm_found = true;
                 s
@@ -343,7 +349,7 @@ impl Game {
             self.clear_nc[i] = c.nc;
             self.clear_any[i] = c.any;
         }
-        self.run_clock = Some(web_time::Instant::now());
+        self.run_clock = Some(now);
     }
 
     // ScoreDat_Save (Result removal): 2 RNG draws. `flush` = Result mode 2 (slow mode drops this run's card credit).
@@ -351,7 +357,7 @@ impl Game {
         &mut self,
         rng: &mut crate::rng::Rng,
         flush: bool,
-        host: &crate::scoredat::HostIo,
+        host: &mut dyn crate::host::Host,
     ) -> Vec<u8> {
         // Result mode 2 registers and is removed at once: its Result_OnRegister list build runs first (15 §2.3).
         if flush {
@@ -364,7 +370,7 @@ impl Game {
             c.nc = self.clear_nc[i];
             c.any = self.clear_any[i];
         }
-        self.update_run_time();
+        self.update_run_time(host.ticks_ms());
         let bytes = self.score.encode(rng);
         self.lsnm_found = true;
         if self.persist {
@@ -381,12 +387,9 @@ impl Game {
     }
 
     // Supervisor_UpdateRunTime (15 §2.9): PLST run time += time since the last update.
-    pub fn update_run_time(&mut self) {
-        if let Some(t) = self.run_clock.replace(web_time::Instant::now()) {
-            crate::scoredat::Plst::add_time(
-                &mut self.score.plst.run_time,
-                t.elapsed().as_millis() as u64,
-            );
+    pub fn update_run_time(&mut self, now: u64) {
+        if let Some(t) = self.run_clock.replace(now) {
+            crate::scoredat::Plst::add_time(&mut self.score.plst.run_time, now.saturating_sub(t));
         }
     }
 
@@ -430,17 +433,14 @@ impl Game {
     }
 
     // Supervisor_UpdatePlayTime (15 §2.9): adds the time since the mark, then clears it.
-    pub fn add_play_time(&mut self) {
+    pub fn add_play_time(&mut self, now: u64) {
         if let Some(t) = self.play_clock.take() {
-            crate::scoredat::Plst::add_time(
-                &mut self.score.plst.play_time,
-                t.elapsed().as_millis() as u64,
-            );
+            crate::scoredat::Plst::add_time(&mut self.score.plst.play_time, now.saturating_sub(t));
         }
     }
 
-    pub fn mark_play_time(&mut self) {
-        self.play_clock = Some(web_time::Instant::now());
+    pub fn mark_play_time(&mut self, now: u64) {
+        self.play_clock = Some(now);
     }
 
     pub fn cleared(&self, any: bool, bit: usize) -> bool {
@@ -651,7 +651,7 @@ impl GameManager {
         st.extends = 0;
         st.next_extend = crate::item::next_extend(d as i32, 0);
         // GameMgr_LoadScoreData: flush (Result mode 2), CATK stamp, hiscore, practice play count, CATK backup.
-        g.save_score(rng, true, &ctx.host);
+        g.save_score(rng, true, &mut *ctx.host);
         g.score.stamp_catk();
         let shot = g.shot as usize % 12;
         // Hiscore-continues digit stats+0x18 from the top HSCR entry, also in practice (11 §5, 15 §2.3).
@@ -721,7 +721,7 @@ impl GameManager {
             }
         }
         g.retrying = false;
-        g.mark_play_time();
+        g.mark_play_time(ctx.host.ticks_ms());
         // Hud_Load branches on the raw flag 0x17CE8BC, not on the StageStart fresh test (12 §5.1a).
         let hud_fresh = g.fresh_start;
         g.fresh_start = false;
@@ -1033,7 +1033,7 @@ impl Task<Ctx> for GameManager {
         if ctx.game.replay() {
             ctx.game.play_clock = None;
         } else {
-            ctx.game.add_play_time();
+            ctx.game.add_play_time(ctx.host.ticks_ms());
         }
         ctx.game.flags &= !F_RUNNING;
         ctx.game.paused = 0;
@@ -1135,7 +1135,7 @@ impl Task<Ctx> for GameManager {
             g.paused = 1;
             // HSCR +0x7C pauses (GM+0x3DAA8++, 15 §2.3).
             self.player.borrow_mut().stats.rec.pauses += 1;
-            g.add_play_time();
+            g.add_play_time(ctx.host.ticks_ms());
             ctx.sound.play(crate::sound::PAUSE);
             ctx.bgm.pause_bgm(true);
             let s = ctx.rng.state;

@@ -44,8 +44,8 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
         script: ctx
             .core
             .input
-            .as_deref()
-            .and_then(crate::input::load_script),
+            .clone()
+            .and_then(|v| crate::input::load_script(&v, &mut *ctx.host)),
         frame: 0,
         scene_task: None,
         logo: None,
@@ -428,9 +428,12 @@ impl Task<Ctx> for Supervisor {
             if let Some(v) = &st.replay {
                 let bytes = match v.strip_prefix("demo") {
                     Some(n) => ctx.archive.read(&format!("demorpy{n}.rpy"))?,
-                    None => load_file(&ctx.host, v).with_context(|| format!("TH08_REPLAY={v}"))?,
+                    None => ctx
+                        .host
+                        .read_path(v)
+                        .with_context(|| format!("TH08_REPLAY={v}"))?,
                 };
-                let r = crate::replay::parse(&bytes, ctx.host.ver_list())?;
+                let r = crate::replay::parse(&bytes, ctx.game.ver_list.get())?;
                 ctx.game.replay_speed = st.replay_speed;
                 let demo = v.strip_prefix("demo").and_then(|n| n.parse().ok());
                 crate::replay::start_playback(&mut ctx.game, r, None, demo);
@@ -457,12 +460,9 @@ impl Task<Ctx> for Supervisor {
         if let Some(s) = &self.script {
             ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);
         } else {
-            // Session tool: Input_Poll's recorded return for this poll index (polls.txt; one poll per calc pass, 00 §3).
-            if let Some(s) = &ctx.game.sched {
-                ctx.input.raw = s.raw(s.poll);
-            }
-            let pad = ctx.pad.poll();
-            ctx.input.poll_joystick(&ctx.game.cfg, pad);
+            // Input_Poll: one host poll per calc pass, also per restarted pass (00 §3).
+            let p = ctx.host.poll_input();
+            ctx.input.poll(&ctx.game.cfg, &p);
         }
         self.frame += 1;
         if ctx.game.slow_skip != 0 {
@@ -615,45 +615,5 @@ impl Task<Ctx> for Supervisor {
         }
         ctx.gfx.set_viewport(crate::gfx::FULLSCREEN);
         Ret::Next
-    }
-}
-
-// Debug: a file from disk natively, or from the save storage (web, and `replay/…` names).
-fn load_file(host: &crate::scoredat::HostIo, path: &str) -> Option<Vec<u8>> {
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Ok(b) = std::fs::read(path) {
-        return Some(b);
-    }
-    host.read(path)
-}
-
-// Today's "%m/%d" in local time for HSCR +0x20 / replay info +0x6C (15 §2.3, §3.5; 16 §2.2: C `localtime`).
-pub fn date_md() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    return chrono::Local::now().format("%m/%d").to_string();
-    #[cfg(target_arch = "wasm32")]
-    {
-        // The JS Date getters are local time.
-        let d = js_sys::Date::new_0();
-        format!("{:02}/{:02}", d.get_month() + 1, d.get_date())
-    }
-}
-
-// Local "%Y/%m/%d %H:%M:%S" for the replay USER line プレイ時刻 (15 §3.5).
-pub fn datetime_now() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    return chrono::Local::now().format("%Y/%m/%d %H:%M:%S").to_string();
-    #[cfg(target_arch = "wasm32")]
-    {
-        let d = js_sys::Date::new_0();
-        format!(
-            "{}/{:02}/{:02} {:02}:{:02}:{:02}",
-            d.get_full_year(),
-            d.get_month() + 1,
-            d.get_date(),
-            d.get_hours(),
-            d.get_minutes(),
-            d.get_seconds()
-        )
     }
 }

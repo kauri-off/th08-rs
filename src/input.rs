@@ -1,7 +1,5 @@
 //! Input word and key repeat (12 intro, 11 §7 `Input_Poll` 0x43D970; gameplay word 09 §3, 15 §3.2–§3.3).
 
-use winit::keyboard::KeyCode;
-
 // Input word bits (09 §3, 12 intro); also the replay stream format (15 §3.2).
 pub const SHOT: u16 = 1 << 0;
 pub const BOMB: u16 = 1 << 1;
@@ -19,49 +17,6 @@ pub const KEY_S: u16 = 1 << 10;
 pub const KEY_HOME: u16 = 1 << 11;
 pub const KEY_D: u16 = 1 << 13;
 pub const KEY_R: u16 = 1 << 14;
-
-// Input_Poll 0x43D970 DIK table, the default path (15 §1.1): physical keys = DIK scan codes. Keypad 7/9/1/3 give the
-// diagonals; only the main Enter (0x1C) is mapped, keypad Enter (0x9C) is not.
-const KEYS: [(KeyCode, u16); 26] = [
-    (KeyCode::ArrowUp, UP),
-    (KeyCode::ArrowDown, DOWN),
-    (KeyCode::ArrowLeft, LEFT),
-    (KeyCode::ArrowRight, RIGHT),
-    (KeyCode::Numpad8, UP),
-    (KeyCode::Numpad2, DOWN),
-    (KeyCode::Numpad4, LEFT),
-    (KeyCode::Numpad6, RIGHT),
-    (KeyCode::Numpad7, UP | LEFT),
-    (KeyCode::Numpad9, UP | RIGHT),
-    (KeyCode::Numpad1, DOWN | LEFT),
-    (KeyCode::Numpad3, DOWN | RIGHT),
-    (KeyCode::KeyZ, SHOT),
-    (KeyCode::KeyX, BOMB),
-    (KeyCode::ShiftLeft, FOCUS),
-    (KeyCode::ShiftRight, FOCUS),
-    (KeyCode::Escape, PAUSE),
-    (KeyCode::ControlLeft, SKIP),
-    (KeyCode::ControlRight, SKIP),
-    (KeyCode::KeyQ, KEY_Q),
-    (KeyCode::KeyS, KEY_S),
-    (KeyCode::KeyR, KEY_R),
-    (KeyCode::Home, KEY_HOME),
-    (KeyCode::KeyP, KEY_HOME),
-    (KeyCode::Enter, ENTER),
-    (KeyCode::KeyD, KEY_D),
-];
-
-pub fn map_key(k: KeyCode) -> u16 {
-    KEYS.iter().find(|e| e.0 == k).map_or(0, |e| e.1)
-}
-
-// The raw keyboard word from the held-key set (bit i = KEYS[i] down): each held key ORs its bits in (15 §1.1).
-fn keyboard_word(keys: u32) -> u16 {
-    KEYS.iter()
-        .enumerate()
-        .filter(|(i, _)| keys >> i & 1 != 0)
-        .fold(0, |w, (_, e)| w | e.1)
-}
 
 // One joystick poll (DirectInput DIJOYSTATE, 15 §1.1): `buttons` bit n = rgbButtons[n] & 0x80 (32 buttons, the raw
 // array `Input_PollJoystickRaw` returns), `axis` = lX / lY.
@@ -128,10 +83,7 @@ pub fn joystick_bits(cfg: &crate::config::Config, pad: &PadState, counter: &mut 
 
 #[derive(Default, Clone, Copy)]
 pub struct Input {
-    // Held keys (bit i = KEYS[i]); `raw` is their word. `kb_failed`: the keyboard read fails (15 §1.1).
-    pub keys: u32,
-    pub kb_failed: bool,
-    // Keyboard state; `held` / `prev` are the polled raw word 0x164D528 / previous 0x164D530 (12 intro, 11 §7).
+    // Keyboard word of the last poll (0 when the read failed, 15 §1.1); `held` / `prev` are the polled raw word 0x164D528 / previous 0x164D530 (12 intro, 11 §7).
     pub raw: u16,
     // Joystick bits of this poll, ORed into the raw word after the keyboard (15 §1.1), and the raw button array.
     pub joy: u16,
@@ -143,36 +95,17 @@ pub struct Input {
     // Unchanged-input counter 0x164D53C and key-repeat flag 0x164D538.
     pub same_frames: u32,
     pub repeat: bool,
-    // g_Input 0x164D52C / g_InputPrev 0x164D534: the gameplay word, written by the replay node (15 §3.2, §3.3).
-    pub game: u16,
-    pub game_prev: u16,
+    // g_Input 0x164D52C / g_InputPrev 0x164D534: the gameplay word per player, written by the replay node (15 §3.2,
+    // §3.3); vanilla uses `[0]` (ARCH_C decision 6).
+    pub game: crate::host::Words,
+    pub game_prev: crate::host::Words,
 }
 
 impl Input {
-    pub fn key(&mut self, k: KeyCode, down: bool) {
-        let Some(i) = KEYS.iter().position(|e| e.0 == k) else {
-            return;
-        };
-        if down {
-            self.keys |= 1 << i;
-        } else {
-            self.keys &= !(1 << i);
-        }
-        self.raw = keyboard_word(self.keys);
-    }
-
-    // Port: winit has no device read, so focus loss stands in for a failing GetDeviceState (keys released).
-    pub fn set_focus(&mut self, focused: bool) {
-        self.kb_failed = !focused;
-        if !focused {
-            self.keys = 0;
-            self.raw = 0;
-        }
-    }
-
-    // A failed GetDeviceState zeroes the word, so the poll returns the joystick bits only (15 §1.1, 0x43DD3C).
-    fn keyboard(&self) -> u16 {
-        if self.kb_failed { 0 } else { self.raw }
+    // Input_Poll 0x43D970 (15 §1.1): player 0's keyboard word and joystick bits of one host poll, run before `tick`.
+    pub fn poll(&mut self, cfg: &crate::config::Config, p: &crate::host::RawInput) {
+        self.raw = p.keys[0];
+        self.poll_joystick(cfg, p.pads[0]);
     }
 
     // The joystick half of Input_Poll (15 §1.1), run before `tick`.
@@ -183,7 +116,7 @@ impl Input {
 
     pub fn tick(&mut self) {
         self.prev = self.held;
-        self.held = self.keyboard() | self.joy;
+        self.held = self.raw | self.joy;
         // Key repeat (11 §7, same rule as 15 §3.3): the counter is tested before it is incremented, and reset to 30
         // after 37, so the flag is set on the 33rd, 41st, … unchanged frame.
         self.repeat = false;
@@ -203,15 +136,15 @@ impl Input {
     // Supervisor_Calc on a slow-mode skipped frame (gm+0x2D, 11 §7): the raw word is OR-ed into the polled word;
     // previous word, repeat counter and flag are not updated.
     pub fn accumulate(&mut self) {
-        self.held |= self.keyboard();
+        self.held |= self.raw;
     }
 
     // The view gameplay objects read (player, dialogue, HUD): g_Input as both raw and held.
     pub fn game_view(&self) -> Input {
         Input {
-            raw: self.game,
-            held: self.game,
-            prev: self.game_prev,
+            raw: self.game[0],
+            held: self.game[0],
+            prev: self.game_prev[0],
             ..*self
         }
     }
@@ -250,10 +183,10 @@ pub fn parse_script(s: &str) -> Option<Vec<u16>> {
     Some(out)
 }
 
-// The value is a file path natively; anything containing ':' or ',' that is not a file is taken inline.
-pub fn load_script(v: &str) -> Option<Vec<u16>> {
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Ok(s) = std::fs::read_to_string(v) {
+// The value is a file path natively (`Host::read_path`); anything containing ':' or ',' that is not a file is taken
+// inline.
+pub fn load_script(v: &str, host: &mut dyn crate::host::Host) -> Option<Vec<u16>> {
+    if let Some(s) = host.read_path(v).and_then(|b| String::from_utf8(b).ok()) {
         return parse_script(&s);
     }
     parse_script(v)
@@ -332,46 +265,6 @@ mod tests {
         i.tick();
         assert_eq!(i.held, SHOT | BOMB);
     }
-    // 15 §1.1 DIK table: keypad directions and diagonals, both Shift/Ctrl, Home/P; keypad Enter unmapped.
-    #[test]
-    fn key_table() {
-        assert_eq!(map_key(KeyCode::Numpad8), UP);
-        assert_eq!(map_key(KeyCode::Numpad3), DOWN | RIGHT);
-        assert_eq!(map_key(KeyCode::Numpad7), 0x50);
-        assert_eq!(map_key(KeyCode::Numpad9), 0x90);
-        assert_eq!(map_key(KeyCode::Numpad1), 0x60);
-        assert_eq!(map_key(KeyCode::Numpad3), 0xA0);
-        assert_eq!(map_key(KeyCode::NumpadEnter), 0);
-        assert_eq!(map_key(KeyCode::Enter), ENTER);
-        let mut i = Input::default();
-        i.key(KeyCode::Numpad7, true);
-        i.key(KeyCode::ArrowUp, true);
-        i.key(KeyCode::Numpad7, false);
-        assert_eq!(i.raw, UP);
-        i.key(KeyCode::KeyP, true);
-        i.key(KeyCode::Home, true);
-        i.key(KeyCode::Home, false);
-        assert_eq!(i.raw, UP | KEY_HOME);
-    }
-
-    // 15 §1.1: a failed keyboard read gives the joystick bits only.
-    #[test]
-    fn failed_read_joystick_only() {
-        let mut i = Input::default();
-        i.key(KeyCode::KeyX, true);
-        i.poll_joystick(&Config::default(), pad(1, 0, 0));
-        i.kb_failed = true;
-        i.tick();
-        assert_eq!(i.held, SHOT);
-        i.kb_failed = false;
-        i.tick();
-        assert_eq!(i.held, SHOT | BOMB);
-        i.set_focus(false);
-        i.set_focus(true);
-        i.tick();
-        assert_eq!(i.held, SHOT);
-    }
-
     #[test]
     fn script() {
         assert_eq!(

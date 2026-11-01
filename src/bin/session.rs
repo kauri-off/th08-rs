@@ -62,7 +62,7 @@ fn main() -> anyhow::Result<()> {
         gfx,
         false,
         th08::settings::get().core(),
-        th08::settings::get().host_io(),
+        th08::settings::get().tool_host(),
     ))?;
     s.start(&mut ctx)?;
     if sound_log {

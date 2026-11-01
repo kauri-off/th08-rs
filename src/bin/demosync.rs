@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
         gfx,
         false,
         th08::settings::get().core(),
-        th08::settings::get().host_io(),
+        th08::settings::get().tool_host(),
     ))?;
     let trace = std::fs::read_to_string(format!(
         "{}/specs/data/demo{n}_trace.txt",
@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     let rows = parse_trace(&trace);
     let r = th08::replay::parse(
         &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
-        ctx.host.ver_list(),
+        ctx.game.ver_list.get(),
     )?;
     ctx.game.replay_ff = false;
     th08::replay::start_playback(&mut ctx.game, r, None, Some(n));

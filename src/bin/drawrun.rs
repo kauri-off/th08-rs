@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
         gfx,
         false,
         th08::settings::get().core(),
-        th08::settings::get().host_io(),
+        th08::settings::get().tool_host(),
     ))?;
     let (mut xz, mut plain) = if args[0].ends_with(".xz") {
         (Some(th08::xz::create(args[0].as_ref())?), None)
@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     };
     match args[1].as_str() {
         "menu" => {
-            let script = th08::input::load_script(&args[2])
+            let script = th08::input::load_script(&args[2], &mut *ctx.host)
                 .ok_or_else(|| anyhow::anyhow!("bad input script {}", args[2]))?;
             let clr = args.get(3).is_some_and(|a| a == "clr");
             let name = if clr {

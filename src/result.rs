@@ -446,7 +446,7 @@ impl ResultScreen {
                     self.frame = 9;
                 }
             }
-            S_SAVE => self.save_ask(ctx.input, &ctx.game, &mut ctx.sound, &ctx.host),
+            S_SAVE => self.save_ask(ctx.input, &ctx.game, &mut ctx.sound, &mut *ctx.host),
             S_SAVE_MSG => {
                 // State 11: the "cannot save" message, left from frame 20 (16 §2.6).
                 let inp = ctx.input;
@@ -454,7 +454,10 @@ impl ResultScreen {
                     self.leave_save(&mut ctx.sound);
                 }
             }
-            S_SAVE_SLOT => self.save_slot(ctx.input, &ctx.game, &mut ctx.sound),
+            S_SAVE_SLOT => {
+                let now = ctx.host.local_time();
+                self.save_slot(ctx.input, &ctx.game, &mut ctx.sound, now)
+            }
             S_SAVE_NAME => self.save_name(ctx),
             S_SAVE_OVER => self.save_overwrite(ctx),
             S_PLAY | S_PLAY_WAIT | S_PLAY_OUT => self.play_data(ctx),
@@ -473,8 +476,8 @@ impl ResultScreen {
         // D in sub-state 1 dumps score.txt, no sound (16 §2.7). Port: written next to score.dat (web: localStorage).
         // Order cursor → D → cancel → confirm (16 §2.4); the dump does not depend on the cursor, so D goes first here.
         if self.sub == 1 && ctx.input.pressed(KEY_D) {
-            ctx.game.update_run_time();
-            let stamp = crate::supervisor::datetime_now();
+            ctx.game.update_run_time(ctx.host.ticks_ms());
+            let stamp = ctx.host.local_time().datetime();
             let txt = score_txt(&ctx.game.score, stamp.get(2..).unwrap_or(&stamp));
             if ctx.game.persist {
                 ctx.host.write("score.txt", &txt);
@@ -634,7 +637,7 @@ impl ResultScreen {
         match self.state {
             S_PLAY => {
                 if self.frame == 1 {
-                    ctx.game.update_run_time();
+                    ctx.game.update_run_time(ctx.host.ticks_ms());
                     for k in 0..19 {
                         let s = self.play_line(ctx, k);
                         self.render(ctx, k, &s);
@@ -655,7 +658,7 @@ impl ResultScreen {
             }
             S_PLAY_WAIT => {
                 if self.frame % 60 == 0 {
-                    ctx.game.update_run_time();
+                    ctx.game.update_run_time(ctx.host.ticks_ms());
                     if ctx.game.score.plst.run_time[2] != self.run_secs {
                         self.run_secs = ctx.game.score.plst.run_time[2];
                         let s = self.play_line(ctx, 0);
@@ -789,7 +792,7 @@ impl ResultScreen {
         inp: Input,
         g: &gamemgr::Game,
         sound: &mut crate::sound::Queue,
-        host: &crate::scoredat::HostIo,
+        host: &mut dyn crate::host::Host,
     ) {
         if self.frame == 10 {
             // Slow mode (Supervisor+0x1A4 bit 3, the no-record flag, is never set in retail code, 15 §3.2).
@@ -815,35 +818,51 @@ impl ResultScreen {
         if inp.pressed(CANCEL) || inp.pressed(CONFIRM) && self.cursor == 1 {
             self.leave_save(sound);
         } else if inp.pressed(CONFIRM) {
-            self.back_to_list(sound, host);
+            self.back_to_list(sound, &g.ver_list, host);
         }
     }
 
     // Shared back-to-list code 0x456BBB (16 §2.6; state 10 confirm, 14 cancel / "no", 13 ESC): SE 10, sound flush,
     // state 12, all 72 VMs interrupt 12, frame 0, headers re-read in the same call; +0x1C is not reset.
-    fn back_to_list(&mut self, sound: &mut crate::sound::Queue, host: &crate::scoredat::HostIo) {
+    fn back_to_list(
+        &mut self,
+        sound: &mut crate::sound::Queue,
+        ver: &crate::scoredat::VerList,
+        host: &mut dyn crate::host::Host,
+    ) {
         sound.play(sound::OK);
         self.flush = true;
-        self.enter_slot_list(host);
+        self.enter_slot_list(ver, host);
         self.interrupt_all(12);
     }
 
     // Entry to state 12 (from 10, 13 and 14): create `replay` and read the 15 slot headers (16 §2.6 "at frame 0").
     // The state body never runs with frame 0 (Result_Calc adds 1 after the state that set it), so this is done here.
-    fn enter_slot_list(&mut self, host: &crate::scoredat::HostIo) {
+    fn enter_slot_list(
+        &mut self,
+        ver: &crate::scoredat::VerList,
+        host: &mut dyn crate::host::Host,
+    ) {
         self.set_state(S_SAVE_SLOT);
         host.mkdir("replay");
         // A missing or failed file leaves the entry as it was: empty, or the previous read on re-entry.
         self.slots.resize(15, (false, None));
         for (i, e) in self.slots.iter_mut().enumerate() {
-            if let Some(r) = read_slot(host, i + 1) {
+            if let Some(r) = read_slot(ver, host, i + 1) {
                 *e = (true, Some(r));
             }
         }
     }
 
     // State 12 (16 §2.6): the 15 slots, cursor from frame 20.
-    fn save_slot(&mut self, inp: Input, g: &gamemgr::Game, sound: &mut crate::sound::Queue) {
+    // `now` = the host's local time, the entry date (16 §2.2: C `localtime`).
+    fn save_slot(
+        &mut self,
+        inp: Input,
+        g: &gamemgr::Game,
+        sound: &mut crate::sound::Queue,
+        now: crate::host::LocalTime,
+    ) {
         if self.frame < 20 {
             return;
         }
@@ -862,7 +881,7 @@ impl ResultScreen {
         // Confirm does not return: the cancel test follows in the same call and wins (16 §2.6, both SEs play).
         if inp.pressed(CONFIRM) {
             sound.play(sound::OK);
-            self.entry_date = crate::supervisor::date_md();
+            self.entry_date = now.date_md();
             self.entry_score = g.stats.score10.clamp(0, 999_999_999) as u32;
             let valid = self.slots.get(self.slot as usize).is_some_and(|s| s.0);
             self.interrupt_all(if valid { 13 } else { 17 });
@@ -890,7 +909,7 @@ impl ResultScreen {
         let inp = ctx.input;
         // Cancel / ESC first, without looking at confirm (16 §2.6).
         if inp.pressed(CANCEL) {
-            self.back_to_list(&mut ctx.sound, &ctx.host);
+            self.back_to_list(&mut ctx.sound, &ctx.game.ver_list, &mut *ctx.host);
         } else if inp.pressed(CONFIRM) {
             self.frame = 0;
             if self.cursor == 0 {
@@ -898,7 +917,7 @@ impl ResultScreen {
                 self.vms[56 + self.slot as usize].pending_interrupt = 16;
                 self.set_state(S_SAVE_NAME);
             } else {
-                self.back_to_list(&mut ctx.sound, &ctx.host);
+                self.back_to_list(&mut ctx.sound, &ctx.game.ver_list, &mut *ctx.host);
             }
         }
     }
@@ -918,7 +937,7 @@ impl ResultScreen {
             self.set_state(S_LEAVE);
             self.interrupt_all(2);
         } else if k.esc {
-            self.back_to_list(&mut ctx.sound, &ctx.host);
+            self.back_to_list(&mut ctx.sound, &ctx.game.ver_list, &mut *ctx.host);
             // QUIRK: name pos and list cursor are both +0x1C, so the list resumes on row = name length.
             self.cursor = self.name_pos;
         }
@@ -943,6 +962,7 @@ impl ResultScreen {
 
     // Frame 0 of state 9: the HSCR entry from the in-game record (16 §2.2, 15 §2.3). False = no entry.
     fn name_start(&mut self, ctx: &mut Ctx) -> bool {
+        let now = ctx.host.local_time();
         let g = &mut ctx.game;
         let shot = (g.shot as usize + g.demo_shot_bias as usize) % 12;
         let d = g.difficulty.clamp(0, 4) as usize;
@@ -972,7 +992,7 @@ impl ResultScreen {
             d as u8,
             stage,
             &lsnm[..8],
-            &crate::supervisor::date_md(),
+            &now.date_md(),
         );
         h.0[0x26] = st.continues;
         h.0[0x28..0x64].copy_from_slice(&g.cfg_bytes());
@@ -1336,7 +1356,7 @@ impl Task<Ctx> for ResultScreen {
         }
         self.removed = true;
         ctx.game.score.clear_new_flags();
-        ctx.game.save_score(&mut ctx.rng, false, &ctx.host);
+        ctx.game.save_score(&mut ctx.rng, false, &mut *ctx.host);
         if let Some(t) = self.surface.take() {
             ctx.gfx.free_texture(t);
         }
@@ -1405,9 +1425,13 @@ impl Task<Ctx> for ResultScreen {
 
 // Slot n's header (16 §2.6 state 12): the decoded copy of a file that passes Replay_Load (15 §3.7); None = missing
 // or failed. A loaded copy is always valid (T8RP, version 6 checked by the load).
-fn read_slot(host: &crate::scoredat::HostIo, n: usize) -> Option<crate::replay::Replay> {
+fn read_slot(
+    ver: &crate::scoredat::VerList,
+    host: &mut dyn crate::host::Host,
+    n: usize,
+) -> Option<crate::replay::Replay> {
     let f = host.read(&format!("replay/th8_{n:02}.rpy"))?;
-    crate::replay::parse(&f, host.ver_list()).ok()
+    crate::replay::parse(&f, ver.get()).ok()
 }
 
 // Name-entry cursor (16 §2.2): Up, Down, Left, Right are four independent tests in that order, each skipping the
@@ -1754,7 +1778,7 @@ mod tests {
             Input::default(),
             &g,
             &mut Default::default(),
-            &Default::default(),
+            &mut crate::platform::ToolHost::default(),
         );
         assert_eq!((r.state, r.frame), (S_SAVE_MSG, 10));
     }
@@ -1845,7 +1869,7 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/data/drawlog");
         let dat = std::fs::read(dir.join("menu_mopup1.score.dat")).unwrap();
         let want = std::fs::read(dir.join("menu_mopup1.score.txt")).unwrap();
-        let mut s = crate::scoredat::HostIo::default().parse(&dat).unwrap();
+        let mut s = crate::scoredat::VerList::default().parse(&dat).unwrap();
         s.rebuild_lists();
         // Supervisor_UpdateRunTime before the dump added the wall-clock time since boot.
         s.plst.run_time[1..3].copy_from_slice(&[18, 31]);
@@ -1921,13 +1945,15 @@ mod tests {
             gfx,
             false,
             crate::settings::get().core(),
-            crate::settings::get().host_io(),
+            crate::settings::get().tool_host(),
         ))
         .unwrap();
         let save =
             crate::settings::temp_dir().join(format!("th08_result_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&save);
-        ctx.host.set_save_dir(Some(save.clone()));
+        crate::platform::tool_host(&mut ctx)
+            .storage
+            .set_save_dir(Some(save.clone()));
         ctx.game.persist = true;
         crate::supervisor::setup_new_game(&mut ctx.game, &ctx.core, 0);
         // … then Bomb on the "save replay?" prompt (16 §2.6 state 10, input from frame 12) → title.
@@ -1943,7 +1969,7 @@ mod tests {
         let (mut k, mut over, mut seen_result) = (0u32, 0u32, false);
         for _ in 0..60_000 {
             let g = &ctx.game;
-            ctx.input.raw = if g.scene == gamemgr::SCENE_RESULT {
+            let key = if g.scene == gamemgr::SCENE_RESULT {
                 seen_result = true;
                 k += 1;
                 keys.iter()
@@ -1963,6 +1989,7 @@ mod tests {
             } else {
                 0
             };
+            crate::platform::tool_host(&mut ctx).keys[0] = key;
             if seen_result && ctx.game.scene == gamemgr::SCENE_MENU {
                 break;
             }
@@ -1987,14 +2014,14 @@ mod tests {
         assert_eq!(h.score(), 1_234_567);
         assert_eq!(h.0[9], 0);
         let file = std::fs::read(save.join("score.dat")).unwrap();
-        let s = ctx.host.parse(&file).unwrap();
+        let s = ctx.game.ver_list.parse(&file).unwrap();
         assert_eq!(&s.lsnm[..8], b"PP      ");
         assert!(s.hscr.contains(&h));
         assert_eq!(s.hiscore(0, 1), h.score().max(100_000));
         // Save → load → save: identical with the same two random header bytes (15 §2.1).
         let mut r1 = crate::rng::Rng::seeded(3);
         let mut r2 = crate::rng::Rng::seeded(3);
-        let again = ctx.host.parse(&s.encode(&mut r1)).unwrap();
+        let again = ctx.game.ver_list.parse(&s.encode(&mut r1)).unwrap();
         assert_eq!(
             again.encode(&mut r2),
             s.encode(&mut crate::rng::Rng::seeded(3))
@@ -2008,11 +2035,12 @@ mod tests {
             if ctx.game.scene == gamemgr::SCENE_RESULT_MENU {
                 k += 1;
             }
-            ctx.input.raw = if [40, 80, 120].iter().any(|&f| (f..f + 3).contains(&k)) {
-                SHOT
-            } else {
-                0
-            };
+            crate::platform::tool_host(&mut ctx).keys[0] =
+                if [40, 80, 120].iter().any(|&f| (f..f + 3).contains(&k)) {
+                    SHOT
+                } else {
+                    0
+                };
             ctx.calc();
             ctx.draw();
             shot(&mut ctx, k > 0, k, "viewer");
@@ -2040,7 +2068,8 @@ mod tests {
     fn save_slot_confirm_then_cancel() {
         let dir = crate::settings::temp_dir().join(format!("th08_slot_cc_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let host = crate::scoredat::HostIo::new(Some(dir.clone()));
+        let mut host =
+            crate::platform::ToolHost::new(crate::platform::Storage::new(Some(dir.clone())));
         let g = gamemgr::Game::default();
         let mut r = ResultScreen::new(1, None);
         r.vms = vec![AnmVm::default(); VM_COUNT];
@@ -2051,7 +2080,7 @@ mod tests {
         };
         r.set_state(S_SAVE);
         r.frame = 12;
-        r.save_ask(confirm, &g, &mut Default::default(), &host);
+        r.save_ask(confirm, &g, &mut Default::default(), &mut host);
         assert_eq!((r.state, r.frame), (S_SAVE_SLOT, 0));
         assert!(r.flush);
         assert!(r.vms.iter().all(|v| v.pending_interrupt == 12));
@@ -2060,7 +2089,7 @@ mod tests {
             held: SHOT | BOMB,
             ..Default::default()
         };
-        r.save_slot(both, &g, &mut Default::default());
+        r.save_slot(both, &g, &mut Default::default(), Default::default());
         assert_eq!((r.state, r.frame), (S_SAVE, 0));
         assert!(r.vms.iter().all(|v| v.pending_interrupt == 2));
         assert_eq!(r.char_cursor, 0);
@@ -2072,7 +2101,8 @@ mod tests {
         let dir =
             crate::settings::temp_dir().join(format!("th08_slot_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let host = crate::scoredat::HostIo::new(Some(dir.clone()));
+        let mut host =
+            crate::platform::ToolHost::new(crate::platform::Storage::new(Some(dir.clone())));
         // A T8RP v6 file that fails Replay_Load counts as empty (16 §2.6): no overwrite question.
         std::fs::create_dir_all(dir.join("replay")).unwrap();
         let mut bad = b"T8RP\x06\x00".to_vec();
@@ -2089,16 +2119,21 @@ mod tests {
         // Result_Calc order: state, then frame += 1.
         r.set_state(S_SAVE);
         r.frame = 12;
-        r.save_ask(confirm, &g, &mut Default::default(), &host);
+        r.save_ask(confirm, &g, &mut Default::default(), &mut host);
         assert_eq!(r.state, S_SAVE_SLOT);
         assert_eq!(r.slots.len(), 15);
         assert!(r.slots.iter().all(|e| !e.0));
         r.frame += 1;
         while r.frame < 20 {
-            r.save_slot(Input::default(), &g, &mut Default::default());
+            r.save_slot(
+                Input::default(),
+                &g,
+                &mut Default::default(),
+                Default::default(),
+            );
             r.frame += 1;
         }
-        r.save_slot(confirm, &g, &mut Default::default());
+        r.save_slot(confirm, &g, &mut Default::default(), Default::default());
         assert_eq!((r.state, r.slot), (S_SAVE_NAME, 0));
         assert_eq!(r.vms[56].pending_interrupt, 16);
         let _ = std::fs::remove_dir_all(&dir);

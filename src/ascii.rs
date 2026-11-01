@@ -998,7 +998,7 @@ impl PauseMenu {
         inp: &Input,
         bgm: &mut crate::sound::Bgm,
         sound: &mut crate::sound::Queue,
-        host: &crate::scoredat::HostIo,
+        host: &mut dyn crate::host::Host,
     ) {
         let replay = g.replay();
         if self.state == 0 {
@@ -1134,7 +1134,7 @@ impl PauseMenu {
                         }
                     }
                     g.paused = 0;
-                    g.mark_play_time();
+                    g.mark_play_time(host.ticks_ms());
                     self.state = 0;
                     self.vms.clear();
                     self.cap_vm = AnmVm::default();
@@ -1284,6 +1284,8 @@ impl ContinueMenu {
         bgm: &mut crate::sound::Bgm,
         sound: &mut crate::sound::Queue,
         panel: &mut crate::hud::Panel,
+        // `Host::ticks_ms` for the play-time marks (15 §2.9).
+        now: u64,
     ) {
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
@@ -1307,7 +1309,7 @@ impl ContinueMenu {
                 return;
             }
             // Play time is added only when the prompt opens, not on the early exits (15 §2.9).
-            g.add_play_time();
+            g.add_play_time(now);
             // Music on opening (12 §4): spell practice with a non-restarting card dips to −10 dB and keeps
             // playing; otherwise command 6 "Pause".
             if g.spell_practice() && !gamemgr::spell_bgm_restarts(g.card) {
@@ -1371,7 +1373,7 @@ impl ContinueMenu {
                         g.request(gamemgr::SCENE_RELOAD);
                         stage_transition(ctx_anm, rng);
                         g.game_over = 0;
-                        g.mark_play_time();
+                        g.mark_play_time(now);
                         self.open = false;
                         return;
                     }
@@ -1408,7 +1410,7 @@ impl ContinueMenu {
                     panel.set_repaint(8);
                     g.continue_apply = true;
                     g.game_over = 0;
-                    g.mark_play_time();
+                    g.mark_play_time(now);
                     self.open = false;
                     return;
                 }
@@ -1478,7 +1480,7 @@ impl Task<Ctx> for AsciiManager {
                 &inp,
                 &mut ctx.bgm,
                 &mut ctx.sound,
-                &ctx.host,
+                &mut *ctx.host,
             );
         } else if ctx.game.game_over != 0 {
             self.cont.update(
@@ -1489,6 +1491,7 @@ impl Task<Ctx> for AsciiManager {
                 &mut ctx.bgm,
                 &mut ctx.sound,
                 &mut ctx.panel,
+                ctx.host.ticks_ms(),
             );
         } else {
             self.cont.open = false;
@@ -1603,6 +1606,7 @@ mod tests {
                 &mut bgm,
                 &mut Default::default(),
                 &mut Default::default(),
+                0,
             );
         }
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1615,6 +1619,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
+            0,
         );
         assert!(m.yes);
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1626,6 +1631,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
+            0,
         );
         assert_eq!(m.vms[1].color, [0x80, 0x80, 0xFF, 0xFF]);
     }
@@ -1651,6 +1657,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
+            0,
         );
         assert!(m.open && !m.yes);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
@@ -1665,7 +1672,7 @@ mod tests {
         let mut g = Game::default();
         g.flags |= gamemgr::F_REPLAY;
         g.game_over = 1;
-        g.mark_play_time();
+        g.mark_play_time(0);
         let mut m = ContinueMenu::default();
         let mut bgm = crate::sound::Bgm::default();
         m.update(
@@ -1676,6 +1683,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
+            0,
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_REPLAY_END));
         assert!(g.play_clock.is_some() && m.vms.is_empty());
@@ -1708,6 +1716,7 @@ mod tests {
                 &mut bgm,
                 &mut Default::default(),
                 &mut Default::default(),
+                0,
             );
         }
         m.update(
@@ -1718,6 +1727,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
+            0,
         );
         assert!(m.yes);
         let frame = m.frame;
@@ -1729,6 +1739,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
+            0,
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RELOAD));
         assert!(!m.open && m.frame == frame);
@@ -1746,6 +1757,7 @@ mod tests {
                 &mut bgm,
                 &mut Default::default(),
                 &mut Default::default(),
+                0,
             );
         }
         m.update(
@@ -1756,6 +1768,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
+            0,
         );
         for _ in 0..19 {
             m.update(
@@ -1766,6 +1779,7 @@ mod tests {
                 &mut bgm,
                 &mut Default::default(),
                 &mut Default::default(),
+                0,
             );
             assert_eq!(g.game_over, 1);
         }
@@ -1777,6 +1791,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut Default::default(),
+            0,
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RESULT));
         assert!(!m.open && m.vms.iter().all(|v| !v.visible()));
@@ -1806,7 +1821,7 @@ mod tests {
             &Input::default(),
             &mut bgm,
             &mut Default::default(),
-            &Default::default(),
+            &mut crate::platform::ToolHost::default(),
         );
         assert_eq!(ints(&m), [1, 1, 1, 1, 0, 0, 0, 0, 0, 0]);
         for _ in 0..4 {
@@ -1817,7 +1832,7 @@ mod tests {
                 &Input::default(),
                 &mut bgm,
                 &mut Default::default(),
-                &Default::default(),
+                &mut crate::platform::ToolHost::default(),
             );
         }
         m.update(
@@ -1827,7 +1842,7 @@ mod tests {
             &press(input::SHOT),
             &mut bgm,
             &mut Default::default(),
-            &Default::default(),
+            &mut crate::platform::ToolHost::default(),
         );
         assert_eq!(m.state, 4);
         assert_eq!(ints(&m), [2, 2, 2, 2, 0, 0, 0, 0, 0, 0]);
@@ -1843,7 +1858,7 @@ mod tests {
             &Input::default(),
             &mut bgm,
             &mut Default::default(),
-            &Default::default(),
+            &mut crate::platform::ToolHost::default(),
         );
         m.state = 5;
         m.frame = 4;
@@ -1857,7 +1872,7 @@ mod tests {
             &press(input::SHOT),
             &mut bgm,
             &mut Default::default(),
-            &Default::default(),
+            &mut crate::platform::ToolHost::default(),
         );
         assert_eq!(m.state, 9);
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
@@ -1868,7 +1883,7 @@ mod tests {
             &Input::default(),
             &mut bgm,
             &mut Default::default(),
-            &Default::default(),
+            &mut crate::platform::ToolHost::default(),
         );
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
     }

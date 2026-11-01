@@ -38,6 +38,7 @@ impl Default for Raster {
 #[cfg(not(target_arch = "wasm32"))]
 impl Raster {
     // `font` = TH08_FONT (`CoreConfig::font`), tried before FONT_PATHS.
+    // TODO(step 8): font files read from disk; text rasterising becomes an output command (`Host::text_raster`).
     pub fn new(font: Option<&str>) -> Self {
         let font = font
             .into_iter()

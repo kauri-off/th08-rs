@@ -57,7 +57,7 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     let mut row = [0i64; 22];
     row[0] = g.frame_counter as i64;
     row[1] = g.demo_frame as i64;
-    row[2] = ctx.input.game as i64;
+    row[2] = ctx.input.game[0] as i64;
     row[3] = ctx.rng.state as i64;
     row[4] = ctx.rng.total.wrapping_sub(rng_base) as i64;
     row[18] = g.rank.rank as i64;
@@ -150,7 +150,7 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
     let rows = parse_trace(trace);
     let r = crate::replay::parse(
         &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
-        ctx.host.ver_list(),
+        ctx.game.ver_list.get(),
     )?;
     ctx.game.replay_ff = false;
     anyhow::ensure!(
@@ -228,7 +228,7 @@ mod tests {
             gfx,
             false,
             crate::settings::get().core(),
-            crate::settings::get().host_io(),
+            crate::settings::get().tool_host(),
         ))
         .unwrap();
         let g = &mut ctx.game;
@@ -243,7 +243,8 @@ mod tests {
             }
             k = k.wrapping_mul(1103515245).wrapping_add(12345);
             let dirs = [0, 0x10, 0x20, 0x40, 0x80, 0x50, 0x90];
-            ctx.input.raw = 0x1 | (k >> 20 & 4) as u16 | dirs[(k >> 24) as usize % 7];
+            crate::platform::tool_host(&mut ctx).keys[0] =
+                0x1 | (k >> 20 & 4) as u16 | dirs[(k >> 24) as usize % 7];
             let f = ctx.game.frame_counter;
             ctx.calc();
             if ctx.game.frame_counter > f {
@@ -252,7 +253,7 @@ mod tests {
         }
         let mut r = ctx.game.rpy.clone().unwrap();
         let mut rng = crate::rng::Rng::seeded(1);
-        let r = crate::replay::parse(&r.encode(&mut rng), ctx.host.ver_list()).unwrap();
+        let r = crate::replay::parse(&r.encode(&mut rng), ctx.game.ver_list.get()).unwrap();
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).unwrap();
         let src = crate::assets::Source::native(dir.into());
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
@@ -260,7 +261,7 @@ mod tests {
             gfx,
             false,
             crate::settings::get().core(),
-            crate::settings::get().host_io(),
+            crate::settings::get().tool_host(),
         ))
         .unwrap();
         ctx.game.replay_ff = false;
@@ -315,7 +316,7 @@ mod tests {
                 g,
                 false,
                 crate::settings::get().core(),
-                crate::settings::get().host_io(),
+                crate::settings::get().tool_host(),
             ))
             .unwrap();
             let trace = std::fs::read_to_string(format!(

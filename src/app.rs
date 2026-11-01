@@ -73,7 +73,7 @@ async fn init(window: Arc<Window>, source: Source, vsync: bool) -> anyhow::Resul
 
 async fn load(window: Arc<Window>, source: Source, gfx: Gfx) -> anyhow::Result<Box<Running>> {
     let s = crate::settings::get();
-    let ctx = Ctx::load(source, gfx, s.core(), s.host_io()).await?;
+    let ctx = Ctx::load(source, gfx, s.core(), s.app_host()).await?;
     Ok(Box::new(Running {
         window,
         ctx,
@@ -187,7 +187,11 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Resized(s) => r.ctx.gfx.resize(s.width, s.height),
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::ModifiersChanged(m) => self.alt = m.state().alt_key(),
-            WindowEvent::Focused(f) => r.ctx.input.set_focus(f),
+            WindowEvent::Focused(f) => {
+                if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+                    h.keyboard.set_focus(f);
+                }
+            }
             // Port-only F11 / Alt+Enter: toggle fullscreen and save it; the key press does not reach the game.
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::KeyboardInput { event, .. }
@@ -207,8 +211,11 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 #[cfg(target_arch = "wasm32")]
                 r.ctx.start_once();
-                if let PhysicalKey::Code(k) = event.physical_key {
-                    r.ctx.input.key(k, event.state == ElementState::Pressed);
+                if let (PhysicalKey::Code(k), Some(h)) = (
+                    event.physical_key,
+                    r.ctx.host_as::<crate::platform::AppHost>(),
+                ) {
+                    h.keyboard.key(k, event.state == ElementState::Pressed);
                 }
             }
             WindowEvent::RedrawRequested => {

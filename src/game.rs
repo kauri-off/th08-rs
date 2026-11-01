@@ -15,12 +15,13 @@ const SKIP_START: i8 = -4;
 // The original's globals that every subsystem reaches (device, archive, sound manager, input words, SprtCtrlInf,
 // funcChain); `game` holds GM / Supervisor fields (11 §2, §7).
 pub struct Ctx {
+    // TODO(step 8): wgpu device calls from logic become DrawList / ResCmd output.
     pub gfx: Gfx,
+    // TODO(step 8b): core reads content through a LogicView, not the archive.
     pub archive: Archive,
+    // TODO(step 10): the cpal device leaves core with the crate cut; logic only queues `SoundCmd`s.
     pub audio: Audio,
     pub input: Input,
-    // Joystick device polled by the Supervisor (15 §1.1).
-    pub pad: crate::joystick::Joystick,
     pub anm: AnmManager,
     // The game RNG g_Rng 0x164D520 (11 §1); every draw site keeps the original's order (future `World.rng`).
     pub rng: crate::rng::Rng,
@@ -57,8 +58,9 @@ pub struct Ctx {
     pub se_log: bool,
     // Port debug / start-up switches (`Settings::core`), passed in by the app or tool.
     pub core: crate::coreconfig::CoreConfig,
-    // Port host IO: save storage and the boot version list (`Settings::host_io`); the `Host` trait in step 7.
-    pub host: crate::scoredat::HostIo,
+    // Input polls, clocks and save storage (`host::Host`), supplied by the app or tool; no other platform access in logic.
+    pub host: Box<dyn crate::host::Host>,
+    // TODO(step 8): debug draw log file writer; becomes a serializer of the recorded DrawList in the tools.
     pub drawlog: Option<crate::drawlog::Writer>,
     // Frame_Run frame-skip counter (i8, 00 §2), compared with cfg +0x23; SKIP_START after every (re)start.
     pub skip_counter: i8,
@@ -170,7 +172,7 @@ impl Ctx {
         source: Source,
         gfx: Gfx,
         core: crate::coreconfig::CoreConfig,
-        host: crate::scoredat::HostIo,
+        host: Box<dyn crate::host::Host>,
     ) -> anyhow::Result<Self> {
         Self::load_with(source, gfx, true, core, host).await
     }
@@ -182,14 +184,13 @@ impl Ctx {
         gfx: Gfx,
         persist: bool,
         core: crate::coreconfig::CoreConfig,
-        mut host: crate::scoredat::HostIo,
+        mut host: Box<dyn crate::host::Host>,
     ) -> anyhow::Result<Self> {
         let archive = Archive::from_bytes(source.read("th08.dat").await?)?;
         // Supervisor_OnRegister 0x4461A0: the exe-check version list, archive only; missing fails start-up (15 §2.10).
         let ver = archive
             .read(crate::scoredat::VER_LIST_NAME)
             .context("error : データのバージョンが違います")?;
-        host.set_ver_list(ver);
         let mut bgm = crate::sound::Bgm::new(&archive.read("thbgm.fmt")?);
         let mut audio = Audio::new(source.clone());
         audio.load_se(&archive);
@@ -197,6 +198,7 @@ impl Ctx {
         bgm.midi_ready = audio.midi_available();
         // Config_Load (15 §1.2): th08.cfg and the thbgm.dat header probe (02 §1), then the file is written back.
         // The port's own save first; else import the original's th08.cfg (read-only).
+        // TODO(step 8b): game-directory reads (assets, the original's th08.cfg / score.dat imports) via `Source`.
         let bgm_header = source.read_range("thbgm.dat", 0, 16).await.ok();
         let mut cfg_file = None;
         if persist {
@@ -214,11 +216,6 @@ impl Ctx {
             archive,
             audio,
             input: Input::default(),
-            pad: if persist {
-                crate::joystick::Joystick::new()
-            } else {
-                Default::default()
-            },
             anm: AnmManager::default(),
             rng: Default::default(),
             tasks: Tasks::default(),
@@ -245,6 +242,7 @@ impl Ctx {
             info: Default::default(),
         };
         ctx.game.cfg = cfg;
+        ctx.game.ver_list.set(ver);
         // Music mode cfg +0x1F and BGM volume +0x27 (02 §4) from the loaded config.
         ctx.bgm.set_volumes(&ctx.game.cfg);
         ctx.flush_sound();
@@ -258,7 +256,7 @@ impl Ctx {
         if ctx.drawlog.is_some() {
             ctx.gfx.enable_log();
         }
-        ctx.rng = crate::rng::Rng::boot(ctx.core.seed);
+        ctx.rng = crate::rng::Rng::boot(ctx.core.seed, ctx.host.boot_clock_ms());
         if persist {
             // The port's own save first; else import the original's score.dat (read-only).
             // The whole file is loaded once; equivalent to the original's boot PLST take (15 §2.2, INFERRED).
@@ -266,10 +264,10 @@ impl Ctx {
                 Some(f) => Some(f),
                 None => source.read("score.dat").await.ok(),
             };
-            ctx.game.load_score(file.as_deref(), &ctx.host);
+            ctx.game.load_score(file.as_deref(), ctx.host.ticks_ms());
             ctx.game.persist = true;
         } else {
-            ctx.game.load_score(None, &ctx.host);
+            ctx.game.load_score(None, ctx.host.ticks_ms());
         }
         // Debug: `TH08_CLRD` overrides clear masks.
         ctx.game.debug_clear_masks(ctx.core.clrd.as_deref());
@@ -404,7 +402,7 @@ impl Ctx {
         // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
         self.bgm.midi_reset();
         self.flush_sound();
-        self.game.save_score(&mut self.rng, true, &self.host);
+        self.game.save_score(&mut self.rng, true, &mut *self.host);
         if self.game.persist {
             self.host.write("th08.cfg", &self.game.cfg.to_bytes());
         }
@@ -416,7 +414,7 @@ impl Ctx {
     // the window and device stay (the app applies the window mode), the 1 s sleep and 60 PeekMessage calls are skipped.
     pub fn restart(&mut self) -> anyhow::Result<()> {
         // Step 1: Result_Register(2) + teardown save score.dat; step 5 reloads it (the written bytes = the file).
-        let score = self.game.save_score(&mut self.rng, true, &self.host);
+        let score = self.game.save_score(&mut self.rng, true, &mut *self.host);
         task::clear(self);
         self.sound_update();
         self.bgm.stop_bgm();
@@ -429,7 +427,7 @@ impl Ctx {
         }
         // New ANM manager; g_GameSpeed := 1.0 (step 5; the port keeps it in the manager). Step 6: g_Rng state :=
         // (u16) timeGetTime(), the call counter +4 is kept (11 §1); AsciiManager_Load zeroes the ASCII object.
-        self.rng.state = crate::rng::Rng::boot(self.core.seed).state;
+        self.rng.state = crate::rng::Rng::boot(self.core.seed, self.host.boot_clock_ms()).state;
         // Supervisor flag 0x20 survives: the Supervisor object is not re-constructed (00 §2).
         let restore = self.anm.slowdown_restore;
         self.anm = AnmManager::default();
@@ -439,7 +437,8 @@ impl Ctx {
         self.ascii = Default::default();
         self.skip_counter = SKIP_START;
         self.init_presents = 2;
-        self.game.load_score(Some(&score), &self.host);
+        let now = self.host.ticks_ms();
+        self.game.load_score(Some(&score), now);
         // Step 3: scene +0x158 := 0; the original's request −1 (switch to the menu on the first calc) is the port's
         // boot request of Supervisor_Init; +0x160 stays until the boot → menu switch writes it.
         self.game.scene = crate::gamemgr::SCENE_BOOT;
@@ -458,7 +457,7 @@ impl Ctx {
         };
         let demo = (g.flags & crate::gamemgr::F_DEMO != 0).then_some((g.demo, g.demo_frame));
         let input = if g.scene == crate::gamemgr::SCENE_GAME {
-            self.input.game
+            self.input.game[0]
         } else {
             self.input.held
         };
@@ -466,6 +465,11 @@ impl Ctx {
         if let Some(w) = &mut self.drawlog {
             w.frame(scene, game_frame, demo, input, &recs);
         }
+    }
+
+    // Tools and tests: their own host type (`platform::ToolHost`), None for another host.
+    pub fn host_as<T: 'static>(&mut self) -> Option<&mut T> {
+        self.host.as_any_mut().downcast_mut()
     }
 
     // Starts an in-memory draw log (tests and tools).
@@ -489,7 +493,7 @@ mod tests {
                 gfx,
                 false,
                 crate::settings::get().core(),
-                crate::settings::get().host_io(),
+                crate::settings::get().tool_host(),
             ))
             .unwrap(),
         )

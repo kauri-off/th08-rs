@@ -13,23 +13,11 @@ pub struct Sched {
     pub stages: VecDeque<[i64; 3]>,
     // Poll index of the calc pass being run (negative during boot); advances on every chain restart (00 §3).
     pub poll: i64,
-    // Recorded Input_Poll return per poll index (polls.txt `S`/`I` rows).
-    pub input: std::rc::Rc<[u16]>,
     // Rows written inside this frame's calc (restarted passes, in-calc presents with ff −1), taken by `Session::run`.
     pub pass_rows: Vec<Row>,
     // Start value of the ASCII frame counter +0x8284 (12 §5.10 slow boots): `asciicalc − poll` of the first
     // `loader gauge` line when positive, else 0.
     pub ascii_offset: u32,
-}
-
-impl Sched {
-    // Raw input of poll `poll`; boot frames before the first menu frame never poll (0).
-    pub fn raw(&self, poll: i64) -> u16 {
-        usize::try_from(poll)
-            .ok()
-            .and_then(|p| self.input.get(p).copied())
-            .unwrap_or(0)
-    }
 }
 
 // FuncChain_RunCalc restart (00 §3, README "Trace"): the probe writes a row per pass, and the next pass polls again.
@@ -419,7 +407,8 @@ mod native {
             std::fs::create_dir_all(save.join("replay"))?;
             let start = self.dir.join("start");
             let score = std::fs::read(start.join("score.dat")).ok();
-            ctx.game.load_score(score.as_deref(), &ctx.host);
+            let now = ctx.host.ticks_ms();
+            ctx.game.load_score(score.as_deref(), now);
             if let Some(b) = &score {
                 std::fs::write(save.join("score.dat"), b)?;
             }
@@ -436,13 +425,13 @@ mod native {
             {
                 std::fs::copy(e.path(), save.join("replay").join(e.file_name()))?;
             }
-            ctx.host.set_save_dir(Some(save));
+            // The session's host: its save dir and the recorded Input_Poll returns (polls.txt), one per poll.
+            let host = crate::platform::tool_host(ctx);
+            host.storage.set_save_dir(Some(save));
+            host.polls = Some(self.input.as_slice().into());
             ctx.rng = crate::rng::Rng::seeded(self.seed as u16);
             ctx.overlays.set_frame_counter(self.sched.ascii_offset);
-            ctx.game.sched = Some(Sched {
-                input: self.input.as_slice().into(),
-                ..self.sched.clone()
-            });
+            ctx.game.sched = Some(self.sched.clone());
             ctx.game.noclip = self.noclip;
             Ok(())
         }
@@ -477,8 +466,9 @@ mod native {
                     s.poll = poll;
                     s.pass_rows.clear();
                 }
-                // Info_Show polls outside the chain; Supervisor_Calc takes its own word from the schedule.
-                ctx.input.raw = ctx.game.sched.as_ref().map_or(0, |s| s.raw(poll));
+                // This frame's first poll (Supervisor_Calc or Info_Show) reads recorded poll `poll`; each restarted
+                // pass polls the next one (00 §3).
+                crate::platform::tool_host(ctx).cursor = poll;
                 let tr = rng_row == Some(poll + 1);
                 crate::rng::TRACE.set(tr);
                 let flow = match &mut draw {
@@ -655,7 +645,7 @@ mod tests {
                 gfx,
                 false,
                 crate::settings::get().core(),
-                crate::settings::get().host_io(),
+                crate::settings::get().tool_host(),
             ))
             .unwrap();
             let s = Session::load(&data_dir(name)).unwrap();
@@ -714,7 +704,7 @@ mod tests {
             gfx,
             false,
             crate::settings::get().core(),
-            crate::settings::get().host_io(),
+            crate::settings::get().tool_host(),
         ))
         .unwrap();
         let s = Session::load(&data_dir("selftest1")).unwrap();
@@ -754,7 +744,7 @@ mod tests {
             gfx,
             false,
             crate::settings::get().core(),
-            crate::settings::get().host_io(),
+            crate::settings::get().tool_host(),
         ))
         .unwrap();
         let s = Session::load(&data_dir("fullrun_noclip")).unwrap();
