@@ -393,10 +393,14 @@ fn timer_at(v: i32) -> anmvm::Timer {
     t
 }
 
+// Popup part of `Ascii_InitVms` 0x402450 (13 §4): all slots cleared, small (+0x8290) and special (+0x8294) cursors
+// := 0; the large cursor +0x8298 is kept across stages and games.
 pub fn clear_popups() {
     POPUPS.with_borrow_mut(|p| {
         p.slots.iter_mut().for_each(|s| *s = None);
         p.large.iter_mut().for_each(|s| *s = None);
+        p.next = 0;
+        p.special = 0;
     });
 }
 
@@ -1663,6 +1667,22 @@ mod tests {
         assert_eq!(y, Some(216.0 - 30.0));
         popups_calc(1.0);
         assert!(POPUPS.with_borrow(|p| p.slots[0].is_none()));
+    }
+
+    // 13 §4 (RE-Q71): Ascii_InitVms resets the small and special cursors, not the large one.
+    #[test]
+    fn clear_popups_resets_small_cursors() {
+        clear_popups();
+        popup([0.0; 3], 1, 0xFFFFFFFF);
+        popup_special([0.0; 3], 1, 0xFFFFFFFF);
+        popup_large_static([0.0, 0.0], 1, 0, 0xFFFFFFFF);
+        let large0 = POPUPS.with_borrow(|p| p.large_next);
+        clear_popups();
+        POPUPS.with_borrow(|p| {
+            assert_eq!((p.next, p.special, p.large_next), (0, 0, large0));
+            assert!(p.slots.iter().all(Option::is_none));
+            assert!(p.large.iter().all(Option::is_none));
+        });
     }
 
     // 13 §4 (RE-Q67): Timer_Greater on the integer cur, so at speed 0.5 a small popup lives 122 calcs, a static

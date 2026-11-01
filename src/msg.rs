@@ -358,9 +358,30 @@ impl Dialogue {
         self.side_effects = true;
     }
 
-    // Starts text.anm script `line` on line[line] and queues Text_RenderToVm (10 §6).
+    // Op 16 line VM at +0x222C4 + line·0x2A4 with no clamp (10 §5.1, RE-Q71): line 2 is boss_card (+0x2280C).
+    // Line 3 (+0x22AB0, not modelled) never occurs: the data has at most three op-16 lines per box.
+    pub fn line_vm(&self, line: usize) -> Option<&AnmVm> {
+        match line {
+            0 | 1 => Some(&self.lines[line]),
+            2 => Some(&self.boss_card),
+            _ => None,
+        }
+    }
+
+    fn line_vm_mut(&mut self, line: usize) -> Option<&mut AnmVm> {
+        match line {
+            0 | 1 => Some(&mut self.lines[line]),
+            2 => Some(&mut self.boss_card),
+            _ => None,
+        }
+    }
+
+    // Starts text.anm script `line` on the line VM and queues Text_RenderToVm (10 §6).
     fn render(&mut self, anm: &mut AnmManager, line: usize, s: String, colour: [u8; 3]) {
-        anm.set_script(&mut self.lines[line], TEXT_SLOT, line);
+        let Some(vm) = self.line_vm_mut(line) else {
+            return;
+        };
+        anm.set_script(vm, TEXT_SLOT, line);
         self.texts.push((line, s, colour));
     }
 
@@ -489,13 +510,13 @@ impl Dialogue {
                     self.next_line = 0;
                 }
                 let (line, c) = (
-                    self.next_line.min(1) as usize,
+                    self.next_line as usize,
                     self.text_colour[self.text_speaker as usize],
                 );
                 self.render(anm, line, s, c);
                 self.wait_count = 0;
                 self.new_box = false;
-                self.next_line += 1;
+                self.next_line = self.next_line.wrapping_add(1);
             }
             17 => {
                 let (who, s) = (f.i32(&ins, 0) as u8, f.i32(&ins, 1));
@@ -702,6 +723,30 @@ mod tests {
             let n = d.events.iter().filter(|e| **e == Event::HaltFinal).count();
             assert_eq!(n, usize::from(stage >= 6), "stage {stage}");
         }
+    }
+
+    // 10 §5.1 op 16 (RE-Q71): no clamp, so the third line of a box goes to boss_card (line index 2).
+    #[test]
+    fn op16_third_line_on_boss_card() {
+        let text = |c: u8| [0, 0, 16, 2, c ^ 0x77, 0x77];
+        let mut data = vec![1, 0, 0, 0, 8, 0, 0, 0];
+        for c in [b'a', b'b', b'c'] {
+            data.extend(text(c));
+        }
+        let f = parse(data).unwrap();
+        let mut anm = AnmManager::default();
+        let mut d = Dialogue {
+            new_box: true,
+            ..Dialogue::default()
+        };
+        for k in 0..3 {
+            let ins = f.ins(8 + 6 * k).unwrap();
+            d.exec(&f, &mut anm, &Input::default(), ins);
+        }
+        let lines: Vec<(usize, String)> = d.texts.iter().map(|t| (t.0, t.1.clone())).collect();
+        assert_eq!(lines, [(0, "a".into()), (1, "b".into()), (2, "c".into())]);
+        assert!(std::ptr::eq(d.line_vm(2).unwrap(), &d.boss_card));
+        assert!(d.line_vm(3).is_none());
     }
 
     // Wait: Shot advances only after min_wait frames; timeout after n; skip is instant.

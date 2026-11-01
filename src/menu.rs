@@ -1234,6 +1234,8 @@ impl Task<Ctx> for MainMenu {
             crate::menulist::RT_SLOT,
             "resulttext.anm",
         )?;
+        // MainMenu_OnRegister → Ascii_InitVms (popup slots + small/special cursors, 13 §4).
+        crate::ascii::clear_popups();
         // MainMenu_OnRegister → Ascii_SetupGaugeVms; hidden in the menu, redone at StageStart (12 §5.9).
         let l = crate::player::GaugeLimits::default();
         crate::ascii::gauge_setup(&mut ctx.anm, l.min, l.max);

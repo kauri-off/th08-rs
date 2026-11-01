@@ -468,7 +468,11 @@ impl Hud {
         let mut d = self.msg.borrow_mut();
         let size = d.font_size;
         for (line, s, colour) in std::mem::take(&mut d.texts) {
-            let Some((tex, w, y)) = Self::line_texture(&ctx.anm, &ctx.gfx, &d.lines[line]) else {
+            // Line 2 renders into boss_card's strip (text.anm sprite 2, 10 §5.1).
+            let Some((tex, w, y)) = d
+                .line_vm(line)
+                .and_then(|vm| Self::line_texture(&ctx.anm, &ctx.gfx, vm))
+            else {
                 continue;
             };
             let rgba = self.raster.render(&s, colour, w as usize, size);

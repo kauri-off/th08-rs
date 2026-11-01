@@ -1175,7 +1175,6 @@ impl Task<Ctx> for EffectManager {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             clear();
-            crate::ascii::clear_popups();
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, BG_SLOT, {
                 let card = ctx.game.spell_practice().then_some(ctx.game.card);
                 bg_file(ctx.game.stage, card)
@@ -1187,7 +1186,6 @@ impl Task<Ctx> for EffectManager {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
             clear();
-            crate::ascii::clear_popups();
             ctx.anm.unload(&mut ctx.gfx, BG_SLOT);
         }
     }

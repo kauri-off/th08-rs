@@ -918,6 +918,8 @@ impl GameManager {
         g.flags |= F_RUNNING;
         g.game_over = 0;
         g.flags &= !F_ENDING_OK;
+        // Ascii_InitVms after `flags &= ~0x10`, before the loading wait (11 §3.1, 13 §4).
+        crate::ascii::clear_popups();
         self.tasks = vec![
             self.player.clone(),
             stage_t.clone(),
@@ -1088,6 +1090,8 @@ impl Task<Ctx> for GameManager {
         for t in std::mem::take(&mut self.tasks) {
             task::remove_task(ctx, &t);
         }
+        // Ascii_InitVms after the subsystem teardown (11 §2, 13 §4).
+        crate::ascii::clear_popups();
         if ctx.game.replay() {
             ctx.game.play_clock = None;
         } else {
