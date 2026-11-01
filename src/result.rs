@@ -306,12 +306,12 @@ impl ResultScreen {
         };
         if d != 0 {
             self.cursor = (self.cursor + d).rem_euclid(n);
-            sound::play(sound::SELECT);
+            ctx.sound.play(sound::SELECT);
             self.highlight(first, n);
         }
         // Every page tests cancel before confirm (16 §2.4), so both on one frame cancel.
         if inp.pressed(CANCEL) {
-            sound::play(sound::CANCEL);
+            ctx.sound.play(sound::CANCEL);
             return Some(false);
         }
         if inp.pressed(CONFIRM) {
@@ -357,7 +357,7 @@ impl ResultScreen {
                 // The code steps after the page input; a confirm / cancel call returns before it (16 §2.4).
                 match self.page(ctx, 4, 5, self.rank_diff, 6) {
                     Some(true) => {
-                        sound::play(sound::OK);
+                        ctx.sound.play(sound::OK);
                         self.rank_diff = self.cursor;
                         self.set_state(S_CHAR);
                         self.cursor = 0;
@@ -370,7 +370,7 @@ impl ResultScreen {
                     None => {
                         if self.hidden.step(ctx.input) {
                             hidden_unlock(&mut ctx.game);
-                            sound::play(sound::EXTEND);
+                            ctx.sound.play(sound::EXTEND);
                         }
                     }
                 }
@@ -378,7 +378,7 @@ impl ResultScreen {
             // State 4 (0x45567D).
             S_CHAR => match self.page(ctx, 15, 12, self.rank_shot, 6) {
                 Some(true) => {
-                    sound::play(sound::OK);
+                    ctx.sound.play(sound::OK);
                     self.vms[VM_ANCHOR].pending_interrupt = 3;
                     self.rank_shot = -1;
                     self.set_state(S_RANK);
@@ -396,7 +396,7 @@ impl ResultScreen {
             // State 6 (0x455A33).
             S_GROUP => match self.page(ctx, 9, 6, self.card_group, 6) {
                 Some(true) => {
-                    sound::play(sound::OK);
+                    ctx.sound.play(sound::OK);
                     self.card_group = self.cursor;
                     self.set_state(S_CARD_CHAR);
                 }
@@ -410,7 +410,7 @@ impl ResultScreen {
             // State 7 (0x455CB0).
             S_CARD_CHAR => match self.page(ctx, 27, 13, self.card_char, 6) {
                 Some(true) => {
-                    sound::play(sound::OK);
+                    ctx.sound.play(sound::OK);
                     self.card_char = self.cursor;
                     self.set_state(S_CARDS);
                     self.vms[VM_ANCHOR].pending_interrupt = 3;
@@ -446,15 +446,15 @@ impl ResultScreen {
                     self.frame = 9;
                 }
             }
-            S_SAVE => self.save_ask(ctx.input, &ctx.game),
+            S_SAVE => self.save_ask(ctx.input, &ctx.game, &mut ctx.sound),
             S_SAVE_MSG => {
                 // State 11: the "cannot save" message, left from frame 20 (16 §2.6).
                 let inp = ctx.input;
                 if self.frame >= 20 && (inp.pressed(CONFIRM) || inp.pressed(CANCEL)) {
-                    self.leave_save();
+                    self.leave_save(&mut ctx.sound);
                 }
             }
-            S_SAVE_SLOT => self.save_slot(ctx.input, &ctx.game),
+            S_SAVE_SLOT => self.save_slot(ctx.input, &ctx.game, &mut ctx.sound),
             S_SAVE_NAME => self.save_name(ctx),
             S_SAVE_OVER => self.save_overwrite(ctx),
             S_PLAY | S_PLAY_WAIT | S_PLAY_OUT => self.play_data(ctx),
@@ -484,19 +484,19 @@ impl ResultScreen {
         match self.page(ctx, 0, 4, c, 20) {
             Some(true) => match self.cursor {
                 0 => {
-                    sound::play(sound::OK);
+                    ctx.sound.play(sound::OK);
                     self.set_state(S_DIFF);
                 }
                 1 => {
-                    sound::play(sound::OK);
+                    ctx.sound.play(sound::OK);
                     self.set_state(S_GROUP);
                 }
                 2 => {
-                    sound::play(sound::OK);
+                    ctx.sound.play(sound::OK);
                     self.set_state(S_PLAY);
                 }
                 _ => {
-                    sound::play(sound::CANCEL);
+                    ctx.sound.play(sound::CANCEL);
                     self.set_state(S_LEAVE);
                 }
             },
@@ -509,7 +509,7 @@ impl ResultScreen {
                     self.highlight(0, 4);
                     if ctx.input.pressed(CONFIRM) {
                         self.confirm_vms(0, 4);
-                        sound::play(sound::CANCEL);
+                        ctx.sound.play(sound::CANCEL);
                         self.set_state(S_LEAVE);
                     }
                 }
@@ -538,7 +538,7 @@ impl ResultScreen {
         if d != 0 {
             let old = self.cursor;
             self.cursor = (self.cursor + d).rem_euclid(12);
-            sound::play(sound::SELECT);
+            ctx.sound.play(sound::SELECT);
             self.frame = 0;
             self.vms[VM_ANCHOR].pending_interrupt = (3 + self.rank_diff) as u16;
             self.vms[15 + old as usize].pending_interrupt = 24;
@@ -547,7 +547,7 @@ impl ResultScreen {
         if inp.pressed(CANCEL) {
             self.rank_shot = self.cursor;
             self.vms[VM_ANCHOR].pending_interrupt = 1;
-            sound::play(sound::CANCEL);
+            ctx.sound.play(sound::CANCEL);
             self.set_state(S_CHAR);
         }
     }
@@ -598,7 +598,7 @@ impl ResultScreen {
         };
         if lr != 0 {
             self.cursor = (self.cursor + lr).rem_euclid((n + 9) / 10);
-            sound::play(sound::SELECT);
+            ctx.sound.play(sound::SELECT);
             self.frame = 0;
             self.vms[VM_ANCHOR].pending_interrupt = 10;
         } else {
@@ -613,7 +613,7 @@ impl ResultScreen {
             if ud != 0 {
                 let old = self.card_char;
                 self.card_char = (self.card_char + ud).rem_euclid(13);
-                sound::play(sound::SELECT);
+                ctx.sound.play(sound::SELECT);
                 self.frame = 0;
                 self.accordion = true;
                 self.vms[27 + old as usize].pending_interrupt = 24;
@@ -623,7 +623,7 @@ impl ResultScreen {
         if inp.pressed(CANCEL) {
             self.card_leaving = true;
             self.frame = 0;
-            sound::play(sound::CANCEL);
+            ctx.sound.play(sound::CANCEL);
             self.vms[VM_ANCHOR].pending_interrupt = 1;
         }
     }
@@ -713,7 +713,7 @@ impl ResultScreen {
 
     // One frame of the name grid (16 §2.2), into +0x58: Up, Down, Left, Right, type, backspace, then the ESC edge; every
     // key but ESC is edge or repeat.
-    fn edit_name(&mut self, ctx: &Ctx) -> NameKeys {
+    fn edit_name(&mut self, ctx: &mut Ctx) -> NameKeys {
         let inp = ctx.input;
         let rep = |b: u16| inp.pressed_or_repeat(b);
         let (c, moves) = move_char_cursor(
@@ -721,17 +721,17 @@ impl ResultScreen {
             [rep(UP), rep(DOWN), rep(LEFT), rep(RIGHT)],
         );
         for _ in 0..moves {
-            sound::play(sound::SELECT);
+            ctx.sound.play(sound::SELECT);
         }
         self.char_cursor = c;
         let mut end = false;
         if rep(SHOT | ENTER) {
             if c < CELL_SP {
-                self.type_char(CHARSET[c as usize]);
+                self.type_char(CHARSET[c as usize], &mut ctx.sound);
             } else if c == CELL_SP {
-                self.type_char(b' ');
+                self.type_char(b' ', &mut ctx.sound);
             } else {
-                sound::play(sound::CANCEL);
+                ctx.sound.play(sound::CANCEL);
                 end = true;
             }
         }
@@ -740,7 +740,7 @@ impl ResultScreen {
             self.name[self.name_pos.min(7) as usize] = b' ';
             self.name_pos -= 1;
             self.name[self.name_pos as usize] = b' ';
-            sound::play(sound::CANCEL);
+            ctx.sound.play(sound::CANCEL);
         }
         NameKeys {
             end,
@@ -769,22 +769,22 @@ impl ResultScreen {
     }
 
     // Result_CursorLeftRight over 2 entries, edge or repeat, SE 12.
-    fn yes_no_keys(&mut self, inp: Input) {
+    fn yes_no_keys(&mut self, inp: Input, sound: &mut crate::sound::Queue) {
         if inp.pressed_or_repeat(LEFT) || inp.pressed_or_repeat(RIGHT) {
             self.cursor ^= 1;
-            sound::play(sound::SELECT);
+            sound.play(sound::SELECT);
         }
     }
 
     // SE 11, state 2, all VMs interrupt 2 (16 §2.6).
-    fn leave_save(&mut self) {
-        sound::play(sound::CANCEL);
+    fn leave_save(&mut self, sound: &mut crate::sound::Queue) {
+        sound.play(sound::CANCEL);
         self.set_state(S_LEAVE);
         self.interrupt_all(2);
     }
 
     // State 10, Result_SaveReplay 0x45696F (16 §2.6): "save replay?"; entered with frame 9 after the end panel.
-    fn save_ask(&mut self, inp: Input, g: &gamemgr::Game) {
+    fn save_ask(&mut self, inp: Input, g: &gamemgr::Game, sound: &mut crate::sound::Queue) {
         if self.frame == 10 {
             // Slow mode (Supervisor+0x1A4 bit 3, the no-record flag, is never set in retail code, 15 §3.2).
             let i = if g.game_slow() != 0 {
@@ -805,18 +805,18 @@ impl ResultScreen {
         if self.frame < 12 {
             return;
         }
-        self.yes_no_keys(inp);
+        self.yes_no_keys(inp, sound);
         if inp.pressed(CANCEL) || inp.pressed(CONFIRM) && self.cursor == 1 {
-            self.leave_save();
+            self.leave_save(sound);
         } else if inp.pressed(CONFIRM) {
-            self.back_to_list();
+            self.back_to_list(sound);
         }
     }
 
     // Shared back-to-list code 0x456BBB (16 §2.6; state 10 confirm, 14 cancel / "no", 13 ESC): SE 10, sound flush,
     // state 12, all 72 VMs interrupt 12, frame 0, headers re-read in the same call; +0x1C is not reset.
-    fn back_to_list(&mut self) {
-        sound::play(sound::OK);
+    fn back_to_list(&mut self, sound: &mut crate::sound::Queue) {
+        sound.play(sound::OK);
         self.flush = true;
         self.enter_slot_list();
         self.interrupt_all(12);
@@ -837,7 +837,7 @@ impl ResultScreen {
     }
 
     // State 12 (16 §2.6): the 15 slots, cursor from frame 20.
-    fn save_slot(&mut self, inp: Input, g: &gamemgr::Game) {
+    fn save_slot(&mut self, inp: Input, g: &gamemgr::Game, sound: &mut crate::sound::Queue) {
         if self.frame < 20 {
             return;
         }
@@ -850,12 +850,12 @@ impl ResultScreen {
         };
         if d != 0 {
             self.cursor = (self.cursor + d).rem_euclid(15);
-            sound::play(sound::SELECT);
+            sound.play(sound::SELECT);
         }
         self.slot = self.cursor.clamp(0, 14);
         // Confirm does not return: the cancel test follows in the same call and wins (16 §2.6, both SEs play).
         if inp.pressed(CONFIRM) {
-            sound::play(sound::OK);
+            sound.play(sound::OK);
             self.entry_date = crate::supervisor::date_md();
             self.entry_score = g.stats.score10.clamp(0, 999_999_999) as u32;
             let valid = self.slots.get(self.slot as usize).is_some_and(|s| s.0);
@@ -868,7 +868,7 @@ impl ResultScreen {
             self.char_cursor = if g.lsnm_found { CELL_END } else { 0 };
         }
         if inp.pressed(CANCEL) {
-            sound::play(sound::CANCEL);
+            sound.play(sound::CANCEL);
             self.set_state(S_SAVE);
             self.interrupt_all(2);
         }
@@ -880,11 +880,11 @@ impl ResultScreen {
         if self.frame < 20 {
             return;
         }
-        self.yes_no_keys(ctx.input);
+        self.yes_no_keys(ctx.input, &mut ctx.sound);
         let inp = ctx.input;
         // Cancel / ESC first, without looking at confirm (16 §2.6).
         if inp.pressed(CANCEL) {
-            self.back_to_list();
+            self.back_to_list(&mut ctx.sound);
         } else if inp.pressed(CONFIRM) {
             self.frame = 0;
             if self.cursor == 0 {
@@ -892,7 +892,7 @@ impl ResultScreen {
                 self.vms[56 + self.slot as usize].pending_interrupt = 16;
                 self.set_state(S_SAVE_NAME);
             } else {
-                self.back_to_list();
+                self.back_to_list(&mut ctx.sound);
             }
         }
     }
@@ -912,14 +912,14 @@ impl ResultScreen {
             self.set_state(S_LEAVE);
             self.interrupt_all(2);
         } else if k.esc {
-            self.back_to_list();
+            self.back_to_list(&mut ctx.sound);
             // QUIRK: name pos and list cursor are both +0x1C, so the list resumes on row = name length.
             self.cursor = self.name_pos;
         }
     }
 
     // name[min(pos, 7)] = ch; pos < 8 → pos += 1; at 8 the cursor jumps to END; SE 10 (16 §2.2).
-    fn type_char(&mut self, ch: u8) {
+    fn type_char(&mut self, ch: u8, sound: &mut crate::sound::Queue) {
         self.name[self.name_pos.min(7) as usize] = ch;
         if self.name_pos < 8 {
             self.name_pos += 1;
@@ -927,7 +927,7 @@ impl ResultScreen {
                 self.char_cursor = CELL_END;
             }
         }
-        sound::play(sound::OK);
+        sound.play(sound::OK);
     }
 
     // VM 71's interrupt 18 is written by state 0xF itself (16 §2.1).
@@ -1727,7 +1727,7 @@ mod tests {
             (gamemgr::F_SPELL_PRACTICE, S_SAVE),
         ] {
             let mut g = gamemgr::Game::default();
-            gamemgr::set_flags(flags);
+            g.flags = flags;
             let mut r = ResultScreen::new(1);
             r.register_state(&mut g);
             assert_eq!((r.state, r.frame), (st, 0));
@@ -1744,7 +1744,7 @@ mod tests {
         r.text_vms = vec![AnmVm::default(); 28];
         r.state = S_SAVE;
         r.frame = 10;
-        r.save_ask(Input::default(), &g);
+        r.save_ask(Input::default(), &g, &mut Default::default());
         assert_eq!((r.state, r.frame), (S_SAVE_MSG, 10));
     }
 
@@ -2034,7 +2034,7 @@ mod tests {
         };
         r.set_state(S_SAVE);
         r.frame = 12;
-        r.save_ask(confirm, &g);
+        r.save_ask(confirm, &g, &mut Default::default());
         assert_eq!((r.state, r.frame), (S_SAVE_SLOT, 0));
         assert!(r.flush);
         assert!(r.vms.iter().all(|v| v.pending_interrupt == 12));
@@ -2043,7 +2043,7 @@ mod tests {
             held: SHOT | BOMB,
             ..Default::default()
         };
-        r.save_slot(both, &g);
+        r.save_slot(both, &g, &mut Default::default());
         assert_eq!((r.state, r.frame), (S_SAVE, 0));
         assert!(r.vms.iter().all(|v| v.pending_interrupt == 2));
         assert_eq!(r.char_cursor, 0);
@@ -2073,16 +2073,16 @@ mod tests {
         // Result_Calc order: state, then frame += 1.
         r.set_state(S_SAVE);
         r.frame = 12;
-        r.save_ask(confirm, &g);
+        r.save_ask(confirm, &g, &mut Default::default());
         assert_eq!(r.state, S_SAVE_SLOT);
         assert_eq!(r.slots.len(), 15);
         assert!(r.slots.iter().all(|e| !e.0));
         r.frame += 1;
         while r.frame < 20 {
-            r.save_slot(Input::default(), &g);
+            r.save_slot(Input::default(), &g, &mut Default::default());
             r.frame += 1;
         }
-        r.save_slot(confirm, &g);
+        r.save_slot(confirm, &g, &mut Default::default());
         assert_eq!((r.state, r.slot), (S_SAVE_NAME, 0));
         assert_eq!(r.vms[56].pending_interrupt, 16);
         crate::scoredat::set_save_dir(None);

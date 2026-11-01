@@ -1,7 +1,5 @@
 //! SE queue of the sound manager (13 §1.1–§1.3): `Sound_Play` 0x45D550, `Sound_PlayAt` 0x45D660, flushed by `Sound_Update` 0x45D790.
 
-use std::cell::RefCell;
-
 // Sound effect ids (13 §1.1).
 pub const PLST: i32 = 0;
 pub const ENEP0: i32 = 2;
@@ -87,7 +85,7 @@ const MAX_PANS: usize = 128;
 
 // Per-frame queue (13 §1.2): up to 12 distinct ids (manager +0x620), each with up to 128 pan values (+0x680);
 // a 13th distinct id in one frame is dropped, so each id sounds at most once per frame.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Queue {
     slots: Vec<(i32, Vec<i32>)>,
 }
@@ -120,26 +118,16 @@ impl Queue {
     }
 }
 
-thread_local! {
-    static QUEUE: RefCell<Queue> = RefCell::default();
-}
+impl Queue {
+    // Sound_Play(id, pan); every call site passes pan 0 (13 §1.2).
+    pub fn play(&mut self, id: i32) {
+        self.push(id, 0);
+    }
 
-// Sound_Play(id, pan); every call site passes pan 0 (13 §1.2).
-pub fn play(id: i32) {
-    QUEUE.with_borrow_mut(|q| q.push(id, 0));
-}
-
-// Sound_PlayAt(id, x): pan = trunc((x − 192)·1000/192), −1000 at x = 0 … +1000 at x = 384 (13 §1.2).
-pub fn play_at(id: i32, x: f32) {
-    QUEUE.with_borrow_mut(|q| q.push(id, ((x - 192.0) * 1000.0 / 192.0) as i32));
-}
-
-pub fn take() -> Vec<(i32, i32)> {
-    QUEUE.with_borrow_mut(|q| q.drain())
-}
-
-pub fn pending() -> bool {
-    QUEUE.with_borrow(|q| !q.is_empty())
+    // Sound_PlayAt(id, x): pan = trunc((x − 192)·1000/192), −1000 at x = 0 … +1000 at x = 384 (13 §1.2).
+    pub fn play_at(&mut self, id: i32, x: f32) {
+        self.push(id, ((x - 192.0) * 1000.0 / 192.0) as i32);
+    }
 }
 
 #[cfg(test)]
@@ -172,9 +160,10 @@ mod tests {
 
     #[test]
     fn pan_from_x() {
-        play_at(4, 384.0);
-        play_at(5, 0.0);
-        play_at(6, 192.0);
-        assert_eq!(take(), vec![(4, 1000), (5, -1000), (6, 0)]);
+        let mut q = Queue::default();
+        q.play_at(4, 384.0);
+        q.play_at(5, 0.0);
+        q.play_at(6, 192.0);
+        assert_eq!(q.drain(), vec![(4, 1000), (5, -1000), (6, 0)]);
     }
 }

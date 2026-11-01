@@ -2,7 +2,8 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::BulletManager;
-use crate::game::Ctx;
+use crate::effect::Effects;
+use crate::game::{Ctx, Sys};
 use crate::gamemgr::{self, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
 use crate::gfx::PLAYFIELD;
 use crate::input;
@@ -247,9 +248,9 @@ impl Stats {
     }
 
     // Rank deltas go straight through the GM sub-counter (11 §3.2); `rank_delta` only sums them per frame.
-    pub fn rank(&mut self, d: i32) {
+    pub fn rank(&mut self, r: &mut crate::gamemgr::Rank, d: i32) {
         self.rank_delta += d;
-        crate::gamemgr::rank_add(d);
+        r.add(d);
     }
 
     // GameMgr_UpdateChecksum 0x406E50: only the 2 × Rng_Range(100000) draws are kept (11 §1.5, §5).
@@ -298,17 +299,17 @@ impl Stats {
     }
 
     // 08 §8.5 1up rule (Extend 0x439B29, 11 §5): life, else bomb; sfx 0x1C, rank +200.
-    pub fn extend(&mut self, rng: &mut Rng) {
+    pub fn extend(&mut self, rng: &mut Rng, sys: &mut Sys) {
         if self.lives < 8.0 {
             self.add_lives(1.0, rng);
             crate::hud::mark_lives(2);
-            self.rank(200);
-            crate::sound::play(crate::sound::EXTEND);
+            self.rank(sys.rank, 200);
+            sys.sound.play(crate::sound::EXTEND);
         } else if self.bombs < 8.0 {
             self.add_bombs(1.0, rng);
             crate::hud::mark_bombs(2);
-            self.rank(200);
-            crate::sound::play(crate::sound::EXTEND);
+            self.rank(sys.rank, 200);
+            sys.sound.play(crate::sound::EXTEND);
         }
     }
 
@@ -589,7 +590,7 @@ impl Player {
 
     // Player_Load 0x44D650 (09 §2, §6.4): sht files, gauge limits, initial script 0 / 5, solo options, state 1
     // with timer 120, or 10 in spell practice (GM +0x3DBAC bit 14, 11 §2.1).
-    pub fn load(&mut self, anm: &mut AnmManager, human: Sht, youkai: Sht, shot: u8) {
+    pub fn load(&mut self, anm: &mut AnmManager, human: Sht, youkai: Sht, shot: u8, flags: u32) {
         self.shot_type = shot;
         self.sht = human;
         self.sht_youkai = youkai;
@@ -599,7 +600,7 @@ impl Player {
         anm.set_script(&mut self.vm, ANM_SLOT, script);
         self.pos = START;
         self.state = 1;
-        let t = if gamemgr::flags() & F_SPELL_PRACTICE != 0 {
+        let t = if flags & F_SPELL_PRACTICE != 0 {
             10
         } else {
             120
@@ -618,7 +619,7 @@ impl Player {
         ctx.anm.load(&mut ctx.gfx, &ctx.archive, ANM_SLOT, &anm)?;
         {
             let mut p = p.borrow_mut();
-            p.load(&mut ctx.anm, human, youkai, shot);
+            p.load(&mut ctx.anm, human, youkai, shot, ctx.game.flags);
         }
         let t: task::TaskRef<Ctx> = p;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -678,6 +679,7 @@ impl Player {
         size: [f32; 2],
         env: &GrazeEnv,
         anm: &mut AnmManager,
+        sys: &mut Sys,
     ) -> (u8, u8) {
         self.cancel_item = 6;
         if self.in_bomb_area(p) {
@@ -686,11 +688,17 @@ impl Player {
         if matches!(self.state, 1 | 2) || !box_overlap(p, size, 20.0, self.graze_box) {
             return (0, 0);
         }
-        (1, self.on_graze(p, false, env, anm))
+        (1, self.on_graze(p, false, env, anm, sys))
     }
 
     // Player_HitTest 0x44A230 (09 §6.1 steps 1–6): 0 miss, 1 hit, 2 inside a bomb area.
-    pub fn hit_test(&mut self, p: [f32; 3], size: [f32; 2], anm: &mut AnmManager) -> u8 {
+    pub fn hit_test(
+        &mut self,
+        p: [f32; 3],
+        size: [f32; 2],
+        anm: &mut AnmManager,
+        sys: &mut Sys,
+    ) -> u8 {
         self.cancel_item = 6;
         if self.in_bomb_area(p) {
             return 2;
@@ -698,35 +706,35 @@ impl Player {
         if !box_overlap(p, size, 0.0, self.hit_box) {
             return 0;
         }
-        self.die(anm);
+        self.die(anm, sys);
         1
     }
 
     // Hit path of bullets/lasers/enemies (09 §6.1 steps 5–6): state check, ScrambleDecoys, then Player_Die.
     // Quirk kept: the state ≠ 0 return comes before the scramble, so invulnerable hits draw no RNG.
-    pub fn die(&mut self, anm: &mut AnmManager) {
+    pub fn die(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         if self.state != 0 {
             return;
         }
         Stats::scramble(&mut anm.rng);
         self.hits += 1;
-        self.player_die(anm);
+        self.player_die(anm, sys);
     }
 
     // Player_Die 0x44AB40 (09 §6.1); `debug_invuln` returns at its start like the noclip probe.
     // Both paths end with ItemMgr_DropAttracted, requested through `drop_attracted`.
-    fn player_die(&mut self, anm: &mut AnmManager) {
+    fn player_die(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         if self.debug_invuln {
             return;
         }
         // Freeze byte 0x160F534 := 0.
         crate::enemy::set_timer_pause(0);
         Stats::checksum(&mut anm.rng);
-        crate::sound::play_at(crate::sound::PLDEAD, self.pos[0]);
-        crate::effect::spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
+        sys.sound.play_at(crate::sound::PLDEAD, self.pos[0]);
+        sys.fx.spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
         self.state = 2;
         self.state_timer.set(0);
-        if self.special() {
+        if self.special(*sys.flags) {
             self.deathbomb = 2;
             self.forced_bomb = 1;
             self.drop_attracted = true;
@@ -756,10 +764,10 @@ impl Player {
             let a = self.vm.color[anmvm::A];
             self.vm.color2 = [0xFF, 0xFF, 0xFF, a];
             self.vm.flags |= anmvm::F_COLOR2;
-            crate::effect::death_ring(anm, self.pos, n);
+            crate::effect::death_ring(sys.fx, anm, self.pos, n);
             // GameFlags bit 10 only in the bombs ≥ 1 branch: a 0-bomb "Miss" during a card freezes nothing (09 §6.1).
             if self.env.spell {
-                self.set_freeze_bullets(true);
+                self.set_freeze_bullets(sys.flags, true);
             }
         }
         self.deathbomb = n;
@@ -767,18 +775,18 @@ impl Player {
     }
 
     // GameFlags bit 10, the spell-card death freeze (09 §6.1, 11 §2.1).
-    pub fn freeze_bullets(&self) -> bool {
-        gamemgr::flags() & gamemgr::F_DEATH != 0
+    pub fn freeze_bullets(&self, flags: u32) -> bool {
+        flags & gamemgr::F_DEATH != 0
     }
 
-    pub fn set_freeze_bullets(&mut self, on: bool) {
-        let f = gamemgr::flags() & !gamemgr::F_DEATH;
-        gamemgr::set_flags(if on { f | gamemgr::F_DEATH } else { f });
+    pub fn set_freeze_bullets(&mut self, flags: &mut u32, on: bool) {
+        let f = *flags & !gamemgr::F_DEATH;
+        *flags = if on { f | gamemgr::F_DEATH } else { f };
     }
 
     // GameFlags bits 7–8: a boss last spell runs or was captured (the dissolve-spell mode, 11 §2.1).
-    pub fn special(&self) -> bool {
-        gamemgr::flags() & (F_LAST_SPELL | F_LAST_CAPTURED) != 0
+    pub fn special(&self, flags: u32) -> bool {
+        flags & (F_LAST_SPELL | F_LAST_CAPTURED) != 0
     }
 
     // Player_OnGraze 0x44A930 (09 §9.2); returns how many time orbs (item type 10, mode 5) to drop at `p`.
@@ -789,10 +797,11 @@ impl Player {
         laser: bool,
         env: &GrazeEnv,
         anm: &mut AnmManager,
+        sys: &mut Sys,
     ) -> u8 {
         self.grazes += 1;
-        crate::sound::play_at(crate::sound::GRAZE, p[0]);
-        crate::effect::spawn(
+        sys.sound.play_at(crate::sound::GRAZE, p[0]);
+        sys.fx.spawn(
             anm,
             8,
             [(p[0] + self.pos[0]) / 2.0, (p[1] + self.pos[1]) / 2.0, 0.0],
@@ -812,7 +821,7 @@ impl Player {
             s.graze = (s.graze + g).min(99_999);
             s.graze_total = (s.graze_total + g).min(999_999);
         }
-        s.rank(6);
+        s.rank(sys.rank, 6);
         s.add_score(if s.youkai() { 4000 } else { 2000 });
         if self.mode != 0 && !self.bombing {
             s.gauge_add(100);
@@ -864,12 +873,18 @@ impl Player {
     }
 
     // Player_HitTestNoBomb 0x44A360 (09 §6.1): no bomb-area test; true on overlap in every state; only state 0 dies.
-    pub fn contact_test(&mut self, p: [f32; 3], size: [f32; 2], anm: &mut AnmManager) -> bool {
+    pub fn contact_test(
+        &mut self,
+        p: [f32; 3],
+        size: [f32; 2],
+        anm: &mut AnmManager,
+        sys: &mut Sys,
+    ) -> bool {
         self.cancel_item = 6;
         if !box_overlap(p, size, 0.0, self.hit_box) {
             return false;
         }
-        self.die(anm);
+        self.die(anm, sys);
         true
     }
 
@@ -886,6 +901,7 @@ impl Player {
         graze: bool,
         env: &GrazeEnv,
         anm: &mut AnmManager,
+        sys: &mut Sys,
     ) -> (u8, u8) {
         // Vec2_Rotate by −a: sin/cos rounded once to f32 (05 §10).
         let (sn, cs) = crate::fmath::sin_cos_f(-a);
@@ -901,12 +917,12 @@ impl Player {
         if hit(0.0) {
             // Step 5: state ≠ 0 returns 0 here, before the scramble.
             let alive = self.state == 0;
-            self.die(anm);
+            self.die(anm, sys);
             return (alive as u8, 0);
         }
         if graze && hit(48.0) && !matches!(self.state, 1 | 2) {
             let p = self.pos;
-            return (2, self.on_graze(p, true, env, anm));
+            return (2, self.on_graze(p, true, env, anm, sys));
         }
         (0, 0)
     }
@@ -939,7 +955,7 @@ impl Player {
     }
 
     // Player_Move (09 §3).
-    fn move_player(&mut self, anm: &mut AnmManager, inp: &input::Input) {
+    fn move_player(&mut self, anm: &mut AnmManager, inp: &input::Input, sys: &mut Sys) {
         let gs = anm.speed;
         let bits = inp.held;
         let (u, d, l, r) = (
@@ -977,7 +993,7 @@ impl Player {
                     } else {
                         (28, 0x808080FF)
                     };
-                    crate::effect::spawn(anm, kind, self.pos, 1, colour);
+                    sys.fx.spawn(anm, kind, self.pos, 1, colour);
                 }
                 // 09 §3: the team sprite reset also sets +0xE2A9C := 0, so moving on the switch frame replays the
                 // start-move script; solos keep it.
@@ -985,11 +1001,13 @@ impl Player {
             }
             // Hitbox marker: effect 22 in fixed slot 2 on every switch to focused, all shot types (14 §5).
             if f == 1 {
-                crate::effect::spawn_fixed(anm, 22, self.pos, crate::effect::FIX_AURA, 0xFFFFFFFF);
+                sys.fx
+                    .spawn_fixed(anm, 22, self.pos, crate::effect::FIX_AURA, 0xFFFFFFFF);
             } else {
-                crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_AURA, |e| {
-                    e.vm.pending_interrupt = 1
-                });
+                sys.fx
+                    .get(crate::effect::FIXED_BASE + crate::effect::FIX_AURA, |e| {
+                        e.vm.pending_interrupt = 1
+                    });
             }
             self.focus_age = 0;
             self.gauge_c.set(0);
@@ -1043,7 +1061,7 @@ impl Player {
         self.pos[0] = (self.pos[0] + vx * gs).clamp(CLAMP[0], CLAMP[2]);
         self.pos[1] = (self.pos[1] + vy * gs).clamp(CLAMP[1], CLAMP[3]);
         self.update_boxes();
-        self.update_options(anm, inp.down(input::SHOT));
+        self.update_options(anm, inp.down(input::SHOT), sys);
         if inp.down(input::SHOT) && self.shot_timer.cur < 0 && !self.env.dialogue {
             self.shot_timer.set(0);
         }
@@ -1100,13 +1118,18 @@ impl Player {
     }
 
     // Player_DyingUpdate 0x44CBF0 (09 §6.2); true when the respawn starts.
-    fn dying_update(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) -> bool {
+    fn dying_update(
+        &mut self,
+        anm: &mut AnmManager,
+        items: &mut Option<&mut ItemManager>,
+        sys: &mut Sys,
+    ) -> bool {
         if self.deathbomb > 0 {
             self.stats.add_time(-15, &mut anm.rng);
             self.deathbomb -= 1;
             self.last_spell = 1;
             if self.deathbomb == 0 {
-                self.real_death(anm, items);
+                self.real_death(anm, items, sys);
             }
             return false;
         }
@@ -1148,13 +1171,19 @@ impl Player {
     // The real death when the deathbomb window runs out (09 §6.2): effects, sound 0xF, unfreeze, miss counter
     // (checksum), time −= min(time/10, 500), drops (mode 2), rank −1600. The spell manager detects the failure
     // through `deaths`.
-    fn real_death(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) {
+    fn real_death(
+        &mut self,
+        anm: &mut AnmManager,
+        items: &mut Option<&mut ItemManager>,
+        sys: &mut Sys,
+    ) {
         self.deaths += 1;
         log::info!("player death at frame {}", self.frames);
-        crate::sound::play_at(crate::sound::TAN00_LOUD, self.pos[0]);
-        crate::effect::free(crate::effect::FIXED_BASE + crate::effect::FIX_DEATH);
-        crate::effect::spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
-        crate::effect::spawn_fixed(
+        sys.sound.play_at(crate::sound::TAN00_LOUD, self.pos[0]);
+        sys.fx
+            .free(crate::effect::FIXED_BASE + crate::effect::FIX_DEATH);
+        sys.fx.spawn(anm, 6, self.pos, 16, 0xFFFFFFFF);
+        sys.fx.spawn_fixed(
             anm,
             12,
             self.pos,
@@ -1162,7 +1191,7 @@ impl Player {
             0xFF4040FF,
         );
         // Unfreeze, then the only tint-off of Player_DyingUpdate (06 §10.2), then the silhouette off (09 §6.2).
-        self.set_freeze_bullets(false);
+        self.set_freeze_bullets(sys.flags, false);
         anm.tint_off();
         self.vm.flags &= !anmvm::F_COLOR2;
         // 0x164D0B0 := 0 here, not in Player_Die: a deathbomb leaves it unchanged (09 §6.2, 11 §2).
@@ -1194,12 +1223,12 @@ impl Player {
             // 09 §6.2 "attracted items fall": ItemMgr_DropAttracted after the death drops.
             it.drop_attracted();
         }
-        self.stats.rank(-1600);
+        self.stats.rank(sys.rank, -1600);
     }
 
     // Player_RespawnUpdate 0x44D180 (09 §6.3): clear timer := 60 on every call, 30-frame grow from scale 3.
     // Spell practice (GameFlags bit 14): the invulnerability timer is not set and keeps its value 30.
-    fn respawn_update(&mut self) {
+    fn respawn_update(&mut self, flags: u32) {
         self.respawn_clear = 60;
         let t = self.state_timer.cur;
         self.speed_mult = [1.0; 2];
@@ -1218,7 +1247,7 @@ impl Player {
         self.vm.flags |= anmvm::F_SCALE_DIRTY;
         self.vm.color = [255; 4];
         self.set_blend(0);
-        if gamemgr::flags() & F_SPELL_PRACTICE == 0 {
+        if flags & F_SPELL_PRACTICE == 0 {
             self.state_timer.set(240);
         }
         self.deathbomb = self.sht.deathbomb;
@@ -1231,7 +1260,7 @@ impl Player {
     }
 
     // Player_UpdateInvuln 0x44D2C0 (09 §6.4): colour 0xFFF02020 when t mod 8 < 2; the ring follows the player.
-    fn update_invuln(&mut self, gs: f32) {
+    fn update_invuln(&mut self, gs: f32, fx: &mut Effects) {
         // 09 §6.3: +0xE2A70 counts down here (60 more frames after the respawn), full-screen clear, item −1.
         // 09 §6.4: the respawn clear runs first, before the state-3 step.
         if self.respawn_clear != 0 {
@@ -1249,7 +1278,7 @@ impl Player {
             let ring = crate::effect::FIXED_BASE + crate::effect::FIX_INVULN;
             if self.invuln_ring {
                 let p = self.pos;
-                crate::effect::get(ring, |e| e.pos = p);
+                fx.get(ring, |e| e.pos = p);
             }
             if t < 1 {
                 self.state = 0;
@@ -1257,7 +1286,7 @@ impl Player {
                 self.state_timer.set(0);
                 self.vm.color = [0xFF; 4];
                 if std::mem::take(&mut self.invuln_ring) {
-                    crate::effect::free(ring);
+                    fx.free(ring);
                 }
             }
         } else {
@@ -1271,12 +1300,13 @@ impl Player {
         anm: &mut AnmManager,
         inp: &input::Input,
         mut items: Option<&mut ItemManager>,
+        sys: &mut Sys,
     ) {
         // Step 1: freeze byte 0x160F534 (ECL native 26) pauses the youkai aura (+0xBE834, fixed slot 2) and the
         // gauge-max aura (+0xE2B24, slot 8) with VM flag 0x80000 and skips the rest of the calc.
         let freeze = crate::enemy::timer_pause() != 0;
         for k in [crate::effect::FIX_AURA, crate::effect::FIX_GAUGE] {
-            crate::effect::get(crate::effect::FIXED_BASE + k, |e| {
+            sys.fx.get(crate::effect::FIXED_BASE + k, |e| {
                 if freeze {
                     e.vm.flags |= anmvm::F_PAUSED;
                 } else {
@@ -1291,29 +1321,29 @@ impl Player {
         // Port-only: areas queued by effects (bomb-owned rings) during the last frame.
         self.take_queued_areas();
         self.update_areas();
-        self.update_bomb(anm, inp, &mut items);
+        self.update_bomb(anm, inp, &mut items, sys);
         match self.state {
             2 => {
-                if self.dying_update(anm, &mut items) {
-                    self.respawn_update();
+                if self.dying_update(anm, &mut items, sys) {
+                    self.respawn_update(*sys.flags);
                 }
             }
-            1 => self.respawn_update(),
+            1 => self.respawn_update(*sys.flags),
             _ => {}
         }
-        self.update_invuln(gs);
+        self.update_invuln(gs, sys.fx);
         let moved = !matches!(self.state, 1 | 2);
         if moved {
-            self.move_player(anm, inp);
+            self.move_player(anm, inp, sys);
         }
         if self.vm.script.is_some() {
             self.vm.run(anm);
         }
         // 09 §4.4: skipped while GameFlags bit 10.
-        if !self.freeze_bullets() {
-            self.update_bullets(anm);
+        if !self.freeze_bullets(*sys.flags) {
+            self.update_bullets(anm, sys);
         }
-        self.update_shot_timer(anm, inp);
+        self.update_shot_timer(anm, inp, sys);
         // Step 9 (0x44D420): HUD panel-side switch, then the target reset.
         crate::ascii::gauge_fade(self.pos);
         self.targets = [[-999.0, -999.0, 0.0]; 2];
@@ -1335,23 +1365,26 @@ impl Player {
         if moved && at_max != self.gauge_aura {
             self.gauge_aura = at_max;
             if at_max {
-                crate::effect::spawn_fixed(anm, 25, self.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
+                sys.fx
+                    .spawn_fixed(anm, 25, self.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
             } else {
-                crate::effect::free(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE);
+                sys.fx
+                    .free(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE);
             }
         }
         if moved && self.gauge_aura {
             let p = self.pos;
-            crate::effect::get(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE, |e| {
-                e.pos = p
-            });
+            sys.fx
+                .get(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE, |e| {
+                    e.pos = p
+                });
         }
         self.frames += 1;
     }
 
     // Standalone step without a bullet manager (tests).
-    pub fn step(&mut self, anm: &mut AnmManager, inp: &input::Input) {
-        self.frame(anm, inp, None);
+    pub fn step(&mut self, anm: &mut AnmManager, inp: &input::Input, sys: &mut Sys) {
+        self.frame(anm, inp, None, sys);
     }
 
     // 0x164D0BB := 1 is written in the same calc (prio 9 death, prio 11 timeline op 16), so later tasks of this frame
@@ -1400,14 +1433,19 @@ impl Task<Ctx> for Player {
         match self.world.upgrade() {
             Some(b) => {
                 let mut b = b.borrow_mut();
-                self.frame(&mut ctx.anm, &inp, Some(&mut b.items));
+                self.frame(
+                    &mut ctx.anm,
+                    &inp,
+                    Some(&mut b.items),
+                    &mut crate::sys!(ctx),
+                );
                 if std::mem::take(&mut self.bomb.attract) {
                     b.items.attract_all();
                 }
             }
-            None => self.frame(&mut ctx.anm, &inp, None),
+            None => self.frame(&mut ctx.anm, &inp, None, &mut crate::sys!(ctx)),
         }
-        crate::effect::set_player(self.pos);
+        ctx.effects.player = self.pos;
         self.store_game_over(&mut ctx.game);
         Ret::Next
     }
@@ -1497,7 +1535,7 @@ mod tests {
         p.state = 3;
         p.state_timer.set(1);
         p.state_timer.prev = 5;
-        p.update_invuln(0.5);
+        p.update_invuln(0.5, &mut Effects::default());
         assert_eq!(p.state, 0);
         assert_eq!(
             (p.state_timer.cur, p.state_timer.prev, p.state_timer.frac),
@@ -1519,6 +1557,8 @@ mod tests {
 
     #[test]
     fn hit_and_graze_use_stored_f32_boxes() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, _) = ready();
         let mut rng = AnmManager::default();
         p.state = 1;
@@ -1526,14 +1566,17 @@ mod tests {
         p.hit_box = [140.0, 0.0, 200.0, 100.0];
         // 12 + 127.99999 rounds to 140.0 in f32: touching edges overlap (08 §4.1 step 6).
         assert_eq!(
-            p.hit_test([127.99999, 50.0, 0.0], [24.0, 24.0], &mut rng),
+            p.hit_test([127.99999, 50.0, 0.0], [24.0, 24.0], &mut rng, sys),
             1
         );
-        assert_eq!(p.hit_test([127.9999, 50.0, 0.0], [24.0, 24.0], &mut rng), 0);
-        assert!(p.contact_test([212.0, 112.0, 0.0], [24.0, 24.0], &mut rng));
+        assert_eq!(
+            p.hit_test([127.9999, 50.0, 0.0], [24.0, 24.0], &mut rng, sys),
+            0
+        );
+        assert!(p.contact_test([212.0, 112.0, 0.0], [24.0, 24.0], &mut rng, sys));
         // The boxes are only refreshed by Player_Move: a moved position is not seen until then.
         p.pos = [0.0, 0.0, 0.0];
-        assert_eq!(p.hit_test([170.0, 50.0, 0.0], [2.0, 2.0], &mut rng), 1);
+        assert_eq!(p.hit_test([170.0, 50.0, 0.0], [2.0, 2.0], &mut rng, sys), 1);
         p.sht.graze = 10.0;
         p.update_boxes();
         assert_eq!(p.graze_box, [-5.0, -5.0, 5.0, 5.0]);
@@ -1553,67 +1596,83 @@ mod tests {
 
     #[test]
     fn movement_speeds_and_bounds() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
-        p.step(&mut anm, &input(input::LEFT | input::UP));
+        p.step(&mut anm, &input(input::LEFT | input::UP), sys);
         assert!(
             (p.pos[0] - (192.0 - p.sht.diag)).abs() < 1e-5
                 && (p.pos[1] - (384.0 - p.sht.diag)).abs() < 1e-5
         );
         let x = p.pos[0];
-        p.step(&mut anm, &input(input::RIGHT));
+        p.step(&mut anm, &input(input::RIGHT), sys);
         assert!((p.pos[0] - (x + p.sht.speed)).abs() < 1e-5);
         let x = p.pos[0];
-        p.step(&mut anm, &input(input::RIGHT | input::FOCUS));
+        p.step(&mut anm, &input(input::RIGHT | input::FOCUS), sys);
         assert!((p.pos[0] - (x + p.sht_youkai.speed_focus)).abs() < 1e-5);
         for _ in 0..300 {
-            p.step(&mut anm, &input(input::FOCUS | input::DOWN | input::RIGHT));
+            p.step(
+                &mut anm,
+                &input(input::FOCUS | input::DOWN | input::RIGHT),
+                sys,
+            );
         }
         assert_eq!((p.pos[0], p.pos[1], p.focus, p.mode), (376.0, 432.0, 1, 1));
         for _ in 0..300 {
-            p.step(&mut anm, &input(input::UP | input::LEFT));
+            p.step(&mut anm, &input(input::UP | input::LEFT), sys);
         }
         assert_eq!((p.pos[0], p.pos[1], p.mode), (8.0, 16.0, 0));
         p.speed_mult = [0.5, 0.5];
-        p.step(&mut anm, &input(input::DOWN));
+        p.step(&mut anm, &input(input::DOWN), sys);
         assert!((p.pos[1] - (16.0 + p.sht.speed * 0.5)).abs() < 1e-5);
     }
 
     #[test]
     fn mode_after_six_frames() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
         for k in 1..=8 {
-            p.step(&mut anm, &input(input::FOCUS));
+            p.step(&mut anm, &input(input::FOCUS), sys);
             assert_eq!(p.mode, (k > 7) as u8, "frame {k}");
         }
     }
 
     #[test]
     fn collisions() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
-        p.step(&mut anm, &input(0));
+        p.step(&mut anm, &input(0), sys);
         let mut rng = AnmManager::default();
         let env = GrazeEnv::default();
         let q = p.pos;
         assert_eq!(
-            p.graze_test([q[0] + 25.0, q[1], 0.0], [4.0, 4.0], &env, &mut rng)
+            p.graze_test([q[0] + 25.0, q[1], 0.0], [4.0, 4.0], &env, &mut rng, sys)
                 .0,
             0
         );
         assert_eq!(
-            p.graze_test([q[0] + 20.0, q[1], 0.0], [4.0, 4.0], &env, &mut rng)
+            p.graze_test([q[0] + 20.0, q[1], 0.0], [4.0, 4.0], &env, &mut rng, sys)
                 .0,
             1
         );
-        assert_eq!(p.hit_test([q[0] + 2.0, q[1], 0.0], [4.0, 4.0], &mut rng), 1);
+        assert_eq!(
+            p.hit_test([q[0] + 2.0, q[1], 0.0], [4.0, 4.0], &mut rng, sys),
+            1
+        );
         assert_eq!((p.state, p.hits), (2, 1));
         p.cancel_rect([q[0], q[1]], [100.0, 100.0], 9, 10);
-        assert_eq!(p.hit_test([q[0] + 2.0, q[1], 0.0], [4.0, 4.0], &mut rng), 2);
+        assert_eq!(
+            p.hit_test([q[0] + 2.0, q[1], 0.0], [4.0, 4.0], &mut rng, sys),
+            2
+        );
         assert_eq!(p.cancel_item, 9);
         // A bomb-area miss keeps the last item; the hit test resets it to 6 first (08 §4.1).
         let far = [q[0] + 200.0, q[1], 0.0];
         assert!(!p.in_bomb_area(far));
         assert_eq!(p.cancel_item, 9);
-        assert_eq!(p.hit_test(far, [4.0, 4.0], &mut rng), 0);
+        assert_eq!(p.hit_test(far, [4.0, 4.0], &mut rng, sys), 0);
         assert_eq!(p.cancel_item, 6);
     }
 
@@ -1627,13 +1686,15 @@ mod tests {
 
     #[test]
     fn die_requests_drop_attracted() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, _) = ready();
         let mut rng = AnmManager::default();
-        p.die(&mut rng);
+        p.die(&mut rng, sys);
         assert!(p.drop_attracted);
         let (mut p, _) = ready();
-        gamemgr::set_flags(F_LAST_SPELL);
-        p.die(&mut rng);
+        *sys.flags = F_LAST_SPELL;
+        p.die(&mut rng, sys);
         assert!(p.drop_attracted);
     }
 
@@ -1641,42 +1702,46 @@ mod tests {
     // the real death turns both off.
     #[test]
     fn die_silhouette() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
         let mut rng = AnmManager::default();
         p.stats.bombs = 1.0;
         p.vm.color = [0x20, 0x40, 0x60, 0x80];
-        p.die(&mut rng);
+        p.die(&mut rng, sys);
         assert!(p.vm.flags & anmvm::F_COLOR2 != 0);
         assert_eq!(p.vm.color2, [0xFF, 0xFF, 0xFF, 0x80]);
         anm.tint_on = true;
         p.deathbomb = 2;
-        p.dying_update(&mut anm, &mut None);
+        p.dying_update(&mut anm, &mut None, sys);
         assert!(anm.tint_on && p.vm.flags & anmvm::F_COLOR2 != 0);
-        p.dying_update(&mut anm, &mut None);
+        p.dying_update(&mut anm, &mut None, sys);
         assert!(!anm.tint_on && p.vm.flags & anmvm::F_COLOR2 == 0);
         let (mut p, _) = ready();
         p.stats.bombs = 0.0;
-        p.die(&mut rng);
+        p.die(&mut rng, sys);
         assert!(p.vm.flags & anmvm::F_COLOR2 == 0);
     }
 
     // 09 §6.2, §6.3: shrink (1 − q, 3q + 1) and grow (1 − f, 2f + 1) with an additive white fade; alpha blend at the end.
     #[test]
     fn dying_and_respawn_sprite() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
         let blend = |p: &Player| (p.vm.flags >> anmvm::F_BLEND_SHIFT) & 3;
         p.deathbomb = 0;
         p.state_timer.set(15);
-        assert!(!p.dying_update(&mut anm, &mut None));
+        assert!(!p.dying_update(&mut anm, &mut None, sys));
         assert_eq!(p.vm.scale, [0.5, 2.5]);
         assert_eq!((p.vm.color, blend(&p)), ([0xFF, 0xFF, 0xFF, 127], 1));
         p.state_timer.set(10);
-        p.respawn_update();
+        p.respawn_update(0);
         let f = (1.0 - 10.0f64 / 30.0) as f32;
         assert_eq!(p.vm.scale, [1.0 - f, (2.0 * f as f64 + 1.0) as f32]);
         assert_eq!((p.vm.color, blend(&p)), ([0xFF, 0xFF, 0xFF, 85], 1));
         p.state_timer.set(30);
-        p.respawn_update();
+        p.respawn_update(0);
         assert_eq!(
             (p.state, p.vm.scale, p.vm.color, blend(&p)),
             (3, [1.0, 1.0], [0xFF; 4], 0)
@@ -1686,22 +1751,26 @@ mod tests {
     // 09 §6.2: the game-over branch returns false, so the same frame runs no respawn update (no clear rectangle).
     #[test]
     fn dying_game_over_no_respawn() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
         p.deathbomb = 0;
         p.state_timer.set(30);
         p.stats.lives = 0.0;
-        assert!(!p.dying_update(&mut anm, &mut None));
+        assert!(!p.dying_update(&mut anm, &mut None, sys));
         assert!(p.game_over && p.state == 1 && p.respawn_clear == 0);
         let (mut p, mut anm) = ready();
         p.deathbomb = 0;
         p.state_timer.set(30);
         p.stats.lives = 2.0;
-        assert!(p.dying_update(&mut anm, &mut None));
+        assert!(p.dying_update(&mut anm, &mut None, sys));
     }
 
     // 09 §9.2: the third time orb only inside the bullet-and-card branch.
     #[test]
     fn graze_orbs() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, _) = ready();
         let mut rng = AnmManager::default();
         let env = |spell| GrazeEnv {
@@ -1711,7 +1780,7 @@ mod tests {
         };
         let mut orbs = |p: &mut Player, laser, spell| {
             p.stats.gauge = 9000;
-            p.on_graze([0.0; 3], laser, &env(spell), &mut rng)
+            p.on_graze([0.0; 3], laser, &env(spell), &mut rng, sys)
         };
         assert_eq!(orbs(&mut p, false, false), 1);
         assert_eq!(orbs(&mut p, true, true), 1);
@@ -1722,6 +1791,8 @@ mod tests {
 
     #[test]
     fn deathbomb_window_and_death() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
         p.stats.bombs = 3.0;
         p.stats.lives = 2.0;
@@ -1730,16 +1801,16 @@ mod tests {
         p.stats.time_threshold = 5000;
         p.stats.d0b0 = 7;
         let mut rng = AnmManager::default();
-        p.die(&mut rng);
+        p.die(&mut rng, sys);
         assert_eq!((p.state, p.deathbomb), (2, 15 * 9 / 5));
         p.shot_type = 2;
         p.state = 0;
-        p.die(&mut rng);
+        p.die(&mut rng, sys);
         assert_eq!(p.deathbomb, 15);
         for k in 0..15 {
             // 09 §6.2: 0x164D0B0 is kept through the window and reset at the real death.
             assert_eq!(p.stats.d0b0, 7, "frame {k}");
-            p.step(&mut anm, &input(0));
+            p.step(&mut anm, &input(0), sys);
             assert_eq!(p.state, 2, "frame {k}");
         }
         assert_eq!(p.stats.d0b0, 0);
@@ -1749,18 +1820,18 @@ mod tests {
         );
         assert_eq!(p.stats.time, 1000 - 15 * 15 - (1000 - 225) / 10);
         for _ in 0..31 {
-            p.step(&mut anm, &input(0));
+            p.step(&mut anm, &input(0), sys);
         }
         assert_eq!(
             (p.state, p.stats.lives, p.stats.bombs, p.pos),
             (1, 1.0, 3.0, RESPAWN)
         );
         for _ in 0..31 {
-            p.step(&mut anm, &input(0));
+            p.step(&mut anm, &input(0), sys);
         }
         assert_eq!((p.state, p.deathbomb), (3, p.sht.deathbomb));
         for _ in 0..240 {
-            p.step(&mut anm, &input(0));
+            p.step(&mut anm, &input(0), sys);
         }
         assert_eq!(p.state, 0);
     }
@@ -1768,97 +1839,108 @@ mod tests {
     // 09 §6.1: card doubling without a boss test; GameFlags bit 10 only with bombs ≥ 1.
     #[test]
     fn spell_death_freeze_flag() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut rng = AnmManager::default();
         let (mut p, _) = ready();
         p.shot_type = 2;
         p.env.spell = true;
         p.stats.time_threshold = 5000;
-        gamemgr::set_flags(0);
+        *sys.flags = 0;
         p.stats.bombs = 0.0;
-        p.die(&mut rng);
-        assert_eq!((p.deathbomb, gamemgr::flags()), (2, 0));
+        p.die(&mut rng, sys);
+        assert_eq!((p.deathbomb, *sys.flags), (2, 0));
         p.state = 0;
         p.stats.bombs = 1.0;
-        p.die(&mut rng);
-        assert_eq!((p.deathbomb, gamemgr::flags()), (12, gamemgr::F_DEATH));
-        assert!(p.freeze_bullets());
-        gamemgr::set_flags(0);
+        p.die(&mut rng, sys);
+        assert_eq!((p.deathbomb, *sys.flags), (12, gamemgr::F_DEATH));
+        assert!(p.freeze_bullets(*sys.flags));
+        *sys.flags = 0;
     }
 
     #[test]
     fn freeze_byte_pauses_auras_and_skips_calc() {
-        crate::effect::clear();
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
+        sys.fx.clear();
         let (mut p, mut anm) = ready();
         let aura = crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE;
-        crate::effect::spawn_fixed(&mut anm, 25, p.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
-        let paused = || crate::effect::peek(aura, |e| e.vm.flags & anmvm::F_PAUSED != 0);
+        sys.fx
+            .spawn_fixed(&mut anm, 25, p.pos, crate::effect::FIX_GAUGE, 0xFFFFFFFF);
+        let paused = |fx: &Effects| fx.peek(aura, |e| e.vm.flags & anmvm::F_PAUSED != 0);
         crate::enemy::set_timer_pause(1);
         let (pos, t) = (p.pos, p.state_timer.cur);
-        p.step(&mut anm, &input(input::LEFT));
-        assert!(paused());
+        p.step(&mut anm, &input(input::LEFT), sys);
+        assert!(paused(sys.fx));
         assert_eq!((p.pos, p.state_timer.cur, p.frames), (pos, t, 0));
         crate::enemy::set_timer_pause(0);
-        p.step(&mut anm, &input(input::LEFT));
-        assert!(!paused() && p.pos[0] < pos[0] && p.frames == 1);
-        crate::effect::clear();
+        p.step(&mut anm, &input(input::LEFT), sys);
+        assert!(!paused(sys.fx) && p.pos[0] < pos[0] && p.frames == 1);
+        sys.fx.clear();
     }
 
     #[test]
     fn spell_practice_timers() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
-        gamemgr::set_flags(F_SPELL_PRACTICE);
-        p.load(&mut anm, Sht::default(), Sht::default(), 0);
+        *sys.flags = F_SPELL_PRACTICE;
+        p.load(&mut anm, Sht::default(), Sht::default(), 0, *sys.flags);
         assert_eq!((p.state, p.state_timer.cur), (1, 10));
         let (mut q, _) = ready();
-        gamemgr::set_flags(0);
-        q.load(&mut anm, Sht::default(), Sht::default(), 0);
+        *sys.flags = 0;
+        q.load(&mut anm, Sht::default(), Sht::default(), 0, *sys.flags);
         assert_eq!(q.state_timer.cur, 120);
-        gamemgr::set_flags(F_SPELL_PRACTICE);
+        *sys.flags = F_SPELL_PRACTICE;
         // Respawn: state 3 at t = 30; the timer keeps 30 instead of 240.
         p.state_timer.set(0);
         for _ in 0..31 {
-            p.step(&mut anm, &input(0));
+            p.step(&mut anm, &input(0), sys);
         }
         assert_eq!((p.state, p.state_timer.cur), (3, 29));
         for _ in 0..29 {
-            p.step(&mut anm, &input(0));
+            p.step(&mut anm, &input(0), sys);
         }
         assert_eq!(p.state, 0);
     }
 
     #[test]
     fn death_ring_lifecycle() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let ring = crate::effect::FIXED_BASE + crate::effect::FIX_DEATH;
-        let active = || crate::effect::peek(ring, |e| e.active);
-        crate::effect::clear();
+        let active = |fx: &Effects| fx.peek(ring, |e| e.active);
+        sys.fx.clear();
         let (mut p, mut anm) = ready();
         p.stats.bombs = 1.0;
         let mut rng = AnmManager::default();
-        p.die(&mut rng);
+        p.die(&mut rng, sys);
         let n = p.deathbomb;
         for _ in 0..n - 1 {
-            p.step(&mut anm, &input(0));
-            assert!(active());
+            p.step(&mut anm, &input(0), sys);
+            assert!(active(sys.fx));
         }
-        p.step(&mut anm, &input(0));
-        assert!(!active() && p.deaths == 1);
-        crate::effect::clear();
+        p.step(&mut anm, &input(0), sys);
+        assert!(!active(sys.fx) && p.deaths == 1);
+        sys.fx.clear();
         let (mut p, _) = ready();
         p.stats.bombs = 0.0;
-        p.die(&mut rng);
-        assert!(!active());
+        p.die(&mut rng, sys);
+        assert!(!active(sys.fx));
     }
 
     #[test]
     fn deathbomb_saves() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
         p.shot_type = 2;
         p.deathbomb = 10;
         p.stats.bombs = 2.0;
         let mut rng = AnmManager::default();
-        p.die(&mut rng);
-        p.step(&mut anm, &input(0));
-        p.step(&mut anm, &input(input::BOMB));
+        p.die(&mut rng, sys);
+        p.step(&mut anm, &input(0), sys);
+        p.step(&mut anm, &input(input::BOMB), sys);
         assert_eq!(
             (p.state, p.bombing, p.bomb.index, p.stats.bombs, p.bomb.used),
             (3, true, 3, 0.0, 2)
@@ -1868,15 +1950,17 @@ mod tests {
 
     #[test]
     fn power_and_lives_rules() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready();
         p.stats.lives = 0.0;
         p.stats.power = 100.0;
         let mut rng = AnmManager::default();
         p.stats.bombs = 0.0;
-        p.die(&mut rng);
+        p.die(&mut rng, sys);
         assert_eq!(p.deathbomb, 2);
         for _ in 0..40 {
-            p.step(&mut anm, &input(0));
+            p.step(&mut anm, &input(0), sys);
         }
         // 09 §6.2: lives and bombs unchanged on game over.
         assert_eq!(
@@ -1885,9 +1969,9 @@ mod tests {
         );
         let (mut p, mut anm) = ready();
         p.stats.power = 10.0;
-        p.die(&mut rng);
+        p.die(&mut rng, sys);
         for _ in 0..40 {
-            p.step(&mut anm, &input(0));
+            p.step(&mut anm, &input(0), sys);
         }
         assert_eq!(p.stats.power, 0.0);
         let mut s = Stats {
@@ -1895,7 +1979,7 @@ mod tests {
             bombs: 7.0,
             ..Stats::default()
         };
-        s.extend(&mut rng.rng);
+        s.extend(&mut rng.rng, sys);
         assert_eq!((s.lives, s.bombs), (8.0, 8.0));
         let before = rng.rng.counter;
         s.add_time(-5, &mut rng.rng);

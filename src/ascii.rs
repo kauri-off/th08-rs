@@ -467,9 +467,9 @@ fn popup_glyph(anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm, idx: usize) -> b
 }
 
 // Ascii_DrawPopups 0x405420 popup part (13 §4): small popups, the darkness mask (§4.1), then large ones, all Draw2DSnap in the playfield viewport.
-fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx) {
+// `pl`: the effect manager's player-position mirror.
+fn popups_draw(anm: &mut crate::anmmgr::AnmManager, gfx: &mut crate::gfx::Gfx, pl: [f32; 3]) {
     gfx.set_viewport(crate::gfx::PLAYFIELD);
-    let pl = crate::effect::with(|e| e.player);
     let mut small = popup_vm(anm, 0, 0.1);
     let mut large = popup_vm(anm, 0x88, 0.0);
     POPUPS.with_borrow(|p| {
@@ -953,6 +953,7 @@ impl PauseMenu {
         g: &mut Game,
         inp: &Input,
         audio: &mut crate::audio::Audio,
+        sound: &mut crate::sound::Queue,
     ) {
         let replay = g.replay();
         if self.state == 0 {
@@ -994,9 +995,9 @@ impl PauseMenu {
         let (up, down) = (pressed(input::UP), pressed(input::DOWN));
         if matches!(self.state, 1..=3 | 5..=8) {
             if up || down {
-                crate::sound::play(crate::sound::PLST);
+                sound.play(crate::sound::PLST);
             } else if confirm {
-                crate::sound::play(crate::sound::OK);
+                sound.play(crate::sound::OK);
             }
             // Shortcut keys ESC / Q / R (R not in replay) (12 §3).
             if inp.pressed(input::PAUSE) {
@@ -1235,6 +1236,7 @@ impl ContinueMenu {
         g: &mut Game,
         inp: &Input,
         audio: &mut crate::audio::Audio,
+        sound: &mut crate::sound::Queue,
     ) {
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
@@ -1304,10 +1306,10 @@ impl ContinueMenu {
             0 if ready => {
                 if inp.pressed(input::UP) || inp.pressed(input::DOWN) {
                     self.yes = !self.yes;
-                    crate::sound::play(crate::sound::PLST);
+                    sound.play(crate::sound::PLST);
                 }
                 if inp.pressed(input::SHOT | input::ENTER) {
-                    crate::sound::play(crate::sound::OK);
+                    sound.play(crate::sound::OK);
                     if self.yes && (g.difficulty >= 4 || g.spell_practice()) {
                         // "Yes" in spell practice / Extra acts in the press call (12 §4 "Music", "Confirm timing"):
                         // `Music_Stop`, or for a non-restarting spell-practice card "UnPause" and
@@ -1421,16 +1423,26 @@ impl Task<Ctx> for AsciiManager {
         if ctx.game.paused != 0 {
             // 11 §2: paused = 2 once the menu was drawn (GameMgr_Calc opened it after this calc).
             ctx.game.paused = 2;
-            self.pause
-                .update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
+            self.pause.update(
+                &mut ctx.anm,
+                &mut ctx.game,
+                &inp,
+                &mut ctx.audio,
+                &mut ctx.sound,
+            );
         } else if ctx.game.game_over != 0 {
-            self.cont
-                .update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
+            self.cont.update(
+                &mut ctx.anm,
+                &mut ctx.game,
+                &inp,
+                &mut ctx.audio,
+                &mut ctx.sound,
+            );
         } else {
             self.cont.open = false;
             self.pause.state = 0;
             // Ascii_Calc 0x402200 (calc prio 1) reads GameFlags bit 10 live, not the end-of-Player_Calc mirror (13 §4).
-            if crate::gamemgr::flags() & crate::gamemgr::F_DEATH == 0 {
+            if ctx.game.flags & crate::gamemgr::F_DEATH == 0 {
                 popups_calc(ctx.anm.speed);
             }
         }
@@ -1471,7 +1483,7 @@ impl Task<Ctx> for AsciiManager {
             }
         }
         if !high {
-            popups_draw(&mut ctx.anm, &mut ctx.gfx);
+            popups_draw(&mut ctx.anm, &mut ctx.gfx, ctx.effects.player);
             // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
             ctx.anm.screen_offset = [0.0; 2];
             gauge_draw(&mut ctx.anm, &mut ctx.gfx, &ctx.game.stats);
@@ -1519,14 +1531,32 @@ mod tests {
         g.game_over = 1;
         let mut m = ContinueMenu::default();
         for _ in 0..30 {
-            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+            m.update(
+                &mut anm,
+                &mut g,
+                &Input::default(),
+                &mut audio,
+                &mut Default::default(),
+            );
         }
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
         assert_eq!(m.vms[1].color, [0x50, 0x50, 0x50, 0xFF]);
-        m.update(&mut anm, &mut g, &press(input::UP), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &press(input::UP),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert!(m.yes);
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
-        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &Input::default(),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert_eq!(m.vms[1].color, [0x80, 0x80, 0xFF, 0xFF]);
     }
 
@@ -1543,7 +1573,13 @@ mod tests {
         let mut m = ContinueMenu::default();
         let mut audio =
             crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
-        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &Input::default(),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert!(m.open && !m.yes);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
         assert_eq!(g.requested, gamemgr::SCENE_BOOT);
@@ -1560,7 +1596,13 @@ mod tests {
         let mut m = ContinueMenu::default();
         let mut audio =
             crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
-        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &Input::default(),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_REPLAY_END));
         assert!(g.play_clock.is_some() && m.vms.is_empty());
     }
@@ -1584,12 +1626,30 @@ mod tests {
         g.game_over = 1;
         let mut m = ContinueMenu::default();
         for _ in 0..30 {
-            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+            m.update(
+                &mut anm,
+                &mut g,
+                &Input::default(),
+                &mut audio,
+                &mut Default::default(),
+            );
         }
-        m.update(&mut anm, &mut g, &press(input::UP), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &press(input::UP),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert!(m.yes);
         let frame = m.frame;
-        m.update(&mut anm, &mut g, &press(input::SHOT), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &press(input::SHOT),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RELOAD));
         assert!(!m.open && m.frame == frame);
 
@@ -1598,14 +1658,38 @@ mod tests {
         g.game_over = 1;
         let mut m = ContinueMenu::default();
         for _ in 0..30 {
-            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+            m.update(
+                &mut anm,
+                &mut g,
+                &Input::default(),
+                &mut audio,
+                &mut Default::default(),
+            );
         }
-        m.update(&mut anm, &mut g, &press(input::SHOT), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &press(input::SHOT),
+            &mut audio,
+            &mut Default::default(),
+        );
         for _ in 0..19 {
-            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+            m.update(
+                &mut anm,
+                &mut g,
+                &Input::default(),
+                &mut audio,
+                &mut Default::default(),
+            );
             assert_eq!(g.game_over, 1);
         }
-        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &Input::default(),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RESULT));
         assert!(!m.open && m.vms.iter().all(|v| !v.visible()));
     }
@@ -1627,12 +1711,30 @@ mod tests {
                 .map(|v| v.pending_interrupt)
                 .collect::<Vec<_>>()
         };
-        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &Input::default(),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert_eq!(ints(&m), [1, 1, 1, 1, 0, 0, 0, 0, 0, 0]);
         for _ in 0..4 {
-            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+            m.update(
+                &mut anm,
+                &mut g,
+                &Input::default(),
+                &mut audio,
+                &mut Default::default(),
+            );
         }
-        m.update(&mut anm, &mut g, &press(input::SHOT), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &press(input::SHOT),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert_eq!(m.state, 4);
         assert_eq!(ints(&m), [2, 2, 2, 2, 0, 0, 0, 0, 0, 0]);
         assert_eq!(m.cap_vm.pending_interrupt, 1);
@@ -1640,16 +1742,34 @@ mod tests {
         let mut g = Game::default();
         g.paused = 1;
         let mut m = PauseMenu::default();
-        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &Input::default(),
+            &mut audio,
+            &mut Default::default(),
+        );
         m.state = 5;
         m.frame = 4;
         for v in &mut m.vms {
             v.pending_interrupt = 0;
         }
-        m.update(&mut anm, &mut g, &press(input::SHOT), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &press(input::SHOT),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert_eq!(m.state, 9);
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
-        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        m.update(
+            &mut anm,
+            &mut g,
+            &Input::default(),
+            &mut audio,
+            &mut Default::default(),
+        );
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
     }
 

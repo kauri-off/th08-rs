@@ -512,19 +512,19 @@ impl MainMenu {
             return;
         }
         let stages = self.stages;
-        self.move_cursor(ctx, 8, UP, DOWN, |c| stages[c as usize]);
+        self.move_cursor(ctx, 8, UP, DOWN, |_, c| stages[c as usize]);
         if ctx.input.pressed(CONFIRM) {
-            sound::play(sound::OK);
+            ctx.sound.play(sound::OK);
             let g = &mut ctx.game;
             g.difficulty = g.cfg.difficulty.min(3) as i32;
             g.stage = self.cursor as usize;
-            g.flags.set(g.flags & !F_REPLAY | F_PRACTICE);
+            g.flags = g.flags & !F_REPLAY | F_PRACTICE;
             g.fresh_start = true;
             ctx.audio.stop_bgm();
             g.request(gamemgr::SCENE_GAME);
             self.remove = true;
         } else if ctx.input.pressed(CANCEL) {
-            sound::play(sound::CANCEL);
+            ctx.sound.play(sound::CANCEL);
             // 11 → 9 returns 2: screen 9 runs in this frame (12 §2).
             self.set_screen(crate::menu::CHAR_PRACTICE);
             self.again = true;
@@ -654,7 +654,7 @@ impl MainMenu {
         if !self.lists.sp_input || self.pending.is_some() {
             return;
         }
-        self.move_cursor(ctx, n, LEFT, RIGHT, |c| Self::sp_shot_ok(ctx, c));
+        self.move_cursor(ctx, n, LEFT, RIGHT, |ctx, c| Self::sp_shot_ok(ctx, c));
         let inp = ctx.input;
         let d = if inp.pressed_or_repeat(UP) {
             -1
@@ -665,17 +665,17 @@ impl MainMenu {
         };
         if d != 0 {
             self.lists.sp_row = (self.lists.sp_row + d).rem_euclid(10);
-            sound::play(sound::SELECT);
+            ctx.sound.play(sound::SELECT);
         }
         if inp.pressed(CONFIRM) {
-            sound::play(sound::OK);
+            ctx.sound.play(sound::OK);
             ctx.game.stage = self.lists.sp_row as usize;
             // +0x00 := 0 before Menu_SetScreen(17); 16 → 17 returns 2: screen 17 runs in this frame (12 §2, 16 §6.1).
             self.lists.card = 0;
             self.set_screen(crate::menu::SPELL_CARD);
             self.again = true;
         } else if inp.pressed(CANCEL) {
-            sound::play(sound::CANCEL);
+            ctx.sound.play(sound::CANCEL);
             // Bomb also stores the row into g_StageIdx (16 §6.1).
             ctx.game.stage = self.lists.sp_row as usize;
             self.interrupt_all(6);
@@ -1010,17 +1010,17 @@ impl MainMenu {
         let mut c = self.lists.card;
         if inp.pressed_or_repeat(UP) {
             c = (c - 1).rem_euclid(count);
-            sound::play(sound::SELECT);
+            ctx.sound.play(sound::SELECT);
         } else if inp.pressed_or_repeat(DOWN) {
             c = (c + 1).rem_euclid(count);
-            sound::play(sound::SELECT);
+            ctx.sound.play(sound::SELECT);
         // Page keys only when count > 15 (16 §6.2); Left also flushes the sound queue (Sound_Update, 13 §1.3).
         } else if count > 15 && inp.pressed_or_repeat(LEFT) {
             c -= 15;
             if c < 0 {
                 c = count - 1;
             }
-            sound::play(sound::SELECT);
+            ctx.sound.play(sound::SELECT);
             ctx.sound_update();
         } else if count > 15 && inp.pressed_or_repeat(RIGHT) {
             if count % 15 < count - c {
@@ -1028,7 +1028,7 @@ impl MainMenu {
             } else {
                 c %= 15;
             }
-            sound::play(sound::SELECT);
+            ctx.sound.play(sound::SELECT);
         }
         if c != self.lists.card {
             self.lists.card = c;
@@ -1065,10 +1065,10 @@ impl MainMenu {
             // Locked card: SE 0x29 (16 §6.2).
             let ok = seen(&catk(ctx, id), 12) || selectable(ctx, id);
             if !ok {
-                sound::play(sound::INVALID);
+                ctx.sound.play(sound::INVALID);
                 return;
             }
-            sound::play(sound::OK);
+            ctx.sound.play(sound::OK);
             let g = &mut ctx.game;
             g.flags |= F_SPELL_PRACTICE;
             g.flags &= !F_REPLAY;
@@ -1082,7 +1082,7 @@ impl MainMenu {
             g.request(gamemgr::SCENE_GAME);
             self.remove = true;
         } else if inp.pressed(CANCEL) {
-            sound::play(sound::CANCEL);
+            ctx.sound.play(sound::CANCEL);
             ctx.game.card = id as i16;
             // +0x00 := g_StageIdx before Menu_SetScreen(16) (16 §6.2); 17 → 16 returns 2: screen 16 runs in this frame (12 §2).
             self.lists.sp_row = ctx.game.stage.min(9) as i32;
@@ -1231,12 +1231,12 @@ impl MainMenu {
         match self.lists.rpy_sub {
             1 => {
                 if n > 0 {
-                    self.move_cursor(ctx, n, UP, DOWN, |_| true);
+                    self.move_cursor(ctx, n, UP, DOWN, |_, _| true);
                 }
                 // Left / Right page by 15 only with more than 15 files, wrapping by the count; SE 12 (15 §3.8).
                 if n > 15 && (inp.pressed_or_repeat(LEFT) || inp.pressed_or_repeat(RIGHT)) {
                     self.cursor = rpy_page(self.cursor, n, inp.pressed_or_repeat(LEFT));
-                    sound::play(sound::SELECT);
+                    ctx.sound.play(sound::SELECT);
                 }
                 // +0xC28C := cursor every sub-state-1 frame, after the paging (15 §3.8).
                 self.lists.rpy_file = self.cursor;
@@ -1246,7 +1246,7 @@ impl MainMenu {
                     return true;
                 }
                 if inp.pressed(CONFIRM) && n > 0 {
-                    sound::play(sound::OK);
+                    ctx.sound.play(sound::OK);
                     let i = self.cursor as usize;
                     // Stage cursor = first stage with a record; +0xC290 keeps its old value until sub-state 2. None:
                     // error log line, scene −1, return 0 (15 §3.8, 00 §2).
@@ -1266,7 +1266,7 @@ impl MainMenu {
                     self.lists.rpy_sub = 2;
                     self.rpy_choose();
                 } else if inp.pressed(CANCEL) {
-                    sound::play(sound::CANCEL);
+                    ctx.sound.play(sound::CANCEL);
                     self.lists.rpy_t = 0;
                     self.interrupt_all(16);
                     // Replay leave: top menu (cursor 4) after 30 frames (12 §2).
@@ -1294,13 +1294,13 @@ impl MainMenu {
                     0
                 };
                 if d != 0 {
-                    sound::play(sound::SELECT);
+                    ctx.sound.play(sound::SELECT);
                 }
                 // +0xC290 is written only here, so the row shown on the file-confirm frame lags by one (15 §3.8).
                 self.cursor = rpy_stage_step(&have, self.cursor.max(0) as usize, d) as i32;
                 self.lists.rpy_stage = self.cursor as usize;
                 if inp.pressed(CONFIRM) {
-                    sound::play(sound::OK);
+                    ctx.sound.play(sound::OK);
                     let spell = r.spell_id() >= 0;
                     self.lists.rpy_sub = 3;
                     self.cursor = 0;
@@ -1309,7 +1309,7 @@ impl MainMenu {
                     self.vms[v].pending_interrupt = 17;
                     self.rpy_speed_vms(spell);
                 } else if inp.pressed(CANCEL) {
-                    sound::play(sound::CANCEL);
+                    ctx.sound.play(sound::CANCEL);
                     // The cancels zero +0x1442C, which only sub-state 0 reads, so the entry block never reruns (12 §2, 15 §3.8).
                     self.lists.rpy_sub = 1;
                     self.cursor = self.lists.rpy_file;
@@ -1330,11 +1330,11 @@ impl MainMenu {
                     self.cursor = (old + 1).rem_euclid(m);
                 }
                 if self.cursor != old {
-                    sound::play(sound::SELECT);
+                    ctx.sound.play(sound::SELECT);
                     self.rpy_speed_vms(spell);
                 }
                 if inp.pressed(CONFIRM) {
-                    sound::play(sound::OK);
+                    ctx.sound.play(sound::OK);
                     ctx.game.replay_speed = self.cursor as u8;
                     // The loaded replay stays listed: this frame's draw still shows its detail rows.
                     let r = self.replays[i].1.clone();
@@ -1345,7 +1345,7 @@ impl MainMenu {
                     // Return 0: nothing of the menu is drawn in the confirm frame (15 §3.8 Start).
                     self.remove = true;
                 } else if inp.pressed(CANCEL) {
-                    sound::play(sound::CANCEL);
+                    ctx.sound.play(sound::CANCEL);
                     self.lists.rpy_sub = 2;
                     self.cursor = self.lists.rpy_stage as i32;
                     self.rpy_choose();

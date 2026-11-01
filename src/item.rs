@@ -3,6 +3,8 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::ANM_SLOT;
+use crate::effect::Effects;
+use crate::game::Sys;
 use crate::gfx::Gfx;
 use crate::player::{Player, Popup, Stats};
 
@@ -211,7 +213,7 @@ impl ItemManager {
     }
 
     // Power reached 128 (08 §8.5): every other type 0/2 item becomes type 8 (effect 0, script 0x45).
-    fn convert_power_items(&mut self, anm: &mut AnmManager, except: usize) {
+    fn convert_power_items(&mut self, anm: &mut AnmManager, except: usize, fx: &mut Effects) {
         for i in 0..MAX_ITEMS {
             let it = &mut self.items[i];
             if i == except || !it.alive || !(it.kind == POWER || it.kind == BIG_POWER) {
@@ -222,7 +224,7 @@ impl ItemManager {
                 it.vel = [0.0, -0.5, 0.0];
             }
             let p = it.pos;
-            crate::effect::spawn(anm, 0, p, 1, 0xFFFFFFFF);
+            fx.spawn(anm, 0, p, 1, 0xFFFFFFFF);
             let it = &mut self.items[i];
             let mut vm = std::mem::take(&mut it.vm);
             anm.set_script(&mut vm, ANM_SLOT, 0x45);
@@ -239,6 +241,7 @@ impl ItemManager {
         p: &mut Player,
         spell: bool,
         cancel: &mut Cancel,
+        sys: &mut Sys,
     ) {
         let (kind, y, max_flag) = (
             self.items[idx].kind,
@@ -268,12 +271,12 @@ impl ItemManager {
                         // Hud_ShowMessage(0, 1) "Full Power Mode!" (0x17CE8CC := 2 when the HUD takes the popup).
                         // The message is outside the spell-card test (08 §8.5, VERIFIED RE-Q34).
                         p.stats.popups.push(Popup::Message(1, 0));
-                        self.convert_power_items(anm, idx);
+                        self.convert_power_items(anm, idx, sys.fx);
                     }
                     let st = &mut p.stats;
                     st.add_score(10);
                     if power_level(st.power) != level {
-                        crate::sound::play(crate::sound::POWERUP);
+                        sys.sound.play(crate::sound::POWERUP);
                         popup(-1, POPUP_POWER);
                     } else {
                         popup(10, POPUP_NORMAL);
@@ -281,7 +284,7 @@ impl ItemManager {
                 }
                 // 08 §8.5: type 0 always adds rank +1, even at full power.
                 if kind == POWER {
-                    p.stats.rank(1);
+                    p.stats.rank(sys.rank, 1);
                 }
             }
             POINT => {
@@ -293,9 +296,9 @@ impl ItemManager {
                 st.point_items += 1;
                 st.rec.points += 1;
                 st.point_items2 += 1;
-                st.rank(if v >= max { 10 } else { 3 });
+                st.rank(sys.rank, if v >= max { 10 } else { 3 });
                 while st.extends >= 0 && st.point_items2 >= st.next_extend {
-                    st.extend(&mut anm.rng);
+                    st.extend(&mut anm.rng, sys);
                     st.extends += 1;
                     st.next_extend = next_extend(st.difficulty, st.extends);
                 }
@@ -315,23 +318,23 @@ impl ItemManager {
                     crate::hud::mark_bombs(2);
                 }
                 // Bomb item rank +5 (11 §3.2 rank deltas).
-                st.rank(5);
+                st.rank(sys.rank, 5);
             }
             FULL_POWER => {
                 // 08 §8.5: this cancel has no spell-card test, unlike the power-item one.
                 if st.power < 128.0 {
                     cancel(self, anm, p);
                     p.stats.popups.push(Popup::Message(1, 0));
-                    crate::sound::play(crate::sound::POWERUP);
+                    sys.sound.play(crate::sound::POWERUP);
                     popup(-1, POPUP_POWER);
-                    self.convert_power_items(anm, idx);
+                    self.convert_power_items(anm, idx, sys.fx);
                 }
                 let st = &mut p.stats;
                 st.set_power(128.0, &mut anm.rng);
                 popup(1000, POPUP_NORMAL);
                 st.add_score(1000);
             }
-            LIFE => st.extend(&mut anm.rng),
+            LIFE => st.extend(&mut anm.rng, sys),
             STAR => {
                 let mut v = if p.bomb_active {
                     100
@@ -383,6 +386,7 @@ impl ItemManager {
         p: &mut Player,
         spell: bool,
         mut cancel: impl FnMut(&mut ItemManager, &mut AnmManager, &mut Player),
+        sys: &mut Sys,
     ) {
         let gs = anm.speed;
         // 08 §8.4: box C from the human sht; fall multiplier m from the sht chosen by player byte +3.
@@ -485,7 +489,7 @@ impl ItemManager {
                     }
                     step = 1;
                 } else {
-                    p.stats.rank(-3);
+                    p.stats.rank(sys.rank, -3);
                     it.alive = false;
                     self.order[k - 1] = DEAD;
                     continue;
@@ -493,7 +497,7 @@ impl ItemManager {
             }
             if step == 1 && it.state != 3 && p.collect_test(it.pos, c) {
                 // 08 §8.4: the handler (and its cancel to items) runs while the item still occupies its slot.
-                self.collect(i, anm, p, spell, &mut cancel);
+                self.collect(i, anm, p, spell, &mut cancel, sys);
                 // One sound per calc after the loop: 0x2C once any max-value item was collected, else 0x15.
                 if sound != Some(crate::sound::ITEM1) {
                     sound = Some(if self.items[i].max_flag {
@@ -515,7 +519,7 @@ impl ItemManager {
         self.order
             .retain(|&i| i != DEAD && self.items[i as usize].alive);
         if let Some(id) = sound {
-            crate::sound::play(id);
+            sys.sound.play(id);
         }
         // 08 §8.4: gauge lock decremented and clamped at 0 after the loop.
         if self.collect_timer != 0 {
@@ -601,6 +605,8 @@ mod tests {
     // 08 §8.4 (RE-Q56 AE): the full-power cancel runs while the collected item still occupies its slot.
     #[test]
     fn collected_item_occupied_during_cancel() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let pr = Player::new_ref();
         let mut p = pr.borrow_mut();
@@ -609,10 +615,16 @@ mod tests {
         let pos = p.pos;
         assert_eq!(m.spawn(&mut anm, &p, pos, FULL_POWER as i32, 0), Some(0));
         let mut got = None;
-        m.calc(&mut anm, &mut p, false, |m, anm, p| {
-            m.cursor = 0;
-            got = m.spawn(anm, p, [100.0, 100.0, 0.0], STAR as i32, 1);
-        });
+        m.calc(
+            &mut anm,
+            &mut p,
+            false,
+            |m, anm, p| {
+                m.cursor = 0;
+                got = m.spawn(anm, p, [100.0, 100.0, 0.0], STAR as i32, 1);
+            },
+            sys,
+        );
         assert_eq!(got, Some(1));
         assert!(!m.items[0].alive);
     }
@@ -620,6 +632,8 @@ mod tests {
     // 08 §8.3 (RE-Q57 Q1): type −1 takes a slot as byte 0xFF; its collection changes nothing but frees the slot.
     #[test]
     fn negative_type_spawned() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let pr = Player::new_ref();
         let mut p = pr.borrow_mut();
@@ -629,7 +643,7 @@ mod tests {
         assert_eq!(m.spawn(&mut anm, &p, pos, -1, 1), Some(0));
         assert_eq!((m.items[0].kind, m.cursor), (0xFF, 1));
         let st = p.stats.clone();
-        m.calc(&mut anm, &mut p, false, |_, _, _| {});
+        m.calc(&mut anm, &mut p, false, |_, _, _| {}, sys);
         assert!(!m.items[0].alive);
         assert_eq!((p.stats.score10, p.stats.power), (st.score10, st.power));
     }

@@ -106,61 +106,6 @@ pub const SCENE_ENDING: i32 = 9;
 pub const SCENE_RETRY: i32 = 10;
 pub const SCENE_RELOAD: i32 = 11;
 
-thread_local! {
-    // The game flags word GM+0x3DBAC = 0x164D0B4 (11 §2.1). One word: `Game::flags` and the subsystems that
-    // have no `Ctx` (player, bombs, enemy manager, ECL) all read and write it here.
-    static FLAGS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-pub fn flags() -> u32 {
-    FLAGS.get()
-}
-
-pub fn set_flags(v: u32) {
-    FLAGS.set(v);
-}
-
-// `Game::flags`: a handle on the thread-local word above, so `g.flags & F`, `g.flags |= F`, `g.flags &= !F` keep
-// working on the one word.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct GameFlags;
-
-impl GameFlags {
-    pub fn get(self) -> u32 {
-        flags()
-    }
-
-    pub fn set(&mut self, v: u32) {
-        set_flags(v);
-    }
-}
-
-impl std::ops::BitAnd<u32> for GameFlags {
-    type Output = u32;
-    fn bitand(self, m: u32) -> u32 {
-        flags() & m
-    }
-}
-
-impl std::ops::Shr<u32> for GameFlags {
-    type Output = u32;
-    fn shr(self, n: u32) -> u32 {
-        flags() >> n
-    }
-}
-
-impl std::ops::BitOrAssign<u32> for GameFlags {
-    fn bitor_assign(&mut self, m: u32) {
-        set_flags(flags() | m);
-    }
-}
-
-impl std::ops::BitAndAssign<u32> for GameFlags {
-    fn bitand_assign(&mut self, m: u32) {
-        set_flags(flags() & m);
-    }
-}
-
 // Game state that survives scene changes (GM object 11 §2 + the menu's choices).
 pub struct Game {
     // Supervisor +0x158 current, +0x15C requested (0x17CE8B4), +0x160 previous scene (11 §7).
@@ -173,8 +118,10 @@ pub struct Game {
     pub shot: u8,
     // GM +0x3DDC4 stage index 0–8.
     pub stage: usize,
-    // GM +0x3DBAC game flags (the shared word, `GameFlags`).
-    pub flags: GameFlags,
+    // GM +0x3DBAC game flags word = 0x164D0B4 (11 §2.1); subsystems without a `Ctx` reach it through `Sys`.
+    pub flags: u32,
+    // GM+0x3DE2C..0x3DE38 rank state (11 §2).
+    pub rank: Rank,
     // GM +0x3DBB2 paused (1 menu open, 2 drawn once), +0x3DBB3 game-over / continue menu.
     pub paused: u8,
     pub game_over: u8,
@@ -251,8 +198,7 @@ pub struct Game {
 
 impl Default for Game {
     fn default() -> Self {
-        // GameMgr_Ctor zeroes the GM, flags included (11 §2).
-        set_flags(0);
+        // GameMgr_Ctor zeroes the GM, flags and rank included (11 §2).
         Self {
             scene: SCENE_BOOT,
             requested: SCENE_BOOT,
@@ -260,7 +206,8 @@ impl Default for Game {
             difficulty: 1,
             shot: 0,
             stage: 0,
-            flags: GameFlags,
+            flags: 0,
+            rank: Rank::default(),
             paused: 0,
             game_over: 0,
             fresh_start: true,
@@ -320,7 +267,7 @@ impl Game {
     }
 
     pub fn set_end_state(&mut self, v: u32) {
-        set_flags(flags() & !(3 << END_SHIFT) | (v & 3) << END_SHIFT);
+        self.flags = self.flags & !(3 << END_SHIFT) | (v & 3) << END_SHIFT;
     }
 
     // Bits 11–12: 0 → 6A, else 6B (11 §4.1).
@@ -329,7 +276,7 @@ impl Game {
     }
 
     pub fn set_route(&mut self, c: u8) {
-        set_flags(flags() & !(3 << ROUTE_SHIFT) | ((c & 3) as u32) << ROUTE_SHIFT);
+        self.flags = self.flags & !(3 << ROUTE_SHIFT) | ((c & 3) as u32) << ROUTE_SHIFT;
     }
 
     pub fn practice(&self) -> bool {
@@ -500,18 +447,14 @@ impl Game {
     }
 }
 
-thread_local! {
-    // GM rank, max, min, sub-counter (GM+0x3DE2C..0x3DE38, 11 §2); ECL var 10041 reads the rank directly.
-    // Boot values 0, 0, 0, 0 (GameMgr_Ctor zeroes the GM) until the first GameMgr_InitRank.
-    static RANK_STATE: std::cell::Cell<[i32; 4]> = const { std::cell::Cell::new([0; 4]) };
-}
-
-pub fn rank_state() -> [i32; 4] {
-    RANK_STATE.get()
-}
-
-pub fn set_rank_state(r: [i32; 4]) {
-    RANK_STATE.set(r);
+// GM rank, max, min, sub-counter (GM+0x3DE2C..0x3DE38, 11 §2); ECL var 10041 reads the rank directly.
+// Boot values 0, 0, 0, 0 (GameMgr_Ctor zeroes the GM) until the first GameMgr_InitRank.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Rank {
+    pub rank: i32,
+    pub max: i32,
+    pub min: i32,
+    pub sub: i32,
 }
 
 // Practice start power (11 §3.1): stage practice by stage, spell practice by card id.
@@ -526,44 +469,27 @@ fn practice_power(spell: bool, stage: usize, card: i16) -> f32 {
     }
 }
 
-pub fn rank() -> i32 {
-    RANK_STATE.get()[0]
-}
-
-pub fn set_rank(v: i32) {
-    RANK_STATE.with(|c| {
-        let mut r = c.get();
-        r[0] = v;
-        c.set(r);
-    });
-}
-
-// GameMgr_InitRank 0x43B936 (11 §3.2): rank, min, max from the table; the sub-counter is left alone.
-fn init_rank(d: usize) {
-    let [init, min, max] = RANK[d];
-    let [.., sub] = RANK_STATE.get();
-    RANK_STATE.set([init, max, min, sub]);
-}
-
-// 0x164D340 = GM+0x3DE38 := 0 at every stage start (11 §3.1).
-fn clear_rank_sub() {
-    let [r, max, min, _] = RANK_STATE.get();
-    RANK_STATE.set([r, max, min, 0]);
-}
-
-// RankAdd / RankSub 0x43BFC3 / 0x43C03F (11 §3.2): ±1 rank per 100 sub-units, clamped to min..max.
-pub fn rank_add(d: i32) {
-    let [mut r, max, min, mut sub] = RANK_STATE.get();
-    sub += d;
-    while sub >= 100 {
-        sub -= 100;
-        r += 1;
+impl Rank {
+    // GameMgr_InitRank 0x43B936 (11 §3.2): rank, min, max from the table; the sub-counter is left alone.
+    fn init(&mut self, d: usize) {
+        let [init, min, max] = RANK[d];
+        (self.rank, self.max, self.min) = (init, max, min);
     }
-    while sub < 0 {
-        sub += 100;
-        r -= 1;
+
+    // RankAdd / RankSub 0x43BFC3 / 0x43C03F (11 §3.2): ±1 rank per 100 sub-units, clamped to min..max.
+    pub fn add(&mut self, d: i32) {
+        let (mut r, mut sub) = (self.rank, self.sub + d);
+        while sub >= 100 {
+            sub -= 100;
+            r += 1;
+        }
+        while sub < 0 {
+            sub += 100;
+            r -= 1;
+        }
+        self.rank = r.clamp(self.min, self.max);
+        self.sub = sub;
     }
-    RANK_STATE.set([r.clamp(min, max), max, min, sub]);
 }
 
 // Stage_Advance 0x43C4B3 (11 §4.1): stage 3 → 4A for teams 1, 2 and solos 6–9, else 4B; 6A/6B by route.
@@ -600,6 +526,7 @@ pub fn clock_advance(stage: usize, time: i32, threshold: i32) -> i32 {
     }
 }
 
+// TODO(step 9): a `Weak` into the Rc subsystem graph (read by debug tools, demosync, replay end, ascii); it goes away with the graph.
 thread_local! {
     static CURRENT: RefCell<std::rc::Weak<RefCell<GameManager>>> = RefCell::new(std::rc::Weak::new());
 }
@@ -731,7 +658,7 @@ impl GameManager {
             st.hiscore = g.score.hiscore(shot, d) as i64;
         }
         g.catk_backup = Some(g.score.catk.clone());
-        init_rank(d);
+        g.rank.init(d);
         st.deaths = 0;
         Stats::checksum(rng);
         st.bombs_used = 0;
@@ -770,7 +697,8 @@ impl GameManager {
             Stats::checksum(&mut ctx.anm.rng);
         }
         // The rank sub-counter restarts after both branches; a continuing stage keeps the rank (11 §3.1).
-        clear_rank_sub();
+        // 0x164D340 = GM+0x3DE38 := 0 at every stage start (11 §3.1).
+        ctx.game.rank.sub = 0;
         let g = &mut ctx.game;
         // PLST play counters (15 §2.9).
         if fresh && g.counts_plays() {
@@ -841,7 +769,7 @@ impl GameManager {
         }
         // Replay playback: rank init, stage record load (seed set), checksum with RNG preserved (11 §3.1, §3.4).
         if ctx.game.replay() {
-            init_rank(d);
+            ctx.game.rank.init(d);
             let mut p = self.player.borrow_mut();
             crate::replay::play_stage_load(&mut ctx.game, &mut p.stats, &mut ctx.anm.rng)?;
             Stats::checksum_restored(&mut ctx.anm.rng);
@@ -1162,13 +1090,13 @@ impl Task<Ctx> for GameManager {
                     crate::hud::set_repaint(0x3C);
                     g.loading_wait = 0;
                     g.flags &= !F_CLEAR_PANEL;
-                    crate::effect::release_loading_overlay();
+                    ctx.effects.release_loading_overlay();
                     if let Some(s) = &mut g.sched {
                         s.stages.pop_front();
                     }
                 } else {
                     if g.loading_wait == 0 {
-                        crate::effect::release_loading_overlay();
+                        ctx.effects.release_loading_overlay();
                     }
                     // Loading_Wait 0x448972 acts on state 1 only: state := 2 (12 §1). It runs between frames, so the
                     // state changes only after the draw of the frame whose calc saw the wait (12 §1 pt 5).
@@ -1197,7 +1125,7 @@ impl Task<Ctx> for GameManager {
             // HSCR +0x7C pauses (GM+0x3DAA8++, 15 §2.3).
             self.player.borrow_mut().stats.rec.pauses += 1;
             g.add_play_time();
-            crate::sound::play(crate::sound::PAUSE);
+            ctx.sound.play(crate::sound::PAUSE);
             ctx.audio.pause_bgm(true);
             let s = ctx.anm.rng.state;
             Stats::checksum(&mut ctx.anm.rng);
@@ -1276,7 +1204,7 @@ impl Task<Ctx> for GameManager {
         // Port-only debug: TH08_SCREEN_FX=<frame>:<type>,<p0>,<p1>,<p2>,<p3>.
         if let Some(n) = ctx.settings.screen_fx {
             if n[0] == g.frame_counter as i64 {
-                crate::effect::screen(
+                ctx.effects.screen(
                     n[1] as u8,
                     n[2] as i32,
                     n[3] as i32,
@@ -1426,31 +1354,53 @@ mod tests {
             ),
             (2, 1, 0, 4)
         );
-        set_rank_state([10, 16, 8, 0]);
-        rank_add(250);
-        assert_eq!(rank_state(), [12, 16, 8, 50]);
-        rank_add(-1600);
-        assert_eq!(rank(), 8);
-        rank_add(10_000);
-        assert_eq!(rank(), 16);
+        let mut r = Rank {
+            rank: 10,
+            max: 16,
+            min: 8,
+            sub: 0,
+        };
+        r.add(250);
+        assert_eq!(
+            r,
+            Rank {
+                rank: 12,
+                max: 16,
+                min: 8,
+                sub: 50
+            }
+        );
+        r.add(-1600);
+        assert_eq!(r.rank, 8);
+        r.add(10_000);
+        assert_eq!(r.rank, 16);
     }
 
     // 11 §3.1 / §3.2: GameMgr_InitRank writes rank / min / max only; every stage start zeroes the sub-counter.
     #[test]
-    fn rank_init_and_stage_sub_reset() {
-        set_rank_state([12, 16, 8, 70]);
-        init_rank(2);
-        assert_eq!(rank_state(), [8, 12, 8, 70]);
-        set_rank_state([14, 16, 8, 70]);
-        clear_rank_sub();
-        assert_eq!(rank_state(), [14, 16, 8, 0]);
+    fn rank_init_keeps_sub() {
+        let mut r = Rank {
+            rank: 12,
+            max: 16,
+            min: 8,
+            sub: 70,
+        };
+        r.init(2);
+        assert_eq!(
+            r,
+            Rank {
+                rank: 8,
+                max: 12,
+                min: 8,
+                sub: 70
+            }
+        );
     }
 
     // 11 §2 gm+0x3DE28: 2 only for a spell-practice reload of a card whose 0x4C7670 flag is 0 (th08_13b ones are 1).
     #[test]
     fn deferred_music_value() {
         let mut g = Game::default();
-        set_flags(0);
         g.card = 10;
         assert_eq!(music_start(&g), 1);
         g.reload_same = true;
@@ -1465,26 +1415,15 @@ mod tests {
         assert_eq!(music_start(&g), 2);
         g.reload_same = false;
         assert_eq!(music_start(&g), 1);
-        set_flags(0);
-    }
-
-    // 11 §2.1: bits 7 / 8 / 13 written outside the GM are in the one flags word `Game::flags` reads.
-    #[test]
-    fn game_flags_one_word() {
-        let mut g = Game::default();
-        assert_eq!(g.flags.get(), 0);
-        set_flags(F_LAST_SPELL | F_13);
-        assert_eq!(g.flags & (F_LAST_SPELL | F_13), F_LAST_SPELL | F_13);
-        g.flags &= !0x2180;
-        assert_eq!(flags(), 0);
-        g.flags |= F_SPELL_PRACTICE;
-        assert_eq!(flags(), F_SPELL_PRACTICE);
     }
 
     // RANK_STATE before the first GameMgr_InitRank: GameMgr_Ctor zeroes the GM (11 §2).
     #[test]
     fn rank_boot_state() {
-        assert_eq!(std::thread::spawn(rank_state).join().unwrap(), [0; 4]);
+        assert_eq!(
+            (Game::default().rank, Game::default().flags),
+            (Rank::default(), 0)
+        );
     }
 
     // 11 §4 step 1: the clear frame sets loading and score_display; the returning paths skip the confirm test.
@@ -1495,7 +1434,7 @@ mod tests {
                 stage,
                 ..Game::default()
             };
-            g.flags.set(flags);
+            g.flags = flags;
             g.set_end_state(2);
             let mut st = Stats {
                 score10: 1234,

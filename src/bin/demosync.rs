@@ -132,7 +132,7 @@ fn main() -> anyhow::Result<()> {
             && f <= b
             && let Some(k) = th08::settings::get().edump
         {
-            print!("frame {f} {}", th08::effect::dump(k));
+            print!("frame {f} {}", ctx.effects.dump(k));
         }
         if f >= a && f <= b {
             let got = sample(&ctx, base);

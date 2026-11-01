@@ -95,7 +95,7 @@ pub fn register(
 fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
     let stage = g.stage % 9;
     if g.rpy.is_none() {
-        let mut r = new_recording(g.shot, g.difficulty, g.flags.get(), g.card, &g.cfg_bytes());
+        let mut r = new_recording(g.shot, g.difficulty, g.flags, g.card, &g.cfg_bytes());
         r.info[0x11C - HEADER] = clear_status(g);
         g.rpy = Some(r);
     }
@@ -116,7 +116,7 @@ fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
         power: st.power as u8,
         lives: st.lives as u8,
         bombs: st.bombs as u8,
-        rank: crate::gamemgr::rank() as u8,
+        rank: g.rank.rank as u8,
         b20: st.d0b0,
         spells: st.spells as u8,
         clock: st.clock as i8,
@@ -174,7 +174,7 @@ pub fn start_playback(
     g.difficulty = r.difficulty().min(4) as i32;
     g.shot = r.shot() % 12;
     g.stage = stage;
-    g.flags.set(g.flags & (7 << 15) | F_REPLAY);
+    g.flags = g.flags & (7 << 15) | F_REPLAY;
     let id = r.spell_id();
     if id >= 0 {
         // Only bit 14: bit 0 stays clear in a spell-practice replay (15 §3.8).
@@ -224,9 +224,7 @@ pub fn play_stage_load(
         st.score_disp = p.score as i64;
     }
     st.score_step = 0;
-    let mut rs = crate::gamemgr::rank_state();
-    rs[0] = rec.rank as i32;
-    crate::gamemgr::set_rank_state(rs);
+    g.rank.rank = rec.rank as i32;
     st.lives = rec.lives as f32;
     crate::player::Stats::checksum(rng);
     st.bombs = rec.bombs as f32;
@@ -548,7 +546,7 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
                 let g = &ctx.game;
                 if g.replay_ff
                     && fast_forward(
-                        g.flags.get(),
+                        g.flags,
                         g.dialogue_skippable,
                         g.replay_speed,
                         self.frame,
@@ -573,10 +571,10 @@ mod tests {
         let mut g = crate::gamemgr::Game::default();
         let f =
             crate::gamemgr::F_REPLAY | crate::gamemgr::F_SPELL_PRACTICE | crate::gamemgr::F_DEMO;
-        crate::gamemgr::set_flags(f);
+        g.flags = f;
         end_playback(&mut g);
-        assert_eq!((g.flags.get(), g.rpy.is_none()), (f, true));
-        crate::gamemgr::set_flags(0);
+        assert_eq!((g.flags, g.rpy.is_none()), (f, true));
+        g.flags = 0;
     }
 
     // 11 §1.4: the hook stores the RNG state at +0xD8 and resets the call counter, leaving the state.
@@ -689,7 +687,7 @@ mod tests {
     fn spell_practice_playback_flags() {
         use crate::gamemgr::*;
         let mut g = Game::default();
-        g.flags.set(F_PRACTICE);
+        g.flags = F_PRACTICE;
         let mut r = Replay::default();
         r.stages[0] = Some(StageRecord::default());
         r.info[0x7C - HEADER..0x7E - HEADER].copy_from_slice(&5i16.to_le_bytes());
@@ -756,7 +754,7 @@ mod tests {
     fn save_card_name_and_skips() {
         use crate::gamemgr::*;
         let mut g = Game::default();
-        g.flags.set(F_PRACTICE | F_SPELL_PRACTICE);
+        g.flags = F_PRACTICE | F_SPELL_PRACTICE;
         g.card = 5;
         g.score.catk[5].name[..4].copy_from_slice(b"Card");
         record_stage_start(&mut g, &Default::default());
@@ -840,7 +838,7 @@ mod tests {
             debug: false,
             rng_snap: 0,
         };
-        g.flags.set(crate::gamemgr::F_RUNNING);
+        g.flags = crate::gamemgr::F_RUNNING;
         let mut input = crate::input::Input::default();
         for _ in 0..61 {
             t.record_game(&mut g, &mut input);

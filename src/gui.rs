@@ -157,7 +157,7 @@ impl Gui {
         }
     }
 
-    fn handle(&mut self, anm: &mut AnmManager, r: Req) {
+    fn handle(&mut self, anm: &mut AnmManager, r: Req, sound: &mut crate::sound::Queue) {
         let v = &mut self.vms;
         match r {
             // Gui_ShowPlayerSpellName 0x415D60 (12 §5.8); face −1 = dissolve spell.
@@ -176,7 +176,7 @@ impl Gui {
                 anm.set_script(&mut v[6], TEXT_SLOT, 4);
                 self.texts.push((6, name.to_string(), [255, 240, 240], 0.0));
                 v[10].pending_interrupt = 1;
-                crate::sound::play(0xE);
+                sound.play(0xE);
             }
             // Player hide 0x416130 (Player_UpdateBomb, bomb end).
             Req::PlayerHide => {
@@ -225,7 +225,7 @@ impl Gui {
                 self.name_only = name_only;
                 // 0x17CE8CC := 2 (12 §5.3).
                 crate::hud::set_repaint(2);
-                crate::sound::play(0xE);
+                sound.play(0xE);
             }
             // Spell_HideName 0x416160 (native 23).
             Req::BossHide => {
@@ -350,7 +350,7 @@ impl Task<Ctx> for Gui {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         for r in QUEUE.with_borrow_mut(std::mem::take) {
             Self::record(&mut ctx.game, &r);
-            self.handle(&mut ctx.anm, r);
+            self.handle(&mut ctx.anm, r, &mut ctx.sound);
         }
         if self.card >= 0 {
             // Read from score.dat every frame for the bonus line.
@@ -360,7 +360,8 @@ impl Task<Ctx> for Gui {
                 ctx.game.spell_practice(),
             );
         }
-        let frozen = self.player.borrow().freeze_bullets() || crate::enemy::timer_pause() != 0;
+        let frozen =
+            self.player.borrow().freeze_bullets(ctx.game.flags) || crate::enemy::timer_pause() != 0;
         // Nothing runs while bullets are frozen (GameFlags bit 10) or the freeze byte 0x160F534 is set (07 §11.1).
         if !frozen {
             // Steps 1 (card active) and 2 (capture ring) run before the VMs (07 §11.1).
@@ -378,13 +379,13 @@ impl Task<Ctx> for Gui {
                 };
                 self.tint = self.tint & 0x00FF_FFFF | a << 24;
             }
-            let ended = e.spell_step(&ctx.anm);
-            e.capture_ring_step(&mut ctx.anm);
+            let ended = e.spell_step(&ctx.anm, &mut crate::sys!(ctx));
+            e.capture_ring_step(&mut ctx.anm, &mut crate::sys!(ctx));
             drop(e);
             if ended {
                 // Spell_HideName from step 1.1 lands before this frame's VM run.
                 for r in QUEUE.with_borrow_mut(std::mem::take) {
-                    self.handle(&mut ctx.anm, r);
+                    self.handle(&mut ctx.anm, r, &mut ctx.sound);
                 }
             }
             for k in CALC_ORDER {

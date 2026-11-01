@@ -497,7 +497,7 @@ impl Hud {
                 // Msg op 14 (10 §5.1, 13 §3): ScreenEffect type 4, 442 frames to white, draw prio 0x15.
                 // Full-repaint counter 0x17CE8CC := 442 (10 §5.1).
                 Event::Flash => {
-                    crate::effect::screen(4, 442, 0xFFFFFF, 0, 0, 0x15);
+                    ctx.effects.screen(4, 442, 0xFFFFFF, 0, 0, 0x15);
                     set_repaint(442);
                 }
                 Event::StageEnd => self.stage_end(ctx),
@@ -507,7 +507,7 @@ impl Hud {
                     log::info!("final route choice {c} at frame {}", ctx.frame);
                     ctx.game.set_route(c)
                 }
-                Event::Sfx(n) => crate::sound::play(n as i32),
+                Event::Sfx(n) => ctx.sound.play(n as i32),
             }
         }
     }
@@ -565,7 +565,7 @@ impl Hud {
             if matches!(shot, 3 | 10 | 11) && st.bombs < 3.0 {
                 st.add_bombs(1.0, rng);
                 mark_bombs(2);
-                crate::sound::play(crate::sound::CARDGET);
+                ctx.sound.play(crate::sound::CARDGET);
             }
         }
         self.clear = Some(ClearPanel {
@@ -805,9 +805,9 @@ impl Hud {
         // Sound on a change of the raw value: v < 3 se_timeout2 (0x26), else v < 10 se_timeout (0x1D).
         if self.timer_last != raw {
             if v < 3 {
-                crate::sound::play(crate::sound::TIMEOUT2);
+                ctx.sound.play(crate::sound::TIMEOUT2);
             } else if v < 10 {
-                crate::sound::play(crate::sound::TIMEOUT);
+                ctx.sound.play(crate::sound::TIMEOUT);
             }
         }
         self.timer_last = raw;
@@ -817,7 +817,7 @@ impl Hud {
         if let Some(i) = e.boss(0)
             && g.paused == 0
             && g.game_over == 0
-            && !self.player.borrow().freeze_bullets()
+            && !self.player.borrow().freeze_bullets(g.flags)
         {
             crate::ascii::popup_large_static(
                 [2.0, 29.0],
@@ -1062,7 +1062,7 @@ impl Hud {
         // Step 4 label: the original draws it only when it repaints the lives or bombs row (field ≠ 0 or full
         // repaint) and it stays in the back buffer, so the port latches the condition on those frames.
         let vm13 = self.front.get(13).is_some_and(|v| v.ip.is_some());
-        let cond = gamemgr::flags() >> 7 & 3 == 1 && self.enemies.borrow().g.spell.is_some();
+        let cond = ctx.game.flags >> 7 & 3 == 1 && self.enemies.borrow().g.spell.is_some();
         let (pn, latch) = label_step(
             PANEL.with(Cell::get),
             vm13,
@@ -1475,12 +1475,12 @@ mod tests {
         let mut r = crate::replay::Replay::default();
         r.info[0x11C - 0x68] = 2;
         g.rpy = Some(r);
-        let f = crate::gamemgr::flags();
-        crate::gamemgr::set_flags(f & !crate::gamemgr::F_REPLAY);
+        let f = g.flags;
+        g.flags = f & !crate::gamemgr::F_REPLAY;
         assert_eq!(replay_route(&g), None);
-        crate::gamemgr::set_flags(f | crate::gamemgr::F_REPLAY);
+        g.flags = f | crate::gamemgr::F_REPLAY;
         assert_eq!(replay_route(&g), Some(2));
-        crate::gamemgr::set_flags(f);
+        g.flags = f;
     }
 
     fn panel(stage: usize, from: i32, to: i32) -> ClearPanel {

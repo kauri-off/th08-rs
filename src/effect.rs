@@ -114,6 +114,7 @@ pub struct View {
     pub facing_norm: [f32; 3],
 }
 
+#[derive(Clone)]
 pub struct Effects {
     pub fx: Vec<Effect>,
     // +0 ring cursor (0..511).
@@ -131,6 +132,8 @@ pub struct Effects {
     lists: [Vec<usize>; 5],
     // Port-only: screen effects queued until `register_pending`.
     screen: Vec<ScreenEffect>,
+    // Release request of the loading darken overlay (0x45C160), consumed by its calc (13 §3).
+    loading_release: bool,
 }
 
 impl Default for Effects {
@@ -146,68 +149,48 @@ impl Default for Effects {
             paused: false,
             lists: Default::default(),
             screen: Vec::new(),
+            loading_release: false,
         }
     }
 }
 
-thread_local! {
-    static EFFECTS: RefCell<Effects> = RefCell::default();
-}
-
-pub fn with<R>(f: impl FnOnce(&mut Effects) -> R) -> R {
-    EFFECTS.with_borrow_mut(f)
-}
-
-pub fn set_player(pos: [f32; 3]) {
-    with(|e| e.player = pos);
-}
-
-pub fn set_view(v: View) {
-    with(|e| e.view = v);
-}
-
-pub fn get(idx: usize, f: impl FnOnce(&mut Effect)) {
-    with(|e| {
-        if let Some(x) = e.fx.get_mut(idx).filter(|x| x.active) {
+impl Effects {
+    pub fn get(&mut self, idx: usize, f: impl FnOnce(&mut Effect)) {
+        if let Some(x) = self.fx.get_mut(idx).filter(|x| x.active) {
             f(x);
         }
-    })
-}
+    }
 
-// Raw +0x2A4 write through a stale pointer, no alive/type check (Sakuya bomb follow, 14 §2.7, RE-Q57 AO).
-// The port's pos is the world +0x2D4 for live 19/51/63, whose update recomputes +0x2A4 anyway: skip them.
-pub fn write_pos_unchecked(idx: usize, pos: [f32; 3]) {
-    with(|e| {
-        if let Some(x) = e.fx.get_mut(idx) {
+    // Raw +0x2A4 write through a stale pointer, no alive/type check (Sakuya bomb follow, 14 §2.7, RE-Q57 AO).
+    // The port's pos is the world +0x2D4 for live 19/51/63, whose update recomputes +0x2A4 anyway: skip them.
+    pub fn write_pos_unchecked(&mut self, idx: usize, pos: [f32; 3]) {
+        if let Some(x) = self.fx.get_mut(idx) {
             if !(x.active && matches!(x.kind, 19 | 51 | 63)) {
                 x.pos = pos;
             }
         }
-    })
-}
+    }
 
-// Reads a slot even after it was freed (the original reads stale slot data).
-pub fn peek<R>(idx: usize, f: impl FnOnce(&Effect) -> R) -> R {
-    with(|e| f(&e.fx[idx]))
-}
+    // Reads a slot even after it was freed (the original reads stale slot data).
+    pub fn peek<R>(&self, idx: usize, f: impl FnOnce(&Effect) -> R) -> R {
+        f(&self.fx[idx])
+    }
 
-pub fn free(idx: usize) {
-    get(idx, |x| x.active = false);
-}
+    pub fn free(&mut self, idx: usize) {
+        self.get(idx, |x| x.active = false);
+    }
 
-// STD op 5 after a jump shifts every kind-51 effect by the camera target change (06 §4).
-pub fn shift_kind(kind: u8, d: [f32; 3]) {
-    with(|e| {
-        for x in e.fx.iter_mut().filter(|x| x.active && x.kind == kind) {
+    // STD op 5 after a jump shifts every kind-51 effect by the camera target change (06 §4).
+    pub fn shift_kind(&mut self, kind: u8, d: [f32; 3]) {
+        for x in self.fx.iter_mut().filter(|x| x.active && x.kind == kind) {
             x.pos = std::array::from_fn(|k| x.pos[k] + d[k]);
         }
-    })
-}
+    }
 
-// Debug dump of every live effect of `kind` (format of specs/data/q15/eff51_decoded.txt).
-pub fn dump(kind: u8) -> String {
-    let argb = |c: [u8; 4]| u32::from_le_bytes(c);
-    with(|m| {
+    // Debug dump of every live effect of `kind` (format of specs/data/q15/eff51_decoded.txt).
+    pub fn dump(&self, kind: u8) -> String {
+        let argb = |c: [u8; 4]| u32::from_le_bytes(c);
+        let m = self;
         let v = m.view;
         let mut s = format!(
             "F ring {} cam {:?} fac {:?} ovl {:08x} player {:?}\n",
@@ -239,16 +222,15 @@ pub fn dump(kind: u8) -> String {
             );
         }
         s
-    })
-}
+    }
 
-pub fn clear() {
-    with(|e| {
-        *e = Effects {
-            player: e.player,
+    // Manager reset at EffectMgr register / remove; the port's player-position mirror survives.
+    pub fn clear(&mut self) {
+        *self = Effects {
+            player: self.player,
             ..Effects::default()
-        }
-    });
+        };
+    }
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -548,7 +530,7 @@ impl Effects {
     }
 
     // Effect_SpawnFixed 0x425870 / Effect_SpawnFixedParam 0x4259E0: always slot 640 + k (overwrites).
-    pub fn spawn_fixed(
+    pub fn spawn_fixed_param(
         &mut self,
         anm: &mut AnmManager,
         kind: u8,
@@ -714,7 +696,7 @@ impl Effects {
 
     // EffectMgr_Calc (13 §2.3): frozen effects (bit 10, +0x357 = 0) skip update/VM/age but are still drawn;
     // survivors are linked in slot order (not spawn order); type 0x40 is never linked.
-    pub fn calc(&mut self, anm: &mut AnmManager) {
+    pub fn calc(&mut self, anm: &mut AnmManager, flags: u32) {
         let gs = anm.speed;
         self.live = 0;
         for l in &mut self.lists {
@@ -726,8 +708,8 @@ impl Effects {
             }
             self.live += 1;
             // Bit 10 read live per slot (13 §2.3): a spell-card death in the enemy calc (prio 11) already freezes
-            // this frame's effects (prio 13).
-            let frozen = crate::gamemgr::flags() & crate::gamemgr::F_DEATH != 0;
+            // this frame's effects (prio 13); no effect update writes the flags, so the word passed in is live.
+            let frozen = flags & crate::gamemgr::F_DEATH != 0;
             if !frozen || self.fx[i].keep_frozen {
                 if !self.update(i) {
                     self.fx[i].active = false;
@@ -874,8 +856,8 @@ impl Effects {
 
 // Stage 6B ring draw from `Stage_DrawLow` step 4 (06 §5.1): calls the slot's draw fn through the stored pointer,
 // with no active check.
-pub fn draw_ring_at(anm: &mut AnmManager, gfx: &mut Gfx, idx: usize) {
-    with(|s| draw_ring(anm, gfx, &s.fx[idx]));
+pub fn draw_ring_at(fx: &Effects, anm: &mut AnmManager, gfx: &mut Gfx, idx: usize) {
+    draw_ring(anm, gfx, &fx.fx[idx]);
 }
 
 // Ring renderer 0x427450 (13 §2.5): strip of 2(n+1) vertices, v along the ring, u across the band, WRAP sampling.
@@ -1079,53 +1061,66 @@ fn screen_fx(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32) -> ScreenEffect {
     }
 }
 
-pub fn spawn(anm: &mut AnmManager, kind: u8, pos: [f32; 3], count: i32, colour: u32) -> usize {
-    with(|e| e.spawn_at(anm, kind, pos, [0.0; 3], count, colour, true))
-}
+impl Effects {
+    pub fn spawn(
+        &mut self,
+        anm: &mut AnmManager,
+        kind: u8,
+        pos: [f32; 3],
+        count: i32,
+        colour: u32,
+    ) -> usize {
+        self.spawn_at(anm, kind, pos, [0.0; 3], count, colour, true)
+    }
 
-pub fn spawn_param(
-    anm: &mut AnmManager,
-    kind: u8,
-    pos: [f32; 3],
-    param: [f32; 3],
-    count: i32,
-    colour: u32,
-) -> usize {
-    with(|e| e.spawn_at(anm, kind, pos, param, count, colour, false))
-}
+    pub fn spawn_param(
+        &mut self,
+        anm: &mut AnmManager,
+        kind: u8,
+        pos: [f32; 3],
+        param: [f32; 3],
+        count: i32,
+        colour: u32,
+    ) -> usize {
+        self.spawn_at(anm, kind, pos, param, count, colour, false)
+    }
 
-pub fn spawn_high(anm: &mut AnmManager, kind: u8, pos: [f32; 3], colour: u32) -> usize {
-    with(|e| e.spawn_high(anm, kind, pos, colour))
-}
+    pub fn spawn_fixed(
+        &mut self,
+        anm: &mut AnmManager,
+        kind: u8,
+        pos: [f32; 3],
+        k: usize,
+        colour: u32,
+    ) -> usize {
+        self.spawn_fixed_param(anm, kind, pos, [0.0; 3], k, colour)
+    }
 
-pub fn spawn_fixed(anm: &mut AnmManager, kind: u8, pos: [f32; 3], k: usize, colour: u32) -> usize {
-    with(|e| e.spawn_fixed(anm, kind, pos, [0.0; 3], k, colour))
-}
-
-// Spell-card start ring at Spell_Start (07 §11.1, 13 §2.7): fixed slot 1, VM pos (8, 64) → (256, 0) over 100
-// frames (ease 6); Spell_Calc turns pos.y into the wave amplitude while waves ≠ 0.
-pub fn spell_ring(anm: &mut AnmManager, pos: [f32; 3], special: bool) {
-    let i = spawn_fixed(
-        anm,
-        if special { 52 } else { 39 },
-        pos,
-        FIX_SPELL,
-        0xFFFFFFFF,
-    );
-    get(i, |e| {
-        e.vm.interp_pos_from(100, 6, [8.0, 64.0, 0.0], [256.0, 0.0, 0.0]);
-        // 07 §11.1: Spell_Start writes only pos.y; pos.x stays 0, so the first update copies radius 0.
-        e.vm.pos[1] = 64.0;
-        e.pos = pos;
-        e.ring = Ring {
-            segments: 64,
-            start: 0.0,
-            radius: 256.0,
-            width: 15.0,
-            waves: 6.0,
-            ..e.ring
-        };
-    });
+    // Spell-card start ring at Spell_Start (07 §11.1, 13 §2.7): fixed slot 1, VM pos (8, 64) → (256, 0) over 100
+    // frames (ease 6); Spell_Calc turns pos.y into the wave amplitude while waves ≠ 0.
+    pub fn spell_ring(&mut self, anm: &mut AnmManager, pos: [f32; 3], special: bool) {
+        let i = self.spawn_fixed(
+            anm,
+            if special { 52 } else { 39 },
+            pos,
+            FIX_SPELL,
+            0xFFFFFFFF,
+        );
+        self.get(i, |e| {
+            e.vm.interp_pos_from(100, 6, [8.0, 64.0, 0.0], [256.0, 0.0, 0.0]);
+            // 07 §11.1: Spell_Start writes only pos.y; pos.x stays 0, so the first update copies radius 0.
+            e.vm.pos[1] = 64.0;
+            e.pos = pos;
+            e.ring = Ring {
+                segments: 64,
+                start: 0.0,
+                radius: 256.0,
+                width: 15.0,
+                waves: 6.0,
+                ..e.ring
+            };
+        });
+    }
 }
 
 // Effect manager task; effect level byte (cfg, 0x17CE894) for list B (13 §2.4).
@@ -1174,7 +1169,7 @@ impl EffectManager {
 impl Task<Ctx> for EffectManager {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
-            clear();
+            ctx.effects.clear();
             ctx.anm.load(&mut ctx.gfx, &ctx.archive, BG_SLOT, {
                 let card = ctx.game.spell_practice().then_some(ctx.game.card);
                 bg_file(ctx.game.stage, card)
@@ -1185,22 +1180,21 @@ impl Task<Ctx> for EffectManager {
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            clear();
+            ctx.effects.clear();
             ctx.anm.unload(&mut ctx.gfx, BG_SLOT);
         }
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let paused = ctx.game.paused != 0 || ctx.game.game_over != 0;
-        with(|e| {
-            e.paused = paused;
-            e.calc(&mut ctx.anm)
-        });
+        let e = &mut ctx.effects;
+        e.paused = paused;
+        e.calc(&mut ctx.anm, ctx.game.flags);
         Ret::Next
     }
 
     fn draw(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        with(|e| e.draw_main(&mut ctx.anm, &mut ctx.gfx));
+        ctx.effects.draw_main(&mut ctx.anm, &mut ctx.gfx);
         Ret::Next
     }
 }
@@ -1226,14 +1220,10 @@ pub struct ScreenEffect {
     done: bool,
 }
 
-thread_local! {
-    static LOADING_RELEASE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 // 0x4489CA(0) `Loading_StartDarken`: the loading darken overlay (type 5, 60 frames, black, draw prio 1), released when
 // loading ends. Called from an on-register callback inside the Supervisor calc (prio 0), so it is linked at once (13 §3).
 pub fn loading_overlay(ctx: &mut Ctx) {
-    LOADING_RELEASE.set(false);
+    ctx.effects.loading_release = false;
     link(
         ctx,
         ScreenEffect {
@@ -1244,32 +1234,32 @@ pub fn loading_overlay(ctx: &mut Ctx) {
     );
 }
 
-// 0x45C160 from Loading_Wait / Loading_End.
-pub fn release_loading_overlay() {
-    LOADING_RELEASE.set(true);
+impl Effects {
+    // 0x45C160 from Loading_Wait / Loading_End.
+    pub fn release_loading_overlay(&mut self) {
+        self.loading_release = true;
+    }
+
+    // Queues a screen effect; registered after the calc pass (calc prio 3, draw at `prio`). Only valid for callers that
+    // run after calc prio 3: their effect's first calc is the next frame either way (13 §3).
+    pub fn screen(&mut self, kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
+        self.screen.push(ScreenEffect {
+            prio,
+            ..screen_fx(kind, p0, p1, p2, p3)
+        });
+    }
+
+    // Test-only: drain the pending screen effects as (type, p0–p3).
+    #[cfg(test)]
+    pub fn take_screen(&mut self) -> Vec<(u8, [i32; 4])> {
+        std::mem::take(&mut self.screen)
+            .into_iter()
+            .map(|s| (s.kind, s.p))
+            .collect()
+    }
 }
 
 pub const SCREEN_CALC_PRIO: u16 = 3;
-
-// Queues a screen effect; registered after the calc pass (calc prio 3, draw at `prio`). Only valid for callers that run
-// after calc prio 3: their effect's first calc is the next frame either way (13 §3).
-pub fn screen(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
-    with(|e| {
-        e.screen.push(ScreenEffect {
-            prio,
-            ..screen_fx(kind, p0, p1, p2, p3)
-        })
-    });
-}
-
-// Test-only: drain the pending screen effects as (type, p0–p3).
-#[cfg(test)]
-pub fn take_screen() -> Vec<(u8, [i32; 4])> {
-    with(|e| std::mem::take(&mut e.screen))
-        .into_iter()
-        .map(|s| (s.kind, s.p))
-        .collect()
-}
 
 // ScreenEffect_Register from a calc node below prio 3 (`GameMgr_Calc`): the nodes are linked at once, so the first
 // calc runs in the same frame (13 §3).
@@ -1284,7 +1274,7 @@ pub fn screen_now(ctx: &mut Ctx, kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, p
 }
 
 pub fn register_pending(ctx: &mut Ctx) {
-    let list = with(|e| std::mem::take(&mut e.screen));
+    let list = std::mem::take(&mut ctx.effects.screen);
     for s in list {
         link(ctx, s);
     }
@@ -1314,8 +1304,8 @@ impl ScreenEffect {
     }
 
     // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set (13 §3); both read live.
-    fn frozen() -> bool {
-        crate::gamemgr::flags() & crate::gamemgr::F_DEATH != 0 || crate::enemy::timer_pause() != 0
+    fn frozen(flags: u32) -> bool {
+        flags & crate::gamemgr::F_DEATH != 0 || crate::enemy::timer_pause() != 0
     }
 }
 
@@ -1353,7 +1343,7 @@ impl ScreenEffect {
             }
             // 0x45BDC0: frozen → hold; 0x18B8A2C ≠ 0 → removed; else tick first, then end test, then a and 2 draws.
             1 => {
-                if Self::frozen() {
+                if Self::frozen(ctx.game.flags) {
                     return Ret::Next;
                 }
                 if crate::enemy::load_frames() != 0 {
@@ -1403,7 +1393,8 @@ impl ScreenEffect {
                 }
             }
             5 | 6 => {
-                if self.loading && !self.release && LOADING_RELEASE.take() {
+                if self.loading && !self.release && std::mem::take(&mut ctx.effects.loading_release)
+                {
                     self.release = true;
                     self.timer.set(0);
                 }
@@ -1420,7 +1411,7 @@ impl ScreenEffect {
             // 0x45BF10: frozen → hold; gameplay frame counter 0x164D2C8 < 2 → removed (no 0x18B8A2C test); else
             // tick first, then end test, then the 2 draws.
             7 => {
-                if Self::frozen() {
+                if Self::frozen(ctx.game.flags) {
                     return Ret::Next;
                 }
                 if ctx.game.frame_counter < 2 {
@@ -1472,24 +1463,22 @@ impl ScreenEffect {
 // Player death ring (type 59, slot 11, colour 0xFFF0404F): radius 128 → 8 over the deathbomb window (ease 4,
 // 13 §2.7).
 // +0x357 (keeps running while bullets are frozen): set only for this ring (13 §2.1).
-pub fn death_ring(anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
-    with(|e| {
-        let i = e.spawn_fixed(anm, 59, pos, [0.0; 3], FIX_DEATH, 0xFFF0404F);
-        let x = &mut e.fx[i];
-        // Radius VM pos.x 128 → 8 over the deathbomb window, ease 4 (13 §3 player hit).
-        x.vm.pos = [128.0, 32.0, 0.0];
-        x.vm.interp_pos(frames.max(1), 4, [8.0, 32.0, 0.0]);
-        x.keep_frozen = true;
-        x.ring.segments = 64;
-        x.ring.waves = 6.0;
-    });
+pub fn death_ring(e: &mut Effects, anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
+    let i = e.spawn_fixed(anm, 59, pos, FIX_DEATH, 0xFFF0404F);
+    let x = &mut e.fx[i];
+    // Radius VM pos.x 128 → 8 over the deathbomb window, ease 4 (13 §3 player hit).
+    x.vm.pos = [128.0, 32.0, 0.0];
+    x.vm.interp_pos(frames.max(1), 4, [8.0, 32.0, 0.0]);
+    x.keep_frozen = true;
+    x.ring.segments = 64;
+    x.ring.waves = 6.0;
 }
 
 // Invulnerability ring at bomb start (Player_SpawnInvulnRing 0x40BF00, type 23, slot 0): I0 := invulnerability
 // frames (13 §2.6, 14 §1.2). `frames` is the player timer +0xE2AF4 just set by Bomb_Start.
-pub fn invuln_ring(anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
-    let i = spawn_fixed(anm, 23, pos, FIX_INVULN, 0xFFFF4040);
-    get(i, |e| {
+pub fn invuln_ring(fx: &mut Effects, anm: &mut AnmManager, pos: [f32; 3], frames: i32) {
+    let i = fx.spawn_fixed(anm, 23, pos, FIX_INVULN, 0xFFFF4040);
+    fx.get(i, |e| {
         e.vm.ivars[0] = frames;
         // 13 §2.6 row 23: the spawn already ran script time 0, so the rotation goes +v, 0, −v, … (0x4B438C).
         e.vm.angular_vel[2] *= -1.0;
@@ -1516,42 +1505,38 @@ mod tests {
     // 07 §11.1: the spell ring start writes only VM pos.y.
     #[test]
     fn invuln_and_spell_ring_spawn() {
-        clear();
+        let mut fx = Effects::default();
         let mut anm = AnmManager::default();
-        invuln_ring(&mut anm, [1.0, 2.0, 0.0], 90);
-        peek(FIXED_BASE + FIX_INVULN, |e| {
+        invuln_ring(&mut fx, &mut anm, [1.0, 2.0, 0.0], 90);
+        fx.peek(FIXED_BASE + FIX_INVULN, |e| {
             assert_eq!((e.vm.ivars[0], e.vm.interp_duration[4].cur), (90, 90));
             assert_eq!((e.vm.interp_mode[4], e.vm.scale_end), (0, [1.0 / 16.0; 2]));
         });
-        spell_ring(&mut anm, [1.0, 2.0, 0.0], false);
-        peek(FIXED_BASE + FIX_SPELL, |e| {
+        fx.spell_ring(&mut anm, [1.0, 2.0, 0.0], false);
+        fx.peek(FIXED_BASE + FIX_SPELL, |e| {
             assert_eq!(e.vm.pos, [0.0, 64.0, 0.0])
         });
-        clear();
     }
 
     // 14 §2.7 (RE-Q57 AO): the Sakuya follow write moves 2D/freed slots, never a live 3D particle's world pos.
     #[test]
     fn sakuya_follow_write_skips_3d_particles() {
         let i = 3;
-        let old = with(|e| e.fx[i].clone());
-        with(|e| {
-            e.fx[i] = Effect {
-                active: true,
-                kind: 51,
-                pos: [1.0, 2.0, -3.0],
-                ..Effect::default()
-            }
-        });
-        write_pos_unchecked(i, [100.0, 200.0, 0.0]);
-        assert_eq!(peek(i, |x| x.pos), [1.0, 2.0, -3.0]);
-        with(|e| e.fx[i].kind = 20);
-        write_pos_unchecked(i, [100.0, 200.0, 0.0]);
-        assert_eq!(peek(i, |x| x.pos), [100.0, 200.0, 0.0]);
-        with(|e| (e.fx[i].kind, e.fx[i].active) = (51, false));
-        write_pos_unchecked(i, [5.0, 6.0, 0.0]);
-        assert_eq!(peek(i, |x| x.pos), [5.0, 6.0, 0.0]);
-        with(|e| e.fx[i] = old);
+        let mut e = Effects::default();
+        e.fx[i] = Effect {
+            active: true,
+            kind: 51,
+            pos: [1.0, 2.0, -3.0],
+            ..Effect::default()
+        };
+        e.write_pos_unchecked(i, [100.0, 200.0, 0.0]);
+        assert_eq!(e.peek(i, |x| x.pos), [1.0, 2.0, -3.0]);
+        e.fx[i].kind = 20;
+        e.write_pos_unchecked(i, [100.0, 200.0, 0.0]);
+        assert_eq!(e.peek(i, |x| x.pos), [100.0, 200.0, 0.0]);
+        (e.fx[i].kind, e.fx[i].active) = (51, false);
+        e.write_pos_unchecked(i, [5.0, 6.0, 0.0]);
+        assert_eq!(e.peek(i, |x| x.pos), [5.0, 6.0, 0.0]);
     }
 
     // 13 §2.6 row 64: update 0x427B50 takes radius from F1 and the centre from the VM pos, amplitude stays 0.
@@ -1580,12 +1565,8 @@ mod tests {
     // 13 §3 type 1/7: the shake freeze reads GameFlags bit 10 live.
     #[test]
     fn shake_frozen_reads_flags_live() {
-        let f = crate::gamemgr::flags();
-        crate::gamemgr::set_flags(f | crate::gamemgr::F_DEATH);
-        assert!(ScreenEffect::frozen());
-        crate::gamemgr::set_flags(f & !crate::gamemgr::F_DEATH);
-        assert_eq!(ScreenEffect::frozen(), crate::enemy::timer_pause() != 0);
-        crate::gamemgr::set_flags(f);
+        assert!(ScreenEffect::frozen(crate::gamemgr::F_DEATH));
+        assert_eq!(ScreenEffect::frozen(0), crate::enemy::timer_pause() != 0);
     }
 
     // Ring init 0x4272E0 (13 §2.6): 24 segments by default, centre = spawn pos, crossed param copy.

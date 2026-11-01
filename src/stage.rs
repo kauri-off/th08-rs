@@ -2,7 +2,7 @@
 
 use crate::anmmgr::{AnmManager, Fog};
 use crate::anmvm::{self, AnmVm, Timer};
-use crate::game::Ctx;
+use crate::game::{Ctx, Sys};
 use crate::gfx::{Camera, Gfx, Mat4, PLAYFIELD, Rect, Vertex};
 use crate::player::PlayerRef;
 use crate::stdfile::{self, QuadKind, Record, Std, Vec3};
@@ -428,7 +428,7 @@ impl Stage {
     }
 
     // One record of the Stage_Calc switch (06 §4); false when processing stops for this frame (op 3).
-    fn exec(&mut self, anm: &mut AnmManager, r: Record) -> bool {
+    fn exec(&mut self, anm: &mut AnmManager, r: Record, sys: &mut Sys) -> bool {
         let cam = &mut self.cam;
         match r.op {
             0 => self.origin = r.v(),
@@ -460,7 +460,7 @@ impl Stage {
                 // After a jump, kind-51 background particles shift by the target change (06 §4, 13 §2.6a).
                 if s == POS && self.jumped {
                     let d = sub(r.v(), cam.target.v[s]);
-                    crate::effect::shift_kind(51, d);
+                    sys.fx.shift_kind(51, d);
                     self.jumped = false;
                 }
                 cam.start.v[s] = cam.target.v[s];
@@ -513,10 +513,10 @@ impl Stage {
     }
 
     // Stage_Calc head for g_StageIdx 7 (06 §5.1): spawn the ring, else drive it with section requests 1–4.
-    fn ring_6b_step(&mut self, anm: &mut AnmManager) {
+    fn ring_6b_step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let Some(i) = self.ring_6b else {
-            let i = crate::effect::spawn_fixed(anm, 0x40, [0.0; 3], 12, 0xFFFF_FFFF);
-            crate::effect::with(|e| anm.file_set_script(&mut e.fx[i].vm, ANM_SLOT, 11));
+            let i = sys.fx.spawn_fixed(anm, 0x40, [0.0; 3], 12, 0xFFFF_FFFF);
+            anm.file_set_script(&mut sys.fx.fx[i].vm, ANM_SLOT, 11);
             self.ring_6b = Some(i);
             return;
         };
@@ -525,8 +525,8 @@ impl Stage {
             return;
         }
         // Writes through the stored pointer, no active check.
-        crate::effect::with(|e| {
-            let vm = &mut e.fx[i].vm;
+        {
+            let vm = &mut sys.fx.fx[i].vm;
             if req == 1 {
                 anm.file_set_script(vm, ANM_SLOT, 11);
                 return;
@@ -542,7 +542,7 @@ impl Stage {
             vm.interp_duration[0] = k.interp_duration[0];
             vm.interp_mode[0] = k.interp_mode[0];
             vm.color = k.color;
-        });
+        }
     }
 
     // 06 §4.1: jump past the op 31 whose arg matches; an unmatched request stays pending.
@@ -657,22 +657,22 @@ impl Stage {
     }
 
     // Stage_Calc body (06 §5).
-    pub fn step(&mut self, anm: &mut AnmManager) {
+    pub fn step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         // GameFlags bit 10 (bullets frozen): nothing runs, the sparkle flag is not set and the frame counter holds.
         if self
             .player
             .as_ref()
-            .is_some_and(|p| p.borrow().freeze_bullets())
+            .is_some_and(|p| p.borrow().freeze_bullets(*sys.flags))
         {
             return;
         }
         let speed = anm.speed;
         if self.index == 7 {
-            self.ring_6b_step(anm);
+            self.ring_6b_step(anm, sys);
         }
         self.handle_section_request();
         while let Some(&r) = self.std.script.get(self.ip) {
-            if r.time == -1 || self.clock.cur < r.time || !self.exec(anm, r) {
+            if r.time == -1 || self.clock.cur < r.time || !self.exec(anm, r, sys) {
                 break;
             }
         }
@@ -695,15 +695,15 @@ impl Stage {
             }
         }
         // Port-only hand-off: camera and overlay colour for the effect manager (13 §2.6a, §2.6c).
-        crate::effect::set_view(crate::effect::View {
+        sys.fx.view = crate::effect::View {
             cam: Some(self.cam.camera(PLAYFIELD)),
             pos: self.cam.v[POS],
             eye: self.cam.eye(),
             facing: self.cam.v[FACING],
             facing_norm: self.cam.facing_norm,
-        });
+        };
         let overlay = self.overlay.color;
-        crate::effect::with(|e| e.overlay = overlay);
+        sys.fx.overlay = overlay;
         if self.vm_a.sprite_index > 0 {
             self.vm_a.run(anm);
         }
@@ -715,11 +715,11 @@ impl Stage {
             self.clear_color = u32::from_le_bytes(self.vm_c.color);
         }
         // 06 §5 quirk kept: sparkles at all 12 points, used or not (unused ones at screen (0, 0)).
-        if self.sparkle_due() {
+        if self.sparkle_due(*sys.flags) {
             let pts = self.sparkles.borrow().1;
             for p in &pts[..12] {
-                let i = crate::effect::spawn(anm, 0x3E, *p, 1, 0x20FFFFFF);
-                crate::effect::get(i, |e| e.layer = 4);
+                let i = sys.fx.spawn(anm, 0x3E, *p, 1, 0x20FFFFFF);
+                sys.fx.get(i, |e| e.layer = 4);
             }
         }
         // Sparkle flag +0x647C (06 §5); cleared at the end of Stage_DrawHigh.
@@ -733,8 +733,8 @@ impl Stage {
     }
 
     // 06 §5: every 3rd frame, from frame 700 (from frame 0 in spell practice, GameFlags bit 14), while +0xB24 < 2.
-    fn sparkle_due(&self) -> bool {
-        let practice = crate::gamemgr::flags() & crate::gamemgr::F_SPELL_PRACTICE != 0;
+    fn sparkle_due(&self, flags: u32) -> bool {
+        let practice = flags & crate::gamemgr::F_SPELL_PRACTICE != 0;
         self.frame % 3 == 0 && (self.frame > 699 || practice) && self.spell_state < 2
     }
 
@@ -754,9 +754,14 @@ impl Stage {
 
     // Stage_SpellMaskCallback 0x4235A0 (07 §12.1): black square frame between the native 3/6/20 rings,
     // inside it the spell background redrawn mirrored.
-    fn draw_spell_mask(&mut self, anm: &mut AnmManager, gfx: &mut Gfx) {
-        let ra = crate::effect::peek(crate::effect::FIXED_BASE + 9, |e| (e.vm.pos[0], e.pos));
-        let rb = crate::effect::peek(crate::effect::FIXED_BASE + 10, |e| e.vm.pos[0]);
+    fn draw_spell_mask(
+        &mut self,
+        anm: &mut AnmManager,
+        gfx: &mut Gfx,
+        fx: &crate::effect::Effects,
+    ) {
+        let ra = fx.peek(crate::effect::FIXED_BASE + 9, |e| (e.vm.pos[0], e.pos));
+        let rb = fx.peek(crate::effect::FIXED_BASE + 10, |e| e.vm.pos[0]);
         let ((a, c), b) = (ra, rb);
         let (a, b) = (
             a * std::f32::consts::FRAC_1_SQRT_2,
@@ -1071,16 +1076,16 @@ impl Task<Ctx> for Stage {
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         for _ in 0..std::mem::take(&mut self.fast_forward) {
-            self.step(&mut ctx.anm);
+            self.step(&mut ctx.anm, &mut crate::sys!(ctx));
         }
-        self.step(&mut ctx.anm);
+        self.step(&mut ctx.anm, &mut crate::sys!(ctx));
         Ret::Next
     }
 
     // Tag 0 = Stage_DrawLow, tag 1 = Stage_DrawHigh (06 §10.2).
     // Not implemented: DrawLow step 2 (+0xB2C clear).
     fn draw(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let (anm, gfx) = (&mut ctx.anm, &mut ctx.gfx);
+        let (anm, gfx, fx) = (&mut ctx.anm, &mut ctx.gfx, &mut ctx.effects);
         if tag == 0 {
             {
                 let mut p = self.sparkles.borrow_mut();
@@ -1100,7 +1105,7 @@ impl Task<Ctx> for Stage {
                 }
             }
             if let Some(i) = self.ring_6b.filter(|_| !hide) {
-                crate::effect::draw_ring_at(anm, gfx, i);
+                crate::effect::draw_ring_at(fx, anm, gfx, i);
             }
             // Step 5: alpha 0xFF → clear target + z; 0 → z only; else blend-fill the playfield, then z.
             let c = self.clear_color.to_le_bytes();
@@ -1124,7 +1129,7 @@ impl Task<Ctx> for Stage {
                 self.draw_layer(anm, gfx, 2);
                 self.draw_layer(anm, gfx, 3);
                 let level = self.effect_level;
-                crate::effect::with(|e| e.draw_background(anm, gfx, level));
+                fx.draw_background(anm, gfx, level);
                 if self.spell_state == 1 {
                     // Spell-start fade: black, alpha +0xB28·255/60, ZFUNC ALWAYS (Screen_FillRect 0x45B1E0).
                     anm.reset_render_state();
@@ -1140,7 +1145,7 @@ impl Task<Ctx> for Stage {
                 anm.draw_mode(gfx, vm, 2);
             }
             if self.spell_mask && self.spell_state > 0 {
-                self.draw_spell_mask(anm, gfx);
+                self.draw_spell_mask(anm, gfx, fx);
             }
             self.sparkle_on = false;
             // +0x646C: the tint stays on while a bomb drew last frame (06 §10.2).
@@ -1189,6 +1194,8 @@ mod tests {
 
     #[test]
     fn camera_interpolation_and_jump() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut st = synthetic(vec![
             rec(0, 5, fl([0.0, 0.0, 0.0])),
             rec(0, 6, [10, 0, 0]),
@@ -1197,14 +1204,14 @@ mod tests {
             rec(-1, 0, [0; 3]),
         ]);
         let mut anm = AnmManager::default();
-        st.step(&mut anm);
+        st.step(&mut anm, sys);
         assert_eq!(st.cam.v[POS], [0.0, 10.0, 0.0]);
         for _ in 0..9 {
-            st.step(&mut anm);
+            st.step(&mut anm, sys);
         }
         assert_eq!(st.cam.v[POS], [0.0, 100.0, 0.0]);
         for _ in 0..30 {
-            st.step(&mut anm);
+            st.step(&mut anm, sys);
         }
         assert_eq!(st.clock.cur, 20);
         assert_eq!(st.ip, 3);
@@ -1251,41 +1258,46 @@ mod tests {
     // the colour; request 2 (script 12) restores the pos interpolation slot 0 and the colour.
     #[test]
     fn stage_6b_ring_requests() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut st = synthetic(vec![rec(-1, 0, [0; 3])]);
         st.index = 7;
         let mut anm = AnmManager::default();
         st.section_request = 3;
-        st.step(&mut anm);
+        st.step(&mut anm, sys);
         let i = st.ring_6b.unwrap();
         assert_eq!(i, crate::effect::FIXED_BASE + 12);
-        crate::effect::peek(i, |e| assert_eq!((e.active, e.kind), (true, 0x40)));
+        sys.fx
+            .peek(i, |e| assert_eq!((e.active, e.kind), (true, 0x40)));
         // The spawn frame does not look at the request.
         assert_eq!(st.section_request, 3);
-        crate::effect::with(|e| {
-            let vm = &mut e.fx[i].vm;
+        {
+            let vm = &mut sys.fx.fx[i].vm;
             vm.color = [1, 2, 3, 4];
             vm.pos_end = [5.0, 6.0, 7.0];
             vm.interp_mode[0] = 4;
-        });
-        st.step(&mut anm);
-        crate::effect::peek(i, |e| {
+        }
+        st.step(&mut anm, sys);
+        sys.fx.peek(i, |e| {
             assert_eq!(e.vm.pending_interrupt, 3);
             assert_eq!(e.vm.color, [1, 2, 3, 4]);
         });
         st.section_request = 2;
-        st.step(&mut anm);
-        crate::effect::peek(i, |e| {
+        st.step(&mut anm, sys);
+        sys.fx.peek(i, |e| {
             assert_eq!(e.vm.pending_interrupt, 2);
             assert_eq!(
                 (e.vm.color, e.vm.pos_end, e.vm.interp_mode[0]),
                 ([1, 2, 3, 4], [5.0, 6.0, 7.0], 4)
             );
         });
-        crate::effect::free(i);
+        sys.fx.free(i);
     }
 
     #[test]
     fn halt_and_section_request() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut st = synthetic(vec![
             rec(0, 3, [0; 3]),
             rec(0, 13, [1, 0, 0]),
@@ -1295,11 +1307,11 @@ mod tests {
         ]);
         let mut anm = AnmManager::default();
         for _ in 0..5 {
-            st.step(&mut anm);
+            st.step(&mut anm, sys);
         }
         assert_eq!((st.ip, st.clock.cur, st.clear_color), (0, 0, 0));
         st.section_request = 2;
-        st.step(&mut anm);
+        st.step(&mut anm, sys);
         assert_eq!(
             (st.clear_color, st.section_request, st.clock.cur),
             (2, 0, 51)
@@ -1308,17 +1320,19 @@ mod tests {
 
     #[test]
     fn fog_interpolates() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut st = synthetic(vec![
             rec(0, 2, [4, 0, 0]),
             rec(0, 1, [0xFF40_8000, 100f32.to_bits(), 300f32.to_bits()]),
             rec(-1, 0, [0; 3]),
         ]);
         let mut anm = AnmManager::default();
-        st.step(&mut anm);
+        st.step(&mut anm, sys);
         assert_eq!(st.fog.near, 175.0);
         assert_eq!(st.fog.color, 0xFF10_2000);
         for _ in 0..3 {
-            st.step(&mut anm);
+            st.step(&mut anm, sys);
         }
         assert_eq!(
             st.fog,
@@ -1333,38 +1347,42 @@ mod tests {
 
     #[test]
     fn frozen_bullets_skip_calc() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut st = synthetic(vec![rec(0, 13, [7, 0, 0]), rec(-1, 0, [0; 3])]);
         let player = crate::player::Player::new_ref();
-        player.borrow_mut().set_freeze_bullets(true);
+        player.borrow_mut().set_freeze_bullets(sys.flags, true);
         st.player = Some(player.clone());
         let mut anm = AnmManager::default();
-        st.step(&mut anm);
+        st.step(&mut anm, sys);
         assert_eq!((st.ip, st.frame, st.clear_color), (0, 0, 0));
         assert!(!st.sparkle_on);
-        player.borrow_mut().set_freeze_bullets(false);
-        st.step(&mut anm);
+        player.borrow_mut().set_freeze_bullets(sys.flags, false);
+        st.step(&mut anm, sys);
         assert_eq!((st.ip, st.frame, st.clear_color), (1, 1, 7));
         assert!(st.sparkle_on);
     }
 
     #[test]
     fn sparkle_frames() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut st = synthetic(vec![rec(-1, 0, [0; 3])]);
         let due = Stage::sparkle_due;
         st.frame = 0;
-        assert!(!due(&st));
+        assert!(!due(&st, *sys.flags));
         st.frame = 702;
-        assert!(due(&st));
+        assert!(due(&st, *sys.flags));
         st.frame = 703;
-        assert!(!due(&st));
-        crate::gamemgr::set_flags(crate::gamemgr::F_SPELL_PRACTICE);
+        assert!(!due(&st, *sys.flags));
+        *sys.flags = crate::gamemgr::F_SPELL_PRACTICE;
         st.frame = 0;
-        assert!(due(&st));
+        assert!(due(&st, *sys.flags));
         st.frame = 1;
-        assert!(!due(&st));
+        assert!(!due(&st, *sys.flags));
         st.spell_state = 2;
         st.frame = 0;
-        assert!(!due(&st));
+        assert!(!due(&st, *sys.flags));
     }
 
     // 06 §10.2: layers / list B / fade rect hidden while +0xB24 ≥ 2 or the HUD cover is on.
@@ -1412,6 +1430,8 @@ mod tests {
 
     #[test]
     fn all_std_scripts_run() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
@@ -1431,7 +1451,7 @@ mod tests {
                 if f == 3000 {
                     st.section_request = 1;
                 }
-                st.step(&mut anm);
+                st.step(&mut anm, sys);
                 let cam = st.cam.camera(PLAYFIELD);
                 assert!(
                     cam.view.0.iter().flatten().all(|v| v.is_finite()),

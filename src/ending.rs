@@ -518,9 +518,9 @@ mod tests {
             assert_eq!(team(shot), t);
         }
         g.shot = 6;
-        g.flags.set(0);
+        g.flags = 0;
         assert_eq!(script_name(&g), "end01a.end");
-        g.flags.set(F_ENDING_OK);
+        g.flags = F_ENDING_OK;
         g.stage = 6;
         assert_eq!(script_name(&g), "end01b.end");
         g.stage = 7;

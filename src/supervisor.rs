@@ -71,7 +71,7 @@ pub fn setup_new_game(g: &mut Game, s: &Settings, stage: usize) {
     g.difficulty = s.rank.unwrap_or(default_diff);
     g.shot = shot;
     g.stage = stage;
-    g.flags.set(0);
+    g.flags = 0;
     g.fresh_start = true;
     g.request(gamemgr::SCENE_GAME);
 }
@@ -88,16 +88,16 @@ pub fn setup_ending(g: &mut Game, s: &Settings, e: &Ending) {
     g.stats.continues = s.continues;
     match kind {
         'a' => {
-            g.flags.set(0);
+            g.flags = 0;
             g.stage = 4;
             g.stats.clock = 12;
         }
         'c' => {
-            g.flags.set(gamemgr::F_ENDING_OK);
+            g.flags = gamemgr::F_ENDING_OK;
             g.stage = 7;
         }
         _ => {
-            g.flags.set(gamemgr::F_ENDING_OK);
+            g.flags = gamemgr::F_ENDING_OK;
             g.stage = 6;
         }
     }
@@ -182,7 +182,7 @@ impl Supervisor {
         // its first draw (alphas 255, 251, …).
         crate::effect::screen_now(ctx, 0, 70, 0xFFFFFF, 0, 0, 0x15);
         // Loading_End releases a loading darken overlay (13 §3 type 5); only the menu load after a game has one.
-        crate::effect::release_loading_overlay();
+        ctx.effects.release_loading_overlay();
         for vm in &mut self.boot_vms {
             vm.pending_interrupt = 1;
         }

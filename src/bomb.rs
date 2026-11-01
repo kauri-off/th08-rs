@@ -2,12 +2,12 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::effect;
-use crate::gamemgr::{self, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
+use crate::game::Sys;
+use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
 use crate::gfx::{Gfx, PLAYFIELD};
 use crate::input;
 use crate::item::ItemManager;
 use crate::player::{ANM_SLOT, DISSOLVE_BEGIN, DISSOLVE_END, Player, Stats};
-use crate::sound;
 use std::cell::RefCell;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -258,12 +258,13 @@ fn len(v: [f32; 2]) -> f32 {
 
 // Screen effects (13 §3): shake (1: p0, p1, p2), flash (3: p0, p1, colour). p0 is the duration the
 // original passes in EDX (14 header note).
-fn shake(dur: i32, a0: i32, a1: i32) {
-    effect::screen(1, dur, a0, a1, 0, SCREEN_PRIO);
+fn shake(dur: i32, a0: i32, a1: i32, sys: &mut Sys) {
+    sys.fx.screen(1, dur, a0, a1, 0, SCREEN_PRIO);
 }
 
-fn flash(dur: i32, repeats: i32, colour: u32) {
-    effect::screen(3, dur, repeats, colour as i32, 0, SCREEN_PRIO);
+fn flash(dur: i32, repeats: i32, colour: u32, sys: &mut Sys) {
+    sys.fx
+        .screen(3, dur, repeats, colour as i32, 0, SCREEN_PRIO);
 }
 
 // Table 0x4C7AD0 (09 §7): teams take the human member's bomb for even indexes, the youkai member's for odd.
@@ -425,12 +426,13 @@ impl Player {
         anm: &mut AnmManager,
         inp: &input::Input,
         items: &mut Option<&mut ItemManager>,
+        sys: &mut Sys,
     ) {
         // 09 §1.1: a forced-start call (+6 set, +0xE2A68 == 1) jumps straight to the bomb start, past the
         // +0xE2A6C decrement, the bombing branch and the start tests.
         if self.forced_bomb != 0 && self.deathbomb == 1 {
-            self.start_bomb(anm, true);
-            self.bomb_calc(anm, items);
+            self.start_bomb(anm, true, sys);
+            self.bomb_calc(anm, items, sys);
             self.bomb.timer.tick(anm.speed);
             return;
         }
@@ -450,9 +452,9 @@ impl Player {
                 return;
             }
             // Special mode: SE 0x29 only on a new press (the function's only edge test); +0xE2A7C kept (09 §1.1, §7).
-            if self.special() || gamemgr::flags() & F_SPELL_PRACTICE != 0 {
+            if self.special(*sys.flags) || *sys.flags & F_SPELL_PRACTICE != 0 {
                 if inp.pressed(input::BOMB) {
-                    sound::play(0x29);
+                    sys.sound.play(0x29);
                 }
                 return;
             }
@@ -461,13 +463,13 @@ impl Player {
                 return;
             }
             // The bomb calc fn runs immediately on the start frame; that branch returns before the gauge add.
-            self.start_bomb(anm, false);
-            self.bomb_calc(anm, items);
+            self.start_bomb(anm, false, sys);
+            self.bomb_calc(anm, items, sys);
             self.bomb.timer.tick(anm.speed);
             return;
         }
         if self.bomb.timer.cur < self.bomb.duration {
-            self.bomb_calc(anm, items);
+            self.bomb_calc(anm, items, sys);
             self.bomb.timer.tick(anm.speed);
         } else {
             // End: speed multipliers 1, bombing 0; no tint-off here (06 §10.2); index 4 per 14 §2.17.
@@ -476,9 +478,9 @@ impl Player {
             self.bombing = false;
             crate::gui::request(crate::gui::Req::PlayerHide);
             if self.bomb.index == 4 {
-                gamemgr::set_flags(gamemgr::flags() & !(F_LAST_SPELL | F_LAST_CAPTURED));
+                *sys.flags = *sys.flags & !(F_LAST_SPELL | F_LAST_CAPTURED);
                 self.dissolve_req |= DISSOLVE_END;
-                flash(30, 1, 0xFFFFFFFF);
+                flash(30, 1, 0xFFFFFFFF, sys);
             }
         }
         // Quirk kept (09 §7): forced gauge add also on the end frame, with the old index.
@@ -491,17 +493,17 @@ impl Player {
 
     // Bomb start (09 §7): index from focus / last-spell request, bomb cost, checksum (0x44E2E0), rank −200,
     // counter += 6 (cap sht +8). Not implemented: statistics bit.
-    fn start_bomb(&mut self, anm: &mut AnmManager, forced: bool) {
+    fn start_bomb(&mut self, anm: &mut AnmManager, forced: bool, sys: &mut Sys) {
         self.forced_bomb = 0;
         // HUD bombs field := 2 (12 §5.3 writers).
         crate::hud::mark_bombs(2);
         let mut index = 4;
         // 09 §7: in special mode (bits 7–8) the whole cost block is skipped: no unfreeze, bombs, counters or checksums.
-        if !self.special() {
+        if !self.special(*sys.flags) {
             // 09 §7 order: silhouette (VM bit 17) off, deathbomb ring ended, bullets unfrozen, AnmMgr_TintOff.
             self.vm.flags &= !anmvm::F_COLOR2;
-            effect::free(effect::FIXED_BASE + effect::FIX_DEATH);
-            self.set_freeze_bullets(false);
+            sys.fx.free(effect::FIXED_BASE + effect::FIX_DEATH);
+            self.set_freeze_bullets(sys.flags, false);
             anm.tint_off();
             let rng = &mut anm.rng;
             index = self.focus.min(1) as usize;
@@ -539,13 +541,13 @@ impl Player {
         self.bomb.timer.set(0);
         self.bomb.duration = 999;
         self.bomb.ch = bomb_char(self.shot_type, index);
-        self.stats.rank(-200);
+        self.stats.rank(sys.rank, -200);
         self.deathbomb = (self.deathbomb + 6).min(self.sht.deathbomb);
     }
 
     // Bomb_Start 0x40BE30 (14 §1.2): banner, duration, state 3 + invulnerability, ring, objects freed (other
     // fields kept), items attracted, origin = p.
-    fn bomb_begin(&mut self, anm: &mut AnmManager, spec: BombSpec) {
+    fn bomb_begin(&mut self, anm: &mut AnmManager, spec: BombSpec, sys: &mut Sys) {
         self.bomb.name = spec.0;
         self.bomb.last_spell = spec.3;
         let face = if self.bomb.index == 4 {
@@ -561,7 +563,7 @@ impl Player {
         self.bomb.duration = spec.1;
         self.state = 3;
         self.state_timer.set(spec.2);
-        effect::invuln_ring(anm, self.pos, spec.2);
+        crate::effect::invuln_ring(sys.fx, anm, self.pos, spec.2);
         self.invuln_ring = true;
         self.bomb.objs.iter_mut().for_each(|o| o.state = 0);
         self.bomb.attract = true;
@@ -569,14 +571,19 @@ impl Player {
     }
 
     // Bomb calc fn dispatch (table 0x4C7AD0 fns 0–4); Bomb_Start runs on the T = 0 frame of each.
-    fn bomb_calc(&mut self, anm: &mut AnmManager, items: &mut Option<&mut ItemManager>) {
+    fn bomb_calc(
+        &mut self,
+        anm: &mut AnmManager,
+        items: &mut Option<&mut ItemManager>,
+        sys: &mut Sys,
+    ) {
         let _ = items;
         let t = self.bomb.timer.cur;
         let adv = self.bomb.timer.cur != self.bomb.timer.prev;
         let ls = self.bomb.index & 2 != 0;
         if self.bomb.index == 4 {
             if t == 0 && adv {
-                let practice = gamemgr::flags() & F_SPELL_PRACTICE != 0;
+                let practice = *sys.flags & F_SPELL_PRACTICE != 0;
                 self.bomb_begin(
                     anm,
                     if practice {
@@ -584,14 +591,15 @@ impl Player {
                     } else {
                         DISSOLVE
                     },
+                    sys,
                 );
-                self.dissolve_start(anm);
+                self.dissolve_start(anm, sys);
             }
             return;
         }
         let ch = self.bomb.ch as usize;
         if t == 0 && adv {
-            self.bomb_begin(anm, SPECS[ch][ls as usize]);
+            self.bomb_begin(anm, SPECS[ch][ls as usize], sys);
         }
         let b = Bf {
             t,
@@ -600,15 +608,15 @@ impl Player {
             gs: anm.speed,
         };
         match ch {
-            0 if ls => self.bomb_reimu_ls(anm, b),
-            0 => self.bomb_reimu(anm, b),
-            1 => self.bomb_yukari(anm, b),
-            2 => self.bomb_marisa(anm, b),
-            3 => self.bomb_alice(anm, b),
-            4 => self.bomb_sakuya(anm, b),
-            5 => self.bomb_remilia(anm, b),
-            6 => self.bomb_youmu(anm, b),
-            _ => self.bomb_yuyuko(anm, b),
+            0 if ls => self.bomb_reimu_ls(anm, b, sys),
+            0 => self.bomb_reimu(anm, b, sys),
+            1 => self.bomb_yukari(anm, b, sys),
+            2 => self.bomb_marisa(anm, b, sys),
+            3 => self.bomb_alice(anm, b, sys),
+            4 => self.bomb_sakuya(anm, b, sys),
+            5 => self.bomb_remilia(anm, b, sys),
+            6 => self.bomb_youmu(anm, b, sys),
+            _ => self.bomb_yuyuko(anm, b, sys),
         }
     }
 
@@ -671,7 +679,7 @@ impl Player {
     }
 
     // Orb impact (14 §2.1 / §2.2), rates 64/15 and 128/15 exact. Quirk kept: the C circle is centred on the player, not the orb.
-    fn orb_explode(&mut self, anm: &mut AnmManager, i: usize, ls: bool) {
+    fn orb_explode(&mut self, anm: &mut AnmManager, i: usize, ls: bool, sys: &mut Sys) {
         self.areas_off(i);
         let p = xy(self.pos);
         let q = self.bomb.objs[i].pos;
@@ -681,21 +689,21 @@ impl Player {
         } else {
             self.dc(xy(q), 64.0, 12.8, 500, 12, 4, 0, false);
         }
-        effect::spawn(anm, 6, q, 8, 0xFFFFFFFF);
+        sys.fx.spawn(anm, 6, q, 8, 0xFFFFFFFF);
         let o = &mut self.bomb.objs[i];
         o.state = 2;
         o.vm.pending_interrupt = 1;
-        sound::play_at(0xF, q[0]);
-        shake(16, 8, 0);
+        sys.sound.play_at(0xF, q[0]);
+        shake(16, 8, 0, sys);
     }
 
     // 14 §2.1 霊符「夢想妙珠」 0x40C010. (The original's discarded velocity/8 temporary has no effect.)
-    fn bomb_reimu(&mut self, anm: &mut AnmManager, b: Bf) {
+    fn bomb_reimu(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let p = self.pos;
         if Self::at(b, 0) {
-            effect::spawn(anm, 12, p, 1, 0xFF4040FF);
+            sys.fx.spawn(anm, 12, p, 1, 0xFF4040FF);
             self.reimu_orbs(anm);
-            sound::play(0xD);
+            sys.sound.play(0xD);
         }
         // T < 40 spin-out: pos = centre + (sin a, cos a)·radius, radius += 3.2.
         if b.t < 40 {
@@ -745,7 +753,7 @@ impl Player {
                         .darea
                         .is_some_and(|a| self.damage_areas[a].total >= 200);
                     if dealt || b.t >= self.bomb.duration - 30 {
-                        self.orb_explode(anm, i, false);
+                        self.orb_explode(anm, i, false, sys);
                     }
                 }
                 let o = &mut self.bomb.objs[i];
@@ -772,12 +780,12 @@ impl Player {
     }
 
     // 14 §2.2 神霊「夢想封印　瞬」 0x40C910: orb i explodes at T ≥ dur − 40 − i; blasts every 20 frames from T = 40.
-    fn bomb_reimu_ls(&mut self, anm: &mut AnmManager, b: Bf) {
+    fn bomb_reimu_ls(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         if Self::at(b, 0) {
-            effect::spawn(anm, 12, self.pos, 1, 0xFF4040FF);
+            sys.fx.spawn(anm, 12, self.pos, 1, 0xFF4040FF);
             self.reimu_orbs(anm);
             self.bomb.n = 0;
-            sound::play(0xD);
+            sys.sound.play(0xD);
         }
         for i in 0..16 {
             let o = &mut self.bomb.objs[i];
@@ -797,7 +805,7 @@ impl Player {
                 // Quirk kept (14 §2.2): the follow write still runs through the old slots, so the impact C circle
                 // that reused the just-freed slot moves from p to the orb.
                 let (c, d) = (o.carea, o.darea);
-                self.orb_explode(anm, i, true);
+                self.orb_explode(anm, i, true, sys);
                 let q = xy(self.bomb.objs[i].pos);
                 if let Some(a) = d {
                     self.damage_areas[a].pos = q;
@@ -823,17 +831,17 @@ impl Player {
                 }
             };
             let pt = [point[0], point[1], 0.0];
-            effect::spawn(anm, 0x31, pt, 1, colour);
-            effect::spawn(anm, 0x37, pt, 1, colour);
+            sys.fx.spawn(anm, 0x31, pt, 1, colour);
+            sys.fx.spawn(anm, 0x37, pt, 1, colour);
             let c = self.cancel_circle(point, 64.0, 64.0 / 15.0, 30, 6);
             let d = self.dc(point, 64.0, 128.0 / 15.0, 400, 15, 2, 0, false);
             let o = &mut self.bomb.objs[k];
             Self::obj_script(anm, o, 0x14);
             o.vm.color = colour.to_le_bytes();
             (o.pos, o.state, o.carea, o.darea) = (pt, 1, Some(c), Some(d));
-            sound::play(0xF);
-            shake(16, 8, 0);
-            flash(8, 1, colour);
+            sys.sound.play(0xF);
+            shake(16, 8, 0, sys);
+            flash(8, 1, colour, sys);
         }
         for k in 0..OBJS {
             if self.bomb.objs[k].state == 0 {
@@ -874,16 +882,16 @@ impl Player {
     }
 
     // 14 §2.3 / §2.4 Alice 0x40D430 / 0x40D970: the doll is option 0.
-    fn bomb_alice(&mut self, anm: &mut AnmManager, b: Bf) {
+    fn bomb_alice(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let ls = b.ls;
         let centre = [192.0, 224.0, 0.0];
         if Self::at(b, 0) {
-            sound::play(0xD);
+            sys.sound.play(0xD);
             if ls {
                 self.bomb.start = self.pos;
             } else {
                 self.bomb.start = self.options[0].pos;
-                sound::play(6);
+                sys.sound.play(6);
             }
         }
         let s = self.bomb.start;
@@ -912,13 +920,14 @@ impl Player {
         }
         let q = doll.pos;
         if b.adv && (60..=76).contains(&b.t) && b.t % 4 == 0 {
-            effect::spawn(anm, 0x28, q, 1, DOLL_FLASH[(b.t as usize - 60) / 4]);
+            sys.fx
+                .spawn(anm, 0x28, q, 1, DOLL_FLASH[(b.t as usize - 60) / 4]);
         }
         let (blast, oct0, end) = if ls { (120, 130, 180) } else { (90, 100, 150) };
         if Self::at(b, blast) {
-            sound::play(0xF);
+            sys.sound.play(0xF);
             for k in [0x2A, 0x2B, 0x2C] {
-                effect::spawn(anm, k, q, 1, 0xFFFFFFFF);
+                sys.fx.spawn(anm, k, q, 1, 0xFFFFFFFF);
             }
             if ls {
                 for (p, c) in [
@@ -927,24 +936,25 @@ impl Player {
                     ([320.0, 352.0], 0xFF00F000),
                     ([320.0, 96.0], 0xFF00F0F0),
                 ] {
-                    effect::spawn(anm, 0x2D, [p[0], p[1], 0.0], 1, c);
+                    sys.fx.spawn(anm, 0x2D, [p[0], p[1], 0.0], 1, c);
                 }
             }
             let c = self.cancel_circle(xy(q), 1.0, 5.0, 110, 6);
             let _ = c;
             self.dc(xy(q), 1.0, 5.0, 70, 110, 5, 0, false);
             if !ls {
-                shake(24, 8, 0);
-                flash(8, 1, 0x8FFFFFFF);
+                shake(24, 8, 0, sys);
+                flash(8, 1, 0x8FFFFFFF, sys);
             }
         }
         if b.adv && (oct0..oct0 + 40).contains(&b.t) && (b.t - oct0) % 10 == 0 {
-            effect::spawn(anm, 0x2D, q, 1, DOLL_OCTAGON[((b.t - oct0) / 10) as usize]);
+            sys.fx
+                .spawn(anm, 0x2D, q, 1, DOLL_OCTAGON[((b.t - oct0) / 10) as usize]);
         }
         if Self::at(b, end) {
-            flash(8, 1, if ls { 0xFFFFFFFF } else { 0x8FFFFFFF });
-            shake(24, 8, 0);
-            sound::play(0x19);
+            flash(8, 1, if ls { 0xFFFFFFFF } else { 0x8FFFFFFF }, sys);
+            shake(24, 8, 0, sys);
+            sys.sound.play(0x19);
         }
         if Self::at(b, self.bomb.duration - 1) {
             self.options[0].state = 1;
@@ -953,20 +963,20 @@ impl Player {
     }
 
     // 14 §2.5 / §2.6 Marisa 0x40E3B0 / 0x40E780: five beam VMs in object 0's memory.
-    fn bomb_marisa(&mut self, anm: &mut AnmManager, b: Bf) {
+    fn bomb_marisa(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let p = self.pos;
         if Self::at(b, 0) {
             if b.ls {
-                sound::play(0xD);
+                sys.sound.play(0xD);
             }
-            sound::play(0x13);
+            sys.sound.play(0x13);
             self.bomb.objs[0].pos = p;
             let base = if b.ls { 0x23 } else { 0x1E };
             for (i, vm) in self.bomb.vms.iter_mut().enumerate() {
                 anm.set_script(vm, ANM_SLOT, base + i);
             }
             self.speed_mult = [0.2; 2];
-            effect::screen(7, 16, 120, 60, 120, SCREEN_PRIO);
+            sys.fx.screen(7, 16, 120, 60, 120, SCREEN_PRIO);
             self.bomb.n = 0;
         }
         // Advanced frames with T % 4 ≠ 0: everything above the player, unrotated, life 0.
@@ -985,7 +995,15 @@ impl Player {
         }
         if b.ls && b.adv && b.t % 10 == 0 {
             let n = self.bomb.n;
-            self.spark_ring(anm, n, 0, Some((32.0, 64.0)), [128.0, 0.0, 0.0], n % 2 == 1);
+            self.spark_ring(
+                anm,
+                n,
+                0,
+                Some((32.0, 64.0)),
+                [128.0, 0.0, 0.0],
+                n % 2 == 1,
+                sys,
+            );
             self.bomb.n += 1;
         }
         for vm in &mut self.bomb.vms {
@@ -1005,11 +1023,14 @@ impl Player {
         width: Option<(f32, f32)>,
         end: [f32; 3],
         alt: bool,
+        sys: &mut Sys,
     ) {
         let p = self.pos;
-        let i = effect::spawn_fixed(anm, 0x35, p, 4 + n.rem_euclid(4) as usize, 0xFFFFFFFF);
-        effect::with(|e| {
-            let x = &mut e.fx[i];
+        let i = sys
+            .fx
+            .spawn_fixed(anm, 0x35, p, 4 + n.rem_euclid(4) as usize, 0xFFFFFFFF);
+        {
+            let x = &mut sys.fx.fx[i];
             if alt {
                 anm.set_script(&mut x.vm, effect::SCRIPT_SLOT, 0x5C);
                 x.vm.color = 0xFFFFFFFFu32.to_le_bytes();
@@ -1027,31 +1048,31 @@ impl Player {
             x.vm.interp_alpha_from(30, 3, 255, 0);
             x.vm.interp_color_from(30, 0, 0xFFFFFF, 0xFF0000);
             x.vm.run(anm);
-        });
-        sound::play_at(0x11, p[0]);
+        }
+        sys.sound.play_at(0x11, p[0]);
     }
 
     // 14 §2.7 / §2.8 Sakuya 0x40FCD0 / 0x4103F0: knives k and k + per appear together every second frame.
-    fn bomb_sakuya(&mut self, anm: &mut AnmManager, b: Bf) {
+    fn bomb_sakuya(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let ls = b.ls;
         let p = self.pos;
         let (count, per, window) = if ls { (128, 64, 148) } else { (96, 48, 116) };
         if Self::at(b, 0) {
             self.bomb.objs[..count].iter_mut().for_each(|o| o.state = 0);
             self.speed_mult = [0.5; 2];
-            self.bomb.fx = effect::spawn(anm, 20, p, 1, 0xFFFFFFFF);
-            sound::play(5);
+            self.bomb.fx = sys.fx.spawn(anm, 20, p, 1, 0xFFFFFFFF);
+            sys.sound.play(5);
             if ls {
-                shake(50, 4, 1);
+                shake(50, 4, 1, sys);
             }
         }
         if b.t <= 60 {
-            effect::write_pos_unchecked(self.bomb.fx, p);
+            sys.fx.write_pos_unchecked(self.bomb.fx, p);
         }
         if (20..window).contains(&b.t) {
             if !ls {
-                sound::play(6);
-                shake(120, 4, 1);
+                sys.sound.play(6);
+                shake(120, 4, 1, sys);
             }
             for k in 0..count {
                 if !Self::at(b, (k % per) as i32 * 2 + 20) {
@@ -1094,7 +1115,7 @@ impl Player {
                 (o.carea, o.darea) = (Some(c), Some(da));
             }
             if ls {
-                sound::play(6);
+                sys.sound.play(6);
             }
         }
         let target = self.homing_target();
@@ -1113,7 +1134,7 @@ impl Player {
                     o.fc = 14.0;
                     if ls {
                         let q = o.pos;
-                        effect::spawn(anm, 0x2E, q, 1, 0xFFFFFFFF);
+                        sys.fx.spawn(anm, 0x2E, q, 1, 0xFFFFFFFF);
                     }
                 }
                 let o = &mut self.bomb.objs[k];
@@ -1134,11 +1155,11 @@ impl Player {
                     let o = &mut self.bomb.objs[k];
                     Self::obj_script(anm, o, if ls { 0x15 } else { 0x17 });
                     let q = o.pos;
-                    effect::spawn(anm, 0, q, 1, 0xFFFF80FF);
+                    sys.fx.spawn(anm, 0, q, 1, 0xFFFF80FF);
                     self.areas_off(k);
-                    sound::play_at(0x2B, q[0]);
+                    sys.sound.play_at(0x2B, q[0]);
                     if ls && k % 3 == 0 {
-                        flash(2, 1, 0x208080FF);
+                        flash(2, 1, 0x208080FF, sys);
                     }
                 }
             } else {
@@ -1155,7 +1176,7 @@ impl Player {
 
     // 14 §2.9 / §2.10 Remilia 0x40EE10 / 0x40F570: the bats are the 4 options (anchors moved).
     // No damage areas: ply02as.sht levels 6/7 do the damage (09 §2.1).
-    fn bomb_remilia(&mut self, anm: &mut AnmManager, b: Bf) {
+    fn bomb_remilia(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let p = self.pos;
         let targets = [
             [p[0] - 32.0, p[1]],
@@ -1164,11 +1185,11 @@ impl Player {
             [p[0] + 32.0, p[1]],
         ];
         if Self::at(b, 0) {
-            sound::play(0xD);
+            sys.sound.play(0xD);
             for k in 0..4 {
                 self.bomb.objs[k].centre = self.options[k].anchor;
             }
-            sound::play(6);
+            sys.sound.play(6);
             self.bomb.n = 0;
             self.speed_mult = [0.0; 2];
         }
@@ -1195,7 +1216,7 @@ impl Player {
             let n = self.bomb.n;
             let amp = anm.rng.next_f32() * 128.0;
             let width = Some((64.0, if b.ls { 128.0 } else { 64.0 }));
-            self.spark_ring(anm, n, 4, width, [192.0, amp, 0.0], false);
+            self.spark_ring(anm, n, 4, width, [192.0, amp, 0.0], false, sys);
             self.bomb.n += 1;
         }
         // While shooting (shot timer ≥ 5): a cross of two cancel rects, life 0.
@@ -1212,13 +1233,13 @@ impl Player {
     }
 
     // 14 §2.11 / §2.12 Youmu 0x411B10 / 0x4123D0: dash down, slashes from the top, dash back.
-    fn bomb_youmu(&mut self, anm: &mut AnmManager, b: Bf) {
+    fn bomb_youmu(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let ls = b.ls;
         if Self::at(b, 0) {
-            sound::play(0xD);
+            sys.sound.play(0xD);
             self.speed_mult = [0.0; 2];
             self.set_script(anm, 0);
-            sound::play(6);
+            sys.sound.play(6);
             self.bomb.start = self.pos;
             self.bomb.dash = [self.pos[0], 416.0, self.pos[2]];
         }
@@ -1230,7 +1251,7 @@ impl Player {
         }
         let colour = if ls { 0xFFFF8080 } else { 0xFF8080FF };
         if Self::at(b, 40) {
-            effect::spawn(anm, 0x28, self.pos, 1, colour);
+            sys.fx.spawn(anm, 0x28, self.pos, 1, colour);
         }
         if Self::at(b, 70) {
             self.pos[1] = 32.0;
@@ -1243,9 +1264,9 @@ impl Player {
                 self.dr(c, [96.0, 448.0], 300, 10, 1, false);
                 self.dr(c, [96.0, 448.0], 80, 60, 5, false);
             }
-            effect::spawn(anm, 0x30, [c[0], c[1], 0.0], 1, colour);
-            flash(8, 1, 0xEFFFFFFF);
-            sound::play(0x2A);
+            sys.fx.spawn(anm, 0x30, [c[0], c[1], 0.0], 1, colour);
+            flash(8, 1, 0xEFFFFFFF, sys);
+            sys.sound.play(0x2A);
         }
         let pairs: &[(i32, f32, i32, u32)] = if ls {
             &[
@@ -1271,9 +1292,9 @@ impl Player {
                 let c = [self.pos[0] + sgn * dx, 224.0];
                 self.cancel_rect(c, [96.0, 448.0], 6, 60);
                 self.dr(c, [96.0, 448.0], dmg, 40, period, false);
-                effect::spawn(anm, 0x30, [c[0], c[1], 0.0], 1, colour);
+                sys.fx.spawn(anm, 0x30, [c[0], c[1], 0.0], 1, colour);
             }
-            flash(8, 1, (a << 24) | 0xFFFFFF);
+            flash(8, 1, (a << 24) | 0xFFFFFF, sys);
         }
         let (q_at, back0) = if ls { (130, 150) } else { (100, 120) };
         if Self::at(b, q_at) {
@@ -1293,11 +1314,11 @@ impl Player {
     }
 
     // 14 §2.13 / §2.14 Yukari 0x410C40 / 0x410FE0: boundary rings (effects 0x24 / 0x25) and expanding circles.
-    fn bomb_yukari(&mut self, anm: &mut AnmManager, b: Bf) {
+    fn bomb_yukari(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let ls = b.ls;
         let p = self.pos;
         if Self::at(b, 0) {
-            sound::play(0xD);
+            sys.sound.play(0xD);
             if ls {
                 self.bomb.objs[0].pos = p;
                 for (i, s) in [(0, 0x15), (1, 0x16)] {
@@ -1314,16 +1335,14 @@ impl Player {
             self.dc(xy(p), 100.0, 1.0, 70, 40, 5, 0, false);
             let at_pos = if ls || k == 0 { self.bomb.origin } else { p };
             let kind = if ls { 0x25 } else { 0x24 };
-            let i = effect::with(|e| {
-                e.spawn_fixed(
-                    anm,
-                    kind,
-                    at_pos,
-                    [BOUNDARY_ANGLES[k], 1.0, 4.0],
-                    4 + k,
-                    0xFFFFFFFF,
-                )
-            });
+            let i = sys.fx.spawn_fixed_param(
+                anm,
+                kind,
+                at_pos,
+                [BOUNDARY_ANGLES[k], 1.0, 4.0],
+                4 + k,
+                0xFFFFFFFF,
+            );
             // Quirk kept (14 §2.14): the init re-spawns the slot as type 0x23, so slot 4 runs script 88 even for 0x25.
             let script = if k == 0 {
                 88
@@ -1332,11 +1351,11 @@ impl Player {
             } else {
                 0x58 + k
             };
-            effect::with(|e| anm.set_script(&mut e.fx[i].vm, effect::SCRIPT_SLOT, script));
+            anm.set_script(&mut sys.fx.fx[i].vm, effect::SCRIPT_SLOT, script);
             // 14 §2.13: the re-spawn writes colour 0xFFFFFFFF after its SetScript and slot 4 gets no second script
             // start, so it draws white (script 88's t = 0 `color` is overwritten); slots 5–7 keep their scripts' colour.
             if k == 0 {
-                effect::with(|e| e.fx[i].vm.color = [0xFF; 4]);
+                sys.fx.fx[i].vm.color = [0xFF; 4];
             }
         }
         if ls {
@@ -1347,7 +1366,7 @@ impl Player {
     }
 
     // 14 §2.15 / §2.16 Yuyuko 0x413140 / 0x413990: butterflies.
-    fn bomb_yuyuko(&mut self, anm: &mut AnmManager, b: Bf) {
+    fn bomb_yuyuko(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let p = self.pos;
         if Self::at(b, 0) {
             self.bomb.objs.iter_mut().for_each(|o| o.state = 0);
@@ -1370,12 +1389,12 @@ impl Player {
                 }
             }
             self.speed_mult = [0.8; 2];
-            effect::spawn(anm, 20, p, 1, 0xFFFFFFFF);
-            sound::play(5);
+            sys.fx.spawn(anm, 20, p, 1, 0xFFFFFFFF);
+            sys.sound.play(5);
             if b.ls {
-                shake(60, 16, 0);
+                shake(60, 16, 0, sys);
             } else {
-                shake(120, 12, 0);
+                shake(120, 12, 0, sys);
             }
         }
         if b.ls && (60..200).contains(&b.t) && b.adv && b.t % 20 == 0 {
@@ -1401,9 +1420,9 @@ impl Player {
                     break;
                 }
             }
-            sound::play_at(0xF, self.bomb.objs[last].pos[0]);
-            shake(30, 8, 0);
-            flash(8, 1, 0xE0F0F0F0);
+            sys.sound.play_at(0xF, self.bomb.objs[last].pos[0]);
+            shake(30, 8, 0, sys);
+            flash(8, 1, 0xE0F0F0F0, sys);
         }
         for k in 0..OBJS {
             let o = &mut self.bomb.objs[k];
@@ -1431,12 +1450,12 @@ impl Player {
     }
 
     // 14 §2.17 「ディゾルブスペル」 0x40D100: boss flag clearing is done by the enemy manager on DISSOLVE_BEGIN.
-    fn dissolve_start(&mut self, anm: &mut AnmManager) {
+    fn dissolve_start(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let p = self.pos;
-        let practice = gamemgr::flags() & F_SPELL_PRACTICE != 0;
-        effect::spawn(anm, 12, p, 1, 0xFF4040FF);
-        let i = effect::spawn_fixed(anm, 0x32, p, 4, 0xFF4040FF);
-        effect::get(i, |e| {
+        let practice = *sys.flags & F_SPELL_PRACTICE != 0;
+        sys.fx.spawn(anm, 12, p, 1, 0xFF4040FF);
+        let i = sys.fx.spawn_fixed(anm, 0x32, p, 4, 0xFF4040FF);
+        sys.fx.get(i, |e| {
             // Ring fields, not the VM scale: the type-50 update copies VM scale.x into the width (14 §2.17).
             e.ring.segments = 64;
             e.ring.waves = 6.0;
@@ -1449,7 +1468,7 @@ impl Player {
                 [128.0, 0.0, 0.0],
             );
         });
-        sound::play(0xD);
+        sys.sound.play(0xD);
         self.speed_mult = [0.0; 2];
         self.dissolve_req |= DISSOLVE_BEGIN;
     }
@@ -1622,8 +1641,14 @@ mod tests {
         (p, AnmManager::default())
     }
 
-    fn shakes_at(p: &mut Player, anm: &mut AnmManager, ls: bool, t: i32) -> Vec<[i32; 4]> {
-        effect::take_screen();
+    fn shakes_at(
+        p: &mut Player,
+        anm: &mut AnmManager,
+        ls: bool,
+        t: i32,
+        sys: &mut Sys,
+    ) -> Vec<[i32; 4]> {
+        sys.fx.take_screen();
         let b = Bf {
             t,
             adv: true,
@@ -1631,10 +1656,11 @@ mod tests {
             gs: 1.0,
         };
         match p.bomb.ch {
-            3 => p.bomb_alice(anm, b),
-            _ => p.bomb_sakuya(anm, b),
+            3 => p.bomb_alice(anm, b, sys),
+            _ => p.bomb_sakuya(anm, b, sys),
         }
-        effect::take_screen()
+        sys.fx
+            .take_screen()
             .into_iter()
             .filter(|s| s.0 == 1)
             .map(|s| s.1)
@@ -1645,19 +1671,26 @@ mod tests {
     // Sakuya LS (1: 50, 4, 1) once at T = 0.
     #[test]
     fn sakuya_shakes() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(8);
         p.bomb.ch = 4;
-        assert!(shakes_at(&mut p, &mut anm, false, 0).is_empty());
-        assert_eq!(shakes_at(&mut p, &mut anm, false, 21), [[120, 4, 1, 0]]);
+        assert!(shakes_at(&mut p, &mut anm, false, 0, sys).is_empty());
+        assert_eq!(
+            shakes_at(&mut p, &mut anm, false, 21, sys),
+            [[120, 4, 1, 0]]
+        );
         let (mut p, mut anm) = ready(8);
         p.bomb.ch = 4;
-        assert_eq!(shakes_at(&mut p, &mut anm, true, 0), [[50, 4, 1, 0]]);
-        assert!(shakes_at(&mut p, &mut anm, true, 21).is_empty());
+        assert_eq!(shakes_at(&mut p, &mut anm, true, 0, sys), [[50, 4, 1, 0]]);
+        assert!(shakes_at(&mut p, &mut anm, true, 21, sys).is_empty());
     }
 
     // 14 §2.1 (RE-Q58 AR, AQ): start angles are a running f32 sum; the ±π/60 spin wraps into [−π, π].
     #[test]
     fn reimu_orb_angles() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(0);
         p.bomb.duration = 200;
         let b = Bf {
@@ -1666,7 +1699,7 @@ mod tests {
             ls: false,
             gs: 1.0,
         };
-        p.bomb_reimu(&mut anm, b);
+        p.bomb_reimu(&mut anm, b, sys);
         let mut a = -PI;
         let mut differs = 0;
         for i in 0..16 {
@@ -1682,31 +1715,35 @@ mod tests {
     // 14 §2.3 / §2.4: Alice shakes (1: 24, 8, 0) at T = 90 and 150; Alice LS only at T = 180.
     #[test]
     fn alice_shakes() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(7);
         p.bomb.ch = 3;
         p.bomb.duration = 210;
         for (t, n) in [(90, 1), (150, 1)] {
             assert_eq!(
-                shakes_at(&mut p, &mut anm, false, t),
+                shakes_at(&mut p, &mut anm, false, t, sys),
                 vec![[24, 8, 0, 0]; n]
             );
         }
         p.bomb.duration = 230;
-        assert!(shakes_at(&mut p, &mut anm, true, 120).is_empty());
-        assert_eq!(shakes_at(&mut p, &mut anm, true, 180), [[24, 8, 0, 0]]);
+        assert!(shakes_at(&mut p, &mut anm, true, 120, sys).is_empty());
+        assert_eq!(shakes_at(&mut p, &mut anm, true, 180, sys), [[24, 8, 0, 0]]);
     }
 
     // 09 §7: a normal-mode start clears the silhouette (VM bit 17) and the global tint; the end does not tint off.
     #[test]
     fn bomb_start_tint_off() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(4);
         p.vm.flags |= anmvm::F_COLOR2;
         anm.tint_on = true;
-        p.step(&mut anm, &press(input::BOMB));
+        p.step(&mut anm, &press(input::BOMB), sys);
         assert!(p.bombing && !anm.tint_on && p.vm.flags & anmvm::F_COLOR2 == 0);
         anm.tint_on = true;
         for _ in 0..200 {
-            p.step(&mut anm, &press(0));
+            p.step(&mut anm, &press(0), sys);
         }
         assert!(!p.bombing && anm.tint_on);
     }
@@ -1714,6 +1751,8 @@ mod tests {
     // 14 §2 / §2.2: exact 64/15 and 128/15; the LS impact C circle reuses the freed slot and is moved to the orb.
     #[test]
     fn reimu_ls_impact_follow_write() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         assert_eq!(
             ((64.0f32 / 15.0).to_bits(), (128.0f32 / 15.0).to_bits()),
             (0x40888889, 0x41088889)
@@ -1727,10 +1766,10 @@ mod tests {
             ls: true,
             gs: 1.0,
         };
-        p.bomb_reimu_ls(&mut anm, bf(0));
+        p.bomb_reimu_ls(&mut anm, bf(0), sys);
         let old_c = p.bomb.objs[15].carea.unwrap();
         p.bomb.objs[15].f8 = 50.0;
-        p.bomb_reimu_ls(&mut anm, bf(145));
+        p.bomb_reimu_ls(&mut anm, bf(145), sys);
         let o = &p.bomb.objs[15];
         assert_eq!((o.state, o.carea), (2, None));
         let c = &p.cancel_areas[old_c];
@@ -1741,8 +1780,10 @@ mod tests {
 
     #[test]
     fn reimu_bomb_lifecycle() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(4);
-        p.step(&mut anm, &press(input::BOMB));
+        p.step(&mut anm, &press(input::BOMB), sys);
         assert!(p.bombing && p.bomb.duration == 200 && p.state == 3);
         assert_eq!(
             p.bomb.objs[..16].iter().filter(|o| o.state == 1).count(),
@@ -1756,15 +1797,15 @@ mod tests {
             16
         );
         for _ in 0..199 {
-            p.step(&mut anm, &press(0));
+            p.step(&mut anm, &press(0), sys);
         }
         assert!(p.bombing && p.bomb_active);
-        p.step(&mut anm, &press(0));
+        p.step(&mut anm, &press(0), sys);
         assert!(!p.bombing && p.speed_mult == [1.0; 2]);
         assert!(p.bomb.objs[..16].iter().all(|o| o.state == 0));
         // 09 §1.1: +0xE2A7C holds through the end frame, drops on the next failed start test.
         assert!(p.bomb_active);
-        p.step(&mut anm, &press(0));
+        p.step(&mut anm, &press(0), sys);
         assert!(!p.bomb_active);
     }
 
@@ -1772,45 +1813,49 @@ mod tests {
     // forced-start call.
     #[test]
     fn bomb_cooldown_decrement() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(4);
         p.bomb_cooldown = 2;
-        p.step(&mut anm, &press(input::BOMB));
+        p.step(&mut anm, &press(input::BOMB), sys);
         assert!(!p.bombing && p.bomb_cooldown == 1);
-        p.step(&mut anm, &press(0));
-        p.step(&mut anm, &press(input::BOMB));
+        p.step(&mut anm, &press(0), sys);
+        p.step(&mut anm, &press(input::BOMB), sys);
         assert!(p.bombing && p.bomb_cooldown == 0);
         let (mut p, mut anm) = ready(4);
         p.bomb_cooldown = 5;
         p.forced_bomb = 1;
         p.deathbomb = 1;
-        p.step(&mut anm, &press(0));
+        p.step(&mut anm, &press(0), sys);
         assert!(p.bombing && p.bomb_cooldown == 5);
-        p.step(&mut anm, &press(0));
+        p.step(&mut anm, &press(0), sys);
         assert_eq!(p.bomb_cooldown, 4);
     }
 
     // 09 §1.1: the cooldown blocks a normal start, is decremented atop Player_UpdateBomb, but not on a forced start.
     #[test]
     fn bomb_cooldown() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(4);
         p.bomb_cooldown = 2;
-        p.update_bomb(&mut anm, &press(input::BOMB), &mut None);
+        p.update_bomb(&mut anm, &press(input::BOMB), &mut None, sys);
         assert!(!p.bombing && p.bomb_cooldown == 1);
-        p.update_bomb(&mut anm, &press(0), &mut None);
+        p.update_bomb(&mut anm, &press(0), &mut None, sys);
         assert_eq!(p.bomb_cooldown, 0);
-        p.update_bomb(&mut anm, &press(input::BOMB), &mut None);
+        p.update_bomb(&mut anm, &press(input::BOMB), &mut None, sys);
         assert!(p.bombing);
         let (mut p, mut anm) = ready(4);
         p.bomb_cooldown = 16;
         p.forced_bomb = 1;
         p.deathbomb = 1;
-        p.update_bomb(&mut anm, &press(0), &mut None);
+        p.update_bomb(&mut anm, &press(0), &mut None, sys);
         assert!(p.bombing && p.bomb_cooldown == 16);
         // Forced start also bypasses the bombing branch: the running bomb restarts at timer 0.
-        p.update_bomb(&mut anm, &press(0), &mut None);
+        p.update_bomb(&mut anm, &press(0), &mut None, sys);
         assert!(p.bomb.timer.cur > 0 && p.bomb_cooldown == 15);
         (p.forced_bomb, p.deathbomb) = (1, 1);
-        p.update_bomb(&mut anm, &press(0), &mut None);
+        p.update_bomb(&mut anm, &press(0), &mut None, sys);
         assert!(p.bombing && p.forced_bomb == 0 && p.bomb_cooldown == 15);
         assert_eq!(p.bomb.timer.cur, 1);
     }
@@ -1818,11 +1863,13 @@ mod tests {
     // 09 §7: the start test reads the held bit, so a bomb held since before the call still starts one.
     #[test]
     fn bomb_start_on_held() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(4);
         let mut held = press(input::BOMB);
         held.tick();
         assert!(!held.pressed(input::BOMB));
-        p.update_bomb(&mut anm, &held, &mut None);
+        p.update_bomb(&mut anm, &held, &mut None, sys);
         assert!(p.bombing && p.stats.bombs == 2.0);
         assert_eq!((p.stats.rec.bombs, p.stats.bombs_used), (1, 1));
     }
@@ -1830,12 +1877,14 @@ mod tests {
     // 09 §7: special mode (bits 7–8) skips the cost block: index 4, no bombs, counters or RNG draws.
     #[test]
     fn special_mode_bomb_is_free() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(4);
         (p.forced_bomb, p.deathbomb, p.last_spell) = (1, 1, 1);
-        gamemgr::set_flags(F_LAST_SPELL);
+        *sys.flags = F_LAST_SPELL;
         let rng = anm.rng.clone();
-        p.start_bomb(&mut anm, true);
-        gamemgr::set_flags(0);
+        p.start_bomb(&mut anm, true, sys);
+        *sys.flags = 0;
         assert_eq!(p.bomb.index, 4);
         assert_eq!(p.stats.bombs, 3.0);
         assert_eq!(
@@ -1854,6 +1903,8 @@ mod tests {
     // GameMgr_AddBombCount adds 4 draws either way.
     #[test]
     fn last_spell_bomb_cost() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         for (bombs, forced, left, used, draws) in [
             (1.0, false, 0.0, 1, 4),
             (2.0, false, 0.0, 2, 8),
@@ -1863,7 +1914,7 @@ mod tests {
             let (mut p, mut anm) = ready(4);
             (p.stats.bombs, p.last_spell) = (bombs, 1);
             let t = anm.rng.total;
-            p.start_bomb(&mut anm, forced);
+            p.start_bomb(&mut anm, forced, sys);
             assert_eq!((p.stats.bombs, p.bomb.used), (left, used));
             assert_eq!(anm.rng.total - t, draws);
         }
@@ -1872,6 +1923,8 @@ mod tests {
     // 14 §2.15: a butterfly reaching radius 500 is freed with both areas off; its angle is wrapped.
     #[test]
     fn yuyuko_butterfly_end_areas_off() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(6);
         let bf = |t| Bf {
             t,
@@ -1884,7 +1937,7 @@ mod tests {
         let o = &mut p.bomb.objs[0];
         (o.state, o.v, o.angle, o.f8) = (1, [499.0, 2.0, 0.0], PI - 0.001, PI / 240.0);
         (o.darea, o.carea) = (Some(d), Some(c));
-        p.bomb_yuyuko(&mut anm, bf(1));
+        p.bomb_yuyuko(&mut anm, bf(1), sys);
         let o = &p.bomb.objs[0];
         assert_eq!(o.state, 0);
         assert!(!p.damage_areas[d].active && !p.cancel_areas[c].active);
@@ -1943,15 +1996,17 @@ mod tests {
 
     #[test]
     fn youmu_dash_and_return() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let (mut p, mut anm) = ready(10);
         let start = p.pos;
-        p.step(&mut anm, &press(input::BOMB));
+        p.step(&mut anm, &press(input::BOMB), sys);
         for _ in 0..70 {
-            p.step(&mut anm, &press(0));
+            p.step(&mut anm, &press(0), sys);
         }
         assert_eq!(p.pos[1], 32.0);
         for _ in 0..80 {
-            p.step(&mut anm, &press(0));
+            p.step(&mut anm, &press(0), sys);
         }
         assert!((p.pos[1] - start[1]).abs() < 1.0 && p.speed_mult == [1.0; 2]);
     }

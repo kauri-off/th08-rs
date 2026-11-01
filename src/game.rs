@@ -27,6 +27,10 @@ pub struct Ctx {
     pub frame: u64,
     pub game: crate::gamemgr::Game,
     pub ascii: crate::ascii::Queue,
+    // Sound manager SE queue (13 §1.2), flushed by `sound_update`.
+    pub sound: crate::sound::Queue,
+    // Effect manager g_EffectMgr 0x4ECE60 (13 §2).
+    pub effects: crate::effect::Effects,
     // Debug: `TH08_SE_LOG` logs each frame's flushed SE ids.
     pub se_log: bool,
     pub settings: &'static crate::settings::Settings,
@@ -38,6 +42,62 @@ pub struct Ctx {
     init_presents: u8,
     // Unlock notices (16 §4), shown in place of the frame's chains.
     pub info: crate::menu::InfoNotices,
+}
+
+// Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue
+// (13 §1.2), effect manager (13 §2), GM flags word (11 §2.1) and rank (11 §2). Built by `sys!(ctx)`; these become
+// `World` fields in step 9 (ARCH_A §2.3).
+pub struct Sys<'a> {
+    pub sound: &'a mut crate::sound::Queue,
+    pub fx: &'a mut crate::effect::Effects,
+    pub flags: &'a mut u32,
+    pub rank: &'a mut crate::gamemgr::Rank,
+}
+
+impl Sys<'_> {
+    pub fn re(&mut self) -> Sys<'_> {
+        Sys {
+            sound: &mut *self.sound,
+            fx: &mut *self.fx,
+            flags: &mut *self.flags,
+            rank: &mut *self.rank,
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! sys {
+    ($c:expr) => {
+        $crate::game::Sys {
+            sound: &mut $c.sound,
+            fx: &mut $c.effects,
+            flags: &mut $c.game.flags,
+            rank: &mut $c.game.rank,
+        }
+    };
+}
+
+// Owned stand-in for the `Ctx` fields behind `Sys`, for unit tests that run a subsystem without a `Ctx`.
+#[cfg(test)]
+#[derive(Default)]
+pub struct TestSys {
+    pub sound: crate::sound::Queue,
+    pub effects: crate::effect::Effects,
+    pub game: TestGame,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub struct TestGame {
+    pub flags: u32,
+    pub rank: crate::gamemgr::Rank,
+}
+
+#[cfg(test)]
+impl TestSys {
+    pub fn sys(&mut self) -> Sys<'_> {
+        crate::sys!(self)
+    }
 }
 
 impl TaskCtx for Ctx {
@@ -98,6 +158,8 @@ impl Ctx {
             frame: 0,
             game: Default::default(),
             ascii: Default::default(),
+            sound: Default::default(),
+            effects: Default::default(),
             se_log: settings.se_log,
             settings,
             drawlog: None,
@@ -172,10 +234,10 @@ impl Ctx {
         let cfg = self.game.cfg;
         // The BGM command queue runs before the SE flush, also with "SE off" (13 §1.3).
         self.audio.start_fade();
-        if cfg.se_on == 0 || !crate::sound::pending() {
+        if cfg.se_on == 0 || self.sound.is_empty() {
             return;
         }
-        let played = crate::sound::take();
+        let played = self.sound.drain();
         if self.se_log {
             log::info!("frame {} se {:?}", self.frame, played);
         }
@@ -355,8 +417,8 @@ mod tests {
         let Some(mut c) = ctx() else {
             return;
         };
-        crate::effect::screen(1, 10, 2, 0, 0, 0x10);
+        c.effects.screen(1, 10, 2, 0, 0, 0x10);
         c.on_restart();
-        assert!(crate::effect::take_screen().is_empty());
+        assert!(c.effects.take_screen().is_empty());
     }
 }

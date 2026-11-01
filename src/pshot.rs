@@ -2,6 +2,7 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::fmath;
+use crate::game::Sys;
 use crate::gamemgr::F_13;
 use crate::gfx::Gfx;
 use crate::input;
@@ -254,7 +255,7 @@ impl Player {
     }
 
     // Option calc functions (14 §3, 09 §5); positions in playfield space.
-    fn place_option(&mut self, anm: &mut AnmManager, k: usize, shot_held: bool) {
+    fn place_option(&mut self, anm: &mut AnmManager, k: usize, shot_held: bool, sys: &mut Sys) {
         let (px, py) = (self.pos[0], self.pos[1]);
         let bombing = self.bombing;
         let leaving = self.options[k].state == 3;
@@ -408,12 +409,12 @@ impl Player {
         let pos = o.pos;
         self.aimed = aimed;
         if let Some(c) = sparkle {
-            crate::effect::spawn(anm, 0x2F, pos, 1, c);
+            sys.fx.spawn(anm, 0x2F, pos, 1, c);
         }
     }
 
     // Generic option loop in Player_Move (09 §5, 14 §3): calc fn, then VM run and timer tick every frame.
-    pub fn update_options(&mut self, anm: &mut AnmManager, shot_held: bool) {
+    pub fn update_options(&mut self, anm: &mut AnmManager, shot_held: bool, sys: &mut Sys) {
         let gs = anm.speed;
         for k in 0..4 {
             match self.options[k].state {
@@ -437,7 +438,7 @@ impl Player {
                 _ => {}
             }
             if !matches!(self.options[k].state, 0 | 3) {
-                self.place_option(anm, k, shot_held);
+                self.place_option(anm, k, shot_held, sys);
             }
             let o = &mut self.options[k];
             if o.vm.script.is_some() {
@@ -469,12 +470,12 @@ impl Player {
     }
 
     // Shot timer (0x451500, 09 §4.2): fires on frames where the timer value changed; t > 19 → −1.
-    pub fn update_shot_timer(&mut self, anm: &mut AnmManager, inp: &input::Input) {
+    pub fn update_shot_timer(&mut self, anm: &mut AnmManager, inp: &input::Input, sys: &mut Sys) {
         let special = self.bombing && self.bomb.index == 4;
         if self.frames >= 20 && self.shot_timer.cur >= 0 && !special {
             let t = self.shot_timer.cur;
             if t != self.shot_timer.prev && !(self.bombing && matches!(self.shot_type, 1 | 6 | 7)) {
-                self.fire(anm, t);
+                self.fire(anm, t, sys);
             }
             self.shot_timer.tick(anm.speed);
             if self.shot_timer.cur > 19 {
@@ -497,7 +498,7 @@ impl Player {
     }
 
     // Firing (0x450F60, 09 §4.3): free slots in index order paired with the entries; a used slot advances.
-    pub fn fire(&mut self, anm: &mut AnmManager, t: i32) {
+    pub fn fire(&mut self, anm: &mut AnmManager, t: i32, sys: &mut Sys) {
         let sht = if self.focus == 1 {
             &self.sht_youkai
         } else {
@@ -521,16 +522,16 @@ impl Player {
             if slot >= MAX_BULLETS {
                 break;
             }
-            if self.init_bullet(anm, slot, t, e, id) {
+            if self.init_bullet(anm, slot, t, e, id, sys) {
                 slot += 1;
             }
         }
     }
 
     // Default spawn 0x44FB70 (09 §4.3): z 0.495, VM script = entry script + 10, VM flag 0x2000.
-    fn spawn_bullet(&mut self, anm: &mut AnmManager, slot: usize, e: &ShotEntry) {
+    fn spawn_bullet(&mut self, anm: &mut AnmManager, slot: usize, e: &ShotEntry, sys: &mut Sys) {
         if e.sound >= 0 {
-            crate::sound::play_at(e.sound as i32, self.pos[0]);
+            sys.sound.play_at(e.sound as i32, self.pos[0]);
         }
         let o = self.origin_pos(e.origin);
         let mut b = PBullet {
@@ -560,11 +561,18 @@ impl Player {
     }
 
     // Init 0 0x44FD80: fire on phase match.
-    fn default_init(&mut self, anm: &mut AnmManager, slot: usize, t: i32, e: &ShotEntry) -> bool {
+    fn default_init(
+        &mut self,
+        anm: &mut AnmManager,
+        slot: usize,
+        t: i32,
+        e: &ShotEntry,
+        sys: &mut Sys,
+    ) -> bool {
         if e.interval <= 0 || t % e.interval as i32 != e.phase as i32 {
             return false;
         }
-        self.spawn_bullet(anm, slot, e);
+        self.spawn_bullet(anm, slot, e, sys);
         true
     }
 
@@ -582,10 +590,11 @@ impl Player {
         t: i32,
         e: &ShotEntry,
         id: EntryId,
+        sys: &mut Sys,
     ) -> bool {
         match e.init {
             1 => {
-                if !self.default_init(anm, slot, t, e) {
+                if !self.default_init(anm, slot, t, e, sys) {
                     return false;
                 }
                 // 0x450240: aims at e+0x2D34 (not the final pos); entry angle + π/2 is summed first (09 §2.1).
@@ -600,12 +609,12 @@ impl Player {
                 }
                 true
             }
-            2 | 3 => !self.bombing && self.default_init(anm, slot, t, e),
+            2 | 3 => !self.bombing && self.default_init(anm, slot, t, e, sys),
             // Laser 0x44FE20 (14 §4): refused while bombing or GameFlags bit 13; one live laser per slot; a different
             // entry (level or focus change, compared by identity) ends the old one.
             4 => {
                 let s = (e.phase.max(0) as usize).min(LASER_SLOTS - 1);
-                if self.bombing || crate::gamemgr::flags() & F_13 != 0 {
+                if self.bombing || *sys.flags & F_13 != 0 {
                     return false;
                 }
                 let ls = self.laser_slots[s];
@@ -616,7 +625,7 @@ impl Player {
                     }
                     return false;
                 }
-                self.spawn_bullet(anm, slot, e);
+                self.spawn_bullet(anm, slot, e, sys);
                 let b = &mut self.bullets[slot];
                 b.slot = s as i16;
                 b.trail_n = e.interval as i32;
@@ -630,7 +639,7 @@ impl Player {
                 true
             }
             5 => {
-                if !self.default_init(anm, slot, t, e) {
+                if !self.default_init(anm, slot, t, e, sys) {
                     return false;
                 }
                 let tg = self.targets[1];
@@ -645,7 +654,7 @@ impl Player {
                 true
             }
             6 => {
-                if !self.default_init(anm, slot, t, e) {
+                if !self.default_init(anm, slot, t, e, sys) {
                     return false;
                 }
                 self.set_dir(slot, self.option_angle + e.angle + FRAC_PI_2, e.speed);
@@ -653,7 +662,7 @@ impl Player {
             }
             // The random angle is drawn only on a firing frame, after Player_InitShot (09 §2.1 init 7).
             7 => {
-                if !self.default_init(anm, slot, t, e) {
+                if !self.default_init(anm, slot, t, e, sys) {
                     return false;
                 }
                 let a = anm.rng.next_signed() * PI / 48.0 - FRAC_PI_2;
@@ -661,18 +670,18 @@ impl Player {
                 true
             }
             8 => {
-                if self.bombing || !self.default_init(anm, slot, t, e) {
+                if self.bombing || !self.default_init(anm, slot, t, e, sys) {
                     return false;
                 }
                 self.set_dir(slot, self.options[2].facing + e.angle, e.speed);
                 true
             }
-            _ => self.default_init(anm, slot, t, e),
+            _ => self.default_init(anm, slot, t, e, sys),
         }
     }
 
     // Update functions (table 0x4C7F04, 09 §2.1); true frees the bullet.
-    fn bullet_update_fn(&mut self, anm: &mut AnmManager, i: usize) -> bool {
+    fn bullet_update_fn(&mut self, anm: &mut AnmManager, i: usize, sys: &mut Sys) -> bool {
         let tg = self.targets[0];
         let b = &mut self.bullets[i];
         match b.update {
@@ -707,14 +716,14 @@ impl Player {
                 }
                 false
             }
-            5 => self.laser_update(i),
+            5 => self.laser_update(i, *sys.flags),
             // Update 4 is used by no shipped sht entry (09 §2.1): unreachable, not implemented.
             _ => false,
         }
     }
 
     // Laser update 5 (0x450840, 14 §4): follows option 0, leaves a 32-point trail of one-frame damage rects.
-    fn laser_update(&mut self, i: usize) -> bool {
+    fn laser_update(&mut self, i: usize, flags: u32) -> bool {
         let s = self.bullets[i].slot.clamp(0, LASER_SLOTS as i16 - 1) as usize;
         let owned = self.laser_slots[s].owner == Some(i);
         if !owned
@@ -722,7 +731,7 @@ impl Player {
             || self.shot_timer.cur < 0
             || self.state == 2
             || self.bombing
-            || crate::gamemgr::flags() & F_13 != 0
+            || flags & F_13 != 0
         {
             let b = &mut self.bullets[i];
             b.vm.pending_interrupt = 1;
@@ -765,13 +774,13 @@ impl Player {
     }
 
     // Player bullets update (0x451150, 09 §4.4): update fn, move, off-screen (08 §4.3) unless types 4/5, VM, timer.
-    pub fn update_bullets(&mut self, anm: &mut AnmManager) {
+    pub fn update_bullets(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let gs = anm.speed;
         for i in 0..MAX_BULLETS {
             if self.bullets[i].state == 0 {
                 continue;
             }
-            if self.bullet_update_fn(anm, i) {
+            if self.bullet_update_fn(anm, i, sys) {
                 self.bullets[i].state = 0;
                 continue;
             }
@@ -803,7 +812,13 @@ impl Player {
     }
 
     // Hit filters (table 0x4C7F24, 09 §2.1); true skips this hit.
-    fn hit_filter(&mut self, anm: &mut AnmManager, i: usize, enemy: [f32; 3]) -> bool {
+    fn hit_filter(
+        &mut self,
+        anm: &mut AnmManager,
+        i: usize,
+        enemy: [f32; 3],
+        sys: &mut Sys,
+    ) -> bool {
         let spell = self.env.spell;
         let b = &mut self.bullets[i];
         match b.hit {
@@ -831,7 +846,7 @@ impl Player {
                     b.vel = [b.vel[0] * 0.88, b.vel[1] * 0.88];
                 }
                 if self.bullets[i].timer.cur % 6 == 0 {
-                    crate::effect::spawn(anm, 5, enemy, 1, 0xFFFFFFFF);
+                    sys.fx.spawn(anm, 5, enemy, 1, 0xFFFFFFFF);
                 }
                 false
             }
@@ -842,7 +857,7 @@ impl Player {
                 let x = b.pos[0];
                 self.spark_counter = self.spark_counter.wrapping_add(1);
                 if self.spark_counter & 7 == 0 {
-                    crate::effect::spawn(anm, 5, [x, enemy[1], enemy[2]], 1, 0xFFFFFFFF);
+                    sys.fx.spawn(anm, 5, [x, enemy[1], enemy[2]], 1, 0xFFFFFFFF);
                 }
                 false
             }
@@ -859,6 +874,7 @@ impl Player {
         size: [f32; 2],
         acc: &mut i32,
         by_bomb: &mut bool,
+        sys: &mut Sys,
     ) -> i32 {
         if self.state_timer.cur == self.state_timer.prev {
             return 0;
@@ -883,7 +899,7 @@ impl Player {
             if matches!(b.kind, 4 | 5) && b.timer.cur % 2 != 0 {
                 continue;
             }
-            if self.hit_filter(anm, i, pos) {
+            if self.hit_filter(anm, i, pos, sys) {
                 continue;
             }
             let d = self.bullets[i].damage as i32;
@@ -906,7 +922,7 @@ impl Player {
                 anm.file_set_script(&mut b.vm, ANM_SLOT, (b.script + 11).max(0) as usize);
                 b.vm.rotation[2] = rot;
                 let pos = b.pos;
-                crate::effect::spawn(anm, 5, pos, 1, 0xFFFFFFFF);
+                sys.fx.spawn(anm, 5, pos, 1, 0xFFFFFFFF);
                 let b = &mut self.bullets[i];
                 b.pos[2] = 0.1;
                 b.state = 2;
@@ -937,7 +953,7 @@ impl Player {
             if !a.no_spark {
                 self.spark_counter = self.spark_counter.wrapping_add(1);
                 if self.spark_counter & 3 == 0 {
-                    crate::effect::spawn(anm, 3, pos, 1, 0xFFFFFFFF);
+                    sys.fx.spawn(anm, 3, pos, 1, 0xFFFFFFFF);
                 }
             }
         }
@@ -1034,19 +1050,21 @@ mod tests {
     // 14 §3.1: the animation test runs after the attack test on the entry sub-state and overwrites sub 3.
     #[test]
     fn yukari_animation_test_overrides_attack() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let mut p = Player::default();
         yukari(&mut p);
         p.shot_timer.set(0);
         p.aimed = Some(3);
         p.aimed_pos = [192.0, 100.0, 0.0];
-        p.place_option(&mut anm, 0, true);
+        p.place_option(&mut anm, 0, true, sys);
         let o = &p.options[0];
         assert_eq!((o.sub, o.vm.pending_interrupt), (2, 2));
         assert_eq!(p.aimed, Some(3));
         // Next frame: entered with sub 2, still moving right → no animation change, the attack sticks.
         p.options[0].vm.pending_interrupt = 0;
-        p.place_option(&mut anm, 0, true);
+        p.place_option(&mut anm, 0, true, sys);
         let o = &p.options[0];
         assert_eq!((o.sub, o.vm.pending_interrupt), (3, 3));
     }
@@ -1054,6 +1072,8 @@ mod tests {
     // 14 §3.1 (RE-Q56): sub 3 chases whenever the pointer is set, then exits; the exit frame still moves.
     #[test]
     fn yukari_sub3_moves_on_exit_frame() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let mut p = Player::default();
         yukari(&mut p);
@@ -1061,7 +1081,7 @@ mod tests {
         p.shot_timer.set(-1);
         p.aimed = Some(3);
         p.aimed_pos = [100.0, 200.0, 0.0];
-        p.place_option(&mut anm, 0, false);
+        p.place_option(&mut anm, 0, false, sys);
         let o = &p.options[0];
         assert_eq!((o.sub, o.vm.pending_interrupt), (0, 1));
         assert_eq!(p.aimed, None);
@@ -1069,7 +1089,7 @@ mod tests {
         // No pointer: no move.
         p.options[0].sub = 3;
         let before = p.options[0].pos;
-        p.place_option(&mut anm, 0, true);
+        p.place_option(&mut anm, 0, true, sys);
         assert_eq!(p.options[0].pos, before);
         assert_eq!(p.options[0].sub, 0);
     }
@@ -1087,17 +1107,19 @@ mod tests {
     // 09 §4.4 (RE-Q57 AM): state 2 only sets the angle; the speed-up divides by the current |v|.
     #[test]
     fn homing_speed_up_only_in_state1_by_current_v() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let mut p = Player::default();
         p.targets[0] = [-999.0; 3];
         let b = &mut p.bullets[0];
         (b.update, b.state, b.speed, b.vel) = (1, 2, 4.0, [0.0, -0.5]);
-        p.bullet_update_fn(&mut anm, 0);
+        p.bullet_update_fn(&mut anm, 0, sys);
         let b = &p.bullets[0];
         assert_eq!((b.speed, b.vel), (4.0, [0.0, -0.5]));
         assert_eq!(b.angle, fmath::atan2_f(-0.5, 0.0));
         p.bullets[0].state = 1;
-        p.bullet_update_fn(&mut anm, 0);
+        p.bullet_update_fn(&mut anm, 0, sys);
         let b = &p.bullets[0];
         assert_eq!(b.speed, 4.0 + 1.0 / 3.0);
         assert_eq!(b.vel, [0.0, -0.5 * b.speed / 0.5]);
@@ -1145,20 +1167,24 @@ mod tests {
     // 14 §4: laser init refuses while GameFlags bit 13 is set.
     #[test]
     fn laser_init_refused_with_bit13() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let mut p = Player::default();
         let e = laser_entry();
-        crate::gamemgr::set_flags(F_13);
-        assert!(!p.init_bullet(&mut anm, 0, 0, &e, EntryId::default()));
+        *sys.flags = F_13;
+        assert!(!p.init_bullet(&mut anm, 0, 0, &e, EntryId::default(), sys));
         assert!(p.laser_slots[0].owner.is_none());
-        crate::gamemgr::set_flags(0);
-        assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default()));
+        *sys.flags = 0;
+        assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default(), sys));
         assert_eq!(p.laser_slots[0].owner, Some(0));
     }
 
     // 14 §4: the same entry from the other sht copy (solo focus change) ends the laser; no new laser that frame.
     #[test]
     fn laser_focus_change_restarts() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let mut p = Player::default();
         let e = laser_entry();
@@ -1167,35 +1193,37 @@ mod tests {
             youkai: true,
             ..human
         };
-        assert!(p.init_bullet(&mut anm, 0, 0, &e, human));
-        assert!(!p.init_bullet(&mut anm, 1, 2, &e, human));
+        assert!(p.init_bullet(&mut anm, 0, 0, &e, human, sys));
+        assert!(!p.init_bullet(&mut anm, 1, 2, &e, human, sys));
         assert_eq!(p.laser_slots[0].owner, Some(0));
-        assert!(!p.init_bullet(&mut anm, 1, 2, &e, youkai));
+        assert!(!p.init_bullet(&mut anm, 1, 2, &e, youkai, sys));
         assert_eq!(p.bullets[0].vm.pending_interrupt, 1);
         assert!(p.laser_slots[0].owner.is_none());
-        assert!(p.init_bullet(&mut anm, 1, 4, &e, youkai));
+        assert!(p.init_bullet(&mut anm, 1, 4, &e, youkai, sys));
         assert_eq!(p.laser_slots[0].entry, Some(youkai));
     }
 
     // 14 §4: laser update 5 ends the laser (interrupt 1, slot cleared, update removed) on bit 13.
     #[test]
     fn laser_update_ends_on_bit13() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let mut p = Player::default();
         let e = laser_entry();
         p.options[0].state = 2;
-        assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default()));
+        assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default(), sys));
         p.shot_timer.set(0);
-        crate::gamemgr::set_flags(F_13);
+        *sys.flags = F_13;
         p.options[0].pos = [80.0, 300.0, 0.0];
-        assert!(!p.laser_update(0));
+        assert!(!p.laser_update(0, *sys.flags));
         let b = &p.bullets[0];
         assert_eq!((b.vm.pending_interrupt, b.update), (1, 0));
         assert!(p.laser_slots[0].owner.is_none());
         // The end branch falls through: this frame the laser still moves to option 0 (14 §4).
         assert_eq!(b.pos, [80.0, 300.0 - 208.0, 0.44]);
         p.options[0].state = 0;
-        assert!(p.laser_update(0));
+        assert!(p.laser_update(0, *sys.flags));
     }
 
     // Player anm slot with 12 scripts: 10 (flight) sets zwrite_off; 11 (hit) sets it only if asked.
@@ -1234,6 +1262,8 @@ mod tests {
     // 09 §4.5: entering state 2 keeps the VM pos and rotation z, z 0.1, flag 0x2000 only from the hit script.
     #[test]
     fn hit_restart_keeps_pos_and_does_not_reset_zwrite() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         for hit_zwrite in [false, true] {
             let mut anm = AnmManager::default();
             hit_scripts(&mut anm, hit_zwrite);
@@ -1247,7 +1277,7 @@ mod tests {
                 kind: 1,
                 ..ShotEntry::default()
             };
-            p.spawn_bullet(&mut anm, 0, &e);
+            p.spawn_bullet(&mut anm, 0, &e, sys);
             let b = &mut p.bullets[0];
             assert_ne!(b.vm.flags & anmvm::F_ZWRITE_OFF, 0);
             b.vm.pos = [11.0, 22.0, 0.0];
@@ -1260,6 +1290,7 @@ mod tests {
                 [32.0, 32.0],
                 &mut acc,
                 &mut by_bomb,
+                sys,
             );
             assert_eq!(dmg, 10);
             let b = &p.bullets[0];
@@ -1279,6 +1310,8 @@ mod tests {
     // miss by rounding although |d| ≤ sum of halves; exactly touching edges hit.
     #[test]
     fn damage_uses_f32_box_edges() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let bx = 3.688_634_f32;
         for (ex, hit) in [(23.688_635_f32, false), (bx + 20.0, true)] {
             let mut anm = AnmManager::default();
@@ -1290,7 +1323,7 @@ mod tests {
                 kind: 1,
                 ..ShotEntry::default()
             };
-            p.spawn_bullet(&mut anm, 0, &e);
+            p.spawn_bullet(&mut anm, 0, &e, sys);
             p.bullets[0].pos = [bx, 100.0, 0.0];
             p.bullets[0].size = [24.0, 8.0];
             let (mut acc, mut by_bomb) = (0, false);
@@ -1301,6 +1334,7 @@ mod tests {
                 [16.0, 16.0],
                 &mut acc,
                 &mut by_bomb,
+                sys,
             );
             assert_eq!(dmg, if hit { 10 } else { 0 }, "enemy x {ex}");
         }
@@ -1309,6 +1343,8 @@ mod tests {
     // 09 §2.1 init 1: Yukari's aimed shot targets e+0x2D34 (`aimed_base`), not the final pos.
     #[test]
     fn yukari_aim_uses_base_pos() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         let mut p = Player::default();
         p.pos = [192.0, 400.0, 0.0];
@@ -1323,7 +1359,7 @@ mod tests {
             sound: -1,
             ..ShotEntry::default()
         };
-        assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default()));
+        assert!(p.init_bullet(&mut anm, 0, 0, &e, EntryId::default(), sys));
         let b = &p.bullets[0];
         assert!(b.vel[0] < 0.0, "aims left at the base pos: {:?}", b.vel);
         assert!((-PI..=PI).contains(&b.angle));
@@ -1332,6 +1368,8 @@ mod tests {
     // 14 §3 "Orbit wrap": every orbit step wraps, so the angle stays in [−π, π].
     #[test]
     fn orbit_angle_wraps() {
+        let mut ts = crate::game::TestSys::default();
+        let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
         for kind in [OptKind::Yuyuko, OptKind::RemiliaSolo, OptKind::YoumuSolo] {
             let mut p = Player::default();
@@ -1339,7 +1377,7 @@ mod tests {
             p.options[0].state = 2;
             p.options[0].timer.set(20);
             for _ in 0..1000 {
-                p.place_option(&mut anm, 0, false);
+                p.place_option(&mut anm, 0, false, sys);
                 let a = p.options[0].angle;
                 assert!((-PI..=PI).contains(&a), "{kind:?} {a}");
             }

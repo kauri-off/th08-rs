@@ -60,8 +60,8 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     row[2] = ctx.input.game as i64;
     row[3] = ctx.anm.rng.state as i64;
     row[4] = ctx.anm.rng.total.wrapping_sub(rng_base) as i64;
-    row[18] = crate::gamemgr::rank() as i64;
-    row[21] = g.flags.get() as i64;
+    row[18] = g.rank.rank as i64;
+    row[21] = g.flags as i64;
     let Some(gm) = crate::gamemgr::current() else {
         return row;
     };
@@ -223,7 +223,7 @@ mod tests {
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(src, gfx, false)).unwrap();
         let g = &mut ctx.game;
         (g.difficulty, g.shot, g.stage, g.fresh_start) = (3, 1, 0, true);
-        g.flags.set(0);
+        g.flags = 0;
         g.request(crate::gamemgr::SCENE_GAME);
         let mut want = Vec::new();
         let mut k = 0u32;
