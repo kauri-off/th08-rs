@@ -448,6 +448,11 @@ impl Task<Ctx> for Supervisor {
     // Supervisor_Calc 0x445453 (11 §7): input poll (OR-accumulated on a slow-mode skipped frame), loading VMs, then
     // the scene switch.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        // AnmManager reset 0x44548A on every pass, also each restarted fast-forward pass (11 §7): tint off
+        // (06 §10.2), shake offset 0 (13 §3), texture caches (05 §12.5); the blend cache models D3D state, kept.
+        ctx.anm.tint_off();
+        ctx.anm.screen_offset = [0.0; 2];
+        ctx.anm.reset_render_state();
         ctx.audio.tick_fade();
         if let Some(s) = &self.script {
             ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);

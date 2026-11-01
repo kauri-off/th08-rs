@@ -897,9 +897,8 @@ struct PauseMenu {
     frame: u32,
     vms: Vec<AnmVm>,
     shown: [bool; 10],
-    // Capture VM +0x1A70 (capture.anm) and the pending AnmManager_QueueCapture request (12 §3).
+    // Capture VM +0x1A70 (capture.anm script 0, 12 §3).
     cap_vm: AnmVm,
-    capture: bool,
 }
 
 const P_TITLE: usize = 0;
@@ -922,6 +921,25 @@ impl PauseMenu {
     fn goto(&mut self, s: u8) {
         self.state = s;
         self.frame = 0;
+    }
+
+    // Close interrupts sent in the branch that changes the state (12 §3): interrupt 2 to `ks`, and interrupt 1 to
+    // the capture VM (label 1 = alpha_fade 0, 30) on the resume paths.
+    fn close(&mut self, ks: impl IntoIterator<Item = usize>, capture: bool) {
+        for k in ks {
+            self.shown[k] = false;
+            self.vms[k].pending_interrupt = 2;
+        }
+        if capture {
+            self.cap_vm.pending_interrupt = 1;
+        }
+    }
+
+    // Shortcut targets: interrupt 2 to every VM with flag bit 0 (visible) set (12 §3).
+    fn visible(&self) -> Vec<usize> {
+        (0..10)
+            .filter(|&k| self.vms[k].flags & anmvm::F_VISIBLE != 0)
+            .collect()
     }
 
     // Input is read from frame 4 of each state; confirms sfx 10, cursor moves sfx 0 (12 §3).
@@ -951,19 +969,18 @@ impl PauseMenu {
             }
             self.shown = [false; 10];
             start_capture(ctx_anm, &mut self.cap_vm);
-            self.capture = true;
+            // Only queued: copied after this frame's Present (12 §3 capture timing). It cannot fail, since every
+            // Present applies the pending request, so the "close at once" path is not modelled.
+            queue_capture(ctx_anm, &self.cap_vm);
             let diff_vm = &mut self.vms[P_DIFF];
             diff_vm.set_sprite(ctx_anm, difficulty_sprite(g));
-            for k in [P_TITLE, 1, 2, P_DIFF] {
+            // Interrupt 1 to VMs 0–3 only, VM 3 also in replay (12 §3).
+            for k in [P_TITLE, 1, 2, 3] {
                 self.show(k, true);
             }
-            if !replay {
-                self.show(3, true);
-            }
-            if g.practice() {
-                self.show(P_PRACTICE, true);
-            }
-            // Visible without an interrupt (dispatch would set it visible); the close interrupts reach it (12 §3).
+            // VMs 7–9 get no interrupt; their scripts start the fade-in on the first run (12 §3).
+            self.shown[P_DIFF] = true;
+            self.shown[P_PRACTICE] = g.practice();
             self.shown[P_SLOW] = g.game_slow() != 0;
             self.goto(1);
         }
@@ -979,10 +996,13 @@ impl PauseMenu {
             }
             // Shortcut keys ESC / Q / R (R not in replay) (12 §3).
             if inp.pressed(input::PAUSE) {
+                self.close(self.visible(), true);
                 self.goto(4);
             } else if inp.pressed(input::KEY_Q) {
+                self.close(self.visible(), false);
                 self.goto(9);
             } else if inp.pressed(input::KEY_R) && !replay {
+                self.close(self.visible(), false);
                 self.goto(10);
             }
         }
@@ -993,6 +1013,7 @@ impl PauseMenu {
                 } else if down {
                     self.goto(2);
                 } else if confirm {
+                    self.close(0..4, true);
                     self.goto(4);
                 }
             }
@@ -1023,6 +1044,8 @@ impl PauseMenu {
                     self.goto(s);
                 } else if confirm {
                     if self.state == base {
+                        // "Yes": interrupt 2 to VMs 4–6 only; the difficulty / practice / slow labels stay (12 §3).
+                        self.close([P_REALLY, P_YES, P_NO], false);
                         self.goto(if base == 5 { 9 } else { 10 });
                     } else {
                         self.confirm_screen(false);
@@ -1030,12 +1053,8 @@ impl PauseMenu {
                     }
                 }
             }
+            // States 4 / 9 / 10 send no interrupts themselves (12 §3).
             4 | 9 | 10 => {
-                if self.frame == 0 {
-                    for k in 0..10 {
-                        self.show(k, false);
-                    }
-                }
                 if self.frame >= 20 {
                     match self.state {
                         4 => audio.pause_bgm(false),
@@ -1189,9 +1208,8 @@ struct ContinueMenu {
     phase_frame: u32,
     vms: Vec<AnmVm>,
     clock_vm: AnmVm,
-    // Capture VM menu +0xFE0 and the pending capture request (12 §4).
+    // Capture VM menu +0xFE0 (12 §4).
     cap_vm: AnmVm,
-    capture: bool,
 }
 
 // 0x404890 early exits (11 §4.2, RE-Q51): game_over := 0 and displayed score := score, no sound / VMs / capture /
@@ -1255,7 +1273,8 @@ impl ContinueMenu {
             ctx_anm.set_script(&mut self.clock_vm, crate::hud::TIMES_SLOT, 1);
             self.clock_vm.set_sprite(ctx_anm, g.clock.clamp(0, 15));
             start_capture(ctx_anm, &mut self.cap_vm);
-            self.capture = true;
+            // Queued, copied after this frame's Present (12 §3 capture timing, §4).
+            queue_capture(ctx_anm, &self.cap_vm);
             // Default "No"; "Yes" only in spell practice with spell flag bit 9 (captured) clear (12 §4).
             let captured = gamemgr::current()
                 .and_then(|gm| gm.borrow().enemies.clone())
@@ -1400,15 +1419,9 @@ impl Task<Ctx> for AsciiManager {
             ctx.game.paused = 2;
             self.pause
                 .update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
-            if std::mem::take(&mut self.pause.capture) {
-                apply_capture(&ctx.anm, &mut ctx.gfx, &self.pause.cap_vm);
-            }
         } else if ctx.game.game_over != 0 {
             self.cont
                 .update(&mut ctx.anm, &mut ctx.game, &inp, &mut ctx.audio);
-            if std::mem::take(&mut self.cont.capture) {
-                apply_capture(&ctx.anm, &mut ctx.gfx, &self.cont.cap_vm);
-            }
         } else {
             self.cont.open = false;
             self.pause.state = 0;
@@ -1527,7 +1540,7 @@ mod tests {
         let mut audio =
             crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
         m.update(&mut anm, &mut g, &Input::default(), &mut audio);
-        assert!(m.open && !m.yes && m.capture);
+        assert!(m.open && !m.yes);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
         assert_eq!(g.requested, gamemgr::SCENE_BOOT);
     }
@@ -1545,7 +1558,7 @@ mod tests {
             crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
         m.update(&mut anm, &mut g, &Input::default(), &mut audio);
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_REPLAY_END));
-        assert!(g.play_clock.is_some() && !m.capture && m.vms.is_empty());
+        assert!(g.play_clock.is_some() && m.vms.is_empty());
     }
 
     fn press(b: u16) -> Input {
@@ -1591,6 +1604,49 @@ mod tests {
         m.update(&mut anm, &mut g, &Input::default(), &mut audio);
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RESULT));
         assert!(!m.open && m.vms.iter().all(|v| !v.visible()));
+    }
+
+    // 12 §3 (RE-Q70): state 0 interrupts VMs 0–3 only (VM 3 also in replay); confirm on Resume sends interrupt 2 to
+    // VMs 0–3 and 1 to the capture VM in that call; "yes" sends interrupt 2 to VMs 4–6 only; states 4/9/10 send none.
+    #[test]
+    fn pause_menu_interrupts() {
+        let mut anm = crate::anmmgr::AnmManager::default();
+        let mut audio =
+            crate::audio::Audio::new(crate::assets::Source::native(std::env::temp_dir()), &[]);
+        let mut g = Game::default();
+        g.flags |= gamemgr::F_REPLAY;
+        g.paused = 1;
+        let mut m = PauseMenu::default();
+        let ints = |m: &PauseMenu| {
+            m.vms
+                .iter()
+                .map(|v| v.pending_interrupt)
+                .collect::<Vec<_>>()
+        };
+        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        assert_eq!(ints(&m), [1, 1, 1, 1, 0, 0, 0, 0, 0, 0]);
+        for _ in 0..4 {
+            m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        }
+        m.update(&mut anm, &mut g, &press(input::SHOT), &mut audio);
+        assert_eq!(m.state, 4);
+        assert_eq!(ints(&m), [2, 2, 2, 2, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(m.cap_vm.pending_interrupt, 1);
+
+        let mut g = Game::default();
+        g.paused = 1;
+        let mut m = PauseMenu::default();
+        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        m.state = 5;
+        m.frame = 4;
+        for v in &mut m.vms {
+            v.pending_interrupt = 0;
+        }
+        m.update(&mut anm, &mut g, &press(input::SHOT), &mut audio);
+        assert_eq!(m.state, 9);
+        assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
+        m.update(&mut anm, &mut g, &Input::default(), &mut audio);
+        assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
     }
 
     #[test]

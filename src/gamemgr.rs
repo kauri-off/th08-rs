@@ -1165,10 +1165,11 @@ impl Task<Ctx> for GameManager {
                 } else {
                     if g.loading_wait == 0 {
                         crate::effect::release_loading_overlay();
-                        // Loading_Wait 0x448972 acts on state 1 only: state := 2 (12 §1).
-                        if g.load_prompt < 2 {
-                            g.load_prompt = 2;
-                        }
+                    }
+                    // Loading_Wait 0x448972 acts on state 1 only: state := 2 (12 §1). It runs between frames, so the
+                    // state changes only after the draw of the frame whose calc saw the wait (12 §1 pt 5).
+                    if g.loading_wait == 1 && g.load_prompt < 2 {
+                        g.load_prompt = 2;
                     }
                     g.loading_wait += 1;
                 }

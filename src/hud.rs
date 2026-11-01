@@ -995,8 +995,9 @@ impl Hud {
         let spr = |anm: &AnmManager, gfx: &mut Gfx, i: usize, x: f32, y: f32, z: f32| {
             if let Some(s) = anm.sprite(FRONT_SLOT, i) {
                 let [u0, v0, u1, v1] = s.uv;
-                let v =
-                    |x: f32, y: f32, u: f32, vv: f32| Vertex::screen(x, y, z, [u, vv], [255; 4]);
+                // Draw2DSnap → EmitQuad: the global tint applies (12 §5.3, 05 §12.1); the gauge quad stays raw.
+                let c = anm.tinted([255; 4]);
+                let v = |x: f32, y: f32, u: f32, vv: f32| Vertex::screen(x, y, z, [u, vv], c);
                 gfx.strip(
                     s.tex,
                     Blend::Alpha,
@@ -1090,15 +1091,6 @@ impl Hud {
                 Vertex::screen(488.5 + pw, 152.5, 0.1, uv, r),
             ],
         );
-        q.push(q.text(
-            488.0,
-            136.0,
-            if pw >= 128.0 {
-                "MAX".to_string()
-            } else {
-                format!("{}", pw as i32)
-            },
-        ));
         q.push(q.text(488.0, 152.0, format!("{}", st.graze_total)));
         for t in ratio_row(168.0, st.point_items2, st.next_extend, q.color) {
             q.push(t);
@@ -1111,8 +1103,18 @@ impl Hud {
         for t in ratio_row(184.0, st.time, st.time_threshold, col) {
             q.push(t);
         }
-        // SPEC-GAP: 12 §5.3 "colour reset to white after" the time row, taken as unconditional (IMPL148 Q1).
+        // Ascii_SetColor(0xFFFFFFFF) ends the time-row block (12 §5.3 step 6); the port draws that row every frame.
         q.color = [255; 4];
+        // Step 7: the power text is the last panel string, so it takes the colour left by step 6 (12 §5.3).
+        q.push(q.text(
+            488.0,
+            136.0,
+            if pw >= 128.0 {
+                "MAX".to_string()
+            } else {
+                format!("{}", pw as i32)
+            },
+        ));
     }
 }
 

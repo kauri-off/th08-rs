@@ -657,7 +657,8 @@ impl Gfx {
         if w == 0 || h == 0 || size[0] == 0 || size[1] == 0 {
             return;
         }
-        if self.log.is_some() {
+        // Draw log: no K for a size-mismatched (filtered) capture (data/drawlog/FORMAT.md K).
+        if self.log.is_some() && size == to_size {
             let rec = LogRec::Copy {
                 src: "screen".into(),
                 dst: self.label_name(dst),
