@@ -1069,3 +1069,14 @@ Plan: 05_anm_vm -> 06_std -> 07_ecl -> 08 -> 09 -> 10 -> 11. Read code from extr
 - Accepted: 78684 lwait gap = probe hook at the `Loading_Wait` entry + loader delay (L); udfl24 Youmu rect colour = log
   artefact (`Screen_FillRect` EDX path); fps digits in FF presents (host time).
 - CODE BUGs 1–7 for IMPL149; after them only accepted classes + 10 rec×frames of single-present U remain.
+
+# RE-Q71 (2026-11-01) — last single-present draw groups (specs/changelog/answers_re_q71.md)
+- Runs re/work/runs/q71 (CHECKPOINT.md, scratch.diff, cls.py for _149 with new classes, fr.py quad dump; target/re71).
+  `session --to` = menu-relative rows, not presents.
+- CODE BUG 1: popup cursors +0x8290/+0x8294 reset by `Ascii_InitVms` (every StageStart, GM remove, menu register);
+  large +0x8298 not. Port never resets → overlapping same-frame popups blend in rotated slot order (alpha ±2). Was class
+  "C FF bomb-end tint" and "P4 ASCII ±2" (13 §4, 11 §3.1).
+- CODE BUG 2: MSG op 16 has no next_line clamp; 3rd line → boss_card VM, text.anm script 2 (msg4ab entry 0 only;
+  78684 39702) (10 §5.1).
+- Accepted: aura sprite 197 groups = drawlog matcher artefact (identical logs); udSs12 particle = P5 edge cull after
+  snap tie; 53334 bullet top edge = P6 tie. Draw parity done after IMPL150.

@@ -220,6 +220,7 @@ unless reloading the same stage (0x17CE8C4): load (not play: `Music_Play` = soun
     slots 1/2 whose name does not start with ' ' from the STD names (spell practice: slot 0 only,
     BGM chosen from table 0x4C7670 by spell id)
 flags |= 4; game_over = 0; ... freeze byte 0x160F534 (GM+0x2C) := 0; stats.score (+0x08) := 0; flags &= ~0x10
+Ascii_InitVms (popup slots cleared, small/special popup cursors := 0, 13 §4; VERIFIED 0x43ABD7, RE-Q71); Ascii_SetupGaugeVms (12 §5.9)
     # score := 0 is undone by the first gameplay calc: §4 step 9 sets score := score_display (equal to the score at
     # a clear, §4 step 1; = continues after a continue). VERIFIED 0x43B7FE–0x43B808, RE-Q24
 wait (thread) until loading_frames >= 30 (80 in replay playback)      # see 'Loading frame count' below

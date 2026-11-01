@@ -540,6 +540,15 @@ Small popups: 720 + 3 slots × 0x38 at Ascii +0xB4DC: digits[≤12] (least signi
 sign used for negative arguments), +0xC pos (+ playfield origin at spawn, i.e. screen coords), +0x18 colour, +0x1C Timer, +0x30 active,
 +0x31 digit count. `Popup_Number` 0x403200(pos, value, colour) uses slots 0–719 round robin; 0x403330 uses
 the 3 slots 720–722 (round robin).
+Cursors (VERIFIED 0x403200 / 0x403330 / 0x403460 / 0x402450, RE-Q71): small Ascii +0x8290 (wraps to 0 when > 719,
+tested **before** the write, then += 1), special +0x8294 (wraps when > 2), large +0x8298 (wraps when > 127). The
+slots are drawn in slot order, so the cursor decides the draw order of popups spawned together.
+`Ascii_InitVms` 0x402450 — called by `AsciiManager_Load`, **`GameManager_StageStart` (every stage start, 11 §3.1)**,
+`GameMgr_OnRemove` and `MainMenu_OnRegister` — zero-fills all 723 small and 128 large slots and sets the small and
+special cursors to **0**; the large cursor +0x8298 is **not** reset (it continues across stages and games).
+Overlapping popups spawned in the same frame (same snapped glyph rect, alphas from slightly different positions) are
+blended in slot order: a port whose small cursor keeps running across stages draws them in a rotated order (ref dl3
+silentselene_52279 present 45984, stage 3: ref alpha order 9d, 9e, 9f, port 9e, 9f, 9d).
 Per frame (`Ascii_Calc`, not while paused/continue, not while bullets frozen — GameFlags bit 10 read **live** at calc prio 1,
 so on the frame after a hit in the bullet calc (prio 14) no popup ages, VERIFIED 0x402200, RE-Q64 ref500 udFa11 present 7094): y −= 0.5·gs; age (Timer) ticks; freed
 when age **> 60** (`Timer_Greater`(60): drawn with ages 0..60, i.e. 61 frames; VERIFIED 0x402200, RE-Q32). The age is a `Timer` ticked at game speed and `Timer_Greater` compares the **integer** cur (n < cur), not cur + frac: under a slowdown a popup is kept while cur = 60 even when frac > 0 (at speed 0.5 it lives 122 calcs, not 121; VERIFIED 0x402200 / 0x4066C0, RE-Q67). The same holds for the large popups' `Timer_Greater`(90) below.

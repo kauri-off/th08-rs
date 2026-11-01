@@ -65,7 +65,7 @@ extra (`msg8*`): 3.
 | 0x21830 | i32 | min_wait | frames a wait must last before Shot can advance it (6 at start, then 8 or 30) |
 | 0x21834 + k·0x2A4 | AnmVm[4] | face[k] | portrait VMs, k = 0..3 |
 | 0x222C4 + l·0x2A4 | AnmVm[2] | line[l] | text line VMs (text.anm) |
-| 0x2280C | AnmVm | boss_card | boss name card VM (op 8) |
+| 0x2280C | AnmVm | boss_card | boss name card VM (op 8); also line[2] of op 16 (§5.1, RE-Q71) |
 | 0x22AB0 | AnmVm | — | run and drawn every frame, but no code ever sets a script or sprite on it (its only references are the run in `Msg_Run` and the draw; msg ops address faces 0–3 / lines 0–1 and the data stays in range) → it never draws anything (VERIFIED RE-Q26) |
 | 0x22D54 + k·4 | u32[4] | text_colour[k] | GDI COLORREF per speaker (from table 0x4C7180, §6) |
 | 0x22D64 + k·4 | u32[4] | outline[k] | always 0 (selects the 2-px outline style, §6) |
@@ -183,7 +183,7 @@ Arguments are given in file order. `str` = XOR-0x77 string (§2). Count = occurr
 | 13 | skippable | u8 b, pad×3 | `skippable = b` | 204 |
 | 14 | flash | — | full-screen ScreenEffect type 4: colour 0xFFFFFF, duration 442 frames, alpha = 255·t/442 (fade to white), draw prio 21; HUD full-repaint counter (0x17CE8CC) = 442 | 12 |
 | 15 | speaker4 | u32 who, i32 s0, s1, s2, s3 | highlight speaker `who` (§5.3); for each k with s_k ≥ 0 set face[k]'s sprite to s_k; text_speaker = who; new_box = 1 | 216 |
-| 16 | text | str | if new_box: clear line[1] (if it has a script) and next_line = 0. Start text.anm script `next_line` on line[next_line], render `str` with `text_colour[text_speaker]`; wait_count = 0; new_box = 0; next_line += 1 | 2214 |
+| 16 | text | str | if new_box: clear line[1] (if it has a script) and next_line = 0. Start text.anm script `next_line` on line[next_line], render `str` with `text_colour[text_speaker]`; wait_count = 0; new_box = 0; next_line += 1. **No clamp** (QUIRK, VERIFIED 0x433DB3 op 16, RE-Q71): the VM is HudImpl+0x222C4 + next_line·0x2A4, so a **third** line in one box (next_line = 2) lands on **boss_card** (+0x2280C): text.anm script 2 (sprite 2 = strip (0, 54, 256, 17), centred at (272, 352), alpha 0 → 240 over 60 frames, fade out at 360, `hide_stop` at 420), font-size bytes set on that VM, the text rendered into sprite 2's row strip. Only occurrence in the data: msg4ab entry 0 (time 121, '魔理沙の仕業ね。'); the following op 8 (time 123) replaces the script with the face name card. Seen in ref dl3 silentselene_78684 present 39702 (one present at alpha 0x08 under replay skip) | 2214 |
 | 17 | speaker | u32 who, i32 s | like op 15 but only face[who]'s sprite is set (if s ≥ 0) | 1336 |
 | 18 | textbox | u8 b, pad×3 | `textbox = b` | 4 |
 | 19 | text0 | str | start script 0 on line[0], render with text_colour[0]; wait_count = 0 | 4 |
