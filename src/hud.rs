@@ -131,7 +131,6 @@ impl ClearPanel {
 
 pub struct Hud {
     pub msg: Rc<RefCell<Dialogue>>,
-    enemies: Rc<RefCell<EnemyManager>>,
     stage: Rc<RefCell<Stage>>,
     frame: u32,
     // front.anm VMs 0–15 (impl+i·0x2A4, 12 §5.2).
@@ -261,13 +260,11 @@ fn stage_start_tiles(anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> Vec<Anm
 impl Hud {
     pub fn register(
         ctx: &mut Ctx,
-        enemies: Rc<RefCell<EnemyManager>>,
         stage: Rc<RefCell<Stage>>,
         fresh: bool,
     ) -> Result<Rc<RefCell<Hud>>> {
         let h = Rc::new(RefCell::new(Hud {
             msg: Rc::new(RefCell::new(Dialogue::default())),
-            enemies,
             stage,
             frame: 0,
             front: Vec::new(),
@@ -373,7 +370,7 @@ impl Hud {
         self.tiles_live = 0;
         // +0x2C := 0, impl+0x2A40 := 0, +0x30 := +0x34 := 0 (12 §5.1a).
         {
-            let mut e = self.enemies.borrow_mut();
+            let e = crate::em!(ctx);
             e.g.hud_boss = false;
             e.g.hud_bar_target = 0.0;
         }
@@ -390,7 +387,7 @@ impl Hud {
             self.diff_vm = k.diff_vm;
             self.label_vm = k.label_vm;
             self.clear_total = k.clear_total;
-            self.enemies.borrow_mut().g.hud_timer = k.timer;
+            crate::em!(ctx).g.hud_timer = k.timer;
             self.timer_last = k.timer_last;
             anm.set_script(
                 &mut ctx.rng,
@@ -643,11 +640,8 @@ impl Hud {
     }
 
     // Hud_Update step 1 (12 §5.1b): boss-bar state machine; the caller skips it while a dialogue runs.
-    fn boss_calc(&mut self) {
-        let (req, target) = {
-            let e = self.enemies.borrow();
-            (e.g.hud_boss, e.g.hud_bar_target)
-        };
+    fn boss_calc(&mut self, e: &EnemyManager) {
+        let (req, target) = (e.g.hud_boss, e.g.hud_bar_target);
         self.bar_target = target;
         let label = &mut self.front[12];
         // W: L's wait-for-interrupt flag as left by its run of the previous frame (L runs after this step).
@@ -786,18 +780,18 @@ impl Hud {
     }
 
     // Guard of the bar part of Hud_DrawBoss (12 §5.4): no dialogue (caller), +0x2C (read live) + bar state ≠ 0.
-    fn bar_shown(&self) -> bool {
-        self.enemies.borrow().g.hud_boss || self.bar_state != 0
+    fn bar_shown(&self, e: &EnemyManager) -> bool {
+        e.g.hud_boss || self.bar_state != 0
     }
 
     // Bar part, step: the timer string, its sounds and Popup_LargeStatic (logic, also with emit off).
     fn bar_step(&mut self, ctx: &mut Ctx) {
-        if !self.bar_shown() {
+        if !self.bar_shown(ctx.enemies.as_deref().expect("enemy manager")) {
             return;
         }
         let a = self.bar_alpha as u8;
         // Timer (12 §5.4): every guarded draw, HUD +0x24 as stored by Enemy_CheckTimeout, shown as min(·, 99).
-        let raw = self.enemies.borrow().g.hud_timer;
+        let raw = ctx.enemies.as_deref().expect("enemy manager").g.hud_timer;
         let v = raw.min(99);
         ctx.ascii
             .push(Text::new(384.0, 16.0, fmt_02d(v)).color(Self::rgb(timer_colour(raw), a)));
@@ -812,7 +806,7 @@ impl Hud {
         self.timer_last = raw;
         // Popup_LargeStatic (12 §5.4, 13 §4): re-issued every guarded draw, "+0" without children too.
         let g = &ctx.game;
-        let e = self.enemies.borrow();
+        let e = ctx.enemies.as_deref().expect("enemy manager");
         if let Some(i) = e.boss(0)
             && g.paused == 0
             && g.game_over == 0
@@ -829,7 +823,8 @@ impl Hud {
 
     // Bar part, emit: fill, ECL markers, remaining-bars gauge, the timer frame VM.
     fn emit_bar(&self, ctx: &Ctx, rec: &mut Recorder) {
-        if !self.bar_shown() {
+        let e = ctx.enemies.as_deref().expect("enemy manager");
+        if !self.bar_shown(e) {
             return;
         }
         let a = self.bar_alpha as u8;
@@ -844,7 +839,6 @@ impl Hud {
             Self::rgb(0xFFFFFF, a),
             Self::rgb(0x202060, a),
         );
-        let e = self.enemies.borrow();
         // ECL op 158 markers: drawn when end ≠ 0 and start < displayed; bottom colour (c >> 2) & 0x3F3F3F.
         for (end, start, c) in e.g.hud_markers {
             if end != 0.0 && start < disp {
@@ -1055,7 +1049,14 @@ impl Hud {
         // Step 4 label: the original draws it only when it repaints the lives or bombs row (field ≠ 0 or full
         // repaint) and it stays in the back buffer, so the port latches the condition on those frames.
         let vm13 = self.front.get(13).is_some_and(|v| v.ip.is_some());
-        let cond = ctx.game.flags >> 7 & 3 == 1 && self.enemies.borrow().g.spell.is_some();
+        let cond = ctx.game.flags >> 7 & 3 == 1
+            && ctx
+                .enemies
+                .as_deref()
+                .expect("enemy manager")
+                .g
+                .spell
+                .is_some();
         let (pn, latch) = label_step(
             ctx.panel,
             vm13,
@@ -1202,7 +1203,7 @@ impl Task<Ctx> for Hud {
                 diff_vm: std::mem::take(&mut self.diff_vm),
                 label_vm: std::mem::take(&mut self.label_vm),
                 clear_total: self.clear_total,
-                timer: self.enemies.borrow().g.hud_timer,
+                timer: ctx.enemies.as_deref().expect("enemy manager").g.hud_timer,
                 timer_last: self.timer_last,
             });
             for s in [FRONT_SLOT, TIMES_SLOT, TXT_SLOT, LOADING_SLOT]
@@ -1224,7 +1225,7 @@ impl Task<Ctx> for Hud {
         }
         let inp = ctx.input.game_view();
         // HUD requests queued by ECL ops this frame (ECL runs before the HUD).
-        let reqs = std::mem::take(&mut self.enemies.borrow_mut().g.hud_requests);
+        let reqs = std::mem::take(&mut crate::em!(ctx).g.hud_requests);
         let clock = crate::pl!(ctx).stats.clock;
         for r in reqs {
             match r {
@@ -1247,7 +1248,7 @@ impl Task<Ctx> for Hud {
         }
         // Hud_Update 0x435900, steps 1–7 of 12 §5.1b.
         if !self.msg.borrow().active() {
-            self.boss_calc();
+            self.boss_calc(ctx.enemies.as_deref().expect("enemy manager"));
         }
         // Front VMs, stage-title VMs, the stage-start clock, the stage-clear VM, the night clock.
         let anm = &mut ctx.anm;
@@ -1332,9 +1333,7 @@ impl Task<Ctx> for Hud {
         };
         // Msg_Start playfield side effects (10 §4 step 6): cancel bullets, kill killable enemies.
         if side {
-            self.enemies
-                .borrow_mut()
-                .msg_side_effects(&mut ctx.anm, &mut crate::sys!(ctx));
+            crate::em!(ctx).msg_side_effects(&mut ctx.anm, &mut crate::sys!(ctx));
         }
         // All items auto-collect while a dialogue runs and the player is not dying (10 §5).
         if collect {

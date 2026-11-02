@@ -200,10 +200,9 @@ fn dump_items(ctx: &th08::game::Ctx, row: i64) {
     let Some(p) = ctx.player.as_deref() else {
         return;
     };
-    let Some(gm) = th08::gamemgr::current() else {
+    if th08::gamemgr::current().is_none() {
         return;
-    };
-    let gm = gm.borrow();
+    }
     println!(
         "row {row}: player {:.3},{:.3} state {} power {} target {:?}",
         p.pos[0], p.pos[1], p.state, p.stats.power, p.targets[0]
@@ -231,8 +230,8 @@ fn dump_items(ctx: &th08::game::Ctx, row: i64) {
             o.state, o.sub, o.pos[0], o.pos[1], o.vel[0], o.vel[1], o.timer.cur, p.aimed
         );
     }
-    if let Some(em) = &gm.enemies {
-        for (i, x) in em.borrow().enemies.iter().enumerate() {
+    if let Some(em) = ctx.enemies.as_deref() {
+        for (i, x) in em.enemies.iter().enumerate() {
             if x.alive() {
                 println!(
                     "  e{i} sub {} t {} pos {:.2},{:.2} fl {:x} life {} acc {}",

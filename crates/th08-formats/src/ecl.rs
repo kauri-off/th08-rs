@@ -19,6 +19,7 @@ pub const MAGIC: u32 = 0x800;
 // Sub instruction header (07 §2.1): time, opcode, size, unused byte, rank mask, var mask.
 pub const SUB_HEADER: usize = 12;
 
+#[derive(Clone)]
 pub struct Ecl {
     pub data: Vec<u8>,
     // Sub offsets from file start (07 §2, table at 0x48).

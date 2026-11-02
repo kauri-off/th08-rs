@@ -32,10 +32,7 @@ enum End {
 
 // Ecl_Run (07 §5.2). The enemy is taken out of the manager while it runs; returns −1 when op 1 executed.
 pub fn ecl_run(m: &mut EnemyManager, anm: &mut AnmManager, idx: usize, sys: &mut Sys) -> i32 {
-    let mut e = m.take(idx);
-    let r = run_enemy(m, anm, &mut e, idx, sys);
-    m.put(idx, e);
-    r
+    m.with_taken(idx, |m, e| run_enemy(m, anm, e, idx, sys))
 }
 
 fn run_enemy(
@@ -591,7 +588,7 @@ impl Exec<'_> {
         let raw = self.raw(ins, k) as i32;
         match int_ref(raw).filter(|_| ins.mask & (1 << k) != 0) {
             Some(r) => self.write_i(t, r, v),
-            None => self.m.ecl.set_arg(ins, k, v as u32),
+            None => std::sync::Arc::make_mut(&mut self.m.ecl).set_arg(ins, k, v as u32),
         }
     }
 
@@ -599,7 +596,7 @@ impl Exec<'_> {
         let raw = f32::from_bits(self.raw(ins, k)) as i32;
         match flt_ref(raw).filter(|_| ins.mask & (1 << k) != 0) {
             Some(r) => self.write_f(t, r, v),
-            None => self.m.ecl.set_arg(ins, k, v.to_bits()),
+            None => std::sync::Arc::make_mut(&mut self.m.ecl).set_arg(ins, k, v.to_bits()),
         }
     }
 

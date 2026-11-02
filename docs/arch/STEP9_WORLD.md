@@ -5,29 +5,29 @@ saves outside the original's save points use a World clone, score.dat write draw
 spec 00 §3, src/task.rs. Rules: behaviour, chain order, RNG call order and every recorded command frozen; one
 subsystem per run; each run `tools/arch_check run target/arch_ref` (T D), batch (B) after 9g.
 
-## 1. Holders of game state outside plain fields (master after IMPL177; 9a / 9b columns = after those runs)
+## 1. Holders of game state outside plain fields (master after IMPL177; 9a / 9b / 9c columns = after those runs)
 
-| holder (file) | kind | holds | target owner | 9a | 9b |
-|---|---|---|---|---|---|
-| `PlayerRef` in GameManager, BulletManager, EnemyManager, Stage, Hud, Gui (player.rs) | `Rc<RefCell<Player>>` | Player 0x17D5EF8 | `GameManager.player` | **gone**: `Ctx.player: Option<Box<Player>>` | — |
-| `Player.world` (player.rs) | `Weak<RefCell<BulletManager>>` | link to items | parameter `items: Option<&mut ItemManager>` | **gone** | items from `ctx.bullets` in `PlayerTask::calc` |
-| ascii `Gauge.player` | `Weak<RefCell<Player>>` | gauge / marker reads | parameter `Option<&Player>` | **gone** | — |
-| `BulletManager.enemies` (bullet.rs) | `Weak<RefCell<EnemyManager>>` | time-orb spell bonus | `&mut EnemyManager` at the bullet calc | **gone** (looked up through the GM until 9c) | still through the GM (`BulletTask::calc`) |
-| `GameManager.{stage,bullets,enemies,hud}` (gamemgr.rs) | `Option<Rc<RefCell<_>>>` | stage-time subsystems | `GameManager` fields (plain) | 9b–9e | `bullets` **gone**: `Ctx.bullets: Option<Box<BulletManager>>` |
-| `EnemyManager.{bullets,stage,msg}` (enemy.rs) | `Rc<RefCell<_>>` | cross links | parameters / `Sys` fields | 9b, 9d, 9e | `bullets` **gone**: `Sys.bullets` (`bm!`, `with_bullets`) |
-| `Hud.{msg,enemies,stage}` (hud.rs) | `Rc<RefCell<_>>` | Dialogue owned here, links | `GameManager.msg`; params | 9c–9e | items via `ctx.bullets` (no `enemies.bullets` hop) |
-| `Gui.enemies` (gui.rs) | `Rc<RefCell<EnemyManager>>` | spell state | param | 9c | — |
-| `Stage.sparkles` (stage.rs) | `RefCell` | draw-phase sparkle points read by the emit | plain field written in `draw_step` (decision 2) | 9d | — |
-| `EffectManager` (effect.rs) | `Rc<RefCell<_>>` task | `level` only (state already in `Ctx.effects`) | `World.effects` + Node | 9f | — |
-| `ScreenEffect` (effect.rs) | one `TaskRef` per effect | type, alpha, timer | pool `World.screen_fx: Vec<Option<ScreenEffect>>`, Node by slot | 9f | — |
-| `ReplayTask` (replay.rs) | `TaskRef`, 4 nodes | playback / record state | `GameManager.replay` | 9g | — |
-| `gamemgr::CURRENT` (gamemgr.rs:535) | `thread_local` `Weak<RefCell<GameManager>>` | the running GM, read by player / bullet calc (interim), ascii, replay, demosync, session tools | `World.gm: Option<GameManager>` | 9g | no bullet reads left (player calc, demosync, session use `ctx.bullets`) |
-| `Supervisor.scene_task` (supervisor.rs) | `Option<TaskRef>` | GM / MainMenu / Result / Ending / MusicRoom | `World.scene: Scene` enum | 9g | — |
-| `AsciiManager`, `AnmDebug`, `Supervisor` | `TaskRef` | menus, debug | `World` fields | 9g | — |
-| `Tasks<Ctx>` payload (task.rs) | `Rc<RefCell<dyn Task>>` | every node | `Node` (`Copy` enum) | 9h | — |
-| `rng::TRACE` / `CALLS` (rng.rs:85) | `thread_local` | debug call-site log (`TH08_SESSION_RNG`) | `Rng.trace: Option<Vec<String>>` (debug, not compared) | 9h | — |
-| `settings::SETTINGS` | `OnceLock` | app/tool settings, debug reads | stays app side; core reads go with step 10 | — | — |
-| `Ctx.renderer`, `Ctx.host` | `Box<dyn …>` | renderer, Host | outside World: `Ctx { world, renderer, host, rec, archive, audio }` | 9h | — |
+| holder (file) | kind | holds | target owner | 9a | 9b | 9c |
+|---|---|---|---|---|---|---|
+| `PlayerRef` in GameManager, BulletManager, EnemyManager, Stage, Hud, Gui (player.rs) | `Rc<RefCell<Player>>` | Player 0x17D5EF8 | `GameManager.player` | **gone**: `Ctx.player: Option<Box<Player>>` | — | — | — |
+| `Player.world` (player.rs) | `Weak<RefCell<BulletManager>>` | link to items | parameter `items: Option<&mut ItemManager>` | **gone** | items from `ctx.bullets` in `PlayerTask::calc` | — |
+| ascii `Gauge.player` | `Weak<RefCell<Player>>` | gauge / marker reads | parameter `Option<&Player>` | **gone** | — | — |
+| `BulletManager.enemies` (bullet.rs) | `Weak<RefCell<EnemyManager>>` | time-orb spell bonus | `&mut EnemyManager` at the bullet calc | **gone** (looked up through the GM until 9c) | still through the GM (`BulletTask::calc`) | `ctx.enemies` in `BulletTask::calc` |
+| `GameManager.{stage,bullets,enemies,hud}` (gamemgr.rs) | `Option<Rc<RefCell<_>>>` | stage-time subsystems | `GameManager` fields (plain) | 9b–9e | `bullets` **gone**: `Ctx.bullets: Option<Box<BulletManager>>` | `enemies` **gone**: `Ctx.enemies: Option<Box<EnemyManager>>` (`EnemyTask` forwarder, `em!`) |
+| `EnemyManager.{bullets,stage,msg}` (enemy.rs) | `Rc<RefCell<_>>` | cross links | parameters / `Sys` fields | 9b, 9d, 9e | `bullets` **gone**: `Sys.bullets` (`bm!`, `with_bullets`) | `ecl: Arc<Ecl>` (copied on a write into the file); stage / msg stay for 9d / 9e |
+| `Hud.{msg,enemies,stage}` (hud.rs) | `Rc<RefCell<_>>` | Dialogue owned here, links | `GameManager.msg`; params | 9c–9e | items via `ctx.bullets` (no `enemies.bullets` hop) | `enemies` **gone**: `ctx.enemies` in the task fns, `&EnemyManager` params (`boss_calc`, `bar_shown`) |
+| `Gui.enemies` (gui.rs) | `Rc<RefCell<EnemyManager>>` | spell state | param | 9c | — | **gone**: `ctx.enemies`; `handle` / `read_bonus` take `&EnemyManager` |
+| `Stage.sparkles` (stage.rs) | `RefCell` | draw-phase sparkle points read by the emit | plain field written in `draw_step` (decision 2) | 9d | — | — |
+| `EffectManager` (effect.rs) | `Rc<RefCell<_>>` task | `level` only (state already in `Ctx.effects`) | `World.effects` + Node | 9f | — | — |
+| `ScreenEffect` (effect.rs) | one `TaskRef` per effect | type, alpha, timer | pool `World.screen_fx: Vec<Option<ScreenEffect>>`, Node by slot | 9f | — | — |
+| `ReplayTask` (replay.rs) | `TaskRef`, 4 nodes | playback / record state | `GameManager.replay` | 9g | — | boss test reads `ctx.enemies` (`boss_active(Option<&EnemyManager>)`) |
+| `gamemgr::CURRENT` (gamemgr.rs:535) | `thread_local` `Weak<RefCell<GameManager>>` | the running GM, read by player / bullet calc (interim), ascii, replay, demosync, session tools | `World.gm: Option<GameManager>` | 9g | no bullet reads left (player calc, demosync, session use `ctx.bullets`) | no enemy reads left (ascii continue menu, replay, player calc, demosync, session use `ctx.enemies`) |
+| `Supervisor.scene_task` (supervisor.rs) | `Option<TaskRef>` | GM / MainMenu / Result / Ending / MusicRoom | `World.scene: Scene` enum | 9g | — | `drop_scene` drops `ctx.enemies` |
+| `AsciiManager`, `AnmDebug`, `Supervisor` | `TaskRef` | menus, debug | `World` fields | 9g | — | — |
+| `Tasks<Ctx>` payload (task.rs) | `Rc<RefCell<dyn Task>>` | every node | `Node` (`Copy` enum) | 9h | — | — |
+| `rng::TRACE` / `CALLS` (rng.rs:85) | `thread_local` | debug call-site log (`TH08_SESSION_RNG`) | `Rng.trace: Option<Vec<String>>` (debug, not compared) | 9h | — | — |
+| `settings::SETTINGS` | `OnceLock` | app/tool settings, debug reads | stays app side; core reads go with step 10 | — | — | — |
+| `Ctx.renderer`, `Ctx.host` | `Box<dyn …>` | renderer, Host | outside World: `Ctx { world, renderer, host, rec, archive, audio }` | 9h | — | — |
 
 ## 2. Cross-subsystem reads: how each becomes a borrow or a parameter
 
@@ -35,9 +35,9 @@ subsystem per run; each run `tools/arch_check run target/arch_ref` (T D), batch 
 |---|---|---|
 | any stage subsystem → player | `self.player.borrow*()` | `Sys.player: Option<&mut Player>` (`pl!(sys)`), or `ctx.player` in task fns; `sys.with_player(|p, sys| …)` where a call needs both (the original passes the player and reads globals) — **done 9a** |
 | player calc → bullet items, enemy dialogue flag | `Weak` / `CURRENT` | 9a: through the GM (`current()`); 9h: `World.gm` disjoint fields |
-| bullet calc → enemy spell bonus | `Weak` | 9a: through the GM; 9c: `&mut EnemyManager` from the caller |
+| bullet calc → enemy spell bonus | `Weak` | 9a: through the GM; 9c: `ctx.enemies` in `BulletTask::calc` — **done 9c** |
 | enemy (ECL) → bullets | `self.bullets.borrow_mut()` | `Sys.bullets: Option<&mut BulletManager>` (`bm!(sys)`, `sys.with_bullets(…)`; None inside the bullet and player calcs) — **done 9b** |
-| enemy → stage, msg; hud → stage, enemies, msg; gui → enemies | `Rc` fields | parameters at the task fn (`ctx.<x>` disjoint field borrows) |
+| enemy → stage, msg; hud → stage, enemies, msg; gui → enemies | `Rc` fields | parameters at the task fn (`ctx.<x>` disjoint field borrows) — hud / gui → enemies **done 9c** (`em!(ctx)`, `&EnemyManager` params) |
 | ascii / replay / tools → GM parts | `current()` | `ctx.gm.as_ref()` |
 
 ## 3. Chain payload: keep `dyn Task` until the last run
@@ -56,7 +56,7 @@ GM's: created by `GameManager::register`, dropped by `Supervisor::drop_scene`.
 |---|---|---|---|
 | 9a (IMPL178) | plan; Player; clone test scaffold (`src/worldclone.rs`) | player, bullet, enemy, eclvm, gamemgr, hud, gui, stage, ascii, game | — |
 | 9b (IMPL180, **done**) | BulletManager → `Ctx.bullets` (`BulletTask` forwarder, `Clone`, templates `Arc<[Template]>`); `Sys.bullets`; items reached by the player calc through it; clone test adds bullets + items | bullet, item, enemy, eclvm, gamemgr, hud, player, demosync, bin/session, bin/demosync, game, supervisor, worldclone | no (enemy, eclvm) |
-| 9c | EnemyManager → `Ctx.enemies`; ECL `with_taken` named; bullet → enemy and gui/hud → enemy links as params | enemy, eclvm, gui, hud, ascii, replay, bullet, gamemgr | after 9b |
+| 9c (IMPL181, **done**) | EnemyManager → `Ctx.enemies` (`EnemyTask` forwarder, `Clone`, `ecl: Arc<Ecl>` copied on an ECL write into the file); ECL take/put named `EnemyManager::with_taken`; bullet → enemy and gui/hud → enemy links as params / `ctx.enemies`; clone test adds the enemy manager with a synthetic ECL | enemy, eclvm, gui, hud, ascii, replay, bullet, gamemgr, player, demosync, bin/session, bin/demosync, game, supervisor, worldclone, th08-formats ecl (`Ecl: Clone`) | after 9b |
 | 9d | Stage → `Ctx.stage`; `sparkles` RefCell → draw-step field | stage, enemy, hud, gamemgr | after 9c; **parallel with 9f** |
 | 9e | Hud, Gui, Dialogue → `Ctx` fields; `Hud.msg` / `EnemyManager.msg` links | hud, gui, msg, enemy, ascii, gamemgr | after 9d |
 | 9f | EffectManager + ScreenEffect pool in `Ctx.effects` | effect, game, supervisor (loading overlay) | **parallel with 9d** (disjoint files; gamemgr register line only) |

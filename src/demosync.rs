@@ -65,10 +65,9 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     let Some(p) = ctx.player.as_deref() else {
         return row;
     };
-    let Some(gm) = crate::gamemgr::current() else {
+    if crate::gamemgr::current().is_none() {
         return row;
-    };
-    let gm = gm.borrow();
+    }
     let st = &p.stats;
     row[5] = p.pos[0].to_bits() as i64;
     row[6] = p.pos[1].to_bits() as i64;
@@ -84,8 +83,7 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     if let Some(b) = ctx.bullets.as_deref() {
         row[16] = b.live as i64;
     }
-    if let Some(e) = &gm.enemies {
-        let e = e.borrow();
+    if let Some(e) = ctx.enemies.as_deref() {
         row[17] = e
             .enemies
             .iter()

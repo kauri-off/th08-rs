@@ -1454,15 +1454,11 @@ impl Task<Ctx> for PlayerTask {
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let inp = ctx.input.game_view();
-        let gm = crate::gamemgr::current();
-        let gm = gm.as_ref().and_then(|g| g.try_borrow().ok());
         let p = ctx.player.as_deref_mut().expect("player");
         // 0x164D2C8 gameplay frame counter (11 §2), read after GameMgr_Calc (prio 2) incremented it.
         p.frames = ctx.game.frame_counter as i32;
         // The dialogue state is read live: the previous frame's dialogue calc (prio 12) ran after the enemies.
-        if let Some(e) = gm.as_ref().and_then(|g| g.enemies.as_ref())
-            && let Ok(e) = e.try_borrow()
-        {
+        if let Some(e) = ctx.enemies.as_deref() {
             p.env.dialogue = e.dialogue_active();
         }
         // Items of the bullet manager (08 §8), held for the player's calc.

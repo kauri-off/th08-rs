@@ -399,10 +399,8 @@ pub fn take_recording(g: &mut crate::gamemgr::Game, now: crate::host::LocalTime)
 }
 
 // The boss test 0x42F1F0 used by fast playback (15 §3.3).
-fn boss_active() -> bool {
-    crate::gamemgr::current()
-        .and_then(|g| g.borrow().enemies.clone())
-        .is_some_and(|e| e.borrow().bosses.iter().any(Option::is_some))
+fn boss_active(enemies: Option<&crate::enemy::EnemyManager>) -> bool {
+    enemies.is_some_and(|e| e.bosses.iter().any(Option::is_some))
 }
 
 // Replay_FastForward 0x452490 (15 §3.3): true = restart the calc chain (6). The boss test 0x42F1F0 is made last.
@@ -557,7 +555,7 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
                         g.dialogue_skippable,
                         g.replay_speed,
                         self.frame,
-                        boss_active,
+                        || boss_active(ctx.enemies.as_deref()),
                     )
                 {
                     return Ret::Restart;

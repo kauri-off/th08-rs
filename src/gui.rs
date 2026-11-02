@@ -56,7 +56,6 @@ pub type Queue = Vec<Req>;
 
 // g_Gui 0x4EA670.
 pub struct Gui {
-    enemies: Rc<RefCell<EnemyManager>>,
     // VMs at +0x120 + k·0x2A4, roles in the 12 §5.8 table; 3 and 5 never get a script.
     vms: [AnmVm; 14],
     // Pending Text_RenderToVm requests: (VM, Shift-JIS text, colour, x inside the strip).
@@ -78,10 +77,9 @@ pub struct Gui {
 }
 
 impl Gui {
-    pub fn register(ctx: &mut Ctx, enemies: Rc<RefCell<EnemyManager>>) -> Result<Rc<RefCell<Gui>>> {
+    pub fn register(ctx: &mut Ctx) -> Result<Rc<RefCell<Gui>>> {
         ctx.gui_queue.clear();
         let g = Rc::new(RefCell::new(Gui {
-            enemies,
             vms: Default::default(),
             texts: Vec::new(),
             name_only: false,
@@ -156,6 +154,7 @@ impl Gui {
         r: Req,
         sound: &mut crate::sound::Queue,
         panel: &mut crate::hud::Panel,
+        en: &EnemyManager,
     ) {
         let v = &mut self.vms;
         match r {
@@ -192,9 +191,7 @@ impl Gui {
             } => {
                 if face >= 0 {
                     // File pointer g_Gui+0x262C = portrait k = 2, swapped by Msg_Start(0) in 6B / Ex (12 §5.8, 10 §4).
-                    let slot = self
-                        .enemies
-                        .borrow()
+                    let slot = en
                         .msg
                         .as_ref()
                         .map_or(SPELL_FACE_SLOT, |m| m.borrow().face_slot[2]);
@@ -273,8 +270,7 @@ impl Gui {
 
     // Bonus line: 8 digits of the bonus, captures and attempts (3 digits each), leading zeros suppressed.
     // Live +0xFC: the card's, or after the card ended the value time orbs keep changing (07 §11.1).
-    fn read_bonus(&mut self) {
-        let en = self.enemies.borrow();
+    fn read_bonus(&mut self, en: &EnemyManager) {
         if let Some(s) = &en.g.spell {
             (self.bonus, self.capturable) = (s.bonus, s.capture);
         } else if let Some(l) = &en.g.spell_left {
@@ -357,6 +353,7 @@ impl Task<Ctx> for Gui {
                 r,
                 &mut ctx.sound,
                 &mut ctx.panel,
+                ctx.enemies.as_deref().expect("enemy manager"),
             );
         }
         if self.card >= 0 {
@@ -371,7 +368,7 @@ impl Task<Ctx> for Gui {
         // Nothing runs while bullets are frozen (GameFlags bit 10) or the freeze byte 0x160F534 is set (07 §11.1).
         if !frozen {
             // Steps 1 (card active) and 2 (capture ring) run before the VMs (07 §11.1).
-            let mut e = self.enemies.borrow_mut();
+            let e = crate::em!(ctx);
             if e.g.spell.is_some() {
                 // Step 1.2: fade the bonus line while the player is in the top band x ≥ 64, y < 64.
                 let p = crate::pl!(ctx).pos;
@@ -387,7 +384,6 @@ impl Task<Ctx> for Gui {
             }
             let ended = e.spell_step(&ctx.anm, &mut crate::sys!(ctx));
             e.capture_ring_step(&mut ctx.anm, &mut crate::sys!(ctx));
-            drop(e);
             if ended {
                 // Spell_HideName from step 1.1 lands before this frame's VM run.
                 for r in std::mem::take(&mut ctx.gui_queue) {
@@ -397,6 +393,7 @@ impl Task<Ctx> for Gui {
                         r,
                         &mut ctx.sound,
                         &mut ctx.panel,
+                        ctx.enemies.as_deref().expect("enemy manager"),
                     );
                 }
             }
@@ -408,9 +405,9 @@ impl Task<Ctx> for Gui {
             }
             // Step 3: Timer_Decrement(+0x108) at game speed after the VMs, also while no card is active (07 §11.1).
             let (speed, sr) = (ctx.anm.speed, ctx.anm.slowdown_restore);
-            self.enemies.borrow_mut().g.spell_remaining.dec(speed, sr);
+            crate::em!(ctx).g.spell_remaining.dec(speed, sr);
         }
-        self.read_bonus();
+        self.read_bonus(ctx.enemies.as_deref().expect("enemy manager"));
         Ret::Next
     }
 
@@ -418,7 +415,7 @@ impl Task<Ctx> for Gui {
     // bonus read, the text renders, the VM 10 / 11 / 12 positions and the tint-off; the emit draws.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
-        self.read_bonus();
+        self.read_bonus(ctx.enemies.as_deref().expect("enemy manager"));
         self.flush_texts(ctx);
         if Self::shown(&self.vms[6]) {
             let p = self.vms[6].pos;

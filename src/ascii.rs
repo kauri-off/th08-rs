@@ -1322,6 +1322,8 @@ impl ContinueMenu {
         panel: &mut crate::hud::Panel,
         // `Host::ticks_ms` for the play-time marks (15 §2.9).
         now: u64,
+        // The running stage's enemy manager (spell flag bit 9, captured).
+        enemies: Option<&crate::enemy::EnemyManager>,
     ) -> bool {
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
@@ -1367,9 +1369,7 @@ impl ContinueMenu {
             // Queued, copied after this frame's Present (12 §3 capture timing, §4).
             queue_capture(ctx_anm, &self.cap_vm);
             // Default "No"; "Yes" only in spell practice with spell flag bit 9 (captured) clear (12 §4).
-            let captured = gamemgr::current()
-                .and_then(|gm| gm.borrow().enemies.clone())
-                .is_some_and(|e| e.borrow().g.spell_captured);
+            let captured = enemies.is_some_and(|e| e.g.spell_captured);
             self.yes = g.spell_practice() && !captured;
         }
         // Input from frame 30 (cursor on "No") or frame 4 (cursor on "Yes") (12 §4).
@@ -1534,6 +1534,7 @@ impl Task<Ctx> for AsciiManager {
                 &mut ctx.sound,
                 &mut ctx.panel,
                 ctx.host.ticks_ms(),
+                ctx.enemies.as_deref(),
             );
             if exited && let Some(p) = ctx.player.as_deref_mut() {
                 p.stats.score_disp = p.stats.score10;
@@ -1668,6 +1669,7 @@ mod tests {
                 &mut Default::default(),
                 &mut Default::default(),
                 0,
+                None,
             );
         }
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1681,6 +1683,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
         );
         assert!(m.yes);
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1693,6 +1696,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
         );
         assert_eq!(m.vms[1].color, [0x80, 0x80, 0xFF, 0xFF]);
     }
@@ -1719,6 +1723,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
         );
         assert!(m.open && !m.yes);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
@@ -1745,6 +1750,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_REPLAY_END));
         assert!(g.play_clock.is_some() && m.vms.is_empty());
@@ -1778,6 +1784,7 @@ mod tests {
                 &mut Default::default(),
                 &mut Default::default(),
                 0,
+                None,
             );
         }
         m.update(
@@ -1789,6 +1796,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
         );
         assert!(m.yes);
         let frame = m.frame;
@@ -1801,6 +1809,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RELOAD));
         assert!(!m.open && m.frame == frame);
@@ -1819,6 +1828,7 @@ mod tests {
                 &mut Default::default(),
                 &mut Default::default(),
                 0,
+                None,
             );
         }
         m.update(
@@ -1830,6 +1840,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
         );
         for _ in 0..19 {
             m.update(
@@ -1841,6 +1852,7 @@ mod tests {
                 &mut Default::default(),
                 &mut Default::default(),
                 0,
+                None,
             );
             assert_eq!(g.game_over, 1);
         }
@@ -1853,6 +1865,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RESULT));
         assert!(!m.open && m.vms.iter().all(|v| !v.visible()));

@@ -1,8 +1,10 @@
 //! World clone round trip (ARCH_A §2.3 `World: Clone`, REWRITE_PLAN "New tests"): a state cloned mid-run continues
 //! exactly like the original. Step 9a covers the player and the `Sys` value parts, 9b the bullet manager with its
-//! items; each later step-9 run adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md).
+//! items, 9c the enemy manager with a synthetic ECL; each later step-9 run adds its subsystem to `World` here
+//! (docs/arch/STEP9_WORLD.md).
 use crate::anmmgr::AnmManager;
-use crate::bullet::{BulletDesc, BulletManager};
+use crate::bullet::BulletManager;
+use crate::enemy::EnemyManager;
 use crate::game::TestSys;
 use crate::input::{self, Input};
 use crate::player::Player;
@@ -11,6 +13,8 @@ struct World {
     // The player and the bullet manager (`TestSys::player`, `::bullets`) next to rng, effects, overlays, panel,
     // queues, flags and rank.
     sys: TestSys,
+    // The enemy manager (`Ctx.enemies`), its ECL shared with the clone until either writes into it.
+    enemies: Box<EnemyManager>,
     anm: AnmManager,
     inp: Input,
     // The frame's SE ids with their pans, as Sound_Update drains them (13 §1.2).
@@ -21,6 +25,7 @@ impl Clone for World {
     fn clone(&self) -> Self {
         World {
             sys: self.sys.clone(),
+            enemies: self.enemies.clone(),
             anm: anm_copy(&self.anm),
             inp: self.inp,
             se: self.se.clone(),
@@ -69,8 +74,11 @@ impl World {
             ..TestSys::default()
         };
         sys.bullets = Some(Box::new(BulletManager::new(&mut anm, &mut sys.rng)));
+        let mut enemies = Box::new(EnemyManager::new(ecl(), crate::pl!(sys), 1));
+        enemies.stage_start(&mut sys.rng, crate::pl!(sys), 0, 0);
         World {
             sys,
+            enemies,
             anm,
             inp: Input::default(),
             se: Vec::new(),
@@ -78,8 +86,8 @@ impl World {
     }
 
     // One game frame of the parts present so far, in chain order: Player_Calc (prio 9) with the player and the
-    // bullet manager lent out of its `Sys` (items passed in), as `PlayerTask::calc`; a ring of 12 aimed bullets
-    // every 40 frames (an ECL fire, prio 11); BulletMgr_Calc (prio 14) as `BulletTask::calc`.
+    // bullet manager lent out of its `Sys` (items passed in), as `PlayerTask::calc`; EnemyMgr_Calc (prio 11) as
+    // `EnemyTask::calc`; BulletMgr_Calc (prio 14) with the time-orb spell bonus, as `BulletTask::calc`.
     fn frame(&mut self, f: u32) {
         let mut bits = input::SHOT;
         bits |= if (f / 45) % 2 == 0 {
@@ -108,21 +116,12 @@ impl World {
                 }
             })
         });
-        if f % 40 == 0 {
-            let d = BulletDesc {
-                aim_mode: 1,
-                count1: 12,
-                count2: 2,
-                speed1: 2.0,
-                speed2: 1.0,
-                angle1: 0.1 * (f / 40) as f32,
-                origin: [192.0, 100.0, 0.0],
-                ..BulletDesc::default()
-            };
-            let pos = crate::pl!(sys).pos;
-            sys.with_bullets(|b, sys| b.spawn_pattern(anm, &d, pos, sys));
-        }
+        self.enemies.step(anm, sys);
         sys.with_bullets(|b, sys| b.step(anm, sys));
+        let orbs = std::mem::take(&mut crate::pl!(sys).stats.spell_bonus_orbs);
+        for _ in 0..orbs {
+            self.enemies.spell_add_bonus(8000);
+        }
         self.se = self.sys.sound.drain();
     }
 
@@ -174,7 +173,63 @@ impl World {
                 .filter(|i| i.alive)
                 .map(|i| (i.kind as u64) << 32 | i.pos[1].to_bits() as u64),
         );
+        let m = &*self.enemies;
+        t.extend([m.clock.cur as u64, m.full as u64, m.g.drop_counter as u64]);
+        t.extend(m.enemies.iter().filter(|e| e.alive()).flat_map(|e| {
+            [
+                (e.life as u64) << 32 | e.main.ctx.clock.cur as u32 as u64,
+                (e.final_pos[0].to_bits() as u64) << 32 | e.final_pos[1].to_bits() as u64,
+            ]
+        }));
+        t.extend(m.ecl.data.iter().map(|&b| b as u64));
         t
+    }
+}
+
+// ECL instruction (07 §2.1): time, op, size, rank mask 0xFF, i32 args.
+fn ins(time: i32, op: i16, args: &[i32]) -> Vec<u8> {
+    let mut v = time.to_le_bytes().to_vec();
+    v.extend(op.to_le_bytes());
+    v.extend(((12 + 4 * args.len()) as i16).to_le_bytes());
+    v.extend([0, 0xFF, 0, 0]);
+    v.extend(args.iter().flat_map(|a| a.to_le_bytes()));
+    v
+}
+
+// A stage ECL with one timeline of five `spawn_randx` (07 §3 op 2, an RNG draw each) and one enemy sub: a random
+// move (op 67, RNG), a write into the file itself (op 6 to a raw destination, 07 §6: a write, so the clone copies
+// the shared file), an aimed two-row ring (op 98, 07 §9), then a jump back to time 0 (op 4).
+fn ecl() -> crate::ecl::Ecl {
+    let f = |x: f32| x.to_bits() as i32;
+    let mut data = vec![0u8; 0x48];
+    let sub = data.len();
+    let body = [
+        ins(0, 67, &[50, 0, f(1.5)]),
+        ins(0, 6, &[0, 7]),
+        ins(30, 98, &[0, 6, 2, f(2.0), f(1.0), 0, f(0.2), 0]),
+    ];
+    let len: usize = body.iter().map(Vec::len).sum();
+    for i in body {
+        data.extend(i);
+    }
+    data.extend(ins(60, 4, &[0, -(len as i32)]));
+    data.extend(ins(0, -1, &[]));
+    let tl = data.len();
+    for time in [10i32, 100, 250, 400, 600] {
+        let mut v = time.to_le_bytes().to_vec();
+        v.extend(2i16.to_le_bytes());
+        v.extend([8 + 4 * 7, 0xFF]);
+        for a in [0, f(64.0), f(320.0), f(80.0), 600, 0, 100] {
+            v.extend(a.to_le_bytes());
+        }
+        data.extend(v);
+    }
+    data.extend((-1i32).to_le_bytes());
+    data.extend([0u8; 4]);
+    crate::ecl::Ecl {
+        data,
+        subs: vec![sub],
+        timelines: vec![tl],
     }
 }
 
@@ -201,9 +256,9 @@ fn clone_continues_identically() {
     assert_ne!(t[..2], start[..2]);
     assert!(p.bombs_started > 0 && a.sys.rng.total > 0, "{:?}", &t[..18]);
     let bm = a.sys.bullets.as_deref().unwrap();
-    assert!(
-        bm.patterns > 0 && bm.live > 0 && bm.frame == 900,
-        "{}",
-        bm.live
-    );
+    assert!(bm.patterns > 20 && bm.frame == 900, "{}", bm.patterns);
+    // All five enemies spawned and fired (the patterns above); each run wrote into its own copy of the ECL file.
+    let (ma, mb) = (&a.enemies, &b.enemies);
+    assert_eq!(ma.enemies.iter().filter(|e| e.alive()).count(), 5);
+    assert!(!std::sync::Arc::ptr_eq(&ma.ecl, &mb.ecl));
 }

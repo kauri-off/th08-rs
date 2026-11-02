@@ -53,6 +53,9 @@ pub struct Ctx {
     // Bullet manager 0xF54E90 (08 §2), with the item manager it holds: created by GameMgr's stage start (11 §3.1),
     // replaced by the next one, dropped with the game manager (11 §7). Step 9b interim owner (STEP9_WORLD.md).
     pub bullets: Option<Box<crate::bullet::BulletManager>>,
+    // Enemy manager 0x577F20 (07 §4): created by GameMgr's stage start (11 §3.1), dropped with the game manager
+    // (11 §7). Step 9c interim owner (STEP9_WORLD.md).
+    pub enemies: Option<Box<crate::enemy::EnemyManager>>,
     // Port queue of bomb areas created by effects (14 §2.13).
     pub bomb_areas: crate::bomb::AreaQueue,
     // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
@@ -161,6 +164,14 @@ macro_rules! bm {
         $s.bullets
             .as_deref_mut()
             .expect("no bullet manager in this Sys")
+    };
+}
+
+// The enemy manager of a `Ctx` inside a running stage (a field borrow, like `bm!`).
+#[macro_export]
+macro_rules! em {
+    ($s:expr) => {
+        $s.enemies.as_deref_mut().expect("no enemy manager")
     };
 }
 
@@ -316,6 +327,7 @@ impl Ctx {
             hud_kept: None,
             player: None,
             bullets: None,
+            enemies: None,
             bomb_areas: Vec::new(),
             timer_pause: 0,
             load_frames: 0,

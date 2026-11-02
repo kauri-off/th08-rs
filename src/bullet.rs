@@ -1678,11 +1678,10 @@ impl Task<Ctx> for BulletTask {
         );
         // Item_CollectTimeOrb: Spell_AddBonus(8000) per orb inside this calc, so this frame's Spell_Draw shows it (08 §8.5).
         let orbs = std::mem::take(&mut crate::pl!(ctx).stats.spell_bonus_orbs);
-        // The spell state g_Gui is held by the enemy manager, owned by the game manager (step 9a).
-        let e = crate::gamemgr::current().and_then(|g| g.borrow().enemies.clone());
-        if let Some(e) = e {
+        // The spell state g_Gui is held by the enemy manager (`ctx.enemies`, step 9c).
+        if let Some(e) = ctx.enemies.as_deref_mut() {
             for _ in 0..orbs {
-                e.borrow_mut().spell_add_bonus(8000);
+                e.spell_add_bonus(8000);
             }
         }
         Ret::Next

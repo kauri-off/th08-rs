@@ -719,12 +719,14 @@ pub struct Payout {
 }
 
 // Enemy manager 0x577F20 (07 §4).
+#[derive(Clone)]
 pub struct EnemyManager {
     pub enemies: Vec<Box<Enemy>>,
     spare: Vec<Box<Enemy>>,
     // mgr+0 template enemy (07 §4.2), copied into every spawned slot.
     template: Box<Enemy>,
-    pub ecl: Ecl,
+    // Stage ECL file (07 §2); shared between clones, copied on the first write into the file by a clone (07 §6).
+    pub ecl: std::sync::Arc<Ecl>,
     // 0xF54CC0[4] boss table.
     pub bosses: [Option<usize>; 4],
     // mgr+0x9DCDD0 + 16·i: {clock, ip} per timeline (07 §3).
@@ -793,7 +795,7 @@ impl EnemyManager {
                 orb_acc: step,
                 ..Enemy::default()
             }),
-            ecl,
+            ecl: std::sync::Arc::new(ecl),
             bosses: [None; 4],
             timelines,
             sync: [-1; 4],
@@ -813,12 +815,13 @@ impl EnemyManager {
         }
     }
 
+    // EnemyManager_Register: the manager becomes `ctx.enemies` (replacing the last stage's) plus its three nodes.
     pub fn register(
         ctx: &mut Ctx,
         index: usize,
         stage: Option<Rc<RefCell<Stage>>>,
         diff: i32,
-    ) -> Result<Rc<RefCell<EnemyManager>>> {
+    ) -> Result<task::TaskRef<Ctx>> {
         let spell = ctx.game.spell_practice().then_some(ctx.game.card);
         let (ecl_name, enm) = files(index, spell);
         let ecl = ecl::parse(ctx.archive.read(&ecl_name)?)?;
@@ -835,12 +838,12 @@ impl EnemyManager {
         m.fast_forward = ctx.core.stage_frame;
         m.debug_damage = ctx.core.enemy_dmg;
         m.stage_start(&mut ctx.rng, p, index, ctx.game.flags);
-        let m = Rc::new(RefCell::new(m));
-        let t: task::TaskRef<Ctx> = m.clone();
+        ctx.enemies = Some(Box::new(m));
+        let t = task::task(EnemyTask);
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t)?;
-        Ok(m)
+        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t.clone())?;
+        Ok(t)
     }
 
     // Stage start values owned by the game manager (11 §3.1) and EnemyManager_Load's two draws (11 §1.5, 07 §10.4).
@@ -958,22 +961,26 @@ impl EnemyManager {
         }
     }
 
-    // The running enemy is swapped out for a placeholder whose alive bit keeps its slot reserved. The placeholder
-    // keeps the chain links (07 §6 var 10096: the original's walks pass through the running enemy).
-    pub(crate) fn take(&mut self, idx: usize) -> Box<Enemy> {
+    // The running enemy is swapped out for a placeholder whose alive bit keeps its slot reserved, then put back
+    // (ECL take/put, ARCH_A §2.3). The placeholder keeps the chain links (07 §6 var 10096: the original's walks pass
+    // through the running enemy); links changed in the slot during the run (a neighbour unlinked, the running enemy
+    // unlinked) win.
+    pub(crate) fn with_taken<R>(
+        &mut self,
+        idx: usize,
+        f: impl FnOnce(&mut Self, &mut Enemy) -> R,
+    ) -> R {
         let mut p = self.spare.pop().unwrap_or_default();
         p.flags = A_ALIVE;
         let e = &self.enemies[idx];
         (p.chain_prev, p.chain_next, p.root) = (e.chain_prev, e.chain_next, e.root);
-        std::mem::replace(&mut self.enemies[idx], p)
-    }
-
-    // Links changed in the slot during the run (a neighbour unlinked, the running enemy unlinked) win.
-    pub(crate) fn put(&mut self, idx: usize, mut e: Box<Enemy>) {
+        let mut e = std::mem::replace(&mut self.enemies[idx], p);
+        let r = f(self, &mut e);
         let p = &self.enemies[idx];
         (e.chain_prev, e.chain_next, e.root) = (p.chain_prev, p.chain_next, p.root);
         let p = std::mem::replace(&mut self.enemies[idx], e);
         self.spare.push(p);
+        r
     }
 
     // Enemy_Free: also clears the aimed pointer (14 §3.1, 07 §10.1); a boss fades its ENEMY marker out (12 §5.10).
@@ -2818,7 +2825,10 @@ impl EnemyManager {
     }
 }
 
-impl Task<Ctx> for EnemyManager {
+// The enemy manager's chain nodes (07 §10.6); they reach the manager through its owner (`ctx.enemies`, step 9c).
+pub struct EnemyTask;
+
+impl Task<Ctx> for EnemyTask {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
             ctx.anm.unload(&mut ctx.rec, ANM_ENEMY);
@@ -2827,15 +2837,16 @@ impl Task<Ctx> for EnemyManager {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        for _ in 0..std::mem::take(&mut self.fast_forward) {
-            self.step(&mut ctx.anm, &mut crate::sys!(ctx));
+        let m = ctx.enemies.as_deref_mut().expect("enemy manager");
+        for _ in 0..std::mem::take(&mut m.fast_forward) {
+            m.step(&mut ctx.anm, &mut crate::sys!(ctx));
             let b = ctx.bullets.as_deref_mut().expect("bullet manager");
             b.step(
                 &mut ctx.anm,
                 &mut crate::sys!(ctx; ctx.player.as_deref_mut(); None),
             );
         }
-        self.step(&mut ctx.anm, &mut crate::sys!(ctx));
+        m.step(&mut ctx.anm, &mut crate::sys!(ctx));
         // Timeline op 16 sets the game-over byte during this calc (11 §4.2).
         crate::pl!(ctx).store_game_over(&mut ctx.game);
         Ret::Next
@@ -2844,13 +2855,15 @@ impl Task<Ctx> for EnemyManager {
     // Draw prio 8 → layers 0–1, prio 11 → layers 2–3 (07 §10.6).
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let p = ctx.player.as_deref().expect("player");
-        self.draw_layer_step(&mut ctx.anm, p, tag == 1, ctx.game.flags);
+        let m = ctx.enemies.as_deref_mut().expect("enemy manager");
+        m.draw_layer_step(&mut ctx.anm, p, tag == 1, ctx.game.flags);
         Ret::Next
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
         let p = ctx.player.as_deref().expect("player");
-        self.draw_layer_emit(&ctx.anm, rec, p, tag == 1, ctx.game.flags);
+        let m = ctx.enemies.as_deref().expect("enemy manager");
+        m.draw_layer_emit(&ctx.anm, rec, p, tag == 1, ctx.game.flags);
     }
 }
 
@@ -2979,7 +2992,7 @@ mod tests {
     #[test]
     fn kill_non_bosses_sets_sub_only() {
         let mut m = empty_manager();
-        m.ecl.subs = vec![0, 40];
+        std::sync::Arc::get_mut(&mut m.ecl).unwrap().subs = vec![0, 40];
         for k in 0..2 {
             let e = &mut m.enemies[k];
             (e.flags, e.life, e.death_sub) = (A_ALIVE, 100, 1);

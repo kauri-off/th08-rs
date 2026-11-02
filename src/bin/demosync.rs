@@ -84,10 +84,9 @@ fn main() -> anyhow::Result<()> {
             }
         }
         if f >= a && f <= b && th08::settings::get().bdump {
-            if let Some(gm) = th08::gamemgr::current() {
-                let gm = gm.borrow();
-                if let Some(em) = &gm.enemies {
-                    for (i, x) in em.borrow().enemies.iter().enumerate() {
+            if th08::gamemgr::current().is_some() {
+                if let Some(em) = ctx.enemies.as_deref() {
+                    for (i, x) in em.enemies.iter().enumerate() {
                         if x.alive() {
                             println!(
                                 "  e{i} sub {} t {} pos {:.1},{:.1} fl {:x} life {}",
