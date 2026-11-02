@@ -10,7 +10,6 @@ use crate::fmath::{cos_f, sin_cos_f, sin_f};
 use crate::game::Ctx;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
-use std::cell::RefCell;
 use std::f32::consts::PI;
 
 // EffectMgr_Calc prio 13, EffectMgr_Draw 0x427F00 prio 12 (13 §2.3, §2.4).
@@ -136,6 +135,10 @@ pub struct Effects {
     screen: Vec<ScreenEffect>,
     // Release request of the loading darken overlay (0x45C160), consumed by its calc (13 §3).
     loading_release: bool,
+    // Effect level byte (cfg, 0x17CE894) copied by EffectMgr_Register (13 §2.4); list B reads the stage's copy.
+    pub level: u8,
+    // Live screen effects ("ScreenInf", 13 §3), one per `ScreenTask` slot; independent of the manager's reset.
+    pub screen_fx: Vec<Option<ScreenEffect>>,
 }
 
 impl Default for Effects {
@@ -152,6 +155,8 @@ impl Default for Effects {
             lists: Default::default(),
             screen: Vec::new(),
             loading_release: false,
+            level: 0,
+            screen_fx: Vec::new(),
         }
     }
 }
@@ -226,10 +231,12 @@ impl Effects {
         s
     }
 
-    // Manager reset at EffectMgr register / remove; the port's player-position mirror survives.
+    // Manager reset at EffectMgr register / remove; the port's player-position mirror and the screen effects (own
+    // chain nodes, 13 §3) survive.
     pub fn clear(&mut self) {
         *self = Effects {
             player: self.player,
+            screen_fx: std::mem::take(&mut self.screen_fx),
             ..Effects::default()
         };
     }
@@ -1125,6 +1132,7 @@ fn screen_fx(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32) -> ScreenEffect {
         loading: false,
         timer: Timer::default(),
         done: false,
+        nodes: 0,
     }
 }
 
@@ -1200,11 +1208,6 @@ impl Effects {
     }
 }
 
-// Effect manager task; effect level byte (cfg, 0x17CE894) for list B (13 §2.4).
-pub struct EffectManager {
-    pub level: u8,
-}
-
 // Slot-9 file (13 §5): table 0x4C7480 by stage index, or in spell practice for cards 0xD8–0xDD the eff09xx.anm entries
 // 9–14 of table 0x4C7144.
 pub fn bg_file(stage: usize, practice_card: Option<i16>) -> &'static str {
@@ -1231,22 +1234,24 @@ pub fn bg_file(stage: usize, practice_card: Option<i16>) -> &'static str {
     ][stage % 9]
 }
 
-impl EffectManager {
-    pub fn register(ctx: &mut Ctx) -> Result<std::rc::Rc<RefCell<EffectManager>>> {
-        let m = std::rc::Rc::new(RefCell::new(EffectManager {
-            level: ctx.game.cfg.effect_level,
-        }));
-        let t: task::TaskRef<Ctx> = m.clone();
+// The effect manager's chain nodes (13 §2.3, §2.4); the manager state is `ctx.effects` (step 9f).
+pub struct EffectTask;
+
+impl EffectTask {
+    // EffectMgr_Register: calc prio 13 + draw prio 12, the effect level copied from the config.
+    pub fn register(ctx: &mut Ctx) -> Result<task::TaskRef<Ctx>> {
+        let t = task::task(EffectTask);
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
-        Ok(m)
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+        Ok(t)
     }
 }
 
-impl Task<Ctx> for EffectManager {
+impl Task<Ctx> for EffectTask {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             ctx.effects.clear();
+            ctx.effects.level = ctx.game.cfg.effect_level;
             ctx.anm.load(&mut ctx.rec, &ctx.archive, BG_SLOT, {
                 let card = ctx.game.spell_practice().then_some(ctx.game.card);
                 bg_file(ctx.game.stage, card)
@@ -1300,6 +1305,31 @@ pub struct ScreenEffect {
     timer: Timer,
     // Port-only: calc returned 0, the draw node removes itself.
     done: bool,
+    // Port-only: linked chain nodes; the pool slot is freed when the last one is removed.
+    nodes: u8,
+}
+
+// Live globals a screen-effect calc reads (13 §3): GameFlags, freeze byte 0x160F534, 0x18B8A2C, pause / game over,
+// gameplay frame counter 0x164D2C8.
+#[derive(Clone, Copy, Default)]
+pub struct ScreenEnv {
+    pub flags: u32,
+    pub timer_pause: i32,
+    pub load_frames: i32,
+    pub paused: bool,
+    pub frame_counter: u32,
+}
+
+impl ScreenEnv {
+    pub fn of(ctx: &Ctx) -> Self {
+        ScreenEnv {
+            flags: ctx.game.flags,
+            timer_pause: ctx.timer_pause,
+            load_frames: ctx.load_frames,
+            paused: ctx.game.paused != 0 || ctx.game.game_over != 0,
+            frame_counter: ctx.game.frame_counter,
+        }
+    }
 }
 
 // 0x4489CA(0) `Loading_StartDarken`: the loading darken overlay (type 5, 60 frames, black, draw prio 1), released when
@@ -1356,33 +1386,129 @@ pub fn screen_now(ctx: &mut Ctx, kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, p
 }
 
 pub fn register_pending(ctx: &mut Ctx) {
-    let list = std::mem::take(&mut ctx.effects.screen);
-    for s in list {
-        link(ctx, s);
+    for slot in ctx.effects.alloc_pending() {
+        link_slot(ctx, slot);
     }
 }
 
-// FuncChain_AddCalc (prio 3) + AddDraw (13 §3).
-fn link(ctx: &mut Ctx, mut s: ScreenEffect) {
-    s.timer.set(0);
-    let t = task::task(s);
-    let prio = s.prio;
+// FuncChain_AddCalc (prio 3) + AddDraw (13 §3): the effect goes into a free pool slot, its nodes forward to it.
+fn link(ctx: &mut Ctx, s: ScreenEffect) {
+    let slot = ctx.effects.alloc_screen(s);
+    link_slot(ctx, slot);
+}
+
+fn link_slot(ctx: &mut Ctx, slot: usize) {
+    let prio = ctx.effects.screen_fx[slot].map_or(0, |s| s.prio);
+    let t = task::task(ScreenTask { slot });
     if task::add(ctx, Chain::Calc, SCREEN_CALC_PRIO, 0, t.clone()).is_ok() {
         let _ = task::add(ctx, Chain::Draw, prio, 0, t);
     }
 }
 
+impl Effects {
+    // First free pool slot (else a new one); the slot number has no effect on chain order.
+    pub fn alloc_screen(&mut self, mut s: ScreenEffect) -> usize {
+        s.timer.set(0);
+        let slot = match self.screen_fx.iter().position(Option::is_none) {
+            Some(i) => i,
+            None => {
+                self.screen_fx.push(None);
+                self.screen_fx.len() - 1
+            }
+        };
+        self.screen_fx[slot] = Some(s);
+        slot
+    }
+
+    // The queued screen effects moved into pool slots, in queue order (`register_pending`).
+    pub fn alloc_pending(&mut self) -> Vec<usize> {
+        let list = std::mem::take(&mut self.screen);
+        list.into_iter().map(|s| self.alloc_screen(s)).collect()
+    }
+
+    // The screen-effect calc node of `slot` (13 §3); Remove also lets its draw node remove itself.
+    pub fn screen_calc(
+        &mut self,
+        slot: usize,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        env: ScreenEnv,
+    ) -> Ret {
+        let Some(mut s) = self.screen_fx[slot] else {
+            return Ret::Remove;
+        };
+        let r = s.step(anm, rng, env, &mut self.loading_release);
+        s.done = r == Ret::Remove;
+        self.screen_fx[slot] = Some(s);
+        r
+    }
+}
+
+// A screen effect's calc + draw nodes; the state is `ctx.effects.screen_fx[slot]` (step 9f).
+pub struct ScreenTask {
+    slot: usize,
+}
+
+impl Task<Ctx> for ScreenTask {
+    fn on_register(&mut self, ctx: &mut Ctx, _: Chain, _: u8) -> Result<()> {
+        if let Some(s) = &mut ctx.effects.screen_fx[self.slot] {
+            s.nodes += 1;
+        }
+        Ok(())
+    }
+
+    fn on_remove(&mut self, ctx: &mut Ctx, _: Chain, _: u8) {
+        let e = &mut ctx.effects.screen_fx[self.slot];
+        if let Some(s) = e {
+            s.nodes -= 1;
+            if s.nodes == 0 {
+                *e = None;
+            }
+        }
+    }
+
+    // Calc returning 0 removes the whole effect, draw node included (13 §3).
+    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        let env = ScreenEnv::of(ctx);
+        ctx.effects
+            .screen_calc(self.slot, &mut ctx.anm, &mut ctx.rng, env)
+    }
+
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        match ctx.effects.screen_fx[self.slot] {
+            Some(s) if !s.done => Ret::Next,
+            _ => Ret::Remove,
+        }
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+        if let Some(s) = ctx.effects.screen_fx[self.slot].filter(|s| !s.done) {
+            s.draw_fx(rec);
+        }
+    }
+}
+
 impl ScreenEffect {
+    // Test-only: (type, timer), alpha and p1 as raw bits.
+    #[cfg(test)]
+    pub fn trace(&self) -> [u64; 3] {
+        [
+            (self.kind as u64) << 32 | self.timer.cur as u32 as u64,
+            self.alpha.to_bits() as u64,
+            self.p[1] as u32 as u64,
+        ]
+    }
+
     // Offsets x then y, each one of {0, +a, −a} by Rng_Range(3): 2 RNG draws per frame.
-    fn shake(&self, ctx: &mut Ctx, a: f32) {
-        let mut pick = || match ctx.rng.range(3) {
+    fn shake(anm: &mut AnmManager, rng: &mut crate::rng::Rng, a: f32) {
+        let mut pick = || match rng.range(3) {
             0 => 0.0,
             1 => a,
             _ => -a,
         };
         let x = pick();
         let y = pick();
-        ctx.anm.screen_offset = [x, y];
+        anm.screen_offset = [x, y];
     }
 
     // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set (13 §3); both read live.
@@ -1391,34 +1517,18 @@ impl ScreenEffect {
     }
 }
 
-impl Task<Ctx> for ScreenEffect {
-    // Calc returning 0 removes the whole effect, draw node included (13 §3).
-    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let r = self.step(ctx);
-        self.done = r == Ret::Remove;
-        r
-    }
-
-    fn draw_step(&mut self, _: &mut Ctx, _: u8) -> Ret {
-        if self.done {
-            return Ret::Remove;
-        }
-        Ret::Next
-    }
-
-    fn emit(&self, _: &Ctx, rec: &mut Recorder, _: u8) {
-        if !self.done {
-            self.draw_fx(rec);
-        }
-    }
-}
-
 impl ScreenEffect {
     // Per-type calc (13 §3 table): alpha / amplitude from Timer_GetF (cur + frac), end / range tests on the integer cur.
-    fn step(&mut self, ctx: &mut Ctx) -> Ret {
+    fn step(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        env: ScreenEnv,
+        loading_release: &mut bool,
+    ) -> Ret {
         let t = self.timer.cur;
         let tf = self.timer.get_f();
-        let gs = ctx.anm.speed;
+        let gs = anm.speed;
         let [p0, p1, p2, p3] = self.p;
         let dur = p0.max(1);
         match self.kind {
@@ -1430,10 +1540,10 @@ impl ScreenEffect {
             }
             // 0x45BDC0: frozen → hold; 0x18B8A2C ≠ 0 → removed; else tick first, then end test, then a and 2 draws.
             1 => {
-                if Self::frozen(ctx.game.flags, ctx.timer_pause) {
+                if Self::frozen(env.flags, env.timer_pause) {
                     return Ret::Next;
                 }
-                if ctx.load_frames != 0 {
+                if env.load_frames != 0 {
                     return Ret::Remove;
                 }
                 self.timer.tick(gs);
@@ -1442,25 +1552,25 @@ impl ScreenEffect {
                     return Ret::Remove;
                 }
                 let a = (p1 as f64 + self.timer.get_f() * (p2 - p1) as f64 / dur as f64) as f32;
-                self.shake(ctx, a);
+                Self::shake(anm, rng, a);
                 return Ret::Next;
             }
             // 0x45B760 (type 4 "as 2"): 0x18B8A2C ≠ 0 → removed before anything else.
             2 | 4 => {
-                if ctx.load_frames != 0 {
+                if env.load_frames != 0 {
                     return Ret::Remove;
                 }
                 self.alpha = (tf * 255.0 / dur as f64).trunc().max(0.0) as f32;
                 if t >= dur {
                     return Ret::Remove;
                 }
-                if ctx.game.paused != 0 || ctx.game.game_over != 0 {
+                if env.paused {
                     return Ret::Next;
                 }
             }
             // 0x45BC90 (13 §3 type 3): 0x18B8A2C ≠ 0 → removed before anything else.
             3 => {
-                if ctx.load_frames != 0 {
+                if env.load_frames != 0 {
                     return Ret::Remove;
                 }
                 let a = (p2 as u32 >> 24) as i32;
@@ -1480,8 +1590,7 @@ impl ScreenEffect {
                 }
             }
             5 | 6 => {
-                if self.loading && !self.release && std::mem::take(&mut ctx.effects.loading_release)
-                {
+                if self.loading && !self.release && std::mem::take(loading_release) {
                     self.release = true;
                     self.timer.set(0);
                 }
@@ -1498,10 +1607,10 @@ impl ScreenEffect {
             // 0x45BF10: frozen → hold; gameplay frame counter 0x164D2C8 < 2 → removed (no 0x18B8A2C test); else
             // tick first, then end test, then the 2 draws.
             7 => {
-                if Self::frozen(ctx.game.flags, ctx.timer_pause) {
+                if Self::frozen(env.flags, env.timer_pause) {
                     return Ret::Next;
                 }
-                if ctx.game.frame_counter < 2 {
+                if env.frame_counter < 2 {
                     return Ret::Remove;
                 }
                 self.timer.tick(gs);
@@ -1518,7 +1627,7 @@ impl ScreenEffect {
                 } else {
                     (((i + h + o) as f64 - tf) / o as f64) as f32
                 };
-                self.shake(ctx, amp * env);
+                Self::shake(anm, rng, amp * env);
                 return Ret::Next;
             }
             _ => return Ret::Remove,
@@ -1751,37 +1860,25 @@ mod tests {
     // 255, 247, 245, 243, 241, 238; alpha 0 once cur ≥ dur.
     #[test]
     fn flash_alpha_uses_timer_getf() {
-        let Some(dir) = crate::settings::test_game_dir() else {
-            return;
-        };
-        let Some(gfx) = pollster::block_on(crate::gfx::Gfx::headless()).ok() else {
-            return;
-        };
-        let src = crate::assets::Source::native(dir.into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
-            src,
-            gfx,
-            false,
-            crate::settings::get().core(),
-            crate::settings::get().tool_host(),
-        ))
-        .unwrap();
+        let (mut anm, mut rng, mut rel) =
+            (AnmManager::default(), crate::rng::Rng::default(), false);
+        let env = ScreenEnv::default();
         let mut f = screen_fx(3, 30, 1, 0xFFFFFFFFu32 as i32, 0);
         let mut seen = Vec::new();
         for speed in [1.0, 0.25, 0.25, 0.25, 0.25, 0.25] {
-            ctx.anm.speed = speed;
-            f.step(&mut ctx);
+            anm.speed = speed;
+            f.step(&mut anm, &mut rng, env, &mut rel);
             seen.push(f.alpha as i32);
         }
         assert_eq!(seen, [255, 247, 245, 243, 241, 238]);
         f.timer.set(30);
         f.p[1] = 2;
-        ctx.anm.speed = 1.0;
-        f.step(&mut ctx);
+        anm.speed = 1.0;
+        f.step(&mut anm, &mut rng, env, &mut rel);
         assert_eq!(f.alpha, 0.0);
         // 13 §3 type 3: the reset call ticks too, so the next repeat starts at t = 1.
         assert_eq!(f.timer.cur, 1);
-        f.step(&mut ctx);
+        f.step(&mut anm, &mut rng, env, &mut rel);
         assert_eq!(f.alpha, (255 - 255 / 30) as f32);
     }
 

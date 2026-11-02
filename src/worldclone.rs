@@ -1,9 +1,10 @@
 //! World clone round trip (ARCH_A §2.3 `World: Clone`, REWRITE_PLAN "New tests"): a state cloned mid-run continues
 //! exactly like the original. Step 9a covers the player and the `Sys` value parts, 9b the bullet manager with its
-//! items, 9c the enemy manager with a synthetic ECL; each later step-9 run adds its subsystem to `World` here
-//! (docs/arch/STEP9_WORLD.md).
+//! items, 9c the enemy manager with a synthetic ECL, 9f the effect manager and the screen-effect pool
+//! (`TestSys::effects`); each later step-9 run adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md).
 use crate::anmmgr::AnmManager;
 use crate::bullet::BulletManager;
+use crate::effect::ScreenEnv;
 use crate::enemy::EnemyManager;
 use crate::game::TestSys;
 use crate::input::{self, Input};
@@ -19,6 +20,11 @@ struct World {
     inp: Input,
     // The frame's SE ids with their pans, as Sound_Update drains them (13 §1.2).
     se: Vec<(i32, i32)>,
+    // Stand-in for the screen effects' calc nodes (prio 3, link order): their `Effects::screen_fx` slots.
+    screen: Vec<usize>,
+    // Screen-effect calcs run and most effects live at once, to check the run exercised them.
+    screen_runs: u32,
+    fx_peak: usize,
 }
 
 impl Clone for World {
@@ -29,6 +35,9 @@ impl Clone for World {
             anm: anm_copy(&self.anm),
             inp: self.inp,
             se: self.se.clone(),
+            screen: self.screen.clone(),
+            screen_runs: self.screen_runs,
+            fx_peak: self.fx_peak,
         }
     }
 }
@@ -82,12 +91,17 @@ impl World {
             anm,
             inp: Input::default(),
             se: Vec::new(),
+            screen: Vec::new(),
+            screen_runs: 0,
+            fx_peak: 0,
         }
     }
 
     // One game frame of the parts present so far, in chain order: Player_Calc (prio 9) with the player and the
     // bullet manager lent out of its `Sys` (items passed in), as `PlayerTask::calc`; EnemyMgr_Calc (prio 11) as
-    // `EnemyTask::calc`; BulletMgr_Calc (prio 14) with the time-orb spell bonus, as `BulletTask::calc`.
+    // `EnemyTask::calc` with a spark burst every 40 frames; EffectMgr_Calc (prio 13); BulletMgr_Calc (prio 14) with the
+    // time-orb spell bonus, as `BulletTask::calc`. 9f: the screen-effect calcs first (prio 3, `ScreenTask::calc`) and
+    // a type 7 + type 1 shake queued every 100 frames, linked after the calc pass (`register_pending`).
     fn frame(&mut self, f: u32) {
         let mut bits = input::SHOT;
         bits |= if (f / 45) % 2 == 0 {
@@ -106,6 +120,22 @@ impl World {
         }
         self.inp.raw = bits;
         self.inp.tick();
+        let env = ScreenEnv {
+            flags: self.sys.game.flags,
+            timer_pause: self.sys.timer_pause,
+            load_frames: self.sys.load_frames,
+            paused: false,
+            frame_counter: f + 2,
+        };
+        let fx = &mut self.sys.effects;
+        self.screen.retain(|&slot| {
+            self.screen_runs += 1;
+            let r = fx.screen_calc(slot, &mut self.anm, &mut self.sys.rng, env);
+            if r == crate::task::Ret::Remove {
+                fx.screen_fx[slot] = None;
+            }
+            r != crate::task::Ret::Remove
+        });
         let (anm, inp) = (&mut self.anm, &self.inp);
         let sys = &mut self.sys.sys();
         sys.with_bullets(|b, sys| {
@@ -117,11 +147,23 @@ impl World {
             })
         });
         self.enemies.step(anm, sys);
+        if f % 40 == 0 {
+            sys.fx
+                .spawn(anm, sys.rng, 4, [192.0, 100.0, 0.0], 6, 0xFFFF_FFFF);
+        }
+        let flags = *sys.flags;
+        sys.fx.calc(anm, sys.rng, flags, sys.areas);
         sys.with_bullets(|b, sys| b.step(anm, sys));
         let orbs = std::mem::take(&mut crate::pl!(sys).stats.spell_bonus_orbs);
         for _ in 0..orbs {
             self.enemies.spell_add_bonus(8000);
         }
+        if f % 100 == 90 {
+            sys.fx.screen(7, 4, 10, 20, 10, 0x15);
+            sys.fx.screen(1, 30, 2, 6, 0, 0x10);
+        }
+        self.fx_peak = self.fx_peak.max(self.sys.effects.live);
+        self.screen.extend(self.sys.effects.alloc_pending());
         self.se = self.sys.sound.drain();
     }
 
@@ -166,6 +208,23 @@ impl World {
                 (b.pos[1].to_bits() as u64) << 32 | b.angle.to_bits() as u64,
             ]
         }));
+        let fx = &self.sys.effects;
+        t.extend([
+            fx.live as u64,
+            self.anm.screen_offset[0].to_bits() as u64,
+            self.anm.screen_offset[1].to_bits() as u64,
+        ]);
+        t.extend(
+            fx.fx
+                .iter()
+                .filter(|e| e.active)
+                .map(|e| (e.kind as u64) << 32 | e.pos[0].to_bits() as u64),
+        );
+        t.extend(
+            self.screen
+                .iter()
+                .flat_map(|&s| fx.screen_fx[s].map_or([0; 3], |e| e.trace())),
+        );
         t.extend(
             bm.items
                 .items
@@ -245,6 +304,10 @@ fn clone_continues_identically() {
         b.sys.bullets.as_deref().unwrap().live > 0,
         "no bullet in flight at the clone"
     );
+    assert!(
+        !b.screen.is_empty() && b.sys.effects.live > 0,
+        "no screen effect or effect live at the clone"
+    );
     assert_eq!(a.trace(), b.trace());
     for f in 200..900 {
         a.frame(f);
@@ -261,4 +324,11 @@ fn clone_continues_identically() {
     let (ma, mb) = (&a.enemies, &b.enemies);
     assert_eq!(ma.enemies.iter().filter(|e| e.alive()).count(), 5);
     assert!(!std::sync::Arc::ptr_eq(&ma.ecl, &mb.ecl));
+    // Effects lived and the screen shakes ran (each type 7 / 1 calc draws the RNG twice).
+    assert!(
+        a.fx_peak > 0 && a.screen_runs > 100,
+        "{} {}",
+        a.fx_peak,
+        a.screen_runs
+    );
 }

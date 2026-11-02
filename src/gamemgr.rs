@@ -797,7 +797,7 @@ impl GameManager {
             stage_t.borrow_mut().fast_forward = 0;
             crate::em!(ctx).fast_forward = 0;
         }
-        let effects = crate::effect::EffectManager::register(ctx)?;
+        let effects = crate::effect::EffectTask::register(ctx)?;
         let hud = Hud::register(ctx, stage_t.clone(), hud_fresh)?;
         let gui = crate::gui::Gui::register(ctx)?;
         // Spell practice in 6A/6B/Extra outside the last-word card ranges: spell-background first script +0xB34 := 2
