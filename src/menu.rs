@@ -184,6 +184,7 @@ impl InfoNotices {
                     };
                     match ctx
                         .archive
+                        .present()
                         .read(file)
                         .map_err(anyhow::Error::from)
                         .and_then(|b| ctx.rec.load_image(file, &b))
@@ -422,6 +423,7 @@ impl MainMenu {
         }
         match ctx
             .archive
+            .present()
             .read(name)
             .map_err(anyhow::Error::from)
             .and_then(|b| ctx.rec.load_image(name, &b))

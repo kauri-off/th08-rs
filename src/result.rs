@@ -1318,6 +1318,7 @@ impl Task<Ctx> for ResultScreen {
         ctx.game.score.rebuild_lists();
         match ctx
             .archive
+            .present()
             .read("result.jpg")
             .map_err(anyhow::Error::from)
             .and_then(|b| ctx.rec.load_image("result.jpg", &b))

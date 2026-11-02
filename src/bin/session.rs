@@ -68,6 +68,11 @@ fn main() -> anyhow::Result<()> {
         th08::settings::get().tool_host(),
     ))?;
     s.start(&mut ctx)?;
+    // Run metadata beside trace.txt (the trace bytes stay as they are): logic-content fingerprint, empty = vanilla.
+    std::fs::write(
+        out.join("meta.txt"),
+        format!("fingerprint: {}\n", ctx.archive.fingerprint()),
+    )?;
     ctx.set_emit(emit);
     if sound_log {
         ctx.bgm.midi_ready = false;

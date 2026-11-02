@@ -303,6 +303,7 @@ impl Task<Ctx> for MusicRoom {
         }
         match ctx
             .archive
+            .present()
             .read("music.jpg")
             .map_err(anyhow::Error::from)
             .and_then(|b| ctx.rec.load_image("music.jpg", &b))

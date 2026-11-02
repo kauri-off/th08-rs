@@ -340,7 +340,7 @@ impl Audio {
     }
 
     // The archive's `bgm/*.mid` members (02 §5), then the boot `Midi_LoadSlot(30, "bgm/init.mid")`.
-    pub fn load_midi(&mut self, archive: &crate::archive::Archive) {
+    pub fn load_midi(&mut self, archive: crate::content::PresentView<'_>) {
         for n in archive.names().iter().filter(|n| n.ends_with(".mid")) {
             match archive.read(n) {
                 Ok(d) => {
@@ -458,7 +458,7 @@ impl Audio {
 
     // Sound_LoadSE 0x45D3F0 (13 §1.1): one buffer per SE id, each a copy of its wave file; the table volume is not
     // stored because Sound_Update overwrites it on every play (13 §1.3).
-    pub fn load_se(&mut self, archive: &crate::archive::Archive) {
+    pub fn load_se(&mut self, archive: crate::content::PresentView<'_>) {
         let mut waves: Vec<(&str, Option<Arc<Wave>>)> = Vec::new();
         let mut voices = Vec::new();
         for (name, _) in crate::sound::TABLE {
@@ -653,7 +653,7 @@ mod tests {
             return;
         };
         let mut d = Dev::new();
-        d.a.load_midi(&arc);
+        d.a.load_midi(crate::content::LogicView::new(arc).present());
         assert!(d.a.midi_slots[30].is_some());
         let sf = crate::midi::tests::tiny_sf2();
         d.a.mixer.lock().unwrap().font =

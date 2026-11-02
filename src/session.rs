@@ -378,6 +378,8 @@ mod native {
         pub noclip: bool,
         // meta.txt `recorded:` local date and time, the session's `localtime` answer (replay / score dates).
         pub recorded_at: Option<crate::host::LocalTime>,
+        // meta.txt `fingerprint:` logic-content fingerprint (ARCH_B D5); absent = vanilla (empty).
+        pub fingerprint: String,
     }
 
     impl Session {
@@ -399,6 +401,10 @@ mod native {
                 .lines()
                 .find_map(|l| l.strip_prefix("recorded:"))
                 .and_then(|v| parse_local_time(v.trim()));
+            let fingerprint = meta
+                .lines()
+                .find_map(|l| l.strip_prefix("fingerprint:"))
+                .map_or_else(String::new, |v| v.trim().to_string());
             Ok(Self {
                 dir: dir.to_path_buf(),
                 input,
@@ -406,6 +412,7 @@ mod native {
                 sched,
                 noclip,
                 recorded_at,
+                fingerprint,
             })
         }
 
@@ -418,6 +425,13 @@ mod native {
 
         // Start state: private save dir with start/score.dat, th08.cfg, replays; boot seed; loader schedule.
         pub fn start(&self, ctx: &mut crate::game::Ctx) -> anyhow::Result<()> {
+            // A session replays only on the logic content it was recorded with (ARCH_B D5).
+            let fp = ctx.archive.fingerprint().to_string();
+            anyhow::ensure!(
+                fp == self.fingerprint,
+                "session fingerprint '{}' ≠ content fingerprint '{fp}'",
+                self.fingerprint
+            );
             let save = crate::settings::temp_dir().join(format!(
                 "th08_session_{}_{:?}",
                 std::process::id(),

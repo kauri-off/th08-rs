@@ -4,6 +4,7 @@ use crate::anmmgr::AnmManager;
 use crate::archive::Archive;
 use crate::assets::Source;
 use crate::audio::Audio;
+use crate::content::LogicView;
 use crate::drawlist::{FULLSCREEN, Recorder, Renderer};
 use crate::input::Input;
 use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
@@ -19,8 +20,8 @@ pub struct Ctx {
     pub rec: Recorder,
     // App / tool renderer; core calls it only at the sync points (`Renderer`, drawlist.rs).
     pub renderer: Box<dyn Renderer>,
-    // TODO(step 8b): core reads content through a LogicView, not the archive.
-    pub archive: Archive,
+    // Game content (th08.dat, 01): logic reads `archive.read`, presentation-only data `archive.present()` (ARCH_B D1).
+    pub archive: LogicView,
     // TODO(step 10): the cpal device leaves core with the crate cut; logic only queues `SoundCmd`s.
     pub audio: Audio,
     pub input: Input,
@@ -193,19 +194,20 @@ impl Ctx {
         core: crate::coreconfig::CoreConfig,
         mut host: Box<dyn crate::host::Host>,
     ) -> anyhow::Result<Self> {
-        let archive = Archive::from_bytes(source.read("th08.dat").await?)?;
+        let archive = LogicView::new(Archive::from_bytes(source.read("th08.dat").await?)?);
         // Supervisor_OnRegister 0x4461A0: the exe-check version list, archive only; missing fails start-up (15 §2.10).
         let ver = archive
             .read(crate::scoredat::VER_LIST_NAME)
             .context("error : データのバージョンが違います")?;
         let mut bgm = crate::sound::Bgm::new(&archive.read("thbgm.fmt")?);
         let mut audio = Audio::new(source.clone());
-        audio.load_se(&archive);
-        audio.load_midi(&archive);
+        audio.load_se(archive.present());
+        audio.load_midi(archive.present());
         bgm.midi_ready = audio.midi_available();
         // Config_Load (15 §1.2): th08.cfg and the thbgm.dat header probe (02 §1), then the file is written back.
         // The port's own save first; else import the original's th08.cfg (read-only).
-        // TODO(step 8b): game-directory reads (assets, the original's th08.cfg / score.dat imports) via `Source`.
+        // Game-directory reads (thbgm.dat header, the original's th08.cfg / score.dat imports) go through the
+        // app's `DataSource` (assets.rs); saves through `host`.
         let bgm_header = source.read_range("thbgm.dat", 0, 16).await.ok();
         let mut cfg_file = None;
         if persist {

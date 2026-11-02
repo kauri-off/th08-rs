@@ -16,6 +16,7 @@ pub mod bomb;
 pub mod bullet;
 pub mod camera;
 pub mod config;
+pub mod content;
 pub mod coreconfig;
 pub mod d3dx;
 pub mod demosync;

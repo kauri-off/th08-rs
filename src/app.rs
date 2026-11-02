@@ -94,7 +94,7 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(start) = self.pre.take() {
             let folder = Some(match &self.source {
                 #[cfg(target_arch = "wasm32")]
-                Some(src) => crate::launcher::Folder::Web(src.file_names()),
+                Some(src) => crate::launcher::Folder::Web(src.names()),
                 _ => crate::launcher::Folder::Native,
             });
             self.launch = Some(Box::new(Launch {

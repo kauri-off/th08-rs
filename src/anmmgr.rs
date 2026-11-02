@@ -2,7 +2,7 @@
 
 use crate::anm::{self, Script};
 use crate::anmvm::{self, AnmVm};
-use crate::archive::Archive;
+use crate::content::LogicView;
 // Draws and texture uploads go to the core `Recorder` (REWRITE_PLAN step 8).
 use crate::camera::{Camera, Mat4};
 use crate::drawlist::{self, Blend, Recorder, TexId, Vertex};
@@ -125,10 +125,12 @@ impl Default for AnmManager {
 
 impl AnmManager {
     // Anm_Preload 0x465860 + Anm_LoadEntryTexture 0x465CC0 (03 §2); the port uploads all entries at once.
+    // TODO(step 8b anm): sprites / scripts are logic data, THTX pixels presentation; split the parse and take pixels
+    // from a PresentView (per-texture overrides, ARCH_B §1.2 images/).
     pub fn load(
         &mut self,
         rec: &mut Recorder,
-        archive: &Archive,
+        archive: &LogicView,
         slot: usize,
         name: &str,
     ) -> Result<()> {
