@@ -89,7 +89,7 @@ else echo "cargo test ok ($(grep -oE '[0-9]+ passed' <<< "$t" | awk '{s+=$1} END
 echo "checks done in $((SECONDS - t0)) s"
 
 out=${RUN_OUT:-$TARGET/arch_run}
-mkdir -p "$out"
+mkdir -p "$out"; find "$out" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +  # fresh dirs: thjob -g counts */digest
 run_all "$out" > /dev/null
 nd=0
 while read -r i _ tr _ rp _ dr; do

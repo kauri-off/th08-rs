@@ -1,0 +1,4 @@
+#!/bin/bash
+# usage: tools/arch_job NAME [arch_check run args…] — full arch_check as a thjob unit with a progress bar (60 digests).
+n=$1; shift
+cd "$(dirname "$0")/.." && exec re/tools/thjob "$n" -c 100 -g "target/arch_run/*/digest|$(( $(wc -l < target/arch_ref/digests.txt) + $(grep -cE '^(s|p)_' target/arch_ref/digests.txt) ))|1" -- flock target/.agents.lock tools/arch_check run target/arch_ref "$@"
