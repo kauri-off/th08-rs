@@ -65,7 +65,7 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     let Some(p) = ctx.player.as_deref() else {
         return row;
     };
-    if crate::gamemgr::current().is_none() {
+    if ctx.gm.is_none() {
         return row;
     }
     let st = &p.stats;

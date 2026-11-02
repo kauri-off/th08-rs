@@ -2,18 +2,21 @@
 //! exactly like the original. Step 9a covers the player and the `Sys` value parts, 9b the bullet manager with its
 //! items, 9c the enemy manager with a synthetic ECL, 9d the stage with a synthetic .std (`TestSys::stage`, released
 //! by the ECL's section requests), 9f the effect manager and the screen-effect pool (`TestSys::effects`), 9e the
-//! HUD, g_Gui and the dialogue (`TestSys::msg`, started by an ECL timeline op 6 with a synthetic .msg file); each
-//! later step-9 run adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md).
+//! HUD, g_Gui and the dialogue (`TestSys::msg`, started by an ECL timeline op 6 with a synthetic .msg file), 9g the
+//! game manager with its replay object recording the run, then playing the recording back; each later step-9 run
+//! adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md).
 use crate::anmmgr::AnmManager;
 use crate::bullet::BulletManager;
 use crate::effect::ScreenEnv;
 use crate::enemy::EnemyManager;
 use crate::game::TestSys;
+use crate::gamemgr::{Game, GameManager};
 use crate::gui::Gui;
 use crate::hud::Hud;
 use crate::input::{self, Input};
 use crate::msg::Dialogue;
 use crate::player::Player;
+use crate::replay::ReplayState;
 use crate::stage::Stage;
 use crate::stdfile::{Record, Std};
 
@@ -26,6 +29,9 @@ struct World {
     // The HUD (`Ctx.hud`) and g_Gui (`Ctx.gui`); the dialogue is `TestSys::msg`, its .msg file shared by the clone.
     hud: Box<Hud>,
     gui: Box<Gui>,
+    // The game manager (`Ctx.gm`) with its replay object recording into `game.rpy` (`Ctx.game`).
+    gm: GameManager,
+    game: Game,
     // Dialogue frames run, text lines queued and g_Gui calls handled, to check the run exercised them.
     msg_frames: u32,
     msg_texts: u32,
@@ -48,6 +54,8 @@ impl Clone for World {
             enemies: self.enemies.clone(),
             hud: self.hud.clone(),
             gui: self.gui.clone(),
+            gm: self.gm.clone(),
+            game: self.game.clone(),
             msg_frames: self.msg_frames,
             msg_texts: self.msg_texts,
             gui_reqs: self.gui_reqs,
@@ -108,11 +116,21 @@ impl World {
         sys.msg = Some(d);
         let mut enemies = Box::new(EnemyManager::new(ecl(), crate::pl!(sys), 1));
         enemies.stage_start(&mut sys.rng, crate::pl!(sys), 0, 0);
+        // As StageStart leaves the game for a recorded stage 1 (11 §3.1, 15 §3.2): flags bit 2, a new recording,
+        // Replay_Register's frame hook.
+        let mut game = Game::default();
+        (game.shot, game.difficulty) = (2, 1);
+        game.flags |= crate::gamemgr::F_RUNNING;
+        crate::replay::record_stage_start(&mut game, &crate::pl!(sys).stats);
+        let mut rp = ReplayState::new(false, 0, false);
+        rp.frame_hook(&mut sys.rng);
         World {
             sys,
             enemies,
             hud: Box::new(Hud::new(true)),
             gui: Box::new(Gui::new(2)),
+            gm: GameManager::for_test(rp),
+            game,
             msg_frames: 0,
             msg_texts: 0,
             gui_reqs: 0,
@@ -133,7 +151,8 @@ impl World {
     // a type 7 + type 1 shake queued every 100 frames, linked after the calc pass (`register_pending`). 9e: Gui_Calc
     // (prio 12) handles the queued g_Gui calls and reads the bonus, as `GuiTask::calc` (no score.dat record, no
     // card steps); Hud_Calc (prio 15) boss bar outside dialogue, popups, Msg_Run with its side effects and item
-    // attraction, as `HudTask::calc` (the queued text renders and events are only counted).
+    // attraction, as `HudTask::calc` (the queued text renders and events are only counted). 9g: GameMgr_Calc's
+    // per-frame part first (prio 2), Replay_FrameHook (prio 7) and Replay_RecordCalc (prio 17), as `ReplayTask::calc`.
     fn frame(&mut self, f: u32) {
         let mut bits = input::SHOT;
         bits |= if (f / 45) % 2 == 0 {
@@ -152,6 +171,8 @@ impl World {
         }
         self.inp.raw = bits;
         self.inp.tick();
+        self.gm
+            .test_frame(&mut self.game, &mut crate::pl!(self.sys).stats);
         let env = ScreenEnv {
             flags: self.sys.game.flags,
             timer_pause: self.sys.timer_pause,
@@ -168,6 +189,8 @@ impl World {
             }
             r != crate::task::Ret::Remove
         });
+        let rp = self.gm.replay.as_mut().unwrap();
+        rp.frame_hook(&mut self.sys.rng);
         let (anm, inp) = (&mut self.anm, &self.inp);
         let ts = &mut self.sys;
         let st = ts.stage.as_deref_mut().unwrap();
@@ -232,6 +255,8 @@ impl World {
         for tag in 0..3 {
             st.draw_step(&mut self.anm, &mut self.sys.effects, tag);
         }
+        let rp = self.gm.replay.as_mut().unwrap();
+        rp.record_game(&mut self.game, &mut self.inp);
         self.fx_peak = self.fx_peak.max(self.sys.effects.live);
         self.screen.extend(self.sys.effects.alloc_pending());
         self.se = self.sys.sound.drain();
@@ -319,6 +344,40 @@ impl World {
             self.msg_frames as u64,
             self.msg_texts as u64,
             self.gui_reqs as u64,
+        ]);
+        t.extend(self.gm.trace());
+        let g = &self.game;
+        t.extend([g.frame_counter as u64, g.replay_fps as u64]);
+        let rec = g.rpy.as_ref().unwrap().stages[0].as_ref().unwrap();
+        t.extend(rec.inputs.iter().map(|&w| w as u64));
+        t.extend(rec.fps.iter().map(|&b| b as u64));
+        t
+    }
+}
+
+// Playback of the World's recording (15 §3.3): its own game state and replay object in mode 1, as `ReplayTask::calc`
+// with tag 0 (Replay_PlayCalc).
+#[derive(Clone)]
+struct Playback {
+    game: Game,
+    rp: ReplayState,
+    inp: Input,
+}
+
+impl Playback {
+    fn frame(&mut self) -> u16 {
+        self.rp.play(&mut self.game, &mut self.inp);
+        self.inp.game[0]
+    }
+
+    fn trace(&self) -> Vec<u64> {
+        let i = &self.inp;
+        let mut t = self.rp.trace().to_vec();
+        t.extend([
+            i.game[0] as u64,
+            i.game_prev[0] as u64,
+            i.repeat as u64,
+            self.game.replay_fps as u64,
         ]);
         t
     }
@@ -495,4 +554,26 @@ fn clone_continues_identically() {
         a.fx_peak,
         a.screen_runs
     );
+    // The GM counted every frame and the replay object recorded each one after the dummy word, with fps samples.
+    let rec = a.game.rpy.as_ref().unwrap().stages[0].clone().unwrap();
+    assert_eq!((a.game.frame_counter, rec.inputs.len()), (900, 901));
+    assert!(rec.fps.len() == 31 && rec.inputs.iter().any(|&w| w & input::BOMB != 0));
+    // Playback reproduces the recorded words one frame late (the dummy first), also from a clone mid-playback.
+    let mut game = a.game.clone();
+    game.flags |= crate::gamemgr::F_REPLAY;
+    let mut pa = Playback {
+        game,
+        rp: ReplayState::new(true, 0, false),
+        inp: Input::default(),
+    };
+    let mut pb: Option<Playback> = None;
+    for (k, &w) in rec.inputs.iter().enumerate() {
+        assert_eq!(pa.frame(), w, "playback frame {k}");
+        if let Some(pb) = &mut pb {
+            pb.frame();
+            assert_eq!(pa.trace(), pb.trace(), "playback frame {k} (clone)");
+        } else if k == 450 {
+            pb = Some(pa.clone());
+        }
+    }
 }

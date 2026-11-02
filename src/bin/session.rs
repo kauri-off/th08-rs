@@ -200,7 +200,7 @@ fn dump_items(ctx: &th08::game::Ctx, row: i64) {
     let Some(p) = ctx.player.as_deref() else {
         return;
     };
-    if th08::gamemgr::current().is_none() {
+    if ctx.gm.is_none() {
         return;
     }
     println!(

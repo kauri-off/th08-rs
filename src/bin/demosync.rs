@@ -84,7 +84,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         if f >= a && f <= b && th08::settings::get().bdump {
-            if th08::gamemgr::current().is_some() {
+            if ctx.gm.is_some() {
                 if let Some(em) = ctx.enemies.as_deref() {
                     for (i, x) in em.enemies.iter().enumerate() {
                         if x.alive() {

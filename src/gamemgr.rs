@@ -8,8 +8,6 @@ use crate::player::{Player, Stats};
 use crate::stage::Stage;
 use crate::task::{self, Chain, Ret, Task, TaskRef};
 use anyhow::Result;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 // Game flags GM +0x3DBAC = 0x164D0B4 (11 §2.1).
 pub const F_PRACTICE: u32 = 1 << 0;
@@ -107,6 +105,7 @@ pub const SCENE_RETRY: i32 = 10;
 pub const SCENE_RELOAD: i32 = 11;
 
 // Game state that survives scene changes (GM object 11 §2 + the menu's choices).
+#[derive(Clone)]
 pub struct Game {
     // Supervisor +0x158 current, +0x15C requested (0x17CE8B4), +0x160 previous scene (11 §7).
     pub scene: i32,
@@ -531,16 +530,6 @@ pub fn clock_advance(stage: usize, time: i32, threshold: i32) -> i32 {
     }
 }
 
-// TODO(step 9): a `Weak` into the Rc subsystem graph (read by debug tools, demosync, replay end, ascii); it goes away with the graph.
-thread_local! {
-    static CURRENT: RefCell<std::rc::Weak<RefCell<GameManager>>> = RefCell::new(std::rc::Weak::new());
-}
-
-// The registered game manager (debug tools and the demo sync test).
-pub fn current() -> Option<Rc<RefCell<GameManager>>> {
-    CURRENT.with_borrow(std::rc::Weak::upgrade)
-}
-
 // 11 §4 step 5: whether a slowdown-reproduction frame runs, from the recorded fps `f` and the counter after += 1.
 fn playback_runs(f: u8, c: u32) -> bool {
     (f >= 20 || c % 3 == 0)
@@ -556,11 +545,12 @@ fn slow_skips(n: usize, c: u32) -> bool {
         || ((128..224).contains(&n) && c % 5 == 0)
 }
 
-// The player, the bullet and enemy managers, the stage, the HUD with its dialogue and g_Gui are `ctx.player` /
-// `ctx.bullets` / `ctx.enemies` / `ctx.stage` / `ctx.hud` / `ctx.msg` / `ctx.gui` until step 9g moves them here
-// (docs/arch/STEP9_WORLD.md).
+// Game manager g_GameManager 0x164D0B0 (11 §2–§4), owned by `Ctx.gm`; its chain nodes are `GameManagerTask`.
+// The player, the bullet and enemy managers, the stage, the HUD with its dialogue and g_Gui stay `Ctx` fields
+// (`sys!` lends several of them at once next to other `Ctx` fields) until `World` replaces `Ctx` (step 9h).
+#[derive(Clone)]
 pub struct GameManager {
-    // Subsystems unregistered by the GM on-remove (11 §7).
+    // Subsystems unregistered by the GM on-remove (11 §7). Stateless forwarders; `Node`s with step 9h.
     tasks: Vec<TaskRef<Ctx>>,
     // Port-only: loading frame at which Ascii_SetupGaugeVms runs, with the gauge limits (12 §5.9).
     gauge_at: Option<(u32, i32, i32)>,
@@ -570,16 +560,19 @@ pub struct GameManager {
     music_start: u8,
     // Port-only: the stage-clear frame has run (11 §4 step 1 loading := 1 with no loader behind it).
     cleared: bool,
+    // The replay object (15 §3.1) registered by StageStart, reached by its `ReplayTask` nodes.
+    pub replay: Option<crate::replay::ReplayState>,
 }
 
 impl GameManager {
-    pub fn register(ctx: &mut Ctx) -> Result<Rc<RefCell<GameManager>>> {
-        let gm = Rc::new(RefCell::new(GameManager {
+    pub fn register(ctx: &mut Ctx) -> Result<TaskRef<Ctx>> {
+        ctx.gm = Some(Box::new(GameManager {
             tasks: Vec::new(),
             gauge_at: None,
             loading_total: 31,
             music_start: 0,
             cleared: false,
+            replay: None,
         }));
         {
             let p = ctx.player.insert(Box::default());
@@ -588,11 +581,58 @@ impl GameManager {
         }
         // GameManager_Register zeroes the gameplay frame counter 0x164D2C8 (11 §2).
         ctx.game.frame_counter = 0;
-        CURRENT.with_borrow_mut(|c| *c = Rc::downgrade(&gm));
-        let t: TaskRef<Ctx> = gm.clone();
+        let t = task::task(GameManagerTask);
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
-        Ok(gm)
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+        Ok(t)
+    }
+
+    // Test: a GM as GameManager_Register leaves it, with a replay object.
+    #[cfg(test)]
+    pub(crate) fn for_test(replay: crate::replay::ReplayState) -> Self {
+        GameManager {
+            tasks: Vec::new(),
+            gauge_at: None,
+            loading_total: 31,
+            music_start: 1,
+            cleared: false,
+            replay: Some(replay),
+        }
+    }
+
+    // Test: GameMgr_Calc's per-frame part past loading and pause (11 §4 steps 3, 9, 11): deferred music start
+    // taken, score roll, gameplay frame counter.
+    #[cfg(test)]
+    pub(crate) fn test_frame(&mut self, g: &mut Game, st: &mut Stats) {
+        st.rec.frames += 1;
+        std::mem::take(&mut self.music_start);
+        Self::roll_score(st);
+        st.rank_delta = 0;
+        g.frame_counter += 1;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn trace(&self) -> Vec<u64> {
+        let mut t = vec![
+            self.loading_total as u64,
+            self.music_start as u64,
+            self.cleared as u64,
+            self.tasks.len() as u64,
+        ];
+        t.extend(
+            self.replay
+                .iter()
+                .flat_map(crate::replay::ReplayState::trace),
+        );
+        t
+    }
+
+    // The GM lent out of `ctx.gm` for one of its chain callbacks (none of them reads `ctx.gm`).
+    fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut GameManager, &mut Ctx) -> R) -> R {
+        let mut gm = ctx.gm.take().expect("no game manager");
+        let r = f(&mut gm, ctx);
+        ctx.gm = Some(gm);
+        r
     }
 
     // Fresh start (11 §3.2) in its RNG order: heap jitter (2 draws), decoys (60), lives / power checksums,
@@ -816,7 +856,8 @@ impl GameManager {
             ctx.game.rpy = None;
         }
         let st = crate::pl!(ctx).stats.clone();
-        let replay_t = crate::replay::register(ctx, ctx.game.replay(), &st)?;
+        let (replay_t, replay) = crate::replay::register(ctx, ctx.game.replay(), &st)?;
+        self.replay = Some(replay);
         // 11 §3.1 / 06 §2 +0x290: load (not play) BGM slot 0, and slots 1/2 unless their name starts with ' ';
         // spell practice loads slot 0 only, chosen by card id. Slot 0 is played by GameMgr_Calc step 3.
         if !ctx.game.reload_same {
@@ -968,20 +1009,36 @@ impl GameManager {
     }
 }
 
-impl Task<Ctx> for GameManager {
+// Chain nodes of `ctx.gm` (calc and draw): stateless forwarder (STEP9_WORLD.md §3).
+pub struct GameManagerTask;
+
+impl Task<Ctx> for GameManagerTask {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
-            self.stage_start(ctx)?;
+            GameManager::with(ctx, GameManager::stage_start)?;
         }
         Ok(())
     }
 
+    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
+        if chain == Chain::Calc {
+            GameManager::with(ctx, GameManager::on_remove);
+        }
+    }
+
+    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        GameManager::with(ctx, GameManager::calc)
+    }
+
+    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+        GameManager::draw_step(ctx)
+    }
+}
+
+impl GameManager {
     // GM on-remove 0x43BE2C (11 §7): score clamped and shown, game speed 1, music stopped (unless reloading the
     // same stage), subsystems torn down.
-    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
-        if chain != Chain::Calc {
-            return;
-        }
+    fn on_remove(&mut self, ctx: &mut Ctx) {
         // 0x18B8A2C := 1 (13 §3).
         ctx.load_frames = 1;
         // Darkness-mask alpha 0x4E3D28 := 0 (13 §4.1).
@@ -1017,7 +1074,7 @@ impl Task<Ctx> for GameManager {
     }
 
     // GameMgr_Calc 0x439BC7 (11 §4); Ret::StopFrame = return 3 (the rest of the calc chain does not run).
-    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    fn calc(&mut self, ctx: &mut Ctx) -> Ret {
         // 0x164D09C += 1 at the top of GameMgr_Calc (11 §4): HSCR play time in frames.
         crate::pl!(ctx).stats.rec.frames += 1;
         self.continue_effects(ctx);
@@ -1195,7 +1252,7 @@ impl Task<Ctx> for GameManager {
     // GameMgr_Draw 0x43AA03 (11 §3): return 3 (nothing above prio 5) when the requested scene 0x17CE8B4 ≠ 2,
     // bits 5–6 == 1 or loading ≠ 0, post-clear frames included. The port's in-calc release stands for the loader
     // thread's after this frame, so `loading_shown` keeps that frame a loading one. Step only: no write, no emit.
-    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    fn draw_step(ctx: &mut Ctx) -> Ret {
         let g = &ctx.game;
         if g.requested == SCENE_GAME && g.end_state() != 1 && g.loading == 0 && !g.loading_shown {
             return Ret::Next;

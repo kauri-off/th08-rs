@@ -33,8 +33,10 @@ const TAG_MAIN: u8 = 0;
 const TAG_FF: u8 = 1;
 const TAG_HOOK: u8 = 2;
 
-// Runtime replay object (15 §3.1): mode 0 records, mode 1 plays back. The data lives in `Game::rpy`.
-pub struct ReplayTask {
+// Runtime replay object (15 §3.1): mode 0 records, mode 1 plays back. The data lives in `Game::rpy`; owned by
+// `GameManager.replay`, its chain nodes are `ReplayTask`.
+#[derive(Clone)]
+pub struct ReplayState {
     play: bool,
     stage: usize,
     // +0x50 input cursor (in words), +0 frame counter, +4 clear-bonus frame counter, fps cursor q (+0xA0).
@@ -54,27 +56,17 @@ pub fn register(
     ctx: &mut crate::game::Ctx,
     play: bool,
     st: &crate::player::Stats,
-) -> anyhow::Result<crate::task::TaskRef<crate::game::Ctx>> {
+) -> anyhow::Result<(crate::task::TaskRef<crate::game::Ctx>, ReplayState)> {
     use crate::task::{self, Chain};
     // Replay_Register 0x451F90 sets g_Input and g_InputPrev to 0 (15 §3.1).
     ctx.input.game = [0; crate::host::MAX_PLAYERS];
     ctx.input.game_prev = [0; crate::host::MAX_PLAYERS];
     let debug = play && ctx.game.rpy.as_ref().is_some_and(|r| r.debug != 0);
-    let mut rt = ReplayTask {
-        play,
-        stage: ctx.game.stage % 9,
-        cursor: 0,
-        frame: 0,
-        bonus_frames: 0,
-        fps_q: 0,
-        repeat_ctr: 0,
-        debug,
-        rng_snap: 0,
-    };
+    let mut rt = ReplayState::new(play, ctx.game.stage % 9, debug);
     if !play || debug {
         rt.frame_hook(&mut ctx.rng);
     }
-    let t = task::task(rt);
+    let t = task::task(ReplayTask);
     if play {
         task::add(ctx, Chain::Calc, PLAY_PRIO, TAG_MAIN, t.clone())?;
         task::add(ctx, Chain::Calc, FF_PRIO, TAG_FF, t.clone())?;
@@ -87,12 +79,12 @@ pub fn register(
     if !play || debug {
         task::add(ctx, Chain::Calc, HOOK_PRIO, TAG_HOOK, t.clone())?;
     }
-    Ok(t)
+    Ok((t, rt))
 }
 
 // Replay_RecordStageStart 0x452830 (15 §3.2): the previous record gets the current score, then a new record with the
 // dummy word (the debug words at +0x26 / +0x28 are overwritten by frames 1 and 2, so they are not kept).
-fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
+pub(crate) fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
     let stage = g.stage % 9;
     if g.rpy.is_none() {
         let mut r = new_recording(g.shot, g.difficulty, g.flags, g.card, &g.cfg_bytes());
@@ -433,14 +425,42 @@ fn next_frame(words: &[u16], tail: &[u8], cursor: usize, debug: bool) -> (u16, u
     (w, cursor + if debug { 3 } else { 1 })
 }
 
-impl ReplayTask {
-    // Replay_RecordCalc 0x452310 (15 §3.2): runs after the game objects, so frame n's input is the raw word sampled at
-    // the end of frame n − 1.
-    fn record(&mut self, ctx: &mut crate::game::Ctx) {
-        self.record_game(&mut ctx.game, &mut ctx.input);
+impl ReplayState {
+    pub(crate) fn new(play: bool, stage: usize, debug: bool) -> Self {
+        ReplayState {
+            play,
+            stage,
+            cursor: 0,
+            frame: 0,
+            bonus_frames: 0,
+            fps_q: 0,
+            repeat_ctr: 0,
+            debug,
+            rng_snap: 0,
+        }
     }
 
-    fn record_game(&mut self, g: &mut crate::gamemgr::Game, i: &mut crate::input::Input) {
+    // Test: the state words, for the World clone test.
+    #[cfg(test)]
+    pub(crate) fn trace(&self) -> [u64; 7] {
+        [
+            self.play as u64,
+            self.cursor as u64,
+            self.frame as u64,
+            self.bonus_frames as u64,
+            self.fps_q as u64,
+            self.repeat_ctr as u64,
+            self.rng_snap as u64,
+        ]
+    }
+
+    // Replay_RecordCalc 0x452310 (15 §3.2): runs after the game objects, so frame n's input is the raw word sampled at
+    // the end of frame n − 1.
+    pub(crate) fn record_game(
+        &mut self,
+        g: &mut crate::gamemgr::Game,
+        i: &mut crate::input::Input,
+    ) {
         if g.flags & crate::gamemgr::F_RUNNING == 0 {
             return;
         }
@@ -481,7 +501,7 @@ impl ReplayTask {
 
     // Replay_FrameHook 0x4522A0 (11 §1.4): +0xD8 := RNG state, RNG call counter := 0. Nothing reads either; the
     // statistics word +0xDA and GM+0x3DB98 it also clears are never read either and not kept.
-    fn frame_hook(&mut self, rng: &mut crate::rng::Rng) {
+    pub(crate) fn frame_hook(&mut self, rng: &mut crate::rng::Rng) {
         self.rng_snap = rng.state;
         rng.counter = 0;
     }
@@ -489,8 +509,7 @@ impl ReplayTask {
     // Replay_PlayCalc 0x452550 (15 §3.3): input substitution and the key-repeat emulation; not during the clear bonus.
     // The first word read is the dummy 0, matching the one-frame latency of recording.
     // Replay_PlayCalcDebug 0x4526C0 (15 §3.1) is the same with the input read through cursor +0x78 in 6-byte steps.
-    fn play(&mut self, ctx: &mut crate::game::Ctx) {
-        let g = &ctx.game;
+    pub(crate) fn play(&mut self, g: &mut crate::gamemgr::Game, i: &mut crate::input::Input) {
         // The slow byte is +0x25 of the gameplay config copy `*(GM+4)` (15 §3.3).
         if g.flags & crate::gamemgr::F_RUNNING == 0
             || g.game_slow() != 0
@@ -505,7 +524,6 @@ impl ReplayTask {
             .map_or((&[][..], &[][..]), |s| (&s.inputs[..], &s.tail[..]));
         let (w, next) = next_frame(words, tail, self.cursor, self.debug);
         self.cursor = next;
-        let i = &mut ctx.input;
         i.game_prev = i.game;
         i.game[0] = w;
         i.repeat = false;
@@ -522,28 +540,32 @@ impl ReplayTask {
         }
         if self.frame % 30 == 0 {
             // QUIRK: playback reads byte q + 1 (one sample ahead).
-            let b = ctx
-                .game
+            let b = g
                 .rpy
                 .as_ref()
                 .and_then(|r| r.stages[self.stage].as_ref())
                 .and_then(|s| s.fps.get(self.fps_q + 1).copied())
                 .unwrap_or(60);
-            ctx.game.replay_fps = b & 0x7F;
-            ctx.game.replay_fps_red = b >> 7 != 0;
+            g.replay_fps = b & 0x7F;
+            g.replay_fps_red = b >> 7 != 0;
             self.fps_q += 1;
         }
         self.frame += 1;
     }
 }
 
+// Chain nodes of `GameManager.replay` (calc prio PLAY / FF / RECORD / HOOK): stateless forwarder (STEP9_WORLD.md §3).
+pub struct ReplayTask;
+
 impl crate::task::Task<crate::game::Ctx> for ReplayTask {
     fn calc(&mut self, ctx: &mut crate::game::Ctx, tag: u8) -> crate::task::Ret {
         use crate::task::Ret;
-        match (self.play, tag) {
-            (_, TAG_HOOK) => self.frame_hook(&mut ctx.rng),
-            (false, _) => self.record(ctx),
-            (true, TAG_MAIN) => self.play(ctx),
+        let r = ctx.gm.as_deref_mut().and_then(|g| g.replay.as_mut());
+        let r = r.expect("no replay object");
+        match (r.play, tag) {
+            (_, TAG_HOOK) => r.frame_hook(&mut ctx.rng),
+            (false, _) => r.record_game(&mut ctx.game, &mut ctx.input),
+            (true, TAG_MAIN) => r.play(&mut ctx.game, &mut ctx.input),
             // Replay_FastForward 0x452490 (15 §3.3); `replay_ff` = false is a tool switch that disables both restarts.
             // Only with flags bit 2 set and bit 9 clear; both tests use the replay frame counter +0: skippable dialogue
             // first, the fast test (speed byte 2) only when it does not restart.
@@ -554,7 +576,7 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
                         g.flags,
                         g.dialogue_skippable,
                         g.replay_speed,
-                        self.frame,
+                        r.frame,
                         || boss_active(ctx.enemies.as_deref()),
                     )
                 {
@@ -585,7 +607,7 @@ mod tests {
     // 11 §1.4: the hook stores the RNG state at +0xD8 and resets the call counter, leaving the state.
     #[test]
     fn frame_hook_snapshots_rng() {
-        let mut t = ReplayTask {
+        let mut t = ReplayState {
             play: false,
             stage: 0,
             cursor: 0,
@@ -859,7 +881,7 @@ mod tests {
         let mut g = crate::gamemgr::Game::default();
         assert_eq!(g.replay_fps, 0);
         record_stage_start(&mut g, &Default::default());
-        let mut t = ReplayTask {
+        let mut t = ReplayState {
             play: false,
             stage: 0,
             cursor: 0,

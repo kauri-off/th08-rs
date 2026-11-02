@@ -65,6 +65,9 @@ pub struct Ctx {
     pub gui: Option<Box<crate::gui::Gui>>,
     // Dialogue state at HudImpl+0x21814 (10 §3), created with the HUD; read by the ECL (`Sys.msg`) and GameMgr_Calc.
     pub msg: Option<Box<crate::msg::Dialogue>>,
+    // Game manager 0x164D0B0 (11 §2–§4) with its replay object: created by GameManager_Register, dropped by the
+    // scene switch (11 §7). Interim owner until `World.gm` (step 9h, STEP9_WORLD.md).
+    pub gm: Option<Box<crate::gamemgr::GameManager>>,
     // Port queue of bomb areas created by effects (14 §2.13).
     pub bomb_areas: crate::bomb::AreaQueue,
     // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
@@ -361,6 +364,7 @@ impl Ctx {
             hud: None,
             gui: None,
             msg: None,
+            gm: None,
             bomb_areas: Vec::new(),
             timer_pause: 0,
             load_frames: 0,
