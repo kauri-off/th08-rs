@@ -50,6 +50,9 @@ pub struct Ctx {
     // Player 0x17D5EF8 (09 §1): created by GameManager_Register, dropped with the game manager by the scene switch
     // (11 §7). Step 9a interim owner; moves into `GameManager` with step 9g (docs/arch/STEP9_WORLD.md).
     pub player: Option<Box<crate::player::Player>>,
+    // Bullet manager 0xF54E90 (08 §2), with the item manager it holds: created by GameMgr's stage start (11 §3.1),
+    // replaced by the next one, dropped with the game manager (11 §7). Step 9b interim owner (STEP9_WORLD.md).
+    pub bullets: Option<Box<crate::bullet::BulletManager>>,
     // Port queue of bomb areas created by effects (14 §2.13).
     pub bomb_areas: crate::bomb::AreaQueue,
     // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
@@ -82,7 +85,8 @@ pub struct Ctx {
 // Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue
 // (13 §1.2), effect manager (13 §2), GM flags word (11 §2.1), rank (11 §2), ascii overlays (13 §4), HUD dirty fields
 // (12 §5.3), bomb area queue (14 §2.13), freeze byte and frames-since-load (13 §3), g_Gui call queue (12 §5.8),
-// g_Rng (11 §1), the player (09 §1; None inside the player's own calc). Built by `sys!(ctx)`; these become `World`
+// g_Rng (11 §1), the player (09 §1; None inside the player's own calc), the bullet manager (08 §2; None inside
+// the bullet calc and the player calc, which hold it). Built by `sys!(ctx)`; these become `World`
 // fields in step 9 (ARCH_A §2.3).
 pub struct Sys<'a> {
     pub sound: &'a mut crate::sound::Queue,
@@ -97,6 +101,7 @@ pub struct Sys<'a> {
     pub gui: &'a mut crate::gui::Queue,
     pub rng: &'a mut crate::rng::Rng,
     pub player: Option<&'a mut crate::player::Player>,
+    pub bullets: Option<&'a mut crate::bullet::BulletManager>,
 }
 
 impl Sys<'_> {
@@ -114,6 +119,7 @@ impl Sys<'_> {
             gui: &mut *self.gui,
             rng: &mut *self.rng,
             player: self.player.as_deref_mut(),
+            bullets: self.bullets.as_deref_mut(),
         }
     }
 
@@ -127,6 +133,17 @@ impl Sys<'_> {
         self.player = Some(p);
         r
     }
+
+    // The bullet manager lent out of `sys` for a call on it that also takes `sys`.
+    pub fn with_bullets<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::bullet::BulletManager, &mut Self) -> R,
+    ) -> R {
+        let b = self.bullets.take().expect("no bullet manager in this Sys");
+        let r = f(b, self);
+        self.bullets = Some(b);
+        r
+    }
 }
 
 // The player of a `Sys` or `Ctx` inside a running game (a field borrow, disjoint from the other fields).
@@ -137,12 +154,22 @@ macro_rules! pl {
     };
 }
 
+// The bullet manager of a `Sys` or `Ctx` inside a running stage (a field borrow, like `pl!`).
+#[macro_export]
+macro_rules! bm {
+    ($s:expr) => {
+        $s.bullets
+            .as_deref_mut()
+            .expect("no bullet manager in this Sys")
+    };
+}
+
 #[macro_export]
 macro_rules! sys {
     ($c:expr) => {
-        $crate::sys!($c; $c.player.as_deref_mut())
+        $crate::sys!($c; $c.player.as_deref_mut(); $c.bullets.as_deref_mut())
     };
-    ($c:expr; $p:expr) => {
+    ($c:expr; $p:expr; $b:expr) => {
         $crate::game::Sys {
             sound: &mut $c.sound,
             fx: &mut $c.effects,
@@ -156,6 +183,7 @@ macro_rules! sys {
             gui: &mut $c.gui_queue,
             rng: &mut $c.rng,
             player: $p,
+            bullets: $b,
         }
     };
 }
@@ -175,6 +203,7 @@ pub struct TestSys {
     pub gui_queue: crate::gui::Queue,
     pub rng: crate::rng::Rng,
     pub player: Option<Box<crate::player::Player>>,
+    pub bullets: Option<Box<crate::bullet::BulletManager>>,
 }
 
 #[cfg(test)]
@@ -194,8 +223,14 @@ impl TestSys {
     pub fn with_player(difficulty: i32) -> Self {
         let mut p = crate::player::Player::default();
         p.stats.difficulty = difficulty;
+        // An empty bullet manager (no etama.anm), built with its own RNG so the test's RNG is untouched.
+        let b = crate::bullet::BulletManager::new(
+            &mut crate::anmmgr::AnmManager::default(),
+            &mut crate::rng::Rng::default(),
+        );
         TestSys {
             player: Some(Box::new(p)),
+            bullets: Some(Box::new(b)),
             ..Default::default()
         }
     }
@@ -280,6 +315,7 @@ impl Ctx {
             panel: Default::default(),
             hud_kept: None,
             player: None,
+            bullets: None,
             bomb_areas: Vec::new(),
             timer_pause: 0,
             load_frames: 0,

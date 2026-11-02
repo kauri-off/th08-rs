@@ -9,9 +9,8 @@ use crate::item::ItemManager;
 use crate::player::{GrazeEnv, Player};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
-use std::cell::RefCell;
 use std::f32::consts::PI;
-use std::rc::Rc;
+use std::sync::Arc;
 
 // etama.anm slot (08 §2, mgr+0x6BA574).
 pub const ANM_SLOT: usize = 6;
@@ -399,9 +398,10 @@ impl Laser {
     }
 }
 
-// Bullet manager 0xF54E90 (08 §2).
+// Bullet manager 0xF54E90 (08 §2). Templates are written once by BulletManager_Load and shared by clones.
+#[derive(Clone)]
 pub struct BulletManager {
-    pub templates: Vec<Template>,
+    pub templates: Arc<[Template]>,
     pub bullets: Vec<Bullet>,
     pub lasers: Vec<Laser>,
     // Updated from inside the bullet calc and drawn from its draw (08 §1).
@@ -466,14 +466,15 @@ impl BulletManager {
         }
     }
 
-    pub fn register(ctx: &mut Ctx) -> Result<Rc<RefCell<BulletManager>>> {
+    // BulletManager_Register: the manager becomes `ctx.bullets` (replacing the last stage's) plus its two nodes.
+    pub fn register(ctx: &mut Ctx) -> Result<task::TaskRef<Ctx>> {
         ctx.anm
             .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "etama.anm")?;
-        let b = Rc::new(RefCell::new(BulletManager::new(&mut ctx.anm, &mut ctx.rng)));
-        let t: task::TaskRef<Ctx> = b.clone();
+        ctx.bullets = Some(Box::new(BulletManager::new(&mut ctx.anm, &mut ctx.rng)));
+        let t = task::task(BulletTask);
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
-        Ok(b)
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+        Ok(t)
     }
 
     pub fn live_bullets(&self) -> impl Iterator<Item = &Bullet> {
@@ -1659,7 +1660,10 @@ impl BulletManager {
 // BulletMgr_Draw / enemy draw prio 11 global tint while bullets are frozen (06 §10.2, 07 §10.6).
 pub const FROZEN_TINT: u32 = 0xFFF0_1010;
 
-impl Task<Ctx> for BulletManager {
+// The bullet manager's chain nodes (08 §1); they reach the manager through its owner (`ctx.bullets`, step 9b).
+pub struct BulletTask;
+
+impl Task<Ctx> for BulletTask {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
             ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
@@ -1667,7 +1671,11 @@ impl Task<Ctx> for BulletManager {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        self.step(&mut ctx.anm, &mut crate::sys!(ctx));
+        let b = ctx.bullets.as_deref_mut().expect("bullet manager");
+        b.step(
+            &mut ctx.anm,
+            &mut crate::sys!(ctx; ctx.player.as_deref_mut(); None),
+        );
         // Item_CollectTimeOrb: Spell_AddBonus(8000) per orb inside this calc, so this frame's Spell_Draw shows it (08 §8.5).
         let orbs = std::mem::take(&mut crate::pl!(ctx).stats.spell_bonus_orbs);
         // The spell state g_Gui is held by the enemy manager, owned by the game manager (step 9a).
@@ -1683,13 +1691,15 @@ impl Task<Ctx> for BulletManager {
     // BulletMgr_Draw prio 13 (08 §1): VM writes and the frozen tint in the step, the draws in the emit.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let p = ctx.player.as_deref().expect("player");
-        BulletManager::draw_step(self, &mut ctx.anm, p, ctx.game.flags);
+        let b = ctx.bullets.as_deref_mut().expect("bullet manager");
+        b.draw_step(&mut ctx.anm, p, ctx.game.flags);
         Ret::Next
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
         let p = ctx.player.as_deref().expect("player");
-        BulletManager::emit(self, &ctx.anm, rec, &ctx.effects, p, ctx.game.flags);
+        let b = ctx.bullets.as_deref().expect("bullet manager");
+        b.emit(&ctx.anm, rec, &ctx.effects, p, ctx.game.flags);
     }
 }
 

@@ -1338,12 +1338,7 @@ impl Task<Ctx> for Hud {
         }
         // All items auto-collect while a dialogue runs and the player is not dying (10 §5).
         if collect {
-            self.enemies
-                .borrow()
-                .bullets
-                .borrow_mut()
-                .items
-                .attract_all();
+            crate::bm!(ctx).items.attract_all();
         }
         self.flush_texts(ctx);
         self.handle_events(ctx, events);

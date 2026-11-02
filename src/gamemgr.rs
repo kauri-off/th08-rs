@@ -556,10 +556,9 @@ fn slow_skips(n: usize, c: u32) -> bool {
         || ((128..224).contains(&n) && c % 5 == 0)
 }
 
-// The player is `ctx.player` until step 9g moves it here (docs/arch/STEP9_WORLD.md).
+// The player and the bullet manager are `ctx.player` / `ctx.bullets` until step 9g moves them here (docs/arch/STEP9_WORLD.md).
 pub struct GameManager {
     pub stage: Option<Rc<RefCell<Stage>>>,
-    pub bullets: Option<Rc<RefCell<BulletManager>>>,
     pub enemies: Option<Rc<RefCell<EnemyManager>>>,
     pub hud: Option<Rc<RefCell<Hud>>>,
     // Subsystems unregistered by the GM on-remove (11 §7).
@@ -578,7 +577,6 @@ impl GameManager {
     pub fn register(ctx: &mut Ctx) -> Result<Rc<RefCell<GameManager>>> {
         let gm = Rc::new(RefCell::new(GameManager {
             stage: None,
-            bullets: None,
             enemies: None,
             hud: None,
             tasks: Vec::new(),
@@ -795,9 +793,8 @@ impl GameManager {
         g.stages_started += 1;
         // Register order Stage, Bullets, Enemies, Effects, HUD, Gui (11 §3.1, 0x43ABD7).
         let stage_t = Stage::register(ctx, stage)?;
-        let bullets = BulletManager::register(ctx)?;
-        let enemies =
-            EnemyManager::register(ctx, stage, Some(stage_t.clone()), bullets.clone(), d as i32)?;
+        let bullets_t = BulletManager::register(ctx)?;
+        let enemies = EnemyManager::register(ctx, stage, Some(stage_t.clone()), d as i32)?;
         if !first {
             stage_t.borrow_mut().fast_forward = 0;
             enemies.borrow_mut().fast_forward = 0;
@@ -852,7 +849,7 @@ impl GameManager {
         self.tasks = vec![
             player_t,
             stage_t.clone(),
-            bullets.clone(),
+            bullets_t,
             enemies.clone(),
             effects,
             hud.clone(),
@@ -863,7 +860,6 @@ impl GameManager {
         self.loading_total = total;
         self.gauge_at = Some(((total + 1).saturating_sub(k).max(1), l.min, l.max));
         self.stage = Some(stage_t);
-        self.bullets = Some(bullets);
         self.enemies = Some(enemies);
         self.hud = Some(hud);
         // 0x18B8A2C := 2 at the end of StageStart (13 §3).
@@ -1192,7 +1188,7 @@ impl Task<Ctx> for GameManager {
         if g.game_slow() != 0 {
             g.slow_skip = 0;
             g.skip_ctr = g.skip_ctr.wrapping_add(1);
-            let n = self.bullets.as_ref().map_or(0, |b| b.borrow().live);
+            let n = ctx.bullets.as_ref().map_or(0, |b| b.live);
             if slow_skips(n, g.skip_ctr) {
                 g.slow_skip = 1;
                 return Ret::StopFrame;

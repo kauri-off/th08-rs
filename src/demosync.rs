@@ -81,8 +81,8 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     row[13] = st.power.to_bits() as i64;
     row[14] = st.gauge as i64;
     row[15] = st.time as i64;
-    if let Some(b) = &gm.bullets {
-        row[16] = b.borrow().live as i64;
+    if let Some(b) = ctx.bullets.as_deref() {
+        row[16] = b.live as i64;
     }
     if let Some(e) = &gm.enemies {
         let e = e.borrow();

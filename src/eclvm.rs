@@ -237,9 +237,11 @@ pub(crate) fn var_f(
 }
 
 // Int getter 0x41F420 (07 §6): float variables read through the float getter and truncate.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn var_i(
     m: &mut EnemyManager,
     pl: &crate::player::Player,
+    bm: Option<&crate::bullet::BulletManager>,
     rng: &mut crate::rng::Rng,
     e: &Enemy,
     c: &Context,
@@ -257,7 +259,10 @@ pub(crate) fn var_i(
         // 07 §6: 2 if stage time + pending capture time + live time orbs ≥ TIME_THR (11 §3.1).
         10098 => {
             let pending = m.g.payout.map_or(0, |c| c.time);
-            let orbs = m.bullets.borrow().items.count(crate::item::TIME_ORB);
+            let orbs = bm
+                .expect("bullet manager")
+                .items
+                .count(crate::item::TIME_ORB);
             let st = &pl.stats;
             if st.time + pending + orbs >= st.time_threshold {
                 2
@@ -473,6 +478,7 @@ impl Exec<'_> {
             var_i(
                 self.m,
                 crate::pl!(self.sys),
+                self.sys.bullets.as_deref(),
                 self.sys.rng,
                 self.e,
                 &t.ctx,
@@ -506,6 +512,7 @@ impl Exec<'_> {
             var_i(
                 self.m,
                 crate::pl!(self.sys),
+                self.sys.bullets.as_deref(),
                 self.sys.rng,
                 self.e,
                 &t.ctx,
@@ -947,10 +954,9 @@ impl Exec<'_> {
     // BulletMgr_SpawnPattern on the enemy's descriptor e+0x2E24 (07 §9.3).
     fn spawn_desc(&mut self) {
         let p = self.m.g.player;
-        self.m
-            .bullets
-            .borrow_mut()
-            .spawn_pattern(self.anm, &self.e.desc, p, &mut self.sys);
+        let (anm, desc) = (&mut *self.anm, &self.e.desc);
+        self.sys
+            .with_bullets(|b, sys| b.spawn_pattern(anm, desc, p, sys));
     }
 
     // Laser block (07 §9.4, 64 bytes) → laser slot[current]; +0x34/+0x38/+0x3C raw.
@@ -979,11 +985,7 @@ impl Exec<'_> {
         };
         d.origin = add3(self.e.final_pos, self.e.shot_offset);
         self.e.laser_desc = d.clone();
-        let id =
-            self.m
-                .bullets
-                .borrow_mut()
-                .spawn_laser(self.anm, self.sys.rng, &d, self.m.g.player);
+        let id = crate::bm!(self.sys).spawn_laser(self.anm, self.sys.rng, &d, self.m.g.player);
         let cur = self.e.laser_cur.min(31);
         self.e.lasers[cur] = id;
     }
@@ -993,7 +995,7 @@ impl Exec<'_> {
             return;
         };
         let p = self.m.g.player;
-        if let Some(l) = self.m.bullets.borrow_mut().laser_mut(id) {
+        if let Some(l) = crate::bm!(self.sys).laser_mut(id) {
             f(l, p);
         }
     }
@@ -1028,19 +1030,13 @@ impl Exec<'_> {
 
     fn item(&mut self, pos: [f32; 3], kind: i32) {
         let p = crate::pl!(self.sys);
-        self.m
-            .bullets
-            .borrow_mut()
+        crate::bm!(self.sys)
             .items
             .spawn(self.anm, self.sys.rng, p, pos, kind, 0);
     }
 
     fn cancel_all(&mut self, mode: i32) {
-        let p = crate::pl!(self.sys);
-        self.m
-            .bullets
-            .borrow_mut()
-            .cancel_all(self.anm, self.sys.rng, p, mode);
+        self.m.cancel_all(self.anm, mode, &mut self.sys);
     }
 
     // Ops 142 / 168 (07 §7): offsets Rng·128 − 64 on x then y; 142 below full power: first type 2, rest 0.
@@ -1232,7 +1228,7 @@ impl Exec<'_> {
             27 => {
                 let sub = t.ctx.int(V_INT1 + 2);
                 let marked: Vec<_> = {
-                    let mut b = self.m.bullets.borrow_mut();
+                    let b = crate::bm!(self.sys);
                     b.bullets[..crate::bullet::MAX_BULLETS]
                         .iter_mut()
                         .filter(|x| !x.free() && x.flags & 0x100000 != 0)
@@ -1258,10 +1254,7 @@ impl Exec<'_> {
                     t.ctx.flt(V_FLT0),
                     t.ctx.flt(V_FLT0 + 1),
                 );
-                self.m
-                    .bullets
-                    .borrow_mut()
-                    .toggle_ghost(self.anm, mask, a, s, n == 14);
+                crate::bm!(self.sys).toggle_ghost(self.anm, mask, a, s, n == 14);
                 if n == 12 {
                     let pause = t.ctx.int(V_INT0 + 1) == 0;
                     let mut c = self.e.chain_next;
@@ -1289,13 +1282,13 @@ impl Exec<'_> {
                 self.anm.speed = 1.0 / arg as f32;
                 self.stage_interrupt(2);
                 let k = self.anm.speed;
-                self.m.bullets.borrow_mut().slow_down(self.anm, k);
+                crate::bm!(self.sys).slow_down(self.anm, k);
             }
             // Undo 28 0x425290 (07 §12): velocities × 1/speed, sprites 0x60–0x6F := +0x218; Supervisor flag 0x20
             // when 1/arg < 1; then speed 1 and interrupt 1.
             29 => {
                 let f = 1.0 / self.anm.speed;
-                self.m.bullets.borrow_mut().slow_down_restore(self.anm, f);
+                crate::bm!(self.sys).slow_down_restore(self.anm, f);
                 if 1.0 / (arg as f32) < 1.0 {
                     self.anm.slowdown_restore = true;
                 }
@@ -1350,7 +1343,7 @@ impl Exec<'_> {
     }
 
     fn warp(&mut self, w: &Warp) {
-        self.m.bullets.borrow_mut().warp(w);
+        crate::bm!(self.sys).warp(w);
     }
 
     // Natives 9 / 11 / 25 0x424730 / 0x424820 / 0x424910 (07 §12): Player_LaserTest from origin
@@ -1375,7 +1368,7 @@ impl Exec<'_> {
             pl.laser_test(c, [590.0, big], o, a, false, &env, anm, sys);
             orbs
         });
-        let mut b = self.m.bullets.borrow_mut();
+        let b = crate::bm!(self.sys);
         let pl = crate::pl!(self.sys);
         if std::mem::take(&mut pl.drop_attracted) {
             b.items.drop_attracted();
@@ -1391,7 +1384,7 @@ impl Exec<'_> {
     // int var 10007 (bullet colour of ecldata6 sub77).
     fn mark_children(&mut self, t: &Thread) {
         let col = t.ctx.int(V_INT0 + 7);
-        let near: Vec<[f32; 3]> = self.m.bullets.borrow().bullets[..crate::bullet::MAX_BULLETS]
+        let near: Vec<[f32; 3]> = crate::bm!(self.sys).bullets[..crate::bullet::MAX_BULLETS]
             .iter()
             .filter(|b| !b.free() && b.flags & 0x100000 != 0)
             .map(|b| b.pos)
@@ -1978,7 +1971,16 @@ impl Exec<'_> {
                     };
                     if op == 86 {
                         let pl = crate::pl!(self.sys);
-                        let v = var_i(self.m, pl, self.sys.rng, e, ctx, var, self.sys.rank.rank);
+                        let v = var_i(
+                            self.m,
+                            pl,
+                            self.sys.bullets.as_deref(),
+                            self.sys.rng,
+                            e,
+                            ctx,
+                            var,
+                            self.sys.rank.rank,
+                        );
                         self.set_i(t, ins, 0, v);
                     } else {
                         let v = var_f(self.m, self.sys.rng, e, ctx, var as f32, self.sys.rank.rank);
@@ -2388,13 +2390,7 @@ impl Exec<'_> {
             161 => {
                 let r = self.af(t, ins, 0);
                 let p = crate::pl!(self.sys);
-                self.m.bullets.borrow_mut().cancel_radius(
-                    self.anm,
-                    self.sys.rng,
-                    &p,
-                    self.e.final_pos,
-                    r,
-                );
+                crate::bm!(self.sys).cancel_radius(self.anm, self.sys.rng, &p, self.e.final_pos, r);
             }
             163 => self.m.g.g_f54cec = self.ai(t, ins, 0),
             // Not implemented: op 164 spell flag bit 6 / 0x41F040 (0 uses in data).
@@ -2494,9 +2490,6 @@ fn hermite(t: f32, v: [f32; 4]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bullet::BulletManager;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     #[test]
     fn hermite_eval_order() {
@@ -2535,7 +2528,6 @@ mod tests {
 
     // Subs placed after a zeroed 0x48-byte header; each ends with an op −1 marker.
     fn manager(subs: &[&[Vec<u8>]]) -> (AnmManager, EnemyManager) {
-        let mut rng = crate::rng::Rng::default();
         let mut data = vec![0u8; 0x48];
         let mut offs = Vec::new();
         for sub in subs {
@@ -2550,10 +2542,9 @@ mod tests {
             subs: offs,
             timelines: Vec::new(),
         };
-        let mut anm = AnmManager::default();
-        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, &mut rng)));
+        let anm = AnmManager::default();
         let mut player = crate::player::Player::default();
-        (anm, EnemyManager::new(ecl, bullets, &mut player, 1))
+        (anm, EnemyManager::new(ecl, &mut player, 1))
     }
 
     // Test systems with the player of `manager`'s enemy manager.
@@ -2561,9 +2552,11 @@ mod tests {
         crate::game::TestSys::with_player(1)
     }
 
-    // A fresh player for each `manager` built inside a loop (each had its own player before step 9a).
+    // A fresh player and bullet manager for each `manager` built inside a loop (each had its own before 9a / 9b).
     fn fresh_player(sys: &mut crate::game::Sys) {
-        *crate::pl!(sys) = *crate::game::TestSys::with_player(1).player.unwrap();
+        let ts = crate::game::TestSys::with_player(1);
+        *crate::pl!(sys) = *ts.player.unwrap();
+        *crate::bm!(sys) = *ts.bullets.unwrap();
     }
 
     fn spawn(m: &mut EnemyManager, idx: usize, sub: i32, death_sub: i32, flags_b: u32) {
@@ -2650,6 +2643,7 @@ mod tests {
             var_i(
                 m,
                 &crate::player::Player::default(),
+                None,
                 &mut rng,
                 &e,
                 &e.main.ctx,
@@ -2916,7 +2910,7 @@ mod tests {
         e.desc.flags = 0x8000;
         ecl_run(&mut m, &mut anm, 0, sys);
         assert_eq!(m.enemies[0].desc.origin, [104.0, 48.0, 0.0]);
-        let b = m.bullets.borrow();
+        let b = crate::bm!(sys);
         let live: Vec<_> = b
             .bullets
             .iter()
@@ -2937,7 +2931,7 @@ mod tests {
             crate::pl!(sys).bombing = bombing;
             spawn(&mut m, 0, 0, -1, 0);
             ecl_run(&mut m, &mut anm, 0, sys);
-            let b = m.bullets.borrow();
+            let b = crate::bm!(sys);
             let kinds: Vec<u8> = b
                 .items
                 .items
@@ -2962,7 +2956,7 @@ mod tests {
             ([400.0, 108.0, 0.0], [2.0, -1.0, 0.0]),
         ];
         {
-            let mut b = m.bullets.borrow_mut();
+            let b = crate::bm!(sys);
             for (k, (pos, vel)) in cases.into_iter().enumerate() {
                 let x = &mut b.bullets[k];
                 (x.state, x.pos, x.vel, x.angle) = (1, pos, vel, 0.0);
@@ -2970,7 +2964,7 @@ mod tests {
         }
         spawn(&mut m, 0, 0, -1, 0);
         ecl_run(&mut m, &mut anm, 0, sys);
-        let b = m.bullets.borrow();
+        let b = crate::bm!(sys);
         let [b0, b1, b2] = [&b.bullets[0], &b.bullets[1], &b.bullets[2]];
         assert!((b0.pos[0] - 261.0).abs() < 1e-3 && b0.pos[1] == 208.0);
         assert_eq!((b0.vel, b0.warp_cooldown), ([-3.0, -0.0, -0.0], 2));
@@ -2986,8 +2980,10 @@ mod tests {
     // 07 §12 native 7: Q's outer x0 is −31.1, so pos −31.0 / prev −31.5 is a zone change (1 vs 2).
     #[test]
     fn native7_prev_bound_quirk() {
-        let (_, m) = manager(&[&[]]);
-        let mut bm = m.bullets.borrow_mut();
+        let mut bm = crate::bullet::BulletManager::new(
+            &mut AnmManager::default(),
+            &mut crate::rng::Rng::default(),
+        );
         let x = &mut bm.bullets[0];
         (x.state, x.pos, x.vel) = (1, [-31.0, 224.0, 0.0], [0.5, 0.0, 0.0]);
         bm.warp(&Warp::native7());
@@ -3142,7 +3138,7 @@ mod tests {
             m.enemies[k].chain_next = (k < 5).then_some(k + 1);
         }
         {
-            let mut b = m.bullets.borrow_mut();
+            let b = crate::bm!(sys);
             (b.bullets[0].state, b.bullets[0].pos, b.bullets[0].flags) =
                 (1, [140.0, 100.0, 0.0], 0x100000);
             (b.bullets[1].state, b.bullets[1].pos) = (1, [250.0, 100.0, 0.0]);
@@ -3182,6 +3178,7 @@ mod tests {
             var_i(
                 &mut m,
                 &crate::player::Player::default(),
+                None,
                 &mut rng,
                 &e,
                 &e.main.ctx,
@@ -3407,6 +3404,7 @@ mod tests {
             var_i(
                 &mut m,
                 &crate::player::Player::default(),
+                None,
                 &mut rng,
                 &e,
                 &e.main.ctx,
@@ -3422,6 +3420,7 @@ mod tests {
             var_i(
                 &mut m,
                 &crate::player::Player::default(),
+                None,
                 &mut rng,
                 &e,
                 &e.main.ctx,

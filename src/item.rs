@@ -54,6 +54,7 @@ pub struct Item {
     pub max_flag: bool,
 }
 
+#[derive(Clone)]
 pub struct ItemManager {
     pub items: Vec<Item>,
     // +0x17ADA4 search cursor (08 §8.3).

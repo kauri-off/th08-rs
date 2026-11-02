@@ -109,8 +109,12 @@ fn main() -> anyhow::Result<()> {
                         p.pos[0], p.pos[1], p.state, p.sht.poc_line, p.sht_youkai.poc_line
                     );
                 }
-                if let Some(bm) = gm.bullets.as_ref().filter(|_| th08::settings::get().idump) {
-                    for (i, x) in bm.borrow().items.items.iter().enumerate() {
+                if let Some(bm) = ctx
+                    .bullets
+                    .as_deref()
+                    .filter(|_| th08::settings::get().idump)
+                {
+                    for (i, x) in bm.items.items.iter().enumerate() {
                         if x.alive {
                             println!(
                                 "  i{i} kind {} st {} pos {:.1},{:.1} t {}",
@@ -119,8 +123,12 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                if let Some(bm) = gm.bullets.as_ref().filter(|_| !th08::settings::get().idump) {
-                    for (i, x) in bm.borrow().bullets.iter().enumerate() {
+                if let Some(bm) = ctx
+                    .bullets
+                    .as_deref()
+                    .filter(|_| !th08::settings::get().idump)
+                {
+                    for (i, x) in bm.bullets.iter().enumerate() {
                         if x.state != 0 {
                             println!(
                                 "  b{i} st {} pos {:.1},{:.1} vel {:.2},{:.2} ang {:.2} off {} act {:x}",

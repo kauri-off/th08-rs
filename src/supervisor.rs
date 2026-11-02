@@ -243,8 +243,9 @@ impl Supervisor {
         if let Some(t) = self.scene_task.take() {
             task::remove_task(ctx, &t);
         }
-        // The player goes with its game manager (both dropped here, after GameMgr_OnRemove, 11 §7).
+        // The player and the bullet manager go with their game manager (dropped here, after GameMgr_OnRemove, 11 §7).
         ctx.player = None;
+        ctx.bullets = None;
     }
 
     // GameMgr_OnRegister 0x43AAF4: 0x44886F at (500, 440) + darken overlay (ScreenEffect type 5) after the main menu,

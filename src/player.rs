@@ -1465,21 +1465,18 @@ impl Task<Ctx> for PlayerTask {
         {
             p.env.dialogue = e.dialogue_active();
         }
-        // Items of the bullet manager, owned by the game manager (08 §8).
-        match gm.as_ref().and_then(|g| g.bullets.as_ref()) {
-            Some(b) => {
-                let mut b = b.borrow_mut();
-                p.frame(
-                    &mut ctx.anm,
-                    &inp,
-                    Some(&mut b.items),
-                    &mut crate::sys!(ctx; None),
-                );
-                if std::mem::take(&mut p.bomb.attract) {
-                    b.items.attract_all();
-                }
-            }
-            None => p.frame(&mut ctx.anm, &inp, None, &mut crate::sys!(ctx; None)),
+        // Items of the bullet manager (08 §8), held for the player's calc.
+        let mut b = ctx.bullets.as_deref_mut();
+        p.frame(
+            &mut ctx.anm,
+            &inp,
+            b.as_mut().map(|b| &mut b.items),
+            &mut crate::sys!(ctx; None; None),
+        );
+        if std::mem::take(&mut p.bomb.attract)
+            && let Some(b) = b
+        {
+            b.items.attract_all();
         }
         ctx.effects.player = p.pos;
         p.store_game_over(&mut ctx.game);

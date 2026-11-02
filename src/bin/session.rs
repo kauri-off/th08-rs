@@ -270,8 +270,8 @@ fn dump_items(ctx: &th08::game::Ctx, row: i64) {
             }
         }
     }
-    if let Some(bm) = &gm.bullets {
-        for (i, x) in bm.borrow().items.items.iter().enumerate() {
+    if let Some(bm) = ctx.bullets.as_deref() {
+        for (i, x) in bm.items.items.iter().enumerate() {
             if x.alive {
                 println!(
                     "  i{i} kind {} st {} pos {:.3},{:.3} vel {:.3},{:.3} t {}",
