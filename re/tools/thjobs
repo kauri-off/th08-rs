@@ -22,7 +22,10 @@ def unit_props(unit):
 
 
 def last_line(unit):
-    lines = [l for l in sh("journalctl", "--user", "-u", unit, "-n", "5", "-o", "cat", "--no-pager").splitlines() if l.strip()]
+    # skip systemd's own Started / Deactivated / Consumed lines
+    noise = re.compile(r"^(Started |Stopped |Stopping |th-[\w-]+\.service: |[\w-]+\.service: )")
+    lines = [l for l in sh("journalctl", "--user", "-u", unit, "-n", "20", "-o", "cat", "--no-pager").splitlines()
+             if l.strip() and not noise.match(l)]
     return lines[-1] if lines else ""
 
 
@@ -61,10 +64,16 @@ def fmt_mem(b):
 def render():
     now = time.time()
     t = Table(expand=True, header_style="bold", box=None, padding=(0, 1))
-    for c, kw in [("job", {}), ("state", {}), ("time", {"justify": "right"}), ("progress", {"no_wrap": True, "min_width": 40}), ("eta", {"justify": "right", "no_wrap": True}),
-                  ("cpu", {"justify": "right"}), ("mem", {"justify": "right"}), ("last log line", {"ratio": 2, "no_wrap": True, "overflow": "ellipsis"})]:
+    js = jobs()
+    nw = max([len(j["name"]) for j in js] + [3])
+    # fixed columns never shrink; only the log line gives way on a narrow terminal
+    fixed = {"no_wrap": True, "overflow": "crop"}
+    for c, kw in [("job", {**fixed, "min_width": nw}), ("state", {**fixed, "min_width": 7}), ("time", {**fixed, "justify": "right", "min_width": 7}),
+                  ("progress", {**fixed, "min_width": 38}), ("eta", {**fixed, "justify": "right"}),
+                  ("cpu", {**fixed, "justify": "right", "min_width": 5}), ("mem", {**fixed, "justify": "right", "min_width": 5}),
+                  ("last log line", {"ratio": 1, "no_wrap": True, "overflow": "ellipsis", "min_width": 0})]:
         t.add_column(c, **kw)
-    for j in jobs():
+    for j in js:
         p = unit_props(j["unit"])
         active = p.get("ActiveState") in ("active", "activating", "deactivating")
         if active:
@@ -104,7 +113,9 @@ def render():
                 json.dump(saved, open(jp, "w"))
             done = sum(min(d, c) if c else d for d, c, _ in st)
             total = j["total"] or sum(c for _, c, _ in st)
-            if total:
+            if total and not active and done == 0 and j["exit"] == 0:
+                prog = Text("output removed before it was counted", "dim")
+            elif total:
                 if all(c for _, c, _ in st):
                     wdone = sum(min(d, c) * w for d, c, w in st)
                     wleft = sum(max(c - d, 0) * w for d, c, w in st)
