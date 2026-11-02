@@ -7,8 +7,6 @@ use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
-use std::cell::RefCell;
-use std::rc::Rc;
 use th08_formats::sjis::{self, SjisString};
 
 // Gui_Calc = Spell_Calc 0x416B90 at calc prio 12, Gui_Draw = Spell_Draw 0x4178C0 at draw prio 15 (12 §5.8).
@@ -54,7 +52,8 @@ pub enum Req {
 // Port queue of g_Gui calls (`Ctx::gui_queue`, `Sys::gui`), drained by Gui_Calc in arrival order.
 pub type Queue = Vec<Req>;
 
-// g_Gui 0x4EA670.
+// g_Gui 0x4EA670; `Ctx.gui`, its chain nodes are `GuiTask`.
+#[derive(Clone)]
 pub struct Gui {
     // VMs at +0x120 + k·0x2A4, roles in the 12 §5.8 table; 3 and 5 never get a script.
     vms: [AnmVm; 14],
@@ -77,24 +76,47 @@ pub struct Gui {
 }
 
 impl Gui {
-    pub fn register(ctx: &mut Ctx) -> Result<Rc<RefCell<Gui>>> {
+    pub fn register(ctx: &mut Ctx) -> Result<task::TaskRef<Ctx>> {
         ctx.gui_queue.clear();
-        let g = Rc::new(RefCell::new(Gui {
+        ctx.gui = Some(Box::new(Gui::new(ctx.game.shot)));
+        let t = task::task(GuiTask);
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+        Ok(t)
+    }
+
+    // g_Gui as Gui_Register leaves it (12 §5.8): no card, bonus-line tint 0x80808080.
+    pub fn new(shot: u8) -> Gui {
+        Gui {
             vms: Default::default(),
             texts: Vec::new(),
             name_only: false,
             card: -1,
-            shot: ctx.game.shot,
+            shot,
             bonus: 0,
             capturable: false,
             history: (0, 0),
             tint: 0x8080_8080,
             pre_tint: None,
+        }
+    }
+
+    // Clone test state (worldclone.rs): card, bonus, tint and per VM (script index, interrupt, alpha).
+    #[cfg(test)]
+    pub fn trace(&self) -> Vec<u64> {
+        let mut t = vec![
+            self.card as u64,
+            self.bonus as u64,
+            self.capturable as u64,
+            self.name_only as u64,
+            self.tint as u64,
+        ];
+        t.extend(self.vms.iter().map(|v| {
+            (v.script_index as u16 as u64) << 32
+                | (v.pending_interrupt as u64) << 8
+                | v.color[anmvm::A] as u64
         }));
-        let t: task::TaskRef<Ctx> = g.clone();
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
-        Ok(g)
+        t
     }
 
     // Gui_LoadFaces 0x414590 part (12 §5.8): face_cdbg, VMs 0–7 hidden, the load-time scripts of VMs 6 and 10–13.
@@ -147,14 +169,15 @@ impl Gui {
         }
     }
 
-    fn handle(
+    pub(crate) fn handle(
         &mut self,
         anm: &mut AnmManager,
         rng: &mut crate::rng::Rng,
         r: Req,
         sound: &mut crate::sound::Queue,
         panel: &mut crate::hud::Panel,
-        en: &EnemyManager,
+        // The HUD's dialogue: Msg_Start(0) may have swapped the portrait file pointers (10 §4).
+        msg: Option<&crate::msg::Dialogue>,
     ) {
         let v = &mut self.vms;
         match r {
@@ -191,10 +214,7 @@ impl Gui {
             } => {
                 if face >= 0 {
                     // File pointer g_Gui+0x262C = portrait k = 2, swapped by Msg_Start(0) in 6B / Ex (12 §5.8, 10 §4).
-                    let slot = en
-                        .msg
-                        .as_ref()
-                        .map_or(SPELL_FACE_SLOT, |m| m.borrow().face_slot[2]);
+                    let slot = msg.map_or(SPELL_FACE_SLOT, |m| m.face_slot[2]);
                     anm.set_script(rng, &mut v[1], slot, 0);
                     v[1].set_sprite(anm, face);
                 }
@@ -270,7 +290,7 @@ impl Gui {
 
     // Bonus line: 8 digits of the bonus, captures and attempts (3 digits each), leading zeros suppressed.
     // Live +0xFC: the card's, or after the card ended the value time orbs keep changing (07 §11.1).
-    fn read_bonus(&mut self, en: &EnemyManager) {
+    pub(crate) fn read_bonus(&mut self, en: &EnemyManager) {
         if let Some(s) = &en.g.spell {
             (self.bonus, self.capturable) = (s.bonus, s.capture);
         } else if let Some(l) = &en.g.spell_left {
@@ -329,7 +349,42 @@ impl Gui {
     }
 }
 
-impl Task<Ctx> for Gui {
+// The spell manager lent out of `ctx.gui` for a step that also takes the `Ctx` (nothing it calls reads `ctx.gui`).
+fn with_gui<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Gui, &mut Ctx) -> R) -> R {
+    let mut g = ctx.gui.take().expect("gui");
+    let r = f(&mut g, ctx);
+    ctx.gui = Some(g);
+    r
+}
+
+// Chain nodes of `ctx.gui` (calc prio 12, draw prio 15): stateless forwarder (STEP9_WORLD.md §3).
+pub struct GuiTask;
+
+impl Task<Ctx> for GuiTask {
+    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) -> Result<()> {
+        with_gui(ctx, |g, ctx| g.on_register(ctx, chain, tag))
+    }
+
+    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) {
+        with_gui(ctx, |g, ctx| g.on_remove(ctx, chain, tag))
+    }
+
+    fn calc(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        with_gui(ctx, |g, ctx| g.calc(ctx, tag))
+    }
+
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        with_gui(ctx, |g, ctx| g.draw_step(ctx, tag))
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        if let Some(g) = ctx.gui.as_deref() {
+            g.emit(ctx, rec, tag);
+        }
+    }
+}
+
+impl Gui {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             self.load(ctx)?;
@@ -353,7 +408,7 @@ impl Task<Ctx> for Gui {
                 r,
                 &mut ctx.sound,
                 &mut ctx.panel,
-                ctx.enemies.as_deref().expect("enemy manager"),
+                ctx.msg.as_deref(),
             );
         }
         if self.card >= 0 {
@@ -393,7 +448,7 @@ impl Task<Ctx> for Gui {
                         r,
                         &mut ctx.sound,
                         &mut ctx.panel,
-                        ctx.enemies.as_deref().expect("enemy manager"),
+                        ctx.msg.as_deref(),
                     );
                 }
             }

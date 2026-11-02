@@ -59,6 +59,12 @@ pub struct Ctx {
     // Stage g_Stage 0x4E4030 (06 §3): created by GameMgr's stage start (11 §3.1), dropped with the game manager
     // (11 §7). Step 9d interim owner (STEP9_WORLD.md).
     pub stage: Option<Box<crate::stage::Stage>>,
+    // HUD g_Hud 0x160F428 (12 §5) and spell manager g_Gui 0x4EA670 (12 §5.8): registered by GameMgr's stage start
+    // (11 §3.1), dropped with the game manager (11 §7). Step 9e interim owner (STEP9_WORLD.md).
+    pub hud: Option<Box<crate::hud::Hud>>,
+    pub gui: Option<Box<crate::gui::Gui>>,
+    // Dialogue state at HudImpl+0x21814 (10 §3), created with the HUD; read by the ECL (`Sys.msg`) and GameMgr_Calc.
+    pub msg: Option<Box<crate::msg::Dialogue>>,
     // Port queue of bomb areas created by effects (14 §2.13).
     pub bomb_areas: crate::bomb::AreaQueue,
     // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
@@ -92,7 +98,8 @@ pub struct Ctx {
 // (13 §1.2), effect manager (13 §2), GM flags word (11 §2.1), rank (11 §2), ascii overlays (13 §4), HUD dirty fields
 // (12 §5.3), bomb area queue (14 §2.13), freeze byte and frames-since-load (13 §3), g_Gui call queue (12 §5.8),
 // g_Rng (11 §1), the player (09 §1; None inside the player's own calc), the bullet manager (08 §2; None inside
-// the bullet calc and the player calc, which hold it), the stage (06 §3; None inside the stage calc). Built by
+// the bullet calc and the player calc, which hold it), the stage (06 §3; None inside the stage calc), the
+// dialogue (10 §3; None without a HUD). Built by
 // `sys!(ctx)`; these become `World` fields in step 9 (ARCH_A §2.3).
 pub struct Sys<'a> {
     pub sound: &'a mut crate::sound::Queue,
@@ -109,6 +116,7 @@ pub struct Sys<'a> {
     pub player: Option<&'a mut crate::player::Player>,
     pub bullets: Option<&'a mut crate::bullet::BulletManager>,
     pub stage: Option<&'a mut crate::stage::Stage>,
+    pub msg: Option<&'a mut crate::msg::Dialogue>,
 }
 
 impl Sys<'_> {
@@ -128,6 +136,7 @@ impl Sys<'_> {
             player: self.player.as_deref_mut(),
             bullets: self.bullets.as_deref_mut(),
             stage: self.stage.as_deref_mut(),
+            msg: self.msg.as_deref_mut(),
         }
     }
 
@@ -212,6 +221,7 @@ macro_rules! sys {
             player: $p,
             bullets: $b,
             stage: $s,
+            msg: $c.msg.as_deref_mut(),
         }
     };
 }
@@ -233,6 +243,7 @@ pub struct TestSys {
     pub player: Option<Box<crate::player::Player>>,
     pub bullets: Option<Box<crate::bullet::BulletManager>>,
     pub stage: Option<Box<crate::stage::Stage>>,
+    pub msg: Option<Box<crate::msg::Dialogue>>,
 }
 
 #[cfg(test)]
@@ -347,6 +358,9 @@ impl Ctx {
             bullets: None,
             enemies: None,
             stage: None,
+            hud: None,
+            gui: None,
+            msg: None,
             bomb_areas: Vec::new(),
             timer_pause: 0,
             load_frames: 0,

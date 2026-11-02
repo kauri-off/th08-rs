@@ -1458,8 +1458,8 @@ impl Task<Ctx> for PlayerTask {
         // 0x164D2C8 gameplay frame counter (11 §2), read after GameMgr_Calc (prio 2) incremented it.
         p.frames = ctx.game.frame_counter as i32;
         // The dialogue state is read live: the previous frame's dialogue calc (prio 12) ran after the enemies.
-        if let Some(e) = ctx.enemies.as_deref() {
-            p.env.dialogue = e.dialogue_active();
+        if ctx.enemies.is_some() {
+            p.env.dialogue = ctx.msg.as_deref().is_some_and(crate::msg::Dialogue::active);
         }
         // Items of the bullet manager (08 §8), held for the player's calc.
         let mut b = ctx.bullets.as_deref_mut();

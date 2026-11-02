@@ -9,8 +9,6 @@ use crate::game::{Ctx, Sys};
 use crate::player::Player;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 pub const CALC_PRIO: u16 = 11;
 // 07 §10.6: draw prio 8 → layers 0–1, prio 11 → layers 2–3.
@@ -742,7 +740,6 @@ pub struct EnemyManager {
     // Debug: `TH08_ENEMY_DMG`, `TH08_STAGE_FRAME`.
     pub debug_damage: i32,
     pub fast_forward: u32,
-    pub msg: Option<Rc<RefCell<crate::msg::Dialogue>>>,
     pub stage_index: usize,
 }
 
@@ -807,7 +804,6 @@ impl EnemyManager {
             },
             debug_damage: 0,
             fast_forward: 0,
-            msg: None,
             stage_index: 0,
         }
     }
@@ -1183,7 +1179,12 @@ impl EnemyManager {
                 }
             }
             6 => self.start_msg(anm, ai(0), sys),
-            7 => return !self.msg.as_ref().is_some_and(|m| m.borrow().blocking()),
+            7 => {
+                return !sys
+                    .msg
+                    .as_deref()
+                    .is_some_and(crate::msg::Dialogue::blocking);
+            }
             8 => {
                 if let Some(b) = self.boss(ai(0)) {
                     self.enemies[b].pending_interrupt = ai(1);
@@ -1593,12 +1594,14 @@ impl EnemyManager {
 
     // Hud_StartMsg: Msg_Start plus its playfield side effects (10 §4 step 6).
     pub fn start_msg(&mut self, anm: &mut AnmManager, n: i32, sys: &mut Sys) {
-        let Some(m) = self.msg.clone() else { return };
-        let mut m = m.borrow_mut();
-        m.info.clock = crate::pl!(sys).stats.clock;
+        if sys.msg.is_none() {
+            return;
+        }
+        let clock = crate::pl!(sys).stats.clock;
+        let m = sys.msg.as_deref_mut().expect("dialogue");
+        m.info.clock = clock;
         m.start(n);
         if std::mem::take(&mut m.side_effects) {
-            drop(m);
             self.msg_side_effects(anm, sys);
         }
     }
@@ -1883,8 +1886,9 @@ impl EnemyManager {
         }
     }
 
-    pub fn dialogue_active(&self) -> bool {
-        self.msg.as_ref().is_some_and(|m| m.borrow().active())
+    // Msg_IsActive on the HUD's dialogue lent in `sys` (10 §1); false without a HUD.
+    pub fn dialogue_active(sys: &Sys) -> bool {
+        sys.msg.as_deref().is_some_and(crate::msg::Dialogue::active)
     }
 
     pub fn spawn_item(
@@ -2394,7 +2398,7 @@ impl EnemyManager {
     // Common tail of 07 §10.1 step 7: hit flash, boss marker, timers, draw-list link.
     fn update_tail(&mut self, idx: usize, gs: f32, sr: bool, sys: &mut Sys) {
         let pause = *sys.timer_pause != 0;
-        let dialogue = self.dialogue_active();
+        let dialogue = Self::dialogue_active(sys);
         let e = &mut self.enemies[idx];
         // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
         let hit = std::mem::take(&mut e.hit);
@@ -2485,7 +2489,7 @@ impl EnemyManager {
         // 0x164D30C play-time counter: top of EnemyMgr_Calc outside dialogue, before the bit-10 test (11 §2).
         // Human-rate counters (15 §2.3) in the same block, only while the manager clock (+0x9DCED0) is > 15;
         // human = player byte +3 == 0.
-        if !self.dialogue_active() {
+        if !Self::dialogue_active(sys) {
             let p = crate::pl!(sys);
             p.stats.rec.progress += 1;
             if self.clock.cur > 15 {
@@ -2525,10 +2529,11 @@ impl EnemyManager {
             .filter(|e| e.flags & A_LOSES_LIFE != 0)
             .map(|e| e.final_pos);
         sys.fx.boss = pull;
+        let dialogue = Self::dialogue_active(sys);
         let b = crate::bm!(sys);
         b.env.boss = self.bosses.iter().any(Option::is_some);
         b.env.spell = self.g.spell.is_some();
-        b.env.dialogue = self.dialogue_active();
+        b.env.dialogue = dialogue;
         let env = b.env;
         crate::pl!(sys).env = env;
         // Timer_Tick at the end of EnemyMgr_Calc with the live game speed (11 §3.2).
@@ -2538,7 +2543,7 @@ impl EnemyManager {
     // EnemyMgr_TimeRank 0x42C3B0 (11 §3.2): rank +100 outside dialogue when the manager clock (before this frame's
     // tick) advanced and cur % (2400 − 240·lives) == 0, signed.
     fn time_rank(&mut self, sys: &mut Sys) {
-        if self.dialogue_active() {
+        if Self::dialogue_active(sys) {
             return;
         }
         let lives = crate::pl!(sys).stats.lives as i32;

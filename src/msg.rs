@@ -117,9 +117,11 @@ pub struct StartInfo {
     pub clock: i32,
 }
 
-// Dialogue state at HudImpl+0x21814.. (10 §3).
+// Dialogue state at HudImpl+0x21814.. (10 §3); `Ctx.msg` (step 9e).
+#[derive(Clone)]
 pub struct Dialogue {
-    pub file: Option<MsgFile>,
+    // The stage's .msg file (10 §2), shared immutable data.
+    pub file: Option<std::sync::Arc<MsgFile>>,
     pub info: StartInfo,
     // Portrait file per face index; 6B / Extra swap slots 2 and 3 on entry 0 (Gui file pointers 0x4ECC9C ↔ 0x4ECCA0).
     pub face_slot: [usize; 4],
@@ -204,6 +206,23 @@ enum Exec {
 }
 
 impl Dialogue {
+    // Clone test state (worldclone.rs): entry, ip, clocks, counters and the line VMs' scripts.
+    #[cfg(test)]
+    pub fn trace(&self) -> Vec<u64> {
+        let mut t = vec![
+            self.entry as u64,
+            self.ip as u64,
+            self.clock.cur as u64,
+            self.wait_count as u64,
+            self.min_wait as u64,
+            self.release_counter as u64,
+            self.next_line as u64,
+            self.new_box as u64,
+        ];
+        t.extend(self.lines.iter().map(|v| v.script_index as u64));
+        t
+    }
+
     pub fn skippable_shown(&self) -> bool {
         self.active() && self.skippable
     }
@@ -707,7 +726,7 @@ mod tests {
             return;
         };
         let mut d = Dialogue {
-            file: Some(parse(ar.read("msg1a.dat").unwrap()).unwrap()),
+            file: Some(parse(ar.read("msg1a.dat").unwrap()).unwrap().into()),
             ..Dialogue::default()
         };
         let mut anm = AnmManager::default();
@@ -755,7 +774,7 @@ mod tests {
                 ..StartInfo::default()
             };
             let mut d = Dialogue {
-                file: Some(parse(ar.read(&file_name(5, shot)).unwrap()).unwrap()),
+                file: Some(parse(ar.read(&file_name(5, shot)).unwrap()).unwrap().into()),
                 info,
                 ..Dialogue::default()
             };

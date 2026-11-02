@@ -11,8 +11,6 @@ use crate::msg::{self, Dialogue, Event};
 use crate::player::{Player, Popup, Stats};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 // Hud_Calc 0x4338CA prio 15, Hud_Draw 0x433927 prio 17; ANM slots front 10, loadingNN 12, stgNtxt 13, times 14 (12 §5.1).
 pub const CALC_PRIO: u16 = 15;
@@ -40,6 +38,7 @@ const RANK_TEXT: [&str; 6] = [
 ];
 
 // Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus popup: timer t and slide x (12 §5.5).
+#[derive(Clone)]
 struct ActivePopup {
     kind: Popup,
     // Timer impl+0x22DA0 / +0x22DC0 / +0x22DE0, ticked at game speed (12 §5.5).
@@ -86,6 +85,7 @@ impl ActivePopup {
 }
 
 // Stage-clear panel state (10 §9, 12 §5.6).
+#[derive(Clone)]
 struct ClearPanel {
     // impl+0x22E10: clock-animation delay timer (op 9 := 0).
     timer: u32,
@@ -128,8 +128,9 @@ impl ClearPanel {
     }
 }
 
+// g_Hud 0x160F428; `Ctx.hud`, its chain nodes are `HudTask`. The dialogue it hosts (HudImpl+0x21814) is `Ctx.msg`.
+#[derive(Clone)]
 pub struct Hud {
-    pub msg: Rc<RefCell<Dialogue>>,
     frame: u32,
     // front.anm VMs 0–15 (impl+i·0x2A4, 12 §5.2).
     front: Vec<AnmVm>,
@@ -256,11 +257,21 @@ fn stage_start_tiles(anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> Vec<Anm
 }
 
 impl Hud {
-    pub fn register(ctx: &mut Ctx, fresh: bool) -> Result<Rc<RefCell<Hud>>> {
-        let h = Rc::new(RefCell::new(Hud {
-            msg: Rc::new(RefCell::new(Dialogue::default())),
+    pub fn register(ctx: &mut Ctx, fresh: bool) -> Result<task::TaskRef<Ctx>> {
+        ctx.msg = Some(Box::new(Dialogue::default()));
+        ctx.hud = Some(Box::new(Hud::new(fresh)));
+        let t = task::task(HudTask);
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+        Ok(t)
+    }
+
+    // The zero-filled HUD of Hud_Register (12 §5.1); Hud_Load fills it on registration.
+    pub fn new(fresh: bool) -> Hud {
+        Hud {
             frame: 0,
-            front: Vec::new(),
+            // Hud_Load replaces all 16 in both branches.
+            front: vec![AnmVm::default(); 16],
             title: Vec::new(),
             diff_vm: AnmVm::default(),
             label_vm: AnmVm::default(),
@@ -283,11 +294,38 @@ impl Hud {
             capture_pending: false,
             tiles: Vec::new(),
             tiles_live: 0,
+        }
+    }
+
+    // Hud_Update step 5 (12 §5.1b): show calls made earlier this frame restart their slot, then the popup timers at
+    // game speed `gs`.
+    pub(crate) fn popup_step(&mut self, st: &mut Stats, panel: &mut Panel, gs: f32) {
+        for p in st.popups.drain(..) {
+            // Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus: 0x17CE8CC := 2 (12 §5.3).
+            panel.set_repaint(2);
+            self.popups[ActivePopup::slot(p)] = Some(ActivePopup::show(p));
+        }
+        for slot in &mut self.popups {
+            if slot.as_mut().is_some_and(|p| !p.update(gs)) {
+                *slot = None;
+            }
+        }
+    }
+
+    // Clone test state (worldclone.rs): boss bar, popups as raw bits.
+    #[cfg(test)]
+    pub fn trace(&self) -> Vec<u64> {
+        let mut t = vec![
+            self.bar_state as u64,
+            self.bar_alpha as u64,
+            self.bar_target.to_bits() as u64,
+            self.bar_disp.to_bits() as u64,
+        ];
+        t.extend(self.popups.iter().map(|p| {
+            p.as_ref()
+                .map_or(0, |p| (p.t.cur as u64) << 32 | p.x.to_bits() as u64)
         }));
-        let t: task::TaskRef<Ctx> = h.clone();
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
-        Ok(h)
+        t
     }
 
     // Hud_StageTransition 0x438F58 (12 §3, §5.7): VM impl+0x3CC0 := capture.anm script 1, then a playfield capture into
@@ -342,9 +380,9 @@ impl Hud {
                 ctx.anm.load(rec, ar, msg::FACE_SLOTS[k], &f)?;
             }
         }
-        let mut d = self.msg.borrow_mut();
+        let d = ctx.msg.as_deref_mut().expect("dialogue");
         if !g.spell_practice() {
-            d.file = Some(msg::parse(ar.read(&msg::file_name(stage, shot))?)?);
+            d.file = Some(msg::parse(ar.read(&msg::file_name(stage, shot))?)?.into());
         }
         d.info = msg::StartInfo {
             stage,
@@ -355,7 +393,6 @@ impl Hud {
             cleared_6b: g.cleared(false, 7),
             clock: 0,
         };
-        drop(d);
         let anm = &mut ctx.anm;
         // The script-index shorts of VMs impl+0x3778 / +0x3A1C / +0x3CC0 := −1 and impl+0x21810 := 0 in both branches.
         self.load_vm.script_index = -1;
@@ -447,8 +484,8 @@ impl Hud {
     }
 
     // Text_RenderToVm 0x4663B0 for the queued dialogue lines (10 §6).
-    fn flush_texts(&mut self, ctx: &mut Ctx) {
-        let mut d = self.msg.borrow_mut();
+    fn flush_texts(ctx: &mut Ctx) {
+        let d = ctx.msg.as_deref_mut().expect("dialogue");
         let size = d.font_size;
         for (line, s, colour) in std::mem::take(&mut d.texts) {
             // Line 2 renders into boss_card's strip (text.anm sprite 2, 10 §5.1).
@@ -633,7 +670,7 @@ impl Hud {
     }
 
     // Hud_Update step 1 (12 §5.1b): boss-bar state machine; the caller skips it while a dialogue runs.
-    fn boss_calc(&mut self, e: &EnemyManager) {
+    pub(crate) fn boss_calc(&mut self, e: &EnemyManager) {
         let (req, target) = (e.g.hud_boss, e.g.hud_bar_target);
         self.bar_target = target;
         let label = &mut self.front[12];
@@ -654,8 +691,7 @@ impl Hud {
 
     // Msg_Draw 0x43542B (10 §7): portrait pairs back-to-front by pos.z, text box, lines, boss card (Draw2DSnap).
     // Emit only: mode 0 writes no VM state (05 §9).
-    fn emit_msg(&self, anm: &AnmManager, rec: &mut Recorder) {
-        let d = self.msg.borrow();
+    fn emit_msg(d: &Dialogue, anm: &AnmManager, rec: &mut Recorder) {
         if !d.active() {
             return;
         }
@@ -730,7 +766,7 @@ impl Hud {
                 anm.prepare(vm, 5);
             }
         }
-        if !self.msg.borrow().active() {
+        if !dialogue_active(ctx) {
             self.bar_step(ctx);
         }
     }
@@ -764,7 +800,7 @@ impl Hud {
                 anm.emit_mode(rec, vm, 5);
             }
         }
-        if !self.msg.borrow().active() {
+        if !dialogue_active(ctx) {
             self.emit_bar(ctx, rec);
         }
         if self.clear_vm.script.is_some() {
@@ -1181,7 +1217,47 @@ impl Hud {
     }
 }
 
-impl Task<Ctx> for Hud {
+// Msg_IsActive on the HUD's dialogue (10 §1).
+fn dialogue_active(ctx: &Ctx) -> bool {
+    ctx.msg.as_deref().is_some_and(Dialogue::active)
+}
+
+// The HUD lent out of `ctx.hud` for a step that also takes the `Ctx` (nothing it calls reads `ctx.hud`).
+fn with_hud<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Hud, &mut Ctx) -> R) -> R {
+    let mut h = ctx.hud.take().expect("hud");
+    let r = f(&mut h, ctx);
+    ctx.hud = Some(h);
+    r
+}
+
+// Chain nodes of `ctx.hud` (calc prio 15, draw prio 17): stateless forwarder (STEP9_WORLD.md §3).
+pub struct HudTask;
+
+impl Task<Ctx> for HudTask {
+    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) -> Result<()> {
+        with_hud(ctx, |h, ctx| h.on_register(ctx, chain, tag))
+    }
+
+    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) {
+        with_hud(ctx, |h, ctx| h.on_remove(ctx, chain, tag))
+    }
+
+    fn calc(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        with_hud(ctx, |h, ctx| h.calc(ctx, tag))
+    }
+
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        with_hud(ctx, |h, ctx| h.draw_step(ctx, tag))
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        if let Some(h) = ctx.hud.as_deref() {
+            h.emit(ctx, rec, tag);
+        }
+    }
+}
+
+impl Hud {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             self.load(ctx)?;
@@ -1240,7 +1316,7 @@ impl Task<Ctx> for Hud {
             }
         }
         // Hud_Update 0x435900, steps 1–7 of 12 §5.1b.
-        if !self.msg.borrow().active() {
+        if !dialogue_active(ctx) {
             self.boss_calc(ctx.enemies.as_deref().expect("enemy manager"));
         }
         // Front VMs, stage-title VMs, the stage-start clock, the stage-clear VM, the night clock.
@@ -1297,24 +1373,14 @@ impl Task<Ctx> for Hud {
                 }
             }
         }
-        // Show calls made earlier this frame restart their slot; then the popup timers (12 §5.1b step 5).
-        for p in crate::pl!(ctx).stats.popups.drain(..) {
-            // Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus: 0x17CE8CC := 2 (12 §5.3).
-            ctx.panel.set_repaint(2);
-            self.popups[ActivePopup::slot(p)] = Some(ActivePopup::show(p));
-        }
         let gs = ctx.anm.speed;
-        for slot in &mut self.popups {
-            if slot.as_mut().is_some_and(|p| !p.update(gs)) {
-                *slot = None;
-            }
-        }
+        self.popup_step(&mut crate::pl!(ctx).stats, &mut ctx.panel, gs);
         self.clear_bonus(&ctx.game, crate::pl!(ctx));
         self.clear_calc(&mut ctx.game, &inp);
         // Msg_Run (10 §5), including op 9.
         let dying = crate::pl!(ctx).state == 2;
         let (collect, events, side) = {
-            let mut d = self.msg.borrow_mut();
+            let d = ctx.msg.as_deref_mut().expect("dialogue");
             d.info.clock = crate::pl!(ctx).stats.clock;
             let c = d.run(&mut ctx.anm, &mut ctx.rng, &inp, dying);
             ctx.game.dialogue_skippable = d.skippable_shown();
@@ -1332,9 +1398,9 @@ impl Task<Ctx> for Hud {
         if collect {
             crate::bm!(ctx).items.attract_all();
         }
-        self.flush_texts(ctx);
+        Self::flush_texts(ctx);
         self.handle_events(ctx, events);
-        self.flush_texts(ctx);
+        Self::flush_texts(ctx);
         // Step 3: SKIP held raises 0x17CE8CC to 8 (12 §5.1b).
         if inp.down(crate::input::SKIP) && ctx.panel.repaint < 8 {
             ctx.panel.set_repaint(8);
@@ -1364,7 +1430,7 @@ impl Task<Ctx> for Hud {
             return;
         }
         rec.set_viewport(PLAYFIELD);
-        self.emit_msg(&ctx.anm, rec);
+        Self::emit_msg(ctx.msg.as_deref().expect("dialogue"), &ctx.anm, rec);
         self.emit_boss(ctx, rec);
         self.emit_panel(&ctx.anm, rec, &ctx.player.as_deref().expect("player").stats);
     }

@@ -556,10 +556,10 @@ fn slow_skips(n: usize, c: u32) -> bool {
         || ((128..224).contains(&n) && c % 5 == 0)
 }
 
-// The player, the bullet and enemy managers and the stage are `ctx.player` / `ctx.bullets` / `ctx.enemies` /
-// `ctx.stage` until step 9g moves them here (docs/arch/STEP9_WORLD.md).
+// The player, the bullet and enemy managers, the stage, the HUD with its dialogue and g_Gui are `ctx.player` /
+// `ctx.bullets` / `ctx.enemies` / `ctx.stage` / `ctx.hud` / `ctx.msg` / `ctx.gui` until step 9g moves them here
+// (docs/arch/STEP9_WORLD.md).
 pub struct GameManager {
-    pub hud: Option<Rc<RefCell<Hud>>>,
     // Subsystems unregistered by the GM on-remove (11 §7).
     tasks: Vec<TaskRef<Ctx>>,
     // Port-only: loading frame at which Ascii_SetupGaugeVms runs, with the gauge limits (12 §5.9).
@@ -575,7 +575,6 @@ pub struct GameManager {
 impl GameManager {
     pub fn register(ctx: &mut Ctx) -> Result<Rc<RefCell<GameManager>>> {
         let gm = Rc::new(RefCell::new(GameManager {
-            hud: None,
             tasks: Vec::new(),
             gauge_at: None,
             loading_total: 31,
@@ -813,7 +812,6 @@ impl GameManager {
                 crate::stg!(ctx).spell_first = 2;
             }
         }
-        crate::em!(ctx).msg = Some(hud.borrow().msg.clone());
         if fresh && !ctx.game.replay() {
             ctx.game.rpy = None;
         }
@@ -844,19 +842,11 @@ impl GameManager {
         // Ascii_InitVms after `flags &= ~0x10`, before the loading wait (11 §3.1, 13 §4).
         ctx.overlays.popups.clear();
         self.tasks = vec![
-            player_t,
-            stage_t,
-            bullets_t,
-            enemies_t,
-            effects,
-            hud.clone(),
-            gui,
-            replay_t,
+            player_t, stage_t, bullets_t, enemies_t, effects, hud, gui, replay_t,
         ];
         let total = loading_total(&ctx.game, ctx.anm.entries_loaded - entries0);
         self.loading_total = total;
         self.gauge_at = Some(((total + 1).saturating_sub(k).max(1), l.min, l.max));
-        self.hud = Some(hud);
         // 0x18B8A2C := 2 at the end of StageStart (13 §3).
         ctx.load_frames = 2;
         Ok(())
@@ -1037,9 +1027,9 @@ impl Task<Ctx> for GameManager {
         // Clear frame with next_scene_after < 0 (stage 1–5 advance, replay next stage): Hud_StageTransition (11 §4 step 1).
         if cleared
             && ctx.game.next_scene_after < 0
-            && let Some(h) = &self.hud
+            && let Some(h) = ctx.hud.as_deref_mut()
         {
-            h.borrow_mut().stage_transition(&mut ctx.anm, &mut ctx.rng);
+            h.stage_transition(&mut ctx.anm, &mut ctx.rng);
         }
         self.cleared |= cleared;
         if let Some(r) = r {
@@ -1124,10 +1114,7 @@ impl Task<Ctx> for GameManager {
             Stats::checksum(&mut ctx.rng);
             ctx.rng.state = s;
         }
-        let msg_active = self
-            .hud
-            .as_ref()
-            .is_some_and(|h| h.borrow().msg.borrow().active());
+        let msg_active = ctx.msg.as_deref().is_some_and(crate::msg::Dialogue::active);
         let g = &mut ctx.game;
         // Step 5 (0x43A24A): replay "slowdown reproduction" (15 §3.3) runs a frame only on a pattern of the recorded
         // fps, never while dialogue is active; a skipped frame leaves gm+0x2D as it is.

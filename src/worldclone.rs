@@ -1,13 +1,18 @@
 //! World clone round trip (ARCH_A §2.3 `World: Clone`, REWRITE_PLAN "New tests"): a state cloned mid-run continues
 //! exactly like the original. Step 9a covers the player and the `Sys` value parts, 9b the bullet manager with its
 //! items, 9c the enemy manager with a synthetic ECL, 9d the stage with a synthetic .std (`TestSys::stage`, released
-//! by the ECL's section requests), 9f the effect manager and the screen-effect pool (`TestSys::effects`); each later step-9 run adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md).
+//! by the ECL's section requests), 9f the effect manager and the screen-effect pool (`TestSys::effects`), 9e the
+//! HUD, g_Gui and the dialogue (`TestSys::msg`, started by an ECL timeline op 6 with a synthetic .msg file); each
+//! later step-9 run adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md).
 use crate::anmmgr::AnmManager;
 use crate::bullet::BulletManager;
 use crate::effect::ScreenEnv;
 use crate::enemy::EnemyManager;
 use crate::game::TestSys;
+use crate::gui::Gui;
+use crate::hud::Hud;
 use crate::input::{self, Input};
+use crate::msg::Dialogue;
 use crate::player::Player;
 use crate::stage::Stage;
 use crate::stdfile::{Record, Std};
@@ -18,6 +23,13 @@ struct World {
     sys: TestSys,
     // The enemy manager (`Ctx.enemies`), its ECL shared with the clone until either writes into it.
     enemies: Box<EnemyManager>,
+    // The HUD (`Ctx.hud`) and g_Gui (`Ctx.gui`); the dialogue is `TestSys::msg`, its .msg file shared by the clone.
+    hud: Box<Hud>,
+    gui: Box<Gui>,
+    // Dialogue frames run, text lines queued and g_Gui calls handled, to check the run exercised them.
+    msg_frames: u32,
+    msg_texts: u32,
+    gui_reqs: u32,
     anm: AnmManager,
     inp: Input,
     // The frame's SE ids with their pans, as Sound_Update drains them (13 §1.2).
@@ -34,6 +46,11 @@ impl Clone for World {
         World {
             sys: self.sys.clone(),
             enemies: self.enemies.clone(),
+            hud: self.hud.clone(),
+            gui: self.gui.clone(),
+            msg_frames: self.msg_frames,
+            msg_texts: self.msg_texts,
+            gui_reqs: self.gui_reqs,
             anm: anm_copy(&self.anm),
             inp: self.inp,
             se: self.se.clone(),
@@ -86,11 +103,19 @@ impl World {
         };
         sys.bullets = Some(Box::new(BulletManager::new(&mut anm, &mut sys.rng)));
         sys.stage = Some(Box::new(Stage::new(0, stage_std())));
+        let mut d = Box::new(Dialogue::default());
+        d.file = Some(std::sync::Arc::new(msg_file()));
+        sys.msg = Some(d);
         let mut enemies = Box::new(EnemyManager::new(ecl(), crate::pl!(sys), 1));
         enemies.stage_start(&mut sys.rng, crate::pl!(sys), 0, 0);
         World {
             sys,
             enemies,
+            hud: Box::new(Hud::new(true)),
+            gui: Box::new(Gui::new(2)),
+            msg_frames: 0,
+            msg_texts: 0,
+            gui_reqs: 0,
             anm,
             inp: Input::default(),
             se: Vec::new(),
@@ -105,7 +130,10 @@ impl World {
     // bullet manager lent out of its `Sys` (items passed in), as `PlayerTask::calc`; EnemyMgr_Calc (prio 11) as
     // `EnemyTask::calc` with a spark burst every 40 frames; EffectMgr_Calc (prio 13); BulletMgr_Calc (prio 14) with the
     // time-orb spell bonus, as `BulletTask::calc`. 9f: the screen-effect calcs first (prio 3, `ScreenTask::calc`) and
-    // a type 7 + type 1 shake queued every 100 frames, linked after the calc pass (`register_pending`).
+    // a type 7 + type 1 shake queued every 100 frames, linked after the calc pass (`register_pending`). 9e: Gui_Calc
+    // (prio 12) handles the queued g_Gui calls and reads the bonus, as `GuiTask::calc` (no score.dat record, no
+    // card steps); Hud_Calc (prio 15) boss bar outside dialogue, popups, Msg_Run with its side effects and item
+    // attraction, as `HudTask::calc` (the queued text renders and events are only counted).
     fn frame(&mut self, f: u32) {
         let mut bits = input::SHOT;
         bits |= if (f / 45) % 2 == 0 {
@@ -155,6 +183,12 @@ impl World {
             })
         });
         self.enemies.step(anm, sys);
+        for r in std::mem::take(sys.gui) {
+            self.gui_reqs += 1;
+            self.gui
+                .handle(anm, sys.rng, r, sys.sound, sys.panel, sys.msg.as_deref());
+        }
+        self.gui.read_bonus(&self.enemies);
         if f % 40 == 0 {
             sys.fx
                 .spawn(anm, sys.rng, 4, [192.0, 100.0, 0.0], 6, 0xFFFF_FFFF);
@@ -169,6 +203,29 @@ impl World {
         if f % 100 == 90 {
             sys.fx.screen(7, 4, 10, 20, 10, 0x15);
             sys.fx.screen(1, 30, 2, 6, 0, 0x10);
+        }
+        if !sys.msg.as_deref().unwrap().active() {
+            self.hud.boss_calc(&self.enemies);
+        }
+        let gs = anm.speed;
+        self.hud
+            .popup_step(&mut crate::pl!(sys).stats, sys.panel, gs);
+        let (clock, dying) = {
+            let p = crate::pl!(sys);
+            (p.stats.clock, p.state == 2)
+        };
+        let d = sys.msg.as_deref_mut().unwrap();
+        self.msg_frames += d.active() as u32;
+        d.info.clock = clock;
+        let collect = d.run(anm, sys.rng, inp, dying);
+        self.msg_texts += d.texts.len() as u32;
+        d.texts.clear();
+        d.events.clear();
+        if std::mem::take(&mut d.side_effects) {
+            self.enemies.msg_side_effects(anm, sys);
+        }
+        if collect {
+            crate::bm!(sys).items.attract_all();
         }
         // Stage_DrawLow / DrawHigh / DrawHigh tail steps (draw prio 6 / 7): sparkle reset and flag clear.
         let st = self.sys.stage.as_deref_mut().unwrap();
@@ -255,6 +312,14 @@ impl World {
         }));
         t.extend(m.ecl.data.iter().map(|&b| b as u64));
         t.extend(self.sys.stage.as_deref().unwrap().trace());
+        t.extend(self.sys.msg.as_deref().unwrap().trace());
+        t.extend(self.hud.trace());
+        t.extend(self.gui.trace());
+        t.extend([
+            self.msg_frames as u64,
+            self.msg_texts as u64,
+            self.gui_reqs as u64,
+        ]);
         t
     }
 }
@@ -290,14 +355,21 @@ fn ecl() -> crate::ecl::Ecl {
     data.extend(ins(60, 4, &[0, -(len as i32)]));
     data.extend(ins(0, -1, &[]));
     let tl = data.len();
-    for time in [10i32, 100, 250, 400, 600] {
+    let tl_ins = |time: i32, op: i16, args: &[i32]| {
         let mut v = time.to_le_bytes().to_vec();
-        v.extend(2i16.to_le_bytes());
-        v.extend([8 + 4 * 7, 0xFF]);
-        for a in [0, f(64.0), f(320.0), f(80.0), 600, 0, 100] {
-            v.extend(a.to_le_bytes());
+        v.extend(op.to_le_bytes());
+        v.extend([(8 + 4 * args.len()) as u8, 0xFF]);
+        v.extend(args.iter().flat_map(|a| a.to_le_bytes()));
+        v
+    };
+    for time in [10i32, 100, 250, 400, 600] {
+        if time == 600 {
+            // Dialogue entry 0 at time 450 (timeline op 6), then op 7 holds the timeline while it blocks (07 §3).
+            data.extend(tl_ins(450, 6, &[0]));
+            data.extend(tl_ins(450, 7, &[]));
         }
-        data.extend(v);
+        let spawn = [0, f(64.0), f(320.0), f(80.0), 600, 0, 100];
+        data.extend(tl_ins(time, 2, &spawn));
     }
     data.extend((-1i32).to_le_bytes());
     data.extend([0u8; 4]);
@@ -306,6 +378,36 @@ fn ecl() -> crate::ecl::Ecl {
         subs: vec![sub],
         timelines: vec![tl],
     }
+}
+
+// msg instruction (10 §2): u16 time, u8 op, u8 arg size, args.
+fn msg_ins(time: u16, op: u8, args: &[u8]) -> Vec<u8> {
+    let mut v = time.to_le_bytes().to_vec();
+    v.extend([op, args.len() as u8]);
+    v.extend(args);
+    v
+}
+
+// A .msg file (10 §2) with entry 0: skippable on (op 13), a speaker line (op 3) and a 40-frame wait (op 4), a release
+// (op 6), a text line (op 16) and a 30-frame wait, then the end (op 0) at clock 20.
+fn msg_file() -> crate::msg::MsgFile {
+    let text = |s: &[u8]| s.iter().chain(&[0]).map(|b| b ^ 0x77).collect::<Vec<u8>>();
+    let mut data = 1u32.to_le_bytes().to_vec();
+    data.extend(8u32.to_le_bytes());
+    let mut line = vec![0, 0, 0, 0];
+    line.extend(text(b"ab"));
+    for i in [
+        msg_ins(0, 13, &[1, 0, 0, 0]),
+        msg_ins(0, 3, &line),
+        msg_ins(0, 4, &40i32.to_le_bytes()),
+        msg_ins(0, 6, &[]),
+        msg_ins(0, 16, &text(b"cd")),
+        msg_ins(0, 4, &30i32.to_le_bytes()),
+        msg_ins(20, 0, &[]),
+    ] {
+        data.extend(i);
+    }
+    crate::msg::parse(data).unwrap()
 }
 
 // A .std script (06 §1.4, §4) without objects: fog fade (ops 2, 1), a 90-frame camera move (ops 6, 5), a halt
@@ -349,24 +451,43 @@ fn clone_continues_identically() {
         "no screen effect or effect live at the clone"
     );
     assert_eq!(a.trace(), b.trace());
+    // A second clone in the middle of the dialogue (9e).
+    let mut c: Option<World> = None;
     for f in 200..900 {
         a.frame(f);
         b.frame(f);
         assert_eq!(a.trace(), b.trace(), "frame {f}");
+        if let Some(c) = &mut c {
+            c.frame(f);
+            assert_eq!(a.trace(), c.trace(), "frame {f} (dialogue clone)");
+        } else if a.sys.msg.as_deref().unwrap().active() && a.msg_frames == 30 {
+            c = Some(a.clone());
+        }
     }
+    assert!(c.is_some(), "no dialogue running for the second clone");
     // The run did something worth cloning: the player moved and bombed, the RNG was drawn, bullets flew.
     let (t, p) = (a.trace(), a.sys.player.as_deref().unwrap());
     assert_ne!(t[..2], start[..2]);
     assert!(p.bombs_started > 0 && a.sys.rng.total > 0, "{:?}", &t[..18]);
     let bm = a.sys.bullets.as_deref().unwrap();
-    assert!(bm.patterns > 20 && bm.frame == 900, "{}", bm.patterns);
-    // All five enemies spawned and fired (the patterns above); each run wrote into its own copy of the ECL file.
+    assert!(bm.patterns > 15 && bm.frame == 900, "{}", bm.patterns);
+    // All five enemies spawned and fired (the patterns above); Msg_Start's KillAll at time 450 took the first four,
+    // the time-600 spawn is still alive; each run wrote into its own copy of the ECL file.
     let (ma, mb) = (&a.enemies, &b.enemies);
-    assert_eq!(ma.enemies.iter().filter(|e| e.alive()).count(), 5);
+    assert_eq!(ma.enemies.iter().filter(|e| e.alive()).count(), 1);
     assert!(!std::sync::Arc::ptr_eq(&ma.ecl, &mb.ecl));
     // The stage passed its halt (released by an ECL section request) and looped; sparkles spawned from frame 700.
     let st = a.sys.stage.as_deref().unwrap().trace();
     assert_eq!((st[0], st[4]), (900, 0x8010_2030), "{st:?}");
+    // The dialogue ran and ended, rendered its lines; g_Gui handled the bomb cut-in calls.
+    let d = a.sys.msg.as_deref().unwrap();
+    assert!(
+        !d.active() && a.msg_frames > 60 && a.msg_texts >= 2 && a.gui_reqs >= 2,
+        "{} {} {}",
+        a.msg_frames,
+        a.msg_texts,
+        a.gui_reqs
+    );
     // Effects lived and the screen shakes ran (each type 7 / 1 calc draws the RNG twice).
     assert!(
         a.fx_peak > 0 && a.screen_runs > 100,

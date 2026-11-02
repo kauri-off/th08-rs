@@ -1039,6 +1039,8 @@ impl PauseMenu {
         bgm: &mut crate::sound::Bgm,
         sound: &mut crate::sound::Queue,
         host: &mut dyn crate::host::Host,
+        // The running game's HUD (Hud_StageTransition, state 10).
+        hud: Option<&mut crate::hud::Hud>,
     ) {
         let replay = g.replay();
         if self.state == 0 {
@@ -1166,7 +1168,7 @@ impl PauseMenu {
                                     bgm.pause_bgm(false);
                                     bgm.start_fade_in(2.0);
                                 }
-                                stage_transition(ctx_anm, rng);
+                                stage_transition(hud, ctx_anm, rng);
                                 g.request(gamemgr::SCENE_RELOAD)
                             } else {
                                 g.request(gamemgr::SCENE_RETRY)
@@ -1274,9 +1276,13 @@ pub fn queue_capture(anm: &mut crate::anmmgr::AnmManager, vm: &AnmVm) -> i32 {
 }
 
 // Hud_StageTransition on the registered game's HUD (pause / continue retry paths, 12 §3).
-fn stage_transition(anm: &mut crate::anmmgr::AnmManager, rng: &mut crate::rng::Rng) {
-    if let Some(h) = gamemgr::current().and_then(|m| m.borrow().hud.clone()) {
-        h.borrow_mut().stage_transition(anm, rng);
+fn stage_transition(
+    hud: Option<&mut crate::hud::Hud>,
+    anm: &mut crate::anmmgr::AnmManager,
+    rng: &mut crate::rng::Rng,
+) {
+    if let Some(h) = hud {
+        h.stage_transition(anm, rng);
     }
 }
 
@@ -1324,6 +1330,8 @@ impl ContinueMenu {
         now: u64,
         // The running stage's enemy manager (spell flag bit 9, captured).
         enemies: Option<&crate::enemy::EnemyManager>,
+        // The running game's HUD (Hud_StageTransition on "Yes" in spell practice / Extra).
+        hud: Option<&mut crate::hud::Hud>,
     ) -> bool {
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
@@ -1407,7 +1415,7 @@ impl ContinueMenu {
                             bgm.start_fade_in_from_dip(1.0);
                         }
                         g.request(gamemgr::SCENE_RELOAD);
-                        stage_transition(ctx_anm, rng);
+                        stage_transition(hud, ctx_anm, rng);
                         g.game_over = 0;
                         g.mark_play_time(now);
                         self.open = false;
@@ -1523,6 +1531,7 @@ impl Task<Ctx> for AsciiManager {
                 &mut ctx.bgm,
                 &mut ctx.sound,
                 &mut *ctx.host,
+                ctx.hud.as_deref_mut(),
             );
         } else if ctx.game.game_over != 0 {
             let exited = self.cont.update(
@@ -1535,6 +1544,7 @@ impl Task<Ctx> for AsciiManager {
                 &mut ctx.panel,
                 ctx.host.ticks_ms(),
                 ctx.enemies.as_deref(),
+                ctx.hud.as_deref_mut(),
             );
             if exited && let Some(p) = ctx.player.as_deref_mut() {
                 p.stats.score_disp = p.stats.score10;
@@ -1670,6 +1680,7 @@ mod tests {
                 &mut Default::default(),
                 0,
                 None,
+                None,
             );
         }
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1684,6 +1695,7 @@ mod tests {
             &mut Default::default(),
             0,
             None,
+            None,
         );
         assert!(m.yes);
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1696,6 +1708,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
             None,
         );
         assert_eq!(m.vms[1].color, [0x80, 0x80, 0xFF, 0xFF]);
@@ -1724,6 +1737,7 @@ mod tests {
             &mut Default::default(),
             0,
             None,
+            None,
         );
         assert!(m.open && !m.yes);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
@@ -1750,6 +1764,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
             None,
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_REPLAY_END));
@@ -1785,6 +1800,7 @@ mod tests {
                 &mut Default::default(),
                 0,
                 None,
+                None,
             );
         }
         m.update(
@@ -1796,6 +1812,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
             None,
         );
         assert!(m.yes);
@@ -1809,6 +1826,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
             None,
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RELOAD));
@@ -1829,6 +1847,7 @@ mod tests {
                 &mut Default::default(),
                 0,
                 None,
+                None,
             );
         }
         m.update(
@@ -1840,6 +1859,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
             None,
         );
         for _ in 0..19 {
@@ -1853,6 +1873,7 @@ mod tests {
                 &mut Default::default(),
                 0,
                 None,
+                None,
             );
             assert_eq!(g.game_over, 1);
         }
@@ -1865,6 +1886,7 @@ mod tests {
             &mut Default::default(),
             &mut Default::default(),
             0,
+            None,
             None,
         );
         assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RESULT));
@@ -1896,6 +1918,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut crate::platform::ToolHost::default(),
+            None,
         );
         assert_eq!(ints(&m), [1, 1, 1, 1, 0, 0, 0, 0, 0, 0]);
         for _ in 0..4 {
@@ -1907,6 +1930,7 @@ mod tests {
                 &mut bgm,
                 &mut Default::default(),
                 &mut crate::platform::ToolHost::default(),
+                None,
             );
         }
         m.update(
@@ -1917,6 +1941,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut crate::platform::ToolHost::default(),
+            None,
         );
         assert_eq!(m.state, 4);
         assert_eq!(ints(&m), [2, 2, 2, 2, 0, 0, 0, 0, 0, 0]);
@@ -1933,6 +1958,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut crate::platform::ToolHost::default(),
+            None,
         );
         m.state = 5;
         m.frame = 4;
@@ -1947,6 +1973,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut crate::platform::ToolHost::default(),
+            None,
         );
         assert_eq!(m.state, 9);
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
@@ -1958,6 +1985,7 @@ mod tests {
             &mut bgm,
             &mut Default::default(),
             &mut crate::platform::ToolHost::default(),
+            None,
         );
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
     }
