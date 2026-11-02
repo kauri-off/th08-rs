@@ -62,6 +62,8 @@ pub mod stdfile;
 pub mod supervisor;
 pub mod task;
 pub mod text;
+#[cfg(test)]
+mod worldclone;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod xz;
 

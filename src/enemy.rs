@@ -6,7 +6,7 @@ use crate::bullet::{BulletDesc, BulletManager, FROZEN_TINT, LaserDesc};
 use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::ecl::{self, Ecl};
 use crate::game::{Ctx, Sys};
-use crate::player::PlayerRef;
+use crate::player::Player;
 use crate::stage::Stage;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
@@ -733,7 +733,6 @@ pub struct EnemyManager {
     pub sync: [i32; 4],
     pub g: Globals,
     pub bullets: Rc<RefCell<BulletManager>>,
-    pub player: PlayerRef,
     pub stage: Option<Rc<RefCell<Stage>>>,
     // Manager "full" flag: the last spawn found no slot (07 §4.1).
     pub full: bool,
@@ -760,20 +759,24 @@ pub fn parse_difficulty(s: &str) -> Option<i32> {
 }
 
 impl EnemyManager {
-    pub fn new(ecl: Ecl, bullets: Rc<RefCell<BulletManager>>, difficulty: i32) -> Self {
+    pub fn new(
+        ecl: Ecl,
+        bullets: Rc<RefCell<BulletManager>>,
+        player: &mut Player,
+        difficulty: i32,
+    ) -> Self {
         let timelines = ecl
             .timelines
             .iter()
             .map(|&o| (Timer::default(), o))
             .collect();
         // Rank is GM+0x3DE2C, synced from the game manager every frame (11 §3.2).
-        let player = bullets.borrow().player.clone();
-        player.borrow_mut().stats.difficulty = difficulty;
-        let step = player.borrow().orb_step;
+        player.stats.difficulty = difficulty;
+        let step = player.orb_step;
         let g = Globals {
             difficulty,
             rank: 16,
-            player: player.borrow().pos,
+            player: player.pos,
             spell_remaining: Timer {
                 prev: 0,
                 frac: 0.0,
@@ -802,7 +805,6 @@ impl EnemyManager {
             sync: [-1; 4],
             g,
             bullets,
-            player,
             stage: None,
             full: false,
             draw_lists: Default::default(),
@@ -833,15 +835,15 @@ impl EnemyManager {
         ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_STAGE, &enm)?;
         // EnemyManager init clears the freeze byte 0x160F534.
         ctx.timer_pause = 0;
-        let mut m = EnemyManager::new(ecl, bullets, diff);
+        let p = ctx.player.as_deref_mut().expect("player");
+        let mut m = EnemyManager::new(ecl, bullets, p, diff);
         m.stage = stage;
         m.stage_index = index;
         m.g.card = ctx.game.card;
         m.fast_forward = ctx.core.stage_frame;
         m.debug_damage = ctx.core.enemy_dmg;
-        m.stage_start(&mut ctx.rng, index, ctx.game.flags);
+        m.stage_start(&mut ctx.rng, p, index, ctx.game.flags);
         let m = Rc::new(RefCell::new(m));
-        m.borrow().bullets.borrow_mut().enemies = Rc::downgrade(&m);
         let t: task::TaskRef<Ctx> = m.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
@@ -850,9 +852,14 @@ impl EnemyManager {
     }
 
     // Stage start values owned by the game manager (11 §3.1) and EnemyManager_Load's two draws (11 §1.5, 07 §10.4).
-    pub fn stage_start(&mut self, rng: &mut crate::rng::Rng, index: usize, flags: u32) {
+    pub fn stage_start(
+        &mut self,
+        rng: &mut crate::rng::Rng,
+        p: &mut Player,
+        index: usize,
+        flags: u32,
+    ) {
         let d = self.g.difficulty.clamp(0, 4) as usize;
-        let mut p = self.player.borrow_mut();
         // 11 §3.1: 0 in spell practice (GameFlags bit 14), else TIME_THR[stage][difficulty].
         p.stats.time_threshold = if flags & crate::gamemgr::F_SPELL_PRACTICE != 0 {
             0
@@ -868,7 +875,6 @@ impl EnemyManager {
             p.stats.human_frames,
             p.stats.youkai_frames,
         ) = (0, 0, 0);
-        drop(p);
         self.g.drop_counter = rng.range16(3);
         self.g.drop_index = rng.range16(8);
     }
@@ -877,7 +883,7 @@ impl EnemyManager {
     fn player_collision(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
         // Graze, contact death and the explosion hit filter read the card flag live (09 §2.1 hit 1, §9.2): a card
         // ended earlier in this calc (step 4) already counts as none.
-        self.player.borrow_mut().env.spell = self.g.spell.is_some();
+        crate::pl!(sys).env.spell = self.g.spell.is_some();
         let e = &self.enemies[idx];
         let (flags, pos, hb, sb) = (e.flags, e.final_pos, e.hitbox, e.shotbox);
         let boss = flags & A_BOSS != 0;
@@ -889,15 +895,15 @@ impl EnemyManager {
                 && e.boss_timer.cur != e.boss_timer.prev
                 && e.boss_timer.cur % 6 == 0;
             let child = e.root.is_some();
-            let mut p = self.player.borrow_mut();
-            if graze {
-                let env = p.env;
-                p.graze_test(pos, [hb[0] / 0.7, hb[1] / 0.7], &env, anm, sys);
-            }
-            let touched = !(child && matches!(p.shot_type, 0 | 4))
-                && p.contact_test(pos, [hb[0] / 1.5, hb[1] / 1.5], anm, sys);
-            let drop_attracted = std::mem::take(&mut p.drop_attracted);
-            drop(p);
+            let (touched, drop_attracted) = sys.with_player(|p, sys| {
+                if graze {
+                    let env = p.env;
+                    p.graze_test(pos, [hb[0] / 0.7, hb[1] / 0.7], &env, anm, sys);
+                }
+                let touched = !(child && matches!(p.shot_type, 0 | 4))
+                    && p.contact_test(pos, [hb[0] / 1.5, hb[1] / 1.5], anm, sys);
+                (touched, std::mem::take(&mut p.drop_attracted))
+            });
             if drop_attracted {
                 self.bullets.borrow_mut().items.drop_attracted();
             }
@@ -908,10 +914,9 @@ impl EnemyManager {
         if flags & A_SHOT_HIT != 0 {
             let mut acc = self.enemies[idx].orb_acc;
             // hitByBomb starts as "player is bombing" but Player_DamageAgainst overwrites it (07 §10.1 step 6).
-            let mut by_bomb = self.player.borrow().bombing;
-            let d = {
-                let mut b = self.bullets.borrow_mut();
-                let mut p = self.player.borrow_mut();
+            let mut by_bomb = crate::pl!(sys).bombing;
+            let mut b = self.bullets.borrow_mut();
+            let d = sys.with_player(|p, sys| {
                 // Homing-target pick, not gated (07 §10.1 step 6); the original runs it after the damage calls, which do not read it.
                 p.offer_target(pos, boss);
                 // The first call is not made for a parented enemy during a card while bombing (07 §10.1 step 6).
@@ -950,12 +955,13 @@ impl EnemyManager {
                     }
                 }
                 d
-            };
+            });
+            drop(b);
             // Aimed-enemy offer only for shootable enemies, after both damage calls (14 §3.1, 0x42D46A, RE-Q54).
-            self.offer_aimed(idx);
+            self.offer_aimed(idx, crate::pl!(sys));
             self.enemies[idx].orb_acc = acc;
             self.enemies[idx].bomb_hit = by_bomb;
-            self.damage(idx, d, by_bomb);
+            self.damage(crate::pl!(sys), idx, d, by_bomb);
         }
     }
 
@@ -983,8 +989,8 @@ impl EnemyManager {
         if e.flags & A_BOSS != 0 && (0..4).contains(&e.boss_slot) {
             sys.ov.marker_release(e.boss_slot as usize);
         }
-        if self.player.borrow().aimed == Some(idx) {
-            self.player.borrow_mut().aimed = None;
+        if crate::pl!(sys).aimed == Some(idx) {
+            crate::pl!(sys).aimed = None;
         }
         self.release(idx, sys);
         self.unregister_boss(idx);
@@ -1193,11 +1199,7 @@ impl EnemyManager {
                 }
             }
             // GameMgr_SetPower 0x406FA0: power := n, checksum (4 RNG draws) (07 timeline op 9, 09 §9.4).
-            9 => self
-                .player
-                .borrow_mut()
-                .stats
-                .set_power(ai(0) as f32, sys.rng),
+            9 => crate::pl!(sys).stats.set_power(ai(0) as f32, sys.rng),
             // A mode-0 boss stays in the table, so the alive bit is tested too (07 §10.3).
             10 => {
                 return self.boss(ai(0)).is_none_or(|b| !self.enemies[b].alive());
@@ -1238,7 +1240,7 @@ impl EnemyManager {
                     .for_each(|s| *s = v);
             }
             // 0x164D0BB = 1: game-over / continue byte (11 §2).
-            16 => self.player.borrow_mut().game_over = true,
+            16 => crate::pl!(sys).game_over = true,
             _ => {}
         }
         true
@@ -1337,7 +1339,7 @@ impl EnemyManager {
                     at.extend((0..e.trail_n()).step_by(6).map(|k| e.trail_ring[k].pos));
                 }
                 for p in at {
-                    self.spawn_item(anm, sys.rng, p, 6, 1);
+                    self.spawn_item(anm, sys.rng, p, 6, 1, crate::pl!(sys));
                     let colour = if v >= MAX {
                         crate::item::POPUP_MAX
                     } else {
@@ -1355,20 +1357,19 @@ impl EnemyManager {
                 self.jump_main(j, sub);
             }
         }
-        self.add_score(sum);
+        self.add_score(crate::pl!(sys), sum);
         sum
     }
 
     // CancelBonus(8000, lasers) + KillAll(8000): score and Hud_ShowBonus (08 §7, 07 §11.1).
     fn cancel_and_kill_bonus(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
-        let sum = {
-            let mut p = self.player.borrow_mut();
+        let sum = sys.with_player(|p, sys| {
             self.bullets
                 .borrow_mut()
-                .cancel_bonus(anm, &mut p, 8000, true, sys)
-        };
+                .cancel_bonus(anm, p, 8000, true, sys)
+        });
         let kills = self.kill_all(anm, sys);
-        let mut p = self.player.borrow_mut();
+        let p = crate::pl!(sys);
         p.stats.add_score(sum);
         // Hud_ShowBonus only when CancelBonus + KillAll ≠ 0 (12 §5.5): else the previous popup keeps running.
         if sum + kills != 0 {
@@ -1446,7 +1447,7 @@ impl EnemyManager {
             } else {
                 9
             };
-            let shot = self.player.borrow().shot_type;
+            let shot = crate::pl!(sys).shot_type;
             let boss_or_spell = self.bosses.iter().any(Option::is_some) && self.g.spell.is_none();
             for (k, &c) in kids.iter().enumerate() {
                 // Orb count c and cancel circle per child (07 §10.3a step 3).
@@ -1474,16 +1475,14 @@ impl EnemyManager {
                     }
                 };
                 // Quirk kept (13 §4): n /= 3 inside the loop while bombing, so it compounds per child.
-                if self.player.borrow().bombing {
+                if crate::pl!(sys).bombing {
                     n /= 3;
                 }
                 let e = &mut self.enemies[c];
                 sys.ov.popup_large(e.final_pos, n, 0, colour, 1.0);
                 e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
                 let pos = e.final_pos;
-                self.player
-                    .borrow_mut()
-                    .cancel_circle([pos[0], pos[1]], 32.0, 2.0, 8, cancel);
+                crate::pl!(sys).cancel_circle([pos[0], pos[1]], 32.0, 2.0, 8, cancel);
                 for _ in 0..orbs {
                     let r = sys.rng.next_f32() * (2 * orbs) as f32;
                     let a = sys.rng.next_signed() * std::f32::consts::PI;
@@ -1495,6 +1494,7 @@ impl EnemyManager {
                         [pos[0] + d[0], pos[1] + d[1], 0.0],
                         crate::item::TIME_ORB as i32,
                         3,
+                        crate::pl!(sys),
                     );
                 }
                 if !boss_or_spell {
@@ -1527,11 +1527,10 @@ impl EnemyManager {
                     [pos[0] + d[0], pos[1] + d[1], 0.0],
                     crate::item::TIME_ORB as i32,
                     1,
+                    crate::pl!(sys),
                 );
             }
-            self.player
-                .borrow_mut()
-                .cancel_circle([pos[0], pos[1]], 32.0, 1.0, 16, 7);
+            crate::pl!(sys).cancel_circle([pos[0], pos[1]], 32.0, 1.0, 16, 7);
             self.bullets.borrow_mut().items.collect_timer = 0;
         }
     }
@@ -1539,7 +1538,7 @@ impl EnemyManager {
     // Single-kill path of 0x42ADB0 (13 §4, 08 §8.4): gauge −gauge/12, gauge lock 50, one time orb.
     fn kill_single(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
         {
-            let mut p = self.player.borrow_mut();
+            let p = crate::pl!(sys);
             // 07 §10.3a: GaugeAdd(−gauge/12, not forced), so nothing while bombing; clamped.
             if !p.bombing {
                 let g = p.stats.gauge as i32;
@@ -1553,7 +1552,14 @@ impl EnemyManager {
         e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
         let pos = e.final_pos;
         sys.ov.popup_large(pos, 1, 0, 0xFFFFFFFF, 1.0);
-        self.spawn_item(anm, sys.rng, pos, crate::item::TIME_ORB as i32, 1);
+        self.spawn_item(
+            anm,
+            sys.rng,
+            pos,
+            crate::item::TIME_ORB as i32,
+            1,
+            crate::pl!(sys),
+        );
         let e = &mut self.enemies[idx];
         e.item = -2;
         e.extra_point = 0;
@@ -1578,8 +1584,7 @@ impl EnemyManager {
     }
 
     // Yukari's aimed enemy (14 §3.1): a persistent pick, replaced by a higher parentless enemy in the 64-px column.
-    fn offer_aimed(&mut self, idx: usize) {
-        let mut p = self.player.borrow_mut();
+    fn offer_aimed(&mut self, idx: usize, p: &mut Player) {
         let e = &self.enemies[idx];
         if e.root.is_some() || (e.final_pos[0] - p.pos[0]).abs() >= 64.0 {
             return;
@@ -1593,7 +1598,7 @@ impl EnemyManager {
 
     // Dissolve spell (14 §2.17): start clears flag A bit 6 of the bosses; the end kills them.
     fn dissolve_requests(&mut self, sys: &mut Sys) {
-        let req = std::mem::take(&mut self.player.borrow_mut().dissolve_req);
+        let req = std::mem::take(&mut crate::pl!(sys).dissolve_req);
         for b in self.bosses.into_iter().flatten() {
             if req & crate::player::DISSOLVE_BEGIN != 0 {
                 self.enemies[b].flags &= !A_SHOT_HIT;
@@ -1610,7 +1615,7 @@ impl EnemyManager {
     pub fn start_msg(&mut self, anm: &mut AnmManager, n: i32, sys: &mut Sys) {
         let Some(m) = self.msg.clone() else { return };
         let mut m = m.borrow_mut();
-        m.info.clock = self.player.borrow().stats.clock;
+        m.info.clock = crate::pl!(sys).stats.clock;
         m.start(n);
         if std::mem::take(&mut m.side_effects) {
             drop(m);
@@ -1620,7 +1625,7 @@ impl EnemyManager {
 
     // Msg_Start side effects (10 §4 step 6): cancel bullets, KillAll, attract items.
     pub fn msg_side_effects(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
-        self.cancel_all(anm, sys.rng, 1);
+        self.cancel_all(anm, sys.rng, crate::pl!(sys), 1);
         self.kill_all(anm, sys);
         self.bullets.borrow_mut().items.attract_all();
     }
@@ -1656,7 +1661,7 @@ impl EnemyManager {
         if !s.timed_out {
             self.cancel_and_kill_bonus(anm, sys);
         }
-        let mut p = self.player.borrow_mut();
+        let p = crate::pl!(sys);
         // Always: bomb cooldown +0xE2A6C := 16, its only writer (07 §11.1, 09 §1.1).
         p.bomb_cooldown = 16;
         if p.state == 0 {
@@ -1726,7 +1731,7 @@ impl EnemyManager {
         if ring {
             sys.fx.free(crate::effect::FIX_SPELL_INDEX);
         }
-        let st = &mut self.player.borrow_mut().stats;
+        let st = &mut crate::pl!(sys).stats;
         st.popups.push(crate::player::Popup::SpellBonus(c.bonus));
         st.add_score(c.bonus);
         if c.time > 0 {
@@ -1860,7 +1865,7 @@ impl EnemyManager {
             _ => {}
         }
         let centre = sys.fx.peek(ring, |e| e.centre);
-        let pp = self.player.borrow().pos;
+        let pp = crate::pl!(sys).pos;
         let div = if t > 80 { 4.0 } else { 16.0 };
         let centre = [
             centre[0] + (pp[0] - centre[0]) / div,
@@ -1888,7 +1893,7 @@ impl EnemyManager {
                 let d = crate::fmath::polar(ang, 128.0);
                 let pos = [centre[0] + d[0], centre[1] + d[1], centre[2]];
                 for _ in 0..spawns {
-                    self.spawn_item(anm, sys.rng, pos, 10, 0);
+                    self.spawn_item(anm, sys.rng, pos, 10, 0, crate::pl!(sys));
                 }
                 left -= k;
             }
@@ -1909,21 +1914,26 @@ impl EnemyManager {
         pos: [f32; 3],
         kind: i32,
         mode: u8,
+        p: &Player,
     ) {
-        let p = self.player.borrow();
         self.bullets
             .borrow_mut()
             .items
-            .spawn(anm, rng, &p, pos, kind, mode);
+            .spawn(anm, rng, p, pos, kind, mode);
     }
 
-    pub fn add_score(&mut self, v: i32) {
-        self.player.borrow_mut().stats.add_score(v);
+    pub fn add_score(&mut self, p: &mut Player, v: i32) {
+        p.stats.add_score(v);
     }
 
-    pub fn cancel_all(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, mode: i32) {
-        let mut p = self.player.borrow_mut();
-        self.bullets.borrow_mut().cancel_all(anm, rng, &mut p, mode);
+    pub fn cancel_all(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        p: &mut Player,
+        mode: i32,
+    ) {
+        self.bullets.borrow_mut().cancel_all(anm, rng, p, mode);
     }
 
     // Enemy_DropItems 0x42BEA0 (07 §10.4): mode 1 (auto-collected) when hitByBomb; extras always mode 0.
@@ -1951,7 +1961,7 @@ impl EnemyManager {
             sys.fx.spawn(anm, sys.rng, spark, p, sparks, 0xFFFFFFFF);
         }
         let e = &mut self.enemies[idx];
-        let power_kind = if self.player.borrow().stats.power < 128.0 {
+        let power_kind = if crate::pl!(sys).stats.power < 128.0 {
             0
         } else {
             1
@@ -1966,7 +1976,7 @@ impl EnemyManager {
         e.extra_point = 0;
         e.extra_power = 0;
         for (pos, kind, mode) in items {
-            self.spawn_item(anm, sys.rng, pos, kind, mode);
+            self.spawn_item(anm, sys.rng, pos, kind, mode, crate::pl!(sys));
         }
     }
 
@@ -1984,7 +1994,7 @@ impl EnemyManager {
         self.kill_chain(idx, if reward { Some(&mut *anm) } else { None }, sys);
         self.kill_non_bosses();
         if self.enemies[idx].flags & A_BOSS != 0 {
-            self.protect_player(70);
+            self.protect_player(crate::pl!(sys), 70);
         }
     }
 
@@ -2005,8 +2015,7 @@ impl EnemyManager {
     }
 
     // Player state 0 → 3 (invulnerable) for `t` frames (07 §10.2, §10.3, §11.1).
-    fn protect_player(&mut self, t: i32) {
-        let mut p = self.player.borrow_mut();
+    fn protect_player(&mut self, p: &mut Player, t: i32) {
         if p.state == 0 {
             p.state = 3;
             p.state_timer.set(t);
@@ -2099,19 +2108,19 @@ impl EnemyManager {
                 sp.capture = false;
                 sp.bonus = 0;
             }
-            self.cancel_all(anm, sys.rng, 4);
+            self.cancel_all(anm, sys.rng, crate::pl!(sys), 4);
         }
         self.cleanup_after_jump(anm, idx, false, sys);
         true
     }
 
     // Shot damage (07 §10.1 step 6); `d` comes from the player side. Score is added before the bit-3 test.
-    pub fn damage(&mut self, idx: usize, d: i32, bomb: bool) {
+    pub fn damage(&mut self, p: &mut Player, idx: usize, d: i32, bomb: bool) {
         if d <= 0 {
             return;
         }
         let d = d.min(70);
-        self.add_score((d / 5) * 10);
+        self.add_score(p, (d / 5) * 10);
         let spell = self.g.spell.is_some();
         let bombed = self.g.spell.as_ref().is_some_and(|s| s.bombed);
         let e = &mut self.enemies[idx];
@@ -2147,7 +2156,7 @@ impl EnemyManager {
         e.last_damage = d;
         // 0x42B370: chained damage to the root; skipped while bombing; the root's damage timer cuts trunc(d/2)/9.
         if let Some(r) = e.root {
-            if self.player.borrow().bombing {
+            if p.bombing {
                 return;
             }
             let root = &mut self.enemies[r];
@@ -2192,7 +2201,7 @@ impl EnemyManager {
         }
         self.kill_chain(idx, Some(&mut *anm), sys);
         {
-            let mut p = self.player.borrow_mut();
+            let p = crate::pl!(sys);
             // Non-forced GaugeAdd, skipped while bombing; sign by player byte +3, not the +5 mode byte.
             if !p.bombing {
                 let n = if p.focus == 0 { -200 } else { 200 };
@@ -2206,14 +2215,14 @@ impl EnemyManager {
             0 => {
                 let sc = e.score;
                 e.flags &= !A_ALIVE;
-                self.add_score(sc);
+                self.add_score(crate::pl!(sys), sc);
                 self.end_aura(idx, sys);
             }
             1 => {
                 let sc = e.score;
                 e.flags |= A_DEAD_CONT;
                 e.flags &= !(A_CONTACT | A_LOSES_LIFE | A_SHOT_HIT);
-                self.add_score(sc);
+                self.add_score(crate::pl!(sys), sc);
             }
             // Latch B bit 3 stays until life > 0 again; HUD boss display off for every mode-3 enemy (07 §10.3).
             3 => {
@@ -2226,7 +2235,7 @@ impl EnemyManager {
                     sys.fx.spawn(anm, sys.rng, db, pos, 3, 0xFFFFFFFF);
                 }
                 self.end_aura(idx, sys);
-                self.protect_player(90);
+                self.protect_player(crate::pl!(sys), 90);
             }
             _ => {}
         }
@@ -2261,11 +2270,18 @@ impl EnemyManager {
                     .spawn(anm, sys.rng, db[1].wrapping_add(4), pos, 4, 0xFFFFFFFF);
             }
             let max = {
-                let p = self.player.borrow();
+                let p = crate::pl!(sys);
                 p.stats.human_max() || p.stats.youkai_max()
             };
             if max {
-                self.spawn_item(anm, sys.rng, pos, crate::item::TIME_ORB as i32, 1);
+                self.spawn_item(
+                    anm,
+                    sys.rng,
+                    pos,
+                    crate::item::TIME_ORB as i32,
+                    1,
+                    crate::pl!(sys),
+                );
             }
         }
         if mode == 0 {
@@ -2337,7 +2353,7 @@ impl EnemyManager {
         // Held (07 §10.1 step 2): flags B bit 7, or flags A bit 30 while bombing / player state ≠ 0. Steps 3–6 and
         // the death test are skipped (no movement, never freed off screen); the e+0x2E14 decrement nets the tick.
         let held = {
-            let p = self.player.borrow();
+            let p = crate::pl!(sys);
             let e = &self.enemies[idx];
             e.flags_b & B_PAUSED != 0
                 || (e.flags & A_LAST_SPELL != 0 && (p.bombing || p.state != 0))
@@ -2394,7 +2410,7 @@ impl EnemyManager {
         // Step 6 is skipped for flag A bits 4/5/11, and for bit 31 while the player is bombing (07 §10.1 step 6).
         let flags = self.enemies[idx].flags;
         if flags & (A_HIDDEN | 1 << 5 | A_YOUKAI) == 0
-            && !(flags & 1 << 31 != 0 && self.player.borrow().bombing)
+            && !(flags & 1 << 31 != 0 && crate::pl!(sys).bombing)
         {
             self.player_collision(idx, anm, sys);
         }
@@ -2403,7 +2419,7 @@ impl EnemyManager {
             && self.enemies[idx].flags & (A_SHOT_HIT | A_HIDDEN) == A_SHOT_HIT
             && self.enemies[idx].flags & A_ON_SCREEN != 0
         {
-            self.damage(idx, self.debug_damage, false);
+            self.damage(crate::pl!(sys), idx, self.debug_damage, false);
         }
         true
     }
@@ -2479,13 +2495,13 @@ impl EnemyManager {
     // EnemyMgr_Calc 0x42C660 (07 §10.1).
     pub fn step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         {
-            let p = self.player.borrow();
+            let p = crate::pl!(sys);
             self.g.player = p.pos;
             self.g.player_mode = p.mode as i32;
         }
         self.dissolve_requests(sys);
         let (deaths, bombs) = {
-            let p = self.player.borrow();
+            let p = crate::pl!(sys);
             (p.deaths, p.bombs_started)
         };
         // Port: spell flag bits 2/7 from the player's bomb/death counters (07 §11.1: 0x44CBA0, 0x44D150).
@@ -2503,7 +2519,7 @@ impl EnemyManager {
         // Human-rate counters (15 §2.3) in the same block, only while the manager clock (+0x9DCED0) is > 15;
         // human = player byte +3 == 0.
         if !self.dialogue_active() {
-            let mut p = self.player.borrow_mut();
+            let p = crate::pl!(sys);
             p.stats.rec.progress += 1;
             if self.clock.cur > 15 {
                 let human = (p.focus == 0) as u32;
@@ -2513,7 +2529,7 @@ impl EnemyManager {
         }
         // Step 0: GameFlags bit 10 (spell-card death freeze) returns here; the draw lists keep last frame's
         // enemies, the manager clock and Spell_Calc's card timer hold (07 §10.1 step 0, §11.1).
-        if self.player.borrow().freeze_bullets(*sys.flags) {
+        if crate::pl!(sys).freeze_bullets(*sys.flags) {
             return;
         }
         // Step 1: the op-176 box, then EnemyMgr_TimeRank, then the resets and the timelines (07 §10.1 step 1).
@@ -2526,12 +2542,12 @@ impl EnemyManager {
         for idx in 0..self.enemies.len() {
             if self.enemies[idx].alive() {
                 self.update(idx, anm, sys);
-            } else if self.player.borrow().aimed == Some(idx) {
-                self.player.borrow_mut().aimed = None;
+            } else if crate::pl!(sys).aimed == Some(idx) {
+                crate::pl!(sys).aimed = None;
             }
         }
         {
-            let mut p = self.player.borrow_mut();
+            let p = crate::pl!(sys);
             if let Some(a) = p.aimed {
                 p.aimed_pos = self.enemies[a].final_pos;
                 p.aimed_base = self.enemies[a].pos;
@@ -2548,7 +2564,7 @@ impl EnemyManager {
         b.env.dialogue = self.dialogue_active();
         let env = b.env;
         drop(b);
-        self.player.borrow_mut().env = env;
+        crate::pl!(sys).env = env;
         // Timer_Tick at the end of EnemyMgr_Calc with the live game speed (11 §3.2).
         self.clock.tick(anm.speed);
     }
@@ -2559,12 +2575,12 @@ impl EnemyManager {
         if self.dialogue_active() {
             return;
         }
-        let lives = self.player.borrow().stats.lives as i32;
+        let lives = crate::pl!(sys).stats.lives as i32;
         // Port-only guard: lives ≤ 8 keeps the period positive.
         let period = (2400 - 240 * lives).max(1);
         let c = self.clock;
         if c.cur != c.prev && c.cur % period == 0 {
-            self.player.borrow_mut().stats.rank(sys.rank, 100);
+            crate::pl!(sys).stats.rank(sys.rank, 100);
         }
     }
 
@@ -2705,17 +2721,18 @@ impl EnemyManager {
         let mut scratch = false;
         {
             let mut b = self.bullets.borrow_mut();
-            let mut p = self.player.borrow_mut();
-            p.env.spell = self.g.spell.is_some();
-            p.damage_against(
-                anm,
-                Some(&mut b.items),
-                [192.0, 224.0, 0.0],
-                [384.0, 448.0],
-                &mut acc,
-                &mut scratch,
-                sys,
-            );
+            sys.with_player(|p, sys| {
+                p.env.spell = self.g.spell.is_some();
+                p.damage_against(
+                    anm,
+                    Some(&mut b.items),
+                    [192.0, 224.0, 0.0],
+                    [384.0, 448.0],
+                    &mut acc,
+                    &mut scratch,
+                    sys,
+                );
+            });
         }
         self.enemies[boss].orb_acc = acc;
     }
@@ -2746,9 +2763,9 @@ impl EnemyManager {
     }
 
     // Enemy drawing step (07 §10.6), all Draw2DRot: frozen tint, VM pos / rotation writes, trail writes.
-    fn draw_layer_step(&mut self, anm: &mut AnmManager, high: bool, flags: u32) {
+    fn draw_layer_step(&mut self, anm: &mut AnmManager, p: &Player, high: bool, flags: u32) {
         // Prio 11 draws with tint 0xFFF01010 while bullets are frozen (07 §10.6).
-        let frozen = self.player.borrow().freeze_bullets(flags);
+        let frozen = p.freeze_bullets(flags);
         if high && frozen {
             (anm.tint, anm.tint_on) = (FROZEN_TINT, true);
         }
@@ -2802,11 +2819,17 @@ impl EnemyManager {
     }
 
     // Enemy drawing emit (07 §10.6): Draw2DRot with the VM z (0.25 main / 0.3 sub) as the vertex depth (05 §9).
-    fn draw_layer_emit(&self, anm: &AnmManager, rec: &mut Recorder, high: bool, flags: u32) {
+    fn draw_layer_emit(
+        &self,
+        anm: &AnmManager,
+        rec: &mut Recorder,
+        p: &Player,
+        high: bool,
+        flags: u32,
+    ) {
         rec.set_viewport(PLAYFIELD);
         // The frozen tint is off again when the emit runs: the emit applies it to VM copies.
-        let tint =
-            (high && self.player.borrow().freeze_bullets(flags)).then_some(Tint(FROZEN_TINT));
+        let tint = (high && p.freeze_bullets(flags)).then_some(Tint(FROZEN_TINT));
         for i in self.draw_order(high) {
             let e = &self.enemies[i];
             for k in [0usize, 2, 1] {
@@ -2842,18 +2865,20 @@ impl Task<Ctx> for EnemyManager {
         }
         self.step(&mut ctx.anm, &mut crate::sys!(ctx));
         // Timeline op 16 sets the game-over byte during this calc (11 §4.2).
-        self.player.borrow_mut().store_game_over(&mut ctx.game);
+        crate::pl!(ctx).store_game_over(&mut ctx.game);
         Ret::Next
     }
 
     // Draw prio 8 → layers 0–1, prio 11 → layers 2–3 (07 §10.6).
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        self.draw_layer_step(&mut ctx.anm, tag == 1, ctx.game.flags);
+        let p = ctx.player.as_deref().expect("player");
+        self.draw_layer_step(&mut ctx.anm, p, tag == 1, ctx.game.flags);
         Ret::Next
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        self.draw_layer_emit(&ctx.anm, rec, tag == 1, ctx.game.flags);
+        let p = ctx.player.as_deref().expect("player");
+        self.draw_layer_emit(&ctx.anm, rec, p, tag == 1, ctx.game.flags);
     }
 }
 
@@ -2864,56 +2889,47 @@ mod tests {
     // GameFlags bit 10 (07 §10.1 step 0): only the play-time counter runs; lists and the manager clock hold.
     #[test]
     fn death_freeze_skips_manager() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(0);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let player = crate::player::Player::new_ref();
-        let bullets = Rc::new(RefCell::new(BulletManager::new(
-            &mut anm,
-            sys.rng,
-            player.clone(),
-        )));
+        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, sys.rng)));
         let ecl = ecl::Ecl {
             data: Vec::new(),
             subs: Vec::new(),
             timelines: Vec::new(),
         };
-        let mut m = EnemyManager::new(ecl, bullets, 1);
+        let mut m = EnemyManager::new(ecl, bullets, crate::pl!(sys), 1);
         m.draw_lists[0].push(5);
-        player.borrow_mut().set_freeze_bullets(sys.flags, true);
+        crate::pl!(sys).set_freeze_bullets(sys.flags, true);
         m.step(&mut anm, sys);
         assert_eq!((m.clock.cur, m.draw_lists[0].len()), (0, 1));
-        assert_eq!(player.borrow().stats.rec.progress, 1);
-        player.borrow_mut().set_freeze_bullets(sys.flags, false);
+        assert_eq!(crate::pl!(sys).stats.rec.progress, 1);
+        crate::pl!(sys).set_freeze_bullets(sys.flags, false);
         m.step(&mut anm, sys);
         assert_eq!((m.clock.cur, m.draw_lists[0].len()), (1, 0));
-        assert_eq!(player.borrow().stats.rec.progress, 2);
+        assert_eq!(crate::pl!(sys).stats.rec.progress, 2);
     }
 
-    fn empty_manager(anm: &mut AnmManager) -> (EnemyManager, Rc<RefCell<crate::player::Player>>) {
+    // Its player is `TestSys::with_player(1)`'s.
+    fn empty_manager(anm: &mut AnmManager) -> EnemyManager {
         let mut rng = crate::rng::Rng::default();
-        let player = crate::player::Player::new_ref();
-        let bullets = Rc::new(RefCell::new(BulletManager::new(
-            anm,
-            &mut rng,
-            player.clone(),
-        )));
+        let bullets = Rc::new(RefCell::new(BulletManager::new(anm, &mut rng)));
         let ecl = ecl::Ecl {
             data: Vec::new(),
             subs: Vec::new(),
             timelines: Vec::new(),
         };
-        (EnemyManager::new(ecl, bullets, 1), player)
+        EnemyManager::new(ecl, bullets, &mut crate::player::Player::default(), 1)
     }
 
     // 07 §10.1 step 7: youkai state sets colour2 (0x20, 0x20, 0xC0, a / 2) and skips the flash; otherwise the flag
     // is turned off on every frame without a new flash.
     #[test]
     fn tail_youkai_colour2_and_flag_off() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         let e = &mut m.enemies[0];
         e.flags = A_ALIVE | A_YOUKAI;
         e.vm.color = [0xFF, 0xFF, 0xFF, 0x81];
@@ -2931,12 +2947,12 @@ mod tests {
     // 07 §10.1 step 2: a held enemy does not move, is not freed off screen, does not die; its timer nets zero.
     #[test]
     fn held_enemy_skips_body() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, player) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         for (b7, bombing) in [(true, false), (false, true)] {
-            player.borrow_mut().bombing = bombing;
+            crate::pl!(sys).bombing = bombing;
             let e = &mut m.enemies[0];
             **e = Enemy::default();
             e.flags = A_ALIVE | A_ON_SCREEN | if b7 { 0 } else { A_LAST_SPELL };
@@ -2956,10 +2972,10 @@ mod tests {
     // 07 §10.1 step 2: the shared tail runs Enemy_UpdateOrbitEffects for a held enemy too (13 §2.6b).
     #[test]
     fn held_enemy_updates_orbit_effects() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         sys.fx.clear();
         let i = sys.fx.spawn(&mut anm, sys.rng, 4, [0.0; 3], 1, 0);
         let e = &mut m.enemies[0];
@@ -2974,10 +2990,10 @@ mod tests {
     // 07 §10.3b: Enemy_Free sends the aura interrupt 3 and drops the pointer; the aura stays live.
     #[test]
     fn free_ends_aura_without_freeing() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         sys.fx.clear();
         let i = sys.fx.spawn(&mut anm, sys.rng, 4, [0.0; 3], 1, 0);
         let e = &mut m.enemies[0];
@@ -2994,7 +3010,7 @@ mod tests {
     #[test]
     fn kill_non_bosses_sets_sub_only() {
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         m.ecl.subs = vec![0, 40];
         for k in 0..2 {
             let e = &mut m.enemies[k];
@@ -3019,10 +3035,10 @@ mod tests {
     // 07 §10.1 / §10.3: death (step 6) reads the timer before step 7 ticks it; a mode-0 death skips the link.
     #[test]
     fn death_before_timer_tick() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         let e = &mut m.enemies[0];
         (e.flags, e.life, e.timeout) = (A_ALIVE | A_ON_SCREEN, 0, 600);
         (e.vm.has_sprite, e.vm.sprite_w, e.vm.sprite_h) = (true, 32.0, 32.0);
@@ -3038,10 +3054,10 @@ mod tests {
     // 12 §5.1: HUD +0x24 from Enemy_CheckTimeout before the tick; +0x30 = life / max life e+0x2E00, no clamp.
     #[test]
     fn boss_hud_timer_and_target() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         let e = &mut m.enemies[0];
         (e.flags, e.boss_slot, e.timeout) = (A_ALIVE | A_BOSS, 0, 600);
         (e.life, e.max_life, e.hud_life) = (500, 400, 100);
@@ -3058,10 +3074,10 @@ mod tests {
     // 07 §10.1 step 4 / 12 §5.1 (RE-Q65 A): no Enemy_CheckTimeout while timeout < 0, so +0x24 keeps its value.
     #[test]
     fn hud_timer_frozen_after_timeout() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         m.g.hud_timer = 5;
         let e = &mut m.enemies[0];
         (e.flags, e.boss_slot, e.timeout) = (A_ALIVE | A_BOSS, 0, -1);
@@ -3073,10 +3089,10 @@ mod tests {
     // 12 §5.8 step 4 (RE-Q65 E): the card's bit 2 survives Spell_End for the bonus line.
     #[test]
     fn spell_left_keeps_capture_flag() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, _player) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         m.g.spell = Some(Spell {
             bonus: 0,
             max: 110_000,
@@ -3097,7 +3113,7 @@ mod tests {
     #[test]
     fn kill_all_popups_and_unlink() {
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         for k in 0..4 {
             m.enemies[k].flags = A_ALIVE;
             m.enemies[k].life = 100;
@@ -3111,7 +3127,7 @@ mod tests {
         (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(0), Some(1));
         (m.enemies[1].root, m.enemies[2].root) = (Some(0), Some(0));
         // Slot 0: final pos + entries 0, 6, 12; slot 1: one more popup.
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         assert_eq!(
             m.kill_all(&mut anm, &mut ts.sys()),
             2000 + 2030 + 2060 + 2090 + 2120
@@ -3133,7 +3149,7 @@ mod tests {
     #[test]
     fn chain_unlink_root_quirk() {
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(1), Some(2));
         (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(0), Some(1));
         (m.enemies[1].root, m.enemies[2].root) = (Some(0), Some(0));
@@ -3168,7 +3184,7 @@ mod tests {
     #[test]
     fn trail_oldest_entry_keeps_enemy() {
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         let e = &mut m.enemies[0];
         e.flags = A_ALIVE | A_ON_SCREEN;
         (e.vm.has_sprite, e.vm.sprite_w, e.vm.sprite_h) = (true, 32.0, 32.0);
@@ -3196,17 +3212,17 @@ mod tests {
     // 07 §7 op 176: with bit 13 and boss 0, every shot in the playfield is a hit, feeding the boss accumulator only.
     #[test]
     fn last_spell_box_hits_all_shots() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         for bit13 in [false, true] {
             let mut anm = AnmManager::default();
-            let (mut m, player) = empty_manager(&mut anm);
+            let mut m = empty_manager(&mut anm);
             m.enemies[0].flags = A_ALIVE | A_BOSS;
             m.enemies[0].life = 1000;
             m.bosses[0] = Some(0);
             let acc0 = m.enemies[0].orb_acc;
             {
-                let mut p = player.borrow_mut();
+                let p = crate::pl!(sys);
                 *sys.flags = if bit13 { crate::gamemgr::F_13 } else { 0 };
                 p.state_timer.set(5);
                 let b = &mut p.bullets[0];
@@ -3214,7 +3230,7 @@ mod tests {
                 (b.pos, b.size) = ([20.0, 30.0, 0.0], [8.0, 8.0]);
             }
             m.last_spell_box(&mut anm, sys);
-            let state = player.borrow().bullets[0].state;
+            let state = crate::pl!(sys).bullets[0].state;
             let e = &m.enemies[0];
             assert_eq!(state, if bit13 { 2 } else { 1 });
             assert_eq!(e.orb_acc - acc0, if bit13 { 10 } else { 0 });
@@ -3226,10 +3242,10 @@ mod tests {
     // also after a silent end (no card active).
     #[test]
     fn spell_end_tail_clears_fixed_bonus() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, _player) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         m.enemies[2].flags |= A_FIXED_BONUS;
         m.g.spell_boss = Some(2);
         m.g.fixed_bonus = true;
@@ -3243,13 +3259,13 @@ mod tests {
     // Spell_End (07 §11.1): bomb cooldown +0xE2A6C := 16 whether or not the card was captured; 0x4E3D28 := 0.
     #[test]
     fn spell_end_sets_bomb_cooldown() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, player) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         sys.ov.set_darkness(200, 288.0);
         m.finish_spell(&mut anm, sys);
-        assert_eq!(player.borrow().bomb_cooldown, 0);
+        assert_eq!(crate::pl!(sys).bomb_cooldown, 0);
         // 0x4E3D28 := 0 even with no card active.
         assert_eq!(sys.ov.darkness_alpha(), 0);
         m.g.spell = Some(Spell {
@@ -3258,16 +3274,16 @@ mod tests {
             ..Spell::default()
         });
         m.finish_spell(&mut anm, sys);
-        assert_eq!(player.borrow().bomb_cooldown, 16);
+        assert_eq!(crate::pl!(sys).bomb_cooldown, 16);
     }
 
     // 07 §11.1 (RE-Q64): time orbs after Spell_End still add to +0xFC (capped to +0x2638); bit 11 still blocks them.
     #[test]
     fn bonus_outlives_spell_end() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, _player) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         m.g.spell = Some(Spell {
             bonus: 100_000,
             max: 110_000,
@@ -3293,10 +3309,10 @@ mod tests {
     #[test]
     fn zero_bonus_shows_no_popup() {
         let mut anm = AnmManager::default();
-        let (mut m, player) = empty_manager(&mut anm);
-        let mut ts = crate::game::TestSys::default();
+        let mut m = empty_manager(&mut anm);
+        let mut ts = crate::game::TestSys::with_player(1);
         m.cancel_and_kill_bonus(&mut anm, &mut ts.sys());
-        assert!(player.borrow().stats.popups.is_empty());
+        assert!(crate::pl!(ts).stats.popups.is_empty());
     }
 
     // 07 §10.1 step 5 (RE-Q66): the main VM colour round-trips through e+0x2E20; sub VMs are not touched.
@@ -3304,7 +3320,7 @@ mod tests {
     fn main_vm_colour_through_main_color() {
         let mut rng = crate::rng::Rng::default();
         let mut anm = AnmManager::default();
-        let (mut m, _) = empty_manager(&mut anm);
+        let mut m = empty_manager(&mut anm);
         let e = &mut m.enemies[0];
         e.main_color = [0xFF, 0xFF, 0xFF, 0x80];
         e.vm.color = [0xFF; 4];
@@ -3319,36 +3335,36 @@ mod tests {
     // 14 §3.1 (RE-Q54 U): only an enemy with flag A bit 6 is offered as the aimed enemy.
     #[test]
     fn aimed_offer_needs_shot_flag() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, player) = empty_manager(&mut anm);
-        player.borrow_mut().pos = [192.0, 400.0, 0.0];
+        let mut m = empty_manager(&mut anm);
+        crate::pl!(sys).pos = [192.0, 400.0, 0.0];
         for (f, want) in [(A_ALIVE, None), (A_ALIVE | A_SHOT_HIT, Some(0))] {
-            player.borrow_mut().aimed = None;
+            crate::pl!(sys).aimed = None;
             let e = &mut m.enemies[0];
             (e.flags, e.life, e.final_pos) = (f, 100, [200.0, 100.0, 0.0]);
             m.player_collision(0, &mut anm, sys);
-            assert_eq!(player.borrow().aimed, want);
+            assert_eq!(crate::pl!(sys).aimed, want);
         }
     }
 
     // 11 §3.2 (RE-Q54 V): the time-rank tick follows the game-speed clock and fires once per clock value.
     #[test]
     fn time_rank_on_slowed_clock() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(1);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let (mut m, player) = empty_manager(&mut anm);
-        player.borrow_mut().stats.lives = 8.0;
+        let mut m = empty_manager(&mut anm);
+        crate::pl!(sys).stats.lives = 8.0;
         anm.speed = 0.5;
+        let r0 = crate::pl!(sys).stats.rank_delta;
         let mut delta = |n: usize, m: &mut EnemyManager, anm: &mut AnmManager| {
             for _ in 0..n {
                 m.step(anm, sys);
             }
-            player.borrow().stats.rank_delta
+            crate::pl!(sys).stats.rank_delta
         };
-        let r0 = player.borrow().stats.rank_delta;
         assert_eq!(delta(960, &mut m, &mut anm), r0);
         assert_eq!(m.clock.cur, 480);
         assert_eq!(delta(1, &mut m, &mut anm), r0 + 100);
@@ -3358,31 +3374,26 @@ mod tests {
     // Human rate (15 §2.3): counted by EnemyMgr_Calc only while its clock reads > 15; human = player +3 == 0.
     #[test]
     fn human_rate_after_clock_15() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(0);
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let player = crate::player::Player::new_ref();
-        let bullets = Rc::new(RefCell::new(BulletManager::new(
-            &mut anm,
-            sys.rng,
-            player.clone(),
-        )));
+        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, sys.rng)));
         let ecl = ecl::Ecl {
             data: Vec::new(),
             subs: Vec::new(),
             timelines: Vec::new(),
         };
-        let mut m = EnemyManager::new(ecl, bullets, 1);
-        player.borrow_mut().focus = 0;
+        let mut m = EnemyManager::new(ecl, bullets, crate::pl!(sys), 1);
+        crate::pl!(sys).focus = 0;
         for _ in 0..16 {
             m.step(&mut anm, sys);
         }
-        let r = player.borrow().stats.rec.clone();
+        let r = crate::pl!(sys).stats.rec.clone();
         assert_eq!((m.clock.cur, r.progress, r.total, r.human), (16, 16, 0, 0));
         m.step(&mut anm, sys);
-        player.borrow_mut().focus = 1;
+        crate::pl!(sys).focus = 1;
         m.step(&mut anm, sys);
-        let r = player.borrow().stats.rec.clone();
+        let r = crate::pl!(sys).stats.rec.clone();
         assert_eq!((r.progress, r.total, r.human), (18, 2, 1));
     }
 
@@ -3390,7 +3401,6 @@ mod tests {
     #[test]
     fn scripted_player_runs() {
         let mut ts = crate::game::TestSys::default();
-        let sys = &mut ts.sys();
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
@@ -3425,23 +3435,18 @@ mod tests {
                 crate::anm::parse(&ar.read(&pa).unwrap()).unwrap(),
                 |_| crate::drawlist::TexId(0),
             );
-            let player = crate::player::Player::new_ref();
+            let mut player = crate::player::Player::default();
             {
                 let human = crate::sht::parse(&ar.read(&a).unwrap()).unwrap();
                 let youkai = crate::sht::parse(&ar.read(&sa).unwrap()).unwrap();
-                player
-                    .borrow_mut()
-                    .load(&mut anm, sys.rng, human, youkai, shot, 0);
-                player.borrow_mut().stats.power = 128.0;
+                player.load(&mut anm, &mut ts.rng, human, youkai, shot, 0);
+                player.stats.power = 128.0;
             }
-            let bullets = Rc::new(RefCell::new(BulletManager::new(
-                &mut anm,
-                sys.rng,
-                player.clone(),
-            )));
-            player.borrow_mut().world = Rc::downgrade(&bullets);
-            let mut m = EnemyManager::new(ecl, bullets.clone(), 1);
-            m.stage_start(sys.rng, index, 0);
+            let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, &mut ts.rng)));
+            ts.player = Some(Box::new(player));
+            let sys = &mut ts.sys();
+            let mut m = EnemyManager::new(ecl, bullets.clone(), crate::pl!(sys), 1);
+            m.stage_start(sys.rng, crate::pl!(sys), index, 0);
             let (mut shots, mut dmg_frames) = (0, 0);
             let mut inp = crate::input::Input::default();
             for f in 0..frames {
@@ -3459,20 +3464,20 @@ mod tests {
                 }
                 inp.raw = bits;
                 inp.tick();
-                {
+                // As the player's calc node: the player is not in its own `Sys`.
+                sys.with_player(|p, sys| {
                     let mut b = bullets.borrow_mut();
-                    let mut p = player.borrow_mut();
                     p.frame(&mut anm, &inp, Some(&mut b.items), sys);
                     if std::mem::take(&mut p.bomb.attract) {
                         b.items.attract_all();
                     }
-                }
+                });
                 let before: i32 = m.enemies.iter().filter(|e| e.alive()).map(|e| e.life).sum();
                 m.step(&mut anm, sys);
                 let after: i32 = m.enemies.iter().filter(|e| e.alive()).map(|e| e.life).sum();
                 dmg_frames += (after < before) as i32;
                 bullets.borrow_mut().step(&mut anm, sys);
-                let p = player.borrow();
+                let p = crate::pl!(sys);
                 shots += p.bullets.iter().filter(|b| b.state != 0).count();
                 assert!(
                     p.pos.iter().all(|v| v.is_finite()),
@@ -3485,7 +3490,7 @@ mod tests {
                     );
                 }
             }
-            let p = player.borrow();
+            let p = crate::pl!(sys);
             eprintln!(
                 "shot {shot} {ecl_name}: bullet-frames {shots} damage-frames {dmg_frames} bombs {} hits {} deaths {} lives {} score {}",
                 p.bombs_started,
@@ -3505,7 +3510,6 @@ mod tests {
     #[test]
     fn all_stage_scripts_run() {
         let mut ts = crate::game::TestSys::default();
-        let sys = &mut ts.sys();
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
@@ -3534,20 +3538,17 @@ mod tests {
                     crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(),
                     |_| crate::drawlist::TexId(0),
                 );
-                let player = crate::player::Player::new_ref();
-                let bullets = Rc::new(RefCell::new(BulletManager::new(
-                    &mut anm,
-                    sys.rng,
-                    player.clone(),
-                )));
+                let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, &mut ts.rng)));
+                ts.player = Some(Box::default());
+                let sys = &mut ts.sys();
                 let diff = if index % 9 == 8 { 4 } else { diff };
-                let mut m = EnemyManager::new(ecl, bullets.clone(), diff);
+                let mut m = EnemyManager::new(ecl, bullets.clone(), crate::pl!(sys), diff);
                 m.debug_damage = 8;
                 let (mut spawned, mut max_alive, mut max_live, mut lasers, mut items) =
                     (0, 0, 0, 0, 0);
                 let inp = crate::input::Input::default();
                 for _ in 0..6000 {
-                    player.borrow_mut().step(&mut anm, &inp, sys);
+                    sys.with_player(|p, sys| p.step(&mut anm, &inp, sys));
                     m.step(&mut anm, sys);
                     bullets.borrow_mut().step(&mut anm, sys);
                     let b = bullets.borrow();
@@ -3584,7 +3585,7 @@ mod tests {
                 assert!(spawned > 0);
                 assert!(max_live <= crate::bullet::MAX_BULLETS);
                 fired += bullets.borrow().patterns;
-                let p = player.borrow();
+                let p = crate::pl!(sys);
                 eprintln!(
                     "{ecl_name} d{diff}: patterns {} max live {max_live} laser-frames {lasers} max items {items} collected {} hits {} grazes {} score {}",
                     bullets.borrow().patterns,
@@ -3633,7 +3634,6 @@ mod laser_tests {
     #[test]
     fn laser_stages_run() {
         let mut ts = crate::game::TestSys::default();
-        let sys = &mut ts.sys();
         let Some(ar) = crate::archive::test_archive() else {
             return;
         };
@@ -3653,23 +3653,20 @@ mod laser_tests {
                     |_| crate::drawlist::TexId(0),
                 );
             }
-            let player = crate::player::Player::new_ref();
-            let bullets = Rc::new(RefCell::new(BulletManager::new(
-                &mut anm,
-                sys.rng,
-                player.clone(),
-            )));
+            let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, &mut ts.rng)));
+            ts.player = Some(Box::default());
+            let sys = &mut ts.sys();
             let mut m = EnemyManager::new(
                 ecl::parse(ar.read(&ecl_name).unwrap()).unwrap(),
                 bullets.clone(),
+                crate::pl!(sys),
                 3,
             );
             m.debug_damage = 40;
             let mut lasers = 0;
             for _ in 0..20000 {
-                player
-                    .borrow_mut()
-                    .step(&mut anm, &crate::input::Input::default(), sys);
+                let inp = crate::input::Input::default();
+                sys.with_player(|p, sys| p.step(&mut anm, &inp, sys));
                 m.step(&mut anm, sys);
                 bullets.borrow_mut().step(&mut anm, sys);
                 let b = bullets.borrow();
@@ -3683,7 +3680,7 @@ mod laser_tests {
             }
             eprintln!(
                 "{ecl_name}: laser-frames {lasers} hits {}",
-                player.borrow().hits
+                crate::pl!(sys).hits
             );
             total += lasers;
         }

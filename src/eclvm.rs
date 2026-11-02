@@ -239,6 +239,7 @@ pub(crate) fn var_f(
 // Int getter 0x41F420 (07 §6): float variables read through the float getter and truncate.
 pub(crate) fn var_i(
     m: &mut EnemyManager,
+    pl: &crate::player::Player,
     rng: &mut crate::rng::Rng,
     e: &Enemy,
     c: &Context,
@@ -257,7 +258,7 @@ pub(crate) fn var_i(
         10098 => {
             let pending = m.g.payout.map_or(0, |c| c.time);
             let orbs = m.bullets.borrow().items.count(crate::item::TIME_ORB);
-            let st = &m.player.borrow().stats;
+            let st = &pl.stats;
             if st.time + pending + orbs >= st.time_threshold {
                 2
             } else {
@@ -471,6 +472,7 @@ impl Exec<'_> {
         if ins.mask & (1 << k) != 0 {
             var_i(
                 self.m,
+                crate::pl!(self.sys),
                 self.sys.rng,
                 self.e,
                 &t.ctx,
@@ -501,7 +503,15 @@ impl Exec<'_> {
     // Same with an explicit mask bit (bullet/laser blocks, 07 §9.1, §9.4).
     fn vi(&mut self, t: &Thread, id: i32, var: bool) -> i32 {
         if var {
-            var_i(self.m, self.sys.rng, self.e, &t.ctx, id, self.sys.rank.rank)
+            var_i(
+                self.m,
+                crate::pl!(self.sys),
+                self.sys.rng,
+                self.e,
+                &t.ctx,
+                id,
+                self.sys.rank.rank,
+            )
         } else {
             id
         }
@@ -1017,26 +1027,26 @@ impl Exec<'_> {
     }
 
     fn item(&mut self, pos: [f32; 3], kind: i32) {
-        let p = self.m.player.borrow();
+        let p = crate::pl!(self.sys);
         self.m
             .bullets
             .borrow_mut()
             .items
-            .spawn(self.anm, self.sys.rng, &p, pos, kind, 0);
+            .spawn(self.anm, self.sys.rng, p, pos, kind, 0);
     }
 
     fn cancel_all(&mut self, mode: i32) {
-        let mut p = self.m.player.borrow_mut();
+        let p = crate::pl!(self.sys);
         self.m
             .bullets
             .borrow_mut()
-            .cancel_all(self.anm, self.sys.rng, &mut p, mode);
+            .cancel_all(self.anm, self.sys.rng, p, mode);
     }
 
     // Ops 142 / 168 (07 §7): offsets Rng·128 − 64 on x then y; 142 below full power: first type 2, rest 0.
     fn item_burst(&mut self, n: i32, all_one: bool) {
         let p = self.e.pos;
-        let low = self.m.player.borrow().stats.power < 128.0;
+        let low = crate::pl!(self.sys).stats.power < 128.0;
         for i in 0..n.max(0) {
             let dx = self.sys.rng.next_f32() * 128.0 - 64.0;
             let dy = self.sys.rng.next_f32() * 128.0 - 64.0;
@@ -1210,7 +1220,7 @@ impl Exec<'_> {
             19 => t.ctx.set_int(V_INT0, self.m.g.card as i32),
             // 07 §12 row 24: stats +0x1C, spell cards captured in this game (11 §5).
             24 => {
-                let n = self.m.player.borrow().stats.spells;
+                let n = crate::pl!(self.sys).stats.spells;
                 t.ctx.set_int(V_INT0, n);
             }
             // Freeze byte 0x160F534 := arg; stage VMs get interrupt 2, or 1 when arg is 0 (07 §12).
@@ -1295,7 +1305,7 @@ impl Exec<'_> {
             30 => *self.sys.load_frames = arg,
             // Type 3 (bomb) while the player is bombing (player +0xFDC = 0x17D6ED4), else 5 (1up) (07 §12).
             31 => {
-                let kind = if self.m.player.borrow().bombing { 3 } else { 5 };
+                let kind = if crate::pl!(self.sys).bombing { 3 } else { 5 };
                 self.item(self.e.pos, kind);
             }
             22 => {
@@ -1352,22 +1362,27 @@ impl Exec<'_> {
         let c = [590.0 / 2.0 + o[0], o[1]];
         let bt = &self.e.boss_timer;
         let graze = bt.cur != bt.prev && bt.cur % 12 == 0;
-        let mut pl = self.m.player.borrow_mut();
-        let env = pl.env;
-        let mut orbs = 0;
-        if graze {
-            orbs = pl
-                .laser_test(c, [590.0, small], o, a, true, &env, self.anm, &mut self.sys)
-                .1;
-        }
-        pl.laser_test(c, [590.0, big], o, a, false, &env, self.anm, &mut self.sys);
+        let anm = &mut *self.anm;
+        let sys = &mut self.sys;
+        let orbs = sys.with_player(|pl, sys| {
+            let env = pl.env;
+            let mut orbs = 0;
+            if graze {
+                orbs = pl
+                    .laser_test(c, [590.0, small], o, a, true, &env, anm, sys)
+                    .1;
+            }
+            pl.laser_test(c, [590.0, big], o, a, false, &env, anm, sys);
+            orbs
+        });
         let mut b = self.m.bullets.borrow_mut();
+        let pl = crate::pl!(self.sys);
         if std::mem::take(&mut pl.drop_attracted) {
             b.items.drop_attracted();
         }
         // Player_OnGraze drops its time orbs (item type 10) at the point it was given: the player pos.
         for _ in 0..orbs {
-            b.items.spawn(self.anm, self.sys.rng, &pl, pl.pos, 10, 0);
+            b.items.spawn(self.anm, self.sys.rng, pl, pl.pos, 10, 0);
         }
     }
 
@@ -1504,8 +1519,8 @@ impl Exec<'_> {
             owner: dec(0x44, 48, 0xBB),
             comment: [dec(0x74, 64, 0xDD), dec(0xB4, 64, 0xEE)],
             duration: self.e.timeout.max(0),
-            deaths0: self.m.player.borrow().deaths,
-            bombs0: self.m.player.borrow().bombs_started,
+            deaths0: crate::pl!(self.sys).deaths,
+            bombs0: crate::pl!(self.sys).bombs_started,
             capture: true,
             timed_out: false,
             bombed: false,
@@ -1546,7 +1561,7 @@ impl Exec<'_> {
             st.borrow_mut().start_spell_bg(self.anm, self.sys.rng);
         }
         // Ring at the boss pos e+0x2D34 (not the final pos); type 52 while GameFlags bits 7–8 ≠ 0 (07 §11.1).
-        let special = self.m.player.borrow().special(*self.sys.flags);
+        let special = crate::pl!(self.sys).special(*self.sys.flags);
         self.sys
             .fx
             .spell_ring(self.anm, self.sys.rng, self.e.pos, special);
@@ -1962,7 +1977,8 @@ impl Exec<'_> {
                         None => (&*self.e, &t.ctx),
                     };
                     if op == 86 {
-                        let v = var_i(self.m, self.sys.rng, e, ctx, var, self.sys.rank.rank);
+                        let pl = crate::pl!(self.sys);
+                        let v = var_i(self.m, pl, self.sys.rng, e, ctx, var, self.sys.rank.rank);
                         self.set_i(t, ins, 0, v);
                     } else {
                         let v = var_f(self.m, self.sys.rng, e, ctx, var as f32, self.sys.rank.rank);
@@ -2371,7 +2387,7 @@ impl Exec<'_> {
             }
             161 => {
                 let r = self.af(t, ins, 0);
-                let p = self.m.player.borrow();
+                let p = crate::pl!(self.sys);
                 self.m.bullets.borrow_mut().cancel_radius(
                     self.anm,
                     self.sys.rng,
@@ -2445,11 +2461,10 @@ impl Exec<'_> {
             184 => self.m.g.bonus_frozen = self.ai(t, ins, 0) & 1 != 0,
             // Only below 12: at 12 nothing at all, not even the sfx 0x2D (07 §7).
             181 => {
-                let mut p = self.m.player.borrow_mut();
+                let p = crate::pl!(self.sys);
                 if p.stats.clock < 12 {
                     self.sys.sound.play(crate::sound::OK_CLOCK);
                     p.stats.clock += 1;
-                    drop(p);
                     self.m.g.hud_requests.push(181);
                 }
             }
@@ -2536,9 +2551,19 @@ mod tests {
             timelines: Vec::new(),
         };
         let mut anm = AnmManager::default();
-        let player = crate::player::Player::new_ref();
-        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, &mut rng, player)));
-        (anm, EnemyManager::new(ecl, bullets, 1))
+        let bullets = Rc::new(RefCell::new(BulletManager::new(&mut anm, &mut rng)));
+        let mut player = crate::player::Player::default();
+        (anm, EnemyManager::new(ecl, bullets, &mut player, 1))
+    }
+
+    // Test systems with the player of `manager`'s enemy manager.
+    fn ts() -> crate::game::TestSys {
+        crate::game::TestSys::with_player(1)
+    }
+
+    // A fresh player for each `manager` built inside a loop (each had its own player before step 9a).
+    fn fresh_player(sys: &mut crate::game::Sys) {
+        *crate::pl!(sys) = *crate::game::TestSys::with_player(1).player.unwrap();
     }
 
     fn spawn(m: &mut EnemyManager, idx: usize, sub: i32, death_sub: i32, flags_b: u32) {
@@ -2555,7 +2580,7 @@ mod tests {
     // id, clock and wait are taken, and its death sub is consumed without running.
     #[test]
     fn kill_all_includes_caller() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let k95 = ins(0, 95, &[]);
         let (mut anm, mut m) = manager(&[
@@ -2596,7 +2621,7 @@ mod tests {
     // 07 §6: a source read of 10042 is the final pos e+0x2D88; the fadd destination read and write use e+0x2D34.
     #[test]
     fn var_10042_source_vs_destination() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let f = |x: f32| x.to_bits() as i32;
         let (mut anm, mut m) = manager(&[&[
@@ -2622,7 +2647,15 @@ mod tests {
         let mut rng = crate::rng::Rng::default();
         let mut read = |m: &mut EnemyManager| {
             let e = m.enemies[0].clone();
-            var_i(m, &mut rng, &e, &e.main.ctx, 10099, 0)
+            var_i(
+                m,
+                &crate::player::Player::default(),
+                &mut rng,
+                &e,
+                &e.main.ctx,
+                10099,
+                0,
+            )
         };
         m.g.spell_captured = true;
         assert_eq!(read(&mut m), 1);
@@ -2639,7 +2672,7 @@ mod tests {
     // 07 op 155: the running card's cap +0x2638 := 99 999 990 whatever the byte; +0xFC untouched.
     #[test]
     fn op155_raises_card_cap() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 155, &[0])]]);
         spawn(&mut m, 0, 0, -1, 0);
@@ -2656,7 +2689,7 @@ mod tests {
     // 07 op 158: word 1 → start, word 2 → end, stored as fractions of the op enemy's max life; op 127 0 → target 1.0.
     #[test]
     fn op158_marker_fractions() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) =
             manager(&[&[ins(0, 158, &[2, 500, 1500, 0xFF8040]), ins(0, 127, &[0])]]);
@@ -2670,7 +2703,7 @@ mod tests {
     // 07 §5.2: native 18 at time 0 slows this frame's clock tick (live game speed).
     #[test]
     fn native18_slows_same_frame_tick() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[18, 4])]]);
         spawn(&mut m, 0, 0, -1, 0);
@@ -2683,7 +2716,7 @@ mod tests {
     // 07 §5 (RE-Q54 Y): the step-7 boss timer and the manager clock tick at the speed set by this frame's native 18.
     #[test]
     fn native18_slows_same_frame_boss_timer() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[18, 4])]]);
         spawn(&mut m, 0, 0, -1, 0);
@@ -2699,7 +2732,7 @@ mod tests {
     // 07 §5 ops 129/130/133/134 under the spell-practice guard (GameFlags bit 14 + bit 7 or 8).
     #[test]
     fn spell_practice_guard() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
         let sub = [
@@ -2715,6 +2748,7 @@ mod tests {
             (F_SPELL_PRACTICE | F_LAST_CAPTURED, true),
         ] {
             let (mut anm, mut m) = manager(&[&sub]);
+            fresh_player(sys);
             spawn(&mut m, 0, 0, -1, 0);
             *sys.flags = f;
             ecl_run(&mut m, &mut anm, 0, sys);
@@ -2740,7 +2774,7 @@ mod tests {
     // + its size; the sub never runs, the caller goes on with clock 0, sub id 1 and depth + 1.
     #[test]
     fn call_boss_self_main_skips_sub() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[
             &[
@@ -2768,7 +2802,7 @@ mod tests {
     // 07 §5.4 op 88 on the caller from a thread: the thread's own context, stack and depth; main is untouched.
     #[test]
     fn call_boss_self_from_thread_uses_thread() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[
             &[ins(0, 135, &[0, 2]), ins(100, 0, &[])],
@@ -2799,7 +2833,7 @@ mod tests {
     // target's working depth; its main depth stays.
     #[test]
     fn call_boss_skips_target_next_ins() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[
             &[ins(0, 88, &[0, 2])],
@@ -2820,7 +2854,7 @@ mod tests {
     // 07 §5 op 128: a, b, c, d are raw words whatever the mask (d = f32 bits).
     #[test]
     fn op128_words_are_raw() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let mut i = ins(
             0,
@@ -2837,7 +2871,7 @@ mod tests {
     // Op 95 in a thread: the main context takes the death sub, the threads are kept (07 §7 op 95).
     #[test]
     fn kill_all_from_thread() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 135, &[0, 2])], &[], &[ins(0, 95, &[])]]);
         spawn(&mut m, 0, 0, 1, 0);
@@ -2850,7 +2884,7 @@ mod tests {
     // The caller is spared like any other enemy by flags B bit 6.
     #[test]
     fn kill_all_spares_caller_with_b6() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 95, &[])], &[]]);
         spawn(&mut m, 3, 0, 1, B_CANNOT_DIE);
@@ -2864,7 +2898,7 @@ mod tests {
     // filters and no rank add.
     #[test]
     fn op109_fires_stored_descriptor_raw() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 109, &[])]]);
         spawn(&mut m, 0, 0, -1, 0);
@@ -2895,11 +2929,12 @@ mod tests {
     // 07 §12 native 31: item type 3 while the player is bombing, else 5.
     #[test]
     fn native31_item_type() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         for (bombing, kind) in [(false, 5), (true, 3)] {
             let (mut anm, mut m) = manager(&[&[ins(0, 136, &[31, 0])]]);
-            m.player.borrow_mut().bombing = bombing;
+            fresh_player(sys);
+            crate::pl!(sys).bombing = bombing;
             spawn(&mut m, 0, 0, -1, 0);
             ecl_run(&mut m, &mut anm, 0, sys);
             let b = m.bullets.borrow();
@@ -2918,7 +2953,7 @@ mod tests {
     // (inward on an outer crossing, outward on an inner one); cooldown 2 then skips the next two calls.
     #[test]
     fn native4_warp() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[4, 0])]]);
         let cases = [
@@ -2966,7 +3001,7 @@ mod tests {
     // height 160 hits on every call (no warning phase).
     #[test]
     fn native9_laser_box() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let cases = [
             (0.0, [150.0, 100.0], false),
@@ -2978,14 +3013,15 @@ mod tests {
         ];
         for (rot, pp, hit) in cases {
             let (mut anm, mut m) = manager(&[&[ins(0, 136, &[9, 0])]]);
+            fresh_player(sys);
             spawn(&mut m, 0, 0, -1, 0);
             let e = &mut m.enemies[0];
             e.pos = [200.0, 100.0, 0.0];
             e.vm.rotation[2] = rot;
             e.main.ctx.set_flt(V_FLT0, 10.0);
-            m.player.borrow_mut().pos = [pp[0], pp[1], 0.0];
+            crate::pl!(sys).pos = [pp[0], pp[1], 0.0];
             ecl_run(&mut m, &mut anm, 0, sys);
-            assert_eq!(m.player.borrow().state == 2, hit, "rot {rot} at {pp:?}");
+            assert_eq!(crate::pl!(sys).state == 2, hit, "rot {rot} at {pp:?}");
         }
     }
 
@@ -2993,18 +3029,19 @@ mod tests {
     // of 12; the big box (240) still misses there.
     #[test]
     fn native11_graze_every_12() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         for (cur, prev, grazed) in [(12, 11, 1), (12, 12, 0), (13, 12, 0)] {
             let (mut anm, mut m) = manager(&[&[ins(0, 136, &[11, 0])]]);
+            fresh_player(sys);
             spawn(&mut m, 0, 0, -1, 0);
             let e = &mut m.enemies[0];
             e.pos = [100.0, 100.0, 0.0];
             e.boss_timer.cur = cur;
             e.boss_timer.prev = prev;
-            m.player.borrow_mut().pos = [300.0, 100.0 + 130.0, 0.0];
+            crate::pl!(sys).pos = [300.0, 100.0 + 130.0, 0.0];
             ecl_run(&mut m, &mut anm, 0, sys);
-            let p = m.player.borrow();
+            let p = crate::pl!(sys);
             assert_eq!((p.grazes, p.state), (grazed, 0), "timer {cur}/{prev}");
         }
     }
@@ -3013,7 +3050,7 @@ mod tests {
     // int vars 10005–10007; the caller turns 2 % toward leader + π + leader orbit velocity.
     #[test]
     fn native8_familiar_ring() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[8, 0])], &[]]);
         for (k, tag) in [(0, 0), (1, 5), (2, 6), (3, 5)] {
@@ -3063,7 +3100,7 @@ mod tests {
     // 07 §12 native 8 does nothing without a parent.
     #[test]
     fn native8_needs_parent() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[8, 0])]]);
         spawn(&mut m, 0, 0, -1, 0);
@@ -3074,7 +3111,7 @@ mod tests {
     // 07 §12 native 13: stage tint request 0xFFC03030.
     #[test]
     fn native13_tint() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[13, 0])]]);
         spawn(&mut m, 0, 0, -1, 0);
@@ -3085,7 +3122,7 @@ mod tests {
     // 07 §12 native 16: chained children near a flag-0x100000 bullet with var 10038 == 0 get 60 and var 10019.
     #[test]
     fn native16_marks_children() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[16, 0])], &[]]);
         spawn(&mut m, 0, 0, -1, 0);
@@ -3123,11 +3160,11 @@ mod tests {
     // 07 §12 row 24: var 10000 := spell cards captured this game (stats +0x1C).
     #[test]
     fn native24_captured_cards() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[24, 0])]]);
         spawn(&mut m, 0, 0, -1, 0);
-        m.player.borrow_mut().stats.spells = 7;
+        crate::pl!(sys).stats.spells = 7;
         ecl_run(&mut m, &mut anm, 0, sys);
         assert_eq!(m.enemies[0].main.ctx.int(V_INT0), 7);
     }
@@ -3141,7 +3178,18 @@ mod tests {
         let mut r = rng.clone();
         r.next_u32();
         let e = m.enemies[0].clone();
-        assert_eq!(var_i(&mut m, &mut rng, &e, &e.main.ctx, 10033, 0), 0);
+        assert_eq!(
+            var_i(
+                &mut m,
+                &crate::player::Player::default(),
+                &mut rng,
+                &e,
+                &e.main.ctx,
+                10033,
+                0
+            ),
+            0
+        );
         assert_eq!(rng.next_u16(), r.next_u16());
     }
 
@@ -3149,7 +3197,7 @@ mod tests {
     // current instruction, pushes and increments the depth, but leaves the main context in its sub.
     #[test]
     fn interrupt_table_default_and_negative() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[ins(0, 0, &[])], &[ins(5, 0, &[]), ins(5, 0, &[])]]);
         spawn(&mut m, 0, 1, -1, 0);
@@ -3181,7 +3229,7 @@ mod tests {
     // the thread's depth, main enters the sub, the thread's depth += 1 and the main depth stays.
     #[test]
     fn interrupt_in_thread_context() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[
             &[ins(0, 135, &[0, 1]), ins(100, 0, &[])],
@@ -3207,15 +3255,16 @@ mod tests {
     // 07 §7 op 181: below 12 sfx 0x2D and clock + 1; at 12 nothing, no sfx.
     #[test]
     fn op181_clock() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         for (clock, after, sfx) in [(11, 12, true), (12, 12, false)] {
             let (mut anm, mut m) = manager(&[&[ins(0, 181, &[])]]);
-            m.player.borrow_mut().stats.clock = clock;
+            fresh_player(sys);
+            crate::pl!(sys).stats.clock = clock;
             spawn(&mut m, 0, 0, -1, 0);
             sys.sound.drain();
             ecl_run(&mut m, &mut anm, 0, sys);
-            assert_eq!(m.player.borrow().stats.clock, after);
+            assert_eq!(crate::pl!(sys).stats.clock, after);
             let played = sys
                 .sound
                 .drain()
@@ -3237,7 +3286,7 @@ mod tests {
     // (10042–10044) and an int variable under a float op use the instruction's own argument slot.
     #[test]
     fn in_place_ops_use_reference() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let iadd = ins_v(0, 10, 1, &[10042, 5]);
         let inc = ins_v(0, 30, 1, &[10043]);
@@ -3264,7 +3313,7 @@ mod tests {
     // 07 §7 ops 86 / 87: one getter call (one RNG draw for 10082 / 10032), on self or another boss.
     #[test]
     fn boss_var_single_getter() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let op87 = ins_v(0, 87, 1, &[10016.0f32.to_bits() as i32, 10082, 0]);
         let op86 = ins_v(0, 86, 1, &[10000, 10032, 1]);
@@ -3287,7 +3336,7 @@ mod tests {
     // the manager flag, ops 93/94 leave it alone.
     #[test]
     fn spawn_ops_life_gate() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let rx = 10032.0f32.to_bits() as i32;
         for op in [90i16, 94] {
@@ -3298,6 +3347,7 @@ mod tests {
             };
             for life in [0, 100] {
                 let (mut anm, mut m) = manager(&[&[ins_v(0, op, 2, args)], &[]]);
+                fresh_player(sys);
                 spawn(&mut m, 0, 0, -1, 0);
                 m.enemies[0].life = life;
                 let mut r = sys.rng.clone();
@@ -3318,10 +3368,11 @@ mod tests {
     // 07 §12 native 2: edge flips without direction tests; angle only when a branch ran (gravity included).
     #[test]
     fn native2_bounce_no_direction_test() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let mut run = |pos: [f32; 3], vel: [f32; 3], cap: f32| {
             let (mut anm, mut m) = manager(&[&[ins(0, 136, &[2, 0])]]);
+            fresh_player(sys);
             spawn(&mut m, 0, 0, -1, 0);
             let e = &mut m.enemies[0];
             (e.pos, e.vel, e.angle) = (pos, vel, 9.0);
@@ -3352,11 +3403,33 @@ mod tests {
         m.g.spell_remaining.dec(1.0, false);
         let e = m.enemies[0].clone();
         assert!(m.g.spell.is_none());
-        assert_eq!(var_i(&mut m, &mut rng, &e, &e.main.ctx, 10100, 0), 763);
+        assert_eq!(
+            var_i(
+                &mut m,
+                &crate::player::Player::default(),
+                &mut rng,
+                &e,
+                &e.main.ctx,
+                10100,
+                0
+            ),
+            763
+        );
         for _ in 0..4 {
             m.g.spell_remaining.dec(0.25, false);
         }
-        assert_eq!(var_i(&mut m, &mut rng, &e, &e.main.ctx, 10100, 0), 762);
+        assert_eq!(
+            var_i(
+                &mut m,
+                &crate::player::Player::default(),
+                &mut rng,
+                &e,
+                &e.main.ctx,
+                10100,
+                0
+            ),
+            762
+        );
     }
 
     fn child_op(op: i16, sub: i32) -> Vec<u8> {
@@ -3367,7 +3440,7 @@ mod tests {
     // mode; op 92 writes the follow offset, final pos and bit 9 only after the spawn-time run.
     #[test]
     fn op92_follow_and_mode_bits_after_spawn_run() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let mut youkai_only = ins_v(0, 6, 1, &[10000, 7]);
         youkai_only[9] = 0x4F;
@@ -3389,7 +3462,7 @@ mod tests {
     // after its spawn-time run, so var 10096 reads 0 there although the spawner is a root with a child.
     #[test]
     fn child_flags_after_spawn_run() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let child = [
             ins(0, 81, &[2]),
@@ -3428,7 +3501,7 @@ mod tests {
     // 07 §10.5: a chained child links the new enemy right after itself and overwrites its own +8.
     #[test]
     fn chained_child_links_after_itself() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[child_op(90, 1)], &[]]);
         for k in 0..3 {
@@ -3453,7 +3526,7 @@ mod tests {
     // 07 §10.5: the aura VM +0x14 (z angular velocity) is negated for an odd slot.
     #[test]
     fn child_aura_odd_slot_negated() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[child_op(90, 1)], &[]]);
         spawn(&mut m, 0, 0, -1, 0);
@@ -3469,7 +3542,7 @@ mod tests {
     // switch the aura's colour2 flag.
     #[test]
     fn aura_op174_and_contact_flag() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[
             &[ins(0, 174, &[0]), ins(1, 81, &[2]), ins(2, 80, &[2])],
@@ -3504,7 +3577,7 @@ mod tests {
     // 07 §4.1 step 3: only pos is written; prev pos stays (0, 0, 0), final pos is recomputed by the run.
     #[test]
     fn spawn_keeps_template_prev_pos() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[]]);
         let i = m.spawn(&mut anm, 0, [100.0, 50.0, 0.0], 10, 0, 100, false, sys);
@@ -3517,7 +3590,7 @@ mod tests {
     // with a `$rand` angle draws nothing; the mode filter tests the enemy's flag A bit 11, not the player's mode.
     #[test]
     fn bullet_filters_before_decode() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = ts();
         let sys = &mut ts.sys();
         let f = |x: f32| x.to_bits() as i32;
         let op = |flags: u32| {
@@ -3534,6 +3607,7 @@ mod tests {
             (0, false, 1024.0),
         ] {
             let (mut anm, mut m) = manager(&[&[op(flags)]]);
+            fresh_player(sys);
             spawn(&mut m, 0, 0, -1, 0);
             m.g.player_mode = 1 - youkai as i32;
             m.enemies[0].set_flag(A_YOUKAI, youkai);

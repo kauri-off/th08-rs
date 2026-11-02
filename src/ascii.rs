@@ -614,8 +614,6 @@ fn darkness_emit(
 struct Gauge {
     vms: Vec<AnmVm>,
     id: i32,
-    // TODO(step 9): the player link becomes a World borrow.
-    player: std::rc::Weak<std::cell::RefCell<crate::player::Player>>,
     // Boss "ENEMY" markers M_k at +0x17C4 + k·0x2A4, k = boss slot (12 §5.10).
     markers: Vec<AnmVm>,
     // +0x2254[slot]: 0 plain, 1 hit flash, 2–4 low-life blink (warning level + 1), written by EnemyMgr_Calc.
@@ -673,10 +671,6 @@ impl Overlays {
                 .iter_mut()
                 .for_each(|v| v.pending_interrupt = id as _);
         }
-    }
-
-    pub fn gauge_player(&mut self, p: &std::rc::Rc<std::cell::RefCell<crate::player::Player>>) {
-        self.gauge.player = std::rc::Rc::downgrade(p);
     }
 
     // Ascii_GaugeInterrupt 0x4070B0 (12 §5.9): 1 show, 2/3 fade out/in, 99 hide (catch-all label); sent to G0–G3.
@@ -753,12 +747,9 @@ impl Overlays {
 
 // Tail of Ascii_DrawStrings (prio 20, full-screen viewport, 12 §5.10); the colour is rewritten every frame.
 // Step: sprite and colour of every marker in range (persistent VM writes).
-fn markers_step(g: &mut Gauge) {
-    let px = g
-        .player
-        .upgrade()
-        .and_then(|p| p.try_borrow().ok().map(|p| p.pos[0]));
-    let px = px.unwrap_or(0.0);
+// `player`: the running game's player (`ctx.player`), none outside a game.
+fn markers_step(g: &mut Gauge, player: Option<&crate::player::Player>) {
+    let px = player.map_or(0.0, |p| p.pos[0]);
     let frame = g.frame;
     for k in 0..g.markers.len() {
         let m = &mut g.markers[k];
@@ -807,14 +798,13 @@ struct GaugeDraw {
 fn gauge_step(
     g: &mut Gauge,
     anm: &crate::anmmgr::AnmManager,
+    player: Option<&crate::player::Player>,
     fallback: &crate::player::Stats,
 ) -> Option<GaugeDraw> {
     if g.vms.len() < 5 || !g.vms[G_BAR].visible() {
         return None;
     }
-    let player = g.player.upgrade();
-    let borrowed = player.as_ref().and_then(|p| p.try_borrow().ok());
-    let st = borrowed.as_ref().map_or(fallback, |p| &p.stats);
+    let st = player.map_or(fallback, |p| &p.stats);
     let gv = st.gauge as i32;
     let (bx, by) = (g.vms[G_BAR].pos[0], g.vms[G_BAR].pos[1]);
     g.vms[G_MARKER].pos[0] = bx + 64.0 + gv as f32 * 56.0 / 10000.0;
@@ -1313,14 +1303,10 @@ struct ContinueMenu {
 }
 
 // 0x404890 early exits (11 §4.2, RE-Q51): game_over := 0 and displayed score := score, no sound / VMs / capture /
-// play time; GameMgr_Calc later in the same pass then runs one more gameplay frame.
+// play time; GameMgr_Calc later in the same pass then runs one more gameplay frame. `update` then returns true and
+// the caller syncs the player's displayed score (nothing in between reads it).
 fn early_exit(g: &mut Game, scene: i32) {
     g.game_over = 0;
-    if let Some(gm) = gamemgr::current() {
-        let gm = gm.borrow();
-        let st = &mut gm.player.borrow_mut().stats;
-        st.score_disp = st.score10;
-    }
     g.request(scene);
 }
 
@@ -1336,7 +1322,7 @@ impl ContinueMenu {
         panel: &mut crate::hud::Panel,
         // `Host::ticks_ms` for the play-time marks (15 §2.9).
         now: u64,
-    ) {
+    ) -> bool {
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
             // below in the same call.
@@ -1347,16 +1333,16 @@ impl ContinueMenu {
             log::info!("continue menu opened");
             if g.practice() && !g.spell_practice() {
                 early_exit(g, gamemgr::SCENE_RESULT);
-                return;
+                return true;
             }
             if g.replay() {
                 early_exit(g, gamemgr::SCENE_REPLAY_END);
-                return;
+                return true;
             }
             if g.difficulty < 4 && !g.spell_practice() && (g.clock > 10 || g.stage % 9 == 7) {
                 g.flags &= !gamemgr::F_ENDING_OK;
                 early_exit(g, gamemgr::SCENE_ENDING);
-                return;
+                return true;
             }
             // Play time is added only when the prompt opens, not on the early exits (15 §2.9).
             g.add_play_time(now);
@@ -1425,7 +1411,7 @@ impl ContinueMenu {
                         g.game_over = 0;
                         g.mark_play_time(now);
                         self.open = false;
-                        return;
+                        return false;
                     }
                     self.phase = if self.yes { 3 } else { 1 };
                     self.phase_frame = 0;
@@ -1443,7 +1429,7 @@ impl ContinueMenu {
                 }
                 early_exit(g, gamemgr::SCENE_RESULT);
                 self.open = false;
-                return;
+                return true;
             }
             3 => {
                 // The night clock advances by one at frame 15 of a continue (12 §4).
@@ -1462,7 +1448,7 @@ impl ContinueMenu {
                     g.game_over = 0;
                     g.mark_play_time(now);
                     self.open = false;
-                    return;
+                    return false;
                 }
             }
             _ => {}
@@ -1477,6 +1463,7 @@ impl ContinueMenu {
         }
         self.frame += 1;
         self.phase_frame += 1;
+        false
     }
 }
 
@@ -1538,7 +1525,7 @@ impl Task<Ctx> for AsciiManager {
                 &mut *ctx.host,
             );
         } else if ctx.game.game_over != 0 {
-            self.cont.update(
+            let exited = self.cont.update(
                 &mut ctx.anm,
                 &mut ctx.rng,
                 &mut ctx.game,
@@ -1548,6 +1535,9 @@ impl Task<Ctx> for AsciiManager {
                 &mut ctx.panel,
                 ctx.host.ticks_ms(),
             );
+            if exited && let Some(p) = ctx.player.as_deref_mut() {
+                p.stats.score_disp = p.stats.score10;
+            }
         } else {
             self.cont.open = false;
             self.pause.state = 0;
@@ -1572,11 +1562,16 @@ impl Task<Ctx> for AsciiManager {
             self.popup_off = ctx.anm.screen_offset;
             // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
             ctx.anm.screen_offset = [0.0; 2];
-            self.gauge = gauge_step(&mut ctx.overlays.gauge, &ctx.anm, &ctx.game.stats);
+            self.gauge = gauge_step(
+                &mut ctx.overlays.gauge,
+                &ctx.anm,
+                ctx.player.as_deref(),
+                &ctx.game.stats,
+            );
         }
         self.texts[high as usize] = ctx.ascii.take(Some(high));
         if high {
-            markers_step(&mut ctx.overlays.gauge);
+            markers_step(&mut ctx.overlays.gauge, ctx.player.as_deref());
         }
         Ret::Next
     }

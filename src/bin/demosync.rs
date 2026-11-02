@@ -101,8 +101,9 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                if th08::settings::get().idump {
-                    let p = gm.player.borrow();
+                if th08::settings::get().idump
+                    && let Some(p) = ctx.player.as_deref()
+                {
                     println!(
                         "  player {:.1},{:.1} state {} poc {} {}",
                         p.pos[0], p.pos[1], p.state, p.sht.poc_line, p.sht_youkai.poc_line

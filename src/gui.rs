@@ -5,7 +5,6 @@ use crate::anmvm::{self, AnmVm};
 use crate::drawlist::{PLAYFIELD, Recorder, TextCmd};
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
-use crate::player::PlayerRef;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 use std::cell::RefCell;
@@ -57,7 +56,6 @@ pub type Queue = Vec<Req>;
 
 // g_Gui 0x4EA670.
 pub struct Gui {
-    player: PlayerRef,
     enemies: Rc<RefCell<EnemyManager>>,
     // VMs at +0x120 + k·0x2A4, roles in the 12 §5.8 table; 3 and 5 never get a script.
     vms: [AnmVm; 14],
@@ -80,14 +78,9 @@ pub struct Gui {
 }
 
 impl Gui {
-    pub fn register(
-        ctx: &mut Ctx,
-        player: PlayerRef,
-        enemies: Rc<RefCell<EnemyManager>>,
-    ) -> Result<Rc<RefCell<Gui>>> {
+    pub fn register(ctx: &mut Ctx, enemies: Rc<RefCell<EnemyManager>>) -> Result<Rc<RefCell<Gui>>> {
         ctx.gui_queue.clear();
         let g = Rc::new(RefCell::new(Gui {
-            player,
             enemies,
             vms: Default::default(),
             texts: Vec::new(),
@@ -374,14 +367,14 @@ impl Task<Ctx> for Gui {
                 ctx.game.spell_practice(),
             );
         }
-        let frozen = self.player.borrow().freeze_bullets(ctx.game.flags) || ctx.timer_pause != 0;
+        let frozen = crate::pl!(ctx).freeze_bullets(ctx.game.flags) || ctx.timer_pause != 0;
         // Nothing runs while bullets are frozen (GameFlags bit 10) or the freeze byte 0x160F534 is set (07 §11.1).
         if !frozen {
             // Steps 1 (card active) and 2 (capture ring) run before the VMs (07 §11.1).
             let mut e = self.enemies.borrow_mut();
             if e.g.spell.is_some() {
                 // Step 1.2: fade the bonus line while the player is in the top band x ≥ 64, y < 64.
-                let p = self.player.borrow().pos;
+                let p = crate::pl!(ctx).pos;
                 let a = self.tint >> 24;
                 let a = if p[0] < 64.0 || p[1] >= 64.0 {
                     if a < 0x80 { a + 4 } else { a }

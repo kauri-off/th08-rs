@@ -47,6 +47,9 @@ pub struct Ctx {
     pub panel: crate::hud::Panel,
     // HUD impl block kept between Hud_OnRemove and the next Hud_Load (12 §5.1a).
     pub hud_kept: Option<crate::hud::Kept>,
+    // Player 0x17D5EF8 (09 §1): created by GameManager_Register, dropped with the game manager by the scene switch
+    // (11 §7). Step 9a interim owner; moves into `GameManager` with step 9g (docs/arch/STEP9_WORLD.md).
+    pub player: Option<Box<crate::player::Player>>,
     // Port queue of bomb areas created by effects (14 §2.13).
     pub bomb_areas: crate::bomb::AreaQueue,
     // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
@@ -79,7 +82,8 @@ pub struct Ctx {
 // Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue
 // (13 §1.2), effect manager (13 §2), GM flags word (11 §2.1), rank (11 §2), ascii overlays (13 §4), HUD dirty fields
 // (12 §5.3), bomb area queue (14 §2.13), freeze byte and frames-since-load (13 §3), g_Gui call queue (12 §5.8),
-// g_Rng (11 §1). Built by `sys!(ctx)`; these become `World` fields in step 9 (ARCH_A §2.3).
+// g_Rng (11 §1), the player (09 §1; None inside the player's own calc). Built by `sys!(ctx)`; these become `World`
+// fields in step 9 (ARCH_A §2.3).
 pub struct Sys<'a> {
     pub sound: &'a mut crate::sound::Queue,
     pub fx: &'a mut crate::effect::Effects,
@@ -92,6 +96,7 @@ pub struct Sys<'a> {
     pub load_frames: &'a mut i32,
     pub gui: &'a mut crate::gui::Queue,
     pub rng: &'a mut crate::rng::Rng,
+    pub player: Option<&'a mut crate::player::Player>,
 }
 
 impl Sys<'_> {
@@ -108,13 +113,36 @@ impl Sys<'_> {
             load_frames: &mut *self.load_frames,
             gui: &mut *self.gui,
             rng: &mut *self.rng,
+            player: self.player.as_deref_mut(),
         }
     }
+
+    // The player lent out of `sys` for a call that takes both (the original passes the player and reads globals).
+    pub fn with_player<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::player::Player, &mut Self) -> R,
+    ) -> R {
+        let p = self.player.take().expect("no player in this Sys");
+        let r = f(p, self);
+        self.player = Some(p);
+        r
+    }
+}
+
+// The player of a `Sys` or `Ctx` inside a running game (a field borrow, disjoint from the other fields).
+#[macro_export]
+macro_rules! pl {
+    ($s:expr) => {
+        $s.player.as_deref_mut().expect("no player in this Sys")
+    };
 }
 
 #[macro_export]
 macro_rules! sys {
     ($c:expr) => {
+        $crate::sys!($c; $c.player.as_deref_mut())
+    };
+    ($c:expr; $p:expr) => {
         $crate::game::Sys {
             sound: &mut $c.sound,
             fx: &mut $c.effects,
@@ -127,13 +155,14 @@ macro_rules! sys {
             load_frames: &mut $c.load_frames,
             gui: &mut $c.gui_queue,
             rng: &mut $c.rng,
+            player: $p,
         }
     };
 }
 
 // Owned stand-in for the `Ctx` fields behind `Sys`, for unit tests that run a subsystem without a `Ctx`.
 #[cfg(test)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct TestSys {
     pub sound: crate::sound::Queue,
     pub effects: crate::effect::Effects,
@@ -145,10 +174,11 @@ pub struct TestSys {
     pub load_frames: i32,
     pub gui_queue: crate::gui::Queue,
     pub rng: crate::rng::Rng,
+    pub player: Option<Box<crate::player::Player>>,
 }
 
 #[cfg(test)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct TestGame {
     pub flags: u32,
     pub rank: crate::gamemgr::Rank,
@@ -158,6 +188,16 @@ pub struct TestGame {
 impl TestSys {
     pub fn sys(&mut self) -> Sys<'_> {
         crate::sys!(self)
+    }
+
+    // With a default player whose difficulty the test's enemy manager wrote (EnemyMgr_Ctor, `EnemyManager::new`).
+    pub fn with_player(difficulty: i32) -> Self {
+        let mut p = crate::player::Player::default();
+        p.stats.difficulty = difficulty;
+        TestSys {
+            player: Some(Box::new(p)),
+            ..Default::default()
+        }
     }
 }
 
@@ -239,6 +279,7 @@ impl Ctx {
             overlays: Default::default(),
             panel: Default::default(),
             hud_kept: None,
+            player: None,
             bomb_areas: Vec::new(),
             timer_pause: 0,
             load_frames: 0,

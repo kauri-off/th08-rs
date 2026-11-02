@@ -8,7 +8,7 @@ use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
 use crate::msg::{self, Dialogue, Event};
-use crate::player::{PlayerRef, Popup, Stats};
+use crate::player::{Player, Popup, Stats};
 use crate::stage::Stage;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
@@ -131,7 +131,6 @@ impl ClearPanel {
 
 pub struct Hud {
     pub msg: Rc<RefCell<Dialogue>>,
-    player: PlayerRef,
     enemies: Rc<RefCell<EnemyManager>>,
     stage: Rc<RefCell<Stage>>,
     frame: u32,
@@ -262,14 +261,12 @@ fn stage_start_tiles(anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> Vec<Anm
 impl Hud {
     pub fn register(
         ctx: &mut Ctx,
-        player: PlayerRef,
         enemies: Rc<RefCell<EnemyManager>>,
         stage: Rc<RefCell<Stage>>,
         fresh: bool,
     ) -> Result<Rc<RefCell<Hud>>> {
         let h = Rc::new(RefCell::new(Hud {
             msg: Rc::new(RefCell::new(Dialogue::default())),
-            player,
             enemies,
             stage,
             frame: 0,
@@ -447,7 +444,7 @@ impl Hud {
         // Clock sprite = clock counter stats+0x28 as it is now (12 §5.1a): the live player stats, since the
         // game-manager copy was taken at the stage start. The clamp is a port guard.
         anm.set_script(&mut ctx.rng, &mut self.start_clock_vm, TIMES_SLOT, 0);
-        let clock = self.player.borrow().stats.clock;
+        let clock = crate::pl!(ctx).stats.clock;
         self.start_clock_vm.set_sprite(anm, clock.clamp(0, 15));
         Ok(())
     }
@@ -522,12 +519,12 @@ impl Hud {
         log::info!(
             "stage clear (msg op 9) at frame {} score {}",
             ctx.frame,
-            self.player.borrow().stats.score10
+            crate::pl!(ctx).stats.score10
         );
         let g = &mut ctx.game;
         g.flags |= gamemgr::F_CLEAR_PANEL;
         let stage = g.stage % 9;
-        let mut p = self.player.borrow_mut();
+        let p = crate::pl!(ctx);
         let shot = p.shot_type;
         let adv = gamemgr::clock_advance(stage, p.stats.time, p.stats.time_threshold);
         // Stage-clear VM impl+0x212C8 (10 §9): stages 1–5 restart ascii.anm script 3 with sprite 0x80 + clock advance;
@@ -593,12 +590,11 @@ impl Hud {
     }
 
     // Bonus computation (12 §5.6), integer arithmetic; the lives-option penalty applies in every game.
-    fn clear_bonus(&mut self, g: &Game) {
+    fn clear_bonus(&mut self, g: &Game, p: &mut Player) {
         let Some(c) = &mut self.clear else { return };
         if !std::mem::take(&mut c.pending) {
             return;
         }
-        let mut p = self.player.borrow_mut();
         let st = &mut p.stats;
         let mut t = c
             .clear
@@ -820,7 +816,7 @@ impl Hud {
         if let Some(i) = e.boss(0)
             && g.paused == 0
             && g.game_over == 0
-            && !self.player.borrow().freeze_bullets(g.flags)
+            && !crate::pl!(ctx).freeze_bullets(g.flags)
         {
             ctx.overlays.popup_large_static(
                 [2.0, 29.0],
@@ -924,7 +920,7 @@ impl Hud {
     fn draw_clear(&mut self, ctx: &mut Ctx) {
         let Some(c) = &self.clear else { return };
         let g = &ctx.game;
-        let st = &self.player.borrow().stats;
+        let st = &ctx.player.as_deref().expect("player").stats;
         let q = &mut ctx.ascii;
         let mut y = 96.0;
         let line = |q: &mut crate::ascii::Queue, y: f32, s: String, col: u32| {
@@ -1229,7 +1225,7 @@ impl Task<Ctx> for Hud {
         let inp = ctx.input.game_view();
         // HUD requests queued by ECL ops this frame (ECL runs before the HUD).
         let reqs = std::mem::take(&mut self.enemies.borrow_mut().g.hud_requests);
-        let clock = self.player.borrow().stats.clock;
+        let clock = crate::pl!(ctx).stats.clock;
         for r in reqs {
             match r {
                 // ECL 179 / 181 (12 §5.7, 07 §7): night clock script 2 with sprite = clock; 181 interrupts 2 at 12,
@@ -1241,7 +1237,7 @@ impl Task<Ctx> for Hud {
                 }
                 180 => self.night_vm.color[anmvm::A] = 0,
                 // ECL op 148: progress counter 0x164D30C += 1800 (10 §8.3, end panel 16 §2.5).
-                148 => self.player.borrow_mut().stats.rec.progress += 1800,
+                148 => crate::pl!(ctx).stats.rec.progress += 1800,
                 181 => {
                     self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
                     self.night_vm.pending_interrupt = if clock >= 12 { 2 } else { 1 };
@@ -1274,7 +1270,7 @@ impl Task<Ctx> for Hud {
         // x ≥ 64, y < 128, else +4 up to 0xFF (≥ 0xFC snaps to 0xFF).
         let a = self.night_vm.color[anmvm::A];
         if a != 0 {
-            let p = self.player.borrow().pos;
+            let p = crate::pl!(ctx).pos;
             self.night_vm.color[anmvm::A] = if p[0] >= 64.0 && p[1] < 128.0 {
                 if a > 0x40 { (a - 4).max(0x40) } else { a }
             } else if a >= 0xFC {
@@ -1308,7 +1304,7 @@ impl Task<Ctx> for Hud {
             }
         }
         // Show calls made earlier this frame restart their slot; then the popup timers (12 §5.1b step 5).
-        for p in self.player.borrow_mut().stats.popups.drain(..) {
+        for p in crate::pl!(ctx).stats.popups.drain(..) {
             // Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus: 0x17CE8CC := 2 (12 §5.3).
             ctx.panel.set_repaint(2);
             self.popups[ActivePopup::slot(p)] = Some(ActivePopup::show(p));
@@ -1319,13 +1315,13 @@ impl Task<Ctx> for Hud {
                 *slot = None;
             }
         }
-        self.clear_bonus(&ctx.game);
+        self.clear_bonus(&ctx.game, crate::pl!(ctx));
         self.clear_calc(&mut ctx.game, &inp);
         // Msg_Run (10 §5), including op 9.
-        let dying = self.player.borrow().state == 2;
+        let dying = crate::pl!(ctx).state == 2;
         let (collect, events, side) = {
             let mut d = self.msg.borrow_mut();
-            d.info.clock = self.player.borrow().stats.clock;
+            d.info.clock = crate::pl!(ctx).stats.clock;
             let c = d.run(&mut ctx.anm, &mut ctx.rng, &inp, dying);
             ctx.game.dialogue_skippable = d.skippable_shown();
             (
@@ -1370,7 +1366,7 @@ impl Task<Ctx> for Hud {
         }
         self.draw_clear(ctx);
         self.boss_step(ctx);
-        let st = self.player.borrow().stats.clone();
+        let st = crate::pl!(ctx).stats.clone();
         self.panel_step(ctx, &st);
         self.draw_popups(ctx);
         Ret::Next
@@ -1383,7 +1379,7 @@ impl Task<Ctx> for Hud {
         rec.set_viewport(PLAYFIELD);
         self.emit_msg(&ctx.anm, rec);
         self.emit_boss(ctx, rec);
-        self.emit_panel(&ctx.anm, rec, &self.player.borrow().stats);
+        self.emit_panel(&ctx.anm, rec, &ctx.player.as_deref().expect("player").stats);
     }
 }
 

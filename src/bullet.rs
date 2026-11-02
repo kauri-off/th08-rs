@@ -6,7 +6,7 @@ use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::fmath::{self, polar, sin_cos_f};
 use crate::game::{Ctx, Sys};
 use crate::item::ItemManager;
-use crate::player::{GrazeEnv, Player, PlayerRef};
+use crate::player::{GrazeEnv, Player};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 use std::cell::RefCell;
@@ -406,9 +406,6 @@ pub struct BulletManager {
     pub lasers: Vec<Laser>,
     // Updated from inside the bullet calc and drawn from its draw (08 §1).
     pub items: ItemManager,
-    pub player: PlayerRef,
-    // Port link to the spell state g_Gui, held by the enemy manager; time orbs add their bonus through it (08 §8.5).
-    pub enemies: std::rc::Weak<RefCell<crate::enemy::EnemyManager>>,
     // +0x6BA538 = 0x160F3C8 live-bullet count from the last calc (08 §4.3a).
     pub live: usize,
     // +0x6BA53C, frames: set to 10 by every mass cancel (08 §2).
@@ -429,7 +426,7 @@ pub struct BulletManager {
 
 impl BulletManager {
     // BulletManager_Load 0x433070 (08 §2.1): one template per type with its 5 VMs (etama.anm in ANM_SLOT).
-    pub fn new(anm: &mut AnmManager, rng: &mut crate::rng::Rng, player: PlayerRef) -> Self {
+    pub fn new(anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> Self {
         let templates = (0..TYPES)
             .map(|t| {
                 let s = MAIN_SCRIPTS[t];
@@ -457,8 +454,6 @@ impl BulletManager {
             bullets,
             lasers: vec![Laser::default(); MAX_LASERS],
             items: ItemManager::default(),
-            player,
-            enemies: std::rc::Weak::new(),
             live: 0,
             cancel_guard: 0,
             timer: Timer::default(),
@@ -471,15 +466,10 @@ impl BulletManager {
         }
     }
 
-    pub fn register(ctx: &mut Ctx, player: PlayerRef) -> Result<Rc<RefCell<BulletManager>>> {
+    pub fn register(ctx: &mut Ctx) -> Result<Rc<RefCell<BulletManager>>> {
         ctx.anm
             .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "etama.anm")?;
-        let b = Rc::new(RefCell::new(BulletManager::new(
-            &mut ctx.anm,
-            &mut ctx.rng,
-            player.clone(),
-        )));
-        player.borrow_mut().world = Rc::downgrade(&b);
+        let b = Rc::new(RefCell::new(BulletManager::new(&mut ctx.anm, &mut ctx.rng)));
         let t: task::TaskRef<Ctx> = b.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
@@ -1508,17 +1498,17 @@ impl BulletManager {
     // BulletMgr_Calc 0x431240 (08 §1).
     pub fn step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         // Port plumbing: bomb areas registered by other tasks this frame become visible here.
-        self.player.borrow_mut().take_queued_areas(sys.areas);
-        if self.frozen || self.player.borrow().freeze_bullets(*sys.flags) {
+        crate::pl!(sys).take_queued_areas(sys.areas);
+        if self.frozen || crate::pl!(sys).freeze_bullets(*sys.flags) {
             return;
         }
-        let pl = self.player.clone();
-        let mut p = pl.borrow_mut();
+        // The player is held for the whole update, as the original's player pointer (lent out of `sys`).
+        let p = sys.player.take().expect("player");
         let mut items = std::mem::take(&mut self.items);
         let spell = self.env.spell;
         items.calc(
             anm,
-            &mut p,
+            p,
             spell,
             |it, anm, rng, p| {
                 std::mem::swap(&mut self.items, it);
@@ -1536,13 +1526,14 @@ impl BulletManager {
                 continue;
             }
             self.live += 1;
-            self.update_bullet(anm, idx, &mut p, sys);
+            self.update_bullet(anm, idx, p, sys);
         }
         for k in 0..MAX_LASERS {
             if self.lasers[k].alive {
-                self.update_laser(anm, k, &mut p, sys);
+                self.update_laser(anm, k, p, sys);
             }
         }
+        sys.player = Some(p);
         if self.cancel_guard > 0 {
             self.cancel_guard -= 1;
         }
@@ -1603,9 +1594,9 @@ impl BulletManager {
 
     // BulletMgr_Draw 0x432B50 (08 §1), draw-phase step: tint, then items, lasers and bullets by size class (each
     // list in reverse visiting order), then tint off; the emit draws the same order plus effect list D.
-    pub fn draw_step(&mut self, anm: &mut AnmManager, flags: u32) {
+    pub fn draw_step(&mut self, anm: &mut AnmManager, p: &Player, flags: u32) {
         // Tint 0xFFF01010 only while bullets are frozen (06 §10.2).
-        let frozen = self.player.borrow().freeze_bullets(flags);
+        let frozen = p.freeze_bullets(flags);
         if frozen {
             (anm.tint, anm.tint_on) = (FROZEN_TINT, true);
         }
@@ -1642,15 +1633,12 @@ impl BulletManager {
         anm: &AnmManager,
         rec: &mut Recorder,
         fx: &crate::effect::Effects,
+        p: &Player,
         flags: u32,
     ) {
         rec.set_viewport(PLAYFIELD);
         // The frozen tint is off again when the emit runs: the emit applies it to VM copies.
-        let tint = self
-            .player
-            .borrow()
-            .freeze_bullets(flags)
-            .then_some(Tint(FROZEN_TINT));
+        let tint = p.freeze_bullets(flags).then_some(Tint(FROZEN_TINT));
         self.items.emit(anm, rec, tint);
         self.lasers_emit(anm, rec, tint);
         for c in 0..6 {
@@ -1681,8 +1669,10 @@ impl Task<Ctx> for BulletManager {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.step(&mut ctx.anm, &mut crate::sys!(ctx));
         // Item_CollectTimeOrb: Spell_AddBonus(8000) per orb inside this calc, so this frame's Spell_Draw shows it (08 §8.5).
-        let orbs = std::mem::take(&mut self.player.borrow_mut().stats.spell_bonus_orbs);
-        if let Some(e) = self.enemies.upgrade() {
+        let orbs = std::mem::take(&mut crate::pl!(ctx).stats.spell_bonus_orbs);
+        // The spell state g_Gui is held by the enemy manager, owned by the game manager (step 9a).
+        let e = crate::gamemgr::current().and_then(|g| g.borrow().enemies.clone());
+        if let Some(e) = e {
             for _ in 0..orbs {
                 e.borrow_mut().spell_add_bonus(8000);
             }
@@ -1692,12 +1682,14 @@ impl Task<Ctx> for BulletManager {
 
     // BulletMgr_Draw prio 13 (08 §1): VM writes and the frozen tint in the step, the draws in the emit.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        BulletManager::draw_step(self, &mut ctx.anm, ctx.game.flags);
+        let p = ctx.player.as_deref().expect("player");
+        BulletManager::draw_step(self, &mut ctx.anm, p, ctx.game.flags);
         Ret::Next
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
-        BulletManager::emit(self, &ctx.anm, rec, &ctx.effects, ctx.game.flags);
+        let p = ctx.player.as_deref().expect("player");
+        BulletManager::emit(self, &ctx.anm, rec, &ctx.effects, p, ctx.game.flags);
     }
 }
 
@@ -1712,14 +1704,15 @@ mod tests {
     use crate::item;
     use crate::player::Player;
 
-    fn mgr() -> (AnmManager, BulletManager) {
+    // A manager and a player far off the playfield (no graze / hit); tests lend the player to their `Sys`.
+    fn mgr() -> (AnmManager, BulletManager, Player) {
         let mut rng = crate::rng::Rng::default();
         let mut anm = AnmManager::default();
-        let p = Player::new_ref();
-        p.borrow_mut().pos = [-1000.0, -1000.0, 0.0];
-        p.borrow_mut().update_boxes();
-        let b = BulletManager::new(&mut anm, &mut rng, p);
-        (anm, b)
+        let mut p = Player::default();
+        p.pos = [-1000.0, -1000.0, 0.0];
+        p.update_boxes();
+        let b = BulletManager::new(&mut anm, &mut rng);
+        (anm, b, p)
     }
 
     fn desc(angle: f32, speed: f32, flags: u32, ex: &[ExCmd]) -> BulletDesc {
@@ -1805,7 +1798,8 @@ mod tests {
     fn ring_pattern_and_visit_order() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let d = BulletDesc {
             aim_mode: 3,
             count1: 4,
@@ -1837,7 +1831,8 @@ mod tests {
     fn slow_down_and_restore() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let i = spawn(&mut anm, &mut b, &desc(0.0, 4.0, 0, &[]), sys);
         b.bullets[i].vms[0].sprite_index = 0x64;
         b.slow_down(&mut anm, 0.5);
@@ -1851,7 +1846,8 @@ mod tests {
     fn speed_up_command() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let i = spawn(
             &mut anm,
             &mut b,
@@ -1876,7 +1872,8 @@ mod tests {
     fn accel_command() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let i = spawn(
             &mut anm,
             &mut b,
@@ -1908,7 +1905,8 @@ mod tests {
     fn angular_command() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let i = spawn(
             &mut anm,
             &mut b,
@@ -1927,7 +1925,8 @@ mod tests {
     fn redirect_commands() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let i = spawn(
             &mut anm,
             &mut b,
@@ -1960,7 +1959,8 @@ mod tests {
     fn bounce_and_wrap() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let mut d = desc(PI, 4.0, 0x400, &[cmd(0x400, 1.5, 0.0, 1, 0)]);
         d.origin = [2.0, 200.0, 0.0];
         let i = spawn(&mut anm, &mut b, &d, sys);
@@ -1995,7 +1995,8 @@ mod tests {
     fn chaining_and_flag_gating() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let ex = [
             cmd(0x10, 0.0, 0.0, 1, 0),
             cmd(0x20000, 0.0, 0.0, 3, 0),
@@ -2025,7 +2026,8 @@ mod tests {
     fn sub_pattern_command() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let a = (3 << 24) | (2 << 16) | (5 << 8);
         let ex = [
             cmd(0x1000000, 3.0, 1.0, a | (1 << 31), 4),
@@ -2053,7 +2055,8 @@ mod tests {
     fn offscreen_rules() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let mut d = desc(PI, 5.0, 0, &[]);
         d.origin = [1.0, 200.0, 0.0];
         let i = spawn(&mut anm, &mut b, &d, sys);
@@ -2075,7 +2078,8 @@ mod tests {
     fn cancel_to_items() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let d = BulletDesc {
             aim_mode: 3,
             count1: 5,
@@ -2085,8 +2089,7 @@ mod tests {
             ..BulletDesc::default()
         };
         b.spawn_pattern(&mut anm, &d, [0.0; 3], sys);
-        let pl = b.player.clone();
-        b.cancel_all(&mut anm, sys.rng, &mut pl.borrow_mut(), 1);
+        b.cancel_all(&mut anm, sys.rng, crate::pl!(sys), 1);
         assert_eq!(b.live_bullets().count(), 0);
         let items: Vec<_> = b.items.live().map(|i| (i.kind, i.state)).collect();
         assert_eq!(items, vec![(6, 1); 5]);
@@ -2095,11 +2098,12 @@ mod tests {
         assert_eq!(b.bullets[i].state, 5);
         let j = spawn(&mut anm, &mut b, &desc(0.0, 1.0, F_NO_CANCEL, &[]), sys);
         assert_eq!(b.bullets[j].state, 1);
-        b.cancel_all(&mut anm, sys.rng, &mut pl.borrow_mut(), 4);
+        b.cancel_all(&mut anm, sys.rng, crate::pl!(sys), 4);
         assert_eq!(b.bullets[j].state, 5);
         assert_eq!(b.items.live().count(), 5);
 
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         b.spawn_pattern(
             &mut anm,
             &BulletDesc {
@@ -2109,12 +2113,12 @@ mod tests {
             [0.0; 3],
             sys,
         );
-        let pl = b.player.clone();
-        let sum = b.cancel_bonus(&mut anm, &mut pl.borrow_mut(), 2030, false, sys);
+        let sum = sys.with_player(|p, sys| b.cancel_bonus(&mut anm, p, 2030, false, sys));
         assert_eq!(sum, 2000 + 2020 + 2030);
         assert!(b.live_bullets().all(|x| x.state == 5));
 
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let l = LaserDesc {
             fixed: true,
             head: 100.0,
@@ -2127,7 +2131,7 @@ mod tests {
             ..LaserDesc::default()
         };
         let k = b.spawn_laser(&mut anm, sys.rng, &l, [0.0; 3]).unwrap();
-        b.cancel_all(&mut anm, sys.rng, &mut pl.borrow_mut(), 1);
+        b.cancel_all(&mut anm, sys.rng, crate::pl!(sys), 1);
         assert_eq!(b.lasers[k].state, 2);
         let xs: Vec<f32> = b.items.live().map(|i| i.pos[0]).collect();
         assert_eq!(xs, vec![50.0, 82.0, 114.0, 146.0]);
@@ -2141,21 +2145,19 @@ mod tests {
     fn cancel_all_raw_item_and_zeroed_slot() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
-        let pl = b.player.clone();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let d = desc(PI, 0.0, 0, &[]);
         let i = spawn(&mut anm, &mut b, &d, sys);
         let j = spawn(&mut anm, &mut b, &d, sys);
         b.bullets[j].pos = [50.0, 50.0, 0.1];
         b.bullets[i].off_count = 5;
         b.bullets[j].off_count = 7;
-        let a = pl
-            .borrow_mut()
-            .cancel_rect([192.0, 224.0], [40.0, 40.0], 9, 10);
-        b.cancel_all(&mut anm, sys.rng, &mut pl.borrow_mut(), 1);
+        let a = crate::pl!(sys).cancel_rect([192.0, 224.0], [40.0, 40.0], 9, 10);
+        b.cancel_all(&mut anm, sys.rng, crate::pl!(sys), 1);
         let kinds: Vec<u8> = b.items.live().map(|it| it.kind).collect();
         assert_eq!(kinds, vec![9, CANCEL_ITEM as u8]);
-        assert_eq!(pl.borrow().cancel_areas[a].total, 2);
+        assert_eq!(crate::pl!(sys).cancel_areas[a].total, 2);
         assert!(b.bullets[i].free() && b.bullets[j].free());
         assert_eq!((b.bullets[i].off_count, b.bullets[j].off_count), (0, 0));
     }
@@ -2177,13 +2179,13 @@ mod tests {
             origin: [-300.0, -300.0, 0.0],
             ..LaserDesc::default()
         };
-        let (mut anm, mut b) = mgr();
-        let pl = b.player.clone();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let k = b.spawn_laser(&mut anm, sys.rng, &l, [0.0; 3]).unwrap();
         anm.speed = 0.5;
         let mut w = Vec::new();
         for _ in 0..4 {
-            b.update_laser(&mut anm, k, &mut pl.borrow_mut(), sys);
+            sys.with_player(|p, sys| b.update_laser(&mut anm, k, p, sys));
             w.push(b.lasers[k].cur_width);
         }
         assert_eq!(w, [1.2, 1.2, 16.0 / 30.0, 1.5f32 * 16.0 / 30.0]);
@@ -2204,17 +2206,16 @@ mod tests {
             origin: [50.0, 50.0, 0.0],
             ..LaserDesc::default()
         };
-        let (mut anm, mut b) = mgr();
-        let pl = b.player.clone();
+        let (mut anm, mut b, mut pl) = mgr();
         let k = b.spawn_laser(&mut anm, &mut rng, &l, [0.0; 3]).unwrap();
         let st = b.lasers[k].state;
-        b.cancel_all(&mut anm, &mut rng, &mut pl.borrow_mut(), 1);
+        b.cancel_all(&mut anm, &mut rng, &mut pl, 1);
         assert!(st < 2 && b.lasers[k].state == st);
 
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
         let k = b.spawn_laser(&mut anm, &mut rng, &l, [0.0; 3]).unwrap();
         let mut ts = crate::game::TestSys::default();
-        b.cancel_bonus(&mut anm, &mut pl.borrow_mut(), 2030, true, &mut ts.sys());
+        b.cancel_bonus(&mut anm, &mut pl, 2030, true, &mut ts.sys());
         assert_eq!(b.lasers[k].state, 2);
         let xs: Vec<f32> = b.items.live().map(|i| i.pos[0]).collect();
         assert_eq!(xs, vec![50.0, 50.0, 82.0]);
@@ -2226,7 +2227,8 @@ mod tests {
     fn place_velocity_unwrapped_angle() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let a = 4.0 * PI / 3.0;
         let i = spawn(&mut anm, &mut b, &desc(a, 3.0, 0, &[]), sys);
         let x = &b.bullets[i];
@@ -2248,7 +2250,8 @@ mod tests {
     fn saved_sprite_is_base() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let mut d = desc(0.0, 1.0, 0, &[]);
         d.colour = 3;
         let i = spawn(&mut anm, &mut b, &d, sys);
@@ -2262,7 +2265,8 @@ mod tests {
     fn laser_lifecycle() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
         let l = LaserDesc {
             fixed: true,
             speed: 4.0,
@@ -2299,17 +2303,31 @@ mod tests {
     fn items_spawn_and_collect() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, mut b) = mgr();
-        let pl = b.player.clone();
-        pl.borrow_mut().stats.power = 128.0;
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
+        crate::pl!(sys).stats.power = 128.0;
         let k = b
             .items
-            .spawn(&mut anm, sys.rng, &pl.borrow(), [100.0, 100.0, 0.0], 0, 0)
+            .spawn(
+                &mut anm,
+                sys.rng,
+                crate::pl!(sys),
+                [100.0, 100.0, 0.0],
+                0,
+                0,
+            )
             .unwrap();
         assert_eq!(b.items.items[k].kind, item::CONVERTED);
         let k = b
             .items
-            .spawn(&mut anm, sys.rng, &pl.borrow(), [100.0, 100.0, 0.0], 10, 0)
+            .spawn(
+                &mut anm,
+                sys.rng,
+                crate::pl!(sys),
+                [100.0, 100.0, 0.0],
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(
             (b.items.items[k].kind, b.items.items[k].state),
@@ -2317,18 +2335,25 @@ mod tests {
         );
         assert!(
             b.items
-                .spawn(&mut anm, sys.rng, &pl.borrow(), [500.0, 100.0, 0.0], 1, 0)
+                .spawn(
+                    &mut anm,
+                    sys.rng,
+                    crate::pl!(sys),
+                    [500.0, 100.0, 0.0],
+                    1,
+                    0
+                )
                 .is_none()
         );
 
-        let (mut anm, mut b) = mgr();
-        let pl = b.player.clone();
-        pl.borrow_mut().pos = [100.0, 300.0, 0.0];
-        pl.borrow_mut().update_boxes();
+        let (mut anm, mut b, mut pl) = mgr();
+        sys.player = Some(&mut pl);
+        crate::pl!(sys).pos = [100.0, 300.0, 0.0];
+        crate::pl!(sys).update_boxes();
         b.items.spawn(
             &mut anm,
             sys.rng,
-            &pl.borrow(),
+            crate::pl!(sys),
             [100.0, 100.0, 0.0],
             item::POINT as i32,
             1,
@@ -2336,7 +2361,7 @@ mod tests {
         for _ in 0..40 {
             b.step(&mut anm, sys);
         }
-        let p = pl.borrow();
+        let p = crate::pl!(sys);
         assert_eq!(b.items.collected, 1);
         let line = p.sht.poc_line;
         assert!(
@@ -2351,7 +2376,7 @@ mod tests {
     fn laser_hits_through_player_laser_test() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let (mut anm, _) = mgr();
+        let (mut anm, _, _) = mgr();
         let mut p = Player {
             state: 0,
             debug_invuln: true,

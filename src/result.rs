@@ -2033,9 +2033,9 @@ mod tests {
             } else if g.game_over != 0 {
                 // Lift the score above the default table so the run ranks.
                 if over == 0
-                    && let Some(gm) = gamemgr::current()
+                    && let Some(p) = ctx.player.as_deref_mut()
                 {
-                    gm.borrow().player.borrow_mut().stats.score10 = 1_234_567;
+                    p.stats.score10 = 1_234_567;
                 }
                 over += 1;
                 if over % 40 == 39 { SHOT } else { 0 }

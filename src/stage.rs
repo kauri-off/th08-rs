@@ -6,7 +6,6 @@ use crate::camera::{Camera, Mat4};
 use crate::drawlist::Recorder;
 use crate::drawlist::{PLAYFIELD, Rect, Vertex};
 use crate::game::{Ctx, Sys};
-use crate::player::PlayerRef;
 use crate::stdfile::{self, QuadKind, Record, Std, Vec3};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
@@ -290,7 +289,6 @@ pub struct Stage {
     overlay: AnmVm,
     overlay_mode: u8,
     overlay_timer: Timer,
-    pub player: Option<PlayerRef>,
     // +0xB24: 0 off, 1 spell bg starting, 2 stage layers hidden (13 §5).
     pub spell_state: i32,
     // cfg effect level (list-B effects only at 2).
@@ -407,7 +405,6 @@ impl Stage {
             overlay: AnmVm::default(),
             overlay_mode: 0,
             overlay_timer: Timer::default(),
-            player: None,
         }
     }
 
@@ -426,16 +423,11 @@ impl Stage {
         }
     }
 
-    pub fn register(
-        ctx: &mut Ctx,
-        index: usize,
-        player: Option<PlayerRef>,
-    ) -> Result<Rc<RefCell<Stage>>> {
+    pub fn register(ctx: &mut Ctx, index: usize) -> Result<Rc<RefCell<Stage>>> {
         let (std_name, bg) = files(index, ctx.game.spell_practice());
         let std = stdfile::parse(&ctx.archive.read(&std_name)?)?;
         ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &bg)?;
         let mut st = Stage::new(index, std);
-        st.player = player;
         st.effect_level = ctx.game.cfg.effect_level;
         st.fast_forward = ctx.core.stage_frame;
         st.start(&mut ctx.anm, &mut ctx.rng);
@@ -662,8 +654,7 @@ impl Stage {
     }
 
     // Stage_UpdateObjects (06 §9): the overlay VM follows the player mode byte (human blue, youkai white).
-    fn update_objects(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
-        let mode = self.player.as_ref().map_or(0, |p| p.borrow().mode);
+    fn update_objects(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, mode: u8) {
         if (mode != 0) != (self.overlay_mode != 0) {
             self.overlay_mode = (mode != 0) as u8;
             self.overlay.pending_interrupt = if mode != 0 { 1 } else { 2 };
@@ -708,10 +699,10 @@ impl Stage {
     // Stage_Calc body (06 §5).
     pub fn step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         // GameFlags bit 10 (bullets frozen): nothing runs, the sparkle flag is not set and the frame counter holds.
-        if self
+        if sys
             .player
-            .as_ref()
-            .is_some_and(|p| p.borrow().freeze_bullets(*sys.flags))
+            .as_deref()
+            .is_some_and(|p| p.freeze_bullets(*sys.flags))
         {
             return;
         }
@@ -732,7 +723,8 @@ impl Stage {
         if self.std.script.get(self.ip).is_none_or(|r| r.op != 3) {
             self.clock.tick(speed);
         }
-        self.update_objects(anm, sys.rng);
+        let mode = sys.player.as_deref().map_or(0, |p| p.mode);
+        self.update_objects(anm, sys.rng, mode);
         // 13 §5: spell background; after 60 frames the stage layers are no longer drawn.
         if self.spell_state > 0 {
             if self.spell_frames == 60 {
@@ -1466,17 +1458,15 @@ mod tests {
 
     #[test]
     fn frozen_bullets_skip_calc() {
-        let mut ts = crate::game::TestSys::default();
+        let mut ts = crate::game::TestSys::with_player(0);
         let sys = &mut ts.sys();
         let mut st = synthetic(vec![rec(0, 13, [7, 0, 0]), rec(-1, 0, [0; 3])]);
-        let player = crate::player::Player::new_ref();
-        player.borrow_mut().set_freeze_bullets(sys.flags, true);
-        st.player = Some(player.clone());
+        crate::pl!(sys).set_freeze_bullets(sys.flags, true);
         let mut anm = AnmManager::default();
         st.step(&mut anm, sys);
         assert_eq!((st.ip, st.frame, st.clear_color), (0, 0, 0));
         assert!(!st.sparkle_on);
-        player.borrow_mut().set_freeze_bullets(sys.flags, false);
+        crate::pl!(sys).set_freeze_bullets(sys.flags, false);
         st.step(&mut anm, sys);
         assert_eq!((st.ip, st.frame, st.clear_color), (1, 1, 7));
         assert!(st.sparkle_on);

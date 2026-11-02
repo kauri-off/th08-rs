@@ -630,8 +630,7 @@ mod tests {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let pr = Player::new_ref();
-        let mut p = pr.borrow_mut();
+        let mut p = Player::default();
         p.update_boxes();
         let mut m = ItemManager::default();
         let pos = p.pos;
@@ -660,8 +659,7 @@ mod tests {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
         let mut anm = AnmManager::default();
-        let pr = Player::new_ref();
-        let mut p = pr.borrow_mut();
+        let mut p = Player::default();
         p.update_boxes();
         let mut m = ItemManager::default();
         let pos = p.pos;

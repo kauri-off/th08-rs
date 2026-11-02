@@ -131,9 +131,9 @@ fn main() -> anyhow::Result<()> {
         s.run(
             &mut ctx,
             to,
-            |r| {
+            |r, ctx| {
                 if dump.is_some_and(|(a, b)| r[25] >= a && r[25] <= b) {
-                    dump_items(r[25]);
+                    dump_items(ctx, r[25]);
                 }
                 let _ = writeln!(trace, "{}", session::format_row(r));
                 if r[26] == 1 || !port_rows.is_empty() {
@@ -196,12 +196,14 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn dump_items(row: i64) {
+fn dump_items(ctx: &th08::game::Ctx, row: i64) {
+    let Some(p) = ctx.player.as_deref() else {
+        return;
+    };
     let Some(gm) = th08::gamemgr::current() else {
         return;
     };
     let gm = gm.borrow();
-    let p = gm.player.borrow();
     println!(
         "row {row}: player {:.3},{:.3} state {} power {} target {:?}",
         p.pos[0], p.pos[1], p.state, p.stats.power, p.targets[0]

@@ -62,11 +62,13 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     row[4] = ctx.rng.total.wrapping_sub(rng_base) as i64;
     row[18] = g.rank.rank as i64;
     row[21] = g.flags as i64;
+    let Some(p) = ctx.player.as_deref() else {
+        return row;
+    };
     let Some(gm) = crate::gamemgr::current() else {
         return row;
     };
     let gm = gm.borrow();
-    let p = gm.player.borrow();
     let st = &p.stats;
     row[5] = p.pos[0].to_bits() as i64;
     row[6] = p.pos[1].to_bits() as i64;

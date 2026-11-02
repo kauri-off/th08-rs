@@ -477,7 +477,7 @@ mod native {
             &self,
             ctx: &mut crate::game::Ctx,
             to: usize,
-            mut row: impl FnMut(&Row) -> bool,
+            mut row: impl FnMut(&Row, &crate::game::Ctx) -> bool,
             mut draw: Option<&mut dyn FnMut(String)>,
         ) {
             if draw.is_some() {
@@ -547,7 +547,7 @@ mod native {
                         r[27] = sf_base + k_in;
                     }
                     r[24] = n - 3;
-                    if !row(&r) {
+                    if !row(&r, ctx) {
                         stop = true;
                         break;
                     }
@@ -565,7 +565,7 @@ mod native {
                 if flow == crate::task::Flow::Quit {
                     ctx.exit_save();
                 }
-                if stop || !row(&r) || flow != crate::task::Flow::Continue {
+                if stop || !row(&r, ctx) || flow != crate::task::Flow::Continue {
                     break;
                 }
             }
@@ -707,7 +707,7 @@ mod tests {
             s.run(
                 &mut ctx,
                 rec.len(),
-                |r| {
+                |r, _| {
                     if r[26] == 1 || !port.is_empty() {
                         port.push(*r);
                     }
@@ -758,7 +758,7 @@ mod tests {
         s.start(&mut ctx).unwrap();
         ctx.bgm.midi_ready = false;
         ctx.sound_log = Some(Vec::new());
-        s.run(&mut ctx, usize::MAX, |_| true, None);
+        s.run(&mut ctx, usize::MAX, |_, _| true, None);
         let got = crate::sound::format_log(ctx.sound_log.as_deref().unwrap());
         let want = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/selftest1.sound.txt"),
@@ -816,11 +816,10 @@ mod tests {
         s.run(
             &mut ctx,
             rec.len(),
-            |r| {
+            |r, ctx| {
                 if r[26] == 1 || !port.is_empty() {
                     port.push(*r);
-                    let h =
-                        crate::gamemgr::current().map_or(0, |g| g.borrow().player.borrow().hits);
+                    let h = ctx.player.as_ref().map_or(0, |p| p.hits);
                     if h < hit_prev {
                         hit_base += hit_prev;
                     }
