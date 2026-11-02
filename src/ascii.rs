@@ -96,6 +96,7 @@ impl Text {
 }
 
 // Per-frame string queue, at most 256 entries, excess ignored (12 §2.9).
+#[derive(Clone)]
 pub struct Queue {
     items: Vec<Text>,
     // Current queue colour 0x4D5088 (RGBA here); only the callers that take "the current colour" read it (12 §1, §5.3).
@@ -787,6 +788,7 @@ fn markers_emit(g: &Gauge, anm: &crate::anmmgr::AnmManager, rec: &mut Recorder) 
 // End of Ascii_DrawPopups 0x405420 (draw prio 14): bar, ends, marker, percent text and max point value.
 // Nothing is drawn unless G0 is visible; g = gauge stats+0x22 (12 §5.9 draw steps 1–4).
 // What the emit needs from the step: gauge value, percent position, zone colour, max point stamps (glyph, x, y).
+#[derive(Clone)]
 struct GaugeDraw {
     gv: i32,
     at: [f32; 2],
@@ -978,7 +980,7 @@ fn set_argb(vm: &mut AnmVm, argb: u32) {
 
 // Pause menu (12 §3); VM i runs ascii.anm script 12 + i.
 // PauseMenu_Update 0x4037B0 state machine (12 §3 table); `shown` = interrupt 1 (show) / 2 (hide) last sent per VM.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct PauseMenu {
     state: u8,
     frame: u32,
@@ -1295,7 +1297,7 @@ pub fn apply_pending_captures(anm: &mut crate::anmmgr::AnmManager, rec: &mut Rec
 
 // Continue / game-over menu (11 §4.2, 12 §4): ascii scripts 22–24 and times.anm script 1 (night clock).
 // ContinueMenu_Update 0x404890 (12 §4); phase 1 = no, 3 = continue (11 §4.2).
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ContinueMenu {
     open: bool,
     yes: bool,
@@ -1476,7 +1478,7 @@ impl ContinueMenu {
 }
 
 // ASCII manager (calc 1, draw 14/20; slots 1 ascii.anm, 3 capture.anm): text queue, pause and continue menus.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AsciiManager {
     pause: PauseMenu,
     cont: ContinueMenu,
@@ -1489,16 +1491,64 @@ pub struct AsciiManager {
 
 impl AsciiManager {
     pub fn register(ctx: &mut Ctx) -> Result<()> {
-        let t = task::task(AsciiManager::default());
+        ctx.ascii_mgr = Some(Box::default());
+        let t = task::task(AsciiTask);
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t)?;
         Ok(())
     }
+
+    #[cfg(test)]
+    pub(crate) fn trace(&self) -> Vec<u64> {
+        let (p, c) = (&self.pause, &self.cont);
+        let mut t = vec![
+            p.state as u64,
+            p.frame as u64,
+            c.open as u64,
+            c.frame as u64,
+            self.popup_off[0].to_bits() as u64,
+            self.texts[0].len() as u64,
+            self.texts[1].len() as u64,
+        ];
+        t.extend(p.vms.iter().chain(&c.vms).map(crate::worldclone::hash_dbg));
+        t
+    }
+
+    // The manager lent out of `ctx.ascii_mgr` for one of its chain callbacks.
+    fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut AsciiManager, &mut Ctx) -> R) -> R {
+        let mut a = ctx.ascii_mgr.take().expect("no ascii manager");
+        let r = f(&mut a, ctx);
+        ctx.ascii_mgr = Some(a);
+        r
+    }
 }
 
-impl Task<Ctx> for AsciiManager {
-    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
+// Chain nodes of `ctx.ascii_mgr` (calc 1, draw 14 / 20): stateless forwarder (STEP9_WORLD.md §3).
+pub struct AsciiTask;
+
+impl Task<Ctx> for AsciiTask {
+    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) -> Result<()> {
+        AsciiManager::with(ctx, |a, ctx| a.on_register(ctx, chain, tag))
+    }
+
+    fn calc(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        AsciiManager::with(ctx, |a, ctx| a.calc(ctx, tag))
+    }
+
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        AsciiManager::with(ctx, |a, ctx| a.draw_step(ctx, tag))
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        if let Some(a) = ctx.ascii_mgr.as_deref() {
+            a.emit(ctx, rec, tag);
+        }
+    }
+}
+
+impl AsciiManager {
+    pub(crate) fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             ctx.anm
                 .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "ascii.anm")?;
@@ -1511,7 +1561,7 @@ impl Task<Ctx> for AsciiManager {
         Ok(())
     }
 
-    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // Supervisor_Init registers the manager on the boot loader thread, so the boot calc passes never reach
         // Ascii_Calc and +0x8284 equals the main-menu frame number (12 §5.10).
         if ctx.game.scene == crate::gamemgr::SCENE_BOOT {
@@ -1565,7 +1615,7 @@ impl Task<Ctx> for AsciiManager {
 
     // Step (prio 14): darkness VM (script set, RNG), shake offset := 0 (12 §5.9 draw), gauge VM writes, low strings
     // drained; (prio 20): high strings drained, marker sprite / colour. Pause and continue draws write nothing.
-    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+    pub(crate) fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let high = tag == 1;
         if !high {
             let pl = ctx.effects.player;
@@ -1587,7 +1637,7 @@ impl Task<Ctx> for AsciiManager {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
         let high = tag == 1;
         // Pause draw 0x404750 (12 §3): playfield viewport; the capture VM (temporary copy, z-write off) while
         // the state ≠ 0; then menu VMs 0..9, all Draw2DSnap.

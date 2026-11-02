@@ -4,7 +4,9 @@
 //! by the ECL's section requests), 9f the effect manager and the screen-effect pool (`TestSys::effects`), 9e the
 //! HUD, g_Gui and the dialogue (`TestSys::msg`, started by an ECL timeline op 6 with a synthetic .msg file), 9g the
 //! game manager with its replay object recording the run, then playing the recording back; each later step-9 run
-//! adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md).
+//! adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md). 9g part 2: the scene objects, the Supervisor and
+//! the ascii manager need a loaded `Ctx`; `scene_clone_continues_identically` snapshots its cloneable parts in the
+//! main menu and replays the continuation from the snapshot.
 use crate::anmmgr::AnmManager;
 use crate::bullet::BulletManager;
 use crate::effect::ScreenEnv;
@@ -73,6 +75,11 @@ impl Clone for World {
 // loaded its whole state is the public fields copied here.
 fn anm_copy(a: &AnmManager) -> AnmManager {
     assert!((0..crate::anmmgr::SLOTS).all(|s| a.get(s).is_none()));
+    anm_fields(a)
+}
+
+// The public fields of an AnmManager, slots left empty (the loaded files stay with the original).
+fn anm_fields(a: &AnmManager) -> AnmManager {
     let mut c = AnmManager::default();
     c.speed = a.speed;
     c.slowdown_restore = a.slowdown_restore;
@@ -87,6 +94,30 @@ fn anm_copy(a: &AnmManager) -> AnmManager {
     c.entries_loaded = a.entries_loaded;
     c.capture_req = a.capture_req;
     c
+}
+
+// Writes the public fields of `src` (from `anm_fields`) back into `dst`, keeping its loaded slots.
+fn anm_restore(dst: &mut AnmManager, src: &AnmManager) {
+    dst.speed = src.speed;
+    dst.slowdown_restore = src.slowdown_restore;
+    dst.vm_counter = src.vm_counter;
+    dst.screen_offset = src.screen_offset;
+    dst.tint = src.tint;
+    dst.tint_on = src.tint_on;
+    dst.stage_tint = src.stage_tint;
+    dst.bomb_drew = src.bomb_drew;
+    dst.stage_camera = src.stage_camera;
+    dst.cam_right = src.cam_right;
+    dst.entries_loaded = src.entries_loaded;
+    dst.capture_req = src.capture_req;
+}
+
+// Test trace of a VM or other Debug state: a hash of its Debug text (deterministic within the test binary).
+pub(crate) fn hash_dbg<T: std::fmt::Debug>(x: &T) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{x:?}").hash(&mut h);
+    h.finish()
 }
 
 impl World {
@@ -575,5 +606,182 @@ fn clone_continues_identically() {
         } else if k == 450 {
             pb = Some(pa.clone());
         }
+    }
+}
+
+// 9g part 2 on a loaded `Ctx` (renderer side: the headless `Gfx`).
+#[cfg(test)]
+mod scene {
+    use super::*;
+
+    // The cloneable parts of a loaded `Ctx` that the menu scene reads and writes (9g part 2): the scene object, the
+    // Supervisor, the ascii manager and the global state around them. The chain, ANM files and textures stay as they
+    // are (the run below loads none; `World` takes the chain with step 9h).
+    #[derive(Clone)]
+    struct CtxWorld {
+        scene: crate::supervisor::Scene,
+        supervisor: Box<crate::supervisor::Supervisor>,
+        ascii_mgr: Box<crate::ascii::AsciiManager>,
+        game: Game,
+        rng: crate::rng::Rng,
+        input: Input,
+        effects: crate::effect::Effects,
+        overlays: crate::ascii::Overlays,
+        ascii: crate::ascii::Queue,
+        sound: crate::sound::Queue,
+        bgm: crate::sound::Bgm,
+        panel: crate::hud::Panel,
+        load_frames: i32,
+        frame: u64,
+        skip_counter: i8,
+        rec_state: crate::drawlist::DeviceState,
+        rec_anm: crate::drawlist::AnmCache,
+    }
+
+    impl CtxWorld {
+        fn take(c: &crate::game::Ctx) -> (Self, AnmManager) {
+            let w = CtxWorld {
+                scene: c.scene.clone(),
+                supervisor: c.supervisor.clone().unwrap(),
+                ascii_mgr: c.ascii_mgr.clone().unwrap(),
+                game: c.game.clone(),
+                rng: c.rng.clone(),
+                input: c.input,
+                effects: c.effects.clone(),
+                overlays: c.overlays.clone(),
+                ascii: c.ascii.clone(),
+                sound: c.sound.clone(),
+                bgm: c.bgm.clone(),
+                panel: c.panel,
+                load_frames: c.load_frames,
+                frame: c.frame,
+                skip_counter: c.skip_counter,
+                rec_state: c.rec.state,
+                rec_anm: c.rec.anm,
+            };
+            (w, anm_fields(&c.anm))
+        }
+
+        fn put(self, c: &mut crate::game::Ctx, anm: &AnmManager) {
+            c.scene = self.scene;
+            c.supervisor = Some(self.supervisor);
+            c.ascii_mgr = Some(self.ascii_mgr);
+            c.game = self.game;
+            c.rng = self.rng;
+            c.input = self.input;
+            c.effects = self.effects;
+            c.overlays = self.overlays;
+            c.ascii = self.ascii;
+            c.sound = self.sound;
+            c.bgm = self.bgm;
+            c.panel = self.panel;
+            c.load_frames = self.load_frames;
+            c.frame = self.frame;
+            c.skip_counter = self.skip_counter;
+            c.rec.state = self.rec_state;
+            c.rec.anm = self.rec_anm;
+            anm_restore(&mut c.anm, anm);
+        }
+    }
+
+    // Scripted main-menu input by frame: Up twice (top cursor to Option), Shot (option screen after its wait), Down,
+    // Right / Left on the option rows, then Bomb twice (cursor to Quit, then leave) back to the top menu.
+    fn menu_keys(f: u32) -> u16 {
+        let press = |at: u32| (at..at + 2).contains(&f);
+        if press(120) || press(140) {
+            input::UP
+        } else if press(160) {
+            input::SHOT
+        } else if press(230) || press(250) {
+            input::DOWN
+        } else if press(270) || press(290) {
+            input::RIGHT
+        } else if press(310) {
+            input::LEFT
+        } else if press(340) || press(360) {
+            input::BOMB
+        } else {
+            0
+        }
+    }
+
+    // One Frame_Run with the scripted keys; the trace of the scene, Supervisor and ascii manager, the RNG and the
+    // frame's draw commands.
+    fn ctx_frame(c: &mut crate::game::Ctx, f: u32) -> Vec<u64> {
+        c.host_as::<crate::platform::ToolHost>().unwrap().keys[0] = menu_keys(f);
+        assert_eq!(c.calc(), crate::task::Flow::Continue);
+        c.draw();
+        let mut t = c.scene.trace();
+        t.extend(c.supervisor.as_deref().unwrap().trace());
+        t.extend(c.ascii_mgr.as_deref().unwrap().trace());
+        t.extend([
+            c.rng.state as u64,
+            c.rng.total as u64,
+            c.game.scene as u64,
+            c.anm.vm_counter as u64,
+            c.rec.draws.len() as u64,
+            hash_dbg(&c.rec.draws),
+        ]);
+        c.present();
+        crate::ascii::apply_pending_captures(&mut c.anm, &mut c.rec);
+        t
+    }
+
+    // 9g part 2: the menu scene, the Supervisor and the ascii manager cloned mid-run (in the option screen's entry
+    // wait) continue exactly like the original: same state, RNG and draw commands every frame.
+    #[test]
+    fn scene_clone_continues_identically() {
+        let Some(dir) = crate::settings::test_game_dir() else {
+            return;
+        };
+        let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
+            return;
+        };
+        let mut core = crate::settings::get().core();
+        core.seed = Some(0x1234);
+        let mut c = pollster::block_on(crate::game::Ctx::load_with(
+            crate::assets::Source::native(dir),
+            gfx,
+            false,
+            core,
+            crate::settings::get().tool_host(),
+        ))
+        .unwrap();
+        const CLONE_AT: u32 = 175;
+        for f in 0..CLONE_AT {
+            ctx_frame(&mut c, f);
+        }
+        assert!(matches!(c.scene, crate::supervisor::Scene::Menu(_)));
+        let chain = (
+            c.tasks.priorities(crate::task::Chain::Calc),
+            c.tasks.priorities(crate::task::Chain::Draw),
+        );
+        let (w, anm) = CtxWorld::take(&c);
+        let a: Vec<_> = (CLONE_AT..450).map(|f| ctx_frame(&mut c, f)).collect();
+        w.put(&mut c, &anm);
+        for (k, f) in (CLONE_AT..450).enumerate() {
+            assert_eq!(ctx_frame(&mut c, f), a[k], "frame {f}");
+        }
+        // The chain is the same at both ends (no scene switch, no task left behind).
+        assert_eq!(
+            chain,
+            (
+                c.tasks.priorities(crate::task::Chain::Calc),
+                c.tasks.priorities(crate::task::Chain::Draw),
+            )
+        );
+        // The run did something worth cloning: the option screen was entered and left, the cursor moved.
+        let screens: Vec<u64> = a.iter().map(|t| t[1]).collect();
+        assert!(
+            screens.contains(&2) && screens.last() == Some(&0),
+            "{screens:?}"
+        );
+        assert!(
+            a.iter()
+                .map(|t| t[4])
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                > 2
+        );
     }
 }

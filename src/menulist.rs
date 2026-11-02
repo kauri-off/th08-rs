@@ -311,7 +311,7 @@ const PA: usize = 4;
 const PC: usize = 5;
 
 // State of the list screens.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Lists {
     // Scratch VMs from menu+0xE7B8 (screen 16: E7B8 / EA5C / ED00; screen 17: 15 row VMs) and the screen they belong to.
     scratch: Vec<AnmVm>,

@@ -5,7 +5,7 @@ use crate::drawlist::{Recorder, TexId, TextCmd};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{ENTER, SHOT, SKIP};
-use crate::task::{Chain, Ret, Task};
+use crate::task::{Chain, Ret};
 use anyhow::Result;
 use th08_formats::end;
 use th08_formats::sjis::SjisString;
@@ -26,6 +26,7 @@ enum Step {
     End,
 }
 
+#[derive(Clone)]
 pub struct Ending {
     // Script buffer and read pointer (Ending_LoadScript 0x4295E0).
     script: end::Script,
@@ -437,8 +438,8 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, rgb: [u8; 3]) {
     vm.flags |= anmvm::F_VISIBLE;
 }
 
-impl Task<Ctx> for Ending {
-    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
+impl Ending {
+    pub(crate) fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             self.init(ctx)?;
         }
@@ -446,7 +447,7 @@ impl Task<Ctx> for Ending {
     }
 
     // Calc 0x429860: interpreter then the 15 VMs; up to 9 times with Ctrl while skip-allowed (16 §1.2).
-    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let n = if self.skip_allowed && ctx.input.down(SKIP) {
             9
         } else {
@@ -476,7 +477,7 @@ impl Task<Ctx> for Ending {
 
     // Draw 0x4298F0 (16 §1.5): picture, 15 VMs, fade overlay.
     // Step: the VMs' draw writes and the fade counter (0x428910 runs inside the draw).
-    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    pub(crate) fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if self.done {
             return Ret::Next;
         }
@@ -488,7 +489,7 @@ impl Task<Ctx> for Ending {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
         if self.done {
             return;
         }
@@ -509,7 +510,7 @@ impl Task<Ctx> for Ending {
     }
 
     // On-remove 0x429D40 (16 §1.6): ANM slot 0x18 and surface 0 released, next scene 6 (result, name entry).
-    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
+    pub(crate) fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain != Chain::Calc {
             return;
         }

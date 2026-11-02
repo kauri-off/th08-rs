@@ -13,7 +13,7 @@ use crate::input::{
 use crate::menu::{CANCEL, CONFIRM};
 use crate::scoredat::{C_ATTEMPTS, C_BONUS, C_CAPTURES, C_PRACTICE, CARDS, Hscr};
 use crate::sound;
-use crate::task::{Chain, Ret, Task};
+use crate::task::{Chain, Ret};
 use th08_formats::sjis::{self, SjisString};
 
 // Result_Calc 0x4584B0 at prio 16, Result_Draw 0x4586B4 at prio 18 (16 §2).
@@ -92,6 +92,7 @@ fn group_cards(g: i32) -> Vec<usize> {
 }
 
 // The 0x477B0-byte result object (16 §2).
+#[derive(Clone)]
 pub struct ResultScreen {
     // Result_Register mode: 0 viewer, 1 after a game (2 = flush only, handled by Game::save_score).
     mode: u8,
@@ -1306,9 +1307,9 @@ impl ResultScreen {
     }
 }
 
-impl Task<Ctx> for ResultScreen {
+impl ResultScreen {
     // Result_OnRegister 0x45964D.
-    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> anyhow::Result<()> {
+    pub(crate) fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> anyhow::Result<()> {
         if chain != Chain::Calc {
             return Ok(());
         }
@@ -1369,7 +1370,7 @@ impl Task<Ctx> for ResultScreen {
     }
 
     // Result_OnRemove 0x459FD2: saves score.dat (2 RNG draws, 15 §2.1).
-    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
+    pub(crate) fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain != Chain::Calc {
             return;
         }
@@ -1384,7 +1385,7 @@ impl Task<Ctx> for ResultScreen {
     }
 
     // Result_Calc 0x4584B0: state, then the 72 VMs, then frame += 1.
-    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.calc_state(ctx);
         // Session tool hook.
         ctx.game.trace_result = Some(self.state);
@@ -1402,7 +1403,7 @@ impl Task<Ctx> for ResultScreen {
 
     // Result_Draw 0x4586B4.
     // Step: VM draw state (`prepare` at pos + pos_offset), the ASCII pushes and the card accordion latch.
-    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    pub(crate) fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The object is removed by the calc that requested scene 1 (16 §2.4 exit, P+20): nothing drawn then.
         if self.removed {
             return Ret::Next;
@@ -1434,7 +1435,7 @@ impl Task<Ctx> for ResultScreen {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
         if self.removed {
             return;
         }

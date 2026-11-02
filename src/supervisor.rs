@@ -10,12 +10,15 @@ use crate::gamemgr::{self, Game, GameManager};
 use crate::task::{self, Chain, Ret, Task, TaskRef};
 use anyhow::{Context, Result};
 
+// Owned by `Ctx.supervisor`; its chain nodes are `SupervisorTask`.
+#[derive(Clone)]
 pub struct Supervisor {
     // Debug `TH08_SLOT_TEST` / `TH08_INPUT`.
     debug_sprites: Option<usize>,
     script: Option<Vec<u16>>,
     frame: usize,
-    // The registered scene object (GM, MainMenu, Result, Ending, MusicRoom).
+    // Chain handle of the registered scene's forwarder (`SceneTask`, or `GameManagerTask` for the GM); the scene
+    // state is `Ctx.scene` / `Ctx.gm`. Becomes the scene's `Node`s with step 9h.
     scene_task: Option<TaskRef<Ctx>>,
     // Full-screen surface slot 8 (logo, captured frame or result.jpg), drawn at prio 0 while loading (12 §1).
     logo: Option<TexId>,
@@ -42,7 +45,7 @@ const MENU_LOAD_BOOT: u32 = 34;
 const MENU_LOAD: u32 = 33;
 
 pub fn register(ctx: &mut Ctx) -> Result<()> {
-    let t = task::task(Supervisor {
+    ctx.supervisor = Some(Box::new(Supervisor {
         debug_sprites: ctx.core.slot_test,
         script: ctx
             .core
@@ -60,7 +63,8 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
         fps_text: String::new(),
         fps_frames: 0,
         prompt: Vec::new(),
-    });
+    }));
+    let t = task::task(SupervisorTask);
     task::add(ctx, Chain::Calc, 0, 0, t.clone())?;
     for prio in [0, 2, 16] {
         task::add(ctx, Chain::Draw, prio, prio as u8, t.clone())?;
@@ -108,7 +112,149 @@ pub fn setup_ending(g: &mut Game, s: &CoreConfig, e: &Ending) {
     g.request(gamemgr::SCENE_ENDING);
 }
 
+// The scene object registered by the Supervisor's scene switch (11 §7), except the game scene, whose GM is `Ctx.gm`.
+#[derive(Clone, Default)]
+pub enum Scene {
+    #[default]
+    None,
+    Menu(Box<crate::menu::MainMenu>),
+    Result(Box<crate::result::ResultScreen>),
+    Ending(Box<crate::ending::Ending>),
+    MusicRoom(Box<crate::musicroom::MusicRoom>),
+}
+
+// One call on whichever scene object is set; `$none` without one.
+macro_rules! on_scene {
+    ($s:expr, $x:ident => $e:expr, $none:expr) => {
+        match $s {
+            Scene::Menu($x) => $e,
+            Scene::Result($x) => $e,
+            Scene::Ending($x) => $e,
+            Scene::MusicRoom($x) => $e,
+            Scene::None => $none,
+        }
+    };
+}
+
+impl Scene {
+    // Test: the menu's screen, cursor and VM states; the other scenes by kind.
+    #[cfg(test)]
+    pub(crate) fn trace(&self) -> Vec<u64> {
+        let h = crate::worldclone::hash_dbg;
+        match self {
+            Scene::Menu(m) => {
+                let mut t = vec![
+                    1,
+                    m.screen as u64,
+                    m.prev_screen as u64,
+                    m.frames as u64,
+                    m.cursor as u32 as u64,
+                    m.idle as u64,
+                    m.pending.as_ref().map_or(0, |p| 1 + p.frames as u64),
+                    m.desc_cur.map_or(0, |d| d as u64 + 1),
+                    h(&m.notice),
+                ];
+                t.extend(m.vms.iter().chain(&m.desc).map(h));
+                t
+            }
+            Scene::Result(_) => vec![2],
+            Scene::Ending(_) => vec![3],
+            Scene::MusicRoom(_) => vec![4],
+            Scene::None => vec![0],
+        }
+    }
+
+    // The scene lent out of `ctx.scene` for one of its chain callbacks (only the Supervisor switches scenes).
+    fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Scene, &mut Ctx) -> R) -> R {
+        let mut s = std::mem::take(&mut ctx.scene);
+        let r = f(&mut s, ctx);
+        ctx.scene = s;
+        r
+    }
+}
+
+// Chain nodes of `ctx.scene` (the scene's calc / draw prios, the menu's surface node): stateless forwarder
+// (STEP9_WORLD.md §3).
+pub struct SceneTask;
+
+impl Task<Ctx> for SceneTask {
+    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) -> Result<()> {
+        Scene::with(
+            ctx,
+            |s, ctx| on_scene!(s, x => x.on_register(ctx, chain, tag), Ok(())),
+        )
+    }
+
+    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) {
+        Scene::with(
+            ctx,
+            |s, ctx| on_scene!(s, x => x.on_remove(ctx, chain, tag), ()),
+        )
+    }
+
+    fn calc(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        Scene::with(ctx, |s, ctx| on_scene!(s, x => x.calc(ctx, tag), Ret::Next))
+    }
+
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        Scene::with(
+            ctx,
+            |s, ctx| on_scene!(s, x => x.draw_step(ctx, tag), Ret::Next),
+        )
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        on_scene!(&ctx.scene, x => x.emit(ctx, rec, tag), ())
+    }
+}
+
+// Chain nodes of `ctx.supervisor` (calc 0, draw 0 / 2 / 16): stateless forwarder (STEP9_WORLD.md §3).
+pub struct SupervisorTask;
+
+impl Task<Ctx> for SupervisorTask {
+    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) -> Result<()> {
+        Supervisor::with(ctx, |s, ctx| s.on_register(ctx, chain, tag))
+    }
+
+    fn calc(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        Supervisor::with(ctx, |s, ctx| s.calc(ctx, tag))
+    }
+
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        Supervisor::with(ctx, |s, ctx| s.draw_step(ctx, tag))
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        if let Some(s) = ctx.supervisor.as_deref() {
+            s.emit(ctx, rec, tag);
+        }
+    }
+}
+
 impl Supervisor {
+    #[cfg(test)]
+    pub(crate) fn trace(&self) -> Vec<u64> {
+        let mut t = vec![
+            self.frame as u64,
+            self.boot_frames as u64,
+            self.stage_load as u64,
+            self.capture_req as u64,
+            self.logo.is_some() as u64,
+            self.prompt.len() as u64,
+            self.load_pos[0].to_bits() as u64,
+        ];
+        t.extend(self.boot_vms.iter().map(crate::worldclone::hash_dbg));
+        t
+    }
+
+    // The Supervisor lent out of `ctx.supervisor` for one of its chain callbacks.
+    fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Supervisor, &mut Ctx) -> R) -> R {
+        let mut s = ctx.supervisor.take().expect("no supervisor");
+        let r = f(&mut s, ctx);
+        ctx.supervisor = Some(s);
+        r
+    }
+
     // Fps_Update 0x446F53 playback text refresh (15 §3.3). The original refreshes on a 500 ms meter window continuous
     // since boot, whose phase cannot be reproduced (15 §3.3); the port refreshes every 30 gameplay calcs, on the 3rd.
     fn replay_fps(&mut self, ctx: &mut Ctx) {
@@ -253,6 +399,7 @@ impl Supervisor {
         ctx.gui = None;
         ctx.msg = None;
         ctx.gm = None;
+        ctx.scene = Scene::None;
     }
 
     // GameMgr_OnRegister 0x43AAF4: 0x44886F at (500, 440) + darken overlay (ScreenEffect type 5) after the main menu,
@@ -282,14 +429,9 @@ impl Supervisor {
         Ok(())
     }
 
-    fn set_scene<T: Task<Ctx> + 'static>(
-        &mut self,
-        ctx: &mut Ctx,
-        t: T,
-        calc: u16,
-        draw: u16,
-    ) -> Result<()> {
-        let t = task::task(t);
+    fn set_scene(&mut self, ctx: &mut Ctx, scene: Scene, calc: u16, draw: u16) -> Result<()> {
+        ctx.scene = scene;
+        let t = task::task(SceneTask);
         task::add(ctx, Chain::Calc, calc, 0, t.clone())?;
         task::add(ctx, Chain::Draw, draw, 0, t.clone())?;
         self.scene_task = Some(t);
@@ -318,7 +460,7 @@ impl Supervisor {
                 self.drop_scene(ctx);
                 self.set_scene(
                     ctx,
-                    crate::ending::Ending::new(),
+                    Scene::Ending(Box::new(crate::ending::Ending::new())),
                     crate::ending::CALC_PRIO,
                     crate::ending::DRAW_PRIO,
                 )?;
@@ -335,7 +477,7 @@ impl Supervisor {
                 ctx.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
-                    crate::menu::MainMenu::new(),
+                    Scene::Menu(Box::new(crate::menu::MainMenu::new())),
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;
@@ -380,7 +522,7 @@ impl Supervisor {
                 let mode = (req == gamemgr::SCENE_RESULT) as u8;
                 self.set_scene(
                     ctx,
-                    crate::result::ResultScreen::new(mode),
+                    Scene::Result(Box::new(crate::result::ResultScreen::new(mode))),
                     crate::result::CALC_PRIO,
                     crate::result::DRAW_PRIO,
                 )?;
@@ -389,7 +531,7 @@ impl Supervisor {
                 self.drop_scene(ctx);
                 self.set_scene(
                     ctx,
-                    crate::musicroom::MusicRoom::default(),
+                    Scene::MusicRoom(Box::default()),
                     crate::musicroom::CALC_PRIO,
                     crate::musicroom::DRAW_PRIO,
                 )?;
@@ -402,7 +544,7 @@ impl Supervisor {
                 ctx.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
-                    crate::menu::MainMenu::new(),
+                    Scene::Menu(Box::new(crate::menu::MainMenu::new())),
                     crate::menu::CALC_PRIO,
                     crate::menu::DRAW_PRIO,
                 )?;
@@ -422,7 +564,7 @@ impl Supervisor {
     }
 }
 
-impl Task<Ctx> for Supervisor {
+impl Supervisor {
     // Supervisor on-register 0x445FA3 (12 §1); score.dat and the unlock flags are loaded in Ctx::load_with.
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {

@@ -68,6 +68,16 @@ pub struct Ctx {
     // Game manager 0x164D0B0 (11 §2–§4) with its replay object: created by GameManager_Register, dropped by the
     // scene switch (11 §7). Interim owner until `World.gm` (step 9h, STEP9_WORLD.md).
     pub gm: Option<Box<crate::gamemgr::GameManager>>,
+    // Supervisor g_Supervisor 0x17CE758 (11 §7, 12 §1), registered at start-up and by a restart (00 §2); its chain
+    // nodes are `SupervisorTask`. Interim owner until `World` (step 9h, STEP9_WORLD.md).
+    pub supervisor: Option<Box<crate::supervisor::Supervisor>>,
+    // The registered menu-side scene object (MainMenu, Result, Ending, MusicRoom; 11 §7), switched by the
+    // Supervisor; its chain nodes are `SceneTask`. The game scene's GM is `gm`.
+    pub scene: crate::supervisor::Scene,
+    // ASCII manager (13 §4, 12 §3–§4), registered by Supervisor on-register; chain nodes `AsciiTask`.
+    pub ascii_mgr: Option<Box<crate::ascii::AsciiManager>>,
+    // Debug ANM viewer (TH08_ANM), not a port; chain nodes `AnmDebugTask`.
+    pub anm_debug: Option<Box<crate::anmdebug::AnmDebug>>,
     // Port queue of bomb areas created by effects (14 §2.13).
     pub bomb_areas: crate::bomb::AreaQueue,
     // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
@@ -365,6 +375,10 @@ impl Ctx {
             gui: None,
             msg: None,
             gm: None,
+            supervisor: None,
+            scene: Default::default(),
+            ascii_mgr: None,
+            anm_debug: None,
             bomb_areas: Vec::new(),
             timer_pause: 0,
             load_frames: 0,
@@ -554,6 +568,10 @@ impl Ctx {
         // Step 1: Result_Register(2) + teardown save score.dat; step 5 reloads it (the written bytes = the file).
         let score = self.game.save_score(&mut self.rng, true, &mut *self.host);
         task::clear(self);
+        // The chain teardown released every task object (00 §2).
+        self.scene = Default::default();
+        self.ascii_mgr = None;
+        self.anm_debug = None;
         self.sound_update();
         self.bgm.stop_bgm();
         self.bgm.release_bgm();

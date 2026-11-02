@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 // TH08_ANM=<file>:<script>[,<script>...][:pf] runs scripts live in slot 24 (`pf` = playfield viewport);
 // TH08_ANM_INT=<frame>:<id>[,<frame>:<id>...] sends interrupts; TH08_ANM_POS=x,y[,dx] places VM i at (x + i·dx, y);
 // TH08_ANM_MODE=<n> forces a draw mode (owners choose it; scripts rarely set one).
+#[derive(Clone)]
 pub struct AnmDebug {
     vms: Vec<AnmVm>,
     playfield: bool,
@@ -45,19 +46,47 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
         }
     }
     let interrupts = ctx.core.anm_int.clone();
-    let t = task::task(AnmDebug {
+    ctx.anm_debug = Some(Box::new(AnmDebug {
         vms,
         playfield,
         interrupts,
         frame: 0,
         mode: ctx.core.anm_mode,
-    });
+    }));
+    let t = task::task(AnmDebugTask);
     task::add(ctx, Chain::Calc, 4, 0, t.clone())?;
     task::add(ctx, Chain::Draw, 3, 0, t)?;
     Ok(())
 }
 
-impl Task<Ctx> for AnmDebug {
+// The viewer lent out of `ctx.anm_debug` for one of its chain callbacks.
+fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut AnmDebug, &mut Ctx) -> R) -> R {
+    let mut a = ctx.anm_debug.take().expect("no anm debug viewer");
+    let r = f(&mut a, ctx);
+    ctx.anm_debug = Some(a);
+    r
+}
+
+// Chain nodes of `ctx.anm_debug` (calc 4, draw 3): stateless forwarder (STEP9_WORLD.md §3).
+pub struct AnmDebugTask;
+
+impl Task<Ctx> for AnmDebugTask {
+    fn calc(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        with(ctx, |a, ctx| a.calc(ctx, tag))
+    }
+
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        with(ctx, |a, ctx| a.draw_step(ctx, tag))
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        if let Some(a) = ctx.anm_debug.as_deref() {
+            a.emit(ctx, rec, tag);
+        }
+    }
+}
+
+impl AnmDebug {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.frame += 1;
         for &(f, id) in &self.interrupts {

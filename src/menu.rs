@@ -8,7 +8,7 @@ use crate::game::Ctx;
 use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
-use crate::task::{Chain, Ret, Task};
+use crate::task::{Chain, Ret};
 use anyhow::Result;
 use th08_formats::sjis;
 
@@ -308,6 +308,7 @@ fn lives_max(g: &gamemgr::Game, unlock: bool) -> i32 {
 }
 
 // A screen switch that waits `frames` calcs (option 30, difficulty cancel 20, 12 §2.2–§2.3).
+#[derive(Clone)]
 pub(crate) struct Pending {
     pub(crate) frames: u32,
     pub(crate) screen: i32,
@@ -317,6 +318,7 @@ pub(crate) struct Pending {
 }
 
 // The 0x14490-byte menu object, global 0x18BDE08 (12 §2 field table).
+#[derive(Clone)]
 pub struct MainMenu {
     // +0xC2B8: VM i runs title01.anm script i; `base` = each script's own (selected) sprite.
     pub(crate) vms: Vec<AnmVm>,
@@ -1213,9 +1215,9 @@ impl Default for MainMenu {
     }
 }
 
-impl Task<Ctx> for MainMenu {
+impl MainMenu {
     // MainMenu_OnRegister 0x470A6C + the loader thread 0x470E10 (00 §3.2, 12 §2.2, 15 §2.2), run synchronously.
-    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
+    pub(crate) fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain != Chain::Calc {
             return Ok(());
         }
@@ -1311,7 +1313,7 @@ impl Task<Ctx> for MainMenu {
         Ok(())
     }
 
-    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
+    pub(crate) fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain != Chain::Calc {
             return;
         }
@@ -1325,7 +1327,7 @@ impl Task<Ctx> for MainMenu {
         self.desc_cur = None;
     }
 
-    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // Session tool hook: screen/+0x00 at every MainMenu_Calc entry (drawlog README cols 29/30).
         ctx.game.trace_menu = Some((self.screen, self.trace_cursor()));
         // The menu starts when its loader has finished (Supervisor loading screen, 12 §1).
@@ -1393,7 +1395,7 @@ impl Task<Ctx> for MainMenu {
     // Menu draw 0x47087F (12 §2.2): surface 0 on its own earlier node (SURFACE_PRIO), VMs 0–141 in order, the
     // description VM, then the per-screen text and the final-route notice.
     // Step: VM draw state (`prepare`), per-screen ASCII pushes / scratch VM positions / pie easing, the notice VM.
-    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+    pub(crate) fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         if !self.drawn(ctx) || tag == SURFACE_PRIO as u8 {
             return Ret::Next;
         }
@@ -1426,7 +1428,7 @@ impl Task<Ctx> for MainMenu {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
         if !self.drawn(ctx) {
             return;
         }
@@ -1559,7 +1561,7 @@ mod tests {
     // switches to screen 7 and clears it; a demo clears bit 3 at register and stays on the top menu.
     #[test]
     fn back_from_replay() {
-        use crate::task::{Chain, Task};
+        use crate::task::Chain;
         let Some(mut c) = ctx() else {
             return;
         };
@@ -1587,7 +1589,7 @@ mod tests {
     // entry block sets bit 14 again for +0x6C == 2 and switches to 15 (8 for plain practice).
     #[test]
     fn back_from_practice() {
-        use crate::task::{Chain, Task};
+        use crate::task::Chain;
         let Some(mut c) = ctx() else {
             return;
         };

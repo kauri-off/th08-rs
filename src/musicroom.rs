@@ -6,7 +6,7 @@ use crate::drawlist::{FULLSCREEN, Recorder, TexId, TextCmd};
 use crate::game::Ctx;
 use crate::gamemgr;
 use crate::input::{BOMB, DOWN, ENTER, KEY_R, PAUSE, SHOT, SKIP, UP};
-use crate::task::{Chain, Ret, Task};
+use crate::task::{Chain, Ret};
 pub use th08_formats::musiccmt::{COMMENT_LINES, Entry, MAX_ENTRIES, parse_musiccmt};
 use th08_formats::sjis::{self, SjisString};
 
@@ -140,7 +140,7 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, colour: u32, mode: i3
 
 // The 0x6A28-byte music-room object at 0x17CF4C8 (16 §5, structs.md). Zeroed at register: every VM is inert until
 // a script is set (16 §5.2).
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MusicRoom {
     entries: Vec<Entry>,
     // +0xC + 4i: heard flags copied from PLST+0x208 at init (15 §2, 16 §5.1).
@@ -295,9 +295,9 @@ impl MusicRoom {
     }
 }
 
-impl Task<Ctx> for MusicRoom {
+impl MusicRoom {
     // MusicRoom_Init 0x44970F (16 §5.1–§5.2).
-    fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> anyhow::Result<()> {
+    pub(crate) fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> anyhow::Result<()> {
         if chain != Chain::Calc {
             return Ok(());
         }
@@ -330,7 +330,7 @@ impl Task<Ctx> for MusicRoom {
     }
 
     // On-remove 0x449C0A.
-    fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
+    pub(crate) fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain != Chain::Calc {
             return;
         }
@@ -341,7 +341,7 @@ impl Task<Ctx> for MusicRoom {
     }
 
     // MusicRoom_Calc 0x449399 (16 §5.3): state, sub-frame step, then the VMs. On exit Calc returns 0 at once.
-    fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let s0 = self.state;
         if s0 == 0 {
             self.state_intro();
@@ -368,7 +368,7 @@ impl Task<Ctx> for MusicRoom {
 
     // MusicRoom_Draw 0x449487 (16 §5.2).
     // Step: row VM positions, the ASCII queue strings and the VMs' draw writes; the emit draws in the same order.
-    fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
+    pub(crate) fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if self.removed {
             return Ret::Remove;
         }
@@ -402,7 +402,7 @@ impl Task<Ctx> for MusicRoom {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
         if self.removed {
             return;
         }
