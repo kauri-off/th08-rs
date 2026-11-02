@@ -1,9 +1,10 @@
 //! Main-menu list screens: practice stage select (12 §2.5), spell practice 16/17 (16 §6), replay (12 §2.8, 15 §3.8).
 #![allow(clippy::disallowed_methods)]
 
+use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
-use crate::drawlist::{Blend, TextCmd, Vertex};
+use crate::drawlist::{Blend, Recorder, TextCmd, Vertex};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{DOWN, LEFT, RIGHT, UP};
@@ -391,9 +392,77 @@ fn scratch(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     vm
 }
 
-fn draw_at(ctx: &mut Ctx, vm: &mut AnmVm, x: f32, y: f32) {
+// The four percent readouts of 16 §6.4 step 6 in draw order: (pie value index, centre, colour).
+const PERCENTS: [(usize, [f32; 2], [u8; 4]); 4] = [
+    (0, [514.0, 404.0], [255; 4]),
+    (1, [514.0, 412.0], 0x80C0C080u32.to_le_bytes()),
+    (2, [580.0, 451.0], [255; 4]),
+    (3, [580.0, 443.0], 0x80C0C080u32.to_le_bytes()),
+];
+
+// Pie value → percent ×100 for the glyph readout (16 §6.4 step 6).
+fn pct(v: f32) -> i32 {
+    (v * 10000.0) as i32
+}
+
+// Step half of a mode-0 draw at (x, y): only the position is written (mode 0 prepares nothing, 05 §9).
+fn place(vm: &mut AnmVm, x: f32, y: f32) {
     vm.pos = [x, y, 0.0];
-    ctx.anm.draw_mode(&mut ctx.rec, vm, 0);
+}
+
+fn emit0(ctx: &Ctx, rec: &mut Recorder, vm: &AnmVm) {
+    ctx.anm.emit_mode(rec, vm, 0);
+}
+
+// Ascii_DrawGaugePercent 0x405E10 (12 §5.9) split like ascii::draw_percent's writes: `each` sees the VM as each glyph
+// is drawn. The step runs it on the real VM, the emit on a copy (every field it reads is overwritten per glyph).
+#[allow(clippy::too_many_arguments)]
+fn percent_glyphs(
+    anm: &AnmManager,
+    vm: &mut AnmVm,
+    value: i32,
+    cx: f32,
+    cy: f32,
+    z: f32,
+    colour: [u8; 4],
+    mut each: impl FnMut(&AnmVm),
+) {
+    vm.color = colour;
+    let a = value.abs();
+    let n = 4
+        + (value < 0) as i32
+        + if a < 1000 {
+            1
+        } else if a < 10000 {
+            2
+        } else {
+            3
+        };
+    let mut x = cx - (3.5 * n as f32 - 3.5 - 4.0);
+    let mut seq: Vec<(i32, f32, bool)> = Vec::new();
+    if value < 0 {
+        seq.push((12, 7.0, false));
+    }
+    let (int, frac): (Vec<i32>, [i32; 2]) = if a < 1000 {
+        (vec![a / 100], [a % 100 / 10, a % 10])
+    } else if a < 10000 {
+        (vec![a / 1000, a % 1000 / 100], [a % 100 / 10, a % 10])
+    } else {
+        (vec![1, 0, 0], [0, 0])
+    };
+    seq.extend(int.into_iter().map(|d| (d, 7.0, false)));
+    seq.push((11, 5.0, false));
+    seq.push((frac[0], 5.0, true));
+    seq.push((frac[1], 7.0, true));
+    seq.push((10, 0.0, false));
+    for (glyph, adv, small) in seq {
+        let (yy, sc) = if small { (cy + 2.0, 0.8) } else { (cy, 1.0) };
+        vm.set_sprite(anm, 136 + glyph);
+        vm.pos = [x, yy, z];
+        vm.scale = [sc, sc];
+        each(vm);
+        x += adv;
+    }
 }
 
 fn set_alpha(vm: &mut AnmVm, a: u8) {
@@ -419,7 +488,7 @@ fn text(x: f32, y: f32, s: impl Into<String>, argb: u32, hl: bool) -> Text {
 }
 
 // Menu_DrawPie 0x46FDC2 → AnmManager_DrawFan: 64-vertex fan from 12 o'clock, clockwise over v·360° (16 §6.4).
-fn pie(ctx: &mut Ctx, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
+fn pie(rec: &mut Recorder, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
     let col = [
         (argb >> 16) as u8,
         (argb >> 8) as u8,
@@ -433,7 +502,7 @@ fn pie(ctx: &mut Ctx, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
         let a = -std::f32::consts::FRAC_PI_2 + k as f32 * step;
         verts.push(p(c[0] + r * a.cos(), c[1] + r * a.sin()));
     }
-    ctx.rec.fan(Blend::Alpha, &verts);
+    rec.fan(Blend::Alpha, &verts);
 }
 
 // Text_RenderToVm (white, outline 0, font 15, 16 §6.3 / §6.5) into the sprite's texture strip.
@@ -541,7 +610,8 @@ impl MainMenu {
 
     // MainMenu_PracticeStageDraw 0x46F429 (12 §2.5): header at A − (0, 96), rows `"%s %9d0 (%3d)"` from A − (0, 80),
     // PSCR hiscore / plays; cursor row white + highlight, others 0xFFA0A0A0 or 0xFF404040 (locked).
-    pub(crate) fn practice_stage_draw(&mut self, ctx: &mut Ctx) {
+    // Draw step only: the rows are ASCII queue pushes, the draw records nothing itself.
+    pub(crate) fn practice_stage_draw_step(&mut self, ctx: &mut Ctx) {
         let [ax, ay] = self.anchor();
         ctx.ascii
             .push(text(ax, ay - 96.0, "Stage    HI-Score", 0xFFFFFFFF, false));
@@ -698,17 +768,15 @@ impl MainMenu {
     }
 
     // MainMenu_SpellPracticeCharDraw 0x46F5CB (16 §6.4 steps 1–6).
-    pub(crate) fn spell_char_draw(&mut self, ctx: &mut Ctx) {
-        // The draw follows the screen variable, so the press frame already draws this screen (VMs not created yet).
-        let own =
-            self.lists.scratch_for == crate::menu::SPELL_PRACTICE && self.lists.scratch.len() >= 3;
+    // Step: scratch VM positions, the ASCII rows, the pie easing (+0x1442C-driven, read by later frames) and the
+    // glyph VM's writes; `spell_char_emit` records the VMs, pies and glyphs in the original order.
+    pub(crate) fn spell_char_draw_step(&mut self, ctx: &mut Ctx) {
+        let own = self.spell_char_own();
         let [ax, ay] = self.anchor();
         // The heading x (A.x − 32) is also the row pen x (16 §6.4 step 1).
         let x0 = ax - 32.0;
         if own {
-            let mut vm = std::mem::take(&mut self.lists.scratch[0]);
-            draw_at(ctx, &mut vm, ax - 32.0, ay - 152.0);
-            self.lists.scratch[0] = vm;
+            place(&mut self.lists.scratch[0], ax - 32.0, ay - 152.0);
         }
         let s = self.cursor.clamp(0, 11) as usize;
         let mut y = ay - 136.0;
@@ -779,12 +847,8 @@ impl MainMenu {
             .scale_xy(0.75, 1.0),
         );
         if own {
-            let mut vm = std::mem::take(&mut self.lists.scratch[1]);
-            draw_at(ctx, &mut vm, 400.0, 376.0);
-            self.lists.scratch[1] = vm;
-            let mut vm = std::mem::take(&mut self.lists.scratch[2]);
-            draw_at(ctx, &mut vm, 552.0, 426.0);
-            self.lists.scratch[2] = vm;
+            place(&mut self.lists.scratch[1], 400.0, 376.0);
+            place(&mut self.lists.scratch[2], 552.0, 426.0);
         }
         let _ = sc_all;
         // Pie values v1..v4 (16 §6.4 step 5), eased over the first 50 screen frames.
@@ -807,57 +871,49 @@ impl MainMenu {
             };
             self.lists.pies[k] = v;
         }
-        let v = self.lists.pies;
         self.glyph_vm(ctx);
-        let mut glyph = std::mem::take(&mut self.lists.glyph);
-        let white = [255; 4];
-        let green = 0x80C0C080u32.to_le_bytes();
-        pie(ctx, [530.0, 420.0], 24.0, 0.02, 0x60C0C0F0, v[0]);
-        pie(ctx, [530.0, 420.0], 12.0, 0.01, 0x80C0C0F0, v[1]);
-        let pct = |v: f32| (v * 10000.0) as i32;
-        crate::ascii::draw_percent(
-            &mut ctx.anm,
-            &mut ctx.rec,
-            &mut glyph,
-            pct(v[0]),
-            514.0,
-            404.0,
-            0.01,
-            white,
-        );
-        crate::ascii::draw_percent(
-            &mut ctx.anm,
-            &mut ctx.rec,
-            &mut glyph,
-            pct(v[1]),
-            514.0,
-            412.0,
-            0.01,
-            green,
-        );
-        pie(ctx, [562.0, 438.0], 16.0, 0.02, 0x6080C0C0, v[2]);
-        pie(ctx, [562.0, 438.0], 8.0, 0.01, 0x8080C0C0, v[3]);
-        crate::ascii::draw_percent(
-            &mut ctx.anm,
-            &mut ctx.rec,
-            &mut glyph,
-            pct(v[2]),
-            580.0,
-            451.0,
-            0.01,
-            white,
-        );
-        crate::ascii::draw_percent(
-            &mut ctx.anm,
-            &mut ctx.rec,
-            &mut glyph,
-            pct(v[3]),
-            580.0,
-            443.0,
-            0.01,
-            green,
-        );
-        self.lists.glyph = glyph;
+        let anm = &ctx.anm;
+        for (k, z, c) in PERCENTS {
+            percent_glyphs(
+                anm,
+                &mut self.lists.glyph,
+                pct(self.lists.pies[k]),
+                z[0],
+                z[1],
+                0.01,
+                c,
+                |_| {},
+            );
+        }
+    }
+
+    // The draw follows the screen variable, so the press frame already draws this screen (VMs not created yet).
+    fn spell_char_own(&self) -> bool {
+        self.lists.scratch_for == crate::menu::SPELL_PRACTICE && self.lists.scratch.len() >= 3
+    }
+
+    // Emit of 0x46F5CB: scratch 0, scratch 1 / 2, then pies and percent glyphs interleaved (16 §6.4 steps 1, 4, 6).
+    pub(crate) fn spell_char_emit(&self, ctx: &Ctx, rec: &mut Recorder) {
+        if self.spell_char_own() {
+            emit0(ctx, rec, &self.lists.scratch[0]);
+            emit0(ctx, rec, &self.lists.scratch[1]);
+            emit0(ctx, rec, &self.lists.scratch[2]);
+        }
+        let v = self.lists.pies;
+        let mut glyph = self.lists.glyph.clone();
+        let mut percent = |rec: &mut Recorder, (k, z, c): (usize, [f32; 2], [u8; 4])| {
+            percent_glyphs(&ctx.anm, &mut glyph, pct(v[k]), z[0], z[1], 0.01, c, |vm| {
+                emit0(ctx, rec, vm)
+            });
+        };
+        pie(rec, [530.0, 420.0], 24.0, 0.02, 0x60C0C0F0, v[0]);
+        pie(rec, [530.0, 420.0], 12.0, 0.01, 0x80C0C0F0, v[1]);
+        percent(rec, PERCENTS[0]);
+        percent(rec, PERCENTS[1]);
+        pie(rec, [562.0, 438.0], 16.0, 0.02, 0x6080C0C0, v[2]);
+        pie(rec, [562.0, 438.0], 8.0, 0.01, 0x8080C0C0, v[3]);
+        percent(rec, PERCENTS[2]);
+        percent(rec, PERCENTS[3]);
     }
 
     // ---- screen 17 (16 §6.2, §6.3, §6.5) ----
@@ -1118,16 +1174,13 @@ impl MainMenu {
 
     // MainMenu_SpellPracticeCardDraw 0x46FFC0 (16 §6.5): header VM at (334, 78), rows from y 94, then the info VMs
     // at x 64 (lines 5/6 at x 96), y 344 + 16k (+8 from line 4).
-    pub(crate) fn spell_card_draw(&mut self, ctx: &mut Ctx) {
-        let own =
-            self.lists.scratch_for == crate::menu::SPELL_CARD && self.lists.scratch.len() >= 15;
+    // Step: VM positions and the ASCII rows; `spell_card_emit` records header, rows, info lines.
+    pub(crate) fn spell_card_draw_step(&mut self, ctx: &mut Ctx) {
         let (a, b) = self.card_ids();
-        if !own {
+        if !self.spell_card_own() {
             return;
         }
-        let mut header = std::mem::take(&mut self.lists.header);
-        draw_at(ctx, &mut header, 334.0, 78.0);
-        self.lists.header = header;
+        place(&mut self.lists.header, 334.0, 78.0);
         let s = self.cursor.clamp(0, 11) as usize;
         for j in 0..15 {
             let i = self.lists.page as usize * 15 + j;
@@ -1165,17 +1218,34 @@ impl MainMenu {
                 )
                 .scale_xy(0.8, 1.0),
             );
-            let mut vm = std::mem::take(&mut self.lists.scratch[j]);
-            draw_at(ctx, &mut vm, 118.0, y);
-            self.lists.scratch[j] = vm;
+            place(&mut self.lists.scratch[j], 118.0, y);
         }
-        let mut info = std::mem::take(&mut self.lists.info);
-        for (k, vm) in info.iter_mut().enumerate() {
+        for (k, vm) in self.lists.info.iter_mut().enumerate() {
             let x = if k >= 5 { 96.0 } else { 64.0 };
             let y = 344.0 + 16.0 * k as f32 + if k >= 4 { 8.0 } else { 0.0 };
-            draw_at(ctx, vm, x, y);
+            place(vm, x, y);
         }
-        self.lists.info = info;
+    }
+
+    fn spell_card_own(&self) -> bool {
+        self.lists.scratch_for == crate::menu::SPELL_CARD && self.lists.scratch.len() >= 15
+    }
+
+    pub(crate) fn spell_card_emit(&self, ctx: &Ctx, rec: &mut Recorder) {
+        if !self.spell_card_own() {
+            return;
+        }
+        let (a, b) = self.card_ids();
+        emit0(ctx, rec, &self.lists.header);
+        for j in 0..15 {
+            if a + self.lists.page as usize * 15 + j >= b {
+                break;
+            }
+            emit0(ctx, rec, &self.lists.scratch[j]);
+        }
+        for vm in &self.lists.info {
+            emit0(ctx, rec, vm);
+        }
     }
 
     // ---- screen 7 (12 §2.8, 15 §3.8) ----
@@ -1382,7 +1452,8 @@ impl MainMenu {
     }
 
     // MainMenu_ReplayDraw 0x46EF8D (12 §2.8 draw steps 1–3); text anchors are the VMs' raw positions.
-    pub(crate) fn replay_draw(&mut self, ctx: &mut Ctx) {
+    // Step: ASCII rows and the card-name VM position; `replay_emit` records that VM.
+    pub(crate) fn replay_draw_step(&mut self, ctx: &mut Ctx) {
         let at = |m: &Self, k: usize| (m.vms[k].pos[0], m.vms[k].pos[1]);
         let (x, y) = at(self, 79);
         ctx.ascii.push(text(
@@ -1452,9 +1523,7 @@ impl MainMenu {
                     false,
                 ));
                 // The card name under the row: scratch VM at VM 97's pos + (0, 16), top-left, white (12 §2.8).
-                let mut vm = std::mem::take(&mut self.notice);
-                draw_at(ctx, &mut vm, x, y + 16.0);
-                self.notice = vm;
+                place(&mut self.notice, x, y + 16.0);
             } else {
                 for s in 0..9 {
                     let line = match &r.stages[s] {
@@ -1472,6 +1541,14 @@ impl MainMenu {
                     ctx.ascii.push(text(x, y, line, c, hl));
                 }
             }
+        }
+    }
+
+    pub(crate) fn replay_emit(&self, ctx: &Ctx, rec: &mut Recorder) {
+        if let (2 | 3, Some(i)) = (self.lists.rpy_sub, self.lists.rpy_loaded)
+            && self.replays[i].1.spell_id() >= 0
+        {
+            emit0(ctx, rec, &self.notice);
         }
     }
 }

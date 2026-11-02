@@ -3,8 +3,8 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
-use crate::drawlist::FULLSCREEN;
 use crate::drawlist::TexId;
+use crate::drawlist::{FULLSCREEN, Recorder};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{
@@ -160,9 +160,11 @@ fn text_vm(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     vm
 }
 
-fn draw_at(ctx: &mut Ctx, vm: &mut AnmVm, x: f32, y: f32) {
+// Mode-0 draw of a copy at (x, y): the original's draws of these VMs leave no persistent write (16 §2.4).
+fn emit_at(ctx: &Ctx, rec: &mut Recorder, vm: &AnmVm, x: f32, y: f32) {
+    let mut vm = vm.clone();
     vm.pos = [x, y, 0.0];
-    ctx.anm.draw_mode(&mut ctx.rec, vm, 0);
+    ctx.anm.emit_mode(rec, &vm, 0);
 }
 
 fn vm_argb(vm: &AnmVm) -> u32 {
@@ -1112,9 +1114,11 @@ impl ResultScreen {
 
     // Save dialogue draw (16 §2.6, states 10–14): VMs 49–54 again on top, header at VM 55, slot rows at VM 56 + i.
     // Shot names 0x4C8010 hold the same strings as 0x4C86C0 (menulist::CHARS).
+    // Step: VMs 49–54 `prepare` and the ASCII rows; the emit draws the VMs again after the list / grid.
     fn draw_save(&mut self, ctx: &mut Ctx) {
         for vm in &mut self.vms[49..55] {
-            ctx.anm.draw(&mut ctx.rec, vm);
+            let mode = vm.draw_mode;
+            ctx.anm.prepare(vm, mode);
         }
         // QUIRK: no colour is set for the header; it keeps the one left by the previous text: white, or in state 13
         // the last grid cell's (END), as the grid is drawn first.
@@ -1216,30 +1220,18 @@ impl ResultScreen {
     }
 
     // Card list (16 §2.4 state 8): bar, row text VM, counts and MaxBonus per row; accordion step after a character change.
+    // Step: the accordion latch (+0x38, read by later frames) and the ASCII rows; the VM draws are in `emit_cards`.
     fn draw_cards(&mut self, ctx: &mut Ctx) {
         let a = self.vms[VM_ANCHOR].pos;
         if a[0] >= 640.0 || self.card_page < 0 {
             return;
         }
-        let ids = group_cards(self.card_group);
-        let s = self.card_built_char.clamp(0, 12) as usize;
-        let mut vm10 = self.text_vms[10].clone();
-        draw_at(ctx, &mut vm10, a[0] + 320.0, a[1] - 16.0);
-        let (x, mut y) = (a[0], a[1] + 16.0);
-        let f = self.frame;
-        if f > 19 {
+        if self.frame > 19 {
             self.accordion = false;
         }
-        for i in 0..10 {
-            let idx = (self.card_page * 10 + i) as usize;
-            let Some(&id) = ids.get(idx) else { break };
-            let c = ctx.game.score.catk[id].clone();
-            let mut bar = self.bar.clone();
-            bar.scale = [2.375, 1.0];
-            bar.flags |= anmvm::F_SCALE_DIRTY;
-            draw_at(ctx, &mut bar, x + 320.0, y + 16.0);
-            let mut row = self.text_vms[i as usize].clone();
-            draw_at(ctx, &mut row, x + 78.0, y);
+        let s = self.card_built_char.clamp(0, 12) as usize;
+        for (i, id, x, y) in self.card_layout() {
+            let c = &ctx.game.score.catk[id];
             let (att, cap) = (c.counters[C_ATTEMPTS][s], c.counters[C_CAPTURES][s]);
             let col = if att == 0 {
                 0xC0C0C0FF
@@ -1248,7 +1240,6 @@ impl ResultScreen {
             } else {
                 0xFFF0F0FFu32 - i as u32 * 0x0008_0800
             };
-            put(ctx, x, y, format!("No.{:02}", id + 1), col);
             let base = if id < 205 { 0 } else { C_PRACTICE };
             let (pa, pc) = (
                 c.counters[base + C_ATTEMPTS][s],
@@ -1263,18 +1254,30 @@ impl ResultScreen {
                     .unwrap_or('-');
                 format!("{pc:3}/{pa:3}({l})")
             };
+            let bonus = (cap != 0).then(|| c.counters[C_BONUS][s]);
+            put(ctx, x, y, format!("No.{:02}", id + 1), col);
             put(ctx, x + 446.0, y, counts, col);
-            if cap != 0 {
+            if let Some(b) = bonus {
                 ctx.ascii.push(
-                    Text::new(
-                        x + 424.0,
-                        y - 13.0,
-                        format!("MaxBonus {:8}", c.counters[C_BONUS][s]),
-                    )
-                    .argb(0xFFA08090)
-                    .scale(0.8),
+                    Text::new(x + 424.0, y - 13.0, format!("MaxBonus {b:8}"))
+                        .argb(0xFFA08090)
+                        .scale(0.8),
                 );
             }
+        }
+    }
+
+    // Rows (i, card id, x, y) of the shown card page; y steps 33, or the accordion step while +0x38 is set.
+    fn card_layout(&self) -> Vec<(i32, usize, f32, f32)> {
+        let a = self.vms[VM_ANCHOR].pos;
+        let ids = group_cards(self.card_group);
+        let (x, mut y) = (a[0], a[1] + 16.0);
+        let f = self.frame;
+        let mut rows = Vec::new();
+        for i in 0..10 {
+            let idx = (self.card_page * 10 + i) as usize;
+            let Some(&id) = ids.get(idx) else { break };
+            rows.push((i, id, x, y));
             y += if !self.accordion {
                 33.0
             } else if f < 10 {
@@ -1282,6 +1285,23 @@ impl ResultScreen {
             } else {
                 ((f - 10) * 33 / 10) as f32
             };
+        }
+        rows
+    }
+
+    // Emit of the card list: header text VM 10, then per row the bar (×2.375) and the row text VM, all copies.
+    fn emit_cards(&self, ctx: &Ctx, rec: &mut Recorder) {
+        let a = self.vms[VM_ANCHOR].pos;
+        if a[0] >= 640.0 || self.card_page < 0 {
+            return;
+        }
+        emit_at(ctx, rec, &self.text_vms[10], a[0] + 320.0, a[1] - 16.0);
+        for (i, _, x, y) in self.card_layout() {
+            let mut bar = self.bar.clone();
+            bar.scale = [2.375, 1.0];
+            bar.flags |= anmvm::F_SCALE_DIRTY;
+            emit_at(ctx, rec, &bar, x + 320.0, y + 16.0);
+            emit_at(ctx, rec, &self.text_vms[i as usize], x + 78.0, y);
         }
     }
 }
@@ -1380,15 +1400,11 @@ impl Task<Ctx> for ResultScreen {
     }
 
     // Result_Draw 0x4586B4.
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    // Step: VM draw state (`prepare` at pos + pos_offset), the ASCII pushes and the card accordion latch.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The object is removed by the calc that requested scene 1 (16 §2.4 exit, P+20): nothing drawn then.
         if self.removed {
             return Ret::Next;
-        }
-        ctx.rec.set_viewport(FULLSCREEN);
-        if let Some(t) = self.surface {
-            ctx.rec.image(t, 0.0, 0.0);
         }
         // pos + pos_offset (+0x288, op 24/6, e.g. the selected item's (−4, −4)), pos restored after the draw (16 §2.4).
         for vm in &mut self.vms {
@@ -1396,7 +1412,8 @@ impl Task<Ctx> for ResultScreen {
             for k in 0..3 {
                 vm.pos[k] += vm.pos_offset[k];
             }
-            ctx.anm.draw(&mut ctx.rec, vm);
+            let mode = vm.draw_mode;
+            ctx.anm.prepare(vm, mode);
             vm.pos = p;
         }
         match self.state {
@@ -1406,11 +1423,6 @@ impl Task<Ctx> for ResultScreen {
         if matches!(self.state, S_PANEL | S_PANEL_OUT) {
             self.draw_panel(ctx);
         }
-        if matches!(self.state, S_PLAY | S_PLAY_WAIT | S_PLAY_OUT) {
-            for vm in &mut self.text_vms[..20] {
-                ctx.anm.draw_mode(&mut ctx.rec, vm, 0);
-            }
-        }
         // The grid comes before the save dialogue (16 §2.6 header colour).
         if matches!(self.state, S_NAME | S_SAVE_NAME) {
             self.draw_grid(ctx);
@@ -1419,6 +1431,36 @@ impl Task<Ctx> for ResultScreen {
             self.draw_save(ctx);
         }
         Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+        if self.removed {
+            return;
+        }
+        rec.set_viewport(FULLSCREEN);
+        if let Some(t) = self.surface {
+            rec.image(t, 0.0, 0.0);
+        }
+        for vm in &self.vms {
+            let mut vm = vm.clone();
+            for k in 0..3 {
+                vm.pos[k] += vm.pos_offset[k];
+            }
+            ctx.anm.emit(rec, &vm);
+        }
+        if self.state == S_CARDS {
+            self.emit_cards(ctx, rec);
+        }
+        if matches!(self.state, S_PLAY | S_PLAY_WAIT | S_PLAY_OUT) {
+            for vm in &self.text_vms[..20] {
+                ctx.anm.emit_mode(rec, vm, 0);
+            }
+        }
+        if (S_SAVE..=S_SAVE_OVER).contains(&self.state) {
+            for vm in &self.vms[49..55] {
+                ctx.anm.emit(rec, vm);
+            }
+        }
     }
 }
 

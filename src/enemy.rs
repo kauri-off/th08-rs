@@ -1,8 +1,8 @@
 //! Enemy manager 0x577F20: timelines, enemy objects, update, damage, death, drawing (07 §3, §4, §8, §10, §11).
 
-use crate::anmmgr::AnmManager;
+use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, Timer};
-use crate::bullet::{BulletDesc, BulletManager, LaserDesc};
+use crate::bullet::{BulletDesc, BulletManager, FROZEN_TINT, LaserDesc};
 use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::ecl::{self, Ecl};
 use crate::game::{Ctx, Sys};
@@ -2568,46 +2568,74 @@ impl EnemyManager {
         }
     }
 
-    // After-image trail (07 §10.6, op 157), drawn before the main VM; the main VM's scale and colour are restored.
-    // Returns the last drawn sprite copy's draw pos (07 §10.6 QUIRK), None when no copy was drawn.
-    fn draw_trail(anm: &mut AnmManager, rec: &mut Recorder, e: &mut Enemy) -> Option<[f32; 3]> {
-        let mut last = None;
-        let (f, n) = (e.trail[0], e.trail_n() as i32);
+    // After-image trail sprite copies (07 §10.6, op 157), oldest first; entry 0 is not drawn. Yields (i, entry).
+    fn trail_copies(e: &Enemy) -> impl Iterator<Item = (i32, TrailEntry)> + '_ {
+        let n = e.trail_n() as i32;
         // Port-only bound: a step b ≤ 0 would never end the walk (data: b ≥ 1).
+        let b = e.trail[3].max(1);
+        std::iter::successors(Some(n - 1), move |&i| Some(i - b))
+            .take_while(|&i| i > 0)
+            .filter(move |&i| e.trail_ring[i as usize].pos[0] >= -990.0)
+            .map(move |i| (i, e.trail_ring[i as usize]))
+    }
+
+    // One sprite copy (07 §10.6): rotation (flag A bit 25), x scale (flag 2) and alpha (flag 4) from the main VM's
+    // own `scale` / alpha `a`; pos = entry + pos offset + playfield origin at z 0.3.
+    fn trail_copy(
+        vm: &mut AnmVm,
+        e_flags: u32,
+        f: i32,
+        (i, t): (i32, TrailEntry),
+        n: i32,
+        scale: [f32; 2],
+        a: i32,
+    ) {
+        if e_flags & (1 << 25) != 0 && vm.rotation[2] != t.angle {
+            vm.rotation[2] = t.angle;
+            vm.flags |= anmvm::F_ROT_DIRTY;
+        }
+        if f & 2 != 0 {
+            vm.scale[0] = scale[0] - i as f32 * scale[0] / n as f32;
+        }
+        if f & 4 != 0 {
+            vm.color[anmvm::A] = (a - a * i / n) as u8;
+        }
+        let off = vm.pos_offset;
+        vm.pos = [t.pos[0] + off[0] + 32.0, t.pos[1] + off[1] + 16.0, 0.3];
+    }
+
+    // Trail draw step, before the main VM: the copies' writes on the main VM, then its scale and colour restored.
+    // Returns the last copy's draw pos (07 §10.6 QUIRK: kept by the main VM), None when no copy was drawn.
+    fn trail_step(anm: &AnmManager, e: &mut Enemy) -> Option<[f32; 3]> {
+        let (f, n) = (e.trail[0], e.trail_n() as i32);
+        // Flag 8: the ring strip writes nothing.
+        if f & 8 != 0 {
+            return None;
+        }
+        let (scale, color) = (e.vm.scale, e.vm.color);
+        let copies: Vec<_> = Self::trail_copies(e).collect();
+        let mut last = None;
+        for c in copies {
+            Self::trail_copy(&mut e.vm, e.flags, f, c, n, scale, color[anmvm::A] as i32);
+            anm.prepare(&mut e.vm, 2);
+            last = Some(e.vm.pos);
+        }
+        (e.vm.scale, e.vm.color) = (scale, color);
+        last
+    }
+
+    // Trail emit: the sprite copies replayed on a copy of the (restored) main VM, or the ring strip.
+    fn trail_emit(anm: &AnmManager, rec: &mut Recorder, e: &Enemy, tint: Option<Tint>) {
+        let (f, n) = (e.trail[0], e.trail_n() as i32);
         let b = e.trail[3].max(1);
         let ring = e.trail_ring;
         let used = |i: i32| ring[i as usize].pos[0] >= -990.0;
-        let (scale, color) = (e.vm.scale, e.vm.color);
-        let a = color[anmvm::A] as i32;
+        let a = e.vm.color[anmvm::A] as i32;
         if f & 8 == 0 {
-            // Sprite copies, oldest first; entry 0 is not drawn here.
-            let mut i = n - 1;
-            while i > 0 {
-                if used(i) {
-                    let t = ring[i as usize];
-                    let vm = &mut e.vm;
-                    if e.flags & (1 << 25) != 0 && vm.rotation[2] != t.angle {
-                        vm.rotation[2] = t.angle;
-                        vm.flags |= anmvm::F_ROT_DIRTY;
-                    }
-                    if f & 2 != 0 {
-                        vm.scale[0] = scale[0] - i as f32 * scale[0] / n as f32;
-                    }
-                    if f & 4 != 0 {
-                        vm.color[anmvm::A] = (a - a * i / n) as u8;
-                    }
-                    let saved_off = vm.pos_offset;
-                    vm.pos = [
-                        t.pos[0] + saved_off[0] + 32.0,
-                        t.pos[1] + saved_off[1] + 16.0,
-                        0.3,
-                    ];
-                    vm.pos_offset = [0.0; 3];
-                    anm.draw_mode_z(rec, vm, 2, 0.3);
-                    vm.pos_offset = saved_off;
-                    last = Some(vm.pos);
-                }
-                i -= b;
+            let mut vm = e.vm.clone();
+            for c in Self::trail_copies(e) {
+                Self::trail_copy(&mut vm, e.flags, f, c, n, e.vm.scale, a);
+                anm.emit_tinted(rec, &vm, 2, 0.3, tint);
             }
         } else if let Some(&spr) = anm.sprite(e.vm.anm_slot as usize, e.vm.sprite_index as usize) {
             // One triangle strip (Anm_DrawRingStrip); unreachable with retail data (07 §10.6).
@@ -2648,6 +2676,7 @@ impl EnemyManager {
                     h *= 1.0 - i as f32 / n as f32;
                 }
                 let al = if f & 4 != 0 { a - a * i / n } else { a } as u8;
+                let al = tint.map_or(al, |t| t.alpha(al));
                 let p = ring[i as usize].pos;
                 let (sn, cs) = crate::fmath::sin_cos_f(th);
                 let (x, y) = (p[0] + 32.0, p[1] + 16.0);
@@ -2655,11 +2684,12 @@ impl EnemyManager {
                 v.push(([x + sn * h, y - cs * h], [ua, vb], al));
             }
             if v.len() > 2 {
-                anm.draw_ring_strip(rec, vm, &v);
+                match tint {
+                    Some(t) => anm.draw_ring_strip(rec, &t.vm(vm), &v),
+                    None => anm.draw_ring_strip(rec, vm, &v),
+                }
             }
         }
-        (e.vm.scale, e.vm.color) = (scale, color);
-        last
     }
 
     // GameFlags bit 13 with boss slot 0 set (07 §7 op 176): Player_DamageAgainst over the whole playfield with the
@@ -2690,24 +2720,40 @@ impl EnemyManager {
         self.enemies[boss].orb_acc = acc;
     }
 
-    // Enemy drawing (07 §10.6): sub VM 0, main VM, sub VM 1, all Draw2DRot.
-    fn draw_layer(&mut self, ctx_anm: &mut AnmManager, rec: &mut Recorder, high: bool, flags: u32) {
-        rec.set_viewport(PLAYFIELD);
+    // Enemy draw order (07 §10.6): prio 8 → layers 0–1, prio 11 → layers 2–3; lists are prepended (07 §10.1
+    // step 7), so they are drawn newest-linked first. Hidden / dead enemies are skipped.
+    fn draw_order(&self, high: bool) -> Vec<usize> {
+        let first = if high { 2 } else { 0 };
+        (first..first + 2)
+            .flat_map(|l| self.draw_lists[l].iter().rev().copied())
+            .filter(|&i| {
+                let e = &self.enemies[i];
+                e.alive() && e.flags & A_HIDDEN == 0
+            })
+            .collect()
+    }
+
+    // Per enemy: sub VM 0, (trail +) main VM, sub VM 1; the main VM skipped when it has no script, flag A bit 5
+    // (invisible) or trail flag 0x10 (07 §10.6).
+    fn vm_drawn(e: &Enemy, k: usize) -> bool {
+        let vm = if k == 2 { &e.vm } else { &e.sub_vms[k] };
+        vm.script.is_some() && !(k == 2 && (e.flags & (1 << 5) != 0 || e.trail[0] & 0x10 != 0))
+    }
+
+    // Main VM z: 0.25, or 0.3 after a trail that drew a copy (07 §10.6); sub VMs 0.3.
+    fn vm_z(k: usize, trail_drew: bool) -> f32 {
+        if k == 2 && !trail_drew { 0.25 } else { 0.3 }
+    }
+
+    // Enemy drawing step (07 §10.6), all Draw2DRot: frozen tint, VM pos / rotation writes, trail writes.
+    fn draw_layer_step(&mut self, anm: &mut AnmManager, high: bool, flags: u32) {
         // Prio 11 draws with tint 0xFFF01010 while bullets are frozen (07 §10.6).
         let frozen = self.player.borrow().freeze_bullets(flags);
         if high && frozen {
-            (ctx_anm.tint, ctx_anm.tint_on) = (0xFFF01010, true);
+            (anm.tint, anm.tint_on) = (FROZEN_TINT, true);
         }
-        // Lists are prepended (07 §10.1 step 7), so they are drawn newest-linked first.
-        let first = if high { 2 } else { 0 };
-        let order: Vec<usize> = (first..first + 2)
-            .flat_map(|l| self.draw_lists[l].iter().rev().copied())
-            .collect();
-        for i in order {
+        for i in self.draw_order(high) {
             let e = &mut self.enemies[i];
-            if !e.alive() || e.flags & A_HIDDEN != 0 {
-                continue;
-            }
             let p = [e.final_pos[0] + 32.0, e.final_pos[1] + 16.0];
             let (angle, main_off) = (e.angle, e.vm.pos_offset);
             // Flags B bit 8: sub VMs use the main VM's position offset.
@@ -2717,27 +2763,20 @@ impl EnemyManager {
                 // QUIRK (07 §10.6): only scale/colour are restored after the trail, so the main VM keeps the last
                 // drawn copy's pos (z 0.3) and rotation.
                 let trail_pos = if main && e.trail[0] != 0 {
-                    Self::draw_trail(ctx_anm, rec, e)
+                    Self::trail_step(anm, e)
                 } else {
                     None
                 };
-                let vm = if main { &mut e.vm } else { &mut e.sub_vms[k] };
-                // Main VM skipped when flag A bit 5 (invisible) or trail flag 0x10.
-                if vm.script.is_none()
-                    || main && (e.flags & (1 << 5) != 0 || e.trail[0] & 0x10 != 0)
-                {
+                if !Self::vm_drawn(e, k) {
                     continue;
                 }
+                let vm = if main { &mut e.vm } else { &mut e.sub_vms[k] };
                 let off = if main || shared {
                     main_off
                 } else {
                     vm.pos_offset
                 };
-                let z = if main && trail_pos.is_none() {
-                    0.25
-                } else {
-                    0.3
-                };
+                let z = Self::vm_z(k, trail_pos.is_some());
                 let rot = if main && trail_pos.is_some() {
                     None
                 } else if main {
@@ -2751,17 +2790,38 @@ impl EnemyManager {
                     vm.rotation[2] = r;
                     vm.flags |= anmvm::F_ROT_DIRTY;
                 }
-                let saved_off = vm.pos_offset;
+                // The original zeroes pos_offset around the draw and restores it; the emit does not read it.
                 vm.pos = trail_pos.unwrap_or([p[0] + off[0], p[1] + off[1], z]);
-                vm.pos_offset = [0.0; 3];
-                // Draw2DRot carries the VM z (0.25 main / 0.3 sub) as the vertex depth (07 §10.6, 05 §9).
-                ctx_anm.draw_mode_z(rec, vm, 2, z);
-                vm.pos_offset = saved_off;
+                anm.prepare(vm, 2);
             }
         }
         // Tint off only while bit 10, the condition it was turned on under (06 §10.2).
         if high && frozen {
-            ctx_anm.tint_off();
+            anm.tint_off();
+        }
+    }
+
+    // Enemy drawing emit (07 §10.6): Draw2DRot with the VM z (0.25 main / 0.3 sub) as the vertex depth (05 §9).
+    fn draw_layer_emit(&self, anm: &AnmManager, rec: &mut Recorder, high: bool, flags: u32) {
+        rec.set_viewport(PLAYFIELD);
+        // The frozen tint is off again when the emit runs: the emit applies it to VM copies.
+        let tint =
+            (high && self.player.borrow().freeze_bullets(flags)).then_some(Tint(FROZEN_TINT));
+        for i in self.draw_order(high) {
+            let e = &self.enemies[i];
+            for k in [0usize, 2, 1] {
+                let main = k == 2;
+                let trail = main && e.trail[0] != 0;
+                if trail {
+                    Self::trail_emit(anm, rec, e, tint);
+                }
+                if Self::vm_drawn(e, k) {
+                    let drew =
+                        trail && e.trail[0] & 8 == 0 && Self::trail_copies(e).next().is_some();
+                    let vm = if main { &e.vm } else { &e.sub_vms[k] };
+                    anm.emit_tinted(rec, vm, 2, Self::vm_z(k, drew), tint);
+                }
+            }
         }
     }
 }
@@ -2787,10 +2847,13 @@ impl Task<Ctx> for EnemyManager {
     }
 
     // Draw prio 8 → layers 0–1, prio 11 → layers 2–3 (07 §10.6).
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        self.draw_layer(&mut ctx.anm, &mut ctx.rec, tag == 1, ctx.game.flags);
+        self.draw_layer_step(&mut ctx.anm, tag == 1, ctx.game.flags);
         Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        self.draw_layer_emit(&ctx.anm, rec, tag == 1, ctx.game.flags);
     }
 }
 

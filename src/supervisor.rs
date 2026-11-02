@@ -3,8 +3,8 @@
 
 use crate::anmvm::AnmVm;
 use crate::coreconfig::{CoreConfig, Ending};
-use crate::drawlist::TexId;
 use crate::drawlist::{Blend, PLAYFIELD, Rect};
+use crate::drawlist::{Recorder, TexId};
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game, GameManager};
 use crate::task::{self, Chain, Ret, Task, TaskRef};
@@ -30,6 +30,8 @@ pub struct Supervisor {
     // Playback fps text buffer 0x17CF2B8 (15 §3.3) and the port's refresh counter.
     fps_text: String,
     fps_frames: u32,
+    // Queue entries the prio-0 loading prompt drained this frame (12 §1), drawn by the emit.
+    prompt: Vec<crate::ascii::Text>,
 }
 
 // The boot and menu-load holds end when the loader threads finish (Supervisor_Calc returns 1 until then; MainMenu
@@ -57,6 +59,7 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
         capture_req: false,
         fps_text: String::new(),
         fps_frames: 0,
+        prompt: Vec::new(),
     });
     task::add(ctx, Chain::Calc, 0, 0, t.clone())?;
     for prio in [0, 2, 16] {
@@ -559,53 +562,61 @@ impl Task<Ctx> for Supervisor {
     }
 
     // Draw prio 0 `Supervisor_DrawLoading` 0x445BD4 (surface 8), prio 2 loading VMs 0x445D3E (12 §1); prio 16 debug only.
-    // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    // Step: tag 0 the "Press Shot Button" counter, queue colour and drain (12 §1); tag 16 the replay fps string
+    // (15 §3.3). Tag 2 and the slot test write nothing.
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        match (tag, self.logo) {
-            (0, logo) => {
-                if let Some(t) = logo {
-                    ctx.rec.set_viewport(crate::drawlist::FULLSCREEN);
-                    ctx.rec.image(t, 0.0, 0.0);
-                }
-                // Then the "Press Shot Button" counter and prompt (12 §1).
-                let mut st = ctx.game.load_prompt;
-                crate::ascii::loading_prompt(&ctx.anm, &mut ctx.rec, &mut ctx.ascii, &mut st);
-                ctx.game.load_prompt = st;
+        match tag {
+            0 => {
+                self.prompt =
+                    crate::ascii::loading_prompt(&mut ctx.ascii, &mut ctx.game.load_prompt)
             }
-            (2, _) => {
+            16 => self.replay_fps_draw(ctx),
+            _ => {}
+        }
+        Ret::Next
+    }
+
+    // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        match tag {
+            0 => {
+                if let Some(t) = self.logo {
+                    rec.set_viewport(crate::drawlist::FULLSCREEN);
+                    rec.image(t, 0.0, 0.0);
+                }
+                // Then the "Press Shot Button" prompt with the whole queue (12 §1).
+                crate::ascii::emit_texts(&ctx.anm, rec, &self.prompt);
+            }
+            2 => {
                 // The scripts' own positions (slide-in, z) are relative to the loading position.
-                for vm in &mut self.boot_vms {
-                    let p = vm.pos;
-                    let o = vm.pos_offset;
-                    vm.pos = [
+                // 0x445D3E: pos += pos_offset, Draw2DRot, pos −= pos_offset (12 §1): a shifted copy, no net write.
+                for vm in &self.boot_vms {
+                    let (p, o) = (vm.pos, vm.pos_offset);
+                    let mut v = vm.clone();
+                    v.pos = [
                         p[0] + o[0] + self.load_pos[0],
                         p[1] + o[1] + self.load_pos[1],
                         p[2] + o[2],
                     ];
-                    // 0x445D3E: pos += pos_offset, Draw2DRot, pos −= pos_offset (12 §1).
-                    ctx.anm.draw_mode(&mut ctx.rec, vm, 2);
-                    vm.pos = p;
+                    ctx.anm.emit_mode(rec, &v, 2);
                 }
             }
-            (16, _) => self.replay_fps_draw(ctx),
             _ => {}
         }
         let (Some(slot), 16) = (self.debug_sprites, tag) else {
-            return Ret::Next;
+            return;
         };
         let Some(anm) = ctx.anm.get(slot) else {
-            return Ret::Next;
+            return;
         };
-        let sprites = anm.sprites.clone();
-        ctx.rec.set_viewport(PLAYFIELD);
-        ctx.rec.clear_viewport([0, 0, 64, 255]);
+        rec.set_viewport(PLAYFIELD);
+        rec.clear_viewport([0, 0, 64, 255]);
         let (mut x, mut y, mut row) = (0.0, 0.0, 0.0f32);
-        for s in sprites {
+        for s in &anm.sprites {
             if x + s.w > 640.0 {
                 (x, y, row) = (0.0, y + row, 0.0);
             }
-            ctx.rec.sprite(
+            rec.sprite(
                 s.tex,
                 Blend::Alpha,
                 Rect::new(x, y, s.w, s.h),
@@ -615,7 +626,6 @@ impl Task<Ctx> for Supervisor {
             x += s.w;
             row = row.max(s.h);
         }
-        ctx.rec.set_viewport(crate::drawlist::FULLSCREEN);
-        Ret::Next
+        rec.set_viewport(crate::drawlist::FULLSCREEN);
     }
 }

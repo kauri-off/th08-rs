@@ -1,5 +1,5 @@
 //! Player bullets, shot functions, options and the player laser (09 §4–§5, 14 §3–§5).
-use crate::anmmgr::AnmManager;
+use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::drawlist::Recorder;
 use crate::fmath;
@@ -96,6 +96,8 @@ pub struct PBullet {
     // +0x2B0 laser trail, 32 × f32[3] (x −999 = unused), and +0x46A its length n (14 §4).
     pub trail: [[f32; 3]; 32],
     pub trail_n: i32,
+    // Port-only draw-phase scratch: VM R, G, B at the main draw, before the trail's youkai-max red (14 §4).
+    pub main_rgb: [u8; 3],
 }
 
 // 14 §4 / §6: 3 slots (09 said 4).
@@ -448,15 +450,25 @@ impl Player {
         }
     }
 
-    // Option draw fn 0x44E9E0: VM at pos + playfield origin, z 0.49, Draw2DRot.
-    pub fn draw_options(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
+    // Option draw fn 0x44E9E0: VM at pos + playfield origin, z 0.49, Draw2DRot. Step: the VM pos write.
+    pub fn step_options(&mut self, anm: &AnmManager) {
         for o in self
             .options
             .iter_mut()
             .filter(|o| o.state != 0 && o.vm.script.is_some())
         {
             o.vm.pos = [o.pos[0] + 32.0, o.pos[1] + 16.0, 0.0];
-            anm.draw_mode_z(rec, &mut o.vm, 2, 0.49);
+            anm.prepare(&mut o.vm, 2);
+        }
+    }
+
+    pub fn emit_options(&self, anm: &AnmManager, rec: &mut Recorder) {
+        for o in self
+            .options
+            .iter()
+            .filter(|o| o.state != 0 && o.vm.script.is_some())
+        {
+            anm.emit_mode_z(rec, &o.vm, 2, 0.49);
         }
     }
 
@@ -975,7 +987,8 @@ impl Player {
     }
 
     // Player draw (14 §5): flying bullets (state 1) at z 0.4 with their extra draw fn, or hit bullets (state 2) at z 0.2.
-    pub fn draw_bullets(&mut self, anm: &mut AnmManager, rec: &mut Recorder, state: u8) {
+    // Step: the VM writes of the draw (rotation, red, pos), then the trail's lasting writes.
+    pub fn step_bullets(&mut self, anm: &AnmManager, state: u8) {
         let youkai_max = self.stats.youkai_max();
         for b in self
             .bullets
@@ -996,43 +1009,87 @@ impl Player {
             b.vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.0];
             if state == 2 {
                 let mode = b.vm.draw_mode;
-                anm.draw_mode_z(rec, &mut b.vm, mode, 0.2);
+                anm.prepare(&mut b.vm, mode);
                 continue;
             }
-            anm.draw_mode_z(rec, &mut b.vm, 2, 0.4);
+            anm.prepare(&mut b.vm, 2);
+            b.main_rgb = [
+                b.vm.color[anmvm::R],
+                b.vm.color[anmvm::G],
+                b.vm.color[anmvm::B],
+            ];
             if b.draw == 1 {
-                Self::draw_trail(anm, rec, b, youkai_max);
+                let mut vm = std::mem::take(&mut b.vm);
+                Self::trail_points(&mut vm, b, youkai_max, |_, _| {});
+                b.vm = vm;
             }
         }
     }
 
-    // Trail draw 0x450AD0 (14 §4): every second trail point, alpha fading from 3/4 of the VM alpha.
-    fn draw_trail(anm: &mut AnmManager, rec: &mut Recorder, b: &mut PBullet, youkai_max: bool) {
+    // Emit of `step_bullets`. `tint`: the global tint the flying bullets were drawn under when a later write of the
+    // same draw node (the bomb's tint off, 14 §1.3) turned it off (05 §12.1).
+    pub fn emit_bullets(
+        &self,
+        anm: &AnmManager,
+        rec: &mut Recorder,
+        state: u8,
+        tint: Option<Tint>,
+    ) {
+        let youkai_max = self.stats.youkai_max();
+        let emit = |rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32| {
+            anm.emit_tinted(rec, vm, mode, z, tint)
+        };
+        for b in self
+            .bullets
+            .iter()
+            .filter(|b| b.state == state && b.vm.script.is_some())
+        {
+            if state == 2 {
+                emit(rec, &b.vm, b.vm.draw_mode, 0.2);
+                continue;
+            }
+            if b.draw != 1 {
+                emit(rec, &b.vm, 2, 0.4);
+                continue;
+            }
+            // The step left the trail's last pos / red in the VM: rebuild the main draw's state on a copy.
+            let mut vm = b.vm.clone();
+            vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.0];
+            (vm.color[anmvm::R], vm.color[anmvm::G], vm.color[anmvm::B]) =
+                (b.main_rgb[0], b.main_rgb[1], b.main_rgb[2]);
+            emit(rec, &vm, 2, 0.4);
+            Self::trail_points(&mut vm, b, youkai_max, |vm, z| emit(rec, vm, 2, z));
+        }
+    }
+
+    // Trail draw 0x450AD0 (14 §4): every second trail point, alpha fading from 3/4 of the VM alpha; `draw` per point.
+    fn trail_points(
+        vm: &mut AnmVm,
+        b: &PBullet,
+        youkai_max: bool,
+        mut draw: impl FnMut(&AnmVm, f32),
+    ) {
         let n = b.trail_n.max(1);
-        let alpha = b.vm.color[anmvm::A];
+        let alpha = vm.color[anmvm::A];
         let a0 = alpha as i32 * 3 / 4;
         let mut c = 0;
         while c < 2 * n && c < 32 && b.trail[c as usize][0] != -999.0 {
             let p = b.trail[c as usize];
-            b.vm.color[anmvm::A] = if c == 0 {
+            vm.color[anmvm::A] = if c == 0 {
                 alpha
             } else {
                 (a0 - (a0 / 2) * c / n).clamp(0, 255) as u8
             };
             if youkai_max {
-                (
-                    b.vm.color[anmvm::R],
-                    b.vm.color[anmvm::G],
-                    b.vm.color[anmvm::B],
-                ) = (0xFF, 0x40, 0x40);
+                (vm.color[anmvm::R], vm.color[anmvm::G], vm.color[anmvm::B]) = (0xFF, 0x40, 0x40);
             }
-            b.vm.pos = [p[0] + 32.0, p[1] + 16.0, p[2]];
+            vm.pos = [p[0] + 32.0, p[1] + 16.0, p[2]];
             // VM pos z := trail[c].z (14 §4), not the 0.4 of the main draw.
-            anm.draw_mode_z(rec, &mut b.vm, 2, p[2]);
+            draw(vm, p[2]);
             c += 2;
         }
         // Only the alpha byte is restored: the youkai-max red stays in the VM colour (14 §4).
-        b.vm.color[anmvm::A] = alpha;
+        vm.color[anmvm::A] = alpha;
     }
 }
 

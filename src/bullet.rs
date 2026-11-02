@@ -1,6 +1,6 @@
 //! Bullet manager 0xF54E90: templates, patterns, ex commands, lasers, cancels (08 §1–§7, 07 §9).
 
-use crate::anmmgr::AnmManager;
+use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::fmath::{self, polar, sin_cos_f};
@@ -376,6 +376,11 @@ pub struct Laser {
 }
 
 impl Laser {
+    // Emitter drawn while the tail is near the origin or the laser does not move, unless hidden during startup (08 §6.3).
+    fn emitter_drawn(&self) -> bool {
+        (self.tail < 16.0 || self.speed == 0.0) && (self.hide_emitter == 0 || self.state != 0)
+    }
+
     // Collision (08 §6.3 step 2) through `Player_LaserTest` (09 §6.1) with c = (origin.x + tail + L/2, origin.y);
     // returns the time orbs of a graze.
     fn test(
@@ -1545,8 +1550,8 @@ impl BulletManager {
         self.frame += 1;
     }
 
-    // Laser draw (08 §6.3): body z 0.06 at the middle, emitter z 0.05 at the tail; +(32, 16) playfield origin.
-    fn draw_lasers(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
+    // Laser draw step (08 §6.3): body pos at the middle; emitter scale / colour / pos at the tail; +(32, 16) origin.
+    fn lasers_draw_step(&mut self, anm: &AnmManager) {
         for l in self.lasers.iter_mut().filter(|l| l.alive) {
             // Math_SinCosF32 (05 §10, 08 §6.3).
             let (s, c) = sin_cos_f(l.angle);
@@ -1557,8 +1562,8 @@ impl BulletManager {
                 l.origin[1] + s * mid + 16.0,
                 0.0,
             ];
-            anm.draw_mode_z(rec, &mut l.body, 2, 0.06);
-            if (l.tail < 16.0 || l.speed == 0.0) && (l.hide_emitter == 0 || l.state != 0) {
+            anm.prepare(&mut l.body, 2);
+            if l.emitter_drawn() {
                 let mut sc = (16.0 - l.tail) / 16.0 * l.width / 10.0;
                 if sc <= 0.0 {
                     sc = l.width / 10.0;
@@ -1571,36 +1576,46 @@ impl BulletManager {
                     l.origin[1] + s * l.tail + 16.0,
                     0.0,
                 ];
-                anm.draw_mode_z(rec, &mut l.emitter, 2, 0.05);
+                anm.prepare(&mut l.emitter, 2);
             }
         }
     }
 
-    // BulletMgr_Draw 0x432B50 (08 §1): items, lasers, then bullets by size class (each list in reverse
-    // visiting order), then the effect manager.
-    pub fn draw(
-        &mut self,
-        anm: &mut AnmManager,
-        rec: &mut Recorder,
-        fx: &mut crate::effect::Effects,
-        flags: u32,
-    ) {
-        rec.set_viewport(PLAYFIELD);
+    // Laser draw emit (08 §6.3): body z 0.06, emitter z 0.05.
+    fn lasers_emit(&self, anm: &AnmManager, rec: &mut Recorder, tint: Option<Tint>) {
+        for l in self.lasers.iter().filter(|l| l.alive) {
+            anm.emit_tinted(rec, &l.body, 2, 0.06, tint);
+            if l.emitter_drawn() {
+                anm.emit_tinted(rec, &l.emitter, 2, 0.05, tint);
+            }
+        }
+    }
+
+    // Bullet_Draw (08 §1): the VM drawn for each state, None = not drawn.
+    fn draw_vm(b: &Bullet) -> Option<usize> {
+        match b.state {
+            1 => Some(0),
+            2..=4 => Some(b.effect),
+            5 => Some(4),
+            _ => None,
+        }
+    }
+
+    // BulletMgr_Draw 0x432B50 (08 §1), draw-phase step: tint, then items, lasers and bullets by size class (each
+    // list in reverse visiting order), then tint off; the emit draws the same order plus effect list D.
+    pub fn draw_step(&mut self, anm: &mut AnmManager, flags: u32) {
         // Tint 0xFFF01010 only while bullets are frozen (06 §10.2).
         let frozen = self.player.borrow().freeze_bullets(flags);
         if frozen {
-            (anm.tint, anm.tint_on) = (0xFFF01010, true);
+            (anm.tint, anm.tint_on) = (FROZEN_TINT, true);
         }
-        self.items.draw(anm, rec);
-        self.draw_lasers(anm, rec);
+        self.items.draw_step(anm);
+        self.lasers_draw_step(anm);
         for c in 0..6 {
             for k in (0..self.lists[c].len()).rev() {
                 let b = &mut self.bullets[self.lists[c][k] as usize];
-                let v = match b.state {
-                    1 => 0,
-                    2..=4 => b.effect,
-                    5 => 4,
-                    _ => continue,
+                let Some(v) = Self::draw_vm(b) else {
+                    continue;
                 };
                 let vm = &mut b.vms[v];
                 // Bullet_Draw (08 §1): z 0.05, RGB white keeping alpha, rotation only for tagged VMs.
@@ -1613,16 +1628,48 @@ impl BulletManager {
                     }
                 }
                 vm.color[..3].fill(255);
-                anm.draw_mode_z(rec, vm, 2, 0.05);
+                anm.prepare(vm, 2);
             }
         }
-        fx.draw_over_bullets(anm, rec);
         // Off only while bit 10, after the over-bullet effects; otherwise the tint state is left alone (06 §10.2).
         if frozen {
             anm.tint_off();
         }
     }
+
+    pub fn emit(
+        &self,
+        anm: &AnmManager,
+        rec: &mut Recorder,
+        fx: &crate::effect::Effects,
+        flags: u32,
+    ) {
+        rec.set_viewport(PLAYFIELD);
+        // The frozen tint is off again when the emit runs: the emit applies it to VM copies.
+        let tint = self
+            .player
+            .borrow()
+            .freeze_bullets(flags)
+            .then_some(Tint(FROZEN_TINT));
+        self.items.emit(anm, rec, tint);
+        self.lasers_emit(anm, rec, tint);
+        for c in 0..6 {
+            for &i in self.lists[c].iter().rev() {
+                let b = &self.bullets[i as usize];
+                if let Some(v) = Self::draw_vm(b) {
+                    anm.emit_tinted(rec, &b.vms[v], 2, 0.05, tint);
+                }
+            }
+        }
+        match tint {
+            Some(t) => fx.emit_over_bullets_with(|vm| t.vm(vm), anm, rec),
+            None => fx.draw_over_bullets(anm, rec),
+        }
+    }
 }
+
+// BulletMgr_Draw / enemy draw prio 11 global tint while bullets are frozen (06 §10.2, 07 §10.6).
+pub const FROZEN_TINT: u32 = 0xFFF0_1010;
 
 impl Task<Ctx> for BulletManager {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
@@ -1643,16 +1690,14 @@ impl Task<Ctx> for BulletManager {
         Ret::Next
     }
 
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    // BulletMgr_Draw prio 13 (08 §1): VM writes and the frozen tint in the step, the draws in the emit.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        BulletManager::draw(
-            self,
-            &mut ctx.anm,
-            &mut ctx.rec,
-            &mut ctx.effects,
-            ctx.game.flags,
-        );
+        BulletManager::draw_step(self, &mut ctx.anm, ctx.game.flags);
         Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+        BulletManager::emit(self, &ctx.anm, rec, &ctx.effects, ctx.game.flags);
     }
 }
 

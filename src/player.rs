@@ -473,6 +473,9 @@ pub struct Player {
     pub debug_invuln: bool,
     pub debug_bomb: Option<usize>,
     pub world: Weak<RefCell<BulletManager>>,
+    // Port-only draw-phase scratch: global tint (05 §12.1) the flying bullets of draw 9 were drawn under, when the
+    // bomb draw later in the same node turned it off (14 §1.3, §5); None = the emit-time tint is the right one.
+    pub bullet_tint: Option<crate::anmmgr::Tint>,
 }
 
 impl Default for Player {
@@ -540,6 +543,7 @@ impl Default for Player {
             debug_invuln: false,
             debug_bomb: None,
             world: Weak::new(),
+            bullet_tint: None,
         }
     }
 }
@@ -1428,12 +1432,18 @@ impl Player {
     }
 
     // 14 §5 (3): sprite at pos + playfield origin, z 0.1, Draw2DSnap; hidden while the continue menu is up.
-    fn draw_sprite(&mut self, anm: &mut AnmManager, rec: &mut Recorder, game_over: bool) {
+    fn step_sprite(&mut self, anm: &AnmManager, game_over: bool) {
         if self.vm.script.is_none() || game_over {
             return;
         }
         self.vm.pos = [self.pos[0] + 32.0, self.pos[1] + 16.0, 0.0];
-        anm.draw_mode_z(rec, &mut self.vm, 0, 0.1);
+        anm.prepare(&mut self.vm, 0);
+    }
+
+    fn emit_sprite(&self, anm: &AnmManager, rec: &mut Recorder, game_over: bool) {
+        if self.vm.script.is_some() && !game_over {
+            anm.emit_mode_z(rec, &self.vm, 0, 0.1);
+        }
     }
 }
 
@@ -1484,19 +1494,33 @@ impl Task<Ctx> for Player {
 
     // Draw 9 (0x44D530): flying bullets, bomb, sprite, options; draw 10 (0x44D630): bullets in their hit animation
     // (14 §5).
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let (anm, rec) = (&mut ctx.anm, &mut ctx.rec);
-        rec.set_viewport(PLAYFIELD);
+        let anm = &mut ctx.anm;
         if tag == 0 {
-            self.draw_bullets(anm, rec, 1);
-            self.draw_bomb(anm, rec);
-            self.draw_sprite(anm, rec, ctx.game.game_over != 0);
-            self.draw_options(anm, rec);
+            self.step_bullets(anm, 1);
+            // The bomb tint (14 §1.3) turns the global tint off after the flying bullets were drawn under it.
+            let before = anm.tint_state();
+            self.step_bomb(anm);
+            self.bullet_tint = before.filter(|_| !anm.tint_on);
+            self.step_sprite(anm, ctx.game.game_over != 0);
+            self.step_options(anm);
         } else {
-            self.draw_bullets(anm, rec, 2);
+            self.step_bullets(anm, 2);
         }
         Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        let anm = &ctx.anm;
+        rec.set_viewport(PLAYFIELD);
+        if tag == 0 {
+            self.emit_bullets(anm, rec, 1, self.bullet_tint);
+            self.emit_bomb(anm, rec);
+            self.emit_sprite(anm, rec, ctx.game.game_over != 0);
+            self.emit_options(anm, rec);
+        } else {
+            self.emit_bullets(anm, rec, 2, None);
+        }
     }
 }
 

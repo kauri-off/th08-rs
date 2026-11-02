@@ -670,8 +670,9 @@ impl Hud {
     }
 
     // Msg_Draw 0x43542B (10 §7): portrait pairs back-to-front by pos.z, text box, lines, boss card (Draw2DSnap).
-    fn draw_msg(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
-        let mut d = self.msg.borrow_mut();
+    // Emit only: mode 0 writes no VM state (05 §9).
+    fn emit_msg(&self, anm: &AnmManager, rec: &mut Recorder) {
+        let d = self.msg.borrow();
         if !d.active() {
             return;
         }
@@ -685,7 +686,7 @@ impl Hud {
             };
             for k in order {
                 if d.faces[k].script.is_some() {
-                    anm.draw_mode(rec, &mut d.faces[k], 0);
+                    anm.emit_mode(rec, &d.faces[k], 0);
                 }
             }
         }
@@ -700,10 +701,9 @@ impl Hud {
             let (top, bot) = ([0, 0, 0, 0xD0], [0, 0, 0, 0x90]);
             Self::bar_quad(rec, x0, x1, y0, y0 + h, top, bot);
         }
-        let d = &mut *d;
-        for vm in d.lines.iter_mut().chain(std::iter::once(&mut d.boss_card)) {
+        for vm in d.lines.iter().chain(std::iter::once(&d.boss_card)) {
             if vm.script.is_some() {
-                anm.draw_mode(rec, vm, 0);
+                anm.emit_mode(rec, vm, 0);
             }
         }
     }
@@ -734,50 +734,109 @@ impl Hud {
         [(c >> 16) as u8, (c >> 8) as u8, c as u8, a]
     }
 
-    // Hud_DrawBoss 0x43741D (12 §5.4): unguarded VMs, the guarded bar part, the stage-clear VM last.
-    fn draw_boss(&mut self, ctx: &mut Ctx) {
-        let (anm, rec) = (&mut ctx.anm, &mut ctx.rec);
-        rec.set_viewport(PLAYFIELD);
-        // Stage title VMs, the stage-start clock, then the night clock with Draw2DRot (12 §5.1, §5.7).
-        for vm in self
-            .title
-            .iter_mut()
-            .chain(std::iter::once(&mut self.start_clock_vm))
-        {
-            if vm.script.is_some() {
-                anm.draw_mode(rec, vm, 0);
-            }
-        }
-        if self.night_vm.script.is_some() {
-            anm.draw_mode(rec, &mut self.night_vm, 2);
-        }
-        // Op 9 VMs: loading picture Draw2DSnap, capture and ghosts Draw3DQuad; impl+0x3A1C is never started (10 §9).
+    // Hud_DrawBoss 0x43741D (12 §5.4), step: the mode-5 matrices of the op 9 VMs and tiles, then the bar's logic.
+    fn boss_step(&mut self, ctx: &mut Ctx) {
+        let anm = &ctx.anm;
         if self.load_vm.script_index >= 0 {
-            anm.draw_mode(rec, &mut self.load_vm, 0);
             for vm in std::iter::once(&mut self.cap_vm).chain(self.ghosts.iter_mut()) {
-                anm.draw_mode(rec, vm, 5);
+                anm.prepare(vm, 5);
             }
         }
         if self.tiles_live != 0 {
             for vm in &mut self.tiles {
-                anm.draw_mode(rec, vm, 5);
+                anm.prepare(vm, 5);
             }
         }
         if !self.msg.borrow().active() {
-            self.draw_bar(ctx);
-        }
-        if self.clear_vm.script.is_some() {
-            ctx.anm.draw_mode(&mut ctx.rec, &mut self.clear_vm, 0);
+            self.bar_step(ctx);
         }
     }
 
-    // Guarded part of Hud_DrawBoss (12 §5.4): no dialogue, +0x2C (read live) + bar state ≠ 0.
-    fn draw_bar(&mut self, ctx: &mut Ctx) {
-        if !self.enemies.borrow().g.hud_boss && self.bar_state == 0 {
+    // Hud_DrawBoss emit: unguarded VMs, the guarded bar part, the stage-clear VM last.
+    fn emit_boss(&self, ctx: &Ctx, rec: &mut Recorder) {
+        let anm = &ctx.anm;
+        rec.set_viewport(PLAYFIELD);
+        // Stage title VMs, the stage-start clock, then the night clock with Draw2DRot (12 §5.1, §5.7).
+        for vm in self
+            .title
+            .iter()
+            .chain(std::iter::once(&self.start_clock_vm))
+        {
+            if vm.script.is_some() {
+                anm.emit_mode(rec, vm, 0);
+            }
+        }
+        if self.night_vm.script.is_some() {
+            anm.emit_mode(rec, &self.night_vm, 2);
+        }
+        // Op 9 VMs: loading picture Draw2DSnap, capture and ghosts Draw3DQuad; impl+0x3A1C is never started (10 §9).
+        if self.load_vm.script_index >= 0 {
+            anm.emit_mode(rec, &self.load_vm, 0);
+            for vm in std::iter::once(&self.cap_vm).chain(self.ghosts.iter()) {
+                anm.emit_mode(rec, vm, 5);
+            }
+        }
+        if self.tiles_live != 0 {
+            for vm in &self.tiles {
+                anm.emit_mode(rec, vm, 5);
+            }
+        }
+        if !self.msg.borrow().active() {
+            self.emit_bar(ctx, rec);
+        }
+        if self.clear_vm.script.is_some() {
+            anm.emit_mode(rec, &self.clear_vm, 0);
+        }
+    }
+
+    // Guard of the bar part of Hud_DrawBoss (12 §5.4): no dialogue (caller), +0x2C (read live) + bar state ≠ 0.
+    fn bar_shown(&self) -> bool {
+        self.enemies.borrow().g.hud_boss || self.bar_state != 0
+    }
+
+    // Bar part, step: the timer string, its sounds and Popup_LargeStatic (logic, also with emit off).
+    fn bar_step(&mut self, ctx: &mut Ctx) {
+        if !self.bar_shown() {
             return;
         }
         let a = self.bar_alpha as u8;
-        let rec = &mut ctx.rec;
+        // Timer (12 §5.4): every guarded draw, HUD +0x24 as stored by Enemy_CheckTimeout, shown as min(·, 99).
+        let raw = self.enemies.borrow().g.hud_timer;
+        let v = raw.min(99);
+        ctx.ascii
+            .push(Text::new(384.0, 16.0, fmt_02d(v)).color(Self::rgb(timer_colour(raw), a)));
+        // Sound on a change of the raw value: v < 3 se_timeout2 (0x26), else v < 10 se_timeout (0x1D).
+        if self.timer_last != raw {
+            if v < 3 {
+                ctx.sound.play(crate::sound::TIMEOUT2);
+            } else if v < 10 {
+                ctx.sound.play(crate::sound::TIMEOUT);
+            }
+        }
+        self.timer_last = raw;
+        // Popup_LargeStatic (12 §5.4, 13 §4): re-issued every guarded draw, "+0" without children too.
+        let g = &ctx.game;
+        let e = self.enemies.borrow();
+        if let Some(i) = e.boss(0)
+            && g.paused == 0
+            && g.game_over == 0
+            && !self.player.borrow().freeze_bullets(g.flags)
+        {
+            ctx.overlays.popup_large_static(
+                [2.0, 29.0],
+                e.chain_count(i),
+                e.enemies[i].children,
+                0xFFF0F00F,
+            );
+        }
+    }
+
+    // Bar part, emit: fill, ECL markers, remaining-bars gauge, the timer frame VM.
+    fn emit_bar(&self, ctx: &Ctx, rec: &mut Recorder) {
+        if !self.bar_shown() {
+            return;
+        }
+        let a = self.bar_alpha as u8;
         rec.set_viewport(PLAYFIELD);
         let disp = self.bar_disp;
         Self::bar_quad(
@@ -813,37 +872,7 @@ impl Hud {
             let c = Self::rgb(0xFFFFFF - (i as u32 * 255 / 9), a);
             Self::bar_quad(rec, x0, x1, 19.0, 23.0, c, Self::rgb(0x202020, a));
         }
-        // Timer (12 §5.4): every guarded draw, HUD +0x24 as stored by Enemy_CheckTimeout, shown as min(·, 99).
-        let raw = e.g.hud_timer;
-        drop(e);
-        ctx.anm.draw_mode(&mut ctx.rec, &mut self.front[12], 0);
-        let v = raw.min(99);
-        ctx.ascii
-            .push(Text::new(384.0, 16.0, fmt_02d(v)).color(Self::rgb(timer_colour(raw), a)));
-        // Sound on a change of the raw value: v < 3 se_timeout2 (0x26), else v < 10 se_timeout (0x1D).
-        if self.timer_last != raw {
-            if v < 3 {
-                ctx.sound.play(crate::sound::TIMEOUT2);
-            } else if v < 10 {
-                ctx.sound.play(crate::sound::TIMEOUT);
-            }
-        }
-        self.timer_last = raw;
-        // Popup_LargeStatic (12 §5.4, 13 §4): re-issued every guarded draw, "+0" without children too.
-        let g = &ctx.game;
-        let e = self.enemies.borrow();
-        if let Some(i) = e.boss(0)
-            && g.paused == 0
-            && g.game_over == 0
-            && !self.player.borrow().freeze_bullets(g.flags)
-        {
-            ctx.overlays.popup_large_static(
-                [2.0, 29.0],
-                e.chain_count(i),
-                e.enemies[i].children,
-                0xFFF0F00F,
-            );
-        }
+        ctx.anm.emit_mode(rec, &self.front[12], 0);
     }
 
     // Hud_DrawPopups 0x438A89 (12 §5.5): every string with the clip flag (playfield viewport); bonus / message
@@ -1008,13 +1037,83 @@ impl Hud {
         }
     }
 
-    // Hud_DrawPanel (12 §5.3), redrawn every frame; flushes and sets the full-screen viewport first.
-    fn draw_panel(&mut self, ctx: &mut Ctx, st: &Stats) {
-        let rec = &mut ctx.rec;
+    // Hud_DrawPanel (12 §5.3), step: the panel strings and queue colour, the lives / bombs VM positions, the label latch.
+    fn panel_step(&mut self, ctx: &mut Ctx, st: &Stats) {
+        let q = &mut ctx.ascii;
+        // Score row (y 56) queued before the hiscore row (y 40) (12 §5.3 step 6). The panel strings take the current
+        // queue colour, so a "Press Shot Button" alpha leaks into them on the first gameplay frame (12 §1).
+        q.push(q.text(
+            488.0,
+            56.0,
+            format!("{:09}", st.score_disp.min(999_999_999)),
+        ));
+        q.push(q.text(605.0, 56.0, format!("{}", st.continues.min(9))));
+        q.push(q.text(488.0, 40.0, format!("{:09}", st.hiscore.min(999_999_999))));
+        q.push(q.text(605.0, 40.0, format!("{}", st.hiscore_cont.min(9))));
+        // The row VMs keep the position of their last stamp; the emit draws every stamp from a copy.
+        for (row, vm, n) in Self::stock_rows(st) {
+            if n > 0 {
+                self.front[vm].pos = Self::stock_pos(row, n - 1);
+            }
+        }
+        // Step 4 label: the original draws it only when it repaints the lives or bombs row (field ≠ 0 or full
+        // repaint) and it stays in the back buffer, so the port latches the condition on those frames.
+        let vm13 = self.front.get(13).is_some_and(|v| v.ip.is_some());
+        let cond = ctx.game.flags >> 7 & 3 == 1 && self.enemies.borrow().g.spell.is_some();
+        let (pn, latch) = label_step(
+            ctx.panel,
+            vm13,
+            cond,
+            self.label_latch,
+            ctx.game.paused != 0,
+        );
+        ctx.panel = pn;
+        self.label_latch = latch;
+        let q = &mut ctx.ascii;
+        q.push(q.text(488.0, 152.0, format!("{}", st.graze_total)));
+        for t in ratio_row(168.0, st.point_items2, st.next_extend, q.color) {
+            q.push(t);
+        }
+        let col = if st.time >= st.time_threshold {
+            [0xFF, 0xF0, 0xC0, 0xFF]
+        } else {
+            q.color
+        };
+        for t in ratio_row(184.0, st.time, st.time_threshold, col) {
+            q.push(t);
+        }
+        // Ascii_SetColor(0xFFFFFFFF) ends the time-row block (12 §5.3 step 6); the port draws that row every frame.
+        q.color = [255; 4];
+        // Step 7: the power text is the last panel string, so it takes the colour left by step 6 (12 §5.3).
+        let pw = st.power.trunc();
+        q.push(q.text(
+            488.0,
+            136.0,
+            if pw >= 128.0 {
+                "MAX".to_string()
+            } else {
+                format!("{}", pw as i32)
+            },
+        ));
+    }
+
+    // Lives (front VM 10, y 88) and bombs (VM 11, y 104) rows: up to 8 stamps 16 px apart (12 §5.3).
+    fn stock_rows(st: &Stats) -> [(f32, usize, i32); 2] {
+        [
+            (88.0, 10, (st.lives as i32).clamp(0, 8)),
+            (104.0, 11, (st.bombs as i32).clamp(0, 8)),
+        ]
+    }
+
+    fn stock_pos(row: f32, i: i32) -> [f32; 3] {
+        [488.0 + 16.0 * i as f32, row, 0.46]
+    }
+
+    // Hud_DrawPanel emit; flushes and sets the full-screen viewport first.
+    fn emit_panel(&self, anm: &AnmManager, rec: &mut Recorder, st: &Stats) {
         rec.set_viewport(FULLSCREEN);
-        let anm = &mut ctx.anm;
         // Tiles (scripts 13–15) keep z-write on; depths 0.49 / 0.48 / 0.46 (12 §5.3).
-        let spr = |anm: &AnmManager, rec: &mut Recorder, i: usize, x: f32, y: f32, z: f32| {
+        let spr = |rec: &mut Recorder, i: usize, x: f32, y: f32, z: f32| {
             if let Some(s) = anm.sprite(FRONT_SLOT, i) {
                 let [u0, v0, u1, v1] = s.uv;
                 // Draw2DSnap → EmitQuad: the global tint applies (12 §5.3, 05 §12.1); the gauge quad stays raw.
@@ -1034,68 +1133,44 @@ impl Hud {
             }
         };
         for y in [40.0, 56.0] {
-            spr(anm, rec, 15, 480.0, y, 0.49);
+            spr(rec, 15, 480.0, y, 0.49);
         }
         for y in [88.0, 104.0, 136.0, 152.0, 168.0, 184.0] {
-            spr(anm, rec, 15, 480.0, y, 0.48);
+            spr(rec, 15, 480.0, y, 0.48);
         }
         // Always: the corner under the fps text.
-        spr(anm, rec, 15, 512.0, 464.0, 0.48);
+        spr(rec, 15, 512.0, 464.0, 0.48);
         // Full repaint (cfg bit 12, tile VM 13 still running = first 200 frames, or counter 0x17CE8CC ≠ 0) and the
         // dirty rows are not tracked: the port clears the screen every frame, so it repaints in full every frame.
         for y in (0..480).step_by(32) {
-            spr(anm, rec, 13, 0.0, y as f32, 0.49);
+            spr(rec, 13, 0.0, y as f32, 0.49);
         }
         for x in (416..640).step_by(32) {
             for y in (16..480).step_by(32) {
-                spr(anm, rec, 13, x as f32, y as f32, 0.49);
+                spr(rec, 13, x as f32, y as f32, 0.49);
             }
         }
         for x in (0..640).step_by(128) {
-            spr(anm, rec, 14, x as f32, 0.0, 0.49);
-            spr(anm, rec, 14, x as f32, 464.0, 0.49);
+            spr(rec, 14, x as f32, 0.0, 0.49);
+            spr(rec, 14, x as f32, 464.0, 0.49);
         }
-        for vm in self.front.iter_mut().take(10) {
-            anm.draw_mode(rec, vm, if vm.script_index == 1 { 2 } else { 0 });
+        for vm in self.front.iter().take(10) {
+            anm.emit_mode(rec, vm, if vm.script_index == 1 { 2 } else { 0 });
         }
-        anm.draw_mode(rec, &mut self.diff_vm, 0);
-        let q = &mut ctx.ascii;
-        // Score row (y 56) queued before the hiscore row (y 40) (12 §5.3 step 6). The panel strings take the current
-        // queue colour, so a "Press Shot Button" alpha leaks into them on the first gameplay frame (12 §1).
-        q.push(q.text(
-            488.0,
-            56.0,
-            format!("{:09}", st.score_disp.min(999_999_999)),
-        ));
-        q.push(q.text(605.0, 56.0, format!("{}", st.continues.min(9))));
-        q.push(q.text(488.0, 40.0, format!("{:09}", st.hiscore.min(999_999_999))));
-        q.push(q.text(605.0, 40.0, format!("{}", st.hiscore_cont.min(9))));
-        for (row, n, vm) in [(88.0, st.lives as i32, 10), (104.0, st.bombs as i32, 11)] {
-            for i in 0..n.clamp(0, 8) {
-                let v = &mut self.front[vm];
-                v.pos = [488.0 + 16.0 * i as f32, row, 0.46];
-                anm.draw_mode(rec, v, 0);
+        anm.emit_mode(rec, &self.diff_vm, 0);
+        for (row, vm, n) in Self::stock_rows(st) {
+            for i in 0..n {
+                let mut v = self.front[vm].clone();
+                v.pos = Self::stock_pos(row, i);
+                anm.emit_mode(rec, &v, 0);
             }
         }
-        // Step 4 label: the original draws it only when it repaints the lives or bombs row (field ≠ 0 or full
-        // repaint) and it stays in the back buffer, so the port latches the condition on those frames.
-        let vm13 = self.front.get(13).is_some_and(|v| v.ip.is_some());
-        let cond = ctx.game.flags >> 7 & 3 == 1 && self.enemies.borrow().g.spell.is_some();
-        let (pn, latch) = label_step(
-            ctx.panel,
-            vm13,
-            cond,
-            self.label_latch,
-            ctx.game.paused != 0,
-        );
-        ctx.panel = pn;
-        self.label_latch = latch;
-        if latch {
-            anm.draw_mode(rec, &mut self.label_vm, 0);
+        if self.label_latch {
+            anm.emit_mode(rec, &self.label_vm, 0);
         }
         // Strip 14 along y = 464 for x 32..368 every frame (12 §5.3).
         for x in [32.0, 160.0, 288.0] {
-            spr(anm, rec, 14, x, 464.0, 0.49);
+            spr(rec, 14, x, 464.0, 0.49);
         }
         // Power gauge x 488 … 488 + power, y 136..152, left 0xE0E0E0FF / right 0x80E0E0FF (12 §5.3).
         let pw = st.power.trunc();
@@ -1113,30 +1188,6 @@ impl Hud {
                 Vertex::screen(488.5 + pw, 152.5, 0.1, uv, r),
             ],
         );
-        q.push(q.text(488.0, 152.0, format!("{}", st.graze_total)));
-        for t in ratio_row(168.0, st.point_items2, st.next_extend, q.color) {
-            q.push(t);
-        }
-        let col = if st.time >= st.time_threshold {
-            [0xFF, 0xF0, 0xC0, 0xFF]
-        } else {
-            q.color
-        };
-        for t in ratio_row(184.0, st.time, st.time_threshold, col) {
-            q.push(t);
-        }
-        // Ascii_SetColor(0xFFFFFFFF) ends the time-row block (12 §5.3 step 6); the port draws that row every frame.
-        q.color = [255; 4];
-        // Step 7: the power text is the last panel string, so it takes the colour left by step 6 (12 §5.3).
-        q.push(q.text(
-            488.0,
-            136.0,
-            if pw >= 128.0 {
-                "MAX".to_string()
-            } else {
-                format!("{}", pw as i32)
-            },
-        ));
     }
 }
 
@@ -1312,19 +1363,27 @@ impl Task<Ctx> for Hud {
 
     // Hud_Draw (12 §5.3): clear panel strings, Msg_Draw, Hud_DrawBoss, Hud_DrawPanel, Hud_DrawPopups. Everything
     // before Hud_DrawPanel inherits the playfield viewport set by Stage_DrawLow.
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    // Step: ASCII queue strings and colour, timer sounds / popup, label latch, VM positions and mode-5 matrices.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         if ctx.game.loading != 0 {
             return Ret::Next;
         }
         self.draw_clear(ctx);
-        ctx.rec.set_viewport(PLAYFIELD);
-        self.draw_msg(&mut ctx.anm, &mut ctx.rec);
-        self.draw_boss(ctx);
+        self.boss_step(ctx);
         let st = self.player.borrow().stats.clone();
-        self.draw_panel(ctx, &st);
+        self.panel_step(ctx, &st);
         self.draw_popups(ctx);
         Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+        if ctx.game.loading != 0 {
+            return;
+        }
+        rec.set_viewport(PLAYFIELD);
+        self.emit_msg(&ctx.anm, rec);
+        self.emit_boss(ctx, rec);
+        self.emit_panel(&ctx.anm, rec, &self.player.borrow().stats);
     }
 }
 

@@ -355,6 +355,8 @@ pub struct ToolHost {
     pub polls: Option<std::sync::Arc<[u16]>>,
     // Poll index of the next poll; negative = boot frames before the first menu frame, which never poll (0).
     pub cursor: i64,
+    // Port-only: a fixed `localtime` answer (session replays: the recording time), so dated saves draw the same any day.
+    pub fixed_time: Option<LocalTime>,
 }
 
 impl ToolHost {
@@ -395,7 +397,7 @@ impl Host for ToolHost {
         self.clock.ticks_ms()
     }
     fn local_time(&mut self) -> LocalTime {
-        self.clock.local_time()
+        self.fixed_time.unwrap_or_else(|| self.clock.local_time())
     }
     fn read(&mut self, name: &str) -> Option<Vec<u8>> {
         self.storage.read(name)

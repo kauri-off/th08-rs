@@ -310,6 +310,48 @@ pub struct Stage {
     sparkles: RefCell<(usize, [Vec3; 32])>,
     // +0x647C sparkle flag, cleared at the end of Stage_DrawHigh (06 §10.2).
     sparkle_on: bool,
+    // Port-only: draws recorded by the DrawLow / DrawHigh steps, replayed by their emits (ARCH decision 2).
+    drawn: [Vec<Item>; 2],
+}
+
+// One recorded command of a stage draw node, in draw order. VMs are snapshots at draw time: object instances share
+// their quads' VMs, and the spell mask redraws spell VM 0 / 1 modified.
+enum Item {
+    Viewport,
+    AnmReset,
+    DepthTest(bool),
+    ClearDepth([u8; 4]),
+    ClearViewport([u8; 4]),
+    ClearZ(u32),
+    // Spell-start fade rect (32, 16)–(416, 464), RGBA.
+    Fade([u8; 4]),
+    // DrawByMode `mode` at vertex depth `z`.
+    Vm {
+        vm: AnmVm,
+        mode: i32,
+        z: f32,
+    },
+    // Draw3DWorld through the stage camera with the tinted fog (06 §11.2).
+    World {
+        vm: AnmVm,
+        cam: Camera,
+        fog: Fog,
+    },
+    // DrawCustomQuad (06 §11.3): `vm` gives blend and z-write.
+    Ribbon {
+        vm: AnmVm,
+        tex: crate::drawlist::TexId,
+        v: [Vertex; 4],
+    },
+    // Stage 6B ring, effect slot (06 §5.1).
+    Ring(usize),
+    Background(crate::effect::BgDraw),
+    // Spell mask frame (07 §12.1): inner / outer half sizes, ring centre.
+    MaskFrame {
+        a: f32,
+        b: f32,
+        c: Vec3,
+    },
 }
 
 impl Stage {
@@ -360,6 +402,7 @@ impl Stage {
             hud_cover: false,
             sparkles: RefCell::new((0, [[0.0; 3]; 32])),
             sparkle_on: false,
+            drawn: [Vec::new(), Vec::new()],
             fast_forward: 0,
             overlay: AnmVm::default(),
             overlay_mode: 0,
@@ -400,7 +443,9 @@ impl Stage {
         let t: task::TaskRef<Ctx> = st.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t)?;
+        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t.clone())?;
+        // Port-only tail of Stage_DrawHigh (step only): its last writes come after the node's emit, see `draw_step`.
+        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 2, t)?;
         Ok(st)
     }
 
@@ -758,53 +803,37 @@ impl Stage {
 
     // Stage_SpellMaskCallback 0x4235A0 (07 §12.1): black square frame between the native 3/6/20 rings,
     // inside it the spell background redrawn mirrored.
-    fn draw_spell_mask(
+    fn spell_mask_step(
         &mut self,
-        anm: &mut AnmManager,
-        rec: &mut Recorder,
+        anm: &AnmManager,
         fx: &crate::effect::Effects,
+        out: &mut Vec<Item>,
     ) {
         let ra = fx.peek(crate::effect::FIXED_BASE + 9, |e| (e.vm.pos[0], e.pos));
         let rb = fx.peek(crate::effect::FIXED_BASE + 10, |e| e.vm.pos[0]);
         let ((a, c), b) = (ra, rb);
-        let (a, b) = (
-            a * std::f32::consts::FRAC_1_SQRT_2,
-            b * std::f32::consts::FRAC_1_SQRT_2,
-        );
-        // +0.5: port D3D → wgpu pixel-centre offset.
-        let (cx, cy) = (c[0] + 32.0 + 0.5, c[1] + 16.0 + 0.5);
-        let ring = [
-            (-1.0, -1.0),
-            (1.0, -1.0),
-            (1.0, 1.0),
-            (-1.0, 1.0),
-            (-1.0, -1.0),
-        ];
-        let white = rec.white();
-        rec.set_depth_test(false);
-        for k in 0..4 {
-            let v = [
-                (ring[k], a),
-                (ring[k], b),
-                (ring[k + 1], a),
-                (ring[k + 1], b),
-            ]
-            .map(|((sx, sy), r)| {
-                Vertex::screen(cx + sx * r, cy + sy * r, 0.8, [0.0, 0.0], [0, 0, 0, 255])
-            });
-            rec.strip(white, crate::drawlist::Blend::Alpha, true, v);
-        }
-        rec.anm.reset();
-        rec.set_depth_test(true);
+        out.push(Item::MaskFrame {
+            a: a * std::f32::consts::FRAC_1_SQRT_2,
+            b: b * std::f32::consts::FRAC_1_SQRT_2,
+            c,
+        });
+        out.push(Item::AnmReset);
+        out.push(Item::DepthTest(true));
         // vm.color is stored B,G,R,A (D3DCOLOR little-endian), so the bytes are used as they are (07 §12.1).
         let grey = 0xFFE0C0C0u32.to_le_bytes();
+        // The restore writes fixed values, not the saved scale / pos; the dirty bits stay set (07 §12.1).
         if let Some(vm) = self.spell_vms.get_mut(0) {
             let col = vm.color;
             vm.scale = [-1.5, -1.75];
             vm.pos = [416.0, 464.0, 0.7];
             vm.color = grey;
             vm.flags |= anmvm::F_SCALE_DIRTY;
-            anm.draw_mode_z(rec, vm, 2, 0.7);
+            anm.prepare(vm, 2);
+            out.push(Item::Vm {
+                vm: vm.clone(),
+                mode: 2,
+                z: 0.7,
+            });
             vm.scale = [1.5, 1.75];
             vm.pos = [32.0, 16.0, 0.5];
             vm.color = col;
@@ -816,12 +845,17 @@ impl Stage {
             vm.rotation[2] = -vm.rotation[2];
             vm.flags |= anmvm::F_ROT_DIRTY;
             vm.color = grey;
-            anm.draw_mode_z(rec, vm, 2, 0.6);
+            anm.prepare(vm, 2);
+            out.push(Item::Vm {
+                vm: vm.clone(),
+                mode: 2,
+                z: 0.6,
+            });
             vm.rotation[2] = -vm.rotation[2];
             vm.flags |= anmvm::F_ROT_DIRTY;
             vm.color = col;
         }
-        rec.set_depth_test(false);
+        out.push(Item::DepthTest(false));
     }
 
     // ECL native 12: interrupt 2 (pause) / 1 to spell VMs 0 and 1 (07 §12).
@@ -848,9 +882,10 @@ impl Stage {
         }
     }
 
-    // Stage_DrawLayer 0x40A1B0 (06 §10.3).
-    fn draw_layer(&mut self, anm: &mut AnmManager, rec: &mut Recorder, layer: u8) {
-        let vp = rec.viewport();
+    // Stage_DrawLayer 0x40A1B0 (06 §10.3), draw-phase step. The viewport is the playfield: DrawLow sets it and
+    // DrawHigh (prio 7) follows it with no draw node between (screen effects draw at prio 1 / 0x10 / 0x15).
+    fn layer_step(&mut self, anm: &mut AnmManager, layer: u8, out: &mut Vec<Item>) {
+        let vp = PLAYFIELD;
         let cam = self.cam.camera(vp);
         anm.stage_camera = Some(cam);
         // Only Stage_SetCamera writes 0x4EA3F4: while the layers are skipped it keeps the last drawn frame's value.
@@ -906,15 +941,20 @@ impl Stage {
                             vm.scale[1] = h / vm.sprite_h;
                         }
                         if vm.tag & 0xF == 2 {
-                            view.billboard(anm, rec, vm, w);
+                            view.billboard(anm, vm, w, out);
                         } else {
-                            anm.draw_3d_world(rec, vm, &cam, Some(fog));
+                            anm.prepare(vm, 5);
+                            out.push(Item::World {
+                                vm: vm.clone(),
+                                cam,
+                                fog,
+                            });
                         }
                     }
                     QuadKind::Ribbon { a, b, w } => {
                         let pa = sub(add(a, inst.pos), self.origin);
                         let pb = sub(add(b, inst.pos), self.origin);
-                        view.ribbon(anm, rec, vm, &mut slots, pa, pb, w);
+                        view.ribbon(anm, vm, &mut slots, pa, pb, w, out);
                     }
                 }
             }
@@ -966,7 +1006,7 @@ impl View<'_> {
     }
 
     // Billboard sprite, tag & 0xF == 2 (06 §11.1).
-    fn billboard(&self, anm: &mut AnmManager, rec: &mut Recorder, vm: &mut AnmVm, w: f32) {
+    fn billboard(&self, anm: &AnmManager, vm: &mut AnmVm, w: f32, out: &mut Vec<Item>) {
         let s = self.project(vm.pos);
         let ww = if w != 0.0 { w } else { vm.sprite_w };
         // Quirk kept (06 §13): uses the previous frame's billboard scale.x (feedback); 3D length of s2 − s.
@@ -982,7 +1022,12 @@ impl View<'_> {
         vm.color = c;
         vm.pos = s;
         if (0.0..=1.0).contains(&s[2]) {
-            anm.draw_mode_z(rec, vm, 1, s[2]);
+            anm.prepare(vm, 1);
+            out.push(Item::Vm {
+                vm: vm.clone(),
+                mode: 1,
+                z: s[2],
+            });
             // Only drawn quads append a sparkle point (06 §11.1).
             if vm.tag & 0xF0 == 0x10
                 && let Some(pts) = self.points
@@ -1006,13 +1051,13 @@ impl View<'_> {
     #[allow(clippy::too_many_arguments)]
     fn ribbon(
         &mut self,
-        anm: &mut AnmManager,
-        rec: &mut Recorder,
-        vm: &mut AnmVm,
+        anm: &AnmManager,
+        vm: &AnmVm,
         slots: &mut [[u8; 4]; 4],
         a: Vec3,
         b: Vec3,
         w: f32,
+        out: &mut Vec<Item>,
     ) {
         use anmvm::*;
         let base = vm.color;
@@ -1064,9 +1109,11 @@ impl View<'_> {
             vx(sb[0] + dy * wb, sb[1] - dx * wb, sb[2], [u0, v1], c2),
             vx(sb[0] - dy * wb, sb[1] + dx * wb, sb[2], [u1, v1], c3),
         ];
-        let blend = AnmManager::blend_for(rec, vm);
-        rec.anm.bound_tex = Some(spr.tex);
-        rec.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
+        out.push(Item::Ribbon {
+            vm: vm.clone(),
+            tex: spr.tex,
+            v,
+        });
     }
 }
 
@@ -1086,19 +1133,31 @@ impl Task<Ctx> for Stage {
         Ret::Next
     }
 
-    // Tag 0 = Stage_DrawLow, tag 1 = Stage_DrawHigh (06 §10.2).
+    // Tag 0 = Stage_DrawLow, tag 1 = Stage_DrawHigh (06 §10.2), tag 2 = DrawHigh's last writes. The tint off and
+    // stage-camera reset end DrawHigh but its draws read the tint: tag 2, linked right after tag 1 at the same prio,
+    // makes them after tag 1's emit and before any other draw node.
     // Not implemented: DrawLow step 2 (+0xB2C clear).
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let (anm, rec, fx) = (&mut ctx.anm, &mut ctx.rec, &mut ctx.effects);
+        let (anm, fx) = (&mut ctx.anm, &mut ctx.effects);
+        if tag == 2 {
+            self.sparkle_on = false;
+            // +0x646C: the tint stays on while a bomb drew last frame (06 §10.2).
+            if !std::mem::take(&mut anm.bomb_drew) {
+                anm.tint_off();
+            }
+            anm.stage_camera = None;
+            return Ret::Next;
+        }
+        let mut out = std::mem::take(&mut self.drawn[tag as usize]);
+        out.clear();
         if tag == 0 {
             {
                 let mut p = self.sparkles.borrow_mut();
                 p.0 = 0;
                 p.1[..16].fill([0.0; 3]);
             }
-            rec.set_viewport(PLAYFIELD);
-            rec.anm.reset();
+            out.push(Item::Viewport);
+            out.push(Item::AnmReset);
             // Step 3: last frame's bomb tint request (14 §1.3) turns the tint on.
             if let Some(c) = anm.stage_tint.take() {
                 (anm.tint, anm.tint_on) = (c, true);
@@ -1106,61 +1165,118 @@ impl Task<Ctx> for Stage {
             let hide = self.layers_hidden();
             for vm in [&mut self.vm_a, &mut self.vm_b] {
                 if vm.sprite_index > 0 && !hide {
-                    anm.draw_mode(rec, vm, 2);
+                    anm.prepare(vm, 2);
+                    out.push(Item::Vm {
+                        vm: vm.clone(),
+                        mode: 2,
+                        z: vm.pos[2],
+                    });
                 }
             }
             if let Some(i) = self.ring_6b.filter(|_| !hide) {
-                crate::effect::draw_ring_at(fx, anm, rec, i);
+                out.push(Item::Ring(i));
             }
             // Step 5: alpha 0xFF → clear target + z; 0 → z only; else blend-fill the playfield, then z.
             let c = self.clear_color.to_le_bytes();
             let rgba = [c[2], c[1], c[0], c[3]];
             if c[3] == 0xFF {
-                rec.clear_depth(Some(rgba));
+                out.push(Item::ClearDepth(rgba));
             } else {
                 if self.clear_color != 0 {
-                    rec.clear_viewport(rgba);
+                    out.push(Item::ClearViewport(rgba));
                 }
                 // The z-only clear passes clear_color (+0x830) as its ignored colour argument.
-                rec.clear_z(self.clear_color);
+                out.push(Item::ClearZ(self.clear_color));
             }
-            rec.set_depth_test(true);
+            out.push(Item::DepthTest(true));
             if !hide {
-                self.draw_layer(anm, rec, 0);
-                self.draw_layer(anm, rec, 1);
+                self.layer_step(anm, 0, &mut out);
+                self.layer_step(anm, 1, &mut out);
             }
         } else {
             if !self.layers_hidden() {
-                self.draw_layer(anm, rec, 2);
-                self.draw_layer(anm, rec, 3);
-                let level = self.effect_level;
-                fx.draw_background(anm, rec, level);
+                self.layer_step(anm, 2, &mut out);
+                self.layer_step(anm, 3, &mut out);
+                let mut bg = Vec::new();
+                fx.background_step(anm, self.effect_level, &mut bg);
+                out.extend(bg.into_iter().map(Item::Background));
                 if self.spell_state == 1 {
                     // Spell-start fade: black, alpha +0xB28·255/60, ZFUNC ALWAYS (Screen_FillRect 0x45B1E0).
-                    rec.anm.reset();
-                    rec.set_depth_test(false);
-                    let a = (self.spell_frames * 255 / 60) as u8;
-                    rec.rect(32.0, 16.0, 384.0, 448.0, [0, 0, 0, a]);
+                    out.push(Item::AnmReset);
+                    out.push(Item::DepthTest(false));
+                    out.push(Item::Fade([0, 0, 0, (self.spell_frames * 255 / 60) as u8]));
                 }
             }
-            rec.set_depth_test(false);
-            rec.set_viewport(PLAYFIELD);
+            out.push(Item::DepthTest(false));
+            out.push(Item::Viewport);
             // AnmManager_DrawRotFlush 0x40BAF0 = Draw2DRot (mode 2) whatever the VM's draw mode (13 §5).
             for vm in &mut self.spell_vms {
-                anm.draw_mode(rec, vm, 2);
+                anm.prepare(vm, 2);
+                out.push(Item::Vm {
+                    vm: vm.clone(),
+                    mode: 2,
+                    z: vm.pos[2],
+                });
             }
             if self.spell_mask && self.spell_state > 0 {
-                self.draw_spell_mask(anm, rec, fx);
+                self.spell_mask_step(anm, fx, &mut out);
             }
-            self.sparkle_on = false;
-            // +0x646C: the tint stays on while a bomb drew last frame (06 §10.2).
-            if !std::mem::take(&mut anm.bomb_drew) {
-                anm.tint_off();
-            }
-            anm.stage_camera = None;
-            rec.set_viewport(PLAYFIELD);
+            out.push(Item::Viewport);
         }
+        self.drawn[tag as usize] = out;
         Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        let anm = &ctx.anm;
+        for it in self.drawn.get(tag as usize).into_iter().flatten() {
+            match it {
+                Item::Viewport => rec.set_viewport(PLAYFIELD),
+                Item::AnmReset => rec.anm.reset(),
+                Item::DepthTest(on) => rec.set_depth_test(*on),
+                Item::ClearDepth(c) => rec.clear_depth(Some(*c)),
+                Item::ClearViewport(c) => rec.clear_viewport(*c),
+                Item::ClearZ(arg) => rec.clear_z(*arg),
+                Item::Fade(c) => rec.rect(32.0, 16.0, 384.0, 448.0, *c),
+                Item::Vm { vm, mode, z } => anm.emit_mode_z(rec, vm, *mode, *z),
+                Item::World { vm, cam, fog } => anm.emit_3d_world(rec, vm, cam, Some(*fog)),
+                Item::Ribbon { vm, tex, v } => {
+                    let blend = AnmManager::blend_for(rec, vm);
+                    rec.anm.bound_tex = Some(*tex);
+                    rec.strip(*tex, blend, vm.flags & anmvm::F_ZWRITE_OFF == 0, *v);
+                }
+                Item::Ring(i) => crate::effect::draw_ring_at(&ctx.effects, anm, rec, *i),
+                Item::Background(d) => ctx.effects.emit_background(anm, rec, d),
+                Item::MaskFrame { a, b, c } => emit_mask_frame(rec, *a, *b, *c),
+            }
+        }
+    }
+}
+
+// Spell mask frame (07 §12.1): four black strips between half sizes a and b around the ring centre, z 0.8.
+fn emit_mask_frame(rec: &mut Recorder, a: f32, b: f32, c: Vec3) {
+    // +0.5: port D3D → wgpu pixel-centre offset.
+    let (cx, cy) = (c[0] + 32.0 + 0.5, c[1] + 16.0 + 0.5);
+    let ring = [
+        (-1.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 1.0),
+        (-1.0, 1.0),
+        (-1.0, -1.0),
+    ];
+    let white = rec.white();
+    rec.set_depth_test(false);
+    for k in 0..4 {
+        let v = [
+            (ring[k], a),
+            (ring[k], b),
+            (ring[k + 1], a),
+            (ring[k + 1], b),
+        ]
+        .map(|((sx, sy), r)| {
+            Vertex::screen(cx + sx * r, cy + sy * r, 0.8, [0.0, 0.0], [0, 0, 0, 255])
+        });
+        rec.strip(white, crate::drawlist::Blend::Alpha, true, v);
     }
 }
 
@@ -1226,8 +1342,8 @@ mod tests {
     // input vector of the next projections.
     #[test]
     fn ribbon_sets_projection_vector() {
-        let mut out = Recorder::new();
-        let mut anm = AnmManager::default();
+        let mut out = Vec::new();
+        let anm = AnmManager::default();
         let mut c = StageCamera::default();
         c.v[FACING] = [0.0, 500.0, -100.0];
         c.v[UP] = [0.0, 0.0, 1.0];
@@ -1246,12 +1362,12 @@ mod tests {
         vm.sprite_w = 16.0;
         let mut slots = [[0; 4]; 4];
         let (a, b) = ([0.0, 300.0, 0.0], [50.0, 400.0, 0.0]);
-        view.ribbon(&mut anm, &mut out, &mut vm, &mut slots, a, b, 0.0);
+        view.ribbon(&anm, &vm, &mut slots, a, b, 0.0, &mut out);
         let d = sub(cam.project(b, vp), cam.project(a, vp));
         let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
         let pv = scale(d, 1.0 / len);
         assert_eq!(view.pv, pv);
-        view.ribbon(&mut anm, &mut out, &mut vm, &mut slots, a, b, 0.0);
+        view.ribbon(&anm, &vm, &mut slots, a, b, 0.0, &mut out);
         let d = sub(cam.project(add(b, pv), vp), cam.project(add(a, pv), vp));
         let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
         assert_eq!(view.pv, scale(d, 1.0 / len));

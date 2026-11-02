@@ -123,102 +123,90 @@ impl Queue {
         Text::new(x, y, s).color(self.color)
     }
 
-    fn draw(&mut self, ctx_anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, high: bool) {
-        self.draw_where(ctx_anm, rec, Some(high));
+    // Draw-phase step of Ascii_DrawStrings: the pass's entries leave the queue in queue order; `pass` None takes every
+    // entry (the loading prompt's direct call, 12 §1).
+    pub fn take(&mut self, pass: Option<bool>) -> Vec<Text> {
+        let (out, keep) = std::mem::take(&mut self.items)
+            .into_iter()
+            .partition(|t| pass.is_none_or(|h| t.high == h));
+        self.items = keep;
+        out
     }
+}
 
-    // Ascii_DrawStrings 0x402B20 (12 §2.9): '\n' → y += 16·scale y, ' ' → advance only, other bytes Draw2DSnap.
-    // `pass` None draws every entry in queue order (the loading prompt's direct call, 12 §1).
-    fn draw_where(
-        &mut self,
-        ctx_anm: &crate::anmmgr::AnmManager,
-        rec: &mut Recorder,
-        pass: Option<bool>,
-    ) {
-        let o = ctx_anm.screen_offset;
-        for t in self
-            .items
-            .iter()
-            .filter(|t| pass.is_none_or(|h| t.high == h))
-        {
-            let vp = if t.clip {
-                crate::drawlist::PLAYFIELD
+// Ascii_DrawStrings 0x402B20 (12 §2.9) emit: '\n' → y += 16·scale y, ' ' → advance only, other bytes Draw2DSnap.
+pub fn emit_texts(ctx_anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, items: &[Text]) {
+    let o = ctx_anm.screen_offset;
+    for t in items {
+        let vp = if t.clip {
+            crate::drawlist::PLAYFIELD
+        } else {
+            FULLSCREEN
+        };
+        rec.set_viewport(vp);
+        let (mut x, mut y) = (t.x + o[0], t.y + o[1]);
+        // Chars U+0000-U+00FF are glyph bytes (U+0080 / U+0081 = the "SP" / "END" cells, 16 §2.2).
+        for c in t.s.chars().map(|c| c as u32 as u8) {
+            if c == b'\n' {
+                (x, y) = (t.x + o[0], y + 16.0 * t.scale_y);
+                continue;
+            }
+            let (idx, col) = if t.hl {
+                (c as usize + 0x8A, [255; 4])
             } else {
-                FULLSCREEN
+                (c.wrapping_sub(1) as usize, t.color)
             };
-            rec.set_viewport(vp);
-            let (mut x, mut y) = (t.x + o[0], t.y + o[1]);
-            // Chars U+0000-U+00FF are glyph bytes (U+0080 / U+0081 = the "SP" / "END" cells, 16 §2.2).
-            for c in t.s.chars().map(|c| c as u32 as u8) {
-                if c == b'\n' {
-                    (x, y) = (t.x + o[0], y + 16.0 * t.scale_y);
+            // Draw2DSnap draws nothing for alpha 0 (05 §9); the pen still advances.
+            let drawn = c > b' ' && col[3] != 0;
+            // Glyphs are EmitQuad quads: the global ANM tint applies (12 §2.9, 05 §12.1).
+            let col = ctx_anm.tinted(col);
+            if let Some(sp) = ctx_anm.sprite(ANM_SLOT, idx).filter(|_| drawn) {
+                // Glyph VM: z 0, z-write on (12 §5.3 depth values).
+                let [u0, v0, u1, v1] = sp.uv;
+                let (w, h) = (sp.w * t.scale, sp.h * t.scale_y);
+                // Draw2DSnap culls quads outside the viewport (05 §9 EmitQuad step 3).
+                let (rx, ry) = (x.round_ties_even() - 0.5, y.round_ties_even() - 0.5);
+                if rx + w < vp.x || rx > vp.x + vp.w || ry + h < vp.y || ry > vp.y + vp.h {
+                    x += t.advance * t.scale;
                     continue;
                 }
-                let (idx, col) = if t.hl {
-                    (c as usize + 0x8A, [255; 4])
-                } else {
-                    (c.wrapping_sub(1) as usize, t.color)
+                let v = |x: f32, y: f32, u: f32, vv: f32| {
+                    crate::drawlist::Vertex::screen(
+                        x.round_ties_even(),
+                        y.round_ties_even(),
+                        0.0,
+                        [u, vv],
+                        col,
+                    )
                 };
-                // Draw2DSnap draws nothing for alpha 0 (05 §9); the pen still advances.
-                let drawn = c > b' ' && col[3] != 0;
-                // Glyphs are EmitQuad quads: the global ANM tint applies (12 §2.9, 05 §12.1).
-                let col = ctx_anm.tinted(col);
-                if let Some(sp) = ctx_anm.sprite(ANM_SLOT, idx).filter(|_| drawn) {
-                    // Glyph VM: z 0, z-write on (12 §5.3 depth values).
-                    let [u0, v0, u1, v1] = sp.uv;
-                    let (w, h) = (sp.w * t.scale, sp.h * t.scale_y);
-                    // Draw2DSnap culls quads outside the viewport (05 §9 EmitQuad step 3).
-                    let (rx, ry) = (x.round_ties_even() - 0.5, y.round_ties_even() - 0.5);
-                    if rx + w < vp.x || rx > vp.x + vp.w || ry + h < vp.y || ry > vp.y + vp.h {
-                        x += t.advance * t.scale;
-                        continue;
-                    }
-                    let v = |x: f32, y: f32, u: f32, vv: f32| {
-                        crate::drawlist::Vertex::screen(
-                            x.round_ties_even(),
-                            y.round_ties_even(),
-                            0.0,
-                            [u, vv],
-                            col,
-                        )
-                    };
-                    rec.strip(
-                        sp.tex,
-                        Blend::Alpha,
-                        true,
-                        [
-                            v(x, y, u0, v0),
-                            v(x + w, y, u1, v0),
-                            v(x, y + h, u0, v1),
-                            v(x + w, y + h, u1, v1),
-                        ],
-                    );
-                }
-                x += t.advance * t.scale;
+                rec.strip(
+                    sp.tex,
+                    Blend::Alpha,
+                    true,
+                    [
+                        v(x, y, u0, v0),
+                        v(x + w, y, u1, v0),
+                        v(x, y + h, u0, v1),
+                        v(x + w, y + h, u1, v1),
+                    ],
+                );
             }
-        }
-        match pass {
-            Some(h) => self.items.retain(|t| t.high != h),
-            None => self.items.clear(),
+            x += t.advance * t.scale;
         }
     }
 }
 
 // Supervisor_DrawLoading 0x445BD4 "Press Shot Button" (12 §1): state (`Game::load_prompt`) += 1 per draw while > 1;
 // prompt from c > 4, alpha written into the queue colour and left there, then the whole queue drawn and emptied.
-pub fn loading_prompt(
-    anm: &crate::anmmgr::AnmManager,
-    rec: &mut Recorder,
-    q: &mut Queue,
-    state: &mut u32,
-) {
+// Draw-phase step: returns the entries to emit (`emit_texts`), empty when the prompt is not shown.
+pub fn loading_prompt(q: &mut Queue, state: &mut u32) -> Vec<Text> {
     let Some(a) = prompt_step(state) else {
-        return;
+        return Vec::new();
     };
     q.color[anmvm::A] = a;
     let t = q.text(288.0, 454.0, "Press Shot Button").scale(0.5);
     q.push(t);
-    q.draw_where(anm, rec, None);
+    q.take(None)
 }
 
 // The counter part of the prompt (12 §1): alpha when this draw shows it; c > 64 → state 5 after the draw (period 60).
@@ -249,12 +237,7 @@ fn prompt_alpha(c: i32) -> u8 {
 
 // Draws one string at once (outside the queue), in the caller's draw pass (like Ascii_DrawGaugePercent, 12 §2.9).
 pub fn draw_now(anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, t: Text) {
-    let high = t.high;
-    let mut q = Queue {
-        items: vec![t],
-        ..Queue::default()
-    };
-    q.draw(anm, rec, high);
+    emit_texts(anm, rec, std::slice::from_ref(&t));
 }
 
 // Small popups: slots 0–719 plus 3 special slots 720–722, life 60; large popups: 128 slots, life 90 (13 §4).
@@ -492,54 +475,54 @@ fn popup_glyph(anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm, idx: usize) -> b
     true
 }
 
-// Ascii_DrawPopups 0x405420 popup part (13 §4): small popups, the darkness mask (§4.1), then large ones, all Draw2DSnap in the playfield viewport.
-// `pl`: the effect manager's player-position mirror.
-fn popups_draw(
-    ov: &mut Overlays,
-    anm: &mut crate::anmmgr::AnmManager,
-    rng: &mut crate::rng::Rng,
+// Ascii_DrawPopups 0x405420 popup part (13 §4) emit: small popups, the darkness mask (§4.1), then large ones, all
+// Draw2DSnap in the playfield viewport. `pl`: the effect manager's player-position mirror; `off`: the shake offset
+// before the draw zeroes it. The glyph VMs are rebuilt per draw (locals of the original), so the emit owns them.
+fn popups_emit(
+    ov: &Overlays,
+    anm: &crate::anmmgr::AnmManager,
     rec: &mut Recorder,
     pl: [f32; 3],
+    off: [f32; 2],
 ) {
     rec.set_viewport(crate::drawlist::PLAYFIELD);
     let mut small = popup_vm(anm, 0, 0.1);
     let mut large = popup_vm(anm, 0x88, 0.0);
-    {
-        let p = &ov.popups;
-        for q in p.slots.iter().flatten() {
-            set_rgb(&mut small, q.colour);
-            small.color[anmvm::A] = popup_alpha(q.pos, pl);
-            // Digit glyph g → sprite g (age < 52), g + 11 (52–55), g + 21 (≥ 56).
-            let shift = if q.age.cur < 52 {
-                0
-            } else if q.age.cur < 56 {
-                11
-            } else {
-                21
-            };
-            // x starts at pos.x − 4·digits, advance 8, most significant (last stored) first.
-            let x0 = q.pos[0] - 4.0 * q.digits.len() as f32;
-            for (k, &g) in q.digits.iter().rev().enumerate() {
-                if popup_glyph(anm, &mut small, (g + shift) as usize) {
-                    small.pos[0] = x0 + 8.0 * k as f32;
-                    small.pos[1] = q.pos[1];
-                    anm.draw_mode(rec, &mut small, 0);
-                }
+    let draw = |rec: &mut Recorder, vm: &AnmVm| anm.emit_mode_z_at(rec, vm, 0, vm.pos[2], off);
+    let p = &ov.popups;
+    for q in p.slots.iter().flatten() {
+        set_rgb(&mut small, q.colour);
+        small.color[anmvm::A] = popup_alpha(q.pos, pl);
+        // Digit glyph g → sprite g (age < 52), g + 11 (52–55), g + 21 (≥ 56).
+        let shift = if q.age.cur < 52 {
+            0
+        } else if q.age.cur < 56 {
+            11
+        } else {
+            21
+        };
+        // x starts at pos.x − 4·digits, advance 8, most significant (last stored) first.
+        let x0 = q.pos[0] - 4.0 * q.digits.len() as f32;
+        for (k, &g) in q.digits.iter().rev().enumerate() {
+            if popup_glyph(anm, &mut small, (g + shift) as usize) {
+                small.pos[0] = x0 + 8.0 * k as f32;
+                small.pos[1] = q.pos[1];
+                draw(rec, &small);
             }
         }
-        darkness_draw(&mut ov.darkness, anm, rng, rec, pl);
-        for q in p.large.iter().flatten() {
-            set_rgb(&mut large, q.colour);
-            large.color[anmvm::A] = popup_alpha(q.pos, pl);
-            large.scale = [q.scale; 2];
-            // x0 = pos.x − count·3.5 (count = stored glyphs incl. '+', unscaled), advance 7·scale.x, sprite 0x88 + glyph.
-            let x0 = q.pos[0] - q.glyphs.len() as f32 * 3.5;
-            for (k, &g) in q.glyphs.iter().rev().enumerate() {
-                if popup_glyph(anm, &mut large, 0x88 + g as usize) {
-                    large.pos[0] = x0 + 7.0 * q.scale * k as f32;
-                    large.pos[1] = q.pos[1];
-                    anm.draw_mode(rec, &mut large, 0);
-                }
+    }
+    darkness_emit(&ov.darkness, anm, rec, pl, off);
+    for q in p.large.iter().flatten() {
+        set_rgb(&mut large, q.colour);
+        large.color[anmvm::A] = popup_alpha(q.pos, pl);
+        large.scale = [q.scale; 2];
+        // x0 = pos.x − count·3.5 (count = stored glyphs incl. '+', unscaled), advance 7·scale.x, sprite 0x88 + glyph.
+        let x0 = q.pos[0] - q.glyphs.len() as f32 * 3.5;
+        for (k, &g) in q.glyphs.iter().rev().enumerate() {
+            if popup_glyph(anm, &mut large, 0x88 + g as usize) {
+                large.pos[0] = x0 + 7.0 * q.scale * k as f32;
+                large.pos[1] = q.pos[1];
+                draw(rec, &large);
             }
         }
     }
@@ -592,28 +575,37 @@ fn darkness_rects(p: [f32; 2], r: f32, s: [f32; 2]) -> Vec<[f32; 4]> {
 
 // Drawn by Ascii_DrawPopups between the small and large popups while alpha > 0: Screen_FillRect rects (untextured,
 // z 0, ZFUNC unchanged), then etama.anm script 105 (sprite 229, 128×128) set every frame, scale r / 63, Draw2DSnap.
-fn darkness_draw(
+// Step: the script set (runs the VM, RNG) and the VM writes; no draw precedes them that reads state.
+fn darkness_step(
     d: &mut Darkness,
     anm: &mut crate::anmmgr::AnmManager,
     rng: &mut crate::rng::Rng,
-    rec: &mut Recorder,
     player: [f32; 3],
 ) {
-    {
-        if d.alpha <= 0 {
-            return;
-        }
-        let a = d.alpha as u8;
-        for [x0, y0, x1, y1] in darkness_rects([player[0], player[1]], d.radius, anm.screen_offset)
-        {
-            rec.rect(x0, y0, x1 - x0, y1 - y0, [0, 0, 0, a]);
-        }
-        anm.file_set_script(rng, &mut d.vm, crate::effect::SCRIPT_SLOT, 105);
-        d.vm.scale = [d.radius / 63.0; 2];
-        d.vm.pos = [player[0] + 32.0, player[1] + 16.0, player[2]];
-        d.vm.color[anmvm::A] = a;
-        anm.draw_mode(rec, &mut d.vm, 0);
+    if d.alpha <= 0 {
+        return;
     }
+    anm.file_set_script(rng, &mut d.vm, crate::effect::SCRIPT_SLOT, 105);
+    d.vm.scale = [d.radius / 63.0; 2];
+    d.vm.pos = [player[0] + 32.0, player[1] + 16.0, player[2]];
+    d.vm.color[anmvm::A] = d.alpha as u8;
+}
+
+fn darkness_emit(
+    d: &Darkness,
+    anm: &crate::anmmgr::AnmManager,
+    rec: &mut Recorder,
+    player: [f32; 3],
+    off: [f32; 2],
+) {
+    if d.alpha <= 0 {
+        return;
+    }
+    let a = d.alpha as u8;
+    for [x0, y0, x1, y1] in darkness_rects([player[0], player[1]], d.radius, off) {
+        rec.rect(x0, y0, x1 - x0, y1 - y0, [0, 0, 0, a]);
+    }
+    anm.emit_mode_z_at(rec, &d.vm, 0, d.vm.pos[2], off);
 }
 
 // Human/youkai gauge readout VMs (12 §5.9): bar, 人, 妖, marker, glyph stamp.
@@ -760,111 +752,151 @@ impl Overlays {
 }
 
 // Tail of Ascii_DrawStrings (prio 20, full-screen viewport, 12 §5.10); the colour is rewritten every frame.
-fn markers_draw(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager, rec: &mut Recorder) {
-    {
-        let px = g
-            .player
-            .upgrade()
-            .and_then(|p| p.try_borrow().ok().map(|p| p.pos[0]));
-        let px = px.unwrap_or(0.0);
-        let frame = g.frame;
-        rec.set_viewport(FULLSCREEN);
-        for k in 0..g.markers.len() {
-            let m = &mut g.markers[k];
-            if !(56.0..=392.0).contains(&m.pos[0]) {
-                continue;
-            }
-            let d = (m.pos[0] - 32.0 - px).abs();
-            // Set directly, without SetSprite (both plates are 48×16).
-            m.sprite_index = MARKER_SPRITE;
-            let plain = 0xFFFFFF | (if d < 64.0 { (d + 96.0) as u32 } else { 160 }) << 24;
-            let argb = match g.marker_mode[k] {
-                1 => 0x80FF4040,
-                n @ 2..=4 if frame % (32 >> n) == 0 => {
-                    m.sprite_index = MARKER_BLINK_SPRITE;
-                    0xFFFFFFFF
-                }
-                _ => plain,
-            };
-            set_rgb(m, argb);
-            m.color[anmvm::A] = (argb >> 24) as u8;
-            anm.draw_mode(rec, m, 0);
+// Step: sprite and colour of every marker in range (persistent VM writes).
+fn markers_step(g: &mut Gauge) {
+    let px = g
+        .player
+        .upgrade()
+        .and_then(|p| p.try_borrow().ok().map(|p| p.pos[0]));
+    let px = px.unwrap_or(0.0);
+    let frame = g.frame;
+    for k in 0..g.markers.len() {
+        let m = &mut g.markers[k];
+        if !marker_shown(m) {
+            continue;
         }
+        let d = (m.pos[0] - 32.0 - px).abs();
+        // Set directly, without SetSprite (both plates are 48×16).
+        m.sprite_index = MARKER_SPRITE;
+        let plain = 0xFFFFFF | (if d < 64.0 { (d + 96.0) as u32 } else { 160 }) << 24;
+        let argb = match g.marker_mode[k] {
+            1 => 0x80FF4040,
+            n @ 2..=4 if frame % (32 >> n) == 0 => {
+                m.sprite_index = MARKER_BLINK_SPRITE;
+                0xFFFFFFFF
+            }
+            _ => plain,
+        };
+        set_rgb(m, argb);
+        m.color[anmvm::A] = (argb >> 24) as u8;
+    }
+}
+
+fn marker_shown(m: &AnmVm) -> bool {
+    (56.0..=392.0).contains(&m.pos[0])
+}
+
+fn markers_emit(g: &Gauge, anm: &crate::anmmgr::AnmManager, rec: &mut Recorder) {
+    rec.set_viewport(FULLSCREEN);
+    for m in g.markers.iter().filter(|m| marker_shown(m)) {
+        anm.emit_mode(rec, m, 0);
     }
 }
 
 // End of Ascii_DrawPopups 0x405420 (draw prio 14): bar, ends, marker, percent text and max point value.
 // Nothing is drawn unless G0 is visible; g = gauge stats+0x22 (12 §5.9 draw steps 1–4).
-fn gauge_draw(
+// What the emit needs from the step: gauge value, percent position, zone colour, max point stamps (glyph, x, y).
+struct GaugeDraw {
+    gv: i32,
+    at: [f32; 2],
+    colour: [u8; 4],
+    stamps: Vec<(i32, f32, f32)>,
+}
+
+// Step: G3 x, G0 colour, and G4's sprite / pos / scale / colour as the last glyph left them.
+fn gauge_step(
     g: &mut Gauge,
-    anm: &mut crate::anmmgr::AnmManager,
-    rec: &mut Recorder,
+    anm: &crate::anmmgr::AnmManager,
     fallback: &crate::player::Stats,
-) {
-    {
-        if g.vms.len() < 5 || !g.vms[G_BAR].visible() {
-            return;
-        }
-        let player = g.player.upgrade();
-        let borrowed = player.as_ref().and_then(|p| p.try_borrow().ok());
-        let st = borrowed.as_ref().map_or(fallback, |p| &p.stats);
-        let gv = st.gauge as i32;
-        let (bx, by) = (g.vms[G_BAR].pos[0], g.vms[G_BAR].pos[1]);
-        let m = &mut g.vms[G_MARKER];
-        m.pos[0] = bx + 64.0 + gv as f32 * 56.0 / 10000.0;
-        // Marker G3 with Draw2DRotNoSnap (12 §5.9 step 1).
-        anm.draw_mode(rec, m, 3);
-        let rgb: u32 = if st.human_max() {
-            0x7070FF
-        } else if st.human() {
-            0xB0B0FF
-        } else if st.youkai_max() {
-            0xFF7070
-        } else if st.youkai() {
-            0xFFB0B0
-        } else {
-            0xFFFFFF
-        };
-        // The zone colour becomes G0's colour (alpha kept) and G4's colour (12 §5.9 step 2).
-        set_rgb(&mut g.vms[G_BAR], rgb);
-        let colour = g.vms[G_BAR].color;
-        for k in [G_BAR, G_HUMAN, G_YOUKAI] {
-            anm.draw_mode(rec, &mut g.vms[k], 0);
-        }
-        let my = g.vms[G_MARKER].pos[1];
-        let vm = &mut g.vms[G_GLYPH];
-        draw_percent(
-            anm,
-            rec,
-            vm,
-            gv,
-            bx + 64.0 + gv as f32 * 40.0 / 10000.0,
-            my - 7.0,
-            0.0,
-            colour,
-        );
-        vm.color = colour;
-        let mut stamp =
-            |anm: &mut crate::anmmgr::AnmManager, glyph: i32, x: f32, y: f32, scale: f32| {
-                vm.set_sprite(anm, 136 + glyph);
-                vm.pos = [x, y, 0.0];
-                vm.scale = [scale, scale];
-                anm.draw_mode(rec, vm, 0);
-            };
-        // Max point value stats+0x24 (12 §5.9 step 4): a digit is drawn once the running digit sum is ≠ 0.
-        let (mut x, y) = (bx + 62.0 - 14.0, by + 3.0 + 8.0);
-        let (mut div, mut sum) = (10_000_000, 0);
-        while div > 0 {
-            let d = st.max_point / div % 10;
-            sum += d;
-            if sum != 0 {
-                stamp(anm, d, x, y, 1.0);
-                x += 7.0;
-            }
-            div /= 10;
-        }
-        vm.scale = [1.0, 1.0];
+) -> Option<GaugeDraw> {
+    if g.vms.len() < 5 || !g.vms[G_BAR].visible() {
+        return None;
     }
+    let player = g.player.upgrade();
+    let borrowed = player.as_ref().and_then(|p| p.try_borrow().ok());
+    let st = borrowed.as_ref().map_or(fallback, |p| &p.stats);
+    let gv = st.gauge as i32;
+    let (bx, by) = (g.vms[G_BAR].pos[0], g.vms[G_BAR].pos[1]);
+    g.vms[G_MARKER].pos[0] = bx + 64.0 + gv as f32 * 56.0 / 10000.0;
+    let rgb: u32 = if st.human_max() {
+        0x7070FF
+    } else if st.human() {
+        0xB0B0FF
+    } else if st.youkai_max() {
+        0xFF7070
+    } else if st.youkai() {
+        0xFFB0B0
+    } else {
+        0xFFFFFF
+    };
+    // The zone colour becomes G0's colour (alpha kept) and G4's colour (12 §5.9 step 2).
+    set_rgb(&mut g.vms[G_BAR], rgb);
+    let colour = g.vms[G_BAR].color;
+    let at = [
+        bx + 64.0 + gv as f32 * 40.0 / 10000.0,
+        g.vms[G_MARKER].pos[1] - 7.0,
+    ];
+    // Max point value stats+0x24 (12 §5.9 step 4): a digit is drawn once the running digit sum is ≠ 0.
+    let mut stamps = Vec::new();
+    let (mut x, y) = (bx + 62.0 - 14.0, by + 3.0 + 8.0);
+    let (mut div, mut sum) = (10_000_000, 0);
+    while div > 0 {
+        let d = st.max_point / div % 10;
+        sum += d;
+        if sum != 0 {
+            stamps.push((d, x, y));
+            x += 7.0;
+        }
+        div /= 10;
+    }
+    let draw = GaugeDraw {
+        gv,
+        at,
+        colour,
+        stamps,
+    };
+    gauge_glyphs(anm, &mut g.vms[G_GLYPH], &draw, None);
+    Some(draw)
+}
+
+// G4's glyph sequence: percent text, then the stamps; with `rec` each glyph is also emitted (from a copy in the emit).
+fn gauge_glyphs(
+    anm: &crate::anmmgr::AnmManager,
+    vm: &mut AnmVm,
+    d: &GaugeDraw,
+    mut rec: Option<&mut Recorder>,
+) {
+    percent_glyphs(
+        anm,
+        rec.as_deref_mut(),
+        vm,
+        d.gv,
+        d.at[0],
+        d.at[1],
+        0.0,
+        d.colour,
+    );
+    vm.color = d.colour;
+    for &(glyph, x, y) in &d.stamps {
+        vm.set_sprite(anm, 136 + glyph);
+        vm.pos = [x, y, 0.0];
+        vm.scale = [1.0, 1.0];
+        if let Some(rec) = rec.as_deref_mut() {
+            anm.emit_mode(rec, vm, 0);
+        }
+    }
+    vm.scale = [1.0, 1.0];
+}
+
+// Marker G3 (Draw2DRotNoSnap, 12 §5.9 step 1), G0–G2, then the G4 glyphs.
+fn gauge_emit(g: &Gauge, anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, d: &GaugeDraw) {
+    anm.emit_mode(rec, &g.vms[G_MARKER], 3);
+    for k in [G_BAR, G_HUMAN, G_YOUKAI] {
+        anm.emit_mode(rec, &g.vms[k], 0);
+    }
+    // Every glyph rewrites sprite, pos and scale, and the colour is fixed: replaying on a copy draws the same quads.
+    let mut vm = g.vms[G_GLYPH].clone();
+    gauge_glyphs(anm, &mut vm, d, Some(rec));
 }
 
 // Ascii_DrawGaugePercent 0x405E10 (12 §5.9): "%d.%02d%%" of value/100 with glyph VM sprites 136 + (0–9, 10 '%',
@@ -873,6 +905,21 @@ fn gauge_draw(
 pub fn draw_percent(
     anm: &mut crate::anmmgr::AnmManager,
     rec: &mut Recorder,
+    vm: &mut AnmVm,
+    value: i32,
+    cx: f32,
+    cy: f32,
+    z: f32,
+    colour: [u8; 4],
+) {
+    percent_glyphs(anm, Some(rec), vm, value, cx, cy, z, colour);
+}
+
+// The VM writes of `draw_percent` (draw-phase step); with `rec` each glyph is emitted right after its writes.
+#[allow(clippy::too_many_arguments)]
+pub fn percent_glyphs(
+    anm: &crate::anmmgr::AnmManager,
+    mut rec: Option<&mut Recorder>,
     vm: &mut AnmVm,
     value: i32,
     cx: f32,
@@ -913,7 +960,9 @@ pub fn draw_percent(
         vm.set_sprite(anm, 136 + glyph);
         vm.pos = [x, yy, z];
         vm.scale = [sc, sc];
-        anm.draw_mode(rec, vm, 0);
+        if let Some(rec) = rec.as_deref_mut() {
+            anm.emit_mode(rec, vm, 0);
+        }
         x += adv;
     }
     vm.scale = [1.0, 1.0];
@@ -1436,6 +1485,11 @@ impl ContinueMenu {
 pub struct AsciiManager {
     pause: PauseMenu,
     cont: ContinueMenu,
+    // Draw-phase results the emit reads: shake offset before the prio-14 zeroing, gauge readout, the drained strings
+    // per pass (0 = prio 14, 1 = prio 20).
+    popup_off: [f32; 2],
+    gauge: Option<GaugeDraw>,
+    texts: [Vec<Text>; 2],
 }
 
 impl AsciiManager {
@@ -1508,62 +1562,72 @@ impl Task<Ctx> for AsciiManager {
         Ret::Next
     }
 
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    // Step (prio 14): darkness VM (script set, RNG), shake offset := 0 (12 §5.9 draw), gauge VM writes, low strings
+    // drained; (prio 20): high strings drained, marker sprite / colour. Pause and continue draws write nothing.
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        let high = tag == 1;
+        if !high {
+            let pl = ctx.effects.player;
+            darkness_step(&mut ctx.overlays.darkness, &mut ctx.anm, &mut ctx.rng, pl);
+            self.popup_off = ctx.anm.screen_offset;
+            // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
+            ctx.anm.screen_offset = [0.0; 2];
+            self.gauge = gauge_step(&mut ctx.overlays.gauge, &ctx.anm, &ctx.game.stats);
+        }
+        self.texts[high as usize] = ctx.ascii.take(Some(high));
+        if high {
+            markers_step(&mut ctx.overlays.gauge);
+        }
+        Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
         let high = tag == 1;
         // Pause draw 0x404750 (12 §3): playfield viewport; the capture VM (temporary copy, z-write off) while
         // the state ≠ 0; then menu VMs 0..9, all Draw2DSnap.
         if high && ctx.game.paused != 0 {
-            ctx.rec.set_viewport(crate::drawlist::PLAYFIELD);
+            rec.set_viewport(crate::drawlist::PLAYFIELD);
             if self.pause.state != 0 && self.pause.cap_vm.script.is_some() {
                 let mut v = self.pause.cap_vm.clone();
                 v.flags |= anmvm::F_ZWRITE_OFF;
-                ctx.anm.draw_mode(&mut ctx.rec, &mut v, 0);
+                ctx.anm.emit_mode(rec, &v, 0);
             }
             // The selected item's (−4, −4) goes to the undrawn pos_offset: no visible shift (12 §3).
-            for vm in &mut self.pause.vms {
-                ctx.anm.draw_mode(&mut ctx.rec, vm, 0);
+            for vm in &self.pause.vms {
+                ctx.anm.emit_mode(rec, vm, 0);
             }
         }
         // ContinueMenu_Draw 0x4052B0 (12 §4): playfield viewport, capture VM, then VMs 0..3 (clock VM 3 only in a
         // normal game below Extra), all Draw2DSnap. The port's menu is past state 0 after its first calc.
         if high && ctx.game.game_over != 0 && self.cont.open {
-            ctx.rec.set_viewport(crate::drawlist::PLAYFIELD);
+            rec.set_viewport(crate::drawlist::PLAYFIELD);
             let g = &ctx.game;
             let clock = g.difficulty < 4 && !g.spell_practice();
-            let c = &mut self.cont;
-            for vm in [&mut c.cap_vm]
+            let c = &self.cont;
+            for vm in [&c.cap_vm]
                 .into_iter()
-                .chain(c.vms.iter_mut())
-                .chain(clock.then_some(&mut c.clock_vm))
+                .chain(c.vms.iter())
+                .chain(clock.then_some(&c.clock_vm))
             {
-                ctx.anm.draw_mode(&mut ctx.rec, vm, 0);
+                ctx.anm.emit_mode(rec, vm, 0);
             }
         }
         if !high {
-            popups_draw(
-                &mut ctx.overlays,
-                &mut ctx.anm,
-                &mut ctx.rng,
-                &mut ctx.rec,
+            popups_emit(
+                &ctx.overlays,
+                &ctx.anm,
+                rec,
                 ctx.effects.player,
+                self.popup_off,
             );
-            // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
-            ctx.anm.screen_offset = [0.0; 2];
-            gauge_draw(
-                &mut ctx.overlays.gauge,
-                &mut ctx.anm,
-                &mut ctx.rec,
-                &ctx.game.stats,
-            );
+            if let Some(d) = &self.gauge {
+                gauge_emit(&ctx.overlays.gauge, &ctx.anm, rec, d);
+            }
         }
-        let mut q = std::mem::take(&mut ctx.ascii);
-        q.draw(&ctx.anm, &mut ctx.rec, high);
-        ctx.ascii = q;
+        emit_texts(&ctx.anm, rec, &self.texts[high as usize]);
         if high {
-            markers_draw(&mut ctx.overlays.gauge, &mut ctx.anm, &mut ctx.rec);
+            markers_emit(&ctx.overlays.gauge, &ctx.anm, rec);
         }
-        Ret::Next
     }
 }
 

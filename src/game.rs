@@ -495,7 +495,7 @@ impl Ctx {
     }
 
     // Emit off: the draw chain runs only the draw-phase steps (rollback re-sim, `session --no-emit`); logic is
-    // unchanged. Draws outside the chain and unconverted steps are dropped by the recorder's mute.
+    // unchanged. Draws outside the chain are dropped by the recorder's mute.
     pub fn set_emit(&mut self, on: bool) {
         self.emit = on;
         self.rec.mute = !on;

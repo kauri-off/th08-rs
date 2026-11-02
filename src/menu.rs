@@ -3,7 +3,7 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::config::Config;
-use crate::drawlist::{FULLSCREEN, TexId, TextCmd};
+use crate::drawlist::{FULLSCREEN, Recorder, TexId, TextCmd};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
@@ -1390,50 +1390,84 @@ impl Task<Ctx> for MainMenu {
 
     // Menu draw 0x47087F (12 §2.2): surface 0 on its own earlier node (SURFACE_PRIO), VMs 0–141 in order, the
     // description VM, then the per-screen text and the final-route notice.
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    // Step: VM draw state (`prepare`), per-screen ASCII pushes / scratch VM positions / pie easing, the notice VM.
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        if ctx.game.menu_loading > 0 || self.vms.is_empty() {
-            return Ret::Next;
-        }
-        ctx.rec.set_viewport(FULLSCREEN);
-        if tag == SURFACE_PRIO as u8 {
-            if let Some((t, _)) = self.surface {
-                ctx.rec.image(t, 0.0, 0.0);
-            }
+        if !self.drawn(ctx) || tag == SURFACE_PRIO as u8 {
             return Ret::Next;
         }
         for vm in &mut self.vms {
-            ctx.anm.draw(&mut ctx.rec, vm);
+            let mode = vm.draw_mode;
+            ctx.anm.prepare(vm, mode);
         }
         // The current description VM (text.anm script 9 at (320, 448)) on every screen while +0xC2BC ≠ 0 (12 §2.2).
         if let Some(i) = self.desc_cur {
-            ctx.anm.draw(&mut ctx.rec, &mut self.desc[i]);
+            let vm = &mut self.desc[i];
+            let mode = vm.draw_mode;
+            ctx.anm.prepare(vm, mode);
         }
         match self.screen {
-            PRACTICE_STAGE => self.practice_stage_draw(ctx),
-            REPLAY => self.replay_draw(ctx),
-            SPELL_PRACTICE => self.spell_char_draw(ctx),
-            SPELL_CARD => self.spell_card_draw(ctx),
+            PRACTICE_STAGE => self.practice_stage_draw_step(ctx),
+            REPLAY => self.replay_draw_step(ctx),
+            SPELL_PRACTICE => self.spell_char_draw_step(ctx),
+            SPELL_CARD => self.spell_card_draw_step(ctx),
             _ => {}
         }
         // Final-route notice: screen 5 only, frame counter > 8, scratch VM at (400, 170) top-left, Draw2DSnap (12 §2.4).
-        if self.screen == CHAR
-            && self.frames > 8
-            && let Some(spr) = final_notice(
-                &ctx.game,
-                self.cursor as usize,
-                ctx.game.cfg.difficulty as usize,
-            )
-        {
+        if let Some(spr) = self.notice_sprite(ctx) {
             let vm = &mut self.notice;
             vm.init();
             vm.anm_slot = ANM_SLOT as _;
             vm.set_sprite(&ctx.anm, spr);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
             vm.pos = [400.0, 170.0, 0.0];
-            ctx.anm.draw_mode(&mut ctx.rec, vm, 0);
         }
         Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        if !self.drawn(ctx) {
+            return;
+        }
+        rec.set_viewport(FULLSCREEN);
+        if tag == SURFACE_PRIO as u8 {
+            if let Some((t, _)) = self.surface {
+                rec.image(t, 0.0, 0.0);
+            }
+            return;
+        }
+        for vm in &self.vms {
+            ctx.anm.emit(rec, vm);
+        }
+        if let Some(i) = self.desc_cur {
+            ctx.anm.emit(rec, &self.desc[i]);
+        }
+        match self.screen {
+            REPLAY => self.replay_emit(ctx, rec),
+            SPELL_PRACTICE => self.spell_char_emit(ctx, rec),
+            SPELL_CARD => self.spell_card_emit(ctx, rec),
+            _ => {}
+        }
+        if self.notice_sprite(ctx).is_some() {
+            ctx.anm.emit_mode(rec, &self.notice, 0);
+        }
+    }
+}
+
+impl MainMenu {
+    // The draw runs only once loading is done and the VMs exist (12 §2.2).
+    fn drawn(&self, ctx: &Ctx) -> bool {
+        ctx.game.menu_loading == 0 && !self.vms.is_empty()
+    }
+
+    fn notice_sprite(&self, ctx: &Ctx) -> Option<i32> {
+        if self.screen != CHAR || self.frames <= 8 {
+            return None;
+        }
+        final_notice(
+            &ctx.game,
+            self.cursor as usize,
+            ctx.game.cfg.difficulty as usize,
+        )
     }
 }
 

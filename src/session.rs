@@ -352,6 +352,19 @@ impl std::fmt::Display for Comparison {
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::*;
 
+// "YYYY-MM-DDTHH:MM:SS[+zone]" (meta.txt `recorded:`): the recorder's local wall-clock fields.
+fn parse_local_time(s: &str) -> Option<crate::host::LocalTime> {
+    let n = |r: std::ops::Range<usize>| s.get(r)?.parse().ok();
+    Some(crate::host::LocalTime {
+        year: n(0..4)? as i32,
+        month: n(5..7)?,
+        day: n(8..10)?,
+        hour: n(11..13)?,
+        minute: n(14..16)?,
+        second: n(17..19)?,
+    })
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
@@ -363,6 +376,8 @@ mod native {
         pub seed: u32,
         pub sched: Sched,
         pub noclip: bool,
+        // meta.txt `recorded:` local date and time, the session's `localtime` answer (replay / score dates).
+        pub recorded_at: Option<crate::host::LocalTime>,
     }
 
     impl Session {
@@ -378,14 +393,19 @@ mod native {
                         .ok_or_else(|| anyhow::anyhow!("bad input.txt"))?
                 }
             };
-            let noclip = std::fs::read_to_string(dir.join("meta.txt"))
-                .is_ok_and(|m| m.lines().any(|l| l.trim() == "noclip: 1"));
+            let meta = std::fs::read_to_string(dir.join("meta.txt")).unwrap_or_default();
+            let noclip = meta.lines().any(|l| l.trim() == "noclip: 1");
+            let recorded_at = meta
+                .lines()
+                .find_map(|l| l.strip_prefix("recorded:"))
+                .and_then(|v| parse_local_time(v.trim()));
             Ok(Self {
                 dir: dir.to_path_buf(),
                 input,
                 seed,
                 sched,
                 noclip,
+                recorded_at,
             })
         }
 
@@ -429,6 +449,7 @@ mod native {
             let host = crate::platform::tool_host(ctx);
             host.storage.set_save_dir(Some(save));
             host.polls = Some(self.input.as_slice().into());
+            host.fixed_time = self.recorded_at;
             ctx.rng = crate::rng::Rng::seeded(self.seed as u16);
             ctx.overlays.set_frame_counter(self.sched.ascii_offset);
             ctx.game.sched = Some(self.sched.clone());
@@ -586,6 +607,18 @@ mod tests {
         ("golden", 25634),
         ("fullrun_noclip", 124707),
     ];
+
+    // meta.txt `recorded:` → the session's fixed `localtime` (dated replay saves draw the same any day).
+    #[test]
+    fn recorded_local_time() {
+        let t = parse_local_time("2026-10-19T19:32:53+03:00").unwrap();
+        assert_eq!(
+            (t.date_md(), t.datetime()),
+            ("10/19".into(), "2026/10/19 19:32:53".into())
+        );
+        let s = Session::load(&data_dir("gameover_save")).unwrap();
+        assert_eq!(s.recorded_at, Some(t));
+    }
 
     #[test]
     fn events() {

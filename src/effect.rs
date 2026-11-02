@@ -806,9 +806,35 @@ impl Effects {
         }
     }
 
+    // List D under BulletMgr_Draw's frozen tint (06 §10.2), already off at emit time: `tint` maps each sprite VM
+    // copy; rings ignore the global tint anyway (13 §2.5).
+    pub fn emit_over_bullets_with(
+        &self,
+        tint: impl Fn(&AnmVm) -> AnmVm,
+        anm: &AnmManager,
+        rec: &mut Recorder,
+    ) {
+        for &i in &self.lists[3] {
+            let e = &self.fx[i];
+            if is_ring(e.kind) {
+                draw_ring(anm, rec, e);
+                continue;
+            }
+            let mut vm = tint(&e.vm);
+            vm.pos = [
+                e.pos[0] + 32.0 + e.vm.pos_offset[0],
+                e.pos[1] + 16.0 + e.vm.pos_offset[1],
+                0.0,
+            ];
+            vm.pos_offset = [0.0; 3];
+            anm.emit_mode_z(rec, &vm, 2, 0.04);
+        }
+    }
+
     // List B from Stage_DrawHigh (13 §2.4, §2.6c): only effect level 2 draws; no fog. Layer 4 at raw coordinates.
     // Layer 3 / ≥ 5 would be a 3D quad, unreachable (13 §2.4: no writer sets them); the port billboards them.
-    pub fn draw_background(&mut self, anm: &mut AnmManager, rec: &mut Recorder, level: u8) {
+    // Draw-phase step: the projections and the pull / push `disp` updates; `out` gets the draws in order.
+    pub fn background_step(&mut self, anm: &AnmManager, level: u8, out: &mut Vec<BgDraw>) {
         if level < 2 {
             return;
         }
@@ -819,11 +845,7 @@ impl Effects {
         for k in 0..self.lists[1].len() {
             let i = self.lists[1][k];
             if self.fx[i].layer == 4 {
-                let e = &mut self.fx[i];
-                let saved = e.vm.pos;
-                e.vm.pos = e.pos;
-                anm.draw_mode_z(rec, &mut e.vm, 2, 0.0);
-                e.vm.pos = saved;
+                out.push(BgDraw::Flat(i));
                 continue;
             }
             let e = &mut self.fx[i];
@@ -862,9 +884,30 @@ impl Effects {
                 s[0] += e.disp[0];
                 s[1] += e.disp[1];
             }
-            anm.draw_billboard(rec, &mut e.vm, s, len);
+            out.push(BgDraw::Billboard { i, s, len });
         }
     }
+
+    // Emit of one list-B draw. Layer 4: the original sets VM pos := effect pos around the draw; a copy here.
+    pub fn emit_background(&self, anm: &AnmManager, rec: &mut Recorder, d: &BgDraw) {
+        match *d {
+            BgDraw::Flat(i) => {
+                let e = &self.fx[i];
+                let mut vm = e.vm.clone();
+                vm.pos = e.pos;
+                anm.emit_mode_z(rec, &vm, 2, 0.0);
+            }
+            BgDraw::Billboard { i, s, len } => anm.draw_billboard(rec, &self.fx[i].vm, s, len),
+        }
+    }
+}
+
+// One list-B background draw recorded by `background_step` (13 §2.4): layer 4 flat, or a billboard at the projected
+// (and pulled / pushed) screen point `s` with the 3D right length `len`.
+#[derive(Clone, Copy, Debug)]
+pub enum BgDraw {
+    Flat(usize),
+    Billboard { i: usize, s: [f32; 3], len: f32 },
 }
 
 // Stage 6B ring draw from `Stage_DrawLow` step 4 (06 §5.1): calls the slot's draw fn through the stored pointer,

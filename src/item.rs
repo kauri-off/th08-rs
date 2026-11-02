@@ -1,6 +1,6 @@
 //! Item manager 0x1653648: spawn, per-frame calc, collection, draw (08 §8).
 
-use crate::anmmgr::AnmManager;
+use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::ANM_SLOT;
 use crate::drawlist::Recorder;
@@ -540,8 +540,8 @@ impl ItemManager {
         }
     }
 
-    // Item draw (08 §8.6), in list order.
-    pub fn draw(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
+    // Item draw (08 §8.6), draw-phase step: sprite / colour / pos and the `shown` latch, in list order.
+    pub fn draw_step(&mut self, anm: &AnmManager) {
         for k in 0..self.order.len() {
             let it = &mut self.items[self.order[k] as usize];
             if !it.alive {
@@ -568,8 +568,17 @@ impl ItemManager {
                 }
                 it.vm.pos = [it.pos[0] + 32.0, y + 16.0, 0.0];
             }
-            // Draw2DRot at z 0.15 (08 §8.6).
-            anm.draw_mode_z(rec, &mut it.vm, 2, 0.15);
+            anm.prepare(&mut it.vm, 2);
+        }
+    }
+
+    // Item draw emit: Draw2DRot at z 0.15 (08 §8.6), in list order.
+    pub fn emit(&self, anm: &AnmManager, rec: &mut Recorder, tint: Option<Tint>) {
+        for &i in &self.order {
+            let it = &self.items[i as usize];
+            if it.alive {
+                anm.emit_tinted(rec, &it.vm, 2, 0.15, tint);
+            }
         }
     }
 }

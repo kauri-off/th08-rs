@@ -394,7 +394,7 @@ pub struct Recorder {
     pub table: ResTable,
     pub anm: AnmCache,
     // Emit off (`Ctx::set_emit`): draw / state commands are dropped, mirrors still update; resource commands kept.
-    // TODO(step 8 split): only needed while unconverted draw steps still record.
+    // Also covers draws outside the draw chain (in-calc loading presents).
     pub mute: bool,
 }
 

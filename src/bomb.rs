@@ -845,11 +845,10 @@ impl Player {
         }
     }
 
-    // Draws active objects 0..n at pos + offset + playfield origin, z 0, optional rotation z.
-    fn draw_objs(
+    // Active objects 0..n at pos + offset + playfield origin, z 0, optional rotation z. Step: rotation / pos writes.
+    fn step_objs(
         &mut self,
-        anm: &mut AnmManager,
-        rec: &mut Recorder,
+        anm: &AnmManager,
         n: usize,
         mode: i32,
         rot: impl Fn(&BombObj) -> Option<f32>,
@@ -866,7 +865,13 @@ impl Player {
                 o.pos[1] + o.offset[1] + ORIGIN[1],
                 0.0,
             ];
-            anm.draw_mode_z(rec, &mut o.vm, mode, 0.0);
+            anm.prepare(&mut o.vm, mode);
+        }
+    }
+
+    fn emit_objs(&self, anm: &AnmManager, rec: &mut Recorder, n: usize, mode: i32) {
+        for o in self.bomb.objs[..n].iter().filter(|o| o.state != 0) {
+            anm.emit_mode_z(rec, &o.vm, mode, 0.0);
         }
     }
 
@@ -1521,9 +1526,9 @@ impl Player {
         );
     }
 
-    // Bomb draw functions (table 0x4C7AD0 fns 5–9), called from the player draw (prio 9, 14 §5).
-    // Quirk kept: Sakuya LS draws only knives 0–95 (96–127 are invisible but damage).
-    pub fn draw_bomb(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
+    // Bomb draw functions (table 0x4C7AD0 fns 5–9), called from the player draw (prio 9, 14 §5). Step: tint requests
+    // (14 §1.3) and VM writes; every tint call precedes the draws of its branch, so the emit sees the same tint.
+    pub fn step_bomb(&mut self, anm: &mut AnmManager) {
         if !self.bombing {
             return;
         }
@@ -1543,19 +1548,19 @@ impl Player {
         match self.bomb.ch {
             0 => {
                 self.tint(anm, if ls { 0x802020D0 } else { 0x80404040 });
-                self.draw_objs(anm, rec, if ls { OBJS } else { 16 }, 0, |_| None);
+                self.step_objs(anm, if ls { OBJS } else { 16 }, 0, |_| None);
             }
             1 => {
                 self.tint(anm, if ls { 0x802020D0 } else { 0x80404040 });
                 if ls {
                     let o = self.bomb.objs[0].pos;
-                    for (vm, z) in self.bomb.vms[..2].iter_mut().zip([0.01, 0.0]) {
+                    for vm in &mut self.bomb.vms[..2] {
                         vm.pos = [
                             o[0] + ORIGIN[0] + vm.pos_offset[0],
                             o[1] + ORIGIN[1] + vm.pos_offset[1],
                             0.0,
                         ];
-                        anm.draw_mode_z(rec, vm, 2, z);
+                        anm.prepare(vm, 2);
                     }
                 }
             }
@@ -1569,7 +1574,7 @@ impl Player {
                         vm.rotation[2] = a;
                         vm.flags |= anmvm::F_ROT_DIRTY;
                     }
-                    anm.draw_mode_z(rec, vm, 2, 0.0);
+                    anm.prepare(vm, 2);
                 }
             }
             3 if !ls => self.tint(anm, 0x80404040),
@@ -1580,14 +1585,11 @@ impl Player {
                     let c = ((t - 90) * 208 / 30) as u32;
                     let r = (c / 5).wrapping_sub(48) & 0xFF;
                     self.tint(anm, 0x8000_0000 | r << 16 | (c + 32) << 8 | (c + 32));
-                    Self::playfield_rect(rec, 0xFFFFFF, (t - 90) * 255 / 30);
-                } else {
-                    Self::playfield_rect(rec, 0xFFFFFF, 0x70);
                 }
             }
             4 => {
                 self.tint(anm, if ls { 0x80202080 } else { 0x80404040 });
-                self.draw_objs(anm, rec, 96, 2, |o| Some(o.angle));
+                self.step_objs(anm, 96, 2, |o| Some(o.angle));
             }
             5 => self.tint(anm, if ls { 0x80F00000 } else { 0x80D02020 }),
             6 => {
@@ -1596,22 +1598,51 @@ impl Player {
                 if t >= 70 {
                     self.tint(anm, 0x80000030);
                 }
-                if (70..160).contains(&t) {
-                    let a = if t <= 100 {
-                        255
-                    } else {
-                        255 - (t - 100) * 255 / 60
-                    };
-                    Self::playfield_rect(rec, if ls { 0xFF0000 } else { 0xFFFFFF }, a);
-                }
             }
             _ => {
                 self.tint(anm, if ls { 0x80802020 } else { 0x80404040 });
                 let n = if ls { OBJS } else { 96 };
-                self.draw_objs(anm, rec, n, 2, |o| {
+                self.step_objs(anm, n, 2, |o| {
                     Some(crate::fmath::atan2_f(o.disp[1], o.disp[0]))
                 });
             }
+        }
+    }
+
+    // Emit of `step_bomb`. Quirk kept: Sakuya LS draws only knives 0–95 (96–127 are invisible but damage).
+    pub fn emit_bomb(&self, anm: &AnmManager, rec: &mut Recorder) {
+        if !self.bombing || self.bomb.index == 4 {
+            return;
+        }
+        let t = self.bomb.timer.cur;
+        let ls = self.bomb.index & 2 != 0;
+        match self.bomb.ch {
+            0 => self.emit_objs(anm, rec, if ls { OBJS } else { 16 }, 0),
+            1 if ls => {
+                for (vm, z) in self.bomb.vms[..2].iter().zip([0.01, 0.0]) {
+                    anm.emit_mode_z(rec, vm, 2, z);
+                }
+            }
+            2 => self
+                .bomb
+                .vms
+                .iter()
+                .for_each(|vm| anm.emit_mode_z(rec, vm, 2, 0.0)),
+            3 if ls && (90..=120).contains(&t) => {
+                Self::playfield_rect(rec, 0xFFFFFF, (t - 90) * 255 / 30)
+            }
+            3 if ls && (121..=220).contains(&t) => Self::playfield_rect(rec, 0xFFFFFF, 0x70),
+            4 => self.emit_objs(anm, rec, 96, 2),
+            6 if (70..160).contains(&t) => {
+                let a = if t <= 100 {
+                    255
+                } else {
+                    255 - (t - 100) * 255 / 60
+                };
+                Self::playfield_rect(rec, if ls { 0xFF0000 } else { 0xFFFFFF }, a);
+            }
+            7.. => self.emit_objs(anm, rec, if ls { OBJS } else { 96 }, 2),
+            _ => {}
         }
     }
 }

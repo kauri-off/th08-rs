@@ -1,6 +1,6 @@
 //! Spell manager g_Gui (12 §5.8): player/boss spell-name plates, cut-ins, streak strips and the bonus line.
 
-use crate::anmmgr::AnmManager;
+use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm};
 use crate::drawlist::{PLAYFIELD, Recorder, TextCmd};
 use crate::enemy::EnemyManager;
@@ -74,6 +74,9 @@ pub struct Gui {
     history: (u32, u32),
     // +0x2620 bonus-line tint, 0x80808080 at Spell_Start; alpha +0x2623 fades 0x80 ↔ 0x20 (12 §5.8, 07 §11.1 step 1.2).
     tint: u32,
+    // Port-only draw-phase scratch: the global tint VMs 0–6 were drawn under when the VM-7 block's tint-off followed
+    // (06 §10.2); None = the emit-time tint is the right one.
+    pre_tint: Option<Tint>,
 }
 
 impl Gui {
@@ -95,6 +98,7 @@ impl Gui {
             capturable: false,
             history: (0, 0),
             tint: 0x8080_8080,
+            pre_tint: None,
         }));
         let t: task::TaskRef<Ctx> = g.clone();
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
@@ -270,15 +274,6 @@ impl Gui {
         }
     }
 
-    // Draw2DSnap (mode 0) / Draw2DRot (mode 2) (05 §9).
-    fn snap(anm: &mut AnmManager, rec: &mut Recorder, vm: &mut AnmVm) {
-        anm.draw_mode(rec, vm, 0);
-    }
-
-    fn rot(anm: &mut AnmManager, rec: &mut Recorder, vm: &mut AnmVm) {
-        anm.draw_mode(rec, vm, 2);
-    }
-
     fn shown(vm: &AnmVm) -> bool {
         vm.script.is_some() && vm.visible()
     }
@@ -295,18 +290,13 @@ impl Gui {
         }
     }
 
-    // 12 §5.8 draw step 4: VM 12 stamps sprite 0x88 + d from VM 13 pos + (−40, +1), advance 7.
-    fn draw_bonus(&mut self, anm: &mut AnmManager, rec: &mut Recorder) {
+    // 12 §5.8 draw step 4: VM 12 stamps sprite 0x88 + d from VM 13 pos + (−40, +1), advance 7; (x, y, digit) each.
+    fn bonus_stamps(&self) -> Vec<(f32, f32, u32)> {
         let (captures, attempts) = self.history;
         let base = self.vms[13].pos;
         let mut x = base[0] - 40.0;
         let y = base[1] + 1.0;
-        let vm = &mut self.vms[12];
-        let mut stamp = |anm: &mut AnmManager, rec: &mut Recorder, x: f32, d: u32| {
-            vm.set_sprite(anm, 0x88 + d as i32);
-            vm.pos = [x, y, 0.0];
-            anm.draw_mode(rec, vm, 0);
-        };
+        let mut out = Vec::new();
         let bonus = if self.capturable {
             self.bonus.max(0) as u32
         } else {
@@ -318,7 +308,7 @@ impl Gui {
             let d = bonus / div % 10;
             on |= d != 0 || div == 1;
             if on {
-                stamp(anm, rec, x, d);
+                out.push((x, y, d));
             }
             x += 7.0;
             div /= 10;
@@ -329,7 +319,7 @@ impl Gui {
         let hundreds = c >= 100;
         for (k, div) in [100, 10, 1].into_iter().enumerate() {
             if c >= div || div == 1 {
-                stamp(anm, rec, x + 7.0 * k as f32, c / div % 10);
+                out.push((x + 7.0 * k as f32, y, c / div % 10));
             }
         }
         // Two advances between the three slots, none after the units; then x += 13 (12 §5.8).
@@ -337,9 +327,16 @@ impl Gui {
         let a = attempts.min(999);
         for (k, div) in [100, 10, 1].into_iter().enumerate() {
             if a >= div || div == 1 || (div == 10 && hundreds) {
-                stamp(anm, rec, x + 7.0 * k as f32, a / div % 10);
+                out.push((x + 7.0 * k as f32, y, a / div % 10));
             }
         }
+        out
+    }
+
+    // VM 12 with the sprite and position of one stamp.
+    fn stamp(vm: &mut AnmVm, anm: &AnmManager, (x, y, d): (f32, f32, u32)) {
+        vm.set_sprite(anm, 0x88 + d as i32);
+        vm.pos = [x, y, 0.0];
     }
 }
 
@@ -424,53 +421,78 @@ impl Task<Ctx> for Gui {
         Ret::Next
     }
 
-    // Spell_Draw 0x4178C0 (12 §5.8 draw steps 1–4).
-    // TODO(step 8 split): writes and draws still mixed; records into the muted recorder with emit off.
+    // Spell_Draw 0x4178C0 (12 §5.8 draw steps 1–4). Modes 0 / 2 write no VM state (05 §9), so the step keeps only the
+    // bonus read, the text renders, the VM 10 / 11 / 12 positions and the tint-off; the emit draws.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
         self.read_bonus();
         self.flush_texts(ctx);
-        let (anm, rec) = (&mut ctx.anm, &mut ctx.rec);
-        rec.set_viewport(PLAYFIELD);
-        // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4 (12 §5.8, RE-Q68).
-        let v = &mut self.vms;
-        // Boss strips (VM 2/4) are drawn only while the player cut-in VM 0 is visible: original quirk (12 §5.8 step 1).
-        if Self::shown(&v[0]) {
-            Self::snap(anm, rec, &mut v[0]);
-            Self::snap(anm, rec, &mut v[2]);
-            Self::rot(anm, rec, &mut v[4]);
+        if Self::shown(&self.vms[6]) {
+            let p = self.vms[6].pos;
+            self.vms[10].pos = [p[0] - 32.0, p[1], p[2]];
         }
-        if Self::shown(&v[1]) {
-            let p = v[1].pos;
-            let o = v[1].pos_offset;
-            // Boss cut-in drawn at pos + pos_offset, restored afterwards (12 §5.8 step 2).
-            v[1].pos = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
-            Self::snap(anm, rec, &mut v[1]);
-            v[1].pos = p;
-        }
-        if Self::shown(&v[6]) {
-            let p = v[6].pos;
-            v[10].pos = [p[0] - 32.0, p[1], p[2]];
-            Self::snap(anm, rec, &mut v[10]);
-            Self::rot(anm, rec, &mut v[6]);
-        }
-        if Self::shown(&v[7]) {
-            // Tint +0x2620 (12 §5.8 step 4).
-            (anm.tint, anm.tint_on) = (self.tint, true);
-            v[11].pos = v[7].pos;
-            Self::snap(anm, rec, &mut v[11]);
-            for k in [7, 8, 9] {
-                if v[k].script.is_some() {
-                    Self::rot(anm, rec, &mut v[k]);
-                }
+        if Self::shown(&self.vms[7]) {
+            self.vms[11].pos = self.vms[7].pos;
+            // VM 12 keeps the sprite / position of its last stamp.
+            if !self.name_only
+                && let Some(&last) = self.bonus_stamps().last()
+            {
+                Self::stamp(&mut self.vms[12], &ctx.anm, last);
             }
-            Self::snap(anm, rec, &mut v[13]);
-            if !self.name_only {
-                self.draw_bonus(anm, rec);
-            }
-            // Spell_Draw turns the tint off only inside its VM-7 block (06 §10.2).
-            anm.tint_off();
+            // Spell_Draw turns the tint off only inside its VM-7 block (06 §10.2); the emit applies +0x2620 itself.
+            self.pre_tint = ctx.anm.tint_state();
+            ctx.anm.tint_off();
+        } else {
+            self.pre_tint = None;
         }
         Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+        let anm = &ctx.anm;
+        rec.set_viewport(PLAYFIELD);
+        // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4 (12 §5.8, RE-Q68).
+        let v = &self.vms;
+        // VMs 0–6 are drawn before the VM-7 block, under the global tint still on then.
+        let pre = self.pre_tint;
+        let draw =
+            |rec: &mut Recorder, vm: &AnmVm, mode| anm.emit_tinted(rec, vm, mode, vm.pos[2], pre);
+        // Boss strips (VM 2/4) are drawn only while the player cut-in VM 0 is visible: original quirk (12 §5.8 step 1).
+        if Self::shown(&v[0]) {
+            draw(rec, &v[0], 0);
+            draw(rec, &v[2], 0);
+            draw(rec, &v[4], 2);
+        }
+        if Self::shown(&v[1]) {
+            // Boss cut-in drawn at pos + pos_offset, restored afterwards (12 §5.8 step 2).
+            let mut c = v[1].clone();
+            let (p, o) = (c.pos, c.pos_offset);
+            c.pos = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
+            draw(rec, &c, 0);
+        }
+        if Self::shown(&v[6]) {
+            draw(rec, &v[10], 0);
+            draw(rec, &v[6], 2);
+        }
+        if Self::shown(&v[7]) {
+            // Tint +0x2620 (12 §5.8 step 4), turned off by the step; the alpha-0 skip tests the untinted colour.
+            let t = Some(Tint(self.tint));
+            let draw =
+                |rec: &mut Recorder, vm: &AnmVm, mode| anm.emit_tinted(rec, vm, mode, vm.pos[2], t);
+            draw(rec, &v[11], 0);
+            for k in [7, 8, 9] {
+                if v[k].script.is_some() {
+                    draw(rec, &v[k], 2);
+                }
+            }
+            draw(rec, &v[13], 0);
+            if !self.name_only {
+                let mut vm = v[12].clone();
+                for st in self.bonus_stamps() {
+                    Self::stamp(&mut vm, anm, st);
+                    draw(rec, &vm, 0);
+                }
+            }
+        }
     }
 }

@@ -56,6 +56,45 @@ pub struct AnmManager {
     pub capture_req: Option<SlotSprite>,
 }
 
+// A global tint D3DCOLOR (05 §12.1) a draw-phase step drew under and turned off (or replaced) before its emit runs;
+// the emit applies it to VM copies. Each channel × tint >> 7, alpha included.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tint(pub u32);
+
+impl Tint {
+    // RGBA colour under the tint.
+    pub fn rgba(self, mut rgba: [u8; 4]) -> [u8; 4] {
+        use anmvm::*;
+        let t = self.0.to_le_bytes();
+        let tc = [t[R], t[G], t[B], t[A]];
+        for k in 0..4 {
+            rgba[k] = ((rgba[k] as u32 * tc[k] as u32) >> 7).min(255) as u8;
+        }
+        rgba
+    }
+
+    // A lone vertex alpha (ring strip).
+    pub fn alpha(self, a: u8) -> u8 {
+        self.rgba([0, 0, 0, a])[3]
+    }
+
+    // A copy that draws under this tint while the global tint is off: EmitQuad's colour (colour2 with bit 17, else
+    // colour), tinted, goes into colour2 + bit 17, so the alpha-0 skip still tests the untinted primary colour (05 §12.2).
+    pub fn vm(self, vm: &AnmVm) -> AnmVm {
+        use anmvm::*;
+        let c = if vm.flags & F_COLOR2 != 0 {
+            vm.color2
+        } else {
+            vm.color
+        };
+        let [r, g, b, a] = self.rgba([c[R], c[G], c[B], c[A]]);
+        let mut v = vm.clone();
+        (v.color2[R], v.color2[G], v.color2[B], v.color2[A]) = (r, g, b, a);
+        v.flags |= F_COLOR2;
+        v
+    }
+}
+
 // Linear vertex fog (06 §10.1): f = clamp((far − z) / (far − near), 0, 1) on eye-space z (no range fog); RGB bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct Fog {
@@ -318,16 +357,27 @@ impl AnmManager {
     }
 
     // Global tint: D3DCOLOR at AnmManager+0, enabled by +4; every channel including alpha (05 §12.1).
-    pub fn tinted(&self, mut rgba: [u8; 4]) -> [u8; 4] {
-        use anmvm::*;
-        if self.tint_on {
-            let t = self.tint.to_le_bytes();
-            let tc = [t[R], t[G], t[B], t[A]];
-            for k in 0..4 {
-                rgba[k] = ((rgba[k] as u32 * tc[k] as u32) >> 7).min(255) as u8;
-            }
+    pub fn tinted(&self, rgba: [u8; 4]) -> [u8; 4] {
+        match self.tint_state() {
+            Some(t) => t.rgba(rgba),
+            None => rgba,
         }
-        rgba
+    }
+
+    // The global tint +0 while +4 is on, else None (05 §12.1).
+    pub fn tint_state(&self) -> Option<Tint> {
+        self.tint_on.then_some(Tint(self.tint))
+    }
+
+    // Emit of `vm` under the tint a draw-phase step saw before it turned the global tint off (None: as is).
+    pub fn emit_tinted(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32, t: Option<Tint>) {
+        match t {
+            Some(t) => {
+                debug_assert!(!self.tint_on, "a saved tint applied under the global tint");
+                self.emit_mode_z(rec, &t.vm(vm), mode, z)
+            }
+            None => self.emit_mode_z(rec, vm, mode, z),
+        }
     }
 
     // Blend bits 4–5: 0 alpha, 1 additive, 2/3 set nothing (05 §12.5).
@@ -467,6 +517,11 @@ impl AnmManager {
 
     // Emit half of DrawByMode: reads only; mode 5 uses the world matrix `prepare` left (05 §9).
     pub fn emit_mode_z(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32) {
+        self.emit_mode_z_at(rec, vm, mode, z, self.screen_offset);
+    }
+
+    // As `emit_mode_z` with the EmitQuad global offset `off` the draw saw (a step zeroed `screen_offset` since).
+    pub fn emit_mode_z_at(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32, off: [f32; 2]) {
         use anmvm::*;
         let Some(spr) = self.drawable(vm) else {
             return;
@@ -537,7 +592,7 @@ impl AnmManager {
             }
             _ => return,
         };
-        self.emit_quad(rec, vm, spr, corners, depth, snap);
+        self.emit_quad_at(rec, vm, spr, corners, depth, snap, off);
     }
 
     // DrawBillboard 0x463CF0 (05 §9 mode 4, 13 §2.6c) from an already projected point `s` and the 3D length `len` of
@@ -565,10 +620,24 @@ impl AnmManager {
         depth: [f32; 4],
         snap: bool,
     ) {
+        self.emit_quad_at(rec, vm, spr, corners, depth, snap, self.screen_offset);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_quad_at(
+        &self,
+        rec: &mut Recorder,
+        vm: &AnmVm,
+        spr: SlotSprite,
+        corners: [[f32; 2]; 4],
+        depth: [f32; 4],
+        snap: bool,
+        off: [f32; 2],
+    ) {
         use anmvm::*;
         // AnmManager_EmitQuad 0x4628B0 (05 §9): global offset, optional snapping, then D3D pixel-centre convention (+0.5) for wgpu.
         let corners = corners.map(|[x, y]| {
-            let (mut x, mut y) = (x + self.screen_offset[0], y + self.screen_offset[1]);
+            let (mut x, mut y) = (x + off[0], y + off[1]);
             // Snap: x87 round-to-nearest-even, minus 0.5 (05 §9).
             if snap {
                 x = x.round_ties_even() - 0.5;
@@ -623,6 +692,51 @@ pub fn length3(a: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A saved tint applied by the emit (global tint off) records what the draw under the global tint records, also
+    // with colour2 and a tint alpha that zeroes a small primary alpha (the skip tests the untinted colour, 05 §12.2).
+    #[test]
+    fn saved_tint_equals_global_tint() {
+        let mut anm = AnmManager::default();
+        let chunk = crate::anm::Chunk {
+            name: "t".into(),
+            width: 256,
+            height: 256,
+            sprites: vec![crate::anm::Sprite {
+                id: 0,
+                x: 0.0,
+                y: 0.0,
+                w: 32.0,
+                h: 16.0,
+            }],
+            scripts: Vec::new(),
+            texture: None,
+        };
+        anm.insert(0, "t", vec![chunk], |_| crate::drawlist::TexId(0));
+        let mut vm = AnmVm::default();
+        vm.init();
+        vm.set_sprite(&anm, 0);
+        vm.pos = [100.0, 100.0, 0.0];
+        for (tint, color, color2) in [
+            (0xFFAB_ABAB, [255, 255, 255, 255], None),
+            (0x20F0_1010, [10, 200, 30, 3], None),
+            (0x8060_6060, [1, 2, 3, 4], Some([200, 100, 50, 255])),
+        ] {
+            vm.color = color;
+            vm.flags &= !anmvm::F_COLOR2;
+            if let Some(c) = color2 {
+                (vm.color2, vm.flags) = (c, vm.flags | anmvm::F_COLOR2);
+            }
+            let mut global = Recorder::new();
+            (anm.tint, anm.tint_on) = (tint, true);
+            anm.emit_mode_z(&mut global, &vm, 0, 0.0);
+            anm.tint_off();
+            let mut saved = Recorder::new();
+            anm.emit_tinted(&mut saved, &vm, 0, 0.0, Some(Tint(tint)));
+            assert_eq!(global.draws.len(), 1);
+            assert_eq!(format!("{:?}", global.draws), format!("{:?}", saved.draws));
+        }
+    }
 
     // 13 §2.6c: half size ((len·0.5)·sprite_w)·scale.x around the projected point, unrotated.
     #[test]
