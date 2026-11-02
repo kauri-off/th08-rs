@@ -57,17 +57,14 @@ impl Renderer {
         let idx: usize = idx.parse().ok()?;
         if !self.anm.contains_key(file) {
             let mut v = Vec::new();
-            if let Some(chunks) = self
+            if let Some(texs) = self
                 .ar
                 .as_ref()
                 .and_then(|a| a.read(file).ok())
-                .and_then(|b| crate::anm::parse(&b).ok())
+                .and_then(|b| crate::anm::textures(&b).ok())
             {
-                for c in chunks {
-                    v.push(
-                        c.texture
-                            .map(|t| self.rec.create_texture(t.width, t.height, &t.rgba)),
-                    );
+                for t in texs {
+                    v.push(t.map(|t| self.rec.create_texture(t.width, t.height, &t.rgba)));
                 }
             }
             self.anm.insert(file.to_string(), v);

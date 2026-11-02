@@ -31,8 +31,10 @@ fn main() -> anyhow::Result<()> {
     }
     let out = std::path::Path::new(&a[3]);
     std::fs::create_dir_all(out)?;
-    for (i, c) in th08::anm::parse(&ar.read(&a[2])?)?.iter().enumerate() {
-        let Some(t) = &c.texture else { continue };
+    let b = ar.read(&a[2])?;
+    let texs = th08::anm::textures(&b)?;
+    for (i, (c, t)) in th08::anm::parse(&b)?.iter().zip(&texs).enumerate() {
+        let Some(t) = t else { continue };
         let mut img = image::RgbaImage::from_raw(t.width, t.height, t.rgba.clone()).unwrap();
         for s in c
             .sprites

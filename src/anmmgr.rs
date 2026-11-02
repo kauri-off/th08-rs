@@ -125,8 +125,8 @@ impl Default for AnmManager {
 
 impl AnmManager {
     // Anm_Preload 0x465860 + Anm_LoadEntryTexture 0x465CC0 (03 §2); the port uploads all entries at once.
-    // TODO(step 8b anm): sprites / scripts are logic data, THTX pixels presentation; split the parse and take pixels
-    // from a PresentView (per-texture overrides, ARCH_B §1.2 images/).
+    // Sprites / scripts come from the LogicView, THTX pixels from its PresentView (ARCH_B §1.2): core keeps no pixels,
+    // the recorder gets them with the create command and `TexSource::Anm { file, entry }` as provenance.
     pub fn load(
         &mut self,
         rec: &mut Recorder,
@@ -136,10 +136,16 @@ impl AnmManager {
     ) -> Result<()> {
         ensure!(slot < SLOTS, "anm slot {slot} out of range");
         let chunks = anm::parse(&archive.read(name)?)?;
+        // Decoded before the unload so a bad THTX still fails the load with the slot untouched.
+        let mut pixels = anm::textures(&archive.present().read(name)?)?;
+        ensure!(
+            pixels.len() == chunks.len(),
+            "{name}: presentation entries differ"
+        );
         self.unload(rec, slot);
         let mut entry = 0;
         self.insert(slot, name, chunks, |c| {
-            let id = match &c.texture {
+            let id = match pixels[entry as usize].take() {
                 Some(t) => rec.create_anm_texture(name, entry, t.width, t.height, &t.rgba),
                 // '@' entries are blank render targets (text / capture).
                 None => rec.create_anm_texture(
@@ -712,7 +718,7 @@ mod tests {
                 h: 16.0,
             }],
             scripts: Vec::new(),
-            texture: None,
+            has_texture: false,
         };
         anm.insert(0, "t", vec![chunk], |_| crate::drawlist::TexId(0));
         let mut vm = AnmVm::default();

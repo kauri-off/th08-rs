@@ -1322,7 +1322,7 @@ mod tests {
             height: 256,
             sprites: Vec::new(),
             scripts,
-            texture: None,
+            has_texture: false,
         };
         anm.insert(ANM_SLOT, "p", vec![chunk], |_| crate::drawlist::TexId(0));
     }

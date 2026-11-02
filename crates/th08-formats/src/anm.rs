@@ -1,4 +1,4 @@
-//! ANM container parser: entry chain, sprite records, script table (logic part), THTX textures (pixel part) (03 §2–§4).
+//! ANM container parser (03 §2–§4): `parse` = entry chain, sprites, scripts (logic); `textures` = THTX pixels (presentation).
 
 #[derive(Debug, thiserror::Error)]
 pub enum AnmError {
@@ -13,7 +13,7 @@ pub enum AnmError {
 pub type Result<T> = std::result::Result<T, AnmError>;
 
 // Sprite record, 20 bytes at entry_start + sprite_offset (03 §2.2); x, y, w, h in logical texture pixels.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sprite {
     // Always the file-wide cumulative sprite index; the loader ignores it (03 §2.2).
     pub id: u32,
@@ -24,7 +24,7 @@ pub struct Sprite {
 }
 
 // One script of the entry's script table (03 §2.1); scripts are addressed by cumulative index (03 §2.4).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Script {
     // Ignored by the original loader (03 §2.1).
     pub id: i32,
@@ -41,7 +41,7 @@ pub struct Thtx {
     pub rgba: Vec<u8>,
 }
 
-// One texture entry of the chain (03 §2.1).
+// One texture entry of the chain (03 §2.1), logic data only; its pixels are `textures(..)[entry]`.
 pub struct Chunk {
     // Image name at +0x1C; a leading '@' means a blank render-target texture (03 §2.1).
     pub name: String,
@@ -50,7 +50,8 @@ pub struct Chunk {
     pub height: u32,
     pub sprites: Vec<Sprite>,
     pub scripts: Vec<Script>,
-    pub texture: Option<Thtx>,
+    // THTX offset +0x30 is non-zero: the pixels come from `textures`, not from this logic record (03 §2.1).
+    pub has_texture: bool,
 }
 
 fn u32at(b: &[u8], o: usize) -> u32 {
@@ -124,107 +125,178 @@ pub fn decode_thtx(b: &[u8]) -> Result<Thtx> {
     })
 }
 
-// Anm_Preload 0x465860 (03 §2) with the THTX pixels decoded per entry.
-pub fn parse(b: &[u8]) -> Result<Vec<Chunk>> {
-    walk(b, true)
-}
-
-// Logic data only (entries, sprites, scripts): `texture` stays None and no pixels are decoded.
-pub fn parse_logic(b: &[u8]) -> Result<Vec<Chunk>> {
-    walk(b, false)
-}
-
-// Anm_Preload 0x465860 (03 §2): entry k+1 at entry_k + next_offset (+0x38), 0 ends the chain; offsets are entry-relative.
-fn walk(b: &[u8], pixels: bool) -> Result<Vec<Chunk>> {
-    let mut chunks = Vec::new();
+// Anm_Preload 0x465860 (03 §2.1): entry k+1 at entry_k + next_offset (+0x38), 0 ends the chain; yields each entry's
+// file offset. Version must be 3, otherwise the load fails.
+fn entries(b: &[u8]) -> Result<Vec<usize>> {
+    let mut v = Vec::new();
     let mut base = 0;
     loop {
         let c = &b[base..];
-        let (n_spr, n_scr) = (u32at(c, 0) as usize, u32at(c, 4) as usize);
-        let (width, height) = (u32at(c, 0x0c), u32at(c, 0x10));
-        let name_off = u32at(c, 0x1c) as usize;
-        // Version must be 3, otherwise the load fails (03 §2.1).
         if u32at(c, 0x28) != 3 {
             return Err(AnmError::VersionMismatch);
         }
-        let thtx_off = u32at(c, 0x30) as usize;
-        let next = u32at(c, 0x38) as usize;
-        let name_end = c[name_off..].iter().position(|&x| x == 0).unwrap_or(0);
-        let name = String::from_utf8_lossy(&c[name_off..name_off + name_end]).into_owned();
-        let sprites = (0..n_spr)
-            .map(|i| {
-                let o = u32at(c, 0x40 + 4 * i) as usize;
-                Sprite {
-                    id: u32at(c, o),
-                    x: f32at(c, o + 4),
-                    y: f32at(c, o + 8),
-                    w: f32at(c, o + 12),
-                    h: f32at(c, o + 16),
-                }
-            })
-            .collect();
-        // Script table {i32 id, u32 offset}[script_count] follows the sprite offsets (03 §2.1).
-        let tbl = 0x40 + 4 * n_spr;
-        let mut offs: Vec<(i32, usize)> = (0..n_scr)
-            .map(|i| {
-                (
-                    u32at(c, tbl + 8 * i) as i32,
-                    u32at(c, tbl + 8 * i + 4) as usize,
-                )
-            })
-            .collect();
-        // Script length is not stored: each script ends at the next script start, the THTX block or the next entry.
-        let limit = if thtx_off != 0 {
-            thtx_off
-        } else if next != 0 {
-            next
-        } else {
-            c.len()
-        };
-        let mut sorted: Vec<usize> = offs.iter().map(|o| o.1).collect();
-        sorted.sort();
-        let scripts = offs
-            .drain(..)
-            .map(|(id, o)| {
-                let end = sorted
-                    .iter()
-                    .copied()
-                    .find(|&e| e > o)
-                    .unwrap_or(limit)
-                    .min(limit);
-                Script {
-                    id,
-                    data: c[o..end].to_vec(),
-                }
-            })
-            .collect();
-        let texture = if pixels && thtx_off != 0 {
-            Some(decode_thtx(&c[thtx_off..])?)
-        } else {
-            None
-        };
-        chunks.push(Chunk {
-            name,
-            width,
-            height,
-            sprites,
-            scripts,
-            texture,
-        });
-        if next == 0 {
-            break;
+        v.push(base);
+        match u32at(c, 0x38) as usize {
+            0 => return Ok(v),
+            next => base += next,
         }
-        base += next;
     }
-    Ok(chunks)
+}
+
+// Logic half of Anm_Preload 0x465860 (03 §2.1–§2.2): entries, sprites, scripts; no pixels are touched.
+pub fn parse(b: &[u8]) -> Result<Vec<Chunk>> {
+    entries(b)?.into_iter().map(|base| entry(b, base)).collect()
+}
+
+fn entry(b: &[u8], base: usize) -> Result<Chunk> {
+    let c = &b[base..];
+    let (n_spr, n_scr) = (u32at(c, 0) as usize, u32at(c, 4) as usize);
+    let (width, height) = (u32at(c, 0x0c), u32at(c, 0x10));
+    let name_off = u32at(c, 0x1c) as usize;
+    let thtx_off = u32at(c, 0x30) as usize;
+    let next = u32at(c, 0x38) as usize;
+    let name_end = c[name_off..].iter().position(|&x| x == 0).unwrap_or(0);
+    let name = String::from_utf8_lossy(&c[name_off..name_off + name_end]).into_owned();
+    let sprites = (0..n_spr)
+        .map(|i| {
+            let o = u32at(c, 0x40 + 4 * i) as usize;
+            Sprite {
+                id: u32at(c, o),
+                x: f32at(c, o + 4),
+                y: f32at(c, o + 8),
+                w: f32at(c, o + 12),
+                h: f32at(c, o + 16),
+            }
+        })
+        .collect();
+    // Script table {i32 id, u32 offset}[script_count] follows the sprite offsets (03 §2.1).
+    let tbl = 0x40 + 4 * n_spr;
+    let offs: Vec<(i32, usize)> = (0..n_scr)
+        .map(|i| {
+            (
+                u32at(c, tbl + 8 * i) as i32,
+                u32at(c, tbl + 8 * i + 4) as usize,
+            )
+        })
+        .collect();
+    // Script length is not stored: each script ends at the next script start, the THTX block or the next entry.
+    let limit = if thtx_off != 0 {
+        thtx_off
+    } else if next != 0 {
+        next
+    } else {
+        c.len()
+    };
+    let mut sorted: Vec<usize> = offs.iter().map(|o| o.1).collect();
+    sorted.sort();
+    let scripts = offs
+        .into_iter()
+        .map(|(id, o)| {
+            let end = sorted
+                .iter()
+                .copied()
+                .find(|&e| e > o)
+                .unwrap_or(limit)
+                .min(limit);
+            Script {
+                id,
+                data: c[o..end].to_vec(),
+            }
+        })
+        .collect();
+    Ok(Chunk {
+        name,
+        width,
+        height,
+        sprites,
+        scripts,
+        has_texture: thtx_off != 0,
+    })
+}
+
+// Pixel half of Anm_Preload / Anm_LoadEntryTexture 0x465CC0 (03 §2.1, §4): one decoded THTX per entry, `None` for
+// entries without a THTX block ('@' render targets). Same entry order as `parse`.
+pub fn textures(b: &[u8]) -> Result<Vec<Option<Thtx>>> {
+    entries(b)?
+        .into_iter()
+        .map(|base| match u32at(b, base + 0x30) as usize {
+            0 => Ok(None),
+            off => decode_thtx(&b[base + off..]).map(Some),
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Pre-IMPL179 single-pass parser (sprites, scripts and decoded THTX together), kept as the split's reference.
+    fn legacy(b: &[u8]) -> Vec<(String, u32, u32, Vec<Sprite>, Vec<Script>, Option<Thtx>)> {
+        let mut out = Vec::new();
+        let mut base = 0;
+        loop {
+            let c = &b[base..];
+            let (n_spr, n_scr) = (u32at(c, 0) as usize, u32at(c, 4) as usize);
+            assert_eq!(u32at(c, 0x28), 3);
+            let (thtx_off, next) = (u32at(c, 0x30) as usize, u32at(c, 0x38) as usize);
+            let name_off = u32at(c, 0x1c) as usize;
+            let name_end = c[name_off..].iter().position(|&x| x == 0).unwrap_or(0);
+            let name = String::from_utf8_lossy(&c[name_off..name_off + name_end]).into_owned();
+            let sprites = (0..n_spr)
+                .map(|i| {
+                    let o = u32at(c, 0x40 + 4 * i) as usize;
+                    let f = |k| f32at(c, o + k);
+                    Sprite {
+                        id: u32at(c, o),
+                        x: f(4),
+                        y: f(8),
+                        w: f(12),
+                        h: f(16),
+                    }
+                })
+                .collect();
+            let tbl = 0x40 + 4 * n_spr;
+            let offs: Vec<(i32, usize)> = (0..n_scr)
+                .map(|i| {
+                    (
+                        u32at(c, tbl + 8 * i) as i32,
+                        u32at(c, tbl + 8 * i + 4) as usize,
+                    )
+                })
+                .collect();
+            let limit = [thtx_off, next, c.len()]
+                .into_iter()
+                .find(|&x| x != 0)
+                .unwrap();
+            let mut sorted: Vec<usize> = offs.iter().map(|o| o.1).collect();
+            sorted.sort();
+            let scripts = offs
+                .into_iter()
+                .map(|(id, o)| {
+                    let end = sorted
+                        .iter()
+                        .copied()
+                        .find(|&e| e > o)
+                        .unwrap_or(limit)
+                        .min(limit);
+                    Script {
+                        id,
+                        data: c[o..end].to_vec(),
+                    }
+                })
+                .collect();
+            let tex = (thtx_off != 0).then(|| decode_thtx(&c[thtx_off..]).unwrap());
+            out.push((name, u32at(c, 0x0c), u32at(c, 0x10), sprites, scripts, tex));
+            if next == 0 {
+                return out;
+            }
+            base += next;
+        }
+    }
+
+    // The logic / pixel split yields the same sprites, scripts and pixel bytes as the single-pass parser, every file.
     #[test]
-    fn all_anm_parse() {
+    fn split_matches_legacy() {
         let Some(ar) = crate::testdata::archive() else {
             return;
         };
@@ -232,10 +304,34 @@ mod tests {
         for n in ar.names().iter().filter(|n| n.ends_with(".anm")) {
             let b = ar.read(n).unwrap();
             let chunks = parse(&b).unwrap_or_else(|e| panic!("{n}: {e}"));
-            let logic = parse_logic(&b).unwrap();
-            assert_eq!(logic.len(), chunks.len(), "{n}");
-            assert!(logic.iter().all(|c| c.texture.is_none()));
-            tex += chunks.iter().filter(|c| c.texture.is_some()).count();
+            let pixels = textures(&b).unwrap_or_else(|e| panic!("{n}: {e}"));
+            let old = legacy(&b);
+            assert_eq!((chunks.len(), pixels.len()), (old.len(), old.len()), "{n}");
+            for ((c, p), (name, w, h, spr, scr, t)) in chunks.iter().zip(&pixels).zip(&old) {
+                assert_eq!((&c.name, c.width, c.height), (name, *w, *h), "{n}");
+                let bits = |v: &[Sprite]| -> Vec<[u32; 5]> {
+                    v.iter()
+                        .map(|s| {
+                            [
+                                s.id,
+                                s.x.to_bits(),
+                                s.y.to_bits(),
+                                s.w.to_bits(),
+                                s.h.to_bits(),
+                            ]
+                        })
+                        .collect()
+                };
+                assert_eq!(bits(&c.sprites), bits(spr), "{n}");
+                assert_eq!(&c.scripts, scr, "{n}");
+                assert_eq!(c.has_texture, t.is_some(), "{n}");
+                let key = |t: &Option<Thtx>| {
+                    t.as_ref()
+                        .map(|t| (t.format, t.width, t.height, t.rgba.clone()))
+                };
+                assert!(key(p) == key(t), "{n}: pixels differ");
+            }
+            tex += pixels.iter().filter(|t| t.is_some()).count();
             files += 1;
         }
         assert_eq!(files, 113);

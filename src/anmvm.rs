@@ -1207,7 +1207,7 @@ mod tests {
                 id: 0,
                 data: script,
             }],
-            texture: None,
+            has_texture: false,
         };
         anm.insert(0, "t", vec![chunk], |_| crate::drawlist::TexId(0));
         let mut vm = AnmVm::default();
