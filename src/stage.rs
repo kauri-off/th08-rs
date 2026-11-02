@@ -9,9 +9,8 @@ use crate::game::{Ctx, Sys};
 use crate::stdfile::{self, QuadKind, Record, Std, Vec3};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
-use std::cell::RefCell;
 use std::f32::consts::PI;
-use std::rc::Rc;
+use std::sync::Arc;
 
 // stgNbg.anm slot (06 §2 step 2).
 pub const ANM_SLOT: usize = 4;
@@ -243,11 +242,13 @@ impl StageCamera {
     }
 }
 
-// g_Stage 0x4E4030 (06 §3).
+// g_Stage 0x4E4030 (06 §3); `Ctx.stage`, its chain nodes are `StageTask`.
+#[derive(Clone)]
 pub struct Stage {
     // Stage index 0..8 (g_StageIdx; also 0..8 in spell practice, 07 §1).
     pub index: usize,
-    pub std: Std,
+    // The parsed .std file, read-only after load (shared between World clones).
+    pub std: Arc<Std>,
     // Object +3 runtime flags (06 §1.1): bit 0 script running, bit 1 drawn.
     obj_flags: Vec<u8>,
     // +0x000 one VM per quad.
@@ -304,8 +305,8 @@ pub struct Stage {
     // HUD cover FUN_00437d87 (06 §10.2): impl+0x398C ≥ 0 and VM impl+0x3778 waiting for an interrupt.
     // Set by the HUD once VM impl+0x3778 (msg op 9 stage-clear capture, RE-Q32 CODE BUG 12) is ported.
     pub hud_cover: bool,
-    // +0x6480 sparkle points: count, screen positions (06 §11.1).
-    sparkles: RefCell<(usize, [Vec3; 32])>,
+    // +0x6480 sparkle points: count, screen positions (06 §11.1); written by the draw step, read by the next calc.
+    sparkles: (usize, [Vec3; 32]),
     // +0x647C sparkle flag, cleared at the end of Stage_DrawHigh (06 §10.2).
     sparkle_on: bool,
     // Port-only: draws recorded by the DrawLow / DrawHigh steps, replayed by their emits (ARCH decision 2).
@@ -314,6 +315,7 @@ pub struct Stage {
 
 // One recorded command of a stage draw node, in draw order. VMs are snapshots at draw time: object instances share
 // their quads' VMs, and the spell mask redraws spell VM 0 / 1 modified.
+#[derive(Clone)]
 enum Item {
     Viewport,
     AnmReset,
@@ -369,7 +371,7 @@ impl Stage {
             index,
             obj_flags: vec![1; std.objects.len()],
             vms: vec![AnmVm::default(); std.quad_count],
-            std,
+            std: Arc::new(std),
             vm_a: AnmVm::default(),
             vm_b: AnmVm::default(),
             vm_c: AnmVm::default(),
@@ -398,7 +400,7 @@ impl Stage {
             spell_vms: Vec::new(),
             spell_mask: false,
             hud_cover: false,
-            sparkles: RefCell::new((0, [[0.0; 3]; 32])),
+            sparkles: (0, [[0.0; 3]; 32]),
             sparkle_on: false,
             drawn: [Vec::new(), Vec::new()],
             fast_forward: 0,
@@ -423,7 +425,8 @@ impl Stage {
         }
     }
 
-    pub fn register(ctx: &mut Ctx, index: usize) -> Result<Rc<RefCell<Stage>>> {
+    // Stage_Register: the stage becomes `ctx.stage` (replacing the last one) plus its four nodes.
+    pub fn register(ctx: &mut Ctx, index: usize) -> Result<task::TaskRef<Ctx>> {
         let (std_name, bg) = files(index, ctx.game.spell_practice());
         let std = stdfile::parse(&ctx.archive.read(&std_name)?)?;
         ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &bg)?;
@@ -431,14 +434,14 @@ impl Stage {
         st.effect_level = ctx.game.cfg.effect_level;
         st.fast_forward = ctx.core.stage_frame;
         st.start(&mut ctx.anm, &mut ctx.rng);
-        let st = Rc::new(RefCell::new(st));
-        let t: task::TaskRef<Ctx> = st.clone();
+        ctx.stage = Some(Box::new(st));
+        let t = task::task(StageTask);
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
         task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t.clone())?;
         // Port-only tail of Stage_DrawHigh (step only): its last writes come after the node's emit, see `draw_step`.
-        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 2, t)?;
-        Ok(st)
+        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 2, t.clone())?;
+        Ok(t)
     }
 
     // Ops 29 / 30 / 34 (06 §4): start a script on VM A / B / C, or disable it (sprite index −1).
@@ -757,7 +760,7 @@ impl Stage {
         }
         // 06 §5 quirk kept: sparkles at all 12 points, used or not (unused ones at screen (0, 0)).
         if self.sparkle_due(*sys.flags) {
-            let pts = self.sparkles.borrow().1;
+            let pts = self.sparkles.1;
             for p in &pts[..12] {
                 let i = sys.fx.spawn(anm, sys.rng, 0x3E, *p, 1, 0x20FFFFFF);
                 sys.fx.get(i, |e| e.layer = 4);
@@ -766,6 +769,25 @@ impl Stage {
         // Sparkle flag +0x647C (06 §5); cleared at the end of Stage_DrawHigh.
         self.sparkle_on = true;
         self.frame += 1;
+    }
+
+    // Clone test state (worldclone.rs): script position, clocks, camera, fog, sparkle points as raw bits.
+    #[cfg(test)]
+    pub fn trace(&self) -> Vec<u64> {
+        let mut t = vec![
+            self.frame as u64,
+            self.ip as u64,
+            self.clock.cur as u64,
+            self.section_request as u64,
+            self.clear_color as u64,
+            self.sparkle_on as u64,
+            self.sparkles.0 as u64,
+            self.fog.near.to_bits() as u64,
+            self.fog.color as u64,
+            self.fog_elapsed.cur as u64,
+        ];
+        t.extend(self.cam.v.iter().flatten().map(|v| v.to_bits() as u64));
+        t
     }
 
     // 06 §10.2: stage layers, list-B effects and the fade rect are skipped while +0xB24 ≥ 2 or the HUD cover is on.
@@ -884,9 +906,10 @@ impl Stage {
         anm.cam_right = self.cam.right();
         let m = cam.view.0;
         let right = normalize([m[0][0], m[0][1], m[0][2]]);
+        let fog = self.fog_params(anm);
         // +0xB24 ≤ 1 is redundant: Stage_DrawLayer runs only while +0xB24 < 2 (06 §11.1, §10.2).
         let points = if self.sparkle_on && self.spell_state <= 1 {
-            Some(&self.sparkles)
+            Some(&mut self.sparkles)
         } else {
             None
         };
@@ -899,7 +922,6 @@ impl Stage {
             points,
             pv: [0.0; 3],
         };
-        let fog = self.fog_params(anm);
         // Reused vertex-colour slots; initial values = stack residue (06 §11.3, INFERRED constant).
         let mut slots = [0x00910D20u32, 0x00676E85, 0, 0].map(u32::to_le_bytes);
         for inst in &self.std.instances {
@@ -961,7 +983,7 @@ struct View<'a> {
     right: Vec3,
     eye: Vec3,
     fog: FogState,
-    points: Option<&'a RefCell<(usize, [Vec3; 32])>>,
+    points: Option<&'a mut (usize, [Vec3; 32])>,
     // Local ebp−0x9C: D3DXVec3Project input vector of every projection, (0,0,0) per call, set by each ribbon
     // (06 §11.4 QUIRK).
     pv: Vec3,
@@ -998,7 +1020,7 @@ impl View<'_> {
     }
 
     // Billboard sprite, tag & 0xF == 2 (06 §11.1).
-    fn billboard(&self, anm: &AnmManager, vm: &mut AnmVm, w: f32, out: &mut Vec<Item>) {
+    fn billboard(&mut self, anm: &AnmManager, vm: &mut AnmVm, w: f32, out: &mut Vec<Item>) {
         let s = self.project(vm.pos);
         let ww = if w != 0.0 { w } else { vm.sprite_w };
         // Quirk kept (06 §13): uses the previous frame's billboard scale.x (feedback); 3D length of s2 − s.
@@ -1022,10 +1044,9 @@ impl View<'_> {
             });
             // Only drawn quads append a sparkle point (06 §11.1).
             if vm.tag & 0xF0 == 0x10
-                && let Some(pts) = self.points
+                && let Some(p) = self.points.as_deref_mut()
             {
                 if sparkle_point_ok(dist, self.fog) {
-                    let mut p = pts.borrow_mut();
                     // Port-only bound: the original has no check (the shipped data stays ≤ 15 points, 06 §11.1).
                     if p.0 < 32 {
                         let n = p.0;
@@ -1109,7 +1130,10 @@ impl View<'_> {
     }
 }
 
-impl Task<Ctx> for Stage {
+// Chain nodes of `ctx.stage` (calc prio 8, draw prio 6 / 7 / 7): stateless forwarder (STEP9_WORLD.md §3).
+pub struct StageTask;
+
+impl Task<Ctx> for StageTask {
     // Port-only: unloads stgNbg.anm when the stage calc node goes away.
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
@@ -1118,19 +1142,35 @@ impl Task<Ctx> for Stage {
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        for _ in 0..std::mem::take(&mut self.fast_forward) {
-            self.step(&mut ctx.anm, &mut crate::sys!(ctx));
+        let st = ctx.stage.as_deref_mut().expect("stage");
+        let (p, b) = (ctx.player.as_deref_mut(), ctx.bullets.as_deref_mut());
+        let sys = &mut crate::sys!(ctx; p; b; None);
+        for _ in 0..std::mem::take(&mut st.fast_forward) {
+            st.step(&mut ctx.anm, sys);
         }
-        self.step(&mut ctx.anm, &mut crate::sys!(ctx));
+        st.step(&mut ctx.anm, sys);
         Ret::Next
     }
 
+    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
+        let st = ctx.stage.as_deref_mut().expect("stage");
+        st.draw_step(&mut ctx.anm, &mut ctx.effects, tag);
+        Ret::Next
+    }
+
+    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+        if let Some(st) = ctx.stage.as_deref() {
+            st.emit(ctx, rec, tag);
+        }
+    }
+}
+
+impl Stage {
     // Tag 0 = Stage_DrawLow, tag 1 = Stage_DrawHigh (06 §10.2), tag 2 = DrawHigh's last writes. The tint off and
     // stage-camera reset end DrawHigh but its draws read the tint: tag 2, linked right after tag 1 at the same prio,
     // makes them after tag 1's emit and before any other draw node.
     // Not implemented: DrawLow step 2 (+0xB2C clear).
-    fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let (anm, fx) = (&mut ctx.anm, &mut ctx.effects);
+    pub fn draw_step(&mut self, anm: &mut AnmManager, fx: &mut crate::effect::Effects, tag: u8) {
         if tag == 2 {
             self.sparkle_on = false;
             // +0x646C: the tint stays on while a bomb drew last frame (06 §10.2).
@@ -1138,16 +1178,13 @@ impl Task<Ctx> for Stage {
                 anm.tint_off();
             }
             anm.stage_camera = None;
-            return Ret::Next;
+            return;
         }
         let mut out = std::mem::take(&mut self.drawn[tag as usize]);
         out.clear();
         if tag == 0 {
-            {
-                let mut p = self.sparkles.borrow_mut();
-                p.0 = 0;
-                p.1[..16].fill([0.0; 3]);
-            }
+            self.sparkles.0 = 0;
+            self.sparkles.1[..16].fill([0.0; 3]);
             out.push(Item::Viewport);
             out.push(Item::AnmReset);
             // Step 3: last frame's bomb tint request (14 §1.3) turns the tint on.
@@ -1216,10 +1253,9 @@ impl Task<Ctx> for Stage {
             out.push(Item::Viewport);
         }
         self.drawn[tag as usize] = out;
-        Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    pub fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
         let anm = &ctx.anm;
         for it in self.drawn.get(tag as usize).into_iter().flatten() {
             match it {

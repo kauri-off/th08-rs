@@ -1,7 +1,7 @@
 //! World clone round trip (ARCH_A §2.3 `World: Clone`, REWRITE_PLAN "New tests"): a state cloned mid-run continues
 //! exactly like the original. Step 9a covers the player and the `Sys` value parts, 9b the bullet manager with its
-//! items, 9c the enemy manager with a synthetic ECL, 9f the effect manager and the screen-effect pool
-//! (`TestSys::effects`); each later step-9 run adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md).
+//! items, 9c the enemy manager with a synthetic ECL, 9d the stage with a synthetic .std (`TestSys::stage`, released
+//! by the ECL's section requests), 9f the effect manager and the screen-effect pool (`TestSys::effects`); each later step-9 run adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md).
 use crate::anmmgr::AnmManager;
 use crate::bullet::BulletManager;
 use crate::effect::ScreenEnv;
@@ -9,9 +9,11 @@ use crate::enemy::EnemyManager;
 use crate::game::TestSys;
 use crate::input::{self, Input};
 use crate::player::Player;
+use crate::stage::Stage;
+use crate::stdfile::{Record, Std};
 
 struct World {
-    // The player and the bullet manager (`TestSys::player`, `::bullets`) next to rng, effects, overlays, panel,
+    // The player, the bullet manager and the stage (`TestSys::player`, `::bullets`, `::stage`) next to rng, effects, overlays, panel,
     // queues, flags and rank.
     sys: TestSys,
     // The enemy manager (`Ctx.enemies`), its ECL shared with the clone until either writes into it.
@@ -83,6 +85,7 @@ impl World {
             ..TestSys::default()
         };
         sys.bullets = Some(Box::new(BulletManager::new(&mut anm, &mut sys.rng)));
+        sys.stage = Some(Box::new(Stage::new(0, stage_std())));
         let mut enemies = Box::new(EnemyManager::new(ecl(), crate::pl!(sys), 1));
         enemies.stage_start(&mut sys.rng, crate::pl!(sys), 0, 0);
         World {
@@ -97,7 +100,8 @@ impl World {
         }
     }
 
-    // One game frame of the parts present so far, in chain order: Player_Calc (prio 9) with the player and the
+    // One game frame of the parts present so far, in chain order: Stage_Calc (prio 8) with the stage lent out of its
+    // `Sys`, as `StageTask::calc`; Player_Calc (prio 9) with the player and the
     // bullet manager lent out of its `Sys` (items passed in), as `PlayerTask::calc`; EnemyMgr_Calc (prio 11) as
     // `EnemyTask::calc` with a spark burst every 40 frames; EffectMgr_Calc (prio 13); BulletMgr_Calc (prio 14) with the
     // time-orb spell bonus, as `BulletTask::calc`. 9f: the screen-effect calcs first (prio 3, `ScreenTask::calc`) and
@@ -137,6 +141,10 @@ impl World {
             r != crate::task::Ret::Remove
         });
         let (anm, inp) = (&mut self.anm, &self.inp);
+        let ts = &mut self.sys;
+        let st = ts.stage.as_deref_mut().unwrap();
+        let (p, b) = (ts.player.as_deref_mut(), ts.bullets.as_deref_mut());
+        st.step(anm, &mut crate::sys!(ts; p; b; None));
         let sys = &mut self.sys.sys();
         sys.with_bullets(|b, sys| {
             sys.with_player(|p, sys| {
@@ -161,6 +169,11 @@ impl World {
         if f % 100 == 90 {
             sys.fx.screen(7, 4, 10, 20, 10, 0x15);
             sys.fx.screen(1, 30, 2, 6, 0, 0x10);
+        }
+        // Stage_DrawLow / DrawHigh / DrawHigh tail steps (draw prio 6 / 7): sparkle reset and flag clear.
+        let st = self.sys.stage.as_deref_mut().unwrap();
+        for tag in 0..3 {
+            st.draw_step(&mut self.anm, &mut self.sys.effects, tag);
         }
         self.fx_peak = self.fx_peak.max(self.sys.effects.live);
         self.screen.extend(self.sys.effects.alloc_pending());
@@ -241,6 +254,7 @@ impl World {
             ]
         }));
         t.extend(m.ecl.data.iter().map(|&b| b as u64));
+        t.extend(self.sys.stage.as_deref().unwrap().trace());
         t
     }
 }
@@ -257,7 +271,8 @@ fn ins(time: i32, op: i16, args: &[i32]) -> Vec<u8> {
 
 // A stage ECL with one timeline of five `spawn_randx` (07 §3 op 2, an RNG draw each) and one enemy sub: a random
 // move (op 67, RNG), a write into the file itself (op 6 to a raw destination, 07 §6: a write, so the clone copies
-// the shared file), an aimed two-row ring (op 98, 07 §9), then a jump back to time 0 (op 4).
+// the shared file), an aimed two-row ring (op 98, 07 §9), a stage section request (op 147, 06 §4.1), then a jump
+// back to time 0 (op 4).
 fn ecl() -> crate::ecl::Ecl {
     let f = |x: f32| x.to_bits() as i32;
     let mut data = vec![0u8; 0x48];
@@ -266,6 +281,7 @@ fn ecl() -> crate::ecl::Ecl {
         ins(0, 67, &[50, 0, f(1.5)]),
         ins(0, 6, &[0, 7]),
         ins(30, 98, &[0, 6, 2, f(2.0), f(1.0), 0, f(0.2), 0]),
+        ins(45, 147, &[1]),
     ];
     let len: usize = body.iter().map(Vec::len).sum();
     for i in body {
@@ -289,6 +305,30 @@ fn ecl() -> crate::ecl::Ecl {
         data,
         subs: vec![sub],
         timelines: vec![tl],
+    }
+}
+
+// A .std script (06 §1.4, §4) without objects: fog fade (ops 2, 1), a 90-frame camera move (ops 6, 5), a halt
+// (op 3, the clock stops on it) that the ECL's section requests release, at time 100 a clear colour (op 13), then a
+// jump to the start (op 4).
+fn stage_std() -> Std {
+    let f = |x: f32| x.to_bits();
+    let rec = |time, op, args| Record { time, op, args };
+    Std {
+        quad_count: 0,
+        bgm: Default::default(),
+        objects: Vec::new(),
+        instances: Vec::new(),
+        script: vec![
+            rec(0, 2, [40, 0, 0]),
+            rec(0, 1, [0xFF40_8000, f(100.0), f(300.0)]),
+            rec(0, 6, [90, 1, 0]),
+            rec(0, 5, [f(10.0), f(-20.0), f(900.0)]),
+            rec(0, 3, [0; 3]),
+            rec(100, 13, [0x8010_2030, 0, 0]),
+            rec(100, 4, [0, 0, 0]),
+            rec(-1, 0, [0; 3]),
+        ],
     }
 }
 
@@ -324,6 +364,9 @@ fn clone_continues_identically() {
     let (ma, mb) = (&a.enemies, &b.enemies);
     assert_eq!(ma.enemies.iter().filter(|e| e.alive()).count(), 5);
     assert!(!std::sync::Arc::ptr_eq(&ma.ecl, &mb.ecl));
+    // The stage passed its halt (released by an ECL section request) and looped; sparkles spawned from frame 700.
+    let st = a.sys.stage.as_deref().unwrap().trace();
+    assert_eq!((st[0], st[4]), (900, 0x8010_2030), "{st:?}");
     // Effects lived and the screen shakes ran (each type 7 / 1 calc draws the RNG twice).
     assert!(
         a.fx_peak > 0 && a.screen_runs > 100,

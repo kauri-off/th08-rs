@@ -556,9 +556,9 @@ fn slow_skips(n: usize, c: u32) -> bool {
         || ((128..224).contains(&n) && c % 5 == 0)
 }
 
-// The player, the bullet and the enemy manager are `ctx.player` / `ctx.bullets` / `ctx.enemies` until step 9g moves them here (docs/arch/STEP9_WORLD.md).
+// The player, the bullet and enemy managers and the stage are `ctx.player` / `ctx.bullets` / `ctx.enemies` /
+// `ctx.stage` until step 9g moves them here (docs/arch/STEP9_WORLD.md).
 pub struct GameManager {
-    pub stage: Option<Rc<RefCell<Stage>>>,
     pub hud: Option<Rc<RefCell<Hud>>>,
     // Subsystems unregistered by the GM on-remove (11 §7).
     tasks: Vec<TaskRef<Ctx>>,
@@ -575,7 +575,6 @@ pub struct GameManager {
 impl GameManager {
     pub fn register(ctx: &mut Ctx) -> Result<Rc<RefCell<GameManager>>> {
         let gm = Rc::new(RefCell::new(GameManager {
-            stage: None,
             hud: None,
             tasks: Vec::new(),
             gauge_at: None,
@@ -792,13 +791,13 @@ impl GameManager {
         // Register order Stage, Bullets, Enemies, Effects, HUD, Gui (11 §3.1, 0x43ABD7).
         let stage_t = Stage::register(ctx, stage)?;
         let bullets_t = BulletManager::register(ctx)?;
-        let enemies_t = EnemyManager::register(ctx, stage, Some(stage_t.clone()), d as i32)?;
+        let enemies_t = EnemyManager::register(ctx, stage, d as i32)?;
         if !first {
-            stage_t.borrow_mut().fast_forward = 0;
+            crate::stg!(ctx).fast_forward = 0;
             crate::em!(ctx).fast_forward = 0;
         }
         let effects = crate::effect::EffectTask::register(ctx)?;
-        let hud = Hud::register(ctx, stage_t.clone(), hud_fresh)?;
+        let hud = Hud::register(ctx, hud_fresh)?;
         let gui = crate::gui::Gui::register(ctx)?;
         // Spell practice in 6A/6B/Extra outside the last-word card ranges: spell-background first script +0xB34 := 2
         // (11 §3.1, 13 §5).
@@ -811,7 +810,7 @@ impl GameManager {
                 _ => false,
             };
             if base2 {
-                stage_t.borrow_mut().spell_first = 2;
+                crate::stg!(ctx).spell_first = 2;
             }
         }
         crate::em!(ctx).msg = Some(hud.borrow().msg.clone());
@@ -823,7 +822,7 @@ impl GameManager {
         // 11 §3.1 / 06 §2 +0x290: load (not play) BGM slot 0, and slots 1/2 unless their name starts with ' ';
         // spell practice loads slot 0 only, chosen by card id. Slot 0 is played by GameMgr_Calc step 3.
         if !ctx.game.reload_same {
-            let names = stage_t.borrow().std.bgm.clone();
+            let names = crate::stg!(ctx).std.bgm.clone();
             if ctx.game.spell_practice() {
                 ctx.bgm
                     .load_bgm(0, spell_bgm(ctx.game.card).unwrap_or(&names[0]));
@@ -846,7 +845,7 @@ impl GameManager {
         ctx.overlays.popups.clear();
         self.tasks = vec![
             player_t,
-            stage_t.clone(),
+            stage_t,
             bullets_t,
             enemies_t,
             effects,
@@ -857,7 +856,6 @@ impl GameManager {
         let total = loading_total(&ctx.game, ctx.anm.entries_loaded - entries0);
         self.loading_total = total;
         self.gauge_at = Some(((total + 1).saturating_sub(k).max(1), l.min, l.max));
-        self.stage = Some(stage_t);
         self.hud = Some(hud);
         // 0x18B8A2C := 2 at the end of StageStart (13 §3).
         ctx.load_frames = 2;
@@ -1159,10 +1157,7 @@ impl Task<Ctx> for GameManager {
         // GameMgr_Calc's own z clear (11 §3.1), the previous frame left the viewport full-screen.
         ctx.rec.set_viewport(crate::drawlist::FULLSCREEN);
         // Its ignored colour argument is the stage fog colour g_Stage+0xAF4 (0xFF000000 before the first fog op).
-        let arg = self
-            .stage
-            .as_ref()
-            .map_or(0xff00_0000, |st| st.borrow().fog.color);
+        let arg = ctx.stage.as_deref().map_or(0xff00_0000, |st| st.fog.color);
         ctx.rec.clear_z(arg);
         let g = &mut ctx.game;
         // Step 7 (0x43A5BC): bit 2 := not paused and no game-over menu, so it is already 0 on the ESC frame (11 §2.1).

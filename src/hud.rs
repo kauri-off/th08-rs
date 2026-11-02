@@ -9,7 +9,6 @@ use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
 use crate::msg::{self, Dialogue, Event};
 use crate::player::{Player, Popup, Stats};
-use crate::stage::Stage;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 use std::cell::RefCell;
@@ -131,7 +130,6 @@ impl ClearPanel {
 
 pub struct Hud {
     pub msg: Rc<RefCell<Dialogue>>,
-    stage: Rc<RefCell<Stage>>,
     frame: u32,
     // front.anm VMs 0–15 (impl+i·0x2A4, 12 §5.2).
     front: Vec<AnmVm>,
@@ -258,14 +256,9 @@ fn stage_start_tiles(anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> Vec<Anm
 }
 
 impl Hud {
-    pub fn register(
-        ctx: &mut Ctx,
-        stage: Rc<RefCell<Stage>>,
-        fresh: bool,
-    ) -> Result<Rc<RefCell<Hud>>> {
+    pub fn register(ctx: &mut Ctx, fresh: bool) -> Result<Rc<RefCell<Hud>>> {
         let h = Rc::new(RefCell::new(Hud {
             msg: Rc::new(RefCell::new(Dialogue::default())),
-            stage,
             frame: 0,
             front: Vec::new(),
             title: Vec::new(),
@@ -483,7 +476,7 @@ impl Hud {
         for ev in events {
             match ev {
                 Event::Plate(n) => set_boss_plate(&ctx.anm, &mut ctx.rec, n),
-                Event::SpellBase(n) => self.stage.borrow_mut().spell_first = n,
+                Event::SpellBase(n) => crate::stg!(ctx).spell_first = n,
                 Event::Bgm(n) if n < 0 => ctx.bgm.stop_bgm(),
                 // Msg op 7 (10 §5.1): song-title card = stgNtxt script 3 with sprite n + 3, then preloaded BGM slot n.
                 Event::Bgm(n) => {
@@ -1346,7 +1339,7 @@ impl Task<Ctx> for Hud {
         if inp.down(crate::input::SKIP) && ctx.panel.repaint < 8 {
             ctx.panel.set_repaint(8);
         }
-        self.stage.borrow_mut().hud_cover = hud_cover(&self.load_vm);
+        crate::stg!(ctx).hud_cover = hud_cover(&self.load_vm);
         self.frame += 1;
         Ret::Next
     }

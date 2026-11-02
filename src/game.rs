@@ -56,6 +56,9 @@ pub struct Ctx {
     // Enemy manager 0x577F20 (07 §4): created by GameMgr's stage start (11 §3.1), dropped with the game manager
     // (11 §7). Step 9c interim owner (STEP9_WORLD.md).
     pub enemies: Option<Box<crate::enemy::EnemyManager>>,
+    // Stage g_Stage 0x4E4030 (06 §3): created by GameMgr's stage start (11 §3.1), dropped with the game manager
+    // (11 §7). Step 9d interim owner (STEP9_WORLD.md).
+    pub stage: Option<Box<crate::stage::Stage>>,
     // Port queue of bomb areas created by effects (14 §2.13).
     pub bomb_areas: crate::bomb::AreaQueue,
     // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
@@ -89,8 +92,8 @@ pub struct Ctx {
 // (13 §1.2), effect manager (13 §2), GM flags word (11 §2.1), rank (11 §2), ascii overlays (13 §4), HUD dirty fields
 // (12 §5.3), bomb area queue (14 §2.13), freeze byte and frames-since-load (13 §3), g_Gui call queue (12 §5.8),
 // g_Rng (11 §1), the player (09 §1; None inside the player's own calc), the bullet manager (08 §2; None inside
-// the bullet calc and the player calc, which hold it). Built by `sys!(ctx)`; these become `World`
-// fields in step 9 (ARCH_A §2.3).
+// the bullet calc and the player calc, which hold it), the stage (06 §3; None inside the stage calc). Built by
+// `sys!(ctx)`; these become `World` fields in step 9 (ARCH_A §2.3).
 pub struct Sys<'a> {
     pub sound: &'a mut crate::sound::Queue,
     pub fx: &'a mut crate::effect::Effects,
@@ -105,6 +108,7 @@ pub struct Sys<'a> {
     pub rng: &'a mut crate::rng::Rng,
     pub player: Option<&'a mut crate::player::Player>,
     pub bullets: Option<&'a mut crate::bullet::BulletManager>,
+    pub stage: Option<&'a mut crate::stage::Stage>,
 }
 
 impl Sys<'_> {
@@ -123,6 +127,7 @@ impl Sys<'_> {
             rng: &mut *self.rng,
             player: self.player.as_deref_mut(),
             bullets: self.bullets.as_deref_mut(),
+            stage: self.stage.as_deref_mut(),
         }
     }
 
@@ -175,12 +180,23 @@ macro_rules! em {
     };
 }
 
+// The stage of a `Ctx` inside a running stage (a field borrow, like `em!`).
+#[macro_export]
+macro_rules! stg {
+    ($s:expr) => {
+        $s.stage.as_deref_mut().expect("no stage")
+    };
+}
+
 #[macro_export]
 macro_rules! sys {
     ($c:expr) => {
         $crate::sys!($c; $c.player.as_deref_mut(); $c.bullets.as_deref_mut())
     };
     ($c:expr; $p:expr; $b:expr) => {
+        $crate::sys!($c; $p; $b; $c.stage.as_deref_mut())
+    };
+    ($c:expr; $p:expr; $b:expr; $s:expr) => {
         $crate::game::Sys {
             sound: &mut $c.sound,
             fx: &mut $c.effects,
@@ -195,6 +211,7 @@ macro_rules! sys {
             rng: &mut $c.rng,
             player: $p,
             bullets: $b,
+            stage: $s,
         }
     };
 }
@@ -215,6 +232,7 @@ pub struct TestSys {
     pub rng: crate::rng::Rng,
     pub player: Option<Box<crate::player::Player>>,
     pub bullets: Option<Box<crate::bullet::BulletManager>>,
+    pub stage: Option<Box<crate::stage::Stage>>,
 }
 
 #[cfg(test)]
@@ -328,6 +346,7 @@ impl Ctx {
             player: None,
             bullets: None,
             enemies: None,
+            stage: None,
             bomb_areas: Vec::new(),
             timer_pause: 0,
             load_frames: 0,

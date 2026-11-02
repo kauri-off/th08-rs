@@ -7,7 +7,6 @@ use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::ecl::{self, Ecl};
 use crate::game::{Ctx, Sys};
 use crate::player::Player;
-use crate::stage::Stage;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 use std::cell::RefCell;
@@ -734,7 +733,6 @@ pub struct EnemyManager {
     // mgr+0x9DCEFC sync slots (timeline ops 13/14), −1 empty.
     pub sync: [i32; 4],
     pub g: Globals,
-    pub stage: Option<Rc<RefCell<Stage>>>,
     // Manager "full" flag: the last spawn found no slot (07 §4.1).
     pub full: bool,
     // Draw lists by layer, linked at the end of each enemy's calc (07 §10.1 step 7).
@@ -800,7 +798,6 @@ impl EnemyManager {
             timelines,
             sync: [-1; 4],
             g,
-            stage: None,
             full: false,
             draw_lists: Default::default(),
             clock: Timer {
@@ -816,12 +813,7 @@ impl EnemyManager {
     }
 
     // EnemyManager_Register: the manager becomes `ctx.enemies` (replacing the last stage's) plus its three nodes.
-    pub fn register(
-        ctx: &mut Ctx,
-        index: usize,
-        stage: Option<Rc<RefCell<Stage>>>,
-        diff: i32,
-    ) -> Result<task::TaskRef<Ctx>> {
+    pub fn register(ctx: &mut Ctx, index: usize, diff: i32) -> Result<task::TaskRef<Ctx>> {
         let spell = ctx.game.spell_practice().then_some(ctx.game.card);
         let (ecl_name, enm) = files(index, spell);
         let ecl = ecl::parse(ctx.archive.read(&ecl_name)?)?;
@@ -832,7 +824,6 @@ impl EnemyManager {
         ctx.timer_pause = 0;
         let p = ctx.player.as_deref_mut().expect("player");
         let mut m = EnemyManager::new(ecl, p, diff);
-        m.stage = stage;
         m.stage_index = index;
         m.g.card = ctx.game.card;
         m.fast_forward = ctx.core.stage_frame;
@@ -1644,8 +1635,8 @@ impl EnemyManager {
         sys.panel.mark_lives(3);
         sys.panel.mark_bombs(3);
         sys.sound.play(crate::sound::TAN00_LOUD);
-        if let Some(st) = &self.stage {
-            st.borrow_mut().end_spell_bg();
+        if let Some(st) = sys.stage.as_deref_mut() {
+            st.end_spell_bg();
         }
         if !s.timed_out {
             self.cancel_and_kill_bonus(anm, sys);

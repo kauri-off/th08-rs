@@ -1181,8 +1181,8 @@ impl Exec<'_> {
             15 => self.sys.fx.screen(7, 16, 20, 20, 20, 0x15),
             // Two effects (0x38 / 0x3A / 0x41) with an extra script and the stage callback 0x4235A0.
             3 | 6 | 20 => {
-                if let Some(st) = &self.m.stage {
-                    st.borrow_mut().spell_mask = true;
+                if let Some(st) = self.sys.stage.as_deref_mut() {
+                    st.spell_mask = true;
                 }
                 let (kind, extra) = match n {
                     3 => (0x38, 0x61),
@@ -1268,8 +1268,8 @@ impl Exec<'_> {
                         };
                         c = x.chain_next;
                     }
-                    if let Some(st) = &self.m.stage {
-                        st.borrow_mut().spell_interrupt(if pause { 2 } else { 1 });
+                    if let Some(st) = self.sys.stage.as_deref_mut() {
+                        st.spell_interrupt(if pause { 2 } else { 1 });
                     }
                 }
             }
@@ -1334,8 +1334,8 @@ impl Exec<'_> {
     // Natives 26 / 28 / 29 "stage VMs interrupt k" (07 §12).
     // 07 §12 rows 26/28/29: g_Stage +0xB38 / +0xDDC, the spell-background pair of native 12.
     fn stage_interrupt(&mut self, k: u16) {
-        if let Some(st) = &self.m.stage {
-            st.borrow_mut().spell_interrupt(k);
+        if let Some(st) = self.sys.stage.as_deref_mut() {
+            st.spell_interrupt(k);
         }
     }
 
@@ -1547,8 +1547,8 @@ impl Exec<'_> {
         self.m.g.spell_left = None;
         // Timer +0x108 (remaining) := e+0x3378 (07 §11.1).
         self.m.g.spell_remaining.set(self.e.timeout);
-        if let Some(st) = &self.m.stage {
-            st.borrow_mut().start_spell_bg(self.anm, self.sys.rng);
+        if let Some(st) = self.sys.stage.as_deref_mut() {
+            st.start_spell_bg(self.anm, self.sys.rng);
         }
         // Ring at the boss pos e+0x2D34 (not the final pos); type 52 while GameFlags bits 7–8 ≠ 0 (07 §11.1).
         let special = crate::pl!(self.sys).special(*self.sys.flags);
@@ -2315,8 +2315,8 @@ impl Exec<'_> {
             // Stage section request (06 §4.1).
             147 => {
                 let n = self.ai(t, ins, 0);
-                if let Some(s) = &self.m.stage {
-                    s.borrow_mut().section_request = n;
+                if let Some(s) = self.sys.stage.as_deref_mut() {
+                    s.section_request = n;
                 }
             }
             // HUD 0x423130(n); the 0x164D30C += 1800 happens in the HUD request handler (07 §7 op 148).
