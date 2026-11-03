@@ -11,9 +11,7 @@ use web_time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-#[cfg(not(target_arch = "wasm32"))]
-use winit::keyboard::KeyCode;
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{KeyCode, PhysicalKey};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::window::Fullscreen;
 use winit::window::{Window, WindowId};
@@ -28,6 +26,26 @@ enum UserEvent {
     Ready(Box<Running>),
     // Launcher mode: the window's GPU device is ready.
     Gfx(Box<Gfx>),
+    // Start-up failed; `gfx` is a fresh device for the error screen (None: no GPU, a message box instead).
+    Failed {
+        window: Arc<Window>,
+        msg: String,
+        gfx: Option<Box<Gfx>>,
+    },
+}
+
+// The `Failed` event for a start-up error: the error screen needs a new device, the failed load consumed the old one.
+async fn failed(window: Arc<Window>, e: anyhow::Error, vsync: Option<bool>) -> UserEvent {
+    log::error!("startup failed: {e:#}");
+    let gfx = match vsync {
+        Some(v) => Gfx::new(window.clone(), v).await.ok().map(Box::new),
+        None => None,
+    };
+    UserEvent::Failed {
+        window,
+        msg: format!("{e:#}"),
+        gfx,
+    }
 }
 
 // The launcher screen in the game window, before `settings::init`.
@@ -38,6 +56,8 @@ struct Launch {
     // Settings before the launcher (window size, vsync) and the files picked in the web page.
     start: Settings,
     folder: Option<crate::launcher::Folder>,
+    // Saved `launcher = off`: when the game starts unless Shift was held (set at the first redraw).
+    auto_at: Option<Instant>,
 }
 
 struct App {
@@ -103,25 +123,24 @@ impl ApplicationHandler<UserEvent> for App {
                 screen: None,
                 start,
                 folder,
+                auto_at: None,
             }));
             spawn(async move {
-                match Gfx::new(window, vsync).await {
-                    Ok(g) => {
-                        let _ = proxy.send_event(UserEvent::Gfx(Box::new(g)));
-                    }
-                    Err(e) => log::error!("startup failed: {e:#}"),
-                }
+                let ev = match Gfx::new(window.clone(), vsync).await {
+                    Ok(g) => UserEvent::Gfx(Box::new(g)),
+                    Err(e) => failed(window, e, None).await,
+                };
+                let _ = proxy.send_event(ev);
             });
             return;
         }
         let source = self.source.clone().unwrap();
         spawn(async move {
-            match init(window, source, vsync).await {
-                Ok(r) => {
-                    let _ = proxy.send_event(UserEvent::Ready(r));
-                }
-                Err(e) => log::error!("startup failed: {e:#}"),
-            }
+            let ev = match init(window.clone(), source, vsync).await {
+                Ok(r) => UserEvent::Ready(r),
+                Err(e) => failed(window, e, Some(vsync)).await,
+            };
+            let _ = proxy.send_event(ev);
         });
     }
 
@@ -137,7 +156,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn user_event(&mut self, _: &ActiveEventLoop, ev: UserEvent) {
+    fn user_event(&mut self, el: &ActiveEventLoop, ev: UserEvent) {
         match ev {
             UserEvent::Ready(mut r) => {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -155,7 +174,8 @@ impl ApplicationHandler<UserEvent> for App {
                 let Some(l) = self.launch.as_mut() else {
                     return;
                 };
-                let model = crate::launcher::Model::new(&l.start, l.folder.take().unwrap());
+                let mut model = crate::launcher::Model::new(&l.start, l.folder.take().unwrap());
+                model.waiting = !l.start.launcher && model.can_play();
                 l.screen = Some(crate::launcher::Screen::new(&l.window, &gfx, model));
                 let mut gfx = gfx;
                 if self.suspended {
@@ -164,6 +184,7 @@ impl ApplicationHandler<UserEvent> for App {
                 l.gfx = Some(gfx);
                 l.window.request_redraw();
             }
+            UserEvent::Failed { window, msg, gfx } => self.failed(el, window, msg, gfx),
         }
     }
 
@@ -171,6 +192,14 @@ impl ApplicationHandler<UserEvent> for App {
         let Some(l) = self.launch.as_ref() else {
             return;
         };
+        if let (Some(t), Some(s)) = (l.auto_at, l.screen.as_ref())
+            && s.model().waiting
+        {
+            if t <= Instant::now() {
+                return self.play(el);
+            }
+            return el.set_control_flow(ControlFlow::WaitUntil(t));
+        }
         match l.screen.as_ref().and_then(|s| s.repaint_at) {
             Some(t) if t <= Instant::now() => {
                 l.window.request_redraw();
@@ -381,6 +410,10 @@ impl App {
         match ev {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::RedrawRequested => match screen.redraw(&l.window, gfx) {
+                // Saved `launcher = off`: Shift may still open the screen for a moment after the first frame.
+                None if screen.model().waiting => {
+                    l.auto_at.get_or_insert_with(|| Instant::now() + AUTO_WAIT);
+                }
                 Some(crate::launcher::Action::Play) => self.play(el),
                 Some(crate::launcher::Action::Quit) => el.exit(),
                 None => {
@@ -422,6 +455,18 @@ impl App {
                 if let WindowEvent::ModifiersChanged(m) = &ev {
                     self.alt = m.state().alt_key();
                 }
+                let shift = match &ev {
+                    WindowEvent::ModifiersChanged(m) => m.state().shift_key(),
+                    WindowEvent::KeyboardInput { event, .. } => matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight)
+                    ),
+                    _ => false,
+                };
+                if shift && screen.model().waiting {
+                    screen.model_mut().waiting = false;
+                    l.window.request_redraw();
+                }
                 if screen.on_event(&l.window, &ev) {
                     l.window.request_redraw();
                 }
@@ -458,19 +503,80 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         let source = Source::native(s.game_dir.clone().expect("Play needs a game folder"));
         #[cfg(target_arch = "wasm32")]
-        let source = self.source.take().expect("web files");
+        let source = self.source.clone().expect("web files");
+        let vsync = s.vsync;
         crate::settings::init(s);
         self.adopt(crate::settings::get());
         let (proxy, window) = (self.proxy.clone(), l.window);
         spawn(async move {
-            match load(window, source, *gfx).await {
-                Ok(r) => {
-                    let _ = proxy.send_event(UserEvent::Ready(r));
-                }
-                Err(e) => log::error!("startup failed: {e:#}"),
-            }
+            let ev = match load(window.clone(), source, *gfx).await {
+                Ok(r) => UserEvent::Ready(r),
+                Err(e) => failed(window, e, Some(vsync)).await,
+            };
+            let _ = proxy.send_event(ev);
         });
     }
+
+    // A start-up error: the launcher's error screen (Back returns to the settings), or a message box and exit when
+    // there is no GPU. Tool runs only log it and exit.
+    fn failed(
+        &mut self,
+        el: &ActiveEventLoop,
+        window: Arc<Window>,
+        msg: String,
+        gfx: Option<Box<Gfx>>,
+    ) {
+        let start = self.settings.filter(|s| !s.is_tool_run()).cloned();
+        let (Some(start), Some(mut gfx)) = (start, gfx) else {
+            if self.settings.is_some_and(|s| s.is_tool_run()) {
+                #[cfg(not(target_arch = "wasm32"))]
+                std::process::exit(1);
+            }
+            message_box(&format!("The game could not start:\n{msg}"));
+            return el.exit();
+        };
+        let folder = match &self.source {
+            #[cfg(target_arch = "wasm32")]
+            Some(src) => crate::launcher::Folder::Web(src.names()),
+            _ => crate::launcher::Folder::Native,
+        };
+        let mut model = crate::launcher::Model::new(&start, folder);
+        model.error = Some(msg);
+        let screen = crate::launcher::Screen::new(&window, &gfx, model);
+        if self.suspended {
+            gfx.detach();
+        }
+        window.request_redraw();
+        self.launch = Some(Box::new(Launch {
+            window,
+            gfx: Some(gfx),
+            screen: Some(screen),
+            start,
+            folder: None,
+            auto_at: None,
+        }));
+    }
+}
+
+// How long a saved `launcher = off` waits for Shift after the first frame (the window must be mapped and focused for
+// the modifier state to arrive).
+const AUTO_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+// Start-up error without a window to draw in.
+fn message_box(msg: &str) {
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("th08")
+        .set_description(msg)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+    #[cfg(target_arch = "wasm32")]
+    if let Some(w) = web_sys::window() {
+        let _ = w.alert_with_message(msg);
+    }
+    #[cfg(target_os = "android")]
+    let _ = msg;
 }
 
 // Port-only fullscreen toggle keys: F11, or Enter / keypad Enter with Alt held.

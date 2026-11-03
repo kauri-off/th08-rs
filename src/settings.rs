@@ -3,7 +3,7 @@
 //! > defaults.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 pub use crate::coreconfig::Ending;
 
@@ -57,6 +57,11 @@ impl Group {
             Group::Cheats => "Cheats/debug",
             Group::Tools => "Recording/tools",
         }
+    }
+
+    // Launcher screen: shown only in the developer view; edits there apply to the run, never saved.
+    pub fn developer(self) -> bool {
+        matches!(self, Group::Cheats | Group::Tools)
     }
 }
 
@@ -372,7 +377,7 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "on",
         group: Group::Display,
-        help: "show this settings screen at start (--no-launcher skips it once)",
+        help: "show this screen at start; when off, hold Shift while th08 starts (web: ?launcher=1) to see it again",
         set: |s, v| {
             s.launcher = parse_bool(v)?;
             Ok(())
@@ -1202,6 +1207,7 @@ pub fn command(dirs: &PlatformDirs) -> clap::Command {
             "Each switch is also an env var (shown), a web URL parameter (name without TH08_, lowercase) and a\n\
              `key = value` line in port.cfg. Priority: command line > env > port.cfg > default.\n\
              Booleans take 1/0, true/false or on/off; `--switch` alone means on, `--no-switch` off.\n\
+             The launcher screen turned off (launcher = off): hold Shift while th08 starts to show it again.\n\
              port.cfg: {}",
             dirs.port_cfg().map_or("(no config dir)".into(), |p| p.display().to_string())
         ))
@@ -1252,19 +1258,22 @@ pub fn command(dirs: &PlatformDirs) -> clap::Command {
     cmd
 }
 
-static SETTINGS: OnceLock<Settings> = OnceLock::new();
+static SETTINGS: RwLock<Option<&'static Settings>> = RwLock::new(None);
 
-// Entry points: install the settings built from the command line before anything reads them.
+// Entry points: install the settings built from the command line before anything reads them. The launcher installs
+// again after a failed start-up (Back, then Play); the replaced settings are leaked, as `&'static` readers may hold them.
 pub fn init(s: Settings) {
-    if SETTINGS.set(s).is_err() {
-        log::error!("settings already initialised");
-    }
+    *SETTINGS.write().unwrap() = Some(Box::leak(Box::new(s)));
 }
 
-// The settings, read once (defaults + env / URL, never port.cfg, if the entry point did not call `init`). Tools and
-// tests without an `init` get the desktop dirs, as the game binary does.
+// The settings (defaults + env / URL, never port.cfg, if the entry point did not call `init`). Tools and tests
+// without an `init` get the desktop dirs, as the game binary does.
 pub fn get() -> &'static Settings {
-    SETTINGS.get_or_init(|| Settings::from_environment(default_dirs()))
+    if let Some(s) = *SETTINGS.read().unwrap() {
+        return s;
+    }
+    let mut w = SETTINGS.write().unwrap();
+    w.get_or_insert_with(|| Box::leak(Box::new(Settings::from_environment(default_dirs()))))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

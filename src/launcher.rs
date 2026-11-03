@@ -214,11 +214,43 @@ fn norm(e: &Entry, v: &str) -> String {
     }
 }
 
+// Player-facing name of an entry; developer entries keep their key.
+pub fn label(e: &Entry) -> String {
+    let l = match e.key {
+        "game_dir" => "Game folder",
+        "scale" => "Window size",
+        "fullscreen" => "Fullscreen",
+        "vsync" => "VSync",
+        "launcher" => "Show this screen at start",
+        "save_dir" => "Save folder",
+        "font" => "Dialogue font",
+        "soundfont" => "MIDI SoundFont",
+        "seed" => "RNG seed",
+        "stage" => "Start at stage",
+        "stage_frame" => "Stage start frame",
+        "player" => "Shot type",
+        "rank" => "Difficulty",
+        "power" => "Starting power",
+        "continues" => "Continues used",
+        "ending" => "Play ending",
+        "replay" => "Play replay",
+        "replay_speed" => "Replay speed",
+        _ => return e.key.replace('_', " "),
+    };
+    l.into()
+}
+
 // The edited settings: one row per `ENTRIES` entry.
 pub struct Model {
     rows: Vec<Row>,
     folder: Folder,
     dirs: settings::PlatformDirs,
+    // Developer view: Cheats and Tools rows and the origin tags are shown.
+    pub dev: bool,
+    // Start-up error after Play (shown instead of the settings, with Back / Quit).
+    pub error: Option<String>,
+    // `launcher = off` saved: the game starts unless Shift is held, this text is shown meanwhile.
+    pub waiting: bool,
 }
 
 impl Model {
@@ -234,11 +266,18 @@ impl Model {
                     origin: s.origin(e.key),
                 }
             })
-            .collect();
+            .collect::<Vec<Row>>();
+        // A developer switch given on the command line / env opens the developer view.
+        let dev = rows
+            .iter()
+            .any(|r| r.e.group.developer() && r.origin > Origin::PortCfg);
         Self {
             rows,
             folder,
             dirs: s.dirs.clone(),
+            dev,
+            error: None,
+            waiting: false,
         }
     }
 
@@ -270,7 +309,7 @@ impl Model {
         }
     }
 
-    fn can_play(&self) -> bool {
+    pub fn can_play(&self) -> bool {
         self.folder_ok() && self.rows.iter().all(|r| r.error().is_none())
     }
 
@@ -285,17 +324,21 @@ impl Model {
         )
     }
 
-    // port.cfg / localStorage: every row edited on screen, removed when back at its default.
-    pub fn save(&self) {
-        let changes: Vec<(&str, Option<&str>)> = self
-            .rows
+    // port.cfg / localStorage changes: every player row edited on screen, removed when back at its default. Cheats
+    // and Tools edits apply to this run only.
+    pub fn changes(&self) -> Vec<(&'static str, Option<&str>)> {
+        self.rows
             .iter()
-            .filter(|r| r.changed())
+            .filter(|r| r.changed() && !r.e.group.developer())
             .map(|r| {
                 let keep = !r.value.is_empty() && r.value != r.default_value();
                 (r.e.key, keep.then_some(r.value.as_str()))
             })
-            .collect();
+            .collect()
+    }
+
+    pub fn save(&self) {
+        let changes = self.changes();
         if !changes.is_empty() {
             settings::write_port_cfg(&self.dirs, &changes);
         }
@@ -308,6 +351,17 @@ impl Model {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
+        if self.waiting {
+            egui::CentralPanel::default_margins().show(ui, |ui| {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Starting the game…  hold Shift to open the settings screen");
+                });
+            });
+            return None;
+        }
+        if self.error.is_some() {
+            return self.error_ui(ui);
+        }
         let mut act = None;
         egui::Panel::top("folder").show(ui, |ui| {
             ui.add_space(4.0);
@@ -331,6 +385,8 @@ impl Model {
                 if cfg!(not(target_arch = "wasm32")) && ui.button("Quit").clicked() {
                     act = Some(Action::Quit);
                 }
+                ui.checkbox(&mut self.dev, "Developer")
+                    .on_hover_text("show cheats and tools (used for this run only, never saved)");
                 if !self.folder_ok() {
                     ui.colored_label(ui.visuals().warn_fg_color, "select the game folder first");
                 } else if self.rows.iter().any(|r| r.error().is_some()) {
@@ -341,9 +397,52 @@ impl Model {
         });
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                for g in Group::ALL {
+                if !self.dev {
+                    let active: Vec<String> = self
+                        .rows
+                        .iter()
+                        .filter(|r| r.e.group.developer() && r.value != r.default_value())
+                        .map(|r| r.e.key.replace('_', " "))
+                        .collect();
+                    if !active.is_empty() {
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            format!("Developer settings active: {}", active.join(", ")),
+                        );
+                    }
+                }
+                let dev = self.dev;
+                for g in Group::ALL.into_iter().filter(|g| dev || !g.developer()) {
                     self.group_ui(ui, g);
                 }
+            });
+        });
+        act
+    }
+
+    fn error_ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
+        let mut act = None;
+        egui::Panel::bottom("buttons").show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("  Back  ").clicked() {
+                    self.error = None;
+                }
+                if cfg!(not(target_arch = "wasm32")) && ui.button("Quit").clicked() {
+                    act = Some(Action::Quit);
+                }
+            });
+            ui.add_space(4.0);
+        });
+        egui::CentralPanel::default_margins().show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.heading("The game could not start");
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    self.error.as_deref().unwrap_or(""),
+                );
             });
         });
         act
@@ -370,8 +469,7 @@ impl Model {
                         egui::TextEdit::singleline(&mut r.value)
                             .hint_text("folder with th08.dat")
                             .desired_width(f32::INFINITY),
-                    )
-                    .on_hover_text(r.e.help);
+                    );
                 }
                 Folder::Web(names) => {
                     ui.label(if names.is_empty() {
@@ -388,7 +486,7 @@ impl Model {
             } else {
                 ui.colored_label(ui.visuals().error_fg_color, "no th08.dat in this folder");
             }
-            if let Folder::Native = self.folder {
+            if self.dev && matches!(self.folder, Folder::Native) {
                 origin_label(ui, self.row("game_dir"));
             }
         });
@@ -405,6 +503,7 @@ impl Model {
             return;
         }
         let set_here = rows.iter().any(|&i| self.rows[i].origin > Origin::PortCfg);
+        let dev = self.dev;
         egui::CollapsingHeader::new(egui::RichText::new(g.title()).strong())
             .default_open(matches!(g, Group::GameData | Group::Display) || set_here)
             .show(ui, |ui| {
@@ -414,7 +513,7 @@ impl Model {
                     .spacing([12.0, 4.0])
                     .show(ui, |ui| {
                         for i in rows {
-                            row_ui(ui, &mut self.rows[i]);
+                            row_ui(ui, &mut self.rows[i], dev);
                             ui.end_row();
                         }
                     });
@@ -422,12 +521,18 @@ impl Model {
     }
 }
 
-fn row_ui(ui: &mut egui::Ui, r: &mut Row) {
-    ui.label(r.e.key.replace('_', " ")).on_hover_text(r.e.help);
+// Help is shown once, under the value; the developer view adds the flag / env name and the origin tag.
+fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool) {
+    let l = ui.label(label(r.e));
+    if dev {
+        l.on_hover_text(format!("--{} / {}", r.e.key.replace('_', "-"), r.e.env));
+    }
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
             value_ui(ui, r);
-            origin_label(ui, r);
+            if dev {
+                origin_label(ui, r);
+            }
         });
         if let Some(err) = r.error() {
             ui.colored_label(ui.visuals().error_fg_color, err);
@@ -773,6 +878,44 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("TH08.DAT"), b"").unwrap();
         d
+    }
+
+    fn edit(m: &mut Model, key: &str, v: &str) {
+        m.rows.iter_mut().find(|r| r.e.key == key).unwrap().value = v.into();
+    }
+
+    #[test]
+    fn developer_rows_not_saved() {
+        let mut s = Settings::default();
+        s.set_from(Origin::PortCfg, "turbo", "2").unwrap();
+        let mut m = Model::new(&s, Folder::Native);
+        assert!(!m.dev);
+        edit(&mut m, "invuln", "on");
+        edit(&mut m, "replay_save", "3");
+        edit(&mut m, "fullscreen", "on");
+        edit(&mut m, "launcher", "off");
+        edit(&mut m, "scale", "1");
+        assert_eq!(
+            m.changes(),
+            [("fullscreen", Some("on")), ("launcher", Some("off"))]
+        );
+        let r = m.settings();
+        assert!(r.invuln && r.replay_save == Some(3) && r.fullscreen && !r.launcher);
+        assert_eq!((r.turbo, r.origin("turbo")), (2, Origin::PortCfg));
+        edit(&mut m, "fullscreen", "off");
+        assert_eq!(m.changes(), [("launcher", Some("off"))]);
+        s.set_from(Origin::Cli, "invuln", "on").unwrap();
+        assert!(Model::new(&s, Folder::Native).dev);
+    }
+
+    #[test]
+    fn labels() {
+        assert_eq!(label(settings::find("scale").unwrap()), "Window size");
+        assert_eq!(label(settings::find("session_rng").unwrap()), "session rng");
+        for e in ENTRIES.iter().filter(|e| !e.group.developer()) {
+            let l = label(e);
+            assert!(l.starts_with(char::is_uppercase), "{}: no label", e.key);
+        }
     }
 
     #[test]

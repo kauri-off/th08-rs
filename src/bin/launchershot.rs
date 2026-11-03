@@ -1,10 +1,13 @@
-//! Port tool: renders the launcher screen offscreen to a PNG. `launchershot OUT.png [WxH] [th08 switches]...`
+//! Port tool: renders the launcher screen offscreen to a PNG.
+//! `launchershot OUT.png [WxH] [--developer] [--error=TEXT] [th08 switches]...`
 
 fn main() {
     env_logger::init();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: launchershot OUT.png [WxH] [th08 switches]...");
+        eprintln!(
+            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [th08 switches]..."
+        );
         std::process::exit(2);
     }
     let out = args.remove(0);
@@ -15,12 +18,21 @@ fn main() {
     if size.is_some() {
         args.remove(0);
     }
+    // Launcher views: the developer view, the start-up error screen.
+    let dev = args.iter().any(|a| a == "--developer");
+    let error = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--error="))
+        .map(String::from);
+    args.retain(|a| a != "--developer" && !a.starts_with("--error="));
     let s = match th08::settings::Settings::from_args(th08::launcher::desktop_dirs(), args) {
         Ok(s) => s,
         Err(e) => e.exit(),
     };
     let gfx = pollster::block_on(th08::gfx::Gfx::headless()).expect("GPU adapter");
-    let model = th08::launcher::Model::new(&s, th08::launcher::Folder::Native);
+    let mut model = th08::launcher::Model::new(&s, th08::launcher::Folder::Native);
+    model.dev |= dev;
+    model.error = error;
     th08::launcher::render_image(&gfx, model, size.unwrap_or((640, 480)))
         .save(&out)
         .expect("save png");

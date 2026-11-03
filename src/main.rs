@@ -1,5 +1,6 @@
 //! Native entry point: `th08 [game dir] [--switch value]...` (settings.rs) shows the launcher screen (launcher.rs)
-//! or, with `--no-launcher` / tool switches, runs the game window directly (app.rs).
+//! or, with `--no-launcher` / tool switches, runs the game window directly (app.rs); a saved `launcher = off`
+//! starts the game from the launcher window unless Shift is held.
 // Release builds on Windows are GUI-subsystem (no console window); see attach_parent_console.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -28,7 +29,9 @@ fn main() {
         Ok(s) => s,
         Err(e) => e.exit(),
     };
-    if s.launcher && !s.is_tool_run() {
+    // A saved `launcher = off` still goes through the launcher window, so Shift held at start-up can open it.
+    let saved_off = !s.launcher && s.origin("launcher") == th08::settings::Origin::PortCfg;
+    if (s.launcher || saved_off) && !s.is_tool_run() {
         th08::launcher::prefill_bundled_game_dir(&mut s);
         th08::app::run_launcher(None, s);
         return;
