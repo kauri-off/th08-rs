@@ -27,12 +27,16 @@ fn group_id(g: Group) -> &'static str {
     }
 }
 
+// `summary`: the short row text, `help` the long one; `unit` / `words`: number suffix and display words by value.
 // `platforms`: the screens that show the entry; `persist`: saved to port.cfg (else launch.cfg, one start only).
 fn entry(e: &Entry) -> Value {
     json!({
         "key": e.key,
         "label": e.label,
+        "summary": e.summary,
         "help": e.help,
+        "unit": e.unit,
+        "words": e.words.iter().map(|&(v, w)| json!({ "value": v, "label": w })).collect::<Vec<_>>(),
         "kind": kind(e.kind),
         "default": e.default,
         "group": group_id(e.group),
@@ -48,7 +52,7 @@ fn schema() -> Value {
         .map(|&g| json!({ "id": group_id(g), "title": g.title() }))
         .collect();
     let entries: Vec<Value> = ENTRIES.iter().map(entry).collect();
-    json!({ "version": 2, "groups": groups, "entries": entries })
+    json!({ "version": 3, "groups": groups, "entries": entries })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -111,6 +115,54 @@ mod tests {
             e.platforms
         );
         assert_eq!(j["persist"].as_bool().unwrap(), e.persist);
+        assert_eq!((s("summary"), s("unit")), (e.summary, e.unit));
+        let words: Vec<(&str, &str)> = j["words"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| (w["value"].as_str().unwrap(), w["label"].as_str().unwrap()))
+            .collect();
+        assert_eq!(words, e.words);
+    }
+
+    // Every entry has a short summary in plain words; every enum choice has a display word.
+    #[test]
+    fn display_metadata() {
+        for e in ENTRIES {
+            let s = e.summary;
+            assert!(
+                !s.is_empty() && s.chars().count() <= 60,
+                "{}: summary {s:?}",
+                e.key
+            );
+            assert!(
+                s.starts_with(|c: char| c.is_uppercase()),
+                "{}: sentence case",
+                e.key
+            );
+            assert!(
+                !s.contains("--") && !s.ends_with('.'),
+                "{}: plain summary",
+                e.key
+            );
+            for (v, w) in e.words {
+                assert!(!w.is_empty(), "{}: empty word for {v:?}", e.key);
+                assert!(
+                    e.check(v).is_ok() || v.is_empty(),
+                    "{}: word for invalid {v:?}",
+                    e.key
+                );
+            }
+            if let Kind::Enum(c) = e.kind {
+                for v in c {
+                    assert!(
+                        e.words.iter().any(|(x, _)| x == v),
+                        "{}: no word for {v}",
+                        e.key
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -120,7 +172,16 @@ mod tests {
         assert_eq!(entries.len(), ENTRIES.len());
         // One entry of each kind, from both audiences.
         for key in [
-            "vsync", "scale", "rank", "ending", "game_dir", "font", "invuln", "turbo",
+            "vsync",
+            "scale",
+            "rank",
+            "ending",
+            "game_dir",
+            "font",
+            "invuln",
+            "turbo",
+            "touch_move",
+            "replay_speed",
         ] {
             let i = ENTRIES.iter().position(|e| e.key == key).unwrap();
             round_trip(&ENTRIES[i], &entries[i]);

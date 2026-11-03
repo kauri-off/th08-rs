@@ -16,7 +16,12 @@ data class Group(val id: String, val title: String)
 data class Entry(
     val key: String,
     val label: String,
+    // Short row text; `help` is the long text behind the info button.
+    val summary: String,
     val help: String,
+    // Number suffix ("%", " dp") and display words by value text ("" = unset), from settings.rs `unit` / `words`.
+    val unit: String,
+    val words: Map<String, String>,
     val kind: Kind,
     val default: String,
     val group: String,
@@ -49,10 +54,17 @@ class Schema(val groups: List<Group>, val entries: List<Entry>) {
                     else -> Kind.Text("")
                 }
                 val ps = e.getJSONArray("platforms")
+                val ws = e.getJSONArray("words")
+                val words = (0 until ws.length()).associate { i ->
+                    ws.getJSONObject(i).let { w -> w.getString("value") to w.getString("label") }
+                }
                 Entry(
                     key = e.getString("key"),
                     label = e.getString("label"),
+                    summary = e.getString("summary"),
                     help = e.getString("help"),
+                    unit = e.getString("unit"),
+                    words = words,
                     kind = kind,
                     default = norm(kind, e.getString("default")),
                     group = e.getString("group"),
@@ -63,6 +75,28 @@ class Schema(val groups: List<Group>, val entries: List<Entry>) {
             }
             return Schema(groups, entries)
         }
+    }
+}
+
+// Display text of a value: the table's word, else On/Off, number + unit, the raw text; "" = "Not set".
+fun Entry.display(v: String): String {
+    words[v]?.let { return it }
+    return when {
+        kind == Kind.Bool -> if (v == "on") "On" else "Off"
+        v.isEmpty() -> "Not set"
+        kind is Kind.IntRange -> v + unit
+        else -> v
+    }
+}
+
+// The values a choice dialog lists: enum choices, or every value of an int range that has a word for each value.
+fun Entry.options(): List<String>? {
+    val unset = if (default.isEmpty()) listOf("") else emptyList()
+    return when (val k = kind) {
+        is Kind.Choice -> unset + k.choices
+        is Kind.IntRange if k.max - k.min < 8 && (k.min..k.max).all { words.containsKey(it.toString()) } ->
+            unset + (k.min..k.max).map { it.toString() }
+        else -> null
     }
 }
 

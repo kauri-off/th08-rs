@@ -1,4 +1,4 @@
-// th08 APK (MATERIAL1): Compose launcher (LauncherActivity) + NativeActivity game in the ":game" process.
+// th08 APK (MATERIAL2): Compose launcher (LauncherActivity) + NativeActivity game in the ":game" process.
 // Inputs as -P properties (tools/android/build_apk.sh sets them):
 //   th08.abis       comma list, arm64-v8a (default) / x86_64     th08.data      folder with th08.dat + thbgm.dat
 //   th08.keystore   keystore.properties for release signing       th08.debugKey  debug keystore (default
@@ -190,6 +190,9 @@ dependencies {
     implementation(bom)
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material3.adaptive:adaptive:1.1.0")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
