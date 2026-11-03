@@ -9,6 +9,7 @@ use crate::input;
 use crate::item::ItemManager;
 use crate::rng::Rng;
 use crate::task::{self, Chain, Ret, Task};
+use crate::types::{Angle, ShotType, lo8};
 use anyhow::Result;
 
 pub use crate::bomb::{Area, Bomb};
@@ -58,27 +59,27 @@ impl Default for GaugeLimits {
 
 impl GaugeLimits {
     // Table of 09 §9.3 by shot type (solo human = even ≥ 4, solo youkai = odd ≥ 4).
-    pub fn for_shot(shot: u8) -> Self {
+    pub fn for_shot(shot: ShotType) -> Self {
         let d = Self::default();
         match shot {
-            3 => Self {
+            ShotType::YoumuYuyuko => Self {
                 min: -5000,
                 human_max: -3000,
                 ..d
             },
-            10 => Self {
+            ShotType::Youmu => Self {
                 min: -5000,
                 max: 5000,
                 human_max: -3000,
                 youkai_max: 3000,
                 ..d
             },
-            s if s >= 4 && s % 2 == 0 => Self {
+            s if s.is_solo_human() => Self {
                 max: 2000,
                 youkai: 2001,
                 ..d
             },
-            s if s >= 4 => Self {
+            s if s.is_solo_youkai() => Self {
                 min: -2000,
                 human: -2001,
                 ..d
@@ -184,7 +185,7 @@ impl Default for Stats {
             graze_total: 0,
             gauge: 0,
             limits: GaugeLimits::default(),
-            max_point: 100000,
+            max_point: 100_000,
             point_items: 0,
             point_items2: 0,
             extends: 0,
@@ -205,7 +206,7 @@ impl Default for Stats {
             point_counter: 0,
             score_disp: 0,
             score_step: 0,
-            hiscore: 100000,
+            hiscore: 100_000,
             hiscore_cont: 0,
             clock: 0,
             continues: 0,
@@ -219,7 +220,7 @@ impl Default for Stats {
 }
 
 // Max point value at a fresh start by difficulty (11 §3.2).
-pub const MAX_POINT: [i32; 5] = [60000, 100000, 200000, 300000, 300000];
+pub const MAX_POINT: [i32; 5] = [60000, 100_000, 200_000, 300_000, 300_000];
 // Time threshold per stage index 0–8 and difficulty E/N/H/L (11 §3.1); Extra reads 10.
 pub const TIME_THR: [[i32; 4]; 8] = [
     [2000, 2500, 2700, 3000],
@@ -235,7 +236,7 @@ pub const TIME_THR: [[i32; 4]; 8] = [
 impl Stats {
     // AddScore 0x4181F0: score += n/10 (11 §5). No cap here (RE-Q57): only GM calc step 9 and the GM unregister cap.
     pub fn add_score(&mut self, v: i32) {
-        self.score10 += (v / 10) as i64;
+        self.score10 += i64::from(v / 10);
     }
 
     pub fn score(&self) -> i64 {
@@ -250,8 +251,8 @@ impl Stats {
 
     // GameMgr_UpdateChecksum 0x406E50: only the 2 × Rng_Range(100000) draws are kept (11 §1.5, §5).
     pub fn checksum(rng: &mut Rng) {
-        rng.range(100000);
-        rng.range(100000);
+        rng.range(100_000);
+        rng.range(100_000);
     }
 
     // `s = g_Rng; GameMgr_UpdateChecksum; g_Rng = s`: state kept, the 4 draws still count in `rng_ctr` (11 §1.4).
@@ -264,7 +265,7 @@ impl Stats {
     // GameMgr_ScrambleDecoys 0x44E160: 5 × Range + 3 × Float, draws only (11 §1.5).
     pub fn scramble(rng: &mut Rng) {
         for _ in 0..5 {
-            rng.range(100000);
+            rng.range(100_000);
         }
         for _ in 0..3 {
             rng.next_f32();
@@ -273,24 +274,24 @@ impl Stats {
 
     // Gauge queries (09 §9.3).
     pub fn youkai_max(&self) -> bool {
-        self.gauge as i32 >= self.limits.youkai_max
+        i32::from(self.gauge) >= self.limits.youkai_max
     }
 
     pub fn youkai(&self) -> bool {
-        self.gauge as i32 >= self.limits.youkai
+        i32::from(self.gauge) >= self.limits.youkai
     }
 
     pub fn human_max(&self) -> bool {
-        self.gauge as i32 <= self.limits.human_max
+        i32::from(self.gauge) <= self.limits.human_max
     }
 
     pub fn human(&self) -> bool {
-        self.gauge as i32 <= self.limits.human
+        i32::from(self.gauge) <= self.limits.human
     }
 
     // GaugeAdd clamp; callers apply the "ignored while bombing unless forced" rule (09 §9.3).
     pub fn gauge_add(&mut self, n: i32) {
-        self.gauge = (self.gauge as i32 + n).clamp(self.limits.min, self.limits.max) as i16;
+        self.gauge = (i32::from(self.gauge) + n).clamp(self.limits.min, self.limits.max) as i16;
     }
 
     // 08 §8.5 1up rule (Extend 0x439B29, 11 §5): life, else bomb; sfx 0x1C, rank +200.
@@ -361,6 +362,10 @@ pub struct GrazeEnv {
 }
 
 // Player object 0x17D5EF8, 0xE2B30 bytes (09 §1.1).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "separate bytes of the original object (09 §1.1) and port-only switches, not one flag word"
+)]
 #[derive(Clone)]
 pub struct Player {
     // +0: 0 normal, 1 respawning, 2 dying (deathbomb window), 3 invulnerable.
@@ -443,10 +448,10 @@ pub struct Player {
     // +0xE2AF4 death / respawn / invulnerability timer.
     pub state_timer: Timer,
     // +0xE2B0C option base angle, −π/2 at load.
-    pub option_angle: f32,
+    pub option_angle: Angle,
     // +0xE2B2C time-orb damage step: 40, solo human 27.
     pub orb_step: i32,
-    // GM +0x3DBA9 shot type 0–11 (09 §2).
+    // GM +0x3DBA9 shot type 0–11 (09 §2), raw byte; typed through `shot()`.
     pub shot_type: u8,
     pub stats: Stats,
     pub env: GrazeEnv,
@@ -521,7 +526,7 @@ impl Default for Player {
             gauge_b: Timer::default(),
             gauge_c: Timer::default(),
             state_timer: Timer::default(),
-            option_angle: -std::f32::consts::FRAC_PI_2,
+            option_angle: Angle(-std::f32::consts::FRAC_PI_2),
             orb_step: 40,
             shot_type: 0,
             stats: Stats::default(),
@@ -573,16 +578,21 @@ pub fn parse_shot(s: &str) -> Option<u8> {
 }
 
 impl Player {
+    // Shot type of GM +0x3DBA9; Player_Load only runs with 0–11 (the sht / anm files of 12+ do not exist, 09 §2).
+    pub fn shot(&self) -> ShotType {
+        ShotType::try_from(self.shot_type).expect("shot type 0–11 (09 §2)")
+    }
+
     pub fn solo_human(&self) -> bool {
-        self.shot_type >= 4 && self.shot_type.is_multiple_of(2)
+        self.shot().is_solo_human()
     }
 
     pub fn solo_youkai(&self) -> bool {
-        self.shot_type >= 4 && self.shot_type % 2 == 1
+        self.shot().is_solo_youkai()
     }
 
     pub fn solo(&self) -> bool {
-        self.shot_type >= 4
+        self.shot().is_solo()
     }
 
     // Player_Load 0x44D650 (09 §2, §6.4): sht files, gauge limits, initial script 0 / 5, solo options, state 1
@@ -599,7 +609,7 @@ impl Player {
         self.shot_type = shot;
         self.sht = human;
         self.sht_youkai = youkai;
-        self.stats.limits = GaugeLimits::for_shot(shot);
+        self.stats.limits = GaugeLimits::for_shot(self.shot());
         self.orb_step = if self.solo_human() { 27 } else { 40 };
         let script = if self.solo_youkai() { 5 } else { 0 };
         anm.set_script(rng, &mut self.vm, ANM_SLOT, script);
@@ -663,10 +673,6 @@ impl Player {
         } else {
             &self.sht
         }
-    }
-
-    pub fn angle_from(&self, o: [f32; 3]) -> f32 {
-        crate::bullet::angle_from(o, self.pos)
     }
 
     // Player_InBombArea 0x449FF0 (09 §8): pure point test of the active cancel areas; +0xE2A90 is written only on a
@@ -742,7 +748,7 @@ impl Player {
         *sys.timer_pause = 0;
         Stats::checksum(sys.rng);
         sys.sound.play_at(crate::sound::PLDEAD, self.pos[0]);
-        sys.fx.spawn(anm, sys.rng, 6, self.pos, 16, 0xFFFFFFFF);
+        sys.fx.spawn(anm, sys.rng, 6, self.pos, 16, 0xFFFF_FFFF);
         self.state = 2;
         self.state_timer.set(0);
         if self.special(*sys.flags) {
@@ -751,6 +757,7 @@ impl Player {
             self.drop_attracted = true;
             return;
         }
+        let shot = self.shot();
         let st = &mut self.stats;
         st.gauge = 0;
         let n = if st.bombs < 1.0 {
@@ -764,7 +771,11 @@ impl Player {
             if self.env.spell {
                 n = (n * 2).min(30);
             }
-            if matches!(self.shot_type, 0 | 4 | 5) {
+            // Shot types 0, 4, 5 (09 §6.1).
+            if matches!(
+                shot,
+                ShotType::ReimuYukari | ShotType::Reimu | ShotType::Yukari
+            ) {
                 n = n * 9 / 5;
             }
             n
@@ -818,9 +829,10 @@ impl Player {
             8,
             [(p[0] + self.pos[0]) / 2.0, (p[1] + self.pos[1]) / 2.0, 0.0],
             1,
-            0xFFFFFFFF,
+            0xFFFF_FFFF,
         );
         let (solo_human, solo_youkai) = (self.solo_human(), self.solo_youkai());
+        let youmu = self.shot() == ShotType::Youmu;
         let s = &mut self.stats;
         if !self.bombing {
             let g = if s.human_max() {
@@ -839,7 +851,7 @@ impl Player {
             s.gauge_add(100);
         }
         let mut orbs = 0;
-        if (!solo_human || self.shot_type == 10) && env.boss && s.youkai_max() {
+        if (!solo_human || youmu) && env.boss && s.youkai_max() {
             orbs = 1;
             if !laser && env.spell {
                 orbs += 1;
@@ -930,7 +942,7 @@ impl Player {
             // Step 5: state ≠ 0 returns 0 here, before the scramble.
             let alive = self.state == 0;
             self.die(anm, sys);
-            return (alive as u8, 0);
+            return (u8::from(alive), 0);
         }
         if graze && hit(48.0) && !matches!(self.state, 1 | 2) {
             let p = self.pos;
@@ -950,7 +962,8 @@ impl Player {
     // Respawn sprite script (09 §6.2). QUIRK: a team test, not a focus test — focused teams 0 / 2 respawn with the
     // human script 0, teams 1 / 3 get 5 when focused; solos by parity.
     fn respawn_script(&self) -> usize {
-        if (self.shot_type < 4 && self.focus == 0) || self.shot_type & 1 == 0 {
+        let s = self.shot();
+        if (!s.is_solo() && self.focus == 0) || !s.is_odd() {
             0
         } else {
             5
@@ -959,7 +972,7 @@ impl Player {
 
     fn sprite_base(&self, focus: u8) -> usize {
         let youkai = if self.solo() {
-            self.shot_type % 2 == 1
+            self.shot().is_odd()
         } else {
             focus == 1
         };
@@ -991,9 +1004,11 @@ impl Player {
         let f = if self.bombing {
             (self.bomb.index & 1) as u8
         } else {
-            (bits & input::FOCUS != 0) as u8
+            u8::from(bits & input::FOCUS != 0)
         };
-        if f != self.focus {
+        if f == self.focus {
+            self.focus_age += 1;
+        } else {
             self.focus = f;
             if !self.solo() {
                 self.swap_options(anm, f);
@@ -1001,9 +1016,9 @@ impl Player {
                 // Switch flash only when the previous state lasted > 3 frames (09 §3).
                 if self.focus_age > 3 {
                     let (kind, colour) = if f == 1 {
-                        (29, 0x80FF8080)
+                        (29, 0x80FF_8080)
                     } else {
-                        (28, 0x808080FF)
+                        (28, 0x8080_80FF)
                     };
                     sys.fx.spawn(anm, sys.rng, kind, self.pos, 1, colour);
                 }
@@ -1019,24 +1034,22 @@ impl Player {
                     22,
                     self.pos,
                     crate::effect::FIX_AURA,
-                    0xFFFFFFFF,
+                    0xFFFF_FFFF,
                 );
             } else {
                 sys.fx
                     .get(crate::effect::FIXED_BASE + crate::effect::FIX_AURA, |e| {
-                        e.vm.pending_interrupt = 1
+                        e.vm.pending_interrupt = 1;
                     });
             }
             self.focus_age = 0;
             self.gauge_c.set(0);
-        } else {
-            self.focus_age += 1;
         }
         if self.focus_age > 6 {
             self.mode = f;
         }
         if self.solo() {
-            self.mode = self.shot_type % 2;
+            self.mode = u8::from(self.shot().is_odd());
         }
         // Unfocused: human sht +0x24 / +0x2C; focused: youkai sht +0x28 / +0x30 (09 §2.1).
         let (ortho, diag) = if f == 1 {
@@ -1115,7 +1128,7 @@ impl Player {
                 self.gauge_c.set(0);
             }
             if self.gauge_b.cur >= 30 {
-                let g = st.gauge as i32;
+                let g = i32::from(st.gauge);
                 if g.abs() <= 9 {
                     st.gauge = 0;
                 } else {
@@ -1155,12 +1168,12 @@ impl Player {
         self.last_v = [0.0; 2];
         let t = self.state_timer.cur;
         // 09 §6.2: shrink + additive fade written every call before the t > 29 test; x87 on the float timer.
-        let tf = self.state_timer.getf() as f64;
+        let tf = f64::from(self.state_timer.getf());
         let q = (tf / 30.0) as f32;
-        self.vm.scale = [1.0 - q, (3.0 * q as f64 + 1.0) as f32];
+        self.vm.scale = [1.0 - q, (3.0 * f64::from(q) + 1.0) as f32];
         self.vm.flags |= anmvm::F_SCALE_DIRTY;
         let a = (255.0 - tf * 255.0 / 30.0) as i32;
-        self.vm.color = [0xFF, 0xFF, 0xFF, a as u8];
+        self.vm.color = [0xFF, 0xFF, 0xFF, lo8(a)];
         self.set_blend(1);
         if t <= 29 {
             return false;
@@ -1200,14 +1213,14 @@ impl Player {
         sys.sound.play_at(crate::sound::TAN00_LOUD, self.pos[0]);
         sys.fx
             .free(crate::effect::FIXED_BASE + crate::effect::FIX_DEATH);
-        sys.fx.spawn(anm, sys.rng, 6, self.pos, 16, 0xFFFFFFFF);
+        sys.fx.spawn(anm, sys.rng, 6, self.pos, 16, 0xFFFF_FFFF);
         sys.fx.spawn_fixed(
             anm,
             sys.rng,
             12,
             self.pos,
             crate::effect::FIX_DEATH_BURST,
-            0xFF4040FF,
+            0xFF40_40FF,
         );
         // Unfreeze, then the only tint-off of Player_DyingUpdate (06 §10.2), then the silhouette off (09 §6.2).
         self.set_freeze_bullets(sys.flags, false);
@@ -1224,15 +1237,20 @@ impl Player {
         let mut drops: Vec<i32> = Vec::new();
         if self.stats.lives < 1.0 {
             self.stats.set_power(0.0, rng);
-            drops.extend([crate::item::FULL_POWER as i32; 5]);
+            drops.extend([i32::from(crate::item::FULL_POWER); 5]);
         } else {
             let p = self.stats.power;
             self.stats
                 .set_power(if p <= 16.0 { 0.0 } else { p - 16.0 }, rng);
-            drops.push(crate::item::BIG_POWER as i32);
-            drops.extend([crate::item::POWER as i32; 5]);
-            if matches!(self.shot_type, 2 | 8 | 9) && self.stats.bombs > 0.0 {
-                drops.push(crate::item::BOMB as i32);
+            drops.push(i32::from(crate::item::BIG_POWER));
+            drops.extend([i32::from(crate::item::POWER); 5]);
+            // Shot types 2, 8, 9 (09 §6.2).
+            if matches!(
+                self.shot(),
+                ShotType::SakuyaRemilia | ShotType::Sakuya | ShotType::Remilia
+            ) && self.stats.bombs > 0.0
+            {
+                drops.push(i32::from(crate::item::BOMB));
             }
         }
         if let Some(it) = items.as_deref_mut() {
@@ -1253,10 +1271,10 @@ impl Player {
         self.speed_mult = [1.0; 2];
         self.deathbomb = 0;
         // 09 §6.3: every call before the t > 29 test: x grows 0 → 1, y 3 → 1, additive, integer-timer alpha.
-        let f = (1.0 - self.state_timer.getf() as f64 / 30.0) as f32;
-        self.vm.scale = [1.0 - f, (2.0 * f as f64 + 1.0) as f32];
+        let f = (1.0 - f64::from(self.state_timer.getf()) / 30.0) as f32;
+        self.vm.scale = [1.0 - f, (2.0 * f64::from(f) + 1.0) as f32];
         self.vm.flags |= anmvm::F_SCALE_DIRTY;
-        self.vm.color = [0xFF, 0xFF, 0xFF, (t * 255 / 30) as u8];
+        self.vm.color = [0xFF, 0xFF, 0xFF, lo8(t * 255 / 30)];
         self.set_blend(1);
         if t <= 29 {
             return;
@@ -1390,7 +1408,7 @@ impl Player {
                     25,
                     self.pos,
                     crate::effect::FIX_GAUGE,
-                    0xFFFFFFFF,
+                    0xFFFF_FFFF,
                 );
             } else {
                 sys.fx
@@ -1401,7 +1419,7 @@ impl Player {
             let p = self.pos;
             sys.fx
                 .get(crate::effect::FIXED_BASE + crate::effect::FIX_GAUGE, |e| {
-                    e.pos = p
+                    e.pos = p;
                 });
         }
         self.frames += 1;
@@ -1456,7 +1474,7 @@ impl Task<Ctx> for PlayerTask {
         let inp = ctx.w.input.game_view();
         let p = ctx.w.player.as_deref_mut().expect("player");
         // 0x164D2C8 gameplay frame counter (11 §2), read after GameMgr_Calc (prio 2) incremented it.
-        p.frames = ctx.w.game.frame_counter as i32;
+        p.frames = ctx.w.game.frame_counter.cast_signed();
         // The dialogue state is read live: the previous frame's dialogue calc (prio 12) ran after the enemies.
         if ctx.w.enemies.is_some() {
             p.env.dialogue = ctx
@@ -1684,7 +1702,7 @@ mod tests {
         let (mut p, mut anm) = ready();
         for k in 1..=8 {
             p.step(&mut anm, &input(input::FOCUS), sys);
-            assert_eq!(p.mode, (k > 7) as u8, "frame {k}");
+            assert_eq!(p.mode, u8::from(k > 7), "frame {k}");
         }
     }
 
@@ -1788,7 +1806,7 @@ mod tests {
         p.state_timer.set(10);
         p.respawn_update(0);
         let f = (1.0 - 10.0f64 / 30.0) as f32;
-        assert_eq!(p.vm.scale, [1.0 - f, (2.0 * f as f64 + 1.0) as f32]);
+        assert_eq!(p.vm.scale, [1.0 - f, (2.0 * f64::from(f) + 1.0) as f32]);
         assert_eq!((p.vm.color, blend(&p)), ([0xFF, 0xFF, 0xFF, 85], 1));
         p.state_timer.set(30);
         p.respawn_update(0);
@@ -1921,7 +1939,7 @@ mod tests {
             25,
             p.pos,
             crate::effect::FIX_GAUGE,
-            0xFFFFFFFF,
+            0xFFFF_FFFF,
         );
         let paused = |fx: &Effects| fx.peek(aura, |e| e.vm.flags & anmvm::F_PAUSED != 0);
         *sys.timer_pause = 1;
@@ -2059,9 +2077,11 @@ mod tests {
     // 09 §9.3 (RE-Q56): timer B decrements at game speed; n = ftol(Timer_GetF(C) / 15), 21 above 300.0.
     #[test]
     fn gauge_timers_use_game_speed() {
-        let mut p = Player::default();
-        p.focus_age = 30;
-        p.focus = 1;
+        let mut p = Player {
+            focus_age: 30,
+            focus: 1,
+            ..Player::default()
+        };
         p.shot_timer.set(0);
         p.gauge_b.set(1);
         p.gauge_drift(0.25, false);
@@ -2081,13 +2101,13 @@ mod tests {
     #[test]
     fn gauge_limits() {
         let mut s = Stats {
-            limits: GaugeLimits::for_shot(4),
+            limits: GaugeLimits::for_shot(ShotType::Reimu),
             ..Stats::default()
         };
         s.gauge_add(5000);
         assert_eq!(s.gauge, 2000);
         assert!(!s.youkai());
-        s.limits = GaugeLimits::for_shot(10);
+        s.limits = GaugeLimits::for_shot(ShotType::Youmu);
         s.gauge_add(-9000);
         assert_eq!(s.gauge, -5000);
         assert!(s.human_max());

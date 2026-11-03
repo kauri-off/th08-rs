@@ -25,6 +25,21 @@ pub fn wrap_add(a: f32, d: f32) -> f32 {
     a
 }
 
+// Player_AngleFrom (08 §3.1): atan2 of p − o; exactly π/2 when both differences are exactly 0.
+pub fn angle_from(o: [f32; 3], p: [f32; 3]) -> f32 {
+    let (dx, dy) = (p[0] - o[0], p[1] - o[1]);
+    if dx == 0.0 && dy == 0.0 {
+        PI / 2.0
+    } else {
+        crate::fmath::atan2_f(dy, dx)
+    }
+}
+
+// Low-byte store of an int into a byte field (`mov byte, al`): same bits as `as u8`, wraps.
+pub const fn lo8(v: i32) -> u8 {
+    v.to_le_bytes()[0]
+}
+
 // Angle in radians, plain f32 arithmetic; each spec'd normalisation is a named fn (`wrap_add` 05 §6.3).
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
@@ -196,6 +211,25 @@ impl ShotType {
         let s = self as u8;
         if s < 4 { s } else { (s - 4) / 2 }
     }
+
+    // 4–11: one character, no focus swap (09 §2).
+    pub const fn is_solo(self) -> bool {
+        self as u8 >= 4
+    }
+
+    // Low bit of the raw byte: solo youkai, or team 1 / 3 (09 §2, §6.2 respawn script).
+    pub const fn is_odd(self) -> bool {
+        self as u8 & 1 == 1
+    }
+
+    // Solo human = even ≥ 4, solo youkai = odd ≥ 4 (09 §9.3).
+    pub const fn is_solo_human(self) -> bool {
+        self.is_solo() && !self.is_odd()
+    }
+
+    pub const fn is_solo_youkai(self) -> bool {
+        self.is_solo() && self.is_odd()
+    }
 }
 
 impl TryFrom<u8> for ShotType {
@@ -249,8 +283,34 @@ mod tests {
             let s = ShotType::try_from(v).unwrap();
             assert_eq!(s as u8, v);
             assert_eq!(s.team(), th08_formats::sht::team(v));
+            assert_eq!(s.is_solo_human(), v >= 4 && v.is_multiple_of(2));
+            assert_eq!(s.is_solo_youkai(), v >= 4 && v % 2 == 1);
         }
         assert_eq!(ShotType::try_from(12), Err(12));
+    }
+
+    #[test]
+    fn angle_from_zero_is_half_pi() {
+        assert_eq!(angle_from([1.0, 2.0, 0.0], [1.0, 2.0, 5.0]), PI / 2.0);
+        assert_eq!(
+            angle_from([0.0; 3], [3.0, -4.0, 0.0]),
+            crate::fmath::atan2_f(-4.0, 3.0)
+        );
+    }
+
+    #[test]
+    fn lo8_is_low_byte() {
+        for (v, b) in [
+            (-1, 0xFF),
+            (0, 0),
+            (127, 127),
+            (255, 255),
+            (256, 0),
+            (-256, 0),
+            (0x1234, 0x34),
+        ] {
+            assert_eq!(lo8(v), b);
+        }
     }
 
     #[test]

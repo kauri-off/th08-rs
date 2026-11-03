@@ -109,7 +109,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11d** ECL exec | (1) `ecl::{EclOff, Op}` in formats/ecl.rs (+ eclview bin); (2) `Exec::exec` → `match Op` dispatching to `eclvm/ops_*.rs`, named args via `Arg` / `Var` (from `IRef`), bullet flag const; (3) eclvm subset 0 | formats/ecl.rs, eclvm (+ new ops_*.rs), bin/eclview | ∥ 11b 11c 11g; before 11e | T D, **B** |
 | **11e** enemy | (1) `EnemyIdx` for chain / boss / thread links; (2) `EnemyFlags` for the 07 flag words, `TlOp` timeline enum (enemy.rs:1139); (3) long fns 1133 / 1392 split, enemy subset 0 | enemy, eclvm (index boundary only) | after 11d; ∥ 11f 11h 11i | T D |
 | **11f** STD + MSG | (1) stage.rs on `std::Op`, `Stage` bools; (2) msg.rs on `msg::Op`, exec split, `Dialogue` bools; (3) both subset 0 | stage, msg | after 11b; ∥ 11e 11g 11h | T D |
-| **11g** player + pshot | (1) `ShotType` enum (+ `sht::team`) inside player / pshot; (2) `Angle`, one `angle_from` (player.rs:668 → types); (3) player / pshot subset 0 (pshot 260 split) | player, pshot | ∥ wave 1 | T D |
+| **11g** player + pshot — **DONE** (see below) | (1) `ShotType` enum (+ `sht::team`) inside player / pshot; (2) `Angle`, one `angle_from` (player.rs:668 → types); (3) player / pshot subset 0 (pshot 260 split) | player, pshot | ∥ wave 1 | T D |
 | **11h** bullet + item | (1) `BulletFlags` / `LaserFlags`; (2) `BulletIdx` / `LaserIdx` / `ItemIdx`, `angle_from` (bullet.rs:81) → types; (3) spawn env struct, fn 657 split, subset 0 | bullet, item | after 11g (`angle_from`); ∥ 11e 11f 11i | T D, **B** |
 | **11i** bomb + effect | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
 | **11j** gamemgr + replay | (1) `GameFlags` bitflags + `end()` / `route()`; (2) `Difficulty`, `Paused`, `Loading` enums inside gamemgr / replay / game / world; (3) long fns 713 / 1078 split, flow-core subset 0 (gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt) | gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt | after 11a; ∥ 11e–11i | T D |
@@ -134,6 +134,25 @@ measured on e45217e); run files types.rs / lib.rs 0. Check: FAST arch_check 0 di
 spec_refs 0. Deviations: `too-many-arguments-threshold = 7` (orchestrator: 7, so the 8-argument fns of §1.2 count) as specified allows 8-arg fns, so the 8-arg sites of §1.2
 (pshot 887, bullet 570) are not flagged — lower to 7 if they should count; tools / audio import lines keep their
 other (11o) warnings.
+
+**11g done.** Files: crates/th08-core/src/player.rs, pshot.rs, types.rs (additions only). (1) `Player::shot() ->
+ShotType` over the raw `shot_type: u8` (kept raw: item / enemy / bomb / hud / worldclone read it, converted by their
+runs); every numeric shot test in player / pshot is a `ShotType` match or predicate (`is_solo`, `is_odd`,
+`is_solo_human`, `is_solo_youkai`, `team()` new on `ShotType`), `sht::team` calls in pshot → `ShotType::team`,
+`GaugeLimits::for_shot(ShotType)`. (2) `types::angle_from` (Player_AngleFrom 08 §3.1, body of bullet.rs:81; bullet.rs
+switches in 11h); `Player::angle_from` (unused) removed; `Angle` for `Opt.angle` / `Opt.facing`, `PBullet.angle`,
+`Player.option_angle` (`.wrap_add` for the 14 §3 orbit steps). (3) `place_option` split into `yukari_calc` /
+`remilia_calc` / `yuyuko_calc` / `youmu_calc` + `OptEnv` snapshot (statement order kept); casts → `From` /
+`cast_signed` / `cast_unsigned`, `types::lo8` for the alpha byte stores, `uidx` / `laser_slot` helpers in pshot;
+literal separators; `if_not_else` in `move_player` swapped (same branches). `#[expect]` with reason: `Player`
+`struct_excessive_bools` (separate original bytes), `damage_against` `too_many_arguments` (callers in enemy.rs, 11e).
+Public API: `Player::angle_from` removed; `Player::shot()` new; `GaugeLimits::for_shot` takes `ShotType`;
+`Opt.angle` / `Opt.facing` / `PBullet.angle` / `Player.option_angle` are `Angle`; new `types::{angle_from, lo8}`,
+`ShotType::{is_solo, is_odd, is_solo_human, is_solo_youkai}` (none used outside core). Lint subset
+(tools/lint_subset): player.rs 45 → 0, pshot.rs 41 → 0, types.rs 0 → 0; workspace total after 1 742. Check: FAST
+arch_check 0 differing (emit-off 0), cargo test -p th08-core 319 passed, spec_refs 0. Deviations: `damage_against`
+keeps 8 args under `#[expect]` instead of an env struct (its callers are not 11g files); `Player::shot()` panics on a
+raw byte ≥ 12, unreachable since Player_Load fails on the missing sht / anm files first.
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in
