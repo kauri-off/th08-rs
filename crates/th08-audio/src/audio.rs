@@ -2,16 +2,16 @@
 //! voices DirectSound plays (13 §1.1, §1.3).
 #![allow(clippy::disallowed_methods)]
 
-use crate::assets::Source;
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use th08_core::assets::Source;
 
 // thbgm.fmt WAVEFORMATEX: 44100 Hz, stereo, 16-bit for every track (02 §2).
 const BGM_RATE: f64 = 44100.0;
 
-use crate::sound::{MidiCmd, SoundCmd, Track, WavCmd};
+use th08_core::sound::{MidiCmd, SoundCmd, Track, WavCmd};
 
 // Streaming ring (02 §3): 16 notification chunks of 44100 bytes = 11025 stereo frames (0.25 s), 4.0 s in all.
 const CHUNK: usize = 11025;
@@ -362,7 +362,7 @@ impl Audio {
     }
 
     // The archive's `bgm/*.mid` members (02 §5), then the boot `Midi_LoadSlot(30, "bgm/init.mid")`.
-    pub fn load_midi(&mut self, archive: crate::content::PresentView<'_>) {
+    pub fn load_midi(&mut self, archive: th08_core::content::PresentView<'_>) {
         for n in archive.names().iter().filter(|n| n.ends_with(".mid")) {
             match archive.read(n) {
                 Ok(d) => {
@@ -480,10 +480,10 @@ impl Audio {
 
     // Sound_LoadSE 0x45D3F0 (13 §1.1): one buffer per SE id, each a copy of its wave file; the table volume is not
     // stored because Sound_Update overwrites it on every play (13 §1.3).
-    pub fn load_se(&mut self, archive: crate::content::PresentView<'_>) {
+    pub fn load_se(&mut self, archive: th08_core::content::PresentView<'_>) {
         let mut waves: Vec<(&str, Option<Arc<Wave>>)> = Vec::new();
         let mut voices = Vec::new();
-        for (name, _) in crate::sound::TABLE {
+        for (name, _) in th08_core::sound::TABLE {
             let w = match waves.iter().find(|(n, _)| *n == name) {
                 Some((_, w)) => w.clone(),
                 None => {
@@ -539,8 +539,8 @@ impl Audio {
     }
 }
 
-impl crate::game::AudioOut for Audio {
-    fn load(&mut self, archive: crate::content::PresentView<'_>) {
+impl th08_core::game::AudioOut for Audio {
+    fn load(&mut self, archive: th08_core::content::PresentView<'_>) {
         self.load_se(archive);
         self.load_midi(archive);
     }
@@ -596,7 +596,7 @@ fn open_stream(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
 
 // th08.dat from TH08_DIR for the audio / MIDI tests (core's testdata.rs is test-only in core).
 #[cfg(test)]
-pub(crate) fn test_archive() -> Option<crate::archive::Archive> {
+pub(crate) fn test_archive() -> Option<th08_core::archive::Archive> {
     let dir = std::path::PathBuf::from(std::env::var_os("TH08_DIR")?);
     let path = std::fs::read_dir(&dir)
         .into_iter()
@@ -605,13 +605,13 @@ pub(crate) fn test_archive() -> Option<crate::archive::Archive> {
         .find(|e| e.file_name().eq_ignore_ascii_case("th08.dat"))
         .map_or(dir.join("th08.dat"), |e| e.path());
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    Some(crate::archive::Archive::from_bytes(bytes).expect("th08.dat"))
+    Some(th08_core::archive::Archive::from_bytes(bytes).expect("th08.dat"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sound::Bgm;
+    use th08_core::sound::Bgm;
 
     #[test]
     fn se_mix_pan_and_volume() {
@@ -642,7 +642,7 @@ mod tests {
     }
     // No game files: BGM reads fail as with an empty directory.
     struct NoFiles;
-    impl crate::assets::DataSource for NoFiles {
+    impl th08_core::assets::DataSource for NoFiles {
         fn names(&self) -> Vec<String> {
             Vec::new()
         }
@@ -650,7 +650,7 @@ mod tests {
             &'a self,
             name: &'a str,
             _: Option<(u64, usize)>,
-        ) -> crate::assets::BoxFuture<'a, Result<Vec<u8>>> {
+        ) -> th08_core::assets::BoxFuture<'a, Result<Vec<u8>>> {
             Box::pin(async move { anyhow::bail!("{name}: no files") })
         }
     }
@@ -690,13 +690,13 @@ mod tests {
             return;
         };
         let mut d = Dev::new();
-        d.a.load_midi(crate::content::LogicView::new(arc).present());
+        d.a.load_midi(th08_core::content::LogicView::new(arc).present());
         assert!(d.a.midi_slots[30].is_some());
         let sf = crate::midi::tests::tiny_sf2();
         d.a.mixer.lock().unwrap().font =
             Some(Arc::new(rustysynth::SoundFont::new(&mut &sf[..]).unwrap()));
         d.b.midi_ready = true;
-        let mut cfg = crate::config::Config::default();
+        let mut cfg = th08_core::config::Config::default();
         cfg.music = 2;
         d.run(|b| b.set_volumes(&cfg));
         d.run(|b| b.load_bgm(1, "bgm/th08_03.mid"));
@@ -762,7 +762,7 @@ mod tests {
             let m = d.a.mixer.lock().unwrap();
             assert!(m.stopped && m.music.as_ref().unwrap().cursor == 0.0);
         }
-        let mut cfg = crate::config::Config::default();
+        let mut cfg = th08_core::config::Config::default();
         cfg.music = 0;
         d.run(|b| {
             b.set_volumes(&cfg);
@@ -862,7 +862,7 @@ mod tests {
         let Some(a) = test_archive() else {
             return;
         };
-        for (name, _) in crate::sound::TABLE {
+        for (name, _) in th08_core::sound::TABLE {
             let data = a.read(&format!("{name}.wav")).unwrap();
             let w = super::parse_wav(&data).unwrap();
             assert!(!w.samples.is_empty() && w.rate > 8000.0, "{name}");

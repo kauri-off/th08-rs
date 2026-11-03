@@ -1,7 +1,7 @@
 //! Joystick device for `Input_PollJoystick` 0x43D120 (15 §1.1): the first connected gamepad via gilrs (the browser
 //! Gamepad API on wasm); the mapping itself is `input::joystick_bits`.
 
-use crate::input::PadState;
+use th08_core::input::PadState;
 
 // Port: gilrs reports standard buttons, not DirectInput indices; this order stands in for rgbButtons[0..16]
 // (defaults Shot 0 = south, Bomb 1 = east, Focus 2 = west, Skip 3 = north, Pause 4 = left shoulder).

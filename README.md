@@ -85,7 +85,8 @@ see every setting. For the web build, see `web/build.sh`.
 | Path | Contents |
 |---|---|
 | `specs/` | the specifications: the only source of truth for behaviour |
-| `src/` | the port, plus tools in `src/bin/` |
+| `src/` | the app: game window, launcher, settings, platform (package `th08`, binary `th08`) |
+| `crates/` | `th08-formats` (file formats), `th08-core` (game logic), `th08-render` (wgpu), `th08-audio` (cpal, MIDI), `th08-tools` (trace / draw-log tools, bins in `src/bin/`) |
 | `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session recorder |
 | `docs/` | status, decisions, the architecture of the rewrite |
 | `web/`, `packaging/` | the browser front end and release packaging |

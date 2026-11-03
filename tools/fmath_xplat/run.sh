@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: tools/fmath_xplat/run.sh — src/fmath.rs on wasm32 (node) vs native x86_64, 10 functions × 2^20 inputs.
+# usage: tools/fmath_xplat/run.sh — crates/th08-core/src/fmath.rs on wasm32 (node) vs native x86_64, 10 functions × 2^20 inputs.
 set -e
 cd "$(dirname "$0")"
 export CARGO_TARGET_DIR=../../target/fmath_xplat

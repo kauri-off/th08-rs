@@ -1,4 +1,4 @@
-//! Generates `src/rsqrt_amd.bin`, the run table of this CPU's `rsqrtss` over [0.5, 2) (05 §10, `fmath::rsqrt_amd`),
+//! Generates `crates/th08-core/src/rsqrt_amd.bin`, the run table of this CPU's `rsqrtss` over [0.5, 2) (05 §10, `fmath::rsqrt_amd`),
 //! and checks the table model against the native instruction (`--verify`; moved out of fmath's tests in 10b).
 // usage: rsqrt_table [OUT] | --verify — run only on the reference CPU (AMD Ryzen 9 7945HX); checks the scaling law first.
 
@@ -12,7 +12,7 @@ fn native(s: f32) -> f32 {
 // The model equals native only on the reference CPU (AMD Zen 4); other x86 vendors have a different rsqrtss table.
 #[cfg(target_arch = "x86_64")]
 fn on_reference_cpu() -> bool {
-    use th08::fmath::rsqrt_amd;
+    use th08_core::fmath::rsqrt_amd;
     native(f32::from_bits(0x3F80_0001)).to_bits()
         == rsqrt_amd(f32::from_bits(0x3F80_0001)).to_bits()
         && native(500.0 * 500.0 + 460.0 * 460.0).to_bits()
@@ -23,7 +23,7 @@ fn on_reference_cpu() -> bool {
 #[cfg(target_arch = "x86_64")]
 fn first_diff(mut inputs: impl Iterator<Item = f32>) -> Option<u32> {
     inputs
-        .find(|&s| th08::fmath::rsqrt_amd(s).to_bits() != native(s).to_bits())
+        .find(|&s| th08_core::fmath::rsqrt_amd(s).to_bits() != native(s).to_bits())
         .map(f32::to_bits)
 }
 
@@ -68,7 +68,7 @@ fn main() -> anyhow::Result<()> {
     if arg.as_deref() == Some("--verify") {
         return verify();
     }
-    let out = arg.unwrap_or_else(|| "src/rsqrt_amd.bin".into());
+    let out = arg.unwrap_or_else(|| "crates/th08-core/src/rsqrt_amd.bin".into());
     let base: Vec<u32> = ((126u32 << 23)..(128u32 << 23))
         .map(|b| native(f32::from_bits(b)).to_bits())
         .collect();

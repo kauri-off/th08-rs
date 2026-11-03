@@ -1,10 +1,10 @@
 //! Launcher screen and game-folder flow, port infrastructure (no spec section): an egui settings screen generated
 //! from `settings::ENTRIES`, drawn on the game's wgpu device and window before the game starts.
 
-use crate::gfx::Gfx;
 use crate::settings::{self, ENTRIES, Entry, Group, Kind, Origin, Settings};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
+use th08_render::gfx::Gfx;
 use winit::event::WindowEvent;
 use winit::window::Window;
 

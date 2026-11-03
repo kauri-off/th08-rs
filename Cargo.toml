@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/th08-formats", "crates/th08-core"]
+members = [".", "crates/th08-formats", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-tools"]
 resolver = "3"
 
 [package]
@@ -14,20 +14,16 @@ default-run = "th08"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-th08-formats = { path = "crates/th08-formats" }
+th08-audio = { path = "crates/th08-audio" }
+th08-core = { path = "crates/th08-core" }
+th08-render = { path = "crates/th08-render" }
 anyhow = "1.0.104"
-bytemuck = { version = "1.25.2", features = ["derive"] }
-cpal = "0.18.2"
 egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
 egui-wgpu = { version = "0.37", default-features = false }
-encoding_rs = "0.8"
-hound = "3.5.1"
-libm = "=0.2.16"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 log = "0.4.34"
-midly = { version = "0.5.3", default-features = false, features = ["std"] }
 web-time = "1.1.0"
-wgpu = { version = "30", features = ["webgl"] }
+wgpu = "30"
 winit = "0.30"
 
 [features]
@@ -44,22 +40,20 @@ gilrs = { version = "0.11.2", optional = true }
 winresource = { version = "0.1.34", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rustysynth = "1.3.8"
-clap = { version = "4.6", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions", "color", "string"] }
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "wayland", "x11"] }
-ab_glyph = "0.2"
-env_logger = "0.11.11"
-pollster = "1.0.1"
-liblzma = { version = "0.4.9", features = ["static", "parallel"] }
 directories = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-sha2 = "0.10"
+# Start-up blocks on a future on Android too (app::spawn), so pollster is native, not desktop-only.
+pollster = "1.0.1"
 
-# File/message dialogs: none on wasm (file input in the page) or Android (no rfd backend).
+# Desktop only: no file/message dialogs, CLI or stderr logger on wasm (page) or Android (logcat).
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
+clap = { version = "4.6", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions", "color", "string"] }
+env_logger = "0.11.11"
 rfd = "0.17"
 
 [target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15.1"
 winit = { version = "0.30", features = ["android-native-activity"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -68,7 +62,6 @@ windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"
 console_log = "1.1.0"
-cpal = { version = "0.18.2", features = ["wasm-bindgen"] }
 egui-winit = { version = "0.37", default-features = false }
 js-sys = "0.3.106"
 wasm-bindgen = "0.2.129"

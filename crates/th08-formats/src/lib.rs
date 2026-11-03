@@ -1,6 +1,7 @@
 //! th08 file formats: pure parsers/writers of the original data files (rewrite step 2, REWRITE_PLAN.md).
 //! Bytes in, plain structs out; no IO, no game state, no rendering. Game text stays Shift-JIS bytes (`sjis`).
 #![deny(clippy::disallowed_methods)]
+#![forbid(unsafe_code)]
 
 pub mod anm;
 pub mod archive;

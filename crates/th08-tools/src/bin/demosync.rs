@@ -1,8 +1,8 @@
 //! Demo sync check: `demosync <0-3> [from-to] [rng-frame]` prints the report, trace/port rows around a range and,
 //! with rng-frame, the call sites of every RNG draw made in that gameplay frame.
 
-use th08::demosync::{FIELDS, parse_trace};
-use th08::trace::demo_sample as sample;
+use th08_core::trace::demo_sample as sample;
+use th08_tools::demosync::{FIELDS, parse_trace};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -13,28 +13,28 @@ fn main() -> anyhow::Result<()> {
     });
     let rng_frame: Option<i32> = args.get(3).and_then(|v| v.parse().ok());
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
-    let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
+    let gfx = pollster::block_on(th08_render::gfx::Gfx::headless())?;
     let src = th08::sources::native(dir.into());
-    let mut ctx = pollster::block_on(th08::game::Ctx::load_with(
+    let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
         src.clone(),
         th08::settings::get().tool_io(gfx, &src),
         th08::settings::get().core(),
         false,
     ))?;
     let trace = std::fs::read_to_string(
-        th08::testdata::repo_root().join(format!("specs/data/demo{n}_trace.txt")),
+        th08_core::testdata::repo_root().join(format!("specs/data/demo{n}_trace.txt")),
     )?;
     if range.is_none() && rng_frame.is_none() {
-        println!("{}", th08::demosync::run(&mut ctx, n, &trace)?);
+        println!("{}", th08_tools::demosync::run(&mut ctx, n, &trace)?);
         return Ok(());
     }
     let rows = parse_trace(&trace);
-    let r = th08::replay::parse(
+    let r = th08_core::replay::parse(
         &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
         ctx.w.game.ver_list.get(),
     )?;
     ctx.w.game.replay_ff = false;
-    th08::replay::start_playback(&mut ctx.w.game, r, None, Some(n));
+    th08_core::replay::start_playback(&mut ctx.w.game, r, None, Some(n));
     let (a, b) = range.unwrap_or((0, 0));
     let mut base = 0;
     let mut started = false;
@@ -62,7 +62,7 @@ fn main() -> anyhow::Result<()> {
                     .lines()
                     .filter(|l| {
                         l.contains("th08::")
-                            && !l.contains("th08::rng::")
+                            && !l.contains("th08_core::rng::")
                             && !l.contains("LocalKey")
                             && !l.contains("closure")
                     })

@@ -1,8 +1,8 @@
 //! Concrete game data sources (ARCH_D_MOBILE §2.3): the game directory (desktop / Android external dir) and the
 //! files picked in the web page; app side, implementing `assets::DataSource`.
 
-use crate::assets::{BoxFuture, DataSource, Source};
 use anyhow::Result;
+use th08_core::assets::{BoxFuture, DataSource, Source};
 
 // Game directory as a `Source`.
 #[cfg(not(target_arch = "wasm32"))]

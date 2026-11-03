@@ -4,3 +4,13 @@ version = "0.1.0"
 license = "GPL-3.0-or-later"
 edition = "2024"
 publish = false
+
+# No dev-dependencies: a dev-dep on render / audio would bring a second copy of core's types (STEP10_CRATES §1).
+[dependencies]
+th08-formats = { path = "../th08-formats" }
+anyhow = "1.0.104"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+encoding_rs = "0.8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+libm = "=0.2.16"
+log = "0.4.34"

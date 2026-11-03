@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
-pub use crate::drawlist::{
+pub use th08_core::drawlist::{
     Blend, DrawCmd, FULLSCREEN, LogFog, LogRec, LogTex, PLAYFIELD, Recorder, Rect, ResCmd,
     SCREEN_H, SCREEN_W, TexId, TexInfo, Vertex, clip_in_viewport,
 };
@@ -1483,7 +1483,7 @@ impl Gfx {
     }
 
     // Text_RenderToVm 0x4663B0 (10 §6): Shift-JIS decode, CPU raster, upload over the strip.
-    fn do_text(&mut self, t: &crate::drawlist::TextCmd) {
+    fn do_text(&mut self, t: &th08_core::drawlist::TextCmd) {
         let font = self.font.as_deref();
         let raster = self
             .text
@@ -1500,7 +1500,7 @@ impl Gfx {
     }
 }
 
-impl crate::drawlist::Renderer for Gfx {
+impl th08_core::drawlist::Renderer for Gfx {
     fn submit(&mut self, rec: &mut Recorder) {
         Gfx::submit(self, rec)
     }

@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage: tools/arch_check freeze DIR | run DIR — port-vs-port references for the rewrite (REWRITE_PLAN step 0).
 # freeze: build, then write port traces + draw hashes of all sessions, demos 0-3 and the pilot replays into DIR.
-# run: fmt, 0-warning build, wasm + android check (tools/android_check), cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
+# run: fmt, 0-warning build, core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core: the crate cut, step 10c, enforces
+# the boundary), wasm + android check (tools/android_check), cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
 # run also replays every session + pilot with emit off (`session --no-emit`, ARCH decision 2) and requires its trace = DIR's.
 # Draw = draw.hash (`--draw-hash`: per-frame hash of the draw-log text, no xz); a mismatch prints the first differing present
 # and a `--port-drawlog` command for a window around it. times.txt (item seconds peak-RSS-kB) in DIR / RUN_OUT orders the
@@ -11,7 +12,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
 BIN=$TARGET/release
-# Binary names; step 1+ may move crates, these names (cargo --bin) must stay.
+# Binary names (cargo --bin; the tool bins live in crates/th08-tools since step 10c), these names must stay.
 SESSION_BIN=session DEMOSYNC_BIN=demosync DRAWRUN_BIN=drawrun
 SESSIONS="golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg"
 SESSION_SRC=$ROOT/specs/data/sessions
@@ -29,7 +30,7 @@ export BIN SESSION_BIN DEMOSYNC_BIN DRAWRUN_BIN SESSION_SRC PILOT_SRC TIME
 
 mode=${1:-} dir=${2:-}
 FAST=${FAST:-}; [[ $mode == freeze ]] && FAST=
-[[ ($mode == freeze || $mode == run) && -n $dir ]] || { sed -n 2,5p "$0"; exit 2; }
+[[ ($mode == freeze || $mode == run) && -n $dir ]] || { sed -n 2,6p "$0"; exit 2; }
 dir=$(realpath -m "$dir")
 cd "$ROOT" || exit 2
 
@@ -113,6 +114,8 @@ fail=0
 cargo fmt --all --check > /dev/null 2>&1 && echo "fmt ok" || { echo "fmt FAILED"; fail=1; }
 w=$(cargo build --release --workspace 2>&1 | grep -cE '^(warning|error)')
 [[ $w == 0 ]] && echo "build ok, 0 warnings" || { echo "build: $w warnings/errors"; fail=1; }
+cdeps=$(cargo tree -q -p th08-core -e normal --prefix none 2>&1 | grep -E '^(wgpu|cpal|winit|egui|rfd|clap|liblzma) ' | sort -u | tr '\n' ' ')
+[[ -z $cdeps ]] && echo "core deps ok" || { echo "core deps FAILED: $cdeps"; fail=1; }
 cargo check -q --release --workspace --lib --target wasm32-unknown-unknown > /dev/null 2>&1 && echo "wasm ok" || { echo "wasm FAILED"; fail=1; }
 ta=$SECONDS; a=$("$ROOT/tools/android_check"); ar=$?; echo "$a ($((SECONDS - ta)) s)"; [[ $ar == 0 ]] || fail=1
 t=$(cargo test -q --release --workspace 2>&1)

@@ -39,7 +39,7 @@ fn main() {
         Ok(s) => s,
         Err(e) => e.exit(),
     };
-    let gfx = pollster::block_on(th08::gfx::Gfx::headless()).expect("GPU adapter");
+    let gfx = pollster::block_on(th08_render::gfx::Gfx::headless()).expect("GPU adapter");
     let mut model = th08::launcher::Model::new(&s, th08::launcher::Folder::Native);
     model.dev |= dev;
     model.view = match error {

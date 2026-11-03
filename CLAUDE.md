@@ -2,7 +2,7 @@
 
 These override the global "no comments / one short line" rule for this repo.
 
-## Comments in `src/`
+## Comments in `src/` and `crates/*/src/`
 
 This is a port: a reader must be able to check the code against the specs. Write comments for:
 - each module: a one-line `//!` naming what it ports and the spec section (`//! ECL enemy VM (07 §5–§10)`);

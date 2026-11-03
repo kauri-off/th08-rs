@@ -109,6 +109,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc7eb209b1518d6bb87b283c20095f5228ecda460da70b44f0802523dea6da04"
 
 [[package]]
+name = "android_log-sys"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84521a3cf562bc62942e294181d9eef17eb38ceb8c68677bc49f144e4c3d4f8d"
+
+[[package]]
+name = "android_logger"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbb4e440d04be07da1f1bf44fb4495ebd58669372fe0cffa6e48595ac5bd88a3"
+dependencies = [
+ "android_log-sys",
+ "env_filter 0.1.4",
+ "log",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -868,6 +885,16 @@ dependencies = [
 
 [[package]]
 name = "env_filter"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bf3c259d255ca70051b30e2e95b5446cdb8949ac4cd22c0d7fd634d89f568e2"
+dependencies = [
+ "log",
+ "regex",
+]
+
+[[package]]
+name = "env_filter"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "900d271a03799a1ee8d1ca9b19893b48ca674a9284fefcfb85f05e74ed314217"
@@ -884,7 +911,7 @@ checksum = "de671bd27a75a797dc9ae289ba1e77276e75e2026408aab65185384e2d5cd3f6"
 dependencies = [
  "anstream",
  "anstyle",
- "env_filter",
+ "env_filter 2.0.0",
  "jiff",
  "log",
 ]
@@ -2958,33 +2985,26 @@ dependencies = [
 name = "th08"
 version = "0.1.0"
 dependencies = [
- "ab_glyph",
+ "android_logger",
  "anyhow",
- "bytemuck",
  "chrono",
  "clap",
  "console_error_panic_hook",
  "console_log",
- "cpal",
  "directories",
  "egui",
  "egui-wgpu",
  "egui-winit",
- "encoding_rs",
  "env_logger",
  "gilrs",
- "hound",
  "image",
  "js-sys",
- "liblzma",
- "libm",
  "log",
- "midly",
  "pollster 1.0.1",
  "rfd",
- "rustysynth",
- "sha2",
- "th08-formats",
+ "th08-audio",
+ "th08-core",
+ "th08-render",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -2996,8 +3016,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "th08-audio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "hound",
+ "log",
+ "pollster 1.0.1",
+ "rustysynth",
+ "th08-core",
+ "th08-formats",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "th08-core"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "encoding_rs",
+ "image",
+ "libm",
+ "log",
+ "th08-formats",
+]
 
 [[package]]
 name = "th08-formats"
@@ -3006,6 +3050,39 @@ dependencies = [
  "encoding_rs",
  "midly",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "th08-render"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "bytemuck",
+ "image",
+ "log",
+ "th08-core",
+ "wasm-bindgen",
+ "web-sys",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "th08-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "image",
+ "liblzma",
+ "log",
+ "pollster 1.0.1",
+ "sha2",
+ "th08",
+ "th08-audio",
+ "th08-core",
+ "th08-render",
 ]
 
 [[package]]

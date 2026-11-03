@@ -1,7 +1,7 @@
 //! Debug tool: demo sync check. Plays demorpyN in the port and compares each gameplay frame with the
 //! ground-truth trace (specs/data/demoN_trace.txt); used to locate divergences only.
 
-use crate::game::Ctx;
+use th08_core::game::Ctx;
 
 pub const FIELDS: [&str; 22] = [
     "frame",
@@ -99,13 +99,13 @@ const CHECKED: [usize; 21] = [
 // Runs demo `n` from a freshly loaded context and compares it with `trace`.
 pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
     let rows = parse_trace(trace);
-    let r = crate::replay::parse(
+    let r = th08_core::replay::parse(
         &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
         ctx.w.game.ver_list.get(),
     )?;
     ctx.w.game.replay_ff = false;
     anyhow::ensure!(
-        crate::replay::start_playback(&mut ctx.w.game, r, None, Some(n)),
+        th08_core::replay::start_playback(&mut ctx.w.game, r, None, Some(n)),
         "demo has no stage"
     );
     let mut rng_base = 0;
@@ -119,13 +119,13 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
             rng_base = ctx.w.rng.total;
             rng_before = ctx.w.rng.state;
         }
-        if ctx.calc() != crate::task::Flow::Continue {
+        if ctx.calc() != th08_core::task::Flow::Continue {
             break;
         }
         if ctx.w.game.demo_frame > before {
-            out.push(crate::trace::demo_sample(ctx, rng_base));
+            out.push(th08_core::trace::demo_sample(ctx, rng_base));
         }
-        if ctx.w.game.flags & crate::gamemgr::F_DEMO == 0 {
+        if ctx.w.game.flags & th08_core::gamemgr::F_DEMO == 0 {
             break;
         }
     }
@@ -158,8 +158,8 @@ mod tests {
     // Frames each demo must stay in sync for (raise as divergences get fixed).
     const MIN_SYNC: [usize; 4] = [6120, 4920, 5040, 7020];
 
-    fn state(ctx: &crate::game::Ctx) -> [i64; 22] {
-        let mut s = crate::trace::demo_sample(ctx, 0);
+    fn state(ctx: &th08_core::game::Ctx) -> [i64; 22] {
+        let mut s = th08_core::trace::demo_sample(ctx, 0);
         s[1] = 0;
         s[4] = 0;
         s
@@ -168,24 +168,24 @@ mod tests {
     // Records a scripted Lunatic stage-1 run, saves/loads the .rpy and plays it back: every frame must match.
     #[test]
     fn record_playback() {
-        let Some(dir) = crate::settings::test_game_dir() else {
+        let Some(dir) = th08::settings::test_game_dir() else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
+        let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
             return;
         };
-        let src = crate::sources::native(dir.clone().into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+        let src = th08::sources::native(dir.clone().into());
+        let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
             src.clone(),
-            crate::settings::get().tool_io(gfx, &src),
-            crate::settings::get().core(),
+            th08::settings::get().tool_io(gfx, &src),
+            th08::settings::get().core(),
             false,
         ))
         .unwrap();
         let g = &mut ctx.w.game;
         (g.difficulty, g.shot, g.stage, g.fresh_start) = (3, 1, 0, true);
         g.flags = 0;
-        g.request(crate::gamemgr::SCENE_GAME);
+        g.request(th08_core::gamemgr::SCENE_GAME);
         let mut want = Vec::new();
         let mut k = 0u32;
         for _ in 0..4000 {
@@ -194,7 +194,7 @@ mod tests {
             }
             k = k.wrapping_mul(1103515245).wrapping_add(12345);
             let dirs = [0, 0x10, 0x20, 0x40, 0x80, 0x50, 0x90];
-            crate::platform::tool_host(&mut ctx).keys[0] =
+            th08::platform::tool_host(&mut ctx).keys[0] =
                 0x1 | (k >> 20 & 4) as u16 | dirs[(k >> 24) as usize % 7];
             let f = ctx.w.game.frame_counter;
             ctx.calc();
@@ -203,19 +203,19 @@ mod tests {
             }
         }
         let mut r = ctx.w.game.rpy.clone().unwrap();
-        let mut rng = crate::rng::Rng::seeded(1);
-        let r = crate::replay::parse(&r.encode(&mut rng), ctx.w.game.ver_list.get()).unwrap();
-        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).unwrap();
-        let src = crate::sources::native(dir.into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+        let mut rng = th08_core::rng::Rng::seeded(1);
+        let r = th08_core::replay::parse(&r.encode(&mut rng), ctx.w.game.ver_list.get()).unwrap();
+        let gfx = pollster::block_on(th08_render::gfx::Gfx::headless()).unwrap();
+        let src = th08::sources::native(dir.into());
+        let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
             src.clone(),
-            crate::settings::get().tool_io(gfx, &src),
-            crate::settings::get().core(),
+            th08::settings::get().tool_io(gfx, &src),
+            th08::settings::get().core(),
             false,
         ))
         .unwrap();
         ctx.w.game.replay_ff = false;
-        assert!(crate::replay::start_playback(
+        assert!(th08_core::replay::start_playback(
             &mut ctx.w.game,
             r,
             None,
@@ -252,10 +252,10 @@ mod tests {
 
     #[test]
     fn demo_sync() {
-        let Some(dir) = crate::settings::test_game_dir() else {
+        let Some(dir) = th08::settings::test_game_dir() else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
+        let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
             eprintln!("no GPU adapter; demo sync skipped");
             return;
         };
@@ -263,18 +263,18 @@ mod tests {
         for n in 0..4u8 {
             let g = match gfx.take() {
                 Some(g) => g,
-                None => pollster::block_on(crate::gfx::Gfx::headless()).unwrap(),
+                None => pollster::block_on(th08_render::gfx::Gfx::headless()).unwrap(),
             };
-            let src = crate::sources::native(dir.clone().into());
-            let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+            let src = th08::sources::native(dir.clone().into());
+            let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
                 src.clone(),
-                crate::settings::get().tool_io(g, &src),
-                crate::settings::get().core(),
+                th08::settings::get().tool_io(g, &src),
+                th08::settings::get().core(),
                 false,
             ))
             .unwrap();
             let trace = std::fs::read_to_string(
-                crate::testdata::repo_root().join(format!("specs/data/demo{n}_trace.txt")),
+                th08_core::testdata::repo_root().join(format!("specs/data/demo{n}_trace.txt")),
             )
             .unwrap();
             let rep = super::run(&mut ctx, n, &trace).unwrap();

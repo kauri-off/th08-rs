@@ -1,13 +1,13 @@
 //! Window and message loop (00 §1, §2: WinMain 0x4418C0, `Frame_Run` 0x441E70 pacing) on winit; plus debug run modes.
 
-use crate::assets::Source;
-use crate::game::Ctx;
-use crate::gfx::Gfx;
 use crate::launcher::{Action, Folder, Screen, View};
 use crate::pacer::{Pacer, Tick};
 use crate::settings::Settings;
-use crate::task::Flow;
 use std::sync::Arc;
+use th08_core::assets::Source;
+use th08_core::game::Ctx;
+use th08_core::task::Flow;
+use th08_render::gfx::Gfx;
 use web_time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -95,9 +95,9 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
     let drawlog = s.drawlog.as_deref().and_then(open_drawlog);
     #[cfg(target_arch = "wasm32")]
     let drawlog = None;
-    let io = crate::game::Io {
+    let io = th08_core::game::Io {
         renderer: Box::new(gfx),
-        audio: Box::new(crate::audio::Audio::new(source.clone(), s.audio())),
+        audio: Box::new(th08_audio::audio::Audio::new(source.clone(), s.audio())),
         host: s.app_host(),
         drawlog,
     };
@@ -586,8 +586,8 @@ impl App {
 
 // Closing the window mid-game. Tool `replay_save`: the recording is still written.
 fn close(r: &mut Running, el: &ActiveEventLoop) {
-    if r.ctx.core.replay_save.is_some() && r.ctx.w.game.scene == crate::gamemgr::SCENE_GAME {
-        crate::replay::finish(&mut r.ctx);
+    if r.ctx.core.replay_save.is_some() && r.ctx.w.game.scene == th08_core::gamemgr::SCENE_GAME {
+        th08_core::replay::finish(&mut r.ctx);
     }
     el.exit()
 }
@@ -647,7 +647,7 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
         return Frame::Exit;
     }
     r.ctx.present();
-    crate::ascii::apply_pending_captures(&mut r.ctx.w.anm, &mut r.ctx.rec);
+    th08_core::ascii::apply_pending_captures(&mut r.ctx.w.anm, &mut r.ctx.rec);
     window.request_redraw();
     Frame::Continue
 }
@@ -745,7 +745,7 @@ fn gfx(ctx: &mut Ctx) -> &mut Gfx {
     gfx_rec(ctx).0
 }
 
-fn gfx_rec(ctx: &mut Ctx) -> (&mut Gfx, &mut crate::drawlist::Recorder) {
+fn gfx_rec(ctx: &mut Ctx) -> (&mut Gfx, &mut th08_core::drawlist::Recorder) {
     let g = ctx
         .renderer
         .as_any_mut()
@@ -756,8 +756,8 @@ fn gfx_rec(ctx: &mut Ctx) -> (&mut Gfx, &mut crate::drawlist::Recorder) {
 
 // `TH08_DRAWLOG` in the game: plain text only (`.xz` logs are written by the tools, which own liblzma).
 #[cfg(not(target_arch = "wasm32"))]
-fn open_drawlog(v: &str) -> Option<crate::drawfmt::Writer> {
-    let (path, range) = crate::drawfmt::parse_spec(v);
+fn open_drawlog(v: &str) -> Option<th08_core::drawfmt::Writer> {
+    let (path, range) = th08_core::drawfmt::parse_spec(v);
     if path.ends_with(".xz") {
         log::error!(
             "TH08_DRAWLOG={path}: the game writes plain text; use the session / drawrun tools for .xz logs"
@@ -765,7 +765,7 @@ fn open_drawlog(v: &str) -> Option<crate::drawfmt::Writer> {
         return None;
     }
     match std::fs::File::create(path) {
-        Ok(f) => Some(crate::drawfmt::Writer::stream(
+        Ok(f) => Some(th08_core::drawfmt::Writer::stream(
             Box::new(std::io::BufWriter::new(f)),
             range,
         )),

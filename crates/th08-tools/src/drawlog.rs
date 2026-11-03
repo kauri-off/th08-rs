@@ -2,24 +2,24 @@
 //! log; the text format and writer are in drawfmt.rs.
 #![allow(clippy::disallowed_methods)]
 
-use crate::drawfmt::{num, num_g};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::io::BufRead;
 use std::rc::Rc;
+use th08_core::drawfmt::{num, num_g};
 
 // `TH08_DRAWLOG=<path>[,from-to | ,dfrom-to]`: the draw log writer for `Io::drawlog`; a `.xz` path is
 // xz-compressed. An unopenable path logs the error and gives None (log off).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn open_spec(v: &str) -> Option<crate::drawfmt::Writer> {
-    let (path, range) = crate::drawfmt::parse_spec(v);
+pub fn open_spec(v: &str) -> Option<th08_core::drawfmt::Writer> {
+    let (path, range) = th08_core::drawfmt::parse_spec(v);
     let w: std::io::Result<Box<dyn std::io::Write>> = if path.ends_with(".xz") {
         crate::xz::create(path.as_ref()).map(|w| Box::new(w) as _)
     } else {
         std::fs::File::create(&path).map(|f| Box::new(std::io::BufWriter::new(f)) as _)
     };
     match w {
-        Ok(w) => Some(crate::drawfmt::Writer::stream(w, range)),
+        Ok(w) => Some(th08_core::drawfmt::Writer::stream(w, range)),
         Err(e) => {
             log::error!("TH08_DRAWLOG={path}: {e}");
             None
@@ -1667,14 +1667,14 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
 // ---- headless runs of the port (tests, drawrun) ----
 
 // One calc + draw + present; returns the logged frame text.
-pub fn step(ctx: &mut crate::game::Ctx) -> Option<(crate::task::Flow, Vec<String>)> {
+pub fn step(ctx: &mut th08_core::game::Ctx) -> Option<(th08_core::task::Flow, Vec<String>)> {
     let f = ctx.run_frame();
     let frames = ctx.drawlog.as_mut().map(|w| w.take_frames())?;
     Some((f, frames))
 }
 
 // Menu CLRD pokes of menu_clr (README): any-clear / no-continue masks of teams 0–2 on E–L.
-pub fn clr_pokes(g: &mut crate::gamemgr::Game) {
+pub fn clr_pokes(g: &mut th08_core::gamemgr::Game) {
     for (t, any, nc) in [(0, 0x41, 0x01), (1, 0x81, 0x81), (2, 0xC1, 0xC1)] {
         g.clear_any[t][..4].fill(any);
         g.clear_nc[t][..4].fill(nc);
@@ -1684,8 +1684,8 @@ pub fn clr_pokes(g: &mut crate::gamemgr::Game) {
 // Start state of a menu script (README of specs/data/drawlog): a private save directory, empty for menu_base /
 // menu_clr; menu_mopup1 adds its score.dat and the four attract demos as replay/th8_01..04.rpy.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Result<()> {
-    let dir = crate::settings::temp_dir().join(format!(
+pub fn menu_start_state(ctx: &mut th08_core::game::Ctx, name: &str) -> anyhow::Result<()> {
+    let dir = th08::settings::temp_dir().join(format!(
         "th08_{name}_{}_{:?}",
         std::process::id(),
         std::thread::current().id()
@@ -1693,7 +1693,7 @@ pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Resul
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("replay"))?;
     if name == "menu_mopup1" {
-        let data = crate::testdata::repo_root().join("specs/data/drawlog");
+        let data = th08_core::testdata::repo_root().join("specs/data/drawlog");
         let score = std::fs::read(data.join("menu_mopup1.score.dat"))?;
         let now = ctx.host.ticks_ms();
         ctx.w.game.load_score(Some(&score), now);
@@ -1702,7 +1702,7 @@ pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Resul
             std::fs::write(dir.join(format!("replay/th8_{:02}.rpy", n + 1)), r)?;
         }
     }
-    crate::platform::tool_host(ctx)
+    th08::platform::tool_host(ctx)
         .storage
         .set_save_dir(Some(dir));
     Ok(())
@@ -1710,7 +1710,7 @@ pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Resul
 
 // Replays a menu input script: script frame 1 = the port's first main-menu frame (boot frames get input 0).
 pub fn run_menu_script(
-    ctx: &mut crate::game::Ctx,
+    ctx: &mut th08_core::game::Ctx,
     script: &[u16],
     clr: bool,
     mut out: impl FnMut(String),
@@ -1721,7 +1721,7 @@ pub fn run_menu_script(
         if k >= script.len() {
             break;
         }
-        crate::platform::tool_host(ctx).keys[0] = if k > 0 { script[k] } else { 0 };
+        th08::platform::tool_host(ctx).keys[0] = if k > 0 { script[k] } else { 0 };
         if clr && (k + 1 == 100 || k + 1 == 280) {
             clr_pokes(&mut ctx.w.game);
         }
@@ -1729,10 +1729,10 @@ pub fn run_menu_script(
             return;
         };
         frames.into_iter().for_each(&mut out);
-        if k > 0 || ctx.w.game.scene == crate::gamemgr::SCENE_MENU {
+        if k > 0 || ctx.w.game.scene == th08_core::gamemgr::SCENE_MENU {
             k += 1;
         }
-        if flow != crate::task::Flow::Continue {
+        if flow != th08_core::task::Flow::Continue {
             break;
         }
     }
@@ -1740,18 +1740,18 @@ pub fn run_menu_script(
 
 // Plays attract demo `n` from boot (no fast-forward) up to demo frame `last`.
 pub fn run_demo(
-    ctx: &mut crate::game::Ctx,
+    ctx: &mut th08_core::game::Ctx,
     n: u8,
     last: i32,
     mut out: impl FnMut(String),
 ) -> anyhow::Result<()> {
-    let r = crate::replay::parse(
+    let r = th08_core::replay::parse(
         &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
         ctx.w.game.ver_list.get(),
     )?;
     ctx.w.game.replay_ff = false;
     anyhow::ensure!(
-        crate::replay::start_playback(&mut ctx.w.game, r, None, Some(n)),
+        th08_core::replay::start_playback(&mut ctx.w.game, r, None, Some(n)),
         "demo has no stage"
     );
     ctx.log_to_memory();
@@ -1761,9 +1761,11 @@ pub fn run_demo(
             break;
         };
         frames.into_iter().for_each(&mut out);
-        let demo = ctx.w.game.flags & crate::gamemgr::F_DEMO != 0;
+        let demo = ctx.w.game.flags & th08_core::gamemgr::F_DEMO != 0;
         started |= demo;
-        if flow != crate::task::Flow::Continue || (started && !demo) || ctx.w.game.demo_frame > last
+        if flow != th08_core::task::Flow::Continue
+            || (started && !demo)
+            || ctx.w.game.demo_frame > last
         {
             break;
         }
@@ -1775,8 +1777,8 @@ pub fn run_demo(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use crate::drawfmt::{Header, format_frame};
-    use crate::drawlist::{Blend, LogRec, LogTex, Rect, Vertex};
+    use th08_core::drawfmt::{Header, format_frame};
+    use th08_core::drawlist::{Blend, LogRec, LogTex, Rect, Vertex};
 
     // FORMAT.md §2 fog: C %g, 6 significant digits.
     // 06 §11.3: alpha-0 colours compare equal whatever their RGB; otherwise ±1 per channel.
@@ -1984,20 +1986,20 @@ mod tests {
     const DEMO: [f64; 4] = [90.6, 71.6, 83.3, 86.9];
 
     fn data(p: &str) -> std::path::PathBuf {
-        crate::testdata::repo_root()
+        th08_core::testdata::repo_root()
             .join("specs/data/drawlog")
             .join(p)
     }
 
-    fn ctx() -> Option<crate::game::Ctx> {
-        let dir = crate::settings::test_game_dir()?;
-        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
-        let src = crate::sources::native(dir.into());
+    fn ctx() -> Option<th08_core::game::Ctx> {
+        let dir = th08::settings::test_game_dir()?;
+        let gfx = pollster::block_on(th08_render::gfx::Gfx::headless()).ok()?;
+        let src = th08::sources::native(dir.into());
         Some(
-            pollster::block_on(crate::game::Ctx::load_with(
+            pollster::block_on(th08_core::game::Ctx::load_with(
                 src.clone(),
-                crate::settings::get().tool_io(gfx, &src),
-                crate::settings::get().core(),
+                th08::settings::get().tool_io(gfx, &src),
+                th08::settings::get().core(),
                 false,
             ))
             .unwrap(),
@@ -2024,7 +2026,7 @@ mod tests {
         rot[1].pos[1] += 0.01;
         let quad = |v| LogRec::Quad {
             tex: tex.clone(),
-            id: crate::drawlist::TexId(3),
+            id: th08_core::drawlist::TexId(3),
             textured: true,
             blend: Blend::Add,
             test: false,
@@ -2206,7 +2208,7 @@ mod tests {
         }
         menu_start_state(&mut ctx, name).unwrap();
         let input = std::fs::read_to_string(data(&format!("{name}.input.txt"))).unwrap();
-        let script = crate::input::parse_script(&input).unwrap();
+        let script = th08_core::input::parse_script(&input).unwrap();
         let mut text = String::new();
         crate::drawlog::run_menu_script(&mut ctx, &script, clr, |s| text.push_str(&s));
         let p = parse_str(&text);

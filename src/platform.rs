@@ -1,8 +1,8 @@
 //! Platform side of `host::Host` (ARCH_A §2.2): save storage (fs / localStorage), clocks, the winit keymap and the
 //! gilrs joystick (app), and the scripted / recorded-poll host of the tools and tests. Not a port of the original.
 
-use crate::host::{Host, LocalTime, MAX_PLAYERS, RawInput, Words};
-use crate::input::*;
+use th08_core::host::{Host, LocalTime, MAX_PLAYERS, RawInput, Words};
+use th08_core::input::*;
 use winit::keyboard::KeyCode;
 
 // Input_Poll 0x43D970 DIK table, the default path (15 §1.1): physical keys = DIK scan codes. Keypad 7/9/1/3 give the
@@ -420,7 +420,7 @@ impl Host for ToolHost {
 }
 
 // Tools and tests: the `ToolHost` of a context loaded with `Settings::tool_host`.
-pub fn tool_host(ctx: &mut crate::game::Ctx) -> &mut ToolHost {
+pub fn tool_host(ctx: &mut th08_core::game::Ctx) -> &mut ToolHost {
     ctx.host_as().expect("not a ToolHost")
 }
 

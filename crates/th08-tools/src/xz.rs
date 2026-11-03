@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn round_trip_concatenated_streams() {
-        let dir = crate::settings::temp_dir().join(format!("th08_xz_{}", std::process::id()));
+        let dir = th08::settings::temp_dir().join(format!("th08_xz_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut both = Vec::new();
         for (i, text) in ["first stream\n", "second stream\n"].iter().enumerate() {

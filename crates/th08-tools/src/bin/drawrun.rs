@@ -25,9 +25,9 @@ fn main() -> anyhow::Result<()> {
         "usage: drawrun [--draw-hash] [--window A-B] <out> menu <input.txt> [clr] | drawrun [--draw-hash] [--window A-B] <out> demo <n> [last]"
     );
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
-    let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
+    let gfx = pollster::block_on(th08_render::gfx::Gfx::headless())?;
     let src = th08::sources::native(dir.into());
-    let mut ctx = pollster::block_on(th08::game::Ctx::load_with(
+    let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
         src.clone(),
         th08::settings::get().tool_io(gfx, &src),
         th08::settings::get().core(),
@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     ))?;
     let mut hash = if hash_on {
         std::fs::create_dir_all(&args[0])?;
-        Some(th08::drawlog::HashSink::create(
+        Some(th08_tools::drawlog::HashSink::create(
             &std::path::Path::new(&args[0]).join("draw.hash"),
         )?)
     } else {
@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<()> {
     let (mut xz, mut plain) = if hash_on {
         (None, None)
     } else if args[0].ends_with(".xz") {
-        (Some(th08::xz::create(args[0].as_ref())?), None)
+        (Some(th08_tools::xz::create(args[0].as_ref())?), None)
     } else {
         let f = std::fs::File::create(&args[0])?;
         (None, Some(std::io::BufWriter::new(f)))
@@ -65,7 +65,7 @@ fn main() -> anyhow::Result<()> {
     };
     match args[1].as_str() {
         "menu" => {
-            let script = th08::input::load_script(&args[2], &mut *ctx.host)
+            let script = th08_core::input::load_script(&args[2], &mut *ctx.host)
                 .ok_or_else(|| anyhow::anyhow!("bad input script {}", args[2]))?;
             let clr = args.get(3).is_some_and(|a| a == "clr");
             let name = if clr {
@@ -75,8 +75,8 @@ fn main() -> anyhow::Result<()> {
             } else {
                 "menu_base"
             };
-            th08::drawlog::menu_start_state(&mut ctx, name)?;
-            th08::drawlog::run_menu_script(&mut ctx, &script, clr, &mut put);
+            th08_tools::drawlog::menu_start_state(&mut ctx, name)?;
+            th08_tools::drawlog::run_menu_script(&mut ctx, &script, clr, &mut put);
         }
         "demo" => {
             let n: u8 = args[2].parse()?;
@@ -84,12 +84,12 @@ fn main() -> anyhow::Result<()> {
                 .get(3)
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(i32::MAX - 4000);
-            th08::drawlog::run_demo(&mut ctx, n, last, &mut put)?;
+            th08_tools::drawlog::run_demo(&mut ctx, n, last, &mut put)?;
         }
         m => anyhow::bail!("unknown mode {m}"),
     }
     if let Some(w) = xz {
-        th08::xz::finish(w)?;
+        th08_tools::xz::finish(w)?;
     }
     if let Some(h) = hash {
         h.finish()?;

@@ -9,8 +9,8 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use th08::drawlog::{self, DemoMerge, KeyMode, Opts};
-use th08::session::{self, Session};
+use th08_tools::drawlog::{self, DemoMerge, KeyMode, Opts};
+use th08_tools::session::{self, Session};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -55,7 +55,7 @@ fn main() -> anyhow::Result<()> {
     let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let mut ref_paths = drawlog::expand(&dir.join("draw").to_string_lossy());
     if ref_paths.is_empty() {
-        let alt = th08::testdata::repo_root().join("sessions").join(name);
+        let alt = th08_core::testdata::repo_root().join("sessions").join(name);
         ref_paths = drawlog::expand(&alt.join("draw").to_string_lossy());
     }
     let port_only = port_only && emit;
@@ -66,9 +66,9 @@ fn main() -> anyhow::Result<()> {
     }
 
     let tdir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
-    let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
+    let gfx = pollster::block_on(th08_render::gfx::Gfx::headless())?;
     let src = th08::sources::native(tdir.into());
-    let mut ctx = pollster::block_on(th08::game::Ctx::load_with(
+    let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
         src.clone(),
         th08::settings::get().tool_io(gfx, &src),
         th08::settings::get().core(),
@@ -101,7 +101,7 @@ fn main() -> anyhow::Result<()> {
     let port_log = out.join("draw.drawlog.xz");
     // `--port-drawlog`: the port's own log of rows from..to, with or without a reference log.
     let mut xz = if drawlog_on || port_only {
-        Some(th08::xz::create(&port_log)?)
+        Some(th08_tools::xz::create(&port_log)?)
     } else {
         None
     };
@@ -166,13 +166,13 @@ fn main() -> anyhow::Result<()> {
     trace.flush()?;
     drop(trace);
     if let Some(w) = xz.take() {
-        th08::xz::finish(w)?;
+        th08_tools::xz::finish(w)?;
     }
     if let Some(h) = hash.take() {
         h.finish()?;
     }
     if let Some(log) = &ctx.sound_log {
-        std::fs::write(out.join("sound.txt"), th08::sound::format_log(log))?;
+        std::fs::write(out.join("sound.txt"), th08_core::sound::format_log(log))?;
     }
     eprintln!(
         "ran {} menu-relative rows in {:.1} s",
@@ -204,9 +204,9 @@ fn main() -> anyhow::Result<()> {
     if let Some(m) = merge {
         let rep = m.finish();
         println!("\ndraw log (key present):\n{}", rep.summary());
-        let entries = th08::drawreport::entries(&rep);
+        let entries = th08_tools::drawreport::entries(&rep);
         let in_range = |f: &drawlog::Frame| f.present >= range.0 && f.present <= range.1;
-        th08::drawreport::write_html(
+        th08_tools::drawreport::write_html(
             &out,
             (&ref_paths[0].to_string_lossy(), &port_log.to_string_lossy()),
             &rep,
@@ -218,7 +218,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn dump_items(ctx: &th08::game::Ctx, row: i64) {
+fn dump_items(ctx: &th08_core::game::Ctx, row: i64) {
     let Some(p) = ctx.w.player.as_deref() else {
         return;
     };
@@ -265,7 +265,7 @@ fn dump_items(ctx: &th08::game::Ctx, row: i64) {
                     x.life,
                     x.orb_acc
                 );
-                if x.flags & th08::enemy::A_BOSS != 0 {
+                if x.flags & th08_core::enemy::A_BOSS != 0 {
                     println!(
                         "    boss dep {} max {} hud {} thr {:?} tsub {:?} tmo {} tmosub {} dsub {} tim {} dmgt {} flb {:x} bon {}",
                         x.main.depth,

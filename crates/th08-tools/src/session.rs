@@ -1,7 +1,7 @@
 //! Session replay (specs/data/drawlog/README.md "Sessions"): recorded input, boot seed and loader timing of the
 //! original, the port's 36-column trace and its comparison with the recorded one.
 
-use crate::trace::{Row, Sched, sample};
+use th08_core::trace::{Row, Sched, sample};
 
 // `polls.txt`: `poll present scene src mask` per Input_Poll call; the mask by poll index.
 pub fn parse_polls(text: &str) -> Option<Vec<u16>> {
@@ -282,9 +282,9 @@ impl std::fmt::Display for Comparison {
 pub use native::*;
 
 // "YYYY-MM-DDTHH:MM:SS[+zone]" (meta.txt `recorded:`): the recorder's local wall-clock fields.
-fn parse_local_time(s: &str) -> Option<crate::host::LocalTime> {
+fn parse_local_time(s: &str) -> Option<th08_core::host::LocalTime> {
     let n = |r: std::ops::Range<usize>| s.get(r)?.parse().ok();
-    Some(crate::host::LocalTime {
+    Some(th08_core::host::LocalTime {
         year: n(0..4)? as i32,
         month: n(5..7)?,
         day: n(8..10)?,
@@ -306,7 +306,7 @@ mod native {
         pub sched: Sched,
         pub noclip: bool,
         // meta.txt `recorded:` local date and time, the session's `localtime` answer (replay / score dates).
-        pub recorded_at: Option<crate::host::LocalTime>,
+        pub recorded_at: Option<th08_core::host::LocalTime>,
         // meta.txt `fingerprint:` logic-content fingerprint (ARCH_B D5); absent = vanilla (empty).
         pub fingerprint: String,
     }
@@ -320,7 +320,7 @@ mod native {
                 Ok(t) => parse_polls(&t).ok_or_else(|| anyhow::anyhow!("bad polls.txt"))?,
                 Err(_) => {
                     let t = std::fs::read_to_string(dir.join("input.txt"))?;
-                    crate::input::parse_script(&t)
+                    th08_core::input::parse_script(&t)
                         .ok_or_else(|| anyhow::anyhow!("bad input.txt"))?
                 }
             };
@@ -353,7 +353,7 @@ mod native {
         }
 
         // Start state: private save dir with start/score.dat, th08.cfg, replays; boot seed; loader schedule.
-        pub fn start(&self, ctx: &mut crate::game::Ctx) -> anyhow::Result<()> {
+        pub fn start(&self, ctx: &mut th08_core::game::Ctx) -> anyhow::Result<()> {
             // A session replays only on the logic content it was recorded with (ARCH_B D5).
             let fp = ctx.archive.fingerprint().to_string();
             anyhow::ensure!(
@@ -361,7 +361,7 @@ mod native {
                 "session fingerprint '{}' ≠ content fingerprint '{fp}'",
                 self.fingerprint
             );
-            let save = crate::settings::temp_dir().join(format!(
+            let save = th08::settings::temp_dir().join(format!(
                 "th08_session_{}_{:?}",
                 std::process::id(),
                 std::thread::current().id()
@@ -377,7 +377,7 @@ mod native {
             }
             if let Some(c) = std::fs::read(start.join("th08.cfg"))
                 .ok()
-                .and_then(|b| crate::config::Config::from_bytes(&b))
+                .and_then(|b| th08_core::config::Config::from_bytes(&b))
             {
                 ctx.w.game.cfg = c;
             }
@@ -389,11 +389,11 @@ mod native {
                 std::fs::copy(e.path(), save.join("replay").join(e.file_name()))?;
             }
             // The session's host: its save dir and the recorded Input_Poll returns (polls.txt), one per poll.
-            let host = crate::platform::tool_host(ctx);
+            let host = th08::platform::tool_host(ctx);
             host.storage.set_save_dir(Some(save));
             host.polls = Some(self.input.as_slice().into());
             host.fixed_time = self.recorded_at;
-            ctx.w.rng = crate::rng::Rng::seeded(self.seed as u16);
+            ctx.w.rng = th08_core::rng::Rng::seeded(self.seed as u16);
             ctx.w.overlays.set_frame_counter(self.sched.ascii_offset);
             ctx.w.game.sched = Some(self.sched.clone());
             ctx.w.game.noclip = self.noclip;
@@ -404,16 +404,16 @@ mod native {
         // pass) and returns false to stop; `draw` gets the draw-log text of every present.
         pub fn run(
             &self,
-            ctx: &mut crate::game::Ctx,
+            ctx: &mut th08_core::game::Ctx,
             to: usize,
-            mut row: impl FnMut(&Row, &crate::game::Ctx) -> bool,
+            mut row: impl FnMut(&Row, &th08_core::game::Ctx) -> bool,
             mut draw: Option<&mut dyn FnMut(String)>,
         ) {
             if draw.is_some() {
                 ctx.log_to_memory();
             }
             // Debug `TH08_SESSION_RNG=<row>`: RNG call sites of that menu frame.
-            let rng_row = crate::settings::get().session_rng;
+            let rng_row = th08::settings::get().session_rng;
             let boot = self.sched.boot_calc as i64;
             let (mut scene, mut scene_frame) = (i32::MIN, 0i64);
             let to = to.min(self.input.len()) as i64;
@@ -432,7 +432,7 @@ mod native {
                 }
                 // This frame's first poll (Supervisor_Calc or Info_Show) reads recorded poll `poll`; each restarted
                 // pass polls the next one (00 §3).
-                crate::platform::tool_host(ctx).cursor = poll;
+                th08::platform::tool_host(ctx).cursor = poll;
                 let tr = rng_row == Some(poll + 1);
                 ctx.w.rng.trace = tr.then(Vec::new);
                 let flow = match &mut draw {
@@ -490,10 +490,10 @@ mod native {
                 r[22] = passes;
                 r[24] = n - 2;
                 // The exit save follows the quitting frame's sample (15 §2.2).
-                if flow == crate::task::Flow::Quit {
+                if flow == th08_core::task::Flow::Quit {
                     ctx.exit_save();
                 }
-                if stop || !row(&r, ctx) || flow != crate::task::Flow::Continue {
+                if stop || !row(&r, ctx) || flow != th08_core::task::Flow::Continue {
                     break;
                 }
             }
@@ -507,11 +507,15 @@ mod native {
             let k = c
                 .lines()
                 .filter(|l| {
-                    l.contains("th08::") && !l.contains("th08::rng::") && !l.contains("closure")
+                    l.contains("th08_core::")
+                        && !l.contains("th08_core::rng::")
+                        && !l.contains("closure")
                 })
                 .map(|l| {
                     let l = l.trim();
-                    l.split_once(": ").map_or(l, |x| x.1).replace("th08::", "")
+                    l.split_once(": ")
+                        .map_or(l, |x| x.1)
+                        .replace("th08_core::", "")
                 })
                 .take(5)
                 .collect::<Vec<_>>()
@@ -533,7 +537,7 @@ mod native {
     }
 
     pub fn data_dir(name: &str) -> PathBuf {
-        crate::testdata::repo_root()
+        th08_core::testdata::repo_root()
             .join("specs/data/sessions")
             .join(name)
     }
@@ -607,19 +611,19 @@ mod tests {
 
     #[test]
     fn session_sync() {
-        let Some(dir) = crate::settings::test_game_dir() else {
+        let Some(dir) = th08::settings::test_game_dir() else {
             return;
         };
         for (name, min) in MIN_LEADING {
-            let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
+            let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
                 eprintln!("no GPU adapter; session sync skipped");
                 return;
             };
-            let src = crate::sources::native(dir.clone().into());
-            let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+            let src = th08::sources::native(dir.clone().into());
+            let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
                 src.clone(),
-                crate::settings::get().tool_io(gfx, &src),
-                crate::settings::get().core(),
+                th08::settings::get().tool_io(gfx, &src),
+                th08::settings::get().core(),
                 false,
             ))
             .unwrap();
@@ -666,18 +670,18 @@ mod tests {
     // SoundCmd stream of selftest1 (IMPL157 `session --sound-log`; equal to the pre-SoundCmd `Audio` call stream).
     #[test]
     fn sound_log_selftest1() {
-        let Some(dir) = crate::settings::test_game_dir() else {
+        let Some(dir) = th08::settings::test_game_dir() else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
+        let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
             eprintln!("no GPU adapter; sound log skipped");
             return;
         };
-        let src = crate::sources::native(dir.into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+        let src = th08::sources::native(dir.into());
+        let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
             src.clone(),
-            crate::settings::get().tool_io(gfx, &src),
-            crate::settings::get().core(),
+            th08::settings::get().tool_io(gfx, &src),
+            th08::settings::get().core(),
             false,
         ))
         .unwrap();
@@ -686,9 +690,9 @@ mod tests {
         ctx.w.bgm.midi_ready = false;
         ctx.sound_log = Some(Vec::new());
         s.run(&mut ctx, usize::MAX, |_, _| true, None);
-        let got = crate::sound::format_log(ctx.sound_log.as_deref().unwrap());
+        let got = th08_core::sound::format_log(ctx.sound_log.as_deref().unwrap());
         let want = std::fs::read_to_string(
-            crate::testdata::repo_root().join("tests/data/selftest1.sound.txt"),
+            th08_core::testdata::repo_root().join("tests/data/selftest1.sound.txt"),
         )
         .unwrap();
         if let Some((k, (g, w))) = got
@@ -705,18 +709,18 @@ mod tests {
     // Smoke test: the whole 124 705-frame noclip run (stages 1–6, ending) without panics or hangs (~12 s release).
     #[test]
     fn fullrun_smoke() {
-        let Some(dir) = crate::settings::test_game_dir() else {
+        let Some(dir) = th08::settings::test_game_dir() else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
+        let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
             eprintln!("no GPU adapter; fullrun smoke skipped");
             return;
         };
-        let src = crate::sources::native(dir.into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+        let src = th08::sources::native(dir.into());
+        let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
             src.clone(),
-            crate::settings::get().tool_io(gfx, &src),
-            crate::settings::get().core(),
+            th08::settings::get().tool_io(gfx, &src),
+            th08::settings::get().core(),
             false,
         ))
         .unwrap();

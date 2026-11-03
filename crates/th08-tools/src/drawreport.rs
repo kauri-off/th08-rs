@@ -1,18 +1,18 @@
 //! Draw-log report: renders reference and port logs with the port's renderer and writes an HTML page with the
 //! chosen frames (drawdiff, session).
 
-use crate::drawlist::{Blend, Recorder, Rect, TexId, Vertex};
 use crate::drawlog::{Frame, Kind, Report, Vtx};
-use crate::gfx::Gfx;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use th08_core::drawlist::{Blend, Recorder, Rect, TexId, Vertex};
+use th08_render::gfx::Gfx;
 
 pub struct Renderer {
     pub gfx: Gfx,
     // The report's own command recorder, executed by `gfx` at capture / flush.
     pub rec: Recorder,
-    ar: Option<crate::archive::Archive>,
+    ar: Option<th08_core::archive::Archive>,
     anm: HashMap<String, Vec<Option<TexId>>>,
     img: HashMap<String, Option<(TexId, u32, u32)>>,
 }
@@ -38,8 +38,8 @@ impl Renderer {
         let mut gfx = pollster::block_on(Gfx::headless())?;
         gfx.persistent = true;
         let ar = match dir {
-            Some(d) => Some(crate::archive::Archive::from_bytes(std::fs::read(
-                crate::sources::find_file(&d, "th08.dat"),
+            Some(d) => Some(th08_core::archive::Archive::from_bytes(std::fs::read(
+                th08::sources::find_file(&d, "th08.dat"),
             )?)?),
             None => None,
         };
@@ -61,7 +61,7 @@ impl Renderer {
                 .ar
                 .as_ref()
                 .and_then(|a| a.read(file).ok())
-                .and_then(|b| crate::anm::textures(&b).ok())
+                .and_then(|b| th08_core::anm::textures(&b).ok())
             {
                 for t in texs {
                     v.push(t.map(|t| self.rec.create_texture(t.width, t.height, &t.rgba)));
@@ -159,7 +159,7 @@ impl Renderer {
                             let (u0, v0) = (n[0] / iw, n[1] / ih);
                             let (u1, v1) = ((n[0] + n[2]) / iw, (n[1] + n[3]) / ih);
                             let (x0, y0, x1, y1) = (n[4], n[5], n[4] + n[2], n[5] + n[3]);
-                            self.rec.set_viewport(crate::drawlist::FULLSCREEN);
+                            self.rec.set_viewport(th08_core::drawlist::FULLSCREEN);
                             let q = [
                                 (x0, y0, u0, v0),
                                 (x1, y0, u1, v0),
@@ -276,7 +276,7 @@ where
         let _ = writeln!(list, "{} {} {} {}", p.0, p.1, p.2, p.3);
     }
     std::fs::write(out.join("frames.txt"), list)?;
-    let dir = crate::settings::test_game_dir();
+    let dir = th08::settings::test_game_dir();
     if dir.is_none() {
         eprintln!("TH08_DIR not set: renders use no textures");
     }
@@ -284,7 +284,7 @@ where
     let want_r: Vec<i64> = entries.iter().map(|e| e.ref_present).collect();
     let want_p: Vec<i64> = entries.iter().map(|e| e.port_present).collect();
     let ri = render_pass(&mut renderer, reference, &want_r);
-    let mut renderer2 = Renderer::new(crate::settings::test_game_dir())?;
+    let mut renderer2 = Renderer::new(th08::settings::test_game_dir())?;
     let pi = render_pass(&mut renderer2, port, &want_p);
     let esc = |s: &str| {
         s.replace('&', "&amp;")
@@ -382,45 +382,48 @@ where
 // Tools-bound: needs a GPU adapter (headless `Gfx` readback).
 #[cfg(test)]
 mod tests {
-    use crate::gamemgr;
-    use crate::input::{BOMB, DOWN, SHOT, UP};
+    use th08_core::gamemgr;
+    use th08_core::input::{BOMB, DOWN, SHOT, UP};
 
     // `TH08_RESULT_SHOTS=k1,k2,…`: /tmp/th08_result_<tag>_<k>.png at those result frames of result.rs
     // `game_over_name_entry_saves`'s run (same input), "after" = the result screen, "viewer" = the ranking viewer.
     #[test]
     fn result_shots() {
-        let want = &crate::settings::get().result_shots;
-        let Some(dir) = crate::settings::test_game_dir() else {
+        let want = &th08::settings::get().result_shots;
+        let Some(dir) = th08::settings::test_game_dir() else {
             return;
         };
         if want.is_empty() {
             return;
         }
-        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).expect("no GPU adapter");
-        let src = crate::sources::native(dir);
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+        let gfx = pollster::block_on(th08_render::gfx::Gfx::headless()).expect("no GPU adapter");
+        let src = th08::sources::native(dir);
+        let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
             src.clone(),
-            crate::settings::get().tool_io(gfx, &src),
-            crate::settings::get().core(),
+            th08::settings::get().tool_io(gfx, &src),
+            th08::settings::get().core(),
             false,
         ))
         .unwrap();
         let save =
-            crate::settings::temp_dir().join(format!("th08_result_shots_{}", std::process::id()));
+            th08::settings::temp_dir().join(format!("th08_result_shots_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&save);
-        crate::platform::tool_host(&mut ctx)
+        th08::platform::tool_host(&mut ctx)
             .storage
             .set_save_dir(Some(save.clone()));
         ctx.w.game.persist = true;
-        let shot = |ctx: &mut crate::game::Ctx, on: bool, k: u32, tag: &str| {
+        let shot = |ctx: &mut th08_core::game::Ctx, on: bool, k: u32, tag: &str| {
             if on && want.contains(&k) {
-                let g = ctx.renderer.as_any_mut().downcast_mut::<crate::gfx::Gfx>();
+                let g = ctx
+                    .renderer
+                    .as_any_mut()
+                    .downcast_mut::<th08_render::gfx::Gfx>();
                 let img = g.expect("renderer is Gfx").capture(&mut ctx.rec, None);
                 let _ = img.save(format!("/tmp/th08_result_{tag}_{k}.png"));
             }
             ctx.present();
         };
-        crate::supervisor::setup_new_game(&mut ctx.w.game, &ctx.core, 0);
+        th08_core::supervisor::setup_new_game(&mut ctx.w.game, &ctx.core, 0);
         let keys: [(u32, u16); 7] = [
             (20, DOWN),
             (28, SHOT),
@@ -452,7 +455,7 @@ mod tests {
             } else {
                 0
             };
-            crate::platform::tool_host(&mut ctx).keys[0] = key;
+            th08::platform::tool_host(&mut ctx).keys[0] = key;
             if seen_result && ctx.w.game.scene == gamemgr::SCENE_MENU {
                 break;
             }
@@ -469,7 +472,7 @@ mod tests {
             if ctx.w.game.scene == gamemgr::SCENE_RESULT_MENU {
                 k += 1;
             }
-            crate::platform::tool_host(&mut ctx).keys[0] =
+            th08::platform::tool_host(&mut ctx).keys[0] =
                 if [40, 80, 120].iter().any(|&f| (f..f + 3).contains(&k)) {
                     SHOT
                 } else {

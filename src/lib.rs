@@ -1,77 +1,14 @@
-//! th08 port library: one module per ported subsystem plus the debug tools (session, demosync, drawlog,
-//! drawreport, anmdebug).
-// Logic transcendentals go through `fmath` (05 §10); clippy.toml lists the banned std methods.
-#![deny(clippy::disallowed_methods)]
+//! th08 app: the game window and launcher (app, launcher), settings and platform services, data sources, input
+//! devices and the frame pacer; entries `start` (wasm) and `android_main` (STEP10_CRATES.md §1). Logic lives in
+//! th08-core, drawing in th08-render, sound in th08-audio.
 
-pub mod anm;
-pub mod anmdebug;
-pub mod anmmgr;
-pub mod anmvm;
 pub mod app;
-pub mod archive;
-pub mod ascii;
-pub mod assets;
-pub mod audio;
-pub mod bomb;
-pub mod bullet;
-pub mod camera;
-pub mod chain;
-pub mod config;
-pub mod content;
-pub mod coreconfig;
-pub mod d3dx;
-pub mod demosync;
-pub mod drawfmt;
-pub mod drawlist;
-pub mod drawlog;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod drawreport;
-pub mod ecl;
-pub mod eclvm;
-pub mod effect;
-pub mod ending;
-pub mod enemy;
-pub mod fmath;
-pub mod game;
-pub mod gamemgr;
-pub mod gfx;
-pub mod gui;
-pub mod host;
-pub mod hud;
-pub mod input;
-pub mod item;
 pub mod joystick;
 pub mod launcher;
-pub mod menu;
-pub mod menulist;
-pub mod midi;
-pub mod msg;
-pub mod musicroom;
 pub mod pacer;
 pub mod platform;
-pub mod player;
-pub mod pshot;
-pub mod replay;
-pub mod result;
-pub mod rng;
-pub mod scoredat;
-pub mod session;
 pub mod settings;
-pub mod sht;
-pub mod sound;
 pub mod sources;
-pub mod stage;
-pub mod stdfile;
-pub mod supervisor;
-pub mod task;
-pub mod testdata;
-pub mod text;
-pub mod trace;
-pub mod world;
-#[cfg(test)]
-mod worldclone;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod xz;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -92,4 +29,20 @@ pub fn start(files: js_sys::Array) {
     } else {
         app::run(source, s);
     }
+}
+
+// Android entry (ARCH_D_MOBILE §6.1 item 6). Stub: the event loop gets `app` in Android run 1 (ARCH_D §6.3).
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+fn android_main(app: winit::platform::android::activity::AndroidApp) {
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+    );
+    let data = app.internal_data_path();
+    let dirs = settings::PlatformDirs {
+        config: data.clone(),
+        save: data,
+        soundfonts: Vec::new(),
+    };
+    app::run_launcher(None, settings::Settings::game_environment(dirs));
 }

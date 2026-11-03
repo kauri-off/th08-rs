@@ -1,6 +1,6 @@
-//! Cross-target check of `src/fmath.rs` (05 §10): per-chunk digests of every fmath function, wasm vs native.
+//! Cross-target check of `crates/th08-core/src/fmath.rs` (05 §10): per-chunk digests of every fmath function, wasm vs native.
 
-#[path = "../../../src/fmath.rs"]
+#[path = "../../../crates/th08-core/src/fmath.rs"]
 #[allow(dead_code)]
 mod fmath;
 

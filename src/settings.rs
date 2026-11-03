@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-pub use crate::coreconfig::Ending;
+pub use th08_core::coreconfig::Ending;
 
 // Where a value came from, highest priority last.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -439,7 +439,7 @@ pub const ENTRIES: &[Entry] = &[
         group: Group::StartGame,
         help: "start a game at that stage (also stageN[.std], idx:N)",
         set: |s, v| {
-            s.stage = Some(crate::stage::parse_stage_arg(v).ok_or("unknown stage")?);
+            s.stage = Some(th08_core::stage::parse_stage_arg(v).ok_or("unknown stage")?);
             Ok(())
         },
     },
@@ -476,7 +476,7 @@ pub const ENTRIES: &[Entry] = &[
         group: Group::StartGame,
         help: "shot type 0-11 or a name (reimu&yukari, ry, marisa, ...) for --stage/--ending",
         set: |s, v| {
-            s.player = Some(crate::player::parse_shot(v).ok_or("unknown shot type")?);
+            s.player = Some(th08_core::player::parse_shot(v).ok_or("unknown shot type")?);
             Ok(())
         },
     },
@@ -488,7 +488,7 @@ pub const ENTRIES: &[Entry] = &[
         group: Group::StartGame,
         help: "difficulty for --stage/--ending (also e/n/h/l/x, 0-4)",
         set: |s, v| {
-            s.rank = Some(crate::enemy::parse_difficulty(v).ok_or("unknown difficulty")?);
+            s.rank = Some(th08_core::enemy::parse_difficulty(v).ok_or("unknown difficulty")?);
             Ok(())
         },
     },
@@ -938,7 +938,7 @@ impl Settings {
 
     // Native: CLI args (without the program name) parsed by the clap command built from `ENTRIES`. `Err` = clap's
     // help/version output or a parse error (`Error::exit` prints it with the right exit code).
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     pub fn from_args(
         dirs: PlatformDirs,
         args: impl IntoIterator<Item = String>,
@@ -947,7 +947,7 @@ impl Settings {
     }
 
     // The `th08` game binary: as `from_args`, with port.cfg under env and command line.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     pub fn game_from_args(
         dirs: PlatformDirs,
         args: impl IntoIterator<Item = String>,
@@ -955,7 +955,7 @@ impl Settings {
         Self::from_args_over(Self::game_environment(dirs), args)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     fn from_args_over(
         mut s: Self,
         args: impl IntoIterator<Item = String>,
@@ -1006,8 +1006,8 @@ impl Settings {
     }
 
     // The switches the game core reads (`Ctx::core`); the rest stays host / tool side.
-    pub fn core(&self) -> crate::coreconfig::CoreConfig {
-        crate::coreconfig::CoreConfig {
+    pub fn core(&self) -> th08_core::coreconfig::CoreConfig {
+        th08_core::coreconfig::CoreConfig {
             seed: self.seed,
             stage: self.stage,
             stage_frame: self.stage_frame,
@@ -1047,13 +1047,13 @@ impl Settings {
     }
 
     // The game window's host: winit keyboard, gilrs joystick, the save storage.
-    pub fn app_host(&self) -> Box<dyn crate::host::Host> {
+    pub fn app_host(&self) -> Box<dyn th08_core::host::Host> {
         Box::new(crate::platform::AppHost::new(self.storage()))
     }
 
     // MIDI SoundFont lookup for `audio::Audio` (`soundfont`, then the platform's soundfont dirs).
-    pub fn audio(&self) -> crate::audio::AudioConfig {
-        crate::audio::AudioConfig {
+    pub fn audio(&self) -> th08_audio::audio::AudioConfig {
+        th08_audio::audio::AudioConfig {
             soundfont: self.soundfont.clone(),
             soundfont_dirs: self.dirs.soundfonts.clone(),
         }
@@ -1063,19 +1063,19 @@ impl Settings {
     // (its SoundFont probe sets `midi_ready` as in the game, STEP10_CRATES risk 8), `tool_host`, no draw log.
     pub fn tool_io(
         &self,
-        renderer: impl crate::drawlist::Renderer + 'static,
-        source: &crate::assets::Source,
-    ) -> crate::game::Io {
-        crate::game::Io {
+        renderer: impl th08_core::drawlist::Renderer + 'static,
+        source: &th08_core::assets::Source,
+    ) -> th08_core::game::Io {
+        th08_core::game::Io {
             renderer: Box::new(renderer),
-            audio: Box::new(crate::audio::Audio::new(source.clone(), self.audio())),
+            audio: Box::new(th08_audio::audio::Audio::new(source.clone(), self.audio())),
             host: self.tool_host(),
             drawlog: None,
         }
     }
 
     // Tools and tests: no devices, scripted / recorded input (`platform::ToolHost`).
-    pub fn tool_host(&self) -> Box<dyn crate::host::Host> {
+    pub fn tool_host(&self) -> Box<dyn th08_core::host::Host> {
         Box::new(crate::platform::ToolHost::new(self.storage()))
     }
 
@@ -1146,20 +1146,20 @@ fn env_value(sw: &Entry) -> Option<String> {
     params.get(&sw.url())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 const POS_DIR: &str = "game dir";
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn no_id(e: &Entry) -> String {
     format!("no-{}", e.key)
 }
 
 // Validates a CLI value with the entry's own table parser (kind range/choices plus aliases such as `idx:N`).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 #[derive(Clone)]
 struct EntryParser(&'static Entry);
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 impl clap::builder::TypedValueParser for EntryParser {
     type Value = String;
 
@@ -1196,7 +1196,7 @@ impl clap::builder::TypedValueParser for EntryParser {
 
 // clap cannot let an optional flag value depend on the next word, so `--bool on` is joined to `--bool=on` first
 // (old rule: a boolean takes the next word only if it is an on/off value; else `--bool` alone = on).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn join_bool_values(args: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut it = args.into_iter().peekable();
@@ -1219,7 +1219,7 @@ fn join_bool_values(args: impl IntoIterator<Item = String>) -> Vec<String> {
 
 // The `th08` command line, one flag per `ENTRIES` row (`--key`, `--k_e_y` and the URL name as aliases), grouped by
 // `Group` in `--help`.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 pub fn command(dirs: &PlatformDirs) -> clap::Command {
     use clap::{Arg, ArgAction, Command};
     let mut cmd = Command::new("th08")

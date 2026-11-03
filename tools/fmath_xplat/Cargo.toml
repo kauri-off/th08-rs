@@ -3,7 +3,7 @@ name = "fmath_xplat"
 version = "0.0.0"
 edition = "2024"
 publish = false
-description = "Cross-target check: th08 src/fmath.rs on wasm32 (node) vs native, bit for bit"
+description = "Cross-target check: th08 crates/th08-core/src/fmath.rs on wasm32 (node) vs native, bit for bit"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

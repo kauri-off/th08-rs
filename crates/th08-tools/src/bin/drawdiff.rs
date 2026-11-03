@@ -3,8 +3,8 @@
 //! renders of both logs (port renderer, textures from TH08_DIR) for the worst frames and the reference screenshots.
 
 use std::path::{Path, PathBuf};
-use th08::drawlog::{self, DemoMerge, Frame, KeyMode, Opts};
-use th08::drawreport::{self, Entry};
+use th08_tools::drawlog::{self, DemoMerge, Frame, KeyMode, Opts};
+use th08_tools::drawreport::{self, Entry};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();

@@ -50,7 +50,7 @@ def main():
     row["drawset_identical_pct"], row["drawset_groups"] = pct(rows), groups(dg)
     dl3 = os.path.join(T, f"drawgroups_dl3_{tag}")
     row["dl3_identical_pct"], row["dl3_groups"] = pct(ident(os.path.join(dl3, "identical.tsv"))), groups(dl3)
-    row["spec_gaps"] = str(sum(open(p, encoding="utf-8").read().count("SPEC-GAP:") for p in glob.glob(f"{R}/src/**/*.rs", recursive=True)))
+    row["spec_gaps"] = str(sum(open(p, encoding="utf-8").read().count("SPEC-GAP:") for p in glob.glob(f"{R}/src/**/*.rs", recursive=True) + glob.glob(f"{R}/crates/*/src/**/*.rs", recursive=True)))
     row["broken_spec_refs"] = str(len([l for l in subprocess.run([sys.executable, os.path.join(R, "tools", "spec_refs.py")], capture_output=True, text=True).stdout.split("\n") if l.strip()]))
     out = os.path.join(R, "docs", "METRICS.csv")
     new = not os.path.exists(out)
