@@ -77,11 +77,32 @@ read by tools: none outside tests after 10b (checked: sound.rs Bgm fields are th
 
 | run | content (≤ 3 deliverables) | files | parallel | check |
 |---|---|---|---|---|
-| **10a** IO out of `Ctx` | (1) `AudioOut` trait + `Io` bundle for `Ctx::load_with`; `Audio` impl; `AudioConfig` instead of `settings::get()` in audio.rs; (2) assets.rs split → `sources.rs` (app-bound), `spawn` into audio.rs; (3) drawlog split → `drawfmt.rs` (core-bound) + `open_spec` (tools-bound); callers pass the writer | game, audio, assets, sources (new), drawlog, drawfmt (new), app, lib, main, session, demosync, drawreport, worldclone, menu/result/game tests (load call sites, 17), bin/* | — (first) | arch_check run (T D W android); `session --sound-log` selftest1 unchanged |
+| **10a** IO out of `Ctx` (**done**, below) | (1) `AudioOut` trait + `Io` bundle for `Ctx::load_with`; `Audio` impl; `AudioConfig` instead of `settings::get()` in audio.rs; (2) assets.rs split → `sources.rs` (app-bound), `spawn` into audio.rs; (3) drawlog split → `drawfmt.rs` (core-bound) + `open_spec` (tools-bound); callers pass the writer | game, audio, assets, sources (new), drawlog, drawfmt (new), app, lib, main, session, demosync, drawreport, worldclone, menu/result/game tests (load call sites, 17), bin/* | — (first) | arch_check run (T D W android); `session --sound-log` selftest1 unchanged |
 | **10b** core self-contained | (1) `trace.rs` (Sched, Row, sample, demosync sample, restart / extra-present hooks); (2) core test infra: `testdata.rs`, `NullRenderer`, `MemHost`, `CoreConfig::default()` in tests; GPU tests (drawlog, result shots, demosync, session) marked tools-bound; Bgm tests → sound.rs; `repo_root()` for manifest-relative paths; (3) boundary gate: drawlist.rs test generalised to the planned core file set — no `crate::{gfx,text,audio,midi,app,launcher,settings,platform,sources,joystick,pacer,session,demosync,drawlog,drawreport,xz}` and no `wgpu/cpal/winit/egui/rfd/clap/std::fs/web_time/web_sys/pollster` outside `#[cfg(test)]`, no `unsafe` (fmath native tests → `rsqrt_table --verify`) | session, demosync, trace (new), testdata (new), gamemgr, supervisor, game, worldclone, drawlist, fmath, bin/rsqrt_table, audio, sound, tests of ascii/replay/result/menu/enemy/msg/stage/anmmgr/anmvm/archive | **parallel with L1** (worktree; disjoint; lib.rs module list merged by me) | arch_check run; gate test green |
 | **L1** (launcher Design 2 run 1) | Shell state machine `enum Shell { Setup, Loading, Running, PortMenu, Error }` replacing `pre/launch/settings/started` (app.rs:63–76); Error + Loading screens with Back; one fullscreen owner; game owns its `HostSettings` by value (OnceLock kept for tools) | app, launcher, main (not lib.rs module list) | parallel with 10b | arch_check run; launchershot images via `tools/offscreen`; manual desktop + wasm start |
 | **10c** the cut (pure move) | (1) `git mv` into crates/th08-core/src (incl. rsqrt_amd.bin), crates/th08-render, crates/th08-audio, crates/th08-tools (lib + src/bin); `crate::` → crate paths; `forbid(unsafe_code)`; (2) Cargo.toml per crate, workspace members, deps split, desktop-only `rfd/clap/env_logger/pollster` under `cfg(not(any(wasm32, android)))`, `android_logger` + `android_main` stub in lib.rs; (3) drop the 10b gate test (compiler enforces), update tools/arch_check comment, docs | everything (alone) | — | arch_check run + B (ref500 490/490, ref_b2 498/498) + `cargo tree -p th08-core` shows no wgpu/cpal/winit/egui |
 | **L2** (launcher Design 2 run 2) | `Entry` metadata (`label`, `audience: Player | Dev`, `platforms`, `persist`) replacing `Group::developer()` (settings.rs:63) and the quick-win rules of 5d5d7c7; typed `Value`s with dirty state instead of strings + the `Origin::Cli` trick (settings.rs:12–18) | settings, launcher, app (th08 crate only) | parallel with step-11 core runs (other crate) | arch_check run (fast); launchershot |
+
+
+**10a done (2026-11-03).** Files: game.rs (`AudioOut` trait, `Io { renderer, audio, host, drawlog }`;
+`Ctx::load(source, io, core)`, `Ctx::load_with(source, io, core, persist)`; `audio: Box<dyn AudioOut>`, `drawlog:
+Option<drawfmt::Writer>`), audio.rs (`AudioConfig { soundfont, soundfont_dirs }`, `Audio::new(source, cfg)`, `impl
+AudioOut for Audio` with `load` = `load_se` + `load_midi`, `spawn` moved here; its tests use an in-test `NoFiles`
+source instead of a temp dir), assets.rs (pure: `MaybeSend`, `BoxFuture`, `DataSource`, `Source`), sources.rs (new:
+`native(dir)`, `web(files)` as free functions instead of `Source::native/web` — inherent impls cannot cross the crate
+cut —, `DirSource`, `WebFiles`, `find_file`), drawfmt.rs (new: `num`, `num_g`, `Header`, `format_frame`, `Writer`
+over `Memory | Stream(Box<dyn Write>)` with `Writer::stream(w, range)`, `Range`, `parse_range`; the `num_fast` tests
+moved with it), drawlog.rs (`open_spec` = the old `Writer::from_spec`; `HashSink` stays), settings.rs (`audio()`,
+`tool_io(renderer, &source)` = renderer + real `Audio` probe + `tool_host` + no log, risk 8), coreconfig.rs
+(`drawlog` field removed: core no longer reads it), app.rs (builds `Io`; opens `TH08_DRAWLOG` itself), lib.rs, main.rs,
+and the 17 load call sites (session, demosync, drawlog, result, menu, game, worldclone tests; bin/session, drawrun,
+demosync), archive.rs / launcher.rs / drawreport.rs (`sources::find_file`). Deviations: (a) `Io::drawlog` is used as
+passed, also with `persist` false (only the app passes one; before, `from_spec` ran only with `persist`); the app now
+opens the log file before the archive is read. (b) **Resolved after 10a:** the app no longer calls
+`drawlog::open_spec`: `app::open_drawlog` writes plain-text logs (spec parsed by core `drawfmt::parse_spec`); `.xz`
+logs and liblzma stay tools-only. Check: `FAST=1 arch_check run` 0 differing
+(emit-off 0; fmt, build, wasm, android, cargo test inside), spec_refs 0, `sound_log_selftest1` / drawlog format and
+menu tests green with TH08_DIR.
 
 Order: 10a → (10b ∥ L1) → 10c → L2 (∥ step 11). 4 step-10 runs + 2 launcher runs. Design 2 runs 3–4 fold into
 Android runs 1 and 4–5 (ARCH_D §6.3) as planned.

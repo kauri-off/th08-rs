@@ -39,7 +39,7 @@ impl Renderer {
         gfx.persistent = true;
         let ar = match dir {
             Some(d) => Some(crate::archive::Archive::from_bytes(std::fs::read(
-                crate::assets::find_file(&d, "th08.dat"),
+                crate::sources::find_file(&d, "th08.dat"),
             )?)?),
             None => None,
         };

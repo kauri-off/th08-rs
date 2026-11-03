@@ -222,13 +222,12 @@ mod tests {
         let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
             return;
         };
-        let src = crate::assets::Source::native(dir.clone().into());
+        let src = crate::sources::native(dir.clone().into());
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
-            src,
-            gfx,
-            false,
+            src.clone(),
+            crate::settings::get().tool_io(gfx, &src),
             crate::settings::get().core(),
-            crate::settings::get().tool_host(),
+            false,
         ))
         .unwrap();
         let g = &mut ctx.w.game;
@@ -255,13 +254,12 @@ mod tests {
         let mut rng = crate::rng::Rng::seeded(1);
         let r = crate::replay::parse(&r.encode(&mut rng), ctx.w.game.ver_list.get()).unwrap();
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).unwrap();
-        let src = crate::assets::Source::native(dir.into());
+        let src = crate::sources::native(dir.into());
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
-            src,
-            gfx,
-            false,
+            src.clone(),
+            crate::settings::get().tool_io(gfx, &src),
             crate::settings::get().core(),
-            crate::settings::get().tool_host(),
+            false,
         ))
         .unwrap();
         ctx.w.game.replay_ff = false;
@@ -315,13 +313,12 @@ mod tests {
                 Some(g) => g,
                 None => pollster::block_on(crate::gfx::Gfx::headless()).unwrap(),
             };
-            let src = crate::assets::Source::native(dir.clone().into());
+            let src = crate::sources::native(dir.clone().into());
             let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
-                src,
-                g,
-                false,
+                src.clone(),
+                crate::settings::get().tool_io(g, &src),
                 crate::settings::get().core(),
-                crate::settings::get().tool_host(),
+                false,
             ))
             .unwrap();
             let trace = std::fs::read_to_string(format!(

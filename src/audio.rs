@@ -2,7 +2,7 @@
 //! voices DirectSound plays (13 §1.1, §1.3).
 #![allow(clippy::disallowed_methods)]
 
-use crate::assets::{Source, spawn};
+use crate::assets::Source;
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::HashMap;
@@ -225,6 +225,25 @@ impl Mixer {
     }
 }
 
+// SoundFont lookup for MIDI music mode (02 §5), from the app's / tool's settings (`soundfont`, the platform's
+// soundfont dirs); read once at load by `midi_available`.
+#[derive(Clone, Debug, Default)]
+pub struct AudioConfig {
+    pub soundfont: Option<std::path::PathBuf>,
+    pub soundfont_dirs: Vec<std::path::PathBuf>,
+}
+
+// Background loader, standing in for the original's loader threads (00 §3.2, §6).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn(fut: impl std::future::Future<Output = ()> + Send + 'static) {
+    std::thread::spawn(move || pollster::block_on(fut));
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn spawn(fut: impl std::future::Future<Output = ()> + 'static) {
+    wasm_bindgen_futures::spawn_local(fut);
+}
+
 // Device side of the sound manager: SE voices, the BGM stream and the MIDI object; driven only by `exec`.
 pub struct Audio {
     source: Source,
@@ -235,13 +254,15 @@ pub struct Audio {
     midi_files: HashMap<String, Arc<[u8]>>,
     midi_slots: [Option<Arc<[u8]>>; 32],
     midi_open: i32,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    cfg: AudioConfig,
     // Port: SoundFont found by `midi_available`, loaded on the first MIDI command.
     #[cfg(not(target_arch = "wasm32"))]
     font_path: Option<std::path::PathBuf>,
 }
 
 impl Audio {
-    pub fn new(source: Source) -> Self {
+    pub fn new(source: Source, cfg: AudioConfig) -> Self {
         let mixer = Arc::new(Mutex::new(Mixer {
             volume: 1.0,
             out_rate: BGM_RATE,
@@ -254,18 +275,19 @@ impl Audio {
             midi_files: HashMap::new(),
             midi_slots: Default::default(),
             midi_open: -1,
+            cfg,
             #[cfg(not(target_arch = "wasm32"))]
             font_path: None,
         }
     }
 
-    // Host input for `sound::Bgm::midi_ready`: a SoundFont (settings `soundfont`, else the system dirs) exists, so
+    // Host input for `sound::Bgm::midi_ready`: a SoundFont (`AudioConfig::soundfont`, else its dirs) exists, so
     // music mode 2 plays MIDI; else it takes the WAV path (port).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn midi_available(&mut self) -> bool {
-        let s = crate::settings::get();
-        self.font_path = crate::midi::find_soundfont(s.soundfont.as_deref(), &s.dirs.soundfonts)
-            .filter(|p| p.is_file());
+        self.font_path =
+            crate::midi::find_soundfont(self.cfg.soundfont.as_deref(), &self.cfg.soundfont_dirs)
+                .filter(|p| p.is_file());
         match &self.font_path {
             Some(p) => log::info!("midi: soundfont {}", p.display()),
             None => log::info!(
@@ -517,6 +539,25 @@ impl Audio {
     }
 }
 
+impl crate::game::AudioOut for Audio {
+    fn load(&mut self, archive: crate::content::PresentView<'_>) {
+        self.load_se(archive);
+        self.load_midi(archive);
+    }
+    fn midi_available(&mut self) -> bool {
+        Audio::midi_available(self)
+    }
+    fn exec(&mut self, c: SoundCmd) {
+        Audio::exec(self, c)
+    }
+    fn is_started(&self) -> bool {
+        Audio::is_started(self)
+    }
+    fn ensure_started(&mut self) {
+        Audio::ensure_started(self)
+    }
+}
+
 // Port: output device setup (prefers 44.1 kHz stereo so the BGM needs no resampling).
 fn open_stream(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
     let host = cpal::default_host();
@@ -585,6 +626,21 @@ mod tests {
         assert!(!m.voices[0].playing);
         assert!((db_gain(-2000) - 0.1).abs() < 1e-6 && db_gain(-10000) == 0.0);
     }
+    // No game files: BGM reads fail as with an empty directory.
+    struct NoFiles;
+    impl crate::assets::DataSource for NoFiles {
+        fn names(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn fetch<'a>(
+            &'a self,
+            name: &'a str,
+            _: Option<(u64, usize)>,
+        ) -> crate::assets::BoxFuture<'a, Result<Vec<u8>>> {
+            Box::pin(async move { anyhow::bail!("{name}: no files") })
+        }
+    }
+
     // Core BGM state plus the device; each call's commands are executed at once (as `Ctx::flush_sound`).
     struct Dev {
         b: Bgm,
@@ -595,7 +651,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 b: Bgm::default(),
-                a: Audio::new(Source::native(std::env::temp_dir())),
+                a: Audio::new(Source::new(NoFiles), AudioConfig::default()),
             }
         }
 

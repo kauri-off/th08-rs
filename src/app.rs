@@ -90,7 +90,18 @@ async fn init(window: Arc<Window>, source: Source, vsync: bool) -> anyhow::Resul
 
 async fn load(window: Arc<Window>, source: Source, gfx: Gfx) -> anyhow::Result<Box<Running>> {
     let s = crate::settings::get();
-    let ctx = Ctx::load(source, gfx, s.core(), s.app_host()).await?;
+    // `TH08_DRAWLOG`: the draw log writer is opened here and passed in (STEP10_CRATES 10a).
+    #[cfg(not(target_arch = "wasm32"))]
+    let drawlog = s.drawlog.as_deref().and_then(open_drawlog);
+    #[cfg(target_arch = "wasm32")]
+    let drawlog = None;
+    let io = crate::game::Io {
+        renderer: Box::new(gfx),
+        audio: Box::new(crate::audio::Audio::new(source.clone(), s.audio())),
+        host: s.app_host(),
+        drawlog,
+    };
+    let ctx = Ctx::load(source, io, s.core()).await?;
     Ok(Box::new(Running {
         window,
         ctx,
@@ -501,7 +512,7 @@ impl App {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        let source = Source::native(s.game_dir.clone().expect("Play needs a game folder"));
+        let source = crate::sources::native(s.game_dir.clone().expect("Play needs a game folder"));
         #[cfg(target_arch = "wasm32")]
         let source = self.source.clone().expect("web files");
         let vsync = s.vsync;
@@ -658,4 +669,26 @@ fn gfx_rec(ctx: &mut Ctx) -> (&mut Gfx, &mut crate::drawlist::Recorder) {
         .downcast_mut()
         .expect("app renderer is Gfx");
     (g, &mut ctx.rec)
+}
+
+// `TH08_DRAWLOG` in the game: plain text only (`.xz` logs are written by the tools, which own liblzma).
+#[cfg(not(target_arch = "wasm32"))]
+fn open_drawlog(v: &str) -> Option<crate::drawfmt::Writer> {
+    let (path, range) = crate::drawfmt::parse_spec(v);
+    if path.ends_with(".xz") {
+        log::error!(
+            "TH08_DRAWLOG={path}: the game writes plain text; use the session / drawrun tools for .xz logs"
+        );
+        return None;
+    }
+    match std::fs::File::create(path) {
+        Ok(f) => Some(crate::drawfmt::Writer::stream(
+            Box::new(std::io::BufWriter::new(f)),
+            range,
+        )),
+        Err(e) => {
+            log::error!("TH08_DRAWLOG={path}: {e}");
+            None
+        }
+    }
 }

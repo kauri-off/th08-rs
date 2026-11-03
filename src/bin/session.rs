@@ -69,13 +69,12 @@ fn main() -> anyhow::Result<()> {
 
     let tdir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
-    let src = th08::assets::Source::native(tdir.into());
+    let src = th08::sources::native(tdir.into());
     let mut ctx = pollster::block_on(th08::game::Ctx::load_with(
-        src,
-        gfx,
-        false,
+        src.clone(),
+        th08::settings::get().tool_io(gfx, &src),
         th08::settings::get().core(),
-        th08::settings::get().tool_host(),
+        false,
     ))?;
     s.start(&mut ctx)?;
     // Run metadata beside trace.txt (the trace bytes stay as they are): logic-content fingerprint, empty = vanilla.

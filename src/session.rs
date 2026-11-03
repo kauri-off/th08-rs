@@ -685,13 +685,12 @@ mod tests {
                 eprintln!("no GPU adapter; session sync skipped");
                 return;
             };
-            let src = crate::assets::Source::native(dir.clone().into());
+            let src = crate::sources::native(dir.clone().into());
             let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
-                src,
-                gfx,
-                false,
+                src.clone(),
+                crate::settings::get().tool_io(gfx, &src),
                 crate::settings::get().core(),
-                crate::settings::get().tool_host(),
+                false,
             ))
             .unwrap();
             let s = Session::load(&data_dir(name)).unwrap();
@@ -744,13 +743,12 @@ mod tests {
             eprintln!("no GPU adapter; sound log skipped");
             return;
         };
-        let src = crate::assets::Source::native(dir.into());
+        let src = crate::sources::native(dir.into());
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
-            src,
-            gfx,
-            false,
+            src.clone(),
+            crate::settings::get().tool_io(gfx, &src),
             crate::settings::get().core(),
-            crate::settings::get().tool_host(),
+            false,
         ))
         .unwrap();
         let s = Session::load(&data_dir("selftest1")).unwrap();
@@ -784,13 +782,12 @@ mod tests {
             eprintln!("no GPU adapter; fullrun smoke skipped");
             return;
         };
-        let src = crate::assets::Source::native(dir.into());
+        let src = crate::sources::native(dir.into());
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
-            src,
-            gfx,
-            false,
+            src.clone(),
+            crate::settings::get().tool_io(gfx, &src),
             crate::settings::get().core(),
-            crate::settings::get().tool_host(),
+            false,
         ))
         .unwrap();
         let s = Session::load(&data_dir("fullrun_noclip")).unwrap();

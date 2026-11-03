@@ -655,14 +655,9 @@ mod scene {
         };
         let mut core = crate::settings::get().core();
         core.seed = Some(0x1234);
-        let mut c = pollster::block_on(crate::game::Ctx::load_with(
-            crate::assets::Source::native(dir),
-            gfx,
-            false,
-            core,
-            crate::settings::get().tool_host(),
-        ))
-        .unwrap();
+        let src = crate::sources::native(dir);
+        let io = crate::settings::get().tool_io(gfx, &src);
+        let mut c = pollster::block_on(crate::game::Ctx::load_with(src, io, core, false)).unwrap();
         const CLONE_AT: u32 = 175;
         for f in 0..CLONE_AT {
             ctx_frame(&mut c, f);
@@ -758,12 +753,14 @@ mod stage {
         let dir = crate::settings::test_game_dir()?;
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
         let host = FixedTicks(ToolHost::new(crate::settings::get().storage()));
+        let src = crate::sources::native(dir);
+        let mut io = crate::settings::get().tool_io(gfx, &src);
+        io.host = Box::new(host);
         let mut c = pollster::block_on(Ctx::load_with(
-            crate::assets::Source::native(dir),
-            gfx,
-            false,
+            src,
+            io,
             crate::settings::get().core(),
-            Box::new(host),
+            false,
         ))
         .unwrap();
         s.start(&mut c).unwrap();

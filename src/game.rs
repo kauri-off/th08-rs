@@ -3,7 +3,6 @@
 use crate::anmmgr::AnmManager;
 use crate::archive::Archive;
 use crate::assets::Source;
-use crate::audio::Audio;
 use crate::content::LogicView;
 use crate::drawlist::{FULLSCREEN, Recorder, Renderer};
 use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
@@ -20,8 +19,8 @@ pub struct Ctx {
     pub renderer: Box<dyn Renderer>,
     // Game content (th08.dat, 01): logic reads `archive.read`, presentation-only data `archive.present()` (ARCH_B D1).
     pub archive: LogicView,
-    // TODO(step 10): the cpal device leaves core with the crate cut; logic only queues `SoundCmd`s.
-    pub audio: Audio,
+    // Sound device (app / tool side, `AudioOut`); logic only queues `SoundCmd`s.
+    pub audio: Box<dyn AudioOut>,
     // Test / tool: every executed `SoundCmd` with its calc frame (`session --sound-log`).
     pub sound_log: Option<Vec<(u64, crate::sound::SoundCmd)>>,
     // Debug: `TH08_SE_LOG` logs each frame's flushed SE ids.
@@ -30,10 +29,33 @@ pub struct Ctx {
     pub core: crate::coreconfig::CoreConfig,
     // Input polls, clocks and save storage (`host::Host`), supplied by the app or tool; no other platform access in logic.
     pub host: Box<dyn crate::host::Host>,
-    // TODO(step 8): debug draw log file writer; becomes a serializer of the recorded DrawList in the tools.
-    pub drawlog: Option<crate::drawlog::Writer>,
+    // Debug draw log writer (drawfmt.rs), passed in by the app / tool (`Io::drawlog`) or `log_to_memory`.
+    pub drawlog: Option<crate::drawfmt::Writer>,
     // Emit switch (ARCH decision 2): off = draw-phase steps only, no draw command recorded (`set_emit`).
     emit: bool,
+}
+
+// The sound device that executes the frame's `SoundCmd` stream (13 §1, 02 §3–§5); `audio::Audio` (cpal) in the
+// app and tools.
+pub trait AudioOut {
+    // Sound_LoadSE (13 §1.1) and the archive's MIDI files + boot slot 30 (02 §5), at start-up.
+    fn load(&mut self, archive: crate::content::PresentView<'_>);
+    // `sound::Bgm::midi_ready` (port): asked once at load, after `load`.
+    fn midi_available(&mut self) -> bool;
+    // One command, in the original's call order.
+    fn exec(&mut self, c: crate::sound::SoundCmd);
+    fn is_started(&self) -> bool;
+    // Opens the output stream (on the web: from a user gesture).
+    fn ensure_started(&mut self);
+}
+
+// The IO side of `Ctx`, built by the app or tool (ARCH decisions 2 / 6).
+pub struct Io {
+    pub renderer: Box<dyn Renderer>,
+    pub audio: Box<dyn AudioOut>,
+    pub host: Box<dyn crate::host::Host>,
+    // Draw log writer (None = off); `Ctx::load_with` enables the renderer's log when present.
+    pub drawlog: Option<crate::drawfmt::Writer>,
 }
 
 // Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue
@@ -236,31 +258,33 @@ impl TaskCtx for Ctx {
 impl Ctx {
     pub async fn load(
         source: Source,
-        renderer: impl Renderer + 'static,
+        io: Io,
         core: crate::coreconfig::CoreConfig,
-        host: Box<dyn crate::host::Host>,
     ) -> anyhow::Result<Self> {
-        Self::load_with(source, renderer, true, core, host).await
+        Self::load_with(source, io, core, true).await
     }
 
     // WinMain start-up (00 §2): archive, sound (thbgm.fmt 02 §2, SE 13 §1.1), RNG boot seed (11 §1.3), score data, then the
     // Supervisor task. `persist` = read/write the port's save files (off for tests).
     pub async fn load_with(
         source: Source,
-        renderer: impl Renderer + 'static,
-        persist: bool,
+        io: Io,
         core: crate::coreconfig::CoreConfig,
-        mut host: Box<dyn crate::host::Host>,
+        persist: bool,
     ) -> anyhow::Result<Self> {
+        let Io {
+            renderer,
+            mut audio,
+            mut host,
+            drawlog,
+        } = io;
         let archive = LogicView::new(Archive::from_bytes(source.read("th08.dat").await?)?);
         // Supervisor_OnRegister 0x4461A0: the exe-check version list, archive only; missing fails start-up (15 §2.10).
         let ver = archive
             .read(crate::scoredat::VER_LIST_NAME)
             .context("error : データのバージョンが違います")?;
         let mut bgm = crate::sound::Bgm::new(&archive.read("thbgm.fmt")?);
-        let mut audio = Audio::new(source.clone());
-        audio.load_se(archive.present());
-        audio.load_midi(archive.present());
+        audio.load(archive.present());
         bgm.midi_ready = audio.midi_available();
         // Config_Load (15 §1.2): th08.cfg and the thbgm.dat header probe (02 §1), then the file is written back.
         // The port's own save first; else import the original's th08.cfg (read-only).
@@ -281,7 +305,7 @@ impl Ctx {
         let mut ctx = Self {
             w: crate::world::World::new(bgm),
             rec: Recorder::new(),
-            renderer: Box::new(renderer),
+            renderer,
             archive,
             audio,
             sound_log: None,
@@ -296,13 +320,7 @@ impl Ctx {
         // Music mode cfg +0x1F and BGM volume +0x27 (02 §4) from the loaded config.
         ctx.w.bgm.set_volumes(&ctx.w.game.cfg);
         ctx.flush_sound();
-        if persist {
-            ctx.drawlog = ctx
-                .core
-                .drawlog
-                .as_deref()
-                .and_then(crate::drawlog::Writer::from_spec);
-        }
+        ctx.drawlog = drawlog;
         ctx.renderer.set_font(ctx.core.font.as_deref());
         if ctx.drawlog.is_some() {
             ctx.renderer.enable_log();
@@ -536,7 +554,7 @@ impl Ctx {
 
     // Starts an in-memory draw log (tests and tools).
     pub fn log_to_memory(&mut self) {
-        self.drawlog = Some(crate::drawlog::Writer::memory());
+        self.drawlog = Some(crate::drawfmt::Writer::memory());
         self.renderer.enable_log();
     }
 
@@ -566,14 +584,13 @@ mod tests {
     fn ctx() -> Option<super::Ctx> {
         let dir = crate::settings::test_game_dir()?;
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
-        let src = crate::assets::Source::native(dir.into());
+        let src = crate::sources::native(dir.into());
         Some(
             pollster::block_on(super::Ctx::load_with(
-                src,
-                gfx,
-                false,
+                src.clone(),
+                crate::settings::get().tool_io(gfx, &src),
                 crate::settings::get().core(),
-                crate::settings::get().tool_host(),
+                false,
             ))
             .unwrap(),
         )

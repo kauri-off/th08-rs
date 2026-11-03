@@ -21,6 +21,7 @@ pub mod content;
 pub mod coreconfig;
 pub mod d3dx;
 pub mod demosync;
+pub mod drawfmt;
 pub mod drawlist;
 pub mod drawlog;
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,6 +59,7 @@ pub mod session;
 pub mod settings;
 pub mod sht;
 pub mod sound;
+pub mod sources;
 pub mod stage;
 pub mod stdfile;
 pub mod supervisor;
@@ -79,7 +81,7 @@ pub fn start(files: js_sys::Array) {
         .iter()
         .filter_map(|f| f.dyn_into::<web_sys::File>().ok())
         .collect();
-    let source = assets::Source::web(files);
+    let source = sources::web(files);
     // `?launcher=0` (or a saved launcher = off) starts the game directly; `?shot=` runs never show it.
     // Web dirs: none; port.cfg and saves are localStorage items.
     let s = settings::Settings::game_environment(settings::PlatformDirs::default());

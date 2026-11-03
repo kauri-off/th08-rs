@@ -775,7 +775,7 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("PATH[,A-B | ,dA-B]"),
         default: "",
         group: Group::Tools,
-        help: "write a draw log (.xz through the xz tool)",
+        help: "write a plain-text draw log: <path>[,from-to] (.xz logs: session / drawrun tools)",
         set: |s, v| {
             s.drawlog = Some(v.to_string());
             Ok(())
@@ -1032,7 +1032,6 @@ impl Settings {
             anm_pos: self.anm_pos.clone(),
             anm_mode: self.anm_mode,
             se_log: self.se_log,
-            drawlog: self.drawlog.clone(),
             font: self.font.clone(),
         }
     }
@@ -1050,6 +1049,29 @@ impl Settings {
     // The game window's host: winit keyboard, gilrs joystick, the save storage.
     pub fn app_host(&self) -> Box<dyn crate::host::Host> {
         Box::new(crate::platform::AppHost::new(self.storage()))
+    }
+
+    // MIDI SoundFont lookup for `audio::Audio` (`soundfont`, then the platform's soundfont dirs).
+    pub fn audio(&self) -> crate::audio::AudioConfig {
+        crate::audio::AudioConfig {
+            soundfont: self.soundfont.clone(),
+            soundfont_dirs: self.dirs.soundfonts.clone(),
+        }
+    }
+
+    // Tools and tests: the headless IO bundle for `Ctx::load_with`: `renderer`, a real `audio::Audio` over `source`
+    // (its SoundFont probe sets `midi_ready` as in the game, STEP10_CRATES risk 8), `tool_host`, no draw log.
+    pub fn tool_io(
+        &self,
+        renderer: impl crate::drawlist::Renderer + 'static,
+        source: &crate::assets::Source,
+    ) -> crate::game::Io {
+        crate::game::Io {
+            renderer: Box::new(renderer),
+            audio: Box::new(crate::audio::Audio::new(source.clone(), self.audio())),
+            host: self.tool_host(),
+            drawlog: None,
+        }
     }
 
     // Tools and tests: no devices, scripted / recorded input (`platform::ToolHost`).

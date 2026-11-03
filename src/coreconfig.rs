@@ -41,7 +41,6 @@ pub struct CoreConfig {
     pub anm_pos: Vec<f32>,
     pub anm_mode: Option<i32>,
     pub se_log: bool,
-    pub drawlog: Option<String>,
     // `TH08_FONT`: Japanese font file for the dialogue / card-name text raster.
     pub font: Option<String>,
 }

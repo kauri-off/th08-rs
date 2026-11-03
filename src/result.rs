@@ -1998,13 +1998,12 @@ mod tests {
         let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
             return;
         };
-        let src = crate::assets::Source::native(dir.into());
+        let src = crate::sources::native(dir.into());
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
-            src,
-            gfx,
-            false,
+            src.clone(),
+            crate::settings::get().tool_io(gfx, &src),
             crate::settings::get().core(),
-            crate::settings::get().tool_host(),
+            false,
         ))
         .unwrap();
         let save =

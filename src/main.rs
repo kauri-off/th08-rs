@@ -46,5 +46,5 @@ fn main() {
     };
     s.game_dir = Some(dir.clone());
     th08::settings::init(s);
-    th08::app::run(th08::assets::Source::native(dir));
+    th08::app::run(th08::sources::native(dir));
 }

@@ -11,7 +11,7 @@ use winit::window::Window;
 // A game folder holds th08.dat (any letter case).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_game_dir(dir: &Path) -> bool {
-    crate::assets::find_file(dir, "th08.dat").is_file()
+    crate::sources::find_file(dir, "th08.dat").is_file()
 }
 
 // Desktop platform dirs (ARCH_D §6.1 item 1), looked up by the entry point and passed to the settings: config =

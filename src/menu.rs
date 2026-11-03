@@ -1551,14 +1551,13 @@ mod tests {
     fn ctx() -> Option<crate::game::Ctx> {
         let dir = crate::settings::test_game_dir()?;
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
-        let src = crate::assets::Source::native(dir.into());
+        let src = crate::sources::native(dir.into());
         Some(
             pollster::block_on(crate::game::Ctx::load_with(
-                src,
-                gfx,
-                false,
+                src.clone(),
+                crate::settings::get().tool_io(gfx, &src),
                 crate::settings::get().core(),
-                crate::settings::get().tool_host(),
+                false,
             ))
             .unwrap(),
         )
