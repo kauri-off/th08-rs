@@ -24,3 +24,8 @@ Do not restate what the code obviously does, and do not write long blocks. `// S
 Run the port's windowed binaries (`th08`, launcher, `launchershot`) only via `tools/offscreen <cmd>` — it is
 `env -u WAYLAND_DISPLAY xvfb-run -a`. Plain `xvfb-run` is NOT enough on this Wayland desktop: winit prefers Wayland
 and opens a real window on the user's screen. wine runs the same way (`WAYLAND_DISPLAY` unset).
+
+## Android devices
+
+Agents use only the headless emulator: every `adb` command takes an explicit emulator serial (`adb -s emulator-NNNN`).
+Never install, launch, screencap, read logcat or run any other `adb` command on a physical phone.
