@@ -35,15 +35,17 @@ pub enum Kind {
 pub enum Group {
     GameData,
     Display,
+    Touch,
     StartGame,
     Cheats,
     Tools,
 }
 
 impl Group {
-    pub const ALL: [Group; 5] = [
+    pub const ALL: [Group; 6] = [
         Group::GameData,
         Group::Display,
+        Group::Touch,
         Group::StartGame,
         Group::Cheats,
         Group::Tools,
@@ -53,6 +55,7 @@ impl Group {
         match self {
             Group::GameData => "Game data",
             Group::Display => "Display",
+            Group::Touch => "Touch controls",
             Group::StartGame => "Start game",
             Group::Cheats => "Cheats/debug",
             Group::Tools => "Recording/tools",
@@ -166,6 +169,8 @@ pub struct Settings {
     pub vsync: bool,
     // Show the launcher screen before the game (th08 binary only).
     pub launcher: bool,
+    // Touch overlay rows (ARCH_D §3).
+    pub touch: crate::platform::touch::TouchConfig,
     pub save_dir: Option<PathBuf>,
     pub font: Option<String>,
     pub soundfont: Option<PathBuf>,
@@ -230,6 +235,7 @@ impl Settings {
             fullscreen: false,
             vsync: true,
             launcher: true,
+            touch: Default::default(),
             save_dir: None,
             font: None,
             soundfont: None,
@@ -380,6 +386,107 @@ pub const ENTRIES: &[Entry] = &[
         help: "show this screen at start; when off, hold Shift while th08 starts (web: ?launcher=1) to see it again",
         set: |s, v| {
             s.launcher = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "touch",
+        env: "TH08_TOUCH",
+        kind: Kind::Enum(&["auto", "on", "off"]),
+        default: "auto",
+        group: Group::Touch,
+        help: "touch overlay: auto (touch platforms), on, off",
+        set: |s, v| {
+            use crate::platform::touch::TouchMode;
+            s.touch.mode = match v.trim() {
+                "auto" => TouchMode::Auto,
+                "on" => TouchMode::On,
+                "off" => TouchMode::Off,
+                _ => return Err("expected auto, on or off".into()),
+            };
+            Ok(())
+        },
+    },
+    Entry {
+        key: "touch_move",
+        env: "TH08_TOUCH_MOVE",
+        kind: Kind::Enum(&["drag", "stick"]),
+        default: "drag",
+        group: Group::Touch,
+        help: "movement: drag (the player follows the finger's movement) or a floating stick",
+        set: |s, v| {
+            use crate::platform::touch::Movement;
+            s.touch.movement = match v.trim() {
+                "drag" => Movement::Drag,
+                "stick" => Movement::Stick,
+                _ => return Err("expected drag or stick".into()),
+            };
+            Ok(())
+        },
+    },
+    Entry {
+        key: "touch_sens",
+        env: "TH08_TOUCH_SENS",
+        kind: Kind::Int { min: 25, max: 400 },
+        default: "100",
+        group: Group::Touch,
+        help: "drag sensitivity in percent (100 = the player follows the finger 1:1 on the game picture)",
+        set: |s, v| {
+            let n: u32 = num(v)?;
+            s.touch.sens = n as f32 / 100.0;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "touch_focus",
+        env: "TH08_TOUCH_FOCUS",
+        kind: Kind::Enum(&["hold", "toggle"]),
+        default: "hold",
+        group: Group::Touch,
+        help: "FOCUS button: held, or a toggle",
+        set: |s, v| {
+            s.touch.focus_toggle = match v.trim() {
+                "hold" => false,
+                "toggle" => true,
+                _ => return Err("expected hold or toggle".into()),
+            };
+            Ok(())
+        },
+    },
+    Entry {
+        key: "touch_autofire",
+        env: "TH08_TOUCH_AUTOFIRE",
+        kind: Kind::Bool,
+        default: "on",
+        group: Group::Touch,
+        help: "auto-fire at start (in play only; the AUTO button toggles it)",
+        set: |s, v| {
+            s.touch.autofire = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "touch_opacity",
+        env: "TH08_TOUCH_OPACITY",
+        kind: Kind::Int { min: 10, max: 100 },
+        default: "50",
+        group: Group::Touch,
+        help: "overlay opacity in percent",
+        set: |s, v| {
+            let n: u32 = num(v)?;
+            s.touch.opacity = n as f32 / 100.0;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "touch_layout",
+        env: "TH08_TOUCH_LAYOUT",
+        kind: Kind::Text("L:name,x,y,w,h,opacity,visible;…|P:…"),
+        default: "",
+        group: Group::Touch,
+        help: "overlay layout per orientation (empty = default; written by the layout editor)",
+        set: |s, v| {
+            s.touch.layout = crate::platform::touch::TouchLayout::parse(v)?;
             Ok(())
         },
     },
@@ -676,6 +783,18 @@ pub const ENTRIES: &[Entry] = &[
         help: "send --shot through the window's scaling blit at that size",
         set: |s, v| {
             s.shot_size = Some(pair(v, 'x')?);
+            Ok(())
+        },
+    },
+    Entry {
+        key: "touch_mouse",
+        env: "TH08_TOUCH_MOUSE",
+        kind: Kind::Bool,
+        default: "off",
+        group: Group::Tools,
+        help: "the mouse acts as one finger and the touch overlay is shown (test touch without a phone)",
+        set: |s, v| {
+            s.touch.mouse = parse_bool(v)?;
             Ok(())
         },
     },
@@ -1048,7 +1167,10 @@ impl Settings {
 
     // The game window's host: winit keyboard, gilrs joystick, the save storage.
     pub fn app_host(&self) -> Box<dyn th08_core::host::Host> {
-        Box::new(crate::platform::AppHost::new(self.storage()))
+        Box::new(crate::platform::AppHost::new(
+            self.storage(),
+            self.touch.clone(),
+        ))
     }
 
     // MIDI SoundFont lookup for `audio::Audio` (`soundfont`, then the platform's soundfont dirs).

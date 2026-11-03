@@ -1,6 +1,9 @@
 //! Platform side of `host::Host` (ARCH_A §2.2): save storage (fs / localStorage), clocks, the winit keymap and the
 //! gilrs joystick (app), and the scripted / recorded-poll host of the tools and tests. Not a port of the original.
 
+pub mod overlay;
+pub mod touch;
+
 use th08_core::host::{Host, LocalTime, MAX_PLAYERS, RawInput, Words};
 use th08_core::input::*;
 use winit::keyboard::KeyCode;
@@ -80,22 +83,12 @@ impl Keyboard {
     }
 }
 
-// Touch overlay source (ARCH_D §3.2–§3.3): empty slot until the overlay exists; it will emit the same word bits.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TouchSource;
-
-impl TouchSource {
-    pub fn set_focus(&mut self, _focused: bool) {}
-
-    pub fn word(&self) -> u16 {
-        0
-    }
-}
+pub use touch::TouchSource;
 
 // App-side input mux (ARCH_D §3.1): per poll, `keys[p]` = the OR of the device words, as Input_Poll ORs keyboard and
 // joystick bits (15 §1.1). Gamepads that report buttons as keys (Android) plug in here as further sources; the gilrs
 // pad state goes to core via `RawInput::pads`, which maps it with cfg / ShotSlow.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct InputMux {
     pub keyboard: Keyboard,
     pub touch: TouchSource,
@@ -108,10 +101,11 @@ impl InputMux {
         self.touch.set_focus(focused);
     }
 
-    // Vanilla th08 is single-player: player 1's word stays 0.
-    pub fn words(&self) -> Words {
+    // One Input_Poll (touch pulses advance per poll, ARCH_D §3.3). Vanilla th08 is single-player: player 1's word
+    // stays 0.
+    pub fn poll(&mut self) -> Words {
         let mut w = [0; MAX_PLAYERS];
-        w[0] = self.keyboard.word() | self.touch.word();
+        w[0] = self.keyboard.word() | self.touch.poll();
         w
     }
 }
@@ -298,9 +292,13 @@ pub struct AppHost {
 }
 
 impl AppHost {
-    pub fn new(storage: Storage) -> Self {
+    pub fn new(storage: Storage, touch: touch::TouchConfig) -> Self {
         Self {
             joystick: crate::joystick::Joystick::new(),
+            input: InputMux {
+                touch: TouchSource::new(touch),
+                ..Default::default()
+            },
             storage,
             ..Default::default()
         }
@@ -310,7 +308,7 @@ impl AppHost {
 impl Host for AppHost {
     fn poll_input(&mut self) -> RawInput {
         let mut r = RawInput {
-            keys: self.input.words(),
+            keys: self.input.poll(),
             ..Default::default()
         };
         r.pads[0] = self.joystick.poll();
@@ -469,9 +467,9 @@ mod tests {
         let mut m = InputMux::default();
         m.keyboard.key(KeyCode::KeyZ, true);
         m.keyboard.key(KeyCode::ArrowLeft, true);
-        assert_eq!(m.words(), [SHOT | LEFT, 0]);
+        assert_eq!(m.poll(), [SHOT | LEFT, 0]);
         m.set_focus(false);
-        assert_eq!(m.words(), [0, 0]);
+        assert_eq!(m.poll(), [0, 0]);
     }
 
     // A restarted pass polls again and reads the next recorded index (00 §3).

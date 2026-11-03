@@ -259,6 +259,13 @@ pub fn label(e: &Entry) -> String {
         "ending" => "Play ending",
         "replay" => "Play replay",
         "replay_speed" => "Replay speed",
+        "touch" => "Touch overlay",
+        "touch_move" => "Movement",
+        "touch_sens" => "Drag sensitivity %",
+        "touch_focus" => "Focus button",
+        "touch_autofire" => "Auto-fire",
+        "touch_opacity" => "Overlay opacity %",
+        "touch_layout" => "Overlay layout",
         _ => return e.key.replace('_', " "),
     };
     l.into()

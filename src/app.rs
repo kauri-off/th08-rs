@@ -156,6 +156,11 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Ready(mut r) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 r.ctx.start();
+                // Touch overlay (ARCH_D §3.5): drawn by the renderer after the blit.
+                if r.settings.touch.active() {
+                    gfx(&mut r.ctx).overlay =
+                        Some(Box::<crate::platform::overlay::TouchOverlay>::default());
+                }
                 r.pacer.start(Instant::now());
                 if self.suspended {
                     r.pacer.suspend();
@@ -574,6 +579,35 @@ impl App {
                         .key(k, event.state == ElementState::Pressed);
                 }
             }
+            WindowEvent::Touch(t) => {
+                if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
+                    && h.input.touch.cfg.active()
+                {
+                    let (x, y) = (t.location.x as f32, t.location.y as f32);
+                    h.input.touch.touch(t.id, t.phase, x, y);
+                }
+            }
+            // Dev `touch_mouse`: the left mouse button is a finger.
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
+                    && h.input.touch.cfg.mouse
+                {
+                    h.input
+                        .touch
+                        .mouse_move(position.x as f32, position.y as f32);
+                }
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
+                    && h.input.touch.cfg.mouse
+                {
+                    h.input.touch.mouse_button(state == ElementState::Pressed);
+                }
+            }
             WindowEvent::RedrawRequested => match frame(r, &window) {
                 Frame::Continue => {}
                 Frame::Exit => el.exit(),
@@ -616,10 +650,24 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
     };
     // Web `?shot=<n>`: logic freezes at frame n so the page can be screenshotted.
     let frozen = cfg!(target_arch = "wasm32") && shot.is_some_and(|f| r.ctx.w.frame >= f);
+    let touch = gfx(&mut r.ctx).overlay.is_some();
+    if touch && let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+        let size = window.inner_size();
+        // A `--shot` through the scaling blit is laid out for the shot's size.
+        let (w, hgt) = r.settings.shot_size.unwrap_or((size.width, size.height));
+        h.input.touch.set_window(w, hgt, window.scale_factor());
+    }
     // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
     for _ in 0..frames {
         if shot.is_some_and(|f| r.ctx.w.frame >= f) && turbo > 0 {
             break;
+        }
+        // Touch drag steers towards the player's position of this frame (a read between frames, ARCH_D §3.2).
+        if touch {
+            let scene = crate::platform::touch::TouchScene::of(&r.ctx.w);
+            if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+                h.input.touch.set_scene(scene);
+            }
         }
         match if frozen { Flow::Continue } else { r.ctx.calc() } {
             Flow::Continue => {}
@@ -641,6 +689,9 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
     }
     let size = window.inner_size();
     gfx(&mut r.ctx).resize(size.width, size.height);
+    if touch {
+        update_overlay(&mut r.ctx);
+    }
     r.ctx.draw();
     // Debug `TH08_SHOT` frame (`TH08_SHOT_SIZE=WxH`: through the window's scaling blit).
     #[cfg(not(target_arch = "wasm32"))]
@@ -656,6 +707,22 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
     th08_core::ascii::apply_pending_captures(&mut r.ctx.w.anm, &mut r.ctx.rec);
     window.request_redraw();
     Frame::Continue
+}
+
+// Hands the touch state to the overlay the renderer draws after the blit.
+fn update_overlay(ctx: &mut Ctx) {
+    let Some(view) = ctx
+        .host_as::<crate::platform::AppHost>()
+        .map(|h| h.input.touch.view())
+    else {
+        return;
+    };
+    if let Some(o) = gfx(ctx).overlay.as_mut().and_then(|o| {
+        o.as_any_mut()
+            .downcast_mut::<crate::platform::overlay::TouchOverlay>()
+    }) {
+        o.view = view;
+    }
 }
 
 // How long a saved `launcher = off` waits for Shift after the first frame (the window must be mapped and focused for

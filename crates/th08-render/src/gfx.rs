@@ -59,9 +59,27 @@ struct Batch {
     end: u32,
 }
 
+// Port-only UI drawn onto the window target after the blit, never into the 640×480 frame (ARCH_D §3.5): the
+// frame texture is what `capture_screen` (12 §1) copies, so overlay pixels must stay out of it.
+pub trait Overlay {
+    fn paint(&mut self, gfx: OverlayTarget<'_>, enc: &mut wgpu::CommandEncoder);
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+// What an overlay draws with: the device and the window-sized target (surface or the scaled `--shot` texture).
+pub struct OverlayTarget<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub view: &'a wgpu::TextureView,
+    pub format: wgpu::TextureFormat,
+    pub size: (u32, u32),
+}
+
 // Port-only GPU state: device, pipelines, texture table, pending batches and the 640×480 frame target.
 pub struct Gfx {
     pub surface: Option<wgpu::Surface<'static>>,
+    // Touch overlay (app), painted after `blit`.
+    pub overlay: Option<Box<dyn Overlay>>,
     // Window devices: makes the surface again after a lifecycle detach (ARCH_D §5); None = headless.
     instance: Option<wgpu::Instance>,
     pub device: wgpu::Device,
@@ -438,6 +456,7 @@ impl Gfx {
         });
         let mut g = Self {
             surface,
+            overlay: None,
             instance: None,
             device,
             queue,
@@ -1170,9 +1189,28 @@ impl Gfx {
         let mut enc = self.device.create_command_encoder(&Default::default());
         self.render_frame(&mut enc);
         self.blit(&mut enc, &view, self.config.width, self.config.height);
+        self.paint_overlay(&mut enc, &view, (self.config.width, self.config.height));
         self.queue.submit([enc.finish()]);
         self.queue.present(frame);
         self.clear_batches();
+    }
+
+    fn paint_overlay(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        size: (u32, u32),
+    ) {
+        if let Some(o) = self.overlay.as_mut() {
+            let t = OverlayTarget {
+                device: &self.device,
+                queue: &self.queue,
+                view,
+                format: self.config.format,
+                size,
+            };
+            o.paint(t, enc);
+        }
     }
 
     // Letterboxed, linearly scaled copy of the 640x480 frame into a w×h target.
@@ -1287,7 +1325,9 @@ impl Gfx {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-            self.blit(&mut enc, &t.create_view(&Default::default()), w, h);
+            let view = t.create_view(&Default::default());
+            self.blit(&mut enc, &view, w, h);
+            self.paint_overlay(&mut enc, &view, (w, h));
             t
         });
         let src = scaled.as_ref().unwrap_or(&self.frame);
