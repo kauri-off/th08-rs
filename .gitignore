@@ -9,3 +9,10 @@ re/work/
 specs/data/drawlog/demos/*.drawlog.xz
 /sessions/*
 !/sessions/README.md
+# not published: process history, personal packaging, screenshots of the original game
+/docs/briefs/
+/docs/archive/
+/packaging/local/
+*.png
+*.jpg
+!/packaging/**/*.png

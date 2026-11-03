@@ -87,7 +87,7 @@ see every setting. For the web build, see `web/build.sh`.
 | `specs/` | the specifications: the only source of truth for behaviour |
 | `src/` | the port, plus tools in `src/bin/` |
 | `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session recorder |
-| `docs/` | status, decisions, task briefs, the architecture of the rewrite |
+| `docs/` | status, decisions, the architecture of the rewrite |
 | `web/`, `packaging/` | the browser front end and release packaging |
 
 ## License
