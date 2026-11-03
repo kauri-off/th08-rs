@@ -318,3 +318,7 @@ in `game.rs:284`. It does not depend on 11p's image work, but it touches `game.r
 own. Running it after 11p avoids merge conflicts and keeps the 11p D refresh clean. If the APK size is needed
 sooner, AS1 + AS2 can run right after 11o while 11p is pending: they touch neither `drawlist.rs` nor `camera.rs`. AS3
 comes after the current Android runs (launcher/Compose, safe area, touch) have landed.
+
+**Schedule (orchestrator, 2026-11-04):** AS1 starts right after step-11 wave 1 is merged (needs 11b's formats work), in
+parallel with wave 2 (only `game.rs` one-line overlap with 11j); AS2 right after AS1 (audio crate, no step-11 run touches
+it before 11o); AS3 right after AS2, then the small personal APK. 11p later refreshes the D reference as planned.
