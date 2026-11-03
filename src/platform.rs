@@ -2,6 +2,7 @@
 //! gilrs joystick (app), and the scripted / recorded-poll host of the tools and tests. Not a port of the original.
 
 pub mod overlay;
+pub mod safearea;
 pub mod touch;
 
 use th08_core::host::{Host, LocalTime, MAX_PLAYERS, RawInput, Words};

@@ -4,7 +4,7 @@
 use crate::settings::{self, ENTRIES, Entry, Group, Kind, Origin, Settings};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
-use th08_render::gfx::Gfx;
+use th08_render::gfx::{Gfx, SafeArea};
 use winit::event::WindowEvent;
 use winit::window::Window;
 
@@ -238,6 +238,26 @@ fn norm(e: &Entry, v: &str) -> String {
     }
 }
 
+// Rows that do nothing on this platform (the table has no platform metadata): Android has no window size,
+// fullscreen toggle or font choice (system CJK fonts); the screen margin is for touch platforms (Android, web).
+fn shown_here(e: &Entry) -> bool {
+    match e.key {
+        "scale" | "fullscreen" | "font" => !cfg!(target_os = "android"),
+        "screen_margin" => cfg!(any(target_os = "android", target_arch = "wasm32")),
+        _ => true,
+    }
+}
+
+// Help under a row; Android has no Shift key at start (a touch opens the screen instead, app.rs).
+fn help(e: &Entry) -> &'static str {
+    match e.key {
+        "launcher" if cfg!(target_os = "android") => {
+            "show this screen at start; when off, touch the screen while th08 starts to see it again"
+        }
+        _ => e.help,
+    }
+}
+
 // Player-facing name of an entry; developer entries keep their key.
 pub fn label(e: &Entry) -> String {
     let l = match e.key {
@@ -246,6 +266,7 @@ pub fn label(e: &Entry) -> String {
         "fullscreen" => "Fullscreen",
         "vsync" => "VSync",
         "launcher" => "Show this screen at start",
+        "screen_margin" => "Screen margin (dp)",
         "save_dir" => "Save folder",
         "font" => "Dialogue font",
         "soundfont" => "MIDI SoundFont",
@@ -392,7 +413,11 @@ impl Model {
             View::Waiting => {
                 message_ui(
                     ui,
-                    "Starting the game…  hold Shift to open the settings screen",
+                    if cfg!(target_os = "android") {
+                        "Starting the game…  touch the screen to open the settings screen"
+                    } else {
+                        "Starting the game…  hold Shift to open the settings screen"
+                    },
                 );
                 None
             }
@@ -534,6 +559,7 @@ impl Model {
         let rows: Vec<usize> = (0..self.rows.len())
             .filter(|&i| self.rows[i].e.group == g && self.rows[i].e.key != "game_dir")
             .filter(|&i| !(web && matches!(self.rows[i].e.kind, Kind::Path | Kind::File)))
+            .filter(|&i| shown_here(self.rows[i].e))
             .collect();
         if rows.is_empty() {
             return;
@@ -630,7 +656,7 @@ fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool) {
         if let Some(err) = r.error() {
             ui.colored_label(ui.visuals().error_fg_color, err);
         }
-        ui.label(egui::RichText::new(r.e.help).small().weak());
+        ui.label(egui::RichText::new(help(r.e)).small().weak());
     });
 }
 
@@ -757,7 +783,23 @@ fn origin_label(ui: &mut egui::Ui, r: &Row) {
     ui.colored_label(c, text);
 }
 
-// The 640×480 layout scaled to the window.
+// Size (px) of the safe rect of a w×h window.
+fn safe_size(safe: SafeArea, (w, h): (u32, u32)) -> (u32, u32) {
+    let [_, _, sw, sh] = safe.rect(w, h);
+    (sw as u32, sh as u32)
+}
+
+// The safe area in egui points at `ppp` px per point.
+fn insets(safe: SafeArea, ppp: f32) -> egui::SafeAreaInsets {
+    egui::SafeAreaInsets(egui::epaint::MarginF32 {
+        left: safe.left as f32 / ppp,
+        right: safe.right as f32 / ppp,
+        top: safe.top as f32 / ppp,
+        bottom: safe.bottom as f32 / ppp,
+    })
+}
+
+// The 640×480 layout scaled to the window's safe rect.
 fn zoom(size_px: (u32, u32)) -> f32 {
     (size_px.0 as f32 / 640.0)
         .min(size_px.1 as f32 / 480.0)
@@ -817,10 +859,15 @@ impl Screen {
         let size = window.inner_size();
         gfx.resize(size.width, size.height);
         let (w, h) = gfx.surface_size();
-        self.p
-            .ctx
-            .set_zoom_factor(zoom((w, h)) / window.scale_factor() as f32);
-        let raw = self.state.take_egui_input(window);
+        let ppp = zoom(safe_size(gfx.safe, (w, h)));
+        let z = ppp / window.scale_factor() as f32;
+        // egui's zoom-change pass lays out one frame with the old insets: draw once more after it.
+        if self.p.ctx.zoom_factor() != z {
+            window.request_redraw();
+        }
+        self.p.ctx.set_zoom_factor(z);
+        let mut raw = self.state.take_egui_input(window);
+        raw.safe_area_insets = Some(insets(gfx.safe, ppp));
         let (out, act) = self.p.pass(raw);
         self.state
             .handle_platform_output(window, out.platform_output.clone());
@@ -870,10 +917,14 @@ impl Painter {
     fn pass(&mut self, raw: egui::RawInput) -> (egui::FullOutput, Option<Action>) {
         let mut act = None;
         let model = &mut self.model;
+        // Every view is laid out inside the safe area (egui's content rect); the clear colour fills the rest.
         let mut out = self.ctx.run_ui(raw, |ui| {
-            if let Some(a) = model.ui(ui) {
-                act = Some(a);
-            }
+            let rect = ui.ctx().content_rect();
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                if let Some(a) = model.ui(ui) {
+                    act = Some(a);
+                }
+            });
         });
         self.pending.append(std::mem::take(&mut out.textures_delta));
         (out, act)
@@ -930,7 +981,12 @@ impl Painter {
 
 // Offscreen render of the launcher (tests, `launchershot`): a few passes so the layout settles, then read back.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn render_image(gfx: &Gfx, model: Model, (w, h): (u32, u32)) -> image::RgbaImage {
+pub fn render_image(
+    gfx: &Gfx,
+    model: Model,
+    (w, h): (u32, u32),
+    safe: SafeArea,
+) -> image::RgbaImage {
     let mut s = Painter::new(gfx, model);
     let tex = gfx.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("launcher shot"),
@@ -947,7 +1003,7 @@ pub fn render_image(gfx: &Gfx, model: Model, (w, h): (u32, u32)) -> image::RgbaI
         view_formats: &[],
     });
     let view = tex.create_view(&Default::default());
-    let ppp = zoom((w, h));
+    let ppp = zoom(safe_size(safe, (w, h)));
     let mut enc = None;
     for i in 0..4 {
         let mut raw = egui::RawInput {
@@ -956,6 +1012,7 @@ pub fn render_image(gfx: &Gfx, model: Model, (w, h): (u32, u32)) -> image::RgbaI
                 egui::vec2(w as f32 / ppp, h as f32 / ppp),
             )),
             time: Some(i as f64 / 60.0),
+            safe_area_insets: Some(insets(safe, ppp)),
             ..Default::default()
         };
         raw.viewports

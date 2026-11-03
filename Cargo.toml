@@ -54,6 +54,9 @@ rfd = "0.17"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.15.1"
+# Safe-area insets from the NativeActivity's WindowInsets (platform/safearea.rs).
+jni = "0.22.4"
+ndk-context = "0.1.1"
 winit = { version = "0.30", features = ["android-native-activity"] }
 
 [target.'cfg(windows)'.dependencies]

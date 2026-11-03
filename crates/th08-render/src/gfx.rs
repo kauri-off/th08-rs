@@ -75,11 +75,34 @@ pub struct OverlayTarget<'a> {
     pub size: (u32, u32),
 }
 
+// Port-only: physical px of the window kept clear on each edge (Android display cutout, rounded corners, system
+// bars, the `screen_margin` setting); zero on desktop / web. The frame is letterboxed inside the rest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SafeArea {
+    pub left: u32,
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
+}
+
+impl SafeArea {
+    // The safe rect `[x, y, w, h]` of a w×h target, at least 1×1 px.
+    pub fn rect(&self, w: u32, h: u32) -> [f32; 4] {
+        let x = self.left.min(w.saturating_sub(1));
+        let y = self.top.min(h.saturating_sub(1));
+        let sw = w.saturating_sub(x + self.right).max(1);
+        let sh = h.saturating_sub(y + self.bottom).max(1);
+        [x as f32, y as f32, sw as f32, sh as f32]
+    }
+}
+
 // Port-only GPU state: device, pipelines, texture table, pending batches and the 640×480 frame target.
 pub struct Gfx {
     pub surface: Option<wgpu::Surface<'static>>,
     // Touch overlay (app), painted after `blit`.
     pub overlay: Option<Box<dyn Overlay>>,
+    // Set by the app on every resize / resume; `blit` and the launcher keep out of it.
+    pub safe: SafeArea,
     // Window devices: makes the surface again after a lifecycle detach (ARCH_D §5); None = headless.
     instance: Option<wgpu::Instance>,
     pub device: wgpu::Device,
@@ -457,6 +480,7 @@ impl Gfx {
         let mut g = Self {
             surface,
             overlay: None,
+            safe: SafeArea::default(),
             instance: None,
             device,
             queue,
@@ -1213,7 +1237,7 @@ impl Gfx {
         }
     }
 
-    // Letterboxed, linearly scaled copy of the 640x480 frame into a w×h target.
+    // Letterboxed, linearly scaled copy of the 640x480 frame into the safe rect of a w×h target.
     fn blit(&self, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, w: u32, h: u32) {
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -1228,12 +1252,12 @@ impl Gfx {
             })],
             ..Default::default()
         });
-        let (w, h) = (w as f32, h as f32);
+        let [x, y, w, h] = self.safe.rect(w, h);
         let scale = (w / SCREEN_W).min(h / SCREEN_H);
         let (vw, vh) = ((SCREEN_W * scale).round(), (SCREEN_H * scale).round());
         pass.set_viewport(
-            ((w - vw) / 2.0).floor(),
-            ((h - vh) / 2.0).floor(),
+            x + ((w - vw) / 2.0).floor(),
+            y + ((h - vh) / 2.0).floor(),
             vw,
             vh,
             0.0,

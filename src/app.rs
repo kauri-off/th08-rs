@@ -83,6 +83,8 @@ struct App {
     auto_at: Option<Instant>,
     // Between `Suspended` and the next `Resumed` (no surface, no logic frames).
     suspended: bool,
+    // Last safe-area read (`refresh_safe`).
+    safe_at: Option<Instant>,
     // Port display: Alt held; the fullscreen state, owned here (`set_fullscreen`).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     alt: bool,
@@ -162,6 +164,7 @@ impl ApplicationHandler<UserEvent> for App {
                         Some(Box::<crate::platform::overlay::TouchOverlay>::default());
                 }
                 r.pacer.start(Instant::now());
+                gfx(&mut r.ctx).safe = self.read_safe();
                 if self.suspended {
                     r.pacer.suspend();
                     gfx(&mut r.ctx).detach();
@@ -170,7 +173,8 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 self.shell = Shell::Running(r);
             }
-            UserEvent::Gfx(gfx) => {
+            UserEvent::Gfx(mut gfx) => {
+                gfx.safe = self.read_safe();
                 if self.launcher {
                     let view = {
                         let m = crate::launcher::Model::new(&self.setup, self.folder());
@@ -232,6 +236,13 @@ impl ApplicationHandler<UserEvent> for App {
             }
             return;
         }
+        match &ev {
+            WindowEvent::Resized(_)
+            | WindowEvent::ScaleFactorChanged { .. }
+            | WindowEvent::Focused(true) => self.refresh_safe(true),
+            WindowEvent::RedrawRequested => self.refresh_safe(false),
+            _ => {}
+        }
         match self.shell {
             Shell::Loading => {
                 if matches!(ev, WindowEvent::CloseRequested) {
@@ -257,6 +268,7 @@ impl App {
             launcher,
             auto_at: None,
             suspended: false,
+            safe_at: None,
             alt: false,
         }
     }
@@ -314,7 +326,34 @@ impl App {
         if let Err(e) = res {
             log::error!("surface: {e:#}");
         }
+        self.refresh_safe(true);
         window.request_redraw();
+    }
+
+    // The window's safe area now (platform insets + `screen_margin`).
+    fn read_safe(&self) -> crate::platform::safearea::SafeArea {
+        crate::platform::safearea::read(self.window(), self.setup.screen_margin)
+    }
+
+    // Re-reads the safe area into the current Gfx: forced on resize / rotation / resume / focus; Android insets can
+    // arrive after the resize, so redraws re-read it too, at most every `SAFE_EVERY`.
+    fn refresh_safe(&mut self, force: bool) {
+        let now = Instant::now();
+        if self.window.is_none() || (!force && self.safe_at.is_some_and(|t| now < t + SAFE_EVERY)) {
+            return;
+        }
+        self.safe_at = Some(now);
+        let safe = self.read_safe();
+        let g = match &mut self.shell {
+            Shell::Running(r) | Shell::PortMenu(r, _) => gfx(&mut r.ctx),
+            Shell::Setup(ui) | Shell::Error(ui) => &mut ui.gfx,
+            Shell::Loading => return,
+        };
+        if g.safe != safe {
+            log::info!("safe area {safe:?}");
+            g.safe = safe;
+            self.window().request_redraw();
+        }
     }
 
     // The one fullscreen owner: F11 / Alt+Enter, the launcher's Fullscreen box and the game's restart land here.
@@ -377,7 +416,9 @@ impl App {
                 if let WindowEvent::Resized(s) = ev {
                     ui.gfx.resize(s.width, s.height);
                 }
+                // A touch stands in for Shift on touch screens (no keyboard at start on Android).
                 let shift = match &ev {
+                    WindowEvent::Touch(t) => t.phase == winit::event::TouchPhase::Started,
                     WindowEvent::ModifiersChanged(m) => m.state().shift_key(),
                     WindowEvent::KeyboardInput { event, .. } => matches!(
                         event.physical_key,
@@ -443,6 +484,7 @@ impl App {
         source: Source,
     ) {
         let window = self.window().clone();
+        gfx.safe = crate::platform::safearea::read(&window, s.screen_margin);
         if let Some(mut screen) = screen
             && !self.suspended
         {
@@ -476,6 +518,8 @@ impl App {
                 return el.exit();
             }
         };
+        let mut gfx = gfx;
+        gfx.safe = self.read_safe();
         self.shell = Shell::Error(self.ui(gfx, View::Error(msg)));
     }
 
@@ -651,11 +695,14 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
     // Web `?shot=<n>`: logic freezes at frame n so the page can be screenshotted.
     let frozen = cfg!(target_arch = "wasm32") && shot.is_some_and(|f| r.ctx.w.frame >= f);
     let touch = gfx(&mut r.ctx).overlay.is_some();
+    let safe = gfx(&mut r.ctx).safe;
     if touch && let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
         let size = window.inner_size();
         // A `--shot` through the scaling blit is laid out for the shot's size.
         let (w, hgt) = r.settings.shot_size.unwrap_or((size.width, size.height));
-        h.input.touch.set_window(w, hgt, window.scale_factor());
+        h.input
+            .touch
+            .set_window(w, hgt, window.scale_factor(), safe);
     }
     // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
     for _ in 0..frames {
@@ -724,6 +771,9 @@ fn update_overlay(ctx: &mut Ctx) {
         o.view = view;
     }
 }
+
+// Safe-area re-read interval on redraws (`App::refresh_safe`).
+const SAFE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 // How long a saved `launcher = off` waits for Shift after the first frame (the window must be mapped and focused for
 // the modifier state to arrive).
@@ -805,6 +855,7 @@ pub fn run_android(
     s: Settings,
 ) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
+    crate::platform::safearea::set_app(&android);
     let el = EventLoop::<UserEvent>::with_user_event()
         .with_android_app(android)
         .build()

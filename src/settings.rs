@@ -167,6 +167,8 @@ pub struct Settings {
     pub scale: u32,
     pub fullscreen: bool,
     pub vsync: bool,
+    // Extra dp kept clear on every window edge, on top of the platform's safe-area insets (platform/safearea.rs).
+    pub screen_margin: u32,
     // Show the launcher screen before the game (th08 binary only).
     pub launcher: bool,
     // Touch overlay rows (ARCH_D §3).
@@ -234,6 +236,7 @@ impl Settings {
             scale: 1,
             fullscreen: false,
             vsync: true,
+            screen_margin: 0,
             launcher: true,
             touch: Default::default(),
             save_dir: None,
@@ -374,6 +377,19 @@ pub const ENTRIES: &[Entry] = &[
         help: "present with vsync (default on); frame pacing is separate",
         set: |s, v| {
             s.vsync = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "screen_margin",
+        env: "TH08_SCREEN_MARGIN",
+        kind: Kind::Int { min: 0, max: 200 },
+        default: "0",
+        group: Group::Display,
+        help: "extra margin on every screen edge in dp, for phones whose cutout / corner insets are wrong",
+        set: |s, v| {
+            let n: u32 = num(v)?;
+            s.screen_margin = n.min(200);
             Ok(())
         },
     },

@@ -2,6 +2,7 @@
 //! keyboard (15 §1.1). Port-only; core never sees touches, a replay records only the word.
 
 use th08_core::input::*;
+use th08_render::gfx::SafeArea;
 use winit::event::TouchPhase;
 
 // Finger id of the desktop mouse when `touch_mouse` is on.
@@ -65,8 +66,8 @@ impl Ctl {
     }
 }
 
-// One overlay control. `x`, `y`: centre as a fraction of the window. `w`, `h`: the Move zone's size as a fraction of
-// the window; buttons are circles of diameter `w` mm (`h` unused, kept equal).
+// One overlay control. `x`, `y`: centre as a fraction of the safe rect (the window minus the safe-area insets).
+// `w`, `h`: the Move zone's size as a fraction of the safe rect; buttons are circles of diameter `w` mm (`h` unused, kept equal).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Control {
     pub ctl: Ctl,
@@ -363,7 +364,8 @@ pub struct TouchView {
 #[derive(Clone, Debug, Default)]
 pub struct TouchSource {
     pub cfg: TouchConfig,
-    // Window size (px) and px per mm.
+    // Safe rect of the window (px): top-left and size; controls are placed in it. Px per mm.
+    origin: [f32; 2],
     size: [f32; 2],
     ppm: f32,
     fingers: Vec<Finger>,
@@ -396,9 +398,11 @@ impl TouchSource {
         }
     }
 
-    // Window size in px and winit's scale factor.
-    pub fn set_window(&mut self, w: u32, h: u32, scale_factor: f64) {
-        self.size = [w.max(1) as f32, h.max(1) as f32];
+    // Window size in px, winit's scale factor and the window's safe area (the blit letterboxes into the same rect).
+    pub fn set_window(&mut self, w: u32, h: u32, scale_factor: f64, safe: SafeArea) {
+        let [x, y, sw, sh] = safe.rect(w.max(1), h.max(1));
+        self.origin = [x, y];
+        self.size = [sw, sh];
         self.ppm = DP_PER_MM * scale_factor as f32;
     }
 
@@ -430,21 +434,35 @@ impl TouchSource {
         self.size[0] >= self.size[1]
     }
 
+    // Controls in window px; a button is moved inside the safe rect when its circle would cross an edge.
     pub fn placed(&self) -> Vec<Placed> {
-        let [w, h] = self.size;
+        let ([x0, y0], [w, h]) = (self.origin, self.size);
         self.cfg
             .layout
             .controls(self.landscape())
             .iter()
             .filter(|c| c.visible)
-            .map(|c| Placed {
-                ctl: c.ctl,
-                centre: [c.x * w, c.y * h],
-                half: match c.ctl {
+            .map(|c| {
+                let half = match c.ctl {
                     Ctl::Move => [c.w * w / 2.0, c.h * h / 2.0],
                     _ => [c.w * self.ppm / 2.0; 2],
-                },
-                opacity: c.opacity,
+                };
+                let inside = |v: f32, lo: f32, len: f32, r: f32| {
+                    if c.ctl == Ctl::Move || 2.0 * r >= len {
+                        v
+                    } else {
+                        v.clamp(lo + r, lo + len - r)
+                    }
+                };
+                Placed {
+                    ctl: c.ctl,
+                    centre: [
+                        inside(x0 + c.x * w, x0, w, half[0]),
+                        inside(y0 + c.y * h, y0, h, half[1]),
+                    ],
+                    half,
+                    opacity: c.opacity,
+                }
             })
             .collect()
     }
@@ -582,7 +600,7 @@ impl TouchSource {
         self.fingers.iter_mut().find(|f| f.on == On::Move)
     }
 
-    // Window px → game px (the blit's letterbox scale).
+    // Window px → game px (the blit's letterbox scale in the safe rect).
     fn game_scale(&self) -> f32 {
         (self.size[0] / SCREEN[0]).min(self.size[1] / SCREEN[1])
     }
@@ -766,7 +784,7 @@ mod tests {
             autofire: false,
             ..cfg
         });
-        t.set_window(640, 480, 1.0);
+        t.set_window(640, 480, 1.0, SafeArea::default());
         t
     }
 
@@ -797,6 +815,35 @@ mod tests {
         if w & DOWN != 0 {
             pos[1] += PLAY_SPEED;
         }
+    }
+
+    // The phone case: controls inside the safe rect (cutout left, corners, gesture bar), hit testing on the same
+    // placed rects, the letterbox scale of the safe rect.
+    #[test]
+    fn safe_area_placement() {
+        let mut t = TouchSource::new(TouchConfig::default());
+        let safe = SafeArea {
+            left: 106,
+            top: 32,
+            right: 32,
+            bottom: 72,
+        };
+        t.set_window(2712, 1220, 3.0, safe);
+        let [x0, y0, w, h] = safe.rect(2712, 1220);
+        for p in t.placed() {
+            let [cx, cy] = p.centre;
+            let [hx, hy] = p.half;
+            assert!(cx - hx >= x0 - 0.5 && cx + hx <= x0 + w + 0.5, "{p:?}");
+            assert!(cy - hy >= y0 - 0.5 && cy + hy <= y0 + h + 0.5, "{p:?}");
+        }
+        let pause = t
+            .placed()
+            .into_iter()
+            .find(|p| p.ctl == Ctl::Pause)
+            .unwrap();
+        t.touch(1, TouchPhase::Started, pause.centre[0], pause.centre[1]);
+        assert_eq!(t.poll() & PAUSE, PAUSE);
+        assert_eq!(t.game_scale(), (1116.0 / 480.0f32).min(2574.0 / 640.0));
     }
 
     #[test]
