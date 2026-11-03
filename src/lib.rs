@@ -50,9 +50,13 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         soundfonts: Vec::new(),
     };
     let mut s = settings::Settings::game_environment(dirs);
+    launch_once(&mut s);
     if let Some(apk) = sources::ApkAssetSource::new(app.asset_manager()) {
         log::info!("game files bundled in the APK: {:?}", apk.names_list());
-        return app::run_android(app, Some(th08_core::assets::Source::new(apk)), s);
+        app::run_android(app, Some(th08_core::assets::Source::new(apk)), s);
+        // Saves are written before the event loop exits; a second android_main in this process would make winit
+        // fail (RecreationAttempt), so the :game process ends here and the next Play starts a fresh one.
+        std::process::exit(0);
     }
     match app.external_data_path() {
         Some(ext) => {
@@ -78,4 +82,29 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         None => log::error!("no external files dir: game folder unavailable"),
     }
     app::run_android(app, None, s);
+    std::process::exit(0);
+}
+
+// The Compose launcher's settings for this start only (`launcher = off`, developer rows): `key = value` lines in
+// `<internal>/launch.cfg`, applied over port.cfg and env, then deleted.
+#[cfg(target_os = "android")]
+fn launch_once(s: &mut settings::Settings) {
+    let Some(path) = s.dirs.config.as_ref().map(|d| d.join("launch.cfg")) else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let _ = std::fs::remove_file(&path);
+    for l in text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        if let Some((k, v)) = l.split_once('=')
+            && let Err(e) = s.set_from(settings::Origin::Cli, k.trim(), v.trim())
+        {
+            log::error!("launch.cfg: {l:?}: {e}");
+        }
+    }
 }

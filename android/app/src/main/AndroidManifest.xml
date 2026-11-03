@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:label="@string/app_name" android:icon="@mipmap/ic_launcher"
+      android:extractNativeLibs="false" android:allowBackup="false">
+    <!-- Compose settings screen; writes port.cfg / launch.cfg in filesDir and starts the game below. -->
+    <activity android:name=".LauncherActivity" android:exported="true" android:theme="@style/Theme.Th08">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+    <!-- The Rust game (lib th08); own process, ended by the game on Quit so the next Play starts fresh. -->
+    <activity android:name="android.app.NativeActivity" android:exported="false" android:process=":game"
+        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density"
+        android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+      <meta-data android:name="android.app.lib_name" android:value="th08"/>
+    </activity>
+  </application>
+</manifest>
