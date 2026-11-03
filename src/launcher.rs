@@ -170,10 +170,13 @@ fn folder_dialog() -> Option<PathBuf> {
     None
 }
 
-// Where the game files come from: the `game_dir` row (native) or the files picked in the web page.
+// Where the game files come from: the `game_dir` row (native), the files picked in the web page, or the APK's
+// bundled assets (Android, ARCH_D §2.1).
 pub enum Folder {
     Native,
     Web(Vec<String>),
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    Bundled(Vec<String>),
 }
 
 // What a screen pass asks the app's Shell to do (app.rs).
@@ -321,7 +324,9 @@ impl Model {
             }
             #[cfg(target_arch = "wasm32")]
             Folder::Native => false,
-            Folder::Web(names) => names.iter().any(|n| n.eq_ignore_ascii_case("th08.dat")),
+            Folder::Web(names) | Folder::Bundled(names) => {
+                names.iter().any(|n| n.eq_ignore_ascii_case("th08.dat"))
+            }
         }
     }
 
@@ -480,6 +485,9 @@ impl Model {
                     #[cfg(target_os = "android")]
                     ui.label(r.value.as_str());
                 }
+                Folder::Bundled(_) => {
+                    ui.label("bundled in the APK");
+                }
                 Folder::Web(names) => {
                     ui.label(if names.is_empty() {
                         "no files".to_string()
@@ -506,6 +514,10 @@ impl Model {
                 "Copy th08.dat and thbgm.dat from your Touhou 8 folder into {dir}\n\
                  e.g. adb push th08.dat thbgm.dat {dir}/ — then this screen picks them up."
             ));
+            // Re-check the folder every second so an `adb push` shows up without a touch (the folder check runs
+            // on every redraw; a `Resumed` redraws too).
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs(1));
         }
     }
 

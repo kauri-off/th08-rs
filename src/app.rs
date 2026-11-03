@@ -74,7 +74,8 @@ struct App {
     // The settings Setup edits: the start-up ones, then the ones the last Play used (Back from Error keeps the edits).
     // Direct starts: the final settings, cloned into `Running`.
     setup: Settings,
-    // Known up front for direct starts and web (the files picked in the page); native launcher: `game_dir` at Play.
+    // Known up front for direct starts, web (the files picked in the page) and Android bundled assets; native
+    // launcher: `game_dir` at Play.
     source: Option<Source>,
     // Show Setup first (else load at once).
     launcher: bool,
@@ -264,6 +265,8 @@ impl App {
         match &self.source {
             #[cfg(target_arch = "wasm32")]
             Some(src) => Folder::Web(src.names()),
+            #[cfg(target_os = "android")]
+            Some(src) => Folder::Bundled(src.names()),
             _ => Folder::Native,
         }
     }
@@ -412,8 +415,11 @@ impl App {
                 .window()
                 .request_inner_size(winit::dpi::LogicalSize::new(640.0 * k, 480.0 * k));
         }
+        // Native: the `game_dir` row; Android with bundled assets and web: the source given at start.
         #[cfg(not(target_arch = "wasm32"))]
-        let source = crate::sources::native(s.game_dir.clone().expect("Play needs a game folder"));
+        let source = self.source.clone().unwrap_or_else(|| {
+            crate::sources::native(s.game_dir.clone().expect("Play needs a game folder"))
+        });
         #[cfg(target_arch = "wasm32")]
         let source = self.source.clone().expect("web files");
         screen.model_mut().view = View::Loading;
@@ -723,15 +729,20 @@ pub fn run_launcher(source: Option<Source>, s: Settings) {
     run_app(source, s, true);
 }
 
-// Android (ARCH_D §6.3 run 1): the launcher on the NativeActivity's event loop; the folder comes from `game_dir`.
+// Android (ARCH_D §6.3 runs 1–2): the launcher on the NativeActivity's event loop; game files from `source` (bundled
+// APK assets) or, when None, the `game_dir` folder.
 #[cfg(target_os = "android")]
-pub fn run_android(android: winit::platform::android::activity::AndroidApp, s: Settings) {
+pub fn run_android(
+    android: winit::platform::android::activity::AndroidApp,
+    source: Option<Source>,
+    s: Settings,
+) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
     let el = EventLoop::<UserEvent>::with_user_event()
         .with_android_app(android)
         .build()
         .expect("event loop");
-    run_on(el, None, s, true);
+    run_on(el, source, s, true);
 }
 
 fn run_app(source: Option<Source>, s: Settings, launcher: bool) {

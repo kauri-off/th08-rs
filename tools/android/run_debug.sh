@@ -4,7 +4,7 @@
 # manifest, aapt2 / zipalign / apksigner with a throwaway key in target/android/. Release APK with bundled data,
 # the release keystore and the AAsset source are ANDROID2 (build_apk.sh), not here.
 #   build     libth08.so for aarch64 + x86_64, pack + sign target/android/th08-debug.apk
-#   emulator  start a headless emulator (own AVD in target/android/avd, no window, no audio) and wait for boot
+#   emulator  start a headless emulator (own AVD th08dbg, no window, no audio) and wait for boot
 #   install   adb install on the emulator only (EMU_SERIAL, never a physical device)
 #   run       start the activity, wait, dump logcat to target/android/logcat.txt
 #   shot      adb exec-out screencap → target/android/screen.png
@@ -29,7 +29,6 @@ NDK=${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/*/ | sort -V | tail -1)}
 NDK=${NDK%/}
 NBIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
 ADB=$SDK/platform-tools/adb
-export ANDROID_AVD_HOME=$PWD/$OUT/avd
 mkdir -p "$OUT"
 
 abi_of() { case $1 in aarch64) echo arm64-v8a ;; x86_64) echo x86_64 ;; *) echo "unknown target $1" >&2; exit 1 ;; esac; }
@@ -91,12 +90,13 @@ emulator_start() {
   local img
   img=$(ls -d "$SDK"/system-images/*/*/x86_64/ | sort -V | tail -1)
   [[ -n $img ]] || { echo "no x86_64 system image under $SDK/system-images"; exit 1; }
-  if [[ ! -f $ANDROID_AVD_HOME/th08dbg.ini ]]; then
+  # avdmanager ignores ANDROID_AVD_HOME, so the AVD lives in the default AVD home under its own name.
+  if ! "$SDK"/cmdline-tools/*/bin/avdmanager list avd -c 2> /dev/null | grep -qx th08dbg; then
     local rel=${img#"$SDK"/}
     echo no | "$SDK"/cmdline-tools/*/bin/avdmanager create avd -n th08dbg -k "$(tr / ';' <<< "${rel%/}")" -d pixel_7 > /dev/null
   fi
   "$ADB" start-server > /dev/null
-  # No window, no host audio, software GPU; the AVD and its data live under target/android/avd.
+  # No window, no host audio, software GPU.
   env -u WAYLAND_DISPLAY "$SDK/emulator/emulator" -avd th08dbg -port "$EMU_PORT" -no-window -no-audio \
     -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$OUT/emulator.log" 2>&1 &
   echo "emulator pid $! on $EMU_SERIAL"

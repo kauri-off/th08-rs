@@ -31,8 +31,9 @@ pub fn start(files: js_sys::Array) {
     }
 }
 
-// Android entry (ARCH_D_MOBILE §6.1 item 6, §6.3 run 1): logcat logger, panics to logcat, config + saves in the
-// app's internal storage, game files in `<external files dir>/game` (adb push target; no SAF picker yet, §2.2).
+// Android entry (ARCH_D_MOBILE §6.1 item 6, §6.3 runs 1–2): logcat logger, panics to logcat, config + saves in the
+// app's internal storage. Game files: the APK's bundled assets if it has th08.dat (§2.1), else
+// `<external files dir>/game` (adb push target; no SAF picker yet, §2.2).
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
@@ -49,6 +50,10 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         soundfonts: Vec::new(),
     };
     let mut s = settings::Settings::game_environment(dirs);
+    if let Some(apk) = sources::ApkAssetSource::new(app.asset_manager()) {
+        log::info!("game files bundled in the APK: {:?}", apk.names_list());
+        return app::run_android(app, Some(th08_core::assets::Source::new(apk)), s);
+    }
     match app.external_data_path() {
         Some(ext) => {
             let game = ext.join("game");
@@ -72,5 +77,5 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         }
         None => log::error!("no external files dir: game folder unavailable"),
     }
-    app::run_android(app, s);
+    app::run_android(app, None, s);
 }
