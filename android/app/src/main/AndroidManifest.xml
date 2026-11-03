@@ -9,8 +9,10 @@
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
-    <!-- The Rust game (lib th08); own process, ended by the game on Quit so the next Play starts fresh. -->
+    <!-- The Rust game (lib th08); own process, ended by the game on Quit so the next Play starts fresh. Back goes to
+         the game (port menu) only: no predictive-back finish of the activity (targetSdk 36 default). -->
     <activity android:name="android.app.NativeActivity" android:exported="false" android:process=":game"
+        android:enableOnBackInvokedCallback="false"
         android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density"
         android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
       <meta-data android:name="android.app.lib_name" android:value="th08"/>

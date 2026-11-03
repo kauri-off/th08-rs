@@ -1,7 +1,7 @@
 //! Launcher screen and game-folder flow, port infrastructure (no spec section): an egui settings screen generated
 //! from `settings::ENTRIES`, drawn on the game's wgpu device and window before the game starts.
 
-use crate::settings::{self, ENTRIES, Entry, Group, Kind, Origin, Settings};
+use crate::settings::{self, Audience, ENTRIES, Entry, Group, Kind, Origin, Settings};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 use th08_render::gfx::{Gfx, SafeArea};
@@ -205,91 +205,85 @@ pub enum View {
     PortMenu,
 }
 
-// One table entry as edited on screen. Value text "" = unset; booleans are "on"/"off".
+// A row's value, typed by the entry's `Kind`; "" / None = unset. `text` is the port.cfg / `Settings` value text.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    Bool(bool),
+    Int(Option<i64>),
+    Choice(String),
+    // Kind::Path and Kind::File.
+    Path(String),
+    Text(String),
+}
+
+impl Value {
+    // From value text (a `Settings` value or the table default); a bad number reads as unset.
+    pub fn parse(kind: Kind, v: &str) -> Self {
+        let v = v.trim();
+        match kind {
+            Kind::Bool => Value::Bool(settings::parse_bool(v).unwrap_or(false)),
+            Kind::Int { .. } => Value::Int(
+                v.parse::<i64>()
+                    .ok()
+                    .or_else(|| v.parse::<f64>().ok().map(|n| n.round() as i64)),
+            ),
+            Kind::Enum(_) => Value::Choice(v.into()),
+            Kind::Path | Kind::File => Value::Path(v.into()),
+            Kind::Text(_) => Value::Text(v.into()),
+        }
+    }
+
+    // Booleans "on"/"off", numbers in decimal (the port.cfg format).
+    pub fn text(&self) -> String {
+        match self {
+            Value::Bool(b) => if *b { "on" } else { "off" }.into(),
+            Value::Int(n) => n.map_or(String::new(), |n| n.to_string()),
+            Value::Choice(s) | Value::Path(s) | Value::Text(s) => s.clone(),
+        }
+    }
+
+    pub fn is_unset(&self) -> bool {
+        match self {
+            Value::Bool(_) => false,
+            Value::Int(n) => n.is_none(),
+            Value::Choice(s) | Value::Path(s) | Value::Text(s) => s.is_empty(),
+        }
+    }
+}
+
+// One table entry as edited on screen; `dirty` = differs from the value the screen opened with.
 struct Row {
     e: &'static Entry,
-    value: String,
-    initial: String,
+    value: Value,
+    initial: Value,
+    dirty: bool,
     origin: Origin,
 }
 
 impl Row {
-    fn default_value(&self) -> String {
-        norm(self.e, self.e.default)
+    fn new(e: &'static Entry, v: &str, origin: Origin) -> Self {
+        let value = Value::parse(e.kind, v);
+        Self {
+            e,
+            initial: value.clone(),
+            value,
+            dirty: false,
+            origin,
+        }
     }
 
-    fn changed(&self) -> bool {
-        self.value != self.initial
+    fn default_value(&self) -> Value {
+        Value::parse(self.e.kind, self.e.default)
+    }
+
+    fn set(&mut self, v: Value) {
+        self.dirty = v != self.initial;
+        self.value = v;
     }
 
     fn error(&self) -> Option<String> {
-        (!self.value.is_empty()).then(|| self.e.check(&self.value).err())?
+        (!self.value.is_unset()).then(|| self.e.check(&self.value.text()).err())?
     }
-}
-
-fn norm(e: &Entry, v: &str) -> String {
-    match e.kind {
-        Kind::Bool => match settings::parse_bool(v) {
-            Ok(true) => "on".into(),
-            Ok(false) => "off".into(),
-            Err(_) => v.into(),
-        },
-        _ => v.trim().into(),
-    }
-}
-
-// Rows that do nothing on this platform (the table has no platform metadata): Android has no window size,
-// fullscreen toggle or font choice (system CJK fonts); the screen margin is for touch platforms (Android, web).
-fn shown_here(e: &Entry) -> bool {
-    match e.key {
-        "scale" | "fullscreen" | "font" => !cfg!(target_os = "android"),
-        "screen_margin" => cfg!(any(target_os = "android", target_arch = "wasm32")),
-        _ => true,
-    }
-}
-
-// Help under a row; Android has no Shift key at start (a touch opens the screen instead, app.rs).
-fn help(e: &Entry) -> &'static str {
-    match e.key {
-        "launcher" if cfg!(target_os = "android") => {
-            "show this screen at start; when off, touch the screen while th08 starts to see it again"
-        }
-        _ => e.help,
-    }
-}
-
-// Player-facing name of an entry; developer entries keep their key.
-pub fn label(e: &Entry) -> String {
-    let l = match e.key {
-        "game_dir" => "Game folder",
-        "scale" => "Window size",
-        "fullscreen" => "Fullscreen",
-        "vsync" => "VSync",
-        "launcher" => "Show this screen at start",
-        "screen_margin" => "Screen margin (dp)",
-        "save_dir" => "Save folder",
-        "font" => "Dialogue font",
-        "soundfont" => "MIDI SoundFont",
-        "seed" => "RNG seed",
-        "stage" => "Start at stage",
-        "stage_frame" => "Stage start frame",
-        "player" => "Shot type",
-        "rank" => "Difficulty",
-        "power" => "Starting power",
-        "continues" => "Continues used",
-        "ending" => "Play ending",
-        "replay" => "Play replay",
-        "replay_speed" => "Replay speed",
-        "touch" => "Touch overlay",
-        "touch_move" => "Movement",
-        "touch_sens" => "Drag sensitivity %",
-        "touch_focus" => "Focus button",
-        "touch_autofire" => "Auto-fire",
-        "touch_opacity" => "Overlay opacity %",
-        "touch_layout" => "Overlay layout",
-        _ => return e.key.replace('_', " "),
-    };
-    l.into()
 }
 
 // The edited settings: one row per `ENTRIES` entry.
@@ -306,20 +300,12 @@ impl Model {
     pub fn new(s: &Settings, folder: Folder) -> Self {
         let rows = ENTRIES
             .iter()
-            .map(|e| {
-                let v = norm(e, s.value(e.key).unwrap_or(""));
-                Row {
-                    e,
-                    value: v.clone(),
-                    initial: v,
-                    origin: s.origin(e.key),
-                }
-            })
+            .map(|e| Row::new(e, s.value(e.key).unwrap_or(e.default), s.origin(e.key)))
             .collect::<Vec<Row>>();
         // A developer switch given on the command line / env opens the developer view.
         let dev = rows
             .iter()
-            .any(|r| r.e.group.developer() && r.origin > Origin::PortCfg);
+            .any(|r| r.e.audience == Audience::Dev && r.origin > Origin::PortCfg);
         Self {
             rows,
             folder,
@@ -331,24 +317,28 @@ impl Model {
 
     // The window's fullscreen state (F11 / Alt+Enter) mirrored into the box; saved with the other edits on Play.
     pub fn set_fullscreen(&mut self, on: bool) {
-        let r = self
-            .rows
-            .iter_mut()
-            .find(|r| r.e.key == "fullscreen")
-            .unwrap();
-        r.value = if on { "on" } else { "off" }.into();
+        self.row_mut("fullscreen").set(Value::Bool(on));
     }
 
     fn row(&self, key: &str) -> &Row {
         self.rows.iter().find(|r| r.e.key == key).unwrap()
     }
 
+    fn row_mut(&mut self, key: &str) -> &mut Row {
+        self.rows.iter_mut().find(|r| r.e.key == key).unwrap()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn game_dir(&self) -> String {
+        self.row("game_dir").value.text()
+    }
+
     fn folder_ok(&self) -> bool {
         match &self.folder {
             #[cfg(not(target_arch = "wasm32"))]
             Folder::Native => {
-                let v = &self.row("game_dir").value;
-                !v.is_empty() && is_game_dir(Path::new(v))
+                let v = self.game_dir();
+                !v.is_empty() && is_game_dir(Path::new(&v))
             }
             #[cfg(target_arch = "wasm32")]
             Folder::Native => false,
@@ -362,26 +352,32 @@ impl Model {
         self.folder_ok() && self.rows.iter().all(|r| r.error().is_none())
     }
 
-    // The final settings: unchanged rows keep their origin, edited ones count as set on the command line.
+    // The final settings: unchanged rows keep their origin, edited ones come from the launcher.
     pub fn settings(&self) -> Settings {
+        let values: Vec<(&'static Entry, String, Origin)> = self
+            .rows
+            .iter()
+            .filter(|r| !r.value.is_unset())
+            .map(|r| {
+                let o = if r.dirty { Origin::Launcher } else { r.origin };
+                (r.e, r.value.text(), o)
+            })
+            .collect();
         Settings::from_values(
             self.dirs.clone(),
-            self.rows.iter().filter(|r| !r.value.is_empty()).map(|r| {
-                let o = if r.changed() { Origin::Cli } else { r.origin };
-                (r.e, r.value.as_str(), o)
-            }),
+            values.iter().map(|(e, v, o)| (*e, v.as_str(), *o)),
         )
     }
 
-    // port.cfg / localStorage changes: every player row edited on screen, removed when back at its default. Cheats
-    // and Tools edits apply to this run only.
-    pub fn changes(&self) -> Vec<(&'static str, Option<&str>)> {
+    // port.cfg / localStorage changes: every `persist` row edited on screen, removed when back at its default; the
+    // other rows apply to this run only.
+    pub fn changes(&self) -> Vec<(&'static str, Option<String>)> {
         self.rows
             .iter()
-            .filter(|r| r.changed() && !r.e.group.developer())
+            .filter(|r| r.dirty && r.e.persist)
             .map(|r| {
-                let keep = !r.value.is_empty() && r.value != r.default_value();
-                (r.e.key, keep.then_some(r.value.as_str()))
+                let keep = !r.value.is_unset() && r.value != r.default_value();
+                (r.e.key, keep.then(|| r.value.text()))
             })
             .collect()
     }
@@ -389,13 +385,15 @@ impl Model {
     pub fn save(&self) {
         let changes = self.changes();
         if !changes.is_empty() {
-            settings::write_port_cfg(&self.dirs, &changes);
+            let c: Vec<(&str, Option<&str>)> =
+                changes.iter().map(|(k, v)| (*k, v.as_deref())).collect();
+            settings::write_port_cfg(&self.dirs, &c);
         }
     }
 
     fn reset(&mut self) {
         for r in self.rows.iter_mut().filter(|r| r.e.key != "game_dir") {
-            r.value = r.default_value();
+            r.set(r.default_value());
         }
     }
 
@@ -406,7 +404,7 @@ impl Model {
                 let act = self.settings_ui(ui);
                 let after = &self.row("fullscreen").value;
                 if act.is_none() && *after != before {
-                    return Some(Action::Fullscreen(after == "on"));
+                    return Some(Action::Fullscreen(*after == Value::Bool(true)));
                 }
                 act
             }
@@ -467,11 +465,11 @@ impl Model {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 if !self.dev {
-                    let active: Vec<String> = self
+                    let active: Vec<&str> = self
                         .rows
                         .iter()
-                        .filter(|r| r.e.group.developer() && r.value != r.default_value())
-                        .map(|r| r.e.key.replace('_', " "))
+                        .filter(|r| r.e.audience == Audience::Dev && r.value != r.default_value())
+                        .map(|r| r.e.label)
                         .collect();
                     if !active.is_empty() {
                         ui.colored_label(
@@ -480,8 +478,7 @@ impl Model {
                         );
                     }
                 }
-                let dev = self.dev;
-                for g in Group::ALL.into_iter().filter(|g| dev || !g.developer()) {
+                for g in Group::ALL {
                     self.group_ui(ui, g);
                 }
             });
@@ -495,27 +492,28 @@ impl Model {
             ui.label("Game folder:");
             match &self.folder {
                 Folder::Native => {
-                    let r = self
-                        .rows
-                        .iter_mut()
-                        .find(|r| r.e.key == "game_dir")
-                        .unwrap();
+                    let r = self.row_mut("game_dir");
+                    #[cfg_attr(target_os = "android", allow(unused_mut))]
+                    let mut v = r.value.text();
                     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
                     if ui.button("Browse…").clicked()
                         && let Some(d) = folder_dialog()
                     {
-                        r.value = d.to_string_lossy().into_owned();
+                        v = d.to_string_lossy().into_owned();
                     }
                     #[cfg(not(target_os = "android"))]
                     ui.add(
-                        egui::TextEdit::singleline(&mut r.value)
+                        egui::TextEdit::singleline(&mut v)
                             .hint_text("folder with th08.dat")
                             .desired_width(f32::INFINITY),
                     );
                     // Android: no soft keyboard under NativeActivity (launcher review item 9), so the fixed folder
                     // set by `android_main` is shown, not edited.
                     #[cfg(target_os = "android")]
-                    ui.label(r.value.as_str());
+                    ui.label(v.as_str());
+                    if v != r.value.text() {
+                        r.set(Value::Path(v));
+                    }
                 }
                 Folder::Bundled(_) => {
                     ui.label("bundled in the APK");
@@ -541,7 +539,7 @@ impl Model {
         });
         #[cfg(target_os = "android")]
         if !ok {
-            let dir = &self.row("game_dir").value;
+            let dir = self.game_dir();
             ui.label(format!(
                 "Copy th08.dat and thbgm.dat from your Touhou 8 folder into {dir}\n\
                  e.g. adb push th08.dat thbgm.dat {dir}/ — then this screen picks them up."
@@ -554,18 +552,21 @@ impl Model {
     }
 
     fn group_ui(&mut self, ui: &mut egui::Ui, g: Group) {
-        let web = matches!(self.folder, Folder::Web(_));
-        // Folder rows are at the top; on the web the files come from the page.
+        // The game folder row is at the top.
+        let dev = self.dev;
         let rows: Vec<usize> = (0..self.rows.len())
-            .filter(|&i| self.rows[i].e.group == g && self.rows[i].e.key != "game_dir")
-            .filter(|&i| !(web && matches!(self.rows[i].e.kind, Kind::Path | Kind::File)))
-            .filter(|&i| shown_here(self.rows[i].e))
+            .filter(|&i| {
+                let e = self.rows[i].e;
+                e.group == g
+                    && e.key != "game_dir"
+                    && e.shown_on_this_platform()
+                    && (dev || e.audience == Audience::Player)
+            })
             .collect();
         if rows.is_empty() {
             return;
         }
         let set_here = rows.iter().any(|&i| self.rows[i].origin > Origin::PortCfg);
-        let dev = self.dev;
         egui::CollapsingHeader::new(egui::RichText::new(g.title()).strong())
             .default_open(matches!(g, Group::GameData | Group::Display) || set_here)
             .show(ui, |ui| {
@@ -642,7 +643,7 @@ fn port_menu_ui(ui: &mut egui::Ui) -> Option<Action> {
 
 // Help is shown once, under the value; the developer view adds the flag / env name and the origin tag.
 fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool) {
-    let l = ui.label(label(r.e));
+    let l = ui.label(r.e.label);
     if dev {
         l.on_hover_text(format!("--{} / {}", r.e.key.replace('_', "-"), r.e.env));
     }
@@ -656,41 +657,36 @@ fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool) {
         if let Some(err) = r.error() {
             ui.colored_label(ui.visuals().error_fg_color, err);
         }
-        ui.label(egui::RichText::new(help(r.e)).small().weak());
+        ui.label(egui::RichText::new(r.e.help).small().weak());
     });
 }
 
+// Edits a copy of the value; the row is set (and its dirty flag updated) only when a widget changed it.
 fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
     let unsettable = r.e.default.is_empty();
-    match r.e.kind {
-        Kind::Bool => {
-            let mut on = r.value == "on";
-            if ui.checkbox(&mut on, "").changed() {
-                r.value = if on { "on" } else { "off" }.into();
-            }
+    let mut v = r.value.clone();
+    match (&mut v, r.e.kind) {
+        (Value::Bool(on), _) => {
+            ui.checkbox(on, "");
         }
-        Kind::Int { min, max } => {
-            let mut set = !r.value.is_empty();
+        (Value::Int(n), Kind::Int { min, max }) => {
+            let mut set = n.is_some();
             if unsettable && ui.checkbox(&mut set, "").changed() {
-                r.value = if set {
-                    min.max(0).min(max).to_string()
-                } else {
-                    String::new()
-                };
+                *n = set.then(|| min.max(0).min(max));
             }
-            if set {
-                let mut n: f64 = r.value.parse().unwrap_or(min as f64);
+            if let Some(n) = n {
+                let mut f = *n as f64;
                 let range = min as f64..=max as f64;
                 let changed = if max - min <= 16 {
                     ui.add(
-                        egui::Slider::new(&mut n, range)
+                        egui::Slider::new(&mut f, range)
                             .step_by(1.0)
                             .fixed_decimals(0),
                     )
                     .changed()
                 } else {
                     ui.add(
-                        egui::DragValue::new(&mut n)
+                        egui::DragValue::new(&mut f)
                             .range(range)
                             .speed(1.0)
                             .fixed_decimals(0),
@@ -698,48 +694,50 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
                     .changed()
                 };
                 if changed {
-                    r.value = (n.round() as i64).to_string();
+                    *n = f.round() as i64;
                 }
             }
         }
-        Kind::Enum(choices) => {
-            let shown = if r.value.is_empty() {
+        (Value::Choice(c), Kind::Enum(choices)) => {
+            let shown = if c.is_empty() {
                 "(not set)"
             } else {
-                r.value.as_str()
-            };
+                c.as_str()
+            }
+            .to_string();
             egui::ComboBox::from_id_salt(r.e.key)
-                .selected_text(shown.to_string())
+                .selected_text(shown)
                 .show_ui(ui, |ui| {
                     if unsettable {
-                        ui.selectable_value(&mut r.value, String::new(), "(not set)");
+                        ui.selectable_value(c, String::new(), "(not set)");
                     }
-                    for c in choices {
-                        ui.selectable_value(&mut r.value, c.to_string(), *c);
+                    for x in choices {
+                        ui.selectable_value(c, x.to_string(), *x);
                     }
                 });
         }
         // Android: text rows are read-only (no soft keyboard); they are set through port.cfg.
         #[cfg(target_os = "android")]
-        Kind::Text(_) | Kind::Path | Kind::File => {
-            ui.label(if r.value.is_empty() {
+        (Value::Text(s) | Value::Path(s), _) => {
+            ui.label(if s.is_empty() {
                 "(not set)"
             } else {
-                r.value.as_str()
+                s.as_str()
             });
         }
         #[cfg(not(target_os = "android"))]
-        Kind::Text(hint) => {
+        (Value::Text(s), kind) => {
+            let hint = if let Kind::Text(h) = kind { h } else { "" };
             ui.add(
-                egui::TextEdit::singleline(&mut r.value)
+                egui::TextEdit::singleline(s)
                     .hint_text(hint)
                     .desired_width(220.0),
             );
         }
         #[cfg(not(target_os = "android"))]
-        Kind::Path | Kind::File => {
+        (Value::Path(s), _) => {
             ui.add(
-                egui::TextEdit::singleline(&mut r.value)
+                egui::TextEdit::singleline(s)
                     .hint_text(r.e.hint())
                     .desired_width(220.0),
             );
@@ -754,20 +752,25 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
                     d.pick_folder()
                 };
                 if let Some(p) = picked {
-                    r.value = p.to_string_lossy().into_owned();
+                    *s = p.to_string_lossy().into_owned();
                 }
             }
         }
+        _ => unreachable!("Value::parse follows the entry kind"),
+    }
+    if v != r.value {
+        r.set(v);
     }
 }
 
 // "set by TH08_STAGE" / "set by --stage" for values from the environment or command line, "changed" after an edit.
 fn origin_label(ui: &mut egui::Ui, r: &Row) {
-    let text = if r.changed() {
+    let text = if r.dirty {
         "changed".to_string()
     } else {
         match r.origin {
             Origin::Cli => format!("set by --{}", r.e.key.replace('_', "-")),
+            Origin::Launcher => "changed".into(),
             Origin::Env if cfg!(target_arch = "wasm32") => format!("set by URL ?{}=", r.e.url()),
             Origin::Env => format!("set by {}", r.e.env),
             Origin::PortCfg if cfg!(target_arch = "wasm32") => "saved".into(),
@@ -775,8 +778,8 @@ fn origin_label(ui: &mut egui::Ui, r: &Row) {
             Origin::Default => return,
         }
     };
-    let c = match (r.changed(), r.origin) {
-        (true, _) => egui::Color32::from_rgb(120, 170, 255),
+    let c = match (r.dirty, r.origin) {
+        (true, _) | (_, Origin::Launcher) => egui::Color32::from_rgb(120, 170, 255),
         (_, Origin::Cli | Origin::Env) => egui::Color32::from_rgb(240, 190, 80),
         _ => ui.visuals().weak_text_color(),
     };
@@ -1042,7 +1045,12 @@ mod tests {
     }
 
     fn edit(m: &mut Model, key: &str, v: &str) {
-        m.rows.iter_mut().find(|r| r.e.key == key).unwrap().value = v.into();
+        let r = m.row_mut(key);
+        r.set(Value::parse(r.e.kind, v));
+    }
+
+    fn some(c: &[(&'static str, &str)]) -> Vec<(&'static str, Option<String>)> {
+        c.iter().map(|(k, v)| (*k, Some(v.to_string()))).collect()
     }
 
     #[test]
@@ -1058,25 +1066,53 @@ mod tests {
         edit(&mut m, "scale", "1");
         assert_eq!(
             m.changes(),
-            [("fullscreen", Some("on")), ("launcher", Some("off"))]
+            some(&[("fullscreen", "on"), ("launcher", "off")])
         );
         let r = m.settings();
         assert!(r.invuln && r.replay_save == Some(3) && r.fullscreen && !r.launcher);
         assert_eq!((r.turbo, r.origin("turbo")), (2, Origin::PortCfg));
+        assert_eq!(r.origin("invuln"), Origin::Launcher);
+        assert_eq!(r.origin("scale"), Origin::Default);
         edit(&mut m, "fullscreen", "off");
-        assert_eq!(m.changes(), [("launcher", Some("off"))]);
+        assert_eq!(m.changes(), some(&[("launcher", "off")]));
+        edit(&mut m, "seed", "");
+        edit(&mut m, "power", "64");
+        edit(&mut m, "power", "");
+        assert_eq!(m.changes(), some(&[("launcher", "off")]));
         s.set_from(Origin::Cli, "invuln", "on").unwrap();
         assert!(Model::new(&s, Folder::Native).dev);
     }
 
     #[test]
-    fn labels() {
-        assert_eq!(label(settings::find("scale").unwrap()), "Window size");
-        assert_eq!(label(settings::find("session_rng").unwrap()), "session rng");
-        for e in ENTRIES.iter().filter(|e| !e.group.developer()) {
-            let l = label(e);
-            assert!(l.starts_with(char::is_uppercase), "{}: no label", e.key);
+    fn typed_values() {
+        let k = |key| settings::find(key).unwrap().kind;
+        assert_eq!(Value::parse(k("vsync"), "1"), Value::Bool(true));
+        assert_eq!(Value::parse(k("scale"), " 3 "), Value::Int(Some(3)));
+        assert_eq!(Value::parse(k("seed"), ""), Value::Int(None));
+        assert_eq!(
+            Value::parse(k("rank"), "hard"),
+            Value::Choice("hard".into())
+        );
+        assert_eq!(
+            Value::parse(k("font"), "/f.ttf"),
+            Value::Path("/f.ttf".into())
+        );
+        assert_eq!(Value::parse(k("ending"), "7c"), Value::Text("7c".into()));
+        for (key, v) in [
+            ("vsync", "off"),
+            ("scale", "2"),
+            ("seed", ""),
+            ("stage", "4a"),
+        ] {
+            assert_eq!(Value::parse(k(key), v).text(), v);
         }
+        let mut s = Settings::default();
+        s.set_from(Origin::Cli, "ending", "zz").ok();
+        let mut m = Model::new(&s, Folder::Native);
+        edit(&mut m, "ending", "zz");
+        assert!(m.row("ending").dirty && m.row("ending").error().is_some());
+        edit(&mut m, "ending", "");
+        assert!(!m.row("ending").dirty && m.row("ending").error().is_none());
     }
 
     #[test]

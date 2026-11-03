@@ -2,6 +2,7 @@
 //! gilrs joystick (app), and the scripted / recorded-poll host of the tools and tests. Not a port of the original.
 
 pub mod overlay;
+pub mod portmenu;
 pub mod safearea;
 pub mod touch;
 

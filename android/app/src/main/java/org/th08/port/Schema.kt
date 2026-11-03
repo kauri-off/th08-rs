@@ -11,7 +11,7 @@ sealed interface Kind {
     data class Text(val format: String) : Kind
 }
 
-data class Group(val id: String, val title: String, val developer: Boolean)
+data class Group(val id: String, val title: String)
 
 data class Entry(
     val key: String,
@@ -20,7 +20,12 @@ data class Entry(
     val kind: Kind,
     val default: String,
     val group: String,
+    // Shown only in the Developer card (settings.rs `Audience::Dev`).
+    val developer: Boolean,
+    // The settings table's platform list names "android".
     val android: Boolean,
+    // Saved to port.cfg; false = launch.cfg, the next start only.
+    val persist: Boolean,
 )
 
 class Schema(val groups: List<Group>, val entries: List<Entry>) {
@@ -30,7 +35,7 @@ class Schema(val groups: List<Group>, val entries: List<Entry>) {
             val gs = root.getJSONArray("groups")
             val groups = (0 until gs.length()).map {
                 val g = gs.getJSONObject(it)
-                Group(g.getString("id"), g.getString("title"), g.getBoolean("developer"))
+                Group(g.getString("id"), g.getString("title"))
             }
             val es = root.getJSONArray("entries")
             val entries = (0 until es.length()).map {
@@ -51,7 +56,9 @@ class Schema(val groups: List<Group>, val entries: List<Entry>) {
                     kind = kind,
                     default = norm(kind, e.getString("default")),
                     group = e.getString("group"),
+                    developer = e.getString("audience") == "dev",
                     android = (0 until ps.length()).any { i -> ps.getString(i) == "android" },
+                    persist = e.getBoolean("persist"),
                 )
             }
             return Schema(groups, entries)

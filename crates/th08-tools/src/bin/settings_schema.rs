@@ -3,26 +3,7 @@
 // usage: settings_schema [OUT.json] — stdout when no path is given.
 
 use serde_json::{Value, json};
-use th08::settings::{ENTRIES, Entry, Group, Kind};
-
-// Platforms an entry means something on; the Compose launcher shows only the "android" ones.
-fn platforms(e: &Entry) -> &'static [&'static str] {
-    const ALL: &[&str] = &["desktop", "web", "android"];
-    const NATIVE: &[&str] = &["desktop", "android"];
-    match e.key {
-        // Window size / fullscreen / the egui launcher switch: no meaning in an Android activity.
-        "scale" | "fullscreen" | "launcher" => &["desktop", "web"],
-        // Folder pickers and font files are desktop-only; Android has fixed folders and system CJK fonts.
-        "game_dir" | "save_dir" | "font" | "soundfont" | "touch_mouse" => &["desktop"],
-        // Written by the in-game layout editor, never edited as text.
-        "touch_layout" => &[],
-        // Tools that write files next to the binary or read host paths.
-        "shot" | "shot_size" | "drawlog" | "anm" | "anm_int" | "anm_pos" | "anm_mode"
-        | "slot_test" => &["desktop", "web"],
-        _ if e.group == Group::Tools => NATIVE,
-        _ => ALL,
-    }
-}
+use th08::settings::{Audience, ENTRIES, Entry, Group, Kind};
 
 fn kind(k: Kind) -> Value {
     match k {
@@ -46,31 +27,105 @@ fn group_id(g: Group) -> &'static str {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+// `platforms`: the screens that show the entry; `persist`: saved to port.cfg (else launch.cfg, one start only).
+fn entry(e: &Entry) -> Value {
+    json!({
+        "key": e.key,
+        "label": e.label,
+        "help": e.help,
+        "kind": kind(e.kind),
+        "default": e.default,
+        "group": group_id(e.group),
+        "audience": match e.audience { Audience::Player => "player", Audience::Dev => "dev" },
+        "platforms": e.platforms.names(),
+        "persist": e.persist,
+    })
+}
+
+fn schema() -> Value {
     let groups: Vec<Value> = Group::ALL
         .iter()
-        .map(|&g| json!({ "id": group_id(g), "title": g.title(), "developer": g.developer() }))
+        .map(|&g| json!({ "id": group_id(g), "title": g.title() }))
         .collect();
-    let entries: Vec<Value> = ENTRIES
-        .iter()
-        .map(|e| {
-            json!({
-                "key": e.key,
-                "label": th08::launcher::label(e),
-                "help": e.help,
-                "kind": kind(e.kind),
-                "default": e.default,
-                "group": group_id(e.group),
-                "platforms": platforms(e),
-            })
-        })
-        .collect();
-    let text = serde_json::to_string_pretty(
-        &json!({ "version": 1, "groups": groups, "entries": entries }),
-    )? + "\n";
+    let entries: Vec<Value> = ENTRIES.iter().map(entry).collect();
+    json!({ "version": 2, "groups": groups, "entries": entries })
+}
+
+fn main() -> anyhow::Result<()> {
+    let text = serde_json::to_string_pretty(&schema())? + "\n";
     match std::env::args_os().nth(1) {
         Some(p) => std::fs::write(p, text)?,
         None => print!("{text}"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use th08::settings::Platforms;
+
+    // Reads one exported entry back as Schema.kt does and compares it with the table row.
+    fn round_trip(e: &Entry, j: &Value) {
+        let s = |k: &str| j[k].as_str().unwrap();
+        assert_eq!(
+            (s("key"), s("label"), s("help"), s("default")),
+            (e.key, e.label, e.help, e.default)
+        );
+        assert_eq!(s("group"), group_id(e.group));
+        let k = &j["kind"];
+        let back = match k["type"].as_str().unwrap() {
+            "bool" => Kind::Bool,
+            "int" => Kind::Int {
+                min: k["min"].as_i64().unwrap(),
+                max: k["max"].as_i64().unwrap(),
+            },
+            "enum" => match e.kind {
+                Kind::Enum(c) => {
+                    assert_eq!(k["choices"], json!(c));
+                    e.kind
+                }
+                _ => panic!("{}: not an enum", e.key),
+            },
+            "text" => match e.kind {
+                Kind::Text(f) => {
+                    assert_eq!(k["format"], f);
+                    e.kind
+                }
+                _ => panic!("{}: not text", e.key),
+            },
+            "path" => Kind::Path,
+            "file" => Kind::File,
+            t => panic!("kind {t}"),
+        };
+        assert_eq!(back, e.kind);
+        let audience = match s("audience") {
+            "player" => Audience::Player,
+            "dev" => Audience::Dev,
+            a => panic!("{a}"),
+        };
+        assert_eq!(audience, e.audience);
+        let names: Vec<String> = serde_json::from_value(j["platforms"].clone()).unwrap();
+        assert_eq!(
+            Platforms::from_names(names.iter().map(String::as_str)),
+            e.platforms
+        );
+        assert_eq!(j["persist"].as_bool().unwrap(), e.persist);
+    }
+
+    #[test]
+    fn schema_round_trip() {
+        let s = schema();
+        let entries = s["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), ENTRIES.len());
+        // One entry of each kind, from both audiences.
+        for key in [
+            "vsync", "scale", "rank", "ending", "game_dir", "font", "invuln", "turbo",
+        ] {
+            let i = ENTRIES.iter().position(|e| e.key == key).unwrap();
+            round_trip(&ENTRIES[i], &entries[i]);
+        }
+        let text = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), s);
+    }
 }

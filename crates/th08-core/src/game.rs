@@ -47,6 +47,9 @@ pub trait AudioOut {
     fn is_started(&self) -> bool;
     // Opens the output stream (on the web: from a user gesture).
     fn ensure_started(&mut self);
+    // Port (ARCH_D_MOBILE §5): output held / restarted by the app (background, port menu); no logic effect.
+    fn pause(&mut self) {}
+    fn resume(&mut self) {}
 }
 
 // The IO side of `Ctx`, built by the app or tool (ARCH decisions 2 / 6).

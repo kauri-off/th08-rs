@@ -1219,6 +1219,40 @@ impl Gfx {
         self.clear_batches();
     }
 
+    // Port UI over a held game (port menu, ARCH_D_MOBILE §5): the last rendered 640×480 frame blitted again, then
+    // `paint` on the window target; no batches run, the frame texture is untouched. False: no frame was presented.
+    pub fn present_last(
+        &mut self,
+        paint: impl FnOnce(OverlayTarget<'_>, &mut wgpu::CommandEncoder),
+    ) -> bool {
+        let Some(surface) = &self.surface else {
+            return false;
+        };
+        let frame = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            _ => {
+                surface.configure(&self.device, &self.config);
+                return false;
+            }
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        let size = (self.config.width, self.config.height);
+        self.blit(&mut enc, &view, size.0, size.1);
+        let t = OverlayTarget {
+            device: &self.device,
+            queue: &self.queue,
+            view: &view,
+            format: self.config.format,
+            size,
+        };
+        paint(t, &mut enc);
+        self.queue.submit([enc.finish()]);
+        self.queue.present(frame);
+        true
+    }
+
     fn paint_overlay(
         &mut self,
         enc: &mut wgpu::CommandEncoder,

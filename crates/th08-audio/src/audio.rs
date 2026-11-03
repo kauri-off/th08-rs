@@ -5,6 +5,7 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use th08_core::assets::Source;
 
@@ -249,6 +250,13 @@ pub struct Audio {
     source: Source,
     mixer: Arc<Mutex<Mixer>>,
     stream: Option<cpal::Stream>,
+    // Port (ARCH_D_MOBILE §5): output held by `pause`; `lost` is set by the error callback when the device or stream
+    // is gone, so `resume` builds a new stream (the mixer keeps the BGM / voice positions).
+    paused: bool,
+    lost: Arc<AtomicBool>,
+    // A stream was opened once (`is_started`; `resume` reopens only then, so the web still waits for its gesture).
+    started: bool,
+    stats: Arc<Stats>,
     // MIDI object (02 §5): the archive's .mid members by lower-case basename, the 32 file slots +0x98 and the open
     // slot +0x10 (−1 none).
     midi_files: HashMap<String, Arc<[u8]>>,
@@ -272,6 +280,10 @@ impl Audio {
             source,
             mixer,
             stream: None,
+            paused: false,
+            lost: Arc::new(AtomicBool::new(false)),
+            started: false,
+            stats: Default::default(),
             midi_files: HashMap::new(),
             midi_slots: Default::default(),
             midi_open: -1,
@@ -434,17 +446,71 @@ impl Audio {
     }
 
     pub fn is_started(&self) -> bool {
-        self.stream.is_some()
+        self.started
     }
 
     // Must be called from a user gesture on the web (AudioContext policy).
     pub fn ensure_started(&mut self) {
-        if self.stream.is_none() {
-            match open_stream(self.mixer.clone()) {
-                Ok(s) => self.stream = Some(s),
-                Err(e) => log::warn!("audio disabled: {e:#}"),
-            }
+        if !self.started && !self.paused {
+            self.open();
         }
+    }
+
+    fn open(&mut self) {
+        self.lost.store(false, Ordering::Relaxed);
+        match open_stream(self.mixer.clone(), self.lost.clone(), self.stats.clone()) {
+            Ok(s) => {
+                self.stream = Some(s);
+                self.started = true;
+            }
+            Err(e) => log::warn!("audio disabled: {e:#}"),
+        }
+    }
+
+    // Port: holds the output (app background, port menu) within one device callback. Native: the stream is closed,
+    // which discards the samples the device (AAudio / ALSA) still queues instead of letting them drain; web: the
+    // AudioContext is suspended (reopening it would need a user gesture). The mixer keeps every position. Idempotent.
+    pub fn pause(&mut self) {
+        if std::mem::replace(&mut self.paused, true) {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.stream = None;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(s) = &self.stream
+            && let Err(e) = s.pause()
+        {
+            log::warn!("audio pause: {e}; the stream is closed");
+            self.stream = None;
+        }
+        log::info!("audio: paused ({})", self.stats.summary());
+    }
+
+    // Port: output again; native (and a lost device / failed play) gets a new stream. Idempotent.
+    pub fn resume(&mut self) {
+        if !std::mem::replace(&mut self.paused, false) {
+            return;
+        }
+        let lost = self.lost.load(Ordering::Relaxed);
+        if let Some(s) = &self.stream
+            && (lost || s.play().is_err())
+        {
+            log::warn!("audio resume: stream lost or not playing; reopening");
+            self.stream = None;
+        }
+        if self.stream.is_none() && self.started {
+            self.open();
+        }
+        log::info!(
+            "audio: resumed (stream {})",
+            if self.stream.is_some() {
+                "open"
+            } else {
+                "none"
+            }
+        );
     }
 
     // Play command (02 §3): the stored part of the track (never past loop_end), read in the background.
@@ -556,10 +622,57 @@ impl th08_core::game::AudioOut for Audio {
     fn ensure_started(&mut self) {
         Audio::ensure_started(self)
     }
+    fn pause(&mut self) {
+        Audio::pause(self)
+    }
+    fn resume(&mut self) {
+        Audio::resume(self)
+    }
 }
 
 // Port: output device setup (prefers 44.1 kHz stereo so the BGM needs no resampling).
-fn open_stream(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
+// Android output callback in frames (10 ms at 48 kHz); the AAudio capacity is twice that.
+const ANDROID_FRAMES: u32 = 480;
+
+// Port: device callback counts for the latency log (frames per callback = the mixer → device granularity).
+#[derive(Default)]
+struct Stats {
+    callbacks: AtomicU64,
+    frames: AtomicU64,
+    max_frames: AtomicU64,
+    rate: AtomicU64,
+    // Underruns reported by the backend (AAudio xrun count).
+    xruns: AtomicU64,
+}
+
+impl Stats {
+    fn on_callback(&self, frames: u64) {
+        self.callbacks.fetch_add(1, Ordering::Relaxed);
+        self.frames.fetch_add(frames, Ordering::Relaxed);
+        self.max_frames.fetch_max(frames, Ordering::Relaxed);
+    }
+
+    fn summary(&self) -> String {
+        let n = self.callbacks.load(Ordering::Relaxed);
+        let rate = self.rate.load(Ordering::Relaxed).max(1) as f64;
+        let max = self.max_frames.load(Ordering::Relaxed);
+        let avg = self.frames.load(Ordering::Relaxed) as f64 / n.max(1) as f64;
+        format!(
+            "{n} callbacks, avg {avg:.0} / max {max} frames = {:.1} / {:.1} ms, {} xruns",
+            avg * 1000.0 / rate,
+            max as f64 * 1000.0 / rate,
+            self.xruns.load(Ordering::Relaxed)
+        )
+    }
+}
+
+// Android: with cpal's `realtime` feature the AAudio stream asks for the LowLatency performance mode (fast mixer /
+// MMAP path, buffer ≈ 2 bursts, tuned up by cpal on underruns) instead of the default deep-buffer path.
+fn open_stream(
+    mixer: Arc<Mutex<Mixer>>,
+    lost: Arc<AtomicBool>,
+    stats: Arc<Stats>,
+) -> Result<cpal::Stream> {
     let host = cpal::default_host();
     let pick = |want: &str| {
         host.output_devices().ok()?.find(|d| {
@@ -575,22 +688,66 @@ fn open_stream(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
     let def = dev.default_output_config()?;
     let channels = def.channels() as usize;
     let mut cfg: cpal::StreamConfig = def.config();
+    // Android: the device's native rate (48 kHz on most phones), else AudioFlinger resamples and the LowLatency
+    // fast path is refused; the mixer resamples BGM / SE itself.
+    let want = if cfg!(target_os = "android") {
+        cfg.sample_rate
+    } else {
+        44100
+    };
     if dev
         .supported_output_configs()?
-        .any(|c| c.channels() == 2 && c.min_sample_rate() <= 44100 && c.max_sample_rate() >= 44100)
+        .any(|c| c.channels() == 2 && c.min_sample_rate() <= want && c.max_sample_rate() >= want)
     {
-        cfg.sample_rate = 44100;
+        cfg.sample_rate = want;
         cfg.channels = 2;
     }
     let channels = if cfg.channels == 2 { 2 } else { channels };
+    // Android: a fixed small callback (AAudio capacity = 2 callbacks), else the legacy path keeps AudioTrack's
+    // ~90 ms default buffer.
+    if cfg!(target_os = "android") {
+        cfg.buffer_size = cpal::BufferSize::Fixed(ANDROID_FRAMES);
+    }
     mixer.lock().unwrap().out_rate = cfg.sample_rate as f64;
+    stats.rate.store(cfg.sample_rate as u64, Ordering::Relaxed);
+    let cb_stats = stats.clone();
+    let err_stats = stats.clone();
     let stream = dev.build_output_stream(
         cfg,
-        move |out: &mut [f32], _| mixer.lock().unwrap().render(out, channels),
-        |e| log::warn!("audio error: {e}"),
+        move |out: &mut [f32], _| {
+            cb_stats.on_callback((out.len() / channels) as u64);
+            mixer.lock().unwrap().render(out, channels)
+        },
+        move |e| {
+            match e.kind() {
+                cpal::ErrorKind::Xrun => {
+                    err_stats.xruns.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                // No real-time thread priority (emulator, most non-system apps): informational.
+                cpal::ErrorKind::RealtimeDenied => return log::info!("audio: {e}"),
+                _ => {}
+            }
+            log::warn!("audio error: {e}");
+            if matches!(
+                e.kind(),
+                cpal::ErrorKind::DeviceNotAvailable
+                    | cpal::ErrorKind::StreamInvalidated
+                    | cpal::ErrorKind::HostUnavailable
+            ) {
+                lost.store(true, Ordering::Relaxed);
+            }
+        },
         None,
     )?;
     stream.play()?;
+    let burst = stream.buffer_size().unwrap_or(0);
+    log::info!(
+        "audio: stream {} Hz × {channels}, buffer {:?}, callback / burst {burst} frames = {:.1} ms",
+        cfg.sample_rate,
+        cfg.buffer_size,
+        burst as f64 * 1000.0 / cfg.sample_rate as f64
+    );
     Ok(stream)
 }
 

@@ -33,15 +33,16 @@ struct Ui {
 
 // The port shell around the game (port UI, no spec section). Transitions:
 // Loading(device) → Setup | Loading(game); Setup → Loading(game) on Play; Loading(game) → Running | Error;
-// Error → Setup on Back; Running ⇄ PortMenu on F1; Quit / close from any state.
+// Error → Setup on Back; Running ⇄ PortMenu on F1 / Android Back (in a stage) and Running → PortMenu on a resume
+// from the background (in a stage); Quit / close from any state.
 enum Shell {
     // The launcher screen (also the saved `launcher = off` wait).
     Setup(Box<Ui>),
     // A start-up step runs: the window's device, then th08.dat / audio (its one "Loading" frame is already drawn).
     Loading,
     Running(Box<Running>),
-    // F1 over the game, whose pacer is suspended; the screen draws on the game's own device.
-    PortMenu(Box<Running>, Box<Screen>),
+    // The port menu over the game's last frame; the game's pacer is suspended and its audio paused.
+    PortMenu(Box<Running>, Box<crate::platform::portmenu::PortMenu>),
     Error(Box<Ui>),
 }
 
@@ -85,6 +86,11 @@ struct App {
     suspended: bool,
     // Last safe-area read (`refresh_safe`).
     safe_at: Option<Instant>,
+    // Window focus, and whether audio pauses while unfocused: always on Android (focus goes at Home / recents,
+    // before `Suspended` = surface destroyed); desktop opt-in `TH08_PAUSE_AUDIO_UNFOCUSED`, default off (its
+    // launcher row waits for the settings table).
+    focused: bool,
+    focus_pause: bool,
     // Port display: Alt held; the fullscreen state, owned here (`set_fullscreen`).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     alt: bool,
@@ -140,17 +146,23 @@ impl ApplicationHandler<UserEvent> for App {
         });
     }
 
-    // ARCH_D §5: the native window is gone (Android home / screen off); drop the surface, freeze logic.
+    // ARCH_D §5: the native window is gone (Android home / screen off); drop the surface, freeze logic, pause audio
+    // and write score.dat from a World clone (the process may be killed in the background; a live save would draw
+    // RNG, rule ARCH_D §6.1 item 3).
     fn suspended(&mut self, _: &ActiveEventLoop) {
+        log::info!("lifecycle: suspended");
         self.suspended = true;
         match &mut self.shell {
             Shell::Running(r) | Shell::PortMenu(r, _) => {
                 r.pacer.suspend();
                 gfx(&mut r.ctx).detach();
+                let n = r.ctx.save_from_clone().len();
+                log::info!("suspend: score.dat saved from a World clone ({n} bytes)");
             }
             Shell::Setup(ui) | Shell::Error(ui) => ui.gfx.detach(),
             Shell::Loading => {}
         }
+        self.sync_audio();
     }
 
     fn user_event(&mut self, el: &ActiveEventLoop, ev: UserEvent) {
@@ -172,6 +184,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.window().request_redraw();
                 }
                 self.shell = Shell::Running(r);
+                self.sync_audio();
             }
             UserEvent::Gfx(mut gfx) => {
                 gfx.safe = self.read_safe();
@@ -197,20 +210,23 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
-        let screen = match &self.shell {
-            Shell::Setup(ui) | Shell::Error(ui) => &ui.screen,
-            Shell::PortMenu(_, s) => &**s,
+        let (waiting, repaint_at) = match &self.shell {
+            Shell::Setup(ui) | Shell::Error(ui) => (
+                ui.screen.model().view == View::Waiting,
+                ui.screen.repaint_at,
+            ),
+            Shell::PortMenu(_, m) => (false, m.repaint_at),
             Shell::Loading | Shell::Running(_) => return,
         };
         if let Some(t) = self.auto_at
-            && screen.model().view == View::Waiting
+            && waiting
         {
             if t <= Instant::now() {
                 return self.play(el);
             }
             return el.set_control_flow(ControlFlow::WaitUntil(t));
         }
-        match screen.repaint_at {
+        match repaint_at {
             Some(t) if t <= Instant::now() => {
                 self.window().request_redraw();
                 el.set_control_flow(ControlFlow::Wait);
@@ -237,9 +253,16 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         match &ev {
-            WindowEvent::Resized(_)
-            | WindowEvent::ScaleFactorChanged { .. }
-            | WindowEvent::Focused(true) => self.refresh_safe(true),
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                self.refresh_safe(true)
+            }
+            WindowEvent::Focused(f) => {
+                self.focused = *f;
+                if *f {
+                    self.refresh_safe(true);
+                }
+                self.sync_audio();
+            }
             WindowEvent::RedrawRequested => self.refresh_safe(false),
             _ => {}
         }
@@ -269,6 +292,10 @@ impl App {
             auto_at: None,
             suspended: false,
             safe_at: None,
+            focused: true,
+            focus_pause: cfg!(target_os = "android")
+                || std::env::var("TH08_PAUSE_AUDIO_UNFOCUSED")
+                    .is_ok_and(|v| crate::settings::parse_bool(&v) == Ok(true)),
             alt: false,
         }
     }
@@ -307,27 +334,43 @@ impl App {
         Box::new(Ui { gfx, screen })
     }
 
-    // A second `Resumed` (ARCH_D §5): a new surface for the native window on the same device; the pacer deadline
-    // restarts at now (not while the port menu holds the game). Audio is not touched here.
+    // A second `Resumed` (ARCH_D §5): a new surface for the native window on the same device. In a stage the port
+    // menu opens over the last frame (the player is not dropped into live play); elsewhere the pacer deadline restarts
+    // at now (no catch-up). Audio resumes unless the port menu holds the game.
     fn reattach(&mut self) {
         if !std::mem::take(&mut self.suspended) {
             return;
         }
+        log::info!("lifecycle: resumed");
         let window = self.window().clone();
         let res = match &mut self.shell {
-            Shell::Running(r) => {
-                r.pacer.resume(Instant::now());
-                gfx(&mut r.ctx).attach(window.clone())
-            }
-            Shell::PortMenu(r, _) => gfx(&mut r.ctx).attach(window.clone()),
+            Shell::Running(r) | Shell::PortMenu(r, _) => gfx(&mut r.ctx).attach(window.clone()),
             Shell::Setup(ui) | Shell::Error(ui) => ui.gfx.attach(window.clone()),
             Shell::Loading => Ok(()),
         };
         if let Err(e) = res {
             log::error!("surface: {e:#}");
         }
+        if let Shell::Running(r) = &mut self.shell {
+            if in_stage(r) {
+                self.open_port_menu();
+            } else {
+                r.pacer.resume(Instant::now());
+            }
+        }
+        self.sync_audio();
         self.refresh_safe(true);
         window.request_redraw();
+    }
+
+    // Game audio is held while suspended, while the port menu is open and (opt-in) while the window is unfocused.
+    fn sync_audio(&mut self) {
+        let hold = self.suspended || (self.focus_pause && !self.focused);
+        match &mut self.shell {
+            Shell::Running(r) if !hold => r.ctx.audio.resume(),
+            Shell::Running(r) | Shell::PortMenu(r, _) => r.ctx.audio.pause(),
+            _ => {}
+        }
     }
 
     // The window's safe area now (platform insets + `screen_margin`).
@@ -523,23 +566,24 @@ impl App {
         self.shell = Shell::Error(self.ui(gfx, View::Error(msg)));
     }
 
-    // F1: the port menu over the game; its pacer stops and held keys are released (as on focus loss).
+    // F1 / Back / resume from the background: the port menu over the game; its pacer stops, audio pauses and held
+    // keys are released (as on focus loss).
     fn open_port_menu(&mut self) {
         let Shell::Running(mut r) = std::mem::replace(&mut self.shell, Shell::Loading) else {
             return;
         };
+        log::info!("port menu: open");
         r.pacer.suspend();
         if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
             h.input.set_focus(false);
         }
-        let mut model = crate::launcher::Model::new(&r.settings, Folder::Native);
-        model.view = View::PortMenu;
-        let screen = Screen::new(self.window(), gfx(&mut r.ctx), model);
-        self.shell = Shell::PortMenu(r, Box::new(screen));
+        let menu = crate::platform::portmenu::PortMenu::new(self.window());
+        self.shell = Shell::PortMenu(r, Box::new(menu));
+        self.sync_audio();
         self.window().request_redraw();
     }
 
-    // Resume: the screen's GPU objects go, the pacer deadline restarts at now (the time in the menu is not caught up).
+    // Resume: the menu's GPU objects go, the pacer deadline restarts at now (the time in the menu is not caught up).
     fn resume_game(&mut self, el: &ActiveEventLoop) {
         let Shell::PortMenu(mut r, screen) = std::mem::replace(&mut self.shell, Shell::Loading)
         else {
@@ -552,7 +596,9 @@ impl App {
         if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
             h.input.set_focus(true);
         }
+        log::info!("port menu: resume");
         self.shell = Shell::Running(r);
+        self.sync_audio();
         el.set_control_flow(ControlFlow::Wait);
         self.window().request_redraw();
     }
@@ -572,10 +618,11 @@ impl App {
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == ElementState::Pressed
                     && !event.repeat
-                    && matches!(
-                        event.physical_key,
-                        PhysicalKey::Code(KeyCode::F1 | KeyCode::Escape)
-                    ) =>
+                    && (is_back(&event)
+                        || matches!(
+                            event.physical_key,
+                            PhysicalKey::Code(KeyCode::F1 | KeyCode::Escape)
+                        )) =>
             {
                 self.resume_game(el)
             }
@@ -608,6 +655,12 @@ impl App {
                 if event.physical_key == PhysicalKey::Code(KeyCode::F1) =>
             {
                 if event.state == ElementState::Pressed && !event.repeat {
+                    self.open_port_menu();
+                }
+            }
+            // Android Back: the port menu in a stage; ignored elsewhere (leaving is the launcher activity's job).
+            WindowEvent::KeyboardInput { event, .. } if is_back(&event) => {
+                if event.state == ElementState::Pressed && !event.repeat && in_stage(r) {
                     self.open_port_menu();
                 }
             }
@@ -666,6 +719,21 @@ impl App {
             _ => {}
         }
     }
+}
+
+// In a stage (scene game): where Back and a resume from the background open the port menu.
+fn in_stage(r: &Running) -> bool {
+    r.ctx.w.game.scene == th08_core::gamemgr::SCENE_GAME
+}
+
+// The Android Back button (logical BrowserBack / GoBack, physical BrowserBack); on Android Escape counts too.
+fn is_back(e: &winit::event::KeyEvent) -> bool {
+    use winit::keyboard::{Key, NamedKey};
+    matches!(
+        e.logical_key,
+        Key::Named(NamedKey::BrowserBack | NamedKey::GoBack)
+    ) || e.physical_key == PhysicalKey::Code(KeyCode::BrowserBack)
+        || (cfg!(target_os = "android") && e.physical_key == PhysicalKey::Code(KeyCode::Escape))
 }
 
 // Closing the window mid-game. Tool `replay_save`: the recording is still written.

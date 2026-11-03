@@ -1,6 +1,6 @@
 // Android settings screen (MATERIAL1): Material 3 cards built from the settings table, Play starts the Rust
 // NativeActivity in the ":game" process. Player rows are saved to port.cfg on change (as the egui launcher's
-// `Model::changes`); Developer rows go to launch.cfg for the next start only.
+// `Model::changes`) when the table marks them `persist`; the other rows go to launch.cfg for the next start only.
 package org.th08.port
 
 import android.app.NativeActivity
@@ -82,7 +82,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import java.io.File
 
 // One table entry as edited on screen; value "" = unset, booleans "on"/"off".
-class Setting(val e: Entry, val developer: Boolean, initial: String) {
+class Setting(val e: Entry, initial: String) {
     var initial = initial
     var value by mutableStateOf(initial)
 
@@ -106,11 +106,10 @@ class LauncherActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         schema = Schema.load(this)
-        val dev = schema.groups.filter { it.developer }.map { it.id }.toSet()
         val cfg = PortCfg.read(cfgFile)
         rows = schema.entries.filter { it.android }.map { e ->
             val saved = cfg[e.key]?.let { norm(e.kind, it) }?.takeIf { it.isNotEmpty() }
-            Setting(e, e.group in dev, saved ?: e.default)
+            Setting(e, saved ?: e.default)
         }
         setContent { Th08Theme { Screen() } }
     }
@@ -126,7 +125,7 @@ class LauncherActivity : ComponentActivity() {
 
     private fun change(r: Setting, v: String) {
         r.value = v
-        if (r.developer || r.error() != null) return
+        if (!r.e.persist || r.error() != null) return
         PortCfg.write(cfgFile, r.e.key, v.takeIf { it.isNotEmpty() && it != r.e.default })
     }
 
@@ -136,7 +135,7 @@ class LauncherActivity : ComponentActivity() {
 
     private fun play() {
         val once = listOf("launcher" to "off") + rows
-            .filter { it.developer && it.value != it.initial && it.value.isNotEmpty() && it.error() == null }
+            .filter { !it.e.persist && it.value != it.initial && it.value.isNotEmpty() && it.error() == null }
             .map { it.e.key to it.value }
         PortCfg.writeLaunch(File(filesDir, "launch.cfg"), once)
         startActivity(Intent(this, NativeActivity::class.java))
@@ -151,7 +150,7 @@ class LauncherActivity : ComponentActivity() {
         }
         val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
         var menu by remember { mutableStateOf(false) }
-        var devOpen by remember { mutableStateOf(rows.any { it.developer && it.value != it.e.default }) }
+        var devOpen by remember { mutableStateOf(rows.any { it.e.developer && it.value != it.e.default }) }
         val canPlay = data != GameData.Unavailable && (data as? GameData.Folder)?.found != false &&
             rows.none { it.error() != null }
         Scaffold(
@@ -191,13 +190,15 @@ class LauncherActivity : ComponentActivity() {
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 item { StatusCard(data) }
-                items(schema.groups.filter { g -> !g.developer && rows.any { it.e.group == g.id } }) { g ->
-                    GroupCard(g.title, rows.filter { it.e.group == g.id })
+                val player = rows.filterNot { it.e.developer }
+                val dev = rows.filter { it.e.developer }
+                items(schema.groups.filter { g -> player.any { it.e.group == g.id } }) { g ->
+                    GroupCard(g.title, player.filter { it.e.group == g.id })
                 }
                 item {
                     DeveloperCard(devOpen, { devOpen = !devOpen }) {
-                        for (g in schema.groups.filter { it.developer }) {
-                            val rs = rows.filter { it.e.group == g.id }
+                        for (g in schema.groups) {
+                            val rs = dev.filter { it.e.group == g.id }
                             if (rs.isEmpty()) continue
                             Text(g.title, style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.primary,

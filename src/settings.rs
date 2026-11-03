@@ -15,6 +15,69 @@ pub enum Origin {
     PortCfg,
     Env,
     Cli,
+    // Edited on a settings screen (the egui launcher's Play).
+    Launcher,
+}
+
+// Who a settings screen shows an entry to: players, or the developer view only (cheats, tools).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Audience {
+    Player,
+    Dev,
+}
+
+// Platforms whose settings screen shows an entry (bit set: desktop, web, Android).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Platforms(u8);
+
+impl Platforms {
+    pub const NONE: Self = Self(0);
+    pub const DESKTOP: Self = Self(1);
+    pub const WEB: Self = Self(2);
+    pub const ANDROID: Self = Self(4);
+    pub const ALL: Self = Self(7);
+    pub const DESKTOP_WEB: Self = Self(3);
+    // Desktop and Android (host files, no browser sandbox).
+    pub const NATIVE: Self = Self(5);
+    // Web and Android (touch screens).
+    pub const TOUCH: Self = Self(6);
+    pub const NAMES: [(Self, &'static str); 3] = [
+        (Self::DESKTOP, "desktop"),
+        (Self::WEB, "web"),
+        (Self::ANDROID, "android"),
+    ];
+
+    // The platform this build runs on.
+    pub const HERE: Self = if cfg!(target_os = "android") {
+        Self::ANDROID
+    } else if cfg!(target_arch = "wasm32") {
+        Self::WEB
+    } else {
+        Self::DESKTOP
+    };
+
+    pub const fn contains(self, p: Self) -> bool {
+        p.0 != 0 && self.0 & p.0 == p.0
+    }
+
+    // Inverse of `names`; unknown names are ignored.
+    pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut bits = 0;
+        for n in names {
+            if let Some((p, _)) = Self::NAMES.iter().find(|(_, m)| *m == n) {
+                bits |= p.0;
+            }
+        }
+        Self(bits)
+    }
+
+    pub fn names(self) -> Vec<&'static str> {
+        Self::NAMES
+            .iter()
+            .filter(|(p, _)| self.contains(*p))
+            .map(|(_, n)| *n)
+            .collect()
+    }
 }
 
 // Value type of an entry (drives parsing checks, `--help` and a settings UI).
@@ -61,11 +124,6 @@ impl Group {
             Group::Tools => "Recording/tools",
         }
     }
-
-    // Launcher screen: shown only in the developer view; edits there apply to the run, never saved.
-    pub fn developer(self) -> bool {
-        matches!(self, Group::Cheats | Group::Tools)
-    }
 }
 
 const U32: i64 = u32::MAX as i64;
@@ -77,18 +135,29 @@ const I64_MIN: i64 = i64::MIN;
 type Setter = fn(&mut Settings, &str) -> Result<(), String>;
 
 // One setting: `key` is the port.cfg key and the `--key` flag (`-` or `_`); `env` the env var; the web URL param
-// is `env` without `TH08_`, lowercase. `default` is the value text ("" = unset).
+// is `env` without `TH08_`, lowercase. `default` is the value text ("" = unset). `label`, `audience`,
+// `platforms` and `persist` are for settings screens (egui launcher, Android launcher via `settings_schema`).
 pub struct Entry {
     pub key: &'static str,
     pub env: &'static str,
     pub kind: Kind,
     pub default: &'static str,
     pub group: Group,
+    pub label: &'static str,
+    pub audience: Audience,
+    pub platforms: Platforms,
+    // Saved to port.cfg / localStorage when edited on a screen; false = this run only.
+    pub persist: bool,
     pub help: &'static str,
     set: Setter,
 }
 
 impl Entry {
+    // Shown on this platform's settings screen.
+    pub fn shown_on_this_platform(&self) -> bool {
+        self.platforms.contains(Platforms::HERE)
+    }
+
     pub fn url(&self) -> String {
         self.env
             .strip_prefix("TH08_")
@@ -337,6 +406,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Path,
         default: "",
         group: Group::GameData,
+        label: "Game folder",
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP,
+        persist: true,
         help: "game folder with th08.dat and thbgm.dat (also the first plain argument)",
         set: |s, v| {
             s.game_dir = Some(PathBuf::from(v));
@@ -349,6 +422,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 1, max: 4 },
         default: "1",
         group: Group::Display,
+        label: "Window size",
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: true,
         help: "window size 640x480 times this (native)",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -362,6 +439,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Display,
+        label: "Fullscreen",
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: true,
         help: "start fullscreen (native; F11 or Alt+Enter toggles and saves)",
         set: |s, v| {
             s.fullscreen = parse_bool(v)?;
@@ -374,6 +455,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "on",
         group: Group::Display,
+        label: "VSync",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "present with vsync (default on); frame pacing is separate",
         set: |s, v| {
             s.vsync = parse_bool(v)?;
@@ -386,6 +471,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: 200 },
         default: "0",
         group: Group::Display,
+        label: "Screen margin (dp)",
+        audience: Audience::Player,
+        platforms: Platforms::TOUCH,
+        persist: true,
         help: "extra margin on every screen edge in dp, for phones whose cutout / corner insets are wrong",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -399,6 +488,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "on",
         group: Group::Display,
+        label: "Show this screen at start",
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: true,
         help: "show this screen at start; when off, hold Shift while th08 starts (web: ?launcher=1) to see it again",
         set: |s, v| {
             s.launcher = parse_bool(v)?;
@@ -411,6 +504,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Enum(&["auto", "on", "off"]),
         default: "auto",
         group: Group::Touch,
+        label: "Touch overlay",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "touch overlay: auto (touch platforms), on, off",
         set: |s, v| {
             use crate::platform::touch::TouchMode;
@@ -429,6 +526,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Enum(&["drag", "stick"]),
         default: "drag",
         group: Group::Touch,
+        label: "Movement",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "movement: drag (the player follows the finger's movement) or a floating stick",
         set: |s, v| {
             use crate::platform::touch::Movement;
@@ -446,6 +547,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 25, max: 400 },
         default: "100",
         group: Group::Touch,
+        label: "Drag sensitivity %",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "drag sensitivity in percent (100 = the player follows the finger 1:1 on the game picture)",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -459,6 +564,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Enum(&["hold", "toggle"]),
         default: "hold",
         group: Group::Touch,
+        label: "Focus button",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "FOCUS button: held, or a toggle",
         set: |s, v| {
             s.touch.focus_toggle = match v.trim() {
@@ -475,6 +584,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "on",
         group: Group::Touch,
+        label: "Auto-fire",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "auto-fire at start (in play only; the AUTO button toggles it)",
         set: |s, v| {
             s.touch.autofire = parse_bool(v)?;
@@ -487,6 +600,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 10, max: 100 },
         default: "50",
         group: Group::Touch,
+        label: "Overlay opacity %",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "overlay opacity in percent",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -500,6 +617,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("L:name,x,y,w,h,opacity,visible;…|P:…"),
         default: "",
         group: Group::Touch,
+        label: "Overlay layout",
+        audience: Audience::Player,
+        platforms: Platforms::NONE,
+        persist: true,
         help: "overlay layout per orientation (empty = default; written by the layout editor)",
         set: |s, v| {
             s.touch.layout = crate::platform::touch::TouchLayout::parse(v)?;
@@ -512,6 +633,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Path,
         default: "",
         group: Group::GameData,
+        label: "Save folder",
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP,
+        persist: true,
         help: "where score.dat and replays are saved (default: the port config dir)",
         set: |s, v| {
             s.save_dir = Some(PathBuf::from(v));
@@ -524,6 +649,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::File,
         default: "",
         group: Group::GameData,
+        label: "Dialogue font",
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP,
+        persist: true,
         help: "Japanese font for dialogue text (native)",
         set: |s, v| {
             s.font = Some(v.to_string());
@@ -536,6 +665,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::File,
         default: "",
         group: Group::GameData,
+        label: "MIDI SoundFont",
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP,
+        persist: true,
         help: "General MIDI SoundFont (.sf2) for music mode MIDI (native; default: system soundfonts dirs)",
         set: |s, v| {
             s.soundfont = Some(PathBuf::from(v));
@@ -548,6 +681,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: 65535 },
         default: "",
         group: Group::StartGame,
+        label: "RNG seed",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "fixed boot RNG seed (0-65535)",
         set: |s, v| {
             s.seed = Some(num(v)?);
@@ -560,6 +697,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Enum(&["1", "2", "3", "4a", "4b", "5", "6a", "6b", "ex"]),
         default: "",
         group: Group::StartGame,
+        label: "Start at stage",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "start a game at that stage (also stageN[.std], idx:N)",
         set: |s, v| {
             s.stage = Some(th08_core::stage::parse_stage_arg(v).ok_or("unknown stage")?);
@@ -572,6 +713,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: U32 },
         default: "0",
         group: Group::StartGame,
+        label: "Stage start frame",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "fast-forward the stage n frames on its first calc",
         set: |s, v| {
             s.stage_frame = num(v)?;
@@ -597,6 +742,10 @@ pub const ENTRIES: &[Entry] = &[
         ]),
         default: "",
         group: Group::StartGame,
+        label: "Shot type",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "shot type 0-11 or a name (reimu&yukari, ry, marisa, ...) for --stage/--ending",
         set: |s, v| {
             s.player = Some(th08_core::player::parse_shot(v).ok_or("unknown shot type")?);
@@ -609,6 +758,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Enum(&["easy", "normal", "hard", "lunatic", "extra"]),
         default: "",
         group: Group::StartGame,
+        label: "Difficulty",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "difficulty for --stage/--ending (also e/n/h/l/x, 0-4)",
         set: |s, v| {
             s.rank = Some(th08_core::enemy::parse_difficulty(v).ok_or("unknown difficulty")?);
@@ -621,6 +774,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: 128 },
         default: "",
         group: Group::StartGame,
+        label: "Starting power",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "player power at the first stage",
         set: |s, v| {
             s.power = Some(num(v)?);
@@ -633,6 +790,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: 255 },
         default: "0",
         group: Group::StartGame,
+        label: "Continues used",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "continues used, for --ending",
         set: |s, v| {
             s.continues = num(v)?;
@@ -645,6 +806,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("<shot><a|b|c> | FILE.end"),
         default: "",
         group: Group::StartGame,
+        label: "Play ending",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "start an ending: <shot><a|b|c> (bad / good 6A / good 6B) or a .end file",
         set: |s, v| {
             s.ending = Some(parse_ending(v)?);
@@ -657,6 +822,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("FILE | demo0-3"),
         default: "",
         group: Group::StartGame,
+        label: "Play replay",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "play a replay file or an attract demo",
         set: |s, v| {
             s.replay = Some(v.to_string());
@@ -669,6 +838,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: 2 },
         default: "0",
         group: Group::StartGame,
+        label: "Replay speed",
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
         help: "replay playback speed",
         set: |s, v| {
             s.replay_speed = num(v)?;
@@ -681,6 +854,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 1, max: 15 },
         default: "",
         group: Group::Tools,
+        label: "Save replay to slot",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "save the recording to that replay slot when the game ends",
         set: |s, v| {
             s.replay_save = Some(num(v)?);
@@ -693,6 +870,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("FILE | frames:mask,..."),
         default: "",
         group: Group::Tools,
+        label: "Input script",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "input script file or inline `frames:mask,...`",
         set: |s, v| {
             s.input = Some(v.to_string());
@@ -705,6 +886,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Cheats,
+        label: "Invulnerable",
+        audience: Audience::Dev,
+        platforms: Platforms::ALL,
+        persist: false,
         help: "the player can't die",
         set: |s, v| {
             s.invuln = parse_bool(v)?;
@@ -717,6 +902,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Cheats,
+        label: "Unlock everything",
+        audience: Audience::Dev,
+        platforms: Platforms::ALL,
+        persist: false,
         help: "unlock everything in the menus",
         set: |s, v| {
             s.unlock = parse_bool(v)?;
@@ -729,6 +918,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: I32 },
         default: "0",
         group: Group::Cheats,
+        label: "Enemy damage per frame",
+        audience: Audience::Dev,
+        platforms: Platforms::ALL,
+        persist: false,
         help: "damage per frame to every on-screen shootable enemy",
         set: |s, v| {
             s.enemy_dmg = num(v)?;
@@ -741,6 +934,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: 4 },
         default: "",
         group: Group::Cheats,
+        label: "Force bomb",
+        audience: Audience::Dev,
+        platforms: Platforms::ALL,
+        persist: false,
         help: "force the bomb index (4 = dissolve spell)",
         set: |s, v| {
             let i: usize = num(v)?;
@@ -754,6 +951,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("SHOT,ANY[,NC]"),
         default: "",
         group: Group::Cheats,
+        label: "Clear masks",
+        audience: Audience::Dev,
+        platforms: Platforms::ALL,
+        persist: false,
         help: "set that shot's clear masks on every difficulty",
         set: |s, v| {
             let m = v.split(',').map(mask).collect::<Result<Vec<_>, _>>()?;
@@ -771,6 +972,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("F:T,P0,P1,P2,P3"),
         default: "",
         group: Group::Cheats,
+        label: "Screen effect",
+        audience: Audience::Dev,
+        platforms: Platforms::ALL,
+        persist: false,
         help: "queue screen effect T at game frame F",
         set: |s, v| {
             let n: Vec<i64> = v.split([':', ',']).map(num).collect::<Result<_, _>>()?;
@@ -784,6 +989,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: I64 },
         default: "",
         group: Group::Tools,
+        label: "Screenshot at frame",
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: false,
         help: "save /tmp/th08_shot.png at that frame and exit (web: freeze)",
         set: |s, v| {
             s.shot = Some(num(v)?);
@@ -796,6 +1005,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("WxH"),
         default: "",
         group: Group::Tools,
+        label: "Screenshot size",
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: false,
         help: "send --shot through the window's scaling blit at that size",
         set: |s, v| {
             s.shot_size = Some(pair(v, 'x')?);
@@ -808,6 +1021,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Tools,
+        label: "Mouse as touch",
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP,
+        persist: false,
         help: "the mouse acts as one finger and the touch overlay is shown (test touch without a phone)",
         set: |s, v| {
             s.touch.mouse = parse_bool(v)?;
@@ -820,6 +1037,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: U32 },
         default: "0",
         group: Group::Tools,
+        label: "Turbo",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "N logic frames per drawn frame, no frame pacing",
         set: |s, v| {
             s.turbo = num(v)?;
@@ -832,6 +1053,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: I32 },
         default: "",
         group: Group::Tools,
+        label: "ANM slot test",
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: false,
         help: "draw that ANM slot's sprites in a grid",
         set: |s, v| {
             s.slot_test = Some(num(v)?);
@@ -844,6 +1069,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("FILE:SCRIPTS[:pf]"),
         default: "",
         group: Group::Tools,
+        label: "ANM viewer",
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: false,
         help: "run ANM scripts live instead of the game",
         set: |s, v| {
             s.anm = Some(v.to_string());
@@ -856,6 +1085,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("F:ID,..."),
         default: "",
         group: Group::Tools,
+        label: "ANM interrupts",
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: false,
         help: "--anm interrupts at those frames",
         set: |s, v| {
             s.anm_int = v
@@ -871,6 +1104,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("X,Y[,DX]"),
         default: "",
         group: Group::Tools,
+        label: "ANM positions",
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: false,
         help: "--anm VM i at (x + i*dx, y)",
         set: |s, v| {
             s.anm_pos = list(v)?;
@@ -886,6 +1123,10 @@ pub const ENTRIES: &[Entry] = &[
         },
         default: "",
         group: Group::Tools,
+        label: "ANM draw mode",
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: false,
         help: "--anm forced draw mode",
         set: |s, v| {
             s.anm_mode = Some(num(v)?);
@@ -898,6 +1139,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Tools,
+        label: "Log sound effects",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "log each frame's flushed sound effect ids",
         set: |s, v| {
             s.se_log = parse_bool(v)?;
@@ -910,6 +1155,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("PATH[,A-B | ,dA-B]"),
         default: "",
         group: Group::Tools,
+        label: "Draw log",
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: false,
         help: "write a plain-text draw log: <path>[,from-to] (.xz logs: session / drawrun tools)",
         set: |s, v| {
             s.drawlog = Some(v.to_string());
@@ -922,6 +1171,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("K,..."),
         default: "",
         group: Group::Tools,
+        label: "Result screenshots",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "tests: result-screen screenshots at those frames",
         set: |s, v| {
             s.result_shots = list(v)?;
@@ -934,6 +1187,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: U32 },
         default: "4000",
         group: Group::Tools,
+        label: "Test frames per shot",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "tests: frames per shot type in the scripted player test",
         set: |s, v| {
             s.test_frames = num(v)?;
@@ -949,6 +1206,10 @@ pub const ENTRIES: &[Entry] = &[
         },
         default: "",
         group: Group::Tools,
+        label: "Session RNG sites",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "session tool: RNG call sites of that menu frame",
         set: |s, v| {
             s.session_rng = Some(num(v)?);
@@ -961,6 +1222,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Text("A-B"),
         default: "",
         group: Group::Tools,
+        label: "Session dump",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "session tool: player and items after each calc of menu frames A..B",
         set: |s, v| {
             s.session_dump = Some(pair(v, '-')?);
@@ -973,6 +1238,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Tools,
+        label: "Session player bullets",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "session tool: also dump player bullets",
         set: |s, v| {
             s.session_pb = parse_bool(v)?;
@@ -985,6 +1254,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Tools,
+        label: "Bullet dump",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "demosync tool: enemies and bullets per frame",
         set: |s, v| {
             s.bdump = parse_bool(v)?;
@@ -997,6 +1270,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Tools,
+        label: "Item dump",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "demosync tool: player and items per frame",
         set: |s, v| {
             s.idump = parse_bool(v)?;
@@ -1009,6 +1286,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 0, max: 255 },
         default: "",
         group: Group::Tools,
+        label: "Effect dump",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "demosync tool: effects of that type per frame",
         set: |s, v| {
             s.edump = Some(num(v)?);
@@ -1021,6 +1302,10 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
         default: "off",
         group: Group::Tools,
+        label: "Shot file dump",
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
         help: "tests: print every parsed .sht file",
         set: |s, v| {
             s.sht_dump = parse_bool(v)?;
@@ -1049,12 +1334,7 @@ impl Settings {
         }
     }
 
-    // Sets one entry by key (a settings UI); the caller saves it with `save_port_cfg` if wanted.
-    pub fn set(&mut self, key: &str, v: &str) -> Result<(), String> {
-        self.set_from(Origin::Cli, key, v)
-    }
-
-    // As `set`, with the given origin.
+    // Sets one entry by key; the caller saves it with `save_port_cfg` if wanted.
     pub fn set_from(&mut self, origin: Origin, key: &str, v: &str) -> Result<(), String> {
         let e = find(key).ok_or_else(|| format!("unknown setting {key}"))?;
         e.parse_into(self, v.trim())?;
@@ -1268,6 +1548,7 @@ fn origin_name(o: Origin) -> &'static str {
         Origin::Env if cfg!(target_arch = "wasm32") => "URL:",
         Origin::Env => "env:",
         Origin::Cli => "command line:",
+        Origin::Launcher => "settings screen:",
     }
 }
 
@@ -1697,5 +1978,45 @@ mod tests {
                 ("scale".into(), "2".into())
             ]
         );
+    }
+
+    #[test]
+    fn entry_metadata() {
+        let mut labels = std::collections::HashSet::new();
+        for e in ENTRIES {
+            assert!(
+                e.label.starts_with(char::is_uppercase),
+                "{}: no label",
+                e.key
+            );
+            assert!(labels.insert(e.label), "{}: label used twice", e.key);
+            if e.audience == Audience::Dev {
+                assert!(!e.persist, "{}: developer rows are never saved", e.key);
+            }
+            assert_eq!(
+                e.audience == Audience::Dev,
+                matches!(e.group, Group::Cheats | Group::Tools)
+            );
+        }
+        assert_eq!(find("scale").unwrap().label, "Window size");
+    }
+
+    #[test]
+    fn platform_filter() {
+        let p = |k: &str| find(k).unwrap().platforms;
+        assert!(
+            Platforms::ALL.contains(Platforms::HERE) && !Platforms::NONE.contains(Platforms::HERE)
+        );
+        assert!(!Platforms::DESKTOP.contains(Platforms::NONE));
+        assert_eq!(p("vsync").names(), ["desktop", "web", "android"]);
+        assert_eq!(p("scale").names(), ["desktop", "web"]);
+        assert_eq!(p("game_dir").names(), ["desktop"]);
+        assert_eq!(p("screen_margin").names(), ["web", "android"]);
+        assert_eq!(p("turbo").names(), ["desktop", "android"]);
+        assert!(p("touch_layout").names().is_empty());
+        if Platforms::HERE == Platforms::DESKTOP {
+            assert!(find("scale").unwrap().shown_on_this_platform());
+            assert!(!find("screen_margin").unwrap().shown_on_this_platform());
+        }
     }
 }

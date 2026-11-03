@@ -54,10 +54,7 @@ impl TouchOverlay {
                 let a = v.opacity * c.opacity;
                 let centre = pos(c.centre);
                 if c.ctl == Ctl::Move {
-                    // The movement zone: a faint outline only, it covers part of the game picture.
-                    let r = Rect::from_center_size(centre, vec2(c.half[0] * 2.0, c.half[1] * 2.0));
-                    let s = Stroke::new(2.0, white(a * if *lit { 0.5 } else { 0.25 }));
-                    p.rect_stroke(r.shrink(2.0), 12.0, s, egui::StrokeKind::Inside);
+                    // The movement zone is invisible (it covers part of the game picture); only the finger / stick shows.
                     continue;
                 }
                 let r = c.half[0];
