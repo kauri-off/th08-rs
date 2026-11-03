@@ -4,7 +4,9 @@
 //! ECL's section requests), the effect manager and the screen-effect pool, the HUD, g_Gui and the dialogue (started
 //! by an ECL timeline op 6 with a synthetic .msg file), the game manager with its replay object recording the run,
 //! then playing the recording back. `scene_clone_continues_identically` clones a loaded `Ctx`'s whole `World` (scene
-//! objects, Supervisor, ascii manager, chain) in the main menu and replays the continuation (docs/arch/STEP9_WORLD.md).
+//! objects, Supervisor, ascii manager, chain) in the main menu and replays the continuation; `stage_clone_continues_
+//! identically` swaps a mid-stage `World` of a recorded session into a second `Ctx`; `save_from_clone_keeps_the_run`
+//! saves score.dat from a clone mid-game (ARCH_D_MOBILE, 15 §2.2) (docs/arch/STEP9_WORLD.md).
 use crate::bullet::BulletManager;
 use crate::effect::ScreenEnv;
 use crate::enemy::EnemyManager;
@@ -17,7 +19,7 @@ use crate::player::Player;
 use crate::replay::ReplayState;
 use crate::stage::Stage;
 use crate::stdfile::{Record, Std};
-use crate::world::{World, anm_restore};
+use crate::world::World;
 
 // A `World` run without a `Ctx` (no chain: `frame` calls the subsystems in chain order) plus the test's counters.
 #[derive(Clone)]
@@ -218,12 +220,65 @@ impl Run {
         self.se = w.sound.drain();
     }
 
-    // Everything the clone must reproduce, as raw bits.
+    // Everything the clone must reproduce, as raw bits: the World's state plus the run's SE drain, screen-effect
+    // list, ECL file bytes, counters and recording.
     fn trace(&self) -> Vec<u64> {
         let w = &self.w;
-        let p = w.player.as_deref().unwrap();
+        let mut t = world_trace(w);
+        t.extend(
+            self.se
+                .iter()
+                .map(|&(id, pan)| (id as u64) << 32 | pan as u32 as u64),
+        );
+        t.extend(
+            self.screen
+                .iter()
+                .flat_map(|&s| w.effects.screen_fx[s].map_or([0; 3], |e| e.trace())),
+        );
+        t.extend(
+            w.enemies
+                .as_deref()
+                .unwrap()
+                .ecl
+                .data
+                .iter()
+                .map(|&b| b as u64),
+        );
+        t.extend([
+            self.msg_frames as u64,
+            self.msg_texts as u64,
+            self.gui_reqs as u64,
+        ]);
+        let rec = w.game.rpy.as_ref().unwrap().stages[0].as_ref().unwrap();
+        t.extend(rec.inputs.iter().map(|&w| w as u64));
+        t.extend(rec.fps.iter().map(|&b| b as u64));
+        t
+    }
+}
+
+// A World's state as raw bits: RNG (state + counter), game and ANM globals, player with its shots, bullets, effects,
+// items, enemies, stage, dialogue, HUD, g_Gui, GM, Supervisor, ascii manager and scene (present ones only).
+pub(crate) fn world_trace(w: &World) -> Vec<u64> {
+    let g = &w.game;
+    let mut t = vec![
+        w.rng.state as u64,
+        w.rng.total as u64,
+        g.flags as u64,
+        g.frame_counter as u64,
+        g.replay_fps as u64,
+        g.scene as u64,
+        w.frame,
+        w.anm.speed.to_bits() as u64,
+        w.anm.vm_counter as u64,
+        w.anm.screen_offset[0].to_bits() as u64,
+        w.anm.screen_offset[1].to_bits() as u64,
+        w.timer_pause as u64,
+        w.load_frames as u64,
+        w.skip_counter as u64,
+    ];
+    if let Some(p) = w.player.as_deref() {
         let st = &p.stats;
-        let mut t = vec![
+        t.extend([
             p.pos[0].to_bits() as u64,
             p.pos[1].to_bits() as u64,
             p.state as u64,
@@ -236,23 +291,14 @@ impl Run {
             st.bombs.to_bits() as u64,
             st.gauge as u64,
             st.score10 as u64,
-            w.rng.state as u64,
-            w.rng.total as u64,
-            w.game.flags as u64,
-            w.anm.speed.to_bits() as u64,
-            w.anm.vm_counter as u64,
-        ];
-        t.extend(
-            self.se
-                .iter()
-                .map(|&(id, pan)| (id as u64) << 32 | pan as u32 as u64),
-        );
+        ]);
         t.extend(
             p.bullets
                 .iter()
                 .map(|b| (b.state as u64) << 32 | b.pos[0].to_bits() as u64),
         );
-        let bm = w.bullets.as_deref().unwrap();
+    }
+    if let Some(bm) = w.bullets.as_deref() {
         t.extend([bm.live as u64, bm.frame as u64, bm.patterns]);
         t.extend(bm.bullets.iter().filter(|b| !b.free()).flat_map(|b| {
             [
@@ -260,23 +306,6 @@ impl Run {
                 (b.pos[1].to_bits() as u64) << 32 | b.angle.to_bits() as u64,
             ]
         }));
-        let fx = &w.effects;
-        t.extend([
-            fx.live as u64,
-            w.anm.screen_offset[0].to_bits() as u64,
-            w.anm.screen_offset[1].to_bits() as u64,
-        ]);
-        t.extend(
-            fx.fx
-                .iter()
-                .filter(|e| e.active)
-                .map(|e| (e.kind as u64) << 32 | e.pos[0].to_bits() as u64),
-        );
-        t.extend(
-            self.screen
-                .iter()
-                .flat_map(|&s| fx.screen_fx[s].map_or([0; 3], |e| e.trace())),
-        );
         t.extend(
             bm.items
                 .items
@@ -284,7 +313,17 @@ impl Run {
                 .filter(|i| i.alive)
                 .map(|i| (i.kind as u64) << 32 | i.pos[1].to_bits() as u64),
         );
-        let m = w.enemies.as_deref().unwrap();
+    }
+    let fx = &w.effects;
+    t.push(fx.live as u64);
+    t.extend(
+        fx.fx
+            .iter()
+            .filter(|e| e.active)
+            .map(|e| (e.kind as u64) << 32 | e.pos[0].to_bits() as u64),
+    );
+    t.extend(fx.screen_fx.iter().flatten().flat_map(|e| e.trace()));
+    if let Some(m) = w.enemies.as_deref() {
         t.extend([m.clock.cur as u64, m.full as u64, m.g.drop_counter as u64]);
         t.extend(m.enemies.iter().filter(|e| e.alive()).flat_map(|e| {
             [
@@ -292,24 +331,17 @@ impl Run {
                 (e.final_pos[0].to_bits() as u64) << 32 | e.final_pos[1].to_bits() as u64,
             ]
         }));
-        t.extend(m.ecl.data.iter().map(|&b| b as u64));
-        t.extend(w.stage.as_deref().unwrap().trace());
-        t.extend(w.msg.as_deref().unwrap().trace());
-        t.extend(w.hud.as_deref().unwrap().trace());
-        t.extend(w.gui.as_deref().unwrap().trace());
-        t.extend([
-            self.msg_frames as u64,
-            self.msg_texts as u64,
-            self.gui_reqs as u64,
-        ]);
-        t.extend(w.gm.as_deref().unwrap().trace());
-        let g = &w.game;
-        t.extend([g.frame_counter as u64, g.replay_fps as u64]);
-        let rec = g.rpy.as_ref().unwrap().stages[0].as_ref().unwrap();
-        t.extend(rec.inputs.iter().map(|&w| w as u64));
-        t.extend(rec.fps.iter().map(|&b| b as u64));
-        t
     }
+    let opt = |v: Option<Vec<u64>>| v.unwrap_or_else(|| vec![u64::MAX]);
+    t.extend(opt(w.stage.as_deref().map(|x| x.trace())));
+    t.extend(opt(w.msg.as_deref().map(|x| x.trace())));
+    t.extend(opt(w.hud.as_deref().map(|x| x.trace())));
+    t.extend(opt(w.gui.as_deref().map(|x| x.trace())));
+    t.extend(opt(w.gm.as_deref().map(|x| x.trace())));
+    t.extend(opt(w.supervisor.as_deref().map(|x| x.trace())));
+    t.extend(opt(w.ascii_mgr.as_deref().map(|x| x.trace())));
+    t.extend(w.scene.trace());
+    t
 }
 
 // Playback of the World's recording (15 §3.3): its own game state and replay object in mode 1, as `ReplayTask::calc`
@@ -543,9 +575,8 @@ fn clone_continues_identically() {
 mod scene {
     use super::*;
 
-    // A loaded `Ctx`'s `World` (9h part 2a: the whole deterministic state, chain included) plus the recorder's
-    // device-state mirror and ANM texture cache, which shape the recorded draw commands; the ANM files and textures
-    // stay with the live `Ctx` (TODO(IMPL189): `World::clone` copies only the ANM manager's public fields).
+    // A loaded `Ctx`'s `World` (the whole deterministic state, chain and ANM manager included) plus the recorder's
+    // device-state mirror and ANM texture cache, which shape the recorded draw commands.
     struct Snapshot {
         w: World,
         rec_state: crate::drawlist::DeviceState,
@@ -563,10 +594,7 @@ mod scene {
 
         // The live World is dropped (its chain without on-remove) and the snapshot continues in its place.
         fn put(self, c: &mut crate::game::Ctx) {
-            let mut anm = std::mem::take(&mut c.w.anm);
-            anm_restore(&mut anm, &self.w.anm);
             c.w = self.w;
-            c.w.anm = anm;
             c.rec.state = self.rec_state;
             c.rec.anm = self.rec_anm;
         }
@@ -671,5 +699,172 @@ mod scene {
                 .len()
                 > 2
         );
+    }
+}
+
+// 9h part 2c on a recorded session mid-stage (golden: stage 1 from poll 722 to 10918, renderer: the headless `Gfx`).
+#[cfg(test)]
+mod stage {
+    use super::*;
+    use crate::game::Ctx;
+    use crate::host::Host;
+    use crate::platform::ToolHost;
+    use crate::session::Session;
+
+    // Poll of the clone / save and the frames run on after it, all inside stage 1 with bullets, enemies and items.
+    const AT: usize = 1800;
+    const FRAMES: usize = 600;
+
+    // The tool host with a fixed tick clock: the PLST run time in a score.dat written at the same frame is then the
+    // same in both runs (15 §2.9).
+    struct FixedTicks(ToolHost);
+
+    impl Host for FixedTicks {
+        fn poll_input(&mut self) -> crate::host::RawInput {
+            self.0.poll_input()
+        }
+        fn boot_clock_ms(&mut self) -> u32 {
+            self.0.boot_clock_ms()
+        }
+        fn ticks_ms(&mut self) -> u64 {
+            0
+        }
+        fn local_time(&mut self) -> crate::host::LocalTime {
+            self.0.local_time()
+        }
+        fn read(&mut self, name: &str) -> Option<Vec<u8>> {
+            self.0.read(name)
+        }
+        fn write(&mut self, name: &str, data: &[u8]) {
+            self.0.write(name, data)
+        }
+        fn mkdir(&mut self, name: &str) {
+            self.0.mkdir(name)
+        }
+        fn list(&mut self, prefix: &str) -> Vec<String> {
+            self.0.list(prefix)
+        }
+        fn read_path(&mut self, path: &str) -> Option<Vec<u8>> {
+            self.0.read_path(path)
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self.0.as_any_mut()
+        }
+    }
+
+    // A loaded `Ctx` run through golden up to poll `AT` (saves on, into the session's private save dir) and the
+    // next frame's poll; None without the game data or a GPU adapter.
+    fn session_at(s: &Session) -> Option<(Ctx, i64)> {
+        let dir = crate::settings::test_game_dir()?;
+        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
+        let host = FixedTicks(ToolHost::new(crate::settings::get().storage()));
+        let mut c = pollster::block_on(Ctx::load_with(
+            crate::assets::Source::native(dir),
+            gfx,
+            false,
+            crate::settings::get().core(),
+            Box::new(host),
+        ))
+        .unwrap();
+        s.start(&mut c).unwrap();
+        c.w.game.persist = true;
+        s.run(&mut c, AT, |_, _| true, None);
+        let poll = c.w.game.sched.as_ref().unwrap().poll + 1;
+        assert_eq!(poll, AT as i64);
+        Some((c, poll))
+    }
+
+    // One Frame_Run on the recorded polls (as `Session::run`); the World's trace, the session trace row, and the
+    // frame's draw and resource commands.
+    fn step(c: &mut Ctx, poll: &mut i64) -> Vec<u64> {
+        if let Some(s) = &mut c.w.game.sched {
+            s.poll = *poll;
+            s.pass_rows.clear();
+        }
+        crate::platform::tool_host(c).cursor = *poll;
+        assert_eq!(c.calc(), crate::task::Flow::Continue);
+        c.draw();
+        let mut t = world_trace(&c.w);
+        t.extend(crate::session::sample(c, 0, *poll, 0).map(|v| v as u64));
+        t.extend([
+            c.rec.draws.len() as u64,
+            c.rec.res.len() as u64,
+            hash_dbg(&c.rec.draws),
+            hash_dbg(&c.rec.res),
+        ]);
+        c.present();
+        crate::ascii::apply_pending_captures(&mut c.w.anm, &mut c.rec);
+        *poll = c.w.game.sched.as_ref().unwrap().poll + 1;
+        t
+    }
+
+    // Live enemy bullets, enemies and items of a World.
+    fn alive(w: &World) -> [usize; 3] {
+        let bm = w.bullets.as_deref().unwrap();
+        [
+            bm.bullets.iter().filter(|b| !b.free()).count(),
+            w.enemies
+                .as_deref()
+                .unwrap()
+                .enemies
+                .iter()
+                .filter(|e| e.alive())
+                .count(),
+            bm.items.items.iter().filter(|i| i.alive).count(),
+        ]
+    }
+
+    // Both runs on for `FRAMES` frames: identical state, RNG, trace row and draw / resource commands every frame;
+    // the peak of bullets, enemies and items alive.
+    fn lockstep(a: &mut (Ctx, i64), b: &mut (Ctx, i64)) -> [usize; 3] {
+        let mut peak = [0; 3];
+        for k in 0..FRAMES {
+            let (ta, tb) = (step(&mut a.0, &mut a.1), step(&mut b.0, &mut b.1));
+            assert_eq!(ta, tb, "frame {k} after the clone");
+            assert_eq!(a.0.w.game.scene, crate::gamemgr::SCENE_GAME, "frame {k}");
+            let n = alive(&a.0.w);
+            peak = std::array::from_fn(|i| peak[i].max(n[i]));
+        }
+        peak
+    }
+
+    // 9h part 2c: a mid-stage World cloned into a second `Ctx` (same session, same frame, so its recorder and
+    // renderer mirror the first's) continues exactly like the original.
+    #[test]
+    fn stage_clone_continues_identically() {
+        let s = Session::load(&crate::session::data_dir("golden")).unwrap();
+        let Some(mut a) = session_at(&s) else { return };
+        let mut b = session_at(&s).unwrap();
+        assert_eq!(a.0.w.game.scene, crate::gamemgr::SCENE_GAME);
+        assert!(alive(&a.0.w).iter().all(|&n| n > 0), "{:?}", alive(&a.0.w));
+        b.0.w = a.0.w.clone();
+        let peak = lockstep(&mut a, &mut b);
+        assert!(peak.iter().all(|&n| n > 0), "{peak:?}");
+    }
+
+    // A save from a clone at poll `AT` (run A) leaves the run as one without it (run B), and writes the score.dat
+    // `exit_save` writes from that state.
+    #[test]
+    fn save_from_clone_keeps_the_run() {
+        let s = Session::load(&crate::session::data_dir("golden")).unwrap();
+        let Some(mut a) = session_at(&s) else { return };
+        let rng = a.0.w.rng.clone();
+        let bytes = a.0.save_from_clone();
+        assert_eq!((a.0.w.rng.state, a.0.w.rng.total), (rng.state, rng.total));
+        assert_eq!(a.0.host.read("score.dat").as_deref(), Some(&bytes[..]));
+        // Run B starts after A's save (the two share the session's save dir, which B's start resets).
+        let mut b = session_at(&s).unwrap();
+        // `exit_save` itself on a copy of B's World, then B's own World back.
+        let mut w = b.0.w.clone();
+        std::mem::swap(&mut b.0.w, &mut w);
+        b.0.exit_save();
+        std::mem::swap(&mut b.0.w, &mut w);
+        assert_eq!(
+            w.rng.total,
+            b.0.w.rng.total + 2,
+            "ScoreDat_Save draws twice (11 §1.5)"
+        );
+        assert_eq!(b.0.host.read("score.dat"), Some(bytes));
+        lockstep(&mut a, &mut b);
     }
 }

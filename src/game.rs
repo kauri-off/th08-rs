@@ -453,12 +453,14 @@ impl Ctx {
         // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
         self.w.bgm.midi_reset();
         self.flush_sound();
-        self.w
-            .game
-            .save_score(&mut self.w.rng, true, &mut *self.host);
-        if self.w.game.persist {
-            self.host.write("th08.cfg", &self.w.game.cfg.to_bytes());
-        }
+        self.w.save_files(&mut *self.host);
+    }
+
+    // Port (ARCH_D_MOBILE: saves outside the original's save points): the files `exit_save` would write from this
+    // state, written from a clone of the World that is then dropped, so the live RNG (2 draws, 11 §1.5), the score
+    // data and the run-time mark are untouched; the score.dat bytes.
+    pub fn save_from_clone(&mut self) -> Vec<u8> {
+        self.w.clone().save_files(&mut *self.host)
     }
 
     // WinMain on Frame_Run result 2 (00 §2 "What the restart re-initialises"): Result(2) score.dat flush, chain

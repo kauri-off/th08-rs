@@ -8,10 +8,10 @@ use crate::task::Tasks;
 // WinMain 0x441A70: skip counter byte := 0xFC at the first start and every restart (00 §2), first draw in frame 4.
 pub(crate) const SKIP_START: i8 = -4;
 
+#[derive(Clone)]
 pub struct World {
     pub input: Input,
-    // TODO(IMPL189): AnmManager becomes `Clone` (Arc script data); until then `World::clone` copies its public fields
-    // with no slot loaded (`anm_fields`).
+    // ANM manager (03 §2.4, 05 §8); its clone shares the parsed scripts (`Arc`, copy on write) and texture handles.
     pub anm: AnmManager,
     // The game RNG g_Rng 0x164D520 (11 §1); every draw site keeps the original's order.
     pub rng: crate::rng::Rng,
@@ -120,76 +120,14 @@ impl World {
     }
 }
 
-impl Clone for World {
-    fn clone(&self) -> Self {
-        World {
-            input: self.input,
-            anm: anm_fields(&self.anm),
-            rng: self.rng.clone(),
-            tasks: self.tasks.clone(),
-            frame: self.frame,
-            game: self.game.clone(),
-            ascii: self.ascii.clone(),
-            sound: self.sound.clone(),
-            bgm: self.bgm.clone(),
-            effects: self.effects.clone(),
-            overlays: self.overlays.clone(),
-            panel: self.panel,
-            hud_kept: self.hud_kept.clone(),
-            player: self.player.clone(),
-            bullets: self.bullets.clone(),
-            enemies: self.enemies.clone(),
-            stage: self.stage.clone(),
-            hud: self.hud.clone(),
-            gui: self.gui.clone(),
-            msg: self.msg.clone(),
-            gm: self.gm.clone(),
-            supervisor: self.supervisor.clone(),
-            scene: self.scene.clone(),
-            ascii_mgr: self.ascii_mgr.clone(),
-            anm_debug: self.anm_debug.clone(),
-            bomb_areas: self.bomb_areas.clone(),
-            timer_pause: self.timer_pause,
-            load_frames: self.load_frames,
-            gui_queue: self.gui_queue.clone(),
-            skip_counter: self.skip_counter,
-            init_presents: self.init_presents,
-            info: self.info.clone(),
+impl World {
+    // WinMain exit's file part (15 §2.2): ScoreDat_Save with Result mode 2 (2 RNG draws, 11 §1.5) and the th08.cfg
+    // write; the score.dat bytes.
+    pub(crate) fn save_files(&mut self, host: &mut dyn crate::host::Host) -> Vec<u8> {
+        let bytes = self.game.save_score(&mut self.rng, true, host);
+        if self.game.persist {
+            host.write("th08.cfg", &self.game.cfg.to_bytes());
         }
+        bytes
     }
-}
-
-// TODO(IMPL189): the public fields of an AnmManager, slots left empty (the loaded files stay with the original).
-pub(crate) fn anm_fields(a: &AnmManager) -> AnmManager {
-    let mut c = AnmManager::default();
-    c.speed = a.speed;
-    c.slowdown_restore = a.slowdown_restore;
-    c.vm_counter = a.vm_counter;
-    c.screen_offset = a.screen_offset;
-    c.tint = a.tint;
-    c.tint_on = a.tint_on;
-    c.stage_tint = a.stage_tint;
-    c.bomb_drew = a.bomb_drew;
-    c.stage_camera = a.stage_camera;
-    c.cam_right = a.cam_right;
-    c.entries_loaded = a.entries_loaded;
-    c.capture_req = a.capture_req;
-    c
-}
-
-// TODO(IMPL189): writes the public fields of `src` (from `anm_fields`) back into `dst`, keeping its loaded slots.
-#[cfg(test)]
-pub(crate) fn anm_restore(dst: &mut AnmManager, src: &AnmManager) {
-    dst.speed = src.speed;
-    dst.slowdown_restore = src.slowdown_restore;
-    dst.vm_counter = src.vm_counter;
-    dst.screen_offset = src.screen_offset;
-    dst.tint = src.tint;
-    dst.tint_on = src.tint_on;
-    dst.stage_tint = src.stage_tint;
-    dst.bomb_drew = src.bomb_drew;
-    dst.stage_camera = src.stage_camera;
-    dst.cam_right = src.cam_right;
-    dst.entries_loaded = src.entries_loaded;
-    dst.capture_req = src.capture_req;
 }
