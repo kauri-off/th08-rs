@@ -76,7 +76,9 @@ cargo run --release -- "/path/to/TH08 - Imperishable Night"
 ```
 
 操作は原作と同じです。矢印キーで移動、`Z` でショット、`X` でボム、`Shift` で低速、`Esc` でポーズ。すべての設定は
-`th08 --help` で確認できます。ブラウザ版のビルド方法は `web/build.sh` を見てください。
+`th08 --help` で確認できます。パッケージ（AppImage、Windows の exe とインストーラー、Android の APK、ブラウザ版）は
+`cargo xtask dist --target <linux-appimage|windows-exe|windows-nsis|android-apk|web>` で作れます。オプションは
+`cargo xtask dist --help` で確認できます。
 
 ## リポジトリの構成
 
@@ -87,7 +89,7 @@ cargo run --release -- "/path/to/TH08 - Imperishable Night"
 | `crates/` | `th08-formats`（ファイル形式）、`th08-core`（ゲームロジック）、`th08-render`（wgpu）、`th08-audio`（cpal、MIDI）、`th08-tools`（トレース・描画ログのツール、`src/bin/` に実行ファイル） |
 | `re/` | リバースエンジニアリング用ツール：フォーマットのダンプ、Ghidra スクリプト、実行時プローブ、プレイの録画 |
 | `docs/` | 進捗、設計判断、書き直しのアーキテクチャ |
-| `web/`, `packaging/` | ブラウザ用フロントエンドとリリース用パッケージング |
+| `web/`, `packaging/`, `xtask/` | ブラウザ用フロントエンド、パッケージング用ファイル、`cargo xtask dist` |
 
 ## ライセンス
 

@@ -1,5 +1,5 @@
-// th08 APK (MATERIAL2): Compose launcher (LauncherActivity) + NativeActivity game in the ":game" process.
-// Inputs as -P properties (tools/android/build_apk.sh sets them):
+// th08 APK: Compose launcher (LauncherActivity) + NativeActivity game in the ":game" process.
+// Inputs as -P properties (`cargo xtask dist --target android-apk` sets them, xtask/src/android.rs):
 //   th08.abis       comma list, arm64-v8a (default) / x86_64     th08.data      folder with th08.dat + thbgm.dat
 //   th08.keystore   keystore.properties for release signing       th08.debugKey  debug keystore (default
 //                   (storeFile relative to the file)                             target/android/debug.keystore)
@@ -18,7 +18,7 @@ fun prop(name: String): String? = (findProperty(name) as String?)?.takeIf { it.i
 val abiList = (prop("th08.abis") ?: "arm64-v8a").split(',').map { it.trim() }.filter { it.isNotEmpty() }
 val minSdkLevel = (prop("th08.minSdk") ?: "26").toInt()
 
-// libth08.so per ABI through tools/android/cargo_android.sh (NDK clang, flock on target/.agents.lock).
+// libth08.so per ABI through tools/android/cargo_android.sh (NDK clang).
 abstract class CargoBuild : DefaultTask() {
     @get:Input abstract val abis: ListProperty<String>
     @get:Input abstract val profile: Property<String>
@@ -60,7 +60,7 @@ abstract class SettingsSchema : DefaultTask() {
         val out = outputDir.get().asFile.also { it.mkdirs() }
         execOps.exec {
             workingDir = root
-            commandLine("flock", File(root, "target/.agents.lock").path, "cargo", "run", "-q", "--release",
+            commandLine("cargo", "run", "-q", "--release",
                 "-p", "th08-tools", "--bin", "settings_schema", File(out, "settings_schema.json").path)
         }
     }

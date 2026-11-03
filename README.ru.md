@@ -77,7 +77,9 @@ cargo run --release -- "/путь/к/TH08 - Imperishable Night"
 ```
 
 Управление как в оригинале: стрелки, `Z` — стрельба, `X` — бомба, `Shift` — фокус, `Esc` — пауза. Все настройки
-перечисляет `th08 --help`. Веб-сборка описана в `web/build.sh`.
+перечисляет `th08 --help`. Пакеты (AppImage, exe или установщик для Windows, APK для Android, веб) собирает
+`cargo xtask dist --target <linux-appimage|windows-exe|windows-nsis|android-apk|web>`; параметры — в
+`cargo xtask dist --help`.
 
 ## Устройство репозитория
 
@@ -88,7 +90,7 @@ cargo run --release -- "/путь/к/TH08 - Imperishable Night"
 | `crates/` | `th08-formats` (форматы файлов), `th08-core` (логика игры), `th08-render` (wgpu), `th08-audio` (cpal, MIDI), `th08-tools` (инструменты трасс и draw-логов, бинарники в `src/bin/`) |
 | `re/` | инструменты реверс-инжиниринга: распаковщики форматов, скрипты Ghidra, зонд, запись сессий |
 | `docs/` | статус, решения, архитектура переписывания |
-| `web/`, `packaging/` | браузерная обёртка и упаковка релизов |
+| `web/`, `packaging/`, `xtask/` | браузерная обёртка, файлы упаковки и `cargo xtask dist` |
 
 ## Лицензия
 

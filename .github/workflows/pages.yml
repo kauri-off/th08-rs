@@ -30,7 +30,7 @@ jobs:
           curl -sSfL https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$v/$d.tar.gz | tar xz
           mkdir -p ~/.cargo/bin && mv $d/wasm-bindgen ~/.cargo/bin/
       - name: Build
-        run: web/build.sh
+        run: cargo xtask dist --target web --assets none --out web/dist
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/dist

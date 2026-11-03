@@ -17,11 +17,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # +crt-static comes from .cargo/config.toml; icon and version info from build.rs.
       - name: Build
-        run: cargo build --release --locked --bin th08
+        run: cargo xtask dist --target windows-exe --assets none
       - uses: actions/upload-artifact@v4
         with:
           name: th08-windows
-          path: target/release/th08.exe
+          path: target/dist/th08-*-windows-exe.exe
           if-no-files-found: error
 
   linux:
@@ -39,11 +39,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build AppImage
-        run: packaging/linux/build-appimage.sh target/appimage
+        run: cargo xtask dist --target linux-appimage --assets none
       - uses: actions/upload-artifact@v4
         with:
           name: th08-linux
-          path: target/appimage/th08-x86_64.AppImage
+          path: target/dist/th08-*-linux-appimage.AppImage
           if-no-files-found: error
 
   release:
@@ -64,4 +64,4 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
-          gh release upload "$TAG" dist/th08.exe dist/th08-x86_64.AppImage --clobber
+          gh release upload "$TAG" dist/* --clobber

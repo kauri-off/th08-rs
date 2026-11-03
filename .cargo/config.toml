@@ -1,3 +1,7 @@
 # Release packaging (impl34): static MSVC runtime so th08.exe needs no VC++ redistributable.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# `cargo xtask dist …`: packaging entry point (xtask/, DIST1).
+[alias]
+xtask = "run -q --release --locked -p xtask --"

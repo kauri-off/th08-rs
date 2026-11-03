@@ -1,8 +1,8 @@
 #!/bin/bash
 # usage: tools/android/run_debug.sh [build|emulator|install|run|shot|stop|all]...  (default: build)
 # Debug APK (ARCH_D_MOBILE §6.3 run 1, §6.4): the Gradle debug variant of android/ (Compose launcher + NativeActivity
-# game) for arm64-v8a + x86_64, signed with the throwaway key in target/android/; release builds are build_apk.sh.
-#   build     tools/android/build_apk.sh --variant debug → target/android/th08-debug.apk (DATA=DIR bundles game data)
+# game) for arm64-v8a + x86_64, signed with the throwaway key in target/android/; release builds: cargo xtask dist.
+#   build     cargo xtask dist --variant debug → target/android/th08-debug.apk (DATA=DIR bundles game data)
 #   emulator  start a headless emulator (own AVD th08dbg, no window, no audio) and wait for boot
 #   install   adb install on the emulator only (EMU_SERIAL, never a physical device)
 #   run       start the Compose launcher, wait, dump logcat to target/android/logcat.txt
@@ -24,11 +24,12 @@ mkdir -p "$OUT"
 
 abi_of() { case $1 in aarch64) echo arm64-v8a ;; x86_64) echo x86_64 ;; *) echo "unknown target $1" >&2; exit 1 ;; esac; }
 
-# Gradle debug variant (org.th08.port.debug) through build_apk.sh; DATA=DIR bundles the game files.
+# Gradle debug variant (org.th08.port.debug) through cargo xtask dist; DATA=DIR bundles the game files.
 build() {
   local abis=() a
   for a in $TARGETS; do abis+=(--abi "$(abi_of "$a")"); done
-  tools/android/build_apk.sh --variant debug --debug-key "${abis[@]}" ${DATA:+--data "$DATA"} --out "$OUT/th08-debug.apk"
+  cargo xtask dist --target android-apk --variant debug --debug-key "${abis[@]}" \
+    ${DATA:+--assets raw --data "$DATA"} --out "$OUT/th08-debug.apk"
 }
 
 emu_adb() { "$ADB" -s "$EMU_SERIAL" "$@"; }

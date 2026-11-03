@@ -1,8 +1,7 @@
 #!/bin/bash
 # usage: tools/android/cargo_android.sh OUT_DIR ABI... — libth08.so per ABI (arm64-v8a, x86_64) built with the NDK
 # clang into OUT_DIR/<abi>/ (debug info stripped). Run by the Gradle task cargoBuild (android/app/build.gradle.kts).
-# Env: ANDROID_SDK, ANDROID_API (NDK clang API, default 26), PROFILE (default release). cargo runs under flock
-# target/.agents.lock here.
+# Env: ANDROID_SDK, ANDROID_API (NDK clang API, default 26), PROFILE (default release).
 set -euo pipefail
 out=$(realpath -m "$1"); shift
 cd "$(dirname "$0")/../.."
@@ -11,7 +10,6 @@ API=${ANDROID_API:-26}
 PROFILE=${PROFILE:-release}
 NDK=${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/*/ | sort -V | tail -1)}; NDK=${NDK%/}
 NBIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
-LOCK=$PWD/target/.agents.lock
 arch_of() { case $1 in arm64-v8a) echo aarch64 ;; x86_64) echo x86_64 ;; *) echo "unknown ABI $1" >&2; exit 1 ;; esac; }
 rm -rf "$out"
 for abi in "$@"; do
@@ -21,7 +19,7 @@ for abi in "$@"; do
   env "CC_${triple//-/_}=$NBIN/$triple$API-clang" "CXX_${triple//-/_}=$NBIN/$triple$API-clang++" \
     "AR_${triple//-/_}=$NBIN/llvm-ar" "CARGO_TARGET_${up}_LINKER=$NBIN/$triple$API-clang" \
     ANDROID_NDK_HOME="$NDK" ANDROID_NDK_ROOT="$NDK" \
-    flock "$LOCK" cargo build --profile "$PROFILE" --lib -p th08 --target "$triple"
+    cargo build --profile "$PROFILE" --lib -p th08 --target "$triple"
   dir=$PROFILE; [[ $PROFILE == dev ]] && dir=debug
   mkdir -p "$out/$abi"
   cp "target/$triple/$dir/libth08.so" "$out/$abi/"

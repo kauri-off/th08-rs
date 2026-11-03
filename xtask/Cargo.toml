@@ -1,0 +1,15 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+license = "GPL-3.0-or-later"
+edition = "2024"
+publish = false
+description = "cargo xtask dist: release packages and personal builds (DIST1)"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6", features = ["derive"] }
+sha2 = "0.10"

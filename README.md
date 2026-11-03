@@ -78,7 +78,9 @@ cargo run --release -- "/path/to/TH08 - Imperishable Night"
 ```
 
 The controls are the original's: arrow keys, `Z` shoot, `X` bomb, `Shift` focus, `Esc` pause. Run `th08 --help` to
-see every setting. For the web build, see `web/build.sh`.
+see every setting. Packages (AppImage, Windows exe or installer, Android APK, web) are built with
+`cargo xtask dist --target <linux-appimage|windows-exe|windows-nsis|android-apk|web>`; `cargo xtask dist --help` lists
+the options.
 
 ## Repository layout
 
@@ -89,7 +91,7 @@ see every setting. For the web build, see `web/build.sh`.
 | `crates/` | `th08-formats` (file formats), `th08-core` (game logic), `th08-render` (wgpu), `th08-audio` (cpal, MIDI), `th08-tools` (trace / draw-log tools, bins in `src/bin/`) |
 | `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session recorder |
 | `docs/` | status, decisions, the architecture of the rewrite |
-| `web/`, `packaging/` | the browser front end and release packaging |
+| `web/`, `packaging/`, `xtask/` | the browser front end, packaging files and `cargo xtask dist` |
 
 ## License
 
