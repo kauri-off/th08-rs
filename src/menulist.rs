@@ -345,7 +345,7 @@ pub struct Lists {
 }
 
 fn catk(ctx: &Ctx, id: usize) -> Catk {
-    ctx.game.score.catk.get(id).cloned().unwrap_or_default()
+    ctx.w.game.score.catk.get(id).cloned().unwrap_or_default()
 }
 
 // Story or practice attempts of shot index `s` ≠ 0.
@@ -358,7 +358,8 @@ fn selectable(ctx: &Ctx, id: usize) -> bool {
     if id < 205 {
         return seen(&catk(ctx, id), 12);
     }
-    ctx.game
+    ctx.w
+        .game
         .score
         .flsp
         .get(id - 205)
@@ -384,7 +385,7 @@ fn scratch(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     let mut vm = AnmVm::default();
     vm.init();
     vm.anm_slot = slot as _;
-    vm.set_sprite(&ctx.anm, sprite);
+    vm.set_sprite(&ctx.w.anm, sprite);
     if !centred {
         vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
     }
@@ -411,7 +412,7 @@ fn place(vm: &mut AnmVm, x: f32, y: f32) {
 }
 
 fn emit0(ctx: &Ctx, rec: &mut Recorder, vm: &AnmVm) {
-    ctx.anm.emit_mode(rec, vm, 0);
+    ctx.w.anm.emit_mode(rec, vm, 0);
 }
 
 // Ascii_DrawGaugePercent 0x405E10 (12 §5.9) split like ascii::draw_percent's writes: `each` sees the VM as each glyph
@@ -507,7 +508,7 @@ fn pie(rec: &mut Recorder, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
 
 // Text_RenderToVm (white, outline 0, font 15, 16 §6.3 / §6.5) into the sprite's texture strip.
 pub(crate) fn render_strip(ctx: &mut Ctx, slot: usize, sprite: i32, s: SjisString) {
-    let Some(sp) = ctx.anm.sprite(slot, sprite.max(0) as usize).copied() else {
+    let Some(sp) = ctx.w.anm.sprite(slot, sprite.max(0) as usize).copied() else {
         return;
     };
     // 10 §6: x = u0 = 0, W = texture-row width (512), 15 rows from v0; rows 15–16 of a 17-high sprite stay untouched.
@@ -537,8 +538,8 @@ impl MainMenu {
 
     fn glyph_vm(&mut self, ctx: &mut Ctx) {
         if self.lists.glyph.script.is_none() {
-            ctx.anm.set_script(
-                &mut ctx.rng,
+            ctx.w.anm.set_script(
+                &mut ctx.w.rng,
                 &mut self.lists.glyph,
                 crate::ascii::ANM_SLOT,
                 4,
@@ -550,7 +551,7 @@ impl MainMenu {
 
     // Any-clear mask CLRD[shot].any[difficulty]: 0 → 1 (stage 1 only); the 6B bit adds 4A and 4B (12 §2.5).
     fn practice_mask(ctx: &Ctx) -> u16 {
-        let g = &ctx.game;
+        let g = &ctx.w.game;
         let mut m = g.clear_any[g.shot as usize % 12][g.cfg.difficulty.min(3) as usize];
         if m == 0 {
             m = 1;
@@ -573,8 +574,8 @@ impl MainMenu {
         {
             self.back = 0;
             self.interrupt_all(18);
-            self.char_vms_list(ctx.game.shot as i32);
-            self.cursor = (ctx.game.stage as i32).clamp(0, 7);
+            self.char_vms_list(ctx.w.game.shot as i32);
+            self.cursor = (ctx.w.game.stage as i32).clamp(0, 7);
             let m = Self::practice_mask(ctx);
             self.stages = std::array::from_fn(|i| ctx.core.unlock || m & (1 << i) != 0);
             if !self.stages[self.cursor.clamp(0, 7) as usize] {
@@ -590,18 +591,18 @@ impl MainMenu {
         }
         let stages = self.stages;
         self.move_cursor(ctx, 8, UP, DOWN, |_, c| stages[c as usize]);
-        if ctx.input.pressed(CONFIRM) {
-            ctx.sound.play(sound::OK);
-            let g = &mut ctx.game;
+        if ctx.w.input.pressed(CONFIRM) {
+            ctx.w.sound.play(sound::OK);
+            let g = &mut ctx.w.game;
             g.difficulty = g.cfg.difficulty.min(3) as i32;
             g.stage = self.cursor as usize;
             g.flags = g.flags & !F_REPLAY | F_PRACTICE;
             g.fresh_start = true;
-            ctx.bgm.stop_bgm();
+            ctx.w.bgm.stop_bgm();
             g.request(gamemgr::SCENE_GAME);
             self.remove = true;
-        } else if ctx.input.pressed(CANCEL) {
-            ctx.sound.play(sound::CANCEL);
+        } else if ctx.w.input.pressed(CANCEL) {
+            ctx.w.sound.play(sound::CANCEL);
             // 11 → 9 returns 2: screen 9 runs in this frame (12 §2).
             self.set_screen(crate::menu::CHAR_PRACTICE);
             self.again = true;
@@ -613,10 +614,11 @@ impl MainMenu {
     // Draw step only: the rows are ASCII queue pushes, the draw records nothing itself.
     pub(crate) fn practice_stage_draw_step(&mut self, ctx: &mut Ctx) {
         let [ax, ay] = self.anchor();
-        ctx.ascii
+        ctx.w
+            .ascii
             .push(text(ax, ay - 96.0, "Stage    HI-Score", 0xFFFFFFFF, false));
         let m = Self::practice_mask(ctx);
-        let g = &ctx.game;
+        let g = &ctx.w.game;
         let (shot, d) = (g.shot as usize % 12, g.cfg.difficulty.min(4) as usize);
         let p = &g.score.pscr[shot];
         for r in 0..8 {
@@ -629,7 +631,8 @@ impl MainMenu {
                 0xFF404040
             };
             let s = format!("{} {:9}0 ({:3})", STAGES[r], p.hiscore[r][d], p.plays[r][d]);
-            ctx.ascii
+            ctx.w
+                .ascii
                 .push(text(ax, ay - 80.0 + 16.0 * r as f32, s, c, cur));
         }
     }
@@ -638,11 +641,11 @@ impl MainMenu {
 
     // Screen 16 offers shots whose team has a Final A clear (Clear_TeamFinalA); solo shots always pass (16 §6.1).
     pub(crate) fn sp_shot_ok(ctx: &Ctx, s: i32) -> bool {
-        s >= 4 || crate::menu::team_final_a(&ctx.game, ctx.core.unlock, s as usize)
+        s >= 4 || crate::menu::team_final_a(&ctx.w.game, ctx.core.unlock, s as usize)
     }
 
     pub(crate) fn spell_char(&mut self, ctx: &mut Ctx) {
-        let n = if crate::menu::extra_all(&ctx.game, ctx.core.unlock) {
+        let n = if crate::menu::extra_all(&ctx.w.game, ctx.core.unlock) {
             12
         } else {
             4
@@ -653,10 +656,10 @@ impl MainMenu {
         // Back from a spell-practice game: 16 → 17 at once, stage row 9 if the last card was a Last Word,
         // return 2 so screen 17 runs in this frame (12 §2.2, 16 §6.1).
         if self.back != 0 {
-            if ctx.game.card >= 205 {
-                ctx.game.stage = 9;
+            if ctx.w.game.card >= 205 {
+                ctx.w.game.stage = 9;
             }
-            self.lists.sp_row = ctx.game.stage.min(9) as i32;
+            self.lists.sp_row = ctx.w.game.stage.min(9) as i32;
             // +0x00 := 0 before Menu_SetScreen(17) (16 §6.1).
             self.lists.card = 0;
             self.set_screen(crate::menu::SPELL_CARD);
@@ -670,12 +673,12 @@ impl MainMenu {
     // stage row = g_StageIdx, scratch VMs E7B8 / EA5C / ED00 with their strips, pie values zeroed.
     fn spell_char_enter(&mut self, ctx: &mut Ctx, n: i32) {
         {
-            self.lists.sp_row = ctx.game.stage.min(9) as i32;
+            self.lists.sp_row = ctx.w.game.stage.min(9) as i32;
             self.lists.sp_input = false;
             self.set_surface(ctx, "select00.png");
-            ctx.game.flags |= F_PRACTICE | F_SPELL_PRACTICE;
+            ctx.w.game.flags |= F_PRACTICE | F_SPELL_PRACTICE;
             self.interrupt_all(18);
-            let mut c = (ctx.game.shot as i32).min(n - 1);
+            let mut c = (ctx.w.game.shot as i32).min(n - 1);
             for _ in 0..n {
                 if Self::sp_shot_ok(ctx, c) {
                     break;
@@ -713,7 +716,7 @@ impl MainMenu {
                 self.frames = 0;
             }
             self.prev_cursor = self.cursor;
-            ctx.game.shot = self.cursor as u8;
+            ctx.w.game.shot = self.cursor as u8;
             self.char_vms_list(self.cursor);
         }
         if entry {
@@ -733,7 +736,7 @@ impl MainMenu {
             return;
         }
         self.move_cursor(ctx, n, LEFT, RIGHT, |ctx, c| Self::sp_shot_ok(ctx, c));
-        let inp = ctx.input;
+        let inp = ctx.w.input;
         let d = if inp.pressed_or_repeat(UP) {
             -1
         } else if inp.pressed_or_repeat(DOWN) {
@@ -743,19 +746,19 @@ impl MainMenu {
         };
         if d != 0 {
             self.lists.sp_row = (self.lists.sp_row + d).rem_euclid(10);
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
         }
         if inp.pressed(CONFIRM) {
-            ctx.sound.play(sound::OK);
-            ctx.game.stage = self.lists.sp_row as usize;
+            ctx.w.sound.play(sound::OK);
+            ctx.w.game.stage = self.lists.sp_row as usize;
             // +0x00 := 0 before Menu_SetScreen(17); 16 → 17 returns 2: screen 17 runs in this frame (12 §2, 16 §6.1).
             self.lists.card = 0;
             self.set_screen(crate::menu::SPELL_CARD);
             self.again = true;
         } else if inp.pressed(CANCEL) {
-            ctx.sound.play(sound::CANCEL);
+            ctx.w.sound.play(sound::CANCEL);
             // Bomb also stores the row into g_StageIdx (16 §6.1).
-            ctx.game.stage = self.lists.sp_row as usize;
+            ctx.w.game.stage = self.lists.sp_row as usize;
             self.interrupt_all(6);
             // flags &= ~1 only with the switch to the top menu at P+20, after cursor := 2 (16 §6.1, RE-Q55).
             self.pending = Some(Pending {
@@ -812,9 +815,10 @@ impl MainMenu {
             };
             let cur = r as i32 == self.lists.sp_row;
             let c = if cur { 0xFFFFFFFF } else { GREY };
-            ctx.ascii
+            ctx.w
+                .ascii
                 .push(text(x0, y, format!("{marker}{}", SP_ROWS[r]), c, cur));
-            ctx.ascii.push(
+            ctx.w.ascii.push(
                 text(
                     x0 + 182.0,
                     y,
@@ -834,9 +838,10 @@ impl MainMenu {
         } else {
             " "
         };
-        ctx.ascii
+        ctx.w
+            .ascii
             .push(text(x0, y, format!("{marker}Total"), 0xFFD06060, false));
-        ctx.ascii.push(
+        ctx.w.ascii.push(
             text(
                 x0 + 182.0,
                 y,
@@ -872,7 +877,7 @@ impl MainMenu {
             self.lists.pies[k] = v;
         }
         self.glyph_vm(ctx);
-        let anm = &ctx.anm;
+        let anm = &ctx.w.anm;
         for (k, z, c) in PERCENTS {
             percent_glyphs(
                 anm,
@@ -902,9 +907,16 @@ impl MainMenu {
         let v = self.lists.pies;
         let mut glyph = self.lists.glyph.clone();
         let mut percent = |rec: &mut Recorder, (k, z, c): (usize, [f32; 2], [u8; 4])| {
-            percent_glyphs(&ctx.anm, &mut glyph, pct(v[k]), z[0], z[1], 0.01, c, |vm| {
-                emit0(ctx, rec, vm)
-            });
+            percent_glyphs(
+                &ctx.w.anm,
+                &mut glyph,
+                pct(v[k]),
+                z[0],
+                z[1],
+                0.01,
+                c,
+                |vm| emit0(ctx, rec, vm),
+            );
         };
         pie(rec, [530.0, 420.0], 24.0, 0.02, 0x60C0C0F0, v[0]);
         pie(rec, [530.0, 420.0], 12.0, 0.01, 0x80C0C0F0, v[1]);
@@ -1063,8 +1075,8 @@ impl MainMenu {
             for vm in &mut self.vms {
                 vm.pending_interrupt = 26;
             }
-            compute_last_word_unlocks(&mut ctx.game);
-            let id = ctx.game.card as i32 - a as i32;
+            compute_last_word_unlocks(&mut ctx.w.game);
+            let id = ctx.w.game.card as i32 - a as i32;
             self.lists.card = if (0..count).contains(&id) { id } else { 0 };
             self.lists.page = self.lists.card / 15;
             self.lists.prev_card = self.lists.card;
@@ -1087,21 +1099,21 @@ impl MainMenu {
     }
 
     fn spell_card_input(&mut self, ctx: &mut Ctx, a: usize, count: i32) {
-        let inp = ctx.input;
+        let inp = ctx.w.input;
         let mut c = self.lists.card;
         if inp.pressed_or_repeat(UP) {
             c = (c - 1).rem_euclid(count);
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
         } else if inp.pressed_or_repeat(DOWN) {
             c = (c + 1).rem_euclid(count);
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
         // Page keys only when count > 15 (16 §6.2); Left also flushes the sound queue (Sound_Update, 13 §1.3).
         } else if count > 15 && inp.pressed_or_repeat(LEFT) {
             c -= 15;
             if c < 0 {
                 c = count - 1;
             }
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
             ctx.sound_update();
         } else if count > 15 && inp.pressed_or_repeat(RIGHT) {
             if count % 15 < count - c {
@@ -1109,7 +1121,7 @@ impl MainMenu {
             } else {
                 c %= 15;
             }
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
         }
         if c != self.lists.card {
             self.lists.card = c;
@@ -1146,11 +1158,11 @@ impl MainMenu {
             // Locked card: SE 0x29 (16 §6.2).
             let ok = seen(&catk(ctx, id), 12) || selectable(ctx, id);
             if !ok {
-                ctx.sound.play(sound::INVALID);
+                ctx.w.sound.play(sound::INVALID);
                 return;
             }
-            ctx.sound.play(sound::OK);
-            let g = &mut ctx.game;
+            ctx.w.sound.play(sound::OK);
+            let g = &mut ctx.w.game;
             g.flags |= F_SPELL_PRACTICE;
             g.flags &= !F_REPLAY;
             g.card = id as i16;
@@ -1159,14 +1171,14 @@ impl MainMenu {
             // Other cards keep g_StageIdx = the row set by the screen-16 confirm (16 §6.1).
             g.stage = st.unwrap_or(self.lists.sp_row as usize);
             g.fresh_start = true;
-            ctx.bgm.stop_bgm();
+            ctx.w.bgm.stop_bgm();
             g.request(gamemgr::SCENE_GAME);
             self.remove = true;
         } else if inp.pressed(CANCEL) {
-            ctx.sound.play(sound::CANCEL);
-            ctx.game.card = id as i16;
+            ctx.w.sound.play(sound::CANCEL);
+            ctx.w.game.card = id as i16;
             // +0x00 := g_StageIdx before Menu_SetScreen(16) (16 §6.2); 17 → 16 returns 2: screen 16 runs in this frame (12 §2).
-            self.lists.sp_row = ctx.game.stage.min(9) as i32;
+            self.lists.sp_row = ctx.w.game.stage.min(9) as i32;
             self.set_screen(crate::menu::SPELL_PRACTICE);
             self.again = true;
         }
@@ -1198,14 +1210,14 @@ impl MainMenu {
             } else {
                 " "
             };
-            ctx.ascii.push(text(
+            ctx.w.ascii.push(text(
                 16.0,
                 y,
                 format!("{marker}No.{:03}", id + 1),
                 col,
                 false,
             ));
-            ctx.ascii.push(
+            ctx.w.ascii.push(
                 text(
                     430.0,
                     y,
@@ -1306,7 +1318,7 @@ impl MainMenu {
             self.set_surface(ctx, "select00.png");
             self.interrupt_all(14);
             self.desc_cur = None;
-            self.load_replays(&ctx.game.ver_list, &mut *ctx.host);
+            self.load_replays(&ctx.w.game.ver_list, &mut *ctx.host);
             self.lists.rpy_sub = 1;
             self.lists.rpy_loaded = None;
             if self.prev_screen == crate::menu::TOP {
@@ -1323,7 +1335,7 @@ impl MainMenu {
             return true;
         }
         let n = self.replays.len() as i32;
-        let inp = ctx.input;
+        let inp = ctx.w.input;
         match self.lists.rpy_sub {
             1 => {
                 if n > 0 {
@@ -1332,7 +1344,7 @@ impl MainMenu {
                 // Left / Right page by 15 only with more than 15 files, wrapping by the count; SE 12 (15 §3.8).
                 if n > 15 && (inp.pressed_or_repeat(LEFT) || inp.pressed_or_repeat(RIGHT)) {
                     self.cursor = rpy_page(self.cursor, n, inp.pressed_or_repeat(LEFT));
-                    ctx.sound.play(sound::SELECT);
+                    ctx.w.sound.play(sound::SELECT);
                 }
                 // +0xC28C := cursor every sub-state-1 frame, after the paging (15 §3.8).
                 self.lists.rpy_file = self.cursor;
@@ -1342,14 +1354,14 @@ impl MainMenu {
                     return true;
                 }
                 if inp.pressed(CONFIRM) && n > 0 {
-                    ctx.sound.play(sound::OK);
+                    ctx.w.sound.play(sound::OK);
                     let i = self.cursor as usize;
                     // Stage cursor = first stage with a record; +0xC290 keeps its old value until sub-state 2. None:
                     // error log line, scene −1, return 0 (15 §3.8, 00 §2).
                     let st = &self.replays[i].1.stages;
                     let Some(first) = (0..9).find(|&s| st[s].is_some()) else {
                         log::error!("リプレイデータが異常");
-                        ctx.game.request(-1);
+                        ctx.w.game.request(-1);
                         return false;
                     };
                     self.lists.rpy_loaded = Some(i);
@@ -1362,7 +1374,7 @@ impl MainMenu {
                     self.lists.rpy_sub = 2;
                     self.rpy_choose();
                 } else if inp.pressed(CANCEL) {
-                    ctx.sound.play(sound::CANCEL);
+                    ctx.w.sound.play(sound::CANCEL);
                     self.lists.rpy_t = 0;
                     self.interrupt_all(16);
                     // Replay leave: top menu (cursor 4) after 30 frames (12 §2).
@@ -1390,13 +1402,13 @@ impl MainMenu {
                     0
                 };
                 if d != 0 {
-                    ctx.sound.play(sound::SELECT);
+                    ctx.w.sound.play(sound::SELECT);
                 }
                 // +0xC290 is written only here, so the row shown on the file-confirm frame lags by one (15 §3.8).
                 self.cursor = rpy_stage_step(&have, self.cursor.max(0) as usize, d) as i32;
                 self.lists.rpy_stage = self.cursor as usize;
                 if inp.pressed(CONFIRM) {
-                    ctx.sound.play(sound::OK);
+                    ctx.w.sound.play(sound::OK);
                     let spell = r.spell_id() >= 0;
                     self.lists.rpy_sub = 3;
                     self.cursor = 0;
@@ -1405,7 +1417,7 @@ impl MainMenu {
                     self.vms[v].pending_interrupt = 17;
                     self.rpy_speed_vms(spell);
                 } else if inp.pressed(CANCEL) {
-                    ctx.sound.play(sound::CANCEL);
+                    ctx.w.sound.play(sound::CANCEL);
                     // The cancels zero +0x1442C, which only sub-state 0 reads, so the entry block never reruns (12 §2, 15 §3.8).
                     self.lists.rpy_sub = 1;
                     self.cursor = self.lists.rpy_file;
@@ -1426,22 +1438,22 @@ impl MainMenu {
                     self.cursor = (old + 1).rem_euclid(m);
                 }
                 if self.cursor != old {
-                    ctx.sound.play(sound::SELECT);
+                    ctx.w.sound.play(sound::SELECT);
                     self.rpy_speed_vms(spell);
                 }
                 if inp.pressed(CONFIRM) {
-                    ctx.sound.play(sound::OK);
-                    ctx.game.replay_speed = self.cursor as u8;
+                    ctx.w.sound.play(sound::OK);
+                    ctx.w.game.replay_speed = self.cursor as u8;
                     // The loaded replay stays listed: this frame's draw still shows its detail rows.
                     let r = self.replays[i].1.clone();
                     let st = Some(self.lists.rpy_stage);
-                    if crate::replay::start_playback(&mut ctx.game, r, st, None) {
-                        ctx.bgm.stop_bgm();
+                    if crate::replay::start_playback(&mut ctx.w.game, r, st, None) {
+                        ctx.w.bgm.stop_bgm();
                     }
                     // Return 0: nothing of the menu is drawn in the confirm frame (15 §3.8 Start).
                     self.remove = true;
                 } else if inp.pressed(CANCEL) {
-                    ctx.sound.play(sound::CANCEL);
+                    ctx.w.sound.play(sound::CANCEL);
                     self.lists.rpy_sub = 2;
                     self.cursor = self.lists.rpy_stage as i32;
                     self.rpy_choose();
@@ -1456,7 +1468,7 @@ impl MainMenu {
     pub(crate) fn replay_draw_step(&mut self, ctx: &mut Ctx) {
         let at = |m: &Self, k: usize| (m.vms[k].pos[0], m.vms[k].pos[1]);
         let (x, y) = at(self, 79);
-        ctx.ascii.push(text(
+        ctx.w.ascii.push(text(
             x,
             y,
             "No.   Name       Date  Player   Rank",
@@ -1492,7 +1504,7 @@ impl MainMenu {
             };
             let cur = i as i32 == self.lists.rpy_file;
             let (x, y) = at(self, 80 + j);
-            ctx.ascii.push(text(
+            ctx.w.ascii.push(text(
                 x,
                 y,
                 head + &tail,
@@ -1503,7 +1515,7 @@ impl MainMenu {
         if let (2 | 3, Some(i)) = (self.lists.rpy_sub, self.lists.rpy_loaded) {
             let r = &self.replays[i].1;
             let (x, y) = at(self, 78);
-            ctx.ascii.push(text(
+            ctx.w.ascii.push(text(
                 x,
                 y,
                 format!("       {:2.3}%", r.slowdown()),
@@ -1511,11 +1523,12 @@ impl MainMenu {
                 false,
             ));
             let (x, y) = at(self, 95);
-            ctx.ascii
+            ctx.w
+                .ascii
                 .push(text(x, y, "Stage    LastScore", 0xFFFFFFFF, false));
             if r.spell_id() >= 0 {
                 let (x, y) = at(self, 97);
-                ctx.ascii.push(text(
+                ctx.w.ascii.push(text(
                     x,
                     y,
                     format!("No.{:03} {:9}0", r.spell_id() + 1, r.score()),
@@ -1538,7 +1551,7 @@ impl MainMenu {
                         _ => (0x60808080, false),
                     };
                     let (x, y) = at(self, 96 + s);
-                    ctx.ascii.push(text(x, y, line, c, hl));
+                    ctx.w.ascii.push(text(x, y, line, c, hl));
                 }
             }
         }

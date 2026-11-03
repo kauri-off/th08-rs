@@ -32,31 +32,33 @@ fn main() -> anyhow::Result<()> {
     let rows = parse_trace(&trace);
     let r = th08::replay::parse(
         &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
-        ctx.game.ver_list.get(),
+        ctx.w.game.ver_list.get(),
     )?;
-    ctx.game.replay_ff = false;
-    th08::replay::start_playback(&mut ctx.game, r, None, Some(n));
+    ctx.w.game.replay_ff = false;
+    th08::replay::start_playback(&mut ctx.w.game, r, None, Some(n));
     let (a, b) = range.unwrap_or((0, 0));
     let mut base = 0;
     let mut started = false;
+    // Kept across calcs that do not advance the demo frame, like the former thread-local list.
+    let mut calls = Vec::new();
     loop {
-        let before = ctx.game.demo_frame;
+        let before = ctx.w.game.demo_frame;
         if !started {
-            base = ctx.rng.total;
+            base = ctx.w.rng.total;
         }
         let tr = rng_frame == Some(before + 1);
-        th08::rng::TRACE.set(tr);
+        ctx.w.rng.trace = tr.then(Vec::new);
         eprintln!("== calc for frame {}", before + 1);
         ctx.calc();
-        th08::rng::TRACE.set(false);
-        if ctx.game.demo_frame == before {
+        calls.extend(ctx.w.rng.trace.take().unwrap_or_default());
+        if ctx.w.game.demo_frame == before {
             continue;
         }
         started = true;
-        let f = ctx.game.demo_frame as usize;
+        let f = ctx.w.game.demo_frame as usize;
         if tr {
             let mut groups: Vec<(String, usize)> = Vec::new();
-            for c in th08::rng::CALLS.with_borrow_mut(std::mem::take) {
+            for c in std::mem::take(&mut calls) {
                 let frames: Vec<String> = c
                     .lines()
                     .filter(|l| {
@@ -84,8 +86,8 @@ fn main() -> anyhow::Result<()> {
             }
         }
         if f >= a && f <= b && th08::settings::get().bdump {
-            if ctx.gm.is_some() {
-                if let Some(em) = ctx.enemies.as_deref() {
+            if ctx.w.gm.is_some() {
+                if let Some(em) = ctx.w.enemies.as_deref() {
                     for (i, x) in em.enemies.iter().enumerate() {
                         if x.alive() {
                             println!(
@@ -101,7 +103,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 if th08::settings::get().idump
-                    && let Some(p) = ctx.player.as_deref()
+                    && let Some(p) = ctx.w.player.as_deref()
                 {
                     println!(
                         "  player {:.1},{:.1} state {} poc {} {}",
@@ -109,6 +111,7 @@ fn main() -> anyhow::Result<()> {
                     );
                 }
                 if let Some(bm) = ctx
+                    .w
                     .bullets
                     .as_deref()
                     .filter(|_| th08::settings::get().idump)
@@ -123,6 +126,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 if let Some(bm) = ctx
+                    .w
                     .bullets
                     .as_deref()
                     .filter(|_| !th08::settings::get().idump)
@@ -149,7 +153,7 @@ fn main() -> anyhow::Result<()> {
             && f <= b
             && let Some(k) = th08::settings::get().edump
         {
-            print!("frame {f} {}", ctx.effects.dump(k));
+            print!("frame {f} {}", ctx.w.effects.dump(k));
         }
         if f >= a && f <= b {
             let got = sample(&ctx, base);

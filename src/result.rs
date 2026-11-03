@@ -153,7 +153,7 @@ fn text_vm(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     let mut vm = AnmVm::default();
     vm.init();
     vm.anm_slot = slot as _;
-    vm.set_sprite(&ctx.anm, sprite);
+    vm.set_sprite(&ctx.w.anm, sprite);
     if !centred {
         vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
     }
@@ -165,7 +165,7 @@ fn text_vm(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
 fn emit_at(ctx: &Ctx, rec: &mut Recorder, vm: &AnmVm, x: f32, y: f32) {
     let mut vm = vm.clone();
     vm.pos = [x, y, 0.0];
-    ctx.anm.emit_mode(rec, &vm, 0);
+    ctx.w.anm.emit_mode(rec, &vm, 0);
 }
 
 fn vm_argb(vm: &AnmVm) -> u32 {
@@ -177,7 +177,7 @@ fn vm_argb(vm: &AnmVm) -> u32 {
 }
 
 fn put(ctx: &mut Ctx, x: f32, y: f32, s: impl Into<String>, argb: u32) {
-    ctx.ascii.push(Text::new(x, y, s).argb(argb));
+    ctx.w.ascii.push(Text::new(x, y, s).argb(argb));
 }
 
 impl ResultScreen {
@@ -288,7 +288,7 @@ impl ResultScreen {
                 for i in 0..n {
                     let vm = &mut self.vms[first + i as usize];
                     vm.pending_interrupt = 22;
-                    vm.run(&mut ctx.anm, &mut ctx.rng);
+                    vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
                     vm.pending_interrupt = if i == self.cursor { 20 } else { 21 };
                 }
             }
@@ -298,7 +298,7 @@ impl ResultScreen {
             }
             return None;
         }
-        let inp = ctx.input;
+        let inp = ctx.w.input;
         // Result_CursorUpDown 0x45A0F4: edge or repeat, wraps.
         let d = if inp.pressed_or_repeat(UP) {
             -1
@@ -309,12 +309,12 @@ impl ResultScreen {
         };
         if d != 0 {
             self.cursor = (self.cursor + d).rem_euclid(n);
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
             self.highlight(first, n);
         }
         // Every page tests cancel before confirm (16 §2.4), so both on one frame cancel.
         if inp.pressed(CANCEL) {
-            ctx.sound.play(sound::CANCEL);
+            ctx.w.sound.play(sound::CANCEL);
             return Some(false);
         }
         if inp.pressed(CONFIRM) {
@@ -348,11 +348,11 @@ impl ResultScreen {
             S_LEAVE => {
                 // Exit (16 §2.1 state 2, §2.4 exit): frame 1 Loading_Begin + interrupt 2, scene 1 after 20.
                 if self.frame == 1 {
-                    ctx.game.loading_req = true;
+                    ctx.w.game.loading_req = true;
                     self.interrupt_all(2);
                 }
                 if self.frame > 19 {
-                    ctx.game.request(gamemgr::SCENE_MENU);
+                    ctx.w.game.request(gamemgr::SCENE_MENU);
                 }
             }
             // State 3, Result_CheatUnlock 0x4550FC (16 §2.4); the hidden code runs every frame, sub-state 0 included.
@@ -360,7 +360,7 @@ impl ResultScreen {
                 // The code steps after the page input; a confirm / cancel call returns before it (16 §2.4).
                 match self.page(ctx, 4, 5, self.rank_diff, 6) {
                     Some(true) => {
-                        ctx.sound.play(sound::OK);
+                        ctx.w.sound.play(sound::OK);
                         self.rank_diff = self.cursor;
                         self.set_state(S_CHAR);
                         self.cursor = 0;
@@ -371,9 +371,9 @@ impl ResultScreen {
                         self.cursor = 0;
                     }
                     None => {
-                        if self.hidden.step(ctx.input) {
-                            hidden_unlock(&mut ctx.game);
-                            ctx.sound.play(sound::EXTEND);
+                        if self.hidden.step(ctx.w.input) {
+                            hidden_unlock(&mut ctx.w.game);
+                            ctx.w.sound.play(sound::EXTEND);
                         }
                     }
                 }
@@ -381,7 +381,7 @@ impl ResultScreen {
             // State 4 (0x45567D).
             S_CHAR => match self.page(ctx, 15, 12, self.rank_shot, 6) {
                 Some(true) => {
-                    ctx.sound.play(sound::OK);
+                    ctx.w.sound.play(sound::OK);
                     self.vms[VM_ANCHOR].pending_interrupt = 3;
                     self.rank_shot = -1;
                     self.set_state(S_RANK);
@@ -399,7 +399,7 @@ impl ResultScreen {
             // State 6 (0x455A33).
             S_GROUP => match self.page(ctx, 9, 6, self.card_group, 6) {
                 Some(true) => {
-                    ctx.sound.play(sound::OK);
+                    ctx.w.sound.play(sound::OK);
                     self.card_group = self.cursor;
                     self.set_state(S_CARD_CHAR);
                 }
@@ -413,7 +413,7 @@ impl ResultScreen {
             // State 7 (0x455CB0).
             S_CARD_CHAR => match self.page(ctx, 27, 13, self.card_char, 6) {
                 Some(true) => {
-                    ctx.sound.play(sound::OK);
+                    ctx.w.sound.play(sound::OK);
                     self.card_char = self.cursor;
                     self.set_state(S_CARDS);
                     self.vms[VM_ANCHOR].pending_interrupt = 3;
@@ -437,7 +437,7 @@ impl ResultScreen {
                 if self.frame <= 30 {
                     self.vms[VM_PANEL].pending_interrupt = 18;
                 }
-                if self.frame >= 90 && ctx.input.pressed(SHOT | ENTER) {
+                if self.frame >= 90 && ctx.w.input.pressed(SHOT | ENTER) {
                     self.vms[VM_PANEL].pending_interrupt = 2;
                     self.set_state(S_PANEL_OUT);
                 }
@@ -449,17 +449,17 @@ impl ResultScreen {
                     self.frame = 9;
                 }
             }
-            S_SAVE => self.save_ask(ctx.input, &ctx.game, &mut ctx.sound, &mut *ctx.host),
+            S_SAVE => self.save_ask(ctx.w.input, &ctx.w.game, &mut ctx.w.sound, &mut *ctx.host),
             S_SAVE_MSG => {
                 // State 11: the "cannot save" message, left from frame 20 (16 §2.6).
-                let inp = ctx.input;
+                let inp = ctx.w.input;
                 if self.frame >= 20 && (inp.pressed(CONFIRM) || inp.pressed(CANCEL)) {
-                    self.leave_save(&mut ctx.sound);
+                    self.leave_save(&mut ctx.w.sound);
                 }
             }
             S_SAVE_SLOT => {
                 let now = ctx.host.local_time();
-                self.save_slot(ctx.input, &ctx.game, &mut ctx.sound, now)
+                self.save_slot(ctx.w.input, &ctx.w.game, &mut ctx.w.sound, now)
             }
             S_SAVE_NAME => self.save_name(ctx),
             S_SAVE_OVER => self.save_overwrite(ctx),
@@ -478,11 +478,11 @@ impl ResultScreen {
         }
         // D in sub-state 1 dumps score.txt, no sound (16 §2.7). Port: written next to score.dat (web: localStorage).
         // Order cursor → D → cancel → confirm (16 §2.4); the dump does not depend on the cursor, so D goes first here.
-        if self.sub == 1 && ctx.input.pressed(KEY_D) {
-            ctx.game.update_run_time(ctx.host.ticks_ms());
+        if self.sub == 1 && ctx.w.input.pressed(KEY_D) {
+            ctx.w.game.update_run_time(ctx.host.ticks_ms());
             let stamp = ctx.host.local_time().datetime();
-            let txt = score_txt(&ctx.game.score, stamp.get(2..).unwrap_or(&stamp));
-            if ctx.game.persist {
+            let txt = score_txt(&ctx.w.game.score, stamp.get(2..).unwrap_or(&stamp));
+            if ctx.w.game.persist {
                 ctx.host.write("score.txt", &txt);
             }
         }
@@ -490,19 +490,19 @@ impl ResultScreen {
         match self.page(ctx, 0, 4, c, 20) {
             Some(true) => match self.cursor {
                 0 => {
-                    ctx.sound.play(sound::OK);
+                    ctx.w.sound.play(sound::OK);
                     self.set_state(S_DIFF);
                 }
                 1 => {
-                    ctx.sound.play(sound::OK);
+                    ctx.w.sound.play(sound::OK);
                     self.set_state(S_GROUP);
                 }
                 2 => {
-                    ctx.sound.play(sound::OK);
+                    ctx.w.sound.play(sound::OK);
                     self.set_state(S_PLAY);
                 }
                 _ => {
-                    ctx.sound.play(sound::CANCEL);
+                    ctx.w.sound.play(sound::CANCEL);
                     self.set_state(S_LEAVE);
                 }
             },
@@ -513,9 +513,9 @@ impl ResultScreen {
                     // Cancel off item 3 does not return (16 §2.4): a confirm edge in the same call exits via item 3.
                     self.cursor = 3;
                     self.highlight(0, 4);
-                    if ctx.input.pressed(CONFIRM) {
+                    if ctx.w.input.pressed(CONFIRM) {
                         self.confirm_vms(0, 4);
-                        ctx.sound.play(sound::CANCEL);
+                        ctx.w.sound.play(sound::CANCEL);
                         self.set_state(S_LEAVE);
                     }
                 }
@@ -532,7 +532,7 @@ impl ResultScreen {
         if self.frame < 6 {
             return;
         }
-        let inp = ctx.input;
+        let inp = ctx.w.input;
         // Result_CursorLeftRight 0x45A2F2.
         let d = if inp.pressed_or_repeat(LEFT) {
             -1
@@ -544,7 +544,7 @@ impl ResultScreen {
         if d != 0 {
             let old = self.cursor;
             self.cursor = (self.cursor + d).rem_euclid(12);
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
             self.frame = 0;
             self.vms[VM_ANCHOR].pending_interrupt = (3 + self.rank_diff) as u16;
             self.vms[15 + old as usize].pending_interrupt = 24;
@@ -553,7 +553,7 @@ impl ResultScreen {
         if inp.pressed(CANCEL) {
             self.rank_shot = self.cursor;
             self.vms[VM_ANCHOR].pending_interrupt = 1;
-            ctx.sound.play(sound::CANCEL);
+            ctx.w.sound.play(sound::CANCEL);
             self.set_state(S_CHAR);
         }
     }
@@ -575,7 +575,7 @@ impl ResultScreen {
             for k in 0..10 {
                 let idx = (self.cursor * 10 + k) as usize;
                 let Some(&id) = ids.get(idx) else { break };
-                let c = &ctx.game.score.catk[id];
+                let c = &ctx.w.game.score.catk[id];
                 let s = if c.counters[C_ATTEMPTS][12] != 0 {
                     SjisString(c.name[..c.name.iter().position(|&b| b == 0).unwrap_or(48)].to_vec())
                 } else {
@@ -592,7 +592,7 @@ impl ResultScreen {
         if self.frame < 6 || self.card_leaving {
             return;
         }
-        let inp = ctx.input;
+        let inp = ctx.w.input;
         let lr = if inp.pressed_or_repeat(LEFT) {
             -1
         } else if inp.pressed_or_repeat(RIGHT) {
@@ -602,7 +602,7 @@ impl ResultScreen {
         };
         if lr != 0 {
             self.cursor = (self.cursor + lr).rem_euclid((n + 9) / 10);
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
             self.frame = 0;
             self.vms[VM_ANCHOR].pending_interrupt = 10;
         } else {
@@ -617,7 +617,7 @@ impl ResultScreen {
             if ud != 0 {
                 let old = self.card_char;
                 self.card_char = (self.card_char + ud).rem_euclid(13);
-                ctx.sound.play(sound::SELECT);
+                ctx.w.sound.play(sound::SELECT);
                 self.frame = 0;
                 self.accordion = true;
                 self.vms[27 + old as usize].pending_interrupt = 24;
@@ -627,7 +627,7 @@ impl ResultScreen {
         if inp.pressed(CANCEL) {
             self.card_leaving = true;
             self.frame = 0;
-            ctx.sound.play(sound::CANCEL);
+            ctx.w.sound.play(sound::CANCEL);
             self.vms[VM_ANCHOR].pending_interrupt = 1;
         }
     }
@@ -638,12 +638,12 @@ impl ResultScreen {
         match self.state {
             S_PLAY => {
                 if self.frame == 1 {
-                    ctx.game.update_run_time(ctx.host.ticks_ms());
+                    ctx.w.game.update_run_time(ctx.host.ticks_ms());
                     for k in 0..19 {
                         let s = self.play_line(ctx, k);
                         self.render(ctx, k, sjis::encode(&s));
                     }
-                    self.run_secs = ctx.game.score.plst.run_time[2];
+                    self.run_secs = ctx.w.game.score.plst.run_time[2];
                     // x 56; y 64, 81, 98, then +17, one extra +17 gap before k = 16 (16 §2.4).
                     for (k, vm) in self.text_vms[..20].iter_mut().enumerate() {
                         let y = 64 + 17 * k + if k >= 16 { 17 } else { 0 };
@@ -659,14 +659,14 @@ impl ResultScreen {
             }
             S_PLAY_WAIT => {
                 if self.frame % 60 == 0 {
-                    ctx.game.update_run_time(ctx.host.ticks_ms());
-                    if ctx.game.score.plst.run_time[2] != self.run_secs {
-                        self.run_secs = ctx.game.score.plst.run_time[2];
+                    ctx.w.game.update_run_time(ctx.host.ticks_ms());
+                    if ctx.w.game.score.plst.run_time[2] != self.run_secs {
+                        self.run_secs = ctx.w.game.score.plst.run_time[2];
                         let s = self.play_line(ctx, 0);
                         self.render(ctx, 0, sjis::encode(&s));
                     }
                 }
-                if ctx.input.pressed(SHOT | BOMB | PAUSE | ENTER) {
+                if ctx.w.input.pressed(SHOT | BOMB | PAUSE | ENTER) {
                     self.set_state(S_PLAY_OUT);
                 }
             }
@@ -688,7 +688,7 @@ impl ResultScreen {
     }
 
     fn play_line(&self, ctx: &Ctx, k: usize) -> String {
-        play_line(&ctx.game.score.plst, k, 5)
+        play_line(&ctx.w.game.score.plst, k, 5)
     }
 
     // State 9, Result_NameEntry 0x45621E (16 §2.2): input from frame 10, every key edge or repeat except the ESC finish.
@@ -703,11 +703,11 @@ impl ResultScreen {
         let finish = k.end || k.esc;
         // The entry is edited in place inside the list, so the ranking shows it during entry.
         let name = self.name;
-        if let Some(e) = ctx.game.score.new_entry_mut() {
+        if let Some(e) = ctx.w.game.score.new_entry_mut() {
             e.0[0x17..0x1F].copy_from_slice(&name);
         }
         if finish {
-            let l = &mut ctx.game.score.lsnm;
+            let l = &mut ctx.w.game.score.lsnm;
             l.fill(0);
             l[..8].copy_from_slice(&name);
             self.interrupt_all(2);
@@ -718,24 +718,24 @@ impl ResultScreen {
     // One frame of the name grid (16 §2.2), into +0x58: Up, Down, Left, Right, type, backspace, then the ESC edge; every
     // key but ESC is edge or repeat.
     fn edit_name(&mut self, ctx: &mut Ctx) -> NameKeys {
-        let inp = ctx.input;
+        let inp = ctx.w.input;
         let rep = |b: u16| inp.pressed_or_repeat(b);
         let (c, moves) = move_char_cursor(
             self.char_cursor,
             [rep(UP), rep(DOWN), rep(LEFT), rep(RIGHT)],
         );
         for _ in 0..moves {
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
         }
         self.char_cursor = c;
         let mut end = false;
         if rep(SHOT | ENTER) {
             if c < CELL_SP {
-                self.type_char(CHARSET[c as usize], &mut ctx.sound);
+                self.type_char(CHARSET[c as usize], &mut ctx.w.sound);
             } else if c == CELL_SP {
-                self.type_char(b' ', &mut ctx.sound);
+                self.type_char(b' ', &mut ctx.w.sound);
             } else {
-                ctx.sound.play(sound::CANCEL);
+                ctx.w.sound.play(sound::CANCEL);
                 end = true;
             }
         }
@@ -744,7 +744,7 @@ impl ResultScreen {
             self.name[self.name_pos.min(7) as usize] = b' ';
             self.name_pos -= 1;
             self.name[self.name_pos as usize] = b' ';
-            ctx.sound.play(sound::CANCEL);
+            ctx.w.sound.play(sound::CANCEL);
         }
         NameKeys {
             end,
@@ -906,11 +906,11 @@ impl ResultScreen {
         if self.frame < 20 {
             return;
         }
-        self.yes_no_keys(ctx.input, &mut ctx.sound);
-        let inp = ctx.input;
+        self.yes_no_keys(ctx.w.input, &mut ctx.w.sound);
+        let inp = ctx.w.input;
         // Cancel / ESC first, without looking at confirm (16 §2.6).
         if inp.pressed(CANCEL) {
-            self.back_to_list(&mut ctx.sound, &ctx.game.ver_list, &mut *ctx.host);
+            self.back_to_list(&mut ctx.w.sound, &ctx.w.game.ver_list, &mut *ctx.host);
         } else if inp.pressed(CONFIRM) {
             self.frame = 0;
             if self.cursor == 0 {
@@ -918,7 +918,7 @@ impl ResultScreen {
                 self.vms[56 + self.slot as usize].pending_interrupt = 16;
                 self.set_state(S_SAVE_NAME);
             } else {
-                self.back_to_list(&mut ctx.sound, &ctx.game.ver_list, &mut *ctx.host);
+                self.back_to_list(&mut ctx.w.sound, &ctx.w.game.ver_list, &mut *ctx.host);
             }
         }
     }
@@ -932,13 +932,13 @@ impl ResultScreen {
         if k.end {
             let name = self.name;
             crate::replay::save(ctx, self.slot as usize + 1, &name);
-            let l = &mut ctx.game.score.lsnm;
+            let l = &mut ctx.w.game.score.lsnm;
             l.fill(0);
             l[..8].copy_from_slice(&name);
             self.set_state(S_LEAVE);
             self.interrupt_all(2);
         } else if k.esc {
-            self.back_to_list(&mut ctx.sound, &ctx.game.ver_list, &mut *ctx.host);
+            self.back_to_list(&mut ctx.w.sound, &ctx.w.game.ver_list, &mut *ctx.host);
             // QUIRK: name pos and list cursor are both +0x1C, so the list resumes on row = name length.
             self.cursor = self.name_pos;
         }
@@ -964,7 +964,7 @@ impl ResultScreen {
     // Frame 0 of state 9: the HSCR entry from the in-game record (16 §2.2, 15 §2.3). False = no entry.
     fn name_start(&mut self, ctx: &mut Ctx) -> bool {
         let now = ctx.host.local_time();
-        let g = &mut ctx.game;
+        let g = &mut ctx.w.game;
         let shot = (g.shot as usize + g.demo_shot_bias as usize) % 12;
         let d = g.difficulty.clamp(0, 4) as usize;
         (self.rank_shot, self.rank_diff) = (shot as i32, d as i32);
@@ -1035,6 +1035,7 @@ impl ResultScreen {
             return;
         }
         let list = ctx
+            .w
             .game
             .score
             .ranking(self.rank_shot as usize, self.rank_diff.clamp(0, 4) as usize);
@@ -1109,7 +1110,7 @@ impl ResultScreen {
                     .argb(0xFFFFFFC0)
                     .scale(s);
             }
-            ctx.ascii.push(t);
+            ctx.w.ascii.push(t);
         }
     }
 
@@ -1119,7 +1120,7 @@ impl ResultScreen {
     fn draw_save(&mut self, ctx: &mut Ctx) {
         for vm in &mut self.vms[49..55] {
             let mode = vm.draw_mode;
-            ctx.anm.prepare(vm, mode);
+            ctx.w.anm.prepare(vm, mode);
         }
         // QUIRK: no colour is set for the header; it keeps the one left by the previous text: white, or in state 13
         // the last grid cell's (END), as the grid is drawn first.
@@ -1136,7 +1137,7 @@ impl ResultScreen {
             "No.   Name     Date   Player Score",
             header,
         );
-        let g = &ctx.game;
+        let g = &ctx.w.game;
         let shot = (g.shot as usize + g.demo_shot_bias as usize) % 12;
         let names = &crate::menulist::CHARS;
         for i in 0..15 {
@@ -1189,7 +1190,7 @@ impl ResultScreen {
         let vm = &self.vms[VM_PANEL];
         let col = vm_argb(vm);
         let (x, mut y) = (vm.pos[0] + 210.0, vm.pos[1] + 32.0);
-        let g = &ctx.game;
+        let g = &ctx.w.game;
         let st = &g.stats;
         let d = g.difficulty.clamp(0, 4) as usize;
         let progress = if g.flags & F_ENDING_OK != 0 {
@@ -1232,7 +1233,7 @@ impl ResultScreen {
         }
         let s = self.card_built_char.clamp(0, 12) as usize;
         for (i, id, x, y) in self.card_layout() {
-            let c = &ctx.game.score.catk[id];
+            let c = &ctx.w.game.score.catk[id];
             let (att, cap) = (c.counters[C_ATTEMPTS][s], c.counters[C_CAPTURES][s]);
             let col = if att == 0 {
                 0xC0C0C0FF
@@ -1259,7 +1260,7 @@ impl ResultScreen {
             put(ctx, x, y, format!("No.{:02}", id + 1), col);
             put(ctx, x + 446.0, y, counts, col);
             if let Some(b) = bonus {
-                ctx.ascii.push(
+                ctx.w.ascii.push(
                     Text::new(x + 424.0, y - 13.0, format!("MaxBonus {b:8}"))
                         .argb(0xFFA08090)
                         .scale(0.8),
@@ -1314,9 +1315,9 @@ impl ResultScreen {
             return Ok(());
         }
         // 0x18B8A2C := 0 (13 §3).
-        ctx.load_frames = 0;
+        ctx.w.load_frames = 0;
         // The 5×12 ranking lists are rebuilt from score.dat (15 §2.2–§2.3).
-        ctx.game.score.rebuild_lists();
+        ctx.w.game.score.rebuild_lists();
         match ctx
             .archive
             .present()
@@ -1327,13 +1328,15 @@ impl ResultScreen {
             Ok(t) => self.surface = Some(t),
             Err(e) => log::warn!("result.jpg: {e:#}"),
         }
-        ctx.anm
+        ctx.w
+            .anm
             .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "result00.anm")?;
-        ctx.anm
+        ctx.w
+            .anm
             .load(&mut ctx.rec, &ctx.archive, RT_SLOT, "resulttext.anm")?;
         for i in 0..VM_COUNT {
             let mut vm = AnmVm::default();
-            ctx.anm.set_script(&mut ctx.rng, &mut vm, ANM_SLOT, i);
+            ctx.w.anm.set_script(&mut ctx.w.rng, &mut vm, ANM_SLOT, i);
             self.vms.push(vm);
         }
         self.text_vms = (0..28)
@@ -1348,10 +1351,10 @@ impl ResultScreen {
             .collect();
         self.bar = text_vm(ctx, ANM_SLOT, 32, true);
         // +0x58, the replay name, starts as LSNM (15 §3.6 "pre-filled from LSNM"; state 9 overwrites it).
-        self.name.copy_from_slice(&ctx.game.score.lsnm[..8]);
-        self.register_state(&mut ctx.game);
+        self.name.copy_from_slice(&ctx.w.game.score.lsnm[..8]);
+        self.register_state(&mut ctx.w.game);
         // Captured counts +0x64 per group and character: CATK present (v3) and a story or practice capture (16 §2.4).
-        let catk = &ctx.game.score.catk;
+        let catk = &ctx.w.game.score.catk;
         for g in 0..6 {
             for id in group_cards(g as i32) {
                 let c = &catk[id];
@@ -1375,27 +1378,27 @@ impl ResultScreen {
             return;
         }
         self.removed = true;
-        ctx.game.score.clear_new_flags();
-        ctx.game.save_score(&mut ctx.rng, false, &mut *ctx.host);
+        ctx.w.game.score.clear_new_flags();
+        ctx.w.game.save_score(&mut ctx.w.rng, false, &mut *ctx.host);
         if let Some(t) = self.surface.take() {
             ctx.rec.free_texture(t);
         }
-        ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
-        ctx.anm.unload(&mut ctx.rec, RT_SLOT);
+        ctx.w.anm.unload(&mut ctx.rec, ANM_SLOT);
+        ctx.w.anm.unload(&mut ctx.rec, RT_SLOT);
     }
 
     // Result_Calc 0x4584B0: state, then the 72 VMs, then frame += 1.
     pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.calc_state(ctx);
         // Session tool hook.
-        ctx.game.trace_result = Some(self.state);
+        ctx.w.game.trace_result = Some(self.state);
         // 16 §2.4 exit: state 2 at frame > 19 returns 0 before the VMs and frame += 1, so Result_OnRemove (score.dat
         // save, 2 RNG draws) runs in this calc pass.
         if exits(self.state, self.frame) {
             return Ret::Remove;
         }
         for vm in &mut self.vms {
-            vm.run(&mut ctx.anm, &mut ctx.rng);
+            vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
         }
         self.frame += 1;
         Ret::Next
@@ -1415,7 +1418,7 @@ impl ResultScreen {
                 vm.pos[k] += vm.pos_offset[k];
             }
             let mode = vm.draw_mode;
-            ctx.anm.prepare(vm, mode);
+            ctx.w.anm.prepare(vm, mode);
             vm.pos = p;
         }
         match self.state {
@@ -1448,19 +1451,19 @@ impl ResultScreen {
             for k in 0..3 {
                 vm.pos[k] += vm.pos_offset[k];
             }
-            ctx.anm.emit(rec, &vm);
+            ctx.w.anm.emit(rec, &vm);
         }
         if self.state == S_CARDS {
             self.emit_cards(ctx, rec);
         }
         if matches!(self.state, S_PLAY | S_PLAY_WAIT | S_PLAY_OUT) {
             for vm in &self.text_vms[..20] {
-                ctx.anm.emit_mode(rec, vm, 0);
+                ctx.w.anm.emit_mode(rec, vm, 0);
             }
         }
         if (S_SAVE..=S_SAVE_OVER).contains(&self.state) {
             for vm in &self.vms[49..55] {
-                ctx.anm.emit(rec, vm);
+                ctx.w.anm.emit(rec, vm);
             }
         }
     }
@@ -2010,8 +2013,8 @@ mod tests {
         crate::platform::tool_host(&mut ctx)
             .storage
             .set_save_dir(Some(save.clone()));
-        ctx.game.persist = true;
-        crate::supervisor::setup_new_game(&mut ctx.game, &ctx.core, 0);
+        ctx.w.game.persist = true;
+        crate::supervisor::setup_new_game(&mut ctx.w.game, &ctx.core, 0);
         // … then Bomb on the "save replay?" prompt (16 §2.6 state 10, input from frame 12) → title.
         let keys: [(u32, u16); 7] = [
             (20, DOWN),
@@ -2024,7 +2027,7 @@ mod tests {
         ];
         let (mut k, mut over, mut seen_result) = (0u32, 0u32, false);
         for _ in 0..60_000 {
-            let g = &ctx.game;
+            let g = &ctx.w.game;
             let key = if g.scene == gamemgr::SCENE_RESULT {
                 seen_result = true;
                 k += 1;
@@ -2034,7 +2037,7 @@ mod tests {
             } else if g.game_over != 0 {
                 // Lift the score above the default table so the run ranks.
                 if over == 0
-                    && let Some(p) = ctx.player.as_deref_mut()
+                    && let Some(p) = ctx.w.player.as_deref_mut()
                 {
                     p.stats.score10 = 1_234_567;
                 }
@@ -2046,19 +2049,20 @@ mod tests {
                 0
             };
             crate::platform::tool_host(&mut ctx).keys[0] = key;
-            if seen_result && ctx.game.scene == gamemgr::SCENE_MENU {
+            if seen_result && ctx.w.game.scene == gamemgr::SCENE_MENU {
                 break;
             }
             ctx.calc();
             ctx.draw();
-            let on = ctx.game.scene == gamemgr::SCENE_RESULT;
+            let on = ctx.w.game.scene == gamemgr::SCENE_RESULT;
             shot(&mut ctx, on, k, "after");
         }
         assert!(
-            seen_result && ctx.game.scene == gamemgr::SCENE_MENU,
+            seen_result && ctx.w.game.scene == gamemgr::SCENE_MENU,
             "no result screen / no return"
         );
         let h = ctx
+            .w
             .game
             .score
             .hscr
@@ -2070,14 +2074,14 @@ mod tests {
         assert_eq!(h.score(), 1_234_567);
         assert_eq!(h.0[9], 0);
         let file = std::fs::read(save.join("score.dat")).unwrap();
-        let s = ctx.game.ver_list.parse(&file).unwrap();
+        let s = ctx.w.game.ver_list.parse(&file).unwrap();
         assert_eq!(&s.lsnm[..8], b"PP      ");
         assert!(s.hscr.contains(&h));
         assert_eq!(s.hiscore(0, 1), h.score().max(100_000));
         // Save → load → save: identical with the same two random header bytes (15 §2.1).
         let mut r1 = crate::rng::Rng::seeded(3);
         let mut r2 = crate::rng::Rng::seeded(3);
-        let again = ctx.game.ver_list.parse(&s.encode(&mut r1)).unwrap();
+        let again = ctx.w.game.ver_list.parse(&s.encode(&mut r1)).unwrap();
         assert_eq!(
             again.encode(&mut r2),
             s.encode(&mut crate::rng::Rng::seeded(3))
@@ -2085,10 +2089,10 @@ mod tests {
         // The viewer (mode 0): top → difficulty (Normal) → character 0 → ranking.
         let mut k = 0;
         for _ in 0..400 {
-            if ctx.game.scene == gamemgr::SCENE_MENU && ctx.game.menu_loading == 0 && k == 0 {
-                ctx.game.request(gamemgr::SCENE_RESULT_MENU);
+            if ctx.w.game.scene == gamemgr::SCENE_MENU && ctx.w.game.menu_loading == 0 && k == 0 {
+                ctx.w.game.request(gamemgr::SCENE_RESULT_MENU);
             }
-            if ctx.game.scene == gamemgr::SCENE_RESULT_MENU {
+            if ctx.w.game.scene == gamemgr::SCENE_RESULT_MENU {
                 k += 1;
             }
             crate::platform::tool_host(&mut ctx).keys[0] =

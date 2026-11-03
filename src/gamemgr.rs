@@ -567,7 +567,7 @@ pub struct GameManager {
 
 impl GameManager {
     pub fn register(ctx: &mut Ctx) -> Result<Node> {
-        ctx.gm = Some(Box::new(GameManager {
+        ctx.w.gm = Some(Box::new(GameManager {
             tasks: Vec::new(),
             gauge_at: None,
             loading_total: 31,
@@ -576,12 +576,12 @@ impl GameManager {
             replay: None,
         }));
         {
-            let p = ctx.player.insert(Box::default());
-            p.debug_invuln = ctx.core.invuln || ctx.game.noclip;
+            let p = ctx.w.player.insert(Box::default());
+            p.debug_invuln = ctx.core.invuln || ctx.w.game.noclip;
             p.debug_bomb = ctx.core.bomb;
         }
         // GameManager_Register zeroes the gameplay frame counter 0x164D2C8 (11 §2).
-        ctx.game.frame_counter = 0;
+        ctx.w.game.frame_counter = 0;
         let t = Node::GameManager;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
         task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
@@ -628,11 +628,11 @@ impl GameManager {
         t
     }
 
-    // The GM lent out of `ctx.gm` for one of its chain callbacks (none of them reads `ctx.gm`).
+    // The GM lent out of `ctx.w.gm` for one of its chain callbacks (none of them reads `ctx.w.gm`).
     fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut GameManager, &mut Ctx) -> R) -> R {
-        let mut gm = ctx.gm.take().expect("no game manager");
+        let mut gm = ctx.w.gm.take().expect("no game manager");
         let r = f(&mut gm, ctx);
-        ctx.gm = Some(gm);
+        ctx.w.gm = Some(gm);
         r
     }
 
@@ -640,7 +640,7 @@ impl GameManager {
     // score.dat flush (2), rank, deaths / bombs-used checksums.
     fn fresh_start(ctx: &mut Ctx, st: &mut Stats) {
         // Port rule (11 §1.2): the loader thread's 53-bit precision does not affect these integer/decoy draws.
-        let rng = &mut ctx.rng;
+        let rng = &mut ctx.w.rng;
         rng.next_u32();
         for _ in 0..21 {
             rng.next_u32();
@@ -648,7 +648,7 @@ impl GameManager {
         for _ in 0..9 {
             rng.next_f32();
         }
-        let g = &mut ctx.game;
+        let g = &mut ctx.w.game;
         let d = g.diff();
         // Also 0x164D0B0 := 0, the fresh-start writer of 11 §2.
         *st = Stats {
@@ -712,8 +712,8 @@ impl GameManager {
     // GameManager_StageStart 0x43ABD7 (11 §3.1) with the subsystems registered synchronously (no loader thread).
     // Not implemented: spell-practice power (11 §3.1), the spell-practice stage overlay base 2.
     fn stage_start(&mut self, ctx: &mut Ctx) -> Result<()> {
-        let entries0 = ctx.anm.entries_loaded;
-        let g = &mut ctx.game;
+        let entries0 = ctx.w.anm.entries_loaded;
+        let g = &mut ctx.w.game;
         g.loading = 1;
         g.loading_frames = 0;
         // Loading_Begin: state 1 (12 §1).
@@ -722,27 +722,27 @@ impl GameManager {
         if g.end_state() >= 2 {
             g.set_end_state(1);
         }
-        ctx.anm.speed = 1.0;
+        ctx.w.anm.speed = 1.0;
         g.flags &= !F_DEATH;
         // Darkness-mask alpha 0x4E3D28 := 0 (13 §4.1).
-        ctx.overlays.clear_darkness();
+        ctx.w.overlays.clear_darkness();
         // gm+0x2D := 0 (0x43B835, 11 §4 step 10).
         g.slow_skip = 0;
         let fresh = g.fresh_start || g.practice() || g.spell_practice() || g.difficulty >= 4;
-        let mut st = std::mem::take(&mut ctx.game.stats);
+        let mut st = std::mem::take(&mut ctx.w.game.stats);
         if fresh {
             Self::fresh_start(ctx, &mut st);
         } else {
             // 11 §3.3 continuing: score display synced, two decoy checksums.
             st.score_disp = st.score10;
             st.score_step = 0;
-            Stats::checksum(&mut ctx.rng);
-            Stats::checksum(&mut ctx.rng);
+            Stats::checksum(&mut ctx.w.rng);
+            Stats::checksum(&mut ctx.w.rng);
         }
         // The rank sub-counter restarts after both branches; a continuing stage keeps the rank (11 §3.1).
         // 0x164D340 = GM+0x3DE38 := 0 at every stage start (11 §3.1).
-        ctx.game.rank.sub = 0;
-        let g = &mut ctx.game;
+        ctx.w.game.rank.sub = 0;
+        let g = &mut ctx.w.game;
         // PLST play counters (15 §2.9).
         if fresh && g.counts_plays() {
             g.count_play();
@@ -761,15 +761,15 @@ impl GameManager {
         let (stage, shot, d) = (g.stage, g.shot, g.diff());
         let player_t = Player::register(ctx, shot)?;
         // Player_Load fades out boss markers M_0..M_2 (M_3 is never sent this, 12 §5.10).
-        (0..3).for_each(|k| ctx.overlays.marker_interrupt(k, 2));
+        (0..3).for_each(|k| ctx.w.overlays.marker_interrupt(k, 2));
         // Player_Load shows the gauge readout on a fresh start; StageStart re-runs its setup after Player_Load, so
         // it uses the new game's limits (12 §5.9).
         if fresh {
-            ctx.overlays.gauge_interrupt(1);
+            ctx.w.overlays.gauge_interrupt(1);
         }
-        let l = crate::pl!(ctx).stats.limits;
+        let l = crate::pl!(ctx.w).stats.limits;
         // The loader thread reaches Ascii_SetupGaugeVms k Ascii_Calc ticks before game frame 1 (12 §5.9 timing).
-        let demo = (ctx.game.flags & F_DEMO != 0).then_some(ctx.game.demo);
+        let demo = (ctx.w.game.flags & F_DEMO != 0).then_some(ctx.w.game.demo);
         let k = match demo {
             Some(0) => 28,
             Some(1) => 27,
@@ -778,12 +778,12 @@ impl GameManager {
             _ => 28,
         };
         {
-            let p = crate::pl!(ctx);
+            let p = crate::pl!(ctx.w);
             let limits = p.stats.limits;
             p.stats = st;
             p.stats.limits = limits;
             p.stats.difficulty = d as i32;
-            if fresh && !ctx.game.replay() {
+            if fresh && !ctx.w.game.replay() {
                 p.stats.bombs = p.sht.bombs.trunc();
             }
             let s = &mut p.stats;
@@ -792,7 +792,7 @@ impl GameManager {
             s.gauge_start = s.gauge;
             s.time = 0;
             s.time_added = 0;
-            s.time_threshold = if ctx.game.spell_practice() {
+            s.time_threshold = if ctx.w.game.spell_practice() {
                 0
             } else {
                 crate::player::TIME_THR
@@ -800,30 +800,30 @@ impl GameManager {
                     .map_or(10, |r| r[d.min(3)])
             };
             // 11 §3.1: both inside practice (flags bit 0); bit 14 picks the spell-practice power by card id.
-            if ctx.game.practice() {
-                let pw = practice_power(ctx.game.spell_practice(), stage, ctx.game.card);
-                s.set_power(pw, &mut ctx.rng);
+            if ctx.w.game.practice() {
+                let pw = practice_power(ctx.w.game.spell_practice(), stage, ctx.w.game.card);
+                s.set_power(pw, &mut ctx.w.rng);
             }
             // Port-only debug override.
-            if let Some(pw) = ctx.core.power.filter(|_| ctx.game.stages_started == 0) {
+            if let Some(pw) = ctx.core.power.filter(|_| ctx.w.game.stages_started == 0) {
                 s.power = pw.clamp(0.0, 128.0);
             }
         }
         // Replay playback: rank init, stage record load (seed set), checksum with RNG preserved (11 §3.1, §3.4).
-        if ctx.game.replay() {
-            ctx.game.rank.init(d);
-            let p = crate::pl!(ctx);
-            crate::replay::play_stage_load(&mut ctx.game, &mut p.stats, &mut ctx.rng)?;
-            Stats::checksum_restored(&mut ctx.rng);
+        if ctx.w.game.replay() {
+            ctx.w.game.rank.init(d);
+            let p = crate::pl!(ctx.w);
+            crate::replay::play_stage_load(&mut ctx.w.game, &mut p.stats, &mut ctx.w.rng)?;
+            Stats::checksum_restored(&mut ctx.w.rng);
         }
-        let g = &mut ctx.game;
+        let g = &mut ctx.w.game;
         g.paused = 0;
         g.flags &= !0x2180;
         // stage_seed is captured before the subsystems register (11 §1.3).
-        g.stage_seed = ctx.rng.state;
+        g.stage_seed = ctx.w.rng.state;
         log::info!(
             "stage {stage} start at frame {}: shot {shot} difficulty {d} seed {:#06x}",
-            ctx.frame,
+            ctx.w.frame,
             g.stage_seed
         );
         let first = g.stages_started == 0;
@@ -833,64 +833,65 @@ impl GameManager {
         let bullets_t = BulletManager::register(ctx)?;
         let enemies_t = EnemyManager::register(ctx, stage, d as i32)?;
         if !first {
-            crate::stg!(ctx).fast_forward = 0;
-            crate::em!(ctx).fast_forward = 0;
+            crate::stg!(ctx.w).fast_forward = 0;
+            crate::em!(ctx.w).fast_forward = 0;
         }
         let effects = crate::effect::EffectTask::register(ctx)?;
         let hud = Hud::register(ctx, hud_fresh)?;
         let gui = crate::gui::Gui::register(ctx)?;
         // Spell practice in 6A/6B/Extra outside the last-word card ranges: spell-background first script +0xB34 := 2
         // (11 §3.1, 13 §5).
-        if ctx.game.spell_practice() {
-            let c = ctx.game.card as i32;
-            let base2 = match ctx.game.stage {
+        if ctx.w.game.spell_practice() {
+            let c = ctx.w.game.card as i32;
+            let base2 = match ctx.w.game.stage {
                 6 => !(0x77..=0x7A).contains(&c),
                 7 => !(0x93..=0x96).contains(&c),
                 8 => !(0xBF..=0xC1).contains(&c) && c != 0xD5,
                 _ => false,
             };
             if base2 {
-                crate::stg!(ctx).spell_first = 2;
+                crate::stg!(ctx.w).spell_first = 2;
             }
         }
-        if fresh && !ctx.game.replay() {
-            ctx.game.rpy = None;
+        if fresh && !ctx.w.game.replay() {
+            ctx.w.game.rpy = None;
         }
-        let st = crate::pl!(ctx).stats.clone();
-        let (replay_t, replay) = crate::replay::register(ctx, ctx.game.replay(), &st)?;
+        let st = crate::pl!(ctx.w).stats.clone();
+        let (replay_t, replay) = crate::replay::register(ctx, ctx.w.game.replay(), &st)?;
         self.replay = Some(replay);
         // 11 §3.1 / 06 §2 +0x290: load (not play) BGM slot 0, and slots 1/2 unless their name starts with ' ';
         // spell practice loads slot 0 only, chosen by card id. Slot 0 is played by GameMgr_Calc step 3.
-        if !ctx.game.reload_same {
-            let names = crate::stg!(ctx).std.bgm.clone();
-            if ctx.game.spell_practice() {
-                ctx.bgm
-                    .load_bgm(0, spell_bgm(ctx.game.card).unwrap_or(&names[0]));
+        if !ctx.w.game.reload_same {
+            let names = crate::stg!(ctx.w).std.bgm.clone();
+            if ctx.w.game.spell_practice() {
+                ctx.w
+                    .bgm
+                    .load_bgm(0, spell_bgm(ctx.w.game.card).unwrap_or(&names[0]));
             } else {
-                ctx.bgm.load_bgm(0, &names[0]);
+                ctx.w.bgm.load_bgm(0, &names[0]);
                 for (k, name) in names.iter().enumerate().take(3).skip(1) {
                     if !name.starts_with(' ') {
-                        ctx.bgm.load_bgm(k, name);
+                        ctx.w.bgm.load_bgm(k, name);
                     }
                 }
             }
         }
-        self.music_start = music_start(&ctx.game);
-        ctx.game.reload_same = false;
-        let g = &mut ctx.game;
+        self.music_start = music_start(&ctx.w.game);
+        ctx.w.game.reload_same = false;
+        let g = &mut ctx.w.game;
         g.flags |= F_RUNNING;
         g.game_over = 0;
         g.flags &= !F_ENDING_OK;
         // Ascii_InitVms after `flags &= ~0x10`, before the loading wait (11 §3.1, 13 §4).
-        ctx.overlays.popups.clear();
+        ctx.w.overlays.popups.clear();
         self.tasks = vec![
             player_t, stage_t, bullets_t, enemies_t, effects, hud, gui, replay_t,
         ];
-        let total = loading_total(&ctx.game, ctx.anm.entries_loaded - entries0);
+        let total = loading_total(&ctx.w.game, ctx.w.anm.entries_loaded - entries0);
         self.loading_total = total;
         self.gauge_at = Some(((total + 1).saturating_sub(k).max(1), l.min, l.max));
         // 0x18B8A2C := 2 at the end of StageStart (13 §3).
-        ctx.load_frames = 2;
+        ctx.w.load_frames = 2;
         Ok(())
     }
 
@@ -960,14 +961,14 @@ impl GameManager {
     // Continue sequence side effects requested by the continue menu (11 §4.2): frame 15 clock + 1; frame 90
     // continues + 1, score = display = continues, lives (checksum), bombs, point items, power 0 (checksum).
     fn continue_effects(&mut self, ctx: &mut Ctx) {
-        let g = &mut ctx.game;
-        let p = crate::pl!(ctx);
+        let g = &mut ctx.w.game;
+        let p = crate::pl!(ctx.w);
         if std::mem::take(&mut g.continue_clock) {
             p.stats.clock += 1;
         }
         if std::mem::take(&mut g.continue_apply) {
             let bombs = p.sht.bombs.trunc();
-            let rng = &mut ctx.rng;
+            let rng = &mut ctx.w.rng;
             let st = &mut p.stats;
             st.continues += 1;
             if g.counts_plays() {
@@ -985,7 +986,7 @@ impl GameManager {
             st.set_power(0.0, rng);
             st.extends = 0;
             st.next_extend = 100;
-            ctx.bgm.pause_bgm(false);
+            ctx.w.bgm.pause_bgm(false);
         }
         g.clock = p.stats.clock;
     }
@@ -1010,7 +1011,7 @@ impl GameManager {
     }
 }
 
-// Chain nodes of `ctx.gm` (calc and draw): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.gm` (calc and draw): stateless forwarder (STEP9_WORLD.md §3).
 pub struct GameManagerTask;
 
 impl Task<Ctx> for GameManagerTask {
@@ -1041,59 +1042,62 @@ impl GameManager {
     // same stage), subsystems torn down.
     fn on_remove(&mut self, ctx: &mut Ctx) {
         // 0x18B8A2C := 1 (13 §3).
-        ctx.load_frames = 1;
+        ctx.w.load_frames = 1;
         // Darkness-mask alpha 0x4E3D28 := 0 (13 §4.1).
-        ctx.overlays.clear_darkness();
-        let mut st = crate::pl!(ctx).stats.clone();
+        ctx.w.overlays.clear_darkness();
+        let mut st = crate::pl!(ctx.w).stats.clone();
         st.score10 = st.score10.min(999_999_999);
         st.score_disp = st.score10;
-        ctx.game.stats = st;
-        ctx.anm.speed = 1.0;
-        if !ctx.game.reload_same {
-            ctx.bgm.stop_bgm();
+        ctx.w.game.stats = st;
+        ctx.w.anm.speed = 1.0;
+        if !ctx.w.game.reload_same {
+            ctx.w.bgm.stop_bgm();
             // Mode 2: the init.mid reset right after Music_Stop (02 §5).
-            ctx.bgm.midi_reset();
+            ctx.w.bgm.midi_reset();
         }
-        ctx.bgm.pause_bgm(false);
+        ctx.w.bgm.pause_bgm(false);
         for t in std::mem::take(&mut self.tasks) {
             task::remove_task(ctx, t);
         }
         // Ascii_InitVms after the subsystem teardown (11 §2, 13 §4).
-        ctx.overlays.popups.clear();
-        if ctx.game.replay() {
-            ctx.game.play_clock = None;
+        ctx.w.overlays.popups.clear();
+        if ctx.w.game.replay() {
+            ctx.w.game.play_clock = None;
         } else {
-            ctx.game.add_play_time(ctx.host.ticks_ms());
+            ctx.w.game.add_play_time(ctx.host.ticks_ms());
         }
-        ctx.game.flags &= !F_RUNNING;
-        ctx.game.paused = 0;
-        ctx.game.game_over = 0;
+        ctx.w.game.flags &= !F_RUNNING;
+        ctx.w.game.paused = 0;
+        ctx.w.game.game_over = 0;
         // gm+0x2D := 0 (0x43BF5C, 11 §4 step 10).
-        ctx.game.slow_skip = 0;
+        ctx.w.game.slow_skip = 0;
         // 0x164D2C8 := 0 as the last statement (0x43BE2C), so the menus after a pause-quit read 0 (11 §2).
-        ctx.game.frame_counter = 0;
+        ctx.w.game.frame_counter = 0;
     }
 
     // GameMgr_Calc 0x439BC7 (11 §4); Ret::StopFrame = return 3 (the rest of the calc chain does not run).
     fn calc(&mut self, ctx: &mut Ctx) -> Ret {
         // 0x164D09C += 1 at the top of GameMgr_Calc (11 §4): HSCR play time in frames.
-        crate::pl!(ctx).stats.rec.frames += 1;
+        crate::pl!(ctx.w).stats.rec.frames += 1;
         self.continue_effects(ctx);
-        let cleared = ctx.game.end_state() == 2;
-        let confirm = ctx.input.pressed(crate::input::SHOT | crate::input::ENTER);
-        let r = Self::stage_end(&mut ctx.game, &mut crate::pl!(ctx).stats, confirm);
+        let cleared = ctx.w.game.end_state() == 2;
+        let confirm = ctx
+            .w
+            .input
+            .pressed(crate::input::SHOT | crate::input::ENTER);
+        let r = Self::stage_end(&mut ctx.w.game, &mut crate::pl!(ctx.w).stats, confirm);
         // Clear frame with next_scene_after < 0 (stage 1–5 advance, replay next stage): Hud_StageTransition (11 §4 step 1).
         if cleared
-            && ctx.game.next_scene_after < 0
-            && let Some(h) = ctx.hud.as_deref_mut()
+            && ctx.w.game.next_scene_after < 0
+            && let Some(h) = ctx.w.hud.as_deref_mut()
         {
-            h.stage_transition(&mut ctx.anm, &mut ctx.rng);
+            h.stage_transition(&mut ctx.w.anm, &mut ctx.w.rng);
         }
         self.cleared |= cleared;
         if let Some(r) = r {
             return r;
         }
-        let g = &mut ctx.game;
+        let g = &mut ctx.w.game;
         g.loading_shown = g.loading != 0 && !self.cleared;
         if g.loading != 0 {
             g.loading_frames += 1;
@@ -1120,24 +1124,25 @@ impl GameManager {
                 && gauge_due
             {
                 self.gauge_at = None;
-                ctx.overlays
-                    .gauge_setup(&mut ctx.anm, &mut ctx.rng, min, max);
+                ctx.w
+                    .overlays
+                    .gauge_setup(&mut ctx.w.anm, &mut ctx.w.rng, min, max);
             }
-            let g = &mut ctx.game;
+            let g = &mut ctx.w.game;
             if wait_due || release_due {
                 if release_due && g.end_state() == 0 {
                     g.loading = 0;
                     // StageStart after the loader wait: 0x17CE8CC := 0x3C (12 §5.3).
-                    ctx.panel.set_repaint(0x3C);
+                    ctx.w.panel.set_repaint(0x3C);
                     g.loading_wait = 0;
                     g.flags &= !F_CLEAR_PANEL;
-                    ctx.effects.release_loading_overlay();
+                    ctx.w.effects.release_loading_overlay();
                     if let Some(s) = &mut g.sched {
                         s.stages.pop_front();
                     }
                 } else {
                     if g.loading_wait == 0 {
-                        ctx.effects.release_loading_overlay();
+                        ctx.w.effects.release_loading_overlay();
                     }
                     // Loading_Wait 0x448972 acts on state 1 only: state := 2 (12 §1). It runs between frames, so the
                     // state changes only after the draw of the frame whose calc saw the wait (12 §1 pt 5).
@@ -1150,30 +1155,34 @@ impl GameManager {
             return Ret::StopFrame;
         }
         // Step 3: 0x17CEA54 := 0 (ends the prompt, 12 §1), deferred music start (gm+0x3DE28), Music_PlaySlot of slot 0 on 1.
-        ctx.game.load_prompt = 0;
+        ctx.w.game.load_prompt = 0;
         if std::mem::take(&mut self.music_start) == 1 {
-            ctx.bgm.play_slot(0);
+            ctx.w.bgm.play_slot(0);
         }
-        let g = &mut ctx.game;
+        let g = &mut ctx.w.game;
         // Step 4 pause: sfx 0x22, music paused, pauses + 1, checksum with the RNG saved and restored.
         if g.paused == 0
             && g.game_over == 0
             && g.flags & F_DEMO == 0
             && g.slow_skip == 0
-            && ctx.input.pressed(crate::input::PAUSE)
+            && ctx.w.input.pressed(crate::input::PAUSE)
         {
             g.paused = 1;
             // HSCR +0x7C pauses (GM+0x3DAA8++, 15 §2.3).
-            crate::pl!(ctx).stats.rec.pauses += 1;
+            crate::pl!(ctx.w).stats.rec.pauses += 1;
             g.add_play_time(ctx.host.ticks_ms());
-            ctx.sound.play(crate::sound::PAUSE);
-            ctx.bgm.pause_bgm(true);
-            let s = ctx.rng.state;
-            Stats::checksum(&mut ctx.rng);
-            ctx.rng.state = s;
+            ctx.w.sound.play(crate::sound::PAUSE);
+            ctx.w.bgm.pause_bgm(true);
+            let s = ctx.w.rng.state;
+            Stats::checksum(&mut ctx.w.rng);
+            ctx.w.rng.state = s;
         }
-        let msg_active = ctx.msg.as_deref().is_some_and(crate::msg::Dialogue::active);
-        let g = &mut ctx.game;
+        let msg_active = ctx
+            .w
+            .msg
+            .as_deref()
+            .is_some_and(crate::msg::Dialogue::active);
+        let g = &mut ctx.w.game;
         // Step 5 (0x43A24A): replay "slowdown reproduction" (15 §3.3) runs a frame only on a pattern of the recorded
         // fps, never while dialogue is active; a skipped frame leaves gm+0x2D as it is.
         if g.replay() && g.replay_speed == 1 && !msg_active {
@@ -1186,14 +1195,14 @@ impl GameManager {
             // Attract demo (11 §4 step 6).
             g.demo_frame += 1;
             let (fade, end) = DEMO_LIMITS[g.demo as usize % 4];
-            if ctx.input.held & !ctx.input.prev != 0 {
+            if ctx.w.input.held & !ctx.w.input.prev != 0 {
                 g.request(SCENE_MENU);
             }
             if g.demo_frame == fade {
-                ctx.bgm.fade_bgm(3.0, ctx.anm.speed);
+                ctx.w.bgm.fade_bgm(3.0, ctx.w.anm.speed);
                 crate::effect::screen_now(ctx, 2, end - fade, 0, 0, 0, 0x15);
             }
-            let g = &mut ctx.game;
+            let g = &mut ctx.w.game;
             if g.demo_frame >= end {
                 g.request(SCENE_MENU);
                 return Ret::StopFrame;
@@ -1202,9 +1211,13 @@ impl GameManager {
         // GameMgr_Calc's own z clear (11 §3.1), the previous frame left the viewport full-screen.
         ctx.rec.set_viewport(crate::drawlist::FULLSCREEN);
         // Its ignored colour argument is the stage fog colour g_Stage+0xAF4 (0xFF000000 before the first fog op).
-        let arg = ctx.stage.as_deref().map_or(0xff00_0000, |st| st.fog.color);
+        let arg = ctx
+            .w
+            .stage
+            .as_deref()
+            .map_or(0xff00_0000, |st| st.fog.color);
         ctx.rec.clear_z(arg);
-        let g = &mut ctx.game;
+        let g = &mut ctx.w.game;
         // Step 7 (0x43A5BC): bit 2 := not paused and no game-over menu, so it is already 0 on the ESC frame (11 §2.1).
         if g.paused == 0 && g.game_over == 0 {
             g.flags |= F_RUNNING;
@@ -1214,17 +1227,17 @@ impl GameManager {
         if g.paused != 0 || g.game_over != 0 {
             return Ret::StopFrame;
         }
-        let p = crate::pl!(ctx);
+        let p = crate::pl!(ctx.w);
         Self::roll_score(&mut p.stats);
         p.stats.rank_delta = 0;
-        if let Some(e) = ctx.enemies.as_deref_mut() {
+        if let Some(e) = ctx.w.enemies.as_deref_mut() {
             e.g.player_char = g.shot as i32;
         }
         // Step 10 slow mode (0x43A92D): skip on a pattern of the live-bullet count from the last bullet calc.
         if g.game_slow() != 0 {
             g.slow_skip = 0;
             g.skip_ctr = g.skip_ctr.wrapping_add(1);
-            let n = ctx.bullets.as_ref().map_or(0, |b| b.live);
+            let n = ctx.w.bullets.as_ref().map_or(0, |b| b.live);
             if slow_skips(n, g.skip_ctr) {
                 g.slow_skip = 1;
                 return Ret::StopFrame;
@@ -1237,7 +1250,7 @@ impl GameManager {
         // Port-only debug: TH08_SCREEN_FX=<frame>:<type>,<p0>,<p1>,<p2>,<p3>.
         if let Some(n) = ctx.core.screen_fx {
             if n[0] == g.frame_counter as i64 {
-                ctx.effects.screen(
+                ctx.w.effects.screen(
                     n[1] as u8,
                     n[2] as i32,
                     n[3] as i32,
@@ -1254,7 +1267,7 @@ impl GameManager {
     // bits 5–6 == 1 or loading ≠ 0, post-clear frames included. The port's in-calc release stands for the loader
     // thread's after this frame, so `loading_shown` keeps that frame a loading one. Step only: no write, no emit.
     fn draw_step(ctx: &mut Ctx) -> Ret {
-        let g = &ctx.game;
+        let g = &ctx.w.game;
         if g.requested == SCENE_GAME && g.end_state() != 1 && g.loading == 0 && !g.loading_shown {
             return Ret::Next;
         }

@@ -1234,7 +1234,7 @@ pub fn bg_file(stage: usize, practice_card: Option<i16>) -> &'static str {
     ][stage % 9]
 }
 
-// The effect manager's chain nodes (13 §2.3, §2.4); the manager state is `ctx.effects` (step 9f).
+// The effect manager's chain nodes (13 §2.3, §2.4); the manager state is `ctx.w.effects` (step 9f).
 pub struct EffectTask;
 
 impl EffectTask {
@@ -1250,11 +1250,11 @@ impl EffectTask {
 impl Task<Ctx> for EffectTask {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
-            ctx.effects.clear();
-            ctx.effects.level = ctx.game.cfg.effect_level;
-            ctx.anm.load(&mut ctx.rec, &ctx.archive, BG_SLOT, {
-                let card = ctx.game.spell_practice().then_some(ctx.game.card);
-                bg_file(ctx.game.stage, card)
+            ctx.w.effects.clear();
+            ctx.w.effects.level = ctx.w.game.cfg.effect_level;
+            ctx.w.anm.load(&mut ctx.rec, &ctx.archive, BG_SLOT, {
+                let card = ctx.w.game.spell_practice().then_some(ctx.w.game.card);
+                bg_file(ctx.w.game.stage, card)
             })?;
         }
         Ok(())
@@ -1262,27 +1262,27 @@ impl Task<Ctx> for EffectTask {
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.effects.clear();
-            ctx.anm.unload(&mut ctx.rec, BG_SLOT);
+            ctx.w.effects.clear();
+            ctx.w.anm.unload(&mut ctx.rec, BG_SLOT);
         }
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let paused = ctx.game.paused != 0 || ctx.game.game_over != 0;
-        let e = &mut ctx.effects;
+        let paused = ctx.w.game.paused != 0 || ctx.w.game.game_over != 0;
+        let e = &mut ctx.w.effects;
         e.paused = paused;
         e.calc(
-            &mut ctx.anm,
-            &mut ctx.rng,
-            ctx.game.flags,
-            &mut ctx.bomb_areas,
+            &mut ctx.w.anm,
+            &mut ctx.w.rng,
+            ctx.w.game.flags,
+            &mut ctx.w.bomb_areas,
         );
         Ret::Next
     }
 
     // EffectMgr_Draw writes nothing: emit only.
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
-        ctx.effects.emit_main(&ctx.anm, rec);
+        ctx.w.effects.emit_main(&ctx.w.anm, rec);
     }
 }
 
@@ -1323,11 +1323,11 @@ pub struct ScreenEnv {
 impl ScreenEnv {
     pub fn of(ctx: &Ctx) -> Self {
         ScreenEnv {
-            flags: ctx.game.flags,
-            timer_pause: ctx.timer_pause,
-            load_frames: ctx.load_frames,
-            paused: ctx.game.paused != 0 || ctx.game.game_over != 0,
-            frame_counter: ctx.game.frame_counter,
+            flags: ctx.w.game.flags,
+            timer_pause: ctx.w.timer_pause,
+            load_frames: ctx.w.load_frames,
+            paused: ctx.w.game.paused != 0 || ctx.w.game.game_over != 0,
+            frame_counter: ctx.w.game.frame_counter,
         }
     }
 }
@@ -1335,7 +1335,7 @@ impl ScreenEnv {
 // 0x4489CA(0) `Loading_StartDarken`: the loading darken overlay (type 5, 60 frames, black, draw prio 1), released when
 // loading ends. Called from an on-register callback inside the Supervisor calc (prio 0), so it is linked at once (13 §3).
 pub fn loading_overlay(ctx: &mut Ctx) {
-    ctx.effects.loading_release = false;
+    ctx.w.effects.loading_release = false;
     link(
         ctx,
         ScreenEffect {
@@ -1386,19 +1386,19 @@ pub fn screen_now(ctx: &mut Ctx, kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, p
 }
 
 pub fn register_pending(ctx: &mut Ctx) {
-    for slot in ctx.effects.alloc_pending() {
+    for slot in ctx.w.effects.alloc_pending() {
         link_slot(ctx, slot);
     }
 }
 
 // FuncChain_AddCalc (prio 3) + AddDraw (13 §3): the effect goes into a free pool slot, its nodes forward to it.
 fn link(ctx: &mut Ctx, s: ScreenEffect) {
-    let slot = ctx.effects.alloc_screen(s);
+    let slot = ctx.w.effects.alloc_screen(s);
     link_slot(ctx, slot);
 }
 
 fn link_slot(ctx: &mut Ctx, slot: usize) {
-    let prio = ctx.effects.screen_fx[slot].map_or(0, |s| s.prio);
+    let prio = ctx.w.effects.screen_fx[slot].map_or(0, |s| s.prio);
     let t = crate::chain::Node::Screen { slot };
     if task::add(ctx, Chain::Calc, SCREEN_CALC_PRIO, 0, t).is_ok() {
         let _ = task::add(ctx, Chain::Draw, prio, 0, t);
@@ -1444,21 +1444,21 @@ impl Effects {
     }
 }
 
-// A screen effect's calc + draw nodes; the state is `ctx.effects.screen_fx[slot]` (step 9f).
+// A screen effect's calc + draw nodes; the state is `ctx.w.effects.screen_fx[slot]` (step 9f).
 pub struct ScreenTask {
     pub(crate) slot: usize,
 }
 
 impl Task<Ctx> for ScreenTask {
     fn on_register(&mut self, ctx: &mut Ctx, _: Chain, _: u8) -> Result<()> {
-        if let Some(s) = &mut ctx.effects.screen_fx[self.slot] {
+        if let Some(s) = &mut ctx.w.effects.screen_fx[self.slot] {
             s.nodes += 1;
         }
         Ok(())
     }
 
     fn on_remove(&mut self, ctx: &mut Ctx, _: Chain, _: u8) {
-        let e = &mut ctx.effects.screen_fx[self.slot];
+        let e = &mut ctx.w.effects.screen_fx[self.slot];
         if let Some(s) = e {
             s.nodes -= 1;
             if s.nodes == 0 {
@@ -1470,19 +1470,20 @@ impl Task<Ctx> for ScreenTask {
     // Calc returning 0 removes the whole effect, draw node included (13 §3).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let env = ScreenEnv::of(ctx);
-        ctx.effects
-            .screen_calc(self.slot, &mut ctx.anm, &mut ctx.rng, env)
+        ctx.w
+            .effects
+            .screen_calc(self.slot, &mut ctx.w.anm, &mut ctx.w.rng, env)
     }
 
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        match ctx.effects.screen_fx[self.slot] {
+        match ctx.w.effects.screen_fx[self.slot] {
             Some(s) if !s.done => Ret::Next,
             _ => Ret::Remove,
         }
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
-        if let Some(s) = ctx.effects.screen_fx[self.slot].filter(|s| !s.done) {
+        if let Some(s) = ctx.w.effects.screen_fx[self.slot].filter(|s| !s.done) {
             s.draw_fx(rec);
         }
     }

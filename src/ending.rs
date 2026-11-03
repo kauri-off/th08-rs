@@ -139,15 +139,17 @@ impl Ending {
         // 0x17CE8D0 has no effect here because the GM (and its HUD) is already unregistered (11 §7, 2 → 9).
         ctx.rec.anm.reset();
         ctx.clear_present_twice([0xFF; 4]);
-        ctx.anm
+        ctx.w
+            .anm
             .load(&mut ctx.rec, &ctx.archive, STAFF_SLOT, "staff01.anm")?;
-        self.update_clear_records(&mut ctx.game);
+        self.update_clear_records(&mut ctx.w.game);
         // Step 4: text VMs i = 0..14 at (64, 16·i + 400); the owner's pos overrides the script's time-0 op 6 (05 §8).
         self.vms = (0..LINES)
             .map(|i| {
                 let mut vm = AnmVm::default();
-                ctx.anm
-                    .set_script(&mut ctx.rng, &mut vm, 0, TEXT_SCRIPT + i);
+                ctx.w
+                    .anm
+                    .set_script(&mut ctx.w.rng, &mut vm, 0, TEXT_SCRIPT + i);
                 vm.pos = [64.0, 16.0 * i as f32 + 400.0, 0.0];
                 vm
             })
@@ -155,7 +157,7 @@ impl Ending {
         // Debug `TH08_ENDING=<file>.end` loads that script instead of the one chosen by the game state.
         let name = match &ctx.core.ending {
             Some(crate::coreconfig::Ending::File(f)) => f.clone(),
-            _ => script_name(&ctx.game),
+            _ => script_name(&ctx.w.game),
         };
         log::info!("ending script {name}");
         self.load_script(ctx, &name)?;
@@ -209,7 +211,7 @@ impl Ending {
 
     // Shot / Enter edge (mask 0x1001), or Ctrl held while skip-allowed (16 §1.4).
     fn released(&self, ctx: &Ctx) -> bool {
-        ctx.input.pressed(SHOT | ENTER) || self.skip_allowed && ctx.input.down(SKIP)
+        ctx.w.input.pressed(SHOT | ENTER) || self.skip_allowed && ctx.w.input.down(SKIP)
     }
 
     // One interpreter frame (0x428B80, 16 §1.4); false when the script ended (`@z`).
@@ -293,7 +295,7 @@ impl Ending {
                 b'R' => self.reset_scripts(),
                 b'M' => {
                     let n = self.script.int_arg();
-                    ctx.bgm.fade_bgm(n as f32, ctx.anm.speed);
+                    ctx.w.bgm.fade_bgm(n as f32, ctx.w.anm.speed);
                 }
                 b'V' => {
                     let a = self.script.int_arg();
@@ -305,9 +307,10 @@ impl Ending {
                     let script = self.script.int_arg();
                     let sprite = self.script.int_arg();
                     if let Some(v) = self.vms.get_mut(vm.max(0) as usize) {
-                        ctx.anm
-                            .set_script(&mut ctx.rng, v, STAFF_SLOT, script.max(0) as usize);
-                        v.set_sprite(&ctx.anm, sprite);
+                        ctx.w
+                            .anm
+                            .set_script(&mut ctx.w.rng, v, STAFF_SLOT, script.max(0) as usize);
+                        v.set_sprite(&ctx.w.anm, sprite);
                     }
                 }
                 b'b' => {
@@ -332,8 +335,8 @@ impl Ending {
                 b'm' => {
                     let name = self.script.str_arg();
                     // Music_Play(0, file) + Music_PlaySlot(0, 0), which marks music flag 0 heard.
-                    ctx.bgm.play_bgm(&name);
-                    ctx.game.score.plst.music[0] = 1;
+                    ctx.w.bgm.play_bgm(&name);
+                    ctx.w.game.score.plst.music[0] = 1;
                 }
                 b'r' => {
                     self.page_timer = self.script.int_arg();
@@ -384,7 +387,7 @@ impl Ending {
             vm.pending_interrupt = 1;
         }
         self.line += 1;
-        let fast = ctx.input.down(SHOT | ENTER);
+        let fast = ctx.w.input.down(SHOT | ENTER);
         self.line_timer = if fast {
             self.line_fast
         } else {
@@ -420,7 +423,12 @@ impl Ending {
 
 // Text_RenderToVm (10 §6) into the VM's text.anm strip, font size 15 (VM+0x298), then visible.
 fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, rgb: [u8; 3]) {
-    let Some(sp) = ctx.anm.sprite(0, vm.sprite_index.max(0) as usize).copied() else {
+    let Some(sp) = ctx
+        .w
+        .anm
+        .sprite(0, vm.sprite_index.max(0) as usize)
+        .copied()
+    else {
         return;
     };
     let t = ctx.rec.texture(sp.tex);
@@ -448,7 +456,7 @@ impl Ending {
 
     // Calc 0x429860: interpreter then the 15 VMs; up to 9 times with Ctrl while skip-allowed (16 §1.2).
     pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let n = if self.skip_allowed && ctx.input.down(SKIP) {
+        let n = if self.skip_allowed && ctx.w.input.down(SKIP) {
             9
         } else {
             1
@@ -468,7 +476,7 @@ impl Ending {
             }
             for vm in &mut self.vms {
                 if vm.script_index >= 0 {
-                    vm.run(&mut ctx.anm, &mut ctx.rng);
+                    vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
                 }
             }
         }
@@ -483,7 +491,7 @@ impl Ending {
         }
         for vm in &mut self.vms {
             let mode = vm.draw_mode;
-            ctx.anm.prepare(vm, mode);
+            ctx.w.anm.prepare(vm, mode);
         }
         self.fade_shown = self.fade_step();
         Ret::Next
@@ -500,7 +508,7 @@ impl Ending {
             rec.image_rect(t, sx, sy, 640, 480, 0.0, 0.0);
         }
         for vm in &self.vms {
-            ctx.anm.emit(rec, vm);
+            ctx.w.anm.emit(rec, vm);
         }
         let c = self.fade_shown;
         if c >> 24 != 0 {
@@ -514,14 +522,14 @@ impl Ending {
         if chain != Chain::Calc {
             return;
         }
-        ctx.anm.unload(&mut ctx.rec, STAFF_SLOT);
+        ctx.w.anm.unload(&mut ctx.rec, STAFF_SLOT);
         if let Some(t) = self.picture.take() {
             ctx.rec.free_texture(t);
         }
         self.script.data.clear();
         // Port guard: a removal by a scene switch away from 9 keeps that switch's target.
-        if ctx.game.requested == gamemgr::SCENE_ENDING {
-            ctx.game.request(gamemgr::SCENE_RESULT);
+        if ctx.w.game.requested == gamemgr::SCENE_ENDING {
+            ctx.w.game.request(gamemgr::SCENE_RESULT);
         }
     }
 }

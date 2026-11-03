@@ -466,11 +466,12 @@ impl BulletManager {
         }
     }
 
-    // BulletManager_Register: the manager becomes `ctx.bullets` (replacing the last stage's) plus its two nodes.
+    // BulletManager_Register: the manager becomes `ctx.w.bullets` (replacing the last stage's) plus its two nodes.
     pub fn register(ctx: &mut Ctx) -> Result<crate::chain::Node> {
-        ctx.anm
+        ctx.w
+            .anm
             .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "etama.anm")?;
-        ctx.bullets = Some(Box::new(BulletManager::new(&mut ctx.anm, &mut ctx.rng)));
+        ctx.w.bullets = Some(Box::new(BulletManager::new(&mut ctx.w.anm, &mut ctx.w.rng)));
         let t = crate::chain::Node::Bullets;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
         task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
@@ -1660,26 +1661,26 @@ impl BulletManager {
 // BulletMgr_Draw / enemy draw prio 11 global tint while bullets are frozen (06 §10.2, 07 §10.6).
 pub const FROZEN_TINT: u32 = 0xFFF0_1010;
 
-// The bullet manager's chain nodes (08 §1); they reach the manager through its owner (`ctx.bullets`, step 9b).
+// The bullet manager's chain nodes (08 §1); they reach the manager through its owner (`ctx.w.bullets`, step 9b).
 pub struct BulletTask;
 
 impl Task<Ctx> for BulletTask {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
+            ctx.w.anm.unload(&mut ctx.rec, ANM_SLOT);
         }
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let b = ctx.bullets.as_deref_mut().expect("bullet manager");
+        let b = ctx.w.bullets.as_deref_mut().expect("bullet manager");
         b.step(
-            &mut ctx.anm,
-            &mut crate::sys!(ctx; ctx.player.as_deref_mut(); None),
+            &mut ctx.w.anm,
+            &mut crate::sys!(ctx.w; ctx.w.player.as_deref_mut(); None),
         );
         // Item_CollectTimeOrb: Spell_AddBonus(8000) per orb inside this calc, so this frame's Spell_Draw shows it (08 §8.5).
-        let orbs = std::mem::take(&mut crate::pl!(ctx).stats.spell_bonus_orbs);
-        // The spell state g_Gui is held by the enemy manager (`ctx.enemies`, step 9c).
-        if let Some(e) = ctx.enemies.as_deref_mut() {
+        let orbs = std::mem::take(&mut crate::pl!(ctx.w).stats.spell_bonus_orbs);
+        // The spell state g_Gui is held by the enemy manager (`ctx.w.enemies`, step 9c).
+        if let Some(e) = ctx.w.enemies.as_deref_mut() {
             for _ in 0..orbs {
                 e.spell_add_bonus(8000);
             }
@@ -1689,16 +1690,16 @@ impl Task<Ctx> for BulletTask {
 
     // BulletMgr_Draw prio 13 (08 §1): VM writes and the frozen tint in the step, the draws in the emit.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let p = ctx.player.as_deref().expect("player");
-        let b = ctx.bullets.as_deref_mut().expect("bullet manager");
-        b.draw_step(&mut ctx.anm, p, ctx.game.flags);
+        let p = ctx.w.player.as_deref().expect("player");
+        let b = ctx.w.bullets.as_deref_mut().expect("bullet manager");
+        b.draw_step(&mut ctx.w.anm, p, ctx.w.game.flags);
         Ret::Next
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
-        let p = ctx.player.as_deref().expect("player");
-        let b = ctx.bullets.as_deref().expect("bullet manager");
-        b.emit(&ctx.anm, rec, &ctx.effects, p, ctx.game.flags);
+        let p = ctx.w.player.as_deref().expect("player");
+        let b = ctx.w.bullets.as_deref().expect("bullet manager");
+        b.emit(&ctx.w.anm, rec, &ctx.w.effects, p, ctx.w.game.flags);
     }
 }
 

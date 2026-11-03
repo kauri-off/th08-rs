@@ -75,7 +75,7 @@ fn main() -> anyhow::Result<()> {
     )?;
     ctx.set_emit(emit);
     if sound_log {
-        ctx.bgm.midi_ready = false;
+        ctx.w.bgm.midi_ready = false;
         ctx.sound_log = Some(Vec::new());
     }
 
@@ -197,10 +197,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn dump_items(ctx: &th08::game::Ctx, row: i64) {
-    let Some(p) = ctx.player.as_deref() else {
+    let Some(p) = ctx.w.player.as_deref() else {
         return;
     };
-    if ctx.gm.is_none() {
+    if ctx.w.gm.is_none() {
         return;
     }
     println!(
@@ -230,7 +230,7 @@ fn dump_items(ctx: &th08::game::Ctx, row: i64) {
             o.state, o.sub, o.pos[0], o.pos[1], o.vel[0], o.vel[1], o.timer.cur, p.aimed
         );
     }
-    if let Some(em) = ctx.enemies.as_deref() {
+    if let Some(em) = ctx.w.enemies.as_deref() {
         for (i, x) in em.enemies.iter().enumerate() {
             if x.alive() {
                 println!(
@@ -269,7 +269,7 @@ fn dump_items(ctx: &th08::game::Ctx, row: i64) {
             }
         }
     }
-    if let Some(bm) = ctx.bullets.as_deref() {
+    if let Some(bm) = ctx.w.bullets.as_deref() {
         for (i, x) in bm.items.items.iter().enumerate() {
             if x.alive {
                 println!(

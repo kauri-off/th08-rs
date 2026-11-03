@@ -53,19 +53,19 @@ pub fn parse_trace(text: &str) -> Vec<[i64; 22]> {
 
 // The port's state in trace column order.
 pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
-    let g = &ctx.game;
+    let g = &ctx.w.game;
     let mut row = [0i64; 22];
     row[0] = g.frame_counter as i64;
     row[1] = g.demo_frame as i64;
-    row[2] = ctx.input.game[0] as i64;
-    row[3] = ctx.rng.state as i64;
-    row[4] = ctx.rng.total.wrapping_sub(rng_base) as i64;
+    row[2] = ctx.w.input.game[0] as i64;
+    row[3] = ctx.w.rng.state as i64;
+    row[4] = ctx.w.rng.total.wrapping_sub(rng_base) as i64;
     row[18] = g.rank.rank as i64;
     row[21] = g.flags as i64;
-    let Some(p) = ctx.player.as_deref() else {
+    let Some(p) = ctx.w.player.as_deref() else {
         return row;
     };
-    if ctx.gm.is_none() {
+    if ctx.w.gm.is_none() {
         return row;
     }
     let st = &p.stats;
@@ -80,10 +80,10 @@ pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     row[13] = st.power.to_bits() as i64;
     row[14] = st.gauge as i64;
     row[15] = st.time as i64;
-    if let Some(b) = ctx.bullets.as_deref() {
+    if let Some(b) = ctx.w.bullets.as_deref() {
         row[16] = b.live as i64;
     }
-    if let Some(e) = ctx.enemies.as_deref() {
+    if let Some(e) = ctx.w.enemies.as_deref() {
         row[17] = e
             .enemies
             .iter()
@@ -150,11 +150,11 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
     let rows = parse_trace(trace);
     let r = crate::replay::parse(
         &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
-        ctx.game.ver_list.get(),
+        ctx.w.game.ver_list.get(),
     )?;
-    ctx.game.replay_ff = false;
+    ctx.w.game.replay_ff = false;
     anyhow::ensure!(
-        crate::replay::start_playback(&mut ctx.game, r, None, Some(n)),
+        crate::replay::start_playback(&mut ctx.w.game, r, None, Some(n)),
         "demo has no stage"
     );
     let mut rng_base = 0;
@@ -163,18 +163,18 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
     let mut guard = 0;
     while out.len() < rows.len() && guard < rows.len() + 2000 {
         guard += 1;
-        let before = ctx.game.demo_frame;
+        let before = ctx.w.game.demo_frame;
         if out.is_empty() {
-            rng_base = ctx.rng.total;
-            rng_before = ctx.rng.state;
+            rng_base = ctx.w.rng.total;
+            rng_before = ctx.w.rng.state;
         }
         if ctx.calc() != crate::task::Flow::Continue {
             break;
         }
-        if ctx.game.demo_frame > before {
+        if ctx.w.game.demo_frame > before {
             out.push(sample(ctx, rng_base));
         }
-        if ctx.game.flags & crate::gamemgr::F_DEMO == 0 {
+        if ctx.w.game.flags & crate::gamemgr::F_DEMO == 0 {
             break;
         }
     }
@@ -231,29 +231,29 @@ mod tests {
             crate::settings::get().tool_host(),
         ))
         .unwrap();
-        let g = &mut ctx.game;
+        let g = &mut ctx.w.game;
         (g.difficulty, g.shot, g.stage, g.fresh_start) = (3, 1, 0, true);
         g.flags = 0;
         g.request(crate::gamemgr::SCENE_GAME);
         let mut want = Vec::new();
         let mut k = 0u32;
         for _ in 0..4000 {
-            if ctx.game.game_over != 0 {
+            if ctx.w.game.game_over != 0 {
                 break;
             }
             k = k.wrapping_mul(1103515245).wrapping_add(12345);
             let dirs = [0, 0x10, 0x20, 0x40, 0x80, 0x50, 0x90];
             crate::platform::tool_host(&mut ctx).keys[0] =
                 0x1 | (k >> 20 & 4) as u16 | dirs[(k >> 24) as usize % 7];
-            let f = ctx.game.frame_counter;
+            let f = ctx.w.game.frame_counter;
             ctx.calc();
-            if ctx.game.frame_counter > f {
+            if ctx.w.game.frame_counter > f {
                 want.push(state(&ctx));
             }
         }
-        let mut r = ctx.game.rpy.clone().unwrap();
+        let mut r = ctx.w.game.rpy.clone().unwrap();
         let mut rng = crate::rng::Rng::seeded(1);
-        let r = crate::replay::parse(&r.encode(&mut rng), ctx.game.ver_list.get()).unwrap();
+        let r = crate::replay::parse(&r.encode(&mut rng), ctx.w.game.ver_list.get()).unwrap();
         let gfx = pollster::block_on(crate::gfx::Gfx::headless()).unwrap();
         let src = crate::assets::Source::native(dir.into());
         let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
@@ -264,16 +264,21 @@ mod tests {
             crate::settings::get().tool_host(),
         ))
         .unwrap();
-        ctx.game.replay_ff = false;
-        assert!(crate::replay::start_playback(&mut ctx.game, r, None, None));
+        ctx.w.game.replay_ff = false;
+        assert!(crate::replay::start_playback(
+            &mut ctx.w.game,
+            r,
+            None,
+            None
+        ));
         let mut got = 0;
         for _ in 0..want.len() + 200 {
             if got == want.len() {
                 break;
             }
-            let f = ctx.game.frame_counter;
+            let f = ctx.w.game.frame_counter;
             ctx.calc();
-            if ctx.game.frame_counter > f {
+            if ctx.w.game.frame_counter > f {
                 let s = state(&ctx);
                 let w = want[got];
                 if let Some(c) = (0..21).find(|&c| c != 2 && s[c] != w[c]) {

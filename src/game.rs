@@ -6,17 +6,15 @@ use crate::assets::Source;
 use crate::audio::Audio;
 use crate::content::LogicView;
 use crate::drawlist::{FULLSCREEN, Recorder, Renderer};
-use crate::input::Input;
 use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
 use anyhow::Context as _;
 
-// WinMain 0x441A70: skip counter byte := 0xFC at the first start and every restart (00 §2), first draw in frame 4.
-const SKIP_START: i8 = -4;
-
-// The original's globals that every subsystem reaches (device, archive, sound manager, input words, SprtCtrlInf,
-// funcChain); `game` holds GM / Supervisor fields (11 §2, §7).
+// The original's globals that every subsystem reaches: the deterministic state in `w` (World, ARCH_A §2.3); the
+// IO / output side (device, archive, sound device, host, tool switches) here.
 pub struct Ctx {
-    // The frame's DrawCmd / ResCmd lists and device-state mirror (drawlist.rs, future `World` draw output).
+    // Deterministic game state (world.rs); subsystems borrow its fields disjointly (`ctx.w.player`, `sys!(ctx.w)`).
+    pub w: crate::world::World,
+    // The frame's DrawCmd / ResCmd lists and device-state mirror (drawlist.rs): draw output, outside World.
     pub rec: Recorder,
     // App / tool renderer; core calls it only at the sync points (`Renderer`, drawlist.rs).
     pub renderer: Box<dyn Renderer>,
@@ -24,70 +22,8 @@ pub struct Ctx {
     pub archive: LogicView,
     // TODO(step 10): the cpal device leaves core with the crate cut; logic only queues `SoundCmd`s.
     pub audio: Audio,
-    pub input: Input,
-    pub anm: AnmManager,
-    // The game RNG g_Rng 0x164D520 (11 §1); every draw site keeps the original's order (future `World.rng`).
-    pub rng: crate::rng::Rng,
-    pub tasks: Tasks<crate::chain::Node>,
-    // Port count of executed calc steps (debug tools, TH08_SHOT); not an original counter.
-    pub frame: u64,
-    pub game: crate::gamemgr::Game,
-    pub ascii: crate::ascii::Queue,
-    // Sound manager SE queue (13 §1.2), flushed by `sound_update`.
-    pub sound: crate::sound::Queue,
-    // Sound manager BGM state + the frame's `SoundCmd` output (02 §4–§5, 13 §1.3), executed by `audio`.
-    pub bgm: crate::sound::Bgm,
     // Test / tool: every executed `SoundCmd` with its calc frame (`session --sound-log`).
     pub sound_log: Option<Vec<(u64, crate::sound::SoundCmd)>>,
-    // Effect manager g_EffectMgr 0x4ECE60 (13 §2).
-    pub effects: crate::effect::Effects,
-    // Ascii manager popups, darkness mask, gauge readout and boss markers (13 §4, 12 §5.9–§5.10).
-    pub overlays: crate::ascii::Overlays,
-    // HUD dirty fields + full-repaint counter 0x17CE8CC (12 §5.3).
-    pub panel: crate::hud::Panel,
-    // HUD impl block kept between Hud_OnRemove and the next Hud_Load (12 §5.1a).
-    pub hud_kept: Option<crate::hud::Kept>,
-    // Player 0x17D5EF8 (09 §1): created by GameManager_Register, dropped with the game manager by the scene switch
-    // (11 §7). Step 9a interim owner; moves into `GameManager` with step 9g (docs/arch/STEP9_WORLD.md).
-    pub player: Option<Box<crate::player::Player>>,
-    // Bullet manager 0xF54E90 (08 §2), with the item manager it holds: created by GameMgr's stage start (11 §3.1),
-    // replaced by the next one, dropped with the game manager (11 §7). Step 9b interim owner (STEP9_WORLD.md).
-    pub bullets: Option<Box<crate::bullet::BulletManager>>,
-    // Enemy manager 0x577F20 (07 §4): created by GameMgr's stage start (11 §3.1), dropped with the game manager
-    // (11 §7). Step 9c interim owner (STEP9_WORLD.md).
-    pub enemies: Option<Box<crate::enemy::EnemyManager>>,
-    // Stage g_Stage 0x4E4030 (06 §3): created by GameMgr's stage start (11 §3.1), dropped with the game manager
-    // (11 §7). Step 9d interim owner (STEP9_WORLD.md).
-    pub stage: Option<Box<crate::stage::Stage>>,
-    // HUD g_Hud 0x160F428 (12 §5) and spell manager g_Gui 0x4EA670 (12 §5.8): registered by GameMgr's stage start
-    // (11 §3.1), dropped with the game manager (11 §7). Step 9e interim owner (STEP9_WORLD.md).
-    pub hud: Option<Box<crate::hud::Hud>>,
-    pub gui: Option<Box<crate::gui::Gui>>,
-    // Dialogue state at HudImpl+0x21814 (10 §3), created with the HUD; read by the ECL (`Sys.msg`) and GameMgr_Calc.
-    pub msg: Option<Box<crate::msg::Dialogue>>,
-    // Game manager 0x164D0B0 (11 §2–§4) with its replay object: created by GameManager_Register, dropped by the
-    // scene switch (11 §7). Interim owner until `World.gm` (step 9h, STEP9_WORLD.md).
-    pub gm: Option<Box<crate::gamemgr::GameManager>>,
-    // Supervisor g_Supervisor 0x17CE758 (11 §7, 12 §1), registered at start-up and by a restart (00 §2); its chain
-    // nodes are `SupervisorTask`. Interim owner until `World` (step 9h, STEP9_WORLD.md).
-    pub supervisor: Option<Box<crate::supervisor::Supervisor>>,
-    // The registered menu-side scene object (MainMenu, Result, Ending, MusicRoom; 11 §7), switched by the
-    // Supervisor; its chain nodes are `SceneTask`. The game scene's GM is `gm`.
-    pub scene: crate::supervisor::Scene,
-    // ASCII manager (13 §4, 12 §3–§4), registered by Supervisor on-register; chain nodes `AsciiTask`.
-    pub ascii_mgr: Option<Box<crate::ascii::AsciiManager>>,
-    // Debug ANM viewer (TH08_ANM), not a port; chain nodes `AnmDebugTask`.
-    pub anm_debug: Option<Box<crate::anmdebug::AnmDebug>>,
-    // Port queue of bomb areas created by effects (14 §2.13).
-    pub bomb_areas: crate::bomb::AreaQueue,
-    // Global freeze byte 0x160F534: native 26 sets it, Player_Die clears it, enemy timers and bullets read it live.
-    pub timer_pause: i32,
-    // Global 0x18B8A2C "frames since load" (13 §3): ECL native 30 (= arg), 2 at the end of StageStart, 1 by
-    // GameMgr_OnRemove, 0 by Result / MainMenu register; Supervisor_Calc decrements it once per frame while ≠ 0.
-    // Read by screen effects 1 / 2 / 4, which are removed while it is ≠ 0.
-    pub load_frames: i32,
-    // g_Gui calls queued for Gui_Calc (12 §5.8); cleared by Gui_Register.
-    pub gui_queue: crate::gui::Queue,
     // Debug: `TH08_SE_LOG` logs each frame's flushed SE ids.
     pub se_log: bool,
     // Port debug / start-up switches (`Settings::core`), passed in by the app or tool.
@@ -96,13 +32,6 @@ pub struct Ctx {
     pub host: Box<dyn crate::host::Host>,
     // TODO(step 8): debug draw log file writer; becomes a serializer of the recorded DrawList in the tools.
     pub drawlog: Option<crate::drawlog::Writer>,
-    // Frame_Run frame-skip counter (i8, 00 §2), compared with cfg +0x23; SKIP_START after every (re)start.
-    pub skip_counter: i8,
-    // Port: Window_InitD3D's two clear + Present (12 §1 boot presents 1–2) run as the first two port frames, outside
-    // Frame_Run, so they neither run the draw chain nor step the skip counter (presents 3–5 are its −3…−1).
-    init_presents: u8,
-    // Unlock notices (16 §4), shown in place of the frame's chains.
-    pub info: crate::menu::InfoNotices,
     // Emit switch (ARCH decision 2): off = draw-phase steps only, no draw command recorded (`set_emit`).
     emit: bool,
 }
@@ -113,7 +42,7 @@ pub struct Ctx {
 // g_Rng (11 §1), the player (09 §1; None inside the player's own calc), the bullet manager (08 §2; None inside
 // the bullet calc and the player calc, which hold it), the stage (06 §3; None inside the stage calc), the
 // dialogue (10 §3; None without a HUD). Built by
-// `sys!(ctx)`; these become `World` fields in step 9 (ARCH_A §2.3).
+// `sys!(ctx.w)` from `World` fields (ARCH_A §2.3).
 pub struct Sys<'a> {
     pub sound: &'a mut crate::sound::Queue,
     pub fx: &'a mut crate::effect::Effects,
@@ -292,7 +221,7 @@ impl TestSys {
 impl TaskCtx for Ctx {
     type Node = crate::chain::Node;
     fn tasks(&mut self) -> &mut Tasks<crate::chain::Node> {
-        &mut self.tasks
+        &mut self.w.tasks
     }
     fn recorder(&mut self) -> Option<&mut Recorder> {
         self.emit.then_some(&mut self.rec)
@@ -350,53 +279,22 @@ impl Ctx {
             host.write("th08.cfg", &cfg.to_bytes());
         }
         let mut ctx = Self {
+            w: crate::world::World::new(bgm),
             rec: Recorder::new(),
             renderer: Box::new(renderer),
             archive,
             audio,
-            input: Input::default(),
-            anm: AnmManager::default(),
-            rng: Default::default(),
-            tasks: Tasks::default(),
-            frame: 0,
-            game: Default::default(),
-            ascii: Default::default(),
-            sound: Default::default(),
-            bgm,
             sound_log: None,
-            effects: Default::default(),
-            overlays: Default::default(),
-            panel: Default::default(),
-            hud_kept: None,
-            player: None,
-            bullets: None,
-            enemies: None,
-            stage: None,
-            hud: None,
-            gui: None,
-            msg: None,
-            gm: None,
-            supervisor: None,
-            scene: Default::default(),
-            ascii_mgr: None,
-            anm_debug: None,
-            bomb_areas: Vec::new(),
-            timer_pause: 0,
-            load_frames: 0,
-            gui_queue: Vec::new(),
             se_log: core.se_log,
             core,
             host,
             drawlog: None,
-            skip_counter: SKIP_START,
-            init_presents: 2,
-            info: Default::default(),
             emit: true,
         };
-        ctx.game.cfg = cfg;
-        ctx.game.ver_list.set(ver);
+        ctx.w.game.cfg = cfg;
+        ctx.w.game.ver_list.set(ver);
         // Music mode cfg +0x1F and BGM volume +0x27 (02 §4) from the loaded config.
-        ctx.bgm.set_volumes(&ctx.game.cfg);
+        ctx.w.bgm.set_volumes(&ctx.w.game.cfg);
         ctx.flush_sound();
         if persist {
             ctx.drawlog = ctx
@@ -409,7 +307,7 @@ impl Ctx {
         if ctx.drawlog.is_some() {
             ctx.renderer.enable_log();
         }
-        ctx.rng = crate::rng::Rng::boot(ctx.core.seed, ctx.host.boot_clock_ms());
+        ctx.w.rng = crate::rng::Rng::boot(ctx.core.seed, ctx.host.boot_clock_ms());
         if persist {
             // The port's own save first; else import the original's score.dat (read-only).
             // The whole file is loaded once; equivalent to the original's boot PLST take (15 §2.2, INFERRED).
@@ -417,13 +315,13 @@ impl Ctx {
                 Some(f) => Some(f),
                 None => source.read("score.dat").await.ok(),
             };
-            ctx.game.load_score(file.as_deref(), ctx.host.ticks_ms());
-            ctx.game.persist = true;
+            ctx.w.game.load_score(file.as_deref(), ctx.host.ticks_ms());
+            ctx.w.game.persist = true;
         } else {
-            ctx.game.load_score(None, ctx.host.ticks_ms());
+            ctx.w.game.load_score(None, ctx.host.ticks_ms());
         }
         // Debug: `TH08_CLRD` overrides clear masks.
-        ctx.game.debug_clear_masks(ctx.core.clrd.as_deref());
+        ctx.w.game.debug_clear_masks(ctx.core.clrd.as_deref());
         crate::supervisor::register(&mut ctx)?;
         Ok(ctx)
     }
@@ -441,11 +339,11 @@ impl Ctx {
 
     // Frame_Run first half (00 §2): AnmManager begin-frame, calc chain, Sound_Update.
     pub fn calc(&mut self) -> Flow {
-        self.anm.begin_frame();
-        if self.info.active() && crate::menu::InfoNotices::calc(self) {
+        self.w.anm.begin_frame();
+        if self.w.info.active() && crate::menu::InfoNotices::calc(self) {
             // Info_Show's own loop: input, Sound_Update, no chains.
             self.sound_update();
-            self.frame += 1;
+            self.w.frame += 1;
             return Flow::Continue;
         }
         let f = task::run(self, Chain::Calc);
@@ -453,7 +351,7 @@ impl Ctx {
         // Port: ScreenEffect_Register (13 §3) links its nodes at once; effects queued by calc nodes after prio 3 are linked
         // here (their first calc is the next frame either way); callers below prio 3 use `effect::screen_now`.
         crate::effect::register_pending(self);
-        self.frame += 1;
+        self.w.frame += 1;
         f
     }
 
@@ -461,23 +359,23 @@ impl Ctx {
     // queue is left as is. Volume = the curve applied to the table volume and cfg +0x28. Menus also call it in place
     // ("sound flush", 12 §2.2, 16 §6.2).
     pub fn sound_update(&mut self) {
-        let cfg = self.game.cfg;
+        let cfg = self.w.game.cfg;
         // The BGM command queue runs before the SE flush, also with "SE off" (13 §1.3).
-        self.bgm.start_fade();
-        if cfg.se_on == 0 || self.sound.is_empty() {
+        self.w.bgm.start_fade();
+        if cfg.se_on == 0 || self.w.sound.is_empty() {
             self.flush_sound();
             return;
         }
-        let played = self.sound.drain();
+        let played = self.w.sound.drain();
         if self.se_log {
-            log::info!("frame {} se {:?}", self.frame, played);
+            log::info!("frame {} se {:?}", self.w.frame, played);
         }
         for (id, pan) in played {
             let vol = crate::config::volume_curve(
                 crate::sound::TABLE[id as usize].1 as i32,
                 cfg.se_volume,
             );
-            self.bgm.play_se(id as usize, pan, vol);
+            self.w.bgm.play_se(id as usize, pan, vol);
         }
         self.flush_sound();
     }
@@ -485,9 +383,9 @@ impl Ctx {
     // Port: the device executes the `SoundCmd`s queued so far, in order, at each Sound_Update and after the
     // start-up / restart / exit calls; nothing is read back into logic.
     pub fn flush_sound(&mut self) {
-        for c in self.bgm.out.drain(..) {
+        for c in self.w.bgm.out.drain(..) {
             if let Some(log) = &mut self.sound_log {
-                log.push((self.frame, c.clone()));
+                log.push((self.w.frame, c.clone()));
             }
             self.audio.exec(c);
         }
@@ -500,7 +398,7 @@ impl Ctx {
         if f == Flow::Continue {
             self.draw();
             self.present();
-            crate::ascii::apply_pending_captures(&mut self.anm, &mut self.rec);
+            crate::ascii::apply_pending_captures(&mut self.w.anm, &mut self.rec);
         }
         f
     }
@@ -508,8 +406,8 @@ impl Ctx {
     // Frame_Run second half (00 §2); Frame_Run only checks the calc runner's result. The draw chain runs when the
     // counter reaches cfg +0x23 (so 0 and 1 both draw every frame); Present follows either way.
     pub fn draw(&mut self) {
-        if self.init_presents > 0 && self.game.scene == crate::gamemgr::SCENE_BOOT {
-            self.init_presents -= 1;
+        if self.w.init_presents > 0 && self.w.game.scene == crate::gamemgr::SCENE_BOOT {
+            self.w.init_presents -= 1;
             self.rec.set_viewport(FULLSCREEN);
             self.rec.clear_depth(Some([0, 0, 0, 255]));
             if self.drawlog.is_some() {
@@ -517,17 +415,17 @@ impl Ctx {
             }
             return;
         }
-        if self.info.showing() {
+        if self.w.info.showing() {
             crate::menu::InfoNotices::draw(self);
             if self.drawlog.is_some() {
                 self.log_frame();
             }
             return;
         }
-        self.skip_counter = self.skip_counter.wrapping_add(1);
-        if self.skip_counter >= self.game.cfg.frame_skip as i8 {
+        self.w.skip_counter = self.w.skip_counter.wrapping_add(1);
+        if self.w.skip_counter >= self.w.game.cfg.frame_skip as i8 {
             task::run(self, Chain::Draw);
-            self.skip_counter = 0;
+            self.w.skip_counter = 0;
         }
         if self.drawlog.is_some() {
             self.log_frame();
@@ -553,11 +451,13 @@ impl Ctx {
     // WinMain exit (15 §1.2).
     pub fn exit_save(&mut self) {
         // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
-        self.bgm.midi_reset();
+        self.w.bgm.midi_reset();
         self.flush_sound();
-        self.game.save_score(&mut self.rng, true, &mut *self.host);
-        if self.game.persist {
-            self.host.write("th08.cfg", &self.game.cfg.to_bytes());
+        self.w
+            .game
+            .save_score(&mut self.w.rng, true, &mut *self.host);
+        if self.w.game.persist {
+            self.host.write("th08.cfg", &self.w.game.cfg.to_bytes());
         }
     }
 
@@ -567,46 +467,49 @@ impl Ctx {
     // the window and device stay (the app applies the window mode), the 1 s sleep and 60 PeekMessage calls are skipped.
     pub fn restart(&mut self) -> anyhow::Result<()> {
         // Step 1: Result_Register(2) + teardown save score.dat; step 5 reloads it (the written bytes = the file).
-        let score = self.game.save_score(&mut self.rng, true, &mut *self.host);
+        let score = self
+            .w
+            .game
+            .save_score(&mut self.w.rng, true, &mut *self.host);
         task::clear(self);
         // The chain teardown released every task object (00 §2).
-        self.scene = Default::default();
-        self.ascii_mgr = None;
-        self.anm_debug = None;
+        self.w.scene = Default::default();
+        self.w.ascii_mgr = None;
+        self.w.anm_debug = None;
         self.sound_update();
-        self.bgm.stop_bgm();
-        self.bgm.release_bgm();
+        self.w.bgm.stop_bgm();
+        self.w.bgm.release_bgm();
         // Supervisor teardown 0x446D06, mode 2: the init.mid reset (02 §5).
-        self.bgm.midi_reset();
+        self.w.bgm.midi_reset();
         self.flush_sound();
         for slot in 0..crate::anmmgr::SLOTS {
-            self.anm.unload(&mut self.rec, slot);
+            self.w.anm.unload(&mut self.rec, slot);
         }
         // New ANM manager; g_GameSpeed := 1.0 (step 5; the port keeps it in the manager). Step 6: g_Rng state :=
         // (u16) timeGetTime(), the call counter +4 is kept (11 §1); AsciiManager_Load zeroes the ASCII object.
-        self.rng.state = crate::rng::Rng::boot(self.core.seed, self.host.boot_clock_ms()).state;
+        self.w.rng.state = crate::rng::Rng::boot(self.core.seed, self.host.boot_clock_ms()).state;
         // Supervisor flag 0x20 survives: the Supervisor object is not re-constructed (00 §2).
-        let restore = self.anm.slowdown_restore;
-        self.anm = AnmManager::default();
-        self.anm.speed = 1.0;
-        self.anm.slowdown_restore = restore;
-        self.info = Default::default();
-        self.ascii = Default::default();
-        self.skip_counter = SKIP_START;
-        self.init_presents = 2;
+        let restore = self.w.anm.slowdown_restore;
+        self.w.anm = AnmManager::default();
+        self.w.anm.speed = 1.0;
+        self.w.anm.slowdown_restore = restore;
+        self.w.info = Default::default();
+        self.w.ascii = Default::default();
+        self.w.skip_counter = crate::world::SKIP_START;
+        self.w.init_presents = 2;
         let now = self.host.ticks_ms();
-        self.game.load_score(Some(&score), now);
+        self.w.game.load_score(Some(&score), now);
         // Step 3: scene +0x158 := 0; the original's request −1 (switch to the menu on the first calc) is the port's
         // boot request of Supervisor_Init; +0x160 stays until the boot → menu switch writes it.
-        self.game.scene = crate::gamemgr::SCENE_BOOT;
-        self.game.requested = crate::gamemgr::SCENE_BOOT;
+        self.w.game.scene = crate::gamemgr::SCENE_BOOT;
+        self.w.game.requested = crate::gamemgr::SCENE_BOOT;
         crate::supervisor::register(self)
     }
 
     // Debug tool. TH08_DRAWLOG: one F record per presented frame, sampled after the draw.
     fn log_frame(&mut self) {
         let recs = self.renderer.take_log(&mut self.rec);
-        let g = &self.game;
+        let g = &self.w.game;
         let game_frame = if g.scene == crate::gamemgr::SCENE_GAME {
             g.frame_counter
         } else {
@@ -614,9 +517,9 @@ impl Ctx {
         };
         let demo = (g.flags & crate::gamemgr::F_DEMO != 0).then_some((g.demo, g.demo_frame));
         let input = if g.scene == crate::gamemgr::SCENE_GAME {
-            self.input.game[0]
+            self.w.input.game[0]
         } else {
-            self.input.held
+            self.w.input.held
         };
         let scene = g.scene;
         if let Some(w) = &mut self.drawlog {
@@ -682,15 +585,15 @@ mod tests {
         };
         let to_menu = |c: &mut super::Ctx| {
             (0..2000)
-                .any(|_| c.run_frame().eq(&super::Flow::Continue) && c.game.scene == SCENE_MENU)
+                .any(|_| c.run_frame().eq(&super::Flow::Continue) && c.w.game.scene == SCENE_MENU)
         };
         assert!(to_menu(&mut c));
-        c.game.cfg.windowed ^= 1;
-        let mode = c.game.cfg.windowed;
+        c.w.game.cfg.windowed ^= 1;
+        let mode = c.w.game.cfg.windowed;
         c.restart().unwrap();
-        assert_eq!(c.game.scene, SCENE_BOOT);
+        assert_eq!(c.w.game.scene, SCENE_BOOT);
         assert!(to_menu(&mut c));
-        assert_eq!(c.game.cfg.windowed, mode);
+        assert_eq!(c.w.game.cfg.windowed, mode);
     }
 
     // ARCH decision 2: with emit off the frames run (boot, logo, menu) and no draw command is recorded.
@@ -708,7 +611,7 @@ mod tests {
             assert!(c.rec.draws.is_empty());
             c.present();
         }
-        assert_eq!(c.game.scene, SCENE_MENU);
+        assert_eq!(c.w.game.scene, SCENE_MENU);
     }
 
     // 13 §3: a screen effect queued in a fast-forward pass is linked before the restarted pass.
@@ -718,8 +621,8 @@ mod tests {
         let Some(mut c) = ctx() else {
             return;
         };
-        c.effects.screen(1, 10, 2, 0, 0, 0x10);
+        c.w.effects.screen(1, 10, 2, 0, 0, 0x10);
         c.on_restart();
-        assert!(c.effects.take_screen().is_empty());
+        assert!(c.w.effects.take_screen().is_empty());
     }
 }

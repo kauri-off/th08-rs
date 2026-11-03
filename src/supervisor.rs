@@ -46,7 +46,7 @@ const MENU_LOAD_BOOT: u32 = 34;
 const MENU_LOAD: u32 = 33;
 
 pub fn register(ctx: &mut Ctx) -> Result<()> {
-    ctx.supervisor = Some(Box::new(Supervisor {
+    ctx.w.supervisor = Some(Box::new(Supervisor {
         debug_sprites: ctx.core.slot_test,
         script: ctx
             .core
@@ -165,16 +165,16 @@ impl Scene {
         }
     }
 
-    // The scene lent out of `ctx.scene` for one of its chain callbacks (only the Supervisor switches scenes).
+    // The scene lent out of `ctx.w.scene` for one of its chain callbacks (only the Supervisor switches scenes).
     fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Scene, &mut Ctx) -> R) -> R {
-        let mut s = std::mem::take(&mut ctx.scene);
+        let mut s = std::mem::take(&mut ctx.w.scene);
         let r = f(&mut s, ctx);
-        ctx.scene = s;
+        ctx.w.scene = s;
         r
     }
 }
 
-// Chain nodes of `ctx.scene` (the scene's calc / draw prios, the menu's surface node): stateless forwarder
+// Chain nodes of `ctx.w.scene` (the scene's calc / draw prios, the menu's surface node): stateless forwarder
 // (STEP9_WORLD.md §3).
 pub struct SceneTask;
 
@@ -205,11 +205,11 @@ impl Task<Ctx> for SceneTask {
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        on_scene!(&ctx.scene, x => x.emit(ctx, rec, tag), ())
+        on_scene!(&ctx.w.scene, x => x.emit(ctx, rec, tag), ())
     }
 }
 
-// Chain nodes of `ctx.supervisor` (calc 0, draw 0 / 2 / 16): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.supervisor` (calc 0, draw 0 / 2 / 16): stateless forwarder (STEP9_WORLD.md §3).
 pub struct SupervisorTask;
 
 impl Task<Ctx> for SupervisorTask {
@@ -226,7 +226,7 @@ impl Task<Ctx> for SupervisorTask {
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        if let Some(s) = ctx.supervisor.as_deref() {
+        if let Some(s) = ctx.w.supervisor.as_deref() {
             s.emit(ctx, rec, tag);
         }
     }
@@ -248,18 +248,18 @@ impl Supervisor {
         t
     }
 
-    // The Supervisor lent out of `ctx.supervisor` for one of its chain callbacks.
+    // The Supervisor lent out of `ctx.w.supervisor` for one of its chain callbacks.
     fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Supervisor, &mut Ctx) -> R) -> R {
-        let mut s = ctx.supervisor.take().expect("no supervisor");
+        let mut s = ctx.w.supervisor.take().expect("no supervisor");
         let r = f(&mut s, ctx);
-        ctx.supervisor = Some(s);
+        ctx.w.supervisor = Some(s);
         r
     }
 
     // Fps_Update 0x446F53 playback text refresh (15 §3.3). The original refreshes on a 500 ms meter window continuous
     // since boot, whose phase cannot be reproduced (15 §3.3); the port refreshes every 30 gameplay calcs, on the 3rd.
     fn replay_fps(&mut self, ctx: &mut Ctx) {
-        let g = &ctx.game;
+        let g = &ctx.w.game;
         if g.loading != 0 || g.scene != gamemgr::SCENE_GAME {
             self.fps_frames = 0;
             return;
@@ -276,7 +276,7 @@ impl Supervisor {
     // Draw-time Fps_Update (Supervisor draw prio 16, 0x445BC0; 15 §3.3): "%2d" at (384, 448), yellow or red with the
     // flag, queued once per presented frame, then the queue colour reset to white.
     fn replay_fps_draw(&mut self, ctx: &mut Ctx) {
-        let g = &ctx.game;
+        let g = &ctx.w.game;
         if g.loading != 0
             || g.scene != gamemgr::SCENE_GAME
             || !g.replay()
@@ -289,9 +289,10 @@ impl Supervisor {
         } else {
             0xFFFFFFD0
         };
-        ctx.ascii
+        ctx.w
+            .ascii
             .push(crate::ascii::Text::new(384.0, 448.0, self.fps_text.clone()).argb(c));
-        ctx.ascii.color = [255; 4];
+        ctx.w.ascii.color = [255; 4];
     }
 
     // Loading_Begin 0x448790 (12 §1): surface 8 (the logo) full screen + nowloading.anm scripts 0–2 at (500, 440).
@@ -309,7 +310,7 @@ impl Supervisor {
         self.boot_vms = (0..3)
             .map(|i| {
                 let mut vm = AnmVm::default();
-                ctx.anm.set_script(&mut ctx.rng, &mut vm, 2, i);
+                ctx.w.anm.set_script(&mut ctx.w.rng, &mut vm, 2, i);
                 vm
             })
             .collect();
@@ -333,7 +334,7 @@ impl Supervisor {
         // its first draw (alphas 255, 251, …).
         crate::effect::screen_now(ctx, 0, 70, 0xFFFFFF, 0, 0, 0x15);
         // Loading_End releases a loading darken overlay (13 §3 type 5); only the menu load after a game has one.
-        ctx.effects.release_loading_overlay();
+        ctx.w.effects.release_loading_overlay();
         for vm in &mut self.boot_vms {
             vm.pending_interrupt = 1;
         }
@@ -341,7 +342,7 @@ impl Supervisor {
 
     // Main-menu loading screen by previous scene (12 §1); returns the port's hold length (see BOOT_FRAMES).
     fn menu_loading(&mut self, ctx: &mut Ctx, from: i32) -> Result<()> {
-        ctx.game.menu_loading = if from == gamemgr::SCENE_BOOT {
+        ctx.w.game.menu_loading = if from == gamemgr::SCENE_BOOT {
             MENU_LOAD_BOOT
         } else if matches!(from, gamemgr::SCENE_RESULT | gamemgr::SCENE_RESULT_MENU) {
             // Loading_Begin already ran at result state 2 frame 1; Result_OnRemove moved result.jpg into surface 8,
@@ -357,7 +358,7 @@ impl Supervisor {
             // The music room calls 0x44886F itself on the exit press, one frame before the scene switch.
             self.begin_loading(ctx)?;
             for vm in &mut self.boot_vms {
-                vm.run(&mut ctx.anm, &mut ctx.rng);
+                vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
             }
             MENU_LOAD - 1
         } else if from == gamemgr::SCENE_GAME {
@@ -392,15 +393,15 @@ impl Supervisor {
         }
         // The game manager with its replay object, and the player, the bullet and enemy managers, the stage, HUD,
         // dialogue and g_Gui that go with it (dropped here, after GameMgr_OnRemove, 11 §7).
-        ctx.player = None;
-        ctx.bullets = None;
-        ctx.enemies = None;
-        ctx.stage = None;
-        ctx.hud = None;
-        ctx.gui = None;
-        ctx.msg = None;
-        ctx.gm = None;
-        ctx.scene = Scene::None;
+        ctx.w.player = None;
+        ctx.w.bullets = None;
+        ctx.w.enemies = None;
+        ctx.w.stage = None;
+        ctx.w.hud = None;
+        ctx.w.gui = None;
+        ctx.w.msg = None;
+        ctx.w.gm = None;
+        ctx.w.scene = Scene::None;
     }
 
     // GameMgr_OnRegister 0x43AAF4: 0x44886F at (500, 440) + darken overlay (ScreenEffect type 5) after the main menu,
@@ -410,7 +411,7 @@ impl Supervisor {
         self.scene_task = Some(gm);
         // Attract demos always start from the main menu.
         let from_menu =
-            ctx.game.previous == gamemgr::SCENE_MENU || ctx.game.flags & gamemgr::F_DEMO != 0;
+            ctx.w.game.previous == gamemgr::SCENE_MENU || ctx.w.game.flags & gamemgr::F_DEMO != 0;
         if let Some(t) = self.logo.take() {
             ctx.rec.free_texture(t);
         }
@@ -431,7 +432,7 @@ impl Supervisor {
     }
 
     fn set_scene(&mut self, ctx: &mut Ctx, scene: Scene, calc: u16, draw: u16) -> Result<()> {
-        ctx.scene = scene;
+        ctx.w.scene = scene;
         let t = Node::Scene;
         task::add(ctx, Chain::Calc, calc, 0, t)?;
         task::add(ctx, Chain::Draw, draw, 0, t)?;
@@ -441,7 +442,7 @@ impl Supervisor {
 
     // Supervisor_Calc 0x445453 scene switch (11 §7 table): `previous` (+0x160) := current, then by (current, requested).
     fn switch(&mut self, ctx: &mut Ctx) -> Result<Option<Ret>> {
-        let g = &mut ctx.game;
+        let g = &mut ctx.w.game;
         let (cur, req) = (g.scene, g.requested);
         if cur == req {
             return Ok(None);
@@ -452,7 +453,7 @@ impl Supervisor {
             // 6 → −1 (Replay_Finish(0), then quit) is unreachable: no −1 request can happen in scene 6 (11 §7).
             return Ok(Some(Ret::Quit));
         }
-        log::info!("scene {cur} -> {req} (calc {})", ctx.frame);
+        log::info!("scene {cur} -> {req} (calc {})", ctx.w.frame);
         match (cur, req) {
             // Debug start (TH08_STAGE / TH08_REPLAY) from boot; the original always goes 0 → 1.
             (gamemgr::SCENE_BOOT, gamemgr::SCENE_GAME) => self.start_game(ctx)?,
@@ -474,8 +475,8 @@ impl Supervisor {
                 if matches!(cur, gamemgr::SCENE_GAME | gamemgr::SCENE_RESULT) {
                     crate::replay::finish(ctx);
                 }
-                crate::replay::end_playback(&mut ctx.game);
-                ctx.game.requested = gamemgr::SCENE_MENU;
+                crate::replay::end_playback(&mut ctx.w.game);
+                ctx.w.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
                     Scene::Menu(Box::new(crate::menu::MainMenu::new())),
@@ -491,15 +492,15 @@ impl Supervisor {
             }
             (gamemgr::SCENE_GAME, gamemgr::SCENE_NEXT_STAGE) => {
                 self.drop_scene(ctx);
-                ctx.game.fresh_start = false;
+                ctx.w.game.fresh_start = false;
                 self.start_game(ctx)?;
-                ctx.game.requested = gamemgr::SCENE_GAME;
+                ctx.w.game.requested = gamemgr::SCENE_GAME;
             }
             // 2 → 10: a full exit and a fresh start (11 §7).
             (gamemgr::SCENE_GAME, gamemgr::SCENE_RETRY) => {
                 self.drop_scene(ctx);
                 crate::replay::finish(ctx);
-                let g = &mut ctx.game;
+                let g = &mut ctx.w.game;
                 if !g.practice() && g.difficulty < 4 {
                     g.stage = 0;
                 }
@@ -507,15 +508,15 @@ impl Supervisor {
                 g.retrying = true;
                 g.stats = Default::default();
                 self.start_game(ctx)?;
-                ctx.game.requested = gamemgr::SCENE_GAME;
+                ctx.w.game.requested = gamemgr::SCENE_GAME;
             }
             // 2 → 11: requested = 3 is written before the unregister, so the GM sees "next stage", not a fresh start (11 §7).
             (gamemgr::SCENE_GAME, gamemgr::SCENE_RELOAD) => {
-                ctx.game.reload_same = true;
+                ctx.w.game.reload_same = true;
                 self.drop_scene(ctx);
-                ctx.game.fresh_start = false;
+                ctx.w.game.fresh_start = false;
                 self.start_game(ctx)?;
-                ctx.game.requested = gamemgr::SCENE_GAME;
+                ctx.w.game.requested = gamemgr::SCENE_GAME;
             }
             // 1 → 5 Result_Register(0) viewer; 2 / 9 → 6 Result_Register(1) after a game.
             (_, gamemgr::SCENE_RESULT | gamemgr::SCENE_RESULT_MENU) => {
@@ -541,8 +542,8 @@ impl Supervisor {
             (_, gamemgr::SCENE_REPLAY_END) => {
                 self.drop_scene(ctx);
                 crate::replay::finish(ctx);
-                crate::replay::end_playback(&mut ctx.game);
-                ctx.game.requested = gamemgr::SCENE_MENU;
+                crate::replay::end_playback(&mut ctx.w.game);
+                ctx.w.game.requested = gamemgr::SCENE_MENU;
                 self.set_scene(
                     ctx,
                     Scene::Menu(Box::new(crate::menu::MainMenu::new())),
@@ -558,9 +559,9 @@ impl Supervisor {
         // The raw input words are cleared so the new scene sees no held keys (11 §7).
         // +0x154: ExeCheck of the running exe every 4000 frames (11 §7); with the 1.00d constants it always passes
         // (15 §2.10), so the port does not count it.
-        ctx.input.held = 0;
-        ctx.input.prev = 0;
-        ctx.game.scene = ctx.game.requested;
+        ctx.w.input.held = 0;
+        ctx.w.input.prev = 0;
+        ctx.w.game.scene = ctx.w.game.requested;
         Ok(None)
     }
 }
@@ -570,8 +571,9 @@ impl Supervisor {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
             // ANM slots 0 text.anm and 2 nowloading.anm (00 §4).
-            ctx.anm.load(&mut ctx.rec, &ctx.archive, 0, "text.anm")?;
-            ctx.anm
+            ctx.w.anm.load(&mut ctx.rec, &ctx.archive, 0, "text.anm")?;
+            ctx.w
+                .anm
                 .load(&mut ctx.rec, &ctx.archive, 2, "nowloading.anm")?;
             // Boot loading screen (12 §1): th08logo.jpg full screen + nowloading.anm scripts 0–2 at (500, 440).
             self.begin_loading(ctx)?;
@@ -590,16 +592,16 @@ impl Supervisor {
                         .read_path(v)
                         .with_context(|| format!("TH08_REPLAY={v}"))?,
                 };
-                let r = crate::replay::parse(&bytes, ctx.game.ver_list.get())?;
-                ctx.game.replay_speed = st.replay_speed;
+                let r = crate::replay::parse(&bytes, ctx.w.game.ver_list.get())?;
+                ctx.w.game.replay_speed = st.replay_speed;
                 let demo = v.strip_prefix("demo").and_then(|n| n.parse().ok());
-                crate::replay::start_playback(&mut ctx.game, r, None, demo);
+                crate::replay::start_playback(&mut ctx.w.game, r, None, demo);
             } else if let Some(e) = &st.ending {
-                setup_ending(&mut ctx.game, &st, e);
+                setup_ending(&mut ctx.w.game, &st, e);
             } else if let Some(index) = st.stage {
-                setup_new_game(&mut ctx.game, &st, index);
+                setup_new_game(&mut ctx.w.game, &st, index);
             } else {
-                ctx.game.request(gamemgr::SCENE_MENU);
+                ctx.w.game.request(gamemgr::SCENE_MENU);
             }
         }
         Ok(())
@@ -610,48 +612,48 @@ impl Supervisor {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // AnmManager reset 0x44548A on every pass, also each restarted fast-forward pass (11 §7): tint off
         // (06 §10.2), shake offset 0 (13 §3), texture caches (05 §12.5); the blend cache models D3D state, kept.
-        ctx.anm.tint_off();
-        ctx.anm.screen_offset = [0.0; 2];
+        ctx.w.anm.tint_off();
+        ctx.w.anm.screen_offset = [0.0; 2];
         ctx.rec.anm.reset();
-        ctx.bgm.tick_fade();
+        ctx.w.bgm.tick_fade();
         if let Some(s) = &self.script {
-            ctx.input.raw = s.get(self.frame).copied().unwrap_or(0);
+            ctx.w.input.raw = s.get(self.frame).copied().unwrap_or(0);
         } else {
             // Input_Poll: one host poll per calc pass, also per restarted pass (00 §3).
             let p = ctx.host.poll_input();
-            ctx.input.poll(&ctx.game.cfg, &p);
+            ctx.w.input.poll(&ctx.w.game.cfg, &p);
         }
         self.frame += 1;
-        if ctx.game.slow_skip != 0 {
-            ctx.input.accumulate();
+        if ctx.w.game.slow_skip != 0 {
+            ctx.w.input.accumulate();
         } else {
-            ctx.input.tick();
+            ctx.w.input.tick();
         }
         self.replay_fps(ctx);
         // Loading_Begin from the result screen (16 §2.1 state 2): requested in its calc (prio 16), so the VMs
         // catch up the frame they missed.
         // Surface 8 stays empty until the result object's removal moves result.jpg into it.
-        if std::mem::take(&mut ctx.game.loading_req) {
+        if std::mem::take(&mut ctx.w.game.loading_req) {
             if let Some(t) = self.logo.take() {
                 ctx.rec.free_texture(t);
             }
             self.start_vms(ctx, [500.0, 440.0]);
             for vm in &mut self.boot_vms {
-                vm.run(&mut ctx.anm, &mut ctx.rng);
+                vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
             }
         }
         if std::mem::take(&mut self.capture_req) {
             self.capture(ctx);
         }
         if self.stage_load {
-            if ctx.game.loading == 0 {
+            if ctx.w.game.loading == 0 {
                 // Loading_End: state 0, surface 8 released.
                 self.stage_load = false;
                 self.boot_vms.clear();
                 if let Some(t) = self.logo.take() {
                     ctx.rec.free_texture(t);
                 }
-            } else if ctx.game.loading_wait == 1 {
+            } else if ctx.w.game.loading_wait == 1 {
                 for vm in &mut self.boot_vms {
                     vm.pending_interrupt = 2;
                 }
@@ -659,39 +661,44 @@ impl Supervisor {
         }
         // Session tool hook: the session trace supplies when the async menu loader finishes (12 §1 has no fixed time).
         // Its tail ran before this calc, so its interrupt reaches this frame's VM run.
-        if ctx.game.menu_loading > 0
-            && let Some(s) = &mut ctx.game.sched
+        if ctx.w.game.menu_loading > 0
+            && let Some(s) = &mut ctx.w.game.sched
             && s.menu.front().is_some_and(|&p| s.poll >= p)
         {
             s.menu.pop_front();
-            ctx.game.menu_loading = 0;
+            ctx.w.game.menu_loading = 0;
             self.end_loading(ctx);
         }
         // Presents 1–2 come from Window_InitD3D, before the first Frame_Run (12 §1 boot presents).
-        if self.frame > 2 || ctx.game.requested != gamemgr::SCENE_MENU {
+        if self.frame > 2 || ctx.w.game.requested != gamemgr::SCENE_MENU {
             for vm in &mut self.boot_vms {
-                vm.run(&mut ctx.anm, &mut ctx.rng);
+                vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
             }
         }
-        if self.logo.is_some() && ctx.game.scene == gamemgr::SCENE_BOOT {
+        if self.logo.is_some() && ctx.w.game.scene == gamemgr::SCENE_BOOT {
             self.boot_frames += 1;
-            let boot = ctx.game.sched.as_ref().map_or(BOOT_FRAMES, |s| s.boot_calc);
-            if ctx.game.requested == gamemgr::SCENE_MENU && self.boot_frames < boot {
+            let boot = ctx
+                .w
+                .game
+                .sched
+                .as_ref()
+                .map_or(BOOT_FRAMES, |s| s.boot_calc);
+            if ctx.w.game.requested == gamemgr::SCENE_MENU && self.boot_frames < boot {
                 return Ret::Next;
             }
-            if ctx.game.requested != gamemgr::SCENE_MENU {
+            if ctx.w.game.requested != gamemgr::SCENE_MENU {
                 self.end_loading(ctx);
                 self.boot_vms.clear();
             }
         }
         let r = self.switch(ctx);
         // 0x18B8A2C decrements once per frame while ≠ 0 (13 §3, 11 §7).
-        let n = ctx.load_frames;
+        let n = ctx.w.load_frames;
         if n != 0 {
-            ctx.load_frames = n - 1;
+            ctx.w.load_frames = n - 1;
         }
-        if ctx.game.menu_loading > 0 {
-            let g = &mut ctx.game;
+        if ctx.w.game.menu_loading > 0 {
+            let g = &mut ctx.w.game;
             match &mut g.sched {
                 Some(s) if s.menu.front().is_some_and(|&p| s.poll >= p) => {
                     s.menu.pop_front();
@@ -721,7 +728,7 @@ impl Supervisor {
         match tag {
             0 => {
                 self.prompt =
-                    crate::ascii::loading_prompt(&mut ctx.ascii, &mut ctx.game.load_prompt)
+                    crate::ascii::loading_prompt(&mut ctx.w.ascii, &mut ctx.w.game.load_prompt)
             }
             16 => self.replay_fps_draw(ctx),
             _ => {}
@@ -738,7 +745,7 @@ impl Supervisor {
                     rec.image(t, 0.0, 0.0);
                 }
                 // Then the "Press Shot Button" prompt with the whole queue (12 §1).
-                crate::ascii::emit_texts(&ctx.anm, rec, &self.prompt);
+                crate::ascii::emit_texts(&ctx.w.anm, rec, &self.prompt);
             }
             2 => {
                 // The scripts' own positions (slide-in, z) are relative to the loading position.
@@ -751,7 +758,7 @@ impl Supervisor {
                         p[1] + o[1] + self.load_pos[1],
                         p[2] + o[2],
                     ];
-                    ctx.anm.emit_mode(rec, &v, 2);
+                    ctx.w.anm.emit_mode(rec, &v, 2);
                 }
             }
             _ => {}
@@ -759,7 +766,7 @@ impl Supervisor {
         let (Some(slot), 16) = (self.debug_sprites, tag) else {
             return;
         };
-        let Some(anm) = ctx.anm.get(slot) else {
+        let Some(anm) = ctx.w.anm.get(slot) else {
             return;
         };
         rec.set_viewport(PLAYFIELD);

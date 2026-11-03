@@ -142,7 +142,7 @@ fn final_notice(g: &gamemgr::Game, c: usize, d: usize) -> Option<i32> {
 
 // `Info_Show` 0x471181 (16 §4): the unlock notices queued by MainMenu_OnRegister. The original runs each as a
 // blocking loop with its own Present; the port runs one loop step per frame in place of the calc and draw chains.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct InfoNotices {
     pub(crate) queue: std::collections::VecDeque<&'static str>,
     // 0x164D530 as of the registering frame: only Supervisor_Calc writes it, so it stays frozen in the loop.
@@ -171,15 +171,15 @@ impl InfoNotices {
     // iteration later as t = 5981. False once no notice is left (the frame then runs normally).
     pub fn calc(ctx: &mut Ctx) -> bool {
         loop {
-            match ctx.info.cur {
+            match ctx.w.info.cur {
                 Some((t, f)) if f >= INFO_FRAMES => {
                     // After the loop, surface 0 is released.
                     ctx.rec.free_texture(t);
-                    ctx.info.cur = None;
+                    ctx.w.info.cur = None;
                 }
                 Some(_) => break,
                 None => {
-                    let Some(file) = ctx.info.queue.pop_front() else {
+                    let Some(file) = ctx.w.info.queue.pop_front() else {
                         return false;
                     };
                     match ctx
@@ -189,7 +189,7 @@ impl InfoNotices {
                         .map_err(anyhow::Error::from)
                         .and_then(|b| ctx.rec.load_image(file, &b))
                     {
-                        Ok(t) => ctx.info.cur = Some((t, 0)),
+                        Ok(t) => ctx.w.info.cur = Some((t, 0)),
                         Err(e) => log::warn!("{file}: {e:#}"),
                     }
                 }
@@ -197,16 +197,16 @@ impl InfoNotices {
         }
         // g_InputRawCur := Input_Poll(); the previous word and the repeat counter are left alone.
         let p = ctx.host.poll_input();
-        ctx.input.poll(&ctx.game.cfg, &p);
-        ctx.input.held = ctx.input.raw | ctx.input.joy;
-        let (held, frozen) = (ctx.input.held, ctx.info.frozen_prev);
-        let Some((_, t)) = &mut ctx.info.cur else {
+        ctx.w.input.poll(&ctx.w.game.cfg, &p);
+        ctx.w.input.held = ctx.w.input.raw | ctx.w.input.joy;
+        let (held, frozen) = (ctx.w.input.held, ctx.w.info.frozen_prev);
+        let Some((_, t)) = &mut ctx.w.info.cur else {
             return false;
         };
-        ctx.info.drawn = *t;
+        ctx.w.info.drawn = *t;
         let (next, pressed) = info_step(*t, held, frozen);
         if pressed {
-            ctx.sound.play(sound::OK);
+            ctx.w.sound.play(sound::OK);
         }
         *t = next;
         true
@@ -214,12 +214,12 @@ impl InfoNotices {
 
     // Draw of the iteration: the picture full-screen and the black quad (0, 0)–(639, 479).
     pub fn draw(ctx: &mut Ctx) {
-        let Some((tex, _)) = ctx.info.cur else {
+        let Some((tex, _)) = ctx.w.info.cur else {
             return;
         };
         ctx.rec.set_viewport(FULLSCREEN);
         ctx.rec.image(tex, 0.0, 0.0);
-        if let Some(a) = info_fade_alpha(ctx.info.drawn) {
+        if let Some(a) = info_fade_alpha(ctx.w.info.drawn) {
             ctx.rec.rect(0.0, 0.0, 639.0, 479.0, [0, 0, 0, a]);
         }
     }
@@ -439,14 +439,14 @@ impl MainMenu {
     fn highlight(&mut self, ctx: &Ctx, vm: usize, on: bool) {
         let b = self.base[vm];
         if b >= 0 {
-            self.vms[vm].set_sprite(&ctx.anm, b + if on { 0 } else { 1 });
+            self.vms[vm].set_sprite(&ctx.w.anm, b + if on { 0 } else { 1 });
         }
     }
 
     // Text_RenderCentered 0x466650 (12 §2.2, 10 §6): `text` into description strip `i` (text.anm sprite 21 + i) at
     // x = trunc(256 − len·15/4), len = Shift-JIS byte length; W = 512, font 15, COLORREF 0x00FFF0E0, ±2 px outline.
     fn render_description(&mut self, ctx: &mut Ctx, i: usize, text: &str) {
-        let Some(sp) = ctx.anm.sprite(0, 21 + i).copied() else {
+        let Some(sp) = ctx.w.anm.sprite(0, 21 + i).copied() else {
             return;
         };
         let t = ctx.rec.texture(sp.tex);
@@ -492,7 +492,7 @@ impl MainMenu {
         next: u16,
         allowed: impl Fn(&Ctx, i32) -> bool,
     ) {
-        let i = &ctx.input;
+        let i = &ctx.w.input;
         let d = if i.pressed_or_repeat(prev) {
             -1
         } else if i.pressed_or_repeat(next) {
@@ -509,7 +509,7 @@ impl MainMenu {
         }
         if c != self.cursor {
             self.cursor = c;
-            ctx.sound.play(sound::SELECT);
+            ctx.w.sound.play(sound::SELECT);
         }
     }
 
@@ -529,8 +529,8 @@ impl MainMenu {
     // Items 1 (Extra) and 2 (Spell Practice) are skipped and drawn 0xFF404040 while locked (12 §2.2).
     fn item_locked(ctx: &Ctx, i: usize) -> bool {
         match i {
-            1 => !extra_any(&ctx.game, ctx.core.unlock),
-            2 => !spell_practice_unlocked(&ctx.game, ctx.core.unlock),
+            1 => !extra_any(&ctx.w.game, ctx.core.unlock),
+            2 => !spell_practice_unlocked(&ctx.w.game, ctx.core.unlock),
             _ => false,
         }
     }
@@ -541,20 +541,20 @@ impl MainMenu {
             self.set_surface(ctx, "title00.png");
             self.interrupt_all(2);
             // Back from a watched replay: the entry block switches to the replay screen and returns 1 (12 §2.2).
-            if ctx.game.replay() {
+            if ctx.w.game.replay() {
                 self.set_screen(REPLAY);
                 self.interrupt_all(13);
                 self.desc_fade_out();
-                ctx.game.flags &= !F_REPLAY;
+                ctx.w.game.flags &= !F_REPLAY;
                 return;
             }
             // Back from a practice game (+0x6C ≠ 0): bit 14 set again for 2, screen 8 + 7·bit 14, range interrupt 5,
             // description interrupt 2, return 1; trace shows screen 0 on the release frame (12 §2.2, RE-Q55).
             if self.back != 0 {
                 if self.back == 2 {
-                    ctx.game.flags |= F_SPELL_PRACTICE;
+                    ctx.w.game.flags |= F_SPELL_PRACTICE;
                 }
-                self.set_screen(if ctx.game.spell_practice() {
+                self.set_screen(if ctx.w.game.spell_practice() {
                     CHAR_SPELL
                 } else {
                     DIFF_PRACTICE
@@ -599,11 +599,11 @@ impl MainMenu {
             // Item 8: after 60 frames free the VMs, scene −1 (12 §2.2).
             *f += 1;
             if *f >= 60 {
-                ctx.game.request(-1);
+                ctx.w.game.request(-1);
             }
             return;
         }
-        self.idle = if ctx.input.held != 0 {
+        self.idle = if ctx.w.input.held != 0 {
             0
         } else {
             self.idle + 1
@@ -611,16 +611,16 @@ impl MainMenu {
         // Demo (12 §2.2): idle counter reset by any raw input; after 1500 frames load demorpy((n+1) mod 4).
         if self.idle >= 1500 {
             self.idle = 0;
-            let n = (ctx.game.demo + 1) % 4;
+            let n = (ctx.w.game.demo + 1) % 4;
             let r = ctx
                 .archive
                 .read(&format!("demorpy{n}.rpy"))
                 .map_err(anyhow::Error::from)
-                .and_then(|b| Ok(crate::replay::parse(&b, ctx.game.ver_list.get())?));
+                .and_then(|b| Ok(crate::replay::parse(&b, ctx.w.game.ver_list.get())?));
             match r {
                 Ok(r) => {
-                    if crate::replay::start_playback(&mut ctx.game, r, None, Some(n)) {
-                        ctx.bgm.stop_bgm();
+                    if crate::replay::start_playback(&mut ctx.w.game, r, None, Some(n)) {
+                        ctx.w.bgm.stop_bgm();
                         return;
                     }
                 }
@@ -632,14 +632,14 @@ impl MainMenu {
             return;
         }
         // Confirm actions of the 12 §2.2 item table: sfx 10, then a sound flush (Sound_Update in place, 13 §1.3).
-        if ctx.input.pressed(CONFIRM) {
-            ctx.sound.play(sound::OK);
+        if ctx.w.input.pressed(CONFIRM) {
+            ctx.w.sound.play(sound::OK);
             ctx.sound_update();
             // Every confirm that leaves to another screen or scene fades the description out; Option and Quit do not.
             if self.cursor < 7 {
                 self.desc_fade_out();
             }
-            let g = &mut ctx.game;
+            let g = &mut ctx.w.game;
             match self.cursor {
                 0 => {
                     g.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
@@ -685,7 +685,7 @@ impl MainMenu {
                 }
                 _ => {
                     // 12 §2.2: no music change in WAV mode; MIDI mode plays the init.mid reset (02 §5), no fade.
-                    ctx.bgm.midi_reset();
+                    ctx.w.bgm.midi_reset();
                     self.interrupt_all(1);
                     self.quitting = Some(0);
                 }
@@ -695,12 +695,12 @@ impl MainMenu {
                 return;
             }
         }
-        if ctx.input.pressed(CANCEL) && self.cursor != ITEM_QUIT {
+        if ctx.w.input.pressed(CANCEL) && self.cursor != ITEM_QUIT {
             // Cancel highlight: old item base + 1, cursor := Quit, Quit base sprite (12 §2.2 "Highlight" (c)).
             self.highlight(ctx, 1 + self.cursor as usize, false);
             self.cursor = ITEM_QUIT;
             self.highlight(ctx, 1 + ITEM_QUIT as usize, true);
-            ctx.sound.play(sound::CANCEL);
+            ctx.w.sound.play(sound::CANCEL);
         }
     }
 
@@ -712,7 +712,11 @@ impl MainMenu {
                 self.set_surface(ctx, "select00.png");
             }
             self.interrupt_all(if extra { 12 } else { 7 });
-            self.cursor = if extra { 0 } else { last_difficulty(&ctx.game) };
+            self.cursor = if extra {
+                0
+            } else {
+                last_difficulty(&ctx.w.game)
+            };
             self.desc_cur = None;
         }
         let active = self.frames >= 8 && self.pending.is_none();
@@ -747,21 +751,21 @@ impl MainMenu {
         }
         let store =
             |g: &mut gamemgr::Game, c: i32| g.cfg.difficulty = if extra { 4 + c } else { c } as u8;
-        if ctx.input.pressed(CONFIRM) {
-            store(&mut ctx.game, self.cursor);
-            ctx.sound.play(sound::OK);
+        if ctx.w.input.pressed(CONFIRM) {
+            store(&mut ctx.w.game, self.cursor);
+            ctx.w.sound.play(sound::OK);
             self.set_screen(self.screen + 1);
             self.cursor = 0;
-        } else if ctx.input.pressed(CANCEL) {
-            store(&mut ctx.game, self.cursor);
-            ctx.sound.play(sound::CANCEL);
+        } else if ctx.w.input.pressed(CANCEL) {
+            store(&mut ctx.w.game, self.cursor);
+            ctx.w.sound.play(sound::CANCEL);
             self.interrupt_all(6);
             let cursor = match self.screen {
                 DIFF_PRACTICE => 3,
                 DIFF_EXTRA => 1,
                 _ => 0,
             };
-            ctx.game.flags &= !F_PRACTICE;
+            ctx.w.game.flags &= !F_PRACTICE;
             self.pending = Some(Pending {
                 frames: 20,
                 screen: TOP,
@@ -805,19 +809,19 @@ impl MainMenu {
 
     fn char_allowed(&self, ctx: &Ctx, c: i32) -> bool {
         match self.screen {
-            CHAR_EXTRA => extra_unlocked(&ctx.game, ctx.core.unlock, c as usize),
+            CHAR_EXTRA => extra_unlocked(&ctx.w.game, ctx.core.unlock, c as usize),
             CHAR_SPELL => Self::sp_shot_ok(ctx, c),
             _ => true,
         }
     }
 
     fn char_cursor(&mut self, ctx: &Ctx) {
-        let n = if extra_all(&ctx.game, ctx.core.unlock) {
+        let n = if extra_all(&ctx.w.game, ctx.core.unlock) {
             12
         } else {
             4
         };
-        self.cursor = (ctx.game.shot as i32).min(n - 1);
+        self.cursor = (ctx.w.game.shot as i32).min(n - 1);
         if !self.char_allowed(ctx, self.cursor) {
             self.cursor = (0..n).find(|&c| self.char_allowed(ctx, c)).unwrap_or(0);
         }
@@ -825,7 +829,7 @@ impl MainMenu {
 
     // Screens 5 / 9 / 13 / 15, 0x46A625 (12 §2.4); input from +0x1442C == 8 (12 §2).
     fn character(&mut self, ctx: &mut Ctx) {
-        let n = if extra_all(&ctx.game, ctx.core.unlock) {
+        let n = if extra_all(&ctx.w.game, ctx.core.unlock) {
             12
         } else {
             4
@@ -834,7 +838,8 @@ impl MainMenu {
             self.interrupt_all(8);
             // Difficulty plate slides to (16, 384), not on screen 15 (12 §2.4).
             if self.screen != CHAR_SPELL {
-                self.vms[VM_DIFF + (ctx.game.cfg.difficulty as usize).min(4)].pending_interrupt = 9;
+                self.vms[VM_DIFF + (ctx.w.game.cfg.difficulty as usize).min(4)].pending_interrupt =
+                    9;
             }
             self.char_cursor(ctx);
         }
@@ -855,7 +860,7 @@ impl MainMenu {
             } else {
                 PRACTICE_STAGE
             });
-            self.cursor = ctx.game.stage as i32;
+            self.cursor = ctx.w.game.stage as i32;
             self.lists.sp_row = self.cursor;
             return;
         }
@@ -864,9 +869,9 @@ impl MainMenu {
         }
         // Confirm (12 §2.4): shot = cursor; practice → screen 11; else difficulty = config +0x21 (Extra 4, stage 8),
         // replay flag cleared, music stopped, scene 2.
-        if ctx.input.pressed(CONFIRM) {
-            ctx.sound.play(sound::OK);
-            let g = &mut ctx.game;
+        if ctx.w.input.pressed(CONFIRM) {
+            ctx.w.sound.play(sound::OK);
+            let g = &mut ctx.w.game;
             g.shot = self.cursor as u8;
             match self.screen {
                 // 9 → 11 / 15 → 16 return 2: the new screen runs in this frame (12 §2).
@@ -890,22 +895,22 @@ impl MainMenu {
                     g.stage = if extra { 8 } else { 0 };
                     g.flags &= !F_REPLAY;
                     g.fresh_start = true;
-                    ctx.bgm.stop_bgm();
+                    ctx.w.bgm.stop_bgm();
                     g.request(gamemgr::SCENE_GAME);
                     self.remove = true;
                 }
             }
-        } else if ctx.input.pressed(CANCEL) {
+        } else if ctx.w.input.pressed(CANCEL) {
             // Cancel (12 §2.4): SE 11 + sound flush, g_ShotType := cursor on every character screen.
-            ctx.sound.play(sound::CANCEL);
+            ctx.w.sound.play(sound::CANCEL);
             ctx.sound_update();
-            ctx.game.shot = self.cursor as u8;
+            ctx.w.game.shot = self.cursor as u8;
             if self.screen == CHAR_SPELL {
                 // Screen 15: SE 11 again (the flush restarts the same buffer: one sound), range interrupt 6, top menu
                 // cursor 2 after 30 frames (12 §2.4).
-                ctx.sound.play(sound::CANCEL);
+                ctx.w.sound.play(sound::CANCEL);
                 self.interrupt_all(6);
-                ctx.game.flags &= !F_PRACTICE;
+                ctx.w.game.flags &= !F_PRACTICE;
                 self.pending = Some(Pending {
                     frames: 30,
                     screen: TOP,
@@ -966,20 +971,20 @@ impl MainMenu {
         let item = self.cursor;
         // Volume preview (15 §1.3): SE 0x1D whenever the screen frame counter +0x1442C is a multiple of 50.
         if matches!(item, 3 | 4) && self.frames % 50 == 0 {
-            ctx.sound.play(sound::TIMEOUT);
+            ctx.w.sound.play(sound::TIMEOUT);
         }
         if self.frames < 4 {
             return;
         }
-        let inp = ctx.input;
-        let lmax = lives_max(&ctx.game, ctx.core.unlock);
-        let cfg = &mut ctx.game.cfg;
+        let inp = ctx.w.input;
+        let lmax = lives_max(&ctx.w.game, ctx.core.unlock);
+        let cfg = &mut ctx.w.game.cfg;
         if matches!(item, 3 | 4) {
             let v = Self::option_value(cfg, item).unwrap();
             let old = *v;
             *v = volume_step(old, &inp);
             if *v != old {
-                ctx.bgm.set_volumes(&ctx.game.cfg);
+                ctx.w.bgm.set_volumes(&ctx.w.game.cfg);
             }
         } else {
             let dir = if inp.pressed_or_repeat(LEFT) {
@@ -1000,21 +1005,21 @@ impl MainMenu {
                 };
                 *v = (*v as i32 + dir).rem_euclid(max + 1) as u8;
                 if *v != old {
-                    ctx.sound.play(sound::TIMEOUT);
+                    ctx.w.sound.play(sound::TIMEOUT);
                     // Item 2 (15 §1.3): `Music_Stop` in the old mode, Left from mode 2 also the init.mid reset, then
                     // `Music_Play(8, th08_01)` + `Music_PlaySlot(8, 0)` in the new mode (nothing in mode 0).
                     if item == 2 {
-                        ctx.bgm.stop_bgm();
+                        ctx.w.bgm.stop_bgm();
                         if dir < 0 && old == 2 {
-                            ctx.bgm.midi_reset();
+                            ctx.w.bgm.midi_reset();
                         }
                     }
-                    ctx.bgm.set_volumes(&ctx.game.cfg);
+                    ctx.w.bgm.set_volumes(&ctx.w.game.cfg);
                     if item == 2 {
-                        ctx.bgm.load_bgm(8, "bgm/th08_01.mid");
-                        ctx.bgm.play_slot(8);
+                        ctx.w.bgm.load_bgm(8, "bgm/th08_01.mid");
+                        ctx.w.bgm.play_slot(8);
                         // Music_PlaySlot marks track 0 heard unless replay playback or demo; mode 0 marks nothing (02 §4).
-                        let g = &mut ctx.game;
+                        let g = &mut ctx.w.game;
                         if matches!(g.cfg.music, 1 | 2)
                             && g.flags & (gamemgr::F_REPLAY | gamemgr::F_DEMO) == 0
                         {
@@ -1026,35 +1031,35 @@ impl MainMenu {
         }
         // Idle exit (15 §1.3), from +0x1442C ≥ 4 only: a non-zero polled word g_InputRawCur resets the counter, then
         // ≥ 3600 leaves as Quit, so the exit comes in call 3600 after the last call with input.
-        if ctx.input.held != 0 {
+        if ctx.w.input.held != 0 {
             self.idle = 0;
         }
         if self.idle >= IDLE_EXIT {
             self.option_leave(ctx);
             return;
         }
-        if ctx.input.pressed(CONFIRM) {
+        if ctx.w.input.pressed(CONFIRM) {
             match item {
                 7 => {
-                    ctx.sound.play(sound::OK);
-                    ctx.game.cfg.reset();
-                    ctx.bgm.set_volumes(&ctx.game.cfg);
+                    ctx.w.sound.play(sound::OK);
+                    ctx.w.game.cfg.reset();
+                    ctx.w.bgm.set_volumes(&ctx.w.game.cfg);
                 }
                 8 => {
                     // Key-config cursor 0 is set here, not by its entry block (15 §1.3).
                     self.cursor = 0;
-                    ctx.sound.play(sound::OK);
+                    ctx.w.sound.play(sound::OK);
                     self.set_screen(KEY_CONFIG);
                 }
                 9 => self.option_leave(ctx),
                 _ => {}
             }
-        } else if ctx.input.pressed(CANCEL) {
+        } else if ctx.w.input.pressed(CANCEL) {
             // Bomb/ESC moves the cursor to Quit (SE 11), on Quit it leaves (15 §1.3).
             if self.cursor == OPTION_ITEMS - 1 {
                 self.option_leave(ctx);
             } else {
-                ctx.sound.play(sound::CANCEL);
+                ctx.w.sound.play(sound::CANCEL);
                 self.cursor = OPTION_ITEMS - 1;
             }
         }
@@ -1063,10 +1068,10 @@ impl MainMenu {
     // Leaving the option menu (15 §1.3): SE 11, top cursor 7, screen 0 at once; return 5 when the colour depth or
     // window mode differs from the snapshot taken on entry (12 §2.2 item 7); return 5 restarts the program (00 §2).
     fn option_leave(&mut self, ctx: &mut Ctx) {
-        ctx.sound.play(sound::CANCEL);
+        ctx.w.sound.play(sound::CANCEL);
         self.set_screen(TOP);
         self.cursor = 7;
-        let (a, b) = (&self.snapshot, &ctx.game.cfg);
+        let (a, b) = (&self.snapshot, &ctx.w.game.cfg);
         if a.colour_mode != b.colour_mode || a.windowed != b.windowed {
             self.restart = true;
         }
@@ -1092,7 +1097,7 @@ impl MainMenu {
             for (k, t) in KEY_DESCRIPTIONS.iter().enumerate() {
                 self.render_description(ctx, k, t);
             }
-            let cfg = &mut ctx.game.cfg;
+            let cfg = &mut ctx.w.game.cfg;
             self.keys = cfg.pad;
             cfg.pad[4] = -1;
             cfg.pad[5] = -1;
@@ -1106,16 +1111,16 @@ impl MainMenu {
         self.desc_follow_cursor();
         // Steps 4–5 (0x469FA9 + ShotSlow) before assign / toggle / Reset / exit: changes show one call later.
         self.key_values(ctx);
-        let inp = ctx.input;
+        let inp = ctx.w.input;
         // Assigning (joystick only): a new first-down raw button on rows 0–8 swaps with any row holding it, SE 10.
         let b = inp.pad.first_button();
         if b >= 0 && b != self.last_button && self.cursor < KEY_ROWS.len() as i32 {
             assign_key(&mut self.keys, self.cursor as usize, b);
-            ctx.sound.play(sound::OK);
+            ctx.w.sound.play(sound::OK);
         }
         // 0x4C868C := scan result every call (15 §1.3; the port's −1 for "none" stands for the original's 32).
         self.last_button = b;
-        let cfg = &mut ctx.game.cfg;
+        let cfg = &mut ctx.w.game.cfg;
         if self.cursor == KEY_SHOT_SLOW && (inp.pressed(LEFT) || inp.pressed(RIGHT)) {
             cfg.shot_slow ^= 1;
         }
@@ -1124,12 +1129,12 @@ impl MainMenu {
             self.idle = 0;
         }
         if inp.pressed(CONFIRM) && self.cursor == KEY_RESET {
-            ctx.sound.play(sound::OK);
+            ctx.w.sound.play(sound::OK);
             self.keys = crate::config::PAD_DEFAULT;
             cfg.shot_slow = 1;
         } else if inp.pressed(CONFIRM) && self.cursor == KEY_QUIT || self.idle >= IDLE_EXIT {
             // Quit (or 3600 idle frames): SE 11, screen 2 cursor 8, the working copy written back (restores Up/Down).
-            ctx.sound.play(sound::CANCEL);
+            ctx.w.sound.play(sound::CANCEL);
             cfg.pad = self.keys;
             self.set_screen(OPTION);
             self.cursor = 8;
@@ -1153,11 +1158,11 @@ impl MainMenu {
                 let vm = &mut self.vms[i];
                 vm.set_flag(anmvm::F_ENABLED, v >= 0);
                 if v >= 0 && self.base[i] >= 0 {
-                    vm.set_sprite(&ctx.anm, self.base[i] + 2 * d);
+                    vm.set_sprite(&ctx.w.anm, self.base[i] + 2 * d);
                 }
             }
         }
-        let on = (ctx.game.cfg.shot_slow != 0) as usize;
+        let on = (ctx.w.game.cfg.shot_slow != 0) as usize;
         for k in 0..2 {
             self.highlight(ctx, VM_KEY_SHOT_SLOW + k, k == on);
         }
@@ -1166,7 +1171,7 @@ impl MainMenu {
     // Value VMs 20–43 (12 §2.7): lit = base sprite, dim = base + 1; volume digits are base + digit·2; VMs 25 / 26 are
     // hidden below 30 / 60 plays.
     fn option_values(&mut self, ctx: &Ctx) {
-        let cfg = ctx.game.cfg;
+        let cfg = ctx.w.game.cfg;
         let choices: [(usize, usize, u8); 5] = [
             (20, 7, cfg.lives),
             (27, 2, cfg.colour_mode),
@@ -1179,7 +1184,7 @@ impl MainMenu {
                 self.highlight(ctx, first + k, k == v as usize);
             }
         }
-        let plays = play_count(&ctx.game, ctx.core.unlock);
+        let plays = play_count(&ctx.w.game, ctx.core.unlock);
         for (vm, need) in [(25, 30), (26, 60)] {
             if plays < need {
                 self.vms[vm].set_flag(anmvm::F_VISIBLE, false);
@@ -1193,7 +1198,7 @@ impl MainMenu {
                 let vm = &mut self.vms[first + k];
                 if base >= 0 {
                     vm.set_sprite(
-                        &ctx.anm,
+                        &ctx.w.anm,
                         if k == 0 {
                             base + dim
                         } else {
@@ -1222,27 +1227,29 @@ impl MainMenu {
             return Ok(());
         }
         // 0x18B8A2C := 0 (13 §3).
-        ctx.load_frames = 0;
-        if title_music(&ctx.game) {
-            ctx.bgm.play_bgm("bgm/th08_01.mid");
+        ctx.w.load_frames = 0;
+        if title_music(&ctx.w.game) {
+            ctx.w.bgm.play_bgm("bgm/th08_01.mid");
         }
-        ctx.anm
+        ctx.w
+            .anm
             .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "title01.anm")?;
-        ctx.anm.load(
+        ctx.w.anm.load(
             &mut ctx.rec,
             &ctx.archive,
             crate::menulist::RT_SLOT,
             "resulttext.anm",
         )?;
         // MainMenu_OnRegister → Ascii_InitVms (popup slots + small/special cursors, 13 §4).
-        ctx.overlays.popups.clear();
+        ctx.w.overlays.popups.clear();
         // MainMenu_OnRegister → Ascii_SetupGaugeVms; hidden in the menu, redone at StageStart (12 §5.9).
         let l = crate::player::GaugeLimits::default();
-        ctx.overlays
-            .gauge_setup(&mut ctx.anm, &mut ctx.rng, l.min, l.max);
+        ctx.w
+            .overlays
+            .gauge_setup(&mut ctx.w.anm, &mut ctx.w.rng, l.min, l.max);
         for i in 0..VM_COUNT {
             let mut vm = AnmVm::default();
-            ctx.anm.set_script(&mut ctx.rng, &mut vm, ANM_SLOT, i);
+            ctx.w.anm.set_script(&mut ctx.w.rng, &mut vm, ANM_SLOT, i);
             self.base.push(if vm.has_sprite {
                 vm.sprite_index as i32
             } else {
@@ -1252,7 +1259,7 @@ impl MainMenu {
         }
         // GM flags 15–17 from the clear records (15 §2.2, §2.4, 16 §4).
         {
-            let g = &mut ctx.game;
+            let g = &mut ctx.w.game;
             let nc_b = |t: usize| g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0);
             let any_a = |t: usize| g.clear_any[t].iter().take(4).any(|m| m & 0x8000 != 0);
             let bits = ((0..4).any(nc_b) as u32) << 15
@@ -1261,18 +1268,18 @@ impl MainMenu {
             // Unlock notices (16 §4): a condition now true whose flag bit is still clear. The port loads CLRD at boot,
             // where the original's in-memory CLRD is still empty, so the first menu after boot shows none.
             if g.previous != gamemgr::SCENE_BOOT {
-                ctx.info.queue.extend(info_files(bits, g.flags));
-                ctx.info.frozen_prev = ctx.input.prev;
+                ctx.w.info.queue.extend(info_files(bits, g.flags));
+                ctx.w.info.frozen_prev = ctx.w.input.prev;
             }
             g.flags = g.flags & !(7 << 15) | bits;
         }
-        crate::menulist::compute_last_word_unlocks(&mut ctx.game);
+        crate::menulist::compute_last_word_unlocks(&mut ctx.w.game);
         // The 14 description VMs start script 9 (fade-in by itself); the loader ends with +0xC2BC := VM 0 (12 §2.2).
         self.desc = (0..DESC_VMS)
             .map(|i| {
                 let mut vm = AnmVm::default();
-                ctx.anm.set_script(&mut ctx.rng, &mut vm, 0, 9);
-                vm.set_sprite(&ctx.anm, 21 + i as i32);
+                ctx.w.anm.set_script(&mut ctx.w.rng, &mut vm, 0, 9);
+                vm.set_sprite(&ctx.w.anm, 21 + i as i32);
                 vm
             })
             .collect();
@@ -1280,7 +1287,7 @@ impl MainMenu {
         // Back from a replay (12 §2.2): bit 3 → shot := 0; a demo also clears bit 3, so only a watched replay keeps it
         // for the Top entry block's switch to the replay screen.
         {
-            let g = &mut ctx.game;
+            let g = &mut ctx.w.game;
             if g.replay() {
                 g.shot = 0;
             }
@@ -1290,7 +1297,7 @@ impl MainMenu {
         }
         // +0x6C := 1 + (flags bit 14) whenever flags bit 0 is set, whatever the previous scene; screen stays 0 and the
         // Top entry block does the switch to 8/15 (12 §2.2, RE-Q55). A spell-practice replay has bit 14 without bit 0.
-        let g = &ctx.game;
+        let g = &ctx.w.game;
         self.back = if g.practice() {
             1 + g.spell_practice() as u8
         } else {
@@ -1308,8 +1315,8 @@ impl MainMenu {
             _ => 0,
         };
         // After the cursor rule: flags &= ~0x4001, later bit 1 := 0 (12 §2.2).
-        ctx.game.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
-        ctx.game.flags &= !F_DEMO;
+        ctx.w.game.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
+        ctx.w.game.flags &= !F_DEMO;
         Ok(())
     }
 
@@ -1320,8 +1327,8 @@ impl MainMenu {
         if let Some((t, _)) = self.surface.take() {
             ctx.rec.free_texture(t);
         }
-        ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
-        ctx.anm.unload(&mut ctx.rec, crate::menulist::RT_SLOT);
+        ctx.w.anm.unload(&mut ctx.rec, ANM_SLOT);
+        ctx.w.anm.unload(&mut ctx.rec, crate::menulist::RT_SLOT);
         // The draw node can outlive a calc node removed by return 0 (00 §3.1); it then draws nothing.
         self.vms.clear();
         self.desc_cur = None;
@@ -1329,9 +1336,9 @@ impl MainMenu {
 
     pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // Session tool hook: screen/+0x00 at every MainMenu_Calc entry (drawlog README cols 29/30).
-        ctx.game.trace_menu = Some((self.screen, self.trace_cursor()));
+        ctx.w.game.trace_menu = Some((self.screen, self.trace_cursor()));
         // The menu starts when its loader has finished (Supervisor loading screen, 12 §1).
-        if ctx.game.menu_loading > 0 {
+        if ctx.w.game.menu_loading > 0 {
             return Ret::Next;
         }
         // Delayed switch: "+0x10 > 19" is true in the call P + 20 after a press on P, which calls Menu_SetScreen
@@ -1343,7 +1350,7 @@ impl MainMenu {
         // handler, RunRange and the description VM run a second time in this frame (12 §2 entry exception).
         loop {
             // A return-2 re-call is a new MainMenu_Calc entry: the last call's values are the row's (RE-Q55).
-            ctx.game.trace_menu = Some((self.screen, self.trace_cursor()));
+            ctx.w.game.trace_menu = Some((self.screen, self.trace_cursor()));
             let screen = self.screen;
             match self.screen {
                 TOP => self.top(ctx),
@@ -1375,10 +1382,10 @@ impl MainMenu {
             if let Some(p) = self.pending.take_if(|p| p.frames == 0) {
                 self.set_screen(p.screen);
                 self.cursor = p.cursor;
-                ctx.game.flags &= !p.clear_flags;
+                ctx.w.game.flags &= !p.clear_flags;
                 // Top item 7: screen 2 with the config snapshot (12 §2.2).
                 if p.screen == OPTION {
-                    self.snapshot = ctx.game.cfg;
+                    self.snapshot = ctx.w.game.cfg;
                 }
             }
             if self.screen == screen {
@@ -1401,13 +1408,13 @@ impl MainMenu {
         }
         for vm in &mut self.vms {
             let mode = vm.draw_mode;
-            ctx.anm.prepare(vm, mode);
+            ctx.w.anm.prepare(vm, mode);
         }
         // The current description VM (text.anm script 9 at (320, 448)) on every screen while +0xC2BC ≠ 0 (12 §2.2).
         if let Some(i) = self.desc_cur {
             let vm = &mut self.desc[i];
             let mode = vm.draw_mode;
-            ctx.anm.prepare(vm, mode);
+            ctx.w.anm.prepare(vm, mode);
         }
         match self.screen {
             PRACTICE_STAGE => self.practice_stage_draw_step(ctx),
@@ -1421,7 +1428,7 @@ impl MainMenu {
             let vm = &mut self.notice;
             vm.init();
             vm.anm_slot = ANM_SLOT as _;
-            vm.set_sprite(&ctx.anm, spr);
+            vm.set_sprite(&ctx.w.anm, spr);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
             vm.pos = [400.0, 170.0, 0.0];
         }
@@ -1440,10 +1447,10 @@ impl MainMenu {
             return;
         }
         for vm in &self.vms {
-            ctx.anm.emit(rec, vm);
+            ctx.w.anm.emit(rec, vm);
         }
         if let Some(i) = self.desc_cur {
-            ctx.anm.emit(rec, &self.desc[i]);
+            ctx.w.anm.emit(rec, &self.desc[i]);
         }
         match self.screen {
             REPLAY => self.replay_emit(ctx, rec),
@@ -1452,7 +1459,7 @@ impl MainMenu {
             _ => {}
         }
         if self.notice_sprite(ctx).is_some() {
-            ctx.anm.emit_mode(rec, &self.notice, 0);
+            ctx.w.anm.emit_mode(rec, &self.notice, 0);
         }
     }
 }
@@ -1460,7 +1467,7 @@ impl MainMenu {
 impl MainMenu {
     // The draw runs only once loading is done and the VMs exist (12 §2.2).
     fn drawn(&self, ctx: &Ctx) -> bool {
-        ctx.game.menu_loading == 0 && !self.vms.is_empty()
+        ctx.w.game.menu_loading == 0 && !self.vms.is_empty()
     }
 
     fn notice_sprite(&self, ctx: &Ctx) -> Option<i32> {
@@ -1468,9 +1475,9 @@ impl MainMenu {
             return None;
         }
         final_notice(
-            &ctx.game,
+            &ctx.w.game,
             self.cursor as usize,
-            ctx.game.cfg.difficulty as usize,
+            ctx.w.game.cfg.difficulty as usize,
         )
     }
 }
@@ -1511,10 +1518,10 @@ fn title_music(g: &gamemgr::Game) -> bool {
 // After the screen handler all 142 VMs run, then the description VM (12 §2).
 fn run_vms(m: &mut MainMenu, ctx: &mut Ctx) {
     for vm in m.vms.iter_mut().filter(|v| v.script.is_some()) {
-        vm.run(&mut ctx.anm, &mut ctx.rng);
+        vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
     }
     if let Some(i) = m.desc_cur {
-        m.desc[i].run(&mut ctx.anm, &mut ctx.rng);
+        m.desc[i].run(&mut ctx.w.anm, &mut ctx.w.rng);
     }
 }
 
@@ -1566,22 +1573,22 @@ mod tests {
             return;
         };
         for demo in [false, true] {
-            c.game.previous = gamemgr::SCENE_GAME;
-            c.game.difficulty = 4;
-            c.game.shot = 5;
+            c.w.game.previous = gamemgr::SCENE_GAME;
+            c.w.game.difficulty = 4;
+            c.w.game.shot = 5;
             let f = gamemgr::F_REPLAY
                 | gamemgr::F_SPELL_PRACTICE
                 | if demo { gamemgr::F_DEMO } else { 0 };
-            c.game.flags = f;
+            c.w.game.flags = f;
             let mut m = super::MainMenu::new();
             m.on_register(&mut c, Chain::Calc, 0).unwrap();
             let kept = if demo { 0 } else { gamemgr::F_REPLAY };
-            assert_eq!(c.game.flags & 0xFFFF, kept);
-            assert_eq!((m.screen, m.cursor, c.game.shot), (super::TOP, 1, 0));
+            assert_eq!(c.w.game.flags & 0xFFFF, kept);
+            assert_eq!((m.screen, m.cursor, c.w.game.shot), (super::TOP, 1, 0));
             m.top(&mut c);
             let screen = if demo { super::TOP } else { super::REPLAY };
             assert_eq!((m.screen, m.prev_screen, m.frames), (screen, super::TOP, 0));
-            assert_eq!(c.game.flags & 0xFFFF, 0);
+            assert_eq!(c.w.game.flags & 0xFFFF, 0);
         }
     }
 
@@ -1594,16 +1601,16 @@ mod tests {
             return;
         };
         for spell in [false, true] {
-            c.game.previous = gamemgr::SCENE_RESULT;
+            c.w.game.previous = gamemgr::SCENE_RESULT;
             let f = gamemgr::F_PRACTICE | if spell { gamemgr::F_SPELL_PRACTICE } else { 0 };
-            c.game.flags = f;
+            c.w.game.flags = f;
             let mut m = super::MainMenu::new();
             m.on_register(&mut c, Chain::Calc, 0).unwrap();
             assert_eq!(
                 (m.screen, m.back, m.cursor),
                 (super::TOP, 1 + spell as u8, 3 - spell as i32)
             );
-            assert_eq!(c.game.flags & 0xFFFF, 0);
+            assert_eq!(c.w.game.flags & 0xFFFF, 0);
             m.top(&mut c);
             let screen = if spell {
                 super::CHAR_SPELL
@@ -1611,7 +1618,7 @@ mod tests {
                 super::DIFF_PRACTICE
             };
             assert_eq!((m.screen, m.prev_screen, m.frames), (screen, super::TOP, 0));
-            assert_eq!(c.game.spell_practice(), spell);
+            assert_eq!(c.w.game.spell_practice(), spell);
         }
     }
 

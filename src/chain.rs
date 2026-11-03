@@ -22,7 +22,7 @@ pub enum Node {
     Hud,
     Gui,
     Effects,
-    // ScreenEffect in pool slot `ctx.effects.screen_fx[slot]` (13 §3).
+    // ScreenEffect in pool slot `ctx.w.effects.screen_fx[slot]` (13 §3).
     Screen { slot: usize },
 }
 

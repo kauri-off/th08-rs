@@ -1,7 +1,7 @@
 //! RNG `g_Rng` 0x164D520 (11 §1.1–§1.3).
 
 // 11 §1.1: 16-bit state, rotate-left-2 of (s ^ 0x9630) − 0x6553; a draw counter that never affects values.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Rng {
     // +0 state `s`; Rng_GetState/SetState 0x453C20/0x453BE0.
     pub state: u16,
@@ -9,14 +9,25 @@ pub struct Rng {
     pub counter: u32,
     // Port-only: every Next16 since seeding, never reset; the traces' `rng_ctr` column (11 §1.4).
     pub total: u32,
+    // Debug only (TH08_SESSION_RNG, demosync): a backtrace per Next16 while `Some`; not game state, not in Debug.
+    pub trace: Option<Vec<String>>,
+}
+
+impl std::fmt::Debug for Rng {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Rng")
+            .field("state", &self.state)
+            .field("counter", &self.counter)
+            .field("total", &self.total)
+            .finish()
+    }
 }
 
 impl Rng {
     pub fn seeded(state: u16) -> Self {
         Self {
             state,
-            counter: 0,
-            total: 0,
+            ..Self::default()
         }
     }
 
@@ -29,9 +40,8 @@ impl Rng {
     // Rng_Next16 0x43ECC0 (11 §1.1).
     pub fn next_u16(&mut self) -> u16 {
         #[cfg(not(target_arch = "wasm32"))]
-        if TRACE.get() {
-            let bt = std::backtrace::Backtrace::force_capture().to_string();
-            CALLS.with_borrow_mut(|c| c.push(bt));
+        if let Some(t) = &mut self.trace {
+            t.push(std::backtrace::Backtrace::force_capture().to_string());
         }
         let t = (self.state ^ 0x9630).wrapping_sub(0x6553);
         self.state = t.rotate_left(2);
@@ -77,14 +87,6 @@ impl th08_formats::ByteSource for Rng {
     fn next_byte(&mut self) -> u8 {
         self.range16(256) as u8
     }
-}
-
-// Debug: record a backtrace per draw while enabled (demo sync investigation).
-// TODO(step 10): a thread-local debug hook in core; moves to the tools with the crate cut.
-#[cfg(not(target_arch = "wasm32"))]
-thread_local! {
-    pub static TRACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    pub static CALLS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[cfg(test)]

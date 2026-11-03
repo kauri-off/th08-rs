@@ -195,7 +195,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CloseRequested => {
                 // Tool `replay_save`: closing the window mid-game still writes the recording.
                 if r.ctx.core.replay_save.is_some()
-                    && r.ctx.game.scene == crate::gamemgr::SCENE_GAME
+                    && r.ctx.w.game.scene == crate::gamemgr::SCENE_GAME
                 {
                     crate::replay::finish(&mut r.ctx);
                 }
@@ -254,10 +254,10 @@ impl ApplicationHandler<UserEvent> for App {
                 };
                 // Web `?shot=<n>`: logic freezes at frame n so the page can be screenshotted.
                 let frozen =
-                    cfg!(target_arch = "wasm32") && self.shot.is_some_and(|f| r.ctx.frame >= f);
+                    cfg!(target_arch = "wasm32") && self.shot.is_some_and(|f| r.ctx.w.frame >= f);
                 // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
                 for _ in 0..frames {
-                    if self.shot.is_some_and(|f| r.ctx.frame >= f) && turbo > 0 {
+                    if self.shot.is_some_and(|f| r.ctx.w.frame >= f) && turbo > 0 {
                         break;
                     }
                     match if frozen { Flow::Continue } else { r.ctx.calc() } {
@@ -276,7 +276,7 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                             #[cfg(not(target_arch = "wasm32"))]
                             {
-                                self.fullscreen = r.ctx.game.cfg.windowed == 0;
+                                self.fullscreen = r.ctx.w.game.cfg.windowed == 0;
                                 r.window.set_fullscreen(
                                     self.fullscreen.then_some(Fullscreen::Borderless(None)),
                                 );
@@ -295,7 +295,7 @@ impl ApplicationHandler<UserEvent> for App {
                 gfx(&mut r.ctx).resize(size.width, size.height);
                 r.ctx.draw();
                 #[cfg(not(target_arch = "wasm32"))]
-                if self.shot.is_some_and(|f| r.ctx.frame >= f) {
+                if self.shot.is_some_and(|f| r.ctx.w.frame >= f) {
                     let (g, rec) = gfx_rec(&mut r.ctx);
                     g.capture(rec, self.shot_size)
                         .save("/tmp/th08_shot.png")
@@ -304,7 +304,7 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
                 r.ctx.present();
-                crate::ascii::apply_pending_captures(&mut r.ctx.anm, &mut r.ctx.rec);
+                crate::ascii::apply_pending_captures(&mut r.ctx.w.anm, &mut r.ctx.rec);
                 r.window.request_redraw();
             }
             _ => {}

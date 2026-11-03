@@ -25,13 +25,13 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
     let file = parts.next().context("TH08_ANM: file")?;
     let scripts = parts.next().unwrap_or("0");
     let playfield = parts.next() == Some("pf");
-    ctx.anm.load(&mut ctx.rec, &ctx.archive, SLOT, file)?;
+    ctx.w.anm.load(&mut ctx.rec, &ctx.archive, SLOT, file)?;
     let mut vms = Vec::new();
     for s in scripts.split(',') {
         let (a, b) = s.split_once('-').unwrap_or((s, s));
         for i in a.parse::<usize>()?..=b.parse::<usize>()? {
             let mut vm = AnmVm::default();
-            ctx.anm.set_script(&mut ctx.rng, &mut vm, SLOT, i);
+            ctx.w.anm.set_script(&mut ctx.w.rng, &mut vm, SLOT, i);
             vms.push(vm);
         }
     }
@@ -46,7 +46,7 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
         }
     }
     let interrupts = ctx.core.anm_int.clone();
-    ctx.anm_debug = Some(Box::new(AnmDebug {
+    ctx.w.anm_debug = Some(Box::new(AnmDebug {
         vms,
         playfield,
         interrupts,
@@ -59,15 +59,15 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
     Ok(())
 }
 
-// The viewer lent out of `ctx.anm_debug` for one of its chain callbacks.
+// The viewer lent out of `ctx.w.anm_debug` for one of its chain callbacks.
 fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut AnmDebug, &mut Ctx) -> R) -> R {
-    let mut a = ctx.anm_debug.take().expect("no anm debug viewer");
+    let mut a = ctx.w.anm_debug.take().expect("no anm debug viewer");
     let r = f(&mut a, ctx);
-    ctx.anm_debug = Some(a);
+    ctx.w.anm_debug = Some(a);
     r
 }
 
-// Chain nodes of `ctx.anm_debug` (calc 4, draw 3): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.anm_debug` (calc 4, draw 3): stateless forwarder (STEP9_WORLD.md §3).
 pub struct AnmDebugTask;
 
 impl Task<Ctx> for AnmDebugTask {
@@ -80,7 +80,7 @@ impl Task<Ctx> for AnmDebugTask {
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        if let Some(a) = ctx.anm_debug.as_deref() {
+        if let Some(a) = ctx.w.anm_debug.as_deref() {
             a.emit(ctx, rec, tag);
         }
     }
@@ -95,7 +95,7 @@ impl AnmDebug {
             }
         }
         for vm in &mut self.vms {
-            vm.run(&mut ctx.anm, &mut ctx.rng);
+            vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
         }
         Ret::Next
     }
@@ -103,7 +103,7 @@ impl AnmDebug {
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         for vm in &mut self.vms {
             let mode = self.mode.unwrap_or(vm.draw_mode);
-            ctx.anm.prepare(vm, mode);
+            ctx.w.anm.prepare(vm, mode);
         }
         Ret::Next
     }
@@ -116,7 +116,8 @@ impl AnmDebug {
         });
         rec.clear_viewport([32, 32, 64, 255]);
         for vm in &self.vms {
-            ctx.anm
+            ctx.w
+                .anm
                 .emit_mode(rec, vm, self.mode.unwrap_or(vm.draw_mode));
         }
         rec.set_viewport(FULLSCREEN);

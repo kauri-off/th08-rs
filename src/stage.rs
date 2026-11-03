@@ -425,16 +425,16 @@ impl Stage {
         }
     }
 
-    // Stage_Register: the stage becomes `ctx.stage` (replacing the last one) plus its four nodes.
+    // Stage_Register: the stage becomes `ctx.w.stage` (replacing the last one) plus its four nodes.
     pub fn register(ctx: &mut Ctx, index: usize) -> Result<crate::chain::Node> {
-        let (std_name, bg) = files(index, ctx.game.spell_practice());
+        let (std_name, bg) = files(index, ctx.w.game.spell_practice());
         let std = stdfile::parse(&ctx.archive.read(&std_name)?)?;
-        ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &bg)?;
+        ctx.w.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &bg)?;
         let mut st = Stage::new(index, std);
-        st.effect_level = ctx.game.cfg.effect_level;
+        st.effect_level = ctx.w.game.cfg.effect_level;
         st.fast_forward = ctx.core.stage_frame;
-        st.start(&mut ctx.anm, &mut ctx.rng);
-        ctx.stage = Some(Box::new(st));
+        st.start(&mut ctx.w.anm, &mut ctx.w.rng);
+        ctx.w.stage = Some(Box::new(st));
         let t = crate::chain::Node::Stage;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t)?;
@@ -1130,36 +1130,36 @@ impl View<'_> {
     }
 }
 
-// Chain nodes of `ctx.stage` (calc prio 8, draw prio 6 / 7 / 7): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.stage` (calc prio 8, draw prio 6 / 7 / 7): stateless forwarder (STEP9_WORLD.md §3).
 pub struct StageTask;
 
 impl Task<Ctx> for StageTask {
     // Port-only: unloads stgNbg.anm when the stage calc node goes away.
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
+            ctx.w.anm.unload(&mut ctx.rec, ANM_SLOT);
         }
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let st = ctx.stage.as_deref_mut().expect("stage");
-        let (p, b) = (ctx.player.as_deref_mut(), ctx.bullets.as_deref_mut());
-        let sys = &mut crate::sys!(ctx; p; b; None);
+        let st = ctx.w.stage.as_deref_mut().expect("stage");
+        let (p, b) = (ctx.w.player.as_deref_mut(), ctx.w.bullets.as_deref_mut());
+        let sys = &mut crate::sys!(ctx.w; p; b; None);
         for _ in 0..std::mem::take(&mut st.fast_forward) {
-            st.step(&mut ctx.anm, sys);
+            st.step(&mut ctx.w.anm, sys);
         }
-        st.step(&mut ctx.anm, sys);
+        st.step(&mut ctx.w.anm, sys);
         Ret::Next
     }
 
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let st = ctx.stage.as_deref_mut().expect("stage");
-        st.draw_step(&mut ctx.anm, &mut ctx.effects, tag);
+        let st = ctx.w.stage.as_deref_mut().expect("stage");
+        st.draw_step(&mut ctx.w.anm, &mut ctx.w.effects, tag);
         Ret::Next
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        if let Some(st) = ctx.stage.as_deref() {
+        if let Some(st) = ctx.w.stage.as_deref() {
             st.emit(ctx, rec, tag);
         }
     }
@@ -1256,7 +1256,7 @@ impl Stage {
     }
 
     pub fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        let anm = &ctx.anm;
+        let anm = &ctx.w.anm;
         for it in self.drawn.get(tag as usize).into_iter().flatten() {
             match it {
                 Item::Viewport => rec.set_viewport(PLAYFIELD),
@@ -1273,8 +1273,8 @@ impl Stage {
                     rec.anm.bound_tex = Some(*tex);
                     rec.strip(*tex, blend, vm.flags & anmvm::F_ZWRITE_OFF == 0, *v);
                 }
-                Item::Ring(i) => crate::effect::draw_ring_at(&ctx.effects, anm, rec, *i),
-                Item::Background(d) => ctx.effects.emit_background(anm, rec, d),
+                Item::Ring(i) => crate::effect::draw_ring_at(&ctx.w.effects, anm, rec, *i),
+                Item::Background(d) => ctx.w.effects.emit_background(anm, rec, d),
                 Item::MaskFrame { a, b, c } => emit_mask_frame(rec, *a, *b, *c),
             }
         }

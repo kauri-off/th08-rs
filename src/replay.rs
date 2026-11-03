@@ -59,19 +59,19 @@ pub fn register(
 ) -> anyhow::Result<(crate::chain::Node, ReplayState)> {
     use crate::task::{self, Chain};
     // Replay_Register 0x451F90 sets g_Input and g_InputPrev to 0 (15 §3.1).
-    ctx.input.game = [0; crate::host::MAX_PLAYERS];
-    ctx.input.game_prev = [0; crate::host::MAX_PLAYERS];
-    let debug = play && ctx.game.rpy.as_ref().is_some_and(|r| r.debug != 0);
-    let mut rt = ReplayState::new(play, ctx.game.stage % 9, debug);
+    ctx.w.input.game = [0; crate::host::MAX_PLAYERS];
+    ctx.w.input.game_prev = [0; crate::host::MAX_PLAYERS];
+    let debug = play && ctx.w.game.rpy.as_ref().is_some_and(|r| r.debug != 0);
+    let mut rt = ReplayState::new(play, ctx.w.game.stage % 9, debug);
     if !play || debug {
-        rt.frame_hook(&mut ctx.rng);
+        rt.frame_hook(&mut ctx.w.rng);
     }
     let t = crate::chain::Node::Replay;
     if play {
         task::add(ctx, Chain::Calc, PLAY_PRIO, TAG_MAIN, t)?;
         task::add(ctx, Chain::Calc, FF_PRIO, TAG_FF, t)?;
     } else {
-        record_stage_start(&mut ctx.game, st);
+        record_stage_start(&mut ctx.w.game, st);
         task::add(ctx, Chain::Calc, RECORD_PRIO, TAG_MAIN, t)?;
     }
     // Replay_FrameHook: always while recording, during playback only with the debug flag; Replay_Register also
@@ -240,17 +240,17 @@ pub fn finish(ctx: &mut crate::game::Ctx) {
     match ctx.core.replay_save {
         Some(slot) => {
             let mut name = [0; 8];
-            name.copy_from_slice(&ctx.game.score.lsnm[..8]);
+            name.copy_from_slice(&ctx.w.game.score.lsnm[..8]);
             save(ctx, slot.clamp(1, 15) as usize, &name);
         }
-        None => drop(take_recording(&mut ctx.game, Default::default())),
+        None => drop(take_recording(&mut ctx.w.game, Default::default())),
     }
 }
 
 // Replay_Finish("./replay/th8_%.2d.rpy", slot) 0x4531F0 (15 §3.6), called by Result state 13 (16 §2.6).
 pub fn save(ctx: &mut crate::game::Ctx, slot: usize, name: &[u8; 8]) -> bool {
     let now = ctx.host.local_time();
-    let Some(bytes) = build_save(&mut ctx.game, name, &mut ctx.rng, now) else {
+    let Some(bytes) = build_save(&mut ctx.w.game, name, &mut ctx.w.rng, now) else {
         return false;
     };
     let path = format!("replay/th8_{slot:02}.rpy");
@@ -560,24 +560,24 @@ pub struct ReplayTask;
 impl crate::task::Task<crate::game::Ctx> for ReplayTask {
     fn calc(&mut self, ctx: &mut crate::game::Ctx, tag: u8) -> crate::task::Ret {
         use crate::task::Ret;
-        let r = ctx.gm.as_deref_mut().and_then(|g| g.replay.as_mut());
+        let r = ctx.w.gm.as_deref_mut().and_then(|g| g.replay.as_mut());
         let r = r.expect("no replay object");
         match (r.play, tag) {
-            (_, TAG_HOOK) => r.frame_hook(&mut ctx.rng),
-            (false, _) => r.record_game(&mut ctx.game, &mut ctx.input),
-            (true, TAG_MAIN) => r.play(&mut ctx.game, &mut ctx.input),
+            (_, TAG_HOOK) => r.frame_hook(&mut ctx.w.rng),
+            (false, _) => r.record_game(&mut ctx.w.game, &mut ctx.w.input),
+            (true, TAG_MAIN) => r.play(&mut ctx.w.game, &mut ctx.w.input),
             // Replay_FastForward 0x452490 (15 §3.3); `replay_ff` = false is a tool switch that disables both restarts.
             // Only with flags bit 2 set and bit 9 clear; both tests use the replay frame counter +0: skippable dialogue
             // first, the fast test (speed byte 2) only when it does not restart.
             (true, _) => {
-                let g = &ctx.game;
+                let g = &ctx.w.game;
                 if g.replay_ff
                     && fast_forward(
                         g.flags,
                         g.dialogue_skippable,
                         g.replay_speed,
                         r.frame,
-                        || boss_active(ctx.enemies.as_deref()),
+                        || boss_active(ctx.w.enemies.as_deref()),
                     )
                 {
                     return Ret::Restart;

@@ -617,20 +617,20 @@ impl Player {
         }
     }
 
-    // Player_Load + the player's three nodes; the player itself is `ctx.player`, created by GameManager_Register.
+    // Player_Load + the player's three nodes; the player itself is `ctx.w.player`, created by GameManager_Register.
     pub fn register(ctx: &mut Ctx, shot: u8) -> Result<crate::chain::Node> {
         let (anm, a, s) = crate::sht::files(shot);
         let human = crate::sht::parse(&ctx.archive.read(&a)?)?;
         let youkai = crate::sht::parse(&ctx.archive.read(&s)?)?;
-        ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &anm)?;
-        let p = ctx.player.as_deref_mut().expect("player");
+        ctx.w.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &anm)?;
+        let p = ctx.w.player.as_deref_mut().expect("player");
         p.load(
-            &mut ctx.anm,
-            &mut ctx.rng,
+            &mut ctx.w.anm,
+            &mut ctx.w.rng,
             human,
             youkai,
             shot,
-            ctx.game.flags,
+            ctx.w.game.flags,
         );
         let t = crate::chain::Node::Player;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
@@ -1436,61 +1436,65 @@ impl Player {
     }
 }
 
-// The player's chain nodes (09 §1); they reach the player through its owner (`ctx.player`, step 9a).
+// The player's chain nodes (09 §1); they reach the player through its owner (`ctx.w.player`, step 9a).
 pub struct PlayerTask;
 
 impl Task<Ctx> for PlayerTask {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
             // Full exit hides the gauge readout (11 §7, 12 §5.9).
-            if !matches!(ctx.game.requested, 3 | 11 | 12) {
-                ctx.overlays.gauge_interrupt(99);
+            if !matches!(ctx.w.game.requested, 3 | 11 | 12) {
+                ctx.w.overlays.gauge_interrupt(99);
                 // Boss markers M_0..M_2 hidden at once (12 §5.10).
-                (0..3).for_each(|k| ctx.overlays.marker_interrupt(k, 99));
+                (0..3).for_each(|k| ctx.w.overlays.marker_interrupt(k, 99));
             }
-            ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
+            ctx.w.anm.unload(&mut ctx.rec, ANM_SLOT);
         }
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let inp = ctx.input.game_view();
-        let p = ctx.player.as_deref_mut().expect("player");
+        let inp = ctx.w.input.game_view();
+        let p = ctx.w.player.as_deref_mut().expect("player");
         // 0x164D2C8 gameplay frame counter (11 §2), read after GameMgr_Calc (prio 2) incremented it.
-        p.frames = ctx.game.frame_counter as i32;
+        p.frames = ctx.w.game.frame_counter as i32;
         // The dialogue state is read live: the previous frame's dialogue calc (prio 12) ran after the enemies.
-        if ctx.enemies.is_some() {
-            p.env.dialogue = ctx.msg.as_deref().is_some_and(crate::msg::Dialogue::active);
+        if ctx.w.enemies.is_some() {
+            p.env.dialogue = ctx
+                .w
+                .msg
+                .as_deref()
+                .is_some_and(crate::msg::Dialogue::active);
         }
         // Items of the bullet manager (08 §8), held for the player's calc.
-        let mut b = ctx.bullets.as_deref_mut();
+        let mut b = ctx.w.bullets.as_deref_mut();
         p.frame(
-            &mut ctx.anm,
+            &mut ctx.w.anm,
             &inp,
             b.as_mut().map(|b| &mut b.items),
-            &mut crate::sys!(ctx; None; None),
+            &mut crate::sys!(ctx.w; None; None),
         );
         if std::mem::take(&mut p.bomb.attract)
             && let Some(b) = b
         {
             b.items.attract_all();
         }
-        ctx.effects.player = p.pos;
-        p.store_game_over(&mut ctx.game);
+        ctx.w.effects.player = p.pos;
+        p.store_game_over(&mut ctx.w.game);
         Ret::Next
     }
 
     // Draw 9 (0x44D530): flying bullets, bomb, sprite, options; draw 10 (0x44D630): bullets in their hit animation
     // (14 §5).
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let anm = &mut ctx.anm;
-        let p = ctx.player.as_deref_mut().expect("player");
+        let anm = &mut ctx.w.anm;
+        let p = ctx.w.player.as_deref_mut().expect("player");
         if tag == 0 {
             p.step_bullets(anm, 1);
             // The bomb tint (14 §1.3) turns the global tint off after the flying bullets were drawn under it.
             let before = anm.tint_state();
             p.step_bomb(anm);
             p.bullet_tint = before.filter(|_| !anm.tint_on);
-            p.step_sprite(anm, ctx.game.game_over != 0);
+            p.step_sprite(anm, ctx.w.game.game_over != 0);
             p.step_options(anm);
         } else {
             p.step_bullets(anm, 2);
@@ -1499,13 +1503,13 @@ impl Task<Ctx> for PlayerTask {
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        let anm = &ctx.anm;
-        let p = ctx.player.as_deref().expect("player");
+        let anm = &ctx.w.anm;
+        let p = ctx.w.player.as_deref().expect("player");
         rec.set_viewport(PLAYFIELD);
         if tag == 0 {
             p.emit_bullets(anm, rec, 1, p.bullet_tint);
             p.emit_bomb(anm, rec);
-            p.emit_sprite(anm, rec, ctx.game.game_over != 0);
+            p.emit_sprite(anm, rec, ctx.w.game.game_over != 0);
             p.emit_options(anm, rec);
         } else {
             p.emit_bullets(anm, rec, 2, None);

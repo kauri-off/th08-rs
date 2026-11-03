@@ -7,6 +7,7 @@ use crate::content::LogicView;
 use crate::camera::{Camera, Mat4};
 use crate::drawlist::{self, Blend, Recorder, TexId, Vertex};
 use anyhow::{Result, ensure};
+use std::sync::Arc;
 
 // ANM file slots 0..24; index ≥ 25 is an error (03 §2.4).
 pub const SLOTS: usize = 25;
@@ -21,13 +22,17 @@ pub struct SlotSprite {
 }
 
 // Loaded-file record at AnmManager + 0x24 + slot × 0x1C (03 §5): cumulative sprite and script arrays (03 §2.4).
+// Clone shares the parsed scripts (`Arc`, copied on the first literal-destination write, 05 §3); `textures` are
+// handles only, so a clone's unload frees the renderer textures of both copies.
+#[derive(Clone)]
 pub struct LoadedAnm {
     pub name: String,
     pub sprites: Vec<SlotSprite>,
-    pub scripts: Vec<Script>,
+    pub scripts: Vec<Arc<Script>>,
     textures: Vec<TexId>,
 }
 
+#[derive(Clone)]
 pub struct AnmManager {
     slots: [Option<LoadedAnm>; SLOTS],
     // Global game speed used by the VM timers (05 §2), 1.0 in normal play.
@@ -184,7 +189,7 @@ impl AnmManager {
                 w: s.w,
                 h: s.h,
             }));
-            scripts.extend(c.scripts);
+            scripts.extend(c.scripts.into_iter().map(Arc::new));
         }
         self.slots[slot] = Some(LoadedAnm {
             name: name.to_string(),
@@ -209,11 +214,16 @@ impl AnmManager {
     }
 
     pub fn script(&self, slot: usize, index: usize) -> Option<&Script> {
-        self.get(slot)?.scripts.get(index)
+        self.get(slot)?.scripts.get(index).map(|s| &**s)
     }
 
     pub fn script_mut(&mut self, slot: usize, index: usize) -> Option<&mut Script> {
-        self.slots.get_mut(slot)?.as_mut()?.scripts.get_mut(index)
+        self.slots
+            .get_mut(slot)?
+            .as_mut()?
+            .scripts
+            .get_mut(index)
+            .map(Arc::make_mut)
     }
 
     // Statistics counter (05 §4).
@@ -744,6 +754,89 @@ mod tests {
             assert_eq!(global.draws.len(), 1);
             assert_eq!(format!("{:?}", global.draws), format!("{:?}", saved.draws));
         }
+    }
+
+    // AnmManager::clone mid-animation (ARCH_SUMMARY C 1): both copies step to the same VM state, RNG and draws; a
+    // literal-destination write (05 §3) copies the clone's script instead of writing into the shared one.
+    #[test]
+    fn clone_mid_animation_steps_identically() {
+        fn ins(op: i16, time: i16, mask: u16, args: &[u32]) -> Vec<u8> {
+            let mut v = Vec::new();
+            v.extend(op.to_le_bytes());
+            v.extend(((8 + 4 * args.len()) as u16).to_le_bytes());
+            v.extend(time.to_le_bytes());
+            v.extend(mask.to_le_bytes());
+            args.iter().for_each(|a| v.extend(a.to_le_bytes()));
+            v
+        }
+        fn step(
+            anm: &mut AnmManager,
+            vms: &mut [AnmVm],
+            rng: &mut crate::rng::Rng,
+            frames: usize,
+        ) -> String {
+            let mut rec = Recorder::new();
+            for _ in 0..frames {
+                anm.begin_frame();
+                for vm in vms.iter_mut() {
+                    vm.run(anm, rng);
+                    anm.draw(&mut rec, vm);
+                }
+            }
+            format!("{:?}\n{vms:?}\n{rng:?}", rec.draws)
+        }
+        let mut s = ins(3, 0, 0, &[0]);
+        let body = s.len() as u32;
+        s.extend(ins(39, 1, 0, &[0, 1]));
+        s.extend(ins(59, 1, 1, &[10000, 100]));
+        s.extend(ins(4, 2, 0, &[body, 1]));
+        let synthetic = crate::anm::Chunk {
+            name: "t".into(),
+            width: 256,
+            height: 256,
+            sprites: vec![crate::anm::Sprite {
+                id: 0,
+                x: 0.0,
+                y: 0.0,
+                w: 32.0,
+                h: 16.0,
+            }],
+            scripts: vec![crate::anm::Script { id: 0, data: s }],
+            has_texture: false,
+        };
+        let mut files = vec![("t".to_string(), vec![synthetic])];
+        if let Some(ar) = crate::archive::test_archive() {
+            for n in ar.names().iter().filter(|n| n.ends_with(".anm")).take(6) {
+                files.push((n.clone(), crate::anm::parse(&ar.read(n).unwrap()).unwrap()));
+            }
+        }
+        let mut anm = AnmManager::default();
+        let mut rng = crate::rng::Rng::seeded(0x1234);
+        let mut vms = Vec::new();
+        for (slot, (name, chunks)) in files.into_iter().enumerate() {
+            let n = chunks.iter().map(|c| c.scripts.len()).sum::<usize>();
+            anm.insert(slot, &name, chunks, |_| crate::drawlist::TexId(slot as u32));
+            for k in 0..n {
+                let mut vm = AnmVm::default();
+                anm.set_script(&mut rng, &mut vm, slot, k);
+                vms.push(vm);
+            }
+        }
+        let start = anm.script(0, 0).unwrap().data.clone();
+        step(&mut anm, &mut vms, &mut rng, 30);
+        assert_ne!(anm.script(0, 0).unwrap().data, start);
+        let (mut anm2, mut vms2, mut rng2) = (anm.clone(), vms.clone(), rng.clone());
+        assert!(Arc::ptr_eq(
+            &anm.get(0).unwrap().scripts[0],
+            &anm2.get(0).unwrap().scripts[0]
+        ));
+        let a = step(&mut anm, &mut vms, &mut rng, 120);
+        let b = step(&mut anm2, &mut vms2, &mut rng2, 120);
+        assert!(rng.total > 30);
+        assert_eq!(a, b);
+        let (s1, s2) = (anm.get(0).unwrap(), anm2.get(0).unwrap());
+        assert!(!Arc::ptr_eq(&s1.scripts[0], &s2.scripts[0]));
+        assert_eq!(s1.scripts[0].data, s2.scripts[0].data);
     }
 
     // 13 §2.6c: half size ((len·0.5)·sprite_w)·scale.x around the projected point, unrotated.

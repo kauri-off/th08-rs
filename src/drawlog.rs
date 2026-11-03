@@ -2021,7 +2021,7 @@ pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Resul
         let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/data/drawlog");
         let score = std::fs::read(data.join("menu_mopup1.score.dat"))?;
         let now = ctx.host.ticks_ms();
-        ctx.game.load_score(Some(&score), now);
+        ctx.w.game.load_score(Some(&score), now);
         for n in 0..4 {
             let r = ctx.archive.read(&format!("demorpy{n}.rpy"))?;
             std::fs::write(dir.join(format!("replay/th8_{:02}.rpy", n + 1)), r)?;
@@ -2048,13 +2048,13 @@ pub fn run_menu_script(
         }
         crate::platform::tool_host(ctx).keys[0] = if k > 0 { script[k] } else { 0 };
         if clr && (k + 1 == 100 || k + 1 == 280) {
-            clr_pokes(&mut ctx.game);
+            clr_pokes(&mut ctx.w.game);
         }
         let Some((flow, frames)) = step(ctx) else {
             return;
         };
         frames.into_iter().for_each(&mut out);
-        if k > 0 || ctx.game.scene == crate::gamemgr::SCENE_MENU {
+        if k > 0 || ctx.w.game.scene == crate::gamemgr::SCENE_MENU {
             k += 1;
         }
         if flow != crate::task::Flow::Continue {
@@ -2072,11 +2072,11 @@ pub fn run_demo(
 ) -> anyhow::Result<()> {
     let r = crate::replay::parse(
         &ctx.archive.read(&format!("demorpy{n}.rpy"))?,
-        ctx.game.ver_list.get(),
+        ctx.w.game.ver_list.get(),
     )?;
-    ctx.game.replay_ff = false;
+    ctx.w.game.replay_ff = false;
     anyhow::ensure!(
-        crate::replay::start_playback(&mut ctx.game, r, None, Some(n)),
+        crate::replay::start_playback(&mut ctx.w.game, r, None, Some(n)),
         "demo has no stage"
     );
     ctx.log_to_memory();
@@ -2086,9 +2086,10 @@ pub fn run_demo(
             break;
         };
         frames.into_iter().for_each(&mut out);
-        let demo = ctx.game.flags & crate::gamemgr::F_DEMO != 0;
+        let demo = ctx.w.game.flags & crate::gamemgr::F_DEMO != 0;
         started |= demo;
-        if flow != crate::task::Flow::Continue || (started && !demo) || ctx.game.demo_frame > last {
+        if flow != crate::task::Flow::Continue || (started && !demo) || ctx.w.game.demo_frame > last
+        {
             break;
         }
     }

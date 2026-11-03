@@ -22,11 +22,11 @@ pub struct Sched {
 
 // FuncChain_RunCalc restart (00 §3, README "Trace"): the probe writes a row per pass, and the next pass polls again.
 pub fn on_restart(ctx: &mut crate::game::Ctx) {
-    let Some(poll) = ctx.game.sched.as_ref().map(|s| s.poll) else {
+    let Some(poll) = ctx.w.game.sched.as_ref().map(|s| s.poll) else {
         return;
     };
     let r = sample(ctx, 0, poll, 0);
-    if let Some(s) = &mut ctx.game.sched {
+    if let Some(s) = &mut ctx.w.game.sched {
         s.pass_rows.push(r);
         s.poll += 1;
     }
@@ -34,12 +34,12 @@ pub fn on_restart(ctx: &mut crate::game::Ctx) {
 
 // Device_ClearPresentTwice (16 §1.2): a present inside a calc gets its own trace row, ff = −1 (README "Trace").
 pub fn on_extra_present(ctx: &mut crate::game::Ctx) {
-    let Some(poll) = ctx.game.sched.as_ref().map(|s| s.poll) else {
+    let Some(poll) = ctx.w.game.sched.as_ref().map(|s| s.poll) else {
         return;
     };
     let mut r = sample(ctx, 0, poll, 0);
     r[22] = -1;
-    if let Some(s) = &mut ctx.game.sched {
+    if let Some(s) = &mut ctx.w.game.sched {
         s.pass_rows.push(r);
     }
 }
@@ -203,9 +203,9 @@ pub fn sample(ctx: &mut crate::game::Ctx, present: i64, poll: i64, scene_frame: 
     let mut r = [0i64; 36];
     let d = crate::demosync::sample(ctx, 0);
     r[..22].copy_from_slice(&d);
-    let (menu, cursor) = ctx.game.trace_menu.take().unwrap_or((-1, -1));
-    let result = ctx.game.trace_result.take().unwrap_or(-1);
-    let g2 = &ctx.game;
+    let (menu, cursor) = ctx.w.game.trace_menu.take().unwrap_or((-1, -1));
+    let result = ctx.w.game.trace_result.take().unwrap_or(-1);
+    let g2 = &ctx.w.game;
     r[22] = 0;
     r[23] = present;
     r[25] = poll + 1;
@@ -215,7 +215,7 @@ pub fn sample(ctx: &mut crate::game::Ctx, present: i64, poll: i64, scene_frame: 
     r[29] = cursor as i64;
     r[30] = result as i64;
     r[31] = g2.paused as i64;
-    r[32] = ctx.input.held as i64;
+    r[32] = ctx.w.input.held as i64;
     r[33] = g2.stage as i64;
     r[34] = g2.loading as i64;
     r[35] = if g2.flags & crate::gamemgr::F_DEMO != 0 {
@@ -442,7 +442,7 @@ mod native {
             let start = self.dir.join("start");
             let score = std::fs::read(start.join("score.dat")).ok();
             let now = ctx.host.ticks_ms();
-            ctx.game.load_score(score.as_deref(), now);
+            ctx.w.game.load_score(score.as_deref(), now);
             if let Some(b) = &score {
                 std::fs::write(save.join("score.dat"), b)?;
             }
@@ -450,7 +450,7 @@ mod native {
                 .ok()
                 .and_then(|b| crate::config::Config::from_bytes(&b))
             {
-                ctx.game.cfg = c;
+                ctx.w.game.cfg = c;
             }
             for e in std::fs::read_dir(start.join("replay"))
                 .into_iter()
@@ -464,10 +464,10 @@ mod native {
             host.storage.set_save_dir(Some(save));
             host.polls = Some(self.input.as_slice().into());
             host.fixed_time = self.recorded_at;
-            ctx.rng = crate::rng::Rng::seeded(self.seed as u16);
-            ctx.overlays.set_frame_counter(self.sched.ascii_offset);
-            ctx.game.sched = Some(self.sched.clone());
-            ctx.game.noclip = self.noclip;
+            ctx.w.rng = crate::rng::Rng::seeded(self.seed as u16);
+            ctx.w.overlays.set_frame_counter(self.sched.ascii_offset);
+            ctx.w.game.sched = Some(self.sched.clone());
+            ctx.w.game.noclip = self.noclip;
             Ok(())
         }
 
@@ -497,7 +497,7 @@ mod native {
                 if poll >= to {
                     break;
                 }
-                if let Some(s) = &mut ctx.game.sched {
+                if let Some(s) = &mut ctx.w.game.sched {
                     s.poll = poll;
                     s.pass_rows.clear();
                 }
@@ -505,7 +505,7 @@ mod native {
                 // pass polls the next one (00 §3).
                 crate::platform::tool_host(ctx).cursor = poll;
                 let tr = rng_row == Some(poll + 1);
-                crate::rng::TRACE.set(tr);
+                ctx.w.rng.trace = tr.then(Vec::new);
                 let flow = match &mut draw {
                     Some(out) => {
                         let Some((flow, frames)) = crate::drawlog::step(ctx) else {
@@ -516,11 +516,10 @@ mod native {
                     }
                     None => ctx.run_frame(),
                 };
-                crate::rng::TRACE.set(false);
-                if tr {
-                    print_rng_calls(poll + 1);
+                if let Some(calls) = ctx.w.rng.trace.take() {
+                    print_rng_calls(poll + 1, calls);
                 }
-                let (last, rows) = match &mut ctx.game.sched {
+                let (last, rows) = match &mut ctx.w.game.sched {
                     Some(s) => (s.poll, std::mem::take(&mut s.pass_rows)),
                     None => (poll, Vec::new()),
                 };
@@ -553,8 +552,8 @@ mod native {
                     }
                 }
                 extra += k_in;
-                if ctx.game.scene != scene {
-                    (scene, scene_frame) = (ctx.game.scene, 1);
+                if ctx.w.game.scene != scene {
+                    (scene, scene_frame) = (ctx.w.game.scene, 1);
                 } else {
                     scene_frame = sf_base + k_in;
                 }
@@ -572,10 +571,10 @@ mod native {
         }
     }
 
-    fn print_rng_calls(row: i64) {
+    fn print_rng_calls(row: i64, calls: Vec<String>) {
         println!("rng calls of row {row}:");
         let mut groups: Vec<(String, usize)> = Vec::new();
-        for c in crate::rng::CALLS.with_borrow_mut(std::mem::take) {
+        for c in calls {
             let k = c
                 .lines()
                 .filter(|l| {
@@ -756,7 +755,7 @@ mod tests {
         .unwrap();
         let s = Session::load(&data_dir("selftest1")).unwrap();
         s.start(&mut ctx).unwrap();
-        ctx.bgm.midi_ready = false;
+        ctx.w.bgm.midi_ready = false;
         ctx.sound_log = Some(Vec::new());
         s.run(&mut ctx, usize::MAX, |_, _| true, None);
         let got = crate::sound::format_log(ctx.sound_log.as_deref().unwrap());
@@ -819,7 +818,7 @@ mod tests {
             |r, ctx| {
                 if r[26] == 1 || !port.is_empty() {
                     port.push(*r);
-                    let h = ctx.player.as_ref().map_or(0, |p| p.hits);
+                    let h = ctx.w.player.as_ref().map_or(0, |p| p.hits);
                     if h < hit_prev {
                         hit_base += hit_prev;
                     }

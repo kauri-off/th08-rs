@@ -748,7 +748,7 @@ impl Overlays {
 
 // Tail of Ascii_DrawStrings (prio 20, full-screen viewport, 12 §5.10); the colour is rewritten every frame.
 // Step: sprite and colour of every marker in range (persistent VM writes).
-// `player`: the running game's player (`ctx.player`), none outside a game.
+// `player`: the running game's player (`ctx.w.player`), none outside a game.
 fn markers_step(g: &mut Gauge, player: Option<&crate::player::Player>) {
     let px = player.map_or(0.0, |p| p.pos[0]);
     let frame = g.frame;
@@ -1491,7 +1491,7 @@ pub struct AsciiManager {
 
 impl AsciiManager {
     pub fn register(ctx: &mut Ctx) -> Result<()> {
-        ctx.ascii_mgr = Some(Box::default());
+        ctx.w.ascii_mgr = Some(Box::default());
         let t = crate::chain::Node::Ascii;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t)?;
@@ -1515,16 +1515,16 @@ impl AsciiManager {
         t
     }
 
-    // The manager lent out of `ctx.ascii_mgr` for one of its chain callbacks.
+    // The manager lent out of `ctx.w.ascii_mgr` for one of its chain callbacks.
     fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut AsciiManager, &mut Ctx) -> R) -> R {
-        let mut a = ctx.ascii_mgr.take().expect("no ascii manager");
+        let mut a = ctx.w.ascii_mgr.take().expect("no ascii manager");
         let r = f(&mut a, ctx);
-        ctx.ascii_mgr = Some(a);
+        ctx.w.ascii_mgr = Some(a);
         r
     }
 }
 
-// Chain nodes of `ctx.ascii_mgr` (calc 1, draw 14 / 20): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.ascii_mgr` (calc 1, draw 14 / 20): stateless forwarder (STEP9_WORLD.md §3).
 pub struct AsciiTask;
 
 impl Task<Ctx> for AsciiTask {
@@ -1541,7 +1541,7 @@ impl Task<Ctx> for AsciiTask {
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        if let Some(a) = ctx.ascii_mgr.as_deref() {
+        if let Some(a) = ctx.w.ascii_mgr.as_deref() {
             a.emit(ctx, rec, tag);
         }
     }
@@ -1550,13 +1550,16 @@ impl Task<Ctx> for AsciiTask {
 impl AsciiManager {
     pub(crate) fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain == Chain::Calc {
-            ctx.anm
+            ctx.w
+                .anm
                 .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "ascii.anm")?;
-            ctx.anm
+            ctx.w
+                .anm
                 .load(&mut ctx.rec, &ctx.archive, CAPTURE_SLOT, "capture.anm")?;
             let l = crate::player::GaugeLimits::default();
-            ctx.overlays
-                .gauge_setup(&mut ctx.anm, &mut ctx.rng, l.min, l.max);
+            ctx.w
+                .overlays
+                .gauge_setup(&mut ctx.w.anm, &mut ctx.w.rng, l.min, l.max);
         }
         Ok(())
     }
@@ -1564,51 +1567,51 @@ impl AsciiManager {
     pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // Supervisor_Init registers the manager on the boot loader thread, so the boot calc passes never reach
         // Ascii_Calc and +0x8284 equals the main-menu frame number (12 §5.10).
-        if ctx.game.scene == crate::gamemgr::SCENE_BOOT {
+        if ctx.w.game.scene == crate::gamemgr::SCENE_BOOT {
             return Ret::Next;
         }
-        let inp = ctx.input;
-        gauge_calc(&mut ctx.overlays.gauge, &mut ctx.anm, &mut ctx.rng);
+        let inp = ctx.w.input;
+        gauge_calc(&mut ctx.w.overlays.gauge, &mut ctx.w.anm, &mut ctx.w.rng);
         // The pause menu runs while paused, the continue menu while game_over; popups only otherwise (12 §3, 13 §4).
-        if ctx.game.paused != 0 {
+        if ctx.w.game.paused != 0 {
             // 11 §2: paused = 2 once the menu was drawn (GameMgr_Calc opened it after this calc).
-            ctx.game.paused = 2;
+            ctx.w.game.paused = 2;
             self.pause.update(
-                &mut ctx.anm,
-                &mut ctx.rng,
-                &mut ctx.game,
+                &mut ctx.w.anm,
+                &mut ctx.w.rng,
+                &mut ctx.w.game,
                 &inp,
-                &mut ctx.bgm,
-                &mut ctx.sound,
+                &mut ctx.w.bgm,
+                &mut ctx.w.sound,
                 &mut *ctx.host,
-                ctx.hud.as_deref_mut(),
+                ctx.w.hud.as_deref_mut(),
             );
-        } else if ctx.game.game_over != 0 {
+        } else if ctx.w.game.game_over != 0 {
             let exited = self.cont.update(
-                &mut ctx.anm,
-                &mut ctx.rng,
-                &mut ctx.game,
+                &mut ctx.w.anm,
+                &mut ctx.w.rng,
+                &mut ctx.w.game,
                 &inp,
-                &mut ctx.bgm,
-                &mut ctx.sound,
-                &mut ctx.panel,
+                &mut ctx.w.bgm,
+                &mut ctx.w.sound,
+                &mut ctx.w.panel,
                 ctx.host.ticks_ms(),
-                ctx.enemies.as_deref(),
-                ctx.hud.as_deref_mut(),
+                ctx.w.enemies.as_deref(),
+                ctx.w.hud.as_deref_mut(),
             );
-            if exited && let Some(p) = ctx.player.as_deref_mut() {
+            if exited && let Some(p) = ctx.w.player.as_deref_mut() {
                 p.stats.score_disp = p.stats.score10;
             }
         } else {
             self.cont.open = false;
             self.pause.state = 0;
             // Ascii_Calc 0x402200 (calc prio 1) reads GameFlags bit 10 live, not the end-of-Player_Calc mirror (13 §4).
-            if ctx.game.flags & crate::gamemgr::F_DEATH == 0 {
-                popups_calc(&mut ctx.overlays.popups, ctx.anm.speed);
+            if ctx.w.game.flags & crate::gamemgr::F_DEATH == 0 {
+                popups_calc(&mut ctx.w.overlays.popups, ctx.w.anm.speed);
             }
         }
         // +0x8284 is incremented at the very end of Ascii_Calc (12 §5.10).
-        let g = &mut ctx.overlays.gauge;
+        let g = &mut ctx.w.overlays.gauge;
         g.frame = g.frame.wrapping_add(1);
         Ret::Next
     }
@@ -1618,21 +1621,26 @@ impl AsciiManager {
     pub(crate) fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let high = tag == 1;
         if !high {
-            let pl = ctx.effects.player;
-            darkness_step(&mut ctx.overlays.darkness, &mut ctx.anm, &mut ctx.rng, pl);
-            self.popup_off = ctx.anm.screen_offset;
+            let pl = ctx.w.effects.player;
+            darkness_step(
+                &mut ctx.w.overlays.darkness,
+                &mut ctx.w.anm,
+                &mut ctx.w.rng,
+                pl,
+            );
+            self.popup_off = ctx.w.anm.screen_offset;
             // The gauge readout is drawn after the shake offset is zeroed (12 §5.9 draw).
-            ctx.anm.screen_offset = [0.0; 2];
+            ctx.w.anm.screen_offset = [0.0; 2];
             self.gauge = gauge_step(
-                &mut ctx.overlays.gauge,
-                &ctx.anm,
-                ctx.player.as_deref(),
-                &ctx.game.stats,
+                &mut ctx.w.overlays.gauge,
+                &ctx.w.anm,
+                ctx.w.player.as_deref(),
+                &ctx.w.game.stats,
             );
         }
-        self.texts[high as usize] = ctx.ascii.take(Some(high));
+        self.texts[high as usize] = ctx.w.ascii.take(Some(high));
         if high {
-            markers_step(&mut ctx.overlays.gauge, ctx.player.as_deref());
+            markers_step(&mut ctx.w.overlays.gauge, ctx.w.player.as_deref());
         }
         Ret::Next
     }
@@ -1641,23 +1649,23 @@ impl AsciiManager {
         let high = tag == 1;
         // Pause draw 0x404750 (12 §3): playfield viewport; the capture VM (temporary copy, z-write off) while
         // the state ≠ 0; then menu VMs 0..9, all Draw2DSnap.
-        if high && ctx.game.paused != 0 {
+        if high && ctx.w.game.paused != 0 {
             rec.set_viewport(crate::drawlist::PLAYFIELD);
             if self.pause.state != 0 && self.pause.cap_vm.script.is_some() {
                 let mut v = self.pause.cap_vm.clone();
                 v.flags |= anmvm::F_ZWRITE_OFF;
-                ctx.anm.emit_mode(rec, &v, 0);
+                ctx.w.anm.emit_mode(rec, &v, 0);
             }
             // The selected item's (−4, −4) goes to the undrawn pos_offset: no visible shift (12 §3).
             for vm in &self.pause.vms {
-                ctx.anm.emit_mode(rec, vm, 0);
+                ctx.w.anm.emit_mode(rec, vm, 0);
             }
         }
         // ContinueMenu_Draw 0x4052B0 (12 §4): playfield viewport, capture VM, then VMs 0..3 (clock VM 3 only in a
         // normal game below Extra), all Draw2DSnap. The port's menu is past state 0 after its first calc.
-        if high && ctx.game.game_over != 0 && self.cont.open {
+        if high && ctx.w.game.game_over != 0 && self.cont.open {
             rec.set_viewport(crate::drawlist::PLAYFIELD);
-            let g = &ctx.game;
+            let g = &ctx.w.game;
             let clock = g.difficulty < 4 && !g.spell_practice();
             let c = &self.cont;
             for vm in [&c.cap_vm]
@@ -1665,24 +1673,24 @@ impl AsciiManager {
                 .chain(c.vms.iter())
                 .chain(clock.then_some(&c.clock_vm))
             {
-                ctx.anm.emit_mode(rec, vm, 0);
+                ctx.w.anm.emit_mode(rec, vm, 0);
             }
         }
         if !high {
             popups_emit(
-                &ctx.overlays,
-                &ctx.anm,
+                &ctx.w.overlays,
+                &ctx.w.anm,
                 rec,
-                ctx.effects.player,
+                ctx.w.effects.player,
                 self.popup_off,
             );
             if let Some(d) = &self.gauge {
-                gauge_emit(&ctx.overlays.gauge, &ctx.anm, rec, d);
+                gauge_emit(&ctx.w.overlays.gauge, &ctx.w.anm, rec, d);
             }
         }
-        emit_texts(&ctx.anm, rec, &self.texts[high as usize]);
+        emit_texts(&ctx.w.anm, rec, &self.texts[high as usize]);
         if high {
-            markers_emit(&ctx.overlays.gauge, &ctx.anm, rec);
+            markers_emit(&ctx.w.overlays.gauge, &ctx.w.anm, rec);
         }
     }
 }

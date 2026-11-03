@@ -258,8 +258,8 @@ fn stage_start_tiles(anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> Vec<Anm
 
 impl Hud {
     pub fn register(ctx: &mut Ctx, fresh: bool) -> Result<crate::chain::Node> {
-        ctx.msg = Some(Box::new(Dialogue::default()));
-        ctx.hud = Some(Box::new(Hud::new(fresh)));
+        ctx.w.msg = Some(Box::new(Dialogue::default()));
+        ctx.w.hud = Some(Box::new(Hud::new(fresh)));
         let t = crate::chain::Node::Hud;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
         task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
@@ -337,15 +337,15 @@ impl Hud {
 
     // Hud_Load + Gui_LoadFaces 0x414590 + Msg_Load 0x439710 (12 §5.1, 10 §1, §3); no msg file in spell practice.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
-        let g = &ctx.game;
+        let g = &ctx.w.game;
         let (stage, shot) = (g.stage % 9, g.shot);
         let (rec, ar) = (&mut ctx.rec, &ctx.archive);
-        ctx.anm.load(rec, ar, FRONT_SLOT, "front.anm")?;
+        ctx.w.anm.load(rec, ar, FRONT_SLOT, "front.anm")?;
         if let Some(n) = stage_plate(stage, g) {
-            set_boss_plate(&ctx.anm, rec, n);
+            set_boss_plate(&ctx.w.anm, rec, n);
         }
-        ctx.anm.load(rec, ar, TIMES_SLOT, "times.anm")?;
-        ctx.anm.load(
+        ctx.w.anm.load(rec, ar, TIMES_SLOT, "times.anm")?;
+        ctx.w.anm.load(
             rec,
             ar,
             TXT_SLOT,
@@ -365,7 +365,7 @@ impl Hud {
             s if s % 2 == 0 => "h",
             _ => "a",
         };
-        if let Err(e) = ctx.anm.load(
+        if let Err(e) = ctx.w.anm.load(
             rec,
             ar,
             LOADING_SLOT,
@@ -375,12 +375,12 @@ impl Hud {
         }
         let card = g.spell_practice().then_some(g.card);
         for (k, f) in msg::face_files(stage, shot, card).into_iter().enumerate() {
-            ctx.anm.unload(rec, msg::FACE_SLOTS[k]);
+            ctx.w.anm.unload(rec, msg::FACE_SLOTS[k]);
             if let Some(f) = f {
-                ctx.anm.load(rec, ar, msg::FACE_SLOTS[k], &f)?;
+                ctx.w.anm.load(rec, ar, msg::FACE_SLOTS[k], &f)?;
             }
         }
-        let d = ctx.msg.as_deref_mut().expect("dialogue");
+        let d = ctx.w.msg.as_deref_mut().expect("dialogue");
         if !g.spell_practice() {
             d.file = Some(msg::parse(ar.read(&msg::file_name(stage, shot))?)?.into());
         }
@@ -393,57 +393,57 @@ impl Hud {
             cleared_6b: g.cleared(false, 7),
             clock: 0,
         };
-        let anm = &mut ctx.anm;
+        let anm = &mut ctx.w.anm;
         // The script-index shorts of VMs impl+0x3778 / +0x3A1C / +0x3CC0 := −1 and impl+0x21810 := 0 in both branches.
         self.load_vm.script_index = -1;
         self.cap_vm.script_index = -1;
         self.tiles_live = 0;
         // +0x2C := 0, impl+0x2A40 := 0, +0x30 := +0x34 := 0 (12 §5.1a).
         {
-            let e = crate::em!(ctx);
+            let e = crate::em!(ctx.w);
             e.g.hud_boss = false;
             e.g.hud_bar_target = 0.0;
         }
         self.bar_state = 0;
         self.bar_disp = 0.0;
         // All six dirty fields := 2, 0x17CE8CC := 0x10 (12 §5.1a).
-        ctx.panel.mark_lives(2);
-        ctx.panel.mark_bombs(2);
-        ctx.panel.set_repaint(0x10);
-        let kept = ctx.hud_kept.take().filter(|_| !self.fresh);
+        ctx.w.panel.mark_lives(2);
+        ctx.w.panel.mark_bombs(2);
+        ctx.w.panel.set_repaint(0x10);
+        let kept = ctx.w.hud_kept.take().filter(|_| !self.fresh);
         if let Some(k) = kept {
             // Continuing stage: no VM-13 repaint, no panel fade-in; the stage-start transition over the old capture.
             self.front = k.front;
             self.diff_vm = k.diff_vm;
             self.label_vm = k.label_vm;
             self.clear_total = k.clear_total;
-            crate::em!(ctx).g.hud_timer = k.timer;
+            crate::em!(ctx.w).g.hud_timer = k.timer;
             self.timer_last = k.timer_last;
             anm.set_script(
-                &mut ctx.rng,
+                &mut ctx.w.rng,
                 &mut self.cap_vm,
                 crate::ascii::CAPTURE_SLOT,
                 1,
             );
             self.cap_vm.sprite_index = 1;
-            self.tiles = stage_start_tiles(anm, &mut ctx.rng);
+            self.tiles = stage_start_tiles(anm, &mut ctx.w.rng);
             self.tiles_live = self.tiles.len() as u32;
         } else {
             self.front = (0..16)
                 .map(|i| {
                     let mut vm = AnmVm::default();
-                    anm.set_script(&mut ctx.rng, &mut vm, FRONT_SLOT, i);
+                    anm.set_script(&mut ctx.w.rng, &mut vm, FRONT_SLOT, i);
                     vm
                 })
                 .collect();
             anm.set_script(
-                &mut ctx.rng,
+                &mut ctx.w.rng,
                 &mut self.label_vm,
                 crate::ascii::ANM_SLOT,
                 0x1A,
             );
             anm.set_script(
-                &mut ctx.rng,
+                &mut ctx.w.rng,
                 &mut self.diff_vm,
                 crate::ascii::ANM_SLOT,
                 0x19,
@@ -456,10 +456,10 @@ impl Hud {
             .map(|i| {
                 let mut vm = AnmVm::default();
                 if !g.spell_practice() {
-                    anm.set_script(&mut ctx.rng, &mut vm, TXT_SLOT, i);
+                    anm.set_script(&mut ctx.w.rng, &mut vm, TXT_SLOT, i);
                 } else if i == 0 && title_on {
                     // Spell practice: VM 0 (not VM 3) := script 3 with the card's song-title sprite; VMs 1–3 untouched.
-                    anm.set_script(&mut ctx.rng, &mut vm, TXT_SLOT, 3);
+                    anm.set_script(&mut ctx.w.rng, &mut vm, TXT_SLOT, 3);
                     vm.set_sprite(anm, crate::gamemgr::spell_title_sprite(g.card) + 3);
                 }
                 vm
@@ -470,8 +470,8 @@ impl Hud {
         self.night_vm.color[anmvm::A] = 0;
         // Clock sprite = clock counter stats+0x28 as it is now (12 §5.1a): the live player stats, since the
         // game-manager copy was taken at the stage start. The clamp is a port guard.
-        anm.set_script(&mut ctx.rng, &mut self.start_clock_vm, TIMES_SLOT, 0);
-        let clock = crate::pl!(ctx).stats.clock;
+        anm.set_script(&mut ctx.w.rng, &mut self.start_clock_vm, TIMES_SLOT, 0);
+        let clock = crate::pl!(ctx.w).stats.clock;
         self.start_clock_vm.set_sprite(anm, clock.clamp(0, 15));
         Ok(())
     }
@@ -485,13 +485,13 @@ impl Hud {
 
     // Text_RenderToVm 0x4663B0 for the queued dialogue lines (10 §6).
     fn flush_texts(ctx: &mut Ctx) {
-        let d = ctx.msg.as_deref_mut().expect("dialogue");
+        let d = ctx.w.msg.as_deref_mut().expect("dialogue");
         let size = d.font_size;
         for (line, s, colour) in std::mem::take(&mut d.texts) {
             // Line 2 renders into boss_card's strip (text.anm sprite 2, 10 §5.1).
             let Some((tex, w, y)) = d
                 .line_vm(line)
-                .and_then(|vm| Self::line_texture(&ctx.anm, &ctx.rec, vm))
+                .and_then(|vm| Self::line_texture(&ctx.w.anm, &ctx.rec, vm))
             else {
                 continue;
             };
@@ -512,31 +512,31 @@ impl Hud {
     fn handle_events(&mut self, ctx: &mut Ctx, events: Vec<Event>) {
         for ev in events {
             match ev {
-                Event::Plate(n) => set_boss_plate(&ctx.anm, &mut ctx.rec, n),
-                Event::SpellBase(n) => crate::stg!(ctx).spell_first = n,
-                Event::Bgm(n) if n < 0 => ctx.bgm.stop_bgm(),
+                Event::Plate(n) => set_boss_plate(&ctx.w.anm, &mut ctx.rec, n),
+                Event::SpellBase(n) => crate::stg!(ctx.w).spell_first = n,
+                Event::Bgm(n) if n < 0 => ctx.w.bgm.stop_bgm(),
                 // Msg op 7 (10 §5.1): song-title card = stgNtxt script 3 with sprite n + 3, then preloaded BGM slot n.
                 Event::Bgm(n) => {
                     let vm = &mut self.title[3];
-                    ctx.anm.set_script(&mut ctx.rng, vm, TXT_SLOT, 3);
-                    vm.set_sprite(&ctx.anm, n + 3);
-                    ctx.bgm.play_slot(n as usize);
+                    ctx.w.anm.set_script(&mut ctx.w.rng, vm, TXT_SLOT, 3);
+                    vm.set_sprite(&ctx.w.anm, n + 3);
+                    ctx.w.bgm.play_slot(n as usize);
                 }
-                Event::BgmFade => ctx.bgm.fade_bgm(4.0, ctx.anm.speed),
+                Event::BgmFade => ctx.w.bgm.fade_bgm(4.0, ctx.w.anm.speed),
                 // Msg op 14 (10 §5.1, 13 §3): ScreenEffect type 4, 442 frames to white, draw prio 0x15.
                 // Full-repaint counter 0x17CE8CC := 442 (10 §5.1).
                 Event::Flash => {
-                    ctx.effects.screen(4, 442, 0xFFFFFF, 0, 0, 0x15);
-                    ctx.panel.set_repaint(442);
+                    ctx.w.effects.screen(4, 442, 0xFFFFFF, 0, 0, 0x15);
+                    ctx.w.panel.set_repaint(442);
                 }
                 Event::StageEnd => self.stage_end(ctx),
                 // Msg op 11: GM flags & ~0x60 | 0x40 (game-clear trigger).
-                Event::HaltFinal => ctx.game.set_end_state(2),
+                Event::HaltFinal => ctx.w.game.set_end_state(2),
                 Event::Route(c) => {
-                    log::info!("final route choice {c} at frame {}", ctx.frame);
-                    ctx.game.set_route(c)
+                    log::info!("final route choice {c} at frame {}", ctx.w.frame);
+                    ctx.w.game.set_route(c)
                 }
-                Event::Sfx(n) => ctx.sound.play(n as i32),
+                Event::Sfx(n) => ctx.w.sound.play(n as i32),
             }
         }
     }
@@ -545,31 +545,35 @@ impl Hud {
     fn stage_end(&mut self, ctx: &mut Ctx) {
         log::info!(
             "stage clear (msg op 9) at frame {} score {}",
-            ctx.frame,
-            crate::pl!(ctx).stats.score10
+            ctx.w.frame,
+            crate::pl!(ctx.w).stats.score10
         );
-        let g = &mut ctx.game;
+        let g = &mut ctx.w.game;
         g.flags |= gamemgr::F_CLEAR_PANEL;
         let stage = g.stage % 9;
-        let p = crate::pl!(ctx);
+        let p = crate::pl!(ctx.w);
         let shot = p.shot_type;
         let adv = gamemgr::clock_advance(stage, p.stats.time, p.stats.time_threshold);
         // Stage-clear VM impl+0x212C8 (10 §9): stages 1–5 restart ascii.anm script 3 with sprite 0x80 + clock advance;
         // 6A/6B/Ex only clear its ip; interrupt 1 in every case.
         if stage < 6 {
-            ctx.anm
-                .set_script(&mut ctx.rng, &mut self.clear_vm, crate::ascii::ANM_SLOT, 3);
-            self.clear_vm.set_sprite(&ctx.anm, 0x80 + adv);
+            ctx.w.anm.set_script(
+                &mut ctx.w.rng,
+                &mut self.clear_vm,
+                crate::ascii::ANM_SLOT,
+                3,
+            );
+            self.clear_vm.set_sprite(&ctx.w.anm, 0x80 + adv);
         } else {
             self.clear_vm.script = None;
         }
         self.clear_vm.pending_interrupt = 1;
         // Stages 1–5: loading VM, capture VM, 8 ghosts (I4 := 4k + 3, alpha := 64 − 2k) and the playfield capture.
         if stage < 6 {
-            let anm = &mut ctx.anm;
-            anm.set_script(&mut ctx.rng, &mut self.load_vm, LOADING_SLOT, 0);
+            let anm = &mut ctx.w.anm;
+            anm.set_script(&mut ctx.w.rng, &mut self.load_vm, LOADING_SLOT, 0);
             anm.set_script(
-                &mut ctx.rng,
+                &mut ctx.w.rng,
                 &mut self.cap_vm,
                 crate::ascii::CAPTURE_SLOT,
                 1,
@@ -577,7 +581,7 @@ impl Hud {
             self.ghosts = (0..8)
                 .map(|k| {
                     let mut vm = AnmVm::default();
-                    anm.set_script(&mut ctx.rng, &mut vm, crate::ascii::CAPTURE_SLOT, 2);
+                    anm.set_script(&mut ctx.w.rng, &mut vm, crate::ascii::CAPTURE_SLOT, 2);
                     vm.ivars[4] = 4 * k + 3;
                     vm.color[anmvm::A] = (64 - 2 * k) as u8;
                     vm
@@ -585,7 +589,7 @@ impl Hud {
                 .collect();
             self.capture_pending = true;
         }
-        let rng = &mut ctx.rng;
+        let rng = &mut ctx.w.rng;
         let st = &mut p.stats;
         let from = st.clock * 30 + 660;
         st.clock += adv;
@@ -598,8 +602,8 @@ impl Hud {
             // Youmu&Yuyuko team and solos: +1 bomb below 3 bombs, stages 1–5 only (10 §9).
             if matches!(shot, 3 | 10 | 11) && st.bombs < 3.0 {
                 st.add_bombs(1.0, rng);
-                ctx.panel.mark_bombs(2);
-                ctx.sound.play(crate::sound::CARDGET);
+                ctx.w.panel.mark_bombs(2);
+                ctx.w.sound.play(crate::sound::CARDGET);
             }
         }
         self.clear = Some(ClearPanel {
@@ -755,7 +759,7 @@ impl Hud {
 
     // Hud_DrawBoss 0x43741D (12 §5.4), step: the mode-5 matrices of the op 9 VMs and tiles, then the bar's logic.
     fn boss_step(&mut self, ctx: &mut Ctx) {
-        let anm = &ctx.anm;
+        let anm = &ctx.w.anm;
         if self.load_vm.script_index >= 0 {
             for vm in std::iter::once(&mut self.cap_vm).chain(self.ghosts.iter_mut()) {
                 anm.prepare(vm, 5);
@@ -773,7 +777,7 @@ impl Hud {
 
     // Hud_DrawBoss emit: unguarded VMs, the guarded bar part, the stage-clear VM last.
     fn emit_boss(&self, ctx: &Ctx, rec: &mut Recorder) {
-        let anm = &ctx.anm;
+        let anm = &ctx.w.anm;
         rec.set_viewport(PLAYFIELD);
         // Stage title VMs, the stage-start clock, then the night clock with Draw2DRot (12 §5.1, §5.7).
         for vm in self
@@ -815,33 +819,34 @@ impl Hud {
 
     // Bar part, step: the timer string, its sounds and Popup_LargeStatic (logic, also with emit off).
     fn bar_step(&mut self, ctx: &mut Ctx) {
-        if !self.bar_shown(ctx.enemies.as_deref().expect("enemy manager")) {
+        if !self.bar_shown(ctx.w.enemies.as_deref().expect("enemy manager")) {
             return;
         }
         let a = self.bar_alpha as u8;
         // Timer (12 §5.4): every guarded draw, HUD +0x24 as stored by Enemy_CheckTimeout, shown as min(·, 99).
-        let raw = ctx.enemies.as_deref().expect("enemy manager").g.hud_timer;
+        let raw = ctx.w.enemies.as_deref().expect("enemy manager").g.hud_timer;
         let v = raw.min(99);
-        ctx.ascii
+        ctx.w
+            .ascii
             .push(Text::new(384.0, 16.0, fmt_02d(v)).color(Self::rgb(timer_colour(raw), a)));
         // Sound on a change of the raw value: v < 3 se_timeout2 (0x26), else v < 10 se_timeout (0x1D).
         if self.timer_last != raw {
             if v < 3 {
-                ctx.sound.play(crate::sound::TIMEOUT2);
+                ctx.w.sound.play(crate::sound::TIMEOUT2);
             } else if v < 10 {
-                ctx.sound.play(crate::sound::TIMEOUT);
+                ctx.w.sound.play(crate::sound::TIMEOUT);
             }
         }
         self.timer_last = raw;
         // Popup_LargeStatic (12 §5.4, 13 §4): re-issued every guarded draw, "+0" without children too.
-        let g = &ctx.game;
-        let e = ctx.enemies.as_deref().expect("enemy manager");
+        let g = &ctx.w.game;
+        let e = ctx.w.enemies.as_deref().expect("enemy manager");
         if let Some(i) = e.boss(0)
             && g.paused == 0
             && g.game_over == 0
-            && !crate::pl!(ctx).freeze_bullets(g.flags)
+            && !crate::pl!(ctx.w).freeze_bullets(g.flags)
         {
-            ctx.overlays.popup_large_static(
+            ctx.w.overlays.popup_large_static(
                 [2.0, 29.0],
                 e.chain_count(i),
                 e.enemies[i].children,
@@ -852,7 +857,7 @@ impl Hud {
 
     // Bar part, emit: fill, ECL markers, remaining-bars gauge, the timer frame VM.
     fn emit_bar(&self, ctx: &Ctx, rec: &mut Recorder) {
-        let e = ctx.enemies.as_deref().expect("enemy manager");
+        let e = ctx.w.enemies.as_deref().expect("enemy manager");
         if !self.bar_shown(e) {
             return;
         }
@@ -891,7 +896,7 @@ impl Hud {
             let c = Self::rgb(0xFFFFFF - (i as u32 * 255 / 9), a);
             Self::bar_quad(rec, x0, x1, 19.0, 23.0, c, Self::rgb(0x202020, a));
         }
-        ctx.anm.emit_mode(rec, &self.front[12], 0);
+        ctx.w.anm.emit_mode(rec, &self.front[12], 0);
     }
 
     // Hud_DrawPopups 0x438A89 (12 §5.5): every string with the clip flag (playfield viewport); bonus / message
@@ -899,7 +904,7 @@ impl Hud {
     fn draw_popups(&mut self, ctx: &mut Ctx) {
         for p in self.popups.iter().flatten() {
             match p.kind {
-                Popup::Bonus(n) => ctx.ascii.push(
+                Popup::Bonus(n) => ctx.w.ascii.push(
                     Text::new(p.x, 48.0, format!(" BONUS {n:8}"))
                         .argb(0xFFFFFF80)
                         .clip(),
@@ -917,7 +922,7 @@ impl Hud {
                     // Types 2/4–6 set Ascii_SetAdvance(11) but reset it to 13 before the draw pass reads it
                     // (12 §2.9), so only the 0.9 x scale narrows them.
                     let tx = Text::new(p.x, 168.0, s).clip();
-                    ctx.ascii.push(if small {
+                    ctx.w.ascii.push(if small {
                         tx.scale_xy(0.9, 1.0).argb(0xFFE0B0FF)
                     } else {
                         tx.argb(0xFFC0B0FF)
@@ -928,11 +933,13 @@ impl Hud {
                 Popup::SpellBonus(n) => {
                     let s = "Spell Card Bonus!";
                     let x = ((384 - s.len() as i32 * 14) / 2 + 32) as f32;
-                    ctx.ascii
+                    ctx.w
+                        .ascii
                         .push(Text::new(x, 80.0, s).argb(0xFFFF0000).clip());
                     let v = format!("+{n}");
                     let x = ((384 - v.len() as i32 * 28) / 2 + 32) as f32;
-                    ctx.ascii
+                    ctx.w
+                        .ascii
                         .push(Text::new(x, 96.0, v).scale(2.0).argb(0xFFFF8080).clip());
                 }
             }
@@ -942,9 +949,9 @@ impl Hud {
     // Hud_DrawClearPanel 0x43826B (12 §5.6): ASCII strings only, full-screen (clip flag 0); pen from (120, 96).
     fn draw_clear(&mut self, ctx: &mut Ctx) {
         let Some(c) = &self.clear else { return };
-        let g = &ctx.game;
-        let st = &ctx.player.as_deref().expect("player").stats;
-        let q = &mut ctx.ascii;
+        let g = &ctx.w.game;
+        let st = &ctx.w.player.as_deref().expect("player").stats;
+        let q = &mut ctx.w.ascii;
         let mut y = 96.0;
         let line = |q: &mut crate::ascii::Queue, y: f32, s: String, col: u32| {
             q.push(Text::new(120.0, y, s).argb(col));
@@ -1058,7 +1065,7 @@ impl Hud {
 
     // Hud_DrawPanel (12 §5.3), step: the panel strings and queue colour, the lives / bombs VM positions, the label latch.
     fn panel_step(&mut self, ctx: &mut Ctx, st: &Stats) {
-        let q = &mut ctx.ascii;
+        let q = &mut ctx.w.ascii;
         // Score row (y 56) queued before the hiscore row (y 40) (12 §5.3 step 6). The panel strings take the current
         // queue colour, so a "Press Shot Button" alpha leaks into them on the first gameplay frame (12 §1).
         q.push(q.text(
@@ -1078,8 +1085,9 @@ impl Hud {
         // Step 4 label: the original draws it only when it repaints the lives or bombs row (field ≠ 0 or full
         // repaint) and it stays in the back buffer, so the port latches the condition on those frames.
         let vm13 = self.front.get(13).is_some_and(|v| v.ip.is_some());
-        let cond = ctx.game.flags >> 7 & 3 == 1
+        let cond = ctx.w.game.flags >> 7 & 3 == 1
             && ctx
+                .w
                 .enemies
                 .as_deref()
                 .expect("enemy manager")
@@ -1087,15 +1095,15 @@ impl Hud {
                 .spell
                 .is_some();
         let (pn, latch) = label_step(
-            ctx.panel,
+            ctx.w.panel,
             vm13,
             cond,
             self.label_latch,
-            ctx.game.paused != 0,
+            ctx.w.game.paused != 0,
         );
-        ctx.panel = pn;
+        ctx.w.panel = pn;
         self.label_latch = latch;
-        let q = &mut ctx.ascii;
+        let q = &mut ctx.w.ascii;
         q.push(q.text(488.0, 152.0, format!("{}", st.graze_total)));
         for t in ratio_row(168.0, st.point_items2, st.next_extend, q.color) {
             q.push(t);
@@ -1219,18 +1227,18 @@ impl Hud {
 
 // Msg_IsActive on the HUD's dialogue (10 §1).
 fn dialogue_active(ctx: &Ctx) -> bool {
-    ctx.msg.as_deref().is_some_and(Dialogue::active)
+    ctx.w.msg.as_deref().is_some_and(Dialogue::active)
 }
 
-// The HUD lent out of `ctx.hud` for a step that also takes the `Ctx` (nothing it calls reads `ctx.hud`).
+// The HUD lent out of `ctx.w.hud` for a step that also takes the `Ctx` (nothing it calls reads `ctx.w.hud`).
 fn with_hud<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Hud, &mut Ctx) -> R) -> R {
-    let mut h = ctx.hud.take().expect("hud");
+    let mut h = ctx.w.hud.take().expect("hud");
     let r = f(&mut h, ctx);
-    ctx.hud = Some(h);
+    ctx.w.hud = Some(h);
     r
 }
 
-// Chain nodes of `ctx.hud` (calc prio 15, draw prio 17): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.hud` (calc prio 15, draw prio 17): stateless forwarder (STEP9_WORLD.md §3).
 pub struct HudTask;
 
 impl Task<Ctx> for HudTask {
@@ -1251,7 +1259,7 @@ impl Task<Ctx> for HudTask {
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        if let Some(h) = ctx.hud.as_deref() {
+        if let Some(h) = ctx.w.hud.as_deref() {
             h.emit(ctx, rec, tag);
         }
     }
@@ -1267,19 +1275,19 @@ impl Hud {
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.hud_kept = Some(Kept {
+            ctx.w.hud_kept = Some(Kept {
                 front: std::mem::take(&mut self.front),
                 diff_vm: std::mem::take(&mut self.diff_vm),
                 label_vm: std::mem::take(&mut self.label_vm),
                 clear_total: self.clear_total,
-                timer: ctx.enemies.as_deref().expect("enemy manager").g.hud_timer,
+                timer: ctx.w.enemies.as_deref().expect("enemy manager").g.hud_timer,
                 timer_last: self.timer_last,
             });
             for s in [FRONT_SLOT, TIMES_SLOT, TXT_SLOT, LOADING_SLOT]
                 .into_iter()
                 .chain(msg::FACE_SLOTS)
             {
-                ctx.anm.unload(&mut ctx.rec, s);
+                ctx.w.anm.unload(&mut ctx.rec, s);
             }
         }
     }
@@ -1290,26 +1298,27 @@ impl Hud {
         // AnmManager_ApplyPendingCaptures runs right after the Present that follows op 9's calc (12 §3); the port
         // copies from that presented frame at the next calc.
         if std::mem::take(&mut self.capture_pending) {
-            crate::ascii::apply_capture(&ctx.anm, &mut ctx.rec, &self.cap_vm);
+            crate::ascii::apply_capture(&ctx.w.anm, &mut ctx.rec, &self.cap_vm);
         }
-        let inp = ctx.input.game_view();
+        let inp = ctx.w.input.game_view();
         // HUD requests queued by ECL ops this frame (ECL runs before the HUD).
-        let reqs = std::mem::take(&mut crate::em!(ctx).g.hud_requests);
-        let clock = crate::pl!(ctx).stats.clock;
+        let reqs = std::mem::take(&mut crate::em!(ctx.w).g.hud_requests);
+        let clock = crate::pl!(ctx.w).stats.clock;
         for r in reqs {
             match r {
                 // ECL 179 / 181 (12 §5.7, 07 §7): night clock script 2 with sprite = clock; 181 interrupts 2 at 12,
                 // else 1; 180 hides it with alpha := 0.
                 179 => {
-                    ctx.anm
-                        .set_script(&mut ctx.rng, &mut self.night_vm, TIMES_SLOT, 2);
-                    self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
+                    ctx.w
+                        .anm
+                        .set_script(&mut ctx.w.rng, &mut self.night_vm, TIMES_SLOT, 2);
+                    self.night_vm.set_sprite(&ctx.w.anm, clock.clamp(0, 15));
                 }
                 180 => self.night_vm.color[anmvm::A] = 0,
                 // ECL op 148: progress counter 0x164D30C += 1800 (10 §8.3, end panel 16 §2.5).
-                148 => crate::pl!(ctx).stats.rec.progress += 1800,
+                148 => crate::pl!(ctx.w).stats.rec.progress += 1800,
                 181 => {
-                    self.night_vm.set_sprite(&ctx.anm, clock.clamp(0, 15));
+                    self.night_vm.set_sprite(&ctx.w.anm, clock.clamp(0, 15));
                     self.night_vm.pending_interrupt = if clock >= 12 { 2 } else { 1 };
                 }
                 _ => {}
@@ -1317,30 +1326,30 @@ impl Hud {
         }
         // Hud_Update 0x435900, steps 1–7 of 12 §5.1b.
         if !dialogue_active(ctx) {
-            self.boss_calc(ctx.enemies.as_deref().expect("enemy manager"));
+            self.boss_calc(ctx.w.enemies.as_deref().expect("enemy manager"));
         }
         // Front VMs, stage-title VMs, the stage-start clock, the stage-clear VM, the night clock.
-        let anm = &mut ctx.anm;
+        let anm = &mut ctx.w.anm;
         for vm in self.front.iter_mut().chain(self.title.iter_mut()) {
             if vm.script.is_some() {
-                vm.run(anm, &mut ctx.rng);
+                vm.run(anm, &mut ctx.w.rng);
             }
         }
         // The clock VM ticks only while stage-title VM 0 has alpha ≠ 0, never in spell practice (12 §5.1).
         let title_on = self.title.first().is_some_and(|v| v.color[anmvm::A] != 0);
-        if self.start_clock_vm.script.is_some() && title_on && !ctx.game.spell_practice() {
-            self.start_clock_vm.run(anm, &mut ctx.rng);
+        if self.start_clock_vm.script.is_some() && title_on && !ctx.w.game.spell_practice() {
+            self.start_clock_vm.run(anm, &mut ctx.w.rng);
         }
         for vm in [&mut self.clear_vm, &mut self.night_vm] {
             if vm.script.is_some() {
-                vm.run(anm, &mut ctx.rng);
+                vm.run(anm, &mut ctx.w.rng);
             }
         }
         // Player-overlap fade of the night clock (12 §5.7): while alpha ≠ 0, −4 down to 0x40 with the player at
         // x ≥ 64, y < 128, else +4 up to 0xFF (≥ 0xFC snaps to 0xFF).
         let a = self.night_vm.color[anmvm::A];
         if a != 0 {
-            let p = crate::pl!(ctx).pos;
+            let p = crate::pl!(ctx.w).pos;
             self.night_vm.color[anmvm::A] = if p[0] >= 64.0 && p[1] < 128.0 {
                 if a > 0x40 { (a - 4).max(0x40) } else { a }
             } else if a >= 0xFC {
@@ -1351,39 +1360,39 @@ impl Hud {
         }
         // Last-spell label VM impl+0x5484, then the difficulty name VM impl+0x22E14 (12 §5.1b step 1.4).
         if self.label_vm.script.is_some() {
-            self.label_vm.run(&mut ctx.anm, &mut ctx.rng);
+            self.label_vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
         }
         if self.diff_vm.script.is_some() {
-            self.diff_vm.run(&mut ctx.anm, &mut ctx.rng);
+            self.diff_vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
         }
         if self.load_vm.script_index >= 0 {
-            let anm = &mut ctx.anm;
+            let anm = &mut ctx.w.anm;
             for vm in [&mut self.load_vm, &mut self.cap_vm]
                 .into_iter()
                 .chain(self.ghosts.iter_mut())
             {
-                vm.run(anm, &mut ctx.rng);
+                vm.run(anm, &mut ctx.w.rng);
             }
         }
         if self.tiles_live != 0 {
             for vm in &mut self.tiles {
                 // +0x21810 = tiles still running (12 §5.7): a finished VM returns 1 every later call, so decrementing once matches.
-                if vm.ip.is_some() && vm.run(&mut ctx.anm, &mut ctx.rng) {
+                if vm.ip.is_some() && vm.run(&mut ctx.w.anm, &mut ctx.w.rng) {
                     self.tiles_live -= 1;
                 }
             }
         }
-        let gs = ctx.anm.speed;
-        self.popup_step(&mut crate::pl!(ctx).stats, &mut ctx.panel, gs);
-        self.clear_bonus(&ctx.game, crate::pl!(ctx));
-        self.clear_calc(&mut ctx.game, &inp);
+        let gs = ctx.w.anm.speed;
+        self.popup_step(&mut crate::pl!(ctx.w).stats, &mut ctx.w.panel, gs);
+        self.clear_bonus(&ctx.w.game, crate::pl!(ctx.w));
+        self.clear_calc(&mut ctx.w.game, &inp);
         // Msg_Run (10 §5), including op 9.
-        let dying = crate::pl!(ctx).state == 2;
+        let dying = crate::pl!(ctx.w).state == 2;
         let (collect, events, side) = {
-            let d = ctx.msg.as_deref_mut().expect("dialogue");
-            d.info.clock = crate::pl!(ctx).stats.clock;
-            let c = d.run(&mut ctx.anm, &mut ctx.rng, &inp, dying);
-            ctx.game.dialogue_skippable = d.skippable_shown();
+            let d = ctx.w.msg.as_deref_mut().expect("dialogue");
+            d.info.clock = crate::pl!(ctx.w).stats.clock;
+            let c = d.run(&mut ctx.w.anm, &mut ctx.w.rng, &inp, dying);
+            ctx.w.game.dialogue_skippable = d.skippable_shown();
             (
                 c,
                 std::mem::take(&mut d.events),
@@ -1392,20 +1401,20 @@ impl Hud {
         };
         // Msg_Start playfield side effects (10 §4 step 6): cancel bullets, kill killable enemies.
         if side {
-            crate::em!(ctx).msg_side_effects(&mut ctx.anm, &mut crate::sys!(ctx));
+            crate::em!(ctx.w).msg_side_effects(&mut ctx.w.anm, &mut crate::sys!(ctx.w));
         }
         // All items auto-collect while a dialogue runs and the player is not dying (10 §5).
         if collect {
-            crate::bm!(ctx).items.attract_all();
+            crate::bm!(ctx.w).items.attract_all();
         }
         Self::flush_texts(ctx);
         self.handle_events(ctx, events);
         Self::flush_texts(ctx);
         // Step 3: SKIP held raises 0x17CE8CC to 8 (12 §5.1b).
-        if inp.down(crate::input::SKIP) && ctx.panel.repaint < 8 {
-            ctx.panel.set_repaint(8);
+        if inp.down(crate::input::SKIP) && ctx.w.panel.repaint < 8 {
+            ctx.w.panel.set_repaint(8);
         }
-        crate::stg!(ctx).hud_cover = hud_cover(&self.load_vm);
+        crate::stg!(ctx.w).hud_cover = hud_cover(&self.load_vm);
         self.frame += 1;
         Ret::Next
     }
@@ -1414,25 +1423,29 @@ impl Hud {
     // before Hud_DrawPanel inherits the playfield viewport set by Stage_DrawLow.
     // Step: ASCII queue strings and colour, timer sounds / popup, label latch, VM positions and mode-5 matrices.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        if ctx.game.loading != 0 {
+        if ctx.w.game.loading != 0 {
             return Ret::Next;
         }
         self.draw_clear(ctx);
         self.boss_step(ctx);
-        let st = crate::pl!(ctx).stats.clone();
+        let st = crate::pl!(ctx.w).stats.clone();
         self.panel_step(ctx, &st);
         self.draw_popups(ctx);
         Ret::Next
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
-        if ctx.game.loading != 0 {
+        if ctx.w.game.loading != 0 {
             return;
         }
         rec.set_viewport(PLAYFIELD);
-        Self::emit_msg(ctx.msg.as_deref().expect("dialogue"), &ctx.anm, rec);
+        Self::emit_msg(ctx.w.msg.as_deref().expect("dialogue"), &ctx.w.anm, rec);
         self.emit_boss(ctx, rec);
-        self.emit_panel(&ctx.anm, rec, &ctx.player.as_deref().expect("player").stats);
+        self.emit_panel(
+            &ctx.w.anm,
+            rec,
+            &ctx.w.player.as_deref().expect("player").stats,
+        );
     }
 }
 

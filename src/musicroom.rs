@@ -113,6 +113,7 @@ fn vm_argb(vm: &AnmVm) -> u32 {
 fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, colour: u32, mode: i32) {
     let slot = vm.anm_slot.max(0) as usize;
     let Some(sp) = ctx
+        .w
         .anm
         .sprite(slot, vm.sprite_index.max(0) as usize)
         .copied()
@@ -207,8 +208,8 @@ impl MusicRoom {
         let Some(e) = self.entries.get(self.playing as usize) else {
             return;
         };
-        ctx.bgm.play_bgm(&String::from_utf8_lossy(&e.file));
-        let g = &mut ctx.game;
+        ctx.w.bgm.play_bgm(&String::from_utf8_lossy(&e.file));
+        let g = &mut ctx.w.game;
         if matches!(g.cfg.music, 1 | 2) && g.flags & (gamemgr::F_REPLAY | gamemgr::F_DEMO) == 0 {
             g.score.plst.music[0] = 1;
         }
@@ -223,8 +224,9 @@ impl MusicRoom {
         let c = self.cursor as usize;
         let s = comment_text(e, self.heard[c], self.cursor == self.playing, k);
         let vm = &mut self.comments[k];
-        ctx.anm
-            .file_set_script(&mut ctx.rng, vm, 0, COMMENT_SCRIPT + k);
+        ctx.w
+            .anm
+            .file_set_script(&mut ctx.w.rng, vm, 0, COMMENT_SCRIPT + k);
         vm.pending_interrupt = 1;
         if s.is_empty() {
             vm.flags &= !anmvm::F_ENABLED;
@@ -248,7 +250,7 @@ impl MusicRoom {
     // MusicRoom_StateInput 0x448B16 (16 §5.3): independent tests on the raw input word in this order; returns true on
     // exit (Ctrl, R and the sub-frame step are skipped).
     fn state_input(&mut self, ctx: &mut Ctx) -> bool {
-        let inp = ctx.input;
+        let inp = ctx.w.input;
         if inp.pressed_or_repeat(UP) {
             (self.cursor, self.top) = cursor_up(self.cursor, self.top, self.n());
             self.interrupt_rows();
@@ -273,19 +275,20 @@ impl MusicRoom {
             if let Some(e) = self.entries.get(self.cursor as usize) {
                 let l = e.comments.first().map(|c| c.as_bytes()).unwrap_or_default();
                 let s = SjisString(l[..l.len().min(COMMENT_SHOWN)].to_vec());
-                ctx.anm
-                    .file_set_script(&mut ctx.rng, &mut self.title, 0, TITLE_SCRIPT);
+                ctx.w
+                    .anm
+                    .file_set_script(&mut ctx.w.rng, &mut self.title, 0, TITLE_SCRIPT);
                 self.title.pending_interrupt = 1;
                 render_vm(ctx, &mut self.title, s, COMMENT_COLOUR, COMMENT_MODE);
             }
         }
         if mask_edge(&inp, BOMB | PAUSE) {
             // The loading banner and screen capture (0x44886F) are done by the Supervisor's 8 → 1 switch.
-            ctx.game.request(gamemgr::SCENE_MENU);
+            ctx.w.game.request(gamemgr::SCENE_MENU);
             return true;
         }
         if mask_edge(&inp, SKIP) {
-            ctx.bgm.fade_bgm(8.0, ctx.anm.speed);
+            ctx.w.bgm.fade_bgm(8.0, ctx.w.anm.speed);
         }
         if mask_edge(&inp, KEY_R) {
             self.play(ctx);
@@ -311,15 +314,19 @@ impl MusicRoom {
             Ok(t) => self.surface = Some(t),
             Err(e) => log::warn!("music.jpg: {e:#}"),
         }
-        ctx.anm
+        ctx.w
+            .anm
             .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "music00.anm")?;
         self.entries = parse_musiccmt(&ctx.archive.read("musiccmt.txt")?);
-        self.heard = heard_flags(&ctx.game.score.plst.music);
-        ctx.anm.set_script(&mut ctx.rng, &mut self.bg, ANM_SLOT, 0);
+        self.heard = heard_flags(&ctx.w.game.score.plst.music);
+        ctx.w
+            .anm
+            .set_script(&mut ctx.w.rng, &mut self.bg, ANM_SLOT, 0);
         for i in 0..self.entries.len() {
             let mut vm = AnmVm::default();
-            ctx.anm
-                .file_set_script(&mut ctx.rng, &mut vm, ANM_SLOT, i + 1);
+            ctx.w
+                .anm
+                .file_set_script(&mut ctx.w.rng, &mut vm, ANM_SLOT, i + 1);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
             vm.pos = [93.0, (18 * (i as i32 + 1) + 104 - 20) as f32, 0.0];
             let (s, c, m) = row_text(&self.entries[i], self.heard[i]);
@@ -337,7 +344,7 @@ impl MusicRoom {
         if let Some(t) = self.surface.take() {
             ctx.rec.free_texture(t);
         }
-        ctx.anm.unload(&mut ctx.rec, ANM_SLOT);
+        ctx.w.anm.unload(&mut ctx.rec, ANM_SLOT);
     }
 
     // MusicRoom_Calc 0x449399 (16 §5.3): state, sub-frame step, then the VMs. On exit Calc returns 0 at once.
@@ -354,14 +361,14 @@ impl MusicRoom {
         } else {
             self.sub_frame += 1;
         }
-        self.bg.run(&mut ctx.anm, &mut ctx.rng);
+        self.bg.run(&mut ctx.w.anm, &mut ctx.w.rng);
         for vm in self
             .rows
             .iter_mut()
             .chain(&mut self.comments)
             .chain(std::iter::once(&mut self.title))
         {
-            vm.run(&mut ctx.anm, &mut ctx.rng);
+            vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
         }
         Ret::Next
     }
@@ -376,26 +383,30 @@ impl MusicRoom {
             let mode = vm.draw_mode;
             anm.prepare(vm, mode);
         };
-        prep(&ctx.anm, &mut self.bg);
+        prep(&ctx.w.anm, &mut self.bg);
         for i in self.top..self.row_end() {
             let y = Self::row_y(self.top, i);
             let vm = &mut self.rows[i as usize];
             let argb = vm_argb(vm);
             vm.pos = [93.0, y, 0.0];
-            prep(&ctx.anm, vm);
+            prep(&ctx.w.anm, vm);
             if i == self.cursor {
-                ctx.ascii.push(Text::new(93.0 - 60.0, y, CURSOR).argb(argb));
+                ctx.w
+                    .ascii
+                    .push(Text::new(93.0 - 60.0, y, CURSOR).argb(argb));
             }
-            ctx.ascii
+            ctx.w
+                .ascii
                 .push(Text::new(48.0, y, format!("{:2}.", i + 1)).argb(argb));
         }
         for vm in &mut self.comments {
-            prep(&ctx.anm, vm);
+            prep(&ctx.w.anm, vm);
         }
-        ctx.ascii
+        ctx.w
+            .ascii
             .push(Text::new(320.0, 32.0, "Now Playing").argb(0xFFFF_FFFF));
         let mut title = self.shown_title();
-        prep(&ctx.anm, &mut title);
+        prep(&ctx.w.anm, &mut title);
         // Only the matrix cache survives the original's pos / colour restore.
         self.title.world_matrix = title.world_matrix;
         self.title.flags = title.flags;
@@ -410,14 +421,14 @@ impl MusicRoom {
         if let Some(t) = self.surface {
             rec.image(t, 0.0, 0.0);
         }
-        ctx.anm.emit(rec, &self.bg);
+        ctx.w.anm.emit(rec, &self.bg);
         for i in self.top..self.row_end() {
-            ctx.anm.emit(rec, &self.rows[i as usize]);
+            ctx.w.anm.emit(rec, &self.rows[i as usize]);
         }
         for vm in &self.comments {
-            ctx.anm.emit(rec, vm);
+            ctx.w.anm.emit(rec, vm);
         }
-        ctx.anm.emit(rec, &self.shown_title());
+        ctx.w.anm.emit(rec, &self.shown_title());
     }
 }
 

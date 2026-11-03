@@ -808,24 +808,27 @@ impl EnemyManager {
         }
     }
 
-    // EnemyManager_Register: the manager becomes `ctx.enemies` (replacing the last stage's) plus its three nodes.
+    // EnemyManager_Register: the manager becomes `ctx.w.enemies` (replacing the last stage's) plus its three nodes.
     pub fn register(ctx: &mut Ctx, index: usize, diff: i32) -> Result<crate::chain::Node> {
-        let spell = ctx.game.spell_practice().then_some(ctx.game.card);
+        let spell = ctx.w.game.spell_practice().then_some(ctx.w.game.card);
         let (ecl_name, enm) = files(index, spell);
         let ecl = ecl::parse(ctx.archive.read(&ecl_name)?)?;
-        ctx.anm
+        ctx.w
+            .anm
             .load(&mut ctx.rec, &ctx.archive, ANM_ENEMY, "enemy.anm")?;
-        ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_STAGE, &enm)?;
+        ctx.w
+            .anm
+            .load(&mut ctx.rec, &ctx.archive, ANM_STAGE, &enm)?;
         // EnemyManager init clears the freeze byte 0x160F534.
-        ctx.timer_pause = 0;
-        let p = ctx.player.as_deref_mut().expect("player");
+        ctx.w.timer_pause = 0;
+        let p = ctx.w.player.as_deref_mut().expect("player");
         let mut m = EnemyManager::new(ecl, p, diff);
         m.stage_index = index;
-        m.g.card = ctx.game.card;
+        m.g.card = ctx.w.game.card;
         m.fast_forward = ctx.core.stage_frame;
         m.debug_damage = ctx.core.enemy_dmg;
-        m.stage_start(&mut ctx.rng, p, index, ctx.game.flags);
-        ctx.enemies = Some(Box::new(m));
+        m.stage_start(&mut ctx.w.rng, p, index, ctx.w.game.flags);
+        ctx.w.enemies = Some(Box::new(m));
         let t = crate::chain::Node::Enemies;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
         task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t)?;
@@ -2821,45 +2824,45 @@ impl EnemyManager {
     }
 }
 
-// The enemy manager's chain nodes (07 §10.6); they reach the manager through its owner (`ctx.enemies`, step 9c).
+// The enemy manager's chain nodes (07 §10.6); they reach the manager through its owner (`ctx.w.enemies`, step 9c).
 pub struct EnemyTask;
 
 impl Task<Ctx> for EnemyTask {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.rec, ANM_ENEMY);
-            ctx.anm.unload(&mut ctx.rec, ANM_STAGE);
+            ctx.w.anm.unload(&mut ctx.rec, ANM_ENEMY);
+            ctx.w.anm.unload(&mut ctx.rec, ANM_STAGE);
         }
     }
 
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        let m = ctx.enemies.as_deref_mut().expect("enemy manager");
+        let m = ctx.w.enemies.as_deref_mut().expect("enemy manager");
         for _ in 0..std::mem::take(&mut m.fast_forward) {
-            m.step(&mut ctx.anm, &mut crate::sys!(ctx));
-            let b = ctx.bullets.as_deref_mut().expect("bullet manager");
+            m.step(&mut ctx.w.anm, &mut crate::sys!(ctx.w));
+            let b = ctx.w.bullets.as_deref_mut().expect("bullet manager");
             b.step(
-                &mut ctx.anm,
-                &mut crate::sys!(ctx; ctx.player.as_deref_mut(); None),
+                &mut ctx.w.anm,
+                &mut crate::sys!(ctx.w; ctx.w.player.as_deref_mut(); None),
             );
         }
-        m.step(&mut ctx.anm, &mut crate::sys!(ctx));
+        m.step(&mut ctx.w.anm, &mut crate::sys!(ctx.w));
         // Timeline op 16 sets the game-over byte during this calc (11 §4.2).
-        crate::pl!(ctx).store_game_over(&mut ctx.game);
+        crate::pl!(ctx.w).store_game_over(&mut ctx.w.game);
         Ret::Next
     }
 
     // Draw prio 8 → layers 0–1, prio 11 → layers 2–3 (07 §10.6).
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        let p = ctx.player.as_deref().expect("player");
-        let m = ctx.enemies.as_deref_mut().expect("enemy manager");
-        m.draw_layer_step(&mut ctx.anm, p, tag == 1, ctx.game.flags);
+        let p = ctx.w.player.as_deref().expect("player");
+        let m = ctx.w.enemies.as_deref_mut().expect("enemy manager");
+        m.draw_layer_step(&mut ctx.w.anm, p, tag == 1, ctx.w.game.flags);
         Ret::Next
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        let p = ctx.player.as_deref().expect("player");
-        let m = ctx.enemies.as_deref().expect("enemy manager");
-        m.draw_layer_emit(&ctx.anm, rec, p, tag == 1, ctx.game.flags);
+        let p = ctx.w.player.as_deref().expect("player");
+        let m = ctx.w.enemies.as_deref().expect("enemy manager");
+        m.draw_layer_emit(&ctx.w.anm, rec, p, tag == 1, ctx.w.game.flags);
     }
 }
 

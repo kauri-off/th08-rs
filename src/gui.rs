@@ -77,8 +77,8 @@ pub struct Gui {
 
 impl Gui {
     pub fn register(ctx: &mut Ctx) -> Result<crate::chain::Node> {
-        ctx.gui_queue.clear();
-        ctx.gui = Some(Box::new(Gui::new(ctx.game.shot)));
+        ctx.w.gui_queue.clear();
+        ctx.w.gui = Some(Box::new(Gui::new(ctx.w.game.shot)));
         let t = crate::chain::Node::Gui;
         task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
         task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
@@ -121,17 +121,18 @@ impl Gui {
 
     // Gui_LoadFaces 0x414590 part (12 §5.8): face_cdbg, VMs 0–7 hidden, the load-time scripts of VMs 6 and 10–13.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
-        ctx.anm
+        ctx.w
+            .anm
             .load(&mut ctx.rec, &ctx.archive, CDBG_SLOT, "face_cdbg.anm")?;
-        let anm = &mut ctx.anm;
+        let anm = &mut ctx.w.anm;
         for vm in &mut self.vms[..8] {
             *vm = AnmVm::default();
             vm.flags &= !anmvm::F_VISIBLE;
         }
-        anm.set_script(&mut ctx.rng, &mut self.vms[6], TEXT_SLOT, 4);
+        anm.set_script(&mut ctx.w.rng, &mut self.vms[6], TEXT_SLOT, 4);
         self.vms[6].flags &= !anmvm::F_VISIBLE;
         for (k, s) in [(10, 1), (11, 0), (12, 4), (13, 2)] {
-            anm.set_script(&mut ctx.rng, &mut self.vms[k], ASCII_SLOT, s);
+            anm.set_script(&mut ctx.w.rng, &mut self.vms[k], ASCII_SLOT, s);
         }
         Ok(())
     }
@@ -262,6 +263,7 @@ impl Gui {
     fn flush_texts(&mut self, ctx: &mut Ctx) {
         for (k, s, colour, x) in std::mem::take(&mut self.texts) {
             let Some(sp) = ctx
+                .w
                 .anm
                 .sprite(TEXT_SLOT, self.vms[k].sprite_index.max(0) as usize)
                 .copied()
@@ -349,15 +351,15 @@ impl Gui {
     }
 }
 
-// The spell manager lent out of `ctx.gui` for a step that also takes the `Ctx` (nothing it calls reads `ctx.gui`).
+// The spell manager lent out of `ctx.w.gui` for a step that also takes the `Ctx` (nothing it calls reads `ctx.w.gui`).
 fn with_gui<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Gui, &mut Ctx) -> R) -> R {
-    let mut g = ctx.gui.take().expect("gui");
+    let mut g = ctx.w.gui.take().expect("gui");
     let r = f(&mut g, ctx);
-    ctx.gui = Some(g);
+    ctx.w.gui = Some(g);
     r
 }
 
-// Chain nodes of `ctx.gui` (calc prio 12, draw prio 15): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.gui` (calc prio 12, draw prio 15): stateless forwarder (STEP9_WORLD.md §3).
 pub struct GuiTask;
 
 impl Task<Ctx> for GuiTask {
@@ -378,7 +380,7 @@ impl Task<Ctx> for GuiTask {
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        if let Some(g) = ctx.gui.as_deref() {
+        if let Some(g) = ctx.w.gui.as_deref() {
             g.emit(ctx, rec, tag);
         }
     }
@@ -394,39 +396,39 @@ impl Gui {
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            ctx.anm.unload(&mut ctx.rec, CDBG_SLOT);
+            ctx.w.anm.unload(&mut ctx.rec, CDBG_SLOT);
         }
     }
 
     // Spell_Calc 0x416B90 (VM part, 12 §5.8).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        for r in std::mem::take(&mut ctx.gui_queue) {
-            Self::record(&mut ctx.game, &r);
+        for r in std::mem::take(&mut ctx.w.gui_queue) {
+            Self::record(&mut ctx.w.game, &r);
             self.handle(
-                &mut ctx.anm,
-                &mut ctx.rng,
+                &mut ctx.w.anm,
+                &mut ctx.w.rng,
                 r,
-                &mut ctx.sound,
-                &mut ctx.panel,
-                ctx.msg.as_deref(),
+                &mut ctx.w.sound,
+                &mut ctx.w.panel,
+                ctx.w.msg.as_deref(),
             );
         }
         if self.card >= 0 {
             // Read from score.dat every frame for the bonus line.
-            self.history = ctx.game.score.card_history(
+            self.history = ctx.w.game.score.card_history(
                 self.card as usize,
                 self.shot as usize,
-                ctx.game.spell_practice(),
+                ctx.w.game.spell_practice(),
             );
         }
-        let frozen = crate::pl!(ctx).freeze_bullets(ctx.game.flags) || ctx.timer_pause != 0;
+        let frozen = crate::pl!(ctx.w).freeze_bullets(ctx.w.game.flags) || ctx.w.timer_pause != 0;
         // Nothing runs while bullets are frozen (GameFlags bit 10) or the freeze byte 0x160F534 is set (07 §11.1).
         if !frozen {
             // Steps 1 (card active) and 2 (capture ring) run before the VMs (07 §11.1).
-            let e = crate::em!(ctx);
+            let e = crate::em!(ctx.w);
             if e.g.spell.is_some() {
                 // Step 1.2: fade the bonus line while the player is in the top band x ≥ 64, y < 64.
-                let p = crate::pl!(ctx).pos;
+                let p = crate::pl!(ctx.w).pos;
                 let a = self.tint >> 24;
                 let a = if p[0] < 64.0 || p[1] >= 64.0 {
                     if a < 0x80 { a + 4 } else { a }
@@ -437,32 +439,32 @@ impl Gui {
                 };
                 self.tint = self.tint & 0x00FF_FFFF | a << 24;
             }
-            let ended = e.spell_step(&ctx.anm, &mut crate::sys!(ctx));
-            e.capture_ring_step(&mut ctx.anm, &mut crate::sys!(ctx));
+            let ended = e.spell_step(&ctx.w.anm, &mut crate::sys!(ctx.w));
+            e.capture_ring_step(&mut ctx.w.anm, &mut crate::sys!(ctx.w));
             if ended {
                 // Spell_HideName from step 1.1 lands before this frame's VM run.
-                for r in std::mem::take(&mut ctx.gui_queue) {
+                for r in std::mem::take(&mut ctx.w.gui_queue) {
                     self.handle(
-                        &mut ctx.anm,
-                        &mut ctx.rng,
+                        &mut ctx.w.anm,
+                        &mut ctx.w.rng,
                         r,
-                        &mut ctx.sound,
-                        &mut ctx.panel,
-                        ctx.msg.as_deref(),
+                        &mut ctx.w.sound,
+                        &mut ctx.w.panel,
+                        ctx.w.msg.as_deref(),
                     );
                 }
             }
             for k in CALC_ORDER {
                 let vm = &mut self.vms[k];
-                if vm.script.is_some() && vm.run(&mut ctx.anm, &mut ctx.rng) {
+                if vm.script.is_some() && vm.run(&mut ctx.w.anm, &mut ctx.w.rng) {
                     vm.script = None;
                 }
             }
             // Step 3: Timer_Decrement(+0x108) at game speed after the VMs, also while no card is active (07 §11.1).
-            let (speed, sr) = (ctx.anm.speed, ctx.anm.slowdown_restore);
-            crate::em!(ctx).g.spell_remaining.dec(speed, sr);
+            let (speed, sr) = (ctx.w.anm.speed, ctx.w.anm.slowdown_restore);
+            crate::em!(ctx.w).g.spell_remaining.dec(speed, sr);
         }
-        self.read_bonus(ctx.enemies.as_deref().expect("enemy manager"));
+        self.read_bonus(ctx.w.enemies.as_deref().expect("enemy manager"));
         Ret::Next
     }
 
@@ -470,7 +472,7 @@ impl Gui {
     // bonus read, the text renders, the VM 10 / 11 / 12 positions and the tint-off; the emit draws.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
-        self.read_bonus(ctx.enemies.as_deref().expect("enemy manager"));
+        self.read_bonus(ctx.w.enemies.as_deref().expect("enemy manager"));
         self.flush_texts(ctx);
         if Self::shown(&self.vms[6]) {
             let p = self.vms[6].pos;
@@ -482,11 +484,11 @@ impl Gui {
             if !self.name_only
                 && let Some(&last) = self.bonus_stamps().last()
             {
-                Self::stamp(&mut self.vms[12], &ctx.anm, last);
+                Self::stamp(&mut self.vms[12], &ctx.w.anm, last);
             }
             // Spell_Draw turns the tint off only inside its VM-7 block (06 §10.2); the emit applies +0x2620 itself.
-            self.pre_tint = ctx.anm.tint_state();
-            ctx.anm.tint_off();
+            self.pre_tint = ctx.w.anm.tint_state();
+            ctx.w.anm.tint_off();
         } else {
             self.pre_tint = None;
         }
@@ -494,7 +496,7 @@ impl Gui {
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
-        let anm = &ctx.anm;
+        let anm = &ctx.w.anm;
         rec.set_viewport(PLAYFIELD);
         // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4 (12 §5.8, RE-Q68).
         let v = &self.vms;
