@@ -13,7 +13,7 @@ use anyhow::Result;
 
 pub use crate::bomb::{Area, Bomb};
 pub use crate::pshot::{Opt, PBullet};
-pub use crate::sht::Sht;
+pub use th08_formats::sht::Sht;
 
 // Player_Calc 0x44C390 (09 §1).
 pub const CALC_PRIO: u16 = 9;
@@ -619,9 +619,9 @@ impl Player {
 
     // Player_Load + the player's three nodes; the player itself is `ctx.w.player`, created by GameManager_Register.
     pub fn register(ctx: &mut Ctx, shot: u8) -> Result<crate::chain::Node> {
-        let (anm, a, s) = crate::sht::files(shot);
-        let human = crate::sht::parse(&ctx.archive.read(&a)?)?;
-        let youkai = crate::sht::parse(&ctx.archive.read(&s)?)?;
+        let (anm, a, s) = th08_formats::sht::files(shot);
+        let human = th08_formats::sht::parse(&ctx.archive.read(&a)?)?;
+        let youkai = th08_formats::sht::parse(&ctx.archive.read(&s)?)?;
         ctx.w.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &anm)?;
         let p = ctx.w.player.as_deref_mut().expect("player");
         p.load(

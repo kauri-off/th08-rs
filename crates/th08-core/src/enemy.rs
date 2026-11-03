@@ -4,11 +4,11 @@ use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::{BulletDesc, FROZEN_TINT, LaserDesc};
 use crate::drawlist::{PLAYFIELD, Recorder};
-use crate::ecl::{self, Ecl};
 use crate::game::{Ctx, Sys};
 use crate::player::Player;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
+use th08_formats::ecl::{self, Ecl};
 
 pub const CALC_PRIO: u16 = 11;
 // 07 §10.6: draw prio 8 → layers 0–1, prio 11 → layers 2–3.
@@ -3391,32 +3391,32 @@ mod tests {
             anm.insert(
                 ANM_ENEMY,
                 "enemy.anm",
-                crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(),
+                th08_formats::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(),
                 |_| crate::drawlist::TexId(0),
             );
             anm.insert(
                 ANM_STAGE,
                 &enm,
-                crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(),
+                th08_formats::anm::parse(&ar.read(&enm).unwrap()).unwrap(),
                 |_| crate::drawlist::TexId(0),
             );
             anm.insert(
                 crate::bullet::ANM_SLOT,
                 "etama.anm",
-                crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(),
+                th08_formats::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(),
                 |_| crate::drawlist::TexId(0),
             );
-            let (pa, a, sa) = crate::sht::files(shot);
+            let (pa, a, sa) = th08_formats::sht::files(shot);
             anm.insert(
                 crate::player::ANM_SLOT,
                 &pa,
-                crate::anm::parse(&ar.read(&pa).unwrap()).unwrap(),
+                th08_formats::anm::parse(&ar.read(&pa).unwrap()).unwrap(),
                 |_| crate::drawlist::TexId(0),
             );
             let mut player = crate::player::Player::default();
             {
-                let human = crate::sht::parse(&ar.read(&a).unwrap()).unwrap();
-                let youkai = crate::sht::parse(&ar.read(&sa).unwrap()).unwrap();
+                let human = th08_formats::sht::parse(&ar.read(&a).unwrap()).unwrap();
+                let youkai = th08_formats::sht::parse(&ar.read(&sa).unwrap()).unwrap();
                 player.load(&mut anm, &mut ts.rng, human, youkai, shot, 0);
                 player.stats.power = 128.0;
             }
@@ -3505,19 +3505,19 @@ mod tests {
                 anm.insert(
                     ANM_ENEMY,
                     "enemy.anm",
-                    crate::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(),
+                    th08_formats::anm::parse(&ar.read("enemy.anm").unwrap()).unwrap(),
                     |_| crate::drawlist::TexId(0),
                 );
                 anm.insert(
                     ANM_STAGE,
                     &enm,
-                    crate::anm::parse(&ar.read(&enm).unwrap()).unwrap(),
+                    th08_formats::anm::parse(&ar.read(&enm).unwrap()).unwrap(),
                     |_| crate::drawlist::TexId(0),
                 );
                 anm.insert(
                     crate::bullet::ANM_SLOT,
                     "etama.anm",
-                    crate::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(),
+                    th08_formats::anm::parse(&ar.read("etama.anm").unwrap()).unwrap(),
                     |_| crate::drawlist::TexId(0),
                 );
                 ts.bullets = Some(Box::new(crate::bullet::BulletManager::new(
@@ -3634,7 +3634,7 @@ mod laser_tests {
                 anm.insert(
                     slot,
                     name,
-                    crate::anm::parse(&ar.read(name).unwrap()).unwrap(),
+                    th08_formats::anm::parse(&ar.read(name).unwrap()).unwrap(),
                     |_| crate::drawlist::TexId(0),
                 );
             }

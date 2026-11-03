@@ -8,8 +8,8 @@ use crate::gamemgr::F_13;
 use crate::input;
 use crate::item::ItemManager;
 use crate::player::{ANM_SLOT, Player};
-use crate::sht::ShotEntry;
 use std::f32::consts::{FRAC_PI_2, PI};
+use th08_formats::sht::ShotEntry;
 
 // 128 × 0x484 at player +0xBE838 (09 §4.1).
 pub const MAX_BULLETS: usize = 128;
@@ -150,7 +150,7 @@ const FACING: [f32; 8] = [
 impl Player {
     // Youkai option set of a team and its slot count (14 §3 table).
     fn youkai_set(&self) -> (OptKind, usize) {
-        match crate::sht::team(self.shot_type) {
+        match th08_formats::sht::team(self.shot_type) {
             0 => (OptKind::Yukari, 1),
             1 => (OptKind::Alice, 1),
             2 => (OptKind::Remilia, 4),
@@ -194,7 +194,7 @@ impl Player {
     // gives team 3 Youmu's half in slot 2 (trail reset to the player).
     pub fn swap_options(&mut self, _anm: &mut AnmManager, f: u8) {
         let (kind, n) = self.youkai_set();
-        let team3 = crate::sht::team(self.shot_type) == 3;
+        let team3 = th08_formats::sht::team(self.shot_type) == 3;
         if f == 1 {
             (0..4).for_each(|k| self.set_option(k, if k < n { kind } else { OptKind::None }));
         } else {
@@ -1313,10 +1313,10 @@ mod tests {
                     data.extend(ins(30, &[1]));
                 }
                 data.extend(&end);
-                crate::anm::Script { id: k, data }
+                th08_formats::anm::Script { id: k, data }
             })
             .collect();
-        let chunk = crate::anm::Chunk {
+        let chunk = th08_formats::anm::Chunk {
             name: "p".into(),
             width: 256,
             height: 256,

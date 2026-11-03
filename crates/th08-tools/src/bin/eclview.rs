@@ -1,10 +1,10 @@
 //! Disassembles an .ecl file: `eclview <th08.dat> <x.ecl> [sub]`.
 
-use th08_core::ecl;
+use th08_formats::ecl;
 
 fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().collect();
-    let ar = th08_core::archive::Archive::from_bytes(std::fs::read(&a[1])?)?;
+    let ar = th08_formats::archive::Archive::from_bytes(std::fs::read(&a[1])?)?;
     let e = ecl::parse(ar.read(&a[2])?)?;
     let only: Option<usize> = a.get(3).and_then(|s| s.parse().ok());
     for (t, &start) in e.timelines.iter().enumerate().filter(|_| only.is_none()) {

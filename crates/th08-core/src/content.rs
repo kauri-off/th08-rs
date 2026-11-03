@@ -1,7 +1,7 @@
 //! Core content views (ARCH_B_MODDING §1.2, decisions D1 / D5): logic reads game data only through `LogicView`,
 //! presentation-only data (pixels, samples, MIDI) through `PresentView`; both over the th08.dat archive (01 §2–§7).
 
-use crate::archive::Archive;
+use th08_formats::archive::Archive;
 
 // Logic-content fingerprint (ARCH_B D5): hash over the sorted (key, bytes) of the Logic-layer overrides.
 // Vanilla has no overrides, so its fingerprint is empty; written into session metadata (`meta.txt`).

@@ -5,11 +5,15 @@ license = "GPL-3.0-or-later"
 edition = "2024"
 publish = false
 
+[lints]
+workspace = true
+
 # Debug tooling: the lib is empty on wasm32 (lib.rs), so its native deps stay off the web build.
 [dependencies]
 th08 = { path = "../.." }
 th08-audio = { path = "../th08-audio" }
 th08-core = { path = "../th08-core" }
+th08-formats = { path = "../th08-formats" }
 th08-render = { path = "../th08-render" }
 anyhow = "1.0.104"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

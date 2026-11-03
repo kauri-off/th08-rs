@@ -753,7 +753,7 @@ fn open_stream(
 
 // th08.dat from TH08_DIR for the audio / MIDI tests (core's testdata.rs is test-only in core).
 #[cfg(test)]
-pub(crate) fn test_archive() -> Option<th08_core::archive::Archive> {
+pub(crate) fn test_archive() -> Option<th08_formats::archive::Archive> {
     let dir = std::path::PathBuf::from(std::env::var_os("TH08_DIR")?);
     let path = std::fs::read_dir(&dir)
         .into_iter()
@@ -762,7 +762,7 @@ pub(crate) fn test_archive() -> Option<th08_core::archive::Archive> {
         .find(|e| e.file_name().eq_ignore_ascii_case("th08.dat"))
         .map_or(dir.join("th08.dat"), |e| e.path());
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    Some(th08_core::archive::Archive::from_bytes(bytes).expect("th08.dat"))
+    Some(th08_formats::archive::Archive::from_bytes(bytes).expect("th08.dat"))
 }
 
 #[cfg(test)]

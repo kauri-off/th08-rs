@@ -1,8 +1,8 @@
 //! ANM manager: 25 file slots, script start, draw modes 0–5, EmitQuad, tint, Draw3DWorld (03 §2.4, §5; 05 §8–§9, §12; 06 §11.2).
 
-use crate::anm::{self, Script};
 use crate::anmvm::{self, AnmVm};
 use crate::content::LogicView;
+use th08_formats::anm::{self, Script};
 // Draws and texture uploads go to the core `Recorder` (REWRITE_PLAN step 8).
 use crate::camera::{Camera, Mat4};
 use crate::drawlist::{self, Blend, Recorder, TexId, Vertex};
@@ -716,11 +716,11 @@ mod tests {
     #[test]
     fn saved_tint_equals_global_tint() {
         let mut anm = AnmManager::default();
-        let chunk = crate::anm::Chunk {
+        let chunk = th08_formats::anm::Chunk {
             name: "t".into(),
             width: 256,
             height: 256,
-            sprites: vec![crate::anm::Sprite {
+            sprites: vec![th08_formats::anm::Sprite {
                 id: 0,
                 x: 0.0,
                 y: 0.0,
@@ -790,24 +790,27 @@ mod tests {
         s.extend(ins(39, 1, 0, &[0, 1]));
         s.extend(ins(59, 1, 1, &[10000, 100]));
         s.extend(ins(4, 2, 0, &[body, 1]));
-        let synthetic = crate::anm::Chunk {
+        let synthetic = th08_formats::anm::Chunk {
             name: "t".into(),
             width: 256,
             height: 256,
-            sprites: vec![crate::anm::Sprite {
+            sprites: vec![th08_formats::anm::Sprite {
                 id: 0,
                 x: 0.0,
                 y: 0.0,
                 w: 32.0,
                 h: 16.0,
             }],
-            scripts: vec![crate::anm::Script { id: 0, data: s }],
+            scripts: vec![th08_formats::anm::Script { id: 0, data: s }],
             has_texture: false,
         };
         let mut files = vec![("t".to_string(), vec![synthetic])];
         if let Some(ar) = crate::testdata::archive() {
             for n in ar.names().iter().filter(|n| n.ends_with(".anm")).take(6) {
-                files.push((n.clone(), crate::anm::parse(&ar.read(n).unwrap()).unwrap()));
+                files.push((
+                    n.clone(),
+                    th08_formats::anm::parse(&ar.read(n).unwrap()).unwrap(),
+                ));
             }
         }
         let mut anm = AnmManager::default();

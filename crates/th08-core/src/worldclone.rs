@@ -18,8 +18,8 @@ use crate::msg::Dialogue;
 use crate::player::Player;
 use crate::replay::ReplayState;
 use crate::stage::Stage;
-use crate::stdfile::{Record, Std};
 use crate::world::World;
+use th08_formats::stdfile::{Record, Std};
 
 // A `World` run without a `Ctx` (no chain: `frame` calls the subsystems in chain order) plus the test's counters.
 #[derive(Clone)]
@@ -386,7 +386,7 @@ fn ins(time: i32, op: i16, args: &[i32]) -> Vec<u8> {
 // move (op 67, RNG), a write into the file itself (op 6 to a raw destination, 07 §6: a write, so the clone copies
 // the shared file), an aimed two-row ring (op 98, 07 §9), a stage section request (op 147, 06 §4.1), then a jump
 // back to time 0 (op 4).
-fn ecl() -> crate::ecl::Ecl {
+fn ecl() -> th08_formats::ecl::Ecl {
     let f = |x: f32| x.to_bits() as i32;
     let mut data = vec![0u8; 0x48];
     let sub = data.len();
@@ -421,7 +421,7 @@ fn ecl() -> crate::ecl::Ecl {
     }
     data.extend((-1i32).to_le_bytes());
     data.extend([0u8; 4]);
-    crate::ecl::Ecl {
+    th08_formats::ecl::Ecl {
         data,
         subs: vec![sub],
         timelines: vec![tl],

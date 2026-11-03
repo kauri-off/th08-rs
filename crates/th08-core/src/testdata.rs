@@ -21,10 +21,10 @@ pub use imp::*;
 
 #[cfg(test)]
 mod imp {
-    use crate::archive::Archive;
     use crate::assets::{BoxFuture, DataSource, Source};
     use crate::game::{AudioOut, Ctx, Io};
     use std::path::PathBuf;
+    use th08_formats::archive::Archive;
 
     // The game directory (TH08_DIR), None when unset.
     pub fn game_dir() -> Option<PathBuf> {

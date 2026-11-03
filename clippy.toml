@@ -27,3 +27,6 @@ disallowed-methods = [
     { path = "f64::hypot", reason = "use crate::fmath (05 §10: same bits on every target)" },
     { path = "f64::mul_add", reason = "use crate::fmath (05 §10: same bits on every target)" },
 ]
+# STEP11 §0 subset thresholds.
+too-many-lines-threshold = 150
+too-many-arguments-threshold = 7

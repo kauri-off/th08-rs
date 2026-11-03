@@ -6,11 +6,11 @@ use crate::camera::{Camera, Mat4};
 use crate::drawlist::Recorder;
 use crate::drawlist::{PLAYFIELD, Rect, Vertex};
 use crate::game::{Ctx, Sys};
-use crate::stdfile::{self, QuadKind, Record, Std, Vec3};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 use std::f32::consts::PI;
 use std::sync::Arc;
+use th08_formats::stdfile::{self, QuadKind, Record, Std, Vec3};
 
 // stgNbg.anm slot (06 §2 step 2).
 pub const ANM_SLOT: usize = 4;
@@ -1587,7 +1587,7 @@ mod tests {
             anm.insert(
                 ANM_SLOT,
                 &bg,
-                crate::anm::parse(&ar.read(&bg).unwrap()).unwrap(),
+                th08_formats::anm::parse(&ar.read(&bg).unwrap()).unwrap(),
                 |_| crate::drawlist::TexId(0),
             );
             let mut st = Stage::new(index, std);

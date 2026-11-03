@@ -24,7 +24,10 @@ const FILES: [[&str; 4]; 9] = [
 
 // Table 0x4C74C0: solos use their team's file (10 §1).
 pub fn file_name(stage: usize, shot: u8) -> String {
-    format!("{}.dat", FILES[stage % 9][crate::sht::team(shot) as usize])
+    format!(
+        "{}.dat",
+        FILES[stage % 9][th08_formats::sht::team(shot) as usize]
+    )
 }
 
 // Gui_LoadFaces (10 §3): player A, partner, stage face, second stage face. `card` is the practised card id in
@@ -32,7 +35,7 @@ pub fn file_name(stage: usize, shot: u8) -> String {
 pub fn face_files(stage: usize, shot: u8, card: Option<i16>) -> [Option<String>; 4] {
     let face = |s: &str| Some(format!("face_{s}.anm"));
     let Some(c) = card else {
-        let team = crate::sht::team(shot) as usize;
+        let team = th08_formats::sht::team(shot) as usize;
         let (s2, s3) = match stage {
             0 => ("st01", None),
             1 => ("st02", None),

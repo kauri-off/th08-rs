@@ -3,11 +3,11 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm};
 use crate::bullet::{BulletDesc, ExCmd, LaserDesc, Warp, angle_from};
-use crate::ecl::Ins;
 use crate::enemy::*;
 use crate::fmath;
 use crate::game::Sys;
 use std::f32::consts::PI;
+use th08_formats::ecl::Ins;
 
 // Card bonus cap g_Gui +0x2638 for flag A bit 27 / op 155 (07 §11.1, op 155).
 const FIXED_BONUS_CAP: i32 = 99_999_990;
@@ -1412,7 +1412,7 @@ impl Exec<'_> {
     // Caller's int vars: 10005 count-changed flag, 10006 count, 10007 call counter. Non-leaders turn their orbit
     // angle 2 % toward leader angle + idx·2π/k (+ leader orbit velocity when the 10007 counters differ).
     fn familiar_ring(&mut self, t: &mut Thread) {
-        const TWO_PI: f32 = 6.2831855;
+        use crate::types::TWO_PI;
         let Some(parent) = self.e.root else {
             return;
         };
@@ -2534,7 +2534,7 @@ mod tests {
             }
             data.extend(ins(0, -1, &[]));
         }
-        let ecl = crate::ecl::Ecl {
+        let ecl = th08_formats::ecl::Ecl {
             data,
             subs: offs,
             timelines: Vec::new(),

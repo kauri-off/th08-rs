@@ -2,10 +2,13 @@
 
 fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().collect();
-    let ar = th08_core::archive::Archive::from_bytes(std::fs::read(&a[1])?)?;
+    let ar = th08_formats::archive::Archive::from_bytes(std::fs::read(&a[1])?)?;
     if a[3] == "--dis" {
         let (mut spr, mut scr) = (0, 0);
-        for (i, c) in th08_core::anm::parse(&ar.read(&a[2])?)?.iter().enumerate() {
+        for (i, c) in th08_formats::anm::parse(&ar.read(&a[2])?)?
+            .iter()
+            .enumerate()
+        {
             println!(
                 "entry {i} {} {}x{} sprites {spr}..{} scripts {scr}..{}",
                 c.name,
@@ -32,8 +35,8 @@ fn main() -> anyhow::Result<()> {
     let out = std::path::Path::new(&a[3]);
     std::fs::create_dir_all(out)?;
     let b = ar.read(&a[2])?;
-    let texs = th08_core::anm::textures(&b)?;
-    for (i, (c, t)) in th08_core::anm::parse(&b)?.iter().zip(&texs).enumerate() {
+    let texs = th08_formats::anm::textures(&b)?;
+    for (i, (c, t)) in th08_formats::anm::parse(&b)?.iter().zip(&texs).enumerate() {
         let Some(t) = t else { continue };
         let mut img = image::RgbaImage::from_raw(t.width, t.height, t.rgba.clone()).unwrap();
         for s in c

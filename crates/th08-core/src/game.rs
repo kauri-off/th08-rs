@@ -1,12 +1,12 @@
 //! Global engine state and the per-frame calc / draw halves of `Frame_Run` 0x441E70 (00 §2).
 
 use crate::anmmgr::AnmManager;
-use crate::archive::Archive;
 use crate::assets::Source;
 use crate::content::LogicView;
 use crate::drawlist::{FULLSCREEN, Recorder, Renderer};
 use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
 use anyhow::Context as _;
+use th08_formats::archive::Archive;
 
 // The original's globals that every subsystem reaches: the deterministic state in `w` (World, ARCH_A §2.3); the
 // IO / output side (device, archive, sound device, host, tool switches) here.

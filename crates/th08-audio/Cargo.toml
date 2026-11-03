@@ -5,6 +5,9 @@ license = "GPL-3.0-or-later"
 edition = "2024"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 th08-core = { path = "../th08-core" }
 th08-formats = { path = "../th08-formats" }

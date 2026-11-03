@@ -3080,6 +3080,7 @@ name = "th08-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitflags 2.13.2",
  "bytemuck",
  "encoding_rs",
  "image",
@@ -3128,6 +3129,7 @@ dependencies = [
  "th08",
  "th08-audio",
  "th08-core",
+ "th08-formats",
  "th08-render",
 ]
 

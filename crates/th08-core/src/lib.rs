@@ -5,11 +5,9 @@
 #![deny(clippy::disallowed_methods)]
 #![forbid(unsafe_code)]
 
-pub mod anm;
 pub mod anmdebug;
 pub mod anmmgr;
 pub mod anmvm;
-pub mod archive;
 pub mod ascii;
 pub mod assets;
 pub mod bomb;
@@ -22,7 +20,6 @@ pub mod coreconfig;
 pub mod d3dx;
 pub mod drawfmt;
 pub mod drawlist;
-pub mod ecl;
 pub mod eclvm;
 pub mod effect;
 pub mod ending;
@@ -45,14 +42,13 @@ pub mod replay;
 pub mod result;
 pub mod rng;
 pub mod scoredat;
-pub mod sht;
 pub mod sound;
 pub mod stage;
-pub mod stdfile;
 pub mod supervisor;
 pub mod task;
 pub mod testdata;
 pub mod trace;
+pub mod types;
 pub mod world;
 #[cfg(test)]
 mod worldclone;

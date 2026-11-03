@@ -103,7 +103,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 
 | run | content (≤ 3 deliverables) | files | parallel / conflicts | check |
 |---|---|---|---|---|
-| **11a** wall + types | (1) `[workspace.lints.clippy]` subset at `warn` (+ `[lints] workspace = true` per crate), clippy.toml `too-many-lines-threshold = 150`, `too-many-arguments-threshold = 8`; `tools/lint_subset` prints subset counts per file; (2) core `types.rs` (§1.7) + `bitflags` dep, `wrap_add` and the ECL `TWO_PI` moved there (callers unchanged); (3) remove the 5 core shims (§1.3), paths → `th08_formats::` | Cargo.toml (all), clippy.toml, tools/lint_subset (new), types.rs (new), lib.rs (core), anmvm/eclvm (2 lines), 45 core `use` lines, 11 in tools/app | **alone, first** (touches imports everywhere) | T D |
+| **11a** wall + types — **DONE** (see below) | (1) `[workspace.lints.clippy]` subset at `warn` (+ `[lints] workspace = true` per crate), clippy.toml `too-many-lines-threshold = 150`, `too-many-arguments-threshold = 7` (orchestrator: 7, so the 8-argument fns of §1.2 count); `tools/lint_subset` prints subset counts per file; (2) core `types.rs` (§1.7) + `bitflags` dep, `wrap_add` and the ECL `TWO_PI` moved there (callers unchanged); (3) remove the 5 core shims (§1.3), paths → `th08_formats::` | Cargo.toml (all), clippy.toml, tools/lint_subset (new), types.rs (new), lib.rs (core), anmvm/eclvm (2 lines), 45 core `use` lines, 11 in tools/app | **alone, first** (touches imports everywhere) | T D |
 | **11b** formats | (1) `Reader` cursor + typed `Truncated { at }` in cfg, msg, replay, scoredat, sht, stdfile, thbgm, archive, end, musiccmt (not anm.rs / ecl.rs); (2) `MsgOff`, `std::Op` decoder (06 §1.4) beside `Record`, `msg::Op` decoder (10 §2) beside `Ins`; (3) formats subset 0 (as_chunks, derivable, collapsible, unwraps → errors) | crates/th08-formats except anm.rs, ecl.rs | ∥ 11c 11d 11g | T D, formats unit tests |
 | **11c** ANM VM | (1) `anm::{AnmOff, Ins, Op}` in formats/anm.rs (header decoder from anmvm.rs:237, lazy per ip); (2) `AnmVm::run` → loop + `exec_op` + op-group fns, `VmFlags`, `D3dColor` for `color` / `color2` / `color_start`; (3) anmmgr subset 0 | formats/anm.rs, anmvm, anmmgr | ∥ 11b 11d 11g | T D |
 | **11d** ECL exec | (1) `ecl::{EclOff, Op}` in formats/ecl.rs (+ eclview bin); (2) `Exec::exec` → `match Op` dispatching to `eclvm/ops_*.rs`, named args via `Arg` / `Var` (from `IRef`), bullet flag const; (3) eclvm subset 0 | formats/ecl.rs, eclvm (+ new ops_*.rs), bin/eclview | ∥ 11b 11c 11g; before 11e | T D, **B** |
@@ -119,6 +119,21 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11n** render | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
 | **11o** audio + app + tools + wall | (1) midi.rs wasm imports, audio subset 0; (2) tools subset 0 (useless_conversion ×10 etc., bin `main` splits), worldclone / testdata subset 0; (3) app subset 0 after L2; arch_check gains `cargo clippy --workspace --all-targets -- -D warnings` (subset at `warn` → enforced) | crates/th08-audio, crates/th08-tools, worldclone, testdata, src/ (not settings.rs until L2), tools/arch_check | last D-neutral run; after L2 and 11n | T D W android, **B** |
 | **11p** leftovers that change draw | (1) camera.rs + menulist pie on `fmath` (drop both `allow(disallowed_methods)`, the `TODO(step 10)`); (2) `image` out of core: `th08_formats::img::dims` + `ResCmd::CreateImage`, decode in gfx; (3) new D reference (`arch_check freeze` into `target/arch_ref_11p`) after my drawgroups image diff shows "visually identical" (PARITY_POLICY) | camera, menulist (2 lines), drawlist, formats/img.rs (new), gfx (CreateImage), anmmgr (load call) | **alone**, after 11o | T must be identical; D intentionally new; drawgroups image diff; B |
+
+**11a done.** Files: Cargo.toml (workspace + root `[lints]`), crates/*/Cargo.toml (`[lints] workspace = true`; core
+`bitflags = "2.13.2"`; tools `th08-formats` dep for the shim paths), clippy.toml (thresholds), tools/lint_subset (new),
+crates/th08-core/src/types.rs (new: `TWO_PI`, `wrap_add`, `Angle`, `D3dColor`, `BulletIdx` / `LaserIdx` / `EnemyIdx`
+/ `ItemIdx` / `EffectIdx` (u16) / `AnmSlot` / `SeId` (u8), `SceneId`, `Difficulty`, `ShotType` + `TryFrom`, tests),
+core lib.rs (shim mods removed, `types` added), anmvm.rs (`pub use crate::types::wrap_add`, PI import dropped),
+eclvm.rs (`use crate::types::TWO_PI`), core shims anm / archive / ecl / sht / stdfile.rs deleted, paths →
+`th08_formats::` in anmmgr, anmvm, content, eclvm, enemy, game, hud, msg, player, pshot, stage, testdata, worldclone,
+tools drawreport + bins anmview / datdump / eclview / stdview, audio.rs (test archive). Public API: `th08_core::{anm,
+archive, ecl, sht, stdfile}` gone (use `th08_formats::…`); `th08_core::player::Sht` re-export kept; new
+`th08_core::types`. Lint subset (tools/lint_subset, workspace): before 1 825 (the two moved `6.2831855` literals), after 1 823 in 71 files (plan's 1 786 was
+measured on e45217e); run files types.rs / lib.rs 0. Check: FAST arch_check 0 differing, cargo test 420 passed,
+spec_refs 0. Deviations: `too-many-arguments-threshold = 7` (orchestrator: 7, so the 8-argument fns of §1.2 count) as specified allows 8-arg fns, so the 8-arg sites of §1.2
+(pshot 887, bullet 570) are not flagged — lower to 7 if they should count; tools / audio import lines keep their
+other (11o) warnings.
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

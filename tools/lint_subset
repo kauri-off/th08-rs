@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""usage: flock target/.agents.lock tools/lint_subset [-l] [PATH_PREFIX ...] — STEP11 §0 lint-subset counts.
+
+Runs `cargo clippy --workspace --all-targets` (the subset is the [workspace.lints.clippy] table in Cargo.toml) and
+prints warnings per file (deduplicated by file:line:col:lint), most first, then the total. PATH_PREFIX limits the
+files (e.g. crates/th08-core/src/types.rs crates/th08-formats/). -l adds per-lint totals. Takes no lock itself."""
+import collections, json, os, subprocess, sys
+
+R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+args = sys.argv[1:]
+if any(a in ("-h", "--help") for a in args):
+    print(__doc__.strip())
+    sys.exit(0)
+per_lint = "-l" in args
+prefixes = [os.path.relpath(os.path.abspath(a), R) for a in args if a != "-l"]
+p = subprocess.run(
+    ["cargo", "clippy", "--workspace", "--all-targets", "--message-format=json"],
+    cwd=R, capture_output=True, text=True,
+)
+seen = set()
+files = collections.Counter()
+lints = collections.Counter()
+for line in p.stdout.splitlines():
+    try:
+        m = json.loads(line)
+    except ValueError:
+        continue
+    if m.get("reason") != "compiler-message":
+        continue
+    d = m["message"]
+    if d.get("level") not in ("warning", "error") or not d.get("spans"):
+        continue
+    sp = next((s for s in d["spans"] if s.get("is_primary")), d["spans"][0])
+    f = os.path.relpath(os.path.join(R, sp["file_name"]), R)
+    if f.startswith(".."):
+        continue
+    if prefixes and not any(f == q or f.startswith(q.rstrip("/") + "/") for q in prefixes):
+        continue
+    code = (d.get("code") or {}).get("code") or d["message"][:40]
+    key = (f, sp["line_start"], sp["column_start"], code)
+    if key in seen:
+        continue
+    seen.add(key)
+    files[f] += 1
+    lints[code] += 1
+if p.returncode != 0 and not seen:
+    sys.stderr.write(p.stderr[-4000:])
+    sys.exit(p.returncode)
+for f, n in sorted(files.items(), key=lambda x: (-x[1], x[0])):
+    print(f"{n:6} {f}")
+if per_lint:
+    print()
+    for c, n in lints.most_common():
+        print(f"{n:6} {c}")
+print(f"{sum(files.values()):6} total ({len(files)} files)")

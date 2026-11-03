@@ -12,7 +12,7 @@ pub struct Renderer {
     pub gfx: Gfx,
     // The report's own command recorder, executed by `gfx` at capture / flush.
     pub rec: Recorder,
-    ar: Option<th08_core::archive::Archive>,
+    ar: Option<th08_formats::archive::Archive>,
     anm: HashMap<String, Vec<Option<TexId>>>,
     img: HashMap<String, Option<(TexId, u32, u32)>>,
 }
@@ -38,7 +38,7 @@ impl Renderer {
         let mut gfx = pollster::block_on(Gfx::headless())?;
         gfx.persistent = true;
         let ar = match dir {
-            Some(d) => Some(th08_core::archive::Archive::from_bytes(std::fs::read(
+            Some(d) => Some(th08_formats::archive::Archive::from_bytes(std::fs::read(
                 th08::sources::find_file(&d, "th08.dat"),
             )?)?),
             None => None,
@@ -61,7 +61,7 @@ impl Renderer {
                 .ar
                 .as_ref()
                 .and_then(|a| a.read(file).ok())
-                .and_then(|b| th08_core::anm::textures(&b).ok())
+                .and_then(|b| th08_formats::anm::textures(&b).ok())
             {
                 for t in texs {
                     v.push(t.map(|t| self.rec.create_texture(t.width, t.height, &t.rgba)));

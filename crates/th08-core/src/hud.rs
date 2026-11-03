@@ -359,7 +359,7 @@ impl Hud {
                 }]
             ),
         )?;
-        let team = crate::sht::team(shot);
+        let team = th08_formats::sht::team(shot);
         let variant = match shot {
             0..=3 => "",
             s if s % 2 == 0 => "h",

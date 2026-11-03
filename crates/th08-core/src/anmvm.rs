@@ -1,7 +1,6 @@
 //! ANM script VM `AnmVm_Run` 0x45EA00: timers, variables, opcodes, per-frame POST (05 §1–§8).
 
 use crate::anmmgr::AnmManager;
-use std::f32::consts::PI;
 
 // AnmVm flags at vm+0x1F8 (05 §2.1).
 pub const F_VISIBLE: u32 = 1 << 0;
@@ -118,24 +117,8 @@ impl Timer {
     }
 }
 
-// Angle_AddNormalize 0x43EDB0 (05 §6.3): at most 18 steps each way, float32 π and 2π, so huge angles stay unwrapped.
-pub fn wrap_add(a: f32, d: f32) -> f32 {
-    const TWO_PI: f32 = 6.2831855;
-    let mut a = a + d;
-    for _ in 0..18 {
-        if a <= PI {
-            break;
-        }
-        a -= TWO_PI;
-    }
-    for _ in 0..18 {
-        if a >= -PI {
-            break;
-        }
-        a += TWO_PI;
-    }
-    a
-}
+// Angle_AddNormalize 0x43EDB0 (05 §6.3), moved to types.
+pub use crate::types::wrap_add;
 
 // UV offset wrap (05 §6 step 4, ops 26/27): a single step, not a modulo.
 fn wrap_uv(u: f32) -> f32 {
@@ -1192,18 +1175,18 @@ mod tests {
     fn vm_with(script: Vec<u8>) -> (AnmManager, AnmVm) {
         let mut rng = crate::rng::Rng::default();
         let mut anm = AnmManager::default();
-        let chunk = crate::anm::Chunk {
+        let chunk = th08_formats::anm::Chunk {
             name: "t".into(),
             width: 256,
             height: 256,
-            sprites: vec![crate::anm::Sprite {
+            sprites: vec![th08_formats::anm::Sprite {
                 id: 0,
                 x: 0.0,
                 y: 0.0,
                 w: 32.0,
                 h: 16.0,
             }],
-            scripts: vec![crate::anm::Script {
+            scripts: vec![th08_formats::anm::Script {
                 id: 0,
                 data: script,
             }],
@@ -1302,7 +1285,7 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         let mut scripts = 0;
         for n in ar.names().iter().filter(|n| n.ends_with(".anm")) {
-            let chunks = crate::anm::parse(&ar.read(n).unwrap()).unwrap();
+            let chunks = th08_formats::anm::parse(&ar.read(n).unwrap()).unwrap();
             for c in &chunks {
                 for s in &c.scripts {
                     scripts += 1;

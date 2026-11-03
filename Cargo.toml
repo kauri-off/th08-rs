@@ -2,6 +2,29 @@
 members = [".", "crates/th08-formats", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-tools"]
 resolver = "3"
 
+# STEP11 §0 lint subset: worth fixing in a bit-exact port (casts that keep the bits, readability, long fns);
+# ftol / fild casts, float_cmp and spec formula names stay allowed. Thresholds in clippy.toml.
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+cast_lossless = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+unreadable_literal = "warn"
+too_many_lines = "warn"
+too_many_arguments = "warn"
+struct_excessive_bools = "warn"
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+explicit_iter_loop = "warn"
+manual_let_else = "warn"
+items_after_statements = "warn"
+default_trait_access = "warn"
+if_not_else = "warn"
+single_match_else = "warn"
+needless_pass_by_value = "warn"
+match_same_arms = "warn"
+bool_to_int_with_if = "warn"
+
 [package]
 name = "th08"
 version = "0.1.0"
@@ -9,6 +32,9 @@ license = "GPL-3.0-or-later"
 edition = "2024"
 description = "Clean-room reimplementation of Touhou 8: Imperishable Night"
 default-run = "th08"
+
+[lints]
+workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]
