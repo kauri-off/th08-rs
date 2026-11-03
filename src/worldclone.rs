@@ -5,7 +5,7 @@
 //! by an ECL timeline op 6 with a synthetic .msg file), the game manager with its replay object recording the run,
 //! then playing the recording back. `scene_clone_continues_identically` clones a loaded `Ctx`'s whole `World` (scene
 //! objects, Supervisor, ascii manager, chain) in the main menu and replays the continuation; `stage_clone_continues_
-//! identically` swaps a mid-stage `World` of a recorded session into a second `Ctx`; `save_from_clone_keeps_the_run`
+//! identically` swaps a mid-stage `World` of a demo replay into a second `Ctx`; `save_from_clone_keeps_the_run`
 //! saves score.dat from a clone mid-game (ARCH_D_MOBILE, 15 §2.2) (docs/arch/STEP9_WORLD.md).
 use crate::bullet::BulletManager;
 use crate::effect::ScreenEnv;
@@ -570,7 +570,7 @@ fn clone_continues_identically() {
     }
 }
 
-// 9g part 2 on a loaded `Ctx` (renderer side: the headless `Gfx`).
+// 9g part 2 on a loaded `Ctx` (renderer side: `NullRenderer`; the test compares recorded commands).
 #[cfg(test)]
 mod scene {
     use super::*;
@@ -624,7 +624,7 @@ mod scene {
     // One Frame_Run with the scripted keys; the trace of the scene, Supervisor and ascii manager, the RNG and the
     // frame's draw commands.
     fn ctx_frame(c: &mut crate::game::Ctx, f: u32) -> Vec<u64> {
-        c.host_as::<crate::platform::ToolHost>().unwrap().keys[0] = menu_keys(f);
+        crate::testdata::mem_host(c).keys[0] = menu_keys(f);
         assert_eq!(c.calc(), crate::task::Flow::Continue);
         c.draw();
         let mut t = c.w.scene.trace();
@@ -647,17 +647,13 @@ mod scene {
     // wait) continue exactly like the original: same state, RNG and draw commands every frame; 9h: with the chain.
     #[test]
     fn scene_clone_continues_identically() {
-        let Some(dir) = crate::settings::test_game_dir() else {
+        let core = crate::coreconfig::CoreConfig {
+            seed: Some(0x1234),
+            ..Default::default()
+        };
+        let Some(mut c) = crate::testdata::ctx(core) else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
-            return;
-        };
-        let mut core = crate::settings::get().core();
-        core.seed = Some(0x1234);
-        let src = crate::sources::native(dir);
-        let io = crate::settings::get().tool_io(gfx, &src);
-        let mut c = pollster::block_on(crate::game::Ctx::load_with(src, io, core, false)).unwrap();
         const CLONE_AT: u32 = 175;
         for f in 0..CLONE_AT {
             ctx_frame(&mut c, f);
@@ -697,92 +693,48 @@ mod scene {
     }
 }
 
-// 9h part 2c on a recorded session mid-stage (golden: stage 1 from poll 722 to 10918, renderer: the headless `Gfx`).
+// 9h part 2c mid-stage: demo 0 (stage play with bullets, enemies and items) from demo frame `AT`; renderer side:
+// `NullRenderer`. Until 10b this ran on the golden session (tools-side `Session`); same checks.
 #[cfg(test)]
 mod stage {
     use super::*;
     use crate::game::Ctx;
-    use crate::host::Host;
-    use crate::platform::ToolHost;
-    use crate::session::Session;
 
-    // Poll of the clone / save and the frames run on after it, all inside stage 1 with bullets, enemies and items.
-    const AT: usize = 1800;
+    const DEMO: u8 = 0;
+    // Demo frame of the clone / save and the frames run on after it, all inside the demo's stage.
+    const AT: i32 = 1800;
     const FRAMES: usize = 600;
 
-    // The tool host with a fixed tick clock: the PLST run time in a score.dat written at the same frame is then the
-    // same in both runs (15 §2.9).
-    struct FixedTicks(ToolHost);
-
-    impl Host for FixedTicks {
-        fn poll_input(&mut self) -> crate::host::RawInput {
-            self.0.poll_input()
-        }
-        fn boot_clock_ms(&mut self) -> u32 {
-            self.0.boot_clock_ms()
-        }
-        fn ticks_ms(&mut self) -> u64 {
-            0
-        }
-        fn local_time(&mut self) -> crate::host::LocalTime {
-            self.0.local_time()
-        }
-        fn read(&mut self, name: &str) -> Option<Vec<u8>> {
-            self.0.read(name)
-        }
-        fn write(&mut self, name: &str, data: &[u8]) {
-            self.0.write(name, data)
-        }
-        fn mkdir(&mut self, name: &str) {
-            self.0.mkdir(name)
-        }
-        fn list(&mut self, prefix: &str) -> Vec<String> {
-            self.0.list(prefix)
-        }
-        fn read_path(&mut self, path: &str) -> Option<Vec<u8>> {
-            self.0.read_path(path)
-        }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self.0.as_any_mut()
-        }
-    }
-
-    // A loaded `Ctx` run through golden up to poll `AT` (saves on, into the session's private save dir) and the
-    // next frame's poll; None without the game data or a GPU adapter.
-    fn session_at(s: &Session) -> Option<(Ctx, i64)> {
-        let dir = crate::settings::test_game_dir()?;
-        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
-        let host = FixedTicks(ToolHost::new(crate::settings::get().storage()));
-        let src = crate::sources::native(dir);
-        let mut io = crate::settings::get().tool_io(gfx, &src);
-        io.host = Box::new(host);
-        let mut c = pollster::block_on(Ctx::load_with(
-            src,
-            io,
-            crate::settings::get().core(),
-            false,
-        ))
-        .unwrap();
-        s.start(&mut c).unwrap();
+    // A loaded `Ctx` (saves on, into its `MemHost`; fixed ticks, so the PLST run time of a score.dat written at the
+    // same frame is the same in both runs, 15 §2.9) playing demo `DEMO` up to demo frame `AT`; None without the
+    // game data.
+    fn demo_at() -> Option<Ctx> {
+        let mut c = crate::testdata::ctx(Default::default())?;
+        let rpy = c.archive.read(&format!("demorpy{DEMO}.rpy")).unwrap();
+        let r = crate::replay::parse(&rpy, c.w.game.ver_list.get()).unwrap();
+        c.w.game.replay_ff = false;
+        assert!(crate::replay::start_playback(
+            &mut c.w.game,
+            r,
+            None,
+            Some(DEMO)
+        ));
         c.w.game.persist = true;
-        s.run(&mut c, AT, |_, _| true, None);
-        let poll = c.w.game.sched.as_ref().unwrap().poll + 1;
-        assert_eq!(poll, AT as i64);
-        Some((c, poll))
+        let mut guard = 0;
+        while c.w.game.demo_frame < AT {
+            step(&mut c);
+            guard += 1;
+            assert!(guard < AT + 2000, "demo {DEMO} never reached frame {AT}");
+        }
+        Some(c)
     }
 
-    // One Frame_Run on the recorded polls (as `Session::run`); the World's trace, the session trace row, and the
-    // frame's draw and resource commands.
-    fn step(c: &mut Ctx, poll: &mut i64) -> Vec<u64> {
-        if let Some(s) = &mut c.w.game.sched {
-            s.poll = *poll;
-            s.pass_rows.clear();
-        }
-        crate::platform::tool_host(c).cursor = *poll;
+    // One Frame_Run; the World's trace, the session trace row, and the frame's draw and resource commands.
+    fn step(c: &mut Ctx) -> Vec<u64> {
         assert_eq!(c.calc(), crate::task::Flow::Continue);
         c.draw();
         let mut t = world_trace(&c.w);
-        t.extend(crate::session::sample(c, 0, *poll, 0).map(|v| v as u64));
+        t.extend(crate::trace::sample(c, 0, 0, 0).map(|v| v as u64));
         t.extend([
             c.rec.draws.len() as u64,
             c.rec.res.len() as u64,
@@ -791,7 +743,6 @@ mod stage {
         ]);
         c.present();
         crate::ascii::apply_pending_captures(&mut c.w.anm, &mut c.rec);
-        *poll = c.w.game.sched.as_ref().unwrap().poll + 1;
         t
     }
 
@@ -813,55 +764,52 @@ mod stage {
 
     // Both runs on for `FRAMES` frames: identical state, RNG, trace row and draw / resource commands every frame;
     // the peak of bullets, enemies and items alive.
-    fn lockstep(a: &mut (Ctx, i64), b: &mut (Ctx, i64)) -> [usize; 3] {
+    fn lockstep(a: &mut Ctx, b: &mut Ctx) -> [usize; 3] {
         let mut peak = [0; 3];
         for k in 0..FRAMES {
-            let (ta, tb) = (step(&mut a.0, &mut a.1), step(&mut b.0, &mut b.1));
+            let (ta, tb) = (step(a), step(b));
             assert_eq!(ta, tb, "frame {k} after the clone");
-            assert_eq!(a.0.w.game.scene, crate::gamemgr::SCENE_GAME, "frame {k}");
-            let n = alive(&a.0.w);
+            assert_eq!(a.w.game.scene, crate::gamemgr::SCENE_GAME, "frame {k}");
+            let n = alive(&a.w);
             peak = std::array::from_fn(|i| peak[i].max(n[i]));
         }
         peak
     }
 
-    // 9h part 2c: a mid-stage World cloned into a second `Ctx` (same session, same frame, so its recorder and
-    // renderer mirror the first's) continues exactly like the original.
+    // 9h part 2c: a mid-stage World cloned into a second `Ctx` (same demo, same frame, so its recorder mirrors the
+    // first's) continues exactly like the original.
     #[test]
     fn stage_clone_continues_identically() {
-        let s = Session::load(&crate::session::data_dir("golden")).unwrap();
-        let Some(mut a) = session_at(&s) else { return };
-        let mut b = session_at(&s).unwrap();
-        assert_eq!(a.0.w.game.scene, crate::gamemgr::SCENE_GAME);
-        assert!(alive(&a.0.w).iter().all(|&n| n > 0), "{:?}", alive(&a.0.w));
-        b.0.w = a.0.w.clone();
+        let Some(mut a) = demo_at() else { return };
+        let mut b = demo_at().unwrap();
+        assert_eq!(a.w.game.scene, crate::gamemgr::SCENE_GAME);
+        assert!(alive(&a.w).iter().all(|&n| n > 0), "{:?}", alive(&a.w));
+        b.w = a.w.clone();
         let peak = lockstep(&mut a, &mut b);
         assert!(peak.iter().all(|&n| n > 0), "{peak:?}");
     }
 
-    // A save from a clone at poll `AT` (run A) leaves the run as one without it (run B), and writes the score.dat
-    // `exit_save` writes from that state.
+    // A save from a clone at demo frame `AT` (run A) leaves the run as one without it (run B), and writes the
+    // score.dat `exit_save` writes from that state.
     #[test]
     fn save_from_clone_keeps_the_run() {
-        let s = Session::load(&crate::session::data_dir("golden")).unwrap();
-        let Some(mut a) = session_at(&s) else { return };
-        let rng = a.0.w.rng.clone();
-        let bytes = a.0.save_from_clone();
-        assert_eq!((a.0.w.rng.state, a.0.w.rng.total), (rng.state, rng.total));
-        assert_eq!(a.0.host.read("score.dat").as_deref(), Some(&bytes[..]));
-        // Run B starts after A's save (the two share the session's save dir, which B's start resets).
-        let mut b = session_at(&s).unwrap();
+        let Some(mut a) = demo_at() else { return };
+        let rng = a.w.rng.clone();
+        let bytes = a.save_from_clone();
+        assert_eq!((a.w.rng.state, a.w.rng.total), (rng.state, rng.total));
+        assert_eq!(a.host.read("score.dat").as_deref(), Some(&bytes[..]));
+        let mut b = demo_at().unwrap();
         // `exit_save` itself on a copy of B's World, then B's own World back.
-        let mut w = b.0.w.clone();
-        std::mem::swap(&mut b.0.w, &mut w);
-        b.0.exit_save();
-        std::mem::swap(&mut b.0.w, &mut w);
+        let mut w = b.w.clone();
+        std::mem::swap(&mut b.w, &mut w);
+        b.exit_save();
+        std::mem::swap(&mut b.w, &mut w);
         assert_eq!(
             w.rng.total,
-            b.0.w.rng.total + 2,
+            b.w.rng.total + 2,
             "ScoreDat_Save draws twice (11 §1.5)"
         );
-        assert_eq!(b.0.host.read("score.dat"), Some(bytes));
+        assert_eq!(b.host.read("score.dat"), Some(bytes));
         lockstep(&mut a, &mut b);
     }
 }

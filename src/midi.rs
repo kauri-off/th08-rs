@@ -669,7 +669,7 @@ pub(crate) mod tests {
     // The shipped files (02 §5): format 0, one track, division 480; every song reaches its loop end repeatedly.
     #[test]
     fn shipped_files() {
-        let Some(a) = crate::archive::test_archive() else {
+        let Some(a) = crate::audio::test_archive() else {
             return;
         };
         let names: Vec<_> = a
@@ -705,7 +705,7 @@ pub(crate) mod tests {
 
     #[test]
     fn th08_01_loop_period() {
-        let Some(a) = crate::archive::test_archive() else {
+        let Some(a) = crate::audio::test_archive() else {
             return;
         };
         let song = parse(&a.read("th08_01.mid").unwrap()).unwrap();
@@ -779,7 +779,7 @@ pub(crate) mod tests {
     // 02 §5 scan example: th08_01 CC 2 at tick 3840, CC 4 at 77762, end of track 81610; every played channel sets CC 7.
     #[test]
     fn shipped_scan() {
-        let Some(a) = crate::archive::test_archive() else {
+        let Some(a) = crate::audio::test_archive() else {
             return;
         };
         let song = parse(&a.read("th08_01.mid").unwrap()).unwrap();
@@ -873,7 +873,7 @@ pub(crate) mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn player_renders_to_buffer() {
-        let Some(a) = crate::archive::test_archive() else {
+        let Some(a) = crate::audio::test_archive() else {
             return;
         };
         let font = Arc::new(rustysynth::SoundFont::new(&mut &tiny_sf2()[..]).unwrap());

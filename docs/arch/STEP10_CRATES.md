@@ -78,8 +78,8 @@ read by tools: none outside tests after 10b (checked: sound.rs Bgm fields are th
 | run | content (≤ 3 deliverables) | files | parallel | check |
 |---|---|---|---|---|
 | **10a** IO out of `Ctx` (**done**, below) | (1) `AudioOut` trait + `Io` bundle for `Ctx::load_with`; `Audio` impl; `AudioConfig` instead of `settings::get()` in audio.rs; (2) assets.rs split → `sources.rs` (app-bound), `spawn` into audio.rs; (3) drawlog split → `drawfmt.rs` (core-bound) + `open_spec` (tools-bound); callers pass the writer | game, audio, assets, sources (new), drawlog, drawfmt (new), app, lib, main, session, demosync, drawreport, worldclone, menu/result/game tests (load call sites, 17), bin/* | — (first) | arch_check run (T D W android); `session --sound-log` selftest1 unchanged |
-| **10b** core self-contained | (1) `trace.rs` (Sched, Row, sample, demosync sample, restart / extra-present hooks); (2) core test infra: `testdata.rs`, `NullRenderer`, `MemHost`, `CoreConfig::default()` in tests; GPU tests (drawlog, result shots, demosync, session) marked tools-bound; Bgm tests → sound.rs; `repo_root()` for manifest-relative paths; (3) boundary gate: drawlist.rs test generalised to the planned core file set — no `crate::{gfx,text,audio,midi,app,launcher,settings,platform,sources,joystick,pacer,session,demosync,drawlog,drawreport,xz}` and no `wgpu/cpal/winit/egui/rfd/clap/std::fs/web_time/web_sys/pollster` outside `#[cfg(test)]`, no `unsafe` (fmath native tests → `rsqrt_table --verify`) | session, demosync, trace (new), testdata (new), gamemgr, supervisor, game, worldclone, drawlist, fmath, bin/rsqrt_table, audio, sound, tests of ascii/replay/result/menu/enemy/msg/stage/anmmgr/anmvm/archive | **parallel with L1** (worktree; disjoint; lib.rs module list merged by me) | arch_check run; gate test green |
-| **L1** (launcher Design 2 run 1) | Shell state machine `enum Shell { Setup, Loading, Running, PortMenu, Error }` replacing `pre/launch/settings/started` (app.rs:63–76); Error + Loading screens with Back; one fullscreen owner; game owns its `HostSettings` by value (OnceLock kept for tools) | app, launcher, main (not lib.rs module list) | parallel with 10b | arch_check run; launchershot images via `tools/offscreen`; manual desktop + wasm start |
+| **10b** core self-contained (**done**, below) | (1) `trace.rs` (Sched, Row, sample, demosync sample, restart / extra-present hooks); (2) core test infra: `testdata.rs`, `NullRenderer`, `MemHost`, `CoreConfig::default()` in tests; GPU tests (drawlog, result shots, demosync, session) marked tools-bound; Bgm tests → sound.rs; `repo_root()` for manifest-relative paths; (3) boundary gate: drawlist.rs test generalised to the planned core file set — no `crate::{gfx,text,audio,midi,app,launcher,settings,platform,sources,joystick,pacer,session,demosync,drawlog,drawreport,xz}` and no `wgpu/cpal/winit/egui/rfd/clap/std::fs/web_time/web_sys/pollster` outside `#[cfg(test)]`, no `unsafe` (fmath native tests → `rsqrt_table --verify`) | session, demosync, trace (new), testdata (new), gamemgr, supervisor, game, worldclone, drawlist, fmath, bin/rsqrt_table, audio, sound, tests of ascii/replay/result/menu/enemy/msg/stage/anmmgr/anmvm/archive | **parallel with L1** (worktree; disjoint; lib.rs module list merged by me) | arch_check run; gate test green |
+| **L1** (launcher Design 2 run 1) (**done** 2026-11-03: `Shell` in app.rs, `launcher::View`; launchershot `--view=`) | Shell state machine `enum Shell { Setup, Loading, Running, PortMenu, Error }` replacing `pre/launch/settings/started` (app.rs:63–76); Error + Loading screens with Back; one fullscreen owner; game owns its `HostSettings` by value (OnceLock kept for tools) | app, launcher, main (not lib.rs module list) | parallel with 10b | arch_check run; launchershot images via `tools/offscreen`; manual desktop + wasm start |
 | **10c** the cut (pure move) | (1) `git mv` into crates/th08-core/src (incl. rsqrt_amd.bin), crates/th08-render, crates/th08-audio, crates/th08-tools (lib + src/bin); `crate::` → crate paths; `forbid(unsafe_code)`; (2) Cargo.toml per crate, workspace members, deps split, desktop-only `rfd/clap/env_logger/pollster` under `cfg(not(any(wasm32, android)))`, `android_logger` + `android_main` stub in lib.rs; (3) drop the 10b gate test (compiler enforces), update tools/arch_check comment, docs | everything (alone) | — | arch_check run + B (ref500 490/490, ref_b2 498/498) + `cargo tree -p th08-core` shows no wgpu/cpal/winit/egui |
 | **L2** (launcher Design 2 run 2) | `Entry` metadata (`label`, `audience: Player | Dev`, `platforms`, `persist`) replacing `Group::developer()` (settings.rs:63) and the quick-win rules of 5d5d7c7; typed `Value`s with dirty state instead of strings + the `Origin::Cli` trick (settings.rs:12–18) | settings, launcher, app (th08 crate only) | parallel with step-11 core runs (other crate) | arch_check run (fast); launchershot |
 
@@ -103,6 +103,36 @@ opens the log file before the archive is read. (b) **Resolved after 10a:** the a
 logs and liblzma stay tools-only. Check: `FAST=1 arch_check run` 0 differing
 (emit-off 0; fmt, build, wasm, android, cargo test inside), spec_refs 0, `sound_log_selftest1` / drawlog format and
 menu tests green with TH08_DIR.
+
+**10b done (2026-11-03).** Files: trace.rs (new: `Row`, `Sched`, `sample(ctx, present, poll, scene_frame)`,
+`demo_sample(ctx, rng_base)` (was `demosync::sample`), `on_restart`, `on_extra_present`), session.rs / demosync.rs
+(runners, parsers, compare stay; use `trace::`), game.rs (hooks → `trace::`), gamemgr.rs (`sched:
+Option<trace::Sched>`), testdata.rs (new: `repo_root()` pure path arithmetic, not cfg(test); cfg(test): `game_dir`
+(TH08_DIR), `archive`, `source` (in-test game-dir `DataSource`), `NullAudio` (`midi_available` false), `block_on`
+(noop waker, no pollster), `ctx(core)`, `ctx_with(core, host)`, `mem_host(ctx)`, `test_frames` (`TH08_TEST_FRAMES`,
+default 4000)), drawlist.rs (`NullRenderer`; gate `core_boundary` replaces `core_has_no_renderer_dependency`),
+host.rs (`MemHost { keys, files, boot_ms, ticks, time }`), archive.rs (`test_archive` removed), sound.rs (Bgm tests
+from audio.rs + `midi_mode_bgm_side`, `wav_pause_bgm_side` for the Bgm-field asserts of the device tests), audio.rs
+(device tests only, own `test_archive` shared with midi.rs), fmath.rs (native tests out), bin/rsqrt_table.rs
+(`--verify` + the two native tests as bin tests), drawreport.rs (tools test `result_shots`, TH08_RESULT_SHOTS),
+tests of ascii / replay / result / menu / game / enemy / msg / stage / anmmgr / anmvm / midi / worldclone,
+repo_root() at session.rs, drawlog.rs, demosync.rs, bin/session.rs, bin/demosync.rs, drawlist.rs. Gate: per-file
+lists `CORE` / `NOT_CORE` (every src/*.rs in exactly one); on comment- and literal-stripped code: no
+`crate::{gfx,text,audio,midi,app,launcher,settings,platform,sources,joystick,pacer,session,demosync,drawlog,drawreport,xz}`,
+no wgpu / cpal / winit / egui / rfd / clap / pollster / web_time / web_sys / js_sys / wasm_bindgen / liblzma / sha2 /
+rustysynth / hound / gilrs / directories / chrono / ab_glyph / env_logger and no `unsafe` anywhere (tests included);
+no `std::fs` / `std::env` / `std::thread` / `std::time` / `Instant` / `SystemTime` / `std::process` outside
+`#[cfg(test)]` items; a probe string checks the scanner. `cargo test --workspace` 398 → 401 passed (1 ignored both).
+Deviations: (a) worldclone `stage` tests run on demo 0 from demo frame 1800 instead of the golden session (Session is
+tools-side); same checks (all of bullets / enemies / items alive, 600 lockstep frames, clone save = exit_save bytes).
+(b) Bgm-field assertions of audio.rs `midi_mode_calls` / `wav_pause_and_fade` moved to two new sound.rs tests (no
+`pub(crate)` use from audio.rs tests). (c) the result screenshots are a separate tools test replaying the same input
+(`result_shots`); core `game_over_name_entry_saves` runs on `NullRenderer` + `MemHost` (score.dat from its map).
+(d) core tests use `CoreConfig::default()`, a fixed-clock `MemHost` and `NullAudio` instead of `settings::get()`, the
+real-clock ToolHost and the real `Audio` probe. (e) `settings::Settings::test_frames` / `TH08_TEST_FRAMES` entry kept
+(settings.rs is L1's), now read by `testdata::test_frames` directly. (f) audio.rs / midi.rs tests read TH08_DIR
+themselves (audio crate cannot use core's cfg(test) testdata). Check: `FAST=1 arch_check run` 0 differing (emit-off 0;
+fmt, 0-warning build, wasm, android, cargo test 401 inside), spec_refs 0, `rsqrt_table --verify` ok.
 
 Order: 10a → (10b ∥ L1) → 10c → L2 (∥ step 11). 4 step-10 runs + 2 launcher runs. Design 2 runs 3–4 fold into
 Android runs 1 and 4–5 (ARCH_D §6.3) as planned.

@@ -1,5 +1,5 @@
 //! Host interface (ARCH_A §2.2, ARCH_C decisions 3 and 6): the core's only way to platform input, clocks and save
-//! storage. Implemented by the app (`platform::AppHost`) and the tools / tests (`platform::ToolHost`).
+//! storage. Implemented by the app (`platform::AppHost`), the tools (`platform::ToolHost`) and core tests (`MemHost`).
 
 use crate::input::PadState;
 
@@ -63,4 +63,50 @@ pub trait Host {
     }
     // Tools reach their own host type through `Ctx::host_as`.
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+// In-memory host (core tests, headless runs): saves in a map, fixed clocks, input `keys` on every poll.
+#[derive(Clone, Debug, Default)]
+pub struct MemHost {
+    pub keys: Words,
+    pub files: std::collections::BTreeMap<String, Vec<u8>>,
+    pub boot_ms: u32,
+    pub ticks: u64,
+    pub time: LocalTime,
+}
+
+impl Host for MemHost {
+    fn poll_input(&mut self) -> RawInput {
+        RawInput {
+            keys: self.keys,
+            ..Default::default()
+        }
+    }
+    fn boot_clock_ms(&mut self) -> u32 {
+        self.boot_ms
+    }
+    fn ticks_ms(&mut self) -> u64 {
+        self.ticks
+    }
+    fn local_time(&mut self) -> LocalTime {
+        self.time
+    }
+    fn read(&mut self, name: &str) -> Option<Vec<u8>> {
+        self.files.get(name).cloned()
+    }
+    fn write(&mut self, name: &str, data: &[u8]) {
+        self.files.insert(name.to_string(), data.to_vec());
+    }
+    // Directories are implicit in the names.
+    fn mkdir(&mut self, _: &str) {}
+    fn list(&mut self, prefix: &str) -> Vec<String> {
+        self.files
+            .keys()
+            .filter(|n| n.starts_with(prefix))
+            .cloned()
+            .collect()
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }

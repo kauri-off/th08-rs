@@ -51,55 +51,6 @@ pub fn parse_trace(text: &str) -> Vec<[i64; 22]> {
         .collect()
 }
 
-// The port's state in trace column order.
-pub fn sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
-    let g = &ctx.w.game;
-    let mut row = [0i64; 22];
-    row[0] = g.frame_counter as i64;
-    row[1] = g.demo_frame as i64;
-    row[2] = ctx.w.input.game[0] as i64;
-    row[3] = ctx.w.rng.state as i64;
-    row[4] = ctx.w.rng.total.wrapping_sub(rng_base) as i64;
-    row[18] = g.rank.rank as i64;
-    row[21] = g.flags as i64;
-    let Some(p) = ctx.w.player.as_deref() else {
-        return row;
-    };
-    if ctx.w.gm.is_none() {
-        return row;
-    }
-    let st = &p.stats;
-    row[5] = p.pos[0].to_bits() as i64;
-    row[6] = p.pos[1].to_bits() as i64;
-    row[7] = p.state as i64;
-    row[8] = st.score10;
-    row[9] = st.graze_total as i64;
-    row[10] = st.point_items2 as i64;
-    row[11] = st.lives.to_bits() as i64;
-    row[12] = st.bombs.to_bits() as i64;
-    row[13] = st.power.to_bits() as i64;
-    row[14] = st.gauge as i64;
-    row[15] = st.time as i64;
-    if let Some(b) = ctx.w.bullets.as_deref() {
-        row[16] = b.live as i64;
-    }
-    if let Some(e) = ctx.w.enemies.as_deref() {
-        row[17] = e
-            .enemies
-            .iter()
-            .filter(|x| x.flags & crate::enemy::A_ALIVE != 0)
-            .count() as i64;
-        row[19] = e.g.spell.is_some() as i64;
-        row[20] = e
-            .bosses
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.is_some())
-            .fold(0, |a, (i, _)| a | 1 << i);
-    }
-    row
-}
-
 pub struct Report {
     pub frames: usize,
     pub first: Option<(usize, &'static str, i64, i64)>,
@@ -172,7 +123,7 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
             break;
         }
         if ctx.w.game.demo_frame > before {
-            out.push(sample(ctx, rng_base));
+            out.push(crate::trace::demo_sample(ctx, rng_base));
         }
         if ctx.w.game.flags & crate::gamemgr::F_DEMO == 0 {
             break;
@@ -201,13 +152,14 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
     })
 }
 
+// Tools-bound tests (headless `Gfx`, settings, game-dir source): move with this file to th08-tools in 10c.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     // Frames each demo must stay in sync for (raise as divergences get fixed).
     const MIN_SYNC: [usize; 4] = [6120, 4920, 5040, 7020];
 
     fn state(ctx: &crate::game::Ctx) -> [i64; 22] {
-        let mut s = super::sample(ctx, 0);
+        let mut s = crate::trace::demo_sample(ctx, 0);
         s[1] = 0;
         s[4] = 0;
         s
@@ -321,10 +273,9 @@ mod tests {
                 false,
             ))
             .unwrap();
-            let trace = std::fs::read_to_string(format!(
-                "{}/specs/data/demo{n}_trace.txt",
-                env!("CARGO_MANIFEST_DIR")
-            ))
+            let trace = std::fs::read_to_string(
+                crate::testdata::repo_root().join(format!("specs/data/demo{n}_trace.txt")),
+            )
             .unwrap();
             let rep = super::run(&mut ctx, n, &trace).unwrap();
             eprintln!("demo {n}: {rep}");

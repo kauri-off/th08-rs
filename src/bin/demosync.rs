@@ -1,7 +1,8 @@
 //! Demo sync check: `demosync <0-3> [from-to] [rng-frame]` prints the report, trace/port rows around a range and,
 //! with rng-frame, the call sites of every RNG draw made in that gameplay frame.
 
-use th08::demosync::{FIELDS, parse_trace, sample};
+use th08::demosync::{FIELDS, parse_trace};
+use th08::trace::demo_sample as sample;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -20,10 +21,9 @@ fn main() -> anyhow::Result<()> {
         th08::settings::get().core(),
         false,
     ))?;
-    let trace = std::fs::read_to_string(format!(
-        "{}/specs/data/demo{n}_trace.txt",
-        env!("CARGO_MANIFEST_DIR")
-    ))?;
+    let trace = std::fs::read_to_string(
+        th08::testdata::repo_root().join(format!("specs/data/demo{n}_trace.txt")),
+    )?;
     if range.is_none() && rng_frame.is_none() {
         println!("{}", th08::demosync::run(&mut ctx, n, &trace)?);
         return Ok(());

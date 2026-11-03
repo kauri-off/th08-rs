@@ -8,7 +8,7 @@
 //! `--no-emit` runs the draw chain's draw-phase steps only, nothing recorded (ARCH decision 2; implies no draw log).
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use th08::drawlog::{self, DemoMerge, KeyMode, Opts};
 use th08::session::{self, Session};
 
@@ -55,9 +55,7 @@ fn main() -> anyhow::Result<()> {
     let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let mut ref_paths = drawlog::expand(&dir.join("draw").to_string_lossy());
     if ref_paths.is_empty() {
-        let alt = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("sessions")
-            .join(name);
+        let alt = th08::testdata::repo_root().join("sessions").join(name);
         ref_paths = drawlog::expand(&alt.join("draw").to_string_lossy());
     }
     let port_only = port_only && emit;

@@ -186,9 +186,8 @@ pub struct Game {
     // GM +0x3DBB0 spell id for spell practice.
     pub card: i16,
     pub menu_loading: u32,
-    // Recorded loader timing of a session replay (src/session.rs). TODO(step 10): a tool hook in core state; leaves with
-    // the tools crate.
-    pub sched: Option<crate::session::Sched>,
+    // Recorded loader timing of a session replay (trace.rs; set by the session tool), None in the game.
+    pub sched: Option<crate::trace::Sched>,
     pub trace_menu: Option<(i32, i32)>,
     // Result state (+0x08) after Result_Calc, session trace column 31.
     pub trace_result: Option<i32>,

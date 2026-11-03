@@ -3379,10 +3379,10 @@ mod tests {
     #[test]
     fn scripted_player_runs() {
         let mut ts = crate::game::TestSys::default();
-        let Some(ar) = crate::archive::test_archive() else {
+        let Some(ar) = crate::testdata::archive() else {
             return;
         };
-        let frames = crate::settings::get().test_frames;
+        let frames = crate::testdata::test_frames();
         for shot in 0..12u8 {
             let index = [0, 1, 2, 4][shot as usize % 4];
             let (ecl_name, enm) = files(index, None);
@@ -3492,7 +3492,7 @@ mod tests {
     #[test]
     fn all_stage_scripts_run() {
         let mut ts = crate::game::TestSys::default();
-        let Some(ar) = crate::archive::test_archive() else {
+        let Some(ar) = crate::testdata::archive() else {
             return;
         };
         let all = (0..9).flat_map(|i| [(i, None), (i, Some(0))]);
@@ -3619,7 +3619,7 @@ mod laser_tests {
     #[test]
     fn laser_stages_run() {
         let mut ts = crate::game::TestSys::default();
-        let Some(ar) = crate::archive::test_archive() else {
+        let Some(ar) = crate::testdata::archive() else {
             return;
         };
         let mut total = 0;

@@ -1577,7 +1577,7 @@ mod tests {
     fn all_std_scripts_run() {
         let mut ts = crate::game::TestSys::default();
         let sys = &mut ts.sys();
-        let Some(ar) = crate::archive::test_archive() else {
+        let Some(ar) = crate::testdata::archive() else {
             return;
         };
         for (index, sp) in (0..9).flat_map(|i| [(i, false), (i, true)]) {

@@ -637,7 +637,7 @@ mod tests {
     // Every msg file parses, every entry walks to op 0 / halt with known opcodes and in-range strings.
     #[test]
     fn all_msg_files() {
-        let Some(ar) = crate::archive::test_archive() else {
+        let Some(ar) = crate::testdata::archive() else {
             return;
         };
         let names: std::collections::BTreeSet<String> =
@@ -722,7 +722,7 @@ mod tests {
     #[test]
     fn wait_and_release() {
         let mut rng = crate::rng::Rng::default();
-        let Some(ar) = crate::archive::test_archive() else {
+        let Some(ar) = crate::testdata::archive() else {
             return;
         };
         let mut d = Dialogue {
@@ -761,7 +761,7 @@ mod tests {
     // Stage-5 entry 10 → Final A / B dialogue or the choice menu (10 §4 step 3).
     #[test]
     fn final_route_resolution() {
-        let Some(ar) = crate::archive::test_archive() else {
+        let Some(ar) = crate::testdata::archive() else {
             return;
         };
         let run = |shot: u8, a: bool, b: bool, cont: u8| {

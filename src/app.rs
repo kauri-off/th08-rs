@@ -3,6 +3,7 @@
 use crate::assets::Source;
 use crate::game::Ctx;
 use crate::gfx::Gfx;
+use crate::launcher::{Action, Folder, Screen, View};
 use crate::pacer::{Pacer, Tick};
 use crate::settings::Settings;
 use crate::task::Flow;
@@ -16,80 +17,79 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Fullscreen;
 use winit::window::{Window, WindowId};
 
+// A loaded game: the game owns its host settings by value (display, dirs, debug switches); the core ones went into
+// its `CoreConfig` at load. The global `settings::get` is only for tools and tests.
 struct Running {
-    window: Arc<Window>,
     ctx: Ctx,
     pacer: Pacer,
+    settings: Settings,
+}
+
+// An egui screen on a device of its own (launcher, error, loading frame).
+struct Ui {
+    gfx: Box<Gfx>,
+    screen: Screen,
+}
+
+// The port shell around the game (port UI, no spec section). Transitions:
+// Loading(device) → Setup | Loading(game); Setup → Loading(game) on Play; Loading(game) → Running | Error;
+// Error → Setup on Back; Running ⇄ PortMenu on F1; Quit / close from any state.
+enum Shell {
+    // The launcher screen (also the saved `launcher = off` wait).
+    Setup(Box<Ui>),
+    // A start-up step runs: the window's device, then th08.dat / audio (its one "Loading" frame is already drawn).
+    Loading,
+    Running(Box<Running>),
+    // F1 over the game, whose pacer is suspended; the screen draws on the game's own device.
+    PortMenu(Box<Running>, Box<Screen>),
+    Error(Box<Ui>),
 }
 
 enum UserEvent {
     Ready(Box<Running>),
-    // Launcher mode: the window's GPU device is ready.
+    // The window's GPU device is ready.
     Gfx(Box<Gfx>),
     // Start-up failed; `gfx` is a fresh device for the error screen (None: no GPU, a message box instead).
-    Failed {
-        window: Arc<Window>,
-        msg: String,
-        gfx: Option<Box<Gfx>>,
-    },
+    Failed { msg: String, gfx: Option<Box<Gfx>> },
 }
 
 // The `Failed` event for a start-up error: the error screen needs a new device, the failed load consumed the old one.
 async fn failed(window: Arc<Window>, e: anyhow::Error, vsync: Option<bool>) -> UserEvent {
     log::error!("startup failed: {e:#}");
     let gfx = match vsync {
-        Some(v) => Gfx::new(window.clone(), v).await.ok().map(Box::new),
+        Some(v) => Gfx::new(window, v).await.ok().map(Box::new),
         None => None,
     };
     UserEvent::Failed {
-        window,
         msg: format!("{e:#}"),
         gfx,
     }
 }
 
-// The launcher screen in the game window, before `settings::init`.
-struct Launch {
-    window: Arc<Window>,
-    gfx: Option<Box<Gfx>>,
-    screen: Option<crate::launcher::Screen>,
-    // Settings before the launcher (window size, vsync) and the files picked in the web page.
-    start: Settings,
-    folder: Option<crate::launcher::Folder>,
-    // Saved `launcher = off`: when the game starts unless Shift was held (set at the first redraw).
-    auto_at: Option<Instant>,
-}
-
 struct App {
-    // None in launcher mode on native (the folder is chosen on screen).
-    source: Option<Source>,
     proxy: EventLoopProxy<UserEvent>,
-    run: Option<Box<Running>>,
-    started: bool,
+    shell: Shell,
+    // Created at the first `Resumed`.
+    window: Option<Arc<Window>>,
+    // The settings Setup edits: the start-up ones, then the ones the last Play used (Back from Error keeps the edits).
+    // Direct starts: the final settings, cloned into `Running`.
+    setup: Settings,
+    // Known up front for direct starts and web (the files picked in the page); native launcher: `game_dir` at Play.
+    source: Option<Source>,
+    // Show Setup first (else load at once).
+    launcher: bool,
+    // Saved `launcher = off`: when the game starts unless Shift was held (set at the first Waiting redraw).
+    auto_at: Option<Instant>,
     // Between `Suspended` and the next `Resumed` (no surface, no logic frames).
     suspended: bool,
-    // Launcher mode: settings before Play; then the window (`launch`).
-    pre: Option<Settings>,
-    launch: Option<Box<Launch>>,
-    settings: Option<&'static Settings>,
-    // Debug `TH08_SHOT` frame.
-    shot: Option<u64>,
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    shot_size: Option<(u32, u32)>,
-    // Port display: Alt held, current fullscreen state (Alt+Enter toggles and saves it).
+    // Port display: Alt held; the fullscreen state, owned here (`set_fullscreen`).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     alt: bool,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fullscreen: bool,
 }
 
-async fn init(window: Arc<Window>, source: Source, vsync: bool) -> anyhow::Result<Box<Running>> {
-    let gfx = Gfx::new(window.clone(), vsync).await?;
-    load(window, source, gfx).await
-}
-
-async fn load(window: Arc<Window>, source: Source, gfx: Gfx) -> anyhow::Result<Box<Running>> {
-    let s = crate::settings::get();
+async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Running>> {
     // `TH08_DRAWLOG`: the draw log writer is opened here and passed in (STEP10_CRATES 10a).
     #[cfg(not(target_arch = "wasm32"))]
     let drawlog = s.drawlog.as_deref().and_then(open_drawlog);
@@ -103,53 +103,35 @@ async fn load(window: Arc<Window>, source: Source, gfx: Gfx) -> anyhow::Result<B
     };
     let ctx = Ctx::load(source, io, s.core()).await?;
     Ok(Box::new(Running {
-        window,
         ctx,
         pacer: Pacer::new(s.turbo),
+        settings: s,
     }))
+}
+
+// What a game frame asks of the shell.
+enum Frame {
+    Continue,
+    Exit,
+    // Result 2 restart: the live config's window mode (true = fullscreen).
+    Restarted(bool),
 }
 
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
-        if self.started {
+        if self.window.is_some() {
             return self.reattach();
         }
-        self.started = true;
-        let s = self.pre.as_ref().or(self.settings).unwrap();
         let window = Arc::new(
-            el.create_window(window_attrs(s.scale, self.fullscreen))
+            el.create_window(window_attrs(self.setup.scale, self.fullscreen))
                 .expect("window"),
         );
-        let proxy = self.proxy.clone();
-        let vsync = s.vsync;
-        if let Some(start) = self.pre.take() {
-            let folder = Some(match &self.source {
-                #[cfg(target_arch = "wasm32")]
-                Some(src) => crate::launcher::Folder::Web(src.names()),
-                _ => crate::launcher::Folder::Native,
-            });
-            self.launch = Some(Box::new(Launch {
-                window: window.clone(),
-                gfx: None,
-                screen: None,
-                start,
-                folder,
-                auto_at: None,
-            }));
-            spawn(async move {
-                let ev = match Gfx::new(window.clone(), vsync).await {
-                    Ok(g) => UserEvent::Gfx(Box::new(g)),
-                    Err(e) => failed(window, e, None).await,
-                };
-                let _ = proxy.send_event(ev);
-            });
-            return;
-        }
-        let source = self.source.clone().unwrap();
+        self.window = Some(window.clone());
+        let (proxy, vsync) = (self.proxy.clone(), self.setup.vsync);
         spawn(async move {
-            let ev = match init(window.clone(), source, vsync).await {
-                Ok(r) => UserEvent::Ready(r),
-                Err(e) => failed(window, e, Some(vsync)).await,
+            let ev = match Gfx::new(window.clone(), vsync).await {
+                Ok(g) => UserEvent::Gfx(Box::new(g)),
+                Err(e) => failed(window, e, None).await,
             };
             let _ = proxy.send_event(ev);
         });
@@ -158,12 +140,13 @@ impl ApplicationHandler<UserEvent> for App {
     // ARCH_D §5: the native window is gone (Android home / screen off); drop the surface, freeze logic.
     fn suspended(&mut self, _: &ActiveEventLoop) {
         self.suspended = true;
-        if let Some(r) = self.run.as_mut() {
-            r.pacer.suspend();
-            gfx(&mut r.ctx).detach();
-        }
-        if let Some(g) = self.launch.as_mut().and_then(|l| l.gfx.as_mut()) {
-            g.detach();
+        match &mut self.shell {
+            Shell::Running(r) | Shell::PortMenu(r, _) => {
+                r.pacer.suspend();
+                gfx(&mut r.ctx).detach();
+            }
+            Shell::Setup(ui) | Shell::Error(ui) => ui.gfx.detach(),
+            Shell::Loading => {}
         }
     }
 
@@ -177,43 +160,49 @@ impl ApplicationHandler<UserEvent> for App {
                     r.pacer.suspend();
                     gfx(&mut r.ctx).detach();
                 } else {
-                    r.window.request_redraw();
+                    self.window().request_redraw();
                 }
-                self.run = Some(r);
+                self.shell = Shell::Running(r);
             }
             UserEvent::Gfx(gfx) => {
-                let Some(l) = self.launch.as_mut() else {
-                    return;
-                };
-                let mut model = crate::launcher::Model::new(&l.start, l.folder.take().unwrap());
-                model.waiting = !l.start.launcher && model.can_play();
-                l.screen = Some(crate::launcher::Screen::new(&l.window, &gfx, model));
-                let mut gfx = gfx;
-                if self.suspended {
-                    gfx.detach();
+                if self.launcher {
+                    let view = {
+                        let m = crate::launcher::Model::new(&self.setup, self.folder());
+                        if !self.setup.launcher && m.can_play() {
+                            View::Waiting
+                        } else {
+                            View::Settings
+                        }
+                    };
+                    self.shell = Shell::Setup(self.ui(gfx, view));
+                } else {
+                    let source = self.source.clone().expect("direct start has a source");
+                    let s = self.setup.clone();
+                    let screen = (!s.is_tool_run()).then(|| self.screen(&gfx, View::Loading));
+                    self.start_load(el, gfx, screen, s, source);
                 }
-                l.gfx = Some(gfx);
-                l.window.request_redraw();
             }
-            UserEvent::Failed { window, msg, gfx } => self.failed(el, window, msg, gfx),
+            UserEvent::Failed { msg, gfx } => self.failed(el, msg, gfx),
         }
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
-        let Some(l) = self.launch.as_ref() else {
-            return;
+        let screen = match &self.shell {
+            Shell::Setup(ui) | Shell::Error(ui) => &ui.screen,
+            Shell::PortMenu(_, s) => &**s,
+            Shell::Loading | Shell::Running(_) => return,
         };
-        if let (Some(t), Some(s)) = (l.auto_at, l.screen.as_ref())
-            && s.model().waiting
+        if let Some(t) = self.auto_at
+            && screen.model().view == View::Waiting
         {
             if t <= Instant::now() {
                 return self.play(el);
             }
             return el.set_control_flow(ControlFlow::WaitUntil(t));
         }
-        match l.screen.as_ref().and_then(|s| s.repaint_at) {
+        match screen.repaint_at {
             Some(t) if t <= Instant::now() => {
-                l.window.request_redraw();
+                self.window().request_redraw();
                 el.set_control_flow(ControlFlow::Wait);
             }
             Some(t) => el.set_control_flow(ControlFlow::WaitUntil(t)),
@@ -222,48 +211,349 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, ev: WindowEvent) {
-        if self.launch.is_some() {
-            return self.launcher_event(el, ev);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let WindowEvent::ModifiersChanged(m) = &ev {
+            self.alt = m.state().alt_key();
         }
-        let Some(r) = self.run.as_mut() else {
-            if matches!(ev, WindowEvent::CloseRequested) {
-                el.exit();
+        // Port-only F11 / Alt+Enter in every state: the one place fullscreen is toggled; the key reaches nothing else.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let WindowEvent::KeyboardInput { event, .. } = &ev
+            && event.state == ElementState::Pressed
+            && is_fullscreen_key(self.alt, event.physical_key)
+        {
+            if !event.repeat {
+                self.set_fullscreen(!self.fullscreen);
             }
+            return;
+        }
+        match self.shell {
+            Shell::Loading => {
+                if matches!(ev, WindowEvent::CloseRequested) {
+                    el.exit();
+                }
+            }
+            Shell::Setup(_) | Shell::Error(_) => self.ui_event(el, ev),
+            Shell::Running(_) => self.game_event(el, ev),
+            Shell::PortMenu(..) => self.menu_event(el, ev),
+        }
+    }
+}
+
+impl App {
+    fn new(el: &EventLoop<UserEvent>, source: Option<Source>, s: Settings, launcher: bool) -> Self {
+        App {
+            proxy: el.create_proxy(),
+            shell: Shell::Loading,
+            window: None,
+            fullscreen: s.fullscreen && cfg!(not(target_arch = "wasm32")),
+            setup: s,
+            source,
+            launcher,
+            auto_at: None,
+            suspended: false,
+            alt: false,
+        }
+    }
+
+    fn window(&self) -> &Arc<Window> {
+        self.window.as_ref().expect("window")
+    }
+
+    // Where Setup's game files come from: the `game_dir` row (native) or the files picked in the web page.
+    fn folder(&self) -> Folder {
+        match &self.source {
+            #[cfg(target_arch = "wasm32")]
+            Some(src) => Folder::Web(src.names()),
+            _ => Folder::Native,
+        }
+    }
+
+    // A screen for `view`, editing `setup`; the box mirrors the window's fullscreen state.
+    fn screen(&self, gfx: &Gfx, view: View) -> Screen {
+        let mut model = crate::launcher::Model::new(&self.setup, self.folder());
+        if cfg!(not(target_arch = "wasm32")) && model.settings().fullscreen != self.fullscreen {
+            model.set_fullscreen(self.fullscreen);
+        }
+        model.view = view;
+        Screen::new(self.window(), gfx, model)
+    }
+
+    fn ui(&self, mut gfx: Box<Gfx>, view: View) -> Box<Ui> {
+        let screen = self.screen(&gfx, view);
+        if self.suspended {
+            gfx.detach();
+        }
+        self.window().request_redraw();
+        Box::new(Ui { gfx, screen })
+    }
+
+    // A second `Resumed` (ARCH_D §5): a new surface for the native window on the same device; the pacer deadline
+    // restarts at now (not while the port menu holds the game). Audio is not touched here.
+    fn reattach(&mut self) {
+        if !std::mem::take(&mut self.suspended) {
+            return;
+        }
+        let window = self.window().clone();
+        let res = match &mut self.shell {
+            Shell::Running(r) => {
+                r.pacer.resume(Instant::now());
+                gfx(&mut r.ctx).attach(window.clone())
+            }
+            Shell::PortMenu(r, _) => gfx(&mut r.ctx).attach(window.clone()),
+            Shell::Setup(ui) | Shell::Error(ui) => ui.gfx.attach(window.clone()),
+            Shell::Loading => Ok(()),
+        };
+        if let Err(e) = res {
+            log::error!("surface: {e:#}");
+        }
+        window.request_redraw();
+    }
+
+    // The one fullscreen owner: F11 / Alt+Enter, the launcher's Fullscreen box and the game's restart land here.
+    // Setup / Error: the box follows and is saved with the other edits on Play; otherwise port.cfg is written now.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+    fn set_fullscreen(&mut self, on: bool) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.fullscreen = on;
+            self.window()
+                .set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
+            match &mut self.shell {
+                Shell::Setup(ui) | Shell::Error(ui) => {
+                    ui.screen.model_mut().set_fullscreen(on);
+                    self.window().request_redraw();
+                }
+                _ => crate::settings::save_port_cfg(
+                    &self.setup.dirs,
+                    "fullscreen",
+                    if on { "on" } else { "off" },
+                ),
+            }
+        }
+    }
+
+    fn act(&mut self, el: &ActiveEventLoop, a: Action) {
+        match a {
+            Action::Play => self.play(el),
+            Action::Quit => el.exit(),
+            Action::Fullscreen(on) => self.set_fullscreen(on),
+            Action::Back => {
+                if let Shell::Error(mut ui) = std::mem::replace(&mut self.shell, Shell::Loading) {
+                    ui.screen.model_mut().view = View::Settings;
+                    self.shell = Shell::Setup(ui);
+                    self.window().request_redraw();
+                }
+            }
+            Action::Resume => self.resume_game(el),
+        }
+    }
+
+    // Setup / Error events: egui input, the redraw pass and its action, Shift during the Waiting screen.
+    fn ui_event(&mut self, el: &ActiveEventLoop, ev: WindowEvent) {
+        let window = self.window().clone();
+        let (Shell::Setup(ui) | Shell::Error(ui)) = &mut self.shell else {
             return;
         };
         match ev {
-            WindowEvent::CloseRequested => {
-                // Tool `replay_save`: closing the window mid-game still writes the recording.
-                if r.ctx.core.replay_save.is_some()
-                    && r.ctx.w.game.scene == crate::gamemgr::SCENE_GAME
-                {
-                    crate::replay::finish(&mut r.ctx);
+            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::RedrawRequested => match ui.screen.redraw(&window, &mut ui.gfx) {
+                // Saved `launcher = off`: Shift may still open the screen for a moment after the first frame.
+                None if ui.screen.model().view == View::Waiting => {
+                    self.auto_at
+                        .get_or_insert_with(|| Instant::now() + AUTO_WAIT);
                 }
-                el.exit()
+                None => {}
+                Some(a) => self.act(el, a),
+            },
+            ev => {
+                if let WindowEvent::Resized(s) = ev {
+                    ui.gfx.resize(s.width, s.height);
+                }
+                let shift = match &ev {
+                    WindowEvent::ModifiersChanged(m) => m.state().shift_key(),
+                    WindowEvent::KeyboardInput { event, .. } => matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight)
+                    ),
+                    _ => false,
+                };
+                let model = ui.screen.model_mut();
+                if shift && model.view == View::Waiting {
+                    model.view = View::Settings;
+                    window.request_redraw();
+                }
+                if ui.screen.on_event(&window, &ev) {
+                    window.request_redraw();
+                }
             }
+        }
+    }
+
+    // Play: save the edited settings, apply the display settings, draw the Loading frame, drop egui (and its GPU
+    // objects) and load the game on the same device exactly as without the launcher.
+    fn play(&mut self, el: &ActiveEventLoop) {
+        let Shell::Setup(ui) = std::mem::replace(&mut self.shell, Shell::Loading) else {
+            return;
+        };
+        let Ui {
+            mut gfx,
+            mut screen,
+        } = *ui;
+        screen.model().save();
+        let s = screen.model().settings();
+        el.set_control_flow(ControlFlow::Wait);
+        if s.vsync != self.setup.vsync {
+            gfx.set_vsync(s.vsync);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if s.scale != self.setup.scale && !s.fullscreen {
+            let k = s.scale as f64;
+            let _ = self
+                .window()
+                .request_inner_size(winit::dpi::LogicalSize::new(640.0 * k, 480.0 * k));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = crate::sources::native(s.game_dir.clone().expect("Play needs a game folder"));
+        #[cfg(target_arch = "wasm32")]
+        let source = self.source.clone().expect("web files");
+        screen.model_mut().view = View::Loading;
+        self.setup = s.clone();
+        self.start_load(el, gfx, Some(screen), s, source);
+    }
+
+    // Shell::Loading: one "Loading" frame (unless tool runs), then the screen and its GPU objects are dropped and the
+    // game loads on this device.
+    fn start_load(
+        &mut self,
+        el: &ActiveEventLoop,
+        mut gfx: Box<Gfx>,
+        screen: Option<Screen>,
+        s: Settings,
+        source: Source,
+    ) {
+        let window = self.window().clone();
+        if let Some(mut screen) = screen
+            && !self.suspended
+        {
+            screen.redraw(&window, &mut gfx);
+        }
+        self.shell = Shell::Loading;
+        self.auto_at = None;
+        el.set_control_flow(ControlFlow::Wait);
+        let (proxy, vsync) = (self.proxy.clone(), s.vsync);
+        spawn(async move {
+            let ev = match load(source, *gfx, s).await {
+                Ok(r) => UserEvent::Ready(r),
+                Err(e) => failed(window, e, Some(vsync)).await,
+            };
+            let _ = proxy.send_event(ev);
+        });
+    }
+
+    // A start-up error: Shell::Error (Back returns to Setup), or a message box and exit when there is no GPU. Tool
+    // runs only log it and exit.
+    fn failed(&mut self, el: &ActiveEventLoop, msg: String, gfx: Option<Box<Gfx>>) {
+        let tool = self.setup.is_tool_run();
+        let gfx = match gfx {
+            Some(g) if !tool => g,
+            _ => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if tool {
+                    std::process::exit(1);
+                }
+                message_box(&format!("The game could not start:\n{msg}"));
+                return el.exit();
+            }
+        };
+        self.shell = Shell::Error(self.ui(gfx, View::Error(msg)));
+    }
+
+    // F1: the port menu over the game; its pacer stops and held keys are released (as on focus loss).
+    fn open_port_menu(&mut self) {
+        let Shell::Running(mut r) = std::mem::replace(&mut self.shell, Shell::Loading) else {
+            return;
+        };
+        r.pacer.suspend();
+        if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+            h.input.set_focus(false);
+        }
+        let mut model = crate::launcher::Model::new(&r.settings, Folder::Native);
+        model.view = View::PortMenu;
+        let screen = Screen::new(self.window(), gfx(&mut r.ctx), model);
+        self.shell = Shell::PortMenu(r, Box::new(screen));
+        self.window().request_redraw();
+    }
+
+    // Resume: the screen's GPU objects go, the pacer deadline restarts at now (the time in the menu is not caught up).
+    fn resume_game(&mut self, el: &ActiveEventLoop) {
+        let Shell::PortMenu(mut r, screen) = std::mem::replace(&mut self.shell, Shell::Loading)
+        else {
+            return;
+        };
+        drop(screen);
+        if !self.suspended {
+            r.pacer.resume(Instant::now());
+        }
+        if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+            h.input.set_focus(true);
+        }
+        self.shell = Shell::Running(r);
+        el.set_control_flow(ControlFlow::Wait);
+        self.window().request_redraw();
+    }
+
+    fn menu_event(&mut self, el: &ActiveEventLoop, ev: WindowEvent) {
+        let window = self.window().clone();
+        let Shell::PortMenu(r, screen) = &mut self.shell else {
+            return;
+        };
+        match ev {
+            WindowEvent::CloseRequested => close(r, el),
+            WindowEvent::RedrawRequested => {
+                if let Some(a) = screen.redraw(&window, gfx(&mut r.ctx)) {
+                    self.act(el, a);
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(KeyCode::F1 | KeyCode::Escape)
+                    ) =>
+            {
+                self.resume_game(el)
+            }
+            ev => {
+                if let WindowEvent::Resized(s) = ev {
+                    gfx(&mut r.ctx).resize(s.width, s.height);
+                }
+                if screen.on_event(&window, &ev) {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn game_event(&mut self, el: &ActiveEventLoop, ev: WindowEvent) {
+        let window = self.window().clone();
+        let Shell::Running(r) = &mut self.shell else {
+            return;
+        };
+        match ev {
+            WindowEvent::CloseRequested => close(r, el),
             WindowEvent::Resized(s) => gfx(&mut r.ctx).resize(s.width, s.height),
-            #[cfg(not(target_arch = "wasm32"))]
-            WindowEvent::ModifiersChanged(m) => self.alt = m.state().alt_key(),
             WindowEvent::Focused(f) => {
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
                     h.input.set_focus(f);
                 }
             }
-            // Port-only F11 / Alt+Enter: toggle fullscreen and save it; the key press does not reach the game.
-            #[cfg(not(target_arch = "wasm32"))]
+            // Port-only F1: the port menu; the key press does not reach the game.
             WindowEvent::KeyboardInput { event, .. }
-                if event.state == ElementState::Pressed
-                    && is_fullscreen_key(self.alt, event.physical_key) =>
+                if event.physical_key == PhysicalKey::Code(KeyCode::F1) =>
             {
-                if !event.repeat {
-                    self.fullscreen = !self.fullscreen;
-                    r.window
-                        .set_fullscreen(self.fullscreen.then_some(Fullscreen::Borderless(None)));
-                    crate::settings::save_port_cfg(
-                        &crate::settings::get().dirs,
-                        "fullscreen",
-                        if self.fullscreen { "on" } else { "off" },
-                    );
+                if event.state == ElementState::Pressed && !event.repeat {
+                    self.open_port_menu();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -278,295 +568,88 @@ impl ApplicationHandler<UserEvent> for App {
                         .key(k, event.state == ElementState::Pressed);
                 }
             }
-            WindowEvent::RedrawRequested => {
-                // Frame_Run timing (00 §2, pacer.rs). Desktop: the port sleeps ≤ 1 ms for Sleep(0) while waiting.
-                let turbo = r.pacer.turbo();
-                let frames = match r.pacer.poll(Instant::now()) {
-                    Tick::Run(n) => n,
-                    Tick::Suspended => return,
-                    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-                    Tick::Wait(left) => {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        std::thread::sleep(std::time::Duration::from_secs_f64(left.min(0.001)));
-                        r.window.request_redraw();
-                        return;
-                    }
-                };
-                // Web `?shot=<n>`: logic freezes at frame n so the page can be screenshotted.
-                let frozen =
-                    cfg!(target_arch = "wasm32") && self.shot.is_some_and(|f| r.ctx.w.frame >= f);
-                // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
-                for _ in 0..frames {
-                    if self.shot.is_some_and(|f| r.ctx.w.frame >= f) && turbo > 0 {
-                        break;
-                    }
-                    match if frozen { Flow::Continue } else { r.ctx.calc() } {
-                        Flow::Continue => {}
-                        // Frame_Run returns after the calc chain and Sound_Update: no draw, no Present (15 §2.2, 00 §2).
-                        Flow::Quit => {
-                            r.ctx.exit_save();
-                            return el.exit();
-                        }
-                        // Result 2 (00 §2): the program restarts in the live config's mode; this frame has no
-                        // draw and no Present. Port: window mode +0x22 is applied as the port's fullscreen setting.
-                        Flow::Error => {
-                            if let Err(e) = r.ctx.restart() {
-                                log::error!("restart failed: {e:#}");
-                                return el.exit();
-                            }
-                            #[cfg(not(target_arch = "wasm32"))]
-                            {
-                                self.fullscreen = r.ctx.w.game.cfg.windowed == 0;
-                                r.window.set_fullscreen(
-                                    self.fullscreen.then_some(Fullscreen::Borderless(None)),
-                                );
-                                crate::settings::save_port_cfg(
-                                    &crate::settings::get().dirs,
-                                    "fullscreen",
-                                    if self.fullscreen { "on" } else { "off" },
-                                );
-                            }
-                            r.window.request_redraw();
-                            return;
-                        }
-                    }
+            WindowEvent::RedrawRequested => match frame(r, &window) {
+                Frame::Continue => {}
+                Frame::Exit => el.exit(),
+                Frame::Restarted(on) => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.set_fullscreen(on);
+                    #[cfg(target_arch = "wasm32")]
+                    let _ = on;
+                    window.request_redraw();
                 }
-                let size = r.window.inner_size();
-                gfx(&mut r.ctx).resize(size.width, size.height);
-                r.ctx.draw();
-                #[cfg(not(target_arch = "wasm32"))]
-                if self.shot.is_some_and(|f| r.ctx.w.frame >= f) {
-                    let (g, rec) = gfx_rec(&mut r.ctx);
-                    g.capture(rec, self.shot_size)
-                        .save("/tmp/th08_shot.png")
-                        .expect("save shot");
-                    el.exit();
-                    return;
-                }
-                r.ctx.present();
-                crate::ascii::apply_pending_captures(&mut r.ctx.w.anm, &mut r.ctx.rec);
-                r.window.request_redraw();
-            }
+            },
             _ => {}
         }
     }
 }
 
-impl App {
-    // A second `Resumed` (ARCH_D §5): a new surface for the native window on the same device; the pacer deadline
-    // restarts at now. Audio is not touched here.
-    fn reattach(&mut self) {
-        if !std::mem::take(&mut self.suspended) {
-            return;
-        }
-        if let Some(r) = self.run.as_mut() {
-            if let Err(e) = gfx(&mut r.ctx).attach(r.window.clone()) {
-                log::error!("surface: {e:#}");
-            }
-            r.pacer.resume(Instant::now());
-            r.window.request_redraw();
-        }
-        if let Some(l) = self.launch.as_mut() {
-            if let Some(g) = l.gfx.as_mut()
-                && let Err(e) = g.attach(l.window.clone())
-            {
-                log::error!("surface: {e:#}");
-            }
-            l.window.request_redraw();
-        }
+// Closing the window mid-game. Tool `replay_save`: the recording is still written.
+fn close(r: &mut Running, el: &ActiveEventLoop) {
+    if r.ctx.core.replay_save.is_some() && r.ctx.w.game.scene == crate::gamemgr::SCENE_GAME {
+        crate::replay::finish(&mut r.ctx);
     }
+    el.exit()
+}
 
-    fn new(el: &EventLoop<UserEvent>, source: Option<Source>, pre: Option<Settings>) -> Self {
-        let mut app = App {
-            source,
-            proxy: el.create_proxy(),
-            run: None,
-            started: false,
-            suspended: false,
-            pre: None,
-            launch: None,
-            settings: None,
-            shot: None,
-            shot_size: None,
-            alt: false,
-            fullscreen: false,
-        };
-        match pre {
-            Some(s) => {
-                app.fullscreen = s.fullscreen && cfg!(not(target_arch = "wasm32"));
-                app.pre = Some(s);
-            }
-            None => app.adopt(crate::settings::get()),
-        }
-        app
-    }
-
-    // The final settings drive the run.
-    fn adopt(&mut self, settings: &'static Settings) {
-        self.settings = Some(settings);
-        self.shot = settings.shot;
-        // Debug `TH08_SHOT_SIZE=WxH`: the shot goes through the window's scaling blit.
-        self.shot_size = settings.shot_size;
-        self.fullscreen = settings.fullscreen && cfg!(not(target_arch = "wasm32"));
-    }
-
-    fn launcher_event(&mut self, el: &ActiveEventLoop, ev: WindowEvent) {
-        let l = self.launch.as_mut().unwrap();
-        let (Some(screen), Some(gfx)) = (l.screen.as_mut(), l.gfx.as_mut()) else {
-            if matches!(ev, WindowEvent::CloseRequested) {
-                el.exit();
-            }
-            return;
-        };
-        match ev {
-            WindowEvent::CloseRequested => el.exit(),
-            WindowEvent::RedrawRequested => match screen.redraw(&l.window, gfx) {
-                // Saved `launcher = off`: Shift may still open the screen for a moment after the first frame.
-                None if screen.model().waiting => {
-                    l.auto_at.get_or_insert_with(|| Instant::now() + AUTO_WAIT);
-                }
-                Some(crate::launcher::Action::Play) => self.play(el),
-                Some(crate::launcher::Action::Quit) => el.exit(),
-                None => {
-                    // The fullscreen box applies at once, not only on Play.
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        let s = screen.model().settings();
-                        if s.fullscreen != self.fullscreen {
-                            self.fullscreen = s.fullscreen;
-                            l.window.set_fullscreen(
-                                s.fullscreen.then_some(Fullscreen::Borderless(None)),
-                            );
-                            if !s.fullscreen {
-                                let k = s.scale as f64;
-                                let _ = l.window.request_inner_size(winit::dpi::LogicalSize::new(
-                                    640.0 * k,
-                                    480.0 * k,
-                                ));
-                            }
-                        }
-                    }
-                }
-            },
+// One redraw of the running game: Frame_Run timing (00 §2, pacer.rs), the logic frames, draw and Present.
+fn frame(r: &mut Running, window: &Window) -> Frame {
+    // Desktop: the port sleeps ≤ 1 ms for Sleep(0) while waiting.
+    let turbo = r.pacer.turbo();
+    let shot = r.settings.shot;
+    let frames = match r.pacer.poll(Instant::now()) {
+        Tick::Run(n) => n,
+        Tick::Suspended => return Frame::Continue,
+        #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+        Tick::Wait(left) => {
             #[cfg(not(target_arch = "wasm32"))]
-            WindowEvent::KeyboardInput { event, .. }
-                if event.state == ElementState::Pressed
-                    && is_fullscreen_key(self.alt, event.physical_key) =>
-            {
-                if !event.repeat {
-                    screen.model_mut().toggle_fullscreen();
-                    l.window.request_redraw();
-                }
+            std::thread::sleep(std::time::Duration::from_secs_f64(left.min(0.001)));
+            window.request_redraw();
+            return Frame::Continue;
+        }
+    };
+    // Web `?shot=<n>`: logic freezes at frame n so the page can be screenshotted.
+    let frozen = cfg!(target_arch = "wasm32") && shot.is_some_and(|f| r.ctx.w.frame >= f);
+    // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
+    for _ in 0..frames {
+        if shot.is_some_and(|f| r.ctx.w.frame >= f) && turbo > 0 {
+            break;
+        }
+        match if frozen { Flow::Continue } else { r.ctx.calc() } {
+            Flow::Continue => {}
+            // Frame_Run returns after the calc chain and Sound_Update: no draw, no Present (15 §2.2, 00 §2).
+            Flow::Quit => {
+                r.ctx.exit_save();
+                return Frame::Exit;
             }
-            ev => {
-                if let WindowEvent::Resized(s) = ev {
-                    gfx.resize(s.width, s.height);
+            // Result 2 (00 §2): the program restarts in the live config's mode; this frame has no draw and no
+            // Present. Port: window mode +0x22 is applied as the port's fullscreen setting.
+            Flow::Error => {
+                if let Err(e) = r.ctx.restart() {
+                    log::error!("restart failed: {e:#}");
+                    return Frame::Exit;
                 }
-                #[cfg(not(target_arch = "wasm32"))]
-                if let WindowEvent::ModifiersChanged(m) = &ev {
-                    self.alt = m.state().alt_key();
-                }
-                let shift = match &ev {
-                    WindowEvent::ModifiersChanged(m) => m.state().shift_key(),
-                    WindowEvent::KeyboardInput { event, .. } => matches!(
-                        event.physical_key,
-                        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight)
-                    ),
-                    _ => false,
-                };
-                if shift && screen.model().waiting {
-                    screen.model_mut().waiting = false;
-                    l.window.request_redraw();
-                }
-                if screen.on_event(&l.window, &ev) {
-                    l.window.request_redraw();
-                }
+                return Frame::Restarted(r.ctx.w.game.cfg.windowed == 0);
             }
         }
     }
-
-    // Play: save the edited settings, drop egui (and its GPU objects), apply the display settings, install the final
-    // settings and load the game on the same device exactly as without the launcher.
-    fn play(&mut self, el: &ActiveEventLoop) {
-        let l = *self.launch.take().unwrap();
-        let screen = l.screen.unwrap();
-        let mut gfx = l.gfx.unwrap();
-        screen.model().save();
-        let s = screen.model().settings();
-        drop(screen);
-        el.set_control_flow(ControlFlow::Wait);
-        if s.vsync != l.start.vsync {
-            gfx.set_vsync(s.vsync);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if s.fullscreen != self.fullscreen {
-                l.window
-                    .set_fullscreen(s.fullscreen.then_some(Fullscreen::Borderless(None)));
-            }
-            if s.scale != l.start.scale && !s.fullscreen {
-                let k = s.scale as f64;
-                let _ = l
-                    .window
-                    .request_inner_size(winit::dpi::LogicalSize::new(640.0 * k, 480.0 * k));
-            }
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        let source = crate::sources::native(s.game_dir.clone().expect("Play needs a game folder"));
-        #[cfg(target_arch = "wasm32")]
-        let source = self.source.clone().expect("web files");
-        let vsync = s.vsync;
-        crate::settings::init(s);
-        self.adopt(crate::settings::get());
-        let (proxy, window) = (self.proxy.clone(), l.window);
-        spawn(async move {
-            let ev = match load(window.clone(), source, *gfx).await {
-                Ok(r) => UserEvent::Ready(r),
-                Err(e) => failed(window, e, Some(vsync)).await,
-            };
-            let _ = proxy.send_event(ev);
-        });
+    let size = window.inner_size();
+    gfx(&mut r.ctx).resize(size.width, size.height);
+    r.ctx.draw();
+    // Debug `TH08_SHOT` frame (`TH08_SHOT_SIZE=WxH`: through the window's scaling blit).
+    #[cfg(not(target_arch = "wasm32"))]
+    if shot.is_some_and(|f| r.ctx.w.frame >= f) {
+        let size = r.settings.shot_size;
+        let (g, rec) = gfx_rec(&mut r.ctx);
+        g.capture(rec, size)
+            .save("/tmp/th08_shot.png")
+            .expect("save shot");
+        return Frame::Exit;
     }
-
-    // A start-up error: the launcher's error screen (Back returns to the settings), or a message box and exit when
-    // there is no GPU. Tool runs only log it and exit.
-    fn failed(
-        &mut self,
-        el: &ActiveEventLoop,
-        window: Arc<Window>,
-        msg: String,
-        gfx: Option<Box<Gfx>>,
-    ) {
-        let start = self.settings.filter(|s| !s.is_tool_run()).cloned();
-        let (Some(start), Some(mut gfx)) = (start, gfx) else {
-            if self.settings.is_some_and(|s| s.is_tool_run()) {
-                #[cfg(not(target_arch = "wasm32"))]
-                std::process::exit(1);
-            }
-            message_box(&format!("The game could not start:\n{msg}"));
-            return el.exit();
-        };
-        let folder = match &self.source {
-            #[cfg(target_arch = "wasm32")]
-            Some(src) => crate::launcher::Folder::Web(src.names()),
-            _ => crate::launcher::Folder::Native,
-        };
-        let mut model = crate::launcher::Model::new(&start, folder);
-        model.error = Some(msg);
-        let screen = crate::launcher::Screen::new(&window, &gfx, model);
-        if self.suspended {
-            gfx.detach();
-        }
-        window.request_redraw();
-        self.launch = Some(Box::new(Launch {
-            window,
-            gfx: Some(gfx),
-            screen: Some(screen),
-            start,
-            folder: None,
-            auto_at: None,
-        }));
-    }
+    r.ctx.present();
+    crate::ascii::apply_pending_captures(&mut r.ctx.w.anm, &mut r.ctx.rec);
+    window.request_redraw();
+    Frame::Continue
 }
 
 // How long a saved `launcher = off` waits for Shift after the first frame (the window must be mapped and focused for
@@ -629,22 +712,22 @@ fn spawn(fut: impl std::future::Future<Output = ()> + 'static) {
     wasm_bindgen_futures::spawn_local(fut);
 }
 
-// Game window with the settings already installed (`settings::init` or `get`).
-pub fn run(source: Source) {
-    run_app(Some(source), None);
+// Game window that loads at once with these final settings (owned by the game, not installed globally).
+pub fn run(source: Source, s: Settings) {
+    run_app(Some(source), s, false);
 }
 
-// Game window that shows the launcher screen first; `settings::init` happens on Play. Native: `source` None (the
-// folder comes from the screen); web: the files picked in the page.
+// Game window that shows the launcher screen first. Native: `source` None (the folder comes from the screen); web:
+// the files picked in the page.
 pub fn run_launcher(source: Option<Source>, s: Settings) {
-    run_app(source, Some(s));
+    run_app(source, s, true);
 }
 
-fn run_app(source: Option<Source>, pre: Option<Settings>) {
+fn run_app(source: Option<Source>, s: Settings, launcher: bool) {
     let el = EventLoop::<UserEvent>::with_user_event()
         .build()
         .expect("event loop");
-    let app = App::new(&el, source, pre);
+    let app = App::new(&el, source, s, launcher);
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut app = app;

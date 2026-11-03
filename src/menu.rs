@@ -1549,18 +1549,7 @@ mod tests {
     use crate::gamemgr::{self, Game};
 
     fn ctx() -> Option<crate::game::Ctx> {
-        let dir = crate::settings::test_game_dir()?;
-        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
-        let src = crate::sources::native(dir.into());
-        Some(
-            pollster::block_on(crate::game::Ctx::load_with(
-                src.clone(),
-                crate::settings::get().tool_io(gfx, &src),
-                crate::settings::get().core(),
-                false,
-            ))
-            .unwrap(),
-        )
+        crate::testdata::ctx(Default::default())
     }
 
     // 12 §2.2 "Back from a replay": bit 3 survives register (screen 0, previous-scene cursor), the Top entry block

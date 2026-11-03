@@ -64,7 +64,9 @@ pub mod stage;
 pub mod stdfile;
 pub mod supervisor;
 pub mod task;
+pub mod testdata;
 pub mod text;
+pub mod trace;
 pub mod world;
 #[cfg(test)]
 mod worldclone;
@@ -88,7 +90,6 @@ pub fn start(files: js_sys::Array) {
     if s.launcher && !s.is_tool_run() {
         app::run_launcher(Some(source), s);
     } else {
-        settings::init(s);
-        app::run(source);
+        app::run(source, s);
     }
 }

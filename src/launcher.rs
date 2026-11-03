@@ -176,9 +176,30 @@ pub enum Folder {
     Web(Vec<String>),
 }
 
+// What a screen pass asks the app's Shell to do (app.rs).
 pub enum Action {
     Play,
     Quit,
+    // Error screen: back to the settings (Shell::Error → Setup).
+    Back,
+    // Port menu: back to the paused game.
+    Resume,
+    // The Fullscreen box was changed on screen; the app applies it to the window.
+    Fullscreen(bool),
+}
+
+// What the screen shows; one per Shell state that draws with egui (app.rs).
+#[derive(Clone, Debug, PartialEq)]
+pub enum View {
+    Settings,
+    // Saved `launcher = off`: the game starts unless Shift is held.
+    Waiting,
+    // th08.dat / audio load (one frame, drawn before the load starts).
+    Loading,
+    // Start-up error, with Back / Quit.
+    Error(String),
+    // In-game port menu over the paused game (stub: Resume only; never logic-affecting settings).
+    PortMenu,
 }
 
 // One table entry as edited on screen. Value text "" = unset; booleans are "on"/"off".
@@ -247,10 +268,7 @@ pub struct Model {
     dirs: settings::PlatformDirs,
     // Developer view: Cheats and Tools rows and the origin tags are shown.
     pub dev: bool,
-    // Start-up error after Play (shown instead of the settings, with Back / Quit).
-    pub error: Option<String>,
-    // `launcher = off` saved: the game starts unless Shift is held, this text is shown meanwhile.
-    pub waiting: bool,
+    pub view: View,
 }
 
 impl Model {
@@ -276,20 +294,18 @@ impl Model {
             folder,
             dirs: s.dirs.clone(),
             dev,
-            error: None,
-            waiting: false,
+            view: View::Settings,
         }
     }
 
-    // F11 / Alt+Enter on the launcher: flips the fullscreen box.
-    pub fn toggle_fullscreen(&mut self) {
-        let on = self.settings().fullscreen;
+    // The window's fullscreen state (F11 / Alt+Enter) mirrored into the box; saved with the other edits on Play.
+    pub fn set_fullscreen(&mut self, on: bool) {
         let r = self
             .rows
             .iter_mut()
             .find(|r| r.e.key == "fullscreen")
             .unwrap();
-        r.value = if on { "off" } else { "on" }.into();
+        r.value = if on { "on" } else { "off" }.into();
     }
 
     fn row(&self, key: &str) -> &Row {
@@ -351,17 +367,33 @@ impl Model {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
-        if self.waiting {
-            egui::CentralPanel::default_margins().show(ui, |ui| {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Starting the game…  hold Shift to open the settings screen");
-                });
-            });
-            return None;
+        match &self.view {
+            View::Settings => {
+                let before = self.row("fullscreen").value.clone();
+                let act = self.settings_ui(ui);
+                let after = &self.row("fullscreen").value;
+                if act.is_none() && *after != before {
+                    return Some(Action::Fullscreen(after == "on"));
+                }
+                act
+            }
+            View::Waiting => {
+                message_ui(
+                    ui,
+                    "Starting the game…  hold Shift to open the settings screen",
+                );
+                None
+            }
+            View::Loading => {
+                message_ui(ui, "Loading th08.dat…");
+                None
+            }
+            View::Error(msg) => error_ui(ui, msg),
+            View::PortMenu => port_menu_ui(ui),
         }
-        if self.error.is_some() {
-            return self.error_ui(ui);
-        }
+    }
+
+    fn settings_ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
         let mut act = None;
         egui::Panel::top("folder").show(ui, |ui| {
             ui.add_space(4.0);
@@ -415,34 +447,6 @@ impl Model {
                 for g in Group::ALL.into_iter().filter(|g| dev || !g.developer()) {
                     self.group_ui(ui, g);
                 }
-            });
-        });
-        act
-    }
-
-    fn error_ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
-        let mut act = None;
-        egui::Panel::bottom("buttons").show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui.button("  Back  ").clicked() {
-                    self.error = None;
-                }
-                if cfg!(not(target_arch = "wasm32")) && ui.button("Quit").clicked() {
-                    act = Some(Action::Quit);
-                }
-            });
-            ui.add_space(4.0);
-        });
-        egui::CentralPanel::default_margins().show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.heading("The game could not start");
-            ui.add_space(8.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    self.error.as_deref().unwrap_or(""),
-                );
             });
         });
         act
@@ -519,6 +523,63 @@ impl Model {
                     });
             });
     }
+}
+
+fn message_ui(ui: &mut egui::Ui, text: &str) {
+    egui::CentralPanel::default_margins().show(ui, |ui| {
+        ui.centered_and_justified(|ui| {
+            ui.label(text);
+        });
+    });
+}
+
+fn error_ui(ui: &mut egui::Ui, msg: &str) -> Option<Action> {
+    let mut act = None;
+    egui::Panel::bottom("buttons").show(ui, |ui| {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button("  Back  ").clicked() {
+                act = Some(Action::Back);
+            }
+            if cfg!(not(target_arch = "wasm32")) && ui.button("Quit").clicked() {
+                act = Some(Action::Quit);
+            }
+        });
+        ui.add_space(4.0);
+    });
+    egui::CentralPanel::default_margins().show(ui, |ui| {
+        ui.add_space(4.0);
+        ui.heading("The game could not start");
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.colored_label(ui.visuals().error_fg_color, msg);
+        });
+    });
+    act
+}
+
+// Port menu stub: the hook for the touch-layout editor; host settings only will go here, never core ones (seed,
+// stage, cheats), so a mid-game visit cannot change the game's logic.
+fn port_menu_ui(ui: &mut egui::Ui) -> Option<Action> {
+    let mut act = None;
+    egui::CentralPanel::default_margins().show(ui, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() / 3.0);
+            ui.heading("Port menu");
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("the game is paused").weak());
+            ui.add_space(12.0);
+            if ui
+                .button(egui::RichText::new("  Resume  ").strong())
+                .clicked()
+            {
+                act = Some(Action::Resume);
+            }
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("F1 / Esc").small().weak());
+        });
+    });
+    act
 }
 
 // Help is shown once, under the value; the developer view adds the flag / env name and the origin tag.

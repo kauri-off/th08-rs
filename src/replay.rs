@@ -742,7 +742,14 @@ mod tests {
         let rec = g.rpy.as_mut().unwrap().stages[0].as_mut().unwrap();
         rec.inputs.extend([1, 2, 3]);
         g.stats.score10 = 123_456;
-        let now = crate::platform::Clock::default().local_time();
+        let now = crate::host::LocalTime {
+            year: 2026,
+            month: 11,
+            day: 3,
+            hour: 12,
+            minute: 34,
+            second: 56,
+        };
         let f = build_save(&mut g, b"TESTER  ", &mut crate::rng::Rng::seeded(5), now).unwrap();
         assert!(g.rpy.is_none());
         let r = parse(&f, None).unwrap();
@@ -865,7 +872,7 @@ mod tests {
         let l = user_lines(&g, &r, 0.0, Default::default());
         assert_eq!(l[2], ("キャラ名", "霊夢＆紫　　　　".into()));
         assert_eq!(l[5], ("最終ステージ", "Clear".into()));
-        let Some(ar) = crate::archive::test_archive() else {
+        let Some(ar) = crate::testdata::archive() else {
             return;
         };
         let ver = ar.read(crate::scoredat::VER_LIST_NAME).unwrap();
@@ -905,7 +912,7 @@ mod tests {
 #[cfg(test)]
 #[test]
 fn dump_demos() {
-    let Some(ar) = crate::archive::test_archive() else {
+    let Some(ar) = crate::testdata::archive() else {
         return;
     };
     let ver = ar.read(crate::scoredat::VER_LIST_NAME).ok();

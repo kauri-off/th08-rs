@@ -1693,7 +1693,7 @@ pub fn menu_start_state(ctx: &mut crate::game::Ctx, name: &str) -> anyhow::Resul
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("replay"))?;
     if name == "menu_mopup1" {
-        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/data/drawlog");
+        let data = crate::testdata::repo_root().join("specs/data/drawlog");
         let score = std::fs::read(data.join("menu_mopup1.score.dat"))?;
         let now = ctx.host.ticks_ms();
         ctx.w.game.load_score(Some(&score), now);
@@ -1771,6 +1771,7 @@ pub fn run_demo(
     Ok(())
 }
 
+// Tools-bound tests (headless `Gfx`, reference draw logs on disk): move with this file to th08-tools in 10c.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
@@ -1983,7 +1984,7 @@ mod tests {
     const DEMO: [f64; 4] = [90.6, 71.6, 83.3, 86.9];
 
     fn data(p: &str) -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        crate::testdata::repo_root()
             .join("specs/data/drawlog")
             .join(p)
     }

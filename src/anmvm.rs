@@ -1296,7 +1296,7 @@ mod tests {
     #[test]
     fn all_game_opcodes_handled() {
         let mut rng = crate::rng::Rng::default();
-        let Some(ar) = crate::archive::test_archive() else {
+        let Some(ar) = crate::testdata::archive() else {
             return;
         };
         let mut seen = std::collections::BTreeSet::new();

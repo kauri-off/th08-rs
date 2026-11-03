@@ -1975,7 +1975,7 @@ mod tests {
             &Input::default(),
             &mut bgm,
             &mut Default::default(),
-            &mut crate::platform::ToolHost::default(),
+            &mut crate::host::MemHost::default(),
             None,
         );
         assert_eq!(ints(&m), [1, 1, 1, 1, 0, 0, 0, 0, 0, 0]);
@@ -1987,7 +1987,7 @@ mod tests {
                 &Input::default(),
                 &mut bgm,
                 &mut Default::default(),
-                &mut crate::platform::ToolHost::default(),
+                &mut crate::host::MemHost::default(),
                 None,
             );
         }
@@ -1998,7 +1998,7 @@ mod tests {
             &press(input::SHOT),
             &mut bgm,
             &mut Default::default(),
-            &mut crate::platform::ToolHost::default(),
+            &mut crate::host::MemHost::default(),
             None,
         );
         assert_eq!(m.state, 4);
@@ -2015,7 +2015,7 @@ mod tests {
             &Input::default(),
             &mut bgm,
             &mut Default::default(),
-            &mut crate::platform::ToolHost::default(),
+            &mut crate::host::MemHost::default(),
             None,
         );
         m.state = 5;
@@ -2030,7 +2030,7 @@ mod tests {
             &press(input::SHOT),
             &mut bgm,
             &mut Default::default(),
-            &mut crate::platform::ToolHost::default(),
+            &mut crate::host::MemHost::default(),
             None,
         );
         assert_eq!(m.state, 9);
@@ -2042,7 +2042,7 @@ mod tests {
             &Input::default(),
             &mut bgm,
             &mut Default::default(),
-            &mut crate::platform::ToolHost::default(),
+            &mut crate::host::MemHost::default(),
             None,
         );
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);

@@ -251,7 +251,7 @@ impl TaskCtx for Ctx {
     fn on_restart(&mut self) {
         // ScreenEffect_Register links at once: the restarted pass already runs effects queued in this one (13 §3).
         crate::effect::register_pending(self);
-        crate::session::on_restart(self);
+        crate::trace::on_restart(self);
     }
 }
 
@@ -460,7 +460,7 @@ impl Ctx {
                 self.log_frame();
             }
             self.present();
-            crate::session::on_extra_present(self);
+            crate::trace::on_extra_present(self);
         }
     }
 
@@ -547,7 +547,7 @@ impl Ctx {
         }
     }
 
-    // Tools and tests: their own host type (`platform::ToolHost`), None for another host.
+    // Tools and tests: their own host type (`platform::ToolHost`, `host::MemHost`), None for another host.
     pub fn host_as<T: 'static>(&mut self) -> Option<&mut T> {
         self.host.as_any_mut().downcast_mut()
     }
@@ -582,18 +582,7 @@ mod tests {
     use crate::gamemgr::{SCENE_BOOT, SCENE_MENU};
 
     fn ctx() -> Option<super::Ctx> {
-        let dir = crate::settings::test_game_dir()?;
-        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).ok()?;
-        let src = crate::sources::native(dir.into());
-        Some(
-            pollster::block_on(super::Ctx::load_with(
-                src.clone(),
-                crate::settings::get().tool_io(gfx, &src),
-                crate::settings::get().core(),
-                false,
-            ))
-            .unwrap(),
-        )
+        crate::testdata::ctx(Default::default())
     }
 
     // 00 §2 restart: back to the boot scene, then logo and loading reach the menu again with the live config kept.

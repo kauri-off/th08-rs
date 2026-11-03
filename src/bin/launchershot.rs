@@ -1,12 +1,12 @@
 //! Port tool: renders the launcher screen offscreen to a PNG.
-//! `launchershot OUT.png [WxH] [--developer] [--error=TEXT] [th08 switches]...`
+//! `launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [th08 switches]...`
 
 fn main() {
     env_logger::init();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!(
-            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [th08 switches]..."
+            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [th08 switches]..."
         );
         std::process::exit(2);
     }
@@ -18,13 +18,23 @@ fn main() {
     if size.is_some() {
         args.remove(0);
     }
-    // Launcher views: the developer view, the start-up error screen.
+    // Launcher views: the developer view and the screens of the app's Shell states.
     let dev = args.iter().any(|a| a == "--developer");
     let error = args
         .iter()
         .find_map(|a| a.strip_prefix("--error="))
         .map(String::from);
-    args.retain(|a| a != "--developer" && !a.starts_with("--error="));
+    let view = match args.iter().find_map(|a| a.strip_prefix("--view=")) {
+        None => th08::launcher::View::Settings,
+        Some("waiting") => th08::launcher::View::Waiting,
+        Some("loading") => th08::launcher::View::Loading,
+        Some("portmenu") => th08::launcher::View::PortMenu,
+        Some(v) => {
+            eprintln!("--view={v}: expected waiting, loading or portmenu");
+            std::process::exit(2);
+        }
+    };
+    args.retain(|a| a != "--developer" && !a.starts_with("--error=") && !a.starts_with("--view="));
     let s = match th08::settings::Settings::from_args(th08::launcher::desktop_dirs(), args) {
         Ok(s) => s,
         Err(e) => e.exit(),
@@ -32,7 +42,10 @@ fn main() {
     let gfx = pollster::block_on(th08::gfx::Gfx::headless()).expect("GPU adapter");
     let mut model = th08::launcher::Model::new(&s, th08::launcher::Folder::Native);
     model.dev |= dev;
-    model.error = error;
+    model.view = match error {
+        Some(e) => th08::launcher::View::Error(e),
+        None => view,
+    };
     th08::launcher::render_image(&gfx, model, size.unwrap_or((640, 480)))
         .save(&out)
         .expect("save png");

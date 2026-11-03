@@ -756,7 +756,8 @@ impl Recorder {
 }
 
 // Core's only access to the renderer (ARCH_A §2.2; like `host::Host`), used at the sync points: Present (frame end,
-// Device_ClearPresentTwice in calc), the draw-log sample. Implemented by `gfx::Gfx` for the app, tools and tests.
+// Device_ClearPresentTwice in calc), the draw-log sample. Implemented by `gfx::Gfx` (app, tools) and `NullRenderer`
+// (core tests).
 pub trait Renderer {
     // Executes everything recorded so far in call order (a recorded `DrawCmd::Present` presents) and drains `rec`.
     fn submit(&mut self, rec: &mut Recorder);
@@ -770,56 +771,360 @@ pub trait Renderer {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
+// Renderer that executes nothing: drains the lists, logs no records. Core tests and headless logic runs (logic never
+// reads the renderer, ARCH decision 2).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NullRenderer;
+
+impl Renderer for NullRenderer {
+    fn submit(&mut self, rec: &mut Recorder) {
+        rec.take();
+    }
+    fn enable_log(&mut self) {}
+    fn take_log(&mut self, rec: &mut Recorder) -> Vec<LogRec> {
+        rec.take();
+        Vec::new()
+    }
+    fn set_font(&mut self, _: Option<&str>) {}
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // REWRITE_PLAN step 8c: core reaches the renderer only through `Renderer`. App / renderer / platform modules may
-    // name `gfx`, `text` (font + raster), wgpu and winit; test modules are skipped (they build a headless `Gfx`).
-    const RENDERER_SIDE: &[&str] = &[
+    // STEP10_CRATES §2 per-file table: the files that become th08-core (10c) and the rest of src/ (app, render,
+    // audio, tools). Every src/*.rs is in exactly one list.
+    const CORE: &[&str] = &[
+        "anm",
+        "anmdebug",
+        "anmmgr",
+        "anmvm",
+        "archive",
+        "ascii",
+        "assets",
+        "bomb",
+        "bullet",
+        "camera",
+        "chain",
+        "config",
+        "content",
+        "coreconfig",
+        "d3dx",
+        "drawfmt",
+        "drawlist",
+        "ecl",
+        "eclvm",
+        "effect",
+        "ending",
+        "enemy",
+        "fmath",
+        "game",
+        "gamemgr",
+        "gui",
+        "host",
+        "hud",
+        "input",
+        "item",
+        "menu",
+        "menulist",
+        "msg",
+        "musicroom",
+        "player",
+        "pshot",
+        "replay",
+        "result",
+        "rng",
+        "scoredat",
+        "sht",
+        "sound",
+        "stage",
+        "stdfile",
+        "supervisor",
+        "task",
+        "testdata",
+        "trace",
+        "world",
+        "worldclone",
+    ];
+    const NOT_CORE: &[&str] = &[
         "app",
-        "gfx",
-        "launcher",
+        "audio",
+        "demosync",
+        "drawlog",
         "drawreport",
-        "platform",
+        "gfx",
+        "joystick",
+        "launcher",
+        "lib",
         "main",
+        "midi",
+        "pacer",
+        "platform",
+        "session",
+        "settings",
+        "sources",
         "text",
+        "xz",
+    ];
+    // Never named by a core file, tests included (core's dev-deps stay empty, §1).
+    const NOT_CORE_MODULES: &[&str] = &[
+        "gfx",
+        "text",
+        "audio",
+        "midi",
+        "app",
+        "launcher",
+        "settings",
+        "platform",
+        "sources",
+        "joystick",
+        "pacer",
+        "session",
+        "demosync",
+        "drawlog",
+        "drawreport",
+        "xz",
+    ];
+    const NOT_CORE_CRATES: &[&str] = &[
+        "wgpu",
+        "cpal",
+        "winit",
+        "egui",
+        "egui_wgpu",
+        "egui_winit",
+        "rfd",
+        "clap",
+        "pollster",
+        "web_time",
+        "web_sys",
+        "js_sys",
+        "wasm_bindgen",
+        "wasm_bindgen_futures",
+        "liblzma",
+        "sha2",
+        "rustysynth",
+        "hound",
+        "gilrs",
+        "directories",
+        "chrono",
+        "ab_glyph",
+        "env_logger",
+    ];
+    // Not outside `#[cfg(test)]` items: file system, environment, threads, clocks (ARCH decisions 3 / 6: `Host`).
+    const NOT_OUTSIDE_TESTS: &[&str] = &[
+        "std::fs",
+        "std::env",
+        "std::thread",
+        "std::time",
+        "Instant",
+        "SystemTime",
+        "std::process",
     ];
 
-    #[test]
-    fn core_has_no_renderer_dependency() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+    // `pat` in `code` as a path segment start (`wgpu::…`, not `my_wgpu::`).
+    fn names(code: &str, pat: &str) -> bool {
+        code.match_indices(pat).any(|(i, _)| {
+            let before = code[..i].chars().next_back();
+            let after = code[i + pat.len()..].chars().next();
+            before.is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == ':'))
+                && after.is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })
+    }
+
+    // `text` with comments removed and string / char literal contents blanked (quotes and newlines kept), so the
+    // checks and the brace depth see code only.
+    fn strip(text: &str) -> String {
+        let c: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        let mut i = 0;
+        let ident = |k: usize| k > 0 && (c[k - 1].is_alphanumeric() || c[k - 1] == '_');
+        while i < c.len() {
+            let at = |k: usize| c.get(k).copied().unwrap_or('\0');
+            if c[i] == '/' && at(i + 1) == '/' {
+                while i < c.len() && c[i] != '\n' {
+                    i += 1;
+                }
+            } else if c[i] == '/' && at(i + 1) == '*' {
+                i += 2;
+                while i < c.len() && !(c[i] == '*' && at(i + 1) == '/') {
+                    if c[i] == '\n' {
+                        out.push('\n');
+                    }
+                    i += 1;
+                }
+                i += 2;
+            } else if c[i] == 'r' && !ident(i) && (at(i + 1) == '"' || at(i + 1) == '#') {
+                // Raw string r#"…"#.
+                let mut k = i + 1;
+                while at(k) == '#' {
+                    k += 1;
+                }
+                if at(k) != '"' {
+                    out.push(c[i]);
+                    i += 1;
+                    continue;
+                }
+                let hashes = k - i - 1;
+                out.push_str("r\"");
+                i = k + 1;
+                while i < c.len() && !(c[i] == '"' && (1..=hashes).all(|h| at(i + h) == '#')) {
+                    out.push(if c[i] == '\n' { '\n' } else { ' ' });
+                    i += 1;
+                }
+                out.push('"');
+                i += 1 + hashes;
+            } else if c[i] == '"' {
+                out.push('"');
+                i += 1;
+                while i < c.len() && c[i] != '"' {
+                    if c[i] == '\\' {
+                        out.push(' ');
+                        i += 1;
+                    }
+                    out.push(if at(i) == '\n' { '\n' } else { ' ' });
+                    i += 1;
+                }
+                out.push('"');
+                i += 1;
+            } else if c[i] == '\'' && (at(i + 2) == '\'' || at(i + 1) == '\\') {
+                // Char literal ('x', '\n', '\''); a lifetime has no closing quote.
+                let end = (i + 2..c.len().min(i + 12)).find(|&k| c[k] == '\'' && k > i + 1);
+                match end {
+                    Some(e) => {
+                        out.push_str("' '");
+                        i = e + 1;
+                    }
+                    None => {
+                        out.push(c[i]);
+                        i += 1;
+                    }
+                }
+            } else {
+                out.push(c[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    fn depth(code: &str) -> i32 {
+        code.chars()
+            .map(|c| match c {
+                '{' => 1,
+                '}' => -1,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    // Boundary violations of one core file: (line, text, rule). Items under `#[cfg(test)]` / `#[cfg(all(test, …))]`
+    // may use the file system etc.; nothing may name the non-core modules or crates or use `unsafe`.
+    fn violations(text: &str) -> Vec<(usize, String, &'static str)> {
         let mut bad = Vec::new();
-        for e in std::fs::read_dir(dir).unwrap() {
-            let path = e.unwrap().path();
-            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-            if path.extension().is_none_or(|x| x != "rs") || RENDERER_SIDE.contains(&name.as_str())
+        let (mut test_attr, mut test_depth) = (false, None::<i32>);
+        let code = strip(text);
+        for (i, (c, line)) in code.lines().zip(text.lines()).enumerate() {
+            let t = c.trim();
+            let in_test = test_depth.is_some() || test_attr;
+            if test_depth.is_none()
+                && t.starts_with("#[cfg(")
+                && names(t, "test")
+                && !t.contains("not(test")
             {
+                test_attr = true;
+            } else if test_attr && !t.starts_with("#[") && !t.is_empty() {
+                // The item after the attribute: a block runs to its closing brace, else one line.
+                test_attr = false;
+                let d = depth(c);
+                if d > 0 {
+                    test_depth = Some(d);
+                }
+            } else if let Some(d) = &mut test_depth {
+                *d += depth(c);
+                if *d <= 0 {
+                    test_depth = None;
+                }
+            }
+            let mut rule = |r: &'static str| bad.push((i + 1, line.trim().to_string(), r));
+            for m in NOT_CORE_MODULES {
+                let group = c.split("crate::{").skip(1).any(|g| {
+                    g.split('}')
+                        .next()
+                        .unwrap_or("")
+                        .split(',')
+                        .any(|n| n.trim().split("::").next() == Some(m))
+                });
+                if names(c, &format!("crate::{m}")) || group {
+                    rule("non-core module");
+                }
+            }
+            if NOT_CORE_CRATES
+                .iter()
+                .any(|k| names(c, &format!("{k}::")) || (names(c, k) && t.starts_with("use ")))
+            {
+                rule("non-core crate");
+            }
+            if names(c, "unsafe") {
+                rule("unsafe");
+            }
+            if !in_test && NOT_OUTSIDE_TESTS.iter().any(|p| names(c, p)) {
+                rule("platform access outside tests");
+            }
+        }
+        assert!(test_depth.is_none(), "unbalanced braces in a test item");
+        bad
+    }
+
+    // STEP10_CRATES 10b gate (replaces step 8c's renderer check; deleted in 10c, where the crate graph enforces
+    // it): every core-bound file is free of non-core modules, crates, platform access and `unsafe`.
+    #[test]
+    fn core_boundary() {
+        let probe = "use crate::{host, settings};\nfn f() { std::fs::read(\"x//\"); }\n\
+                     #[cfg(test)]\nmod t {\n    fn g() { std::fs::read(\"{\"); let _ = '}'; }\n}\n\
+                     fn h() { unsafe {} }\n// crate::gfx in a comment\n";
+        let rules: Vec<_> = violations(probe).into_iter().map(|v| (v.0, v.2)).collect();
+        assert_eq!(
+            rules,
+            [
+                (1, "non-core module"),
+                (2, "platform access outside tests"),
+                (7, "unsafe")
+            ]
+        );
+        let dir = crate::testdata::repo_root().join("src");
+        let mut bad = Vec::new();
+        let mut files = Vec::new();
+        for e in std::fs::read_dir(&dir).unwrap() {
+            let path = e.unwrap().path();
+            if path.extension().is_some_and(|x| x == "rs") {
+                files.push(path.file_stem().unwrap().to_string_lossy().into_owned());
+            }
+        }
+        files.sort();
+        for f in &files {
+            let (c, n) = (CORE.contains(&f.as_str()), NOT_CORE.contains(&f.as_str()));
+            assert!(
+                c != n,
+                "src/{f}.rs must be in exactly one of CORE / NOT_CORE"
+            );
+            if !c {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).unwrap();
-            let lines: Vec<&str> = text.lines().collect();
-            let end = (1..lines.len())
-                .find(|&i| {
-                    lines[i - 1].starts_with("#[cfg(")
-                        && lines[i - 1].contains("test")
-                        && lines[i].starts_with("mod ")
-                })
-                .unwrap_or(lines.len());
-            for (i, l) in lines[..end].iter().enumerate() {
-                if ["crate::gfx", "crate::text", "wgpu::", "winit::", "egui"]
-                    .iter()
-                    .any(|p| l.contains(p))
-                {
-                    bad.push(format!("{name}.rs:{}: {}", i + 1, l.trim()));
-                }
+            let text = std::fs::read_to_string(dir.join(format!("{f}.rs"))).unwrap();
+            for (l, t, r) in violations(&text) {
+                bad.push(format!("{f}.rs:{l}: {r}: {t}"));
             }
         }
         assert!(
-            bad.is_empty(),
-            "renderer paths in core modules:\n{}",
-            bad.join("\n")
+            CORE.iter()
+                .chain(NOT_CORE)
+                .all(|f| files.iter().any(|x| x == f)),
+            "a listed file is missing from src/"
         );
+        assert!(bad.is_empty(), "core boundary:\n{}", bad.join("\n"));
     }
 
     // Same id order as the device table: white = 0, then push, freed slots reused last-freed first.

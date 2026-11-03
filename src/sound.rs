@@ -506,4 +506,135 @@ mod tests {
         q.play_at(6, 192.0);
         assert_eq!(q.drain(), vec![(4, 1000), (5, -1000), (6, 0)]);
     }
+
+    #[test]
+    fn music_off_plays_nothing() {
+        // cfg +0x1F = 0 (02 §4): no slot is loaded and no fade is queued; mode 1 loads.
+        let mut a = Bgm::default();
+        let mut cfg = crate::config::Config::default();
+        cfg.music = 0;
+        a.set_volumes(&cfg);
+        a.load_bgm(0, "bgm/th08_00.mid");
+        a.fade_bgm(4.0, 1.0);
+        assert!(a.slots[0].is_none() && a.fade_req.is_none());
+        cfg.music = 1;
+        a.set_volumes(&cfg);
+        a.load_bgm(0, "bgm/th08_00.mid");
+        a.fade_bgm(4.0, 1.0);
+        assert!(a.slots[0].is_some() && a.fade_req == Some(4));
+    }
+
+    // 02 §4: WAV fades divide by a game speed in (0, 1]; MIDI mode without a SoundFont takes the WAV path.
+    #[test]
+    fn wav_fade_speed_and_midi_fallback() {
+        let mut a = Bgm::default();
+        a.fade_bgm(4.0, 0.5);
+        assert_eq!(a.fade_req, Some(8));
+        a.fade_bgm(4.0, 2.0);
+        assert_eq!(a.fade_req, Some(4));
+        let mut cfg = crate::config::Config::default();
+        cfg.music = 2;
+        a.set_volumes(&cfg);
+        a.out.clear();
+        a.load_bgm(0, "bgm/th08_00.mid");
+        assert!(a.slots[0].is_some() && a.out.is_empty());
+    }
+
+    #[test]
+    fn fade_linear_in_db() {
+        // Music_Fade(4): N = 240; first tick n = 239, middle n = 120, last audible n = 1, then stop.
+        let mut f = Fade::new(1, 4.0);
+        let p = ticks(&mut f);
+        assert_eq!(p.len(), 239);
+        assert_eq!([p[0], p[119], p[238]], [-21, -2500, -4980]);
+        let bgm = |p, v| crate::config::bgm_volume_curve(p, v);
+        assert_eq!(
+            [bgm(p[0], 100), bgm(p[119], 100), bgm(p[238], 100)],
+            [-21, -2500, -4980]
+        );
+        // v = 50 (k = 0.75): trunc((p + 5000)·0.75) − 5000.
+        assert_eq!(
+            [bgm(p[0], 50), bgm(p[119], 50), bgm(p[238], 50)],
+            [-1266, -3125, -4985]
+        );
+        assert_eq!(Fade::new(1, 0.0).tick(), FadeTick::Stop);
+    }
+
+    fn ticks(f: &mut Fade) -> Vec<i32> {
+        std::iter::from_fn(|| match f.tick() {
+            FadeTick::Volume(p) => Some(p),
+            _ => None,
+        })
+        .collect()
+    }
+
+    // 02 §4 modes 2/3/4: last values −41 (N 120), −16 and −984 (N 60), then mode 0 with no write.
+    #[test]
+    fn fade_in_and_dip() {
+        let mut f = Fade::new(2, 2.0);
+        let p = ticks(&mut f);
+        assert_eq!((p.len(), p[0], p[118]), (119, -4958, -41));
+        assert_eq!(f.tick(), FadeTick::End);
+        let p = ticks(&mut Fade::new(3, 1.0));
+        assert_eq!((p.len(), p[0], p[58]), (59, -983, -16));
+        let p = ticks(&mut Fade::new(4, 1.0));
+        assert_eq!((p.len(), p[0], p[58]), (59, -17, -984));
+
+        let mut a = Bgm::default();
+        a.start_fade_in(2.0);
+        assert_eq!(a.fade_p, -10000);
+        (0..119).for_each(|_| a.tick_fade());
+        assert_eq!(a.fade_p, -41);
+        a.tick_fade();
+        assert!(a.fade.is_none() && a.fade_p == -41);
+        a.start_dip(1.0);
+        assert_eq!(a.fade_p, -41);
+        a.tick_fade();
+        assert_eq!(a.fade_p, -17);
+        a.start_fade_in_from_dip(1.0);
+        assert_eq!(a.fade_p, -1000);
+        // Every attenuation write is one Volume command; the mode-2 end writes nothing.
+        let vols = a
+            .out
+            .iter()
+            .filter(|c| matches!(c, SoundCmd::Wav(WavCmd::Volume(_))))
+            .count();
+        assert_eq!((vols, a.out.len()), (1 + 119 + 1 + 1, 122));
+    }
+
+    // Bgm side of audio.rs `midi_mode_calls` (02 §5): the MIDI path fills no WAV slot and queues no WAV fade.
+    #[test]
+    fn midi_mode_bgm_side() {
+        let mut b = Bgm::default();
+        b.midi_ready = true;
+        let mut cfg = crate::config::Config::default();
+        cfg.music = 2;
+        b.set_volumes(&cfg);
+        b.load_bgm(1, "bgm/th08_03.mid");
+        assert!(b.slots[1].is_none());
+        b.out.clear();
+        b.fade_bgm(3.0, 0.5);
+        assert!(b.fade_req.is_none());
+        assert!(matches!(b.out[..], [SoundCmd::Midi(MidiCmd::Fade(3000))]));
+    }
+
+    // Bgm side of audio.rs `wav_pause_and_fade` (02 §4): command 6 keeps the fade ticking to its end; Music_Stop
+    // clears a running fade and a queued one.
+    #[test]
+    fn wav_pause_bgm_side() {
+        let mut b = Bgm::default();
+        b.fade_bgm(4.0, 1.0);
+        b.start_fade();
+        b.pause_bgm(true);
+        (0..240).for_each(|_| b.tick_fade());
+        assert!(b.fade.is_none() && b.fade_p == -4980);
+        b.pause_bgm(false);
+        b.fade_bgm(4.0, 1.0);
+        b.start_fade();
+        b.stop_bgm();
+        assert!(b.fade.is_none());
+        b.fade_bgm(4.0, 1.0);
+        b.stop_bgm();
+        assert!(b.fade_req.is_none());
+    }
 }

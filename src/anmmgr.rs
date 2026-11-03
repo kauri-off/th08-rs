@@ -805,7 +805,7 @@ mod tests {
             has_texture: false,
         };
         let mut files = vec![("t".to_string(), vec![synthetic])];
-        if let Some(ar) = crate::archive::test_archive() {
+        if let Some(ar) = crate::testdata::archive() {
             for n in ar.names().iter().filter(|n| n.ends_with(".anm")).take(6) {
                 files.push((n.clone(), crate::anm::parse(&ar.read(n).unwrap()).unwrap()));
             }

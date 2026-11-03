@@ -1837,7 +1837,7 @@ mod tests {
             Input::default(),
             &g,
             &mut Default::default(),
-            &mut crate::platform::ToolHost::default(),
+            &mut crate::host::MemHost::default(),
         );
         assert_eq!((r.state, r.frame), (S_SAVE_MSG, 10));
     }
@@ -1925,7 +1925,7 @@ mod tests {
     // 16 §2.7 against its reference dump (written from the same score.dat by the original).
     #[test]
     fn score_txt_reference() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/data/drawlog");
+        let dir = crate::testdata::repo_root().join("specs/data/drawlog");
         let dat = std::fs::read(dir.join("menu_mopup1.score.dat")).unwrap();
         let want = std::fs::read(dir.join("menu_mopup1.score.txt")).unwrap();
         let mut s = crate::scoredat::VerList::default().parse(&dat).unwrap();
@@ -1988,30 +1988,13 @@ mod tests {
     }
 
     // Headless: stage 1 with Shot held until game over, "No" on the continue menu, name "PP" (cursor starts on END
-    // because the game-start flush wrote LSNM), END, end panel, title; then score.dat is reloaded from the save dir.
-    #[cfg(not(target_arch = "wasm32"))]
+    // because the game-start flush wrote LSNM), END, end panel, title; then the saved score.dat is parsed again.
+    // Screenshots of these frames: tools-bound `drawreport::tests::result_shots` (TH08_RESULT_SHOTS).
     #[test]
     fn game_over_name_entry_saves() {
-        let Some(dir) = crate::settings::test_game_dir() else {
+        let Some(mut ctx) = crate::testdata::ctx(Default::default()) else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(crate::gfx::Gfx::headless()) else {
-            return;
-        };
-        let src = crate::sources::native(dir.into());
-        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
-            src.clone(),
-            crate::settings::get().tool_io(gfx, &src),
-            crate::settings::get().core(),
-            false,
-        ))
-        .unwrap();
-        let save =
-            crate::settings::temp_dir().join(format!("th08_result_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&save);
-        crate::platform::tool_host(&mut ctx)
-            .storage
-            .set_save_dir(Some(save.clone()));
         ctx.w.game.persist = true;
         crate::supervisor::setup_new_game(&mut ctx.w.game, &ctx.core, 0);
         // … then Bomb on the "save replay?" prompt (16 §2.6 state 10, input from frame 12) → title.
@@ -2047,14 +2030,13 @@ mod tests {
             } else {
                 0
             };
-            crate::platform::tool_host(&mut ctx).keys[0] = key;
+            crate::testdata::mem_host(&mut ctx).keys[0] = key;
             if seen_result && ctx.w.game.scene == gamemgr::SCENE_MENU {
                 break;
             }
             ctx.calc();
             ctx.draw();
-            let on = ctx.w.game.scene == gamemgr::SCENE_RESULT;
-            shot(&mut ctx, on, k, "after");
+            ctx.present();
         }
         assert!(
             seen_result && ctx.w.game.scene == gamemgr::SCENE_MENU,
@@ -2072,7 +2054,7 @@ mod tests {
         assert_eq!(&h.name()[..2], "PP");
         assert_eq!(h.score(), 1_234_567);
         assert_eq!(h.0[9], 0);
-        let file = std::fs::read(save.join("score.dat")).unwrap();
+        let file = crate::testdata::mem_host(&mut ctx).files["score.dat"].clone();
         let s = ctx.w.game.ver_list.parse(&file).unwrap();
         assert_eq!(&s.lsnm[..8], b"PP      ");
         assert!(s.hscr.contains(&h));
@@ -2094,7 +2076,7 @@ mod tests {
             if ctx.w.game.scene == gamemgr::SCENE_RESULT_MENU {
                 k += 1;
             }
-            crate::platform::tool_host(&mut ctx).keys[0] =
+            crate::testdata::mem_host(&mut ctx).keys[0] =
                 if [40, 80, 120].iter().any(|&f| (f..f + 3).contains(&k)) {
                     SHOT
                 } else {
@@ -2102,35 +2084,17 @@ mod tests {
                 };
             ctx.calc();
             ctx.draw();
-            shot(&mut ctx, k > 0, k, "viewer");
+            ctx.present();
         }
-        let _ = std::fs::remove_dir_all(&save);
-    }
-
-    // `TH08_RESULT_SHOTS=k1,k2,…`: /tmp/th08_result_<tag>_<k>.png at those result frames.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn shot(ctx: &mut Ctx, on: bool, k: u32, tag: &str) {
-        let want = crate::settings::get().result_shots.contains(&k);
-        if on && want {
-            // Test-only screenshot readback (pixels back to the CPU) on the concrete renderer.
-            let g = ctx.renderer.as_any_mut().downcast_mut::<crate::gfx::Gfx>();
-            let img = g.expect("test renderer is Gfx").capture(&mut ctx.rec, None);
-            let _ = img.save(format!("/tmp/th08_result_{tag}_{k}.png"));
-        }
-        ctx.present();
     }
 
     // 16 §2.6 (PR #27 review): state 12 entered from state 10 has its slot list before the first input frame (20), so
     // a confirm there picks slot 0 instead of indexing an empty list.
-    #[cfg(not(target_arch = "wasm32"))]
     // 16 §2.6: state 10 confirm takes the shared back-to-list path (all VMs 12, flush); in state 12 a confirm and a
     // cancel on the same frame both run and the cancel wins.
     #[test]
     fn save_slot_confirm_then_cancel() {
-        let dir = crate::settings::temp_dir().join(format!("th08_slot_cc_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let mut host =
-            crate::platform::ToolHost::new(crate::platform::Storage::new(Some(dir.clone())));
+        let mut host = crate::host::MemHost::default();
         let g = gamemgr::Game::default();
         let mut r = ResultScreen::new(1);
         r.vms = vec![AnmVm::default(); VM_COUNT];
@@ -2154,21 +2118,15 @@ mod tests {
         assert_eq!((r.state, r.frame), (S_SAVE, 0));
         assert!(r.vms.iter().all(|v| v.pending_interrupt == 2));
         assert_eq!(r.char_cursor, 0);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn save_slot_confirm_first_frame() {
-        let dir =
-            crate::settings::temp_dir().join(format!("th08_slot_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let mut host =
-            crate::platform::ToolHost::new(crate::platform::Storage::new(Some(dir.clone())));
+        let mut host = crate::host::MemHost::default();
         // A T8RP v6 file that fails Replay_Load counts as empty (16 §2.6): no overwrite question.
-        std::fs::create_dir_all(dir.join("replay")).unwrap();
         let mut bad = b"T8RP\x06\x00".to_vec();
         bad.resize(0x200, 0x55);
-        std::fs::write(dir.join("replay/th8_01.rpy"), bad).unwrap();
+        host.files.insert("replay/th8_01.rpy".into(), bad);
         let g = gamemgr::Game::default();
         let mut r = ResultScreen::new(1);
         r.vms = vec![AnmVm::default(); VM_COUNT];
@@ -2197,7 +2155,6 @@ mod tests {
         r.save_slot(confirm, &g, &mut Default::default(), Default::default());
         assert_eq!((r.state, r.slot), (S_SAVE_NAME, 0));
         assert_eq!(r.vms[56].pending_interrupt, 16);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

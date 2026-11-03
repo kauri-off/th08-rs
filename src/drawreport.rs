@@ -378,3 +378,107 @@ where
     eprintln!("report: {}", out.join("index.html").display());
     Ok(())
 }
+
+// Tools-bound: needs a GPU adapter (headless `Gfx` readback).
+#[cfg(test)]
+mod tests {
+    use crate::gamemgr;
+    use crate::input::{BOMB, DOWN, SHOT, UP};
+
+    // `TH08_RESULT_SHOTS=k1,k2,…`: /tmp/th08_result_<tag>_<k>.png at those result frames of result.rs
+    // `game_over_name_entry_saves`'s run (same input), "after" = the result screen, "viewer" = the ranking viewer.
+    #[test]
+    fn result_shots() {
+        let want = &crate::settings::get().result_shots;
+        let Some(dir) = crate::settings::test_game_dir() else {
+            return;
+        };
+        if want.is_empty() {
+            return;
+        }
+        let gfx = pollster::block_on(crate::gfx::Gfx::headless()).expect("no GPU adapter");
+        let src = crate::sources::native(dir);
+        let mut ctx = pollster::block_on(crate::game::Ctx::load_with(
+            src.clone(),
+            crate::settings::get().tool_io(gfx, &src),
+            crate::settings::get().core(),
+            false,
+        ))
+        .unwrap();
+        let save =
+            crate::settings::temp_dir().join(format!("th08_result_shots_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&save);
+        crate::platform::tool_host(&mut ctx)
+            .storage
+            .set_save_dir(Some(save.clone()));
+        ctx.w.game.persist = true;
+        let shot = |ctx: &mut crate::game::Ctx, on: bool, k: u32, tag: &str| {
+            if on && want.contains(&k) {
+                let g = ctx.renderer.as_any_mut().downcast_mut::<crate::gfx::Gfx>();
+                let img = g.expect("renderer is Gfx").capture(&mut ctx.rec, None);
+                let _ = img.save(format!("/tmp/th08_result_{tag}_{k}.png"));
+            }
+            ctx.present();
+        };
+        crate::supervisor::setup_new_game(&mut ctx.w.game, &ctx.core, 0);
+        let keys: [(u32, u16); 7] = [
+            (20, DOWN),
+            (28, SHOT),
+            (36, SHOT),
+            (44, UP),
+            (52, SHOT),
+            (200, SHOT),
+            (260, BOMB),
+        ];
+        let (mut k, mut over, mut seen_result) = (0u32, 0u32, false);
+        for _ in 0..60_000 {
+            let g = &ctx.w.game;
+            let key = if g.scene == gamemgr::SCENE_RESULT {
+                seen_result = true;
+                k += 1;
+                keys.iter()
+                    .find(|&&(f, _)| (f..f + 3).contains(&k))
+                    .map_or(0, |e| e.1)
+            } else if g.game_over != 0 {
+                if over == 0
+                    && let Some(p) = ctx.w.player.as_deref_mut()
+                {
+                    p.stats.score10 = 1_234_567;
+                }
+                over += 1;
+                if over % 40 == 39 { SHOT } else { 0 }
+            } else if g.scene == gamemgr::SCENE_GAME {
+                SHOT
+            } else {
+                0
+            };
+            crate::platform::tool_host(&mut ctx).keys[0] = key;
+            if seen_result && ctx.w.game.scene == gamemgr::SCENE_MENU {
+                break;
+            }
+            ctx.calc();
+            ctx.draw();
+            let on = ctx.w.game.scene == gamemgr::SCENE_RESULT;
+            shot(&mut ctx, on, k, "after");
+        }
+        let mut k = 0;
+        for _ in 0..400 {
+            if ctx.w.game.scene == gamemgr::SCENE_MENU && ctx.w.game.menu_loading == 0 && k == 0 {
+                ctx.w.game.request(gamemgr::SCENE_RESULT_MENU);
+            }
+            if ctx.w.game.scene == gamemgr::SCENE_RESULT_MENU {
+                k += 1;
+            }
+            crate::platform::tool_host(&mut ctx).keys[0] =
+                if [40, 80, 120].iter().any(|&f| (f..f + 3).contains(&k)) {
+                    SHOT
+                } else {
+                    0
+                };
+            ctx.calc();
+            ctx.draw();
+            shot(&mut ctx, k > 0, k, "viewer");
+        }
+        let _ = std::fs::remove_dir_all(&save);
+    }
+}
