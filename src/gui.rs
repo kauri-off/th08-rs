@@ -76,12 +76,12 @@ pub struct Gui {
 }
 
 impl Gui {
-    pub fn register(ctx: &mut Ctx) -> Result<task::TaskRef<Ctx>> {
+    pub fn register(ctx: &mut Ctx) -> Result<crate::chain::Node> {
         ctx.gui_queue.clear();
         ctx.gui = Some(Box::new(Gui::new(ctx.game.shot)));
-        let t = task::task(GuiTask);
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+        let t = crate::chain::Node::Gui;
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
         Ok(t)
     }
 

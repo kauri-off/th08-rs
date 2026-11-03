@@ -426,7 +426,7 @@ impl Stage {
     }
 
     // Stage_Register: the stage becomes `ctx.stage` (replacing the last one) plus its four nodes.
-    pub fn register(ctx: &mut Ctx, index: usize) -> Result<task::TaskRef<Ctx>> {
+    pub fn register(ctx: &mut Ctx, index: usize) -> Result<crate::chain::Node> {
         let (std_name, bg) = files(index, ctx.game.spell_practice());
         let std = stdfile::parse(&ctx.archive.read(&std_name)?)?;
         ctx.anm.load(&mut ctx.rec, &ctx.archive, ANM_SLOT, &bg)?;
@@ -435,12 +435,12 @@ impl Stage {
         st.fast_forward = ctx.core.stage_frame;
         st.start(&mut ctx.anm, &mut ctx.rng);
         ctx.stage = Some(Box::new(st));
-        let t = task::task(StageTask);
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t.clone())?;
+        let t = crate::chain::Node::Stage;
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t)?;
         // Port-only tail of Stage_DrawHigh (step only): its last writes come after the node's emit, see `draw_step`.
-        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 2, t.clone())?;
+        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 2, t)?;
         Ok(t)
     }
 

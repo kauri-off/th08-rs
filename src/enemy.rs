@@ -809,7 +809,7 @@ impl EnemyManager {
     }
 
     // EnemyManager_Register: the manager becomes `ctx.enemies` (replacing the last stage's) plus its three nodes.
-    pub fn register(ctx: &mut Ctx, index: usize, diff: i32) -> Result<task::TaskRef<Ctx>> {
+    pub fn register(ctx: &mut Ctx, index: usize, diff: i32) -> Result<crate::chain::Node> {
         let spell = ctx.game.spell_practice().then_some(ctx.game.card);
         let (ecl_name, enm) = files(index, spell);
         let ecl = ecl::parse(ctx.archive.read(&ecl_name)?)?;
@@ -826,10 +826,10 @@ impl EnemyManager {
         m.debug_damage = ctx.core.enemy_dmg;
         m.stage_start(&mut ctx.rng, p, index, ctx.game.flags);
         ctx.enemies = Some(Box::new(m));
-        let t = task::task(EnemyTask);
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t.clone())?;
+        let t = crate::chain::Node::Enemies;
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t)?;
         Ok(t)
     }
 

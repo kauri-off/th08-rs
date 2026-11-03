@@ -618,7 +618,7 @@ impl Player {
     }
 
     // Player_Load + the player's three nodes; the player itself is `ctx.player`, created by GameManager_Register.
-    pub fn register(ctx: &mut Ctx, shot: u8) -> Result<task::TaskRef<Ctx>> {
+    pub fn register(ctx: &mut Ctx, shot: u8) -> Result<crate::chain::Node> {
         let (anm, a, s) = crate::sht::files(shot);
         let human = crate::sht::parse(&ctx.archive.read(&a)?)?;
         let youkai = crate::sht::parse(&ctx.archive.read(&s)?)?;
@@ -632,10 +632,10 @@ impl Player {
             shot,
             ctx.game.flags,
         );
-        let t = task::task(PlayerTask);
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO_HIGH, 1, t.clone())?;
+        let t = crate::chain::Node::Player;
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO_HIGH, 1, t)?;
         Ok(t)
     }
 

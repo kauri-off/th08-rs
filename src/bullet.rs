@@ -467,13 +467,13 @@ impl BulletManager {
     }
 
     // BulletManager_Register: the manager becomes `ctx.bullets` (replacing the last stage's) plus its two nodes.
-    pub fn register(ctx: &mut Ctx) -> Result<task::TaskRef<Ctx>> {
+    pub fn register(ctx: &mut Ctx) -> Result<crate::chain::Node> {
         ctx.anm
             .load(&mut ctx.rec, &ctx.archive, ANM_SLOT, "etama.anm")?;
         ctx.bullets = Some(Box::new(BulletManager::new(&mut ctx.anm, &mut ctx.rng)));
-        let t = task::task(BulletTask);
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+        let t = crate::chain::Node::Bullets;
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
         Ok(t)
     }
 

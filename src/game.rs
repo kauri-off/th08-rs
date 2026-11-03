@@ -28,7 +28,7 @@ pub struct Ctx {
     pub anm: AnmManager,
     // The game RNG g_Rng 0x164D520 (11 §1); every draw site keeps the original's order (future `World.rng`).
     pub rng: crate::rng::Rng,
-    pub tasks: Tasks<Ctx>,
+    pub tasks: Tasks<crate::chain::Node>,
     // Port count of executed calc steps (debug tools, TH08_SHOT); not an original counter.
     pub frame: u64,
     pub game: crate::gamemgr::Game,
@@ -290,7 +290,8 @@ impl TestSys {
 }
 
 impl TaskCtx for Ctx {
-    fn tasks(&mut self) -> &mut Tasks<Self> {
+    type Node = crate::chain::Node;
+    fn tasks(&mut self) -> &mut Tasks<crate::chain::Node> {
         &mut self.tasks
     }
     fn recorder(&mut self) -> Option<&mut Recorder> {

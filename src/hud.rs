@@ -257,12 +257,12 @@ fn stage_start_tiles(anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> Vec<Anm
 }
 
 impl Hud {
-    pub fn register(ctx: &mut Ctx, fresh: bool) -> Result<task::TaskRef<Ctx>> {
+    pub fn register(ctx: &mut Ctx, fresh: bool) -> Result<crate::chain::Node> {
         ctx.msg = Some(Box::new(Dialogue::default()));
         ctx.hud = Some(Box::new(Hud::new(fresh)));
-        let t = task::task(HudTask);
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+        let t = crate::chain::Node::Hud;
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
         Ok(t)
     }
 

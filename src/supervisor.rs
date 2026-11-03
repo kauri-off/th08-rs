@@ -2,12 +2,13 @@
 //! draw prios 0 / 2 / 16 (00 §4).
 
 use crate::anmvm::AnmVm;
+use crate::chain::Node;
 use crate::coreconfig::{CoreConfig, Ending};
 use crate::drawlist::{Blend, PLAYFIELD, Rect};
 use crate::drawlist::{Recorder, TexId};
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game, GameManager};
-use crate::task::{self, Chain, Ret, Task, TaskRef};
+use crate::task::{self, Chain, Ret, Task};
 use anyhow::{Context, Result};
 
 // Owned by `Ctx.supervisor`; its chain nodes are `SupervisorTask`.
@@ -17,9 +18,9 @@ pub struct Supervisor {
     debug_sprites: Option<usize>,
     script: Option<Vec<u16>>,
     frame: usize,
-    // Chain handle of the registered scene's forwarder (`SceneTask`, or `GameManagerTask` for the GM); the scene
-    // state is `Ctx.scene` / `Ctx.gm`. Becomes the scene's `Node`s with step 9h.
-    scene_task: Option<TaskRef<Ctx>>,
+    // Chain node of the registered scene (`Node::Scene`, or `Node::GameManager` for the GM); the scene
+    // state is `Ctx.scene` / `Ctx.gm`.
+    scene_task: Option<Node>,
     // Full-screen surface slot 8 (logo, captured frame or result.jpg), drawn at prio 0 while loading (12 §1).
     logo: Option<TexId>,
     // The three nowloading.anm VMs (scripts 0–2) and their screen position (12 §1 state 1).
@@ -64,10 +65,10 @@ pub fn register(ctx: &mut Ctx) -> Result<()> {
         fps_frames: 0,
         prompt: Vec::new(),
     }));
-    let t = task::task(SupervisorTask);
-    task::add(ctx, Chain::Calc, 0, 0, t.clone())?;
+    let t = Node::Supervisor;
+    task::add(ctx, Chain::Calc, 0, 0, t)?;
     for prio in [0, 2, 16] {
-        task::add(ctx, Chain::Draw, prio, prio as u8, t.clone())?;
+        task::add(ctx, Chain::Draw, prio, prio as u8, t)?;
     }
     Ok(())
 }
@@ -380,14 +381,14 @@ impl Supervisor {
     fn menu_surface(&mut self, ctx: &mut Ctx) -> Result<()> {
         if let Some(t) = &self.scene_task {
             let p = crate::menu::SURFACE_PRIO;
-            task::add(ctx, Chain::Draw, p, p as u8, t.clone())?;
+            task::add(ctx, Chain::Draw, p, p as u8, *t)?;
         }
         Ok(())
     }
 
     fn drop_scene(&mut self, ctx: &mut Ctx) {
         if let Some(t) = self.scene_task.take() {
-            task::remove_task(ctx, &t);
+            task::remove_task(ctx, t);
         }
         // The game manager with its replay object, and the player, the bullet and enemy managers, the stage, HUD,
         // dialogue and g_Gui that go with it (dropped here, after GameMgr_OnRemove, 11 §7).
@@ -431,9 +432,9 @@ impl Supervisor {
 
     fn set_scene(&mut self, ctx: &mut Ctx, scene: Scene, calc: u16, draw: u16) -> Result<()> {
         ctx.scene = scene;
-        let t = task::task(SceneTask);
-        task::add(ctx, Chain::Calc, calc, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, draw, 0, t.clone())?;
+        let t = Node::Scene;
+        task::add(ctx, Chain::Calc, calc, 0, t)?;
+        task::add(ctx, Chain::Draw, draw, 0, t)?;
         self.scene_task = Some(t);
         Ok(())
     }

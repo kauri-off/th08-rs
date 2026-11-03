@@ -53,8 +53,8 @@ pub fn register(ctx: &mut Ctx, spec: &str) -> Result<()> {
         frame: 0,
         mode: ctx.core.anm_mode,
     }));
-    let t = task::task(AnmDebugTask);
-    task::add(ctx, Chain::Calc, 4, 0, t.clone())?;
+    let t = crate::chain::Node::AnmDebug;
+    task::add(ctx, Chain::Calc, 4, 0, t)?;
     task::add(ctx, Chain::Draw, 3, 0, t)?;
     Ok(())
 }

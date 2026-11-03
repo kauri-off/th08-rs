@@ -56,7 +56,7 @@ pub fn register(
     ctx: &mut crate::game::Ctx,
     play: bool,
     st: &crate::player::Stats,
-) -> anyhow::Result<(crate::task::TaskRef<crate::game::Ctx>, ReplayState)> {
+) -> anyhow::Result<(crate::chain::Node, ReplayState)> {
     use crate::task::{self, Chain};
     // Replay_Register 0x451F90 sets g_Input and g_InputPrev to 0 (15 §3.1).
     ctx.input.game = [0; crate::host::MAX_PLAYERS];
@@ -66,18 +66,18 @@ pub fn register(
     if !play || debug {
         rt.frame_hook(&mut ctx.rng);
     }
-    let t = task::task(ReplayTask);
+    let t = crate::chain::Node::Replay;
     if play {
-        task::add(ctx, Chain::Calc, PLAY_PRIO, TAG_MAIN, t.clone())?;
-        task::add(ctx, Chain::Calc, FF_PRIO, TAG_FF, t.clone())?;
+        task::add(ctx, Chain::Calc, PLAY_PRIO, TAG_MAIN, t)?;
+        task::add(ctx, Chain::Calc, FF_PRIO, TAG_FF, t)?;
     } else {
         record_stage_start(&mut ctx.game, st);
-        task::add(ctx, Chain::Calc, RECORD_PRIO, TAG_MAIN, t.clone())?;
+        task::add(ctx, Chain::Calc, RECORD_PRIO, TAG_MAIN, t)?;
     }
     // Replay_FrameHook: always while recording, during playback only with the debug flag; Replay_Register also
     // calls it once on linking (above, 11 §1.4).
     if !play || debug {
-        task::add(ctx, Chain::Calc, HOOK_PRIO, TAG_HOOK, t.clone())?;
+        task::add(ctx, Chain::Calc, HOOK_PRIO, TAG_HOOK, t)?;
     }
     Ok((t, rt))
 }

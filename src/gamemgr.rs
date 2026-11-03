@@ -1,12 +1,13 @@
 //! Game manager GM 0x160F508: stage start, GameMgr_Calc flow, rank, routing, scene state (11 §2–§7).
 
 use crate::bullet::BulletManager;
+use crate::chain::Node;
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::hud::Hud;
 use crate::player::{Player, Stats};
 use crate::stage::Stage;
-use crate::task::{self, Chain, Ret, Task, TaskRef};
+use crate::task::{self, Chain, Ret, Task};
 use anyhow::Result;
 
 // Game flags GM +0x3DBAC = 0x164D0B4 (11 §2.1).
@@ -550,8 +551,8 @@ fn slow_skips(n: usize, c: u32) -> bool {
 // (`sys!` lends several of them at once next to other `Ctx` fields) until `World` replaces `Ctx` (step 9h).
 #[derive(Clone)]
 pub struct GameManager {
-    // Subsystems unregistered by the GM on-remove (11 §7). Stateless forwarders; `Node`s with step 9h.
-    tasks: Vec<TaskRef<Ctx>>,
+    // Subsystems unregistered by the GM on-remove (11 §7): their chain nodes.
+    tasks: Vec<Node>,
     // Port-only: loading frame at which Ascii_SetupGaugeVms runs, with the gauge limits (12 §5.9).
     gauge_at: Option<(u32, i32, i32)>,
     // Port-only: loading calcs of this stage start (11 §3.1 "Loading frame count").
@@ -565,7 +566,7 @@ pub struct GameManager {
 }
 
 impl GameManager {
-    pub fn register(ctx: &mut Ctx) -> Result<TaskRef<Ctx>> {
+    pub fn register(ctx: &mut Ctx) -> Result<Node> {
         ctx.gm = Some(Box::new(GameManager {
             tasks: Vec::new(),
             gauge_at: None,
@@ -581,9 +582,9 @@ impl GameManager {
         }
         // GameManager_Register zeroes the gameplay frame counter 0x164D2C8 (11 §2).
         ctx.game.frame_counter = 0;
-        let t = task::task(GameManagerTask);
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+        let t = Node::GameManager;
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
         Ok(t)
     }
 
@@ -1055,7 +1056,7 @@ impl GameManager {
         }
         ctx.bgm.pause_bgm(false);
         for t in std::mem::take(&mut self.tasks) {
-            task::remove_task(ctx, &t);
+            task::remove_task(ctx, t);
         }
         // Ascii_InitVms after the subsystem teardown (11 §2, 13 §4).
         ctx.overlays.popups.clear();

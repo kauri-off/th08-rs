@@ -1239,10 +1239,10 @@ pub struct EffectTask;
 
 impl EffectTask {
     // EffectMgr_Register: calc prio 13 + draw prio 12, the effect level copied from the config.
-    pub fn register(ctx: &mut Ctx) -> Result<task::TaskRef<Ctx>> {
-        let t = task::task(EffectTask);
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t.clone())?;
+    pub fn register(ctx: &mut Ctx) -> Result<crate::chain::Node> {
+        let t = crate::chain::Node::Effects;
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_PRIO, 0, t)?;
         Ok(t)
     }
 }
@@ -1399,8 +1399,8 @@ fn link(ctx: &mut Ctx, s: ScreenEffect) {
 
 fn link_slot(ctx: &mut Ctx, slot: usize) {
     let prio = ctx.effects.screen_fx[slot].map_or(0, |s| s.prio);
-    let t = task::task(ScreenTask { slot });
-    if task::add(ctx, Chain::Calc, SCREEN_CALC_PRIO, 0, t.clone()).is_ok() {
+    let t = crate::chain::Node::Screen { slot };
+    if task::add(ctx, Chain::Calc, SCREEN_CALC_PRIO, 0, t).is_ok() {
         let _ = task::add(ctx, Chain::Draw, prio, 0, t);
     }
 }
@@ -1446,7 +1446,7 @@ impl Effects {
 
 // A screen effect's calc + draw nodes; the state is `ctx.effects.screen_fx[slot]` (step 9f).
 pub struct ScreenTask {
-    slot: usize,
+    pub(crate) slot: usize,
 }
 
 impl Task<Ctx> for ScreenTask {

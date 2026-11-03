@@ -6,7 +6,8 @@
 //! game manager with its replay object recording the run, then playing the recording back; each later step-9 run
 //! adds its subsystem to `World` here (docs/arch/STEP9_WORLD.md). 9g part 2: the scene objects, the Supervisor and
 //! the ascii manager need a loaded `Ctx`; `scene_clone_continues_identically` snapshots its cloneable parts in the
-//! main menu and replays the continuation from the snapshot.
+//! main menu and replays the continuation from the snapshot; 9h part 1 adds the chain (`Tasks<Node>`) to that
+//! snapshot.
 use crate::anmmgr::AnmManager;
 use crate::bullet::BulletManager;
 use crate::effect::ScreenEnv;
@@ -619,6 +620,8 @@ mod scene {
     // are (the run below loads none; `World` takes the chain with step 9h).
     #[derive(Clone)]
     struct CtxWorld {
+        // The chain itself (step 9h): `Node` values, cloned with the state they forward to.
+        tasks: crate::task::Tasks<crate::chain::Node>,
         scene: crate::supervisor::Scene,
         supervisor: Box<crate::supervisor::Supervisor>,
         ascii_mgr: Box<crate::ascii::AsciiManager>,
@@ -641,6 +644,7 @@ mod scene {
     impl CtxWorld {
         fn take(c: &crate::game::Ctx) -> (Self, AnmManager) {
             let w = CtxWorld {
+                tasks: c.tasks.clone(),
                 scene: c.scene.clone(),
                 supervisor: c.supervisor.clone().unwrap(),
                 ascii_mgr: c.ascii_mgr.clone().unwrap(),
@@ -663,6 +667,7 @@ mod scene {
         }
 
         fn put(self, c: &mut crate::game::Ctx, anm: &AnmManager) {
+            c.tasks = self.tasks;
             c.scene = self.scene;
             c.supervisor = Some(self.supervisor);
             c.ascii_mgr = Some(self.ascii_mgr);
@@ -728,7 +733,7 @@ mod scene {
     }
 
     // 9g part 2: the menu scene, the Supervisor and the ascii manager cloned mid-run (in the option screen's entry
-    // wait) continue exactly like the original: same state, RNG and draw commands every frame.
+    // wait) continue exactly like the original: same state, RNG and draw commands every frame; 9h: with the chain.
     #[test]
     fn scene_clone_continues_identically() {
         let Some(dir) = crate::settings::test_game_dir() else {
@@ -752,24 +757,25 @@ mod scene {
             ctx_frame(&mut c, f);
         }
         assert!(matches!(c.scene, crate::supervisor::Scene::Menu(_)));
-        let chain = (
-            c.tasks.priorities(crate::task::Chain::Calc),
-            c.tasks.priorities(crate::task::Chain::Draw),
-        );
+        let nodes = |c: &crate::game::Ctx| {
+            (
+                c.tasks.nodes(crate::task::Chain::Calc),
+                c.tasks.nodes(crate::task::Chain::Draw),
+            )
+        };
+        let chain = nodes(&c);
         let (w, anm) = CtxWorld::take(&c);
         let a: Vec<_> = (CLONE_AT..450).map(|f| ctx_frame(&mut c, f)).collect();
+        // The live chain is dropped (no on-remove); the continuation runs on the cloned one.
+        c.tasks = Default::default();
         w.put(&mut c, &anm);
+        assert_eq!(chain, nodes(&c));
         for (k, f) in (CLONE_AT..450).enumerate() {
             assert_eq!(ctx_frame(&mut c, f), a[k], "frame {f}");
         }
         // The chain is the same at both ends (no scene switch, no task left behind).
-        assert_eq!(
-            chain,
-            (
-                c.tasks.priorities(crate::task::Chain::Calc),
-                c.tasks.priorities(crate::task::Chain::Draw),
-            )
-        );
+        assert_eq!(chain, nodes(&c));
+        assert!(chain.1.iter().any(|n| n.2 == crate::chain::Node::Scene));
         // The run did something worth cloning: the option screen was entered and left, the cursor moved.
         let screens: Vec<u64> = a.iter().map(|t| t[1]).collect();
         assert!(

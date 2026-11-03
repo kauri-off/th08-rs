@@ -1492,9 +1492,9 @@ pub struct AsciiManager {
 impl AsciiManager {
     pub fn register(ctx: &mut Ctx) -> Result<()> {
         ctx.ascii_mgr = Some(Box::default());
-        let t = task::task(AsciiTask);
-        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t.clone())?;
-        task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t.clone())?;
+        let t = crate::chain::Node::Ascii;
+        task::add(ctx, Chain::Calc, CALC_PRIO, 0, t)?;
+        task::add(ctx, Chain::Draw, DRAW_LOW_PRIO, 0, t)?;
         task::add(ctx, Chain::Draw, DRAW_HIGH_PRIO, 1, t)?;
         Ok(())
     }

@@ -15,6 +15,7 @@ pub mod audio;
 pub mod bomb;
 pub mod bullet;
 pub mod camera;
+pub mod chain;
 pub mod config;
 pub mod content;
 pub mod coreconfig;
