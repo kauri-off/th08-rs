@@ -1,8 +1,10 @@
 //! Port-only tool (no spec): prints the settings table `th08::settings::ENTRIES` as JSON for the Android Compose
-//! launcher (android/, MATERIAL1), so its screen is generated from the table and cannot drift.
+//! launcher (android/, MATERIAL1), so its screen is generated from the table and cannot drift. Entries and groups
+//! also carry `ja` / `ru` objects from the i18n tables (docs/arch/I18N.md §3.3, read by the launcher from L2 on).
 // usage: settings_schema [OUT.json] — stdout when no path is given.
 
 use serde_json::{Value, json};
+use th08::i18n::{self, Lang};
 use th08::settings::{Audience, ENTRIES, Entry, Group, Kind};
 
 fn kind(k: Kind) -> Value {
@@ -16,15 +18,22 @@ fn kind(k: Kind) -> Value {
     }
 }
 
-fn group_id(g: Group) -> &'static str {
-    match g {
-        Group::GameData => "game_data",
-        Group::Display => "display",
-        Group::Touch => "touch",
-        Group::StartGame => "start_game",
-        Group::Cheats => "cheats",
-        Group::Tools => "tools",
-    }
+fn words(e: &Entry, lang: Lang) -> Value {
+    e.words
+        .iter()
+        .map(|&(v, _)| json!({ "value": v, "label": i18n::word(lang, e, v).unwrap() }))
+        .collect()
+}
+
+// The display texts of an entry in one language (same shape as the English fields).
+fn entry_lang(e: &Entry, lang: Lang) -> Value {
+    json!({
+        "label": i18n::label(lang, e),
+        "summary": i18n::summary(lang, e),
+        "help": i18n::help(lang, e),
+        "unit": i18n::unit(lang, e),
+        "words": words(e, lang),
+    })
 }
 
 // `summary`: the short row text, `help` the long one; `unit` / `words`: number suffix and display words by value.
@@ -36,23 +45,37 @@ fn entry(e: &Entry) -> Value {
         "summary": e.summary,
         "help": e.help,
         "unit": e.unit,
-        "words": e.words.iter().map(|&(v, w)| json!({ "value": v, "label": w })).collect::<Vec<_>>(),
+        "words": words(e, Lang::En),
         "kind": kind(e.kind),
         "default": e.default,
-        "group": group_id(e.group),
+        "group": e.group.id(),
         "audience": match e.audience { Audience::Player => "player", Audience::Dev => "dev" },
         "platforms": e.platforms.names(),
         "persist": e.persist,
+        "ja": entry_lang(e, Lang::Ja),
+        "ru": entry_lang(e, Lang::Ru),
     })
 }
 
 fn schema() -> Value {
     let groups: Vec<Value> = Group::ALL
         .iter()
-        .map(|&g| json!({ "id": group_id(g), "title": g.title() }))
+        .map(|&g| {
+            json!({
+                "id": g.id(),
+                "title": g.title(),
+                "ja": { "title": i18n::group_title(Lang::Ja, g) },
+                "ru": { "title": i18n::group_title(Lang::Ru, g) },
+            })
+        })
         .collect();
     let entries: Vec<Value> = ENTRIES.iter().map(entry).collect();
-    json!({ "version": 3, "groups": groups, "entries": entries })
+    json!({
+        "version": 3,
+        "languages": Lang::ALL.map(Lang::code),
+        "groups": groups,
+        "entries": entries,
+    })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -76,7 +99,7 @@ mod tests {
             (s("key"), s("label"), s("help"), s("default")),
             (e.key, e.label, e.help, e.default)
         );
-        assert_eq!(s("group"), group_id(e.group));
+        assert_eq!(s("group"), e.group.id());
         let k = &j["kind"];
         let back = match k["type"].as_str().unwrap() {
             "bool" => Kind::Bool,
@@ -123,6 +146,31 @@ mod tests {
             .map(|w| (w["value"].as_str().unwrap(), w["label"].as_str().unwrap()))
             .collect();
         assert_eq!(words, e.words);
+        for lang in Lang::TRANSLATED {
+            let t = &j[lang.code()];
+            let s = |k: &str| t[k].as_str().unwrap();
+            assert_eq!(
+                (s("label"), s("summary"), s("help"), s("unit")),
+                (
+                    i18n::label(lang, e),
+                    i18n::summary(lang, e),
+                    i18n::help(lang, e),
+                    i18n::unit(lang, e)
+                )
+            );
+            let words: Vec<(&str, &str)> = t["words"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| (w["value"].as_str().unwrap(), w["label"].as_str().unwrap()))
+                .collect();
+            let want: Vec<(&str, &str)> = e
+                .words
+                .iter()
+                .map(|&(v, _)| (v, i18n::word(lang, e, v).unwrap()))
+                .collect();
+            assert_eq!(words, want);
+        }
     }
 
     // Every entry has a short summary in plain words; every enum choice has a display word.
@@ -182,10 +230,19 @@ mod tests {
             "turbo",
             "touch_move",
             "replay_speed",
+            "language",
+            "stage_frame",
         ] {
             let i = ENTRIES.iter().position(|e| e.key == key).unwrap();
             round_trip(&ENTRIES[i], &entries[i]);
         }
+        for (g, j) in Group::ALL.iter().zip(s["groups"].as_array().unwrap()) {
+            assert_eq!(j["id"], g.id());
+            for lang in Lang::TRANSLATED {
+                assert_eq!(j[lang.code()]["title"], i18n::group_title(lang, *g));
+            }
+        }
+        assert_eq!(s["languages"], json!(["ja", "en", "ru"]));
         let text = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), s);
     }

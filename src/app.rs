@@ -577,7 +577,12 @@ impl App {
         if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
             h.input.set_focus(false);
         }
-        let menu = crate::platform::portmenu::PortMenu::new(self.window());
+        let lang = crate::i18n::resolve(r.settings.language);
+        let menu = crate::platform::portmenu::PortMenu::new(
+            self.window(),
+            lang,
+            r.settings.font.as_deref(),
+        );
         self.shell = Shell::PortMenu(r, Box::new(menu));
         self.sync_audio();
         self.window().request_redraw();

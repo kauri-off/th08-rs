@@ -114,6 +114,19 @@ impl Group {
         Group::Tools,
     ];
 
+    // Stable id: settings_schema `group`, i18n table `group.<id>`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Group::GameData => "game_data",
+            Group::Display => "display",
+            Group::Touch => "touch",
+            Group::StartGame => "start_game",
+            Group::Cheats => "cheats",
+            Group::Tools => "tools",
+        }
+    }
+
+    // English title; settings screens show `i18n::group_title`.
     pub fn title(self) -> &'static str {
         match self {
             Group::GameData => "Game data",
@@ -250,6 +263,10 @@ pub struct Settings {
     pub touch: crate::platform::touch::TouchConfig,
     pub save_dir: Option<PathBuf>,
     pub font: Option<String>,
+    // Launcher / port menu language; None = the system locale (i18n.rs).
+    pub language: Option<crate::i18n::Lang>,
+    // Game text language, stored for the presentation packs (I18N §3.2); None = follow `language`.
+    pub game_text: Option<crate::i18n::Lang>,
     pub soundfont: Option<PathBuf>,
     pub seed: Option<u16>,
     pub stage: Option<usize>,
@@ -316,6 +333,8 @@ impl Settings {
             touch: Default::default(),
             save_dir: None,
             font: None,
+            language: None,
+            game_text: None,
             soundfont: None,
             seed: None,
             stage: None,
@@ -422,6 +441,61 @@ pub const ENTRIES: &[Entry] = &[
         help: "game folder with th08.dat and thbgm.dat (also the first plain argument)",
         set: |s, v| {
             s.game_dir = Some(PathBuf::from(v));
+            Ok(())
+        },
+    },
+    Entry {
+        key: "game_text",
+        env: "TH08_GAME_TEXT",
+        kind: Kind::Enum(&["follow", "ja", "en", "ru"]),
+        default: "follow",
+        group: Group::GameData,
+        label: "Game text language",
+        summary: "Language of the in-game text",
+        unit: "",
+        words: &[
+            ("follow", "Same as the screens"),
+            ("ja", "日本語 (original)"),
+            ("en", "English"),
+            ("ru", "Русский"),
+        ],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "language of dialogue and other game text: follow (the screen language), ja (original), en or ru; \
+               a translation pack is needed for en and ru",
+        set: |s, v| {
+            s.game_text = match v.trim() {
+                "follow" => None,
+                l => Some(crate::i18n::Lang::from_code(l).ok_or("expected follow, ja, en or ru")?),
+            };
+            Ok(())
+        },
+    },
+    Entry {
+        key: "language",
+        env: "TH08_LANGUAGE",
+        kind: Kind::Enum(&["auto", "ja", "en", "ru"]),
+        default: "auto",
+        group: Group::Display,
+        label: "Language",
+        summary: "Language of the settings screens",
+        unit: "",
+        words: &[
+            ("auto", "System"),
+            ("ja", "日本語"),
+            ("en", "English"),
+            ("ru", "Русский"),
+        ],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "language of this screen and the port menu: auto (system language), ja, en or ru",
+        set: |s, v| {
+            s.language = match v.trim() {
+                "auto" => None,
+                l => Some(crate::i18n::Lang::from_code(l).ok_or("expected auto, ja, en or ru")?),
+            };
             Ok(())
         },
     },

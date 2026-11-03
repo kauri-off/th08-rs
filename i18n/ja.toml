@@ -1,0 +1,481 @@
+# Japanese launcher / port menu strings (docs/arch/I18N.md §3.1). English source: src/settings.rs ENTRIES and
+# src/i18n.rs UI; `cargo test i18n` checks that every id is here and that none is stale.
+
+[ui]
+title = "th08 — 東方永夜抄 移植版"
+play = "プレイ"
+reset = "初期設定に戻す"
+quit = "終了"
+back = "戻る"
+developer = "開発者"
+developer_hint = "チートとツールを表示（今回の起動のみ有効、保存されません）"
+select_folder_first = "先にゲームフォルダを選んでください"
+fix_values = "赤く表示された値を直してください"
+dev_active = "有効な開発者設定: {list}"
+game_folder = "ゲームフォルダ:"
+browse = "参照…"
+folder_hint = "th08.dat のあるフォルダ"
+bundled_apk = "APK に同梱"
+no_files = "ファイルがありません"
+dat_found = "th08.dat が見つかりました"
+dat_missing = "このフォルダに th08.dat がありません"
+android_copy = "東方永夜抄のフォルダから th08.dat と thbgm.dat を {dir} にコピーしてください\n例: adb push th08.dat thbgm.dat {dir}/ — コピーするとこの画面が自動で認識します。"
+waiting_touch = "ゲームを起動しています…  画面をタッチすると設定画面を開きます"
+waiting_shift = "ゲームを起動しています…  Shift を押し続けると設定画面を開きます"
+loading = "th08.dat を読み込んでいます…"
+start_failed = "ゲームを起動できませんでした"
+not_set = "（未設定）"
+changed = "変更済み"
+set_by = "{source} で指定"
+saved = "保存済み"
+port_menu = "移植版メニュー"
+paused = "ゲームは一時停止中です"
+resume = "再開"
+key_back = "戻るボタン"
+
+[group]
+game_data = "ゲームデータ"
+display = "画面"
+touch = "タッチ操作"
+start_game = "ゲーム開始"
+cheats = "チート／デバッグ"
+tools = "録画／ツール"
+
+[entry.game_dir]
+label = "ゲームフォルダ"
+summary = "th08.dat と thbgm.dat のあるフォルダ"
+help = "th08.dat と thbgm.dat のあるゲームフォルダ（最初の引数でも指定可）"
+
+[entry.game_text]
+label = "ゲーム内テキストの言語"
+summary = "ゲーム中のテキストの言語"
+help = "会話などゲーム内テキストの言語: follow（画面の言語に合わせる）、ja（オリジナル）、en、ru。en と ru には翻訳パックが必要です"
+
+[entry.game_text.words]
+follow = "画面の言語に合わせる"
+ja = "日本語（オリジナル）"
+en = "English"
+ru = "Русский"
+
+[entry.language]
+label = "言語"
+summary = "設定画面の言語"
+help = "この画面と移植版メニューの言語: auto（システムの言語）、ja、en、ru"
+
+[entry.language.words]
+auto = "システムの言語"
+ja = "日本語"
+en = "English"
+ru = "Русский"
+
+[entry.scale]
+label = "ウィンドウサイズ"
+summary = "640×480 の何倍で表示するか"
+help = "ウィンドウサイズを 640x480 のこの倍率にする（ネイティブ版）"
+
+[entry.fullscreen]
+label = "フルスクリーン"
+summary = "フルスクリーンで起動"
+help = "フルスクリーンで起動（ネイティブ版。F11 か Alt+Enter で切り替えて保存）"
+
+[entry.vsync]
+label = "垂直同期"
+summary = "フレームをディスプレイに同期"
+help = "垂直同期して表示（初期値はオン）。フレームレート制御とは別です"
+
+[entry.screen_margin]
+label = "画面の余白 (dp)"
+summary = "画面の端に空けておく余白"
+help = "画面の各辺に追加する余白 (dp)。ノッチや角の領域が正しく取れない端末向け"
+unit = " dp"
+
+[entry.screen_margin.words]
+0 = "なし"
+
+[entry.launcher]
+label = "起動時にこの画面を表示"
+summary = "ゲーム開始前にこの画面を表示"
+help = "起動時にこの画面を表示する。オフの場合、th08 の起動中に Shift を押し続ける（Web 版: ?launcher=1）と再び表示されます"
+
+[entry.touch]
+label = "タッチオーバーレイ"
+summary = "タッチ画面用の画面上ボタン"
+help = "タッチオーバーレイ: auto（タッチ対応の環境で表示）、on、off"
+
+[entry.touch.words]
+auto = "自動"
+on = "オン"
+off = "オフ"
+
+[entry.touch_move]
+label = "移動方法"
+summary = "指で自機を動かす方法"
+help = "移動方法: ドラッグ（自機が指の動きについてくる）またはフローティングスティック"
+
+[entry.touch_move.words]
+drag = "ドラッグ"
+stick = "フローティングスティック"
+
+[entry.touch_sens]
+label = "ドラッグ感度 %"
+summary = "指の動きに対する自機の移動量"
+help = "ドラッグ感度（パーセント）。100 = ゲーム画面上で自機が指と 1:1 で動く"
+
+[entry.touch_focus]
+label = "低速ボタン"
+summary = "押している間だけ低速か、タップで切り替えか"
+help = "低速（FOCUS）ボタン: 押している間だけ、または切り替え"
+
+[entry.touch_focus.words]
+hold = "押している間"
+toggle = "切り替え"
+
+[entry.touch_autofire]
+label = "オートショット"
+summary = "ボタンを押さなくてもショットを撃つ"
+help = "開始時にオートショットを有効にする（プレイ中のみ。AUTO ボタンで切り替え）"
+
+[entry.touch_opacity]
+label = "オーバーレイの不透明度 %"
+summary = "画面上ボタンの見えやすさ"
+help = "オーバーレイの不透明度（パーセント）"
+
+[entry.touch_layout]
+label = "オーバーレイの配置"
+summary = "レイアウトエディタで決めたボタン位置"
+help = "画面の向きごとのオーバーレイ配置（空 = 初期配置。レイアウトエディタが書き込みます）"
+
+[entry.touch_layout.words]
+"" = "初期設定"
+
+[entry.save_dir]
+label = "セーブフォルダ"
+summary = "スコアとリプレイの保存先"
+help = "score.dat とリプレイの保存先（初期値: 移植版の設定フォルダ）"
+
+[entry.save_dir.words]
+"" = "初期設定"
+
+[entry.font]
+label = "会話フォント"
+summary = "会話テキスト用の日本語フォント"
+help = "会話テキスト用の日本語フォント（ネイティブ版）"
+
+[entry.font.words]
+"" = "初期設定"
+
+[entry.soundfont]
+label = "MIDI サウンドフォント"
+summary = "MIDI 音楽用のサウンドフォント"
+help = "音楽を MIDI にしたときに使う General MIDI サウンドフォント (.sf2)（ネイティブ版。初期値: システムのサウンドフォントフォルダ）"
+
+[entry.soundfont.words]
+"" = "初期設定"
+
+[entry.seed]
+label = "乱数シード"
+summary = "起動時の乱数シードを固定"
+help = "起動時の乱数シードを固定する (0-65535)"
+
+[entry.seed.words]
+"" = "ランダム"
+
+[entry.stage]
+label = "開始ステージ"
+summary = "メニューを飛ばしてステージから開始"
+help = "そのステージからゲームを開始（stageN[.std]、idx:N も可）"
+
+[entry.stage.words]
+"" = "オフ"
+1 = "Stage 1"
+2 = "Stage 2"
+3 = "Stage 3"
+4a = "Stage 4A"
+4b = "Stage 4B"
+5 = "Stage 5"
+6a = "Final A"
+6b = "Final B"
+ex = "Extra"
+
+[entry.stage_frame]
+label = "ステージ開始フレーム"
+summary = "ステージの途中まで早送り"
+help = "最初の処理でステージを n フレーム早送りする"
+unit = " フレーム"
+
+[entry.stage_frame.words]
+0 = "オフ"
+
+[entry.player]
+label = "自機"
+summary = "ステージやエンディングを直接始めるときの自機"
+help = "--stage/--ending で使う自機: 0-11 または名前（reimu&yukari、ry、marisa など）"
+
+[entry.player.words]
+"" = "初期設定"
+"reimu&yukari" = "霊夢＆紫（幻想の結界チーム）"
+"marisa&alice" = "魔理沙＆アリス（禁呪の詠唱チーム）"
+"sakuya&remilia" = "咲夜＆レミリア（夢幻の紅魔チーム）"
+"youmu&yuyuko" = "妖夢＆幽々子（幽冥の住人チーム）"
+reimu = "博麗 霊夢"
+yukari = "八雲 紫"
+marisa = "霧雨 魔理沙"
+alice = "アリス・マーガトロイド"
+sakuya = "十六夜 咲夜"
+remilia = "レミリア・スカーレット"
+youmu = "魂魄 妖夢"
+yuyuko = "西行寺 幽々子"
+
+[entry.rank]
+label = "難易度"
+summary = "ステージやエンディングを直接始めるときの難易度"
+help = "--stage/--ending の難易度（e/n/h/l/x、0-4 も可）"
+
+[entry.rank.words]
+"" = "初期設定"
+easy = "Easy"
+normal = "Normal"
+hard = "Hard"
+lunatic = "Lunatic"
+extra = "Extra"
+
+[entry.power]
+label = "開始時のパワー"
+summary = "最初のステージでのパワー"
+help = "最初のステージでの自機のパワー"
+
+[entry.power.words]
+"" = "初期設定"
+
+[entry.continues]
+label = "使用コンティニュー数"
+summary = "エンディング開始時に数えるコンティニュー回数"
+help = "使用したコンティニュー回数（--ending 用）"
+
+[entry.continues.words]
+0 = "なし"
+
+[entry.ending]
+label = "エンディング再生"
+summary = "エンディングを直接見る"
+help = "エンディングを開始: <shot><a|b|c>（バッド / 6A グッド / 6B グッド）または .end ファイル"
+
+[entry.ending.words]
+"" = "オフ"
+
+[entry.replay]
+label = "リプレイ再生"
+summary = "リプレイファイルかデモを再生"
+help = "リプレイファイルまたはデモプレイを再生"
+
+[entry.replay.words]
+"" = "オフ"
+
+[entry.replay_speed]
+label = "リプレイ速度"
+summary = "そのリプレイの再生速度"
+help = "リプレイの再生速度"
+
+[entry.replay_speed.words]
+0 = "通常"
+1 = "スロー"
+2 = "早送り"
+
+[entry.replay_save]
+label = "リプレイ保存スロット"
+summary = "ゲーム終了時に記録を保存"
+help = "ゲーム終了時に記録をそのリプレイスロットに保存"
+
+[entry.replay_save.words]
+"" = "オフ"
+
+[entry.input]
+label = "入力スクリプト"
+summary = "スクリプトによるボタン入力"
+help = "入力スクリプトファイル、または直接 `frames:mask,...`"
+
+[entry.input.words]
+"" = "オフ"
+
+[entry.invuln]
+label = "無敵"
+summary = "自機がやられない"
+help = "自機がやられなくなる"
+
+[entry.unlock]
+label = "すべて解放"
+summary = "メニューの項目をすべて解放"
+help = "メニューの項目をすべて解放する"
+
+[entry.enemy_dmg]
+label = "毎フレームの敵ダメージ"
+summary = "すべての敵に毎フレーム与えるダメージ"
+help = "画面内の撃てる敵すべてに毎フレーム与えるダメージ"
+
+[entry.enemy_dmg.words]
+0 = "オフ"
+
+[entry.bomb]
+label = "ボム固定"
+summary = "すべての自機でこのボムを使う"
+help = "ボム番号を固定する（4 = ディゾルブスペル）"
+
+[entry.bomb.words]
+"" = "オフ"
+4 = "ディゾルブスペル"
+
+[entry.clrd]
+label = "クリアフラグ"
+summary = "自機をクリア済みにする"
+help = "その自機のクリアフラグを全難易度に設定する"
+
+[entry.clrd.words]
+"" = "オフ"
+
+[entry.screen_fx]
+label = "画面エフェクト"
+summary = "指定フレームで画面エフェクトを再生"
+help = "ゲームフレーム F で画面エフェクト T を予約する"
+
+[entry.screen_fx.words]
+"" = "オフ"
+
+[entry.shot]
+label = "スクリーンショットのフレーム"
+summary = "指定フレームでスクリーンショットを保存して終了"
+help = "そのフレームで /tmp/th08_shot.png を保存して終了（Web 版: 停止）"
+
+[entry.shot.words]
+"" = "オフ"
+
+[entry.shot_size]
+label = "スクリーンショットのサイズ"
+summary = "そのスクリーンショットのサイズ"
+help = "--shot をウィンドウの拡大転送を通してこのサイズで撮る"
+
+[entry.shot_size.words]
+"" = "初期設定"
+
+[entry.touch_mouse]
+label = "マウスをタッチとして使う"
+summary = "マウスを指として使う"
+help = "マウスを 1 本の指として扱い、タッチオーバーレイを表示する（端末なしでタッチを試す）"
+
+[entry.turbo]
+label = "ターボ"
+summary = "描画 1 フレームあたりの処理フレーム数"
+help = "描画 1 フレームごとに N フレーム処理する。フレームレート制御なし"
+
+[entry.turbo.words]
+0 = "オフ"
+
+[entry.slot_test]
+label = "ANM スロットテスト"
+summary = "スプライトシート 1 枚を格子状に表示"
+help = "その ANM スロットのスプライトを格子状に描く"
+
+[entry.slot_test.words]
+"" = "オフ"
+
+[entry.anm]
+label = "ANM ビューア"
+summary = "ゲームの代わりにアニメーションスクリプトを実行"
+help = "ゲームの代わりに ANM スクリプトを実行する"
+
+[entry.anm.words]
+"" = "オフ"
+
+[entry.anm_int]
+label = "ANM 割り込み"
+summary = "指定フレームでのアニメーション割り込み"
+help = "--anm でそのフレームに割り込みを送る"
+
+[entry.anm_int.words]
+"" = "オフ"
+
+[entry.anm_pos]
+label = "ANM 表示位置"
+summary = "アニメーションを描く位置"
+help = "--anm の VM i を (x + i*dx, y) に置く"
+
+[entry.anm_pos.words]
+"" = "初期設定"
+
+[entry.anm_mode]
+label = "ANM 描画モード"
+summary = "アニメーションの描画モードを固定"
+help = "--anm の描画モードを固定する"
+
+[entry.anm_mode.words]
+"" = "オフ"
+
+[entry.se_log]
+label = "効果音ログ"
+summary = "毎フレームの効果音を記録"
+help = "フレームごとに鳴らした効果音 ID を記録する"
+
+[entry.drawlog]
+label = "描画ログ"
+summary = "すべての描画をテキストで記録"
+help = "テキスト形式の描画ログを書く: <path>[,from-to]（.xz ログは session / drawrun ツール）"
+
+[entry.drawlog.words]
+"" = "オフ"
+
+[entry.result_shots]
+label = "リザルト画面のスクリーンショット"
+summary = "テスト用のリザルト画面スクリーンショット"
+help = "テスト用: そのフレームでリザルト画面のスクリーンショットを撮る"
+
+[entry.result_shots.words]
+"" = "オフ"
+
+[entry.test_frames]
+label = "自機ごとのテストフレーム数"
+summary = "自機テストでの自機ごとのフレーム数"
+help = "テスト用: スクリプトによる自機テストでの自機ごとのフレーム数"
+unit = " フレーム"
+
+[entry.session_rng]
+label = "セッション乱数呼び出し"
+summary = "メニューフレームでの乱数呼び出しを記録"
+help = "セッションツール: そのメニューフレームの乱数呼び出し元"
+
+[entry.session_rng.words]
+"" = "オフ"
+
+[entry.session_dump]
+label = "セッションダンプ"
+summary = "メニューフレーム間の自機とアイテムを記録"
+help = "セッションツール: メニューフレーム A..B の各処理後の自機とアイテム"
+
+[entry.session_dump.words]
+"" = "オフ"
+
+[entry.session_pb]
+label = "セッション自機弾"
+summary = "自機弾も記録"
+help = "セッションツール: 自機弾もダンプする"
+
+[entry.bdump]
+label = "弾ダンプ"
+summary = "毎フレームの敵と弾を記録"
+help = "demosync ツール: フレームごとの敵と弾"
+
+[entry.idump]
+label = "アイテムダンプ"
+summary = "毎フレームの自機とアイテムを記録"
+help = "demosync ツール: フレームごとの自機とアイテム"
+
+[entry.edump]
+label = "エフェクトダンプ"
+summary = "毎フレームの指定種類のエフェクトを記録"
+help = "demosync ツール: フレームごとのその種類のエフェクト"
+
+[entry.edump.words]
+"" = "オフ"
+
+[entry.sht_dump]
+label = "ショットファイルダンプ"
+summary = "読み込んだショットファイルをすべて表示"
+help = "テスト用: 読み込んだ .sht ファイルをすべて表示する"

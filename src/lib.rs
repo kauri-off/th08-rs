@@ -3,6 +3,7 @@
 //! th08-core, drawing in th08-render, sound in th08-audio.
 
 pub mod app;
+pub mod i18n;
 pub mod joystick;
 pub mod launcher;
 pub mod pacer;

@@ -1,6 +1,7 @@
 //! Port menu (F1 / Android Back / resume from the background, ARCH_D_MOBILE §5): an egui pass over the held game's
 //! last frame (`Gfx::present_last`), dimmed. Port-only UI, no spec section.
 
+use crate::i18n::{self, Lang};
 use crate::launcher::Action;
 use egui::{Align2, Color32, Id, LayerId, Order, RichText};
 use th08_render::gfx::{Gfx, OverlayTarget, SafeArea};
@@ -16,6 +17,7 @@ pub struct PortMenu {
     pending: egui::TexturesDelta,
     // When egui wants the next repaint.
     pub repaint_at: Option<web_time::Instant>,
+    lang: Lang,
 }
 
 // The launcher's 640×480 layout scale for a window's safe rect (launcher.rs `zoom`).
@@ -25,9 +27,13 @@ fn zoom(safe: SafeArea, (w, h): (u32, u32)) -> f32 {
 }
 
 impl PortMenu {
-    pub fn new(window: &Window) -> Self {
+    // `lang`: the game's resolved `language` setting; `font`: its `font` setting (CJK fallback lookup).
+    pub fn new(window: &Window, lang: Lang, font: Option<&str>) -> Self {
         let ctx = egui::Context::default();
         ctx.set_visuals(egui::Visuals::dark());
+        if lang == Lang::Ja {
+            i18n::install_fonts(&ctx, font);
+        }
         let state = egui_winit::State::new(
             ctx.clone(),
             egui::ViewportId::ROOT,
@@ -42,6 +48,7 @@ impl PortMenu {
             renderer: None,
             pending: Default::default(),
             repaint_at: None,
+            lang,
         }
     }
 
@@ -70,7 +77,8 @@ impl PortMenu {
             bottom: s.bottom as f32 / ppp,
         }));
         let mut act = None;
-        let mut out = self.ctx.run_pass(raw, |ctx| act = menu_ui(ctx));
+        let lang = self.lang;
+        let mut out = self.ctx.run_pass(raw, |ctx| act = menu_ui(ctx, lang));
         self.state
             .handle_platform_output(window, std::mem::take(&mut out.platform_output));
         let delay = out
@@ -91,7 +99,7 @@ impl PortMenu {
     }
 }
 
-fn menu_ui(ctx: &egui::Context) -> Option<Action> {
+fn menu_ui(ctx: &egui::Context, lang: Lang) -> Option<Action> {
     let mut act = None;
     let screen = ctx.content_rect();
     ctx.layer_painter(LayerId::new(Order::Background, Id::unique("dim")))
@@ -103,16 +111,17 @@ fn menu_ui(ctx: &egui::Context) -> Option<Action> {
                 .inner_margin(egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.heading("Port menu");
+                        ui.heading(i18n::ui(lang, "port_menu"));
                         ui.add_space(4.0);
-                        ui.label(RichText::new("the game is paused").weak());
+                        ui.label(RichText::new(i18n::ui(lang, "paused")).weak());
                         ui.add_space(12.0);
-                        if ui.button(RichText::new("  Resume  ").strong()).clicked() {
+                        let resume = format!("  {}  ", i18n::ui(lang, "resume"));
+                        if ui.button(RichText::new(resume).strong()).clicked() {
                             act = Some(Action::Resume);
                         }
                         ui.add_space(4.0);
                         let keys = if cfg!(target_os = "android") {
-                            "Back"
+                            i18n::ui(lang, "key_back")
                         } else {
                             "F1 / Esc"
                         };

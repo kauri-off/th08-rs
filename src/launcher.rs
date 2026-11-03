@@ -1,6 +1,7 @@
 //! Launcher screen and game-folder flow, port infrastructure (no spec section): an egui settings screen generated
 //! from `settings::ENTRIES`, drawn on the game's wgpu device and window before the game starts.
 
+use crate::i18n::{self, Lang};
 use crate::settings::{self, Audience, ENTRIES, Entry, Group, Kind, Origin, Settings};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
@@ -320,6 +321,11 @@ impl Model {
         self.row_mut("fullscreen").set(Value::Bool(on));
     }
 
+    // The screen language: the `language` row as edited (a change applies at once), auto = the system locale.
+    pub fn lang(&self) -> Lang {
+        i18n::resolve(Lang::from_code(&self.row("language").value.text()))
+    }
+
     fn row(&self, key: &str) -> &Row {
         self.rows.iter().find(|r| r.e.key == key).unwrap()
     }
@@ -398,6 +404,7 @@ impl Model {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
+        let lang = self.lang();
         match &self.view {
             View::Settings => {
                 let before = self.row("fullscreen").value.clone();
@@ -411,28 +418,32 @@ impl Model {
             View::Waiting => {
                 message_ui(
                     ui,
-                    if cfg!(target_os = "android") {
-                        "Starting the game…  touch the screen to open the settings screen"
-                    } else {
-                        "Starting the game…  hold Shift to open the settings screen"
-                    },
+                    i18n::ui(
+                        lang,
+                        if cfg!(target_os = "android") {
+                            "waiting_touch"
+                        } else {
+                            "waiting_shift"
+                        },
+                    ),
                 );
                 None
             }
             View::Loading => {
-                message_ui(ui, "Loading th08.dat…");
+                message_ui(ui, i18n::ui(lang, "loading"));
                 None
             }
-            View::Error(msg) => error_ui(ui, msg),
-            View::PortMenu => port_menu_ui(ui),
+            View::Error(msg) => error_ui(ui, lang, msg),
+            View::PortMenu => port_menu_ui(ui, lang),
         }
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
         let mut act = None;
+        let lang = self.lang();
         egui::Panel::top("folder").show(ui, |ui| {
             ui.add_space(4.0);
-            ui.heading("th08 — Touhou 8 port");
+            ui.heading(i18n::ui(lang, "title"));
             self.folder_ui(ui);
             ui.add_space(4.0);
         });
@@ -441,23 +452,29 @@ impl Model {
             ui.horizontal(|ui| {
                 let play = ui.add_enabled(
                     self.can_play(),
-                    egui::Button::new(egui::RichText::new("  Play  ").strong()),
+                    egui::Button::new(
+                        egui::RichText::new(format!("  {}  ", i18n::ui(lang, "play"))).strong(),
+                    ),
                 );
                 if play.clicked() {
                     act = Some(Action::Play);
                 }
-                if ui.button("Reset to defaults").clicked() {
+                if ui.button(i18n::ui(lang, "reset")).clicked() {
                     self.reset();
                 }
-                if cfg!(not(target_arch = "wasm32")) && ui.button("Quit").clicked() {
+                if cfg!(not(target_arch = "wasm32")) && ui.button(i18n::ui(lang, "quit")).clicked()
+                {
                     act = Some(Action::Quit);
                 }
-                ui.checkbox(&mut self.dev, "Developer")
-                    .on_hover_text("show cheats and tools (used for this run only, never saved)");
+                ui.checkbox(&mut self.dev, i18n::ui(lang, "developer"))
+                    .on_hover_text(i18n::ui(lang, "developer_hint"));
                 if !self.folder_ok() {
-                    ui.colored_label(ui.visuals().warn_fg_color, "select the game folder first");
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        i18n::ui(lang, "select_folder_first"),
+                    );
                 } else if self.rows.iter().any(|r| r.error().is_some()) {
-                    ui.colored_label(ui.visuals().error_fg_color, "fix the marked values");
+                    ui.colored_label(ui.visuals().error_fg_color, i18n::ui(lang, "fix_values"));
                 }
             });
             ui.add_space(4.0);
@@ -469,17 +486,17 @@ impl Model {
                         .rows
                         .iter()
                         .filter(|r| r.e.audience == Audience::Dev && r.value != r.default_value())
-                        .map(|r| r.e.label)
+                        .map(|r| i18n::label(lang, r.e))
                         .collect();
                     if !active.is_empty() {
                         ui.colored_label(
                             ui.visuals().error_fg_color,
-                            format!("Developer settings active: {}", active.join(", ")),
+                            i18n::ui_fmt(lang, "dev_active", &[("list", &active.join(", "))]),
                         );
                     }
                 }
                 for g in Group::ALL {
-                    self.group_ui(ui, g);
+                    self.group_ui(ui, g, lang);
                 }
             });
         });
@@ -488,15 +505,16 @@ impl Model {
 
     fn folder_ui(&mut self, ui: &mut egui::Ui) {
         let ok = self.folder_ok();
+        let lang = self.lang();
         ui.horizontal(|ui| {
-            ui.label("Game folder:");
+            ui.label(i18n::ui(lang, "game_folder"));
             match &self.folder {
                 Folder::Native => {
                     let r = self.row_mut("game_dir");
                     #[cfg_attr(target_os = "android", allow(unused_mut))]
                     let mut v = r.value.text();
                     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-                    if ui.button("Browse…").clicked()
+                    if ui.button(i18n::ui(lang, "browse")).clicked()
                         && let Some(d) = folder_dialog()
                     {
                         v = d.to_string_lossy().into_owned();
@@ -504,7 +522,7 @@ impl Model {
                     #[cfg(not(target_os = "android"))]
                     ui.add(
                         egui::TextEdit::singleline(&mut v)
-                            .hint_text("folder with th08.dat")
+                            .hint_text(i18n::ui(lang, "folder_hint"))
                             .desired_width(f32::INFINITY),
                     );
                     // Android: no soft keyboard under NativeActivity (launcher review item 9), so the fixed folder
@@ -516,11 +534,11 @@ impl Model {
                     }
                 }
                 Folder::Bundled(_) => {
-                    ui.label("bundled in the APK");
+                    ui.label(i18n::ui(lang, "bundled_apk"));
                 }
                 Folder::Web(names) => {
                     ui.label(if names.is_empty() {
-                        "no files".to_string()
+                        i18n::ui(lang, "no_files").to_string()
                     } else {
                         names.join(", ")
                     });
@@ -529,21 +547,21 @@ impl Model {
         });
         ui.horizontal(|ui| {
             if ok {
-                ui.colored_label(egui::Color32::from_rgb(110, 200, 110), "th08.dat found");
+                ui.colored_label(
+                    egui::Color32::from_rgb(110, 200, 110),
+                    i18n::ui(lang, "dat_found"),
+                );
             } else {
-                ui.colored_label(ui.visuals().error_fg_color, "no th08.dat in this folder");
+                ui.colored_label(ui.visuals().error_fg_color, i18n::ui(lang, "dat_missing"));
             }
             if self.dev && matches!(self.folder, Folder::Native) {
-                origin_label(ui, self.row("game_dir"));
+                origin_label(ui, self.row("game_dir"), lang);
             }
         });
         #[cfg(target_os = "android")]
         if !ok {
             let dir = self.game_dir();
-            ui.label(format!(
-                "Copy th08.dat and thbgm.dat from your Touhou 8 folder into {dir}\n\
-                 e.g. adb push th08.dat thbgm.dat {dir}/ — then this screen picks them up."
-            ));
+            ui.label(i18n::ui_fmt(lang, "android_copy", &[("dir", &dir)]));
             // Re-check the folder every second so an `adb push` shows up without a touch (the folder check runs
             // on every redraw; a `Resumed` redraws too).
             ui.ctx()
@@ -551,7 +569,7 @@ impl Model {
         }
     }
 
-    fn group_ui(&mut self, ui: &mut egui::Ui, g: Group) {
+    fn group_ui(&mut self, ui: &mut egui::Ui, g: Group, lang: Lang) {
         // The game folder row is at the top.
         let dev = self.dev;
         let rows: Vec<usize> = (0..self.rows.len())
@@ -567,16 +585,18 @@ impl Model {
             return;
         }
         let set_here = rows.iter().any(|&i| self.rows[i].origin > Origin::PortCfg);
-        egui::CollapsingHeader::new(egui::RichText::new(g.title()).strong())
+        // Ids from the group id, so a language switch keeps the open/closed state.
+        egui::CollapsingHeader::new(egui::RichText::new(i18n::group_title(lang, g)).strong())
+            .id_salt(g.id())
             .default_open(matches!(g, Group::GameData | Group::Display) || set_here)
             .show(ui, |ui| {
-                egui::Grid::new(g.title())
+                egui::Grid::new(g.id())
                     .num_columns(2)
                     .striped(true)
                     .spacing([12.0, 4.0])
                     .show(ui, |ui| {
                         for i in rows {
-                            row_ui(ui, &mut self.rows[i], dev);
+                            row_ui(ui, &mut self.rows[i], dev, lang);
                             ui.end_row();
                         }
                     });
@@ -592,15 +612,18 @@ fn message_ui(ui: &mut egui::Ui, text: &str) {
     });
 }
 
-fn error_ui(ui: &mut egui::Ui, msg: &str) -> Option<Action> {
+fn error_ui(ui: &mut egui::Ui, lang: Lang, msg: &str) -> Option<Action> {
     let mut act = None;
     egui::Panel::bottom("buttons").show(ui, |ui| {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.button("  Back  ").clicked() {
+            if ui
+                .button(format!("  {}  ", i18n::ui(lang, "back")))
+                .clicked()
+            {
                 act = Some(Action::Back);
             }
-            if cfg!(not(target_arch = "wasm32")) && ui.button("Quit").clicked() {
+            if cfg!(not(target_arch = "wasm32")) && ui.button(i18n::ui(lang, "quit")).clicked() {
                 act = Some(Action::Quit);
             }
         });
@@ -608,7 +631,7 @@ fn error_ui(ui: &mut egui::Ui, msg: &str) -> Option<Action> {
     });
     egui::CentralPanel::default_margins().show(ui, |ui| {
         ui.add_space(4.0);
-        ui.heading("The game could not start");
+        ui.heading(i18n::ui(lang, "start_failed"));
         ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.colored_label(ui.visuals().error_fg_color, msg);
@@ -619,17 +642,17 @@ fn error_ui(ui: &mut egui::Ui, msg: &str) -> Option<Action> {
 
 // Port menu stub: the hook for the touch-layout editor; host settings only will go here, never core ones (seed,
 // stage, cheats), so a mid-game visit cannot change the game's logic.
-fn port_menu_ui(ui: &mut egui::Ui) -> Option<Action> {
+fn port_menu_ui(ui: &mut egui::Ui, lang: Lang) -> Option<Action> {
     let mut act = None;
     egui::CentralPanel::default_margins().show(ui, |ui| {
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() / 3.0);
-            ui.heading("Port menu");
+            ui.heading(i18n::ui(lang, "port_menu"));
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("the game is paused").weak());
+            ui.label(egui::RichText::new(i18n::ui(lang, "paused")).weak());
             ui.add_space(12.0);
             if ui
-                .button(egui::RichText::new("  Resume  ").strong())
+                .button(egui::RichText::new(format!("  {}  ", i18n::ui(lang, "resume"))).strong())
                 .clicked()
             {
                 act = Some(Action::Resume);
@@ -642,27 +665,27 @@ fn port_menu_ui(ui: &mut egui::Ui) -> Option<Action> {
 }
 
 // Help is shown once, under the value; the developer view adds the flag / env name and the origin tag.
-fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool) {
-    let l = ui.label(r.e.label);
+fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang) {
+    let l = ui.label(i18n::label(lang, r.e));
     if dev {
         l.on_hover_text(format!("--{} / {}", r.e.key.replace('_', "-"), r.e.env));
     }
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
-            value_ui(ui, r);
+            value_ui(ui, r, lang);
             if dev {
-                origin_label(ui, r);
+                origin_label(ui, r, lang);
             }
         });
         if let Some(err) = r.error() {
             ui.colored_label(ui.visuals().error_fg_color, err);
         }
-        ui.label(egui::RichText::new(r.e.help).small().weak());
+        ui.label(egui::RichText::new(i18n::help(lang, r.e)).small().weak());
     });
 }
 
 // Edits a copy of the value; the row is set (and its dirty flag updated) only when a widget changed it.
-fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
+fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang) {
     let unsettable = r.e.default.is_empty();
     let mut v = r.value.clone();
     match (&mut v, r.e.kind) {
@@ -699,20 +722,23 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
             }
         }
         (Value::Choice(c), Kind::Enum(choices)) => {
-            let shown = if c.is_empty() {
-                "(not set)"
-            } else {
-                c.as_str()
-            }
-            .to_string();
+            // Choices show their display words; a value without one shows as is.
+            let e = r.e;
+            let shown = |v: &str| -> String {
+                match i18n::word(lang, e, v) {
+                    Some(w) => w.to_string(),
+                    None if v.is_empty() => i18n::ui(lang, "not_set").to_string(),
+                    None => v.to_string(),
+                }
+            };
             egui::ComboBox::from_id_salt(r.e.key)
-                .selected_text(shown)
+                .selected_text(shown(c))
                 .show_ui(ui, |ui| {
                     if unsettable {
-                        ui.selectable_value(c, String::new(), "(not set)");
+                        ui.selectable_value(c, String::new(), shown(""));
                     }
                     for x in choices {
-                        ui.selectable_value(c, x.to_string(), *x);
+                        ui.selectable_value(c, x.to_string(), shown(x));
                     }
                 });
         }
@@ -720,7 +746,7 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
         #[cfg(target_os = "android")]
         (Value::Text(s) | Value::Path(s), _) => {
             ui.label(if s.is_empty() {
-                "(not set)"
+                i18n::ui(lang, "not_set")
             } else {
                 s.as_str()
             });
@@ -742,8 +768,8 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
                     .desired_width(220.0),
             );
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-            if ui.button("Browse…").clicked() {
-                let d = rfd::FileDialog::new().set_title(r.e.help);
+            if ui.button(i18n::ui(lang, "browse")).clicked() {
+                let d = rfd::FileDialog::new().set_title(i18n::help(lang, r.e));
                 let picked = if r.e.key == "soundfont" {
                     d.add_filter("SoundFont", &["sf2"]).pick_file()
                 } else if r.e.kind == Kind::File {
@@ -764,16 +790,17 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
 }
 
 // "set by TH08_STAGE" / "set by --stage" for values from the environment or command line, "changed" after an edit.
-fn origin_label(ui: &mut egui::Ui, r: &Row) {
+fn origin_label(ui: &mut egui::Ui, r: &Row, lang: Lang) {
+    let set_by = |source: &str| i18n::ui_fmt(lang, "set_by", &[("source", source)]);
     let text = if r.dirty {
-        "changed".to_string()
+        i18n::ui(lang, "changed").to_string()
     } else {
         match r.origin {
-            Origin::Cli => format!("set by --{}", r.e.key.replace('_', "-")),
-            Origin::Launcher => "changed".into(),
-            Origin::Env if cfg!(target_arch = "wasm32") => format!("set by URL ?{}=", r.e.url()),
-            Origin::Env => format!("set by {}", r.e.env),
-            Origin::PortCfg if cfg!(target_arch = "wasm32") => "saved".into(),
+            Origin::Cli => set_by(&format!("--{}", r.e.key.replace('_', "-"))),
+            Origin::Launcher => i18n::ui(lang, "changed").into(),
+            Origin::Env if cfg!(target_arch = "wasm32") => set_by(&format!("URL ?{}=", r.e.url())),
+            Origin::Env => set_by(r.e.env),
+            Origin::PortCfg if cfg!(target_arch = "wasm32") => i18n::ui(lang, "saved").into(),
             Origin::PortCfg => "port.cfg".into(),
             Origin::Default => return,
         }
@@ -904,6 +931,8 @@ impl Painter {
     fn new(gfx: &Gfx, model: Model) -> Self {
         let ctx = egui::Context::default();
         ctx.set_visuals(egui::Visuals::dark());
+        let font = model.row("font").value.text();
+        i18n::install_fonts(&ctx, Some(font.as_str()).filter(|f| !f.is_empty()));
         let renderer = egui_wgpu::Renderer::new(
             &gfx.device,
             gfx.surface_format(),

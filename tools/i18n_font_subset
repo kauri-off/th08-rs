@@ -1,0 +1,14 @@
+#!/bin/bash
+# Web launcher CJK font (docs/arch/I18N.md §3.1): Noto Sans CJK JP (OFL 1.1) cut down to the glyphs of i18n/ja.toml
+# and the language names. Rerun after editing ja.toml; `cargo test i18n` fails while a glyph is missing.
+# usage: tools/i18n_font_subset [NotoSansCJK-Regular.ttc]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+src=${1:-/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc}
+text=$(mktemp)
+trap 'rm -f "$text"' EXIT
+cat i18n/ja.toml i18n/ru.toml src/settings.rs > "$text"
+# Face 0 of the collection is the JP face.
+pyftsubset "$src" --font-number=0 --text-file="$text" --layout-features='' --no-hinting \
+    --desubroutinize --name-IDs='*' --output-file=i18n/fonts/NotoSansJP-launcher.otf
+ls -l i18n/fonts/NotoSansJP-launcher.otf

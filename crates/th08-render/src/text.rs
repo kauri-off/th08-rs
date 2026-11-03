@@ -12,7 +12,7 @@ pub struct Raster {
 
 // Port-only font search order; TH08_FONT overrides it.
 #[cfg(not(target_arch = "wasm32"))]
-const FONT_PATHS: &[&str] = &[
+pub const FONT_PATHS: &[&str] = &[
     "C:\\Windows\\Fonts\\msgothic.ttc",
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Medium.ttc",
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
