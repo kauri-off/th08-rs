@@ -1,4 +1,5 @@
-//! ANM container parser (03 §2–§4): `parse` = entry chain, sprites, scripts (logic); `textures` = THTX pixels (presentation).
+//! ANM container parser (03 §2–§4): `parse` = entry chain, sprites, scripts (logic); `textures` = THTX pixels (presentation);
+//! script instructions (05 §1) and their `Op` decoder (05 §5).
 
 #[derive(Debug, thiserror::Error)]
 pub enum AnmError {
@@ -72,7 +73,7 @@ pub fn decode_thtx(b: &[u8]) -> Result<Thtx> {
         return Err(AnmError::BadThtxMagic);
     }
     let format = u16at(b, 6);
-    let (width, height) = (u16at(b, 8) as u32, u16at(b, 10) as u32);
+    let (width, height) = (u32::from(u16at(b, 8)), u32::from(u16at(b, 10)));
     let px = &b[16..];
     let n = (width * height) as usize;
     let mut rgba = Vec::with_capacity(n * 4);
@@ -82,13 +83,13 @@ pub fn decode_thtx(b: &[u8]) -> Result<Thtx> {
     match format {
         // 03 §3 format table: 1 A8R8G8B8, 2 A1R5G5B5, 3 R5G6B5, 4 R8G8B8, 5 A4R4G4B4 (little-endian words).
         1 => {
-            for p in px[..n * 4].chunks_exact(4) {
+            for p in px[..n * 4].as_chunks::<4>().0 {
                 rgba.extend([p[2], p[1], p[0], p[3]]);
             }
         }
         2 => {
-            for p in px[..n * 2].chunks_exact(2) {
-                let v = u16::from_le_bytes([p[0], p[1]]);
+            for &p in px[..n * 2].as_chunks::<2>().0 {
+                let v = u16::from_le_bytes(p);
                 rgba.extend([
                     x5((v >> 10) & 31),
                     x5((v >> 5) & 31),
@@ -98,19 +99,19 @@ pub fn decode_thtx(b: &[u8]) -> Result<Thtx> {
             }
         }
         3 => {
-            for p in px[..n * 2].chunks_exact(2) {
-                let v = u16::from_le_bytes([p[0], p[1]]);
+            for &p in px[..n * 2].as_chunks::<2>().0 {
+                let v = u16::from_le_bytes(p);
                 rgba.extend([x5(v >> 11), x6((v >> 5) & 63), x5(v & 31), 255]);
             }
         }
         4 => {
-            for p in px[..n * 3].chunks_exact(3) {
+            for p in px[..n * 3].as_chunks::<3>().0 {
                 rgba.extend([p[2], p[1], p[0], 255]);
             }
         }
         5 => {
-            for p in px[..n * 2].chunks_exact(2) {
-                let v = u16::from_le_bytes([p[0], p[1]]);
+            for &p in px[..n * 2].as_chunks::<2>().0 {
+                let v = u16::from_le_bytes(p);
                 let n4 = |s: u16| (((v >> s) & 15) * 17) as u8;
                 rgba.extend([n4(8), n4(4), n4(0), n4(12)]);
             }
@@ -174,7 +175,7 @@ fn entry(b: &[u8], base: usize) -> Result<Chunk> {
     let offs: Vec<(i32, usize)> = (0..n_scr)
         .map(|i| {
             (
-                u32at(c, tbl + 8 * i) as i32,
+                u32at(c, tbl + 8 * i).cast_signed(),
                 u32at(c, tbl + 8 * i + 4) as usize,
             )
         })
@@ -226,12 +227,468 @@ pub fn textures(b: &[u8]) -> Result<Vec<Option<Thtx>>> {
         .collect()
 }
 
+// Byte offset from the script start (05 §1: jump / branch targets and the VM ip are script-relative byte offsets).
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AnmOff(pub u32);
+
+impl AnmOff {
+    pub const fn at(self) -> usize {
+        self.0 as usize
+    }
+
+    // `self + n` bytes; script offsets stay far below 2^32 (scripts are a few KiB).
+    #[must_use]
+    pub const fn add(self, n: usize) -> Self {
+        Self(self.0.wrapping_add(n as u32))
+    }
+}
+
+// Instruction header at `off` (05 §1): i16 op, u16 size (header + args), i16 time, u16 var mask; args at off + 8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ins {
+    pub off: AnmOff,
+    pub op: i16,
+    pub size: u16,
+    pub time: i16,
+    pub mask: u16,
+}
+
+// One 4-byte argument (05 §3): the raw bits and its var-mask bit (set = the bits are a variable id).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Arg {
+    pub raw: u32,
+    pub var: bool,
+}
+
+impl Ins {
+    // Header at `off`; `None` when the header or one of the (at most 8) args its size covers lies past the end.
+    pub fn read(d: &[u8], off: AnmOff) -> Option<Ins> {
+        let ip = off.at();
+        let h = d.get(ip..ip.checked_add(8)?)?;
+        let ins = Ins {
+            off,
+            op: i16::from_le_bytes([h[0], h[1]]),
+            size: u16::from_le_bytes([h[2], h[3]]),
+            time: i16::from_le_bytes([h[4], h[5]]),
+            mask: u16::from_le_bytes([h[6], h[7]]),
+        };
+        d.get(ip + 8..ip + 8 + 4 * ins.nargs())?;
+        Some(ins)
+    }
+
+    // Args the size covers, capped at 8 (the VM's argument buffer).
+    pub fn nargs(&self) -> usize {
+        (usize::from(self.size).saturating_sub(8) / 4).min(8)
+    }
+
+    // Raw bits of arg k; 0 for an arg the size does not cover.
+    pub fn raw(&self, d: &[u8], k: usize) -> u32 {
+        if k >= self.nargs() {
+            return 0;
+        }
+        let o = self.off.at() + 8 + 4 * k;
+        u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
+    }
+
+    pub fn arg(&self, d: &[u8], k: usize) -> Arg {
+        Arg {
+            raw: self.raw(d, k),
+            var: self.mask & (1 << k) != 0,
+        }
+    }
+}
+
+// Arg letters of the 05 §5 opcode table: i int, f float, V int var dest, W float var dest, O offset, T time.
+pub fn signature(op: i16) -> Option<&'static str> {
+    Some(match op {
+        -1 | 0 | 1 | 2 | 10 | 11 | 20 | 22 | 23 | 89 => "",
+        3 | 8 | 16 | 21 | 24 | 25 | 28 | 30 | 31 | 79 | 82 | 83 | 85 | 88 => "i",
+        4 => "OT",
+        5 => "VOT",
+        6 | 12 | 13 => "fff",
+        7 | 14 => "ff",
+        9 | 34 | 84 | 87 => "iii",
+        15 => "ii",
+        17..=19 => "fffi",
+        26 | 27 | 80 | 81 => "f",
+        29 => "ffi",
+        32 | 35 => "iifff",
+        33 | 86 => "iiiii",
+        36 => "iiff",
+        // Ops 37–58: odd int, even float; 49–58 take two sources.
+        37..=58 => match (op % 2 == 1, op >= 49) {
+            (true, false) => "Vi",
+            (false, false) => "Wf",
+            (true, true) => "Vii",
+            (false, true) => "Wff",
+        },
+        59 => "Vi",
+        60..=65 => "Wf",
+        66 => "W",
+        67..=78 => {
+            if op % 2 == 1 {
+                "iiOT"
+            } else {
+                "ffOT"
+            }
+        }
+        _ => return None,
+    })
+}
+
+// Control flow, waits and interrupts (05 §4, §5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FlowOp {
+    // Op −1 end, op 1 hide_stop: visible = 0, script finished.
+    End,
+    // Op 2 stop: finished, visible kept.
+    Stop,
+    // Op 0 nop; op 21 interrupt label (a no-op when executed).
+    Nop,
+    Jump {
+        to: Arg,
+        time: Arg,
+    },
+    LoopDec {
+        var: Arg,
+        to: Arg,
+        time: Arg,
+    },
+    // Ops 20 / 23 (`hide` = 23).
+    WaitInterrupt {
+        hide: bool,
+    },
+    // Ops 67–78: odd int, even float compare.
+    Branch {
+        cmp: Cmp,
+        float: bool,
+        a: Arg,
+        b: Arg,
+        to: Arg,
+        time: Arg,
+    },
+    Wait(Arg),
+    ReturnInterrupt,
+}
+
+// Compare of ops 67–78 in table order (op − 67) / 2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cmp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+// Direct state writes: sprite, transform, colour, flag bits, UV, blend, draw mode (05 §5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpriteOp {
+    Sprite(Arg),
+    Pos([Arg; 3]),
+    Scale([Arg; 2]),
+    // Op 8 alpha / op 85 alpha2 (`second`).
+    Alpha { second: bool, a: Arg },
+    // Op 9 colour / op 84 colour2.
+    Color { second: bool, rgb: [Arg; 3] },
+    FlipX,
+    FlipY,
+    Rotation([Arg; 3]),
+    AngularVel([Arg; 3]),
+    ScaleGrowth([Arg; 2]),
+    BlendAdditive(Arg),
+    AnchorTopLeft,
+    PosTargetOffset(Arg),
+    SetTag(Arg),
+    // Ops 26 / 27: axis 0 u, 1 v.
+    UvAdd { axis: usize, d: Arg },
+    Visible(Arg),
+    ZwriteOff(Arg),
+    StageCamera(Arg),
+    // Ops 80 / 81.
+    UvScroll { axis: usize, s: Arg },
+    BlendMode(Arg),
+    // Op 83 reads its arg raw, no variable support.
+    DrawMode(u32),
+    UseColor2(Arg),
+}
+
+// Interpolation slot starts (05 §5 ops 15, 17–19, 29, 32–36, 86, 87).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum InterpOp {
+    AlphaFade {
+        a: Arg,
+        dur: Arg,
+    },
+    // Ops 17 / 18 / 19 = easing modes 0 / 4 / 6.
+    PosFixed {
+        mode: i32,
+        end: [Arg; 3],
+        dur: Arg,
+    },
+    ScaleLinear {
+        end: [Arg; 2],
+        dur: Arg,
+    },
+    Pos {
+        dur: Arg,
+        mode: Arg,
+        end: [Arg; 3],
+    },
+    // Op 33 colour / op 86 colour2.
+    Color {
+        second: bool,
+        dur: Arg,
+        mode: Arg,
+        rgb: [Arg; 3],
+    },
+    // Op 34 alpha / op 87 alpha2.
+    Alpha {
+        second: bool,
+        dur: Arg,
+        mode: Arg,
+        a: Arg,
+    },
+    Rotation {
+        dur: Arg,
+        mode: Arg,
+        end: [Arg; 3],
+    },
+    Scale {
+        dur: Arg,
+        mode: Arg,
+        end: [Arg; 2],
+    },
+}
+
+// Variable arithmetic of ops 37–58 in table order (op − 37) / 2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arith {
+    Set,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Add3,
+    Sub3,
+    Mul3,
+    Div3,
+    Rem3,
+}
+
+// Ops 61–65.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MathFn {
+    Sin,
+    Cos,
+    Tan,
+    Acos,
+    Atan,
+}
+
+// Variable ops 37–66 (05 §3, §5); `dst` is always arg 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VarOp {
+    // Odd ops 37–57 int (`float` false), even 38–58 float.
+    Arith {
+        f: Arith,
+        float: bool,
+        dst: Arg,
+        b: Arg,
+        c: Arg,
+    },
+    IRand {
+        dst: Arg,
+        n: Arg,
+    },
+    FRand {
+        dst: Arg,
+        x: Arg,
+    },
+    Math {
+        f: MathFn,
+        dst: Arg,
+        x: Arg,
+    },
+    NormAngle {
+        dst: Arg,
+    },
+}
+
+// One decoded instruction of the 05 §5 table, grouped as the VM executes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Op {
+    Flow(FlowOp),
+    Sprite(SpriteOp),
+    Interp(InterpOp),
+    Var(VarOp),
+    // Not in the table; every data opcode is known (05 §11).
+    Unknown(i16),
+}
+
+const CMPS: [Cmp; 6] = [Cmp::Eq, Cmp::Ne, Cmp::Lt, Cmp::Le, Cmp::Gt, Cmp::Ge];
+const ARITH: [Arith; 11] = [
+    Arith::Set,
+    Arith::Add,
+    Arith::Sub,
+    Arith::Mul,
+    Arith::Div,
+    Arith::Rem,
+    Arith::Add3,
+    Arith::Sub3,
+    Arith::Mul3,
+    Arith::Div3,
+    Arith::Rem3,
+];
+const MATH: [MathFn; 5] = [
+    MathFn::Sin,
+    MathFn::Cos,
+    MathFn::Tan,
+    MathFn::Acos,
+    MathFn::Atan,
+];
+
+// Table index of an op inside its range (`op - first`, step `step`); only called with op in that range.
+fn rank(op: i16, first: i16, step: i16) -> usize {
+    usize::from((op - first).cast_unsigned()) / usize::from(step.cast_unsigned())
+}
+
+impl Op {
+    // Decode `ins` from the script bytes it was read from (05 §5); args past the size read as 0.
+    pub fn decode(ins: &Ins, d: &[u8]) -> Op {
+        let a = |k: usize| ins.arg(d, k);
+        let a2 = |k: usize| [a(k), a(k + 1)];
+        let a3 = |k: usize| [a(k), a(k + 1), a(k + 2)];
+        let op = ins.op;
+        let flow = |f| Op::Flow(f);
+        let spr = |s| Op::Sprite(s);
+        let interp = |i| Op::Interp(i);
+        match op {
+            -1 | 1 => flow(FlowOp::End),
+            2 => flow(FlowOp::Stop),
+            0 | 21 => flow(FlowOp::Nop),
+            4 => flow(FlowOp::Jump {
+                to: a(0),
+                time: a(1),
+            }),
+            5 => flow(FlowOp::LoopDec {
+                var: a(0),
+                to: a(1),
+                time: a(2),
+            }),
+            20 | 23 => flow(FlowOp::WaitInterrupt { hide: op == 23 }),
+            67..=78 => flow(FlowOp::Branch {
+                cmp: CMPS[rank(op, 67, 2)],
+                float: op % 2 == 0,
+                a: a(0),
+                b: a(1),
+                to: a(2),
+                time: a(3),
+            }),
+            79 => flow(FlowOp::Wait(a(0))),
+            89 => flow(FlowOp::ReturnInterrupt),
+            3 => spr(SpriteOp::Sprite(a(0))),
+            6 => spr(SpriteOp::Pos(a3(0))),
+            7 => spr(SpriteOp::Scale(a2(0))),
+            8 | 85 => spr(SpriteOp::Alpha {
+                second: op == 85,
+                a: a(0),
+            }),
+            9 | 84 => spr(SpriteOp::Color {
+                second: op == 84,
+                rgb: a3(0),
+            }),
+            10 => spr(SpriteOp::FlipX),
+            11 => spr(SpriteOp::FlipY),
+            12 => spr(SpriteOp::Rotation(a3(0))),
+            13 => spr(SpriteOp::AngularVel(a3(0))),
+            14 => spr(SpriteOp::ScaleGrowth(a2(0))),
+            16 => spr(SpriteOp::BlendAdditive(a(0))),
+            22 => spr(SpriteOp::AnchorTopLeft),
+            24 => spr(SpriteOp::PosTargetOffset(a(0))),
+            25 => spr(SpriteOp::SetTag(a(0))),
+            26 | 27 => spr(SpriteOp::UvAdd {
+                axis: rank(op, 26, 1),
+                d: a(0),
+            }),
+            28 => spr(SpriteOp::Visible(a(0))),
+            30 => spr(SpriteOp::ZwriteOff(a(0))),
+            31 => spr(SpriteOp::StageCamera(a(0))),
+            80 | 81 => spr(SpriteOp::UvScroll {
+                axis: rank(op, 80, 1),
+                s: a(0),
+            }),
+            82 => spr(SpriteOp::BlendMode(a(0))),
+            83 => spr(SpriteOp::DrawMode(a(0).raw)),
+            88 => spr(SpriteOp::UseColor2(a(0))),
+            15 => interp(InterpOp::AlphaFade { a: a(0), dur: a(1) }),
+            17..=19 => interp(InterpOp::PosFixed {
+                mode: [0, 4, 6][rank(op, 17, 1)],
+                end: a3(0),
+                dur: a(3),
+            }),
+            29 => interp(InterpOp::ScaleLinear {
+                end: a2(0),
+                dur: a(2),
+            }),
+            32 => interp(InterpOp::Pos {
+                dur: a(0),
+                mode: a(1),
+                end: a3(2),
+            }),
+            33 | 86 => interp(InterpOp::Color {
+                second: op == 86,
+                dur: a(0),
+                mode: a(1),
+                rgb: a3(2),
+            }),
+            34 | 87 => interp(InterpOp::Alpha {
+                second: op == 87,
+                dur: a(0),
+                mode: a(1),
+                a: a(2),
+            }),
+            35 => interp(InterpOp::Rotation {
+                dur: a(0),
+                mode: a(1),
+                end: a3(2),
+            }),
+            36 => interp(InterpOp::Scale {
+                dur: a(0),
+                mode: a(1),
+                end: a2(2),
+            }),
+            37..=58 => Op::Var(VarOp::Arith {
+                f: ARITH[rank(op, 37, 2)],
+                float: op % 2 == 0,
+                dst: a(0),
+                b: a(1),
+                c: a(2),
+            }),
+            59 => Op::Var(VarOp::IRand { dst: a(0), n: a(1) }),
+            60 => Op::Var(VarOp::FRand { dst: a(0), x: a(1) }),
+            61..=65 => Op::Var(VarOp::Math {
+                f: MATH[rank(op, 61, 1)],
+                dst: a(0),
+                x: a(1),
+            }),
+            66 => Op::Var(VarOp::NormAngle { dst: a(0) }),
+            _ => Op::Unknown(op),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    type LegacyEntry = (String, u32, u32, Vec<Sprite>, Vec<Script>, Option<Thtx>);
+
     // Pre-IMPL179 single-pass parser (sprites, scripts and decoded THTX together), kept as the split's reference.
-    fn legacy(b: &[u8]) -> Vec<(String, u32, u32, Vec<Sprite>, Vec<Script>, Option<Thtx>)> {
+    fn legacy(b: &[u8]) -> Vec<LegacyEntry> {
         let mut out = Vec::new();
         let mut base = 0;
         loop {
@@ -259,7 +716,7 @@ mod tests {
             let offs: Vec<(i32, usize)> = (0..n_scr)
                 .map(|i| {
                     (
-                        u32at(c, tbl + 8 * i) as i32,
+                        u32at(c, tbl + 8 * i).cast_signed(),
                         u32at(c, tbl + 8 * i + 4) as usize,
                     )
                 })
@@ -336,5 +793,62 @@ mod tests {
         }
         assert_eq!(files, 113);
         assert_eq!(tex, 306);
+    }
+
+    // Every op of the 05 §5 table decodes to a known `Op`, every other number to `Unknown`.
+    #[test]
+    fn decode_covers_signature_table() {
+        for op in i16::MIN..=i16::MAX {
+            let mut b = Vec::from(op.to_le_bytes());
+            b.extend(40u16.to_le_bytes());
+            b.extend([0; 4 + 32]);
+            let ins = Ins::read(&b, AnmOff(0)).unwrap();
+            let known = !matches!(Op::decode(&ins, &b), Op::Unknown(_));
+            assert_eq!(known, signature(op).is_some(), "op {op}");
+        }
+    }
+
+    // Decoding every instruction of every vanilla script: no `Unknown`, sizes match the signature, args by mask.
+    #[test]
+    fn decode_vanilla_scripts() {
+        let Some(ar) = crate::testdata::archive() else {
+            return;
+        };
+        let mut n_ins = 0;
+        for n in ar.names().iter().filter(|n| n.ends_with(".anm")) {
+            for c in parse(&ar.read(n).unwrap()).unwrap() {
+                for s in &c.scripts {
+                    let mut ip = AnmOff(0);
+                    while let Some(i) = Ins::read(&s.data, ip) {
+                        let op = Op::decode(&i, &s.data);
+                        assert!(!matches!(op, Op::Unknown(_)), "{n}: op {}", i.op);
+                        let sig = signature(i.op).unwrap();
+                        assert_eq!(i.nargs(), sig.len(), "{n}: op {}", i.op);
+                        n_ins += 1;
+                        if i.op == -1 {
+                            break;
+                        }
+                        ip = ip.add(usize::from(i.size));
+                    }
+                }
+            }
+        }
+        assert_eq!(n_ins, 17_117);
+    }
+
+    // Truncated args: the header alone is not enough when the size covers args past the end (05 §1).
+    #[test]
+    fn read_needs_covered_args() {
+        let mut b = Vec::from(3i16.to_le_bytes());
+        b.extend(12u16.to_le_bytes());
+        b.extend([0; 4]);
+        assert!(Ins::read(&b, AnmOff(0)).is_none());
+        b.extend(7u32.to_le_bytes());
+        let i = Ins::read(&b, AnmOff(0)).unwrap();
+        assert_eq!((i.nargs(), i.raw(&b, 0), i.raw(&b, 1)), (1, 7, 0));
+        assert_eq!(
+            Op::decode(&i, &b),
+            Op::Sprite(SpriteOp::Sprite(Arg { raw: 7, var: false }))
+        );
     }
 }

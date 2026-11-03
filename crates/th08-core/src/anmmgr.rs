@@ -1,7 +1,8 @@
 //! ANM manager: 25 file slots, script start, draw modes 0–5, EmitQuad, tint, Draw3DWorld (03 §2.4, §5; 05 §8–§9, §12; 06 §11.2).
 
-use crate::anmvm::{self, AnmVm};
+use crate::anmvm::{self, AnmVm, VmFlags};
 use crate::content::LogicView;
+use crate::types::D3dColor;
 use th08_formats::anm::{self, Script};
 // Draws and texture uploads go to the core `Recorder` (REWRITE_PLAN step 8).
 use crate::camera::{Camera, Mat4};
@@ -11,6 +12,11 @@ use std::sync::Arc;
 
 // ANM file slots 0..24; index ≥ 25 is an error (03 §2.4).
 pub const SLOTS: usize = 25;
+
+// Low word of a slot / script number, the original's i16 fields vm+0x204 / vm+0x21A (05 §2, §8).
+fn lo16_index(v: usize) -> i16 {
+    (v as u16).cast_signed()
+}
 
 // Runtime sprite record (03 §5, structs.md), reduced to texture, normalised UV rect (u0, v0, u1, v1) and logical size.
 #[derive(Clone, Copy, Debug)]
@@ -69,11 +75,10 @@ pub struct Tint(pub u32);
 impl Tint {
     // RGBA colour under the tint.
     pub fn rgba(self, mut rgba: [u8; 4]) -> [u8; 4] {
-        use anmvm::*;
-        let t = self.0.to_le_bytes();
-        let tc = [t[R], t[G], t[B], t[A]];
+        let t = D3dColor(self.0);
+        let tc = [t.r(), t.g(), t.b(), t.a()];
         for k in 0..4 {
-            rgba[k] = ((rgba[k] as u32 * tc[k] as u32) >> 7).min(255) as u8;
+            rgba[k] = ((u32::from(rgba[k]) * u32::from(tc[k])) >> 7).min(255) as u8;
         }
         rgba
     }
@@ -87,7 +92,7 @@ impl Tint {
     // colour), tinted, goes into colour2 + bit 17, so the alpha-0 skip still tests the untinted primary colour (05 §12.2).
     pub fn vm(self, vm: &AnmVm) -> AnmVm {
         use anmvm::*;
-        let c = if vm.flags & F_COLOR2 != 0 {
+        let c = if vm.has(VmFlags::COLOR2) {
             vm.color2
         } else {
             vm.color
@@ -95,7 +100,7 @@ impl Tint {
         let [r, g, b, a] = self.rgba([c[R], c[G], c[B], c[A]]);
         let mut v = vm.clone();
         (v.color2[R], v.color2[G], v.color2[B], v.color2[A]) = (r, g, b, a);
-        v.flags |= F_COLOR2;
+        v.insert(VmFlags::COLOR2);
         v
     }
 }
@@ -239,7 +244,7 @@ impl AnmManager {
         slot: usize,
         index: usize,
     ) {
-        vm.script_index = index as i16;
+        vm.script_index = lo16_index(index);
         vm.pos = [0.0; 3];
         vm.pos_offset = [0.0; 3];
         self.start_script(rng, vm, slot, index);
@@ -253,7 +258,7 @@ impl AnmManager {
         slot: usize,
         index: usize,
     ) {
-        vm.script_index = index as i16;
+        vm.script_index = lo16_index(index);
         self.start_script(rng, vm, slot, index);
     }
 
@@ -273,10 +278,10 @@ impl AnmManager {
             return;
         }
         vm.init();
-        vm.anm_slot = slot as i16;
-        vm.flags &= !(anmvm::F_FLIP_X | anmvm::F_FLIP_Y | anmvm::F_VISIBLE);
+        vm.anm_slot = lo16_index(slot);
+        vm.remove(VmFlags::FLIP_X | VmFlags::FLIP_Y | VmFlags::VISIBLE);
         vm.script = Some((slot, index));
-        vm.ip = Some(0);
+        vm.ip = Some(anm::AnmOff(0));
         vm.time.set(0);
         vm.run(self, rng);
     }
@@ -311,20 +316,23 @@ impl AnmManager {
     // Visible, enabled, primary alpha ≠ 0, has a sprite (05 §12.2), and the sprite exists.
     fn drawable(&self, vm: &AnmVm) -> Option<SlotSprite> {
         use anmvm::*;
-        if vm.flags & (F_VISIBLE | F_ENABLED) != (F_VISIBLE | F_ENABLED)
+        if !vm.vm_flags().contains(VmFlags::VISIBLE | VmFlags::ENABLED)
             || vm.color[A] == 0
             || !vm.has_sprite
         {
             return None;
         }
-        self.sprite(vm.anm_slot as usize, vm.sprite_index as usize)
-            .copied()
+        self.sprite(
+            table_index(i32::from(vm.anm_slot)),
+            table_index(i32::from(vm.sprite_index)),
+        )
+        .copied()
     }
 
     // Mode-5 world matrix (05 §9): base (w/256, h/256) × scale, then × RotX × RotY × RotZ (each only if ≠ 0).
     fn update_world_matrix(vm: &mut AnmVm) {
         use anmvm::*;
-        if vm.flags & (F_ROT_DIRTY | F_SCALE_DIRTY) != 0 && vm.flags & F_FREEZE_MATRIX == 0 {
+        if vm.has(VmFlags::ROT_DIRTY | VmFlags::SCALE_DIRTY) && !vm.has(VmFlags::FREEZE_MATRIX) {
             let mut m = Mat4::scale(
                 vm.sprite_w / 256.0 * vm.scale[0],
                 vm.sprite_h / 256.0 * vm.scale[1],
@@ -341,14 +349,14 @@ impl AnmManager {
                 m = m.mul(&Mat4::rotation_z(rz));
             }
             vm.world_matrix = m;
-            vm.flags &= !(F_ROT_DIRTY | F_SCALE_DIRTY);
+            vm.remove(VmFlags::ROT_DIRTY | VmFlags::SCALE_DIRTY);
         }
     }
 
     // Colour or colour2 (bit 17), then the global tint (05 §9 EmitQuad step 4); returns RGBA.
     fn vm_color(&self, vm: &AnmVm) -> [u8; 4] {
         use anmvm::*;
-        let c = if vm.flags & F_COLOR2 != 0 {
+        let c = if vm.has(VmFlags::COLOR2) {
             vm.color2
         } else {
             vm.color
@@ -367,7 +375,7 @@ impl AnmManager {
             Some(o) => {
                 let (a, b) = (o.to_le_bytes(), c.to_le_bytes());
                 u32::from_le_bytes(std::array::from_fn(|k| {
-                    ((a[k] as u32 + b[k] as u32) / 2) as u8
+                    ((u32::from(a[k]) + u32::from(b[k])) / 2) as u8
                 }))
             }
             None => c,
@@ -392,7 +400,7 @@ impl AnmManager {
         match t {
             Some(t) => {
                 debug_assert!(!self.tint_on, "a saved tint applied under the global tint");
-                self.emit_mode_z(rec, &t.vm(vm), mode, z)
+                self.emit_mode_z(rec, &t.vm(vm), mode, z);
             }
             None => self.emit_mode_z(rec, vm, mode, z),
         }
@@ -431,8 +439,8 @@ impl AnmManager {
             (vm.sprite_w * vm.scale[0] / 2.0).abs(),
             (vm.sprite_h * vm.scale[1] / 2.0).abs(),
         );
-        let ax = if vm.flags & F_ANCHOR_X != 0 { hw } else { 0.0 };
-        let ay = if vm.flags & F_ANCHOR_Y != 0 { hh } else { 0.0 };
+        let ax = if vm.has(VmFlags::ANCHOR_X) { hw } else { 0.0 };
+        let ay = if vm.has(VmFlags::ANCHOR_Y) { hh } else { 0.0 };
         let mut w = vm.world_matrix;
         w.0[3] = [
             vm.pos[0] + ax + self.screen_offset[0],
@@ -490,7 +498,7 @@ impl AnmManager {
             start: f.near,
             end: f.far,
         }));
-        rec.strip(tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
+        rec.strip(tex, blend, !vm.has(VmFlags::ZWRITE_OFF), v);
         rec.set_log_fog(None);
     }
 
@@ -498,10 +506,13 @@ impl AnmManager {
     // texture, blend and colour, emitted as consecutive 4-vertex strips.
     pub fn draw_ring_strip(&self, rec: &mut Recorder, vm: &AnmVm, v: &[([f32; 2], [f32; 2], u8)]) {
         use anmvm::*;
-        let Some(&spr) = self.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+        let Some(&spr) = self.sprite(
+            table_index(i32::from(vm.anm_slot)),
+            table_index(i32::from(vm.sprite_index)),
+        ) else {
             return;
         };
-        let c = if vm.flags & F_COLOR2 != 0 {
+        let c = if vm.has(VmFlags::COLOR2) {
             vm.color2
         } else {
             vm.color
@@ -518,7 +529,7 @@ impl AnmManager {
                 rec.strip(
                     spr.tex,
                     blend,
-                    vm.flags & F_ZWRITE_OFF == 0,
+                    !vm.has(VmFlags::ZWRITE_OFF),
                     [v[q], v[q + 1], v[q + 2], v[q + 3]],
                 );
             }
@@ -549,8 +560,8 @@ impl AnmManager {
             vm.sprite_h * vm.scale[1] / 2.0,
         );
         let [px, py, pz] = vm.pos;
-        let ax = if vm.flags & F_ANCHOR_X != 0 { hw } else { 0.0 };
-        let ay = if vm.flags & F_ANCHOR_Y != 0 { hh } else { 0.0 };
+        let ax = if vm.has(VmFlags::ANCHOR_X) { hw } else { 0.0 };
+        let ay = if vm.has(VmFlags::ANCHOR_Y) { hh } else { 0.0 };
         let axis_aligned = || {
             let (x0, y0) = (px - hw + ax, py - hh + ay);
             let (x1, y1) = (px + hw + ax, py + hh + ay);
@@ -564,7 +575,7 @@ impl AnmManager {
         };
         // Mode 4 sizes the quad from the projection; both 3D modes carry the projected z as vertex depth (05 §9).
         let mut depth = [z; 4];
-        let stage_cam = vm.flags & F_STAGE_CAM != 0;
+        let stage_cam = vm.has(VmFlags::STAGE_CAM);
         let cam = |anm: &Self, vp| match (stage_cam, anm.stage_camera) {
             (true, Some(c)) => c,
             _ => Camera::set_2d(vp),
@@ -685,7 +696,7 @@ impl AnmManager {
             Vertex::screen(corners[i][0], corners[i][1], depth[i], uv[i], rgba)
         });
         rec.anm.bound_tex = Some(spr.tex);
-        rec.strip(spr.tex, blend, vm.flags & F_ZWRITE_OFF == 0, v);
+        rec.strip(spr.tex, blend, !vm.has(VmFlags::ZWRITE_OFF), v);
     }
 }
 

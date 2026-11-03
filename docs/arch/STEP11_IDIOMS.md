@@ -106,6 +106,8 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11a** wall + types — **DONE** (see below) | (1) `[workspace.lints.clippy]` subset at `warn` (+ `[lints] workspace = true` per crate), clippy.toml `too-many-lines-threshold = 150`, `too-many-arguments-threshold = 7` (orchestrator: 7, so the 8-argument fns of §1.2 count); `tools/lint_subset` prints subset counts per file; (2) core `types.rs` (§1.7) + `bitflags` dep, `wrap_add` and the ECL `TWO_PI` moved there (callers unchanged); (3) remove the 5 core shims (§1.3), paths → `th08_formats::` | Cargo.toml (all), clippy.toml, tools/lint_subset (new), types.rs (new), lib.rs (core), anmvm/eclvm (2 lines), 45 core `use` lines, 11 in tools/app | **alone, first** (touches imports everywhere) | T D |
 | **11b** formats — **DONE** (see below) | (1) `Reader` cursor + typed `Truncated { at }` in cfg, msg, replay, scoredat, sht, stdfile, thbgm, archive, end, musiccmt (not anm.rs / ecl.rs); (2) `MsgOff`, `std::Op` decoder (06 §1.4) beside `Record`, `msg::Op` decoder (10 §2) beside `Ins`; (3) formats subset 0 (as_chunks, derivable, collapsible, unwraps → errors) | crates/th08-formats except anm.rs, ecl.rs | ∥ 11c 11d 11g | T D, formats unit tests |
 | **11c** ANM VM | (1) `anm::{AnmOff, Ins, Op}` in formats/anm.rs (header decoder from anmvm.rs:237, lazy per ip); (2) `AnmVm::run` → loop + `exec_op` + op-group fns, `VmFlags`, `D3dColor` for `color` / `color2` / `color_start`; (3) anmmgr subset 0 | formats/anm.rs, anmvm, anmmgr | ∥ 11b 11d 11g | T D |
+| **11b** formats | (1) `Reader` cursor + typed `Truncated { at }` in cfg, msg, replay, scoredat, sht, stdfile, thbgm, archive, end, musiccmt (not anm.rs / ecl.rs); (2) `MsgOff`, `std::Op` decoder (06 §1.4) beside `Record`, `msg::Op` decoder (10 §2) beside `Ins`; (3) formats subset 0 (as_chunks, derivable, collapsible, unwraps → errors) | crates/th08-formats except anm.rs, ecl.rs | ∥ 11c 11d 11g | T D, formats unit tests |
+| **11c** ANM VM — **DONE** (see below) | (1) `anm::{AnmOff, Ins, Op}` in formats/anm.rs (header decoder from anmvm.rs:237, lazy per ip); (2) `AnmVm::run` → loop + `exec_op` + op-group fns, `VmFlags`, `D3dColor` for `color` / `color2` / `color_start`; (3) anmmgr subset 0 | formats/anm.rs, anmvm, anmmgr | ∥ 11b 11d 11g | T D |
 | **11d** ECL exec | (1) `ecl::{EclOff, Op}` in formats/ecl.rs (+ eclview bin); (2) `Exec::exec` → `match Op` dispatching to `eclvm/ops_*.rs`, named args via `Arg` / `Var` (from `IRef`), bullet flag const; (3) eclvm subset 0 | formats/ecl.rs, eclvm (+ new ops_*.rs), bin/eclview | ∥ 11b 11c 11g; before 11e | T D, **B** |
 | **11e** enemy | (1) `EnemyIdx` for chain / boss / thread links; (2) `EnemyFlags` for the 07 flag words, `TlOp` timeline enum (enemy.rs:1139); (3) long fns 1133 / 1392 split, enemy subset 0 | enemy, eclvm (index boundary only) | after 11d; ∥ 11f 11h 11i | T D |
 | **11f** STD + MSG | (1) stage.rs on `std::Op`, `Stage` bools; (2) msg.rs on `msg::Op`, exec split, `Dialogue` bools; (3) both subset 0 | stage, msg | after 11b; ∥ 11e 11g 11h | T D |
@@ -171,6 +173,28 @@ workspace 1 768 after. Check: FAST arch_check 0 differing (32/32 identical), car
 Deviations: malformed-input paths that panicked before now return errors (std negative quad size → `QuadSize`, archive
 table running past its end → `BadTable` / `Truncated`); valid files parse identically. Writers (`to_bytes`, `encode`,
 `header`, `pack`) keep direct slice stores.
+**11c done.** Files: crates/th08-formats/src/anm.rs (`AnmOff(u32)`, header-only `Ins { off, op, size, time, mask }`
+with `read` / `nargs` / `raw` / `arg`, `Arg { raw, var }`, `signature` (moved from anmvm), `Op` = `Flow(FlowOp)` /
+`Sprite(SpriteOp)` / `Interp(InterpOp)` / `Var(VarOp)` / `Unknown(i16)` with `Cmp`, `Arith`, `MathFn`,
+`Op::decode(&Ins, bytes)`; THTX `as_chunks`, `cast_signed`, test type alias; tests: decode ⇔ signature for every
+i16, every vanilla instruction decodes (17 117), truncated-arg read), crates/th08-core/src/anmvm.rs (`VmFlags`
+bitflags, the `F_*` consts now `VmFlags::X.bits()` (same values, test); `run` = loop + `exec_op` + `ops_flow` /
+`ops_sprite` / `ops_interp` / `ops_var`, decode lazily after the time test; `Step::{Jump(AnmOff), Interrupt}`;
+`var()` id table + `Dest::Lit`; `lo8` / `lo16` / `table_index` quirk helpers; `compare` / `int_arith` /
+`float_arith`; `D3dColor` for init colour and `interp_color_from`), crates/th08-core/src/anmmgr.rs (flag tests via
+`VmFlags`, `Tint` via `D3dColor`, `lo16_index`, `From` casts). Public API: `AnmVm.ip` / `saved_ip`:
+`Option<AnmOff>` (was `Option<usize>`; outside users only call `.is_some()`); `anmvm::signature` →
+`th08_formats::anm::signature`; new `anmvm::VmFlags`, `AnmVm::{vm_flags, has, insert, remove}`, `th08_formats::anm::{AnmOff, Ins,
+Arg, Op, …}`; `anmvm::disasm` unchanged. Lint subset (tools/lint_subset): run files 84 → 0 (anmvm 62, anmmgr 12,
+formats/anm 10); workspace 1 744 (11a reported 1 823). Check: FAST arch_check 0 differing (424 tests), core 318 + formats
+28 tests pass, spec_refs 0; `session golden --no-emit --no-drawlog` 2.30–2.53 s vs 2.35–2.56 s for master's binary (risk 2: no
+slowdown). Deviations: the pub fields `flags: u32` and `color` / `color2` / `color_start` / `color_end` /
+`color2_start` / `color2_end: [u8; 4]` keep their raw types. They are written in ~20 other files, among them eclvm
+(11d), player and pshot (11g), which run in parallel. So `VmFlags` / `D3dColor` are used inside anmvm / anmmgr, and
+callers keep `F_*` / `[A]`. Switching the field types is left to the owners' runs, or to one small run after wave 1
+(the new accessors give each owner the typed form). Jump targets are `AnmOff(ival.cast_unsigned())`, where the old
+code used `ival as usize`. The two differ only for negative offsets, and both fail the instruction read and end the
+script.
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in
