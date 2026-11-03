@@ -1,13 +1,28 @@
 //! Headless port run that writes a draw log: `drawrun <out[.xz]> menu <input.txt> [clr]` replays a menu script
 //! (README of specs/data/drawlog; a `*mopup1*` input gets that script's score.dat and replays), `drawrun <out[.xz]> demo <0-3> [last demo frame]` plays an attract demo.
+//! `--draw-hash`: <out> is a directory that gets draw.hash (`HashSink`) instead of a log; `--window A-B` keeps only
+//! presents A..B (log or hash).
 
 use std::io::Write;
 
 fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (mut args, mut hash_on, mut window) = (Vec::new(), false, (i64::MIN, i64::MAX));
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--draw-hash" => hash_on = true,
+            "--window" => {
+                let w = it.next();
+                let w = w.as_deref().and_then(|v| v.split_once('-'));
+                let w = w.and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)));
+                window = w.ok_or_else(|| anyhow::anyhow!("--window A-B"))?;
+            }
+            _ => args.push(a),
+        }
+    }
     anyhow::ensure!(
         args.len() >= 3,
-        "usage: drawrun <out> menu <input.txt> [clr] | drawrun <out> demo <n> [last]"
+        "usage: drawrun [--draw-hash] [--window A-B] <out> menu <input.txt> [clr] | drawrun [--draw-hash] [--window A-B] <out> demo <n> [last]"
     );
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08::gfx::Gfx::headless())?;
@@ -19,16 +34,32 @@ fn main() -> anyhow::Result<()> {
         th08::settings::get().core(),
         th08::settings::get().tool_host(),
     ))?;
-    let (mut xz, mut plain) = if args[0].ends_with(".xz") {
+    let mut hash = if hash_on {
+        std::fs::create_dir_all(&args[0])?;
+        Some(th08::drawlog::HashSink::create(
+            &std::path::Path::new(&args[0]).join("draw.hash"),
+        )?)
+    } else {
+        None
+    };
+    let (mut xz, mut plain) = if hash_on {
+        (None, None)
+    } else if args[0].ends_with(".xz") {
         (Some(th08::xz::create(args[0].as_ref())?), None)
     } else {
         let f = std::fs::File::create(&args[0])?;
         (None, Some(std::io::BufWriter::new(f)))
     };
     let mut put = |s: String| {
-        let w: &mut dyn Write = match (&mut xz, &mut plain) {
-            (Some(w), _) => w,
-            (_, Some(w)) => w,
+        let present = s.split_ascii_whitespace().nth(1);
+        let present = present.and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        if !(window.0..=window.1).contains(&present) {
+            return;
+        }
+        let w: &mut dyn Write = match (&mut xz, &mut plain, &mut hash) {
+            (_, _, Some(h)) => return h.frame(&s),
+            (Some(w), _, _) => w,
+            (_, Some(w), _) => w,
             _ => unreachable!(),
         };
         let _ = w.write_all(s.as_bytes());
@@ -60,6 +91,9 @@ fn main() -> anyhow::Result<()> {
     }
     if let Some(w) = xz {
         th08::xz::finish(w)?;
+    }
+    if let Some(h) = hash {
+        h.finish()?;
     }
     if let Some(mut w) = plain {
         w.flush()?;

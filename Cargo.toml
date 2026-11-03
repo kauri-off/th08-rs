@@ -53,6 +53,7 @@ pollster = "1.0.1"
 liblzma = { version = "0.4.9", features = ["static", "parallel"] }
 directories = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+sha2 = "0.10"
 
 # File/message dialogs: none on wasm (file input in the page) or Android (no rfd backend).
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]

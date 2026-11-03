@@ -3,6 +3,8 @@
 //! recorded one and the draw log with sessions/<name>/draw_*.drawlog.xz (DIR/index.html). N = main-menu frame.
 //! `--port-drawlog` writes only the port's draw log (no reference compare), e.g. for port-vs-port checks.
 //! `--sound-log` writes DIR/sound.txt, the executed `SoundCmd` stream (MIDI synth treated as absent).
+//! `--draw-hash` writes DIR/draw.hash (per-frame hash of the rows `--port-drawlog` would log, `HashSink`);
+//! `--draw-window A-B` limits `--port-drawlog` / `--draw-hash` to presents A..B (re-log around a mismatch).
 //! `--no-emit` runs the draw chain's draw-phase steps only, nothing recorded (ARCH decision 2; implies no draw log).
 
 use std::io::Write;
@@ -20,6 +22,7 @@ fn main() -> anyhow::Result<()> {
         usize::MAX,
     );
     let (mut port_only, mut sound_log, mut emit) = (false, false, true);
+    let (mut hash_on, mut window) = (false, (i64::MIN, i64::MAX));
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -28,6 +31,12 @@ fn main() -> anyhow::Result<()> {
             "--port-drawlog" => port_only = true,
             "--sound-log" => sound_log = true,
             "--no-emit" => emit = false,
+            "--draw-hash" => hash_on = true,
+            "--draw-window" => {
+                let w = it.next().and_then(|v| v.split_once('-'));
+                let w = w.and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)));
+                window = w.ok_or_else(|| anyhow::anyhow!("--draw-window A-B"))?;
+            }
             "--from" => from = it.next().and_then(|v| v.parse().ok()).unwrap_or(1).max(1),
             "--to" => to = it.next().and_then(|v| v.parse().ok()).unwrap_or(to),
             _ => dir = Some(PathBuf::from(a)),
@@ -35,7 +44,7 @@ fn main() -> anyhow::Result<()> {
     }
     let dir = dir.ok_or_else(|| {
         anyhow::anyhow!(
-            "usage: session <session dir> [--out DIR] [--no-drawlog] [--port-drawlog] [--sound-log] [--no-emit] [--from N] [--to N]"
+            "usage: session <session dir> [--out DIR] [--no-drawlog] [--port-drawlog] [--draw-hash] [--draw-window A-B] [--sound-log] [--no-emit] [--from N] [--to N]"
         )
     })?;
     let s = Session::load(&dir)?;
@@ -52,8 +61,9 @@ fn main() -> anyhow::Result<()> {
         ref_paths = drawlog::expand(&alt.join("draw").to_string_lossy());
     }
     let port_only = port_only && emit;
-    let drawlog_on = drawlog_on && emit && !port_only && !ref_paths.is_empty();
-    if !drawlog_on && !port_only {
+    let hash_on = hash_on && emit;
+    let drawlog_on = drawlog_on && emit && !port_only && !hash_on && !ref_paths.is_empty();
+    if !drawlog_on && !port_only && !hash_on {
         eprintln!("draw log: off (no reference draw_*.drawlog.xz or --no-drawlog)");
     }
 
@@ -98,6 +108,11 @@ fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+    let mut hash = if hash_on {
+        Some(drawlog::HashSink::create(&out.join("draw.hash"))?)
+    } else {
+        None
+    };
     let mut trace = std::io::BufWriter::new(std::fs::File::create(out.join("trace.txt"))?);
     trace.write_all(session::trace_header().as_bytes())?;
     let mut port_rows = Vec::new();
@@ -111,7 +126,14 @@ fn main() -> anyhow::Result<()> {
                 .nth(1)
                 .and_then(|v| v.parse::<i64>().ok())
                 .unwrap_or(0);
-            if port_only && !(range.0..=range.1 + 1).contains(&present) {
+            let keep = (range.0..=range.1 + 1).contains(&present)
+                && (window.0..=window.1).contains(&present);
+            if let Some(h) = &mut hash
+                && keep
+            {
+                h.frame(&text);
+            }
+            if port_only && !keep {
                 return;
             }
             if let Some(w) = &mut xz {
@@ -123,7 +145,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         };
-        let draw: Option<&mut dyn FnMut(String)> = if drawlog_on || port_only {
+        let draw: Option<&mut dyn FnMut(String)> = if drawlog_on || port_only || hash_on {
             Some(&mut on_draw)
         } else {
             None
@@ -148,6 +170,9 @@ fn main() -> anyhow::Result<()> {
     drop(trace);
     if let Some(w) = xz.take() {
         th08::xz::finish(w)?;
+    }
+    if let Some(h) = hash.take() {
+        h.finish()?;
     }
     if let Some(log) = &ctx.sound_log {
         std::fs::write(out.join("sound.txt"), th08::sound::format_log(log))?;

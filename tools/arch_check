@@ -1,10 +1,12 @@
 #!/bin/bash
 # usage: tools/arch_check freeze DIR | run DIR — port-vs-port references for the rewrite (REWRITE_PLAN step 0).
-# freeze: build, then write port traces + draw logs of all sessions, demos 0-3 and the pilot replays into DIR.
+# freeze: build, then write port traces + draw hashes of all sessions, demos 0-3 and the pilot replays into DIR.
 # run: fmt, 0-warning build, wasm + android check (tools/android_check), cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
 # run also replays every session + pilot with emit off (`session --no-emit`, ARCH decision 2) and requires its trace = DIR's.
-# Run output of identical items keeps no draw log. Env: J (parallel jobs, default 8), CARGO_TARGET_DIR, RUN_OUT (run output, default $TARGET/arch_run), ONLY (item regex),
-# FAST=1 (run only: traces only, no draw logs — a few GB less RAM, for agents in parallel worktrees; the full run stays the gate before a commit).
+# Draw = draw.hash (`--draw-hash`: per-frame hash of the draw-log text, no xz); a mismatch prints the first differing present
+# and a `--port-drawlog` command for a window around it. times.txt (item seconds peak-RSS-kB) in DIR / RUN_OUT orders the
+# next run longest first. Env: J (parallel jobs, default from MemAvailable and cores), CARGO_TARGET_DIR, RUN_OUT (run
+# output, default $TARGET/arch_run), ONLY (item regex), FAST=1 (run only: traces only, no draw hashes).
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
@@ -14,11 +16,14 @@ SESSION_BIN=session DEMOSYNC_BIN=demosync DRAWRUN_BIN=drawrun
 SESSIONS="golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg"
 SESSION_SRC=$ROOT/specs/data/sessions
 PILOT_SRC=/home/anon/Projects/th08_ext_replays/ref
-J=${J:-8}
+# Default J: half the hardware threads (SMT gives no more), capped by MemAvailable / JOB_MB (measured item peak RSS ≤ 0.6 GB).
+JOB_MB=${JOB_MB:-1200}
+J=${J:-$(awk -v c="$(nproc)" -v m="$JOB_MB" '/^MemAvailable/ {j = int($2 / 1024 / m); if (j > c / 2) j = c / 2; if (j < 1) j = 1; print j}' /proc/meminfo)}
+TIME=; [[ -x /usr/bin/time ]] && TIME=/usr/bin/time
 export TH08_DIR="/home/anon/Games/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/"
 export XDG_CONFIG_HOME=$ROOT/target/verify-42/cfg
 export CARGO_TARGET_DIR=$TARGET
-export BIN SESSION_BIN DEMOSYNC_BIN DRAWRUN_BIN SESSION_SRC PILOT_SRC
+export BIN SESSION_BIN DEMOSYNC_BIN DRAWRUN_BIN SESSION_SRC PILOT_SRC TIME
 
 mode=${1:-} dir=${2:-}
 FAST=${FAST:-}; [[ $mode == freeze ]] && FAST=
@@ -37,30 +42,53 @@ noemit_items() {
   items | grep -E '^(s|p)_' | sed 's/^/n_/'
 }
 
-# One item into $1/$2: trace.txt, report.txt (stdout), draw.drawlog.xz, digest (sha256 of trace, report, unpacked draw).
+all_items() { items; noemit_items; }
+
+# One item into $1/$2: trace.txt, report.txt (stdout), draw.hash, time (seconds + peak RSS kB per process),
+# digest (sha256 of trace, report, draw.hash; written last — tools/arch_job counts */digest).
 run_item() {
   local o=$1/$2 n=${2#?_}
   rm -rf "$o"; mkdir -p "$o"
-  local dl=--port-drawlog; [[ -n ${FAST:-} ]] && dl=--no-drawlog
+  local dl="--draw-hash --no-drawlog"; [[ -n ${FAST:-} ]] && dl=--no-drawlog
+  local t=(); [[ -n $TIME ]] && t=("$TIME" -a -o "$o/time" -f "%e %M")
   case $2 in
     n_*) local r=${2#n_} src=$SESSION_SRC; [[ $r == p_* ]] && src=$PILOT_SRC
-         nice -n 10 "$BIN/$SESSION_BIN" "$src/${r#?_}" --out "$o" --no-emit --no-drawlog > "$o/report.txt" 2> "$o/stderr.txt" ;;
-    s_*) nice -n 10 "$BIN/$SESSION_BIN" "$SESSION_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
-    p_*) nice -n 10 "$BIN/$SESSION_BIN" "$PILOT_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
-    d_*) nice -n 10 "$BIN/$DEMOSYNC_BIN" "$n" 1-9999999 > "$o/trace.txt" 2> /dev/null
-         [[ -n ${FAST:-} ]] && : > "$o/report.txt" || nice -n 10 "$BIN/$DRAWRUN_BIN" "$o/draw.drawlog.xz" demo "$n" > "$o/report.txt" 2> "$o/stderr.txt" ;;
+         nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$src/${r#?_}" --out "$o" --no-emit --no-drawlog > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    s_*) nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$SESSION_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    p_*) nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$PILOT_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    d_*) nice -n 10 "${t[@]}" "$BIN/$DEMOSYNC_BIN" "$n" 1-9999999 > "$o/trace.txt" 2> /dev/null
+         [[ -n ${FAST:-} ]] && : > "$o/report.txt" || nice -n 10 "${t[@]}" "$BIN/$DRAWRUN_BIN" --draw-hash "$o" demo "$n" > "$o/report.txt" 2> "$o/stderr.txt" ;;
   esac
   {
     echo "trace $(sha256sum < "$o/trace.txt" | cut -c1-64)"
     echo "report $(sha256sum < "$o/report.txt" | cut -c1-64)"
-    echo "draw $(xz -dc "$o/draw.drawlog.xz" 2> /dev/null | sha256sum | cut -c1-64)"
+    echo "draw $(cat "$o/draw.hash" 2> /dev/null | sha256sum | cut -c1-64)"
   } > "$o/digest"
   echo "done $2"
 }
 export -f run_item; export FAST
 
+# Items of $ITEMS in the order of $2/times.txt (previous seconds, descending; unknown items first, in list order).
+ordered() {
+  local tf=$1/times.txt
+  ${ITEMS:-items} | grep -E "${ONLY:-.}" | if [[ -f $tf ]]; then
+    awk 'NR == FNR {t[$1] = $2; next} {print ($1 in t ? t[$1] : 1e9), NR, $1}' "$tf" - | sort -k1,1gr -k2,2n | cut -d' ' -f3
+  else cat; fi
+}
+
+# Merges this run's per-item seconds and peak RSS into $1/times.txt (items not run keep their old line).
+save_times() {
+  local tf=$1/times.txt
+  for d in "$1"/*/; do
+    [[ -f $d/time ]] && awk -v i="$(basename "$d")" '$1 ~ /^[0-9.]+$/ {s += $1; if ($2 > m) m = $2} END {print i, s, m}' "$d/time"
+  done > "$tf.new"
+  [[ -f $tf ]] && awk 'NR == FNR {n[$1] = 1; next} !($1 in n)' "$tf.new" "$tf" >> "$tf.new"
+  sort "$tf.new" > "$tf"; rm -f "$tf.new"
+}
+
+# run_all OUT [TIMES_DIR]: runs the items into OUT, longest first by TIMES_DIR/times.txt (default OUT).
 run_all() {
-  ${ITEMS:-items} | grep -E "${ONLY:-.}" | xargs -P "$J" -I{} bash -c 'run_item "$0" "$1"' "$1" {} | sort | tr '\n' ' '; echo
+  ordered "${2:-$1}" | xargs -P "$J" -I{} bash -c 'run_item "$0" "$1"' "$1" {} | sort | tr '\n' ' '; echo
 }
 
 build() {
@@ -71,7 +99,9 @@ t0=$SECONDS
 if [[ $mode == freeze ]]; then
   build
   mkdir -p "$dir"
+  echo "J=$J"
   run_all "$dir"
+  save_times "$dir"
   items | grep -E "${ONLY:-.}" | while read -r i; do echo "$i $(tr '\n' ' ' < "$dir/$i/digest")"; done > "$dir/digests.txt"
   echo "frozen $(wc -l < "$dir/digests.txt") items into $dir ($(du -sh "$dir" | cut -f1)) in $((SECONDS - t0)) s"
   exit 0
@@ -90,7 +120,9 @@ echo "checks done in $((SECONDS - t0)) s"
 
 out=${RUN_OUT:-$TARGET/arch_run}
 mkdir -p "$out"; find "$out" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +  # fresh dirs: thjob -g counts */digest
-run_all "$out" > /dev/null
+tdir=$out; [[ -f $out/times.txt ]] || tdir=$dir
+echo "J=$J"
+ITEMS=all_items run_all "$out" "$tdir" > /dev/null  # both batches in one queue: longest first across all
 nd=0
 while read -r i _ tr _ rp _ dr; do
   [[ -f $out/$i/digest ]] || { echo "$i MISSING"; nd=$((nd + 1)); continue; }
@@ -98,10 +130,23 @@ while read -r i _ tr _ rp _ dr; do
   s=""
   [[ $tr == "$tr2" ]] || s+=" trace DIFFERS ($(LC_ALL=C cmp "$dir/$i/trace.txt" "$out/$i/trace.txt" | head -1 | sed 's/.*, //'))"
   [[ -n ${FAST:-} || $rp == "$rp2" ]] || s+=" report DIFFERS"
-  [[ -n ${FAST:-} || $dr == "$dr2" ]] || s+=" draw DIFFERS"
-  if [[ -n $s ]]; then echo "$i$s"; nd=$((nd + 1)); else echo "$i identical"; rm -f "$out/$i/draw.drawlog.xz"; fi
+  if [[ -z ${FAST:-} && $dr != "$dr2" ]]; then
+    s+=" draw DIFFERS"
+    # First differing draw.hash line → present number; rerun hint with a ±5 present window around it.
+    f=$(diff "$dir/$i/draw.hash" "$out/$i/draw.hash" 2> /dev/null | grep -m1 -E '^[<>]' | cut -d' ' -f2)
+    f=${f:-1}
+    s+=" (first differing present $f)"
+    w=$((f > 5 ? f - 5 : 1))-$((f + 5))
+    case $i in
+      d_*) hint="$BIN/$DRAWRUN_BIN --window $w $out/$i/draw.drawlog.xz demo ${i#d_}" ;;
+      s_*) hint="$BIN/$SESSION_BIN $SESSION_SRC/${i#s_} --out $out/$i --port-drawlog --draw-window $w" ;;
+      p_*) hint="$BIN/$SESSION_BIN $PILOT_SRC/${i#p_} --out $out/$i --port-drawlog --draw-window $w" ;;
+    esac
+  fi
+  if [[ -n $s ]]; then echo "$i$s"; [[ -n ${hint:-} ]] && echo "  rerun (same for DIR with the reference build): TH08_DIR=… $hint"; nd=$((nd + 1)); else echo "$i identical"; fi
+  hint=
 done < <(awk -v r="${ONLY:-.}" '$1 ~ r' "$dir/digests.txt")
-ITEMS=noemit_items run_all "$out" > /dev/null
+save_times "$out"
 ne=0
 while read -r i; do
   ref=$(awk -v r="${i#n_}" '$1 == r {print $3}' "$dir/digests.txt")

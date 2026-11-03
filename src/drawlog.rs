@@ -9,6 +9,13 @@ use std::rc::Rc;
 
 // Decimal with trailing zeros removed ("436.5", "0", "0.00781").
 pub fn num(v: f32, dec: usize) -> String {
+    if let Some(s) = num_fast(v, dec) {
+        return s;
+    }
+    num_fmt(v, dec)
+}
+
+fn num_fmt(v: f32, dec: usize) -> String {
     let mut s = format!("{v:.dec$}");
     if s.contains('.') {
         while s.ends_with('0') {
@@ -19,6 +26,67 @@ pub fn num(v: f32, dec: usize) -> String {
         }
     }
     if s == "-0" { "0".into() } else { s }
+}
+
+// `num` by integer arithmetic (port tooling speed-up): v·10^dec rounded half to even on the exact binary value, as
+// `{:.dec$}` does; None (huge, NaN/inf, dec > 9) falls back to the formatter.
+fn num_fast(v: f32, dec: usize) -> Option<String> {
+    if dec > 9 || !v.is_finite() {
+        return None;
+    }
+    let bits = v.to_bits();
+    let (ex, fr) = (((bits >> 23) & 0xff) as i32, (bits & 0x7f_ffff) as u64);
+    let (m, e) = if ex == 0 {
+        (fr, -149)
+    } else {
+        (fr | 0x80_0000, ex - 150)
+    };
+    let p = 10u64.pow(dec as u32);
+    let x = m * p; // < 2^54
+    let n = if e >= 0 {
+        if e > 9 {
+            return None;
+        }
+        x << e
+    } else if e <= -63 {
+        0 // x < 2^54 < half
+    } else {
+        let k = (-e) as u32;
+        let (q, r, half) = (x >> k, x & ((1 << k) - 1), 1u64 << (k - 1));
+        q + (r > half || (r == half && q & 1 == 1)) as u64
+    };
+    if n == 0 {
+        return Some("0".into());
+    }
+    // Digits right to left; trailing fraction zeros (and a bare '.') never written.
+    let mut buf = [0u8; 32];
+    let (mut i, mut n, mut frac) = (buf.len(), n, true);
+    for _ in 0..dec {
+        let d = (n % 10) as u8;
+        n /= 10;
+        if d != 0 || !frac {
+            frac = false;
+            i -= 1;
+            buf[i] = b'0' + d;
+        }
+    }
+    if !frac {
+        i -= 1;
+        buf[i] = b'.';
+    }
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    if bits >> 31 != 0 {
+        i -= 1;
+        buf[i] = b'-';
+    }
+    Some(std::str::from_utf8(&buf[i..]).ok()?.to_string())
 }
 
 // C `printf("%g")` (6 significant digits, trailing zeros removed), as the probe prints fog start / end (FORMAT.md §2).
@@ -363,6 +431,34 @@ impl Writer {
             #[cfg(not(target_arch = "wasm32"))]
             _ => Vec::new(),
         }
+    }
+}
+
+// Port tooling (arch_check): per-frame sha256 of the `format_frame` text, `<present> <first 32 hex>` per line, so a
+// hash match means the draw log would match byte for byte.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct HashSink(std::io::BufWriter<std::fs::File>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl HashSink {
+    pub fn create(path: &std::path::Path) -> std::io::Result<Self> {
+        Ok(Self(std::io::BufWriter::new(std::fs::File::create(path)?)))
+    }
+
+    pub fn frame(&mut self, text: &str) {
+        use sha2::Digest;
+        use std::io::Write;
+        let present = text.split_ascii_whitespace().nth(1).unwrap_or("?");
+        let h = sha2::Sha256::digest(text.as_bytes());
+        let mut hex = String::with_capacity(32);
+        for b in &h[..16] {
+            let _ = write!(hex, "{b:02x}");
+        }
+        let _ = writeln!(self.0, "{present} {hex}");
+    }
+
+    pub fn finish(mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.0)
     }
 }
 
@@ -2100,6 +2196,46 @@ pub fn run_demo(
 mod tests {
     use super::*;
     use crate::drawlist::{LogTex, Rect};
+
+    // `num_fast` = the formatter path on every f32 bit pattern, for the decimals the log uses (2, 4, 5). ~2 min.
+    #[test]
+    #[ignore]
+    fn num_fast_exhaustive() {
+        let t = 32u64;
+        std::thread::scope(|sc| {
+            for i in 0..t {
+                sc.spawn(move || {
+                    let mut b = i;
+                    while b < 1 << 32 {
+                        let v = f32::from_bits(b as u32);
+                        for d in [2, 4, 5] {
+                            if let Some(s) = num_fast(v, d) {
+                                assert_eq!(s, num_fmt(v, d), "{b:#x} {d}");
+                            }
+                        }
+                        b += t;
+                    }
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn num_fast_ties_and_edges() {
+        let mut vals = vec![
+            0.25f32, 0.75, 0.125, 0.375, 2.5, 3.5, -0.0, 1e-30, 5e-3, 1e12, 0.005, 0.00005,
+        ];
+        for n in -2000i32..2000 {
+            for k in 0..20 {
+                vals.push(n as f32 / (1u32 << k) as f32);
+            }
+        }
+        for v in vals {
+            for d in [0, 1, 2, 4, 5] {
+                assert_eq!(num(v, d), num_fmt(v, d), "{v} {d}");
+            }
+        }
+    }
 
     // FORMAT.md §2 fog: C %g, 6 significant digits.
     // 06 §11.3: alpha-0 colours compare equal whatever their RGB; otherwise ±1 per channel.
