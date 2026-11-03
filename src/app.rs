@@ -723,10 +723,25 @@ pub fn run_launcher(source: Option<Source>, s: Settings) {
     run_app(source, s, true);
 }
 
+// Android (ARCH_D §6.3 run 1): the launcher on the NativeActivity's event loop; the folder comes from `game_dir`.
+#[cfg(target_os = "android")]
+pub fn run_android(android: winit::platform::android::activity::AndroidApp, s: Settings) {
+    use winit::platform::android::EventLoopBuilderExtAndroid;
+    let el = EventLoop::<UserEvent>::with_user_event()
+        .with_android_app(android)
+        .build()
+        .expect("event loop");
+    run_on(el, None, s, true);
+}
+
 fn run_app(source: Option<Source>, s: Settings, launcher: bool) {
     let el = EventLoop::<UserEvent>::with_user_event()
         .build()
         .expect("event loop");
+    run_on(el, source, s, launcher);
+}
+
+fn run_on(el: EventLoop<UserEvent>, source: Option<Source>, s: Settings, launcher: bool) {
     let app = App::new(&el, source, s, launcher);
     #[cfg(not(target_arch = "wasm32"))]
     {

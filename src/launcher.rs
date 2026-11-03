@@ -469,11 +469,16 @@ impl Model {
                     {
                         r.value = d.to_string_lossy().into_owned();
                     }
+                    #[cfg(not(target_os = "android"))]
                     ui.add(
                         egui::TextEdit::singleline(&mut r.value)
                             .hint_text("folder with th08.dat")
                             .desired_width(f32::INFINITY),
                     );
+                    // Android: no soft keyboard under NativeActivity (launcher review item 9), so the fixed folder
+                    // set by `android_main` is shown, not edited.
+                    #[cfg(target_os = "android")]
+                    ui.label(r.value.as_str());
                 }
                 Folder::Web(names) => {
                     ui.label(if names.is_empty() {
@@ -494,6 +499,14 @@ impl Model {
                 origin_label(ui, self.row("game_dir"));
             }
         });
+        #[cfg(target_os = "android")]
+        if !ok {
+            let dir = &self.row("game_dir").value;
+            ui.label(format!(
+                "Copy th08.dat and thbgm.dat from your Touhou 8 folder into {dir}\n\
+                 e.g. adb push th08.dat thbgm.dat {dir}/ — then this screen picks them up."
+            ));
+        }
     }
 
     fn group_ui(&mut self, ui: &mut egui::Ui, g: Group) {
@@ -661,6 +674,16 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
                     }
                 });
         }
+        // Android: text rows are read-only (no soft keyboard); they are set through port.cfg.
+        #[cfg(target_os = "android")]
+        Kind::Text(_) | Kind::Path | Kind::File => {
+            ui.label(if r.value.is_empty() {
+                "(not set)"
+            } else {
+                r.value.as_str()
+            });
+        }
+        #[cfg(not(target_os = "android"))]
         Kind::Text(hint) => {
             ui.add(
                 egui::TextEdit::singleline(&mut r.value)
@@ -668,6 +691,7 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row) {
                     .desired_width(220.0),
             );
         }
+        #[cfg(not(target_os = "android"))]
         Kind::Path | Kind::File => {
             ui.add(
                 egui::TextEdit::singleline(&mut r.value)

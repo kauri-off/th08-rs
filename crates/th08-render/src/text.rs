@@ -23,6 +23,13 @@ const FONT_PATHS: &[&str] = &[
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
     "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    // Android system CJK fonts (ARCH_D_MOBILE §6.2): AOSP 7+, older AOSP, some OEM builds.
+    "/system/fonts/NotoSansCJK-Regular.ttc",
+    "/system/fonts/NotoSansCJKjp-Regular.otf",
+    "/system/fonts/NotoSansJP-Regular.otf",
+    "/system/fonts/DroidSansJapanese.ttf",
+    "/system/fonts/DroidSansFallback.ttf",
+    "/system/fonts/DroidSansFallbackFull.ttf",
 ];
 
 // No font (blank text); `Raster::new` does the font search.

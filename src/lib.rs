@@ -31,18 +31,46 @@ pub fn start(files: js_sys::Array) {
     }
 }
 
-// Android entry (ARCH_D_MOBILE §6.1 item 6). Stub: the event loop gets `app` in Android run 1 (ARCH_D §6.3).
+// Android entry (ARCH_D_MOBILE §6.1 item 6, §6.3 run 1): logcat logger, panics to logcat, config + saves in the
+// app's internal storage, game files in `<external files dir>/game` (adb push target; no SAF picker yet, §2.2).
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("th08"),
     );
+    std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
     let data = app.internal_data_path();
     let dirs = settings::PlatformDirs {
         config: data.clone(),
         save: data,
         soundfonts: Vec::new(),
     };
-    app::run_launcher(None, settings::Settings::game_environment(dirs));
+    let mut s = settings::Settings::game_environment(dirs);
+    match app.external_data_path() {
+        Some(ext) => {
+            let game = ext.join("game");
+            let _ = std::fs::create_dir_all(&game);
+            log::info!(
+                "game folder {} (th08.dat {})",
+                game.display(),
+                if launcher::is_game_dir(&game) {
+                    "found"
+                } else {
+                    "missing"
+                }
+            );
+            // The folder row is read-only on Android, so the fixed folder wins over a port.cfg value.
+            s.set_from(
+                settings::Origin::Default,
+                "game_dir",
+                &game.to_string_lossy(),
+            )
+            .expect("game_dir accepts any path");
+        }
+        None => log::error!("no external files dir: game folder unavailable"),
+    }
+    app::run_android(app, s);
 }
