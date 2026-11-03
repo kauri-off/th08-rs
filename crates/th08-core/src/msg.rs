@@ -86,7 +86,7 @@ pub fn face_files(stage: usize, shot: u8, card: Option<i16>) -> [Option<String>;
     [None, None, s2.and_then(face), None]
 }
 
-pub use th08_formats::msg::{Ins, MsgError, MsgFile, parse};
+pub use th08_formats::msg::{Ins, MsgError, MsgFile, MsgOff, parse};
 
 // Things the HUD / game manager must do after a Msg_Run (10 §5.1).
 // Bgm op 7, BgmFade op 12, Flash op 14, StageEnd op 9, HaltFinal op 11, Route = GM flags bits 11–12 (ops 21/22,
@@ -298,7 +298,7 @@ impl Dialogue {
             return;
         };
         self.entry = n;
-        self.ip = ip;
+        self.ip = ip.idx();
         // 10 §4 step 5: script index −1 makes the first line-1 clear a no-op; the other defaults come from Default.
         self.lines.iter_mut().for_each(|l| l.script_index = -1);
         self.textbox = true;
@@ -547,12 +547,12 @@ impl Dialogue {
         }
         let skip = self.skippable && inp.down(input::SKIP);
         // Ctrl fast-forward: clock = time of the current instruction (10 §5).
-        if skip && let Some(i) = self.file.as_ref().unwrap().ins(self.ip) {
+        if skip && let Some(i) = self.file.as_ref().unwrap().ins(MsgOff::from_idx(self.ip)) {
             self.clock.set(i.time as i32);
         }
         let mut stalled = false;
         loop {
-            let Some(ins) = self.file.as_ref().unwrap().ins(self.ip) else {
+            let Some(ins) = self.file.as_ref().unwrap().ins(MsgOff::from_idx(self.ip)) else {
                 // Port-only guard: running off the file ends the dialogue.
                 self.entry = -1;
                 return !dying;
@@ -564,7 +564,7 @@ impl Dialogue {
             let r = self.exec(&f, anm, rng, inp, ins);
             self.file = Some(f);
             match r {
-                Exec::Next => self.ip = ins.at + 4 + ins.size,
+                Exec::Next => self.ip = ins.next().idx(),
                 Exec::Stall => {
                     stalled = true;
                     break;
@@ -666,7 +666,7 @@ mod tests {
                         let s = f.string(&i, if i.op == 3 { 4 } else { 0 }).decode();
                         assert!(!s.contains('\u{FFFD}'), "{name}: undecodable text {s:?}");
                     }
-                    at += 4 + i.size;
+                    at = i.next();
                 }
             }
         }
@@ -684,7 +684,7 @@ mod tests {
         for stage in 0..9 {
             let mut d = Dialogue::default();
             d.info.stage = stage;
-            let ins = f.ins(8).unwrap();
+            let ins = f.ins(MsgOff(8)).unwrap();
             for _ in 0..2 {
                 assert!(matches!(
                     d.exec(&f, &mut anm, &mut rng, &Input::default(), ins),
@@ -712,7 +712,7 @@ mod tests {
             ..Dialogue::default()
         };
         for k in 0..3 {
-            let ins = f.ins(8 + 6 * k).unwrap();
+            let ins = f.ins(MsgOff(8 + 6 * k)).unwrap();
             d.exec(&f, &mut anm, &mut rng, &Input::default(), ins);
         }
         let lines: Vec<(usize, String)> = d.texts.iter().map(|t| (t.0, t.1.decode())).collect();

@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use crate::reader::{Reader, Truncated, u32_at};
+
 #[derive(Debug, thiserror::Error)]
 pub enum ArchiveError {
     #[error("not a PBGZ archive")]
@@ -12,6 +14,8 @@ pub enum ArchiveError {
     BadTable,
     #[error("{0} not in archive")]
     NotFound(String),
+    #[error("archive table: {0}")]
+    Truncated(#[from] Truncated),
 }
 
 pub type Result<T> = std::result::Result<T, ArchiveError>;
@@ -73,7 +77,7 @@ fn crypt(src: &[u8], k: &CipherKey, enc: bool) -> Vec<u8> {
     let tail = if rem < k.block / 4 { rem } else { 0 } + (len & 1);
     // n is signed in the original: a tail longer than the data (short odd input) deciphers nothing.
     let mut left = len.saturating_sub(tail);
-    let mut budget = k.limit as isize;
+    let mut budget = k.limit.cast_signed();
     let mut key = k.key;
     let mut pos = 0;
     while left > 0 && budget > 0 {
@@ -96,7 +100,7 @@ fn crypt(src: &[u8], k: &CipherKey, enc: bool) -> Vec<u8> {
         }
         pos += b;
         left -= b;
-        budget -= k.block as isize;
+        budget -= k.block.cast_signed();
     }
     out
 }
@@ -115,7 +119,7 @@ impl Bits<'_> {
             self.cur = self.data.get(self.pos).copied().unwrap_or(0);
             self.pos += 1;
         }
-        let b = (self.cur & self.mask != 0) as u32;
+        let b = u32::from(self.cur & self.mask != 0);
         self.mask >>= 1;
         if self.mask == 0 {
             self.mask = 0x80;
@@ -203,24 +207,24 @@ pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
     let mut i = 0;
     while i < input.len() {
         let mut best = (0, 0);
-        if i + 3 <= input.len() {
-            if let Some(c) = head.get(&key(i)) {
-                for &j in c.iter().rev() {
-                    if i - j > WINDOW {
+        if i + 3 <= input.len()
+            && let Some(c) = head.get(&key(i))
+        {
+            for &j in c.iter().rev() {
+                if i - j > WINDOW {
+                    break;
+                }
+                // Offset 0 is the end marker (01 §3), so a match at dictionary position 0 cannot be coded.
+                if (j + 1) & 0x1fff == 0 {
+                    continue;
+                }
+                let n = (0..18.min(input.len() - i))
+                    .take_while(|&k| input[j + k] == input[i + k])
+                    .count();
+                if n > best.1 {
+                    best = (j, n);
+                    if n == 18 {
                         break;
-                    }
-                    // Offset 0 is the end marker (01 §3), so a match at dictionary position 0 cannot be coded.
-                    if (j + 1) & 0x1fff == 0 {
-                        continue;
-                    }
-                    let n = (0..18.min(input.len() - i))
-                        .take_while(|&k| input[j + k] == input[i + k])
-                        .count();
-                    if n > best.1 {
-                        best = (j, n);
-                        if n == 18 {
-                            break;
-                        }
                     }
                 }
             }
@@ -232,7 +236,7 @@ pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
             best.1
         } else {
             w.bits(1, 1);
-            w.bits(input[i] as u32, 8);
+            w.bits(u32::from(input[i]), 8);
             1
         };
         for k in i..i + n {
@@ -264,9 +268,10 @@ pub struct Archive {
     names: Vec<String>,
 }
 
-fn u32le(b: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
+// 01 §4: the header dwords are stored biased (count + 123456, table offset + 345678, table size + 567891).
+const COUNT_BIAS: u32 = 123_456;
+const TABLE_OFF_BIAS: u32 = 345_678;
+const TABLE_SIZE_BIAS: u32 = 567_891;
 
 impl Archive {
     pub fn from_bytes(data: Vec<u8>) -> Result<Self> {
@@ -274,31 +279,27 @@ impl Archive {
             return Err(ArchiveError::NotPbgz);
         }
         let hdr = decrypt(&data[4..16], &HEADER_KEY);
-        // 01 §4: entry count, table offset and table size are stored biased by 123456 / 345678 / 567891.
-        // The open fails unless count > 0 and table offset < file size (signed count).
-        let count = u32le(&hdr, 0).wrapping_sub(123456) as i32;
-        let table_off = u32le(&hdr, 4).wrapping_sub(345678) as usize;
-        let table_size = u32le(&hdr, 8).wrapping_sub(567891) as usize;
+        // 01 §4: the open fails unless count > 0 and table offset < file size (signed count).
+        let count = u32_at(&hdr, 0).wrapping_sub(COUNT_BIAS).cast_signed();
+        let table_off = u32_at(&hdr, 4).wrapping_sub(TABLE_OFF_BIAS) as usize;
+        let table_size = u32_at(&hdr, 8).wrapping_sub(TABLE_SIZE_BIAS) as usize;
         if count <= 0 || table_off >= data.len() {
             return Err(ArchiveError::BadHeader { count, table_off });
         }
-        let count = count as usize;
+        let count = count.cast_unsigned() as usize;
         let table = lzss_decompress(&decrypt(&data[table_off..], &TABLE_KEY), table_size);
         let mut raw = Vec::with_capacity(count);
         let mut p = 0;
         for _ in 0..count {
-            let nul = table[p..]
-                .iter()
-                .position(|&c| c == 0)
+            let nul = table
+                .get(p..)
+                .and_then(|t| t.iter().position(|&c| c == 0))
                 .ok_or(ArchiveError::BadTable)?;
             // PbgArchive_FindEntry 0x474C70 compares names case-insensitively (01 §5).
             let name = String::from_utf8_lossy(&table[p..p + nul]).to_ascii_lowercase();
             p += nul + 1;
-            raw.push((
-                name,
-                u32le(&table, p) as usize,
-                u32le(&table, p + 4) as usize,
-            ));
+            let mut r = Reader::at(&table, p);
+            raw.push((name, r.u32()? as usize, r.u32()? as usize));
             // Skips offset, size and the unread reserved dword.
             p += 12;
         }
@@ -361,7 +362,7 @@ pub fn pack(files: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 // `count` and the table-offset bias are free so tests can build invalid headers.
-fn pack_with(count: u32, table_off_delta: i64, files: &[(&str, &[u8])]) -> Vec<u8> {
+fn pack_with(count: u32, table_off_delta: i32, files: &[(&str, &[u8])]) -> Vec<u8> {
     let (h, t) = (HEADER_KEY, TABLE_KEY);
     let mut out = b"PBGZ".to_vec();
     out.resize(16, 0);
@@ -374,13 +375,13 @@ fn pack_with(count: u32, table_off_delta: i64, files: &[(&str, &[u8])]) -> Vec<u
         table.extend_from_slice(&0u32.to_le_bytes());
         out.extend_from_slice(&lzss_compress(raw));
     }
-    let table_off = (out.len() as i64 + table_off_delta) as u32;
+    let table_off = (out.len() as u32).wrapping_add_signed(table_off_delta);
     let table_size = table.len() as u32;
     out.extend_from_slice(&crypt(&lzss_compress(&table), &t, true));
     let hdr: Vec<u8> = [
-        count.wrapping_add(123456),
-        table_off.wrapping_add(345678),
-        table_size.wrapping_add(567891),
+        count.wrapping_add(COUNT_BIAS),
+        table_off.wrapping_add(TABLE_OFF_BIAS),
+        table_size.wrapping_add(TABLE_SIZE_BIAS),
     ]
     .iter()
     .flat_map(|v| v.to_le_bytes())
@@ -405,7 +406,7 @@ mod tests {
         assert_eq!(super::block_decrypt(&e, 0x59, 0x79, 0x100, 0xC00), data);
     }
 
-    fn build(count: u32, table_off_delta: i64, files: &[(&str, &[u8])]) -> Vec<u8> {
+    fn build(count: u32, table_off_delta: i32, files: &[(&str, &[u8])]) -> Vec<u8> {
         super::pack_with(count, table_off_delta, files)
     }
 
@@ -414,7 +415,8 @@ mod tests {
         let f: &[(&str, &[u8])] = &[("a.txt", b"hello")];
         assert!(super::Archive::from_bytes(build(1, 0, f)).is_ok());
         assert!(super::Archive::from_bytes(build(0, 0, f)).is_err());
-        assert!(super::Archive::from_bytes(build(-1i32 as u32, 0, f)).is_err());
+        // Count −1.
+        assert!(super::Archive::from_bytes(build(u32::MAX, 0, f)).is_err());
         assert!(super::Archive::from_bytes(build(1, 0x10000, f)).is_err());
     }
 

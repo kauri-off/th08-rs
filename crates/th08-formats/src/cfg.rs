@@ -1,5 +1,7 @@
 //! th08.cfg image (15 §1): the 60-byte config at Supervisor+0x118 (0x17CE870), read by `Config_Load` 0x4477B1.
 
+use crate::reader::Reader;
+
 // Pad buttons +0x00…+0x10 in file order (Shot, Bomb, Focus, Pause, Up, Down, Left, Right, Skip): DirectInput button
 // indices, −1 = none. Defaults = the key-config reset table 0x4C78C8 (15 §1.3).
 pub const PAD_DEFAULT: [i16; 9] = [0, 1, 2, 4, -1, -1, -1, -1, 3];
@@ -111,18 +113,31 @@ impl Config {
 
     // Config_Load (15 §1.2): None when the size, version or any byte field is invalid (→ defaults).
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() != 0x3C || u32::from_le_bytes(b[0x14..0x18].try_into().ok()?) != VERSION {
+        let mut r = Reader::new(b);
+        if b.len() != 0x3C || r.seek(0x14).u32().ok()? != VERSION {
             return None;
         }
         // Valid ranges of bytes +0x1C..+0x26 (15 §1.1 "valid" column).
         let limits = [7, 4, 2, 3, 2, 6, 2, 3, 3, 2, 2];
-        if (0..11).any(|i| b[0x1C + i] >= limits[i]) {
+        if b[0x1C..0x27].iter().zip(limits).any(|(&v, l)| v >= l) {
             return None;
         }
-        let i16_at = |o: usize| i16::from_le_bytes([b[o], b[o + 1]]);
+        let mut i16_at = |o: usize| r.seek(o).i16().ok();
+        let pad = [
+            i16_at(0)?,
+            i16_at(2)?,
+            i16_at(4)?,
+            i16_at(6)?,
+            i16_at(8)?,
+            i16_at(0xA)?,
+            i16_at(0xC)?,
+            i16_at(0xE)?,
+            i16_at(0x10)?,
+        ];
+        let stick = [i16_at(0x18)?, i16_at(0x1A)?];
         Some(Self {
-            pad: std::array::from_fn(|i| i16_at(2 * i)),
-            stick: [i16_at(0x18), i16_at(0x1A)],
+            pad,
+            stick,
             lives: b[0x1C],
             bombs: b[0x1D],
             colour_mode: b[0x1E],
@@ -136,9 +151,9 @@ impl Config {
             shot_slow: b[0x26],
             bgm_volume: b[0x27],
             se_volume: b[0x28],
-            debug_flags: u32::from_le_bytes(b[0x38..0x3C].try_into().ok()?) | 1,
+            debug_flags: r.seek(0x38).u32().ok()? | 1,
             padding: [b[0x12], b[0x13]],
-            unused: b[0x29..0x38].try_into().ok()?,
+            unused: r.seek(0x29).array().ok()?,
         })
     }
 }

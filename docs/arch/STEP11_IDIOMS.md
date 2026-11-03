@@ -104,7 +104,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | run | content (≤ 3 deliverables) | files | parallel / conflicts | check |
 |---|---|---|---|---|
 | **11a** wall + types — **DONE** (see below) | (1) `[workspace.lints.clippy]` subset at `warn` (+ `[lints] workspace = true` per crate), clippy.toml `too-many-lines-threshold = 150`, `too-many-arguments-threshold = 7` (orchestrator: 7, so the 8-argument fns of §1.2 count); `tools/lint_subset` prints subset counts per file; (2) core `types.rs` (§1.7) + `bitflags` dep, `wrap_add` and the ECL `TWO_PI` moved there (callers unchanged); (3) remove the 5 core shims (§1.3), paths → `th08_formats::` | Cargo.toml (all), clippy.toml, tools/lint_subset (new), types.rs (new), lib.rs (core), anmvm/eclvm (2 lines), 45 core `use` lines, 11 in tools/app | **alone, first** (touches imports everywhere) | T D |
-| **11b** formats | (1) `Reader` cursor + typed `Truncated { at }` in cfg, msg, replay, scoredat, sht, stdfile, thbgm, archive, end, musiccmt (not anm.rs / ecl.rs); (2) `MsgOff`, `std::Op` decoder (06 §1.4) beside `Record`, `msg::Op` decoder (10 §2) beside `Ins`; (3) formats subset 0 (as_chunks, derivable, collapsible, unwraps → errors) | crates/th08-formats except anm.rs, ecl.rs | ∥ 11c 11d 11g | T D, formats unit tests |
+| **11b** formats — **DONE** (see below) | (1) `Reader` cursor + typed `Truncated { at }` in cfg, msg, replay, scoredat, sht, stdfile, thbgm, archive, end, musiccmt (not anm.rs / ecl.rs); (2) `MsgOff`, `std::Op` decoder (06 §1.4) beside `Record`, `msg::Op` decoder (10 §2) beside `Ins`; (3) formats subset 0 (as_chunks, derivable, collapsible, unwraps → errors) | crates/th08-formats except anm.rs, ecl.rs | ∥ 11c 11d 11g | T D, formats unit tests |
 | **11c** ANM VM | (1) `anm::{AnmOff, Ins, Op}` in formats/anm.rs (header decoder from anmvm.rs:237, lazy per ip); (2) `AnmVm::run` → loop + `exec_op` + op-group fns, `VmFlags`, `D3dColor` for `color` / `color2` / `color_start`; (3) anmmgr subset 0 | formats/anm.rs, anmvm, anmmgr | ∥ 11b 11d 11g | T D |
 | **11d** ECL exec | (1) `ecl::{EclOff, Op}` in formats/ecl.rs (+ eclview bin); (2) `Exec::exec` → `match Op` dispatching to `eclvm/ops_*.rs`, named args via `Arg` / `Var` (from `IRef`), bullet flag const; (3) eclvm subset 0 | formats/ecl.rs, eclvm (+ new ops_*.rs), bin/eclview | ∥ 11b 11c 11g; before 11e | T D, **B** |
 | **11e** enemy | (1) `EnemyIdx` for chain / boss / thread links; (2) `EnemyFlags` for the 07 flag words, `TlOp` timeline enum (enemy.rs:1139); (3) long fns 1133 / 1392 split, enemy subset 0 | enemy, eclvm (index boundary only) | after 11d; ∥ 11f 11h 11i | T D |
@@ -153,6 +153,24 @@ Public API: `Player::angle_from` removed; `Player::shot()` new; `GaugeLimits::fo
 arch_check 0 differing (emit-off 0), cargo test -p th08-core 319 passed, spec_refs 0. Deviations: `damage_against`
 keeps 8 args under `#[expect]` instead of an env struct (its callers are not 11g files); `Player::shot()` panics on a
 raw byte ≥ 12, unreachable since Player_Load fails on the missing sht / anm files first.
+**11b done.** Files: crates/th08-formats/src/reader.rs (new: `Reader` cursor `u8/u16/i16/u32/i32/f32/vec3/u16s/u32s/
+array/bytes`, `at` / `seek` / `skip`, `Truncated { at }`; crate-private `u16_at` / `u32_at` / `put_u32` for fixed-size
+in-memory records), lib.rs (`pub mod reader`), stdfile.rs (parse on `Reader`; `std::Op` + `CamSlot` decoder beside
+`Record`, 06 §4), msg.rs (`MsgOff(u32)`, `Ins.at: MsgOff`, `Ins::next()`, `entries: Vec<MsgOff>`, `ins(MsgOff)`,
+`msg::Op` decoder + `MsgFile::op`, 10 §5.1), sht.rs, cfg.rs, replay.rs, scoredat.rs, thbgm.rs, archive.rs, end.rs
+(Reader / shared accessors, casts, lints); boundary only: core msg.rs (8 lines: `ip.idx()`, `MsgOff::from_idx(ip)`,
+`ins.next().idx()`, tests `MsgOff(8)`). musiccmt.rs needed nothing (byte scanner, no reads). Public API (outside the
+crate): `th08_formats::msg::{Ins.at, MsgFile.entries, MsgFile::ins}` typed `MsgOff`, new `msg::{MsgOff, Op}`,
+`MsgFile::op`, `stdfile::{Op, CamSlot}`, `reader::{Reader, Truncated}`; error enums: `StdError::ReadPastEnd(usize)` /
+`ShtError::Truncated(usize)` → `Truncated(reader::Truncated)`, new `Truncated` variant in `ArchiveError`,
+`ReplayError`, `ScoreError` (no user outside formats); `Record::i/f/v` kept for stage.rs / stdview (11f).
+New tests: `reader::reads_and_truncation`; `msg::all_msg_ops_decode` (every instruction decodes, counts = 10 §5.1
+column for all 23 ops); `stdfile::all_std_parse` checks `Op::decode` and the 06 §4 count column. Lint subset
+(tools/lint_subset): formats 86 → 26 (the 26 are anm.rs 10 / ecl.rs 16, runs 11c / 11d); run files 60 → 0;
+workspace 1 768 after. Check: FAST arch_check 0 differing (32/32 identical), cargo test 422 passed, spec_refs 0.
+Deviations: malformed-input paths that panicked before now return errors (std negative quad size → `QuadSize`, archive
+table running past its end → `BadTable` / `Truncated`); valid files parse identically. Writers (`to_bytes`, `encode`,
+`header`, `pack`) keep direct slice stores.
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

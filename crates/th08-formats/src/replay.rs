@@ -2,6 +2,7 @@
 
 use crate::ByteSource;
 use crate::archive::{lzss_compress, lzss_decompress};
+use crate::reader::{Reader, Truncated, put_u32, u16_at, u32_at};
 use crate::scoredat::{EXE_SIZE, EXE_SUM, exe_check_in};
 use crate::sjis::SjisStr;
 
@@ -21,6 +22,8 @@ pub enum ReplayError {
     ExeCheck,
     #[error("replay stage {0} record")]
     StageRecord(usize),
+    #[error("replay: {0}")]
+    Truncated(#[from] Truncated),
 }
 
 pub type Result<T> = std::result::Result<T, ReplayError>;
@@ -29,19 +32,7 @@ pub type Result<T> = std::result::Result<T, ReplayError>;
 pub const HEADER: usize = 0x68;
 pub const INFO: usize = 0x134;
 pub const REC: usize = 0x24;
-const CHECK_BASE: u32 = 0x3F000318;
-
-fn u16_at(b: &[u8], o: usize) -> u16 {
-    u16::from_le_bytes([b[o], b[o + 1]])
-}
-
-fn u32_at(b: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
-
-fn put_u32(b: &mut [u8], o: usize, v: u32) {
-    b[o..o + 4].copy_from_slice(&v.to_le_bytes());
-}
+const CHECK_BASE: u32 = 0x3F00_0318;
 
 // Stage record, 0x24-byte header (11 §6) + input words + fps bytes (15 §3.4).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -72,37 +63,46 @@ pub struct StageRecord {
 }
 
 impl StageRecord {
-    fn parse(b: &[u8]) -> Self {
-        Self {
-            score: u32_at(b, 0),
-            point_items: u32_at(b, 4) as i32,
-            graze: u32_at(b, 8),
-            extends: u32_at(b, 0x0C) as i32,
-            next_extend: u32_at(b, 0x10) as i32,
-            max_point: u32_at(b, 0x14) as i32,
-            gauge: u16_at(b, 0x18) as i16,
-            seed: u16_at(b, 0x1A),
-            power: b[0x1C],
-            lives: b[0x1D],
-            bombs: b[0x1E],
-            rank: b[0x1F],
-            b20: b[0x20],
-            spells: b[0x21],
-            clock: b[0x22] as i8,
-            inputs: b[REC..].chunks_exact(2).map(|c| u16_at(c, 0)).collect(),
+    // `b` runs from the record header to its fps stream; +0x23 is padding.
+    fn parse(b: &[u8]) -> std::result::Result<Self, Truncated> {
+        let mut r = Reader::new(b);
+        Ok(Self {
+            score: r.u32()?,
+            point_items: r.i32()?,
+            graze: r.u32()?,
+            extends: r.i32()?,
+            next_extend: r.i32()?,
+            max_point: r.i32()?,
+            gauge: r.i16()?,
+            seed: r.u16()?,
+            power: r.u8()?,
+            lives: r.u8()?,
+            bombs: r.u8()?,
+            rank: r.u8()?,
+            b20: r.u8()?,
+            spells: r.u8()?,
+            clock: r.u8()?.cast_signed(),
+            inputs: r
+                .seek(REC)
+                .bytes(b.len().saturating_sub(REC))?
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| u16::from_le_bytes(c))
+                .collect(),
             fps: Vec::new(),
             tail: Vec::new(),
-        }
+        })
     }
 
     fn header(&self) -> [u8; REC] {
         let mut h = [0; REC];
         put_u32(&mut h, 0, self.score);
-        put_u32(&mut h, 4, self.point_items as u32);
+        put_u32(&mut h, 4, self.point_items.cast_unsigned());
         put_u32(&mut h, 8, self.graze);
-        put_u32(&mut h, 0x0C, self.extends as u32);
-        put_u32(&mut h, 0x10, self.next_extend as u32);
-        put_u32(&mut h, 0x14, self.max_point as u32);
+        put_u32(&mut h, 0x0C, self.extends.cast_unsigned());
+        put_u32(&mut h, 0x10, self.next_extend.cast_unsigned());
+        put_u32(&mut h, 0x14, self.max_point.cast_unsigned());
         h[0x18..0x1A].copy_from_slice(&self.gauge.to_le_bytes());
         h[0x1A..0x1C].copy_from_slice(&self.seed.to_le_bytes());
         h[0x1C] = self.power;
@@ -111,7 +111,7 @@ impl StageRecord {
         h[0x1F] = self.rank;
         h[0x20] = self.b20;
         h[0x21] = self.spells;
-        h[0x22] = self.clock as u8;
+        h[0x22] = self.clock.cast_unsigned();
         h
     }
 }
@@ -177,7 +177,7 @@ impl Replay {
         self.info[0x7B - HEADER] != 0
     }
     pub fn spell_id(&self) -> i16 {
-        u16_at(&self.info, 0x7C - HEADER) as i16
+        u16_at(&self.info, 0x7C - HEADER).cast_signed()
     }
     pub fn score(&self) -> u32 {
         u32_at(&self.info, 0xB0 - HEADER)
@@ -186,11 +186,7 @@ impl Replay {
         &self.info[0xB4 - HEADER..0xF0 - HEADER]
     }
     pub fn slowdown(&self) -> f32 {
-        f32::from_le_bytes(
-            self.info[0x118 - HEADER..0x11C - HEADER]
-                .try_into()
-                .unwrap(),
-        )
+        f32::from_bits(u32_at(&self.info, 0x118 - HEADER))
     }
     pub fn first_stage(&self) -> Option<usize> {
         self.stages.iter().position(Option::is_some)
@@ -211,7 +207,7 @@ impl Replay {
         crypt(&mut b[0x18..], file[0x15], true);
         let sum = b[0x15..]
             .iter()
-            .fold(CHECK_BASE, |a, &c| a.wrapping_add(c as u32));
+            .fold(CHECK_BASE, |a, &c| a.wrapping_add(u32::from(c)));
         if sum != u32_at(&b, 0x10) {
             return Err(ReplayError::Checksum);
         }
@@ -258,7 +254,7 @@ impl Replay {
             if o + REC > f {
                 return Err(ReplayError::StageRecord(i));
             }
-            let mut r = StageRecord::parse(&img[o..f]);
+            let mut r = StageRecord::parse(&img[o..f])?;
             r.fps = img[f..next].to_vec();
             r.tail = img[o + REC + 2 * r.inputs.len()..].to_vec();
             stages[i] = Some(r);
@@ -315,7 +311,7 @@ impl Replay {
         // Checksum over [0x15, 0x68) + the compressed body, before encryption.
         let sum = f[0x15..]
             .iter()
-            .fold(CHECK_BASE, |a, &c| a.wrapping_add(c as u32));
+            .fold(CHECK_BASE, |a, &c| a.wrapping_add(u32::from(c)));
         put_u32(&mut f, 0x10, sum);
         let k = f[0x15];
         crypt(&mut f[0x18..], k, false);
@@ -386,15 +382,15 @@ mod tests {
         // Demo 0 has the listed 1.00a tag/size/sum, demos 1–3 the tag "debug": all pass ExeCheck (15 §2.10).
         let ver = ar.read(VER_LIST_NAME).unwrap();
         let frames = [11083, 0, 0, 0];
-        for n in 0..4 {
+        for (n, &want) in frames.iter().enumerate() {
             let f = ar.read(&format!("demorpy{n}.rpy")).unwrap();
             let r = Replay::parse(&f, Some(&ver)).unwrap();
             let st = r.first_stage().unwrap();
             let s = r.stages[st].as_ref().unwrap();
             assert_eq!(s.inputs[0], 0, "dummy word");
             assert!(s.inputs.iter().all(|w| w & !0x1FFF == 0 || *w == 0xCDCD));
-            if frames[n] != 0 {
-                assert!(s.inputs.len() >= frames[n]);
+            if want != 0 {
+                assert!(s.inputs.len() >= want);
             }
             let mut c = r.clone();
             let enc = c.encode(&mut crate::testdata::Counter(3, 0));

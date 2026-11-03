@@ -2,6 +2,7 @@
 
 use crate::ByteSource;
 use crate::archive::{block_decrypt, block_encrypt, lzss_compress, lzss_decompress};
+use crate::reader::{Reader, Truncated, put_u32, u16_at, u32_at};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScoreError {
@@ -17,6 +18,8 @@ pub enum ScoreError {
     EmptyChunk,
     #[error("score.dat: no TH8K chunk")]
     NoTh8k,
+    #[error("score.dat: {0}")]
+    Truncated(#[from] Truncated),
 }
 
 pub type Result<T> = std::result::Result<T, ScoreError>;
@@ -69,7 +72,7 @@ fn scan_d(b: &[u8]) -> Option<(u32, &[u8])> {
         return None;
     }
     let v = b[i..i + n].iter().fold(0u32, |a, &c| {
-        a.wrapping_mul(10).wrapping_add((c - b'0') as u32)
+        a.wrapping_mul(10).wrapping_add(u32::from(c - b'0'))
     });
     Some((if neg { v.wrapping_neg() } else { v }, &b[i + n..]))
 }
@@ -111,22 +114,6 @@ fn strcpy(dst: &mut [u8], src: &[u8]) {
         .min(dst.len() - 1);
     dst[..n].copy_from_slice(&src[..n]);
     dst[n] = 0;
-}
-
-fn u16_at(b: &[u8], o: usize) -> u16 {
-    u16::from_le_bytes([b[o], b[o + 1]])
-}
-
-fn u32_at(b: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
-
-fn put_u32(b: &mut [u8], o: usize, v: u32) {
-    b[o..o + 4].copy_from_slice(&v.to_le_bytes());
-}
-
-fn u32s<const N: usize>(b: &[u8], o: usize) -> [u32; N] {
-    std::array::from_fn(|i| u32_at(b, o + 4 * i))
 }
 
 fn put_u32s(b: &mut [u8], o: usize, v: &[u32]) {
@@ -192,7 +179,7 @@ impl Hscr {
         n[..end].iter().map(|&c| c as char).collect()
     }
     pub fn slowdown(&self) -> f32 {
-        f32::from_le_bytes(self.0[0x10..0x14].try_into().unwrap())
+        f32::from_bits(u32_at(&self.0, 0x10))
     }
     pub fn put_u32(&mut self, o: usize, v: u32) {
         put_u32(&mut self.0, o, v);
@@ -278,14 +265,14 @@ impl Catk {
             .name
             .iter()
             .take_while(|&&c| c != 0)
-            .map(|&c| c as i8 as i32)
+            .map(|&c| i32::from(c.cast_signed()))
             .sum();
         let c: u32 = self
             .counters
             .iter()
             .flatten()
             .fold(0, |a, &v| a.wrapping_add(v));
-        (n as u32).wrapping_add(c) as u8
+        n.cast_unsigned().wrapping_add(c) as u8
     }
 
     // "Attempted" for the FLSP unlocks: any attempt counter ≠ 0, story or practice (15 §2.8).
@@ -304,23 +291,12 @@ pub struct Pscr {
 
 // PLST chunk v2, 0x228 bytes (15 §2.9): run / play time h, m, s, ms; counters [block][17] with blocks 0..4 =
 // difficulty, 5 unused, 6 total; +0x208 music-room heard flags.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Plst {
     pub run_time: [u32; 4],
     pub play_time: [u32; 4],
     pub counters: [[u32; 17]; 7],
     pub music: [u8; 32],
-}
-
-impl Default for Plst {
-    fn default() -> Self {
-        Self {
-            run_time: [0; 4],
-            play_time: [0; 4],
-            counters: [[0; 17]; 7],
-            music: [0; 32],
-        }
-    }
 }
 
 // Counter indices inside a 17-word block (15 §2.9); [1 + shot] are per-shot plays.
@@ -345,7 +321,9 @@ impl Plst {
 
     // Adds `ms` to an h/m/s/ms clock with carries (Supervisor_UpdatePlayTime 0x448418, 15 §2.9).
     pub fn add_time(t: &mut [u32; 4], ms: u64) {
-        let total = ((t[0] as u64 * 60 + t[1] as u64) * 60 + t[2] as u64) * 1000 + t[3] as u64 + ms;
+        let total = ((u64::from(t[0]) * 60 + u64::from(t[1])) * 60 + u64::from(t[2])) * 1000
+            + u64::from(t[3])
+            + ms;
         *t = [
             (total / 3_600_000) as u32,
             (total / 60_000 % 60) as u32,
@@ -419,7 +397,9 @@ pub fn decode_container(file: &[u8]) -> Result<Vec<u8>> {
         acc = acc.wrapping_add(b[i]).rotate_left(3);
         b[i + 1] ^= acc;
     }
-    let sum = b[4..].iter().fold(0u16, |a, &c| a.wrapping_add(c as u16));
+    let sum = b[4..]
+        .iter()
+        .fold(0u16, |a, &c| a.wrapping_add(u16::from(c)));
     if sum != u16_at(&b, 2) {
         return Err(ScoreError::Checksum);
     }
@@ -445,7 +425,9 @@ pub fn encode_container(body: &[u8], r: [u8; 2]) -> Vec<u8> {
     put_u32(&mut b, 0x14, body.len() as u32);
     put_u32(&mut b, 0x18, comp.len() as u32);
     b.extend(comp);
-    let sum = b[4..].iter().fold(0u16, |a, &c| a.wrapping_add(c as u16));
+    let sum = b[4..]
+        .iter()
+        .fold(0u16, |a, &c| a.wrapping_add(u16::from(c)));
     b[2..4].copy_from_slice(&sum.to_le_bytes());
     let plain = b.clone();
     let mut acc = 0u8;
@@ -484,34 +466,47 @@ impl ScoreDat {
                 (b"TH8K", 1) => th8k = true,
                 (b"HSCR", 4) if size >= 0x168 => s.hscr.push(Hscr(c[..0x168].to_vec())),
                 (b"CLRD", 4) if size >= 0x24 => {
-                    let i = c[0x21] as usize;
-                    if let Some(e) = s.clrd.get_mut(i) {
-                        e.nc = std::array::from_fn(|k| u16_at(c, 0x0C + 2 * k));
-                        e.any = std::array::from_fn(|k| u16_at(c, 0x16 + 2 * k));
-                        e.bad_ending = c[0x20];
+                    let mut r = Reader::at(c, 0x0C);
+                    let (nc, any, bad_ending) = (r.u16s()?, r.u16s()?, r.u8()?);
+                    if let Some(e) = s.clrd.get_mut(usize::from(r.u8()?)) {
+                        *e = Clrd {
+                            nc,
+                            any,
+                            bad_ending,
+                        };
                     }
                 }
                 (b"CATK", 3) if size >= 0x22C => {
-                    let id = u16_at(c, 0x0C) as usize;
+                    let mut r = Reader::at(c, 0x0C);
+                    let id = usize::from(r.u16()?);
                     if let Some(e) = s.catk.get_mut(id) {
-                        e.present = true;
-                        e.checksum = c[0x0E];
-                        e.difficulty = c[0x0F];
-                        e.name.copy_from_slice(&c[0x10..0x40]);
-                        e.owner.copy_from_slice(&c[0x40..0x70]);
-                        e.comment[0].copy_from_slice(&c[0x70..0xB0]);
-                        e.comment[1].copy_from_slice(&c[0xB0..0xF0]);
-                        for (k, row) in e.counters.iter_mut().enumerate() {
-                            *row = u32s(c, 0xF0 + 0x34 * k);
-                        }
+                        *e = Catk {
+                            present: true,
+                            checksum: r.u8()?,
+                            difficulty: r.u8()?,
+                            name: r.array()?,
+                            owner: r.array()?,
+                            comment: [r.array()?, r.array()?],
+                            counters: [
+                                r.u32s()?,
+                                r.u32s()?,
+                                r.u32s()?,
+                                r.u32s()?,
+                                r.u32s()?,
+                                r.u32s()?,
+                            ],
+                        };
                     }
                 }
                 (b"PSCR", 2) if size >= 0x178 => {
-                    let shot = c[0x174] as usize;
+                    let shot = usize::from(c[0x174]);
                     if let Some(e) = s.pscr.get_mut(shot) {
-                        for st in 0..9 {
-                            e.plays[st] = u32s(c, 0x0C + 20 * st);
-                            e.hiscore[st] = u32s(c, 0xC0 + 20 * st);
+                        let mut r = Reader::at(c, 0x0C);
+                        for row in &mut e.plays {
+                            *row = r.u32s()?;
+                        }
+                        for row in &mut e.hiscore {
+                            *row = r.u32s()?;
                         }
                         e.used = c[0x175];
                     }
@@ -519,12 +514,13 @@ impl ScoreDat {
                 (b"LSNM", 1) if size >= 0x18 => s.lsnm.copy_from_slice(&c[0x0C..0x18]),
                 (b"FLSP", 1) if size >= 0x20 => s.flsp.copy_from_slice(&c[0x0C..0x1D]),
                 (b"PLST", 2) if size >= 0x228 => {
-                    s.plst.run_time = u32s(c, 0x0C);
-                    s.plst.play_time = u32s(c, 0x1C);
-                    for b in 0..7 {
-                        s.plst.counters[b] = u32s(c, 0x2C + 0x44 * b);
+                    let mut r = Reader::at(c, 0x0C);
+                    s.plst.run_time = r.u32s()?;
+                    s.plst.play_time = r.u32s()?;
+                    for row in &mut s.plst.counters {
+                        *row = r.u32s()?;
                     }
-                    s.plst.music.copy_from_slice(&c[0x208..0x228]);
+                    s.plst.music = r.array()?;
                 }
                 (b"VRSM", 1) if size >= 0x1C => s.vrsm.copy_from_slice(&c[0x0C..0x1C]),
                 _ => {}
@@ -656,15 +652,14 @@ impl ScoreDat {
         let mut lists: Vec<((usize, usize), Vec<Hscr>)> = Vec::new();
         for e in file {
             let key = (e.difficulty(), e.shot());
-            let i = match lists.iter().position(|(k, _)| *k == key) {
-                Some(i) => i,
-                None => {
-                    let d = (0..10u32)
-                        .map(|i| Hscr::placeholder(100_000 - 10_000 * i, key.0))
-                        .collect();
-                    lists.push((key, d));
-                    lists.len() - 1
-                }
+            let i = if let Some(i) = lists.iter().position(|(k, _)| *k == key) {
+                i
+            } else {
+                let d = (0..10u32)
+                    .map(|i| Hscr::placeholder(100_000 - 10_000 * i, key.0))
+                    .collect();
+                lists.push((key, d));
+                lists.len() - 1
             };
             let list = &mut lists[i].1;
             let at = list.iter().filter(|h| h.score() > e.score()).count();
@@ -901,7 +896,10 @@ mod tests {
         assert!(!chk(b"0100\0\0\0\0", EXE_SIZE, EXE_SUM));
         assert!(chk(b"debug\0\0\0", 0, 0));
         assert!(exe_check_in(None, b"xxxxx\0\0\0", 0, 0));
-        assert_eq!(scan_d(b" -5 x"), Some((-5i32 as u32, &b" x"[..])));
+        assert_eq!(
+            scan_d(b" -5 x"),
+            Some(((-5i32).cast_unsigned(), &b" x"[..]))
+        );
 
         let Some(ar) = crate::testdata::archive() else {
             return;

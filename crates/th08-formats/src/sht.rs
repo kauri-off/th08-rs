@@ -1,9 +1,11 @@
 //! .sht player shot files: header, level table, shot entries (09 §2.1).
 
+use crate::reader::{Reader, Truncated};
+
 #[derive(Debug, thiserror::Error)]
 pub enum ShtError {
-    #[error("sht: truncated at {0:#x}")]
-    Truncated(usize),
+    #[error("sht: {0}")]
+    Truncated(#[from] Truncated),
     #[error("sht: unterminated level {0}")]
     Unterminated(usize),
 }
@@ -114,42 +116,35 @@ impl Sht {
 pub const ENTRY_SIZE: usize = 0x38;
 
 pub fn parse(b: &[u8]) -> Result<Sht> {
-    fn rd<const N: usize>(b: &[u8], o: usize) -> Result<[u8; N]> {
-        b.get(o..o + N)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(ShtError::Truncated(o))
-    }
-    let f = |o: usize| -> Result<f32> { Ok(f32::from_le_bytes(rd(b, o)?)) };
-    let i = |o: usize| -> Result<i32> { Ok(i32::from_le_bytes(rd(b, o)?)) };
-    let h = |o: usize| -> Result<i16> { Ok(i16::from_le_bytes(rd(b, o)?)) };
-    let n = u16::from_le_bytes(rd(b, 2)?) as usize;
+    let n = usize::from(Reader::at(b, 2).u16()?);
     let mut levels = Vec::with_capacity(n);
     for k in 0..n {
-        let off = i(0x38 + k * 8)? as usize;
-        let threshold = i(0x3C + k * 8)?;
+        let mut t = Reader::at(b, 0x38 + k * 8);
+        let mut o = t.u32()? as usize;
+        let threshold = t.i32()?;
         let mut entries = Vec::new();
-        let mut o = off;
         loop {
-            if i(o)? == -1 {
+            if Reader::at(b, o).i32()? == -1 {
                 break;
             }
+            let mut r = Reader::at(b, o);
             entries.push(ShotEntry {
-                interval: h(o)?,
-                phase: h(o + 2)?,
-                offset: [f(o + 4)?, f(o + 8)?],
-                size: [f(o + 0xC)?, f(o + 0x10)?],
-                angle: f(o + 0x14)?,
-                speed: f(o + 0x18)?,
-                damage: h(o + 0x1C)?,
-                side: h(o + 0x1E)?,
-                origin: h(o + 0x20)?,
-                kind: h(o + 0x22)?,
-                script: h(o + 0x24)?,
-                sound: h(o + 0x26)?,
-                init: i(o + 0x28)?,
-                update: i(o + 0x2C)?,
-                draw: i(o + 0x30)?,
-                hit: i(o + 0x34)?,
+                interval: r.i16()?,
+                phase: r.i16()?,
+                offset: [r.f32()?, r.f32()?],
+                size: [r.f32()?, r.f32()?],
+                angle: r.f32()?,
+                speed: r.f32()?,
+                damage: r.i16()?,
+                side: r.i16()?,
+                origin: r.i16()?,
+                kind: r.i16()?,
+                script: r.i16()?,
+                sound: r.i16()?,
+                init: r.i32()?,
+                update: r.i32()?,
+                draw: r.i32()?,
+                hit: r.i32()?,
             });
             o += ENTRY_SIZE;
             // Port-only guard.
@@ -159,20 +154,21 @@ pub fn parse(b: &[u8]) -> Result<Sht> {
         }
         levels.push(Level { threshold, entries });
     }
+    let mut r = Reader::at(b, 4);
     Ok(Sht {
-        bombs: f(4)?,
-        deathbomb: i(8)?,
-        hitbox: f(0xC)?,
-        graze: f(0x10)?,
-        attract_speed: f(0x14)?,
-        collect: f(0x18)?,
-        poc_line: f(0x1C)?,
-        unknown: i(0x20)?,
-        speed: f(0x24)?,
-        speed_focus: f(0x28)?,
-        diag: f(0x2C)?,
-        diag_focus: f(0x30)?,
-        fall: f(0x34)?,
+        bombs: r.f32()?,
+        deathbomb: r.i32()?,
+        hitbox: r.f32()?,
+        graze: r.f32()?,
+        attract_speed: r.f32()?,
+        collect: r.f32()?,
+        poc_line: r.f32()?,
+        unknown: r.i32()?,
+        speed: r.f32()?,
+        speed_focus: r.f32()?,
+        diag: r.f32()?,
+        diag_focus: r.f32()?,
+        fall: r.f32()?,
         levels,
     })
 }

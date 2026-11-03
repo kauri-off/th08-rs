@@ -1,9 +1,11 @@
 //! .std stage background file parser (06 §1).
 
+use crate::reader::{Reader, Truncated};
+
 #[derive(Debug, thiserror::Error)]
 pub enum StdError {
-    #[error("std: read past end at {0:#x}")]
-    ReadPastEnd(usize),
+    #[error("std: {0}")]
+    Truncated(#[from] Truncated),
     #[error("std: quad record size {size} at {at:#x}")]
     QuadSize { size: usize, at: usize },
     #[error("std: instance of object {0}")]
@@ -63,13 +65,133 @@ pub struct Record {
 
 impl Record {
     pub fn i(&self, k: usize) -> i32 {
-        self.args[k] as i32
+        self.args[k].cast_signed()
     }
     pub fn f(&self, k: usize) -> f32 {
         f32::from_bits(self.args[k])
     }
     pub fn v(&self) -> Vec3 {
         [self.f(0), self.f(1), self.f(2)]
+    }
+}
+
+// Camera vector / fov slot of the interpolation arrays (06 §4, §6): ops 5/7/9 and 6/8/10/12 by (op − 5) / 2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CamSlot {
+    Pos = 0,
+    Facing = 1,
+    Up = 2,
+    Fov = 3,
+}
+
+impl CamSlot {
+    pub fn index(self) -> usize {
+        usize::from(self as u8)
+    }
+
+    const VEC: [Self; 3] = [Self::Pos, Self::Facing, Self::Up];
+}
+
+// One script record decoded by opcode (06 §4 table, `Stage_Calc` switch); args as the original reads them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Op {
+    // 0 set_origin.
+    SetOrigin(Vec3),
+    // 1 fog: current fog and fog target = (colour, near, far).
+    Fog { color: u32, near: f32, far: f32 },
+    // 2 fog_time.
+    FogTime { dur: i32 },
+    // 3 halt until a section request.
+    Halt,
+    // 4 jump: instruction index and script clock.
+    Jump { index: i32, time: i32 },
+    // 5 / 7 / 9 cam_pos / cam_facing / cam_up target.
+    CamTarget { slot: CamSlot, v: Vec3 },
+    // 6 / 8 / 10 / 12 interpolation duration and mode (slot Fov for 12).
+    CamTime { slot: CamSlot, dur: i32, mode: i32 },
+    // 11 fov target.
+    Fov(f32),
+    // 13 clear colour (D3DCOLOR).
+    ClearColor(u32),
+    // 14 / 19 / 24 Hermite start vector of pos / facing / up.
+    CamStart { slot: CamSlot, v: Vec3 },
+    // 15 / 20 / 25 end vector.
+    CamEnd { slot: CamSlot, v: Vec3 },
+    // 16 / 21 / 26 start tangent.
+    CamTan0 { slot: CamSlot, v: Vec3 },
+    // 17 / 22 / 27 end tangent.
+    CamTan1 { slot: CamSlot, v: Vec3 },
+    // 18 / 23 / 28 interpolation with mode 7 (Hermite).
+    CamHermite { slot: CamSlot, dur: i32 },
+    // 29 / 30 / 34 bg_anm on VM A / B / C (`vm` 0 / 1 / 2; op 30's disable quirk is the interpreter's, 06 §4).
+    BgAnm { vm: u8, script: i32 },
+    // 31 section label (no-op when executed, 06 §4.1).
+    Section(i32),
+    // 32 cam_eye_offset.
+    EyeOffset(Vec3),
+    // 33 sway: mode (the interpreter keeps the low byte).
+    Sway { mode: i32 },
+    // Any other opcode: ignored, the index just advances (06 §4).
+    Unknown(i16),
+}
+
+impl Op {
+    pub fn decode(r: &Record) -> Self {
+        let v = r.v();
+        match r.op {
+            0 => Self::SetOrigin(v),
+            1 => Self::Fog {
+                color: r.args[0],
+                near: r.f(1),
+                far: r.f(2),
+            },
+            2 => Self::FogTime { dur: r.i(0) },
+            3 => Self::Halt,
+            4 => Self::Jump {
+                index: r.i(0),
+                time: r.i(1),
+            },
+            5 | 7 | 9 => Self::CamTarget {
+                slot: CamSlot::VEC[usize::from((r.op - 5).cast_unsigned()) / 2],
+                v,
+            },
+            6 | 8 | 10 | 12 => Self::CamTime {
+                slot: [CamSlot::Pos, CamSlot::Facing, CamSlot::Up, CamSlot::Fov]
+                    [usize::from((r.op - 6).cast_unsigned()) / 2],
+                dur: r.i(0),
+                mode: r.i(1),
+            },
+            11 => Self::Fov(r.f(0)),
+            13 => Self::ClearColor(r.args[0]),
+            14..=28 => {
+                let k = usize::from((r.op - 14).cast_unsigned());
+                let slot = CamSlot::VEC[k / 5];
+                match k % 5 {
+                    0 => Self::CamStart { slot, v },
+                    1 => Self::CamEnd { slot, v },
+                    2 => Self::CamTan0 { slot, v },
+                    3 => Self::CamTan1 { slot, v },
+                    _ => Self::CamHermite { slot, dur: r.i(0) },
+                }
+            }
+            29 => Self::BgAnm {
+                vm: 0,
+                script: r.i(0),
+            },
+            30 => Self::BgAnm {
+                vm: 1,
+                script: r.i(0),
+            },
+            34 => Self::BgAnm {
+                vm: 2,
+                script: r.i(0),
+            },
+            31 => Self::Section(r.i(0)),
+            32 => Self::EyeOffset(v),
+            33 => Self::Sway { mode: r.i(0) },
+            op => Self::Unknown(op),
+        }
     }
 }
 
@@ -84,29 +206,13 @@ pub struct Std {
     pub script: Vec<Record>,
 }
 
-fn rd<const N: usize>(b: &[u8], o: usize) -> Result<[u8; N]> {
-    b.get(o..o + N)
-        .and_then(|s| s.try_into().ok())
-        .ok_or(StdError::ReadPastEnd(o))
-}
-fn i16at(b: &[u8], o: usize) -> Result<i16> {
-    Ok(i16::from_le_bytes(rd(b, o)?))
-}
-fn u32at(b: &[u8], o: usize) -> Result<u32> {
-    Ok(u32::from_le_bytes(rd(b, o)?))
-}
-fn f32at(b: &[u8], o: usize) -> Result<f32> {
-    Ok(f32::from_bits(u32at(b, o)?))
-}
-fn v3at(b: &[u8], o: usize) -> Result<Vec3> {
-    Ok([f32at(b, o)?, f32at(b, o + 4)?, f32at(b, o + 8)?])
-}
-
+// 06 §1 header, objects with their quads, instance list and script; the object offsets stay file offsets.
 pub fn parse(b: &[u8]) -> Result<Std> {
-    let nobj = i16at(b, 0)?.max(0) as usize;
-    let quad_count = i16at(b, 2)?.max(0) as usize;
-    let inst_off = u32at(b, 4)? as usize;
-    let script_off = u32at(b, 8)? as usize;
+    let mut h = Reader::new(b);
+    let nobj = usize::from(h.i16()?.max(0).cast_unsigned());
+    let quad_count = usize::from(h.i16()?.max(0).cast_unsigned());
+    let inst_off = h.u32()? as usize;
+    let script_off = h.u32()? as usize;
     let bgm = std::array::from_fn(|k| {
         let s = b
             .get(0x290 + k * 0x80..0x290 + (k + 1) * 0x80)
@@ -117,73 +223,77 @@ pub fn parse(b: &[u8]) -> Result<Std> {
     let mut objects = Vec::with_capacity(nobj);
     let mut vm = 0;
     for k in 0..nobj {
-        let o = u32at(b, 0x490 + k * 4)? as usize;
+        let o = Reader::at(b, 0x490 + k * 4).u32()? as usize;
+        let mut r = Reader::at(b, o);
         let mut obj = Object {
-            id: i16at(b, o)?,
-            layer: rd::<1>(b, o + 2)?[0],
+            id: r.i16()?,
+            layer: r.u8()?,
             flags: 0,
-            pos: v3at(b, o + 4)?,
-            size: v3at(b, o + 0x10)?,
+            pos: r.skip(1).vec3()?,
+            size: r.vec3()?,
             quads: Vec::new(),
         };
         let mut q = o + 0x1C;
         loop {
-            let ty = i16at(b, q)?;
+            let mut r = Reader::at(b, q);
+            let ty = r.i16()?;
             if ty < 0 {
                 break;
             }
-            let size = i16at(b, q + 2)? as usize;
+            let size = r.i16()?;
             if size < 4 {
-                return Err(StdError::QuadSize { size, at: q });
+                return Err(StdError::QuadSize {
+                    size: usize::from(size.cast_unsigned()),
+                    at: q,
+                });
             }
+            let size = usize::from(size.cast_unsigned());
+            // 06 §2: the original does not filter, but shipped files have only types 0 and 1.
+            if !matches!(ty, 0 | 1) {
+                q += size;
+                continue;
+            }
+            let script = r.i16()?;
+            r.skip(2);
             let kind = match ty {
                 0 => QuadKind::Sprite {
-                    pos: v3at(b, q + 8)?,
-                    w: f32at(b, q + 0x14)?,
-                    h: f32at(b, q + 0x18)?,
+                    pos: r.vec3()?,
+                    w: r.f32()?,
+                    h: r.f32()?,
                 },
-                1 => QuadKind::Ribbon {
-                    a: v3at(b, q + 8)?,
-                    b: v3at(b, q + 0x14)?,
-                    w: f32at(b, q + 0x20)?,
+                _ => QuadKind::Ribbon {
+                    a: r.vec3()?,
+                    b: r.vec3()?,
+                    w: r.f32()?,
                 },
-                // 06 §2: the original does not filter, but shipped files have only types 0 and 1.
-                _ => {
-                    q += size;
-                    continue;
-                }
             };
-            obj.quads.push(Quad {
-                script: i16at(b, q + 4)?,
-                vm,
-                kind,
-            });
+            obj.quads.push(Quad { script, vm, kind });
             vm += 1;
             q += size;
         }
         objects.push(obj);
     }
     let mut instances = Vec::new();
-    let mut o = inst_off;
+    let mut r = Reader::at(b, inst_off);
     loop {
-        let idx = i16at(b, o)?;
+        let idx = r.i16()?;
         if idx < 0 {
             break;
         }
-        if idx as usize >= objects.len() {
+        let object = usize::from(idx.cast_unsigned());
+        if object >= objects.len() {
             return Err(StdError::Instance(idx));
         }
         instances.push(Instance {
-            object: idx as usize,
-            pos: v3at(b, o + 4)?,
+            object,
+            pos: r.skip(2).vec3()?,
         });
-        o += 16;
     }
     let mut script = Vec::new();
-    let mut o = script_off;
+    let mut r = Reader::at(b, script_off);
     loop {
-        let time = u32at(b, o)? as i32;
-        let op = i16at(b, o + 4)?;
+        let time = r.i32()?;
+        let op = r.i16()?;
         if time == -1 {
             script.push(Record {
                 time,
@@ -195,9 +305,8 @@ pub fn parse(b: &[u8]) -> Result<Std> {
         script.push(Record {
             time,
             op,
-            args: [u32at(b, o + 8)?, u32at(b, o + 12)?, u32at(b, o + 16)?],
+            args: [r.skip(2).u32()?, r.u32()?, r.u32()?],
         });
-        o += 20;
     }
     Ok(Std {
         // Port-only guard against a header count below the quads found.
@@ -225,7 +334,7 @@ mod tests {
             let s = parse(&b).unwrap_or_else(|e| panic!("{n}: {e}"));
             assert_eq!(
                 s.quad_count,
-                i16::from_le_bytes([b[2], b[3]]) as usize,
+                usize::from(u16::from_le_bytes([b[2], b[3]])),
                 "{n}"
             );
             for q in s.objects.iter().flat_map(|o| &o.quads) {
@@ -235,13 +344,46 @@ mod tests {
                 }
             }
             for r in &s.script {
-                if r.op == 4 {
-                    assert!((r.i(0) as usize) < s.script.len(), "{n}: jump");
+                if let Op::Jump { index, .. } = Op::decode(r) {
+                    assert!(
+                        usize::try_from(index).unwrap() < s.script.len(),
+                        "{n}: jump"
+                    );
                 }
             }
             files += 1;
         }
         assert_eq!(files, 18);
         assert_eq!((sprites, ribbons), (384, 168));
+        // 06 §4 "count" column: uses of each opcode in the 18 files, terminators excluded.
+        let want = [
+            (0, 18),
+            (1, 52),
+            (2, 25),
+            (4, 35),
+            (5, 213),
+            (6, 95),
+            (7, 53),
+            (8, 19),
+            (9, 26),
+            (11, 18),
+            (13, 11),
+            (29, 24),
+            (31, 17),
+            (32, 10),
+            (33, 18),
+            (34, 7),
+        ];
+        let mut got = std::collections::BTreeMap::new();
+        for n in ar.names().iter().filter(|n| n.ends_with(".std")) {
+            for r in parse(&ar.read(n).unwrap()).unwrap().script {
+                if r.time == -1 {
+                    continue;
+                }
+                assert!(!matches!(Op::decode(&r), Op::Unknown(_)), "{n}: {r:?}");
+                *got.entry(r.op).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(got.into_iter().collect::<Vec<_>>(), want);
     }
 }

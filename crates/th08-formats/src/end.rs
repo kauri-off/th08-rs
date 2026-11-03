@@ -53,7 +53,7 @@ impl Script {
         while self.byte(p).is_ascii_digit() {
             v = v
                 .wrapping_mul(10)
-                .wrapping_add((self.byte(p) - b'0') as i32);
+                .wrapping_add(i32::from(self.byte(p) - b'0'));
             p += 1;
         }
         self.ip = p;
