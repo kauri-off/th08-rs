@@ -723,7 +723,8 @@ impl Gfx {
     }
 
     // Before each submit: a lost device is replaced (native); web keeps the dead one and logs (no blocking there).
-    fn recover_if_lost(&mut self) {
+    // Callers presenting on their own (launcher) call it first, then compare `generation`.
+    pub fn recover_if_lost(&mut self) {
         if !self.lost.load(Ordering::Acquire) {
             return;
         }
@@ -800,7 +801,7 @@ impl Gfx {
                         size,
                     } => {
                         if let Some(Some(a)) = self.textures.get(src.index()) {
-                            copy_region(&mut enc, &a.tex, from, &dst.tex, to, size);
+                            copy_region(&self.device, &mut enc, &a.tex, from, &dst.tex, to, size);
                         }
                     }
                 }
@@ -1070,7 +1071,7 @@ impl Gfx {
         // No K record: the original's texture-to-texture copy (D3DXLoadSurfaceFromSurface) makes no device call
         // (specs/data/drawlog/FORMAT.md §3 K).
         let mut enc = encoder(&self.device);
-        copy_region(&mut enc, &a.tex, from, &b.tex, to, [w, h]);
+        copy_region(&self.device, &mut enc, &a.tex, from, &b.tex, to, [w, h]);
         self.queue.submit([enc.finish()]);
         self.push_edit(
             dst,
@@ -1469,6 +1470,11 @@ impl Gfx {
 
     fn do_present(&mut self) {
         self.present_frame();
+        self.presented();
+    }
+
+    // Counts a Present for the TH08_DEVICE_LOSS hook; the launcher, which presents outside `Gfx`, calls it too.
+    pub fn presented(&mut self) {
         self.presents += 1;
         if self.loss_at == Some(self.presents) {
             self.force_device_loss();
@@ -1527,6 +1533,7 @@ impl Gfx {
         paint(t, &mut enc);
         self.queue.submit([enc.finish()]);
         self.queue.present(frame);
+        self.presented();
         true
     }
 
@@ -1924,8 +1931,11 @@ fn write_region(
     );
 }
 
-// Texel rect copy `src`@`from` → `dst`@`to`, already clipped to both textures.
+// Texel rect copy `src`@`from` → `dst`@`to`, already clipped to both textures. wgpu rejects a copy within one
+// texture, so `src == dst` (e.g. two sprites of one ANM texture) goes through a scratch texture: the whole source
+// rect is read before any destination texel is written.
 fn copy_region(
+    device: &wgpu::Device,
     enc: &mut wgpu::CommandEncoder,
     src: &wgpu::Texture,
     from: [u32; 2],
@@ -1943,7 +1953,23 @@ fn copy_region(
         },
         aspect: wgpu::TextureAspect::All,
     };
-    enc.copy_texture_to_texture(info(src, from), info(dst, to), extent(size[0], size[1]));
+    let ext = extent(size[0], size[1]);
+    if src != dst {
+        enc.copy_texture_to_texture(info(src, from), info(dst, to), ext);
+        return;
+    }
+    let scratch = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("self-copy scratch"),
+        size: ext,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: src.format(),
+        usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    enc.copy_texture_to_texture(info(src, from), info(&scratch, [0, 0]), ext);
+    enc.copy_texture_to_texture(info(&scratch, [0, 0]), info(dst, to), ext);
 }
 
 #[cfg(test)]
@@ -1983,6 +2009,37 @@ mod tests {
         let after = frame(&mut gfx, &mut rec, tex);
         assert_eq!(gfx.generation(), 1);
         assert!(before == after, "rebuilt frame differs");
+    }
+
+    #[test]
+    fn copy_within_one_texture() {
+        let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
+            eprintln!("no GPU adapter; skipped");
+            return;
+        };
+        let mut rec = Recorder::new();
+        let base: Vec<u8> = (0..8 * 8 * 4).map(|i: u32| (i * 13 % 247) as u8).collect();
+        let mut want = base.clone();
+        for y in 0..3 {
+            for x in 0..4 {
+                let s = ((y + 1) * 8 + x) * 4;
+                let d = ((y + 5) * 8 + x + 3) * 4;
+                want.copy_within(s..s + 4, d);
+            }
+        }
+        let tex = rec.create_texture(8, 8, &base);
+        rec.copy_texture(tex, [0, 1], tex, [3, 5], [4, 3]);
+        let reference = rec.create_texture(8, 8, &want);
+        let got = frame(&mut gfx, &mut rec, tex);
+        assert!(
+            got == frame(&mut gfx, &mut rec, reference),
+            "self-copy differs"
+        );
+        gfx.force_device_loss();
+        assert!(
+            got == frame(&mut gfx, &mut rec, tex),
+            "rebuilt self-copy differs"
+        );
     }
 
     #[test]

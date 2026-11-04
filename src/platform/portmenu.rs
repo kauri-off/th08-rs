@@ -2,7 +2,7 @@
 //! last frame (`Gfx::present_last`), dimmed. Port-only UI, no spec section.
 
 use crate::i18n::{self, Lang};
-use crate::launcher::Action;
+use crate::launcher::{self, Action};
 use egui::{Align2, Color32, Id, LayerId, Order, RichText};
 use th08_render::gfx::{Gfx, OverlayTarget, SafeArea};
 use winit::event::WindowEvent;
@@ -18,6 +18,8 @@ pub struct PortMenu {
     // When egui wants the next repaint.
     pub repaint_at: Option<web_time::Instant>,
     lang: Lang,
+    // `Gfx::generation` of the first paint; a change means the renderer is dead (device rebuilt).
+    generation: Option<u32>,
 }
 
 // The launcher's 640×480 layout scale for a window's safe rect (launcher.rs `zoom`).
@@ -46,9 +48,10 @@ impl PortMenu {
             ctx,
             state,
             renderer: None,
-            pending: Default::default(),
+            pending: egui::TexturesDelta::default(),
             repaint_at: None,
             lang,
+            generation: None,
         }
     }
 
@@ -90,8 +93,14 @@ impl PortMenu {
         self.pending.append(std::mem::take(&mut out.textures_delta));
         let jobs = self.ctx.tessellate(out.shapes, out.pixels_per_point);
         let ppp = out.pixels_per_point;
+        gfx.recover_if_lost();
+        if self.generation.is_some_and(|g| g != gfx.generation()) {
+            self.renderer = None;
+            launcher::resend_atlas(&self.ctx, &mut self.pending);
+        }
+        self.generation = Some(gfx.generation());
         let (renderer, pending) = (&mut self.renderer, &mut self.pending);
-        let shown = gfx.present_last(|t, enc| paint(renderer, pending, &jobs, ppp, t, enc));
+        let shown = gfx.present_last(|t, enc| paint(renderer, pending, &jobs, ppp, &t, enc));
         if !shown {
             window.request_redraw();
         }
@@ -137,7 +146,7 @@ fn paint(
     pending: &mut egui::TexturesDelta,
     jobs: &[egui::ClippedPrimitive],
     ppp: f32,
-    t: OverlayTarget<'_>,
+    t: &OverlayTarget<'_>,
     enc: &mut wgpu::CommandEncoder,
 ) {
     if renderer.as_ref().is_none_or(|(f, _)| *f != t.format) {

@@ -124,7 +124,7 @@ w=$(cargo build --release --workspace 2>&1 | grep -cE '^(warning|error)')
 [[ $w == 0 ]] && echo "build ok, 0 warnings" || { echo "build: $w warnings/errors"; fail=1; }
 # Clippy wall (STEP11 11o): every target with the [workspace.lints] subset, any warning fails. CLIPPY_PENDING lists files
 # of a run still open (DEVLOSS2): their warnings are counted, not failed; empty = `cargo clippy … -- -D warnings`.
-CLIPPY_PENDING=${CLIPPY_PENDING-src/launcher.rs src/platform/overlay.rs src/platform/portmenu.rs}
+CLIPPY_PENDING=${CLIPPY_PENDING-}
 if [[ -z $CLIPPY_PENDING ]]; then
   cargo clippy -q --workspace --all-targets -- -D warnings > /dev/null 2>&1 && echo "clippy ok, 0 warnings" || { echo "clippy FAILED"; fail=1; }
 elif cl=$("$ROOT/tools/lint_subset" 2>&1); then

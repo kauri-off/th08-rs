@@ -32,10 +32,12 @@ fn pos(p: [f32; 2]) -> Pos2 {
 }
 
 // White / accent with alpha `a` (0–1).
+#[expect(clippy::cast_sign_loss, reason = "alpha is clamped to 0–1 first")]
 fn white(a: f32) -> Color32 {
     Color32::from_white_alpha((a.clamp(0.0, 1.0) * 255.0) as u8)
 }
 
+#[expect(clippy::cast_sign_loss, reason = "alpha is clamped to 0–1 first")]
 fn accent(a: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(255, 120, 160, (a.clamp(0.0, 1.0) * 255.0) as u8)
 }
@@ -144,5 +146,10 @@ impl Overlay for TouchOverlay {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    // The renderer belonged to the lost device; the next paint makes a new one and a fresh context.
+    fn device_rebuilt(&mut self) {
+        self.renderer = None;
     }
 }

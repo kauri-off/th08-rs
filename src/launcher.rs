@@ -814,6 +814,10 @@ fn origin_label(ui: &mut egui::Ui, r: &Row, lang: Lang) {
 }
 
 // Size (px) of the safe rect of a w×h window.
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "the safe rect is inside the window, so its size is non-negative"
+)]
 fn safe_size(safe: SafeArea, (w, h): (u32, u32)) -> (u32, u32) {
     let [_, _, sw, sh] = safe.rect(w, h);
     (sw as u32, sh as u32)
@@ -841,6 +845,8 @@ struct Painter {
     model: Model,
     ctx: egui::Context,
     renderer: egui_wgpu::Renderer,
+    // `Gfx::generation` the renderer was made on.
+    generation: u32,
     // Texture updates not yet uploaded (a pass whose frame was skipped keeps them for the next paint).
     pending: egui::TexturesDelta,
 }
@@ -907,24 +913,51 @@ impl Screen {
             .map_or(std::time::Duration::MAX, |v| v.repaint_delay);
         self.repaint_at =
             (delay < std::time::Duration::from_secs(5)).then(|| web_time::Instant::now() + delay);
+        gfx.recover_if_lost();
+        if self.p.generation != gfx.generation() {
+            self.p.renew(gfx);
+        }
         let Some(surface) = &gfx.surface else {
             return act;
         };
-        let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            _ => {
-                gfx.reconfigure();
-                window.request_redraw();
-                return act;
-            }
+        let (wgpu::CurrentSurfaceTexture::Success(frame)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = surface.get_current_texture()
+        else {
+            gfx.reconfigure();
+            window.request_redraw();
+            return act;
         };
-        let view = frame.texture.create_view(&Default::default());
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let enc = self.p.paint(gfx, out, &view, (w, h));
         gfx.queue.submit([enc.finish()]);
         gfx.queue.present(frame);
+        gfx.presented();
         act
     }
+}
+
+fn atlas_image(f: &egui::epaint::text::FontsView<'_>) -> egui::ColorImage {
+    f.image()
+}
+
+// After a device rebuild the egui renderer is dead and the new one has no font atlas: queue the whole current
+// atlas in place of its owed partial updates (other texture ids are dropped with the old renderer).
+pub fn resend_atlas(ctx: &egui::Context, pending: &mut egui::TexturesDelta) {
+    let font = egui::TextureId::default();
+    let options = ctx
+        .tex_manager()
+        .read()
+        .meta(font)
+        .map(|m| m.options)
+        .unwrap_or_default();
+    let image = ctx.fonts(atlas_image);
+    pending.free.clear();
+    pending.set.insert(
+        font,
+        [egui::epaint::ImageDelta::full(image, options)].into(),
+    );
 }
 
 impl Painter {
@@ -942,8 +975,20 @@ impl Painter {
             model,
             ctx,
             renderer,
+            generation: gfx.generation(),
             pending: egui::TexturesDelta::default(),
         }
+    }
+
+    // A new renderer on the rebuilt device (`Gfx::rebuild`), with the font atlas sent again.
+    fn renew(&mut self, gfx: &Gfx) {
+        self.renderer = egui_wgpu::Renderer::new(
+            &gfx.device,
+            gfx.surface_format(),
+            egui_wgpu::RendererOptions::default(),
+        );
+        self.generation = gfx.generation();
+        resend_atlas(&self.ctx, &mut self.pending);
     }
 
     fn pass(&mut self, raw: egui::RawInput) -> (egui::FullOutput, Option<Action>) {
@@ -979,7 +1024,9 @@ impl Painter {
                 self.renderer.update_texture(&gfx.device, &gfx.queue, id, d);
             }
         }
-        let mut enc = gfx.device.create_command_encoder(&Default::default());
+        let mut enc = gfx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let extra = self
             .renderer
             .update_buffers(&gfx.device, &gfx.queue, &mut enc, &jobs, &desc);
@@ -1034,7 +1081,7 @@ pub fn render_image(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let view = tex.create_view(&Default::default());
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     let ppp = zoom(safe_size(safe, (w, h)));
     let mut enc = None;
     for i in 0..4 {
@@ -1043,7 +1090,7 @@ pub fn render_image(
                 egui::Pos2::ZERO,
                 egui::vec2(w as f32 / ppp, h as f32 / ppp),
             )),
-            time: Some(i as f64 / 60.0),
+            time: Some(f64::from(i) / 60.0),
             safe_area_insets: Some(insets(safe, ppp)),
             ..Default::default()
         };
