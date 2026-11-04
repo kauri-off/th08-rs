@@ -53,7 +53,7 @@ impl DataSource for DirSource {
     }
 }
 
-// Android: th08.dat / thbgm.dat bundled as stored (uncompressed) APK assets (ARCH_D §2.1). Each entry is opened once
+// Android: th08.dat / thbgm.dat (or th08.pak / thbgm.pak, ASSETS_FORMAT §3.5) bundled as stored (uncompressed) APK assets (ARCH_D §2.1). Each entry is opened once
 // as `(fd, start, len)` through `AAsset_openFileDescriptor64`; reads are `pread(fd, start + off)`, so the 450 MB
 // thbgm.dat is never read whole.
 #[cfg(target_os = "android")]
@@ -72,20 +72,18 @@ struct ApkEntry {
 
 #[cfg(target_os = "android")]
 impl ApkAssetSource {
-    // The APK's root `assets/` as a source, or None when it holds no th08.dat (APK without bundled data).
+    // The APK's root `assets/` as a source, or None when it holds neither th08.pak nor th08.dat (no bundled data);
+    // `Content::load` / `BgmSource::resolve` then prefer the packs.
     pub fn new(mgr: winit::platform::android::activity::ndk::asset::AssetManager) -> Option<Self> {
         let names: Vec<String> = mgr
             .open_dir(c"")?
             .map(|n| n.to_string_lossy().into_owned())
             .collect();
-        names
-            .iter()
-            .any(|n| n.eq_ignore_ascii_case("th08.dat"))
-            .then(|| ApkAssetSource {
-                mgr,
-                names,
-                open: Default::default(),
-            })
+        th08_core::content::has_content(&names).then(|| ApkAssetSource {
+            mgr,
+            names,
+            open: Default::default(),
+        })
     }
 
     pub fn names_list(&self) -> &[String] {
@@ -107,7 +105,7 @@ impl ApkAssetSource {
             .mgr
             .open(&c)
             .ok_or_else(|| anyhow::anyhow!("cannot open APK asset {real}"))?;
-        // Fails for a compressed entry: build_apk.sh stores .dat files (`aapt2 -0 .dat`).
+        // Fails for a compressed entry: Gradle stores .dat / .pak assets (`noCompress`).
         let fd = asset
             .open_file_descriptor()
             .map_err(|e| anyhow::anyhow!("APK asset {real} is not stored uncompressed: {e}"))?;

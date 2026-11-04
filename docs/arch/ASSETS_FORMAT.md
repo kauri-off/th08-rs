@@ -311,7 +311,7 @@ matter. Raw `th08.dat` / `thbgm.dat` stay supported side by side: the user's gam
 |---|---|---|---|
 | **AS1** pack format + repack — **DONE 2026-11-04** (see "AS1 result" below) | (1) `th08-formats::pack` reader/writer (header, manifest, zstd frames via ruzstd decode / zstd encode behind a tool-only feature) with unit tests; (2) `repack` bin: th08.pak from th08.dat + self-verify; (3) vanilla Logic sha256 table + `Content::{Archive, Pack}` under `LogicView::new`, fingerprint rule | formats/pack.rs (new), tools/bin/repack.rs (new), core/content.rs, game.rs:284 (one line) | **after 11p** (11p owns drawlist/anmmgr/game load paths and refreshes the D reference). Check T D on the normal set + the new pack item (identical) |
 | **AS2** BGM pack — **DONE 2026-11-04** (see "AS2 result" below) | (1) thbgm.pak writer in `repack` (padded encode, Vorbis q4, header + loop table, self-check of lag/seam/length); (2) `BgmSource { Raw, Vorbis }` in th08-audio, lewton decode cut to `loop_end`, header probe answered from the pack; (3) samples as `[i16; 2]` | tools/bin/repack.rs, audio.rs, game.rs:296 (probe via source) | after AS1; ∥ the Android runs that do not touch audio.rs. Check T D identical (pack item); bgmcheck metrics in the repack self-check |
-| **AS3** packaging | (1) build_apk.sh / Gradle `GameData` + `noCompress "pak"`, prefer `.pak`, launcher folder check accepts `.pak`; (2) AppImage / NSIS staging use the packs; (3) progressive BGM decode (growing buffer, first ring first) | tools/android/*, android/app/build.gradle.kts, packaging scripts, src/sources.rs / launcher folder check, audio.rs | after AS2; Android emulator only (headless, `adb -s emulator-NNNN`): install, start, title BGM starts (logcat "bgm" timing), APK size recorded |
+| **AS3** packaging — **DONE 2026-11-04** (see "AS3 result" below) | (1) build_apk.sh / Gradle `GameData` + `noCompress "pak"`, prefer `.pak`, launcher folder check accepts `.pak`; (2) AppImage / NSIS staging use the packs; (3) progressive BGM decode (growing buffer, first ring first) | tools/android/*, android/app/build.gradle.kts, packaging scripts, src/sources.rs / launcher folder check, audio.rs | after AS2; Android emulator only (headless, `adb -s emulator-NNNN`): install, start, title BGM starts (logcat "bgm" timing), APK size recorded |
 
 Ordering against step 11: the plan only needs `LogicView` / `PresentView` (already in place) and the one-line load
 in `game.rs:284`. It does not depend on 11p's image work, but it touches `game.rs` and `audio.rs`, which 11j/11o
@@ -411,3 +411,57 @@ splice 8× wider) also fails on content (th08_07, th08_19, th08_20). Seam SNR an
 report. (2) No lpSNR (it was only a diagnostic in §2.1). (3) Vorbis is not decoded inside `th08-formats`:
 `Pack::read` on a Vorbis frame returns a `Decode` error, and the audio crate decodes. (4) BGM decode is still
 synchronous per play command on the loader thread (progressive decode is AS3).
+
+### AS3 result (2026-11-04)
+
+**Files.** `xtask/src/assets.rs` (`--assets packed`: repack cached in `<target>/pack/` with `dist.stamp`),
+`xtask/src/util.rs` (`personal_target`, `TH08_TARGET`), `xtask/src/android.rs` (packed allowed),
+`android/app/build.gradle.kts` (`gameFiles` prefers the `.pak` pair, `noCompress += listOf("dat", "pak")`),
+`LauncherActivity.kt` (`checkData`: th08.pak or th08.dat, two lines), `tools/android/build_apk.sh` (`--packed DIR`),
+`tools/android/run_debug.sh` (`PACKED=DIR`), `crates/th08-core/src/content.rs` (`CONTENT_PACK`, `CONTENT_FILES`,
+`has_content`), `src/launcher.rs` (`is_game_dir` / `folder_ok` accept th08.pak; test `pack_folder_is_game_dir`),
+`src/sources.rs` (`ApkAssetSource::new` accepts th08.pak), `crates/th08-audio/src/bgm.rs` (`Pcm`, `PcmWriter`,
+`BgmSource::stream`, `decode_vorbis_into`), `audio.rs` (`Music` over `Arc<Pcm>`, progressive `play_wav`).
+
+**Packed staging.** `cargo xtask dist --target T --assets packed [--data DIR]` runs `repack` into
+`<target>/pack/.dist-tmp`, renames `th08.pak` / `thbgm.pak` into `<target>/pack/` (so links like `pack/game_bgm/`
+stay valid) and writes `dist.stamp` = path, size, mtime of th08.dat / thbgm.dat + sha256 of `repack.rs`,
+`formats/pack.rs`, `audio/bgm.rs`. A matching stamp reuses the packs ("reusing … (dist.stamp matches)"). AppImage
+(`usr/share/th08/game/`), windows-exe (`game/`), NSIS (`game\`) and Android (Gradle `GameData` assets) stage the two
+packs through the same `Game::copy_to` / `-Pth08.data` paths as raw. The rebuilt packs are byte-identical to AS1/AS2
+(th08.pak `409152e9…`, thbgm.pak `6d575df2…`). `--assets none` is untouched: `prepare` still returns `None` before
+any game-data code, and Gradle without `th08.data` gets no assets.
+
+**Progressive BGM.** `Pcm` = the track's `[0, loop_end)` frames in 11025-frame blocks (one ring chunk, 02 §3), each a
+`OnceLock`, published in order by one `PcmWriter`; the mixer reads without locks, and a block not decoded yet reads
+as silence and sets `underrun` (logged by the loader at the end). `play_wav` creates the `Music` (fill stage
+unchanged) as soon as the first ring (16 blocks = 4.0 s, or the whole shorter track) is published, then keeps
+appending. Decoding stops when the generation changes before the start, or when the Music's `Arc` is dropped (new
+play / release). Raw thbgm.dat reads the first ring by range, then 1 MiB ranges. Loop points, `track_frame`, ring
+and stop/unpause logic are unchanged (ring tests pass on `Pcm`). New unit tests: `pcm_writer_blocks_cut_and_pad`,
+`pcm_writer_stops`. repack's read-back (all 21 tracks through `BgmSource::read` → `stream`) = checked decode.
+
+**Sizes (personal, `/home/anon/Projects/th_08/target/dist/`).**
+
+| package | bytes | raw-assets build |
+|---|---|---|
+| android-apk arm64-v8a, `-assets-packed.apk` | 83 051 153 (79.2 MiB) | 511 471 881 |
+| android-apk arm64-v8a + x86_64 (emulator test) | 99 196 649 (94.6 MiB) | — |
+| linux-appimage `-assets-packed.AppImage` | 76 503 544 (73.0 MiB) | — |
+| windows-nsis `-assets-packed.exe` | 75 961 805 (72.4 MiB) | — |
+
+APK entries `assets/th08.pak` / `assets/thbgm.pak` are Stored (unzip -v).
+
+**Emulator (headless th08dbg, `adb -s emulator-5584`, x86_64, SwiftShader).** Release APK (keystore via xtask)
+installed and started; Compose launcher shows "Game data: Included in this app"; Play → logcat `game files bundled in
+the APK: ["settings_schema.json", "th08.pak", "thbgm.pak"]`, `APK asset th08.pak … thbgm.pak` opened as fds. **BGM
+start latency** (play command → Music playing): title `th08_01.wav: first 176400 frames after 7.4 ms`, whole track
+after 190.1 ms; demo `th08_11.wav`: 12.0 ms vs 541.9 ms for the whole track. No underrun logged. The title and
+then the stage 5 demo ran.
+
+**Deviations.** (1) `TH08_TARGET` (env) names another checkout's `target/` (must be named `target` next to a
+Cargo.toml) for dist outputs, the pack cache and the game-data guard, so a worktree build writes to the main
+checkout's target/. (2) The cache lives directly in `target/pack/` (not `target/dist/packs/<name>`), shared by all
+targets. (3) Desktop BGM latency not measured in the game window: there is no mute switch and the run would open the
+real audio device; desktop uses the same code path. (4) Messages / i18n strings still say "th08.dat" (L2 owns
+i18n). (5) wasm keeps decoding on the page's thread (spawn_local, as before), now with the ring published first.

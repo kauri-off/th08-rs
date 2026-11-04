@@ -17,6 +17,8 @@ hound = "3.5.1"
 # thbgm.pak tracks (bgm.rs): pure-Rust Ogg Vorbis decode on every target.
 lewton = "0.10"
 log = "0.4.34"
+# bgm decode timing (audio.rs play_wav); std Instant panics on wasm32.
+web-time = "1.1.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1.0.1"

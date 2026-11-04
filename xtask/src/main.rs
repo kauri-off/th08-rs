@@ -116,6 +116,7 @@ fn dist(a: &DistArgs) -> Result<()> {
     {
         bail!("--abi / --keystore / --debug-key are only for --target android-apk");
     }
+    util::check_personal_target()?;
     let local = util::LocalEnv::load()?;
     let suffix = match a.assets {
         Assets::None => "",

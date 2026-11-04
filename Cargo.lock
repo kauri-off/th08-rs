@@ -3149,6 +3149,7 @@ dependencies = [
  "th08-core",
  "th08-formats",
  "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]

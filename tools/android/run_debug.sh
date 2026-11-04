@@ -2,14 +2,16 @@
 # usage: tools/android/run_debug.sh [build|emulator|install|run|shot|stop|all]...  (default: build)
 # Debug APK (ARCH_D_MOBILE §6.3 run 1, §6.4): the Gradle debug variant of android/ (Compose launcher + NativeActivity
 # game) for arm64-v8a + x86_64, signed with the throwaway key in target/android/; release builds: cargo xtask dist.
-#   build     cargo xtask dist --variant debug → target/android/th08-debug.apk (DATA=DIR bundles game data)
+#   build     cargo xtask dist --variant debug → target/android/th08-debug.apk (DATA=DIR bundles th08.dat +
+#             thbgm.dat, PACKED=DIR the repacked th08.pak + thbgm.pak)
 #   emulator  start a headless emulator (own AVD th08dbg, no window, no audio) and wait for boot
 #   install   adb install on the emulator only (EMU_SERIAL, never a physical device)
 #   run       start the Compose launcher, wait, dump logcat to target/android/logcat.txt
 #   shot      adb exec-out screencap → target/android/screen.png
 #   stop      kill the emulator
 # Env: ANDROID_SDK (default ~/.local/share/android-sdk/Sdk), ANDROID_API (min SDK / NDK clang API, default 26),
-#      EMU_PORT (default 5584), PROFILE (release|dev, default release), TARGETS (default "aarch64 x86_64"), DATA.
+#      EMU_PORT (default 5584), PROFILE (release|dev, default release), TARGETS (default "aarch64 x86_64"), DATA,
+#      PACKED.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 SDK=${ANDROID_SDK:-$HOME/.local/share/android-sdk/Sdk}
@@ -29,7 +31,7 @@ build() {
   local abis=() a
   for a in $TARGETS; do abis+=(--abi "$(abi_of "$a")"); done
   cargo xtask dist --target android-apk --variant debug --debug-key "${abis[@]}" \
-    ${DATA:+--assets raw --data "$DATA"} --out "$OUT/th08-debug.apk"
+    ${DATA:+--assets raw --data "$DATA"} ${PACKED:+--assets packed --data "$PACKED"} --out "$OUT/th08-debug.apk"
 }
 
 emu_adb() { "$ADB" -s "$EMU_SERIAL" "$@"; }

@@ -14,9 +14,31 @@ pub fn root() -> PathBuf {
         .to_path_buf()
 }
 
-// Always <repo>/target/dist, even with CARGO_TARGET_DIR set: the target/ guard is about the repo's own target/.
+// Personal outputs root: <repo>/target, even with CARGO_TARGET_DIR set (the guard is about the repo's own target/).
+// TH08_TARGET may name another checkout's target/ (a git worktree writing to the main checkout's target/).
+pub fn personal_target() -> PathBuf {
+    std::env::var_os("TH08_TARGET")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| root().join("target"), |p| absolute(Path::new(&p)))
+}
+
+// TH08_TARGET must be some repo's target/: named `target`, next to a Cargo.toml.
+pub fn check_personal_target() -> Result<()> {
+    let t = personal_target();
+    if t.file_name().is_some_and(|n| n == "target")
+        && t.parent().is_some_and(|p| p.join("Cargo.toml").is_file())
+    {
+        Ok(())
+    } else {
+        bail!(
+            "TH08_TARGET {} is not a checkout's target/ dir",
+            t.display()
+        )
+    }
+}
+
 pub fn dist_dir() -> PathBuf {
-    root().join("target/dist")
+    personal_target().join("dist")
 }
 
 // cargo's output dir (CARGO_TARGET_DIR or <repo>/target).
@@ -62,9 +84,9 @@ pub fn absolute(p: &Path) -> PathBuf {
     real
 }
 
-// Builds with game data write only under <repo>/target/.
+// Builds with game data write only under <repo>/target/ (or TH08_TARGET).
 pub fn inside_target(p: &Path) -> Result<()> {
-    let t = absolute(&root().join("target"));
+    let t = absolute(&personal_target());
     let p = absolute(p);
     if p.starts_with(&t) && p != t {
         Ok(())

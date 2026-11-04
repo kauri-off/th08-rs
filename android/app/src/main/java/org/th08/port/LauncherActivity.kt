@@ -66,10 +66,10 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
 
     // Bundled assets win, as in android_main; else <external files>/game (adb push target).
     private fun checkData(): GameData {
-        if (assets.list("")?.contains("th08.dat") == true) return GameData.Bundled
+        if (assets.list("")?.any { it == "th08.pak" || it == "th08.dat" } == true) return GameData.Bundled
         val dir = getExternalFilesDir(null)?.let { File(it, "game") } ?: return GameData.Unavailable
         dir.mkdirs()
-        val found = dir.listFiles()?.any { it.isFile && it.name.equals("th08.dat", ignoreCase = true) } == true
+        val found = dir.listFiles()?.any { f -> f.isFile && listOf("th08.pak", "th08.dat").any { f.name.equals(it, ignoreCase = true) } } == true
         return GameData.Folder(dir, found)
     }
 

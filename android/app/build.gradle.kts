@@ -1,6 +1,7 @@
 // th08 APK: Compose launcher (LauncherActivity) + NativeActivity game in the ":game" process.
 // Inputs as -P properties (`cargo xtask dist --target android-apk` sets them, xtask/src/android.rs):
-//   th08.abis       comma list, arm64-v8a (default) / x86_64     th08.data      folder with th08.dat + thbgm.dat
+//   th08.abis       comma list, arm64-v8a (default) / x86_64     th08.data      folder with th08.pak + thbgm.pak
+//                                                                                (preferred) or th08.dat + thbgm.dat
 //   th08.keystore   keystore.properties for release signing       th08.debugKey  debug keystore (default
 //                   (storeFile relative to the file)                             target/android/debug.keystore)
 //   th08.versionCode (1)   th08.minSdk (26)   th08.profile (cargo profile, release)
@@ -66,8 +67,8 @@ abstract class SettingsSchema : DefaultTask() {
     }
 }
 
-// Optional bundled game data: th08.dat / thbgm.dat (any letter case) copied as lowercase assets; the source folder
-// is only read. Up to date while the two files are unchanged.
+// Optional bundled game data: th08.pak / thbgm.pak (repack, ASSETS_FORMAT §3.5) or th08.dat / thbgm.dat (any letter
+// case) copied as lowercase assets; the source folder is only read. Up to date while the two files are unchanged.
 abstract class GameData : DefaultTask() {
     @get:InputFiles abstract val files: ConfigurableFileCollection
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
@@ -81,12 +82,13 @@ abstract class GameData : DefaultTask() {
     }
 }
 
+// The pack pair when the folder has both packs, else the raw pair.
 fun gameFiles(dir: String?): List<File> {
     dir ?: return emptyList()
-    return listOf("th08.dat", "thbgm.dat").map { name ->
-        File(dir).listFiles()?.firstOrNull { it.isFile && it.name.equals(name, ignoreCase = true) }
-            ?: throw GradleException("no $name in $dir")
-    }
+    fun find(name: String) = File(dir).listFiles()?.firstOrNull { it.isFile && it.name.equals(name, ignoreCase = true) }
+    val packs = listOf("th08.pak", "thbgm.pak").map { find(it) }
+    if (packs.all { it != null }) return packs.filterNotNull()
+    return listOf("th08.dat", "thbgm.dat").map { name -> find(name) ?: throw GradleException("no $name in $dir") }
 }
 
 // Release keystore from keystore.properties (values stay in Gradle memory), else the throwaway debug key.
@@ -161,9 +163,9 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // Stored .so (extractNativeLibs=false) and stored .dat assets (AAsset fds, ARCH_D §2.1).
+    // Stored .so (extractNativeLibs=false) and stored .dat / .pak assets (AAsset fds, ARCH_D §2.1, ASSETS_FORMAT §3.5).
     packaging { jniLibs { useLegacyPackaging = false } }
-    androidResources { noCompress += "dat" }
+    androidResources { noCompress += listOf("dat", "pak") }
 
     lint { checkReleaseBuilds = false }
 }

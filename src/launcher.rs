@@ -9,10 +9,12 @@ use th08_render::gfx::{Gfx, SafeArea};
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-// A game folder holds th08.dat (any letter case).
+// A game folder holds th08.dat or its repacked th08.pak (any letter case, ASSETS_FORMAT §3.3).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_game_dir(dir: &Path) -> bool {
-    crate::sources::find_file(dir, "th08.dat").is_file()
+    th08_core::content::CONTENT_FILES
+        .iter()
+        .any(|n| crate::sources::find_file(dir, n).is_file())
 }
 
 // Desktop platform dirs (ARCH_D §6.1 item 1), looked up by the entry point and passed to the settings: config =
@@ -348,9 +350,7 @@ impl Model {
             }
             #[cfg(target_arch = "wasm32")]
             Folder::Native => false,
-            Folder::Web(names) | Folder::Bundled(names) => {
-                names.iter().any(|n| n.eq_ignore_ascii_case("th08.dat"))
-            }
+            Folder::Web(names) | Folder::Bundled(names) => th08_core::content::has_content(names),
         }
     }
 
@@ -1071,6 +1071,25 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("TH08.DAT"), b"").unwrap();
         d
+    }
+
+    // ASSETS_FORMAT §3.3: a folder with only the packs is a game folder, as is one with th08.dat.
+    #[test]
+    fn pack_folder_is_game_dir() {
+        let root = std::env::temp_dir().join(format!("th08_pack_dir_{}", std::process::id()));
+        let d = root.join("packs");
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(!is_game_dir(&d));
+        std::fs::write(d.join("thbgm.pak"), b"").unwrap();
+        assert!(!is_game_dir(&d));
+        std::fs::write(d.join("TH08.PAK"), b"").unwrap();
+        assert!(is_game_dir(&d));
+        assert!(th08_core::content::has_content(&["thbgm.pak", "th08.pak"]));
+        assert!(!th08_core::content::has_content(&[
+            "thbgm.pak",
+            "thbgm.dat"
+        ]));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     fn edit(m: &mut Model, key: &str, v: &str) {

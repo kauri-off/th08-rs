@@ -81,12 +81,8 @@ pub fn apk(a: &DistArgs, local: &LocalEnv, out: &Path, game: Option<&Game>) -> R
         // Only the path goes to Gradle; it reads the passwords itself (build.gradle.kts keyConfig).
         args.push(format!("-Pth08.keystore={}", util::absolute(p).display()));
     }
+    // Gradle's GameData takes the .pak pair when the folder has both, else the .dat pair (build.gradle.kts gameFiles).
     if let Some(g) = game {
-        if g.packed {
-            bail!(
-                "android-apk with --assets packed needs AS3 (Gradle GameData .pak, ASSETS_FORMAT §5); use --assets raw"
-            );
-        }
         args.push(format!("-Pth08.data={}", g.dir.display()));
     }
     let variant = match a.variant {

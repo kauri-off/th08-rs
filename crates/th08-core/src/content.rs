@@ -59,6 +59,21 @@ impl std::fmt::Display for Fingerprint {
     }
 }
 
+// The content pack's file name (ASSETS_FORMAT §3.1); preferred over th08.dat by `Content::load`.
+pub const CONTENT_PACK: &str = "th08.pak";
+
+// A game folder / bundle holds one of these (any letter case), the pack first (ASSETS_FORMAT §3.3).
+pub const CONTENT_FILES: [&str; 2] = [CONTENT_PACK, "th08.dat"];
+
+// Whether `names` hold game content (th08.pak or th08.dat), as the launchers' folder checks ask.
+pub fn has_content<S: AsRef<str>>(names: &[S]) -> bool {
+    names.iter().any(|n| {
+        CONTENT_FILES
+            .iter()
+            .any(|c| n.as_ref().eq_ignore_ascii_case(c))
+    })
+}
+
 // Where the content bytes live: the original th08.dat, or a th08.pak repacked from it (same bytes per entry).
 pub enum Content {
     Archive(Archive),
@@ -71,10 +86,10 @@ impl Content {
         if source
             .names()
             .iter()
-            .any(|n| n.eq_ignore_ascii_case("th08.pak"))
+            .any(|n| n.eq_ignore_ascii_case(CONTENT_PACK))
         {
             return Ok(Self::Pack(Pack::from_bytes(
-                source.read("th08.pak").await?,
+                source.read(CONTENT_PACK).await?,
             )?));
         }
         Ok(Self::Archive(Archive::from_bytes(

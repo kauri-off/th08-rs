@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use th08_core::assets::Source;
 
-use crate::bgm::{BgmSource, Frame};
+use crate::bgm::{BgmSource, Pcm, PcmWriter};
 
 // thbgm.fmt WAVEFORMATEX: 44100 Hz, stereo, 16-bit for every track (02 §2).
 const BGM_RATE: f64 = 44100.0;
@@ -17,14 +17,15 @@ const BGM_RATE: f64 = 44100.0;
 use th08_core::sound::{MidiCmd, SoundCmd, Track, WavCmd};
 
 // Streaming ring (02 §3): 16 notification chunks of 44100 bytes = 11025 stereo frames (0.25 s), 4.0 s in all.
-const CHUNK: usize = 11025;
-const RING: usize = 16 * CHUNK;
+const CHUNK: usize = crate::bgm::BLOCK;
+const RING: usize = crate::bgm::RING_FRAMES;
 
-// The playing BGM: the whole stored track in memory, heard through a model of the DirectSound streaming ring
+// The playing BGM: the stored track in memory (decoded progressively, ASSETS_FORMAT §3.4), heard through a model of the DirectSound streaming ring
 // (02 §3) so that `Bgm_StreamStop` + UnPause replays what the ring still holds (02 §4).
 struct Music {
-    // s16 frames as stored in thbgm.dat (or decoded from thbgm.pak), half the RAM of f32 (ASSETS_FORMAT §3.4).
-    samples: Vec<Frame>,
+    // s16 frames as stored in thbgm.dat (or decoded from thbgm.pak), half the RAM of f32 (ASSETS_FORMAT §3.4);
+    // the loader thread still appends while the first rings play.
+    samples: Arc<Pcm>,
     loop_start: usize,
     // Per ring chunk: the stream frame its data starts at (frames read since the play command's rewind).
     chunks: [u64; 16],
@@ -37,7 +38,7 @@ struct Music {
 
 impl Music {
     // Play command fill stage (02 §3): rewind, fill the whole ring with the first 4.0 s, +0x64 := 0, play from 0.
-    fn new(samples: Vec<Frame>, loop_start: usize) -> Self {
+    fn new(samples: Arc<Pcm>, loop_start: usize) -> Self {
         Self {
             samples,
             loop_start,
@@ -60,7 +61,9 @@ impl Music {
 
     fn ring_sample(&self, r: usize) -> [f32; 2] {
         let r = r % RING;
-        let s = self.samples[self.track_frame(self.chunks[r / CHUNK] + (r % CHUNK) as u64)];
+        let s = self
+            .samples
+            .get(self.track_frame(self.chunks[r / CHUNK] + (r % CHUNK) as u64));
         [f32::from(s[0]) / 32768.0, f32::from(s[1]) / 32768.0]
     }
 
@@ -531,6 +534,7 @@ impl Audio {
         };
         let (source, mixer, cell) = (self.source.clone(), self.mixer.clone(), self.bgm.clone());
         spawn(async move {
+            let t0 = web_time::Instant::now();
             let known = cell.lock().unwrap().clone();
             let bgm = match known {
                 Some(b) => b,
@@ -539,13 +543,59 @@ impl Audio {
                     cell.lock().unwrap().get_or_insert(b).clone()
                 }
             };
-            match bgm.read(&source, &t).await {
-                Ok(samples) => {
-                    let mut m = mixer.lock().unwrap();
-                    if m.generation == generation {
-                        m.music = Some(Music::new(samples, t.loop_start));
+            // Port (ASSETS_FORMAT §3.4): the play command's fill stage needs only the first ring (02 §3), so the
+            // Music starts as soon as 4.0 s (or the whole shorter track) are decoded; the rest is appended while it
+            // plays, far ahead of the play cursor. Decoding stops when the track is replaced or released.
+            let pcm = Pcm::new(t.length);
+            let (name, loop_start, first) = (t.name.clone(), t.loop_start, RING.min(t.length));
+            let mut started = false;
+            let m2 = mixer.clone();
+            let mut w = PcmWriter::with(pcm.clone(), move |p, ready| {
+                if !started {
+                    if ready < first {
+                        return m2.lock().unwrap().generation == generation;
                     }
+                    let mut m = m2.lock().unwrap();
+                    if m.generation != generation {
+                        return false;
+                    }
+                    m.music = Some(Music::new(p.clone(), loop_start));
+                    started = true;
+                    log::info!(
+                        "bgm {name}: first {ready} frames after {:.1} ms, playing",
+                        t0.elapsed().as_secs_f64() * 1000.0
+                    );
+                    return true;
                 }
+                // The writer's own Arc plus the Music's (kept across Music_Stop, dropped on a new play / release).
+                Arc::strong_count(p) > 1
+            });
+            match bgm.stream(&source, &t, &mut w).await {
+                Ok(()) if pcm.ready() == pcm.len() => {
+                    if pcm.is_empty() {
+                        let mut m = mixer.lock().unwrap();
+                        if m.generation == generation {
+                            m.music = Some(Music::new(pcm.clone(), t.loop_start));
+                        }
+                    }
+                    log::info!(
+                        "bgm {}: all {} frames after {:.1} ms{}",
+                        t.name,
+                        pcm.len(),
+                        t0.elapsed().as_secs_f64() * 1000.0,
+                        if pcm.underrun() {
+                            " (underrun: played before decoded)"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+                Ok(()) => log::info!(
+                    "bgm {}: decode stopped at {} / {} frames (replaced)",
+                    t.name,
+                    pcm.ready(),
+                    pcm.len()
+                ),
                 Err(e) => log::warn!("bgm {}: {e:#}", t.name),
             }
         });
@@ -903,7 +953,7 @@ mod tests {
     #[test]
     fn wav_pause_and_fade() {
         let mut d = Dev::new();
-        let mut music = Music::new(vec![[16384, 16384]; 10], 0);
+        let mut music = Music::new(Pcm::from_frames(&[[16384, 16384]; 10]), 0);
         music.cursor = 3.0;
         d.a.mixer.lock().unwrap().music = Some(music);
         d.run(|b| {
@@ -946,9 +996,10 @@ mod tests {
 
     fn ring_mixer(len: usize, loop_start: usize) -> Mixer {
         // Frame index i encoded as (low 15 bits, high bits) in the two s16 channels.
-        let samples = (0..len)
+        let samples: Vec<_> = (0..len)
             .map(|i| [(i & 0x7FFF) as i16, (i >> 15) as i16])
             .collect();
+        let samples = Pcm::from_frames(&samples);
         Mixer {
             volume: 1.0,
             out_rate: BGM_RATE,

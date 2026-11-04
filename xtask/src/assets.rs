@@ -12,7 +12,6 @@ use crate::{Assets, DistArgs, Target};
 pub struct Game {
     pub dir: PathBuf,
     pub files: Vec<(PathBuf, String)>,
-    pub packed: bool,
 }
 
 impl Game {
@@ -105,50 +104,101 @@ fn raw(data: &Path) -> Result<Game> {
     Ok(Game {
         dir: data.to_path_buf(),
         files,
-        packed: false,
     })
 }
 
-// th08.pak + thbgm.pak from the `repack` bin (ASSETS_FORMAT AS1/AS2), written under target/dist/packs/.
-fn packed(data: &Path, name: &str) -> Result<Game> {
-    let root = util::root();
-    if !root.join("crates/th08-tools/src/bin/repack.rs").is_file() {
-        bail!(
-            "--assets packed needs the `repack` bin (docs/arch/ASSETS_FORMAT.md AS1/AS2), which is not in this \
-             checkout yet; use --assets raw"
+const PACKS: [&str; 2] = ["th08.pak", "thbgm.pak"];
+
+// Sources whose change can change the pack bytes (repack is deterministic, ASSETS_FORMAT AS1/AS2 results).
+const REPACK_SOURCES: [&str; 3] = [
+    "crates/th08-tools/src/bin/repack.rs",
+    "crates/th08-formats/src/pack.rs",
+    "crates/th08-audio/src/bgm.rs",
+];
+
+// Cache key of a repack: name, size and mtime of each game file, sha256 of the repack sources.
+fn pack_stamp(data: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut s = String::from("repack v1\n");
+    for n in ["th08.dat", "thbgm.dat"] {
+        let p = find(data, n)?;
+        let m = fs::metadata(&p)?;
+        let t = m
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        s += &format!(
+            "{} {} {}.{:09}\n",
+            p.display(),
+            m.len(),
+            t.as_secs(),
+            t.subsec_nanos()
         );
     }
-    let out = util::dist_dir().join("packs").join(name);
-    util::inside_target(&out)?;
-    util::fresh_dir(&out)?;
-    util::run(
-        util::cargo()
-            .args([
-                "run",
-                "-q",
-                "--release",
-                "--locked",
-                "-p",
-                "th08-tools",
-                "--bin",
-                "repack",
-                "--",
-            ])
-            .arg(data)
-            .arg(&out),
-    )?;
-    let files = ["th08.pak", "thbgm.pak"]
-        .iter()
-        .map(|n| {
-            let p = out.join(n);
-            util::ensure_nonempty(&p)
-                .with_context(|| format!("repack did not write {n} (AS2 not landed yet?)"))?;
-            Ok((p, (*n).to_owned()))
-        })
-        .collect::<Result<_>>()?;
+    for f in REPACK_SOURCES {
+        let h = Sha256::digest(fs::read(util::root().join(f)).with_context(|| f.to_owned())?);
+        s += &format!(
+            "{f} {}\n",
+            h.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
+    }
+    Ok(s)
+}
+
+// th08.pak + thbgm.pak from the `repack` bin (ASSETS_FORMAT AS1/AS2), cached in <personal target>/pack/ with a
+// `dist.stamp`; a rerun with the same game files and repack sources reuses them.
+fn packed(data: &Path, _name: &str) -> Result<Game> {
+    let root = util::root();
+    if !root.join(REPACK_SOURCES[0]).is_file() {
+        bail!(
+            "--assets packed needs the `repack` bin (docs/arch/ASSETS_FORMAT.md AS1/AS2); use --assets raw"
+        );
+    }
+    let cache = util::personal_target().join("pack");
+    util::inside_target(&cache)?;
+    fs::create_dir_all(&cache)?;
+    let stamp = pack_stamp(data)?;
+    let stamp_file = cache.join("dist.stamp");
+    let fresh = fs::read_to_string(&stamp_file).is_ok_and(|s| s == stamp)
+        && PACKS
+            .iter()
+            .all(|n| util::ensure_nonempty(&cache.join(n)).is_ok());
+    if fresh {
+        eprintln!("reusing {} (dist.stamp matches)", cache.display());
+    } else {
+        let tmp = cache.join(".dist-tmp");
+        util::fresh_dir(&tmp)?;
+        util::run(
+            util::cargo()
+                .args([
+                    "run",
+                    "-q",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    "th08-tools",
+                    "--bin",
+                    "repack",
+                    "--",
+                ])
+                .arg(data)
+                .arg(&tmp),
+        )?;
+        let _ = fs::remove_file(&stamp_file);
+        for n in PACKS {
+            let p = tmp.join(n);
+            util::ensure_nonempty(&p).with_context(|| format!("repack did not write {n}"))?;
+            // rename keeps links to the cached packs (e.g. pack/game_bgm/) valid.
+            fs::rename(&p, cache.join(n))?;
+        }
+        fs::remove_dir_all(&tmp)?;
+        fs::write(&stamp_file, &stamp)?;
+    }
     Ok(Game {
-        dir: out,
-        files,
-        packed: true,
+        files: PACKS
+            .iter()
+            .map(|n| (cache.join(n), (*n).to_owned()))
+            .collect(),
+        dir: cache,
     })
 }
