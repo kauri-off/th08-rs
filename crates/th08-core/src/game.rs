@@ -6,7 +6,6 @@ use crate::content::LogicView;
 use crate::drawlist::{FULLSCREEN, Recorder, Renderer};
 use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
 use anyhow::Context as _;
-use th08_formats::archive::Archive;
 
 // The original's globals that every subsystem reaches: the deterministic state in `w` (World, ARCH_A §2.3); the
 // IO / output side (device, archive, sound device, host, tool switches) here.
@@ -281,7 +280,7 @@ impl Ctx {
             mut host,
             drawlog,
         } = io;
-        let archive = LogicView::new(Archive::from_bytes(source.read("th08.dat").await?)?);
+        let archive = LogicView::new(crate::content::Content::load(&source).await?);
         // Supervisor_OnRegister 0x4461A0: the exe-check version list, archive only; missing fails start-up (15 §2.10).
         let ver = archive
             .read(crate::scoredat::VER_LIST_NAME)

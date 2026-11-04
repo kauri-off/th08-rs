@@ -16,6 +16,9 @@ pub enum ArchiveError {
     NotFound(String),
     #[error("archive table: {0}")]
     Truncated(#[from] Truncated),
+    // Content read through a th08.pak instead of th08.dat (pack.rs).
+    #[error(transparent)]
+    Pack(#[from] crate::pack::PackError),
 }
 
 pub type Result<T> = std::result::Result<T, ArchiveError>;

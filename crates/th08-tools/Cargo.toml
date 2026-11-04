@@ -25,3 +25,5 @@ liblzma = { version = "0.4.9", features = ["static", "parallel"] }
 pollster = "1.0.1"
 sha2 = "0.10"
 serde_json = "1"
+# repack: zstd level-19 encoder (C, tool only; the game decodes with ruzstd).
+zstd = "0.13"

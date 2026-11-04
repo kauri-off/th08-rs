@@ -11,6 +11,7 @@ pub mod end;
 pub mod midi;
 pub mod msg;
 pub mod musiccmt;
+pub mod pack;
 pub mod reader;
 pub mod replay;
 pub mod scoredat;

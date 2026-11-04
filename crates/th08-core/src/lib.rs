@@ -49,6 +49,7 @@ pub mod task;
 pub mod testdata;
 pub mod trace;
 pub mod types;
+mod vanilla;
 pub mod world;
 #[cfg(test)]
 mod worldclone;
