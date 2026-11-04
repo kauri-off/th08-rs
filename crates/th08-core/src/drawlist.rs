@@ -354,7 +354,9 @@ pub struct TextCmd {
     // Texture-row width W and font size (strip height) in texels.
     pub w: u32,
     pub size: u32,
+    // Vanilla Shift-JIS bytes, rendered as is when no translation of `key` is mounted.
     pub text: SjisString,
+    pub key: crate::textref::TextRef,
     pub color: [u8; 3],
     // Pen start x in strip pixels.
     pub x: f32,

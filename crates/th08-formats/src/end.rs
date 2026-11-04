@@ -27,6 +27,14 @@ impl Script {
         self.ip >= self.data.len()
     }
 
+    // 0-based line (LF count before the read pointer): the key of a text line (I18N §2.3).
+    pub fn line_no(&self) -> usize {
+        self.data[..self.ip.min(self.data.len())]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count()
+    }
+
     // Bytes past the end read as 0.
     pub fn byte(&self, p: usize) -> u8 {
         self.data.get(p).copied().unwrap_or(0)

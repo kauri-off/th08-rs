@@ -132,6 +132,20 @@ impl MsgFile {
     pub fn op(&self, i: &Ins) -> Op {
         Op::decode(i, self.args(i))
     }
+
+    // Text ops (3, 16, 19, 20) from `start` up to, not including, `at` in file order: the `nth` of a text key
+    // (I18N §2.3; the instruction chain of 10 §2).
+    pub fn text_ops_before(&self, start: MsgOff, at: MsgOff) -> u16 {
+        let (mut n, mut p) = (0u16, start);
+        while p < at {
+            let Some(i) = self.ins(p) else { break };
+            if matches!(i.op, 3 | 16 | 19 | 20) {
+                n = n.saturating_add(1);
+            }
+            p = i.next();
+        }
+        n
+    }
 }
 
 // One instruction decoded by opcode (10 §5.1 table, `Msg_Run` switch 0x433DB3); args in file order, raw.

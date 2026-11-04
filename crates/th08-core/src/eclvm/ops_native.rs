@@ -78,13 +78,9 @@ impl Exec<'_> {
             }
             22 => {
                 // 07 §11.1 bit 10: Spell_ShowNameOnly passes face −1 (sprite 1): no portrait, no cut-in.
-                let name = encoding_rs::SHIFT_JIS
-                    .encode("「リザレクション」")
-                    .0
-                    .into_owned();
                 self.sys.gui.push(crate::gui::Req::BossShow {
                     face: -1,
-                    name,
+                    name: crate::builtin::Builtin::Resurrection.txt(),
                     card: -1,
                     name_only: true,
                 });

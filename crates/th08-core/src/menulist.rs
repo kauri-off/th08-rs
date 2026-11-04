@@ -2,6 +2,7 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::{Text, int, percent_glyphs, short, uidx};
+use crate::builtin::Builtin;
 use crate::drawlist::{Blend, Recorder, TextCmd, Vertex};
 use crate::fmath;
 use crate::game::Ctx;
@@ -10,8 +11,9 @@ use crate::input::{DOWN, LEFT, RIGHT, UP};
 use crate::menu::{CANCEL, CONFIRM, MainMenu, Pending};
 use crate::scoredat::Catk;
 use crate::sound;
+use crate::textref::{FmtArg, SpellField, Text as Txt, TextRef};
 use crate::types::{D3dColor, lo8};
-use th08_formats::sjis::{self, SjisString};
+use th08_formats::sjis::SjisString;
 
 // resulttext.anm ANM slot (00 §3.2 loader thread); text.anm slot 0 (info strips, 16 §6.3).
 pub const RT_SLOT: usize = 22;
@@ -57,31 +59,6 @@ pub(crate) const CHARS: [&str; 12] = [
     "Sakuya ", "Remilia", "Youmu  ", "Yuyuko ",
 ];
 const DIFFS: [&str; 5] = ["Easy    ", "Normal  ", "Hard    ", "Lunatic ", "Extra   "];
-// Shot names 0x4C7F4C, padded to 8 full-width cells (specs/data/spell_tables.md §5).
-pub(crate) const SHOT_NAMES: [&str; 13] = [
-    "霊夢＆紫　　　　",
-    "魔理沙＆アリス　",
-    "咲夜＆レミリア　",
-    "妖夢＆幽々子　　",
-    "博麗　霊夢　　　",
-    "八雲　紫　　　　",
-    "霧雨　魔理沙　　",
-    "アリス・Ｍ　　　",
-    "十六夜　咲夜　　",
-    "レミリア・Ｓ　　",
-    "魂魄　妖夢　　　",
-    "西行寺　幽々子　",
-    "全主人公合計　　",
-];
-// Difficulty names 0x4C8628 for info line 1 (16 §6.3; specs/data/spell_tables.md).
-const DIFF_NAMES: [&str; 6] = [
-    "初月（イージー）",
-    "三日月（ノーマル）",
-    "上つ弓張（ハード）",
-    "待宵（ルナティック）",
-    "望月（エキストラ）",
-    "極意（ラストワード）",
-];
 // Easy / Normal / Hard card lists 0x4C6120 / 0x4C61C8 / 0x4C6290 (15 §2.8; specs/data/spell_tables.md §1); the
 // Lunatic list is every other id < 191.
 const EASY: [u8; 42] = [
@@ -103,78 +80,6 @@ const LAST: [u8; 43] = [
     10, 11, 12, 29, 30, 31, 51, 52, 53, 74, 75, 76, 97, 98, 99, 116, 117, 118, 143, 144, 145, 146,
     171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189,
     190, 204,
-];
-// Unlock hints 0x4C82C8 for ids 204–221, numbers already printed + 1 (16 §6.3; specs/data/spell_tables.md §7).
-const HINTS: [[&str; 2]; 18] = [
-    [
-        "挑戦可能条件：望月（エキストラ）をスペルカード７枚以上取得して",
-        "　　　　　　　クリアする。",
-    ],
-    [
-        "挑戦可能条件：通常モードFinalBを２キャラ以上クリアする。",
-        "　　　　　　　難易度不問。",
-    ],
-    [
-        "挑戦可能条件：通常モードFinalBを３キャラ以上クリアする。",
-        "　　　　　　　難易度不問。",
-    ],
-    [
-        "挑戦可能条件：スペルカードモードでスペルカードを50枚以上取得する。",
-        "　　　　　　　全キャラ合計。",
-    ],
-    [
-        "挑戦可能条件：通常モードFinalBを４キャラ以上クリアする。",
-        "　　　　　　　難易度不問。",
-    ],
-    ["挑戦可能条件：No.138を取得する。", " "],
-    [
-        "挑戦可能条件：スペルカードモードでラストスペルを15枚以上取得する。",
-        "　　　　　　　全キャラ合計。",
-    ],
-    [
-        "挑戦可能条件：No.146,196を取得し",
-        "　　　　　　　かつ、No.205を一度でも見る。",
-    ],
-    [
-        "挑戦可能条件：No.209,210,211を一度でも見る。",
-        "　　　　　　　取得の必要はない。",
-    ],
-    [
-        "挑戦可能条件：No.206,207,208,212を一度でも見る。",
-        "　　　　　　　取得の必要はない。",
-    ],
-    [
-        "挑戦可能条件：魔理沙（単独使用）で三日月（ノーマル）の",
-        "　　　　　　　スペルカードを全て取得。",
-    ],
-    [
-        "挑戦可能条件：霊夢（単独使用）で上つ弓張（ハード）以上をクリア。",
-        "　　　　　　　最終面はFinalBのみ。",
-    ],
-    [
-        "挑戦可能条件：スペルカードモードでスペルカードを120枚以上取得する",
-        "　　　　　　　全キャラ合計。",
-    ],
-    [
-        "挑戦可能条件：通常モードFinalBを６キャラ以上クリアする。",
-        "　　　　　　　",
-    ],
-    [
-        "挑戦可能条件：望月（エキストラ）を３キャラ以上クリアする。",
-        " ",
-    ],
-    [
-        "挑戦可能条件：スペルカードモードでラストスペルを30枚以上取得する。",
-        "　　　　　　　全キャラ合計。",
-    ],
-    [
-        "挑戦可能条件：待宵（ルナティック）をクリアする。",
-        "　　　　　　　コンティニュー可、使用キャラ不問。",
-    ],
-    [
-        "挑戦可能条件：これ以外のラストワードを全て一度見る。",
-        "　　　　　　　取得の必要はない。",
-    ],
 ];
 
 // Spell_DifficultyOf 0x4144D0 (15 §2.8): list index 0..4, 5 for Last Words (ids ≥ 205).
@@ -299,10 +204,6 @@ pub fn compute_last_word_unlocks(g: &mut crate::gamemgr::Game) {
     }
 }
 
-// 8 and 9 full-width '?' (16 §6.3; the 9-char one is string 0x4B9330).
-const UNKNOWN8: &str = "？？？？？？？？";
-const UNKNOWN9: &str = "？？？？？？？？？";
-
 // CATK counter rows (15 §2.5): story attempts / captures, practice bonus / attempts / captures.
 const SA: usize = 1;
 const SC: usize = 2;
@@ -364,6 +265,13 @@ fn selectable(ctx: &Ctx, id: usize) -> bool {
         .flsp
         .get(id - 205)
         .is_some_and(|&v| v as usize == id - 205 + 0xCD)
+}
+
+fn spell_ref(id: usize, field: SpellField) -> TextRef {
+    TextRef::Spell {
+        card: id as u16,
+        field,
+    }
 }
 
 // Shift-JIS bytes of a NUL-terminated score.dat / replay field.
@@ -457,7 +365,7 @@ fn pie(rec: &mut Recorder, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
     clippy::cast_sign_loss,
     reason = "texture row of v0 ≥ 0, rounded as before"
 )]
-pub(crate) fn render_strip(ctx: &mut Ctx, slot: usize, sprite: i32, s: SjisString) {
+pub(crate) fn render_strip(ctx: &mut Ctx, slot: usize, sprite: i32, s: Txt) {
     let Some(sp) = ctx.w.anm.sprite(slot, uidx(sprite.max(0))).copied() else {
         return;
     };
@@ -469,7 +377,8 @@ pub(crate) fn render_strip(ctx: &mut Ctx, slot: usize, sprite: i32, s: SjisStrin
         y: ty,
         w,
         size: 15,
-        text: s,
+        text: s.raw,
+        key: s.key,
         color: [255, 255, 255],
         x: 0.0,
         outline: 0,
@@ -482,7 +391,7 @@ impl MainMenu {
         [p[0], p[1]]
     }
 
-    fn render_vm(&mut self, ctx: &mut Ctx, slot: usize, sprite: i32, s: SjisString) {
+    fn render_vm(&mut self, ctx: &mut Ctx, slot: usize, sprite: i32, s: Txt) {
         render_strip(ctx, slot, sprite, s);
     }
 
@@ -645,13 +554,8 @@ impl MainMenu {
             ];
             // QUIRK (16 §6.4): the anchor bits go to the EA5C VM twice, so the pie frame stays centred.
             self.lists.scratch[2].flags &= !(anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y);
-            self.render_vm(
-                ctx,
-                RT_SLOT,
-                2,
-                sjis::encode("ステージ    取得/挑戦可能/総数（()内は全キャラ合計）"),
-            );
-            self.render_vm(ctx, RT_SLOT, 3, sjis::encode("取得率　（キャラ別／総合）"));
+            self.render_vm(ctx, RT_SLOT, 2, Builtin::SpHeader.txt());
+            self.render_vm(ctx, RT_SLOT, 3, Builtin::SpPercent.txt());
             self.lists.pies = [0.0; 4];
             self.glyph_vm(ctx);
         }
@@ -890,14 +794,15 @@ impl MainMenu {
         ROW_IDS[uidx(self.lists.sp_row.clamp(0, 9))]
     }
 
-    fn row_name(ctx: &Ctx, id: usize) -> SjisString {
+    // Displayed by card id (I18N_STRINGS §4.3): the CATK bytes are only the vanilla text.
+    fn row_name(ctx: &Ctx, id: usize) -> Txt {
         let c = catk(ctx, id);
         if seen(&c, 12) {
-            sjis(&c.name)
+            Txt::new(spell_ref(id, SpellField::Name), sjis(&c.name))
         } else if id >= 205 && selectable(ctx, id) {
-            sjis::encode("挑戦者歓迎中！")
+            Builtin::SpWelcome.txt()
         } else {
-            sjis::encode(UNKNOWN8)
+            Builtin::Unknown8.txt()
         }
     }
 
@@ -933,7 +838,7 @@ impl MainMenu {
     }
 
     // Info panel line k (16 §6.3, 0x46D7F9).
-    fn info_line(&self, ctx: &Ctx, k: usize) -> SjisString {
+    fn info_line(&self, ctx: &Ctx, k: usize) -> Txt {
         let (a, _) = self.card_ids();
         let id = a + uidx(self.lists.card.max(0));
         let c = catk(ctx, id);
@@ -941,29 +846,28 @@ impl MainMenu {
         let att = seen(&c, 12);
         let lw = id >= 205;
         // Name / owner bytes from score.dat, or the unknown placeholder.
-        let field = |b: &[u8]| {
-            if att { sjis(b) } else { sjis::encode(UNKNOWN8) }
+        let field = |b: &[u8], f: SpellField| {
+            FmtArg::Text(if att {
+                Txt::new(spell_ref(id, f), sjis(b))
+            } else {
+                Builtin::Unknown8.txt()
+            })
         };
         match k {
-            0 => {
-                let mut t = sjis::encode(&format!("Ｎｏ．{}　　", fullwidth_digits(id + 1)));
-                t.push_bytes(&field(&c.name));
-                t
-            }
-            1 => {
-                let mut t = sjis::encode("使用者  ");
-                t.push_bytes(&field(&c.owner));
-                t.push_str(&format!(
-                    "　　{} {}",
-                    DIFF_NAMES[difficulty_of(id)],
-                    if is_last(id) { "Last" } else { " " }
-                ));
-                t
-            }
-            2 => sjis::encode(&format!(
-                "取得数/挑戦数[最高点]　{}　全主人公合計",
-                SHOT_NAMES[s]
-            )),
+            0 => Builtin::SpNoLine.fmt(vec![
+                FmtArg::Text(Txt::dynamic_str(&fullwidth_digits(id + 1))),
+                field(&c.name, SpellField::Name),
+            ]),
+            1 => Builtin::SpOwnerLine.fmt(vec![
+                field(&c.owner, SpellField::Owner),
+                FmtArg::Text(Builtin::SpDiff(difficulty_of(id) as u8).txt()),
+                FmtArg::Text(if is_last(id) {
+                    Builtin::SpLast.txt()
+                } else {
+                    Txt::dynamic_str(" ")
+                }),
+            ]),
+            2 => Builtin::SpScoreLine.fmt(vec![FmtArg::Text(Builtin::Shot(s as u8).txt())]),
             3 => {
                 let t = if !att {
                     "　　---/---(---/---)[--------]　　---/---(---/---)[--------]".into()
@@ -988,16 +892,23 @@ impl MainMenu {
                     };
                     format!("　　{}　　{}", f(s), f(12))
                 };
-                sjis::encode(&t)
+                Txt::dynamic_str(&t)
             }
-            4 => sjis::encode("カードの補足"),
+            4 => Builtin::SpComment.txt(),
             _ => {
                 if id >= 204 && !att && !selectable(ctx, id) {
-                    sjis::encode(HINTS[id - 204][k - 5])
+                    Builtin::SpHint {
+                        card: id as u8,
+                        line: (k - 5) as u8,
+                    }
+                    .txt()
                 } else if c.counters[PC][12] != 0 {
-                    sjis(&c.comment[k - 5])
+                    Txt::new(
+                        spell_ref(id, SpellField::Comment((k - 5) as u8)),
+                        sjis(&c.comment[k - 5]),
+                    )
                 } else {
-                    sjis::encode(UNKNOWN9)
+                    Builtin::Unknown9.txt()
                 }
             }
         }
@@ -1038,12 +949,7 @@ impl MainMenu {
             self.lists.prev_card = self.lists.card;
             self.card_rows(ctx);
             self.lists.header = scratch(ctx, RT_SLOT, 17, false);
-            self.render_vm(
-                ctx,
-                RT_SLOT,
-                17,
-                sjis::encode("取得数/挑戦数（()内は本編での集計）"),
-            );
+            self.render_vm(ctx, RT_SLOT, 17, Builtin::SpListHeader.txt());
             self.lists.info = (0..7)
                 .map(|k| scratch(ctx, TEXT_SLOT, 21 + k, false))
                 .collect();
@@ -1330,7 +1236,18 @@ impl MainMenu {
             self.lists.rpy_loaded = Some(i);
             // Card-name scratch VM menu+0xE7B8 (12 §2.8 step 3): header +0x7E into resulttext sprite 11, set up
             // for every file, drawn only for spell replays.
-            let name = sjis(&self.replays[i].1.card_name());
+            // Shown by the header's card id +0x7C (I18N_STRINGS §2.7); −1 outside spell practice.
+            let r = &self.replays[i].1;
+            let name = match u16::try_from(r.spell_id()) {
+                Ok(card) => Txt::new(
+                    TextRef::Spell {
+                        card,
+                        field: SpellField::Name,
+                    },
+                    sjis(&r.card_name()),
+                ),
+                Err(_) => Txt::dynamic(sjis(&r.card_name())),
+            };
             self.notice = scratch(ctx, RT_SLOT, 11, false);
             self.render_vm(ctx, RT_SLOT, 11, name);
             self.cursor = int(first);
@@ -1542,24 +1459,25 @@ mod tests {
 
     #[test]
     fn literals_are_sjis() {
-        HINTS.iter().flatten().for_each(|s| round_trips(s));
-        SHOT_NAMES
-            .iter()
-            .chain(&DIFF_NAMES)
-            .for_each(|s| round_trips(s));
-        [
-            UNKNOWN8,
-            UNKNOWN9,
-            "挑戦者歓迎中！",
-            "カードの補足",
-            "Ｎｏ．０１２　　",
-            "使用者  ",
-        ]
-        .into_iter()
-        .for_each(round_trips);
-        round_trips("ステージ    取得/挑戦可能/総数（()内は全キャラ合計）");
-        round_trips("取得率　（キャラ別／総合）");
-        round_trips("取得数/挑戦数（()内は本編での集計）");
+        round_trips("Ｎｏ．０１２　　");
+        // The info-line formats rebuild the bytes of the former concatenation (16 §6.3).
+        let name = Txt::dynamic(SjisString(vec![0x83, 0x41, b'X']));
+        let t = Builtin::SpNoLine.fmt(vec![
+            FmtArg::Text(Txt::dynamic_str(&fullwidth_digits(12))),
+            FmtArg::Text(name.clone()),
+        ]);
+        let mut want = th08_formats::sjis::encode("Ｎｏ．０１２　　");
+        want.push_bytes(&name.raw);
+        assert_eq!(t.raw, want);
+        let t = Builtin::SpOwnerLine.fmt(vec![
+            FmtArg::Text(name.clone()),
+            FmtArg::Text(Builtin::SpDiff(5).txt()),
+            FmtArg::Text(Builtin::SpLast.txt()),
+        ]);
+        let mut want = th08_formats::sjis::encode("使用者  ");
+        want.push_bytes(&name.raw);
+        want.push_str("　　極意（ラストワード） Last");
+        assert_eq!(t.raw, want);
         round_trips("取得数/挑戦数[最高点]　　全主人公合計");
     }
 

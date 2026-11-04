@@ -236,9 +236,17 @@ impl Exec<'_> {
         // HUD +0x04 |= 0xF: lives and bombs fields := 3 (12 §5.3).
         self.sys.panel.mark_lives(3);
         self.sys.panel.mark_bombs(3);
+        // Shown by card id (I18N §2.3); CATK below keeps the ECL bytes.
+        let key = u16::try_from(spell.id).map_or(crate::textref::TextRef::Dynamic, |card| {
+            crate::textref::TextRef::Spell {
+                card,
+                field: crate::textref::SpellField::Name,
+            }
+        });
+        let name = crate::textref::Text::new(key, spell.name.clone().into());
         self.sys.gui.push(crate::gui::Req::BossShow {
             face: spell.face,
-            name: spell.name.clone(),
+            name,
             card: spell.id,
             name_only: false,
         });

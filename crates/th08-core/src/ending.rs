@@ -6,9 +6,9 @@ use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{ENTER, SHOT, SKIP};
 use crate::task::{Chain, Ret};
+use crate::textref::{Text, TextRef};
 use anyhow::Result;
 use th08_formats::end;
-use th08_formats::sjis::SjisString;
 
 pub const CALC_PRIO: u16 = 5;
 pub const DRAW_PRIO: u16 = 4;
@@ -30,6 +30,8 @@ enum Step {
 pub struct Ending {
     // Script buffer and read pointer (Ending_LoadScript 0x4295E0).
     script: end::Script,
+    // Port: `END_FILES` index of the loaded script, for text keys (None = not a retail name).
+    file: Option<u8>,
     // Surface slot 0 (`@b` picture); +8 / +0xC source x / y, +0x10 scroll speed (px per frame).
     picture: Option<TexId>,
     pic_x: f32,
@@ -106,6 +108,7 @@ impl Ending {
     pub fn new() -> Self {
         Self {
             script: end::Script::default(),
+            file: None,
             picture: None,
             pic_x: 0.0,
             pic_y: 0.0,
@@ -199,6 +202,7 @@ impl Ending {
     // last `@s` value), timers +0x2A70 / +0x2A64 reset (16 §1.2 step 6).
     fn load_script(&mut self, ctx: &mut Ctx, name: &str) -> Result<()> {
         self.set_script(ctx.archive.read(base_name(name))?);
+        self.file = crate::textref::end_file(base_name(name));
         Ok(())
     }
 
@@ -378,7 +382,11 @@ impl Ending {
     // Text line (16 §1.3): copied two bytes at a time until 0 / LF / CR at an even position, drawn into
     // VM[line] with Text_RenderToVm(colour, outline −1), interrupt 1, then the per-line wait.
     fn text_line(&mut self, ctx: &mut Ctx) {
-        let text = self.script.text_line(LINE_BYTES);
+        let key = match (self.file, u16::try_from(self.script.line_no())) {
+            (Some(file), Ok(line)) => TextRef::Ending { file, line },
+            _ => TextRef::Dynamic,
+        };
+        let text = Text::new(key, self.script.text_line(LINE_BYTES));
         // Line 15 would hit the invisible VM 15 (≥ 16 corrupts); retail pages have ≤ 4 lines, extras dropped (16 §1.3).
         if let Some(vm) = self.vms.get_mut(self.line) {
             let rgb = [
@@ -425,7 +433,7 @@ impl Ending {
 }
 
 // Text_RenderToVm (10 §6) into the VM's text.anm strip, font size 15 (VM+0x298), then visible.
-fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, rgb: [u8; 3]) {
+fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: Text, rgb: [u8; 3]) {
     let Some(sp) = ctx
         .w
         .anm
@@ -445,7 +453,8 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, rgb: [u8; 3]) {
         y: ty,
         w,
         size: 15,
-        text: s,
+        text: s.raw,
+        key: s.key,
         color: rgb,
         x: 0.0,
         outline: -1,

@@ -346,7 +346,7 @@ fn user_lines(
         ("プレイ時刻", now.datetime()),
         (
             "キャラ名",
-            crate::menulist::SHOT_NAMES[r.shot() as usize % 12].into(),
+            crate::builtin::Builtin::Shot(r.shot() % 12).text().into(),
         ),
         ("スコア", format!("{}0", r.score())),
         ("難易度", DIFF[r.difficulty().min(4) as usize].into()),
@@ -885,7 +885,7 @@ mod tests {
         let ver = ar.read(crate::scoredat::VER_LIST_NAME).unwrap();
         let d = parse(&ar.read("demorpy0.rpy").unwrap(), Some(&ver)).unwrap();
         let text = th08_formats::sjis::decode(&d.user);
-        let want = crate::menulist::SHOT_NAMES[d.shot() as usize % 12];
+        let want = crate::builtin::Builtin::Shot(d.shot() % 12).text();
         assert!(text.contains(&format!("キャラ名\t{want}\r\n")), "{text}");
     }
 

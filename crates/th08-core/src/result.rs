@@ -3,6 +3,7 @@
 
 use crate::anmvm::{self, AnmVm, table_index};
 use crate::ascii::Text;
+use crate::builtin::Builtin;
 use crate::drawlist::TexId;
 use crate::drawlist::{FULLSCREEN, Recorder};
 use crate::game::Ctx;
@@ -14,8 +15,9 @@ use crate::menu::{CANCEL, CONFIRM};
 use crate::scoredat::{C_ATTEMPTS, C_BONUS, C_CAPTURES, C_PRACTICE, CARDS, Hscr};
 use crate::sound;
 use crate::task::{Chain, Ret};
+use crate::textref::{FmtArg, SpellField, Text as Txt, TextRef};
 use crate::types::{D3dColor, SceneId, lo8};
-use th08_formats::sjis::{self, SjisString};
+use th08_formats::sjis::SjisString;
 
 // Result_Calc 0x4584B0 at prio 16, Result_Draw 0x4586B4 at prio 18 (16 §2).
 pub const CALC_PRIO: u16 = 16;
@@ -99,7 +101,6 @@ const DIFF_PANEL: [&str; 5] = [
 ];
 // Last-attempt difficulty letter of a card (CATK +0x0F, 16 §2.4 card list).
 const DIFF_LETTER: [char; 5] = ['E', 'N', 'H', 'L', '-'];
-const UNKNOWN5: &str = "？？？？？";
 
 // Ranking stage map, table 0x4C7F80 (16 §2.3): stage byte 0..8 → shown number (4A/4B → 4, 6A/6B → 6, Extra → 1).
 const STAGE_SHOWN: [u8; 9] = [1, 2, 3, 4, 4, 5, 6, 6, 1];
@@ -307,7 +308,7 @@ impl ResultScreen {
     }
 
     // Text_RenderToVm into text VM k (white, outline 0, font 15) and alpha 255.
-    fn render(&mut self, ctx: &mut Ctx, k: usize, s: SjisString) {
+    fn render(&mut self, ctx: &mut Ctx, k: usize, s: Txt) {
         let (slot, sprite) = if k < 14 {
             (0, 21 + int(k))
         } else {
@@ -642,19 +643,26 @@ impl ResultScreen {
                 let idx = table_index(self.cursor * 10 + k);
                 let Some(&id) = ids.get(idx) else { break };
                 let c = &ctx.w.game.score.catk[id];
+                // Shown by card id (I18N_STRINGS §2.8); the CATK bytes are the vanilla text.
                 let s = if c.counters[C_ATTEMPTS][12] != 0 {
-                    SjisString(c.name[..c.name.iter().position(|&b| b == 0).unwrap_or(48)].to_vec())
+                    let raw = c.name[..c.name.iter().position(|&b| b == 0).unwrap_or(48)].to_vec();
+                    let key = TextRef::Spell {
+                        card: id as u16,
+                        field: SpellField::Name,
+                    };
+                    Txt::new(key, SjisString(raw))
                 } else {
-                    sjis::encode(UNKNOWN5)
+                    Builtin::Unknown5.txt()
                 };
                 self.render(ctx, table_index(k), s);
             }
-            let s = format!(
-                "{:3}/{:3}（キャラ切り替え↓↑）",
-                self.captured[table_index(self.card_group)][table_index(self.card_built_char)],
-                n
-            );
-            self.render(ctx, 10, sjis::encode(&s));
+            let s = Builtin::ResultCards.fmt(vec![
+                FmtArg::Int(i64::from(
+                    self.captured[table_index(self.card_group)][table_index(self.card_built_char)],
+                )),
+                FmtArg::Int(i64::from(n)),
+            ]);
+            self.render(ctx, 10, s);
         }
         if self.frame < 6 || self.card_leaving {
             return;
@@ -704,7 +712,7 @@ impl ResultScreen {
                     ctx.w.game.update_run_time(ctx.host.ticks_ms());
                     for k in 0..19 {
                         let s = self.play_line(ctx, k);
-                        self.render(ctx, k, sjis::encode(&s));
+                        self.render(ctx, k, s);
                     }
                     self.run_secs = ctx.w.game.score.plst.run_time[2];
                     // x 56; y 64, 81, 98, then +17, one extra +17 gap before k = 16 (16 §2.4).
@@ -726,7 +734,7 @@ impl ResultScreen {
                     if ctx.w.game.score.plst.run_time[2] != self.run_secs {
                         self.run_secs = ctx.w.game.score.plst.run_time[2];
                         let s = self.play_line(ctx, 0);
-                        self.render(ctx, 0, sjis::encode(&s));
+                        self.render(ctx, 0, s);
                     }
                 }
                 if ctx.w.input.pressed(SHOT | BOMB | PAUSE | ENTER) {
@@ -750,7 +758,7 @@ impl ResultScreen {
         }
     }
 
-    fn play_line(&self, ctx: &Ctx, k: usize) -> String {
+    fn play_line(&self, ctx: &Ctx, k: usize) -> Txt {
         play_line(&ctx.w.game.score.plst, k, 5)
     }
 
@@ -1622,30 +1630,22 @@ fn hidden_unlock(g: &mut gamemgr::Game) {
 
 // Play-data line k (16 §2.4 table; PLST 15 §2.9). `cont_last` = block of the continue row's last column: 5 on the
 // page (QUIRK: the unused block, always 0), 6 in score.txt (16 §2.7 step 5).
-fn play_line(p: &crate::scoredat::Plst, k: usize, cont_last: usize) -> String {
-    let row = |label: &str, idx: usize, last: usize| {
-        let mut s = label.to_string();
-        for b in [0, 1, 2, 3, 4, last] {
-            s += &format!(" {:6}", p.counters[b][idx]);
-        }
-        s
+fn play_line(p: &crate::scoredat::Plst, k: usize, cont_last: usize) -> Txt {
+    let row = |label: Builtin, idx: usize, last: usize| {
+        let mut a = vec![FmtArg::Text(label.txt())];
+        a.extend([0, 1, 2, 3, 4, last].map(|b| FmtArg::Int(i64::from(p.counters[b][idx]))));
+        Builtin::StatsRow.fmt(a)
     };
-    let names = &crate::menulist::SHOT_NAMES;
+    let hms = |t: &[u32; 4]| t[..3].iter().map(|&v| FmtArg::Int(i64::from(v))).collect();
     match k {
-        0 => format!(
-            "総起動時間   {:02}:{:02}:{:02}",
-            p.run_time[0], p.run_time[1], p.run_time[2]
-        ),
-        1 => format!(
-            "総プレイ時間 {:02}:{:02}:{:02}",
-            p.play_time[0], p.play_time[1], p.play_time[2]
-        ),
-        2 => "プレイ回数　　　 　Easy 　Norm 　Hard 　Luna  Extra  Total".into(),
-        3..=14 => row(names[k - 3], 1 + k - 3, 6),
-        15 => row(names[12], 0, 6),
-        16 => row("クリア回数  　　", 14, 6),
-        17 => row("コンティニュー  ", 15, cont_last),
-        _ => row("プラクティス　  ", 16, 6),
+        0 => Builtin::StatsRunTime.fmt(hms(&p.run_time)),
+        1 => Builtin::StatsPlayTime.fmt(hms(&p.play_time)),
+        2 => Builtin::StatsPlayHeader.txt(),
+        3..=14 => row(Builtin::Shot((k - 3) as u8), 1 + k - 3, 6),
+        15 => row(Builtin::Shot(12), 0, 6),
+        16 => row(Builtin::StatsClear, 14, 6),
+        17 => row(Builtin::StatsContinue, 15, cont_last),
+        _ => row(Builtin::StatsPractice, 16, 6),
     }
 }
 
@@ -1692,7 +1692,10 @@ fn cstr(b: &[u8]) -> Vec<u8> {
 
 // Card names: CATK +0x10 (raw Shift-JIS) or 5 full-width ?; padded with spaces to 48 bytes.
 fn txt_card_names(s: &crate::scoredat::ScoreDat) -> Vec<Vec<u8>> {
-    let unknown = encoding_rs::SHIFT_JIS.encode(UNKNOWN5).0.into_owned();
+    let unknown = encoding_rs::SHIFT_JIS
+        .encode(Builtin::Unknown5.text())
+        .0
+        .into_owned();
     s.catk
         .iter()
         .map(|c| {
@@ -1868,7 +1871,7 @@ pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
             txt_line(&mut out, "# ---------------------------------------- ");
             txt_line(
                 &mut out,
-                &format!("使用キャラ {}", crate::menulist::SHOT_NAMES[shot]),
+                &format!("使用キャラ {}", Builtin::Shot(shot as u8).text()),
             );
             out.extend(buf);
             out.extend_from_slice(b"\r\n");
@@ -1878,7 +1881,8 @@ pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
     txt_cards(&mut out, s, &names);
     txt_line(&mut out, TXT_RULE);
     for k in 0..19 {
-        txt_line(&mut out, &play_line(&s.plst, k, 6));
+        out.extend_from_slice(play_line(&s.plst, k, 6).raw.as_bytes());
+        out.extend_from_slice(b"\r\n");
     }
     out
 }
@@ -1895,10 +1899,43 @@ mod tests {
 
     #[test]
     fn literals_are_sjis() {
-        round_trips(UNKNOWN5);
         round_trips(&format!("{:3}/{:3}（キャラ切り替え↓↑）", 1, 2));
         let p = crate::scoredat::Plst::default();
-        (0..19).for_each(|k| round_trips(&play_line(&p, k, 5)));
+        (0..19).for_each(|k| round_trips(&play_line(&p, k, 5).raw.decode()));
+    }
+
+    // The play-data formats give the bytes of the former Rust formatting (16 §2.4 table).
+    #[test]
+    fn play_lines_from_formats() {
+        let mut p = crate::scoredat::Plst {
+            run_time: [123, 4, 56, 0],
+            play_time: [0, 59, 7, 0],
+            ..Default::default()
+        };
+        for (b, row) in p.counters.iter_mut().enumerate() {
+            for (i, v) in row.iter_mut().enumerate() {
+                *v = (b * 1000 + i * 37) as u32;
+            }
+        }
+        let line = |k| play_line(&p, k, 5).raw.decode();
+        assert_eq!(line(0), "総起動時間   123:04:56");
+        assert_eq!(line(1), "総プレイ時間 00:59:07");
+        let row = |label: &str, idx: usize, last: usize| {
+            let mut s = label.to_string();
+            for b in [0, 1, 2, 3, 4, last] {
+                s += &format!(" {:6}", p.counters[b][idx]);
+            }
+            s
+        };
+        assert_eq!(line(3), row("霊夢＆紫　　　　", 1, 6));
+        assert_eq!(line(15), row("全主人公合計　　", 0, 6));
+        assert_eq!(line(17), row("コンティニュー  ", 15, 5));
+        assert_eq!(line(18), row("プラクティス　  ", 16, 6));
+        let t = Builtin::ResultCards.fmt(vec![FmtArg::Int(7), FmtArg::Int(42)]);
+        assert_eq!(
+            t.raw.decode(),
+            format!("{:3}/{:3}（キャラ切り替え↓↑）", 7, 42)
+        );
     }
 
     // 16 §2.1 "Initial state": practice / spell practice enter state 10 at frame 0; a story game enters 9.

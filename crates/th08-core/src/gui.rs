@@ -2,13 +2,14 @@
 
 use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, table_index};
+use crate::builtin::Builtin;
 use crate::drawlist::{PLAYFIELD, Recorder, TextCmd};
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::task::{self, Chain, Ret, Task};
+use crate::textref::Text;
 use crate::types::lo8;
 use anyhow::Result;
-use th08_formats::sjis::{self, SjisString};
 
 // Gui_Calc = Spell_Calc 0x416B90 at calc prio 12, Gui_Draw = Spell_Draw 0x4178C0 at draw prio 15 (12 §5.8).
 pub const CALC_PRIO: u16 = 12;
@@ -41,13 +42,14 @@ const TINT_A_MAX: u32 = 0x80;
 pub enum Req {
     PlayerShow {
         face: i32,
-        name: &'static str,
+        name: Builtin,
         last: bool,
     },
     PlayerHide,
     BossShow {
         face: i32,
-        name: Vec<u8>,
+        // Card name bytes keyed by card id, or the native-22 literal (07 §11.1).
+        name: Text,
         card: i32,
         name_only: bool,
     },
@@ -72,8 +74,8 @@ pub type Queue = Vec<Req>;
 pub struct Gui {
     // VMs at +0x120 + k·0x2A4, roles in the 12 §5.8 table; 3 and 5 never get a script.
     vms: [AnmVm; 14],
-    // Pending Text_RenderToVm requests: (VM, Shift-JIS text, colour, x inside the strip).
-    texts: Vec<(usize, SjisString, [u8; 3], f32)>,
+    // Pending Text_RenderToVm requests: (VM, text, colour, x inside the strip).
+    texts: Vec<(usize, Text, [u8; 3], f32)>,
     // Spell flag bit 10: name-only show (native 22), no bonus line and no VM 13 interrupts.
     name_only: bool,
     card: i32,
@@ -211,8 +213,7 @@ impl Gui {
                 // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 (12 §5.3).
                 panel.set_repaint(2);
                 anm.set_script(rng, &mut v[6], TEXT_SLOT, 4);
-                self.texts
-                    .push((6, sjis::encode(name), PLAYER_NAME_RGB, 0.0));
+                self.texts.push((6, name.txt(), PLAYER_NAME_RGB, 0.0));
                 v[10].pending_interrupt = 1;
                 sound.play(0xE);
             }
@@ -247,9 +248,8 @@ impl Gui {
                 }
                 // Text_RenderToVmRight 0x4664A0 (10 §6): x = trunc(u0 + sw − len·15/2), u0 0, sw 320, len in
                 // Shift-JIS bytes; colour 0x00FFF0F0.
-                let x = (NAME_STRIP_W - name.len() as f32 * 15.0 / 2.0).trunc();
-                self.texts
-                    .push((7, SjisString(name.to_vec()), BOSS_NAME_RGB, x));
+                let x = (NAME_STRIP_W - name.raw.len() as f32 * 15.0 / 2.0).trunc();
+                self.texts.push((7, name, BOSS_NAME_RGB, x));
                 v[11].pending_interrupt = 1;
                 if !name_only {
                     v[13].pending_interrupt = 1;
@@ -300,7 +300,8 @@ impl Gui {
                 y: ty,
                 w,
                 size: TEXT_SIZE,
-                text: s,
+                text: s.raw,
+                key: s.key,
                 color: colour,
                 x,
                 outline: 0,

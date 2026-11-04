@@ -227,6 +227,8 @@ pub struct Gfx {
     pub persistent: bool,
     // `ResCmd::Text` rasteriser (10 §6), made with `font` at the first text command.
     text: Option<crate::text::Raster>,
+    // Translations for `TextCmd` keys; empty = vanilla text (I18N §2.3).
+    textdb: crate::textdb::TextDb,
     font: Option<String>,
 }
 
@@ -720,6 +722,7 @@ impl Gfx {
             log_fog: None,
             persistent: false,
             text: None,
+            textdb: crate::textdb::TextDb::new(),
             font: None,
         };
         // A fresh recorder's white texture (slot 0), so a Gfx without a core recorder (launcher, tools) has it too.
@@ -1881,20 +1884,20 @@ impl Gfx {
         }
     }
 
-    // Text_RenderToVm 0x4663B0 (10 §6): Shift-JIS decode, CPU raster, upload over the strip.
+    // Translated text table used by every later `TextCmd` (I18N §2.3).
+    pub fn set_text_db(&mut self, db: crate::textdb::TextDb) {
+        self.textdb = db;
+    }
+
+    // Text_RenderToVm 0x4663B0 (10 §6): translation or Shift-JIS decode, CPU raster, upload over the strip.
     fn do_text(&mut self, t: &th08_core::drawlist::TextCmd) {
+        let s = self.textdb.resolve(&t.key, &t.text);
         let font = self.font.as_deref();
         let raster = self
             .text
             .get_or_insert_with(|| crate::text::Raster::new(font));
-        let rgba = raster.render_outline(
-            &t.text.decode(),
-            t.color,
-            t.w as usize,
-            t.size as usize,
-            t.x,
-            t.outline,
-        );
+        let rgba =
+            raster.render_outline(&s, t.color, t.w as usize, t.size as usize, t.x, t.outline);
         self.do_write_texture(t.dst, 0, t.y, t.w, t.size, &rgba);
     }
 }

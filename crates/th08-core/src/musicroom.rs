@@ -2,14 +2,16 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
+use crate::builtin::Builtin;
 use crate::drawlist::{FULLSCREEN, Recorder, TexId, TextCmd};
 use crate::game::Ctx;
 use crate::gamemgr;
 use crate::input::{BOMB, DOWN, ENTER, KEY_R, PAUSE, SHOT, SKIP, UP};
 use crate::task::{Chain, Ret};
+use crate::textref::{Text as Txt, TextRef};
 use crate::types::D3dColor;
 pub use th08_formats::musiccmt::{COMMENT_LINES, Entry, MAX_ENTRIES, parse_musiccmt};
-use th08_formats::sjis::{self, SjisString};
+use th08_formats::sjis::SjisString;
 
 // Calc 0x449399 at prio 4, draw 0x449487 at prio 3 (16 §5).
 pub const CALC_PRIO: u16 = 4;
@@ -23,18 +25,6 @@ const ROWS: i32 = 10;
 // text.anm (slot 0) scripts: comment line k = 10 + k, playing title 0x11 (16 §5.3).
 const COMMENT_SCRIPT: usize = 10;
 const TITLE_SCRIPT: usize = 0x11;
-const UNHEARD: &str = "？？？？？？？？";
-// Warning table 0x4C7AAC, shown for a comment of a track neither heard nor playing (16 §5.3); U+3000 is part of the
-// strings, line 4 is a single U+3000 (not empty, so rendered).
-const WARNING: [&str; COMMENT_LINES] = [
-    "＊＊＊注意＊＊＊",
-    "　この曲はまだ、ゲーム中で流れておりません",
-    "　自分でプレイする前に聴きたくない、コメントを見たくない、",
-    "　という方は一刻も早くここから立ち去る事をお奨めします。",
-    "　",
-    "　（なお、ここで決定ボタンを押せば、他の曲と同様、",
-    "　　曲の再生とコメント表示が行われますので、注意）",
-];
 // Comment / title text colour, COLORREF 0xFFE0C0 = RGB (192, 224, 255), and mode arg 0x300000 (16 §5.3).
 const COMMENT_COLOUR: u32 = 0x00FF_E0C0;
 const COMMENT_MODE: i32 = 0x0030_0000;
@@ -46,27 +36,32 @@ fn heard_flags(plst: &[u8; MAX_ENTRIES]) -> [bool; MAX_ENTRIES] {
     plst.map(|f| f != 0)
 }
 
-// Title-list text of entry i (16 §5.2): (text, COLORREF colour, mode arg).
-fn row_text(e: &Entry, heard: bool) -> (SjisString, u32, i32) {
+// Title-list text of entry `track` (16 §5.2): (text, COLORREF colour, mode arg).
+fn row_text(e: &Entry, track: usize, heard: bool) -> (Txt, u32, i32) {
     if heard {
-        (e.title.clone(), 0x00C0_E0FF, 0x0030_2080)
+        let key = TextRef::MusicTitle { track: track as u8 };
+        (Txt::new(key, e.title.clone()), 0x00C0_E0FF, 0x0030_2080)
     } else {
-        (sjis::encode(UNHEARD), 0x0080_A0C0, 0x0010_0040)
+        (Builtin::Unknown8.txt(), 0x0080_A0C0, 0x0010_0040)
     }
 }
 
 // Comment line k of the selected entry (16 §5.3): the real comment if heard or playing, else the warning; cut to
 // 64 bytes.
-fn comment_text(e: &Entry, heard: bool, playing: bool, k: usize) -> SjisString {
+fn comment_text(e: &Entry, track: usize, heard: bool, playing: bool, k: usize) -> Txt {
     if heard || playing {
         let l = e
             .comments
             .get(k)
             .map(SjisString::as_bytes)
             .unwrap_or_default();
-        SjisString(l[..l.len().min(COMMENT_SHOWN)].to_vec())
+        let key = TextRef::MusicCmt {
+            track: track as u8,
+            line: k as u8,
+        };
+        Txt::new(key, SjisString(l[..l.len().min(COMMENT_SHOWN)].to_vec()))
     } else {
-        sjis::encode(WARNING[k])
+        Builtin::MusicWarning(k as u8).txt()
     }
 }
 
@@ -117,7 +112,7 @@ fn int(v: usize) -> i32 {
 
 // Text_RenderToVm (10 §6), font 15: the rasteriser gets x = u0 and the texture-row width and replaces the whole
 // 15-row strip; the outline is always black, `mode` only selects ±1 (−1) / ±2 px. Sets VM flag bit 0.
-fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, colour: u32, mode: i32) {
+fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: Txt, colour: u32, mode: i32) {
     let slot = usize::from(vm.anm_slot.max(0).cast_unsigned());
     let Some(sp) = ctx
         .w
@@ -142,7 +137,8 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, colour: u32, mode: i3
         y: ty,
         w,
         size: 15,
-        text: s,
+        text: s.raw,
+        key: s.key,
         color: colorref(colour),
         x: tx,
         outline: mode,
@@ -233,13 +229,13 @@ impl MusicRoom {
             return;
         };
         let c = anmvm::table_index(self.cursor);
-        let s = comment_text(e, self.heard[c], self.cursor == self.playing, k);
+        let s = comment_text(e, c, self.heard[c], self.cursor == self.playing, k);
         let vm = &mut self.comments[k];
         ctx.w
             .anm
             .file_set_script(&mut ctx.w.rng, vm, 0, COMMENT_SCRIPT + k);
         vm.pending_interrupt = 1;
-        if s.is_empty() {
+        if s.raw.is_empty() {
             vm.flags &= !anmvm::F_ENABLED;
         } else {
             vm.flags |= anmvm::F_ENABLED;
@@ -283,13 +279,10 @@ impl MusicRoom {
             self.playing = self.cursor;
             self.play(ctx);
             self.sub_frame = 0;
-            if let Some(e) = self.entries.get(anmvm::table_index(self.cursor)) {
-                let l = e
-                    .comments
-                    .first()
-                    .map(SjisString::as_bytes)
-                    .unwrap_or_default();
-                let s = SjisString(l[..l.len().min(COMMENT_SHOWN)].to_vec());
+            let c = anmvm::table_index(self.cursor);
+            if let Some(e) = self.entries.get(c) {
+                // Comment line 0 (`No.N <title>`) of the entry, as the comment it is (16 §5.3 step 4).
+                let s = comment_text(e, c, true, true, 0);
                 ctx.w
                     .anm
                     .file_set_script(&mut ctx.w.rng, &mut self.title, 0, TITLE_SCRIPT);
@@ -344,7 +337,7 @@ impl MusicRoom {
                 .file_set_script(&mut ctx.w.rng, &mut vm, ANM_SLOT, i + 1);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
             vm.pos = [93.0, (18 * (int(i) + 1) + 104 - 20) as f32, 0.0];
-            let (s, c, m) = row_text(&self.entries[i], self.heard[i]);
+            let (s, c, m) = row_text(&self.entries[i], i, self.heard[i]);
             render_vm(ctx, &mut vm, s, c, m);
             self.rows.push(vm);
         }
@@ -451,17 +444,6 @@ impl MusicRoom {
 mod tests {
     use super::*;
 
-    // Text commands carry Shift-JIS; every port literal must round-trip so the raster sees the same characters.
-    fn round_trips(s: &str) {
-        assert_eq!(th08_formats::sjis::encode(s).decode(), s);
-    }
-
-    #[test]
-    fn literals_are_sjis() {
-        WARNING.iter().for_each(|s| round_trips(s));
-        round_trips(UNHEARD);
-    }
-
     #[test]
     fn title_list_and_unlock() {
         let e = Entry {
@@ -474,20 +456,22 @@ mod tests {
         plst[3] = 1;
         let h = heard_flags(&plst);
         assert!(h[0] && !h[2] && h[3]);
-        let (s, c, o) = row_text(&e, h[2]);
+        let (s, c, o) = row_text(&e, 2, h[2]);
         assert_eq!(
-            (s.decode().as_str(), c, o),
-            (UNHEARD, 0x0080_A0C0, 0x0010_0040)
+            (s.raw.decode().as_str(), c, o),
+            ("？？？？？？？？", 0x0080_A0C0, 0x0010_0040)
         );
-        let (_, c, o) = row_text(&e, h[3]);
+        let (s, c, o) = row_text(&e, 3, h[3]);
         assert_eq!((c, o), (0x00C0_E0FF, 0x0030_2080));
+        assert_eq!(s.key, TextRef::MusicTitle { track: 3 });
         // Comments: real text if heard or playing (cut to 64 bytes), else the warning table.
-        let t = |h, p, k| comment_text(&e, h, p, k).decode();
+        let t = |h, p, k| comment_text(&e, 3, h, p, k).raw.decode();
+        let warning = |k| Builtin::MusicWarning(k).text();
         assert_eq!(t(true, false, 0), "x".repeat(64));
         assert_eq!(t(false, true, 1), "second");
         assert_eq!(t(true, false, 5), "");
-        assert_eq!(t(false, false, 0), WARNING[0]);
-        assert_eq!(t(false, false, 1), WARNING[1]);
+        assert_eq!(t(false, false, 0), warning(0));
+        assert_eq!(t(false, false, 1), warning(1));
     }
 
     #[test]
@@ -518,8 +502,9 @@ mod tests {
         assert_eq!(colorref(COMMENT_COLOUR), [192, 224, 255]);
         assert_eq!(colorref(0x00C0_E0FF), [255, 224, 192]);
         // Warning line 4 is one U+3000, not empty.
-        assert_eq!(WARNING[4], "\u{3000}");
-        assert!(WARNING[1..7].iter().all(|l| l.starts_with('\u{3000}')));
+        let warning = |k| Builtin::MusicWarning(k).text();
+        assert_eq!(warning(4), "\u{3000}");
+        assert!((1..7).all(|k| warning(k).starts_with('\u{3000}')));
     }
 
     #[test]

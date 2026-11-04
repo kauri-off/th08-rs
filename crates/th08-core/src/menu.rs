@@ -3,6 +3,7 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::{int, lo16, short, uidx};
+use crate::builtin::Builtin;
 use crate::config::Config;
 use crate::drawlist::{FULLSCREEN, Recorder, TexId, TextCmd};
 use crate::game::Ctx;
@@ -12,7 +13,6 @@ use crate::sound;
 use crate::task::{Chain, Ret};
 use crate::types::{SceneId, lo8};
 use anyhow::Result;
-use th08_formats::sjis;
 
 // title01.anm in ANM slot 20; calc prio 4 (0x467399), draw prio 3 (0x47087F) (12 §2, 00 §4).
 pub const ANM_SLOT: usize = 20;
@@ -68,49 +68,6 @@ const KEY_QUIT: i32 = 11;
 
 // Description VMs (12 §2.2): text.anm script 9, sprite 21 + i; 14 strips shared by the top menu, option and key config.
 const DESC_VMS: usize = 14;
-
-// Top-menu item descriptions (12 §2.2 table).
-const DESCRIPTIONS: [&str; ITEMS] = [
-    "ゲームを開始します",
-    "エキストラステージを開始します",
-    "敵にスペルカード戦をお願いします",
-    "ステージを選択し、練習を開始します",
-    "リプレイを鑑賞できます",
-    "過去のスコアやスペルカードの取得歴を見られます",
-    "音楽を聴けます",
-    "各種設定できます",
-    "いろいろと終了します",
-];
-
-// Option descriptions, table 0x4C8664 (12 §2.2).
-const OPTION_DESCRIPTIONS: [&str; 10] = [
-    "プレイヤーの初期数を変更します。（初期設定　３）",
-    "画面の色数を変更します。３２ＢＩＴだと最も綺麗に表示されます。",
-    "ＢＧＭの再生方法を変更します。（初期設定　ＷＡＶ）",
-    "ＢＧＭの音量を調整します",
-    "効果音の音量を調整します",
-    "ウィンドウかフルスクリーンか選択します",
-    "弾が多い場面でわざと処理落ちさせます(スコア、リプレイ記録不可)",
-    "全て初期設定にします",
-    "パッド操作のボタン配置を変更します",
-    "おいそれと終了します",
-];
-
-// Key-config descriptions, table 0x4C8690 (12 §2.2).
-const KEY_DESCRIPTIONS: [&str; 12] = [
-    "ショット、決定ボタンを設定します",
-    "ボム、キャンセルボタンを設定します",
-    "低速移動ボタンを設定します",
-    "メッセージスキップボタンを設定します",
-    "ポーズボタンを設定します",
-    "上移動ボタンを設定します",
-    "下移動ボタンを設定します",
-    "左移動ボタンを設定します",
-    "右移動ボタンを設定します",
-    "ショット押しっぱなしで低速移動になるようにします",
-    "初期設定に戻します",
-    "おおよそ終了します",
-];
 
 // Character select VMs per shot (table 0x4B8CD8): shown VMs, then the VM that gets interrupt 23.
 pub(crate) const CHAR_VMS: [[i32; 4]; 12] = [
@@ -451,20 +408,21 @@ impl MainMenu {
         clippy::cast_sign_loss,
         reason = "texture row of v0 ≥ 0, rounded as before"
     )]
-    fn render_description(&mut self, ctx: &mut Ctx, i: usize, text: &str) {
+    fn render_description(&mut self, ctx: &mut Ctx, i: usize, b: Builtin) {
         let Some(sp) = ctx.w.anm.sprite(0, 21 + i).copied() else {
             return;
         };
         let t = ctx.rec.texture(sp.tex);
         let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
-        let text = sjis::encode(text);
+        let t = b.txt();
         ctx.rec.text(TextCmd {
             dst: sp.tex,
             y: ty,
             w,
             size: 15,
-            x: centred_x(&text),
-            text,
+            x: centred_x(&t.raw),
+            text: t.raw,
+            key: t.key,
             color: [224, 240, 255],
             outline: 0x0030_0000,
         });
@@ -550,7 +508,7 @@ impl MainMenu {
         // call 9 (12 §2.2), so a previous screen's description stays drawn meanwhile.
         if self.frames < TOP_INPUT {
             let k = self.frames as usize;
-            self.render_description(ctx, k, DESCRIPTIONS[k]);
+            self.render_description(ctx, k, Builtin::MenuTop(k as u8));
         }
         // Calls 0–8 are sub-state 0; call 9 enters sub-state 1 (+0x08 := −1, +0x14430 := 0), and cursor, demo counter
         // and change test run from that call on (12 §2.2 "Input timing"). The port keeps counting `frames` instead of
@@ -979,8 +937,8 @@ impl MainMenu {
         if self.frames == 0 {
             self.interrupt_all(3);
             self.idle = 0;
-            for (k, t) in OPTION_DESCRIPTIONS.iter().enumerate() {
-                self.render_description(ctx, k, t);
+            for k in 0..10 {
+                self.render_description(ctx, usize::from(k), Builtin::MenuOption(k));
             }
         }
         for i in 0..OPTION_ITEMS {
@@ -1117,8 +1075,8 @@ impl MainMenu {
         if self.frames == 0 {
             self.interrupt_all(4);
             self.key_rows(ctx);
-            for (k, t) in KEY_DESCRIPTIONS.iter().enumerate() {
-                self.render_description(ctx, k, t);
+            for k in 0..12 {
+                self.render_description(ctx, usize::from(k), Builtin::MenuKey(k));
             }
             let cfg = &mut ctx.w.game.cfg;
             self.keys = cfg.pad;
@@ -1561,26 +1519,12 @@ fn last_difficulty(g: &gamemgr::Game) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{DESCRIPTIONS, KEY_DESCRIPTIONS, OPTION_DESCRIPTIONS};
     use super::{
         INFO_FADE_OUT, assign_key, centred_x, final_notice, info_fade_alpha, info_files, info_step,
         title_music, volume_step,
     };
     use crate::types::SceneId;
 
-    // Text commands carry Shift-JIS; every port literal must round-trip so the raster sees the same characters.
-    fn round_trips(s: &str) {
-        assert_eq!(th08_formats::sjis::encode(s).decode(), s);
-    }
-
-    #[test]
-    fn descriptions_are_sjis() {
-        DESCRIPTIONS
-            .iter()
-            .chain(&OPTION_DESCRIPTIONS)
-            .chain(&KEY_DESCRIPTIONS)
-            .for_each(|s| round_trips(s));
-    }
     use crate::gamemgr::{self, Game};
 
     fn ctx() -> Option<crate::game::Ctx> {

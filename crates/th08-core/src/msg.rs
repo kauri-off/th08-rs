@@ -3,6 +3,7 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{AnmVm, Timer};
 use crate::input::{self, Input};
+use crate::textref::{MSG_FILES, Text, TextRef};
 use crate::types::{D3dColor, lo8};
 use th08_formats::msg::Op;
 use th08_formats::sjis::SjisString;
@@ -167,8 +168,8 @@ pub struct Dialogue {
     pub choice: u8,
     // +0x22D84, set by op 9; the HUD then draws the clear bonus panel (10 §9).
     pub stage_end: bool,
-    // Port-only: pending Text_RenderToVm requests (line, Shift-JIS text, colour) the HUD records as text commands (10 §6).
-    pub texts: Vec<(usize, SjisString, [u8; 3])>,
+    // Port-only: pending Text_RenderToVm requests (line, text, colour) the HUD records as text commands (10 §6).
+    pub texts: Vec<(usize, Text, [u8; 3])>,
     pub events: Vec<Event>,
     // Port-only: set by Msg_Start; the caller then performs the playfield side effects of 10 §4 step 6.
     pub side_effects: bool,
@@ -353,7 +354,7 @@ impl Dialogue {
         anm: &mut AnmManager,
         rng: &mut crate::rng::Rng,
         line: usize,
-        s: SjisString,
+        s: Text,
         colour: [u8; 3],
     ) {
         let Some(vm) = self.line_vm_mut(line) else {
@@ -366,7 +367,8 @@ impl Dialogue {
     // Renders " " into line 1 if it has a script (ops 3/16).
     fn clear_line1(&mut self) {
         if self.lines[1].script_index >= 0 {
-            self.texts.push((1, SjisString(b" ".to_vec()), [255; 3]));
+            self.texts
+                .push((1, Text::dynamic(SjisString(b" ".to_vec())), [255; 3]));
         }
     }
 
@@ -420,7 +422,8 @@ impl Dialogue {
             | Op::Text1(_)
             | Op::Skippable(_)
             | Op::Textbox(_)) => {
-                self.exec_text(anm, rng, op);
+                let key = self.text_key(f, &ins);
+                self.exec_text(anm, rng, op, key);
                 Exec::Next
             }
             op => self.exec_flow(inp, &op),
@@ -482,7 +485,27 @@ impl Dialogue {
     }
 
     // 10 §5.1 text ops 3, 13, 16, 18, 19, 20.
-    fn exec_text(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, op: Op) {
+    // Translation key of a text op: msg file, entry (lowest index with its offset), text-op number (I18N §2.3).
+    fn text_key(&self, f: &MsgFile, ins: &Ins) -> TextRef {
+        let name = file_name(self.info.stage, self.info.shot);
+        let file = MSG_FILES
+            .iter()
+            .position(|&n| name.strip_suffix(".dat") == Some(n));
+        let start = f
+            .entries
+            .get(self.entry.max(0).cast_unsigned() as usize)
+            .copied();
+        match (file, start) {
+            (Some(file), Some(start)) => TextRef::Msg {
+                file: file as u8,
+                entry: f.entries.iter().position(|&o| o == start).unwrap_or(0) as u16,
+                nth: f.text_ops_before(start, ins.at),
+            },
+            _ => TextRef::Dynamic,
+        }
+    }
+
+    fn exec_text(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, op: Op, key: TextRef) {
         match op {
             // Op 3.
             Op::TextLine {
@@ -495,7 +518,7 @@ impl Dialogue {
                     self.clear_line1();
                 }
                 let c = self.text_colour[sp.min(3)];
-                self.render(anm, rng, line.min(1), text, c);
+                self.render(anm, rng, line.min(1), Text::new(key, text), c);
                 self.wait_count = 0;
             }
             // Op 13.
@@ -510,7 +533,7 @@ impl Dialogue {
                     usize::from(self.next_line),
                     self.text_colour[usize::from(self.text_speaker)],
                 );
-                self.render(anm, rng, line, s, c);
+                self.render(anm, rng, line, Text::new(key, s), c);
                 self.wait_count = 0;
                 self.new_box = false;
                 self.next_line = self.next_line.wrapping_add(1);
@@ -518,8 +541,8 @@ impl Dialogue {
             // Op 18.
             Op::Textbox(b) => self.textbox = b != 0,
             // Ops 19 / 20: line 0 / 1 with text_colour[0].
-            Op::Text0(s) => self.text_on_line(anm, rng, 0, s),
-            Op::Text1(s) => self.text_on_line(anm, rng, 1, s),
+            Op::Text0(s) => self.text_on_line(anm, rng, 0, Text::new(key, s)),
+            Op::Text1(s) => self.text_on_line(anm, rng, 1, Text::new(key, s)),
             // Other groups are dispatched by `exec`.
             _ => {}
         }
@@ -530,7 +553,7 @@ impl Dialogue {
         anm: &mut AnmManager,
         rng: &mut crate::rng::Rng,
         line: usize,
-        s: SjisString,
+        s: Text,
     ) {
         let c = self.text_colour[0];
         self.render(anm, rng, line, s, c);
@@ -796,7 +819,7 @@ mod tests {
             let ins = f.ins(MsgOff(8 + 6 * k)).unwrap();
             d.exec(&f, &mut anm, &mut rng, &Input::default(), ins);
         }
-        let lines: Vec<(usize, String)> = d.texts.iter().map(|t| (t.0, t.1.decode())).collect();
+        let lines: Vec<(usize, String)> = d.texts.iter().map(|t| (t.0, t.1.raw.decode())).collect();
         assert_eq!(lines, [(0, "a".into()), (1, "b".into()), (2, "c".into())]);
         assert!(std::ptr::eq(d.line_vm(2).unwrap(), &d.boss_card));
         assert!(d.line_vm(3).is_none());

@@ -1,6 +1,7 @@
 //! Bombs: Player_UpdateBomb, Bomb_Start, the 16 bombs + dissolve spell, tint (09 §7, 14 §1–§2); areas (09 §8).
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer, table_index};
+use crate::builtin::Builtin;
 use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::effect::{self, FxEnv, WHITE};
 use crate::game::Sys;
@@ -152,7 +153,7 @@ pub struct Bomb {
     // Object 0's +0x1B8 VM and the next ones' used as plain VM slots (Marisa beams, Yukari LS) (14 §1.1).
     pub vms: [AnmVm; 5],
     // Port-only: spell name and cut-in data for the GUI banner (14 §1.2).
-    pub name: &'static str,
+    pub name: Option<Builtin>,
     pub last_spell: bool,
     // Port-only: character row of SPECS (bomb_char).
     pub ch: u8,
@@ -177,7 +178,7 @@ impl Default for Bomb {
             origin: [0.0; 3],
             objs: vec![BombObj::default(); OBJS],
             vms: Default::default(),
-            name: "",
+            name: None,
             last_spell: false,
             ch: 0,
             attract: false,
@@ -192,43 +193,171 @@ impl Default for Bomb {
 
 // (name, duration, invulnerability, isLastSpell) per character (Reimu, Yukari, Marisa, Alice, Sakuya, Remilia,
 // Youmu, Yuyuko) × (bomb, last spell), 14 §2.
-type BombSpec = (&'static str, i32, i32, bool);
+type BombSpec = (Builtin, i32, i32, bool);
 const SPECS: [[BombSpec; 2]; 8] = [
     [
-        ("霊符「夢想妙珠」", 200, 260, false),
-        ("神霊「夢想封印　瞬」", 200, 260, true),
+        (
+            Builtin::Bomb {
+                chara: 0,
+                last: false,
+            },
+            200,
+            260,
+            false,
+        ),
+        (
+            Builtin::Bomb {
+                chara: 0,
+                last: true,
+            },
+            200,
+            260,
+            true,
+        ),
     ],
     [
-        ("境符「四重結界」", 150, 200, false),
-        ("境界「永夜四重結界」", 250, 300, true),
+        (
+            Builtin::Bomb {
+                chara: 1,
+                last: false,
+            },
+            150,
+            200,
+            false,
+        ),
+        (
+            Builtin::Bomb {
+                chara: 1,
+                last: true,
+            },
+            250,
+            300,
+            true,
+        ),
     ],
     [
-        ("恋符「マスタースパーク」", 300, 350, false),
-        ("魔砲「ファイナルスパーク」", 350, 380, true),
+        (
+            Builtin::Bomb {
+                chara: 2,
+                last: false,
+            },
+            300,
+            350,
+            false,
+        ),
+        (
+            Builtin::Bomb {
+                chara: 2,
+                last: true,
+            },
+            350,
+            380,
+            true,
+        ),
     ],
     [
-        ("魔符「アーティフルサクリファイス」", 210, 250, false),
-        ("魔操「リターンイナニメトネス」", 230, 280, true),
+        (
+            Builtin::Bomb {
+                chara: 3,
+                last: false,
+            },
+            210,
+            250,
+            false,
+        ),
+        (
+            Builtin::Bomb {
+                chara: 3,
+                last: true,
+            },
+            230,
+            280,
+            true,
+        ),
     ],
     [
-        ("幻符「殺人ドール」", 250, 290, false),
-        ("幻葬「夜霧の幻影殺人鬼」", 320, 350, true),
+        (
+            Builtin::Bomb {
+                chara: 4,
+                last: false,
+            },
+            250,
+            290,
+            false,
+        ),
+        (
+            Builtin::Bomb {
+                chara: 4,
+                last: true,
+            },
+            320,
+            350,
+            true,
+        ),
     ],
     [
-        ("紅符「不夜城レッド」", 240, 290, false),
-        ("紅魔「スカーレットデビル」", 280, 320, true),
+        (
+            Builtin::Bomb {
+                chara: 5,
+                last: false,
+            },
+            240,
+            290,
+            false,
+        ),
+        (
+            Builtin::Bomb {
+                chara: 5,
+                last: true,
+            },
+            280,
+            320,
+            true,
+        ),
     ],
     [
-        ("人符「現世斬」", 220, 270, false),
-        ("人鬼「未来永劫斬」", 250, 300, false),
+        (
+            Builtin::Bomb {
+                chara: 6,
+                last: false,
+            },
+            220,
+            270,
+            false,
+        ),
+        (
+            Builtin::Bomb {
+                chara: 6,
+                last: true,
+            },
+            250,
+            300,
+            false,
+        ),
     ],
     [
-        ("死符「ギャストリドリーム」", 300, 350, false),
-        ("死蝶「華胥の永眠」", 300, 350, true),
+        (
+            Builtin::Bomb {
+                chara: 7,
+                last: false,
+            },
+            300,
+            350,
+            false,
+        ),
+        (
+            Builtin::Bomb {
+                chara: 7,
+                last: true,
+            },
+            300,
+            350,
+            true,
+        ),
     ],
 ];
 // Youmu LS passes isLastSpell = 0 (14 §2.12 quirk); the dissolve spell is 40 frames in spell practice.
-const DISSOLVE: BombSpec = ("「ディゾルブスペル」", 120, 200, false);
+const DISSOLVE: BombSpec = (Builtin::Dissolve, 120, 200, false);
 // Colours (D3DCOLOR 0xAARRGGBB) by spec row. Table 0x4C6100, the Reimu LS blasts (14 §2.2).
 const BLAST_COLOURS: [D3dColor; 7] = [
     D3dColor(0x8FFF_FFFF),
@@ -647,7 +776,7 @@ impl Player {
     // Bomb_Start 0x40BE30 (14 §1.2): banner, duration, state 3 + invulnerability, ring, objects freed (other
     // fields kept), items attracted, origin = p.
     fn bomb_begin(&mut self, anm: &mut AnmManager, spec: BombSpec, sys: &mut Sys) {
-        self.bomb.name = spec.0;
+        self.bomb.name = Some(spec.0);
         self.bomb.last_spell = spec.3;
         let face = if self.bomb.index == 4 {
             -1
@@ -1774,7 +1903,7 @@ mod tests {
 
     #[test]
     fn spell_names_are_sjis() {
-        SPECS.iter().flatten().for_each(|s| round_trips(s.0));
+        SPECS.iter().flatten().for_each(|s| round_trips(s.0.text()));
     }
 
     fn press(bits: u16) -> input::Input {
