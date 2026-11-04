@@ -1,6 +1,4 @@
-//! Trace sampling of the port's state (specs/data/drawlog/README.md "Sessions", "Trace"): the 36-column session row,
-//! the 22-column demo row, the recorded loader schedule and the chain hooks that write per-pass rows. Pure reads of
-//! `ctx.w`; the session / demosync runners, parsers and comparisons are tools-side.
+//! Trace sampling of the port's state: session / demo rows, the recorded loader schedule and per-pass chain hooks.
 
 use crate::game::Ctx;
 use std::collections::VecDeque;
@@ -19,12 +17,12 @@ pub struct Sched {
     pub poll: i64,
     // Rows written inside this frame's calc (restarted passes, in-calc presents with ff −1), taken by `Session::run`.
     pub pass_rows: Vec<Row>,
-    // Start value of the ASCII frame counter +0x8284 (12 §5.10 slow boots): `asciicalc − poll` of the first
+    // Start value of the ASCII frame counter +0x8284 (slow boots): `asciicalc − poll` of the first
     // `loader gauge` line when positive, else 0.
     pub ascii_offset: u32,
 }
 
-// FuncChain_RunCalc restart (00 §3, README "Trace"): the probe writes a row per pass, and the next pass polls again.
+// FuncChain_RunCalc restart: the probe writes a row per pass, and the next pass polls again.
 pub fn on_restart(ctx: &mut Ctx) {
     let Some(poll) = ctx.w.game.sched.as_ref().map(|s| s.poll) else {
         return;
@@ -36,7 +34,7 @@ pub fn on_restart(ctx: &mut Ctx) {
     }
 }
 
-// Device_ClearPresentTwice (16 §1.2): a present inside a calc gets its own trace row, ff = −1 (README "Trace").
+// Device_ClearPresentTwice: a present inside a calc gets its own trace row, ff = −1.
 pub fn on_extra_present(ctx: &mut Ctx) {
     let Some(poll) = ctx.w.game.sched.as_ref().map(|s| s.poll) else {
         return;

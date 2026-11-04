@@ -1,11 +1,10 @@
-//! Display-text keys on `TextCmd` (I18N §2.3, ARCH_B §1.4): where a string came from, next to its vanilla bytes.
-//! Core only builds keys; translations are looked up on the render side and never read here.
+//! Display-text keys on `TextCmd`: where a string came from, next to its vanilla bytes; core never reads translations.
 
 use crate::builtin::Builtin;
 use th08_formats::sjis;
 pub use th08_formats::sjis::SjisString;
 
-// Card record text fields (ECL op 122, 07 §11.1; CATK +0x10 / +0x40 / +0x70 / +0xB0, 15 §2).
+// Card record text fields (ECL op 122; CATK +0x10 / +0x40 / +0x70 / +0xB0).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SpellField {
     Name,
@@ -15,14 +14,14 @@ pub enum SpellField {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TextRef {
-    // Text op (3/16/19/20) number `nth` of msg entry `entry` in file order (10 §5.1); `file` indexes `MSG_FILES`.
-    // Entries sharing an offset use the lowest index (10 §2), so one text has one key.
+    // Text op (3/16/19/20) number `nth` of msg entry `entry` in file order; `file` indexes `MSG_FILES`.
+    // Entries sharing an offset use the lowest index, so one text has one key.
     Msg { file: u8, entry: u16, nth: u16 },
-    // Card id = ECL op 122 +0x0E, 0-based (07 §11.1).
+    // Card id = ECL op 122 +0x0E, 0-based.
     Spell { card: u16, field: SpellField },
-    // 0-based physical line (LF-split) of a text line in `END_FILES[file]` (16 §1.3).
+    // 0-based physical line (LF-split) of a text line in `END_FILES[file]`.
     Ending { file: u8, line: u16 },
-    // musiccmt.txt entry `track` (0-based): title row and comment line k (16 §5.1).
+    // musiccmt.txt entry `track` (0-based): title row and comment line k.
     MusicTitle { track: u8 },
     MusicCmt { track: u8, line: u8 },
     // Exe literal or printf format with its arguments (`builtin.rs`).
@@ -81,7 +80,7 @@ impl Builtin {
     }
 }
 
-// The msg files of `msg::FILES` (10 §1), each once.
+// The msg files of `msg::FILES`, each once.
 pub const MSG_FILES: [&str; 33] = [
     "msg1a", "msg1b", "msg1c", "msg1d", "msg2a", "msg2b", "msg2c", "msg2d", "msg3a", "msg3b",
     "msg3c", "msg3d", "msg4dm", "msg4ab", "msg4ac", "msg4ba", "msg4bd", "msg5a", "msg5b", "msg5c",
@@ -89,7 +88,7 @@ pub const MSG_FILES: [&str; 33] = [
     "msg8b", "msg8c", "msg8d",
 ];
 
-// Ending scripts (16 §1.2 step 5) and the staff-roll files they chain to.
+// Ending scripts and the staff-roll files they chain to.
 pub const END_FILES: [&str; 14] = [
     "end00a.end",
     "end00b.end",
@@ -112,7 +111,7 @@ pub fn end_file(name: &str) -> Option<u8> {
 }
 
 impl TextRef {
-    // Stable key string of a translation table (ARCH_B §1.4 form): `msg/msg4a.dat/3/17`, `spell/112/name`,
+    // Stable key string of a translation table: `msg/msg4a.dat/3/17`, `spell/112/name`,
     // `end/end00a.end/5`, `music/3/title`, `musiccmt/3/2`, `builtin/menu.top.0`. Dynamic has none.
     pub fn key(&self) -> Option<String> {
         Some(match self {

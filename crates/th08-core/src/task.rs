@@ -3,7 +3,7 @@
 use crate::drawlist::Recorder;
 use anyhow::Result;
 
-// Callback return codes interpreted by the runners (00 §3 table).
+// Callback return codes interpreted by the runners (§3 table).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Ret {
@@ -16,7 +16,7 @@ pub enum Ret {
     Restart = 6,
 }
 
-// Runner result: normal (count of callbacks or 1 for code 3), 0 = quit (code 4), −1 = error quit (code 5) (00 §3.1).
+// Runner result: normal (count of callbacks or 1 for code 3), 0 = quit (code 4), −1 = error quit (code 5) (§3.1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Flow {
     Continue,
@@ -32,14 +32,14 @@ pub enum Chain {
     Draw,
 }
 
-// One subsystem object: node callbacks (0x20-byte node: +0x04 per-frame, +0x08 on-register, +0x0C on-remove, 00 §3).
+// One subsystem object: node callbacks (0x20-byte node: +0x04 per-frame, +0x08 on-register, +0x0C on-remove).
 // Port: a subsystem registers one object on several nodes; `tag` tells the nodes apart. The chain payload is the
 // context's `Copy` node value (`TaskCtx::Node`), whose `Task` impl dispatches to the subsystem (chain.rs for `Ctx`).
 pub trait Task<C> {
     fn calc(&mut self, _ctx: &mut C, _tag: u8) -> Ret {
         Ret::Next
     }
-    // Draw node, ARCH decision 2: the draw-phase step makes every state write of the draw callback (logic, VM
+    // Draw node: the draw-phase step makes every state write of the draw callback (logic, VM
     // caches, ascii queue) and runs whenever the draw chain runs, emit on or off.
     fn draw_step(&mut self, _ctx: &mut C, _tag: u8) -> Ret {
         Ret::Next
@@ -83,7 +83,7 @@ pub struct Tasks<N> {
     next_id: u64,
     // Unlinked nodes whose on-remove has not run yet (see `reap`).
     dead: Vec<(N, Chain, u8)>,
-    // Task objects with a callback in progress, innermost last (the port's former `RefCell` borrows).
+    // Task objects with a callback in progress, innermost last.
     running: Vec<N>,
 }
 
@@ -144,7 +144,7 @@ fn guarded<C: TaskCtx, R>(
     r
 }
 
-// FuncChain_AddCalc / AddDraw (00 §3): on-register runs first, then the node is linked after nodes of equal
+// FuncChain_AddCalc / AddDraw: on-register runs first, then the node is linked after nodes of equal
 // priority whatever it returned (a node it registers with the same priority lands before this one); no unlink on Err.
 pub fn add<C: TaskCtx>(
     ctx: &mut C,
@@ -179,7 +179,7 @@ pub fn add<C: TaskCtx>(
     r.map(|()| id)
 }
 
-// FuncChain_Remove 0x43CF50 (00 §3.1): unlinks exactly one node and calls its on-remove once.
+// FuncChain_Remove 0x43CF50 (§3.1): unlinks exactly one node and calls its on-remove once.
 pub fn remove<C: TaskCtx>(ctx: &mut C, id: NodeId) -> bool {
     for chain in [Chain::Calc, Chain::Draw] {
         if let Some(p) = ctx.tasks().list(chain).iter().position(|n| n.id == id) {
@@ -191,7 +191,7 @@ pub fn remove<C: TaskCtx>(ctx: &mut C, id: NodeId) -> bool {
     false
 }
 
-// A subsystem's unregister function (e.g. Stage 0x409CA0, 00 §3.1): removes its calc node and all its draw nodes.
+// A subsystem's unregister function (e.g. Stage 0x409CA0, §3.1): removes its calc node and all its draw nodes.
 pub fn remove_task<C: TaskCtx>(ctx: &mut C, task: C::Node) {
     for chain in [Chain::Calc, Chain::Draw] {
         while let Some(p) = ctx.tasks().list(chain).iter().position(|n| n.task == task) {
@@ -217,7 +217,7 @@ fn unlink<C: TaskCtx>(ctx: &mut C, chain: Chain, pos: usize) {
 }
 
 // On-remove hooks of tasks that are currently running (removed from inside their own callback) wait for the next reap.
-// Port artifact (formerly RefCell): the original calls on-remove inside FuncChain_Remove, i.e. before the caller continues.
+// Port artifact: the original calls on-remove inside FuncChain_Remove, i.e. before the caller continues.
 fn reap<C: TaskCtx>(ctx: &mut C) {
     let mut i = 0;
     while i < ctx.tasks().dead.len() {
@@ -232,7 +232,7 @@ fn reap<C: TaskCtx>(ctx: &mut C) {
     }
 }
 
-// FuncChain_RunCalc 0x43CA50 / FuncChain_RunDraw 0x43CB60 (00 §3, §3.1).
+// FuncChain_RunCalc 0x43CA50 / FuncChain_RunDraw 0x43CB60.
 pub fn run<C: TaskCtx>(ctx: &mut C, chain: Chain) -> Flow {
     let mut i = 0;
     loop {
@@ -273,7 +273,7 @@ pub fn run<C: TaskCtx>(ctx: &mut C, chain: Chain) -> Flow {
             Ret::StopFrame => return Flow::Continue,
             Ret::Quit => return Flow::Quit,
             Ret::ErrorQuit => return Flow::Error,
-            // Restart (00 §3): every calc node runs again in the same Frame_Run, Supervisor_Calc's input poll included.
+            // Restart: every calc node runs again in the same Frame_Run, Supervisor_Calc's input poll included.
             Ret::Restart if chain == Chain::Calc => {
                 ctx.on_restart();
                 i = 0;
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(c.tasks.priorities(Chain::Calc), [5, 5, 9]);
     }
 
-    // 00 §2 restart / exit: both chains emptied, every node's on-remove called (calc chain first).
+    // Restart / exit (00 §2): both chains emptied, every node's on-remove called (calc chain first).
     #[test]
     fn clear_all_chains() {
         let mut c = T::default();
@@ -413,7 +413,7 @@ mod tests {
         assert!(c.tasks.priorities(Chain::Draw).is_empty());
     }
 
-    // Decision 2: each draw node's step, then its emit (seeing that step's writes), in chain order; emit off runs
+    // Each draw node's step, then its emit (seeing that step's writes), in chain order; emit off runs
     // the same steps and records nothing.
     #[test]
     fn draw_step_then_emit() {
@@ -440,7 +440,7 @@ mod tests {
         assert_eq!(c.log.join(" "), "s1 s2");
     }
 
-    // 00 §3: a node registered by on-register with the same priority lands first; the outer node stays on Err.
+    // A node registered by on-register with the same priority lands first; the outer node stays on Err.
     #[test]
     fn add_runs_on_register_before_linking() {
         let mut c = T::default();

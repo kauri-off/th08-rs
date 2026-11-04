@@ -1,5 +1,4 @@
-//! Builtin display strings: the exe literals that reach `Text_RenderToVm` (10 §6), keyed for translation (I18N §2.3,
-//! G0 inventory docs/arch/I18N_STRINGS.md §2). The text is the vanilla original; printf forms are the exe formats.
+//! Builtin display strings: the vanilla exe literals and printf formats that reach `Text_RenderToVm` (10 §6).
 
 // One table row: vanilla text (UTF-8 of the cp932 literal, or the exe printf format), exe VA when it is a single
 // literal (0 = table row / port-printed), thcrap stringlocs id ("" = none).
@@ -21,9 +20,9 @@ pub enum Builtin {
     MenuTop(u8),
     MenuOption(u8),
     MenuKey(u8),
-    // Player bomb names (14 §1.2, §2): `chara` = row of bomb.rs SPECS (Reimu … Yuyuko), `last` = its last-spell slot.
+    // Player bomb names (14 §2): `chara` = row of bomb.rs SPECS (Reimu … Yuyuko), `last` = its last-spell slot.
     Bomb { chara: u8, last: bool },
-    // 「ディゾルブスペル」 (14 §2.17) and the name-only 「リザレクション」 of ECL native 22 (07 §11.1, §12).
+    // 「ディゾルブスペル」 (14 §2.17) and the name-only 「リザレクション」 of ECL native 22 (07 §12).
     Dissolve,
     Resurrection,
     // 8 / 9 / 5 full-width '?' (16 §5.2, §6.3, §2.4).
@@ -200,7 +199,7 @@ impl Builtin {
         }
     }
 
-    // Every builtin, for table checks and the G3 importer.
+    // Every builtin, for table checks and the importer.
     pub fn all() -> Vec<Builtin> {
         let n = |len: usize| (0..len).map(|k| k as u8);
         let mut v: Vec<Builtin> = Vec::new();
@@ -308,7 +307,7 @@ const SHOT_NAMES: [&str; 13] = [
     "全主人公合計　　",
 ];
 
-// Difficulty names 0x4C8628 for info line 1 (16 §6.3; specs/data/spell_tables.md).
+// Difficulty names 0x4C8628 for info line 1 (16 §6.3).
 const DIFF_NAMES: [&str; 6] = [
     "初月（イージー）",
     "三日月（ノーマル）",
@@ -318,7 +317,7 @@ const DIFF_NAMES: [&str; 6] = [
     "極意（ラストワード）",
 ];
 
-// Unlock hints 0x4C82C8 for ids 204–221, numbers already printed + 1 (16 §6.3; specs/data/spell_tables.md §7).
+// Unlock hints 0x4C82C8 for ids 204–221, numbers already printed + 1 (16 §6.3).
 const HINTS: [[&str; 2]; 18] = [
     [
         "挑戦可能条件：望月（エキストラ）をスペルカード７枚以上取得して",
@@ -391,7 +390,7 @@ const HINTS: [[&str; 2]; 18] = [
     ],
 ];
 
-// 8 and 9 full-width '?' (16 §6.3; the 9-char one is string 0x4B9330).
+// 8 and 9 full-width '?' (16 §6.3); the 9-char one is string 0x4B9330.
 const UNKNOWN8: &str = "？？？？？？？？";
 const UNKNOWN9: &str = "？？？？？？？？？";
 

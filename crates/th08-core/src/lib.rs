@@ -1,6 +1,4 @@
-//! th08 game logic core: platform-free `World` state, the `Ctx` frame driver and every ported subsystem
-//! (rewrite step 10, STEP10_CRATES.md §1). No renderer, audio device, window, file system or clock: those are the
-//! `Renderer` / `AudioOut` / `Host` / `DataSource` traits implemented by th08-render, th08-audio and the app.
+//! th08 game logic core: platform-free `World` state, the `Ctx` frame driver and every ported subsystem.
 // Logic transcendentals go through `fmath` (05 §10); clippy.toml lists the banned std methods.
 #![deny(clippy::disallowed_methods)]
 #![forbid(unsafe_code)]

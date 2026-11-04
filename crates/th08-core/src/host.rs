@@ -1,9 +1,8 @@
-//! Host interface (ARCH_A §2.2, ARCH_C decisions 3 and 6): the core's only way to platform input, clocks and save
-//! storage. Implemented by the app (`platform::AppHost`), the tools (`platform::ToolHost`) and core tests (`MemHost`).
+//! Host interface: the core's only way to platform input, clocks and save storage (app, tools, `MemHost`).
 
 use crate::input::PadState;
 
-// Per-frame input is a per-player array; vanilla th08 is single-player and reads `[0]` (ARCH_C decision 6).
+// Per-frame input is a per-player array; vanilla th08 is single-player and reads `[0]`.
 pub const MAX_PLAYERS: usize = 2;
 pub type Words = [u16; MAX_PLAYERS];
 

@@ -1,4 +1,4 @@
-//! ASCII manager 0x4CCE20: string queue, score popups, gauge readout, boss markers, pause and continue menus (12 §2.9, §3, §4, §5.9, §5.10; 13 §4).
+//! ASCII manager 0x4CCE20: string queue, popups, gauge, boss markers, pause / continue menus (12 §2.9, §3–§5; 13 §4).
 
 use crate::anmvm::{self, AnmVm};
 use crate::drawlist::Recorder;
@@ -1381,7 +1381,7 @@ struct ContinueMenu {
     cap_vm: AnmVm,
 }
 
-// 0x404890 early exits (11 §4.2, RE-Q51): game_over := 0 and displayed score := score, no sound / VMs / capture /
+// 0x404890 early exits (11 §4.2): game_over := 0 and displayed score := score, no sound / VMs / capture /
 // play time; GameMgr_Calc later in the same pass then runs one more gameplay frame. `update` then returns true and
 // the caller syncs the player's displayed score (nothing in between reads it).
 fn early_exit(g: &mut Game, scene: SceneId) {
@@ -1479,10 +1479,9 @@ impl ContinueMenu {
                 if inp.pressed(input::SHOT | input::ENTER) {
                     sound.play(crate::sound::OK);
                     if self.yes && (g.difficulty >= 4 || g.spell_practice()) {
-                        // "Yes" in spell practice / Extra acts in the press call (12 §4 "Music", "Confirm timing"):
-                        // `Music_Stop`, or for a non-restarting spell-practice card "UnPause" and
-                        // `Bgm_StartFadeInFromDip(1.0)`; scene 11, Hud_StageTransition, game_over := 0 on both
-                        // branches, play-time timestamp; return with no VM run and no frame += 1.
+                        // "Yes" in spell practice / Extra acts in the press call (12 §4): `Music_Stop`, or for a
+                        // non-restarting card "UnPause" + `Bgm_StartFadeInFromDip(1.0)`; scene 11, Hud_StageTransition,
+                        // game_over := 0, play-time timestamp; no VM run and no frame += 1.
                         if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
                             bgm.stop_bgm();
                         } else {
@@ -1597,7 +1596,7 @@ impl AsciiManager {
     }
 }
 
-// Chain nodes of `ctx.w.ascii_mgr` (calc 1, draw 14 / 20): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.ascii_mgr` (calc 1, draw 14 / 20): stateless forwarder.
 pub struct AsciiTask;
 
 impl Task<Ctx> for AsciiTask {
@@ -2023,7 +2022,7 @@ mod tests {
         assert!(!m.open && m.vms.iter().all(|v| !v.visible()));
     }
 
-    // 12 §3 (RE-Q70): state 0 interrupts VMs 0–3 only (VM 3 also in replay); confirm on Resume sends interrupt 2 to
+    // 12 §3: state 0 interrupts VMs 0–3 only (VM 3 also in replay); confirm on Resume sends interrupt 2 to
     // VMs 0–3 and 1 to the capture VM in that call; "yes" sends interrupt 2 to VMs 4–6 only; states 4/9/10 send none.
     #[test]
     fn pause_menu_interrupts() {
@@ -2124,7 +2123,7 @@ mod tests {
         assert!(ov.popups.slots[0].is_none());
     }
 
-    // 13 §4 (RE-Q71): Ascii_InitVms resets the small and special cursors, not the large one.
+    // 13 §4: Ascii_InitVms resets the small and special cursors, not the large one.
     #[test]
     fn clear_popups_resets_small_cursors() {
         let mut ov = Overlays::default();
@@ -2139,7 +2138,7 @@ mod tests {
         assert!(p.large.iter().all(Option::is_none));
     }
 
-    // 13 §4 (RE-Q67): Timer_Greater on the integer cur, so at speed 0.5 a small popup lives 122 calcs, a static
+    // 13 §4: Timer_Greater on the integer cur, so at speed 0.5 a small popup lives 122 calcs, a static
     // large popup (age 88) 6.
     #[test]
     fn popup_life_on_integer_cur() {

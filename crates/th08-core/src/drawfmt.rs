@@ -1,5 +1,4 @@
-//! Draw log text format (specs/data/drawlog/FORMAT.md): per-frame text of the recorded `LogRec`s and the writer
-//! `Ctx` feeds; pure (the file / xz opening is `drawlog::open_spec`, tools side).
+//! Draw log text format: per-frame text of the recorded `LogRec`s and the writer `Ctx` feeds.
 
 use crate::drawlist::{Blend, LogRec, Vertex};
 use std::fmt::Write as _;
@@ -89,7 +88,7 @@ fn num_fast(v: f32, dec: usize) -> Option<String> {
     Some(std::str::from_utf8(&buf[i..]).ok()?.to_string())
 }
 
-// C `printf("%g")` (6 significant digits, trailing zeros removed), as the probe prints fog start / end (FORMAT.md §2).
+// C `printf("%g")` (6 significant digits, trailing zeros removed), as the probe prints fog start / end.
 pub fn num_g(v: f32) -> String {
     let v = f64::from(v);
     if !v.is_finite() {
@@ -353,8 +352,7 @@ impl Writer {
         Self::new(Sink::Memory(Vec::new()))
     }
 
-    // Text log into `w` (a file or an xz stream opened by the app / tool, `drawlog::open_spec`), only the frames
-    // in `range`.
+    // Text log into `w` (a file or an xz stream opened by the app / tool), only the frames in `range`.
     pub fn stream(w: Box<dyn std::io::Write>, range: Option<Range>) -> Self {
         let mut w = Self::new(Sink::Stream(w));
         w.range = range;

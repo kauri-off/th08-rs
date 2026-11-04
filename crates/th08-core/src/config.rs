@@ -1,9 +1,9 @@
-//! th08.cfg (15 §1): `Config_Load` 0x4477B1 and the volume curves; the 60-byte image is th08_formats::cfg.
+//! th08.cfg `Config_Load` 0x4477B1 and the volume curves (15 §1); the 60-byte image is th08_formats::cfg.
 
 pub use th08_formats::cfg::*;
 pub use th08_formats::thbgm::bgm_header_valid;
 
-// Config_Load (15 §1.2, 02 §1): the file (None = missing) and the thbgm.dat header (None = missing) give the
+// Config_Load (§1.2, 02 §1): the file (None = missing) and the thbgm.dat header (None = missing) give the
 // config; Err when thbgm.dat exists with a bad header (startup fails).
 pub fn load(file: Option<&[u8]>, bgm_header: Option<&[u8]>) -> anyhow::Result<Config> {
     if bgm_header.is_some_and(|h| !bgm_header_valid(h)) {
@@ -15,7 +15,7 @@ pub fn load(file: Option<&[u8]>, bgm_header: Option<&[u8]>) -> anyhow::Result<Co
     log::warn!("th08.cfg: コンフィグデータが異常; using defaults");
     let mut c = Config::default();
     // A missing thbgm.dat only matters when the defaults are applied (02 §1); a valid cfg keeps its mode.
-    // The original calls the empty function 0x437CDD here: nothing is shown (15 §1.2); the log line is the port's.
+    // The original calls the empty function 0x437CDD here: nothing is shown; the log line is the port's.
     if bgm_header.is_none() {
         log::warn!("thbgm.dat missing; music mode 2 (MIDI)");
         c.music = 2;
@@ -54,7 +54,7 @@ mod tests {
         assert_eq!(volume_curve(-1100, 80), (3900.0f32 * 0.992) as i32 - 5000);
     }
 
-    // 15 §1.2: invalid files fall back to defaults; 02 §1: the thbgm.dat probe.
+    // Invalid files fall back to defaults; 02 §1: the thbgm.dat probe.
     #[test]
     fn load_rules() {
         let good = Config::default().to_bytes();

@@ -1,5 +1,4 @@
-//! Supervisor g_Supervisor 0x17CE758 (11 §7, 12 §1): scene switches, input poll, boot / loading screens; calc prio 0,
-//! draw prios 0 / 2 / 16 (00 §4).
+//! Supervisor g_Supervisor 0x17CE758 (11 §7): scene switches, input poll, boot / loading screens; calc 0, draw 0/2/16.
 
 use crate::anmvm::AnmVm;
 use crate::chain::Node;
@@ -40,7 +39,7 @@ pub struct Supervisor {
 }
 
 // The boot and menu-load holds end when the loader threads finish (Supervisor_Calc returns 1 until then; MainMenu
-// +0x14434), host-timed (12 §1, 11 §7), so any fixed count is allowed: 13 boot frames, then the menu loader until
+// +0x14434), host-timed (12 §1), so any fixed count is allowed: 13 boot frames, then the menu loader until
 // scene frame 34 (33 when the menu is entered again).
 const BOOT_FRAMES: u32 = 14;
 const MENU_LOAD_BOOT: u32 = 34;
@@ -114,7 +113,7 @@ pub fn setup_ending(g: &mut Game, s: &CoreConfig, e: &Ending) {
     g.request(SceneId::Ending);
 }
 
-// The scene object registered by the Supervisor's scene switch (11 §7), except the game scene, whose GM is `Ctx.gm`.
+// The scene object registered by the Supervisor's scene switch, except the game scene, whose GM is `Ctx.gm`.
 #[derive(Clone, Default)]
 pub enum Scene {
     #[default]
@@ -175,8 +174,7 @@ impl Scene {
     }
 }
 
-// Chain nodes of `ctx.w.scene` (the scene's calc / draw prios, the menu's surface node): stateless forwarder
-// (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.scene` (the scene's calc / draw prios, the menu's surface node): stateless forwarder.
 pub struct SceneTask;
 
 impl Task<Ctx> for SceneTask {
@@ -210,7 +208,7 @@ impl Task<Ctx> for SceneTask {
     }
 }
 
-// Chain nodes of `ctx.w.supervisor` (calc 0, draw 0 / 2 / 16): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.supervisor` (calc 0, draw 0 / 2 / 16): stateless forwarder.
 pub struct SupervisorTask;
 
 impl Task<Ctx> for SupervisorTask {
@@ -393,7 +391,7 @@ impl Supervisor {
             task::remove_task(ctx, t);
         }
         // The game manager with its replay object, and the player, the bullet and enemy managers, the stage, HUD,
-        // dialogue and g_Gui that go with it (dropped here, after GameMgr_OnRemove, 11 §7).
+        // dialogue and g_Gui that go with it (dropped here, after GameMgr_OnRemove).
         ctx.w.player = None;
         ctx.w.bullets = None;
         ctx.w.enemies = None;
@@ -451,7 +449,7 @@ impl Supervisor {
         g.previous = cur;
         if req == SceneId::Quit {
             // The quitting frame is not drawn or presented; the score.dat flush follows it (`Ctx::exit_save`, 15 §2.2).
-            // 6 → −1 (Replay_Finish(0), then quit) is unreachable: no −1 request can happen in scene 6 (11 §7).
+            // 6 → −1 (Replay_Finish(0), then quit) is unreachable: no −1 request can happen in scene 6.
             return Ok(Some(Ret::Quit));
         }
         log::info!(
@@ -495,7 +493,7 @@ impl Supervisor {
                 ctx.w.game.requested = SceneId::Game;
             }
             (SceneId::Game, SceneId::Retry) => self.retry(ctx)?,
-            // 2 → 11: requested = 3 is written before the unregister, so the GM sees "next stage", not a fresh start (11 §7).
+            // 2 → 11: requested = 3 is written before the unregister, so the GM sees "next stage", not a fresh start.
             (SceneId::Game, SceneId::Reload) => {
                 ctx.w.game.reload_same = true;
                 self.drop_scene(ctx);
@@ -530,11 +528,11 @@ impl Supervisor {
                 crate::replay::end_playback(&mut ctx.w.game);
                 self.open_menu(ctx, cur)?;
             }
-            // 2 → 12 is never requested (11 §7).
+            // 2 → 12 is never requested.
             _ => log::warn!("unhandled scene switch {} -> {}", cur as i32, req as i32),
         }
-        // The raw input words are cleared so the new scene sees no held keys (11 §7).
-        // +0x154: ExeCheck of the running exe every 4000 frames (11 §7); with the 1.00d constants it always passes
+        // The raw input words are cleared so the new scene sees no held keys.
+        // +0x154: ExeCheck of the running exe every 4000 frames; with the 1.00d constants it always passes
         // (15 §2.10), so the port does not count it.
         ctx.w.input.held = 0;
         ctx.w.input.prev = 0;
@@ -542,7 +540,7 @@ impl Supervisor {
         Ok(None)
     }
 
-    // Shared tail of x → 1 and 2 → 7: requested := 1, MainMenu_Register, then the loading screen by `cur` (11 §7, 12 §1).
+    // Shared tail of x → 1 and 2 → 7: requested := 1, MainMenu_Register, then the loading screen by `cur` (12 §1).
     fn open_menu(&mut self, ctx: &mut Ctx, cur: SceneId) -> Result<()> {
         ctx.w.game.requested = SceneId::Menu;
         self.set_scene(
@@ -555,7 +553,7 @@ impl Supervisor {
         self.menu_loading(ctx, cur)
     }
 
-    // 2 → 10: a full exit and a fresh start (11 §7).
+    // 2 → 10: a full exit and a fresh start.
     fn retry(&mut self, ctx: &mut Ctx) -> Result<()> {
         self.drop_scene(ctx);
         crate::replay::finish(ctx);
@@ -613,10 +611,10 @@ impl Supervisor {
         Ok(())
     }
 
-    // Supervisor_Calc 0x445453 (11 §7): input poll (OR-accumulated on a slow-mode skipped frame), loading VMs, then
+    // Supervisor_Calc 0x445453: input poll (OR-accumulated on a slow-mode skipped frame), loading VMs, then
     // the scene switch.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        // AnmManager reset 0x44548A on every pass, also each restarted fast-forward pass (11 §7): tint off
+        // AnmManager reset 0x44548A on every pass, also each restarted fast-forward pass: tint off
         // (06 §10.2), shake offset 0 (13 §3), texture caches (05 §12.5); the blend cache models D3D state, kept.
         ctx.w.anm.tint_off();
         ctx.w.anm.screen_offset = [0.0; 2];
@@ -698,7 +696,7 @@ impl Supervisor {
             }
         }
         let r = self.switch(ctx);
-        // 0x18B8A2C decrements once per frame while ≠ 0 (13 §3, 11 §7).
+        // 0x18B8A2C decrements once per frame while ≠ 0 (13 §3).
         let n = ctx.w.load_frames;
         if n != 0 {
             ctx.w.load_frames = n - 1;

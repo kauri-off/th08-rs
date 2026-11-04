@@ -1,11 +1,9 @@
-//! Test data and test doubles of the core (like th08-formats' testdata.rs): the repository root for checked-in
-//! reference data, and (tests only) the original game files from TH08_DIR plus a `Ctx` loaded on a
-//! `NullRenderer`, a silent `AudioOut` and a `MemHost`. Tests that need the game files skip without TH08_DIR.
+//! Test data and doubles of the core: the repository root, and (tests only) the TH08_DIR game files and a test `Ctx`.
 
 use std::path::{Path, PathBuf};
 
-// Repository root (specs/data, tests/data): the manifest dir, or two levels up for a crate under crates/
-// (STEP10_CRATES risk 6). Pure path arithmetic, no file system access.
+// Repository root (specs/data, tests/data): the manifest dir, or two levels up for a crate under crates/.
+// Pure path arithmetic, no file system access.
 pub fn repo_root() -> PathBuf {
     let m = Path::new(env!("CARGO_MANIFEST_DIR"));
     match m.parent() {
@@ -31,7 +29,7 @@ mod imp {
         std::env::var_os("TH08_DIR").map(PathBuf::from)
     }
 
-    // Exact name first, else a case-insensitive match (as on Windows, 01 §7).
+    // Exact name first, else a case-insensitive match (as on Windows).
     fn find(dir: &std::path::Path, name: &str) -> PathBuf {
         let exact = dir.join(name);
         if exact.exists() {

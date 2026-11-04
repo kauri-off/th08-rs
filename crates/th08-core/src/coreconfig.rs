@@ -1,5 +1,4 @@
-//! Port-only debug and start-up switches the game core reads (not a port; the game's own th08.cfg is 15 §1). Built by
-//! the app / tools from `settings::Settings`; the core never reads the process-global settings.
+//! Port-only debug and start-up switches the game core reads, built by the app / tools from `settings::Settings`.
 
 // Debug ending start (`TH08_ENDING`): `<shot 0–11><a|b|c>` or a `.end` script name.
 #[derive(Clone, Debug, PartialEq)]
@@ -10,7 +9,7 @@ pub enum Ending {
 
 #[derive(Clone, Debug, Default)]
 pub struct CoreConfig {
-    // `TH08_SEED`: fixed boot RNG seed instead of (u16) timeGetTime() (11 §1.3).
+    // `TH08_SEED`: fixed boot RNG seed instead of (u16) timeGetTime().
     pub seed: Option<u16>,
     // Debug start: stage index, start frame (ECL / stage fast-forward), shot, difficulty, power, continues.
     pub stage: Option<usize>,

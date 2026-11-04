@@ -11,18 +11,18 @@ use crate::textref::Text;
 use crate::types::lo8;
 use anyhow::Result;
 
-// Gui_Calc = Spell_Calc 0x416B90 at calc prio 12, Gui_Draw = Spell_Draw 0x4178C0 at draw prio 15 (12 §5.8).
+// Gui_Calc = Spell_Calc 0x416B90 at calc prio 12, Gui_Draw = Spell_Draw 0x4178C0 at draw prio 15.
 pub const CALC_PRIO: u16 = 12;
 pub const DRAW_PRIO: u16 = 15;
-// face_cdbg.anm slot 15; player faces 16 (human) / 17 (youkai); spell face file slot 18 (12 §5.8).
+// face_cdbg.anm slot 15; player faces 16 (human) / 17 (youkai); spell face file slot 18.
 pub const CDBG_SLOT: usize = 15;
 const FACE_SLOT: usize = 16;
 const SPELL_FACE_SLOT: usize = 18;
 const TEXT_SLOT: usize = crate::msg::TEXT_SLOT;
 const ASCII_SLOT: usize = crate::ascii::ANM_SLOT;
-// VM run order of Spell_Calc (12 §5.8); VM 12 (digit stamp) is never run.
+// VM run order of Spell_Calc; VM 12 (digit stamp) is never run.
 const CALC_ORDER: [usize; 13] = [0, 2, 4, 6, 10, 1, 3, 5, 7, 8, 9, 11, 13];
-// Bonus line (12 §5.8 draw step 4): first stamp at VM 13 pos + (−40, +1), 7 px per digit, digit sprites 0x88 + d.
+// Bonus line (draw step 4): first stamp at VM 13 pos + (−40, +1), 7 px per digit, digit sprites 0x88 + d.
 const STAMP_DX: f32 = -40.0;
 const STAMP_DY: f32 = 1.0;
 const STAMP_ADVANCE: f32 = 7.0;
@@ -72,7 +72,7 @@ pub type Queue = Vec<Req>;
 // g_Gui 0x4EA670; `Ctx.gui`, its chain nodes are `GuiTask`.
 #[derive(Clone)]
 pub struct Gui {
-    // VMs at +0x120 + k·0x2A4, roles in the 12 §5.8 table; 3 and 5 never get a script.
+    // VMs at +0x120 + k·0x2A4, roles in the §5.8 table; 3 and 5 never get a script.
     vms: [AnmVm; 14],
     // Pending Text_RenderToVm requests: (VM, text, colour, x inside the strip, placement).
     texts: Vec<(usize, Text, [u8; 3], f32, Align)>,
@@ -80,12 +80,12 @@ pub struct Gui {
     name_only: bool,
     card: i32,
     shot: u8,
-    // Spell +0xFC bonus and spell flag bit 2 (still capturable), read live from the card or what it left (12 §5.8 step 4).
+    // Spell +0xFC bonus and spell flag bit 2 (still capturable), read live from the card or what it left (step 4).
     bonus: i32,
     capturable: bool,
     // Captures / attempts of the card for this shot type (CATK story +0x158 / +0x124, practice +0x1F4 / +0x1C0).
     history: (u32, u32),
-    // +0x2620 bonus-line tint, 0x80808080 at Spell_Start; alpha +0x2623 fades 0x80 ↔ 0x20 (12 §5.8, 07 §11.1 step 1.2).
+    // +0x2620 bonus-line tint, 0x80808080 at Spell_Start; alpha +0x2623 fades 0x80 ↔ 0x20 (07 §11.1 step 1.2).
     tint: u32,
     // Port-only draw-phase scratch: the global tint VMs 0–6 were drawn under when the VM-7 block's tint-off followed
     // (06 §10.2); None = the emit-time tint is the right one.
@@ -102,7 +102,7 @@ impl Gui {
         Ok(t)
     }
 
-    // g_Gui as Gui_Register leaves it (12 §5.8): no card, bonus-line tint 0x80808080.
+    // g_Gui as Gui_Register leaves it: no card, bonus-line tint 0x80808080.
     pub fn new(shot: u8) -> Gui {
         Gui {
             vms: Default::default(),
@@ -136,7 +136,7 @@ impl Gui {
         t
     }
 
-    // Gui_LoadFaces 0x414590 part (12 §5.8): face_cdbg, VMs 0–7 hidden, the load-time scripts of VMs 6 and 10–13.
+    // Gui_LoadFaces 0x414590 part: face_cdbg, VMs 0–7 hidden, the load-time scripts of VMs 6 and 10–13.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
         ctx.w
             .anm
@@ -199,9 +199,9 @@ impl Gui {
     ) {
         let v = &mut self.vms;
         match r {
-            // Gui_ShowPlayerSpellName 0x415D60 (12 §5.8); face −1 = dissolve spell.
+            // Gui_ShowPlayerSpellName 0x415D60; face −1 = dissolve spell.
             Req::PlayerShow { face, name, last } => {
-                // Face −1 (dissolve spell) skips only VM 0; the strips 2/4 always restart (12 §5.8).
+                // Face −1 (dissolve spell) skips only VM 0; the strips 2/4 always restart.
                 if face >= 0 {
                     anm.set_script(rng, &mut v[0], FACE_SLOT + table_index(face), 0);
                     v[0].set_sprite(anm, 0);
@@ -231,7 +231,7 @@ impl Gui {
                 name_only,
             } => {
                 if face >= 0 {
-                    // File pointer g_Gui+0x262C = portrait k = 2, swapped by Msg_Start(0) in 6B / Ex (12 §5.8, 10 §4).
+                    // File pointer g_Gui+0x262C = portrait k = 2, swapped by Msg_Start(0) in 6B / Ex (10 §4).
                     let slot = msg.map_or(SPELL_FACE_SLOT, |m| m.face_slot[2]);
                     anm.set_script(rng, &mut v[1], slot, 0);
                     v[1].set_sprite(anm, face);
@@ -323,12 +323,12 @@ impl Gui {
         if let Some(s) = &en.g.spell {
             (self.bonus, self.capturable) = (s.bonus, s.capture);
         } else if let Some(l) = &en.g.spell_left {
-            // Also after Spell_End: a same-frame timeout + op 123 left bit 2 clear and +0xFC 0 (12 §5.8 step 4).
+            // Also after Spell_End: a same-frame timeout + op 123 left bit 2 clear and +0xFC 0 (step 4).
             (self.bonus, self.capturable) = (l.bonus, l.capture);
         }
     }
 
-    // 12 §5.8 draw step 4: VM 12 stamps sprite 0x88 + d from VM 13 pos + (−40, +1), advance 7; (x, y, digit) each.
+    // Draw step 4: VM 12 stamps sprite 0x88 + d from VM 13 pos + (−40, +1), advance 7; (x, y, digit) each.
     fn bonus_stamps(&self) -> Vec<(f32, f32, u32)> {
         let (captures, attempts) = self.history;
         let base = self.vms[13].pos;
@@ -360,7 +360,7 @@ impl Gui {
                 out.push((x + STAMP_ADVANCE * k as f32, y, c / div % 10));
             }
         }
-        // Two advances between the three slots, none after the units; then x += 13 (12 §5.8).
+        // Two advances between the three slots, none after the units; then x += 13.
         x += 14.0 + 13.0;
         let a = attempts.min(999);
         for (k, div) in [100, 10, 1].into_iter().enumerate() {
@@ -387,7 +387,7 @@ fn with_gui<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Gui, &mut Ctx) -> R) -> Option
     Some(r)
 }
 
-// Chain nodes of `ctx.w.gui` (calc prio 12, draw prio 15): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.gui` (calc prio 12, draw prio 15): stateless forwarder.
 pub struct GuiTask;
 
 impl Task<Ctx> for GuiTask {
@@ -428,7 +428,7 @@ impl Gui {
         }
     }
 
-    // Spell_Calc 0x416B90 (VM part, 12 §5.8).
+    // Spell_Calc 0x416B90 (VM part).
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         for r in std::mem::take(&mut ctx.w.gui_queue) {
             Self::record(&mut ctx.w.game, &r);
@@ -499,7 +499,7 @@ impl Gui {
         Ret::Next
     }
 
-    // Spell_Draw 0x4178C0 (12 §5.8 draw steps 1–4). Modes 0 / 2 write no VM state (05 §9), so the step keeps only the
+    // Spell_Draw 0x4178C0 (draw steps 1–4). Modes 0 / 2 write no VM state (05 §9), so the step keeps only the
     // bonus read, the text renders, the VM 10 / 11 / 12 positions and the tint-off; the emit draws.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
@@ -532,20 +532,20 @@ impl Gui {
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
         let anm = &ctx.w.anm;
         rec.set_viewport(PLAYFIELD);
-        // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4 (12 §5.8, RE-Q68).
+        // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4.
         let v = &self.vms;
         // VMs 0–6 are drawn before the VM-7 block, under the global tint still on then.
         let pre = self.pre_tint;
         let draw =
             |rec: &mut Recorder, vm: &AnmVm, mode| anm.emit_tinted(rec, vm, mode, vm.pos[2], pre);
-        // Boss strips (VM 2/4) are drawn only while the player cut-in VM 0 is visible: original quirk (12 §5.8 step 1).
+        // Boss strips (VM 2/4) are drawn only while the player cut-in VM 0 is visible: original quirk (step 1).
         if Self::shown(&v[0]) {
             draw(rec, &v[0], 0);
             draw(rec, &v[2], 0);
             draw(rec, &v[4], 2);
         }
         if Self::shown(&v[1]) {
-            // Boss cut-in drawn at pos + pos_offset, restored afterwards (12 §5.8 step 2).
+            // Boss cut-in drawn at pos + pos_offset, restored afterwards (step 2).
             let mut c = v[1].clone();
             let (p, o) = (c.pos, c.pos_offset);
             c.pos = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
@@ -556,7 +556,7 @@ impl Gui {
             draw(rec, &v[6], 2);
         }
         if Self::shown(&v[7]) {
-            // Tint +0x2620 (12 §5.8 step 4), turned off by the step; the alpha-0 skip tests the untinted colour.
+            // Tint +0x2620 (step 4), turned off by the step; the alpha-0 skip tests the untinted colour.
             let t = Some(Tint(self.tint));
             let draw =
                 |rec: &mut Recorder, vm: &AnmVm, mode| anm.emit_tinted(rec, vm, mode, vm.pos[2], t);

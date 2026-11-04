@@ -17,7 +17,7 @@ const STAFF_SLOT: usize = 24;
 // 15 text VMs: text.anm (slot 0) scripts 0x12 + i, sprites 21 + i (512×17 strips).
 const LINES: usize = 15;
 const TEXT_SCRIPT: usize = 0x12;
-// Text buffer 0x44 bytes (16 §1.3).
+// Text buffer 0x44 bytes (§1.3).
 const LINE_BYTES: usize = 0x44;
 
 // Interpreter result of one command/text run (0x428B80).
@@ -83,7 +83,7 @@ pub fn script_name(g: &gamemgr::Game) -> String {
     format!("end{:02}{k}.end", team(g.shot))
 }
 
-// Archive lookups ignore directories (16 §1.3, 01): "data/end/end00.jpg" → "end00.jpg".
+// Archive lookups ignore directories (01 §5): "data/end/end00.jpg" → "end00.jpg".
 fn base_name(s: &str) -> &str {
     s.rsplit(['/', '\\']).next().unwrap_or(s)
 }
@@ -121,7 +121,7 @@ impl Ending {
             line_min: 0,
             page_timer: 0,
             page_min: 0,
-            // Ending_Ctor (16 §1.2): only +0x2A90 starts at 8; +0x2A94 and the colour are zero-filled (black).
+            // Ending_Ctor: only +0x2A90 starts at 8; +0x2A94 and the colour are zero-filled (black).
             line_normal: 8,
             line_fast: 0,
             line: 0,
@@ -135,7 +135,7 @@ impl Ending {
         }
     }
 
-    // Ending_Init 0x429980 (16 §1.2).
+    // Ending_Init 0x429980.
     fn init(&mut self, ctx: &mut Ctx) -> Result<()> {
         // Step 1: AnmManager texture / texture-matrix caches reset (the blend and vertex-path cache resets only force the
         // next state set, the device state the port tracks is unchanged), then two white clear+Presents. The HUD flag
@@ -167,7 +167,7 @@ impl Ending {
         Ok(())
     }
 
-    // Ending_Init step 3: clear records by ending type (16 §1.2, 15 §2.4).
+    // Ending_Init step 3: clear records by ending type (15 §2.4).
     fn update_clear_records(&mut self, g: &mut gamemgr::Game) {
         let shot = g.shot as usize % 12;
         if g.flags & F_ENDING_OK == 0 {
@@ -371,7 +371,7 @@ impl Ending {
     }
 
     // `@R`: script index := 0 on the VMs.
-    // 16 §1.2–§1.3: VM 15 is never run or drawn, so the `@R` write to it is unobservable and not modelled.
+    // VM 15 is never run or drawn, so the `@R` write to it is unobservable and not modelled.
     fn reset_scripts(&mut self) {
         for vm in &mut self.vms {
             vm.script_index = 0;
@@ -407,7 +407,7 @@ impl Ending {
     }
 
     // Fade overlay 0x428910 (16 §1.5): one step per draw call; returns the overlay colour.
-    // Colour from t, then t += 1 (16 §1.5); `max(1)` differs only for n = 0, which no retail file uses.
+    // Colour from t, then t += 1; `max(1)` differs only for n = 0, which no retail file uses.
     fn fade_step(&mut self) -> u32 {
         if self.fade_mode == 0 {
             return 0;
@@ -589,7 +589,7 @@ mod tests {
         assert_eq!(base_name(&e.script.str_arg()), "staff00b.end");
     }
 
-    // 16 §1.2: Ending_Ctor zero-fills colour and +0x2A94; LoadScript resets only +0x2A90.
+    // Ending_Ctor zero-fills colour and +0x2A94; LoadScript resets only +0x2A90.
     #[test]
     fn start_values() {
         let mut e = Ending::new();

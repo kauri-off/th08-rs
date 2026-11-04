@@ -1,5 +1,4 @@
-//! Result object `Result_Register(mode)` 0x4582A0 (16 §2): name entry, ranking and end panel after a game (mode 1),
-//! result viewer from the main menu (mode 0). score.dat is saved when it is removed (15 §2.2).
+//! Result object `Result_Register(mode)` 0x4582A0 (16 §2): name entry, ranking, end panel and the result viewer.
 
 use crate::anmvm::{self, AnmVm, table_index};
 use crate::ascii::Text;
@@ -19,10 +18,10 @@ use crate::textref::{FmtArg, SpellField, Text as Txt, TextRef};
 use crate::types::{D3dColor, SceneId, lo8};
 use th08_formats::sjis::SjisString;
 
-// Result_Calc 0x4584B0 at prio 16, Result_Draw 0x4586B4 at prio 18 (16 §2).
+// Result_Calc 0x4584B0 at prio 16, Result_Draw 0x4586B4 at prio 18.
 pub const CALC_PRIO: u16 = 16;
 pub const DRAW_PRIO: u16 = 18;
-// result00.anm in slot 0x15, resulttext.anm in 0x16 (16 §2).
+// result00.anm in slot 0x15, resulttext.anm in 0x16.
 const ANM_SLOT: usize = 21;
 const RT_SLOT: usize = 22;
 const VM_COUNT: usize = 72;
@@ -110,14 +109,14 @@ fn stage_shown(b: u8) -> u8 {
     STAGE_SHOWN.get(b as usize).copied().unwrap_or(b)
 }
 
-// Card ids of result-viewer group g (16 §2.4; spell_tables.md §1): 0–4 = Spell_DifficultyOf, 5 = all 222.
+// Card ids of result-viewer group g (§2.4): 0–4 = Spell_DifficultyOf, 5 = all 222.
 fn group_cards(g: i32) -> Vec<usize> {
     (0..CARDS)
         .filter(|&id| g >= 5 || (id < 205 && crate::menulist::difficulty_of(id) == table_index(g)))
         .collect()
 }
 
-// The 0x477B0-byte result object (16 §2).
+// The 0x477B0-byte result object.
 #[derive(Clone)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -643,7 +642,7 @@ impl ResultScreen {
                 let idx = table_index(self.cursor * 10 + k);
                 let Some(&id) = ids.get(idx) else { break };
                 let c = &ctx.w.game.score.catk[id];
-                // Shown by card id (I18N_STRINGS §2.8); the CATK bytes are the vanilla text.
+                // Shown by card id; the CATK bytes are the vanilla text.
                 let s = if c.counters[C_ATTEMPTS][12] != 0 {
                     let raw = c.name[..c.name.iter().position(|&b| b == 0).unwrap_or(48)].to_vec();
                     let key = TextRef::Spell {
@@ -877,7 +876,7 @@ impl ResultScreen {
             };
             self.interrupt_from4(i);
             self.cursor = 0;
-            // State 11 by a direct write: frame kept (10), and the rest of this call still runs (16 §2.6, RE-Q56).
+            // State 11 by a direct write: frame kept (10), and the rest of this call still runs (§2.6).
             if i != 0xB {
                 self.state = State::SaveMsg;
             }
@@ -1034,7 +1033,7 @@ impl ResultScreen {
         self.set_state(State::Panel);
     }
 
-    // Frame 0 of state 9: the HSCR entry from the in-game record (16 §2.2, 15 §2.3). False = no entry.
+    // Frame 0 of state 9: the HSCR entry from the in-game record (15 §2.3). False = no entry.
     fn name_start(&mut self, ctx: &mut Ctx) -> bool {
         let now = ctx.host.local_time();
         let g = &mut ctx.w.game;
@@ -1903,7 +1902,7 @@ mod tests {
         (0..19).for_each(|k| round_trips(&play_line(&p, k, 5).raw.decode()));
     }
 
-    // The play-data formats give the bytes of the former Rust formatting (16 §2.4 table).
+    // The play-data formats reproduce the original's bytes (§2.4 table).
     #[test]
     fn play_lines_from_formats() {
         let mut p = crate::scoredat::Plst {
@@ -2218,10 +2217,9 @@ mod tests {
         }
     }
 
-    // 16 §2.6 (PR #27 review): state 12 entered from state 10 has its slot list before the first input frame (20), so
-    // a confirm there picks slot 0 instead of indexing an empty list.
-    // 16 §2.6: state 10 confirm takes the shared back-to-list path (all VMs 12, flush); in state 12 a confirm and a
-    // cancel on the same frame both run and the cancel wins.
+    // State 12 entered from state 10 has its slot list before the first input frame (20), so a confirm there picks
+    // slot 0 instead of indexing an empty list. State 10 confirm takes the shared back-to-list path (all VMs 12,
+    // flush); in state 12 a confirm and a cancel on the same frame both run and the cancel wins.
     #[test]
     fn save_slot_confirm_then_cancel() {
         let mut host = crate::host::MemHost::default();

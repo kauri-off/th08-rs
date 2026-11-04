@@ -1,6 +1,4 @@
-//! Game data source traits: where th08.dat / thbgm.dat bytes come from (00 §1 data, 01 §7; ARCH_D_MOBILE §2.3).
-//! Pure: the concrete sources (game dir, web files) are in `sources.rs`. The original loads synchronously or on a
-//! loader thread (00 §6).
+//! Game data source traits: where th08.dat / thbgm.dat bytes come from; the concrete sources are in `sources.rs`.
 
 use anyhow::Result;
 use std::future::Future;
@@ -22,8 +20,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[cfg(target_arch = "wasm32")]
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-// A game data location (ARCH_D_MOBILE §2.3): game directory, APK assets (later), user-picked web files.
-// Names are bare file names, matched case-insensitively as on Windows (01 §5, §7).
+// A game data location: game directory, APK assets (later), user-picked web files.
+// Names are bare file names, matched case-insensitively as on Windows.
 pub trait DataSource: MaybeSend {
     // File names available (launcher folder check / web file list).
     fn names(&self) -> Vec<String>;
@@ -52,7 +50,7 @@ impl Source {
         self.0.fetch(name, None).await
     }
 
-    // Byte-range read, used to stream thbgm.dat tracks (02 §1) without loading the whole file.
+    // Byte-range read, used to stream thbgm.dat tracks without loading the whole file.
     pub async fn read_range(&self, name: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
         self.0.fetch(name, Some((offset, len))).await
     }

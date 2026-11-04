@@ -1,5 +1,4 @@
-//! Main menu (12 §2, `MainMenu_Register` 0x47146D): top menu, difficulty / character select, option screen; the
-//! practice, replay and spell-practice screens are in menulist.rs.
+//! Main menu `MainMenu_Register` 0x47146D (12 §2): top menu, difficulty / character select, option screen.
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::{int, lo16, short, uidx};
@@ -14,7 +13,7 @@ use crate::task::{Chain, Ret};
 use crate::types::{SceneId, lo8};
 use anyhow::Result;
 
-// title01.anm in ANM slot 20; calc prio 4 (0x467399), draw prio 3 (0x47087F) (12 §2, 00 §4).
+// title01.anm in ANM slot 20; calc prio 4 (0x467399), draw prio 3 (0x47087F) (00 §4).
 pub const ANM_SLOT: usize = 20;
 pub const CALC_PRIO: u16 = 4;
 pub const DRAW_PRIO: u16 = 3;
@@ -400,7 +399,7 @@ impl MainMenu {
         }
     }
 
-    // Text_RenderCentered 0x466650 (12 §2.2, 10 §6): `text` into description strip `i` (text.anm sprite 21 + i) at
+    // Text_RenderCentered 0x466650 (10 §6): `text` into description strip `i` (text.anm sprite 21 + i) at
     // x = trunc(256 − len·15/4), len = Shift-JIS byte length; W = 512, font 15, COLORREF 0x00FFF0E0, ±2 px outline.
     #[expect(
         clippy::cast_sign_loss,
@@ -650,7 +649,7 @@ impl MainMenu {
             return true;
         }
         // Back from a practice game (+0x6C ≠ 0): bit 14 set again for 2, screen 8 + 7·bit 14, range interrupt 5,
-        // description interrupt 2, return 1; trace shows screen 0 on the release frame (12 §2.2, RE-Q55).
+        // description interrupt 2, return 1; trace shows screen 0 on the release frame (12 §2.2).
         if self.back != 0 {
             if self.back == 2 {
                 ctx.w.game.flags |= F_SPELL_PRACTICE;
@@ -1206,7 +1205,7 @@ impl Default for MainMenu {
 }
 
 impl MainMenu {
-    // MainMenu_OnRegister 0x470A6C + the loader thread 0x470E10 (00 §3.2, 12 §2.2, 15 §2.2), run synchronously.
+    // MainMenu_OnRegister 0x470A6C + the loader thread 0x470E10 (00 §3.2), run synchronously.
     pub(crate) fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> Result<()> {
         if chain != Chain::Calc {
             return Ok(());
@@ -1242,7 +1241,7 @@ impl MainMenu {
             });
             self.vms.push(vm);
         }
-        // GM flags 15–17 from the clear records (15 §2.2, §2.4, 16 §4).
+        // GM flags 15–17 from the clear records (15 §2.4, 16 §4).
         {
             let g = &mut ctx.w.game;
             let nc_b = |t: usize| g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0);
@@ -1281,7 +1280,7 @@ impl MainMenu {
             }
         }
         // +0x6C := 1 + (flags bit 14) whenever flags bit 0 is set, whatever the previous scene; screen stays 0 and the
-        // Top entry block does the switch to 8/15 (12 §2.2, RE-Q55). A spell-practice replay has bit 14 without bit 0.
+        // Top entry block does the switch to 8/15 (12 §2.2). A spell-practice replay has bit 14 without bit 0.
         let g = &ctx.w.game;
         self.back = if g.practice() {
             1 + u8::from(g.spell_practice())
@@ -1318,7 +1317,7 @@ impl MainMenu {
     }
 
     pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
-        // Session tool hook: screen/+0x00 at every MainMenu_Calc entry (drawlog README cols 29/30).
+        // Session tool hook: screen/+0x00 at every MainMenu_Calc entry (trace cols 29/30).
         ctx.w.game.trace_menu = Some((self.screen, self.trace_cursor()));
         // The menu starts when its loader has finished (Supervisor loading screen, 12 §1).
         if ctx.w.game.menu_loading > 0 {
@@ -1332,7 +1331,7 @@ impl MainMenu {
         // A handler that returns 2 makes the chain call this node again at once (00 §3), so the new screen's
         // handler, RunRange and the description VM run a second time in this frame (12 §2 entry exception).
         loop {
-            // A return-2 re-call is a new MainMenu_Calc entry: the last call's values are the row's (RE-Q55).
+            // A return-2 re-call is a new MainMenu_Calc entry: the last call's values are the row's.
             ctx.w.game.trace_menu = Some((self.screen, self.trace_cursor()));
             let screen = self.screen;
             match self.screen {
@@ -1353,12 +1352,12 @@ impl MainMenu {
                 _ => {}
             }
             // Return 0: RunRange and the description VM still run, then the calc node is removed; its on-remove
-            // clears the VMs, so the menu draws nothing in this frame (12 §2 "Handlers that return 0", 00 §3).
+            // clears the VMs, so the menu draws nothing in this frame (12 §2 "Handlers that return 0").
             if std::mem::take(&mut self.remove) {
                 run_vms(self, ctx);
                 return Ret::Remove;
             }
-            // Option left with a changed colour depth / window mode: return 5, the program restarts (15 §1.3, 00 §2).
+            // Option left with a changed colour depth / window mode: return 5, the program restarts (00 §2).
             if std::mem::take(&mut self.restart) {
                 return Ret::ErrorQuit;
             }
@@ -1559,7 +1558,7 @@ mod tests {
         }
     }
 
-    // 12 §2.2 (RE-Q55): +0x6C from flags bit 0 for any previous scene, bits 0/14 cleared, screen stays 0; the Top
+    // 12 §2.2: +0x6C from flags bit 0 for any previous scene, bits 0/14 cleared, screen stays 0; the Top
     // entry block sets bit 14 again for +0x6C == 2 and switches to 15 (8 for plain practice).
     #[test]
     fn back_from_practice() {
@@ -1589,7 +1588,7 @@ mod tests {
         }
     }
 
-    // Drawlog README col 30: +0x00 is the stage row on screen 16, the card row on 17, else the cursor (16 §6.1/§6.2).
+    // Trace col 30: +0x00 is the stage row on screen 16, the card row on 17, else the cursor (16 §6.1/§6.2).
     #[test]
     fn trace_cursor_rows() {
         let mut m = super::MainMenu::new();

@@ -1,7 +1,4 @@
-//! Core content views (ARCH_B_MODDING §1.2, decisions D1 / D5): logic reads game data only through `LogicView`,
-//! presentation-only data (pixels, samples, MIDI) through `PresentView`; both over the th08.dat archive (01 §2–§7)
-//! or its repacked th08.pak (port-only container, docs/arch/ASSETS_FORMAT.md §3.1, §3.3); a mounted presentation
-//! pack (`Overlay`, I18N §2.4–§2.5, ARCH_B §1.7) replaces textures through `PresentView` only.
+//! Core content views: logic reads game data only through `LogicView`, presentation-only data through `PresentView`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +8,7 @@ use th08_formats::pack::{HEADER_LEN, Index, Kind, Layer, Pack, PackError};
 
 use crate::assets::Source;
 
-// Logic-content fingerprint (ARCH_B D5): hash over the sorted (key, bytes) of the Logic-layer overrides.
+// Logic-content fingerprint: hash over the sorted (key, bytes) of the Logic-layer overrides.
 // Vanilla has no overrides, so its fingerprint is empty; written into session metadata (`meta.txt`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Fingerprint(Vec<u8>);
@@ -21,7 +18,7 @@ impl Fingerprint {
         self.0.is_empty()
     }
 
-    // ASSETS_FORMAT §3.3 rule for a pack: vanilla iff its Logic entries are exactly the vanilla table (name and
+    // Rule for a pack: vanilla iff its Logic entries are exactly the vanilla table (name and
     // sha256); otherwise sha256 over the sorted differing names, each with its pack hash (none when missing).
     fn of_pack(pack: &Pack) -> Self {
         let mut diff: Vec<(&str, Option<&[u8; 32]>)> = Vec::new();
@@ -63,10 +60,10 @@ impl std::fmt::Display for Fingerprint {
     }
 }
 
-// The content pack's file name (ASSETS_FORMAT §3.1); preferred over th08.dat by `Content::load`.
+// The content pack's file name; preferred over th08.dat by `Content::load`.
 pub const CONTENT_PACK: &str = "th08.pak";
 
-// A game folder / bundle holds one of these (any letter case), the pack first (ASSETS_FORMAT §3.3).
+// A game folder / bundle holds one of these (any letter case), the pack first.
 pub const CONTENT_FILES: [&str; 2] = [CONTENT_PACK, "th08.dat"];
 
 // Whether `names` hold game content (th08.pak or th08.dat), as the launchers' folder checks ask.
@@ -85,7 +82,7 @@ pub enum Content {
 }
 
 impl Content {
-    // Start-up (00 §2 archive open): th08.pak when the source has one, else th08.dat.
+    // Start-up: th08.pak when the source has one, else th08.dat.
     pub async fn load(source: &Source) -> anyhow::Result<Self> {
         if source
             .names()
@@ -119,7 +116,7 @@ impl Content {
     }
 }
 
-// The BGM pack's file name (ASSETS_FORMAT §3.1): Ogg Vorbis per thbgm.fmt track, preferred over thbgm.dat.
+// The BGM pack's file name: Ogg Vorbis per thbgm.fmt track, preferred over thbgm.dat.
 pub const BGM_PACK: &str = "thbgm.pak";
 
 // thbgm.pak's header + manifest, read by range (no stream data); None when the source has no thbgm.pak.
@@ -147,7 +144,7 @@ pub async fn bgm_pack_index(source: &Source) -> Option<anyhow::Result<Index>> {
     )
 }
 
-// Config_Load's thbgm.dat header probe (02 §1, 15 §1.2): the 16 header bytes, or None when the file is missing.
+// Config_Load's thbgm.dat header probe: the 16 header bytes, or None when the file is missing.
 // With a thbgm.pak the stored original header answers, so `config::load` decides exactly as with thbgm.dat.
 pub async fn bgm_header(source: &Source) -> Option<Vec<u8>> {
     match bgm_pack_index(source).await {
@@ -186,12 +183,12 @@ impl LogicView {
         }
     }
 
-    // Mounts a presentation pack (I18N G2) over the presentation reads.
+    // Mounts a presentation pack over the presentation reads.
     pub fn mount(&mut self, overlay: Arc<Overlay>) {
         self.overlay = Some(overlay);
     }
 
-    // Lookup by bare name, case-insensitive (01 §5).
+    // Lookup by bare name, case-insensitive.
     pub fn read(&self, name: &str) -> th08_formats::archive::Result<Vec<u8>> {
         self.content.read(name)
     }
@@ -217,7 +214,7 @@ pub struct PresentView<'a> {
 }
 
 impl PresentView<'_> {
-    // The vanilla bytes; a pack never changes them (sizes stay the archive's, ASSETS_FORMAT §1.1).
+    // The vanilla bytes; a pack never changes them (sizes stay the archive's).
     pub fn read(&self, name: &str) -> th08_formats::archive::Result<Vec<u8>> {
         self.content.read(name)
     }
@@ -226,13 +223,13 @@ impl PresentView<'_> {
         self.content.names()
     }
 
-    // A standalone .jpg / .png (03 §1): the vanilla bytes (they give the texture size) and the pack's override.
+    // A standalone .jpg / .png: the vanilla bytes (they give the texture size) and the pack's override.
     pub fn image(&self, name: &str) -> anyhow::Result<(Vec<u8>, Option<ImageBytes>)> {
         let over = self.overlay.and_then(|o| o.file(name));
         Ok((self.read(name)?, over))
     }
 
-    // Override of an ANM entry's THTX pixels by its image name (+0x1C, 03 §2.1); '@' targets never.
+    // Override of an ANM entry's THTX pixels by its image name (+0x1C); '@' targets never.
     pub fn chunk_image(&self, chunk: &str) -> Option<Arc<[u8]>> {
         self.overlay.and_then(|o| o.chunk(chunk))
     }
@@ -246,7 +243,7 @@ pub type ImageBytes = Arc<[u8]>;
 pub enum Reject {
     // A key core logic reads (ecl, std, msg, anm, sht, end, …: `pack::layer_of` = Logic).
     Logic(String),
-    // A presentation key that is not a texture (wav, mid): G2 overrides textures only.
+    // A presentation key that is not a texture (wav, mid): packs override textures only.
     NotTexture(String),
 }
 
@@ -262,7 +259,7 @@ impl std::fmt::Display for Reject {
     }
 }
 
-// Image layers of a presentation pack (I18N §2.4, ARCH_B §1.7): `images/<chunk image name>` replaces the THTX pixels
+// Image layers of a presentation pack: `images/<chunk image name>` replaces the THTX pixels
 // of every ANM entry with that name, `files/<name>.jpg|png` a standalone image. Keys are lowercase with '/'.
 #[derive(Clone, Debug, Default)]
 pub struct Overlay {
@@ -373,7 +370,7 @@ mod tests {
         }
     }
 
-    // 02 §1 probe: thbgm.pak answers with the stored thbgm.dat header; without it thbgm.dat; neither → None.
+    // Probe: thbgm.pak answers with the stored thbgm.dat header; without it thbgm.dat; neither → None.
     #[test]
     fn bgm_header_probe() {
         use crate::testdata::block_on;

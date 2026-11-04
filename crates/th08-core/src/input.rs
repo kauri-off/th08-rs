@@ -1,4 +1,4 @@
-//! Input word and key repeat (12 intro, 11 §7 `Input_Poll` 0x43D970; gameplay word 09 §3, 15 §3.2–§3.3).
+//! Input word and key repeat (11 §7 `Input_Poll` 0x43D970).
 
 // Input word bits (09 §3, 12 intro); also the replay stream format (15 §3.2).
 pub const SHOT: u16 = 1 << 0;
@@ -11,7 +11,7 @@ pub const LEFT: u16 = 1 << 6;
 pub const RIGHT: u16 = 1 << 7;
 pub const SKIP: u16 = 1 << 8;
 pub const ENTER: u16 = 1 << 12;
-// Keyboard map 0x43D970 (12 intro): Q 0x200, S 0x400, Home/P 0x800, D 0x2000, R 0x4000.
+// Keyboard map 0x43D970: Q 0x200, S 0x400, Home/P 0x800, D 0x2000, R 0x4000.
 pub const KEY_Q: u16 = 1 << 9;
 pub const KEY_S: u16 = 1 << 10;
 pub const KEY_HOME: u16 = 1 << 11;
@@ -83,7 +83,8 @@ pub fn joystick_bits(cfg: &crate::config::Config, pad: &PadState, counter: &mut 
 
 #[derive(Default, Clone, Copy)]
 pub struct Input {
-    // Keyboard word of the last poll (0 when the read failed, 15 §1.1); `held` / `prev` are the polled raw word 0x164D528 / previous 0x164D530 (12 intro, 11 §7).
+    // Keyboard word of the last poll (0 when the read failed, 15 §1.1); `held` / `prev` are the polled raw word
+    // 0x164D528 / previous 0x164D530.
     pub raw: u16,
     // Joystick bits of this poll, ORed into the raw word after the keyboard (15 §1.1), and the raw button array.
     pub joy: u16,
@@ -96,7 +97,7 @@ pub struct Input {
     pub same_frames: u32,
     pub repeat: bool,
     // g_Input 0x164D52C / g_InputPrev 0x164D534: the gameplay word per player, written by the replay node (15 §3.2,
-    // §3.3); vanilla uses `[0]` (ARCH_C decision 6).
+    // §3.3); vanilla uses `[0]`.
     pub game: crate::host::Words,
     pub game_prev: crate::host::Words,
 }
@@ -108,7 +109,7 @@ impl Input {
         self.poll_joystick(cfg, p.pads[0]);
     }
 
-    // The joystick half of Input_Poll (15 §1.1), run before `tick`.
+    // The joystick half of Input_Poll, run before `tick`.
     pub fn poll_joystick(&mut self, cfg: &crate::config::Config, pad: PadState) {
         self.pad = pad;
         self.joy = joystick_bits(cfg, &pad, &mut self.shot_slow);
@@ -117,7 +118,7 @@ impl Input {
     pub fn tick(&mut self) {
         self.prev = self.held;
         self.held = self.raw | self.joy;
-        // Key repeat (11 §7, same rule as 15 §3.3): the counter is tested before it is incremented, and reset to 30
+        // Key repeat (same rule as 15 §3.3): the counter is tested before it is incremented, and reset to 30
         // after 37, so the flag is set on the 33rd, 41st, … unchanged frame.
         self.repeat = false;
         if self.held == self.prev {
@@ -133,7 +134,7 @@ impl Input {
         }
     }
 
-    // Supervisor_Calc on a slow-mode skipped frame (gm+0x2D, 11 §7): the raw word is OR-ed into the polled word;
+    // Supervisor_Calc on a slow-mode skipped frame (gm+0x2D): the raw word is OR-ed into the polled word;
     // previous word, repeat counter and flag are not updated.
     pub fn accumulate(&mut self) {
         self.held |= self.raw;
@@ -162,7 +163,7 @@ impl Input {
     }
 }
 
-// Port debug tool, not a port of the original. Debug input script (`TH08_INPUT`): items separated by newlines/commas/spaces, each `mask` or `frames:mask`
+// Port debug input script (`TH08_INPUT`): items separated by newlines/commas/spaces, each `mask` or `frames:mask`
 // (decimal or 0x hex, game bit layout); `#` starts a comment. The script then holds 0.
 pub fn parse_script(s: &str) -> Option<Vec<u16>> {
     let num = |t: &str| {
@@ -204,7 +205,7 @@ mod tests {
         }
     }
 
-    // 15 §1.1: default buttons 0 Shot, 1 Bomb, 2 Focus, 4 Pause, 3 Skip; stick thresholds 600 (strict).
+    // Default buttons (15 §1.1): 0 Shot, 1 Bomb, 2 Focus, 4 Pause, 3 Skip; stick thresholds 600 (strict).
     #[test]
     fn joystick_mapping() {
         let mut cfg = Config::default();
@@ -227,7 +228,7 @@ mod tests {
         assert_eq!(pad(0, 0, 0).first_button(), -1);
     }
 
-    // 15 §1.1 +0x26: focus from the 10th held poll; after release it stays one poll (counter capped at 20).
+    // +0x26: focus from the 10th held poll; after release it stays one poll (counter capped at 20).
     #[test]
     fn shot_slow_counter() {
         let mut cfg = Config::default();
@@ -274,7 +275,7 @@ mod tests {
         assert!(super::parse_script("x").is_none());
     }
 
-    // 11 §7: holding a key, the repeat flag first fires on the 33rd unchanged frame, then on the 41st.
+    // Holding a key, the repeat flag first fires on the 33rd unchanged frame, then on the 41st.
     #[test]
     fn key_repeat() {
         let mut i = super::Input {
@@ -292,7 +293,7 @@ mod tests {
         assert_eq!(fired, [33, 41, 49]);
     }
 
-    // 11 §7: on a slow-mode skipped frame the raw word is OR-ed in; previous word and repeat state stay.
+    // On a slow-mode skipped frame the raw word is OR-ed in; previous word and repeat state stay.
     #[test]
     fn slow_skip_accumulates() {
         use super::{BOMB, Input, SHOT};

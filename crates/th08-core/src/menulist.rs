@@ -15,7 +15,7 @@ use crate::textref::{FmtArg, SpellField, Text as Txt, TextRef};
 use crate::types::{D3dColor, lo8};
 use th08_formats::sjis::SjisString;
 
-// resulttext.anm ANM slot (00 §3.2 loader thread); text.anm slot 0 (info strips, 16 §6.3).
+// resulttext.anm ANM slot (00 §3.2 loader thread); text.anm slot 0 (info strips).
 pub const RT_SLOT: usize = 22;
 const TEXT_SLOT: usize = 0;
 // Anchor A = raw pos of title01 VM 141 (12 §2.5, 16 §6.4); unselected row colour.
@@ -59,7 +59,7 @@ pub(crate) const CHARS: [&str; 12] = [
     "Sakuya ", "Remilia", "Youmu  ", "Yuyuko ",
 ];
 const DIFFS: [&str; 5] = ["Easy    ", "Normal  ", "Hard    ", "Lunatic ", "Extra   "];
-// Easy / Normal / Hard card lists 0x4C6120 / 0x4C61C8 / 0x4C6290 (15 §2.8; specs/data/spell_tables.md §1); the
+// Easy / Normal / Hard card lists 0x4C6120 / 0x4C61C8 / 0x4C6290 (15 §2.8); the
 // Lunatic list is every other id < 191.
 const EASY: [u8; 42] = [
     2, 6, 13, 17, 21, 25, 32, 39, 43, 47, 54, 58, 62, 66, 70, 77, 81, 85, 89, 93, 100, 104, 108,
@@ -515,7 +515,7 @@ impl MainMenu {
             self.spell_char_enter(ctx, n);
         }
         // Back from a spell-practice game: 16 → 17 at once, stage row 9 if the last card was a Last Word,
-        // return 2 so screen 17 runs in this frame (12 §2.2, 16 §6.1).
+        // return 2 so screen 17 runs in this frame (16 §6.1).
         if self.back != 0 {
             if ctx.w.game.card >= 205 {
                 ctx.w.game.stage = 9;
@@ -605,7 +605,7 @@ impl MainMenu {
         if inp.pressed(CONFIRM) {
             ctx.w.sound.play(sound::OK);
             ctx.w.game.stage = uidx(self.lists.sp_row);
-            // +0x00 := 0 before Menu_SetScreen(17); 16 → 17 returns 2: screen 17 runs in this frame (12 §2, 16 §6.1).
+            // +0x00 := 0 before Menu_SetScreen(17); 16 → 17 returns 2: screen 17 runs in this frame (16 §6.1).
             self.lists.card = 0;
             self.set_screen(crate::menu::SPELL_CARD);
             self.again = true;
@@ -614,7 +614,7 @@ impl MainMenu {
             // Bomb also stores the row into g_StageIdx (16 §6.1).
             ctx.w.game.stage = uidx(self.lists.sp_row);
             self.interrupt_all(6);
-            // flags &= ~1 only with the switch to the top menu at P+20, after cursor := 2 (16 §6.1, RE-Q55).
+            // flags &= ~1 only with the switch to the top menu at P+20, after cursor := 2 (16 §6.1).
             self.pending = Some(Pending {
                 frames: 20,
                 screen: crate::menu::TOP,
@@ -796,7 +796,7 @@ impl MainMenu {
         ROW_IDS[uidx(self.lists.sp_row.clamp(0, 9))]
     }
 
-    // Displayed by card id (I18N_STRINGS §4.3): the CATK bytes are only the vanilla text.
+    // Displayed by card id: the CATK bytes are only the vanilla text.
     fn row_name(ctx: &Ctx, id: usize) -> Txt {
         let c = catk(ctx, id);
         if seen(&c, 12) {
@@ -1041,7 +1041,7 @@ impl MainMenu {
         } else if inp.pressed(CANCEL) {
             ctx.w.sound.play(sound::CANCEL);
             ctx.w.game.card = short(id);
-            // +0x00 := g_StageIdx before Menu_SetScreen(16) (16 §6.2); 17 → 16 returns 2: screen 16 runs in this frame (12 §2).
+            // +0x00 := g_StageIdx before Menu_SetScreen(16) (16 §6.2); 17 → 16 returns 2: screen 16 runs in this frame.
             self.lists.sp_row = int(ctx.w.game.stage.min(9));
             self.set_screen(crate::menu::SPELL_PRACTICE);
             self.again = true;
@@ -1191,7 +1191,7 @@ impl MainMenu {
             self.cursor = self.cursor.clamp(0, (int(self.replays.len()) - 1).max(0));
         }
         // Sub-state 0 in calls 0–7; sub-state 1 starts in call 8 with +0x10 := 0, so the list moves from call 9 and
-        // takes confirm / cancel from call 18 (+0x10 > 9) (12 §2 intro, 15 §3.8).
+        // takes confirm / cancel from call 18 (+0x10 > 9) (15 §3.8).
         if self.frames == 8 {
             self.lists.rpy_t = 0;
         }
@@ -1220,7 +1220,7 @@ impl MainMenu {
         // +0xC28C := cursor every sub-state-1 frame, after the paging (15 §3.8).
         self.lists.rpy_file = self.cursor;
         // The +0x10 > 9 gate is armed once per visit: only the list cancel zeroes +0x10 again; the file
-        // confirm and the cancels 2 → 1 / 3 → 2 leave it counting (12 §2 intro, 15 §3.8).
+        // confirm and the cancels 2 → 1 / 3 → 2 leave it counting (15 §3.8).
         if self.lists.rpy_t <= 9 {
             return true;
         }
@@ -1228,7 +1228,7 @@ impl MainMenu {
             ctx.w.sound.play(sound::OK);
             let i = uidx(self.cursor);
             // Stage cursor = first stage with a record; +0xC290 keeps its old value until sub-state 2. None:
-            // error log line, scene −1, return 0 (15 §3.8, 00 §2).
+            // error log line, scene −1, return 0 (15 §3.8).
             let st = &self.replays[i].1.stages;
             let Some(first) = (0..9).find(|&s| st[s].is_some()) else {
                 log::error!("リプレイデータが異常");
@@ -1238,7 +1238,7 @@ impl MainMenu {
             self.lists.rpy_loaded = Some(i);
             // Card-name scratch VM menu+0xE7B8 (12 §2.8 step 3): header +0x7E into resulttext sprite 11, set up
             // for every file, drawn only for spell replays.
-            // Shown by the header's card id +0x7C (I18N_STRINGS §2.7); −1 outside spell practice.
+            // Shown by the header's card id +0x7C; −1 outside spell practice.
             let r = &self.replays[i].1;
             let name = match u16::try_from(r.spell_id()) {
                 Ok(card) => Txt::new(
@@ -1301,7 +1301,7 @@ impl MainMenu {
             self.rpy_speed_vms(spell);
         } else if inp.pressed(CANCEL) {
             ctx.w.sound.play(sound::CANCEL);
-            // The cancels zero +0x1442C, which only sub-state 0 reads, so the entry block never reruns (12 §2, 15 §3.8).
+            // The cancels zero +0x1442C, which only sub-state 0 reads, so the entry block never reruns (15 §3.8).
             self.lists.rpy_sub = 1;
             self.cursor = self.lists.rpy_file;
             self.lists.rpy_loaded = None;
@@ -1462,7 +1462,7 @@ mod tests {
     #[test]
     fn literals_are_sjis() {
         round_trips("Ｎｏ．０１２　　");
-        // The info-line formats rebuild the bytes of the former concatenation (16 §6.3).
+        // The info-line formats rebuild the bytes of the original concatenation (16 §6.3).
         let name = Txt::dynamic(SjisString(vec![0x83, 0x41, b'X']));
         let t = Builtin::SpNoLine.fmt(vec![
             FmtArg::Text(Txt::dynamic_str(&fullwidth_digits(12))),

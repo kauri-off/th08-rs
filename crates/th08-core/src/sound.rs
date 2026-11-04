@@ -1,5 +1,4 @@
-//! Sound manager (13 §1.1–§1.3): SE queue (`Sound_Play` 0x45D550, `Sound_PlayAt` 0x45D660, flushed by `Sound_Update`
-//! 0x45D790) and the BGM state of `Music_*` / `Bgm_*` (02 §4–§5), which emit `SoundCmd`s for the audio back end.
+//! Sound manager (13 §1, 02 §4–§5): SE queue flushed by `Sound_Update` 0x45D790 and the `Music_*` / `Bgm_*` BGM state.
 
 pub use th08_formats::thbgm::Track;
 
@@ -137,7 +136,7 @@ impl Queue {
     }
 }
 
-// One device call of the frame, executed in order by `audio::Audio::exec` (ARCH_A §2.2 `Outputs.sound`). Track
+// One device call of the frame, executed in order by `audio::Audio::exec`. Track
 // lookup, slots, music-mode routing and the BGM fade state machine are resolved in `Bgm` before a command is made.
 #[derive(Clone, Debug)]
 pub enum SoundCmd {
@@ -312,10 +311,9 @@ impl Bgm {
         }
     }
 
-    // Music_Play + Music_PlaySlot / Music_PlayFile (02 §4) in one step; music mode 0 plays nothing. The music-room
-    // heard flags are set by callers. MIDI: `Midi_Stop`, `Midi_PlayFileOnce(name)` (slot 31), `Midi_Play` (02 §5).
-    // WAV: loads the stored part (never past loop_end) and plays; script names like "bgm/th08_00.mid" are renamed and
-    // unknown names fall back to track 0.
+    // Music_Play + Music_PlaySlot / Music_PlayFile in one step; mode 0 plays nothing; heard flags are set by callers.
+    // MIDI: `Midi_Stop`, `Midi_PlayFileOnce(name)` (slot 31), `Midi_Play`. WAV: loads the stored part (never past
+    // loop_end) and plays; script names like "bgm/th08_00.mid" are renamed and unknown names fall back to track 0.
     pub fn play_bgm(&mut self, name: &str) {
         match self.path() {
             Path::Off => {}
@@ -331,7 +329,7 @@ impl Bgm {
             log::warn!("no bgm {name}");
             return;
         };
-        // Sound_Update play stages 0 (stop: fade mode 0) and 4 (`Bgm_SetVolume(0)`), 02 §4 (RE-Q30); done at once here.
+        // Sound_Update play stages 0 (stop: fade mode 0) and 4 (`Bgm_SetVolume(0)`); done at once here.
         (self.fade_req, self.fade, self.fade_p) = (None, None, 0);
         self.apply_volume();
         self.wav(WavCmd::Play(t));
@@ -375,7 +373,7 @@ impl Bgm {
         }
     }
 
-    // Music_Fade 0x4480F8 (10 §5 op 12, 11 §4, 16 §1.3 `@M`), 02 §4: MIDI `Midi_Fade(trunc(1000·secs))` ms, no
+    // Music_Fade 0x4480F8 (02 §4): MIDI `Midi_Fade(trunc(1000·secs))` ms, no
     // game-speed division. WAV: secs / `speed` (Supervisor+0x188) when 0 < speed ≤ 1, then command 5 with trunc(secs):
     // linear in dB from 0 to −50 dB over trunc(secs)·60 frames, then stop. Music mode 0 queues nothing.
     pub fn fade_bgm(&mut self, secs: f32, speed: f32) {

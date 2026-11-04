@@ -1,6 +1,6 @@
 //! RNG `g_Rng` 0x164D520 (11 §1.1–§1.3).
 
-// 11 §1.1: 16-bit state, rotate-left-2 of (s ^ 0x9630) − 0x6553; a draw counter that never affects values.
+// 16-bit state, rotate-left-2 of (s ^ 0x9630) − 0x6553; a draw counter that never affects values.
 #[derive(Clone, Default)]
 pub struct Rng {
     // +0 state `s`; Rng_GetState/SetState 0x453C20/0x453BE0.
@@ -31,13 +31,13 @@ impl Rng {
         }
     }
 
-    // Boot seed (11 §1.3, 0x4464C8): (u16) timeGetTime() = the host's `boot_clock_ms`; `TH08_SEED` fixes it for
+    // Boot seed (0x4464C8): (u16) timeGetTime() = the host's `boot_clock_ms`; `TH08_SEED` fixes it for
     // reproducible runs.
     pub fn boot(seed: Option<u16>, clock_ms: u32) -> Self {
         Self::seeded(seed.unwrap_or(clock_ms as u16))
     }
 
-    // Rng_Next16 0x43ECC0 (11 §1.1).
+    // Rng_Next16 0x43ECC0.
     pub fn next_u16(&mut self) -> u16 {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(t) = &mut self.trace {
@@ -57,12 +57,12 @@ impl Rng {
         hi << 16 | lo
     }
 
-    // Rng_Float 0x43ED50; single-precision division (11 §1.2, x87 CW 0x007F): values ≥ 0xFFFFFF80 round to 1.0.
+    // Rng_Float 0x43ED50; single-precision division (x87 CW 0x007F): values ≥ 0xFFFFFF80 round to 1.0.
     pub fn next_f32(&mut self) -> f32 {
         self.next_u32() as f32 / 4_294_967_296.0
     }
 
-    // Rng_Range 0x406EF0 (11 §1.1): unsigned modulus; n == 0 returns 0 without drawing.
+    // Rng_Range 0x406EF0: unsigned modulus; n == 0 returns 0 without drawing.
     pub fn range(&mut self, n: i32) -> i32 {
         if n == 0 {
             0
@@ -76,7 +76,7 @@ impl Rng {
         if n == 0 { 0 } else { self.next_u16() % n }
     }
 
-    // Rng_Signed 0x43ED80 (11 §1.1): Next32 / 2^31 − 1, in [−1, 1].
+    // Rng_Signed 0x43ED80: Next32 / 2^31 − 1, in [−1, 1].
     pub fn next_signed(&mut self) -> f32 {
         self.next_u32() as f32 / 2_147_483_648.0 - 1.0
     }

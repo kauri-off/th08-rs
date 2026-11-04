@@ -1,5 +1,4 @@
-//! Core-side draw output: `DrawCmd` / `ResCmd` lists, core-owned `TexId`s and the device-state mirror (ARCH_A §2.2,
-//! REWRITE_PLAN step 8; graphics 12 §1, §3). No wgpu type; the app's `Renderer` runs them.
+//! Core-side draw output (05 §12): `DrawCmd` / `ResCmd` lists, core-owned `TexId`s and the device-state mirror.
 
 use std::sync::Arc;
 
@@ -135,7 +134,7 @@ impl std::fmt::LowerHex for TexId {
     }
 }
 
-// Where a texture's pixels came from, kept for a device-loss rebuild (ARCH_D §5, §6.1 item 4).
+// Where a texture's pixels came from, kept for a device-loss rebuild.
 #[derive(Clone, Debug)]
 pub enum TexSource {
     White,
@@ -164,7 +163,7 @@ pub struct TexInfo {
     pub height: u32,
 }
 
-// Slot allocator for `TexId`s: same order as the device table it replaces (push, or pop the last freed slot).
+// Slot allocator for `TexId`s: push, or pop the last freed slot.
 #[derive(Debug, Default)]
 pub struct ResTable {
     slots: Vec<Option<TexEntry>>,
@@ -213,7 +212,7 @@ impl Default for DeviceState {
     }
 }
 
-// One device draw / state call, 1:1 with the `Recorder` method of the same name (05 §9, §12; 06 §10; 12 §1).
+// One device draw / state call, 1:1 with the `Recorder` method of the same name.
 #[derive(Clone, Debug)]
 pub enum DrawCmd {
     SetViewport(Rect),
@@ -301,8 +300,8 @@ pub enum ResCmd {
         rgba: Arc<[u8]>,
     },
     // Standalone .jpg / .png file bytes (03 §1); the renderer decodes them to RGBA8 of the header's `w` × `h`.
-    // `fit`: a presentation-pack override (I18N G2), scaled to `w` × `h` when its size differs (the logical size and
-    // every UV stay the vanilla ones, ARCH_B §1.7).
+    // `fit`: a presentation-pack override, scaled to `w` × `h` when its size differs (the logical size and
+    // every UV stay the vanilla ones).
     CreateImage {
         id: TexId,
         bytes: Arc<[u8]>,
@@ -348,7 +347,7 @@ pub enum ResCmd {
     Text(TextCmd),
 }
 
-// Text_RenderToVm 0x4663B0 family (10 §6) as an output command (ARCH_SUMMARY decision 7): the renderer decodes and
+// Text_RenderToVm 0x4663B0 family (10 §6) as an output command: the renderer decodes and
 // rasterises `text` and replaces rows `y .. y+size` of `dst`, `w` texels wide (x = 0), at this point in call order.
 #[derive(Clone, Debug)]
 pub struct TextCmd {
@@ -366,9 +365,9 @@ pub struct TextCmd {
     // −1 → ±1 px outline offsets (2× space), anything else ±2 px.
     pub outline: i32,
     // How the original placed the text (10 §6 entry points). The vanilla path always draws at `x` (the original's
-    // byte-length formula); a translation is placed by its measured width (I18N §2.3).
+    // byte-length formula); a translation is placed by its measured width.
     pub align: Align,
-    // Which recorder made it: the presentation pack picks the overflow mode per site (I18N §2.3, ARCH_B §1.5).
+    // Which recorder made it: the presentation pack picks the overflow mode per site.
     pub site: TextSite,
 }
 
@@ -381,12 +380,12 @@ pub enum Align {
     Right(f32),
 }
 
-// The six text recorders (I18N §2.2); the key of a pack's `[targets]` overflow table.
+// The six text recorders; the key of a pack's `[targets]` overflow table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextSite {
     // Dialogue strips (10 §6, hud.rs).
     Dialogue,
-    // Spell / player-spell plate (07 §11.1, 12 §5.3, gui.rs).
+    // Spell / player-spell plate (gui.rs).
     Spell,
     // Ending text (16 §1.3).
     Ending,
@@ -422,7 +421,7 @@ impl TextSite {
 }
 
 // AnmManager's D3D render-state mirrors: blend +0x24C0 (05 §12.5), bound texture +0x24BC and texture-matrix sprite
-// +0x24C8 (05 §12.8). Only draw paths read them, so they are emit state (ARCH decision 2): with emit off they keep
+// +0x24C8 (05 §12.8). Only draw paths read them, so they are emit state: with emit off they keep
 // their last emitted values, as on a frame-skipped frame of the original (00 §2), and are never part of the World.
 #[derive(Clone, Copy, Debug)]
 pub struct AnmCache {
@@ -450,7 +449,7 @@ impl AnmCache {
     }
 }
 
-// Per-frame command recorder (the former `Gfx` draw API). `res` entries carry the `draws` length at record time, so
+// Per-frame command recorder. `res` entries carry the `draws` length at record time, so
 // the executor replays both lists in exact call order (log order of K records; GPU order is unchanged either way).
 #[derive(Debug)]
 pub struct Recorder {
@@ -526,7 +525,7 @@ impl Recorder {
         TexId::WHITE
     }
 
-    // Logical size of a live texture; panics on a freed id like the device table did.
+    // Logical size of a live texture; panics on a freed id.
     pub fn texture(&self, id: TexId) -> TexInfo {
         let e = self.table.get(id).expect("freed texture");
         TexInfo {
@@ -710,7 +709,7 @@ impl Recorder {
         self.create_entry(width, height, src, Arc::from(rgba))
     }
 
-    // ANM entry texture replaced by a pack image (I18N G2): same provenance and THTX size, pixels decoded and fitted
+    // ANM entry texture replaced by a pack image: same provenance and THTX size, pixels decoded and fitted
     // by the renderer.
     pub fn create_anm_texture_over(
         &mut self,
@@ -873,7 +872,7 @@ impl Recorder {
     }
 }
 
-// Core's only access to the renderer (ARCH_A §2.2; like `host::Host`), used at the sync points: Present (frame end,
+// Core's only access to the renderer (like `host::Host`), used at the sync points: Present (frame end,
 // Device_ClearPresentTwice in calc), the draw-log sample. Implemented by `gfx::Gfx` (app, tools) and `NullRenderer`
 // (core tests).
 pub trait Renderer {
@@ -890,7 +889,7 @@ pub trait Renderer {
 }
 
 // Renderer that executes nothing: drains the lists, logs no records. Core tests and headless logic runs (logic never
-// reads the renderer, ARCH decision 2).
+// reads the renderer).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NullRenderer;
 

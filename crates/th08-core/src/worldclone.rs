@@ -1,12 +1,4 @@
-//! World clone round trip (ARCH_A §2.3 `World: Clone`, REWRITE_PLAN "New tests"): a `World` cloned mid-run continues
-//! exactly like the original. `clone_continues_identically` runs a `World` without a `Ctx`: the player, the bullet
-//! manager with its items, the enemy manager with a synthetic ECL, the stage with a synthetic .std (released by the
-//! ECL's section requests), the effect manager and the screen-effect pool, the HUD, g_Gui and the dialogue (started
-//! by an ECL timeline op 6 with a synthetic .msg file), the game manager with its replay object recording the run,
-//! then playing the recording back. `scene_clone_continues_identically` clones a loaded `Ctx`'s whole `World` (scene
-//! objects, Supervisor, ascii manager, chain) in the main menu and replays the continuation; `stage_clone_continues_
-//! identically` swaps a mid-stage `World` of a demo replay into a second `Ctx`; `save_from_clone_keeps_the_run`
-//! saves score.dat from a clone mid-game (ARCH_D_MOBILE, 15 §2.2) (docs/arch/STEP9_WORLD.md).
+//! World clone round trips: a `World` cloned mid-run (bare, menu `Ctx`, mid-stage demo) continues like the original.
 use crate::bullet::BulletManager;
 use crate::effect::ScreenEnv;
 use crate::enemy::EnemyManager;
@@ -95,16 +87,9 @@ impl Run {
         }
     }
 
-    // One game frame of the parts present so far, in chain order: Stage_Calc (prio 8) with the stage lent out of its
-    // `Sys`, as `StageTask::calc`; Player_Calc (prio 9) with the player and the
-    // bullet manager lent out of its `Sys` (items passed in), as `PlayerTask::calc`; EnemyMgr_Calc (prio 11) as
-    // `EnemyTask::calc` with a spark burst every 40 frames; EffectMgr_Calc (prio 13); BulletMgr_Calc (prio 14) with the
-    // time-orb spell bonus, as `BulletTask::calc`. 9f: the screen-effect calcs first (prio 3, `ScreenTask::calc`) and
-    // a type 7 + type 1 shake queued every 100 frames, linked after the calc pass (`register_pending`). 9e: Gui_Calc
-    // (prio 12) handles the queued g_Gui calls and reads the bonus, as `GuiTask::calc` (no score.dat record, no
-    // card steps); Hud_Calc (prio 15) boss bar outside dialogue, popups, Msg_Run with its side effects and item
-    // attraction, as `HudTask::calc` (the queued text renders and events are only counted). 9g: GameMgr_Calc's
-    // per-frame part first (prio 2), Replay_FrameHook (prio 7) and Replay_RecordCalc (prio 17), as `ReplayTask::calc`.
+    // One game frame in chain order, each part as its `*Task::calc` with its `Sys` lent out: GameMgr (prio 2),
+    // screen effects (3, a type 7 + type 1 shake every 100 frames), replay hook (7), Stage (8), Player (9), EnemyMgr
+    // (11, a spark burst every 40 frames), Gui (12), EffectMgr (13), BulletMgr (14), Hud (15), replay record (17).
     fn frame(&mut self, f: u32) {
         let mut bits = input::SHOT;
         bits |= if (f / 45).is_multiple_of(2) {
@@ -400,10 +385,9 @@ fn ins(time: i32, op: i16, args: &[i32]) -> Vec<u8> {
     v
 }
 
-// A stage ECL with one timeline of five `spawn_randx` (07 §3 op 2, an RNG draw each) and one enemy sub: a random
-// move (op 67, RNG), a write into the file itself (op 6 to a raw destination, 07 §6: a write, so the clone copies
-// the shared file), an aimed two-row ring (op 98, 07 §9), a stage section request (op 147, 06 §4.1), then a jump
-// back to time 0 (op 4).
+// A stage ECL with one timeline of five `spawn_randx` (op 2, an RNG draw each) and one enemy sub: a random
+// move (op 67, RNG), a write into the file itself (op 6 to a raw destination: the clone copies the shared file),
+// an aimed two-row ring (op 98), a stage section request (op 147), then a jump back to time 0 (op 4).
 fn ecl() -> th08_formats::ecl::Ecl {
     let f = |x: f32| x.to_bits().cast_signed();
     let mut data = vec![0u8; 0x48];
@@ -517,7 +501,7 @@ fn clone_continues_identically() {
         "no screen effect or effect live at the clone"
     );
     assert_eq!(a.trace(), b.trace());
-    // A second clone in the middle of the dialogue (9e).
+    // A second clone in the middle of the dialogue.
     let mut c: Option<Run> = None;
     for f in 200..900 {
         a.frame(f);
@@ -588,7 +572,7 @@ fn clone_continues_identically() {
     }
 }
 
-// 9g part 2 on a loaded `Ctx` (renderer side: `NullRenderer`; the test compares recorded commands).
+// On a loaded `Ctx` (renderer side: `NullRenderer`; the test compares recorded commands).
 #[cfg(test)]
 mod scene {
     use super::*;
@@ -661,8 +645,8 @@ mod scene {
         t
     }
 
-    // 9g part 2: the menu scene, the Supervisor and the ascii manager cloned mid-run (in the option screen's entry
-    // wait) continue exactly like the original: same state, RNG and draw commands every frame; 9h: with the chain.
+    // The menu scene, the Supervisor and the ascii manager cloned mid-run (in the option screen's entry wait), chain
+    // included, continue exactly like the original: same state, RNG and draw commands every frame.
     #[test]
     fn scene_clone_continues_identically() {
         const CLONE_AT: u32 = 175;
@@ -711,8 +695,8 @@ mod scene {
     }
 }
 
-// 9h part 2c mid-stage: demo 0 (stage play with bullets, enemies and items) from demo frame `AT`; renderer side:
-// `NullRenderer`. Until 10b this ran on the golden session (tools-side `Session`); same checks.
+// Mid-stage: demo 0 (stage play with bullets, enemies and items) from demo frame `AT`; renderer side:
+// `NullRenderer`.
 #[cfg(test)]
 mod stage {
     use super::*;
@@ -794,7 +778,7 @@ mod stage {
         peak
     }
 
-    // 9h part 2c: a mid-stage World cloned into a second `Ctx` (same demo, same frame, so its recorder mirrors the
+    // A mid-stage World cloned into a second `Ctx` (same demo, same frame, so its recorder mirrors the
     // first's) continues exactly like the original.
     #[test]
     fn stage_clone_continues_identically() {

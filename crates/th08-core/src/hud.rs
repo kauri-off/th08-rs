@@ -399,7 +399,7 @@ impl Hud {
         crate::ascii::queue_capture(anm, &self.cap_vm);
     }
 
-    // Hud_Load + Gui_LoadFaces 0x414590 + Msg_Load 0x439710 (12 §5.1, 10 §1, §3); no msg file in spell practice.
+    // Hud_Load + Gui_LoadFaces 0x414590 + Msg_Load 0x439710 (10 §1); no msg file in spell practice.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
         Self::load_files(ctx)?;
         self.load_reset(ctx);
@@ -596,7 +596,7 @@ impl Hud {
             else {
                 continue;
             };
-            // Recorded in calc; it runs at the next submit, before any draw recorded after it (decision 7).
+            // Recorded in calc; it runs at the next submit, before any draw recorded after it.
             ctx.rec.text(TextCmd {
                 dst: tex,
                 y,
@@ -1255,7 +1255,7 @@ fn with_hud<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Hud, &mut Ctx) -> R) -> Option
     Some(r)
 }
 
-// Chain nodes of `ctx.w.hud` (calc prio 15, draw prio 17): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.hud` (calc prio 15, draw prio 17): stateless forwarder.
 pub struct HudTask;
 
 impl Task<Ctx> for HudTask {
@@ -1899,7 +1899,7 @@ mod tests {
             std::iter::from_fn(|| b.update(1.0).then_some(())).count(),
             250
         );
-        // RE-Q67: at speed 0.5 the slide moves every frame (GetF) and the popup lives 500 frames.
+        // At speed 0.5 the slide moves every frame (GetF) and the popup lives 500 frames.
         let mut b = ActivePopup::show(Popup::Bonus(5));
         let mut xs = Vec::new();
         while b.update(0.5) {

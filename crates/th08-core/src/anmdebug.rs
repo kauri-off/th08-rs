@@ -67,7 +67,7 @@ fn with<R>(ctx: &mut Ctx, f: impl FnOnce(&mut AnmDebug, &mut Ctx) -> R) -> R {
     r
 }
 
-// Chain nodes of `ctx.w.anm_debug` (calc 4, draw 3): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.anm_debug` (calc 4, draw 3): stateless forwarder.
 pub struct AnmDebugTask;
 
 impl Task<Ctx> for AnmDebugTask {

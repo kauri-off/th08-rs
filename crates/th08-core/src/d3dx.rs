@@ -1,6 +1,6 @@
 //! D3DX CPU-dispatched helpers used by game logic (05 §10 "Vector normalise").
 
-/// `D3DXVec3Normalize`, SSE variant 0x48EFB0 (05 §10): s = (x²+y²)+z², m = (0.5·r)·(3 − (s·r)·r) with r = rsqrtss(s).
+/// `D3DXVec3Normalize`, SSE variant 0x48EFB0: s = (x²+y²)+z², m = (0.5·r)·(3 − (s·r)·r) with r = rsqrtss(s).
 /// rsqrtss is the reference CPU's (AMD) table on every target and host CPU (`fmath::rsqrt_amd`).
 pub fn vec3_normalize(v: [f32; 3]) -> [f32; 3] {
     let s = (v[0] * v[0] + v[1] * v[1]) + v[2] * v[2];
@@ -16,7 +16,7 @@ pub fn vec3_normalize(v: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
 
-    // 05 §10 example; holds on every target since rsqrtss is the table model.
+    // Spec example; holds on every target since rsqrtss is the table model.
     #[test]
     fn facing_example_matches_spec() {
         let n = vec3_normalize([0.0, 500.0, 460.0]);

@@ -13,7 +13,7 @@ use crate::types::D3dColor;
 pub use th08_formats::musiccmt::{COMMENT_LINES, Entry, MAX_ENTRIES, parse_musiccmt};
 use th08_formats::sjis::SjisString;
 
-// Calc 0x449399 at prio 4, draw 0x449487 at prio 3 (16 §5).
+// Calc 0x449399 at prio 4, draw 0x449487 at prio 3.
 pub const CALC_PRIO: u16 = 4;
 pub const DRAW_PRIO: u16 = 3;
 // music00.anm in ANM slot 0x17 (16 §5.1).
@@ -28,7 +28,7 @@ const TITLE_SCRIPT: usize = 0x11;
 // Comment / title text colour, COLORREF 0xFFE0C0 = RGB (192, 224, 255), and mode arg 0x300000 (16 §5.3).
 const COMMENT_COLOUR: u32 = 0x00FF_E0C0;
 const COMMENT_MODE: i32 = 0x0030_0000;
-// The one-byte cursor string 0x7F: ascii.anm sprite 126, a ▶ glyph (16 §5.2, 12 §2.9).
+// The one-byte cursor string 0x7F: ascii.anm sprite 126, a ▶ glyph (12 §2.9).
 const CURSOR: &str = "\u{7f}";
 
 // PLST+0x208 heard flags → object +0xC + 4i (16 §5.1); playing in the music room never sets them.
@@ -148,12 +148,12 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: Txt, colour: u32, mode: i32) {
     vm.flags |= anmvm::F_VISIBLE;
 }
 
-// The 0x6A28-byte music-room object at 0x17CF4C8 (16 §5, structs.md). Zeroed at register: every VM is inert until
-// a script is set (16 §5.2).
+// The 0x6A28-byte music-room object at 0x17CF4C8 (structs.md). Zeroed at register: every VM is inert until
+// a script is set (§5.2).
 #[derive(Default, Clone)]
 pub struct MusicRoom {
     entries: Vec<Entry>,
-    // +0xC + 4i: heard flags copied from PLST+0x208 at init (15 §2, 16 §5.1).
+    // +0xC + 4i: heard flags copied from PLST+0x208 at init (15 §2).
     heard: [bool; MAX_ENTRIES],
     // +0x6C sub-frame, +0x70 state, +0x74 cursor, +0x78 playing entry (0 at init), +0x7C top row.
     sub_frame: i32,
@@ -309,7 +309,7 @@ impl MusicRoom {
 }
 
 impl MusicRoom {
-    // MusicRoom_Init 0x44970F (16 §5.1–§5.2).
+    // MusicRoom_Init 0x44970F.
     pub(crate) fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) -> anyhow::Result<()> {
         if chain != Chain::Calc {
             return Ok(());
