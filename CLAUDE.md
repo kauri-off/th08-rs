@@ -4,7 +4,6 @@
 
 A reader must be able to check spec-bound code against the specs, without the comments drowning the code.
 - Each module: exactly one `//!` line naming what it ports and its spec section (`//! ECL enemy VM (07 §5–§10)`).
-  The spec section is cited there once.
 - On an item or statement, cite a spec section only when it adds something: a different section than the module's,
   a kept quirk, units / fixed-point / angle format, or the original's name or address. Plain fields, constants and
   obvious statements get no citation.
@@ -20,7 +19,7 @@ A reader must be able to check spec-bound code against the specs, without the co
 ## Source of truth
 
 - Numbered specs `specs/00–16_*.md` plus `specs/structs.md` are the only source of truth for behaviour.
-- `specs/answers_*.md` are a changelog with evidence; every fact in them must also be in a numbered spec.
+- `specs/changelog/answers_*.md` are a changelog with evidence; every fact in them must also be in a numbered spec.
 - An implementer brief cites a spec section for every deliverable; a deliverable without one goes to RE first.
 - Session traces (golden, fullrun_noclip, demos) are used to locate divergences, never to derive behaviour.
   If the spec does not explain a divergence: `// SPEC-GAP:` plus a question for the spec, never a fix fitted to the
