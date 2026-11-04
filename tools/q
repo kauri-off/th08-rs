@@ -1,10 +1,10 @@
 #!/usr/bin/env -S python3 -I
 """usage: tools/q  (one-line summary)
-       tools/q submit [--kind check|test|emu|full] [--prio high|normal] [--label TEXT] [-C DIR] -- CMD…  (prints ID)
+       tools/q submit [--kind check|test|emu|full|batch] [--prio high|normal] [--label TEXT] [-C DIR] -- CMD…  (prints ID)
        tools/q wait ID [--max SECONDS] [--tail N] | ls | stats [--since 24h] [--id ID] | cancel ID | selftest
        tools/q legacy [-w SECS] -- CMD…  (= tools/qlock: exclusive .agents.lock, wait/run logged as kind=legacy)
 Job queue for heavy checks: each job is a systemd user unit that waits for capacity (weighted semaphore, 4 units:
-check 2, test 1, emu 1 + the emulator token, full 4; prio high first, strict FIFO behind the head), holds
+check 2, test 1, emu 1 + the emulator token, full 4, batch 2 (external-replay batches); prio high first, strict FIFO behind the head), holds
 .agents.lock SHARED while it runs, logs to QDIR/log.jsonl. wait exits with the job's code, or 75 = not done yet.
 Env: QDIR (default /home/anon/Projects/th_08/target/queue), QLOCK (default …/target/.agents.lock), QPOLL (s)."""
 import fcntl, json, os, random, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time
@@ -15,7 +15,7 @@ QLOCK = os.path.realpath(os.environ.get("QLOCK") or f"{MAIN}/target/.agents.lock
 ARCH_TIMES = f"{MAIN}/target/arch_ref/times.txt"
 POLL = float(os.environ.get("QPOLL", "2"))
 CAP = 4
-WEIGHT = {"check": 2, "test": 1, "emu": 1, "full": 4}
+WEIGHT = {"check": 2, "test": 1, "emu": 1, "full": 4, "batch": 2}
 WAIT_MAX = 540  # one Bash tool call never reaches the 600 s limit
 EXIT_PENDING = 75  # EX_TEMPFAIL: job not finished, call `q wait` again
 EXIT_CANCELLED = 125
@@ -123,7 +123,7 @@ def est_run(kind, hist):
             j = max(2, 16 * WEIGHT[kind] // CAP)
             return 150 + tot * (1.6 if kind == "full" else 1.4) / j  # fmt/build/wasm/android/test + items (+ emit-off)
         except (OSError, ValueError): pass
-    return {"test": 120, "emu": 300}.get(kind, 600)
+    return {"test": 120, "emu": 300, "batch": 1200}.get(kind, 600)
 
 
 def simulate(s, hist):
@@ -205,7 +205,7 @@ def finish(i, job, st, state, rc, out_path):
                 "submit": job["submit"], "start": start, "end": st["end"],
                 "wait": round((start or st["end"]) - job["submit"], 1),
                 "lockwait": st.get("lockwait"), "run": round(st["end"] - start, 1) if start else None,
-                "out": out_path})
+                "J": st.get("J"), "load": st.get("load"), "load_max": st.get("load_max"), "out": out_path})
 
 
 def cmd_run(a):
@@ -266,8 +266,13 @@ def cmd_run(a):
         except OSError as x:
             out.write(f"q: cannot start {job['cmd']}: {x}\n".encode())
             finish(i, job, st, "failed", 127, out_path); return
+        loads = []
+        st["J"] = env.get("J")
         while child[0].poll() is None:
             time.sleep(POLL)
+            try: loads.append(float(open("/proc/loadavg").read().split()[0]))
+            except (OSError, ValueError): pass
+            if loads: st.update(load=round(sum(loads) / len(loads), 1), load_max=round(max(loads), 1))
             if not os.path.isdir(job["cwd"]) and not term[0]:
                 st["reason"] = "worktree removed"; on_term()
     rc = child[0].returncode
@@ -289,7 +294,8 @@ def job_line(i, st, job):
     w = (st.get("start") or st.get("end") or now()) - job["submit"]
     r = (st["end"] - st["start"]) if st.get("start") and st.get("end") else None
     return (f"q stats: job {i} kind={job['kind']} label={job['label'] or '-'} waited {w:.0f} s"
-            + (f" (lock {st['lockwait']:.0f} s)" if st.get("lockwait") else "") + (f", ran {r:.0f} s" if r is not None else ""))
+            + (f" (lock {st['lockwait']:.0f} s)" if st.get("lockwait") else "") + (f", ran {r:.0f} s" if r is not None else "")
+            + (f", J={st['J']} load {st['load']} (max {st['load_max']})" if st.get("load") is not None else ""))
 
 
 def cmd_wait(a):
@@ -401,15 +407,16 @@ def cmd_stats(a):
         st = rjson(f"{jdir(jid)}/status.json", {}); job = rjson(f"{jdir(jid)}/job.json")
         print(job_line(jid, st, job)); return
     print(f"q stats since {time.strftime('%Y-%m-%d %H:%M', time.localtime(t0))} ({len(hist)} jobs; times in s)")
-    print(f"{'kind':7} {'n':>4} {'ok':>4} {'wait p50':>8} {'p90':>6} {'max':>6} {'run p50':>8} {'p90':>6} {'>540s':>6}")
-    for k in ["check", "test", "emu", "full", "legacy"]:
+    print(f"{'kind':7} {'n':>4} {'ok':>4} {'wait p50':>8} {'p90':>6} {'max':>6} {'run p50':>8} {'p90':>6} {'>540s':>6} {'load p50':>8}")
+    for k in ["check", "test", "emu", "full", "batch", "legacy"]:
         h = [x for x in hist if x.get("kind") == k]
         if not h: continue
         w = [x["wait"] for x in h if x.get("wait") is not None]
         r = [x["run"] for x in h if x.get("run") is not None]
         f = lambda v: "-" if v is None else f"{v:.0f}"
         print(f"{k:7} {len(h):4} {sum(1 for x in h if x.get('rc') == 0):4} {f(pct(w, 50)):>8} {f(pct(w, 90)):>6} {f(max(w) if w else None):>6}"
-              f" {f(pct(r, 50)):>8} {f(pct(r, 90)):>6} {sum(1 for v in w if v > WAIT_MAX):6}")
+              f" {f(pct(r, 50)):>8} {f(pct(r, 90)):>6} {sum(1 for v in w if v > WAIT_MAX):6}"
+              f" {f(pct([x['load'] for x in h if x.get('load') is not None], 50)):>8}")
     qh = [x for x in hist if x.get("kind") != "legacy"]
     ev = []
     for x in qh:

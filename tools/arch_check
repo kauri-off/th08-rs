@@ -11,6 +11,8 @@
 # SCOPE=logic (run only, implies FAST; for runs that change no draw code): only the LOGIC_ITEMS subset — golden,
 # gameover_save (save path), options_cfg (config), the fullrun_noclip prefix f_ (session --to FULLRUN_TO, compared
 # as a prefix of the reference trace), demos 0 and 3, two pilots (udAr02 short, udDn14 long) and emit-off of golden + udAr02.
+# PACK=<pack dir or zip> (I18N G2): every item runs with that presentation pack mounted (TH08_PACK) and is compared with
+# the vanilla DIR as usual: a pack changes only pixels, so traces, reports and draw hashes must all stay identical.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
@@ -26,11 +28,12 @@ FULLRUN_TO=${FULLRUN_TO:-80000}
 JOB_MB=${JOB_MB:-1200}
 J=${J:-$(awk -v c="$(nproc)" -v m="$JOB_MB" '/^MemAvailable/ {j = int($2 / 1024 / m); if (j > c / 2) j = c / 2; if (j < 1) j = 1; print j}' /proc/meminfo)}
 # A replay batch (systemd unit th-b-*) grows after we start: leave it room (headless GPU allocs fail first).
-systemctl --user list-units 'th-b-*' --state=active --no-legend 2>/dev/null | grep -q . && (( J > 6 )) && J=6
+{ systemctl --user list-units 'th-b-*' --state=active --no-legend 2>/dev/null | grep -q . || [[ -e $ROOT/target/queue/batch.running ]]; } && (( J > 6 )) && J=6
 TIME=; [[ -x /usr/bin/time ]] && TIME=/usr/bin/time
 export TH08_DIR="/home/anon/Games/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/"
 export XDG_CONFIG_HOME=$ROOT/target/verify-42/cfg
 export CARGO_TARGET_DIR=$TARGET
+if [[ -n ${PACK:-} ]]; then export TH08_PACK=$(realpath "$PACK") RUST_LOG=th08::packs=info; echo "pack $TH08_PACK"; else unset TH08_PACK; fi
 export BIN SESSION_BIN DEMOSYNC_BIN DRAWRUN_BIN SESSION_SRC PILOT_SRC TIME
 
 mode=${1:-} dir=${2:-}
