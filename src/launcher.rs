@@ -88,9 +88,16 @@ enum Choice {
     Ask,
 }
 
-// Lookup order: valid configured folder; invalid CLI/env folder is an error; bundled folder; folder dialog.
+// Lookup order: valid CLI / env / launcher folder; invalid CLI/env folder is an error; bundled folder (a package's own
+// data beats the port.cfg folder shared by every build); valid port.cfg folder; folder dialog.
 #[cfg(not(target_arch = "wasm32"))]
 fn choose_game_dir(s: &Settings, bundled: impl FnOnce() -> Option<PathBuf>) -> Choice {
+    let mut bundled = Some(bundled);
+    if s.origin("game_dir") <= Origin::PortCfg
+        && let Some(d) = bundled.take().and_then(|f| f())
+    {
+        return Choice::Bundled(d);
+    }
     if let Some(d) = &s.game_dir {
         if is_game_dir(d) {
             return Choice::Configured(d.clone());
@@ -101,7 +108,7 @@ fn choose_game_dir(s: &Settings, bundled: impl FnOnce() -> Option<PathBuf>) -> C
         }
         log::warn!("port.cfg {msg}");
     }
-    match bundled() {
+    match bundled.and_then(|f| f()) {
         Some(d) => Choice::Bundled(d),
         None => Choice::Ask,
     }
@@ -1576,6 +1583,13 @@ mod tests {
         assert_eq!(choose_game_dir(&s, some), Choice::Bundled(bundled.clone()));
         assert_eq!(choose_game_dir(&s, || None), Choice::Ask);
         s.set_from(Origin::PortCfg, "game_dir", &user.to_string_lossy())
+            .unwrap();
+        assert_eq!(choose_game_dir(&s, some), Choice::Bundled(bundled.clone()));
+        assert_eq!(
+            choose_game_dir(&s, || None),
+            Choice::Configured(user.clone())
+        );
+        s.set_from(Origin::Launcher, "game_dir", &user.to_string_lossy())
             .unwrap();
         assert_eq!(choose_game_dir(&s, some), Choice::Configured(user.clone()));
         let missing = root.join("missing").to_string_lossy().into_owned();

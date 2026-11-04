@@ -2095,6 +2095,13 @@ impl Settings {
         };
         for (k, v) in read_port_cfg(&s.dirs) {
             match find(&k) {
+                // Developer rows are never saved; a stale or hand-written one would silently turn on a cheat.
+                Some(sw) if sw.audience == Audience::Dev => {
+                    log::warn!(
+                        "port.cfg: developer setting {k} ignored (use --{k} or {})",
+                        sw.env
+                    );
+                }
                 Some(sw) => s.apply(Origin::PortCfg, &k, sw, &v),
                 None => log::error!("port.cfg: unknown key {k} ignored"),
             }
