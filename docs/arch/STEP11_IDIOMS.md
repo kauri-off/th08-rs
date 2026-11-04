@@ -109,6 +109,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11b** formats | (1) `Reader` cursor + typed `Truncated { at }` in cfg, msg, replay, scoredat, sht, stdfile, thbgm, archive, end, musiccmt (not anm.rs / ecl.rs); (2) `MsgOff`, `std::Op` decoder (06 §1.4) beside `Record`, `msg::Op` decoder (10 §2) beside `Ins`; (3) formats subset 0 (as_chunks, derivable, collapsible, unwraps → errors) | crates/th08-formats except anm.rs, ecl.rs | ∥ 11c 11d 11g | T D, formats unit tests |
 | **11c** ANM VM — **DONE** (see below) | (1) `anm::{AnmOff, Ins, Op}` in formats/anm.rs (header decoder from anmvm.rs:237, lazy per ip); (2) `AnmVm::run` → loop + `exec_op` + op-group fns, `VmFlags`, `D3dColor` for `color` / `color2` / `color_start`; (3) anmmgr subset 0 | formats/anm.rs, anmvm, anmmgr | ∥ 11b 11d 11g | T D |
 | **11d** ECL exec | (1) `ecl::{EclOff, Op}` in formats/ecl.rs (+ eclview bin); (2) `Exec::exec` → `match Op` dispatching to `eclvm/ops_*.rs`, named args via `Arg` / `Var` (from `IRef`), bullet flag const; (3) eclvm subset 0 | formats/ecl.rs, eclvm (+ new ops_*.rs), bin/eclview | ∥ 11b 11c 11g; before 11e | T D, **B** |
+| **11d** ECL exec — **DONE** (see below) | (1) `ecl::{EclOff, Op}` in formats/ecl.rs (+ eclview bin); (2) `Exec::exec` → `match Op` dispatching to `eclvm/ops_*.rs`, named args via `Arg` / `Var` (from `IRef`), bullet flag const; (3) eclvm subset 0 | formats/ecl.rs, eclvm (+ new ops_*.rs), bin/eclview | ∥ 11b 11c 11g; before 11e | T D, **B** |
 | **11e** enemy | (1) `EnemyIdx` for chain / boss / thread links; (2) `EnemyFlags` for the 07 flag words, `TlOp` timeline enum (enemy.rs:1139); (3) long fns 1133 / 1392 split, enemy subset 0 | enemy, eclvm (index boundary only) | after 11d; ∥ 11f 11h 11i | T D |
 | **11f** STD + MSG | (1) stage.rs on `std::Op`, `Stage` bools; (2) msg.rs on `msg::Op`, exec split, `Dialogue` bools; (3) both subset 0 | stage, msg | after 11b; ∥ 11e 11g 11h | T D |
 | **11g** player + pshot — **DONE** (see below) | (1) `ShotType` enum (+ `sht::team`) inside player / pshot; (2) `Angle`, one `angle_from` (player.rs:668 → types); (3) player / pshot subset 0 (pshot 260 split) | player, pshot | ∥ wave 1 | T D |
@@ -195,6 +196,28 @@ callers keep `F_*` / `[A]`. Switching the field types is left to the owners' run
 (the new accessors give each owner the typed form). Jump targets are `AnmOff(ival.cast_unsigned())`, where the old
 code used `ival as usize`. The two differ only for negative offsets, and both fail the instruction read and end the
 script.
+**11d done.** Files: crates/th08-formats/src/ecl.rs (`EclOff(u32)` for `Ins.off` / `TlIns.off` with `idx()` / `rel()`;
+`Arg { raw, var }`, `Dst { slot, arg }`; `Op` = `Flow` / `Var` / `Move` / `Enemy` / `Bullet` / `Laser` / `Boss` group
+enums with named fields, `Unknown(i16)`; `Op::decode(&Ins, &[u8])` (one opcode switch → the group's switch) and
+`Ecl::op`; `BulletBlock` / `LaserBlock` / `SpellBlock` parsers (07 §9.1, §9.4, §11); `signature` arms merged; new test
+`decode_every_table_op`, the vanilla-file test now asserts every executed op decodes), crates/th08-core/src/eclvm.rs
+(run loop, argument readers on `Arg` / `Dst`, `exec` = `match Op` → group fn, `at` / `at_mut` / `lo8` / `lo16`
+helpers; tests unchanged except imports), new crates/th08-core/src/eclvm/{vars, ops_flow, ops_var, ops_move,
+ops_enemy, ops_bullet, ops_laser, ops_spell, ops_native}.rs (`IRef` / `FRef` → `IntVar` / `FltVar::from_id`; named
+consts `BULLET_MARKED` 0x100000, `BLK_YOUKAI_ONLY` / `BLK_HUMAN_ONLY`, `DESC_SFX`, `WHITE`), crates/th08-tools/src/bin/
+eclview.rs (`-o` prints the decoded `Op`). Public API: `th08_formats::ecl::Ins.off` / `TlIns.off` are `EclOff` (was
+`usize`); new `ecl::{EclOff, Arg, Dst, Arith, Cmp, SpawnKind, Op, FlowOp, VarOp, MoveOp, EnemyOp, BulletOp, LaserOp,
+BossOp, BulletBlock, LaserBlock, SpellBlock}`, `Ecl::op`; `Ecl::ins` / `tl_ins` / `sub_start` signatures unchanged
+(core `Context.ip` stays `usize`). Lint subset (tools/lint_subset) for the run's files: before 154 (eclvm 137,
+ecl.rs 16, eclview 1), after 0; workspace 1 674 in 67 files. Check: FAST arch_check 0 differing, cargo test 421
+passed (+1 formats test), spec_refs 0, SPEC-GAP unchanged. Perf (§4 risk 2): user instructions on fullrun_noclip
+130.449 G → 130.515 G (+0.05 %); ECL symbols 0.7 % → 0.8 % of cycles. Wall time under parallel agent load was
++5 % ± noise (cycles of unrelated fns such as `graze_test` varied 3×), so re-time on an idle machine if wanted.
+Deviations: two op files beyond the plan's six (`ops_var` for ops 6–39 / 86 / 87 / 166 / 169, `ops_enemy` for
+ANM / flags / spawns / items / effects) plus `vars.rs`; group enums nested under `Op` (one flat 180-variant `match` would exceed the 150-line limit); block ops
+(`Bullets`, `Laser`, `Spellcard`) carry no fields: the block is parsed from the instruction bytes because
+`Enemy.stored_fire` (enemy.rs, 11e) stores the raw bytes; enemy flag literals (`1 << 25`, `1 << 30`, flags B `1 << 1`,
+`1 << 8`) stay raw for 11e's `EnemyFlags`.
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

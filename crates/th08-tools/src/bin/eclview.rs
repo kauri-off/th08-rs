@@ -1,4 +1,4 @@
-//! Disassembles an .ecl file: `eclview <th08.dat> <x.ecl> [sub]`.
+//! Disassembles an .ecl file: `eclview <th08.dat> <x.ecl> [sub] [-o]`; `-o` adds the decoded `ecl::Op` (07 §7).
 
 use th08_formats::ecl;
 
@@ -7,6 +7,7 @@ fn main() -> anyhow::Result<()> {
     let ar = th08_formats::archive::Archive::from_bytes(std::fs::read(&a[1])?)?;
     let e = ecl::parse(ar.read(&a[2])?)?;
     let only: Option<usize> = a.get(3).and_then(|s| s.parse().ok());
+    let show_op = a.iter().skip(3).any(|s| s == "-o");
     for (t, &start) in e.timelines.iter().enumerate().filter(|_| only.is_none()) {
         println!("timeline {t}");
         let mut off = start;
@@ -44,8 +45,13 @@ fn main() -> anyhow::Result<()> {
                     )
                 })
                 .collect();
+            let op = if show_op && i.op != -1 {
+                format!("  ; {:?}", e.op(&i))
+            } else {
+                String::new()
+            };
             println!(
-                "  {off:#07x} t{:<5} op{:<3} r{:02x} {}",
+                "  {off:#07x} t{:<5} op{:<3} r{:02x} {}{op}",
                 i.time,
                 i.op,
                 i.rank,
@@ -64,6 +70,6 @@ fn fmt(v: u32, float: bool) -> String {
     if float {
         format!("{}", f32::from_bits(v))
     } else {
-        format!("{}", v as i32)
+        format!("{}", v.cast_signed())
     }
 }
