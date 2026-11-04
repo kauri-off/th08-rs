@@ -1,5 +1,7 @@
 # RE-Q57 — batch500 leftovers after AC–AL (homing speed-up, Alice while bombing, Sakuya follow write, replay overrun); IMPL130 Q1
 
+Questions: [IMPL130](questions/IMPL130_QUESTIONS.md).
+
 Code: decompile/disassembly of th08.exe (functions per row). Traces (ref500 recordings, original re-runs with the
 probe `TH08_SCAN*` lines incl. the new `TH08_SCANORB`, in re/work/runs/q57/orig_*) only to locate. Scratch port
 `portcopy` = q56 portcopy (master dfc6e03 + AC–AL) + AM–AP + debug dumps (CARGO_TARGET_DIR=target/re57; src/

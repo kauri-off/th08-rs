@@ -1,5 +1,7 @@
 # RE-Q26 — IMPL28 questions (endings, staff roll) and the INFERRED sweep (changelog)
 
+Questions: [IMPL28](questions/IMPL28_QUESTIONS.md).
+
 Labels: **SPEC FIXED** (spec was wrong or silent, now corrected), **CODE BUG** (spec right, port differs),
 **NEW FACT** (new behaviour added to a numbered spec). Evidence = binary (addresses), the retail `.end` files and a
 full replay of `sessions/fullrun_noclip` **with draw log** in the original (2026-10-20: 124 708 trace rows, 0 differ;

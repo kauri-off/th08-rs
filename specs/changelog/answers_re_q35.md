@@ -1,6 +1,6 @@
 # RE-Q35 — SPEC-GAP batch 1: ECL VM and enemies (2026-10-24)
 
-Brief: docs/briefs/RE_Q35_BRIEF.md; markers: docs/specgaps/batch1_ecl_enemy.txt (17). Runs: re/work/runs/q35/
+Markers: docs/specgaps/batch1_ecl_enemy.txt (17). Runs: re/work/runs/q35/
 (CHECKPOINT.md). All answers come from the code (fn.sh / disx.py) and the ECL data (re/extracted/ecl_dis.txt); no
 session run was needed, since every marker is either already covered by a spec section or settled by the code. Data
 reachability was checked with ecl_dis scans (below).

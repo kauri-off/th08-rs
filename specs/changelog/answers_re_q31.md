@@ -1,5 +1,7 @@
 # RE-Q31 — fullrun from 90010, IMPL78–85 questions (changelog)
 
+Questions: [IMPL78](questions/IMPL78_QUESTIONS.md), [IMPL80](questions/IMPL80_QUESTIONS.md), [IMPL81](questions/IMPL81_QUESTIONS.md), [IMPL83](questions/IMPL83_QUESTIONS.md), [IMPL84](questions/IMPL84_QUESTIONS.md), [IMPL85](questions/IMPL85_QUESTIONS.md).
+
 Labels: **SPEC FIXED** (spec was wrong or silent, now corrected), **CODE BUG** (spec right, port differs),
 **NEW FACT** (new behaviour added to a numbered spec). Run data `re/work/runs/q31/` (not in git):
 - `portfix/`: scratch copy of master src at 1a2cbe5 (+ impl83 WIP) with fix A (`// q31 A`); `portfix2/`: master src after

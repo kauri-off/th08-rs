@@ -1,5 +1,7 @@
 # Answers to IMPL13_QUESTIONS (dirty room, 2026-10-18)
 
+Questions: [IMPL13](questions/IMPL13_QUESTIONS.md).
+
 All answers were read from th08.exe (`re/extracted/all_decomp.c`, byte scans of the image where noted).
 Spec sections fixed in place: 12 §5.9, 11 §7 (exit/fresh-start flags), 06 §8 and
 `specs/data/drawlog/FORMAT.md` §2 (stage fog, task deliverable 2), 15 §1.1 (cfg flag bit 10).

@@ -1,5 +1,7 @@
 # Answers to IMPL21 questions (RE-Q21)
 
+Questions: [IMPL21](questions/IMPL21_QUESTIONS.md).
+
 Spec sections changed:
 - 07 §6 var 10096: the exact walk, and what a child reads.
 - 07 §4.3 field map: trail ring 0x3394, trail settings 0x534C–0x5352.

@@ -1,5 +1,7 @@
 # RE-Q25 — answers to IMPL26 / IMPL27 questions (changelog)
 
+Questions: [IMPL26](questions/IMPL26_QUESTIONS.md), [IMPL27](questions/IMPL27_QUESTIONS.md).
+
 Labels: **SPEC FIXED** (spec was wrong or silent, now corrected), **CODE BUG** (spec right, port differs),
 **NEW FACT** (new behaviour added to a numbered spec). Evidence = binary (addresses) and the reference session draw
 logs in `sessions/` (golden, gameover_save). Run scratch: `re/work/runs/q25/` (`inputmap.py` = keyboard-map extractor).

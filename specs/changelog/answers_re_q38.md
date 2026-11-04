@@ -1,6 +1,8 @@
 # RE-Q38 — SPEC-GAP batch 4: result screen and endings (2026-10-24)
 
-Brief: docs/briefs/RE_Q38_BRIEF.md; markers: docs/specgaps/batch4_result_ending.txt (16) + docs/briefs/IMPL103_QUESTIONS.md
+Questions: [IMPL103](questions/IMPL103_QUESTIONS.md).
+
+Markers: docs/specgaps/batch4_result_ending.txt (16) + [IMPL103_QUESTIONS.md](questions/IMPL103_QUESTIONS.md)
 Q1. Runs: re/work/runs/q38/ (CHECKPOINT.md). Evidence: decompile (fn.sh) and disassembly (disx.py) of `Result_*`
 0x454CB2–0x45A1F3, `Ending_DrawFade` 0x428910, `Player_UpdateBomb` 0x44C650, `Player_Die` 0x44AB40,
 `Player_DyingUpdate` 0x44CBF0; the result00.anm dump (anm_dis.txt, VM 40/71 scripts); string tables read with

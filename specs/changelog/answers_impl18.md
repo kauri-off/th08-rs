@@ -1,5 +1,7 @@
 # Answers to IMPL18 questions (RE-Q18)
 
+Questions: [IMPL18](questions/IMPL18_QUESTIONS.md).
+
 Spec sections changed:
 - 07 §10.1 step 6 (hitByBomb rule), step 7 (hit-flash counter, draw-list prepend and which enemies are linked, aimed
   pointer vs death check), §10.6 (list walk order); the step-4 screen check is covered in answers_impl19.

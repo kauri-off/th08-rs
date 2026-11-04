@@ -1,5 +1,7 @@
 # RE-Q47 — IMPL113 questions 1–3 (replay entry block, save-dialog flush, restart PLST test)
 
+Questions: [IMPL113](questions/IMPL113_QUESTIONS.md).
+
 Code only (decompile + capstone disasm of th08.exe, re/tools/dispscan.py). No runs of the original.
 
 | # | question | original | spec | port |

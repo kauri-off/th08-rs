@@ -1,6 +1,6 @@
 # RE-Q64 — draw-log differences, part 5 (2026-10-30)
 
-Brief: docs/briefs/RE_Q64_BRIEF.md. Runs: re/work/runs/q64 (CHECKPOINT.md; scratch port = q63 portcopy + Q64 fixes behind
+Runs: re/work/runs/q64 (CHECKPOINT.md; scratch port = q63 portcopy + Q64 fixes behind
 `Q64NO*` env switches, target/re64). Recordings: ref500 draw-log set (re/work/runs/batch500/drawlog.txt) + golden.
 
 ## Changed spec sections

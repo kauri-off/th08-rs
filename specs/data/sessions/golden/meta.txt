@@ -1,8 +1,8 @@
 name: golden
 recorded: 2026-10-18T19:13:17+03:00
-wine: /home/anon/PortProton/data/dist/WINE_LG_11-1/bin/wine
-prefix: /home/anon/PortProton/data/prefixes/DEFAULT
-display: :0
+wine: wine (system)
+prefix: default
+display: X display (desktop)
 renderer: wined3d (wine builtin d3d8 behind the probe)
 drawlog: 1
 sound: on

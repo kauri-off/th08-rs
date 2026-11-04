@@ -1,6 +1,6 @@
 # RE-Q63 — draw-log differences, part 4 (changelog)
 
-Brief: docs/briefs/RE_Q63_BRIEF.md. Runs: re/work/runs/q63 (CHECKPOINT.md; portcopy = q62 portcopy + scratch fixes,
+Runs: re/work/runs/q63 (CHECKPOINT.md; portcopy = q62 portcopy + scratch fixes,
 CARGO_TARGET_DIR target/re63; before = q62/fix4). Every fact below is in the numbered spec section named.
 
 ## Answers

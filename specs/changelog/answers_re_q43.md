@@ -1,5 +1,7 @@
 # RE-Q43 — IMPL107 questions 1–3 (result screen, spell records)
 
+Questions: [IMPL107](questions/IMPL107_QUESTIONS.md).
+
 Code only (decompile + capstone disasm of th08.exe); no runs.
 
 | # | question | original | spec | port |

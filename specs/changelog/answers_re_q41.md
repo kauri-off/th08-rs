@@ -1,6 +1,6 @@
 # RE-Q41 — SPEC-GAP batch 7: input, audio, sound, joystick, ECL interrupt, ascii pause fade, text filter (2026-10-25)
 
-Brief: docs/briefs/RE_Q41_BRIEF.md; markers: docs/specgaps/batch7_input_audio_misc.txt (8). Runs: re/work/runs/q41/
+Markers: docs/specgaps/batch7_input_audio_misc.txt (8). Runs: re/work/runs/q41/
 (CHECKPOINT.md). Evidence: disassembly of `Input_Poll` 0x43D970 (all 47 key tests extracted mechanically), the DI
 set-up `FUN_00446A37` and its EnumObjects callback 0x445E3D; `Ecl_Run` LOOP test 0x418510 and interrupt handler
 0x41C88A–0x41C93C; `Sound_Play` / 13 §1.2 call-site audit (RE-Q25); `Sound_Update` 0x45D790 cases 2/6/7/8;

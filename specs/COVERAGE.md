@@ -197,4 +197,4 @@ quoting its addresses.
 ## 6. What the port still needs from RE
 
 As of RE-Q41 the MIDI music mode is specified too (02 §5); as of RE-Q23 (see §A) it was the only unspecified part. Runtime traces, menu/result layouts, score.txt and
-the small-helper mop-up are done. Open implementer questions go through `docs/briefs/IMPLn_QUESTIONS.md`.
+the small-helper mop-up are done. Implementer questions and their answers are logged in [changelog/questions/](changelog/questions/) and `changelog/answers_*.md`.

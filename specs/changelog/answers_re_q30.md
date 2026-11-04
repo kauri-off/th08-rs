@@ -1,5 +1,7 @@
 # RE-Q30 — remaining fullrun divergences, IMPL42–54 questions (changelog)
 
+Questions: [IMPL42](questions/IMPL42_QUESTIONS.md), [IMPL43](questions/IMPL43_QUESTIONS.md), [IMPL44](questions/IMPL44_QUESTIONS.md), [IMPL45](questions/IMPL45_QUESTIONS.md), [IMPL46](questions/IMPL46_QUESTIONS.md), [IMPL47](questions/IMPL47_QUESTIONS.md), [IMPL48](questions/IMPL48_QUESTIONS.md), [IMPL49](questions/IMPL49_QUESTIONS.md), [IMPL50](questions/IMPL50_QUESTIONS.md), [IMPL51](questions/IMPL51_QUESTIONS.md), [IMPL52](questions/IMPL52_QUESTIONS.md), [IMPL53](questions/IMPL53_QUESTIONS.md), [IMPL54](questions/IMPL54_QUESTIONS.md).
+
 Labels: **SPEC FIXED** (spec was wrong or silent, now corrected), **CODE BUG** (spec right, port differs),
 **NEW FACT** (new behaviour added to a numbered spec). Run data `re/work/runs/q30/` (not in git):
 - `portfix/`: scratch copy of master 3a3e354 `src/` + RE-Q29 fixes C, D, E (impl75, not merged there) + the fixes below,

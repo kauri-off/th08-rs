@@ -1,5 +1,7 @@
 # RE-Q44 — IMPL108 questions 1–3 (text copy width, bomb tint wording)
 
+Questions: [IMPL108](questions/IMPL108_QUESTIONS.md).
+
 Code only (decompile + capstone disasm of th08.exe, text/music00/resulttext.anm sprite dump); no runs.
 Call-site argument dump: re/work/runs/q44/callers_raw.txt.
 

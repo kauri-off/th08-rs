@@ -1,5 +1,7 @@
 # RE-Q70 — IMPL148 questions and the last open draw items (2026-11-01)
 
+Questions: [IMPL148](questions/IMPL148_QUESTIONS.md).
+
 Inputs: target/drawgroups_148 (batch500 + golden), target/drawgroups_dl3_148 (36 dl3). Runs: re/work/runs/q70
 (CHECKPOINT.md; portcopy = master ebe04ae src + scratch fixes, scratch.diff; `Q70=1` instrumentation is env-gated debug
 only). Port cuts (target/re70/out/<tag>): a1/a2 golden ≤ 11000; a3/a4 udSe43 instrumented; a5 udSe43 + udSs12 ≤ 74266;
@@ -132,12 +134,8 @@ note (`K screen capture.anm#0 … 0 0` at 25317, the reference has only `K scree
 After CODE BUGs 1–7, in both sets only the accepted classes (precision, races, host timing, log artefacts) remain,
 plus 10 rec×frames of single-present U.
 
-## Full-set compare (not run here; for the orchestrator after IMPL149)
-```
-re/tools/thjob dg149 -t 21 -g 'target/drawgroups_149/*/groups.tsv' -- bash -c 'cd /home/anon/Projects/th_08 && target/drawgroups.sh target/drawgroups_149 5'
-re/tools/thjob dgdl3149 -t 36 -g 'target/drawgroups_dl3_149/*/groups.tsv' -- bash -c 'cd /home/anon/Projects/th_08 && E=re/work/runs/dl3/rec LIST=re/work/runs/dl3/drawlog.txt GOLDEN=0 target/drawgroups.sh target/drawgroups_dl3_149 5'
-sed -i 's/_148/_149/g' re/work/runs/q70/cls.py && (cd re/work/runs/q70 && python3 -I cls.py)   # writes totals.tsv
-```
+## Full-set compare
+Not run here: the draw-group comparison over both recording sets is to be repeated after the fixes above.
 
 ## Draw parity
 Not done yet: seven small CODE BUGs remain (above). Once IMPL149 fixes them and the full-set compare confirms it, every

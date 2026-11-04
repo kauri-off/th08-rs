@@ -1,5 +1,7 @@
 # Answers to IMPL12_QUESTIONS (dirty room, 2026-10-18)
 
+Questions: [IMPL12](questions/IMPL12_QUESTIONS.md).
+
 All answers were read from th08.exe (`re/extracted/all_decomp.c`, disassembly where noted).
 
 ## 1. `Enemy_KillChildren` path choice — VERIFIED

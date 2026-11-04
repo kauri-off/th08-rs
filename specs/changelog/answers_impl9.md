@@ -1,5 +1,7 @@
 # Answers to IMPL9_QUESTIONS.md
 
+Questions: [IMPL9](questions/IMPL9_QUESTIONS.md).
+
 All addresses are from th08.exe. Function names are from `symbols.csv` (fresh dump, `tools/redump.sh`).
 VERIFIED = read from code; INFERRED = reasoning, not read directly.
 

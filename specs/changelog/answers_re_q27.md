@@ -1,5 +1,7 @@
 # RE-Q27 — next sync divergences, IMPL29 / IMPL30 questions (changelog)
 
+Questions: [IMPL29](questions/IMPL29_QUESTIONS.md), [IMPL30](questions/IMPL30_QUESTIONS.md).
+
 Labels: **SPEC FIXED** (spec was wrong or silent, now corrected), **CODE BUG** (spec right, port differs),
 **NEW FACT** (new behaviour added to a numbered spec). Run data: `re/work/runs/q27/` (not in git):
 - `golden_orig/`, `fr_orig/`: partial replays of golden / fullrun_noclip in the original with `TH08_SCAN` (items);

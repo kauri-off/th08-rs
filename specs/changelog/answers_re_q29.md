@@ -1,5 +1,7 @@
 # RE-Q29 — replay frame hook vs traces, next divergences, IMPL35–40 questions (changelog)
 
+Questions: [IMPL35](questions/IMPL35_QUESTIONS.md), [IMPL36](questions/IMPL36_QUESTIONS.md), [IMPL37](questions/IMPL37_QUESTIONS.md), [IMPL38](questions/IMPL38_QUESTIONS.md), [IMPL39](questions/IMPL39_QUESTIONS.md), [IMPL40](questions/IMPL40_QUESTIONS.md), [IMPL73](questions/IMPL73_QUESTIONS.md).
+
 Labels: **SPEC FIXED** (spec was wrong or silent, now corrected), **CODE BUG** (spec right, port differs),
 **NEW FACT** (new behaviour added to a numbered spec). Run data: `re/work/runs/q29/` (not in git):
 - `portfix/`: scratch copy of `src/` (master 896927b = f50761b src) with PR #29 applied (supervisor hunk merged by hand) and

@@ -1,5 +1,7 @@
 # Answers to IMPL14_QUESTIONS (dirty room, 2026-10-18)
 
+Questions: [IMPL14](questions/IMPL14_QUESTIONS.md).
+
 Sources: th08.exe (`re/extracted/all_decomp.c`, disassembly, byte/displacement scans) and a new wine probe run
 over all 4 attract demos. The probe now logs every main-thread `Rng_Next16` call with its return-address chain
 inside chosen demo-frame windows (`rngsite K F0 F1` → `probe_rng.txt`), and dumps all live bullets per frame

@@ -1,5 +1,7 @@
 # RE-Q55 — op 109 filters; gameover_save and musicroom_practice divergences
 
+Questions: [IMPL121](questions/IMPL121_QUESTIONS.md).
+
 Code: decompile/disassembly of th08.exe (functions per row). Traces only to locate; no original runs were needed.
 Runs in re/work/runs/q55/ (CHECKPOINT.md). Scratch port `portcopy` = master src snapshot 2026-10-26 08:43 + fixes
 A–H (built with target/re55; src/ untouched); the fixes alone are in `q55_scratch.diff` (5 files: ascii, gamemgr,

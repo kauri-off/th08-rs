@@ -1,6 +1,6 @@
 # RE-Q65 — draw-log differences on the 20 ref_b2 draw-log recordings (2026-10-30 / 31)
 
-Brief: docs/briefs/RE_Q65_BRIEF.md. Runs: re/work/runs/q65 (CHECKPOINT.md). Scratch port = q64 portcopy (all RE-Q64
+Runs: re/work/runs/q65 (CHECKPOINT.md). Scratch port = q64 portcopy (all RE-Q64
 fixes) + RE-Q65 fixes A–N behind `Q65NO<letter>` env switches (re/work/runs/q65/portcopy, target/re65). Recordings: the
 ref_b2 draw-log set (re/work/runs/batch2/drawlog.txt). Before = master 395bac0 (target/dl_b2); run `d` = q64 portcopy + A–G
 (classification run, all 20); after = run `g` = A–N (bin_g), golden = `golden_g`. The work was interrupted by a poweroff

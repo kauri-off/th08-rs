@@ -1,5 +1,7 @@
 # RE-Q48 — IMPL114 questions 1–2 (UnPause after Music_Stop, Music_PlaySlot heard flag)
 
+Questions: [IMPL114](questions/IMPL114_QUESTIONS.md).
+
 Code only (decompile + capstone disasm of th08.exe; msg/ecl dumps re/extracted/msg_dump.txt, ecl_dis.txt). No runs of the
 original — the stream logic settles Q1 without one.
 

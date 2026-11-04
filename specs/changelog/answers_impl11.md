@@ -1,4 +1,6 @@
-# Answers to docs/briefs/IMPL11_QUESTIONS.md (RE side)
+# Answers to [IMPL11_QUESTIONS.md](questions/IMPL11_QUESTIONS.md) (RE side)
+
+Questions: [IMPL11](questions/IMPL11_QUESTIONS.md).
 
 Questions covered: **1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14** (and 15, which was already answered in
 `answers_bugs1.md` §B2; not repeated here).

@@ -1,6 +1,8 @@
 # RE-Q67 — worst batch500 draw-log recordings, stage-5 flash, IMPL141 questions (2026-10-31)
 
-Brief: docs/briefs/RE_Q67_BRIEF.md. Runs: re/work/runs/q67 (CHECKPOINT.md). Scratch port = q66 portcopy (RE-Q66 fixes)
+Questions: [IMPL141](questions/IMPL141_QUESTIONS.md).
+
+Runs: re/work/runs/q67 (CHECKPOINT.md). Scratch port = q66 portcopy (RE-Q66 fixes)
 + RE-Q67 fixes A–D behind `Q67NO<letter>` env switches (re/work/runs/q67/portcopy, target/re67). Groups by `drawdiff_src`
 (drawdiff of a src snapshot at the start of the cycle, same rules as target/drawgroups_144). Before = target/drawgroups_144
 (master 3a51a8d); `b0` = q66 portcopy unchanged; `f` = all RE-Q67 fixes (bin_f).

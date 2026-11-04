@@ -1,6 +1,6 @@
 # RE-Q39 — SPEC-GAP batch 5: music room (2026-10-24)
 
-Brief: docs/briefs/RE_Q39_BRIEF.md; markers: docs/specgaps/batch5_musicroom.txt (13, src/musicroom.rs). Runs:
+Markers: docs/specgaps/batch5_musicroom.txt (13, src/musicroom.rs). Runs:
 re/work/runs/q39/ (CHECKPOINT.md, glyph7f.png = ascii.anm sprite 126). Evidence: decompile (fn.sh / fnc.sh) of
 `MusicRoom_Register` 0x449254, `_Ctor` 0x449331, `_Calc` 0x449399, `_StateIntro` 0x448A65, `_StateInput` 0x448B16,
 `_Draw` 0x449487, `_Init` 0x44970F, `_OnRemove` 0x449C0A, `Text_RenderToVm` 0x4663B0 / `Text_Render` 0x466310 /

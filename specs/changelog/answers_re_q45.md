@@ -1,5 +1,7 @@
 # RE-Q45 — IMPL109 questions 1–3, IMPL110 question 1 (text centring, strip rows, music-room reveal, キャラ名 length)
 
+Questions: [IMPL109](questions/IMPL109_QUESTIONS.md), [IMPL110](questions/IMPL110_QUESTIONS.md).
+
 Code (decompile + capstone disasm of th08.exe, .rdata reads) and one original run under Xvfb with a proxy d3d8.dll that
 dumps every 512-wide A4R4G4B4 texture at creation and every 100 presents (re/work/runs/q45/tex/: tex.c, run.sh).
 

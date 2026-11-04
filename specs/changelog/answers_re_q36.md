@@ -1,6 +1,6 @@
 # RE-Q36 — SPEC-GAP batch 2: rest of gameplay (2026-10-24)
 
-Brief: docs/briefs/RE_Q36_BRIEF.md; markers: docs/specgaps/batch2_gameplay.txt (23). Runs: re/work/runs/q36/
+Markers: docs/specgaps/batch2_gameplay.txt (23). Runs: re/work/runs/q36/
 (CHECKPOINT.md; scenes.py / gf.py = golden draw-log frame scans). Evidence: decompile / disassembly (fn.sh, disx.py),
 byte scans of absolute references (q34 tools/calls.py), sht_dump / anm_dis / ecl_dis data scans, the golden reference
 draw log (sessions/golden) against the q34 port run (re/work/runs/q34/golden_E). No new session run was needed.

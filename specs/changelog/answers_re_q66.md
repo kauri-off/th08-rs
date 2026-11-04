@@ -1,6 +1,6 @@
 # RE-Q66 — draw-log difference groups on the 36 dl3 recordings (2026-10-31)
 
-Brief: docs/briefs/RE_Q66_BRIEF.md. Runs: re/work/runs/q66 (CHECKPOINT.md). Scratch port = q65 portcopy (RE-Q65 fixes A–N)
+Runs: re/work/runs/q66 (CHECKPOINT.md). Scratch port = q65 portcopy (RE-Q65 fixes A–N)
 + RE-Q66 fixes A–D, F, H and one session tool fix, behind `Q66NO<letter>` / `Q66NOTOOL` env switches
 (re/work/runs/q66/portcopy, target/re66). Recordings: re/work/runs/dl3 (12 shots × 6A / 6B / Extra, selection.tsv).
 Before = master 97bae01 (target/drawgroups_dl3); `b0` = q65 portcopy unchanged (15 recordings); `a` = A–D (udVn17, 54214,

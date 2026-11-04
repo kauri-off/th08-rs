@@ -1,4 +1,6 @@
-# Answers to docs/briefs/IMPL10_QUESTIONS.md (RE side)
+# Answers to [IMPL10_QUESTIONS.md](questions/IMPL10_QUESTIONS.md) (RE side)
+
+Questions: [IMPL10](questions/IMPL10_QUESTIONS.md).
 
 Questions covered: **1, 2, 3, 4, 5, 6, 7, 8, 9** (all).
 

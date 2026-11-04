@@ -1,6 +1,8 @@
 # RE-Q42 — implementer questions: menus, key config, restart, Info loop (IMPL105 Q1–5, IMPL106 Q1–3) (2026-10-25)
 
-Brief: docs/briefs/RE_Q42_BRIEF.md; questions docs/briefs/IMPL105_QUESTIONS.md, IMPL106_QUESTIONS.md. Run notes:
+Questions: [IMPL105](questions/IMPL105_QUESTIONS.md), [IMPL106](questions/IMPL106_QUESTIONS.md).
+
+Questions [IMPL105_QUESTIONS.md](questions/IMPL105_QUESTIONS.md), [IMPL106_QUESTIONS.md](questions/IMPL106_QUESTIONS.md). Run notes:
 re/work/runs/q42/CHECKPOINT.md. Evidence: decompile + disassembly of `MainMenu_Top` 0x4674E0, `MainMenu_Option`
 0x46837B, `Menu_SetScreen` 0x4694C3, `MainMenu_KeyConfig` 0x469636, `KeyConfig_SetDigits` 0x469FA9, `MainMenu_Replay`
 0x46E136, `MainMenu_LoaderThread` 0x470E10, `MainMenu_OnRegister` 0x470A6C, `Info_Show` 0x471181, `Input_Poll`

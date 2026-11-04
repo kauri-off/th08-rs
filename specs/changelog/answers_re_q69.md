@@ -88,9 +88,5 @@ Not yet, but almost. After CODE BUGs 1–5 (and the check in 6), what is left ou
 groups. Everything else is accepted precision or race. By rec×frames, 99.9 % of both sets is accepted. The open items
 are all one-frame or one-recording effects; C2-pos is the only one that recurs (57 presents in 29 recordings).
 
-## Full-set compare (not run here; for the orchestrator after the IMPL fixes)
-```
-re/tools/thjob dg148 -t 21 -g 'target/drawgroups_148/*/groups.tsv' -- bash -c 'cd /home/anon/Projects/th_08 && target/drawgroups.sh target/drawgroups_148 5'
-re/tools/thjob dgdl3148 -t 36 -g 'target/drawgroups_dl3_148/*/groups.tsv' -- bash -c 'cd /home/anon/Projects/th_08 && E=re/work/runs/dl3/rec LIST=re/work/runs/dl3/drawlog.txt GOLDEN=0 target/drawgroups.sh target/drawgroups_dl3_148 5'
-python3 -I re/work/runs/q69/cls.py   # after editing B in cls.py to the _148 dirs: re-classifies, writes totals.tsv
-```
+## Full-set compare
+Not run here: the draw-group comparison over both recording sets is to be repeated after the fixes above.

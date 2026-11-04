@@ -1,5 +1,7 @@
 # RE-Q24 — answers to IMPL22 / IMPL23 / IMPL24 / IMPL25 questions (changelog)
 
+Questions: [IMPL22](questions/IMPL22_QUESTIONS.md), [IMPL23](questions/IMPL23_QUESTIONS.md), [IMPL24](questions/IMPL24_QUESTIONS.md), [IMPL25](questions/IMPL25_QUESTIONS.md).
+
 Labels: **SPEC FIXED** (spec was wrong or silent, now corrected), **CODE BUG** (spec right, port differs),
 **NEW FACT** (new behaviour added to a numbered spec). Run data: `re/work/runs/q24/` (demo2 rngsite, golden / fullrun
 port session dumps, fullrun_orig + fullrun_orig2 original scans with the new `B` player-bullet lines of

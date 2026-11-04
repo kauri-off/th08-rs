@@ -1,6 +1,6 @@
 # RE-Q68 — stage 5/6 3D background, boss portrait tint, worst dl3 recordings (2026-10-31)
 
-Brief: docs/briefs/RE_Q68_BRIEF.md. Runs: re/work/runs/q68 (CHECKPOINT.md). Scratch port = q67 portcopy (RE-Q66 + RE-Q67
+Runs: re/work/runs/q68 (CHECKPOINT.md). Scratch port = q67 portcopy (RE-Q66 + RE-Q67
 fixes) + RE-Q68 A behind `Q68NOA` and the draw-log tool rules behind `Q68NOTOOL` (re/work/runs/q68/portcopy,
 target/re68). Before = target/drawgroups_dl3_145 / target/drawgroups_145 (master 125c751, IMPL145).
 Session cuts with `--to` (menu-relative rows, ≈ present + 2400 in stage 5/6) via re/work/runs/q68/rn.sh.

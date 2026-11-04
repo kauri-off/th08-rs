@@ -1,5 +1,7 @@
 # RE-Q46 — IMPL111 questions 1–2, IMPL112 questions 1–11 (Music_Stop, keyboard cooperative level, MIDI details)
 
+Questions: [IMPL111](questions/IMPL111_QUESTIONS.md), [IMPL112](questions/IMPL112_QUESTIONS.md).
+
 Code only (decompile + capstone disasm of th08.exe, .rdata reads) and two scans of the shipped .mid files
 (re/work/runs/q46/midiscan.py: tempo metas, Fx statuses; sysex.py: SysEx list). No runs of the original.
 

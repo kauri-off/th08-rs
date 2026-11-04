@@ -1,6 +1,8 @@
 # RE-Q34 — implementer questions IMPL91–98 (2026-10-24)
 
-Brief: docs/briefs/RE_Q34_BRIEF.md. Runs: re/work/runs/q34/ (portfix = master src copy + `// q34 X` scratch fixes,
+Questions: [IMPL91](questions/IMPL91_QUESTIONS.md), [IMPL92](questions/IMPL92_QUESTIONS.md), [IMPL93](questions/IMPL93_QUESTIONS.md), [IMPL95](questions/IMPL95_QUESTIONS.md), [IMPL96](questions/IMPL96_QUESTIONS.md), [IMPL97](questions/IMPL97_QUESTIONS.md), [IMPL98](questions/IMPL98_QUESTIONS.md).
+
+Runs: re/work/runs/q34/ (portfix = master src copy + `// q34 X` scratch fixes,
 q34_fixes.diff; rungolden.sh <tag>; tim.py = per-frame boss-timer / life-bar counts; kl.py = K (capture) lines;
 tools/calls.py = byte scan for `call`/`jmp` rel32 and absolute references to a function).
 Baseline golden_M0 (master): trace 25634 full, draw same 97.45 % (front.anm extra 3.66 M = the port's every-frame

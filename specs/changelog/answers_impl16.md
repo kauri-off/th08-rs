@@ -1,5 +1,7 @@
 # Answers to IMPL16_QUESTIONS (dirty room, 2026-10-18)
 
+Questions: [IMPL16](questions/IMPL16_QUESTIONS.md).
+
 Sources: th08.exe (`re/extracted/all_decomp.c`, disassembly, displacement scans) and two wine-probe runs of the
 attract demos. The probe has two new commands: `escan K F0 F1` dumps every live enemy slot per frame (flags, final
 pos, life, time-orb accumulator e+0x2E10, item, timer, parent, child count). `iscan K F0 F1` dumps the item list

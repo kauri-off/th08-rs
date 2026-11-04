@@ -1,5 +1,7 @@
 # Answers to IMPL20 questions (RE-Q20)
 
+Questions: [IMPL20](questions/IMPL20_QUESTIONS.md).
+
 Spec sections changed:
 - 07 §6 var 10098: full definition (a, b, c, d; comparison is ≥).
 - 07 §7 op 36: the target var id is stored as a float.

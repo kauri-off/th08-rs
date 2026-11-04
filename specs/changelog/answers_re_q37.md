@@ -1,6 +1,6 @@
 # RE-Q37 — SPEC-GAP batch 3: menus (2026-10-24)
 
-Brief: docs/briefs/RE_Q37_BRIEF.md; markers: docs/specgaps/batch3_menus.txt (17). Runs: re/work/runs/q37/
+Markers: docs/specgaps/batch3_menus.txt (17). Runs: re/work/runs/q37/
 (CHECKPOINT.md; `sess_top` = copy of sessions/options_cfg with crafted polls after the return to the top menu,
 replayed in the original off-screen → `play_top`). Evidence: decompile (fn.sh), the title01 anm dump, the
 `options_cfg` reference trace, and the `play_top` run.

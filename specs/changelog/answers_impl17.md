@@ -1,5 +1,7 @@
 # Answers to IMPL17_QUESTIONS — gameplay/demo part (Q2, Q5) (dirty room, 2026-10-18)
 
+Questions: [IMPL17](questions/IMPL17_QUESTIONS.md).
+
 The menu questions (Q1, Q3, Q4, Q6, Q7) belong to the next RE run.
 Sources: th08.exe, the reference draw logs `specs/data/drawlog/demos/`, the session recordings `sessions/golden` and
 `sessions/selftest1`, and the attract-demo replays.

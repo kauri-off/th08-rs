@@ -1,6 +1,6 @@
 # RE-Q40 — SPEC-GAP batch 6: replay, score.dat, supervisor, config (2026-10-24)
 
-Brief: docs/briefs/RE_Q40_BRIEF.md; markers: docs/specgaps/batch6_replay_scoredat_supervisor.txt (14). Runs:
+Markers: docs/specgaps/batch6_replay_scoredat_supervisor.txt (14). Runs:
 re/work/runs/q40/ (CHECKPOINT.md). Evidence: decompile / disasm of `ExeCheck` 0x44858D, the version-list loader
 0x4461A0, `FileSystem_OpenFile` 0x43E660, `ScoreDat_Load` 0x45A5E0 (chunk walk), `ScoreDat_Save` 0x453D0D,
 `Supervisor_Calc` 0x445453 (top + 0x445AFF), `Supervisor_StartLoader` 0x4486BA, `Supervisor_Init` tail, `MainMenu_Calc`

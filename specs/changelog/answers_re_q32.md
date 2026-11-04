@@ -1,5 +1,7 @@
 # RE-Q32 — draw parity (golden draw log), IMPL86/89/90 questions
 
+Questions: [IMPL86](questions/IMPL86_QUESTIONS.md), [IMPL89](questions/IMPL89_QUESTIONS.md), [IMPL90](questions/IMPL90_QUESTIONS.md).
+
 Runs: `re/work/runs/q32/` (scratch port `portfix/` = master 2c3bb84 src + fixes tagged `// q32 X`; `rungolden.sh <tag>`
 = golden session with draw log, report `golden_<tag>/index.html`). The logic trace stayed full (25634 rows) for every tag.
 

@@ -1,5 +1,7 @@
 # Answers to IMPL19 questions (RE-Q18)
 
+Questions: [IMPL19](questions/IMPL19_QUESTIONS.md).
+
 Spec sections changed (RE-Q19 addendum, §Q3 completed below):
 - 07 §6 var 10096: number of children linked in the chain (root's count), not the chain depth.
 

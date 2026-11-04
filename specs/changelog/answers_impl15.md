@@ -1,4 +1,6 @@
-# Answers to impl15 questions (docs/briefs/IMPL15_QUESTIONS.md)
+# Answers to impl15 questions ([IMPL15_QUESTIONS.md](questions/IMPL15_QUESTIONS.md))
+
+Questions: [IMPL15](questions/IMPL15_QUESTIONS.md).
 
 Sources: th08.exe static code (`re/extracted/all_decomp.c`, disassembly), and wine probe runs (`re/work/runs/q15`).
 New reference data in `specs/data/q15/`:
