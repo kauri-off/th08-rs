@@ -7,6 +7,7 @@ use crate::enemy::{
 };
 use crate::game::Sys;
 use crate::gamemgr::{F_13, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
+use crate::types::EnemyIdx;
 use th08_formats::ecl::{Arg, BossOp, Ins, SpellBlock};
 
 // Card bonus cap g_Gui +0x2638 for flag A bit 27 / op 155 (07 §11.1, op 155).
@@ -118,7 +119,7 @@ impl Exec<'_> {
                     .ov
                     .marker_interrupt(slot.cast_unsigned() as usize, 1);
             }
-            *b = Some(self.idx);
+            *b = Some(EnemyIdx::from_slot(self.idx));
             self.e.flags |= A_BOSS;
             self.e.boss_slot = slot;
             self.e.nofire_r2 = 0.0;
@@ -205,7 +206,7 @@ impl Exec<'_> {
             bonus: bonus.cast_signed(),
             max,
             decay: ((bonus - bonus / 7) / secs).cast_signed(),
-            boss: self.idx,
+            boss: EnemyIdx::from_slot(self.idx),
             // g_Gui +0xC := boss e+0x2E0C, written only by Spell_Start (07 §11.1).
             slot: self.e.slot,
             name: b.name,
@@ -228,7 +229,7 @@ impl Exec<'_> {
         );
         self.m.pay_capture(false, &mut self.sys);
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
-        self.m.g.spell_boss = Some(self.idx);
+        self.m.g.spell_boss = Some(EnemyIdx::from_slot(self.idx));
         (self.m.g.spell_flag6, self.m.g.bonus_frozen) = (false, false);
         // Bit 9 := 0 is Spell_Start's first statement (07 §11.1).
         self.m.g.spell_captured = false;

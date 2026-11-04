@@ -110,12 +110,14 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11c** ANM VM — **DONE** (see below) | (1) `anm::{AnmOff, Ins, Op}` in formats/anm.rs (header decoder from anmvm.rs:237, lazy per ip); (2) `AnmVm::run` → loop + `exec_op` + op-group fns, `VmFlags`, `D3dColor` for `color` / `color2` / `color_start`; (3) anmmgr subset 0 | formats/anm.rs, anmvm, anmmgr | ∥ 11b 11d 11g | T D |
 | **11d** ECL exec | (1) `ecl::{EclOff, Op}` in formats/ecl.rs (+ eclview bin); (2) `Exec::exec` → `match Op` dispatching to `eclvm/ops_*.rs`, named args via `Arg` / `Var` (from `IRef`), bullet flag const; (3) eclvm subset 0 | formats/ecl.rs, eclvm (+ new ops_*.rs), bin/eclview | ∥ 11b 11c 11g; before 11e | T D, **B** |
 | **11d** ECL exec — **DONE** (see below) | (1) `ecl::{EclOff, Op}` in formats/ecl.rs (+ eclview bin); (2) `Exec::exec` → `match Op` dispatching to `eclvm/ops_*.rs`, named args via `Arg` / `Var` (from `IRef`), bullet flag const; (3) eclvm subset 0 | formats/ecl.rs, eclvm (+ new ops_*.rs), bin/eclview | ∥ 11b 11c 11g; before 11e | T D, **B** |
-| **11e** enemy | (1) `EnemyIdx` for chain / boss / thread links; (2) `EnemyFlags` for the 07 flag words, `TlOp` timeline enum (enemy.rs:1139); (3) long fns 1133 / 1392 split, enemy subset 0 | enemy, eclvm (index boundary only) | after 11d; ∥ 11f 11h 11i | T D |
+| **11e** enemy — **DONE** (see below) | (1) `EnemyIdx` for chain / boss / thread links; (2) `EnemyFlags` for the 07 flag words, `TlOp` timeline enum (enemy.rs:1139); (3) long fns 1133 / 1392 split, enemy subset 0 | enemy, eclvm (index boundary only) | after 11d; ∥ 11f 11h 11i | T D |
 | **11f** STD + MSG | (1) stage.rs on `std::Op`, `Stage` bools; (2) msg.rs on `msg::Op`, exec split, `Dialogue` bools; (3) both subset 0 | stage, msg | after 11b; ∥ 11e 11g 11h | T D |
 | **11g** player + pshot — **DONE** (see below) | (1) `ShotType` enum (+ `sht::team`) inside player / pshot; (2) `Angle`, one `angle_from` (player.rs:668 → types); (3) player / pshot subset 0 (pshot 260 split) | player, pshot | ∥ wave 1 | T D |
 | **11h** bullet + item | (1) `BulletFlags` / `LaserFlags`; (2) `BulletIdx` / `LaserIdx` / `ItemIdx`, `angle_from` (bullet.rs:81) → types; (3) spawn env struct, fn 657 split, subset 0 | bullet, item | after 11g (`angle_from`); ∥ 11e 11f 11i | T D, **B** |
 | **11i** bomb + effect — **DONE** (see below) | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
 | **11j** gamemgr + replay | (1) `GameFlags` bitflags + `end()` / `route()`; (2) `Difficulty`, `Paused`, `Loading` enums inside gamemgr / replay / game / world; (3) long fns 713 / 1078 split, flow-core subset 0 (gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt) | gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt | after 11a; ∥ 11e–11i | T D |
+| **11i** bomb + effect | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
+| **11j** gamemgr + replay — **DONE** (see below) | (1) `GameFlags` bitflags + `end()` / `route()`; (2) `Difficulty`, `Paused`, `Loading` enums inside gamemgr / replay / game / world; (3) long fns 713 / 1078 split, flow-core subset 0 (gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt) | gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt | after 11a; ∥ 11e–11i | T D |
 | **11k** scenes | (1) `SceneId` for every `SCENE_*` (123 uses, 15 files, incl. tools drawreport / demosync / drawlog, app 1); (2) result state enum + splits (340, 1614), supervisor `box_default` + split (444); (3) ending / musicroom / supervisor / result subset 0 | gamemgr (consts), supervisor, result, ending, musicroom, ascii, menu, menulist, game, replay, worldclone, tools, src/app.rs (1 line) | **alone** (touches UI + flow + app) | T D, **B** |
 | **11l** HUD + GUI | (1) hud unwraps → `let … else`; (2) named layout consts, splits 339 / 950 / 1297; (3) hud / gui subset 0 | hud, gui | after 11k; ∥ 11m 11n | T D |
 | **11m** ascii + menus | (1) one `percent_glyphs` (ascii.rs:912 + menulist.rs:421); (2) `MenuEnv` for ascii 1035 / 1322, splits menu 539, menulist 776 / 1316; (3) ascii / menu / menulist subset 0 | ascii, menu, menulist | after 11k; ∥ 11l 11n | T D |
@@ -246,6 +248,59 @@ wave-2 runs not merged). Check: FAST arch_check 0 differing (emit-off 0), cargo 
 spec_refs 0. Deviations: `spawn_param` keeps its 8 args under `#[expect(too_many_arguments)]` (caller
 eclvm/ops_enemy.rs, 11e); no `BombEnv`: the bomb's per-frame context is the existing `Bf`, the arg bundles are `Hit`
 / `SparkRing`; effect / SE / script ids stay short hex (they are the spec's numbers).
+**11j done.** Files: crates/th08-core/src/{gamemgr, replay, game, world, chain, trace, sound, input, rng, config,
+drawfmt}.rs (task.rs, host.rs had no subset warnings and are unchanged). (1) gamemgr: `GameFlags` bitflags (11 §2.1 bit
+positions, `const _ = !0` keeps unnamed bits; `END` / `ROUTE` / `UNLOCKS` masks, `end()` / `with_end()` / `route()` /
+`with_route()`); the `F_*: u32` consts stay as `GameFlags::X.bits()` aliases; `STAGE_START_CLEARS` names `~0x2180`
+(11 §3.1); new `Game::{game_flags, set_game_flags, has, insert_flags, remove_flags, pause_state, set_paused,
+loading_state, set_loading}`, `diff()` now `pub` and returns `Difficulty` (was private `usize`); `end_state` /
+`route` / `practice` / `replay` … delegate to `GameFlags`. (2) `Paused { No, Open, Drawn }`, `Loading { Done, Active,
+Failed }` (`#[repr(u8)]`, gamemgr) used in gamemgr; `Difficulty` in gamemgr / replay; replay `fast_forward` and
+`new_recording` take `GameFlags`, `start_playback` keeps `UNLOCKS | REPLAY`. (3) `stage_start` → `begin_stage` (to
+Hud_Load's fresh flag) + `player_stats` + free `gauge_lead` / `spell_background_base` / `load_stage_bgm`; `calc` →
+`loading_step` + `pause_key` + `demo_step`; statement order unchanged. Lint fixes: `From` / `cast_signed` /
+`cast_unsigned` / `lo8`, replay-local `lo32` (i64 score → u32 low dword), `is_multiple_of`, range `contains`, typed
+`::default()`, `#[expect]` with reason for ftol float→int (`record_stage_start`, sound MIDI fade), the 128-pan average,
+trace `col(usize)` and `Game`'s `struct_excessive_bools` (independent GM bytes). Test added: `game_flags_bits`
+(round trip, 2-bit fields, `0x2180`, paused / loading bytes, `diff` clamp). Public API: `gamemgr::{GameFlags, Paused,
+Loading}` + the `Game` methods above, `Game::diff` public with a new return type; `Game.{flags, difficulty, paused,
+loading}` fields and every `F_*` / `SCENE_*` const unchanged, so no out-of-crate caller changes. Lint subset for the
+run's files: before 166 (replay 46, gamemgr 43, trace 29, drawfmt 11, world 9, game 8, rng 8, sound 7, chain 2,
+input 2, config 1), after 0; workspace 1 278 in 44 files at the time of the run (parallel runs included). Deviations:
+the `Game` fields stay raw (`flags: u32`, `difficulty: i32`, `paused` / `loading: u8`) because ascii, menu, menulist,
+hud, effect, enemy, eclvm, supervisor, result, player, worldclone, src/platform/touch.rs and tools read or write them
+(≈ 120 sites in files of other runs); `Sys.flags` stays `&mut u32` (a `&mut GameFlags` needs the field typed). The
+field switch fits 11k, which touches most of those files. `game_over` (0 / 1) kept as `u8` (not in the row). Check: FAST
+arch_check 0 differing, cargo test -p th08-core 324 passed (+1 test), spec_refs 0, SPEC-GAP unchanged.
+**11e done.** Files: crates/th08-core/src/enemy.rs; eclvm boundary only: eclvm.rs (tests: link / boss-table literals
+`Some(EnemyIdx(n))`, one `spawn` call → `Spawn`), eclvm/ops_enemy.rs (child-link tail `EnemyIdx`), ops_native.rs (2
+`i.idx() == self.idx` compares), ops_spell.rs (boss table / `Spell.boss` / `spell_boss` writes via
+`EnemyIdx::from_slot`). (1) `Enemy.chain_prev` / `chain_next` / `root`, `EnemyManager.bosses`, `Globals.spell_boss`,
+`Spell.boss` are `EnemyIdx`; `EnemyIdx::from_slot(usize)` (inherent impl in enemy.rs, types.rs untouched) and
+`Index` / `IndexMut<EnemyIdx>` for the `Vec<Box<Enemy>>` pool, so chain walks index unchanged. (2) `EnemyFlags` /
+`EnemyFlagsB` bitflags with the 07 §4.4 bit positions (incl. the formerly literal bits A 5 `INVISIBLE`, 25 `ROTATE`, 31
+`BOMB_IMMUNE`, B 1 `SPARKLE`, 8 `SHARED_OFFSET`; multi-bit `MOVE_MODE` / `EASE` / `DEATH_MODE` / `WARN`); the `A_*` /
+`B_*` consts are now `EnemyFlags::X.bits()` (same values, test `flag_bits_round_trip`); `Enemy::{a_flags, b_flags,
+has, has_b, set, insert, remove, insert_b, remove_b, death_mode, warning}`; every flag test in enemy.rs typed.
+`TlOp` (07 §3 table) decoded from the 7 raw args (`TlOp::decode`, test `timeline_op_decode`), `timeline_op` = one
+`match TlOp`; new `Spawn` request struct (07 §4.1) for `spawn`. (3) `kill_chain` split per 07 §10.3a step:
+`detach_children` (step 2), `reward_children` (step 3), `boss_chain_reward` (step 5), helpers `chain_popup_colour`
+(step 1), `child_orbs`; casts → `From` / `cast_signed` / `cast_unsigned` / `lo8` / `anmvm::table_index`, `TRAIL_MAX`,
+`if_not_else` in `screen_check` swapped, literal separators. `#[expect]` with reason: `spawn_finish`
+`too_many_arguments` (ECL callers pass fields separately), the one ftol `f32 as u32` in `spell_step`,
+`struct_excessive_bools` on `Enemy` (port-only per-frame bools), `Spell` / `Globals` (spell-flag bits split across
+both, written by eclvm). Public API: `EnemyManager::spawn(anm, Spawn, sys)` (was 8 positional args; only caller
+outside enemy.rs: an eclvm test); `Enemy.{chain_prev, chain_next, root}`, `EnemyManager.bosses`,
+`Globals.spell_boss`: `Option<EnemyIdx>`, `Spell.boss: EnemyIdx`; new `enemy::{EnemyFlags, EnemyFlagsB, Spawn}`;
+`EnemyManager::boss(slot)` still returns `Option<usize>` (hud / eclvm compare it with usize slots); no user in
+app / tools changed (session.rs reads `flags` / `flags_b` / `A_BOSS`, unchanged). Lint subset (tools/lint_subset):
+enemy.rs 85 → 0, eclvm files 0 → 0; workspace 1 359 in 54 files after (parallel runs' worktree base). Check: FAST
+arch_check 0 differing (emit-off 0), cargo test -p th08-core 325 passed (+2) / formats 36, spec_refs 0, SPEC-GAP 1. Deviations:
+the `flags` / `flags_b: u32` fields stay raw (eclvm writes them in ~40 places; 11c's `VmFlags` pattern), so eclvm keeps
+`A_*`; `running_thread` (a thread slot 0–3, not an enemy) and `draw_lists` / `idx: usize` parameters stay `usize`;
+`drop_items` power kind written `i32::from(power >= 128.0)` (differs from `power < 128 ? 0 : 1` only for NaN power,
+which no path produces); the old 1133 / 1392 fns (105 / 122 lines) were under the 150 limit, both split anyway
+(`timeline_op` now 70 lines).
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

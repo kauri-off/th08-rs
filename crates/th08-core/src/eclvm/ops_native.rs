@@ -305,7 +305,7 @@ impl Exec<'_> {
             && guard <= MAX_ENEMIES
         {
             guard += 1;
-            if i == self.idx {
+            if i.idx() == self.idx {
                 t.ctx.set_int(V_INT1 + 1, k);
                 leader.get_or_insert(i);
                 k += 1;
@@ -336,7 +336,7 @@ impl Exec<'_> {
         let Some(l) = leader.filter(|_| idx != 0) else {
             return;
         };
-        let (l_angle, l_av, l_calls) = if l == self.idx {
+        let (l_angle, l_av, l_calls) = if l.idx() == self.idx {
             (self.e.orbit_angle, self.e.orbit_av, calls)
         } else {
             let e = &self.m.enemies[l];

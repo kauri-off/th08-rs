@@ -1,5 +1,7 @@
 //! Replays (15 §3, 11 §6): playback and recording; the .rpy codec is th08_formats::replay.
 
+use crate::gamemgr::GameFlags;
+use crate::types::{Difficulty, lo8};
 use anyhow::{Result, bail};
 pub use th08_formats::replay::{HEADER, INFO, REC, Replay, ReplayError, StageRecord};
 
@@ -82,24 +84,33 @@ pub fn register(
     Ok((t, rt))
 }
 
+// Low-dword store of the port's i64 score into a u32 record / file field (same bits as `as u32`).
+const fn lo32(v: i64) -> u32 {
+    v.cast_unsigned() as u32
+}
+
 // Replay_RecordStageStart 0x452830 (15 §3.2): the previous record gets the current score, then a new record with the
 // dummy word (the debug words at +0x26 / +0x28 are overwritten by frames 1 and 2, so they are not kept).
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "f32 power / lives / bombs → byte by ftol (float→int stays `as`)"
+)]
 pub(crate) fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::player::Stats) {
     let stage = g.stage % 9;
     if g.rpy.is_none() {
-        let mut r = new_recording(g.shot, g.difficulty, g.flags, g.card, &g.cfg_bytes());
+        let mut r = new_recording(g.shot, g.difficulty, g.game_flags(), g.card, &g.cfg_bytes());
         r.info[0x11C - HEADER] = clear_status(g);
         g.rpy = Some(r);
     }
     let r = g.rpy.as_mut().unwrap();
     // Only the record of the highest stage below this one gets +0 := score (scan 0 .. stage − 1, last non-null).
     if let Some(s) = r.stages[..stage].iter_mut().flatten().last() {
-        s.score = st.score10 as u32;
+        s.score = lo32(st.score10);
     }
     r.stages[stage] = Some(StageRecord {
         score: 0,
         point_items: st.point_items2,
-        graze: st.graze_total as u32,
+        graze: st.graze_total.cast_unsigned(),
         extends: st.extends,
         next_extend: st.next_extend,
         max_point: st.max_point,
@@ -108,9 +119,9 @@ pub(crate) fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::playe
         power: st.power as u8,
         lives: st.lives as u8,
         bombs: st.bombs as u8,
-        rank: g.rank.rank as u8,
+        rank: lo8(g.rank.rank),
         b20: st.d0b0,
-        spells: st.spells as u8,
+        spells: lo8(st.spells),
         clock: st.clock as i8,
         inputs: vec![0],
         fps: Vec::new(),
@@ -124,23 +135,21 @@ fn clear_status(g: &crate::gamemgr::Game) -> u8 {
     let t = g.shot as usize % 12;
     if t >= 4 || g.clear_nc[t][..4].iter().any(|m| m & 0x4000 != 0) {
         2
-    } else if g.clear_any[t][..4].iter().any(|m| m & 0x8000 != 0) {
-        1
     } else {
-        0
+        u8::from(g.clear_any[t][..4].iter().any(|m| m & 0x8000 != 0))
     }
 }
 
 // Info block at record start (15 §3.5): shot, difficulty, "NO NAME", practice flag +0x7B, spell id +0x7C (−1 outside
 // spell practice), +0xAE = 0x100, config copy +0xB4.
-fn new_recording(shot: u8, diff: i32, flags: u32, card: i16, cfg: &[u8; 60]) -> Replay {
+fn new_recording(shot: u8, diff: i32, flags: GameFlags, card: i16, cfg: &[u8; 60]) -> Replay {
     let mut r = Replay::default();
     let i = &mut r.info;
     i[0x6A - HEADER] = shot;
-    i[0x6B - HEADER] = diff as u8;
+    i[0x6B - HEADER] = lo8(diff);
     i[0x72 - HEADER..0x79 - HEADER].copy_from_slice(b"NO NAME");
-    i[0x7B - HEADER] = (flags & crate::gamemgr::F_PRACTICE != 0) as u8;
-    let id = if flags & crate::gamemgr::F_SPELL_PRACTICE != 0 {
+    i[0x7B - HEADER] = u8::from(flags.contains(GameFlags::PRACTICE));
+    let id = if flags.contains(GameFlags::SPELL_PRACTICE) {
         card
     } else {
         -1
@@ -159,22 +168,21 @@ pub fn start_playback(
     stage: Option<usize>,
     demo: Option<u8>,
 ) -> bool {
-    use crate::gamemgr::*;
     let Some(stage) = stage.or_else(|| r.first_stage()) else {
         return false;
     };
-    g.difficulty = r.difficulty().min(4) as i32;
+    g.difficulty = i32::from(r.difficulty().min(4));
     g.shot = r.shot() % 12;
     g.stage = stage;
-    g.flags = g.flags & (7 << 15) | F_REPLAY;
+    g.set_game_flags(g.game_flags() & GameFlags::UNLOCKS | GameFlags::REPLAY);
     let id = r.spell_id();
     if id >= 0 {
         // Only bit 14: bit 0 stays clear in a spell-practice replay (15 §3.8).
-        g.flags |= F_SPELL_PRACTICE;
+        g.insert_flags(GameFlags::SPELL_PRACTICE);
         g.card = id;
     }
     if let Some(n) = demo {
-        g.flags |= F_DEMO;
+        g.insert_flags(GameFlags::DEMO);
         g.demo = n;
         g.demo_frame = 0;
         // Byte 0x164D0B2 = shot % 2 for attract demos (12 §2.2).
@@ -184,7 +192,7 @@ pub fn start_playback(
     }
     g.rpy = Some(r);
     g.fresh_start = true;
-    g.request(SCENE_GAME);
+    g.request(crate::gamemgr::SCENE_GAME);
     true
 }
 
@@ -212,23 +220,23 @@ pub fn play_stage_load(
         bail!("replay has no record for stage {stage}")
     };
     if let Some(p) = r.stages[..stage].iter().flatten().last() {
-        st.score10 = p.score as i64;
-        st.score_disp = p.score as i64;
+        st.score10 = i64::from(p.score);
+        st.score_disp = i64::from(p.score);
     }
     st.score_step = 0;
-    g.rank.rank = rec.rank as i32;
-    st.lives = rec.lives as f32;
+    g.rank.rank = i32::from(rec.rank);
+    st.lives = f32::from(rec.lives);
     crate::player::Stats::checksum(rng);
-    st.bombs = rec.bombs as f32;
-    st.set_power(rec.power as f32, rng);
-    st.graze_total = rec.graze as i32;
+    st.bombs = f32::from(rec.bombs);
+    st.set_power(f32::from(rec.power), rng);
+    st.graze_total = rec.graze.cast_signed();
     st.point_items2 = rec.point_items;
     st.max_point = rec.max_point;
-    st.spells = rec.spells as i32;
+    st.spells = i32::from(rec.spells);
     st.extends = rec.extends;
     st.next_extend = rec.next_extend;
     st.gauge = rec.gauge;
-    st.clock = rec.clock as i32;
+    st.clock = i32::from(rec.clock);
     st.d0b0 = rec.b20;
     rng.state = rec.seed;
     Ok(())
@@ -243,7 +251,10 @@ pub fn finish(ctx: &mut crate::game::Ctx) {
             name.copy_from_slice(&ctx.w.game.score.lsnm[..8]);
             save(ctx, slot.clamp(1, 15) as usize, &name);
         }
-        None => drop(take_recording(&mut ctx.w.game, Default::default())),
+        None => drop(take_recording(
+            &mut ctx.w.game,
+            crate::host::LocalTime::default(),
+        )),
     }
 }
 
@@ -269,7 +280,7 @@ pub fn build_save(
 ) -> Option<Vec<u8>> {
     let mut r = take_recording(g, now)?;
     // Skipped for a normal game on E–L whose config changed since record start, and for a recorded slow mode (+0xD9).
-    if !g.practice() && g.difficulty < 4 && r.config() != g.cfg_bytes() {
+    if !g.practice() && g.diff() != Difficulty::Extra && r.config() != g.cfg_bytes() {
         return None;
     }
     if r.info[0xD9 - HEADER] != 0 {
@@ -284,7 +295,7 @@ pub fn build_save(
     let id = r.spell_id();
     if id >= 0 {
         // 48 bytes of the in-memory CATK[id] +0x10 (15 §3.6 step 1).
-        let c = &g.score.catk[id as usize % crate::scoredat::CARDS].name;
+        let c = &g.score.catk[usize::from(id.cast_unsigned()) % crate::scoredat::CARDS].name;
         r.info[0x7E - HEADER..0xAE - HEADER].copy_from_slice(c);
     }
     r.user = user_section(&user_lines(g, &r, slow, now));
@@ -316,9 +327,9 @@ fn user_lines(
     let last = if id >= 0 {
         (
             "カード名",
-            format!("No.{:3} {}", id as i32 + 1, r.card_name().decode()),
+            format!("No.{:3} {}", i32::from(id) + 1, r.card_name().decode()),
         )
-    } else if g.flags & crate::gamemgr::F_ENDING_OK != 0 {
+    } else if g.has(GameFlags::ENDING_OK) {
         ("最終ステージ", "Clear".into())
     } else {
         (
@@ -327,8 +338,8 @@ fn user_lines(
         )
     };
     // HSCR +0x84 = human·10000/total (16 §2.2), printed ÷ 100.
-    let human = (st.rec.human as u64 * 10000)
-        .checked_div(st.rec.total as u64)
+    let human = (u64::from(st.rec.human) * 10000)
+        .checked_div(u64::from(st.rec.total))
         .unwrap_or(0);
     vec![
         ("プレイヤー名", r.name()),
@@ -357,7 +368,7 @@ pub fn user_section(lines: &[(&str, String)]) -> Vec<u8> {
     }
     let mut body = encoding_rs::SHIFT_JIS.encode(&text).0.into_owned();
     body.push(0);
-    if body.len() % 2 != 0 {
+    if !body.len().is_multiple_of(2) {
         body.push(0);
     }
     let mut out = b"USER".to_vec();
@@ -372,7 +383,7 @@ pub fn take_recording(g: &mut crate::gamemgr::Game, now: crate::host::LocalTime)
         return None;
     }
     let mut r = g.rpy.take()?;
-    let score = g.stats.score10 as u32;
+    let score = lo32(g.stats.score10);
     for s in r.stages.iter_mut().flatten() {
         if s.score == 0 {
             s.score = score;
@@ -397,14 +408,13 @@ fn boss_active(enemies: Option<&crate::enemy::EnemyManager>) -> bool {
 
 // Replay_FastForward 0x452490 (15 §3.3): true = restart the calc chain (6). The boss test 0x42F1F0 is made last.
 fn fast_forward(
-    flags: u32,
+    flags: GameFlags,
     dialogue: bool,
     speed: u8,
     frame: u32,
     boss: impl FnOnce() -> bool,
 ) -> bool {
-    use crate::gamemgr::{F_CLEAR_PANEL, F_RUNNING};
-    if flags & F_RUNNING == 0 || flags & F_CLEAR_PANEL != 0 {
+    if !flags.contains(GameFlags::RUNNING) || flags.contains(GameFlags::CLEAR_PANEL) {
         return false;
     }
     if dialogue && frame % 3 != 2 {
@@ -444,13 +454,13 @@ impl ReplayState {
     #[cfg(test)]
     pub(crate) fn trace(&self) -> [u64; 7] {
         [
-            self.play as u64,
+            u64::from(self.play),
             self.cursor as u64,
-            self.frame as u64,
-            self.bonus_frames as u64,
+            u64::from(self.frame),
+            u64::from(self.bonus_frames),
             self.fps_q as u64,
-            self.repeat_ctr as u64,
-            self.rng_snap as u64,
+            u64::from(self.repeat_ctr),
+            u64::from(self.rng_snap),
         ]
     }
 
@@ -461,7 +471,7 @@ impl ReplayState {
         g: &mut crate::gamemgr::Game,
         i: &mut crate::input::Input,
     ) {
-        if g.flags & crate::gamemgr::F_RUNNING == 0 {
+        if !g.has(GameFlags::RUNNING) {
             return;
         }
         i.game_prev = i.game;
@@ -472,7 +482,7 @@ impl ReplayState {
             return;
         }
         // Step 3: at most 3 frames are recorded during the stage-clear bonus (flags bit 9).
-        if g.flags & crate::gamemgr::F_CLEAR_PANEL != 0 {
+        if g.has(GameFlags::CLEAR_PANEL) {
             if self.bonus_frames > 2 {
                 return;
             }
@@ -483,7 +493,7 @@ impl ReplayState {
             return;
         };
         s.inputs.push(raw);
-        if self.frame % 30 == 0 {
+        if self.frame.is_multiple_of(30) {
             let q = self.fps_q;
             // Overlapping two-byte write: fps[q] = fps_now | flag (always 0), fps[q+1] = fps_now (15 §3.2 step 5).
             // No fps meter: sample 0 is the carried fps_now, later samples 60, which a meter window at 60 fps
@@ -511,10 +521,7 @@ impl ReplayState {
     // Replay_PlayCalcDebug 0x4526C0 (15 §3.1) is the same with the input read through cursor +0x78 in 6-byte steps.
     pub(crate) fn play(&mut self, g: &mut crate::gamemgr::Game, i: &mut crate::input::Input) {
         // The slow byte is +0x25 of the gameplay config copy `*(GM+4)` (15 §3.3).
-        if g.flags & crate::gamemgr::F_RUNNING == 0
-            || g.game_slow() != 0
-            || g.flags & crate::gamemgr::F_CLEAR_PANEL != 0
-        {
+        if !g.has(GameFlags::RUNNING) || g.game_slow() != 0 || g.has(GameFlags::CLEAR_PANEL) {
             return;
         }
         let (words, tail) = g
@@ -538,7 +545,7 @@ impl ReplayState {
         } else {
             self.repeat_ctr = 0;
         }
-        if self.frame % 30 == 0 {
+        if self.frame.is_multiple_of(30) {
             // QUIRK: playback reads byte q + 1 (one sample ahead).
             let b = g
                 .rpy
@@ -573,7 +580,7 @@ impl crate::task::Task<crate::game::Ctx> for ReplayTask {
                 let g = &ctx.w.game;
                 if g.replay_ff
                     && fast_forward(
-                        g.flags,
+                        g.game_flags(),
                         g.dialogue_skippable,
                         g.replay_speed,
                         r.frame,
@@ -792,13 +799,13 @@ mod tests {
         g.flags = F_PRACTICE | F_SPELL_PRACTICE;
         g.card = 5;
         g.score.catk[5].name[..4].copy_from_slice(b"Card");
-        record_stage_start(&mut g, &Default::default());
+        record_stage_start(&mut g, &crate::player::Stats::default());
         let r = parse(
             &build_save(
                 &mut g,
                 b"A       ",
-                &mut Default::default(),
-                Default::default(),
+                &mut crate::rng::Rng::default(),
+                crate::host::LocalTime::default(),
             )
             .unwrap(),
             None,
@@ -808,28 +815,28 @@ mod tests {
         assert!(th08_formats::sjis::decode(&r.user).contains("カード名\tNo.  6 Card\r\n"));
 
         let mut g = Game::default();
-        record_stage_start(&mut g, &Default::default());
+        record_stage_start(&mut g, &crate::player::Stats::default());
         g.cfg.slow ^= 1;
         assert!(
             build_save(
                 &mut g,
                 b"A       ",
-                &mut Default::default(),
-                Default::default()
+                &mut crate::rng::Rng::default(),
+                crate::host::LocalTime::default()
             )
             .is_none()
         );
 
         let mut g = Game::default();
         g.difficulty = 4;
-        record_stage_start(&mut g, &Default::default());
+        record_stage_start(&mut g, &crate::player::Stats::default());
         g.rpy.as_mut().unwrap().info[0xD9 - HEADER] = 1;
         assert!(
             build_save(
                 &mut g,
                 b"A       ",
-                &mut Default::default(),
-                Default::default()
+                &mut crate::rng::Rng::default(),
+                crate::host::LocalTime::default()
             )
             .is_none()
         );
@@ -838,11 +845,11 @@ mod tests {
     // 15 §3.3: Replay_FastForward gate (bit 2 set, bit 9 clear), dialogue test first, fast test only otherwise.
     #[test]
     fn fast_forward_order() {
-        use crate::gamemgr::{F_CLEAR_PANEL, F_RUNNING};
+        const F_RUNNING: GameFlags = GameFlags::RUNNING;
         let no_boss = || false;
-        assert!(!fast_forward(0, true, 2, 0, no_boss));
+        assert!(!fast_forward(GameFlags::empty(), true, 2, 0, no_boss));
         assert!(!fast_forward(
-            F_RUNNING | F_CLEAR_PANEL,
+            F_RUNNING | GameFlags::CLEAR_PANEL,
             true,
             2,
             0,
@@ -867,9 +874,9 @@ mod tests {
     fn user_chara_padding() {
         let mut g = crate::gamemgr::Game::default();
         g.stage = 9;
-        record_stage_start(&mut g, &Default::default());
+        record_stage_start(&mut g, &crate::player::Stats::default());
         let r = g.rpy.clone().unwrap();
-        let l = user_lines(&g, &r, 0.0, Default::default());
+        let l = user_lines(&g, &r, 0.0, crate::host::LocalTime::default());
         assert_eq!(l[2], ("キャラ名", "霊夢＆紫　　　　".into()));
         assert_eq!(l[5], ("最終ステージ", "Clear".into()));
         let Some(ar) = crate::testdata::archive() else {
@@ -887,7 +894,7 @@ mod tests {
     fn fps_sample0_carried() {
         let mut g = crate::gamemgr::Game::default();
         assert_eq!(g.replay_fps, 0);
-        record_stage_start(&mut g, &Default::default());
+        record_stage_start(&mut g, &crate::player::Stats::default());
         let mut t = ReplayState {
             play: false,
             stage: 0,

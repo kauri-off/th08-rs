@@ -6,6 +6,7 @@ use crate::enemy::{
     A_CANCEL_BONUS, A_CHAIN_KILLED, A_CONTACT, A_FOLLOW, A_HIDDEN, A_KEEP_OFFSCREEN, A_LOSES_LIFE,
     A_MODE_REACT, A_NO_PUSH, A_SHOT_HIT, A_YOUKAI, B_CANNOT_DIE, B_STAGE_ANM, MAX_ENEMIES, Thread,
 };
+use crate::types::EnemyIdx;
 use th08_formats::ecl::{Arg, EnemyOp, SpawnKind};
 
 // Effect VM colour2 flag (bit 17) := `on` (07 §7 ops 80/81, §10.5 aura).
@@ -355,7 +356,7 @@ impl Exec<'_> {
         // 07 §10.5: the tail is looked up before the spawn. A chain root (no parent) links after its last child;
         // a chained child links after itself, overwriting its own +8 (the rest of the chain is cut off).
         let tail = if chained && self.m.enemies[self.idx].root.is_none() {
-            let mut last = self.idx;
+            let mut last = EnemyIdx::from_slot(self.idx);
             let mut guard = 0;
             while let Some(i) = self.m.enemies[last].chain_next {
                 guard += 1;
@@ -366,7 +367,7 @@ impl Exec<'_> {
             }
             last
         } else {
-            self.idx
+            EnemyIdx::from_slot(self.idx)
         };
         let Some(ci) = self.m.spawn_prepare(sub, pos, life, false) else {
             return;
@@ -388,7 +389,7 @@ impl Exec<'_> {
     }
 
     // 07 §10.5: applied after the spawn-time Ecl_Run, overriding the child's own time-0 ops.
-    fn link_child(&mut self, ci: usize, tail: usize, youkai: bool, follow: bool) {
+    fn link_child(&mut self, ci: usize, tail: EnemyIdx, youkai: bool, follow: bool) {
         let c = &mut self.m.enemies[ci];
         c.flags |= A_MODE_REACT;
         c.set_flag(A_YOUKAI, youkai);
@@ -423,11 +424,11 @@ impl Exec<'_> {
             c.flags |= A_FOLLOW;
         }
         // The chain link is written last (07 §10.5): during the spawn-time run the child has no parent.
-        c.root = Some(self.idx);
+        c.root = Some(EnemyIdx::from_slot(self.idx));
         c.chain_prev = Some(tail);
-        self.m.enemies[tail].chain_next = Some(ci);
-        if tail == self.idx {
-            self.e.chain_next = Some(ci);
+        self.m.enemies[tail].chain_next = Some(EnemyIdx::from_slot(ci));
+        if tail.idx() == self.idx {
+            self.e.chain_next = Some(EnemyIdx::from_slot(ci));
         }
         self.e.children += 1;
     }

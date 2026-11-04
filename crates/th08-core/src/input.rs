@@ -122,7 +122,7 @@ impl Input {
         self.repeat = false;
         if self.held == self.prev {
             if self.same_frames > 29 {
-                self.repeat = self.same_frames % 8 == 0;
+                self.repeat = self.same_frames.is_multiple_of(8);
                 if self.same_frames > 37 {
                     self.same_frames = 30;
                 }
@@ -233,7 +233,7 @@ mod tests {
         let mut cfg = Config::default();
         let mut c = 0;
         let focus = |cfg: &Config, c: &mut u16, held| {
-            joystick_bits(cfg, &pad(held as u32, 0, 0), c) & FOCUS != 0
+            joystick_bits(cfg, &pad(u32::from(held), 0, 0), c) & FOCUS != 0
         };
         assert!((0..30).all(|_| !focus(&cfg, &mut c, true)));
         assert_eq!(c, 0);

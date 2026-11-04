@@ -52,14 +52,14 @@ impl Rng {
 
     // Rng_Next32 0x43ED20: the first Next16 is the high half.
     pub fn next_u32(&mut self) -> u32 {
-        let hi = self.next_u16() as u32;
-        let lo = self.next_u16() as u32;
+        let hi = u32::from(self.next_u16());
+        let lo = u32::from(self.next_u16());
         hi << 16 | lo
     }
 
     // Rng_Float 0x43ED50; single-precision division (11 §1.2, x87 CW 0x007F): values ≥ 0xFFFFFF80 round to 1.0.
     pub fn next_f32(&mut self) -> f32 {
-        self.next_u32() as f32 / 4294967296.0
+        self.next_u32() as f32 / 4_294_967_296.0
     }
 
     // Rng_Range 0x406EF0 (11 §1.1): unsigned modulus; n == 0 returns 0 without drawing.
@@ -67,7 +67,7 @@ impl Rng {
         if n == 0 {
             0
         } else {
-            (self.next_u32() % n as u32) as i32
+            (self.next_u32() % n.cast_unsigned()).cast_signed()
         }
     }
 
@@ -78,7 +78,7 @@ impl Rng {
 
     // Rng_Signed 0x43ED80 (11 §1.1): Next32 / 2^31 − 1, in [−1, 1].
     pub fn next_signed(&mut self) -> f32 {
-        self.next_u32() as f32 / 2147483648.0 - 1.0
+        self.next_u32() as f32 / 2_147_483_648.0 - 1.0
     }
 }
 
@@ -100,8 +100,9 @@ mod tests {
         assert_eq!(r.next_u16(), t.rotate_left(2));
         let mut a = Rng::seeded(1234);
         let mut b = Rng::seeded(1234);
-        let hi = b.next_u16() as u32;
-        let lo = b.next_u16() as u32;
+        let hi = u32::from(b.next_u16());
+        let lo = u32::from(b.next_u16());
+
         assert_eq!(a.next_u32(), hi << 16 | lo);
         assert_eq!(a.counter, 2);
         assert_eq!(Rng::seeded(5).range(0), 0);

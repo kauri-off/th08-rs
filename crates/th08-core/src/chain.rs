@@ -56,12 +56,12 @@ impl Task<Ctx> for Node {
         self.with(|t| t.draw_step(ctx, tag))
     }
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        self.with(|t| t.emit(ctx, rec, tag))
+        self.with(|t| t.emit(ctx, rec, tag));
     }
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) -> Result<()> {
         self.with(|t| t.on_register(ctx, chain, tag))
     }
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) {
-        self.with(|t| t.on_remove(ctx, chain, tag))
+        self.with(|t| t.on_remove(ctx, chain, tag));
     }
 }

@@ -32,7 +32,10 @@ fn num_fast(v: f32, dec: usize) -> Option<String> {
         return None;
     }
     let bits = v.to_bits();
-    let (ex, fr) = (((bits >> 23) & 0xff) as i32, (bits & 0x7f_ffff) as u64);
+    let (ex, fr) = (
+        ((bits >> 23) & 0xff).cast_signed(),
+        u64::from(bits & 0x7f_ffff),
+    );
     let (m, e) = if ex == 0 {
         (fr, -149)
     } else {
@@ -48,9 +51,9 @@ fn num_fast(v: f32, dec: usize) -> Option<String> {
     } else if e <= -63 {
         0 // x < 2^54 < half
     } else {
-        let k = (-e) as u32;
+        let k = (-e).cast_unsigned();
         let (q, r, half) = (x >> k, x & ((1 << k) - 1), 1u64 << (k - 1));
-        q + (r > half || (r == half && q & 1 == 1)) as u64
+        q + u64::from(r > half || (r == half && q & 1 == 1))
     };
     if n == 0 {
         return Some("0".into());
@@ -88,7 +91,7 @@ fn num_fast(v: f32, dec: usize) -> Option<String> {
 
 // C `printf("%g")` (6 significant digits, trailing zeros removed), as the probe prints fog start / end (FORMAT.md §2).
 pub fn num_g(v: f32) -> String {
-    let v = v as f64;
+    let v = f64::from(v);
     if !v.is_finite() {
         return if v.is_nan() {
             "nan".into()
@@ -111,11 +114,11 @@ pub fn num_g(v: f32) -> String {
             s.to_string()
         }
     };
-    if !(-4..6).contains(&exp) {
+    if (-4..6).contains(&exp) {
+        strip(&format!("{v:.*}", (5 - exp).cast_unsigned() as usize))
+    } else {
         let sign = if exp < 0 { '-' } else { '+' };
         format!("{}e{sign}{:02}", strip(mant), exp.abs())
-    } else {
-        strip(&format!("{v:.*}", (5 - exp) as usize))
     }
 }
 
@@ -179,7 +182,7 @@ pub fn format_frame(h: &Header, recs: &[LogRec]) -> String {
                     "S blend={} atest=ge4 ztest={} zwrite={} c={comb} a={comb}",
                     if *blend == Blend::Add { "add" } else { "alpha" },
                     if *test { "le" } else { "always" },
-                    *write as u8
+                    u8::from(*write)
                 );
                 if let Some(f) = fog {
                     let c = argb([f.color[0], f.color[1], f.color[2], 255]);
@@ -376,16 +379,17 @@ impl Writer {
             scene,
             scene_frame: self.scene_frame,
             game_frame,
-            demo: demo.map_or(-1, |d| d.0 as i32),
+            demo: demo.map_or(-1, |d| i32::from(d.0)),
             demo_frame: demo.map_or(0, |d| d.1),
             input,
         };
         if let Some(r) = self.range {
             let k = if r.demo {
-                h.demo_frame as i64
+                i64::from(h.demo_frame)
             } else {
-                h.present as i64
+                h.present.cast_signed()
             };
+
             if k < r.from || k > r.to || (r.demo && h.demo < 0) {
                 return;
             }

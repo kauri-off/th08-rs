@@ -392,6 +392,7 @@ mod tests {
     use crate::enemy::*;
     use crate::fmath;
     use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
+    use crate::types::EnemyIdx;
     use std::f32::consts::PI;
 
     #[test]
@@ -682,7 +683,7 @@ mod tests {
             &[ins(0, 83, &[1])],
         ]);
         spawn(&mut m, 0, 0, -1, 0);
-        m.bosses[0] = Some(0);
+        m.bosses[0] = Some(EnemyIdx(0));
         let s0 = m.ecl.sub_start(0).unwrap();
         ecl_run(&mut m, &mut anm, 0, sys);
         let e = &m.enemies[0];
@@ -711,7 +712,7 @@ mod tests {
             ],
         ]);
         spawn(&mut m, 0, 0, -1, 0);
-        m.bosses[0] = Some(0);
+        m.bosses[0] = Some(EnemyIdx(0));
         let s2 = m.ecl.sub_start(2).unwrap();
         ecl_run(&mut m, &mut anm, 0, sys);
         let e = &m.enemies[0];
@@ -738,7 +739,7 @@ mod tests {
         ]);
         spawn(&mut m, 0, 0, -1, 0);
         spawn(&mut m, 1, 1, -1, 0);
-        m.bosses[0] = Some(1);
+        m.bosses[0] = Some(EnemyIdx(1));
         let ip = m.enemies[1].main.ctx.ip;
         m.enemies[1].work_depth = 3;
         ecl_run(&mut m, &mut anm, 0, sys);
@@ -962,8 +963,8 @@ mod tests {
             m.enemies[k].main.ctx.set_int(V_INT1 + 2, tag);
             m.enemies[k].main.ctx.set_int(V_INT1 + 1, -1);
             if k > 0 {
-                m.enemies[k].root = Some(0);
-                m.enemies[k - 1].chain_next = Some(k);
+                m.enemies[k].root = Some(EnemyIdx(0));
+                m.enemies[k - 1].chain_next = Some(EnemyIdx::from_slot(k));
             }
         }
         m.enemies[1].orbit_av = 0.1;
@@ -1031,7 +1032,7 @@ mod tests {
         let (mut anm, mut m) = manager(&[&[ins(0, 136, &[16, 0])], &[]]);
         spawn(&mut m, 0, 0, -1, 0);
         m.enemies[0].main.ctx.set_int(V_INT0 + 7, 5);
-        m.enemies[0].chain_next = Some(1);
+        m.enemies[0].chain_next = Some(EnemyIdx(1));
         // 4: 3D distance² = 40² + 50² = 4100 ≥ 4096; 5: exactly 64 px (strict test).
         for (k, x, z, tag) in [
             (1, 100.0, 0.0, 0),
@@ -1043,7 +1044,7 @@ mod tests {
             spawn(&mut m, k, 1, -1, 0);
             m.enemies[k].pos = [x, 100.0, z];
             m.enemies[k].main.ctx.set_int(V_INT1 + 2, tag);
-            m.enemies[k].chain_next = (k < 5).then_some(k + 1);
+            m.enemies[k].chain_next = (k < 5).then_some(EnemyIdx::from_slot(k + 1));
         }
         {
             let b = crate::bm!(sys);
@@ -1228,7 +1229,7 @@ mod tests {
         let (mut anm, mut m) = manager(&[&[op87, op86]]);
         spawn(&mut m, 0, 0, -1, 0);
         spawn(&mut m, 1, 0, -1, 0);
-        m.bosses = [Some(0), Some(1), None, None];
+        m.bosses = [Some(EnemyIdx(0)), Some(EnemyIdx(1)), None, None];
         let mut rng = sys.rng.clone();
         let (f, i) = (
             rng.next_f32() * 2.0 * PI - PI,
@@ -1385,8 +1386,8 @@ mod tests {
         let (mut anm, mut m) = manager(&[&[child_op(90, 1)], &child, &[]]);
         spawn(&mut m, 0, 2, -1, 0);
         spawn(&mut m, 1, 2, -1, 0);
-        (m.enemies[0].chain_next, m.enemies[1].chain_prev) = (Some(1), Some(0));
-        m.enemies[1].root = Some(0);
+        (m.enemies[0].chain_next, m.enemies[1].chain_prev) = (Some(EnemyIdx(1)), Some(EnemyIdx(0)));
+        m.enemies[1].root = Some(EnemyIdx(0));
         m.enemies[0].main.ctx.enter(&m.ecl, 0);
         m.enemies[0].main.ctx.vars[V_INT0] = 7;
         ecl_run(&mut m, &mut anm, 0, sys);
@@ -1400,9 +1401,9 @@ mod tests {
         assert_eq!(c.layer, 2);
         assert_eq!(
             (c.root, c.chain_prev, c.chain_next),
-            (Some(0), Some(1), None)
+            (Some(EnemyIdx(0)), Some(EnemyIdx(1)), None)
         );
-        assert_eq!(m.enemies[1].chain_next, Some(2));
+        assert_eq!(m.enemies[1].chain_next, Some(EnemyIdx(2)));
         assert_eq!(m.enemies[0].children, 1);
         assert_ne!(c.fx_aura, crate::effect::NONE);
         sys.fx.get(c.fx_aura, |x| {
@@ -1420,19 +1421,19 @@ mod tests {
         for k in 0..3 {
             spawn(&mut m, k, 1, -1, 0);
         }
-        (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(1), Some(2));
-        (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(0), Some(1));
-        (m.enemies[1].root, m.enemies[2].root) = (Some(0), Some(0));
+        (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(EnemyIdx(1)), Some(EnemyIdx(2)));
+        (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(EnemyIdx(0)), Some(EnemyIdx(1)));
+        (m.enemies[1].root, m.enemies[2].root) = (Some(EnemyIdx(0)), Some(EnemyIdx(0)));
         m.enemies[1].main.ctx.enter(&m.ecl, 0);
         ecl_run(&mut m, &mut anm, 1, sys);
-        assert_eq!(m.enemies[1].chain_next, Some(3));
+        assert_eq!(m.enemies[1].chain_next, Some(EnemyIdx(3)));
         let c = &m.enemies[3];
         assert_eq!(
             (c.root, c.chain_prev, c.chain_next),
-            (Some(1), Some(1), None)
+            (Some(EnemyIdx(1)), Some(EnemyIdx(1)), None)
         );
         // The cut-off enemy keeps its +4.
-        assert_eq!(m.enemies[2].chain_prev, Some(1));
+        assert_eq!(m.enemies[2].chain_prev, Some(EnemyIdx(1)));
         assert_eq!((m.enemies[1].children, m.enemies[0].children), (1, 0));
     }
 
@@ -1493,7 +1494,15 @@ mod tests {
         let mut ts = ts();
         let sys = &mut ts.sys();
         let (mut anm, mut m) = manager(&[&[]]);
-        let i = m.spawn(&mut anm, 0, [100.0, 50.0, 0.0], 10, 0, 100, false, sys);
+        let at = crate::enemy::Spawn {
+            sub: 0,
+            pos: [100.0, 50.0, 0.0],
+            life: 10,
+            item: 0,
+            score: 100,
+            mirror: false,
+        };
+        let i = m.spawn(&mut anm, at, sys);
         let e = &m.enemies[i.unwrap()];
         assert_eq!(e.prev_pos, [0.0; 3]);
         assert_eq!(e.final_pos, [100.0, 50.0, 0.0]);

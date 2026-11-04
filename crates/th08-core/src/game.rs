@@ -392,10 +392,10 @@ impl Ctx {
         }
         for (id, pan) in played {
             let vol = crate::config::volume_curve(
-                crate::sound::TABLE[id as usize].1 as i32,
+                i32::from(crate::sound::TABLE[id.cast_unsigned() as usize].1),
                 cfg.se_volume,
             );
-            self.w.bgm.play_se(id as usize, pan, vol);
+            self.w.bgm.play_se(id.cast_unsigned() as usize, pan, vol);
         }
         self.flush_sound();
     }
@@ -443,7 +443,7 @@ impl Ctx {
             return;
         }
         self.w.skip_counter = self.w.skip_counter.wrapping_add(1);
-        if self.w.skip_counter >= self.w.game.cfg.frame_skip as i8 {
+        if self.w.skip_counter >= self.w.game.cfg.frame_skip.cast_signed() {
             task::run(self, Chain::Draw);
             self.w.skip_counter = 0;
         }
@@ -495,7 +495,7 @@ impl Ctx {
             .save_score(&mut self.w.rng, true, &mut *self.host);
         task::clear(self);
         // The chain teardown released every task object (00 §2).
-        self.w.scene = Default::default();
+        self.w.scene = crate::supervisor::Scene::default();
         self.w.ascii_mgr = None;
         self.w.anm_debug = None;
         self.sound_update();
@@ -515,8 +515,8 @@ impl Ctx {
         self.w.anm = AnmManager::default();
         self.w.anm.speed = 1.0;
         self.w.anm.slowdown_restore = restore;
-        self.w.info = Default::default();
-        self.w.ascii = Default::default();
+        self.w.info = crate::menu::InfoNotices::default();
+        self.w.ascii = crate::ascii::Queue::default();
         self.w.skip_counter = crate::world::SKIP_START;
         self.w.init_presents = 2;
         let now = self.host.ticks_ms();
@@ -537,7 +537,10 @@ impl Ctx {
         } else {
             0
         };
-        let demo = (g.flags & crate::gamemgr::F_DEMO != 0).then_some((g.demo, g.demo_frame));
+        let demo = g
+            .has(crate::gamemgr::GameFlags::DEMO)
+            .then_some((g.demo, g.demo_frame));
+
         let input = if g.scene == crate::gamemgr::SCENE_GAME {
             self.w.input.game[0]
         } else {
@@ -584,7 +587,7 @@ mod tests {
     use crate::gamemgr::{SCENE_BOOT, SCENE_MENU};
 
     fn ctx() -> Option<super::Ctx> {
-        crate::testdata::ctx(Default::default())
+        crate::testdata::ctx(crate::coreconfig::CoreConfig::default())
     }
 
     // 00 §2 restart: back to the boot scene, then logo and loading reach the menu again with the live config kept.

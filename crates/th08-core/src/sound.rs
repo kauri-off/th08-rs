@@ -96,7 +96,7 @@ pub struct Queue {
 impl Queue {
     pub fn push(&mut self, id: i32, pan: i32) {
         // No range check in the original, but no caller passes an invalid id (13 §1.2); this guard is never taken.
-        if !(0..TABLE.len() as i32).contains(&id) {
+        if id.cast_unsigned() as usize >= TABLE.len() {
             return;
         }
         if let Some((_, pans)) = self.slots.iter_mut().find(|(i, _)| *i == id) {
@@ -109,6 +109,10 @@ impl Queue {
     }
 
     // Sound_Update: (id, integer average pan) in queue order; the queue is cleared.
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "at most MAX_PANS = 128 pans per id"
+    )]
     pub fn drain(&mut self) -> Vec<(i32, i32)> {
         self.slots
             .drain(..)
@@ -385,7 +389,12 @@ impl Bgm {
                 };
                 self.fade_req = Some(secs as i32);
             }
-            Path::Midi => self.midi(MidiCmd::Fade((1000.0 * secs) as u32)),
+            Path::Midi => {
+                // trunc(1000·secs) by ftol (02 §4).
+                #[expect(clippy::cast_sign_loss, reason = "float→int stays `as` (ftol)")]
+                let ms = (1000.0 * secs) as u32;
+                self.midi(MidiCmd::Fade(ms));
+            }
         }
     }
 
@@ -511,8 +520,10 @@ mod tests {
     fn music_off_plays_nothing() {
         // cfg +0x1F = 0 (02 §4): no slot is loaded and no fade is queued; mode 1 loads.
         let mut a = Bgm::default();
-        let mut cfg = crate::config::Config::default();
-        cfg.music = 0;
+        let mut cfg = crate::config::Config {
+            music: 0,
+            ..crate::config::Config::default()
+        };
         a.set_volumes(&cfg);
         a.load_bgm(0, "bgm/th08_00.mid");
         a.fade_bgm(4.0, 1.0);
@@ -532,8 +543,10 @@ mod tests {
         assert_eq!(a.fade_req, Some(8));
         a.fade_bgm(4.0, 2.0);
         assert_eq!(a.fade_req, Some(4));
-        let mut cfg = crate::config::Config::default();
-        cfg.music = 2;
+        let cfg = crate::config::Config {
+            music: 2,
+            ..crate::config::Config::default()
+        };
         a.set_volumes(&cfg);
         a.out.clear();
         a.load_bgm(0, "bgm/th08_00.mid");
@@ -605,10 +618,15 @@ mod tests {
     // Bgm side of audio.rs `midi_mode_calls` (02 §5): the MIDI path fills no WAV slot and queues no WAV fade.
     #[test]
     fn midi_mode_bgm_side() {
-        let mut b = Bgm::default();
-        b.midi_ready = true;
-        let mut cfg = crate::config::Config::default();
-        cfg.music = 2;
+        let mut b = Bgm {
+            midi_ready: true,
+            ..Bgm::default()
+        };
+        let cfg = crate::config::Config {
+            music: 2,
+            ..crate::config::Config::default()
+        };
+
         b.set_volumes(&cfg);
         b.load_bgm(1, "bgm/th08_03.mid");
         assert!(b.slots[1].is_none());

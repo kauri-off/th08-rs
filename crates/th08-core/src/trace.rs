@@ -59,17 +59,17 @@ pub fn sample(ctx: &mut Ctx, present: i64, poll: i64, scene_frame: i64) -> Row {
     r[22] = 0;
     r[23] = present;
     r[25] = poll + 1;
-    r[26] = g2.scene as i64;
+    r[26] = i64::from(g2.scene);
     r[27] = scene_frame;
-    r[28] = menu as i64;
-    r[29] = cursor as i64;
-    r[30] = result as i64;
-    r[31] = g2.paused as i64;
-    r[32] = ctx.w.input.held as i64;
-    r[33] = g2.stage as i64;
-    r[34] = g2.loading as i64;
-    r[35] = if g2.flags & crate::gamemgr::F_DEMO != 0 {
-        g2.demo as i64
+    r[28] = i64::from(menu);
+    r[29] = i64::from(cursor);
+    r[30] = i64::from(result);
+    r[31] = i64::from(g2.paused);
+    r[32] = i64::from(ctx.w.input.held);
+    r[33] = col(g2.stage);
+    r[34] = i64::from(g2.loading);
+    r[35] = if g2.has(crate::gamemgr::GameFlags::DEMO) {
+        i64::from(g2.demo)
     } else {
         -1
     };
@@ -81,13 +81,13 @@ pub fn sample(ctx: &mut Ctx, present: i64, poll: i64, scene_frame: i64) -> Row {
 pub fn demo_sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
     let g = &ctx.w.game;
     let mut row = [0i64; 22];
-    row[0] = g.frame_counter as i64;
-    row[1] = g.demo_frame as i64;
-    row[2] = ctx.w.input.game[0] as i64;
-    row[3] = ctx.w.rng.state as i64;
-    row[4] = ctx.w.rng.total.wrapping_sub(rng_base) as i64;
-    row[18] = g.rank.rank as i64;
-    row[21] = g.flags as i64;
+    row[0] = i64::from(g.frame_counter);
+    row[1] = i64::from(g.demo_frame);
+    row[2] = i64::from(ctx.w.input.game[0]);
+    row[3] = i64::from(ctx.w.rng.state);
+    row[4] = i64::from(ctx.w.rng.total.wrapping_sub(rng_base));
+    row[18] = i64::from(g.rank.rank);
+    row[21] = i64::from(g.flags);
     let Some(p) = ctx.w.player.as_deref() else {
         return row;
     };
@@ -95,27 +95,27 @@ pub fn demo_sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
         return row;
     }
     let st = &p.stats;
-    row[5] = p.pos[0].to_bits() as i64;
-    row[6] = p.pos[1].to_bits() as i64;
-    row[7] = p.state as i64;
+    row[5] = i64::from(p.pos[0].to_bits());
+    row[6] = i64::from(p.pos[1].to_bits());
+    row[7] = i64::from(p.state);
     row[8] = st.score10;
-    row[9] = st.graze_total as i64;
-    row[10] = st.point_items2 as i64;
-    row[11] = st.lives.to_bits() as i64;
-    row[12] = st.bombs.to_bits() as i64;
-    row[13] = st.power.to_bits() as i64;
-    row[14] = st.gauge as i64;
-    row[15] = st.time as i64;
+    row[9] = i64::from(st.graze_total);
+    row[10] = i64::from(st.point_items2);
+    row[11] = i64::from(st.lives.to_bits());
+    row[12] = i64::from(st.bombs.to_bits());
+    row[13] = i64::from(st.power.to_bits());
+    row[14] = i64::from(st.gauge);
+    row[15] = i64::from(st.time);
     if let Some(b) = ctx.w.bullets.as_deref() {
-        row[16] = b.live as i64;
+        row[16] = col(b.live);
     }
     if let Some(e) = ctx.w.enemies.as_deref() {
-        row[17] = e
+        row[17] = col(e
             .enemies
             .iter()
             .filter(|x| x.flags & crate::enemy::A_ALIVE != 0)
-            .count() as i64;
-        row[19] = e.g.spell.is_some() as i64;
+            .count());
+        row[19] = i64::from(e.g.spell.is_some());
         row[20] = e
             .bosses
             .iter()
@@ -124,4 +124,10 @@ pub fn demo_sample(ctx: &Ctx, rng_base: u32) -> [i64; 22] {
             .fold(0, |a, (i, _)| a | 1 << i);
     }
     row
+}
+
+// A slot index or count as a trace column (all < 2^31).
+#[expect(clippy::cast_possible_wrap, reason = "trace column of a small count")]
+fn col(n: usize) -> i64 {
+    n as i64
 }

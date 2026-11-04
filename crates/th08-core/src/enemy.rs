@@ -1,12 +1,13 @@
 //! Enemy manager 0x577F20: timelines, enemy objects, update, damage, death, drawing (07 §3, §4, §8, §10, §11).
 
 use crate::anmmgr::{AnmManager, Tint};
-use crate::anmvm::{self, AnmVm, Timer};
+use crate::anmvm::{self, AnmVm, Timer, table_index};
 use crate::bullet::{BulletDesc, FROZEN_TINT, LaserDesc};
 use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::game::{Ctx, Sys};
 use crate::player::Player;
 use crate::task::{self, Chain, Ret, Task};
+use crate::types::{EnemyIdx, lo8};
 use anyhow::Result;
 use th08_formats::ecl::{self, Ecl};
 
@@ -20,42 +21,117 @@ pub const ANM_STAGE: usize = 8;
 // 07 §4: 480 slots of 0x53D0 after the template.
 pub const MAX_ENEMIES: usize = 480;
 
-// Flags A (e+0x3324, 07 §4.4).
-pub const A_ALIVE: u32 = 1 << 0;
-pub const A_BOSS: u32 = 1 << 1;
-pub const A_CONTACT: u32 = 1 << 2;
-pub const A_LOSES_LIFE: u32 = 1 << 3;
-pub const A_HIDDEN: u32 = 1 << 4;
-pub const A_SHOT_HIT: u32 = 1 << 6;
-pub const A_CANCEL_BONUS: u32 = 1 << 7;
-pub const A_MODE_REACT: u32 = 1 << 8;
-pub const A_FOLLOW: u32 = 1 << 9;
-pub const A_CHAIN_KILLED: u32 = 1 << 10;
-pub const A_YOUKAI: u32 = 1 << 11;
-// Bits 12–13 movement mode (07 §8), 14–16 easing (07 §5.6 table).
-pub const A_MOVE_SHIFT: u32 = 12;
-pub const A_EASE_SHIFT: u32 = 14;
-pub const A_STORE_FIRE: u32 = 1 << 17;
-pub const A_MIRROR: u32 = 1 << 18;
-pub const A_CLAMP: u32 = 1 << 19;
-// Bits 20–22 death mode (op 129, 07 §10.3).
-pub const A_DEATH_SHIFT: u32 = 20;
-pub const A_DEAD_CONT: u32 = 1 << 23;
-pub const A_ON_SCREEN: u32 = 1 << 24;
-pub const A_NO_PUSH: u32 = 1 << 26;
-pub const A_FIXED_BONUS: u32 = 1 << 27;
-pub const A_KEEP_OFFSCREEN: u32 = 1 << 28;
-pub const A_NO_MOVE: u32 = 1 << 29;
-// Set by ops 173 / 176 (07 §7); pauses the script while the player bombs (07 §4.4 flags B bit 7).
-pub const A_LAST_SPELL: u32 = 1 << 30;
-// Flags B (e+0x3328, 07 §4.4).
-pub const B_STAGE_ANM: u32 = 1 << 2;
-pub const B_DEATH_LATCH: u32 = 1 << 3;
-pub const B_CANNOT_DIE: u32 = 1 << 6;
-pub const B_PAUSED: u32 = 1 << 7;
-// Bits 4–5 low-life warning level (07 §10.2).
-pub const B_WARN_SHIFT: u32 = 4;
-pub const B_WARN_MASK: u32 = 3 << B_WARN_SHIFT;
+bitflags::bitflags! {
+    // Flags A (e+0x3324, 07 §4.4), the original's bit positions; names of 23 / 25 / 30 / 31 are INFERRED there.
+    #[repr(transparent)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct EnemyFlags: u32 {
+        const ALIVE = 1 << 0;
+        const BOSS = 1 << 1;
+        const CONTACT = 1 << 2;
+        const LOSES_LIFE = 1 << 3;
+        const HIDDEN = 1 << 4;
+        // Bit 5: main VM not drawn and no player collision (07 §10.1 step 6, §10.6).
+        const INVISIBLE = 1 << 5;
+        const SHOT_HIT = 1 << 6;
+        const CANCEL_BONUS = 1 << 7;
+        const MODE_REACT = 1 << 8;
+        const FOLLOW = 1 << 9;
+        const CHAIN_KILLED = 1 << 10;
+        const YOUKAI = 1 << 11;
+        // Bits 12–13 movement mode (07 §8), 14–16 easing (07 §5.6 table).
+        const MOVE_MODE = 3 << 12;
+        const EASE = 7 << 14;
+        const STORE_FIRE = 1 << 17;
+        const MIRROR = 1 << 18;
+        const CLAMP = 1 << 19;
+        // Bits 20–22 death mode (op 129, 07 §10.3).
+        const DEATH_MODE = 7 << 20;
+        const DEAD_CONT = 1 << 23;
+        const ON_SCREEN = 1 << 24;
+        // Bit 25 (op 145): the main VM and trail copies rotate with the enemy angle (07 §10.6).
+        const ROTATE = 1 << 25;
+        const NO_PUSH = 1 << 26;
+        const FIXED_BONUS = 1 << 27;
+        const KEEP_OFFSCREEN = 1 << 28;
+        const NO_MOVE = 1 << 29;
+        // Set by ops 173 / 176 (07 §7); pauses the script while the player bombs (07 §4.4 flags B bit 7).
+        const LAST_SPELL = 1 << 30;
+        // Bit 31 (op 183): no player collision while the player bombs (07 §10.1 step 6).
+        const BOMB_IMMUNE = 1 << 31;
+    }
+}
+
+bitflags::bitflags! {
+    // Flags B (e+0x3328, 07 §4.4).
+    #[repr(transparent)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct EnemyFlagsB: u32 {
+        // Bit 1 (op 83): effect 38 sparkle on even timer frames (07 §10.1 step 3).
+        const SPARKLE = 1 << 1;
+        const STAGE_ANM = 1 << 2;
+        const DEATH_LATCH = 1 << 3;
+        // Bits 4–5 low-life warning level (07 §10.2).
+        const WARN = 3 << 4;
+        const CANNOT_DIE = 1 << 6;
+        const PAUSED = 1 << 7;
+        // Bit 8 (op 182): sub VMs use the main VM's position offset (07 §10.6).
+        const SHARED_OFFSET = 1 << 8;
+    }
+}
+
+// Raw bit values of `EnemyFlags` / `EnemyFlagsB` for the owners that still use the `flags` / `flags_b` words.
+pub const A_ALIVE: u32 = EnemyFlags::ALIVE.bits();
+pub const A_BOSS: u32 = EnemyFlags::BOSS.bits();
+pub const A_CONTACT: u32 = EnemyFlags::CONTACT.bits();
+pub const A_LOSES_LIFE: u32 = EnemyFlags::LOSES_LIFE.bits();
+pub const A_HIDDEN: u32 = EnemyFlags::HIDDEN.bits();
+pub const A_SHOT_HIT: u32 = EnemyFlags::SHOT_HIT.bits();
+pub const A_CANCEL_BONUS: u32 = EnemyFlags::CANCEL_BONUS.bits();
+pub const A_MODE_REACT: u32 = EnemyFlags::MODE_REACT.bits();
+pub const A_FOLLOW: u32 = EnemyFlags::FOLLOW.bits();
+pub const A_CHAIN_KILLED: u32 = EnemyFlags::CHAIN_KILLED.bits();
+pub const A_YOUKAI: u32 = EnemyFlags::YOUKAI.bits();
+pub const A_MOVE_SHIFT: u32 = EnemyFlags::MOVE_MODE.bits().trailing_zeros();
+pub const A_EASE_SHIFT: u32 = EnemyFlags::EASE.bits().trailing_zeros();
+pub const A_STORE_FIRE: u32 = EnemyFlags::STORE_FIRE.bits();
+pub const A_MIRROR: u32 = EnemyFlags::MIRROR.bits();
+pub const A_CLAMP: u32 = EnemyFlags::CLAMP.bits();
+pub const A_DEATH_SHIFT: u32 = EnemyFlags::DEATH_MODE.bits().trailing_zeros();
+pub const A_DEAD_CONT: u32 = EnemyFlags::DEAD_CONT.bits();
+pub const A_ON_SCREEN: u32 = EnemyFlags::ON_SCREEN.bits();
+pub const A_NO_PUSH: u32 = EnemyFlags::NO_PUSH.bits();
+pub const A_FIXED_BONUS: u32 = EnemyFlags::FIXED_BONUS.bits();
+pub const A_KEEP_OFFSCREEN: u32 = EnemyFlags::KEEP_OFFSCREEN.bits();
+pub const A_NO_MOVE: u32 = EnemyFlags::NO_MOVE.bits();
+pub const A_LAST_SPELL: u32 = EnemyFlags::LAST_SPELL.bits();
+pub const B_STAGE_ANM: u32 = EnemyFlagsB::STAGE_ANM.bits();
+pub const B_DEATH_LATCH: u32 = EnemyFlagsB::DEATH_LATCH.bits();
+pub const B_CANNOT_DIE: u32 = EnemyFlagsB::CANNOT_DIE.bits();
+pub const B_PAUSED: u32 = EnemyFlagsB::PAUSED.bits();
+pub const B_WARN_SHIFT: u32 = EnemyFlagsB::WARN.bits().trailing_zeros();
+pub const B_WARN_MASK: u32 = EnemyFlagsB::WARN.bits();
+
+// Enemy slot links (07 §4.3 e+4 / e+8 / e+0x2DA4, boss table 0xF54CC0) as typed slot numbers.
+impl EnemyIdx {
+    // Slots are < MAX_ENEMIES (480), so the u16 always holds them.
+    pub const fn from_slot(k: usize) -> Self {
+        Self(k as u16)
+    }
+}
+
+impl std::ops::Index<EnemyIdx> for Vec<Box<Enemy>> {
+    type Output = Box<Enemy>;
+    fn index(&self, i: EnemyIdx) -> &Box<Enemy> {
+        &self[i.idx()]
+    }
+}
+
+impl std::ops::IndexMut<EnemyIdx> for Vec<Box<Enemy>> {
+    fn index_mut(&mut self, i: EnemyIdx) -> &mut Box<Enemy> {
+        &mut self[i.idx()]
+    }
+}
 
 // Item table 0x4C70D8 for item −1 drops (07 §10.4).
 const DROP_TABLE: [i32; 32] = [
@@ -77,11 +153,11 @@ pub fn files(index: usize, spell: Option<i16>) -> (String, String) {
     };
     match c - 205 {
         n @ 0..=10 => {
-            let k = ECL_NAMES[LAST_WORD_STAGE[n as usize]];
+            let k = ECL_NAMES[LAST_WORD_STAGE[usize::from(n.cast_unsigned())]];
             (format!("ecldata{k}sp.ecl"), format!("stg{k}enm.anm"))
         }
         n @ 11..=16 => {
-            let x = LAST_WORD_CHAR[n as usize - 11];
+            let x = LAST_WORD_CHAR[usize::from(n.cast_unsigned()) - 11];
             (format!("ecldata_{x}.ecl"), format!("stgenm_{x}.anm"))
         }
         _ => (format!("ecldata{k}sp.ecl"), format!("stg{k}enm.anm")),
@@ -150,7 +226,7 @@ pub const V_ARGF: usize = 26;
 
 impl Context {
     pub fn int(&self, k: usize) -> i32 {
-        self.vars[k] as i32
+        self.vars[k].cast_signed()
     }
 
     pub fn flt(&self, k: usize) -> f32 {
@@ -158,7 +234,7 @@ impl Context {
     }
 
     pub fn set_int(&mut self, k: usize, v: i32) {
-        self.vars[k] = v as u32;
+        self.vars[k] = v.cast_unsigned();
     }
 
     pub fn set_flt(&mut self, k: usize, v: f32) {
@@ -203,13 +279,17 @@ impl Thread {
         if self.stack.len() < 16 {
             self.stack.resize(16, Context::default());
         }
-        self.stack[d.clamp(0, 15) as usize] = c;
+        self.stack[table_index(d.clamp(0, 15))] = c;
         (d + 1).min(15)
     }
 }
 
 // Enemy object 0x53D0 (07 §4.3); positions in playfield px, angles in radians, timers in frames.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "port-only per-frame state (07 §10.1 steps 6–7, §5.4), not an original flag word"
+)]
 pub struct Enemy {
     // e+0xC main VM, e+0x2B0 / e+0x554 sub VMs (ops 57/61).
     pub vm: AnmVm,
@@ -319,9 +399,9 @@ pub struct Enemy {
     // e+0x3380 chained children created minus killed by damage (07 §4.3).
     pub children: i32,
     // e+0x4 / e+0x8 chain links, e+0x2DA4 parent (the spawner, 07 §10.5).
-    pub chain_prev: Option<usize>,
-    pub chain_next: Option<usize>,
-    pub root: Option<usize>,
+    pub chain_prev: Option<EnemyIdx>,
+    pub chain_next: Option<EnemyIdx>,
+    pub root: Option<EnemyIdx>,
     // e+0x5354 damage-reduction timer (op 160).
     pub dmg_timer: Timer,
     // e+0x2E10 time-orb damage accumulator (07 §4.3).
@@ -355,8 +435,47 @@ fn trail_mid(a: f32, c: f32) -> f32 {
     lo + 0.5 * (a - c).abs().min(lo + 2.0 * std::f32::consts::PI - hi)
 }
 
+// Chain-kill popup colour, chosen once from the undivided child count n (07 §10.3a step 1, 13 §4).
+fn chain_popup_colour(n: i32) -> u32 {
+    match n {
+        ..2 => 0xFFFF_FFFF,
+        2..=5 => 0xFFFF_FFD0,
+        6..=9 => 0xFFFF_FFB0,
+        _ => 0xFFFF_FF80,
+    }
+}
+
+// Orb count c per chain-killed child from the current n (07 §10.3a step 3): team shots 0–3, solo human (even),
+// solo youkai (odd).
+fn child_orbs(shot: u8, n: i32) -> i32 {
+    match shot {
+        0..4 => {
+            if n < 8 {
+                2 * n + 10
+            } else {
+                26
+            }
+        }
+        _ if shot.is_multiple_of(2) => {
+            if n < 4 {
+                6 * n + 16
+            } else {
+                40
+            }
+        }
+        _ => {
+            if n < 10 {
+                2 * n + 6
+            } else {
+                26
+            }
+        }
+    }
+}
+
 // e+0x3394 ring length: 96 entries of 0x1C (07 §4.3).
-pub const TRAIL_LEN: usize = 96;
+const TRAIL_MAX: i32 = 96;
+pub const TRAIL_LEN: usize = TRAIL_MAX.unsigned_abs() as usize;
 
 // One 0x1C ring entry (07 §10.1 step 4): final pos, velocity e+0x2D4C, angle e+0x2D94.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -435,7 +554,11 @@ impl Default for Enemy {
             extra_power: 0,
             death_bytes: [0; 3],
             boss_slot: -1,
-            flags: A_ALIVE | A_CONTACT | A_LOSES_LIFE | A_SHOT_HIT,
+            flags: (EnemyFlags::ALIVE
+                | EnemyFlags::CONTACT
+                | EnemyFlags::LOSES_LIFE
+                | EnemyFlags::SHOT_HIT)
+                .bits(),
             flags_b: 0,
             dir: -1,
             layer: 0,
@@ -473,7 +596,12 @@ impl Default for Enemy {
 impl Enemy {
     // e+0x534E trail length n; the clamp is a port-only bound for the 96-entry ring (data: 15 and 90).
     fn trail_n(&self) -> usize {
-        self.trail[1].clamp(0, TRAIL_LEN as i32) as usize
+        table_index(self.trail_len())
+    }
+
+    // `trail_n` as the i32 the draw loops count with.
+    fn trail_len(&self) -> i32 {
+        self.trail[1].clamp(0, TRAIL_MAX)
     }
 
     // Ring shift (07 §10.1 step 4): entry[i] = entry[i − 1] for i = n − 1..1, then entry[0] = now.
@@ -490,7 +618,54 @@ impl Enemy {
     }
 
     pub fn alive(&self) -> bool {
-        self.flags & A_ALIVE != 0
+        self.has(EnemyFlags::ALIVE)
+    }
+
+    pub fn a_flags(&self) -> EnemyFlags {
+        EnemyFlags::from_bits_retain(self.flags)
+    }
+
+    pub fn b_flags(&self) -> EnemyFlagsB {
+        EnemyFlagsB::from_bits_retain(self.flags_b)
+    }
+
+    // Any of the bits of `f` set.
+    pub fn has(&self, f: EnemyFlags) -> bool {
+        self.a_flags().intersects(f)
+    }
+
+    pub fn has_b(&self, f: EnemyFlagsB) -> bool {
+        self.b_flags().intersects(f)
+    }
+
+    pub fn set(&mut self, f: EnemyFlags, on: bool) {
+        self.set_flag(f.bits(), on);
+    }
+
+    pub fn insert(&mut self, f: EnemyFlags) {
+        self.flags |= f.bits();
+    }
+
+    pub fn remove(&mut self, f: EnemyFlags) {
+        self.flags &= !f.bits();
+    }
+
+    pub fn insert_b(&mut self, f: EnemyFlagsB) {
+        self.flags_b |= f.bits();
+    }
+
+    pub fn remove_b(&mut self, f: EnemyFlagsB) {
+        self.flags_b &= !f.bits();
+    }
+
+    // Flags A bits 20–22 (op 129, 07 §10.3).
+    pub fn death_mode(&self) -> u32 {
+        (self.flags >> A_DEATH_SHIFT) & 7
+    }
+
+    // Flags B bits 4–5, low-life warning level 0–3 (07 §10.2).
+    pub fn warning(&self) -> u8 {
+        ((self.flags_b >> B_WARN_SHIFT) & 3).to_le_bytes()[0]
     }
 
     pub fn set_flag(&mut self, f: u32, on: bool) {
@@ -518,12 +693,13 @@ impl Enemy {
     }
 
     pub fn set_ease(&mut self, m: i32) {
-        self.flags = (self.flags & !(7 << A_EASE_SHIFT)) | (((m as u32) & 7) << A_EASE_SHIFT);
+        self.flags =
+            (self.flags & !(7 << A_EASE_SHIFT)) | ((m.cast_unsigned() & 7) << A_EASE_SHIFT);
     }
 
     // Sprite file by flags B bit 2 (07 §7 ops 54/58).
     pub fn anm_slot(&self) -> usize {
-        if self.flags_b & B_STAGE_ANM != 0 {
+        if self.has_b(EnemyFlagsB::STAGE_ANM) {
             ANM_STAGE
         } else {
             ANM_ENEMY
@@ -532,7 +708,7 @@ impl Enemy {
 
     // Enemy_ClampPos 0x42C180 (07 §8): only with flag A bit 19.
     pub fn clamp_pos(&mut self) {
-        if self.flags & A_CLAMP != 0 {
+        if self.has(EnemyFlags::CLAMP) {
             let [x0, y0, x1, y1] = self.clamp;
             self.pos[0] = self.pos[0].max(x0).min(x1);
             self.pos[1] = self.pos[1].max(y0).min(y1);
@@ -547,7 +723,7 @@ impl Enemy {
 
     // Enemy_UpdateMoveMode 0x422C40 (07 §8 table).
     pub fn update_move_mode(&mut self, gs: f32, sr: bool) {
-        let mirror = self.flags & A_MIRROR != 0;
+        let mirror = self.has(EnemyFlags::MIRROR);
         match self.move_mode() {
             1 => {
                 self.angle = anmvm::wrap_add(self.angle, gs * self.angvel);
@@ -611,6 +787,10 @@ impl Enemy {
 
 // Running spell card (op 122 block, 07 §11; spell object g_Gui 0x4EA670, §11.1).
 #[derive(Clone, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "spell flag bits 2 / 3 / 5 / 7 (07 §11.1), split with `Globals`; written by eclvm ops_spell"
+)]
 pub struct Spell {
     pub id: i32,
     // +0x0C portrait/face parameter.
@@ -624,7 +804,7 @@ pub struct Spell {
     pub max: i32,
     pub decay: i32,
     // g_Gui +4: the boss that started the card (enemy slot); g_Gui +0xC: its slot index e+0x2E0C (07 §11.1 step 1.1).
-    pub boss: usize,
+    pub boss: EnemyIdx,
     pub slot: i32,
     // g_Gui +0x114 card duration (07 §11.1); the remaining time +0x108 is `Globals::spell_remaining`.
     pub duration: i32,
@@ -640,6 +820,10 @@ pub struct Spell {
 
 // Globals touched by ECL (difficulty, rank, argument registers, spell state, …).
 #[derive(Clone, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "separate original bytes / spell flag bits (07 §6, §11.1); written by eclvm"
+)]
 pub struct Globals {
     // 0x160F538 (var 10040): 0 Easy … 3 Lunatic, 4 Extra.
     pub difficulty: i32,
@@ -683,7 +867,7 @@ pub struct Globals {
     pub bonus_frozen: bool,
     // g_Gui +4 boss pointer (enemy slot): set by Spell_Start, kept after a silent end (step 1.1), cleared by the
     // Spell_End tail (07 §11.1).
-    pub spell_boss: Option<usize>,
+    pub spell_boss: Option<EnemyIdx>,
     // Spell flag bit 9 "captured" (07 §11.1); read by the continue menu default (12 §4).
     pub spell_captured: bool,
     // Port: op 148 argument, HUD requests (ops 148/179–181) handled by the HUD, unimplemented-op counter.
@@ -715,6 +899,97 @@ pub struct Payout {
     pub time: i32,
 }
 
+// Timeline spawn request (07 §3 ops 0–5 / 11 / 12 / 15, §4.1): life < 0 and score < 0 keep the template's;
+// item is taken as a signed char after the spawn run; mirror = flags A bit 18.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spawn {
+    pub sub: i32,
+    pub pos: [f32; 3],
+    pub life: i32,
+    pub item: i32,
+    pub score: i32,
+    pub mirror: bool,
+}
+
+// Timeline instruction (07 §3 table), decoded from its op and the raw argument dwords; other ops do nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TlOp {
+    // Ops 0 / 1 (mirror) / 15 (`force`: no boss-display / disable test, not mirrored).
+    Spawn { at: Spawn, force: bool },
+    // Ops 2 / 4 (mirror): x = Rng_Float·(x1 − x0) + x0, drawn when the spawn is not blocked.
+    SpawnRandX { at: Spawn, x0: f32, x1: f32 },
+    // Ops 3 / 5 (mirror): x = Rng_Float·384.
+    SpawnRandXFull(Spawn),
+    // Op 6 dialogue n.
+    Msg(i32),
+    // Op 7: stall while a dialogue blocks.
+    WaitMsg,
+    // Op 8: boss[slot].pending_interrupt := n (07 §5.5).
+    InterruptBoss { slot: i32, n: i32 },
+    // Op 9 GameMgr_SetPower(n).
+    SetPower(i32),
+    // Op 10: stall while boss[slot] exists and is alive.
+    WaitBoss(i32),
+    // Ops 11 / 12 (mirror): item −1, then e+0x3308 := point, e+0x330C := power.
+    SpawnItems { at: Spawn, point: i32, power: i32 },
+    // Op 13: consume every sync slot == v, stall if none; op 14: every empty slot := v.
+    WaitSync(i32),
+    PostSync(i32),
+    // Op 16: byte 0x164D0BB := 1.
+    Flag,
+    Unknown(i16),
+}
+
+impl TlOp {
+    // Argument layout per 07 §3 table; args are i32 or f32 dwords at +8.
+    fn decode(op: i16, args: [u32; 7]) -> Self {
+        let ai = |k: usize| args[k].cast_signed();
+        let af = |k: usize| f32::from_bits(args[k]);
+        let mirror = matches!(op, 1 | 4 | 5 | 12);
+        let spawn = |x: f32, y: f32, k: usize| Spawn {
+            sub: ai(0),
+            pos: [x, y, 0.0],
+            life: ai(k),
+            item: ai(k + 1),
+            score: ai(k + 2),
+            mirror,
+        };
+        match op {
+            0 | 1 | 15 => Self::Spawn {
+                at: spawn(af(1), af(2), 3),
+                force: op == 15,
+            },
+            2 | 4 => Self::SpawnRandX {
+                at: spawn(0.0, af(3), 4),
+                x0: af(1),
+                x1: af(2),
+            },
+            3 | 5 => Self::SpawnRandXFull(spawn(0.0, af(1), 2)),
+            6 => Self::Msg(ai(0)),
+            7 => Self::WaitMsg,
+            8 => Self::InterruptBoss {
+                slot: ai(0),
+                n: ai(1),
+            },
+            9 => Self::SetPower(ai(0)),
+            10 => Self::WaitBoss(ai(0)),
+            11 | 12 => Self::SpawnItems {
+                at: Spawn {
+                    item: -1,
+                    score: ai(6),
+                    ..spawn(af(1), af(2), 3)
+                },
+                point: ai(4),
+                power: ai(5),
+            },
+            13 => Self::WaitSync(ai(0)),
+            14 => Self::PostSync(ai(0)),
+            16 => Self::Flag,
+            _ => Self::Unknown(op),
+        }
+    }
+}
+
 // Enemy manager 0x577F20 (07 §4).
 #[derive(Clone)]
 pub struct EnemyManager {
@@ -725,7 +1000,7 @@ pub struct EnemyManager {
     // Stage ECL file (07 §2); shared between clones, copied on the first write into the file by a clone (07 §6).
     pub ecl: std::sync::Arc<Ecl>,
     // 0xF54CC0[4] boss table.
-    pub bosses: [Option<usize>; 4],
+    pub bosses: [Option<EnemyIdx>; 4],
     // mgr+0x9DCDD0 + 16·i: {clock, ip} per timeline (07 §3).
     timelines: Vec<(Timer, usize)>,
     // mgr+0x9DCEFC sync slots (timeline ops 13/14), −1 empty.
@@ -844,7 +1119,7 @@ impl EnemyManager {
         index: usize,
         flags: u32,
     ) {
-        let d = self.g.difficulty.clamp(0, 4) as usize;
+        let d = table_index(self.g.difficulty.clamp(0, 4));
         // 11 §3.1: 0 in spell practice (GameFlags bit 14), else TIME_THR[stage][difficulty].
         p.stats.time_threshold = if flags & crate::gamemgr::F_SPELL_PRACTICE != 0 {
             0
@@ -870,13 +1145,13 @@ impl EnemyManager {
         // ended earlier in this calc (step 4) already counts as none.
         crate::pl!(sys).env.spell = self.g.spell.is_some();
         let e = &self.enemies[idx];
-        let (flags, pos, hb, sb) = (e.flags, e.final_pos, e.hitbox, e.shotbox);
-        let boss = flags & A_BOSS != 0;
+        let (flags, pos, hb, sb) = (e.a_flags(), e.final_pos, e.hitbox, e.shotbox);
+        let boss = flags.contains(EnemyFlags::BOSS);
         // (a) graze every 6 frames of the enemy timer for flag A bit 7, (b) contact unless a chained child
         // under shot type 0/4; contact costs a non-boss without bit 7 10 life per frame.
-        if flags & A_CONTACT != 0 {
+        if flags.contains(EnemyFlags::CONTACT) {
             let e = &self.enemies[idx];
-            let graze = flags & A_CANCEL_BONUS != 0
+            let graze = flags.contains(EnemyFlags::CANCEL_BONUS)
                 && e.boss_timer.cur != e.boss_timer.prev
                 && e.boss_timer.cur % 6 == 0;
             let child = e.root.is_some();
@@ -892,11 +1167,11 @@ impl EnemyManager {
             if drop_attracted {
                 crate::bm!(sys).items.drop_attracted();
             }
-            if touched && !boss && flags & A_CANCEL_BONUS == 0 {
+            if touched && !boss && !flags.contains(EnemyFlags::CANCEL_BONUS) {
                 self.enemies[idx].life -= 10;
             }
         }
-        if flags & A_SHOT_HIT != 0 {
+        if flags.contains(EnemyFlags::SHOT_HIT) {
             let mut acc = self.enemies[idx].orb_acc;
             // hitByBomb starts as "player is bombing" but Player_DamageAgainst overwrites it (07 §10.1 step 6).
             let mut by_bomb = crate::pl!(sys).bombing;
@@ -961,7 +1236,7 @@ impl EnemyManager {
         f: impl FnOnce(&mut Self, &mut Enemy) -> R,
     ) -> R {
         let mut p = self.spare.pop().unwrap_or_default();
-        p.flags = A_ALIVE;
+        p.flags = EnemyFlags::ALIVE.bits();
         let e = &self.enemies[idx];
         (p.chain_prev, p.chain_next, p.root) = (e.chain_prev, e.chain_next, e.root);
         let mut e = std::mem::replace(&mut self.enemies[idx], p);
@@ -976,8 +1251,10 @@ impl EnemyManager {
     // Enemy_Free: also clears the aimed pointer (14 §3.1, 07 §10.1); a boss fades its ENEMY marker out (12 §5.10).
     pub fn free(&mut self, idx: usize, sys: &mut Sys) {
         let e = &self.enemies[idx];
-        if e.flags & A_BOSS != 0 && (0..4).contains(&e.boss_slot) {
-            sys.ov.marker_release(e.boss_slot as usize);
+        if e.has(EnemyFlags::BOSS)
+            && let Some(k) = usize::try_from(e.boss_slot).ok().filter(|&k| k < 4)
+        {
+            sys.ov.marker_release(k);
         }
         if crate::pl!(sys).aimed == Some(idx) {
             crate::pl!(sys).aimed = None;
@@ -991,24 +1268,26 @@ impl EnemyManager {
     fn release(&mut self, idx: usize, sys: &mut Sys) {
         self.kill_chain(idx, None, sys);
         self.release_effects(idx, sys);
-        self.enemies[idx].flags &= !A_ALIVE;
+        self.enemies[idx].remove(EnemyFlags::ALIVE);
     }
 
     // HUD +0x2C (boss display) is cleared when any boss slot unregisters (answers_phase5 impl8).
     pub(crate) fn unregister_boss(&mut self, idx: usize) {
-        for b in self.bosses.iter_mut() {
-            if *b == Some(idx) {
+        for b in &mut self.bosses {
+            if b.is_some_and(|b| b.idx() == idx) {
                 *b = None;
                 self.g.hud_boss = false;
             }
         }
     }
 
+    // Boss table entry `slot` (0xF54CC0[4]) as a slot number; None for an empty entry or a slot outside 0–3.
     pub fn boss(&self, slot: i32) -> Option<usize> {
         self.bosses
             .get(usize::try_from(slot).ok()?)
             .copied()
             .flatten()
+            .map(EnemyIdx::idx)
     }
 
     pub fn alive_count(&self) -> usize {
@@ -1036,9 +1315,9 @@ impl EnemyManager {
             return None;
         };
         let mut e = self.template.clone();
-        e.slot = idx as i32;
+        e.slot = i32::from(EnemyIdx::from_slot(idx).0);
         // Mirror bit 18: all x motion negated (07 §3 timeline op 1).
-        e.set_flag(A_MIRROR, mirror);
+        e.set(EnemyFlags::MIRROR, mirror);
         if life >= 0 {
             e.life = life;
         }
@@ -1048,6 +1327,10 @@ impl EnemyManager {
         Some(idx)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "07 §4.1 steps 4–5; the ECL callers (ops 90–92, native) pass the fields separately"
+    )]
     pub(crate) fn spawn_finish(
         &mut self,
         anm: &mut AnmManager,
@@ -1066,7 +1349,7 @@ impl EnemyManager {
         let e = &mut self.enemies[idx];
         e.main_color = e.vm.color;
         // Item is taken as a signed char (07 §4.1 step 5).
-        e.item = item as i8 as i32;
+        e.item = i32::from(lo8(item).cast_signed());
         if score >= 0 {
             e.score = score;
         }
@@ -1079,19 +1362,10 @@ impl EnemyManager {
         Some(idx)
     }
 
-    pub fn spawn(
-        &mut self,
-        anm: &mut AnmManager,
-        sub: i32,
-        pos: [f32; 3],
-        life: i32,
-        item: i32,
-        score: i32,
-        mirror: bool,
-        sys: &mut Sys,
-    ) -> Option<usize> {
-        let idx = self.spawn_prepare(sub, pos, life, mirror)?;
-        self.spawn_finish(anm, idx, life, item, score, false, sys)
+    // EnemyMgr_SpawnFromTimeline 0x42A4E0 (07 §4.1).
+    pub fn spawn(&mut self, anm: &mut AnmManager, at: Spawn, sys: &mut Sys) -> Option<usize> {
+        let idx = self.spawn_prepare(at.sub, at.pos, at.life, at.mirror)?;
+        self.spawn_finish(anm, idx, at.life, at.item, at.score, false, sys)
     }
 
     fn spawn_blocked(&self) -> bool {
@@ -1132,92 +1406,51 @@ impl EnemyManager {
     // Timeline ops (07 §3 table). Returns false to stall.
     fn timeline_op(&mut self, anm: &mut AnmManager, ins: &ecl::TlIns, sys: &mut Sys) -> bool {
         let args: [u32; 7] = std::array::from_fn(|k| self.ecl.tl_arg(ins, k));
-        let (ai, af) = (
-            |k: usize| args[k] as i32,
-            |k: usize| f32::from_bits(args[k]),
-        );
-        match ins.op {
-            0 | 1 | 15 => {
-                if ins.op == 15 || !self.spawn_blocked() {
-                    self.spawn(
-                        anm,
-                        ai(0),
-                        [af(1), af(2), 0.0],
-                        ai(3),
-                        ai(4),
-                        ai(5),
-                        ins.op == 1,
-                        sys,
-                    );
+        match TlOp::decode(ins.op, args) {
+            TlOp::Spawn { at, force } => {
+                if force || !self.spawn_blocked() {
+                    self.spawn(anm, at, sys);
                 }
             }
-            2 | 4 => {
+            TlOp::SpawnRandX { mut at, x0, x1 } => {
                 if !self.spawn_blocked() {
-                    let x = sys.rng.next_f32() * (af(2) - af(1)) + af(1);
-                    self.spawn(
-                        anm,
-                        ai(0),
-                        [x, af(3), 0.0],
-                        ai(4),
-                        ai(5),
-                        ai(6),
-                        ins.op == 4,
-                        sys,
-                    );
+                    at.pos[0] = sys.rng.next_f32() * (x1 - x0) + x0;
+                    self.spawn(anm, at, sys);
                 }
             }
-            3 | 5 => {
+            TlOp::SpawnRandXFull(mut at) => {
                 if !self.spawn_blocked() {
-                    let x = sys.rng.next_f32() * 384.0;
-                    self.spawn(
-                        anm,
-                        ai(0),
-                        [x, af(1), 0.0],
-                        ai(2),
-                        ai(3),
-                        ai(4),
-                        ins.op == 5,
-                        sys,
-                    );
+                    at.pos[0] = sys.rng.next_f32() * 384.0;
+                    self.spawn(anm, at, sys);
                 }
             }
-            6 => self.start_msg(anm, ai(0), sys),
-            7 => {
+            TlOp::Msg(n) => self.start_msg(anm, n, sys),
+            TlOp::WaitMsg => {
                 return !sys
                     .msg
                     .as_deref()
                     .is_some_and(crate::msg::Dialogue::blocking);
             }
-            8 => {
-                if let Some(b) = self.boss(ai(0)) {
-                    self.enemies[b].pending_interrupt = ai(1);
+            TlOp::InterruptBoss { slot, n } => {
+                if let Some(b) = self.boss(slot) {
+                    self.enemies[b].pending_interrupt = n;
                 }
             }
             // GameMgr_SetPower 0x406FA0: power := n, checksum (4 RNG draws) (07 timeline op 9, 09 §9.4).
-            9 => crate::pl!(sys).stats.set_power(ai(0) as f32, sys.rng),
+            TlOp::SetPower(n) => crate::pl!(sys).stats.set_power(n as f32, sys.rng),
             // A mode-0 boss stays in the table, so the alive bit is tested too (07 §10.3).
-            10 => {
-                return self.boss(ai(0)).is_none_or(|b| !self.enemies[b].alive());
+            TlOp::WaitBoss(slot) => {
+                return self.boss(slot).is_none_or(|b| !self.enemies[b].alive());
             }
-            11 | 12 => {
+            TlOp::SpawnItems { at, point, power } => {
                 if !self.spawn_blocked()
-                    && let Some(idx) = self.spawn(
-                        anm,
-                        ai(0),
-                        [af(1), af(2), 0.0],
-                        ai(3),
-                        -1,
-                        ai(6),
-                        ins.op == 12,
-                        sys,
-                    )
+                    && let Some(idx) = self.spawn(anm, at, sys)
                 {
-                    self.enemies[idx].extra_point = ai(4);
-                    self.enemies[idx].extra_power = ai(5);
+                    self.enemies[idx].extra_point = point;
+                    self.enemies[idx].extra_power = power;
                 }
             }
-            13 => {
-                let v = ai(0);
+            TlOp::WaitSync(v) => {
                 let mut hit = false;
                 for s in &mut self.sync {
                     if *s == v {
@@ -1227,16 +1460,15 @@ impl EnemyManager {
                 }
                 return hit;
             }
-            14 => {
-                let v = ai(0);
+            TlOp::PostSync(v) => {
                 self.sync
                     .iter_mut()
                     .filter(|s| **s < 0)
                     .for_each(|s| *s = v);
             }
             // 0x164D0BB = 1: game-over / continue byte (11 §2).
-            16 => crate::pl!(sys).game_over = true,
-            _ => {}
+            TlOp::Flag => crate::pl!(sys).game_over = true,
+            TlOp::Unknown(_) => {}
         }
         true
     }
@@ -1246,11 +1478,11 @@ impl EnemyManager {
     fn move_enemy(&mut self, idx: usize, gs: f32) {
         let root_pos = self.enemies[idx].root.map(|r| self.enemies[r].pos);
         let e = &mut self.enemies[idx];
-        if e.flags & A_NO_MOVE == 0 {
+        if !e.has(EnemyFlags::NO_MOVE) {
             e.clamp_pos();
             e.displacement = std::array::from_fn(|k| e.pos[k] - e.prev_pos[k]);
             e.prev_pos = e.pos;
-            if e.flags & A_MIRROR != 0 {
+            if e.has(EnemyFlags::MIRROR) {
                 e.pos[0] -= gs * e.vel[0];
             } else {
                 e.pos[0] += gs * e.vel[0];
@@ -1259,7 +1491,7 @@ impl EnemyManager {
             e.pos[2] += gs * e.vel[2];
             e.clamp_pos();
         }
-        if e.flags & A_FOLLOW != 0
+        if e.has(EnemyFlags::FOLLOW)
             && let Some(p) = root_pos
         {
             e.pos_offset = p;
@@ -1272,9 +1504,9 @@ impl EnemyManager {
     fn screen_check(&mut self, idx: usize) -> bool {
         let e = &mut self.enemies[idx];
         if !e.vm.has_sprite {
-            e.flags |= A_HIDDEN;
+            e.insert(EnemyFlags::HIDDEN);
         }
-        if e.flags & A_HIDDEN != 0 {
+        if e.has(EnemyFlags::HIDDEN) {
             return false;
         }
         // Main VM sprite box, inclusive (07 §10.1 step 4).
@@ -1283,15 +1515,15 @@ impl EnemyManager {
             x + hw >= 0.0 && x - hw <= 384.0 && y + hh >= 0.0 && y - hh <= 448.0
         };
         let inside = on_screen(e.final_pos);
-        if e.flags & A_ON_SCREEN == 0 {
-            if inside {
-                e.flags |= A_ON_SCREEN;
-            }
-            false
-        } else {
+        if e.has(EnemyFlags::ON_SCREEN) {
             // With a trail the oldest entry n − 1 must be off screen too (port bound: n = 0 reads entry 0).
             let oldest = e.trail[0] != 0 && on_screen(e.trail_ring[e.trail_n().max(1) - 1].pos);
-            !inside && !oldest && e.flags & A_KEEP_OFFSCREEN == 0
+            !inside && !oldest && !e.has(EnemyFlags::KEEP_OFFSCREEN)
+        } else {
+            if inside {
+                e.insert(EnemyFlags::ON_SCREEN);
+            }
+            false
         }
     }
 
@@ -1322,15 +1554,15 @@ impl EnemyManager {
         let (mut v, mut sum) = (2000, 0);
         for j in 0..self.enemies.len() {
             let e = &mut self.enemies[j];
-            if !e.alive() || e.flags & A_BOSS != 0 || e.flags_b & B_CANNOT_DIE != 0 {
+            if !e.alive() || e.has(EnemyFlags::BOSS) || e.has_b(EnemyFlagsB::CANNOT_DIE) {
                 continue;
             }
             e.life = 0;
-            if e.flags & A_CANCEL_BONUS != 0 {
+            if e.has(EnemyFlags::CANCEL_BONUS) {
                 e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
                 let mut at = vec![e.final_pos];
                 // u8 e+0x534C trail on: entries k = 0, 6, 12, … < n.
-                if e.trail[0] as u8 != 0 {
+                if lo8(e.trail[0]) != 0 {
                     at.extend((0..e.trail_n()).step_by(6).map(|k| e.trail_ring[k].pos));
                 }
                 for p in at {
@@ -1377,7 +1609,7 @@ impl EnemyManager {
     pub fn chain_count(&self, idx: usize) -> i32 {
         let (mut next, mut n) = (self.enemies[idx].chain_next, 0);
         while let Some(c) = next {
-            if n as usize > MAX_ENEMIES {
+            if table_index(n) > MAX_ENEMIES {
                 break;
             }
             next = self.enemies[c].chain_next;
@@ -1409,14 +1641,26 @@ impl EnemyManager {
         if self.enemies[idx].chain_next.is_none() {
             return;
         }
-        let mut n = self.chain_count(idx);
-        // Popup colour chosen once from the original n (13 §4).
-        let colour = match n {
-            ..2 => 0xFFFFFFFF,
-            2..=5 => 0xFFFFFFD0,
-            6..=9 => 0xFFFFFFB0,
-            _ => 0xFFFFFF80,
-        };
+        let n = self.chain_count(idx);
+        let colour = chain_popup_colour(n);
+        let kids = self.detach_children(idx);
+        if let Some(anm) = anm.as_deref_mut() {
+            self.reward_children(idx, &kids, n, colour, anm, sys);
+        }
+        // 07 §10.3a step 4: always, reward or not.
+        for &c in &kids {
+            let e = &mut self.enemies[c];
+            e.extra_point = 0;
+            e.extra_power = 0;
+            e.item = -2;
+        }
+        if let Some(anm) = anm {
+            self.boss_chain_reward(idx, anm, sys);
+        }
+    }
+
+    // 07 §10.3a step 2: walk +8 from the root, mark each child chain-killed and cut its links; the root's +8 := 0.
+    fn detach_children(&mut self, idx: usize) -> Vec<EnemyIdx> {
         let parent_pos = self.enemies[idx].pos;
         let mut kids = Vec::new();
         let mut next = std::mem::take(&mut self.enemies[idx].chain_next);
@@ -1427,103 +1671,90 @@ impl EnemyManager {
             kids.push(c);
             let e = &mut self.enemies[c];
             next = e.chain_next.take();
-            if e.flags & A_FOLLOW != 0 {
+            if e.has(EnemyFlags::FOLLOW) {
                 e.pos_offset = parent_pos;
             }
-            e.flags |= A_CHAIN_KILLED;
+            e.insert(EnemyFlags::CHAIN_KILLED);
             e.root = None;
             e.chain_prev = None;
         }
-        if let Some(anm) = anm.as_deref_mut() {
-            let cancel = if self.enemies[idx].flags & A_BOSS != 0 {
-                7
-            } else {
-                9
-            };
-            let shot = crate::pl!(sys).shot_type;
-            let boss_or_spell = self.bosses.iter().any(Option::is_some) && self.g.spell.is_none();
-            for (k, &c) in kids.iter().enumerate() {
-                // Orb count c and cancel circle per child (07 §10.3a step 3).
-                let orbs = match shot {
-                    0..4 => {
-                        if n < 8 {
-                            2 * n + 10
-                        } else {
-                            26
-                        }
-                    }
-                    _ if shot % 2 == 0 => {
-                        if n < 4 {
-                            6 * n + 16
-                        } else {
-                            40
-                        }
-                    }
-                    _ => {
-                        if n < 10 {
-                            2 * n + 6
-                        } else {
-                            26
-                        }
-                    }
-                };
-                // Quirk kept (13 §4): n /= 3 inside the loop while bombing, so it compounds per child.
-                if crate::pl!(sys).bombing {
-                    n /= 3;
-                }
-                let e = &mut self.enemies[c];
-                sys.ov.popup_large(e.final_pos, n, 0, colour, 1.0);
-                e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
-                let pos = e.final_pos;
-                crate::pl!(sys).cancel_circle([pos[0], pos[1]], 32.0, 2.0, 8, cancel);
-                for _ in 0..orbs {
-                    let r = sys.rng.next_f32() * (2 * orbs) as f32;
-                    let a = sys.rng.next_signed() * std::f32::consts::PI;
-                    // Vec3_FromPolar 0x42B01D (05 §10 trig sites).
-                    let d = crate::fmath::polar(a, r);
-                    self.spawn_item(
-                        anm,
-                        [pos[0] + d[0], pos[1] + d[1], 0.0],
-                        crate::item::TIME_ORB as i32,
-                        3,
-                        sys,
-                    );
-                }
-                if !boss_or_spell {
-                    self.enemies[c].item = 8;
-                    self.drop_items(c, anm, Some(0), sys);
-                }
-                // SE 2 + (k & 1) by the child's index in the chain walk (07 §10.3a, 13 §1.4).
-                sys.sound
-                    .play_at(crate::sound::ENEP0 + (k & 1) as i32, pos[0]);
+        kids
+    }
+
+    // 07 §10.3a step 3 per child k: cancel circle, popup, c time orbs, drops, SE.
+    fn reward_children(
+        &mut self,
+        idx: usize,
+        kids: &[EnemyIdx],
+        mut n: i32,
+        colour: u32,
+        anm: &mut AnmManager,
+        sys: &mut Sys,
+    ) {
+        let cancel = if self.enemies[idx].has(EnemyFlags::BOSS) {
+            7
+        } else {
+            9
+        };
+        let shot = crate::pl!(sys).shot_type;
+        let boss_or_spell = self.bosses.iter().any(Option::is_some) && self.g.spell.is_none();
+        for (k, &c) in kids.iter().enumerate() {
+            let orbs = child_orbs(shot, n);
+            // Quirk kept (13 §4): n /= 3 inside the loop while bombing, so it compounds per child.
+            if crate::pl!(sys).bombing {
+                n /= 3;
             }
-        }
-        for &c in &kids {
             let e = &mut self.enemies[c];
-            e.extra_point = 0;
-            e.extra_power = 0;
-            e.item = -2;
-        }
-        let e = &self.enemies[idx];
-        // Boss chain kill (13 §4): popup of e+0x3380 at scale 2, 2·count time orbs within 128 px.
-        if let Some(anm) = anm {
-            let (pos, count) = (e.final_pos, e.children);
-            sys.ov.popup_large(pos, count, 0, 0xFFF0F00F, 2.0);
-            for _ in 0..2 * count {
-                let r = sys.rng.next_f32() * 128.0;
+            sys.ov.popup_large(e.final_pos, n, 0, colour, 1.0);
+            e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
+            let pos = e.final_pos;
+            crate::pl!(sys).cancel_circle([pos[0], pos[1]], 32.0, 2.0, 8, cancel);
+            for _ in 0..orbs {
+                let r = sys.rng.next_f32() * (2 * orbs) as f32;
                 let a = sys.rng.next_signed() * std::f32::consts::PI;
+                // Vec3_FromPolar 0x42B01D (05 §10 trig sites).
                 let d = crate::fmath::polar(a, r);
                 self.spawn_item(
                     anm,
                     [pos[0] + d[0], pos[1] + d[1], 0.0],
-                    crate::item::TIME_ORB as i32,
-                    1,
+                    i32::from(crate::item::TIME_ORB),
+                    3,
                     sys,
                 );
             }
-            crate::pl!(sys).cancel_circle([pos[0], pos[1]], 32.0, 1.0, 16, 7);
-            crate::bm!(sys).items.collect_timer = 0;
+            if !boss_or_spell {
+                self.enemies[c].item = 8;
+                self.drop_items(c.idx(), anm, Some(0), sys);
+            }
+            // SE 2 + (k & 1) by the child's index in the chain walk (07 §10.3a, 13 §1.4).
+            let se = if k % 2 == 0 {
+                crate::sound::ENEP0
+            } else {
+                crate::sound::ENEP1
+            };
+            sys.sound.play_at(se, pos[0]);
         }
+    }
+
+    // Boss chain kill (07 §10.3a step 5, 13 §4): popup of e+0x3380 at scale 2, 2·count time orbs within 128 px.
+    fn boss_chain_reward(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
+        let e = &self.enemies[idx];
+        let (pos, count) = (e.final_pos, e.children);
+        sys.ov.popup_large(pos, count, 0, 0xFFF0_F00F, 2.0);
+        for _ in 0..2 * count {
+            let r = sys.rng.next_f32() * 128.0;
+            let a = sys.rng.next_signed() * std::f32::consts::PI;
+            let d = crate::fmath::polar(a, r);
+            self.spawn_item(
+                anm,
+                [pos[0] + d[0], pos[1] + d[1], 0.0],
+                i32::from(crate::item::TIME_ORB),
+                1,
+                sys,
+            );
+        }
+        crate::pl!(sys).cancel_circle([pos[0], pos[1]], 32.0, 1.0, 16, 7);
+        crate::bm!(sys).items.collect_timer = 0;
     }
 
     // Single-kill path of 0x42ADB0 (13 §4, 08 §8.4): gauge −gauge/12, gauge lock 50, one time orb.
@@ -1532,7 +1763,7 @@ impl EnemyManager {
             let p = crate::pl!(sys);
             // 07 §10.3a: GaugeAdd(−gauge/12, not forced), so nothing while bombing; clamped.
             if !p.bombing {
-                let g = p.stats.gauge as i32;
+                let g = i32::from(p.stats.gauge);
                 p.stats.gauge_add(-g / 12);
             }
             p.gauge_c.set(0);
@@ -1542,8 +1773,8 @@ impl EnemyManager {
         let e = &mut self.enemies[idx];
         e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
         let pos = e.final_pos;
-        sys.ov.popup_large(pos, 1, 0, 0xFFFFFFFF, 1.0);
-        self.spawn_item(anm, pos, crate::item::TIME_ORB as i32, 1, sys);
+        sys.ov.popup_large(pos, 1, 0, 0xFFFF_FFFF, 1.0);
+        self.spawn_item(anm, pos, i32::from(crate::item::TIME_ORB), 1, sys);
         let e = &mut self.enemies[idx];
         e.item = -2;
         e.extra_point = 0;
@@ -1585,12 +1816,12 @@ impl EnemyManager {
         let req = std::mem::take(&mut crate::pl!(sys).dissolve_req);
         for b in self.bosses.into_iter().flatten() {
             if req & crate::player::DISSOLVE_BEGIN != 0 {
-                self.enemies[b].flags &= !A_SHOT_HIT;
+                self.enemies[b].remove(EnemyFlags::SHOT_HIT);
             }
             if req & crate::player::DISSOLVE_END != 0 {
-                self.kill_chain(b, None, sys);
+                self.kill_chain(b.idx(), None, sys);
                 self.enemies[b].life = 0;
-                self.enemies[b].flags &= !A_LAST_SPELL;
+                self.enemies[b].remove(EnemyFlags::LAST_SPELL);
             }
         }
     }
@@ -1624,7 +1855,7 @@ impl EnemyManager {
         // Tail of every op 123 (07 §11.1, RE-Q56): after the time-reward test, the boss loses flag A bit 27,
         // g_Gui +4 := 0, spell flag bit 11 := 0.
         if let Some(b) = self.g.spell_boss.take() {
-            self.enemies[b].flags &= !A_FIXED_BONUS;
+            self.enemies[b].remove(EnemyFlags::FIXED_BONUS);
             self.g.fixed_bonus = false;
         }
         self.g.bonus_frozen = false;
@@ -1632,6 +1863,7 @@ impl EnemyManager {
 
     // Card-active block of Spell_End 0x4161B0 (07 §11.1).
     fn end_active_spell(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
+        use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL};
         let Some(s) = self.g.spell.take() else { return };
         self.keep_bonus(&s);
         sys.gui.push(crate::gui::Req::BossHide);
@@ -1654,14 +1886,13 @@ impl EnemyManager {
             p.state = 3;
             p.state_timer.set(70);
         }
-        use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL};
         if !s.capture || p.deaths != s.deaths0 || p.bombs_started != s.bombs0 {
             *sys.flags &= !(F_LAST_SPELL | F_LAST_CAPTURED);
             // Not captured: the start ring is freed, +0xF4 := 0 (07 §11.1).
             sys.fx.free(crate::effect::FIX_SPELL_INDEX);
             p.stats
                 .popups
-                .push(crate::player::Popup::Message(5 + s.last as u8, 0));
+                .push(crate::player::Popup::Message(5 + u8::from(s.last), 0));
             return;
         }
         if *sys.flags & (F_LAST_SPELL | F_LAST_CAPTURED) != 0 {
@@ -1740,7 +1971,7 @@ impl EnemyManager {
             (None, None) => return,
         };
         *bonus = bonus.wrapping_add(n);
-        if (*bonus as u32) < max as u32 {
+        if bonus.cast_unsigned() < max.cast_unsigned() {
             *decay += n / 120;
         } else {
             *bonus = max;
@@ -1779,10 +2010,12 @@ impl EnemyManager {
                     e.vm.scale[0] = 4.0;
                 }
             });
-        } else if !self.g.bonus_frozen && boss.flags & A_FIXED_BONUS == 0 {
-            let d = ((s.decay as u32 / 60) as f32 * anm.speed) as u32;
-            let b = (s.bonus as u32).wrapping_sub(d);
-            s.bonus = (b - b % 10) as i32;
+        } else if !self.g.bonus_frozen && !boss.has(EnemyFlags::FIXED_BONUS) {
+            // Unsigned rate / 60 scaled by game speed, ftol to u32 (07 §11.1 step 1.3).
+            #[expect(clippy::cast_sign_loss, reason = "f32 → u32 ftol of the original")]
+            let d = ((s.decay.cast_unsigned() / 60) as f32 * anm.speed) as u32;
+            let b = s.bonus.cast_unsigned().wrapping_sub(d);
+            s.bonus = (b - b % 10).cast_signed();
         }
         // Step 1.5 reads the boss's live timeout e+0x3378: after a timeout (−1) the restart gets −101 and the slot
         // stays inactive, so the ring stays at radius 8 (07 §11.1 step 5).
@@ -1790,9 +2023,9 @@ impl EnemyManager {
         let follow = (!self.g.spell_flag6)
             .then(|| -> [f32; 3] { std::array::from_fn(|k| boss.pos[k] + boss.pos_offset[k]) });
         let d = if active && s.last {
-            -0.031415928
+            -0.031_415_93
         } else {
-            0.015707964
+            0.015_707_964
         };
         sys.fx.get(ring, |e| {
             // Step 1.4: wavy start ring, amplitude +0x32C := VM pos.y until it reaches 0, then plain (+0x334 := 0).
@@ -1808,8 +2041,8 @@ impl EnemyManager {
             }
             // Step 1.6: the ring follows the boss unless spell bit 6.
             if let Some(target) = follow {
-                for k in 0..2 {
-                    e.centre[k] += (target[k] - e.centre[k]) / 16.0;
+                for (c, t) in e.centre.iter_mut().zip(target).take(2) {
+                    *c += (t - *c) / 16.0;
                 }
                 e.centre[2] = 0.0;
             }
@@ -1860,7 +2093,11 @@ impl EnemyManager {
         ];
         sys.fx.get(ring, |e| {
             e.centre = centre;
-            let d = if t > 80 { -0.05235988 } else { -0.015707964 };
+            let d = if t > 80 {
+                -0.052_359_88
+            } else {
+                -0.015_707_964
+            };
             e.ring.start = anmvm::wrap_add(e.ring.start, d);
             // +0x32C := VM pos.y every frame (no +0x334 test here).
             e.ring.amp = e.vm.pos[1];
@@ -1923,7 +2160,7 @@ impl EnemyManager {
         let e = &mut self.enemies[idx];
         let p = e.final_pos;
         let mut items = Vec::new();
-        let mode = mode.unwrap_or(if e.bomb_hit { 1 } else { 0 });
+        let mode = mode.unwrap_or(u8::from(e.bomb_hit));
         let mut sparks = 0;
         if e.item >= 0 {
             items.push((p, e.item, mode));
@@ -1939,14 +2176,10 @@ impl EnemyManager {
         }
         if sparks > 0 {
             let spark = self.enemies[idx].death_bytes[1].wrapping_add(4);
-            sys.fx.spawn(anm, sys.rng, spark, p, sparks, 0xFFFFFFFF);
+            sys.fx.spawn(anm, sys.rng, spark, p, sparks, 0xFFFF_FFFF);
         }
         let e = &mut self.enemies[idx];
-        let power_kind = if crate::pl!(sys).stats.power < 128.0 {
-            0
-        } else {
-            1
-        };
+        let power_kind = i32::from(crate::pl!(sys).stats.power >= 128.0);
         for (n, kind) in [(e.extra_power, power_kind), (e.extra_point, 1)] {
             for _ in 0..n.max(0) {
                 let dx = sys.rng.next_f32() * 128.0 - 64.0;
@@ -1971,10 +2204,10 @@ impl EnemyManager {
     ) {
         let e = &mut self.enemies[idx];
         e.reset_for_jump();
-        e.flags_b &= !B_WARN_MASK;
+        e.remove_b(EnemyFlagsB::WARN);
         self.kill_chain(idx, if reward { Some(&mut *anm) } else { None }, sys);
         self.kill_non_bosses();
-        if self.enemies[idx].flags & A_BOSS != 0 {
+        if self.enemies[idx].has(EnemyFlags::BOSS) {
             self.protect_player(crate::pl!(sys), 70);
         }
     }
@@ -1984,7 +2217,7 @@ impl EnemyManager {
     fn kill_non_bosses(&mut self) {
         for j in 0..self.enemies.len() {
             let e = &mut self.enemies[j];
-            if !e.alive() || e.flags & A_BOSS != 0 {
+            if !e.alive() || e.has(EnemyFlags::BOSS) {
                 continue;
             }
             e.life = 0;
@@ -2006,7 +2239,7 @@ impl EnemyManager {
     // Low-life warning level 0–3 (07 §10.2); `diff` = life − threshold, or life without thresholds.
     fn warn_level(&self, e: &Enemy, diff: i32, with_thr: bool) -> u32 {
         let card = self.g.spell.is_some();
-        let t: [i32; 3] = match (with_thr, card, e.flags & A_BOSS != 0) {
+        let t: [i32; 3] = match (with_thr, card, e.has(EnemyFlags::BOSS)) {
             (true, false, _) => [500, 1500, 2200],
             (true, true, _) => [120, 200, 300],
             (false, false, true) => [600, 1600, 2400],
@@ -2019,7 +2252,7 @@ impl EnemyManager {
 
     // Enemy_CheckLifeThresholds 0x42B490 (07 §10.2): first k with life < threshold[k] wins; max life unchanged.
     fn check_thresholds(&mut self, anm: &mut AnmManager, idx: usize, sys: &mut Sys) -> bool {
-        self.enemies[idx].flags_b &= !B_WARN_MASK;
+        self.enemies[idx].remove_b(EnemyFlagsB::WARN);
         let e = &self.enemies[idx];
         let mut level = 0;
         let mut hit = None;
@@ -2061,7 +2294,7 @@ impl EnemyManager {
             return false;
         }
         // Every call on a slot-0 boss, before the fire test and before this frame's step-7 tick (07 §10.2).
-        if e.flags & A_BOSS != 0 && e.boss_slot == 0 {
+        if e.has(EnemyFlags::BOSS) && e.boss_slot == 0 {
             self.g.hud_timer = (e.timeout - e.boss_timer.cur) / 60;
         }
         if e.timeout < 0 || e.boss_timer.cur < e.timeout {
@@ -2080,7 +2313,7 @@ impl EnemyManager {
         e.timeout = -1;
         e.timeout_sub = e.death_sub;
         e.boss_timer.set(0);
-        let fixed = e.flags & A_FIXED_BONUS != 0;
+        let fixed = e.has(EnemyFlags::FIXED_BONUS);
         self.jump_main(idx, sub);
         // 0x42BC50: the card stays active, its own op 123 ends it.
         if !fixed {
@@ -2107,7 +2340,7 @@ impl EnemyManager {
         let e = &mut self.enemies[idx];
         // The hit flash needs only d > 0 at step 6, also without bit 3 (07 §10.1 step 7).
         e.hit = true;
-        if e.flags & A_LOSES_LIFE == 0 {
+        if !e.has(EnemyFlags::LOSES_LIFE) {
             return;
         }
         let child = e.root.is_some();
@@ -2131,7 +2364,7 @@ impl EnemyManager {
             _ => d,
         };
         if e.dmg_timer.cur > 0 {
-            d = if e.flags & A_BOSS != 0 { d / 9 } else { 0 };
+            d = if e.has(EnemyFlags::BOSS) { d / 9 } else { 0 };
         }
         e.life -= d;
         e.last_damage = d;
@@ -2143,7 +2376,11 @@ impl EnemyManager {
             let root = &mut self.enemies[r];
             let mut rd = d / 2;
             if root.dmg_timer.cur > 0 {
-                rd = if root.flags & A_BOSS != 0 { rd / 9 } else { 0 };
+                rd = if root.has(EnemyFlags::BOSS) {
+                    rd / 9
+                } else {
+                    0
+                };
             }
             // Unused −1 thresholds count as 0.
             let floor = root.thresholds.iter().fold(0, |m, &t| m.max(t));
@@ -2168,11 +2405,12 @@ impl EnemyManager {
     // Death processing (07 §10.3): runs after this frame's Ecl_Run, so the death sub starts next frame.
     fn death(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
         let e = &self.enemies[idx];
-        if e.life >= 1 || e.flags_b & (B_DEATH_LATCH | B_CANNOT_DIE) != 0 || !e.alive() {
+        if e.life >= 1 || e.has_b(EnemyFlagsB::DEATH_LATCH | EnemyFlagsB::CANNOT_DIE) || !e.alive()
+        {
             return;
         }
         let e = &mut self.enemies[idx];
-        e.flags_b |= B_DEATH_LATCH;
+        e.insert_b(EnemyFlagsB::DEATH_LATCH);
         e.bonus_seconds = (e.timeout - e.boss_timer.cur) / 60;
         e.timeout = -1;
         e.thresholds = [-1; 4];
@@ -2190,30 +2428,35 @@ impl EnemyManager {
             }
         }
         let e = &mut self.enemies[idx];
-        let mode = (e.flags >> A_DEATH_SHIFT) & 7;
-        let boss = e.flags & A_BOSS != 0;
+        let mode = e.death_mode();
+        let boss = e.has(EnemyFlags::BOSS);
         match mode {
             0 => {
                 let sc = e.score;
-                e.flags &= !A_ALIVE;
+                e.remove(EnemyFlags::ALIVE);
                 self.add_score(crate::pl!(sys), sc);
                 self.end_aura(idx, sys);
             }
             1 => {
                 let sc = e.score;
-                e.flags |= A_DEAD_CONT;
-                e.flags &= !(A_CONTACT | A_LOSES_LIFE | A_SHOT_HIT);
+                e.insert(EnemyFlags::DEAD_CONT);
+                e.remove(EnemyFlags::CONTACT | EnemyFlags::LOSES_LIFE | EnemyFlags::SHOT_HIT);
                 self.add_score(crate::pl!(sys), sc);
             }
             // Latch B bit 3 stays until life > 0 again; HUD boss display off for every mode-3 enemy (07 §10.3).
             3 => {
                 e.life = 1;
-                e.flags &= !(A_LOSES_LIFE | 7 << A_DEATH_SHIFT | 3 << 30);
+                e.remove(
+                    EnemyFlags::LOSES_LIFE
+                        | EnemyFlags::DEATH_MODE
+                        | EnemyFlags::LAST_SPELL
+                        | EnemyFlags::BOMB_IMMUNE,
+                );
                 self.g.hud_boss = false;
                 let db = e.death_bytes[0];
                 let pos = e.final_pos;
                 if db < 0x80 {
-                    sys.fx.spawn(anm, sys.rng, db, pos, 3, 0xFFFFFFFF);
+                    sys.fx.spawn(anm, sys.rng, db, pos, 3, 0xFFFF_FFFF);
                 }
                 self.end_aura(idx, sys);
                 self.protect_player(crate::pl!(sys), 90);
@@ -2235,9 +2478,9 @@ impl EnemyManager {
             self.enemies[idx].life = 0;
         }
         // Every death mode, also 3 and 4–7 (07 §10.3). RNG order: drops → death sparks ×4 → time orb.
-        if self.enemies[idx].flags & A_CHAIN_KILLED == 0 {
+        if !self.enemies[idx].has(EnemyFlags::CHAIN_KILLED) {
             sys.sound.play_at(
-                if idx % 2 == 0 {
+                if idx.is_multiple_of(2) {
                     crate::sound::ENEP0
                 } else {
                     crate::sound::ENEP1
@@ -2246,16 +2489,16 @@ impl EnemyManager {
             );
             // Both spawns only when the signed byte e+0x3310 ≥ 0.
             if db[0] < 0x80 {
-                sys.fx.spawn(anm, sys.rng, db[0], pos, 1, 0xFFFFFFFF);
+                sys.fx.spawn(anm, sys.rng, db[0], pos, 1, 0xFFFF_FFFF);
                 sys.fx
-                    .spawn(anm, sys.rng, db[1].wrapping_add(4), pos, 4, 0xFFFFFFFF);
+                    .spawn(anm, sys.rng, db[1].wrapping_add(4), pos, 4, 0xFFFF_FFFF);
             }
             let max = {
                 let p = crate::pl!(sys);
                 p.stats.human_max() || p.stats.youkai_max()
             };
             if max {
-                self.spawn_item(anm, pos, crate::item::TIME_ORB as i32, 1, sys);
+                self.spawn_item(anm, pos, i32::from(crate::item::TIME_ORB), 1, sys);
             }
         }
         if mode == 0 {
@@ -2293,31 +2536,31 @@ impl EnemyManager {
         let youkai = self.g.player_mode != 0;
         let e = &mut self.enemies[idx];
         let p = e.final_pos;
-        if e.flags & A_YOUKAI == 0 {
+        if !e.has(EnemyFlags::YOUKAI) {
             if youkai {
-                sys.fx.spawn(anm, sys.rng, 0x1F, p, 1, 0x80303080);
+                sys.fx.spawn(anm, sys.rng, 0x1F, p, 1, 0x8030_3080);
                 sys.fx.get(e.fx_aura, |x| x.vm.pending_interrupt = 2);
                 sys.sound.play_at(crate::sound::OPHIDE, p[0]);
                 e.layer = 0;
             }
             // Effect 38 (10 RNG draws) when the timer "changed and even", also on the switching frame.
             let t = e.boss_timer;
-            if e.flags_b & 1 << 1 != 0 && t.cur != t.prev && t.cur % 2 == 0 {
-                sys.fx.spawn(anm, sys.rng, 38, p, 1, 0xFFFFFFFF);
+            if e.has_b(EnemyFlagsB::SPARKLE) && t.cur != t.prev && t.cur % 2 == 0 {
+                sys.fx.spawn(anm, sys.rng, 38, p, 1, 0xFFFF_FFFF);
             }
         } else if !youkai {
-            sys.fx.spawn(anm, sys.rng, 0x1E, p, 1, 0x80803030);
+            sys.fx.spawn(anm, sys.rng, 0x1E, p, 1, 0x8080_3030);
             sys.fx.get(e.fx_aura, |x| x.vm.pending_interrupt = 1);
             sys.sound.play_at(crate::sound::OPSHOW, p[0]);
             e.layer = 2;
         }
         e.mode_bits = if youkai { 0x40 } else { 0x20 };
-        e.set_flag(A_YOUKAI, youkai);
+        e.set(EnemyFlags::YOUKAI, youkai);
     }
 
     // EnemyMgr_Calc per enemy (07 §10.1).
     fn update(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
-        if self.enemies[idx].flags & A_CHAIN_KILLED != 0 {
+        if self.enemies[idx].has(EnemyFlags::CHAIN_KILLED) {
             let e = &mut self.enemies[idx];
             e.life = 0;
             e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
@@ -2329,8 +2572,8 @@ impl EnemyManager {
         let held = {
             let p = crate::pl!(sys);
             let e = &self.enemies[idx];
-            e.flags_b & B_PAUSED != 0
-                || (e.flags & A_LAST_SPELL != 0 && (p.bombing || p.state != 0))
+            e.has_b(EnemyFlagsB::PAUSED)
+                || (e.has(EnemyFlags::LAST_SPELL) && (p.bombing || p.state != 0))
         };
         if held {
             self.enemies[idx]
@@ -2343,7 +2586,7 @@ impl EnemyManager {
         if !held {
             let e = &mut self.enemies[idx];
             if e.life > 0 {
-                e.flags_b &= !B_DEATH_LATCH;
+                e.remove_b(EnemyFlagsB::DEATH_LATCH);
             }
             self.death(idx, anm, sys);
         }
@@ -2354,7 +2597,7 @@ impl EnemyManager {
 
     // 07 §10.1 steps 3–6; false when the enemy was freed (op 1 delete, off screen).
     fn update_body(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) -> bool {
-        if self.enemies[idx].flags & A_MODE_REACT != 0 {
+        if self.enemies[idx].has(EnemyFlags::MODE_REACT) {
             self.react_player_mode(idx, anm, sys);
         }
         // 07 §10.1 step 4: a threshold or timeout switch re-runs the whole body in the same frame.
@@ -2382,16 +2625,17 @@ impl EnemyManager {
         }
         self.run_vms(idx, anm, sys.rng);
         // Step 6 is skipped for flag A bits 4/5/11, and for bit 31 while the player is bombing (07 §10.1 step 6).
-        let flags = self.enemies[idx].flags;
-        if flags & (A_HIDDEN | 1 << 5 | A_YOUKAI) == 0
-            && !(flags & 1 << 31 != 0 && crate::pl!(sys).bombing)
+        let flags = self.enemies[idx].a_flags();
+        if !flags.intersects(EnemyFlags::HIDDEN | EnemyFlags::INVISIBLE | EnemyFlags::YOUKAI)
+            && !(flags.contains(EnemyFlags::BOMB_IMMUNE) && crate::pl!(sys).bombing)
         {
             self.player_collision(idx, anm, sys);
         }
         // Debug: `TH08_ENEMY_DMG` damage per frame.
         if self.debug_damage > 0
-            && self.enemies[idx].flags & (A_SHOT_HIT | A_HIDDEN) == A_SHOT_HIT
-            && self.enemies[idx].flags & A_ON_SCREEN != 0
+            && self.enemies[idx].has(EnemyFlags::SHOT_HIT)
+            && !self.enemies[idx].has(EnemyFlags::HIDDEN)
+            && self.enemies[idx].has(EnemyFlags::ON_SCREEN)
         {
             self.damage(crate::pl!(sys), idx, self.debug_damage, false);
         }
@@ -2405,12 +2649,12 @@ impl EnemyManager {
         let e = &mut self.enemies[idx];
         // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
         let hit = std::mem::take(&mut e.hit);
-        if e.flags & A_YOUKAI != 0 {
+        if e.has(EnemyFlags::YOUKAI) {
             // Youkai state skips the hit flash entirely (no counter change, no sfx); BGRA (0x20, 0x20, 0xC0, a / 2).
             e.vm.flags |= anmvm::F_COLOR2;
             e.vm.color2 = [0xC0, 0x20, 0x20, e.vm.color[anmvm::A] / 2];
         } else if hit && !e.flash {
-            let low = (e.flags_b >> 4) & 3 >= 2;
+            let low = e.warning() >= 2;
             sys.sound.play_at(
                 if low {
                     crate::sound::DAMAGE1
@@ -2429,28 +2673,30 @@ impl EnemyManager {
             e.vm.flags &= !anmvm::F_COLOR2;
         }
         // Boss HUD target +0x30 (12 §5.1): slot-0 boss, no dialogue; the enemy's own max life e+0x2E00.
-        if e.flags & A_BOSS != 0 && e.boss_slot == 0 && !dialogue {
+        if e.has(EnemyFlags::BOSS) && e.boss_slot == 0 && !dialogue {
             self.g.hud_bar_target = e.life as f32 / e.max_life as f32;
         }
         // ENEMY marker (12 §5.10): x + 32 (−999 while not drawn); mode = warning level + 1, else 1 on a hit flash.
-        if e.flags & A_BOSS != 0 && (0..4).contains(&e.boss_slot) {
-            let x = if e.flags & A_HIDDEN != 0 {
+        if e.has(EnemyFlags::BOSS)
+            && let Some(slot) = usize::try_from(e.boss_slot).ok().filter(|&k| k < 4)
+        {
+            let x = if e.has(EnemyFlags::HIDDEN) {
                 -999.0
             } else {
                 e.final_pos[0] + 32.0
             };
-            let level = ((e.flags_b >> 4) & 3) as u8;
+            let level = e.warning();
             let mode = if level != 0 {
                 level + 1
             } else {
-                (e.vm.flags & anmvm::F_COLOR2 != 0) as u8
+                u8::from(e.vm.flags & anmvm::F_COLOR2 != 0)
             };
-            sys.ov.marker_track(e.boss_slot as usize, x, mode);
+            sys.ov.marker_track(slot, x, mode);
         }
         // Enemy_UpdateOrbitEffects 0x42E010 (07 §10.1 step 7): after the marker; a boss mode-0/1 death has
         // already drained them. 13 §2.6b: centred on the base pos e+0x2D34, not the final pos.
         // A held enemy runs it too (unconditional call in the shared tail, 07 §10.1 step 2).
-        let (c, d, hidden) = (e.pos, e.orbit_target, e.flags & A_HIDDEN != 0);
+        let (c, d, hidden) = (e.pos, e.orbit_target, e.has(EnemyFlags::HIDDEN));
         for &i in &e.fx_attached {
             sys.fx.get(i, |x| x.orbit_follow(c, d, hidden));
         }
@@ -2461,7 +2707,7 @@ impl EnemyManager {
             e.dmg_timer.dec(gs, sr);
         }
         // Linked only if still alive: a mode-0 death this frame skips the link (07 §10.1 step 7).
-        if e.alive() && e.flags & A_HIDDEN == 0 {
+        if e.alive() && !e.has(EnemyFlags::HIDDEN) {
             self.draw_lists[e.layer.min(3) as usize].push(idx);
         }
     }
@@ -2471,7 +2717,7 @@ impl EnemyManager {
         {
             let p = crate::pl!(sys);
             self.g.player = p.pos;
-            self.g.player_mode = p.mode as i32;
+            self.g.player_mode = i32::from(p.mode);
         }
         self.dissolve_requests(sys);
         let (deaths, bombs) = {
@@ -2496,7 +2742,7 @@ impl EnemyManager {
             let p = crate::pl!(sys);
             p.stats.rec.progress += 1;
             if self.clock.cur > 15 {
-                let human = (p.focus == 0) as u32;
+                let human = u32::from(p.focus == 0);
                 p.stats.rec.total += 1;
                 p.stats.rec.human += human;
             }
@@ -2529,7 +2775,7 @@ impl EnemyManager {
         }
         let pull = self.bosses[0]
             .map(|i| &self.enemies[i])
-            .filter(|e| e.flags & A_LOSES_LIFE != 0)
+            .filter(|e| e.has(EnemyFlags::LOSES_LIFE))
             .map(|e| e.final_pos);
         sys.fx.boss = pull;
         let dialogue = Self::dialogue_active(sys);
@@ -2560,27 +2806,27 @@ impl EnemyManager {
 
     // After-image trail sprite copies (07 §10.6, op 157), oldest first; entry 0 is not drawn. Yields (i, entry).
     fn trail_copies(e: &Enemy) -> impl Iterator<Item = (i32, TrailEntry)> + '_ {
-        let n = e.trail_n() as i32;
+        let n = e.trail_len();
         // Port-only bound: a step b ≤ 0 would never end the walk (data: b ≥ 1).
         let b = e.trail[3].max(1);
         std::iter::successors(Some(n - 1), move |&i| Some(i - b))
             .take_while(|&i| i > 0)
-            .filter(move |&i| e.trail_ring[i as usize].pos[0] >= -990.0)
-            .map(move |i| (i, e.trail_ring[i as usize]))
+            .filter(move |&i| e.trail_ring[table_index(i)].pos[0] >= -990.0)
+            .map(move |i| (i, e.trail_ring[table_index(i)]))
     }
 
     // One sprite copy (07 §10.6): rotation (flag A bit 25), x scale (flag 2) and alpha (flag 4) from the main VM's
     // own `scale` / alpha `a`; pos = entry + pos offset + playfield origin at z 0.3.
     fn trail_copy(
         vm: &mut AnmVm,
-        e_flags: u32,
+        e_flags: EnemyFlags,
         f: i32,
         (i, t): (i32, TrailEntry),
         n: i32,
         scale: [f32; 2],
         a: i32,
     ) {
-        if e_flags & (1 << 25) != 0 && vm.rotation[2] != t.angle {
+        if e_flags.contains(EnemyFlags::ROTATE) && vm.rotation[2] != t.angle {
             vm.rotation[2] = t.angle;
             vm.flags |= anmvm::F_ROT_DIRTY;
         }
@@ -2588,7 +2834,7 @@ impl EnemyManager {
             vm.scale[0] = scale[0] - i as f32 * scale[0] / n as f32;
         }
         if f & 4 != 0 {
-            vm.color[anmvm::A] = (a - a * i / n) as u8;
+            vm.color[anmvm::A] = lo8(a - a * i / n);
         }
         let off = vm.pos_offset;
         vm.pos = [t.pos[0] + off[0] + 32.0, t.pos[1] + off[1] + 16.0, 0.3];
@@ -2597,16 +2843,16 @@ impl EnemyManager {
     // Trail draw step, before the main VM: the copies' writes on the main VM, then its scale and colour restored.
     // Returns the last copy's draw pos (07 §10.6 QUIRK: kept by the main VM), None when no copy was drawn.
     fn trail_step(anm: &AnmManager, e: &mut Enemy) -> Option<[f32; 3]> {
-        let (f, n) = (e.trail[0], e.trail_n() as i32);
+        let (f, n) = (e.trail[0], e.trail_len());
         // Flag 8: the ring strip writes nothing.
         if f & 8 != 0 {
             return None;
         }
-        let (scale, color) = (e.vm.scale, e.vm.color);
+        let (scale, color, flags) = (e.vm.scale, e.vm.color, e.a_flags());
         let copies: Vec<_> = Self::trail_copies(e).collect();
         let mut last = None;
         for c in copies {
-            Self::trail_copy(&mut e.vm, e.flags, f, c, n, scale, color[anmvm::A] as i32);
+            Self::trail_copy(&mut e.vm, flags, f, c, n, scale, i32::from(color[anmvm::A]));
             anm.prepare(&mut e.vm, 2);
             last = Some(e.vm.pos);
         }
@@ -2616,18 +2862,21 @@ impl EnemyManager {
 
     // Trail emit: the sprite copies replayed on a copy of the (restored) main VM, or the ring strip.
     fn trail_emit(anm: &AnmManager, rec: &mut Recorder, e: &Enemy, tint: Option<Tint>) {
-        let (f, n) = (e.trail[0], e.trail_n() as i32);
+        let (f, n) = (e.trail[0], e.trail_len());
         let b = e.trail[3].max(1);
         let ring = e.trail_ring;
-        let used = |i: i32| ring[i as usize].pos[0] >= -990.0;
-        let a = e.vm.color[anmvm::A] as i32;
+        let used = |i: i32| ring[table_index(i)].pos[0] >= -990.0;
+        let a = i32::from(e.vm.color[anmvm::A]);
         if f & 8 == 0 {
             let mut vm = e.vm.clone();
             for c in Self::trail_copies(e) {
-                Self::trail_copy(&mut vm, e.flags, f, c, n, e.vm.scale, a);
+                Self::trail_copy(&mut vm, e.a_flags(), f, c, n, e.vm.scale, a);
                 anm.emit_tinted(rec, &vm, 2, 0.3, tint);
             }
-        } else if let Some(&spr) = anm.sprite(e.vm.anm_slot as usize, e.vm.sprite_index as usize) {
+        } else if let Some(&spr) = anm.sprite(
+            table_index(i32::from(e.vm.anm_slot)),
+            table_index(i32::from(e.vm.sprite_index)),
+        ) {
             // One triangle strip (Anm_DrawRingStrip); unreachable with retail data (07 §10.6).
             let mut idx = Vec::new();
             let mut i = 0;
@@ -2640,7 +2889,7 @@ impl EnemyManager {
             let step = (u1 - u0) / (idx.len() as f32 - 1.0).max(1.0);
             let (va, vb) = (spr.uv[1] + vm.uv_off[1], spr.uv[3] + vm.uv_off[1]);
             let theta = |i: i32| {
-                let at = |k: i32| ring[k as usize].angle;
+                let at = |k: i32| ring[table_index(k)].angle;
                 if i == 0 {
                     at(0)
                 } else {
@@ -2653,7 +2902,10 @@ impl EnemyManager {
                 let th = theta(i);
                 // Flag 2: an interior entry on a straight run is skipped (QUIRK: m uses the fixed index b).
                 if f & 2 != 0 && i > 0 && i + b < n {
-                    let m = trail_mid(ring[(i + b - 1) as usize].angle, ring[b as usize].angle);
+                    let m = trail_mid(
+                        ring[table_index(i + b - 1)].angle,
+                        ring[table_index(b)].angle,
+                    );
                     if prev.is_some_and(|p: f32| (p - th).abs() < 1e-5) && (th - m).abs() < 1e-5 {
                         continue;
                     }
@@ -2665,9 +2917,9 @@ impl EnemyManager {
                 if f & 2 != 0 {
                     h *= 1.0 - i as f32 / n as f32;
                 }
-                let al = if f & 4 != 0 { a - a * i / n } else { a } as u8;
+                let al = lo8(if f & 4 != 0 { a - a * i / n } else { a });
                 let al = tint.map_or(al, |t| t.alpha(al));
-                let p = ring[i as usize].pos;
+                let p = ring[table_index(i)].pos;
                 let (sn, cs) = crate::fmath::sin_cos_f(th);
                 let (x, y) = (p[0] + 32.0, p[1] + 16.0);
                 v.push(([x - sn * h, y + cs * h], [ua, va], al));
@@ -2706,7 +2958,7 @@ impl EnemyManager {
                         &mut scratch,
                         sys,
                     );
-                })
+                });
             });
         }
         self.enemies[boss].orb_acc = acc;
@@ -2720,7 +2972,7 @@ impl EnemyManager {
             .flat_map(|l| self.draw_lists[l].iter().rev().copied())
             .filter(|&i| {
                 let e = &self.enemies[i];
-                e.alive() && e.flags & A_HIDDEN == 0
+                e.alive() && !e.has(EnemyFlags::HIDDEN)
             })
             .collect()
     }
@@ -2729,7 +2981,7 @@ impl EnemyManager {
     // (invisible) or trail flag 0x10 (07 §10.6).
     fn vm_drawn(e: &Enemy, k: usize) -> bool {
         let vm = if k == 2 { &e.vm } else { &e.sub_vms[k] };
-        vm.script.is_some() && !(k == 2 && (e.flags & (1 << 5) != 0 || e.trail[0] & 0x10 != 0))
+        vm.script.is_some() && !(k == 2 && (e.has(EnemyFlags::INVISIBLE) || e.trail[0] & 0x10 != 0))
     }
 
     // Main VM z: 0.25, or 0.3 after a trail that drew a copy (07 §10.6); sub VMs 0.3.
@@ -2749,7 +3001,8 @@ impl EnemyManager {
             let p = [e.final_pos[0] + 32.0, e.final_pos[1] + 16.0];
             let (angle, main_off) = (e.angle, e.vm.pos_offset);
             // Flags B bit 8: sub VMs use the main VM's position offset.
-            let shared = e.flags_b & (1 << 8) != 0;
+            let shared = e.has_b(EnemyFlagsB::SHARED_OFFSET);
+            let rotate = e.has(EnemyFlags::ROTATE);
             for k in [0usize, 2, 1] {
                 let main = k == 2;
                 // QUIRK (07 §10.6): only scale/colour are restored after the trail, so the main VM keeps the last
@@ -2772,7 +3025,7 @@ impl EnemyManager {
                 let rot = if main && trail_pos.is_some() {
                     None
                 } else if main {
-                    (e.flags & (1 << 25) != 0).then_some(angle)
+                    rotate.then_some(angle)
                 } else {
                     (vm.tag != 0).then_some(if k == 0 { angle } else { -angle })
                 };
@@ -2892,6 +3145,142 @@ mod tests {
         m.step(&mut anm, sys);
         assert_eq!((m.clock.cur, m.draw_lists[0].len()), (1, 0));
         assert_eq!(crate::pl!(sys).stats.rec.progress, 2);
+    }
+
+    // 07 §4.4: the typed flags keep the original bit positions; raw words round-trip unchanged.
+    #[test]
+    fn flag_bits_round_trip() {
+        let a = [
+            (A_ALIVE, 0),
+            (A_BOSS, 1),
+            (A_CONTACT, 2),
+            (A_LOSES_LIFE, 3),
+            (A_HIDDEN, 4),
+            (EnemyFlags::INVISIBLE.bits(), 5),
+            (A_SHOT_HIT, 6),
+            (A_CANCEL_BONUS, 7),
+            (A_MODE_REACT, 8),
+            (A_FOLLOW, 9),
+            (A_CHAIN_KILLED, 10),
+            (A_YOUKAI, 11),
+            (A_STORE_FIRE, 17),
+            (A_MIRROR, 18),
+            (A_CLAMP, 19),
+            (A_DEAD_CONT, 23),
+            (A_ON_SCREEN, 24),
+            (EnemyFlags::ROTATE.bits(), 25),
+            (A_NO_PUSH, 26),
+            (A_FIXED_BONUS, 27),
+            (A_KEEP_OFFSCREEN, 28),
+            (A_NO_MOVE, 29),
+            (A_LAST_SPELL, 30),
+            (EnemyFlags::BOMB_IMMUNE.bits(), 31),
+        ];
+        for (f, bit) in a {
+            assert_eq!(f, 1 << bit);
+        }
+        assert_eq!((A_MOVE_SHIFT, A_EASE_SHIFT, A_DEATH_SHIFT), (12, 14, 20));
+        let b = [
+            (EnemyFlagsB::SPARKLE.bits(), 1),
+            (B_STAGE_ANM, 2),
+            (B_DEATH_LATCH, 3),
+            (B_CANNOT_DIE, 6),
+            (B_PAUSED, 7),
+            (EnemyFlagsB::SHARED_OFFSET.bits(), 8),
+        ];
+        for (f, bit) in b {
+            assert_eq!(f, 1 << bit);
+        }
+        assert_eq!((B_WARN_SHIFT, B_WARN_MASK), (4, 0x30));
+        for x in [0, u32::MAX, 0x8000_0001, 0x0012_3456] {
+            assert_eq!(EnemyFlags::from_bits_retain(x).bits(), x);
+            assert_eq!(EnemyFlagsB::from_bits_retain(x).bits(), x);
+        }
+        assert_eq!(EnemyIdx::from_slot(479).idx(), 479);
+    }
+
+    // 07 §3: every timeline op decodes to its argument layout; op 15 forces, odd spawn ops mirror.
+    #[test]
+    fn timeline_op_decode() {
+        let args = [
+            7,
+            1.5f32.to_bits(),
+            2.5f32.to_bits(),
+            3.5f32.to_bits(),
+            40,
+            50,
+            60,
+        ];
+        let at = |pos: [f32; 3], life, item, score, mirror| Spawn {
+            sub: 7,
+            pos,
+            life,
+            item,
+            score,
+            mirror,
+        };
+        let spawn = at(
+            [1.5, 2.5, 0.0],
+            3.5f32.to_bits().cast_signed(),
+            40,
+            50,
+            false,
+        );
+        assert_eq!(
+            TlOp::decode(0, args),
+            TlOp::Spawn {
+                at: spawn,
+                force: false
+            }
+        );
+        assert_eq!(
+            TlOp::decode(15, args),
+            TlOp::Spawn {
+                at: spawn,
+                force: true
+            }
+        );
+        assert_eq!(
+            TlOp::decode(4, args),
+            TlOp::SpawnRandX {
+                at: at([0.0, 3.5, 0.0], 40, 50, 60, true),
+                x0: 1.5,
+                x1: 2.5
+            }
+        );
+        assert_eq!(
+            TlOp::decode(5, args),
+            TlOp::SpawnRandXFull(at(
+                [0.0, 1.5, 0.0],
+                2.5f32.to_bits().cast_signed(),
+                3.5f32.to_bits().cast_signed(),
+                40,
+                true
+            ))
+        );
+        assert_eq!(
+            TlOp::decode(12, args),
+            TlOp::SpawnItems {
+                at: at(
+                    [1.5, 2.5, 0.0],
+                    3.5f32.to_bits().cast_signed(),
+                    -1,
+                    60,
+                    true
+                ),
+                point: 40,
+                power: 50
+            }
+        );
+        assert_eq!(
+            TlOp::decode(8, args),
+            TlOp::InterruptBoss {
+                slot: 7,
+                n: 1.5f32.to_bits().cast_signed()
+            }
+        );
+        assert_eq!(TlOp::decode(16, args), TlOp::Flag);
+        assert_eq!(TlOp::decode(17, args), TlOp::Unknown(17));
     }
 
     // Its player and bullet manager are `TestSys::with_player(1)`'s.
@@ -3103,9 +3492,9 @@ mod tests {
         (e.pos, e.pos_offset, e.trail) = ([10.0, 20.0, 0.0], [1.0, 2.0, 0.0], [1, 15, 0, 1]);
         m.enemies[1].flags |= A_CANCEL_BONUS;
         m.enemies[3].flags |= A_BOSS | A_CANCEL_BONUS;
-        (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(1), Some(2));
-        (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(0), Some(1));
-        (m.enemies[1].root, m.enemies[2].root) = (Some(0), Some(0));
+        (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(EnemyIdx(1)), Some(EnemyIdx(2)));
+        (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(EnemyIdx(0)), Some(EnemyIdx(1)));
+        (m.enemies[1].root, m.enemies[2].root) = (Some(EnemyIdx(0)), Some(EnemyIdx(0)));
         // Slot 0: final pos + entries 0, 6, 12; slot 1: one more popup.
         let mut ts = crate::game::TestSys::with_player(1);
         assert_eq!(
@@ -3129,25 +3518,27 @@ mod tests {
     #[test]
     fn chain_unlink_root_quirk() {
         let mut m = empty_manager();
-        (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(1), Some(2));
-        (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(0), Some(1));
-        (m.enemies[1].root, m.enemies[2].root) = (Some(0), Some(0));
+        (m.enemies[0].chain_next, m.enemies[1].chain_next) = (Some(EnemyIdx(1)), Some(EnemyIdx(2)));
+        (m.enemies[1].chain_prev, m.enemies[2].chain_prev) = (Some(EnemyIdx(0)), Some(EnemyIdx(1)));
+        (m.enemies[1].root, m.enemies[2].root) = (Some(EnemyIdx(0)), Some(EnemyIdx(0)));
         m.unlink(0);
         assert_eq!(m.enemies[0].chain_next, None);
         assert_eq!(
             (m.enemies[1].chain_prev, m.enemies[1].root),
-            (Some(0), Some(0))
+            (Some(EnemyIdx(0)), Some(EnemyIdx(0)))
         );
         m.unlink(1);
-        assert_eq!(m.enemies[0].chain_next, Some(2));
-        assert_eq!(m.enemies[2].chain_prev, Some(0));
+        assert_eq!(m.enemies[0].chain_next, Some(EnemyIdx(2)));
+        assert_eq!(m.enemies[2].chain_prev, Some(EnemyIdx(0)));
     }
 
     // 07 §10.1 step 4: the ring shifts n − 1 entries, entry 0 = final pos, velocity, angle; the rest untouched.
     #[test]
     fn trail_ring_shift() {
-        let mut e = Enemy::default();
-        e.trail = [5, 3, 0, 1];
+        let mut e = Enemy {
+            trail: [5, 3, 0, 1],
+            ..Enemy::default()
+        };
         for k in 0..4 {
             e.final_pos = [k as f32, 0.0, 0.0];
             e.vel = [0.0, k as f32, 0.0];
@@ -3197,7 +3588,7 @@ mod tests {
             let mut m = empty_manager();
             m.enemies[0].flags = A_ALIVE | A_BOSS;
             m.enemies[0].life = 1000;
-            m.bosses[0] = Some(0);
+            m.bosses[0] = Some(EnemyIdx(0));
             let acc0 = m.enemies[0].orb_acc;
             {
                 let p = crate::pl!(sys);
@@ -3225,7 +3616,7 @@ mod tests {
         let mut anm = AnmManager::default();
         let mut m = empty_manager();
         m.enemies[2].flags |= A_FIXED_BONUS;
-        m.g.spell_boss = Some(2);
+        m.g.spell_boss = Some(EnemyIdx(2));
         m.g.fixed_bonus = true;
         m.g.bonus_frozen = true;
         m.finish_spell(&mut anm, sys);
@@ -3452,12 +3843,12 @@ mod tests {
                         if std::mem::take(&mut p.bomb.attract) {
                             b.items.attract_all();
                         }
-                    })
+                    });
                 });
                 let before: i32 = m.enemies.iter().filter(|e| e.alive()).map(|e| e.life).sum();
                 m.step(&mut anm, sys);
                 let after: i32 = m.enemies.iter().filter(|e| e.alive()).map(|e| e.life).sum();
-                dmg_frames += (after < before) as i32;
+                dmg_frames += i32::from(after < before);
                 sys.with_bullets(|b, sys| b.step(&mut anm, sys));
                 let p = crate::pl!(sys);
                 shots += p.bullets.iter().filter(|b| b.state != 0).count();
@@ -3549,12 +3940,11 @@ mod tests {
                     }
                     let n = m.alive_count();
                     max_alive = max_alive.max(n);
-                    spawned += (m
-                        .enemies
-                        .iter()
-                        .filter(|e| e.alive() && e.main.ctx.clock.cur == 1)
-                        .count()
-                        > 0) as i32;
+                    spawned += i32::from(
+                        m.enemies
+                            .iter()
+                            .any(|e| e.alive() && e.main.ctx.clock.cur == 1),
+                    );
                     for e in m.enemies.iter().filter(|e| e.alive()) {
                         assert!(
                             e.pos.iter().all(|v| v.is_finite()),

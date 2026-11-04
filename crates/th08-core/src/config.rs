@@ -39,7 +39,7 @@ fn curve(table: i32, v: u8, exp: i32) -> i32 {
     if v == 0 {
         return -10000;
     }
-    let k = 1.0 - (1.0 - v.min(100) as f32 / 100.0).powi(exp);
+    let k = 1.0 - (1.0 - f32::from(v.min(100)) / 100.0).powi(exp);
     ((table + 5000) as f32 * k) as i32 - 5000
 }
 
