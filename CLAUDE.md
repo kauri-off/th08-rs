@@ -37,3 +37,13 @@ and opens a real window on the user's screen. wine runs the same way (`WAYLAND_D
 
 Agents use only the headless emulator: every `adb` command takes an explicit emulator serial (`adb -s emulator-NNNN`).
 Never install, launch, screencap, read logcat or run any other `adb` command on a physical phone.
+
+## Worktrees and heavy runs
+
+- Do not use the cargo-worktree skill / link-target.sh here (`.cargo-worktree-skip`): every git worktree builds in its
+  own `target/`. Plain cargo build / check / clippy / fmt / unit tests need no lock.
+- Heavy runs (arch_check, cargo tests with game data, the emulator, replay batches) go through the job queue:
+  `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…`, then `tools/q wait ID` in the
+  foreground until it ends (exit 75 = not done yet; never run_in_background). In a worktree, call the main checkout's
+  `/home/anon/Projects/th_08/tools/q`. Never `flock target/.agents.lock` by hand.
+

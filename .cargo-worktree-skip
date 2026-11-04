@@ -1,0 +1,1 @@
+This repo opts out of the cargo-worktree skill: each git worktree builds in its own target/; heavy runs go through tools/q (see CLAUDE.md).
