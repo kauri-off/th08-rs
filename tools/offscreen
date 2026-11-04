@@ -1,3 +1,10 @@
 #!/bin/bash
 # Run a windowed binary off-screen: xvfb with Wayland hidden (winit prefers WAYLAND_DISPLAY over xvfb's DISPLAY).
-exec env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET xvfb-run -a "$@"
+# Saves and port.cfg go to a throwaway copy of ~/.config/th08 unless XDG_CONFIG_HOME is set by the caller.
+if [[ -z $XDG_CONFIG_HOME ]]; then
+  XDG_CONFIG_HOME=$(mktemp -d "${TMPDIR:-/tmp}/th08cfg.XXXXXX")
+  trap 'rm -rf "$XDG_CONFIG_HOME"' EXIT
+  [[ -d $HOME/.config/th08 ]] && cp -r "$HOME/.config/th08" "$XDG_CONFIG_HOME/"
+  export XDG_CONFIG_HOME
+fi
+env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET xvfb-run -a "$@"
