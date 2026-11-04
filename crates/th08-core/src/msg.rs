@@ -1,8 +1,10 @@
 //! Dialogue interpreter of the HUD (Msg_Load / Msg_Start / Msg_Run, msg*.dat) (10 §1–§5, §8).
 
 use crate::anmmgr::AnmManager;
-use crate::anmvm::{self, AnmVm, Timer};
+use crate::anmvm::{AnmVm, Timer};
 use crate::input::{self, Input};
+use crate::types::{D3dColor, lo8};
+use th08_formats::msg::Op;
 use th08_formats::sjis::SjisString;
 
 // ANM slots of the portrait files face[0..3] (10 §3); text.anm is slot 0 (10 §6).
@@ -26,7 +28,7 @@ const FILES: [[&str; 4]; 9] = [
 pub fn file_name(stage: usize, shot: u8) -> String {
     format!(
         "{}.dat",
-        FILES[stage % 9][th08_formats::sht::team(shot) as usize]
+        FILES[stage % 9][usize::from(th08_formats::sht::team(shot))]
     )
 }
 
@@ -35,17 +37,17 @@ pub fn file_name(stage: usize, shot: u8) -> String {
 pub fn face_files(stage: usize, shot: u8, card: Option<i16>) -> [Option<String>; 4] {
     let face = |s: &str| Some(format!("face_{s}.anm"));
     let Some(c) = card else {
-        let team = th08_formats::sht::team(shot) as usize;
+        let team = usize::from(th08_formats::sht::team(shot));
         let (s2, s3) = match stage {
             0 => ("st01", None),
             1 => ("st02", None),
-            2 => ("st03", None),
             3 => ("st04a", None),
             4 => ("st04b", None),
             5 => ("st05", Some("st05b")),
             6 => ("st06", None),
             7 => ("st06", Some("st07")),
             8 => ("st08m", Some("st08")),
+            // Stage 2 and any out-of-range index.
             _ => ("st03", None),
         };
         return [
@@ -88,6 +90,12 @@ pub fn face_files(stage: usize, shot: u8, card: Option<i16>) -> [Option<String>;
 
 pub use th08_formats::msg::{Ins, MsgError, MsgFile, MsgOff, parse};
 
+// i16 face / line / speaker argument as an index. Negatives map to ≥ 0x8000 instead of the old sign-extended
+// `as usize`: both fail every `< 4` test and clamp alike under `min` (10 §5.1), so the results are the same.
+fn arg_index(v: i16) -> usize {
+    usize::from(v.cast_unsigned())
+}
+
 // Things the HUD / game manager must do after a Msg_Run (10 §5.1).
 // Bgm op 7, BgmFade op 12, Flash op 14, StageEnd op 9, HaltFinal op 11, Route = GM flags bits 11–12 (ops 21/22,
 // 10 §4 step 3), Plate / SpellBase = entry-0 hooks (10 §4 step 2).
@@ -122,13 +130,18 @@ pub struct StartInfo {
 
 // Dialogue state at HudImpl+0x21814.. (10 §3); `Ctx.msg` (step 9e).
 #[derive(Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "separate bytes +0x22D7C.. / +0x22D84 of the original and one port-only hand-off, not a flag word"
+)]
 pub struct Dialogue {
     // The stage's .msg file (10 §2), shared immutable data.
     pub file: Option<std::sync::Arc<MsgFile>>,
     pub info: StartInfo,
     // Portrait file per face index; 6B / Extra swap slots 2 and 3 on entry 0 (Gui file pointers 0x4ECC9C ↔ 0x4ECCA0).
     pub face_slot: [usize; 4],
-    ip: usize,
+    // Offset of the next instruction (10 §2).
+    ip: MsgOff,
     // +0x2181C running entry, −1 = none; +0x21820 script clock (05 §2 Timer).
     pub entry: i32,
     pub clock: Timer,
@@ -175,7 +188,7 @@ impl Default for Dialogue {
             file: None,
             info: StartInfo::default(),
             face_slot: FACE_SLOTS,
-            ip: 0,
+            ip: MsgOff(0),
             entry: -1,
             clock: Timer::default(),
             wait_count: 0,
@@ -213,16 +226,20 @@ impl Dialogue {
     #[cfg(test)]
     pub fn trace(&self) -> Vec<u64> {
         let mut t = vec![
-            self.entry as u64,
-            self.ip as u64,
-            self.clock.cur as u64,
-            self.wait_count as u64,
-            self.min_wait as u64,
-            self.release_counter as u64,
-            self.next_line as u64,
-            self.new_box as u64,
+            i64::from(self.entry).cast_unsigned(),
+            u64::from(self.ip.0),
+            i64::from(self.clock.cur).cast_unsigned(),
+            i64::from(self.wait_count).cast_unsigned(),
+            i64::from(self.min_wait).cast_unsigned(),
+            i64::from(self.release_counter).cast_unsigned(),
+            u64::from(self.next_line),
+            u64::from(self.new_box),
         ];
-        t.extend(self.lines.iter().map(|v| v.script_index as u64));
+        t.extend(
+            self.lines
+                .iter()
+                .map(|v| i64::from(v.script_index).cast_unsigned()),
+        );
         t
     }
 
@@ -282,7 +299,7 @@ impl Dialogue {
                     _ => (1, 0),
                 }
             } else if !info.cleared_6b && info.shot < 4 {
-                if !info.cleared_6a { (1, 0) } else { (2, 1) }
+                if info.cleared_6a { (2, 1) } else { (1, 0) }
             } else {
                 (3, 0)
             };
@@ -294,11 +311,15 @@ impl Dialogue {
             n = 5;
         }
         // Port-only guard: a missing entry leaves the dialogue inactive.
-        let Some(&ip) = self.file.as_ref().and_then(|f| f.entries.get(n as usize)) else {
+        let Some(&ip) = self
+            .file
+            .as_ref()
+            .and_then(|f| f.entries.get(n.cast_unsigned() as usize))
+        else {
             return;
         };
         self.entry = n;
-        self.ip = ip.idx();
+        self.ip = ip;
         // 10 §4 step 5: script index −1 makes the first line-1 clear a no-op; the other defaults come from Default.
         self.lines.iter_mut().for_each(|l| l.script_index = -1);
         self.textbox = true;
@@ -357,14 +378,14 @@ impl Dialogue {
         if who != self.active_speaker {
             let prev = self.active_speaker;
             for k in 0..4u8 {
-                self.faces[k as usize].pending_interrupt = if k == prev && prev / 2 != who / 2 {
+                self.faces[usize::from(k)].pending_interrupt = if k == prev && prev / 2 != who / 2 {
                     6
                 } else {
                     4
                 };
             }
         }
-        self.faces[who as usize].pending_interrupt = 3;
+        self.faces[usize::from(who)].pending_interrupt = 3;
         self.active_speaker = who;
     }
 
@@ -374,7 +395,7 @@ impl Dialogue {
         }
     }
 
-    // One instruction of the 10 §5.1 opcode table.
+    // One instruction of the 10 §5.1 opcode table, decoded by `msg::Op` and run by its group.
     fn exec(
         &mut self,
         f: &MsgFile,
@@ -383,39 +404,150 @@ impl Dialogue {
         inp: &Input,
         ins: Ins,
     ) -> Exec {
-        let skip = self.skippable && inp.down(input::SKIP);
-        match ins.op {
-            0 => {
-                self.entry = -1;
-                return Exec::End;
+        match f.op(&ins) {
+            op @ (Op::FaceScript { .. }
+            | Op::FaceSprite { .. }
+            | Op::FaceInterrupt { .. }
+            | Op::BossCard
+            | Op::Speaker4 { .. }
+            | Op::Speaker { .. }) => {
+                self.exec_portrait(anm, rng, &op);
+                Exec::Next
             }
-            1 => {
-                let (k, s) = (f.i16(&ins, 0) as usize, f.i16(&ins, 1));
-                // The pos_offset writes of ops 1/2 are omitted: they have no visible effect (10 §5.1 note).
-                if k < 4 && s >= 0 {
-                    anm.set_script(rng, &mut self.faces[k], self.face_slot[k], s as usize);
+            op @ (Op::TextLine { .. }
+            | Op::Text(_)
+            | Op::Text0(_)
+            | Op::Text1(_)
+            | Op::Skippable(_)
+            | Op::Textbox(_)) => {
+                self.exec_text(anm, rng, op);
+                Exec::Next
+            }
+            op => self.exec_flow(inp, &op),
+        }
+    }
+
+    // 10 §5.1 portrait ops 1, 2, 5, 8, 15, 17.
+    fn exec_portrait(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, op: &Op) {
+        match *op {
+            // Op 1. The pos_offset writes of ops 1/2 are omitted: they have no visible effect (10 §5.1 note).
+            Op::FaceScript { face, script } => {
+                let k = arg_index(face);
+                if k < 4 && script >= 0 {
+                    anm.set_script(
+                        rng,
+                        &mut self.faces[k],
+                        self.face_slot[k],
+                        arg_index(script),
+                    );
                 }
             }
-            2 => {
-                let (k, s) = (f.i16(&ins, 0) as usize, f.i16(&ins, 1) as i32);
-                self.set_face_sprite(anm, k, s);
+            // Op 2.
+            Op::FaceSprite { face, sprite } => {
+                self.set_face_sprite(anm, arg_index(face), i32::from(sprite));
             }
-            3 => {
-                let (sp, line, s) = (
-                    f.i16(&ins, 0) as usize,
-                    f.i16(&ins, 1) as usize,
-                    f.string(&ins, 4),
-                );
+            // Op 5.
+            Op::FaceInterrupt { face, interrupt } => {
+                let k = arg_index(face);
+                if k < 4 {
+                    self.faces[k].pending_interrupt = u16::from(interrupt);
+                }
+            }
+            // Op 8.
+            Op::BossCard => {
+                anm.set_script(rng, &mut self.boss_card, self.face_slot[2], 1);
+                self.wait_count = 0;
+            }
+            // Op 15: the speaker byte is the arg's low byte.
+            Op::Speaker4 { who, sprites } => {
+                let who = lo8(who.cast_signed());
+                self.highlight(who);
+                for (k, s) in sprites.into_iter().enumerate() {
+                    self.set_face_sprite(anm, k, s);
+                }
+                self.text_speaker = who.min(3);
+                self.new_box = true;
+            }
+            // Op 17.
+            Op::Speaker { who, sprite } => {
+                let who = lo8(who.cast_signed());
+                self.highlight(who);
+                self.set_face_sprite(anm, usize::from(who), sprite);
+                self.text_speaker = who.min(3);
+                self.new_box = true;
+            }
+            // Other groups are dispatched by `exec`.
+            _ => {}
+        }
+    }
+
+    // 10 §5.1 text ops 3, 13, 16, 18, 19, 20.
+    fn exec_text(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, op: Op) {
+        match op {
+            // Op 3.
+            Op::TextLine {
+                speaker,
+                line,
+                text,
+            } => {
+                let (sp, line) = (arg_index(speaker), arg_index(line));
                 if line == 0 {
                     self.clear_line1();
                 }
                 let c = self.text_colour[sp.min(3)];
-                self.render(anm, rng, line.min(1), s, c);
+                self.render(anm, rng, line.min(1), text, c);
                 self.wait_count = 0;
             }
-            4 => {
-                // Op 4 wait (10 §5.2): Skip advances at once; Shot after min_wait; else stall up to n frames, then time out.
-                let n = f.i32(&ins, 0);
+            // Op 13.
+            Op::Skippable(b) => self.skippable = b != 0,
+            // Op 16.
+            Op::Text(s) => {
+                if self.new_box {
+                    self.clear_line1();
+                    self.next_line = 0;
+                }
+                let (line, c) = (
+                    usize::from(self.next_line),
+                    self.text_colour[usize::from(self.text_speaker)],
+                );
+                self.render(anm, rng, line, s, c);
+                self.wait_count = 0;
+                self.new_box = false;
+                self.next_line = self.next_line.wrapping_add(1);
+            }
+            // Op 18.
+            Op::Textbox(b) => self.textbox = b != 0,
+            // Ops 19 / 20: line 0 / 1 with text_colour[0].
+            Op::Text0(s) => self.text_on_line(anm, rng, 0, s),
+            Op::Text1(s) => self.text_on_line(anm, rng, 1, s),
+            // Other groups are dispatched by `exec`.
+            _ => {}
+        }
+    }
+
+    fn text_on_line(
+        &mut self,
+        anm: &mut AnmManager,
+        rng: &mut crate::rng::Rng,
+        line: usize,
+        s: SjisString,
+    ) {
+        let c = self.text_colour[0];
+        self.render(anm, rng, line, s, c);
+        self.wait_count = 0;
+    }
+
+    // 10 §5.1 flow ops 0, 4, 6, 7, 9–12, 14, 21, 22 and unknown opcodes.
+    fn exec_flow(&mut self, inp: &Input, op: &Op) -> Exec {
+        match *op {
+            // Op 0.
+            Op::End => {
+                self.entry = -1;
+                return Exec::End;
+            }
+            // Op 4 wait (10 §5.2): Skip advances at once; Shot after min_wait; else stall up to n frames, then time out.
+            Op::Wait(n) => {
+                let skip = self.skippable && inp.down(input::SKIP);
                 if skip {
                 } else if inp.pressed(input::SHOT) && self.wait_count >= self.min_wait {
                     self.new_box = true;
@@ -428,25 +560,18 @@ impl Dialogue {
                     self.min_wait = 30;
                 }
             }
-            5 => {
-                let (k, i) = (f.i16(&ins, 0) as usize, f.u8(&ins, 2));
-                if k < 4 {
-                    self.faces[k].pending_interrupt = i as u16;
-                }
-            }
-            6 => self.release_counter += 1,
-            7 => self.events.push(Event::Bgm(f.i32(&ins, 0))),
-            8 => {
-                anm.set_script(rng, &mut self.boss_card, self.face_slot[2], 1);
-                self.wait_count = 0;
-            }
-            9 => {
+            // Op 6.
+            Op::ReleaseTimeline => self.release_counter += 1,
+            // Op 7.
+            Op::Bgm(n) => self.events.push(Event::Bgm(n)),
+            // Op 9.
+            Op::StageEnd => {
                 self.stage_end = true;
                 self.events.push(Event::StageEnd);
             }
             // Op 10 halt stalls forever; the game manager ends the stage.
-            10 => return Exec::Stall,
-            11 => {
+            Op::Halt => return Exec::Stall,
+            Op::HaltFinal => {
                 // Op 11 sets GM flags & ~0x60 | 0x40 every stalled frame (one event is enough), but only in stage idx
                 // 6–8; in stages 1–5 it only stalls like op 10 (10 §5).
                 if matches!(self.info.stage, 6..=8) && !self.events.contains(&Event::HaltFinal) {
@@ -454,51 +579,12 @@ impl Dialogue {
                 }
                 return Exec::Stall;
             }
-            12 => self.events.push(Event::BgmFade),
-            13 => self.skippable = f.u8(&ins, 0) != 0,
-            14 => self.events.push(Event::Flash),
-            15 => {
-                let who = f.i32(&ins, 0) as u8;
-                self.highlight(who);
-                for k in 0..4 {
-                    let s = f.i32(&ins, 1 + k);
-                    self.set_face_sprite(anm, k, s);
-                }
-                self.text_speaker = who.min(3);
-                self.new_box = true;
-            }
-            16 => {
-                let s = f.string(&ins, 0);
-                if self.new_box {
-                    self.clear_line1();
-                    self.next_line = 0;
-                }
-                let (line, c) = (
-                    self.next_line as usize,
-                    self.text_colour[self.text_speaker as usize],
-                );
-                self.render(anm, rng, line, s, c);
-                self.wait_count = 0;
-                self.new_box = false;
-                self.next_line = self.next_line.wrapping_add(1);
-            }
-            17 => {
-                let (who, s) = (f.i32(&ins, 0) as u8, f.i32(&ins, 1));
-                self.highlight(who);
-                self.set_face_sprite(anm, who as usize, s);
-                self.text_speaker = who.min(3);
-                self.new_box = true;
-            }
-            18 => self.textbox = f.u8(&ins, 0) != 0,
-            19 | 20 => {
-                let s = f.string(&ins, 0);
-                let c = self.text_colour[0];
-                self.render(anm, rng, (ins.op - 19) as usize, s, c);
-                self.wait_count = 0;
-            }
-            21 => {
+            // Op 12.
+            Op::BgmFade => self.events.push(Event::BgmFade),
+            // Op 14.
+            Op::Flash => self.events.push(Event::Flash),
+            Op::Choice(n) => {
                 // Op 21 choice (10 §5.4): ignores Skip; Shot needs wait_count ≥ 60; timeout keeps the current choice.
-                let n = f.i32(&ins, 0);
                 let old = self.choice;
                 if inp.pressed(input::UP) {
                     self.choice = 0;
@@ -508,7 +594,7 @@ impl Dialogue {
                 if self.choice != old {
                     self.events.push(Event::Sfx(12));
                 }
-                let (on, off) = (self.choice as usize, 1 - self.choice as usize);
+                let (on, off) = (usize::from(self.choice), 1 - usize::from(self.choice));
                 self.lines[on].color = [255; 4];
                 self.lines[off].color = argb(0xE060_6060);
                 if inp.pressed(input::SHOT) && self.wait_count >= 60 {
@@ -522,10 +608,11 @@ impl Dialogue {
                 }
             }
             // Op 22: Msg_Start(choice + 1) and the new entry runs in the same frame (10 §5.1).
-            22 => {
+            Op::ChoiceJump => {
                 self.events.push(Event::Route(self.choice));
                 return Exec::Choice(self.choice);
             }
+            // Unknown opcodes and the other groups (dispatched by `exec`): the instruction just advances.
             _ => {}
         }
         Exec::Next
@@ -547,31 +634,31 @@ impl Dialogue {
         }
         let skip = self.skippable && inp.down(input::SKIP);
         // Ctrl fast-forward: clock = time of the current instruction (10 §5).
-        if skip && let Some(i) = self.file.as_ref().unwrap().ins(MsgOff::from_idx(self.ip)) {
-            self.clock.set(i.time as i32);
+        if skip && let Some(i) = self.file.as_ref().unwrap().ins(self.ip) {
+            self.clock.set(i32::from(i.time));
         }
         let mut stalled = false;
         loop {
-            let Some(ins) = self.file.as_ref().unwrap().ins(MsgOff::from_idx(self.ip)) else {
+            let Some(ins) = self.file.as_ref().unwrap().ins(self.ip) else {
                 // Port-only guard: running off the file ends the dialogue.
                 self.entry = -1;
                 return !dying;
             };
-            if self.clock.cur < ins.time as i32 {
+            if self.clock.cur < i32::from(ins.time) {
                 break;
             }
             let f = self.file.take().unwrap();
             let r = self.exec(&f, anm, rng, inp, ins);
             self.file = Some(f);
             match r {
-                Exec::Next => self.ip = ins.next().idx(),
+                Exec::Next => self.ip = ins.next(),
                 Exec::Stall => {
                     stalled = true;
                     break;
                 }
                 // Op 0 returns at once: no clock tick and no VM run this frame (10 §5.1).
                 Exec::End => return !dying,
-                Exec::Choice(c) => self.start(c as i32 + 1),
+                Exec::Choice(c) => self.start(i32::from(c) + 1),
             }
         }
         // A stall leaves without ticking the clock, but the VMs still run (10 §5).
@@ -595,15 +682,9 @@ impl Dialogue {
     }
 }
 
-// D3DCOLOR ARGB → VM colour bytes.
 // D3DCOLOR 0xAARRGGBB → VM colour bytes B, G, R, A (05 §2).
 pub fn argb(c: u32) -> [u8; 4] {
-    let mut v = [0u8; 4];
-    v[anmvm::A] = (c >> 24) as u8;
-    v[anmvm::R] = (c >> 16) as u8;
-    v[anmvm::G] = (c >> 8) as u8;
-    v[anmvm::B] = c as u8;
-    v
+    D3dColor(c).to_bgra()
 }
 
 #[cfg(test)]
@@ -613,7 +694,7 @@ mod tests {
     // 10 §3 face tables: normal per stage and team, spell practice by card id.
     #[test]
     fn face_file_tables() {
-        let f = |v: [Option<String>; 4]| v.map(|s| s.unwrap_or_default());
+        let f = |v: [Option<String>; 4]| v.map(Option::unwrap_or_default);
         assert_eq!(
             f(face_files(7, 9, None)),
             [
@@ -656,7 +737,7 @@ mod tests {
                         .ins(at)
                         .unwrap_or_else(|| panic!("{name}: bad instruction at {at:#x}"));
                     assert!(i.op <= 22, "{name}: op {}", i.op);
-                    ops[i.op as usize] += 1;
+                    ops[usize::from(i.op)] += 1;
                     if i.op == 0 || i.op == 10 || i.op == 11 {
                         break;
                     }
@@ -702,7 +783,7 @@ mod tests {
         let mut rng = crate::rng::Rng::default();
         let text = |c: u8| [0, 0, 16, 2, c ^ 0x77, 0x77];
         let mut data = vec![1, 0, 0, 0, 8, 0, 0, 0];
-        for c in [b'a', b'b', b'c'] {
+        for c in *b"abc" {
             data.extend(text(c));
         }
         let f = parse(data).unwrap();

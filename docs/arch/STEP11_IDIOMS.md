@@ -112,6 +112,8 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11d** ECL exec — **DONE** (see below) | (1) `ecl::{EclOff, Op}` in formats/ecl.rs (+ eclview bin); (2) `Exec::exec` → `match Op` dispatching to `eclvm/ops_*.rs`, named args via `Arg` / `Var` (from `IRef`), bullet flag const; (3) eclvm subset 0 | formats/ecl.rs, eclvm (+ new ops_*.rs), bin/eclview | ∥ 11b 11c 11g; before 11e | T D, **B** |
 | **11e** enemy — **DONE** (see below) | (1) `EnemyIdx` for chain / boss / thread links; (2) `EnemyFlags` for the 07 flag words, `TlOp` timeline enum (enemy.rs:1139); (3) long fns 1133 / 1392 split, enemy subset 0 | enemy, eclvm (index boundary only) | after 11d; ∥ 11f 11h 11i | T D |
 | **11f** STD + MSG | (1) stage.rs on `std::Op`, `Stage` bools; (2) msg.rs on `msg::Op`, exec split, `Dialogue` bools; (3) both subset 0 | stage, msg | after 11b; ∥ 11e 11g 11h | T D |
+| **11e** enemy | (1) `EnemyIdx` for chain / boss / thread links; (2) `EnemyFlags` for the 07 flag words, `TlOp` timeline enum (enemy.rs:1139); (3) long fns 1133 / 1392 split, enemy subset 0 | enemy, eclvm (index boundary only) | after 11d; ∥ 11f 11h 11i | T D |
+| **11f** STD + MSG — **DONE** (see below) | (1) stage.rs on `std::Op`, `Stage` bools; (2) msg.rs on `msg::Op`, exec split, `Dialogue` bools; (3) both subset 0 | stage, msg | after 11b; ∥ 11e 11g 11h | T D |
 | **11g** player + pshot — **DONE** (see below) | (1) `ShotType` enum (+ `sht::team`) inside player / pshot; (2) `Angle`, one `angle_from` (player.rs:668 → types); (3) player / pshot subset 0 (pshot 260 split) | player, pshot | ∥ wave 1 | T D |
 | **11h** bullet + item | (1) `BulletFlags` / `LaserFlags`; (2) `BulletIdx` / `LaserIdx` / `ItemIdx`, `angle_from` (bullet.rs:81) → types; (3) spawn env struct, fn 657 split, subset 0 | bullet, item | after 11g (`angle_from`); ∥ 11e 11f 11i | T D, **B** |
 | **11i** bomb + effect — **DONE** (see below) | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
@@ -301,6 +303,25 @@ the `flags` / `flags_b: u32` fields stay raw (eclvm writes them in ~40 places; 1
 `drop_items` power kind written `i32::from(power >= 128.0)` (differs from `power < 128 ? 0 : 1` only for NaN power,
 which no path produces); the old 1133 / 1392 fns (105 / 122 lines) were under the 150 limit, both split anyway
 (`timeline_op` now 70 lines).
+**11f done.** Files: crates/th08-core/src/stage.rs, crates/th08-core/src/msg.rs (formats untouched: the 11b
+decoders `stdfile::Op` / `msg::Op` were complete). (1) `Stage::exec` = `match stdfile::Op::decode(&r)`, one arm per
+06 §4 op with its citation (`CamSlot::index()` replaces the `(op − 5) / 2` / `(op − 14) / 5` arithmetic); the op-3
+clock test in `step` and the op-31 search in `handle_section_request` compare decoded `Op::Halt` / `Op::Section(req)`;
+op 33's byte store is `types::lo8`; casts → `From` / `cast_signed` / `cast_unsigned`, the two ftol colour bytes (06 §8
+fog lerp, 06 §11.1 soft-fog alpha) keep `as u8` under `#[expect(cast_sign_loss)]`; literal separators,
+`is_multiple_of`, collapsed sparkle `if`, `if_not_else`, test `AnmVm { sprite_w, .. }`. (2) `Dialogue::exec` =
+`match msg::Op` → `exec_portrait` (ops 1 2 5 8 15 17), `exec_text` (3 13 16 18 19 20, `text_on_line` for 19 / 20),
+`exec_flow` (0 4 6 7 9–12 14 21 22, unknown), statement order per op unchanged; `Dialogue.ip: MsgOff` (was `usize`,
+the `from_idx` / `idx()` round trips gone); i16 index args through `arg_index` (`usize::from(v.cast_unsigned())`:
+negatives fail every `< 4` test and clamp under `min` exactly as the old sign-extending `as usize`); op 15 / 17
+speaker byte `lo8`; `argb` = `D3dColor(c).to_bgra()` (same bytes, B G R A = 0 1 2 3); `face_files` stage-2 arm merged
+into the identical wildcard. (3) `Stage` and `Dialogue` bools under `#[expect(struct_excessive_bools)]` with reason:
+each is a separate original field / byte (g_Stage +0x6464, +0x625C, +0x647C, HUD cover; HudImpl +0x22D7C.., +0x22D84,
+port-only `side_effects`), not one flag word (rule 4). Public API: none changed (`msg::argb` same signature; `ip` is
+private). Lint subset (tools/lint_subset): stage.rs 43 → 0, msg.rs 27 → 0; workspace 1 374 in 53 files (worktree base 9cada7f). Check: FAST arch_check 0
+differing (emit-off 0), cargo test -p th08-core 323 passed + th08-formats 36 passed, spec_refs 0. Deviations: the bools stay (with `#[expect]`) instead of bitflags
+or enums, as in 11g's `Player`; `Stage.ring_6b: Option<usize>` stays raw (an effect slot, `EffectIdx` is 11i's);
+`Record::i/f/v` are no longer used by stage.rs (stdview and `Op::decode` still use them).
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

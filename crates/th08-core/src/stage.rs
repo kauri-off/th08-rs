@@ -7,10 +7,11 @@ use crate::drawlist::Recorder;
 use crate::drawlist::{PLAYFIELD, Rect, Vertex};
 use crate::game::{Ctx, Sys};
 use crate::task::{self, Chain, Ret, Task};
+use crate::types::lo8;
 use anyhow::Result;
 use std::f32::consts::PI;
 use std::sync::Arc;
-use th08_formats::stdfile::{self, QuadKind, Record, Std, Vec3};
+use th08_formats::stdfile::{self, CamSlot, Op, QuadKind, Record, Std, Vec3};
 
 // stgNbg.anm slot (06 §2 step 2).
 pub const ANM_SLOT: usize = 4;
@@ -244,6 +245,10 @@ impl StageCamera {
 
 // g_Stage 0x4E4030 (06 §3); `Ctx.stage`, its chain nodes are `StageTask`.
 #[derive(Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "separate g_Stage fields (+0x6464, +0x625C, +0x647C) and the HUD cover input, not one flag word"
+)]
 pub struct Stage {
     // Stage index 0..8 (g_StageIdx; also 0..8 in spell practice, 07 §1).
     pub index: usize,
@@ -420,7 +425,12 @@ impl Stage {
         self.ip = 0;
         for q in self.std.objects.iter().flat_map(|o| &o.quads) {
             if let Some(vm) = self.vms.get_mut(q.vm) {
-                anm.set_script(rng, vm, ANM_SLOT, q.script.max(0) as usize);
+                anm.set_script(
+                    rng,
+                    vm,
+                    ANM_SLOT,
+                    usize::from(q.script.max(0).cast_unsigned()),
+                );
             }
         }
     }
@@ -452,7 +462,7 @@ impl Stage {
             _ => &mut self.vm_c,
         };
         if script >= 0 {
-            anm.set_script(rng, vm, ANM_SLOT, script as usize);
+            anm.set_script(rng, vm, ANM_SLOT, script.cast_unsigned() as usize);
         } else if which == 2 {
             self.vm_c.sprite_index = -1;
         } else {
@@ -469,86 +479,93 @@ impl Stage {
         }
     }
 
-    // One record of the Stage_Calc switch (06 §4); false when processing stops for this frame (op 3).
+    // One record of the Stage_Calc switch (06 §4), decoded by `stdfile::Op`; false when processing stops for this
+    // frame (op 3).
     fn exec(&mut self, anm: &mut AnmManager, r: Record, sys: &mut Sys) -> bool {
         let cam = &mut self.cam;
-        match r.op {
-            0 => self.origin = r.v(),
-            1 => {
-                self.fog = Self::fog_from(r.args[0], r.f(1), r.f(2));
+        match Op::decode(&r) {
+            // 06 §4 op 0.
+            Op::SetOrigin(v) => self.origin = v,
+            // 06 §4 op 1.
+            Op::Fog { color, near, far } => {
+                self.fog = Self::fog_from(color, near, far);
                 self.fog_target = self.fog;
             }
-            2 => {
+            // 06 §4 op 2.
+            Op::FogTime { dur } => {
                 self.fog_start = self.fog;
-                self.fog_dur = r.i(0);
+                self.fog_dur = dur;
                 self.fog_elapsed.set(0);
             }
-            3 => {
+            // 06 §4 op 3.
+            Op::Halt => {
                 if self.section_request == 0 {
                     return false;
                 }
                 self.section_request = 0;
             }
-            // Jump: cancels only the position interpolation; continues in the same frame.
-            4 => {
-                self.ip = r.i(0).max(0) as usize;
-                self.clock.set(r.i(1));
+            // 06 §4 op 4 jump: cancels only the position interpolation; continues in the same frame.
+            Op::Jump { index, time } => {
+                self.ip = index.max(0).cast_unsigned() as usize;
+                self.clock.set(time);
                 cam.dur[POS] = 0;
                 self.jumped = true;
                 return true;
             }
-            5 | 7 | 9 => {
-                let s = ((r.op - 5) / 2) as usize;
+            // 06 §4 ops 5 / 7 / 9.
+            Op::CamTarget { slot, v } => {
+                let s = slot.index();
                 // After a jump, kind-51 background particles shift by the target change (06 §4, 13 §2.6a).
-                if s == POS && self.jumped {
-                    let d = sub(r.v(), cam.target.v[s]);
+                if slot == CamSlot::Pos && self.jumped {
+                    let d = sub(v, cam.target.v[s]);
                     sys.fx.shift_kind(51, d);
                     self.jumped = false;
                 }
                 cam.start.v[s] = cam.target.v[s];
-                cam.target.v[s] = r.v();
+                cam.target.v[s] = v;
                 if cam.dur[s] == 0 {
-                    cam.v[s] = r.v();
+                    cam.v[s] = v;
                 }
             }
-            6 | 8 | 10 | 12 => {
-                let s = ((r.op - 6) / 2) as usize;
-                cam.dur[s] = r.i(0);
+            // 06 §4 ops 6 / 8 / 10 / 12.
+            Op::CamTime { slot, dur, mode } => {
+                let s = slot.index();
+                cam.dur[s] = dur;
                 cam.elapsed[s].set(0);
-                cam.mode[s] = r.i(1);
+                cam.mode[s] = mode;
             }
-            11 => {
+            // 06 §4 op 11.
+            Op::Fov(fov) => {
                 cam.start.fov = cam.target.fov;
-                cam.target.fov = r.f(0);
+                cam.target.fov = fov;
                 if cam.dur[FOV] == 0 {
-                    cam.fov = r.f(0);
+                    cam.fov = fov;
                 }
             }
-            13 => self.clear_color = r.args[0],
-            // 14–18 / 19–23 / 24–28: start, end, tan0, tan1, Hermite (mode 7) for pos / facing / up.
-            14..=28 => {
-                let s = ((r.op - 14) / 5) as usize;
-                match (r.op - 14) % 5 {
-                    0 => cam.start.v[s] = r.v(),
-                    1 => cam.target.v[s] = r.v(),
-                    2 => cam.tan0[s] = r.v(),
-                    3 => cam.tan1[s] = r.v(),
-                    _ => {
-                        cam.dur[s] = r.i(0);
-                        cam.elapsed[s].set(0);
-                        cam.mode[s] = 7;
-                    }
-                }
+            // 06 §4 op 13.
+            Op::ClearColor(c) => self.clear_color = c,
+            // 06 §4 ops 14–18 / 19–23 / 24–28: start, end, tan0, tan1, Hermite (mode 7) for pos / facing / up.
+            Op::CamStart { slot, v } => cam.start.v[slot.index()] = v,
+            Op::CamEnd { slot, v } => cam.target.v[slot.index()] = v,
+            Op::CamTan0 { slot, v } => cam.tan0[slot.index()] = v,
+            Op::CamTan1 { slot, v } => cam.tan1[slot.index()] = v,
+            Op::CamHermite { slot, dur } => {
+                let s = slot.index();
+                cam.dur[s] = dur;
+                cam.elapsed[s].set(0);
+                cam.mode[s] = 7;
             }
-            29 => self.bg_vm(anm, sys.rng, 0, r.i(0)),
-            30 => self.bg_vm(anm, sys.rng, 1, r.i(0)),
-            34 => self.bg_vm(anm, sys.rng, 2, r.i(0)),
-            32 => cam.eye_offset = r.v(),
-            33 => {
-                self.sway_mode = r.i(0) as u8;
+            // 06 §4 ops 29 / 30 / 34.
+            Op::BgAnm { vm, script } => self.bg_vm(anm, sys.rng, vm, script),
+            // 06 §4 op 32.
+            Op::EyeOffset(v) => cam.eye_offset = v,
+            // 06 §4 op 33: the sway mode byte keeps the arg's low byte.
+            Op::Sway { mode } => {
+                self.sway_mode = lo8(mode);
                 self.sway_clock.set(0);
             }
-            _ => {}
+            // 06 §4.1 op 31 label and unknown opcodes: no-ops, the index advances.
+            Op::Section(_) | Op::Unknown(_) => {}
         }
         self.ip += 1;
         true
@@ -580,7 +597,7 @@ impl Stage {
             if req == 2 {
                 anm.file_set_script(sys.rng, vm, ANM_SLOT, 12);
             }
-            vm.pending_interrupt = req as u16;
+            vm.pending_interrupt = req.cast_unsigned() as u16;
             (vm.pos_end, vm.pos_start) = (k.pos_end, k.pos_start);
             vm.interp_elapsed[0] = k.interp_elapsed[0];
             vm.interp_duration[0] = k.interp_duration[0];
@@ -598,7 +615,7 @@ impl Stage {
             .std
             .script
             .iter()
-            .position(|r| r.time != -1 && r.op == 31 && r.i(0) == self.section_request)
+            .position(|r| r.time != -1 && Op::decode(r) == Op::Section(self.section_request))
         {
             self.ip = k + 1;
             self.clock.set(self.std.script[k].time);
@@ -646,8 +663,11 @@ impl Stage {
             self.fog_start.color.to_le_bytes(),
             self.fog_target.color.to_le_bytes(),
         );
-        let c: [u8; 4] =
-            std::array::from_fn(|k| ((b[k] as f32 - a[k] as f32) * t + a[k] as f32) as u8);
+        // Float → byte is the original's ftol (truncation); the factors stay in 0..=255.
+        #[expect(clippy::cast_sign_loss, reason = "06 §8 ftol of a colour byte")]
+        let c: [u8; 4] = std::array::from_fn(|k| {
+            ((f32::from(b[k]) - f32::from(a[k])) * t + f32::from(a[k])) as u8
+        });
         self.fog.color = u32::from_le_bytes(c);
         self.fog.near = (self.fog_target.near - self.fog_start.near) * t + self.fog_start.near;
         self.fog.far = (self.fog_target.far - self.fog_start.far) * t + self.fog_start.far;
@@ -659,7 +679,7 @@ impl Stage {
     // Stage_UpdateObjects (06 §9): the overlay VM follows the player mode byte (human blue, youkai white).
     fn update_objects(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, mode: u8) {
         if (mode != 0) != (self.overlay_mode != 0) {
-            self.overlay_mode = (mode != 0) as u8;
+            self.overlay_mode = u8::from(mode != 0);
             self.overlay.pending_interrupt = if mode != 0 { 1 } else { 2 };
             self.overlay_timer = Timer::default();
         }
@@ -689,7 +709,7 @@ impl Stage {
                 if vm.tag == 1 {
                     vm.flags |= anmvm::F_COLOR2;
                     vm.color2 = std::array::from_fn(|k| {
-                        ((vm.color[k] as u32 * overlay[k] as u32) / 256) as u8
+                        ((u32::from(vm.color[k]) * u32::from(overlay[k])) / 256) as u8
                     });
                 }
             }
@@ -723,7 +743,12 @@ impl Stage {
         self.sway(speed);
         self.update_fog(speed);
         // The clock does not advance while the current record is a halt (op 3).
-        if self.std.script.get(self.ip).is_none_or(|r| r.op != 3) {
+        if self
+            .std
+            .script
+            .get(self.ip)
+            .is_none_or(|r| Op::decode(r) != Op::Halt)
+        {
             self.clock.tick(speed);
         }
         let mode = sys.player.as_deref().map_or(0, |p| p.mode);
@@ -762,7 +787,7 @@ impl Stage {
         if self.sparkle_due(*sys.flags) {
             let pts = self.sparkles.1;
             for p in &pts[..12] {
-                let i = sys.fx.spawn(anm, sys.rng, 0x3E, *p, 1, 0x20FFFFFF);
+                let i = sys.fx.spawn(anm, sys.rng, 0x3E, *p, 1, 0x20FF_FFFF);
                 sys.fx.get(i, |e| e.layer = 4);
             }
         }
@@ -775,18 +800,18 @@ impl Stage {
     #[cfg(test)]
     pub fn trace(&self) -> Vec<u64> {
         let mut t = vec![
-            self.frame as u64,
+            u64::from(self.frame),
             self.ip as u64,
-            self.clock.cur as u64,
-            self.section_request as u64,
-            self.clear_color as u64,
-            self.sparkle_on as u64,
+            i64::from(self.clock.cur).cast_unsigned(),
+            i64::from(self.section_request).cast_unsigned(),
+            u64::from(self.clear_color),
+            u64::from(self.sparkle_on),
             self.sparkles.0 as u64,
-            self.fog.near.to_bits() as u64,
-            self.fog.color as u64,
-            self.fog_elapsed.cur as u64,
+            u64::from(self.fog.near.to_bits()),
+            u64::from(self.fog.color),
+            i64::from(self.fog_elapsed.cur).cast_unsigned(),
         ];
-        t.extend(self.cam.v.iter().flatten().map(|v| v.to_bits() as u64));
+        t.extend(self.cam.v.iter().flatten().map(|v| u64::from(v.to_bits())));
         t
     }
 
@@ -798,7 +823,7 @@ impl Stage {
     // 06 §5: every 3rd frame, from frame 700 (from frame 0 in spell practice, GameFlags bit 14), while +0xB24 < 2.
     fn sparkle_due(&self, flags: u32) -> bool {
         let practice = flags & crate::gamemgr::F_SPELL_PRACTICE != 0;
-        self.frame % 3 == 0 && (self.frame > 699 || practice) && self.spell_state < 2
+        self.frame.is_multiple_of(3) && (self.frame > 699 || practice) && self.spell_state < 2
     }
 
     // Stage_StartSpellBg 0x415CE0 (13 §5): spell VMs run scripts first..first+count of the slot-9 file.
@@ -834,7 +859,7 @@ impl Stage {
         out.push(Item::AnmReset);
         out.push(Item::DepthTest(true));
         // vm.color is stored B,G,R,A (D3DCOLOR little-endian), so the bytes are used as they are (07 §12.1).
-        let grey = 0xFFE0C0C0u32.to_le_bytes();
+        let grey = 0xFFE0_C0C0_u32.to_le_bytes();
         // The restore writes fixed values, not the saved scale / pos; the dirty bits stay set (07 §12.1).
         if let Some(vm) = self.spell_vms.get_mut(0) {
             let col = vm.color;
@@ -923,7 +948,7 @@ impl Stage {
             pv: [0.0; 3],
         };
         // Reused vertex-colour slots; initial values = stack residue (06 §11.3, INFERRED constant).
-        let mut slots = [0x00910D20u32, 0x00676E85, 0, 0].map(u32::to_le_bytes);
+        let mut slots = [0x0091_0D20_u32, 0x0067_6E85, 0, 0].map(u32::to_le_bytes);
         for inst in &self.std.instances {
             let obj = &self.std.objects[inst.object];
             if obj.layer != layer {
@@ -1008,9 +1033,12 @@ impl View<'_> {
         let fc = self.fog.color.to_le_bytes();
         let mut c = color;
         for k in 0..3 {
-            c[k] = (c[k] as i32 - ((c[k] as i32 - fc[k] as i32) as f32 * f) as i32) as u8;
+            c[k] = lo8(i32::from(c[k]) - ((i32::from(c[k]) - i32::from(fc[k])) as f32 * f) as i32);
         }
-        c[3] = (c[3] as f32 * (1.0 - f)) as u8;
+        #[expect(clippy::cast_sign_loss, reason = "06 §11.1 ftol of the alpha byte")]
+        {
+            c[3] = (f32::from(c[3]) * (1.0 - f)) as u8;
+        }
         Some(c)
     }
 
@@ -1022,7 +1050,7 @@ impl View<'_> {
     // Billboard sprite, tag & 0xF == 2 (06 §11.1).
     fn billboard(&mut self, anm: &AnmManager, vm: &mut AnmVm, w: f32, out: &mut Vec<Item>) {
         let s = self.project(vm.pos);
-        let ww = if w != 0.0 { w } else { vm.sprite_w };
+        let ww = if w == 0.0 { vm.sprite_w } else { w };
         // Quirk kept (06 §13): uses the previous frame's billboard scale.x (feedback); 3D length of s2 − s.
         let s2 = self.project(add(vm.pos, scale(self.right, ww * vm.scale[0])));
         let d = sub(s2, s);
@@ -1045,14 +1073,13 @@ impl View<'_> {
             // Only drawn quads append a sparkle point (06 §11.1).
             if vm.tag & 0xF0 == 0x10
                 && let Some(p) = self.points.as_deref_mut()
+                && sparkle_point_ok(dist, self.fog)
             {
-                if sparkle_point_ok(dist, self.fog) {
-                    // Port-only bound: the original has no check (the shipped data stays ≤ 15 points, 06 §11.1).
-                    if p.0 < 32 {
-                        let n = p.0;
-                        p.1[n] = [s[0], s[1], 0.0];
-                        p.0 += 1;
-                    }
+                // Port-only bound: the original has no check (the shipped data stays ≤ 15 points, 06 §11.1).
+                if p.0 < 32 {
+                    let n = p.0;
+                    p.1[n] = [s[0], s[1], 0.0];
+                    p.0 += 1;
                 }
             }
         }
@@ -1082,7 +1109,7 @@ impl View<'_> {
                 }
             }
         }
-        let ww = if w != 0.0 { w } else { vm.sprite_w };
+        let ww = if w == 0.0 { vm.sprite_w } else { w };
         let point = |p: Vec3| {
             let sp = self.project(p);
             let e = sub(self.project(add(p, scale(self.right, ww))), sp);
@@ -1100,7 +1127,10 @@ impl View<'_> {
         {
             return;
         }
-        let Some(&spr) = anm.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+        let Some(&spr) = anm.sprite(
+            usize::from(vm.anm_slot.cast_unsigned()),
+            usize::from(vm.sprite_index.cast_unsigned()),
+        ) else {
             return;
         };
         // `AnmManager_DrawCustomQuad` 0x464DD0 pushes the colours as given: no global tint (06 §11.3, 05 §12.1).
@@ -1233,7 +1263,7 @@ impl Stage {
                     // Spell-start fade: black, alpha +0xB28·255/60, ZFUNC ALWAYS (Screen_FillRect 0x45B1E0).
                     out.push(Item::AnmReset);
                     out.push(Item::DepthTest(false));
-                    out.push(Item::Fade([0, 0, 0, (self.spell_frames * 255 / 60) as u8]));
+                    out.push(Item::Fade([0, 0, 0, lo8(self.spell_frames * 255 / 60)]));
                 }
             }
             out.push(Item::DepthTest(false));
@@ -1386,8 +1416,10 @@ mod tests {
             points: None,
             pv: [0.0; 3],
         };
-        let mut vm = AnmVm::default();
-        vm.sprite_w = 16.0;
+        let vm = AnmVm {
+            sprite_w: 16.0,
+            ..AnmVm::default()
+        };
         let mut slots = [[0; 4]; 4];
         let (a, b) = ([0.0, 300.0, 0.0], [50.0, 400.0, 0.0]);
         view.ribbon(&anm, &vm, &mut slots, a, b, 0.0, &mut out);
