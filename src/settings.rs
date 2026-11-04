@@ -1089,9 +1089,9 @@ pub const ENTRIES: &[Entry] = &[
         summary: "Fixed random seed at boot",
         unit: "",
         words: &[("", "Random")],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "fixed boot RNG seed (0-65535)",
         set: |s, v| {
             s.seed = Some(num(v)?);
@@ -1119,9 +1119,9 @@ pub const ENTRIES: &[Entry] = &[
             ("6b", "Final B"),
             ("ex", "Extra"),
         ],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "start a game at that stage (also stageN[.std], idx:N)",
         set: |s, v| {
             s.stage = Some(th08_core::stage::parse_stage_arg(v).ok_or("unknown stage")?);
@@ -1138,9 +1138,9 @@ pub const ENTRIES: &[Entry] = &[
         summary: "Skip ahead into the stage",
         unit: " frames",
         words: &[("0", "Off")],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "fast-forward the stage n frames on its first calc",
         set: |s, v| {
             s.stage_frame = num(v)?;
@@ -1184,9 +1184,9 @@ pub const ENTRIES: &[Entry] = &[
             ("youmu", "Youmu"),
             ("yuyuko", "Yuyuko"),
         ],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "shot type 0-11 or a name (reimu&yukari, ry, marisa, ...) for --stage/--ending",
         set: |s, v| {
             s.player = Some(th08_core::player::parse_shot(v).ok_or("unknown shot type")?);
@@ -1210,9 +1210,9 @@ pub const ENTRIES: &[Entry] = &[
             ("lunatic", "Lunatic"),
             ("extra", "Extra"),
         ],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "difficulty for --stage/--ending (also e/n/h/l/x, 0-4)",
         set: |s, v| {
             s.rank = Some(th08_core::enemy::parse_difficulty(v).ok_or("unknown difficulty")?);
@@ -1229,9 +1229,9 @@ pub const ENTRIES: &[Entry] = &[
         summary: "Player power at the first stage",
         unit: "",
         words: &[("", "Default")],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "player power at the first stage",
         set: |s, v| {
             s.power = Some(num(v)?);
@@ -1248,9 +1248,9 @@ pub const ENTRIES: &[Entry] = &[
         summary: "Continues counted when an ending starts",
         unit: "",
         words: &[("0", "None")],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "continues used, for --ending",
         set: |s, v| {
             s.continues = num(v)?;
@@ -1267,9 +1267,9 @@ pub const ENTRIES: &[Entry] = &[
         summary: "Watch an ending directly",
         unit: "",
         words: &[("", "Off")],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "start an ending: <shot><a|b|c> (bad / good 6A / good 6B) or a .end file",
         set: |s, v| {
             s.ending = Some(parse_ending(v)?);
@@ -1286,9 +1286,9 @@ pub const ENTRIES: &[Entry] = &[
         summary: "Play a replay file or a demo",
         unit: "",
         words: &[("", "Off")],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "play a replay file or an attract demo",
         set: |s, v| {
             s.replay = Some(v.to_string());
@@ -1305,9 +1305,9 @@ pub const ENTRIES: &[Entry] = &[
         summary: "Playback speed of that replay",
         unit: "",
         words: &[("0", "Normal"), ("1", "Slowdown"), ("2", "Fast")],
-        audience: Audience::Player,
+        audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         help: "replay playback speed",
         set: |s, v| {
             s.replay_speed = num(v)?;
@@ -2567,7 +2567,7 @@ mod tests {
             }
             assert_eq!(
                 e.audience == Audience::Dev,
-                matches!(e.group, Group::Cheats | Group::Tools)
+                matches!(e.group, Group::StartGame | Group::Cheats | Group::Tools)
             );
         }
         assert_eq!(find("scale").unwrap().label, "Window size");
