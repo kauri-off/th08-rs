@@ -299,8 +299,8 @@ impl Supervisor {
     // Loading_Begin 0x448790 (12 §1): surface 8 (the logo) full screen + nowloading.anm scripts 0–2 at (500, 440).
     fn begin_loading(&mut self, ctx: &mut Ctx) -> Result<()> {
         if self.logo.is_none() {
-            let b = ctx.archive.present().read("th08logo.jpg")?;
-            self.logo = Some(ctx.rec.load_image("th08logo.jpg", &b)?);
+            let (b, over) = ctx.archive.present().image("th08logo.jpg")?;
+            self.logo = Some(ctx.rec.load_image_over("th08logo.jpg", &b, over)?);
         }
         self.start_vms(ctx, [500.0, 440.0]);
         Ok(())
@@ -352,8 +352,8 @@ impl Supervisor {
                 ctx.rec.free_texture(t);
             }
             // Labelled by its surface slot's file name, as the draw log names surface 8.
-            let b = ctx.archive.present().read("result.jpg")?;
-            self.logo = Some(ctx.rec.load_image("th08logo.jpg", &b)?);
+            let (b, over) = ctx.archive.present().image("result.jpg")?;
+            self.logo = Some(ctx.rec.load_image_over("th08logo.jpg", &b, over)?);
             MENU_LOAD
         } else if from == SceneId::MusicRoom {
             // The music room calls 0x44886F itself on the exit press, one frame before the scene switch.

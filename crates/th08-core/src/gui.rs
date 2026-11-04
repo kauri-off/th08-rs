@@ -3,7 +3,7 @@
 use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, table_index};
 use crate::builtin::Builtin;
-use crate::drawlist::{PLAYFIELD, Recorder, TextCmd};
+use crate::drawlist::{Align, PLAYFIELD, Recorder, TextCmd, TextSite};
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::task::{self, Chain, Ret, Task};
@@ -74,8 +74,8 @@ pub type Queue = Vec<Req>;
 pub struct Gui {
     // VMs at +0x120 + k·0x2A4, roles in the 12 §5.8 table; 3 and 5 never get a script.
     vms: [AnmVm; 14],
-    // Pending Text_RenderToVm requests: (VM, text, colour, x inside the strip).
-    texts: Vec<(usize, Text, [u8; 3], f32)>,
+    // Pending Text_RenderToVm requests: (VM, text, colour, x inside the strip, placement).
+    texts: Vec<(usize, Text, [u8; 3], f32, Align)>,
     // Spell flag bit 10: name-only show (native 22), no bonus line and no VM 13 interrupts.
     name_only: bool,
     card: i32,
@@ -213,7 +213,8 @@ impl Gui {
                 // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 (12 §5.3).
                 panel.set_repaint(2);
                 anm.set_script(rng, &mut v[6], TEXT_SLOT, 4);
-                self.texts.push((6, name.txt(), PLAYER_NAME_RGB, 0.0));
+                self.texts
+                    .push((6, name.txt(), PLAYER_NAME_RGB, 0.0, Align::Left));
                 v[10].pending_interrupt = 1;
                 sound.play(0xE);
             }
@@ -249,7 +250,8 @@ impl Gui {
                 // Text_RenderToVmRight 0x4664A0 (10 §6): x = trunc(u0 + sw − len·15/2), u0 0, sw 320, len in
                 // Shift-JIS bytes; colour 0x00FFF0F0.
                 let x = (NAME_STRIP_W - name.raw.len() as f32 * 15.0 / 2.0).trunc();
-                self.texts.push((7, name, BOSS_NAME_RGB, x));
+                self.texts
+                    .push((7, name, BOSS_NAME_RGB, x, Align::Right(NAME_STRIP_W)));
                 v[11].pending_interrupt = 1;
                 if !name_only {
                     v[13].pending_interrupt = 1;
@@ -280,7 +282,7 @@ impl Gui {
         reason = "ftol of the strip's v0 in pixels (10 §6)"
     )]
     fn flush_texts(&mut self, ctx: &mut Ctx) {
-        for (k, s, colour, x) in std::mem::take(&mut self.texts) {
+        for (k, s, colour, x, align) in std::mem::take(&mut self.texts) {
             let Some(sp) = ctx
                 .w
                 .anm
@@ -305,6 +307,8 @@ impl Gui {
                 color: colour,
                 x,
                 outline: 0,
+                align,
+                site: TextSite::Spell,
             });
         }
     }

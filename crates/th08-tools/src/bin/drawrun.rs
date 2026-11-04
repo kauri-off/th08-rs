@@ -6,6 +6,8 @@
 use std::io::Write;
 
 fn main() -> anyhow::Result<()> {
+    // RUST_LOG only (arch_check PACK: the pack mount line); stderr is never digested.
+    let _ = env_logger::try_init();
     let (mut args, mut hash_on, mut window) = (Vec::new(), false, (i64::MIN, i64::MAX));
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {

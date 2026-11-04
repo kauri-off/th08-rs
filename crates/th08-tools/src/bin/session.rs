@@ -106,6 +106,8 @@ fn load_ctx(s: &Session, a: &Args) -> anyhow::Result<th08_core::game::Ctx> {
 }
 
 fn main() -> anyhow::Result<()> {
+    // RUST_LOG only (arch_check PACK: the pack mount line); stderr is never digested.
+    let _ = env_logger::try_init();
     let a = parse_args()?;
     let (dir, out, from, to, window) = (&a.dir, &a.out, a.from, a.to, a.window);
     let s = Session::load(dir)?;

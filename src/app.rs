@@ -120,11 +120,14 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
     let drawlog = s.drawlog.as_deref().and_then(open_drawlog);
     #[cfg(target_arch = "wasm32")]
     let drawlog = None;
+    let mut renderer: Box<dyn th08_core::drawlist::Renderer> = Box::new(gfx);
+    let overlay = s.mount_pack(renderer.as_mut());
     let io = th08_core::game::Io {
-        renderer: Box::new(gfx),
+        renderer,
         audio: Box::new(th08_audio::audio::Audio::new(source.clone(), s.audio())),
         host: s.app_host(),
         drawlog,
+        overlay,
     };
     let ctx = Ctx::load(source, io, s.core()).await?;
     Ok(Box::new(Running {

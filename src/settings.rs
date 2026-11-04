@@ -271,6 +271,8 @@ pub struct Settings {
     pub language: Option<crate::i18n::Lang>,
     // Game text language, stored for the presentation packs (I18N §3.2); None = follow `language`.
     pub game_text: Option<crate::i18n::Lang>,
+    // Presentation pack to mount (packs.rs): a folder / .zip path or an id in the pack folders; None = by `game_text`.
+    pub pack: Option<String>,
     pub soundfont: Option<PathBuf>,
     pub seed: Option<u16>,
     pub stage: Option<usize>,
@@ -339,6 +341,7 @@ impl Settings {
             font: None,
             language: None,
             game_text: None,
+            pack: None,
             soundfont: None,
             seed: None,
             stage: None,
@@ -785,6 +788,26 @@ pub const ENTRIES: &[Entry] = &[
         help: "Japanese font for dialogue text (native)",
         set: |s, v| {
             s.font = Some(v.to_string());
+            Ok(())
+        },
+    },
+    Entry {
+        key: "pack",
+        env: "TH08_PACK",
+        kind: Kind::Path,
+        default: "",
+        group: Group::Tools,
+        label: "Presentation pack",
+        summary: "Translation pack folder or zip",
+        unit: "",
+        words: &[("", "By game text language")],
+        audience: Audience::Dev,
+        platforms: Platforms::DESKTOP,
+        persist: false,
+        help: "presentation pack to mount: a folder or .zip, or a pack id in <game folder>/packs or \
+               <config folder>/packs; empty = the pack of the game text language (texts, fonts, images only)",
+        set: |s, v| {
+            s.pack = (!v.trim().is_empty()).then(|| v.trim().to_string());
             Ok(())
         },
     },
@@ -1762,12 +1785,31 @@ impl Settings {
         renderer: impl th08_core::drawlist::Renderer + 'static,
         source: &th08_core::assets::Source,
     ) -> th08_core::game::Io {
+        let mut renderer: Box<dyn th08_core::drawlist::Renderer> = Box::new(renderer);
+        let overlay = self.mount_pack(renderer.as_mut());
         th08_core::game::Io {
-            renderer: Box::new(renderer),
+            renderer,
             audio: Box::new(th08_audio::audio::Audio::new(source.clone(), self.audio())),
             host: self.tool_host(),
             drawlog: None,
+            overlay,
         }
+    }
+
+    // The selected presentation pack (packs.rs) into the renderer (when it is a `Gfx`); its images for `Io::overlay`.
+    pub fn mount_pack(
+        &self,
+        renderer: &mut dyn th08_core::drawlist::Renderer,
+    ) -> Option<std::sync::Arc<th08_core::content::Overlay>> {
+        let m = crate::packs::select(self)?;
+        let overlay = m.overlay();
+        if let Some(g) = renderer
+            .as_any_mut()
+            .downcast_mut::<th08_render::gfx::Gfx>()
+        {
+            g.set_pack(m.text);
+        }
+        overlay
     }
 
     // Tools and tests: no devices, scripted / recorded input (`platform::ToolHost`).

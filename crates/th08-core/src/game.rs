@@ -59,6 +59,8 @@ pub struct Io {
     pub host: Box<dyn crate::host::Host>,
     // Draw log writer (None = off); `Ctx::load_with` enables the renderer's log when present.
     pub drawlog: Option<crate::drawfmt::Writer>,
+    // Presentation pack images (I18N G2), mounted over `archive.present()` only.
+    pub overlay: Option<std::sync::Arc<crate::content::Overlay>>,
 }
 
 // Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue
@@ -280,8 +282,12 @@ impl Ctx {
             mut audio,
             mut host,
             drawlog,
+            overlay,
         } = io;
-        let archive = LogicView::new(crate::content::Content::load(&source).await?);
+        let mut archive = LogicView::new(crate::content::Content::load(&source).await?);
+        if let Some(o) = overlay {
+            archive.mount(o);
+        }
         // Supervisor_OnRegister 0x4461A0: the exe-check version list, archive only; missing fails start-up (15 §2.10).
         let ver = archive
             .read(crate::scoredat::VER_LIST_NAME)

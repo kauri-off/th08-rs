@@ -1,6 +1,10 @@
 //! Core content views (ARCH_B_MODDING §1.2, decisions D1 / D5): logic reads game data only through `LogicView`,
 //! presentation-only data (pixels, samples, MIDI) through `PresentView`; both over the th08.dat archive (01 §2–§7)
-//! or its repacked th08.pak (port-only container, docs/arch/ASSETS_FORMAT.md §3.1, §3.3).
+//! or its repacked th08.pak (port-only container, docs/arch/ASSETS_FORMAT.md §3.1, §3.3); a mounted presentation
+//! pack (`Overlay`, I18N §2.4–§2.5, ARCH_B §1.7) replaces textures through `PresentView` only.
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use th08_formats::archive::{Archive, ArchiveError};
 use th08_formats::pack::{HEADER_LEN, Index, Kind, Layer, Pack, PackError};
@@ -164,6 +168,8 @@ impl From<Archive> for Content {
 pub struct LogicView {
     content: Content,
     fingerprint: Fingerprint,
+    // Presentation pack images; never read by `read`, so the fingerprint and every logic byte stay vanilla.
+    overlay: Option<Arc<Overlay>>,
 }
 
 impl LogicView {
@@ -176,7 +182,13 @@ impl LogicView {
         Self {
             content,
             fingerprint,
+            overlay: None,
         }
+    }
+
+    // Mounts a presentation pack (I18N G2) over the presentation reads.
+    pub fn mount(&mut self, overlay: Arc<Overlay>) {
+        self.overlay = Some(overlay);
     }
 
     // Lookup by bare name, case-insensitive (01 §5).
@@ -190,22 +202,124 @@ impl LogicView {
 
     // The presentation layers over the same content.
     pub fn present(&self) -> PresentView<'_> {
-        PresentView(&self.content)
+        PresentView {
+            content: &self.content,
+            overlay: self.overlay.as_deref(),
+        }
     }
 }
 
-// Presentation-only reads (jpg surfaces, se_*.wav, .mid); a later presentation pack may replace them freely.
+// Presentation-only reads (jpg surfaces, se_*.wav, .mid, THTX pixels) and the mounted pack's image overrides.
 #[derive(Clone, Copy)]
-pub struct PresentView<'a>(&'a Content);
+pub struct PresentView<'a> {
+    content: &'a Content,
+    overlay: Option<&'a Overlay>,
+}
 
 impl PresentView<'_> {
+    // The vanilla bytes; a pack never changes them (sizes stay the archive's, ASSETS_FORMAT §1.1).
     pub fn read(&self, name: &str) -> th08_formats::archive::Result<Vec<u8>> {
-        self.0.read(name)
+        self.content.read(name)
     }
 
     pub fn names(&self) -> &[String] {
-        self.0.names()
+        self.content.names()
     }
+
+    // A standalone .jpg / .png (03 §1): the vanilla bytes (they give the texture size) and the pack's override.
+    pub fn image(&self, name: &str) -> anyhow::Result<(Vec<u8>, Option<ImageBytes>)> {
+        let over = self.overlay.and_then(|o| o.file(name));
+        Ok((self.read(name)?, over))
+    }
+
+    // Override of an ANM entry's THTX pixels by its image name (+0x1C, 03 §2.1); '@' targets never.
+    pub fn chunk_image(&self, chunk: &str) -> Option<Arc<[u8]>> {
+        self.overlay.and_then(|o| o.chunk(chunk))
+    }
+}
+
+// An encoded .png / .jpg of a presentation pack, shared with the renderer's create command.
+pub type ImageBytes = Arc<[u8]>;
+
+// Why a pack file is not mounted.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Reject {
+    // A key core logic reads (ecl, std, msg, anm, sht, end, …: `pack::layer_of` = Logic).
+    Logic(String),
+    // A presentation key that is not a texture (wav, mid): G2 overrides textures only.
+    NotTexture(String),
+}
+
+impl std::fmt::Display for Reject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Logic(n) => write!(
+                f,
+                "{n}: logic key, rejected (presentation packs never change logic)"
+            ),
+            Self::NotTexture(n) => write!(f, "{n}: not a texture, ignored"),
+        }
+    }
+}
+
+// Image layers of a presentation pack (I18N §2.4, ARCH_B §1.7): `images/<chunk image name>` replaces the THTX pixels
+// of every ANM entry with that name, `files/<name>.jpg|png` a standalone image. Keys are lowercase with '/'.
+#[derive(Clone, Debug, Default)]
+pub struct Overlay {
+    chunks: HashMap<String, Arc<[u8]>>,
+    files: HashMap<String, Arc<[u8]>>,
+}
+
+impl Overlay {
+    pub fn is_empty(&self) -> bool {
+        self.chunks.is_empty() && self.files.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.chunks.len() + self.files.len()
+    }
+
+    // `path` relative to the pack root. `images/…` → chunk override, anything else → a file override by base name
+    // (`files/info00.jpg`, a stray `ecldata1.ecl`); logic keys and non-textures are refused.
+    pub fn add(&mut self, path: &str, bytes: Vec<u8>) -> Result<(), Reject> {
+        let path = path.replace('\\', "/").to_ascii_lowercase();
+        let base = path.rsplit('/').next().unwrap_or(&path).to_string();
+        if th08_formats::pack::layer_of(&base) == Layer::Logic {
+            return Err(Reject::Logic(path));
+        }
+        if !(base.ends_with(".png") || base.ends_with(".jpg")) {
+            return Err(Reject::NotTexture(path));
+        }
+        match path.strip_prefix("images/") {
+            Some(chunk) => self
+                .chunks
+                .insert(chunk_key(chunk).to_string(), bytes.into()),
+            None => self.files.insert(base, bytes.into()),
+        };
+        Ok(())
+    }
+
+    // By chunk image name (`data/ascii/ascii.png`, thcrap's `ascii/ascii.png`), then by its base name.
+    fn chunk(&self, name: &str) -> Option<Arc<[u8]>> {
+        if name.starts_with('@') {
+            return None;
+        }
+        let key = name.replace('\\', "/").to_ascii_lowercase();
+        let key = chunk_key(&key);
+        self.chunks
+            .get(key)
+            .or_else(|| self.chunks.get(key.rsplit('/').next()?))
+            .cloned()
+    }
+
+    fn file(&self, name: &str) -> Option<Arc<[u8]>> {
+        self.files.get(&name.to_ascii_lowercase()).cloned()
+    }
+}
+
+// `data/` prefix dropped: thcrap's `data/text/stg1txt.png` and the chunk name `data/text/stg1txt.png` share a key.
+fn chunk_key(name: &str) -> &str {
+    name.strip_prefix("data/").unwrap_or(name)
 }
 
 #[cfg(test)]
@@ -297,6 +411,50 @@ mod tests {
                 .unwrap()
                 .is_err()
         );
+    }
+
+    // Overlay keys: thcrap / chunk names share a key, '@' targets and logic keys are never overridden, and
+    // mounting changes neither `read` nor the fingerprint.
+    #[test]
+    fn overlay_keys() {
+        let mut o = Overlay::default();
+        o.add("images/ascii/ascii.png", b"a".to_vec()).unwrap();
+        o.add("images/front.png", b"f".to_vec()).unwrap();
+        o.add("files/TH08LOGO.JPG", b"l".to_vec()).unwrap();
+        assert_eq!(
+            o.add("files/ecldata1.ecl", vec![]),
+            Err(Reject::Logic("files/ecldata1.ecl".into()))
+        );
+        assert!(matches!(o.add("msg1a.dat", vec![]), Err(Reject::Logic(_))));
+        assert!(matches!(
+            o.add("images/text.anm", vec![]),
+            Err(Reject::Logic(_))
+        ));
+        assert!(matches!(
+            o.add("files/se_ok00.wav", vec![]),
+            Err(Reject::NotTexture(_))
+        ));
+        assert_eq!(o.chunk("data/ascii/ascii.png").as_deref(), Some(&b"a"[..]));
+        assert_eq!(o.chunk("data/front/front.png").as_deref(), Some(&b"f"[..]));
+        assert_eq!(o.chunk("@text"), None);
+        assert_eq!(o.file("th08logo.jpg").as_deref(), Some(&b"l"[..]));
+        let pak = write(
+            Kind::Content,
+            &[("ecldata1.ecl", b"x"), ("th08logo.jpg", b"jpg")],
+            1 << 20,
+            &mut |b: &[u8]| b.to_vec(),
+        );
+        let plain = LogicView::new(Content::Pack(Pack::from_bytes(pak.clone()).unwrap()));
+        let mut lv = LogicView::new(Content::Pack(Pack::from_bytes(pak).unwrap()));
+        lv.mount(Arc::new(o));
+        assert_eq!(lv.fingerprint(), plain.fingerprint());
+        assert_eq!(lv.read("ecldata1.ecl").unwrap(), b"x");
+        let (b, over) = lv.present().image("th08logo.jpg").unwrap();
+        assert_eq!(
+            (b.as_slice(), over.as_deref()),
+            (&b"jpg"[..], Some(&b"l"[..]))
+        );
+        assert_eq!(plain.present().image("th08logo.jpg").unwrap().1, None);
     }
 
     #[test]

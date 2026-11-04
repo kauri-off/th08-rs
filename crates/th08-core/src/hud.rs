@@ -3,7 +3,9 @@
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, table_index};
 use crate::ascii::Text;
-use crate::drawlist::{Blend, FULLSCREEN, PLAYFIELD, Recorder, TexId, TextCmd, Vertex};
+use crate::drawlist::{
+    Align, Blend, FULLSCREEN, PLAYFIELD, Recorder, TexId, TextCmd, TextSite, Vertex,
+};
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
@@ -605,6 +607,8 @@ impl Hud {
                 color: colour,
                 x: 0.0,
                 outline: 0,
+                align: Align::Left,
+                site: TextSite::Dialogue,
             });
         }
     }

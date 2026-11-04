@@ -118,6 +118,27 @@ fn decode_image(bytes: &[u8], w: u32, h: u32) -> Arc<[u8]> {
     }
 }
 
+// A presentation-pack image override (I18N G2, ARCH_B §1.7): decoded and scaled to the vanilla `w` × `h` (HD
+// overrides keep the logical size and UVs); undecodable → transparent like `decode_image`.
+fn decode_fitted(bytes: &[u8], w: u32, h: u32) -> Arc<[u8]> {
+    match image::load_from_memory(bytes) {
+        Ok(img) if (img.width(), img.height()) == (w, h) => Arc::from(img.to_rgba8().into_raw()),
+        Ok(img) => {
+            let fitted = image::imageops::resize(
+                &img.to_rgba8(),
+                w,
+                h,
+                image::imageops::FilterType::Triangle,
+            );
+            Arc::from(fitted.into_raw())
+        }
+        Err(e) => {
+            log::warn!("pack image decode failed: {e}");
+            Arc::from(vec![0; 4 * w as usize * h as usize])
+        }
+    }
+}
+
 // True when rect `inner` lies inside `outer` (both `[x, y, w, h]`).
 fn rect_within(inner: [u32; 4], outer: [u32; 4]) -> bool {
     inner[0] >= outer[0]
@@ -227,8 +248,8 @@ pub struct Gfx {
     pub persistent: bool,
     // `ResCmd::Text` rasteriser (10 §6), made with `font` at the first text command.
     text: Option<crate::text::Raster>,
-    // Translations for `TextCmd` keys; empty = vanilla text (I18N §2.3).
-    textdb: crate::textdb::TextDb,
+    // Translations for `TextCmd` keys, pack font, overflow per site; empty = vanilla text (I18N §2.3).
+    pack: crate::textdb::PackText,
     font: Option<String>,
 }
 
@@ -722,7 +743,7 @@ impl Gfx {
             log_fog: None,
             persistent: false,
             text: None,
-            textdb: crate::textdb::TextDb::new(),
+            pack: crate::textdb::PackText::default(),
             font: None,
         };
         // A fresh recorder's white texture (slot 0), so a Gfx without a core recorder (launcher, tools) has it too.
@@ -1851,8 +1872,18 @@ impl Gfx {
             ResCmd::Create { id, w, h, rgba } => {
                 self.create_texture_fmt(*id, *w, *h, Some(rgba), wgpu::TextureFormat::Rgba8Unorm);
             }
-            ResCmd::CreateImage { id, bytes, w, h } => {
-                let rgba = decode_image(bytes, *w, *h);
+            ResCmd::CreateImage {
+                id,
+                bytes,
+                w,
+                h,
+                fit,
+            } => {
+                let rgba = if *fit {
+                    decode_fitted(bytes, *w, *h)
+                } else {
+                    decode_image(bytes, *w, *h)
+                };
                 self.create_texture_fmt(*id, *w, *h, Some(&rgba), wgpu::TextureFormat::Rgba8Unorm);
             }
             ResCmd::CaptureScreen { id, label } => self.do_capture_screen(*id, label),
@@ -1886,18 +1917,32 @@ impl Gfx {
 
     // Translated text table used by every later `TextCmd` (I18N §2.3).
     pub fn set_text_db(&mut self, db: crate::textdb::TextDb) {
-        self.textdb = db;
+        self.pack.db = db;
+    }
+
+    // A mounted presentation pack's text side (I18N G2): texts, FileFont, overflow modes.
+    pub fn set_pack(&mut self, pack: crate::textdb::PackText) {
+        self.pack = pack;
+        self.text = None;
     }
 
     // Text_RenderToVm 0x4663B0 (10 §6): translation or Shift-JIS decode, CPU raster, upload over the strip.
+    // Text equal to the vanilla decode takes the vanilla path (system font, byte-formula `x`), so untranslated
+    // strings keep their pixels with a pack mounted.
     fn do_text(&mut self, t: &th08_core::drawlist::TextCmd) {
-        let s = self.textdb.resolve(&t.key, &t.text);
-        let font = self.font.as_deref();
+        let s = self.pack.db.resolve(&t.key, &t.text);
+        let translated = !self.pack.db.is_empty() && s != t.text.decode();
+        let (font, pack_font) = (self.font.as_deref(), &self.pack.font);
         let raster = self
             .text
-            .get_or_insert_with(|| crate::text::Raster::new(font));
-        let rgba =
-            raster.render_outline(&s, t.color, t.w as usize, t.size as usize, t.x, t.outline);
+            .get_or_insert_with(|| crate::text::Raster::new(font, pack_font.clone()));
+        let (w, size) = (t.w as usize, t.size as usize);
+        let rgba = if translated {
+            let overflow = self.pack.overflow(t.site);
+            raster.render_layout(&s, t.color, w, size, t.outline, (t.align, t.x), overflow)
+        } else {
+            raster.render_outline(&s, t.color, w, size, t.x, t.outline)
+        };
         self.do_write_texture(t.dst, 0, t.y, t.w, t.size, &rgba);
     }
 }

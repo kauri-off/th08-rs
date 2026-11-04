@@ -123,6 +123,7 @@ mod imp {
             audio: Box::new(NullAudio),
             host,
             drawlog: None,
+            overlay: None,
         };
         Some(block_on(Ctx::load_with(source()?, io, core, false)).unwrap())
     }

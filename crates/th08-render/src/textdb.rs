@@ -2,7 +2,26 @@
 //! as before, so with nothing mounted every `TextCmd` rasterises the original string (10 §6).
 
 use std::collections::HashMap;
+use th08_core::drawlist::TextSite;
 use th08_core::textref::{SjisString, TextRef, sprintf};
+
+use crate::text::Overflow;
+
+// The renderer half of a mounted presentation pack (I18N G2): its texts, its font file, overflow per site.
+#[derive(Clone, Debug, Default)]
+pub struct PackText {
+    pub db: TextDb,
+    // TTF / OTF bytes of the pack's text font (FileFont); None = the system font.
+    pub font: Option<Vec<u8>>,
+    // `[targets]` of pack.toml; a site not listed uses `Overflow::default()`.
+    pub overflow: HashMap<TextSite, Overflow>,
+}
+
+impl PackText {
+    pub fn overflow(&self, site: TextSite) -> Overflow {
+        self.overflow.get(&site).copied().unwrap_or_default()
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct TextDb {
@@ -17,6 +36,10 @@ impl TextDb {
 
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
     }
 
     // Filled by a presentation pack mount (I18N G2); an empty text means "keep vanilla".

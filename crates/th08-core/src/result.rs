@@ -1393,9 +1393,8 @@ impl ResultScreen {
         match ctx
             .archive
             .present()
-            .read("result.jpg")
-            .map_err(anyhow::Error::from)
-            .and_then(|b| ctx.rec.load_image("result.jpg", &b))
+            .image("result.jpg")
+            .and_then(|(b, over)| ctx.rec.load_image_over("result.jpg", &b, over))
         {
             Ok(t) => self.surface = Some(t),
             Err(e) => log::warn!("result.jpg: {e:#}"),

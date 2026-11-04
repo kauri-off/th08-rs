@@ -3,7 +3,7 @@
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::{Text, int, percent_glyphs, short, uidx};
 use crate::builtin::Builtin;
-use crate::drawlist::{Blend, Recorder, TextCmd, Vertex};
+use crate::drawlist::{Align, Blend, Recorder, TextCmd, TextSite, Vertex};
 use crate::fmath;
 use crate::game::Ctx;
 use crate::gamemgr::{F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
@@ -382,6 +382,8 @@ pub(crate) fn render_strip(ctx: &mut Ctx, slot: usize, sprite: i32, s: Txt) {
         color: [255, 255, 255],
         x: 0.0,
         outline: 0,
+        align: Align::Left,
+        site: TextSite::MenuList,
     });
 }
 

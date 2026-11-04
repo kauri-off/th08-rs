@@ -48,6 +48,7 @@ egui = { version = "0.37", default-features = false, features = ["default_fonts"
 egui-wgpu = { version = "0.37", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 log = "0.4.34"
+serde_json = "1"
 toml = "1.1"
 web-time = "1.1.0"
 wgpu = "30"
@@ -76,6 +77,8 @@ directories = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Start-up blocks on a future on Android too (app::spawn), so pollster is native, not desktop-only.
 pollster = "1.0.1"
+# Presentation packs as .zip (packs.rs).
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # Desktop only: no file/message dialogs, CLI or stderr logger on wasm (page) or Android (logcat).
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]

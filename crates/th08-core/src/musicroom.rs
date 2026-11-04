@@ -3,7 +3,7 @@
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
 use crate::builtin::Builtin;
-use crate::drawlist::{FULLSCREEN, Recorder, TexId, TextCmd};
+use crate::drawlist::{Align, FULLSCREEN, Recorder, TexId, TextCmd, TextSite};
 use crate::game::Ctx;
 use crate::gamemgr;
 use crate::input::{BOMB, DOWN, ENTER, KEY_R, PAUSE, SHOT, SKIP, UP};
@@ -142,6 +142,8 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: Txt, colour: u32, mode: i32) {
         color: colorref(colour),
         x: tx,
         outline: mode,
+        align: Align::Left,
+        site: TextSite::MusicRoom,
     });
     vm.flags |= anmvm::F_VISIBLE;
 }
@@ -315,9 +317,8 @@ impl MusicRoom {
         match ctx
             .archive
             .present()
-            .read("music.jpg")
-            .map_err(anyhow::Error::from)
-            .and_then(|b| ctx.rec.load_image("music.jpg", &b))
+            .image("music.jpg")
+            .and_then(|(b, over)| ctx.rec.load_image_over("music.jpg", &b, over))
         {
             Ok(t) => self.surface = Some(t),
             Err(e) => log::warn!("music.jpg: {e:#}"),

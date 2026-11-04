@@ -5,7 +5,7 @@ use crate::anmvm::{self, AnmVm};
 use crate::ascii::{int, lo16, short, uidx};
 use crate::builtin::Builtin;
 use crate::config::Config;
-use crate::drawlist::{FULLSCREEN, Recorder, TexId, TextCmd};
+use crate::drawlist::{Align, FULLSCREEN, Recorder, TexId, TextCmd, TextSite};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
@@ -144,9 +144,8 @@ impl InfoNotices {
                     match ctx
                         .archive
                         .present()
-                        .read(file)
-                        .map_err(anyhow::Error::from)
-                        .and_then(|b| ctx.rec.load_image(file, &b))
+                        .image(file)
+                        .and_then(|(b, over)| ctx.rec.load_image_over(file, &b, over))
                     {
                         Ok(t) => ctx.w.info.cur = Some((t, 0)),
                         Err(e) => log::warn!("{file}: {e:#}"),
@@ -385,9 +384,8 @@ impl MainMenu {
         match ctx
             .archive
             .present()
-            .read(name)
-            .map_err(anyhow::Error::from)
-            .and_then(|b| ctx.rec.load_image(name, &b))
+            .image(name)
+            .and_then(|(b, over)| ctx.rec.load_image_over(name, &b, over))
         {
             Ok(t) => self.surface = Some((t, name)),
             Err(e) => log::warn!("{name}: {e:#}"),
@@ -425,6 +423,8 @@ impl MainMenu {
             key: t.key,
             color: [224, 240, 255],
             outline: 0x0030_0000,
+            align: Align::Centre(256.0),
+            site: TextSite::MenuDesc,
         });
     }
 

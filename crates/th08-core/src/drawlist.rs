@@ -301,11 +301,14 @@ pub enum ResCmd {
         rgba: Arc<[u8]>,
     },
     // Standalone .jpg / .png file bytes (03 §1); the renderer decodes them to RGBA8 of the header's `w` × `h`.
+    // `fit`: a presentation-pack override (I18N G2), scaled to `w` × `h` when its size differs (the logical size and
+    // every UV stay the vanilla ones, ARCH_B §1.7).
     CreateImage {
         id: TexId,
         bytes: Arc<[u8]>,
         w: u32,
         h: u32,
+        fit: bool,
     },
     // Post-present capture into a new 640×480 surface-format texture (12 §1, 0x44886F).
     CaptureScreen {
@@ -362,6 +365,60 @@ pub struct TextCmd {
     pub x: f32,
     // −1 → ±1 px outline offsets (2× space), anything else ±2 px.
     pub outline: i32,
+    // How the original placed the text (10 §6 entry points). The vanilla path always draws at `x` (the original's
+    // byte-length formula); a translation is placed by its measured width (I18N §2.3).
+    pub align: Align,
+    // Which recorder made it: the presentation pack picks the overflow mode per site (I18N §2.3, ARCH_B §1.5).
+    pub site: TextSite,
+}
+
+// Placement of a `TextCmd` in strip pixels: Text_RenderToVm at `x`, Text_RenderCentered around a centre,
+// Text_RenderToVmRight against a right edge (10 §6).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Align {
+    Left,
+    Centre(f32),
+    Right(f32),
+}
+
+// The six text recorders (I18N §2.2); the key of a pack's `[targets]` overflow table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextSite {
+    // Dialogue strips (10 §6, hud.rs).
+    Dialogue,
+    // Spell / player-spell plate (07 §11.1, 12 §5.3, gui.rs).
+    Spell,
+    // Ending text (16 §1.3).
+    Ending,
+    // Music room title and comments (16 §5.1).
+    MusicRoom,
+    // Spell practice / result / replay lists (16 §6.3, §6.5).
+    MenuList,
+    // Menu descriptions (12 §2.2).
+    MenuDesc,
+}
+
+impl TextSite {
+    pub const ALL: [TextSite; 6] = [
+        TextSite::Dialogue,
+        TextSite::Spell,
+        TextSite::Ending,
+        TextSite::MusicRoom,
+        TextSite::MenuList,
+        TextSite::MenuDesc,
+    ];
+
+    // Name in a pack's `[targets]` table.
+    pub fn name(self) -> &'static str {
+        match self {
+            TextSite::Dialogue => "dialogue",
+            TextSite::Spell => "spell",
+            TextSite::Ending => "ending",
+            TextSite::MusicRoom => "music_room",
+            TextSite::MenuList => "menu_list",
+            TextSite::MenuDesc => "menu_desc",
+        }
+    }
 }
 
 // AnmManager's D3D render-state mirrors: blend +0x24C0 (05 §12.5), bound texture +0x24BC and texture-matrix sprite
@@ -653,6 +710,35 @@ impl Recorder {
         self.create_entry(width, height, src, Arc::from(rgba))
     }
 
+    // ANM entry texture replaced by a pack image (I18N G2): same provenance and THTX size, pixels decoded and fitted
+    // by the renderer.
+    pub fn create_anm_texture_over(
+        &mut self,
+        file: &str,
+        entry: u32,
+        width: u32,
+        height: u32,
+        image: Arc<[u8]>,
+    ) -> TexId {
+        let id = self.table.alloc(TexEntry {
+            width,
+            height,
+            label: None,
+            src: TexSource::Anm {
+                file: file.into(),
+                entry,
+            },
+        });
+        self.res_cmd(ResCmd::CreateImage {
+            id,
+            bytes: image,
+            w: width,
+            h: height,
+            fit: true,
+        });
+        id
+    }
+
     #[expect(clippy::cast_sign_loss, reason = "640.0 × 480.0 screen constants")]
     pub fn capture_screen(&mut self, label: &str) -> TexId {
         let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
@@ -705,6 +791,16 @@ impl Recorder {
     // Standalone .jpg / .png images (03 §1): size from the header, pixels decoded by the renderer; `name` is the
     // draw-log label.
     pub fn load_image(&mut self, name: &str, bytes: &[u8]) -> anyhow::Result<TexId> {
+        self.load_image_over(name, bytes, None)
+    }
+
+    // `load_image` with a pack override (`PresentView::image`): the size still comes from the vanilla `bytes`.
+    pub fn load_image_over(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        over: Option<Arc<[u8]>>,
+    ) -> anyhow::Result<TexId> {
         let (w, h) = th08_formats::img::dims(bytes)?;
         let id = self.table.alloc(TexEntry {
             width: w,
@@ -712,11 +808,13 @@ impl Recorder {
             label: None,
             src: TexSource::Image { name: name.into() },
         });
+        let fit = over.is_some();
         self.res_cmd(ResCmd::CreateImage {
             id,
-            bytes: Arc::from(bytes),
+            bytes: over.unwrap_or_else(|| Arc::from(bytes)),
             w,
             h,
+            fit,
         });
         self.set_label(id, name, w, h);
         Ok(id)

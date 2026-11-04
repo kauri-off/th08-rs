@@ -6,6 +6,8 @@ use th08_tools::demosync::{FIELDS, parse_trace};
 
 #[expect(clippy::cast_sign_loss, reason = "demo frames are ≥ 0")]
 fn main() -> anyhow::Result<()> {
+    // RUST_LOG only (arch_check PACK: the pack mount line); stderr is never digested.
+    let _ = env_logger::try_init();
     let args: Vec<String> = std::env::args().collect();
     let n: u8 = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
     let range = args.get(2).and_then(|r| {

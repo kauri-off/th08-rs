@@ -154,11 +154,16 @@ impl AnmManager {
         );
         self.unload(rec, slot);
         let mut entry = 0;
+        let present = archive.present();
         self.insert(slot, name, chunks, |c| {
-            let id = match pixels[entry as usize].take() {
-                Some(t) => rec.create_anm_texture(name, entry, t.width, t.height, &t.rgba),
+            let id = match (pixels[entry as usize].take(), present.chunk_image(&c.name)) {
+                // Pack image by chunk name (I18N G2): THTX size kept, pixels replaced.
+                (Some(t), Some(img)) => {
+                    rec.create_anm_texture_over(name, entry, t.width, t.height, img)
+                }
+                (Some(t), None) => rec.create_anm_texture(name, entry, t.width, t.height, &t.rgba),
                 // '@' entries are blank render targets (text / capture).
-                None => rec.create_anm_texture(
+                (None, _) => rec.create_anm_texture(
                     name,
                     entry,
                     c.width.max(1),

@@ -1,7 +1,7 @@
 //! Ending object and `.end` script interpreter (16 §1.2–§1.7): Ending_Register 0x4296A0, calc prio 5, draw prio 4.
 
 use crate::anmvm::{self, AnmVm};
-use crate::drawlist::{Recorder, TexId, TextCmd};
+use crate::drawlist::{Align, Recorder, TexId, TextCmd, TextSite};
 use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{ENTER, SHOT, SKIP};
@@ -326,9 +326,8 @@ impl Ending {
                     let tex = ctx
                         .archive
                         .present()
-                        .read(&file)
-                        .map_err(anyhow::Error::from)
-                        .and_then(|b| ctx.rec.load_image(&file, &b));
+                        .image(&file)
+                        .and_then(|(b, over)| ctx.rec.load_image_over(&file, &b, over));
                     match tex {
                         Ok(t) => {
                             if let Some(old) = self.picture.replace(t) {
@@ -458,6 +457,8 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: Text, rgb: [u8; 3]) {
         color: rgb,
         x: 0.0,
         outline: -1,
+        align: Align::Left,
+        site: TextSite::Ending,
     });
     vm.flags |= anmvm::F_VISIBLE;
 }

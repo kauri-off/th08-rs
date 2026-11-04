@@ -1,0 +1,325 @@
+//! Presentation packs (I18N §2.5, run G2): `packs/<id>` (a folder or a .zip) chosen by `game_text` or the `pack`
+//! setting, read into the renderer's `PackText` (texts, FileFont, overflow per site) and core's image `Overlay`.
+//! Port-only; nothing here reaches logic (logic keys are refused by `Overlay::add`, I18N §2.1).
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use th08_core::content::Overlay;
+use th08_core::drawlist::TextSite;
+use th08_render::text::Overflow;
+use th08_render::textdb::{PackText, TextDb};
+
+use crate::settings::Settings;
+
+// A pack read and checked: what the renderer and core get, plus the warnings printed at mount.
+pub struct Mounted {
+    pub id: String,
+    pub language: String,
+    pub text: PackText,
+    pub overlay: Arc<Overlay>,
+    pub warnings: Vec<String>,
+}
+
+impl Mounted {
+    // `Io::overlay`: None when the pack has no images, so a text-only pack leaves `PresentView` untouched.
+    pub fn overlay(&self) -> Option<Arc<Overlay>> {
+        (!self.overlay.is_empty()).then(|| self.overlay.clone())
+    }
+}
+
+// The pack this run shows: the `pack` setting (a path, or an id in the pack folders), else the first pack whose
+// `language` is the game text language (`game_text`, `follow` = `language`); none for Japanese, the original.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn select(s: &Settings) -> Option<Mounted> {
+    let dirs = pack_dirs(s);
+    let path = if let Some(p) = &s.pack {
+        let path = std::path::PathBuf::from(p);
+        let found = std::iter::once(path)
+            .chain(dirs.iter().map(|d| d.join(p)))
+            .chain(dirs.iter().map(|d| d.join(format!("{p}.zip"))))
+            .find(|d| d.exists());
+        if found.is_none() {
+            log::warn!("pack {p}: not found in {dirs:?}");
+        }
+        found?
+    } else {
+        let lang = s
+            .game_text
+            .unwrap_or_else(|| crate::i18n::resolve(s.language));
+        if lang == crate::i18n::Lang::Ja {
+            return None;
+        }
+        let found = find_language(&dirs, lang.code());
+        if found.is_none() {
+            log::info!(
+                "no {} presentation pack in {dirs:?}; vanilla text",
+                lang.code()
+            );
+        }
+        found?
+    };
+    let files = match read_files(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::warn!("pack {}: {e:#}", path.display());
+            return None;
+        }
+    };
+    match mount(&files, &stem(&path)) {
+        Ok(m) => {
+            for w in &m.warnings {
+                log::warn!("pack {}: {w}", m.id);
+            }
+            log::info!(
+                "pack {} ({}) mounted: {} texts, {} images, font {}",
+                m.id,
+                m.language,
+                m.text.db.len(),
+                m.overlay.len(),
+                if m.text.font.is_some() {
+                    "yes"
+                } else {
+                    "system"
+                }
+            );
+            Some(m)
+        }
+        Err(e) => {
+            log::warn!("pack {}: {e:#}", path.display());
+            None
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn select(_: &Settings) -> Option<Mounted> {
+    None
+}
+
+// `<game folder>/packs`, then `<config folder>/packs`.
+#[cfg(not(target_arch = "wasm32"))]
+fn pack_dirs(s: &Settings) -> Vec<std::path::PathBuf> {
+    s.game_dir
+        .iter()
+        .chain(s.dirs.config.iter())
+        .map(|d| d.join("packs"))
+        .collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn stem(p: &std::path::Path) -> String {
+    p.file_stem()
+        .map_or_else(String::new, |s| s.to_string_lossy().into_owned())
+}
+
+// The first pack (in name order) of the folders whose pack.toml says `language = <code>`.
+#[cfg(not(target_arch = "wasm32"))]
+fn find_language(dirs: &[std::path::PathBuf], code: &str) -> Option<std::path::PathBuf> {
+    for d in dirs {
+        let mut entries: Vec<_> = std::fs::read_dir(d)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        entries.sort();
+        for p in entries {
+            let Some(manifest) = read_manifest(&p) else {
+                continue;
+            };
+            if manifest.get("language").and_then(toml::Value::as_str) == Some(code) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_manifest(p: &std::path::Path) -> Option<toml::Table> {
+    let text = if p.is_dir() {
+        std::fs::read_to_string(p.join("pack.toml")).ok()?
+    } else {
+        let mut z = zip::ZipArchive::new(std::fs::File::open(p).ok()?).ok()?;
+        let mut f = z.by_name("pack.toml").ok()?;
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut f, &mut s).ok()?;
+        s
+    };
+    text.parse().ok()
+}
+
+// Every file of a pack folder (recursively) or zip, as (relative path with '/', bytes).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_files(p: &std::path::Path) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    if p.is_dir() {
+        let mut stack = vec![p.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d)? {
+                let path = e?.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let rel = path.strip_prefix(p)?.to_string_lossy().replace('\\', "/");
+                    out.push((rel, std::fs::read(&path)?));
+                }
+            }
+        }
+    } else {
+        let mut z = zip::ZipArchive::new(std::fs::File::open(p)?)?;
+        for i in 0..z.len() {
+            let mut f = z.by_index(i)?;
+            if f.is_dir() {
+                continue;
+            }
+            let name = f.name()?.replace('\\', "/");
+            let mut b = Vec::new();
+            f.read_to_end(&mut b)?;
+            out.push((name, b));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+// Pack layout (I18N §2.5): `pack.toml`; `text/*.json` = flat `{"<TextRef key>": "<text>"}` objects; `fonts/*.ttf|otf`;
+// `images/<chunk image name>` and `files/<name>` textures; ATTRIBUTION / LICENSE / README files are skipped.
+pub fn mount(files: &[(String, Vec<u8>)], fallback_id: &str) -> anyhow::Result<Mounted> {
+    let manifest: toml::Table = match files.iter().find(|f| f.0.eq_ignore_ascii_case("pack.toml")) {
+        Some((_, b)) => std::str::from_utf8(b)?.parse()?,
+        None => anyhow::bail!("no pack.toml"),
+    };
+    let get = |k: &str| manifest.get(k).and_then(toml::Value::as_str);
+    let class = get("class").unwrap_or("presentation");
+    anyhow::ensure!(
+        class == "presentation",
+        "class = {class:?}: only presentation packs are mounted"
+    );
+    let mut warnings = Vec::new();
+    let mut overflow = HashMap::new();
+    if let Some(t) = manifest.get("targets").and_then(toml::Value::as_table) {
+        for (k, v) in t {
+            let site = TextSite::ALL.into_iter().find(|s| s.name() == k);
+            let mode = v.as_str().and_then(Overflow::from_name);
+            match (site, mode) {
+                (Some(s), Some(m)) => {
+                    overflow.insert(s, m);
+                }
+                _ => warnings.push(format!("[targets] {k} = {v}: unknown site or mode")),
+            }
+        }
+    }
+    let font_name = manifest
+        .get("fonts")
+        .and_then(toml::Value::as_table)
+        .and_then(|t| t.get("text"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_ascii_lowercase);
+    let mut db = TextDb::new();
+    let mut overlay = Overlay::default();
+    let mut fonts: Vec<(String, Vec<u8>)> = Vec::new();
+    for (path, bytes) in files {
+        let lower = path.to_ascii_lowercase();
+        let base = lower.rsplit('/').next().unwrap_or(&lower);
+        if lower == "pack.toml"
+            || ["attribution", "license", "readme", "copying"]
+                .iter()
+                .any(|m| base.starts_with(m))
+        {
+            continue;
+        }
+        if let Some(rest) = lower.strip_prefix("text/") {
+            if !rest.ends_with(".json") {
+                warnings.push(format!("{path}: not a .json text table, ignored"));
+                continue;
+            }
+            match serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(bytes) {
+                Ok(map) => {
+                    for (k, v) in map {
+                        match v {
+                            serde_json::Value::String(t) => db.insert(k, t),
+                            _ => warnings.push(format!("{path}: {k}: not a string")),
+                        }
+                    }
+                }
+                Err(e) => warnings.push(format!("{path}: {e}")),
+            }
+        } else if lower.starts_with("fonts/") {
+            if base.ends_with(".ttf") || base.ends_with(".otf") || base.ends_with(".ttc") {
+                fonts.push((lower.clone(), bytes.clone()));
+            } else {
+                warnings.push(format!("{path}: not a font file, ignored"));
+            }
+        } else if let Err(e) = overlay.add(path, bytes.clone()) {
+            warnings.push(e.to_string());
+        }
+    }
+    let font = match &font_name {
+        Some(n) => {
+            let f = fonts.iter().find(|f| &f.0 == n).map(|f| f.1.clone());
+            if f.is_none() {
+                warnings.push(format!("[fonts] text = {n:?}: no such file"));
+            }
+            f
+        }
+        None => fonts.first().map(|f| f.1.clone()),
+    };
+    Ok(Mounted {
+        id: get("id").unwrap_or(fallback_id).to_string(),
+        language: get("language").unwrap_or("").to_string(),
+        text: PackText { db, font, overflow },
+        overlay: Arc::new(overlay),
+        warnings,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn f(p: &str, b: &[u8]) -> (String, Vec<u8>) {
+        (p.to_string(), b.to_vec())
+    }
+
+    // Texts and targets are read; logic keys and non-textures are refused with a warning; nothing else breaks.
+    #[test]
+    fn mount_rejects_logic_keys() {
+        let files = vec![
+            f(
+                "pack.toml",
+                b"id = \"t\"\nlanguage = \"en\"\n[targets]\ndialogue = \"wrap\"\nbogus = \"clip\"\n",
+            ),
+            f("ATTRIBUTION.txt", b"x"),
+            f("text/msg.json", br#"{"msg/msg1a.dat/0/0": "Hello", "spell/0/name": 3}"#),
+            f("files/ecldata1.ecl", b"evil"),
+            f("msg1a.dat", b"evil"),
+            f("images/text/stg1txt.anm", b"evil"),
+            f("files/se_ok00.wav", b"RIFF"),
+            f("images/data/text/stg1txt.png", b"png"),
+            f("files/th08logo.jpg", b"jpg"),
+        ];
+        let m = mount(&files, "fallback").unwrap();
+        assert_eq!((m.id.as_str(), m.language.as_str()), ("t", "en"));
+        assert_eq!(m.text.db.len(), 1);
+        assert_eq!(m.text.overflow(TextSite::Dialogue), Overflow::Wrap);
+        assert_eq!(m.text.overflow(TextSite::Spell), Overflow::Shrink);
+        assert_eq!(m.overlay.len(), 2);
+        let w = m.warnings.join("\n");
+        for k in ["ecldata1.ecl", "msg1a.dat", "stg1txt.anm"] {
+            assert!(w.contains(&format!("{k}: logic key")), "{w}");
+        }
+        assert!(w.contains("se_ok00.wav: not a texture"), "{w}");
+        assert!(w.contains("bogus"), "{w}");
+        assert!(w.contains("spell/0/name: not a string"), "{w}");
+    }
+
+    #[test]
+    fn mount_refuses_logic_class() {
+        let files = vec![f("pack.toml", b"class = \"logic\"\n")];
+        assert!(mount(&files, "x").is_err());
+        assert!(mount(&[], "x").is_err());
+    }
+}

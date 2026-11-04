@@ -7,6 +7,7 @@ pub mod i18n;
 pub mod joystick;
 pub mod launcher;
 pub mod pacer;
+pub mod packs;
 pub mod platform;
 pub mod settings;
 pub mod sources;

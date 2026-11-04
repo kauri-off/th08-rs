@@ -164,6 +164,14 @@ help = "会話テキスト用の日本語フォント（ネイティブ版）"
 [entry.font.words]
 "" = "初期設定"
 
+[entry.pack]
+label = "表示パック"
+summary = "翻訳パックのフォルダまたは zip"
+help = "読み込む表示パック：フォルダか .zip、または <ゲームフォルダ>/packs か <設定フォルダ>/packs 内のパック ID。空欄 = ゲームテキストの言語のパック（テキスト・フォント・画像のみ）"
+
+[entry.pack.words]
+"" = "ゲームテキストの言語"
+
 [entry.soundfont]
 label = "MIDI サウンドフォント"
 summary = "MIDI 音楽用のサウンドフォント"
