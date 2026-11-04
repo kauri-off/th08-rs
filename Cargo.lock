@@ -3186,6 +3186,7 @@ dependencies = [
  "bytemuck",
  "image",
  "log",
+ "pollster 1.0.1",
  "th08-core",
  "wasm-bindgen",
  "web-sys",

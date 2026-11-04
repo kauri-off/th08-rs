@@ -1,13 +1,19 @@
 //! wgpu renderer standing in for the D3D8 device state the original sets up (05 §9, §12.4–§12.5; 06 §10).
 #![allow(clippy::disallowed_methods)]
 
+use std::borrow::Cow;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use wgpu::util::DeviceExt;
 
 pub use th08_core::drawlist::{
     Blend, DrawCmd, FULLSCREEN, LogFog, LogRec, LogTex, PLAYFIELD, Recorder, Rect, ResCmd,
     SCREEN_H, SCREEN_W, TexId, TexInfo, Vertex, clip_in_viewport,
 };
+
+// The 640×480 frame in texels (05 §12.4).
+#[expect(clippy::cast_sign_loss, reason = "640.0 / 480.0 exactly")]
+const FRAME: (u32, u32) = (SCREEN_W as u32, SCREEN_H as u32);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -31,9 +37,9 @@ impl PipeKey {
             Kind::ClearColor => 8,
             Kind::ClearDepth => 9,
             Kind::Draw => {
-                (self.blend == Blend::Add) as usize
-                    | (self.test as usize) << 1
-                    | (self.write as usize) << 2
+                usize::from(self.blend == Blend::Add)
+                    | usize::from(self.test) << 1
+                    | usize::from(self.write) << 2
             }
         }
     }
@@ -50,6 +56,59 @@ pub struct Texture {
     label: Option<LogTex>,
 }
 
+// Port-only (ARCH_D_MOBILE §5): how slot `TexId.0` was made and changed since, replayed by `Gfx::rebuild` after a
+// device loss. ANM entries and .jpg / .png arrive as `ResCmd::Create` pixels (core decodes), so both are `rgba`.
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(dead_code, reason = "no rebuild on the web")
+)]
+struct Provenance {
+    w: u32,
+    h: u32,
+    format: wgpu::TextureFormat,
+    // `ResCmd::Create` pixels; None = screen capture target, which comes back black until captured again.
+    rgba: Option<Arc<[u8]>>,
+    // Writes (text rasters included) and copies into the slot, in order; an edit inside a later one's rect is dropped.
+    edits: Vec<Edit>,
+}
+
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(dead_code, reason = "no rebuild on the web")
+)]
+enum Edit {
+    Write {
+        at: [u32; 2],
+        size: [u32; 2],
+        rgba: Vec<u8>,
+    },
+    Copy {
+        src: TexId,
+        from: [u32; 2],
+        to: [u32; 2],
+        size: [u32; 2],
+    },
+}
+
+impl Edit {
+    // Destination rect `[x, y, w, h]`.
+    fn rect(&self) -> [u32; 4] {
+        match *self {
+            Edit::Write { at, size, .. } | Edit::Copy { to: at, size, .. } => {
+                [at[0], at[1], size[0], size[1]]
+            }
+        }
+    }
+}
+
+// True when rect `inner` lies inside `outer` (both `[x, y, w, h]`).
+fn rect_within(inner: [u32; 4], outer: [u32; 4]) -> bool {
+    inner[0] >= outer[0]
+        && inner[1] >= outer[1]
+        && inner[0] + inner[2] <= outer[0] + outer[2]
+        && inner[1] + inner[3] <= outer[1] + outer[3]
+}
+
 // Consecutive quads with equal texture, state and viewport, drawn in one call (05 §9 EmitQuad step 5).
 struct Batch {
     tex: TexId,
@@ -64,6 +123,8 @@ struct Batch {
 pub trait Overlay {
     fn paint(&mut self, gfx: OverlayTarget<'_>, enc: &mut wgpu::CommandEncoder);
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    // After `Gfx::rebuild`: GPU objects made on the old device are dead and must be made again.
+    fn device_rebuilt(&mut self) {}
 }
 
 // What an overlay draws with: the device and the window-sized target (surface or the scaled `--shot` texture).
@@ -96,6 +157,19 @@ impl SafeArea {
     }
 }
 
+// Device-bound objects that do not depend on core state: made by `build` and again by `rebuild`.
+struct Gpu {
+    pipes: Vec<wgpu::RenderPipeline>,
+    tex_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    // The original renders at 640x480; the window shows that image scaled (05 §12.4).
+    frame: wgpu::Texture,
+    frame_bind: wgpu::BindGroup,
+    blit: wgpu::RenderPipeline,
+    // Filtered sub-rect copy of the frame into an Rgba8Unorm texture (texture capture, 12 §3).
+    crop: wgpu::RenderPipeline,
+}
+
 // Port-only GPU state: device, pipelines, texture table, pending batches and the 640×480 frame target.
 pub struct Gfx {
     pub surface: Option<wgpu::Surface<'static>>,
@@ -103,28 +177,34 @@ pub struct Gfx {
     pub overlay: Option<Box<dyn Overlay>>,
     // Set by the app on every resize / resume; `blit` and the launcher keep out of it.
     pub safe: SafeArea,
-    // Window devices: makes the surface again after a lifecycle detach (ARCH_D §5); None = headless.
-    instance: Option<wgpu::Instance>,
+    // Makes the surface again after a lifecycle detach and the device after a loss (ARCH_D §5).
+    instance: wgpu::Instance,
+    // No window: `attach` fails, `rebuild` asks for any adapter.
+    headless: bool,
+    // The native window `surface` was made for (None while detached): `rebuild` makes a new surface on it.
+    window: Option<Arc<winit::window::Window>>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    pipes: Vec<wgpu::RenderPipeline>,
+    gpu: Gpu,
     depth: Option<(u32, u32, wgpu::TextureView)>,
     depth_test: bool,
-    tex_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
     // Executor side of the core `ResTable`: slot `TexId.0` holds that id's texture.
     textures: Vec<Option<Texture>>,
+    // Same slots: what `rebuild` uploads again.
+    prov: Vec<Option<Provenance>>,
+    // Set by the device-lost callback of the current device; checked before each submit.
+    lost: Arc<AtomicBool>,
+    // Bumped by every `rebuild`; GPU objects made outside `Gfx` on an older generation are dead.
+    generation: u32,
+    // Port debug hook TH08_DEVICE_LOSS=<n>: the device is destroyed at the n-th Present (ARCH_D §5 manual check).
+    loss_at: Option<u32>,
+    presents: u32,
     viewport: Rect,
     verts: Vec<Vertex>,
     indices: Vec<u32>,
     batches: Vec<Batch>,
     white: TexId,
-    frame: wgpu::Texture,
-    frame_bind: wgpu::BindGroup,
-    blit: wgpu::RenderPipeline,
-    // Filtered sub-rect copy of the frame into an Rgba8Unorm texture (texture capture, 12 §3).
-    crop: wgpu::RenderPipeline,
     log: Option<Vec<LogRec>>,
     log_fog: Option<LogFog>,
     pub persistent: bool,
@@ -182,96 +262,124 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 @fragment fn fs(i: VsOut) -> @location(0) vec4f { return textureSample(t, s, i.uv); }
 "#;
 
-impl Gfx {
-    // `vsync` = port display setting; logic pacing is separate (app.rs).
-    pub async fn new(window: Arc<winit::window::Window>, vsync: bool) -> anyhow::Result<Self> {
-        let size = window.inner_size();
-        let instance = wgpu::util::new_instance_with_webgpu_detection(
-            wgpu::InstanceDescriptor::new_without_display_handle(),
-        )
-        .await;
-        let surface = instance.create_surface(window)?;
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                compatible_surface: Some(&surface),
-                ..Default::default()
-            })
-            .await?;
-        let info = adapter.get_info();
-        log::info!(
-            "adapter: {} ({:?}, {:?})",
-            info.name,
-            info.backend,
-            info.device_type
-        );
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
-                ..Default::default()
-            })
-            .await?;
-        let mut config = surface
-            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .ok_or_else(|| anyhow::anyhow!("surface unsupported"))?;
-        let caps = surface.get_capabilities(&adapter);
-        let want = [
-            wgpu::TextureFormat::Bgra8Unorm,
-            wgpu::TextureFormat::Rgba8Unorm,
-        ];
-        if let Some(f) = caps.formats.iter().find(|f| want.contains(f)) {
-            config.format = *f;
-        }
-        config.present_mode = if vsync {
-            wgpu::PresentMode::AutoVsync
-        } else {
-            wgpu::PresentMode::AutoNoVsync
-        };
-        surface.configure(&device, &config);
-        let mut g = Self::build(Some(surface), device, queue, config);
-        g.instance = Some(instance);
-        Ok(g)
-    }
+fn shader(device: &wgpu::Device, src: &str) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(src.into()),
+    })
+}
 
-    // Offscreen device for tests and tools: renders only into the 640x480 frame.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub async fn headless() -> anyhow::Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
-            .await?;
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
-                ..Default::default()
-            })
-            .await?;
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            width: SCREEN_W as u32,
-            height: SCREEN_H as u32,
-            present_mode: wgpu::PresentMode::Fifo,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: Vec::new(),
-            color_space: Default::default(),
-        };
-        Ok(Self::build(None, device, queue, config))
-    }
+fn view(t: &wgpu::Texture) -> wgpu::TextureView {
+    t.create_view(&wgpu::TextureViewDescriptor::default())
+}
 
-    fn build(
-        surface: Option<wgpu::Surface<'static>>,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        config: wgpu::SurfaceConfiguration,
-    ) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
+    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default())
+}
+
+fn extent(width: u32, height: u32) -> wgpu::Extent3d {
+    wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    }
+}
+
+// Texture + sampler bind group of the draw / blit / crop shaders (`@group(0)`).
+fn bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+// Same limits for the first device and a rebuilt one.
+async fn request_device(adapter: &wgpu::Adapter) -> anyhow::Result<(wgpu::Device, wgpu::Queue)> {
+    Ok(adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                .using_resolution(adapter.limits()),
+            ..Default::default()
+        })
+        .await?)
+}
+
+// A fresh flag per device, so the old device's late callback cannot trigger a second rebuild.
+fn watch_loss(device: &wgpu::Device) -> Arc<AtomicBool> {
+    let lost = Arc::new(AtomicBool::new(false));
+    let flag = lost.clone();
+    device.set_device_lost_callback(move |reason, msg| {
+        log::warn!("device lost ({reason:?}): {msg}");
+        flag.store(true, Ordering::Release);
+    });
+    lost
+}
+
+impl Gpu {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let tex_layout = Self::tex_layout(device);
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            bind_group_layouts: &[Some(&tex_layout)],
+            immediate_size: 0,
         });
-        let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let pipes = Self::draw_pipes(device, &layout, format);
+        // ADDRESSU/V = WRAP, MAG/MIN = LINEAR, no mip (05 §12.4).
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let blit = Self::blit_pipe(device, &layout, format);
+        let crop = Self::crop_pipe(device, &layout);
+        let frame = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: extent(FRAME.0, FRAME.1),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let frame_bind = bind_group(device, &tex_layout, &view(&frame), &blit_sampler);
+        Self {
+            pipes,
+            tex_layout,
+            sampler,
+            frame,
+            frame_bind,
+            blit,
+            crop,
+        }
+    }
+
+    fn tex_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -291,12 +399,17 @@ impl Gfx {
                     count: None,
                 },
             ],
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[Some(&tex_layout)],
-            immediate_size: 0,
-        });
+        })
+    }
+
+    // Pipelines indexed by `PipeKey::index`: 0–7 draw (bit 0 Add blend, bit 1 z test, bit 2 z write), 8 colour + z
+    // clear, 9 z-only clear.
+    fn draw_pipes(
+        device: &wgpu::Device,
+        layout: &wgpu::PipelineLayout,
+        format: wgpu::TextureFormat,
+    ) -> Vec<wgpu::RenderPipeline> {
+        let shader = shader(device, SHADER);
         let add = wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -312,11 +425,11 @@ impl Gfx {
                     fs: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
-                layout: Some(&layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs"),
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Vertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
@@ -326,18 +439,18 @@ impl Gfx {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(fs),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format: config.format, blend, write_mask: mask })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: mask })],
                 }),
-                primitive: Default::default(),
+                primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
                     depth_write_enabled: Some(write),
                     depth_compare: Some(if test { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Always }),
-                    stencil: Default::default(),
-                    bias: Default::default(),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
                 }),
-                multisample: Default::default(),
+                multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
             })
@@ -366,54 +479,51 @@ impl Gfx {
             true,
             "fs_clear",
         ));
-        // ADDRESSU/V = WRAP, MAG/MIN = LINEAR, no mip (05 §12.4).
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        pipes
+    }
+
+    fn blit_pipe(
+        device: &wgpu::Device,
+        layout: &wgpu::PipelineLayout,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        let blit_shader = shader(device, BLIT);
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(BLIT.into()),
-        });
-        let blit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(&layout),
+            layout: Some(layout),
             vertex: wgpu::VertexState {
                 module: &blit_shader,
                 entry_point: Some("vs"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &blit_shader,
                 entry_point: Some("fs"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            primitive: Default::default(),
+            primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
-        });
-        let crop_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        })
+    }
+
+    fn crop_pipe(device: &wgpu::Device, layout: &wgpu::PipelineLayout) -> wgpu::RenderPipeline {
+        let crop_shader = shader(device, CROP);
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(CROP.into()),
-        });
-        let crop = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(&layout),
+            layout: Some(layout),
             vertex: wgpu::VertexState {
                 module: &crop_shader,
                 entry_point: Some("vs"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: 16,
                     step_mode: wgpu::VertexStepMode::Vertex,
@@ -423,7 +533,7 @@ impl Gfx {
             fragment: Some(wgpu::FragmentState {
                 module: &crop_shader,
                 entry_point: Some("fs"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: None,
@@ -435,71 +545,160 @@ impl Gfx {
                 ..Default::default()
             },
             depth_stencil: None,
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
-        });
-        // The original renders at 640x480; the window shows that image scaled (05 §12.4).
-        let frame = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width: SCREEN_W as u32,
-                height: SCREEN_H as u32,
-                depth_or_array_layers: 1,
+        })
+    }
+
+    // Full-precision RGBA8 upload (03 §3: the reduced-colour option can be ignored); `rgba` None = a blank (black,
+    // alpha 0) capture target.
+    fn upload(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        size: [u32; 2],
+        rgba: Option<&[u8]>,
+        format: wgpu::TextureFormat,
+    ) -> Texture {
+        let [width, height] = size;
+        let rgba = rgba.map_or_else(
+            || Cow::Owned(vec![0u8; (width * height * 4) as usize]),
+            Cow::Borrowed,
+        );
+        let tex = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: extent(width, height),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let frame_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &rgba,
+        );
+        let bind = bind_group(device, &self.tex_layout, &view(&tex), &self.sampler);
+        Texture {
+            width,
+            height,
+            bind,
+            tex,
             label: None,
-            layout: &tex_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &frame.create_view(&Default::default()),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&blit_sampler),
-                },
-            ],
-        });
+        }
+    }
+}
+
+impl Gfx {
+    // `vsync` = port display setting; logic pacing is separate (app.rs).
+    pub async fn new(window: Arc<winit::window::Window>, vsync: bool) -> anyhow::Result<Self> {
+        let size = window.inner_size();
+        let instance = wgpu::util::new_instance_with_webgpu_detection(
+            wgpu::InstanceDescriptor::new_without_display_handle(),
+        )
+        .await;
+        let surface = instance.create_surface(window.clone())?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                ..Default::default()
+            })
+            .await?;
+        let info = adapter.get_info();
+        log::info!(
+            "adapter: {} ({:?}, {:?})",
+            info.name,
+            info.backend,
+            info.device_type
+        );
+        let (device, queue) = request_device(&adapter).await?;
+        let mut config = surface
+            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+            .ok_or_else(|| anyhow::anyhow!("surface unsupported"))?;
+        let caps = surface.get_capabilities(&adapter);
+        let want = [
+            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
+        ];
+        if let Some(f) = caps.formats.iter().find(|f| want.contains(f)) {
+            config.format = *f;
+        }
+        config.present_mode = if vsync {
+            wgpu::PresentMode::AutoVsync
+        } else {
+            wgpu::PresentMode::AutoNoVsync
+        };
+        surface.configure(&device, &config);
+        let mut g = Self::build(instance, Some(surface), device, queue, config);
+        g.window = Some(window);
+        Ok(g)
+    }
+
+    // Offscreen device for tests and tools: renders only into the 640x480 frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn headless() -> anyhow::Result<Self> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await?;
+        let (device, queue) = request_device(&adapter).await?;
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            width: FRAME.0,
+            height: FRAME.1,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: Vec::new(),
+            color_space: wgpu::SurfaceColorSpace::default(),
+        };
+        Ok(Self::build(instance, None, device, queue, config))
+    }
+
+    // `surface` None = headless.
+    fn build(
+        instance: wgpu::Instance,
+        surface: Option<wgpu::Surface<'static>>,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        config: wgpu::SurfaceConfiguration,
+    ) -> Self {
+        let gpu = Gpu::new(&device, config.format);
+        let lost = watch_loss(&device);
+        let loss_at = std::env::var("TH08_DEVICE_LOSS")
+            .ok()
+            .and_then(|v| v.parse().ok());
         let mut g = Self {
+            headless: surface.is_none(),
+            window: None,
             surface,
             overlay: None,
             safe: SafeArea::default(),
-            instance: None,
+            instance,
             device,
             queue,
             config,
-            pipes,
+            gpu,
             depth: None,
             depth_test: false,
-            tex_layout,
-            sampler,
             textures: Vec::new(),
+            prov: Vec::new(),
+            lost,
+            generation: 0,
+            loss_at,
+            presents: 0,
             viewport: FULLSCREEN,
             verts: Vec::new(),
             indices: Vec::new(),
             batches: Vec::new(),
             white: TexId::WHITE,
-            frame,
-            frame_bind,
-            blit,
-            crop,
             log: None,
             log_fog: None,
             persistent: false,
@@ -509,6 +708,105 @@ impl Gfx {
         // A fresh recorder's white texture (slot 0), so a Gfx without a core recorder (launcher, tools) has it too.
         g.submit(&mut Recorder::new());
         g
+    }
+
+    // Number of `rebuild`s so far: a caller holding its own GPU objects (egui renderer) remakes them when it changes.
+    pub fn generation(&self) -> u32 {
+        self.generation
+    }
+
+    // Port debug: destroys the device as a driver reset would; the next submit rebuilds (ARCH_D §5 manual check).
+    pub fn force_device_loss(&mut self) {
+        log::warn!("forcing a device loss");
+        self.device.destroy();
+        self.lost.store(true, Ordering::Release);
+    }
+
+    // Before each submit: a lost device is replaced (native); web keeps the dead one and logs (no blocking there).
+    fn recover_if_lost(&mut self) {
+        if !self.lost.load(Ordering::Acquire) {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        match self.rebuild() {
+            Ok(()) => log::warn!("device rebuilt (generation {})", self.generation),
+            Err(e) => log::error!("device rebuild failed: {e:#}"),
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            log::error!("device lost; no rebuild on the web");
+            self.lost.store(false, Ordering::Release);
+        }
+    }
+
+    // Device loss (ARCH_D_MOBILE §5): a new device and surface on the same instance and window, pipelines and frame
+    // made again, every live slot uploaded from its provenance with its edits replayed. Captures come back black.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn rebuild(&mut self) -> anyhow::Result<()> {
+        // The old swapchain goes while its device still exists; reconfiguring it onto a new device crashes (Vulkan).
+        self.surface = None;
+        if let Some(w) = &self.window {
+            self.surface = Some(self.instance.create_surface(w.clone())?);
+        }
+        let adapter =
+            pollster::block_on(self.instance.request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: self.surface.as_ref(),
+                ..Default::default()
+            }))?;
+        let (device, queue) = pollster::block_on(request_device(&adapter))?;
+        self.lost = watch_loss(&device);
+        self.gpu = Gpu::new(&device, self.config.format);
+        self.device = device;
+        self.queue = queue;
+        self.depth = None;
+        self.reconfigure();
+        self.reupload();
+        self.generation += 1;
+        if let Some(o) = self.overlay.as_mut() {
+            o.device_rebuilt();
+        }
+        Ok(())
+    }
+
+    // Base pixels of every slot first, then each slot's edits in order (copies read the rebuilt sources).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reupload(&mut self) {
+        for (i, p) in self.prov.iter().enumerate() {
+            let Some(p) = p else {
+                self.textures[i] = None;
+                continue;
+            };
+            let rgba = p.rgba.as_deref();
+            let mut t = self
+                .gpu
+                .upload(&self.device, &self.queue, [p.w, p.h], rgba, p.format);
+            t.label = self.textures[i].take().and_then(|old| old.label);
+            self.textures[i] = Some(t);
+        }
+        let mut enc = encoder(&self.device);
+        for (i, p) in self.prov.iter().enumerate() {
+            let (Some(p), Some(dst)) = (p, &self.textures[i]) else {
+                continue;
+            };
+            for e in &p.edits {
+                match *e {
+                    Edit::Write { at, size, ref rgba } => {
+                        write_region(&self.queue, &dst.tex, at, size, rgba);
+                    }
+                    Edit::Copy {
+                        src,
+                        from,
+                        to,
+                        size,
+                    } => {
+                        if let Some(Some(a)) = self.textures.get(src.index()) {
+                            copy_region(&mut enc, &a.tex, from, &dst.tex, to, size);
+                        }
+                    }
+                }
+            }
+        }
+        self.queue.submit([enc.finish()]);
     }
 
     // Port display setting `vsync`, changed by the launcher screen after the surface exists.
@@ -524,19 +822,21 @@ impl Gfx {
     // App `Suspended` (ARCH_D §5): the native window goes away; the device and textures stay.
     pub fn detach(&mut self) {
         self.surface = None;
+        self.window = None;
     }
 
     // App `Resumed` again: a surface for the (new) native window on the same device, same format and present mode.
     pub fn attach(&mut self, window: Arc<winit::window::Window>) -> anyhow::Result<()> {
-        let Some(instance) = &self.instance else {
+        if self.headless {
             anyhow::bail!("headless device has no window surface");
-        };
+        }
         let size = window.inner_size();
-        let surface = instance.create_surface(window)?;
+        let surface = self.instance.create_surface(window.clone())?;
         self.config.width = size.width.max(1);
         self.config.height = size.height.max(1);
         surface.configure(&self.device, &self.config);
         self.surface = Some(surface);
+        self.window = Some(window);
         Ok(())
     }
 
@@ -566,21 +866,16 @@ impl Gfx {
 
     // Post-present capture (12 §1, 0x44886F): copies the last presented 640x480 frame into a new surface texture.
     fn do_capture_screen(&mut self, id: TexId, label: &str) {
-        let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
+        let (w, h) = FRAME;
         let fmt = self.config.format;
-        let blank = vec![0u8; (w * h * 4) as usize];
-        self.create_texture_fmt(id, w, h, &blank, fmt);
+        self.create_texture_fmt(id, w, h, None, fmt);
         if self.surface.is_some() {
-            let mut enc = self.device.create_command_encoder(&Default::default());
+            let mut enc = encoder(&self.device);
             let dst = &self.tex(id).tex;
             enc.copy_texture_to_texture(
-                self.frame.as_image_copy(),
+                self.gpu.frame.as_image_copy(),
                 dst.as_image_copy(),
-                wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
+                extent(w, h),
             );
             self.queue.submit([enc.finish()]);
         }
@@ -616,15 +911,17 @@ impl Gfx {
             return;
         }
         // Draw log: no K for a size-mismatched (filtered) capture (data/drawlog/FORMAT.md K).
-        if self.log.is_some() && size == to_size {
-            let rec = LogRec::Copy {
+        if size == to_size
+            && let Some(mut log) = self.log.take()
+        {
+            log.push(LogRec::Copy {
                 src: "screen".into(),
                 dst: self.label_name(dst),
                 from,
                 size,
                 to,
-            };
-            self.log.as_mut().unwrap().push(rec);
+            });
+            self.log = Some(log);
         }
         if self.surface.is_none() || t.tex.format() != wgpu::TextureFormat::Rgba8Unorm {
             return;
@@ -644,13 +941,13 @@ impl Gfx {
                 contents: bytemuck::cast_slice(&quad),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-        let view = t.tex.create_view(&Default::default());
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let target = view(&t.tex);
+        let mut enc = encoder(&self.device);
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &target,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -661,77 +958,65 @@ impl Gfx {
                 ..Default::default()
             });
             pass.set_viewport(to[0] as f32, to[1] as f32, w as f32, h as f32, 0.0, 1.0);
-            pass.set_pipeline(&self.crop);
-            pass.set_bind_group(0, &self.frame_bind, &[]);
+            pass.set_pipeline(&self.gpu.crop);
+            pass.set_bind_group(0, &self.gpu.frame_bind, &[]);
             pass.set_vertex_buffer(0, vb.slice(..));
             pass.draw(0..4, 0..1);
         }
         self.queue.submit([enc.finish()]);
     }
 
-    // Full-precision RGBA8 upload (03 §3: the reduced-colour option can be ignored) or a capture target, at core id `id`.
+    // Upload at core id `id`: `rgba` from `ResCmd::Create`, None = blank capture target; records its provenance.
     fn create_texture_fmt(
         &mut self,
         id: TexId,
         width: u32,
         height: u32,
-        rgba: &[u8],
+        rgba: Option<&Arc<[u8]>>,
         format: wgpu::TextureFormat,
     ) {
-        let tex = self.device.create_texture_with_data(
+        let t = self.gpu.upload(
+            &self.device,
             &self.queue,
-            &wgpu::TextureDescriptor {
-                label: None,
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            },
-            wgpu::util::TextureDataOrder::LayerMajor,
-            rgba,
+            [width, height],
+            rgba.map(|b| &b[..]),
+            format,
         );
-        let view = tex.create_view(&Default::default());
-        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.tex_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-        let t = Some(Texture {
-            width,
-            height,
-            bind,
-            tex,
-            label: None,
-        });
+        let p = Provenance {
+            w: width,
+            h: height,
+            format,
+            // The web never rebuilds (`recover_if_lost`): no second copy of the pixels there.
+            rgba: rgba.filter(|_| cfg!(not(target_arch = "wasm32"))).cloned(),
+            edits: Vec::new(),
+        };
         if self.textures.len() <= id.index() {
             self.textures.resize_with(id.index() + 1, || None);
+            self.prov.resize_with(id.index() + 1, || None);
         }
-        self.textures[id.index()] = t;
+        self.textures[id.index()] = Some(t);
+        self.prov[id.index()] = Some(p);
+    }
+
+    // Appends an edit to slot `id`'s provenance, dropping earlier ones it fully covers (bounded by distinct rects).
+    fn push_edit(&mut self, id: TexId, e: Edit) {
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
+        if let Some(Some(p)) = self.prov.get_mut(id.index()) {
+            let r = e.rect();
+            p.edits.retain(|o| !rect_within(o.rect(), r));
+            p.edits.push(e);
+        }
     }
 
     // The core table already skipped white and double frees.
     fn do_free_texture(&mut self, id: TexId) {
         if let Some(t) = self.textures.get_mut(id.index()) {
             *t = None;
+        }
+        if let Some(p) = self.prov.get_mut(id.index()) {
+            *p = None;
         }
     }
 
@@ -747,23 +1032,13 @@ impl Gfx {
         if w == 0 || h == 0 {
             return;
         }
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &t.tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(w * 4),
-                rows_per_image: Some(h),
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
+        write_region(&self.queue, &t.tex, [x, y], [w, h], rgba);
+        self.push_edit(
+            id,
+            Edit::Write {
+                at: [x, y],
+                size: [w, h],
+                rgba: rgba.to_vec(),
             },
         );
     }
@@ -794,29 +1069,18 @@ impl Gfx {
         }
         // No K record: the original's texture-to-texture copy (D3DXLoadSurfaceFromSurface) makes no device call
         // (specs/data/drawlog/FORMAT.md §3 K).
-        let mut enc = self.device.create_command_encoder(&Default::default());
-        fn info(t: &wgpu::Texture, p: [u32; 2]) -> wgpu::TexelCopyTextureInfo<'_> {
-            wgpu::TexelCopyTextureInfo {
-                texture: t,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: p[0],
-                    y: p[1],
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            }
-        }
-        enc.copy_texture_to_texture(
-            info(&a.tex, from),
-            info(&b.tex, to),
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
+        let mut enc = encoder(&self.device);
+        copy_region(&mut enc, &a.tex, from, &b.tex, to, [w, h]);
+        self.queue.submit([enc.finish()]);
+        self.push_edit(
+            dst,
+            Edit::Copy {
+                src,
+                from,
+                to,
+                size: [w, h],
             },
         );
-        self.queue.submit([enc.finish()]);
     }
 
     fn do_set_label(&mut self, id: TexId, label: &str, w: u32, h: u32) {
@@ -997,7 +1261,9 @@ impl Gfx {
                 fog: self.log_fog,
                 v,
             };
-            self.log.as_mut().unwrap().push(rec);
+            if let Some(log) = self.log.as_mut() {
+                log.push(rec);
+            }
         }
         let base = self.verts.len() as u32;
         self.verts.extend(v);
@@ -1034,6 +1300,10 @@ impl Gfx {
     }
 
     // Full-surface copy to the screen (logged as a K record).
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "draw-log K fields: ftol of the screen position"
+    )]
     fn do_image(&mut self, tex: TexId, x: f32, y: f32) {
         let t = self.tex(tex);
         let (w, h) = (t.width as f32, t.height as f32);
@@ -1068,6 +1338,10 @@ impl Gfx {
 
     // Copy of the (sx, sy, w, h) source rectangle to the screen at (dx, dy) (logged as a K record).
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "draw-log K fields: ftol of the screen position"
+    )]
     fn do_image_rect(&mut self, tex: TexId, sx: u32, sy: u32, w: u32, h: u32, dx: f32, dy: f32) {
         let t = self.tex(tex);
         let (tw, th) = (t.width as f32, t.height as f32);
@@ -1104,11 +1378,7 @@ impl Gfx {
         }
         let tex = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
+            size: extent(w, h),
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1116,11 +1386,13 @@ impl Gfx {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        let v = tex.create_view(&Default::default());
+        let v = view(&tex);
         self.depth = Some((w, h, v.clone()));
         v
     }
 
+    // Scissor = batch viewport rounded and clamped to the frame (D3D viewport clip).
+    #[expect(clippy::cast_sign_loss, reason = "clamped to 0 … 640 / 480 first")]
     fn encode(
         &self,
         enc: &mut wgpu::CommandEncoder,
@@ -1188,7 +1460,7 @@ impl Gfx {
                     continue;
                 }
                 pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
-                pass.set_pipeline(&self.pipes[b.key.index()]);
+                pass.set_pipeline(&self.gpu.pipes[b.key.index()]);
                 pass.set_bind_group(0, &self.tex(b.tex).bind, &[]);
                 pass.draw_indexed(b.start..b.end, 0, 0..1);
             }
@@ -1196,24 +1468,30 @@ impl Gfx {
     }
 
     fn do_present(&mut self) {
+        self.present_frame();
+        self.presents += 1;
+        if self.loss_at == Some(self.presents) {
+            self.force_device_loss();
+        }
+    }
+
+    fn present_frame(&mut self) {
         let Some(surface) = &self.surface else {
             self.clear_batches();
             return;
         };
-        let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            _ => {
-                surface.configure(&self.device, &self.config);
-                self.clear_batches();
-                return;
-            }
+        let (wgpu::CurrentSurfaceTexture::Success(frame)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = surface.get_current_texture()
+        else {
+            surface.configure(&self.device, &self.config);
+            self.clear_batches();
+            return;
         };
-        let view = frame.texture.create_view(&Default::default());
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let target = view(&frame.texture);
+        let mut enc = encoder(&self.device);
         self.render_frame(&mut enc);
-        self.blit(&mut enc, &view, self.config.width, self.config.height);
-        self.paint_overlay(&mut enc, &view, (self.config.width, self.config.height));
+        self.blit(&mut enc, &target, self.config.width, self.config.height);
+        self.paint_overlay(&mut enc, &target, (self.config.width, self.config.height));
         self.queue.submit([enc.finish()]);
         self.queue.present(frame);
         self.clear_batches();
@@ -1225,25 +1503,24 @@ impl Gfx {
         &mut self,
         paint: impl FnOnce(OverlayTarget<'_>, &mut wgpu::CommandEncoder),
     ) -> bool {
+        self.recover_if_lost();
         let Some(surface) = &self.surface else {
             return false;
         };
-        let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            _ => {
-                surface.configure(&self.device, &self.config);
-                return false;
-            }
+        let (wgpu::CurrentSurfaceTexture::Success(frame)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = surface.get_current_texture()
+        else {
+            surface.configure(&self.device, &self.config);
+            return false;
         };
-        let view = frame.texture.create_view(&Default::default());
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let target = view(&frame.texture);
+        let mut enc = encoder(&self.device);
         let size = (self.config.width, self.config.height);
-        self.blit(&mut enc, &view, size.0, size.1);
+        self.blit(&mut enc, &target, size.0, size.1);
         let t = OverlayTarget {
             device: &self.device,
             queue: &self.queue,
-            view: &view,
+            view: &target,
             format: self.config.format,
             size,
         };
@@ -1297,15 +1574,15 @@ impl Gfx {
             0.0,
             1.0,
         );
-        pass.set_pipeline(&self.blit);
-        pass.set_bind_group(0, &self.frame_bind, &[]);
+        pass.set_pipeline(&self.gpu.blit);
+        pass.set_bind_group(0, &self.gpu.frame_bind, &[]);
         pass.draw(0..3, 0..1);
     }
 
     // Renders the pending batches into the 640x480 frame without presenting (tools).
     pub fn flush(&mut self, rec: &mut Recorder) {
         self.submit(rec);
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut enc = encoder(&self.device);
         self.render_frame(&mut enc);
         self.queue.submit([enc.finish()]);
         self.clear_batches();
@@ -1356,26 +1633,22 @@ impl Gfx {
     }
 
     fn render_frame(&mut self, enc: &mut wgpu::CommandEncoder) {
-        let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
+        let (w, h) = FRAME;
         let depth = self.depth_view(w, h);
-        let view = self.frame.create_view(&Default::default());
-        self.encode(enc, &view, &depth);
+        let target = view(&self.gpu.frame);
+        self.encode(enc, &target, &depth);
     }
 
     // Renders the pending batches at 640x480 into memory, optionally scaled to `size` like the window (RGBA).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn capture(&mut self, rec: &mut Recorder, size: Option<(u32, u32)>) -> image::RgbaImage {
         self.submit(rec);
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut enc = encoder(&self.device);
         self.render_frame(&mut enc);
         let scaled = size.map(|(w, h)| {
             let t = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
+                size: extent(w, h),
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -1383,12 +1656,12 @@ impl Gfx {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-            let view = t.create_view(&Default::default());
-            self.blit(&mut enc, &view, w, h);
-            self.paint_overlay(&mut enc, &view, (w, h));
+            let target = view(&t);
+            self.blit(&mut enc, &target, w, h);
+            self.paint_overlay(&mut enc, &target, (w, h));
             t
         });
-        let src = scaled.as_ref().unwrap_or(&self.frame);
+        let src = scaled.as_ref().unwrap_or(&self.gpu.frame);
         let img = self.read_texture(enc, src);
         self.clear_batches();
         img
@@ -1405,7 +1678,7 @@ impl Gfx {
         let row = (w * 4).div_ceil(256) * 256;
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: (row * h) as u64,
+            size: u64::from(row * h),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -1419,11 +1692,7 @@ impl Gfx {
                     rows_per_image: Some(h),
                 },
             },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
+            extent(w, h),
         );
         self.queue.submit([enc.finish()]);
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
@@ -1438,7 +1707,10 @@ impl Gfx {
             self.config.format,
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
         ) {
-            px.chunks_exact_mut(4).for_each(|p| p.swap(0, 2));
+            px.as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .for_each(|p| p.swap(0, 2));
         }
         image::RgbaImage::from_raw(w, h, px).unwrap()
     }
@@ -1460,6 +1732,7 @@ impl Gfx {
 impl Gfx {
     // Runs everything recorded so far in call order: each `ResCmd` before the draw that followed it.
     pub fn submit(&mut self, rec: &mut Recorder) {
+        self.recover_if_lost();
         let (draws, res) = rec.take();
         let mut res = res.into_iter().peekable();
         for (i, d) in draws.iter().enumerate() {
@@ -1549,7 +1822,7 @@ impl Gfx {
     pub fn execute_res(&mut self, c: &ResCmd) {
         match c {
             ResCmd::Create { id, w, h, rgba } => {
-                self.create_texture_fmt(*id, *w, *h, rgba, wgpu::TextureFormat::Rgba8Unorm)
+                self.create_texture_fmt(*id, *w, *h, Some(rgba), wgpu::TextureFormat::Rgba8Unorm);
             }
             ResCmd::CaptureScreen { id, label } => self.do_capture_screen(*id, label),
             ResCmd::CaptureRect {
@@ -1600,11 +1873,11 @@ impl Gfx {
 
 impl th08_core::drawlist::Renderer for Gfx {
     fn submit(&mut self, rec: &mut Recorder) {
-        Gfx::submit(self, rec)
+        Gfx::submit(self, rec);
     }
 
     fn enable_log(&mut self) {
-        Gfx::enable_log(self)
+        Gfx::enable_log(self);
     }
 
     fn take_log(&mut self, rec: &mut Recorder) -> Vec<LogRec> {
@@ -1618,5 +1891,105 @@ impl th08_core::drawlist::Renderer for Gfx {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+// `w`×`h` RGBA texels at `at`, rows `w * 4` bytes apart.
+fn write_region(
+    queue: &wgpu::Queue,
+    tex: &wgpu::Texture,
+    at: [u32; 2],
+    size: [u32; 2],
+    rgba: &[u8],
+) {
+    let [w, h] = size;
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: at[0],
+                y: at[1],
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(w * 4),
+            rows_per_image: Some(h),
+        },
+        extent(w, h),
+    );
+}
+
+// Texel rect copy `src`@`from` → `dst`@`to`, already clipped to both textures.
+fn copy_region(
+    enc: &mut wgpu::CommandEncoder,
+    src: &wgpu::Texture,
+    from: [u32; 2],
+    dst: &wgpu::Texture,
+    to: [u32; 2],
+    size: [u32; 2],
+) {
+    let info = |t, p: [u32; 2]| wgpu::TexelCopyTextureInfo {
+        texture: t,
+        mip_level: 0,
+        origin: wgpu::Origin3d {
+            x: p[0],
+            y: p[1],
+            z: 0,
+        },
+        aspect: wgpu::TextureAspect::All,
+    };
+    enc.copy_texture_to_texture(info(src, from), info(dst, to), extent(size[0], size[1]));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // One frame drawing an 8×8 texture made of bytes, a write and a copy, scaled over the frame.
+    fn frame(gfx: &mut Gfx, rec: &mut Recorder, tex: TexId) -> image::RgbaImage {
+        rec.image_rect(tex, 0, 0, 8, 8, 0.0, 0.0);
+        rec.sprite(
+            tex,
+            Blend::Alpha,
+            FULLSCREEN,
+            [0.0, 0.0, 1.0, 1.0],
+            [255; 4],
+        );
+        gfx.capture(rec, None)
+    }
+
+    #[test]
+    fn rebuild_restores_bytes_writes_and_copies() {
+        let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
+            eprintln!("no GPU adapter; skipped");
+            return;
+        };
+        let mut rec = Recorder::new();
+        let base: Vec<u8> = (0..8 * 8 * 4).map(|i: u32| (i * 7 % 251) as u8).collect();
+        let tex = rec.create_texture(8, 8, &base);
+        rec.write_texture(tex, 2, 2, 2, 2, &[200u8; 16]);
+        rec.write_texture(tex, 1, 1, 4, 4, &[90u8; 64]);
+        let src = rec.create_texture(2, 2, &[30u8; 16]);
+        rec.copy_texture(src, [0, 0], tex, [6, 6], [2, 2]);
+        let before = frame(&mut gfx, &mut rec, tex);
+        let p = gfx.prov[tex.index()].as_ref().expect("provenance");
+        assert_eq!(p.edits.len(), 2, "the 2×2 write lies inside the 4×4 one");
+        gfx.force_device_loss();
+        let after = frame(&mut gfx, &mut rec, tex);
+        assert_eq!(gfx.generation(), 1);
+        assert!(before == after, "rebuilt frame differs");
+    }
+
+    #[test]
+    fn rect_within_edges() {
+        assert!(rect_within([1, 1, 2, 2], [1, 1, 2, 2]));
+        assert!(rect_within([2, 2, 1, 1], [0, 0, 4, 4]));
+        assert!(!rect_within([3, 3, 2, 2], [0, 0, 4, 4]));
+        assert!(!rect_within([0, 0, 1, 1], [1, 1, 4, 4]));
     }
 }

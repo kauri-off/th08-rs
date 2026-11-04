@@ -5,7 +5,9 @@
 // Port font metric, no spec section: baseline of the glyph cell as a fraction of the cell height (MS Gothic ascent ≈ 0.86 em).
 const BASELINE: f32 = 0.86;
 
+// `Default`: no font (blank text); `Raster::new` does the font search.
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
 pub struct Raster {
     font: Option<ab_glyph::FontVec>,
 }
@@ -31,14 +33,6 @@ pub const FONT_PATHS: &[&str] = &[
     "/system/fonts/DroidSansFallback.ttf",
     "/system/fonts/DroidSansFallbackFull.ttf",
 ];
-
-// No font (blank text); `Raster::new` does the font search.
-#[cfg(not(target_arch = "wasm32"))]
-impl Default for Raster {
-    fn default() -> Self {
-        Self { font: None }
-    }
-}
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Raster {
@@ -78,15 +72,28 @@ impl Raster {
             };
             let b = o.px_bounds();
             o.draw(|gx, gy, c| {
-                let (px, py) = (b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32);
-                if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
-                    let v = &mut out[py as usize * w + px as usize];
-                    *v = (*v).max((c.clamp(0.0, 1.0) * 255.0) as u8);
+                let (px, py) = (
+                    b.min.x as i32 + gx.cast_signed(),
+                    b.min.y as i32 + gy.cast_signed(),
+                );
+                if let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py))
+                    && px < w
+                    && py < h
+                {
+                    let v = &mut out[py * w + px];
+                    *v = (*v).max(coverage_u8(c));
                 }
             });
         }
         out
     }
+}
+
+// Glyph coverage 0 … 1 as a byte (port raster, truncating like the original's ftol).
+#[cfg(not(target_arch = "wasm32"))]
+#[expect(clippy::cast_sign_loss, reason = "clamped to 0 … 255 first")]
+fn coverage_u8(c: f32) -> u8 {
+    (c.clamp(0.0, 1.0) * 255.0) as u8
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -221,10 +228,10 @@ impl Px {
     // A GDI antialiased TextOut sample: blend over the pixel, 15-bit result. The two alpha-bit inversions (steps 2, 4)
     // leave exactly the GDI-touched pixels opaque (1-bit alpha). Coverage and blend are platform, like the glyphs.
     fn text_out(&mut self, c: [u8; 3], a: u8) {
-        let a = a as u32;
+        let a = u32::from(a);
         for (d, c) in self.rgb.iter_mut().zip(c) {
             let d8 = *d << 3 | *d >> 2;
-            *d = (c as u32 * a + d8 * (255 - a)) / 255 >> 3;
+            *d = ((u32::from(c) * a + d8 * (255 - a)) / 255) >> 3;
         }
         self.alpha = true;
     }
@@ -263,6 +270,7 @@ fn gradient(dib: &mut [Px], w: usize, h: usize, flag: bool) {
 // D3DX filter TRIANGLE at exactly 2:1 (10 §6 "TRIANGLE 2:1"): source rows 0 … sh−1 of the w-wide DIB into A4R4G4B4
 // (returned as u16 0xARGB). Unweighted channels, taps 2j−1 … 2j+2 with weights 1/16, 7/16, 7/16, 1/16 wrapping in the
 // source rect, f32 sums in source (row, column) order, trunc(acc·15 + 0.5).
+#[expect(clippy::cast_sign_loss, reason = "trunc of a non-negative sum (10 §6)")]
 fn triangle_2to1(src: &[Px], w: usize, sh: usize) -> Vec<u16> {
     const W: [f32; 4] = [1.0 / 16.0, 7.0 / 16.0, 7.0 / 16.0, 1.0 / 16.0];
     let taps = |j: usize, n: usize| {
@@ -282,8 +290,8 @@ fn triangle_2to1(src: &[Px], w: usize, sh: usize) -> Vec<u16> {
                 for &(sx, wx) in &tx {
                     let p = src[sy * w + sx];
                     let wt = wy * wx;
-                    for k in 0..3 {
-                        acc[k] += wt * (p.rgb[k] as f32 * k31);
+                    for (a, &c) in acc.iter_mut().zip(&p.rgb) {
+                        *a += wt * (c as f32 * k31);
                     }
                     acc[3] += wt * if p.alpha { 1.0 } else { 0.0 };
                 }

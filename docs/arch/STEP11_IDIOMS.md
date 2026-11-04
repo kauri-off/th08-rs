@@ -128,6 +128,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11l** HUD + GUI | (1) hud unwraps → `let … else`; (2) named layout consts, splits 339 / 950 / 1297; (3) hud / gui subset 0 | hud, gui | after 11k; ∥ 11m 11n | T D |
 | **11m** ascii + menus — **DONE** (see below) | (1) one `percent_glyphs` (ascii.rs:912 + menulist.rs:421); (2) `MenuEnv` for ascii 1035 / 1322, splits menu 539, menulist 776 / 1316; (3) ascii / menu / menulist subset 0 | ascii, menu, menulist | after 11k; ∥ 11l 11n | T D |
 | **11n** render | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
+| **11n** render — **DONE** (see below) | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
 | **11o** audio + app + tools + wall | (1) midi.rs wasm imports, audio subset 0; (2) tools subset 0 (useless_conversion ×10 etc., bin `main` splits), worldclone / testdata subset 0; (3) app subset 0 after L2; arch_check gains `cargo clippy --workspace --all-targets -- -D warnings` (subset at `warn` → enforced) | crates/th08-audio, crates/th08-tools, worldclone, testdata, src/ (not settings.rs until L2), tools/arch_check | last D-neutral run; after L2 and 11n | T D W android, **B** |
 | **11p** leftovers that change draw | (1) camera.rs + menulist pie on `fmath` (drop both `allow(disallowed_methods)`, the `TODO(step 10)`); (2) `image` out of core: `th08_formats::img::dims` + `ResCmd::CreateImage`, decode in gfx; (3) new D reference (`arch_check freeze` into `target/arch_ref_11p`) after my drawgroups image diff shows "visually identical" (PARITY_POLICY) | camera, menulist (2 lines), drawlist, formats/img.rs (new), gfx (CreateImage), anmmgr (load call) | **alone**, after 11o | T must be identical; D intentionally new; drawgroups image diff; B |
 
@@ -426,6 +427,30 @@ New `pub(crate)`: `ascii::{MenuEnv, uidx, int, short, lo16}`. Lint subset (tools
 th08-core 327 passed (1 ignored), spec_refs 0, SPEC-GAP 1. Deviations: none of the three old long fns was over the
 150-line limit (no `too_many_lines` warning before), split anyway as planned; `PauseMenu::update` keeps its state
 `match` (now ≈ 135 lines incl. comments); `replay_speed` returns `bool` like its siblings though it is always true.
+**11n done.** Files: crates/th08-render/src/gfx.rs, text.rs, Cargo.toml (native `pollster` dep). (1) The 239-line fn
+at gfx.rs:264 was `Gfx::build` (the executor `execute_one` / `execute_res` was already one arm per `DrawCmd` /
+`ResCmd`): the device-bound objects move into `struct Gpu` (`new`, `tex_layout`, `draw_pipes`, `blit_pipe`,
+`crop_pipe`, `upload`), helpers `shader` / `view` / `encoder` / `extent` / `bind_group` / `write_region` /
+`copy_region`, `request_device` shared by `new` / `headless` / `rebuild`. (2) Device loss: per-slot `Provenance`
+(size, format, `ResCmd::Create` pixels as the shared `Arc`, None for screen captures) plus ordered `Edit`s (writes
+incl. text rasters, copies; an edit inside a later one's rect is dropped), filled by `execute_res`; a device-lost
+callback (fresh flag per device) is checked before every submit / `present_last`; `rebuild()` (native, pollster)
+drops the old surface before the old device, makes a new surface on the kept window, new adapter / device / `Gpu`,
+re-uploads every slot with labels and replays edits; captures come back black. Web: no rebuild (logged), no pixel
+copies kept. Debug hook `TH08_DEVICE_LOSS=<n>` (n-th Present) / `force_device_loss()`. (3) Lint subset
+(tools/lint_subset crates/th08-render/): gfx 61 → 0, text 13 → 0 (74 → 0); float→int `as` kept under
+`#[expect(cast_sign_loss)]` with reasons, `FRAME` u32 const for 640×480. Public API (all additive): `Gfx::rebuild`
+(native), `Gfx::force_device_loss`, `Gfx::generation`, `Overlay::device_rebuilt` (default no-op). Check: FAST
+arch_check 0 differing (emit-off 0), cargo test -p th08-render 5 passed (new: rebuild round trip bytes + writes +
+copy, `rect_within`), wasm32 check clean, spec_refs 0. Manual: desktop `tools/offscreen th08 --no-launcher`
+TH08_STAGE=1 TH08_SHOT=900 with TH08_DEVICE_LOSS=400 is pixel-identical to the run without (first try crashed
+reconfiguring the old surface onto the new device on Vulkan → surface remade); emulator-5584 (x86_64 debug APK,
+bundled data): game in stage 5, two HOME / resume cycles, frame + port menu render, no errors. Deviations: no
+separate `Image` provenance (core decodes .jpg / .png into `Create` bytes until 11p); follow-ups outside the row:
+app overlays (overlay.rs, portmenu.rs) and launcher.rs keep egui renderers / textures made on `gfx.device` and must
+remake them on `Overlay::device_rebuilt` / `Gfx::generation()` change; `TH08_DEVICE_LOSS` is not a settings.rs entry;
+wgpu rejects a `ResCmd::Copy` with src == dst (same texture) as a validation error (pre-existing, hud boss plate if
+both sprites share a texture).
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in
