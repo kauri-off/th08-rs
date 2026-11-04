@@ -158,6 +158,8 @@ pub const UI: &[(&str, &str)] = &[
     ("paused", "the game is paused"),
     ("resume", "Resume"),
     ("key_back", "Back"),
+    ("controller", "Controller: {name}"),
+    ("no_controller", "none"),
 ];
 
 type Table = HashMap<String, String>;

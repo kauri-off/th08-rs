@@ -32,6 +32,8 @@ port_menu = "移植版メニュー"
 paused = "ゲームは一時停止中です"
 resume = "再開"
 key_back = "戻るボタン"
+controller = "コントローラー: {name}"
+no_controller = "なし"
 
 [group]
 game_data = "ゲームデータ"

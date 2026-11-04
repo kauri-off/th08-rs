@@ -19,6 +19,8 @@ pub struct PortMenu {
     lang: Lang,
     // `Gfx::generation` of the first paint; a change means the renderer is dead (device rebuilt).
     generation: Option<u32>,
+    // The active gamepad's name for the controller row (set by the app before each redraw).
+    pub controller: Option<String>,
 }
 
 // The launcher's 640×480 layout scale for a window's safe rect (launcher.rs `zoom`).
@@ -51,6 +53,7 @@ impl PortMenu {
             repaint_at: None,
             lang,
             generation: None,
+            controller: None,
         }
     }
 
@@ -80,7 +83,8 @@ impl PortMenu {
         }));
         let mut act = None;
         let lang = self.lang;
-        let mut out = self.ctx.run_pass(raw, |ctx| act = menu_ui(ctx, lang));
+        let pad = self.controller.as_deref();
+        let mut out = self.ctx.run_pass(raw, |ctx| act = menu_ui(ctx, lang, pad));
         self.state
             .handle_platform_output(window, std::mem::take(&mut out.platform_output));
         let delay = out
@@ -107,7 +111,7 @@ impl PortMenu {
     }
 }
 
-fn menu_ui(ctx: &egui::Context, lang: Lang) -> Option<Action> {
+fn menu_ui(ctx: &egui::Context, lang: Lang, pad: Option<&str>) -> Option<Action> {
     let mut act = None;
     let screen = ctx.content_rect();
     ctx.layer_painter(LayerId::new(Order::Background, Id::unique("dim")))
@@ -134,6 +138,9 @@ fn menu_ui(ctx: &egui::Context, lang: Lang) -> Option<Action> {
                             "F1 / Esc"
                         };
                         ui.label(RichText::new(keys).small().weak());
+                        ui.add_space(8.0);
+                        let name = pad.unwrap_or_else(|| i18n::ui(lang, "no_controller"));
+                        ui.label(i18n::ui_fmt(lang, "controller", &[("name", name)]));
                     });
                 });
         });

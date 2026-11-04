@@ -32,6 +32,8 @@ port_menu = "Меню порта"
 paused = "игра на паузе"
 resume = "Продолжить"
 key_back = "Кнопка «Назад»"
+controller = "Контроллер: {name}"
+no_controller = "нет"
 
 [group]
 game_data = "Данные игры"

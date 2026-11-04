@@ -23,6 +23,8 @@ struct Running {
     ctx: Ctx,
     pacer: Pacer,
     settings: Settings,
+    // The touch overlay while a gamepad is in use; back on the next touch.
+    hidden_overlay: Option<Box<dyn th08_render::gfx::Overlay>>,
 }
 
 // An egui screen on a device of its own (launcher, error, loading frame).
@@ -89,6 +91,10 @@ struct App {
     // `Suspended`); desktop opt-in `TH08_PAUSE_AUDIO_UNFOCUSED`, default off.
     focus: Focus,
     display: Display,
+    // Android joystick motion among the touch events.
+    sticks: crate::joystick::StickFilter<winit::event::DeviceId>,
+    // Last gamepad list read (`refresh_pads`).
+    pads_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -132,6 +138,7 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         ctx,
         pacer: Pacer::new(s.turbo),
         settings: s,
+        hidden_overlay: None,
     }))
 }
 
@@ -234,6 +241,21 @@ impl ApplicationHandler<UserEvent> for App {
             Shell::PortMenu(_, m) => (false, m.repaint_at),
             Shell::Loading | Shell::Running(_) => return,
         };
+        // The game does not poll in the port menu: gilrs is pumped here for its Select (resume).
+        if let Shell::PortMenu(r, _) = &mut self.shell
+            && let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
+            && h.joystick.needs_pump()
+        {
+            h.joystick.pump();
+            if h.joystick.take_menu() {
+                return self.resume_game(el);
+            }
+            let t = Instant::now() + PAD_PUMP;
+            let t = repaint_at.map_or(t, |r| r.min(t));
+            if t > Instant::now() {
+                return el.set_control_flow(ControlFlow::WaitUntil(t));
+            }
+        }
         if let Some(t) = self.auto_at
             && waiting
         {
@@ -279,7 +301,24 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 self.sync_audio();
             }
-            WindowEvent::RedrawRequested => self.refresh_safe(false),
+            WindowEvent::RedrawRequested => {
+                self.refresh_safe(false);
+                self.refresh_pads();
+            }
+            // Android: joystick motion goes to the gamepad, never to a touch consumer.
+            WindowEvent::Touch(t) if cfg!(target_os = "android") => {
+                if let Some((x, y)) = self.sticks.classify(
+                    t.device_id,
+                    t.phase,
+                    t.location.x as f32,
+                    t.location.y as f32,
+                ) {
+                    if let Some(h) = self.host() {
+                        h.joystick.events.stick(x, y);
+                    }
+                    return;
+                }
+            }
             _ => {}
         }
         match self.shell {
@@ -311,6 +350,8 @@ impl App {
             auto_at: None,
             suspended: false,
             safe_at: None,
+            sticks: crate::joystick::StickFilter::default(),
+            pads_at: None,
             focus: Focus {
                 focused: true,
                 pause_audio: cfg!(target_os = "android")
@@ -418,6 +459,42 @@ impl App {
             log::info!("safe area {safe:?}");
             g.safe = safe;
             self.window().request_redraw();
+        }
+    }
+
+    fn host(&mut self) -> Option<&mut crate::platform::AppHost> {
+        match &mut self.shell {
+            Shell::Running(r) | Shell::PortMenu(r, _) => r.ctx.host_as(),
+            _ => None,
+        }
+    }
+
+    // Android hot-plug: the connected gamepad list, re-read every `SAFE_EVERY`; a device that went away releases
+    // everything the event pad holds.
+    fn refresh_pads(&mut self) {
+        let now = Instant::now();
+        if !cfg!(target_os = "android") || self.pads_at.is_some_and(|t| now < t + SAFE_EVERY) {
+            return;
+        }
+        self.pads_at = Some(now);
+        #[cfg(target_os = "android")]
+        if let Some(list) = crate::platform::gamepad::devices()
+            && let Some(h) = self.host()
+        {
+            let pad = &mut h.joystick.events;
+            if list != pad.devices {
+                for d in list.iter().filter(|d| !pad.devices.contains(d)) {
+                    log::info!("gamepad connected: {d}");
+                }
+                let gone: Vec<_> = pad.devices.iter().filter(|d| !list.contains(d)).collect();
+                for d in &gone {
+                    log::info!("gamepad disconnected: {d}");
+                }
+                if !gone.is_empty() {
+                    pad.release();
+                }
+                pad.devices = list;
+            }
         }
     }
 
@@ -638,6 +715,10 @@ impl App {
         match ev {
             WindowEvent::CloseRequested => close(r, el),
             WindowEvent::RedrawRequested => {
+                screen.controller = r
+                    .ctx
+                    .host_as::<crate::platform::AppHost>()
+                    .and_then(|h| h.joystick.active_name());
                 if let Some(a) = screen.redraw(&window, gfx(&mut r.ctx)) {
                     self.act(el, &a);
                 }
@@ -649,7 +730,8 @@ impl App {
                         || matches!(
                             event.physical_key,
                             PhysicalKey::Code(KeyCode::F1 | KeyCode::Escape)
-                        )) =>
+                        )
+                        || pad_button(&event) == Some(crate::joystick::MENU_BUTTON)) =>
             {
                 self.resume_game(el);
             }
@@ -691,6 +773,18 @@ impl App {
                     self.open_port_menu();
                 }
             }
+            // Gamepad buttons (Android keycodes): Select opens the port menu in a stage, as Back does.
+            WindowEvent::KeyboardInput { event, .. } if pad_button(&event).is_some() => {
+                let i = pad_button(&event).expect("pad button");
+                let down = event.state == ElementState::Pressed;
+                if i == crate::joystick::MENU_BUTTON {
+                    if down && !event.repeat && in_stage(r) {
+                        self.open_port_menu();
+                    }
+                } else if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+                    h.joystick.events.button(i, down);
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 #[cfg(target_arch = "wasm32")]
                 r.ctx.start_once();
@@ -704,6 +798,11 @@ impl App {
                 }
             }
             WindowEvent::Touch(t) => {
+                if t.phase == winit::event::TouchPhase::Started
+                    && let Some(o) = r.hidden_overlay.take()
+                {
+                    gfx(&mut r.ctx).overlay = Some(o);
+                }
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
                     && h.input.touch.cfg.active()
                 {
@@ -733,7 +832,11 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => match frame(r, &window) {
-                Frame::Continue => {}
+                Frame::Continue => {
+                    if pad_frame(r) {
+                        self.open_port_menu();
+                    }
+                }
                 Frame::Exit => el.exit(),
                 Frame::Restarted(on) => {
                     #[cfg(not(target_arch = "wasm32"))]
@@ -745,6 +848,31 @@ impl App {
             },
             _ => {}
         }
+    }
+}
+
+// After a game frame: gamepad use hides the touch overlay; a gilrs Select asks for the port menu (in a stage).
+fn pad_frame(r: &mut Running) -> bool {
+    let stage = in_stage(r);
+    let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() else {
+        return false;
+    };
+    let used = h.joystick.take_used();
+    let menu = h.joystick.take_menu() && stage;
+    if used && let Some(o) = gfx(&mut r.ctx).overlay.take() {
+        log::info!("gamepad in use: touch overlay hidden");
+        r.hidden_overlay = Some(o);
+    }
+    menu
+}
+
+// The gamepad button index of an Android gamepad keycode event.
+fn pad_button(e: &winit::event::KeyEvent) -> Option<usize> {
+    match e.physical_key {
+        PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Android(c)) => {
+            crate::joystick::android_button(c)
+        }
+        _ => None,
     }
 }
 
@@ -867,7 +995,10 @@ fn update_overlay(ctx: &mut Ctx) {
     }
 }
 
-// Safe-area re-read interval on redraws (`App::refresh_safe`).
+// gilrs pump interval while the port menu is open.
+const PAD_PUMP: std::time::Duration = std::time::Duration::from_millis(50);
+
+// Safe-area re-read interval on redraws (`App::refresh_safe`, `App::refresh_pads`).
 const SAFE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 // How long a saved `launcher = off` waits for Shift after the first frame (the window must be mapped and focused for
