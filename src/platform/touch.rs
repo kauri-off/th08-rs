@@ -219,10 +219,10 @@ pub enum TouchMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Movement {
-    // Relative drag (recommended): the player follows the finger's movement.
-    #[default]
+    // Relative drag: the player follows the finger's movement.
     Drag,
     // Floating 8-way stick centred where the finger went down.
+    #[default]
     Stick,
 }
 
@@ -249,7 +249,7 @@ impl Default for TouchConfig {
         Self {
             mode: TouchMode::Auto,
             mouse: false,
-            movement: Movement::Drag,
+            movement: Movement::Stick,
             sens: 1.0,
             focus_toggle: false,
             autofire: true,
@@ -866,10 +866,17 @@ mod tests {
         assert!(TouchLayout::parse("X:").is_err());
     }
 
+    fn drag_cfg() -> TouchConfig {
+        TouchConfig {
+            movement: Movement::Drag,
+            ..TouchConfig::default()
+        }
+    }
+
     // Relative drag: the player follows the finger's movement and stops within one step, no oscillation.
     #[test]
     fn drag_follows_finger() {
-        let mut t = src(TouchConfig::default());
+        let mut t = src(drag_cfg());
         let mut pos = [192.0, 400.0];
         t.set_scene(play(pos));
         t.touch(1, TouchPhase::Started, 100.0, 300.0);
@@ -893,6 +900,7 @@ mod tests {
     #[test]
     fn drag_sensitivity_and_wall() {
         let mut t = src(TouchConfig {
+            movement: Movement::Drag,
             sens: 2.0,
             ..Default::default()
         });
@@ -945,7 +953,7 @@ mod tests {
     // Two fingers: movement + SHOT + BOMB together; each release clears only its own bits.
     #[test]
     fn multi_touch() {
-        let mut t = src(TouchConfig::default());
+        let mut t = src(drag_cfg());
         let mut pos = [192.0, 400.0];
         t.set_scene(play(pos));
         t.touch(1, TouchPhase::Started, 100.0, 300.0);
@@ -1073,7 +1081,7 @@ mod tests {
             .collect();
 
         let mut m = InputMux {
-            touch: src(TouchConfig::default()),
+            touch: src(drag_cfg()),
             ..Default::default()
         };
         let t = &mut m.touch;
