@@ -304,7 +304,10 @@ impl TouchScene {
             pos: [p.pos[0], p.pos[1]],
             speed: [p.sht.speed, p.sht_youkai.speed_focus],
             mult: p.speed_mult,
-            fire: !w.msg.as_deref().is_some_and(|m| m.active()),
+            fire: !w
+                .msg
+                .as_deref()
+                .is_some_and(th08_core::msg::Dialogue::active),
         }
     }
 }
@@ -362,6 +365,10 @@ pub struct TouchView {
 
 // The touch device (ARCH_D §3.2–§3.3): fingers on controls, polled once per Input_Poll like the keyboard.
 #[derive(Clone, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent toggles and latches, not one mode"
+)]
 pub struct TouchSource {
     pub cfg: TouchConfig,
     // Safe rect of the window (px): top-left and size; controls are placed in it. Px per mm.
@@ -682,7 +689,7 @@ impl TouchSource {
                     held = eight_way(
                         [f.last[0] - f.centre[0], f.last[1] - f.centre[1]],
                         r * STICK_DEAD,
-                    )
+                    );
                 }
                 Movement::Drag => {
                     let d = [f.last[0] - f.seen[0], f.last[1] - f.seen[1]];
@@ -752,6 +759,7 @@ fn len(x: f32, y: f32) -> f32 {
 }
 
 // 8-way direction of `d` (window px, y down), none inside `dead`: 45° sectors.
+#[expect(clippy::cast_sign_loss, reason = "the shifted angle is in [0, 360)")]
 fn eight_way(d: [f32; 2], dead: f32) -> u16 {
     if len(d[0], d[1]) < dead {
         return 0;

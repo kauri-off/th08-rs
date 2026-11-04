@@ -94,6 +94,15 @@ pub fn parse_trace(text: &str) -> Vec<Row> {
         .collect()
 }
 
+// Low 32 bits of a trace value (hex columns, schedule numbers): exactly `as u32`.
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "two's-complement low word, `as u32` kept"
+)]
+const fn lo32(v: i64) -> u32 {
+    v as u32
+}
+
 pub fn format_row(r: &Row) -> String {
     let mut s = String::new();
     for (i, v) in r.iter().enumerate() {
@@ -101,7 +110,7 @@ pub fn format_row(r: &Row) -> String {
             s.push(' ');
         }
         match HEX.iter().find(|h| h.0 == i) {
-            Some(&(_, w)) => s.push_str(&format!("{:0w$x}", *v as u32)),
+            Some(&(_, w)) => s.push_str(&format!("{:0w$x}", lo32(*v))),
             None => s.push_str(&v.to_string()),
         }
     }
@@ -126,7 +135,7 @@ pub fn parse_events(text: &str) -> anyhow::Result<(u32, Sched)> {
         let num = |i: usize| t.get(i).and_then(|v| v.parse::<i64>().ok());
         match t.as_slice() {
             ["seed", h, ..] => seed = u32::from_str_radix(h, 16).ok(),
-            ["release", "boot", "calc", ..] => s.boot_calc = num(3).unwrap_or(12) as u32 + 2,
+            ["release", "boot", "calc", ..] => s.boot_calc = lo32(num(3).unwrap_or(12)) + 2,
             ["release", "menu", "poll", ..] => s.menu.extend(num(3)),
             ["loader", "gauge", "poll", ..] => {
                 gauge = num(3);
@@ -138,7 +147,7 @@ pub fn parse_events(text: &str) -> anyhow::Result<(u32, Sched)> {
                     && let (Some(b), Some(c)) = (gauge, calc)
                     && c > b
                 {
-                    s.ascii_offset = (c - b) as u32;
+                    s.ascii_offset = lo32(c - b);
                 }
             }
             ["loader", "lwait", "poll", ..] => wait = num(3),
@@ -165,6 +174,9 @@ pub fn compared(c: usize, rec: &Row) -> bool {
     !SKIP.contains(&c) && (rec[26] == 2 || !GAMEPLAY.contains(&c))
 }
 
+// (column name, recorded, port).
+pub type Column = (&'static str, i64, i64);
+
 #[derive(Default, Debug)]
 pub struct Comparison {
     pub rows: usize,
@@ -172,7 +184,7 @@ pub struct Comparison {
     pub skipped_loading: usize,
     pub leading: usize,
     // (row, columns (name, recorded, port)) of the first differing row.
-    pub first: Option<(usize, Vec<(&'static str, i64, i64)>)>,
+    pub first: Option<(usize, Vec<Column>)>,
     // (scene, visit, first row, rows, leading identical rows).
     pub visits: Vec<(i64, usize, usize, usize, usize)>,
     pub per_column: Vec<usize>,
@@ -285,7 +297,7 @@ pub use native::*;
 fn parse_local_time(s: &str) -> Option<th08_core::host::LocalTime> {
     let n = |r: std::ops::Range<usize>| s.get(r)?.parse().ok();
     Some(th08_core::host::LocalTime {
-        year: n(0..4)? as i32,
+        year: u32::cast_signed(n(0..4)?),
         month: n(5..7)?,
         day: n(8..10)?,
         hour: n(11..13)?,
@@ -316,13 +328,12 @@ mod native {
             let events = std::fs::read_to_string(dir.join("events.txt"))?;
             let (seed, sched) = parse_events(&events)?;
             // Raw input per poll (README: polls.txt, not the per-present input.txt, which loses restart polls).
-            let input = match std::fs::read_to_string(dir.join("polls.txt")) {
-                Ok(t) => parse_polls(&t).ok_or_else(|| anyhow::anyhow!("bad polls.txt"))?,
-                Err(_) => {
-                    let t = std::fs::read_to_string(dir.join("input.txt"))?;
-                    th08_core::input::parse_script(&t)
-                        .ok_or_else(|| anyhow::anyhow!("bad input.txt"))?
-                }
+            let input = if let Ok(t) = std::fs::read_to_string(dir.join("polls.txt")) {
+                parse_polls(&t).ok_or_else(|| anyhow::anyhow!("bad polls.txt"))?
+            } else {
+                let t = std::fs::read_to_string(dir.join("input.txt"))?;
+                th08_core::input::parse_script(&t)
+                    .ok_or_else(|| anyhow::anyhow!("bad input.txt"))?
             };
             let meta = std::fs::read_to_string(dir.join("meta.txt")).unwrap_or_default();
             let noclip = meta.lines().any(|l| l.trim() == "noclip: 1");
@@ -414,9 +425,9 @@ mod native {
             }
             // Debug `TH08_SESSION_RNG=<row>`: RNG call sites of that menu frame.
             let rng_row = th08::settings::get().session_rng;
-            let boot = self.sched.boot_calc as i64;
+            let boot = i64::from(self.sched.boot_calc);
             let (mut scene, mut scene_frame) = (i32::MIN, 0i64);
-            let to = to.min(self.input.len()) as i64;
+            let to = crate::int(to.min(self.input.len()));
             // Poll index of the next frame's first pass (restarted passes take one each, 00 §3).
             let mut next_poll = 0i64;
             // Presents made inside a calc (Device_ClearPresentTwice) so far; `n` counts Frame_Runs.
@@ -440,7 +451,7 @@ mod native {
                         let Some((flow, frames)) = crate::drawlog::step(ctx) else {
                             break;
                         };
-                        frames.into_iter().for_each(|f| out(f));
+                        frames.into_iter().for_each(out);
                         flow
                     }
                     None => ctx.run_frame(),
@@ -460,7 +471,7 @@ mod native {
                 // scene_frame count presents, the in-calc ones included.
                 let base = n + extra;
                 let sf_base = scene_frame + 1;
-                let k_in = rows.iter().filter(|r| r[22] < 0).count() as i64;
+                let k_in = crate::int(rows.iter().filter(|r| r[22] < 0).count());
                 let present = base + k_in;
                 let (mut passes, mut ins, mut stop) = (0, 0, false);
                 for mut r in rows {
@@ -481,10 +492,10 @@ mod native {
                     }
                 }
                 extra += k_in;
-                if ctx.w.game.scene as i32 != scene {
-                    (scene, scene_frame) = (ctx.w.game.scene as i32, 1);
-                } else {
+                if ctx.w.game.scene as i32 == scene {
                     scene_frame = sf_base + k_in;
+                } else {
+                    (scene, scene_frame) = (ctx.w.game.scene as i32, 1);
                 }
                 let mut r = sample(ctx, present, last.max(-1), scene_frame);
                 r[22] = passes;
@@ -531,9 +542,9 @@ mod native {
     }
 
     // Rows from the first main-menu row (scene 1) on.
-    pub fn menu_rows(rows: Vec<Row>) -> Vec<Row> {
+    pub fn menu_rows(mut rows: Vec<Row>) -> Vec<Row> {
         let k = rows.iter().position(|r| r[26] == 1).unwrap_or(rows.len());
-        rows[k..].to_vec()
+        rows.split_off(k)
     }
 
     pub fn data_dir(name: &str) -> PathBuf {
@@ -551,8 +562,8 @@ mod tests {
     // Leading identical trace rows per session (raise as divergences get fixed).
     const MIN_LEADING: [(&str, usize); 3] = [
         ("selftest1", 1922),
-        ("golden", 25634),
-        ("fullrun_noclip", 124707),
+        ("golden", 25_634),
+        ("fullrun_noclip", 124_707),
     ];
 
     // meta.txt `recorded:` → the session's fixed `localtime` (dated replay saves draw the same any day).
@@ -574,7 +585,7 @@ mod tests {
              loader gauge poll 10918 present 1\nloader lwait poll 10935 present 1\nrelease stage poll 10968 present 1\n",
         )
         .unwrap();
-        assert_eq!((seed, s.boot_calc), (0x1afaed, 14));
+        assert_eq!((seed, s.boot_calc), (0x001a_faed, 14));
         assert_eq!(s.menu, [32]);
         assert_eq!(s.stages, [[10918, 10935, 10968]]);
         assert_eq!(s.ascii_offset, 0);
@@ -619,7 +630,7 @@ mod tests {
                 eprintln!("no GPU adapter; session sync skipped");
                 return;
             };
-            let src = th08::sources::native(dir.clone().into());
+            let src = th08::sources::native(dir.clone());
             let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
                 src.clone(),
                 th08::settings::get().tool_io(gfx, &src),
@@ -677,7 +688,7 @@ mod tests {
             eprintln!("no GPU adapter; sound log skipped");
             return;
         };
-        let src = th08::sources::native(dir.into());
+        let src = th08::sources::native(dir);
         let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
             src.clone(),
             th08::settings::get().tool_io(gfx, &src),
@@ -716,7 +727,7 @@ mod tests {
             eprintln!("no GPU adapter; fullrun smoke skipped");
             return;
         };
-        let src = th08::sources::native(dir.into());
+        let src = th08::sources::native(dir);
         let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
             src.clone(),
             th08::settings::get().tool_io(gfx, &src),

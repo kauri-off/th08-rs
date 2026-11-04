@@ -129,7 +129,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11m** ascii + menus — **DONE** (see below) | (1) one `percent_glyphs` (ascii.rs:912 + menulist.rs:421); (2) `MenuEnv` for ascii 1035 / 1322, splits menu 539, menulist 776 / 1316; (3) ascii / menu / menulist subset 0 | ascii, menu, menulist | after 11k; ∥ 11l 11n | T D |
 | **11n** render | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
 | **11n** render — **DONE** (see below) | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
-| **11o** audio + app + tools + wall | (1) midi.rs wasm imports, audio subset 0; (2) tools subset 0 (useless_conversion ×10 etc., bin `main` splits), worldclone / testdata subset 0; (3) app subset 0 after L2; arch_check gains `cargo clippy --workspace --all-targets -- -D warnings` (subset at `warn` → enforced) | crates/th08-audio, crates/th08-tools, worldclone, testdata, src/ (not settings.rs until L2), tools/arch_check | last D-neutral run; after L2 and 11n | T D W android, **B** |
+| **11o** audio + app + tools + wall — **DONE** (see below) | (1) midi.rs wasm imports, audio subset 0; (2) tools subset 0 (useless_conversion ×10 etc., bin `main` splits), worldclone / testdata subset 0; (3) app subset 0 after L2; arch_check gains `cargo clippy --workspace --all-targets -- -D warnings` (subset at `warn` → enforced) | crates/th08-audio, crates/th08-tools, worldclone, testdata, src/ (not settings.rs until L2), tools/arch_check | last D-neutral run; after L2 and 11n | T D W android, **B** |
 | **11p** leftovers that change draw | (1) camera.rs + menulist pie on `fmath` (drop both `allow(disallowed_methods)`, the `TODO(step 10)`); (2) `image` out of core: `th08_formats::img::dims` + `ResCmd::CreateImage`, decode in gfx; (3) new D reference (`arch_check freeze` into `target/arch_ref_11p`) after my drawgroups image diff shows "visually identical" (PARITY_POLICY) | camera, menulist (2 lines), drawlist, formats/img.rs (new), gfx (CreateImage), anmmgr (load call) | **alone**, after 11o | T must be identical; D intentionally new; drawgroups image diff; B |
 
 **11a done.** Files: Cargo.toml (workspace + root `[lints]`), crates/*/Cargo.toml (`[lints] workspace = true`; core
@@ -451,6 +451,40 @@ app overlays (overlay.rs, portmenu.rs) and launcher.rs keep egui renderers / tex
 remake them on `Overlay::device_rebuilt` / `Gfx::generation()` change; `TH08_DEVICE_LOSS` is not a settings.rs entry;
 wgpu rejects a `ResCmd::Copy` with src == dst (same texture) as a validation error (pre-existing, hud boss plate if
 both sprites share a texture).
+
+**11o done.** Files: crates/th08-audio/src/{audio, midi, bgm}.rs; crates/th08-tools/src/{lib, session, demosync,
+drawlog, drawreport, xz}.rs + bin/{session, demosync, drawdiff, drawrun, anmview, repack, rsqrt_table}.rs;
+crates/th08-core/src/worldclone.rs (testdata.rs had 0); src/{app, platform, pacer, settings, sources, lib}.rs,
+src/platform/{touch, safearea}.rs; tools/arch_check; outside the row: core fmath.rs, d3dx.rs, drawlist.rs (see
+deviations). (1) midi.rs: `anyhow::{Context, Result}` / `Arc` imports under `cfg(not(wasm32))` like their users (wasm
+clippy clean); `RESETS.contains`, `scaled` keeps `as u8` after its 0..=127 clamp under `#[expect]`; audio.rs
+`slot_id` (MIDI slot → open-slot i32, 02 §5), `manual_map` / `single_match_else` / `as_chunks` / typed defaults /
+struct-update `Config` in tests; device-side float→int `as` under `#[expect(cast_sign_loss)]` with reasons.
+(2) tools: `useless_conversion` ×10, `collapsible_if`, `cloned_ref_to_slice_refs`, `type_complexity`
+(`session::Column`, `drawlog::Matches`); `th08_tools::int` (usize → i64 trace column, exactly `as`), `lo32` in
+session.rs (low word of a trace value / schedule number, exactly `as u32`); bins split: `session` → `parse_args` /
+`load_ctx` / `main` / `report_trace` / `report_draw`, `demosync` → `print_rng_calls` / `dump_frame`, `drawdiff` →
+`menu_shots` / `demo_shots`, drawlog `diff_frame` → `match_quads` (passes 1–2); statement order kept. worldclone.rs:
+trace words via `u64::from` / `i64::from(x).cast_unsigned()` (sign extension = old `as u64`), method paths,
+`is_multiple_of`. (3) app: `App` bools grouped into `Focus { focused, pause_audio }` + `holds_audio()` and
+`Display { alt, fullscreen }`; `act(&Action)` (Action is launcher.rs, DEVLOSS2); `Settings` / `TouchSource` keep
+their bools under `#[expect(struct_excessive_bools)]` (independent table entries / latches, no mode); safearea
+`cast_unsigned` / `cast_signed` (Android), `(0i32..).zip` for the JNI corner index; wasm-only sites (`boot_ms`,
+`start`, `WebFiles::names`, `get_full_year`) fixed too. Wall: arch_check runs `tools/lint_subset` after the build and
+fails on any warning outside `CLIPPY_PENDING` (default: src/launcher.rs, src/platform/overlay.rs,
+src/platform/portmenu.rs — DEVLOSS2's files, counted only); `CLIPPY_PENDING=` runs exactly `cargo clippy --workspace
+--all-targets -- -D warnings`. Public API (outside the crate): `th08_tools::drawlog::Report::add(key: &str)` (was
+`String`), new `th08_tools::int`, `th08_tools::session::Column`; none in core / audio / render. Lint subset
+(tools/lint_subset, workspace): before 285 in 28 files, after 11 in 3 files (launcher.rs 7, overlay.rs 2, portmenu.rs
+2, all DEVLOSS2); run files 274 → 0. Android (`clippy --lib --target aarch64-linux-android`) and wasm clippy: 0
+outside the DEVLOSS2 files except render text.rs (3, wasm-only, not a wall target). Check: FAST arch_check 0
+differing (emit-off 0), clippy wall ok (11 pending), cargo test 452 passed, tools/fmath_xplat 3 passed, spec_refs 0,
+SPEC-GAP 1. Deviations: fmath.rs (23: `f64::from`, `cast_signed` / `cast_unsigned`, `is_multiple_of`, literal
+separators — all `core`, fmath_xplat still includes it), d3dx.rs (2 test literals) and drawlist.rs (`#[expect]` on
+`capture_screen`'s 640×480 `as u32`) are outside the row but no run owns them and the wall needs them at 0; the wall
+is not yet `-D warnings` (CLIPPY_PENDING until DEVLOSS2 lands its files at 0, then set it empty in arch_check);
+worldclone's test ECL builder uses `i16::try_from(..).unwrap()` / `i32::try_from` for instruction sizes (test-only,
+values < 100).
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

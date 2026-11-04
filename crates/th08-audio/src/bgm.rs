@@ -135,12 +135,11 @@ impl Pcm {
     }
 
     pub fn get(&self, i: usize) -> Frame {
-        match self.blocks[i / BLOCK].get() {
-            Some(b) => b[i % BLOCK],
-            None => {
-                self.underrun.store(true, Ordering::Relaxed);
-                [0, 0]
-            }
+        if let Some(b) = self.blocks[i / BLOCK].get() {
+            b[i % BLOCK]
+        } else {
+            self.underrun.store(true, Ordering::Relaxed);
+            [0, 0]
         }
     }
 }
@@ -217,7 +216,9 @@ impl PcmWriter {
 // s16 LE stereo bytes → frames.
 pub fn pcm_frames(bytes: &[u8]) -> Vec<Frame> {
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| {
             [
                 i16::from_le_bytes([c[0], c[1]]),
@@ -281,6 +282,10 @@ pub fn fit(s: &mut Vec<Frame>, len: usize) {
 mod tests {
     use super::*;
 
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "test frames, `as i16` wraps on purpose"
+    )]
     fn f(i: usize) -> Frame {
         [i as i16, (i >> 15) as i16]
     }

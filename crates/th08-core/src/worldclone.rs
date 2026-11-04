@@ -63,7 +63,7 @@ impl Run {
         p.stats.bombs = 3.0;
         p.stats.lives = 2.0;
         p.state_timer.set(0);
-        let mut w = World::new(Default::default());
+        let mut w = World::new(crate::sound::Bgm::default());
         w.player = Some(Box::new(p));
         w.bullets = Some(Box::new(BulletManager::new(&mut w.anm, &mut w.rng)));
         w.stage = Some(Box::new(Stage::new(0, stage_std())));
@@ -107,7 +107,7 @@ impl Run {
     // per-frame part first (prio 2), Replay_FrameHook (prio 7) and Replay_RecordCalc (prio 17), as `ReplayTask::calc`.
     fn frame(&mut self, f: u32) {
         let mut bits = input::SHOT;
-        bits |= if (f / 45) % 2 == 0 {
+        bits |= if (f / 45).is_multiple_of(2) {
             input::LEFT
         } else {
             input::RIGHT
@@ -163,7 +163,7 @@ impl Run {
                 if std::mem::take(&mut p.bomb.attract) {
                     b.items.attract_all();
                 }
-            })
+            });
         });
         enemies.step(anm, sys);
         for r in std::mem::take(sys.gui) {
@@ -171,7 +171,7 @@ impl Run {
             gui.handle(anm, sys.rng, r, sys.sound, sys.panel, sys.msg.as_deref());
         }
         gui.read_bonus(enemies);
-        if f % 40 == 0 {
+        if f.is_multiple_of(40) {
             sys.fx
                 .spawn(anm, sys.rng, 4, [192.0, 100.0, 0.0], 6, 0xFFFF_FFFF);
         }
@@ -196,7 +196,7 @@ impl Run {
             (p.stats.clock, p.state == 2)
         };
         let d = sys.msg.as_deref_mut().unwrap();
-        self.msg_frames += d.active() as u32;
+        self.msg_frames += u32::from(d.active());
         d.info.clock = clock;
         let collect = d.run(anm, sys.rng, inp, dying);
         self.msg_texts += d.texts.len() as u32;
@@ -225,11 +225,9 @@ impl Run {
     fn trace(&self) -> Vec<u64> {
         let w = &self.w;
         let mut t = world_trace(w);
-        t.extend(
-            self.se
-                .iter()
-                .map(|&(id, pan)| (id as u64) << 32 | pan as u32 as u64),
-        );
+        t.extend(self.se.iter().map(|&(id, pan)| {
+            i64::from(id).cast_unsigned() << 32 | u64::from(pan.cast_unsigned())
+        }));
         t.extend(
             self.screen
                 .iter()
@@ -242,16 +240,16 @@ impl Run {
                 .ecl
                 .data
                 .iter()
-                .map(|&b| b as u64),
+                .map(|&b| u64::from(b)),
         );
         t.extend([
-            self.msg_frames as u64,
-            self.msg_texts as u64,
-            self.gui_reqs as u64,
+            u64::from(self.msg_frames),
+            u64::from(self.msg_texts),
+            u64::from(self.gui_reqs),
         ]);
         let rec = w.game.rpy.as_ref().unwrap().stages[0].as_ref().unwrap();
-        t.extend(rec.inputs.iter().map(|&w| w as u64));
-        t.extend(rec.fps.iter().map(|&b| b as u64));
+        t.extend(rec.inputs.iter().map(|&w| u64::from(w)));
+        t.extend(rec.fps.iter().map(|&b| u64::from(b)));
         t
     }
 }
@@ -261,49 +259,53 @@ impl Run {
 pub(crate) fn world_trace(w: &World) -> Vec<u64> {
     let g = &w.game;
     let mut t = vec![
-        w.rng.state as u64,
-        w.rng.total as u64,
-        g.flags as u64,
-        g.frame_counter as u64,
-        g.replay_fps as u64,
+        u64::from(w.rng.state),
+        u64::from(w.rng.total),
+        u64::from(g.flags),
+        u64::from(g.frame_counter),
+        u64::from(g.replay_fps),
         g.scene as u64,
         w.frame,
-        w.anm.speed.to_bits() as u64,
-        w.anm.vm_counter as u64,
-        w.anm.screen_offset[0].to_bits() as u64,
-        w.anm.screen_offset[1].to_bits() as u64,
-        w.timer_pause as u64,
-        w.load_frames as u64,
-        w.skip_counter as u64,
+        u64::from(w.anm.speed.to_bits()),
+        u64::from(w.anm.vm_counter),
+        u64::from(w.anm.screen_offset[0].to_bits()),
+        u64::from(w.anm.screen_offset[1].to_bits()),
+        i64::from(w.timer_pause).cast_unsigned(),
+        i64::from(w.load_frames).cast_unsigned(),
+        i64::from(w.skip_counter).cast_unsigned(),
     ];
     if let Some(p) = w.player.as_deref() {
         let st = &p.stats;
         t.extend([
-            p.pos[0].to_bits() as u64,
-            p.pos[1].to_bits() as u64,
-            p.state as u64,
-            p.focus as u64,
-            p.mode as u64,
-            p.bombing as u64,
-            p.bombs_started as u64,
-            p.frames as u64,
-            st.power.to_bits() as u64,
-            st.bombs.to_bits() as u64,
-            st.gauge as u64,
-            st.score10 as u64,
+            u64::from(p.pos[0].to_bits()),
+            u64::from(p.pos[1].to_bits()),
+            u64::from(p.state),
+            u64::from(p.focus),
+            u64::from(p.mode),
+            u64::from(p.bombing),
+            u64::from(p.bombs_started),
+            i64::from(p.frames).cast_unsigned(),
+            u64::from(st.power.to_bits()),
+            u64::from(st.bombs.to_bits()),
+            i64::from(st.gauge).cast_unsigned(),
+            st.score10.cast_unsigned(),
         ]);
         t.extend(
             p.bullets
                 .iter()
-                .map(|b| (b.state as u64) << 32 | b.pos[0].to_bits() as u64),
+                .map(|b| u64::from(b.state) << 32 | u64::from(b.pos[0].to_bits())),
         );
     }
     if let Some(bm) = w.bullets.as_deref() {
-        t.extend([bm.live as u64, bm.frame as u64, bm.patterns]);
+        t.extend([
+            bm.live as u64,
+            i64::from(bm.frame).cast_unsigned(),
+            bm.patterns,
+        ]);
         t.extend(bm.bullets.iter().filter(|b| !b.free()).flat_map(|b| {
             [
-                (b.state as u64) << 32 | b.pos[0].to_bits() as u64,
-                (b.pos[1].to_bits() as u64) << 32 | b.angle.to_bits() as u64,
+                i64::from(b.state).cast_unsigned() << 32 | u64::from(b.pos[0].to_bits()),
+                u64::from(b.pos[1].to_bits()) << 32 | u64::from(b.angle.to_bits()),
             ]
         }));
         t.extend(
@@ -311,7 +313,7 @@ pub(crate) fn world_trace(w: &World) -> Vec<u64> {
                 .items
                 .iter()
                 .filter(|i| i.alive)
-                .map(|i| (i.kind as u64) << 32 | i.pos[1].to_bits() as u64),
+                .map(|i| u64::from(i.kind) << 32 | u64::from(i.pos[1].to_bits())),
         );
     }
     let fx = &w.effects;
@@ -320,26 +322,42 @@ pub(crate) fn world_trace(w: &World) -> Vec<u64> {
         fx.fx
             .iter()
             .filter(|e| e.active)
-            .map(|e| (e.kind as u64) << 32 | e.pos[0].to_bits() as u64),
+            .map(|e| u64::from(e.kind) << 32 | u64::from(e.pos[0].to_bits())),
     );
-    t.extend(fx.screen_fx.iter().flatten().flat_map(|e| e.trace()));
+    t.extend(
+        fx.screen_fx
+            .iter()
+            .flatten()
+            .flat_map(crate::effect::ScreenEffect::trace),
+    );
     if let Some(m) = w.enemies.as_deref() {
-        t.extend([m.clock.cur as u64, m.full as u64, m.g.drop_counter as u64]);
+        t.extend([
+            i64::from(m.clock.cur).cast_unsigned(),
+            u64::from(m.full),
+            u64::from(m.g.drop_counter),
+        ]);
         t.extend(m.enemies.iter().filter(|e| e.alive()).flat_map(|e| {
             [
-                (e.life as u64) << 32 | e.main.ctx.clock.cur as u32 as u64,
-                (e.final_pos[0].to_bits() as u64) << 32 | e.final_pos[1].to_bits() as u64,
+                i64::from(e.life).cast_unsigned() << 32
+                    | u64::from(e.main.ctx.clock.cur.cast_unsigned()),
+                u64::from(e.final_pos[0].to_bits()) << 32 | u64::from(e.final_pos[1].to_bits()),
             ]
         }));
     }
     let opt = |v: Option<Vec<u64>>| v.unwrap_or_else(|| vec![u64::MAX]);
-    t.extend(opt(w.stage.as_deref().map(|x| x.trace())));
-    t.extend(opt(w.msg.as_deref().map(|x| x.trace())));
-    t.extend(opt(w.hud.as_deref().map(|x| x.trace())));
-    t.extend(opt(w.gui.as_deref().map(|x| x.trace())));
-    t.extend(opt(w.gm.as_deref().map(|x| x.trace())));
-    t.extend(opt(w.supervisor.as_deref().map(|x| x.trace())));
-    t.extend(opt(w.ascii_mgr.as_deref().map(|x| x.trace())));
+    t.extend(opt(w.stage.as_deref().map(Stage::trace)));
+    t.extend(opt(w.msg.as_deref().map(Dialogue::trace)));
+    t.extend(opt(w.hud.as_deref().map(Hud::trace)));
+    t.extend(opt(w.gui.as_deref().map(Gui::trace)));
+    t.extend(opt(w.gm.as_deref().map(GameManager::trace)));
+    t.extend(opt(w
+        .supervisor
+        .as_deref()
+        .map(crate::supervisor::Supervisor::trace)));
+    t.extend(opt(w
+        .ascii_mgr
+        .as_deref()
+        .map(crate::ascii::AsciiManager::trace)));
     t.extend(w.scene.trace());
     t
 }
@@ -363,10 +381,10 @@ impl Playback {
         let i = &self.inp;
         let mut t = self.rp.trace().to_vec();
         t.extend([
-            i.game[0] as u64,
-            i.game_prev[0] as u64,
-            i.repeat as u64,
-            self.game.replay_fps as u64,
+            u64::from(i.game[0]),
+            u64::from(i.game_prev[0]),
+            u64::from(i.repeat),
+            u64::from(self.game.replay_fps),
         ]);
         t
     }
@@ -376,7 +394,7 @@ impl Playback {
 fn ins(time: i32, op: i16, args: &[i32]) -> Vec<u8> {
     let mut v = time.to_le_bytes().to_vec();
     v.extend(op.to_le_bytes());
-    v.extend(((12 + 4 * args.len()) as i16).to_le_bytes());
+    v.extend(i16::try_from(12 + 4 * args.len()).unwrap().to_le_bytes());
     v.extend([0, 0xFF, 0, 0]);
     v.extend(args.iter().flat_map(|a| a.to_le_bytes()));
     v
@@ -387,7 +405,7 @@ fn ins(time: i32, op: i16, args: &[i32]) -> Vec<u8> {
 // the shared file), an aimed two-row ring (op 98, 07 §9), a stage section request (op 147, 06 §4.1), then a jump
 // back to time 0 (op 4).
 fn ecl() -> th08_formats::ecl::Ecl {
-    let f = |x: f32| x.to_bits() as i32;
+    let f = |x: f32| x.to_bits().cast_signed();
     let mut data = vec![0u8; 0x48];
     let sub = data.len();
     let body = [
@@ -400,7 +418,7 @@ fn ecl() -> th08_formats::ecl::Ecl {
     for i in body {
         data.extend(i);
     }
-    data.extend(ins(60, 4, &[0, -(len as i32)]));
+    data.extend(ins(60, 4, &[0, -i32::try_from(len).unwrap()]));
     data.extend(ins(0, -1, &[]));
     let tl = data.len();
     let tl_ins = |time: i32, op: i16, args: &[i32]| {
@@ -631,10 +649,10 @@ mod scene {
         t.extend(c.w.supervisor.as_deref().unwrap().trace());
         t.extend(c.w.ascii_mgr.as_deref().unwrap().trace());
         t.extend([
-            c.w.rng.state as u64,
-            c.w.rng.total as u64,
+            u64::from(c.w.rng.state),
+            u64::from(c.w.rng.total),
             c.w.game.scene as u64,
-            c.w.anm.vm_counter as u64,
+            u64::from(c.w.anm.vm_counter),
             c.rec.draws.len() as u64,
             hash_dbg(&c.rec.draws),
         ]);
@@ -647,6 +665,7 @@ mod scene {
     // wait) continue exactly like the original: same state, RNG and draw commands every frame; 9h: with the chain.
     #[test]
     fn scene_clone_continues_identically() {
+        const CLONE_AT: u32 = 175;
         let core = crate::coreconfig::CoreConfig {
             seed: Some(0x1234),
             ..Default::default()
@@ -654,7 +673,6 @@ mod scene {
         let Some(mut c) = crate::testdata::ctx(core) else {
             return;
         };
-        const CLONE_AT: u32 = 175;
         for f in 0..CLONE_AT {
             ctx_frame(&mut c, f);
         }
@@ -709,7 +727,7 @@ mod stage {
     // same frame is the same in both runs, 15 §2.9) playing demo `DEMO` up to demo frame `AT`; None without the
     // game data.
     fn demo_at() -> Option<Ctx> {
-        let mut c = crate::testdata::ctx(Default::default())?;
+        let mut c = crate::testdata::ctx(crate::coreconfig::CoreConfig::default())?;
         let rpy = c.archive.read(&format!("demorpy{DEMO}.rpy")).unwrap();
         let r = crate::replay::parse(&rpy, c.w.game.ver_list.get()).unwrap();
         c.w.game.replay_ff = false;
@@ -734,7 +752,7 @@ mod stage {
         assert_eq!(c.calc(), crate::task::Flow::Continue);
         c.draw();
         let mut t = world_trace(&c.w);
-        t.extend(crate::trace::sample(c, 0, 0, 0).map(|v| v as u64));
+        t.extend(crate::trace::sample(c, 0, 0, 0).map(i64::cast_unsigned));
         t.extend([
             c.rec.draws.len() as u64,
             c.rec.res.len() as u64,

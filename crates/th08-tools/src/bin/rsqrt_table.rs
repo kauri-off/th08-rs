@@ -74,11 +74,12 @@ fn main() -> anyhow::Result<()> {
         .collect();
     let mut bad = 0u64;
     for e in 1u32..255 {
-        let b0 = if e % 2 == 0 { 126 } else { 127 };
-        let k = (e as i32 - b0 as i32) / 2;
+        let b0: u32 = if e % 2 == 0 { 126 } else { 127 };
+        let k = (e.cast_signed() - b0.cast_signed()) / 2;
         for m in (0..1u32 << 23).step_by(97) {
-            let want = (base[((b0 - 126) << 23 | m) as usize] as i32 - (k << 23)) as u32;
-            bad += (native(f32::from_bits(e << 23 | m)).to_bits() != want) as u64;
+            let want =
+                (base[((b0 - 126) << 23 | m) as usize].cast_signed() - (k << 23)).cast_unsigned();
+            bad += u64::from(native(f32::from_bits(e << 23 | m)).to_bits() != want);
         }
     }
     anyhow::ensure!(

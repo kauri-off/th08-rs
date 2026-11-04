@@ -121,7 +121,7 @@ mod tests {
         assert_eq!(p.poll(at(&p, 0.017)), Tick::Run(1));
         assert!(matches!(p.poll(at(&p, 0.018)), Tick::Wait(_)));
         let total: u32 = (1..=600)
-            .map(|i| runs(p.poll(at(&p, 0.017 + i as f64 * 0.001))))
+            .map(|i| runs(p.poll(at(&p, 0.017 + f64::from(i) * 0.001))))
             .sum();
         assert_eq!(total, 36);
     }

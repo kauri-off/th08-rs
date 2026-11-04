@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
     );
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08_render::gfx::Gfx::headless())?;
-    let src = th08::sources::native(dir.into());
+    let src = th08::sources::native(dir);
     let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
         src.clone(),
         th08::settings::get().tool_io(gfx, &src),

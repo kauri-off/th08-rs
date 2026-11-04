@@ -16,7 +16,7 @@ pub fn open_spec(v: &str) -> Option<th08_core::drawfmt::Writer> {
     let w: std::io::Result<Box<dyn std::io::Write>> = if path.ends_with(".xz") {
         crate::xz::create(path.as_ref()).map(|w| Box::new(w) as _)
     } else {
-        std::fs::File::create(&path).map(|f| Box::new(std::io::BufWriter::new(f)) as _)
+        std::fs::File::create(path).map(|f| Box::new(std::io::BufWriter::new(f)) as _)
     };
     match w {
         Ok(w) => Some(th08_core::drawfmt::Writer::stream(w, range)),
@@ -673,11 +673,11 @@ fn clip_coords(v: &Vtx, vp: [f32; 4]) -> [f64; 4] {
     let w = if v.rhw == 0.0 {
         0.0
     } else {
-        1.0 / v.rhw as f64
+        1.0 / f64::from(v.rhw)
     };
-    let nx = (v.x as f64 - vp[0] as f64) / (vp[2] as f64 * 0.5) - 1.0;
-    let ny = 1.0 - (v.y as f64 - vp[1] as f64) / (vp[3] as f64 * 0.5);
-    [nx * w, ny * w, v.z as f64 * w, w]
+    let nx = (f64::from(v.x) - f64::from(vp[0])) / (f64::from(vp[2]) * 0.5) - 1.0;
+    let ny = 1.0 - (f64::from(v.y) - f64::from(vp[1])) / (f64::from(vp[3]) * 0.5);
+    [nx * w, ny * w, f64::from(v.z) * w, w]
 }
 
 // Comparable quads of a frame (strips split into quads); clears, copies and other polygons go to `others` as text.
@@ -859,22 +859,11 @@ fn lis(v: &[usize]) -> usize {
     tails.len()
 }
 
-pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
-    let (mut ro, mut po) = (Vec::new(), Vec::new());
-    let ri = items(r, o, &mut ro);
-    let pi = items(p, o, &mut po);
-    let cuts: Vec<(&str, &str)> = r
-        .prims
-        .iter()
-        .filter(|p| matches!(&p.kind, Kind::Poly(k, v) if is_cut(k, v)))
-        .map(|p| (&*p.tex, &*p.state))
-        .collect();
-    let mut d = FrameDiff {
-        ref_quads: ri.len(),
-        port_quads: pi.len(),
-        cuts: cuts.len(),
-        ..Default::default()
-    };
+// Port index per reference quad, (reference index, compare bits) per port quad.
+type Matches = (Vec<Option<usize>>, Vec<Option<(usize, u8)>>);
+
+// Pairs reference and port quads: identical ones first, then the nearest same-texture quad.
+fn match_quads(ri: &[Item], pi: &[Item]) -> Matches {
     let mut rmatch: Vec<Option<usize>> = vec![None; ri.len()];
     let mut pmatch: Vec<Option<(usize, u8)>> = vec![None; pi.len()];
     // Pass 1: identical quads, looked up by sprite and position.
@@ -940,7 +929,7 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
                     if dist > 64.0 {
                         continue;
                     }
-                    cand.push((dist + if a.key != it.key { 50.0 } else { 0.0 }, i, j));
+                    cand.push((dist + if a.key == it.key { 0.0 } else { 50.0 }, i, j));
                 }
             }
         }
@@ -953,6 +942,26 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
         rmatch[i] = Some(j);
         pmatch[j] = Some((i, compare(&ri[i], &pi[j])));
     }
+    (rmatch, pmatch)
+}
+
+pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
+    let (mut ro, mut po) = (Vec::new(), Vec::new());
+    let ri = items(r, o, &mut ro);
+    let pi = items(p, o, &mut po);
+    let cuts: Vec<(&str, &str)> = r
+        .prims
+        .iter()
+        .filter(|p| matches!(&p.kind, Kind::Poly(k, v) if is_cut(k, v)))
+        .map(|p| (&*p.tex, &*p.state))
+        .collect();
+    let mut d = FrameDiff {
+        ref_quads: ri.len(),
+        port_quads: pi.len(),
+        cuts: cuts.len(),
+        ..Default::default()
+    };
+    let (rmatch, pmatch) = match_quads(&ri, &pi);
     for (i, it) in ri.iter().enumerate() {
         let l = d.by_label.entry(it.prim.tex.clone()).or_default();
         if rmatch[i].is_none() && !it.edge {
@@ -1205,7 +1214,7 @@ impl Report {
         }
     }
 
-    pub fn add(&mut self, key: String, r: &Frame, p: &Frame, d: &FrameDiff) {
+    pub fn add(&mut self, key: &str, r: &Frame, p: &Frame, d: &FrameDiff) {
         self.compared += 1;
         let score = d.score();
         self.pairs.push((r.present, p.present, r.game_frame, score));
@@ -1213,8 +1222,8 @@ impl Report {
             self.identical += 1;
         }
         self.total.add(&d.total);
-        self.cut_frames += (d.cuts > 0) as usize;
-        self.accepted_frames += (d.total.accepted > 0) as usize;
+        self.cut_frames += usize::from(d.cuts > 0);
+        self.accepted_frames += usize::from(d.total.accepted > 0);
         self.reordered += d.reordered;
         self.ref_quads += d.ref_quads;
         for (l, x) in &d.by_label {
@@ -1228,7 +1237,7 @@ impl Report {
         }
         self.add_groups(r, p, d);
         let note = || FrameNote {
-            key: key.clone(),
+            key: key.to_string(),
             ref_present: r.present,
             port_present: p.present,
             score,
@@ -1543,7 +1552,7 @@ pub fn diff_all(r: &[Frame], p: &[Frame], mode: KeyMode, o: &Opts, worst: usize)
                     KeyMode::Scene => format!("scene {} visit {} frame {}", k.0, k.1, k.2),
                     _ => format!("present {}", k.2),
                 };
-                rep.add(key, &r[i], &p[j], &d);
+                rep.add(&key, &r[i], &p[j], &d);
             }
             None => rep.ref_only += 1,
         }
@@ -1643,7 +1652,7 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
                         ),
                         _ => format!("demo frame {} #{}", key.0, key.1),
                     };
-                    self.report.add(k, &r, p, &d);
+                    self.report.add(&k, &r, p, &d);
                     return;
                 }
                 std::cmp::Ordering::Greater => {
@@ -1669,7 +1678,10 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
 // One calc + draw + present; returns the logged frame text.
 pub fn step(ctx: &mut th08_core::game::Ctx) -> Option<(th08_core::task::Flow, Vec<String>)> {
     let f = ctx.run_frame();
-    let frames = ctx.drawlog.as_mut().map(|w| w.take_frames())?;
+    let frames = ctx
+        .drawlog
+        .as_mut()
+        .map(th08_core::drawfmt::Writer::take_frames)?;
     Some((f, frames))
 }
 
@@ -1739,6 +1751,7 @@ pub fn run_menu_script(
 }
 
 // Plays attract demo `n` from boot (no fast-forward) up to demo frame `last`.
+#[expect(clippy::cast_sign_loss, reason = "demo frames are ≥ 0")]
 pub fn run_demo(
     ctx: &mut th08_core::game::Ctx,
     n: u8,
@@ -1785,6 +1798,7 @@ mod tests {
     // 05 §9 step 3: quads ≥ 0.5 px outside the viewport are not compared; 13 §2.6c: z ∉ [0, 1] gets 1e-3 relative.
     #[test]
     fn off_viewport_and_far_vertices() {
+        use VpSide::*;
         let quad = |x: f32, y: f32, z: f32| -> [Vtx; 4] {
             [(0.0, 0.0), (8.0, 0.0), (0.0, 8.0), (8.0, 8.0)].map(|(dx, dy)| Vtx {
                 x: x + dx,
@@ -1794,7 +1808,6 @@ mod tests {
             })
         };
         let vp = [32.0, 16.0, 384.0, 448.0];
-        use VpSide::*;
         assert_eq!(off_vp(vp, &quad(100.0, 464.0, 0.0)), Off);
         assert_eq!(off_vp(vp, &quad(100.0, 462.0, 0.0)), In);
         assert_eq!(off_vp(vp, &quad(100.0, 463.0, 0.0)), Edge);
@@ -1886,7 +1899,7 @@ mod tests {
             )
         };
         let (mut a, mut b) = (inside, inside);
-        (a[0], b[0]) = (at(-0.0023498), at(-0.0023193));
+        (a[0], b[0]) = (at(-0.002_349_8), at(-0.002_319_3));
         assert_eq!(compare(&item(a), &item(b)) & (D_POS | D_Z), 0);
         b[0] = at(-0.0030);
         let mut b2 = b;
@@ -1908,13 +1921,23 @@ mod tests {
             ..item(q)
         };
         let (mut a, mut b) = (inside, inside);
-        (a[0], b[0]) = (at(-0.0023498), at(-0.0023193));
+        (a[0], b[0]) = (at(-0.002_349_8), at(-0.002_319_3));
         assert_ne!(compare(&item2(a), &item2(b)) & D_POS, 0);
     }
 
     // 13 §2.6c: ztest=le quads get 4e-4 × size; a viewport mismatch is ignored for a quad inside both viewports.
     #[test]
     fn projected_tolerance_and_viewport() {
+        fn item(p: &Prim, q: [Vtx; 4]) -> Item<'_> {
+            Item {
+                order: 0,
+                prim: p,
+                key: Default::default(),
+                q,
+                c: [0.0; 2],
+                edge: false,
+            }
+        }
         let quad = |x: f32, s: f32| -> [Vtx; 4] {
             [(0.0, 0.0), (s, 0.0), (0.0, s), (s, s)].map(|(dx, dy)| Vtx {
                 x: x + dx,
@@ -1931,16 +1954,6 @@ mod tests {
             vp,
             kind: Kind::Quad([Vtx::default(); 4]),
         };
-        fn item(p: &Prim, q: [Vtx; 4]) -> Item<'_> {
-            Item {
-                order: 0,
-                prim: p,
-                key: Default::default(),
-                q,
-                c: [0.0; 2],
-                edge: false,
-            }
-        }
         let full = [0.0, 0.0, 640.0, 480.0];
         let (le, plain) = (prim("ztest=le", full), prim("", full));
         let (a, b) = (quad(100.0, 140.0), quad(100.04, 140.0));
@@ -1966,11 +1979,11 @@ mod tests {
             (294.58334, "294.583"),
             (1800.0, "1800"),
             (0.5, "0.5"),
-            (1234567.0, "1.23457e+06"),
+            (1_234_567.0, "1.23457e+06"),
             (0.0001, "0.0001"),
             (0.00001, "1e-05"),
             (-12.25, "-12.25"),
-            (999999.6, "1e+06"),
+            (999_999.6, "1e+06"),
             (0.0, "0"),
         ];
         for (v, s) in cases {
@@ -1994,7 +2007,7 @@ mod tests {
     fn ctx() -> Option<th08_core::game::Ctx> {
         let dir = th08::settings::test_game_dir()?;
         let gfx = pollster::block_on(th08_render::gfx::Gfx::headless()).ok()?;
-        let src = th08::sources::native(dir.into());
+        let src = th08::sources::native(dir);
         Some(
             pollster::block_on(th08_core::game::Ctx::load_with(
                 src.clone(),
@@ -2164,7 +2177,7 @@ mod tests {
             };
             let (rf, pf) = (parse_str(&rt), parse_str(&pt));
             let d = diff_frame(&rf[0], &pf[0], &o);
-            rep.add(format!("{n}"), &rf[0], &pf[0], &d);
+            rep.add(&format!("{n}"), &rf[0], &pf[0], &d);
         }
         assert_eq!(rep.identical, 1);
         let g = rep.sorted_groups();

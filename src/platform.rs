@@ -231,6 +231,10 @@ impl Default for Clock {
 }
 
 impl Clock {
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(clippy::cast_sign_loss, reason = "Date.now() is ≥ 0")
+    )]
     pub fn boot_ms(&self) -> u32 {
         #[cfg(not(target_arch = "wasm32"))]
         let ms = std::time::SystemTime::now()
@@ -264,7 +268,7 @@ impl Clock {
             // The JS Date getters are local time.
             let d = js_sys::Date::new_0();
             LocalTime {
-                year: d.get_full_year() as i32,
+                year: d.get_full_year().cast_signed(),
                 month: d.get_month() + 1,
                 day: d.get_date(),
                 hour: d.get_hours(),
@@ -329,10 +333,10 @@ impl Host for AppHost {
         self.storage.read(name)
     }
     fn write(&mut self, name: &str, data: &[u8]) {
-        self.storage.write(name, data)
+        self.storage.write(name, data);
     }
     fn mkdir(&mut self, name: &str) {
-        self.storage.mkdir(name)
+        self.storage.mkdir(name);
     }
     fn list(&mut self, prefix: &str) -> Vec<String> {
         self.storage.list(prefix)
@@ -403,10 +407,10 @@ impl Host for ToolHost {
         self.storage.read(name)
     }
     fn write(&mut self, name: &str, data: &[u8]) {
-        self.storage.write(name, data)
+        self.storage.write(name, data);
     }
     fn mkdir(&mut self, name: &str) {
-        self.storage.mkdir(name)
+        self.storage.mkdir(name);
     }
     fn list(&mut self, prefix: &str) -> Vec<String> {
         self.storage.list(prefix)

@@ -142,7 +142,12 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
         }
     }
     if out.len() < rows.len() && first.is_none() {
-        first = Some((out.len() + 1, "frame", rows.len() as i64, out.len() as i64));
+        first = Some((
+            out.len() + 1,
+            "frame",
+            crate::int(rows.len()),
+            crate::int(out.len()),
+        ));
     }
     Ok(Report {
         frames: out.len(),
@@ -174,7 +179,7 @@ mod tests {
         let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
             return;
         };
-        let src = th08::sources::native(dir.clone().into());
+        let src = th08::sources::native(dir.clone());
         let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
             src.clone(),
             th08::settings::get().tool_io(gfx, &src),
@@ -192,7 +197,7 @@ mod tests {
             if ctx.w.game.game_over != 0 {
                 break;
             }
-            k = k.wrapping_mul(1103515245).wrapping_add(12345);
+            k = k.wrapping_mul(1_103_515_245).wrapping_add(12345);
             let dirs = [0, 0x10, 0x20, 0x40, 0x80, 0x50, 0x90];
             th08::platform::tool_host(&mut ctx).keys[0] =
                 0x1 | (k >> 20 & 4) as u16 | dirs[(k >> 24) as usize % 7];
@@ -206,7 +211,7 @@ mod tests {
         let mut rng = th08_core::rng::Rng::seeded(1);
         let r = th08_core::replay::parse(&r.encode(&mut rng), ctx.w.game.ver_list.get()).unwrap();
         let gfx = pollster::block_on(th08_render::gfx::Gfx::headless()).unwrap();
-        let src = th08::sources::native(dir.into());
+        let src = th08::sources::native(dir);
         let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
             src.clone(),
             th08::settings::get().tool_io(gfx, &src),
@@ -265,7 +270,7 @@ mod tests {
                 Some(g) => g,
                 None => pollster::block_on(th08_render::gfx::Gfx::headless()).unwrap(),
             };
-            let src = th08::sources::native(dir.clone().into());
+            let src = th08::sources::native(dir.clone());
             let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
                 src.clone(),
                 th08::settings::get().tool_io(g, &src),

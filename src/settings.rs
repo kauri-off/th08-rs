@@ -246,6 +246,10 @@ impl PlatformDirs {
 }
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per independent settings-table entry"
+)]
 pub struct Settings {
     // Effective value text and origin of every entry set from a source (defaults included).
     values: std::collections::BTreeMap<&'static str, (String, Origin)>,
@@ -322,7 +326,7 @@ impl Default for Settings {
 impl Settings {
     fn empty() -> Self {
         Self {
-            values: Default::default(),
+            values: std::collections::BTreeMap::default(),
             dirs: PlatformDirs::default(),
             game_dir: None,
             scale: 1,
@@ -330,7 +334,7 @@ impl Settings {
             vsync: true,
             screen_margin: 0,
             launcher: true,
-            touch: Default::default(),
+            touch: crate::platform::touch::TouchConfig::default(),
             save_dir: None,
             font: None,
             language: None,
@@ -1866,7 +1870,7 @@ impl clap::builder::TypedValueParser for EntryParser {
             .to_str()
             .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8).with_cmd(cmd))?;
         self.0.check(v).map(|_| v.to_string()).map_err(|msg| {
-            let name = arg.map_or(self.0.key.to_string(), |a| a.to_string());
+            let name = arg.map_or(self.0.key.to_string(), ToString::to_string);
             clap::Error::raw(
                 clap::error::ErrorKind::ValueValidation,
                 format!("invalid value '{v}' for '{name}': {msg}\n"),
@@ -2017,9 +2021,10 @@ fn parse_port_cfg(text: &str) -> Vec<(String, String)> {
     text.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(|l| match l.split_once('=') {
-            Some((k, v)) => Some((k.trim().to_string(), v.trim().to_string())),
-            None => {
+        .filter_map(|l| {
+            if let Some((k, v)) = l.split_once('=') {
+                Some((k.trim().to_string(), v.trim().to_string()))
+            } else {
                 log::error!("port.cfg: line {l:?} is not `key = value`; ignored");
                 None
             }
@@ -2142,7 +2147,7 @@ mod tests {
     use super::*;
 
     fn args(a: &[&str]) -> Settings {
-        Settings::from_args(PlatformDirs::default(), a.iter().map(|s| s.to_string())).unwrap()
+        Settings::from_args(PlatformDirs::default(), a.iter().map(ToString::to_string)).unwrap()
     }
 
     #[test]
@@ -2169,7 +2174,7 @@ mod tests {
         assert_eq!(s.ending, Some(Ending::Kind { shot: 7, kind: 'c' }));
         assert!(Settings::from_args(PlatformDirs::default(), ["--help".to_string()]).is_err());
         let bad = |a: &[&str]| {
-            Settings::from_args(PlatformDirs::default(), a.iter().map(|s| s.to_string())).is_err()
+            Settings::from_args(PlatformDirs::default(), a.iter().map(ToString::to_string)).is_err()
         };
         assert!(
             bad(&["--scale", "9"])

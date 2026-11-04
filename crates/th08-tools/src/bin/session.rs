@@ -8,11 +8,30 @@
 //! `--no-emit` runs the draw chain's draw-phase steps only, nothing recorded (ARCH decision 2; implies no draw log).
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use th08_tools::drawlog::{self, DemoMerge, KeyMode, Opts};
+use th08_tools::int;
 use th08_tools::session::{self, Session};
 
-fn main() -> anyhow::Result<()> {
+// Command line (module doc).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent command-line switches"
+)]
+struct Args {
+    dir: PathBuf,
+    out: PathBuf,
+    drawlog_on: bool,
+    from: usize,
+    to: usize,
+    port_only: bool,
+    sound_log: bool,
+    emit: bool,
+    hash_on: bool,
+    window: (i64, i64),
+}
+
+fn parse_args() -> anyhow::Result<Args> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (mut dir, mut out, mut drawlog_on, mut from, mut to) = (
         None,
@@ -47,27 +66,25 @@ fn main() -> anyhow::Result<()> {
             "usage: session <session dir> [--out DIR] [--no-drawlog] [--port-drawlog] [--draw-hash] [--draw-window A-B] [--sound-log] [--no-emit] [--from N] [--to N]"
         )
     })?;
-    let s = Session::load(&dir)?;
-    if s.noclip {
-        eprintln!("noclip: player invulnerable (meta.txt)");
-    }
-    std::fs::create_dir_all(&out)?;
-    let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let mut ref_paths = drawlog::expand(&dir.join("draw").to_string_lossy());
-    if ref_paths.is_empty() {
-        let alt = th08_core::testdata::repo_root().join("sessions").join(name);
-        ref_paths = drawlog::expand(&alt.join("draw").to_string_lossy());
-    }
-    let port_only = port_only && emit;
-    let hash_on = hash_on && emit;
-    let drawlog_on = drawlog_on && emit && !port_only && !hash_on && !ref_paths.is_empty();
-    if !drawlog_on && !port_only && !hash_on {
-        eprintln!("draw log: off (no reference draw_*.drawlog.xz or --no-drawlog)");
-    }
+    Ok(Args {
+        dir,
+        out,
+        drawlog_on,
+        from,
+        to,
+        port_only,
+        sound_log,
+        emit,
+        hash_on,
+        window,
+    })
+}
 
+// Headless game context with the session's start state; run metadata beside trace.txt.
+fn load_ctx(s: &Session, a: &Args) -> anyhow::Result<th08_core::game::Ctx> {
     let tdir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08_render::gfx::Gfx::headless())?;
-    let src = th08::sources::native(tdir.into());
+    let src = th08::sources::native(tdir);
     let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
         src.clone(),
         th08::settings::get().tool_io(gfx, &src),
@@ -77,27 +94,49 @@ fn main() -> anyhow::Result<()> {
     s.start(&mut ctx)?;
     // Run metadata beside trace.txt (the trace bytes stay as they are): logic-content fingerprint, empty = vanilla.
     std::fs::write(
-        out.join("meta.txt"),
+        a.out.join("meta.txt"),
         format!("fingerprint: {}\n", ctx.archive.fingerprint()),
     )?;
-    ctx.set_emit(emit);
-    if sound_log {
+    ctx.set_emit(a.emit);
+    if a.sound_log {
         ctx.w.bgm.midi_ready = false;
         ctx.sound_log = Some(Vec::new());
     }
+    Ok(ctx)
+}
 
-    let boot = s.sched.boot_calc as i64;
-    let range = (from as i64 - 1 + boot, (to.min(1 << 40) as i64) + boot - 1);
-    let mut merge = drawlog_on.then(|| -> anyhow::Result<_> {
-        let mut m = DemoMerge::new(drawlog::open(&ref_paths)?, Opts { playfield: false }, 8);
-        m.key = KeyMode::Present;
-        m.range = Some(range);
-        Ok(m)
-    });
-    let mut merge = match merge.take() {
-        Some(m) => Some(m?),
-        None => None,
-    };
+fn main() -> anyhow::Result<()> {
+    let a = parse_args()?;
+    let (dir, out, from, to, window) = (&a.dir, &a.out, a.from, a.to, a.window);
+    let s = Session::load(dir)?;
+    if s.noclip {
+        eprintln!("noclip: player invulnerable (meta.txt)");
+    }
+    std::fs::create_dir_all(out)?;
+    let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let mut ref_paths = drawlog::expand(&dir.join("draw").to_string_lossy());
+    if ref_paths.is_empty() {
+        let alt = th08_core::testdata::repo_root().join("sessions").join(name);
+        ref_paths = drawlog::expand(&alt.join("draw").to_string_lossy());
+    }
+    let port_only = a.port_only && a.emit;
+    let hash_on = a.hash_on && a.emit;
+    let drawlog_on = a.drawlog_on && a.emit && !port_only && !hash_on && !ref_paths.is_empty();
+    if !drawlog_on && !port_only && !hash_on {
+        eprintln!("draw log: off (no reference draw_*.drawlog.xz or --no-drawlog)");
+    }
+    let mut ctx = load_ctx(&s, &a)?;
+
+    let boot = i64::from(s.sched.boot_calc);
+    let range = (int(from) - 1 + boot, int(to.min(1 << 40)) + boot - 1);
+    let mut merge = drawlog_on
+        .then(|| -> anyhow::Result<_> {
+            let mut m = DemoMerge::new(drawlog::open(&ref_paths)?, Opts { playfield: false }, 8);
+            m.key = KeyMode::Present;
+            m.range = Some(range);
+            Ok(m)
+        })
+        .transpose()?;
     let port_log = out.join("draw.drawlog.xz");
     // `--port-drawlog`: the port's own log of rows from..to, with or without a reference log.
     let mut xz = if drawlog_on || port_only {
@@ -180,6 +219,19 @@ fn main() -> anyhow::Result<()> {
         t0.elapsed().as_secs_f64()
     );
 
+    report_trace(&s, from, &port_rows)?;
+    if let Some(m) = merge {
+        report_draw(m, out, &ref_paths, &port_log, range)?;
+    }
+    Ok(())
+}
+
+// Recorded vs port trace from menu frame `from`, with the rows around the first difference.
+fn report_trace(
+    s: &Session,
+    from: usize,
+    port_rows: &[th08_core::trace::Row],
+) -> anyhow::Result<()> {
     let rec = s.recorded()?;
     let k = from - 1;
     let c = session::compare(
@@ -200,21 +252,29 @@ fn main() -> anyhow::Result<()> {
             println!("  p {:6} {}", j + 1, session::format_row(&port_rows[j]));
         }
     }
+    Ok(())
+}
 
-    if let Some(m) = merge {
-        let rep = m.finish();
-        println!("\ndraw log (key present):\n{}", rep.summary());
-        let entries = th08_tools::drawreport::entries(&rep);
-        let in_range = |f: &drawlog::Frame| f.present >= range.0 && f.present <= range.1;
-        th08_tools::drawreport::write_html(
-            &out,
-            (&ref_paths[0].to_string_lossy(), &port_log.to_string_lossy()),
-            &rep,
-            &entries,
-            drawlog::open(&ref_paths)?.filter(in_range),
-            drawlog::open(&[port_log.clone()])?.filter(in_range),
-        )?;
-    }
+// Draw-log summary and DIR/index.html for the presents in `range`.
+fn report_draw(
+    m: DemoMerge<impl Iterator<Item = drawlog::Frame>>,
+    out: &Path,
+    ref_paths: &[PathBuf],
+    port_log: &Path,
+    range: (i64, i64),
+) -> anyhow::Result<()> {
+    let rep = m.finish();
+    println!("\ndraw log (key present):\n{}", rep.summary());
+    let entries = th08_tools::drawreport::entries(&rep);
+    let in_range = |f: &drawlog::Frame| f.present >= range.0 && f.present <= range.1;
+    th08_tools::drawreport::write_html(
+        out,
+        (&ref_paths[0].to_string_lossy(), &port_log.to_string_lossy()),
+        &rep,
+        &entries,
+        drawlog::open(ref_paths)?.filter(in_range),
+        drawlog::open(&[port_log.to_path_buf()])?.filter(in_range),
+    )?;
     Ok(())
 }
 

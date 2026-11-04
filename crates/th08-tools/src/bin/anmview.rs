@@ -44,8 +44,8 @@ fn main() -> anyhow::Result<()> {
             .iter()
             .filter(|_| a.get(4).map(String::as_str) != Some("--raw"))
         {
-            let (x0, y0) = (s.x as u32, s.y as u32);
-            let (x1, y1) = ((s.x + s.w) as u32, (s.y + s.h) as u32);
+            let (x0, y0) = (px(s.x), px(s.y));
+            let (x1, y1) = (px(s.x + s.w), px(s.y + s.h));
             for x in x0..x1.min(t.width) {
                 for y in [y0, y1.saturating_sub(1)] {
                     if y < t.height {
@@ -68,4 +68,10 @@ fn main() -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+// A sprite-rect edge in texture pixels (≥ 0).
+#[expect(clippy::cast_sign_loss, reason = "sprite rects lie inside the texture")]
+fn px(v: f32) -> u32 {
+    v as u32
 }

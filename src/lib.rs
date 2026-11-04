@@ -13,6 +13,10 @@ pub mod sources;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen exports take JS values by value"
+)]
 pub fn start(files: js_sys::Array) {
     use wasm_bindgen::JsCast;
     console_error_panic_hook::set_once();

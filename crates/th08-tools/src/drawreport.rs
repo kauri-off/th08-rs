@@ -192,11 +192,11 @@ pub fn diff_image(a: &image::RgbaImage, b: &image::RgbaImage) -> (image::RgbaIma
             bad += 1;
             *p = image::Rgba([255, 40, 40, 255]);
         } else {
-            let g = (pa[0] as u32 + pa[1] as u32 + pa[2] as u32) / 9;
+            let g = (u32::from(pa[0]) + u32::from(pa[1]) + u32::from(pa[2])) / 9;
             *p = image::Rgba([g as u8, g as u8, g as u8, 255]);
         }
     }
-    (out, 100.0 * bad as f64 / (a.width() * a.height()) as f64)
+    (out, 100.0 * bad as f64 / f64::from(a.width() * a.height()))
 }
 
 pub struct Entry {

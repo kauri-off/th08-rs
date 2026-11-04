@@ -644,6 +644,7 @@ impl Recorder {
         self.create_entry(width, height, src, Arc::from(rgba))
     }
 
+    #[expect(clippy::cast_sign_loss, reason = "640.0 × 480.0 screen constants")]
     pub fn capture_screen(&mut self, label: &str) -> TexId {
         let (w, h) = (SCREEN_W as u32, SCREEN_H as u32);
         let id = self.table.alloc(TexEntry {

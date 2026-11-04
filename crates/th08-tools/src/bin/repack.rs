@@ -277,6 +277,7 @@ mod bgm {
     }
 
     // Cross-correlation peak of `d` against `o` over three windows; 0 = sample-aligned.
+    #[expect(clippy::cast_sign_loss, reason = "start ≥ LAG keeps i + l ≥ 0")]
     fn lag(o: &[Frame], d: &[Frame]) -> i64 {
         let n = o.len();
         let mut best = (i128::MIN, 0);
@@ -285,10 +286,10 @@ mod bgm {
             for w in [n / 4, n / 2, 3 * n / 4] {
                 let start = w.max(LAG as usize);
                 let end = (start + LAG_WIN).min(n.saturating_sub(LAG as usize));
-                for i in start..end {
-                    let j = (i as i64 + l) as usize;
-                    acc += i128::from(i32::from(o[i][0]) * i32::from(d[j][0]))
-                        + i128::from(i32::from(o[i][1]) * i32::from(d[j][1]));
+                for (i, oi) in o.iter().enumerate().take(end).skip(start) {
+                    let j = (th08_tools::int(i) + l) as usize;
+                    acc += i128::from(i32::from(oi[0]) * i32::from(d[j][0]))
+                        + i128::from(i32::from(oi[1]) * i32::from(d[j][1]));
                 }
             }
             if acc > best.0 {
@@ -393,7 +394,7 @@ mod bgm {
                 t.name.trim_end_matches(".wav"),
                 t.loop_start,
                 t.length,
-                d.dec_len as i64 - t.length as i64,
+                th08_tools::int(d.dec_len) - th08_tools::int(t.length),
                 d.lag,
                 d.snr,
                 d.seam_snr,

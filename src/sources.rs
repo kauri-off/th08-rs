@@ -82,7 +82,7 @@ impl ApkAssetSource {
         th08_core::content::has_content(&names).then(|| ApkAssetSource {
             mgr,
             names,
-            open: Default::default(),
+            open: std::sync::Mutex::default(),
         })
     }
 
@@ -154,7 +154,7 @@ pub struct WebFiles(pub Vec<web_sys::File>);
 #[cfg(target_arch = "wasm32")]
 impl DataSource for WebFiles {
     fn names(&self) -> Vec<String> {
-        self.0.iter().map(|f| f.name()).collect()
+        self.0.iter().map(web_sys::File::name).collect()
     }
 
     fn fetch<'a>(

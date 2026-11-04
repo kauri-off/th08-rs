@@ -4,6 +4,7 @@
 use th08_core::trace::demo_sample as sample;
 use th08_tools::demosync::{FIELDS, parse_trace};
 
+#[expect(clippy::cast_sign_loss, reason = "demo frames are ≥ 0")]
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let n: u8 = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -14,7 +15,7 @@ fn main() -> anyhow::Result<()> {
     let rng_frame: Option<i32> = args.get(3).and_then(|v| v.parse().ok());
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let gfx = pollster::block_on(th08_render::gfx::Gfx::headless())?;
-    let src = th08::sources::native(dir.into());
+    let src = th08::sources::native(dir);
     let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(
         src.clone(),
         th08::settings::get().tool_io(gfx, &src),
@@ -56,97 +57,10 @@ fn main() -> anyhow::Result<()> {
         started = true;
         let f = ctx.w.game.demo_frame as usize;
         if tr {
-            let mut groups: Vec<(String, usize)> = Vec::new();
-            for c in std::mem::take(&mut calls) {
-                let frames: Vec<String> = c
-                    .lines()
-                    .filter(|l| {
-                        l.contains("th08::")
-                            && !l.contains("th08_core::rng::")
-                            && !l.contains("LocalKey")
-                            && !l.contains("closure")
-                    })
-                    .map(|l| {
-                        let l = l.trim();
-                        let l = l.split_once(": ").map_or(l, |x| x.1);
-                        l.replace("th08::", "")
-                            .replace(" as task::Task<game::Ctx>>", ">")
-                    })
-                    .take(6)
-                    .collect();
-                let k = frames.join(" <- ");
-                match groups.last_mut() {
-                    Some((g, n)) if *g == k => *n += 1,
-                    _ => groups.push((k, 1)),
-                }
-            }
-            for (g, n) in groups {
-                println!("  {n:4} x {g}");
-            }
+            print_rng_calls(std::mem::take(&mut calls));
         }
-        if f >= a && f <= b && th08::settings::get().bdump {
-            if ctx.w.gm.is_some() {
-                if let Some(em) = ctx.w.enemies.as_deref() {
-                    for (i, x) in em.enemies.iter().enumerate() {
-                        if x.alive() {
-                            println!(
-                                "  e{i} sub {} t {} pos {:.1},{:.1} fl {:x} life {}",
-                                x.main.ctx.sub,
-                                x.main.ctx.clock.cur,
-                                x.final_pos[0],
-                                x.final_pos[1],
-                                x.flags,
-                                x.life
-                            );
-                        }
-                    }
-                }
-                if th08::settings::get().idump
-                    && let Some(p) = ctx.w.player.as_deref()
-                {
-                    println!(
-                        "  player {:.1},{:.1} state {} poc {} {}",
-                        p.pos[0], p.pos[1], p.state, p.sht.poc_line, p.sht_youkai.poc_line
-                    );
-                }
-                if let Some(bm) = ctx
-                    .w
-                    .bullets
-                    .as_deref()
-                    .filter(|_| th08::settings::get().idump)
-                {
-                    for (i, x) in bm.items.items.iter().enumerate() {
-                        if x.alive {
-                            println!(
-                                "  i{i} kind {} st {} pos {:.1},{:.1} t {}",
-                                x.kind, x.state, x.pos[0], x.pos[1], x.timer.cur
-                            );
-                        }
-                    }
-                }
-                if let Some(bm) = ctx
-                    .w
-                    .bullets
-                    .as_deref()
-                    .filter(|_| !th08::settings::get().idump)
-                {
-                    for (i, x) in bm.bullets.iter().enumerate() {
-                        if x.state != 0 {
-                            println!(
-                                "  b{i} st {} pos {:.1},{:.1} vel {:.2},{:.2} ang {:.2} off {} act {:x}",
-                                x.state,
-                                x.pos[0],
-                                x.pos[1],
-                                x.vel[0],
-                                x.vel[1],
-                                x.angle,
-                                x.off_count,
-                                x.active
-                            );
-                        }
-                    }
-                }
-            }
+        if f >= a && f <= b && th08::settings::get().bdump && ctx.w.gm.is_some() {
+            dump_frame(&ctx);
         }
         if f >= a
             && f <= b
@@ -180,4 +94,92 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+// Call sites of the RNG draws of one frame, consecutive equal stacks grouped.
+fn print_rng_calls(calls: Vec<String>) {
+    let mut groups: Vec<(String, usize)> = Vec::new();
+    for c in calls {
+        let frames: Vec<String> = c
+            .lines()
+            .filter(|l| {
+                l.contains("th08::")
+                    && !l.contains("th08_core::rng::")
+                    && !l.contains("LocalKey")
+                    && !l.contains("closure")
+            })
+            .map(|l| {
+                let l = l.trim();
+                let l = l.split_once(": ").map_or(l, |x| x.1);
+                l.replace("th08::", "")
+                    .replace(" as task::Task<game::Ctx>>", ">")
+            })
+            .take(6)
+            .collect();
+        let k = frames.join(" <- ");
+        match groups.last_mut() {
+            Some((g, n)) if *g == k => *n += 1,
+            _ => groups.push((k, 1)),
+        }
+    }
+    for (g, n) in groups {
+        println!("  {n:4} x {g}");
+    }
+}
+
+// `TH08_BDUMP`: enemies, then the player and items (`TH08_IDUMP`) or the bullets.
+fn dump_frame(ctx: &th08_core::game::Ctx) {
+    if let Some(em) = ctx.w.enemies.as_deref() {
+        for (i, x) in em.enemies.iter().enumerate() {
+            if x.alive() {
+                println!(
+                    "  e{i} sub {} t {} pos {:.1},{:.1} fl {:x} life {}",
+                    x.main.ctx.sub,
+                    x.main.ctx.clock.cur,
+                    x.final_pos[0],
+                    x.final_pos[1],
+                    x.flags,
+                    x.life
+                );
+            }
+        }
+    }
+    if th08::settings::get().idump
+        && let Some(p) = ctx.w.player.as_deref()
+    {
+        println!(
+            "  player {:.1},{:.1} state {} poc {} {}",
+            p.pos[0], p.pos[1], p.state, p.sht.poc_line, p.sht_youkai.poc_line
+        );
+    }
+    if let Some(bm) = ctx
+        .w
+        .bullets
+        .as_deref()
+        .filter(|_| th08::settings::get().idump)
+    {
+        for (i, x) in bm.items.items.iter().enumerate() {
+            if x.alive {
+                println!(
+                    "  i{i} kind {} st {} pos {:.1},{:.1} t {}",
+                    x.kind, x.state, x.pos[0], x.pos[1], x.timer.cur
+                );
+            }
+        }
+    }
+    if let Some(bm) = ctx
+        .w
+        .bullets
+        .as_deref()
+        .filter(|_| !th08::settings::get().idump)
+    {
+        for (i, x) in bm.bullets.iter().enumerate() {
+            if x.state != 0 {
+                println!(
+                    "  b{i} st {} pos {:.1},{:.1} vel {:.2},{:.2} ang {:.2} off {} act {:x}",
+                    x.state, x.pos[0], x.pos[1], x.vel[0], x.vel[1], x.angle, x.off_count, x.active
+                );
+            }
+        }
+    }
 }

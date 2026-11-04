@@ -5,8 +5,12 @@ pub use th08_render::gfx::SafeArea;
 use winit::window::Window;
 
 // Insets of the window plus `margin_dp` (dp, × the scale factor) on every edge.
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "margin and scale factor are positive"
+)]
 pub fn read(window: &Window, margin_dp: u32) -> SafeArea {
-    let m = (margin_dp as f64 * window.scale_factor()).round() as u32;
+    let m = (f64::from(margin_dp) * window.scale_factor()).round() as u32;
     let base = platform_insets(window);
     SafeArea {
         left: base.left + m,
@@ -34,6 +38,7 @@ fn platform_insets(window: &Window) -> SafeArea {
 // `radii` `[top-left, top-right, bottom-right, bottom-left]` (px). Per corner the cheapest of: grow the horizontal
 // edge only, the vertical edge only, or both to the arc's 45° point r·(1 − 1/√2).
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[expect(clippy::cast_sign_loss, reason = "insets grow from u32 edges, ≥ 0")]
 pub fn fold_corners(edges: [u32; 4], radii: [u32; 4]) -> SafeArea {
     let [mut l, mut t, mut r, mut b] = edges.map(|e| e as f32);
     for (i, &rad) in radii.iter().enumerate() {
@@ -99,12 +104,12 @@ mod android {
         if r.right <= r.left || r.bottom <= r.top {
             return SafeArea::default();
         }
-        let c = |v: i32| v.max(0) as u32;
+        let c = |v: i32| v.max(0).cast_unsigned();
         SafeArea {
             left: c(r.left),
             top: c(r.top),
-            right: c(w as i32 - r.right),
-            bottom: c(h as i32 - r.bottom),
+            right: c(w.cast_signed() - r.right),
+            bottom: c(h.cast_signed() - r.bottom),
         }
     }
 
@@ -206,13 +211,13 @@ mod android {
             let mut radii = [0i32; 4];
             if sdk >= 31 {
                 // RoundedCorner.POSITION_TOP_LEFT 0, TOP_RIGHT 1, BOTTOM_RIGHT 2, BOTTOM_LEFT 3.
-                for (pos, r) in radii.iter_mut().enumerate() {
+                for (pos, r) in (0i32..).zip(radii.iter_mut()) {
                     let rc = env
                         .call_method(
                             &wi,
                             jni_str!("getRoundedCorner"),
                             jni_sig!("(I)Landroid/view/RoundedCorner;"),
-                            &[JValue::Int(pos as i32)],
+                            &[JValue::Int(pos)],
                         )?
                         .l()?;
                     if !rc.is_null() {
@@ -223,8 +228,8 @@ mod android {
                 }
             }
             Ok(Some((
-                edges.map(|v| v.max(0) as u32),
-                radii.map(|v| v.max(0) as u32),
+                edges.map(|v| v.max(0).cast_unsigned()),
+                radii.map(|v| v.max(0).cast_unsigned()),
             )))
         });
         r.flatten()

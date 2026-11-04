@@ -1,7 +1,10 @@
 //! MIDI music mode: the original's own SMF sequencer (02 §5, `Midi_*` 0x443C60–0x445440) and the port's synth output.
 #![allow(clippy::disallowed_methods)]
 
+// The synth half (rustysynth) is native only; the sequencer also runs on wasm.
+#[cfg(not(target_arch = "wasm32"))]
 use anyhow::{Context, Result};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
 // Midi_Open's tempo := 1 000 000 µs per quarter note (02 §5).
@@ -69,7 +72,7 @@ impl Reader<'_> {
         let mut v = 0u32;
         for _ in 0..4 {
             let b = self.byte()?;
-            v = (v << 7) | (b & 0x7F) as u32;
+            v = (v << 7) | u32::from(b & 0x7F);
             if b < 0x80 {
                 return Some(v);
             }
@@ -145,7 +148,7 @@ impl Sequencer {
             let first = r.vlq();
             self.tracks[i] = Track {
                 active: first.is_some(),
-                next: first.unwrap_or(0) as u64,
+                next: u64::from(first.unwrap_or(0)),
                 running: 0,
                 pos: r.pos,
                 loop_pos: 0,
@@ -173,7 +176,7 @@ impl Sequencer {
 
     // Step 1: pos = B + trunc(T·division·1000 / tempo), unsigned 64-bit.
     fn pos(&self) -> u64 {
-        self.b + self.t * self.song.division as u64 * 1000 / self.tempo.max(1) as u64
+        self.b + self.t * u64::from(self.song.division) * 1000 / u64::from(self.tempo.max(1))
     }
 
     // Midi_Tick 0x444820, one 1 ms timer callback.
@@ -213,8 +216,9 @@ impl Sequencer {
     }
 
     // clamp(trunc(raw · factor), 0, 127).
+    #[expect(clippy::cast_sign_loss, reason = "clamped to 0..=127")]
     fn scaled(&self, raw: u8) -> u8 {
-        ((raw as f32 * self.factor) as i32).clamp(0, 127) as u8
+        ((f32::from(raw) * self.factor) as i32).clamp(0, 127) as u8
     }
 
     // Midi_Event 0x444A90; None = the track data ran out.
@@ -270,7 +274,7 @@ impl Sequencer {
                         self.t = 0;
                         // Original bug kept (02 §5): tempo := tempo·256 + b + tempo per byte, i.e. ·257, ≈ 0.75 % slow.
                         self.tempo = data.iter().fold(0u32, |v, &b| {
-                            (v << 8).wrapping_add(b as u32).wrapping_add(v)
+                            (v << 8).wrapping_add(u32::from(b)).wrapping_add(v)
                         });
                     }
                     _ => {}
@@ -282,7 +286,7 @@ impl Sequencer {
         // Running status := status, next time += the following delta (after a CC 4: the delta after the CC 2).
         let tr = &mut self.tracks[i];
         tr.running = status;
-        tr.next += r.vlq()? as u64;
+        tr.next += u64::from(r.vlq()?);
         tr.pos = r.pos;
         Some(())
     }
@@ -319,7 +323,7 @@ pub struct Synth {
 #[cfg(not(target_arch = "wasm32"))]
 impl Synth {
     pub fn new(font: &Arc<rustysynth::SoundFont>, rate: u32) -> Result<Self> {
-        let settings = rustysynth::SynthesizerSettings::new(rate as i32);
+        let settings = rustysynth::SynthesizerSettings::new(rate.cast_signed());
         Ok(Self {
             synth: rustysynth::Synthesizer::new(font, &settings)
                 .map_err(|e| anyhow::anyhow!("{e:?}"))?,
@@ -340,10 +344,10 @@ impl Synth {
 impl Out for Synth {
     fn short(&mut self, m: [u8; 3]) {
         self.synth.process_midi_message(
-            (m[0] & 0x0F) as i32,
-            (m[0] & 0xF0) as i32,
-            m[1] as i32,
-            m[2] as i32,
+            i32::from(m[0] & 0x0F),
+            i32::from(m[0] & 0xF0),
+            i32::from(m[1]),
+            i32::from(m[2]),
         );
     }
 
@@ -354,7 +358,7 @@ impl Out for Synth {
             &[0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7F, 0x00, 0x41, 0xF7],
             &[0x43, 0x10, 0x4C, 0x00, 0x00, 0x7E, 0x00, 0xF7],
         ];
-        if RESETS.iter().any(|r| data == *r) {
+        if RESETS.contains(&data) {
             self.synth.reset();
         }
     }
@@ -399,7 +403,7 @@ impl Player {
         self.right.resize(n, 0.0);
         let mut done = 0;
         while done < n {
-            let left_ms = (self.rate as u64 - self.acc).div_ceil(1000) as usize;
+            let left_ms = (u64::from(self.rate) - self.acc).div_ceil(1000) as usize;
             let k = left_ms.clamp(1, n - done);
             self.synth.render(
                 &mut self.left[done..done + k],
@@ -408,8 +412,8 @@ impl Player {
             self.acc += k as u64 * 1000;
             done += k;
             // The first callback comes 1 ms after timeSetEvent.
-            if self.acc >= self.rate as u64 {
-                self.acc -= self.rate as u64;
+            if self.acc >= u64::from(self.rate) {
+                self.acc -= u64::from(self.rate);
                 if self.playing {
                     self.seq.tick(&mut self.synth);
                 }
@@ -426,10 +430,10 @@ pub fn find_soundfont(
     configured: Option<&std::path::Path>,
     dirs: &[std::path::PathBuf],
 ) -> Option<std::path::PathBuf> {
+    const PREFERRED: [&str; 3] = ["default.sf2", "FluidR3_GM.sf2", "GeneralUser.sf2"];
     if let Some(p) = configured {
         return Some(p.to_path_buf());
     }
-    const PREFERRED: [&str; 3] = ["default.sf2", "FluidR3_GM.sf2", "GeneralUser.sf2"];
     for d in dirs {
         if let Some(p) = PREFERRED.iter().map(|f| d.join(f)).find(|p| p.is_file()) {
             return Some(p);
@@ -732,7 +736,7 @@ pub(crate) mod tests {
         let (mut at, mut running, mut marks) = (0u64, 0u8, Vec::new());
         let (mut notes, mut cc7) = ([false; 16], [false; 16]);
         loop {
-            at += r.vlq().unwrap() as u64;
+            at += u64::from(r.vlq().unwrap());
             let mut st = body[r.pos];
             if st < 0x80 {
                 st = running;

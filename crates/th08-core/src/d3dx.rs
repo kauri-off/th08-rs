@@ -21,7 +21,7 @@ mod tests {
     fn facing_example_matches_spec() {
         let n = vec3_normalize([0.0, 500.0, 460.0]);
         assert_eq!(n[0], 0.0);
-        assert_eq!([n[1].to_bits(), n[2].to_bits()], [0x3F3C65F9, 0x3F2D5393]);
+        assert_eq!([n[1].to_bits(), n[2].to_bits()], [0x3F3C_65F9, 0x3F2D_5393]);
     }
 
     #[test]

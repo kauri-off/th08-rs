@@ -38,7 +38,7 @@ pub fn create(path: &Path) -> std::io::Result<Writer> {
 
 pub fn finish(w: Writer) -> std::io::Result<()> {
     w.into_inner()
-        .map_err(|e| e.into_error())?
+        .map_err(std::io::IntoInnerError::into_error)?
         .finish()?
         .flush()
 }

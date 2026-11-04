@@ -89,9 +89,25 @@ struct App {
     // Window focus, and whether audio pauses while unfocused: always on Android (focus goes at Home / recents,
     // before `Suspended` = surface destroyed); desktop opt-in `TH08_PAUSE_AUDIO_UNFOCUSED`, default off (its
     // launcher row waits for the settings table).
+    focus: Focus,
+    display: Display,
+}
+
+#[derive(Clone, Copy)]
+struct Focus {
     focused: bool,
-    focus_pause: bool,
-    // Port display: Alt held; the fullscreen state, owned here (`set_fullscreen`).
+    pause_audio: bool,
+}
+
+impl Focus {
+    fn holds_audio(self) -> bool {
+        self.pause_audio && !self.focused
+    }
+}
+
+// Port display: Alt held; the fullscreen state, owned here (`set_fullscreen`).
+#[derive(Clone, Copy)]
+struct Display {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     alt: bool,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -132,7 +148,7 @@ impl ApplicationHandler<UserEvent> for App {
             return self.reattach();
         }
         let window = Arc::new(
-            el.create_window(window_attrs(self.setup.scale, self.fullscreen))
+            el.create_window(window_attrs(self.setup.scale, self.display.fullscreen))
                 .expect("window"),
         );
         self.window = Some(window.clone());
@@ -239,25 +255,25 @@ impl ApplicationHandler<UserEvent> for App {
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, ev: WindowEvent) {
         #[cfg(not(target_arch = "wasm32"))]
         if let WindowEvent::ModifiersChanged(m) = &ev {
-            self.alt = m.state().alt_key();
+            self.display.alt = m.state().alt_key();
         }
         // Port-only F11 / Alt+Enter in every state: the one place fullscreen is toggled; the key reaches nothing else.
         #[cfg(not(target_arch = "wasm32"))]
         if let WindowEvent::KeyboardInput { event, .. } = &ev
             && event.state == ElementState::Pressed
-            && is_fullscreen_key(self.alt, event.physical_key)
+            && is_fullscreen_key(self.display.alt, event.physical_key)
         {
             if !event.repeat {
-                self.set_fullscreen(!self.fullscreen);
+                self.set_fullscreen(!self.display.fullscreen);
             }
             return;
         }
         match &ev {
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
-                self.refresh_safe(true)
+                self.refresh_safe(true);
             }
             WindowEvent::Focused(f) => {
-                self.focused = *f;
+                self.focus.focused = *f;
                 if *f {
                     self.refresh_safe(true);
                 }
@@ -285,18 +301,22 @@ impl App {
             proxy: el.create_proxy(),
             shell: Shell::Loading,
             window: None,
-            fullscreen: s.fullscreen && cfg!(not(target_arch = "wasm32")),
+            display: Display {
+                alt: false,
+                fullscreen: s.fullscreen && cfg!(not(target_arch = "wasm32")),
+            },
             setup: s,
             source,
             launcher,
             auto_at: None,
             suspended: false,
             safe_at: None,
-            focused: true,
-            focus_pause: cfg!(target_os = "android")
-                || std::env::var("TH08_PAUSE_AUDIO_UNFOCUSED")
-                    .is_ok_and(|v| crate::settings::parse_bool(&v) == Ok(true)),
-            alt: false,
+            focus: Focus {
+                focused: true,
+                pause_audio: cfg!(target_os = "android")
+                    || std::env::var("TH08_PAUSE_AUDIO_UNFOCUSED")
+                        .is_ok_and(|v| crate::settings::parse_bool(&v) == Ok(true)),
+            },
         }
     }
 
@@ -318,8 +338,10 @@ impl App {
     // A screen for `view`, editing `setup`; the box mirrors the window's fullscreen state.
     fn screen(&self, gfx: &Gfx, view: View) -> Screen {
         let mut model = crate::launcher::Model::new(&self.setup, self.folder());
-        if cfg!(not(target_arch = "wasm32")) && model.settings().fullscreen != self.fullscreen {
-            model.set_fullscreen(self.fullscreen);
+        if cfg!(not(target_arch = "wasm32"))
+            && model.settings().fullscreen != self.display.fullscreen
+        {
+            model.set_fullscreen(self.display.fullscreen);
         }
         model.view = view;
         Screen::new(self.window(), gfx, model)
@@ -365,7 +387,7 @@ impl App {
 
     // Game audio is held while suspended, while the port menu is open and (opt-in) while the window is unfocused.
     fn sync_audio(&mut self) {
-        let hold = self.suspended || (self.focus_pause && !self.focused);
+        let hold = self.suspended || self.focus.holds_audio();
         match &mut self.shell {
             Shell::Running(r) if !hold => r.ctx.audio.resume(),
             Shell::Running(r) | Shell::PortMenu(r, _) => r.ctx.audio.pause(),
@@ -405,7 +427,7 @@ impl App {
     fn set_fullscreen(&mut self, on: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.fullscreen = on;
+            self.display.fullscreen = on;
             self.window()
                 .set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
             match &mut self.shell {
@@ -422,11 +444,11 @@ impl App {
         }
     }
 
-    fn act(&mut self, el: &ActiveEventLoop, a: Action) {
+    fn act(&mut self, el: &ActiveEventLoop, a: &Action) {
         match a {
             Action::Play => self.play(el),
             Action::Quit => el.exit(),
-            Action::Fullscreen(on) => self.set_fullscreen(on),
+            Action::Fullscreen(on) => self.set_fullscreen(*on),
             Action::Back => {
                 if let Shell::Error(mut ui) = std::mem::replace(&mut self.shell, Shell::Loading) {
                     ui.screen.model_mut().view = View::Settings;
@@ -453,7 +475,7 @@ impl App {
                         .get_or_insert_with(|| Instant::now() + AUTO_WAIT);
                 }
                 None => {}
-                Some(a) => self.act(el, a),
+                Some(a) => self.act(el, &a),
             },
             ev => {
                 if let WindowEvent::Resized(s) = ev {
@@ -499,7 +521,7 @@ impl App {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if s.scale != self.setup.scale && !s.fullscreen {
-            let k = s.scale as f64;
+            let k = f64::from(s.scale);
             let _ = self
                 .window()
                 .request_inner_size(winit::dpi::LogicalSize::new(640.0 * k, 480.0 * k));
@@ -617,7 +639,7 @@ impl App {
             WindowEvent::CloseRequested => close(r, el),
             WindowEvent::RedrawRequested => {
                 if let Some(a) = screen.redraw(&window, gfx(&mut r.ctx)) {
-                    self.act(el, a);
+                    self.act(el, &a);
                 }
             }
             WindowEvent::KeyboardInput { event, .. }
@@ -629,7 +651,7 @@ impl App {
                             PhysicalKey::Code(KeyCode::F1 | KeyCode::Escape)
                         )) =>
             {
-                self.resume_game(el)
+                self.resume_game(el);
             }
             ev => {
                 if let WindowEvent::Resized(s) = ev {
@@ -746,7 +768,7 @@ fn close(r: &mut Running, el: &ActiveEventLoop) {
     if r.ctx.core.replay_save.is_some() && r.ctx.w.game.scene == th08_core::types::SceneId::Game {
         th08_core::replay::finish(&mut r.ctx);
     }
-    el.exit()
+    el.exit();
 }
 
 // One redraw of the running game: Frame_Run timing (00 §2, pacer.rs), the logic frames, draw and Present.
@@ -885,7 +907,7 @@ fn window_attrs(scale: u32, fullscreen: bool) -> winit::window::WindowAttributes
     let attrs = Window::default_attributes().with_title("th08");
     #[cfg(not(target_arch = "wasm32"))]
     let attrs = {
-        let k = scale as f64;
+        let k = f64::from(scale);
         attrs
             .with_inner_size(winit::dpi::LogicalSize::new(640.0 * k, 480.0 * k))
             .with_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)))

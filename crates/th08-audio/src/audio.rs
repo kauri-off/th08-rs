@@ -79,6 +79,7 @@ impl Music {
     }
 
     // One output frame at `step` ring frames per output frame (port: linear resampling to the device rate).
+    #[expect(clippy::cast_sign_loss, reason = "the ring cursor is ≥ 0")]
     fn next(&mut self, step: f64) -> (f32, f32) {
         let i = self.cursor as usize;
         let t = (self.cursor - i as f64) as f32;
@@ -116,7 +117,7 @@ pub fn parse_wav(data: &[u8]) -> Result<Wave> {
     let scale = if bits == 8 { 128.0 } else { 32768.0 };
     let pcm = r
         .into_samples::<i16>()
-        .map(|v| v.map(|v| v as f32 / scale))
+        .map(|v| v.map(|v| f32::from(v) / scale))
         .collect::<Result<Vec<f32>, _>>()?;
     let samples = pcm
         .chunks_exact(channels)
@@ -124,7 +125,7 @@ pub fn parse_wav(data: &[u8]) -> Result<Wave> {
         .collect();
     Ok(Wave {
         samples,
-        rate: spec.sample_rate as f64,
+        rate: f64::from(spec.sample_rate),
     })
 }
 
@@ -165,6 +166,7 @@ struct Mixer {
 impl Mixer {
     // The MIDI player at the current output rate, (re)created from the SoundFont when the rate changed.
     #[cfg(not(target_arch = "wasm32"))]
+    #[expect(clippy::cast_sign_loss, reason = "device rates are positive")]
     fn midi(&mut self) -> Option<&mut crate::midi::Player> {
         let rate = self.out_rate as u32;
         if self.midi.as_ref().is_none_or(|p| p.rate() != rate) {
@@ -185,6 +187,7 @@ impl Mixer {
         self.midi.as_mut()
     }
 
+    #[expect(clippy::cast_sign_loss, reason = "voice positions are ≥ 0")]
     fn render(&mut self, out: &mut [f32], channels: usize) {
         let step = BGM_RATE / self.out_rate;
         #[cfg(not(target_arch = "wasm32"))]
@@ -194,10 +197,7 @@ impl Mixer {
             self.midi();
         }
         #[cfg(not(target_arch = "wasm32"))]
-        let midi = match &mut self.midi {
-            Some(p) => Some(p.render(n)),
-            None => None,
-        };
+        let midi = self.midi.as_mut().map(|p| p.render(n));
         for (k, fr) in out.chunks_exact_mut(channels).enumerate() {
             let (l, r) = match &mut self.music {
                 Some(m) if !m.samples.is_empty() && !self.stopped => m.next(step),
@@ -287,13 +287,13 @@ impl Audio {
         }));
         Self {
             source,
-            bgm: Default::default(),
+            bgm: Arc::default(),
             mixer,
             stream: None,
             paused: false,
             lost: Arc::new(AtomicBool::new(false)),
             started: false,
-            stats: Default::default(),
+            stats: Arc::default(),
             midi_files: HashMap::new(),
             midi_slots: Default::default(),
             midi_open: -1,
@@ -399,7 +399,7 @@ impl Audio {
     // Midi_LoadSlot 0x4441A0: the open slot is stopped first; the name's basename is the archive lookup (01 §5); not
     // found → null slot (02 §5).
     fn midi_load_slot(&mut self, slot: usize, name: &str) {
-        if slot as i32 == self.midi_open {
+        if slot_id(slot) == self.midi_open {
             self.midi_stop();
         }
         let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
@@ -421,7 +421,7 @@ impl Audio {
                 .ok()
         });
         if song.is_some() {
-            self.midi_open = slot as i32;
+            self.midi_open = slot_id(slot);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(p) = self.mixer.lock().unwrap().midi() {
@@ -536,12 +536,11 @@ impl Audio {
         spawn(async move {
             let t0 = web_time::Instant::now();
             let known = cell.lock().unwrap().clone();
-            let bgm = match known {
-                Some(b) => b,
-                None => {
-                    let b = Arc::new(BgmSource::resolve(&source).await);
-                    cell.lock().unwrap().get_or_insert(b).clone()
-                }
+            let bgm = if let Some(b) = known {
+                b
+            } else {
+                let b = Arc::new(BgmSource::resolve(&source).await);
+                cell.lock().unwrap().get_or_insert(b).clone()
             };
             // Port (ASSETS_FORMAT §3.4): the play command's fill stage needs only the first ring (02 §3), so the
             // Music starts as soon as 4.0 s (or the whole shorter track) are decoded; the rest is appended while it
@@ -607,20 +606,19 @@ impl Audio {
         let mut waves: Vec<(&str, Option<Arc<Wave>>)> = Vec::new();
         let mut voices = Vec::new();
         for (name, _) in th08_core::sound::TABLE {
-            let w = match waves.iter().find(|(n, _)| *n == name) {
-                Some((_, w)) => w.clone(),
-                None => {
-                    let w = archive
-                        .read(&format!("{name}.wav"))
-                        .map_err(anyhow::Error::from)
-                        .and_then(|d| parse_wav(&d))
-                        .map(Arc::new);
-                    if let Err(e) = &w {
-                        log::warn!("{name}.wav: {e:#}");
-                    }
-                    waves.push((name, w.ok()));
-                    waves.last().unwrap().1.clone()
+            let w = if let Some((_, w)) = waves.iter().find(|(n, _)| *n == name) {
+                w.clone()
+            } else {
+                let w = archive
+                    .read(&format!("{name}.wav"))
+                    .map_err(anyhow::Error::from)
+                    .and_then(|d| parse_wav(&d))
+                    .map(Arc::new);
+                if let Err(e) = &w {
+                    log::warn!("{name}.wav: {e:#}");
                 }
+                waves.push((name, w.ok()));
+                waves.last().unwrap().1.clone()
             };
             voices.push(Voice {
                 wave: w,
@@ -671,19 +669,19 @@ impl th08_core::game::AudioOut for Audio {
         Audio::midi_available(self)
     }
     fn exec(&mut self, c: SoundCmd) {
-        Audio::exec(self, c)
+        Audio::exec(self, c);
     }
     fn is_started(&self) -> bool {
         Audio::is_started(self)
     }
     fn ensure_started(&mut self) {
-        Audio::ensure_started(self)
+        Audio::ensure_started(self);
     }
     fn pause(&mut self) {
-        Audio::pause(self)
+        Audio::pause(self);
     }
     fn resume(&mut self) {
-        Audio::resume(self)
+        Audio::resume(self);
     }
 }
 
@@ -725,6 +723,10 @@ impl Stats {
 
 // Android: with cpal's `realtime` feature the AAudio stream asks for the LowLatency performance mode (fast mixer /
 // MMAP path, buffer ≈ 2 bursts, tuned up by cpal on underruns) instead of the default deep-buffer path.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "`lost` moves into the error callback"
+)]
 fn open_stream(
     mixer: Arc<Mutex<Mixer>>,
     lost: Arc<AtomicBool>,
@@ -765,15 +767,17 @@ fn open_stream(
     if cfg!(target_os = "android") {
         cfg.buffer_size = cpal::BufferSize::Fixed(ANDROID_FRAMES);
     }
-    mixer.lock().unwrap().out_rate = cfg.sample_rate as f64;
-    stats.rate.store(cfg.sample_rate as u64, Ordering::Relaxed);
+    mixer.lock().unwrap().out_rate = f64::from(cfg.sample_rate);
+    stats
+        .rate
+        .store(u64::from(cfg.sample_rate), Ordering::Relaxed);
     let cb_stats = stats.clone();
     let err_stats = stats.clone();
     let stream = dev.build_output_stream(
         cfg,
         move |out: &mut [f32], _| {
             cb_stats.on_callback((out.len() / channels) as u64);
-            mixer.lock().unwrap().render(out, channels)
+            mixer.lock().unwrap().render(out, channels);
         },
         move |e| {
             match e.kind() {
@@ -803,7 +807,7 @@ fn open_stream(
         "audio: stream {} Hz × {channels}, buffer {:?}, callback / burst {burst} frames = {:.1} ms",
         cfg.sample_rate,
         cfg.buffer_size,
-        burst as f64 * 1000.0 / cfg.sample_rate as f64
+        f64::from(burst) * 1000.0 / f64::from(cfg.sample_rate)
     );
     Ok(stream)
 }
@@ -822,10 +826,22 @@ pub(crate) fn test_archive() -> Option<th08_formats::archive::Archive> {
     Some(th08_formats::archive::Archive::from_bytes(bytes).expect("th08.dat"))
 }
 
+// A MIDI slot index (0..=31) as the open-slot field holds it (02 §5, +0x10).
+#[expect(clippy::cast_possible_wrap, reason = "slots 0..=31")]
+const fn slot_id(slot: usize) -> i32 {
+    slot as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use th08_core::sound::Bgm;
+
+    // Test frame halves (< 0x8000): same bits as `as i16`.
+    #[expect(clippy::cast_possible_wrap, reason = "values < 0x8000")]
+    fn lo16(v: usize) -> i16 {
+        v as i16
+    }
 
     #[test]
     fn se_mix_pan_and_volume() {
@@ -910,8 +926,10 @@ mod tests {
         d.a.mixer.lock().unwrap().font =
             Some(Arc::new(rustysynth::SoundFont::new(&mut &sf[..]).unwrap()));
         d.b.midi_ready = true;
-        let mut cfg = th08_core::config::Config::default();
-        cfg.music = 2;
+        let mut cfg = th08_core::config::Config {
+            music: 2,
+            ..th08_core::config::Config::default()
+        };
         d.run(|b| b.set_volumes(&cfg));
         d.run(|b| b.load_bgm(1, "bgm/th08_03.mid"));
         d.run(|b| b.load_bgm(2, "bgm/th08_02.mid"));
@@ -929,22 +947,22 @@ mod tests {
         assert!(!playing(&d.a) && d.a.midi_open == -1);
         d.run(|b| b.play_bgm("bgm/th08_01.mid"));
         assert!(playing(&d.a) && d.a.midi_open == 31 && d.a.midi_slots[31].is_none());
-        d.run(|b| b.stop_bgm());
+        d.run(Bgm::stop_bgm);
         assert!(!playing(&d.a));
-        d.run(|b| b.midi_reset());
+        d.run(Bgm::midi_reset);
         assert!(playing(&d.a) && d.a.midi_open == 30);
         // A null slot (th08_02.mid missing): Midi_Open frees the tracks, open slot unchanged; Play / Stop do nothing.
         d.run(|b| b.play_slot(2));
         assert!(!playing(&d.a) && d.a.midi_open == -1);
         d.a.midi_open = 5;
-        d.run(|b| b.stop_bgm());
+        d.run(Bgm::stop_bgm);
         assert_eq!(d.a.midi_open, 5);
         // Option Reset from mode 2 (15 §1.3 row 7): mode 1 with no music call; WAV plays never stop the MIDI song.
         d.run(|b| b.play_slot(1));
         cfg.music = 1;
         d.run(|b| b.set_volumes(&cfg));
         d.run(|b| b.play_bgm("bgm/th08_01.mid"));
-        d.run(|b| b.stop_bgm());
+        d.run(Bgm::stop_bgm);
         assert!(playing(&d.a) && d.a.midi_open == 1);
     }
 
@@ -961,7 +979,7 @@ mod tests {
             b.start_fade();
             b.pause_bgm(true);
         });
-        (0..240).for_each(|_| d.run(|b| b.tick_fade()));
+        (0..240).for_each(|_| d.run(Bgm::tick_fade));
         d.run(|b| b.pause_bgm(false));
         {
             let m = d.a.mixer.lock().unwrap();
@@ -976,8 +994,10 @@ mod tests {
             let m = d.a.mixer.lock().unwrap();
             assert!(m.stopped && m.music.as_ref().unwrap().cursor == 0.0);
         }
-        let mut cfg = th08_core::config::Config::default();
-        cfg.music = 0;
+        let cfg = th08_core::config::Config {
+            music: 0,
+            ..th08_core::config::Config::default()
+        };
         d.run(|b| {
             b.set_volumes(&cfg);
             b.pause_bgm(false);
@@ -985,11 +1005,14 @@ mod tests {
         assert!(d.stopped());
     }
     // Renders `frames` at 44.1 kHz (step 1, no interpolation) and decodes the track frame each sample encodes.
+    #[expect(clippy::cast_sign_loss, reason = "encoded frame halves are ≥ 0")]
     fn heard(m: &mut Mixer, frames: usize) -> Vec<usize> {
         let mut out = vec![0.0; 2 * frames];
         m.render(&mut out, 2);
         let s = |v: f32| (v * 32768.0).round() as usize;
-        out.chunks_exact(2)
+        out.as_chunks::<2>()
+            .0
+            .iter()
             .map(|f| s(f[0]) | s(f[1]) << 15)
             .collect()
     }
@@ -997,7 +1020,7 @@ mod tests {
     fn ring_mixer(len: usize, loop_start: usize) -> Mixer {
         // Frame index i encoded as (low 15 bits, high bits) in the two s16 channels.
         let samples: Vec<_> = (0..len)
-            .map(|i| [(i & 0x7FFF) as i16, (i >> 15) as i16])
+            .map(|i| [lo16(i & 0x7FFF), lo16(i >> 15)])
             .collect();
         let samples = Pcm::from_frames(&samples);
         Mixer {
@@ -1072,7 +1095,7 @@ mod tests {
             b.pause_bgm(false);
         });
         assert!(!d.stopped());
-        d.run(|b| b.release_bgm());
+        d.run(Bgm::release_bgm);
         assert!(d.a.mixer.lock().unwrap().music.is_none());
     }
 
@@ -1133,9 +1156,9 @@ mod tests {
         let bytes = bits as usize / 8;
         let sample = |c: &[u8]| {
             if bytes == 1 {
-                (c[0] as f32 - 128.0) / 128.0
+                (f32::from(c[0]) - 128.0) / 128.0
             } else {
-                i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0
+                f32::from(i16::from_le_bytes([c[0], c[1]])) / 32768.0
             }
         };
         let samples = pcm
@@ -1154,7 +1177,7 @@ mod tests {
             .collect();
         Ok(Wave {
             samples,
-            rate: rate as f64,
+            rate: f64::from(rate),
         })
     }
 }

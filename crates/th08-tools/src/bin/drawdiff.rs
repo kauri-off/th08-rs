@@ -21,7 +21,7 @@ fn main() -> anyhow::Result<()> {
                     Some("demo") => KeyMode::Demo,
                     Some("present") => KeyMode::Present,
                     _ => KeyMode::Scene,
-                })
+                });
             }
             "--worst" => worst_n = it.next().and_then(|v| v.parse().ok()).unwrap_or(8),
             "--out" => out = it.next().map(PathBuf::from).unwrap_or(out),
@@ -56,15 +56,7 @@ fn main() -> anyhow::Result<()> {
         opts.playfield
     );
     let mut mem: Option<(Vec<Frame>, Vec<Frame>)> = None;
-    let rep = if mode != KeyMode::Scene {
-        let mut m = DemoMerge::new(drawlog::open(&ref_paths)?, opts, worst_n);
-        m.range = range;
-        m.key = mode;
-        for f in drawlog::open(&port_paths)? {
-            m.feed(&f);
-        }
-        m.finish()
-    } else {
+    let rep = if mode == KeyMode::Scene {
         let mut r: Vec<Frame> = drawlog::open(&ref_paths)?.collect();
         if let Some((a, b)) = range {
             r.retain(|f| f.present >= a && f.present <= b);
@@ -73,6 +65,14 @@ fn main() -> anyhow::Result<()> {
         let rep = drawlog::diff_all(&r, &p, mode, &opts, worst_n);
         mem = Some((r, p));
         rep
+    } else {
+        let mut m = DemoMerge::new(drawlog::open(&ref_paths)?, opts, worst_n);
+        m.range = range;
+        m.key = mode;
+        for f in drawlog::open(&port_paths)? {
+            m.feed(&f);
+        }
+        m.finish()
     };
     println!("{}", rep.summary());
     println!("worst frames:");
@@ -92,7 +92,6 @@ fn main() -> anyhow::Result<()> {
         .parent()
         .unwrap_or(Path::new("."))
         .to_path_buf();
-    let pair_of = |rp: i64| rep.pairs.iter().find(|p| p.0 == rp).copied();
     // Menu screenshots: `<stem>.shots.txt` = `<script frame> <name>`, script frame 1 = first main-menu frame.
     let stem = ref_paths[0]
         .file_name()
@@ -104,56 +103,11 @@ fn main() -> anyhow::Result<()> {
         &mem,
         std::fs::read_to_string(ref_dir.join(format!("{stem}.shots.txt"))),
     ) {
-        let base = r.iter().find(|f| f.scene == 1).map_or(0, |f| f.present - 1);
-        for l in shots.lines() {
-            let mut t = l.split_whitespace();
-            let (Some(fr), Some(name)) = (t.next().and_then(|x| x.parse::<i64>().ok()), t.next())
-            else {
-                continue;
-            };
-            let png = ref_dir.join("menu_ref").join(format!("{name}.png"));
-            let rp = base + fr;
-            if let Some(pr) = pair_of(rp) {
-                let text = match (
-                    r.iter().find(|f| f.present == pr.0),
-                    p.iter().find(|f| f.present == pr.1),
-                ) {
-                    (Some(a), Some(b)) => drawlog::diff_frame(a, b, &opts).describe(8),
-                    _ => String::new(),
-                };
-                entries.push(Entry {
-                    title: format!("shot {name} (script frame {fr}) — score {}", pr.3),
-                    ref_present: pr.0,
-                    port_present: pr.1,
-                    text,
-                    shot: png.exists().then_some(png),
-                });
-            }
-        }
+        menu_shots(&mut entries, &ref_dir, &shots, (r, p), &rep, &opts);
     }
     // Demo screenshots: demos/dl_d<K>_f<game frame>.png.
     if let Some(k) = first.as_ref().filter(|f| f.demo >= 0).map(|f| f.demo) {
-        for e in std::fs::read_dir(&ref_dir).into_iter().flatten().flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            let Some(rest) = name.strip_prefix(&format!("dl_d{k}_f")) else {
-                continue;
-            };
-            let Some(gf) = rest
-                .strip_suffix(".png")
-                .and_then(|x| x.parse::<i64>().ok())
-            else {
-                continue;
-            };
-            if let Some(pr) = rep.pairs.iter().find(|p| p.2 == gf) {
-                entries.push(Entry {
-                    title: format!("demo {k} game frame {gf} — score {}", pr.3),
-                    ref_present: pr.0,
-                    port_present: pr.1,
-                    text: String::new(),
-                    shot: Some(e.path()),
-                });
-            }
-        }
+        demo_shots(&mut entries, &ref_dir, k, &rep);
     }
     let names = (pos[0].as_str(), pos[1].as_str());
     match mem {
@@ -168,5 +122,68 @@ fn main() -> anyhow::Result<()> {
             drawlog::open(&ref_paths)?,
             drawlog::open(&port_paths)?,
         ),
+    }
+}
+
+// Entries for the reference menu screenshots listed in `<stem>.shots.txt` (`shots`).
+fn menu_shots(
+    entries: &mut Vec<Entry>,
+    ref_dir: &Path,
+    shots: &str,
+    (r, p): (&[Frame], &[Frame]),
+    rep: &drawlog::Report,
+    opts: &Opts,
+) {
+    let pair_of = |rp: i64| rep.pairs.iter().find(|p| p.0 == rp).copied();
+    let base = r.iter().find(|f| f.scene == 1).map_or(0, |f| f.present - 1);
+    for l in shots.lines() {
+        let mut t = l.split_whitespace();
+        let (Some(fr), Some(name)) = (t.next().and_then(|x| x.parse::<i64>().ok()), t.next())
+        else {
+            continue;
+        };
+        let png = ref_dir.join("menu_ref").join(format!("{name}.png"));
+        let rp = base + fr;
+        if let Some(pr) = pair_of(rp) {
+            let text = match (
+                r.iter().find(|f| f.present == pr.0),
+                p.iter().find(|f| f.present == pr.1),
+            ) {
+                (Some(a), Some(b)) => drawlog::diff_frame(a, b, opts).describe(8),
+                _ => String::new(),
+            };
+            entries.push(Entry {
+                title: format!("shot {name} (script frame {fr}) — score {}", pr.3),
+                ref_present: pr.0,
+                port_present: pr.1,
+                text,
+                shot: png.exists().then_some(png),
+            });
+        }
+    }
+}
+
+// Entries for the reference demo screenshots `dl_d<k>_f<game frame>.png` in `ref_dir`.
+fn demo_shots(entries: &mut Vec<Entry>, ref_dir: &Path, k: i32, rep: &drawlog::Report) {
+    for e in std::fs::read_dir(ref_dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(rest) = name.strip_prefix(&format!("dl_d{k}_f")) else {
+            continue;
+        };
+        let Some(gf) = rest
+            .strip_suffix(".png")
+            .and_then(|x| x.parse::<i64>().ok())
+        else {
+            continue;
+        };
+        if let Some(pr) = rep.pairs.iter().find(|p| p.2 == gf) {
+            entries.push(Entry {
+                title: format!("demo {k} game frame {gf} — score {}", pr.3),
+                ref_present: pr.0,
+                port_present: pr.1,
+                text: String::new(),
+                shot: Some(e.path()),
+            });
+        }
     }
 }

@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: tools/arch_check freeze DIR | run DIR — port-vs-port references for the rewrite (REWRITE_PLAN step 0).
 # freeze: build, then write port traces + draw hashes of all sessions, demos 0-3 and the pilot replays into DIR.
-# run: fmt, 0-warning build, core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core: the crate cut, step 10c, enforces
+# run: fmt, 0-warning build, clippy wall (STEP11 11o), core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core: the crate cut, step 10c, enforces
 # the boundary), wasm + android check (tools/android_check), cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
 # run also replays every session + pilot with emit off (`session --no-emit`, ARCH decision 2) and requires its trace = DIR's.
 # Draw = draw.hash (`--draw-hash`: per-frame hash of the draw-log text, no xz); a mismatch prints the first differing present
@@ -122,6 +122,15 @@ fail=0
 cargo fmt --all --check > /dev/null 2>&1 && echo "fmt ok" || { echo "fmt FAILED"; fail=1; }
 w=$(cargo build --release --workspace 2>&1 | grep -cE '^(warning|error)')
 [[ $w == 0 ]] && echo "build ok, 0 warnings" || { echo "build: $w warnings/errors"; fail=1; }
+# Clippy wall (STEP11 11o): every target with the [workspace.lints] subset, any warning fails. CLIPPY_PENDING lists files
+# of a run still open (DEVLOSS2): their warnings are counted, not failed; empty = `cargo clippy … -- -D warnings`.
+CLIPPY_PENDING=${CLIPPY_PENDING-src/launcher.rs src/platform/overlay.rs src/platform/portmenu.rs}
+if [[ -z $CLIPPY_PENDING ]]; then
+  cargo clippy -q --workspace --all-targets -- -D warnings > /dev/null 2>&1 && echo "clippy ok, 0 warnings" || { echo "clippy FAILED"; fail=1; }
+elif cl=$("$ROOT/tools/lint_subset" 2>&1); then
+  read -r cw cp < <(awk -v p=" $CLIPPY_PENDING " '$2 != "total" {if (index(p, " " $2 " ")) n += $1; else w += $1} END {print w + 0, n + 0}' <<< "$cl")
+  [[ $cw == 0 ]] && echo "clippy ok, 0 warnings ($cp in pending files)" || { echo "clippy: $cw warnings"; grep -vE "total|${CLIPPY_PENDING// /|}" <<< "$cl" | head; fail=1; }
+else echo "clippy FAILED"; tail -5 <<< "$cl"; fail=1; fi
 cdeps=$(cargo tree -q -p th08-core -e normal --prefix none 2>&1 | grep -E '^(wgpu|cpal|winit|egui|rfd|clap|liblzma) ' | sort -u | tr '\n' ' ')
 [[ -z $cdeps ]] && echo "core deps ok" || { echo "core deps FAILED: $cdeps"; fail=1; }
 cargo check -q --release --workspace --lib --target wasm32-unknown-unknown > /dev/null 2>&1 && echo "wasm ok" || { echo "wasm FAILED"; fail=1; }
