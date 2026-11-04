@@ -1,14 +1,26 @@
-# Clean-room implementer docs (for me)
+# Documentation
 
-Read order after any context loss: this file → STATUS.md → DECISIONS.md → AGENTS.md.
+Reference documents for the port. Behaviour itself is described only in the numbered specifications in
+[`specs/`](../specs/); everything here is about the port, its decisions and its status.
 
-- STATUS.md — what is implemented, what is next.
-- DECISIONS.md — architecture/tech choices and why.
-- AGENTS.md — agent roster and workflow.
-- FORMATS.md — format facts implemented, with source spec.
-- briefs/ — templates, RE_WORKFLOW, active briefs; archive/ — finished briefs and history.
+| Document | Contents |
+|---|---|
+| [STATUS.md](STATUS.md) | what works, known differences from the original, what is next |
+| [DECISIONS.md](DECISIONS.md) | technical choices (libraries, rendering, assets, timing) and why |
+| [PARITY_POLICY.md](PARITY_POLICY.md) | what "identical to the original" means for logic and for drawing |
+| [FORMATS.md](FORMATS.md) | short reference of the file formats the port reads and writes |
+| [parity/](parity/README.md) | draw parity result and the accepted difference classes |
+| [arch/ARCH_SUMMARY.md](arch/ARCH_SUMMARY.md) | architecture of the idiomatic rewrite: `World`, draw split, host interface |
+| [arch/ARCH_D_MOBILE.md](arch/ARCH_D_MOBILE.md) | Android and mobile web design |
+| [arch/ASSETS_FORMAT.md](arch/ASSETS_FORMAT.md) | the repacked game-data format (`.pak`, Vorbis BGM) |
+| [arch/I18N.md](arch/I18N.md) | translated game text and the multilingual launcher |
+| [arch/I18N_STRINGS.md](arch/I18N_STRINGS.md), [arch/I18N_QUESTIONS.md](arch/I18N_QUESTIONS.md) | inventory of displayed strings, open i18n points |
+| [research/RE_SPEC_METHODS.md](research/RE_SPEC_METHODS.md) | how other projects document reverse-engineering results |
 
-Layout: `specs/` clean specs (implementer input) · `re/` dirty-room workspace (Ghidra, dumps, tools, symbols, NOTES) · `src/` Rust.
+Elsewhere in the repository:
 
-Clean-room rule: I write Rust only from spec prose in specs/*.md. I do not read Ghidra output,
-the agents' Python tools, or the binary's code. Comparing the agents' *outputs* (extracted files, PNGs) is fine.
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md): how to contribute, the clean-room rule, checks, commit style.
+- [`../CLAUDE.md`](../CLAUDE.md): code comment rules and the source-of-truth rules (for people and AI agents).
+- [`../specs/`](../specs/): the specifications, the only source of truth for behaviour.
+- [`../re/README.md`](../re/README.md): the reverse-engineering tools and where the findings live.
+- [`../sessions/README.md`](../sessions/README.md): recording and replaying play sessions of the original.

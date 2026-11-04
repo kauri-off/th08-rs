@@ -1,7 +1,7 @@
 # Architecture proposal D — mobile version
 
-Brief: docs/briefs/ARCH_D_MOBILE_BRIEF.md. Fits into REWRITE_PLAN.md (step 7 `Host` in progress) and the day-0 table
-in ARCH_SUMMARY.md. Measured on the working tree of 2026-11-01 (IMPL158 mid-edit). Scratch: target/arch_D/.
+Fits into the rewrite order and the day-0 table of [ARCH_SUMMARY.md](ARCH_SUMMARY.md). Measured on the working tree
+of 2026-11-01, while the `Host` step of the rewrite was in progress.
 
 **Scope (user decision 2026-11-01):** targets are **native Android (APK)** and **mobile web** (existing wasm build).
 **iOS is not supported.** Desktop packaging (NSIS, AppImage) is designed elsewhere and is out of scope here.
@@ -13,11 +13,11 @@ distributed; user-provided files are the secondary route.
 | what | result |
 |---|---|
 | Toolchain | rustc 1.98.0; `rustup target add aarch64-linux-android` done (no other rustup change) |
-| Android SDK | `~/.local/share/android-sdk/Sdk`: NDK 27.1.12297006, build-tools 35/36 (aapt2, zipalign, apksigner, d8), platform android-36, an x86_64 system image + AVD, `~/.android/debug.keystore`; `adb`, `scrcpy`, `gradle`, JDK 17 installed. `ANDROID_HOME` is **not** set |
+| Android SDK | a local Android SDK: NDK 27.1.12297006, build-tools 35/36 (aapt2, zipalign, apksigner, d8), platform android-36, an x86_64 system image + AVD, `~/.android/debug.keystore`; `adb`, `scrcpy`, `gradle`, JDK 17 installed. `ANDROID_HOME` is **not** set |
 | `xbuild` on PATH | `/usr/bin/xbuild` is **Mono's XBuild**, not rust-mobile xbuild. `cargo-apk`/`cargo-ndk` not installed. Packaging below therefore uses aapt2 directly |
 | `th08-formats`, `th08-core` for aarch64-linux-android | `cargo check` clean |
 | `th08` lib for aarch64-linux-android, tree as-is | fails in `android-activity 0.6.1`: winit needs feature `android-native-activity` or `android-game-activity` |
-| same, scratch copy with that winit feature + `rfd` cfg'd off Android | **all dependencies compile**: wgpu 30 (Vulkan/GLES), cpal 0.18.2 (AAudio via `ndk`), egui/egui-wgpu/egui-winit 0.37 (arboard is already cfg'd off Android by egui-winit), gilrs 0.11, liblzma `static` (C built by NDK clang via `CC_aarch64_linux_android`), rustysynth, ab_glyph, chrono, directories. Remaining errors: 5 × `rfd::` in `src/launcher.rs` (46, 47, 53, 60, 397) — the only Android-specific blocker — plus 4 errors that the host build has too (IMPL158 in progress: `HostIo`, `load_score`) |
+| same, scratch copy with that winit feature + `rfd` cfg'd off Android | **all dependencies compile**: wgpu 30 (Vulkan/GLES), cpal 0.18.2 (AAudio via `ndk`), egui/egui-wgpu/egui-winit 0.37 (arboard is already cfg'd off Android by egui-winit), gilrs 0.11, liblzma `static` (C built by NDK clang via `CC_aarch64_linux_android`), rustysynth, ab_glyph, chrono, directories. Remaining errors: 5 × `rfd::` in `src/launcher.rs` (46, 47, 53, 60, 397) — the only Android-specific blocker — plus 4 errors that the host build has too (the `Host` step was mid-edit: `HostIo`, `load_score`) |
 | gilrs on Android | `gilrs-core 0.6.8` has no Android backend (platform dirs: linux, macos, windows, wasm, default=dummy) → **no gamepads via gilrs** |
 | winit 0.30.13 Android gamepad | buttons arrive as `KeyboardInput` with `PhysicalKey::Unidentified(NativeKeyCode::Android(code))` (A/B/X/Y/L1/R1/Start…); D-pad keycodes map to `ArrowUp…` (keycodes.rs:69); **stick/hat axes are not exposed** (every MotionEvent becomes a `Touch`, mod.rs:376) |
 | winit Android lifecycle | `Resumed`/`Suspended` per native window (mod.rs:215/218), `Focused`, `LowMemory`; `content_rect()` for insets; `android_app().internal_data_path()/external_data_path()/asset_manager()` available |
@@ -196,7 +196,7 @@ state from `InputMux`.
 2. **Step 7:** a pure `Pacer` (Frame_Run deadline + drop-late, 00 §2) separate from the winit handler, with
    `suspend()/resume()` and `next_deadline()` so Android, web rAF and desktop share it; no `thread::sleep` in it.
 3. **Saves are pure w.r.t. logic:** any save outside the original's call sites is taken from a clone (score.dat
-   consumes RNG). Write this rule into the step-9 brief together with the clone round-trip test.
+   consumes RNG). Apply this rule in the `World` step together with the clone round-trip test.
 4. **Step 8:** the renderer separates device from surface (`attach(window)` / `detach()`), keeps a `TexId → source`
    registry (anm entry or bytes) for rebuild, and has a port-UI layer drawn after the blit, outside the 640×480
    frame texture.

@@ -1,10 +1,10 @@
 # I18N_STRINGS — inventory of every displayed string (run G0 of I18N.md §4)
 
 RE / docs run, 2026-11-04. Read-only: specs 00–16 + structs.md, port source (`crates/th08-core`, `th08-render`), `re/`
-dumps (`re/extracted/dat`, `re/tools/msgdump.py`), th08.exe 1.00d (string reads only) and the **local thcrap install**
-`~/Games/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/thcrap/repos/` (`nmlgc/base_tsa`,
+dumps (`re/extracted/dat`, `re/tools/msgdump.py`), th08.exe 1.00d (string reads only) and a **local thcrap install**
+`<game dir>/thcrap/repos/` (`nmlgc/base_tsa`,
 `nmlgc/script_latin`, `thpatch/lang_en`; **no `lang_ru` locally**). Below, `<thcrap>` = that `repos/` dir.
-Open points: `I18N_QUESTIONS.md`.
+Open points: [I18N_QUESTIONS.md](I18N_QUESTIONS.md).
 
 Line numbers are for commit 7a218b6. Port paths are relative to `crates/th08-core/src/` unless written in full.
 
@@ -377,7 +377,7 @@ themes; comment line 0 maps to the numbered title.
 | ascii popup x from glyph counts (`ascii.rs:384, 506, 521`), `Spell Card Bonus!` x = (384 − 17·14)/2 + 32 | 12 §5.5 | draw positions of fixed-content strings |
 | panel `/` x = 488 + 13·len (`hud.rs:1509`) | 12 §5.3 | draw only (digits) |
 | `ascii::text_width` (`ascii.rs:964`) | 12 §2.9 | no callers |
-| msg ops 1/2 `pos_offset` from **sprite** width > 128/256 | 10 §5.1 note | ANM sprite table (logic ANM), not the image; no visible effect. Image overrides keep the logical size (ARCH_B §1.7) |
+| msg ops 1/2 `pos_offset` from **sprite** width > 128/256 | 10 §5.1 note | ANM sprite table (logic ANM), not the image; no visible effect. Image overrides keep the logical size |
 | comment cut to 64 bytes, vsprintf buffers 128/72 bytes, `.end` 0x44 buffer | 16 §5.1, 10 §6, 16 §1.3 | vanilla-path limits; translated text bypasses them (rendered from the pack, never formatted) |
 
 No text width, glyph count, ascii position or string content is an input to the RNG. RNG consumers are listed in

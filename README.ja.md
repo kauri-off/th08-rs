@@ -88,7 +88,9 @@ cargo run --release -- "/path/to/TH08 - Imperishable Night"
 | `src/` | アプリ本体：ゲームウィンドウ、ランチャー、設定、プラットフォーム（パッケージ `th08`、実行ファイル `th08`） |
 | `crates/` | `th08-formats`（ファイル形式）、`th08-core`（ゲームロジック）、`th08-render`（wgpu）、`th08-audio`（cpal、MIDI）、`th08-tools`（トレース・描画ログのツール、`src/bin/` に実行ファイル） |
 | `re/` | リバースエンジニアリング用ツール：フォーマットのダンプ、Ghidra スクリプト、実行時プローブ、プレイの録画 |
-| `docs/` | 進捗、設計判断、書き直しのアーキテクチャ |
+| `docs/` | 進捗、設計判断、書き直しのアーキテクチャ（[目次](docs/README.md)） |
+
+貢献の方法：[CONTRIBUTING.md](CONTRIBUTING.md)（英語）。
 | `web/`, `packaging/`, `xtask/` | ブラウザ用フロントエンド、パッケージング用ファイル、`cargo xtask dist` |
 
 ## ライセンス

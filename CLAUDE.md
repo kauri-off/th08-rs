@@ -12,7 +12,7 @@ A reader must be able to check spec-bound code against the specs, without the co
 - Port-only code (launcher, settings, platform, render backend, tools, xtask): no spec citations; one `//!` line
   saying what the module does.
 - No process history in code: no IMPL / RE-Q numbers, rewrite steps, run ids, `answers_*`, ARCH_* / plan-doc
-  pointers, "was / moved from / until X lands". Git and docs/ hold that.
+  pointers, "was / moved from / until X lands". Git history holds that.
 - Do not restate what the code obviously does, no long blocks; CLI usage text belongs in `--help`, not in a comment
   banner. `// SPEC-GAP:` stays a one-line marker.
 

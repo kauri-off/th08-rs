@@ -1,8 +1,8 @@
 # Architecture proposals — comparison and recommendation
 
-Inputs: [ARCH_A_IDIOMATIC.md](ARCH_A_IDIOMATIC.md) (idiomatic core), [ARCH_B_MODDING.md](ARCH_B_MODDING.md) (content /
-mod platform), [ARCH_C_NETPLAY.md](ARCH_C_NETPLAY.md) (netplay-ready deterministic core). Brief:
-docs/briefs/ARCH_PROPOSALS_BRIEF.md.
+Summary of three proposals for the idiomatic rewrite: A (idiomatic core), B (content / mod platform), C (netplay-ready
+deterministic core). The full proposals are planning documents and are not kept in the repository; this summary holds
+the decisions taken from them.
 
 ## Verdict
 The three are not alternatives: they agree on the core's shape and differ only in what they add on top. Recommended:

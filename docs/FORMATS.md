@@ -1,6 +1,9 @@
-# Formats as implemented (source → specs/...)
+# File formats as implemented
 
-## th08.dat (PBGZ) — source: deepseek NOTES.md; verified by byte-identical extraction
+Short reference of the on-disk formats the port reads and writes, each with its spec section and the Rust module
+that implements it. The numbered specs stay the source of truth.
+
+## th08.dat (PBGZ) — source: specs/01_archive.md (crates/th08-formats/src/archive.rs); verified by byte-identical extraction
 - "PBGZ", then 12 bytes ciphered (key 0x1b, step 0x37, block 12, limit 0x400) → 3 u32 minus 123456 / 345678 / 567891
   = count / table offset / table decompressed size.
 - Table: from table offset to EOF, cipher (0x3e,0x9b,0x80,0x400) → LZSS → records {cstr name, u32 off, u32 size, u32 0}.
@@ -10,54 +13,54 @@
 - LZSS: MSB-first bits, flag 1 = literal byte, 0 = 13-bit ring pos (0 = end) + 4-bit len (+3); 8 KiB ring, write pos starts at 1.
 - edz keys: M 1b/37/40/2800, T 51/e9/40/3000, A c1/51/1400/2000, J 03/19/1400/7800, E ab/cd/200/1000, W 12/34/400/2800, - 35/97/80/2800, * 99/37/400/1000.
 
-## thbgm.dat / thbgm.fmt — source: deepseek NOTES.md
+## thbgm.dat / thbgm.fmt — source: specs/02_bgm.md (crates/th08-formats/src/thbgm.rs)
 - fmt: 52-byte entries {name[16], +0x10 offset, +0x14 preload size, +0x18 loop start (bytes from track start, CONFIRMED), +0x1C length = loop end, +0x20 WAVEFORMATEX}. List ends at name[0]==0.
 - PCM 44.1 kHz stereo s16. Track for title = th08_01.wav.
 
-## ANM — source: deepseek NOTES + my checks (src/anm.rs, test parses all 113 files / 306 textures)
+## ANM — source: specs/03_images.md (crates/th08-formats/src/anm.rs; the test parses all 113 files / 306 textures)
 - Chunk header 0x40: +0 n_sprites, +4 n_scripts, +0x1C name offset, +0x28 version (=3), +0x30 THTX offset (0 = none),
   +0x34 low byte 1 = texture embedded, +0x38 next chunk offset (relative, 0 = last).
 - +0x40: n_sprites u32 offsets → {u32 id, f32 x, y, w, h} (pixels in texture). Then n_scripts × {i32 id, u32 offset}. Then name.
-- Script data: {i16 op, u16 size incl. header, i16 time, u16 var mask, 4-byte args}, ends with op −1. Semantics: specs/05_anm_vm.md (src/anmvm.rs).
+- Script data: {i16 op, u16 size incl. header, i16 time, u16 var mask, 4-byte args}, ends with op −1. Semantics: specs/05_anm_vm.md (crates/th08-core/src/anmvm.rs).
   Data uses 57 distinct opcodes; only draw mode 2 is ever set by scripts (op 83), owners pick the rest.
 - THTX: "THTX", u16 0, u16 fmt, u16 w, u16 h, u32 size, raw D3D texels. fmt 1 BGRA8888, 2 ARGB1555, 3 RGB565, 4 BGR888, 5 ARGB4444.
 
-## STD — source: specs/06_std.md (src/stdfile.rs)
+## STD — source: specs/06_std.md (crates/th08-formats/src/stdfile.rs)
 - Header: i16 objects, i16 quads, u32 instance offset, u32 script offset, 5×0x80 unused text, 4×0x80 BGM names at 0x290 (" " = none), u32 object offsets at 0x490.
 - Object: i16 id, u8 layer, u8 flags, f32[3] bbox origin, f32[3] bbox size, quad records {i16 type, i16 size} until type < 0.
   Type 0 (0x1C): script, vm, pos[3], w, h (0 = sprite size, negative = mirrored). Type 1 (0x24): script, vm, A[3], B[3], width.
   Quad positions are not relative to the bbox origin (draw adds only instance pos − origin).
 - Instances: 16 bytes {i16 object (< 0 ends), i16 unused, f32[3] pos}. Script: 20 bytes {i32 time (−1 ends), i16 op, i16 12, 3×4 args}.
 
-## ECL — source: specs/07_ecl.md (src/ecl.rs)
+## ECL — source: specs/07_ecl.md (crates/th08-formats/src/ecl.rs)
 - Header: u32 0x800, i16 subs, i16 timelines run, u32[16] timeline offsets (ntl+1 non-zero; the last is never run), u32[subs] sub offsets at 0x48.
 - Sub instruction: i32 time, i16 op (−1 ends), i16 size, u8 0, u8 rank mask, u16 var mask, 4-byte args. Bullet ops 96–104 are 44 bytes (i16 type/colour, counts, speeds, angles, flags at +0x28), lasers 114/115 64 bytes, spell card 122 244 bytes (strings XOR AA/BB/DD/EE).
 - Timeline instruction: i32 time (< 0 ends), i16 op, u8 size, u8 rank mask, args. Data uses 147 distinct sub ops.
 
-## SHT — source: specs/09_player.md §2.1 (src/sht.rs)
+## SHT — source: specs/09_player.md §2.1 (crates/th08-formats/src/sht.rs)
 - Header 0x38: u16 0, u16 levels, f32 bombs per life, i32 deathbomb base, f32 hitbox, graze box, attraction speed, collect box, POC line,
   i32 unknown, f32 unfocused/focused speed, unfocused/focused diagonal, item fall multiplier; then levels × {u32 file offset, i32 power threshold}.
 - Entry 0x38 (list ends with i32 −1): i16 interval, phase; f32 offset x/y, hitbox w/h, angle, speed; i16 damage, side (>0 youkai, <0 human),
   origin (0 player, k option k−1), type (3 pierce, 4/5 laser, 6 no hit anim), script−10, sound; i32 init/update/draw/hit function indexes.
 - All 8 files: 6 levels (thresholds 8/24/48/80/128/999) except ply02as (8; levels 6/7 = Remilia bomb / last spell).
 
-## MSG — source: specs/10_msg.md (src/msg.rs)
+## MSG — source: specs/10_msg.md (crates/th08-formats/src/msg.rs)
 - u32 count, u32 offset[count] (entries may share offsets), then instructions {u16 time, u8 op, u8 arg size, args}; an entry ends at op 0 (or halts at 10/11).
 - Strings: bytes XOR 0x77, terminated by a byte decoding to 0, padded to 4; Shift-JIS. Op 3 = i16 speaker, i16 line, str; ops 15/17 = u32 who + i32 sprites (< 0 keep).
 - Files: msgN{a,b,c,d} by team (solos use their team), 4A/4B: msg4ab/4ac/4ba/4bd, impossible combos → msg4dm; 6A = msg6*, 6B = msg7*, Extra = msg8*.
 
-## MIDI (bgm/*.mid, init.mid) — source: specs/02_bgm.md §5 (src/midi.rs)
+## MIDI (bgm/*.mid, init.mid) — source: specs/02_bgm.md §5 (crates/th08-formats/src/midi.rs)
 - 22 archive members, SMF format 0, one track, division 480; loop = CC 2 (start) / CC 4 (end); init.mid = GS SysEx +
   controller set-up, CC 2 on ch 0 and CC 4 on ch 2 two ticks apart. th08_07 has two CC 2 (the later one wins).
 - Some files carry metas with lengths that strict SMF parsers reject (th08_01: key signature `FF 59 00`); metas are
   skipped by their length. Every channel with notes sets CC 7.
 
-## WAV (SE) — source: specs/13_sfx_effects.md §1 (src/audio.rs)
+## WAV (SE) — source: specs/13_sfx_effects.md §1 (crates/th08-audio/src/audio.rs)
 - `se_*.wav` in th08.dat: RIFF/WAVE, `fmt ` PCM (format 1), 8-bit unsigned or 16-bit signed, mono or stereo; `data` chunk; other chunks skipped.
-- SE table (src/sound.rs): 46 ids → 36 waves, volume in 1/100 dB (DirectSound attenuation, gain = 10^(dB/2000)); pan −1000..1000 = (x − 192)·1000/192.
+- SE table (crates/th08-core/src/sound.rs): 46 ids → 36 waves, volume in 1/100 dB (DirectSound attenuation, gain = 10^(dB/2000)); pan −1000..1000 = (x − 192)·1000/192.
 - Config volume curve: k = 1 − (1 − v/100)³, vol = trunc((table + 5000)·k) − 5000, v = 0 → −10000.
 
-## title01.anm (menu) — source: specs/12_menus_hud.md §1–2 (src/menu.rs)
+## title01.anm (menu) — source: specs/12_menus_hud.md §1–2 (crates/th08-core/src/menu.rs)
 - 142 scripts, VM i runs script i; a selected item shows its base sprite, an unselected one base + 1.
 - Option screen: labels VM 10–19; values lives 20–26, graphic 27/28, BGM 29–31, volume digits 32–35 (BGM) / 36–39 (SE), mode 40/41, slow 42/43.
 
@@ -65,27 +68,27 @@
 - Sprites 0–9 small 8×8 digits, 10 = "PowerUp" (48×8), 11–20 / 21–30 the fade variants of the digits.
 
 ## etama.anm effect scripts — source: specs/13_sfx_effects.md §2.6
-- Effect type → global etama script table (66 entries, src/effect.rs `SCRIPTS`); ring sprites 221–225 are 16×768 strips in the 128×128 etama3.png (v wraps 6×).
+- Effect type → global etama script table (66 entries, crates/th08-core/src/effect.rs `SCRIPTS`); ring sprites 221–225 are 16×768 strips in the 128×128 etama3.png (v wraps 6×).
 
-## score.dat — source: specs/15_files_replay_score.md §2 (src/scoredat.rs)
+## score.dat — source: specs/15_files_replay_score.md §2 (crates/th08-formats/src/scoredat.rs)
 - Whole file: archive block cipher (key 0x59, step 0x79, block 0x100, limit 0xC00); then from byte 1 a rolling XOR (`acc = rotl8(acc + plain[i], 3); b[i+1] ^= acc`).
 - Header 0x1C: u8 0, u8 random, u16 checksum (Σ bytes 4.. of the decoded file), u16 version 1, u8 random, u32 0x1C, u32 ptr, u32 total size, u32 body size, u32 compressed size; body LZSS.
 - Chunks {magic, u16 size ×2, u8 version, 3 pad}: TH8K 0xC/1, HSCR 0x168/4, CLRD 0x24/4 ×13, CATK 0x22C/3, PSCR 0x178/2, LSNM 0x18/1, FLSP 0x20/1, PLST 0x228/2, VRSM 0x1C/1 (written in this order). Verified: the real file's body re-encodes byte-identically.
 - VRSM +0x0C tag char[8] "0100d", +0x14 exe size 840704, +0x18 exe sum 0xA26861B9; on load every VRSM v1 chunk must pass ExeCheck against `th08_0100d.ver` (th08.dat member: 15 lines `tag size sum\n`, numbers read as wrapping 32-bit `%d`; tag "debug" always passes) (15 §2.10).
 
-## .rpy — source: specs/15 §3, 11 §6 (src/replay.rs)
+## .rpy — source: specs/15 §3, 11 §6 (crates/th08-formats/src/replay.rs)
 - Header 0x68: "T8RP", u16 6, u8 debug, +0xC size w/o USER, +0x10 checksum 0x3F000318 + Σ plain bytes from 0x15, +0x15 key; bytes 0x18.. encrypted `b += key; key += 7`; +0x18 compressed size, +0x1C image size − 0x68, +0x20/+0x44 u32[9] stage / fps offsets (image coordinates).
 - Image = header + info (0x68..0x134) + per stage: 0x24-byte record + u16 input words (dummy 0 first) + fps bytes. USER text section after the compressed body.
 - Load also rejects info +0xD9 ≠ 0 and an ExeCheck fail of info +0x12C tag / +0x124 size / +0x128 sum (15 §3.7).
 - USER: "USER", u32 length incl. the 12-byte head, u8 type 0, 3 bytes; Shift-JIS `key\tvalue\r\n` lines (name, time, character, score, difficulty, last stage / card, misses, bombs, slowdown, human rate, version), NUL, padded to even. Info +0x11C clear status (route byte), +0x7E card name, +0x114/+0x118 slowdown + 1.12 / slowdown.
 
-## .end (ending / staff scripts) — source: specs/16_endings_result.md §1.3 (src/ending.rs)
+## .end (ending / staff scripts) — source: specs/16_endings_result.md §1.3 (crates/th08-core/src/ending.rs)
 - Shift-JIS text. `@` lines are commands: one command byte, then NUL-separated arguments (`@w120\0120\0\n`); ints by `atol`, strings up to the NUL; the reader then skips to the end of the line and over CR/LF. Other lines are text, copied 2 bytes at a time (≤ 0x44-byte buffer).
 - File names carry `data/` or `data/end/` prefixes; the port strips directories for the archive lookup. 14 files: `end0N{a,b,c}.end` (bad / 6A / 6B, N = team), `staff00.end` (6B), `staff00b.end` (6A). Pictures are 640×480 (`end*.jpg`) or 640×720 (`staff*.jpg`, scrolled by `@v` / `@V`).
 - `@F` falls through into `@R`, so the loaded file's first line is skipped; both staff files start with a dummy `@R`.
 
-## Draw log — source: specs/data/drawlog/FORMAT.md (src/drawlog.rs)
+## Draw log — source: specs/data/drawlog/FORMAT.md (crates/th08-tools/src/drawlog.rs)
 - Writer: one `F` per presented frame (sampled after the draw), `T`/`S`/`V` before a primitive when changed in the frame; `R` exactly when the formatted values satisfy the rectangle rule, else `Q`; untextured = `T -` + `-` UVs; numbers: xy 2, z/rhw 4, uv 5 decimals, trailing zeros removed. Port vertices are converted back from clip space: x = (ndc.x + 1)·320 − 0.5 (the port's +0.5 wgpu shift removed), z = z/w, rhw = 1/w.
-- Labels: `AnmManager::load` labels each entry `<file>#<index>` with the ANM header size; `Gfx::load_image(name, …)` labels images by file name. Unlabelled textures log as `?<id hex> 0 0`.
+- Labels: `AnmManager::load` labels each entry `<file>#<index>` with the ANM header size; `Recorder::load_image(name, …)` (crates/th08-core/src/drawlist.rs) labels images by file name. Unlabelled textures log as `?<id hex> 0 0`.
 - Port specifics: atest always `ge4`, ztest `le` (stage) / `always`, blend `alpha` / `add` only; Clear → `C tz <colour>` / `C z ff000000`.
-- Fans (`Gfx::fan`, spell-practice pies): one `T -` + `S` with zwrite 0 and `P fan <n>` with untextured vertices; screen captures (`Gfx::capture_screen`, logo before stage / music-room exit) log `K screen <label> 0 0 640 480 0 0`.
+- Fans (`Recorder::fan`, spell-practice pies): one `T -` + `S` with zwrite 0 and `P fan <n>` with untextured vertices; screen captures (`Recorder::capture_screen`, logo before stage / music-room exit) log `K screen <label> 0 0 640 480 0 0`.

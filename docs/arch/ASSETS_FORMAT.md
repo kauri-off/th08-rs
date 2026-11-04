@@ -1,6 +1,6 @@
 # ASSETS — a smaller format for the shipped game data (research report)
 
-Brief: docs/briefs/ASSETS_BRIEF.md (2026-11-03). Question: the personal APK is ~511 MB (th08.dat 46.8 MB + thbgm.dat
+Research report, 2026-11-03. Question: the personal APK is ~511 MB (th08.dat 46.8 MB + thbgm.dat
 450.0 MB of raw PCM + code). Can it be cut several times without touching logic?
 
 **Answer: yes, by about 6×, losslessly for everything except the BGM.** Keep every th08.dat entry byte-identical and
@@ -255,14 +255,14 @@ matter. Raw `th08.dat` / `thbgm.dat` stay supported side by side: the user's gam
   external encoder is acceptable. Or `vorbis_rs` (libvorbis bindings) inside the tool. Never in the game binary.
 
 ### 3.3 Where it plugs in
-- **DataSource / content (ARCH_D §2.3, ARCH_B D1).** A `Pack` reader in a new `th08-formats::pack` reads the
+- **DataSource / content (ARCH_D_MOBILE §2.3, ARCH_SUMMARY day-0 decision 6).** A `Pack` reader in a new `th08-formats::pack` reads the
   manifest by range and then frames on demand through `Source::read_range`. Keep an LRU of 1–2 decoded frames.
   Startup today does `Archive::from_bytes(source.read("th08.dat"))` (`game.rs:284`). It becomes a `Content` enum
   `{ Archive, Pack }` behind `LogicView::new`, chosen by `names()` (prefer `th08.pak`, else `th08.dat`).
   `LogicView::read` and `PresentView::read` keep their signatures and return the same bytes, so **no core caller
   changes**, anmmgr included (textures stay inside the .anm bytes). The fingerprint stays vanilla (empty) when every
   Logic entry's `src_sha256` equals the vanilla table. A mismatch is treated as a Logic override: it changes the
-  fingerprint and lands in `meta.txt` (ARCH_B D5). A broken repack is therefore visible, never silent.
+  fingerprint and lands in `meta.txt` (ARCH_SUMMARY day-0 decision 9). A broken repack is therefore visible, never silent.
 - **thbgm header probe (02 §1, `game.rs:296`).** `read_range("thbgm.dat", 0, 16)` keeps working when only
   `thbgm.pak` exists: the BGM source answers with the stored original header (`ZWAV`, 1, 0x800, 0), so `config::load`
   makes the same decision.

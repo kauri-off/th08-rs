@@ -89,8 +89,10 @@ the options.
 | `specs/` | the specifications: the only source of truth for behaviour |
 | `src/` | the app: game window, launcher, settings, platform (package `th08`, binary `th08`) |
 | `crates/` | `th08-formats` (file formats), `th08-core` (game logic), `th08-render` (wgpu), `th08-audio` (cpal, MIDI), `th08-tools` (trace / draw-log tools, bins in `src/bin/`) |
-| `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session recorder |
-| `docs/` | status, decisions, the architecture of the rewrite |
+| `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session recorder ([index](re/README.md)) |
+| `docs/` | status, decisions, the architecture of the rewrite ([index](docs/README.md)) |
+
+How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
 | `web/`, `packaging/`, `xtask/` | the browser front end, packaging files and `cargo xtask dist` |
 
 ## License

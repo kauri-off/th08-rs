@@ -167,7 +167,7 @@ Ranked suggestions (cost → value):
    entries.
 4. **Falsified-hypothesis log ("Ruled out").** One line per hypothesis that RE or IMPL disproved, with the evidence
    (run dir, VA, replay) — per spec file as a `## Ruled out` section, plus a global file for cross-cutting ones.
-   Today they sit in `re/NOTES.md` (1000+ lines) and in old briefs, so new agents re-derive them.
+   Today they sit in a long RE notes log (1000+ lines) and in old briefs, so new agents re-derive them.
 5. **Decomp-style progress metrics, generated.** One script producing a table per cycle: replays logic-identical
    (`ref500 490/490`), golden draw-identical frames, draw-log groups, open SPEC-GAPs, open questions, PARTIAL rows in
    coverage — appended to a CSV, so a regression in any number is visible across cycles (we already quote these in
