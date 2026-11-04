@@ -192,7 +192,7 @@ pub fn start_playback(
     }
     g.rpy = Some(r);
     g.fresh_start = true;
-    g.request(crate::gamemgr::SCENE_GAME);
+    g.request(crate::types::SceneId::Game);
     true
 }
 

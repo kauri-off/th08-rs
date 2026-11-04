@@ -1729,7 +1729,7 @@ pub fn run_menu_script(
             return;
         };
         frames.into_iter().for_each(&mut out);
-        if k > 0 || ctx.w.game.scene == th08_core::gamemgr::SCENE_MENU {
+        if k > 0 || ctx.w.game.scene == th08_core::types::SceneId::Menu {
             k += 1;
         }
         if flow != th08_core::task::Flow::Continue {

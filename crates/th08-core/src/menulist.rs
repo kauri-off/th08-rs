@@ -6,7 +6,7 @@ use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
 use crate::drawlist::{Blend, Recorder, TextCmd, Vertex};
 use crate::game::Ctx;
-use crate::gamemgr::{self, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
+use crate::gamemgr::{F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{DOWN, LEFT, RIGHT, UP};
 use crate::menu::{CANCEL, CONFIRM, MainMenu, Pending};
 use crate::scoredat::Catk;
@@ -599,7 +599,7 @@ impl MainMenu {
             g.flags = g.flags & !F_REPLAY | F_PRACTICE;
             g.fresh_start = true;
             ctx.w.bgm.stop_bgm();
-            g.request(gamemgr::SCENE_GAME);
+            g.request(crate::types::SceneId::Game);
             self.remove = true;
         } else if ctx.w.input.pressed(CANCEL) {
             ctx.w.sound.play(sound::CANCEL);
@@ -1172,7 +1172,7 @@ impl MainMenu {
             g.stage = st.unwrap_or(self.lists.sp_row as usize);
             g.fresh_start = true;
             ctx.w.bgm.stop_bgm();
-            g.request(gamemgr::SCENE_GAME);
+            g.request(crate::types::SceneId::Game);
             self.remove = true;
         } else if inp.pressed(CANCEL) {
             ctx.w.sound.play(sound::CANCEL);
@@ -1361,7 +1361,7 @@ impl MainMenu {
                     let st = &self.replays[i].1.stages;
                     let Some(first) = (0..9).find(|&s| st[s].is_some()) else {
                         log::error!("リプレイデータが異常");
-                        ctx.w.game.request(-1);
+                        ctx.w.game.request(crate::types::SceneId::Quit);
                         return false;
                     };
                     self.lists.rpy_loaded = Some(i);

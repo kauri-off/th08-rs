@@ -9,6 +9,7 @@ use crate::drawlist::{Recorder, TexId};
 use crate::game::Ctx;
 use crate::gamemgr::{self, Game, GameManager};
 use crate::task::{self, Chain, Ret, Task};
+use crate::types::SceneId;
 use anyhow::{Context, Result};
 
 // Owned by `Ctx.supervisor`; its chain nodes are `SupervisorTask`.
@@ -82,7 +83,7 @@ pub fn setup_new_game(g: &mut Game, s: &CoreConfig, stage: usize) {
     g.stage = stage;
     g.flags = 0;
     g.fresh_start = true;
-    g.request(gamemgr::SCENE_GAME);
+    g.request(SceneId::Game);
 }
 
 // Debug tool, not a port. `TH08_ENDING=<shot 0–11><a|b|c>` (bad / good 6A / good 6B, e.g. `0b`, `7a`) or a
@@ -110,7 +111,7 @@ pub fn setup_ending(g: &mut Game, s: &CoreConfig, e: &Ending) {
             g.stage = 6;
         }
     }
-    g.request(gamemgr::SCENE_ENDING);
+    g.request(SceneId::Ending);
 }
 
 // The scene object registered by the Supervisor's scene switch (11 §7), except the game scene, whose GM is `Ctx.gm`.
@@ -146,12 +147,12 @@ impl Scene {
             Scene::Menu(m) => {
                 let mut t = vec![
                     1,
-                    m.screen as u64,
-                    m.prev_screen as u64,
-                    m.frames as u64,
-                    m.cursor as u32 as u64,
-                    m.idle as u64,
-                    m.pending.as_ref().map_or(0, |p| 1 + p.frames as u64),
+                    i64::from(m.screen).cast_unsigned(),
+                    i64::from(m.prev_screen).cast_unsigned(),
+                    u64::from(m.frames),
+                    u64::from(m.cursor.cast_unsigned()),
+                    u64::from(m.idle),
+                    m.pending.as_ref().map_or(0, |p| 1 + u64::from(p.frames)),
                     m.desc_cur.map_or(0, |d| d as u64 + 1),
                     h(&m.notice),
                 ];
@@ -190,7 +191,7 @@ impl Task<Ctx> for SceneTask {
         Scene::with(
             ctx,
             |s, ctx| on_scene!(s, x => x.on_remove(ctx, chain, tag), ()),
-        )
+        );
     }
 
     fn calc(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
@@ -205,7 +206,7 @@ impl Task<Ctx> for SceneTask {
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        on_scene!(&ctx.w.scene, x => x.emit(ctx, rec, tag), ())
+        on_scene!(&ctx.w.scene, x => x.emit(ctx, rec, tag), ());
     }
 }
 
@@ -237,12 +238,12 @@ impl Supervisor {
     pub(crate) fn trace(&self) -> Vec<u64> {
         let mut t = vec![
             self.frame as u64,
-            self.boot_frames as u64,
-            self.stage_load as u64,
-            self.capture_req as u64,
-            self.logo.is_some() as u64,
+            u64::from(self.boot_frames),
+            u64::from(self.stage_load),
+            u64::from(self.capture_req),
+            u64::from(self.logo.is_some()),
             self.prompt.len() as u64,
-            self.load_pos[0].to_bits() as u64,
+            u64::from(self.load_pos[0].to_bits()),
         ];
         t.extend(self.boot_vms.iter().map(crate::worldclone::hash_dbg));
         t
@@ -260,7 +261,7 @@ impl Supervisor {
     // since boot, whose phase cannot be reproduced (15 §3.3); the port refreshes every 30 gameplay calcs, on the 3rd.
     fn replay_fps(&mut self, ctx: &mut Ctx) {
         let g = &ctx.w.game;
-        if g.loading != 0 || g.scene != gamemgr::SCENE_GAME {
+        if g.loading != 0 || g.scene != SceneId::Game {
             self.fps_frames = 0;
             return;
         }
@@ -278,16 +279,16 @@ impl Supervisor {
     fn replay_fps_draw(&mut self, ctx: &mut Ctx) {
         let g = &ctx.w.game;
         if g.loading != 0
-            || g.scene != gamemgr::SCENE_GAME
+            || g.scene != SceneId::Game
             || !g.replay()
             || g.flags & gamemgr::F_RUNNING == 0
         {
             return;
         }
         let c = if g.replay_fps_red {
-            0xFFFF4040
+            0xFFFF_4040
         } else {
-            0xFFFFFFD0
+            0xFFFF_FFD0
         };
         ctx.w
             .ascii
@@ -332,7 +333,7 @@ impl Supervisor {
         }
         // Title fade (13 §3 "Title fade"): linked at once from the Supervisor calc (prio 0), so its first calc precedes
         // its first draw (alphas 255, 251, …).
-        crate::effect::screen_now(ctx, 0, 70, 0xFFFFFF, 0, 0, 0x15);
+        crate::effect::screen_now(ctx, 0, 70, 0x00FF_FFFF, 0, 0, 0x15);
         // Loading_End releases a loading darken overlay (13 §3 type 5); only the menu load after a game has one.
         ctx.w.effects.release_loading_overlay();
         for vm in &mut self.boot_vms {
@@ -341,10 +342,10 @@ impl Supervisor {
     }
 
     // Main-menu loading screen by previous scene (12 §1); returns the port's hold length (see BOOT_FRAMES).
-    fn menu_loading(&mut self, ctx: &mut Ctx, from: i32) -> Result<()> {
-        ctx.w.game.menu_loading = if from == gamemgr::SCENE_BOOT {
+    fn menu_loading(&mut self, ctx: &mut Ctx, from: SceneId) -> Result<()> {
+        ctx.w.game.menu_loading = if from == SceneId::Boot {
             MENU_LOAD_BOOT
-        } else if matches!(from, gamemgr::SCENE_RESULT | gamemgr::SCENE_RESULT_MENU) {
+        } else if matches!(from, SceneId::Result | SceneId::ResultMenu) {
             // Loading_Begin already ran at result state 2 frame 1; Result_OnRemove moved result.jpg into surface 8,
             // so the menu loader shows it without a capture (16 §2.4 exit).
             if let Some(t) = self.logo.take() {
@@ -354,14 +355,14 @@ impl Supervisor {
             let b = ctx.archive.present().read("result.jpg")?;
             self.logo = Some(ctx.rec.load_image("th08logo.jpg", &b)?);
             MENU_LOAD
-        } else if from == gamemgr::SCENE_MUSIC_ROOM {
+        } else if from == SceneId::MusicRoom {
             // The music room calls 0x44886F itself on the exit press, one frame before the scene switch.
             self.begin_loading(ctx)?;
             for vm in &mut self.boot_vms {
                 vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
             }
             MENU_LOAD - 1
-        } else if from == gamemgr::SCENE_GAME {
+        } else if from == SceneId::Game {
             // MainMenu_OnRegister, previous scene 2: Loading_BeginCapture 0x44886F (capture after the next Present, no
             // logo) + Loading_StartDarken(0); the first frame draws no surface 8 but the darken quad (12 §1).
             if let Some(t) = self.logo.take() {
@@ -411,7 +412,7 @@ impl Supervisor {
         self.scene_task = Some(gm);
         // Attract demos always start from the main menu.
         let from_menu =
-            ctx.w.game.previous == gamemgr::SCENE_MENU || ctx.w.game.flags & gamemgr::F_DEMO != 0;
+            ctx.w.game.previous == SceneId::Menu || ctx.w.game.flags & gamemgr::F_DEMO != 0;
         if let Some(t) = self.logo.take() {
             ctx.rec.free_texture(t);
         }
@@ -448,80 +449,64 @@ impl Supervisor {
             return Ok(None);
         }
         g.previous = cur;
-        if req < 0 {
+        if req == SceneId::Quit {
             // The quitting frame is not drawn or presented; the score.dat flush follows it (`Ctx::exit_save`, 15 §2.2).
             // 6 → −1 (Replay_Finish(0), then quit) is unreachable: no −1 request can happen in scene 6 (11 §7).
             return Ok(Some(Ret::Quit));
         }
-        log::info!("scene {cur} -> {req} (calc {})", ctx.w.frame);
+        log::info!(
+            "scene {} -> {} (calc {})",
+            cur as i32,
+            req as i32,
+            ctx.w.frame
+        );
         match (cur, req) {
             // Debug start (TH08_STAGE / TH08_REPLAY) from boot; the original always goes 0 → 1.
-            (gamemgr::SCENE_BOOT, gamemgr::SCENE_GAME) => self.start_game(ctx)?,
+            (SceneId::Boot, SceneId::Game) => self.start_game(ctx)?,
             // 1 / 2 → 9 (0 → 9: debug `TH08_ENDING`): unregister GM, Ending_Register 0x4296A0 (16 §1.1–§1.2).
-            (_, gamemgr::SCENE_ENDING) => {
+            (_, SceneId::Ending) => {
                 self.drop_scene(ctx);
                 self.set_scene(
                     ctx,
-                    Scene::Ending(Box::new(crate::ending::Ending::new())),
+                    Scene::Ending(Box::default()),
                     crate::ending::CALC_PRIO,
                     crate::ending::DRAW_PRIO,
                 )?;
             }
-            (gamemgr::SCENE_BOOT, _) | (_, gamemgr::SCENE_MENU) => {
-                if cur == gamemgr::SCENE_MUSIC_ROOM {
+            (SceneId::Boot, _) | (_, SceneId::Menu) => {
+                if cur == SceneId::MusicRoom {
                     self.capture(ctx);
                 }
                 self.drop_scene(ctx);
-                if matches!(cur, gamemgr::SCENE_GAME | gamemgr::SCENE_RESULT) {
+                if matches!(cur, SceneId::Game | SceneId::Result) {
                     crate::replay::finish(ctx);
                 }
                 crate::replay::end_playback(&mut ctx.w.game);
-                ctx.w.game.requested = gamemgr::SCENE_MENU;
-                self.set_scene(
-                    ctx,
-                    Scene::Menu(Box::new(crate::menu::MainMenu::new())),
-                    crate::menu::CALC_PRIO,
-                    crate::menu::DRAW_PRIO,
-                )?;
-                self.menu_surface(ctx)?;
-                self.menu_loading(ctx, cur)?;
+                self.open_menu(ctx, cur)?;
             }
-            (gamemgr::SCENE_MENU, gamemgr::SCENE_GAME) => {
+            (SceneId::Menu, SceneId::Game) => {
                 self.drop_scene(ctx);
                 self.start_game(ctx)?;
             }
-            (gamemgr::SCENE_GAME, gamemgr::SCENE_NEXT_STAGE) => {
+            (SceneId::Game, SceneId::NextStage) => {
                 self.drop_scene(ctx);
                 ctx.w.game.fresh_start = false;
                 self.start_game(ctx)?;
-                ctx.w.game.requested = gamemgr::SCENE_GAME;
+                ctx.w.game.requested = SceneId::Game;
             }
-            // 2 → 10: a full exit and a fresh start (11 §7).
-            (gamemgr::SCENE_GAME, gamemgr::SCENE_RETRY) => {
-                self.drop_scene(ctx);
-                crate::replay::finish(ctx);
-                let g = &mut ctx.w.game;
-                if !g.practice() && g.difficulty < 4 {
-                    g.stage = 0;
-                }
-                g.fresh_start = true;
-                g.retrying = true;
-                g.stats = Default::default();
-                self.start_game(ctx)?;
-                ctx.w.game.requested = gamemgr::SCENE_GAME;
-            }
+            (SceneId::Game, SceneId::Retry) => self.retry(ctx)?,
             // 2 → 11: requested = 3 is written before the unregister, so the GM sees "next stage", not a fresh start (11 §7).
-            (gamemgr::SCENE_GAME, gamemgr::SCENE_RELOAD) => {
+            (SceneId::Game, SceneId::Reload) => {
                 ctx.w.game.reload_same = true;
                 self.drop_scene(ctx);
                 ctx.w.game.fresh_start = false;
                 self.start_game(ctx)?;
-                ctx.w.game.requested = gamemgr::SCENE_GAME;
+                ctx.w.game.requested = SceneId::Game;
             }
             // 1 → 5 Result_Register(0) viewer; 2 / 9 → 6 Result_Register(1) after a game.
-            (_, gamemgr::SCENE_RESULT | gamemgr::SCENE_RESULT_MENU) => {
+            (_, SceneId::Result | SceneId::ResultMenu) => {
                 self.drop_scene(ctx);
-                let mode = (req == gamemgr::SCENE_RESULT) as u8;
+                let mode = u8::from(req == SceneId::Result);
                 self.set_scene(
                     ctx,
                     Scene::Result(Box::new(crate::result::ResultScreen::new(mode))),
@@ -529,7 +514,7 @@ impl Supervisor {
                     crate::result::DRAW_PRIO,
                 )?;
             }
-            (_, gamemgr::SCENE_MUSIC_ROOM) => {
+            (_, SceneId::MusicRoom) => {
                 self.drop_scene(ctx);
                 self.set_scene(
                     ctx,
@@ -539,22 +524,14 @@ impl Supervisor {
                 )?;
             }
             // 2 → 7: like 2 → 1 (also releases managed textures in the original).
-            (_, gamemgr::SCENE_REPLAY_END) => {
+            (_, SceneId::ReplayEnd) => {
                 self.drop_scene(ctx);
                 crate::replay::finish(ctx);
                 crate::replay::end_playback(&mut ctx.w.game);
-                ctx.w.game.requested = gamemgr::SCENE_MENU;
-                self.set_scene(
-                    ctx,
-                    Scene::Menu(Box::new(crate::menu::MainMenu::new())),
-                    crate::menu::CALC_PRIO,
-                    crate::menu::DRAW_PRIO,
-                )?;
-                self.menu_surface(ctx)?;
-                self.menu_loading(ctx, cur)?;
+                self.open_menu(ctx, cur)?;
             }
             // 2 → 12 is never requested (11 §7).
-            _ => log::warn!("unhandled scene switch {cur} -> {req}"),
+            _ => log::warn!("unhandled scene switch {} -> {}", cur as i32, req as i32),
         }
         // The raw input words are cleared so the new scene sees no held keys (11 §7).
         // +0x154: ExeCheck of the running exe every 4000 frames (11 §7); with the 1.00d constants it always passes
@@ -563,6 +540,35 @@ impl Supervisor {
         ctx.w.input.prev = 0;
         ctx.w.game.scene = ctx.w.game.requested;
         Ok(None)
+    }
+
+    // Shared tail of x → 1 and 2 → 7: requested := 1, MainMenu_Register, then the loading screen by `cur` (11 §7, 12 §1).
+    fn open_menu(&mut self, ctx: &mut Ctx, cur: SceneId) -> Result<()> {
+        ctx.w.game.requested = SceneId::Menu;
+        self.set_scene(
+            ctx,
+            Scene::Menu(Box::default()),
+            crate::menu::CALC_PRIO,
+            crate::menu::DRAW_PRIO,
+        )?;
+        self.menu_surface(ctx)?;
+        self.menu_loading(ctx, cur)
+    }
+
+    // 2 → 10: a full exit and a fresh start (11 §7).
+    fn retry(&mut self, ctx: &mut Ctx) -> Result<()> {
+        self.drop_scene(ctx);
+        crate::replay::finish(ctx);
+        let g = &mut ctx.w.game;
+        if !g.practice() && g.difficulty < 4 {
+            g.stage = 0;
+        }
+        g.fresh_start = true;
+        g.retrying = true;
+        g.stats = crate::player::Stats::default();
+        self.start_game(ctx)?;
+        ctx.w.game.requested = SceneId::Game;
+        Ok(())
     }
 }
 
@@ -601,7 +607,7 @@ impl Supervisor {
             } else if let Some(index) = st.stage {
                 setup_new_game(&mut ctx.w.game, &st, index);
             } else {
-                ctx.w.game.request(gamemgr::SCENE_MENU);
+                ctx.w.game.request(SceneId::Menu);
             }
         }
         Ok(())
@@ -670,12 +676,12 @@ impl Supervisor {
             self.end_loading(ctx);
         }
         // Presents 1–2 come from Window_InitD3D, before the first Frame_Run (12 §1 boot presents).
-        if self.frame > 2 || ctx.w.game.requested != gamemgr::SCENE_MENU {
+        if self.frame > 2 || ctx.w.game.requested != SceneId::Menu {
             for vm in &mut self.boot_vms {
                 vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
             }
         }
-        if self.logo.is_some() && ctx.w.game.scene == gamemgr::SCENE_BOOT {
+        if self.logo.is_some() && ctx.w.game.scene == SceneId::Boot {
             self.boot_frames += 1;
             let boot = ctx
                 .w
@@ -683,10 +689,10 @@ impl Supervisor {
                 .sched
                 .as_ref()
                 .map_or(BOOT_FRAMES, |s| s.boot_calc);
-            if ctx.w.game.requested == gamemgr::SCENE_MENU && self.boot_frames < boot {
+            if ctx.w.game.requested == SceneId::Menu && self.boot_frames < boot {
                 return Ret::Next;
             }
-            if ctx.w.game.requested != gamemgr::SCENE_MENU {
+            if ctx.w.game.requested != SceneId::Menu {
                 self.end_loading(ctx);
                 self.boot_vms.clear();
             }
@@ -728,7 +734,7 @@ impl Supervisor {
         match tag {
             0 => {
                 self.prompt =
-                    crate::ascii::loading_prompt(&mut ctx.w.ascii, &mut ctx.w.game.load_prompt)
+                    crate::ascii::loading_prompt(&mut ctx.w.ascii, &mut ctx.w.game.load_prompt);
             }
             16 => self.replay_fps_draw(ctx),
             _ => {}

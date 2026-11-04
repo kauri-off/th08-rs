@@ -59,7 +59,7 @@ pub fn sample(ctx: &mut Ctx, present: i64, poll: i64, scene_frame: i64) -> Row {
     r[22] = 0;
     r[23] = present;
     r[25] = poll + 1;
-    r[26] = i64::from(g2.scene);
+    r[26] = i64::from(g2.scene as i32);
     r[27] = scene_frame;
     r[28] = i64::from(menu);
     r[29] = i64::from(cursor);

@@ -292,12 +292,12 @@ pub enum TouchScene {
 
 impl TouchScene {
     pub fn of(w: &th08_core::world::World) -> Self {
-        use th08_core::gamemgr::SCENE_GAME;
+        use th08_core::types::SceneId;
         let g = &w.game;
         let Some(p) = w.player.as_deref() else {
             return Self::Menu;
         };
-        if g.scene != SCENE_GAME || g.paused != 0 || g.game_over != 0 {
+        if g.scene != SceneId::Game || g.paused != 0 || g.game_over != 0 {
             return Self::Menu;
         }
         Self::Play {

@@ -8,7 +8,7 @@ use crate::hud::Hud;
 use crate::player::{Player, Stats};
 use crate::stage::Stage;
 use crate::task::{self, Chain, Ret, Task};
-use crate::types::Difficulty;
+use crate::types::{Difficulty, SceneId};
 use anyhow::Result;
 
 bitflags::bitflags! {
@@ -168,19 +168,6 @@ fn music_start(g: &Game) -> u8 {
 // Demo music-fade and end frames per demo index (11 §4 step 6).
 const DEMO_LIMITS: [(i32, i32); 4] = [(6000, 6120), (4800, 4920), (4920, 5040), (6900, 7020)];
 
-// Scenes (11 §7).
-pub const SCENE_BOOT: i32 = 0;
-pub const SCENE_MENU: i32 = 1;
-pub const SCENE_GAME: i32 = 2;
-pub const SCENE_NEXT_STAGE: i32 = 3;
-pub const SCENE_RESULT_MENU: i32 = 5;
-pub const SCENE_RESULT: i32 = 6;
-pub const SCENE_REPLAY_END: i32 = 7;
-pub const SCENE_MUSIC_ROOM: i32 = 8;
-pub const SCENE_ENDING: i32 = 9;
-pub const SCENE_RETRY: i32 = 10;
-pub const SCENE_RELOAD: i32 = 11;
-
 // Game state that survives scene changes (GM object 11 §2 + the menu's choices). Raw bytes / words stay public for the
 // files that read them directly; `game_flags()`, `diff()`, `pause_state()`, `loading_state()` give the typed view.
 #[derive(Clone)]
@@ -190,9 +177,9 @@ pub const SCENE_RELOAD: i32 = 11;
 )]
 pub struct Game {
     // Supervisor +0x158 current, +0x15C requested (0x17CE8B4), +0x160 previous scene (11 §7).
-    pub scene: i32,
-    pub requested: i32,
-    pub previous: i32,
+    pub scene: SceneId,
+    pub requested: SceneId,
+    pub previous: SceneId,
     // GM +0x30: 0 Easy .. 4 Extra (`diff()`); ECL var 10041 writes it unchecked.
     pub difficulty: i32,
     // GM +0x3DBA9 shot type 0–11.
@@ -209,8 +196,8 @@ pub struct Game {
     // 0x17CE8BC fresh-start flag, 0x17CE8C4 reload-same-stage flag (11 §7).
     pub fresh_start: bool,
     pub reload_same: bool,
-    // Scene to request once the stage-end state is confirmed (11 §4 step 1).
-    pub next_scene_after: i32,
+    // Scene to request once the stage-end state is confirmed (11 §4 step 1); the original's −1 is `None`.
+    pub next_scene_after: Option<SceneId>,
     // GM +0x38 loading state (`Loading`), +0x3C frames spent loading.
     pub loading: u8,
     pub loading_frames: u32,
@@ -284,9 +271,9 @@ impl Default for Game {
     fn default() -> Self {
         // GameMgr_Ctor zeroes the GM, flags and rank included (11 §2).
         Self {
-            scene: SCENE_BOOT,
-            requested: SCENE_BOOT,
-            previous: SCENE_BOOT,
+            scene: SceneId::Boot,
+            requested: SceneId::Boot,
+            previous: SceneId::Boot,
             difficulty: 1,
             shot: 0,
             stage: 0,
@@ -296,7 +283,7 @@ impl Default for Game {
             game_over: 0,
             fresh_start: true,
             reload_same: false,
-            next_scene_after: -1,
+            next_scene_after: None,
             loading: 0,
             loading_frames: 0,
             loading_shown: false,
@@ -447,7 +434,7 @@ impl Game {
                 .is_some_and(crate::replay::Replay::practice)
     }
 
-    pub fn request(&mut self, scene: i32) {
+    pub fn request(&mut self, scene: SceneId) {
         self.requested = scene;
     }
 
@@ -1015,28 +1002,28 @@ impl GameManager {
         if g.end_state() == 2 {
             g.set_end_state(3);
             g.set_loading(Loading::Active);
-            g.next_scene_after = -1;
+            g.next_scene_after = None;
             let (shot, stage) = (g.shot as usize % 12, g.stage % 9);
             if !g.replay() {
                 g.set_clear(st.continues == 0, 1 << stage);
             }
             st.score_disp = st.score10;
             if g.practice() {
-                g.next_scene_after = SCENE_RESULT;
+                g.next_scene_after = Some(SceneId::Result);
                 return Some(Ret::StopFrame);
             } else if stage >= 6 {
                 if g.replay() {
-                    g.next_scene_after = SCENE_REPLAY_END;
+                    g.next_scene_after = Some(SceneId::ReplayEnd);
                 } else if g.diff() == Difficulty::Extra {
                     g.clear_nc[shot][4] |= 0x8000;
                     g.clear_any[12][4] |= 0x8000;
                     g.play_counter(crate::scoredat::PL_CLEARS);
                     g.insert_flags(GameFlags::ENDING_OK);
-                    g.next_scene_after = SCENE_RESULT;
+                    g.next_scene_after = Some(SceneId::Result);
                     return Some(Ret::StopFrame);
                 } else {
                     g.insert_flags(GameFlags::ENDING_OK);
-                    g.next_scene_after = SCENE_ENDING;
+                    g.next_scene_after = Some(SceneId::Ending);
                     return Some(Ret::StopFrame);
                 }
             } else if g.replay() {
@@ -1047,25 +1034,25 @@ impl GameManager {
                 match next {
                     Some(s) => {
                         g.stage = s;
-                        g.request(SCENE_NEXT_STAGE);
+                        g.request(SceneId::NextStage);
                     }
-                    // 0x439BC7 writes scene := 7 directly; next_scene_after stays −1, so `Hud_StageTransition`
+                    // 0x439BC7 writes scene := 7 directly; next_scene_after stays None (−1), so `Hud_StageTransition`
                     // still captures on this clear frame (11 §4 step 1).
-                    None => g.request(SCENE_REPLAY_END),
+                    None => g.request(SceneId::ReplayEnd),
                 }
             } else if st.clock > 11 {
-                g.next_scene_after = SCENE_ENDING;
+                g.next_scene_after = Some(SceneId::Ending);
                 g.remove_flags(GameFlags::ENDING_OK);
                 return Some(Ret::StopFrame);
             } else {
                 g.stage = next_stage(stage, g.shot, g.route());
-                g.request(SCENE_NEXT_STAGE);
+                g.request(SceneId::NextStage);
             }
         }
         if g.end_state() != 0 && (confirm || g.replay() || g.stage % 9 >= 6) {
             g.set_end_state(0);
-            if g.next_scene_after >= 0 {
-                g.request(g.next_scene_after);
+            if let Some(next) = g.next_scene_after {
+                g.request(next);
                 return Some(Ret::StopFrame);
             }
         }
@@ -1201,9 +1188,9 @@ impl GameManager {
             .input
             .pressed(crate::input::SHOT | crate::input::ENTER);
         let r = Self::stage_end(&mut ctx.w.game, &mut crate::pl!(ctx.w).stats, confirm);
-        // Clear frame with next_scene_after < 0 (stage 1–5 advance, replay next stage): Hud_StageTransition (11 §4 step 1).
+        // Clear frame with no next_scene_after (stage 1–5 advance, replay next stage): Hud_StageTransition (11 §4 step 1).
         if cleared
-            && ctx.w.game.next_scene_after < 0
+            && ctx.w.game.next_scene_after.is_none()
             && let Some(h) = ctx.w.hud.as_deref_mut()
         {
             h.stage_transition(&mut ctx.w.anm, &mut ctx.w.rng);
@@ -1381,7 +1368,7 @@ impl GameManager {
         g.demo_frame += 1;
         let (fade, end) = DEMO_LIMITS[g.demo as usize % 4];
         if ctx.w.input.held & !ctx.w.input.prev != 0 {
-            g.request(SCENE_MENU);
+            g.request(SceneId::Menu);
         }
         if g.demo_frame == fade {
             ctx.w.bgm.fade_bgm(3.0, ctx.w.anm.speed);
@@ -1389,7 +1376,7 @@ impl GameManager {
         }
         let g = &mut ctx.w.game;
         if g.demo_frame >= end {
-            g.request(SCENE_MENU);
+            g.request(SceneId::Menu);
             return true;
         }
         false
@@ -1400,7 +1387,7 @@ impl GameManager {
     // thread's after this frame, so `loading_shown` keeps that frame a loading one. Step only: no write, no emit.
     fn draw_step(ctx: &mut Ctx) -> Ret {
         let g = &ctx.w.game;
-        if g.requested == SCENE_GAME
+        if g.requested == SceneId::Game
             && g.end_state() != 1
             && g.loading_state() == Loading::Done
             && !g.loading_shown
@@ -1708,14 +1695,14 @@ mod tests {
         };
         // Practice, Extra, 6A, night over: return 3 with the bits still 3; the next frame confirms.
         for (flags, stage, clock, next) in [
-            (F_PRACTICE, 1, 0, SCENE_RESULT),
-            (0, 6, 0, SCENE_ENDING),
-            (0, 2, 12, SCENE_ENDING),
+            (F_PRACTICE, 1, 0, SceneId::Result),
+            (0, 6, 0, SceneId::Ending),
+            (0, 2, 12, SceneId::Ending),
         ] {
             let (r, mut g) = clear(flags, stage, clock, true);
             assert_eq!(
                 (r, g.end_state(), g.requested),
-                (Some(Ret::StopFrame), 3, SCENE_BOOT)
+                (Some(Ret::StopFrame), 3, SceneId::Boot)
             );
             let mut st = Stats::default();
             let r = GameManager::stage_end(&mut g, &mut st, true);
@@ -1726,7 +1713,10 @@ mod tests {
         }
         // Stage 1–5 advance: confirm tested on the clear frame itself, then the loading branch runs.
         let (r, g) = clear(0, 0, 0, true);
-        assert_eq!((r, g.end_state(), g.requested), (None, 0, SCENE_NEXT_STAGE));
+        assert_eq!(
+            (r, g.end_state(), g.requested),
+            (None, 0, SceneId::NextStage)
+        );
         let (r, g) = clear(0, 0, 0, false);
         assert_eq!((r, g.end_state(), g.stage), (None, 3, 1));
     }

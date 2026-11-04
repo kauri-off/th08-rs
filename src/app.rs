@@ -728,7 +728,7 @@ impl App {
 
 // In a stage (scene game): where Back and a resume from the background open the port menu.
 fn in_stage(r: &Running) -> bool {
-    r.ctx.w.game.scene == th08_core::gamemgr::SCENE_GAME
+    r.ctx.w.game.scene == th08_core::types::SceneId::Game
 }
 
 // The Android Back button (logical BrowserBack / GoBack, physical BrowserBack); on Android Escape counts too.
@@ -743,7 +743,7 @@ fn is_back(e: &winit::event::KeyEvent) -> bool {
 
 // Closing the window mid-game. Tool `replay_save`: the recording is still written.
 fn close(r: &mut Running, el: &ActiveEventLoop) {
-    if r.ctx.core.replay_save.is_some() && r.ctx.w.game.scene == th08_core::gamemgr::SCENE_GAME {
+    if r.ctx.core.replay_save.is_some() && r.ctx.w.game.scene == th08_core::types::SceneId::Game {
         th08_core::replay::finish(&mut r.ctx);
     }
     el.exit()

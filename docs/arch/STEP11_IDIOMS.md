@@ -122,7 +122,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11j** gamemgr + replay | (1) `GameFlags` bitflags + `end()` / `route()`; (2) `Difficulty`, `Paused`, `Loading` enums inside gamemgr / replay / game / world; (3) long fns 713 / 1078 split, flow-core subset 0 (gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt) | gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt | after 11a; ∥ 11e–11i | T D |
 | **11i** bomb + effect | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
 | **11j** gamemgr + replay — **DONE** (see below) | (1) `GameFlags` bitflags + `end()` / `route()`; (2) `Difficulty`, `Paused`, `Loading` enums inside gamemgr / replay / game / world; (3) long fns 713 / 1078 split, flow-core subset 0 (gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt) | gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt | after 11a; ∥ 11e–11i | T D |
-| **11k** scenes | (1) `SceneId` for every `SCENE_*` (123 uses, 15 files, incl. tools drawreport / demosync / drawlog, app 1); (2) result state enum + splits (340, 1614), supervisor `box_default` + split (444); (3) ending / musicroom / supervisor / result subset 0 | gamemgr (consts), supervisor, result, ending, musicroom, ascii, menu, menulist, game, replay, worldclone, tools, src/app.rs (1 line) | **alone** (touches UI + flow + app) | T D, **B** |
+| **11k** scenes — **DONE** (see below) | (1) `SceneId` for every `SCENE_*` (123 uses, 15 files, incl. tools drawreport / demosync / drawlog, app 1); (2) result state enum + splits (340, 1614), supervisor `box_default` + split (444); (3) ending / musicroom / supervisor / result subset 0 | gamemgr (consts), supervisor, result, ending, musicroom, ascii, menu, menulist, game, replay, worldclone, tools, src/app.rs (1 line) | **alone** (touches UI + flow + app) | T D, **B** |
 | **11l** HUD + GUI | (1) hud unwraps → `let … else`; (2) named layout consts, splits 339 / 950 / 1297; (3) hud / gui subset 0 | hud, gui | after 11k; ∥ 11m 11n | T D |
 | **11m** ascii + menus | (1) one `percent_glyphs` (ascii.rs:912 + menulist.rs:421); (2) `MenuEnv` for ascii 1035 / 1322, splits menu 539, menulist 776 / 1316; (3) ascii / menu / menulist subset 0 | ascii, menu, menulist | after 11k; ∥ 11l 11n | T D |
 | **11n** render | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
@@ -347,6 +347,37 @@ with `{:x}`, unchanged output), `Laser.flags: LaserFlags`, `BulletManager::{spaw
 0 → 0); workspace 1 346 in 53 files after. Check: FAST arch_check 0 differing (emit-off 0), cargo test -p th08-core 323 passed, spec_refs 0. Deviations: enemy `lasers: [Option<usize>; 32]`
 (enemy.rs, 11e) stays raw, converted in ops_laser (`usize::from` / `LaserIdx(id as u16)`); `Bullet.angle` not `Angle`
 (not in the row; eclvm tests and worldclone write it).
+
+**11k done.** Files: crates/th08-core/src/{gamemgr, supervisor, result, ending, musicroom, ascii, menu, menulist,
+game, replay, worldclone}.rs, crates/th08-tools/src/{drawreport, demosync, drawlog, session}.rs, src/app.rs (2
+lines: the two `SCENE_GAME` compares), and boundary lines outside the row (forced by the field type): player.rs
+(`matches!(requested, 3 | 11 | 12)` → `NextStage | Reload | Advance` + import), trace.rs:62 (`i64::from(scene as
+i32)`), src/platform/touch.rs (2 lines). (1) `Game.scene` / `requested` / `previous: SceneId`, `Game::request(SceneId)`,
+`next_scene_after: Option<SceneId>` (the original's −1 = `None`; `>= 0` → `if let Some`, `< 0` → `is_none()`); the
+`SCENE_*` consts removed, every use `SceneId::X`; the two `request(-1)` (menu quit, menulist bad replay) →
+`SceneId::Quit`, the supervisor's `req < 0` → `req == SceneId::Quit`; `as i32` at the draw-log (`game.rs` →
+`drawfmt`), trace, session and log-line boundaries (log text unchanged: numbers). (2) result: `State` `#[repr(i32)]`
+enum (16 §2.1 / §2.4 / §2.6 values, incl. `ScoreLoad` 0x12 for the existing exit test, `is_save()` / `is_play()` for
+the 10–14 / 0x13–0x15 ranges), `trace_result` gets `state as i32`; `calc_state` = dispatch + `leave` / `diff_page` /
+`char_page` / `group_page` / `card_char_page` / `panel` / `panel_out` / `save_msg` (bodies unchanged); `score_txt` →
+`txt_card_names` / `txt_entry` / `txt_cards` + free `txt_sj` / `txt_line` / `hscr_i32` / `cstr` (were closures),
+output order unchanged (score_txt_reference passes). supervisor: `Box::default()` for Ending / MainMenu (both
+`Default` = `new()`), `switch` → `open_menu` (shared x → 1 / 2 → 7 tail) + `retry` (2 → 10). (3) lint fixes:
+`table_index` for signed indices, `From` / `cast_signed` / `cast_unsigned`, `lo8` (play-data alpha bytes), local
+`lo16` (pending interrupt word), `score_u32` (0..=999 999 999 clamp, 15 §2.3) and `int` (usize counts → i32) helpers
+with `#[expect]`, `vm_argb` = `D3dColor::from_bgra(color).0` (result + musicroom, same bits), ftol `as u32` under
+`#[expect(cast_sign_loss)]` (ending / musicroom text row, ending picture offset), `bool_to_int_with_if` → `i32::from`
+in the else branch (test order kept), `if_not_else` swaps, literal separators, typed `::default()` in tests,
+`ResultScreen` `struct_excessive_bools` `#[expect]` (separate fields +0x38 / +0x54 + 2 port flags). Public API:
+`th08_core::gamemgr::SCENE_*` removed (use `th08_core::types::SceneId`); `Game.{scene, requested, previous}:
+SceneId`, `Game.next_scene_after: Option<SceneId>`, `Game::request(SceneId)` (users in app, touch, tools drawreport /
+demosync / drawlog / session updated). Lint subset (tools/lint_subset): run files result 104 → 0, musicroom 32 → 0,
+supervisor 23 → 0, ending 14 → 0 (ascii / menu / menulist / tools / app unchanged counts, worldclone 80 → 78);
+workspace 865 → 690 in 35 files. Check: FAST arch_check 0 differing (emit-off 0), cargo test -p th08-core 327 passed (1 ignored), th08-tools 24 + 35 passed, th08 app tests pass,
+spec_refs 0. Deviations: the other `Game` raw fields (`flags`, `difficulty`, `paused`, `loading`) stay raw (not in
+this row; ≈ 120 sites in hud / effect / enemy / eclvm …); boundary edits in player / trace / touch beyond the row's
+file list (the field type forces them); app is 2 lines, not 1; supervisor's `switch` was 109 lines (under the limit),
+split anyway as planned.
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

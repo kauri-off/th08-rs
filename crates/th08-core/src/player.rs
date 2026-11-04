@@ -9,7 +9,7 @@ use crate::input;
 use crate::item::ItemManager;
 use crate::rng::Rng;
 use crate::task::{self, Chain, Ret, Task};
-use crate::types::{Angle, ShotType, lo8};
+use crate::types::{Angle, SceneId, ShotType, lo8};
 use anyhow::Result;
 
 pub use crate::bomb::{Area, Bomb};
@@ -1461,7 +1461,10 @@ impl Task<Ctx> for PlayerTask {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
             // Full exit hides the gauge readout (11 §7, 12 §5.9).
-            if !matches!(ctx.w.game.requested, 3 | 11 | 12) {
+            if !matches!(
+                ctx.w.game.requested,
+                SceneId::NextStage | SceneId::Reload | SceneId::Advance
+            ) {
                 ctx.w.overlays.gauge_interrupt(99);
                 // Boss markers M_0..M_2 hidden at once (12 §5.10).
                 (0..3).for_each(|k| ctx.w.overlays.marker_interrupt(k, 99));

@@ -7,6 +7,7 @@ use crate::game::Ctx;
 use crate::gamemgr;
 use crate::input::{BOMB, DOWN, ENTER, KEY_R, PAUSE, SHOT, SKIP, UP};
 use crate::task::{Chain, Ret};
+use crate::types::D3dColor;
 pub use th08_formats::musiccmt::{COMMENT_LINES, Entry, MAX_ENTRIES, parse_musiccmt};
 use th08_formats::sjis::{self, SjisString};
 
@@ -35,8 +36,8 @@ const WARNING: [&str; COMMENT_LINES] = [
     "　　曲の再生とコメント表示が行われますので、注意）",
 ];
 // Comment / title text colour, COLORREF 0xFFE0C0 = RGB (192, 224, 255), and mode arg 0x300000 (16 §5.3).
-const COMMENT_COLOUR: u32 = 0xFFE0C0;
-const COMMENT_MODE: i32 = 0x300000;
+const COMMENT_COLOUR: u32 = 0x00FF_E0C0;
+const COMMENT_MODE: i32 = 0x0030_0000;
 // The one-byte cursor string 0x7F: ascii.anm sprite 126, a ▶ glyph (16 §5.2, 12 §2.9).
 const CURSOR: &str = "\u{7f}";
 
@@ -48,9 +49,9 @@ fn heard_flags(plst: &[u8; MAX_ENTRIES]) -> [bool; MAX_ENTRIES] {
 // Title-list text of entry i (16 §5.2): (text, COLORREF colour, mode arg).
 fn row_text(e: &Entry, heard: bool) -> (SjisString, u32, i32) {
     if heard {
-        (e.title.clone(), 0xC0E0FF, 0x302080)
+        (e.title.clone(), 0x00C0_E0FF, 0x0030_2080)
     } else {
-        (sjis::encode(UNHEARD), 0x80A0C0, 0x100040)
+        (sjis::encode(UNHEARD), 0x0080_A0C0, 0x0010_0040)
     }
 }
 
@@ -58,7 +59,11 @@ fn row_text(e: &Entry, heard: bool) -> (SjisString, u32, i32) {
 // 64 bytes.
 fn comment_text(e: &Entry, heard: bool, playing: bool, k: usize) -> SjisString {
     if heard || playing {
-        let l = e.comments.get(k).map(|c| c.as_bytes()).unwrap_or_default();
+        let l = e
+            .comments
+            .get(k)
+            .map(SjisString::as_bytes)
+            .unwrap_or_default();
         SjisString(l[..l.len().min(COMMENT_SHOWN)].to_vec())
     } else {
         sjis::encode(WARNING[k])
@@ -101,26 +106,32 @@ fn colorref(c: u32) -> [u8; 3] {
 
 // VM +0x1F0 colour as D3DCOLOR 0xAARRGGBB, for `Ascii_SetColor`.
 fn vm_argb(vm: &AnmVm) -> u32 {
-    let c = vm.color;
-    (c[anmvm::A] as u32) << 24
-        | (c[anmvm::R] as u32) << 16
-        | (c[anmvm::G] as u32) << 8
-        | c[anmvm::B] as u32
+    D3dColor::from_bgra(vm.color).0
+}
+
+// Entry / row number as the object's int fields hold it (at most 32 entries, 16 §5.1).
+#[expect(clippy::cast_possible_wrap, reason = "counts < 32 (16 §5.1)")]
+fn int(v: usize) -> i32 {
+    v as i32
 }
 
 // Text_RenderToVm (10 §6), font 15: the rasteriser gets x = u0 and the texture-row width and replaces the whole
 // 15-row strip; the outline is always black, `mode` only selects ±1 (−1) / ±2 px. Sets VM flag bit 0.
 fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, colour: u32, mode: i32) {
-    let slot = vm.anm_slot.max(0) as usize;
+    let slot = usize::from(vm.anm_slot.max(0).cast_unsigned());
     let Some(sp) = ctx
         .w
         .anm
-        .sprite(slot, vm.sprite_index.max(0) as usize)
+        .sprite(slot, usize::from(vm.sprite_index.max(0).cast_unsigned()))
         .copied()
     else {
         return;
     };
     let t = ctx.rec.texture(sp.tex);
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "ftol of the strip's texel row (10 §6); uv is never negative"
+    )]
     let (w, tx, ty) = (
         t.width,
         (sp.uv[0] * t.width as f32).round(),
@@ -168,7 +179,7 @@ pub struct MusicRoom {
 
 impl MusicRoom {
     fn n(&self) -> i32 {
-        self.entries.len() as i32
+        int(self.entries.len())
     }
 
     // Rows top..end shown by the draw, at y = 18·(i − top + 1) + 84 (16 §5.2).
@@ -191,7 +202,7 @@ impl MusicRoom {
     // Selected row interrupt 1, the others 2 (16 §5.3).
     fn interrupt_rows(&mut self) {
         for (i, vm) in self.rows.iter_mut().enumerate() {
-            vm.pending_interrupt = if i as i32 == self.cursor { 1 } else { 2 };
+            vm.pending_interrupt = if int(i) == self.cursor { 1 } else { 2 };
         }
     }
 
@@ -205,7 +216,7 @@ impl MusicRoom {
     // music mode 1/2 and not in replay playback or demo. The Supervisor flag 13 `Bgm_StreamStart` restart is part of
     // `play_bgm`, which always restarts the stream.
     fn play(&mut self, ctx: &mut Ctx) {
-        let Some(e) = self.entries.get(self.playing as usize) else {
+        let Some(e) = self.entries.get(anmvm::table_index(self.playing)) else {
             return;
         };
         ctx.w.bgm.play_bgm(&String::from_utf8_lossy(&e.file));
@@ -218,10 +229,10 @@ impl MusicRoom {
     // Comment line k = 0..6 (16 §5.3 state 1 step 3): AnmFile_SetScript(text.anm 10 + k), interrupt 1; empty →
     // flag bit 1 cleared and nothing rendered, else bit 1 set and rendered.
     fn reveal(&mut self, ctx: &mut Ctx, k: usize) {
-        let Some(e) = self.entries.get(self.cursor as usize) else {
+        let Some(e) = self.entries.get(anmvm::table_index(self.cursor)) else {
             return;
         };
-        let c = self.cursor as usize;
+        let c = anmvm::table_index(self.cursor);
         let s = comment_text(e, self.heard[c], self.cursor == self.playing, k);
         let vm = &mut self.comments[k];
         ctx.w
@@ -266,14 +277,18 @@ impl MusicRoom {
         // Reveal at sub-frames 10, 12, …, 22; the sub-frame is always even here.
         let sf = self.sub_frame;
         if sf < 30 && (10..=22).contains(&sf) && sf % 2 == 0 {
-            self.reveal(ctx, (sf - 10) as usize / 2);
+            self.reveal(ctx, anmvm::table_index(sf - 10) / 2);
         }
         if mask_edge(&inp, SHOT | ENTER) {
             self.playing = self.cursor;
             self.play(ctx);
             self.sub_frame = 0;
-            if let Some(e) = self.entries.get(self.cursor as usize) {
-                let l = e.comments.first().map(|c| c.as_bytes()).unwrap_or_default();
+            if let Some(e) = self.entries.get(anmvm::table_index(self.cursor)) {
+                let l = e
+                    .comments
+                    .first()
+                    .map(SjisString::as_bytes)
+                    .unwrap_or_default();
                 let s = SjisString(l[..l.len().min(COMMENT_SHOWN)].to_vec());
                 ctx.w
                     .anm
@@ -284,7 +299,7 @@ impl MusicRoom {
         }
         if mask_edge(&inp, BOMB | PAUSE) {
             // The loading banner and screen capture (0x44886F) are done by the Supervisor's 8 → 1 switch.
-            ctx.w.game.request(gamemgr::SCENE_MENU);
+            ctx.w.game.request(crate::types::SceneId::Menu);
             return true;
         }
         if mask_edge(&inp, SKIP) {
@@ -328,7 +343,7 @@ impl MusicRoom {
                 .anm
                 .file_set_script(&mut ctx.w.rng, &mut vm, ANM_SLOT, i + 1);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
-            vm.pos = [93.0, (18 * (i as i32 + 1) + 104 - 20) as f32, 0.0];
+            vm.pos = [93.0, (18 * (int(i) + 1) + 104 - 20) as f32, 0.0];
             let (s, c, m) = row_text(&self.entries[i], self.heard[i]);
             render_vm(ctx, &mut vm, s, c, m);
             self.rows.push(vm);
@@ -356,10 +371,10 @@ impl MusicRoom {
             self.removed = true;
             return Ret::Remove;
         }
-        if self.state != s0 {
-            self.sub_frame = 0;
-        } else {
+        if self.state == s0 {
             self.sub_frame += 1;
+        } else {
+            self.sub_frame = 0;
         }
         self.bg.run(&mut ctx.w.anm, &mut ctx.w.rng);
         for vm in self
@@ -386,7 +401,7 @@ impl MusicRoom {
         prep(&ctx.w.anm, &mut self.bg);
         for i in self.top..self.row_end() {
             let y = Self::row_y(self.top, i);
-            let vm = &mut self.rows[i as usize];
+            let vm = &mut self.rows[anmvm::table_index(i)];
             let argb = vm_argb(vm);
             vm.pos = [93.0, y, 0.0];
             prep(&ctx.w.anm, vm);
@@ -423,7 +438,7 @@ impl MusicRoom {
         }
         ctx.w.anm.emit(rec, &self.bg);
         for i in self.top..self.row_end() {
-            ctx.w.anm.emit(rec, &self.rows[i as usize]);
+            ctx.w.anm.emit(rec, &self.rows[anmvm::table_index(i)]);
         }
         for vm in &self.comments {
             ctx.w.anm.emit(rec, vm);
@@ -460,9 +475,12 @@ mod tests {
         let h = heard_flags(&plst);
         assert!(h[0] && !h[2] && h[3]);
         let (s, c, o) = row_text(&e, h[2]);
-        assert_eq!((s.decode().as_str(), c, o), (UNHEARD, 0x80A0C0, 0x100040));
+        assert_eq!(
+            (s.decode().as_str(), c, o),
+            (UNHEARD, 0x0080_A0C0, 0x0010_0040)
+        );
         let (_, c, o) = row_text(&e, h[3]);
-        assert_eq!((c, o), (0xC0E0FF, 0x302080));
+        assert_eq!((c, o), (0x00C0_E0FF, 0x0030_2080));
         // Comments: real text if heard or playing (cut to 64 bytes), else the warning table.
         let t = |h, p, k| comment_text(&e, h, p, k).decode();
         assert_eq!(t(true, false, 0), "x".repeat(64));
@@ -498,7 +516,7 @@ mod tests {
         assert!(!mask_edge(&inp(0, SHOT), SHOT | ENTER));
         // COLORREF 0x00BBGGRR.
         assert_eq!(colorref(COMMENT_COLOUR), [192, 224, 255]);
-        assert_eq!(colorref(0xC0E0FF), [255, 224, 192]);
+        assert_eq!(colorref(0x00C0_E0FF), [255, 224, 192]);
         // Warning line 4 is one U+3000, not empty.
         assert_eq!(WARNING[4], "\u{3000}");
         assert!(WARNING[1..7].iter().all(|l| l.starts_with('\u{3000}')));
@@ -512,7 +530,7 @@ mod tests {
         while m.state == 0 {
             let s0 = m.state;
             m.state_intro();
-            m.sub_frame = if m.state != s0 { 0 } else { m.sub_frame + 1 };
+            m.sub_frame = if m.state == s0 { m.sub_frame + 1 } else { 0 };
             calls += 1;
         }
         assert_eq!((calls, m.sub_frame), (9, 0));

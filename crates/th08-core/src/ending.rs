@@ -306,10 +306,13 @@ impl Ending {
                     let vm = self.script.int_arg();
                     let script = self.script.int_arg();
                     let sprite = self.script.int_arg();
-                    if let Some(v) = self.vms.get_mut(vm.max(0) as usize) {
-                        ctx.w
-                            .anm
-                            .set_script(&mut ctx.w.rng, v, STAFF_SLOT, script.max(0) as usize);
+                    if let Some(v) = self.vms.get_mut(anmvm::table_index(vm.max(0))) {
+                        ctx.w.anm.set_script(
+                            &mut ctx.w.rng,
+                            v,
+                            STAFF_SLOT,
+                            anmvm::table_index(script.max(0)),
+                        );
                         v.set_sprite(&ctx.w.anm, sprite);
                     }
                 }
@@ -331,7 +334,7 @@ impl Ending {
                         Err(e) => log::warn!("ending @b {name}: {e:#}"),
                     }
                 }
-                b'c' => self.text_rgb = self.script.int_arg() as u32 & 0xFFFFFF,
+                b'c' => self.text_rgb = self.script.int_arg().cast_unsigned() & 0x00FF_FFFF,
                 b'm' => {
                     let name = self.script.str_arg();
                     // Music_Play(0, file) + Music_PlaySlot(0, 0), which marks music flag 0 heard.
@@ -404,7 +407,7 @@ impl Ending {
         }
         let n = self.fade_n.max(1);
         let t = self.fade_t.min(n);
-        let rgb = if self.fade_mode >= 3 { 0xFFFFFF } else { 0 };
+        let rgb = if self.fade_mode >= 3 { 0x00FF_FFFF } else { 0 };
         let alpha = match self.fade_mode {
             1 | 3 if self.fade_t >= n => {
                 self.fade_mode = 0;
@@ -416,7 +419,7 @@ impl Ending {
         if self.fade_t < n {
             self.fade_t += 1;
         }
-        self.fade_argb = ((alpha as u32) << 24) | rgb;
+        self.fade_argb = (alpha.cast_unsigned() << 24) | rgb;
         self.fade_argb
     }
 }
@@ -426,12 +429,16 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: SjisString, rgb: [u8; 3]) {
     let Some(sp) = ctx
         .w
         .anm
-        .sprite(0, vm.sprite_index.max(0) as usize)
+        .sprite(0, usize::from(vm.sprite_index.max(0).cast_unsigned()))
         .copied()
     else {
         return;
     };
     let t = ctx.rec.texture(sp.tex);
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "ftol of the strip's texel row (10 §6); uv is never negative"
+    )]
     let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
     ctx.rec.text(TextCmd {
         dst: sp.tex,
@@ -504,6 +511,10 @@ impl Ending {
         rec.set_viewport(crate::drawlist::FULLSCREEN);
         if let Some(t) = self.picture {
             // The float source offset is truncated (ftol) to whole pixels (16 §1.5).
+            #[expect(
+                clippy::cast_sign_loss,
+                reason = "ftol of a value clamped to ≥ 0 (16 §1.5)"
+            )]
             let (sx, sy) = (self.pic_x.max(0.0) as u32, self.pic_y.max(0.0) as u32);
             rec.image_rect(t, sx, sy, 640, 480, 0.0, 0.0);
         }
@@ -528,8 +539,8 @@ impl Ending {
         }
         self.script.data.clear();
         // Port guard: a removal by a scene switch away from 9 keeps that switch's target.
-        if ctx.w.game.requested == gamemgr::SCENE_ENDING {
-            ctx.w.game.request(gamemgr::SCENE_RESULT);
+        if ctx.w.game.requested == crate::types::SceneId::Ending {
+            ctx.w.game.request(crate::types::SceneId::Result);
         }
     }
 }
@@ -586,6 +597,6 @@ mod tests {
         assert_eq!(a, [255, 192, 128, 64, 0, 0]);
         (e.fade_mode, e.fade_t, e.fade_n) = (4, 0, 2);
         let a: Vec<u32> = (0..4).map(|_| e.fade_step()).collect();
-        assert_eq!(a, [0x00FFFFFF, 0x7FFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF]);
+        assert_eq!(a, [0x00FF_FFFF, 0x7FFF_FFFF, 0xFFFF_FFFF, 0xFFFF_FFFF]);
     }
 }

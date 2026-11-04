@@ -481,8 +481,8 @@ mod native {
                     }
                 }
                 extra += k_in;
-                if ctx.w.game.scene != scene {
-                    (scene, scene_frame) = (ctx.w.game.scene, 1);
+                if ctx.w.game.scene as i32 != scene {
+                    (scene, scene_frame) = (ctx.w.game.scene as i32, 1);
                 } else {
                     scene_frame = sf_base + k_in;
                 }

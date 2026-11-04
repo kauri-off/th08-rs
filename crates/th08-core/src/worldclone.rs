@@ -769,7 +769,7 @@ mod stage {
         for k in 0..FRAMES {
             let (ta, tb) = (step(a), step(b));
             assert_eq!(ta, tb, "frame {k} after the clone");
-            assert_eq!(a.w.game.scene, crate::gamemgr::SCENE_GAME, "frame {k}");
+            assert_eq!(a.w.game.scene, crate::types::SceneId::Game, "frame {k}");
             let n = alive(&a.w);
             peak = std::array::from_fn(|i| peak[i].max(n[i]));
         }
@@ -782,7 +782,7 @@ mod stage {
     fn stage_clone_continues_identically() {
         let Some(mut a) = demo_at() else { return };
         let mut b = demo_at().unwrap();
-        assert_eq!(a.w.game.scene, crate::gamemgr::SCENE_GAME);
+        assert_eq!(a.w.game.scene, crate::types::SceneId::Game);
         assert!(alive(&a.w).iter().all(|&n| n > 0), "{:?}", alive(&a.w));
         b.w = a.w.clone();
         let peak = lockstep(&mut a, &mut b);

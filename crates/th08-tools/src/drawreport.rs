@@ -382,8 +382,8 @@ where
 // Tools-bound: needs a GPU adapter (headless `Gfx` readback).
 #[cfg(test)]
 mod tests {
-    use th08_core::gamemgr;
     use th08_core::input::{BOMB, DOWN, SHOT, UP};
+    use th08_core::types::SceneId;
 
     // `TH08_RESULT_SHOTS=k1,k2,…`: /tmp/th08_result_<tag>_<k>.png at those result frames of result.rs
     // `game_over_name_entry_saves`'s run (same input), "after" = the result screen, "viewer" = the ranking viewer.
@@ -436,7 +436,7 @@ mod tests {
         let (mut k, mut over, mut seen_result) = (0u32, 0u32, false);
         for _ in 0..60_000 {
             let g = &ctx.w.game;
-            let key = if g.scene == gamemgr::SCENE_RESULT {
+            let key = if g.scene == SceneId::Result {
                 seen_result = true;
                 k += 1;
                 keys.iter()
@@ -450,26 +450,26 @@ mod tests {
                 }
                 over += 1;
                 if over % 40 == 39 { SHOT } else { 0 }
-            } else if g.scene == gamemgr::SCENE_GAME {
+            } else if g.scene == SceneId::Game {
                 SHOT
             } else {
                 0
             };
             th08::platform::tool_host(&mut ctx).keys[0] = key;
-            if seen_result && ctx.w.game.scene == gamemgr::SCENE_MENU {
+            if seen_result && ctx.w.game.scene == SceneId::Menu {
                 break;
             }
             ctx.calc();
             ctx.draw();
-            let on = ctx.w.game.scene == gamemgr::SCENE_RESULT;
+            let on = ctx.w.game.scene == SceneId::Result;
             shot(&mut ctx, on, k, "after");
         }
         let mut k = 0;
         for _ in 0..400 {
-            if ctx.w.game.scene == gamemgr::SCENE_MENU && ctx.w.game.menu_loading == 0 && k == 0 {
-                ctx.w.game.request(gamemgr::SCENE_RESULT_MENU);
+            if ctx.w.game.scene == SceneId::Menu && ctx.w.game.menu_loading == 0 && k == 0 {
+                ctx.w.game.request(SceneId::ResultMenu);
             }
-            if ctx.w.game.scene == gamemgr::SCENE_RESULT_MENU {
+            if ctx.w.game.scene == SceneId::ResultMenu {
                 k += 1;
             }
             th08::platform::tool_host(&mut ctx).keys[0] =

@@ -7,6 +7,7 @@ use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
 use crate::input::{self, Input};
 use crate::task::{self, Chain, Ret, Task};
+use crate::types::SceneId;
 use anyhow::Result;
 
 // ascii.anm slot 1, capture.anm slot 3 (12 §3); calc prio 1, draw prio 14 / 20 (12 §5.7).
@@ -1155,7 +1156,7 @@ impl PauseMenu {
                         9 => {
                             // State 9: Result_Register(2) (save) and scene 1 (12 §3).
                             g.save_score(rng, true, host);
-                            g.request(gamemgr::SCENE_MENU)
+                            g.request(SceneId::Menu)
                         }
                         _ => {
                             // State 10: spell practice / practice / Extra reload the stage (scene 11) after
@@ -1171,9 +1172,9 @@ impl PauseMenu {
                                     bgm.start_fade_in(2.0);
                                 }
                                 stage_transition(hud, ctx_anm, rng);
-                                g.request(gamemgr::SCENE_RELOAD)
+                                g.request(SceneId::Reload)
                             } else {
-                                g.request(gamemgr::SCENE_RETRY)
+                                g.request(SceneId::Retry)
                             }
                         }
                     }
@@ -1313,7 +1314,7 @@ struct ContinueMenu {
 // 0x404890 early exits (11 §4.2, RE-Q51): game_over := 0 and displayed score := score, no sound / VMs / capture /
 // play time; GameMgr_Calc later in the same pass then runs one more gameplay frame. `update` then returns true and
 // the caller syncs the player's displayed score (nothing in between reads it).
-fn early_exit(g: &mut Game, scene: i32) {
+fn early_exit(g: &mut Game, scene: SceneId) {
     g.game_over = 0;
     g.request(scene);
 }
@@ -1344,16 +1345,16 @@ impl ContinueMenu {
             };
             log::info!("continue menu opened");
             if g.practice() && !g.spell_practice() {
-                early_exit(g, gamemgr::SCENE_RESULT);
+                early_exit(g, SceneId::Result);
                 return true;
             }
             if g.replay() {
-                early_exit(g, gamemgr::SCENE_REPLAY_END);
+                early_exit(g, SceneId::ReplayEnd);
                 return true;
             }
             if g.difficulty < 4 && !g.spell_practice() && (g.clock > 10 || g.stage % 9 == 7) {
                 g.flags &= !gamemgr::F_ENDING_OK;
-                early_exit(g, gamemgr::SCENE_ENDING);
+                early_exit(g, SceneId::Ending);
                 return true;
             }
             // Play time is added only when the prompt opens, not on the early exits (15 §2.9).
@@ -1416,7 +1417,7 @@ impl ContinueMenu {
                             bgm.pause_bgm(false);
                             bgm.start_fade_in_from_dip(1.0);
                         }
-                        g.request(gamemgr::SCENE_RELOAD);
+                        g.request(SceneId::Reload);
                         stage_transition(hud, ctx_anm, rng);
                         g.game_over = 0;
                         g.mark_play_time(now);
@@ -1437,7 +1438,7 @@ impl ContinueMenu {
                 for vm in self.vms.iter_mut().chain([&mut self.clock_vm]) {
                     vm.flags &= !crate::anmvm::F_VISIBLE;
                 }
-                early_exit(g, gamemgr::SCENE_RESULT);
+                early_exit(g, SceneId::Result);
                 self.open = false;
                 return true;
             }
@@ -1567,7 +1568,7 @@ impl AsciiManager {
     pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // Supervisor_Init registers the manager on the boot loader thread, so the boot calc passes never reach
         // Ascii_Calc and +0x8284 equals the main-menu frame number (12 §5.10).
-        if ctx.w.game.scene == crate::gamemgr::SCENE_BOOT {
+        if ctx.w.game.scene == SceneId::Boot {
             return Ret::Next;
         }
         let inp = ctx.w.input;
@@ -1799,7 +1800,7 @@ mod tests {
         );
         assert!(m.open && !m.yes);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
-        assert_eq!(g.requested, gamemgr::SCENE_BOOT);
+        assert_eq!(g.requested, SceneId::Boot);
     }
 
     // 11 §4.2 / 15 §2.9: the replay early exit clears game_over, requests scene 7, opens nothing, adds no play time.
@@ -1825,7 +1826,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_REPLAY_END));
+        assert_eq!((g.game_over, g.requested), (0, SceneId::ReplayEnd));
         assert!(g.play_clock.is_some() && m.vms.is_empty());
     }
 
@@ -1887,7 +1888,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RELOAD));
+        assert_eq!((g.game_over, g.requested), (0, SceneId::Reload));
         assert!(!m.open && m.frame == frame);
 
         let mut g = Game::default();
@@ -1947,7 +1948,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!((g.game_over, g.requested), (0, gamemgr::SCENE_RESULT));
+        assert_eq!((g.game_over, g.requested), (0, SceneId::Result));
         assert!(!m.open && m.vms.iter().all(|v| !v.visible()));
     }
 

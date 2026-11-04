@@ -185,7 +185,7 @@ mod tests {
         let g = &mut ctx.w.game;
         (g.difficulty, g.shot, g.stage, g.fresh_start) = (3, 1, 0, true);
         g.flags = 0;
-        g.request(th08_core::gamemgr::SCENE_GAME);
+        g.request(th08_core::types::SceneId::Game);
         let mut want = Vec::new();
         let mut k = 0u32;
         for _ in 0..4000 {

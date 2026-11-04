@@ -9,6 +9,7 @@ use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
 use crate::task::{Chain, Ret};
+use crate::types::SceneId;
 use anyhow::Result;
 use th08_formats::sjis;
 
@@ -599,7 +600,7 @@ impl MainMenu {
             // Item 8: after 60 frames free the VMs, scene −1 (12 §2.2).
             *f += 1;
             if *f >= 60 {
-                ctx.w.game.request(-1);
+                ctx.w.game.request(SceneId::Quit);
             }
             return;
         }
@@ -670,8 +671,8 @@ impl MainMenu {
                     self.interrupt_all(13);
                     self.set_screen(REPLAY);
                 }
-                5 => g.request(gamemgr::SCENE_RESULT_MENU),
-                6 => g.request(gamemgr::SCENE_MUSIC_ROOM),
+                5 => g.request(SceneId::ResultMenu),
+                6 => g.request(SceneId::MusicRoom),
                 7 => {
                     // The in-place MainMenu_Option call adds one to +0x10, so screen 2 first runs on P + 30 (12 §2).
                     // No range interrupt and no highlight: item 7 stays lit until the option entry's interrupt 3.
@@ -896,7 +897,7 @@ impl MainMenu {
                     g.flags &= !F_REPLAY;
                     g.fresh_start = true;
                     ctx.w.bgm.stop_bgm();
-                    g.request(gamemgr::SCENE_GAME);
+                    g.request(SceneId::Game);
                     self.remove = true;
                 }
             }
@@ -1267,7 +1268,7 @@ impl MainMenu {
                 | ((0..4).all(nc_b) as u32) << 17;
             // Unlock notices (16 §4): a condition now true whose flag bit is still clear. The port loads CLRD at boot,
             // where the original's in-memory CLRD is still empty, so the first menu after boot shows none.
-            if g.previous != gamemgr::SCENE_BOOT {
+            if g.previous != SceneId::Boot {
                 ctx.w.info.queue.extend(info_files(bits, g.flags));
                 ctx.w.info.frozen_prev = ctx.w.input.prev;
             }
@@ -1307,11 +1308,9 @@ impl MainMenu {
         self.cursor = match g.previous {
             _ if g.practice() && g.spell_practice() => 2,
             _ if g.practice() => 3,
-            gamemgr::SCENE_GAME | gamemgr::SCENE_NEXT_STAGE | gamemgr::SCENE_RESULT => {
-                (g.difficulty > 3) as i32
-            }
-            gamemgr::SCENE_RESULT_MENU => 5,
-            gamemgr::SCENE_MUSIC_ROOM => 6,
+            SceneId::Game | SceneId::NextStage | SceneId::Result => (g.difficulty > 3) as i32,
+            SceneId::ResultMenu => 5,
+            SceneId::MusicRoom => 6,
             _ => 0,
         };
         // After the cursor rule: flags &= ~0x4001, later bit 1 := 0 (12 §2.2).
@@ -1512,7 +1511,7 @@ fn assign_key(keys: &mut [i16; 9], row: usize, b: i16) {
 
 // Loader thread 0x470E10 (00 §3.2): title music unless music is off or the previous scene was 5 (result screen).
 fn title_music(g: &gamemgr::Game) -> bool {
-    g.cfg.music != 0 && g.previous != gamemgr::SCENE_RESULT_MENU
+    g.cfg.music != 0 && g.previous != SceneId::ResultMenu
 }
 
 // After the screen handler all 142 VMs run, then the description VM (12 §2).
@@ -1532,6 +1531,7 @@ mod tests {
         INFO_FADE_OUT, assign_key, centred_x, final_notice, info_fade_alpha, info_files, info_step,
         title_music, volume_step,
     };
+    use crate::types::SceneId;
 
     // Text commands carry Shift-JIS; every port literal must round-trip so the raster sees the same characters.
     fn round_trips(s: &str) {
@@ -1561,7 +1561,7 @@ mod tests {
             return;
         };
         for demo in [false, true] {
-            c.w.game.previous = gamemgr::SCENE_GAME;
+            c.w.game.previous = SceneId::Game;
             c.w.game.difficulty = 4;
             c.w.game.shot = 5;
             let f = gamemgr::F_REPLAY
@@ -1589,7 +1589,7 @@ mod tests {
             return;
         };
         for spell in [false, true] {
-            c.w.game.previous = gamemgr::SCENE_RESULT;
+            c.w.game.previous = SceneId::Result;
             let f = gamemgr::F_PRACTICE | if spell { gamemgr::F_SPELL_PRACTICE } else { 0 };
             c.w.game.flags = f;
             let mut m = super::MainMenu::new();
@@ -1720,11 +1720,11 @@ mod tests {
     fn title_music_after_result() {
         let mut g = Game::default();
         g.cfg.music = 1;
-        g.previous = gamemgr::SCENE_GAME;
+        g.previous = SceneId::Game;
         assert!(title_music(&g));
-        g.previous = gamemgr::SCENE_RESULT_MENU;
+        g.previous = SceneId::ResultMenu;
         assert!(!title_music(&g));
-        g.previous = gamemgr::SCENE_BOOT;
+        g.previous = SceneId::Boot;
         g.cfg.music = 0;
         assert!(!title_music(&g));
     }

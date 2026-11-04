@@ -1,7 +1,7 @@
 //! Result object `Result_Register(mode)` 0x4582A0 (16 §2): name entry, ranking and end panel after a game (mode 1),
 //! result viewer from the main menu (mode 0). score.dat is saved when it is removed (15 §2.2).
 
-use crate::anmvm::{self, AnmVm};
+use crate::anmvm::{self, AnmVm, table_index};
 use crate::ascii::Text;
 use crate::drawlist::TexId;
 use crate::drawlist::{FULLSCREEN, Recorder};
@@ -14,6 +14,7 @@ use crate::menu::{CANCEL, CONFIRM};
 use crate::scoredat::{C_ATTEMPTS, C_BONUS, C_CAPTURES, C_PRACTICE, CARDS, Hscr};
 use crate::sound;
 use crate::task::{Chain, Ret};
+use crate::types::{D3dColor, SceneId, lo8};
 use th08_formats::sjis::{self, SjisString};
 
 // Result_Calc 0x4584B0 at prio 16, Result_Draw 0x4586B4 at prio 18 (16 §2).
@@ -28,34 +29,58 @@ const VM_ANCHOR: usize = 40;
 // End-panel picture result03.png (16 §2.5).
 const VM_PANEL: usize = 71;
 
-// Result states (+8, 16 §2.1 / §2.4 / §2.6).
-const S_INIT: i32 = 0;
-const S_TOP: i32 = 1;
-const S_LEAVE: i32 = 2;
-const S_DIFF: i32 = 3;
-const S_CHAR: i32 = 4;
-const S_RANK: i32 = 5;
-const S_GROUP: i32 = 6;
-const S_CARD_CHAR: i32 = 7;
-const S_CARDS: i32 = 8;
-const S_NAME: i32 = 9;
-const S_SAVE: i32 = 10;
-const S_SAVE_MSG: i32 = 11;
-const S_SAVE_SLOT: i32 = 12;
-const S_SAVE_NAME: i32 = 13;
-const S_SAVE_OVER: i32 = 14;
-const S_PANEL: i32 = 0xF;
-const S_PANEL_OUT: i32 = 0x10;
-const S_PRACTICE: i32 = 0x11;
-const S_PLAY: i32 = 0x13;
-const S_PLAY_WAIT: i32 = 0x14;
-const S_PLAY_OUT: i32 = 0x15;
-const S_SPELL: i32 = 0x16;
+// Result states (+8, 16 §2.1 / §2.4 / §2.6); `ScoreLoad` 0x12 is mode 2's (score.dat loader), which never calcs.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum State {
+    Init = 0,
+    Top = 1,
+    Leave = 2,
+    Diff = 3,
+    Char = 4,
+    Rank = 5,
+    Group = 6,
+    CardChar = 7,
+    Cards = 8,
+    Name = 9,
+    Save = 10,
+    SaveMsg = 11,
+    SaveSlot = 12,
+    SaveName = 13,
+    SaveOver = 14,
+    Panel = 0xF,
+    PanelOut = 0x10,
+    Practice = 0x11,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "mode 2 never builds a ResultScreen (16 §2.1)")
+    )]
+    ScoreLoad = 0x12,
+    Play = 0x13,
+    PlayWait = 0x14,
+    PlayOut = 0x15,
+    Spell = 0x16,
+}
+
+impl State {
+    // Replay-save dialogue states 10–14 (16 §2.6).
+    fn is_save(self) -> bool {
+        matches!(
+            self,
+            Self::Save | Self::SaveMsg | Self::SaveSlot | Self::SaveName | Self::SaveOver
+        )
+    }
+
+    // Play-data states 0x13–0x15 (16 §2.4).
+    fn is_play(self) -> bool {
+        matches!(self, Self::Play | Self::PlayWait | Self::PlayOut)
+    }
+}
 
 // Result_Calc return 0 (16 §2.4 exit): state 2 at frame > 19 after its scene request. Its 0x11 / 0x12 / 0x16 cases
 // are unreachable (0x11 / 0x16 become 10 in OnRegister, 0x12 objects have no calc node), so they are not ported.
-fn exits(state: i32, frame: i32) -> bool {
-    state == S_LEAVE && frame > 19
+fn exits(state: State, frame: i32) -> bool {
+    state == State::Leave && frame > 19
 }
 
 // Name-entry charset 0x4B7340, 6 rows × 16 (16 §2.2). 0x5D is the only unselectable cell; 0x5E / 0x5F are
@@ -87,16 +112,20 @@ fn stage_shown(b: u8) -> u8 {
 // Card ids of result-viewer group g (16 §2.4; spell_tables.md §1): 0–4 = Spell_DifficultyOf, 5 = all 222.
 fn group_cards(g: i32) -> Vec<usize> {
     (0..CARDS)
-        .filter(|&id| g >= 5 || (id < 205 && crate::menulist::difficulty_of(id) == g as usize))
+        .filter(|&id| g >= 5 || (id < 205 && crate::menulist::difficulty_of(id) == table_index(g)))
         .collect()
 }
 
 // The 0x477B0-byte result object (16 §2).
 #[derive(Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "separate fields +0x38 / +0x54 and two port flags, not one mode (16 §2.4)"
+)]
 pub struct ResultScreen {
     // Result_Register mode: 0 viewer, 1 after a game (2 = flush only, handled by Game::save_score).
     mode: u8,
-    state: i32,
+    state: State,
     // Result +4 frame counter, +0x10 sub-state, +0x18 sub-frame, +0x1C cursor (16 §2.4).
     frame: i32,
     sub: i32,
@@ -149,6 +178,7 @@ struct NameKeys {
 }
 
 // AnmVm_Init + sprite, top-left anchor unless centred, white (16 §2.4 text VMs).
+#[expect(clippy::cast_possible_wrap, reason = "ANM slots 0, 0x15, 0x16 (16 §2)")]
 fn text_vm(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     let mut vm = AnmVm::default();
     vm.init();
@@ -169,11 +199,25 @@ fn emit_at(ctx: &Ctx, rec: &mut Recorder, vm: &AnmVm, x: f32, y: f32) {
 }
 
 fn vm_argb(vm: &AnmVm) -> u32 {
-    let c = vm.color;
-    (c[anmvm::A] as u32) << 24
-        | (c[anmvm::R] as u32) << 16
-        | (c[anmvm::G] as u32) << 8
-        | c[anmvm::B] as u32
+    D3dColor::from_bgra(vm.color).0
+}
+
+// A list position / count as the object's int fields hold it (at most 222 cards, 16 §2.4).
+#[expect(clippy::cast_possible_wrap, reason = "positions < 256 (16 §2.4)")]
+fn int(v: usize) -> i32 {
+    v as i32
+}
+
+// Low-word store into a VM's pending interrupt (`mov word`): same bits as `as u16`.
+fn lo16(v: i32) -> u16 {
+    let b = v.to_le_bytes();
+    u16::from_le_bytes([b[0], b[1]])
+}
+
+// Score as the HSCR / practice hiscore dword: score10 clamped to 0..=999 999 999 first (15 §2.3, §2.6).
+#[expect(clippy::cast_sign_loss, reason = "clamped to 0..=999_999_999")]
+fn score_u32(score10: i64) -> u32 {
+    score10.clamp(0, 999_999_999) as u32
 }
 
 fn put(ctx: &mut Ctx, x: f32, y: f32, s: impl Into<String>, argb: u32) {
@@ -185,7 +229,7 @@ impl ResultScreen {
     pub fn new(mode: u8) -> Self {
         Self {
             mode,
-            state: S_INIT,
+            state: State::Init,
             frame: 0,
             sub: 0,
             sub_frame: 0,
@@ -225,31 +269,31 @@ impl ResultScreen {
             return;
         }
         self.state = if g.spell_practice() {
-            S_SPELL
+            State::Spell
         } else if g.practice() {
-            S_PRACTICE
+            State::Practice
         } else {
-            S_NAME
+            State::Name
         };
-        if self.state == S_NAME {
+        if self.state == State::Name {
             return;
         }
         // Slow mode drops this run's card credit (15 §2.5, modes 0x11 / 0x16).
         if g.cfg.slow != 0 {
             g.restore_catk_backup();
         }
-        if self.state == S_PRACTICE {
+        if self.state == State::Practice {
             // 15 §2.6: practice hiscore [shot + 0x164D0B2][stage][difficulty] := max.
             let shot = (g.shot as usize + g.demo_shot_bias as usize) % 12;
-            let d = g.difficulty.clamp(0, 4) as usize;
-            let score = g.stats.score10.clamp(0, 999_999_999) as u32;
+            let d = table_index(g.difficulty.clamp(0, 4));
+            let score = score_u32(g.stats.score10);
             let h = &mut g.score.pscr[shot].hiscore[g.stage % 9][d];
             *h = (*h).max(score);
         }
-        self.state = S_SAVE;
+        self.state = State::Save;
     }
 
-    fn set_state(&mut self, s: i32) {
+    fn set_state(&mut self, s: State) {
         self.state = s;
         self.frame = 0;
         self.sub = 0;
@@ -265,9 +309,9 @@ impl ResultScreen {
     // Text_RenderToVm into text VM k (white, outline 0, font 15) and alpha 255.
     fn render(&mut self, ctx: &mut Ctx, k: usize, s: SjisString) {
         let (slot, sprite) = if k < 14 {
-            (0, 21 + k as i32)
+            (0, 21 + int(k))
         } else {
-            (RT_SLOT, 2 + k as i32 - 14)
+            (RT_SLOT, 2 + int(k) - 14)
         };
         crate::menulist::render_strip(ctx, slot, sprite, s);
         self.text_vms[k].color[anmvm::A] = 255;
@@ -286,7 +330,7 @@ impl ResultScreen {
             if self.sub_frame == 0 {
                 self.cursor = remembered.clamp(0, n - 1);
                 for i in 0..n {
-                    let vm = &mut self.vms[first + i as usize];
+                    let vm = &mut self.vms[first + table_index(i)];
                     vm.pending_interrupt = 22;
                     vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
                     vm.pending_interrupt = if i == self.cursor { 20 } else { 21 };
@@ -302,10 +346,8 @@ impl ResultScreen {
         // Result_CursorUpDown 0x45A0F4: edge or repeat, wraps.
         let d = if inp.pressed_or_repeat(UP) {
             -1
-        } else if inp.pressed_or_repeat(DOWN) {
-            1
         } else {
-            0
+            i32::from(inp.pressed_or_repeat(DOWN))
         };
         if d != 0 {
             self.cursor = (self.cursor + d).rem_euclid(n);
@@ -327,147 +369,173 @@ impl ResultScreen {
     // Confirm: selected VM interrupt 23, the others 1 (16 §2.4).
     fn confirm_vms(&mut self, first: usize, n: i32) {
         for i in 0..n {
-            self.vms[first + i as usize].pending_interrupt = if i == self.cursor { 23 } else { 1 };
+            self.vms[first + table_index(i)].pending_interrupt =
+                if i == self.cursor { 23 } else { 1 };
         }
     }
 
     fn highlight(&mut self, first: usize, n: i32) {
         for i in 0..n {
-            self.vms[first + i as usize].pending_interrupt = if i == self.cursor { 20 } else { 21 };
+            self.vms[first + table_index(i)].pending_interrupt =
+                if i == self.cursor { 20 } else { 21 };
         }
     }
 
     fn calc_state(&mut self, ctx: &mut Ctx) {
         match self.state {
-            S_INIT => {
+            State::Init => {
                 // State 0 continues as state 1 in the same frame (16 §2.4 play data exit).
-                self.set_state(S_TOP);
+                self.set_state(State::Top);
                 self.calc_state(ctx);
             }
-            S_TOP => self.top(ctx),
-            S_LEAVE => {
-                // Exit (16 §2.1 state 2, §2.4 exit): frame 1 Loading_Begin + interrupt 2, scene 1 after 20.
-                if self.frame == 1 {
-                    ctx.w.game.loading_req = true;
-                    self.interrupt_all(2);
-                }
-                if self.frame > 19 {
-                    ctx.w.game.request(gamemgr::SCENE_MENU);
-                }
+            State::Top => self.top(ctx),
+            State::Leave => self.leave(ctx),
+            State::Diff => self.diff_page(ctx),
+            State::Char => self.char_page(ctx),
+            State::Rank => self.ranking(ctx),
+            State::Group => self.group_page(ctx),
+            State::CardChar => self.card_char_page(ctx),
+            State::Cards => self.cards(ctx),
+            State::Name => self.name_entry(ctx),
+            State::Panel => self.panel(ctx.w.input),
+            State::PanelOut => self.panel_out(),
+            State::Save => {
+                self.save_ask(ctx.w.input, &ctx.w.game, &mut ctx.w.sound, &mut *ctx.host);
             }
-            // State 3, Result_CheatUnlock 0x4550FC (16 §2.4); the hidden code runs every frame, sub-state 0 included.
-            S_DIFF => {
-                // The code steps after the page input; a confirm / cancel call returns before it (16 §2.4).
-                match self.page(ctx, 4, 5, self.rank_diff, 6) {
-                    Some(true) => {
-                        ctx.w.sound.play(sound::OK);
-                        self.rank_diff = self.cursor;
-                        self.set_state(S_CHAR);
-                        self.cursor = 0;
-                    }
-                    Some(false) => {
-                        self.rank_diff = self.cursor;
-                        self.set_state(S_TOP);
-                        self.cursor = 0;
-                    }
-                    None => {
-                        if self.hidden.step(ctx.w.input) {
-                            hidden_unlock(&mut ctx.w.game);
-                            ctx.w.sound.play(sound::EXTEND);
-                        }
-                    }
-                }
-            }
-            // State 4 (0x45567D).
-            S_CHAR => match self.page(ctx, 15, 12, self.rank_shot, 6) {
-                Some(true) => {
-                    ctx.w.sound.play(sound::OK);
-                    self.vms[VM_ANCHOR].pending_interrupt = 3;
-                    self.rank_shot = -1;
-                    self.set_state(S_RANK);
-                }
-                Some(false) => {
-                    self.rank_shot = self.cursor;
-                    for vm in &mut self.vms[15..27] {
-                        vm.pending_interrupt = 1;
-                    }
-                    self.set_state(S_DIFF);
-                }
-                None => {}
-            },
-            S_RANK => self.ranking(ctx),
-            // State 6 (0x455A33).
-            S_GROUP => match self.page(ctx, 9, 6, self.card_group, 6) {
-                Some(true) => {
-                    ctx.w.sound.play(sound::OK);
-                    self.card_group = self.cursor;
-                    self.set_state(S_CARD_CHAR);
-                }
-                Some(false) => {
-                    self.card_group = self.cursor;
-                    self.set_state(S_TOP);
-                    self.cursor = 1;
-                }
-                None => {}
-            },
-            // State 7 (0x455CB0).
-            S_CARD_CHAR => match self.page(ctx, 27, 13, self.card_char, 6) {
-                Some(true) => {
-                    ctx.w.sound.play(sound::OK);
-                    self.card_char = self.cursor;
-                    self.set_state(S_CARDS);
-                    self.vms[VM_ANCHOR].pending_interrupt = 3;
-                    self.cursor = 0;
-                    self.card_page = -1;
-                }
-                Some(false) => {
-                    self.card_char = self.cursor;
-                    for vm in &mut self.vms[27..40] {
-                        vm.pending_interrupt = 1;
-                    }
-                    self.set_state(S_GROUP);
-                }
-                None => {}
-            },
-            S_CARDS => self.cards(ctx),
-            S_NAME => self.name_entry(ctx),
-            // State 0xF, Result_EndBanner 0x4577E2 (16 §2.1): VM 71 interrupt 18 on every call with frame ≤ 30, each
-            // restarting its fade, so the panel fades in over frames 30–60; after 90 frames Shot/Enter → state 0x10.
-            S_PANEL => {
-                if self.frame <= 30 {
-                    self.vms[VM_PANEL].pending_interrupt = 18;
-                }
-                if self.frame >= 90 && ctx.w.input.pressed(SHOT | ENTER) {
-                    self.vms[VM_PANEL].pending_interrupt = 2;
-                    self.set_state(S_PANEL_OUT);
-                }
-            }
-            // State 0x10: after 30 frames → state 10 with frame counter 9 (16 §2.1).
-            S_PANEL_OUT => {
-                if self.frame >= 30 {
-                    self.set_state(S_SAVE);
-                    self.frame = 9;
-                }
-            }
-            S_SAVE => self.save_ask(ctx.w.input, &ctx.w.game, &mut ctx.w.sound, &mut *ctx.host),
-            S_SAVE_MSG => {
-                // State 11: the "cannot save" message, left from frame 20 (16 §2.6).
-                let inp = ctx.w.input;
-                if self.frame >= 20 && (inp.pressed(CONFIRM) || inp.pressed(CANCEL)) {
-                    self.leave_save(&mut ctx.w.sound);
-                }
-            }
-            S_SAVE_SLOT => {
+            State::SaveMsg => self.save_msg(ctx),
+            State::SaveSlot => {
                 let now = ctx.host.local_time();
-                self.save_slot(ctx.w.input, &ctx.w.game, &mut ctx.w.sound, now)
+                self.save_slot(ctx.w.input, &ctx.w.game, &mut ctx.w.sound, now);
             }
-            S_SAVE_NAME => self.save_name(ctx),
-            S_SAVE_OVER => self.save_overwrite(ctx),
-            S_PLAY | S_PLAY_WAIT | S_PLAY_OUT => self.play_data(ctx),
-            _ => {}
+            State::SaveName => self.save_name(ctx),
+            State::SaveOver => self.save_overwrite(ctx),
+            State::Play | State::PlayWait | State::PlayOut => self.play_data(ctx),
+            State::Practice | State::ScoreLoad | State::Spell => {}
         }
         if std::mem::take(&mut self.flush) {
             ctx.sound_update();
+        }
+    }
+
+    // Exit (16 §2.1 state 2, §2.4 exit): frame 1 Loading_Begin + interrupt 2, scene 1 after 20.
+    fn leave(&mut self, ctx: &mut Ctx) {
+        if self.frame == 1 {
+            ctx.w.game.loading_req = true;
+            self.interrupt_all(2);
+        }
+        if self.frame > 19 {
+            ctx.w.game.request(SceneId::Menu);
+        }
+    }
+
+    // State 3, Result_CheatUnlock 0x4550FC (16 §2.4); the hidden code runs every frame, sub-state 0 included.
+    fn diff_page(&mut self, ctx: &mut Ctx) {
+        // The code steps after the page input; a confirm / cancel call returns before it (16 §2.4).
+        match self.page(ctx, 4, 5, self.rank_diff, 6) {
+            Some(true) => {
+                ctx.w.sound.play(sound::OK);
+                self.rank_diff = self.cursor;
+                self.set_state(State::Char);
+                self.cursor = 0;
+            }
+            Some(false) => {
+                self.rank_diff = self.cursor;
+                self.set_state(State::Top);
+                self.cursor = 0;
+            }
+            None => {
+                if self.hidden.step(ctx.w.input) {
+                    hidden_unlock(&mut ctx.w.game);
+                    ctx.w.sound.play(sound::EXTEND);
+                }
+            }
+        }
+    }
+
+    // State 4 (0x45567D).
+    fn char_page(&mut self, ctx: &mut Ctx) {
+        match self.page(ctx, 15, 12, self.rank_shot, 6) {
+            Some(true) => {
+                ctx.w.sound.play(sound::OK);
+                self.vms[VM_ANCHOR].pending_interrupt = 3;
+                self.rank_shot = -1;
+                self.set_state(State::Rank);
+            }
+            Some(false) => {
+                self.rank_shot = self.cursor;
+                for vm in &mut self.vms[15..27] {
+                    vm.pending_interrupt = 1;
+                }
+                self.set_state(State::Diff);
+            }
+            None => {}
+        }
+    }
+
+    // State 6 (0x455A33).
+    fn group_page(&mut self, ctx: &mut Ctx) {
+        match self.page(ctx, 9, 6, self.card_group, 6) {
+            Some(true) => {
+                ctx.w.sound.play(sound::OK);
+                self.card_group = self.cursor;
+                self.set_state(State::CardChar);
+            }
+            Some(false) => {
+                self.card_group = self.cursor;
+                self.set_state(State::Top);
+                self.cursor = 1;
+            }
+            None => {}
+        }
+    }
+
+    // State 7 (0x455CB0).
+    fn card_char_page(&mut self, ctx: &mut Ctx) {
+        match self.page(ctx, 27, 13, self.card_char, 6) {
+            Some(true) => {
+                ctx.w.sound.play(sound::OK);
+                self.card_char = self.cursor;
+                self.set_state(State::Cards);
+                self.vms[VM_ANCHOR].pending_interrupt = 3;
+                self.cursor = 0;
+                self.card_page = -1;
+            }
+            Some(false) => {
+                self.card_char = self.cursor;
+                for vm in &mut self.vms[27..40] {
+                    vm.pending_interrupt = 1;
+                }
+                self.set_state(State::Group);
+            }
+            None => {}
+        }
+    }
+
+    // State 0xF, Result_EndBanner 0x4577E2 (16 §2.1): VM 71 interrupt 18 on every call with frame ≤ 30, each
+    // restarting its fade, so the panel fades in over frames 30–60; after 90 frames Shot/Enter → state 0x10.
+    fn panel(&mut self, inp: Input) {
+        if self.frame <= 30 {
+            self.vms[VM_PANEL].pending_interrupt = 18;
+        }
+        if self.frame >= 90 && inp.pressed(SHOT | ENTER) {
+            self.vms[VM_PANEL].pending_interrupt = 2;
+            self.set_state(State::PanelOut);
+        }
+    }
+
+    // State 0x10: after 30 frames → state 10 with frame counter 9 (16 §2.1).
+    fn panel_out(&mut self) {
+        if self.frame >= 30 {
+            self.set_state(State::Save);
+            self.frame = 9;
+        }
+    }
+
+    // State 11: the "cannot save" message, left from frame 20 (16 §2.6).
+    fn save_msg(&mut self, ctx: &mut Ctx) {
+        let inp = ctx.w.input;
+        if self.frame >= 20 && (inp.pressed(CONFIRM) || inp.pressed(CANCEL)) {
+            self.leave_save(&mut ctx.w.sound);
         }
     }
 
@@ -491,24 +559,24 @@ impl ResultScreen {
             Some(true) => match self.cursor {
                 0 => {
                     ctx.w.sound.play(sound::OK);
-                    self.set_state(S_DIFF);
+                    self.set_state(State::Diff);
                 }
                 1 => {
                     ctx.w.sound.play(sound::OK);
-                    self.set_state(S_GROUP);
+                    self.set_state(State::Group);
                 }
                 2 => {
                     ctx.w.sound.play(sound::OK);
-                    self.set_state(S_PLAY);
+                    self.set_state(State::Play);
                 }
                 _ => {
                     ctx.w.sound.play(sound::CANCEL);
-                    self.set_state(S_LEAVE);
+                    self.set_state(State::Leave);
                 }
             },
             Some(false) => {
                 if self.cursor == 3 {
-                    self.set_state(S_LEAVE);
+                    self.set_state(State::Leave);
                 } else {
                     // Cancel off item 3 does not return (16 §2.4): a confirm edge in the same call exits via item 3.
                     self.cursor = 3;
@@ -516,7 +584,7 @@ impl ResultScreen {
                     if ctx.w.input.pressed(CONFIRM) {
                         self.confirm_vms(0, 4);
                         ctx.w.sound.play(sound::CANCEL);
-                        self.set_state(S_LEAVE);
+                        self.set_state(State::Leave);
                     }
                 }
             }
@@ -536,35 +604,33 @@ impl ResultScreen {
         // Result_CursorLeftRight 0x45A2F2.
         let d = if inp.pressed_or_repeat(LEFT) {
             -1
-        } else if inp.pressed_or_repeat(RIGHT) {
-            1
         } else {
-            0
+            i32::from(inp.pressed_or_repeat(RIGHT))
         };
         if d != 0 {
             let old = self.cursor;
             self.cursor = (self.cursor + d).rem_euclid(12);
             ctx.w.sound.play(sound::SELECT);
             self.frame = 0;
-            self.vms[VM_ANCHOR].pending_interrupt = (3 + self.rank_diff) as u16;
-            self.vms[15 + old as usize].pending_interrupt = 24;
-            self.vms[15 + self.cursor as usize].pending_interrupt = 25;
+            self.vms[VM_ANCHOR].pending_interrupt = lo16(3 + self.rank_diff);
+            self.vms[15 + table_index(old)].pending_interrupt = 24;
+            self.vms[15 + table_index(self.cursor)].pending_interrupt = 25;
         }
         if inp.pressed(CANCEL) {
             self.rank_shot = self.cursor;
             self.vms[VM_ANCHOR].pending_interrupt = 1;
             ctx.w.sound.play(sound::CANCEL);
-            self.set_state(S_CHAR);
+            self.set_state(State::Char);
         }
     }
 
     // State 8 (0x455F6B): card list of group +0x48 for character +0x30, 10 cards per page (+0x1C).
     fn cards(&mut self, ctx: &mut Ctx) {
         let ids = group_cards(self.card_group);
-        let n = ids.len() as i32;
+        let n = int(ids.len());
         if self.card_leaving && self.frame > 9 {
             self.card_leaving = false;
-            self.set_state(S_CARD_CHAR);
+            self.set_state(State::CardChar);
             return;
         }
         if self.frame == 10
@@ -573,7 +639,7 @@ impl ResultScreen {
             self.card_page = self.cursor;
             self.card_built_char = self.card_char;
             for k in 0..10 {
-                let idx = (self.cursor * 10 + k) as usize;
+                let idx = table_index(self.cursor * 10 + k);
                 let Some(&id) = ids.get(idx) else { break };
                 let c = &ctx.w.game.score.catk[id];
                 let s = if c.counters[C_ATTEMPTS][12] != 0 {
@@ -581,11 +647,12 @@ impl ResultScreen {
                 } else {
                     sjis::encode(UNKNOWN5)
                 };
-                self.render(ctx, k as usize, s);
+                self.render(ctx, table_index(k), s);
             }
             let s = format!(
                 "{:3}/{:3}（キャラ切り替え↓↑）",
-                self.captured[self.card_group as usize][self.card_built_char as usize], n
+                self.captured[table_index(self.card_group)][table_index(self.card_built_char)],
+                n
             );
             self.render(ctx, 10, sjis::encode(&s));
         }
@@ -595,10 +662,8 @@ impl ResultScreen {
         let inp = ctx.w.input;
         let lr = if inp.pressed_or_repeat(LEFT) {
             -1
-        } else if inp.pressed_or_repeat(RIGHT) {
-            1
         } else {
-            0
+            i32::from(inp.pressed_or_repeat(RIGHT))
         };
         if lr != 0 {
             self.cursor = (self.cursor + lr).rem_euclid((n + 9) / 10);
@@ -609,10 +674,8 @@ impl ResultScreen {
             // Result_CursorUpDown2 0x45A1F3 on +0x30: Up first, then Down, SE 12 (16 §2.4).
             let ud = if inp.pressed_or_repeat(UP) {
                 -1
-            } else if inp.pressed_or_repeat(DOWN) {
-                1
             } else {
-                0
+                i32::from(inp.pressed_or_repeat(DOWN))
             };
             if ud != 0 {
                 let old = self.card_char;
@@ -620,8 +683,8 @@ impl ResultScreen {
                 ctx.w.sound.play(sound::SELECT);
                 self.frame = 0;
                 self.accordion = true;
-                self.vms[27 + old as usize].pending_interrupt = 24;
-                self.vms[27 + self.card_char as usize].pending_interrupt = 25;
+                self.vms[27 + table_index(old)].pending_interrupt = 24;
+                self.vms[27 + table_index(self.card_char)].pending_interrupt = 25;
             }
         }
         if inp.pressed(CANCEL) {
@@ -636,7 +699,7 @@ impl ResultScreen {
     // 60 frames), fade out over 20 frames, then back to state 1 in the same frame.
     fn play_data(&mut self, ctx: &mut Ctx) {
         match self.state {
-            S_PLAY => {
+            State::Play => {
                 if self.frame == 1 {
                     ctx.w.game.update_run_time(ctx.host.ticks_ms());
                     for k in 0..19 {
@@ -651,13 +714,13 @@ impl ResultScreen {
                     }
                 }
                 if self.frame < 40 {
-                    self.set_play_alpha((self.frame * 255 / 40) as u8);
+                    self.set_play_alpha(lo8(self.frame * 255 / 40));
                 } else {
                     // Alpha stays at 39·255/40; the frame counter is not reset.
-                    self.state = S_PLAY_WAIT;
+                    self.state = State::PlayWait;
                 }
             }
-            S_PLAY_WAIT => {
+            State::PlayWait => {
                 if self.frame % 60 == 0 {
                     ctx.w.game.update_run_time(ctx.host.ticks_ms());
                     if ctx.w.game.score.plst.run_time[2] != self.run_secs {
@@ -667,14 +730,14 @@ impl ResultScreen {
                     }
                 }
                 if ctx.w.input.pressed(SHOT | BOMB | PAUSE | ENTER) {
-                    self.set_state(S_PLAY_OUT);
+                    self.set_state(State::PlayOut);
                 }
             }
             _ => {
                 // Byte arithmetic: −1 − f·255/20.
-                self.set_play_alpha((255 - self.frame * 255 / 20) as u8);
+                self.set_play_alpha(lo8(255 - self.frame * 255 / 20));
                 if self.frame > 19 {
-                    self.set_state(S_INIT);
+                    self.set_state(State::Init);
                     self.calc_state(ctx);
                 }
             }
@@ -731,7 +794,7 @@ impl ResultScreen {
         let mut end = false;
         if rep(SHOT | ENTER) {
             if c < CELL_SP {
-                self.type_char(CHARSET[c as usize], &mut ctx.w.sound);
+                self.type_char(CHARSET[table_index(c)], &mut ctx.w.sound);
             } else if c == CELL_SP {
                 self.type_char(b' ', &mut ctx.w.sound);
             } else {
@@ -741,9 +804,9 @@ impl ResultScreen {
         }
         // Backspace (16 §2.2): name[min(pos, 7)] = ' ', pos −= 1, name[pos] = ' '.
         if rep(BOMB | PAUSE) && self.name_pos > 0 {
-            self.name[self.name_pos.min(7) as usize] = b' ';
+            self.name[table_index(self.name_pos.min(7))] = b' ';
             self.name_pos -= 1;
-            self.name[self.name_pos as usize] = b' ';
+            self.name[table_index(self.name_pos)] = b' ';
             ctx.w.sound.play(sound::CANCEL);
         }
         NameKeys {
@@ -763,7 +826,7 @@ impl ResultScreen {
     // VM 50 (はい) / 51 (いいえ) RGB: 0xFF6060 on the cursor, 0x606060 off; alpha kept (16 §2.6 states 10 and 14).
     fn yes_no_colours(&mut self) {
         for (k, vm) in self.vms[50..52].iter_mut().enumerate() {
-            let v = if k as i32 == self.cursor {
+            let v = if int(k) == self.cursor {
                 [0xFF, 0x60, 0x60]
             } else {
                 [0x60; 3]
@@ -783,7 +846,7 @@ impl ResultScreen {
     // SE 11, state 2, all VMs interrupt 2 (16 §2.6).
     fn leave_save(&mut self, sound: &mut crate::sound::Queue) {
         sound.play(sound::CANCEL);
-        self.set_state(S_LEAVE);
+        self.set_state(State::Leave);
         self.interrupt_all(2);
     }
 
@@ -808,7 +871,7 @@ impl ResultScreen {
             self.cursor = 0;
             // State 11 by a direct write: frame kept (10), and the rest of this call still runs (16 §2.6, RE-Q56).
             if i != 0xB {
-                self.state = S_SAVE_MSG;
+                self.state = State::SaveMsg;
             }
         }
         self.yes_no_colours();
@@ -844,7 +907,7 @@ impl ResultScreen {
         ver: &crate::scoredat::VerList,
         host: &mut dyn crate::host::Host,
     ) {
-        self.set_state(S_SAVE_SLOT);
+        self.set_state(State::SaveSlot);
         host.mkdir("replay");
         // A missing or failed file leaves the entry as it was: empty, or the previous read on re-entry.
         self.slots.resize(15, (false, None));
@@ -869,10 +932,8 @@ impl ResultScreen {
         }
         let d = if inp.pressed_or_repeat(UP) {
             -1
-        } else if inp.pressed_or_repeat(DOWN) {
-            1
         } else {
-            0
+            i32::from(inp.pressed_or_repeat(DOWN))
         };
         if d != 0 {
             self.cursor = (self.cursor + d).rem_euclid(15);
@@ -883,11 +944,15 @@ impl ResultScreen {
         if inp.pressed(CONFIRM) {
             sound.play(sound::OK);
             self.entry_date = now.date_md();
-            self.entry_score = g.stats.score10.clamp(0, 999_999_999) as u32;
-            let valid = self.slots.get(self.slot as usize).is_some_and(|s| s.0);
+            self.entry_score = score_u32(g.stats.score10);
+            let valid = self.slots.get(table_index(self.slot)).is_some_and(|s| s.0);
             self.interrupt_all(if valid { 13 } else { 17 });
-            self.vms[56 + self.slot as usize].pending_interrupt = 16;
-            self.set_state(if valid { S_SAVE_OVER } else { S_SAVE_NAME });
+            self.vms[56 + table_index(self.slot)].pending_interrupt = 16;
+            self.set_state(if valid {
+                State::SaveOver
+            } else {
+                State::SaveName
+            });
             // Name pos +0x1C := 0 (the same field as the cursor), char cursor on END if LSNM was loaded.
             self.cursor = 0;
             self.name_pos = 0;
@@ -895,7 +960,7 @@ impl ResultScreen {
         }
         if inp.pressed(CANCEL) {
             sound.play(sound::CANCEL);
-            self.set_state(S_SAVE);
+            self.set_state(State::Save);
             self.interrupt_all(2);
         }
     }
@@ -915,8 +980,8 @@ impl ResultScreen {
             self.frame = 0;
             if self.cursor == 0 {
                 self.interrupt_all(17);
-                self.vms[56 + self.slot as usize].pending_interrupt = 16;
-                self.set_state(S_SAVE_NAME);
+                self.vms[56 + table_index(self.slot)].pending_interrupt = 16;
+                self.set_state(State::SaveName);
             } else {
                 self.back_to_list(&mut ctx.w.sound, &ctx.w.game.ver_list, &mut *ctx.host);
             }
@@ -931,11 +996,11 @@ impl ResultScreen {
         let k = self.edit_name(ctx);
         if k.end {
             let name = self.name;
-            crate::replay::save(ctx, self.slot as usize + 1, &name);
+            crate::replay::save(ctx, table_index(self.slot) + 1, &name);
             let l = &mut ctx.w.game.score.lsnm;
             l.fill(0);
             l[..8].copy_from_slice(&name);
-            self.set_state(S_LEAVE);
+            self.set_state(State::Leave);
             self.interrupt_all(2);
         } else if k.esc {
             self.back_to_list(&mut ctx.w.sound, &ctx.w.game.ver_list, &mut *ctx.host);
@@ -946,7 +1011,7 @@ impl ResultScreen {
 
     // name[min(pos, 7)] = ch; pos < 8 → pos += 1; at 8 the cursor jumps to END; SE 10 (16 §2.2).
     fn type_char(&mut self, ch: u8, sound: &mut crate::sound::Queue) {
-        self.name[self.name_pos.min(7) as usize] = ch;
+        self.name[table_index(self.name_pos.min(7))] = ch;
         if self.name_pos < 8 {
             self.name_pos += 1;
             if self.name_pos == 8 {
@@ -958,7 +1023,7 @@ impl ResultScreen {
 
     // VM 71's interrupt 18 is written by state 0xF itself (16 §2.1).
     fn enter_panel(&mut self) {
-        self.set_state(S_PANEL);
+        self.set_state(State::Panel);
     }
 
     // Frame 0 of state 9: the HSCR entry from the in-game record (16 §2.2, 15 §2.3). False = no entry.
@@ -966,8 +1031,8 @@ impl ResultScreen {
         let now = ctx.host.local_time();
         let g = &mut ctx.w.game;
         let shot = (g.shot as usize + g.demo_shot_bias as usize) % 12;
-        let d = g.difficulty.clamp(0, 4) as usize;
-        (self.rank_shot, self.rank_diff) = (shot as i32, d as i32);
+        let d = table_index(g.difficulty.clamp(0, 4));
+        (self.rank_shot, self.rank_diff) = (int(shot), int(d));
         // Slow mode skips the entry (16 §2.1). The cfg copy's slow byte is 0 for Extra (15 §2.9).
         // The skip is tested first on every call: no interrupt d + 3 is sent (16 §2.1, §2.2).
         if g.cfg.slow != 0 && g.difficulty < 4 {
@@ -988,7 +1053,7 @@ impl ResultScreen {
         };
         let lsnm = g.score.lsnm;
         h.set(
-            st.score10.clamp(0, 999_999_999) as u32,
+            score_u32(st.score10),
             shot as u8,
             d as u8,
             stage,
@@ -999,13 +1064,13 @@ impl ResultScreen {
         h.0[0x28..0x64].copy_from_slice(&g.cfg_bytes());
         h.put_u32(0x64, r.frames);
         h.put_u32(0x68, r.points);
-        h.put_u32(0x70, st.deaths.max(0) as u32);
+        h.put_u32(0x70, st.deaths.max(0).cast_unsigned());
         h.put_u32(0x74, r.bombs);
         h.put_u32(0x78, r.last_spells);
         h.put_u32(0x7C, r.pauses);
-        h.put_u32(0x80, r.orbs as u32);
-        let rate = (r.human as u64 * 10000)
-            .checked_div(r.total as u64)
+        h.put_u32(0x80, r.orbs.cast_unsigned());
+        let rate = (u64::from(r.human) * 10000)
+            .checked_div(u64::from(r.total))
             .unwrap_or(0);
         h.put_u32(0x84, rate as u32);
         h.0[0x88..0x88 + CARDS].copy_from_slice(&g.rec_cards[..CARDS]);
@@ -1034,32 +1099,31 @@ impl ResultScreen {
         if a[0] >= 640.0 || self.rank_shot < 0 {
             return;
         }
-        let list = ctx
-            .w
-            .game
-            .score
-            .ranking(self.rank_shot as usize, self.rank_diff.clamp(0, 4) as usize);
+        let list = ctx.w.game.score.ranking(
+            table_index(self.rank_shot),
+            table_index(self.rank_diff.clamp(0, 4)),
+        );
         put(
             ctx,
             a[0] + 24.0,
             a[1] + 18.0,
             "No  Name       Score(Stage)   Date   Slow",
-            0xFFE0E0EF,
+            0xFFE0_E0EF,
         );
         for (i, e) in list.iter().enumerate() {
             let y = a[1] + 36.0 + 18.0 * i as f32;
             let mut x = a[0] + 24.0;
             let new = e.0[9] != 0;
-            let col = match (self.state == S_NAME, new) {
-                (true, true) => 0xFFF0F0FF,
-                (true, false) => 0xC0FFC0C0,
-                _ => 0xFFFFC0C0,
+            let col = match (self.state == State::Name, new) {
+                (true, true) => 0xFFF0_F0FF,
+                (true, false) => 0xC0FF_C0C0,
+                _ => 0xFFFF_C0C0,
             };
             put(ctx, x, y, format!("{:2}", i + 1), col);
             x += 48.0;
-            if self.state == S_NAME && new {
+            if self.state == State::Name && new {
                 let mut u = [b' '; 8];
-                u[self.name_pos.min(7) as usize] = b'_';
+                u[table_index(self.name_pos.min(7))] = b'_';
                 put(ctx, x, y, String::from_utf8_lossy(&u).into_owned(), col);
             }
             let stage = if e.stage() >= 99 {
@@ -1099,15 +1163,15 @@ impl ResultScreen {
             let ch = match cell {
                 CELL_SP => '\u{80}',
                 CELL_END => '\u{81}',
-                _ => CHARSET[cell as usize] as char,
+                _ => CHARSET[table_index(cell)] as char,
             };
-            let mut t = Text::new(x, y, ch.to_string()).argb(0xC0C0C0C0);
+            let mut t = Text::new(x, y, ch.to_string()).argb(0xC0C0_C0C0);
             if cell == self.char_cursor {
                 let m = (f % 32) as f32 * 0.8 / 32.0;
                 let s = if f % 64 < 32 { 1.2 + m } else { 2.0 - m };
                 let o = (s - 1.0) * 8.0;
                 t = Text::new(x - o, y - o, ch.to_string())
-                    .argb(0xFFFFFFC0)
+                    .argb(0xFFFF_FFC0)
                     .scale(s);
             }
             ctx.w.ascii.push(t);
@@ -1125,9 +1189,9 @@ impl ResultScreen {
         // QUIRK: no colour is set for the header; it keeps the one left by the previous text: white, or in state 13
         // the last grid cell's (END), as the grid is drawn first.
         let header = match self.state {
-            S_SAVE_NAME if self.char_cursor == CELL_END => 0xFFFFFFC0,
-            S_SAVE_NAME => 0xC0C0C0C0,
-            _ => 0xFFFFFFFF,
+            State::SaveName if self.char_cursor == CELL_END => 0xFFFF_FFC0,
+            State::SaveName => 0xC0C0_C0C0,
+            _ => 0xFFFF_FFFF,
         };
         let h = self.vms[55].pos;
         put(
@@ -1142,18 +1206,18 @@ impl ResultScreen {
         let names = &crate::menulist::CHARS;
         for i in 0..15 {
             let p = self.vms[56 + i].pos;
-            let col = if i as i32 == self.slot {
-                0xFFFF8080
+            let col = if int(i) == self.slot {
+                0xFFFF_8080
             } else {
-                0xFF808080
+                0xFF80_8080
             };
-            let row = if self.state == S_SAVE_NAME {
+            let row = if self.state == State::SaveName {
                 String::from_utf8_lossy(&self.name).into_owned()
             } else {
                 String::new()
             };
             let line = match self.slots.get(i) {
-                _ if self.state == S_SAVE_NAME => format!(
+                _ if self.state == State::SaveName => format!(
                     "No.{:02} {row:>8} {:>5}  {:>7} {:9}0",
                     i + 1,
                     self.entry_date,
@@ -1171,15 +1235,15 @@ impl ResultScreen {
                 _ => format!("No.{:02} -------- --/--  -------          0", i + 1),
             };
             put(ctx, p[0], p[1], line, col);
-            if self.state == S_SAVE_NAME {
+            if self.state == State::SaveName {
                 let mut u = [b' '; 8];
-                u[self.name_pos.min(7) as usize] = b'_';
+                u[table_index(self.name_pos.min(7))] = b'_';
                 put(
                     ctx,
                     p[0],
                     p[1],
                     format!("      {}", String::from_utf8_lossy(&u)),
-                    0xFFF0F0FF,
+                    0xFFF0_F0FF,
                 );
             }
         }
@@ -1192,11 +1256,11 @@ impl ResultScreen {
         let (x, mut y) = (vm.pos[0] + 210.0, vm.pos[1] + 32.0);
         let g = &ctx.w.game;
         let st = &g.stats;
-        let d = g.difficulty.clamp(0, 4) as usize;
+        let d = table_index(g.difficulty.clamp(0, 4));
         let progress = if g.flags & F_ENDING_OK != 0 {
             "      100%".to_string()
         } else {
-            let t = if d >= 4 { 80000.0 } else { 195559.0 };
+            let t = if d >= 4 { 80_000.0 } else { 195_559.0 };
             format!("    {:.2}%", (st.rec.progress as f32 / t).min(0.99) * 100.0)
         };
         let lines = [
@@ -1231,16 +1295,16 @@ impl ResultScreen {
         if self.frame > 19 {
             self.accordion = false;
         }
-        let s = self.card_built_char.clamp(0, 12) as usize;
+        let s = table_index(self.card_built_char.clamp(0, 12));
         for (i, id, x, y) in self.card_layout() {
             let c = &ctx.w.game.score.catk[id];
             let (att, cap) = (c.counters[C_ATTEMPTS][s], c.counters[C_CAPTURES][s]);
             let col = if att == 0 {
-                0xC0C0C0FF
+                0xC0C0_C0FF
             } else if cap == 0 {
-                0xFFC0A0A0
+                0xFFC0_A0A0
             } else {
-                0xFFF0F0FFu32 - i as u32 * 0x0008_0800
+                0xFFF0_F0FF_u32 - i.cast_unsigned() * 0x0008_0800
             };
             let base = if id < 205 { 0 } else { C_PRACTICE };
             let (pa, pc) = (
@@ -1262,7 +1326,7 @@ impl ResultScreen {
             if let Some(b) = bonus {
                 ctx.w.ascii.push(
                     Text::new(x + 424.0, y - 13.0, format!("MaxBonus {b:8}"))
-                        .argb(0xFFA08090)
+                        .argb(0xFFA0_8090)
                         .scale(0.8),
                 );
             }
@@ -1277,7 +1341,7 @@ impl ResultScreen {
         let f = self.frame;
         let mut rows = Vec::new();
         for i in 0..10 {
-            let idx = (self.card_page * 10 + i) as usize;
+            let idx = table_index(self.card_page * 10 + i);
             let Some(&id) = ids.get(idx) else { break };
             rows.push((i, id, x, y));
             y += if !self.accordion {
@@ -1303,7 +1367,7 @@ impl ResultScreen {
             bar.scale = [2.375, 1.0];
             bar.flags |= anmvm::F_SCALE_DIRTY;
             emit_at(ctx, rec, &bar, x + 320.0, y + 16.0);
-            emit_at(ctx, rec, &self.text_vms[i as usize], x + 78.0, y);
+            emit_at(ctx, rec, &self.text_vms[table_index(i)], x + 78.0, y);
         }
     }
 }
@@ -1356,7 +1420,7 @@ impl ResultScreen {
         // Captured counts +0x64 per group and character: CATK present (v3) and a story or practice capture (16 §2.4).
         let catk = &ctx.w.game.score.catk;
         for g in 0..6 {
-            for id in group_cards(g as i32) {
+            for id in group_cards(int(g)) {
                 let c = &catk[id];
                 if !c.present {
                     continue;
@@ -1391,7 +1455,7 @@ impl ResultScreen {
     pub(crate) fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.calc_state(ctx);
         // Session tool hook.
-        ctx.w.game.trace_result = Some(self.state);
+        ctx.w.game.trace_result = Some(self.state as i32);
         // 16 §2.4 exit: state 2 at frame > 19 returns 0 before the VMs and frame += 1, so Result_OnRemove (score.dat
         // save, 2 RNG draws) runs in this calc pass.
         if exits(self.state, self.frame) {
@@ -1422,17 +1486,17 @@ impl ResultScreen {
             vm.pos = p;
         }
         match self.state {
-            S_CARDS => self.draw_cards(ctx),
+            State::Cards => self.draw_cards(ctx),
             _ => self.draw_ranking(ctx),
         }
-        if matches!(self.state, S_PANEL | S_PANEL_OUT) {
+        if matches!(self.state, State::Panel | State::PanelOut) {
             self.draw_panel(ctx);
         }
         // The grid comes before the save dialogue (16 §2.6 header colour).
-        if matches!(self.state, S_NAME | S_SAVE_NAME) {
+        if matches!(self.state, State::Name | State::SaveName) {
             self.draw_grid(ctx);
         }
-        if (S_SAVE..=S_SAVE_OVER).contains(&self.state) {
+        if self.state.is_save() {
             self.draw_save(ctx);
         }
         Ret::Next
@@ -1453,15 +1517,15 @@ impl ResultScreen {
             }
             ctx.w.anm.emit(rec, &vm);
         }
-        if self.state == S_CARDS {
+        if self.state == State::Cards {
             self.emit_cards(ctx, rec);
         }
-        if matches!(self.state, S_PLAY | S_PLAY_WAIT | S_PLAY_OUT) {
+        if self.state.is_play() {
             for vm in &self.text_vms[..20] {
                 ctx.w.anm.emit_mode(rec, vm, 0);
             }
         }
-        if (S_SAVE..=S_SAVE_OVER).contains(&self.state) {
+        if self.state.is_save() {
             for vm in &self.vms[49..55] {
                 ctx.w.anm.emit(rec, vm);
             }
@@ -1483,7 +1547,7 @@ fn read_slot(
 // Name-entry cursor (16 §2.2): Up, Down, Left, Right are four independent tests in that order, each skipping the
 // space cell and playing SE 12, so Up+Down held both move. Keys are [up, down, left, right]; returns (cursor, moves).
 fn move_char_cursor(mut c: i32, keys: [bool; 4]) -> (i32, u32) {
-    let space = |c: i32| CHARSET[c as usize] == b' ';
+    let space = |c: i32| CHARSET[table_index(c)] == b' ';
     let mut moves = 0;
     for (k, held) in keys.into_iter().enumerate() {
         if !held {
@@ -1546,10 +1610,10 @@ impl HiddenCode {
 // Effect of the hidden code (15 §2.12): every CLRD mask := 0xFFFF; in all 222 CATK records (magic or not) the 13
 // story attempt counters (+0x124) += 1. QUIRK: no 9999 cap and no checksum update. SE by the caller.
 fn hidden_unlock(g: &mut gamemgr::Game) {
-    for m in g.clear_nc.iter_mut().chain(g.clear_any.iter_mut()) {
+    for m in g.clear_nc.iter_mut().chain(&mut g.clear_any) {
         *m = [0xFFFF; 5];
     }
-    for c in g.score.catk.iter_mut() {
+    for c in &mut g.score.catk {
         for a in &mut c.counters[C_ATTEMPTS] {
             *a = a.wrapping_add(1);
         }
@@ -1609,19 +1673,27 @@ fn d02(v: i32) -> String {
     }
 }
 
-// `Result_DumpScoreTxt` 0x454298 (16 §2.7): the Shift-JIS, CR LF text of the in-memory records. `stamp` is the
-// local time as "%y/%m/%d %H:%M:%S"; the play-data block reads PLST as it is (the caller updates the run time).
-pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
-    let mut out = Vec::new();
-    let sj = |o: &mut Vec<u8>, t: &str| o.extend_from_slice(&encoding_rs::SHIFT_JIS.encode(t).0);
-    let line = |o: &mut Vec<u8>, t: &str| {
-        sj(o, t);
-        o.extend_from_slice(b"\r\n");
-    };
-    // Card names: CATK +0x10 (raw Shift-JIS) or 5 full-width ?; padded with spaces to 48 bytes.
+fn txt_sj(o: &mut Vec<u8>, t: &str) {
+    o.extend_from_slice(&encoding_rs::SHIFT_JIS.encode(t).0);
+}
+
+fn txt_line(o: &mut Vec<u8>, t: &str) {
+    txt_sj(o, t);
+    o.extend_from_slice(b"\r\n");
+}
+
+fn hscr_i32(h: &Hscr, o: usize) -> i32 {
+    i32::from_le_bytes(h.0[o..o + 4].try_into().unwrap())
+}
+
+fn cstr(b: &[u8]) -> Vec<u8> {
+    b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())].to_vec()
+}
+
+// Card names: CATK +0x10 (raw Shift-JIS) or 5 full-width ?; padded with spaces to 48 bytes.
+fn txt_card_names(s: &crate::scoredat::ScoreDat) -> Vec<Vec<u8>> {
     let unknown = encoding_rs::SHIFT_JIS.encode(UNKNOWN5).0.into_owned();
-    let names: Vec<Vec<u8>> = s
-        .catk
+    s.catk
         .iter()
         .map(|c| {
             let mut n = if c.present {
@@ -1635,10 +1707,129 @@ pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
             }
             n
         })
-        .collect();
-    let i32_at = |h: &Hscr, o: usize| i32::from_le_bytes(h.0[o..o + 4].try_into().unwrap());
-    let cstr = |b: &[u8]| b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())].to_vec();
+        .collect()
+}
 
+// One ranking entry (rank n) of the score.txt per-difficulty block (16 §2.7).
+fn txt_entry(
+    buf: &mut Vec<u8>,
+    s: &crate::scoredat::ScoreDat,
+    names: &[Vec<u8>],
+    n: usize,
+    h: &Hscr,
+) {
+    let b = &h.0;
+    let cont = b[0x26].cast_signed();
+    txt_line(buf, &format!("  No.{} ", n + 1));
+    txt_line(buf, &format!("    得点  {}{}", hscr_i32(h, 0x0C), cont));
+    txt_sj(buf, "    名前  ");
+    buf.extend(cstr(&b[0x17..0x20]));
+    buf.extend_from_slice(b"\r\n");
+    let stage = match h.stage() {
+        99 => "All Clear".to_string(),
+        st => TXT_STAGES
+            .get(usize::from(st))
+            .map_or_else(|| st.to_string(), ToString::to_string),
+    };
+    txt_line(buf, &format!("    ステージ         {stage}"));
+    txt_sj(buf, "    日付               ");
+    buf.extend(cstr(&b[0x20..0x26]));
+    buf.extend_from_slice(b"\r\n");
+    txt_line(buf, &format!("    処理落ち率        {:.2}％", h.slowdown()));
+    let frames = hscr_i32(h, 0x64);
+    txt_line(
+        buf,
+        &format!(
+            "    プレイ時間      {}分{}秒",
+            d02(frames / 3600),
+            d02(frames / 60 % 60)
+        ),
+    );
+    txt_line(
+        buf,
+        &format!("    初期プレイヤー数     {}人", i32::from(b[0x44]) + 1),
+    );
+    txt_line(
+        buf,
+        &format!("    得点アイテム数   {:5}個", hscr_i32(h, 0x68)),
+    );
+    txt_line(
+        buf,
+        &format!("    刻符数          {:6}個", hscr_i32(h, 0x80)),
+    );
+    txt_line(
+        buf,
+        &format!("    ミス回数           {:3}回", hscr_i32(h, 0x70)),
+    );
+    txt_line(
+        buf,
+        &format!("    ボム回数           {:3}回", hscr_i32(h, 0x74)),
+    );
+    txt_line(
+        buf,
+        &format!("    ラストスペル回数   {:3}回", hscr_i32(h, 0x78)),
+    );
+    txt_line(
+        buf,
+        &format!("    ポーズ回数         {:3}回", hscr_i32(h, 0x7C)),
+    );
+    txt_line(buf, &format!("    コンティニュー回数 {cont:3}回"));
+    txt_line(
+        buf,
+        &format!(
+            "    人間率          {:3.2}%",
+            f64::from(hscr_i32(h, 0x84)) / 100.0
+        ),
+    );
+    txt_line(buf, "    取得スペルカード一覧 (総取得回数/総遭遇回数)");
+    for (i, c) in s.catk.iter().enumerate() {
+        if b[0x88 + i] == 0 {
+            continue;
+        }
+        // All-shot story totals from CATK, not this entry's.
+        txt_sj(buf, &format!("      No.{:03} ", i + 1));
+        buf.extend(&names[i]);
+        let (cap, att) = (c.counters[C_CAPTURES][12], c.counters[C_ATTEMPTS][12]);
+        txt_line(
+            buf,
+            &format!(" ({}/{})", cap.cast_signed(), att.cast_signed()),
+        );
+    }
+}
+
+// The score.txt spell-card block: story and practice totals of every card met (16 §2.7).
+fn txt_cards(out: &mut Vec<u8>, s: &crate::scoredat::ScoreDat, names: &[Vec<u8>]) {
+    txt_line(out, TXT_RULE);
+    txt_line(out, "スペルカード一覧 本編　練習");
+    for (i, c) in s.catk.iter().enumerate() {
+        let k = &c.counters;
+        if !c.present || (k[C_ATTEMPTS][12] == 0 && k[C_PRACTICE + C_ATTEMPTS][12] == 0) {
+            continue;
+        }
+        txt_sj(out, &format!("No.{:03} ", i + 1));
+        out.extend(&names[i]);
+        let diff = TXT_DIFFS
+            .get(usize::from(c.difficulty))
+            .copied()
+            .unwrap_or("");
+        txt_line(
+            out,
+            &format!(
+                " {:3}/{:3} {:3}/{:3}  ({diff})",
+                k[C_CAPTURES][12].cast_signed(),
+                k[C_ATTEMPTS][12].cast_signed(),
+                k[C_PRACTICE + C_CAPTURES][12].cast_signed(),
+                k[C_PRACTICE + C_ATTEMPTS][12].cast_signed(),
+            ),
+        );
+    }
+}
+
+// `Result_DumpScoreTxt` 0x454298 (16 §2.7): the Shift-JIS, CR LF text of the in-memory records. `stamp` is the
+// local time as "%y/%m/%d %H:%M:%S"; the play-data block reads PLST as it is (the caller updates the run time).
+pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let names = txt_card_names(s);
     for t in [
         "# 東方永夜抄　～ Imperishable Night. ver 1.00d 記録テキスト版",
         "# ",
@@ -1646,113 +1837,36 @@ pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
         "# このファイルの内容を変更してもゲームには反映されません。",
         "# このファイルは自由に利用したり転載したり、別のフォーマットにしても構いません。",
     ] {
-        line(&mut out, t);
+        txt_line(&mut out, t);
     }
-    line(
+    txt_line(
         &mut out,
         &format!("# {}   Time-stamp: <{stamp}>", "　".repeat(12)),
     );
-    line(&mut out, "");
-    line(&mut out, "");
-    line(&mut out, &format!("Version: {:.2}", 0.01));
-    line(&mut out, "");
+    txt_line(&mut out, "");
+    txt_line(&mut out, "");
+    txt_line(&mut out, &format!("Version: {:.2}", 0.01));
+    txt_line(&mut out, "");
 
-    for d in 0..5 {
+    for (d, diff) in TXT_DIFFS.iter().enumerate() {
         let mut first = true;
         for shot in 0..12 {
             let mut buf = Vec::new();
             // Default entries carry no HSCR magic: skipped, but they count in n.
             for (n, h) in s.ranking(shot, d).iter().enumerate() {
-                if h.is_placeholder() {
-                    continue;
-                }
-                let b = &h.0;
-                let cont = b[0x26] as i8;
-                line(&mut buf, &format!("  No.{} ", n + 1));
-                line(&mut buf, &format!("    得点  {}{}", i32_at(h, 0x0C), cont));
-                sj(&mut buf, "    名前  ");
-                buf.extend(cstr(&b[0x17..0x20]));
-                buf.extend_from_slice(b"\r\n");
-                let stage = match h.stage() {
-                    99 => "All Clear".to_string(),
-                    st => TXT_STAGES
-                        .get(st as usize)
-                        .map_or_else(|| st.to_string(), |n| n.to_string()),
-                };
-                line(&mut buf, &format!("    ステージ         {stage}"));
-                sj(&mut buf, "    日付               ");
-                buf.extend(cstr(&b[0x20..0x26]));
-                buf.extend_from_slice(b"\r\n");
-                line(
-                    &mut buf,
-                    &format!("    処理落ち率        {:.2}％", h.slowdown()),
-                );
-                let frames = i32_at(h, 0x64);
-                line(
-                    &mut buf,
-                    &format!(
-                        "    プレイ時間      {}分{}秒",
-                        d02(frames / 3600),
-                        d02(frames / 60 % 60)
-                    ),
-                );
-                line(
-                    &mut buf,
-                    &format!("    初期プレイヤー数     {}人", b[0x44] as i32 + 1),
-                );
-                line(
-                    &mut buf,
-                    &format!("    得点アイテム数   {:5}個", i32_at(h, 0x68)),
-                );
-                line(
-                    &mut buf,
-                    &format!("    刻符数          {:6}個", i32_at(h, 0x80)),
-                );
-                line(
-                    &mut buf,
-                    &format!("    ミス回数           {:3}回", i32_at(h, 0x70)),
-                );
-                line(
-                    &mut buf,
-                    &format!("    ボム回数           {:3}回", i32_at(h, 0x74)),
-                );
-                line(
-                    &mut buf,
-                    &format!("    ラストスペル回数   {:3}回", i32_at(h, 0x78)),
-                );
-                line(
-                    &mut buf,
-                    &format!("    ポーズ回数         {:3}回", i32_at(h, 0x7C)),
-                );
-                line(&mut buf, &format!("    コンティニュー回数 {cont:3}回"));
-                line(
-                    &mut buf,
-                    &format!(
-                        "    人間率          {:3.2}%",
-                        i32_at(h, 0x84) as f64 / 100.0
-                    ),
-                );
-                line(&mut buf, "    取得スペルカード一覧 (総取得回数/総遭遇回数)");
-                for (i, c) in s.catk.iter().enumerate() {
-                    if b[0x88 + i] == 0 {
-                        continue;
-                    }
-                    // All-shot story totals from CATK, not this entry's.
-                    sj(&mut buf, &format!("      No.{:03} ", i + 1));
-                    buf.extend(&names[i]);
-                    let (cap, att) = (c.counters[C_CAPTURES][12], c.counters[C_ATTEMPTS][12]);
-                    line(&mut buf, &format!(" ({}/{})", cap as i32, att as i32));
+                if !h.is_placeholder() {
+                    txt_entry(&mut buf, s, &names, n, h);
                 }
             }
             if buf.is_empty() {
                 continue;
             }
             if std::mem::take(&mut first) {
-                line(&mut out, TXT_RULE);
-                line(&mut out, &format!("難易度 {}", TXT_DIFFS[d]));
+                txt_line(&mut out, TXT_RULE);
+                txt_line(&mut out, &format!("難易度 {diff}"));
             }
-            line(&mut out, "# ---------------------------------------- ");
-            line(
+            txt_line(&mut out, "# ---------------------------------------- ");
+            txt_line(
                 &mut out,
                 &format!("使用キャラ {}", crate::menulist::SHOT_NAMES[shot]),
             );
@@ -1761,31 +1875,10 @@ pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
         }
     }
 
-    line(&mut out, TXT_RULE);
-    line(&mut out, "スペルカード一覧 本編　練習");
-    for (i, c) in s.catk.iter().enumerate() {
-        let k = &c.counters;
-        if !c.present || (k[C_ATTEMPTS][12] == 0 && k[C_PRACTICE + C_ATTEMPTS][12] == 0) {
-            continue;
-        }
-        sj(&mut out, &format!("No.{:03} ", i + 1));
-        out.extend(&names[i]);
-        let diff = TXT_DIFFS.get(c.difficulty as usize).copied().unwrap_or("");
-        line(
-            &mut out,
-            &format!(
-                " {:3}/{:3} {:3}/{:3}  ({diff})",
-                k[C_CAPTURES][12] as i32,
-                k[C_ATTEMPTS][12] as i32,
-                k[C_PRACTICE + C_CAPTURES][12] as i32,
-                k[C_PRACTICE + C_ATTEMPTS][12] as i32,
-            ),
-        );
-    }
-
-    line(&mut out, TXT_RULE);
+    txt_cards(&mut out, s, &names);
+    txt_line(&mut out, TXT_RULE);
     for k in 0..19 {
-        line(&mut out, &play_line(&s.plst, k, 6));
+        txt_line(&mut out, &play_line(&s.plst, k, 6));
     }
     out
 }
@@ -1793,6 +1886,7 @@ pub fn score_txt(s: &crate::scoredat::ScoreDat, stamp: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::LocalTime;
 
     // Text commands carry Shift-JIS; every port literal must round-trip so the raster sees the same characters.
     fn round_trips(s: &str) {
@@ -1811,9 +1905,9 @@ mod tests {
     #[test]
     fn register_practice_state() {
         for (flags, st) in [
-            (0, S_NAME),
-            (gamemgr::F_PRACTICE, S_SAVE),
-            (gamemgr::F_SPELL_PRACTICE, S_SAVE),
+            (0, State::Name),
+            (gamemgr::F_PRACTICE, State::Save),
+            (gamemgr::F_SPELL_PRACTICE, State::Save),
         ] {
             let mut g = gamemgr::Game::default();
             g.flags = flags;
@@ -1831,26 +1925,26 @@ mod tests {
         let mut r = ResultScreen::new(1);
         r.vms = vec![AnmVm::default(); VM_COUNT];
         r.text_vms = vec![AnmVm::default(); 28];
-        r.state = S_SAVE;
+        r.state = State::Save;
         r.frame = 10;
         r.save_ask(
             Input::default(),
             &g,
-            &mut Default::default(),
+            &mut crate::sound::Queue::default(),
             &mut crate::host::MemHost::default(),
         );
-        assert_eq!((r.state, r.frame), (S_SAVE_MSG, 10));
+        assert_eq!((r.state, r.frame), (State::SaveMsg, 10));
     }
 
     // 16 §2.4 exit: Result_Calc returns 0 for state 2 at frame > 19 only.
     #[test]
     fn calc_exit_states() {
-        assert!(!exits(S_LEAVE, 19));
-        assert!(exits(S_LEAVE, 20));
-        for st in [S_PRACTICE, 0x12, S_SPELL, S_SAVE] {
+        assert!(!exits(State::Leave, 19));
+        assert!(exits(State::Leave, 20));
+        for st in [State::Practice, State::ScoreLoad, State::Spell, State::Save] {
             assert!(!exits(st, 20));
         }
-        assert!(!exits(S_TOP, 20));
+        assert!(!exits(State::Top, 20));
     }
 
     // 15 §2.12: Right ×4, Left, D ×2, Q ×3 as edge presses while Focus (or Skip) is held.
@@ -1861,11 +1955,11 @@ mod tests {
             let mut fired = 0;
             for &k in keys {
                 for (held, prev) in [(mods | k, mods), (mods, mods | k)] {
-                    fired += c.step(Input {
+                    fired += u32::from(c.step(Input {
                         held,
                         prev,
                         ..Default::default()
-                    }) as u32;
+                    }));
                 }
             }
             fired
@@ -1992,7 +2086,7 @@ mod tests {
     // Screenshots of these frames: tools-bound `drawreport::tests::result_shots` (TH08_RESULT_SHOTS).
     #[test]
     fn game_over_name_entry_saves() {
-        let Some(mut ctx) = crate::testdata::ctx(Default::default()) else {
+        let Some(mut ctx) = crate::testdata::ctx(crate::coreconfig::CoreConfig::default()) else {
             return;
         };
         ctx.w.game.persist = true;
@@ -2010,7 +2104,7 @@ mod tests {
         let (mut k, mut over, mut seen_result) = (0u32, 0u32, false);
         for _ in 0..60_000 {
             let g = &ctx.w.game;
-            let key = if g.scene == gamemgr::SCENE_RESULT {
+            let key = if g.scene == SceneId::Result {
                 seen_result = true;
                 k += 1;
                 keys.iter()
@@ -2025,13 +2119,13 @@ mod tests {
                 }
                 over += 1;
                 if over % 40 == 39 { SHOT } else { 0 }
-            } else if g.scene == gamemgr::SCENE_GAME {
+            } else if g.scene == SceneId::Game {
                 SHOT
             } else {
                 0
             };
             crate::testdata::mem_host(&mut ctx).keys[0] = key;
-            if seen_result && ctx.w.game.scene == gamemgr::SCENE_MENU {
+            if seen_result && ctx.w.game.scene == SceneId::Menu {
                 break;
             }
             ctx.calc();
@@ -2039,7 +2133,7 @@ mod tests {
             ctx.present();
         }
         assert!(
-            seen_result && ctx.w.game.scene == gamemgr::SCENE_MENU,
+            seen_result && ctx.w.game.scene == SceneId::Menu,
             "no result screen / no return"
         );
         let h = ctx
@@ -2070,10 +2164,10 @@ mod tests {
         // The viewer (mode 0): top → difficulty (Normal) → character 0 → ranking.
         let mut k = 0;
         for _ in 0..400 {
-            if ctx.w.game.scene == gamemgr::SCENE_MENU && ctx.w.game.menu_loading == 0 && k == 0 {
-                ctx.w.game.request(gamemgr::SCENE_RESULT_MENU);
+            if ctx.w.game.scene == SceneId::Menu && ctx.w.game.menu_loading == 0 && k == 0 {
+                ctx.w.game.request(SceneId::ResultMenu);
             }
-            if ctx.w.game.scene == gamemgr::SCENE_RESULT_MENU {
+            if ctx.w.game.scene == SceneId::ResultMenu {
                 k += 1;
             }
             crate::testdata::mem_host(&mut ctx).keys[0] =
@@ -2103,10 +2197,10 @@ mod tests {
             held: SHOT,
             ..Default::default()
         };
-        r.set_state(S_SAVE);
+        r.set_state(State::Save);
         r.frame = 12;
-        r.save_ask(confirm, &g, &mut Default::default(), &mut host);
-        assert_eq!((r.state, r.frame), (S_SAVE_SLOT, 0));
+        r.save_ask(confirm, &g, &mut crate::sound::Queue::default(), &mut host);
+        assert_eq!((r.state, r.frame), (State::SaveSlot, 0));
         assert!(r.flush);
         assert!(r.vms.iter().all(|v| v.pending_interrupt == 12));
         r.frame = 20;
@@ -2114,8 +2208,13 @@ mod tests {
             held: SHOT | BOMB,
             ..Default::default()
         };
-        r.save_slot(both, &g, &mut Default::default(), Default::default());
-        assert_eq!((r.state, r.frame), (S_SAVE, 0));
+        r.save_slot(
+            both,
+            &g,
+            &mut crate::sound::Queue::default(),
+            LocalTime::default(),
+        );
+        assert_eq!((r.state, r.frame), (State::Save, 0));
         assert!(r.vms.iter().all(|v| v.pending_interrupt == 2));
         assert_eq!(r.char_cursor, 0);
     }
@@ -2136,10 +2235,10 @@ mod tests {
             ..Default::default()
         };
         // Result_Calc order: state, then frame += 1.
-        r.set_state(S_SAVE);
+        r.set_state(State::Save);
         r.frame = 12;
-        r.save_ask(confirm, &g, &mut Default::default(), &mut host);
-        assert_eq!(r.state, S_SAVE_SLOT);
+        r.save_ask(confirm, &g, &mut crate::sound::Queue::default(), &mut host);
+        assert_eq!(r.state, State::SaveSlot);
         assert_eq!(r.slots.len(), 15);
         assert!(r.slots.iter().all(|e| !e.0));
         r.frame += 1;
@@ -2147,13 +2246,18 @@ mod tests {
             r.save_slot(
                 Input::default(),
                 &g,
-                &mut Default::default(),
-                Default::default(),
+                &mut crate::sound::Queue::default(),
+                LocalTime::default(),
             );
             r.frame += 1;
         }
-        r.save_slot(confirm, &g, &mut Default::default(), Default::default());
-        assert_eq!((r.state, r.slot), (S_SAVE_NAME, 0));
+        r.save_slot(
+            confirm,
+            &g,
+            &mut crate::sound::Queue::default(),
+            LocalTime::default(),
+        );
+        assert_eq!((r.state, r.slot), (State::SaveName, 0));
         assert_eq!(r.vms[56].pending_interrupt, 16);
     }
 

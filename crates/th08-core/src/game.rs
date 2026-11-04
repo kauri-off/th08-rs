@@ -5,6 +5,7 @@ use crate::assets::Source;
 use crate::content::LogicView;
 use crate::drawlist::{FULLSCREEN, Recorder, Renderer};
 use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
+use crate::types::SceneId;
 use anyhow::Context as _;
 
 // The original's globals that every subsystem reaches: the deterministic state in `w` (World, ARCH_A §2.3); the
@@ -426,7 +427,7 @@ impl Ctx {
     // Frame_Run second half (00 §2); Frame_Run only checks the calc runner's result. The draw chain runs when the
     // counter reaches cfg +0x23 (so 0 and 1 both draw every frame); Present follows either way.
     pub fn draw(&mut self) {
-        if self.w.init_presents > 0 && self.w.game.scene == crate::gamemgr::SCENE_BOOT {
+        if self.w.init_presents > 0 && self.w.game.scene == SceneId::Boot {
             self.w.init_presents -= 1;
             self.rec.set_viewport(FULLSCREEN);
             self.rec.clear_depth(Some([0, 0, 0, 255]));
@@ -523,8 +524,8 @@ impl Ctx {
         self.w.game.load_score(Some(&score), now);
         // Step 3: scene +0x158 := 0; the original's request −1 (switch to the menu on the first calc) is the port's
         // boot request of Supervisor_Init; +0x160 stays until the boot → menu switch writes it.
-        self.w.game.scene = crate::gamemgr::SCENE_BOOT;
-        self.w.game.requested = crate::gamemgr::SCENE_BOOT;
+        self.w.game.scene = SceneId::Boot;
+        self.w.game.requested = SceneId::Boot;
         crate::supervisor::register(self)
     }
 
@@ -532,7 +533,7 @@ impl Ctx {
     fn log_frame(&mut self) {
         let recs = self.renderer.take_log(&mut self.rec);
         let g = &self.w.game;
-        let game_frame = if g.scene == crate::gamemgr::SCENE_GAME {
+        let game_frame = if g.scene == SceneId::Game {
             g.frame_counter
         } else {
             0
@@ -541,14 +542,14 @@ impl Ctx {
             .has(crate::gamemgr::GameFlags::DEMO)
             .then_some((g.demo, g.demo_frame));
 
-        let input = if g.scene == crate::gamemgr::SCENE_GAME {
+        let input = if g.scene == SceneId::Game {
             self.w.input.game[0]
         } else {
             self.w.input.held
         };
         let scene = g.scene;
         if let Some(w) = &mut self.drawlog {
-            w.frame(scene, game_frame, demo, input, &recs);
+            w.frame(scene as i32, game_frame, demo, input, &recs);
         }
     }
 
@@ -584,7 +585,7 @@ impl Ctx {
 
 #[cfg(test)]
 mod tests {
-    use crate::gamemgr::{SCENE_BOOT, SCENE_MENU};
+    use crate::types::SceneId;
 
     fn ctx() -> Option<super::Ctx> {
         crate::testdata::ctx(crate::coreconfig::CoreConfig::default())
@@ -597,14 +598,15 @@ mod tests {
             return;
         };
         let to_menu = |c: &mut super::Ctx| {
-            (0..2000)
-                .any(|_| c.run_frame().eq(&super::Flow::Continue) && c.w.game.scene == SCENE_MENU)
+            (0..2000).any(|_| {
+                c.run_frame().eq(&super::Flow::Continue) && c.w.game.scene == SceneId::Menu
+            })
         };
         assert!(to_menu(&mut c));
         c.w.game.cfg.windowed ^= 1;
         let mode = c.w.game.cfg.windowed;
         c.restart().unwrap();
-        assert_eq!(c.w.game.scene, SCENE_BOOT);
+        assert_eq!(c.w.game.scene, SceneId::Boot);
         assert!(to_menu(&mut c));
         assert_eq!(c.w.game.cfg.windowed, mode);
     }
@@ -624,7 +626,7 @@ mod tests {
             assert!(c.rec.draws.is_empty());
             c.present();
         }
-        assert_eq!(c.w.game.scene, SCENE_MENU);
+        assert_eq!(c.w.game.scene, SceneId::Menu);
     }
 
     // 13 §3: a screen effect queued in a fast-forward pass is linked before the restarted pass.
