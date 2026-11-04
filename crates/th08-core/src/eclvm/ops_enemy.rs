@@ -9,7 +9,7 @@ use crate::enemy::{
 use crate::types::EnemyIdx;
 use th08_formats::ecl::{Arg, EnemyOp, SpawnKind};
 
-// Effect VM colour2 flag (bit 17) := `on` (07 §7 ops 80/81, §10.5 aura).
+// Effect VM colour2 flag (bit 17) := `on` (ops 80/81, aura).
 fn set_color2(vm: &mut AnmVm, on: bool) {
     vm.flags = (vm.flags & !anmvm::F_COLOR2) | if on { anmvm::F_COLOR2 } else { 0 };
 }
@@ -26,7 +26,7 @@ impl Exec<'_> {
                 self.e.set_flag_b(B_STAGE_ANM, stg);
                 let base = self.ai(t, base);
                 self.e.dir_scripts = [0, 1, 2, 3, 4, 5].map(|k| base + k);
-                // Stored through 0x421DE0, which also sets the current direction e+0x332E := -1 (07 §9.3).
+                // Stored through 0x421DE0, which also sets the current direction e+0x332E := -1.
                 self.e.dir = -1;
             }
             EnemyOp::AnmDir6 { scripts, stg } => {
@@ -93,7 +93,7 @@ impl Exec<'_> {
         }
     }
 
-    // Ops 147–183 that write one field or post one request (07 §7).
+    // Ops 147–183 that write one field or post one request.
     fn op_enemy_misc(&mut self, t: &Thread, op: EnemyOp) {
         match op {
             // Stage section request (06 §4.1).
@@ -103,7 +103,7 @@ impl Exec<'_> {
                     s.section_request = n;
                 }
             }
-            // HUD 0x423130(n); the 0x164D30C += 1800 happens in the HUD request handler (07 §7 op 148).
+            // HUD 0x423130(n); the 0x164D30C += 1800 happens in the HUD request handler.
             EnemyOp::Hud148(n) => {
                 self.m.g.hud_bars = self.ai(t, n);
                 self.m.g.hud_requests.push(148);
@@ -152,7 +152,7 @@ impl Exec<'_> {
             EnemyOp::SetHudLife(n) => self.e.hud_life = self.ai(t, n),
             EnemyOp::NightClockShow => self.m.g.hud_requests.push(179),
             EnemyOp::NightClockHide => self.m.g.hud_requests.push(180),
-            // Only below 12: at 12 nothing at all, not even the sfx 0x2D (07 §7).
+            // Only below 12: at 12 nothing at all, not even the sfx 0x2D.
             EnemyOp::Extend181 => {
                 let p = crate::pl!(self.sys);
                 if p.stats.clock < 12 {
@@ -165,7 +165,7 @@ impl Exec<'_> {
         }
     }
 
-    // Op 79: absolute flag set from the mask bits (07 §7).
+    // Op 79: absolute flag set from the mask bits.
     fn flags_set(&mut self, t: &Thread, m: Arg) {
         let m = self.ai(t, m);
         let e = &mut *self.e;
@@ -177,7 +177,7 @@ impl Exec<'_> {
         e.set_flag_b(B_CANNOT_DIE, m & 32 != 0);
     }
 
-    // Ops 80 / 81: only the flags selected by the mask (07 §7).
+    // Ops 80 / 81: only the flags selected by the mask.
     fn flags_on_off(&mut self, t: &Thread, m: Arg, on: bool) {
         let m = self.ai(t, m);
         let e = &mut *self.e;
@@ -186,7 +186,7 @@ impl Exec<'_> {
         }
         if m & 2 != 0 {
             e.set_flag(A_CONTACT, on);
-            // The aura VM's colour2 flag (bit 17) follows contact damage (07 §7 ops 80/81).
+            // The aura VM's colour2 flag (bit 17) follows contact damage.
             self.sys.fx.get(e.fx_aura, |x| set_color2(&mut x.vm, on));
         }
         if m & 4 != 0 {
@@ -204,7 +204,7 @@ impl Exec<'_> {
     }
 
     // Op 128: effect 13 (0xFF6060D0) kept in e+0x5360[] and updated every frame (follow, grow to d, spin).
-    // 07 §5 op 128, 13 §2.6b: a, b, c, d are copied raw (mask ignored, d = f32 bits into e+0x53C4) and
+    // 13 §2.6b: a, b, c, d are copied raw (mask ignored, d = f32 bits into e+0x53C4) and
     // the effect spawns at the base pos e+0x2D34, not the final pos.
     fn effect13(&mut self, axis: [f32; 3], radius: f32) {
         self.e.effects += 1;
@@ -219,7 +219,7 @@ impl Exec<'_> {
         }
     }
 
-    // Ops 139 / 140 / 174 (07 §7).
+    // Ops 139 / 140 / 174.
     fn effect(&mut self, t: &Thread, op: EnemyOp) {
         self.e.effects += 1;
         match op {
@@ -262,7 +262,7 @@ impl Exec<'_> {
                     self.e.final_pos,
                     0xFFFF_FFFF,
                 );
-                // Interrupt (player mode ≠ 0) + 1; odd slot negates VM +0x14; colour2 untouched (07 §7 op 174).
+                // Interrupt (player mode ≠ 0) + 1; odd slot negates VM +0x14; colour2 untouched.
                 let interrupt = u16::from(self.m.g.player_mode != 0) + 1;
                 let odd = self.e.slot & 1 != 0;
                 self.sys.fx.get(self.e.fx_aura, |x| {
@@ -277,7 +277,7 @@ impl Exec<'_> {
     }
 
     // --- ANM ---
-    // Main VM script from enemy.anm or stgNenm.anm by flags B bit 2 (07 §7 ops 54/58/62, §9.3 direction scripts);
+    // Main VM script from enemy.anm or stgNenm.anm by flags B bit 2 (ops 54/58/62);
     // started the AnmFile_SetScript way, so VM pos and pos offset are kept.
     pub(super) fn start_main(&mut self, script: i32) {
         let slot = self.e.anm_slot();
@@ -289,7 +289,7 @@ impl Exec<'_> {
             .file_set_script(self.sys.rng, &mut self.e.vm, slot, script);
     }
 
-    // Ops 57/61: script < 0 disables the sub VM; else AnmFile_SetScript (pos / pos offset kept, 07 §7).
+    // Ops 57/61: script < 0 disables the sub VM; else AnmFile_SetScript (pos / pos offset kept).
     fn start_sub(&mut self, k: usize, script: i32) {
         let slot = self.e.anm_slot();
         let Some(vm) = self.e.sub_vms.get_mut(k) else {
@@ -301,13 +301,13 @@ impl Exec<'_> {
         }
     }
 
-    // --- spawning (ops 90–94, 07 §4.1 / §10.5) ---
+    // --- spawning (ops 90–94) ---
     fn spawn_child(&mut self, t: &Thread, op: EnemyOp) {
         let EnemyOp::Spawn { kind, .. } = op else {
             return;
         };
         if kind.chained() {
-            // 07 §10.5: fails (manager flag) if the parent's life < 1 or it is being chain-killed, tested before
+            // Fails (manager flag) if the parent's life < 1 or it is being chain-killed, tested before
             // any argument is read; SE 0x24 at the spawner pos plays after the spawn block either way.
             if self.e.life < 1 || self.e.flags & A_CHAIN_KILLED != 0 {
                 self.m.full = true;
@@ -316,7 +316,7 @@ impl Exec<'_> {
             }
             self.sys.sound.play_at(crate::sound::OPTION, self.e.pos[0]);
         } else if self.e.life > 0 {
-            // Ops 93/94 (07 op table): nothing at all while the spawner's life ≤ 0, before any argument read.
+            // Ops 93/94: nothing at all while the spawner's life ≤ 0, before any argument read.
             self.spawn_block(t, op);
         }
     }
@@ -346,14 +346,14 @@ impl Exec<'_> {
         let score = self.ai(t, score);
         let chained = kind.chained();
         let follow = kind == SpawnKind::ChildFollow;
-        // 07 §10.5: ops 90/92 spawn at (x, y, 0) as given; op 92's follow offset is written after the spawn run.
+        // Ops 90/92 spawn at (x, y, 0) as given; op 92's follow offset is written after the spawn run.
         let pos = match kind {
             SpawnKind::ChildRel => [self.e.final_pos[0] + x, self.e.final_pos[1] + y, 0.0],
             SpawnKind::SpawnRel => [self.e.pos[0] + x, self.e.pos[1] + y, self.e.pos[2] + z],
             SpawnKind::Spawn => [x, y, z],
             SpawnKind::Child | SpawnKind::ChildFollow => [x, y, 0.0],
         };
-        // 07 §10.5: the tail is looked up before the spawn. A chain root (no parent) links after its last child;
+        // The tail is looked up before the spawn. A chain root (no parent) links after its last child;
         // a chained child links after itself, overwriting its own +8 (the rest of the chain is cut off).
         let tail = if chained && self.m.enemies[self.idx].root.is_none() {
             let mut last = EnemyIdx::from_slot(self.idx);
@@ -373,7 +373,7 @@ impl Exec<'_> {
             return;
         };
         // 07 §4.1 step 3: the 30 variable dwords of the spawning context.
-        // Ops 90–92 never write the mode bits e+0x3330 (07 §10.5): the spawn-time run sees 0, so both human-
+        // Ops 90–92 never write the mode bits e+0x3330: the spawn-time run sees 0, so both human-
         // and youkai-masked time-0 instructions run; Enemy_ReactPlayerMode sets them at the first step 3.
         self.m.enemies[ci].main.ctx.vars = t.ctx.vars;
         let youkai = self.m.g.player_mode != 0;
@@ -388,13 +388,13 @@ impl Exec<'_> {
         self.link_child(ci, tail, youkai, follow);
     }
 
-    // 07 §10.5: applied after the spawn-time Ecl_Run, overriding the child's own time-0 ops.
+    // Applied after the spawn-time Ecl_Run, overriding the child's own time-0 ops.
     fn link_child(&mut self, ci: usize, tail: EnemyIdx, youkai: bool, follow: bool) {
         let c = &mut self.m.enemies[ci];
         c.flags |= A_MODE_REACT;
         c.set_flag(A_YOUKAI, youkai);
         c.layer = if youkai { 0 } else { 2 };
-        // Op 92 (07 §10.5): follow offset := parent pos and final pos, after the run, so time 0 saw neither.
+        // Op 92: follow offset := parent pos and final pos, after the run, so time 0 saw neither.
         if follow {
             c.pos_offset = self.e.pos;
             c.final_pos = add3(c.pos_offset, c.pos);
@@ -419,11 +419,11 @@ impl Exec<'_> {
             });
             c.fx_aura = fx;
         }
-        // Op 92: bit 9 (follow) after the aura, before the link (07 §10.5).
+        // Op 92: bit 9 (follow) after the aura, before the link.
         if follow {
             c.flags |= A_FOLLOW;
         }
-        // The chain link is written last (07 §10.5): during the spawn-time run the child has no parent.
+        // The chain link is written last: during the spawn-time run the child has no parent.
         c.root = Some(EnemyIdx::from_slot(self.idx));
         c.chain_prev = Some(tail);
         self.m.enemies[tail].chain_next = Some(EnemyIdx::from_slot(ci));
@@ -441,7 +441,7 @@ impl Exec<'_> {
             .spawn(self.anm, self.sys.rng, p, pos, kind, 0);
     }
 
-    // Ops 142 / 168 (07 §7): offsets Rng·128 − 64 on x then y; 142 below full power: first type 2, rest 0.
+    // Ops 142 / 168: offsets Rng·128 − 64 on x then y; 142 below full power: first type 2, rest 0.
     fn item_burst(&mut self, n: i32, all_one: bool) {
         let p = self.e.pos;
         let low = crate::pl!(self.sys).stats.power < 128.0;

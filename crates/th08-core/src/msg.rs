@@ -8,11 +8,11 @@ use crate::types::{D3dColor, lo8};
 use th08_formats::msg::Op;
 use th08_formats::sjis::SjisString;
 
-// ANM slots of the portrait files face[0..3] (10 §3); text.anm is slot 0 (10 §6).
+// ANM slots of the portrait files face[0..3]; text.anm is slot 0 (10 §6).
 pub const FACE_SLOTS: [usize; 4] = [16, 17, 18, 19];
 pub const TEXT_SLOT: usize = 0;
 
-// Msg file per stage index 0–8 and team (10 §1).
+// Msg file per stage index 0–8 and team.
 const FILES: [[&str; 4]; 9] = [
     ["msg1a", "msg1b", "msg1c", "msg1d"],
     ["msg2a", "msg2b", "msg2c", "msg2d"],
@@ -25,7 +25,7 @@ const FILES: [[&str; 4]; 9] = [
     ["msg8a", "msg8b", "msg8c", "msg8d"],
 ];
 
-// Table 0x4C74C0: solos use their team's file (10 §1).
+// Table 0x4C74C0: solos use their team's file.
 pub fn file_name(stage: usize, shot: u8) -> String {
     format!(
         "{}.dat",
@@ -33,7 +33,7 @@ pub fn file_name(stage: usize, shot: u8) -> String {
     )
 }
 
-// Gui_LoadFaces (10 §3): player A, partner, stage face, second stage face. `card` is the practised card id in
+// Gui_LoadFaces: player A, partner, stage face, second stage face. `card` is the practised card id in
 // spell practice: player slots stay empty and slot 18 gets the `…sp` cut-in file (Ex: none for other cards).
 pub fn face_files(stage: usize, shot: u8, card: Option<i16>) -> [Option<String>; 4] {
     let face = |s: &str| Some(format!("face_{s}.anm"));
@@ -91,15 +91,15 @@ pub fn face_files(stage: usize, shot: u8, card: Option<i16>) -> [Option<String>;
 
 pub use th08_formats::msg::{Ins, MsgError, MsgFile, MsgOff, parse};
 
-// i16 face / line / speaker argument as an index. Negatives map to ≥ 0x8000 instead of the old sign-extended
-// `as usize`: both fail every `< 4` test and clamp alike under `min` (10 §5.1), so the results are the same.
+// i16 face / line / speaker argument as an index: negatives map to ≥ 0x8000, which fails every `< 4` test and
+// clamps under `min` the same as the original's sign extension.
 fn arg_index(v: i16) -> usize {
     usize::from(v.cast_unsigned())
 }
 
-// Things the HUD / game manager must do after a Msg_Run (10 §5.1).
-// Bgm op 7, BgmFade op 12, Flash op 14, StageEnd op 9, HaltFinal op 11, Route = GM flags bits 11–12 (ops 21/22,
-// 10 §4 step 3), Plate / SpellBase = entry-0 hooks (10 §4 step 2).
+// Things the HUD / game manager must do after a Msg_Run.
+// Bgm op 7, BgmFade op 12, Flash op 14, StageEnd op 9, HaltFinal op 11, Route = GM flags bits 11–12 (ops 21/22),
+// Plate / SpellBase = entry-0 hooks.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     Bgm(i32),
@@ -113,40 +113,40 @@ pub enum Event {
     SpellBase(usize),
 }
 
-// Facts Msg_Start needs about the running game (10 §4).
+// Facts Msg_Start needs about the running game.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StartInfo {
     pub stage: usize,
     pub shot: u8,
     // stats+0x29: 10 §4 step 3 calls it the practice flag, 16 §1 the continue count.
     pub continues: u8,
-    // Route byte of the replay header (replay+8 → +0x11C) during playback (10 §4 step 3).
+    // Route byte of the replay header (replay+8 → +0x11C) during playback.
     pub replay_route: Option<u8>,
-    // Clear-mask bits 6 (6A) / 7 (6B) over all four difficulties for this shot (10 §4 step 3).
+    // Clear-mask bits 6 (6A) / 7 (6B) over all four difficulties for this shot.
     pub cleared_6a: bool,
     pub cleared_6b: bool,
-    // Clock counter stats+0x28 (10 §4 step 4).
+    // Clock counter stats+0x28.
     pub clock: i32,
 }
 
-// Dialogue state at HudImpl+0x21814.. (10 §3); `Ctx.msg` (step 9e).
+// Dialogue state at HudImpl+0x21814..; `Ctx.msg`.
 #[derive(Clone)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "separate bytes +0x22D7C.. / +0x22D84 of the original and one port-only hand-off, not a flag word"
 )]
 pub struct Dialogue {
-    // The stage's .msg file (10 §2), shared immutable data.
+    // The stage's .msg file, shared immutable data.
     pub file: Option<std::sync::Arc<MsgFile>>,
     pub info: StartInfo,
     // Portrait file per face index; 6B / Extra swap slots 2 and 3 on entry 0 (Gui file pointers 0x4ECC9C ↔ 0x4ECCA0).
     pub face_slot: [usize; 4],
-    // Offset of the next instruction (10 §2).
+    // Offset of the next instruction.
     ip: MsgOff,
     // +0x2181C running entry, −1 = none; +0x21820 script clock (05 §2 Timer).
     pub entry: i32,
     pub clock: Timer,
-    // +0x2182C frames since the last text op; +0x21830 frames a wait must last before Shot advances it (6, then 8 or 30).
+    // +0x2182C frames since the last text op; +0x21830 minimum frames before Shot advances a wait (6, then 8 or 30).
     wait_count: i32,
     min_wait: i32,
     // face[k] +0x21834, line[l] +0x222C4 (text.anm strips), boss_card +0x2280C; VM +0x22AB0 is not modelled (unused).
@@ -156,7 +156,7 @@ pub struct Dialogue {
     // +0x22D54 per-speaker COLORREF as RGB; outline style +0x22D64 is always 0 and not stored.
     text_colour: [[u8; 3]; 4],
     pub font_size: usize,
-    // +0x22D78: op 6 increments, each Msg_Run decrements; Msg_IsBlocking needs 0 (10 §8.1).
+    // +0x22D78: op 6 increments, each Msg_Run decrements; Msg_IsBlocking needs 0.
     pub release_counter: i32,
     // +0x22D7C..+0x22D82: skippable, text_speaker, new_box, next_line, active_speaker (0xFF none), textbox, choice.
     skippable: bool,
@@ -248,7 +248,7 @@ impl Dialogue {
         self.active() && self.skippable
     }
 
-    // Msg_IsActive 0x4358BB / Msg_IsBlocking 0x43587E (10 §1).
+    // Msg_IsActive 0x4358BB / Msg_IsBlocking 0x43587E.
     pub fn active(&self) -> bool {
         self.file.is_some() && self.entry >= 0
     }
@@ -257,7 +257,7 @@ impl Dialogue {
         self.active() && self.release_counter == 0
     }
 
-    // Msg_Start (10 §4); the caller performs the playfield side effects (§4.6) when `side_effects` is set.
+    // Msg_Start; the caller performs the playfield side effects (10 §4.6) when `side_effects` is set.
     pub fn start(&mut self, n: i32) {
         let Some(file) = self.file.take() else { return };
         let (info, face_slot, events, texts) = (
@@ -276,7 +276,7 @@ impl Dialogue {
         };
         let mut n = n;
         if n == 0 {
-            // Entry 0 hooks (answers_impl10 §6).
+            // Entry 0 hooks.
             if matches!(info.stage, 7 | 8) {
                 self.face_slot.swap(2, 3);
             }
@@ -321,7 +321,7 @@ impl Dialogue {
         };
         self.entry = n;
         self.ip = ip;
-        // 10 §4 step 5: script index −1 makes the first line-1 clear a no-op; the other defaults come from Default.
+        // Script index −1 makes the first line-1 clear a no-op; the other defaults come from Default.
         self.lines.iter_mut().for_each(|l| l.script_index = -1);
         self.textbox = true;
         self.skippable = true;
@@ -330,7 +330,7 @@ impl Dialogue {
         self.side_effects = true;
     }
 
-    // Op 16 line VM at +0x222C4 + line·0x2A4 with no clamp (10 §5.1, RE-Q71): line 2 is boss_card (+0x2280C).
+    // Op 16 line VM at +0x222C4 + line·0x2A4 with no clamp: line 2 is boss_card (+0x2280C).
     // Line 3 (+0x22AB0, not modelled) never occurs: the data has at most three op-16 lines per box.
     pub fn line_vm(&self, line: usize) -> Option<&AnmVm> {
         match line {
@@ -372,7 +372,7 @@ impl Dialogue {
         }
     }
 
-    // Speaker highlight (10 §5.3).
+    // Speaker highlight.
     fn highlight(&mut self, who: u8) {
         if who >= 4 {
             return;
@@ -430,10 +430,10 @@ impl Dialogue {
         }
     }
 
-    // 10 §5.1 portrait ops 1, 2, 5, 8, 15, 17.
+    // Portrait ops 1, 2, 5, 8, 15, 17.
     fn exec_portrait(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, op: &Op) {
         match *op {
-            // Op 1. The pos_offset writes of ops 1/2 are omitted: they have no visible effect (10 §5.1 note).
+            // Op 1. The pos_offset writes of ops 1/2 are omitted: they have no visible effect.
             Op::FaceScript { face, script } => {
                 let k = arg_index(face);
                 if k < 4 && script >= 0 {
@@ -484,8 +484,8 @@ impl Dialogue {
         }
     }
 
-    // 10 §5.1 text ops 3, 13, 16, 18, 19, 20.
-    // Translation key of a text op: msg file, entry (lowest index with its offset), text-op number (I18N §2.3).
+    // Text ops 3, 13, 16, 18, 19, 20.
+    // Translation key of a text op: msg file, entry (lowest index with its offset), text-op number.
     fn text_key(&self, f: &MsgFile, ins: &Ins) -> TextRef {
         let name = file_name(self.info.stage, self.info.shot);
         let file = MSG_FILES
@@ -560,7 +560,7 @@ impl Dialogue {
         self.wait_count = 0;
     }
 
-    // 10 §5.1 flow ops 0, 4, 6, 7, 9–12, 14, 21, 22 and unknown opcodes.
+    // Flow ops 0, 4, 6, 7, 9–12, 14, 21, 22 and unknown opcodes.
     fn exec_flow(&mut self, inp: &Input, op: &Op) -> Exec {
         match *op {
             // Op 0.
@@ -568,7 +568,7 @@ impl Dialogue {
                 self.entry = -1;
                 return Exec::End;
             }
-            // Op 4 wait (10 §5.2): Skip advances at once; Shot after min_wait; else stall up to n frames, then time out.
+            // Op 4 wait: Skip advances at once; Shot after min_wait; else stall up to n frames, then time out.
             Op::Wait(n) => {
                 let skip = self.skippable && inp.down(input::SKIP);
                 if skip {
@@ -596,7 +596,7 @@ impl Dialogue {
             Op::Halt => return Exec::Stall,
             Op::HaltFinal => {
                 // Op 11 sets GM flags & ~0x60 | 0x40 every stalled frame (one event is enough), but only in stage idx
-                // 6–8; in stages 1–5 it only stalls like op 10 (10 §5).
+                // 6–8; in stages 1–5 it only stalls like op 10.
                 if matches!(self.info.stage, 6..=8) && !self.events.contains(&Event::HaltFinal) {
                     self.events.push(Event::HaltFinal);
                 }
@@ -607,7 +607,7 @@ impl Dialogue {
             // Op 14.
             Op::Flash => self.events.push(Event::Flash),
             Op::Choice(n) => {
-                // Op 21 choice (10 §5.4): ignores Skip; Shot needs wait_count ≥ 60; timeout keeps the current choice.
+                // Op 21 choice: ignores Skip; Shot needs wait_count ≥ 60; timeout keeps the current choice.
                 let old = self.choice;
                 if inp.pressed(input::UP) {
                     self.choice = 0;
@@ -630,7 +630,7 @@ impl Dialogue {
                     self.min_wait = 30;
                 }
             }
-            // Op 22: Msg_Start(choice + 1) and the new entry runs in the same frame (10 §5.1).
+            // Op 22: Msg_Start(choice + 1) and the new entry runs in the same frame.
             Op::ChoiceJump => {
                 self.events.push(Event::Route(self.choice));
                 return Exec::Choice(self.choice);
@@ -641,7 +641,7 @@ impl Dialogue {
         Exec::Next
     }
 
-    // Msg_Run (10 §5); `dying` = player state 2. Returns true when items should be auto-collected.
+    // Msg_Run; `dying` = player state 2. Returns true when items should be auto-collected.
     pub fn run(
         &mut self,
         anm: &mut AnmManager,
@@ -656,7 +656,7 @@ impl Dialogue {
             self.release_counter -= 1;
         }
         let skip = self.skippable && inp.down(input::SKIP);
-        // Ctrl fast-forward: clock = time of the current instruction (10 §5).
+        // Ctrl fast-forward: clock = time of the current instruction.
         if skip && let Some(i) = self.file.as_ref().unwrap().ins(self.ip) {
             self.clock.set(i32::from(i.time));
         }
@@ -679,12 +679,12 @@ impl Dialogue {
                     stalled = true;
                     break;
                 }
-                // Op 0 returns at once: no clock tick and no VM run this frame (10 §5.1).
+                // Op 0 returns at once: no clock tick and no VM run this frame.
                 Exec::End => return !dying,
                 Exec::Choice(c) => self.start(i32::from(c) + 1),
             }
         }
-        // A stall leaves without ticking the clock, but the VMs still run (10 §5).
+        // A stall leaves without ticking the clock, but the VMs still run.
         if !stalled {
             self.clock.tick(anm.speed);
         }
@@ -714,7 +714,7 @@ pub fn argb(c: u32) -> [u8; 4] {
 mod tests {
     use super::*;
 
-    // 10 §3 face tables: normal per stage and team, spell practice by card id.
+    // Face tables: normal per stage and team, spell practice by card id.
     #[test]
     fn face_file_tables() {
         let f = |v: [Option<String>; 4]| v.map(Option::unwrap_or_default);
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(f.entries.len(), 2);
     }
 
-    // 10 §5 op 11: the game-clear trigger only in stage idx 6–8; elsewhere it only stalls like op 10.
+    // Op 11: the game-clear trigger only in stage idx 6–8; elsewhere it only stalls like op 10.
     #[test]
     fn halt_final_trigger_by_stage() {
         let mut rng = crate::rng::Rng::default();
@@ -800,7 +800,7 @@ mod tests {
         }
     }
 
-    // 10 §5.1 op 16 (RE-Q71): no clamp, so the third line of a box goes to boss_card (line index 2).
+    // Op 16: no clamp, so the third line of a box goes to boss_card (line index 2).
     #[test]
     fn op16_third_line_on_boss_card() {
         let mut rng = crate::rng::Rng::default();
@@ -865,7 +865,7 @@ mod tests {
         assert!(n < frames / 10, "skip: {n} frames vs {frames}");
     }
 
-    // Stage-5 entry 10 → Final A / B dialogue or the choice menu (10 §4 step 3).
+    // Stage-5 entry 10 → Final A / B dialogue or the choice menu.
     #[test]
     fn final_route_resolution() {
         let Some(ar) = crate::testdata::archive() else {

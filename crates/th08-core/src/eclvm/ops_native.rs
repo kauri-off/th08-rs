@@ -8,9 +8,9 @@ use crate::fmath;
 use crate::types::TWO_PI;
 use std::f32::consts::PI;
 
-// Bullet flag +0xDB0 0x100000 (07 §12 rows 16 / 27): marks bullets that natives 16 and 27 act on.
+// Bullet flag +0xDB0 0x100000: marks bullets that natives 16 and 27 act on.
 const BULLET_MARKED: u32 = 0x10_0000;
-// Screen-effect colour 0xFFFFFFFF passed as the i32 parameter (07 §12 rows 1 / 17, 13 §3).
+// Screen-effect colour 0xFFFFFFFF passed as the i32 parameter (natives 1 / 17, 13 §3).
 const WHITE: i32 = 0xFFFF_FFFF_u32.cast_signed();
 
 impl Exec<'_> {
@@ -20,7 +20,7 @@ impl Exec<'_> {
                 .sys
                 .ov
                 .set_darkness(t.ctx.int(V_INT0), t.ctx.flt(V_FLT0)),
-            // Screen flash / shake parameters (07 §12, 13 §3).
+            // Screen flash / shake parameters (13 §3).
             1 => self.sys.fx.screen(3, 60, 1, WHITE, 0, 0x15),
             17 => self.sys.fx.screen(3, 180, 1, WHITE, 0, 0x15),
             10 => {
@@ -37,21 +37,21 @@ impl Exec<'_> {
             }
             8 => self.familiar_ring(t),
             18 if arg != 0 => self.anm.speed = 1.0 / arg as f32,
-            // 07 §12 row 19: the spell-practice card id (i16 0x164D0B8, sign-extended), not the running Spell's id.
+            // Native 19: the spell-practice card id (i16 0x164D0B8, sign-extended), not the running Spell's id.
             19 => t.ctx.set_int(V_INT0, i32::from(self.m.g.card)),
-            // 07 §12 row 24: stats +0x1C, spell cards captured in this game (11 §5).
+            // Native 24: stats +0x1C, spell cards captured in this game (11 §5).
             24 => {
                 let n = crate::pl!(self.sys).stats.spells;
                 t.ctx.set_int(V_INT0, n);
             }
-            // Freeze byte 0x160F534 := arg; stage VMs get interrupt 2, or 1 when arg is 0 (07 §12).
+            // Freeze byte 0x160F534 := arg; stage VMs get interrupt 2, or 1 when arg is 0.
             26 => {
                 *self.sys.timer_pause = arg;
                 self.stage_interrupt(if arg != 0 { 2 } else { 1 });
             }
             27 => self.spawn_from_marked(t),
             12 | 14 => self.toggle_ghost(t, n == 14),
-            // Slow-down 0x4251B0 (07 §12): game speed 1/arg first, interrupt 2, then live bullets' velocities ×
+            // Slow-down 0x4251B0: game speed 1/arg first, interrupt 2, then live bullets' velocities ×
             // the new speed, +0x218 := sprite, sprites 0x60–0x6F → 0x6F (VM0 only).
             28 if arg != 0 => {
                 self.anm.speed = 1.0 / arg as f32;
@@ -59,7 +59,7 @@ impl Exec<'_> {
                 let k = self.anm.speed;
                 crate::bm!(self.sys).slow_down(self.anm, k);
             }
-            // Undo 28 0x425290 (07 §12): velocities × 1/speed, sprites 0x60–0x6F := +0x218; Supervisor flag 0x20
+            // Undo 28 0x425290: velocities × 1/speed, sprites 0x60–0x6F := +0x218; Supervisor flag 0x20
             // when 1/arg < 1; then speed 1 and interrupt 1.
             29 => {
                 let f = 1.0 / self.anm.speed;
@@ -71,7 +71,7 @@ impl Exec<'_> {
                 self.stage_interrupt(1);
             }
             30 => *self.sys.load_frames = arg,
-            // Type 3 (bomb) while the player is bombing (player +0xFDC = 0x17D6ED4), else 5 (1up) (07 §12).
+            // Type 3 (bomb) while the player is bombing (player +0xFDC = 0x17D6ED4), else 5 (1up).
             31 => {
                 let kind = if crate::pl!(self.sys).bombing { 3 } else { 5 };
                 self.item(self.e.pos, kind);
@@ -86,16 +86,16 @@ impl Exec<'_> {
                 });
             }
             23 => self.sys.gui.push(crate::gui::Req::BossHide),
-            // Bullet warp (07 §12).
+            // Bullet warp.
             4 => self.warp(&Warp::native4()),
             7 => self.warp(&Warp::native7()),
             21 => self.warp(&Warp::native21()),
-            // Rotated 590-long player-hit boxes, heights big / small (07 §12); native 11 starts at pos, not final pos.
+            // Rotated 590-long player-hit boxes, heights big / small; native 11 starts at pos, not final pos.
             9 => self.laser_box(t, self.e.final_pos, 160.0, 128.0),
             11 => self.laser_box(t, self.e.pos, 240.0, 192.0),
             25 => self.laser_box(t, self.e.final_pos, 288.0, 224.0),
-            // Stage tint request 0xFFC03030 (07 §12, 06 §10.2 step 3).
-            // Only Stage_RequestTint; +0x646C is not written (07 §12 row 13).
+            // Stage tint request 0xFFC03030 (06 §10.2 step 3).
+            // Only Stage_RequestTint; +0x646C is not written.
             13 => self.anm.request_tint(0xFFC0_3030),
             16 => self.mark_children(t),
             _ => self.m.g.misc_calls += 1,
@@ -103,7 +103,7 @@ impl Exec<'_> {
     }
 
     // Bounce: vars 10022 / 10023 are the gravity step and the fall-speed cap.
-    // EclNative_2 (07 §12 row 2): no direction tests, so an enemy still past an edge flips back next
+    // EclNative_2: no direction tests, so an enemy still past an edge flips back next
     // frame; the angle is recomputed when any branch ran, the gravity add included.
     fn bounce(&mut self, t: &Thread) {
         let e = &mut *self.e;
@@ -127,7 +127,7 @@ impl Exec<'_> {
         }
     }
 
-    // Natives 3 / 6 / 20 (07 §12, §12.1): two effects (0x38 / 0x3A / 0x41) with an extra script and the stage
+    // Natives 3 / 6 / 20 (07 §12.1): two effects (0x38 / 0x3A / 0x41) with an extra script and the stage
     // callback 0x4235A0.
     fn spell_mask_fx(&mut self, n: i32) {
         if let Some(st) = self.sys.stage.as_deref_mut() {
@@ -152,7 +152,7 @@ impl Exec<'_> {
         });
     }
 
-    // Native 27 (07 §12 row 27): bullets with flag 0x100000 spawn enemy sub = var 10038 (life 800, item −2,
+    // Native 27: bullets with flag 0x100000 spawn enemy sub = var 10038 (life 800, item −2,
     // score 10, var 10016 = angle); the flag is cleared.
     fn spawn_from_marked(&mut self, t: &Thread) {
         let sub = t.ctx.int(V_INT1 + 2);
@@ -208,8 +208,7 @@ impl Exec<'_> {
         }
     }
 
-    // Natives 26 / 28 / 29 "stage VMs interrupt k" (07 §12).
-    // 07 §12 rows 26/28/29: g_Stage +0xB38 / +0xDDC, the spell-background pair of native 12.
+    // Natives 26 / 28 / 29 "stage VMs interrupt k": g_Stage +0xB38 / +0xDDC, the spell-background pair of native 12.
     fn stage_interrupt(&mut self, k: u16) {
         if let Some(st) = self.sys.stage.as_deref_mut() {
             st.spell_interrupt(k);
@@ -220,7 +219,7 @@ impl Exec<'_> {
         crate::bm!(self.sys).warp(w);
     }
 
-    // Natives 9 / 11 / 25 0x424730 / 0x424820 / 0x424910 (07 §12): Player_LaserTest from origin
+    // Natives 9 / 11 / 25 0x424730 / 0x424820 / 0x424910: Player_LaserTest from origin
     // o = p − (float vars 10016, 10017) along main VM rotation z; small box with graze when the e+0x2E14 timer
     // changed to a multiple of 12, then the big box without graze on every call.
     fn laser_box(&mut self, t: &Thread, p: [f32; 3], big: f32, small: f32) {
@@ -253,7 +252,7 @@ impl Exec<'_> {
         }
     }
 
-    // Native 16 `EclNative_16` 0x424E50 (07 §12 row 16): per flag-0x100000 bullet in slot order, a member of the
+    // Native 16 `EclNative_16` 0x424E50: per flag-0x100000 bullet in slot order, a member of the
     // caller's chain with int var 10038 == 0 and pos within 64 px (3D, strict) gets 10038 := 60 and the caller's
     // int var 10007 (bullet colour of ecldata6 sub77).
     fn mark_children(&mut self, t: &Thread) {
@@ -284,10 +283,9 @@ impl Exec<'_> {
         }
     }
 
-    // Native 8 `EclNative_8` 0x4244F0 (07 §12): familiar ring. Members are the parent's +8 chain (caller
-    // included, no alive test) whose int var 10038 equals the caller's; each gets int var 10037 := its index.
-    // Caller's int vars: 10005 count-changed flag, 10006 count, 10007 call counter. Non-leaders turn their orbit
-    // angle 2 % toward leader angle + idx·2π/k (+ leader orbit velocity when the 10007 counters differ).
+    // `EclNative_8` 0x4244F0 familiar ring: members are the parent's +8 chain (caller included, no alive test) with the
+    // caller's int var 10038; each gets 10037 := its index. Caller's 10005 / 10006 / 10007: changed, count, calls.
+    // Non-leaders turn their orbit angle 2 % toward leader + idx·2π/k (+ leader orbit velocity if the 10007s differ).
     fn familiar_ring(&mut self, t: &mut Thread) {
         let Some(parent) = self.e.root else {
             return;
@@ -308,7 +306,7 @@ impl Exec<'_> {
                 n = self.e.chain_next;
                 continue;
             }
-            // e+0x2CA0 outside its own Ecl_Run is the main context (07 §4.3, §12 row 8).
+            // e+0x2CA0 outside its own Ecl_Run is the main context (07 §4.3).
             let c = &mut self.m.enemies[i].main.ctx;
             if c.int(V_INT1 + 2) == tag {
                 c.set_int(V_INT1 + 1, k);
@@ -328,7 +326,7 @@ impl Exec<'_> {
         let calls = t.ctx.int(V_INT0 + 7).wrapping_add(1);
         t.ctx.set_int(V_INT0 + 7, calls);
         let idx = t.ctx.int(V_INT1 + 1);
-        // 07 §12 row 8: a caller outside the ring keeps its old 10037; k = 0 is UB in the original (unreachable), nothing here.
+        // A caller outside the ring keeps its old 10037; k = 0 is UB in the original (unreachable), nothing here.
         let Some(l) = leader.filter(|_| idx != 0) else {
             return;
         };

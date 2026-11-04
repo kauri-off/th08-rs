@@ -11,7 +11,7 @@ fn off(id: i32, base: i32) -> usize {
     (id - base).cast_unsigned() as usize
 }
 
-// Writable int variables (07 §6 "writable as int").
+// Writable int variables.
 #[derive(Clone, Copy)]
 pub(super) enum IntVar {
     Ctx(usize),
@@ -25,7 +25,7 @@ pub(super) enum IntVar {
     Score,
 }
 
-// Writable float variables (07 §6 "writable as float"); 10045–47 (player pos) are writable (!).
+// Writable float variables; 10045–47 (player pos) are writable (!).
 #[derive(Clone, Copy)]
 pub(super) enum FltVar {
     Ctx(usize),
@@ -87,7 +87,7 @@ impl FltVar {
     }
 }
 
-// Variable getters (07 §6) evaluated on any enemy/context (also used for boss queries, ops 86/87).
+// Variable getters evaluated on any enemy/context (also used for boss queries, ops 86/87).
 pub(crate) fn var_f(
     m: &mut EnemyManager,
     rng: &mut crate::rng::Rng,
@@ -96,9 +96,9 @@ pub(crate) fn var_f(
     lit: f32,
     rank: i32,
 ) -> f32 {
-    // Float variable ids are float literals (e.g. 10016.0), truncated before lookup (07 §6).
+    // Float variable ids are float literals (e.g. 10016.0), truncated before lookup.
     let id = lit as i32;
-    // 07 §6: the getter reads the final pos e+0x2D88; only the destination (FltVar::Pos) is the pos e+0x2D34.
+    // The getter reads the final pos e+0x2D88; only the destination (FltVar::Pos) is the pos e+0x2D34.
     if let 10042..=10044 = id {
         return e.final_pos[off(id, 10042)];
     }
@@ -123,13 +123,13 @@ pub(crate) fn var_f(
         10088..=10091 => e.thresholds[off(id, 10088)] as f32,
         10096 => chain_count(m, e) as f32,
         10097 => m.g.player_mode as f32,
-        // 07 §6: card active (bit 0) ? bit 2 capture possible : bit 9 last card captured.
+        // Card active (bit 0) ? bit 2 capture possible : bit 9 last card captured.
         10099 => i32::from(m.g.spell.as_ref().map_or(m.g.spell_captured, |s| s.capture)) as f32,
         _ => lit,
     }
 }
 
-// Int getter 0x41F420 (07 §6): float variables read through the float getter and truncate.
+// Int getter 0x41F420: float variables read through the float getter and truncate.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn var_i(
     m: &mut EnemyManager,
@@ -145,11 +145,11 @@ pub(crate) fn var_i(
         return read_i(m, e, c, &r, rank);
     }
     match id {
-        // 07 §6 (0x41F5E7): Rng_Float truncated, one Next32; 1 only when it rounds up to 1.0.
+        // 0x41F5E7: Rng_Float truncated, one Next32; 1 only when it rounds up to 1.0.
         10033 => rng.next_f32() as i32,
         10032 => (rng.next_u32() & 0x7FFF_FFFF).cast_signed(),
         10034 => rng.next_u32().cast_signed(),
-        // 07 §6: 2 if stage time + pending capture time + live time orbs ≥ TIME_THR (11 §3.1).
+        // 2 if stage time + pending capture time + live time orbs ≥ TIME_THR (11 §3.1).
         10098 => {
             let pending = m.g.payout.map_or(0, |c| c.time);
             let orbs = bm
@@ -163,7 +163,7 @@ pub(crate) fn var_i(
                 0
             }
         }
-        // Remaining card time Timer_Get(g_Gui +0x108), also after the card and without one (07 §6).
+        // Remaining card time Timer_Get(g_Gui +0x108), also after the card and without one.
         10100 => m.g.spell_remaining.cur,
         // Int read of 10079–10081 gives the literal; 10082 is float only.
         10079..=10082 => id,
@@ -216,7 +216,7 @@ fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
-// Var 10096, Enemy_ChainChildCount 0x41FD40 (07 §6): a root (no parent, +8 set) counts the enemies reached by +8;
+// Var 10096, Enemy_ChainChildCount 0x41FD40: a root (no parent, +8 set) counts the enemies reached by +8;
 // a child is evaluated on its parent (0 unless the parent is a root); no parent and no +8 → 0. No alive test.
 fn chain_count(m: &EnemyManager, e: &Enemy) -> i32 {
     let root = match e.root {

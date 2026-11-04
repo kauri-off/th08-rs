@@ -36,7 +36,7 @@ enum End {
     Finished,
 }
 
-// Ecl_Run (07 §5.2). The enemy is taken out of the manager while it runs; returns −1 when op 1 executed.
+// Ecl_Run: the enemy is taken out of the manager while it runs; returns −1 when op 1 executed.
 pub fn ecl_run(m: &mut EnemyManager, anm: &mut AnmManager, idx: usize, sys: &mut Sys) -> i32 {
     m.with_taken(idx, |m, e| run_enemy(m, anm, e, idx, sys))
 }
@@ -62,9 +62,9 @@ fn run_enemy(
     if r == End::Delete {
         return -1;
     }
-    // 0x2CEA is written back after each context, so it keeps the last one's depth (07 §5.4 depth storage).
+    // 0x2CEA is written back after each context, so it keeps the last one's depth (07 §5.4).
     e.work_depth = e.main.depth;
-    // Threads in slot order after main; one created this frame by main runs this frame (07 §5.2).
+    // Threads in slot order after main; one created this frame by main runs this frame.
     for k in 0..4 {
         let Some(mut t) = e.threads[k].take() else {
             continue;
@@ -93,7 +93,7 @@ fn run_enemy(
             e.threads[k] = Some(t);
         }
     }
-    // After all contexts: Enemy_UpdateMoveMode, then Enemy_AutoFireAndDirAnim (07 §5.2).
+    // After all contexts: Enemy_UpdateMoveMode, then Enemy_AutoFireAndDirAnim.
     e.update_move_mode(anm.speed, anm.slowdown_restore);
     let mut main = std::mem::take(&mut e.main);
     Exec {
@@ -142,12 +142,12 @@ pub(crate) struct Exec<'a> {
 }
 
 impl Exec<'_> {
-    // One context of Ecl_Run (07 §5.2): LOOP / EXEC / POST.
-    // Game speed is read live at each Decrement/Tick (07 §5.2): a native 18 earlier in this run already applies.
+    // One context of Ecl_Run: LOOP / EXEC / POST.
+    // Game speed is read live at each Decrement/Tick: a native 18 earlier in this run already applies.
     fn run_thread(&mut self, t: &mut Thread) -> End {
         self.loaded_ip = t.ctx.ip;
         'outer: loop {
-            // 07 §5.2 / §5.5: the pending test sits at the LOOP of every context, threads included.
+            // The pending-interrupt test sits at the LOOP of every context, threads included (07 §5.5).
             if self.e.pending_interrupt >= 0 {
                 self.interrupt(t);
                 self.loaded_ip = t.ctx.ip;
@@ -164,7 +164,7 @@ impl Exec<'_> {
                 let Some(ins) = self.m.ecl.ins(t.ctx.ip) else {
                     break 'outer;
                 };
-                // Exact time match (07 §5.2): a past instruction is never reached, the sub stalls.
+                // Exact time match: a past instruction is never reached, the sub stalls.
                 if ins.op == -1 || t.ctx.clock.cur != ins.time {
                     break 'outer;
                 }
@@ -184,7 +184,7 @@ impl Exec<'_> {
                 }
             }
         }
-        // POST (07 §5.2): native callback and interpolation slots only while life > 0.
+        // POST: native callback and interpolation slots only while life > 0.
         if self.e.life > 0 {
             if t.ctx.callback >= 0 {
                 let (n, arg) = (t.ctx.callback, t.ctx.callback_arg);
@@ -196,12 +196,12 @@ impl Exec<'_> {
         End::Post
     }
 
-    // Interrupt handler 0x41C88A (07 §5.5): the current context's pending (not yet executed) instruction is
+    // Interrupt handler 0x41C88A: the current context's pending (not yet executed) instruction is
     // skipped; the main context is pushed onto the current stack at the working depth and enters table[k].
     fn interrupt(&mut self, t: &mut Thread) {
         let k = self.e.pending_interrupt;
         self.e.pending_interrupt = -1;
-        // k ≥ 32 would read the pending word / later enemy fields (07 §5.5); unreachable, the data sends k = 1 only.
+        // k ≥ 32 would read the pending word / later enemy fields; unreachable, the data sends k = 1 only.
         let sub = at(&self.e.interrupts, k).copied().unwrap_or(0);
         let size = self.m.ecl.ins(t.ctx.ip).map_or(0, |i| i.size);
         t.ctx.ip += size;
@@ -224,7 +224,7 @@ impl Exec<'_> {
         }
     }
 
-    // Ecl_CallSub 0x421BD0 (07 §5.4): push unless flag A bit 26, then copy the global args 10061–68 into
+    // Ecl_CallSub 0x421BD0: push unless flag A bit 26, then copy the global args 10061–68 into
     // the callee's 10053–60.
     fn call(&mut self, t: &mut Thread, next_ip: usize, sub: i32) {
         t.ctx.ip = next_ip;
@@ -237,8 +237,7 @@ impl Exec<'_> {
         }
     }
 
-    // --- arguments ---
-    // Argument as int / float: a variable id when its var-mask bit is set (07 §2.1, §6).
+    // Argument as int / float: a variable id when its var-mask bit is set (07 §2.1).
     fn ai(&mut self, t: &Thread, a: Arg) -> i32 {
         self.vi(t, a.raw.cast_signed(), a.var)
     }
@@ -247,7 +246,7 @@ impl Exec<'_> {
         self.vf(t, f32::from_bits(a.raw), a.var)
     }
 
-    // Same with an explicit mask bit (bullet/laser blocks, 07 §9.1, §9.4).
+    // Same with an explicit mask bit (bullet / laser blocks).
     fn vi(&mut self, t: &Thread, id: i32, var: bool) -> i32 {
         if var {
             var_i(
@@ -307,7 +306,7 @@ impl Exec<'_> {
         }
     }
 
-    // Destination read of an in-place int op (07 §6 `Ecl_IntVarRef` 0x41FE10): through the reference, never the
+    // Destination read of an in-place int op (`Ecl_IntVarRef` 0x41FE10): through the reference, never the
     // getter; anything but a writable int variable reads the instruction's own argument slot (e.g. 10042–10044).
     fn ai_dst(&self, t: &Thread, d: Dst) -> i32 {
         let raw = d.arg.raw.cast_signed();
@@ -317,7 +316,7 @@ impl Exec<'_> {
         }
     }
 
-    // Destination read of an in-place float op (07 §6 `Ecl_FloatVarRef` 0x420950): 10042–10044 are the pos, not the
+    // Destination read of an in-place float op (`Ecl_FloatVarRef` 0x420950): 10042–10044 are the pos, not the
     // final pos; anything but a writable float variable reads the argument slot.
     fn af_dst(&self, t: &Thread, d: Dst) -> f32 {
         let lit = f32::from_bits(d.arg.raw);
@@ -327,7 +326,7 @@ impl Exec<'_> {
         }
     }
 
-    // Destination write; anything but a writable variable of the right type writes into the file (07 §6).
+    // Destination write; anything but a writable variable of the right type writes into the file.
     fn set_i(&mut self, t: &mut Thread, ins: &Ins, d: Dst, v: i32) {
         match IntVar::from_id(d.arg.raw.cast_signed()).filter(|_| d.arg.var) {
             Some(r) => self.write_i(t, r, v),
@@ -344,7 +343,7 @@ impl Exec<'_> {
         }
     }
 
-    // Interpolation targets (07 §5.6): float variables, else int variables (truncated).
+    // Interpolation targets: float variables, else int variables (truncated).
     fn set_var_any(&mut self, t: &mut Thread, id: i32, v: f32) {
         if let Some(r) = FltVar::from_id(id) {
             self.write_f(t, r, v);
@@ -353,7 +352,7 @@ impl Exec<'_> {
         }
     }
 
-    // Jump (07 §7 op 4): clock = t; ip = this instruction + byte offset.
+    // Op 4 jump: clock = t; ip = this instruction + byte offset.
     fn jump(&mut self, t: &mut Thread, ins: &Ins, time: Arg, to: Arg) -> Flow {
         let time = self.ai(t, time);
         let off = self.ai(t, to);
@@ -362,7 +361,7 @@ impl Exec<'_> {
         Flow::Jumped
     }
 
-    // Opcode switch (07 §7 table), one fn per op group; ops outside the table are ignored.
+    // Opcode switch, one fn per op group; ops outside the table are ignored.
     fn exec(&mut self, t: &mut Thread, ins: &Ins) -> Flow {
         match self.m.ecl.op(ins) {
             Op::Flow(op) => return self.op_flow(t, ins, op),
@@ -456,7 +455,7 @@ mod tests {
         crate::game::TestSys::with_player(1)
     }
 
-    // A fresh player and bullet manager for each `manager` built inside a loop (each had its own before 9a / 9b).
+    // A fresh player and bullet manager for each `manager` built inside a loop.
     fn fresh_player(sys: &mut crate::game::Sys) {
         let ts = crate::game::TestSys::with_player(1);
         *crate::pl!(sys) = *ts.player.unwrap();
@@ -472,7 +471,7 @@ mod tests {
         e.main.ctx.enter(&m.ecl, sub);
     }
 
-    // 07 §7 op 95: no self test. Another enemy gets `Ecl_SetSub` to its death sub (threads, thresholds kept); the
+    // Op 95: no self test. Another enemy gets `Ecl_SetSub` to its death sub (threads, thresholds kept); the
     // caller's own main context keeps its local ip in the old sub (time-0 ops after op 95 still run), only the sub
     // id, clock and wait are taken, and its death sub is consumed without running.
     #[test]
@@ -515,7 +514,7 @@ mod tests {
         v
     }
 
-    // 07 §6: a source read of 10042 is the final pos e+0x2D88; the fadd destination read and write use e+0x2D34.
+    // A source read of 10042 is the final pos e+0x2D88; the fadd destination read and write use e+0x2D34.
     #[test]
     fn var_10042_source_vs_destination() {
         let mut ts = ts();
@@ -536,7 +535,7 @@ mod tests {
         assert_eq!(e.pos[0], -4.5);
     }
 
-    // 07 §6 var 10099: card active ? spell bit 2 : spell bit 9 (captured).
+    // Var 10099: card active ? spell bit 2 : spell bit 9 (captured).
     #[test]
     fn var_10099_spell_state() {
         let (_, mut m) = manager(&[&[]]);
@@ -567,7 +566,7 @@ mod tests {
         assert_eq!(read(&mut m), 1);
     }
 
-    // 07 op 155: the running card's cap +0x2638 := 99 999 990 whatever the byte; +0xFC untouched.
+    // Op 155: the running card's cap +0x2638 := 99 999 990 whatever the byte; +0xFC untouched.
     #[test]
     fn op155_raises_card_cap() {
         let mut ts = ts();
@@ -584,7 +583,7 @@ mod tests {
         assert_eq!((s.bonus, s.max), (33_000_000, FIXED_BONUS_CAP));
     }
 
-    // 07 op 158: word 1 → start, word 2 → end, stored as fractions of the op enemy's max life; op 127 0 → target 1.0.
+    // Op 158: word 1 → start, word 2 → end, stored as fractions of the op enemy's max life; op 127 0 → target 1.0.
     #[test]
     fn op158_marker_fractions() {
         let mut ts = ts();
@@ -598,7 +597,7 @@ mod tests {
         assert_eq!(m.g.hud_bar_target, 1.0);
     }
 
-    // 07 §5.2: native 18 at time 0 slows this frame's clock tick (live game speed).
+    // Native 18 at time 0 slows this frame's clock tick (live game speed).
     #[test]
     fn native18_slows_same_frame_tick() {
         let mut ts = ts();
@@ -611,7 +610,7 @@ mod tests {
         assert_eq!((c.cur, c.frac), (0, 0.25));
     }
 
-    // 07 §5 (RE-Q54 Y): the step-7 boss timer and the manager clock tick at the speed set by this frame's native 18.
+    // 07 §5.2: the §10.1 step-7 boss timer and the manager clock tick at the speed set by this frame's native 18.
     #[test]
     fn native18_slows_same_frame_boss_timer() {
         let mut ts = ts();
@@ -627,7 +626,7 @@ mod tests {
         assert_eq!((m.clock.cur, m.clock.frac), (0, 0.25));
     }
 
-    // 07 §5 ops 129/130/133/134 under the spell-practice guard (GameFlags bit 14 + bit 7 or 8).
+    // Ops 129/130/133/134 under the spell-practice guard (GameFlags bit 14 + bit 7 or 8).
     #[test]
     fn spell_practice_guard() {
         let mut ts = ts();
@@ -667,7 +666,7 @@ mod tests {
         }
     }
 
-    // 07 §5.4 op 88 on the caller (main context): the frame pushed holds the stored ip (first instruction this frame)
+    // Op 88 on the caller (main context): the frame pushed holds the stored ip (first instruction this frame)
     // + its size; the sub never runs, the caller goes on with clock 0, sub id 1 and depth + 1.
     #[test]
     fn call_boss_self_main_skips_sub() {
@@ -696,7 +695,7 @@ mod tests {
         assert_eq!((e.main.stack[0].sub, e.main.stack[0].ip), (0, s0 + 12));
     }
 
-    // 07 §5.4 op 88 on the caller from a thread: the thread's own context, stack and depth; main is untouched.
+    // Op 88 on the caller from a thread: the thread's own context, stack and depth; main is untouched.
     #[test]
     fn call_boss_self_from_thread_uses_thread() {
         let mut ts = ts();
@@ -726,7 +725,7 @@ mod tests {
         assert_eq!((t.stack[0].sub, t.stack[0].ip), (2, s2 + 12));
     }
 
-    // 07 §5.4 op 88: the target's stored ip is advanced past its next instruction before the push, at the
+    // Op 88: the target's stored ip is advanced past its next instruction before the push, at the
     // target's working depth; its main depth stays.
     #[test]
     fn call_boss_skips_target_next_ins() {
@@ -748,7 +747,7 @@ mod tests {
         assert_eq!(o.main.stack[3].ip, ip + m.ecl.ins(ip).unwrap().size);
     }
 
-    // 07 §5 op 128: a, b, c, d are raw words whatever the mask (d = f32 bits).
+    // Op 128: a, b, c, d are raw words whatever the mask (d = f32 bits).
     #[test]
     fn op128_words_are_raw() {
         let mut ts = ts();
@@ -771,7 +770,7 @@ mod tests {
         assert_eq!(m.enemies[0].orbit_target, 96.0);
     }
 
-    // Op 95 in a thread: the main context takes the death sub, the threads are kept (07 §7 op 95).
+    // Op 95 in a thread: the main context takes the death sub, the threads are kept.
     #[test]
     fn kill_all_from_thread() {
         let mut ts = ts();
@@ -797,7 +796,7 @@ mod tests {
         assert_ne!(e.main.ctx.ip, m.ecl.subs[1]);
     }
 
-    // 07 §7 row 109: the stored descriptor fires from base pos + shot offset with no life test, no mode / no-fire
+    // Op 109: the stored descriptor fires from base pos + shot offset with no life test, no mode / no-fire
     // filters and no rank add.
     #[test]
     fn op109_fires_stored_descriptor_raw() {
@@ -829,7 +828,7 @@ mod tests {
         assert_eq!(live, [[104.0, 48.0, 0.1]; 3]);
     }
 
-    // 07 §12 native 31: item type 3 while the player is bombing, else 5.
+    // Native 31: item type 3 while the player is bombing, else 5.
     #[test]
     fn native31_item_type() {
         let mut ts = ts();
@@ -852,7 +851,7 @@ mod tests {
         }
     }
 
-    // 07 §12 native 4: zone change between pos and pos − vel reverses the bullet and scales it across the ring
+    // Native 4: zone change between pos and pos − vel reverses the bullet and scales it across the ring
     // (inward on an outer crossing, outward on an inner one); cooldown 2 then skips the next two calls.
     #[test]
     fn native4_warp() {
@@ -886,7 +885,7 @@ mod tests {
         );
     }
 
-    // 07 §12 native 7: Q's outer x0 is −31.1, so pos −31.0 / prev −31.5 is a zone change (1 vs 2).
+    // Native 7: Q's outer x0 is −31.1, so pos −31.0 / prev −31.5 is a zone change (1 vs 2).
     #[test]
     fn native7_prev_bound_quirk() {
         let mut bm = crate::bullet::BulletManager::new(
@@ -902,7 +901,7 @@ mod tests {
         assert_eq!(bm.bullets[0].warp_cooldown, 1);
     }
 
-    // 07 §12 native 9: box from o = final pos − (vars 10016, 10017), 590 along main VM rotation z, big box
+    // Native 9: box from o = final pos − (vars 10016, 10017), 590 along main VM rotation z, big box
     // height 160 hits on every call (no warning phase).
     #[test]
     fn native9_laser_box() {
@@ -930,7 +929,7 @@ mod tests {
         }
     }
 
-    // 07 §12 native 11: small box (192 + 48 per side) grazes only when timer e+0x2E14 changed to a multiple
+    // Native 11: small box (192 + 48 per side) grazes only when timer e+0x2E14 changed to a multiple
     // of 12; the big box (240) still misses there.
     #[test]
     fn native11_graze_every_12() {
@@ -951,7 +950,7 @@ mod tests {
         }
     }
 
-    // 07 §12 native 8: parent 0 → 1 → 2 → 3; caller 3 and enemy 1 share var 10038, enemy 1 leads. Counters in
+    // Native 8: parent 0 → 1 → 2 → 3; caller 3 and enemy 1 share var 10038, enemy 1 leads. Counters in
     // int vars 10005–10007; the caller turns 2 % toward leader + π + leader orbit velocity.
     #[test]
     fn native8_familiar_ring() {
@@ -1002,7 +1001,7 @@ mod tests {
         );
     }
 
-    // 07 §12 native 8 does nothing without a parent.
+    // Native 8 does nothing without a parent.
     #[test]
     fn native8_needs_parent() {
         let mut ts = ts();
@@ -1013,7 +1012,7 @@ mod tests {
         assert_eq!(m.enemies[0].main.ctx.int(V_INT0 + 7), 0);
     }
 
-    // 07 §12 native 13: stage tint request 0xFFC0_3030.
+    // Native 13: stage tint request 0xFFC0_3030.
     #[test]
     fn native13_tint() {
         let mut ts = ts();
@@ -1024,7 +1023,7 @@ mod tests {
         assert_eq!(anm.stage_tint, Some(0xFFC0_3030));
     }
 
-    // 07 §12 native 16: chained children near a flag-0x100000 bullet with var 10038 == 0 get 60 and var 10019.
+    // Native 16: chained children near a flag-0x100000 bullet with var 10038 == 0 get 60 and var 10019.
     #[test]
     fn native16_marks_children() {
         let mut ts = ts();
@@ -1062,7 +1061,7 @@ mod tests {
         assert_eq!(got, [(60, 5), (7, 0), (0, 0), (0, 0), (0, 0)]);
     }
 
-    // 07 §12 row 24: var 10000 := spell cards captured this game (stats +0x1C).
+    // Native 24: var 10000 := spell cards captured this game (stats +0x1C).
     #[test]
     fn native24_captured_cards() {
         let mut ts = ts();
@@ -1074,7 +1073,7 @@ mod tests {
         assert_eq!(m.enemies[0].main.ctx.int(V_INT0), 7);
     }
 
-    // 07 §6: an int read of 10033 draws one Next32 and truncates Rng_Float.
+    // An int read of 10033 draws one Next32 and truncates Rng_Float.
     #[test]
     fn int_read_10033_draws() {
         let (_, mut m) = manager(&[&[]]);
@@ -1099,7 +1098,7 @@ mod tests {
         assert_eq!(rng.next_u16(), r.next_u16());
     }
 
-    // 07 §4.2 / §5.5: an unregistered index enters sub 0 (table zero-filled); a negative entry still skips the
+    // 07 §4.2: an unregistered index enters sub 0 (table zero-filled); a negative entry still skips the
     // current instruction, pushes and increments the depth, but leaves the main context in its sub.
     #[test]
     fn interrupt_table_default_and_negative() {
@@ -1131,7 +1130,7 @@ mod tests {
         assert_eq!((e.main.ctx.clock.cur, e.pending_interrupt), (1, -1));
     }
 
-    // 07 §5.5 thread contexts: taken in a thread, the thread's ip skips, main is pushed on the thread's stack at
+    // Thread contexts: taken in a thread, the thread's ip skips, main is pushed on the thread's stack at
     // the thread's depth, main enters the sub, the thread's depth += 1 and the main depth stays.
     #[test]
     fn interrupt_in_thread_context() {
@@ -1158,7 +1157,7 @@ mod tests {
         assert_eq!(e.flags_b & 2, 2);
     }
 
-    // 07 §7 op 181: below 12 sfx 0x2D and clock + 1; at 12 nothing, no sfx.
+    // Op 181: below 12 sfx 0x2D and clock + 1; at 12 nothing, no sfx.
     #[test]
     fn op181_clock() {
         let mut ts = ts();
@@ -1188,7 +1187,7 @@ mod tests {
         v
     }
 
-    // 07 §6 in-place ops: the destination is read and written through the reference; a non-int destination
+    // In-place ops: the destination is read and written through the reference; a non-int destination
     // (10042–10044) and an int variable under a float op use the instruction's own argument slot.
     #[test]
     fn in_place_ops_use_reference() {
@@ -1219,7 +1218,7 @@ mod tests {
         assert_eq!(m.enemies[0].main.ctx.int(V_INT0), 7);
     }
 
-    // 07 §7 ops 86 / 87: one getter call (one RNG draw for 10082 / 10032), on self or another boss.
+    // Ops 86 / 87: one getter call (one RNG draw for 10082 / 10032), on self or another boss.
     #[test]
     fn boss_var_single_getter() {
         let mut ts = ts();
@@ -1241,7 +1240,7 @@ mod tests {
         assert_eq!(sys.rng.state, rng.state);
     }
 
-    // 07 op 93/94 and §10.5: a spawner with life ≤ 0 reads no argument (no RNG draw from var 10032); ops 90–92 set
+    // 07 §10.5, ops 93/94: a spawner with life ≤ 0 reads no argument (no RNG draw from var 10032); ops 90–92 set
     // the manager flag, ops 93/94 leave it alone.
     #[test]
     fn spawn_ops_life_gate() {
@@ -1274,7 +1273,7 @@ mod tests {
         }
     }
 
-    // 07 §12 native 2: edge flips without direction tests; angle only when a branch ran (gravity included).
+    // Native 2: edge flips without direction tests; angle only when a branch ran (gravity included).
     #[test]
     fn native2_bounce_no_direction_test() {
         let mut ts = ts();
@@ -1301,7 +1300,7 @@ mod tests {
         assert_eq!(a, 9.0);
     }
 
-    // 07 §6 var 10100: the remaining-time timer +0x108, also with no card active.
+    // Var 10100: the remaining-time timer +0x108, also with no card active.
     #[test]
     fn var_10100_remaining_timer() {
         let (_, mut m) = manager(&[&[]]);
@@ -1452,7 +1451,7 @@ mod tests {
         });
     }
 
-    // 07 §7 op 174: interrupt (player mode ≠ 0) + 1, odd slot negates the spin, colour2 untouched; ops 80/81 bit 1
+    // Op 174: interrupt (player mode ≠ 0) + 1, odd slot negates the spin, colour2 untouched; ops 80/81 bit 1
     // switch the aura's colour2 flag.
     #[test]
     fn aura_op174_and_contact_flag() {

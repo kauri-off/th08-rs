@@ -12,17 +12,17 @@ use anyhow::Result;
 use th08_formats::ecl::{self, Ecl};
 
 pub const CALC_PRIO: u16 = 11;
-// 07 §10.6: draw prio 8 → layers 0–1, prio 11 → layers 2–3.
+// Draw prio 8 → layers 0–1, prio 11 → layers 2–3.
 pub const DRAW_LOW_PRIO: u16 = 8;
 pub const DRAW_HIGH_PRIO: u16 = 11;
 // ANM slots of enemy.anm and stgNenm.anm (flags B bit 2 picks the latter).
 pub const ANM_ENEMY: usize = 7;
 pub const ANM_STAGE: usize = 8;
-// 07 §4: 480 slots of 0x53D0 after the template.
+// 480 slots of 0x53D0 after the template.
 pub const MAX_ENEMIES: usize = 480;
 
 bitflags::bitflags! {
-    // Flags A (e+0x3324, 07 §4.4), the original's bit positions; names of 23 / 25 / 30 / 31 are INFERRED there.
+    // Flags A (e+0x3324), the original's bit positions; names of 23 / 25 / 30 / 31 are INFERRED.
     #[repr(transparent)]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct EnemyFlags: u32 {
@@ -31,7 +31,7 @@ bitflags::bitflags! {
         const CONTACT = 1 << 2;
         const LOSES_LIFE = 1 << 3;
         const HIDDEN = 1 << 4;
-        // Bit 5: main VM not drawn and no player collision (07 §10.1 step 6, §10.6).
+        // Bit 5: main VM not drawn and no player collision.
         const INVISIBLE = 1 << 5;
         const SHOT_HIT = 1 << 6;
         const CANCEL_BONUS = 1 << 7;
@@ -39,43 +39,43 @@ bitflags::bitflags! {
         const FOLLOW = 1 << 9;
         const CHAIN_KILLED = 1 << 10;
         const YOUKAI = 1 << 11;
-        // Bits 12–13 movement mode (07 §8), 14–16 easing (07 §5.6 table).
+        // Bits 12–13 movement mode, 14–16 easing (07 §5.6 table).
         const MOVE_MODE = 3 << 12;
         const EASE = 7 << 14;
         const STORE_FIRE = 1 << 17;
         const MIRROR = 1 << 18;
         const CLAMP = 1 << 19;
-        // Bits 20–22 death mode (op 129, 07 §10.3).
+        // Bits 20–22 death mode (op 129).
         const DEATH_MODE = 7 << 20;
         const DEAD_CONT = 1 << 23;
         const ON_SCREEN = 1 << 24;
-        // Bit 25 (op 145): the main VM and trail copies rotate with the enemy angle (07 §10.6).
+        // Bit 25 (op 145): the main VM and trail copies rotate with the enemy angle.
         const ROTATE = 1 << 25;
         const NO_PUSH = 1 << 26;
         const FIXED_BONUS = 1 << 27;
         const KEEP_OFFSCREEN = 1 << 28;
         const NO_MOVE = 1 << 29;
-        // Set by ops 173 / 176 (07 §7); pauses the script while the player bombs (07 §4.4 flags B bit 7).
+        // Set by ops 173 / 176; pauses the script while the player bombs.
         const LAST_SPELL = 1 << 30;
-        // Bit 31 (op 183): no player collision while the player bombs (07 §10.1 step 6).
+        // Bit 31 (op 183): no player collision while the player bombs.
         const BOMB_IMMUNE = 1 << 31;
     }
 }
 
 bitflags::bitflags! {
-    // Flags B (e+0x3328, 07 §4.4).
+    // Flags B (e+0x3328).
     #[repr(transparent)]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct EnemyFlagsB: u32 {
-        // Bit 1 (op 83): effect 38 sparkle on even timer frames (07 §10.1 step 3).
+        // Bit 1 (op 83): effect 38 sparkle on even timer frames.
         const SPARKLE = 1 << 1;
         const STAGE_ANM = 1 << 2;
         const DEATH_LATCH = 1 << 3;
-        // Bits 4–5 low-life warning level (07 §10.2).
+        // Bits 4–5 low-life warning level.
         const WARN = 3 << 4;
         const CANNOT_DIE = 1 << 6;
         const PAUSED = 1 << 7;
-        // Bit 8 (op 182): sub VMs use the main VM's position offset (07 §10.6).
+        // Bit 8 (op 182): sub VMs use the main VM's position offset.
         const SHARED_OFFSET = 1 << 8;
     }
 }
@@ -112,7 +112,7 @@ pub const B_PAUSED: u32 = EnemyFlagsB::PAUSED.bits();
 pub const B_WARN_SHIFT: u32 = EnemyFlagsB::WARN.bits().trailing_zeros();
 pub const B_WARN_MASK: u32 = EnemyFlagsB::WARN.bits();
 
-// Enemy slot links (07 §4.3 e+4 / e+8 / e+0x2DA4, boss table 0xF54CC0) as typed slot numbers.
+// Enemy slot links (e+4 / e+8 / e+0x2DA4, boss table 0xF54CC0) as typed slot numbers.
 impl EnemyIdx {
     // Slots are < MAX_ENEMIES (480), so the u16 always holds them.
     pub const fn from_slot(k: usize) -> Self {
@@ -133,7 +133,7 @@ impl std::ops::IndexMut<EnemyIdx> for Vec<Box<Enemy>> {
     }
 }
 
-// Item table 0x4C70D8 for item −1 drops (07 §10.4).
+// Item table 0x4C70D8 for item −1 drops.
 const DROP_TABLE: [i32; 32] = [
     0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0,
 ];
@@ -172,7 +172,7 @@ pub struct Interp {
     pub dur: i32,
     // fn index 0–6 linear, 7 Hermite.
     pub func: i32,
-    // Easing mode (07 §5.6 table).
+    // Easing mode.
     pub mode: i32,
     // Raw a–d, re-read through the float getter at every evaluation.
     pub abcd: [f32; 4],
@@ -241,7 +241,7 @@ impl Context {
         self.vars[k] = v.to_bits();
     }
 
-    // Ecl_SetSub: ip = sub start, clock 0, wait 0, sub id; variables and slots kept (07 §10.2).
+    // Ecl_SetSub: ip = sub start, clock 0, wait 0, sub id; variables and slots kept.
     pub fn enter(&mut self, ecl: &Ecl, sub: i32) -> bool {
         let Some(ip) = ecl.sub_start(sub) else {
             return false;
@@ -259,12 +259,12 @@ impl Context {
 pub struct Thread {
     pub ctx: Context,
     pub stack: Vec<Context>,
-    // Main: e+0x2CE8; thread: block +6 (07 §5.4 depth storage).
+    // Main: e+0x2CE8; thread: block +6 (07 §5.4).
     pub depth: i32,
 }
 
 impl Thread {
-    // Push a copy of the whole context at stack[depth]; depth max 15 (07 §5.4).
+    // Push a copy of the whole context at stack[depth]; depth max 15.
     pub fn push(&mut self) {
         self.depth = self.push_at(self.depth);
     }
@@ -284,7 +284,7 @@ impl Thread {
     }
 }
 
-// Enemy object 0x53D0 (07 §4.3); positions in playfield px, angles in radians, timers in frames.
+// Enemy object 0x53D0; positions in playfield px, angles in radians, timers in frames.
 #[derive(Clone, Debug)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -339,7 +339,7 @@ pub struct Enemy {
     // e+0x2DDC / e+0x2DE8.
     pub move_timer: Timer,
     pub move_dur: i32,
-    // e+0x2DEC–0x2DFA bullet rank ranges (op 152, 07 §9.2): speed s0/s1, counts c1a c1b c2a c2b.
+    // e+0x2DEC–0x2DFA bullet rank ranges (op 152): speed s0/s1, counts c1a c1b c2a c2b.
     pub rank_speed: [f32; 2],
     pub rank_counts: [i32; 4],
     // e+0x2DFC / e+0x2E00 / e+0x2E04 (HUD).
@@ -353,7 +353,7 @@ pub struct Enemy {
     pub f2e1c: i32,
     // e+0x2E14 boss/spell timer (op 132); held by the freeze byte 0x160F534.
     pub boss_timer: Timer,
-    // e+0x2E20 main VM colour copied after the spawn run (07 §4.1).
+    // e+0x2E20 main VM colour copied after the spawn run.
     pub main_color: [u8; 4],
     // e+0x2E24 (07 §9).
     pub desc: BulletDesc,
@@ -396,28 +396,28 @@ pub struct Enemy {
     // e+0x3378 / e+0x337C (op 134).
     pub timeout: i32,
     pub timeout_sub: i32,
-    // e+0x3380 chained children created minus killed by damage (07 §4.3).
+    // e+0x3380 chained children created minus killed by damage.
     pub children: i32,
-    // e+0x4 / e+0x8 chain links, e+0x2DA4 parent (the spawner, 07 §10.5).
+    // e+0x4 / e+0x8 chain links, e+0x2DA4 parent (the spawner).
     pub chain_prev: Option<EnemyIdx>,
     pub chain_next: Option<EnemyIdx>,
     pub root: Option<EnemyIdx>,
     // e+0x5354 damage-reduction timer (op 160).
     pub dmg_timer: Timer,
-    // e+0x2E10 time-orb damage accumulator (07 §4.3).
+    // e+0x2E10 time-orb damage accumulator.
     pub orb_acc: i32,
     // e+0x53CC spell-capture bonus seconds.
     pub bonus_seconds: i32,
-    // Port: damage taken this frame / hitByBomb / hit-flash flag (07 §10.1 steps 6–7).
+    // Port: damage taken this frame / hitByBomb / hit-flash flag.
     pub hit: bool,
     pub bomb_hit: bool,
     pub flash: bool,
-    // Port: a thread returned from its first sub while running (07 §5.4 return).
+    // Port: a thread returned from its first sub while running (07 §5.4).
     pub kill_running_thread: bool,
     pub running_thread: Option<usize>,
     // e+0x534C–0x5352: trail flags, length n, op 157 arg a, draw step b.
     pub trail: [i32; 4],
-    // e+0x3394 after-image ring (07 §4.3, §10.1 step 4): entry 0 newest; template x = −999.
+    // e+0x3394 after-image ring: entry 0 newest; template x = −999.
     pub trail_ring: [TrailEntry; TRAIL_LEN],
     // e+0x53C0 effect count (op 128 and friends); handles in `fx_attached`.
     pub effects: u32,
@@ -428,14 +428,14 @@ pub struct Enemy {
     pub fx_aura: usize,
 }
 
-// Trail strip angle midpoint (07 §10.6): lo + d/2 with d = min(|a − c|, lo + 2π − hi).
+// Trail strip angle midpoint: lo + d/2 with d = min(|a − c|, lo + 2π − hi).
 // QUIRK: the wrap distance is taken from lo, not the true shortest-arc midpoint.
 fn trail_mid(a: f32, c: f32) -> f32 {
     let (lo, hi) = (a.min(c), a.max(c));
     lo + 0.5 * (a - c).abs().min(lo + 2.0 * std::f32::consts::PI - hi)
 }
 
-// Chain-kill popup colour, chosen once from the undivided child count n (07 §10.3a step 1, 13 §4).
+// Chain-kill popup colour, chosen once from the undivided child count n (13 §4).
 fn chain_popup_colour(n: i32) -> u32 {
     match n {
         ..2 => 0xFFFF_FFFF,
@@ -445,7 +445,7 @@ fn chain_popup_colour(n: i32) -> u32 {
     }
 }
 
-// Orb count c per chain-killed child from the current n (07 §10.3a step 3): team shots 0–3, solo human (even),
+// Orb count c per chain-killed child from the current n: team shots 0–3, solo human (even),
 // solo youkai (odd).
 fn child_orbs(shot: u8, n: i32) -> i32 {
     match shot {
@@ -473,11 +473,11 @@ fn child_orbs(shot: u8, n: i32) -> i32 {
     }
 }
 
-// e+0x3394 ring length: 96 entries of 0x1C (07 §4.3).
+// e+0x3394 ring length: 96 entries of 0x1C.
 const TRAIL_MAX: i32 = 96;
 pub const TRAIL_LEN: usize = TRAIL_MAX.unsigned_abs() as usize;
 
-// One 0x1C ring entry (07 §10.1 step 4): final pos, velocity e+0x2D4C, angle e+0x2D94.
+// One 0x1C ring entry: final pos, velocity e+0x2D4C, angle e+0x2D94.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrailEntry {
     pub pos: [f32; 3],
@@ -486,7 +486,7 @@ pub struct TrailEntry {
 }
 
 impl Default for TrailEntry {
-    // EnemyMgr_Ctor writes only x = −999, so an unwritten entry is off screen (07 §10.1 step 4).
+    // EnemyMgr_Ctor writes only x = −999, so an unwritten entry is off screen.
     fn default() -> Self {
         Self {
             pos: [-999.0, 0.0, 0.0],
@@ -497,7 +497,7 @@ impl Default for TrailEntry {
 }
 
 impl Default for Enemy {
-    // EnemyMgr_Ctor template defaults (07 §4.2).
+    // EnemyMgr_Ctor template defaults.
     fn default() -> Self {
         Self {
             vm: AnmVm::default(),
@@ -508,7 +508,7 @@ impl Default for Enemy {
             ivars: [0; 8],
             fvars: [0.0; 8],
             death_sub: -1,
-            // 07 §4.2: zero-filled by the constructor, so an unregistered index enters sub 0.
+            // Zero-filled by the constructor, so an unregistered index enters sub 0.
             interrupts: [0; 32],
             pending_interrupt: -1,
             pos: [0.0; 3],
@@ -604,7 +604,7 @@ impl Enemy {
         self.trail[1].clamp(0, TRAIL_MAX)
     }
 
-    // Ring shift (07 §10.1 step 4): entry[i] = entry[i − 1] for i = n − 1..1, then entry[0] = now.
+    // Ring shift: entry[i] = entry[i − 1] for i = n − 1..1, then entry[0] = now.
     fn push_trail(&mut self) {
         let n = self.trail_n();
         if n > 1 {
@@ -629,7 +629,6 @@ impl Enemy {
         EnemyFlagsB::from_bits_retain(self.flags_b)
     }
 
-    // Any of the bits of `f` set.
     pub fn has(&self, f: EnemyFlags) -> bool {
         self.a_flags().intersects(f)
     }
@@ -658,12 +657,12 @@ impl Enemy {
         self.flags_b &= !f.bits();
     }
 
-    // Flags A bits 20–22 (op 129, 07 §10.3).
+    // Flags A bits 20–22 (op 129).
     pub fn death_mode(&self) -> u32 {
         (self.flags >> A_DEATH_SHIFT) & 7
     }
 
-    // Flags B bits 4–5, low-life warning level 0–3 (07 §10.2).
+    // Flags B bits 4–5, low-life warning level 0–3.
     pub fn warning(&self) -> u8 {
         ((self.flags_b >> B_WARN_SHIFT) & 3).to_le_bytes()[0]
     }
@@ -697,7 +696,7 @@ impl Enemy {
             (self.flags & !(7 << A_EASE_SHIFT)) | ((m.cast_unsigned() & 7) << A_EASE_SHIFT);
     }
 
-    // Sprite file by flags B bit 2 (07 §7 ops 54/58).
+    // Sprite file by flags B bit 2 (ops 54/58).
     pub fn anm_slot(&self) -> usize {
         if self.has_b(EnemyFlagsB::STAGE_ANM) {
             ANM_STAGE
@@ -706,7 +705,7 @@ impl Enemy {
         }
     }
 
-    // Enemy_ClampPos 0x42C180 (07 §8): only with flag A bit 19.
+    // Enemy_ClampPos 0x42C180: only with flag A bit 19.
     pub fn clamp_pos(&mut self) {
         if self.has(EnemyFlags::CLAMP) {
             let [x0, y0, x1, y1] = self.clamp;
@@ -715,13 +714,13 @@ impl Enemy {
         }
     }
 
-    // Phase-change / death reset (07 §10.2): speed −0.5…+0.5, not the template's ±0.15.
+    // Phase-change / death reset: speed −0.5…+0.5, not the template's ±0.15.
     pub fn reset_rank_ranges(&mut self) {
         self.rank_speed = [-0.5, 0.5];
         self.rank_counts = [0; 4];
     }
 
-    // Enemy_UpdateMoveMode 0x422C40 (07 §8 table).
+    // Enemy_UpdateMoveMode 0x422C40.
     pub fn update_move_mode(&mut self, gs: f32, sr: bool) {
         let mirror = self.has(EnemyFlags::MIRROR);
         match self.move_mode() {
@@ -765,7 +764,7 @@ impl Enemy {
         }
     }
 
-    // Modes 1/3 with a duration: timer ≤ 0 → mode 0, velocity kept (07 §8).
+    // Modes 1/3 with a duration: timer ≤ 0 → mode 0, velocity kept.
     fn tick_duration(&mut self, gs: f32, sr: bool) {
         if self.move_dur > 0 {
             self.move_timer.dec(gs, sr);
@@ -785,7 +784,7 @@ impl Enemy {
     }
 }
 
-// Running spell card (op 122 block, 07 §11; spell object g_Gui 0x4EA670, §11.1).
+// Running spell card (op 122 block; spell object g_Gui 0x4EA670).
 #[derive(Clone, Debug, Default)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -799,14 +798,14 @@ pub struct Spell {
     pub name: Vec<u8>,
     pub owner: Vec<u8>,
     pub comment: [Vec<u8>; 2],
-    // Bonus +0xFC, max +0x2638, per-second decay rate R +0x100 = (bonus − bonus/7) / (timeout/60) (07 §11.1).
+    // Bonus +0xFC, max +0x2638, per-second decay rate R +0x100 = (bonus − bonus/7) / (timeout/60).
     pub bonus: i32,
     pub max: i32,
     pub decay: i32,
-    // g_Gui +4: the boss that started the card (enemy slot); g_Gui +0xC: its slot index e+0x2E0C (07 §11.1 step 1.1).
+    // g_Gui +4: the boss that started the card (enemy slot); g_Gui +0xC: its slot index e+0x2E0C.
     pub boss: EnemyIdx,
     pub slot: i32,
-    // g_Gui +0x114 card duration (07 §11.1); the remaining time +0x108 is `Globals::spell_remaining`.
+    // g_Gui +0x114 card duration; the remaining time +0x108 is `Globals::spell_remaining`.
     pub duration: i32,
     // Port: death / bomb counters at card start.
     pub deaths0: u32,
@@ -827,7 +826,7 @@ pub struct Spell {
 pub struct Globals {
     // 0x160F538 (var 10040): 0 Easy … 3 Lunatic, 4 Extra.
     pub difficulty: i32,
-    // GM+0x3DE2C (var 10041, 07 §9.2).
+    // GM+0x3DE2C (var 10041).
     pub rank: i32,
     // 0x4ECE20–0x4ECE3C vars 10061–10068, copied into the callee on a call (07 §5.4).
     pub args: [u32; 8],
@@ -838,15 +837,15 @@ pub struct Globals {
     // Player byte +5 (var 10097).
     pub player_mode: i32,
     pub spell: Option<Spell>,
-    // g_Gui +0x108 remaining card time (var 10100, 07 §6): set at Spell_Start, decremented at game speed by every
-    // Spell_Calc, also after the card; zero-filled at stage start (07 §11.1).
+    // g_Gui +0x108 remaining card time (var 10100): set at Spell_Start, decremented at game speed by every
+    // Spell_Calc, also after the card; zero-filled at stage start.
     pub spell_remaining: Timer,
     // 0xF54E2C (op 175).
     pub spawn_disabled: i32,
-    // HUD +0x2C boss display byte (07 §3 timeline op 0).
+    // HUD +0x2C boss display byte (timeline op 0).
     pub hud_boss: bool,
     pub dialogue: bool,
-    // mgr+0x9DCDC0 / +0x9DCDC2 (07 §10.4).
+    // mgr+0x9DCDC0 / +0x9DCDC2.
     pub drop_counter: u16,
     pub drop_index: u16,
     // Byte 0x164D0BB (timeline op 16).
@@ -858,17 +857,17 @@ pub struct Globals {
     pub hud_markers: [(f32, f32, u32); 8],
     // HUD +0x30 boss bar target life / max life, no clamp (12 §5.1); written in the step-7 tail and by op 127.
     pub hud_bar_target: f32,
-    // HUD +0x24 boss timer seconds, written only by Enemy_CheckTimeout (12 §5.1, 07 §10.2).
+    // HUD +0x24 boss timer seconds, written only by Enemy_CheckTimeout (12 §5.1).
     pub hud_timer: i32,
     // 0x4ECCA8 = 99 999 990 (op 155).
     pub fixed_bonus: bool,
-    // Spell flag bit 6 (op 164: the start ring stops following the boss) and bit 11 (op 184: bonus frozen), 07 §11.1.
+    // Spell flag bit 6 (op 164: the start ring stops following the boss) and bit 11 (op 184: bonus frozen).
     pub spell_flag6: bool,
     pub bonus_frozen: bool,
     // g_Gui +4 boss pointer (enemy slot): set by Spell_Start, kept after a silent end (step 1.1), cleared by the
-    // Spell_End tail (07 §11.1).
+    // Spell_End tail.
     pub spell_boss: Option<EnemyIdx>,
-    // Spell flag bit 9 "captured" (07 §11.1); read by the continue menu default (12 §4).
+    // Spell flag bit 9 "captured"; read by the continue menu default (12 §4).
     pub spell_captured: bool,
     // Port: op 148 argument, HUD requests (ops 148/179–181) handled by the HUD, unimplemented-op counter.
     pub hud_bars: i32,
@@ -878,7 +877,7 @@ pub struct Globals {
     pub card: i16,
     pub payout: Option<Payout>,
     // Bonus +0xFC / max +0x2638 / rate +0x100 left by the last card after it ended: `Spell_AddBonus` still changes them
-    // (07 §11.1); overwritten by the next `Spell_Start`, zero-filled at stage start.
+    // overwritten by the next `Spell_Start`, zero-filled at stage start.
     pub spell_left: Option<SpellBonus>,
 }
 
@@ -891,7 +890,7 @@ pub struct SpellBonus {
     pub capture: bool,
 }
 
-// Capture payout pending in the spell object (07 §11.1, bit 8): paid at ring timer 130 or at the next card start.
+// Capture payout pending in the spell object (bit 8): paid at ring timer 130 or at the next card start.
 #[derive(Clone, Copy, Debug)]
 pub struct Payout {
     // +0x104 bonus, +0x10 time reward still to be spawned as time orbs.
@@ -899,7 +898,7 @@ pub struct Payout {
     pub time: i32,
 }
 
-// Timeline spawn request (07 §3 ops 0–5 / 11 / 12 / 15, §4.1): life < 0 and score < 0 keep the template's;
+// Timeline spawn request (timeline ops 0–5 / 11 / 12 / 15): life < 0 and score < 0 keep the template's;
 // item is taken as a signed char after the spawn run; mirror = flags A bit 18.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spawn {
@@ -911,7 +910,7 @@ pub struct Spawn {
     pub mirror: bool,
 }
 
-// Timeline instruction (07 §3 table), decoded from its op and the raw argument dwords; other ops do nothing.
+// Timeline instruction, decoded from its op and the raw argument dwords; other ops do nothing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum TlOp {
     // Ops 0 / 1 (mirror) / 15 (`force`: no boss-display / disable test, not mirrored).
@@ -941,7 +940,7 @@ enum TlOp {
 }
 
 impl TlOp {
-    // Argument layout per 07 §3 table; args are i32 or f32 dwords at +8.
+    // Argument layout per the timeline table; args are i32 or f32 dwords at +8.
     fn decode(op: i16, args: [u32; 7]) -> Self {
         let ai = |k: usize| args[k].cast_signed();
         let af = |k: usize| f32::from_bits(args[k]);
@@ -990,25 +989,25 @@ impl TlOp {
     }
 }
 
-// Enemy manager 0x577F20 (07 §4).
+// Enemy manager 0x577F20.
 #[derive(Clone)]
 pub struct EnemyManager {
     pub enemies: Vec<Box<Enemy>>,
     spare: Vec<Box<Enemy>>,
-    // mgr+0 template enemy (07 §4.2), copied into every spawned slot.
+    // mgr+0 template enemy, copied into every spawned slot.
     template: Box<Enemy>,
-    // Stage ECL file (07 §2); shared between clones, copied on the first write into the file by a clone (07 §6).
+    // Stage ECL file; shared between clones, copied on the first write into the file by a clone (07 §6).
     pub ecl: std::sync::Arc<Ecl>,
     // 0xF54CC0[4] boss table.
     pub bosses: [Option<EnemyIdx>; 4],
-    // mgr+0x9DCDD0 + 16·i: {clock, ip} per timeline (07 §3).
+    // mgr+0x9DCDD0 + 16·i: {clock, ip} per timeline.
     timelines: Vec<(Timer, usize)>,
     // mgr+0x9DCEFC sync slots (timeline ops 13/14), −1 empty.
     pub sync: [i32; 4],
     pub g: Globals,
-    // Manager "full" flag: the last spawn found no slot (07 §4.1).
+    // Manager "full" flag: the last spawn found no slot.
     pub full: bool,
-    // Draw lists by layer, linked at the end of each enemy's calc (07 §10.1 step 7).
+    // Draw lists by layer, linked at the end of each enemy's calc.
     draw_lists: [Vec<usize>; 4],
     // mgr+0x9DCED0 manager clock (11 §3.2): a Timer ticked at game speed, zero-filled at construction.
     pub clock: Timer,
@@ -1111,7 +1110,7 @@ impl EnemyManager {
         Ok(t)
     }
 
-    // Stage start values owned by the game manager (11 §3.1) and EnemyManager_Load's two draws (11 §1.5, 07 §10.4).
+    // Stage start values owned by the game manager (11 §3.1) and EnemyManager_Load's two draws (11 §1.5).
     pub fn stage_start(
         &mut self,
         rng: &mut crate::rng::Rng,
@@ -1120,7 +1119,7 @@ impl EnemyManager {
         flags: u32,
     ) {
         let d = table_index(self.g.difficulty.clamp(0, 4));
-        // 11 §3.1: 0 in spell practice (GameFlags bit 14), else TIME_THR[stage][difficulty].
+        // 0 in spell practice (GameFlags bit 14), else TIME_THR[stage][difficulty].
         p.stats.time_threshold = if flags & crate::gamemgr::F_SPELL_PRACTICE != 0 {
             0
         } else {
@@ -1139,9 +1138,9 @@ impl EnemyManager {
         self.g.drop_index = rng.range16(8);
     }
 
-    // Player collision (07 §10.1 step 6): graze box hitbox/0.7, contact box hitbox/1.5, shot/bomb damage.
+    // Player collision: graze box hitbox/0.7, contact box hitbox/1.5, shot/bomb damage.
     fn player_collision(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
-        // Graze, contact death and the explosion hit filter read the card flag live (09 §2.1 hit 1, §9.2): a card
+        // Graze, contact death and the explosion hit filter read the card flag live (09 §2.1): a card
         // ended earlier in this calc (step 4) already counts as none.
         crate::pl!(sys).env.spell = self.g.spell.is_some();
         let e = &self.enemies[idx];
@@ -1173,13 +1172,13 @@ impl EnemyManager {
         }
         if flags.contains(EnemyFlags::SHOT_HIT) {
             let mut acc = self.enemies[idx].orb_acc;
-            // hitByBomb starts as "player is bombing" but Player_DamageAgainst overwrites it (07 §10.1 step 6).
+            // hitByBomb starts as "player is bombing" but Player_DamageAgainst overwrites it.
             let mut by_bomb = crate::pl!(sys).bombing;
             let d = sys.with_bullets(|b, sys| {
                 sys.with_player(|p, sys| {
-                    // Homing-target pick, not gated (07 §10.1 step 6); the original runs it after the damage calls, which do not read it.
+                    // Homing-target pick, not gated; the original runs it after the damage calls, which do not read it.
                     p.offer_target(pos, boss);
-                    // The first call is not made for a parented enemy during a card while bombing (07 §10.1 step 6).
+                    // The first call is not made for a parented enemy during a card while bombing.
                     let skip =
                         self.g.spell.is_some() && self.enemies[idx].root.is_some() && p.bombing;
                     let mut d = if skip {
@@ -1218,7 +1217,7 @@ impl EnemyManager {
                     d
                 })
             });
-            // Aimed-enemy offer only for shootable enemies, after both damage calls (14 §3.1, 0x42D46A, RE-Q54).
+            // Aimed-enemy offer only for shootable enemies, after both damage calls (14 §3.1, 0x42D46A).
             self.offer_aimed(idx, crate::pl!(sys));
             self.enemies[idx].orb_acc = acc;
             self.enemies[idx].bomb_hit = by_bomb;
@@ -1226,10 +1225,9 @@ impl EnemyManager {
         }
     }
 
-    // The running enemy is swapped out for a placeholder whose alive bit keeps its slot reserved, then put back
-    // (ECL take/put, ARCH_A §2.3). The placeholder keeps the chain links (07 §6 var 10096: the original's walks pass
-    // through the running enemy); links changed in the slot during the run (a neighbour unlinked, the running enemy
-    // unlinked) win.
+    // The running enemy is swapped out for a placeholder whose alive bit keeps its slot reserved, then put back. It
+    // keeps the chain links (07 §6 var 10096: the original walks through the running enemy); links changed in the
+    // slot during the run (a neighbour or the running enemy unlinked) win.
     pub(crate) fn with_taken<R>(
         &mut self,
         idx: usize,
@@ -1248,7 +1246,7 @@ impl EnemyManager {
         r
     }
 
-    // Enemy_Free: also clears the aimed pointer (14 §3.1, 07 §10.1); a boss fades its ENEMY marker out (12 §5.10).
+    // Enemy_Free: also clears the aimed pointer (14 §3.1); a boss fades its ENEMY marker out (12 §5.10).
     pub fn free(&mut self, idx: usize, sys: &mut Sys) {
         let e = &self.enemies[idx];
         if e.has(EnemyFlags::BOSS)
@@ -1264,14 +1262,14 @@ impl EnemyManager {
     }
 
     // Death mode 0: like Enemy_Free but the aimed pointer survives until the next frame's slot test, and the boss
-    // table entry and flags A bit 1 stay, so the ENEMY marker keeps its last position (07 §10.3 rows 0–1, 12 §5.10).
+    // table entry and flags A bit 1 stay, so the ENEMY marker keeps its last position (12 §5.10).
     fn release(&mut self, idx: usize, sys: &mut Sys) {
         self.kill_chain(idx, None, sys);
         self.release_effects(idx, sys);
         self.enemies[idx].remove(EnemyFlags::ALIVE);
     }
 
-    // HUD +0x2C (boss display) is cleared when any boss slot unregisters (answers_phase5 impl8).
+    // HUD +0x2C (boss display) is cleared when any boss slot unregisters.
     pub(crate) fn unregister_boss(&mut self, idx: usize) {
         for b in &mut self.bosses {
             if b.is_some_and(|b| b.idx() == idx) {
@@ -1300,9 +1298,9 @@ impl EnemyManager {
         (if d < 4 { 1u8 << d } else { 0x0F }) | mode_bits
     }
 
-    // EnemyMgr_SpawnFromTimeline 0x42A4E0 / _FromEcl 0x42A680 steps 1–3 (07 §4.1); the caller finishes with
+    // EnemyMgr_SpawnFromTimeline 0x42A4E0 / _FromEcl 0x42A680 steps 1–3; the caller finishes with
     // `spawn_finish`. Only pos is written: prev pos and final pos keep the template's (0, 0, 0), so the first
-    // move's displacement (vars 10085–87) equals the spawn pos (07 §4.1 step 3 QUIRK).
+    // move's displacement (vars 10085–87) equals the spawn pos (quirk kept, 07 §4.1 step 3).
     pub(crate) fn spawn_prepare(
         &mut self,
         sub: i32,
@@ -1316,7 +1314,7 @@ impl EnemyManager {
         };
         let mut e = self.template.clone();
         e.slot = i32::from(EnemyIdx::from_slot(idx).0);
-        // Mirror bit 18: all x motion negated (07 §3 timeline op 1).
+        // Mirror bit 18: all x motion negated (timeline op 1).
         e.set(EnemyFlags::MIRROR, mirror);
         if life >= 0 {
             e.life = life;
@@ -1341,14 +1339,14 @@ impl EnemyManager {
         from_ecl: bool,
         sys: &mut Sys,
     ) -> Option<usize> {
-        // 07 §4.1 steps 4–5: time-0 instructions run at once; op 1 frees the slot.
+        // Steps 4–5: time-0 instructions run at once; op 1 frees the slot.
         if crate::eclvm::ecl_run(self, anm, idx, sys) == -1 {
             self.free(idx, sys);
             return None;
         }
         let e = &mut self.enemies[idx];
         e.main_color = e.vm.color;
-        // Item is taken as a signed char (07 §4.1 step 5).
+        // Item is taken as a signed char.
         e.item = i32::from(lo8(item).cast_signed());
         if score >= 0 {
             e.score = score;
@@ -1362,7 +1360,7 @@ impl EnemyManager {
         Some(idx)
     }
 
-    // EnemyMgr_SpawnFromTimeline 0x42A4E0 (07 §4.1).
+    // EnemyMgr_SpawnFromTimeline 0x42A4E0.
     pub fn spawn(&mut self, anm: &mut AnmManager, at: Spawn, sys: &mut Sys) -> Option<usize> {
         let idx = self.spawn_prepare(at.sub, at.pos, at.life, at.mirror)?;
         self.spawn_finish(anm, idx, at.life, at.item, at.score, false, sys)
@@ -1373,7 +1371,7 @@ impl EnemyManager {
         self.g.hud_boss || self.g.spawn_disabled != 0
     }
 
-    // EclTimeline_Run 0x42A8A0 (07 §3): late instructions are skipped, not stalled.
+    // EclTimeline_Run 0x42A8A0: late instructions are skipped, not stalled.
     fn run_timelines(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let gs = anm.speed;
         let dmask = self.rank_mask(0);
@@ -1389,7 +1387,7 @@ impl EnemyManager {
                 }
                 if clock.cur == ins.time {
                     if ins.rank & dmask != 0 && !self.timeline_op(anm, &ins, sys) {
-                        // Stall (07 §3): Decrement then the normal Tick, net zero even at game speed < 1.
+                        // Stall: Decrement then the normal Tick, net zero even at game speed < 1.
                         self.timelines[i].0.dec(gs, anm.slowdown_restore);
                         self.timelines[i].0.tick(gs);
                         break;
@@ -1403,7 +1401,7 @@ impl EnemyManager {
         }
     }
 
-    // Timeline ops (07 §3 table). Returns false to stall.
+    // Timeline ops. Returns false to stall.
     fn timeline_op(&mut self, anm: &mut AnmManager, ins: &ecl::TlIns, sys: &mut Sys) -> bool {
         let args: [u32; 7] = std::array::from_fn(|k| self.ecl.tl_arg(ins, k));
         match TlOp::decode(ins.op, args) {
@@ -1436,7 +1434,7 @@ impl EnemyManager {
                     self.enemies[b].pending_interrupt = n;
                 }
             }
-            // GameMgr_SetPower 0x406FA0: power := n, checksum (4 RNG draws) (07 timeline op 9, 09 §9.4).
+            // GameMgr_SetPower 0x406FA0: power := n, checksum (4 RNG draws) (09 §9.4).
             TlOp::SetPower(n) => crate::pl!(sys).stats.set_power(n as f32, sys.rng),
             // A mode-0 boss stays in the table, so the alive bit is tested too (07 §10.3).
             TlOp::WaitBoss(slot) => {
@@ -1473,7 +1471,7 @@ impl EnemyManager {
         true
     }
 
-    // Enemy_Move 0x42DEB0 (07 §8): clamp, step by velocity (x mirrored), clamp, follow parent, final pos z 0.
+    // Enemy_Move 0x42DEB0: clamp, step by velocity (x mirrored), clamp, follow parent, final pos z 0.
     // Flag A bit 29 skips only the clamp/step part.
     fn move_enemy(&mut self, idx: usize, gs: f32) {
         let root_pos = self.enemies[idx].root.map(|r| self.enemies[r].pos);
@@ -1499,7 +1497,7 @@ impl EnemyManager {
         e.final_pos = [e.pos[0] + e.pos_offset[0], e.pos[1] + e.pos_offset[1], 0.0];
     }
 
-    // Screen check (07 §10.1 step 4); returns true when the enemy left the screen and must be freed.
+    // Screen check; returns true when the enemy left the screen and must be freed.
     // No free test on the pass that first sets bit 24.
     fn screen_check(&mut self, idx: usize) -> bool {
         let e = &mut self.enemies[idx];
@@ -1509,7 +1507,7 @@ impl EnemyManager {
         if e.has(EnemyFlags::HIDDEN) {
             return false;
         }
-        // Main VM sprite box, inclusive (07 §10.1 step 4).
+        // Main VM sprite box, inclusive.
         let (hw, hh) = (e.vm.sprite_w / 2.0, e.vm.sprite_h / 2.0);
         let on_screen = |[x, y, _]: [f32; 3]| {
             x + hw >= 0.0 && x - hw <= 384.0 && y + hh >= 0.0 && y - hh <= 448.0
@@ -1532,7 +1530,7 @@ impl EnemyManager {
         self.enemies[idx].main.ctx.enter(ecl, sub);
     }
 
-    // Jump to the death sub with the full context reset; the death sub is consumed (07 §10.3, §10.6).
+    // Jump to the death sub with the full context reset; the death sub is consumed.
     pub(crate) fn jump_to_death_sub(&mut self, idx: usize) {
         let sub = self.enemies[idx].death_sub;
         if sub >= 0 {
@@ -1545,10 +1543,9 @@ impl EnemyManager {
         }
     }
 
-    // EnemyMgr_KillAll(8000, 0) 0x42EFB0 (07 §7 op 95): per alive non-boss enemy without flags B bit 6, in slot
-    // order: life 0; flag A bit 7 → item 6 + popup at the recomputed final pos and at every 6th trail entry
-    // (v = 2000 first, then min(v + 30, 8000)); `Enemy_ChainUnlink`; `Ecl_SetSub` to the death sub (consumed).
-    // No self test: an ECL caller must be back in its slot (`Exec::with_self_in_slot`) to be included.
+    // EnemyMgr_KillAll(8000, 0) 0x42EFB0 (07 §7 op 95), slot order, alive non-boss without flags B bit 6: life 0; flag
+    // A bit 7 → item 6 + popup at the recomputed final pos and every 6th trail entry (v = 2000, then min(v + 30,
+    // 8000)); ChainUnlink; SetSub to the death sub (consumed). No self test: the ECL caller must be back in its slot.
     pub(crate) fn kill_all(&mut self, anm: &mut AnmManager, sys: &mut Sys) -> i32 {
         const MAX: i32 = 8000;
         let (mut v, mut sum) = (2000, 0);
@@ -1588,7 +1585,7 @@ impl EnemyManager {
         sum
     }
 
-    // CancelBonus(8000, lasers) + KillAll(8000): score and Hud_ShowBonus (08 §7, 07 §11.1).
+    // CancelBonus(8000, lasers) + KillAll(8000): score and Hud_ShowBonus (08 §7).
     fn cancel_and_kill_bonus(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let sum = sys.with_player(|p, sys| {
             sys.with_bullets(|b, sys| b.cancel_bonus(anm, p, 8000, true, sys))
@@ -1620,7 +1617,7 @@ impl EnemyManager {
         n
     }
 
-    // Enemy_KillChildren 0x42ADB0 (07 §10.5, 13 §4 large popups, 08 §8.4 gauge lock); `anm` None = no drops.
+    // Enemy_KillChildren 0x42ADB0 (13 §4); `anm` None = no drops.
     pub(crate) fn kill_chain(
         &mut self,
         idx: usize,
@@ -1633,7 +1630,7 @@ impl EnemyManager {
             self.kill_single(idx, anm, sys);
             return;
         }
-        // A chained child never chain-kills its later siblings; without reward it only unlinks (answers_impl12 §1).
+        // A chained child never chain-kills its later siblings; without reward it only unlinks.
         if self.enemies[idx].root.is_some() {
             self.unlink(idx);
             return;
@@ -1647,7 +1644,7 @@ impl EnemyManager {
         if let Some(anm) = anm.as_deref_mut() {
             self.reward_children(idx, &kids, n, colour, anm, sys);
         }
-        // 07 §10.3a step 4: always, reward or not.
+        // Step 4: always, reward or not.
         for &c in &kids {
             let e = &mut self.enemies[c];
             e.extra_point = 0;
@@ -1659,7 +1656,7 @@ impl EnemyManager {
         }
     }
 
-    // 07 §10.3a step 2: walk +8 from the root, mark each child chain-killed and cut its links; the root's +8 := 0.
+    // Step 2: walk +8 from the root, mark each child chain-killed and cut its links; the root's +8 := 0.
     fn detach_children(&mut self, idx: usize) -> Vec<EnemyIdx> {
         let parent_pos = self.enemies[idx].pos;
         let mut kids = Vec::new();
@@ -1681,7 +1678,7 @@ impl EnemyManager {
         kids
     }
 
-    // 07 §10.3a step 3 per child k: cancel circle, popup, c time orbs, drops, SE.
+    // Step 3 per child k: cancel circle, popup, c time orbs, drops, SE.
     fn reward_children(
         &mut self,
         idx: usize,
@@ -1726,7 +1723,7 @@ impl EnemyManager {
                 self.enemies[c].item = 8;
                 self.drop_items(c.idx(), anm, Some(0), sys);
             }
-            // SE 2 + (k & 1) by the child's index in the chain walk (07 §10.3a, 13 §1.4).
+            // SE 2 + (k & 1) by the child's index in the chain walk (13 §1.4).
             let se = if k % 2 == 0 {
                 crate::sound::ENEP0
             } else {
@@ -1736,7 +1733,7 @@ impl EnemyManager {
         }
     }
 
-    // Boss chain kill (07 §10.3a step 5, 13 §4): popup of e+0x3380 at scale 2, 2·count time orbs within 128 px.
+    // Boss chain kill (13 §4): popup of e+0x3380 at scale 2, 2·count time orbs within 128 px.
     fn boss_chain_reward(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
         let e = &self.enemies[idx];
         let (pos, count) = (e.final_pos, e.children);
@@ -1757,11 +1754,11 @@ impl EnemyManager {
         crate::bm!(sys).items.collect_timer = 0;
     }
 
-    // Single-kill path of 0x42ADB0 (13 §4, 08 §8.4): gauge −gauge/12, gauge lock 50, one time orb.
+    // Single-kill path of 0x42ADB0 (08 §8.4): gauge −gauge/12, gauge lock 50, one time orb.
     fn kill_single(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
         {
             let p = crate::pl!(sys);
-            // 07 §10.3a: GaugeAdd(−gauge/12, not forced), so nothing while bombing; clamped.
+            // GaugeAdd(−gauge/12, not forced), so nothing while bombing; clamped.
             if !p.bombing {
                 let g = i32::from(p.stats.gauge);
                 p.stats.gauge_add(-g / 12);
@@ -1782,7 +1779,7 @@ impl EnemyManager {
         self.unlink(idx);
     }
 
-    // Enemy_ChainUnlink 0x42B2F0 (07 §10.3a). Quirk kept: without a parent only e+4/e+8 are zeroed, so the
+    // Enemy_ChainUnlink 0x42B2F0. Quirk kept: without a parent only e+4/e+8 are zeroed, so the
     // first child keeps prev = e and its own unlink later re-attaches the rest of the chain to e.
     fn unlink(&mut self, idx: usize) {
         let e = &mut self.enemies[idx];
@@ -1847,12 +1844,12 @@ impl EnemyManager {
         crate::bm!(sys).items.attract_all();
     }
 
-    // Spell_End 0x4161B0 (07 §11.1); the payout is queued and made 130 frames later in `step`.
+    // Spell_End 0x4161B0; the payout is queued and made 130 frames later in `step`.
     pub fn finish_spell(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         // 0x4E3D28 (darkness mask alpha) := 0 first, every call; then, with the card active, Spell_HideName.
         sys.ov.clear_darkness();
         self.end_active_spell(anm, sys);
-        // Tail of every op 123 (07 §11.1, RE-Q56): after the time-reward test, the boss loses flag A bit 27,
+        // Tail of every op 123: after the time-reward test, the boss loses flag A bit 27,
         // g_Gui +4 := 0, spell flag bit 11 := 0.
         if let Some(b) = self.g.spell_boss.take() {
             self.enemies[b].remove(EnemyFlags::FIXED_BONUS);
@@ -1861,13 +1858,13 @@ impl EnemyManager {
         self.g.bonus_frozen = false;
     }
 
-    // Card-active block of Spell_End 0x4161B0 (07 §11.1).
+    // Card-active block of Spell_End 0x4161B0.
     fn end_active_spell(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL};
         let Some(s) = self.g.spell.take() else { return };
         self.keep_bonus(&s);
         sys.gui.push(crate::gui::Req::BossHide);
-        // Time reward from +0x114 and the remaining-time timer +0x108 (07 §11.1).
+        // Time reward from +0x114 and the remaining-time timer +0x108.
         let (total, remaining) = (s.duration, self.g.spell_remaining.cur);
         // HUD +0x04 |= 0xF (lives and bombs fields := 3) only with a card active, before sfx 0xF (12 §5.3).
         sys.panel.mark_lives(3);
@@ -1880,7 +1877,7 @@ impl EnemyManager {
             self.cancel_and_kill_bonus(anm, sys);
         }
         let p = crate::pl!(sys);
-        // Always: bomb cooldown +0xE2A6C := 16, its only writer (07 §11.1, 09 §1.1).
+        // Always: bomb cooldown +0xE2A6C := 16, its only writer (09 §1.1).
         p.bomb_cooldown = 16;
         if p.state == 0 {
             p.state = 3;
@@ -1888,7 +1885,7 @@ impl EnemyManager {
         }
         if !s.capture || p.deaths != s.deaths0 || p.bombs_started != s.bombs0 {
             *sys.flags &= !(F_LAST_SPELL | F_LAST_CAPTURED);
-            // Not captured: the start ring is freed, +0xF4 := 0 (07 §11.1).
+            // Not captured: the start ring is freed, +0xF4 := 0.
             sys.fx.free(crate::effect::FIX_SPELL_INDEX);
             p.stats
                 .popups
@@ -1898,14 +1895,14 @@ impl EnemyManager {
         if *sys.flags & (F_LAST_SPELL | F_LAST_CAPTURED) != 0 {
             *sys.flags = *sys.flags & !F_LAST_SPELL | F_LAST_CAPTURED;
         }
-        // Spell flag bit 9 "captured" is set by `Spell_End` (07 §11.1).
+        // Spell flag bit 9 "captured" is set by `Spell_End`.
         self.g.spell_captured = true;
         sys.gui.push(crate::gui::Req::Captured {
             card: s.id,
             bonus: s.bonus,
             comment: s.comment.clone(),
         });
-        // Time reward 700 (flag A bit 27) or from the remaining card time (07 §11.1 → answers_phase5 impl8).
+        // Time reward 700 (flag A bit 27) or from the remaining card time.
         let thr = total - total / 7;
         let time = if self.g.fixed_bonus {
             700
@@ -1920,7 +1917,7 @@ impl EnemyManager {
         p.stats.spells += 1;
         // Spell capture checksum (11 §1.5, 4 draws).
         crate::player::Stats::checksum(sys.rng);
-        // Capture ring restyle (07 §11.1): radius → 256 over 30 (mode 6), colour slot → 0x20D080A0 over 60 (mode 3),
+        // Capture ring restyle: radius → 256 over 30 (mode 6), colour slot → 0x20D080A0 over 60 (mode 3),
         // waves 6, age timer +0x338 := 0; the start ring becomes the capture ring (+0xF4 → +0xF8).
         sys.fx.get(crate::effect::FIX_SPELL_INDEX, |e| {
             let p = [e.ring.radius, e.ring.amp, 0.0];
@@ -1928,7 +1925,7 @@ impl EnemyManager {
             e.vm.pos = p;
             let c = u32::from_le_bytes(e.vm.color);
             e.vm.interp_color_from(60, 3, c, 0x20D0_80A0);
-            // The colour slot lerps RGB only; 0x20 goes into alpha_end, alpha_start := current alpha (07 §11.1, 05 §6).
+            // The colour slot lerps RGB only; 0x20 goes into alpha_end, alpha_start := current alpha (05 §6).
             e.vm.color_start[crate::anmvm::A] = e.vm.color[crate::anmvm::A];
             e.vm.color_end[crate::anmvm::A] = 0x20;
             e.ring.waves = 6.0;
@@ -1940,7 +1937,7 @@ impl EnemyManager {
         });
     }
 
-    // Payout (07 §11.1): at ring timer 130 (`ring`: ring freed, max point += left·10) or at the next Spell_Start.
+    // Payout: at ring timer 130 (`ring`: ring freed, max point += left·10) or at the next Spell_Start.
     pub fn pay_capture(&mut self, ring: bool, sys: &mut Sys) {
         let Some(c) = self.g.payout.take() else {
             return;
@@ -1959,8 +1956,8 @@ impl EnemyManager {
         }
     }
 
-    // Spell_AddBonus 0x416B10 (07 §11): ignored while bit 11; below the max (unsigned) R += n/120, else bonus := max.
-    // No card-active test: after the card ended it changes the values the card left (07 §11.1).
+    // Spell_AddBonus 0x416B10: ignored while bit 11; below the max (unsigned) R += n/120, else bonus := max.
+    // No card-active test: after the card ended it changes the values the card left.
     pub fn spell_add_bonus(&mut self, n: i32) {
         if self.g.bonus_frozen {
             return;
@@ -1978,7 +1975,7 @@ impl EnemyManager {
         }
     }
 
-    // The spell object keeps +0xFC / +0x2638 / +0x100 after the card ends (07 §11.1).
+    // The spell object keeps +0xFC / +0x2638 / +0x100 after the card ends.
     fn keep_bonus(&mut self, s: &Spell) {
         self.g.spell_left = Some(SpellBonus {
             bonus: s.bonus,
@@ -1988,7 +1985,7 @@ impl EnemyManager {
         });
     }
 
-    // Card-active part of Spell_Calc 0x416B90 (07 §11.1 steps 1.1 and 1.3–1.7); the caller skips it while bit 10 /
+    // Card-active part of Spell_Calc 0x416B90 (steps 1.1 and 1.3–1.7); the caller skips it while bit 10 /
     // the freeze byte is set and does step 1.2 (bonus-line tint). Returns true when step 1.1 ended the card.
     pub fn spell_step(&mut self, anm: &AnmManager, sys: &mut Sys) -> bool {
         let Some(mut s) = self.g.spell.take() else {
@@ -2011,14 +2008,14 @@ impl EnemyManager {
                 }
             });
         } else if !self.g.bonus_frozen && !boss.has(EnemyFlags::FIXED_BONUS) {
-            // Unsigned rate / 60 scaled by game speed, ftol to u32 (07 §11.1 step 1.3).
+            // Unsigned rate / 60 scaled by game speed, ftol to u32.
             #[expect(clippy::cast_sign_loss, reason = "f32 → u32 ftol of the original")]
             let d = ((s.decay.cast_unsigned() / 60) as f32 * anm.speed) as u32;
             let b = s.bonus.cast_unsigned().wrapping_sub(d);
             s.bonus = (b - b % 10).cast_signed();
         }
         // Step 1.5 reads the boss's live timeout e+0x3378: after a timeout (−1) the restart gets −101 and the slot
-        // stays inactive, so the ring stays at radius 8 (07 §11.1 step 5).
+        // stays inactive, so the ring stays at radius 8.
         let duration = boss.timeout;
         let follow = (!self.g.spell_flag6)
             .then(|| -> [f32; 3] { std::array::from_fn(|k| boss.pos[k] + boss.pos_offset[k]) });
@@ -2057,7 +2054,7 @@ impl EnemyManager {
         !active
     }
 
-    // Capture-ring part of Spell_Calc 0x416B90 (07 §11.1); the caller skips it while bit 10 / the freeze byte is set.
+    // Capture-ring part of Spell_Calc 0x416B90; the caller skips it while bit 10 / the freeze byte is set.
     pub fn capture_ring_step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         if self.g.spell.is_some() || self.g.payout.is_none() {
             return;
@@ -2104,14 +2101,14 @@ impl EnemyManager {
         });
         let left = self.g.payout.map_or(0, |c| c.time);
         if t > 8 && left > 0 {
-            // t = Timer_GetF; f32 per operation, left to right (07 §11.1, main-thread CW 0x007F).
+            // t = Timer_GetF; f32 per operation, left to right (main-thread CW 0x007F).
             use std::f32::consts::PI;
             let tf = sys.fx.peek(ring, |e| e.age.getf());
             let a = anmvm::wrap_add((tf - 10.0) * (2.0 * PI) / 40.0 - PI / 2.0, 0.0);
             let mut left = left;
             for (ang, n) in [(a, None), (anmvm::wrap_add(a + PI, 0.0), Some(6))] {
                 let k = left.min(7);
-                // Quirk kept (07 §11.1): the second burst always spawns 6, whatever k is.
+                // Quirk kept: the second burst always spawns 6, whatever k is.
                 let spawns = n.unwrap_or(k);
                 let d = crate::fmath::polar(ang, 128.0);
                 let pos = [centre[0] + d[0], centre[1] + d[1], centre[2]];
@@ -2154,7 +2151,7 @@ impl EnemyManager {
         crate::bm!(sys).cancel_all(anm, sys.rng, p, mode);
     }
 
-    // Enemy_DropItems 0x42BEA0 (07 §10.4): mode 1 (auto-collected) when hitByBomb; extras always mode 0.
+    // Enemy_DropItems 0x42BEA0: mode 1 (auto-collected) when hitByBomb; extras always mode 0.
     // RNG order: sparks (effect), then extras x then y per item, then the items themselves.
     fn drop_items(&mut self, idx: usize, anm: &mut AnmManager, mode: Option<u8>, sys: &mut Sys) {
         let e = &mut self.enemies[idx];
@@ -2194,7 +2191,7 @@ impl EnemyManager {
         }
     }
 
-    // Threshold / timeout switch cleanup (07 §10.2).
+    // Threshold / timeout switch cleanup.
     fn cleanup_after_jump(
         &mut self,
         anm: &mut AnmManager,
@@ -2212,8 +2209,8 @@ impl EnemyManager {
         }
     }
 
-    // Every alive non-boss enemy: life 0 and an `Ecl_SetSub` jump to its death sub, consumed (07 §10.2, §10.6:
-    // ip/clock/wait only). No self test: a non-boss switching enemy also dies, its new sub replaced by the death sub.
+    // Every alive non-boss enemy: life 0 and an `Ecl_SetSub` jump to its death sub, consumed (ip/clock/wait
+    // only). No self test: a non-boss switching enemy also dies, its new sub replaced by the death sub.
     fn kill_non_bosses(&mut self) {
         for j in 0..self.enemies.len() {
             let e = &mut self.enemies[j];
@@ -2228,7 +2225,7 @@ impl EnemyManager {
         }
     }
 
-    // Player state 0 → 3 (invulnerable) for `t` frames (07 §10.2, §10.3, §11.1).
+    // Player state 0 → 3 (invulnerable) for `t` frames.
     fn protect_player(&mut self, p: &mut Player, t: i32) {
         if p.state == 0 {
             p.state = 3;
@@ -2236,7 +2233,7 @@ impl EnemyManager {
         }
     }
 
-    // Low-life warning level 0–3 (07 §10.2); `diff` = life − threshold, or life without thresholds.
+    // Low-life warning level 0–3; `diff` = life − threshold, or life without thresholds.
     fn warn_level(&self, e: &Enemy, diff: i32, with_thr: bool) -> u32 {
         let card = self.g.spell.is_some();
         let t: [i32; 3] = match (with_thr, card, e.has(EnemyFlags::BOSS)) {
@@ -2250,7 +2247,7 @@ impl EnemyManager {
         t.iter().position(|&v| diff < v).map_or(0, |k| 3 - k as u32)
     }
 
-    // Enemy_CheckLifeThresholds 0x42B490 (07 §10.2): first k with life < threshold[k] wins; max life unchanged.
+    // Enemy_CheckLifeThresholds 0x42B490: first k with life < threshold[k] wins; max life unchanged.
     fn check_thresholds(&mut self, anm: &mut AnmManager, idx: usize, sys: &mut Sys) -> bool {
         self.enemies[idx].remove_b(EnemyFlagsB::WARN);
         let e = &self.enemies[idx];
@@ -2286,14 +2283,14 @@ impl EnemyManager {
         true
     }
 
-    // Enemy_CheckTimeout 0x42B930 (07 §10.2): the largest active threshold becomes life; timeout sub := death sub.
+    // Enemy_CheckTimeout 0x42B930: the largest active threshold becomes life; timeout sub := death sub.
     fn check_timeout(&mut self, anm: &mut AnmManager, idx: usize, sys: &mut Sys) -> bool {
         let e = &mut self.enemies[idx];
-        // EnemyMgr_Calc calls 0x42B930 only while timeout ≥ 0, so the HUD timer is frozen after −1 (07 §10.1, 12 §5.1).
+        // EnemyMgr_Calc calls 0x42B930 only while timeout ≥ 0, so the HUD timer is frozen after −1 (12 §5.1).
         if e.timeout < 0 {
             return false;
         }
-        // Every call on a slot-0 boss, before the fire test and before this frame's step-7 tick (07 §10.2).
+        // Every call on a slot-0 boss, before the fire test and before this frame's step-7 tick.
         if e.has(EnemyFlags::BOSS) && e.boss_slot == 0 {
             self.g.hud_timer = (e.timeout - e.boss_timer.cur) / 60;
         }
@@ -2328,7 +2325,7 @@ impl EnemyManager {
         true
     }
 
-    // Shot damage (07 §10.1 step 6); `d` comes from the player side. Score is added before the bit-3 test.
+    // Shot damage; `d` comes from the player side. Score is added before the bit-3 test.
     pub fn damage(&mut self, p: &mut Player, idx: usize, d: i32, bomb: bool) {
         if d <= 0 {
             return;
@@ -2338,7 +2335,7 @@ impl EnemyManager {
         let spell = self.g.spell.is_some();
         let bombed = self.g.spell.as_ref().is_some_and(|s| s.bombed);
         let e = &mut self.enemies[idx];
-        // The hit flash needs only d > 0 at step 6, also without bit 3 (07 §10.1 step 7).
+        // The hit flash needs only d > 0 at step 6, also without bit 3.
         e.hit = true;
         if !e.has(EnemyFlags::LOSES_LIFE) {
             return;
@@ -2394,7 +2391,7 @@ impl EnemyManager {
     }
 
     // Enemy-owned effects: op 128 effects fade out; the op 174 aura gets interrupt 3 and plays its own end, it is
-    // not freed (07 §10.3b).
+    // not freed.
     fn release_effects(&mut self, idx: usize, sys: &mut Sys) {
         for i in self.enemies[idx].fx_attached.drain(..) {
             sys.fx.get(i, |x| x.fade = true);
@@ -2402,7 +2399,7 @@ impl EnemyManager {
         self.end_aura(idx, sys);
     }
 
-    // Death processing (07 §10.3): runs after this frame's Ecl_Run, so the death sub starts next frame.
+    // Death processing: runs after this frame's Ecl_Run, so the death sub starts next frame.
     fn death(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
         let e = &self.enemies[idx];
         if e.life >= 1 || e.has_b(EnemyFlagsB::DEATH_LATCH | EnemyFlagsB::CANNOT_DIE) || !e.alive()
@@ -2443,7 +2440,7 @@ impl EnemyManager {
                 e.remove(EnemyFlags::CONTACT | EnemyFlags::LOSES_LIFE | EnemyFlags::SHOT_HIT);
                 self.add_score(crate::pl!(sys), sc);
             }
-            // Latch B bit 3 stays until life > 0 again; HUD boss display off for every mode-3 enemy (07 §10.3).
+            // Latch B bit 3 stays until life > 0 again; HUD boss display off for every mode-3 enemy.
             3 => {
                 e.life = 1;
                 e.remove(
@@ -2477,7 +2474,7 @@ impl EnemyManager {
             }
             self.enemies[idx].life = 0;
         }
-        // Every death mode, also 3 and 4–7 (07 §10.3). RNG order: drops → death sparks ×4 → time orb.
+        // Every death mode, also 3 and 4–7. RNG order: drops → death sparks ×4 → time orb.
         if !self.enemies[idx].has(EnemyFlags::CHAIN_KILLED) {
             sys.sound.play_at(
                 if idx.is_multiple_of(2) {
@@ -2514,10 +2511,10 @@ impl EnemyManager {
         sys.fx.get(h, |x| x.vm.pending_interrupt = 3);
     }
 
-    // 07 §10.1 step 5: a finished sub VM is disabled.
+    // A finished sub VM is disabled.
     fn run_vms(&mut self, idx: usize, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
         let e = &mut self.enemies[idx];
-        // Colour copy (07 §10.1 step 5): the main VM runs with colour := e+0x2E20 and saves it back, so its colour
+        // Colour copy: the main VM runs with colour := e+0x2E20 and saves it back, so its colour
         // survives later script starts; sub VMs have no copy.
         e.vm.color = e.main_color;
         if e.vm.script.is_some() {
@@ -2531,7 +2528,7 @@ impl EnemyManager {
         }
     }
 
-    // Enemy_ReactPlayerMode 0x42C420 (07 §10.1 step 3), using the stored bit 11 at entry.
+    // Enemy_ReactPlayerMode 0x42C420, using the stored bit 11 at entry.
     fn react_player_mode(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
         let youkai = self.g.player_mode != 0;
         let e = &mut self.enemies[idx];
@@ -2558,7 +2555,7 @@ impl EnemyManager {
         e.set(EnemyFlags::YOUKAI, youkai);
     }
 
-    // EnemyMgr_Calc per enemy (07 §10.1).
+    // EnemyMgr_Calc per enemy.
     fn update(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) {
         if self.enemies[idx].has(EnemyFlags::CHAIN_KILLED) {
             let e = &mut self.enemies[idx];
@@ -2567,7 +2564,7 @@ impl EnemyManager {
             self.death(idx, anm, sys);
             return;
         }
-        // Held (07 §10.1 step 2): flags B bit 7, or flags A bit 30 while bombing / player state ≠ 0. Steps 3–6 and
+        // Held (step 2): flags B bit 7, or flags A bit 30 while bombing / player state ≠ 0. Steps 3–6 and
         // the death test are skipped (no movement, never freed off screen); the e+0x2E14 decrement nets the tick.
         let held = {
             let p = crate::pl!(sys);
@@ -2582,7 +2579,7 @@ impl EnemyManager {
         } else if !self.update_body(idx, anm, sys) {
             return;
         }
-        // Death latch cleared when life > 0, only on frames the script block ran (07 §10.3).
+        // Death latch cleared when life > 0, only on frames the script block ran.
         if !held {
             let e = &mut self.enemies[idx];
             if e.life > 0 {
@@ -2590,25 +2587,25 @@ impl EnemyManager {
             }
             self.death(idx, anm, sys);
         }
-        // Step 7 after step 6's death: the death bonus seconds read the un-ticked timer (07 §10.1, §10.3).
-        // Game speed read live (07 §5): a native 18 run by this frame's Ecl_Run already slows these ticks.
+        // Step 7 after step 6's death: the death bonus seconds read the un-ticked timer.
+        // Game speed read live (07 §5.2): a native 18 run by this frame's Ecl_Run already slows these ticks.
         self.update_tail(idx, anm.speed, anm.slowdown_restore, sys);
     }
 
-    // 07 §10.1 steps 3–6; false when the enemy was freed (op 1 delete, off screen).
+    // Steps 3–6; false when the enemy was freed (op 1 delete, off screen).
     fn update_body(&mut self, idx: usize, anm: &mut AnmManager, sys: &mut Sys) -> bool {
         if self.enemies[idx].has(EnemyFlags::MODE_REACT) {
             self.react_player_mode(idx, anm, sys);
         }
-        // 07 §10.1 step 4: a threshold or timeout switch re-runs the whole body in the same frame.
+        // Step 4: a threshold or timeout switch re-runs the whole body in the same frame.
         loop {
             if crate::eclvm::ecl_run(self, anm, idx, sys) == -1 {
                 self.free(idx, sys);
                 return false;
             }
-            // Live game speed (07 §5): set by this pass's Ecl_Run.
+            // Live game speed (07 §5.2): set by this pass's Ecl_Run.
             self.move_enemy(idx, anm.speed);
-            // Aura VM pos (07 §10.1 step 4, 0x42CAC9): every pass, before the trail shift and the screen check.
+            // Aura VM pos (0x42CAC9): every pass, before the trail shift and the screen check.
             let e = &self.enemies[idx];
             let p = e.final_pos;
             sys.fx.get(e.fx_aura, |x| x.pos = p);
@@ -2624,7 +2621,7 @@ impl EnemyManager {
             }
         }
         self.run_vms(idx, anm, sys.rng);
-        // Step 6 is skipped for flag A bits 4/5/11, and for bit 31 while the player is bombing (07 §10.1 step 6).
+        // Step 6 is skipped for flag A bits 4/5/11, and for bit 31 while the player is bombing.
         let flags = self.enemies[idx].a_flags();
         if !flags.intersects(EnemyFlags::HIDDEN | EnemyFlags::INVISIBLE | EnemyFlags::YOUKAI)
             && !(flags.contains(EnemyFlags::BOMB_IMMUNE) && crate::pl!(sys).bombing)
@@ -2642,12 +2639,12 @@ impl EnemyManager {
         true
     }
 
-    // Common tail of 07 §10.1 step 7: hit flash, boss marker, timers, draw-list link.
+    // Common tail of step 7: hit flash, boss marker, timers, draw-list link.
     fn update_tail(&mut self, idx: usize, gs: f32, sr: bool, sys: &mut Sys) {
         let pause = *sys.timer_pause != 0;
         let dialogue = Self::dialogue_active(sys);
         let e = &mut self.enemies[idx];
-        // Counter e+0x3314 (07 §10.1 step 7): a flashed frame is followed by one without.
+        // Counter e+0x3314: a flashed frame is followed by one without.
         let hit = std::mem::take(&mut e.hit);
         if e.has(EnemyFlags::YOUKAI) {
             // Youkai state skips the hit flash entirely (no counter change, no sfx); BGRA (0x20, 0x20, 0xC0, a / 2).
@@ -2693,9 +2690,8 @@ impl EnemyManager {
             };
             sys.ov.marker_track(slot, x, mode);
         }
-        // Enemy_UpdateOrbitEffects 0x42E010 (07 §10.1 step 7): after the marker; a boss mode-0/1 death has
-        // already drained them. 13 §2.6b: centred on the base pos e+0x2D34, not the final pos.
-        // A held enemy runs it too (unconditional call in the shared tail, 07 §10.1 step 2).
+        // Enemy_UpdateOrbitEffects 0x42E010: after the marker; a boss mode-0/1 death has already drained them.
+        // 13 §2.6b: centred on the base pos e+0x2D34, not the final pos. A held enemy runs it too (shared-tail call).
         let (c, d, hidden) = (e.pos, e.orbit_target, e.has(EnemyFlags::HIDDEN));
         for &i in &e.fx_attached {
             sys.fx.get(i, |x| x.orbit_follow(c, d, hidden));
@@ -2706,13 +2702,13 @@ impl EnemyManager {
         if e.dmg_timer.cur > 0 {
             e.dmg_timer.dec(gs, sr);
         }
-        // Linked only if still alive: a mode-0 death this frame skips the link (07 §10.1 step 7).
+        // Linked only if still alive: a mode-0 death this frame skips the link.
         if e.alive() && !e.has(EnemyFlags::HIDDEN) {
             self.draw_lists[e.layer.min(3) as usize].push(idx);
         }
     }
 
-    // EnemyMgr_Calc 0x42C660 (07 §10.1).
+    // EnemyMgr_Calc 0x42C660.
     pub fn step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         {
             let p = crate::pl!(sys);
@@ -2724,7 +2720,7 @@ impl EnemyManager {
             let p = crate::pl!(sys);
             (p.deaths, p.bombs_started)
         };
-        // Port: spell flag bits 2/7 from the player's bomb/death counters (07 §11.1: 0x44CBA0, 0x44D150).
+        // Port: spell flag bits 2/7 from the player's bomb/death counters (0x44CBA0, 0x44D150).
         if let Some(s) = &mut self.g.spell {
             if bombs != s.bombs0 && !s.bombed {
                 s.bombed = true;
@@ -2748,17 +2744,17 @@ impl EnemyManager {
             }
         }
         // Step 0: GameFlags bit 10 (spell-card death freeze) returns here; the draw lists keep last frame's
-        // enemies, the manager clock and Spell_Calc's card timer hold (07 §10.1 step 0, §11.1).
+        // enemies, the manager clock and Spell_Calc's card timer hold.
         if crate::pl!(sys).freeze_bullets(*sys.flags) {
             return;
         }
-        // Step 1: the op-176 box, then EnemyMgr_TimeRank, then the resets and the timelines (07 §10.1 step 1).
+        // Step 1: the op-176 box, then EnemyMgr_TimeRank, then the resets and the timelines.
         self.last_spell_box(anm, sys);
         self.time_rank(sys);
         self.full = false;
         self.draw_lists.iter_mut().for_each(Vec::clear);
         self.run_timelines(anm, sys);
-        // Slot order; an inactive slot clears the aimed pointer (07 §10.1 step 7, 14 §3.1).
+        // Slot order; an inactive slot clears the aimed pointer (14 §3.1).
         for idx in 0..self.enemies.len() {
             if self.enemies[idx].alive() {
                 self.update(idx, anm, sys);
@@ -2804,7 +2800,7 @@ impl EnemyManager {
         }
     }
 
-    // After-image trail sprite copies (07 §10.6, op 157), oldest first; entry 0 is not drawn. Yields (i, entry).
+    // After-image trail sprite copies (op 157), oldest first; entry 0 is not drawn. Yields (i, entry).
     fn trail_copies(e: &Enemy) -> impl Iterator<Item = (i32, TrailEntry)> + '_ {
         let n = e.trail_len();
         // Port-only bound: a step b ≤ 0 would never end the walk (data: b ≥ 1).
@@ -2815,7 +2811,7 @@ impl EnemyManager {
             .map(move |i| (i, e.trail_ring[table_index(i)]))
     }
 
-    // One sprite copy (07 §10.6): rotation (flag A bit 25), x scale (flag 2) and alpha (flag 4) from the main VM's
+    // One sprite copy: rotation (flag A bit 25), x scale (flag 2) and alpha (flag 4) from the main VM's
     // own `scale` / alpha `a`; pos = entry + pos offset + playfield origin at z 0.3.
     fn trail_copy(
         vm: &mut AnmVm,
@@ -2841,7 +2837,7 @@ impl EnemyManager {
     }
 
     // Trail draw step, before the main VM: the copies' writes on the main VM, then its scale and colour restored.
-    // Returns the last copy's draw pos (07 §10.6 QUIRK: kept by the main VM), None when no copy was drawn.
+    // Returns the last copy's draw pos (quirk kept: the main VM keeps it), None when no copy was drawn.
     fn trail_step(anm: &AnmManager, e: &mut Enemy) -> Option<[f32; 3]> {
         let (f, n) = (e.trail[0], e.trail_len());
         // Flag 8: the ring strip writes nothing.
@@ -2877,7 +2873,7 @@ impl EnemyManager {
             table_index(i32::from(e.vm.anm_slot)),
             table_index(i32::from(e.vm.sprite_index)),
         ) {
-            // One triangle strip (Anm_DrawRingStrip); unreachable with retail data (07 §10.6).
+            // One triangle strip (Anm_DrawRingStrip); unreachable with retail data.
             let mut idx = Vec::new();
             let mut i = 0;
             while i < n && used(i) {
@@ -2911,7 +2907,7 @@ impl EnemyManager {
                     }
                 }
                 prev = Some(th);
-                // Coordinate A steps per walked entry, skipped ones included (07 §10.6).
+                // Coordinate A steps per walked entry, skipped ones included.
                 let ua = u1 + vm.uv_off[0] - step * j as f32;
                 let mut h = vm.scale[1] * vm.sprite_h / 2.0;
                 if f & 2 != 0 {
@@ -2964,8 +2960,8 @@ impl EnemyManager {
         self.enemies[boss].orb_acc = acc;
     }
 
-    // Enemy draw order (07 §10.6): prio 8 → layers 0–1, prio 11 → layers 2–3; lists are prepended (07 §10.1
-    // step 7), so they are drawn newest-linked first. Hidden / dead enemies are skipped.
+    // Enemy draw order: prio 8 → layers 0–1, prio 11 → layers 2–3; lists are prepended (step 7), so they are drawn
+    // newest-linked first. Hidden / dead enemies are skipped.
     fn draw_order(&self, high: bool) -> Vec<usize> {
         let first = if high { 2 } else { 0 };
         (first..first + 2)
@@ -2978,20 +2974,20 @@ impl EnemyManager {
     }
 
     // Per enemy: sub VM 0, (trail +) main VM, sub VM 1; the main VM skipped when it has no script, flag A bit 5
-    // (invisible) or trail flag 0x10 (07 §10.6).
+    // (invisible) or trail flag 0x10.
     fn vm_drawn(e: &Enemy, k: usize) -> bool {
         let vm = if k == 2 { &e.vm } else { &e.sub_vms[k] };
         vm.script.is_some() && !(k == 2 && (e.has(EnemyFlags::INVISIBLE) || e.trail[0] & 0x10 != 0))
     }
 
-    // Main VM z: 0.25, or 0.3 after a trail that drew a copy (07 §10.6); sub VMs 0.3.
+    // Main VM z: 0.25, or 0.3 after a trail that drew a copy; sub VMs 0.3.
     fn vm_z(k: usize, trail_drew: bool) -> f32 {
         if k == 2 && !trail_drew { 0.25 } else { 0.3 }
     }
 
-    // Enemy drawing step (07 §10.6), all Draw2DRot: frozen tint, VM pos / rotation writes, trail writes.
+    // Enemy drawing step, all Draw2DRot: frozen tint, VM pos / rotation writes, trail writes.
     fn draw_layer_step(&mut self, anm: &mut AnmManager, p: &Player, high: bool, flags: u32) {
-        // Prio 11 draws with tint 0xFFF01010 while bullets are frozen (07 §10.6).
+        // Prio 11 draws with tint 0xFFF01010 while bullets are frozen.
         let frozen = p.freeze_bullets(flags);
         if high && frozen {
             (anm.tint, anm.tint_on) = (FROZEN_TINT, true);
@@ -3005,7 +3001,7 @@ impl EnemyManager {
             let rotate = e.has(EnemyFlags::ROTATE);
             for k in [0usize, 2, 1] {
                 let main = k == 2;
-                // QUIRK (07 §10.6): only scale/colour are restored after the trail, so the main VM keeps the last
+                // Quirk kept: only scale/colour are restored after the trail, so the main VM keeps the last
                 // drawn copy's pos (z 0.3) and rotation.
                 let trail_pos = if main && e.trail[0] != 0 {
                     Self::trail_step(anm, e)
@@ -3046,7 +3042,7 @@ impl EnemyManager {
         }
     }
 
-    // Enemy drawing emit (07 §10.6): Draw2DRot with the VM z (0.25 main / 0.3 sub) as the vertex depth (05 §9).
+    // Enemy drawing emit: Draw2DRot with the VM z (0.25 main / 0.3 sub) as the vertex depth (05 §9).
     fn draw_layer_emit(
         &self,
         anm: &AnmManager,
@@ -3077,7 +3073,7 @@ impl EnemyManager {
     }
 }
 
-// The enemy manager's chain nodes (07 §10.6); they reach the manager through its owner (`ctx.w.enemies`, step 9c).
+// The enemy manager's chain nodes; they reach the manager through its owner (`ctx.w.enemies`).
 pub struct EnemyTask;
 
 impl Task<Ctx> for EnemyTask {
@@ -3104,7 +3100,7 @@ impl Task<Ctx> for EnemyTask {
         Ret::Next
     }
 
-    // Draw prio 8 → layers 0–1, prio 11 → layers 2–3 (07 §10.6).
+    // Draw prio 8 → layers 0–1, prio 11 → layers 2–3.
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         let p = ctx.w.player.as_deref().expect("player");
         let m = ctx.w.enemies.as_deref_mut().expect("enemy manager");
@@ -3123,7 +3119,7 @@ impl Task<Ctx> for EnemyTask {
 mod tests {
     use super::*;
 
-    // GameFlags bit 10 (07 §10.1 step 0): only the play-time counter runs; lists and the manager clock hold.
+    // GameFlags bit 10: only the play-time counter runs; lists and the manager clock hold.
     #[test]
     fn death_freeze_skips_manager() {
         let mut ts = crate::game::TestSys::with_player(0);
@@ -3147,7 +3143,7 @@ mod tests {
         assert_eq!(crate::pl!(sys).stats.rec.progress, 2);
     }
 
-    // 07 §4.4: the typed flags keep the original bit positions; raw words round-trip unchanged.
+    // The typed flags keep the original bit positions; raw words round-trip unchanged.
     #[test]
     fn flag_bits_round_trip() {
         let a = [
@@ -3199,7 +3195,7 @@ mod tests {
         assert_eq!(EnemyIdx::from_slot(479).idx(), 479);
     }
 
-    // 07 §3: every timeline op decodes to its argument layout; op 15 forces, odd spawn ops mirror.
+    // Every timeline op decodes to its argument layout; op 15 forces, odd spawn ops mirror.
     #[test]
     fn timeline_op_decode() {
         let args = [
@@ -3293,7 +3289,7 @@ mod tests {
         EnemyManager::new(ecl, &mut crate::player::Player::default(), 1)
     }
 
-    // 07 §10.1 step 7: youkai state sets colour2 (0x20, 0x20, 0xC0, a / 2) and skips the flash; otherwise the flag
+    // Step 7: youkai state sets colour2 (0x20, 0x20, 0xC0, a / 2) and skips the flash; otherwise the flag
     // is turned off on every frame without a new flash.
     #[test]
     fn tail_youkai_colour2_and_flag_off() {
@@ -3314,7 +3310,7 @@ mod tests {
         assert_eq!(m.enemies[0].vm.flags & anmvm::F_COLOR2, 0);
     }
 
-    // 07 §10.1 step 2: a held enemy does not move, is not freed off screen, does not die; its timer nets zero.
+    // Step 2: a held enemy does not move, is not freed off screen, does not die; its timer nets zero.
     #[test]
     fn held_enemy_skips_body() {
         let mut ts = crate::game::TestSys::with_player(1);
@@ -3339,7 +3335,7 @@ mod tests {
         }
     }
 
-    // 07 §10.1 step 2: the shared tail runs Enemy_UpdateOrbitEffects for a held enemy too (13 §2.6b).
+    // Step 2: the shared tail runs Enemy_UpdateOrbitEffects for a held enemy too (13 §2.6b).
     #[test]
     fn held_enemy_updates_orbit_effects() {
         let mut ts = crate::game::TestSys::with_player(1);
@@ -3357,7 +3353,7 @@ mod tests {
         assert_eq!(sys.fx.peek(i, |x| x.centre), [5.0, 6.0, 0.0]);
     }
 
-    // 07 §10.3b: Enemy_Free sends the aura interrupt 3 and drops the pointer; the aura stays live.
+    // Enemy_Free sends the aura interrupt 3 and drops the pointer; the aura stays live.
     #[test]
     fn free_ends_aura_without_freeing() {
         let mut ts = crate::game::TestSys::with_player(1);
@@ -3375,7 +3371,7 @@ mod tests {
         assert_eq!(sys.fx.peek(i, |x| x.vm.pending_interrupt), 3);
     }
 
-    // 07 §10.2 / §10.6: threshold-kill victims jump to their death sub with `Ecl_SetSub` only; threads, thresholds
+    // Threshold-kill victims jump to their death sub with `Ecl_SetSub` only; threads, thresholds
     // and timeout are kept, the death sub is consumed.
     #[test]
     fn kill_non_bosses_sets_sub_only() {
@@ -3401,7 +3397,7 @@ mod tests {
         assert_eq!((m.enemies[1].life, m.enemies[1].death_sub), (100, 1));
     }
 
-    // 07 §10.1 / §10.3: death (step 6) reads the timer before step 7 ticks it; a mode-0 death skips the link.
+    // Death (step 6) reads the timer before step 7 ticks it; a mode-0 death skips the link.
     #[test]
     fn death_before_timer_tick() {
         let mut ts = crate::game::TestSys::with_player(1);
@@ -3440,7 +3436,7 @@ mod tests {
         assert_eq!(m.g.hud_timer, 7);
     }
 
-    // 07 §10.1 step 4 / 12 §5.1 (RE-Q65 A): no Enemy_CheckTimeout while timeout < 0, so +0x24 keeps its value.
+    // 12 §5.1: no Enemy_CheckTimeout while timeout < 0, so +0x24 keeps its value.
     #[test]
     fn hud_timer_frozen_after_timeout() {
         let mut ts = crate::game::TestSys::with_player(1);
@@ -3455,7 +3451,7 @@ mod tests {
         assert_eq!(m.g.hud_timer, 5);
     }
 
-    // 12 §5.8 step 4 (RE-Q65 E): the card's bit 2 survives Spell_End for the bonus line.
+    // 12 §5.8 step 4: the card's bit 2 survives Spell_End for the bonus line.
     #[test]
     fn spell_left_keeps_capture_flag() {
         let mut ts = crate::game::TestSys::with_player(1);
@@ -3514,7 +3510,7 @@ mod tests {
         assert_eq!(m.enemies[3].life, 100);
     }
 
-    // 07 §10.3a Enemy_ChainUnlink: a root keeps its first child's +4, whose unlink re-attaches the rest to the root.
+    // Enemy_ChainUnlink: a root keeps its first child's +4, whose unlink re-attaches the rest to the root.
     #[test]
     fn chain_unlink_root_quirk() {
         let mut m = empty_manager();
@@ -3532,7 +3528,7 @@ mod tests {
         assert_eq!(m.enemies[2].chain_prev, Some(EnemyIdx(0)));
     }
 
-    // 07 §10.1 step 4: the ring shifts n − 1 entries, entry 0 = final pos, velocity, angle; the rest untouched.
+    // Step 4: the ring shifts n − 1 entries, entry 0 = final pos, velocity, angle; the rest untouched.
     #[test]
     fn trail_ring_shift() {
         let mut e = Enemy {
@@ -3550,7 +3546,7 @@ mod tests {
         assert_eq!((e.trail_ring[1].vel[1], e.trail_ring[1].angle), (2.0, 0.2));
     }
 
-    // 07 §10.1 step 4: with a trail, an off-screen enemy is freed only once the oldest entry n − 1 is off screen too.
+    // Step 4: with a trail, an off-screen enemy is freed only once the oldest entry n − 1 is off screen too.
     #[test]
     fn trail_oldest_entry_keeps_enemy() {
         let mut m = empty_manager();
@@ -3569,7 +3565,7 @@ mod tests {
         assert!(m.screen_check(0));
     }
 
-    // 07 §10.6 mid(): lo + d/2 with the wrap distance taken from lo.
+    // mid(): lo + d/2 with the wrap distance taken from lo.
     #[test]
     fn trail_mid_quirk() {
         assert!((trail_mid(1.0, 2.0) - 1.5).abs() < 1e-6);
@@ -3607,7 +3603,7 @@ mod tests {
         }
     }
 
-    // 07 §11.1 tail of every op 123 (RE-Q56): the card's boss loses flag A bit 27, g_Gui +4 and bit 11 := 0,
+    // Tail of every op 123: the card's boss loses flag A bit 27, g_Gui +4 and bit 11 := 0,
     // also after a silent end (no card active).
     #[test]
     fn spell_end_tail_clears_fixed_bonus() {
@@ -3625,7 +3621,7 @@ mod tests {
         assert!(!m.g.fixed_bonus && !m.g.bonus_frozen);
     }
 
-    // Spell_End (07 §11.1): bomb cooldown +0xE2A6C := 16 whether or not the card was captured; 0x4E3D28 := 0.
+    // Spell_End: bomb cooldown +0xE2A6C := 16 whether or not the card was captured; 0x4E3D28 := 0.
     #[test]
     fn spell_end_sets_bomb_cooldown() {
         let mut ts = crate::game::TestSys::with_player(1);
@@ -3646,7 +3642,7 @@ mod tests {
         assert_eq!(crate::pl!(sys).bomb_cooldown, 16);
     }
 
-    // 07 §11.1 (RE-Q64): time orbs after Spell_End still add to +0xFC (capped to +0x2638); bit 11 still blocks them.
+    // Time orbs after Spell_End still add to +0xFC (capped to +0x2638); bit 11 still blocks them.
     #[test]
     fn bonus_outlives_spell_end() {
         let mut ts = crate::game::TestSys::with_player(1);
@@ -3674,7 +3670,7 @@ mod tests {
         assert_eq!(m.g.spell_left.map(|l| l.bonus), Some(110_000));
     }
 
-    // 12 §5.5 (RE-Q66): no bonus popup when CancelBonus + KillAll = 0.
+    // 12 §5.5: no bonus popup when CancelBonus + KillAll = 0.
     #[test]
     fn zero_bonus_shows_no_popup() {
         let mut anm = AnmManager::default();
@@ -3684,7 +3680,7 @@ mod tests {
         assert!(crate::pl!(ts).stats.popups.is_empty());
     }
 
-    // 07 §10.1 step 5 (RE-Q66): the main VM colour round-trips through e+0x2E20; sub VMs are not touched.
+    // Step 5: the main VM colour round-trips through e+0x2E20; sub VMs are not touched.
     #[test]
     fn main_vm_colour_through_main_color() {
         let mut rng = crate::rng::Rng::default();
@@ -3701,7 +3697,7 @@ mod tests {
         );
     }
 
-    // 14 §3.1 (RE-Q54 U): only an enemy with flag A bit 6 is offered as the aimed enemy.
+    // 14 §3.1: only an enemy with flag A bit 6 is offered as the aimed enemy.
     #[test]
     fn aimed_offer_needs_shot_flag() {
         let mut ts = crate::game::TestSys::with_player(1);
@@ -3718,7 +3714,7 @@ mod tests {
         }
     }
 
-    // 11 §3.2 (RE-Q54 V): the time-rank tick follows the game-speed clock and fires once per clock value.
+    // 11 §3.2: the time-rank tick follows the game-speed clock and fires once per clock value.
     #[test]
     fn time_rank_on_slowed_clock() {
         let mut ts = crate::game::TestSys::with_player(1);

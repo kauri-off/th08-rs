@@ -10,10 +10,10 @@ use crate::gamemgr::{F_13, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
 use crate::types::EnemyIdx;
 use th08_formats::ecl::{Arg, BossOp, Ins, SpellBlock};
 
-// Card bonus cap g_Gui +0x2638 for flag A bit 27 / op 155 (07 §11.1, op 155).
+// Card bonus cap g_Gui +0x2638 for flag A bit 27 / op 155 (op 155).
 pub(super) const FIXED_BONUS_CAP: i32 = 99_999_990;
 
-// Spell practice (GameFlags bit 14) with a last spell running or captured (bits 7–8) (07 §5 ops 129–134, 11 §2.1).
+// Spell practice (GameFlags bit 14) with a last spell running or captured (bits 7–8) (11 §2.1).
 fn practice_guard(f: u32) -> bool {
     f & F_SPELL_PRACTICE != 0 && f & (F_LAST_SPELL | F_LAST_CAPTURED) != 0
 }
@@ -34,7 +34,7 @@ impl Exec<'_> {
                 let slot = self.ai(t, slot);
                 self.boss(slot);
             }
-            // Spell-practice guard (0x164D0B4 bit 14 and bits 7–8 ≠ 0): 129/130 ignored, 133/134 keep the sub (07 §5).
+            // Spell-practice guard (0x164D0B4 bit 14 and bits 7–8 ≠ 0): 129/130 ignored, 133/134 keep the sub.
             BossOp::DeathMode(w) if !practice_guard(*self.sys.flags) => {
                 let m = w & 0xFF;
                 self.e.flags = (self.e.flags & !(7 << A_DEATH_SHIFT)) | ((m & 7) << A_DEATH_SHIFT);
@@ -64,7 +64,7 @@ impl Exec<'_> {
                     }
                 }
             }
-            // Timer 0 here, so op 134 on frame F times out on frame F + timeout (07 §10.2).
+            // Timer 0 here, so op 134 on frame F times out on frame F + timeout.
             BossOp::Timeout { frames, sub } => {
                 self.e.timeout = self.ai(t, frames);
                 let sub = self.ai(t, sub);
@@ -81,7 +81,7 @@ impl Exec<'_> {
                 let on = w & 0xFF != 0;
                 self.e.set_flag(A_FIXED_BONUS, on);
                 self.m.g.fixed_bonus = on;
-                // 07 op 155: whatever the byte, 0x4ECCA8 = g_Gui +0x2638 (running card's cap) := 99 999 990.
+                // Whatever the byte, 0x4ECCA8 = g_Gui +0x2638 (running card's cap) := 99 999 990.
                 if let Some(s) = &mut self.m.g.spell {
                     s.max = FIXED_BONUS_CAP;
                 }
@@ -94,13 +94,13 @@ impl Exec<'_> {
                 self.m.g.misc_calls += 1;
             }
             BossOp::LastSpell => self.last_spell(),
-            // Spell_SetBonusFrozen 0x41F0E0: spell flag bit 11 := n & 1 (07 §11.1).
+            // Spell_SetBonusFrozen 0x41F0E0: spell flag bit 11 := n & 1.
             BossOp::SpellEx(n) => self.m.g.bonus_frozen = self.ai(t, n) & 1 != 0,
         }
         Flow::Next
     }
 
-    // Op 127, boss table 0xF54CC0 (07 §7 op 127): no-fire radius 0; slot 0 turns on the HUD boss display.
+    // Op 127, boss table 0xF54CC0: no-fire radius 0; slot 0 turns on the HUD boss display.
     fn boss(&mut self, slot: i32) {
         if slot < 0 {
             self.m.unregister_boss(self.idx);
@@ -109,7 +109,7 @@ impl Exec<'_> {
             if let Some(k) = usize::try_from(self.e.boss_slot).ok().filter(|&k| k < 4) {
                 self.sys.ov.marker_release(k);
             }
-            // `Enemy_ReleaseOrbitEffects` 0x42A820 (13 §2.6b, RE-Q56 AL): op-128 effects fade and free.
+            // `Enemy_ReleaseOrbitEffects` 0x42A820 (13 §2.6b): op-128 effects fade and free.
             for i in self.e.fx_attached.drain(..) {
                 self.sys.fx.get(i, |x| x.fade = true);
             }
@@ -131,7 +131,7 @@ impl Exec<'_> {
         }
     }
 
-    // Op 158: word 1 → start +0x5C, word 2 → end +0x3C, as fractions of this enemy's max life (07 op 158).
+    // Op 158: word 1 → start +0x5C, word 2 → end +0x3C, as fractions of this enemy's max life.
     fn hp_marker(&mut self, t: &Thread, k: Arg, abc: [Arg; 3]) {
         let k = self.ai(t, k);
         let max = self.e.max_life as f32;
@@ -142,7 +142,7 @@ impl Exec<'_> {
         }
     }
 
-    // Op 176, GameFlags 0x164D0B4: clear 7, 8, 13, set 7; bit 13 by stage / practice card (07 §7 op 176).
+    // Op 176, GameFlags 0x164D0B4: clear 7, 8, 13, set 7; bit 13 by stage / practice card.
     fn last_spell(&mut self) {
         let mut f = *self.sys.flags & !(F_LAST_SPELL | F_LAST_CAPTURED | F_13) | F_LAST_SPELL;
         let card = self.m.g.card;
@@ -159,11 +159,9 @@ impl Exec<'_> {
         self.e.flags |= A_LAST_SPELL;
     }
 
-    // Runs a manager-wide op (KillAll, Spell_End) with the running enemy and its running main context back in
-    // its slot, so the loop sees the caller in slot order (07 §7 op 95, §10.2: no self test).
-    // Quirk kept (07 §7 op 95): Ecl_Run steps a local copy of the ip, so a death-sub `Ecl_SetSub` on the caller's
-    // own main context keeps only clock/wait 0 and the sub id; the old sub continues and the death sub never runs.
-    // From a thread the main context keeps the death sub and the thread goes on.
+    // Runs a manager-wide op (KillAll, Spell_End) with the caller and its main context back in its slot (no self test).
+    // Quirk kept (07 §7 op 95): Ecl_Run steps a local ip copy, so a death-sub `Ecl_SetSub` on the caller's own main
+    // context keeps only clock/wait 0 and the sub id: the death sub never runs. From a thread, main takes it.
     fn with_self_in_slot(
         &mut self,
         t: &mut Thread,
@@ -187,14 +185,14 @@ impl Exec<'_> {
         Flow::Next
     }
 
-    // Op 122 spell block (07 §11): decoded strings, bonus / max / decay rate, pending payout paid first
-    // (07 §11.1), bullets cancelled, spell background, rank ranges reset.
+    // Op 122 spell block: decoded strings, bonus / max / decay rate, pending payout paid first,
+    // bullets cancelled, spell background, rank ranges reset.
     fn spell_card(&mut self, ins: &Ins) {
         let b = SpellBlock::parse(self.m.ecl.bytes(ins));
         let bonus = b.bonus;
         // Rate R = (bonus − bonus/7) / (timeout/60), unsigned; op 134 precedes op 122 in all data.
         let secs = (self.e.timeout / 60).max(1).cast_unsigned();
-        // 07 §11.1: +0xFC := card bonus; cap +0x2638 := card bonus, or 99 999 990 if flag A bit 27 is already set.
+        // +0xFC := card bonus; cap +0x2638 := card bonus, or 99 999 990 if flag A bit 27 is already set.
         let max = if self.e.flags & A_FIXED_BONUS != 0 {
             FIXED_BONUS_CAP
         } else {
@@ -207,7 +205,7 @@ impl Exec<'_> {
             max,
             decay: ((bonus - bonus / 7) / secs).cast_signed(),
             boss: EnemyIdx::from_slot(self.idx),
-            // g_Gui +0xC := boss e+0x2E0C, written only by Spell_Start (07 §11.1).
+            // g_Gui +0xC := boss e+0x2E0C, written only by Spell_Start.
             slot: self.e.slot,
             name: b.name,
             owner: b.owner,
@@ -231,12 +229,12 @@ impl Exec<'_> {
         self.m.g.fixed_bonus = self.e.flags & A_FIXED_BONUS != 0;
         self.m.g.spell_boss = Some(EnemyIdx::from_slot(self.idx));
         (self.m.g.spell_flag6, self.m.g.bonus_frozen) = (false, false);
-        // Bit 9 := 0 is Spell_Start's first statement (07 §11.1).
+        // Bit 9 := 0 is Spell_Start's first statement.
         self.m.g.spell_captured = false;
         // HUD +0x04 |= 0xF: lives and bombs fields := 3 (12 §5.3).
         self.sys.panel.mark_lives(3);
         self.sys.panel.mark_bombs(3);
-        // Shown by card id (I18N §2.3); CATK below keeps the ECL bytes.
+        // Shown by card id; CATK below keeps the ECL bytes.
         let key = u16::try_from(spell.id).map_or(crate::textref::TextRef::Dynamic, |card| {
             crate::textref::TextRef::Spell {
                 card,
@@ -257,12 +255,12 @@ impl Exec<'_> {
         });
         self.m.g.spell = Some(spell);
         self.m.g.spell_left = None;
-        // Timer +0x108 (remaining) := e+0x3378 (07 §11.1).
+        // Timer +0x108 (remaining) := e+0x3378.
         self.m.g.spell_remaining.set(self.e.timeout);
         if let Some(st) = self.sys.stage.as_deref_mut() {
             st.start_spell_bg(self.anm, self.sys.rng);
         }
-        // Ring at the boss pos e+0x2D34 (not the final pos); type 52 while GameFlags bits 7–8 ≠ 0 (07 §11.1).
+        // Ring at the boss pos e+0x2D34 (not the final pos); type 52 while GameFlags bits 7–8 ≠ 0.
         let special = crate::pl!(self.sys).special(*self.sys.flags);
         self.sys
             .fx

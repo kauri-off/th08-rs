@@ -78,7 +78,7 @@ impl Exec<'_> {
         self.with_laser(k, |l, p| l.angle = f(l, p, a));
     }
 
-    // Laser block (07 §9.4, 64 bytes) → laser slot[current]; +0x34/+0x38/+0x3C raw.
+    // Laser block (64 bytes) → laser slot[current]; +0x34/+0x38/+0x3C raw.
     fn laser_op(&mut self, t: &Thread, ins: &Ins, fixed: bool) {
         let b = LaserBlock::parse(self.m.ecl.bytes(ins));
         let mut d = LaserDesc {
@@ -103,7 +103,7 @@ impl Exec<'_> {
         self.e.laser_desc = d.clone();
         let id = crate::bm!(self.sys).spawn_laser(self.anm, self.sys.rng, &d, self.m.g.player);
         let cur = self.e.laser_cur.min(31);
-        // Enemy laser slots hold the raw slot number (07 §9.4).
+        // Enemy laser slots hold the raw slot number.
         self.e.lasers[cur] = id.map(usize::from);
     }
 

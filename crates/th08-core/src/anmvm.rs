@@ -11,14 +11,14 @@ bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct VmFlags: u32 {
         const VISIBLE = 1 << 0;
-        // Set at init, never changed by scripts; also required for drawing (05 §2.1, §12.2).
+        // Set at init, never changed by scripts; also required for drawing (05 §12.2).
         const ENABLED = 1 << 1;
         // Bits 2/3: mode-5 world matrix must be rebuilt (05 §9).
         const ROT_DIRTY = 1 << 2;
         const SCALE_DIRTY = 1 << 3;
-        // Bits 4–5: 0 alpha, 1 additive, 2/3 leave the previous dest-blend (05 §2.1, §12.5).
+        // Bits 4–5: 0 alpha, 1 additive, 2/3 leave the previous dest-blend (05 §12.5).
         const BLEND = 3 << 4;
-        // Op 6 and the pos slot write pos_offset (vm+0x288) instead of pos (05 §2.1).
+        // Op 6 and the pos slot write pos_offset (vm+0x288) instead of pos.
         const POS_OFFSET = 1 << 8;
         const FLIP_X = 1 << 9;
         const FLIP_Y = 1 << 10;
@@ -26,7 +26,7 @@ bitflags::bitflags! {
         const ANCHOR_X = 1 << 11;
         const ANCHOR_Y = 1 << 12;
         const ZWRITE_OFF = 1 << 13;
-        // Set by ops 20/23 while waiting for an interrupt (05 §5).
+        // Set by ops 20/23 while waiting for an interrupt.
         const WAIT_INT = 1 << 14;
         // Draw with the stage 3D camera instead of the default 2D camera (05 §9).
         const STAGE_CAM = 1 << 15;
@@ -34,7 +34,7 @@ bitflags::bitflags! {
         const FREEZE_MATRIX = 1 << 16;
         // Draw with colour2; the skip test still uses the primary alpha (05 §12.2).
         const COLOR2 = 1 << 17;
-        // AnmVm_Run returns 0 at once (05 §4).
+        // AnmVm_Run returns 0 at once.
         const PAUSED = 1 << 19;
     }
 }
@@ -57,7 +57,7 @@ pub const F_FREEZE_MATRIX: u32 = VmFlags::FREEZE_MATRIX.bits();
 pub const F_COLOR2: u32 = VmFlags::COLOR2.bits();
 pub const F_PAUSED: u32 = VmFlags::PAUSED.bits();
 
-// Interpolation slot order of vm+0x050/0x0A4/0x0F8 (05 §2).
+// Interpolation slot order of vm+0x050/0x0A4/0x0F8.
 const SLOT_POS: usize = 0;
 const SLOT_COLOR: usize = 1;
 const SLOT_ALPHA: usize = 2;
@@ -66,13 +66,13 @@ const SLOT_SCALE: usize = 4;
 const SLOT_COLOR2: usize = 5;
 const SLOT_ALPHA2: usize = 6;
 
-// D3DCOLOR byte order of colour / colour2 (05 §2: +0x1F0 B, +0x1F1 G, +0x1F2 R, +0x1F3 A).
+// D3DCOLOR byte order of colour / colour2 (+0x1F0 B, +0x1F1 G, +0x1F2 R, +0x1F3 A).
 pub const B: usize = 0;
 pub const G: usize = 1;
 pub const R: usize = 2;
 pub const A: usize = 3;
 
-// 12-byte Timer (05 §2): previous value (−999 after a Set), sub-frame fraction, current value.
+// 12-byte Timer: previous value (−999 after a Set), sub-frame fraction, current value.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Timer {
     pub prev: i32,
@@ -104,7 +104,7 @@ impl Timer {
         f64::from(self.cur) + f64::from(self.frac)
     }
 
-    // Timer_Tick (05 §2): one step per frame at full speed, else accumulates the fraction; not affected by flag 0x20.
+    // Timer_Tick: one step per frame at full speed, else accumulates the fraction; not affected by flag 0x20.
     pub fn tick(&mut self, speed: f32) {
         self.prev = self.cur;
         if speed > 0.99 {
@@ -118,14 +118,14 @@ impl Timer {
         }
     }
 
-    // Timer_Sub(1) (05 §2), with the extra step of Supervisor flag 0x20 (`restore`, AnmManager field) first (05 §12.6).
+    // Timer_Sub(1), with the extra step of Supervisor flag 0x20 (`restore`, AnmManager field) first (05 §12.6).
     pub fn dec(&mut self, speed: f32, restore: bool) {
         if restore {
             self.cur -= 1;
             self.frac = 0.0;
             self.prev = -999;
         }
-        // The fast path leaves prev alone (−999 after a Set stays); only the slow path copies it (05 §2, 0x44735B).
+        // The fast path leaves prev alone (−999 after a Set stays); only the slow path copies it (0x44735B).
         if speed > 0.99 {
             self.cur -= 1;
         } else {
@@ -138,16 +138,16 @@ impl Timer {
         }
     }
 
-    // Timer_GetF = current + fraction (05 §2).
+    // Timer_GetF = current + fraction.
     pub fn getf(&self) -> f32 {
         self.cur as f32 + self.frac
     }
 }
 
-// Angle_AddNormalize 0x43EDB0 (05 §6.3), moved to types.
+// Angle_AddNormalize 0x43EDB0 (05 §6.3).
 pub use crate::types::wrap_add;
 
-// UV offset wrap (05 §6 step 4, ops 26/27): a single step, not a modulo.
+// UV offset wrap (ops 26/27): a single step, not a modulo.
 fn wrap_uv(u: f32) -> f32 {
     if u >= 1.0 {
         u - 1.0
@@ -158,7 +158,7 @@ fn wrap_uv(u: f32) -> f32 {
     }
 }
 
-// Easing modes of the interpolation slots (05 §6 step 2); unknown modes are linear.
+// Easing modes of the interpolation slots; unknown modes are linear.
 pub fn ease(mode: u8, t: f32) -> f32 {
     match mode {
         1 => t * t,
@@ -171,19 +171,19 @@ pub fn ease(mode: u8, t: f32) -> f32 {
     }
 }
 
-// Low byte of an int, the original's byte stores (alpha / colour bytes, the signed-char easing mode, 05 §5 notes).
+// Low byte of an int, the original's byte stores (alpha / colour bytes, the signed-char easing mode).
 fn lo8(v: i32) -> u8 {
     v.to_le_bytes()[0]
 }
 
-// Low word of an int, the op-25 tag store into the u16 at vm+0x1FC (05 §5).
+// Low word of an int, the op-25 tag store into the u16 at vm+0x1FC.
 fn lo16(v: i32) -> u16 {
     let b = v.to_le_bytes();
     u16::from_le_bytes([b[0], b[1]])
 }
 
 // A signed slot / sprite / script number as a table index: sign-extended like the original's indexing, so a
-// negative number is far out of range and the lookup fails (05 §7: no change when the sprite is missing).
+// negative number is far out of range and the lookup fails (no change when the sprite is missing).
 #[expect(
     clippy::cast_sign_loss,
     reason = "sign-extended index; negatives must miss the table"
@@ -192,7 +192,7 @@ pub(crate) fn table_index(v: i32) -> usize {
     v as usize
 }
 
-// Debug listing in the style of 05 §5 ("$" = variable argument, 05 §3).
+// Debug listing in the style of the 05 §5 table ("$" = variable argument).
 pub fn disasm(data: &[u8]) -> String {
     use std::fmt::Write;
     let mut s = String::new();
@@ -225,7 +225,7 @@ pub fn disasm(data: &[u8]) -> String {
     s
 }
 
-// Variable ids of 05 §3: 10000–10003 I0–I3, 10004–10007 F0–F3, 10008/10009 I4/I5 (ivars[4], ivars[5]).
+// Variable ids: 10000–10003 I0–I3, 10004–10007 F0–F3, 10008/10009 I4/I5 (ivars[4], ivars[5]).
 #[derive(Clone, Copy)]
 enum Var {
     I(usize),
@@ -248,7 +248,7 @@ fn var(id: i32) -> Option<Var> {
     })
 }
 
-// Destination of a V/W argument (05 §3): a VM variable or arg 0's own bytes in the script (`Lit`, its raw bits).
+// Destination of a V/W argument: a VM variable or arg 0's own bytes in the script (`Lit`, its raw bits).
 #[derive(Clone, Copy)]
 enum Dest {
     I(usize),
@@ -256,7 +256,7 @@ enum Dest {
     Lit(u32),
 }
 
-// Result of one instruction (05 §4 LOOP): next instruction, jump, yield to POST, script finished, or dispatch the
+// Result of one instruction (LOOP): next instruction, jump, yield to POST, script finished, or dispatch the
 // pending interrupt (ops 20 / 23 with a request already pending).
 enum Step {
     Next,
@@ -266,24 +266,24 @@ enum Step {
     Interrupt,
 }
 
-// Game speed and Supervisor flag 0x20, read once at the start of AnmVm_Run (05 §2, §12.6).
+// Game speed and Supervisor flag 0x20, read once at the start of AnmVm_Run (05 §12.6).
 #[derive(Clone, Copy)]
 struct Clock {
     speed: f32,
     restore: bool,
 }
 
-// AnmVm, 0x2A4 bytes in the original (05 §2); base/tex matrices are derived at draw time by the port.
+// AnmVm, 0x2A4 bytes in the original; base/tex matrices are derived at draw time by the port.
 #[derive(Clone, Debug)]
 pub struct AnmVm {
     // +0x000 radians; 2D draws use z only.
     pub rotation: [f32; 3],
-    // +0x00C, added each frame × game speed (05 §6 step 1).
+    // +0x00C, added each frame × game speed.
     pub angular_vel: [f32; 3],
     pub scale: [f32; 2],
-    // +0x020, added each frame × game speed (05 §6 step 3).
+    // +0x020, added each frame × game speed.
     pub scale_growth: [f32; 2],
-    // +0x028/+0x02C: current sprite size in logical px (05 §7).
+    // +0x028/+0x02C: current sprite size in logical px.
     pub sprite_w: f32,
     pub sprite_h: f32,
     // +0x030/+0x034: added to the normalised sprite UVs, wrapped into [0,1) (05 §9).
@@ -291,43 +291,43 @@ pub struct AnmVm {
     // +0x038 script clock; +0x044 op-79 wait timer.
     pub time: Timer,
     pub wait_timer: Timer,
-    // +0x050 / +0x0A4 / +0x0F8: per-slot elapsed, duration (≤ 0 = inactive) and easing mode (05 §2).
+    // +0x050 / +0x0A4 / +0x0F8: per-slot elapsed, duration (≤ 0 = inactive) and easing mode.
     pub interp_elapsed: [Timer; 7],
     pub interp_duration: [Timer; 7],
     pub interp_mode: [u8; 7],
-    // I0–I3 at +0x100, I4/I5 at +0x120 (vars 10000–10003, 10008–10009); F0–F3 at +0x110 (10004–10007) (05 §3).
+    // I0–I3 at +0x100, I4/I5 at +0x120 (vars 10000–10003, 10008–10009); F0–F3 at +0x110 (10004–10007).
     pub ivars: [i32; 6],
     pub fvars: [f32; 4],
-    // +0x128, added to uv_off every frame, not scaled by game speed (05 §6 step 4).
+    // +0x128, added to uv_off every frame, not scaled by game speed.
     pub uv_scroll: [f32; 2],
     // +0x170 cached mode-5 model matrix (05 §9).
     pub world_matrix: crate::camera::Mat4,
     // +0x1F0 / +0x1F4 D3DCOLOR bytes B, G, R, A.
     pub color: [u8; 4],
     pub color2: [u8; 4],
-    // +0x1F8 raw flag word, bits = `VmFlags` (05 §2.1).
+    // +0x1F8 raw flag word, bits = `VmFlags`.
     pub flags: u32,
-    // +0x1FC op 25 value, read only by owners (player bullets: tag ≠ 0 → rotation z = angle, 05 §2).
+    // +0x1FC op 25 value, read only by owners (player bullets: tag ≠ 0 → rotation z = angle).
     pub tag: u16,
-    // +0x1FE, written by owners (AnmVm_Interrupt 0x407120), handled at the next run (05 §4).
+    // +0x1FE, written by owners (AnmVm_Interrupt 0x407120), handled at the next run.
     pub pending_interrupt: u16,
     // +0x200, 0..5 for AnmManager_DrawByMode (05 §9).
     pub draw_mode: i32,
     pub anm_slot: i16,
-    // +0x208, outside the block AnmVm_Init clears (05 §8).
+    // +0x208, outside the block AnmVm_Init clears.
     pub pos: [f32; 3],
     pub sprite_index: i16,
     // Port-only: the original tests the sprite pointer at +0x224.
     pub has_sprite: bool,
-    // +0x21A; < 0 = no script, skipped by the range runner (05 §8).
+    // +0x21A; < 0 = no script, skipped by the range runner.
     pub script_index: i16,
     // Port form of script_start / ip (+0x21C / +0x220): (ANM slot, script index) and a byte offset; ip None = finished.
     pub script: Option<(usize, usize)>,
     pub ip: Option<AnmOff>,
-    // +0x228 / +0x234: clock and ip saved on interrupt entry, restored by op 89 (05 §4).
+    // +0x228 / +0x234: clock and ip saved on interrupt entry, restored by op 89.
     pub saved_time: Timer,
     pub saved_ip: Option<AnmOff>,
-    // +0x238..+0x287 interpolation start / end values (05 §2).
+    // +0x238..+0x287 interpolation start / end values.
     pub pos_start: [f32; 3],
     pub pos_end: [f32; 3],
     pub rot_start: [f32; 3],
@@ -338,7 +338,7 @@ pub struct AnmVm {
     pub color_end: [u8; 4],
     pub color2_start: [u8; 4],
     pub color2_end: [u8; 4],
-    // +0x288, written instead of pos when flag bit 8 is set (05 §2).
+    // +0x288, written instead of pos when flag bit 8 is set.
     pub pos_offset: [f32; 3],
     // +0x294, script time when op 3 last ran.
     pub sprite_set_time: i32,
@@ -395,7 +395,7 @@ impl Default for AnmVm {
 }
 
 impl AnmVm {
-    // AnmVm_Init (05 §8): zero the first 0x208 bytes (fields before `pos`), scale 1, colour 0xFFFFFFFF, flags 7, time 0.
+    // AnmVm_Init: zero the first 0x208 bytes (fields before `pos`), scale 1, colour 0xFFFFFFFF, flags 7, time 0.
     pub fn init(&mut self) {
         let keep = std::mem::take(self);
         *self = AnmVm {
@@ -428,12 +428,11 @@ impl AnmVm {
         self.time.set(0);
     }
 
-    // The flag word as `VmFlags` (05 §2.1); bits without a name are kept.
+    // The flag word as `VmFlags`; bits without a name are kept.
     pub fn vm_flags(&self) -> VmFlags {
         VmFlags::from_bits_retain(self.flags)
     }
 
-    // Any of the bits of `f` set.
     pub fn has(&self, f: VmFlags) -> bool {
         self.vm_flags().intersects(f)
     }
@@ -475,7 +474,7 @@ impl AnmVm {
         self.flags = (self.flags & !VmFlags::BLEND.bits()) | (b << F_BLEND_SHIFT);
     }
 
-    // AnmVm_SetSprite 0x45E430 (05 §7): no change when the file or sprite is missing.
+    // AnmVm_SetSprite 0x45E430: no change when the file or sprite is missing.
     pub fn set_sprite(&mut self, anm: &AnmManager, idx: i32) {
         let slot = table_index(i32::from(self.anm_slot));
         let Some(s) = anm.sprite(slot, table_index(idx)) else {
@@ -487,7 +486,7 @@ impl AnmVm {
         self.sprite_h = s.h;
     }
 
-    // Int argument read 0x45E650 (05 §3): float vars truncate; an unknown id returns the literal.
+    // Int argument read 0x45E650: float vars truncate; an unknown id returns the literal.
     fn ival(&self, a: Arg) -> i32 {
         let lit = a.raw.cast_signed();
         if !a.var {
@@ -500,7 +499,7 @@ impl AnmVm {
         }
     }
 
-    // Float argument read (05 §3): the id is stored as a float and truncated before the lookup.
+    // Float argument read: the id is stored as a float and truncated before the lookup.
     fn fval(&self, a: Arg) -> f32 {
         let lit = f32::from_bits(a.raw);
         if !a.var {
@@ -521,7 +520,7 @@ impl AnmVm {
         a.map(|a| self.fval(a))
     }
 
-    // Destinations redirect only with mask bit 0 and a variable of the right kind (05 §3).
+    // Destinations redirect only with mask bit 0 and a variable of the right kind.
     fn idest(a: Arg) -> Dest {
         match var(a.raw.cast_signed()) {
             Some(Var::I(k)) if a.var => Dest::I(k),
@@ -552,7 +551,7 @@ impl AnmVm {
         }
     }
 
-    // Literal destinations write into the shared script bytes, so the write persists for every user (05 §3).
+    // Literal destinations write into the shared script bytes, so the write persists for every user.
     fn write(&mut self, anm: &mut AnmManager, ip: AnmOff, d: Dest, bits: u32, is_float: bool) {
         match d {
             Dest::I(i) => {
@@ -581,7 +580,7 @@ impl AnmVm {
         }
     }
 
-    // Only the low byte (signed char) of the mode is kept (05 §5 notes).
+    // Only the low byte (signed char) of the mode is kept.
     fn start_slot(&mut self, slot: usize, dur: i32, mode: i32) {
         self.interp_mode[slot] = lo8(mode);
         self.interp_elapsed[slot].set(0);
@@ -644,7 +643,7 @@ impl AnmVm {
         self.start_slot(SLOT_POS, dur, mode);
     }
 
-    // AnmVm_Run 0x45EA00 (05 §4): runs every instruction with time ≤ clock, then POST; returns true when finished.
+    // AnmVm_Run 0x45EA00: runs every instruction with time ≤ clock, then POST; returns true when finished.
     pub fn run(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> bool {
         let Some(mut ip) = self.ip else { return true };
         if self.has(VmFlags::PAUSED) {
@@ -658,7 +657,7 @@ impl AnmVm {
         loop {
             if interrupt {
                 interrupt = false;
-                // DISPATCH_INTERRUPT (05 §4): with no label the clock is decremented, so POST leaves it unchanged.
+                // DISPATCH_INTERRUPT: with no label the clock is decremented, so POST leaves it unchanged.
                 let Some(target) = self.find_label(anm) else {
                     self.time.dec(clk.speed, clk.restore);
                     break;
@@ -696,7 +695,7 @@ impl AnmVm {
         }
         self.ip = Some(ip);
         self.post(clk.speed);
-        // Statistics only (05 §4).
+        // Statistics only.
         anm.vm_counter += 1;
         false
     }
@@ -721,16 +720,16 @@ impl AnmVm {
         Step::Next
     }
 
-    // Jump of ops 4 / 5 / 67–78: clock = T, ip = script start + O, continue in the same frame (05 §4).
+    // Jump of ops 4 / 5 / 67–78: clock = T, ip = script start + O, continue in the same frame.
     fn jump(&mut self, to: Arg, time: Arg) -> Step {
         self.time.set(self.ival(time));
         Step::Jump(AnmOff(self.ival(to).cast_unsigned()))
     }
 
-    // Flow ops (05 §4, §5): −1, 0–2, 4, 5, 20, 21, 23, 67–79, 89.
+    // Flow ops: −1, 0–2, 4, 5, 20, 21, 23, 67–79, 89.
     fn ops_flow(&mut self, anm: &mut AnmManager, ip: AnmOff, op: FlowOp, clk: Clock) -> Step {
         match op {
-            // 05 §5 ops −1 / 1.
+            // Ops −1 / 1.
             FlowOp::End => {
                 self.remove(VmFlags::VISIBLE);
                 Step::Done
@@ -744,7 +743,7 @@ impl AnmVm {
             // Op 5.
             FlowOp::LoopDec { var, to, time } => {
                 let d = Self::idest(var);
-                // Op 5: a literal counter is written back into the shared script bytes (05 §3).
+                // Op 5: a literal counter is written back into the shared script bytes.
                 let v = self.read_i(d).wrapping_sub(1);
                 self.write(anm, ip, d, v.cast_unsigned(), false);
                 if v > 0 {
@@ -758,7 +757,7 @@ impl AnmVm {
                 if hide {
                     self.remove(VmFlags::VISIBLE);
                 }
-                // Yield (05 §4): decrement now, POST ticks again, so the same instruction re-runs next frame.
+                // Yield: decrement now, POST ticks again, so the same instruction re-runs next frame.
                 if self.pending_interrupt == 0 {
                     self.insert(VmFlags::WAIT_INT);
                     self.time.dec(clk.speed, clk.restore);
@@ -787,7 +786,7 @@ impl AnmVm {
                     Step::Next
                 }
             }
-            // Op 79 wait: the first run sets the timer, later runs decrement it; the clock is held meanwhile (05 §5).
+            // Op 79 wait: the first run sets the timer, later runs decrement it; the clock is held meanwhile.
             FlowOp::Wait(n) => {
                 if self.wait_timer.cur == 0 {
                     self.wait_timer.set(self.ival(n));
@@ -802,7 +801,7 @@ impl AnmVm {
                     Step::Next
                 }
             }
-            // Op 89: clock and ip as saved on interrupt entry, so the interrupted instruction runs again (05 §5).
+            // Op 89: clock and ip as saved on interrupt entry, so the interrupted instruction runs again.
             FlowOp::ReturnInterrupt => {
                 self.time = self.saved_time;
                 // Port-only guard: no saved ip (op 89 without an interrupt) ends the script.
@@ -811,7 +810,7 @@ impl AnmVm {
         }
     }
 
-    // Direct state ops (05 §5): 3, 6–14, 16, 22, 24–28, 30, 31, 80–85, 88.
+    // Direct state ops: 3, 6–14, 16, 22, 24–28, 30, 31, 80–85, 88.
     fn ops_sprite(&mut self, anm: &AnmManager, op: SpriteOp) {
         match op {
             // Op 3.
@@ -819,7 +818,7 @@ impl AnmVm {
                 self.insert(VmFlags::VISIBLE);
                 let idx = self.ival(a);
                 self.set_sprite(anm, idx);
-                // Op 3 sets visible even when the sprite lookup fails (05 §5, §7).
+                // Op 3 sets visible even when the sprite lookup fails.
                 self.sprite_set_time = self.time.cur;
             }
             // Op 6.
@@ -863,7 +862,7 @@ impl AnmVm {
                 self.scale[1] = -self.scale[1];
                 self.insert(VmFlags::SCALE_DIRTY);
             }
-            // Ops 12/13 both set bit 2 (05 §5).
+            // Ops 12/13 both set bit 2.
             SpriteOp::Rotation(v) => {
                 self.rotation = self.fvals(v);
                 self.insert(VmFlags::ROT_DIRTY);
@@ -914,9 +913,9 @@ impl AnmVm {
                 let b = (self.ival(m) & 3).cast_unsigned();
                 self.set_blend(b);
             }
-            // Op 83 reads its argument raw, without variable support (05 §5).
+            // Op 83 reads its argument raw, without variable support.
             SpriteOp::DrawMode(raw) => self.draw_mode = raw.cast_signed(),
-            // Op 88 takes bit 8 of the argument, not bit 0: the original reads the arg's second byte (05 §5).
+            // Op 88 takes bit 8 of the argument, not bit 0: the original reads the arg's second byte.
             SpriteOp::UseColor2(b) => {
                 let b = self.ival(b);
                 self.set(VmFlags::COLOR2, (b >> 8) & 1 != 0);
@@ -924,7 +923,7 @@ impl AnmVm {
         }
     }
 
-    // Interpolation starts (05 §5): 15, 17–19, 29, 32–36, 86, 87.
+    // Interpolation starts: 15, 17–19, 29, 32–36, 86, 87.
     fn ops_interp(&mut self, op: InterpOp) {
         match op {
             // Op 15.
@@ -934,7 +933,7 @@ impl AnmVm {
                 let dur = self.ival(dur);
                 self.start_slot(SLOT_ALPHA, dur, 0);
             }
-            // Ops 17/18/19 = easing modes 0/4/6 (05 §5).
+            // Ops 17/18/19 = easing modes 0/4/6.
             InterpOp::PosFixed { mode, end, dur } => {
                 let end = self.fvals(end);
                 let dur = self.ival(dur);
@@ -1018,7 +1017,7 @@ impl AnmVm {
         }
     }
 
-    // Variable ops 37–66 (05 §3, §5); the destination is arg 0 of the instruction at `ip`.
+    // Variable ops 37–66; the destination is arg 0 of the instruction at `ip`.
     fn ops_var(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, ip: AnmOff, op: VarOp) {
         match op {
             // Odd ops 37–57.
@@ -1047,7 +1046,7 @@ impl AnmVm {
                 let (b, c) = (self.fval(b), self.fval(c));
                 self.write(anm, ip, d, float_arith(f, x, b, c).to_bits(), true);
             }
-            // Ops 59/60 draw from the global game RNG g_Rng 0x164D520 (05 §5 notes); Rng_Range(0) draws nothing (05 §12.3).
+            // Ops 59/60 draw from the global game RNG g_Rng 0x164D520; Rng_Range(0) draws nothing (05 §12.3).
             VarOp::IRand { dst, n } => {
                 let d = Self::idest(dst);
                 let n = self.ival(n);
@@ -1093,7 +1092,7 @@ impl AnmVm {
     }
 
     // Clears the request; returns the ip after the matching label or after the last catch-all seen.
-    // Scan from the script start for op 21 with the id, stopping at op −1; a −1 label is the catch-all (05 §4).
+    // Scan from the script start for op 21 with the id, stopping at op −1; a −1 label is the catch-all.
     fn find_label(&mut self, anm: &AnmManager) -> Option<AnmOff> {
         let want = i32::from(self.pending_interrupt.cast_signed());
         self.pending_interrupt = 0;
@@ -1120,7 +1119,7 @@ impl AnmVm {
         catch_all
     }
 
-    // POST (05 §6), in the original order: angular velocity, slots 0..6, scale growth, UV scroll, clock tick.
+    // POST, in the original order: angular velocity, slots 0..6, scale growth, UV scroll, clock tick.
     fn post(&mut self, speed: f32) {
         for k in 0..3 {
             if self.angular_vel[k] != 0.0 {
@@ -1142,7 +1141,7 @@ impl AnmVm {
             };
             let t = ease(self.interp_mode[slot], t);
             let lerp = |s: f32, e: f32| (e - s) * t + s;
-            // Colour bytes: float lerp, then truncation (05 §6).
+            // Colour bytes: float lerp, then truncation.
             #[expect(
                 clippy::cast_sign_loss,
                 reason = "05 §6: ftol of a lerp between two bytes"
@@ -1196,7 +1195,7 @@ impl AnmVm {
     }
 }
 
-// Branch compare of ops 67–78 (05 §5).
+// Branch compare of ops 67–78.
 fn compare<T: PartialOrd + Copy>(cmp: Cmp, x: T, y: T) -> bool {
     match cmp {
         Cmp::Eq => x == y,
@@ -1208,14 +1207,14 @@ fn compare<T: PartialOrd + Copy>(cmp: Cmp, x: T, y: T) -> bool {
     }
 }
 
-// Int ops 37–57 (05 §5): `x` the destination's value, `b` / `c` args 1 / 2; wrapping like x86 32-bit ALU ops.
+// Int ops 37–57: `x` the destination's value, `b` / `c` args 1 / 2; wrapping like x86 32-bit ALU ops.
 fn int_arith(f: Arith, x: i32, b: i32, c: i32) -> i32 {
     match f {
         Arith::Set => b,
         Arith::Add => x.wrapping_add(b),
         Arith::Sub => x.wrapping_sub(b),
         Arith::Mul => x.wrapping_mul(b),
-        // Divide by zero crashes the original; unreachable in the data (05 §5 ops 45–58), yields 0 here.
+        // Divide by zero crashes the original; unreachable in the data, yields 0 here.
         Arith::Div => x.checked_div(b).unwrap_or(0),
         Arith::Rem => x.checked_rem(b).unwrap_or(0),
         Arith::Add3 => b.wrapping_add(c),
@@ -1226,14 +1225,14 @@ fn int_arith(f: Arith, x: i32, b: i32, c: i32) -> i32 {
     }
 }
 
-// Float ops 38–58 (05 §5).
+// Float ops 38–58.
 fn float_arith(f: Arith, x: f32, b: f32, c: f32) -> f32 {
     match f {
         Arith::Set => b,
         Arith::Add => x + b,
         Arith::Sub => x - b,
         Arith::Mul => x * b,
-        // Float `%` is fmod like x87 (05 §5); division by 0 gives ±inf/NaN, as on x87 with exceptions masked (05 §10).
+        // Float `%` is fmod like x87; division by 0 gives ±inf/NaN, as on x87 with exceptions masked (05 §10).
         Arith::Div => x / b,
         Arith::Rem => x % b,
         Arith::Add3 => b + c,
@@ -1434,7 +1433,7 @@ mod tests {
         assert_eq!(seen.len(), 57, "{seen:?}");
     }
 
-    // `VmFlags` keeps the 05 §2.1 bit positions and any unnamed bits of the word.
+    // `VmFlags` keeps the original bit positions and any unnamed bits of the word.
     #[test]
     fn vm_flag_bits() {
         let bits = [

@@ -34,7 +34,7 @@ fn rand_sign<T: std::ops::Neg<Output = T>>(r: u16, b: T) -> T {
     if r & 1 != 0 { b } else { -b }
 }
 
-// EclInterp_Fn7 0x421180 (07 §5.6): f32 product/sum order as in the disasm; any other order is 1 ulp off.
+// EclInterp_Fn7 0x421180: f32 product/sum order as in the disasm; any other order is 1 ulp off.
 pub(super) fn hermite(t: f32, v: [f32; 4]) -> f32 {
     let h0 = ((t - 1.0) * (t - 1.0)) * (2.0 * t + 1.0);
     let h1 = (t * t) * (3.0 - 2.0 * t);
@@ -157,7 +157,7 @@ impl Exec<'_> {
             }
             VarOp::IGetBoss { dst, var, slot } => self.get_boss(t, ins, dst, var, slot, false),
             VarOp::FGetBoss { dst, var, slot } => self.get_boss(t, ins, dst, var, slot, true),
-            // Op 169: leftward / rightward cone from one Rng_Float (07 §7 op 169).
+            // Op 169: leftward / rightward cone from one Rng_Float.
             VarOp::RandAwayAngle(dst) => {
                 let (x, px) = (self.e.pos[0], self.m.g.player[0]);
                 let r = self.sys.rng.next_f32() * (PI / 2.0);
@@ -185,7 +185,7 @@ impl Exec<'_> {
         let dur = self.ai(t, dur);
         let func = self.ai(t, func);
         let mode = self.ai(t, mode);
-        // 07 §5.6: a–d are resolved once, at op time.
+        // a–d are resolved once, at op time.
         let abcd: [f32; 4] = abcd.map(|a| self.af(t, a));
         let slots = &mut t.ctx.interp;
         let s = slots
@@ -207,11 +207,11 @@ impl Exec<'_> {
         }
     }
 
-    // Ops 86 / 87: variable `var` evaluated once, with the op's own getter, on boss[slot]'s main context (07 §7):
+    // Ops 86 / 87: variable `var` evaluated once, with the op's own getter, on boss[slot]'s main context:
     // 87 only if the boss exists; 86 has no such test.
     fn get_boss(&mut self, t: &mut Thread, ins: &Ins, dst: Dst, var: Arg, slot: Arg, float: bool) {
         let (var, slot) = (self.ai(t, var), self.ai(t, slot));
-        // 07 §7 op 86: an empty entry faults in the original for enemy/context ids (0 uses); skipped as a stand-in.
+        // Op 86: an empty entry faults in the original for enemy/context ids (0 uses); skipped as a stand-in.
         let Some(b) = self.m.boss(slot) else {
             return;
         };
@@ -239,7 +239,7 @@ impl Exec<'_> {
         }
     }
 
-    // Variable interpolation slots (07 §5.6); a position target turns into velocity + angle, pos restored.
+    // Variable interpolation slots; a position target turns into velocity + angle, pos restored.
     pub(super) fn run_interp(&mut self, t: &mut Thread) {
         let gs = self.anm.speed;
         let old = self.e.pos;

@@ -1,24 +1,24 @@
-//! ANM manager: 25 file slots, script start, draw modes 0–5, EmitQuad, tint, Draw3DWorld (03 §2.4, §5; 05 §8–§9, §12; 06 §11.2).
+//! ANM manager: file slots, script start, DrawByMode, EmitQuad, tint, Draw3DWorld (03 §2.4; 05 §8–§9, §12; 06 §11.2).
 
 use crate::anmvm::{self, AnmVm, VmFlags};
 use crate::content::LogicView;
 use crate::types::D3dColor;
 use th08_formats::anm::{self, Script};
-// Draws and texture uploads go to the core `Recorder` (REWRITE_PLAN step 8).
+// Draws and texture uploads go to the core `Recorder`.
 use crate::camera::{Camera, Mat4};
 use crate::drawlist::{self, Blend, Recorder, TexId, Vertex};
 use anyhow::{Result, ensure};
 use std::sync::Arc;
 
-// ANM file slots 0..24; index ≥ 25 is an error (03 §2.4).
+// ANM file slots 0..24; index ≥ 25 is an error.
 pub const SLOTS: usize = 25;
 
-// Low word of a slot / script number, the original's i16 fields vm+0x204 / vm+0x21A (05 §2, §8).
+// Low word of a slot / script number, the original's i16 fields vm+0x204 / vm+0x21A.
 fn lo16_index(v: usize) -> i16 {
     (v as u16).cast_signed()
 }
 
-// Runtime sprite record (03 §5, structs.md), reduced to texture, normalised UV rect (u0, v0, u1, v1) and logical size.
+// Runtime sprite record, reduced to texture, normalised UV rect (u0, v0, u1, v1) and logical size.
 #[derive(Clone, Copy, Debug)]
 pub struct SlotSprite {
     pub tex: TexId,
@@ -27,7 +27,7 @@ pub struct SlotSprite {
     pub h: f32,
 }
 
-// Loaded-file record at AnmManager + 0x24 + slot × 0x1C (03 §5): cumulative sprite and script arrays (03 §2.4).
+// Loaded-file record at AnmManager + 0x24 + slot × 0x1C: cumulative sprite and script arrays.
 // Clone shares the parsed scripts (`Arc`, copied on the first literal-destination write, 05 §3); `textures` are
 // handles only, so a clone's unload frees the renderer textures of both copies.
 #[derive(Clone)]
@@ -41,24 +41,24 @@ pub struct LoadedAnm {
 #[derive(Clone)]
 pub struct AnmManager {
     slots: [Option<LoadedAnm>; SLOTS],
-    // Global game speed used by the VM timers (05 §2), 1.0 in normal play.
+    // Global game speed used by the VM timers, 1.0 in normal play.
     pub speed: f32,
-    // Supervisor flag 0x20 (Supervisor+0x1A4, 05 §12.6): set by ECL native 29, never cleared (the Supervisor survives a
+    // Supervisor flag 0x20 (Supervisor+0x1A4): set by ECL native 29, never cleared (the Supervisor survives a
     // restart, 00 §2); every Timer_Sub reads it next to `speed`.
     pub slowdown_restore: bool,
     pub vm_counter: u32,
-    // Global screen offset AnmManager +0x1C/+0x20, written by the screen-shake effect (05 §9 EmitQuad step 1).
+    // Global screen offset AnmManager +0x1C/+0x20, written by the screen-shake effect.
     pub screen_offset: [f32; 2],
-    // Global tint D3DCOLOR at AnmManager+0, enabled by +4 (05 §12.1); 0x80 per channel is neutral.
+    // Global tint D3DCOLOR at AnmManager+0, enabled by +4; 0x80 per channel is neutral.
     pub tint: u32,
     pub tint_on: bool,
     // Stage tint request +0x6468 (06 §10.2 step 3), applied at the next Stage_DrawLow.
     pub stage_tint: Option<u32>,
-    // Stage flag +0x646C "a bomb drew this frame" (06 §10.2, 14 §1.3).
+    // Stage flag +0x646C "a bomb drew this frame" (14 §1.3).
     pub bomb_drew: bool,
-    // Camera used by VMs with flag bit 15 (05 §9).
+    // Camera used by VMs with flag bit 15.
     pub stage_camera: Option<Camera>,
-    // 0x4EA3F4 = g_Stage+0x63C4: normalised camera-right vector written by Stage_SetCamera every frame (05 §9 mode 4).
+    // 0x4EA3F4 = g_Stage+0x63C4: normalised camera-right vector written by Stage_SetCamera every frame.
     pub cam_right: [f32; 3],
     // The blend / texture / texture-matrix caches +0x24C0 / +0x24BC / +0x24C8 are emit state: `Recorder::anm`.
     // Port-only: texture entries loaded so far; paces the loading screen (gamemgr `loading_total`).
@@ -67,7 +67,7 @@ pub struct AnmManager {
     pub capture_req: Option<SlotSprite>,
 }
 
-// A global tint D3DCOLOR (05 §12.1) a draw-phase step drew under and turned off (or replaced) before its emit runs;
+// A global tint D3DCOLOR a draw-phase step drew under and turned off (or replaced) before its emit runs;
 // the emit applies it to VM copies. Each channel × tint >> 7, alpha included.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tint(pub u32);
@@ -89,7 +89,7 @@ impl Tint {
     }
 
     // A copy that draws under this tint while the global tint is off: EmitQuad's colour (colour2 with bit 17, else
-    // colour), tinted, goes into colour2 + bit 17, so the alpha-0 skip still tests the untinted primary colour (05 §12.2).
+    // colour), tinted, goes into colour2 + bit 17, so the alpha-0 skip still tests the untinted primary colour.
     pub fn vm(self, vm: &AnmVm) -> AnmVm {
         use anmvm::*;
         let c = if vm.has(VmFlags::COLOR2) {
@@ -134,8 +134,8 @@ impl Default for AnmManager {
 }
 
 impl AnmManager {
-    // Anm_Preload 0x465860 + Anm_LoadEntryTexture 0x465CC0 (03 §2); the port uploads all entries at once.
-    // Sprites / scripts come from the LogicView, THTX pixels from its PresentView (ARCH_B §1.2): core keeps no pixels,
+    // Anm_Preload 0x465860 + Anm_LoadEntryTexture 0x465CC0; the port uploads all entries at once.
+    // Sprites / scripts come from the LogicView, THTX pixels from its PresentView: core keeps no pixels,
     // the recorder gets them with the create command and `TexSource::Anm { file, entry }` as provenance.
     pub fn load(
         &mut self,
@@ -157,7 +157,7 @@ impl AnmManager {
         let present = archive.present();
         self.insert(slot, name, chunks, |c| {
             let id = match (pixels[entry as usize].take(), present.chunk_image(&c.name)) {
-                // Pack image by chunk name (I18N G2): THTX size kept, pixels replaced.
+                // Pack image by chunk name: THTX size kept, pixels replaced.
                 (Some(t), Some(img)) => {
                     rec.create_anm_texture_over(name, entry, t.width, t.height, img)
                 }
@@ -179,7 +179,7 @@ impl AnmManager {
         Ok(())
     }
 
-    // Concatenates every entry's sprites and scripts into the slot's cumulative arrays (03 §2.4).
+    // Concatenates every entry's sprites and scripts into the slot's cumulative arrays.
     pub fn insert(
         &mut self,
         slot: usize,
@@ -241,7 +241,7 @@ impl AnmManager {
         self.vm_counter = 0;
     }
 
-    // AnmManager_SetScript 0x40B910 (05 §8): pos and pos_offset are zeroed before the frame-0 run.
+    // AnmManager_SetScript 0x40B910: pos and pos_offset are zeroed before the frame-0 run.
     pub fn set_script(
         &mut self,
         rng: &mut crate::rng::Rng,
@@ -267,7 +267,7 @@ impl AnmManager {
         self.start_script(rng, vm, slot, index);
     }
 
-    // AnmFile_StartScript 0x45E580 (05 §8): a missing script zeroes the whole VM; otherwise init and run once (frame 0).
+    // AnmFile_StartScript 0x45E580: a missing script zeroes the whole VM; otherwise init and run once (frame 0).
     pub fn start_script(
         &mut self,
         rng: &mut crate::rng::Rng,
@@ -291,7 +291,7 @@ impl AnmManager {
         vm.run(self, rng);
     }
 
-    // Draw = `prepare` (draw-phase step) + `emit_mode_z` (ARCH decision 2).
+    // Draw = `prepare` (draw-phase step) + `emit_mode_z`.
     pub fn draw(&self, rec: &mut Recorder, vm: &mut AnmVm) {
         self.draw_mode(rec, vm, vm.draw_mode);
     }
@@ -311,14 +311,14 @@ impl AnmManager {
     }
 
     // The VM write of a draw (draw-phase step): DrawByMode mode 5 and Draw3DWorld rebuild the cached world matrix
-    // (05 §9) behind the same visibility / sprite guards; every other mode writes nothing.
+    // behind the same visibility / sprite guards; every other mode writes nothing.
     pub fn prepare(&self, vm: &mut AnmVm, mode: i32) {
         if mode == 5 && self.drawable(vm).is_some() {
             Self::update_world_matrix(vm);
         }
     }
 
-    // Visible, enabled, primary alpha ≠ 0, has a sprite (05 §12.2), and the sprite exists.
+    // Visible, enabled, primary alpha ≠ 0, has a sprite, and the sprite exists.
     fn drawable(&self, vm: &AnmVm) -> Option<SlotSprite> {
         use anmvm::*;
         if !vm.vm_flags().contains(VmFlags::VISIBLE | VmFlags::ENABLED)
@@ -334,7 +334,7 @@ impl AnmManager {
         .copied()
     }
 
-    // Mode-5 world matrix (05 §9): base (w/256, h/256) × scale, then × RotX × RotY × RotZ (each only if ≠ 0).
+    // Mode-5 world matrix: base (w/256, h/256) × scale, then × RotX × RotY × RotZ (each only if ≠ 0).
     fn update_world_matrix(vm: &mut AnmVm) {
         use anmvm::*;
         if vm.has(VmFlags::ROT_DIRTY | VmFlags::SCALE_DIRTY) && !vm.has(VmFlags::FREEZE_MATRIX) {
@@ -358,7 +358,7 @@ impl AnmManager {
         }
     }
 
-    // Colour or colour2 (bit 17), then the global tint (05 §9 EmitQuad step 4); returns RGBA.
+    // Colour or colour2 (bit 17), then the global tint; returns RGBA.
     fn vm_color(&self, vm: &AnmVm) -> [u8; 4] {
         use anmvm::*;
         let c = if vm.has(VmFlags::COLOR2) {
@@ -387,7 +387,7 @@ impl AnmManager {
         });
     }
 
-    // Global tint: D3DCOLOR at AnmManager+0, enabled by +4; every channel including alpha (05 §12.1).
+    // Global tint: D3DCOLOR at AnmManager+0, enabled by +4; every channel including alpha.
     pub fn tinted(&self, rgba: [u8; 4]) -> [u8; 4] {
         match self.tint_state() {
             Some(t) => t.rgba(rgba),
@@ -395,7 +395,7 @@ impl AnmManager {
         }
     }
 
-    // The global tint +0 while +4 is on, else None (05 §12.1).
+    // The global tint +0 while +4 is on, else None.
     pub fn tint_state(&self) -> Option<Tint> {
         self.tint_on.then_some(Tint(self.tint))
     }
@@ -411,7 +411,7 @@ impl AnmManager {
         }
     }
 
-    // Blend bits 4–5: 0 alpha, 1 additive, 2/3 set nothing (05 §12.5).
+    // Blend bits 4–5: 0 alpha, 1 additive, 2/3 set nothing.
     pub fn blend_for(rec: &mut Recorder, vm: &AnmVm) -> Blend {
         let blend = match vm.blend() {
             0 => Blend::Alpha,
@@ -422,7 +422,7 @@ impl AnmManager {
         blend
     }
 
-    // AnmManager_Draw3DWorld 0x464470 (06 §11.2): unit quad ±128 through `cam` with vertex fog; the screen-shake
+    // AnmManager_Draw3DWorld 0x464470: unit quad ±128 through `cam` with vertex fog; the screen-shake
     // offset is added to the translation.
     pub fn draw_3d_world(
         &self,
@@ -543,13 +543,13 @@ impl AnmManager {
     }
 
     // `z` is the vertex depth (projected depth for stage billboards, 0 otherwise).
-    // AnmManager_DrawByMode 0x45E960 (05 §9); skip unless visible, enabled and primary alpha ≠ 0 (05 §12.2).
+    // AnmManager_DrawByMode 0x45E960; skip unless visible, enabled and primary alpha ≠ 0.
     pub fn draw_mode_z(&self, rec: &mut Recorder, vm: &mut AnmVm, mode: i32, z: f32) {
         self.prepare(vm, mode);
         self.emit_mode_z(rec, vm, mode, z);
     }
 
-    // Emit half of DrawByMode: reads only; mode 5 uses the world matrix `prepare` left (05 §9).
+    // Emit half of DrawByMode: reads only; mode 5 uses the world matrix `prepare` left.
     pub fn emit_mode_z(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32) {
         self.emit_mode_z_at(rec, vm, mode, z, self.screen_offset);
     }
@@ -572,13 +572,13 @@ impl AnmManager {
             let (x1, y1) = (px + hw + ax, py + hh + ay);
             [[x0, y0], [x1, y0], [x0, y1], [x1, y1]]
         };
-        // Modes 2/3 with rotation z ≠ 0: corners rotated, the anchor shift added afterwards unrotated (05 §9).
+        // Modes 2/3 with rotation z ≠ 0: corners rotated, the anchor shift added afterwards unrotated.
         let rotated = || {
             let (s, c) = crate::fmath::sin_cos_f(vm.rotation[2]);
             [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
                 .map(|(dx, dy)| [dx * c - dy * s + px + ax, dx * s + dy * c + py + ay])
         };
-        // Mode 4 sizes the quad from the projection; both 3D modes carry the projected z as vertex depth (05 §9).
+        // Mode 4 sizes the quad from the projection; both 3D modes carry the projected z as vertex depth.
         let mut depth = [z; 4];
         let stage_cam = vm.has(VmFlags::STAGE_CAM);
         let cam = |anm: &Self, vp| match (stage_cam, anm.stage_camera) {
@@ -586,7 +586,8 @@ impl AnmManager {
             _ => Camera::set_2d(vp),
         };
         let (corners, snap) = match mode {
-            // 0 Draw2DSnap 0x462FF0, 1 Draw2D 0x463800, 2 Draw2DRot 0x463210 (snaps only when unrotated), 3 Draw2DRotNoSnap 0x463470.
+            // 0 Draw2DSnap 0x462FF0, 1 Draw2D 0x463800, 2 Draw2DRot 0x463210 (snaps only when unrotated),
+            // 3 Draw2DRotNoSnap 0x463470.
             0 => (axis_aligned(), true),
             1 => (axis_aligned(), false),
             2 | 3 if vm.rotation[2] == 0.0 => (axis_aligned(), mode == 2),
@@ -604,7 +605,7 @@ impl AnmManager {
                 depth = [s[2]; 4];
                 (billboard_corners(vm, s, len), false)
             }
-            // 5 Draw3DQuad 0x464070; the anchor shift uses the absolute half size (05 §12.7).
+            // 5 Draw3DQuad 0x464070; the anchor shift uses the absolute half size.
             5 => {
                 let mut w = vm.world_matrix;
                 w.0[3] = [px + ax.abs(), py + ay.abs(), pz, 1.0];
@@ -620,7 +621,7 @@ impl AnmManager {
                     let p = w.transform([x, y, 0.0]);
                     cam.project([p[0], p[1], p[2]], vp)
                 });
-                // EmitQuad never rewrites z: the projected z is the vertex depth (≈ 0.9994 for z = 0 under the 2D camera).
+                // EmitQuad never rewrites z: the projected z is the vertex depth (≈ 0.9994 for z = 0, 2D camera).
                 depth = projected.map(|s| s[2]);
                 (projected.map(|s| [s[0], s[1]]), false)
             }
@@ -629,7 +630,7 @@ impl AnmManager {
         self.emit_quad_at(rec, vm, spr, corners, depth, snap, off);
     }
 
-    // DrawBillboard 0x463CF0 (05 §9 mode 4, 13 §2.6c) from an already projected point `s` and the 3D length `len` of
+    // DrawBillboard 0x463CF0 (13 §2.6c) from an already projected point `s` and the 3D length `len` of
     // project(pos + right) − s; list B moves `s` in screen space (callback 0x428310) between the two.
     pub fn draw_billboard(&self, rec: &mut Recorder, vm: &AnmVm, s: [f32; 3], len: f32) {
         let Some(spr) = self.drawable(vm) else {
@@ -669,10 +670,10 @@ impl AnmManager {
         off: [f32; 2],
     ) {
         use anmvm::*;
-        // AnmManager_EmitQuad 0x4628B0 (05 §9): global offset, optional snapping, then D3D pixel-centre convention (+0.5) for wgpu.
+        // AnmManager_EmitQuad 0x4628B0: global offset, optional snapping, then the D3D pixel centre (+0.5) for wgpu.
         let corners = corners.map(|[x, y]| {
             let (mut x, mut y) = (x + off[0], y + off[1]);
-            // Snap: x87 round-to-nearest-even, minus 0.5 (05 §9).
+            // Snap: x87 round-to-nearest-even, minus 0.5.
             if snap {
                 x = x.round_ties_even() - 0.5;
                 y = y.round_ties_even() - 0.5;
@@ -686,12 +687,12 @@ impl AnmManager {
         let (miny, maxy) = corners
             .iter()
             .fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c[1]), b.max(c[1])));
-        // Cull unless the bounding box meets the viewport (05 §9 step 3), in D3D coordinates (undo the +0.5).
+        // Cull unless the bounding box meets the viewport, in D3D coordinates (undo the +0.5).
         let (minx, maxx, miny, maxy) = (minx - 0.5, maxx - 0.5, miny - 0.5, maxy - 0.5);
         if maxx < vp.x || minx > vp.x + vp.w || maxy < vp.y || miny > vp.y + vp.h {
             return;
         }
-        // EmitQuad step 2 (05 §9): v0 (u0,v0), v1 (u1,v0), v2 (u0,v1), v3 (u1,v1).
+        // EmitQuad step 2: v0 (u0,v0), v1 (u1,v0), v2 (u0,v1), v3 (u1,v1).
         let (u0, v0) = (spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]);
         let (u1, v1) = (spr.uv[2] + vm.uv_off[0], spr.uv[3] + vm.uv_off[1]);
         let rgba = self.vm_color(vm);
@@ -705,7 +706,7 @@ impl AnmManager {
     }
 }
 
-// Billboard corners (05 §9 mode 4, 13 §2.6c): half size ((len·0.5)·sprite_w)·scale.x, rotated by rotation.z about s.
+// Billboard corners (13 §2.6c): half size ((len·0.5)·sprite_w)·scale.x, rotated by rotation.z about s.
 fn billboard_corners(vm: &AnmVm, s: [f32; 3], len: f32) -> [[f32; 2]; 4] {
     let hw = ((len * 0.5) * vm.sprite_w) * vm.scale[0];
     let hh = ((len * 0.5) * vm.sprite_h) * vm.scale[1];
@@ -728,7 +729,7 @@ mod tests {
     use super::*;
 
     // A saved tint applied by the emit (global tint off) records what the draw under the global tint records, also
-    // with colour2 and a tint alpha that zeroes a small primary alpha (the skip tests the untinted colour, 05 §12.2).
+    // with colour2 and a tint alpha that zeroes a small primary alpha (the skip tests the untinted colour).
     #[test]
     fn saved_tint_equals_global_tint() {
         let mut anm = AnmManager::default();
@@ -772,7 +773,7 @@ mod tests {
         }
     }
 
-    // AnmManager::clone mid-animation (ARCH_SUMMARY C 1): both copies step to the same VM state, RNG and draws; a
+    // AnmManager::clone mid-animation: both copies step to the same VM state, RNG and draws; a
     // literal-destination write (05 §3) copies the clone's script instead of writing into the shared one.
     #[test]
     fn clone_mid_animation_steps_identically() {

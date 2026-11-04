@@ -14,7 +14,7 @@ impl Exec<'_> {
                 self.e.pos = [self.af(t, x), self.af(t, y), 0.0];
                 self.e.clamp_pos();
             }
-            // Op 64: delta = target − final pos, start = pos (07 §7).
+            // Op 64: delta = target − final pos, start = pos.
             MoveOp::MoveTo { dur, ease, x, y } => {
                 let (dur, ease) = (self.ai(t, dur), self.ai(t, ease));
                 let (x, y) = (self.af(t, x), self.af(t, y));
@@ -138,7 +138,7 @@ impl Exec<'_> {
         angle_from(p, self.m.g.player)
     }
 
-    // Mode 1 polar (07 §8): angle wrapped; `dur` 0 = no duration.
+    // Mode 1 polar: angle wrapped; `dur` 0 = no duration.
     fn mode1(&mut self, ang: f32, spd: f32, dur: i32) {
         let e = &mut *self.e;
         e.angle = wrap_add(ang, 0.0);
@@ -148,7 +148,7 @@ impl Exec<'_> {
         e.set_move_mode(1);
     }
 
-    // Mode 2 interpolate (07 §8): velocity 0, ease in flag A bits 14–16.
+    // Mode 2 interpolate: velocity 0, ease in flag A bits 14–16.
     fn mode2(&mut self, dur: i32, ease: i32, start: [f32; 3], delta: [f32; 3]) {
         let e = &mut *self.e;
         e.interp_start = start;
@@ -160,7 +160,7 @@ impl Exec<'_> {
         e.set_move_mode(2);
     }
 
-    // Ops 66 / 67 / 178 (07 §7, §8.3): dur < 1 → mode 1; else mode 2 from the final pos. `mirror`: op 66
+    // Ops 66 / 67 / 178: dur < 1 → mode 1; else mode 2 from the final pos. `mirror`: op 66
     // negates delta.x for mirrored enemies (`Ecl_OpMoveDir` 0x420D10); ops 67/178 do not.
     fn move_dir(&mut self, dur: i32, ease: i32, ang: f32, spd: f32, mirror: bool) {
         if dur < 1 {
@@ -183,7 +183,7 @@ impl Exec<'_> {
         e.set_move_mode(3);
     }
 
-    // Random direction 0x422020 (op 67) / 0x4224A0 (op 178), 07 §8.3; one Rng_Float per line, in order.
+    // Random direction 0x422020 (op 67) / 0x4224A0 (op 178); one Rng_Float per line, in order.
     fn random_dir(&mut self, op178: bool) -> f32 {
         let rng = &mut self.sys.rng;
         let e = &*self.e;
@@ -230,7 +230,7 @@ impl Exec<'_> {
                 }
             }
         }
-        // 07 §8.3: two sequential tests; when the bands overlap both can flip, so the move goes up.
+        // Two sequential tests; when the bands overlap both can flip, so the move goes up.
         if y < y0 + 48.0 && a < 0.0 {
             a = -a;
         }

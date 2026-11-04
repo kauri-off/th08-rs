@@ -13,15 +13,15 @@ use std::f32::consts::PI;
 use std::sync::Arc;
 use th08_formats::stdfile::{self, CamSlot, Op, QuadKind, Record, Std, Vec3};
 
-// stgNbg.anm slot (06 §2 step 2).
+// stgNbg.anm slot.
 pub const ANM_SLOT: usize = 4;
-// Stage_Calc 0x407400 / Stage_DrawLow 0x409200 / Stage_DrawHigh 0x409640 (06).
+// Stage_Calc 0x407400 / Stage_DrawLow 0x409200 / Stage_DrawHigh 0x409640.
 pub const CALC_PRIO: u16 = 8;
 pub const DRAW_LOW_PRIO: u16 = 6;
 pub const DRAW_HIGH_PRIO: u16 = 7;
-// PerspectiveFovLH near/far planes (06 §10.1).
+// PerspectiveFovLH near/far planes.
 const NEAR: f32 = 30.0;
-// Overlay/tint VM +0x844: text.anm (slot 0) script 33 (06 §2 step 4, §13).
+// Overlay/tint VM +0x844: text.anm (slot 0) script 33 (06 §13).
 const OVERLAY_SLOT: usize = 0;
 const OVERLAY_SCRIPT: usize = 33;
 const FAR: f32 = 1800.0;
@@ -33,7 +33,7 @@ const BG_NAMES: [&str; 9] = [
     "stg1bg", "stg2bg", "stg3bg", "stg4abg", "stg4abg", "stg5bg", "stg6bg", "stg7bg", "stg8bg",
 ];
 
-// Stage index 0..8 → (.std, bg .anm); spell practice (GameFlags bit 14) takes `stageN_s.std` (07 §1, 06 §2, 04).
+// Stage index 0..8 → (.std, bg .anm); spell practice (GameFlags bit 14) takes `stageN_s.std` (07 §1).
 pub fn files(index: usize, spell_practice: bool) -> (String, String) {
     let s = if spell_practice { "_s" } else { "" };
     (
@@ -65,7 +65,7 @@ pub fn parse_stage_arg(a: &str) -> Option<usize> {
     Some(k)
 }
 
-// Fog near/far (eye-space z) and colour (D3DCOLOR); current at +0xAEC (06 §3, §8).
+// Fog near/far (eye-space z) and colour (D3DCOLOR); current at +0xAEC.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FogState {
     pub near: f32,
@@ -73,14 +73,14 @@ pub struct FogState {
     pub color: u32,
 }
 
-// Camera value block: pos, facing, up (indexed POS/FACING/UP) and fov (06 §3).
+// Camera value block: pos, facing, up (indexed POS/FACING/UP) and fov.
 #[derive(Clone, Copy, Debug, Default)]
 struct CamBlock {
     v: [Vec3; 3],
     fov: f32,
 }
 
-// Stage camera fields of g_Stage +0x6264..+0x6474 (06 §3).
+// Stage camera fields of g_Stage +0x6264..+0x6474.
 #[derive(Clone, Debug)]
 pub struct StageCamera {
     // +0x6264 target values.
@@ -109,7 +109,7 @@ const FACING: usize = 1;
 const UP: usize = 2;
 const FOV: usize = 3;
 
-// Stage_Load defaults (06 §2 step 5): pos (0, 0, 1000), up (0, 1, 0), fov π/6; start/target copied.
+// Stage_Load step 5 defaults: pos (0, 0, 1000), up (0, 1, 0), fov π/6; start/target copied.
 impl Default for StageCamera {
     fn default() -> Self {
         let v = [[0.0, 0.0, 1000.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
@@ -180,7 +180,7 @@ fn sparkle_point_ok(dist: f32, fog: FogState) -> bool {
 }
 
 impl StageCamera {
-    // 0x408D60 timer part (06 §6): factor for slot s (None if inactive); finishing sets t = 1 and duration 0.
+    // 0x408D60 timer part: factor for slot s (None if inactive); finishing sets t = 1 and duration 0.
     fn step(&mut self, s: usize, speed: f32) -> Option<f32> {
         let d = self.dur[s];
         if d == 0 {
@@ -197,7 +197,7 @@ impl StageCamera {
         Some(t)
     }
 
-    // 06 §5: slots pos, facing, up (mode 7 = Hermite), then fov (modes 0–6), then facing_norm.
+    // Slots pos, facing, up (mode 7 = Hermite), then fov (modes 0–6), then facing_norm.
     fn update(&mut self, speed: f32) {
         for s in [POS, FACING, UP] {
             let Some(t) = self.step(s, speed) else {
@@ -221,7 +221,7 @@ impl StageCamera {
             let t = cam_ease(self.mode[FOV], t);
             self.fov = self.start.fov + (self.target.fov - self.start.fov) * t;
         }
-        // +0x63B8 (06 §3): D3DX SSE normalise, not facing / |facing| (05 §10).
+        // +0x63B8: D3DX SSE normalise, not facing / |facing| (05 §10).
         self.facing_norm = crate::d3dx::vec3_normalize(self.v[FACING]);
     }
 
@@ -229,12 +229,12 @@ impl StageCamera {
         add(self.v[POS], self.eye_offset)
     }
 
-    // Stage_SetCamera's +0x63C4 (06 §10.1, 13 §2.6c): normalise(cross(raw facing +0x63A0, up +0x63AC)), not view row 0.
+    // Stage_SetCamera's +0x63C4 (13 §2.6c): normalise(cross(raw facing +0x63A0, up +0x63AC)), not view row 0.
     pub fn right(&self) -> Vec3 {
         normalize(cross(self.v[FACING], self.v[UP]))
     }
 
-    // Stage_SetCamera 0x40B6D0 (06 §10.1): LookAtLH(eye, pos + facing, up), PerspectiveFovLH(fov, w/h, 30, 1800).
+    // Stage_SetCamera 0x40B6D0: LookAtLH(eye, pos + facing, up), PerspectiveFovLH(fov, w/h, 30, 1800).
     pub fn camera(&self, vp: Rect) -> Camera {
         Camera {
             view: Mat4::look_at_lh(self.eye(), add(self.v[POS], self.v[FACING]), self.v[UP]),
@@ -243,7 +243,7 @@ impl StageCamera {
     }
 }
 
-// g_Stage 0x4E4030 (06 §3); `Ctx.stage`, its chain nodes are `StageTask`.
+// g_Stage 0x4E4030; `Ctx.stage`, its chain nodes are `StageTask`.
 #[derive(Clone)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -254,7 +254,7 @@ pub struct Stage {
     pub index: usize,
     // The parsed .std file, read-only after load (shared between World clones).
     pub std: Arc<Std>,
-    // Object +3 runtime flags (06 §1.1): bit 0 script running, bit 1 drawn.
+    // Object +3 runtime flags: bit 0 script running, bit 1 drawn.
     obj_flags: Vec<u8>,
     // +0x000 one VM per quad.
     vms: Vec<AnmVm>,
@@ -271,9 +271,9 @@ pub struct Stage {
     origin: Vec3,
     // +0x830 D3DCOLOR (op 13; VM C's colour while VM C runs).
     pub clear_color: u32,
-    // +0xAE8 stage 6B ring effect (fixed slot 12, 06 §5.1); None = 0.
+    // +0xAE8 stage 6B ring effect (fixed slot 12); None = 0.
     ring_6b: Option<usize>,
-    // +0xAEC current, +0xAF8 start, +0xB04 target, +0xB10 duration, +0xB14 elapsed (06 §8).
+    // +0xAEC current, +0xAF8 start, +0xB04 target, +0xB10 duration, +0xB14 elapsed.
     pub fog: FogState,
     fog_start: FogState,
     fog_target: FogState,
@@ -284,37 +284,37 @@ pub struct Stage {
     pub cam: StageCamera,
     // +0x6464 set by op 4, consumed by the next op 5.
     jumped: bool,
-    // +0x6474 op-33 sway mode, +0x6424 sway clock (06 §7).
+    // +0x6474 op-33 sway mode, +0x6424 sway clock.
     sway_mode: u8,
     sway_clock: Timer,
-    // +0x6470 cull distance² (06 §2 step 6).
+    // +0x6470 cull distance².
     cull_dist2: f32,
     // Port-only: TH08_STAGE_FRAME debug fast-forward.
     pub fast_forward: u32,
-    // +0x844 overlay/tint VM, +0x834 youkai latch, +0x838 switch timer (06 §13).
+    // +0x844 overlay/tint VM, +0x834 youkai latch, +0x838 switch timer.
     overlay: AnmVm,
     overlay_mode: u8,
     overlay_timer: Timer,
-    // +0xB24: 0 off, 1 spell bg starting, 2 stage layers hidden (13 §5).
+    // +0xB24: 0 off, 1 spell bg starting, 2 stage layers hidden.
     pub spell_state: i32,
     // cfg effect level (list-B effects only at 2).
     pub effect_level: u8,
     // +0xB28 frames since Stage_StartSpellBg.
     spell_frames: i32,
-    // +0xB30 count, +0xB34 first script, +0xB38 VMs (13 §5).
+    // +0xB30 count, +0xB34 first script, +0xB38 VMs.
     pub spell_count: usize,
     pub spell_first: usize,
     spell_vms: Vec<AnmVm>,
     // +0x625C mask callback 0x4235A0 set (07 §12.1).
     pub spell_mask: bool,
-    // HUD cover FUN_00437d87 (06 §10.2): impl+0x398C ≥ 0 and VM impl+0x3778 waiting for an interrupt.
-    // Set by the HUD once VM impl+0x3778 (msg op 9 stage-clear capture, RE-Q32 CODE BUG 12) is ported.
+    // HUD cover FUN_00437d87: impl+0x398C ≥ 0 and VM impl+0x3778 waiting for an interrupt.
+    // Set every frame by the HUD from its VM impl+0x3778 (msg op 9 stage-clear capture).
     pub hud_cover: bool,
-    // +0x6480 sparkle points: count, screen positions (06 §11.1); written by the draw step, read by the next calc.
+    // +0x6480 sparkle points: count, screen positions; written by the draw step, read by the next calc.
     sparkles: (usize, [Vec3; 32]),
-    // +0x647C sparkle flag, cleared at the end of Stage_DrawHigh (06 §10.2).
+    // +0x647C sparkle flag, cleared at the end of Stage_DrawHigh.
     sparkle_on: bool,
-    // Port-only: draws recorded by the DrawLow / DrawHigh steps, replayed by their emits (ARCH decision 2).
+    // Port-only: draws recorded by the DrawLow / DrawHigh steps, replayed by their emits.
     drawn: [Vec<Item>; 2],
 }
 
@@ -336,19 +336,19 @@ enum Item {
         mode: i32,
         z: f32,
     },
-    // Draw3DWorld through the stage camera with the tinted fog (06 §11.2).
+    // Draw3DWorld through the stage camera with the tinted fog.
     World {
         vm: AnmVm,
         cam: Camera,
         fog: Fog,
     },
-    // DrawCustomQuad (06 §11.3): `vm` gives blend and z-write.
+    // DrawCustomQuad: `vm` gives blend and z-write.
     Ribbon {
         vm: AnmVm,
         tex: crate::drawlist::TexId,
         v: [Vertex; 4],
     },
-    // Stage 6B ring, effect slot (06 §5.1).
+    // Stage 6B ring, effect slot.
     Ring(usize),
     Background(crate::effect::BgDraw),
     // Spell mask frame (07 §12.1): inner / outer half sizes, ring centre.
@@ -360,7 +360,7 @@ enum Item {
 }
 
 impl Stage {
-    // Stage_Load step 5–6 defaults (06 §2).
+    // Stage_Load step 5–6 defaults.
     pub fn new(index: usize, std: Std) -> Self {
         let cull_dist2 = match index {
             5 => 1_822_500.0,
@@ -415,8 +415,8 @@ impl Stage {
         }
     }
 
-    // Stage_Load steps 1, 3 and 4 (06 §2; files already loaded).
-    // The overlay VM (step 4) is started before the quad scripts (step 3): no script draws RNG, order is moot (06 §2).
+    // Stage_Load steps 1, 3 and 4 (files already loaded).
+    // The overlay VM (step 4) is started before the quad scripts (step 3): no script draws RNG, order is moot.
     pub fn start(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
         anm.set_script(rng, &mut self.overlay, OVERLAY_SLOT, OVERLAY_SCRIPT);
         self.overlay.pending_interrupt = 2;
@@ -454,7 +454,7 @@ impl Stage {
         Ok(t)
     }
 
-    // Ops 29 / 30 / 34 (06 §4): start a script on VM A / B / C, or disable it (sprite index −1).
+    // Ops 29 / 30 / 34: start a script on VM A / B / C, or disable it (sprite index −1).
     fn bg_vm(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, which: u8, script: i32) {
         let vm = match which {
             0 => &mut self.vm_a,
@@ -466,7 +466,7 @@ impl Stage {
         } else if which == 2 {
             self.vm_c.sprite_index = -1;
         } else {
-            // Quirk kept (06 §4): op 30 with a negative arg disables VM A, not VM B.
+            // Quirk kept: op 30 with a negative arg disables VM A, not VM B.
             self.vm_a.sprite_index = -1;
         }
     }
@@ -479,32 +479,32 @@ impl Stage {
         }
     }
 
-    // One record of the Stage_Calc switch (06 §4), decoded by `stdfile::Op`; false when processing stops for this
+    // One record of the Stage_Calc switch, decoded by `stdfile::Op`; false when processing stops for this
     // frame (op 3).
     fn exec(&mut self, anm: &mut AnmManager, r: Record, sys: &mut Sys) -> bool {
         let cam = &mut self.cam;
         match Op::decode(&r) {
-            // 06 §4 op 0.
+            // Op 0.
             Op::SetOrigin(v) => self.origin = v,
-            // 06 §4 op 1.
+            // Op 1.
             Op::Fog { color, near, far } => {
                 self.fog = Self::fog_from(color, near, far);
                 self.fog_target = self.fog;
             }
-            // 06 §4 op 2.
+            // Op 2.
             Op::FogTime { dur } => {
                 self.fog_start = self.fog;
                 self.fog_dur = dur;
                 self.fog_elapsed.set(0);
             }
-            // 06 §4 op 3.
+            // Op 3.
             Op::Halt => {
                 if self.section_request == 0 {
                     return false;
                 }
                 self.section_request = 0;
             }
-            // 06 §4 op 4 jump: cancels only the position interpolation; continues in the same frame.
+            // Op 4 jump: cancels only the position interpolation; continues in the same frame.
             Op::Jump { index, time } => {
                 self.ip = index.max(0).cast_unsigned() as usize;
                 self.clock.set(time);
@@ -512,10 +512,10 @@ impl Stage {
                 self.jumped = true;
                 return true;
             }
-            // 06 §4 ops 5 / 7 / 9.
+            // Ops 5 / 7 / 9.
             Op::CamTarget { slot, v } => {
                 let s = slot.index();
-                // After a jump, kind-51 background particles shift by the target change (06 §4, 13 §2.6a).
+                // After a jump, kind-51 background particles shift by the target change (13 §2.6a).
                 if slot == CamSlot::Pos && self.jumped {
                     let d = sub(v, cam.target.v[s]);
                     sys.fx.shift_kind(51, d);
@@ -527,14 +527,14 @@ impl Stage {
                     cam.v[s] = v;
                 }
             }
-            // 06 §4 ops 6 / 8 / 10 / 12.
+            // Ops 6 / 8 / 10 / 12.
             Op::CamTime { slot, dur, mode } => {
                 let s = slot.index();
                 cam.dur[s] = dur;
                 cam.elapsed[s].set(0);
                 cam.mode[s] = mode;
             }
-            // 06 §4 op 11.
+            // Op 11.
             Op::Fov(fov) => {
                 cam.start.fov = cam.target.fov;
                 cam.target.fov = fov;
@@ -542,9 +542,9 @@ impl Stage {
                     cam.fov = fov;
                 }
             }
-            // 06 §4 op 13.
+            // Op 13.
             Op::ClearColor(c) => self.clear_color = c,
-            // 06 §4 ops 14–18 / 19–23 / 24–28: start, end, tan0, tan1, Hermite (mode 7) for pos / facing / up.
+            // Ops 14–18 / 19–23 / 24–28: start, end, tan0, tan1, Hermite (mode 7) for pos / facing / up.
             Op::CamStart { slot, v } => cam.start.v[slot.index()] = v,
             Op::CamEnd { slot, v } => cam.target.v[slot.index()] = v,
             Op::CamTan0 { slot, v } => cam.tan0[slot.index()] = v,
@@ -555,23 +555,23 @@ impl Stage {
                 cam.elapsed[s].set(0);
                 cam.mode[s] = 7;
             }
-            // 06 §4 ops 29 / 30 / 34.
+            // Ops 29 / 30 / 34.
             Op::BgAnm { vm, script } => self.bg_vm(anm, sys.rng, vm, script),
-            // 06 §4 op 32.
+            // Op 32.
             Op::EyeOffset(v) => cam.eye_offset = v,
-            // 06 §4 op 33: the sway mode byte keeps the arg's low byte.
+            // Op 33: the sway mode byte keeps the arg's low byte.
             Op::Sway { mode } => {
                 self.sway_mode = lo8(mode);
                 self.sway_clock.set(0);
             }
-            // 06 §4.1 op 31 label and unknown opcodes: no-ops, the index advances.
+            // Op 31 label and unknown opcodes: no-ops, the index advances.
             Op::Section(_) | Op::Unknown(_) => {}
         }
         self.ip += 1;
         true
     }
 
-    // Stage_Calc head for g_StageIdx 7 (06 §5.1): spawn the ring, else drive it with section requests 1–4.
+    // Stage_Calc head for g_StageIdx 7: spawn the ring, else drive it with section requests 1–4.
     fn ring_6b_step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let Some(i) = self.ring_6b else {
             let i = sys
@@ -606,7 +606,7 @@ impl Stage {
         }
     }
 
-    // 06 §4.1: jump past the op 31 whose arg matches; an unmatched request stays pending.
+    // Jump past the op 31 whose arg matches; an unmatched request stays pending.
     fn handle_section_request(&mut self) {
         if self.section_request == 0 {
             return;
@@ -623,7 +623,7 @@ impl Stage {
         }
     }
 
-    // 06 §7: φ = 2πc/P − π (written c·π + c·π as in the original); clock wraps to 0 at P.
+    // φ = 2πc/P − π (written c·π + c·π as in the original); clock wraps to 0 at P.
     fn sway(&mut self, speed: f32) {
         let c = self.sway_clock.getf();
         let (p, wrap) = match self.sway_mode {
@@ -632,7 +632,7 @@ impl Stage {
             _ => return,
         };
         let phi = (c * PI + c * PI) / p - PI;
-        // Each value is f32(sin φ · k) rounded once from the extended product (06 §7, RE-Q58 AS).
+        // Each value is f32(sin φ · k) rounded once from the extended product.
         let s = |k: f64| crate::fmath::sin_mul(phi, k);
         match self.sway_mode {
             1 => self.cam.eye_offset[0] = s(40.0),
@@ -651,7 +651,7 @@ impl Stage {
         }
     }
 
-    // 06 §8: each colour byte truncated; near/far linear; done when elapsed ≥ duration.
+    // Each colour byte truncated; near/far linear; done when elapsed ≥ duration.
     fn update_fog(&mut self, speed: f32) {
         if self.fog_dur == 0 {
             return;
@@ -676,7 +676,7 @@ impl Stage {
         }
     }
 
-    // Stage_UpdateObjects (06 §9): the overlay VM follows the player mode byte (human blue, youkai white).
+    // Stage_UpdateObjects: the overlay VM follows the player mode byte (human blue, youkai white).
     fn update_objects(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng, mode: u8) {
         if (mode != 0) != (self.overlay_mode != 0) {
             self.overlay_mode = u8::from(mode != 0);
@@ -719,7 +719,7 @@ impl Stage {
         }
     }
 
-    // Stage_Calc body (06 §5).
+    // Stage_Calc body.
     pub fn step(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         // GameFlags bit 10 (bullets frozen): nothing runs, the sparkle flag is not set and the frame counter holds.
         if sys
@@ -753,7 +753,7 @@ impl Stage {
         }
         let mode = sys.player.as_deref().map_or(0, |p| p.mode);
         self.update_objects(anm, sys.rng, mode);
-        // 13 §5: spell background; after 60 frames the stage layers are no longer drawn.
+        // Spell background: after 60 frames the stage layers are no longer drawn.
         if self.spell_state > 0 {
             if self.spell_frames == 60 {
                 self.spell_state = 2;
@@ -763,7 +763,7 @@ impl Stage {
                 vm.run(anm, sys.rng);
             }
         }
-        // Port-only hand-off: camera and overlay colour for the effect manager (13 §2.6a, §2.6c).
+        // Port-only hand-off: camera and overlay colour for the effect manager.
         sys.fx.view = crate::effect::View {
             cam: Some(self.cam.camera(PLAYFIELD)),
             pos: self.cam.v[POS],
@@ -783,7 +783,7 @@ impl Stage {
             self.vm_c.run(anm, sys.rng);
             self.clear_color = u32::from_le_bytes(self.vm_c.color);
         }
-        // 06 §5 quirk kept: sparkles at all 12 points, used or not (unused ones at screen (0, 0)).
+        // Quirk kept: sparkles at all 12 points, used or not (unused ones at screen (0, 0)).
         if self.sparkle_due(*sys.flags) {
             let pts = self.sparkles.1;
             for p in &pts[..12] {
@@ -791,7 +791,7 @@ impl Stage {
                 sys.fx.get(i, |e| e.layer = 4);
             }
         }
-        // Sparkle flag +0x647C (06 §5); cleared at the end of Stage_DrawHigh.
+        // Sparkle flag +0x647C; cleared at the end of Stage_DrawHigh.
         self.sparkle_on = true;
         self.frame += 1;
     }
@@ -815,18 +815,18 @@ impl Stage {
         t
     }
 
-    // 06 §10.2: stage layers, list-B effects and the fade rect are skipped while +0xB24 ≥ 2 or the HUD cover is on.
+    // Stage layers, list-B effects and the fade rect are skipped while +0xB24 ≥ 2 or the HUD cover is on.
     fn layers_hidden(&self) -> bool {
         self.spell_state >= 2 || self.hud_cover
     }
 
-    // 06 §5: every 3rd frame, from frame 700 (from frame 0 in spell practice, GameFlags bit 14), while +0xB24 < 2.
+    // Every 3rd frame, from frame 700 (from frame 0 in spell practice, GameFlags bit 14), while +0xB24 < 2.
     fn sparkle_due(&self, flags: u32) -> bool {
         let practice = flags & crate::gamemgr::F_SPELL_PRACTICE != 0;
         self.frame.is_multiple_of(3) && (self.frame > 699 || practice) && self.spell_state < 2
     }
 
-    // Stage_StartSpellBg 0x415CE0 (13 §5): spell VMs run scripts first..first+count of the slot-9 file.
+    // Stage_StartSpellBg 0x415CE0: spell VMs run scripts first..first+count of the slot-9 file.
     pub fn start_spell_bg(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
         self.spell_state = 1;
         self.spell_frames = 0;
@@ -858,9 +858,9 @@ impl Stage {
         });
         out.push(Item::AnmReset);
         out.push(Item::DepthTest(true));
-        // vm.color is stored B,G,R,A (D3DCOLOR little-endian), so the bytes are used as they are (07 §12.1).
+        // vm.color is stored B,G,R,A (D3DCOLOR little-endian), so the bytes are used as they are.
         let grey = 0xFFE0_C0C0_u32.to_le_bytes();
-        // The restore writes fixed values, not the saved scale / pos; the dirty bits stay set (07 §12.1).
+        // The restore writes fixed values, not the saved scale / pos; the dirty bits stay set.
         if let Some(vm) = self.spell_vms.get_mut(0) {
             let col = vm.color;
             vm.scale = [-1.5, -1.75];
@@ -904,13 +904,13 @@ impl Stage {
         }
     }
 
-    // Spell_End 0x416AD0: +0xB24 = 0 (13 §5).
+    // Spell_End 0x416AD0: +0xB24 = 0.
     pub fn end_spell_bg(&mut self) {
         self.spell_state = 0;
         self.spell_vms.clear();
     }
 
-    // Stage_DrawLow step 6: fog colour × global ANM tint when active (06 §8, §10.2).
+    // Stage_DrawLow step 6: fog colour × global ANM tint when active.
     fn fog_params(&self, anm: &AnmManager) -> Fog {
         let c = self.fog.color.to_le_bytes();
         let [r, g, b, _] = anm.tinted([c[2], c[1], c[0], c[3]]);
@@ -921,7 +921,7 @@ impl Stage {
         }
     }
 
-    // Stage_DrawLayer 0x40A1B0 (06 §10.3), draw-phase step. The viewport is the playfield: DrawLow sets it and
+    // Stage_DrawLayer 0x40A1B0, draw-phase step. The viewport is the playfield: DrawLow sets it and
     // DrawHigh (prio 7) follows it with no draw node between (screen effects draw at prio 1 / 0x10 / 0x15).
     fn layer_step(&mut self, anm: &mut AnmManager, layer: u8, out: &mut Vec<Item>) {
         let vp = PLAYFIELD;
@@ -932,7 +932,7 @@ impl Stage {
         let m = cam.view.0;
         let right = normalize([m[0][0], m[0][1], m[0][2]]);
         let fog = self.fog_params(anm);
-        // +0xB24 ≤ 1 is redundant: Stage_DrawLayer runs only while +0xB24 < 2 (06 §11.1, §10.2).
+        // +0xB24 ≤ 1 is redundant: Stage_DrawLayer runs only while +0xB24 < 2.
         let points = if self.sparkle_on && self.spell_state <= 1 {
             Some(&mut self.sparkles)
         } else {
@@ -947,7 +947,7 @@ impl Stage {
             points,
             pv: [0.0; 3],
         };
-        // Reused vertex-colour slots; initial values = stack residue (06 §11.3, INFERRED constant).
+        // Reused vertex-colour slots; initial values = stack residue (INFERRED).
         let mut slots = [0x0091_0D20_u32, 0x0067_6E85, 0, 0].map(u32::to_le_bytes);
         for inst in &self.std.instances {
             let obj = &self.std.objects[inst.object];
@@ -1009,18 +1009,18 @@ struct View<'a> {
     eye: Vec3,
     fog: FogState,
     points: Option<&'a mut (usize, [Vec3; 32])>,
-    // Local ebp−0x9C: D3DXVec3Project input vector of every projection, (0,0,0) per call, set by each ribbon
-    // (06 §11.4 QUIRK).
+    // Quirk kept (06 §11.4): local ebp−0x9C, the D3DXVec3Project input vector of every projection, is (0,0,0) per
+    // call and set by each ribbon.
     pv: Vec3,
 }
 
 impl View<'_> {
-    // D3DXVec3Project with world = translation(p) and input `pv`: project(p + pv) (06 §11.4).
+    // D3DXVec3Project with world = translation(p) and input `pv`: project(p + pv).
     fn project(&self, p: Vec3) -> Vec3 {
         self.cam.project(add(p, self.pv), self.vp)
     }
 
-    // Software fog (06 §11.1), D3DCOLOR byte order: c −= trunc((c − fog)·f), alpha ·= 1 − f; None when f ≥ 1.
+    // Software fog, D3DCOLOR byte order: c −= trunc((c − fog)·f), alpha ·= 1 − f; None when f ≥ 1.
     fn soft_fog(&self, color: [u8; 4], dist: f32) -> Option<[u8; 4]> {
         let (near, far) = (self.fog.near, self.fog.far);
         if dist <= near {
@@ -1047,7 +1047,7 @@ impl View<'_> {
         dot(r, r).sqrt()
     }
 
-    // Billboard sprite, tag & 0xF == 2 (06 §11.1).
+    // Billboard sprite, tag & 0xF == 2.
     fn billboard(&mut self, anm: &AnmManager, vm: &mut AnmVm, w: f32, out: &mut Vec<Item>) {
         let s = self.project(vm.pos);
         let ww = if w == 0.0 { vm.sprite_w } else { w };
@@ -1070,12 +1070,12 @@ impl View<'_> {
                 mode: 1,
                 z: s[2],
             });
-            // Only drawn quads append a sparkle point (06 §11.1).
+            // Only drawn quads append a sparkle point.
             if vm.tag & 0xF0 == 0x10
                 && let Some(p) = self.points.as_deref_mut()
                 && sparkle_point_ok(dist, self.fog)
             {
-                // Port-only bound: the original has no check (the shipped data stays ≤ 15 points, 06 §11.1).
+                // Port-only bound: the original has no check (the shipped data stays ≤ 15 points).
                 if p.0 < 32 {
                     let n = p.0;
                     p.1[n] = [s[0], s[1], 0.0];
@@ -1086,8 +1086,8 @@ impl View<'_> {
         vm.color = saved;
     }
 
-    // Colours go to the call's reused slots first; f ≥ 1 clears only alpha (06 §11.3). The projections and the `pv`
-    // update (06 §11.4) come before the depth and DrawCustomQuad checks.
+    // Colours go to the call's reused slots first; f ≥ 1 clears only alpha. The projections and the `pv`
+    // update come before the depth and DrawCustomQuad checks.
     #[allow(clippy::too_many_arguments)]
     fn ribbon(
         &mut self,
@@ -1133,7 +1133,7 @@ impl View<'_> {
         ) else {
             return;
         };
-        // `AnmManager_DrawCustomQuad` 0x464DD0 pushes the colours as given: no global tint (06 §11.3, 05 §12.1).
+        // `AnmManager_DrawCustomQuad` 0x464DD0 pushes the colours as given: no global tint (05 §12.1).
         let col = |c: [u8; 4]| [c[R], c[G], c[B], c[A]];
         let (c0, c1, c2, c3) = (col(slots[0]), col(slots[1]), col(slots[2]), col(slots[3]));
         if len < 1e-5 || !(0.0..=1.0).contains(&sa[2]) || !(0.0..=1.0).contains(&sb[2]) {
@@ -1142,7 +1142,7 @@ impl View<'_> {
         let (dx, dy) = (d[0] / len, d[1] / len);
         let (u0, v0) = (spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]);
         let (u1, v1) = (spr.uv[2] + vm.uv_off[0], spr.uv[3] + vm.uv_off[1]);
-        // DrawCustomQuad / PushQuad add no screen-shake offset (06 §11.3).
+        // DrawCustomQuad / PushQuad add no screen-shake offset.
         let vx = |x: f32, y: f32, z: f32, uv: [f32; 2], c: [u8; 4]| {
             Vertex::screen(x + 0.5, y + 0.5, z, uv, c)
         };
@@ -1160,7 +1160,7 @@ impl View<'_> {
     }
 }
 
-// Chain nodes of `ctx.w.stage` (calc prio 8, draw prio 6 / 7 / 7): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `ctx.w.stage` (calc prio 8, draw prio 6 / 7 / 7): stateless forwarder.
 pub struct StageTask;
 
 impl Task<Ctx> for StageTask {
@@ -1196,14 +1196,13 @@ impl Task<Ctx> for StageTask {
 }
 
 impl Stage {
-    // Tag 0 = Stage_DrawLow, tag 1 = Stage_DrawHigh (06 §10.2), tag 2 = DrawHigh's last writes. The tint off and
-    // stage-camera reset end DrawHigh but its draws read the tint: tag 2, linked right after tag 1 at the same prio,
-    // makes them after tag 1's emit and before any other draw node.
-    // Not implemented: DrawLow step 2 (+0xB2C clear).
+    // Tag 0 = Stage_DrawLow, tag 1 = Stage_DrawHigh, tag 2 = DrawHigh's last writes (tint off, stage-camera reset): its
+    // draws read the tint, so tag 2, linked right after tag 1 at the same prio, runs after tag 1's emit and before any
+    // other draw node. Not implemented: DrawLow step 2 (+0xB2C clear).
     pub fn draw_step(&mut self, anm: &mut AnmManager, fx: &mut crate::effect::Effects, tag: u8) {
         if tag == 2 {
             self.sparkle_on = false;
-            // +0x646C: the tint stays on while a bomb drew last frame (06 §10.2).
+            // +0x646C: the tint stays on while a bomb drew last frame.
             if !std::mem::take(&mut anm.bomb_drew) {
                 anm.tint_off();
             }
@@ -1268,7 +1267,7 @@ impl Stage {
             }
             out.push(Item::DepthTest(false));
             out.push(Item::Viewport);
-            // AnmManager_DrawRotFlush 0x40BAF0 = Draw2DRot (mode 2) whatever the VM's draw mode (13 §5).
+            // AnmManager_DrawRotFlush 0x40BAF0 = Draw2DRot (mode 2) whatever the VM's draw mode.
             for vm in &mut self.spell_vms {
                 anm.prepare(vm, 2);
                 out.push(Item::Vm {
@@ -1396,7 +1395,7 @@ mod tests {
         assert_eq!(st.ip, 3);
     }
 
-    // 06 §11.4: every ribbon (even an invisible one) sets `pv` to its normalised screen direction, used as the
+    // Every ribbon (even an invisible one) sets `pv` to its normalised screen direction, used as the
     // input vector of the next projections.
     #[test]
     fn ribbon_sets_projection_vector() {
@@ -1433,7 +1432,7 @@ mod tests {
         assert_eq!(view.pv, scale(d, 1.0 / len));
     }
 
-    // 06 §5.1: stage 7 spawns the type-0x40 ring in slot 12 on its first calc; request 3 interrupts and keeps
+    // Stage 7 spawns the type-0x40 ring in slot 12 on its first calc; request 3 interrupts and keeps
     // the colour; request 2 (script 12) restores the pos interpolation slot 0 and the colour.
     #[test]
     fn stage_6b_ring_requests() {
@@ -1562,7 +1561,7 @@ mod tests {
         assert!(!due(&st, *sys.flags));
     }
 
-    // 06 §10.2: layers / list B / fade rect hidden while +0xB24 ≥ 2 or the HUD cover is on.
+    // Layers / list B / fade rect hidden while +0xB24 ≥ 2 or the HUD cover is on.
     #[test]
     fn draw_gates() {
         let mut st = synthetic(vec![rec(-1, 0, [0; 3])]);

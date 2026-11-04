@@ -1,5 +1,4 @@
-//! ECL control flow: wait, jumps, calls, returns, threads, interrupts, natives (07 §5.2–§5.5, §7 ops 0–5, 40–53,
-//! 88, 89, 125, 126, 135–137, 146).
+//! ECL control flow: wait, jumps, calls, returns, threads, interrupts, natives (07 §5.2–§5.5, §7).
 
 use super::{Exec, Flow, at, at_mut};
 use crate::enemy::{A_NO_PUSH, Thread, V_ARGI};
@@ -98,14 +97,14 @@ impl Exec<'_> {
         Flow::Next
     }
 
-    // Op 53, 0x421CB0 (07 §5.4): restore the whole context from stack[depth].
+    // Op 53, 0x421CB0: restore the whole context from stack[depth].
     fn ret(&mut self, t: &mut Thread) -> Flow {
         t.depth -= 1;
         if t.depth < 0 {
             if self.e.running_thread.is_some() {
                 return Flow::ThreadEnd;
             }
-            // Malformed main-context return at depth 0 (never in shipped data, answers_phase5): halt this frame.
+            // Malformed main-context return at depth 0 (never in shipped data): halt this frame.
             t.depth = 0;
             return Flow::Post;
         }
@@ -117,7 +116,7 @@ impl Exec<'_> {
         Flow::Jumped
     }
 
-    // Op 88: call in boss[slot]'s main context the same way (07 §5.4).
+    // Op 88: call in boss[slot]'s main context the same way.
     fn call_boss(&mut self, t: &mut Thread, slot: Arg, sub: Arg) {
         let (slot, sub) = (self.ai(t, slot), self.ai(t, sub));
         let Some(b) = self.m.boss(slot) else {
@@ -129,7 +128,7 @@ impl Exec<'_> {
         let args = self.m.g.args;
         let ecl = &self.m.ecl;
         if b == self.idx {
-            // 07 §5.4 on the caller itself: the running context, its own stack and working depth; the
+            // On the caller itself: the running context, its own stack and working depth; the
             // pushed ip is the stored ip + its size. Ecl_Run then writes its local ip (past op 88) back
             // over the sub start, so the sub never runs; clock, wait, sub id, args and the push stay.
             let cur = t.ctx.ip;
@@ -143,7 +142,7 @@ impl Exec<'_> {
             return;
         }
         let o = &mut self.m.enemies[b];
-        // 07 §5.4: Ecl_CallSub gets the target's stored ip, so the instruction it would run next is
+        // Ecl_CallSub gets the target's stored ip, so the instruction it would run next is
         // skipped on return; the push goes to the working depth 0x2CEA, the main depth 0x2CE8 stays.
         let ip = o.main.ctx.ip;
         o.main.ctx.ip = ip + ecl.ins(ip).map_or(0, |i| i.size);
@@ -154,7 +153,7 @@ impl Exec<'_> {
         o.main.ctx.vars[V_ARGI..V_ARGI + 8].copy_from_slice(&args);
     }
 
-    // Op 135: free thread slot k; sub ≥ 0 creates it with the current context's 30 var dwords, clock 0 (07 §5.4).
+    // Op 135: free thread slot k; sub ≥ 0 creates it with the current context's 30 var dwords, clock 0.
     fn thread(&mut self, t: &Thread, k: Arg, sub: Arg) {
         let (k, sub) = (self.ai(t, k), self.ai(t, sub));
         let Some(k) = usize::try_from(k).ok().filter(|&k| k < 4) else {
