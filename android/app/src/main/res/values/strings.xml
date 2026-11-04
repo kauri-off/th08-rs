@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Kotlin-only launcher strings (docs/arch/I18N.md §3.3); setting texts come from settings_schema.json. -->
+<resources>
+  <string name="title">Imperishable Night</string>
+  <string name="subtitle">Touhou 8 port</string>
+  <string name="more">More</string>
+  <string name="reset_all">Reset all settings</string>
+  <string name="play">Play</string>
+  <string name="developer">Developer</string>
+  <string name="developer_options">Developer options</string>
+  <string name="developer_summary">Cheats and tools for the next start only</string>
+  <string name="changed_count">" · %d changed"</string>
+  <string name="about_setting">About this setting</string>
+  <string name="details">%1$s.\n\nDetails: %2$s</string>
+  <string name="game_data">Game data</string>
+  <string name="data_bundled">Included in this app</string>
+  <string name="data_bundled_detail">th08.dat and thbgm.dat are bundled in this APK.</string>
+  <string name="data_found">Found in the game folder</string>
+  <string name="data_found_detail">th08.dat was found in:\n%s</string>
+  <string name="data_missing">Missing: add th08.dat and thbgm.dat</string>
+  <string name="data_missing_detail">Copy th08.dat and thbgm.dat from your Imperishable Night folder into:\n%1$s\n\nFor example from a computer:\nadb push th08.dat thbgm.dat %1$s/</string>
+  <string name="data_unavailable">No storage for the game folder</string>
+  <string name="data_unavailable_detail">External storage is unavailable.</string>
+  <string name="check_again">Check again</string>
+  <string name="ok">OK</string>
+  <string name="cancel">Cancel</string>
+  <string name="clear">Clear</string>
+  <string name="default_value">Default</string>
+  <string name="range">Range %s</string>
+  <string name="format">Format: %s</string>
+  <string name="demo">Demo %d</string>
+  <string name="choose_replay">Choose a replay file…</string>
+  <string name="on">On</string>
+  <string name="off">Off</string>
+  <string name="not_set">Not set</string>
+  <string name="expected_number">expected a number</string>
+  <string name="expected_range">expected %1$d–%2$d</string>
+</resources>

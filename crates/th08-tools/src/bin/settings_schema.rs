@@ -146,9 +146,16 @@ mod tests {
             .map(|w| (w["value"].as_str().unwrap(), w["label"].as_str().unwrap()))
             .collect();
         assert_eq!(words, e.words);
+    }
+
+    // The ja / ru objects of one exported entry (Schema.kt `Entry.texts`) against the i18n tables.
+    fn lang_maps(e: &Entry, j: &Value) {
         for lang in Lang::TRANSLATED {
             let t = &j[lang.code()];
-            let s = |k: &str| t[k].as_str().unwrap();
+            let s = |k: &str| {
+                t[k].as_str()
+                    .unwrap_or_else(|| panic!("{}: {}.{k}", e.key, lang.code()))
+            };
             assert_eq!(
                 (s("label"), s("summary"), s("help"), s("unit")),
                 (
@@ -156,20 +163,23 @@ mod tests {
                     i18n::summary(lang, e),
                     i18n::help(lang, e),
                     i18n::unit(lang, e)
-                )
+                ),
+                "{}: {}",
+                e.key,
+                lang.code()
             );
-            let words: Vec<(&str, &str)> = t["words"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|w| (w["value"].as_str().unwrap(), w["label"].as_str().unwrap()))
-                .collect();
-            let want: Vec<(&str, &str)> = e
-                .words
-                .iter()
-                .map(|&(v, _)| (v, i18n::word(lang, e, v).unwrap()))
-                .collect();
-            assert_eq!(words, want);
+            let words = t["words"].as_array().unwrap();
+            assert_eq!(
+                words.len(),
+                e.words.len(),
+                "{}: {} words",
+                e.key,
+                lang.code()
+            );
+            for (w, &(v, _)) in words.iter().zip(e.words) {
+                assert_eq!(w["value"], v);
+                assert_eq!(w["label"].as_str(), i18n::word(lang, e, v));
+            }
         }
     }
 
@@ -243,6 +253,10 @@ mod tests {
             }
         }
         assert_eq!(s["languages"], json!(["ja", "en", "ru"]));
+        // Language maps of every entry.
+        for (e, j) in ENTRIES.iter().zip(entries) {
+            lang_maps(e, j);
+        }
         let text = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), s);
     }

@@ -2,6 +2,9 @@
 // edited in dialogs, long help behind an info button; two panes (title, status, Play | settings) in wide windows.
 package org.th08.port
 
+import android.content.Context
+import android.content.res.Configuration
+import android.content.res.Resources
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -66,16 +69,19 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -85,13 +91,14 @@ import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowHeightSizeClass
 import androidx.window.core.layout.WindowWidthSizeClass
 import java.io.File
+import java.util.Locale
 
 // One table entry as edited on screen; value "" = unset, booleans "on"/"off".
 class Setting(val e: Entry, initial: String) {
     var initial = initial
     var value by mutableStateOf(initial)
 
-    fun error(): String? = (e.kind as? Kind.IntRange)?.let { intError(it, value) }
+    fun ok(): Boolean = (e.kind as? Kind.IntRange)?.let { intOk(it, value) } ?: true
 }
 
 sealed interface GameData {
@@ -110,7 +117,28 @@ interface LauncherActions {
     fun play()
 }
 
-private const val TITLE = "Imperishable Night"
+// The resolved launcher language (ja / en / ru) and the app resources in that locale, for the Kotlin-only strings.
+val LocalLang = staticCompositionLocalOf { "en" }
+val LocalStrings = staticCompositionLocalOf<Resources> { error("no launcher resources") }
+
+// `res` in the locale of `lang`, so values-ja / values-ru follow the setting rather than the device.
+fun localized(ctx: Context, lang: String): Resources {
+    val conf = Configuration(ctx.resources.configuration).apply { setLocale(Locale.forLanguageTag(lang)) }
+    return ctx.createConfigurationContext(conf).resources
+}
+
+@Composable
+private fun str(id: Int, vararg args: Any): String = LocalStrings.current.getString(id, *args)
+
+@Composable
+private fun Entry.t() = text(LocalLang.current)
+
+@Composable
+private fun Entry.show(v: String) = display(v, LocalLang.current, LocalStrings.current)
+
+@Composable
+private fun Setting.errorText(): String? = (e.kind as? Kind.IntRange)?.let { intError(it, value, LocalStrings.current) }
+
 private val BLOCK = RoundedCornerShape(16.dp)
 private val ROW = RoundedCornerShape(4.dp)
 
@@ -122,7 +150,7 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
     val w = size.windowWidthSizeClass
     val wide = w == WindowWidthSizeClass.EXPANDED ||
         (w == WindowWidthSizeClass.MEDIUM && size.windowHeightSizeClass == WindowHeightSizeClass.COMPACT)
-    val canPlay = data.ok() && rows.none { it.error() != null }
+    val canPlay = data.ok() && rows.all { it.ok() }
     var info by remember { mutableStateOf<Pair<String, String>?>(null) }
     val showInfo = { title: String, text: String -> info = title to text }
     if (wide) {
@@ -134,8 +162,8 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(TITLE, style = MaterialTheme.typography.headlineMedium)
-                            Text("Touhou 8 port", style = MaterialTheme.typography.bodyMedium,
+                            Text(str(R.string.title), style = MaterialTheme.typography.headlineMedium)
+                            Text(str(R.string.subtitle), style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         ResetMenu(act)
@@ -156,7 +184,7 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
             contentWindowInsets = WindowInsets.safeDrawing,
             topBar = {
                 TopAppBar(
-                    title = { Text(TITLE) },
+                    title = { Text(str(R.string.title)) },
                     actions = { ResetMenu(act) },
                     scrollBehavior = scroll,
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -189,9 +217,9 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
 private fun ResetMenu(act: LauncherActions) {
     var menu by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More") }
+        IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, str(R.string.more)) }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("Reset all settings") }, onClick = { menu = false; act.reset() })
+            DropdownMenuItem(text = { Text(str(R.string.reset_all)) }, onClick = { menu = false; act.reset() })
         }
     }
 }
@@ -201,7 +229,7 @@ private fun PlayButton(enabled: Boolean, act: LauncherActions, modifier: Modifie
     Button(onClick = act::play, enabled = enabled, modifier = modifier.fillMaxWidth().height(56.dp)) {
         Icon(Icons.Default.PlayArrow, null)
         Spacer(Modifier.width(8.dp))
-        Text("Play", style = MaterialTheme.typography.titleMedium)
+        Text(str(R.string.play), style = MaterialTheme.typography.titleMedium)
     }
 }
 
@@ -227,12 +255,12 @@ private fun SettingsList(
         if (dev.isNotEmpty()) {
             item(key = "dev") {
                 val changed = dev.count { it.value != it.e.default }
-                Header("Developer")
+                Header(str(R.string.developer))
                 Block {
                     ShellRow(
-                        title = "Developer options",
-                        summary = "Cheats and tools for the next start only" +
-                            if (changed > 0) " · $changed changed" else "",
+                        title = str(R.string.developer_options),
+                        summary = str(R.string.developer_summary) +
+                            if (changed > 0) str(R.string.changed_count, changed) else "",
                         modifier = Modifier.clickable { devOpen = !devOpen },
                     ) { Icon(if (devOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null) }
                 }
@@ -252,7 +280,7 @@ private fun LazyListScope.groupBlocks(
         val rs = rows.filter { it.e.group == g.id }
         if (rs.isEmpty()) continue
         item(key = "g:" + g.id + rs.first().e.developer) {
-            Header(g.title)
+            Header(g.title(LocalLang.current))
             Block { rs.forEach { SettingRow(it, act, showInfo) } }
         }
     }
@@ -294,7 +322,7 @@ private fun ShellRow(
             }
             if (info != null) {
                 IconButton(onClick = info) {
-                    Icon(Icons.Outlined.Info, "About this setting", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(Icons.Outlined.Info, str(R.string.about_setting), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (trailing != null) {
@@ -313,27 +341,26 @@ private fun ShellRow(
 private fun StatusRow(d: GameData, act: LauncherActions, showInfo: (String, String) -> Unit) {
     val ok = d.ok()
     val (summary, detail) = when (d) {
-        GameData.Bundled -> "Included in this app" to "th08.dat and thbgm.dat are bundled in this APK."
-        is GameData.Folder if d.found -> "Found in the game folder" to "th08.dat was found in:\n${d.dir.path}"
-        is GameData.Folder -> "Missing: add th08.dat and thbgm.dat" to
-            "Copy th08.dat and thbgm.dat from your Imperishable Night folder into:\n${d.dir.path}\n\n" +
-            "For example from a computer:\nadb push th08.dat thbgm.dat ${d.dir.path}/"
-        GameData.Unavailable -> "No storage for the game folder" to "External storage is unavailable."
+        GameData.Bundled -> str(R.string.data_bundled) to str(R.string.data_bundled_detail)
+        is GameData.Folder if d.found -> str(R.string.data_found) to str(R.string.data_found_detail, d.dir.path)
+        is GameData.Folder -> str(R.string.data_missing) to str(R.string.data_missing_detail, d.dir.path)
+        GameData.Unavailable -> str(R.string.data_unavailable) to str(R.string.data_unavailable_detail)
     }
+    val title = str(R.string.game_data)
     Row(
         Modifier.fillMaxWidth().clip(ROW).background(MaterialTheme.colorScheme.surfaceContainer)
-            .clickable { showInfo("Game data", detail) }.heightIn(min = 64.dp).padding(start = 16.dp, end = 8.dp),
+            .clickable { showInfo(title, detail) }.heightIn(min = 64.dp).padding(start = 16.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(if (ok) Icons.Default.CheckCircle else Icons.Default.Warning, null,
             tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
-            Text("Game data", style = MaterialTheme.typography.bodyLarge)
+            Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(summary, style = MaterialTheme.typography.bodyMedium,
                 color = if (ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
         }
-        if (!ok) TextButton(onClick = act::recheck) { Text("Check again") }
+        if (!ok) TextButton(onClick = act::recheck) { Text(str(R.string.check_again)) }
     }
 }
 
@@ -341,16 +368,18 @@ private fun StatusRow(d: GameData, act: LauncherActions, showInfo: (String, Stri
 @Composable
 private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, String) -> Unit) {
     val e = r.e
-    val info = { showInfo(e.label, e.summary + ".\n\nDetails: " + e.help) }
+    val t = e.t()
+    val details = str(R.string.details, t.summary, t.help)
+    val info = { showInfo(t.label, details) }
     var editing by rememberSaveable(e.key) { mutableStateOf(false) }
     val opts = e.options()
     when {
         e.kind == Kind.Bool -> ShellRow(
-            e.label, e.summary, info = info,
+            t.label, t.summary, info = info,
             modifier = Modifier.toggleable(r.value == "on", role = Role.Switch) { act.change(r, if (it) "on" else "off") },
         ) { Switch(checked = r.value == "on", onCheckedChange = null) }
         // 2–3 options: segmented buttons in the row.
-        opts != null && opts.size <= 3 -> ShellRow(e.label, e.summary, info = info, below = {
+        opts != null && opts.size <= 3 -> ShellRow(t.label, t.summary, info = info, below = {
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 opts.forEachIndexed { i, v ->
                     SegmentedButton(
@@ -358,14 +387,14 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
                         onClick = { act.change(r, v) },
                         shape = SegmentedButtonDefaults.itemShape(i, opts.size),
                         colors = SegmentedButtonDefaults.colors(inactiveContainerColor = Color.Transparent),
-                    ) { Text(e.display(v), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    ) { Text(e.show(v), maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             }
         })
         else -> {
-            ShellRow(e.label, e.summary, info = info, modifier = Modifier.clickable { editing = true }) {
-                Text(e.display(r.value), style = MaterialTheme.typography.labelLarge,
-                    color = if (r.error() != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            ShellRow(t.label, t.summary, info = info, modifier = Modifier.clickable { editing = true }) {
+                Text(e.show(r.value), style = MaterialTheme.typography.labelLarge,
+                    color = if (!r.ok()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
             }
             if (editing) {
@@ -388,7 +417,7 @@ private fun InfoDialog(title: String, text: String, close: () -> Unit) {
         icon = { Icon(Icons.Outlined.Info, null) },
         title = { Text(title) },
         text = { Text(text) },
-        confirmButton = { TextButton(onClick = close) { Text("OK") } },
+        confirmButton = { TextButton(onClick = close) { Text(str(R.string.ok)) } },
     )
 }
 
@@ -397,7 +426,7 @@ private fun InfoDialog(title: String, text: String, close: () -> Unit) {
 private fun ChoiceDialog(r: Setting, opts: List<String>, act: LauncherActions, close: () -> Unit) {
     AlertDialog(
         onDismissRequest = close,
-        title = { Text(r.e.label) },
+        title = { Text(r.e.t().label) },
         text = {
             Column(Modifier.selectableGroup().verticalScroll(rememberScrollState())) {
                 opts.forEach { v ->
@@ -409,12 +438,12 @@ private fun ChoiceDialog(r: Setting, opts: List<String>, act: LauncherActions, c
                     ) {
                         RadioButton(selected = r.value == v, onClick = null)
                         Spacer(Modifier.width(16.dp))
-                        Text(r.e.display(v), style = MaterialTheme.typography.bodyLarge)
+                        Text(r.e.show(v), style = MaterialTheme.typography.bodyLarge)
                     }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = close) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = close) { Text(str(R.string.cancel)) } },
     )
 }
 
@@ -425,10 +454,10 @@ private fun SliderDialog(r: Setting, k: Kind.IntRange, act: LauncherActions, clo
     val n = Math.round(v).toLong()
     AlertDialog(
         onDismissRequest = close,
-        title = { Text(r.e.label) },
+        title = { Text(r.e.t().label) },
         text = {
             Column {
-                Text(r.e.display(n.toString()), style = MaterialTheme.typography.headlineSmall,
+                Text(r.e.show(n.toString()), style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.primary, modifier = Modifier.align(Alignment.CenterHorizontally))
                 Slider(
                     value = v,
@@ -437,21 +466,21 @@ private fun SliderDialog(r: Setting, k: Kind.IntRange, act: LauncherActions, clo
                     steps = if (k.max - k.min <= 20) (k.max - k.min - 1).toInt().coerceAtLeast(0) else 0,
                 )
                 Row {
-                    Text(r.e.display(k.min.toString()), style = MaterialTheme.typography.labelMedium,
+                    Text(r.e.show(k.min.toString()), style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.weight(1f))
-                    Text(r.e.display(k.max.toString()), style = MaterialTheme.typography.labelMedium,
+                    Text(r.e.show(k.max.toString()), style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { act.change(r, n.toString()); close() }) { Text("OK") } },
+        confirmButton = { TextButton(onClick = { act.change(r, n.toString()); close() }) { Text(str(R.string.ok)) } },
         dismissButton = {
             Row {
                 TextButton(onClick = { act.change(r, r.e.default); close() }) {
-                    Text(if (r.e.default.isEmpty()) "Clear" else "Default")
+                    Text(str(if (r.e.default.isEmpty()) R.string.clear else R.string.default_value))
                 }
-                TextButton(onClick = close) { Text("Cancel") }
+                TextButton(onClick = close) { Text(str(R.string.cancel)) }
             }
         },
     )
@@ -462,7 +491,7 @@ private fun SliderDialog(r: Setting, k: Kind.IntRange, act: LauncherActions, clo
 private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
     var t by remember { mutableStateOf(r.value) }
     val k = r.e.kind
-    val err = (k as? Kind.IntRange)?.let { intError(it, t.trim()) }
+    val err = (k as? Kind.IntRange)?.let { intError(it, t.trim(), LocalStrings.current) }
     val hint = when (k) {
         is Kind.IntRange -> "${k.min}–${k.max}"
         is Kind.Text -> k.format
@@ -470,16 +499,16 @@ private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
     }
     AlertDialog(
         onDismissRequest = close,
-        title = { Text(r.e.label) },
+        title = { Text(r.e.t().label) },
         text = {
             Column {
                 OutlinedTextField(
                     value = t,
                     onValueChange = { t = it },
                     singleLine = true,
-                    placeholder = { Text(r.e.display(""), fontFamily = FontFamily.Default) },
+                    placeholder = { Text(r.e.show(""), fontFamily = FontFamily.Default) },
                     isError = err != null,
-                    supportingText = { Text(err ?: if (k is Kind.IntRange) "Range $hint" else "Format: $hint") },
+                    supportingText = { Text(err ?: str(if (k is Kind.IntRange) R.string.range else R.string.format, hint)) },
                     keyboardOptions = KeyboardOptions(
                         keyboardType = if (k is Kind.IntRange) KeyboardType.Number else KeyboardType.Text,
                     ),
@@ -488,19 +517,19 @@ private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
                 if (r.e.key == "replay") {
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     (0..3).forEach { i ->
-                        TextButton(onClick = { act.change(r, "demo$i"); close() }) { Text("Demo ${i + 1}") }
+                        TextButton(onClick = { act.change(r, "demo$i"); close() }) { Text(str(R.string.demo, i + 1)) }
                     }
-                    TextButton(onClick = { close(); act.pick(r) }) { Text("Choose a replay file…") }
+                    TextButton(onClick = { close(); act.pick(r) }) { Text(str(R.string.choose_replay)) }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = { act.change(r, t.trim()); close() }, enabled = err == null) { Text("OK") }
+            TextButton(onClick = { act.change(r, t.trim()); close() }, enabled = err == null) { Text(str(R.string.ok)) }
         },
         dismissButton = {
             Row {
-                if (r.e.default.isEmpty()) TextButton(onClick = { act.change(r, ""); close() }) { Text("Clear") }
-                TextButton(onClick = close) { Text("Cancel") }
+                if (r.e.default.isEmpty()) TextButton(onClick = { act.change(r, ""); close() }) { Text(str(R.string.clear)) }
+                TextButton(onClick = close) { Text(str(R.string.cancel)) }
             }
         },
     )
@@ -518,9 +547,10 @@ private object PreviewActions : LauncherActions {
 private fun previewRows(): Pair<List<Group>, List<Setting>> {
     fun e(key: String, label: String, summary: String, kind: Kind, default: String, group: String, dev: Boolean = false,
           unit: String = "", words: Map<String, String> = emptyMap()) =
-        Entry(key, label, summary, "$summary.", unit, words, kind, default, group, dev, true, !dev)
-    val groups = listOf(Group("display", "Display"), Group("touch", "Touch controls"), Group("start_game", "Start game"),
-        Group("cheats", "Cheats/debug"))
+        Entry(key, mapOf("en" to EntryText(label, summary, "$summary.", unit, words)), kind, default, group, dev, true, !dev)
+    fun g(id: String, title: String) = Group(id, mapOf("en" to title))
+    val groups = listOf(g("display", "Display"), g("touch", "Touch controls"), g("start_game", "Start game"),
+        g("cheats", "Cheats/debug"))
     val es = listOf(
         e("vsync", "VSync", "Sync frames to the display", Kind.Bool, "on", "display"),
         e("screen_margin", "Screen margin (dp)", "Extra space kept clear at the screen edges", Kind.IntRange(0, 200),
@@ -541,7 +571,12 @@ private fun previewRows(): Pair<List<Group>, List<Setting>> {
 @Composable
 private fun PreviewScreen(dark: Boolean) {
     val (g, rs) = remember { previewRows() }
-    Th08Theme(dark) { LauncherScreen(g, rs, GameData.Bundled, PreviewActions) }
+    val ctx = LocalContext.current
+    Th08Theme(dark) {
+        CompositionLocalProvider(LocalStrings provides ctx.resources) {
+            LauncherScreen(g, rs, GameData.Bundled, PreviewActions)
+        }
+    }
 }
 
 @Preview(name = "Light", widthDp = 412, heightDp = 915)

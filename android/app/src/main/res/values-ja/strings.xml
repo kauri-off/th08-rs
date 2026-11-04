@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="title">東方永夜抄</string>
+  <string name="subtitle">Imperishable Night 移植版</string>
+  <string name="more">その他</string>
+  <string name="reset_all">すべての設定を初期状態に戻す</string>
+  <string name="play">プレイ</string>
+  <string name="developer">開発者</string>
+  <string name="developer_options">開発者向けオプション</string>
+  <string name="developer_summary">次回の起動だけに使うチートとツール</string>
+  <string name="changed_count">"・%d 件変更"</string>
+  <string name="about_setting">この設定について</string>
+  <string name="details">%1$s。\n\n詳細: %2$s</string>
+  <string name="game_data">ゲームデータ</string>
+  <string name="data_bundled">このアプリに同梱</string>
+  <string name="data_bundled_detail">th08.dat と thbgm.dat はこの APK に同梱されています。</string>
+  <string name="data_found">ゲームフォルダで見つかりました</string>
+  <string name="data_found_detail">th08.dat の場所:\n%s</string>
+  <string name="data_missing">見つかりません: th08.dat と thbgm.dat を追加してください</string>
+  <string name="data_missing_detail">東方永夜抄のフォルダから th08.dat と thbgm.dat を次の場所にコピーしてください:\n%1$s\n\nパソコンからの例:\nadb push th08.dat thbgm.dat %1$s/</string>
+  <string name="data_unavailable">ゲームフォルダ用のストレージがありません</string>
+  <string name="data_unavailable_detail">外部ストレージを使用できません。</string>
+  <string name="check_again">再確認</string>
+  <string name="ok">OK</string>
+  <string name="cancel">キャンセル</string>
+  <string name="clear">クリア</string>
+  <string name="default_value">初期値</string>
+  <string name="range">範囲: %s</string>
+  <string name="format">形式: %s</string>
+  <string name="demo">デモ %d</string>
+  <string name="choose_replay">リプレイファイルを選択…</string>
+  <string name="on">オン</string>
+  <string name="off">オフ</string>
+  <string name="not_set">未設定</string>
+  <string name="expected_number">数値を入力してください</string>
+  <string name="expected_range">%1$d～%2$d の範囲で入力してください</string>
+</resources>

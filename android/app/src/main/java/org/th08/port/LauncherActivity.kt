@@ -1,6 +1,7 @@
 // Android settings screen (MATERIAL2): the Compose screen of LauncherUi.kt built from the settings table, Play starts
 // the Rust NativeActivity in the ":game" process. Player rows are saved to port.cfg on change (as the egui launcher's
 // `Model::changes`) when the table marks them `persist`; the other rows go to launch.cfg for the next start only.
+// Texts follow the `language` row (docs/arch/I18N.md §3.3).
 package org.th08.port
 
 import android.app.NativeActivity
@@ -21,8 +22,10 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -57,7 +60,13 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                     uri?.let { copyPicked(it) }?.let { change(r, it.path) }
                 }
                 pickFile = { r -> picking = r; pick.launch(arrayOf("*/*")) }
-                LauncherScreen(schema.groups, rows, data, this)
+                // The `language` row picks the texts and switches the screen live; the game reads the same value from
+                // port.cfg (auto: its own Locale.getDefault(), i18n.rs `os_locale`).
+                val lang = resolveLang(rows.firstOrNull { it.e.key == "language" }?.value ?: "auto")
+                val res = remember(lang) { localized(this, lang) }
+                CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res) {
+                    LauncherScreen(schema.groups, rows, data, this)
+                }
             }
         }
     }
@@ -85,7 +94,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
 
     override fun change(r: Setting, v: String) {
         r.value = v
-        if (!r.e.persist || r.error() != null) return
+        if (!r.e.persist || !r.ok()) return
         PortCfg.write(cfgFile, r.e.key, v.takeIf { it.isNotEmpty() && it != r.e.default })
     }
 
@@ -101,7 +110,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
 
     override fun play() {
         val once = listOf("launcher" to "off") + rows
-            .filter { !it.e.persist && it.value != it.initial && it.value.isNotEmpty() && it.error() == null }
+            .filter { !it.e.persist && it.value != it.initial && it.value.isNotEmpty() && it.ok() }
             .map { it.e.key to it.value }
         PortCfg.writeLaunch(File(filesDir, "launch.cfg"), once)
         startActivity(Intent(this, NativeActivity::class.java))

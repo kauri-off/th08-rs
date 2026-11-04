@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="title">Imperishable Night</string>
+  <string name="subtitle">Порт Touhou 8</string>
+  <string name="more">Ещё</string>
+  <string name="reset_all">Сбросить все настройки</string>
+  <string name="play">Играть</string>
+  <string name="developer">Разработчик</string>
+  <string name="developer_options">Параметры разработчика</string>
+  <string name="developer_summary">Читы и инструменты только на следующий запуск</string>
+  <string name="changed_count">" · изменено: %d"</string>
+  <string name="about_setting">Об этой настройке</string>
+  <string name="details">%1$s.\n\nПодробнее: %2$s</string>
+  <string name="game_data">Данные игры</string>
+  <string name="data_bundled">Встроены в приложение</string>
+  <string name="data_bundled_detail">th08.dat и thbgm.dat встроены в этот APK.</string>
+  <string name="data_found">Найдены в папке игры</string>
+  <string name="data_found_detail">th08.dat найден в папке:\n%s</string>
+  <string name="data_missing">Нет файлов: добавьте th08.dat и thbgm.dat</string>
+  <string name="data_missing_detail">Скопируйте th08.dat и thbgm.dat из папки Touhou 8 в папку:\n%1$s\n\nНапример, с компьютера:\nadb push th08.dat thbgm.dat %1$s/</string>
+  <string name="data_unavailable">Нет хранилища для папки игры</string>
+  <string name="data_unavailable_detail">Внешнее хранилище недоступно.</string>
+  <string name="check_again">Проверить снова</string>
+  <string name="ok">ОК</string>
+  <string name="cancel">Отмена</string>
+  <string name="clear">Очистить</string>
+  <string name="default_value">По умолчанию</string>
+  <string name="range">Диапазон: %s</string>
+  <string name="format">Формат: %s</string>
+  <string name="demo">Демо %d</string>
+  <string name="choose_replay">Выбрать файл реплея…</string>
+  <string name="on">Вкл.</string>
+  <string name="off">Выкл.</string>
+  <string name="not_set">Не задано</string>
+  <string name="expected_number">нужно число</string>
+  <string name="expected_range">нужно от %1$d до %2$d</string>
+</resources>

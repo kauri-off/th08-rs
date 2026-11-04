@@ -45,7 +45,7 @@ impl Lang {
     }
 }
 
-// Locale handed over by the platform launcher (Android Compose, later); wins over the OS lookup.
+// Locale handed over by a platform launcher; wins over the OS lookup.
 static GIVEN_LOCALE: RwLock<Option<String>> = RwLock::new(None);
 
 pub fn set_system_locale(tag: &str) {
@@ -69,9 +69,45 @@ fn os_locale() -> Option<String> {
     web_sys::window()?.navigator().language()
 }
 
+// The `:game` process's `Locale.getDefault()` (BCP 47), the same device locale the Compose launcher resolves `auto`
+// with; read here rather than handed over so it survives Android restarting the game process alone.
 #[cfg(target_os = "android")]
 fn os_locale() -> Option<String> {
-    None
+    use jni::objects::JString;
+    use jni::{JavaVM, jni_sig, jni_str};
+    let vm_ptr = ndk_context::android_context().vm();
+    if vm_ptr.is_null() {
+        return None;
+    }
+    // SAFETY: the process's JavaVM from ndk-context, valid for the lifetime of the process.
+    let vm = unsafe { JavaVM::from_raw(vm_ptr.cast()) };
+    let r = vm.attach_current_thread(|env| -> jni::errors::Result<String> {
+        let r = (|| {
+            let loc = env
+                .call_static_method(
+                    jni_str!("java/util/Locale"),
+                    jni_str!("getDefault"),
+                    jni_sig!("()Ljava/util/Locale;"),
+                    &[],
+                )?
+                .l()?;
+            let tag = env
+                .call_method(
+                    &loc,
+                    jni_str!("toLanguageTag"),
+                    jni_sig!("()Ljava/lang/String;"),
+                    &[],
+                )?
+                .l()?;
+            env.cast_local::<JString>(tag)?.try_to_string(env)
+        })();
+        if env.exception_check() {
+            env.exception_clear();
+        }
+        r
+    });
+    r.inspect_err(|e| log::warn!("system locale via JNI failed: {e}"))
+        .ok()
 }
 
 // The `language` setting resolved: None (auto) = the system locale.
