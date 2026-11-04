@@ -5,6 +5,7 @@
 //   th08.keystore   keystore.properties for release signing       th08.debugKey  debug keystore (default
 //                   (storeFile relative to the file)                             target/android/debug.keystore)
 //   th08.versionCode (1)   th08.minSdk (26)   th08.profile (cargo profile, release)
+//   th08.packs + th08.packIds   folder of translation packs + comma list of lang_xx ids to bundle (personal builds)
 import java.util.Properties
 import javax.inject.Inject
 
@@ -79,6 +80,27 @@ abstract class GameData : DefaultTask() {
         out.deleteRecursively()
         out.mkdirs()
         files.files.forEach { it.copyTo(File(out, it.name.lowercase())) }
+    }
+}
+
+// Translation packs as assets/packs/lang_xx; the launcher copies them into filesDir/packs (LauncherActivity).
+abstract class PackAssets : DefaultTask() {
+    @get:InputFiles abstract val dirs: ConfigurableFileCollection
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun run() {
+        val root = outputDir.get().asFile
+        root.deleteRecursively()
+        val out = File(root, "packs").also { it.mkdirs() }
+        dirs.files.forEach { it.copyRecursively(File(out, it.name)) }
+    }
+}
+
+fun packDirs(): List<File> {
+    val dir = prop("th08.packs") ?: return emptyList()
+    return (prop("th08.packIds") ?: "").split(',').map { it.trim() }.filter { it.isNotEmpty() }.map { id ->
+        File(dir, id).also { if (!File(it, "pack.toml").isFile) throw GradleException("no pack.toml in $it") }
     }
 }
 
@@ -181,9 +203,11 @@ androidComponents {
         }
         val schema = tasks.register<SettingsSchema>("settingsSchema$cap") { repo.set(repoDir) }
         val data = tasks.register<GameData>("gameData$cap") { files.from(gameFiles(prop("th08.data"))) }
+        val packs = tasks.register<PackAssets>("packAssets$cap") { dirs.from(packDirs()) }
         v.sources.jniLibs?.addGeneratedSourceDirectory(cargo, CargoBuild::outputDir)
         v.sources.assets?.addGeneratedSourceDirectory(schema, SettingsSchema::outputDir)
         v.sources.assets?.addGeneratedSourceDirectory(data, GameData::outputDir)
+        v.sources.assets?.addGeneratedSourceDirectory(packs, PackAssets::outputDir)
     }
 }
 

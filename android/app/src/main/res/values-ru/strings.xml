@@ -16,8 +16,8 @@
   <string name="data_bundled_detail">th08.dat и thbgm.dat встроены в этот APK.</string>
   <string name="data_found">Найдены в папке игры</string>
   <string name="data_found_detail">th08.dat найден в папке:\n%s</string>
-  <string name="data_missing">Нет файлов: добавьте th08.dat и thbgm.dat</string>
-  <string name="data_missing_detail">Скопируйте th08.dat и thbgm.dat из папки Touhou 8 в папку:\n%1$s\n\nНапример, с компьютера:\nadb push th08.dat thbgm.dat %1$s/</string>
+  <string name="data_missing">Нет файлов: добавьте th08.dat или th08.pak, а также thbgm.dat или thbgm.pak</string>
+  <string name="data_missing_detail">Скопируйте th08.dat и thbgm.dat (или th08.pak и thbgm.pak) из папки Touhou 8 в папку:\n%1$s\n\nНапример, с компьютера:\nadb push th08.dat thbgm.dat %1$s/</string>
   <string name="data_unavailable">Нет хранилища для папки игры</string>
   <string name="data_unavailable_detail">Внешнее хранилище недоступно.</string>
   <string name="check_again">Проверить снова</string>
@@ -34,4 +34,23 @@
   <string name="not_set">Не задано</string>
   <string name="expected_number">нужно число</string>
   <string name="expected_range">нужно от %1$d до %2$d</string>
+  <string name="tr_title">Переводы</string>
+  <string name="tr_none">Не установлены: игра показывает оригинальный японский текст</string>
+  <string name="tr_server">Скачать перевод</string>
+  <string name="tr_server_summary">Языки с Touhou Patch Center</string>
+  <string name="tr_loading">Загрузка списка языков…</string>
+  <string name="tr_filter">Фильтр</string>
+  <string name="tr_install">Скачать</string>
+  <string name="tr_update">Обновить</string>
+  <string name="tr_remove">Удалить</string>
+  <string name="tr_up_to_date">актуален</string>
+  <string name="tr_translated">переведено %s%%</string>
+  <string name="tr_estimate">около %s%% текстов</string>
+  <string name="tr_on_top">на основе %s</string>
+  <string name="tr_working">%1$s: %2$d / %3$d файлов</string>
+  <string name="tr_building">%s: сборка пакета…</string>
+  <string name="tr_done">%1$s установлен: переведено %2$s%%</string>
+  <string name="tr_removed">%s удалён</string>
+  <string name="tr_failed">%1$s: %2$s</string>
+  <string name="tr_attribution">Переводы: Touhou Patch Center (thpatch.net) и его участники, CC BY-SA 4.0; текст игры — Team Shanghai Alice. Пакеты собираются на этом устройстве из ваших данных игры, для личного использования.</string>
 </resources>

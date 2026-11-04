@@ -19,7 +19,7 @@ fn main() -> Result<()> {
     let pack = pack.context("usage: pack-check <pack dir|zip> [--dat th08.dat] [--max N]")?;
     let files = th08::packs::read_files(std::path::Path::new(&pack))?;
     let vanilla = dat
-        .map(|d| th08_tools::thcrap::Vanilla::from_dat(std::path::Path::new(&d)))
+        .map(|d| th08_thcrap::thcrap::Vanilla::from_dat(std::path::Path::new(&d)))
         .transpose()?;
     let s = th08_tools::packcheck::check(&files, vanilla.as_ref(), max)?;
     print!("{}", s.text);

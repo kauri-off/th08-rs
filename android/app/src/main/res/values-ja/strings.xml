@@ -16,8 +16,8 @@
   <string name="data_bundled_detail">th08.dat と thbgm.dat はこの APK に同梱されています。</string>
   <string name="data_found">ゲームフォルダで見つかりました</string>
   <string name="data_found_detail">th08.dat の場所:\n%s</string>
-  <string name="data_missing">見つかりません: th08.dat と thbgm.dat を追加してください</string>
-  <string name="data_missing_detail">東方永夜抄のフォルダから th08.dat と thbgm.dat を次の場所にコピーしてください:\n%1$s\n\nパソコンからの例:\nadb push th08.dat thbgm.dat %1$s/</string>
+  <string name="data_missing">見つかりません: th08.dat または th08.pak と、thbgm.dat または thbgm.pak を追加してください</string>
+  <string name="data_missing_detail">東方永夜抄のフォルダから th08.dat と thbgm.dat（または th08.pak と thbgm.pak）を次の場所にコピーしてください:\n%1$s\n\nパソコンからの例:\nadb push th08.dat thbgm.dat %1$s/</string>
   <string name="data_unavailable">ゲームフォルダ用のストレージがありません</string>
   <string name="data_unavailable_detail">外部ストレージを使用できません。</string>
   <string name="check_again">再確認</string>
@@ -34,4 +34,23 @@
   <string name="not_set">未設定</string>
   <string name="expected_number">数値を入力してください</string>
   <string name="expected_range">%1$d～%2$d の範囲で入力してください</string>
+  <string name="tr_title">翻訳</string>
+  <string name="tr_none">インストールされていません: ゲームはオリジナルの日本語で表示されます</string>
+  <string name="tr_server">翻訳をダウンロード</string>
+  <string name="tr_server_summary">Touhou Patch Center の言語</string>
+  <string name="tr_loading">言語の一覧を読み込み中…</string>
+  <string name="tr_filter">絞り込み</string>
+  <string name="tr_install">ダウンロード</string>
+  <string name="tr_update">更新</string>
+  <string name="tr_remove">削除</string>
+  <string name="tr_up_to_date">最新</string>
+  <string name="tr_translated">%s%% 翻訳済み</string>
+  <string name="tr_estimate">テキストの約 %s%%</string>
+  <string name="tr_on_top">%s を基にしています</string>
+  <string name="tr_working">%1$s: %2$d / %3$d ファイル</string>
+  <string name="tr_building">%s: パックを作成中…</string>
+  <string name="tr_done">%1$s をインストールしました: %2$s%% 翻訳済み</string>
+  <string name="tr_removed">%s を削除しました</string>
+  <string name="tr_failed">%1$s: %2$s</string>
+  <string name="tr_attribution">翻訳: Touhou Patch Center (thpatch.net) とその協力者、CC BY-SA 4.0。ゲームのテキストは上海アリス幻樂団によるものです。パックはこの端末でゲームデータから作成され、個人利用に限ります。</string>
 </resources>

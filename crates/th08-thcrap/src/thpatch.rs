@@ -10,6 +10,8 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
+use crate::Progress;
+
 pub const SERVER: &str = "https://srv.thpatch.net/";
 pub const LICENCE: &str =
     "Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)";
@@ -170,13 +172,25 @@ impl Client {
         }
     }
 
+    // Up to three attempts: a phone's connection drops single requests of a parallel batch.
     pub fn get(&self, url: &str) -> Result<Vec<u8>> {
-        let mut r = self
-            .agent
-            .get(url)
-            .call()
-            .with_context(|| format!("GET {url}"))?;
-        Ok(r.body_mut().with_config().limit(MAX_FILE).read_to_vec()?)
+        let mut last = None;
+        for attempt in 0..3u64 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
+            }
+            let r = self
+                .agent
+                .get(url)
+                .call()
+                .with_context(|| format!("GET {url}"))
+                .and_then(|mut r| Ok(r.body_mut().with_config().limit(MAX_FILE).read_to_vec()?));
+            match r {
+                Ok(b) => return Ok(b),
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.unwrap_or_else(|| anyhow::anyhow!("GET {url}")))
     }
 
     // Languages of the server (`repo.js` patches named `lang_…`): (id, title).
@@ -253,51 +267,54 @@ impl Client {
         })
     }
 
-    // `lang` and every patch it depends on, dependencies first (thcrap's stacking order, the language last).
-    pub fn chain(&self, lang: &str) -> Result<Vec<Patch>> {
+    // `lang` and every patch it depends on, dependencies first (thcrap's stacking order, the language last);
+    // `langs_only` follows only `lang_*` dependencies (the text layers).
+    pub fn chain(&self, lang: &str, langs_only: bool, p: &dyn Progress) -> Result<Vec<Patch>> {
         anyhow::ensure!(valid_lang(lang), "{lang}: not a lang_xx patch id");
         let mut out: Vec<Patch> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        self.visit("thpatch", lang, &mut out, &mut seen, 0)?;
+        let mut v = Visit {
+            out: &mut out,
+            seen: &mut seen,
+            langs_only,
+            p,
+        };
+        self.visit("thpatch", lang, &mut v, 0)?;
         Ok(out)
     }
 
-    fn visit(
-        &self,
-        repo: &str,
-        id: &str,
-        out: &mut Vec<Patch>,
-        seen: &mut std::collections::HashSet<String>,
-        depth: usize,
-    ) -> Result<()> {
-        if depth > 8 || !seen.insert(format!("{repo}/{id}")) {
+    fn visit(&self, repo: &str, id: &str, v: &mut Visit<'_>, depth: usize) -> Result<()> {
+        if depth > 8 || (v.langs_only && !valid_lang(id)) || !v.seen.insert(format!("{repo}/{id}"))
+        {
             return Ok(());
         }
         let p = match self.patch(repo, id) {
             Ok(p) => p,
-            // A missing dependency only costs its fonts; the language itself must exist.
+            // A missing dependency only costs its fonts (or its base text); the language itself must exist.
             Err(e) if depth > 0 => {
-                println!("  dependency {repo}/{id}: {e:#}");
+                v.p.line(&format!("  dependency {repo}/{id}: {e:#}"));
                 return Ok(());
             }
             Err(e) => return Err(e),
         };
         for (r, d) in p.dependencies() {
-            self.visit(&r, &d, out, seen, depth + 1)?;
+            self.visit(&r, &d, v, depth + 1)?;
         }
-        out.push(p);
+        v.out.push(p);
         Ok(())
     }
 
     // Downloads `(url, path, crc)` items in parallel, skipping files already there with the right CRC; returns the
     // failed requests.
-    fn download_all(&self, items: &[(String, PathBuf, u32)]) -> Vec<String> {
+    fn download_all(&self, items: &[(String, PathBuf, u32)], prog: &dyn Progress) -> Vec<String> {
         let crc_ok =
             |p: &Path, crc: u32| std::fs::read(p).is_ok_and(|b| crc32fast::hash(&b) == crc);
         let todo: Vec<&(String, PathBuf, u32)> =
             items.iter().filter(|(_, p, c)| !crc_ok(p, *c)).collect();
         let next = std::sync::atomic::AtomicUsize::new(0);
+        let done = std::sync::atomic::AtomicUsize::new(0);
         let errors = Mutex::new(Vec::new());
+        prog.files(0, todo.len());
         std::thread::scope(|s| {
             for _ in 0..WORKERS {
                 s.spawn(|| {
@@ -309,7 +326,9 @@ impl Client {
                         let r = self.get(url).and_then(|b| {
                             // The server's own list can be stale (lang_ru themes.js, 2026-11): kept, reported.
                             if crc32fast::hash(&b) != *crc {
-                                println!("  warning: {url}: CRC32 differs from files.js (kept)");
+                                prog.line(&format!(
+                                    "  warning: {url}: CRC32 differs from files.js (kept)"
+                                ));
                             }
                             if let Some(d) = p.parent() {
                                 std::fs::create_dir_all(d)?;
@@ -319,6 +338,8 @@ impl Client {
                         if let Err(e) = r {
                             errors.lock().unwrap().push(format!("{e:#}"));
                         }
+                        let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        prog.files(n, todo.len());
                     }
                 });
             }
@@ -343,55 +364,97 @@ pub struct Fonts {
     pub decls: Vec<FontDecl>,
 }
 
-// A fetched language: cache folder (`files.js`, `patch.js`, `SOURCE.txt`, `th08/…`, `fonts/<repo>_<patch>/…`).
+// Patch-chain state of `Client::chain`.
+struct Visit<'a> {
+    out: &'a mut Vec<Patch>,
+    seen: &'a mut std::collections::HashSet<String>,
+    langs_only: bool,
+    p: &'a dyn Progress,
+}
+
+// A fetched language: cache folder (`files.js`, `patch.js`, `SOURCE.txt`, `th08/…`, `fonts/<repo>_<patch>/…`,
+// `base/<lang>/…` = the text of the languages it builds on), its text layers (base languages first, `dir` last) and
+// its fonts.
 pub struct Fetched {
     pub dir: PathBuf,
+    pub layers: Vec<PathBuf>,
+    pub title: String,
     pub fonts: Fonts,
 }
 
 // Downloads the th08 text (and with `full` the images and fonts) of `lang` into `<cache>/<lang>/<revision>/`.
-pub fn fetch(c: &Client, lang: &str, cache: &Path, full: bool) -> Result<Fetched> {
-    let chain = if full {
-        c.chain(lang)?
-    } else {
-        vec![c.patch("thpatch", lang)?]
-    };
+pub fn fetch(
+    c: &Client,
+    lang: &str,
+    cache: &Path,
+    full: bool,
+    p: &dyn Progress,
+) -> Result<Fetched> {
+    let chain = c.chain(lang, !full, p)?;
     let me = chain.last().context("empty chain")?;
-    let rev = revision(&me.files_raw);
+    // Language patches of the chain (a variant such as lang_en-gb on lang_en), base first.
+    let langs: Vec<&Patch> = chain
+        .iter()
+        .filter(|q| q.repo == "thpatch" && valid_lang(&q.id))
+        .collect();
+    let rev = if langs.len() > 1 {
+        revision(
+            &langs
+                .iter()
+                .flat_map(|q| q.files_raw.clone())
+                .collect::<Vec<u8>>(),
+        )
+    } else {
+        revision(&me.files_raw)
+    };
     let dir = cache.join(lang).join(&rev);
     std::fs::create_dir_all(&dir)?;
-    let mut items: Vec<(String, PathBuf, u32)> = me
-        .files
-        .iter()
-        .filter(|(n, _)| is_text(n) || (full && is_image(n)) || n.as_str() == "th08.js")
-        .map(|(n, c)| (format!("{}{n}", me.base), dir.join(n), *c))
-        .collect();
+    let mut layers = Vec::new();
+    let mut items: Vec<(String, PathBuf, u32)> = Vec::new();
+    for q in &langs {
+        let d = if q.id == me.id {
+            dir.clone()
+        } else {
+            dir.join("base").join(&q.id)
+        };
+        items.extend(
+            q.files
+                .iter()
+                .filter(|(n, _)| {
+                    is_text(n)
+                        || (full && is_image(n))
+                        || (q.id == me.id && n.as_str() == "th08.js")
+                })
+                .map(|(n, c)| (format!("{}{n}", q.base), d.join(n), *c)),
+        );
+        layers.push(d);
+    }
     let mut decls = Vec::new();
     let mut face = None;
     if full {
-        for p in chain.iter().rev() {
-            let sub = format!("{}_{}", p.repo, p.id);
+        for q in chain.iter().rev() {
+            let sub = format!("{}_{}", q.repo, q.id);
             if face.is_none()
-                && let Some(&crc) = p.files.get("th08.js")
+                && let Some(&crc) = q.files.get("th08.js")
             {
                 let path = dir.join("fonts").join(&sub).join("th08.js");
-                let e = c.download_all(&[(format!("{}th08.js", p.base), path.clone(), crc)]);
+                let e = c.download_all(&[(format!("{}th08.js", q.base), path.clone(), crc)], p);
                 if e.is_empty()
                     && let Ok(m) = std::fs::read(&path)
                         .map_err(anyhow::Error::from)
                         .and_then(|b| json_object(&b, "th08.js"))
                     && let Some(f) = m.get("font").and_then(Value::as_str)
                 {
-                    face = Some((p.key(), f.to_string()));
+                    face = Some((q.key(), f.to_string()));
                 }
             }
-            for name in p.declared_fonts() {
+            for name in q.declared_fonts() {
                 let (file, status) = if !is_th08_font(&name) {
                     (None, "for another game, skipped".to_string())
-                } else if let Some(&crc) = p.files.get(&name) {
+                } else if let Some(&crc) = q.files.get(&name) {
                     let path = dir.join("fonts").join(&sub).join(&name);
                     items.push((
-                        format!("{}{}", p.base, name.replace(' ', "%20")),
+                        format!("{}{}", q.base, name.replace(' ', "%20")),
                         path.clone(),
                         crc,
                     ));
@@ -400,7 +463,7 @@ pub fn fetch(c: &Client, lang: &str, cache: &Path, full: bool) -> Result<Fetched
                     (None, "declared, not on the server".to_string())
                 };
                 decls.push(FontDecl {
-                    patch: p.key(),
+                    patch: q.key(),
                     name,
                     file,
                     status,
@@ -409,12 +472,12 @@ pub fn fetch(c: &Client, lang: &str, cache: &Path, full: bool) -> Result<Fetched
         }
     }
     let todo = items.len();
-    println!(
+    p.line(&format!(
         "{lang} revision {rev}: {todo} files ({}, {LICENCE}) in {}",
         me.base,
         dir.display()
-    );
-    let errors = c.download_all(&items);
+    ));
+    let errors = c.download_all(&items, p);
     anyhow::ensure!(errors.is_empty(), "{lang}: {}", errors.join("; "));
     std::fs::write(dir.join("files.js"), &me.files_raw)?;
     std::fs::write(dir.join("patch.js"), serde_json::to_vec_pretty(&me.meta)?)?;
@@ -429,10 +492,66 @@ pub fn fetch(c: &Client, lang: &str, cache: &Path, full: bool) -> Result<Fetched
             ),
         )?;
     }
+    let title = me
+        .meta
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     Ok(Fetched {
         dir,
+        layers,
+        title,
         fonts: Fonts { face, decls },
     })
+}
+
+// Text layers of a local thcrap `lang_xx` folder: the `lang_*` patches it depends on (`<repos>/<repo>/<patch>/`,
+// base first), then the folder itself.
+pub fn local_layers(lang_dir: &Path) -> Vec<PathBuf> {
+    let repos = lang_dir.parent().and_then(Path::parent);
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    local_visit(repos, lang_dir, &mut out, &mut seen, 0);
+    out
+}
+
+fn local_visit(
+    repos: Option<&Path>,
+    d: &Path,
+    out: &mut Vec<PathBuf>,
+    seen: &mut std::collections::HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth > 8 || !seen.insert(d.to_path_buf()) {
+        return;
+    }
+    let repo = d
+        .parent()
+        .and_then(Path::file_name)
+        .map(|s| s.to_string_lossy().into_owned());
+    let meta = std::fs::read(d.join("patch.js"))
+        .ok()
+        .and_then(|b| json_object(&b, "patch.js").ok());
+    for dep in meta
+        .iter()
+        .filter_map(|m| m.get("dependencies").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        let (r, p) = dep
+            .split_once('/')
+            .map_or((repo.clone(), dep), |(r, p)| (Some(r.to_string()), p));
+        if let (Some(root), Some(r)) = (repos, r)
+            && valid_id(&r)
+            && valid_lang(p)
+        {
+            local_visit(repos, &root.join(r).join(p), out, seen, depth + 1);
+        }
+    }
+    if depth == 0 || d.is_dir() {
+        out.push(d.to_path_buf());
+    }
 }
 
 // The same for a local thcrap install: `<repos>/<repo>/<patch>/` folders (the language folder is one of them).
@@ -535,6 +654,28 @@ mod tests {
         assert!(is_th08_font("PT Sans-Narrow.ttf") && is_th08_font("th08/MyriadPro-Cond.otf"));
         assert!(!is_th08_font("th175/data/font/ipam.ttf") && !is_th08_font("x.png"));
         assert!(valid_lang("lang_pt-br") && !valid_lang("lang_") && !valid_lang("lang_../x"));
+    }
+
+    // A local thcrap install: `<repos>/thpatch/lang_en-gb` on `lang_en`; non-language dependencies are not text layers.
+    #[test]
+    fn local_text_layers() {
+        let root = std::env::temp_dir().join(format!("th08-local-{}", std::process::id()));
+        let repo = root.join("thpatch");
+        for (id, deps) in [
+            ("lang_en-gb", r#"["lang_en"]"#),
+            ("lang_en", r#"["nmlgc/base_tsa"]"#),
+        ] {
+            std::fs::create_dir_all(repo.join(id)).unwrap();
+            std::fs::write(
+                repo.join(id).join("patch.js"),
+                format!(r#"{{"dependencies": {deps}}}"#),
+            )
+            .unwrap();
+        }
+        let l = local_layers(&repo.join("lang_en-gb"));
+        assert_eq!(l, [repo.join("lang_en"), repo.join("lang_en-gb")]);
+        assert_eq!(local_layers(&repo.join("lang_en")), [repo.join("lang_en")]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

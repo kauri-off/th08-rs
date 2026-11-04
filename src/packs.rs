@@ -44,18 +44,13 @@ pub fn select(s: &Settings) -> Option<Mounted> {
         }
         found?
     } else {
-        let lang = s
-            .game_text
-            .unwrap_or_else(|| crate::i18n::resolve(s.language));
-        if lang == crate::i18n::Lang::Ja {
+        let lang = game_text(s);
+        if lang == "ja" {
             return None;
         }
-        let found = find_language(&dirs, lang.code());
+        let found = find_language(&dirs, &lang);
         if found.is_none() {
-            log::info!(
-                "no {} presentation pack in {dirs:?}; vanilla text",
-                lang.code()
-            );
+            log::info!("no {lang} presentation pack in {dirs:?}; vanilla text");
         }
         found?
     };
@@ -93,12 +88,91 @@ pub fn select(_: &Settings) -> Option<Mounted> {
     None
 }
 
-// `<game folder>/packs`, then `<config folder>/packs`.
+// The game text language code: `game_text`, `follow` = the screen language.
+pub fn game_text(s: &Settings) -> String {
+    s.game_text
+        .clone()
+        .unwrap_or_else(|| crate::i18n::resolve(s.language).code().to_string())
+}
+
+// An installed pack as the settings screens list it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Installed {
+    pub id: String,
+    pub language: String,
+    pub title: String,
+    pub revision: String,
+    // Translated share of the vanilla slots (0–100) recorded at import.
+    pub coverage: Option<f64>,
+    pub path: std::path::PathBuf,
+    // In `<config folder>/packs`: installed by a settings screen, so it can be updated and removed there.
+    pub managed: bool,
+}
+
+// Every pack of the pack folders (both, name order); `config` = the config folder.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn installed(
+    game_dir: Option<&std::path::Path>,
+    config: Option<&std::path::Path>,
+) -> Vec<Installed> {
+    let mut out = Vec::new();
+    for (d, managed) in [(config, true), (game_dir, false)] {
+        let Some(d) = d else { continue };
+        for p in pack_entries(&d.join("packs")) {
+            let Some(m) = read_manifest(&p) else {
+                continue;
+            };
+            let get = |k: &str| {
+                m.get(k)
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let language = get("language");
+            if language.is_empty() {
+                continue;
+            }
+            out.push(Installed {
+                id: if get("id").is_empty() {
+                    stem(&p)
+                } else {
+                    get("id")
+                },
+                language,
+                title: get("title"),
+                revision: get("revision"),
+                coverage: m
+                    .get("coverage")
+                    .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))),
+                managed: managed && p.is_dir(),
+                path: p,
+            });
+        }
+    }
+    out
+}
+
+// Pack folders and zips of a folder in name order; `.`-names (an install in progress) are skipped.
+#[cfg(not(target_arch = "wasm32"))]
+fn pack_entries(d: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut entries: Vec<_> = std::fs::read_dir(d)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .collect();
+    entries.sort();
+    entries
+}
+
+// `<config folder>/packs` (downloaded by a settings screen, so an update wins), then `<game folder>/packs` (bundled).
 #[cfg(not(target_arch = "wasm32"))]
 fn pack_dirs(s: &Settings) -> Vec<std::path::PathBuf> {
-    s.game_dir
+    s.dirs
+        .config
         .iter()
-        .chain(s.dirs.config.iter())
+        .chain(s.game_dir.iter())
         .map(|d| d.join("packs"))
         .collect()
 }
@@ -113,14 +187,7 @@ fn stem(p: &std::path::Path) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn find_language(dirs: &[std::path::PathBuf], code: &str) -> Option<std::path::PathBuf> {
     for d in dirs {
-        let mut entries: Vec<_> = std::fs::read_dir(d)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .collect();
-        entries.sort();
-        for p in entries {
+        for p in pack_entries(d) {
             let Some(manifest) = read_manifest(&p) else {
                 continue;
             };

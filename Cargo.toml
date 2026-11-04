@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/th08-formats", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-tools", "xtask"]
+members = [".", "crates/th08-formats", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-thcrap", "crates/th08-tools", "xtask"]
 resolver = "3"
 
 # Lint subset: worth fixing in a bit-exact port (casts that keep the bits, readability, long fns);
@@ -80,6 +80,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 pollster = "1.0.1"
 # Presentation packs as .zip (packs.rs).
 zip = { version = "9", default-features = false, features = ["deflate"] }
+# Translation download / import from the settings screens (translations.rs).
+th08-thcrap = { path = "crates/th08-thcrap" }
 
 # Desktop only: no file/message dialogs, CLI or stderr logger on wasm (page) or Android (logcat).
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]

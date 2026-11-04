@@ -29,9 +29,42 @@ pub struct Vanilla {
 }
 
 impl Vanilla {
+    // th08.dat or a th08.pak repacked from it (by its name).
     pub fn from_dat(path: &Path) -> Result<Self> {
         let raw = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        let ar = th08_formats::archive::Archive::from_bytes(raw)?;
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        Self::from_bytes(&name, raw)
+    }
+
+    // The content file of a game folder (th08.pak first, then th08.dat, any letter case).
+    pub fn from_game_dir(dir: &Path) -> Result<Self> {
+        for n in th08_core::content::CONTENT_FILES {
+            let found = std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| {
+                    p.is_file()
+                        && p.file_name()
+                            .is_some_and(|f| f.to_string_lossy().eq_ignore_ascii_case(n))
+                });
+            if let Some(p) = found {
+                return Self::from_dat(&p);
+            }
+        }
+        anyhow::bail!("{}: no th08.dat or th08.pak", dir.display())
+    }
+
+    // `name` = the content file's name: `.pak` = the repacked th08.pak, else the original archive.
+    pub fn from_bytes(name: &str, raw: Vec<u8>) -> Result<Self> {
+        use th08_core::content::{Content, LogicView};
+        let content = if name.to_ascii_lowercase().ends_with(".pak") {
+            Content::Pack(th08_formats::pack::Pack::from_bytes(raw)?)
+        } else {
+            Content::Archive(th08_formats::archive::Archive::from_bytes(raw)?)
+        };
+        let ar = LogicView::new(content);
         let msg = MSG_FILES
             .iter()
             .map(|n| {
@@ -314,6 +347,7 @@ pub fn printf_compatible(vanilla: &str, tr: &str) -> Result<(), String> {
 // The JSON files of one `lang_xx` folder (`<lang>/stringdefs.js`, `<lang>/themes.js`, `<lang>/th08/…`).
 pub struct Lang {
     pub dir: PathBuf,
+    pub layers: Vec<PathBuf>,
     pub stringdefs: serde_json::Map<String, Value>,
     pub themes: serde_json::Map<String, Value>,
     pub spells: serde_json::Map<String, Value>,
@@ -339,30 +373,61 @@ fn read_json(p: &Path) -> Result<Option<serde_json::Map<String, Value>>> {
     }
 }
 
+// thcrap's patch stacking: a later layer's object keys replace the earlier ones', nested objects merge.
+fn merge(base: &mut serde_json::Map<String, Value>, over: serde_json::Map<String, Value>) {
+    for (k, v) in over {
+        match (base.get_mut(&k), v) {
+            (Some(Value::Object(b)), Value::Object(o)) => merge(b, o),
+            (_, v) => {
+                base.insert(k, v);
+            }
+        }
+    }
+}
+
+// One JSON file of every layer, merged; None when no layer has it.
+fn read_layered(layers: &[PathBuf], rel: &str) -> Result<Option<serde_json::Map<String, Value>>> {
+    let mut out: Option<serde_json::Map<String, Value>> = None;
+    for l in layers {
+        if let Some(m) = read_json(&l.join(rel))? {
+            match &mut out {
+                Some(b) => merge(b, m),
+                None => out = Some(m),
+            }
+        }
+    }
+    Ok(out)
+}
+
 impl Lang {
     pub fn read(dir: &Path) -> Result<Self> {
+        Self::read_layers(&[dir.to_path_buf()])
+    }
+
+    // A language over the languages it builds on (`layers`: base first, the language last).
+    pub fn read_layers(layers: &[PathBuf]) -> Result<Self> {
         // No th08 folder = nothing translated (every key falls back to the original).
-        let g = dir.join("th08");
-        let obj = |p: PathBuf| read_json(&p).map(Option::unwrap_or_default);
+        let obj = |rel: &str| read_layered(layers, rel).map(Option::unwrap_or_default);
         let mut msg = BTreeMap::new();
         for n in MSG_FILES {
-            if let Some(m) = read_json(&g.join(format!("{n}.dat.jdiff")))? {
+            if let Some(m) = read_layered(layers, &format!("th08/{n}.dat.jdiff"))? {
                 msg.insert(n.to_string(), m);
             }
         }
         let mut end = BTreeMap::new();
         for n in END_FILES {
-            if let Some(m) = read_json(&g.join(format!("{n}.jdiff")))? {
+            if let Some(m) = read_layered(layers, &format!("th08/{n}.jdiff"))? {
                 end.insert(n.to_string(), m);
             }
         }
         Ok(Self {
-            dir: dir.to_path_buf(),
-            stringdefs: obj(dir.join("stringdefs.js"))?,
-            themes: obj(dir.join("themes.js"))?,
-            spells: obj(g.join("spells.js"))?,
-            comments: obj(g.join("spellcomments.js"))?,
-            musiccmt: obj(g.join("musiccmt.js"))?,
+            dir: layers.last().cloned().unwrap_or_default(),
+            layers: layers.to_vec(),
+            stringdefs: obj("stringdefs.js")?,
+            themes: obj("themes.js")?,
+            spells: obj("th08/spells.js")?,
+            comments: obj("th08/spellcomments.js")?,
+            musiccmt: obj("th08/musiccmt.js")?,
             msg,
             end,
         })
@@ -370,8 +435,13 @@ impl Lang {
 
     // Texture replacements (I18N §1.2, §2.4): `th08/data/**.png|jpg` → `images/<path under data>`, `th08/*.jpg|png`
     // → `files/<name>`. Each must decode as an image; names are restricted to [A-Za-z0-9_.-/].
+    // A later layer's image replaces an earlier one of the same name.
     pub fn images(&self, report: &mut Report) -> Vec<(String, Vec<u8>)> {
-        images(&self.dir, report)
+        let mut out: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        for l in &self.layers {
+            out.extend(images(l, report));
+        }
+        out.into_iter().collect()
     }
 }
 
@@ -794,6 +864,51 @@ fn builtin_id(b: Builtin, defs: &serde_json::Map<String, Value>) -> Option<&str>
     (!id.is_empty() && defs.contains_key(id)).then_some(id)
 }
 
+// Equivalent for our values: a vanilla literal whose ASCII numbers the translation writes as `%d` conversions (Last
+// Word hints: `No.138` vs thcrap's `No.%.3d`, I18N_STRINGS §3.5). Each conversion must print its number's digits
+// exactly; the translation is then filled in at import.
+fn fill_numbers(vanilla: &str, tr: &str) -> Option<String> {
+    use th08_core::textref::{FmtArg, sprintf};
+    if !printf_specs(vanilla).ok()?.is_empty() {
+        return None;
+    }
+    let specs = printf_specs(tr).ok()?;
+    let nums: Vec<&str> = vanilla
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|n| !n.is_empty())
+        .collect();
+    if specs.is_empty() || specs.len() != nums.len() {
+        return None;
+    }
+    let mut args = Vec::new();
+    for (sp, n) in specs.iter().zip(&nums) {
+        let v: i64 = n.parse().ok()?;
+        let one = sprintf(sp.as_bytes(), &[FmtArg::Int(v)], |_| Vec::new());
+        if !sp.ends_with('d') || one.trim_ascii() != n.as_bytes() {
+            return None;
+        }
+        args.push(FmtArg::Int(v));
+    }
+    String::from_utf8(sprintf(tr.as_bytes(), &args, |_| Vec::new())).ok()
+}
+
+// Play-data row labels (16 §2.4): vanilla prints `label` as the `%s` of `Builtin::StatsRow`; thcrap writes the whole
+// row. A translation ending in the row's own tail gives the label.
+fn row_label(b: Builtin, tr: &str) -> Option<String> {
+    if !matches!(
+        b,
+        Builtin::StatsClear | Builtin::StatsContinue | Builtin::StatsPractice
+    ) {
+        return None;
+    }
+    let tail = Builtin::StatsRow.text().strip_prefix("%s")?;
+    let label = tr.strip_suffix(tail)?;
+    printf_specs(label)
+        .ok()?
+        .is_empty()
+        .then(|| label.replace("%%", "%"))
+}
+
 fn import_builtins(lang: &Lang, report: &mut Report) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for b in Builtin::all() {
@@ -804,17 +919,28 @@ fn import_builtins(lang: &Lang, report: &mut Report) -> BTreeMap<String, String>
             );
             continue;
         };
-        let Some(s) = lang.stringdefs[id].as_str() else {
+        let Some(raw) = lang.stringdefs[id].as_str() else {
             continue;
         };
+        let literal = printf_specs(b.text()).is_ok_and(|v| v.is_empty());
         // A literal without conversions is shown as is (`Builtin::txt`), a format goes through `sprintf`.
-        let s = if printf_specs(b.text()).is_ok_and(|v| v.is_empty()) {
-            plain(s, &mut 0)
+        let s = if literal {
+            plain(raw, &mut 0)
         } else {
-            flatten(s, &mut 0)
+            flatten(raw, &mut 0)
         };
-        match printf_compatible(b.text(), &s) {
-            Ok(()) => {
+        let s = match printf_compatible(b.text(), &s) {
+            Ok(()) => Ok(s),
+            Err(e) if literal => {
+                let f = flatten(raw, &mut 0);
+                fill_numbers(b.text(), &f)
+                    .or_else(|| row_label(b, &f))
+                    .ok_or(e)
+            }
+            Err(e) => Err(e),
+        };
+        match s {
+            Ok(s) => {
                 out.insert(format!("builtin/{}", b.key()), s);
             }
             Err(e) => report.add("printf", format!("{} ({id}): {e}; kept vanilla", b.key())),
@@ -1038,11 +1164,24 @@ mod tests {
         );
         defs.insert("th08 Stats Clear Count".into(), "Clears %6d".into());
         defs.insert(
+            "th08 Stats Continue".into(),
+            "Continues  %6d %6d %6d %6d %6d %6d".into(),
+        );
+        defs.insert(
+            "th08 Spell Condition Line 1 212".into(),
+            "Needs No.%.3d,%.3d".into(),
+        );
+        defs.insert(
+            "th08 Spell Condition Line 1 210".into(),
+            "Needs No.%3d".into(),
+        );
+        defs.insert(
             "th08 Spell Condition Line 2 206 207 209".into(),
             "Any difficulty.".into(),
         );
         let lang = Lang {
             dir: PathBuf::new(),
+            layers: Vec::new(),
             stringdefs: defs,
             themes: serde_json::Map::new(),
             spells: serde_json::Map::new(),
@@ -1058,7 +1197,43 @@ mod tests {
         // Card id 206 = card number 207 (1-based ids).
         assert_eq!(t["builtin/spell.hint.206.1"], "Any difficulty.");
         assert!(!t.contains_key("builtin/stats.clear"));
+        assert_eq!(t["builtin/stats.continue"], "Continues ");
+        // Vanilla `No.146,196` against `%.3d`: filled in; `%3d` of 138 prints the same digits.
+        assert_eq!(t["builtin/spell.hint.211.0"], "Needs No.146,196");
+        assert_eq!(t["builtin/spell.hint.209.0"], "Needs No.138");
         assert_eq!(r.count("printf"), 1);
+    }
+
+    // A variant language over its base: its own keys win, nested jdiff objects merge, base-only files stay.
+    #[test]
+    fn layered_language() {
+        let root = std::env::temp_dir().join(format!("th08-layers-{}", std::process::id()));
+        let (base, var) = (root.join("lang_en"), root.join("lang_en-gb"));
+        for (d, defs, msg) in [
+            (
+                &base,
+                r#"{"th07 Menu Start": "Start", "th07 Menu Replay": "Replay"}"#,
+                r#"{"0": {"60_0": {"lines": ["color"]}, "61_0": {"lines": ["base"]}}}"#,
+            ),
+            (
+                &var,
+                r#"{"th07 Menu Start": "Begin"}"#,
+                r#"{"0": {"60_0": {"lines": ["colour"]}}}"#,
+            ),
+        ] {
+            std::fs::create_dir_all(d.join("th08")).unwrap();
+            std::fs::write(d.join("stringdefs.js"), defs).unwrap();
+            std::fs::write(d.join("th08/msg1a.dat.jdiff"), msg).unwrap();
+        }
+        std::fs::write(base.join("th08/spells.js"), r#"{"0": "Sign"}"#).unwrap();
+        let l = Lang::read_layers(&[base.clone(), var.clone()]).unwrap();
+        assert_eq!(l.stringdefs["th07 Menu Start"], "Begin");
+        assert_eq!(l.stringdefs["th07 Menu Replay"], "Replay");
+        assert_eq!(l.msg["msg1a"]["0"]["60_0"]["lines"][0], "colour");
+        assert_eq!(l.msg["msg1a"]["0"]["61_0"]["lines"][0], "base");
+        assert_eq!(l.spells["0"], "Sign");
+        assert_eq!(l.dir, var);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

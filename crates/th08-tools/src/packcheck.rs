@@ -9,7 +9,7 @@ use th08_core::drawlist::TextSite;
 use th08_render::text::{MIN_FIT_SCALE, Overflow, Raster};
 use th08_render::textdb::PackText;
 
-use crate::thcrap::{self, Vanilla};
+use th08_thcrap::thcrap::{self, Vanilla};
 
 // Strip font size of every text caller (10 §6: font byte 0 → 15; dialogue font_size = 15).
 const SIZE: usize = 15;

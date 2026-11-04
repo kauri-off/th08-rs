@@ -191,6 +191,14 @@ pub fn nsis(name: &str, out: &Path, game: Option<&Game>) -> Result<()> {
             .names()
             .map(|n| format!("Delete \"$INSTDIR\\game\\{n}\"\n"))
             .collect();
+        let (install, uninstall) = if g.packs.is_empty() {
+            (install, uninstall)
+        } else {
+            (
+                install + "File /r \"${SRC}\\game\\packs\"\n",
+                uninstall + "RMDir /r \"$INSTDIR\\game\\packs\"\n",
+            )
+        };
         fs::write(stage.join("game_install.nsh"), install)?;
         fs::write(stage.join("game_uninstall.nsh"), uninstall)?;
         defs.push("-DWITH_GAME".to_owned());

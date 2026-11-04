@@ -9,6 +9,8 @@ pub mod packs;
 pub mod platform;
 pub mod settings;
 pub mod sources;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod translations;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]

@@ -35,6 +35,10 @@ pub struct DistArgs {
     /// Game folder with th08.dat / thbgm.dat (read only); default TH08_GAME_SRC (env or packaging/local/local.env).
     #[arg(long)]
     data: Option<PathBuf>,
+    /// Translation packs to bundle, e.g. en,ru (thpatch language codes, imported with thcrap-import); personal
+    /// packages only, so it needs --assets raw or packed.
+    #[arg(long, value_delimiter = ',')]
+    packs: Vec<String>,
     /// Android ABI, repeatable (default arm64-v8a).
     #[arg(long, value_enum)]
     abi: Vec<Abi>,

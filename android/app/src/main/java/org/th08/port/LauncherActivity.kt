@@ -29,6 +29,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 
 class LauncherActivity : ComponentActivity(), LauncherActions {
@@ -38,6 +43,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     private lateinit var rows: List<Setting>
     private var data by mutableStateOf<GameData>(GameData.Unavailable)
     private var picking: Setting? = null
+    private var packs by mutableStateOf(PackState())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -48,11 +54,19 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             val saved = cfg[e.key]?.let { norm(e.kind, it) }?.takeIf { it.isNotEmpty() }
             Setting(e, saved ?: e.default)
         }
+        Thread { copyBundledPacks(); runOnUiThread { packCall("status") } }.start()
         setContent {
             Th08Theme {
                 LifecycleResumeEffect(Unit) {
                     data = checkData()
                     onPauseOrDispose { }
+                }
+                // Poll the Rust job while one runs.
+                LaunchedEffect(packs.busy) {
+                    while (packs.busy != null) {
+                        delay(250)
+                        packs = withContext(Dispatchers.Default) { PackState.parse(Packs.call(request("status"))) }
+                    }
                 }
                 val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     val r = picking ?: return@rememberLauncherForActivityResult
@@ -64,7 +78,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 // port.cfg (auto: its own Locale.getDefault(), i18n.rs `os_locale`).
                 val lang = resolveLang(rows.firstOrNull { it.e.key == "language" }?.value ?: "auto")
                 val res = remember(lang) { localized(this, lang) }
-                CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res) {
+                CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs) {
                     LauncherScreen(schema.groups, rows, data, this)
                 }
             }
@@ -107,6 +121,69 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     }
 
     override fun pick(r: Setting) = pickFile(r)
+
+    private fun request(op: String, code: String = ""): String = JSONObject().apply {
+        put("op", op)
+        put("config", filesDir.path)
+        put("code", code)
+        (data as? GameData.Folder)?.let { put("dir", it.dir.path) }
+    }.toString()
+
+    private fun packCall(op: String, code: String = "", extra: (JSONObject) -> Unit = {}) {
+        val req = JSONObject(request(op, code)).also(extra).toString()
+        packs = runCatching { PackState.parse(Packs.call(req)) }
+            .getOrElse { PackState(outcome = PackOutcome.Failed(code, it.message ?: it.toString())) }
+    }
+
+    override fun packList() = packCall("list")
+
+    override fun packRemove(code: String) = packCall("remove", code)
+
+    // The importer reads th08.pak / th08.dat: a bundled asset by descriptor (stored, noCompress), else the folder.
+    override fun packInstall(code: String) {
+        val asset = listOf("th08.pak", "th08.dat").firstOrNull { n -> assets.list("")?.contains(n) == true }
+        if (asset == null) return packCall("install", code)
+        val afd = runCatching { assets.openFd(asset) }.getOrNull() ?: return packCall("install", code)
+        val fd = afd.parcelFileDescriptor.dup().detachFd()
+        packCall("install", code) { r ->
+            r.put("fd", fd)
+            r.put("off", afd.startOffset)
+            r.put("len", afd.length)
+            r.put("name", asset)
+        }
+        afd.close()
+    }
+
+    // assets/packs/lang_xx of a personal build into filesDir/packs, once per pack revision (a removed one stays
+    // removed until the APK brings a new revision).
+    private fun copyBundledPacks() {
+        val ids = assets.list("packs") ?: return
+        val dst = File(filesDir, "packs").also { it.mkdirs() }
+        val marker = File(dst, ".bundled")
+        val done = runCatching { marker.readLines().toMutableSet() }.getOrDefault(mutableSetOf())
+        for (id in ids) {
+            val toml = runCatching { assets.open("packs/$id/pack.toml").bufferedReader().use { it.readText() } }
+                .getOrNull() ?: continue
+            val rev = Regex("""(?m)^revision\s*=\s*"([^"]*)"""").find(toml)?.groupValues?.get(1) ?: ""
+            val key = "$id $rev"
+            if (key in done) continue
+            val out = File(dst, id)
+            out.deleteRecursively()
+            copyAssetDir("packs/$id", out)
+            done.add(key)
+        }
+        marker.writeText(done.joinToString("\n", postfix = "\n"))
+    }
+
+    private fun copyAssetDir(path: String, out: File) {
+        val children = assets.list(path).orEmpty()
+        if (children.isEmpty()) {
+            out.parentFile?.mkdirs()
+            assets.open(path).use { i -> out.outputStream().use { i.copyTo(it) } }
+            return
+        }
+        children.forEach { copyAssetDir("$path/$it", File(out, it)) }
+    }
 
     override fun play() {
         val once = listOf("launcher" to "off") + rows

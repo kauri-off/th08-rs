@@ -4,11 +4,8 @@
 pub mod demosync;
 pub mod drawlog;
 pub mod drawreport;
-pub mod fontchain;
 pub mod packcheck;
 pub mod session;
-pub mod thcrap;
-pub mod thpatch;
 pub mod xz;
 
 /// A count or index as a trace column (i64); exactly `as i64`.

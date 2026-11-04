@@ -130,14 +130,17 @@ pub const UI: &[(&str, &str)] = &[
     ("dev_active", "Developer settings active: {list}"),
     ("game_folder", "Game folder:"),
     ("browse", "Browse…"),
-    ("folder_hint", "folder with th08.dat"),
+    ("folder_hint", "folder with th08.dat or th08.pak"),
     ("bundled_apk", "bundled in the APK"),
     ("no_files", "no files"),
-    ("dat_found", "th08.dat found"),
-    ("dat_missing", "no th08.dat in this folder"),
+    ("dat_found", "game files found"),
+    (
+        "dat_missing",
+        "game files missing: the folder needs th08.dat or th08.pak, and thbgm.dat or thbgm.pak for the music",
+    ),
     (
         "android_copy",
-        "Copy th08.dat and thbgm.dat from your Touhou 8 folder into {dir}\n\
+        "Copy th08.dat and thbgm.dat (or th08.pak and thbgm.pak) from your Touhou 8 folder into {dir}\n\
          e.g. adb push th08.dat thbgm.dat {dir}/ — then this screen picks them up.",
     ),
     (
@@ -173,6 +176,41 @@ pub const UI: &[(&str, &str)] = &[
     ("touch_reset", "Reset layout"),
     ("cancel", "Cancel"),
     ("save", "Save"),
+    ("tr_title", "Translations"),
+    ("tr_installed", "Installed:"),
+    (
+        "tr_none",
+        "no translation installed: the game shows the original Japanese text",
+    ),
+    ("tr_server", "Available from Touhou Patch Center:"),
+    ("tr_load", "Show the languages"),
+    ("tr_loading", "Loading the language list…"),
+    ("tr_filter", "filter"),
+    ("tr_install", "Download"),
+    ("tr_update", "Update"),
+    ("tr_remove", "Remove"),
+    ("tr_up_to_date", "up to date"),
+    ("tr_translated", "{pct}% translated"),
+    ("tr_estimate", "about {pct}% of the texts"),
+    ("tr_on_top", "builds on {base}"),
+    ("tr_working", "{lang}: {done} / {total} files"),
+    ("tr_building", "{lang}: building the pack…"),
+    ("tr_done", "{lang} installed: {pct}% translated"),
+    ("tr_removed", "{lang} removed"),
+    ("tr_failed", "{lang}: {err}"),
+    (
+        "tr_needs_data",
+        "select the game folder first: the import reads th08.dat or th08.pak",
+    ),
+    (
+        "tr_attribution",
+        "Translations by Touhou Patch Center (thpatch.net) and its contributors, CC BY-SA 4.0; the game text \
+         is by Team Shanghai Alice. Packs are built on this device into {dir}, for personal use.",
+    ),
+    (
+        "tr_web",
+        "Downloading translations is not available in the browser version yet; use the desktop or Android version.",
+    ),
 ];
 
 type Table = HashMap<String, String>;

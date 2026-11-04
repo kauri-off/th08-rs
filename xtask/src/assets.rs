@@ -9,9 +9,12 @@ use crate::util::{self, LocalEnv};
 use crate::{Assets, DistArgs, Target};
 
 // Files to bundle: (source, lowercase name in the package). `dir` holds all of them (Gradle `th08.data`).
+// `packs`: translation pack folders (`<packs_dir>/lang_xx`), bundled as `packs/lang_xx` next to the game files.
 pub struct Game {
     pub dir: PathBuf,
     pub files: Vec<(PathBuf, String)>,
+    pub packs_dir: Option<PathBuf>,
+    pub packs: Vec<String>,
 }
 
 impl Game {
@@ -28,12 +31,31 @@ impl Game {
                 fs::set_permissions(&d, fs::Permissions::from_mode(0o644))?;
             }
         }
+        if let Some(src) = &self.packs_dir {
+            for id in &self.packs {
+                copy_dir(&src.join(id), &dst.join("packs").join(id))?;
+            }
+        }
         Ok(())
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.files.iter().map(|(_, n)| n.as_str())
     }
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for e in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
+        let p = e?.path();
+        let d = dst.join(p.file_name().context("file name")?);
+        if p.is_dir() {
+            copy_dir(&p, &d)?;
+        } else {
+            util::copy(&p, &d)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn notice() {
@@ -47,6 +69,11 @@ pub fn prepare(a: &DistArgs, local: &LocalEnv, name: &str) -> Result<Option<Game
     if a.assets == Assets::None {
         if a.data.is_some() {
             bail!("--data needs --assets raw or --assets packed");
+        }
+        if !a.packs.is_empty() {
+            bail!(
+                "--packs needs --assets raw or --assets packed (translation packs are never in public builds)"
+            );
         }
         return Ok(None);
     }
@@ -69,10 +96,62 @@ pub fn prepare(a: &DistArgs, local: &LocalEnv, name: &str) -> Result<Option<Game
         bail!("no game folder {}", data.display());
     }
     let data = util::absolute(&data);
-    match a.assets {
-        Assets::Raw => raw(&data).map(Some),
-        _ => packed(&data, name).map(Some),
+    let mut game = match a.assets {
+        Assets::Raw => raw(&data)?,
+        _ => packed(&data, name)?,
+    };
+    if !a.packs.is_empty() {
+        game.packs_dir = Some(packs(&data, &a.packs)?);
+        game.packs = a.packs.iter().map(|c| pack_id(c)).collect();
     }
+    Ok(Some(game))
+}
+
+fn pack_id(code: &str) -> String {
+    if code.starts_with("lang_") {
+        code.to_owned()
+    } else {
+        format!("lang_{code}")
+    }
+}
+
+// Translation packs built by `thcrap-import` from the server (cache <personal target>/thcrap) and this th08.dat
+// into <personal target>/dist-packs/lang_xx; fonts without an open licence are listed in pack.toml `personal`.
+fn packs(data: &Path, codes: &[String]) -> Result<PathBuf> {
+    let out = util::personal_target().join("dist-packs");
+    util::inside_target(&out)?;
+    fs::create_dir_all(&out)?;
+    let dat = find(data, "th08.dat")?;
+    let cache = util::personal_target().join("thcrap");
+    for c in codes {
+        let id = pack_id(c);
+        eprintln!("translation pack {id} (Touhou Patch Center, CC BY-SA 4.0; personal use)");
+        util::run(
+            util::cargo()
+                .args([
+                    "run",
+                    "-q",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    "th08-tools",
+                    "--bin",
+                    "thcrap-import",
+                    "--",
+                    "--force",
+                    "--lang",
+                    &id,
+                    "--dat",
+                ])
+                .arg(&dat)
+                .arg("--cache")
+                .arg(&cache)
+                .arg("-o")
+                .arg(out.join(&id)),
+        )?;
+        util::ensure_nonempty(&out.join(&id).join("pack.toml"))?;
+    }
+    Ok(out)
 }
 
 fn assets_name(a: Assets) -> &'static str {
@@ -104,6 +183,8 @@ fn raw(data: &Path) -> Result<Game> {
     Ok(Game {
         dir: data.to_path_buf(),
         files,
+        packs_dir: None,
+        packs: Vec::new(),
     })
 }
 
@@ -200,5 +281,7 @@ fn packed(data: &Path, _name: &str) -> Result<Game> {
             .map(|n| (cache.join(n), (*n).to_owned()))
             .collect(),
         dir: cache,
+        packs_dir: None,
+        packs: Vec::new(),
     })
 }

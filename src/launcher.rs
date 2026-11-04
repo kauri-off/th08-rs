@@ -87,7 +87,7 @@ fn choose_game_dir(s: &Settings, bundled: impl FnOnce() -> Option<PathBuf>) -> C
         if is_game_dir(d) {
             return Choice::Configured(d.clone());
         }
-        let msg = format!("{}: no th08.dat in this folder", d.display());
+        let msg = format!("{}: no th08.dat or th08.pak in this folder", d.display());
         if s.origin("game_dir") > Origin::PortCfg {
             return Choice::Invalid(msg);
         }
@@ -147,7 +147,7 @@ fn not_game_dir_dialog(dir: &std::path::Path) {
         .set_level(rfd::MessageLevel::Error)
         .set_title("th08")
         .set_description(format!(
-            "{} does not contain th08.dat.\nSelect the Imperishable Night folder.",
+            "{} has no th08.dat or th08.pak (and thbgm.dat or thbgm.pak for the music).\nSelect the Imperishable Night folder.",
             dir.display()
         ))
         .set_buttons(rfd::MessageButtons::Ok)
@@ -164,7 +164,7 @@ fn folder_dialog() -> Option<PathBuf> {
 // Android: no rfd backend; the folder comes from `game_dir` (launcher text field, port.cfg) or the bundled lookup.
 #[cfg(target_os = "android")]
 fn not_game_dir_dialog(dir: &std::path::Path) {
-    log::error!("{} does not contain th08.dat", dir.display());
+    log::error!("{} has no th08.dat or th08.pak", dir.display());
 }
 
 #[cfg(target_os = "android")]
@@ -253,6 +253,16 @@ impl Value {
     }
 }
 
+// Translation packs on the settings screen: the job manager (None without a config folder) and the installed packs,
+// re-listed when (job generation, game folder) changes.
+#[cfg(not(target_arch = "wasm32"))]
+struct Tr {
+    manager: Option<crate::translations::Manager>,
+    installed: Vec<crate::packs::Installed>,
+    seen: Option<(u64, String)>,
+    filter: String,
+}
+
 // One table entry as edited on screen; `dirty` = differs from the value the screen opened with.
 struct Row {
     e: &'static Entry,
@@ -293,6 +303,8 @@ pub struct Model {
     rows: Vec<Row>,
     folder: Folder,
     dirs: settings::PlatformDirs,
+    #[cfg(not(target_arch = "wasm32"))]
+    tr: Tr,
     // Developer view: Cheats and Tools rows and the origin tags are shown.
     pub dev: bool,
     pub view: View,
@@ -308,13 +320,64 @@ impl Model {
         let dev = rows
             .iter()
             .any(|r| r.e.audience == Audience::Dev && r.origin > Origin::PortCfg);
-        Self {
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut m = Self {
             rows,
             folder,
             dirs: s.dirs.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            tr: Tr {
+                manager: s
+                    .dirs
+                    .config
+                    .as_deref()
+                    .map(|c| crate::translations::Manager::new(c, || {})),
+                installed: Vec::new(),
+                seen: None,
+                filter: String::new(),
+            },
             dev,
             view: View::Settings,
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        m.refresh_installed();
+        m
+    }
+
+    // The translation job manager (tools drive it directly for screenshots).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn translations(&self) -> Option<&crate::translations::Manager> {
+        self.tr.manager.as_ref()
+    }
+
+    // Re-lists the installed packs after an install / remove or a game folder change.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn refresh_installed(&mut self) {
+        let generation = self.tr.manager.as_ref().map_or(0, |t| t.state().generation);
+        let key = (generation, self.game_dir());
+        if self.tr.seen.as_ref() != Some(&key) {
+            let gd = (!key.1.is_empty()).then(|| PathBuf::from(&key.1));
+            self.tr.installed = crate::packs::installed(gd.as_deref(), self.dirs.config.as_deref());
+            self.tr.seen = Some(key);
         }
+    }
+
+    // `game_text` choices after follow / ja: the installed pack languages, (code, shown name).
+    fn pack_choices(&self) -> Vec<(String, String)> {
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut v: Vec<(String, String)> = Vec::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        for p in &self.tr.installed {
+            if p.language != "ja" && !v.iter().any(|(c, _)| *c == p.language) {
+                let name = if p.title.is_empty() {
+                    p.language.clone()
+                } else {
+                    format!("{} — {}", p.language, p.title)
+                };
+                v.push((p.language.clone(), name));
+            }
+        }
+        v
     }
 
     // The window's fullscreen state (F11 / Alt+Enter) mirrored into the box; saved with the other edits on Play.
@@ -568,6 +631,9 @@ impl Model {
     }
 
     fn group_ui(&mut self, ui: &mut egui::Ui, g: Group, lang: Lang) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.refresh_installed();
+        let extra = self.pack_choices();
         // The game folder row is at the top.
         let dev = self.dev;
         let rows: Vec<usize> = (0..self.rows.len())
@@ -586,7 +652,9 @@ impl Model {
         // Ids from the group id, so a language switch keeps the open/closed state.
         egui::CollapsingHeader::new(egui::RichText::new(i18n::group_title(lang, g)).strong())
             .id_salt(g.id())
-            .default_open(matches!(g, Group::GameData | Group::Display) || set_here)
+            .default_open(
+                matches!(g, Group::GameData | Group::Language | Group::Display) || set_here,
+            )
             .show(ui, |ui| {
                 egui::Grid::new(g.id())
                     .num_columns(2)
@@ -594,11 +662,272 @@ impl Model {
                     .spacing([12.0, 4.0])
                     .show(ui, |ui| {
                         for i in rows {
-                            row_ui(ui, &mut self.rows[i], dev, lang);
+                            let x: &[(String, String)] = if self.rows[i].e.key == "game_text" {
+                                &extra
+                            } else {
+                                &[]
+                            };
+                            row_ui(ui, &mut self.rows[i], dev, lang, x);
                             ui.end_row();
                         }
                     });
+                if g == Group::Language {
+                    ui.add_space(6.0);
+                    self.translations_ui(ui, lang);
+                }
             });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn translations_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        ui.label(egui::RichText::new(i18n::ui(lang, "tr_title")).strong());
+        ui.label(egui::RichText::new(i18n::ui(lang, "tr_web")).weak());
+    }
+
+    // Installed packs, the server's languages and the running download (port-only UI).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn translations_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        let data = match &self.folder {
+            Folder::Native if self.folder_ok() => Some(PathBuf::from(self.game_dir())),
+            _ => None,
+        };
+        let Some(t) = &self.tr.manager else {
+            return;
+        };
+        let st = t.state();
+        if st.busy.is_some() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(150));
+        }
+        ui.label(egui::RichText::new(i18n::ui(lang, "tr_title")).strong());
+        let can_install = st.busy.is_none() && data.is_some();
+        let mut act = installed_ui(ui, lang, &self.tr.installed, &st, can_install);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(i18n::ui(lang, "tr_server"));
+            if st.busy.as_deref() == Some("") {
+                ui.spinner();
+                ui.label(i18n::ui(lang, "tr_loading"));
+            } else if st.server.is_none()
+                && ui
+                    .add_enabled(
+                        st.busy.is_none(),
+                        egui::Button::new(i18n::ui(lang, "tr_load")),
+                    )
+                    .clicked()
+            {
+                t.load_list();
+            }
+            if st.server.is_some() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.tr.filter)
+                        .hint_text(i18n::ui(lang, "tr_filter"))
+                        .desired_width(140.0),
+                );
+            }
+        });
+        if let Some(list) = &st.server {
+            act = act.or(server_ui(ui, lang, list, &self.tr, can_install));
+        }
+        if data.is_none() {
+            ui.colored_label(ui.visuals().warn_fg_color, i18n::ui(lang, "tr_needs_data"));
+        }
+        job_ui(ui, lang, &st);
+        let dir = t.packs_dir().display().to_string();
+        ui.label(
+            egui::RichText::new(i18n::ui_fmt(lang, "tr_attribution", &[("dir", &dir)]))
+                .small()
+                .weak(),
+        );
+        match act {
+            Some((true, code)) => {
+                if let Some(d) = data {
+                    t.install(&code, crate::translations::Data::Dir(d));
+                }
+            }
+            Some((false, code)) => {
+                t.remove(&code);
+            }
+            None => {}
+        }
+    }
+}
+
+// Installed packs with Update / Remove for the downloaded ones; returns (install?, code) of a click.
+#[cfg(not(target_arch = "wasm32"))]
+fn installed_ui(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    installed: &[crate::packs::Installed],
+    st: &crate::translations::State,
+    can_install: bool,
+) -> Option<(bool, String)> {
+    let mut act = None;
+    let busy = st.busy.is_some();
+    ui.label(i18n::ui(lang, "tr_installed"));
+    if installed.is_empty() {
+        ui.label(egui::RichText::new(i18n::ui(lang, "tr_none")).weak());
+    }
+    egui::Grid::new("tr_installed")
+        .num_columns(3)
+        .spacing([12.0, 4.0])
+        .show(ui, |ui| {
+            for p in installed {
+                ui.label(egui::RichText::new(&p.language).monospace());
+                let mut s = p.title.clone();
+                if let Some(c) = p.coverage {
+                    let pct = format!("{c:.1}");
+                    s = format!(
+                        "{s}  ({})",
+                        i18n::ui_fmt(lang, "tr_translated", &[("pct", &pct)])
+                    );
+                }
+                ui.label(s);
+                ui.horizontal(|ui| {
+                    if !p.managed {
+                        ui.label(
+                            egui::RichText::new(p.path.display().to_string())
+                                .small()
+                                .weak(),
+                        );
+                        return;
+                    }
+                    let server = st
+                        .server
+                        .as_ref()
+                        .and_then(|l| l.iter().find(|x| x.code() == p.language));
+                    if server.is_some_and(|x| x.base.is_empty() && x.revision == p.revision) {
+                        ui.label(egui::RichText::new(i18n::ui(lang, "tr_up_to_date")).weak());
+                    } else if ui
+                        .add_enabled(can_install, egui::Button::new(i18n::ui(lang, "tr_update")))
+                        .clicked()
+                    {
+                        act = Some((true, p.language.clone()));
+                    }
+                    if ui
+                        .add_enabled(!busy, egui::Button::new(i18n::ui(lang, "tr_remove")))
+                        .clicked()
+                    {
+                        act = Some((false, p.language.clone()));
+                    }
+                });
+                ui.end_row();
+            }
+        });
+    act
+}
+
+// The server's languages (filtered) with Download / Update.
+#[cfg(not(target_arch = "wasm32"))]
+fn server_ui(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    list: &[th08_thcrap::manage::ServerLang],
+    tr: &Tr,
+    can_install: bool,
+) -> Option<(bool, String)> {
+    let mut act = None;
+    let f = tr.filter.to_lowercase();
+    egui::ScrollArea::vertical()
+        .id_salt("tr_server")
+        .max_height(220.0)
+        .show(ui, |ui| {
+            egui::Grid::new("tr_server_grid")
+                .num_columns(4)
+                .striped(true)
+                .spacing([12.0, 3.0])
+                .show(ui, |ui| {
+                    let mut shown: Vec<&th08_thcrap::manage::ServerLang> = list
+                        .iter()
+                        .filter(|l| {
+                            f.is_empty() || l.id.contains(&f) || l.title.to_lowercase().contains(&f)
+                        })
+                        .collect();
+                    // Exact and prefix code matches first.
+                    shown.sort_by_key(|l| {
+                        u8::from(l.code() != f) + u8::from(!l.code().starts_with(f.as_str()))
+                    });
+                    for l in shown {
+                        let have = tr
+                            .installed
+                            .iter()
+                            .any(|p| p.managed && p.language == l.code());
+                        let label = if have { "tr_update" } else { "tr_install" };
+                        if ui
+                            .add_enabled(can_install, egui::Button::new(i18n::ui(lang, label)))
+                            .clicked()
+                        {
+                            act = Some((true, l.code().to_string()));
+                        }
+                        ui.label(egui::RichText::new(l.code()).monospace());
+                        ui.label(&l.title);
+                        let pct = format!("{:.0}", l.estimate());
+                        let mut info = i18n::ui_fmt(lang, "tr_estimate", &[("pct", &pct)]);
+                        if !l.base.is_empty() {
+                            let base: Vec<&str> = l
+                                .base
+                                .iter()
+                                .map(|b| b.strip_prefix("lang_").unwrap_or(b))
+                                .collect();
+                            info = format!(
+                                "{info}; {}",
+                                i18n::ui_fmt(lang, "tr_on_top", &[("base", &base.join(", "))])
+                            );
+                        }
+                        ui.label(egui::RichText::new(info).small());
+                        ui.end_row();
+                    }
+                });
+        });
+    act
+}
+
+// The running job's progress, else the last outcome.
+#[cfg(not(target_arch = "wasm32"))]
+fn job_ui(ui: &mut egui::Ui, lang: Lang, st: &crate::translations::State) {
+    use crate::translations::Outcome;
+    if let Some(code) = st.busy.as_deref().filter(|c| !c.is_empty()) {
+        let (done, total) = st.files;
+        let text = if st.building {
+            i18n::ui_fmt(lang, "tr_building", &[("lang", code)])
+        } else {
+            i18n::ui_fmt(
+                lang,
+                "tr_working",
+                &[
+                    ("lang", code),
+                    ("done", &done.to_string()),
+                    ("total", &total.to_string()),
+                ],
+            )
+        };
+        let frac = if total == 0 {
+            0.0
+        } else {
+            done as f32 / total as f32
+        };
+        ui.add(egui::ProgressBar::new(frac).text(text).animate(st.building));
+        ui.label(egui::RichText::new(&st.last_line).small().weak());
+        return;
+    }
+    match &st.outcome {
+        Some(Outcome::Installed { lang: l, percent }) => {
+            let pct = format!("{percent:.1}");
+            ui.colored_label(
+                egui::Color32::from_rgb(110, 200, 110),
+                i18n::ui_fmt(lang, "tr_done", &[("lang", l), ("pct", &pct)]),
+            );
+        }
+        Some(Outcome::Removed { lang: l }) => {
+            ui.label(i18n::ui_fmt(lang, "tr_removed", &[("lang", l)]));
+        }
+        Some(Outcome::Failed { lang: l, error }) => {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                i18n::ui_fmt(lang, "tr_failed", &[("lang", l), ("err", error)]),
+            );
+        }
+        None => {}
     }
 }
 
@@ -663,14 +992,14 @@ fn port_menu_ui(ui: &mut egui::Ui, lang: Lang) -> Option<Action> {
 }
 
 // Help is shown once, under the value; the developer view adds the flag / env name and the origin tag.
-fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang) {
+fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang, extra: &[(String, String)]) {
     let l = ui.label(i18n::label(lang, r.e));
     if dev {
         l.on_hover_text(format!("--{} / {}", r.e.key.replace('_', "-"), r.e.env));
     }
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
-            value_ui(ui, r, lang);
+            value_ui(ui, r, lang, extra);
             if dev {
                 origin_label(ui, r, lang);
             }
@@ -683,7 +1012,8 @@ fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang) {
 }
 
 // Edits a copy of the value; the row is set (and its dirty flag updated) only when a widget changed it.
-fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang) {
+// `extra` = choices after the table's (value, shown name): the installed pack languages for `game_text`.
+fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String)]) {
     let unsettable = r.e.default.is_empty();
     let mut v = r.value.clone();
     match (&mut v, r.e.kind) {
@@ -729,14 +1059,21 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang) {
                     None => v.to_string(),
                 }
             };
+            let selected = extra
+                .iter()
+                .find(|(x, _)| x == c)
+                .map_or_else(|| shown(c), |(_, n)| n.clone());
             egui::ComboBox::from_id_salt(r.e.key)
-                .selected_text(shown(c))
+                .selected_text(selected)
                 .show_ui(ui, |ui| {
                     if unsettable {
                         ui.selectable_value(c, String::new(), shown(""));
                     }
                     for x in choices {
                         ui.selectable_value(c, x.to_string(), shown(x));
+                    }
+                    for (x, name) in extra {
+                        ui.selectable_value(c, x.clone(), name);
                     }
                 });
         }

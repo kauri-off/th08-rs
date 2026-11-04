@@ -1,0 +1,25 @@
+[package]
+name = "th08-thcrap"
+version = "0.1.0"
+license = "GPL-3.0-or-later"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+# Native only (lib.rs is empty on wasm32): HTTPS, hashing and font parsing stay off the web build.
+[dependencies]
+th08-core = { path = "../th08-core" }
+th08-formats = { path = "../th08-formats" }
+th08-render = { path = "../th08-render" }
+anyhow = "1.0.104"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde_json = "1"
+sha2 = "0.10"
+ureq = "3.4"
+jiff = "0.2"
+ttf-parser = "0.25"
+crc32fast = "1.5"

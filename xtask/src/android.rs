@@ -83,6 +83,11 @@ pub fn apk(a: &DistArgs, local: &LocalEnv, out: &Path, game: Option<&Game>) -> R
     // Gradle's GameData takes the .pak pair when the folder has both, else the .dat pair (build.gradle.kts gameFiles).
     if let Some(g) = game {
         args.push(format!("-Pth08.data={}", g.dir.display()));
+        // Translation packs: assets/packs/lang_xx, copied into the app's pack folder by the launcher.
+        if let Some(p) = &g.packs_dir {
+            args.push(format!("-Pth08.packs={}", p.display()));
+            args.push(format!("-Pth08.packIds={}", g.packs.join(",")));
+        }
     }
     let variant = match a.variant {
         Variant::Release => "release",

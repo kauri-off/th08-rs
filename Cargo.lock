@@ -3232,6 +3232,7 @@ dependencies = [
  "th08-audio",
  "th08-core",
  "th08-render",
+ "th08-thcrap",
  "toml",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -3304,14 +3305,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "th08-tools"
+name = "th08-thcrap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "crc32fast",
- "env_logger",
  "image",
  "jiff",
+ "serde_json",
+ "sha2",
+ "th08-core",
+ "th08-formats",
+ "th08-render",
+ "ttf-parser",
+ "ureq",
+]
+
+[[package]]
+name = "th08-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "image",
  "liblzma",
  "log",
  "pollster 1.0.1",
@@ -3322,8 +3338,7 @@ dependencies = [
  "th08-core",
  "th08-formats",
  "th08-render",
- "ttf-parser",
- "ureq",
+ "th08-thcrap",
  "zstd",
 ]
 

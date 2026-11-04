@@ -95,6 +95,7 @@ pub enum Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
     GameData,
+    Language,
     Display,
     Sound,
     Accessibility,
@@ -105,8 +106,9 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Group; 8] = [
+    pub const ALL: [Group; 9] = [
         Group::GameData,
+        Group::Language,
         Group::Display,
         Group::Sound,
         Group::Accessibility,
@@ -120,6 +122,7 @@ impl Group {
     pub fn id(self) -> &'static str {
         match self {
             Group::GameData => "game_data",
+            Group::Language => "language",
             Group::Display => "display",
             Group::Sound => "sound",
             Group::Accessibility => "accessibility",
@@ -134,6 +137,7 @@ impl Group {
     pub fn title(self) -> &'static str {
         match self {
             Group::GameData => "Game data",
+            Group::Language => "Language",
             Group::Display => "Display",
             Group::Sound => "Sound",
             Group::Accessibility => "Accessibility",
@@ -281,8 +285,9 @@ pub struct Settings {
     pub font: Option<String>,
     // Launcher / port menu language; None = the system locale (i18n.rs).
     pub language: Option<crate::i18n::Lang>,
-    // Game text language, stored for the presentation packs; None = follow `language`.
-    pub game_text: Option<crate::i18n::Lang>,
+    // Game text language: `ja` (the original) or the language code of a presentation pack (`en`, `pt-br`…);
+    // None = follow `language`.
+    pub game_text: Option<String>,
     // Presentation pack to mount (packs.rs): a folder / .zip path or an id in the pack folders; None = by `game_text`.
     pub pack: Option<String>,
     pub soundfont: Option<PathBuf>,
@@ -409,6 +414,14 @@ pub fn parse_bool(v: &str) -> Result<bool, String> {
     }
 }
 
+// A pack language code: `ja`, `en`, `pt-br`… ([a-z0-9-], as thpatch's `lang_<code>`).
+pub fn is_lang_code(c: &str) -> bool {
+    !c.is_empty()
+        && c.len() <= 32
+        && c.chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+}
+
 fn num<T: std::str::FromStr>(v: &str) -> Result<T, String> {
     v.trim()
         .parse()
@@ -469,39 +482,11 @@ pub const ENTRIES: &[Entry] = &[
         },
     },
     Entry {
-        key: "game_text",
-        env: "TH08_GAME_TEXT",
-        kind: Kind::Enum(&["follow", "ja", "en", "ru"]),
-        default: "follow",
-        group: Group::GameData,
-        label: "Game text language",
-        summary: "Language of the in-game text",
-        unit: "",
-        words: &[
-            ("follow", "Same as the screens"),
-            ("ja", "日本語 (original)"),
-            ("en", "English"),
-            ("ru", "Русский"),
-        ],
-        audience: Audience::Player,
-        platforms: Platforms::ALL,
-        persist: true,
-        help: "language of dialogue and other game text: follow (the screen language), ja (original), en or ru; \
-               a translation pack is needed for en and ru",
-        set: |s, v| {
-            s.game_text = match v.trim() {
-                "follow" => None,
-                l => Some(crate::i18n::Lang::from_code(l).ok_or("expected follow, ja, en or ru")?),
-            };
-            Ok(())
-        },
-    },
-    Entry {
         key: "language",
         env: "TH08_LANGUAGE",
         kind: Kind::Enum(&["auto", "ja", "en", "ru"]),
         default: "auto",
-        group: Group::Display,
+        group: Group::Language,
         label: "Language",
         summary: "Language of the settings screens",
         unit: "",
@@ -519,6 +504,34 @@ pub const ENTRIES: &[Entry] = &[
             s.language = match v.trim() {
                 "auto" => None,
                 l => Some(crate::i18n::Lang::from_code(l).ok_or("expected auto, ja, en or ru")?),
+            };
+            Ok(())
+        },
+    },
+    // Choices: follow, ja, then the languages of the installed packs (the settings screens add those).
+    Entry {
+        key: "game_text",
+        env: "TH08_GAME_TEXT",
+        kind: Kind::Enum(&["follow", "ja"]),
+        default: "follow",
+        group: Group::Language,
+        label: "Game text language",
+        summary: "Language of the in-game text",
+        unit: "",
+        words: &[
+            ("follow", "Same as the screens"),
+            ("ja", "日本語 (original)"),
+        ],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "language of dialogue and other game text: follow (the screen language), ja (original) or the code \
+               of an installed translation (en, ru, de, pt-br…)",
+        set: |s, v| {
+            s.game_text = match v.trim() {
+                "follow" => None,
+                l if is_lang_code(l) => Some(l.to_string()),
+                _ => return Err("expected follow, ja or a language code (en, pt-br…)".into()),
             };
             Ok(())
         },
