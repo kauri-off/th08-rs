@@ -5,6 +5,7 @@ pub mod overlay;
 pub mod portmenu;
 pub mod safearea;
 pub mod touch;
+pub mod touchedit;
 
 use th08_core::host::{Host, LocalTime, MAX_PLAYERS, RawInput, Words};
 use th08_core::input::*;

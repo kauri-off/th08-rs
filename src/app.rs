@@ -684,10 +684,16 @@ impl App {
             h.input.set_focus(false);
         }
         let lang = crate::i18n::resolve(r.settings.language);
+        let touch = gfx(&mut r.ctx).overlay.is_some().then(|| {
+            r.ctx
+                .host_as::<crate::platform::AppHost>()
+                .map_or_else(|| r.settings.touch.clone(), |h| h.input.touch.cfg.clone())
+        });
         let menu = crate::platform::portmenu::PortMenu::new(
             self.window(),
             lang,
             r.settings.font.as_deref(),
+            touch,
         );
         self.shell = Shell::PortMenu(r, Box::new(menu));
         self.sync_audio();
@@ -726,7 +732,12 @@ impl App {
                     .ctx
                     .host_as::<crate::platform::AppHost>()
                     .and_then(|h| h.joystick.active_name());
-                if let Some(a) = screen.redraw(&window, gfx(&mut r.ctx)) {
+                let a = screen.redraw(&window, gfx(&mut r.ctx));
+                if let Some(l) = screen.take_layout() {
+                    self.setup.touch.layout = l.clone();
+                    save_layout(r, l);
+                }
+                if let Some(a) = a {
                     self.act(el, &a);
                 }
             }
@@ -740,7 +751,11 @@ impl App {
                         )
                         || pad_button(&event) == Some(crate::joystick::MENU_BUTTON)) =>
             {
-                self.resume_game(el);
+                if screen.back() {
+                    window.request_redraw();
+                } else {
+                    self.resume_game(el);
+                }
             }
             ev => {
                 if let WindowEvent::Resized(s) = ev {
@@ -887,6 +902,18 @@ fn pad_button(e: &winit::event::KeyEvent) -> Option<usize> {
         }
         _ => None,
     }
+}
+
+// The layout editor's result: the live overlay takes it now and port.cfg keeps it ("" = the defaults).
+fn save_layout(r: &mut Running, l: crate::platform::touch::TouchLayout) {
+    let v = l.cfg_value();
+    log::info!("touch layout saved: {v:?}");
+    if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+        h.input.touch.cfg.layout = l.clone();
+    }
+    r.settings.touch.layout = l;
+    let v = (!v.is_empty()).then_some(v.as_str());
+    crate::settings::write_port_cfg(&r.settings.dirs, &[("touch_layout", v)]);
 }
 
 // In a stage (scene game): where Back and a resume from the background open the port menu.

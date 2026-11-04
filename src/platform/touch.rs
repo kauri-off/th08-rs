@@ -15,6 +15,8 @@ const TAP_MM: f32 = 3.0;
 // Stick: dead zone as a fraction of its radius.
 const STICK_DEAD: f32 = 0.3;
 const SCREEN: [f32; 2] = [640.0, 480.0];
+// Button diameter range of the layout editor (mm).
+pub const BUTTON_MM: [f32; 2] = [6.0, 30.0];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ctl {
@@ -90,8 +92,8 @@ const fn c(ctl: Ctl, x: f32, y: f32, w: f32, h: f32) -> Control {
     }
 }
 
-// The overlay layout, one control list per orientation (the later layout editor edits these); port.cfg
-// `touch_layout` holds `to_cfg()`, "" = the defaults.
+// The overlay layout, one control list per orientation (edited in the port menu); port.cfg `touch_layout` holds
+// `to_cfg()`, "" = the defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TouchLayout {
     pub landscape: Vec<Control>,
@@ -105,20 +107,20 @@ impl Default for TouchLayout {
         Self {
             landscape: vec![
                 c(Ctl::Move, 0.30, 0.50, 0.60, 1.00),
-                c(Ctl::Shot, 0.92, 0.78, 15.0, 15.0),
-                c(Ctl::Bomb, 0.94, 0.53, 11.0, 11.0),
-                c(Ctl::Focus, 0.84, 0.89, 12.0, 12.0),
-                c(Ctl::Auto, 0.86, 0.60, 8.0, 8.0),
-                c(Ctl::Skip, 0.875, 0.09, 8.0, 8.0),
+                c(Ctl::Shot, 0.935, 0.75, 15.0, 15.0),
+                c(Ctl::Bomb, 0.94, 0.47, 11.0, 11.0),
+                c(Ctl::Focus, 0.835, 0.90, 12.0, 12.0),
+                c(Ctl::Auto, 0.85, 0.57, 8.0, 8.0),
+                c(Ctl::Skip, 0.85, 0.09, 8.0, 8.0),
                 c(Ctl::Pause, 0.95, 0.09, 8.0, 8.0),
             ],
             portrait: vec![
                 c(Ctl::Move, 0.275, 0.835, 0.55, 0.33),
-                c(Ctl::Shot, 0.83, 0.86, 15.0, 15.0),
-                c(Ctl::Bomb, 0.83, 0.74, 11.0, 11.0),
-                c(Ctl::Focus, 0.64, 0.93, 12.0, 12.0),
-                c(Ctl::Auto, 0.64, 0.78, 8.0, 8.0),
-                c(Ctl::Skip, 0.75, 0.06, 8.0, 8.0),
+                c(Ctl::Shot, 0.84, 0.85, 15.0, 15.0),
+                c(Ctl::Bomb, 0.84, 0.70, 11.0, 11.0),
+                c(Ctl::Focus, 0.62, 0.93, 12.0, 12.0),
+                c(Ctl::Auto, 0.62, 0.78, 8.0, 8.0),
+                c(Ctl::Skip, 0.72, 0.06, 8.0, 8.0),
                 c(Ctl::Pause, 0.90, 0.06, 8.0, 8.0),
             ],
         }
@@ -131,6 +133,23 @@ impl TouchLayout {
             &self.landscape
         } else {
             &self.portrait
+        }
+    }
+
+    pub fn controls_mut(&mut self, landscape: bool) -> &mut Vec<Control> {
+        if landscape {
+            &mut self.landscape
+        } else {
+            &mut self.portrait
+        }
+    }
+
+    // `to_cfg()`, or "" for the defaults.
+    pub fn cfg_value(&self) -> String {
+        if *self == Self::default() {
+            String::new()
+        } else {
+            self.to_cfg()
         }
     }
 
@@ -436,41 +455,144 @@ impl TouchSource {
         }
     }
 
-    fn landscape(&self) -> bool {
+    pub fn landscape(&self) -> bool {
         self.size[0] >= self.size[1]
     }
 
-    // Controls in window px; a button is moved inside the safe rect when its circle would cross an edge.
+    // The safe rect (px): x, y, w, h.
+    pub fn rect(&self) -> [f32; 4] {
+        [self.origin[0], self.origin[1], self.size[0], self.size[1]]
+    }
+
+    // Visible controls in window px.
     pub fn placed(&self) -> Vec<Placed> {
-        let ([x0, y0], [w, h]) = (self.origin, self.size);
         self.cfg
             .layout
             .controls(self.landscape())
             .iter()
             .filter(|c| c.visible)
-            .map(|c| {
-                let half = match c.ctl {
-                    Ctl::Move => [c.w * w / 2.0, c.h * h / 2.0],
-                    _ => [c.w * self.ppm / 2.0; 2],
-                };
-                let inside = |v: f32, lo: f32, len: f32, r: f32| {
-                    if c.ctl == Ctl::Move || 2.0 * r >= len {
-                        v
-                    } else {
-                        v.clamp(lo + r, lo + len - r)
-                    }
-                };
-                Placed {
-                    ctl: c.ctl,
-                    centre: [
-                        inside(x0 + c.x * w, x0, w, half[0]),
-                        inside(y0 + c.y * h, y0, h, half[1]),
-                    ],
-                    half,
-                    opacity: c.opacity,
-                }
-            })
+            .map(|c| self.place(c))
             .collect()
+    }
+
+    // A control in window px, kept inside the safe rect: a button's circle is moved in, the Move zone is cut to it.
+    pub fn place(&self, c: &Control) -> Placed {
+        let ([x0, y0], [w, h]) = (self.origin, self.size);
+        let (centre, half) = if c.ctl == Ctl::Move {
+            let lo = [(c.x - c.w / 2.0).max(0.0), (c.y - c.h / 2.0).max(0.0)];
+            let hi = [(c.x + c.w / 2.0).min(1.0), (c.y + c.h / 2.0).min(1.0)];
+            (
+                [
+                    x0 + (lo[0] + hi[0]) / 2.0 * w,
+                    y0 + (lo[1] + hi[1]) / 2.0 * h,
+                ],
+                [
+                    (hi[0] - lo[0]).max(0.0) * w / 2.0,
+                    (hi[1] - lo[1]).max(0.0) * h / 2.0,
+                ],
+            )
+        } else {
+            let r = c.w * self.ppm / 2.0;
+            let inside = |v: f32, lo: f32, len: f32| {
+                if 2.0 * r >= len {
+                    lo + len / 2.0
+                } else {
+                    v.clamp(lo + r, lo + len - r)
+                }
+            };
+            (
+                [inside(x0 + c.x * w, x0, w), inside(y0 + c.y * h, y0, h)],
+                [r; 2],
+            )
+        };
+        Placed {
+            ctl: c.ctl,
+            centre,
+            half,
+            opacity: c.opacity,
+        }
+    }
+
+    fn control_mut(&mut self, ctl: Ctl) -> Option<&mut Control> {
+        let l = self.landscape();
+        self.cfg
+            .layout
+            .controls_mut(l)
+            .iter_mut()
+            .find(|c| c.ctl == ctl)
+    }
+
+    // Layout editor: moves `ctl` of the current orientation by `d` window px, kept inside the safe rect.
+    pub fn edit_move(&mut self, ctl: Ctl, d: [f32; 2]) {
+        let [_, _, w, h] = self.rect();
+        let Some(c) = self
+            .cfg
+            .layout
+            .controls(self.landscape())
+            .iter()
+            .find(|c| c.ctl == ctl)
+        else {
+            return;
+        };
+        let p = self.place(c);
+        let x = (p.centre[0] + d[0] - self.origin[0]) / w;
+        let y = (p.centre[1] + d[1] - self.origin[1]) / h;
+        self.edit(ctl, |c| {
+            c.x = x;
+            c.y = y;
+        });
+    }
+
+    // Layout editor: scales `ctl` by `k` (buttons 6–30 mm, the Move zone 10–100 % of the safe rect).
+    pub fn edit_scale(&mut self, ctl: Ctl, k: f32) {
+        self.edit(ctl, |c| {
+            if c.ctl == Ctl::Move {
+                c.w = (c.w * k).clamp(0.1, 1.0);
+                c.h = (c.h * k).clamp(0.1, 1.0);
+            } else {
+                c.w = (c.w * k).clamp(BUTTON_MM[0], BUTTON_MM[1]);
+                c.h = c.w;
+            }
+        });
+    }
+
+    // Layout editor: changes `ctl` of the current orientation, then keeps it inside the safe rect.
+    pub fn edit(&mut self, ctl: Ctl, f: impl FnOnce(&mut Control)) {
+        if let Some(c) = self.control_mut(ctl) {
+            f(c);
+        }
+        self.fit(ctl);
+    }
+
+    // Stores the placed (inside the safe rect) position back into the fractions.
+    pub fn fit(&mut self, ctl: Ctl) {
+        let [x0, y0, w, h] = self.rect();
+        let Some(c) = self
+            .cfg
+            .layout
+            .controls(self.landscape())
+            .iter()
+            .find(|c| c.ctl == ctl)
+        else {
+            return;
+        };
+        let mut c = *c;
+        if ctl == Ctl::Move {
+            c.w = c.w.clamp(0.1, 1.0);
+            c.h = c.h.clamp(0.1, 1.0);
+            c.x = c.x.clamp(c.w / 2.0, 1.0 - c.w / 2.0);
+            c.y = c.y.clamp(c.h / 2.0, 1.0 - c.h / 2.0);
+        } else {
+            let p = self.place(&c);
+            c.x = (p.centre[0] - x0) / w;
+            c.y = (p.centre[1] - y0) / h;
+        }
+        // Four decimals keep port.cfg readable (0.1 px on a 2400 px screen).
+        let round = |v: f32| (v * 1e4).round() / 1e4;
+        (c.x, c.y, c.w, c.h) = (round(c.x), round(c.y), round(c.w), round(c.h));
+        if let Some(m) = self.control_mut(ctl) {
+            *m = c;
+        }
     }
 
     // A winit `Touch` (window px).
@@ -851,6 +973,92 @@ mod tests {
         t.touch(1, TouchPhase::Started, pause.centre[0], pause.centre[1]);
         assert_eq!(t.poll() & PAUSE, PAUSE);
         assert_eq!(t.game_scale(), (1116.0 / 480.0f32).min(2574.0 / 640.0));
+    }
+
+    // Phones (landscape and portrait, with and without insets) and desktop windows: every default control inside
+    // the safe rect, buttons at least 1 mm apart.
+    #[test]
+    fn default_layout_fits() {
+        let cut = SafeArea {
+            left: 106,
+            top: 32,
+            right: 32,
+            bottom: 72,
+        };
+        let windows = [
+            (2712, 1220, 3.0, cut),
+            (2400, 1080, 2.625, SafeArea::default()),
+            (2340, 1080, 2.75, cut),
+            (1920, 1080, 2.0, SafeArea::default()),
+            (2560, 1600, 2.0, SafeArea::default()),
+            (640, 480, 1.0, SafeArea::default()),
+            (1280, 960, 1.0, SafeArea::default()),
+        ];
+        for (w, h, k, safe) in windows {
+            let rot = SafeArea {
+                left: safe.bottom,
+                top: safe.left,
+                right: safe.top,
+                bottom: safe.right,
+            };
+            for (w, h, safe) in [(w, h, safe), (h, w, rot)] {
+                let mut t = TouchSource::new(TouchConfig::default());
+                t.set_window(w, h, k, safe);
+                let [x0, y0, sw, sh] = t.rect();
+                let placed = t.placed();
+                for p in &placed {
+                    let [cx, cy] = p.centre;
+                    let [hx, hy] = p.half;
+                    assert!(
+                        cx - hx >= x0 - 0.5 && cx + hx <= x0 + sw + 0.5,
+                        "{w}x{h} {p:?}"
+                    );
+                    assert!(
+                        cy - hy >= y0 - 0.5 && cy + hy <= y0 + sh + 0.5,
+                        "{w}x{h} {p:?}"
+                    );
+                }
+                let buttons: Vec<_> = placed.iter().filter(|p| p.ctl != Ctl::Move).collect();
+                for (i, a) in buttons.iter().enumerate() {
+                    for b in &buttons[i + 1..] {
+                        let d = len(a.centre[0] - b.centre[0], a.centre[1] - b.centre[1]);
+                        let gap = (d - a.half[0] - b.half[0]) / t.ppm;
+                        assert!(
+                            gap >= 1.0,
+                            "{w}x{h}: {:?} / {:?} gap {gap} mm",
+                            a.ctl,
+                            b.ctl
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Editor moves and resizes stay inside the safe rect and round-trip through port.cfg.
+    #[test]
+    fn edit_keeps_inside() {
+        let mut t = TouchSource::new(TouchConfig::default());
+        t.set_window(2400, 1080, 2.625, SafeArea::default());
+        let [x0, y0, w, h] = t.rect();
+        t.edit_move(Ctl::Shot, [5000.0, 5000.0]);
+        let s = t.placed().into_iter().find(|p| p.ctl == Ctl::Shot).unwrap();
+        assert!((s.centre[0] - (x0 + w - s.half[0])).abs() < 0.5);
+        assert!((s.centre[1] - (y0 + h - s.half[1])).abs() < 0.5);
+        t.edit_scale(Ctl::Shot, 100.0);
+        let c = t.cfg.layout.landscape[1];
+        assert_eq!(c.w, BUTTON_MM[1]);
+        let s = t.place(&c);
+        assert!(s.centre[0] + s.half[0] <= x0 + w + 0.01);
+        t.edit_move(Ctl::Move, [-9000.0, 0.0]);
+        let m = t.cfg.layout.landscape[0];
+        assert!((m.x - m.w / 2.0).abs() < 1e-6);
+        t.edit_scale(Ctl::Move, 0.01);
+        assert_eq!(t.cfg.layout.landscape[0].w, 0.1);
+        assert_eq!(t.cfg.layout.portrait, TouchLayout::default().portrait);
+        let l = &t.cfg.layout;
+        assert_eq!(&TouchLayout::parse(&l.cfg_value()).unwrap(), l);
+        assert_eq!(TouchLayout::default().cfg_value(), "");
     }
 
     #[test]

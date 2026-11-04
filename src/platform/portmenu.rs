@@ -1,5 +1,7 @@
 //! Port menu (F1 / Android Back / resume from the background): an egui pass over the held game's dimmed last frame.
 
+use super::touch::{TouchConfig, TouchLayout};
+use super::touchedit::{EditOut, TouchEdit};
 use crate::i18n::{self, Lang};
 use crate::launcher::{self, Action};
 use egui::{Align2, Color32, Id, LayerId, Order, RichText};
@@ -21,6 +23,10 @@ pub struct PortMenu {
     generation: Option<u32>,
     // The active gamepad's name for the controller row (set by the app before each redraw).
     pub controller: Option<String>,
+    // The live overlay settings (None: no overlay, no layout editor), the open editor, a saved layout not yet taken.
+    touch: Option<TouchConfig>,
+    edit: Option<TouchEdit>,
+    saved: Option<TouchLayout>,
 }
 
 // The launcher's 640×480 layout scale for a window's safe rect (launcher.rs `zoom`).
@@ -30,8 +36,14 @@ fn zoom(safe: SafeArea, (w, h): (u32, u32)) -> f32 {
 }
 
 impl PortMenu {
-    // `lang`: the game's resolved `language` setting; `font`: its `font` setting (CJK fallback lookup).
-    pub fn new(window: &Window, lang: Lang, font: Option<&str>) -> Self {
+    // `lang`: the game's resolved `language` setting; `font`: its `font` setting (CJK fallback lookup); `touch`: the
+    // overlay's settings when it is on.
+    pub fn new(
+        window: &Window,
+        lang: Lang,
+        font: Option<&str>,
+        touch: Option<TouchConfig>,
+    ) -> Self {
         let ctx = egui::Context::default();
         ctx.set_visuals(egui::Visuals::dark());
         if lang == Lang::Ja {
@@ -54,7 +66,20 @@ impl PortMenu {
             lang,
             generation: None,
             controller: None,
+            touch,
+            edit: None,
+            saved: None,
         }
+    }
+
+    // Back / Esc: closes the layout editor without saving; false when the menu itself should close.
+    pub fn back(&mut self) -> bool {
+        self.edit.take().is_some()
+    }
+
+    // A layout the editor saved since the last call.
+    pub fn take_layout(&mut self) -> Option<TouchLayout> {
+        self.saved.take()
     }
 
     // Returns whether the window needs a redraw.
@@ -83,8 +108,39 @@ impl PortMenu {
         }));
         let mut act = None;
         let lang = self.lang;
+        if let Some(e) = &mut self.edit {
+            e.set_window((w, h), window.scale_factor(), s);
+        }
         let pad = self.controller.as_deref();
-        let mut out = self.ctx.run_pass(raw, |ctx| act = menu_ui(ctx, lang, pad));
+        let (edit, touch) = (&mut self.edit, self.touch.is_some());
+        let mut open_edit = false;
+        let mut done = None;
+        let mut out = self.ctx.run_pass(raw, |ctx| {
+            if let Some(e) = edit {
+                done = e.ui(ctx, lang, ppp);
+            } else {
+                (act, open_edit) = menu_ui(ctx, lang, pad, touch);
+            }
+        });
+        match done {
+            Some(EditOut::Save(l)) => {
+                if let Some(t) = &mut self.touch {
+                    t.layout = l.clone();
+                }
+                self.saved = Some(l);
+                self.edit = None;
+                window.request_redraw();
+            }
+            Some(EditOut::Cancel) => {
+                self.edit = None;
+                window.request_redraw();
+            }
+            None => {}
+        }
+        if open_edit && let Some(t) = &self.touch {
+            self.edit = Some(TouchEdit::new(t.clone()));
+            window.request_redraw();
+        }
         self.state
             .handle_platform_output(window, std::mem::take(&mut out.platform_output));
         let delay = out
@@ -111,8 +167,15 @@ impl PortMenu {
     }
 }
 
-fn menu_ui(ctx: &egui::Context, lang: Lang, pad: Option<&str>) -> Option<Action> {
+// The menu box; also whether the layout editor was asked for (`touch`: the overlay is on).
+fn menu_ui(
+    ctx: &egui::Context,
+    lang: Lang,
+    pad: Option<&str>,
+    touch: bool,
+) -> (Option<Action>, bool) {
     let mut act = None;
+    let mut edit = false;
     let screen = ctx.content_rect();
     ctx.layer_painter(LayerId::new(Order::Background, Id::unique("dim")))
         .rect_filled(screen, 0.0, Color32::from_black_alpha(150));
@@ -131,6 +194,10 @@ fn menu_ui(ctx: &egui::Context, lang: Lang, pad: Option<&str>) -> Option<Action>
                         if ui.button(RichText::new(resume).strong()).clicked() {
                             act = Some(Action::Resume);
                         }
+                        if touch {
+                            ui.add_space(4.0);
+                            edit = ui.button(i18n::ui(lang, "touch_edit")).clicked();
+                        }
                         ui.add_space(4.0);
                         let keys = if cfg!(target_os = "android") {
                             i18n::ui(lang, "key_back")
@@ -144,7 +211,7 @@ fn menu_ui(ctx: &egui::Context, lang: Lang, pad: Option<&str>) -> Option<Action>
                     });
                 });
         });
-    act
+    (act, edit)
 }
 
 fn paint(

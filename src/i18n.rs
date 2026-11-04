@@ -160,6 +160,19 @@ pub const UI: &[(&str, &str)] = &[
     ("key_back", "Back"),
     ("controller", "Controller: {name}"),
     ("no_controller", "none"),
+    ("touch_edit", "Touch controls layout"),
+    (
+        "touch_hint",
+        "Drag a control to move it; pinch or the slider resizes it",
+    ),
+    ("touch_landscape", "Landscape layout"),
+    ("touch_portrait", "Portrait layout"),
+    ("touch_size", "Size"),
+    ("touch_opacity", "Opacity"),
+    ("touch_shown", "Shown"),
+    ("touch_reset", "Reset layout"),
+    ("cancel", "Cancel"),
+    ("save", "Save"),
 ];
 
 type Table = HashMap<String, String>;

@@ -14,9 +14,9 @@ pub struct TouchOverlay {
     free: Vec<egui::TextureId>,
 }
 
-fn label(c: Ctl) -> &'static str {
+pub(crate) fn label(c: Ctl) -> &'static str {
     match c {
-        Ctl::Move => "",
+        Ctl::Move => "MOVE",
         Ctl::Shot => "SHOT",
         Ctl::Bomb => "BOMB",
         Ctl::Focus => "FOCUS",
@@ -32,13 +32,31 @@ fn pos(p: [f32; 2]) -> Pos2 {
 
 // White / accent with alpha `a` (0–1).
 #[expect(clippy::cast_sign_loss, reason = "alpha is clamped to 0–1 first")]
-fn white(a: f32) -> Color32 {
+pub(crate) fn white(a: f32) -> Color32 {
     Color32::from_white_alpha((a.clamp(0.0, 1.0) * 255.0) as u8)
 }
 
 #[expect(clippy::cast_sign_loss, reason = "alpha is clamped to 0–1 first")]
-fn accent(a: f32) -> Color32 {
+pub(crate) fn accent(a: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(255, 120, 160, (a.clamp(0.0, 1.0) * 255.0) as u8)
+}
+
+// One button: a circle of radius `r` with its label, alpha `a`, accent fill when lit.
+pub(crate) fn button(p: &egui::Painter, centre: Pos2, r: f32, ctl: Ctl, a: f32, lit: bool) {
+    let fill = if lit {
+        accent(a * 0.7)
+    } else {
+        white(a * 0.18)
+    };
+    p.circle(centre, r, fill, Stroke::new(2.0, white(a * 0.8)));
+    let size = (r * 0.42).clamp(8.0, 28.0);
+    p.text(
+        centre,
+        Align2::CENTER_CENTER,
+        label(ctl),
+        FontId::proportional(size),
+        white(a.max(0.3) * 1.6),
+    );
 }
 
 impl TouchOverlay {
@@ -58,21 +76,7 @@ impl TouchOverlay {
                     // The movement zone is invisible (it covers part of the game picture); only the finger / stick shows.
                     continue;
                 }
-                let r = c.half[0];
-                let fill = if *lit {
-                    accent(a * 0.7)
-                } else {
-                    white(a * 0.18)
-                };
-                p.circle(centre, r, fill, Stroke::new(2.0, white(a * 0.8)));
-                let size = (r * 0.42).clamp(8.0, 28.0);
-                p.text(
-                    centre,
-                    Align2::CENTER_CENTER,
-                    label(c.ctl),
-                    FontId::proportional(size),
-                    white(a.max(0.3) * 1.6),
-                );
+                button(&p, centre, c.half[0], c.ctl, a, *lit);
             }
             if let Some((centre, finger, r)) = v.finger {
                 let a = v.opacity;
