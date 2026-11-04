@@ -11,8 +11,9 @@ use crate::text::Overflow;
 #[derive(Clone, Debug, Default)]
 pub struct PackText {
     pub db: TextDb,
-    // TTF / OTF bytes of the pack's text font (FileFont); None = the system font.
-    pub font: Option<Vec<u8>>,
+    // TTF / OTF bytes of the pack's text fonts in chain order (FileFont, `[fonts] text` then `fallback`); empty = the
+    // system font.
+    pub fonts: Vec<Vec<u8>>,
     // `[targets]` of pack.toml; a site not listed uses `Overflow::default()`.
     pub overflow: HashMap<TextSite, Overflow>,
 }

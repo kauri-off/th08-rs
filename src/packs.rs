@@ -72,16 +72,12 @@ pub fn select(s: &Settings) -> Option<Mounted> {
                 log::warn!("pack {}: {w}", m.id);
             }
             log::info!(
-                "pack {} ({}) mounted: {} texts, {} images, font {}",
+                "pack {} ({}) mounted: {} texts, {} images, {} pack fonts",
                 m.id,
                 m.language,
                 m.text.db.len(),
                 m.overlay.len(),
-                if m.text.font.is_some() {
-                    "yes"
-                } else {
-                    "system"
-                }
+                m.text.fonts.len()
             );
             Some(m)
         }
@@ -212,12 +208,23 @@ pub fn mount(files: &[(String, Vec<u8>)], fallback_id: &str) -> anyhow::Result<M
             }
         }
     }
-    let font_name = manifest
-        .get("fonts")
-        .and_then(toml::Value::as_table)
+    // `[fonts] text` = the first font of the chain, `fallback` = the next ones in order (I18N G3).
+    let fonts_t = manifest.get("fonts").and_then(toml::Value::as_table);
+    let mut chain_names: Vec<String> = fonts_t
         .and_then(|t| t.get("text"))
         .and_then(toml::Value::as_str)
-        .map(str::to_ascii_lowercase);
+        .map(str::to_ascii_lowercase)
+        .into_iter()
+        .collect();
+    chain_names.extend(
+        fonts_t
+            .and_then(|t| t.get("fallback"))
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .map(str::to_ascii_lowercase),
+    );
     let mut db = TextDb::new();
     let mut overlay = Overlay::default();
     let mut fonts: Vec<(String, Vec<u8>)> = Vec::new();
@@ -257,20 +264,26 @@ pub fn mount(files: &[(String, Vec<u8>)], fallback_id: &str) -> anyhow::Result<M
             warnings.push(e.to_string());
         }
     }
-    let font = match &font_name {
-        Some(n) => {
-            let f = fonts.iter().find(|f| &f.0 == n).map(|f| f.1.clone());
-            if f.is_none() {
-                warnings.push(format!("[fonts] text = {n:?}: no such file"));
+    let font_list = if chain_names.is_empty() {
+        fonts.first().map(|f| f.1.clone()).into_iter().collect()
+    } else {
+        let mut v = Vec::new();
+        for n in &chain_names {
+            match fonts.iter().find(|f| &f.0 == n) {
+                Some(f) => v.push(f.1.clone()),
+                None => warnings.push(format!("[fonts] {n:?}: no such file")),
             }
-            f
         }
-        None => fonts.first().map(|f| f.1.clone()),
+        v
     };
     Ok(Mounted {
         id: get("id").unwrap_or(fallback_id).to_string(),
         language: get("language").unwrap_or("").to_string(),
-        text: PackText { db, font, overflow },
+        text: PackText {
+            db,
+            fonts: font_list,
+            overflow,
+        },
         overlay: Arc::new(overlay),
         warnings,
     })
@@ -314,6 +327,26 @@ mod tests {
         assert!(w.contains("se_ok00.wav: not a texture"), "{w}");
         assert!(w.contains("bogus"), "{w}");
         assert!(w.contains("spell/0/name: not a string"), "{w}");
+    }
+
+    // `[fonts] text` then `fallback` in order; a missing file is a warning.
+    #[test]
+    fn mount_font_chain() {
+        let files = vec![
+            f(
+                "pack.toml",
+                b"[fonts]\ntext = \"fonts/B.ttf\"\nfallback = [\"fonts/a.otf\", \"fonts/none.ttf\"]\n",
+            ),
+            f("fonts/a.otf", b"A"),
+            f("fonts/B.ttf", b"B"),
+        ];
+        let m = mount(&files, "x").unwrap();
+        assert_eq!(m.text.fonts, [b"B".to_vec(), b"A".to_vec()]);
+        assert!(
+            m.warnings.join("\n").contains("none.ttf"),
+            "{:?}",
+            m.warnings
+        );
     }
 
     #[test]

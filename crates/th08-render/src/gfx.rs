@@ -1932,7 +1932,7 @@ impl Gfx {
     fn do_text(&mut self, t: &th08_core::drawlist::TextCmd) {
         let s = self.pack.db.resolve(&t.key, &t.text);
         let translated = !self.pack.db.is_empty() && s != t.text.decode();
-        let (font, pack_font) = (self.font.as_deref(), &self.pack.font);
+        let (font, pack_font) = (self.font.as_deref(), &self.pack.fonts);
         let raster = self
             .text
             .get_or_insert_with(|| crate::text::Raster::new(font, pack_font.clone()));

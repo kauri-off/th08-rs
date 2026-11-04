@@ -25,5 +25,11 @@ liblzma = { version = "0.4.9", features = ["static", "parallel"] }
 pollster = "1.0.1"
 sha2 = "0.10"
 serde_json = "1"
+# thcrap-import --download (I18N G3): HTTPS GET of thpatch JSON / images, rustls; source date.
+ureq = "3.4"
+jiff = "0.2"
+# thcrap-import: names, licence and glyph coverage of the patch fonts; CRC32 of downloads (files.js).
+ttf-parser = "0.25"
+crc32fast = "1.5"
 # repack: zstd level-19 encoder (C, tool only; the game decodes with ruzstd).
 zstd = "0.13"

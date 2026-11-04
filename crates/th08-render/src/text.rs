@@ -12,8 +12,9 @@ const BASELINE: f32 = 0.86;
 #[derive(Default)]
 pub struct Raster {
     font: Option<ab_glyph::FontVec>,
-    // Presentation-pack FileFont (ARCH_B §1.6, I18N §2.3): translated text only, the system font as fallback.
-    pack: Option<ab_glyph::FontVec>,
+    // Presentation-pack FileFont chain (ARCH_B §1.6, I18N §2.3): translated text only, first font with the glyph
+    // wins, the system font last.
+    pack: Vec<ab_glyph::FontVec>,
 }
 
 // Port-only font search order; TH08_FONT overrides it.
@@ -48,8 +49,8 @@ pub fn file_font(data: Vec<u8>) -> Option<ab_glyph::FontVec> {
 #[cfg(not(target_arch = "wasm32"))]
 impl Raster {
     // `font` = TH08_FONT (`CoreConfig::font`, via `Renderer::set_font`), tried before FONT_PATHS; `pack` = the
-    // mounted pack's font file.
-    pub fn new(font: Option<&str>, pack: Option<Vec<u8>>) -> Self {
+    // mounted pack's font files in chain order.
+    pub fn new(font: Option<&str>, pack: Vec<Vec<u8>>) -> Self {
         let font = font
             .into_iter()
             .chain(FONT_PATHS.iter().copied())
@@ -62,7 +63,7 @@ impl Raster {
         }
         Self {
             font,
-            pack: pack.and_then(file_font),
+            pack: pack.into_iter().filter_map(file_font).collect(),
         }
     }
 
@@ -88,7 +89,29 @@ impl Raster {
         let fonts: Vec<&ab_glyph::FontVec> = self.pack.iter().chain(self.font.iter()).collect();
         glyph_width(&fonts, s, cell)
     }
+
+    // pack-check (I18N G3): the first pack-chain font with a glyph for `ch` (index), and whether the system font has
+    // one (None = no system font).
+    pub fn has_glyph(&self, ch: char) -> (Option<usize>, Option<bool>) {
+        use ab_glyph::Font;
+        let has = |f: &ab_glyph::FontVec| f.glyph_id(ch).0 != 0;
+        (self.pack.iter().position(has), self.font.as_ref().map(has))
+    }
+
+    pub fn pack_fonts(&self) -> usize {
+        self.pack.len()
+    }
+
+    // pack-check: measured width of translated text over the room `render_layout` gives it in a `w`-wide strip of
+    // font size `size` (> 1 = the overflow mode applies; > 1 / MIN_FIT = still too wide after fitting).
+    pub fn fit_ratio(&mut self, s: &str, w: usize, size: usize, (align, x): (Align, f32)) -> f32 {
+        let cell = (2 * size - 2) as f32;
+        self.measure(s, cell) / (2.0 * avail(align, x, w as f32))
+    }
 }
+
+// Smallest fitted scale, for pack-check (`fit_ratio` above 1 / this is cut even after shrink / squeeze).
+pub const MIN_FIT_SCALE: f32 = MIN_FIT;
 
 // One line of translated text in 2× work-surface pixels: glyph cell height, horizontal scale, pen start, cell top.
 struct Run<'a> {
@@ -186,17 +209,17 @@ pub struct Raster {
         web_sys::HtmlCanvasElement,
         web_sys::CanvasRenderingContext2d,
     )>,
-    // Presentation-pack FileFont: the same pixels as native for translated text (ARCH_B §1.6).
-    pack: Option<ab_glyph::FontVec>,
+    // Presentation-pack FileFont chain: the same pixels as native for translated text (ARCH_B §1.6).
+    pack: Vec<ab_glyph::FontVec>,
 }
 
 #[cfg(target_arch = "wasm32")]
 impl Raster {
     // The browser's canvas font; TH08_FONT is native only.
-    pub fn new(_font: Option<&str>, pack: Option<Vec<u8>>) -> Self {
+    pub fn new(_font: Option<&str>, pack: Vec<Vec<u8>>) -> Self {
         Self {
             canvas: None,
-            pack: pack.and_then(file_font),
+            pack: pack.into_iter().filter_map(file_font).collect(),
         }
     }
 
@@ -255,19 +278,21 @@ impl Raster {
     }
 
     fn mask_runs(&mut self, runs: &[Run], w: usize, h: usize) -> Vec<u8> {
-        let Some(font) = &self.pack else {
+        if self.pack.is_empty() {
             return self.canvas_runs(runs, w, h);
-        };
+        }
+        let fonts: Vec<&ab_glyph::FontVec> = self.pack.iter().collect();
         let mut out = vec![0u8; w * h];
         for r in runs {
-            glyph_mask(&[font], r, &mut out, w, h);
+            glyph_mask(&fonts, r, &mut out, w, h);
         }
         out
     }
 
     fn measure(&mut self, s: &str, cell: f32) -> f32 {
-        if let Some(font) = &self.pack {
-            return glyph_width(&[font], s, cell);
+        if !self.pack.is_empty() {
+            let fonts: Vec<&ab_glyph::FontVec> = self.pack.iter().collect();
+            return glyph_width(&fonts, s, cell);
         }
         let Some(ctx) = self.ctx(1, 1) else {
             return 0.0;
@@ -591,7 +616,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layout_right_aligns_by_measured_width() {
-        let mut r = Raster::new(None, None);
+        let mut r = Raster::new(None, Vec::new());
         if r.font.is_none() {
             return;
         }

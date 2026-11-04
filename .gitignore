@@ -18,3 +18,10 @@ specs/data/drawlog/demos/*.drawlog.xz
 !/packaging/**/*.png
 /CLAUDE.local.md
 /tools/fmath_xplat/target/
+# I18N G3: thcrap-import caches and packs (default under /target); never commit anything from thpatch.
+*.jpeg
+*.bmp
+*.webp
+/packs/
+/thcrap/
+lang_*/
