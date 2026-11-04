@@ -172,6 +172,11 @@ def cmd_submit(a):
     if kind not in WEIGHT or prio not in ("high", "normal") or not a: die(__doc__, 2)
     if not os.path.isdir(cwd): die(f"submit: no directory {cwd}")
     env = dict(os.environ)
+    try:  # local paths (gitignored, so missing in worktrees) from the main checkout
+        for ln in open(f"{MAIN}/packaging/local/local.env"):
+            k, eq, v = ln.strip().partition("=")
+            if eq and k and not k.startswith("#"): env.setdefault(k, v)
+    except OSError: pass
     env.setdefault("J", str(max(2, 16 * WEIGHT[kind] // CAP)))
     i = time.strftime("%Y%m%d-%H%M%S") + "-" + "".join(random.choices("0123456789abcdef", k=4))
     d = jdir(i)
@@ -188,7 +193,7 @@ def cmd_submit(a):
                         "submit": job["submit"], "label": label, "cwd": cwd, "pid": None}
     cpu = os.cpu_count() * 75  # 75 % of the machine + nice 10
     r = subprocess.run(["systemd-run", "--user", "-q", "--collect", "--unit", job["unit"], f"--working-directory={QDIR}",
-                        "--description", f"th08 queue {kind} {label}", "-p", "Nice=10", "-p", f"CPUQuota={cpu}%",
+                        "--description", f"th08 queue {kind} {label}", "-p", "Nice=10", "-p", f"CPUQuota={cpu}%", "-p", "LimitCORE=0",
                         "-E", f"QDIR={QDIR}", "-E", f"QLOCK={QLOCK}", "-E", f"QPOLL={POLL}",
                         "/usr/bin/python3", "-I", f"{d}/runner.py", "_run", i], capture_output=True, text=True)
     if r.returncode:
