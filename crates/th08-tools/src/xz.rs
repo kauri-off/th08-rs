@@ -1,4 +1,4 @@
-//! `.xz` file reading and writing for draw logs and session traces (port tooling, native only; liblzma).
+//! `.xz` file reading and writing for draw logs and session traces (native only; liblzma).
 
 use liblzma::read::XzDecoder;
 use liblzma::stream::{Check, MtStreamBuilder};
@@ -20,7 +20,7 @@ pub fn read_to_string(path: &Path) -> std::io::Result<String> {
     Ok(s)
 }
 
-// Preset 1 on all cores (the former `xz -1 -T0`); the stream is finished when the writer is dropped or `finish`ed.
+// Preset 1 on all cores (`xz -1 -T0`); the stream is finished when the writer is dropped or `finish`ed.
 pub type Writer = BufWriter<XzEncoder<File>>;
 
 pub fn create(path: &Path) -> std::io::Result<Writer> {

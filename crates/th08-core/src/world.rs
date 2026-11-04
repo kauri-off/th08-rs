@@ -1,5 +1,4 @@
-//! Deterministic game state of the original's globals (ARCH_A §2.3 `World`, STEP9_WORLD.md 9h): everything a frame's
-//! calc and draw chains read and write; `Ctx` adds only the IO / output side (renderer, host, recorder, audio, tools).
+//! Deterministic game state of the original's globals: everything a frame's calc and draw chains read and write.
 
 use crate::anmmgr::AnmManager;
 use crate::input::Input;
@@ -11,11 +10,11 @@ pub(crate) const SKIP_START: i8 = -4;
 #[derive(Clone)]
 pub struct World {
     pub input: Input,
-    // ANM manager (03 §2.4, 05 §8); its clone shares the parsed scripts (`Arc`, copy on write) and texture handles.
+    // ANM manager (03 §2.4); its clone shares the parsed scripts (`Arc`, copy on write) and texture handles.
     pub anm: AnmManager,
     // The game RNG g_Rng 0x164D520 (11 §1); every draw site keeps the original's order.
     pub rng: crate::rng::Rng,
-    // funcChain (00 §2, 9h part 1: `Node` payload).
+    // funcChain (00 §2) of `Node` payloads.
     pub tasks: Tasks<crate::chain::Node>,
     // Port count of executed calc steps (debug tools, TH08_SHOT, sound log stamps); not an original counter.
     pub frame: u64,
@@ -23,7 +22,7 @@ pub struct World {
     pub ascii: crate::ascii::Queue,
     // Sound manager SE queue (13 §1.2), flushed by `sound_update`.
     pub sound: crate::sound::Queue,
-    // Sound manager BGM state + the frame's `SoundCmd` output (02 §4–§5, 13 §1.3), executed by `Ctx.audio`.
+    // Sound manager BGM state + the frame's `SoundCmd` output (13 §1.3), executed by `Ctx.audio`.
     pub bgm: crate::sound::Bgm,
     // Effect manager g_EffectMgr 0x4ECE60 (13 §2).
     pub effects: crate::effect::Effects,
@@ -33,18 +32,18 @@ pub struct World {
     pub panel: crate::hud::Panel,
     // HUD impl block kept between Hud_OnRemove and the next Hud_Load (12 §5.1a).
     pub hud_kept: Option<crate::hud::Kept>,
-    // Player 0x17D5EF8 (09 §1): created by GameManager_Register, dropped with the game manager by the scene switch
-    // (11 §7). A `World` field next to the GM so `sys!` can lend it with the other fields (STEP9_WORLD.md 9a).
+    // Player 0x17D5EF8 (09 §1): created by GameManager_Register, dropped with the game manager by the scene switch;
+    // a `World` field next to the GM so `sys!` can lend it with the other fields.
     pub player: Option<Box<crate::player::Player>>,
     // Bullet manager 0xF54E90 (08 §2), with the item manager it holds: created by GameMgr's stage start (11 §3.1),
-    // replaced by the next one, dropped with the game manager (11 §7).
+    // replaced by the next one, dropped with the game manager.
     pub bullets: Option<Box<crate::bullet::BulletManager>>,
-    // Enemy manager 0x577F20 (07 §4): created by GameMgr's stage start (11 §3.1), dropped with the game manager (11 §7).
+    // Enemy manager 0x577F20 (07 §4): created by GameMgr's stage start, dropped with the game manager.
     pub enemies: Option<Box<crate::enemy::EnemyManager>>,
-    // Stage g_Stage 0x4E4030 (06 §3): created by GameMgr's stage start (11 §3.1), dropped with the game manager (11 §7).
+    // Stage g_Stage 0x4E4030 (06 §3): created by GameMgr's stage start, dropped with the game manager.
     pub stage: Option<Box<crate::stage::Stage>>,
-    // HUD g_Hud 0x160F428 (12 §5) and spell manager g_Gui 0x4EA670 (12 §5.8): registered by GameMgr's stage start
-    // (11 §3.1), dropped with the game manager (11 §7).
+    // HUD g_Hud 0x160F428 (12 §5) and spell manager g_Gui 0x4EA670 (12 §5.8): registered by GameMgr's stage start,
+    // dropped with the game manager.
     pub hud: Option<Box<crate::hud::Hud>>,
     pub gui: Option<Box<crate::gui::Gui>>,
     // Dialogue state at HudImpl+0x21814 (10 §3), created with the HUD; read by the ECL (`Sys.msg`) and GameMgr_Calc.
@@ -52,7 +51,7 @@ pub struct World {
     // Game manager 0x164D0B0 (11 §2–§4) with its replay object: created by GameManager_Register, dropped by the
     // scene switch (11 §7).
     pub gm: Option<Box<crate::gamemgr::GameManager>>,
-    // Supervisor g_Supervisor 0x17CE758 (11 §7, 12 §1), registered at start-up and by a restart (00 §2); its chain
+    // Supervisor g_Supervisor 0x17CE758 (11 §7), registered at start-up and by a restart (00 §2); its chain
     // nodes are `SupervisorTask`.
     pub supervisor: Option<Box<crate::supervisor::Supervisor>>,
     // The registered menu-side scene object (MainMenu, Result, Ending, MusicRoom; 11 §7), switched by the

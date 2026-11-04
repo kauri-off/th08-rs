@@ -1,6 +1,4 @@
-//! Shared value types of the core (ARCH_A §2.4, STEP11 §1.7): angles, D3DCOLOR, slot indices, scene / difficulty /
-//! shot-type enums. Newtypes are `repr(transparent)` and keep the original's raw value; `.0` / `as` at file, trace and
-//! ECL-variable boundaries.
+//! Shared value types of the core: angles, D3DCOLOR, slot indices, scene / difficulty / shot-type enums.
 
 use std::f32::consts::PI;
 
@@ -40,13 +38,13 @@ pub const fn lo8(v: i32) -> u8 {
     v.to_le_bytes()[0]
 }
 
-// Angle in radians, plain f32 arithmetic; each spec'd normalisation is a named fn (`wrap_add` 05 §6.3).
+// Angle in radians, plain f32 arithmetic; each spec'd normalisation is a named fn.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
 pub struct Angle(pub f32);
 
 impl Angle {
-    // Angle_AddNormalize (05 §6.3).
+    // Angle_AddNormalize.
     #[must_use]
     pub fn wrap_add(self, d: f32) -> Self {
         Self(wrap_add(self.0, d))
@@ -79,7 +77,7 @@ impl D3dColor {
     }
 }
 
-// Slot index into a fixed pool (D5): the original's slot number, pools keep their order and free-slot search.
+// Slot index into a fixed pool: the original's slot number, pools keep their order and free-slot search.
 macro_rules! slot_idx {
     ($($(#[$m:meta])* $name:ident($t:ty);)*) => {$(
         $(#[$m])*
@@ -102,19 +100,14 @@ macro_rules! slot_idx {
 }
 
 slot_idx! {
-    // Bullet slot (08 §2).
     BulletIdx(u16);
-    // Laser slot (08 §6).
     LaserIdx(u16);
-    // Enemy slot (07 §4).
     EnemyIdx(u16);
-    // Item slot (08 §8).
     ItemIdx(u16);
-    // Effect slot (13 §2).
     EffectIdx(u16);
-    // ANM file slot of the AnmManager (03 §5).
+    // ANM file slot of the AnmManager.
     AnmSlot(u8);
-    // Sound-effect id (13 §1).
+    // Sound-effect id.
     SeId(u8);
 }
 
@@ -206,18 +199,18 @@ pub enum ShotType {
 }
 
 impl ShotType {
-    // Team 0–3 of a shot type (09 §2), as `th08_formats::sht::team`.
+    // Team 0–3 of a shot type, as `th08_formats::sht::team`.
     pub const fn team(self) -> u8 {
         let s = self as u8;
         if s < 4 { s } else { (s - 4) / 2 }
     }
 
-    // 4–11: one character, no focus swap (09 §2).
+    // 4–11: one character, no focus swap.
     pub const fn is_solo(self) -> bool {
         self as u8 >= 4
     }
 
-    // Low bit of the raw byte: solo youkai, or team 1 / 3 (09 §2, §6.2 respawn script).
+    // Low bit of the raw byte: solo youkai, or team 1 / 3 (09 §6.2 respawn script).
     pub const fn is_odd(self) -> bool {
         self as u8 & 1 == 1
     }

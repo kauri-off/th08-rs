@@ -1,14 +1,4 @@
-//! th08.pak: the port-only content container (docs/arch/ASSETS_FORMAT.md §3.1, not a spec format); each entry holds
-//! the bytes `Archive::read` returns for that th08.dat entry (01 §5–§6), grouped into zstd frames.
-//!
-//! Layout (all LE): 32-byte header | frame data | manifest. Header: magic `T8PK`, version u32, kind u32, manifest
-//! length u32, manifest offset u64, first 8 bytes of the manifest's sha256. Manifest: u32 frame count, per frame
-//! (codec u8, offset u64, stored length u64, decoded size u64); u32 entry count, per entry (name length u16, name,
-//! layer u8, frame u32, offset u64 and size u64 inside the decoded frame, sha256 of the entry's bytes). A BGM pack
-//! (kind 2, thbgm.pak, AS2) holds one Ogg Vorbis stream per thbgm.fmt track as a `Vorbis` frame (decoded by the audio
-//! crate); its entry's size is `loop_end`·4 and its sha256 is that of the track's PCM `[0, loop_end)` in thbgm.dat
-//! (02 §1–§2). Its manifest ends with the thbgm.dat trailer: the original 16-byte header (02 §1), the file's length
-//! u64 and sha256.
+//! th08.pak / thbgm.pak: the port's zstd-framed content container holding th08.dat entries or BGM tracks.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +8,9 @@ use sha2::{Digest, Sha256};
 
 use crate::reader::{Reader, Truncated};
 
+// Layout (LE): 32-byte header (magic, version, kind, manifest length u32 + offset u64, sha256[..8] of the manifest),
+// frame data, manifest: frames (codec, offset, stored length, decoded size), entries (name, layer, frame, offset,
+// size, sha256). A BGM pack holds one Ogg Vorbis stream per track and ends with the thbgm.dat trailer.
 pub const MAGIC: &[u8; 4] = b"T8PK";
 pub const VERSION: u32 = 1;
 pub const HEADER_LEN: usize = 32;
@@ -53,7 +46,7 @@ pub enum Kind {
     Bgm = 2,
 }
 
-// ARCH_B §1.2 layers: Logic entries feed the game state (and the fingerprint), Present ones only pixels/samples.
+// Layers: Logic entries feed the game state (and the fingerprint), Present ones only pixels/samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layer {
     Logic = 0,
@@ -68,7 +61,7 @@ pub enum Codec {
     Vorbis = 2,
 }
 
-// Layer of a th08.dat entry by name (ASSETS_FORMAT §1.1): jpg/png surfaces, se_*.wav and .mid are presentation-only;
+// Layer of a th08.dat entry by name: jpg/png surfaces, se_*.wav and .mid are presentation-only;
 // everything else (.anm, .ecl, .std, msg*.dat, .sht, .end, .rpy, .fmt, .ver, .txt) is read by logic.
 pub fn layer_of(name: &str) -> Layer {
     let ext = name.rsplit_once('.').map_or("", |(_, e)| e);
@@ -97,7 +90,7 @@ pub struct Frame {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
-    // Lower-case, as `Archive::names` (01 §5 lookups are case-insensitive).
+    // Lower-case, as `Archive::names` (lookups are case-insensitive).
     pub name: String,
     pub layer: Layer,
     pub frame: u32,
@@ -107,7 +100,7 @@ pub struct Entry {
     pub sha256: [u8; 32],
 }
 
-// BGM pack trailer: what thbgm.dat itself held, so the header probe (02 §1) is answered exactly.
+// BGM pack trailer: what thbgm.dat itself held, so the header probe is answered exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BgmInfo {
     pub header: [u8; 16],
@@ -382,9 +375,8 @@ impl Pack {
     }
 }
 
-// Writer (repack tool and tests): files in order, grouped into frames by extension (first-appearance order), a frame
-// closed before it would exceed `frame_limit` decoded bytes; a file never spans frames. `compress` makes one zstd
-// frame; a frame that does not shrink is stored.
+// Writer (repack tool and tests): files grouped into frames by extension (first-appearance order), a frame closed
+// before it would exceed `frame_limit` decoded bytes; a file never spans frames; a frame that does not shrink is stored.
 pub fn write(
     kind: Kind,
     files: &[(&str, &[u8])],

@@ -23,7 +23,7 @@ pub enum ArchiveError {
 
 pub type Result<T> = std::result::Result<T, ArchiveError>;
 
-// decrypt() parameters of 01 §2: start key, key step (both mod 256), block size and byte limit.
+// decrypt() parameters: start key, key step (both mod 256), block size and byte limit.
 struct CipherKey {
     key: u8,
     step: u8,
@@ -40,11 +40,11 @@ const fn ck(key: u8, step: u8, block: usize, limit: usize) -> CipherKey {
     }
 }
 
-// 01 §4 (header dwords at +4) and 01 §5 (file table, before LZSS).
+// Header dwords at +4 (01 §4) and the file table, before LZSS (01 §5).
 const HEADER_KEY: CipherKey = ck(0x1b, 0x37, 0x0c, 0x400);
 const TABLE_KEY: CipherKey = ck(0x3e, 0x9b, 0x80, 0x400);
 
-// edz type char → cipher, table at exe 0x4C78E0 (01 §6); 'M' and '*' are unused by th08.dat.
+// edz type char → cipher, table at exe 0x4C78E0; 'M' and '*' are unused by th08.dat.
 fn payload_key(tag: u8) -> Option<CipherKey> {
     Some(match tag {
         b'M' => ck(0x1b, 0x37, 0x40, 0x2800),
@@ -63,7 +63,7 @@ fn decrypt(src: &[u8], k: &CipherKey) -> Vec<u8> {
     crypt(src, k, false)
 }
 
-// Crypt_XorBlockReverse 0x43E1D0 (01 §2), also used by score.dat (15 §2.1); encrypt 0x43E4A0 is the inverse permutation.
+// Crypt_XorBlockReverse 0x43E1D0, also used by score.dat (15 §2.1); encrypt 0x43E4A0 is the inverse permutation.
 pub fn block_decrypt(src: &[u8], key: u8, step: u8, block: usize, limit: usize) -> Vec<u8> {
     crypt(src, &ck(key, step, block, limit), false)
 }
@@ -72,7 +72,7 @@ pub fn block_encrypt(src: &[u8], key: u8, step: u8, block: usize, limit: usize) 
     crypt(src, &ck(key, step, block, limit), true)
 }
 
-// 01 §2 steps 1–4: the key runs on across blocks; the tail and bytes past `limit` are copied as-is.
+// The key runs on across blocks; the tail and bytes past `limit` are copied as-is.
 fn crypt(src: &[u8], k: &CipherKey, enc: bool) -> Vec<u8> {
     let len = src.len();
     let mut out = src.to_vec();
@@ -108,7 +108,6 @@ fn crypt(src: &[u8], k: &CipherKey, enc: bool) -> Vec<u8> {
     out
 }
 
-// MSB-first bit reader (01 §3).
 struct Bits<'a> {
     data: &'a [u8],
     pos: usize,
@@ -135,8 +134,8 @@ impl Bits<'_> {
     }
 }
 
-// Lzss_Decompress 0x4740E0 (01 §3): 0x2000-byte dictionary, cursor starts at 1, 13-bit offset / 4-bit length+3.
-// The original never re-clears its global dictionary; 01 §3 says clearing it per call is byte-exact.
+// Lzss_Decompress 0x4740E0: 0x2000-byte dictionary, cursor starts at 1, 13-bit offset / 4-bit length+3.
+// The original never re-clears its global dictionary; clearing it per call is byte-exact.
 pub fn lzss_decompress(input: &[u8], size_hint: usize) -> Vec<u8> {
     let mut ring = [0u8; 0x2000];
     let mut rp = 1usize;
@@ -196,7 +195,7 @@ impl BitWriter {
 }
 
 // LZSS encoder producing streams `lzss_decompress` reads back (greedy, hash chains over 3-byte prefixes).
-// 01 §3: any valid stream is compatible with the decoder; byte-identical output is not required.
+// Any valid stream is compatible with the decoder; byte-identical output is not required.
 pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
     const WINDOW: usize = 0x2000 - 18;
     let mut w = BitWriter {
@@ -217,7 +216,7 @@ pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
                 if i - j > WINDOW {
                     break;
                 }
-                // Offset 0 is the end marker (01 §3), so a match at dictionary position 0 cannot be coded.
+                // Offset 0 is the end marker, so a match at dictionary position 0 cannot be coded.
                 if (j + 1) & 0x1fff == 0 {
                     continue;
                 }
@@ -257,7 +256,7 @@ pub fn lzss_compress(input: &[u8]) -> Vec<u8> {
     w.out
 }
 
-// File-table entry (01 §5): absolute data offset, decompressed size incl. the 4-byte edz wrapper, and the next
+// File-table entry: absolute data offset, decompressed size incl. the 4-byte edz wrapper, and the next
 // entry's offset (the table offset for the last one) as the end of the compressed data.
 struct Entry {
     offset: usize,
@@ -271,7 +270,7 @@ pub struct Archive {
     names: Vec<String>,
 }
 
-// 01 §4: the header dwords are stored biased (count + 123456, table offset + 345678, table size + 567891).
+// Header dwords are stored biased (count + 123456, table offset + 345678, table size + 567891).
 const COUNT_BIAS: u32 = 123_456;
 const TABLE_OFF_BIAS: u32 = 345_678;
 const TABLE_SIZE_BIAS: u32 = 567_891;
@@ -282,7 +281,7 @@ impl Archive {
             return Err(ArchiveError::NotPbgz);
         }
         let hdr = decrypt(&data[4..16], &HEADER_KEY);
-        // 01 §4: the open fails unless count > 0 and table offset < file size (signed count).
+        // The open fails unless count > 0 and table offset < file size (signed count).
         let count = u32_at(&hdr, 0).wrapping_sub(COUNT_BIAS).cast_signed();
         let table_off = u32_at(&hdr, 4).wrapping_sub(TABLE_OFF_BIAS) as usize;
         let table_size = u32_at(&hdr, 8).wrapping_sub(TABLE_SIZE_BIAS) as usize;
@@ -298,7 +297,7 @@ impl Archive {
                 .get(p..)
                 .and_then(|t| t.iter().position(|&c| c == 0))
                 .ok_or(ArchiveError::BadTable)?;
-            // PbgArchive_FindEntry 0x474C70 compares names case-insensitively (01 §5).
+            // PbgArchive_FindEntry 0x474C70 compares names case-insensitively.
             let name = String::from_utf8_lossy(&table[p..p + nul]).to_ascii_lowercase();
             p += nul + 1;
             let mut r = Reader::at(&table, p);
@@ -325,11 +324,11 @@ impl Archive {
         &self.names
     }
 
-    // FileSystem_OpenFile 0x43E660, archive path (01 §6, §7): LZSS, then the edz type cipher; the wrapper is dropped.
-    // Callers pass bare names; the original strips any directory part before the lookup (01 §5).
+    // FileSystem_OpenFile 0x43E660, archive path: LZSS, then the edz type cipher; the wrapper is dropped.
+    // Callers pass bare names; the original strips any directory part before the lookup.
     pub fn read(&self, name: &str) -> Result<Vec<u8>> {
         let file = self.read_stored(name)?;
-        // 01 §6 step 4: without `edz` + a known type char the data is used as-is.
+        // Without `edz` + a known type char the data is used as-is.
         match file.get(..4) {
             Some([b'e', b'd', b'z', t]) => match payload_key(*t) {
                 Some(k) => Ok(decrypt(&file[4..], &k)),
@@ -339,7 +338,7 @@ impl Archive {
         }
     }
 
-    // The entry as stored after LZSS (01 §6 steps 1–3), `edz` wrapper and payload cipher intact; input for `pack`.
+    // The entry as stored after LZSS, `edz` wrapper and payload cipher intact; input for `pack`.
     pub fn read_stored(&self, name: &str) -> Result<Vec<u8>> {
         let e = self
             .entries
@@ -349,7 +348,7 @@ impl Archive {
     }
 }
 
-// `edz` wrapper of 01 §6: "edz" + type char, then the payload under that type's cipher; None for an unknown type.
+// `edz` wrapper: "edz" + type char, then the payload under that type's cipher; None for an unknown type.
 pub fn wrap_edz(tag: u8, payload: &[u8]) -> Option<Vec<u8>> {
     let k = payload_key(tag)?;
     let mut out = vec![b'e', b'd', b'z', tag];
@@ -357,9 +356,8 @@ pub fn wrap_edz(tag: u8, payload: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-// PBGZ writer (01 §4–§5): stored bytes (see `read_stored` / `wrap_edz`) LZSS-compressed in order, then the
-// encrypted file table, then the biased header dwords. Any valid layout loads; byte-identical output to th08.dat
-// is not a goal (01 §3).
+// PBGZ writer: stored bytes (see `read_stored` / `wrap_edz`) LZSS-compressed in order, then the encrypted
+// file table, then the biased header dwords. Any valid layout loads; byte-identical output is not a goal.
 pub fn pack(files: &[(&str, &[u8])]) -> Vec<u8> {
     pack_with(files.len() as u32, 0, files)
 }
@@ -444,7 +442,7 @@ mod tests {
         assert_eq!(a.read("x").unwrap(), b"ed");
     }
 
-    // 01 §4–§6: pack → load gives every file back, wrapped ones decrypted.
+    // Pack → load gives every file back, wrapped ones decrypted.
     #[test]
     fn pack_round_trip() {
         let body = b"payload under the J cipher ".repeat(300);

@@ -1,5 +1,4 @@
-//! Port menu (F1 / Android Back / resume from the background, ARCH_D_MOBILE §5): an egui pass over the held game's
-//! last frame (`Gfx::present_last`), dimmed. Port-only UI, no spec section.
+//! Port menu (F1 / Android Back / resume from the background): an egui pass over the held game's dimmed last frame.
 
 use crate::i18n::{self, Lang};
 use crate::launcher::{self, Action};

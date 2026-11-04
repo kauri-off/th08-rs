@@ -1,4 +1,4 @@
-//! Window and message loop (00 §1, §2: WinMain 0x4418C0, `Frame_Run` 0x441E70 pacing) on winit; plus debug run modes.
+//! Window and message loop on winit (00 §1, §2: WinMain 0x4418C0, `Frame_Run` 0x441E70 pacing); plus debug run modes.
 
 use crate::launcher::{Action, Folder, Screen, View};
 use crate::pacer::{Pacer, Tick};
@@ -31,10 +31,9 @@ struct Ui {
     screen: Screen,
 }
 
-// The port shell around the game (port UI, no spec section). Transitions:
-// Loading(device) → Setup | Loading(game); Setup → Loading(game) on Play; Loading(game) → Running | Error;
-// Error → Setup on Back; Running ⇄ PortMenu on F1 / Android Back (in a stage) and Running → PortMenu on a resume
-// from the background (in a stage); Quit / close from any state.
+// The port shell around the game. Loading(device) → Setup | Loading(game); Setup → Loading(game) on Play;
+// Loading(game) → Running | Error; Error → Setup on Back; Running ⇄ PortMenu on F1 / Android Back / a resume from
+// the background (in a stage); Quit / close from any state.
 enum Shell {
     // The launcher screen (also the saved `launcher = off` wait).
     Setup(Box<Ui>),
@@ -86,9 +85,8 @@ struct App {
     suspended: bool,
     // Last safe-area read (`refresh_safe`).
     safe_at: Option<Instant>,
-    // Window focus, and whether audio pauses while unfocused: always on Android (focus goes at Home / recents,
-    // before `Suspended` = surface destroyed); desktop opt-in `TH08_PAUSE_AUDIO_UNFOCUSED`, default off (its
-    // launcher row waits for the settings table).
+    // Window focus, and whether audio pauses while unfocused: always on Android (focus goes at Home / recents, before
+    // `Suspended`); desktop opt-in `TH08_PAUSE_AUDIO_UNFOCUSED`, default off.
     focus: Focus,
     display: Display,
 }
@@ -115,7 +113,7 @@ struct Display {
 }
 
 async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Running>> {
-    // `TH08_DRAWLOG`: the draw log writer is opened here and passed in (STEP10_CRATES 10a).
+    // `TH08_DRAWLOG`: the draw log writer is opened here and passed in.
     #[cfg(not(target_arch = "wasm32"))]
     let drawlog = s.drawlog.as_deref().and_then(open_drawlog);
     #[cfg(target_arch = "wasm32")]
@@ -165,9 +163,8 @@ impl ApplicationHandler<UserEvent> for App {
         });
     }
 
-    // ARCH_D §5: the native window is gone (Android home / screen off); drop the surface, freeze logic, pause audio
-    // and write score.dat from a World clone (the process may be killed in the background; a live save would draw
-    // RNG, rule ARCH_D §6.1 item 3).
+    // The native window is gone (Android home / screen off): drop the surface, freeze logic, pause audio and write
+    // score.dat from a World clone (the process may be killed in the background; a live save would draw RNG).
     fn suspended(&mut self, _: &ActiveEventLoop) {
         log::info!("lifecycle: suspended");
         self.suspended = true;
@@ -189,7 +186,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Ready(mut r) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 r.ctx.start();
-                // Touch overlay (ARCH_D §3.5): drawn by the renderer after the blit.
+                // Touch overlay: drawn by the renderer after the blit.
                 if r.settings.touch.active() {
                     gfx(&mut r.ctx).overlay =
                         Some(Box::<crate::platform::overlay::TouchOverlay>::default());
@@ -359,7 +356,7 @@ impl App {
         Box::new(Ui { gfx, screen })
     }
 
-    // A second `Resumed` (ARCH_D §5): a new surface for the native window on the same device. In a stage the port
+    // A second `Resumed`: a new surface for the native window on the same device. In a stage the port
     // menu opens over the last frame (the player is not dropped into live play); elsewhere the pacer deadline restarts
     // at now (no catch-up). Audio resumes unless the port menu holds the game.
     fn reattach(&mut self) {
@@ -807,7 +804,7 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
         if shot.is_some_and(|f| r.ctx.w.frame >= f) && turbo > 0 {
             break;
         }
-        // Touch drag steers towards the player's position of this frame (a read between frames, ARCH_D §3.2).
+        // Touch drag steers towards the player's position of this frame (a read between frames).
         if touch {
             let scene = crate::platform::touch::TouchScene::of(&r.ctx.w);
             if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
@@ -925,7 +922,7 @@ fn window_attrs(scale: u32, fullscreen: bool) -> winit::window::WindowAttributes
     attrs
 }
 
-// Native start-up blocks on the future (as before the launcher); web runs it on the JS event loop.
+// Native start-up blocks on the future; web runs it on the JS event loop.
 fn spawn(fut: impl std::future::Future<Output = ()> + 'static) {
     #[cfg(not(target_arch = "wasm32"))]
     pollster::block_on(fut);
@@ -944,7 +941,7 @@ pub fn run_launcher(source: Option<Source>, s: Settings) {
     run_app(source, s, true);
 }
 
-// Android (ARCH_D §6.3 runs 1–2): the launcher on the NativeActivity's event loop; game files from `source` (bundled
+// Android: the launcher on the NativeActivity's event loop; game files from `source` (bundled
 // APK assets) or, when None, the `game_dir` folder.
 #[cfg(target_os = "android")]
 pub fn run_android(

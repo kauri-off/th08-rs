@@ -3,19 +3,19 @@
 use crate::reader::Reader;
 
 // Pad buttons +0x00…+0x10 in file order (Shot, Bomb, Focus, Pause, Up, Down, Left, Right, Skip): DirectInput button
-// indices, −1 = none. Defaults = the key-config reset table 0x4C78C8 (15 §1.3).
+// indices, −1 = none. Defaults = the key-config reset table 0x4C78C8.
 pub const PAD_DEFAULT: [i16; 9] = [0, 1, 2, 4, -1, -1, -1, -1, 3];
-// +0x14, the only accepted version (15 §1.2).
+// +0x14, the only accepted version.
 pub const VERSION: u32 = 0x80001;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
     pub pad: [i16; 9],
-    // +0x18 / +0x1A DirectInput stick X / Y thresholds (15 §1.1 joystick mapping).
+    // +0x18 / +0x1A DirectInput stick X / Y thresholds.
     pub stick: [i16; 2],
     // +0x1C starting-lives option (< 7).
     pub lives: u8,
-    // +0x1D, unused by the game (reset to 3 by the option "Reset", 15 §1.1).
+    // +0x1D, unused by the game (reset to 3 by the option "Reset").
     pub bombs: u8,
     // +0x1E force 16-bit colour.
     pub colour_mode: u8,
@@ -33,12 +33,12 @@ pub struct Config {
     pub effect_level: u8,
     // +0x25 slow mode.
     pub slow: u8,
-    // +0x26 joystick "shot also focuses" (ShotSlow row of the key config, 15 §1.3).
+    // +0x26 joystick "shot also focuses" (ShotSlow row of the key config).
     pub shot_slow: u8,
     // +0x27 / +0x28, 0..100 (13 §1.3 volume curve).
     pub bgm_volume: u8,
     pub se_volume: u8,
-    // +0x38 debug/driver flags (15 §1.1 table); bit 0 is always forced to 1.
+    // +0x38 debug/driver flags; bit 0 is always forced to 1.
     pub debug_flags: u32,
     // Padding +0x12..+0x14 and unused +0x29..+0x38: never read, kept so the file is written back as loaded.
     pub padding: [u8; 2],
@@ -47,7 +47,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        // 15 §1.1 defaults (music 1 = WAV; 2 when thbgm.dat is missing, `apply_bgm_probe`).
+        // Defaults (music 1 = WAV; 2 when thbgm.dat is missing, `apply_bgm_probe`).
         Self {
             pad: PAD_DEFAULT,
             stick: [600, 600],
@@ -72,7 +72,7 @@ impl Default for Config {
 }
 
 impl Config {
-    // Option item 7 "Reset" (15 §1.3): lives 2, +0x1D 3, music 1, SE 1, slow 0.
+    // Option item 7 "Reset": lives 2, +0x1D 3, music 1, SE 1, slow 0.
     pub fn reset(&mut self) {
         self.lives = 2;
         self.bombs = 3;
@@ -83,7 +83,7 @@ impl Config {
 }
 
 impl Config {
-    // The 60-byte th08.cfg image (15 §1.1), as written to disk and copied into replays (info +0xB4) and HSCR +0x28.
+    // The 60-byte th08.cfg image, as written to disk and copied into replays (info +0xB4) and HSCR +0x28.
     pub fn to_bytes(&self) -> [u8; 60] {
         let mut b = [0u8; 60];
         for (i, v) in self.pad.iter().enumerate() {
@@ -111,13 +111,13 @@ impl Config {
         b
     }
 
-    // Config_Load (15 §1.2): None when the size, version or any byte field is invalid (→ defaults).
+    // Config_Load: None when the size, version or any byte field is invalid (→ defaults).
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         let mut r = Reader::new(b);
         if b.len() != 0x3C || r.seek(0x14).u32().ok()? != VERSION {
             return None;
         }
-        // Valid ranges of bytes +0x1C..+0x26 (15 §1.1 "valid" column).
+        // Valid ranges of bytes +0x1C..+0x26.
         let limits = [7, 4, 2, 3, 2, 6, 2, 3, 3, 2, 2];
         if b[0x1C..0x27].iter().zip(limits).any(|(&v, l)| v >= l) {
             return None;
@@ -162,7 +162,7 @@ impl Config {
 mod tests {
     use super::*;
 
-    // 15 §1.1/§1.2: every field survives a load → save round trip, bit 0 of +0x38 is forced.
+    // Every field survives a load → save round trip, bit 0 of +0x38 is forced.
     #[test]
     fn round_trip() {
         let mut b = Config::default().to_bytes();

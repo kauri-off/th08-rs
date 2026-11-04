@@ -1,4 +1,4 @@
-//! Disassembles an .ecl file: `eclview <th08.dat> <x.ecl> [sub] [-o]`; `-o` adds the decoded `ecl::Op` (07 §7).
+//! Disassembles an .ecl file: `eclview <th08.dat> <x.ecl> [sub] [-o]`; `-o` adds the decoded `ecl::Op`.
 
 use th08_formats::ecl;
 

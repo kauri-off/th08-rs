@@ -2,20 +2,20 @@
 
 use crate::reader::{Reader, u32_at};
 
-// thbgm.fmt record (0x34 bytes, 02 §2); positions are in stereo frames (bytes / 4).
+// thbgm.fmt record (0x34 bytes); positions are in stereo frames (bytes / 4).
 #[derive(Clone, Debug)]
 pub struct Track {
     pub name: String,
     pub offset: u64,
     pub loop_start: usize,
-    // Loop end +0x1C = frames stored in thbgm.dat; +0x14 (full length) is larger and never read (02 §2).
+    // Loop end +0x1C = frames stored in thbgm.dat; +0x14 (full length) is larger and never read.
     pub length: usize,
 }
 
-// thbgm.dat magic "ZWAV" as a little-endian u32 (02 §1).
+// thbgm.dat magic "ZWAV" as a little-endian u32.
 const ZWAV: u32 = u32::from_le_bytes(*b"ZWAV");
 
-// 52-byte records up to the one whose name starts with NUL (02 §2).
+// 52-byte records up to the one whose name starts with NUL.
 pub fn parse_fmt(data: &[u8]) -> Vec<Track> {
     data.as_chunks::<52>()
         .0
@@ -35,7 +35,7 @@ pub fn parse_fmt(data: &[u8]) -> Vec<Track> {
         .collect()
 }
 
-// thbgm.dat header probe made by `Config_Load` (02 §1): "ZWAV", version 1, 0x800.
+// thbgm.dat header probe made by `Config_Load`: "ZWAV", version 1, 0x800.
 pub fn bgm_header_valid(h: &[u8]) -> bool {
     let mut r = Reader::new(h);
     r.u32() == Ok(ZWAV) && r.u32() == Ok(1) && r.u32() == Ok(0x800)

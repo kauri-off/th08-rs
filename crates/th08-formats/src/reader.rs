@@ -1,5 +1,4 @@
-//! Little-endian byte cursor shared by the format parsers (file layouts: 01 §4, 06 §1, 09 §2.1, 10 §2, 15 §1–§3) plus the
-//! fixed-offset accessors of in-memory records whose size is an invariant (score.dat chunks, replay images).
+//! Little-endian byte cursor and fixed-offset record accessors shared by the format parsers.
 
 // A read that runs past the end of the input; `at` is the offset of the first missing byte's read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]

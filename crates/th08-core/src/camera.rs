@@ -1,5 +1,5 @@
 //! View / projection matrices: Camera_Set2D (05 §9), the default and stage cameras (00 §1, 06 §10.1), ANM world matrix.
-// Trig on `fmath` (05 §10, step 11p): draw-only, its vertices differ from the old std sin_cos / tan for |a| > 2.
+// Trig on `fmath` (05 §10).
 
 use crate::drawlist::{Rect, SCREEN_H, SCREEN_W};
 use crate::fmath::{sin_cos_f, tan_f};
@@ -120,7 +120,7 @@ impl Mat4 {
     }
 }
 
-// View and projection of one camera: Camera_Set2D (05 §9) or the stage camera (06 §10.1).
+// View and projection of one camera: Camera_Set2D or the stage camera.
 #[derive(Clone, Copy, Debug)]
 pub struct Camera {
     pub view: Mat4,
@@ -128,7 +128,7 @@ pub struct Camera {
 }
 
 impl Camera {
-    // Default camera (00 §1): FOV π/6, aspect 4/3, near 100, far 10000.
+    // Default camera: FOV π/6, aspect 4/3, near 100, far 10000.
     pub const FOV: f32 = std::f32::consts::PI / 6.0;
     pub const NEAR: f32 = 100.0;
     pub const FAR: f32 = 10000.0;
@@ -142,7 +142,7 @@ impl Camera {
         }
     }
 
-    // Camera_Set2D 0x40B5A0 (05 §9): fovY π/10, near 1, far 10000, up (0, −1, 0); world (x, y, 0) maps to viewport pixel (x, y).
+    // Camera_Set2D 0x40B5A0: fovY π/10, near 1, far 10000, up (0, −1, 0); world (x, y, 0) → viewport pixel (x, y).
     pub fn set_2d(vp: Rect) -> Self {
         let fov = std::f32::consts::PI / 10.0;
         let (cx, cy) = (vp.w / 2.0, vp.h / 2.0);

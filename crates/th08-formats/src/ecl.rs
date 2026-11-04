@@ -1,4 +1,4 @@
-//! ECL file format: header, subs, timelines, instruction signatures (07 §2, §2.1, §2.2, §7).
+//! ECL file format: header, subs, timelines, instruction signatures (07 §2, §7).
 
 #[derive(Debug, thiserror::Error)]
 pub enum EclError {
@@ -14,21 +14,21 @@ pub enum EclError {
 
 pub type Result<T> = std::result::Result<T, EclError>;
 
-// Header dword 0x00 (07 §2): checked, load fails otherwise.
+// Header dword 0x00: checked, load fails otherwise.
 pub const MAGIC: u32 = 0x800;
-// Sub instruction header (07 §2.1): time, opcode, size, unused byte, rank mask, var mask.
+// Sub instruction header: time, opcode, size, unused byte, rank mask, var mask.
 pub const SUB_HEADER: usize = 12;
 
 #[derive(Clone)]
 pub struct Ecl {
     pub data: Vec<u8>,
-    // Sub offsets from file start (07 §2, table at 0x48).
+    // Sub offsets from file start (table at 0x48).
     pub subs: Vec<usize>,
-    // The `ntl` timelines that are run (07 §2: the extra last entry is never run).
+    // The `ntl` timelines that are run (the extra last entry is never run).
     pub timelines: Vec<usize>,
 }
 
-// Byte offset of an instruction from the file start (07 §2: the loader's relocated pointers, kept file-relative).
+// Byte offset of an instruction from the file start (the loader's relocated pointers, kept file-relative).
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EclOff(pub u32);
@@ -38,14 +38,13 @@ impl EclOff {
         self.0 as usize
     }
 
-    // Jump target `this instruction + signed byte offset` (07 §7 op 4); a negative sum wraps like the original's
+    // Jump target `this instruction + signed byte offset` (op 4); a negative sum wraps like the original's
     // pointer add and is never a valid offset.
     pub fn rel(self, d: i32) -> usize {
         (i64::from(self.0) + i64::from(d)).cast_unsigned() as usize
     }
 }
 
-// Sub instruction (07 §2.1).
 #[derive(Clone, Copy, Debug)]
 pub struct Ins {
     pub off: EclOff,
@@ -60,7 +59,7 @@ pub struct Ins {
     pub mask: u16,
 }
 
-// Timeline instruction (07 §2.2): +0 time (< 0 end), +4 op, +6 u8 size, +7 u8 rank mask.
+// Timeline instruction: +0 time (< 0 end), +4 op, +6 u8 size, +7 u8 rank mask.
 #[derive(Clone, Copy, Debug)]
 pub struct TlIns {
     pub off: EclOff,
@@ -78,12 +77,12 @@ fn i16_at(d: &[u8], o: usize) -> Option<i16> {
     Some(i16::from_le_bytes(d.get(o..o + 2)?.try_into().ok()?))
 }
 
-// i16 count clamped to `lo..=hi` (07 §2 header counts).
+// i16 count clamped to `lo..=hi` (header counts).
 fn count(v: i16, lo: i16, hi: i16) -> usize {
     usize::from(v.clamp(lo, hi).cast_unsigned())
 }
 
-// Loader 0x418330 (07 §2): offsets stay file-relative instead of being relocated to pointers.
+// Loader 0x418330: offsets stay file-relative instead of being relocated to pointers.
 pub fn parse(data: Vec<u8>) -> Result<Ecl> {
     if data.len() < 0x48 || u32_at(&data, 0) != Some(MAGIC) {
         return Err(EclError::NotEcl);
@@ -134,7 +133,7 @@ impl Ecl {
         u32_at(&self.data, ins.off.idx() + SUB_HEADER + 4 * k).unwrap_or(0)
     }
 
-    // 07 §6: literal destinations write into the loaded file (shared by every enemy running the instruction).
+    // Literal destinations write into the loaded file (shared by every enemy running the instruction, 07 §6).
     pub fn set_arg(&mut self, ins: &Ins, k: usize, v: u32) {
         let o = ins.off.idx() + SUB_HEADER + 4 * k;
         if o + 4 <= ins.off.idx() + ins.size
@@ -149,7 +148,7 @@ impl Ecl {
         &self.data[o..(o + ins.size).min(self.data.len())]
     }
 
-    // The instruction's opcode with its arguments (07 §7), decoded from the current file bytes.
+    // The instruction's opcode with its arguments, decoded from the current file bytes.
     pub fn op(&self, ins: &Ins) -> Op {
         Op::decode(ins, &self.data)
     }
@@ -176,16 +175,16 @@ impl Ecl {
     }
 }
 
-// --- opcodes (07 §7 table; names are the table's mnemonics) ---
+// --- opcodes (names are the table's mnemonics) ---
 
-// Argument dword k with its var-mask bit (07 §2.1): a literal, or a variable id when `var` (07 §6).
+// Argument dword k with its var-mask bit: a literal, or a variable id when `var` (07 §6).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Arg {
     pub raw: u32,
     pub var: bool,
 }
 
-// Destination argument (07 §7 letters V/W): a writable variable, else the dword in the file at `slot` (07 §6).
+// Destination argument (letters V/W): a writable variable, else the dword in the file at `slot` (07 §6).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Dst {
     pub slot: u8,
@@ -198,7 +197,7 @@ impl Dst {
     }
 }
 
-// Ops 10–29 (07 §7): the op number's last digit (10–14 / 20–24, 15–19 / 25–29).
+// Ops 10–29: the op number's last digit (10–14 / 20–24, 15–19 / 25–29).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Arith {
     Add,
@@ -220,7 +219,7 @@ impl Arith {
     }
 }
 
-// Ops 40–51 (07 §7): ije ijne ijl ijle ijg ijge, int / float pairs.
+// Ops 40–51: ije ijne ijl ijle ijg ijge, int / float pairs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmp {
     Eq,
@@ -231,7 +230,7 @@ pub enum Cmp {
     Ge,
 }
 
-// Ops 90–94 (07 §7, §10.5).
+// Ops 90–94 (07 §10.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpawnKind {
     // 90 child: at (x, y, 0).
@@ -247,13 +246,13 @@ pub enum SpawnKind {
 }
 
 impl SpawnKind {
-    // Ops 90–92 chain the child to the spawner (07 §10.5).
+    // Ops 90–92 chain the child to the spawner.
     pub fn chained(self) -> bool {
         matches!(self, Self::Child | Self::ChildRel | Self::ChildFollow)
     }
 }
 
-// Control flow, calls, threads, interrupts, natives (07 §5.2–§5.5, §7).
+// Control flow, calls, threads, interrupts, natives (07 §5.2–§5.5).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FlowOp {
     // 0, 3, 84, 85.
@@ -324,7 +323,7 @@ pub enum FlowOp {
     TimeAdd(Arg),
 }
 
-// Variable ops (07 §5.6, §6, §7 ops 6–39, 86/87, 166, 169).
+// Variable ops (07 §5.6, §6).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VarOp {
     // 6 / 7.
@@ -441,7 +440,7 @@ pub enum VarOp {
     RandAwayAngle(Dst),
 }
 
-// Movement (07 §7 ops 63–78, 82, 178; §8).
+// Movement (07 §8).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MoveOp {
     SetPos {
@@ -520,7 +519,7 @@ pub enum MoveOp {
     NofireRadius(Arg),
 }
 
-// Enemy state: ANM scripts, flags, children, items, effects, HUD requests (07 §7).
+// Enemy state: ANM scripts, flags, children, items, effects, HUD requests.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EnemyOp {
     // 54 / 58 (`stg`: stgNenm.anm, flags B bit 2).
@@ -565,7 +564,7 @@ pub enum EnemyOp {
     },
     // 124.
     Sfx(Arg),
-    // 128: words 1–4 raw (07 §7 op 128: mask ignored, word 0 unused).
+    // 128: words 1–4 raw (mask ignored, word 0 unused).
     Effect13 {
         axis: [f32; 3],
         radius: f32,
@@ -632,7 +631,7 @@ pub enum EnemyOp {
     Extend181,
 }
 
-// Bullets (07 §7 ops 96–113, 152, 161, 162; §9.1–§9.3).
+// Bullets (07 §9.1–§9.3).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BulletOp {
     // 96–104: the block is the instruction itself (`BulletBlock`).
@@ -678,7 +677,7 @@ pub enum BulletOp {
     CancelRadius(Arg),
 }
 
-// Lasers (07 §7 ops 114–121, 154, 167, 170–172; §9.4).
+// Lasers (07 §9.4).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LaserOp {
     // 114 / 115: the block is the instruction itself (`LaserBlock`); 114 = fixed.
@@ -700,7 +699,7 @@ pub enum LaserOp {
     LaserLen { k: Arg, tail: Arg, head: Arg },
 }
 
-// Boss, spell card, death and timeout (07 §7 ops 95, 122, 123, 127, 129–134, 153, 155, 158, 164, 176, 184; §10–§11).
+// Boss, spell card, death and timeout (07 §10–§11).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BossOp {
     KillAll,
@@ -724,7 +723,7 @@ pub enum BossOp {
     SpellEx(Arg),
 }
 
-// One decoded sub instruction (07 §7). `Unknown` = an op outside the table: ignored (07 §7).
+// One decoded sub instruction. `Unknown` = an op outside the table: ignored.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Op {
     Flow(FlowOp),
@@ -768,12 +767,12 @@ impl Rd<'_> {
 }
 
 impl Op {
-    // Cheap per-execution decode (D6): the file stays writable (07 §6 literal destinations), so it is decoded
-    // from the current bytes each time the instruction runs.
+    // Decoded from the current bytes each time the instruction runs: the file stays writable (07 §6 literal
+    // destinations).
     pub fn decode(ins: &Ins, data: &[u8]) -> Self {
         let r = Rd { d: data, ins };
         let op = ins.op;
-        // One switch on the opcode picks the group, then the group's own switch (07 §7 table rows).
+        // One switch on the opcode picks the group, then the group's own switch.
         match op {
             0..=5 | 40..=53 | 84 | 85 | 88 | 89 | 125 | 126 | 135..=137 | 146 => {
                 FlowOp::decode(op, &r).map(Op::Flow)
@@ -1383,7 +1382,7 @@ impl SpellBlock {
     }
 }
 
-// Argument letters (07 §7): i int, f float, V/W int/float destination, T time, O offset, S sub, r raw;
+// Argument letters: i int, f float, V/W int/float destination, T time, O offset, S sub, r raw;
 // B bullet block (8 dwords, 07 §9.1), L laser block (13, §9.4), C spell block (58, §11).
 pub fn signature(op: i16) -> Option<&'static str> {
     Some(match op {
@@ -1473,7 +1472,7 @@ pub fn ins_size(op: i16) -> Option<usize> {
     Some(SUB_HEADER + 4 * n)
 }
 
-// Timeline instruction sizes by op (07 §3 table args).
+// Timeline instruction sizes by op (07 §3).
 pub fn tl_size(op: i16) -> Option<usize> {
     Some(
         8 + 4 * match op {
@@ -1590,7 +1589,7 @@ mod tests {
         assert!(used.len() > 140, "only {} distinct ops", used.len());
     }
 
-    // Every op of the 07 §7 table decodes to a known `Op`, each argument from its own dword and mask bit.
+    // Every op of the table decodes to a known `Op`, each argument from its own dword and mask bit.
     #[test]
     fn decode_every_table_op() {
         for op in 0..=184i16 {

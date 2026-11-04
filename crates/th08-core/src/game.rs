@@ -8,7 +8,7 @@ use crate::task::{self, Chain, Flow, TaskCtx, Tasks};
 use crate::types::SceneId;
 use anyhow::Context as _;
 
-// The original's globals that every subsystem reaches: the deterministic state in `w` (World, ARCH_A §2.3); the
+// The original's globals that every subsystem reaches: the deterministic state in `w` (World); the
 // IO / output side (device, archive, sound device, host, tool switches) here.
 pub struct Ctx {
     // Deterministic game state (world.rs); subsystems borrow its fields disjointly (`ctx.w.player`, `sys!(ctx.w)`).
@@ -17,7 +17,7 @@ pub struct Ctx {
     pub rec: Recorder,
     // App / tool renderer; core calls it only at the sync points (`Renderer`, drawlist.rs).
     pub renderer: Box<dyn Renderer>,
-    // Game content (th08.dat, 01): logic reads `archive.read`, presentation-only data `archive.present()` (ARCH_B D1).
+    // Game content (th08.dat, 01): logic reads `archive.read`, presentation-only data `archive.present()`.
     pub archive: LogicView,
     // Sound device (app / tool side, `AudioOut`); logic only queues `SoundCmd`s.
     pub audio: Box<dyn AudioOut>,
@@ -31,7 +31,7 @@ pub struct Ctx {
     pub host: Box<dyn crate::host::Host>,
     // Debug draw log writer (drawfmt.rs), passed in by the app / tool (`Io::drawlog`) or `log_to_memory`.
     pub drawlog: Option<crate::drawfmt::Writer>,
-    // Emit switch (ARCH decision 2): off = draw-phase steps only, no draw command recorded (`set_emit`).
+    // Emit switch: off = draw-phase steps only, no draw command recorded (`set_emit`).
     emit: bool,
 }
 
@@ -47,29 +47,25 @@ pub trait AudioOut {
     fn is_started(&self) -> bool;
     // Opens the output stream (on the web: from a user gesture).
     fn ensure_started(&mut self);
-    // Port (ARCH_D_MOBILE §5): output held / restarted by the app (background, port menu); no logic effect.
+    // Port: output held / restarted by the app (background, port menu); no logic effect.
     fn pause(&mut self) {}
     fn resume(&mut self) {}
 }
 
-// The IO side of `Ctx`, built by the app or tool (ARCH decisions 2 / 6).
+// The IO side of `Ctx`, built by the app or tool.
 pub struct Io {
     pub renderer: Box<dyn Renderer>,
     pub audio: Box<dyn AudioOut>,
     pub host: Box<dyn crate::host::Host>,
     // Draw log writer (None = off); `Ctx::load_with` enables the renderer's log when present.
     pub drawlog: Option<crate::drawfmt::Writer>,
-    // Presentation pack images (I18N G2), mounted over `archive.present()` only.
+    // Presentation pack images, mounted over `archive.present()` only.
     pub overlay: Option<std::sync::Arc<crate::content::Overlay>>,
 }
 
-// Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue
-// (13 §1.2), effect manager (13 §2), GM flags word (11 §2.1), rank (11 §2), ascii overlays (13 §4), HUD dirty fields
-// (12 §5.3), bomb area queue (14 §2.13), freeze byte and frames-since-load (13 §3), g_Gui call queue (12 §5.8),
-// g_Rng (11 §1), the player (09 §1; None inside the player's own calc), the bullet manager (08 §2; None inside
-// the bullet calc and the player calc, which hold it), the stage (06 §3; None inside the stage calc), the
-// dialogue (10 §3; None without a HUD). Built by
-// `sys!(ctx.w)` from `World` fields (ARCH_A §2.3).
+// Disjoint borrows of the `Ctx` state that stage subsystems without a `Ctx` read and write mid-frame: SE queue,
+// effects, GM flags, rank, overlays, HUD fields, bomb areas, freeze / load bytes, g_Gui queue, g_Rng, dialogue, and
+// player / bullets / stage, each None while its own calc (bullets: also the player's) holds it. Built by `sys!`.
 pub struct Sys<'a> {
     pub sound: &'a mut crate::sound::Queue,
     pub fx: &'a mut crate::effect::Effects,
@@ -269,8 +265,8 @@ impl Ctx {
         Self::load_with(source, io, core, true).await
     }
 
-    // WinMain start-up (00 §2): archive, sound (thbgm.fmt 02 §2, SE 13 §1.1), RNG boot seed (11 §1.3), score data, then the
-    // Supervisor task. `persist` = read/write the port's save files (off for tests).
+    // WinMain start-up (00 §2): archive, sound, RNG boot seed (11 §1.3), score data, then the Supervisor task.
+    // `persist` = read/write the port's save files (off for tests).
     pub async fn load_with(
         source: Source,
         io: Io,
@@ -296,9 +292,8 @@ impl Ctx {
         audio.load(archive.present());
         bgm.midi_ready = audio.midi_available();
         // Config_Load (15 §1.2): th08.cfg and the thbgm.dat header probe (02 §1), then the file is written back.
-        // The port's own save first; else import the original's th08.cfg (read-only).
-        // Game-directory reads (thbgm.dat header, the original's th08.cfg / score.dat imports) go through the
-        // app's `DataSource` (assets.rs); saves through `host`.
+        // The port's own save first, else the original's th08.cfg is imported (read-only); game-directory reads go
+        // through the app's `DataSource`, saves through `host`.
         let bgm_header = crate::content::bgm_header(&source).await;
         let mut cfg_file = None;
         if persist {
@@ -483,17 +478,16 @@ impl Ctx {
         self.w.save_files(&mut *self.host);
     }
 
-    // Port (ARCH_D_MOBILE: saves outside the original's save points): the files `exit_save` would write from this
-    // state, written from a clone of the World that is then dropped, so the live RNG (2 draws, 11 §1.5), the score
-    // data and the run-time mark are untouched; the score.dat bytes.
+    // Port, a save outside the original's save points: the files `exit_save` would write from this state, written
+    // from a clone of the World that is then dropped, so the live RNG (2 draws, 11 §1.5), score data and run-time mark
+    // are untouched; the score.dat bytes.
     pub fn save_from_clone(&mut self) -> Vec<u8> {
         self.w.clone().save_files(&mut *self.host)
     }
 
-    // WinMain on Frame_Run result 2 (00 §2 "What the restart re-initialises"): Result(2) score.dat flush, chain
-    // teardown, Sound_Update, sound / ANM manager released, then Supervisor_Register as at start-up, so the game boots
-    // again through logo and loading. The live config, input words and GM fields are kept; no th08.cfg write. Port:
-    // the window and device stay (the app applies the window mode), the 1 s sleep and 60 PeekMessage calls are skipped.
+    // WinMain on Frame_Run result 2 (00 §2 "What the restart re-initialises"): Result(2) score.dat flush, teardown,
+    // Sound_Update, sound / ANM released, Supervisor_Register, then logo and loading again; config, input and GM fields
+    // kept, no th08.cfg write. Port: window and device stay; the 1 s sleep and 60 PeekMessage calls are skipped.
     pub fn restart(&mut self) -> anyhow::Result<()> {
         // Step 1: Result_Register(2) + teardown save score.dat; step 5 reloads it (the written bytes = the file).
         let score = self
@@ -597,7 +591,7 @@ mod tests {
         crate::testdata::ctx(crate::coreconfig::CoreConfig::default())
     }
 
-    // 00 §2 restart: back to the boot scene, then logo and loading reach the menu again with the live config kept.
+    // Restart: back to the boot scene, then logo and loading reach the menu again with the live config kept.
     #[test]
     fn restart_boots_again() {
         let Some(mut c) = ctx() else {
@@ -617,7 +611,7 @@ mod tests {
         assert_eq!(c.w.game.cfg.windowed, mode);
     }
 
-    // ARCH decision 2: with emit off the frames run (boot, logo, menu) and no draw command is recorded.
+    // With emit off the frames run (boot, logo, menu) and no draw command is recorded.
     #[test]
     fn emit_off_records_nothing() {
         let Some(mut c) = ctx() else {

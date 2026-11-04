@@ -1,5 +1,4 @@
-//! .end staff-roll script lexer (16 §1.3): byte cursor, `@` commands, int/string arguments, text lines.
-//! The interpreter (commands, timers, VMs) is th08 ending.rs.
+//! .end staff-roll script lexer (16 §1.3): `@` commands, int/string arguments, text lines.
 
 use crate::sjis::SjisString;
 
@@ -27,7 +26,7 @@ impl Script {
         self.ip >= self.data.len()
     }
 
-    // 0-based line (LF count before the read pointer): the key of a text line (I18N §2.3).
+    // 0-based line (LF count before the read pointer): the key of a text line.
     pub fn line_no(&self) -> usize {
         self.data[..self.ip.min(self.data.len())]
             .iter()
@@ -40,7 +39,7 @@ impl Script {
         self.data.get(p).copied().unwrap_or(0)
     }
 
-    // Integer argument: `atol`, then skip to the next NUL and over any NULs (16 §1.3).
+    // Integer argument: `atol`, then skip to the next NUL and over any NULs.
     pub fn int_arg(&mut self) -> i32 {
         let mut p = self.ip;
         while matches!(self.byte(p), b' ' | b'\t') {
@@ -101,7 +100,7 @@ impl Script {
         }
     }
 
-    // Text line (16 §1.3): copied two bytes at a time until 0 / LF / CR at an even position, while the copy plus 2
+    // Text line: copied two bytes at a time until 0 / LF / CR at an even position, while the copy plus 2
     // stays below `cap` bytes (the line buffer size).
     pub fn text_line(&mut self, cap: usize) -> SjisString {
         let mut buf = Vec::new();

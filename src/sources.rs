@@ -1,5 +1,4 @@
-//! Concrete game data sources (ARCH_D_MOBILE §2.1, §2.3): the game directory (desktop / Android external dir), the
-//! APK's bundled assets (Android) and the files picked in the web page; app side, implementing `assets::DataSource`.
+//! Concrete game data sources (game directory, Android APK assets, web-picked files) implementing `assets::DataSource`.
 
 use anyhow::Result;
 use th08_core::assets::{BoxFuture, DataSource, Source};
@@ -53,7 +52,7 @@ impl DataSource for DirSource {
     }
 }
 
-// Android: th08.dat / thbgm.dat (or th08.pak / thbgm.pak, ASSETS_FORMAT §3.5) bundled as stored (uncompressed) APK assets (ARCH_D §2.1). Each entry is opened once
+// Android: th08.dat / thbgm.dat (or the packs) bundled as stored (uncompressed) APK assets. Each entry is opened once
 // as `(fd, start, len)` through `AAsset_openFileDescriptor64`; reads are `pread(fd, start + off)`, so the 450 MB
 // thbgm.dat is never read whole.
 #[cfg(target_os = "android")]

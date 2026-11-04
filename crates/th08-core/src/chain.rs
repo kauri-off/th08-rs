@@ -5,8 +5,8 @@ use crate::game::Ctx;
 use crate::task::{Chain, Ret, Task};
 use anyhow::Result;
 
-// One task object on the chain (00 §3 node +0x10 object pointer); a forwarder with several nodes tells them apart by
-// the chain node's tag. The state is the matching `Ctx` field (docs/arch/STEP9_WORLD.md §3).
+// One task object on the chain (node +0x10 object pointer); a forwarder with several nodes tells them apart by
+// the chain node's tag. The state is the matching `Ctx` field.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Node {
     Supervisor,

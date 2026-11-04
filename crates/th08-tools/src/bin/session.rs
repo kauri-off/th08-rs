@@ -1,11 +1,4 @@
-//! Session replay: `session <session dir> [--out DIR] [--no-drawlog] [--from N] [--to N]` runs a recorded session
-//! of the original in the port (headless), writes DIR/trace.txt (+ DIR/draw.drawlog.xz), compares the trace with the
-//! recorded one and the draw log with sessions/<name>/draw_*.drawlog.xz (DIR/index.html). N = main-menu frame.
-//! `--port-drawlog` writes only the port's draw log (no reference compare), e.g. for port-vs-port checks.
-//! `--sound-log` writes DIR/sound.txt, the executed `SoundCmd` stream (MIDI synth treated as absent).
-//! `--draw-hash` writes DIR/draw.hash (per-frame hash of the rows `--port-drawlog` would log, `HashSink`);
-//! `--draw-window A-B` limits `--port-drawlog` / `--draw-hash` to presents A..B (re-log around a mismatch).
-//! `--no-emit` runs the draw chain's draw-phase steps only, nothing recorded (ARCH decision 2; implies no draw log).
+//! Session replay: runs a recorded session of the original headless and compares trace and draw log with it.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,7 +6,8 @@ use th08_tools::drawlog::{self, DemoMerge, KeyMode, Opts};
 use th08_tools::int;
 use th08_tools::session::{self, Session};
 
-// Command line (module doc).
+// N = main-menu frame; `--port-drawlog` logs without a reference, `--draw-hash` writes per-frame hashes instead,
+// `--draw-window A-B` limits both to presents A..B, `--sound-log` writes the `SoundCmd` stream, `--no-emit` records nothing.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent command-line switches"
@@ -106,7 +100,7 @@ fn load_ctx(s: &Session, a: &Args) -> anyhow::Result<th08_core::game::Ctx> {
 }
 
 fn main() -> anyhow::Result<()> {
-    // RUST_LOG only (arch_check PACK: the pack mount line); stderr is never digested.
+    // RUST_LOG only (the pack mount line for arch_check); stderr is never digested.
     let _ = env_logger::try_init();
     let a = parse_args()?;
     let (dir, out, from, to, window) = (&a.dir, &a.out, a.from, a.to, a.window);

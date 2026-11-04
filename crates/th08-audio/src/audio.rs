@@ -1,5 +1,4 @@
-//! Port audio back end (cpal): thbgm.dat BGM streaming (02 §1–§4), MIDI music mode (02 §5, `midi.rs`) and the SE
-//! voices DirectSound plays (13 §1.1, §1.3).
+//! Audio back end: thbgm.dat BGM streaming (02 §1–§4), MIDI music mode and the SE voices (13 §1).
 #![allow(clippy::disallowed_methods)]
 
 use anyhow::{Context, Result};
@@ -11,19 +10,19 @@ use th08_core::assets::Source;
 
 use crate::bgm::{BgmSource, Pcm, PcmWriter};
 
-// thbgm.fmt WAVEFORMATEX: 44100 Hz, stereo, 16-bit for every track (02 §2).
+// thbgm.fmt WAVEFORMATEX: 44100 Hz, stereo, 16-bit for every track.
 const BGM_RATE: f64 = 44100.0;
 
 use th08_core::sound::{MidiCmd, SoundCmd, Track, WavCmd};
 
-// Streaming ring (02 §3): 16 notification chunks of 44100 bytes = 11025 stereo frames (0.25 s), 4.0 s in all.
+// Streaming ring: 16 notification chunks of 44100 bytes = 11025 stereo frames (0.25 s), 4.0 s in all.
 const CHUNK: usize = crate::bgm::BLOCK;
 const RING: usize = crate::bgm::RING_FRAMES;
 
-// The playing BGM: the stored track in memory (decoded progressively, ASSETS_FORMAT §3.4), heard through a model of the DirectSound streaming ring
-// (02 §3) so that `Bgm_StreamStop` + UnPause replays what the ring still holds (02 §4).
+// The playing BGM: the stored track in memory (decoded progressively), heard through a model of the DirectSound
+// streaming ring so that `Bgm_StreamStop` + UnPause replays what the ring still holds.
 struct Music {
-    // s16 frames as stored in thbgm.dat (or decoded from thbgm.pak), half the RAM of f32 (ASSETS_FORMAT §3.4);
+    // s16 frames as stored in thbgm.dat (or decoded from thbgm.pak), half the RAM of f32;
     // the loader thread still appends while the first rings play.
     samples: Arc<Pcm>,
     loop_start: usize,
@@ -37,7 +36,7 @@ struct Music {
 }
 
 impl Music {
-    // Play command fill stage (02 §3): rewind, fill the whole ring with the first 4.0 s, +0x64 := 0, play from 0.
+    // Play command fill stage: rewind, fill the whole ring with the first 4.0 s, +0x64 := 0, play from 0.
     fn new(samples: Arc<Pcm>, loop_start: usize) -> Self {
         Self {
             samples,
@@ -49,7 +48,7 @@ impl Music {
         }
     }
 
-    // Stream frame → track frame: `loop_end` frames first, then loop_start..loop_end forever (02 §3).
+    // Stream frame → track frame: `loop_end` frames first, then loop_start..loop_end forever.
     fn track_frame(&self, s: u64) -> usize {
         let n = self.samples.len() as u64;
         if s < n {
@@ -67,7 +66,7 @@ impl Music {
         [f32::from(s[0]) / 32768.0, f32::from(s[1]) / 32768.0]
     }
 
-    // Notification as the play cursor leaves a chunk (handler 0x472D30, 02 §3). The write cursor then lies in the
+    // Notification as the play cursor leaves a chunk (handler 0x472D30). The write cursor then lies in the
     // chunk the play cursor entered; if that is the refill chunk → "Stream Skip", else refill it and advance.
     fn notify(&mut self, entered: usize) {
         if entered == self.refill {
@@ -96,7 +95,7 @@ impl Music {
     }
 }
 
-// One se_*.wav PCM wave file (RIFF, 8/16-bit, mono/stereo; 04 file index, 13 §1.1).
+// One se_*.wav PCM wave file (RIFF, 8/16-bit, mono/stereo; 04 file index).
 pub struct Wave {
     samples: Vec<[f32; 2]>,
     rate: f64,
@@ -129,7 +128,7 @@ pub fn parse_wav(data: &[u8]) -> Result<Wave> {
     })
 }
 
-// One SE id's DirectSound buffer (13 §1.1): a non-looping copy of its wave; gain holds volume and pan per channel.
+// One SE id's DirectSound buffer: a non-looping copy of its wave; gain holds volume and pan per channel.
 #[derive(Default, Clone)]
 struct Voice {
     wave: Option<Arc<Wave>>,
@@ -154,7 +153,7 @@ struct Mixer {
     generation: u32,
     out_rate: f64,
     volume: f32,
-    // Streaming object +0x30 playing flag cleared by `Stop` with the position kept (command 6, mode-1 fade end, 02 §4).
+    // Streaming object +0x30 playing flag cleared by `Stop` with the position kept (command 6, mode-1 fade end).
     stopped: bool,
     // MIDI mode (02 §5): the sequencer + synth, driven by the output sample clock; not scaled by the BGM volume.
     #[cfg(not(target_arch = "wasm32"))]
@@ -233,7 +232,7 @@ impl Mixer {
     }
 }
 
-// SoundFont lookup for MIDI music mode (02 §5), from the app's / tool's settings (`soundfont`, the platform's
+// SoundFont lookup for MIDI music mode, from the app's / tool's settings (`soundfont`, the platform's
 // soundfont dirs); read once at load by `midi_available`.
 #[derive(Clone, Debug, Default)]
 pub struct AudioConfig {
@@ -259,14 +258,14 @@ pub struct Audio {
     bgm: Arc<Mutex<Option<Arc<BgmSource>>>>,
     mixer: Arc<Mutex<Mixer>>,
     stream: Option<cpal::Stream>,
-    // Port (ARCH_D_MOBILE §5): output held by `pause`; `lost` is set by the error callback when the device or stream
+    // Port: output held by `pause`; `lost` is set by the error callback when the device or stream
     // is gone, so `resume` builds a new stream (the mixer keeps the BGM / voice positions).
     paused: bool,
     lost: Arc<AtomicBool>,
     // A stream was opened once (`is_started`; `resume` reopens only then, so the web still waits for its gesture).
     started: bool,
     stats: Arc<Stats>,
-    // MIDI object (02 §5): the archive's .mid members by lower-case basename, the 32 file slots +0x98 and the open
+    // MIDI object: the archive's .mid members by lower-case basename, the 32 file slots +0x98 and the open
     // slot +0x10 (−1 none).
     midi_files: HashMap<String, Arc<[u8]>>,
     midi_slots: [Option<Arc<[u8]>>; 32],
@@ -383,7 +382,7 @@ impl Audio {
         }
     }
 
-    // The archive's `bgm/*.mid` members (02 §5), then the boot `Midi_LoadSlot(30, "bgm/init.mid")`.
+    // The archive's `bgm/*.mid` members, then the boot `Midi_LoadSlot(30, "bgm/init.mid")`.
     pub fn load_midi(&mut self, archive: th08_core::content::PresentView<'_>) {
         for n in archive.names().iter().filter(|n| n.ends_with(".mid")) {
             match archive.read(n) {
@@ -397,7 +396,7 @@ impl Audio {
     }
 
     // Midi_LoadSlot 0x4441A0: the open slot is stopped first; the name's basename is the archive lookup (01 §5); not
-    // found → null slot (02 §5).
+    // found → null slot.
     fn midi_load_slot(&mut self, slot: usize, name: &str) {
         if slot_id(slot) == self.midi_open {
             self.midi_stop();
@@ -413,7 +412,7 @@ impl Audio {
     }
 
     // Midi_Open 0x4442E0: parses the slot's file (tempo 1 000 000), open slot := slot; a null slot frees the tracks
-    // and leaves the open slot unchanged (02 §5).
+    // and leaves the open slot unchanged.
     fn midi_open(&mut self, slot: usize) {
         let song = self.midi_slots.get(slot).cloned().flatten().and_then(|d| {
             crate::midi::parse(&d)
@@ -523,7 +522,7 @@ impl Audio {
         );
     }
 
-    // Play command (02 §3): the stored part of the track (never past loop_end), read in the background.
+    // Play command: the stored part of the track (never past loop_end), read in the background.
     fn play_wav(&mut self, t: Track) {
         let generation = {
             let mut m = self.mixer.lock().unwrap();
@@ -542,9 +541,8 @@ impl Audio {
                 let b = Arc::new(BgmSource::resolve(&source).await);
                 cell.lock().unwrap().get_or_insert(b).clone()
             };
-            // Port (ASSETS_FORMAT §3.4): the play command's fill stage needs only the first ring (02 §3), so the
-            // Music starts as soon as 4.0 s (or the whole shorter track) are decoded; the rest is appended while it
-            // plays, far ahead of the play cursor. Decoding stops when the track is replaced or released.
+            // Port: the fill stage needs only the first ring, so the Music starts as soon as 4.0 s (or the whole shorter
+            // track) are decoded; the rest is appended while it plays. Decoding stops when the track is replaced or released.
             let pcm = Pcm::new(t.length);
             let (name, loop_start, first) = (t.name.clone(), t.loop_start, RING.min(t.length));
             let mut started = false;
@@ -600,8 +598,8 @@ impl Audio {
         });
     }
 
-    // Sound_LoadSE 0x45D3F0 (13 §1.1): one buffer per SE id, each a copy of its wave file; the table volume is not
-    // stored because Sound_Update overwrites it on every play (13 §1.3).
+    // Sound_LoadSE 0x45D3F0: one buffer per SE id, each a copy of its wave file; the table volume is not
+    // stored because Sound_Update overwrites it on every play.
     pub fn load_se(&mut self, archive: th08_core::content::PresentView<'_>) {
         let mut waves: Vec<(&str, Option<Arc<Wave>>)> = Vec::new();
         let mut voices = Vec::new();
@@ -628,7 +626,7 @@ impl Audio {
         self.mixer.lock().unwrap().voices = voices;
     }
 
-    // Sound_Update per queued id (13 §1.3): stop, rewind, set pan/volume (1/100 dB) and play once.
+    // Sound_Update per queued id: stop, rewind, set pan/volume (1/100 dB) and play once.
     // Pan uses the DirectSound rule: the opposite channel is attenuated by |pan| (1/100 dB).
     fn play_se(&mut self, id: usize, pan: i32, volume: i32) {
         let mut m = self.mixer.lock().unwrap();
@@ -642,8 +640,8 @@ impl Audio {
         v.playing = v.wave.is_some();
     }
 
-    // `Bgm_StreamStop` 0x4728E0 (02 §4): `Stop` + position 0, playing flag 0; the object, ring, +0x64 and file
-    // position stay, so a later UnPause plays the ring on from position 0 (02 §4 "UnPause after `Music_Stop`").
+    // `Bgm_StreamStop` 0x4728E0: `Stop` + position 0, playing flag 0; the object, ring, +0x64 and file
+    // position stay, so a later UnPause plays the ring on from position 0.
     fn stop_wav(&mut self) {
         let mut m = self.mixer.lock().unwrap();
         m.stopped = true;
@@ -826,7 +824,7 @@ pub(crate) fn test_archive() -> Option<th08_formats::archive::Archive> {
     Some(th08_formats::archive::Archive::from_bytes(bytes).expect("th08.dat"))
 }
 
-// A MIDI slot index (0..=31) as the open-slot field holds it (02 §5, +0x10).
+// A MIDI slot index (0..=31) as the open-slot field +0x10 holds it.
 #[expect(clippy::cast_possible_wrap, reason = "slots 0..=31")]
 const fn slot_id(slot: usize) -> i32 {
     slot as i32
@@ -911,7 +909,7 @@ mod tests {
         }
     }
 
-    // 02 §5 calls in mode 2: Midi_LoadSlot, PlaySlot (stop, open, play), Midi_Fade in ms without speed division,
+    // Mode-2 calls (02 §5): Midi_LoadSlot, PlaySlot (stop, open, play), Midi_Fade in ms without speed division,
     // Music_Stop, and the init.mid reset from slot 30.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -966,7 +964,7 @@ mod tests {
         assert!(playing(&d.a) && d.a.midi_open == 1);
     }
 
-    // 02 §4 command 6 keeps the fade ticking, a mode-1 fade end stops the buffer (position and last volume kept) and
+    // Command 6 keeps the fade ticking, a mode-1 fade end stops the buffer (position and last volume kept) and
     // command 7 resumes it there; Music_Stop rewinds. Mode 2 ignores 6/7. Bgm side: sound.rs `wav_pause_bgm_side`.
     #[test]
     fn wav_pause_and_fade() {
@@ -1031,7 +1029,7 @@ mod tests {
         }
     }
 
-    // 02 §3 ring + 02 §4 "UnPause after `Music_Stop`": stop in chunk P at song time t (start of chunk P), UnPause plays
+    // Ring + UnPause after `Music_Stop`: stop in chunk P at song time t (start of chunk P), UnPause plays
     // from ring position 0 and the song continues seamlessly from t + ((16 − P) mod 16)·0.25 s; P = 1 plays 0.25 s of
     // t + 3.75 s, then t on.
     #[test]
@@ -1078,8 +1076,7 @@ mod tests {
         }
     }
 
-    // The ring keeps streaming through the loop point (02 §3) and `Audio::stop_bgm` keeps the stream object.
-    // The ring keeps streaming through the loop point (02 §3) and `Music_Stop` keeps the stream object.
+    // The ring keeps streaming through the loop point and `Music_Stop` keeps the stream object.
     #[test]
     fn ring_loops_and_stop_keeps_object() {
         let mut m = ring_mixer(200_000, 150_000);
@@ -1120,7 +1117,7 @@ mod tests {
         }
     }
 
-    // The pre-hound RIFF/WAVE parser, kept as the reference for se_waves_parse.
+    // Reference RIFF/WAVE parser for the hound-based `se_waves_parse`.
     fn parse_wav_reference(data: &[u8]) -> Result<Wave> {
         anyhow::ensure!(
             data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WAVE",

@@ -1,4 +1,4 @@
-//! Game data for personal builds: guard (CI, target/, web), raw th08.dat / thbgm.dat or `repack` packs (ASSETS_FORMAT §3).
+//! Game data for personal builds: guard (CI, target/, web), raw th08.dat / thbgm.dat or `repack` packs.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,7 +109,7 @@ fn raw(data: &Path) -> Result<Game> {
 
 const PACKS: [&str; 2] = ["th08.pak", "thbgm.pak"];
 
-// Sources whose change can change the pack bytes (repack is deterministic, ASSETS_FORMAT AS1/AS2 results).
+// Sources whose change can change the pack bytes (repack is deterministic).
 const REPACK_SOURCES: [&str; 3] = [
     "crates/th08-tools/src/bin/repack.rs",
     "crates/th08-formats/src/pack.rs",
@@ -145,7 +145,7 @@ fn pack_stamp(data: &Path) -> Result<String> {
     Ok(s)
 }
 
-// th08.pak + thbgm.pak from the `repack` bin (ASSETS_FORMAT AS1/AS2), cached in <personal target>/pack/ with a
+// th08.pak + thbgm.pak from the `repack` bin, cached in <personal target>/pack/ with a
 // `dist.stamp`; a rerun with the same game files and repack sources reuses them.
 fn packed(data: &Path, _name: &str) -> Result<Game> {
     let root = util::root();

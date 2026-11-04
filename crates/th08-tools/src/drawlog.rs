@@ -1,5 +1,4 @@
-//! Draw log tools (specs/data/drawlog/FORMAT.md): log file opening, a reader and a per-frame diff against a reference
-//! log; the text format and writer are in drawfmt.rs.
+//! Draw log tools: log file opening, a reader and a per-frame diff against a reference log.
 #![allow(clippy::disallowed_methods)]
 
 use std::collections::{BTreeMap, HashMap};
@@ -27,7 +26,7 @@ pub fn open_spec(v: &str) -> Option<th08_core::drawfmt::Writer> {
     }
 }
 
-// Port tooling (arch_check): per-frame sha256 of the `format_frame` text, `<present> <first 32 hex>` per line, so a
+// Per-frame sha256 of the `format_frame` text, `<present> <first 32 hex>` per line, so a
 // hash match means the draw log would match byte for byte.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct HashSink(std::io::BufWriter<std::fs::File>);
@@ -383,9 +382,9 @@ pub struct LabelDiff {
     pub extra: usize,
     pub changed: usize,
     pub why: [usize; 6],
-    // Port quads beyond a reference batch cut at 682 quads (FORMAT.md §3): not counted as extra.
+    // Port quads beyond a reference batch cut at 682 quads: not counted as extra.
     pub truncated: usize,
-    // Port side-panel quads the reference did not repaint (PARITY_POLICY, RE-Q32 CODE BUG 1): not counted as extra.
+    // Port side-panel quads the reference did not repaint: not counted as extra.
     pub accepted: usize,
 }
 
@@ -445,7 +444,7 @@ pub struct FrameDiff {
     pub sprites_extra: Vec<SpriteKey>,
     pub other_missing: Vec<String>,
     pub other_extra: Vec<String>,
-    // `P list 4` markers in the reference frame: batches the probe cut at 682 quads (FORMAT.md §3).
+    // `P list 4` markers in the reference frame: batches the probe cut at 682 quads.
     pub cuts: usize,
     pub quads: Vec<QuadDiff>,
 }
@@ -554,7 +553,7 @@ fn sprite_rect(p: &Prim, q: &[Vtx; 4]) -> [i32; 4] {
     ]
 }
 
-// The fps counter at (512, 464) and the replay fps text "%2d" at (384, 448) (15 §3.3) depend on host timing, so
+// The fps counter at (512, 464) and the replay fps text "%2d" at (384, 448) depend on host timing, so
 // they are never compared.
 fn is_fps(p: &Prim, q: &[Vtx; 4]) -> bool {
     p.tex.starts_with("ascii.anm")
@@ -578,14 +577,14 @@ fn in_playfield(q: &[Vtx; 4]) -> bool {
     x1 > PLAYFIELD[0] && x0 < PLAYFIELD[2] && y1 > PLAYFIELD[1] && y0 < PLAYFIELD[3]
 }
 
-// The probe's 4 leftover vertices of a sprite batch cut at 682 quads (FORMAT.md §3).
+// The probe's 4 leftover vertices of a sprite batch cut at 682 quads.
 fn is_cut(kind: &str, v: &[Vtx]) -> bool {
     kind == "list" && v.len() == 4
 }
 
-// Side panel repaint (PARITY_POLICY): the reference repaints the panel only for dirty rows (12 §5.3), the port
-// every gameplay frame; unmatched full-screen-viewport port quads that cover no playfield pixel are accepted.
-// Coverage by pixel centres (§3: centres on integers), so a tile edge at 415.5 does not reach playfield pixel 415.
+// Side panel: the reference repaints it only for dirty rows, the port every gameplay frame; unmatched full-screen
+// port quads that cover no playfield pixel are accepted. Coverage by pixel centres (on integers), so a tile edge at
+// 415.5 does not reach playfield pixel 415.
 fn panel_repaint(fr: &Frame, p: &Prim, q: &[Vtx; 4]) -> bool {
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for v in q {
@@ -600,11 +599,9 @@ fn panel_repaint(fr: &Frame, p: &Prim, q: &[Vtx; 4]) -> bool {
         && (x1 <= px0 || x0 >= px1 - 0.5 || y1 <= py0 || y0 >= py1 - 0.5)
 }
 
-// A quad ≥ 0.5 px outside the viewport covers no pixel centre; whether the cull (05 §9 step 3) keeps it depends on
-// f32 rounding at the edge, so it is dropped on both sides. Touching the near edges (or within 1 px of the far ones,
-// top-left rule) also covers no pixel. The log rounds to 2 decimals, so a quad within 0.05 px of that coverage edge
-// (16.00 vs 16.01) is dropped only from -0.05; a quad reaching at most 0.25 px past it (16.05 vs 16.06 moved between
-// builds) is `Edge`: matched normally, not counted when unmatched (05 §9 step 3, RE-Q64 tool rule).
+// A quad ≥ 0.5 px outside the viewport covers no pixel centre and whether the cull keeps it depends on f32 rounding,
+// so it is dropped on both sides (near edges / within 1 px of far ones too, top-left rule; from -0.05 for the log's
+// 2-decimal rounding); one at most 0.25 px past that edge is `Edge`: matched normally, not counted when unmatched.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum VpSide {
     In,
@@ -633,12 +630,12 @@ fn off_vp(vp: [f32; 4], q: &[Vtx; 4]) -> VpSide {
 }
 
 // A vertex in front of the near plane (z < 0) or on/behind the camera plane (rhw <= 0): its screen position is f32
-// noise around w ≈ 0, D3D clips it in homogeneous space (06 §11.2, RE-Q68 tool rule).
+// noise around w ≈ 0, D3D clips it in homogeneous space.
 fn clip_vertex(v: &Vtx) -> bool {
     v.z < 0.0 || v.rhw <= 0.0
 }
 
-// `off_vp`, except that a quad with a clip-space vertex is never dropped: its screen bbox is not its visible extent (06 §11.2).
+// `off_vp`, except that a quad with a clip-space vertex is never dropped: its screen bbox is not its visible extent.
 fn quad_side(vp: [f32; 4], q: &[Vtx; 4]) -> VpSide {
     if q.iter().any(clip_vertex) {
         VpSide::In
@@ -647,8 +644,8 @@ fn quad_side(vp: [f32; 4], q: &[Vtx; 4]) -> VpSide {
     }
 }
 
-// Matching centre from the vertices with z in [0, 1] and rhw > 0 when only some are: a near-plane vertex (~1e6 px,
-// 13 §2.6c) or a camera-plane one (06 §11.2) would move it out of the matching window although compare() accepts it.
+// Matching centre from the vertices with z in [0, 1] and rhw > 0 when only some are: a near-plane vertex (~1e6 px)
+// or a camera-plane one would move it out of the matching window although compare() accepts it.
 fn match_centre(q: &[Vtx; 4]) -> [f32; 2] {
     let inr: Vec<&Vtx> = q
         .iter()
@@ -668,7 +665,7 @@ fn match_centre(q: &[Vtx; 4]) -> [f32; 2] {
     }
 }
 
-// Homogeneous clip coordinates (x·w, y·w, z·w, w) of a logged vertex, w = 1/rhw (0 for rhw 0) (06 §11.2).
+// Homogeneous clip coordinates (x·w, y·w, z·w, w) of a logged vertex, w = 1/rhw (0 for rhw 0).
 fn clip_coords(v: &Vtx, vp: [f32; 4]) -> [f64; 4] {
     let w = if v.rhw == 0.0 {
         0.0
@@ -738,7 +735,7 @@ fn close(a: f32, b: f32, t: f32) -> bool {
 }
 
 fn col_close(a: u32, b: u32) -> bool {
-    // Alpha-0 ribbon ends keep stack-residue RGB (06 §11.3, accepted approximation): two alpha-0 colours are equal.
+    // Alpha-0 ribbon ends keep stack-residue RGB (accepted approximation): two alpha-0 colours are equal.
     if a >> 24 == 0 && b >> 24 == 0 {
         return true;
     }
@@ -754,7 +751,7 @@ fn compare(a: &Item, b: &Item) -> u8 {
         }
         (x1 - x0).max(y1 - y0).min(4096.0)
     };
-    // Software-projected 3D quads (ztest=le): D3DXVec3Project precision, 4e-4 of the quad size (13 §2.6c).
+    // Software-projected 3D quads (ztest=le): D3DXVec3Project precision, 4e-4 of the quad size.
     let proj = a.prim.state.contains("ztest=le");
     let ha = a.q.map(|v| clip_coords(&v, a.prim.vp));
     let hb = b.q.map(|v| clip_coords(&v, b.prim.vp));
@@ -764,7 +761,7 @@ fn compare(a: &Item, b: &Item) -> u8 {
         .flatten()
         .fold(0f64, |m, h| m.max(h.abs().min(1e4)));
     for (i, (x, y)) in a.q.iter().zip(&b.q).enumerate() {
-        // 3D-quad vertex in front of / behind the camera plane: compared in clip space, no z/rhw bit (06 §11.2, RE-Q68).
+        // 3D-quad vertex in front of / behind the camera plane: compared in clip space, no z/rhw bit.
         if proj && (clip_vertex(x) || clip_vertex(y)) {
             let (p, r) = (ha[i], hb[i]);
             let (nx, ny) = if p[3] == 0.0 {
@@ -787,7 +784,7 @@ fn compare(a: &Item, b: &Item) -> u8 {
             }
             continue;
         }
-        // A vertex outside the depth range is a near-singular projection (13 §2.6c): 1e-3 relative.
+        // A vertex outside the depth range is a near-singular projection: 1e-3 relative.
         let far = !(0.0..=1.0).contains(&x.z) || !(0.0..=1.0).contains(&y.z);
         let ptol = |v: f32| {
             let t = if far {
@@ -1049,7 +1046,7 @@ pub fn diff_frame(r: &Frame, p: &Frame, o: &Opts) -> FrameDiff {
             po_left.remove(k);
         } else if x.contains("K screen ? full") {
             // The D3DX surface load inside Anm_CaptureToTexture copies the whole back buffer in the recording
-            // environment; not a game draw (FORMAT.md §3).
+            // environment; not a game draw.
         } else {
             d.other_missing.push(x.clone());
         }
@@ -1095,7 +1092,7 @@ pub struct FrameNote {
 
 pub type GroupKey = (Rc<str>, [i32; 4], QuadKind, u8);
 
-// All non-same quads of one GroupKey over a run (IMPL142); presents are reference presents.
+// All non-same quads of one GroupKey over a run; presents are reference presents.
 #[derive(Clone, Debug)]
 pub struct Group {
     pub first_present: i64,
@@ -1685,7 +1682,7 @@ pub fn step(ctx: &mut th08_core::game::Ctx) -> Option<(th08_core::task::Flow, Ve
     Some((f, frames))
 }
 
-// Menu CLRD pokes of menu_clr (README): any-clear / no-continue masks of teams 0–2 on E–L.
+// Menu CLRD pokes of menu_clr: any-clear / no-continue masks of teams 0–2 on E–L.
 pub fn clr_pokes(g: &mut th08_core::gamemgr::Game) {
     for (t, any, nc) in [(0, 0x41, 0x01), (1, 0x81, 0x81), (2, 0xC1, 0xC1)] {
         g.clear_any[t][..4].fill(any);
@@ -1693,7 +1690,7 @@ pub fn clr_pokes(g: &mut th08_core::gamemgr::Game) {
     }
 }
 
-// Start state of a menu script (README of specs/data/drawlog): a private save directory, empty for menu_base /
+// Start state of a menu script: a private save directory, empty for menu_base /
 // menu_clr; menu_mopup1 adds its score.dat and the four attract demos as replay/th8_01..04.rpy.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn menu_start_state(ctx: &mut th08_core::game::Ctx, name: &str) -> anyhow::Result<()> {
@@ -1786,16 +1783,16 @@ pub fn run_demo(
     Ok(())
 }
 
-// Tools-bound tests (headless `Gfx`, reference draw logs on disk): move with this file to th08-tools in 10c.
+// Tools-bound tests (headless `Gfx`, reference draw logs on disk).
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use th08_core::drawfmt::{Header, format_frame};
     use th08_core::drawlist::{Blend, LogRec, LogTex, Rect, Vertex};
 
-    // FORMAT.md §2 fog: C %g, 6 significant digits.
-    // 06 §11.3: alpha-0 colours compare equal whatever their RGB; otherwise ±1 per channel.
-    // 05 §9 step 3: quads ≥ 0.5 px outside the viewport are not compared; 13 §2.6c: z ∉ [0, 1] gets 1e-3 relative.
+    // Fog: C %g, 6 significant digits.
+    // Alpha-0 colours compare equal whatever their RGB; otherwise ±1 per channel.
+    // Quads ≥ 0.5 px outside the viewport are not compared; z ∉ [0, 1] gets 1e-3 relative.
     #[test]
     fn off_viewport_and_far_vertices() {
         use VpSide::*;
@@ -1843,7 +1840,7 @@ mod tests {
         assert_ne!(compare(&item(a), &item(b)) & D_POS, 0);
     }
 
-    // 06 §11.2 (RE-Q68): clip-space compare of near/camera-plane vertices, matching centre without them, no off-viewport drop.
+    // Clip-space compare of near/camera-plane vertices, matching centre without them, no off-viewport drop.
     #[test]
     fn clip_space_vertices() {
         let vp = [32.0, 16.0, 384.0, 448.0];
@@ -1925,7 +1922,7 @@ mod tests {
         assert_ne!(compare(&item2(a), &item2(b)) & D_POS, 0);
     }
 
-    // 13 §2.6c: ztest=le quads get 4e-4 × size; a viewport mismatch is ignored for a quad inside both viewports.
+    // Ztest=le quads get 4e-4 × size; a viewport mismatch is ignored for a quad inside both viewports.
     #[test]
     fn projected_tolerance_and_viewport() {
         fn item(p: &Prim, q: [Vtx; 4]) -> Item<'_> {
@@ -2073,7 +2070,7 @@ mod tests {
         assert_eq!((d.score(), d.total.same), (0, 2));
     }
 
-    // 11 §3.1 / 06 §3 step 5: a z-only clear logs its ignored colour argument; a target clear its colour.
+    // A z-only clear logs its ignored colour argument; a target clear its colour.
     #[test]
     fn clear_logs_colour_argument() {
         let h = Header {
@@ -2103,7 +2100,7 @@ mod tests {
         assert!(text.contains("\nC tz ff010203\n"), "{text}");
     }
 
-    // 15 §3.3: the replay fps text near (384, 448) in white / red is skipped like the fps counter, other text is not.
+    // The replay fps text near (384, 448) in white / red is skipped like the fps counter, other text is not.
     #[test]
     fn replay_fps_text_skipped() {
         let p = Prim {
@@ -2130,7 +2127,7 @@ mod tests {
         assert!(is_fps(&p, &q(409.5, 447.5, 0xffff_ffd0)));
     }
 
-    // FORMAT.md §3 cut batches and the accepted side-panel repaint are reported apart from extra quads.
+    // Cut batches and the accepted side-panel repaint are reported apart from extra quads.
     #[test]
     fn cut_batch_and_panel_repaint_not_extra() {
         let st = "T etama.anm#0 256 256\nS blend=alpha atest=ge4 ztest=always zwrite=0 c=tex*col a=tex*col\nV 0 0 640 480\n";
@@ -2154,7 +2151,7 @@ mod tests {
         assert_eq!(d.score(), 0);
     }
 
-    // IMPL142: non-same quads grouped by (texture, rect, kind, fields) with frames, quads and present ranges.
+    // Non-same quads grouped by (texture, rect, kind, fields) with frames, quads and present ranges.
     #[test]
     fn difference_groups() {
         let st = "T etama.anm#0 256 256\nS blend=alpha atest=ge4 ztest=always zwrite=0 c=tex*col a=tex*col\nV 0 0 640 480\n";

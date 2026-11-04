@@ -1,6 +1,4 @@
-//! Launcher and port-menu languages (port-only UI, no spec section; plan docs/arch/I18N.md §3, run L1): ja / ru
-//! string tables in `i18n/{ja,ru}.toml`, English from the settings table and `UI`, system locale detection and the
-//! egui CJK fallback font.
+//! Launcher and port-menu languages: ja / ru string tables, system locale detection and the egui CJK fallback font.
 
 use crate::settings::{ENTRIES, Entry, Group};
 use std::collections::HashMap;

@@ -46,9 +46,9 @@ pub struct ReplayState {
     frame: u32,
     bonus_frames: u32,
     fps_q: usize,
-    // Playback's key-repeat emulation counter (0x164D53C, 15 §3.3).
+    // Playback's key-repeat emulation counter (0x164D53C).
     repeat_ctr: u32,
-    // Header +6 ≠ 0: Replay_PlayCalcDebug 0x4526C0 with 6-byte frames (15 §3.1).
+    // Header +6 ≠ 0: Replay_PlayCalcDebug 0x4526C0 with 6-byte frames.
     debug: bool,
     // +0xD8 RNG state stored by Replay_FrameHook (11 §1.4).
     rng_snap: u16,
@@ -60,7 +60,7 @@ pub fn register(
     st: &crate::player::Stats,
 ) -> anyhow::Result<(crate::chain::Node, ReplayState)> {
     use crate::task::{self, Chain};
-    // Replay_Register 0x451F90 sets g_Input and g_InputPrev to 0 (15 §3.1).
+    // Replay_Register 0x451F90 sets g_Input and g_InputPrev to 0.
     ctx.w.input.game = [0; crate::host::MAX_PLAYERS];
     ctx.w.input.game_prev = [0; crate::host::MAX_PLAYERS];
     let debug = play && ctx.w.game.rpy.as_ref().is_some_and(|r| r.debug != 0);
@@ -129,8 +129,8 @@ pub(crate) fn record_stage_start(g: &mut crate::gamemgr::Game, st: &crate::playe
     });
 }
 
-// Info +0x11C at record start (15 §3.5): 2 if the shot passes 0x43C15F (a no-continue Final B clear on E–L, or shot ≥ 4),
-// else 1 if it passes 0x43C23B (a Final A clear on E–L), else 0 (15 §2.4). Read back as the route byte (10 §4 step 3).
+// Info +0x11C at record start: 2 if the shot passes 0x43C15F (a no-continue Final B clear on E–L, or shot ≥ 4),
+// else 1 if it passes 0x43C23B (a Final A clear on E–L), else 0 (15 §2.4). Read back as the route byte (10 §4).
 fn clear_status(g: &crate::gamemgr::Game) -> u8 {
     let t = g.shot as usize % 12;
     if t >= 4 || g.clear_nc[t][..4].iter().any(|m| m & 0x4000 != 0) {
@@ -140,7 +140,7 @@ fn clear_status(g: &crate::gamemgr::Game) -> u8 {
     }
 }
 
-// Info block at record start (15 §3.5): shot, difficulty, "NO NAME", practice flag +0x7B, spell id +0x7C (−1 outside
+// Info block at record start: shot, difficulty, "NO NAME", practice flag +0x7B, spell id +0x7C (−1 outside
 // spell practice), +0xAE = 0x100, config copy +0xB4.
 fn new_recording(shot: u8, diff: i32, flags: GameFlags, card: i16, cfg: &[u8; 60]) -> Replay {
     let mut r = Replay::default();
@@ -177,7 +177,7 @@ pub fn start_playback(
     g.set_game_flags(g.game_flags() & GameFlags::UNLOCKS | GameFlags::REPLAY);
     let id = r.spell_id();
     if id >= 0 {
-        // Only bit 14: bit 0 stays clear in a spell-practice replay (15 §3.8).
+        // Only bit 14: bit 0 stays clear in a spell-practice replay.
         g.insert_flags(GameFlags::SPELL_PRACTICE);
         g.card = id;
     }
@@ -214,7 +214,7 @@ pub fn play_stage_load(
     let Some(r) = g.rpy.as_ref() else {
         bail!("no replay loaded")
     };
-    // 11 §3.4: all 60 bytes of info +0xB4 over the gameplay copy *(GM+4), as stored (no field selection, no clamp).
+    // All 60 bytes of info +0xB4 over the gameplay copy *(GM+4), as stored (no field selection, no clamp).
     g.cfg_game.copy_from_slice(r.config());
     let Some(rec) = r.stages[stage].as_ref() else {
         bail!("replay has no record for stage {stage}")
@@ -294,7 +294,7 @@ pub fn build_save(
     r.info[0x118 - HEADER..0x11C - HEADER].copy_from_slice(&slow.to_le_bytes());
     let id = r.spell_id();
     if id >= 0 {
-        // 48 bytes of the in-memory CATK[id] +0x10 (15 §3.6 step 1).
+        // 48 bytes of the in-memory CATK[id] +0x10 (step 1).
         let c = &g.score.catk[usize::from(id.cast_unsigned()) % crate::scoredat::CARDS].name;
         r.info[0x7E - HEADER..0xAE - HEADER].copy_from_slice(c);
     }
@@ -401,7 +401,7 @@ pub fn take_recording(g: &mut crate::gamemgr::Game, now: crate::host::LocalTime)
     Some(r)
 }
 
-// The boss test 0x42F1F0 used by fast playback (15 §3.3).
+// The boss test 0x42F1F0 used by fast playback.
 fn boss_active(enemies: Option<&crate::enemy::EnemyManager>) -> bool {
     enemies.is_some_and(|e| e.bosses.iter().any(Option::is_some))
 }
@@ -424,9 +424,8 @@ fn fast_forward(
 }
 
 // One playback frame from the input words at `cursor`: (input, next cursor). PlayCalc steps 1 word; PlayCalcDebug
-// (header +6 ≠ 0) steps 3 words and never reads the other two (15 §3.1).
-// QUIRK (15 §3.3, RE-Q57 AP): no bound check, past the input words the read goes on through the following image bytes
-// (`tail`, LE u16); past the end of the image (undefined heap in the original) the input is 0.
+// (header +6 ≠ 0) steps 3 words and reads only the first. QUIRK (15 §3.3): no bound check, the read goes on through
+// the image bytes after the words (`tail`, LE u16); past the image (undefined heap in the original) the input is 0.
 fn next_frame(words: &[u16], tail: &[u8], cursor: usize, debug: bool) -> (u16, usize) {
     let w = words.get(cursor).copied().unwrap_or_else(|| {
         let o = 2 * (cursor - words.len());
@@ -477,7 +476,7 @@ impl ReplayState {
         i.game_prev = i.game;
         i.game[0] = i.held;
         // Step 2: slow mode records nothing (Supervisor+0x1A4 bit 3 is never set in retail code).
-        // The slow byte is +0x25 of the gameplay config copy `*(GM+4)` (15 §3.2 step 2).
+        // The slow byte is +0x25 of the gameplay config copy `*(GM+4)`.
         if g.game_slow() != 0 {
             return;
         }
@@ -495,9 +494,9 @@ impl ReplayState {
         s.inputs.push(raw);
         if self.frame.is_multiple_of(30) {
             let q = self.fps_q;
-            // Overlapping two-byte write: fps[q] = fps_now | flag (always 0), fps[q+1] = fps_now (15 §3.2 step 5).
+            // Overlapping two-byte write: fps[q] = fps_now | flag (always 0), fps[q+1] = fps_now (step 5).
             // No fps meter: sample 0 is the carried fps_now, later samples 60, which a meter window at 60 fps
-            // has stored into fps_now by then (15 §3.2).
+            // has stored into fps_now by then.
             if q > 0 {
                 g.replay_fps = 60;
             }
@@ -520,7 +519,7 @@ impl ReplayState {
     // The first word read is the dummy 0, matching the one-frame latency of recording.
     // Replay_PlayCalcDebug 0x4526C0 (15 §3.1) is the same with the input read through cursor +0x78 in 6-byte steps.
     pub(crate) fn play(&mut self, g: &mut crate::gamemgr::Game, i: &mut crate::input::Input) {
-        // The slow byte is +0x25 of the gameplay config copy `*(GM+4)` (15 §3.3).
+        // The slow byte is +0x25 of the gameplay config copy `*(GM+4)`.
         if !g.has(GameFlags::RUNNING) || g.game_slow() != 0 || g.has(GameFlags::CLEAR_PANEL) {
             return;
         }
@@ -561,7 +560,7 @@ impl ReplayState {
     }
 }
 
-// Chain nodes of `GameManager.replay` (calc prio PLAY / FF / RECORD / HOOK): stateless forwarder (STEP9_WORLD.md §3).
+// Chain nodes of `GameManager.replay` (calc prio PLAY / FF / RECORD / HOOK): stateless forwarder.
 pub struct ReplayTask;
 
 impl crate::task::Task<crate::game::Ctx> for ReplayTask {
@@ -646,14 +645,14 @@ mod tests {
         assert_eq!(next_frame(&w, &[], 3, true), (0x11, 6));
         assert_eq!(next_frame(&w, &[], 6, true), (0, 9));
         assert_eq!(next_frame(&w, &[], 6, false), (0, 7));
-        // 15 §3.3 (RE-Q57 AP): past the words the read continues into the following image bytes, then 0.
+        // Past the words the read continues into the following image bytes, then 0.
         let t = [0x05, 0x01, 0xBD, 0x05, 0x70];
         assert_eq!(next_frame(&w, &t, 6, false), (0x0105, 7));
         assert_eq!(next_frame(&w, &t, 7, false), (0x05BD, 8));
         assert_eq!(next_frame(&w, &t, 8, false), (0, 9));
     }
 
-    // 15 §3.2 (audit A.48): a stage start sets +0 := score only on the highest recorded stage below it.
+    // 15 §3.2: a stage start sets +0 := score only on the highest recorded stage below it.
     #[test]
     fn stage_start_scores_previous_record() {
         let mut g = crate::gamemgr::Game::default();
@@ -698,7 +697,7 @@ mod tests {
         );
     }
 
-    // 11 §3.4 (audit A.47): all 60 config bytes go over the gameplay copy unclamped; the Supervisor config is untouched.
+    // 11 §3.4: all 60 config bytes go over the gameplay copy unclamped; the Supervisor config is untouched.
     #[test]
     fn stage_load_copies_config() {
         let mut g = crate::gamemgr::Game::default();
@@ -716,7 +715,7 @@ mod tests {
         assert_eq!(g.cfg, live);
     }
 
-    // 15 §3.8 (audit A.49): a spell-practice replay starts with bit 14 and bit 3, bit 0 clear.
+    // 15 §3.8: a spell-practice replay starts with bit 14 and bit 3, bit 0 clear.
     #[test]
     fn spell_practice_playback_flags() {
         use crate::gamemgr::*;
@@ -734,7 +733,7 @@ mod tests {
         assert_eq!(g.card, 5);
     }
 
-    // 15 §3.5 / §3.6 (impl69): a saved replay parses back with the same header fields, USER section appended.
+    // 15 §3.5 / §3.6: a saved replay parses back with the same header fields, USER section appended.
     #[test]
     fn save_parses_back() {
         let mut g = crate::gamemgr::Game::default();

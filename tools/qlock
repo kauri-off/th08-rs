@@ -1,3 +1,3 @@
 #!/bin/bash
-# usage: tools/qlock [-w SECS] CMD… — the old exclusive `flock target/.agents.lock CMD`, wait/run logged to the q log (kind=legacy).
+# usage: tools/qlock [-w SECS] CMD… — an exclusive `flock target/.agents.lock CMD`, wait/run logged to the q log (kind=legacy).
 exec "$(dirname "$0")/q" legacy "$@"

@@ -1,6 +1,4 @@
-//! Port tool: renders the launcher screen offscreen to a PNG.
-//! `launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B]
-//! [th08 switches]...` (`--safe`: safe-area insets in px, as an Android cutout / rounded corners give).
+//! Renders the launcher screen offscreen to a PNG (`--safe`: safe-area insets in px, as an Android cutout gives).
 
 fn main() {
     env_logger::init();

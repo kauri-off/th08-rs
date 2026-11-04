@@ -1,5 +1,4 @@
-//! Platform side of `host::Host` (ARCH_A §2.2): save storage (fs / localStorage), clocks, the winit keymap and the
-//! gilrs joystick (app), and the scripted / recorded-poll host of the tools and tests. Not a port of the original.
+//! Platform side of `host::Host`: save storage, clocks, keyboard / joystick input and the tools' scripted host.
 
 pub mod overlay;
 pub mod portmenu;
@@ -10,7 +9,7 @@ use th08_core::host::{Host, LocalTime, MAX_PLAYERS, RawInput, Words};
 use th08_core::input::*;
 use winit::keyboard::KeyCode;
 
-// Input_Poll 0x43D970 DIK table, the default path (15 §1.1): physical keys = DIK scan codes. Keypad 7/9/1/3 give the
+// Input_Poll 0x43D970 DIK table, the default path: physical keys = DIK scan codes. Keypad 7/9/1/3 give the
 // diagonals; only the main Enter (0x1C) is mapped, keypad Enter (0x9C) is not.
 const KEYS: [(KeyCode, u16); 26] = [
     (KeyCode::ArrowUp, UP),
@@ -45,11 +44,11 @@ pub fn map_key(k: KeyCode) -> u16 {
     KEYS.iter().find(|e| e.0 == k).map_or(0, |e| e.1)
 }
 
-// The keyboard device: held keys (bit i = KEYS[i] down); each held key ORs its bits into the word (15 §1.1).
+// The keyboard device: held keys (bit i = KEYS[i] down); each held key ORs its bits into the word.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Keyboard {
     keys: u32,
-    // The keyboard read fails (15 §1.1). Port: winit has no device read, so focus loss stands in for a failing
+    // The keyboard read fails. Port: winit has no device read, so focus loss stands in for a failing
     // GetDeviceState (keys released).
     failed: bool,
 }
@@ -73,7 +72,7 @@ impl Keyboard {
         }
     }
 
-    // A failed GetDeviceState zeroes the word, so the poll returns the joystick bits only (15 §1.1, 0x43DD3C).
+    // A failed GetDeviceState zeroes the word, so the poll returns the joystick bits only (0x43DD3C).
     pub fn word(&self) -> u16 {
         if self.failed {
             return 0;
@@ -87,9 +86,9 @@ impl Keyboard {
 
 pub use touch::TouchSource;
 
-// App-side input mux (ARCH_D §3.1): per poll, `keys[p]` = the OR of the device words, as Input_Poll ORs keyboard and
-// joystick bits (15 §1.1). Gamepads that report buttons as keys (Android) plug in here as further sources; the gilrs
-// pad state goes to core via `RawInput::pads`, which maps it with cfg / ShotSlow.
+// App-side input mux: per poll, `keys[p]` = the OR of the device words, as Input_Poll ORs keyboard and joystick
+// bits. Gamepads that report buttons as keys (Android) plug in here as further sources; the gilrs pad state goes to
+// core via `RawInput::pads`, which maps it with cfg / ShotSlow.
 #[derive(Clone, Debug, Default)]
 pub struct InputMux {
     pub keyboard: Keyboard,
@@ -103,7 +102,7 @@ impl InputMux {
         self.touch.set_focus(focused);
     }
 
-    // One Input_Poll (touch pulses advance per poll, ARCH_D §3.3). Vanilla th08 is single-player: player 1's word
+    // One Input_Poll (touch pulses advance per poll). Vanilla th08 is single-player: player 1's word
     // stays 0.
     pub fn poll(&mut self) -> Words {
         let mut w = [0; MAX_PLAYERS];
@@ -112,7 +111,7 @@ impl InputMux {
     }
 }
 
-// Save storage (not a port of the original, which writes next to th08.exe, 00 §1): never the game directory.
+// Save storage (the original writes next to th08.exe): never the game directory.
 // Native: `save_dir`, None = no saves. Web: localStorage (hex).
 #[derive(Clone, Debug, Default)]
 pub struct Storage {
@@ -148,7 +147,7 @@ impl Storage {
         }
     }
 
-    // Result state 12 creates the directory `replay` (16 §2.6); web storage has no directories.
+    // Result state 12 creates the directory `replay`; web storage has no directories.
     pub fn mkdir(&self, name: &str) {
         if let Some(dir) = &self.save_dir {
             let _ = std::fs::create_dir_all(dir.join(name));
@@ -350,7 +349,7 @@ impl Host for AppHost {
 }
 
 // Tools and tests: no devices. Each poll answers `keys`, or with recorded polls (session polls.txt) the value of poll
-// index `cursor`, then advances it (one poll per calc pass, so a restarted pass reads the next index, 00 §3).
+// index `cursor`, then advances it (one poll per calc pass, so a restarted pass reads the next index).
 #[derive(Clone, Debug, Default)]
 pub struct ToolHost {
     pub storage: Storage,
@@ -432,7 +431,7 @@ pub fn tool_host(ctx: &mut th08_core::game::Ctx) -> &mut ToolHost {
 mod tests {
     use super::*;
 
-    // 15 §1.1 DIK table: keypad directions and diagonals, both Shift/Ctrl, Home/P; keypad Enter unmapped.
+    // DIK table: keypad directions and diagonals, both Shift/Ctrl, Home/P; keypad Enter unmapped.
     #[test]
     fn key_table() {
         assert_eq!(map_key(KeyCode::Numpad8), UP);
@@ -454,7 +453,7 @@ mod tests {
         assert_eq!(k.word(), UP | KEY_HOME);
     }
 
-    // 15 §1.1: a failed keyboard read gives the joystick bits only; focus loss releases the keys.
+    // A failed keyboard read gives the joystick bits only; focus loss releases the keys.
     #[test]
     fn failed_read() {
         let mut k = Keyboard::default();
@@ -478,7 +477,7 @@ mod tests {
         assert_eq!(m.poll(), [0, 0]);
     }
 
-    // A restarted pass polls again and reads the next recorded index (00 §3).
+    // A restarted pass polls again and reads the next recorded index.
     #[test]
     fn recorded_polls() {
         let mut h = ToolHost {

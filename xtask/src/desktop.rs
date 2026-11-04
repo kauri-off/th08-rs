@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::assets::Game;
 use crate::util;
 
-// Pinned AppImage tooling (impl34), sha256-checked, cached in target/dist/tools/.
+// Pinned AppImage tooling, sha256-checked, cached in target/dist/tools/.
 const APPIMAGETOOL: (&str, &str) = (
     "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage",
     "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0",

@@ -1,23 +1,14 @@
 #!/bin/bash
-# usage: tools/arch_check freeze DIR | run DIR — port-vs-port references for the rewrite (REWRITE_PLAN step 0).
+# usage: tools/arch_check freeze DIR | run DIR — port-vs-port reference traces and draw hashes.
 # freeze: build, then write port traces + draw hashes of all sessions, demos 0-3 and the pilot replays into DIR.
-# run: fmt, 0-warning build, clippy wall (STEP11 11o), core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core: the crate cut, step 10c, enforces
-# the boundary), wasm + android check (tools/android_check), cargo test, then rerun every item and compare with DIR; exit 1 on any diff.
-# run also replays every session + pilot with emit off (`session --no-emit`, ARCH decision 2) and requires its trace = DIR's.
-# Draw = draw.hash (`--draw-hash`: per-frame hash of the draw-log text, no xz); a mismatch prints the first differing present
-# and a `--port-drawlog` command for a window around it. times.txt (item seconds peak-RSS-kB) in DIR / RUN_OUT orders the
-# next run longest first. Env: J (parallel jobs, default from MemAvailable and cores), CARGO_TARGET_DIR, RUN_OUT (run
-# output, default $TARGET/arch_run), ONLY (item regex), FAST=1 (run only: traces only, no draw hashes),
-# SCOPE=logic (run only, implies FAST; for runs that change no draw code): only the LOGIC_ITEMS subset — golden,
-# gameover_save (save path), options_cfg (config), the fullrun_noclip prefix f_ (session --to FULLRUN_TO, compared
-# as a prefix of the reference trace), demos 0 and 3, two pilots (udAr02 short, udDn14 long) and emit-off of golden + udAr02.
-# PACK=<pack dir or zip> (I18N G2): every item runs with that presentation pack mounted (TH08_PACK) and is compared with
-# the vanilla DIR as usual: a pack changes only pixels, so traces, reports and draw hashes must all stay identical.
+# run: fmt, 0-warning build, clippy, core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core), wasm + android
+# check, cargo test, then rerun every item (plus emit-off session replays) and compare with DIR; exit 1 on any diff.
+# Env: J, CARGO_TARGET_DIR, RUN_OUT, ONLY (item regex), FAST=1 (traces only), SCOPE=logic (LOGIC_ITEMS), PACK (pack mounted, same results).
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
 BIN=$TARGET/release
-# Binary names (cargo --bin; the tool bins live in crates/th08-tools since step 10c), these names must stay.
+# Binary names (cargo --bin, in crates/th08-tools); these names must stay.
 SESSION_BIN=session DEMOSYNC_BIN=demosync DRAWRUN_BIN=drawrun
 SESSIONS="golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg"
 SESSION_SRC=$ROOT/specs/data/sessions
@@ -125,8 +116,8 @@ fail=0
 cargo fmt --all --check > /dev/null 2>&1 && echo "fmt ok" || { echo "fmt FAILED"; fail=1; }
 w=$(cargo build --release --workspace 2>&1 | grep -cE '^(warning|error)')
 [[ $w == 0 ]] && echo "build ok, 0 warnings" || { echo "build: $w warnings/errors"; fail=1; }
-# Clippy wall (STEP11 11o): every target with the [workspace.lints] subset, any warning fails. CLIPPY_PENDING lists files
-# of a run still open (DEVLOSS2): their warnings are counted, not failed; empty = `cargo clippy … -- -D warnings`.
+# Clippy wall: every target, any warning fails. CLIPPY_PENDING lists files whose warnings are counted, not failed;
+# empty = `cargo clippy … -- -D warnings`.
 CLIPPY_PENDING=${CLIPPY_PENDING-}
 if [[ -z $CLIPPY_PENDING ]]; then
   cargo clippy -q --workspace --all-targets -- -D warnings > /dev/null 2>&1 && echo "clippy ok, 0 warnings" || { echo "clippy FAILED"; fail=1; }

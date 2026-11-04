@@ -1,7 +1,4 @@
-//! th08.pak from th08.dat and thbgm.pak from thbgm.dat (docs/arch/ASSETS_FORMAT.md §3.1, §3.5): `repack <game dir>
-//! <out dir> [--only content|bgm] [--frame-mb N] [--level L] [--table FILE] [--vorbis-q Q] [--ffmpeg PATH]`.
-//! th08.pak: every entry keeps the bytes `Archive::read` returns (01 §5–§6), zstd-compressed, read back and checked
-//! entry by entry; `--table` writes core's vanilla Logic sha256 table. thbgm.pak: see `bgm` below.
+//! Builds th08.pak from th08.dat (checked entry by entry; `--table` writes core's vanilla sha256 table) and thbgm.pak.
 
 use anyhow::{Context, bail, ensure};
 use std::fmt::Write as _;
@@ -171,12 +168,9 @@ fn content(a: &Args, ar: &Archive, dat_len: usize) -> anyhow::Result<()> {
     Ok(())
 }
 
-// thbgm.pak (ASSETS_FORMAT §2.1, §3.1, §3.5): per thbgm.fmt track (02 §2) the PCM `[0, loop_end)` of thbgm.dat plus
-// 1 s of the loop continuation `[loop_start, …)` is encoded to Ogg Vorbis (ffmpeg libvorbis, bit-exact muxing, so the
-// output is deterministic); the decode is cut to `loop_end`. Self-check per track (the bgmcheck metrics): decoded
-// length ≥ loop_end, lag 0 in ±64 frames, junction RMS ≤ 1.5× global RMS error. Seam SNR (and the same splice 8×
-// wider) is reported only: a short window's SNR follows the local loudness, so no SNR bound holds per track. Then
-// every track is read back from the written file through the game's `BgmSource` and the header probe is checked.
+// thbgm.pak: per track the PCM `[0, loop_end)` plus 1 s of loop continuation encoded to Ogg Vorbis (ffmpeg, deterministic),
+// decode cut to `loop_end`. Self-check per track: length ≥ loop_end, lag 0 in ±64 frames, junction RMS ≤ 1.5× global
+// RMS error (seam SNR only reported); then every track is read back through the game's `BgmSource`.
 mod bgm {
     use super::Args;
     use anyhow::{Context, bail, ensure};
@@ -190,9 +184,9 @@ mod bgm {
     use th08_formats::pack::{self, BgmInfo, BgmTrack, Kind, Pack};
     use th08_formats::thbgm::{Track, parse_fmt};
 
-    // Encoder look-ahead past loop_end: the musical continuation, 1 s (§2.1 "pad").
+    // Encoder look-ahead past loop_end: the musical continuation, 1 s.
     const PAD: usize = 44100;
-    // Lag search range and windows (frames), seam half-width and junction half-width (§2.1).
+    // Lag search range and windows (frames), seam half-width and junction half-width.
     const LAG: i64 = 64;
     const LAG_WIN: usize = 65536;
     const SEAM: usize = 4096;

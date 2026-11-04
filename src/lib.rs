@@ -1,6 +1,4 @@
-//! th08 app: the game window and launcher (app, launcher), settings and platform services, data sources, input
-//! devices and the frame pacer; entries `start` (wasm) and `android_main` (STEP10_CRATES.md §1). Logic lives in
-//! th08-core, drawing in th08-render, sound in th08-audio.
+//! th08 app: game window, launcher, settings, platform services, data sources, input and pacer; wasm / Android entries.
 
 pub mod app;
 pub mod i18n;
@@ -37,9 +35,8 @@ pub fn start(files: js_sys::Array) {
     }
 }
 
-// Android entry (ARCH_D_MOBILE §6.1 item 6, §6.3 runs 1–2): logcat logger, panics to logcat, config + saves in the
-// app's internal storage. Game files: the APK's bundled assets if it has th08.dat (§2.1), else
-// `<external files dir>/game` (adb push target; no SAF picker yet, §2.2).
+// Android entry: logcat logger, panics to logcat, config + saves in the app's internal storage. Game files: the
+// APK's bundled assets if it has th08.dat, else `<external files dir>/game` (adb push target).
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {

@@ -1,12 +1,11 @@
-//! Demo sync check: `demosync <0-3> [from-to] [rng-frame]` prints the report, trace/port rows around a range and,
-//! with rng-frame, the call sites of every RNG draw made in that gameplay frame.
+//! Demo sync check: `demosync <0-3> [from-to] [rng-frame]`; rng-frame lists the call sites of that frame's RNG draws.
 
 use th08_core::trace::demo_sample as sample;
 use th08_tools::demosync::{FIELDS, parse_trace};
 
 #[expect(clippy::cast_sign_loss, reason = "demo frames are ≥ 0")]
 fn main() -> anyhow::Result<()> {
-    // RUST_LOG only (arch_check PACK: the pack mount line); stderr is never digested.
+    // RUST_LOG only (the pack mount line for arch_check); stderr is never digested.
     let _ = env_logger::try_init();
     let args: Vec<String> = std::env::args().collect();
     let n: u8 = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -41,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     let (a, b) = range.unwrap_or((0, 0));
     let mut base = 0;
     let mut started = false;
-    // Kept across calcs that do not advance the demo frame, like the former thread-local list.
+    // Kept across calcs that do not advance the demo frame.
     let mut calls = Vec::new();
     loop {
         let before = ctx.w.game.demo_frame;

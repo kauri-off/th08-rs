@@ -1,5 +1,4 @@
-//! Debug tool: demo sync check. Plays demorpyN in the port and compares each gameplay frame with the
-//! ground-truth trace (specs/data/demoN_trace.txt); used to locate divergences only.
+//! Demo sync check: plays demorpyN in the port and compares each gameplay frame with its ground-truth trace.
 
 use th08_core::game::Ctx;
 
@@ -157,7 +156,7 @@ pub fn run(ctx: &mut Ctx, n: u8, trace: &str) -> anyhow::Result<Report> {
     })
 }
 
-// Tools-bound tests (headless `Gfx`, settings, game-dir source): move with this file to th08-tools in 10c.
+// Tools-bound tests (headless `Gfx`, settings, game-dir source).
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     // Frames each demo must stay in sync for (raise as divergences get fixed).

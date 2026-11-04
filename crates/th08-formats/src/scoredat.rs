@@ -25,15 +25,15 @@ pub enum ScoreError {
 pub type Result<T> = std::result::Result<T, ScoreError>;
 
 pub const CARDS: usize = 222;
-// Outer layer: archive block cipher (key, step, block, limit) (15 §2.1, cipher of 01 §2).
+// Outer layer: archive block cipher (key, step, block, limit) (01 §2).
 const CRYPT: (u8, u8, usize, usize) = (0x59, 0x79, 0x100, 0xC00);
-// CATK counter cap (15 §2.5) and PLST counter cap (15 §2.9).
+// CATK counter cap and PLST counter cap.
 const CAP: u32 = 9999;
 const PLST_CAP: u32 = 999_999;
-// VRSM values of the shipped th08.exe (15 §2.10).
+// VRSM values of the shipped th08.exe.
 pub const EXE_SIZE: u32 = 840_704;
 pub const EXE_SUM: u32 = 0xA268_61B9;
-// Version list file, read from th08.dat only at boot (15 §2.10: `th08_%.4x%c.ver` with 0x100, 'd').
+// Version list file, read from th08.dat only at boot (`th08_%.4x%c.ver` with 0x100, 'd').
 pub const VER_LIST_NAME: &str = "th08_0100d.ver";
 
 // C `strncmp(a, b, n) == 0` on byte strings (missing bytes read as NUL).
@@ -77,7 +77,7 @@ fn scan_d(b: &[u8]) -> Option<(u32, &[u8])> {
     Some((if neg { v.wrapping_neg() } else { v }, &b[i + n..]))
 }
 
-// ExeCheck steps 1–4 (15 §2.10) over the `tag size sum\n` lines; `tag` is the 8-byte field (NUL-terminated).
+// ExeCheck steps 1–4 over the `tag size sum\n` lines; `tag` is the 8-byte field (NUL-terminated).
 // QUIRK: a tag-matching line with other numbers makes the original walk past the buffer end unless a later line
 // matches; that over-run is treated as a fail, as the spec allows.
 pub fn exe_check_in(list: Option<&[u8]>, tag: &[u8], size: u32, sum: u32) -> bool {
@@ -122,7 +122,7 @@ fn put_u32s(b: &mut [u8], o: usize, v: &[u32]) {
     }
 }
 
-// Chunk header (15 §2.1): magic, u16 size twice, u8 version, 3 bytes padding.
+// Chunk header: magic, u16 size twice, u8 version, 3 bytes padding.
 fn chunk(magic: &[u8; 4], size: usize, version: u8) -> Vec<u8> {
     let mut c = vec![0; size];
     c[..4].copy_from_slice(magic);
@@ -132,7 +132,7 @@ fn chunk(magic: &[u8; 4], size: usize, version: u8) -> Vec<u8> {
     c
 }
 
-// HSCR chunk v4, 0x168 bytes, kept raw (15 §2.3 offsets): +0x0C score ÷10, +0x10 slowdown f32, +0x14 shot, +0x15
+// HSCR chunk v4, 0x168 bytes, kept raw: +0x0C score ÷10, +0x10 slowdown f32, +0x14 shot, +0x15
 // difficulty, +0x16 stage (99 = cleared), +0x17 name, +0x20 date, +0x26 continues, +0x166 default flag.
 #[derive(Clone)]
 pub struct Hscr(pub Vec<u8>);
@@ -150,7 +150,7 @@ impl Hscr {
     pub fn difficulty(&self) -> usize {
         self.0[0x15] as usize
     }
-    // Default table entry (Result_OnRegister 0x45964D, 15 §2.3): magic "DMYS", name "--------", date "--/--",
+    // Default table entry (Result_OnRegister 0x45964D): magic "DMYS", name "--------", date "--/--",
     // stage byte 0 (shown as stage 1, 16 §2.3), +0x166 = 1. The loop never writes the shot byte +0x14, so it stays 0.
     pub fn placeholder(score: u32, diff: usize) -> Self {
         let mut h = Self(chunk(b"DMYS", 0x168, 4));
@@ -158,7 +158,7 @@ impl Hscr {
         h.0[0x166] = 1;
         h
     }
-    // ScoreDat_Save skips every node whose magic is not "HSCR" (15 §2.3).
+    // ScoreDat_Save skips every node whose magic is not "HSCR".
     pub fn is_placeholder(&self) -> bool {
         &self.0[..4] != b"HSCR"
     }
@@ -204,7 +204,7 @@ impl Default for Hscr {
     }
 }
 
-// CLRD chunk v4 (15 §2.4): +0x0C no-continue masks, +0x16 any-clear masks (E, N, H, L, Ex; bit 1 << stage, 0x4000
+// CLRD chunk v4: +0x0C no-continue masks, +0x16 any-clear masks (E, N, H, L, Ex; bit 1 << stage, 0x4000
 // Final B, 0x8000 Final A), +0x20 "bad ending seen" flag. Entry 12 is the union over all shots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clrd {
@@ -216,7 +216,7 @@ pub struct Clrd {
 impl Default for Clrd {
     fn default() -> Self {
         Self {
-            // Every mask defaults to 1 (the stage-1 bit, 15 §2.4).
+            // Every mask defaults to 1 (the stage-1 bit).
             nc: [1; 5],
             any: [1; 5],
             bad_ending: 0,
@@ -224,7 +224,7 @@ impl Default for Clrd {
     }
 }
 
-// CATK chunk v3, 0x22C bytes (15 §2.5); in memory at GM+0x40.
+// CATK chunk v3, 0x22C bytes; in memory at GM+0x40.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Catk {
     // `CATK` magic set (loaded or stamped at game start); the chunk is saved only when set.
@@ -259,7 +259,7 @@ impl Default for Catk {
 }
 
 impl Catk {
-    // +0x0E = (Σ signed name bytes up to the NUL + Σ all 78 u32 counters) & 0xFF (15 §2.5).
+    // +0x0E = (Σ signed name bytes up to the NUL + Σ all 78 u32 counters) & 0xFF.
     pub fn compute_checksum(&self) -> u8 {
         let n: i32 = self
             .name
@@ -275,13 +275,13 @@ impl Catk {
         n.cast_unsigned().wrapping_add(c) as u8
     }
 
-    // "Attempted" for the FLSP unlocks: any attempt counter ≠ 0, story or practice (15 §2.8).
+    // "Attempted" for the FLSP unlocks: any attempt counter ≠ 0, story or practice.
     pub fn attempted(&self) -> bool {
         self.counters[C_ATTEMPTS][12] != 0 || self.counters[C_PRACTICE + C_ATTEMPTS][12] != 0
     }
 }
 
-// PSCR chunk v2, 0x178 bytes per shot (15 §2.6): +0x0C plays [stage][diff], +0xC0 hiscore ÷10, +0x175 used.
+// PSCR chunk v2, 0x178 bytes per shot: +0x0C plays [stage][diff], +0xC0 hiscore ÷10, +0x175 used.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Pscr {
     pub plays: [[u32; 5]; 9],
@@ -289,7 +289,7 @@ pub struct Pscr {
     pub used: u8,
 }
 
-// PLST chunk v2, 0x228 bytes (15 §2.9): run / play time h, m, s, ms; counters [block][17] with blocks 0..4 =
+// PLST chunk v2, 0x228 bytes: run / play time h, m, s, ms; counters [block][17] with blocks 0..4 =
 // difficulty, 5 unused, 6 total; +0x208 music-room heard flags.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Plst {
@@ -299,7 +299,7 @@ pub struct Plst {
     pub music: [u8; 32],
 }
 
-// Counter indices inside a 17-word block (15 §2.9); [1 + shot] are per-shot plays.
+// Counter indices inside a 17-word block; [1 + shot] are per-shot plays.
 pub const PL_PLAYS: usize = 0;
 pub const PL_RETRIES: usize = 13;
 pub const PL_CLEARS: usize = 14;
@@ -319,7 +319,7 @@ impl Plst {
         }
     }
 
-    // Adds `ms` to an h/m/s/ms clock with carries (Supervisor_UpdatePlayTime 0x448418, 15 §2.9).
+    // Adds `ms` to an h/m/s/ms clock with carries (Supervisor_UpdatePlayTime 0x448418).
     pub fn add_time(t: &mut [u32; 4], ms: u64) {
         let total = ((u64::from(t[0]) * 60 + u64::from(t[1])) * 60 + u64::from(t[2])) * 1000
             + u64::from(t[3])
@@ -333,8 +333,8 @@ impl Plst {
     }
 }
 
-// All chunks of one score.dat; `lsnm` +0x0C char[12] (15 §2.7), `flsp` +0x0C u8[17] (15 §2.8), `vrsm` +0x0C..+0x1C
-// tag, exe size, exe sum (15 §2.10).
+// All chunks of one score.dat; `lsnm` +0x0C char[12], `flsp` +0x0C u8[17], `vrsm` +0x0C..+0x1C tag, exe size,
+// exe sum.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScoreDat {
     pub hscr: Vec<Hscr>,
@@ -376,7 +376,7 @@ impl Default for ScoreDat {
             clrd: [Clrd::default(); 13],
             catk: vec![Catk::default(); CARDS],
             pscr: Default::default(),
-            // LSNM default: 8 spaces (15 §2.7).
+            // LSNM default: 8 spaces.
             lsnm: *b"        \0\0\0\0",
             flsp: [0; 17],
             plst: Plst::default(),
@@ -385,7 +385,7 @@ impl Default for ScoreDat {
     }
 }
 
-// ScoreDat_Load 0x45A5E0 container (15 §2.1): removes both layers (archive cipher, then the rolling XOR from byte 1),
+// ScoreDat_Load 0x45A5E0 container: removes both layers (archive cipher, then the rolling XOR from byte 1),
 // checks the u16 checksum of bytes 4.., header size 0x1C and version 1, then LZSS-decompresses the body.
 pub fn decode_container(file: &[u8]) -> Result<Vec<u8>> {
     if file.len() < 0x1C {
@@ -413,7 +413,7 @@ pub fn decode_container(file: &[u8]) -> Result<Vec<u8>> {
 }
 
 // ScoreDat_Save 0x453D0D container: `r` are the random header bytes +0x01 and +0x06; the rolling XOR runs on the
-// plain bytes so that the decoder above recovers them (15 §2.1).
+// plain bytes so that the decoder above recovers them.
 pub fn encode_container(body: &[u8], r: [u8; 2]) -> Vec<u8> {
     let comp = lzss_compress(body);
     let mut b = vec![0u8; 0x1C];
@@ -439,8 +439,8 @@ pub fn encode_container(body: &[u8], r: [u8; 2]) -> Vec<u8> {
 }
 
 impl ScoreDat {
-    // Chunk walk of ScoreDat_Get* (15 §2.1): only chunks with matching magic and version are taken; a size-0 chunk or no
-    // TH8K v1 rejects the file. `ver_list` is the boot-loaded version list (15 §2.10), None = not loaded (pass).
+    // Chunk walk of ScoreDat_Get*: only chunks with matching magic and version are taken; a size-0 chunk or no
+    // TH8K v1 rejects the file. `ver_list` is the boot-loaded version list, None = not loaded (pass).
     pub fn parse(file: &[u8], ver_list: Option<&[u8]>) -> Result<Self> {
         let d = decode_container(file)?;
         let mut s = Self::default();
@@ -448,7 +448,7 @@ impl ScoreDat {
         let mut p = 0x1C;
         while p + 12 <= d.len() {
             let size = u16_at(&d, p + 4) as usize;
-            // Every VRSM v1 chunk goes through ExeCheck (tag +0x0C, size +0x14, sum +0x18) before the size-0 test (15 §2.10).
+            // Every VRSM v1 chunk goes through ExeCheck (tag +0x0C, size +0x14, sum +0x18) before the size-0 test.
             if &d[p..p + 4] == b"VRSM" && d[p + 8] == 1 {
                 let ok = d
                     .get(p + 0x0C..p + 0x1C)
@@ -533,7 +533,7 @@ impl ScoreDat {
         Ok(s)
     }
 
-    // Chunk list in the saver's order (15 §2.1).
+    // Chunk list in the saver's order.
     pub fn body(&self) -> Vec<u8> {
         let mut out = chunk(b"TH8K", 0x0C, 1);
         for h in &self.hscr {
@@ -593,13 +593,13 @@ impl ScoreDat {
         out
     }
 
-    // Saving draws two Rng_Range16(256) values (15 §2.1); the RNG state carries into the next game (11 §1.5).
+    // Saving draws two Rng_Range16(256) values; the RNG state carries into the next game (11 §1.5).
     pub fn encode(&self, rng: &mut impl ByteSource) -> Vec<u8> {
         let r = [rng.next_byte(), rng.next_byte()];
         encode_container(&self.body(), r)
     }
 
-    // ScoreDat_GetHiscore 0x45A950: max(top entry of (shot, difficulty), 100000), ÷10 units (15 §2.3).
+    // ScoreDat_GetHiscore 0x45A950: max(top entry of (shot, difficulty), 100000), ÷10 units.
     pub fn hiscore(&self, shot: usize, diff: usize) -> u32 {
         self.hscr
             .iter()
@@ -611,7 +611,7 @@ impl ScoreDat {
     }
 
     // ScoreDat_GetHiscore 4th argument: continues byte +0x26 of the top entry of (shot, difficulty), 0 when there is
-    // none; of equal scores the later file entry is on top (15 §2.3).
+    // none; of equal scores the later file entry is on top.
     pub fn hiscore_continues(&self, shot: usize, diff: usize) -> u8 {
         self.hscr
             .iter()
@@ -623,7 +623,7 @@ impl ScoreDat {
             .map_or(0, Hscr::continues)
     }
 
-    // One ranking list [diff][shot] as it stands in memory (15 §2.3): `hscr` holds the list's stored entries in list
+    // One ranking list [diff][shot] as it stands in memory: `hscr` holds the list's stored entries in list
     // order, each one above the default rows of equal score.
     pub fn ranking(&self, shot: usize, diff: usize) -> Vec<Hscr> {
         let mut list: Vec<Hscr> = (0..10u32)
@@ -644,7 +644,7 @@ impl ScoreDat {
         list
     }
 
-    // Result_OnRegister 0x45964D list build (15 §2.3): the default table, then the file's HSCR entries in file order,
+    // Result_OnRegister 0x45964D list build: the default table, then the file's HSCR entries in file order,
     // each with ScoreList_Insert (before every equal score); top 10 kept. Equal scores of one list end up in reverse
     // file order, so each load/save cycle flips them. Port: `hscr` stands for the file (it is what the last save wrote).
     pub fn rebuild_lists(&mut self) {
@@ -673,7 +673,7 @@ impl ScoreDat {
             .collect();
     }
 
-    // ScoreList_Insert 0x45A500 (15 §2.3): the new entry goes before every equal score (the walk passes a node only while
+    // ScoreList_Insert 0x45A500: the new entry goes before every equal score (the walk passes a node only while
     // the new score is strictly less); only the top 10 survive and default entries are never stored. Returns the rank.
     pub fn insert_hscr(&mut self, h: Hscr) -> Option<usize> {
         let (shot, diff) = (h.shot(), h.difficulty());
@@ -685,7 +685,7 @@ impl ScoreDat {
             .retain(|e| e.shot() != shot || e.difficulty() != diff);
         self.hscr
             .extend(list.into_iter().filter(|e| !e.is_placeholder()));
-        // The saver walks the lists by difficulty, then shot (15 §2.1).
+        // The saver walks the lists by difficulty, then shot.
         self.hscr.sort_by_key(|e| (e.difficulty(), e.shot()));
         (rank < 10).then_some(rank)
     }
@@ -695,14 +695,14 @@ impl ScoreDat {
         self.hscr.iter_mut().find(|h| h.0[9] != 0)
     }
 
-    // ScoreDat_Save sets the in-memory entry's +9 := 0 before copying it (15 §2.3, 16 §2.3).
+    // ScoreDat_Save sets the in-memory entry's +9 := 0 before copying it (16 §2.3).
     pub fn clear_new_flags(&mut self) {
         for h in &mut self.hscr {
             h.0[9] = 0;
         }
     }
 
-    // GameMgr_LoadScoreData 0x43BBE1 (15 §2.2): the CATK block is zeroed and all 222 records stamped (magic, size,
+    // GameMgr_LoadScoreData 0x43BBE1: the CATK block is zeroed and all 222 records stamped (magic, size,
     // version 3, id) before the file is loaded. With the blocks kept in memory, a record that is in the file
     // (`present`) already equals its file copy; the others become zero records with the magic.
     pub fn stamp_catk(&mut self) {
@@ -714,7 +714,7 @@ impl ScoreDat {
         }
     }
 
-    // Spell_Start 0x4152A0 attempt (15 §2.5 steps 1–6): name and owner are written first (`strcpy`, bytes after the
+    // Spell_Start 0x4152A0 attempt (steps 1–6): name and owner are written first (`strcpy`, bytes after the
     // NUL keep their old value), then the checksum of the new name is tested with no magic test; a mismatch zeroes all
     // counters. Attempts of this shot and of all shots (index 12) are capped at 9999.
     pub fn card_attempt(
@@ -745,7 +745,7 @@ impl ScoreDat {
         c.checksum = c.compute_checksum();
     }
 
-    // Spell_End 0x4161B0 capture (15 §2.5): captures and max bonus; comments only in spell practice.
+    // Spell_End 0x4161B0 capture: captures and max bonus; comments only in spell practice.
     pub fn card_capture(
         &mut self,
         id: usize,
@@ -789,7 +789,7 @@ impl ScoreDat {
 mod tests {
     use super::*;
 
-    // 15 §2.3: the continues digit comes from the top entry; equal scores → the later file entry.
+    // The continues digit comes from the top entry; equal scores → the later file entry.
     #[test]
     fn hiscore_continues_top_entry() {
         let mut s = ScoreDat::default();
@@ -825,7 +825,7 @@ mod tests {
         assert_eq!(t.card_history(54, 0, false), (1, 1));
     }
 
-    // 15 §2.3 (RE-Q26): a new entry goes before equal scores, including a default entry of the same score.
+    // A new entry goes before equal scores, including a default entry of the same score.
     #[test]
     fn insert_before_equal() {
         let mut s = ScoreDat::default();
@@ -843,7 +843,7 @@ mod tests {
         assert_eq!(s.insert_hscr(c), Some(3));
     }
 
-    // 15 §2.3 (audit A.67): each Result_OnRegister rebuild re-inserts the stored entries, flipping equal scores.
+    // Each Result_OnRegister rebuild re-inserts the stored entries, flipping equal scores.
     #[test]
     fn rebuild_flips_ties() {
         let mut s = ScoreDat::default();
@@ -866,7 +866,7 @@ mod tests {
         assert_eq!((&r[0], r[1].is_placeholder()), (&d, true));
     }
 
-    // 15 §2.3 (audit A.46): default rows are "DMYS" entries with stage byte 0 and are never saved.
+    // Default rows are "DMYS" entries with stage byte 0 and are never saved.
     #[test]
     fn default_rows() {
         let mut s = ScoreDat::default();
@@ -884,7 +884,7 @@ mod tests {
         assert_eq!(s.hscr.len(), 1);
     }
 
-    // 15 §2.10: ExeCheck over the shipped list; `%d` wraps, the duplicate "0100c" tag passes on its second line.
+    // ExeCheck over the shipped list; `%d` wraps, the duplicate "0100c" tag passes on its second line.
     #[test]
     fn exe_check_list() {
         let list = b"0100c 840704 1605176696\n0100c 840704 1588396223\n0100d 840704 2724749753\n";
@@ -913,7 +913,7 @@ mod tests {
             841_216,
             3_000_360_128
         ));
-        // A VRSM v1 chunk failing the check rejects the whole file (15 §2.1).
+        // A VRSM v1 chunk failing the check rejects the whole file.
         let mut s = ScoreDat::default();
         let mut rng = crate::testdata::Counter(1, 0);
         assert!(ScoreDat::parse(&s.encode(&mut rng), Some(&ver)).is_ok());
@@ -922,12 +922,12 @@ mod tests {
         assert!(ScoreDat::parse(&s.encode(&mut rng), None).is_ok());
     }
 
-    // 15 §2.2 / §2.5 (RE-Q43): game start stamps all 222 records; Spell_Start writes the name, then tests the checksum
+    // Game start stamps all 222 records; Spell_Start writes the name, then tests the checksum
     // against it, with no magic test.
     #[test]
     fn stamp_and_attempt() {
         let mut s = ScoreDat::default();
-        // Hidden code +1 on a record without the magic (§2.12) is dropped by the stamp: first attempt = 1.
+        // Hidden code +1 on a record without the magic is dropped by the stamp: first attempt = 1.
         s.catk[7].counters[C_ATTEMPTS] = [1; 13];
         s.catk[8].present = true;
         s.catk[8].counters[C_ATTEMPTS][0] = 5;

@@ -1,4 +1,4 @@
-//! Extracts every th08.dat entry: `datdump <th08.dat> <outdir>` (decoded with archive.rs, 01 §5–§6).
+//! Extracts every th08.dat entry: `datdump <th08.dat> <outdir>`.
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();

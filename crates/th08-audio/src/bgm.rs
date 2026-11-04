@@ -1,6 +1,4 @@
-//! BGM sample source (docs/arch/ASSETS_FORMAT.md §3.3, AS2): a thbgm.fmt track's stored PCM `[0, loop_end)` (02 §1–§2)
-//! from thbgm.dat by range, or decoded from its Ogg Vorbis stream in thbgm.pak (lewton) and cut to `loop_end`;
-//! published progressively into a `Pcm` block by block, so playback starts after the first ring (AS3, §3.4).
+//! BGM sample source: a track's PCM from thbgm.dat or thbgm.pak's Ogg Vorbis, published block by block.
 
 use anyhow::{Context, Result, ensure};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -10,7 +8,7 @@ use th08_core::content::{BGM_PACK, bgm_pack_index};
 use th08_formats::pack::Index;
 use th08_formats::thbgm::Track;
 
-// One stereo frame of thbgm.dat: s16 LE left, right (02 §2 WAVEFORMATEX).
+// One stereo frame of thbgm.dat: s16 LE left, right (WAVEFORMATEX).
 pub type Frame = [i16; 2];
 
 pub enum BgmSource {
@@ -31,7 +29,7 @@ impl BgmSource {
         }
     }
 
-    // The track's `[0, loop_end)` frames (`t.length`, 02 §2) at once (repack's read-back check).
+    // The track's `[0, loop_end)` frames (`t.length`) at once (repack's read-back check).
     pub async fn read(&self, source: &Source, t: &Track) -> Result<Vec<Frame>> {
         let pcm = Pcm::new(t.length);
         self.stream(source, t, &mut PcmWriter::new(pcm.clone()))
@@ -84,12 +82,12 @@ impl BgmSource {
     }
 }
 
-// Frames per publication block: one ring notification chunk (02 §3, 0.25 s).
+// Frames per publication block: one ring notification chunk (0.25 s).
 pub const BLOCK: usize = 11025;
-// The streaming ring (02 §3): 16 chunks; the play command's fill stage needs these first.
+// The streaming ring: 16 chunks; the play command's fill stage needs these first.
 pub const RING_FRAMES: usize = 16 * BLOCK;
 
-// A track's `[0, len)` frames, filled block by block while it plays (ASSETS_FORMAT §3.4). Readers never block: a
+// A track's `[0, len)` frames, filled block by block while it plays. Readers never block: a
 // block not decoded yet reads as silence and sets `underrun`.
 pub struct Pcm {
     len: usize,
@@ -229,7 +227,7 @@ pub fn pcm_frames(bytes: &[u8]) -> Vec<Frame> {
 }
 
 // Ogg Vorbis (44.1 kHz stereo) → frames, decoding stops once `max` frames exist. lewton starts at sample 0 of the
-// encoder input (lag 0 measured, ASSETS_FORMAT §2.1) and applies no end trim, so the result may run past `max`.
+// encoder input (lag 0 measured) and applies no end trim, so the result may run past `max`.
 pub fn decode_vorbis(ogg: &[u8], max: usize) -> Result<Vec<Frame>> {
     let mut out: Vec<Frame> = Vec::with_capacity(max.min(1 << 24));
     vorbis_packets(ogg, |p| {

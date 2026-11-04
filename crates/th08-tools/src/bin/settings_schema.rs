@@ -1,6 +1,4 @@
-//! Port-only tool (no spec): prints the settings table `th08::settings::ENTRIES` as JSON for the Android Compose
-//! launcher (android/, MATERIAL1), so its screen is generated from the table and cannot drift. Entries and groups
-//! also carry `ja` / `ru` objects from the i18n tables (docs/arch/I18N.md §3.3, read by the launcher from L2 on).
+//! Prints the settings table (with ja / ru texts) as JSON for the Android Compose launcher's generated screen.
 // usage: settings_schema [OUT.json] — stdout when no path is given.
 
 use serde_json::{Value, json};

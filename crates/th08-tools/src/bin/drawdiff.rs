@@ -1,6 +1,4 @@
-//! Draw-log diff: `drawdiff <reference> <port-log> [from-to] [--playfield|--full] [--key scene|demo|present]
-//! [--worst N] [--out DIR]`. Prints per-frame differences and writes DIR/index.html (default /tmp/drawdiff) with
-//! renders of both logs (port renderer, textures from TH08_DIR) for the worst frames and the reference screenshots.
+//! Draw-log diff: per-frame differences plus DIR/index.html (default /tmp/drawdiff) with renders of both logs.
 
 use std::path::{Path, PathBuf};
 use th08_tools::drawlog::{self, DemoMerge, Frame, KeyMode, Opts};

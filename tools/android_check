@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: tools/android_check — cargo check of the workspace libs for aarch64-linux-android (ARCH_D_MOBILE §1.1, §6.1 item 7).
+# usage: tools/android_check — cargo check of the workspace libs for aarch64-linux-android.
 # Prints "android ok" / "android FAILED" (exit 1) / "android skipped: …" (exit 0). NDK env is set only here.
 # Env: ANDROID_SDK (default ~/.local/share/android-sdk/Sdk), ANDROID_API (default 26), V=1 shows cargo output.
 set -u

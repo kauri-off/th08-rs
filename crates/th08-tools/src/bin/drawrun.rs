@@ -1,12 +1,9 @@
-//! Headless port run that writes a draw log: `drawrun <out[.xz]> menu <input.txt> [clr]` replays a menu script
-//! (README of specs/data/drawlog; a `*mopup1*` input gets that script's score.dat and replays), `drawrun <out[.xz]> demo <0-3> [last demo frame]` plays an attract demo.
-//! `--draw-hash`: <out> is a directory that gets draw.hash (`HashSink`) instead of a log; `--window A-B` keeps only
-//! presents A..B (log or hash).
+//! Headless port run that writes a draw log (or `--draw-hash` hashes) of a menu input script or an attract demo.
 
 use std::io::Write;
 
 fn main() -> anyhow::Result<()> {
-    // RUST_LOG only (arch_check PACK: the pack mount line); stderr is never digested.
+    // RUST_LOG only (the pack mount line for arch_check); stderr is never digested.
     let _ = env_logger::try_init();
     let (mut args, mut hash_on, mut window) = (Vec::new(), false, (i64::MIN, i64::MAX));
     let mut it = std::env::args().skip(1);

@@ -14,27 +14,27 @@ use anyhow::Result;
 use std::f32::consts::PI;
 use std::ops::{Index, IndexMut};
 
-// EffectMgr_Calc prio 13, EffectMgr_Draw 0x427F00 prio 12 (13 §2.3, §2.4).
+// EffectMgr_Calc prio 13, EffectMgr_Draw 0x427F00 prio 12.
 pub const CALC_PRIO: u16 = 13;
 pub const DRAW_PRIO: u16 = 12;
 // ANM slot 6 etama.anm (all effect scripts), slot 9 effNN.anm (spell backgrounds, 13 §5).
 pub const SCRIPT_SLOT: usize = 6;
 pub const BG_SLOT: usize = 9;
-// 653 × 0x360: 0–511 ring pool, 512–639 "high" pool, 640–652 fixed slots 0–12 (13 §2.1).
+// 653 × 0x360: 0–511 ring pool, 512–639 "high" pool, 640–652 fixed slots 0–12.
 const RING_POOL: usize = 512;
 const HIGH_POOL: usize = 128;
 const FIXED: usize = 13;
 const TOTAL: usize = RING_POOL + HIGH_POOL + FIXED;
 // Port stand-in for the dummy effect (index 653) returned when a pool is full.
 pub const NONE: usize = usize::MAX;
-// Spawn colours: white (most callers), player death ring, bomb invulnerability ring (13 §2.7, 14 §1.2).
+// Spawn colours: white (most callers), player death ring, bomb invulnerability ring (14 §1.2).
 pub const WHITE: D3dColor = D3dColor(0xFFFF_FFFF);
 const DEATH_RING: D3dColor = D3dColor(0xFFF0_404F);
 const INVULN_RING: D3dColor = D3dColor(0xFFFF_4040);
-// Orbit spin per frame (13 §2.6b) and the type-19 spin range (13 §2.6a): the exe's 0.0314159, not π/100.
+// Orbit spin per frame and the type-19 spin range: the exe's 0.0314159, not π/100.
 const ORBIT_SPIN: f32 = 0.031_415_9;
 
-// Fixed slots (13 §2.2).
+// Fixed slots.
 pub const FIX_INVULN: usize = 0;
 pub const FIXED_BASE: usize = RING_POOL + HIGH_POOL;
 pub const FIX_SPELL_INDEX: usize = FIXED_BASE + FIX_SPELL;
@@ -44,19 +44,19 @@ pub const FIX_DEATH_BURST: usize = 3;
 pub const FIX_GAUGE: usize = 8;
 pub const FIX_DEATH: usize = 11;
 
-// Effect type → etama.anm script (table 0x4C6D30, 13 §2.6).
+// Effect type → etama.anm script (table 0x4C6D30).
 const SCRIPTS: [i32; 66] = [
     28, 29, 30, 31, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 45, 45, 0, 32, 33, 51, 56, 52, 54, 104,
     104, 35, 53, 34, 57, 58, 59, 60, 48, 49, 50, 88, 88, 92, 71, 76, 81, 82, 83, 83, 83, 83, 84,
     72, 85, 86, 80, 73, 77, 88, 88, 87, 96, 55, 100, 78, 102, 103, 75, 74, 77, 98,
 ];
 
-// Types drawn by the ring renderer 0x427450 (13 §2.6 table).
+// Types drawn by the ring renderer 0x427450.
 fn is_ring(kind: u8) -> bool {
     matches!(kind, 35..=37 | 39..=46 | 48..=50 | 52..=56 | 58 | 59 | 64 | 65)
 }
 
-// Ring parameters +0x314 … +0x334 (13 §2.5).
+// Ring parameters +0x314 … +0x334.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Ring {
     // +0x314 radius (VM pos.x), +0x318 start angle (VM rotation z).
@@ -72,7 +72,7 @@ pub struct Ring {
     pub waves: f32,
 }
 
-// Effect 0x360 (13 §2.1).
+// Effect 0x360.
 #[derive(Clone, Default)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -110,7 +110,7 @@ pub struct Effect {
     spin: f32,
     rot: f32,
     // Types 51/63: pos offset +0x288 (boss pull, −9999 = unset), VM pos_end +0x244 accumulated displacement D,
-    // VM +0x238 pull speed (13 §2.6c).
+    // VM +0x238 pull speed.
     pull: [f32; 3],
     disp: [f32; 3],
     pull_speed: f32,
@@ -123,7 +123,7 @@ pub struct View {
     pub pos: [f32; 3],
     pub eye: [f32; 3],
     pub facing: [f32; 3],
-    // Stage +0x63B8: facing normalised by Stage_Calc (06 §3).
+    // Stage +0x63B8: facing normalised by Stage_Calc.
     pub facing_norm: [f32; 3],
 }
 
@@ -141,15 +141,15 @@ pub struct Effects {
     pub boss: Option<[f32; 3]>,
     pub overlay: [u8; 4],
     pub paused: bool,
-    // Draw lists A, B, C, D, E (13 §2.3).
+    // Draw lists A, B, C, D, E.
     lists: [Vec<EffectIdx>; 5],
     // Port-only: screen effects queued until `register_pending`.
     screen: Vec<ScreenEffect>,
-    // Release request of the loading darken overlay (0x45C160), consumed by its calc (13 §3).
+    // Release request of the loading darken overlay (0x45C160), consumed by its calc.
     loading_release: bool,
-    // Effect level byte (cfg, 0x17CE894) copied by EffectMgr_Register (13 §2.4); list B reads the stage's copy.
+    // Effect level byte (cfg, 0x17CE894) copied by EffectMgr_Register; list B reads the stage's copy.
     pub level: u8,
-    // Live screen effects ("ScreenInf", 13 §3), one per `ScreenTask` slot; independent of the manager's reset.
+    // Live screen effects ("ScreenInf"), one per `ScreenTask` slot; independent of the manager's reset.
     pub screen_fx: Vec<Option<ScreenEffect>>,
 }
 
@@ -180,7 +180,7 @@ impl Effects {
         }
     }
 
-    // Raw +0x2A4 write through a stale pointer, no alive/type check (Sakuya bomb follow, 14 §2.7, RE-Q57 AO).
+    // Raw +0x2A4 write through a stale pointer, no alive/type check (Sakuya bomb follow, 14 §2.7).
     // The port's pos is the world +0x2D4 for live 19/51/63, whose update recomputes +0x2A4 anyway: skip them.
     pub fn write_pos_unchecked(&mut self, idx: EffectIdx, pos: [f32; 3]) {
         if let Some(x) = self.fx.get_mut(idx.idx())
@@ -206,7 +206,7 @@ impl Effects {
         }
     }
 
-    // Debug dump of every live effect of `kind` (format of specs/data/q15/eff51_decoded.txt).
+    // Debug dump of every live effect of `kind`.
     pub fn dump(&self, kind: u8) -> String {
         let argb = |c: [u8; 4]| D3dColor::from_bgra(c).0;
         let m = self;
@@ -244,7 +244,7 @@ impl Effects {
     }
 
     // Manager reset at EffectMgr register / remove; the port's player-position mirror and the screen effects (own
-    // chain nodes, 13 §3) survive.
+    // chain nodes) survive.
     pub fn clear(&mut self) {
         *self = Effects {
             player: self.player,
@@ -277,13 +277,13 @@ fn raw(i: Option<EffectIdx>) -> usize {
     i.map_or(NONE, EffectIdx::idx)
 }
 
-// Float → byte store through ftol (the alpha byte writes, 13 §2.6b, §3); `as` saturates like the port always did.
+// Float → byte store through ftol (the alpha byte writes); `as` saturates.
 #[expect(clippy::cast_sign_loss, reason = "ftol into a byte field")]
 fn ftol_u8(f: f32) -> u8 {
     f as u8
 }
 
-// Effect_Spawn* arguments after the manager (13 §2.2): type, position, parameter, colour, and `zoff` = VM flag 0x2000
+// Effect_Spawn* arguments after the manager: type, position, parameter, colour, and `zoff` = VM flag 0x2000
 // (set by every spawn except Effect_SpawnWithParam).
 #[derive(Clone, Copy, Debug)]
 pub struct FxEnv {
@@ -311,13 +311,13 @@ fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-// Vec3_Dot 0x40B540: (x·x' + y·y') + z·z' in f32 (13 §2.6a).
+// Vec3_Dot 0x40B540: (x·x' + y·y') + z·z' in f32.
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     (a[0] * b[0] + a[1] * b[1]) + a[2] * b[2]
 }
 
 impl Effect {
-    // Enemy_UpdateOrbitEffects 0x42E010 (13 §2.6b): visibility, centre, radius grows 0.3/frame to d, spin.
+    // Enemy_UpdateOrbitEffects 0x42E010: visibility, centre, radius grows 0.3/frame to d, spin.
     pub fn orbit_follow(&mut self, centre: [f32; 3], target: f32, hidden: bool) {
         if hidden {
             self.vm.flags &= !anmvm::F_VISIBLE;
@@ -335,10 +335,9 @@ impl Effect {
 }
 
 impl Effects {
-    // Effect_Spawn / Effect_SpawnWithParam loop (13 §2.2): one 512-slot search budget for the whole call, every
-    // examined slot advances the cursor; count is decremented per spawn and the loop ends at exactly 0, so
-    // count ≤ 0 fills free slots until the budget ends. Returns the last slot taken (even if its init freed it),
-    // or the dummy (NONE) when the budget runs out.
+    // Effect_Spawn / Effect_SpawnWithParam loop: one 512-slot search budget for the whole call, every examined slot
+    // advances the cursor; count is decremented per spawn and the loop ends at exactly 0, so count ≤ 0 fills free slots
+    // until the budget ends. Returns the last slot taken (even if its init freed it), or NONE once the budget runs out.
     fn spawn_ring(
         &mut self,
         count: i32,
@@ -381,7 +380,7 @@ impl Effects {
         e.age.set(0);
     }
 
-    // Per-type init of table 0x4C6D30 (13 §2.6); velocities and accelerations are × gs at init.
+    // Per-type init of table 0x4C6D30; velocities and accelerations are × gs at init.
     fn type_init(&mut self, rng: &mut crate::rng::Rng, gs: f32, i: EffectIdx) -> bool {
         let player = self.player;
         let view = self.view;
@@ -401,14 +400,14 @@ impl Effects {
                 e.vel = [vx * gs, vy * gs, 0.0];
                 e.acc = [-vx / 19.0 * gs, -vy / 19.0 * gs, 0.0];
             }
-            // EffInit_Orbit13 0x425FE0 (13 §2.6b); the op-128 spawn then writes the axis.
+            // EffInit_Orbit13 0x425FE0; the op-128 spawn then writes the axis.
             13..=15 => {
                 e.layer = 2;
                 e.centre = pos;
                 e.dir = [0.0; 3];
                 e.ring.radius = 0.0;
             }
-            // EffInit_Converge 0x426B20 (13 §2.6): angle = Rng_FloatRange(2π) − π, one draw.
+            // EffInit_Converge 0x426B20: angle = Rng_FloatRange(2π) − π, one draw.
             17 | 18 | 27 => {
                 e.centre = pos;
                 let a = rng.next_f32() * (2.0 * PI) - PI;
@@ -419,7 +418,7 @@ impl Effects {
                     _ => 120,
                 };
             }
-            // 3D background particles (13 §2.6a): base = camera + facing/2; 10 draws (19) / 8 draws (51, 63) in
+            // 3D background particles: base = camera + facing/2; 10 draws (19) / 8 draws (51, 63) in
             // table order. Type 51/63 keep the original's expression order for 24-bit bit-exactness.
             19 | 51 | 63 => {
                 let mut r = |x: f32| rng.next_f32() * x;
@@ -466,7 +465,7 @@ impl Effects {
             }
             21 | 26 => {
                 e.centre = pos;
-                // EffInit_Burst 0x4270C0 (13 §2.6): ECL passes −999.0 for "random"; 0 and negative angles are kept.
+                // EffInit_Burst 0x4270C0: ECL passes −999.0 for "random"; 0 and negative angles are kept.
                 let a = if param[0] <= -990.0 {
                     rng.next_f32() * (2.0 * PI) - PI
                 } else {
@@ -475,7 +474,7 @@ impl Effects {
                 let m = 1.0 + rng.next_f32() * 1.5;
                 e.dir = [cos_f(a) * m, sin_f(a) * m, 0.0];
             }
-            // 13 §2.6: no init; the spawners pass the player pos +0x2B4.
+            // No init; the spawners pass the player pos +0x2B4.
             22..=25 => e.pos = player,
             // pos += polar(param.x, 256); rotation z = param.x + π/2.
             60 | 61 => {
@@ -486,14 +485,14 @@ impl Effects {
             }
             _ => {}
         }
-        // Ring init 0x4272E0 (13 §2.6): centre := pos, crossed param copy (+0x318 ← x, +0x314 ← y, +0x320 ← z),
+        // Ring init 0x4272E0: centre := pos, crossed param copy (+0x318 ← x, +0x314 ← y, +0x320 ← z),
         // segments := 24. Types 41 and 50 get their update's per-frame count (48 / 32) here; 56/58/65 are over bullets.
         if is_ring(kind) {
             e.centre = pos;
             (e.ring.start, e.ring.radius, e.ring.width) = (param[0], param[1], param[2]);
             e.ring.segments = match kind {
                 41 => 48,
-                // `Bomb_Dissolve` writes 64, but the type-50 update writes 32 before the first draw (13 §2.6).
+                // `Bomb_Dissolve` writes 64, but the type-50 update writes 32 before the first draw.
                 50 => 32,
                 _ => 24,
             };
@@ -526,7 +525,7 @@ impl Effects {
         true
     }
 
-    // The script runs its t = 0 step here, so its RNG draws precede the type init's (13 §2.6).
+    // The script runs its t = 0 step here, so its RNG draws precede the type init's.
     fn start_script(
         &mut self,
         anm: &mut AnmManager,
@@ -622,7 +621,7 @@ impl Effects {
         i
     }
 
-    // Per-type update (13 §2.6); false frees the effect.
+    // Per-type update; false frees the effect.
     fn update(&mut self, i: EffectIdx, areas: &mut crate::bomb::AreaQueue) -> bool {
         let player = self.player;
         let view = self.view;
@@ -638,7 +637,7 @@ impl Effects {
                     e.vel[k] += e.acc[k];
                 }
             }
-            // EffUpd_Orbit13 0x426030 (13 §2.6b): the quaternion (n·sin a, cos a) rotates by 2a about n.
+            // EffUpd_Orbit13 0x426030: the quaternion (n·sin a, cos a) rotates by 2a about n.
             13..=15 => {
                 let n = d3dx::vec3_normalize(e.dir);
                 let th = 2.0 * e.ring.start;
@@ -678,13 +677,13 @@ impl Effects {
                     if e.kind == 18 { e.pos[2] } else { 0.0 },
                 ];
             }
-            // 13 §2.6a per frame: v += a, world += v, view-cone cull (dot < 0.94 frees).
+            // Per frame: v += a, world += v, view-cone cull (dot < 0.94 frees).
             19 | 51 | 63 => {
                 for k in 0..3 {
                     e.vel[k] += e.acc[k];
                     e.pos[k] += e.vel[k];
                 }
-                // Stored facing; Vec3_Dot order (13 §2.6a).
+                // Stored facing; Vec3_Dot order.
                 let d = d3dx::vec3_normalize(sub(e.pos, view.pos));
                 if dot(d, view.facing_norm) < 0.94 {
                     return false;
@@ -722,7 +721,7 @@ impl Effects {
                 ];
             }
             22 => e.pos = player,
-            // 23 / 24 invulnerability ring: no-op update; the scale runs in VM slot 4 (13 §2.6 row 23, `invuln_ring`).
+            // 23 / 24 invulnerability ring: no-op update; the scale runs in VM slot 4 (table row 23, `invuln_ring`).
             _ => {}
         }
         if bomb_ring(e.kind) {
@@ -731,7 +730,7 @@ impl Effects {
             self.screen.extend(screen);
             return keep;
         }
-        // Stage 6B ring update 0x427B50 (13 §2.6 row 64): radius := F1, centre := VM pos, amplitude untouched.
+        // Stage 6B ring update 0x427B50 (table row 64): radius := F1, centre := VM pos, amplitude untouched.
         if e.kind == 64 {
             let r = &mut e.ring;
             r.segments = e.vm.ivars[0];
@@ -761,7 +760,7 @@ impl Effects {
             if matches!(e.kind, 53 | 54) && e.vm.color[anmvm::A] == 0 {
                 return false;
             }
-            // EffUpd_DissolveRing 0x427A60: segments := 32 every update (13 §2.6 type 50).
+            // EffUpd_DissolveRing 0x427A60: segments := 32 every update.
             if e.kind == 50 {
                 r.segments = 32;
             }
@@ -772,7 +771,7 @@ impl Effects {
         true
     }
 
-    // EffectMgr_Calc (13 §2.3): frozen effects (bit 10, +0x357 = 0) skip update/VM/age but are still drawn;
+    // EffectMgr_Calc: frozen effects (bit 10, +0x357 = 0) skip update/VM/age but are still drawn;
     // survivors are linked in slot order (not spawn order); type 0x40 is never linked.
     pub fn calc(
         &mut self,
@@ -791,7 +790,7 @@ impl Effects {
                 continue;
             }
             self.live += 1;
-            // Bit 10 read live per slot (13 §2.3): a spell-card death in the enemy calc (prio 11) already freezes
+            // Bit 10 read live per slot: a spell-card death in the enemy calc (prio 11) already freezes
             // this frame's effects (prio 13); no effect update writes the flags, so the word passed in is live.
             let frozen = flags & crate::gamemgr::F_DEATH != 0;
             if !frozen || self[i].keep_frozen {
@@ -821,7 +820,7 @@ impl Effects {
         }
     }
 
-    // Lists A/D/E (13 §2.4): 2D rotated sprite at pos + playfield origin + pos offset, or the ring renderer.
+    // Lists A/D/E: 2D rotated sprite at pos + playfield origin + pos offset, or the ring renderer.
     // The original sets pos / pos_offset around the draw and restores them; the emit draws a copy instead.
     fn draw_one(&self, anm: &AnmManager, rec: &mut Recorder, i: EffectIdx, z: f32) {
         let e = &self[i];
@@ -853,7 +852,7 @@ impl Effects {
         }
     }
 
-    // List C (13 §2.4): `AnmManager_DrawBillboard` (05 §9 mode 4) at the effect pos as-is (no playfield origin, no
+    // List C: `AnmManager_DrawBillboard` (05 §9 mode 4) at the effect pos as-is (no playfield origin, no
     // pos offset), projected through `Camera_Set2D` on the playfield viewport left by `Stage_DrawHigh`, whatever
     // the VM's camera bit; sized by the stage camera's right vector, vertex z = projected z.
     fn draw_billboard_c(&self, anm: &AnmManager, rec: &mut Recorder, i: EffectIdx) {
@@ -872,7 +871,7 @@ impl Effects {
     }
 
     // List D under BulletMgr_Draw's frozen tint (06 §10.2), already off at emit time: `tint` maps each sprite VM
-    // copy; rings ignore the global tint anyway (13 §2.5).
+    // copy; rings ignore the global tint anyway.
     pub fn emit_over_bullets_with(
         &self,
         tint: impl Fn(&AnmVm) -> AnmVm,
@@ -896,15 +895,15 @@ impl Effects {
         }
     }
 
-    // List B from Stage_DrawHigh (13 §2.4, §2.6c): only effect level 2 draws; no fog. Layer 4 at raw coordinates.
-    // Layer 3 / ≥ 5 would be a 3D quad, unreachable (13 §2.4: no writer sets them); the port billboards them.
+    // List B from Stage_DrawHigh: only effect level 2 draws; no fog. Layer 4 at raw coordinates.
+    // Layer 3 / ≥ 5 would be a 3D quad, unreachable (no writer sets them); the port billboards them.
     // Draw-phase step: the projections and the pull / push `disp` updates; `out` gets the draws in order.
     pub fn background_step(&mut self, anm: &AnmManager, level: u8, out: &mut Vec<BgDraw>) {
         if level < 2 {
             return;
         }
         let Some(cam) = self.view.cam else { return };
-        // 0x4EA3F4 as last written by Stage_SetCamera (this frame's layers 2/3 just before, 13 §2.6c).
+        // 0x4EA3F4 as last written by Stage_SetCamera (this frame's layers 2/3 just before).
         let right = anm.cam_right;
         let player = self.player;
         for k in 0..self.lists[1].len() {
@@ -928,7 +927,7 @@ impl Effects {
                 PLAYFIELD,
             );
             let len = anmmgr::length3([s2[0] - s[0], s2[1] - s[1], s2[2] - s[2]]);
-            // Callback 0x428310 (13 §2.6c): boss pull within 160 px, player push within 88 px; only these D updates
+            // Callback 0x428310: boss pull within 160 px, player push within 88 px; only these D updates
             // are skipped while paused / game over, `s += D` always runs.
             if matches!(e.kind, 51 | 63) && !self.paused {
                 let p = [s[0] + e.disp[0], s[1] + e.disp[1]];
@@ -968,7 +967,7 @@ impl Effects {
     }
 }
 
-// One list-B background draw recorded by `background_step` (13 §2.4): layer 4 flat, or a billboard at the projected
+// One list-B background draw recorded by `background_step`: layer 4 flat, or a billboard at the projected
 // (and pulled / pushed) screen point `s` with the 3D right length `len`.
 #[derive(Clone, Copy, Debug)]
 pub enum BgDraw {
@@ -982,7 +981,7 @@ pub fn draw_ring_at(fx: &Effects, anm: &AnmManager, rec: &mut Recorder, idx: usi
     draw_ring(anm, rec, &fx.fx[idx]);
 }
 
-// Ring renderer 0x427450 (13 §2.5): strip of 2(n+1) vertices, v along the ring, u across the band, WRAP sampling.
+// Ring renderer 0x427450: strip of 2(n+1) vertices, v along the ring, u across the band, WRAP sampling.
 fn draw_ring(anm: &AnmManager, rec: &mut Recorder, e: &Effect) {
     let vm = &e.vm;
     if vm.flags & (anmvm::F_VISIBLE | anmvm::F_ENABLED) != (anmvm::F_VISIBLE | anmvm::F_ENABLED)
@@ -1003,14 +1002,14 @@ fn draw_ring(anm: &AnmManager, rec: &mut Recorder, e: &Effect) {
     let w = r.width / sin_f((PI - step) / 2.0);
     // Half width w = width / sin((π − 2π/n)/2); +0.5 is the port's D3D → wgpu pixel-centre offset.
     let (cx, cy) = (e.centre[0] + 32.0 + 0.5, e.centre[1] + 16.0 + 0.5);
-    // Raw VM colour: `Anm_RingSetUV` 0x464B00 skips the global ANM tint (13 §2.5).
+    // Raw VM colour: `Anm_RingSetUV` 0x464B00 skips the global ANM tint.
     let c = vm.color;
     let rgba = [c[anmvm::R], c[anmvm::G], c[anmvm::B], c[anmvm::A]];
     let wrap = |a: f32| if a >= PI { a - 2.0 * PI } else { a };
     let point = |k: i32, outer: bool| -> [f32; 2] {
         let th = wrap(r.start + k as f32 * step);
         let sgn = if outer { 1.0 } else { -1.0 };
-        // Plain ring / rotated ellipse (θ from 0) / wavy ring (13 §2.5).
+        // Plain ring / rotated ellipse (θ from 0) / wavy ring.
         if r.amp == 0.0 {
             let rr = r.radius + sgn * w;
             [cx + cos_f(th) * rr, cy + sin_f(th) * rr]
@@ -1044,15 +1043,15 @@ fn draw_ring(anm: &AnmManager, rec: &mut Recorder, e: &Effect) {
             point(k + 1, false),
         ];
         let uv = [[u0, vk(k)], [u1, vk(k)], [u0, vk(k + 1)], [u1, vk(k + 1)]];
-        // Vertex z (13 §2.5): plain ring = 0 + centre z (the spawn position z); ellipse / wavy := 0 after the add.
+        // Vertex z: plain ring = 0 + centre z (the spawn position z); ellipse / wavy := 0 after the add.
         let z = if r.amp == 0.0 { e.centre[2] } else { 0.0 };
         let v = std::array::from_fn(|i| Vertex::screen(p[i][0], p[i][1], z, uv[i], rgba));
-        // z-write on unless VM flag bit 13 (`AnmManager_SetRenderState2D`, 13 §2.5).
+        // z-write on unless VM flag bit 13 (`AnmManager_SetRenderState2D`).
         rec.strip(spr.tex, blend, vm.flags & anmvm::F_ZWRITE_OFF == 0, v);
     }
 }
 
-// Ring types whose update functions belong to the bombs (13 §2.6 rows 36/37, 42–46/48).
+// Ring types whose update functions belong to the bombs (table rows 36/37, 42–46/48).
 fn bomb_ring(kind: u8) -> bool {
     matches!(kind, 36 | 37 | 42..=46 | 48)
 }
@@ -1196,10 +1195,10 @@ fn screen_fx(kind: u8, p0: i32, p1: i32, p2: i32, p3: i32) -> ScreenEffect {
     ScreenEffect {
         kind,
         p: [p0, p1, p2, p3],
-        // Draw prio 0x15: every code call passes it except the loading darken (1) (13 §3).
+        // Draw prio 0x15: every code call passes it except the loading darken (1).
         prio: 0x15,
-        // ScreenEffect_Register 0x45B8B0 zero-fills the object: a draw before the first calc shows alpha 0 (13 §3
-        // "Initial alpha").
+        // ScreenEffect_Register 0x45B8B0 zero-fills the object: a draw before the first calc shows alpha 0
+        // ("Initial alpha").
         alpha: 0.0,
         release: false,
         loading: false,
@@ -1257,7 +1256,7 @@ impl Effects {
             .idx()
     }
 
-    // Spell-card start ring at Spell_Start (07 §11.1, 13 §2.7): fixed slot 1, VM pos (8, 64) → (256, 0) over 100
+    // Spell-card start ring at Spell_Start (07 §11.1): fixed slot 1, VM pos (8, 64) → (256, 0) over 100
     // frames (ease 6); Spell_Calc turns pos.y into the wave amplitude while waves ≠ 0.
     pub fn spell_ring(
         &mut self,
@@ -1311,7 +1310,7 @@ pub fn bg_file(stage: usize, practice_card: Option<i16>) -> &'static str {
     ][stage % 9]
 }
 
-// The effect manager's chain nodes (13 §2.3, §2.4); the manager state is `ctx.w.effects` (step 9f).
+// The effect manager's chain nodes; the manager state is `ctx.w.effects`.
 pub struct EffectTask;
 
 impl EffectTask {
@@ -1363,9 +1362,9 @@ impl Task<Ctx> for EffectTask {
     }
 }
 
-// --- screen effects (`ScreenEffect_Register`, 13 §3) ---
+// --- screen effects (`ScreenEffect_Register`) ---
 
-// "ScreenInf" 0x34 bytes (13 §3).
+// "ScreenInf" 0x34 bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct ScreenEffect {
     // +0 type, +0x14.. p0–p3.
@@ -1386,7 +1385,7 @@ pub struct ScreenEffect {
     nodes: u8,
 }
 
-// Live globals a screen-effect calc reads (13 §3): GameFlags, freeze byte 0x160F534, 0x18B8A2C, pause / game over,
+// Live globals a screen-effect calc reads: GameFlags, freeze byte 0x160F534, 0x18B8A2C, pause / game over,
 // gameplay frame counter 0x164D2C8.
 #[derive(Clone, Copy, Default)]
 pub struct ScreenEnv {
@@ -1410,7 +1409,7 @@ impl ScreenEnv {
 }
 
 // 0x4489CA(0) `Loading_StartDarken`: the loading darken overlay (type 5, 60 frames, black, draw prio 1), released when
-// loading ends. Called from an on-register callback inside the Supervisor calc (prio 0), so it is linked at once (13 §3).
+// loading ends. Called from an on-register callback inside the Supervisor calc (prio 0), so it is linked at once.
 pub fn loading_overlay(ctx: &mut Ctx) {
     ctx.w.effects.loading_release = false;
     link(
@@ -1430,7 +1429,7 @@ impl Effects {
     }
 
     // Queues a screen effect; registered after the calc pass (calc prio 3, draw at `prio`). Only valid for callers that
-    // run after calc prio 3: their effect's first calc is the next frame either way (13 §3).
+    // run after calc prio 3: their effect's first calc is the next frame either way.
     pub fn screen(&mut self, kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
         self.screen.push(ScreenEffect {
             prio,
@@ -1451,7 +1450,7 @@ impl Effects {
 pub const SCREEN_CALC_PRIO: u16 = 3;
 
 // ScreenEffect_Register from a calc node below prio 3 (`GameMgr_Calc`): the nodes are linked at once, so the first
-// calc runs in the same frame (13 §3).
+// calc runs in the same frame.
 pub fn screen_now(ctx: &mut Ctx, kind: u8, p0: i32, p1: i32, p2: i32, p3: i32, prio: u16) {
     link(
         ctx,
@@ -1468,7 +1467,7 @@ pub fn register_pending(ctx: &mut Ctx) {
     }
 }
 
-// FuncChain_AddCalc (prio 3) + AddDraw (13 §3): the effect goes into a free pool slot, its nodes forward to it.
+// FuncChain_AddCalc (prio 3) + AddDraw: the effect goes into a free pool slot, its nodes forward to it.
 fn link(ctx: &mut Ctx, s: ScreenEffect) {
     let slot = ctx.w.effects.alloc_screen(s);
     link_slot(ctx, slot);
@@ -1504,7 +1503,7 @@ impl Effects {
         list.into_iter().map(|s| self.alloc_screen(s)).collect()
     }
 
-    // The screen-effect calc node of `slot` (13 §3); Remove also lets its draw node remove itself.
+    // The screen-effect calc node of `slot`; Remove also lets its draw node remove itself.
     pub fn screen_calc(
         &mut self,
         slot: usize,
@@ -1522,7 +1521,7 @@ impl Effects {
     }
 }
 
-// A screen effect's calc + draw nodes; the state is `ctx.w.effects.screen_fx[slot]` (step 9f).
+// A screen effect's calc + draw nodes; the state is `ctx.w.effects.screen_fx[slot]`.
 pub struct ScreenTask {
     pub(crate) slot: usize,
 }
@@ -1545,7 +1544,7 @@ impl Task<Ctx> for ScreenTask {
         }
     }
 
-    // Calc returning 0 removes the whole effect, draw node included (13 §3).
+    // Calc returning 0 removes the whole effect, draw node included.
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         let env = ScreenEnv::of(ctx);
         ctx.w
@@ -1590,14 +1589,14 @@ impl ScreenEffect {
         anm.screen_offset = [x, y];
     }
 
-    // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set (13 §3); both read live.
+    // Shakes 1 / 7 hold (no tick, no RNG) while GameFlags bit 10 or the freeze byte 0x160F534 is set; both read live.
     fn frozen(flags: u32, timer_pause: i32) -> bool {
         flags & crate::gamemgr::F_DEATH != 0 || timer_pause != 0
     }
 }
 
 impl ScreenEffect {
-    // Per-type calc (13 §3 table): alpha / amplitude from Timer_GetF (cur + frac), end / range tests on the integer cur.
+    // Per-type calc: alpha / amplitude from Timer_GetF (cur + frac), end / range tests on the integer cur.
     fn step(
         &mut self,
         anm: &mut AnmManager,
@@ -1648,7 +1647,7 @@ impl ScreenEffect {
                     return Ret::Next;
                 }
             }
-            // 0x45BC90 (13 §3 type 3): 0x18B8A2C ≠ 0 → removed before anything else.
+            // 0x45BC90 (type 3): 0x18B8A2C ≠ 0 → removed before anything else.
             3 => {
                 if env.load_frames != 0 {
                     return Ret::Remove;
@@ -1737,8 +1736,7 @@ impl ScreenEffect {
 }
 
 // Player death ring (type 59, slot 11, colour DEATH_RING 0xFFF0404F): radius 128 → 8 over the deathbomb window (ease 4,
-// 13 §2.7).
-// +0x357 (keeps running while bullets are frozen): set only for this ring (13 §2.1).
+// 13 §2.7). +0x357 (keeps running while bullets are frozen) is set only for this ring.
 pub fn death_ring(
     e: &mut Effects,
     anm: &mut AnmManager,
@@ -1757,7 +1755,7 @@ pub fn death_ring(
 }
 
 // Invulnerability ring at bomb start (Player_SpawnInvulnRing 0x40BF00, type 23, slot 0): I0 := invulnerability
-// frames (13 §2.6, 14 §1.2). `frames` is the player timer +0xE2AF4 just set by Bomb_Start.
+// frames (14 §1.2). `frames` is the player timer +0xE2AF4 just set by Bomb_Start.
 pub fn invuln_ring(
     fx: &mut Effects,
     anm: &mut AnmManager,
@@ -1768,7 +1766,7 @@ pub fn invuln_ring(
     let i = fx.spawn_fixed_param(anm, rng, FxEnv::new(23, pos, INVULN_RING), FIX_INVULN);
     fx.get(i.idx(), |e| {
         e.vm.ivars[0] = frames;
-        // 13 §2.6 row 23: the spawn already ran script time 0, so the rotation goes +v, 0, −v, … (0x4B438C).
+        // Row 23: the spawn already ran script time 0, so the rotation goes +v, 0, −v, … (0x4B438C).
         e.vm.angular_vel[2] *= -1.0;
         // Scale slot 4, linear, current scale → 1/16 over the invulnerability time, advanced by AnmVm_Run (05 §6).
         let sc = e.vm.scale;
@@ -1785,7 +1783,7 @@ mod tests {
         FxEnv::new(kind, pos, D3dColor(0))
     }
 
-    // 13 §5 (RE-Q65 L): spell practice cards 0xD8–0xDD load eff09xx.anm; other cards the stage file.
+    // 13 §5: spell practice cards 0xD8–0xDD load eff09xx.anm; other cards the stage file.
     #[test]
     fn spell_bg_file_table() {
         assert_eq!(bg_file(3, None), "eff04a.anm");
@@ -1812,7 +1810,7 @@ mod tests {
         });
     }
 
-    // 14 §2.7 (RE-Q57 AO): the Sakuya follow write moves 2D/freed slots, never a live 3D particle's world pos.
+    // 14 §2.7: the Sakuya follow write moves 2D/freed slots, never a live 3D particle's world pos.
     #[test]
     fn sakuya_follow_write_skips_3d_particles() {
         let i = 3;
@@ -1865,7 +1863,7 @@ mod tests {
         assert!(ScreenEffect::frozen(0, 1));
     }
 
-    // Ring init 0x4272E0 (13 §2.6): 24 segments by default, centre = spawn pos, crossed param copy.
+    // Ring init 0x4272E0: 24 segments by default, centre = spawn pos, crossed param copy.
     #[test]
     fn ring_init_defaults() {
         let mut rng = crate::rng::Rng::default();
@@ -1898,7 +1896,7 @@ mod tests {
         assert_eq!((r.start, r.radius, r.width), (1.0, 2.0, 3.0));
     }
 
-    // EffInit_Converge (13 §2.6): angle = R·2π − π, so dir lies on the unit circle at that angle.
+    // EffInit_Converge: angle = R·2π − π, so dir lies on the unit circle at that angle.
     #[test]
     fn converge_angle_minus_pi() {
         for kind in [17, 18, 27] {
@@ -1952,7 +1950,7 @@ mod tests {
         }
     }
 
-    // 13 §3 (RE-Q66): the flash alpha uses Timer_GetF; silentselene 77236 present 39707 at speed 0.25 draws
+    // 13 §3: the flash alpha uses Timer_GetF; silentselene 77236 present 39707 at speed 0.25 draws
     // 255, 247, 245, 243, 241, 238; alpha 0 once cur ≥ dur.
     #[test]
     fn flash_alpha_uses_timer_getf() {

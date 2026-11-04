@@ -1,5 +1,4 @@
-//! Touch overlay input (ARCH_D_MOBILE §3.1–§3.3): fingers on the overlay controls → the same input word bits as the
-//! keyboard (15 §1.1). Port-only; core never sees touches, a replay records only the word.
+//! Touch overlay input: fingers on the overlay controls → the keyboard's input word bits; core never sees touches.
 
 use th08_core::input::*;
 use th08_render::gfx::SafeArea;
@@ -220,7 +219,7 @@ pub enum TouchMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Movement {
-    // Relative drag (ARCH_D §3.2, recommended): the player follows the finger's movement.
+    // Relative drag (recommended): the player follows the finger's movement.
     #[default]
     Drag,
     // Floating 8-way stick centred where the finger went down.
@@ -273,19 +272,19 @@ impl TouchConfig {
 }
 
 // What the game is doing, set by the app before each logic frame (a read of the World between frames; only the
-// resulting word is recorded, so determinism is unaffected, ARCH_D §3.2).
+// resulting word is recorded, so determinism is unaffected).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum TouchScene {
-    // Menus, pause, game over: directions as pulses, a tap = SHOT, no auto-fire (§3.3).
+    // Menus, pause, game over: directions as pulses, a tap = SHOT, no auto-fire.
     #[default]
     Menu,
     Play {
-        // Player position (09 §1 +pos), game pixels.
+        // Player position, game pixels.
         pos: [f32; 2],
-        // Ortho speed per frame unfocused / focused (09 §2.1 sht +0x24 / youkai +0x28) and the x / y multipliers.
+        // Ortho speed per frame unfocused / focused (sht +0x24 / +0x28) and the x / y multipliers.
         speed: [f32; 2],
         mult: [f32; 2],
-        // Auto-fire allowed: not during dialogue (§3.3).
+        // Auto-fire allowed: not during dialogue.
         fire: bool,
     },
 }
@@ -353,7 +352,7 @@ impl Placed {
     }
 }
 
-// Overlay draw state (§3.5): placed controls, which are lit, and the movement finger's marks.
+// Overlay draw state: placed controls, which are lit, and the movement finger's marks.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TouchView {
     pub controls: Vec<(Placed, bool)>,
@@ -363,7 +362,7 @@ pub struct TouchView {
     pub finger: Option<([f32; 2], [f32; 2], f32)>,
 }
 
-// The touch device (ARCH_D §3.2–§3.3): fingers on controls, polled once per Input_Poll like the keyboard.
+// The touch device: fingers on controls, polled once per Input_Poll like the keyboard.
 #[derive(Clone, Debug, Default)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -552,7 +551,7 @@ impl TouchSource {
         let f = self.fingers.remove(i);
         if f.on == On::Move {
             self.target = None;
-            // Menu tap = confirm (§3.3).
+            // Menu tap = confirm.
             if ended && self.scene == TouchScene::Menu && f.travel < TAP_MM * self.ppm {
                 self.pulse(SHOT);
             }
@@ -677,7 +676,7 @@ impl TouchSource {
     }
 
     // Menus: a drag swipes one direction pulse per `SWIPE_MM`; a stick holds the direction (the menus repeat
-    // held keys themselves). A pulse is one poll down, then one poll up, so the edge detection sees each (§3.3).
+    // held keys themselves). A pulse is one poll down, then one poll up, so the edge detection sees each.
     fn menu(&mut self) -> u16 {
         let swipe = SWIPE_MM * self.ppm;
         let movement = self.cfg.movement;
@@ -1041,7 +1040,7 @@ mod tests {
         assert_eq!(t.poll(), 0);
     }
 
-    // Recorded-input check (ARCH_D §6.4): touch-made input gives the same word stream as the keyboard, in play
+    // Recorded-input check: touch-made input gives the same word stream as the keyboard, in play
     // (drag + held SHOT) and in a menu (two swipes down + a tap = Down, Down, Z taps).
     #[test]
     fn same_words_as_keyboard() {

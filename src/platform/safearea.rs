@@ -1,5 +1,4 @@
-//! Window safe area (port UI, ARCH_D_MOBILE §3.5 "Safe areas"): Android system bars, display cutout and rounded
-//! corners as per-edge insets, plus the `screen_margin` setting. Desktop / web: the margin only.
+//! Window safe area: Android system bars, display cutout and rounded corners as insets, plus `screen_margin`.
 
 pub use th08_render::gfx::SafeArea;
 use winit::window::Window;

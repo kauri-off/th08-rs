@@ -13,7 +13,7 @@ pub enum MsgError {
     OffsetOutOfRange,
 }
 
-// Byte offset of an instruction from the start of the msg file (10 §2 entry offsets, instruction chain).
+// Byte offset of an instruction from the start of the msg file (entry offsets, instruction chain).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MsgOff(pub u32);
 
@@ -34,13 +34,13 @@ impl std::fmt::LowerHex for MsgOff {
     }
 }
 
-// File layout (10 §2): u32 count, u32 offset[count] (entries may share an offset), instructions.
+// File layout: u32 count, u32 offset[count] (entries may share an offset), instructions.
 pub struct MsgFile {
     data: Vec<u8>,
     pub entries: Vec<MsgOff>,
 }
 
-// Instruction header (10 §2): u16 time, u8 opcode, u8 arg_size; next = at + 4 + arg_size.
+// Instruction header: u16 time, u8 opcode, u8 arg_size; next = at + 4 + arg_size.
 #[derive(Clone, Copy, Debug)]
 pub struct Ins {
     pub time: u16,
@@ -84,7 +84,7 @@ fn arg_u8(a: &[u8], k: usize) -> u8 {
     a.get(k).copied().unwrap_or(0)
 }
 
-// XOR-0x77 Shift-JIS string starting at byte `from` of the arguments, up to the byte that decodes to 0 (10 §2).
+// XOR-0x77 Shift-JIS string starting at byte `from` of the arguments, up to the byte that decodes to 0.
 fn arg_string(a: &[u8], from: usize) -> SjisString {
     SjisString(
         a.iter()
@@ -133,8 +133,7 @@ impl MsgFile {
         Op::decode(i, self.args(i))
     }
 
-    // Text ops (3, 16, 19, 20) from `start` up to, not including, `at` in file order: the `nth` of a text key
-    // (I18N §2.3; the instruction chain of 10 §2).
+    // Text ops (3, 16, 19, 20) from `start` up to, not including, `at` in file order: the `nth` of a text key.
     pub fn text_ops_before(&self, start: MsgOff, at: MsgOff) -> u16 {
         let (mut n, mut p) = (0u16, start);
         while p < at {
@@ -148,7 +147,7 @@ impl MsgFile {
     }
 }
 
-// One instruction decoded by opcode (10 §5.1 table, `Msg_Run` switch 0x433DB3); args in file order, raw.
+// One instruction decoded by opcode (10 §5.1, `Msg_Run` switch 0x433DB3); args in file order, raw.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Op {
     // 0 end: entry = −1.
@@ -180,7 +179,7 @@ pub enum Op {
     ReleaseTimeline,
     // 7 bgm: n < 0 stops the music, else plays slot n.
     Bgm(i32),
-    // 8 boss_card; its arguments are ignored (10 §5.1).
+    // 8 boss_card; its arguments are ignored.
     BossCard,
     // 9 stage_end; the i32 argument (always 0) is ignored.
     StageEnd,

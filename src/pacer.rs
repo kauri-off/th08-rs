@@ -1,10 +1,9 @@
-//! Frame_Run 0x441E70 logic pacing (00 §2) without the window: 1/60 s deadline steps, late frames dropped, plus the
-//! port's turbo and suspend / resume (ARCH_D §4, §5). Pure: the caller passes the time and does any waiting itself.
+//! Frame_Run 0x441E70 logic pacing (00 §2) without the window, plus the port's turbo and suspend / resume.
 
 use std::time::Duration;
 use web_time::Instant;
 
-// Frame_Run deadline step, 1/60 s (00 §2).
+// Frame_Run deadline step, 1/60 s.
 pub const FRAME: f64 = 1.0 / 60.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,7 +50,7 @@ impl Pacer {
         now.saturating_duration_since(self.epoch).as_secs_f64()
     }
 
-    // One logic step per deadline; a frame due at or before the deadline waits (`now <= deadline`, 00 §2). Late frames
+    // One logic step per deadline; a frame due at or before the deadline waits (`now <= deadline`). Late frames
     // are dropped: the deadline jumps past `now` in whole steps and only one frame runs. The monotonic clock never
     // runs backwards, so Frame_Run's timer-wrap reset is not needed.
     pub fn poll(&mut self, now: Instant) -> Tick {

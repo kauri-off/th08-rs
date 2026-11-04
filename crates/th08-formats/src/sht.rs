@@ -12,7 +12,7 @@ pub enum ShtError {
 
 pub type Result<T> = std::result::Result<T, ShtError>;
 
-// Shot entry, 0x38 bytes (09 §2.1); the list ends with i32 −1.
+// Shot entry, 0x38 bytes; the list ends with i32 −1.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ShotEntry {
     // +0x00 / +0x02: fires when shot timer % interval == phase (laser entries: phase = laser slot).
@@ -50,7 +50,7 @@ pub struct Level {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-// Header, 0x38 bytes (09 §2.1).
+// Header, 0x38 bytes.
 pub struct Sht {
     // +4 bombs per life (truncated on respawn).
     pub bombs: f32,
@@ -99,7 +99,7 @@ impl Default for Sht {
 }
 
 impl Sht {
-    // First level whose threshold > trunc(power) (09 §2.1); `forced` picks bomb level 6/7 (shot types 2/9).
+    // First level whose threshold > trunc(power); `forced` picks bomb level 6/7 (shot types 2/9).
     pub fn level(&self, power: f32, forced: Option<usize>) -> Option<&Level> {
         self.level_index(power, forced).map(|k| &self.levels[k])
     }

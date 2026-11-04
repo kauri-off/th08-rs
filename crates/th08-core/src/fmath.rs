@@ -1,64 +1,63 @@
 //! Pinned transcendental math and the AMD `rsqrtss` model (05 §10): the only place logic computes sin/cos/atan2/…
 // Uses only `core` and the pinned `libm`, so `tools/fmath_xplat` includes this file unchanged for the wasm check.
 
-// 05 §10: x87 fsin/fcos/fpatan/fptan are extended; the port evaluates them in f64 with the pinned `libm` (the same
+// x87 fsin/fcos/fpatan/fptan are extended; the port evaluates them in f64 with the pinned `libm` (the same
 // bits on every target, unlike the platform libm) and rounds once to f32. Single-precision libm is never used.
 
-/// `Math_Sin` result stored to f32 (05 §10 "rounded to f32 first").
+/// `Math_Sin` result stored to f32.
 pub fn sin_f(a: f32) -> f32 {
     libm::sin(f64::from(a)) as f32
 }
 
-/// `Math_Cos` result stored to f32 (05 §10 "rounded to f32 first").
+/// `Math_Cos` result stored to f32.
 pub fn cos_f(a: f32) -> f32 {
     libm::cos(f64::from(a)) as f32
 }
 
-/// `Math_SinCosF32` 0x433880: `fsincos`, both stored as f32 (05 §10). Returns (sin, cos).
+/// `Math_SinCosF32` 0x433880: `fsincos`, both stored as f32. Returns (sin, cos).
 pub fn sin_cos_f(a: f32) -> (f32, f32) {
     (sin_f(a), cos_f(a))
 }
 
-/// `Vec3_FromPolar` 0x4286E0 (05 §10): f32(cos a·r), f32(sin a·r), the product taken in f64 and rounded once.
+/// `Vec3_FromPolar` 0x4286E0: f32(cos a·r), f32(sin a·r), the product taken in f64 and rounded once.
 pub fn polar(a: f32, r: f32) -> [f32; 3] {
     let (a, r) = (f64::from(a), f64::from(r));
     [(libm::cos(a) * r) as f32, (libm::sin(a) * r) as f32, 0.0]
 }
 
-/// `call Math_Sin; fmul` site (05 §10): f32(sin a·k) rounded once; k is f64 so qword constants stay exact.
+/// `call Math_Sin; fmul` site: f32(sin a·k) rounded once; k is f64 so qword constants stay exact.
 pub fn sin_mul(a: f32, k: f64) -> f32 {
     (libm::sin(f64::from(a)) * k) as f32
 }
 
-/// `call Math_Cos; fmul` site (05 §10): f32(cos a·k) rounded once.
+/// `call Math_Cos; fmul` site: f32(cos a·k) rounded once.
 pub fn cos_mul(a: f32, k: f64) -> f32 {
     (libm::cos(f64::from(a)) * k) as f32
 }
 
-/// x87 `fpatan` rounded to f32 (05 §10 rule for extended transcendentals).
+/// x87 `fpatan` rounded to f32.
 pub fn atan2_f(y: f32, x: f32) -> f32 {
     libm::atan2(f64::from(y), f64::from(x)) as f32
 }
 
-/// x87 `fptan` rounded to f32 (ANM op 63, 05 §10 rule).
+/// x87 `fptan` rounded to f32 (ANM op 63).
 pub fn tan_f(x: f32) -> f32 {
     libm::tan(f64::from(x)) as f32
 }
 
-/// CRT `acos` (x87) rounded to f32 (ANM op 64, 05 §10 rule).
+/// CRT `acos` (x87) rounded to f32 (ANM op 64).
 pub fn acos_f(x: f32) -> f32 {
     libm::acos(f64::from(x)) as f32
 }
 
-/// x87 `fpatan(x, 1)` rounded to f32 (ANM op 65, 05 §10 rule).
+/// x87 `fpatan(x, 1)` rounded to f32 (ANM op 65).
 pub fn atan_f(x: f32) -> f32 {
     libm::atan(f64::from(x)) as f32
 }
 
-// `rsqrtss` of the reference CPU (AMD Ryzen 9 7945HX, 05 §10 "an exact model of that CPU's table elsewhere").
-// rsqrt_amd.bin: runs of equal output over the 2²⁴ inputs of [0.5, 2) (exponents 126, 127), each run a pair of
-// little-endian u32 (index of its first input = (exponent − 126)·2²³ + mantissa, output bits). Written by
-// `src/bin/rsqrt_table.rs`; every other exponent follows rsqrt(4ᵏx) = 2⁻ᵏ·rsqrt(x), exact on that CPU.
+// `rsqrtss` of the reference CPU (AMD Ryzen 9 7945HX). rsqrt_amd.bin (from `src/bin/rsqrt_table.rs`): runs of equal
+// output over the 2²⁴ inputs of [0.5, 2), each a little-endian u32 pair (first index (exponent − 126)·2²³ + mantissa,
+// output bits); other exponents follow rsqrt(4ᵏx) = 2⁻ᵏ·rsqrt(x), exact on that CPU.
 const RSQRT_BIN: &[u8] = include_bytes!("rsqrt_amd.bin");
 const RSQRT_RUNS: usize = RSQRT_BIN.len() / 8;
 static RSQRT_START: [u32; RSQRT_RUNS] = rsqrt_column(0);
@@ -111,13 +110,13 @@ pub fn rsqrt_amd(s: f32) -> f32 {
 mod tests {
     use super::*;
 
-    // 05 §10 (RE-Q58 AS): f32 of the extended cos, not cosf (0xC0045DCE → 0xBEF44F55, cosf gives …54).
+    // f32 of the extended cos, not cosf (0xC0045DCE → 0xBEF44F55, cosf gives …54).
     #[test]
     fn cos_rounds_once_spec_example() {
         assert_eq!(cos_f(f32::from_bits(0xC004_5DCE)).to_bits(), 0xBEF4_4F55);
     }
 
-    // 05 §10: Vec3_FromPolar rounds the extended product once, not f32(cos a)·r.
+    // Vec3_FromPolar rounds the extended product once, not f32(cos a)·r.
     #[test]
     fn polar_rounds_once() {
         let mut differs = 0;

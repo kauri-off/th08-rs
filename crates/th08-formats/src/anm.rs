@@ -1,5 +1,4 @@
-//! ANM container parser (03 §2–§4): `parse` = entry chain, sprites, scripts (logic); `textures` = THTX pixels (presentation);
-//! script instructions (05 §1) and their `Op` decoder (05 §5).
+//! ANM container (03 §2–§4) and script instruction decoder (05 §1, §5).
 
 #[derive(Debug, thiserror::Error)]
 pub enum AnmError {
@@ -13,10 +12,10 @@ pub enum AnmError {
 
 pub type Result<T> = std::result::Result<T, AnmError>;
 
-// Sprite record, 20 bytes at entry_start + sprite_offset (03 §2.2); x, y, w, h in logical texture pixels.
+// Sprite record, 20 bytes at entry_start + sprite_offset; x, y, w, h in logical texture pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sprite {
-    // Always the file-wide cumulative sprite index; the loader ignores it (03 §2.2).
+    // Always the file-wide cumulative sprite index; the loader ignores it.
     pub id: u32,
     pub x: f32,
     pub y: f32,
@@ -24,34 +23,33 @@ pub struct Sprite {
     pub h: f32,
 }
 
-// One script of the entry's script table (03 §2.1); scripts are addressed by cumulative index (03 §2.4).
+// One script of the entry's script table; scripts are addressed by cumulative index.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Script {
-    // Ignored by the original loader (03 §2.1).
+    // Ignored by the original loader.
     pub id: i32,
-    // Instruction bytes from the table offset up to the next script (scripts are contiguous, 05 intro).
+    // Instruction bytes up to the next script (scripts are contiguous).
     pub data: Vec<u8>,
 }
 
-// Embedded THTX texture block (03 §4), decoded to RGBA8.
+// Embedded THTX texture block, decoded to RGBA8.
 pub struct Thtx {
-    // Texture format index (03 §3).
     pub format: u16,
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
 }
 
-// One texture entry of the chain (03 §2.1), logic data only; its pixels are `textures(..)[entry]`.
+// One texture entry of the chain, logic data only; its pixels are `textures(..)[entry]`.
 pub struct Chunk {
-    // Image name at +0x1C; a leading '@' means a blank render-target texture (03 §2.1).
+    // Image name at +0x1C; a leading '@' means a blank render-target texture.
     pub name: String,
-    // Logical size at +0x0C/+0x10: sprite UVs are normalised by it, not by the THTX size (03 §2.2).
+    // Logical size at +0x0C/+0x10: sprite UVs are normalised by it, not by the THTX size.
     pub width: u32,
     pub height: u32,
     pub sprites: Vec<Sprite>,
     pub scripts: Vec<Script>,
-    // THTX offset +0x30 is non-zero: the pixels come from `textures`, not from this logic record (03 §2.1).
+    // THTX offset +0x30 is non-zero: the pixels come from `textures`, not from this logic record.
     pub has_texture: bool,
 }
 
@@ -67,7 +65,7 @@ fn u16at(b: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([b[o], b[o + 1]])
 }
 
-// THTX header (03 §4): magic, u16 0, u16 format, u16 width, u16 height, u32 size, then packed rows at +0x10.
+// THTX header: magic, u16 0, u16 format, u16 width, u16 height, u32 size, then packed rows at +0x10.
 pub fn decode_thtx(b: &[u8]) -> Result<Thtx> {
     if b.len() < 16 || &b[0..4] != b"THTX" {
         return Err(AnmError::BadThtxMagic);
@@ -81,7 +79,7 @@ pub fn decode_thtx(b: &[u8]) -> Result<Thtx> {
     let x5 = |v: u16| ((v << 3) | (v >> 2)) as u8;
     let x6 = |v: u16| ((v << 2) | (v >> 4)) as u8;
     match format {
-        // 03 §3 format table: 1 A8R8G8B8, 2 A1R5G5B5, 3 R5G6B5, 4 R8G8B8, 5 A4R4G4B4 (little-endian words).
+        // Formats: 1 A8R8G8B8, 2 A1R5G5B5, 3 R5G6B5, 4 R8G8B8, 5 A4R4G4B4 (little-endian words).
         1 => {
             for p in px[..n * 4].as_chunks::<4>().0 {
                 rgba.extend([p[2], p[1], p[0], p[3]]);
@@ -126,7 +124,7 @@ pub fn decode_thtx(b: &[u8]) -> Result<Thtx> {
     })
 }
 
-// Anm_Preload 0x465860 (03 §2.1): entry k+1 at entry_k + next_offset (+0x38), 0 ends the chain; yields each entry's
+// Anm_Preload 0x465860: entry k+1 at entry_k + next_offset (+0x38), 0 ends the chain; yields each entry's
 // file offset. Version must be 3, otherwise the load fails.
 fn entries(b: &[u8]) -> Result<Vec<usize>> {
     let mut v = Vec::new();
@@ -144,7 +142,7 @@ fn entries(b: &[u8]) -> Result<Vec<usize>> {
     }
 }
 
-// Logic half of Anm_Preload 0x465860 (03 §2.1–§2.2): entries, sprites, scripts; no pixels are touched.
+// Logic half of Anm_Preload 0x465860: entries, sprites, scripts; no pixels are touched.
 pub fn parse(b: &[u8]) -> Result<Vec<Chunk>> {
     entries(b)?.into_iter().map(|base| entry(b, base)).collect()
 }
@@ -170,7 +168,7 @@ fn entry(b: &[u8], base: usize) -> Result<Chunk> {
             }
         })
         .collect();
-    // Script table {i32 id, u32 offset}[script_count] follows the sprite offsets (03 §2.1).
+    // Script table {i32 id, u32 offset}[script_count] follows the sprite offsets.
     let tbl = 0x40 + 4 * n_spr;
     let offs: Vec<(i32, usize)> = (0..n_scr)
         .map(|i| {
@@ -215,7 +213,7 @@ fn entry(b: &[u8], base: usize) -> Result<Chunk> {
     })
 }
 
-// Pixel half of Anm_Preload / Anm_LoadEntryTexture 0x465CC0 (03 §2.1, §4): one decoded THTX per entry, `None` for
+// Pixel half of Anm_Preload / Anm_LoadEntryTexture 0x465CC0: one decoded THTX per entry, `None` for
 // entries without a THTX block ('@' render targets). Same entry order as `parse`.
 pub fn textures(b: &[u8]) -> Result<Vec<Option<Thtx>>> {
     entries(b)?
@@ -227,7 +225,7 @@ pub fn textures(b: &[u8]) -> Result<Vec<Option<Thtx>>> {
         .collect()
 }
 
-// Byte offset from the script start (05 §1: jump / branch targets and the VM ip are script-relative byte offsets).
+// Byte offset from the script start (jump / branch targets and the VM ip are script-relative).
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AnmOff(pub u32);
@@ -244,7 +242,7 @@ impl AnmOff {
     }
 }
 
-// Instruction header at `off` (05 §1): i16 op, u16 size (header + args), i16 time, u16 var mask; args at off + 8.
+// Instruction header at `off`: i16 op, u16 size (header + args), i16 time, u16 var mask; args at off + 8.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ins {
     pub off: AnmOff,
@@ -337,7 +335,7 @@ pub fn signature(op: i16) -> Option<&'static str> {
     })
 }
 
-// Control flow, waits and interrupts (05 §4, §5).
+// Control flow, waits and interrupts (05 §4).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FlowOp {
     // Op −1 end, op 1 hide_stop: visible = 0, script finished.
@@ -383,7 +381,7 @@ pub enum Cmp {
     Ge,
 }
 
-// Direct state writes: sprite, transform, colour, flag bits, UV, blend, draw mode (05 §5).
+// Direct state writes: sprite, transform, colour, flag bits, UV, blend, draw mode.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SpriteOp {
     Sprite(Arg),
@@ -415,7 +413,7 @@ pub enum SpriteOp {
     UseColor2(Arg),
 }
 
-// Interpolation slot starts (05 §5 ops 15, 17–19, 29, 32–36, 86, 87).
+// Interpolation slot starts (ops 15, 17–19, 29, 32–36, 86, 87).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum InterpOp {
     AlphaFade {
@@ -489,7 +487,7 @@ pub enum MathFn {
     Atan,
 }
 
-// Variable ops 37–66 (05 §3, §5); `dst` is always arg 0.
+// Variable ops 37–66 (05 §3); `dst` is always arg 0.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VarOp {
     // Odd ops 37–57 int (`float` false), even 38–58 float.
@@ -518,7 +516,7 @@ pub enum VarOp {
     },
 }
 
-// One decoded instruction of the 05 §5 table, grouped as the VM executes it.
+// One decoded instruction of the opcode table, grouped as the VM executes it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Op {
     Flow(FlowOp),
@@ -557,7 +555,7 @@ fn rank(op: i16, first: i16, step: i16) -> usize {
 }
 
 impl Op {
-    // Decode `ins` from the script bytes it was read from (05 §5); args past the size read as 0.
+    // Decode `ins` from the script bytes it was read from; args past the size read as 0.
     pub fn decode(ins: &Ins, d: &[u8]) -> Op {
         let a = |k: usize| ins.arg(d, k);
         let a2 = |k: usize| [a(k), a(k + 1)];
@@ -687,7 +685,7 @@ mod tests {
 
     type LegacyEntry = (String, u32, u32, Vec<Sprite>, Vec<Script>, Option<Thtx>);
 
-    // Pre-IMPL179 single-pass parser (sprites, scripts and decoded THTX together), kept as the split's reference.
+    // Single-pass reference parser (sprites, scripts and decoded THTX together) for the split test.
     fn legacy(b: &[u8]) -> Vec<LegacyEntry> {
         let mut out = Vec::new();
         let mut base = 0;
@@ -795,7 +793,7 @@ mod tests {
         assert_eq!(tex, 306);
     }
 
-    // Every op of the 05 §5 table decodes to a known `Op`, every other number to `Unknown`.
+    // Every op of the opcode table decodes to a known `Op`, every other number to `Unknown`.
     #[test]
     fn decode_covers_signature_table() {
         for op in i16::MIN..=i16::MAX {
@@ -836,7 +834,7 @@ mod tests {
         assert_eq!(n_ins, 17_117);
     }
 
-    // Truncated args: the header alone is not enough when the size covers args past the end (05 §1).
+    // Truncated args: the header alone is not enough when the size covers args past the end.
     #[test]
     fn read_needs_covered_args() {
         let mut b = Vec::from(3i16.to_le_bytes());

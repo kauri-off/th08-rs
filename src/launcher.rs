@@ -1,5 +1,4 @@
-//! Launcher screen and game-folder flow, port infrastructure (no spec section): an egui settings screen generated
-//! from `settings::ENTRIES`, drawn on the game's wgpu device and window before the game starts.
+//! Launcher screen and game-folder flow: an egui settings screen generated from `settings::ENTRIES`.
 
 use crate::i18n::{self, Lang};
 use crate::settings::{self, Audience, ENTRIES, Entry, Group, Kind, Origin, Settings};
@@ -9,7 +8,7 @@ use th08_render::gfx::{Gfx, SafeArea};
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-// A game folder holds th08.dat or its repacked th08.pak (any letter case, ASSETS_FORMAT §3.3).
+// A game folder holds th08.dat or its repacked th08.pak (any letter case).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_game_dir(dir: &Path) -> bool {
     th08_core::content::CONTENT_FILES
@@ -17,7 +16,7 @@ pub fn is_game_dir(dir: &Path) -> bool {
         .any(|n| crate::sources::find_file(dir, n).is_file())
 }
 
-// Desktop platform dirs (ARCH_D §6.1 item 1), looked up by the entry point and passed to the settings: config =
+// Desktop platform dirs, looked up by the entry point and passed to the settings: config =
 // `directories` BaseDirs config dir + th08 ($XDG_CONFIG_HOME/th08 = ~/.config/th08, %APPDATA%\th08,
 // ~/Library/Application Support/th08); saves there, else next to the binary.
 #[cfg(not(target_arch = "wasm32"))]
@@ -174,7 +173,7 @@ fn folder_dialog() -> Option<PathBuf> {
 }
 
 // Where the game files come from: the `game_dir` row (native), the files picked in the web page, or the APK's
-// bundled assets (Android, ARCH_D §2.1).
+// bundled assets (Android).
 pub enum Folder {
     Native,
     Web(Vec<String>),
@@ -525,8 +524,7 @@ impl Model {
                             .hint_text(i18n::ui(lang, "folder_hint"))
                             .desired_width(f32::INFINITY),
                     );
-                    // Android: no soft keyboard under NativeActivity (launcher review item 9), so the fixed folder
-                    // set by `android_main` is shown, not edited.
+                    // Android: no soft keyboard under NativeActivity, so the fixed folder set by `android_main` is shown, not edited.
                     #[cfg(target_os = "android")]
                     ui.label(v.as_str());
                     if v != r.value.text() {
@@ -1120,7 +1118,7 @@ mod tests {
         d
     }
 
-    // ASSETS_FORMAT §3.3: a folder with only the packs is a game folder, as is one with th08.dat.
+    // A folder with only the packs is a game folder, as is one with th08.dat.
     #[test]
     fn pack_folder_is_game_dir() {
         let root = std::env::temp_dir().join(format!("th08_pack_dir_{}", std::process::id()));

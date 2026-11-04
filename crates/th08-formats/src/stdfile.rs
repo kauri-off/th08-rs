@@ -18,9 +18,9 @@ pub type Vec3 = [f32; 3];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum QuadKind {
-    // Type 0, 0x1C bytes: pos relative to the object origin; w/h 0 = keep sprite size (06 §1.2).
+    // Type 0, 0x1C bytes: pos relative to the object origin; w/h 0 = keep sprite size.
     Sprite { pos: Vec3, w: f32, h: f32 },
-    // Type 1, 0x24 bytes: points A/B; w 0 = sprite width (06 §1.2, §11.3).
+    // Type 1, 0x24 bytes: points A/B; w 0 = sprite width (06 §11.3).
     Ribbon { a: Vec3, b: Vec3, w: f32 },
 }
 
@@ -34,7 +34,6 @@ pub struct Quad {
 }
 
 #[derive(Clone, Debug)]
-// Object record (06 §1.1).
 pub struct Object {
     pub id: i16,
     // +2 layer 0..3.
@@ -48,14 +47,14 @@ pub struct Object {
     pub quads: Vec<Quad>,
 }
 
-// 16-byte instance record; the +2 field (always 256) is never read (06 §1.3).
+// 16-byte instance record; the +2 field (always 256) is never read.
 #[derive(Clone, Copy, Debug)]
 pub struct Instance {
     pub object: usize,
     pub pos: Vec3,
 }
 
-// 20-byte script record: time in frames (−1 terminates), opcode, 3 args (06 §1.4).
+// 20-byte script record: time in frames (−1 terminates), opcode, 3 args.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Record {
     pub time: i32,
@@ -206,7 +205,7 @@ pub struct Std {
     pub script: Vec<Record>,
 }
 
-// 06 §1 header, objects with their quads, instance list and script; the object offsets stay file offsets.
+// Header, objects with their quads, instance list and script; the object offsets stay file offsets.
 pub fn parse(b: &[u8]) -> Result<Std> {
     let mut h = Reader::new(b);
     let nobj = usize::from(h.i16()?.max(0).cast_unsigned());

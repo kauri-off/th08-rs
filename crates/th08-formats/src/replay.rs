@@ -28,13 +28,13 @@ pub enum ReplayError {
 
 pub type Result<T> = std::result::Result<T, ReplayError>;
 
-// File header size, end of the info block, stage record header size and checksum base (15 §3.5, 11 §6).
+// File header size, end of the info block, stage record header size and checksum base.
 pub const HEADER: usize = 0x68;
 pub const INFO: usize = 0x134;
 pub const REC: usize = 0x24;
 const CHECK_BASE: u32 = 0x3F00_0318;
 
-// Stage record, 0x24-byte header (11 §6) + input words + fps bytes (15 §3.4).
+// Stage record, 0x24-byte header + input words + fps bytes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StageRecord {
     // +0x00 score ÷10 at the end of this stage (filled when the next stage starts or at finish).
@@ -125,12 +125,12 @@ pub struct Replay {
     pub stages: [Option<StageRecord>; 9],
     // Header +0x44, the stage-0 fps-stream offset; also read by the replay menu's stage-skip quirk (15 §3.8).
     pub fps0: u32,
-    // Raw "USER" section after the file size (15 §3.5), kept as read.
+    // Raw "USER" section after the file size, kept as read.
     pub user: Vec<u8>,
 }
 
 impl Default for Replay {
-    // Info constants of 15 §3.5: +0x69 = 100, +0x120 = 30 (fps interval), exe size/sum and tag "0100d" (15 §2.10).
+    // Info constants: +0x69 = 100, +0x120 = 30 (fps interval), exe size/sum and tag "0100d" (15 §2.10).
     fn default() -> Self {
         let mut info = vec![0; INFO - HEADER];
         info[1] = 100;
@@ -148,7 +148,7 @@ impl Default for Replay {
     }
 }
 
-// 15 §3.5: from header +0x18 on, b += key, key += 7 (u8); decrypt subtracts the same sequence.
+// From header +0x18 on, b += key, key += 7 (u8); decrypt subtracts the same sequence.
 fn crypt(b: &mut [u8], mut key: u8, decrypt: bool) {
     for c in b {
         *c = if decrypt {
@@ -192,7 +192,7 @@ impl Replay {
         self.stages.iter().position(Option::is_some)
     }
 
-    // Replay_Load 0x451D90 (15 §3.7): magic + version 6, decrypt from 0x18 with key +0x15, checksum, LZSS, then the
+    // Replay_Load 0x451D90: magic + version 6, decrypt from 0x18 with key +0x15, checksum, LZSS, then the
     // slow-mode and exe-check rejects (step 5: ExeCheck of info +0x12C tag, +0x124 size, +0x128 sum, 15 §2.10).
     // `ver_list` is the boot-loaded version list, None = not loaded (pass).
     pub fn parse(file: &[u8], ver_list: Option<&[u8]>) -> Result<Self> {
@@ -243,7 +243,7 @@ impl Replay {
             if o == 0 {
                 continue;
             }
-            // A record runs to its fps stream, the fps stream to the next record (15 §3.5 image order).
+            // A record runs to its fps stream, the fps stream to the next record (image order).
             let next = offs[i + 1..]
                 .iter()
                 .copied()
@@ -276,7 +276,7 @@ impl Replay {
         SjisStr(&c[..c.iter().position(|&b| b == 0).unwrap_or(c.len())])
     }
 
-    // Replay_Finish image/compress/checksum/encrypt (15 §3.5, §3.6 steps 2–5). 3 RNG draws in this order:
+    // Replay_Finish image/compress/checksum/encrypt. 3 RNG draws in this order:
     // key byte, info +0x68, header +0x14 (Rng_Range16(256) each). `user` is appended as is.
     pub fn encode(&mut self, rng: &mut impl ByteSource) -> Vec<u8> {
         let key = rng.next_byte();
@@ -330,7 +330,7 @@ mod tests {
     use super::*;
     use crate::scoredat::VER_LIST_NAME;
 
-    // 15 §3.5–§3.7: a built replay round-trips; a broken checksum and a slow-mode record are rejected.
+    // A built replay round-trips; a broken checksum and a slow-mode record are rejected.
     #[test]
     fn encode_round_trip() {
         let mut r = Replay::default();

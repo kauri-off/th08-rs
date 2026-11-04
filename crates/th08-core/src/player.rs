@@ -16,24 +16,24 @@ pub use crate::bomb::{Area, Bomb};
 pub use crate::pshot::{Opt, PBullet};
 pub use th08_formats::sht::Sht;
 
-// Player_Calc 0x44C390 (09 §1).
+// Player_Calc 0x44C390.
 pub const CALC_PRIO: u16 = 9;
 // Requests for the enemy manager: dissolve spell started / ended.
 pub const DISSOLVE_BEGIN: u8 = 1;
 pub const DISSOLVE_END: u8 = 2;
-// Draw 0x44D530 / 0x44D630 (09 §1, 14 §5).
+// Draw 0x44D530 / 0x44D630 (14 §5).
 pub const DRAW_PRIO: u16 = 9;
 pub const DRAW_PRIO_HIGH: u16 = 10;
-// playerNN.anm slot (09 §1.1 +0xC).
+// playerNN.anm slot (player +0xC).
 pub const ANM_SLOT: usize = 5;
-// (192, 448 − 64, 0.2), playfield px (09 §6.2, z per §6.4).
+// (192, 448 − 64, 0.2), playfield px (z per 09 §6.4).
 pub const RESPAWN: [f32; 3] = [192.0, 384.0, 0.2];
-// Player_Load: (playfield w / 2, playfield h − 64, 0.49) (09 §6.4).
+// Player_Load: (playfield w / 2, playfield h − 64, 0.49).
 pub const START: [f32; 3] = [192.0, 384.0, 0.49];
-// Clamp rect min x, min y, max x, max y (GM +0x3DDE4.., 09 §3).
+// Clamp rect min x, min y, max x, max y (GM +0x3DDE4..).
 pub const CLAMP: [f32; 4] = [8.0, 16.0, 376.0, 432.0];
 
-// Gauge limits (game manager +0x3DDF8.., 09 §9.3).
+// Gauge limits (game manager +0x3DDF8..).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GaugeLimits {
     pub min: i32,
@@ -58,7 +58,7 @@ impl Default for GaugeLimits {
 }
 
 impl GaugeLimits {
-    // Table of 09 §9.3 by shot type (solo human = even ≥ 4, solo youkai = odd ≥ 4).
+    // Gauge-limit table by shot type (solo human = even ≥ 4, solo youkai = odd ≥ 4).
     pub fn for_shot(shot: ShotType) -> Self {
         let d = Self::default();
         match shot {
@@ -89,7 +89,7 @@ impl GaugeLimits {
     }
 }
 
-// Game-manager stats block (09 §9.1, 11 §5).
+// Game-manager stats block.
 #[derive(Clone, Debug)]
 pub struct Stats {
     // GM +0x30, 0 Easy .. 4 Extra.
@@ -101,7 +101,7 @@ pub struct Stats {
     pub graze_total: i32,
     // +0x22 human/youkai gauge.
     pub gauge: i16,
-    // GM +0x3DDF8.. (09 §9.3).
+    // GM +0x3DDF8..
     pub limits: GaugeLimits,
     // +0x24 max point value.
     pub max_point: i32,
@@ -156,7 +156,7 @@ pub struct Stats {
 #[derive(Clone, Debug, Default)]
 pub struct Record {
     pub frames: u32,
-    // 0x164D30C play-time counter (11 §2): EnemyMgr_Calc outside dialogue, + 1800 per ECL op 148; zeroed at a fresh start (11 §3.2).
+    // 0x164D30C play-time counter (11 §2): EnemyMgr_Calc outside dialogue, + 1800 per ECL op 148; 0 at a fresh start.
     pub progress: i32,
     pub points: u32,
     pub bombs: u32,
@@ -234,7 +234,7 @@ pub const TIME_THR: [[i32; 4]; 8] = [
 ];
 
 impl Stats {
-    // AddScore 0x4181F0: score += n/10 (11 §5). No cap here (RE-Q57): only GM calc step 9 and the GM unregister cap.
+    // AddScore 0x4181F0: score += n/10. No cap here: only GM calc step 9 and the GM unregister cap.
     pub fn add_score(&mut self, v: i32) {
         self.score10 += i64::from(v / 10);
     }
@@ -249,7 +249,7 @@ impl Stats {
         r.add(d);
     }
 
-    // GameMgr_UpdateChecksum 0x406E50: only the 2 × Rng_Range(100000) draws are kept (11 §1.5, §5).
+    // GameMgr_UpdateChecksum 0x406E50: only the 2 × Rng_Range(100000) draws are kept (11 §1.5).
     pub fn checksum(rng: &mut Rng) {
         rng.range(100_000);
         rng.range(100_000);
@@ -272,7 +272,7 @@ impl Stats {
         }
     }
 
-    // Gauge queries (09 §9.3).
+    // Gauge queries.
     pub fn youkai_max(&self) -> bool {
         i32::from(self.gauge) >= self.limits.youkai_max
     }
@@ -289,12 +289,12 @@ impl Stats {
         i32::from(self.gauge) <= self.limits.human
     }
 
-    // GaugeAdd clamp; callers apply the "ignored while bombing unless forced" rule (09 §9.3).
+    // GaugeAdd clamp; callers apply the "ignored while bombing unless forced" rule.
     pub fn gauge_add(&mut self, n: i32) {
         self.gauge = (i32::from(self.gauge) + n).clamp(self.limits.min, self.limits.max) as i16;
     }
 
-    // 08 §8.5 1up rule (Extend 0x439B29, 11 §5): life, else bomb; sfx 0x1C, rank +200.
+    // 08 §8.5 1up rule (Extend 0x439B29): life, else bomb; sfx 0x1C, rank +200.
     pub fn extend(&mut self, sys: &mut Sys) {
         if self.lives < 8.0 {
             self.add_lives(1.0, sys.rng);
@@ -309,7 +309,7 @@ impl Stats {
         }
     }
 
-    // AddLives 0x43C641 / AddBombs 0x439883 / SetPower 0x406FA0: each runs a checksum (09 §9.4).
+    // AddLives 0x43C641 / AddBombs 0x439883 / SetPower 0x406FA0: each runs a checksum.
     pub fn add_lives(&mut self, n: f32, rng: &mut Rng) {
         self.lives += n;
         Self::checksum(rng);
@@ -334,7 +334,7 @@ impl Stats {
         }
         self.time += n;
         self.rec.orbs += n;
-        // Parity +0x44 takes negative n too (death-bomb drain, death penalty) (11 §1.5 setters).
+        // Parity +0x44 takes negative n too (death-bomb drain, death penalty).
         self.time_added += n;
         if n > 0 {
             self.max_point += (n + (self.time_added & 1)) / 2 * 10;
@@ -343,8 +343,7 @@ impl Stats {
     }
 }
 
-// Centred boxes, inclusive overlap (08 §8.4).
-// Box test of HitTest / HitTestNoBomb / GrazeTest (08 §4.1 step 6): object min = (p − s/2) − e,
+// Box test of HitTest / HitTestNoBomb / GrazeTest (08 §4.1 step 6), centred boxes: object min = (p − s/2) − e,
 // max = (s/2 + p) + e, each edge an f32, against a stored player box [min x, min y, max x, max y]; touching overlaps.
 fn box_overlap(p: [f32; 3], size: [f32; 2], e: f32, b: [f32; 4]) -> bool {
     let h = [size[0] / 2.0, size[1] / 2.0];
@@ -361,7 +360,7 @@ pub struct GrazeEnv {
     pub dialogue: bool,
 }
 
-// Player object 0x17D5EF8, 0xE2B30 bytes (09 §1.1).
+// Player object 0x17D5EF8, 0xE2B30 bytes.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "separate bytes of the original object (09 §1.1) and port-only switches, not one flag word"
@@ -376,12 +375,12 @@ pub struct Player {
     pub last_spell: u8,
     // +5 active character: focus held > 6 frames; solos: shot-type parity.
     pub mode: u8,
-    // +6 forced bomb (dissolve spell, 09 §6.1).
+    // +6 forced bomb (dissolve spell).
     pub forced_bomb: u8,
     pub dissolve_req: u8,
     // +8 frames since the last focus change.
     pub focus_age: i32,
-    // Gauge-max aura effect 25 alive (09 §9.3).
+    // Gauge-max aura effect 25 alive.
     pub gauge_aura: bool,
     // +0x10 sprite VM.
     pub vm: AnmVm,
@@ -393,7 +392,7 @@ pub struct Player {
     pub last_disp: [f32; 2],
     // +0x404 / +0x408 x / y speed multipliers (bombs change them).
     pub speed_mult: [f32; 2],
-    // +0x40C 4 × 0x2F4 (09 §5, 14 §3).
+    // +0x40C 4 × 0x2F4 (09 §5).
     pub options: [Opt; 4],
     // +0xFDC.. bomb state and objects (14 §1).
     pub bomb: Bomb,
@@ -408,11 +407,11 @@ pub struct Player {
     pub bullets: Vec<PBullet>,
     // +0xE2A38 3 slots (14 §6).
     pub laser_slots: [crate::pshot::LaserSlot; crate::pshot::LASER_SLOTS],
-    // +0xE2A68 deathbomb counter / bomb-allowed counter (09 §6).
+    // +0xE2A68 deathbomb counter / bomb-allowed counter.
     pub deathbomb: i32,
     // +0xE2A6C := 16 by Spell_End (07 §11.1); decremented atop Player_UpdateBomb; a normal bomb start needs 0.
     pub bomb_cooldown: i32,
-    // +0xE2A70 respawn clear frames (09 §6.3).
+    // +0xE2A70 respawn clear frames.
     pub respawn_clear: i32,
     // +0xE2A74 / +0xE2A78 human / youkai sht (which fields come from which: 09 §2.1).
     pub sht: Sht,
@@ -422,12 +421,12 @@ pub struct Player {
     // Port-only: `Player_Die` ended with `ItemMgr_DropAttracted` (09 §6.1); the caller that owns the item
     // manager runs it right after the hit test returns.
     pub drop_attracted: bool,
-    // +0x3BC..+0x3D0 item box min x, min y, max x, max y = pos ∓ collect/2, stored by `Player_Move` (09 §1.1, §3).
+    // +0x3BC..+0x3D0 item box min x, min y, max x, max y = pos ∓ collect/2, stored by `Player_Move`.
     pub item_box: [f32; 4],
-    // +0x38C / +0x3A4 hit and graze boxes, same layout, also stored only by `Player_Move` (09 §1.1).
+    // +0x38C / +0x3A4 hit and graze boxes, same layout, also stored only by `Player_Move`.
     pub hit_box: [f32; 4],
     pub graze_box: [f32; 4],
-    // +0xE2A98 direction code (09 §3).
+    // +0xE2A98 direction code.
     pub direction: u8,
     // +0xE2A9C / +0xE2AA0 last vx / vy before gs.
     pub last_v: [f32; 2],
@@ -442,7 +441,7 @@ pub struct Player {
     pub boss_target: bool,
     // +0xE2AC4: −1 idle, 0..19 firing cycle (09 §4.2).
     pub shot_timer: Timer,
-    // +0xE2AD0 / +0xE2AE8 gauge timers B / C (09 §9.3).
+    // +0xE2AD0 / +0xE2AE8 gauge timers B / C.
     pub gauge_b: Timer,
     pub gauge_c: Timer,
     // +0xE2AF4 death / respawn / invulnerability timer.
@@ -451,7 +450,7 @@ pub struct Player {
     pub option_angle: Angle,
     // +0xE2B2C time-orb damage step: 40, solo human 27.
     pub orb_step: i32,
-    // GM +0x3DBA9 shot type 0–11 (09 §2), raw byte; typed through `shot()`.
+    // GM +0x3DBA9 shot type 0–11, raw byte; typed through `shot()`.
     pub shot_type: u8,
     pub stats: Stats,
     pub env: GrazeEnv,
@@ -547,7 +546,7 @@ impl Default for Player {
     }
 }
 
-// TH08_PLAYER: shot type 0–11 or a name (09 §2).
+// TH08_PLAYER: shot type 0–11 or a name.
 pub fn parse_shot(s: &str) -> Option<u8> {
     const NAMES: [&str; 12] = [
         "reimu&yukari",
@@ -578,7 +577,7 @@ pub fn parse_shot(s: &str) -> Option<u8> {
 }
 
 impl Player {
-    // Shot type of GM +0x3DBA9; Player_Load only runs with 0–11 (the sht / anm files of 12+ do not exist, 09 §2).
+    // Shot type of GM +0x3DBA9; Player_Load only runs with 0–11 (the sht / anm files of 12+ do not exist).
     pub fn shot(&self) -> ShotType {
         ShotType::try_from(self.shot_type).expect("shot type 0–11 (09 §2)")
     }
@@ -595,8 +594,8 @@ impl Player {
         self.shot().is_solo()
     }
 
-    // Player_Load 0x44D650 (09 §2, §6.4): sht files, gauge limits, initial script 0 / 5, solo options, state 1
-    // with timer 120, or 10 in spell practice (GM +0x3DBAC bit 14, 11 §2.1).
+    // Player_Load 0x44D650 (09 §6.4): sht files, gauge limits, initial script 0 / 5, solo options, state 1
+    // with timer 120, or 10 in spell practice (GM +0x3DBAC bit 14).
     pub fn load(
         &mut self,
         anm: &mut AnmManager,
@@ -649,7 +648,7 @@ impl Player {
         Ok(t)
     }
 
-    // Box half sizes, all from the human sht (09 §2.1, §3).
+    // Box half sizes, all from the human sht.
     pub fn hit_half(&self) -> [f32; 2] {
         [self.sht.hitbox / 2.0; 2]
     }
@@ -666,7 +665,7 @@ impl Player {
         [self.pos[0], self.pos[1]]
     }
 
-    // Item fall multiplier source: youkai sht when +3 ≠ 0 (09 §2.1, 08 §8.4).
+    // Item fall multiplier source: youkai sht when +3 ≠ 0 (08 §8.4).
     pub fn item_sht(&self) -> &Sht {
         if self.focus == 1 {
             &self.sht_youkai
@@ -738,7 +737,7 @@ impl Player {
         self.player_die(anm, sys);
     }
 
-    // Player_Die 0x44AB40 (09 §6.1); `debug_invuln` returns at its start like the noclip probe.
+    // Player_Die 0x44AB40; `debug_invuln` returns at its start like the noclip probe.
     // Both paths end with ItemMgr_DropAttracted, requested through `drop_attracted`.
     fn player_die(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         if self.debug_invuln {
@@ -771,7 +770,7 @@ impl Player {
             if self.env.spell {
                 n = (n * 2).min(30);
             }
-            // Shot types 0, 4, 5 (09 §6.1).
+            // Shot types 0, 4, 5.
             if matches!(
                 shot,
                 ShotType::ReimuYukari | ShotType::Reimu | ShotType::Yukari
@@ -780,14 +779,14 @@ impl Player {
             }
             n
         };
-        // Silhouette and ring 59 (fixed slot 11) only with a bomb in stock (09 §6.1 "else" branch): colour2 :=
+        // Silhouette and ring 59 (fixed slot 11) only with a bomb in stock (the "else" branch): colour2 :=
         // white with the VM colour's alpha, drawn via VM flag bit 17 (05 §2.1).
         if st.bombs >= 1.0 {
             let a = self.vm.color[anmvm::A];
             self.vm.color2 = [0xFF, 0xFF, 0xFF, a];
             self.vm.flags |= anmvm::F_COLOR2;
             crate::effect::death_ring(sys.fx, anm, sys.rng, self.pos, n);
-            // GameFlags bit 10 only in the bombs ≥ 1 branch: a 0-bomb "Miss" during a card freezes nothing (09 §6.1).
+            // GameFlags bit 10 only in the bombs ≥ 1 branch: a 0-bomb "Miss" during a card freezes nothing.
             if self.env.spell {
                 self.set_freeze_bullets(sys.flags, true);
             }
@@ -796,7 +795,7 @@ impl Player {
         self.drop_attracted = true;
     }
 
-    // GameFlags bit 10, the spell-card death freeze (09 §6.1, 11 §2.1).
+    // GameFlags bit 10, the spell-card death freeze (11 §2.1).
     pub fn freeze_bullets(&self, flags: u32) -> bool {
         flags & gamemgr::F_DEATH != 0
     }
@@ -811,7 +810,7 @@ impl Player {
         flags & (F_LAST_SPELL | F_LAST_CAPTURED) != 0
     }
 
-    // Player_OnGraze 0x44A930 (09 §9.2); returns how many time orbs (item type 10, mode 5) to drop at `p`.
+    // Player_OnGraze 0x44A930; returns how many time orbs (item type 10, mode 5) to drop at `p`.
     // Not implemented: HUD flag and statistics bit 0x2000.
     pub fn on_graze(
         &mut self,
@@ -855,7 +854,7 @@ impl Player {
             orbs = 1;
             if !laser && env.spell {
                 orbs += 1;
-                // Nested in the bullet-and-card branch (09 §9.2, RE-Q28).
+                // Nested in the bullet-and-card branch.
                 if !solo_youkai {
                     orbs += 1;
                 }
@@ -864,7 +863,7 @@ impl Player {
         orbs
     }
 
-    // Hit / graze / item boxes = pos ∓ half size (09 §3), as `Player_Move` stores them after the clamp.
+    // Hit / graze / item boxes = pos ∓ half size, as `Player_Move` stores them after the clamp.
     pub fn update_boxes(&mut self) {
         let pos = self.pos;
         let b = |h: [f32; 2]| [pos[0] - h[0], pos[1] - h[1], pos[0] + h[0], pos[1] + h[1]];
@@ -882,8 +881,8 @@ impl Player {
             && !(p[0] + h < x0 || x1 < p[0] - h || p[1] + h < y0 || y1 < p[1] - h)
     }
 
-    // EnemyMgr_Calc target pick (09 §1.1 +0xE2AA4): target 1 = boss (horizontally nearest) else the lowest enemy;
-    // Target 2 is never written; the aimed enemy is picked by the enemy manager (14 §3.1).
+    // EnemyMgr_Calc target pick (+0xE2AA4): target 1 = boss (horizontally nearest) else the lowest enemy;
+    // target 2 is never written; the aimed enemy is picked by the enemy manager (14 §3.1).
     pub fn offer_target(&mut self, e: [f32; 3], boss: bool) {
         let t = &mut self.targets[0];
         if boss {
@@ -896,7 +895,7 @@ impl Player {
         }
     }
 
-    // Player_HitTestNoBomb 0x44A360 (09 §6.1): no bomb-area test; true on overlap in every state; only state 0 dies.
+    // Player_HitTestNoBomb 0x44A360: no bomb-area test; true on overlap in every state; only state 0 dies.
     pub fn contact_test(
         &mut self,
         p: [f32; 3],
@@ -912,7 +911,7 @@ impl Player {
         true
     }
 
-    // Player_LaserTest 0x44A6A0 (09 §6.1): box centre `c`, size `s` in the frame rotated by `a` about origin `o`.
+    // Player_LaserTest 0x44A6A0: box centre `c`, size `s` in the frame rotated by `a` about origin `o`.
     // Returns (0 miss, 1 hit, 2 graze; time orbs to drop at the player). No bomb-area test, no +0xE2A90 write;
     // f32 box edges, touching counts as overlap.
     #[allow(clippy::too_many_arguments)]
@@ -958,7 +957,7 @@ impl Player {
         self.vm.pos = pos;
     }
 
-    // Sprite script base: 0 human / 5 youkai; teams by focus, solos by parity (09 §3).
+    // Sprite script base: 0 human / 5 youkai; teams by focus, solos by parity.
     // Respawn sprite script (09 §6.2). QUIRK: a team test, not a focus test — focused teams 0 / 2 respawn with the
     // human script 0, teams 1 / 3 get 5 when focused; solos by parity.
     fn respawn_script(&self) -> usize {
@@ -979,7 +978,7 @@ impl Player {
         if youkai { 5 } else { 0 }
     }
 
-    // Player_Move (09 §3).
+    // Player_Move.
     fn move_player(&mut self, anm: &mut AnmManager, inp: &input::Input, sys: &mut Sys) {
         let gs = anm.speed;
         let bits = inp.held;
@@ -989,7 +988,7 @@ impl Player {
             bits & input::LEFT != 0,
             bits & input::RIGHT != 0,
         );
-        // Direction code +0xE2A98 in the priority order of 09 §3.
+        // Direction code +0xE2A98 in the original's priority order.
         self.direction = match (u, d, l, r) {
             (true, _, true, _) => 5,
             (_, true, true, _) => 7,
@@ -1013,7 +1012,7 @@ impl Player {
             if !self.solo() {
                 self.swap_options(anm, f);
                 self.set_script(anm, sys.rng, self.sprite_base(f));
-                // Switch flash only when the previous state lasted > 3 frames (09 §3).
+                // Switch flash only when the previous state lasted > 3 frames.
                 if self.focus_age > 3 {
                     let (kind, colour) = if f == 1 {
                         (29, 0x80FF_8080)
@@ -1022,7 +1021,7 @@ impl Player {
                     };
                     sys.fx.spawn(anm, sys.rng, kind, self.pos, 1, colour);
                 }
-                // 09 §3: the team sprite reset also sets +0xE2A9C := 0, so moving on the switch frame replays the
+                // The team sprite reset also sets +0xE2A9C := 0, so moving on the switch frame replays the
                 // start-move script; solos keep it.
                 self.last_v[0] = 0.0;
             }
@@ -1051,7 +1050,7 @@ impl Player {
         if self.solo() {
             self.mode = u8::from(self.shot().is_odd());
         }
-        // Unfocused: human sht +0x24 / +0x2C; focused: youkai sht +0x28 / +0x30 (09 §2.1).
+        // Unfocused: human sht +0x24 / +0x2C; focused: youkai sht +0x28 / +0x30.
         let (ortho, diag) = if f == 1 {
             (self.sht_youkai.speed_focus, self.sht_youkai.diag_focus)
         } else {
@@ -1072,7 +1071,7 @@ impl Player {
         vy *= self.speed_mult[1];
         let base = self.sprite_base(f);
         let pvx = self.last_v[0];
-        // Start/stop scripts 1–4 (+5 youkai) against the previous frame's vx (09 §3).
+        // Start/stop scripts 1–4 (+5 youkai) against the previous frame's vx.
         let script = if vx < 0.0 && pvx >= 0.0 {
             Some(1)
         } else if vx > 0.0 && pvx <= 0.0 {
@@ -1103,14 +1102,14 @@ impl Player {
         }
     }
 
-    // Gauge per frame (09 §9.3): shooting → timer C ramp (sign by focus); idle → drift toward 0 after B ≥ 30.
+    // Gauge per frame: shooting → timer C ramp (sign by focus); idle → drift toward 0 after B ≥ 30.
     fn gauge_drift(&mut self, gs: f32, sr: bool) {
         if self.focus_age < 30 || self.bombing || self.env.dialogue {
             return;
         }
         let st = &mut self.stats;
         if self.shot_timer.cur >= 0 {
-            // 09 §9.3 (RE-Q56): B falls by Timer_Decrement 0x418110 (game speed); n from c = Timer_GetF(C), f32,
+            // B falls by Timer_Decrement 0x418110 (game speed); n from c = Timer_GetF(C), f32,
             // > 300.0 → 21, else ftol(c / 15).
             if self.gauge_b.cur > 0 {
                 self.gauge_b.dec(gs, sr);
@@ -1148,7 +1147,7 @@ impl Player {
         }
     }
 
-    // Player_DyingUpdate 0x44CBF0 (09 §6.2); true when the respawn starts.
+    // Player_DyingUpdate 0x44CBF0; true when the respawn starts.
     fn dying_update(
         &mut self,
         anm: &mut AnmManager,
@@ -1164,10 +1163,10 @@ impl Player {
             }
             return false;
         }
-        // 09 §6.2: t counts from the hit (not reset at the real death); last vx/vy := 0 every frame here.
+        // t counts from the hit (not reset at the real death); last vx/vy := 0 every frame here.
         self.last_v = [0.0; 2];
         let t = self.state_timer.cur;
-        // 09 §6.2: shrink + additive fade written every call before the t > 29 test; x87 on the float timer.
+        // Shrink + additive fade written every call before the t > 29 test; x87 on the float timer.
         let tf = f64::from(self.state_timer.getf());
         let q = (tf / 30.0) as f32;
         self.vm.scale = [1.0 - q, (3.0 * f64::from(q) + 1.0) as f32];
@@ -1193,13 +1192,13 @@ impl Player {
             return true;
         }
         // Game over: the ASCII manager opens the continue menu (12 §4).
-        // Lives and bombs are not changed on game over (09 §6.2).
+        // Lives and bombs are not changed on game over.
         self.game_over = true;
-        // 09 §6.2: returns 0 here, so no Player_RespawnUpdate (no respawn clear) on the game-over frame.
+        // Returns 0 here, so no Player_RespawnUpdate (no respawn clear) on the game-over frame.
         false
     }
 
-    // The real death when the deathbomb window runs out (09 §6.2): effects, sound 0xF, unfreeze, miss counter
+    // The real death when the deathbomb window runs out: effects, sound 0xF, unfreeze, miss counter
     // (checksum), time −= min(time/10, 500), drops (mode 2), rank −1600. The spell manager detects the failure
     // through `deaths`.
     fn real_death(
@@ -1222,11 +1221,11 @@ impl Player {
             crate::effect::FIX_DEATH_BURST,
             0xFF40_40FF,
         );
-        // Unfreeze, then the only tint-off of Player_DyingUpdate (06 §10.2), then the silhouette off (09 §6.2).
+        // Unfreeze, then the only tint-off of Player_DyingUpdate (06 §10.2), then the silhouette off.
         self.set_freeze_bullets(sys.flags, false);
         anm.tint_off();
         self.vm.flags &= !anmvm::F_COLOR2;
-        // 0x164D0B0 := 0 here, not in Player_Die: a deathbomb leaves it unchanged (09 §6.2, 11 §2).
+        // 0x164D0B0 := 0 here, not in Player_Die: a deathbomb leaves it unchanged (11 §2).
         self.stats.d0b0 = 0;
         self.last_spell = 0;
         let rng = &mut *sys.rng;
@@ -1244,7 +1243,7 @@ impl Player {
                 .set_power(if p <= 16.0 { 0.0 } else { p - 16.0 }, rng);
             drops.push(i32::from(crate::item::BIG_POWER));
             drops.extend([i32::from(crate::item::POWER); 5]);
-            // Shot types 2, 8, 9 (09 §6.2).
+            // Shot types 2, 8, 9.
             if matches!(
                 self.shot(),
                 ShotType::SakuyaRemilia | ShotType::Sakuya | ShotType::Remilia
@@ -1257,20 +1256,20 @@ impl Player {
             for k in drops {
                 it.spawn(anm, sys.rng, self, self.pos, k, 2);
             }
-            // 09 §6.2 "attracted items fall": ItemMgr_DropAttracted after the death drops.
+            // "Attracted items fall": ItemMgr_DropAttracted after the death drops.
             it.drop_attracted();
         }
         self.stats.rank(sys.rank, -1600);
     }
 
-    // Player_RespawnUpdate 0x44D180 (09 §6.3): clear timer := 60 on every call, 30-frame grow from scale 3.
+    // Player_RespawnUpdate 0x44D180: clear timer := 60 on every call, 30-frame grow from scale 3.
     // Spell practice (GameFlags bit 14): the invulnerability timer is not set and keeps its value 30.
     fn respawn_update(&mut self, flags: u32) {
         self.respawn_clear = 60;
         let t = self.state_timer.cur;
         self.speed_mult = [1.0; 2];
         self.deathbomb = 0;
-        // 09 §6.3: every call before the t > 29 test: x grows 0 → 1, y 3 → 1, additive, integer-timer alpha.
+        // Every call before the t > 29 test: x grows 0 → 1, y 3 → 1, additive, integer-timer alpha.
         let f = (1.0 - f64::from(self.state_timer.getf()) / 30.0) as f32;
         self.vm.scale = [1.0 - f, (2.0 * f64::from(f) + 1.0) as f32];
         self.vm.flags |= anmvm::F_SCALE_DIRTY;
@@ -1290,16 +1289,16 @@ impl Player {
         self.deathbomb = self.sht.deathbomb;
     }
 
-    // VM blend bits 4–5 (0x44E0F0 := 1 additive, 0x44E120 := 0 alpha; 09 §6.2, §6.3).
+    // VM blend bits 4–5 (0x44E0F0 := 1 additive, 0x44E120 := 0 alpha).
     fn set_blend(&mut self, b: u32) {
         self.vm.flags =
             (self.vm.flags & !(3 << anmvm::F_BLEND_SHIFT)) | (b << anmvm::F_BLEND_SHIFT);
     }
 
-    // Player_UpdateInvuln 0x44D2C0 (09 §6.4): colour 0xFFF02020 when t mod 8 < 2; the ring follows the player.
+    // Player_UpdateInvuln 0x44D2C0: colour 0xFFF02020 when t mod 8 < 2; the ring follows the player.
     fn update_invuln(&mut self, gs: f32, sr: bool, fx: &mut Effects) {
-        // 09 §6.3: +0xE2A70 counts down here (60 more frames after the respawn), full-screen clear, item −1.
-        // 09 §6.4: the respawn clear runs first, before the state-3 step.
+        // +0xE2A70 counts down here (60 more frames after the respawn), full-screen clear, item −1.
+        // The respawn clear runs first, before the state-3 step.
         if self.respawn_clear != 0 {
             self.respawn_clear -= 1;
             self.cancel_rect([self.pos[0], self.pos[1]], [768.0, 896.0], -1, 0);
@@ -1319,7 +1318,7 @@ impl Player {
             }
             if t < 1 {
                 self.state = 0;
-                // 09 §6.4: timer := 0 when state 3 ends.
+                // Timer := 0 when state 3 ends.
                 self.state_timer.set(0);
                 self.vm.color = [0xFF; 4];
                 if std::mem::take(&mut self.invuln_ring) {
@@ -1331,7 +1330,7 @@ impl Player {
         }
     }
 
-    // Player_Calc 0x44C390 (09 §1); `items` is the item manager when the bullet manager exists.
+    // Player_Calc 0x44C390; `items` is the item manager when the bullet manager exists.
     pub fn frame(
         &mut self,
         anm: &mut AnmManager,
@@ -1396,7 +1395,7 @@ impl Player {
                 st.add_score(100);
             }
         }
-        // Gauge-max aura: effect 25 in fixed slot 8 follows the player (09 §9.3, 13 §2.6). Part of Player_Move, so
+        // Gauge-max aura: effect 25 in fixed slot 8 follows the player (13 §2.6). Part of Player_Move, so
         // in states 1 / 2 it is neither moved nor freed: the aura stays at the death spot.
         let at_max = self.stats.youkai_max() || self.stats.human_max();
         if moved && at_max != self.gauge_aura {
@@ -1454,13 +1453,13 @@ impl Player {
     }
 }
 
-// The player's chain nodes (09 §1); they reach the player through its owner (`ctx.w.player`, step 9a).
+// The player's chain nodes; they reach the player through its owner (`ctx.w.player`).
 pub struct PlayerTask;
 
 impl Task<Ctx> for PlayerTask {
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, _: u8) {
         if chain == Chain::Calc {
-            // Full exit hides the gauge readout (11 §7, 12 §5.9).
+            // Full exit hides the gauge readout (12 §5.9).
             if !matches!(
                 ctx.w.game.requested,
                 SceneId::NextStage | SceneId::Reload | SceneId::Advance
@@ -1542,7 +1541,7 @@ impl Task<Ctx> for PlayerTask {
 mod tests {
     use super::*;
 
-    // 09 §6.2 (RE-Q65 J): respawn script by team / parity, not by focus.
+    // 09 §6.2: respawn script by team / parity, not by focus.
     #[test]
     fn respawn_script_team_quirk() {
         let script = |shot_type, focus| {
@@ -1569,7 +1568,7 @@ mod tests {
         assert_eq!((rng.state, rng.total - t), (0x1234, 4));
     }
 
-    // 11 §5 (RE-Q57): AddScore adds n/10 with no cap.
+    // 11 §5: AddScore adds n/10 with no cap.
     #[test]
     fn add_score_uncapped() {
         let mut st = Stats {
@@ -1599,7 +1598,7 @@ mod tests {
         i
     }
 
-    // 09 §6.4: leaving state 3 sets the timer to exactly 0 (RE-Q54 Z).
+    // 09 §6.4: leaving state 3 sets the timer to exactly 0.
     #[test]
     fn invuln_end_resets_timer() {
         let (mut p, _) = ready();
@@ -2077,7 +2076,7 @@ mod tests {
         assert_eq!((s.time, sys.rng.counter), (0, before));
     }
 
-    // 09 §9.3 (RE-Q56): timer B decrements at game speed; n = ftol(Timer_GetF(C) / 15), 21 above 300.0.
+    // 09 §9.3: timer B decrements at game speed; n = ftol(Timer_GetF(C) / 15), 21 above 300.0.
     #[test]
     fn gauge_timers_use_game_speed() {
         let mut p = Player {

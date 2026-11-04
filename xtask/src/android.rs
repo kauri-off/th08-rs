@@ -1,5 +1,4 @@
-//! Android APK through Gradle (android/, MATERIAL1): libth08.so per ABI via tools/android/cargo_android.sh, the
-//! settings schema, optional stored game assets (ARCH_D_MOBILE §2.1); signed with keystore.properties or the debug key.
+//! Android APK through Gradle: libth08.so per ABI, the settings schema, optional stored game assets, signing.
 
 use std::fs;
 use std::path::{Path, PathBuf};

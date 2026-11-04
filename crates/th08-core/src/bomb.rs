@@ -12,16 +12,16 @@ use crate::player::{ANM_SLOT, DISSOLVE_BEGIN, DISSOLVE_END, Player, Stats};
 use crate::types::{D3dColor, EffectIdx, lo8};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-// 192 damage + 192 cancel areas, 0x40 each (09 §8).
+// 192 damage + 192 cancel areas, 0x40 each.
 pub const AREAS: usize = 192;
-// 128 × 0x16F0 bomb objects at player +0x1028 (14 §1.1).
+// 128 × 0x16F0 bomb objects at player +0x1028.
 pub const OBJS: usize = 128;
-// Playfield origin 0x164D2DC / 0x164D2E0 added to VM positions (14 intro).
+// Playfield origin 0x164D2DC / 0x164D2E0 added to VM positions.
 const ORIGIN: [f32; 2] = [32.0, 16.0];
 // Draw prio of bomb shakes/flashes (13 §3: every code call passes 0x15).
 const SCREEN_PRIO: u16 = 0x15;
 
-// Damage / cancel area, 0x40 bytes (09 §8).
+// Damage / cancel area, 0x40 bytes.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Area {
     // +0 x, y.
@@ -79,7 +79,7 @@ impl Area {
             && d[1] - s[1] / 2.0 <= h2
     }
 
-    // Cancel-area test (Player_InBombArea, 09 §8): circle distance² < r²; rectangle inside the rotated bounds.
+    // Cancel-area test (Player_InBombArea): circle distance² < r²; rectangle inside the rotated bounds.
     pub fn contains(&self, p: [f32; 2]) -> bool {
         let (dx, dy) = (p[0] - self.pos[0], p[1] - self.pos[1]);
         if self.r > 0.0 {
@@ -95,7 +95,7 @@ impl Area {
 // (damage, area) pairs; held in `Ctx::bomb_areas` / `Sys::areas`.
 pub type AreaQueue = Vec<(bool, Area)>;
 
-// Bomb object +0 state (14 §1.1).
+// Bomb object +0 state.
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ObjState {
@@ -105,7 +105,7 @@ pub enum ObjState {
     Exploding = 2,
 }
 
-// Bomb object (14 §1.1, 0x16F0 bytes); fields keep their values between bombs.
+// Bomb object (0x16F0 bytes); fields keep their values between bombs.
 #[derive(Clone, Debug, Default)]
 pub struct BombObj {
     // +0 state.
@@ -136,7 +136,7 @@ pub struct BombObj {
     pub carea: Option<usize>,
 }
 
-// Player bomb fields (09 §1.1, 14 §1).
+// Player bomb fields.
 #[derive(Clone, Debug)]
 pub struct Bomb {
     // +0xFE0: 0 human bomb, 1 youkai bomb, 2 / 3 last spells, 4 dissolve spell.
@@ -150,9 +150,9 @@ pub struct Bomb {
     // +0xB8828 bomb origin.
     pub origin: [f32; 3],
     pub objs: Vec<BombObj>,
-    // Object 0's +0x1B8 VM and the next ones' used as plain VM slots (Marisa beams, Yukari LS) (14 §1.1).
+    // Object 0's +0x1B8 VM and the next ones' used as plain VM slots (Marisa beams, Yukari LS).
     pub vms: [AnmVm; 5],
-    // Port-only: spell name and cut-in data for the GUI banner (14 §1.2).
+    // Port-only: spell name and cut-in data for the GUI banner.
     pub name: Option<Builtin>,
     pub last_spell: bool,
     // Port-only: character row of SPECS (bomb_char).
@@ -192,7 +192,7 @@ impl Default for Bomb {
 }
 
 // (name, duration, invulnerability, isLastSpell) per character (Reimu, Yukari, Marisa, Alice, Sakuya, Remilia,
-// Youmu, Yuyuko) × (bomb, last spell), 14 §2.
+// Youmu, Yuyuko) × (bomb, last spell).
 type BombSpec = (Builtin, i32, i32, bool);
 const SPECS: [[BombSpec; 2]; 8] = [
     [
@@ -358,7 +358,7 @@ const SPECS: [[BombSpec; 2]; 8] = [
 ];
 // Youmu LS passes isLastSpell = 0 (14 §2.12 quirk); the dissolve spell is 40 frames in spell practice.
 const DISSOLVE: BombSpec = (Builtin::Dissolve, 120, 200, false);
-// Colours (D3DCOLOR 0xAARRGGBB) by spec row. Table 0x4C6100, the Reimu LS blasts (14 §2.2).
+// Colours (D3DCOLOR 0xAARRGGBB) by spec row. Table 0x4C6100, the Reimu LS blasts.
 const BLAST_COLOURS: [D3dColor; 7] = [
     D3dColor(0x8FFF_FFFF),
     D3dColor(0x8F00_00FF),
@@ -368,7 +368,7 @@ const BLAST_COLOURS: [D3dColor; 7] = [
     D3dColor(0x8F00_FF00),
     D3dColor(0x8F00_FFFF),
 ];
-// Alice effect 0x28 / 0x2D colours (14 §2.3).
+// Alice effect 0x28 / 0x2D colours.
 const DOLL_FLASH: [D3dColor; 5] = [
     WHITE,
     D3dColor(0xFFFF_D0D0),
@@ -382,31 +382,30 @@ const DOLL_OCTAGON: [D3dColor; 4] = [
     D3dColor(0xFFFF_8080),
     D3dColor(0xFFFF_0000),
 ];
-// Alice LS corner rings 0x2D at T = 120 (14 §2.4).
+// Alice LS corner rings 0x2D at T = 120.
 const DOLL_LS_CORNERS: [([f32; 2], D3dColor); 4] = [
     ([64.0, 96.0], D3dColor(0xFF00_00F0)),
     ([64.0, 352.0], D3dColor(0xFFF0_0000)),
     ([320.0, 352.0], D3dColor(0xFF00_F000)),
     ([320.0, 96.0], D3dColor(0xFF00_F0F0)),
 ];
-// Effect 12 at the bomb start, also the dissolve ring 0x32 (14 §2.1, §2.2, §2.17).
+// Effect 12 at the bomb start, also the dissolve ring 0x32.
 const START_FX: D3dColor = D3dColor(0xFF40_40FF);
-// Alice flash (3: 8, 1, ·) at the blast and the end (14 §2.3).
+// Alice flash (3: 8, 1, ·) at the blast and the end.
 const ALICE_FLASH: D3dColor = D3dColor(0x8FFF_FFFF);
-// Sakuya knife hit effect 0 (14 §2.7), Sakuya LS hit flash every third knife (14 §2.8).
+// Sakuya knife hit effect 0, Sakuya LS hit flash every third knife.
 const KNIFE_HIT: D3dColor = D3dColor(0xFFFF_80FF);
 const KNIFE_LS_FLASH: D3dColor = D3dColor(0x2080_80FF);
-// Youmu / Youmu LS effects 0x28 and 0x30, the slash flash (14 §2.11, §2.12).
+// Youmu / Youmu LS effects 0x28 and 0x30, the slash flash.
 const YOUMU_FX: D3dColor = D3dColor(0xFF80_80FF);
 const YOUMU_LS_FX: D3dColor = D3dColor(0xFFFF_8080);
 const YOUMU_FLASH: D3dColor = D3dColor(0xEFFF_FFFF);
-// Yuyuko LS butterfly-ring flash (14 §2.16).
+// Yuyuko LS butterfly-ring flash.
 const YUYUKO_LS_FLASH: D3dColor = D3dColor(0xE0F0_F0F0);
-// RGB only (alpha byte 0): spark-ring colour interpolation white → red (14 §2.6, §2.9), playfield rectangles
-// (14 §2.4, §2.11, §2.12).
+// RGB only (alpha byte 0): spark-ring colour interpolation white → red, playfield rectangles.
 const RGB_WHITE: D3dColor = D3dColor(0x00FF_FFFF);
 const RGB_RED: D3dColor = D3dColor(0x00FF_0000);
-// Background tints C (14 §1.3 table); alpha 0x80.
+// Background tints C; alpha 0x80.
 const TINT_ALPHA: u32 = 0x8000_0000;
 const TINT: D3dColor = D3dColor(0x8040_4040);
 const TINT_LS: D3dColor = D3dColor(0x8020_20D0);
@@ -415,14 +414,14 @@ const TINT_REMILIA: D3dColor = D3dColor(0x80D0_2020);
 const TINT_REMILIA_LS: D3dColor = D3dColor(0x80F0_0000);
 const TINT_YOUMU_2: D3dColor = D3dColor(0x8000_0030);
 const TINT_YUYUKO_LS: D3dColor = D3dColor(0x8080_2020);
-// Yuyuko (script, angular speed, radial speed) per group of 16 butterflies (14 §2.15).
+// Yuyuko (script, angular speed, radial speed) per group of 16 butterflies.
 const YUYUKO_GROUPS: [(usize, f32, f32); 4] = [
     (0x12, PI / 240.0, 2.0),
     (0x13, -PI / 240.0, 2.0),
     (0x12, PI / 200.0, 1.5),
     (0x13, -PI / 200.0, 1.5),
 ];
-// Boundary angles of Yukari (14 §2.13).
+// Boundary angles of Yukari.
 const BOUNDARY_ANGLES: [f32; 4] = [PI / 4.0, 3.0 * PI / 8.0, PI / 2.0, 5.0 * PI / 8.0];
 
 // Vec3_FromPolar (05 §10).
@@ -431,7 +430,7 @@ fn polar(a: f32, r: f32) -> [f32; 2] {
     [v[0], v[1]]
 }
 
-// Reimu orbs `call; fmul` (05 §10 trig sites, 14 §2.1): sin/cos·r rounded once, then + centre.
+// Reimu orbs `call; fmul` (05 §10 trig sites): sin/cos·r rounded once, then + centre.
 fn sin_r(a: f32, r: f32) -> f32 {
     crate::fmath::sin_mul(a, f64::from(r))
 }
@@ -449,7 +448,7 @@ fn len(v: [f32; 2]) -> f32 {
 }
 
 // Screen effects (13 §3): shake (1: p0, p1, p2), flash (3: p0, p1, colour). p0 is the duration the
-// original passes in EDX (14 header note).
+// original passes in EDX.
 fn shake(dur: i32, a0: i32, a1: i32, sys: &mut Sys) {
     sys.fx.screen(1, dur, a0, a1, 0, SCREEN_PRIO);
 }
@@ -477,7 +476,7 @@ fn obj_int(k: usize) -> i32 {
     k as i32
 }
 
-// Damage-area fields the bombs set after the creator (09 §8): +0x38 period, +0x34 max total, +0x3D no hit effect.
+// Damage-area fields the bombs set after the creator: +0x38 period, +0x34 max total, +0x3D no hit effect.
 #[derive(Clone, Copy)]
 struct Hit {
     period: i32,
@@ -496,7 +495,7 @@ impl Hit {
     }
 }
 
-// Ring 0x35 arguments of `spark_ring` (14 §2.6, §2.9).
+// Ring 0x35 arguments of `spark_ring`.
 #[derive(Clone, Copy)]
 struct SparkRing {
     // Ring counter n (fixed slot 4 + n % 4).
@@ -510,7 +509,7 @@ struct SparkRing {
     alt: bool,
 }
 
-// Table 0x4C7AD0 (09 §7): teams take the human member's bomb for even indexes, the youkai member's for odd.
+// Table 0x4C7AD0: teams take the human member's bomb for even indexes, the youkai member's for odd.
 pub fn bomb_char(shot: u8, index: usize) -> u8 {
     if shot >= 4 {
         shot - 4
@@ -520,12 +519,12 @@ pub fn bomb_char(shot: u8, index: usize) -> u8 {
 }
 
 impl Player {
-    // First inactive slot of the half; index 191 reused when full (09 §8, creators).
+    // First inactive slot of the half; index 191 reused when full (creators).
     fn free_slot(v: &[Area]) -> usize {
         v.iter().position(|a| !a.active).unwrap_or(AREAS - 1)
     }
 
-    // Creators 0x44DF00 / 0x44DE60 / 0x44E040 / 0x44DFA0 (09 §8).
+    // Creators 0x44DF00 / 0x44DE60 / 0x44E040 / 0x44DFA0.
     pub fn cancel_circle(&mut self, pos: [f32; 2], r: f32, dr: f32, life: i32, item: i32) -> usize {
         let i = Self::free_slot(&self.cancel_areas);
         self.cancel_areas[i] = Area {
@@ -628,7 +627,7 @@ impl Player {
         }
     }
 
-    // 09 §8 update, start of Player_Calc: an area created with life 0 exists for exactly one pass.
+    // Area update, start of Player_Calc: an area created with life 0 exists for exactly one pass.
     pub fn update_areas(&mut self) {
         for a in self
             .damage_areas
@@ -648,7 +647,7 @@ impl Player {
         }
     }
 
-    // Player_UpdateBomb 0x44C650 (09 §7).
+    // Player_UpdateBomb 0x44C650.
     pub fn update_bomb(
         &mut self,
         anm: &mut AnmManager,
@@ -668,7 +667,7 @@ impl Player {
             self.bomb_cooldown -= 1;
         }
         if !self.bombing {
-            // 09 §7: a level test on the held bomb bit (no edge), so holding bomb chains bombs.
+            // A level test on the held bomb bit (no edge), so holding bomb chains bombs.
             let start = inp.down(input::BOMB)
                 && !self.env.dialogue
                 && self.deathbomb != 0
@@ -679,7 +678,7 @@ impl Player {
                 self.bomb_active = false;
                 return;
             }
-            // Special mode: SE 0x29 only on a new press (the function's only edge test); +0xE2A7C kept (09 §1.1, §7).
+            // Special mode: SE 0x29 only on a new press (the function's only edge test); +0xE2A7C kept (09 §1.1).
             if self.special(*sys.flags) || *sys.flags & F_SPELL_PRACTICE != 0 {
                 if inp.pressed(input::BOMB) {
                     sys.sound.play(0x29);
@@ -711,7 +710,7 @@ impl Player {
                 flash(30, 1, WHITE, sys);
             }
         }
-        // Quirk kept (09 §7): forced gauge add also on the end frame, with the old index.
+        // Quirk kept: forced gauge add also on the end frame, with the old index.
         if self.bomb.index < 4 {
             let d = 26000 / self.bomb.duration.max(1);
             self.stats
@@ -719,16 +718,16 @@ impl Player {
         }
     }
 
-    // Bomb start (09 §7): index from focus / last-spell request, bomb cost, checksum (0x44E2E0), rank −200,
+    // Bomb start: index from focus / last-spell request, bomb cost, checksum (0x44E2E0), rank −200,
     // counter += 6 (cap sht +8). Not implemented: statistics bit.
     fn start_bomb(&mut self, anm: &mut AnmManager, forced: bool, sys: &mut Sys) {
         self.forced_bomb = 0;
         // HUD bombs field := 2 (12 §5.3 writers).
         sys.panel.mark_bombs(2);
         let mut index = 4;
-        // 09 §7: in special mode (bits 7–8) the whole cost block is skipped: no unfreeze, bombs, counters or checksums.
+        // In special mode (bits 7–8) the whole cost block is skipped: no unfreeze, bombs, counters or checksums.
         if !self.special(*sys.flags) {
-            // 09 §7 order: silhouette (VM bit 17) off, deathbomb ring ended, bullets unfrozen, AnmMgr_TintOff.
+            // Order: silhouette (VM bit 17) off, deathbomb ring ended, bullets unfrozen, AnmMgr_TintOff.
             self.vm.flags &= !anmvm::F_COLOR2;
             sys.fx.free(effect::FIXED_BASE + effect::FIX_DEATH);
             self.set_freeze_bullets(sys.flags, false);
@@ -773,7 +772,7 @@ impl Player {
         self.deathbomb = (self.deathbomb + 6).min(self.sht.deathbomb);
     }
 
-    // Bomb_Start 0x40BE30 (14 §1.2): banner, duration, state 3 + invulnerability, ring, objects freed (other
+    // Bomb_Start 0x40BE30: banner, duration, state 3 + invulnerability, ring, objects freed (other
     // fields kept), items attracted, origin = p.
     fn bomb_begin(&mut self, anm: &mut AnmManager, spec: BombSpec, sys: &mut Sys) {
         self.bomb.name = Some(spec.0);
@@ -851,7 +850,7 @@ impl Player {
         }
     }
 
-    // "At T = n": the timer advanced and equals n, so nothing fires twice in slow motion (14 intro).
+    // "At T = n": the timer advanced and equals n, so nothing fires twice in slow motion.
     fn at(b: Bf, n: i32) -> bool {
         b.adv && b.t == n
     }
@@ -892,10 +891,10 @@ impl Player {
         (t[0] > -100.0).then_some([t[0], t[1]])
     }
 
-    // Shared orb setup of Reimu's bombs (14 §2.1).
+    // Shared orb setup of Reimu's bombs.
     fn reimu_orbs(&mut self, anm: &mut AnmManager, rng: &mut crate::rng::Rng) {
         let p = self.pos;
-        // Start angles are a running f32 sum (0x40C0F0 fld/fadd/fstp), not −π + i·π/8 (14 §2.1, RE-Q58 AR).
+        // Start angles are a running f32 sum (0x40C0F0 fld/fadd/fstp), not −π + i·π/8.
         let mut a = -PI;
         for i in 0..16 {
             let c = self.cancel_circle(xy(p), 96.0, 0.0, 200, 6);
@@ -914,7 +913,7 @@ impl Player {
         }
     }
 
-    // Orb impact (14 §2.1 / §2.2), rates 64/15 and 128/15 exact. Quirk kept: the C circle is centred on the player, not the orb.
+    // Orb impact, rates 64/15 and 128/15 exact. Quirk kept: the C circle is centred on the player, not the orb.
     fn orb_explode(&mut self, anm: &mut AnmManager, i: usize, ls: bool, sys: &mut Sys) {
         self.areas_off(i);
         let p = xy(self.pos);
@@ -1045,7 +1044,7 @@ impl Player {
                 o.f8 += if i % 2 == 0 { 2.4 } else { 1.2 };
             }
             if b.t >= self.bomb.duration - 40 - obj_int(i) {
-                // Quirk kept (14 §2.2): the follow write still runs through the old slots, so the impact C circle
+                // Quirk kept: the follow write still runs through the old slots, so the impact C circle
                 // that reused the just-freed slot moves from p to the orb.
                 let (c, d) = (o.carea, o.darea);
                 self.orb_explode(anm, i, true, sys);
@@ -1061,8 +1060,8 @@ impl Player {
             }
         }
         if b.t >= 40 && b.t % 20 == 0 && b.adv {
-            // Quirk kept: the first blast uses object 16, every later one reuses object 17.
-            // 14 §2.2 sets the VM script before the RNG point; no player*.anm script draws RNG at time 0, so order is moot.
+            // Quirk kept: the first blast uses object 16, every later one reuses object 17. The VM script is set
+            // before the RNG point; no player*.anm script draws RNG at time 0, so the order is moot.
             let k = 16 + table_index(self.bomb.n);
             self.bomb.n = 1;
             let colour = BLAST_COLOURS[table_index((b.t / 20) % 7)];
@@ -1265,7 +1264,7 @@ impl Player {
         }
     }
 
-    // Ring effect 0x35 in fixed slot 4 + n % 4 (14 §2.6, §2.9): radius/amplitude, width, fade, white → red;
+    // Ring effect 0x35 in fixed slot 4 + n % 4: radius/amplitude, width, fade, white → red;
     // `alt` = Marisa LS odd n → script 0x5C. `width` None = constant 64 (Remilia's 64 → 64 interpolation).
     fn spark_ring(&mut self, anm: &mut AnmManager, s: SparkRing, sys: &mut Sys) {
         let p = self.pos;
@@ -1405,7 +1404,7 @@ impl Player {
             } else {
                 self.areas_off(k);
             }
-            // Not scaled by gs (14 §2.7); knives are never freed before the next bomb.
+            // Not scaled by gs; knives are never freed before the next bomb.
             let o = &mut self.bomb.objs[k];
             o.pos[0] += o.v[0];
             o.pos[1] += o.v[1];
@@ -1514,7 +1513,7 @@ impl Player {
             flash(8, 1, YOUMU_FLASH, sys);
             sys.sound.play(0x2A);
         }
-        // (T, x offset, damage, flash alpha) per slash pair (14 §2.11, §2.12).
+        // (T, x offset, damage, flash alpha) per slash pair.
         let pairs: &[(i32, f32, i32, u32)] = if ls {
             &[
                 (80, 32.0, 100, 0xCF),
@@ -1587,7 +1586,7 @@ impl Player {
                 ..FxEnv::new(kind, at_pos, WHITE)
             };
             let i = sys.fx.spawn_fixed_param(anm, sys.rng, f, 4 + k);
-            // Quirk kept (14 §2.14): the init re-spawns the slot as type 0x23, so slot 4 runs script 88 even for 0x25.
+            // Quirk kept: the init re-spawns the slot as type 0x23, so slot 4 runs script 88 even for 0x25.
             let script = if k == 0 {
                 88
             } else if ls {
@@ -1596,7 +1595,7 @@ impl Player {
                 0x58 + k
             };
             anm.set_script(sys.rng, &mut sys.fx[i].vm, effect::SCRIPT_SLOT, script);
-            // 14 §2.13: the re-spawn writes colour 0xFFFFFFFF after its SetScript and slot 4 gets no second script
+            // The re-spawn writes colour 0xFFFFFFFF after its SetScript and slot 4 gets no second script
             // start, so it draws white (script 88's t = 0 `color` is overwritten); slots 5–7 keep their scripts' colour.
             if k == 0 {
                 sys.fx[i].vm.color = WHITE.to_bgra();
@@ -1691,7 +1690,7 @@ impl Player {
                     self.areas_off(k);
                 }
             } else {
-                // 14 §2.15: freed and both areas switched off.
+                // Freed and both areas switched off.
                 o.state = ObjState::Free;
                 self.areas_off(k);
             }
@@ -1707,7 +1706,7 @@ impl Player {
             .fx
             .spawn_fixed_param(anm, sys.rng, FxEnv::new(0x32, p, START_FX), 4);
         sys.fx.get(i.idx(), |e| {
-            // Ring fields, not the VM scale: the type-50 update copies VM scale.x into the width (14 §2.17).
+            // Ring fields, not the VM scale: the type-50 update copies VM scale.x into the width.
             e.ring.segments = 64;
             e.ring.waves = 6.0;
             (e.ring.width, e.ring.radius, e.ring.start) = (15.0, 8.0, 0.0);
@@ -1724,7 +1723,7 @@ impl Player {
         self.dissolve_req |= DISSOLVE_BEGIN;
     }
 
-    // Background tint 0x40BC60 (14 §1.3): ramps over the first/last 60 frames, alpha 0x80; global tint off, then
+    // Background tint 0x40BC60: ramps over the first/last 60 frames, alpha 0x80; global tint off, then
     // a stage tint request for the next Stage_DrawLow and the +0x646C "bomb drew" flag.
     fn tint(&self, anm: &mut AnmManager, c: D3dColor) {
         let (t, dur) = (self.bomb.timer.cur, self.bomb.duration);
@@ -1758,8 +1757,8 @@ impl Player {
         );
     }
 
-    // Bomb draw functions (table 0x4C7AD0 fns 5–9), called from the player draw (prio 9, 14 §5). Step: tint requests
-    // (14 §1.3) and VM writes; every tint call precedes the draws of its branch, so the emit sees the same tint.
+    // Bomb draw functions (table 0x4C7AD0 fns 5–9), called from the player draw (prio 9). Step: tint requests
+    // and VM writes; every tint call precedes the draws of its branch, so the emit sees the same tint.
     pub fn step_bomb(&mut self, anm: &mut AnmManager) {
         if !self.bombing {
             return;
@@ -1814,7 +1813,7 @@ impl Player {
                 if !(90..=220).contains(&t) {
                     self.tint(anm, TINT_LS);
                 } else if t <= 120 {
-                    // 14 §2.4: c = (T − 90)·208/30, R (c/5 − 48) mod 256, G = B = c + 32.
+                    // c = (T − 90)·208/30, R (c/5 − 48) mod 256, G = B = c + 32.
                     let c = ((t - 90) * 208 / 30).cast_unsigned();
                     let r = (c / 5).wrapping_sub(48) & 0xFF;
                     self.tint(
@@ -1829,7 +1828,7 @@ impl Player {
             }
             5 => self.tint(anm, if ls { TINT_REMILIA_LS } else { TINT_REMILIA }),
             6 => {
-                // Two `Bomb_DrawTint` calls from T 70, averaged by the stage request (14 §2.11/§2.12).
+                // Two `Bomb_DrawTint` calls from T 70, averaged by the stage request.
                 self.tint(anm, TINT);
                 if t >= 70 {
                     self.tint(anm, TINT_YOUMU_2);
@@ -1953,7 +1952,7 @@ mod tests {
             .collect()
     }
 
-    // 14 header note, §2.7 / §2.8: the shake duration is the EDX argument: Sakuya (1: 120, 4, 1) every window frame,
+    // 14 §2.7 / §2.8: the shake duration is the EDX argument: Sakuya (1: 120, 4, 1) every window frame,
     // Sakuya LS (1: 50, 4, 1) once at T = 0.
     #[test]
     fn sakuya_shakes() {
@@ -1972,7 +1971,7 @@ mod tests {
         assert!(shakes_at(&mut p, &mut anm, true, 21, sys).is_empty());
     }
 
-    // 14 §2.1 (RE-Q58 AR, AQ): start angles are a running f32 sum; the ±π/60 spin wraps into [−π, π].
+    // 14 §2.1: start angles are a running f32 sum; the ±π/60 spin wraps into [−π, π].
     #[test]
     fn reimu_orb_angles() {
         let mut ts = crate::game::TestSys::default();

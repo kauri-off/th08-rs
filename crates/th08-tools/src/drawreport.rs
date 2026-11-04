@@ -1,5 +1,4 @@
-//! Draw-log report: renders reference and port logs with the port's renderer and writes an HTML page with the
-//! chosen frames (drawdiff, session).
+//! Draw-log report: renders reference and port logs with the port's renderer into an HTML page of chosen frames.
 
 use crate::drawlog::{Frame, Kind, Report, Vtx};
 use std::collections::HashMap;
@@ -22,7 +21,7 @@ fn rgba(c: u32) -> [u8; 4] {
     [r, g, b, a]
 }
 
-// `fog=AARRGGBB,start,end` from a primitive's state field (drawlog FORMAT.md, linear fog 06 §8).
+// `fog=AARRGGBB,start,end` from a primitive's state field (linear fog).
 fn parse_fog(state: &str) -> Option<(u32, f32, f32)> {
     let f = state.split(' ').find_map(|k| k.strip_prefix("fog="))?;
     let mut t = f.split(',');
@@ -89,7 +88,7 @@ impl Renderer {
     }
 
     fn vertex(v: &Vtx, fog: Option<(u32, f32, f32)>) -> Vertex {
-        // Stage quads: eye depth from z (rhw is too coarse in the log), FORMAT.md §2.
+        // Stage quads: eye depth from z (rhw is too coarse in the log).
         let w = match fog {
             Some(_) => 30.0 * 1800.0 / (1800.0 - 1770.0 * v.z),
             None if v.rhw.abs() > 1e-6 => 1.0 / v.rhw,

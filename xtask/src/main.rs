@@ -1,4 +1,4 @@
-//! `cargo xtask dist`: one entry point for public packages and personal builds with game data (port-only, DIST1).
+//! `cargo xtask dist`: one entry point for public packages and personal builds with game data.
 
 mod android;
 mod assets;

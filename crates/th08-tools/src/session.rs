@@ -1,5 +1,4 @@
-//! Session replay (specs/data/drawlog/README.md "Sessions"): recorded input, boot seed and loader timing of the
-//! original, the port's 36-column trace and its comparison with the recorded one.
+//! Session replay: recorded input, boot seed and loader timing of the original, the port's trace and its comparison.
 
 use th08_core::trace::{Row, Sched, sample};
 
@@ -319,7 +318,7 @@ mod native {
         pub noclip: bool,
         // meta.txt `recorded:` local date and time, the session's `localtime` answer (replay / score dates).
         pub recorded_at: Option<th08_core::host::LocalTime>,
-        // meta.txt `fingerprint:` logic-content fingerprint (ARCH_B D5); absent = vanilla (empty).
+        // meta.txt `fingerprint:` logic-content fingerprint; absent = vanilla (empty).
         pub fingerprint: String,
     }
 
@@ -327,7 +326,7 @@ mod native {
         pub fn load(dir: &Path) -> anyhow::Result<Self> {
             let events = std::fs::read_to_string(dir.join("events.txt"))?;
             let (seed, sched) = parse_events(&events)?;
-            // Raw input per poll (README: polls.txt, not the per-present input.txt, which loses restart polls).
+            // Raw input per poll (polls.txt, not the per-present input.txt, which loses restart polls).
             let input = if let Ok(t) = std::fs::read_to_string(dir.join("polls.txt")) {
                 parse_polls(&t).ok_or_else(|| anyhow::anyhow!("bad polls.txt"))?
             } else {
@@ -365,7 +364,7 @@ mod native {
 
         // Start state: private save dir with start/score.dat, th08.cfg, replays; boot seed; loader schedule.
         pub fn start(&self, ctx: &mut th08_core::game::Ctx) -> anyhow::Result<()> {
-            // A session replays only on the logic content it was recorded with (ARCH_B D5).
+            // A session replays only on the logic content it was recorded with.
             let fp = ctx.archive.fingerprint().to_string();
             anyhow::ensure!(
                 fp == self.fingerprint,
@@ -428,7 +427,7 @@ mod native {
             let boot = i64::from(self.sched.boot_calc);
             let (mut scene, mut scene_frame) = (i32::MIN, 0i64);
             let to = crate::int(to.min(self.input.len()));
-            // Poll index of the next frame's first pass (restarted passes take one each, 00 §3).
+            // Poll index of the next frame's first pass (restarted passes take one each).
             let mut next_poll = 0i64;
             // Presents made inside a calc (Device_ClearPresentTwice) so far; `n` counts Frame_Runs.
             let mut extra = 0i64;
@@ -442,7 +441,7 @@ mod native {
                     s.pass_rows.clear();
                 }
                 // This frame's first poll (Supervisor_Calc or Info_Show) reads recorded poll `poll`; each restarted
-                // pass polls the next one (00 §3).
+                // pass polls the next one.
                 th08::platform::tool_host(ctx).cursor = poll;
                 let tr = rng_row == Some(poll + 1);
                 ctx.w.rng.trace = tr.then(Vec::new);
@@ -466,7 +465,7 @@ mod native {
                 if n >= boot {
                     next_poll = last + 1;
                 }
-                // Rows written inside this calc (README "Trace"): pass rows ff = 1…k before the final row ff = k,
+                // Rows written inside this calc: pass rows ff = 1…k before the final row ff = k,
                 // ff = −1 rows for in-calc presents; `calc` (Frame_Runs) increments only on the final row; present and
                 // scene_frame count presents, the in-calc ones included.
                 let base = n + extra;
@@ -500,7 +499,7 @@ mod native {
                 let mut r = sample(ctx, present, last.max(-1), scene_frame);
                 r[22] = passes;
                 r[24] = n - 2;
-                // The exit save follows the quitting frame's sample (15 §2.2).
+                // The exit save follows the quitting frame's sample.
                 if flow == th08_core::task::Flow::Quit {
                     ctx.exit_save();
                 }
@@ -554,7 +553,7 @@ mod native {
     }
 }
 
-// Tools-bound tests (headless `Gfx`, recorded sessions on disk): move with this file to th08-tools in 10c.
+// Tools-bound tests (headless `Gfx`, recorded sessions on disk).
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
@@ -603,7 +602,7 @@ mod tests {
         );
     }
 
-    // 12 §5.10 slow boots: offset = asciicalc − poll of the first gauge line, only when positive.
+    // Slow boots: offset = asciicalc − poll of the first gauge line, only when positive.
     #[test]
     fn events_ascii_offset() {
         let ev = |g: &str| {
@@ -678,7 +677,7 @@ mod tests {
         }
     }
 
-    // SoundCmd stream of selftest1 (IMPL157 `session --sound-log`; equal to the pre-SoundCmd `Audio` call stream).
+    // SoundCmd stream of selftest1 (`session --sound-log`).
     #[test]
     fn sound_log_selftest1() {
         let Some(dir) = th08::settings::test_game_dir() else {
@@ -791,7 +790,7 @@ mod tests {
             "the port stopped at row {}",
             port.len()
         );
-        // Past the leading rows the recorded input drives a desynced game, so how far it gets is luck (impl29: 5 stages).
+        // Past the leading rows the recorded input drives a desynced game, so how far it gets is luck.
         assert!(ps.len() >= 5, "the port reached only stages {ps:?}");
         let c = compare(&rec, &port);
         let synced_calc = port[c.leading.saturating_sub(1)][24];

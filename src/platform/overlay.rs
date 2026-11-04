@@ -1,5 +1,4 @@
-//! Touch overlay drawing (ARCH_D_MOBILE §3.5): an egui painter-only pass onto the window target after the blit,
-//! never into the 640×480 frame. Port-only UI.
+//! Touch overlay drawing: an egui painter-only pass onto the window target after the blit, never into the frame.
 
 use super::touch::{Ctl, TouchView};
 use egui::{Align2, Color32, FontId, LayerId, Order, Pos2, Rect, Stroke, pos2, vec2};

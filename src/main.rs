@@ -1,11 +1,8 @@
-//! Native entry point: `th08 [game dir] [--switch value]...` (settings.rs) shows the launcher screen (launcher.rs)
-//! or, with `--no-launcher` / tool switches, runs the game window directly (app.rs); a saved `launcher = off`
-//! starts the game from the launcher window unless Shift is held.
+//! Native entry point: shows the launcher screen or, with `--no-launcher` / tool switches, runs the game directly.
 // Release builds on Windows are GUI-subsystem (no console window); see attach_parent_console.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-/// Started from a terminal, reuse its console so `--help`, errors and logs are visible; redirected
-/// output keeps its handle.
+/// Started from a terminal, reuse its console so `--help`, errors and logs are visible; redirected output keeps its handle.
 #[cfg(windows)]
 fn attach_parent_console() {
     use windows_sys::Win32::System::Console::{

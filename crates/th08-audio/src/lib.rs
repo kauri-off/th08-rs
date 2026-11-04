@@ -1,5 +1,4 @@
-//! th08 audio output: the cpal mixer (`Audio: AudioOut`) executing the core's `SoundCmd`s and the SMF sequencer /
-//! SoundFont synth for MIDI BGM (STEP10_CRATES.md §1).
+//! th08 audio output: the cpal mixer executing the core's `SoundCmd`s and the MIDI BGM sequencer / synth.
 
 pub mod audio;
 pub mod bgm;

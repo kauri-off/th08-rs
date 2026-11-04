@@ -2,11 +2,11 @@
 
 use crate::sjis::SjisString;
 
-// Entry array 32 × 0x292, up to 7 comment lines per entry (16 §5.1).
+// Entry array 32 × 0x292, up to 7 comment lines per entry.
 pub const MAX_ENTRIES: usize = 32;
 pub const COMMENT_LINES: usize = 7;
 
-// One musiccmt.txt entry (0x292 bytes, 16 §5.1): Shift-JIS bytes as stored.
+// One musiccmt.txt entry (0x292 bytes): Shift-JIS bytes as stored.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Entry {
     // +0x00 file name after `@` (`bgm/…mid`).
@@ -21,9 +21,8 @@ fn is_eol(c: u8) -> bool {
     c == b'\r' || c == b'\n'
 }
 
-// musiccmt.txt parsing (16 §5.1): skip to `@`, file name, title line, then up to 7 lines until the next `@`; CR/LF
-// runs after each line are skipped, so blank lines are dropped. The array holds 32 entries; the original's copies
-// are unbounded, extra entries are dropped here.
+// Parsing: skip to `@`, file name, title line, then up to 7 lines until the next `@`; CR/LF runs after each line
+// are skipped, so blank lines are dropped. The original's copies are unbounded; entries past 32 are dropped here.
 pub fn parse_musiccmt(data: &[u8]) -> Vec<Entry> {
     let mut p = 0;
     let line = |p: &mut usize| {

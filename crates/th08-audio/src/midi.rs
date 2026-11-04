@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
-// Midi_Open's tempo := 1 000 000 µs per quarter note (02 §5).
+// Midi_Open's tempo := 1 000 000 µs per quarter note.
 const OPEN_TEMPO: u32 = 1_000_000;
 
 // Where the sequencer's channel messages and SysEx go (winmm `midiOutShortMsg` / `midiOutLongMsg` in the original).
@@ -31,8 +31,8 @@ struct Track {
     loop_next: u64,
 }
 
-// The MIDI object (02 §5 "Object"), one per run: +0x2CC and the raw CC 7 bytes carry over between songs. The
-// per-channel bookkeeping other than CC 7 (note bitmap, program, bank, pan, CC 91/93) has no reader in 02 §5.
+// The MIDI object, one per run: +0x2CC and the raw CC 7 bytes carry over between songs. The per-channel
+// bookkeeping other than CC 7 (note bitmap, program, bank, pan, CC 91/93) has no reader.
 pub struct Sequencer {
     // Parsed tracks of the open file; none after `Midi_Open` of a null slot (+0x138 = 0).
     song: Song,
@@ -95,7 +95,7 @@ impl Default for Sequencer {
 
 impl Sequencer {
     // Midi_Ctor 0x443FA0: no tracks, tempo 0, factor 0.0, +0x2CC = 0. The raw CC 7 bytes are heap content in the
-    // original (02 §5), 0 here.
+    // original, 0 here.
     pub fn new() -> Self {
         Self {
             song: Song {
@@ -197,7 +197,7 @@ impl Sequencer {
             self.last_q = q;
             self.fade_counter += 1;
         }
-        // Step 4's "active" flag is set when step 3 reaches an active track, before its events run (02 §5).
+        // Step 4's "active" flag is set when step 3 reaches an active track, before its events run.
         let mut any = false;
         let mut pos = self.pos();
         for i in 0..self.tracks.len() {
@@ -272,7 +272,7 @@ impl Sequencer {
                     0x51 => {
                         self.b = self.pos();
                         self.t = 0;
-                        // Original bug kept (02 §5): tempo := tempo·256 + b + tempo per byte, i.e. ·257, ≈ 0.75 % slow.
+                        // Original bug kept: tempo := tempo·256 + b + tempo per byte, i.e. ·257, ≈ 0.75 % slow.
                         self.tempo = data.iter().fold(0u32, |v, &b| {
                             (v << 8).wrapping_add(u32::from(b)).wrapping_add(v)
                         });
@@ -280,7 +280,7 @@ impl Sequencer {
                     _ => {}
                 }
             }
-            // 0xF1–0xFE (0xF7 included) read no data bytes and send nothing (02 §5 Event).
+            // 0xF1–0xFE (0xF7 included) read no data bytes and send nothing.
             _ => {}
         }
         // Running status := status, next time += the following delta (after a CC 4: the delta after the CC 2).
@@ -301,7 +301,7 @@ impl Sequencer {
     }
 
     // CC 4: restores the copies; `pos` is the current track's read position. Without a CC 2 since `Midi_Play` the
-    // tracks go back to their start (+0x18) with next time +0x1C, and tempo/T/B to the last CC 2 since boot (02 §5);
+    // tracks go back to their start (+0x18) with next time +0x1C, and tempo/T/B to the last CC 2 since boot;
     // before the first CC 2 since boot they are heap content in the original and are kept here.
     fn restore_loop(&mut self, cur: usize, pos: &mut usize) {
         for t in &mut self.tracks {
@@ -520,7 +520,7 @@ pub(crate) mod tests {
         }
     }
 
-    // Division 480, tempo bytes 07 C9 00 → 7·66049 + 201·257 = 514 000 µs (02 §5 ·257 quirk): tick 480 is due at
+    // Division 480, tempo bytes 07 C9 00 → 7·66049 + 201·257 = 514 000 µs (·257 quirk): tick 480 is due at
     // T = 514.
     #[test]
     fn timing_tempo_and_loop() {
@@ -555,7 +555,7 @@ pub(crate) mod tests {
         );
     }
 
-    // 02 §5 example: th08_01's file tempo 0x069627 = 431 655 µs plays as 434 883.
+    // Spec example: th08_01's file tempo 0x069627 = 431 655 µs plays as 434 883.
     #[test]
     fn tempo_times_257() {
         let f = smf(
@@ -570,7 +570,7 @@ pub(crate) mod tests {
         assert_eq!(seq.tempo, 434_883);
     }
 
-    // 0xF7 reads no length (02 §5 Event): its next byte is the following delta. CC 4 with no CC 2 since boot puts the
+    // 0xF7 reads no length: its next byte is the following delta. CC 4 with no CC 2 since boot puts the
     // track at its start with next time +0x1C = 0; the CC 4's delta read then lands on the first event.
     #[test]
     fn f7_and_cc4_without_cc2() {
@@ -594,8 +594,7 @@ pub(crate) mod tests {
         assert_eq!(seq.tempo, OPEN_TEMPO);
     }
 
-    // Midi_Ctor +0x2CC = 0 and the raw CC 7 bytes carry over Midi_Open / Midi_Play (02 §5 Object); a null slot leaves no
-    // tracks.
+    // Midi_Ctor +0x2CC = 0 and the raw CC 7 bytes carry over Midi_Open / Midi_Play; a null slot leaves no tracks.
     #[test]
     fn object_state_carries_across_songs() {
         let mut seq = Sequencer::new();
@@ -670,7 +669,7 @@ pub(crate) mod tests {
         assert_eq!(notes, [0, 1002]);
     }
 
-    // The shipped files (02 §5): format 0, one track, division 480; every song reaches its loop end repeatedly.
+    // The shipped files: format 0, one track, division 480; every song reaches its loop end repeatedly.
     #[test]
     fn shipped_files() {
         let Some(a) = crate::audio::test_archive() else {
@@ -780,7 +779,7 @@ pub(crate) mod tests {
         }
     }
 
-    // 02 §5 scan example: th08_01 CC 2 at tick 3840, CC 4 at 77762, end of track 81610; every played channel sets CC 7.
+    // Spec scan example: th08_01 CC 2 at tick 3840, CC 4 at 77762, end of track 81610; every played channel sets CC 7.
     #[test]
     fn shipped_scan() {
         let Some(a) = crate::audio::test_archive() else {

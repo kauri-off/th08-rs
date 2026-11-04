@@ -1,6 +1,4 @@
-//! Port settings, not a port of the original (the game's own th08.cfg is 15 §1): one typed struct, read once from
-//! command-line flags > env vars (native) or URL params (web) > the port config file `port.cfg` (web: localStorage)
-//! > defaults.
+//! Port settings: one typed struct from command-line flags > env vars / URL params > `port.cfg` (web: localStorage) > defaults.
 
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -227,7 +225,7 @@ impl Entry {
     }
 }
 
-// Platform directories given by the entry point (ARCH_D §6.1 item 1); settings.rs never looks them up itself.
+// Platform directories given by the entry point; settings.rs never looks them up itself.
 // Desktop: `launcher::desktop_dirs`; web: none (port.cfg and saves live in localStorage).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PlatformDirs {
@@ -263,13 +261,13 @@ pub struct Settings {
     pub screen_margin: u32,
     // Show the launcher screen before the game (th08 binary only).
     pub launcher: bool,
-    // Touch overlay rows (ARCH_D §3).
+    // Touch overlay rows.
     pub touch: crate::platform::touch::TouchConfig,
     pub save_dir: Option<PathBuf>,
     pub font: Option<String>,
     // Launcher / port menu language; None = the system locale (i18n.rs).
     pub language: Option<crate::i18n::Lang>,
-    // Game text language, stored for the presentation packs (I18N §3.2); None = follow `language`.
+    // Game text language, stored for the presentation packs; None = follow `language`.
     pub game_text: Option<crate::i18n::Lang>,
     // Presentation pack to mount (packs.rs): a folder / .zip path or an id in the pack folders; None = by `game_text`.
     pub pack: Option<String>,
@@ -1779,7 +1777,7 @@ impl Settings {
     }
 
     // Tools and tests: the headless IO bundle for `Ctx::load_with`: `renderer`, a real `audio::Audio` over `source`
-    // (its SoundFont probe sets `midi_ready` as in the game, STEP10_CRATES risk 8), `tool_host`, no draw log.
+    // (its SoundFont probe sets `midi_ready` as in the game), `tool_host`, no draw log.
     pub fn tool_io(
         &self,
         renderer: impl th08_core::drawlist::Renderer + 'static,
@@ -1934,7 +1932,7 @@ impl clap::builder::TypedValueParser for EntryParser {
 }
 
 // clap cannot let an optional flag value depend on the next word, so `--bool on` is joined to `--bool=on` first
-// (old rule: a boolean takes the next word only if it is an on/off value; else `--bool` alone = on).
+// (a boolean takes the next word only if it is an on/off value; else `--bool` alone = on).
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn join_bool_values(args: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();

@@ -1,6 +1,5 @@
-//! Generates `crates/th08-core/src/rsqrt_amd.bin`, the run table of this CPU's `rsqrtss` over [0.5, 2) (05 §10, `fmath::rsqrt_amd`),
-//! and checks the table model against the native instruction (`--verify`; moved out of fmath's tests in 10b).
-// usage: rsqrt_table [OUT] | --verify — run only on the reference CPU (AMD Ryzen 9 7945HX); checks the scaling law first.
+//! Generates `crates/th08-core/src/rsqrt_amd.bin`, this CPU's `rsqrtss` run table over [0.5, 2), or `--verify`s it.
+// usage: rsqrt_table [OUT] | --verify — run only on the reference CPU (AMD Ryzen 9 7945HX).
 
 #[cfg(target_arch = "x86_64")]
 fn native(s: f32) -> f32 {

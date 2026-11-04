@@ -55,7 +55,7 @@ fn jpeg_dims(b: &[u8]) -> Result<(u32, u32), ImgError> {
     }
 }
 
-/// Width and height of a .png or .jpg file (03 §1), read from its header only.
+/// Width and height of a .png or .jpg file, read from its header only.
 pub fn dims(bytes: &[u8]) -> Result<(u32, u32), ImgError> {
     if bytes.starts_with(&PNG_MAGIC) {
         png_dims(bytes)
@@ -90,7 +90,7 @@ mod tests {
         assert_eq!(dims(b"GIF89a"), Err(ImgError::Format));
     }
 
-    // Every .jpg / .png of th08.dat (03 §1: 37 + 2): header size equals the decoded image's size.
+    // Every .jpg / .png of th08.dat (37 + 2): header size equals the decoded image's size.
     #[test]
     fn vanilla_images_match_decoder() {
         let Some(ar) = crate::testdata::archive() else {
