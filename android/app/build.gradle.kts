@@ -46,8 +46,8 @@ abstract class CargoBuild : DefaultTask() {
         val root = repo.get().asFile
         execOps.exec {
             workingDir = root
-            environment("PROFILE", profile.get())
-            environment("ANDROID_API", minSdk.get().toString())
+            environment("TH08_ANDROID_PROFILE", profile.get())
+            environment("TH08_ANDROID_MIN_SDK", minSdk.get().toString())
             // Read by build.rs for the launcher and port-menu version line.
             environment("TH08_VERSION", version.get())
             environment("TH08_CHANNEL", channel.get())

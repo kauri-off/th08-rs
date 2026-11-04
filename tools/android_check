@@ -1,11 +1,11 @@
 #!/bin/bash
 # usage: tools/android_check — cargo check of the workspace libs for aarch64-linux-android.
 # Prints "android ok" / "android FAILED" (exit 1) / "android skipped: …" (exit 0). NDK env is set only here.
-# Env: ANDROID_SDK (default ~/.local/share/android-sdk/Sdk), ANDROID_API (default 26), V=1 shows cargo output.
+# Env: ANDROID_SDK (default ~/.local/share/android-sdk/Sdk), TH08_ANDROID_MIN_SDK (default 26), V=1 shows cargo output.
 set -u
 TRIPLE=aarch64-linux-android
 SDK=${ANDROID_SDK:-$HOME/.local/share/android-sdk/Sdk}
-API=${ANDROID_API:-26}
+API=${TH08_ANDROID_MIN_SDK:-26}
 rustup target list --installed 2> /dev/null | grep -qx $TRIPLE || { echo "android skipped: rustup target $TRIPLE not installed"; exit 0; }
 NDK=${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/*/ 2> /dev/null | sort -V | tail -1)}
 NDK=${NDK%/}

@@ -201,6 +201,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Ready(mut r) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 r.ctx.start();
+                r.ctx.set_windowed(!self.display.fullscreen);
                 // Touch overlay: drawn by the renderer after the blit.
                 if r.settings.touch.active() {
                     gfx(&mut r.ctx).overlay =
@@ -517,7 +518,8 @@ impl App {
     }
 
     // The one fullscreen owner: F11 / Alt+Enter, the launcher's Fullscreen box and the game's restart land here.
-    // Setup / Error: the box follows and is saved with the other edits on Play; otherwise port.cfg is written now.
+    // Setup / Error: the box follows and is saved with the other edits on Play; otherwise port.cfg is written now and
+    // the game's th08.cfg window mode follows. The web window cannot go fullscreen: the mode stays windowed.
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     fn set_fullscreen(&mut self, on: bool) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -525,17 +527,19 @@ impl App {
             self.display.fullscreen = on;
             self.window()
                 .set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
-            match &mut self.shell {
-                Shell::Setup(ui) | Shell::Error(ui) => {
-                    ui.screen.model_mut().set_fullscreen(on);
-                    self.window().request_redraw();
-                }
-                _ => crate::settings::save_port_cfg(
-                    &self.setup.dirs,
-                    "fullscreen",
-                    if on { "on" } else { "off" },
-                ),
+            if let Shell::Setup(ui) | Shell::Error(ui) = &mut self.shell {
+                ui.screen.model_mut().set_fullscreen(on);
+                self.window().request_redraw();
+                return;
             }
+            crate::settings::save_port_cfg(
+                &self.setup.dirs,
+                "fullscreen",
+                if on { "on" } else { "off" },
+            );
+        }
+        if let Shell::Running(r) | Shell::PortMenu(r, _) = &mut self.shell {
+            r.ctx.set_windowed(!self.display.fullscreen);
         }
     }
 
@@ -667,8 +671,9 @@ impl App {
     // runs only log it and exit.
     fn failed(&mut self, el: &ActiveEventLoop, msg: String, gfx: Option<Box<Gfx>>) {
         let tool = self.setup.is_tool_run();
+        // Android shows no egui screen: the process ends and the task returns to the Compose launcher.
         let gfx = match gfx {
-            Some(g) if !tool => g,
+            Some(g) if !tool && cfg!(not(target_os = "android")) => g,
             _ => {
                 #[cfg(not(target_arch = "wasm32"))]
                 if tool {
@@ -885,10 +890,7 @@ impl App {
                 }
                 Frame::Exit => el.exit(),
                 Frame::Restarted(on) => {
-                    #[cfg(not(target_arch = "wasm32"))]
                     self.set_fullscreen(on);
-                    #[cfg(target_arch = "wasm32")]
-                    let _ = on;
                     window.request_redraw();
                 }
             },
@@ -1148,8 +1150,9 @@ pub fn run_launcher(source: Option<Source>, s: Settings) {
     run_app(source, s, true);
 }
 
-// Android: the launcher on the NativeActivity's event loop; game files from `source` (bundled
-// APK assets) or, when None, the `game_dir` folder.
+// Android: the game on the NativeActivity's event loop, never a settings screen: the Compose launcher is the only one,
+// and a `:game` process recreated after a background kill starts at the title. Game files: `source` (bundled APK
+// assets), else the `game_dir` folder.
 #[cfg(target_os = "android")]
 pub fn run_android(
     android: winit::platform::android::activity::AndroidApp,
@@ -1157,12 +1160,16 @@ pub fn run_android(
     s: Settings,
 ) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
+    let Some(source) = source.or_else(|| s.game_dir.clone().map(crate::sources::native)) else {
+        log::error!("no game folder: the game cannot start");
+        return;
+    };
     crate::platform::safearea::set_app(&android);
     let el = EventLoop::<UserEvent>::with_user_event()
         .with_android_app(android)
         .build()
         .expect("event loop");
-    run_on(el, source, s, true);
+    run_on(el, Some(source), s, false);
 }
 
 fn run_app(source: Option<Source>, s: Settings, launcher: bool) {

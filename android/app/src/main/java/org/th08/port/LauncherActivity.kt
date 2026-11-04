@@ -187,7 +187,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     }
 
     override fun play() {
-        val once = listOf("launcher" to "off") + rows
+        val once = rows
             .filter { !it.e.persist && it.value != it.initial && it.value.isNotEmpty() && it.ok() }
             .map { it.e.key to it.value }
         PortCfg.writeLaunch(File(filesDir, "launch.cfg"), once)

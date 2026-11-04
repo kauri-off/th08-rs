@@ -564,7 +564,7 @@ pub const ENTRIES: &[Entry] = &[
         unit: "×",
         words: &[],
         audience: Audience::Player,
-        platforms: Platforms::DESKTOP_WEB,
+        platforms: Platforms::DESKTOP,
         persist: true,
         help: "window size 640x480 times this (native)",
         set: |s, v| {
@@ -584,7 +584,7 @@ pub const ENTRIES: &[Entry] = &[
         unit: "",
         words: &[],
         audience: Audience::Player,
-        platforms: Platforms::DESKTOP_WEB,
+        platforms: Platforms::DESKTOP,
         persist: true,
         help: "start fullscreen (native; F11 or Alt+Enter toggles and saves)",
         set: |s, v| {
@@ -2733,7 +2733,8 @@ mod tests {
         );
         assert!(!Platforms::DESKTOP.contains(Platforms::NONE));
         assert_eq!(p("vsync").names(), ["desktop", "web", "android"]);
-        assert_eq!(p("scale").names(), ["desktop", "web"]);
+        assert_eq!(p("scale").names(), ["desktop"]);
+        assert_eq!(p("fullscreen").names(), ["desktop"]);
         assert_eq!(p("game_dir").names(), ["desktop"]);
         assert_eq!(p("screen_margin").names(), ["web", "android"]);
         assert_eq!(p("turbo").names(), ["desktop", "android"]);

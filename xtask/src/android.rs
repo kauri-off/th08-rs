@@ -61,27 +61,26 @@ pub fn apk(
         }
         Channel::Debug => None,
         _ if a.debug_key => bail!("--debug-key is for --channel debug"),
-        _ => Some(
+        // The release key must be chosen explicitly: a local fallback key could not update the published APK.
+        Channel::Release => Some(a.keystore.clone().context(
+            "--channel release needs --keystore PROPS (TH08_KEYSTORE_PROPS is not used)",
+        )?),
+        Channel::Dev => Some(
             a.keystore
                 .clone()
                 .or_else(|| local.get("TH08_KEYSTORE_PROPS"))
-                .with_context(|| {
-                    format!(
-                        "--channel {} needs --keystore PROPS (or TH08_KEYSTORE_PROPS)",
-                        channel.name()
-                    )
-                })?,
+                .context("--channel dev needs --keystore PROPS (or TH08_KEYSTORE_PROPS)")?,
         ),
     };
     let mut args = vec![
         format!("-Pth08.abis={}", abis.join(",")),
         format!(
             "-Pth08.minSdk={}",
-            std::env::var("ANDROID_API").unwrap_or_else(|_| "26".into())
+            std::env::var("TH08_ANDROID_MIN_SDK").unwrap_or_else(|_| "26".into())
         ),
         format!(
             "-Pth08.profile={}",
-            std::env::var("PROFILE").unwrap_or_else(|_| "release".into())
+            std::env::var("TH08_ANDROID_PROFILE").unwrap_or_else(|_| "release".into())
         ),
         format!("-Pth08.channel={}", channel.name()),
         format!("-Pth08.versionCode={}", ver.code),

@@ -90,7 +90,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     std::process::exit(0);
 }
 
-// The Compose launcher's settings for this start only (`launcher = off`, developer rows): `key = value` lines in
+// The Compose launcher's settings for this start only (developer rows): `key = value` lines in
 // `<internal>/launch.cfg`, applied over port.cfg and env, then deleted.
 #[cfg(target_os = "android")]
 fn launch_once(s: &mut settings::Settings) {

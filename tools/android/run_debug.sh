@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: tools/android/run_debug.sh [build|emulator|install|run|shot|stop|all]...  (default: build)
 # build: debug APK (DATA=DIR / PACKED=DIR bundle the game files); emulator: headless AVD th08dbg; install: emulator only;
-# run: launcher + logcat.txt; shot: screen.png; stop. Env: ANDROID_SDK, ANDROID_API, EMU_PORT, PROFILE, TARGETS.
+# run: launcher + logcat.txt; shot: screen.png; stop. Env: ANDROID_SDK, TH08_ANDROID_MIN_SDK, EMU_PORT, TH08_ANDROID_PROFILE, TARGETS.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 SDK=${ANDROID_SDK:-$HOME/.local/share/android-sdk/Sdk}
@@ -9,7 +9,7 @@ PKG=org.th08.port.debug
 OUT=target/android
 EMU_PORT=${EMU_PORT:-5584}
 EMU_SERIAL=emulator-$EMU_PORT
-export PROFILE=${PROFILE:-release}
+export TH08_ANDROID_PROFILE=${TH08_ANDROID_PROFILE:-release}
 TARGETS=${TARGETS:-aarch64 x86_64}
 ADB=$SDK/platform-tools/adb
 mkdir -p "$OUT"

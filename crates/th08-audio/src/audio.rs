@@ -302,9 +302,6 @@ pub struct Audio {
     midi_open: i32,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     cfg: AudioConfig,
-    // Port: SoundFont found by `midi_available`, loaded on the first MIDI command.
-    #[cfg(not(target_arch = "wasm32"))]
-    font_path: Option<std::path::PathBuf>,
 }
 
 impl Audio {
@@ -330,25 +327,35 @@ impl Audio {
             midi_slots: Default::default(),
             midi_open: -1,
             cfg,
-            #[cfg(not(target_arch = "wasm32"))]
-            font_path: None,
         }
     }
 
-    // Host input for `sound::Bgm::midi_ready`: a SoundFont (`AudioConfig::soundfont`, else its dirs) exists, so
+    // Host input for `sound::Bgm::midi_ready`: a SoundFont (`AudioConfig::soundfont`, else its dirs) loads, so
     // music mode 2 plays MIDI; else it takes the WAV path (port).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn midi_available(&mut self) -> bool {
-        self.font_path =
-            crate::midi::find_soundfont(self.cfg.soundfont.as_deref(), &self.cfg.soundfont_dirs)
-                .filter(|p| p.is_file());
-        match &self.font_path {
-            Some(p) => log::info!("midi: soundfont {}", p.display()),
-            None => log::info!(
-                "midi: no SoundFont found (set soundfont / TH08_SOUNDFONT); music mode MIDI plays the WAV tracks"
-            ),
+        let wav = "music mode MIDI plays the WAV tracks";
+        let found =
+            crate::midi::find_soundfont(self.cfg.soundfont.as_deref(), &self.cfg.soundfont_dirs);
+        let Some(p) = found.filter(|p| p.is_file()) else {
+            if let Some(p) = &self.cfg.soundfont {
+                log::warn!("midi: soundfont {} not found; {wav}", p.display());
+            } else {
+                log::info!("midi: no SoundFont found (set soundfont / TH08_SOUNDFONT); {wav}");
+            }
+            return false;
+        };
+        match crate::midi::load_soundfont(&p) {
+            Ok(f) => {
+                log::info!("midi: soundfont {}", p.display());
+                self.mixer.lock().unwrap().font = Some(f);
+                true
+            }
+            Err(e) => {
+                log::warn!("midi: {e:#}; {wav}");
+                false
+            }
         }
-        self.font_path.is_some()
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -356,19 +363,6 @@ impl Audio {
         false
     }
 
-    // Port: the SoundFont is loaded on the first MIDI command; a file that fails to load leaves MIDI silent.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn ensure_font(&mut self) {
-        let Some(p) = self.font_path.take() else {
-            return;
-        };
-        match crate::midi::load_soundfont(&p) {
-            Ok(f) => self.mixer.lock().unwrap().font = Some(f),
-            Err(e) => log::warn!("midi: {e:#}; MIDI music is silent"),
-        }
-    }
-
-    // Executes one command of the frame's `SoundCmd` stream (call order = the original's).
     pub fn exec(&mut self, c: SoundCmd) {
         match c {
             SoundCmd::Se { id, pan, vol } => self.play_se(id, pan, vol),
@@ -379,39 +373,35 @@ impl Audio {
                 WavCmd::Release => self.release_bgm(),
                 WavCmd::Volume(db) => self.mixer.lock().unwrap().volume = db_gain(db),
             },
-            SoundCmd::Midi(c) => {
-                #[cfg(not(target_arch = "wasm32"))]
-                self.ensure_font();
-                match c {
-                    MidiCmd::Load { slot, name } => self.midi_load_slot(slot, &name),
-                    MidiCmd::PlaySlot(slot) => {
-                        self.midi_stop();
-                        self.midi_open(slot);
-                        self.midi_play();
-                    }
-                    MidiCmd::PlayFile(name) => {
-                        self.midi_stop();
-                        self.midi_load_slot(31, &name);
-                        self.midi_open(31);
-                        self.midi_slots[31] = None;
-                        self.midi_play();
-                    }
-                    MidiCmd::Stop => self.midi_stop(),
-                    MidiCmd::Reset => {
-                        self.midi_stop();
-                        self.midi_open(30);
-                        self.midi_play();
-                    }
-                    MidiCmd::Fade(ms) => {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        if let Some(p) = self.mixer.lock().unwrap().midi() {
-                            p.seq.fade(ms);
-                        }
-                        #[cfg(target_arch = "wasm32")]
-                        let _ = ms;
-                    }
+            SoundCmd::Midi(c) => match c {
+                MidiCmd::Load { slot, name } => self.midi_load_slot(slot, &name),
+                MidiCmd::PlaySlot(slot) => {
+                    self.midi_stop();
+                    self.midi_open(slot);
+                    self.midi_play();
                 }
-            }
+                MidiCmd::PlayFile(name) => {
+                    self.midi_stop();
+                    self.midi_load_slot(31, &name);
+                    self.midi_open(31);
+                    self.midi_slots[31] = None;
+                    self.midi_play();
+                }
+                MidiCmd::Stop => self.midi_stop(),
+                MidiCmd::Reset => {
+                    self.midi_stop();
+                    self.midi_open(30);
+                    self.midi_play();
+                }
+                MidiCmd::Fade(ms) => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(p) = self.mixer.lock().unwrap().midi() {
+                        p.seq.fade(ms);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    let _ = ms;
+                }
+            },
         }
     }
 
@@ -988,6 +978,27 @@ mod tests {
         fn stopped(&self) -> bool {
             self.a.mixer.lock().unwrap().stopped
         }
+    }
+
+    // A configured SoundFont that is missing or does not parse leaves MIDI not ready; a valid one makes it ready.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn midi_available_needs_a_loadable_soundfont() {
+        let dir = std::env::temp_dir().join(format!("th08-sf2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (bad, good) = (dir.join("bad.sf2"), dir.join("good.sf2"));
+        std::fs::write(&bad, b"not a soundfont").unwrap();
+        std::fs::write(&good, crate::midi::tests::tiny_sf2()).unwrap();
+        let ready = |p: &std::path::Path| {
+            let cfg = AudioConfig {
+                soundfont: Some(p.to_path_buf()),
+                ..AudioConfig::default()
+            };
+            Audio::new(Source::new(NoFiles), cfg).midi_available()
+        };
+        let (missing, bad, good) = (ready(&dir.join("gone.sf2")), ready(&bad), ready(&good));
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(!missing && !bad && good);
     }
 
     // Mode-2 calls (02 §5): Midi_LoadSlot, PlaySlot (stop, open, play), Midi_Fade in ms without speed division,

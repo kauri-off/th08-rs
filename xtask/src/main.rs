@@ -42,8 +42,8 @@ pub struct DistArgs {
     /// Android ABI, repeatable (default arm64-v8a).
     #[arg(long, value_enum)]
     abi: Vec<Abi>,
-    /// Android keystore.properties for the release and dev channels (read only by Gradle); default
-    /// TH08_KEYSTORE_PROPS.
+    /// Android keystore.properties for the release and dev channels (read only by Gradle); required for release,
+    /// dev defaults to TH08_KEYSTORE_PROPS.
     #[arg(long, conflicts_with = "debug_key")]
     keystore: Option<PathBuf>,
     /// Android: sign with the throwaway key target/android/debug.keystore (debug channel only).

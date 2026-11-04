@@ -487,6 +487,16 @@ impl Ctx {
         self.w.clone().save_files(&mut *self.host)
     }
 
+    // Port: the host's real window mode (port.cfg `fullscreen`) written into th08.cfg +0x22 (15 §1), whose only
+    // reader is the option menu; its entry snapshot follows, so a host toggle never triggers the result-2 restart.
+    pub fn set_windowed(&mut self, windowed: bool) {
+        let v = u8::from(windowed);
+        self.w.game.cfg.windowed = v;
+        if let crate::supervisor::Scene::Menu(m) = &mut self.w.scene {
+            m.snapshot.windowed = v;
+        }
+    }
+
     // WinMain on Frame_Run result 2 (00 §2 "What the restart re-initialises"): Result(2) score.dat flush, teardown,
     // Sound_Update, sound / ANM released, Supervisor_Register, then logo and loading again; config, input and GM fields
     // kept, no th08.cfg write. Port: window and device stay; the 1 s sleep and 60 PeekMessage calls are skipped.

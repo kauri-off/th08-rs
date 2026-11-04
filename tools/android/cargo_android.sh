@@ -1,13 +1,13 @@
 #!/bin/bash
 # usage: tools/android/cargo_android.sh OUT_DIR ABI... — libth08.so per ABI (arm64-v8a, x86_64) built with the NDK
 # clang into OUT_DIR/<abi>/ (debug info stripped). Run by the Gradle task cargoBuild (android/app/build.gradle.kts).
-# Env: ANDROID_SDK, ANDROID_API (NDK clang API, default 26), PROFILE (default release).
+# Env: ANDROID_SDK, TH08_ANDROID_MIN_SDK (NDK clang API, default 26), TH08_ANDROID_PROFILE (cargo profile, default release).
 set -euo pipefail
 out=$(realpath -m "$1"); shift
 cd "$(dirname "$0")/../.."
 SDK=${ANDROID_SDK:-$HOME/.local/share/android-sdk/Sdk}
-API=${ANDROID_API:-26}
-PROFILE=${PROFILE:-release}
+API=${TH08_ANDROID_MIN_SDK:-26}
+PROFILE=${TH08_ANDROID_PROFILE:-release}
 NDK=${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/*/ | sort -V | tail -1)}; NDK=${NDK%/}
 NBIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
 arch_of() { case $1 in arm64-v8a) echo aarch64 ;; x86_64) echo x86_64 ;; *) echo "unknown ABI $1" >&2; exit 1 ;; esac; }

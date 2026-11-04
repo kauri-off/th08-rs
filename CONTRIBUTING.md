@@ -66,12 +66,17 @@ Android has three channels, installable side by side:
 
 | `--channel` | applicationId | label | signing | use |
 |---|---|---|---|---|
-| `release` | `org.th08.port` | th08 | `--keystore PROPS` | GitHub Releases; `--assets none` only, no `--packs` |
+| `release` | `org.th08.port` | th08 | `--keystore PROPS` only | GitHub Releases; `--assets none` only, no `--packs` |
 | `dev` (default) | `org.th08.port.dev` | th08 dev | `--keystore PROPS` or `TH08_KEYSTORE_PROPS` | personal builds, may bundle game data and packs |
 | `debug` | `org.th08.port.debug` | th08 debug | `--debug-key` (throwaway `target/android/debug.keystore`) | agents and emulators |
 
 `PROPS` is a `keystore.properties` file with `storeFile` (absolute or relative to the file), `storePassword`,
 `keyAlias` and `keyPassword`. Only its path is passed on; Gradle reads the passwords. Never commit a keystore.
+The release channel never falls back to `TH08_KEYSTORE_PROPS`: an APK signed with another key cannot update the
+published one, and switching back means an uninstall, which deletes the saves.
+
+Android build env: `TH08_ANDROID_MIN_SDK` (minSdk and NDK clang API, default 26) and `TH08_ANDROID_PROFILE` (cargo
+profile of `libth08.so`, default `release`).
 
 The release workflow (`.github/workflows/release.yml`) runs by hand from the Actions tab on `master`
 (`gh workflow run release.yml -f publish=true`). With `publish` it tags `v<Cargo.toml version>` at that commit and
