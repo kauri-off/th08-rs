@@ -1,6 +1,7 @@
 //! Platform side of `host::Host`: save storage, clocks, keyboard / joystick input and the tools' scripted host.
 
 pub mod gamepad;
+pub mod gestures;
 pub mod overlay;
 pub mod portmenu;
 pub mod safearea;

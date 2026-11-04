@@ -17,6 +17,9 @@ const STICK_DEAD: f32 = 0.3;
 const SCREEN: [f32; 2] = [640.0, 480.0];
 // Button diameter range of the layout editor (mm).
 pub const BUTTON_MM: [f32; 2] = [6.0, 30.0];
+// Gesture exclusion: the most Android honours per vertical edge, and how near an edge a control must reach (dp).
+const EXCLUSION_DP: f32 = 200.0;
+const EDGE_DP: f32 = 48.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ctl {
@@ -29,10 +32,12 @@ pub enum Ctl {
     Skip,
     // Auto-fire on/off.
     Auto,
+    // Opens the port menu; never in the input word.
+    Menu,
 }
 
 impl Ctl {
-    pub const ALL: [Ctl; 7] = [
+    pub const ALL: [Ctl; 8] = [
         Ctl::Move,
         Ctl::Shot,
         Ctl::Bomb,
@@ -40,6 +45,7 @@ impl Ctl {
         Ctl::Pause,
         Ctl::Skip,
         Ctl::Auto,
+        Ctl::Menu,
     ];
 
     pub fn name(self) -> &'static str {
@@ -51,6 +57,7 @@ impl Ctl {
             Ctl::Pause => "pause",
             Ctl::Skip => "skip",
             Ctl::Auto => "auto",
+            Ctl::Menu => "menu",
         }
     }
 
@@ -62,9 +69,37 @@ impl Ctl {
             Ctl::Focus => FOCUS,
             Ctl::Pause => PAUSE,
             Ctl::Skip => SKIP,
-            Ctl::Move | Ctl::Auto => 0,
+            Ctl::Move | Ctl::Auto | Ctl::Menu => 0,
         }
     }
+
+    // Controls that do nothing in menus (focus, auto-fire, skip) are hidden there.
+    pub fn shown(self, s: Screen) -> bool {
+        s != Screen::Menu || !matches!(self, Ctl::Focus | Ctl::Auto | Ctl::Skip)
+    }
+
+    // Order in which controls near an edge get the limited gesture exclusion height.
+    fn edge_rank(self) -> u8 {
+        match self {
+            Ctl::Move => 0,
+            Ctl::Shot => 1,
+            Ctl::Bomb => 2,
+            Ctl::Focus => 3,
+            Ctl::Skip => 4,
+            Ctl::Auto => 5,
+            Ctl::Pause => 6,
+            Ctl::Menu => 7,
+        }
+    }
+}
+
+// What the overlay labels and shows: menus (SHOT = confirm, BOMB = cancel), play, or dialogue (SHOT = next).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Screen {
+    #[default]
+    Menu,
+    Play,
+    Dialogue,
 }
 
 // One overlay control. `x`, `y`: centre as a fraction of the safe rect (the window minus the safe-area insets).
@@ -113,6 +148,7 @@ impl Default for TouchLayout {
                 c(Ctl::Auto, 0.85, 0.57, 8.0, 8.0),
                 c(Ctl::Skip, 0.85, 0.09, 8.0, 8.0),
                 c(Ctl::Pause, 0.95, 0.09, 8.0, 8.0),
+                c(Ctl::Menu, 0.04, 0.09, 8.0, 8.0),
             ],
             portrait: vec![
                 c(Ctl::Move, 0.275, 0.835, 0.55, 0.33),
@@ -122,6 +158,7 @@ impl Default for TouchLayout {
                 c(Ctl::Auto, 0.62, 0.78, 8.0, 8.0),
                 c(Ctl::Skip, 0.72, 0.06, 8.0, 8.0),
                 c(Ctl::Pause, 0.90, 0.06, 8.0, 8.0),
+                c(Ctl::Menu, 0.08, 0.06, 8.0, 8.0),
             ],
         }
     }
@@ -195,6 +232,18 @@ impl TouchLayout {
             };
             for item in list.split(';').filter(|s| !s.trim().is_empty()) {
                 dst.push(parse_control(item)?);
+            }
+        }
+        // A layout saved before a control existed gets that control at its default place.
+        let def = Self::default();
+        for (dst, d) in [
+            (&mut out.landscape, &def.landscape),
+            (&mut out.portrait, &def.portrait),
+        ] {
+            for c in d {
+                if !dst.iter().any(|m| m.ctl == c.ctl) {
+                    dst.push(*c);
+                }
             }
         }
         Ok(out)
@@ -309,6 +358,32 @@ pub enum TouchScene {
 }
 
 impl TouchScene {
+    pub fn screen(self) -> Screen {
+        match self {
+            TouchScene::Menu => Screen::Menu,
+            TouchScene::Play { fire: true, .. } => Screen::Play,
+            TouchScene::Play { fire: false, .. } => Screen::Dialogue,
+        }
+    }
+
+    // The keyboard key Back stands for: X (cancel, back one level) in menus, Esc (the game's pause) in play.
+    pub fn back_bit(self) -> u16 {
+        match self {
+            TouchScene::Menu => BOMB,
+            TouchScene::Play { .. } => PAUSE,
+        }
+    }
+
+    // Back for the live game: the pause menu only answers Esc, so Back there resumes instead of sending X.
+    pub fn back_bit_of(w: &th08_core::world::World) -> u16 {
+        let g = &w.game;
+        if g.scene == th08_core::types::SceneId::Game && g.paused != 0 && g.game_over == 0 {
+            PAUSE
+        } else {
+            Self::of(w).back_bit()
+        }
+    }
+
     pub fn of(w: &th08_core::world::World) -> Self {
         use th08_core::types::SceneId;
         let g = &w.game;
@@ -375,6 +450,7 @@ impl Placed {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TouchView {
     pub controls: Vec<(Placed, bool)>,
+    pub screen: Screen,
     pub autofire: bool,
     pub opacity: f32,
     // Movement finger: (stick centre or drag start, finger), and the stick radius (0 = drag).
@@ -389,7 +465,8 @@ pub struct TouchView {
 )]
 pub struct TouchSource {
     pub cfg: TouchConfig,
-    // Safe rect of the window (px): top-left and size; controls are placed in it. Px per mm.
+    // Window size and its safe rect (px): top-left and size; controls are placed in it. Px per mm.
+    window: [f32; 2],
     origin: [f32; 2],
     size: [f32; 2],
     ppm: f32,
@@ -408,6 +485,8 @@ pub struct TouchSource {
     last_word: u16,
     mouse_pos: [f32; 2],
     mouse_down: bool,
+    // The Menu control was tapped; the app opens the port menu.
+    menu_req: bool,
     // As `Keyboard::failed`: focus loss releases every finger.
     failed: bool,
 }
@@ -417,6 +496,7 @@ impl TouchSource {
         Self {
             autofire: cfg.autofire,
             cfg,
+            window: SCREEN,
             size: SCREEN,
             ppm: DP_PER_MM,
             ..Default::default()
@@ -426,6 +506,7 @@ impl TouchSource {
     // Window size in px, winit's scale factor and the window's safe area (the blit letterboxes into the same rect).
     pub fn set_window(&mut self, w: u32, h: u32, scale_factor: f64, safe: SafeArea) {
         let [x, y, sw, sh] = safe.rect(w.max(1), h.max(1));
+        self.window = [w.max(1) as f32, h.max(1) as f32];
         self.origin = [x, y];
         self.size = [sw, sh];
         self.ppm = DP_PER_MM * scale_factor as f32;
@@ -452,6 +533,7 @@ impl TouchSource {
             self.target = None;
             self.acc = [0.0; 2];
             self.mouse_down = false;
+            self.menu_req = false;
         }
     }
 
@@ -464,13 +546,14 @@ impl TouchSource {
         [self.origin[0], self.origin[1], self.size[0], self.size[1]]
     }
 
-    // Visible controls in window px.
+    // Visible controls of the current screen in window px.
     pub fn placed(&self) -> Vec<Placed> {
+        let s = self.scene.screen();
         self.cfg
             .layout
             .controls(self.landscape())
             .iter()
-            .filter(|c| c.visible)
+            .filter(|c| c.visible && c.ctl.shown(s))
             .map(|c| self.place(c))
             .collect()
     }
@@ -648,6 +731,7 @@ impl TouchSource {
         };
         match on {
             On::Button(Ctl::Auto) => self.autofire = !self.autofire,
+            On::Button(Ctl::Menu) => self.menu_req = true,
             On::Button(Ctl::Focus) if self.cfg.focus_toggle => self.focus_on = !self.focus_on,
             On::Move => {
                 self.target = None;
@@ -678,6 +762,21 @@ impl TouchSource {
                 self.pulse(SHOT);
             }
         }
+    }
+
+    // Android Back (button, gesture or a pad's Back key): one pulse of the key it stands for in `scene`.
+    pub fn back(&mut self, scene: TouchScene) {
+        self.back_key(scene.back_bit());
+    }
+
+    pub fn back_key(&mut self, bit: u16) {
+        if !self.failed {
+            self.pulse(bit);
+        }
+    }
+
+    pub fn take_menu(&mut self) -> bool {
+        std::mem::take(&mut self.menu_req)
     }
 
     fn pulse(&mut self, bit: u16) {
@@ -719,6 +818,13 @@ impl TouchSource {
                 w |= self.steer(pos, [v * mult[0], v * mult[1]]);
             }
             TouchScene::Menu => w |= self.menu(),
+        }
+        // A pulse is one poll down, then one poll up, so the edge detection sees each.
+        if !std::mem::take(&mut self.gap)
+            && let Some(b) = self.pulses.pop_front()
+        {
+            self.gap = true;
+            w |= b;
         }
         self.last_word = w;
         w
@@ -798,7 +904,7 @@ impl TouchSource {
     }
 
     // Menus: a drag swipes one direction pulse per `SWIPE_MM`; a stick holds the direction (the menus repeat
-    // held keys themselves). A pulse is one poll down, then one poll up, so the edge detection sees each.
+    // held keys themselves).
     fn menu(&mut self) -> u16 {
         let swipe = SWIPE_MM * self.ppm;
         let movement = self.cfg.movement;
@@ -832,16 +938,57 @@ impl TouchSource {
                 }
             }
         }
-        if std::mem::take(&mut self.gap) {
-            return held;
+        held
+    }
+
+    // Android system gesture exclusion rects `[left, top, right, bottom]` (window px) in play: the controls that
+    // reach within `EDGE_DP` of the safe rect's left or right side, by `Ctl::edge_rank`, cut to `EXCLUSION_DP` of
+    // height per edge around each control's centre and stretched out to the window edge (the gesture starts in the
+    // cutout / bar inset). None in menus.
+    #[expect(clippy::cast_possible_truncation, reason = "window px fit i32")]
+    pub fn exclusion(&self) -> Vec<[i32; 4]> {
+        if self.scene == TouchScene::Menu {
+            return Vec::new();
         }
-        match self.pulses.pop_front() {
-            Some(b) => {
-                self.gap = true;
-                held | b
+        let dp = self.ppm / DP_PER_MM;
+        let edge = EDGE_DP * dp;
+        let mut placed = self.placed();
+        placed.sort_by_key(|p| p.ctl.edge_rank());
+        let mut out = Vec::new();
+        for left in [true, false] {
+            let mut budget = (EXCLUSION_DP * dp).floor();
+            for p in &placed {
+                let half = if p.ctl == Ctl::Move {
+                    p.half
+                } else {
+                    [p.half[0] * 1.2; 2]
+                };
+                let (x0, x1) = (p.centre[0] - half[0], p.centre[0] + half[0]);
+                let near = if left {
+                    x0 <= self.origin[0] + edge
+                } else {
+                    x1 >= self.origin[0] + self.size[0] - edge
+                };
+                if !near || budget < EDGE_DP * dp / 2.0 {
+                    continue;
+                }
+                let h = (2.0 * half[1]).min(budget).floor();
+                budget -= h;
+                let y0 = p.centre[1] - h / 2.0;
+                let (x0, x1) = if left {
+                    (0.0, x1)
+                } else {
+                    (x0, self.window[0])
+                };
+                out.push([
+                    x0.floor() as i32,
+                    y0.ceil() as i32,
+                    x1.ceil() as i32,
+                    (y0.ceil() + h) as i32,
+                ]);
             }
-            None => held,
         }
+        out
     }
 
     // Overlay state for the frame being drawn.
@@ -867,6 +1014,7 @@ impl TouchSource {
                 });
         TouchView {
             controls,
+            screen: self.scene.screen(),
             autofire: self.autofire,
             opacity: self.cfg.opacity,
             finger,
@@ -1004,6 +1152,7 @@ mod tests {
             for (w, h, safe) in [(w, h, safe), (h, w, rot)] {
                 let mut t = TouchSource::new(TouchConfig::default());
                 t.set_window(w, h, k, safe);
+                t.set_scene(play([0.0; 2]));
                 let [x0, y0, sw, sh] = t.rect();
                 let placed = t.placed();
                 for p in &placed {
@@ -1331,5 +1480,158 @@ mod tests {
         }
         assert_eq!(touch, keyboard);
         assert_eq!(pos, [180.0, 400.0]);
+    }
+
+    // Back = one pulse of the key it stands for: X in menus, Esc in play and dialogue; the same words as tapping
+    // those keys, one poll each.
+    #[test]
+    fn back_pulses_per_scene() {
+        let mut t = src(TouchConfig::default());
+        t.back(TouchScene::Menu);
+        assert_eq!([t.poll(), t.poll()], [BOMB, 0]);
+        t.set_scene(play([0.0; 2]));
+        t.back(play([0.0; 2]));
+        assert_eq!([t.poll(), t.poll()], [PAUSE, 0]);
+        let dialogue = TouchScene::Play {
+            pos: [0.0; 2],
+            speed: [4.0, 2.0],
+            mult: [1.0; 2],
+            fire: false,
+        };
+        t.set_scene(dialogue);
+        t.back(dialogue);
+        assert_eq!([t.poll(), t.poll()], [PAUSE, 0]);
+        // Two quick Backs stay two edges.
+        t.set_scene(TouchScene::Menu);
+        t.back(TouchScene::Menu);
+        t.back(TouchScene::Menu);
+        assert_eq!([t.poll(), t.poll(), t.poll(), t.poll()], [BOMB, 0, BOMB, 0]);
+        // Unfocused: nothing.
+        t.set_focus(false);
+        t.back(TouchScene::Menu);
+        t.set_focus(true);
+        assert_eq!(t.poll(), 0);
+
+        let mut kb = InputMux::default();
+        let mut keys = Vec::new();
+        for k in [KeyCode::KeyX, KeyCode::Escape] {
+            kb.keyboard.key(k, true);
+            keys.push(kb.poll()[0]);
+            kb.keyboard.key(k, false);
+            keys.push(kb.poll()[0]);
+        }
+        let mut m = InputMux {
+            touch: src(TouchConfig::default()),
+            ..Default::default()
+        };
+        let mut words = Vec::new();
+        m.touch.back(TouchScene::Menu);
+        words.extend([m.poll()[0], m.poll()[0]]);
+        m.touch.set_scene(play([0.0; 2]));
+        m.touch.back(play([0.0; 2]));
+        words.extend([m.poll()[0], m.poll()[0]]);
+        assert_eq!(words, keys);
+    }
+
+    // The MENU control asks for the port menu and never reaches the word; it is shown in menus and in play.
+    #[test]
+    fn menu_control() {
+        let mut t = src(TouchConfig::default());
+        for scene in [TouchScene::Menu, play([0.0; 2])] {
+            t.set_scene(scene);
+            let [x, y] = centre(&t, Ctl::Menu);
+            t.touch(1, TouchPhase::Started, x, y);
+            assert_eq!(t.poll(), 0);
+            t.touch(1, TouchPhase::Ended, x, y);
+            assert_eq!(t.poll(), 0);
+            assert!(t.take_menu());
+            assert!(!t.take_menu());
+        }
+    }
+
+    // Menus hide FOCUS / AUTO / SKIP (not hit either); play and dialogue show every control.
+    #[test]
+    fn controls_per_screen() {
+        let mut t = src(TouchConfig::default());
+        let shown = |t: &TouchSource| t.placed().iter().map(|p| p.ctl).collect::<Vec<_>>();
+        assert_eq!(t.view().screen, Screen::Menu);
+        assert_eq!(
+            shown(&t),
+            [Ctl::Move, Ctl::Shot, Ctl::Bomb, Ctl::Pause, Ctl::Menu]
+        );
+        let focus = TouchSource::new(TouchConfig::default())
+            .cfg
+            .layout
+            .landscape
+            .iter()
+            .find(|c| c.ctl == Ctl::Focus)
+            .map(|c| t.place(c).centre)
+            .unwrap();
+        t.touch(1, TouchPhase::Started, focus[0], focus[1]);
+        assert_eq!(t.poll(), 0);
+        t.touch(1, TouchPhase::Ended, focus[0], focus[1]);
+        t.set_scene(play([0.0; 2]));
+        assert_eq!(t.view().screen, Screen::Play);
+        assert_eq!(shown(&t).len(), Ctl::ALL.len());
+        assert_eq!(
+            TouchScene::Play {
+                pos: [0.0; 2],
+                speed: [1.0; 2],
+                mult: [1.0; 2],
+                fire: false
+            }
+            .screen(),
+            Screen::Dialogue
+        );
+    }
+
+    // A layout saved before MENU existed gets it at its default place.
+    #[test]
+    fn old_layout_gets_menu() {
+        let mut old = TouchLayout::default();
+        old.landscape.retain(|c| c.ctl != Ctl::Menu);
+        old.portrait.retain(|c| c.ctl != Ctl::Menu);
+        old.landscape[1].x = 0.5;
+        let l = TouchLayout::parse(&old.to_cfg()).unwrap();
+        assert_eq!(l.landscape[1].x, 0.5);
+        assert_eq!(l.landscape.last().unwrap().ctl, Ctl::Menu);
+        assert_eq!(l.portrait, TouchLayout::default().portrait);
+    }
+
+    // Exclusion rects: none in menus; in play the movement zone on the left and the near-edge buttons on the right,
+    // at most 200 dp of height per edge.
+    #[test]
+    fn gesture_exclusion() {
+        let mut t = TouchSource::new(TouchConfig::default());
+        t.set_window(2400, 1080, 2.625, SafeArea::default());
+        assert!(t.exclusion().is_empty());
+        t.set_scene(play([0.0; 2]));
+        let ex = t.exclusion();
+        let cap = 200.0 * 2.625;
+        let left: Vec<_> = ex.iter().filter(|r| r[0] <= 0).collect();
+        let right: Vec<_> = ex.iter().filter(|r| r[2] >= 2400).collect();
+        assert_eq!(left.len() + right.len(), ex.len(), "{ex:?}");
+        for side in [&left, &right] {
+            assert!(!side.is_empty());
+            let h: i32 = side.iter().map(|r| r[3] - r[1]).sum();
+            assert!(f64::from(h) <= cap, "{ex:?}");
+        }
+        // Left: the middle of the movement zone; right: SHOT first.
+        let m = t.placed()[0];
+        assert_eq!(m.ctl, Ctl::Move);
+        let r = left[0];
+        assert!((f64::from(r[1] + r[3]) / 2.0 - f64::from(m.centre[1])).abs() <= 1.0);
+        let shot = centre(&t, Ctl::Shot);
+        let r = right[0];
+        assert!(r[1] as f32 <= shot[1] && shot[1] <= r[3] as f32, "{ex:?}");
+        // Portrait too; a cutout inset on the left still covers the movement zone, out to the window edge.
+        t.set_window(1080, 2400, 2.625, SafeArea::default());
+        assert!(!t.exclusion().is_empty());
+        let cut = SafeArea {
+            left: 130,
+            ..SafeArea::default()
+        };
+        t.set_window(2400, 1080, 2.625, cut);
+        assert!(t.exclusion().iter().any(|r| r[0] == 0));
     }
 }

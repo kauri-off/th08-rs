@@ -1,7 +1,7 @@
 //! Touch layout editor in the port menu: move, resize, opacity, show / hide and reset of the overlay controls.
 
 use super::overlay::{accent, button, label, white};
-use super::touch::{BUTTON_MM, Control, Ctl, TouchConfig, TouchLayout, TouchSource};
+use super::touch::{BUTTON_MM, Control, Ctl, Screen, TouchConfig, TouchLayout, TouchSource};
 use crate::i18n::{self, Lang};
 use egui::{
     Align2, Color32, FontId, Id, Order, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2,
@@ -86,12 +86,12 @@ impl TouchEdit {
                         self.src.edit_scale(s, z);
                     }
                 }
-                self.draw(ui.painter(), ppp);
+                self.draw(ui.painter(), lang, ppp);
             });
         self.panel(ctx, lang, land)
     }
 
-    fn draw(&self, p: &egui::Painter, ppp: f32) {
+    fn draw(&self, p: &egui::Painter, lang: Lang, ppp: f32) {
         let pt = |v: [f32; 2]| pos2(v[0] / ppp, v[1] / ppp);
         let [x0, y0, w, h] = self.src.rect();
         p.rect_stroke(
@@ -121,7 +121,7 @@ impl TouchEdit {
                 p.text(
                     centre,
                     Align2::CENTER_CENTER,
-                    label(c.ctl),
+                    label(lang, c.ctl, Screen::Play),
                     FontId::proportional(18.0),
                     white(a.max(0.3) * 1.6),
                 );
@@ -129,7 +129,14 @@ impl TouchEdit {
                     p.rect_stroke(r, 6.0, Stroke::new(3.0, accent(1.0)), StrokeKind::Inside);
                 }
             } else {
-                button(p, centre, half.x, c.ctl, a, false);
+                button(
+                    p,
+                    centre,
+                    half.x,
+                    label(lang, c.ctl, Screen::Play),
+                    a,
+                    false,
+                );
                 if sel {
                     p.circle_stroke(centre, half.x + 3.0, Stroke::new(3.0, accent(1.0)));
                 }
@@ -188,7 +195,7 @@ impl TouchEdit {
 
     fn control_ui(&mut self, ui: &mut egui::Ui, lang: Lang, c: Control) {
         let ctl = c.ctl;
-        ui.label(RichText::new(label(ctl)).strong());
+        ui.label(RichText::new(label(lang, ctl, Screen::Play)).strong());
         egui::Grid::new("touch edit grid")
             .num_columns(2)
             .show(ui, |ui| {

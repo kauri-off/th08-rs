@@ -236,7 +236,9 @@ mod android {
 
     // Runs `f` with the NativeActivity object on this thread's JNI env (attached if needed); errors (and a pending
     // Java exception) are logged once per kind and give None.
-    fn with_activity<R>(f: impl FnOnce(&mut Env, &JObject) -> jni::errors::Result<R>) -> Option<R> {
+    pub(crate) fn with_activity<R>(
+        f: impl FnOnce(&mut Env, &JObject) -> jni::errors::Result<R>,
+    ) -> Option<R> {
         // ndk-context's context is the Application; the activity (for its Window) comes from the AndroidApp.
         let vm_ptr = ndk_context::android_context().vm();
         let act_ptr = APP.get()?.activity_as_ptr();
@@ -260,7 +262,7 @@ mod android {
                 static LOGGED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
                 if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    log::warn!("safe area via JNI failed ({e}); using the content rect");
+                    log::warn!("JNI call failed ({e}); safe area: using the content rect");
                 }
                 None
             }
@@ -270,6 +272,8 @@ mod android {
 
 #[cfg(target_os = "android")]
 pub use android::set_app;
+#[cfg(target_os = "android")]
+pub(crate) use android::with_activity;
 
 #[cfg(test)]
 mod tests {

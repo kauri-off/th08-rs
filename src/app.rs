@@ -34,8 +34,8 @@ struct Ui {
 }
 
 // The port shell around the game. Loading(device) → Setup | Loading(game); Setup → Loading(game) on Play;
-// Loading(game) → Running | Error; Error → Setup on Back; Running ⇄ PortMenu on F1 / Android Back / a resume from
-// the background (in a stage); Quit / close from any state.
+// Loading(game) → Running | Error; Error → Setup on Back; Running ⇄ PortMenu on F1 / the touch MENU control /
+// pad Select or a resume from the background (in a stage); Quit / close from any state.
 enum Shell {
     // The launcher screen (also the saved `launcher = off` wait).
     Setup(Box<Ui>),
@@ -196,7 +196,10 @@ impl ApplicationHandler<UserEvent> for App {
                 // Touch overlay: drawn by the renderer after the blit.
                 if r.settings.touch.active() {
                     gfx(&mut r.ctx).overlay =
-                        Some(Box::<crate::platform::overlay::TouchOverlay>::default());
+                        Some(Box::new(crate::platform::overlay::TouchOverlay::new(
+                            crate::i18n::resolve(r.settings.language),
+                            r.settings.font.clone(),
+                        )));
                 }
                 r.pacer.start(Instant::now());
                 gfx(&mut r.ctx).safe = self.read_safe();
@@ -672,7 +675,7 @@ impl App {
         self.shell = Shell::Error(self.ui(gfx, View::Error(msg)));
     }
 
-    // F1 / Back / resume from the background: the port menu over the game; its pacer stops, audio pauses and held
+    // F1 / MENU control / pad Select / resume from the background: the port menu over the game; its pacer stops, audio pauses and held
     // keys are released (as on focus loss).
     fn open_port_menu(&mut self) {
         let Shell::Running(mut r) = std::mem::replace(&mut self.shell, Shell::Loading) else {
@@ -683,6 +686,7 @@ impl App {
         if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
             h.input.set_focus(false);
         }
+        crate::platform::gestures::set_exclusion(&[]);
         let lang = crate::i18n::resolve(r.settings.language);
         let touch = gfx(&mut r.ctx).overlay.is_some().then(|| {
             r.ctx
@@ -795,13 +799,18 @@ impl App {
                     self.open_port_menu();
                 }
             }
-            // Android Back: the port menu in a stage; ignored elsewhere (leaving is the launcher activity's job).
+            // Android Back (button, gesture, a pad's Back key): one X pulse in menus, one Esc pulse in play and in the
+            // pause menu, through the touch source so replays record it like a key.
             WindowEvent::KeyboardInput { event, .. } if is_back(&event) => {
-                if event.state == ElementState::Pressed && !event.repeat && in_stage(r) {
-                    self.open_port_menu();
+                let bit = crate::platform::touch::TouchScene::back_bit_of(&r.ctx.w);
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
+                {
+                    h.input.touch.back_key(bit);
                 }
             }
-            // Gamepad buttons (Android keycodes): Select opens the port menu in a stage, as Back does.
+            // Gamepad buttons (Android keycodes): Select opens the port menu in a stage.
             WindowEvent::KeyboardInput { event, .. } if pad_button(&event).is_some() => {
                 let i = pad_button(&event).expect("pad button");
                 let down = event.state == ElementState::Pressed;
@@ -879,14 +888,15 @@ impl App {
     }
 }
 
-// After a game frame: gamepad use hides the touch overlay; a gilrs Select asks for the port menu (in a stage).
+// After a game frame: gamepad use hides the touch overlay; a gilrs Select (in a stage) or the touch MENU control
+// asks for the port menu.
 fn pad_frame(r: &mut Running) -> bool {
     let stage = in_stage(r);
     let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() else {
         return false;
     };
     let used = h.joystick.take_used();
-    let menu = h.joystick.take_menu() && stage;
+    let menu = (h.joystick.take_menu() && stage) | h.input.touch.take_menu();
     if used && let Some(o) = gfx(&mut r.ctx).overlay.take() {
         log::info!("gamepad in use: touch overlay hidden");
         r.hidden_overlay = Some(o);
@@ -916,7 +926,7 @@ fn save_layout(r: &mut Running, l: crate::platform::touch::TouchLayout) {
     crate::settings::write_port_cfg(&r.settings.dirs, &[("touch_layout", v)]);
 }
 
-// In a stage (scene game): where Back and a resume from the background open the port menu.
+// In a stage (scene game): where pad Select and a resume from the background open the port menu.
 fn in_stage(r: &Running) -> bool {
     r.ctx.w.game.scene == th08_core::types::SceneId::Game
 }
@@ -1010,6 +1020,15 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
     if touch {
         update_overlay(&mut r.ctx);
     }
+    let excl = if touch {
+        r.ctx
+            .host_as::<crate::platform::AppHost>()
+            .map(|h| h.input.touch.exclusion())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    crate::platform::gestures::set_exclusion(&excl);
     r.ctx.draw();
     // Debug `TH08_SHOT` frame (`TH08_SHOT_SIZE=WxH`: through the window's scaling blit).
     #[cfg(not(target_arch = "wasm32"))]
