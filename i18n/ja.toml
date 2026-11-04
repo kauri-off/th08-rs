@@ -38,6 +38,8 @@ no_controller = "なし"
 [group]
 game_data = "ゲームデータ"
 display = "画面"
+sound = "サウンド"
+accessibility = "アクセシビリティ"
 touch = "タッチ操作"
 start_game = "ゲーム開始"
 cheats = "チート／デバッグ"
@@ -98,6 +100,84 @@ unit = " dp"
 label = "起動時にこの画面を表示"
 summary = "ゲーム開始前にこの画面を表示"
 help = "起動時にこの画面を表示する。オフの場合、th08 の起動中に Shift を押し続ける（Web 版: ?launcher=1）と再び表示されます"
+
+[entry.pause_unfocused]
+label = "フォーカスを失ったら一時停止"
+summary = "ステージ中に別のウィンドウへ切り替えるとポートメニューを開く"
+help = "ステージ中にウィンドウやブラウザのタブがフォーカスを失ったらポートメニューを開く"
+
+[entry.scale_filter]
+label = "拡大フィルタ"
+summary = "画面をウィンドウに合わせて拡大する方法"
+help = "ウィンドウの拡大方法: smooth（バイリニア）、sharp（くっきりしたピクセルと滑らかな境目）、nearest"
+
+[entry.scale_filter.words]
+smooth = "スムーズ"
+sharp = "シャープ"
+nearest = "ドット"
+
+[entry.integer_scale]
+label = "整数倍拡大"
+summary = "640×480 の整数倍だけで拡大"
+help = "収まる最大の 640x480 の整数倍で画面を拡大する"
+
+[entry.volume_master]
+label = "全体音量"
+summary = "ゲームの音すべての音量"
+help = "ポートの全体音量（パーセント）。ゲーム自身の BGM 音量設定はそのまま"
+
+[entry.volume_master.words]
+0 = "オフ"
+
+[entry.volume_bgm]
+label = "BGM 音量"
+summary = "音楽の音量"
+help = "ポートの BGM 音量（パーセント）"
+
+[entry.volume_bgm.words]
+0 = "オフ"
+
+[entry.volume_se]
+label = "効果音音量"
+summary = "効果音の音量"
+help = "ポートの効果音音量（パーセント）"
+
+[entry.volume_se.words]
+0 = "オフ"
+
+[entry.mute_unfocused]
+label = "非アクティブ時にミュート"
+summary = "別のウィンドウがアクティブな間は音を消す"
+help = "ウィンドウやブラウザのタブにフォーカスがない間は音を消す"
+
+[entry.audio_buffer]
+label = "オーディオバッファ"
+summary = "出力バッファの大きさ。大きくすると音切れが減る"
+help = "音声出力バッファ（フレーム数、0 = デバイスの既定値）。音が途切れるときは大きくする"
+unit = " フレーム"
+
+[entry.audio_buffer.words]
+0 = "自動"
+
+[entry.color_filter]
+label = "カラーフィルタ"
+summary = "色覚やコントラストに合わせて色を調整"
+help = "ウィンドウ画面のカラーフィルタ: off、protan、deutan、tritan（色覚補正）、high_contrast"
+
+[entry.color_filter.words]
+off = "オフ"
+protan = "1 型色覚"
+deutan = "2 型色覚"
+tritan = "3 型色覚"
+high_contrast = "ハイコントラスト"
+
+[entry.brightness]
+label = "明るさ"
+summary = "画面のガンマ。上げると暗い所が明るくなる"
+help = "画面のガンマ（パーセント、100 = 変更なし。上げると暗い所が明るくなる）"
+
+[entry.brightness.words]
+100 = "標準"
 
 [entry.touch]
 label = "タッチオーバーレイ"

@@ -200,6 +200,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 r.pacer.start(Instant::now());
                 gfx(&mut r.ctx).safe = self.read_safe();
+                gfx(&mut r.ctx).blit_options = r.settings.blit;
                 if self.suspended {
                     r.pacer.suspend();
                     gfx(&mut r.ctx).detach();
@@ -426,9 +427,15 @@ impl App {
         window.request_redraw();
     }
 
-    // Game audio is held while suspended, while the port menu is open and (opt-in) while the window is unfocused.
+    // Game audio is held while suspended, while the port menu is open and (opt-in) while the window is unfocused;
+    // `mute_unfocused` silences it without holding it.
     fn sync_audio(&mut self) {
         let hold = self.suspended || self.focus.holds_audio();
+        let focused = self.focus.focused;
+        if let Shell::Running(r) | Shell::PortMenu(r, _) = &mut self.shell {
+            let mute = r.settings.mute_unfocused && !focused;
+            r.ctx.audio.set_muted(mute);
+        }
         match &mut self.shell {
             Shell::Running(r) if !hold => r.ctx.audio.resume(),
             Shell::Running(r) | Shell::PortMenu(r, _) => r.ctx.audio.pause(),
@@ -758,7 +765,13 @@ impl App {
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
                     h.input.set_focus(f);
                 }
+                if !f && pauses_unfocused(r) {
+                    self.open_port_menu();
+                }
             }
+            // Web: the tab was hidden.
+            #[cfg(target_arch = "wasm32")]
+            WindowEvent::Occluded(true) if pauses_unfocused(r) => self.open_port_menu(),
             // Port-only F1: the port menu; the key press does not reach the game.
             WindowEvent::KeyboardInput { event, .. }
                 if event.physical_key == PhysicalKey::Code(KeyCode::F1) =>
@@ -879,6 +892,14 @@ fn pad_button(e: &winit::event::KeyEvent) -> Option<usize> {
 // In a stage (scene game): where Back and a resume from the background open the port menu.
 fn in_stage(r: &Running) -> bool {
     r.ctx.w.game.scene == th08_core::types::SceneId::Game
+}
+
+// Desktop / web `pause_unfocused`: focus loss in a stage opens the port menu (Android has its resume path).
+fn pauses_unfocused(r: &Running) -> bool {
+    cfg!(not(target_os = "android"))
+        && r.settings.pause_unfocused
+        && !r.settings.is_tool_run()
+        && in_stage(r)
 }
 
 // The Android Back button (logical BrowserBack / GoBack, physical BrowserBack); on Android Escape counts too.

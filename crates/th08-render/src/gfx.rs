@@ -195,6 +195,135 @@ impl SafeArea {
     }
 }
 
+// Window blit sampling: plain bilinear, sharp-bilinear (crisp texels, smooth seams) or nearest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScaleFilter {
+    #[default]
+    Smooth,
+    Sharp,
+    Nearest,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorFilter {
+    #[default]
+    Off,
+    Protan,
+    Deutan,
+    Tritan,
+    HighContrast,
+}
+
+impl ColorFilter {
+    // Row-major colour matrix and offset: out = M·rgb + o.
+    fn matrix(self) -> ([[f32; 3]; 3], [f32; 3]) {
+        const I: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        // Machado et al. 2009 dichromat simulation (severity 1).
+        let sim = match self {
+            ColorFilter::Off => return (I, [0.0; 3]),
+            ColorFilter::HighContrast => {
+                // Contrast 1.5 about mid grey with saturation 1.3.
+                let (k, sat) = (1.5f32, 1.3f32);
+                let l = [0.2126f32, 0.7152, 0.0722];
+                let mut m = [[0.0; 3]; 3];
+                for (r, row) in m.iter_mut().enumerate() {
+                    for (c, v) in row.iter_mut().enumerate() {
+                        let id = if r == c { 1.0 } else { 0.0 };
+                        *v = k * ((1.0 - sat) * l[c] + sat * id);
+                    }
+                }
+                return (m, [0.5 * (1.0 - k); 3]);
+            }
+            ColorFilter::Protan => [
+                [0.152_286, 1.052_583, -0.204_868],
+                [0.114_503, 0.786_281, 0.099_216],
+                [-0.003_882, -0.048_116, 1.051_998],
+            ],
+            ColorFilter::Deutan => [
+                [0.367_322, 0.860_646, -0.227_968],
+                [0.280_085, 0.672_501, 0.047_413],
+                [-0.011_820, 0.042_940, 0.968_881],
+            ],
+            ColorFilter::Tritan => [
+                [1.255_528, -0.076_749, -0.178_779],
+                [-0.078_411, 0.930_809, 0.147_602],
+                [0.004_733, 0.691_367, 0.303_900],
+            ],
+        };
+        // Daltonisation: the colour error the viewer misses is moved into channels they see,
+        // out = c + E·(c − S·c).
+        let e = [[0.0, 0.0, 0.0], [0.7, 1.0, 0.0], [0.7, 0.0, 1.0]];
+        let mut m = I;
+        for (r, row) in m.iter_mut().enumerate() {
+            for (c, v) in row.iter_mut().enumerate() {
+                *v += (0..3).map(|k| e[r][k] * (I[k][c] - sim[k][c])).sum::<f32>();
+            }
+        }
+        (m, [0.0; 3])
+    }
+}
+
+// Port display options of the final window blit only; the frame texture, captures and the draw log never see them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlitOptions {
+    pub filter: ScaleFilter,
+    // Largest whole multiple of 640×480 that fits (when at least 1×).
+    pub integer: bool,
+    pub color: ColorFilter,
+    // Output gamma: out = in^(1/gamma); 1 = neutral, above 1 brightens the darks.
+    pub gamma: f32,
+}
+
+impl Default for BlitOptions {
+    fn default() -> Self {
+        Self {
+            filter: ScaleFilter::Smooth,
+            integer: false,
+            color: ColorFilter::Off,
+            gamma: 1.0,
+        }
+    }
+}
+
+impl BlitOptions {
+    // Plain texture copy (today's blit shader) with only the sampler chosen.
+    fn plain(&self) -> bool {
+        self.filter != ScaleFilter::Sharp && self.color == ColorFilter::Off && self.gamma == 1.0
+    }
+
+    // `BLIT_FX` uniform: matrix rows, offset, (sharp, scale x, scale y, 1/gamma).
+    fn uniform(&self, scale: [f32; 2]) -> [f32; 20] {
+        let (m, o) = self.color.matrix();
+        let sharp = if self.filter == ScaleFilter::Sharp {
+            1.0
+        } else {
+            0.0
+        };
+        [
+            m[0][0],
+            m[0][1],
+            m[0][2],
+            0.0,
+            m[1][0],
+            m[1][1],
+            m[1][2],
+            0.0,
+            m[2][0],
+            m[2][1],
+            m[2][2],
+            0.0,
+            o[0],
+            o[1],
+            o[2],
+            0.0,
+            sharp,
+            scale[0],
+            scale[1],
+            1.0 / self.gamma,
+        ]
+    }
+}
+
 // Device-bound objects that do not depend on core state: made by `build` and again by `rebuild`.
 struct Gpu {
     pipes: Vec<wgpu::RenderPipeline>,
@@ -204,6 +333,11 @@ struct Gpu {
     frame: wgpu::Texture,
     frame_bind: wgpu::BindGroup,
     blit: wgpu::RenderPipeline,
+    // Window blit with `BlitOptions`: the frame through a nearest sampler, the filter / colour pipeline and its uniform.
+    frame_near: wgpu::BindGroup,
+    blit_fx: wgpu::RenderPipeline,
+    fx_buf: wgpu::Buffer,
+    fx_bind: wgpu::BindGroup,
     // Filtered sub-rect copy of the frame into an Rgba8Unorm texture (texture capture, 12 §3).
     crop: wgpu::RenderPipeline,
 }
@@ -215,6 +349,7 @@ pub struct Gfx {
     pub overlay: Option<Box<dyn Overlay>>,
     // Set by the app on every resize / resume; `blit` and the launcher keep out of it.
     pub safe: SafeArea,
+    pub blit_options: BlitOptions,
     // Makes the surface again after a lifecycle detach and the device after a loss (ARCH_D §5).
     instance: wgpu::Instance,
     // No window: `attach` fails, `rebuild` asks for any adapter.
@@ -287,6 +422,36 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 @group(0) @binding(0) var t: texture_2d<f32>;
 @group(0) @binding(1) var s: sampler;
 @fragment fn fs(i: VsOut) -> @location(0) vec4f { return textureSample(t, s, i.uv); }
+"#;
+
+// `BLIT` plus sharp-bilinear (texel interiors flat, a bilinear seam one output pixel wide), colour matrix and gamma.
+const BLIT_FX: &str = r#"
+struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> VsOut {
+    let uv = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+    var o: VsOut;
+    o.pos = vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    o.uv = uv;
+    return o;
+}
+struct Fx { m0: vec4f, m1: vec4f, m2: vec4f, off: vec4f, p: vec4f };
+@group(0) @binding(0) var t: texture_2d<f32>;
+@group(0) @binding(1) var s: sampler;
+@group(1) @binding(0) var<uniform> fx: Fx;
+@fragment fn fs(i: VsOut) -> @location(0) vec4f {
+    var uv = i.uv;
+    if fx.p.x > 0.5 {
+        let size = vec2f(textureDimensions(t));
+        let texel = uv * size;
+        let sc = max(fx.p.yz, vec2f(1.0));
+        let rr = 0.5 - 0.5 / sc;
+        let d = fract(texel) - 0.5;
+        uv = (floor(texel) + (d - clamp(d, -rr, rr)) * sc + 0.5) / size;
+    }
+    let c = textureSample(t, s, uv);
+    let rgb = vec3f(dot(fx.m0.xyz, c.rgb), dot(fx.m1.xyz, c.rgb), dot(fx.m2.xyz, c.rgb)) + fx.off.xyz;
+    return vec4f(pow(clamp(rgb, vec3f(0.0), vec3f(1.0)), vec3f(fx.p.w)), c.a);
+}
 "#;
 
 const CROP: &str = r#"
@@ -387,7 +552,7 @@ impl Gpu {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let blit = Self::blit_pipe(device, &layout, format);
+        let blit = Self::blit_pipe(device, &layout, format, BLIT);
         let crop = Self::crop_pipe(device, &layout);
         let frame = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -407,6 +572,45 @@ impl Gpu {
             ..Default::default()
         });
         let frame_bind = bind_group(device, &tex_layout, &view(&frame), &blit_sampler);
+        let near_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let frame_near = bind_group(device, &tex_layout, &view(&frame), &near_sampler);
+        let fx_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let fx_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 80,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let fx_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &fx_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: fx_buf.as_entire_binding(),
+            }],
+        });
+        let fx_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&tex_layout), Some(&fx_layout)],
+            immediate_size: 0,
+        });
+        let blit_fx = Self::blit_pipe(device, &fx_pipe_layout, format, BLIT_FX);
         Self {
             pipes,
             tex_layout,
@@ -414,6 +618,10 @@ impl Gpu {
             frame,
             frame_bind,
             blit,
+            frame_near,
+            blit_fx,
+            fx_buf,
+            fx_bind,
             crop,
         }
     }
@@ -526,8 +734,9 @@ impl Gpu {
         device: &wgpu::Device,
         layout: &wgpu::PipelineLayout,
         format: wgpu::TextureFormat,
+        src: &str,
     ) -> wgpu::RenderPipeline {
-        let blit_shader = shader(device, BLIT);
+        let blit_shader = shader(device, src);
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(layout),
@@ -721,6 +930,7 @@ impl Gfx {
             surface,
             overlay: None,
             safe: SafeArea::default(),
+            blit_options: BlitOptions::default(),
             instance,
             device,
             queue,
@@ -1596,7 +1806,7 @@ impl Gfx {
         }
     }
 
-    // Letterboxed, linearly scaled copy of the 640x480 frame into the safe rect of a w×h target.
+    // Letterboxed, scaled copy of the 640x480 frame into the safe rect of a w×h target.
     fn blit(&self, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, w: u32, h: u32) {
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -1611,8 +1821,12 @@ impl Gfx {
             })],
             ..Default::default()
         });
+        let o = self.blit_options;
         let [x, y, w, h] = self.safe.rect(w, h);
-        let scale = (w / SCREEN_W).min(h / SCREEN_H);
+        let mut scale = (w / SCREEN_W).min(h / SCREEN_H);
+        if o.integer && scale >= 1.0 {
+            scale = scale.floor();
+        }
         let (vw, vh) = ((SCREEN_W * scale).round(), (SCREEN_H * scale).round());
         pass.set_viewport(
             x + ((w - vw) / 2.0).floor(),
@@ -1622,8 +1836,21 @@ impl Gfx {
             0.0,
             1.0,
         );
-        pass.set_pipeline(&self.gpu.blit);
-        pass.set_bind_group(0, &self.gpu.frame_bind, &[]);
+        let frame = if o.filter == ScaleFilter::Nearest {
+            &self.gpu.frame_near
+        } else {
+            &self.gpu.frame_bind
+        };
+        if o.plain() {
+            pass.set_pipeline(&self.gpu.blit);
+        } else {
+            let u = o.uniform([vw / SCREEN_W, vh / SCREEN_H]);
+            self.queue
+                .write_buffer(&self.gpu.fx_buf, 0, bytemuck::cast_slice(&u));
+            pass.set_pipeline(&self.gpu.blit_fx);
+            pass.set_bind_group(1, &self.gpu.fx_bind, &[]);
+        }
+        pass.set_bind_group(0, frame, &[]);
         pass.draw(0..3, 0..1);
     }
 
@@ -2109,6 +2336,65 @@ mod tests {
             got == frame(&mut gfx, &mut rec, tex),
             "rebuilt self-copy differs"
         );
+    }
+
+    // Blit options touch only the scaled window copy; at 2× sharp-bilinear hits texel centres like nearest.
+    #[test]
+    fn blit_options_window_only() {
+        let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
+            eprintln!("no GPU adapter; skipped");
+            return;
+        };
+        let mut rec = Recorder::new();
+        let base: Vec<u8> = (0..8 * 8 * 4).map(|i: u32| (i * 11 % 253) as u8).collect();
+        let tex = rec.create_texture(8, 8, &base);
+        let mut shot = |gfx: &mut Gfx, o: BlitOptions, size| {
+            gfx.blit_options = o;
+            rec.sprite(
+                tex,
+                Blend::Alpha,
+                FULLSCREEN,
+                [0.0, 0.0, 1.0, 1.0],
+                [255; 4],
+            );
+            gfx.capture(&mut rec, size)
+        };
+        let plain = BlitOptions::default();
+        let with = |filter, color| BlitOptions {
+            filter,
+            color,
+            ..plain
+        };
+        let fx = with(ScaleFilter::Sharp, ColorFilter::Deutan);
+        assert!(shot(&mut gfx, plain, None) == shot(&mut gfx, fx, None));
+        let two = Some((1280, 960));
+        let near = shot(&mut gfx, with(ScaleFilter::Nearest, ColorFilter::Off), two);
+        let sharp = shot(&mut gfx, with(ScaleFilter::Sharp, ColorFilter::Off), two);
+        let max = near
+            .pixels()
+            .zip(sharp.pixels())
+            .flat_map(|(a, b)| (0..4).map(move |i| a[i].abs_diff(b[i])))
+            .max();
+        assert!(
+            max <= Some(1),
+            "sharp at 2× differs from nearest by {max:?}"
+        );
+        assert!(shot(&mut gfx, plain, two) != near);
+    }
+
+    #[test]
+    fn colour_filters_keep_grey() {
+        for f in [
+            ColorFilter::Off,
+            ColorFilter::Protan,
+            ColorFilter::Deutan,
+            ColorFilter::Tritan,
+        ] {
+            let (m, o) = f.matrix();
+            for (row, off) in m.iter().zip(o) {
+                assert!((row.iter().sum::<f32>() + off - 1.0).abs() < 0.01, "{f:?}");
+            }
+        }
     }
 
     #[test]

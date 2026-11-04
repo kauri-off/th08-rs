@@ -153,6 +153,10 @@ struct Mixer {
     generation: u32,
     out_rate: f64,
     volume: f32,
+    // Port volume rows (0–1) applied after the game's own gains; `muted` silences the output, positions still advance.
+    bgm_gain: f32,
+    se_gain: f32,
+    muted: bool,
     // Streaming object +0x30 playing flag cleared by `Stop` with the position kept (command 6, mode-1 fade end).
     stopped: bool,
     // MIDI mode (02 §5): the sequencer + synth, driven by the output sample clock; not scaled by the BGM volume.
@@ -197,6 +201,7 @@ impl Mixer {
         }
         #[cfg(not(target_arch = "wasm32"))]
         let midi = self.midi.as_mut().map(|p| p.render(n));
+        let (bg, sg) = (self.bgm_gain, self.se_gain);
         for (k, fr) in out.chunks_exact_mut(channels).enumerate() {
             let (l, r) = match &mut self.music {
                 Some(m) if !m.samples.is_empty() && !self.stopped => m.next(step),
@@ -210,6 +215,7 @@ impl Mixer {
             }
             #[cfg(target_arch = "wasm32")]
             let _ = k;
+            (l, r) = (l * bg, r * bg);
             for vc in self.voices.iter_mut().filter(|v| v.playing) {
                 let Some(w) = &vc.wave else { continue };
                 let i = vc.pos as usize;
@@ -218,9 +224,12 @@ impl Mixer {
                     continue;
                 }
                 let s = w.samples[i];
-                l += s[0] * vc.gain[0];
-                r += s[1] * vc.gain[1];
+                l += s[0] * (vc.gain[0] * sg);
+                r += s[1] * (vc.gain[1] * sg);
                 vc.pos += w.rate / self.out_rate;
+            }
+            if self.muted {
+                (l, r) = (0.0, 0.0);
             }
             if channels > 1 {
                 fr[0] = l.clamp(-1.0, 1.0);
@@ -238,6 +247,27 @@ impl Mixer {
 pub struct AudioConfig {
     pub soundfont: Option<std::path::PathBuf>,
     pub soundfont_dirs: Vec<std::path::PathBuf>,
+    pub volume: PortVolume,
+    // Desktop / web output callback size in frames; None = the device default.
+    pub buffer: Option<u32>,
+}
+
+// Port volume rows as gains 0–1: `master` scales both the BGM (WAV and MIDI) and the SE mix.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PortVolume {
+    pub master: f32,
+    pub bgm: f32,
+    pub se: f32,
+}
+
+impl Default for PortVolume {
+    fn default() -> Self {
+        Self {
+            master: 1.0,
+            bgm: 1.0,
+            se: 1.0,
+        }
+    }
 }
 
 // Background loader, standing in for the original's loader threads (00 §3.2, §6).
@@ -279,8 +309,11 @@ pub struct Audio {
 
 impl Audio {
     pub fn new(source: Source, cfg: AudioConfig) -> Self {
+        let v = cfg.volume;
         let mixer = Arc::new(Mutex::new(Mixer {
             volume: 1.0,
+            bgm_gain: v.master * v.bgm,
+            se_gain: v.master * v.se,
             out_rate: BGM_RATE,
             ..Default::default()
         }));
@@ -458,6 +491,11 @@ impl Audio {
         self.started
     }
 
+    // Port: silence the output without holding it (window unfocused); BGM and SE keep playing underneath.
+    pub fn set_muted(&mut self, on: bool) {
+        self.mixer.lock().unwrap().muted = on;
+    }
+
     // Must be called from a user gesture on the web (AudioContext policy).
     pub fn ensure_started(&mut self) {
         if !self.started && !self.paused {
@@ -467,7 +505,12 @@ impl Audio {
 
     fn open(&mut self) {
         self.lost.store(false, Ordering::Relaxed);
-        match open_stream(self.mixer.clone(), self.lost.clone(), self.stats.clone()) {
+        match open_stream(
+            self.mixer.clone(),
+            self.lost.clone(),
+            self.stats.clone(),
+            self.cfg.buffer,
+        ) {
             Ok(s) => {
                 self.stream = Some(s);
                 self.started = true;
@@ -681,6 +724,9 @@ impl th08_core::game::AudioOut for Audio {
     fn resume(&mut self) {
         Audio::resume(self);
     }
+    fn set_muted(&mut self, on: bool) {
+        Audio::set_muted(self, on);
+    }
 }
 
 // Port: output device setup (prefers 44.1 kHz stereo so the BGM needs no resampling).
@@ -729,6 +775,7 @@ fn open_stream(
     mixer: Arc<Mutex<Mixer>>,
     lost: Arc<AtomicBool>,
     stats: Arc<Stats>,
+    buffer: Option<u32>,
 ) -> Result<cpal::Stream> {
     let host = cpal::default_host();
     let pick = |want: &str| {
@@ -764,6 +811,8 @@ fn open_stream(
     // ~90 ms default buffer.
     if cfg!(target_os = "android") {
         cfg.buffer_size = cpal::BufferSize::Fixed(ANDROID_FRAMES);
+    } else if let Some(n) = buffer {
+        cfg.buffer_size = cpal::BufferSize::Fixed(n);
     }
     mixer.lock().unwrap().out_rate = f64::from(cfg.sample_rate);
     stats
@@ -849,6 +898,8 @@ mod tests {
         });
         let mut m = Mixer {
             volume: 1.0,
+            bgm_gain: 1.0,
+            se_gain: 1.0,
             out_rate: 44100.0,
             voices: vec![Voice {
                 wave: Some(wave),
@@ -868,6 +919,36 @@ mod tests {
         assert!(!m.voices[0].playing);
         assert!((db_gain(-2000) - 0.1).abs() < 1e-6 && db_gain(-10000) == 0.0);
     }
+
+    // Port SE gain scales the voice; mute writes silence while the voice still advances.
+    #[test]
+    fn port_gain_and_mute() {
+        let wave = Arc::new(Wave {
+            samples: vec![[0.5, 0.5]; 100],
+            rate: 44100.0,
+        });
+        let mut m = Mixer {
+            volume: 1.0,
+            bgm_gain: 1.0,
+            se_gain: 0.5,
+            out_rate: 44100.0,
+            voices: vec![Voice {
+                wave: Some(wave),
+                gain: [1.0, 1.0],
+                playing: true,
+                ..Voice::default()
+            }],
+            ..Default::default()
+        };
+        let mut out = vec![0.0; 2 * 10];
+        m.render(&mut out, 2);
+        assert!((out[0] - 0.25).abs() < 1e-6);
+        m.muted = true;
+        m.render(&mut out, 2);
+        assert!(out.iter().all(|&x| x == 0.0));
+        assert!((m.voices[0].pos - 20.0).abs() < 1e-9);
+    }
+
     // No game files: BGM reads fail as with an empty directory.
     struct NoFiles;
     impl th08_core::assets::DataSource for NoFiles {
@@ -1023,6 +1104,8 @@ mod tests {
         let samples = Pcm::from_frames(&samples);
         Mixer {
             volume: 1.0,
+            bgm_gain: 1.0,
+            se_gain: 1.0,
             out_rate: BGM_RATE,
             music: Some(Music::new(samples, loop_start)),
             ..Default::default()

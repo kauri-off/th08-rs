@@ -96,6 +96,8 @@ pub enum Kind {
 pub enum Group {
     GameData,
     Display,
+    Sound,
+    Accessibility,
     Touch,
     StartGame,
     Cheats,
@@ -103,9 +105,11 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Group; 6] = [
+    pub const ALL: [Group; 8] = [
         Group::GameData,
         Group::Display,
+        Group::Sound,
+        Group::Accessibility,
         Group::Touch,
         Group::StartGame,
         Group::Cheats,
@@ -117,6 +121,8 @@ impl Group {
         match self {
             Group::GameData => "game_data",
             Group::Display => "display",
+            Group::Sound => "sound",
+            Group::Accessibility => "accessibility",
             Group::Touch => "touch",
             Group::StartGame => "start_game",
             Group::Cheats => "cheats",
@@ -129,6 +135,8 @@ impl Group {
         match self {
             Group::GameData => "Game data",
             Group::Display => "Display",
+            Group::Sound => "Sound",
+            Group::Accessibility => "Accessibility",
             Group::Touch => "Touch controls",
             Group::StartGame => "Start game",
             Group::Cheats => "Cheats/debug",
@@ -261,6 +269,12 @@ pub struct Settings {
     pub screen_margin: u32,
     // Show the launcher screen before the game (th08 binary only).
     pub launcher: bool,
+    // Open the port menu when the window / tab loses focus in a stage (desktop, web).
+    pub pause_unfocused: bool,
+    pub blit: th08_render::gfx::BlitOptions,
+    pub volume: th08_audio::audio::PortVolume,
+    pub mute_unfocused: bool,
+    pub audio_buffer: Option<u32>,
     // Touch overlay rows.
     pub touch: crate::platform::touch::TouchConfig,
     pub save_dir: Option<PathBuf>,
@@ -334,6 +348,11 @@ impl Settings {
             vsync: true,
             screen_margin: 0,
             launcher: true,
+            pause_unfocused: true,
+            blit: th08_render::gfx::BlitOptions::default(),
+            volume: th08_audio::audio::PortVolume::default(),
+            mute_unfocused: true,
+            audio_buffer: None,
             touch: crate::platform::touch::TouchConfig::default(),
             save_dir: None,
             font: None,
@@ -598,6 +617,225 @@ pub const ENTRIES: &[Entry] = &[
         help: "show this screen at start; when off, hold Shift while th08 starts (web: ?launcher=1) to see it again",
         set: |s, v| {
             s.launcher = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "pause_unfocused",
+        env: "TH08_PAUSE_UNFOCUSED",
+        kind: Kind::Bool,
+        default: "on",
+        group: Group::Display,
+        label: "Pause when unfocused",
+        summary: "Open the port menu when you switch away in a stage",
+        unit: "",
+        words: &[],
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: true,
+        help: "open the port menu when the window or browser tab loses focus during a stage",
+        set: |s, v| {
+            s.pause_unfocused = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "scale_filter",
+        env: "TH08_SCALE_FILTER",
+        kind: Kind::Enum(&["smooth", "sharp", "nearest"]),
+        default: "sharp",
+        group: Group::Display,
+        label: "Scaling filter",
+        summary: "How the picture is scaled to the window",
+        unit: "",
+        words: &[
+            ("smooth", "Smooth"),
+            ("sharp", "Sharp"),
+            ("nearest", "Pixelated"),
+        ],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "window scaling: smooth (bilinear), sharp (crisp pixels with smooth edges) or nearest",
+        set: |s, v| {
+            use th08_render::gfx::ScaleFilter;
+            s.blit.filter = match v.trim() {
+                "smooth" => ScaleFilter::Smooth,
+                "sharp" => ScaleFilter::Sharp,
+                "nearest" => ScaleFilter::Nearest,
+                _ => return Err("expected smooth, sharp or nearest".into()),
+            };
+            Ok(())
+        },
+    },
+    Entry {
+        key: "integer_scale",
+        env: "TH08_INTEGER_SCALE",
+        kind: Kind::Bool,
+        default: "off",
+        group: Group::Display,
+        label: "Integer scaling",
+        summary: "Scale only by whole multiples of 640×480",
+        unit: "",
+        words: &[],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "scale the picture by the largest whole multiple of 640x480 that fits",
+        set: |s, v| {
+            s.blit.integer = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "volume_master",
+        env: "TH08_VOLUME_MASTER",
+        kind: Kind::Int { min: 0, max: 100 },
+        default: "100",
+        group: Group::Sound,
+        label: "Master volume",
+        summary: "Volume of all game sound",
+        unit: "%",
+        words: &[("0", "Off")],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "port master volume in percent (the game's own BGM volume option stays as it is)",
+        set: |s, v| {
+            let n: u32 = num(v)?;
+            s.volume.master = n.min(100) as f32 / 100.0;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "volume_bgm",
+        env: "TH08_VOLUME_BGM",
+        kind: Kind::Int { min: 0, max: 100 },
+        default: "100",
+        group: Group::Sound,
+        label: "Music volume",
+        summary: "Volume of the music",
+        unit: "%",
+        words: &[("0", "Off")],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "port music volume in percent",
+        set: |s, v| {
+            let n: u32 = num(v)?;
+            s.volume.bgm = n.min(100) as f32 / 100.0;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "volume_se",
+        env: "TH08_VOLUME_SE",
+        kind: Kind::Int { min: 0, max: 100 },
+        default: "100",
+        group: Group::Sound,
+        label: "Sound effects volume",
+        summary: "Volume of the sound effects",
+        unit: "%",
+        words: &[("0", "Off")],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "port sound effect volume in percent",
+        set: |s, v| {
+            let n: u32 = num(v)?;
+            s.volume.se = n.min(100) as f32 / 100.0;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "mute_unfocused",
+        env: "TH08_MUTE_UNFOCUSED",
+        kind: Kind::Bool,
+        default: "on",
+        group: Group::Sound,
+        label: "Mute when unfocused",
+        summary: "Silence the game while another window is active",
+        unit: "",
+        words: &[],
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: true,
+        help: "mute the sound while the window or browser tab is not focused",
+        set: |s, v| {
+            s.mute_unfocused = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "audio_buffer",
+        env: "TH08_AUDIO_BUFFER",
+        kind: Kind::Int { min: 0, max: 8192 },
+        default: "0",
+        group: Group::Sound,
+        label: "Audio buffer",
+        summary: "Output buffer size; larger fixes crackling",
+        unit: " frames",
+        words: &[("0", "Auto")],
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP_WEB,
+        persist: true,
+        help: "audio output buffer in frames (0 = the device default); raise it if the sound crackles",
+        set: |s, v| {
+            let n: u32 = num(v)?;
+            s.audio_buffer = (n > 0).then_some(n.min(8192));
+            Ok(())
+        },
+    },
+    Entry {
+        key: "color_filter",
+        env: "TH08_COLOR_FILTER",
+        kind: Kind::Enum(&["off", "protan", "deutan", "tritan", "high_contrast"]),
+        default: "off",
+        group: Group::Accessibility,
+        label: "Colour filter",
+        summary: "Colours adjusted for colour vision or contrast",
+        unit: "",
+        words: &[
+            ("off", "Off"),
+            ("protan", "Protanopia"),
+            ("deutan", "Deuteranopia"),
+            ("tritan", "Tritanopia"),
+            ("high_contrast", "High contrast"),
+        ],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "colour filter on the window picture: off, protan, deutan, tritan (colour-vision correction) or high_contrast",
+        set: |s, v| {
+            use th08_render::gfx::ColorFilter;
+            s.blit.color = match v.trim() {
+                "off" => ColorFilter::Off,
+                "protan" => ColorFilter::Protan,
+                "deutan" => ColorFilter::Deutan,
+                "tritan" => ColorFilter::Tritan,
+                "high_contrast" => ColorFilter::HighContrast,
+                _ => return Err("expected off, protan, deutan, tritan or high_contrast".into()),
+            };
+            Ok(())
+        },
+    },
+    Entry {
+        key: "brightness",
+        env: "TH08_BRIGHTNESS",
+        kind: Kind::Int { min: 50, max: 200 },
+        default: "100",
+        group: Group::Accessibility,
+        label: "Brightness",
+        summary: "Gamma of the picture; higher brightens dark areas",
+        unit: "%",
+        words: &[("100", "Normal")],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "picture gamma in percent (100 = unchanged; higher brightens dark areas)",
+        set: |s, v| {
+            let n: u32 = num(v)?;
+            s.blit.gamma = n.clamp(50, 200) as f32 / 100.0;
             Ok(())
         },
     },
@@ -1768,11 +2006,13 @@ impl Settings {
         ))
     }
 
-    // MIDI SoundFont lookup for `audio::Audio` (`soundfont`, then the platform's soundfont dirs).
+    // Audio output for `audio::Audio`: port volume, buffer size and the MIDI SoundFont lookup (`soundfont`, then the platform's soundfont dirs).
     pub fn audio(&self) -> th08_audio::audio::AudioConfig {
         th08_audio::audio::AudioConfig {
             soundfont: self.soundfont.clone(),
             soundfont_dirs: self.dirs.soundfonts.clone(),
+            volume: self.volume,
+            buffer: self.audio_buffer,
         }
     }
 

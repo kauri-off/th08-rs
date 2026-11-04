@@ -50,6 +50,8 @@ pub trait AudioOut {
     // Port: output held / restarted by the app (background, port menu); no logic effect.
     fn pause(&mut self) {}
     fn resume(&mut self) {}
+    // Port: output silenced (unfocused window) while it keeps running; no logic effect.
+    fn set_muted(&mut self, _: bool) {}
 }
 
 // The IO side of `Ctx`, built by the app or tool.
