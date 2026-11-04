@@ -1714,6 +1714,7 @@ pub fn menu_start_state(ctx: &mut th08_core::game::Ctx, name: &str) -> anyhow::R
     th08::platform::tool_host(ctx)
         .storage
         .set_save_dir(Some(dir));
+    ctx.w.game.persist = true;
     Ok(())
 }
 

@@ -128,10 +128,19 @@ pub const UI: &[(&str, &str)] = &[
     ("select_folder_first", "select the game folder first"),
     ("fix_values", "fix the marked values"),
     ("dev_active", "Developer settings active: {list}"),
+    (
+        "cheats_nosave",
+        "Cheats on: {list}. Scores and replays are not saved.",
+    ),
     ("game_folder", "Game folder:"),
     ("browse", "Browse…"),
     ("folder_hint", "folder with th08.dat or th08.pak"),
     ("bundled_apk", "bundled in the APK"),
+    ("bundled", "bundled"),
+    (
+        "bundled_note",
+        "This build uses its own bundled game files; a folder chosen here is used for this run only.",
+    ),
     ("no_files", "no files"),
     ("dat_found", "game files found"),
     (

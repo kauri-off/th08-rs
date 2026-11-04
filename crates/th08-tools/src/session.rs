@@ -403,6 +403,8 @@ mod native {
             host.storage.set_save_dir(Some(save));
             host.polls = Some(self.input.as_slice().into());
             host.fixed_time = self.recorded_at;
+            // The private save dir takes the session's saves (replays the menus list again).
+            ctx.w.game.persist = true;
             ctx.w.rng = th08_core::rng::Rng::seeded(self.seed as u16);
             ctx.w.overlays.set_frame_counter(self.sched.ascii_offset);
             ctx.w.game.sched = Some(self.sched.clone());

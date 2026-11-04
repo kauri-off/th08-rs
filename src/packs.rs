@@ -44,6 +44,10 @@ pub fn select(s: &Settings) -> Option<Mounted> {
         }
         found?
     } else {
+        // Tool runs never follow the system locale: a pack only by an explicit `pack`, `game_text` or `language`.
+        if s.hermetic && s.game_text.is_none() && s.language.is_none() {
+            return None;
+        }
         let lang = game_text(s);
         if lang == "ja" {
             return None;

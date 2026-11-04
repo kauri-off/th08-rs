@@ -264,9 +264,12 @@ pub fn save(ctx: &mut crate::game::Ctx, slot: usize, name: &[u8; 8]) -> bool {
     let Some(bytes) = build_save(&mut ctx.w.game, name, &mut ctx.w.rng, now) else {
         return false;
     };
+    // Port: built (RNG draws included) but not written when the run keeps no saves (tools, cheats), as score.dat.
     let path = format!("replay/th8_{slot:02}.rpy");
-    ctx.host.write(&path, &bytes);
-    log::info!("replay saved to {path} ({} bytes)", bytes.len());
+    if ctx.w.game.persist {
+        ctx.host.write(&path, &bytes);
+        log::info!("replay saved to {path} ({} bytes)", bytes.len());
+    }
     true
 }
 

@@ -50,8 +50,9 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
         super.onCreate(savedInstanceState)
         schema = Schema.load(this)
         val cfg = PortCfg.read(cfgFile)
+        // Developer rows always start at their default: the game ignores them in port.cfg.
         rows = schema.entries.filter { it.android }.map { e ->
-            val saved = cfg[e.key]?.let { norm(e.kind, it) }?.takeIf { it.isNotEmpty() }
+            val saved = cfg[e.key]?.takeUnless { e.developer }?.let { norm(e.kind, it) }?.takeIf { it.isNotEmpty() }
             Setting(e, saved ?: e.default)
         }
         Thread { copyBundledPacks(); runOnUiThread { packCall("status") } }.start()

@@ -128,15 +128,37 @@ pub fn resolve_game_dir(s: &Settings) -> Result<Option<PathBuf>, String> {
     }
 }
 
-// Launcher screen: show the bundled folder in the `game_dir` row when none is configured; as a default-origin
-// value it is not written to port.cfg.
+// Launcher screen: show the bundled folder in the `game_dir` row unless the command line / env names one. A build
+// with bundled data never writes `game_dir`: a folder edited on screen applies to that run only.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn prefill_bundled_game_dir(s: &mut Settings) {
-    if let Choice::Bundled(d) = choose_game_dir(s, bundled_game_dir) {
+    prefill_bundled(s, bundled_game_dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prefill_bundled(s: &mut Settings, bundled: impl FnOnce() -> Option<PathBuf>) {
+    if let Choice::Bundled(d) = choose_game_dir(s, bundled) {
         log::info!("bundled game folder: {}", d.display());
-        s.set_from(Origin::Default, "game_dir", &d.to_string_lossy())
+        s.set_from(Origin::Bundled, "game_dir", &d.to_string_lossy())
             .expect("game_dir accepts any path");
     }
+}
+
+// "Cheats on: …; no saves" for the active Cheats rows (keys), None when there are none.
+pub fn cheats_note(lang: Lang, keys: &[&str]) -> Option<String> {
+    if keys.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = keys
+        .iter()
+        .filter_map(|k| settings::find(k))
+        .map(|e| i18n::label(lang, e))
+        .collect();
+    Some(i18n::ui_fmt(
+        lang,
+        "cheats_nosave",
+        &[("list", &names.join(", "))],
+    ))
 }
 
 // Folder dialog until a valid folder is picked (saved as port.cfg `game_dir`) or the dialog is cancelled.
@@ -322,6 +344,8 @@ pub struct Model {
     tr: Tr,
     // Developer view: Cheats and Tools rows and the origin tags are shown.
     pub dev: bool,
+    // The game folder row holds this build's bundled data: never saved to port.cfg.
+    bundled: bool,
     pub view: View,
 }
 
@@ -352,6 +376,7 @@ impl Model {
                 filter: String::new(),
             },
             dev,
+            bundled: s.origin("game_dir") == Origin::Bundled,
             view: View::Settings,
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -453,11 +478,11 @@ impl Model {
     }
 
     // port.cfg / localStorage changes: every `persist` row edited on screen, removed when back at its default; the
-    // other rows apply to this run only.
+    // other rows (and the game folder of a build with bundled data) apply to this run only.
     pub fn changes(&self) -> Vec<(&'static str, Option<String>)> {
         self.rows
             .iter()
-            .filter(|r| r.dirty && r.e.persist)
+            .filter(|r| r.dirty && r.e.persist && !(self.bundled && r.e.key == "game_dir"))
             .map(|r| {
                 let keep = !r.value.is_unset() && r.value != r.default_value();
                 (r.e.key, keep.then(|| r.value.text()))
@@ -472,6 +497,15 @@ impl Model {
                 changes.iter().map(|(k, v)| (*k, v.as_deref())).collect();
             settings::write_port_cfg(&self.dirs, &c);
         }
+    }
+
+    // Active Cheats rows as edited on screen (keys).
+    fn active_cheats(&self) -> Vec<&'static str> {
+        self.rows
+            .iter()
+            .filter(|r| r.e.group == Group::Cheats && r.value != r.default_value())
+            .map(|r| r.e.key)
+            .collect()
     }
 
     fn reset(&mut self) {
@@ -493,17 +527,18 @@ impl Model {
                 act
             }
             View::Waiting => {
-                message_ui(
-                    ui,
-                    i18n::ui(
-                        lang,
-                        if cfg!(target_os = "android") {
-                            "waiting_touch"
-                        } else {
-                            "waiting_shift"
-                        },
-                    ),
+                let wait = i18n::ui(
+                    lang,
+                    if cfg!(target_os = "android") {
+                        "waiting_touch"
+                    } else {
+                        "waiting_shift"
+                    },
                 );
+                match cheats_note(lang, &self.active_cheats()) {
+                    Some(note) => message_ui(ui, &format!("{wait}\n\n{note}")),
+                    None => message_ui(ui, wait),
+                }
                 None
             }
             View::Loading => {
@@ -575,6 +610,9 @@ impl Model {
                         );
                     }
                 }
+                if let Some(note) = cheats_note(lang, &self.active_cheats()) {
+                    ui.colored_label(ui.visuals().error_fg_color, note);
+                }
                 for g in Group::ALL {
                     self.group_ui(ui, g, lang);
                 }
@@ -637,6 +675,13 @@ impl Model {
                 origin_label(ui, self.row("game_dir"), lang);
             }
         });
+        if self.bundled {
+            ui.label(
+                egui::RichText::new(i18n::ui(lang, "bundled_note"))
+                    .small()
+                    .weak(),
+            );
+        }
         #[cfg(target_os = "android")]
         if !ok {
             let dir = self.game_dir();
@@ -1156,6 +1201,7 @@ fn origin_label(ui: &mut egui::Ui, r: &Row, lang: Lang) {
             Origin::Env => set_by(r.e.env),
             Origin::PortCfg if cfg!(target_arch = "wasm32") => i18n::ui(lang, "saved").into(),
             Origin::PortCfg => "port.cfg".into(),
+            Origin::Bundled => i18n::ui(lang, "bundled").into(),
             Origin::Default => return,
         }
     };
@@ -1582,6 +1628,9 @@ mod tests {
         let mut s = Settings::default();
         assert_eq!(choose_game_dir(&s, some), Choice::Bundled(bundled.clone()));
         assert_eq!(choose_game_dir(&s, || None), Choice::Ask);
+        s.set_from(Origin::Bundled, "game_dir", &bundled.to_string_lossy())
+            .unwrap();
+        assert_eq!(choose_game_dir(&s, some), Choice::Bundled(bundled.clone()));
         s.set_from(Origin::PortCfg, "game_dir", &user.to_string_lossy())
             .unwrap();
         assert_eq!(choose_game_dir(&s, some), Choice::Bundled(bundled.clone()));
@@ -1613,5 +1662,65 @@ mod tests {
             .unwrap();
         assert_eq!(choose_game_dir(&s, some), Choice::Configured(user));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // A build with bundled data shows its folder as bundled and runs an edited folder without saving it; a build
+    // without bundled data saves the folder as before.
+    #[test]
+    fn bundled_game_dir_not_saved() {
+        let root = std::env::temp_dir().join(format!("th08-bundled-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let user = game_dir(&root, "user");
+        let bundled = game_dir(&root, "bundled");
+        let user_text = user.to_string_lossy().into_owned();
+
+        let mut s = Settings::default();
+        s.set_from(
+            Origin::PortCfg,
+            "game_dir",
+            &root.join("old").to_string_lossy(),
+        )
+        .unwrap();
+        prefill_bundled(&mut s, || Some(bundled.clone()));
+        assert_eq!(s.origin("game_dir"), Origin::Bundled);
+        assert_eq!(s.game_dir.as_deref(), Some(bundled.as_path()));
+        let mut m = Model::new(&s, Folder::Native);
+        assert!(m.bundled && m.changes().is_empty());
+        edit(&mut m, "game_dir", &user_text);
+        edit(&mut m, "scale", "2");
+        assert_eq!(m.changes(), some(&[("scale", "2")]));
+        let run = m.settings();
+        assert_eq!(run.origin("game_dir"), Origin::Launcher);
+        assert_eq!(
+            choose_game_dir(&run, || Some(bundled.clone())),
+            Choice::Configured(user.clone())
+        );
+
+        let s = Settings::default();
+        let mut s2 = s.clone();
+        prefill_bundled(&mut s2, || None);
+        assert_eq!(s2.origin("game_dir"), Origin::Default);
+        let mut m = Model::new(&s, Folder::Native);
+        assert!(!m.bundled);
+        edit(&mut m, "game_dir", &user_text);
+        assert_eq!(m.changes(), some(&[("game_dir", &user_text)]));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // The cheat note follows the Cheats rows as edited, in every view that can start the game.
+    #[test]
+    fn cheats_note_rows() {
+        let mut m = Model::new(&Settings::default(), Folder::Native);
+        assert!(m.active_cheats().is_empty());
+        assert_eq!(cheats_note(Lang::En, &[]), None);
+        edit(&mut m, "invuln", "on");
+        edit(&mut m, "enemy_dmg", "0");
+        edit(&mut m, "turbo", "2");
+        assert_eq!(m.active_cheats(), ["invuln"]);
+        assert_eq!(
+            cheats_note(Lang::En, &m.active_cheats()).as_deref(),
+            Some("Cheats on: Invulnerable. Scores and replays are not saved.")
+        );
+        assert_eq!(m.settings().active_cheats(), ["invuln"]);
     }
 }

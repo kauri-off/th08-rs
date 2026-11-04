@@ -1,4 +1,4 @@
-//! Tests and tools ignore the user's port.cfg; only the game entry points read it (port infrastructure).
+//! Tests and tools ignore the user's port.cfg and save dir; only the game entry points read them.
 #![cfg(not(target_arch = "wasm32"))]
 
 use th08::settings::{self, Origin, Settings};
@@ -19,13 +19,12 @@ fn tools_ignore_port_cfg() {
     assert_eq!(dirs.save, Some(home.join("th08")));
 
     let game = Settings::game_environment(dirs.clone());
-    assert!(game.invuln && game.scale == 3);
-    assert_eq!(game.origin("invuln"), Origin::PortCfg);
-    assert!(
-        Settings::game_from_args(dirs.clone(), ["--stage".into(), "1".into()])
-            .unwrap()
-            .invuln
-    );
+    assert!(!game.invuln && game.scale == 3);
+    assert_eq!(game.origin("scale"), Origin::PortCfg);
+    let play = Settings::game_from_args(dirs.clone(), ["--stage".into(), "1".into()]).unwrap();
+    assert!(play.scale == 3 && !play.hermetic);
+    let shot = Settings::game_from_args(dirs.clone(), ["--shot".into(), "9".into()]).unwrap();
+    assert!(shot.scale == 1 && shot.hermetic && shot.storage_dir().is_none());
 
     for s in [
         Settings::from_environment(dirs.clone()),
@@ -34,6 +33,9 @@ fn tools_ignore_port_cfg() {
     ] {
         assert!(!s.invuln && s.scale == Settings::default().scale);
         assert_eq!(s.origin("invuln"), Origin::Default);
+        assert!(s.hermetic);
     }
+    assert_eq!(settings::get().dirs.config, None);
+    assert_eq!(settings::get().storage_dir(), None);
     let _ = std::fs::remove_dir_all(&home);
 }

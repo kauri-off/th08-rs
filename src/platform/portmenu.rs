@@ -23,6 +23,8 @@ pub struct PortMenu {
     generation: Option<u32>,
     // The active gamepad's name for the controller row (set by the app before each redraw).
     pub controller: Option<String>,
+    // Active Cheats rows (`Settings::active_cheats`), shown as a no-saves note.
+    pub cheats: Vec<&'static str>,
     // The live overlay settings (None: no overlay, no layout editor), the open editor, a saved layout not yet taken.
     touch: Option<TouchConfig>,
     edit: Option<TouchEdit>,
@@ -66,6 +68,7 @@ impl PortMenu {
             lang,
             generation: None,
             controller: None,
+            cheats: Vec::new(),
             touch,
             edit: None,
             saved: None,
@@ -112,6 +115,7 @@ impl PortMenu {
             e.set_window((w, h), window.scale_factor(), s);
         }
         let pad = self.controller.as_deref();
+        let cheats = &self.cheats;
         let (edit, touch) = (&mut self.edit, self.touch.is_some());
         let mut open_edit = false;
         let mut done = None;
@@ -119,7 +123,7 @@ impl PortMenu {
             if let Some(e) = edit {
                 done = e.ui(ctx, lang, ppp);
             } else {
-                (act, open_edit) = menu_ui(ctx, lang, pad, touch);
+                (act, open_edit) = menu_ui(ctx, lang, pad, touch, cheats);
             }
         });
         match done {
@@ -173,6 +177,7 @@ fn menu_ui(
     lang: Lang,
     pad: Option<&str>,
     touch: bool,
+    cheats: &[&str],
 ) -> (Option<Action>, bool) {
     let mut act = None;
     let mut edit = false;
@@ -189,6 +194,10 @@ fn menu_ui(
                         ui.heading(i18n::ui(lang, "port_menu"));
                         ui.add_space(4.0);
                         ui.label(RichText::new(i18n::ui(lang, "paused")).weak());
+                        if let Some(note) = launcher::cheats_note(lang, cheats) {
+                            ui.add_space(4.0);
+                            ui.colored_label(ui.visuals().error_fg_color, note);
+                        }
                         ui.add_space(12.0);
                         let resume = format!("  {}  ", i18n::ui(lang, "resume"));
                         if ui.button(RichText::new(resume).strong()).clicked() {

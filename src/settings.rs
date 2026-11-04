@@ -10,6 +10,8 @@ pub use th08_core::coreconfig::Ending;
 pub enum Origin {
     #[default]
     Default,
+    // The game data bundled with this build (launcher prefill); never written to port.cfg.
+    Bundled,
     PortCfg,
     Env,
     Cli,
@@ -253,6 +255,16 @@ impl PlatformDirs {
     pub fn port_cfg(&self) -> Option<PathBuf> {
         Some(self.config.as_ref()?.join("port.cfg"))
     }
+
+    // Tool and test runs: no config dir (no port.cfg, no downloaded packs) and no save dir unless `save_dir` is set.
+    #[must_use]
+    pub fn tool(self) -> Self {
+        Self {
+            config: None,
+            save: None,
+            soundfonts: self.soundfonts,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -264,6 +276,8 @@ pub struct Settings {
     // Effective value text and origin of every entry set from a source (defaults included).
     values: std::collections::BTreeMap<&'static str, (String, Origin)>,
     pub dirs: PlatformDirs,
+    // Tool or test run: defaults plus explicit env / CLI only, saves only in an explicit `save_dir`.
+    pub hermetic: bool,
     pub game_dir: Option<PathBuf>,
     // Window client size 640×480 × scale (1–4); native only.
     pub scale: u32,
@@ -347,6 +361,7 @@ impl Settings {
         Self {
             values: std::collections::BTreeMap::default(),
             dirs: PlatformDirs::default(),
+            hermetic: false,
             game_dir: None,
             scale: 1,
             fullscreen: false,
@@ -406,10 +421,12 @@ impl Settings {
     }
 }
 
+// Empty means off: a cleared env var (`TH08_INVULN=`) or URL param never turns a switch on. `--switch` alone is
+// clap's "on".
 pub fn parse_bool(v: &str) -> Result<bool, String> {
     match v.trim().to_ascii_lowercase().as_str() {
-        "" | "1" | "true" | "on" | "yes" => Ok(true),
-        "0" | "false" | "off" | "no" => Ok(false),
+        "1" | "true" | "on" | "yes" => Ok(true),
+        "" | "0" | "false" | "off" | "no" => Ok(false),
         _ => Err("expected 1/0, true/false or on/off".into()),
     }
 }
@@ -1870,12 +1887,13 @@ pub fn find(name: &str) -> Option<&'static Entry> {
 }
 
 impl Settings {
-    // One value from `origin`; a bad value is logged and the previous one kept. Empty = unset, except booleans (on).
+    // One value from `origin`; a bad value is logged and the previous one kept. Empty = unset, except booleans (off).
     fn apply(&mut self, origin: Origin, name: &str, sw: &Entry, v: &str) {
-        let v = v.trim();
-        if v.is_empty() && !sw.is_bool() {
-            return;
-        }
+        let v = match v.trim() {
+            "" if sw.is_bool() => "off",
+            "" => return,
+            v => v,
+        };
         match sw.parse_into(self, v) {
             Ok(()) => {
                 self.values.insert(sw.key, (v.to_string(), origin));
@@ -1911,13 +1929,19 @@ impl Settings {
         Self::from_args_over(Self::from_environment(dirs), args)
     }
 
-    // The `th08` game binary: as `from_args`, with port.cfg under env and command line.
+    // The `th08` game binary: as `from_args`, with port.cfg under env and command line. A tool run (`is_tool_run`)
+    // is parsed again without port.cfg and with the tool dirs, as the headless tools are.
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     pub fn game_from_args(
         dirs: PlatformDirs,
         args: impl IntoIterator<Item = String>,
     ) -> Result<Self, clap::Error> {
-        Self::from_args_over(Self::game_environment(dirs), args)
+        let args: Vec<String> = args.into_iter().collect();
+        let s = Self::from_args_over(Self::game_environment(dirs.clone()), args.clone())?;
+        if !s.is_tool_run() {
+            return Ok(s);
+        }
+        Self::from_args_over(Self::from_environment(dirs.tool()), args)
     }
 
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -2005,10 +2029,15 @@ impl Settings {
     // next to the binary).
     pub fn storage(&self) -> crate::platform::Storage {
         #[cfg(not(target_arch = "wasm32"))]
-        let dir = self.save_dir.clone().or_else(|| self.dirs.save.clone());
+        let dir = self.storage_dir();
         #[cfg(target_arch = "wasm32")]
         let dir = None;
         crate::platform::Storage::new(dir)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn storage_dir(&self) -> Option<PathBuf> {
+        self.save_dir.clone().or_else(|| self.dirs.save.clone())
     }
 
     // The game window's host: winit keyboard, gilrs joystick, the save storage.
@@ -2082,9 +2111,31 @@ impl Settings {
     pub fn from_environment(dirs: PlatformDirs) -> Self {
         Self {
             dirs,
+            hermetic: true,
             ..Self::default()
         }
         .with_env()
+    }
+
+    // Whether the game loads and writes the save files (score.dat, th08.cfg, replays): a tool run only with an
+    // explicit `save_dir`.
+    pub fn uses_saves(&self) -> bool {
+        !self.hermetic || self.save_dir.is_some()
+    }
+
+    // Cheats rows not at their default (keys); any one keeps score.dat and replays from being written.
+    pub fn active_cheats(&self) -> Vec<&'static str> {
+        [
+            ("invuln", self.invuln),
+            ("unlock", self.unlock),
+            ("enemy_dmg", self.enemy_dmg != 0),
+            ("bomb", self.bomb.is_some()),
+            ("clrd", self.clrd.is_some()),
+            ("screen_fx", self.screen_fx.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(k, on)| on.then_some(k))
+        .collect()
     }
 
     // The game (native binary, web build): defaults < port.cfg (web: localStorage) < env vars / URL params.
@@ -2115,6 +2166,14 @@ impl Settings {
                 self.apply(Origin::Env, sw.env, sw, &v);
             }
         }
+        let cheats = self.active_cheats();
+        if cheats.iter().any(|k| self.origin(k) == Origin::Env) {
+            log::warn!(
+                "{} cheats on: {}",
+                origin_name(Origin::Env),
+                cheats.join(", ")
+            );
+        }
         self
     }
 }
@@ -2122,6 +2181,7 @@ impl Settings {
 fn origin_name(o: Origin) -> &'static str {
     match o {
         Origin::Default => "default",
+        Origin::Bundled => "bundled:",
         Origin::PortCfg => "port.cfg:",
         Origin::Env if cfg!(target_arch = "wasm32") => "URL:",
         Origin::Env => "env:",
@@ -2286,13 +2346,13 @@ pub fn init(s: Settings) {
 }
 
 // The settings (defaults + env / URL, never port.cfg, if the entry point did not call `init`). Tools and tests
-// without an `init` get the desktop dirs, as the game binary does.
+// without an `init` get the tool dirs: no config dir, saves only in an explicit `save_dir`.
 pub fn get() -> &'static Settings {
     if let Some(s) = *SETTINGS.read().unwrap() {
         return s;
     }
     let mut w = SETTINGS.write().unwrap();
-    w.get_or_insert_with(|| Box::leak(Box::new(Settings::from_environment(default_dirs()))))
+    w.get_or_insert_with(|| Box::leak(Box::new(Settings::from_environment(default_dirs().tool()))))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2514,9 +2574,94 @@ mod tests {
         assert_eq!(s.anm_int, vec![(10, 2), (20, 3)]);
         set(&mut s, "turbo", "x");
         assert_eq!(s.turbo, 0);
+        set(&mut s, "se_log", "on");
         set(&mut s, "se_log", "");
-        assert!(s.se_log);
+        assert!(!s.se_log);
+        assert_eq!(s.value("se_log"), Some("off"));
         assert!(find("stage-frame").is_some() && find("dir").is_some());
+    }
+
+    // Only explicit truthy text turns a switch on; empty and the off words are off.
+    #[test]
+    fn bool_values() {
+        for v in ["1", "true", "On", " yes "] {
+            assert_eq!(parse_bool(v), Ok(true), "{v:?}");
+        }
+        for v in ["", " ", "0", "false", "OFF", "no"] {
+            assert_eq!(parse_bool(v), Ok(false), "{v:?}");
+        }
+        assert!(parse_bool("2").is_err() && parse_bool("enabled").is_err());
+        for e in ENTRIES.iter().filter(|e| e.is_bool()) {
+            let mut s = Settings::default();
+            s.apply(Origin::Env, e.env, e, "on");
+            s.apply(Origin::Env, e.env, e, "");
+            assert_eq!(s.value(e.key), Some("off"), "{}", e.key);
+            assert_eq!(s.origin(e.key), Origin::Env);
+        }
+        let s = args(&["--invuln", "--unlock="]);
+        assert!(s.invuln && !s.unlock);
+    }
+
+    // `active_cheats` covers exactly the Cheats rows, each only when off its default.
+    #[test]
+    fn cheat_rows() {
+        let mut s = Settings::default();
+        assert!(s.active_cheats().is_empty() && s.uses_saves());
+        let cheats: Vec<&str> = ENTRIES
+            .iter()
+            .filter(|e| e.group == Group::Cheats)
+            .map(|e| e.key)
+            .collect();
+        let on = [
+            ("invuln", "1"),
+            ("unlock", "on"),
+            ("enemy_dmg", "5"),
+            ("bomb", "4"),
+            ("clrd", "3,0x8000"),
+            ("screen_fx", "1:2,0,0,0,0"),
+        ];
+        assert_eq!(on.map(|c| c.0).to_vec(), cheats);
+        for (k, v) in on {
+            let mut one = Settings::default();
+            one.set_from(Origin::Env, k, v).unwrap();
+            assert_eq!(one.active_cheats(), [k]);
+            s.set_from(Origin::Cli, k, v).unwrap();
+        }
+        assert_eq!(s.active_cheats(), cheats);
+        s.set_from(Origin::Cli, "invuln", "").unwrap();
+        s.set_from(Origin::Cli, "enemy_dmg", "0").unwrap();
+        assert!(
+            !s.active_cheats().contains(&"invuln") && !s.active_cheats().contains(&"enemy_dmg")
+        );
+    }
+
+    // A tool run of the game binary reads no port.cfg and has no config or save dir unless `save_dir` is given.
+    #[test]
+    fn tool_runs_are_hermetic() {
+        let root = std::env::temp_dir().join(format!("th08-hermetic-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("port.cfg"), "scale = 3\nlanguage = ru\n").unwrap();
+        let dirs = PlatformDirs {
+            config: Some(root.clone()),
+            save: Some(root.clone()),
+            soundfonts: vec![root.join("sf")],
+        };
+        let game = |a: &[&str]| {
+            Settings::game_from_args(dirs.clone(), a.iter().map(ToString::to_string)).unwrap()
+        };
+        let play = game(&["--stage", "1"]);
+        assert!(!play.hermetic && play.uses_saves() && play.scale == 3);
+        assert_eq!(play.storage_dir(), Some(root.clone()));
+        let tool = game(&["--shot", "100", "--input", "x.txt"]);
+        assert!(tool.hermetic && !tool.uses_saves());
+        assert_eq!((tool.scale, tool.origin("scale")), (1, Origin::Default));
+        assert_eq!((tool.dirs.config.clone(), tool.storage_dir()), (None, None));
+        assert_eq!(tool.dirs.soundfonts, [root.join("sf")]);
+        let saves = game(&["--shot", "100", "--save-dir", "/tmp/s"]);
+        assert!(saves.uses_saves());
+        assert_eq!(saves.storage_dir(), Some(PathBuf::from("/tmp/s")));
+        assert_eq!(dirs.clone().tool().port_cfg(), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

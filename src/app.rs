@@ -133,7 +133,15 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         drawlog,
         overlay,
     };
-    let ctx = Ctx::load(source, io, s.core()).await?;
+    let mut ctx = Ctx::load_with(source, io, s.core(), s.uses_saves()).await?;
+    let cheats = s.active_cheats();
+    if !cheats.is_empty() {
+        log::warn!(
+            "cheats on ({}): score.dat and replays are not saved",
+            cheats.join(", ")
+        );
+        ctx.w.game.persist = false;
+    }
     Ok(Box::new(Running {
         ctx,
         pacer: Pacer::new(s.turbo),
@@ -693,12 +701,13 @@ impl App {
                 .host_as::<crate::platform::AppHost>()
                 .map_or_else(|| r.settings.touch.clone(), |h| h.input.touch.cfg.clone())
         });
-        let menu = crate::platform::portmenu::PortMenu::new(
+        let mut menu = crate::platform::portmenu::PortMenu::new(
             self.window(),
             lang,
             r.settings.font.as_deref(),
             touch,
         );
+        menu.cheats = r.settings.active_cheats();
         self.shell = Shell::PortMenu(r, Box::new(menu));
         self.sync_audio();
         self.window().request_redraw();

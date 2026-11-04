@@ -5,7 +5,7 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!(
-            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B] [--config=DIR] [--tr-install=CODE] [--tr-list] [th08 switches]..."
+            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [th08 switches]..."
         );
         std::process::exit(2);
     }
@@ -60,6 +60,11 @@ fn main() {
         .find_map(|a| a.strip_prefix("--tr-install="))
         .map(String::from);
     let list = args.iter().any(|a| a == "--tr-list");
+    // A build with bundled game data: DIR as its bundled folder.
+    let bundled = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--bundled="))
+        .map(String::from);
     args.retain(|a| {
         a != "--developer"
             && a != "--tr-list"
@@ -68,16 +73,21 @@ fn main() {
             && !a.starts_with("--safe=")
             && !a.starts_with("--config=")
             && !a.starts_with("--tr-install=")
+            && !a.starts_with("--bundled=")
     });
-    let mut dirs = th08::launcher::desktop_dirs();
+    let mut dirs = th08::launcher::desktop_dirs().tool();
     if let Some(c) = config {
         dirs.config = Some(c.clone());
         dirs.save = Some(c);
     }
-    let s = match th08::settings::Settings::from_args(dirs, args) {
+    let mut s = match th08::settings::Settings::from_args(dirs, args) {
         Ok(s) => s,
         Err(e) => e.exit(),
     };
+    if let Some(d) = bundled {
+        s.set_from(th08::settings::Origin::Bundled, "game_dir", &d)
+            .expect("game_dir accepts any path");
+    }
     let gfx = pollster::block_on(th08_render::gfx::Gfx::headless()).expect("GPU adapter");
     let mut model = th08::launcher::Model::new(&s, th08::launcher::Folder::Native);
     if let Some(t) = model.translations() {

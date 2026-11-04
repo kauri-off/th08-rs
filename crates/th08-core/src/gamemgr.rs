@@ -217,6 +217,7 @@ pub struct Game {
     pub clear_nc: [[u16; 5]; 13],
     pub clear_any: [[u16; 5]; 13],
     pub score: crate::scoredat::ScoreDat,
+    // Port: write score.dat, th08.cfg, score.txt and replays; off for tool runs and cheats.
     pub persist: bool,
     catk_backup: Option<Vec<crate::scoredat::Catk>>,
     // Supervisor_UpdateRunTime / UpdatePlayTime marks (15 §2.9), in `Host::ticks_ms`.
