@@ -6,7 +6,8 @@
 # llvmpipe threads per game: LP_NUM_THREADS (default 2; trace unaffected, best fps per core).
 set -u
 TOOLS=$(cd "$(dirname "$0")" && pwd)
-E=/home/anon/Projects/th08_ext_replays
+source "$(dirname "$0")/localenv.sh"
+E=$TH08_EXT_REPLAYS
 sel="" root="" jobs=4 dl="" log=""
 while (( $# )); do
   case $1 in

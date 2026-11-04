@@ -386,7 +386,7 @@ lewton, cut / zero-padded to `t.length` (thbgm.fmt `loop_end`). The loop points 
 ffmpeg jobs: 12.6–18 s for all 21 tracks, including the checks.
 
 **Sizes.** thbgm.dat 449 961 024 B → **thbgm.pak 44 469 772 B (10.1×)**, personal output
-`/home/anon/Projects/th_08/target/pack/thbgm.pak`.
+`target/pack/thbgm.pak`.
 
 **Loop metrics (repack self-check, all 21 tracks).** Decoded length = loop_end + 44100..44224 (the pad plus no
 end-trim, as in §2.1), cut to loop_end. **Lag 0 on all 21.** Global SNR 14.90–21.42 dB. Seam SNR 14.61–26.34 dB.
@@ -441,7 +441,7 @@ play / release). Raw thbgm.dat reads the first ring by range, then 1 MiB ranges.
 and stop/unpause logic are unchanged (ring tests pass on `Pcm`). New unit tests: `pcm_writer_blocks_cut_and_pad`,
 `pcm_writer_stops`. repack's read-back (all 21 tracks through `BgmSource::read` → `stream`) = checked decode.
 
-**Sizes (personal, `/home/anon/Projects/th_08/target/dist/`).**
+**Sizes (personal, `target/dist/`).**
 
 | package | bytes | raw-assets build |
 |---|---|---|

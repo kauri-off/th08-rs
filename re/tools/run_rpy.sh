@@ -15,7 +15,8 @@ PROBE=$REPO/re/probe
 SLOTS=$REPO/re/work/runs/rpy
 WINE=${TH08_WINE:-wine}
 CFG=$REPO/sessions/golden/start/th08.cfg
-SCORE=/home/anon/Projects/th08_ext_replays/score_full_unlock/score.dat
+source "$(dirname "$0")/localenv.sh"
+SCORE=$TH08_EXT_REPLAYS/score_full_unlock/score.dat
 
 drawlog=0 tmo="" rpy="" out="" srclabel="" fast=1
 while (( $# )); do

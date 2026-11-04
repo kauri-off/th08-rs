@@ -2,7 +2,8 @@
 """Parse thbgm.fmt and verify against thbgm.dat. Usage: thbgm.py [fmt] [bgm] [--wav outdir]"""
 import os, struct, sys
 
-GAME = "/home/anon/Games/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/"
+import localenv
+GAME = localenv.game()
 REC = 0x34
 
 
