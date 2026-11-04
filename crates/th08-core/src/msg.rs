@@ -257,7 +257,7 @@ impl Dialogue {
         self.active() && self.release_counter == 0
     }
 
-    // Msg_Start; the caller performs the playfield side effects (10 §4.6) when `side_effects` is set.
+    // Msg_Start; the caller performs the playfield side effects (10 §4 step 6) when `side_effects` is set.
     pub fn start(&mut self, n: i32) {
         let Some(file) = self.file.take() else { return };
         let (info, face_slot, events, texts) = (
