@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""usage: flock target/.agents.lock tools/lint_subset [-l] [PATH_PREFIX ...] — STEP11 §0 lint-subset counts.
+"""usage: tools/lint_subset [-l] [PATH_PREFIX ...] — counts of the [workspace.lints.clippy] subset per file.
 
 Runs `cargo clippy --workspace --all-targets` (the subset is the [workspace.lints.clippy] table in Cargo.toml) and
 prints warnings per file (deduplicated by file:line:col:lint), most first, then the total. PATH_PREFIX limits the

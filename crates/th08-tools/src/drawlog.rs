@@ -1402,8 +1402,8 @@ impl Report {
         }
         let _ = writeln!(
             s,
-            "reference truncated (FORMAT.md §3): {} frames with a 682-quad cut, {} port quads beyond the cut\n\
-             accepted (PARITY_POLICY, side-panel repaint, RE-Q32 CODE BUG 1): {} port quads in {} frames\n\
+            "reference truncated: {} frames with a 682-quad cut, {} port quads beyond the cut\n\
+             accepted (side-panel repaint): {} port quads in {} frames\n\
              extra incl. truncated + accepted: {}",
             self.cut_frames,
             t.truncated,

@@ -1,21 +1,23 @@
 #!/usr/bin/env -S python3 -I
 """usage: tools/q  (one-line summary)
-       tools/q submit [--kind check|test|emu|full|batch] [--prio high|normal] [--label TEXT] [-C DIR] -- CMD…  (prints ID)
-       tools/q wait ID [--max SECONDS] [--tail N] | ls | stats [--since 24h] [--id ID] | cancel ID | selftest
-       tools/q legacy [-w SECS] -- CMD…  (= tools/qlock: exclusive .agents.lock, wait/run logged as kind=legacy)
-Job queue for heavy checks: each job is a systemd user unit that waits for capacity (weighted semaphore, 4 units:
-check 2, test 1, emu 1 + the emulator token, full 4, batch 2 (external-replay batches); prio high first, strict FIFO behind the head), holds
-.agents.lock SHARED while it runs, logs to QDIR/log.jsonl. wait exits with the job's code, or 75 = not done yet.
-Env: QDIR (default /home/anon/Projects/th_08/target/queue), QLOCK (default …/target/.agents.lock), QPOLL (s)."""
-import fcntl, json, os, random, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time
+       tools/q submit [--kind check|test|emu|full|batch|long] [--prio high|normal] [--label TEXT] [-C DIR]
+                [--progress 'GLOB|N']… -- CMD…  (prints ID)
+       tools/q wait ID [--max SECONDS] [--tail N] | ls | top [--once] | stats [--since 24h] [--id ID] | cancel ID | selftest
+       tools/q legacy [-w SECS] -- CMD…  (exclusive QLOCK, wait/run logged as kind=legacy)
+Job queue for heavy runs: each job is a systemd user unit that waits for capacity (weighted semaphore, 4 units:
+check 2, test 1, emu 1 + the emulator token, full 4, batch 2 (replay batches), long 2 (dirty-room wine / full-set
+runs); prio high first, strict FIFO behind the head), holds QLOCK SHARED while it runs, logs to QDIR/log.jsonl. wait exits with the job's code, or 75 = not done yet.
+Env: QDIR (default <repo>/target/queue), QLOCK (default QDIR/compat.lock), QPOLL (s)."""
+import glob as globmod, fcntl, json, os, random, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time
 
-MAIN = "/home/anon/Projects/th_08"
+_me = os.path.realpath(__file__)
+MAIN = _me[:_me.find("/target/queue/")] if "/target/queue/" in _me else os.path.dirname(os.path.dirname(_me))
 QDIR = os.path.realpath(os.environ.get("QDIR") or f"{MAIN}/target/queue")
-QLOCK = os.path.realpath(os.environ.get("QLOCK") or f"{MAIN}/target/.agents.lock")
+QLOCK = os.path.realpath(os.environ.get("QLOCK") or f"{QDIR}/compat.lock")
 ARCH_TIMES = f"{MAIN}/target/arch_ref/times.txt"
 POLL = float(os.environ.get("QPOLL", "2"))
 CAP = 4
-WEIGHT = {"check": 2, "test": 1, "emu": 1, "full": 4, "batch": 2}
+WEIGHT = {"check": 2, "test": 1, "emu": 1, "full": 4, "batch": 2, "long": 2}
 WAIT_MAX = 540  # one Bash tool call never reaches the 600 s limit
 EXIT_PENDING = 75  # EX_TEMPFAIL: job not finished, call `q wait` again
 EXIT_CANCELLED = 125
@@ -123,7 +125,7 @@ def est_run(kind, hist):
             j = max(2, 16 * WEIGHT[kind] // CAP)
             return 150 + tot * (1.6 if kind == "full" else 1.4) / j  # fmt/build/wasm/android/test + items (+ emit-off)
         except (OSError, ValueError): pass
-    return {"test": 120, "emu": 300, "batch": 1200}.get(kind, 600)
+    return {"test": 120, "emu": 300, "batch": 1200, "long": 3600}.get(kind, 600)
 
 
 def simulate(s, hist):
@@ -156,12 +158,13 @@ def summary(s=None):
 # ---- commands --------------------------------------------------------------------------------------------------
 
 def cmd_submit(a):
-    kind, prio, label, cwd = "check", "normal", "", os.getcwd()
+    kind, prio, label, cwd, prog = "check", "normal", "", os.getcwd(), []
     while a and a[0] != "--":
         o = a.pop(0)
-        if o in ("--kind", "--prio", "--label", "-C") and a: v = a.pop(0)
+        if o in ("--kind", "--prio", "--label", "-C", "--progress") and a: v = a.pop(0)
         else: die(f"submit: unknown option {o}")
-        if o == "--kind": kind = v
+        if o == "--progress": prog.append(v)
+        elif o == "--kind": kind = v
         elif o == "--prio": prio = v
         elif o == "--label": label = v
         else: cwd = os.path.realpath(v)
@@ -174,7 +177,7 @@ def cmd_submit(a):
     d = jdir(i)
     os.makedirs(d)
     job = {"id": i, "cmd": a, "cwd": cwd, "label": label, "kind": kind, "prio": prio, "weight": WEIGHT[kind],
-           "submit": now(), "worktree": worktree(cwd), "unit": f"{PREFIX}-{i}"}
+           "submit": now(), "worktree": worktree(cwd), "unit": f"{PREFIX}-{i}", "progress": prog}
     wjson(f"{d}/job.json", job)
     wjson(f"{d}/env.json", env)
     wjson(f"{d}/status.json", {"state": "queued", "submit": job["submit"]})
@@ -183,7 +186,7 @@ def cmd_submit(a):
         s["seq"] += 1
         s["jobs"][i] = {"state": "queued", "kind": kind, "prio": prio, "weight": WEIGHT[kind], "seq": s["seq"],
                         "submit": job["submit"], "label": label, "cwd": cwd, "pid": None}
-    cpu = os.cpu_count() * 75  # like thjob: 75 % of the machine + nice 10
+    cpu = os.cpu_count() * 75  # 75 % of the machine + nice 10
     r = subprocess.run(["systemd-run", "--user", "-q", "--collect", "--unit", job["unit"], f"--working-directory={QDIR}",
                         "--description", f"th08 queue {kind} {label}", "-p", "Nice=10", "-p", f"CPUQuota={cpu}%",
                         "-E", f"QDIR={QDIR}", "-E", f"QLOCK={QLOCK}", "-E", f"QPOLL={POLL}",
@@ -347,7 +350,15 @@ def cmd_wait(a):
 
 
 def progress(job, st):
-    """arch_check jobs: items finished so far (RUN_OUT digests newer than the job's start)."""
+    """Files matching the job's --progress 'GLOB|N' specs (relative to its cwd, newer than its start); else arch_check items."""
+    if job.get("progress") and st.get("start"):
+        done = total = 0
+        for spec in job["progress"]:
+            g, _, n = spec.partition("|")
+            try: done += sum(1 for f in globmod.glob(os.path.join(job["cwd"], g)) if os.path.getmtime(f) >= st["start"])
+            except OSError: pass
+            total += int(n) if n.isdigit() else 0
+        return f", {done}/{total}" if total else f", {done} done"
     if job["kind"] not in ("check", "full"): return ""
     env = rjson(f"{jdir(job['id'])}/env.json", {})
     out = env.get("RUN_OUT") or f"{env.get('CARGO_TARGET_DIR') or job['cwd'] + '/target'}/arch_run"
@@ -381,10 +392,31 @@ def cmd_ls(a):
             ran = now() - e["start"]; waited = e["start"] - e["submit"]
             st = rjson(f"{jdir(i)}/status.json", {})
             et = "lock wait" if st.get("lock") == "waiting" else f"~{max(0, est_run(e['kind'], hist) - ran):.0f}s left"
-            print(f"{i:22} {'running':8} {e['kind']:5} {e['prio']:6} {worktree(e['cwd'])[:14]:14} {e['label'][:20]:20} {waited:6.0f}s {ran:6.0f}s {et:>12}")
+            pg = progress(rjson(f"{jdir(i)}/job.json", {"kind": e["kind"], "cwd": e["cwd"], "id": i}), st).lstrip(", ")
+            print(f"{i:22} {'running':8} {e['kind']:5} {e['prio']:6} {worktree(e['cwd'])[:14]:14} {e['label'][:20]:20} {waited:6.0f}s {ran:6.0f}s {et:>12}  {pg}")
         else:
             print(f"{i:22} {'queued':8} {e['kind']:5} {e['prio']:6} {worktree(e['cwd'])[:14]:14} {e['label'][:20]:20} {now() - e['submit']:6.0f}s {'-':>7} {'start ~' + str(int(max(0, est.get(i, now()) - now()))) + 's':>12}")
     print(summ)
+
+
+def cmd_top(a):
+    """Live view: queue, progress, output tails of running jobs, machine load; Ctrl-C quits (--once: one frame)."""
+    once = "--once" in a
+    while True:
+        frame = subprocess.run([sys.executable, "-I", os.path.realpath(__file__), "ls"], capture_output=True, text=True).stdout
+        with Locked() as s: run = [i for i, e in s["jobs"].items() if e["state"] == "running"]
+        for i in run:
+            try:
+                with open(f"{jdir(i)}/out.log", errors="replace") as f: tail = f.readlines()[-3:]
+            except OSError: tail = []
+            frame += f"\n── {i}\n" + "".join("   " + l[:150].rstrip() + "\n" for l in tail)
+        la = open("/proc/loadavg").read().split()[:3]
+        mem = next((int(l.split()[1]) // 1024 for l in open("/proc/meminfo") if l.startswith("MemAvailable")), 0)
+        frame += f"\nload {' '.join(la)} / {os.cpu_count()} threads, {mem} MB available  ({time.strftime('%H:%M:%S')})\n"
+        sys.stdout.write(("" if once else "\x1b[H\x1b[2J") + frame); sys.stdout.flush()
+        if once: return
+        try: time.sleep(2)
+        except KeyboardInterrupt: return
 
 
 def parse_dur(v):
@@ -408,7 +440,7 @@ def cmd_stats(a):
         print(job_line(jid, st, job)); return
     print(f"q stats since {time.strftime('%Y-%m-%d %H:%M', time.localtime(t0))} ({len(hist)} jobs; times in s)")
     print(f"{'kind':7} {'n':>4} {'ok':>4} {'wait p50':>8} {'p90':>6} {'max':>6} {'run p50':>8} {'p90':>6} {'>540s':>6} {'load p50':>8}")
-    for k in ["check", "test", "emu", "full", "batch", "legacy"]:
+    for k in ["check", "test", "emu", "full", "batch", "long", "legacy"]:
         h = [x for x in hist if x.get("kind") == k]
         if not h: continue
         w = [x["wait"] for x in h if x.get("wait") is not None]
@@ -432,11 +464,11 @@ def cmd_stats(a):
 
 
 def cmd_legacy(a):
-    """qlock: the old exclusive flock of .agents.lock, wait and run logged (kind=legacy)."""
+    """q legacy: an exclusive hold of QLOCK, wait and run logged (kind=legacy)."""
     w = None
     if a[:1] == ["-w"] and len(a) > 1: w = float(a[1]); a = a[2:]
     a = a[1:] if a[:1] == ["--"] else a
-    if not a: die("usage: tools/qlock [-w SECS] CMD…", 2)
+    if not a: die("usage: tools/q legacy [-w SECS] -- CMD…", 2)
     os.makedirs(os.path.dirname(QLOCK), exist_ok=True)
     lk = open(QLOCK, "a"); t0 = now()
     while True:
@@ -446,7 +478,7 @@ def cmd_legacy(a):
                 append_log({"id": f"legacy-{int(t0)}-{os.getpid()}", "kind": "legacy", "label": " ".join(a)[:60],
                             "cwd": os.getcwd(), "worktree": worktree(os.getcwd()), "cmd": a, "status": "lock-timeout",
                             "rc": 1, "submit": t0, "start": None, "end": now(), "wait": round(now() - t0, 1), "run": None, "weight": 0})
-                print(f"qlock: lock not acquired in {w:.0f} s", file=sys.stderr); sys.exit(1)
+                print(f"q legacy: lock not acquired in {w:.0f} s", file=sys.stderr); sys.exit(1)
             time.sleep(min(POLL, 1))
     t1 = now()
     rc = subprocess.call(a)
@@ -540,7 +572,7 @@ def cmd_selftest(a):
         rmq = sub("test", "sleep", "1", C=wt)
         os.rmdir(wt); done(rmq); q("cancel", f); done(f)
         ok(st(rmq).get("state") == "cancelled" and st(rmq).get("reason") == "worktree removed", "removed worktree: job cancelled")
-        # legacy interplay: exclusive holder blocks q jobs; q jobs share; running q jobs block qlock
+        # legacy interplay: exclusive holder blocks q jobs; q jobs share; running q jobs block q legacy
         hold = subprocess.Popen(["flock", env["QLOCK"], "sleep", "1.5"])
         time.sleep(0.3)
         l1 = sub("test", "sleep", "1"); l2 = sub("test", "sleep", "1")
@@ -549,10 +581,10 @@ def cmd_selftest(a):
         hold.wait()
         until(lambda: st(l1).get("lock") == "shared" and st(l2).get("lock") == "shared", 5)
         ok(st(l1).get("lock") == "shared" and st(l2).get("lock") == "shared", "legacy: two q jobs hold the lock shared at once")
-        ql = subprocess.run([os.path.join(os.path.dirname(me), "qlock"), "-w", "0.3", "true"], env=env, capture_output=True, text=True)
+        ql = subprocess.run([me, "legacy", "-w", "0.3", "--", "true"], env=env, capture_output=True, text=True)
         ok(ql.returncode == 1, "legacy: qlock -w times out while q jobs run")
         done(l1, l2)
-        ql = subprocess.run([os.path.join(os.path.dirname(me), "qlock"), "sh", "-c", "exit 4"], env=env, capture_output=True, text=True)
+        ql = subprocess.run([me, "legacy", "--", "sh", "-c", "exit 4"], env=env, capture_output=True, text=True)
         ok(ql.returncode == 4, "legacy: qlock runs CMD and returns its exit code")
         # log.jsonl + stats
         log = read_log_at(f"{tmp}/queue/log.jsonl")
@@ -581,7 +613,7 @@ def main():
     if not a: print(summary()); return
     c = a.pop(0)
     f = {"submit": cmd_submit, "_run": cmd_run, "wait": cmd_wait, "ls": cmd_ls, "stats": cmd_stats, "cancel": cmd_cancel,
-         "legacy": cmd_legacy, "selftest": cmd_selftest}.get(c)
+         "legacy": cmd_legacy, "selftest": cmd_selftest, "top": cmd_top}.get(c)
     if not f: die(__doc__, 2)
     f(a)
 

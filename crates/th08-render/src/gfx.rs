@@ -1776,7 +1776,7 @@ impl Gfx {
     }
 }
 
-// Executor: today's device code run from the recorded lists (REWRITE_PLAN step 8).
+// Executor: runs the recorded command lists on the device.
 impl Gfx {
     // Runs everything recorded so far in call order: each `ResCmd` before the draw that followed it.
     pub fn submit(&mut self, rec: &mut Recorder) {

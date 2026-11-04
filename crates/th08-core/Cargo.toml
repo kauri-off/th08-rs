@@ -8,7 +8,7 @@ publish = false
 [lints]
 workspace = true
 
-# No dev-dependencies: a dev-dep on render / audio would bring a second copy of core's types (STEP10_CRATES §1).
+# No dev-dependencies: a dev-dep on render / audio would bring a second copy of core's types.
 [dependencies]
 th08-formats = { path = "../th08-formats" }
 anyhow = "1.0.104"

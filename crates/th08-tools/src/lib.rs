@@ -1,5 +1,4 @@
-//! th08 debug tooling (STEP10_CRATES.md §1): session / demo trace runners and comparisons, draw-log files and
-//! reports, xz streams. Native only; the bins under src/bin keep their names.
+//! th08 debug tooling: trace runners and comparisons, draw-log files and reports (native only).
 #![cfg(not(target_arch = "wasm32"))]
 
 pub mod demosync;

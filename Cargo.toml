@@ -2,7 +2,7 @@
 members = [".", "crates/th08-formats", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-tools", "xtask"]
 resolver = "3"
 
-# STEP11 §0 lint subset: worth fixing in a bit-exact port (casts that keep the bits, readability, long fns);
+# Lint subset: worth fixing in a bit-exact port (casts that keep the bits, readability, long fns);
 # ftol / fild casts, float_cmp and spec formula names stay allowed. Thresholds in clippy.toml.
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -12,7 +12,8 @@ BIN=$TARGET/release
 SESSION_BIN=session DEMOSYNC_BIN=demosync DRAWRUN_BIN=drawrun
 SESSIONS="golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg"
 SESSION_SRC=$ROOT/specs/data/sessions
-PILOT_SRC=/home/anon/Projects/th08_ext_replays/ref
+source "$ROOT/re/tools/localenv.sh"
+PILOT_SRC=${PILOT_SRC:-$TH08_EXT_REPLAYS/ref}
 LOGIC_ITEMS="s_golden s_gameover_save s_options_cfg f_fullrun_noclip d_0 d_3 p_gensokyou_th8_udAr02 p_gensokyou_th8_udDn14 n_s_golden n_p_gensokyou_th8_udAr02"
 FULLRUN_TO=${FULLRUN_TO:-80000}
 # Default J: half the hardware threads (SMT gives no more), capped by MemAvailable / JOB_MB (measured item peak RSS ≤ 0.6 GB).
@@ -21,7 +22,7 @@ J=${J:-$(awk -v c="$(nproc)" -v m="$JOB_MB" '/^MemAvailable/ {j = int($2 / 1024 
 # A replay batch (systemd unit th-b-*) grows after we start: leave it room (headless GPU allocs fail first).
 { systemctl --user list-units 'th-b-*' --state=active --no-legend 2>/dev/null | grep -q . || [[ -e $ROOT/target/queue/batch.running ]]; } && (( J > 6 )) && J=6
 TIME=; [[ -x /usr/bin/time ]] && TIME=/usr/bin/time
-export TH08_DIR="/home/anon/Games/Touhou Collection/TH08 - Imperishable Night/TH08 - Imperishable Night/"
+export TH08_DIR="${TH08_DIR:-$TH08_GAME_SRC/}"
 export XDG_CONFIG_HOME=$ROOT/target/verify-42/cfg
 export CARGO_TARGET_DIR=$TARGET
 if [[ -n ${PACK:-} ]]; then export TH08_PACK=$(realpath "$PACK") RUST_LOG=th08::packs=info; echo "pack $TH08_PACK"; else unset TH08_PACK; fi
@@ -127,6 +128,8 @@ elif cl=$("$ROOT/tools/lint_subset" 2>&1); then
 else echo "clippy FAILED"; tail -5 <<< "$cl"; fail=1; fi
 cdeps=$(cargo tree -q -p th08-core -e normal --prefix none 2>&1 | grep -E '^(wgpu|cpal|winit|egui|rfd|clap|liblzma) ' | sort -u | tr '\n' ' ')
 [[ -z $cdeps ]] && echo "core deps ok" || { echo "core deps FAILED: $cdeps"; fail=1; }
+srefs=$(python3 "$ROOT/tools/spec_refs.py" 2>&1 | grep "^spec_refs:")
+[[ $srefs == *" 0 broken"* ]] && echo "spec refs ok" || { echo "spec refs FAILED: $srefs"; fail=1; }
 cargo check -q --release --workspace --lib --target wasm32-unknown-unknown > /dev/null 2>&1 && echo "wasm ok" || { echo "wasm FAILED"; fail=1; }
 ta=$SECONDS; a=$("$ROOT/tools/android_check"); ar=$?; echo "$a ($((SECONDS - ta)) s)"; [[ $ar == 0 ]] || fail=1
 t=$(cargo test -q --release --workspace 2>&1)
@@ -135,7 +138,7 @@ else echo "cargo test ok ($(grep -oE '[0-9]+ passed' <<< "$t" | awk '{s+=$1} END
 echo "checks done in $((SECONDS - t0)) s"
 
 out=${RUN_OUT:-$TARGET/arch_run}
-mkdir -p "$out"; find "$out" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +  # fresh dirs: thjob -g counts */digest
+mkdir -p "$out"; find "$out" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +  # fresh dirs: progress counts */digest
 tdir=$out; [[ -f $out/times.txt ]] || tdir=$dir
 echo "J=$J"
 ITEMS=all_items run_all "$out" "$tdir" > /dev/null  # both batches in one queue: longest first across all
