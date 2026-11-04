@@ -83,3 +83,11 @@ not record this call. That is fine for display, but the `@` strip content differ
 re-render.
 **Evidence:** a draw log of the original covering the frames of name entry (state 9), checking for any draw of text
 VM 0 / text.anm sprite 21 before state 8. If it is never drawn, add "not visible" to 16 §2.2.
+
+## Q7 — `menulist::render_strip` never sets VM flag bit 0 (found in G1)
+
+10 §6: `Text_RenderToVm` always sets bit 0 (visible) on the target VM. The port's ending and music-room sites do; HUD
+and gui sites get it from `set_script` just before. `menulist::render_strip` (spell practice, replay, result) never
+touches its scratch VM, so if an ANM script cleared bit 0 on that VM before a re-render, the port would not show the
+strip where the original would. Not an i18n issue: a draw-parity item for the next IMPL brief (vanilla data shows no
+difference in the full draw check).
