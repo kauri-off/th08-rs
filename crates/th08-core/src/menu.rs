@@ -2,6 +2,7 @@
 //! practice, replay and spell-practice screens are in menulist.rs.
 
 use crate::anmvm::{self, AnmVm};
+use crate::ascii::{int, lo16, short, uidx};
 use crate::config::Config;
 use crate::drawlist::{FULLSCREEN, Recorder, TexId, TextCmd};
 use crate::game::Ctx;
@@ -9,7 +10,7 @@ use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
 use crate::task::{Chain, Ret};
-use crate::types::SceneId;
+use crate::types::{SceneId, lo8};
 use anyhow::Result;
 use th08_formats::sjis;
 
@@ -247,9 +248,9 @@ fn info_files(bits: u32, flags: u32) -> impl Iterator<Item = &'static str> {
 // The fade-in ends at 10 (t = 19), 16 §4.
 fn info_fade_alpha(t: i32) -> Option<u8> {
     if t < 20 {
-        Some(((60 - t) * 255 / 20) as u8)
+        Some(lo8((60 - t) * 255 / 20))
     } else if t > 5940 {
-        Some(((t - INFO_FADE_OUT) * 255 / 20) as u8)
+        Some(lo8((t - INFO_FADE_OUT) * 255 / 20))
     } else {
         None
     }
@@ -389,7 +390,7 @@ impl MainMenu {
             last_button: -1,
             stages: [false; 8],
             replays: Vec::new(),
-            lists: Default::default(),
+            lists: crate::menulist::Lists::default(),
         }
     }
 
@@ -413,7 +414,7 @@ impl MainMenu {
     // AnmManager_InterruptRange over the 142 VMs; a later per-VM write replaces it (one pending slot, 12 §2.1).
     pub(crate) fn interrupt_all(&mut self, id: i32) {
         for vm in &mut self.vms {
-            vm.pending_interrupt = id as _;
+            vm.pending_interrupt = lo16(id);
         }
     }
 
@@ -440,12 +441,16 @@ impl MainMenu {
     fn highlight(&mut self, ctx: &Ctx, vm: usize, on: bool) {
         let b = self.base[vm];
         if b >= 0 {
-            self.vms[vm].set_sprite(&ctx.w.anm, b + if on { 0 } else { 1 });
+            self.vms[vm].set_sprite(&ctx.w.anm, b + i32::from(!on));
         }
     }
 
     // Text_RenderCentered 0x466650 (12 §2.2, 10 §6): `text` into description strip `i` (text.anm sprite 21 + i) at
     // x = trunc(256 − len·15/4), len = Shift-JIS byte length; W = 512, font 15, COLORREF 0x00FFF0E0, ±2 px outline.
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "texture row of v0 ≥ 0, rounded as before"
+    )]
     fn render_description(&mut self, ctx: &mut Ctx, i: usize, text: &str) {
         let Some(sp) = ctx.w.anm.sprite(0, 21 + i).copied() else {
             return;
@@ -461,7 +466,7 @@ impl MainMenu {
             x: centred_x(&text),
             text,
             color: [224, 240, 255],
-            outline: 0x300000,
+            outline: 0x0030_0000,
         });
     }
 
@@ -470,7 +475,7 @@ impl MainMenu {
     fn desc_follow_cursor(&mut self) {
         if self.cursor != self.prev_cursor {
             self.prev_cursor = self.cursor;
-            let i = (self.cursor.max(0) as usize).min(DESC_VMS - 1);
+            let i = uidx(self.cursor.max(0)).min(DESC_VMS - 1);
             self.desc_cur = Some(i);
             self.desc[i].pending_interrupt = 1;
         }
@@ -518,7 +523,7 @@ impl MainMenu {
     // never written back to white (12 §2.2 "Highlight").
     fn highlight_items(&mut self, ctx: &Ctx) {
         for i in 0..ITEMS {
-            self.highlight(ctx, 1 + i, i as i32 == self.cursor);
+            self.highlight(ctx, 1 + i, int(i) == self.cursor);
         }
         for i in 0..ITEMS {
             if Self::item_locked(ctx, i) {
@@ -538,32 +543,8 @@ impl MainMenu {
 
     // Screen 0, 0x4674E0 (12 §2.2).
     fn top(&mut self, ctx: &mut Ctx) {
-        if self.frames == 0 {
-            self.set_surface(ctx, "title00.png");
-            self.interrupt_all(2);
-            // Back from a watched replay: the entry block switches to the replay screen and returns 1 (12 §2.2).
-            if ctx.w.game.replay() {
-                self.set_screen(REPLAY);
-                self.interrupt_all(13);
-                self.desc_fade_out();
-                ctx.w.game.flags &= !F_REPLAY;
-                return;
-            }
-            // Back from a practice game (+0x6C ≠ 0): bit 14 set again for 2, screen 8 + 7·bit 14, range interrupt 5,
-            // description interrupt 2, return 1; trace shows screen 0 on the release frame (12 §2.2, RE-Q55).
-            if self.back != 0 {
-                if self.back == 2 {
-                    ctx.w.game.flags |= F_SPELL_PRACTICE;
-                }
-                self.set_screen(if ctx.w.game.spell_practice() {
-                    CHAR_SPELL
-                } else {
-                    DIFF_PRACTICE
-                });
-                self.interrupt_all(5);
-                self.desc_fade_out();
-                return;
-            }
+        if self.frames == 0 && self.top_entry(ctx) {
+            return;
         }
         // Calls 0–8 render description k = +0x1442C into strip k; the pointer keeps its VM until the change test of
         // call 9 (12 §2.2), so a previous screen's description stays drawn meanwhile.
@@ -586,7 +567,7 @@ impl MainMenu {
         if input && self.quitting.is_none() {
             let locked: Vec<bool> = (0..ITEMS).map(|i| Self::item_locked(ctx, i)).collect();
             let old = self.cursor;
-            self.move_cursor(ctx, ITEMS as i32, UP, DOWN, |_, c| !locked[c as usize]);
+            self.move_cursor(ctx, int(ITEMS), UP, DOWN, |_, c| !locked[uidx(c)]);
             if self.cursor != old {
                 self.highlight_items(ctx);
             }
@@ -612,20 +593,8 @@ impl MainMenu {
         // Demo (12 §2.2): idle counter reset by any raw input; after 1500 frames load demorpy((n+1) mod 4).
         if self.idle >= 1500 {
             self.idle = 0;
-            let n = (ctx.w.game.demo + 1) % 4;
-            let r = ctx
-                .archive
-                .read(&format!("demorpy{n}.rpy"))
-                .map_err(anyhow::Error::from)
-                .and_then(|b| Ok(crate::replay::parse(&b, ctx.w.game.ver_list.get())?));
-            match r {
-                Ok(r) => {
-                    if crate::replay::start_playback(&mut ctx.w.game, r, None, Some(n)) {
-                        ctx.w.bgm.stop_bgm();
-                        return;
-                    }
-                }
-                Err(e) => log::warn!("demorpy{n}.rpy: {e:#}"),
+            if Self::top_demo(ctx) {
+                return;
             }
         }
         // Confirm / cancel only while +0x1442C ≥ 10 after its reset in call 9, i.e. from call 19 (12 §2.2).
@@ -640,57 +609,7 @@ impl MainMenu {
             if self.cursor < 7 {
                 self.desc_fade_out();
             }
-            let g = &mut ctx.w.game;
-            match self.cursor {
-                0 => {
-                    g.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
-                    self.interrupt_all(5);
-                    self.set_screen(DIFF);
-                    self.cursor = last_difficulty(g);
-                }
-                1 => {
-                    g.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
-                    self.interrupt_all(5);
-                    self.set_screen(DIFF_EXTRA);
-                }
-                2 => {
-                    g.flags |= F_SPELL_PRACTICE | F_PRACTICE;
-                    self.interrupt_all(5);
-                    self.set_screen(SPELL_PRACTICE);
-                    self.cursor = g.shot as i32;
-                    // +0x00 := shot until the screen-16 entry writes the stage row (12 §2.2 item 2).
-                    self.lists.sp_row = self.cursor;
-                }
-                3 => {
-                    g.flags = g.flags & !F_SPELL_PRACTICE | F_PRACTICE;
-                    self.interrupt_all(5);
-                    self.set_screen(DIFF_PRACTICE);
-                    self.cursor = last_difficulty(g);
-                }
-                4 => {
-                    self.interrupt_all(13);
-                    self.set_screen(REPLAY);
-                }
-                5 => g.request(SceneId::ResultMenu),
-                6 => g.request(SceneId::MusicRoom),
-                7 => {
-                    // The in-place MainMenu_Option call adds one to +0x10, so screen 2 first runs on P + 30 (12 §2).
-                    // No range interrupt and no highlight: item 7 stays lit until the option entry's interrupt 3.
-                    self.cursor = 0;
-                    self.pending = Some(Pending {
-                        frames: 29,
-                        screen: OPTION,
-                        cursor: 0,
-                        clear_flags: 0,
-                    });
-                }
-                _ => {
-                    // 12 §2.2: no music change in WAV mode; MIDI mode plays the init.mid reset (02 §5), no fade.
-                    ctx.w.bgm.midi_reset();
-                    self.interrupt_all(1);
-                    self.quitting = Some(0);
-                }
-            }
+            self.top_item(ctx);
             // Only the Option press falls through to the cancel test (12 §2.2 item 7).
             if self.pending.is_none() {
                 return;
@@ -698,11 +617,116 @@ impl MainMenu {
         }
         if ctx.w.input.pressed(CANCEL) && self.cursor != ITEM_QUIT {
             // Cancel highlight: old item base + 1, cursor := Quit, Quit base sprite (12 §2.2 "Highlight" (c)).
-            self.highlight(ctx, 1 + self.cursor as usize, false);
+            self.highlight(ctx, 1 + uidx(self.cursor), false);
             self.cursor = ITEM_QUIT;
             self.highlight(ctx, 1 + ITEM_QUIT as usize, true);
             ctx.w.sound.play(sound::CANCEL);
         }
+    }
+
+    // Confirm action of the 12 §2.2 item table for the cursor item.
+    fn top_item(&mut self, ctx: &mut Ctx) {
+        let g = &mut ctx.w.game;
+        match self.cursor {
+            0 => {
+                g.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
+                self.interrupt_all(5);
+                self.set_screen(DIFF);
+                self.cursor = last_difficulty(g);
+            }
+            1 => {
+                g.flags &= !(F_PRACTICE | F_SPELL_PRACTICE);
+                self.interrupt_all(5);
+                self.set_screen(DIFF_EXTRA);
+            }
+            2 => {
+                g.flags |= F_SPELL_PRACTICE | F_PRACTICE;
+                self.interrupt_all(5);
+                self.set_screen(SPELL_PRACTICE);
+                self.cursor = i32::from(g.shot);
+                // +0x00 := shot until the screen-16 entry writes the stage row (12 §2.2 item 2).
+                self.lists.sp_row = self.cursor;
+            }
+            3 => {
+                g.flags = g.flags & !F_SPELL_PRACTICE | F_PRACTICE;
+                self.interrupt_all(5);
+                self.set_screen(DIFF_PRACTICE);
+                self.cursor = last_difficulty(g);
+            }
+            4 => {
+                self.interrupt_all(13);
+                self.set_screen(REPLAY);
+            }
+            5 => g.request(SceneId::ResultMenu),
+            6 => g.request(SceneId::MusicRoom),
+            7 => {
+                // The in-place MainMenu_Option call adds one to +0x10, so screen 2 first runs on P + 30 (12 §2).
+                // No range interrupt and no highlight: item 7 stays lit until the option entry's interrupt 3.
+                self.cursor = 0;
+                self.pending = Some(Pending {
+                    frames: 29,
+                    screen: OPTION,
+                    cursor: 0,
+                    clear_flags: 0,
+                });
+            }
+            _ => {
+                // 12 §2.2: no music change in WAV mode; MIDI mode plays the init.mid reset (02 §5), no fade.
+                ctx.w.bgm.midi_reset();
+                self.interrupt_all(1);
+                self.quitting = Some(0);
+            }
+        }
+    }
+
+    // Call-0 entry block of screen 0 (12 §2.2): surface, interrupt 2, and the two "back from a game" returns (true).
+    fn top_entry(&mut self, ctx: &mut Ctx) -> bool {
+        self.set_surface(ctx, "title00.png");
+        self.interrupt_all(2);
+        // Back from a watched replay: the entry block switches to the replay screen and returns 1 (12 §2.2).
+        if ctx.w.game.replay() {
+            self.set_screen(REPLAY);
+            self.interrupt_all(13);
+            self.desc_fade_out();
+            ctx.w.game.flags &= !F_REPLAY;
+            return true;
+        }
+        // Back from a practice game (+0x6C ≠ 0): bit 14 set again for 2, screen 8 + 7·bit 14, range interrupt 5,
+        // description interrupt 2, return 1; trace shows screen 0 on the release frame (12 §2.2, RE-Q55).
+        if self.back != 0 {
+            if self.back == 2 {
+                ctx.w.game.flags |= F_SPELL_PRACTICE;
+            }
+            self.set_screen(if ctx.w.game.spell_practice() {
+                CHAR_SPELL
+            } else {
+                DIFF_PRACTICE
+            });
+            self.interrupt_all(5);
+            self.desc_fade_out();
+            return true;
+        }
+        false
+    }
+
+    // Demo start (12 §2.2): demorpy((n+1) mod 4) from the archive; true when its playback started.
+    fn top_demo(ctx: &mut Ctx) -> bool {
+        let n = (ctx.w.game.demo + 1) % 4;
+        let r = ctx
+            .archive
+            .read(&format!("demorpy{n}.rpy"))
+            .map_err(anyhow::Error::from)
+            .and_then(|b| Ok(crate::replay::parse(&b, ctx.w.game.ver_list.get())?));
+        match r {
+            Ok(r) => {
+                if crate::replay::start_playback(&mut ctx.w.game, r, None, Some(n)) {
+                    ctx.w.bgm.stop_bgm();
+                    return true;
+                }
+            }
+            Err(e) => log::warn!("demorpy{n}.rpy: {e:#}"),
+        }
+        false
     }
 
     // Screens 4 / 8 / 12, 0x46A071 (12 §2.3): interactive from frame 8, cursor = config +0x21 (> 3 → 1), Extra fixed.
@@ -729,7 +753,7 @@ impl MainMenu {
                 self.prev_cursor = self.cursor;
                 for i in 0..4 {
                     self.vms[VM_DIFF + i].pending_interrupt =
-                        if i as i32 == self.cursor { 24 } else { 25 };
+                        if int(i) == self.cursor { 24 } else { 25 };
                 }
             }
         }
@@ -737,7 +761,7 @@ impl MainMenu {
             self.highlight(ctx, VM_DIFF_EXTRA, true);
         } else {
             for i in 0..4 {
-                self.highlight(ctx, VM_DIFF + i, i as i32 == self.cursor);
+                self.highlight(ctx, VM_DIFF + i, int(i) == self.cursor);
             }
         }
         // Back from a practice game: 8 → 9 (cursor 0) at once, return 1 (12 §2.2).
@@ -751,7 +775,7 @@ impl MainMenu {
             return;
         }
         let store =
-            |g: &mut gamemgr::Game, c: i32| g.cfg.difficulty = if extra { 4 + c } else { c } as u8;
+            |g: &mut gamemgr::Game, c: i32| g.cfg.difficulty = lo8(if extra { 4 + c } else { c });
         if ctx.w.input.pressed(CONFIRM) {
             store(&mut ctx.w.game, self.cursor);
             ctx.w.sound.play(sound::OK);
@@ -789,10 +813,10 @@ impl MainMenu {
 
     // Entries `from`..3 of the team row: enabled with 9, the partner entry 3 with 23.
     pub(crate) fn char_row(&mut self, c: i32, from: usize) {
-        let row = CHAR_VMS[c.clamp(0, 11) as usize];
+        let row = CHAR_VMS[uidx(c.clamp(0, 11))];
         for (k, &v) in row.iter().enumerate().skip(from) {
             if v >= 0 {
-                let vm = &mut self.vms[v as usize];
+                let vm = &mut self.vms[uidx(v)];
                 vm.flags |= anmvm::F_ENABLED;
                 vm.pending_interrupt = if k == 3 { 23 } else { 9 };
             }
@@ -810,7 +834,7 @@ impl MainMenu {
 
     fn char_allowed(&self, ctx: &Ctx, c: i32) -> bool {
         match self.screen {
-            CHAR_EXTRA => extra_unlocked(&ctx.w.game, ctx.core.unlock, c as usize),
+            CHAR_EXTRA => extra_unlocked(&ctx.w.game, ctx.core.unlock, uidx(c)),
             CHAR_SPELL => Self::sp_shot_ok(ctx, c),
             _ => true,
         }
@@ -822,7 +846,7 @@ impl MainMenu {
         } else {
             4
         };
-        self.cursor = (ctx.w.game.shot as i32).min(n - 1);
+        self.cursor = i32::from(ctx.w.game.shot).min(n - 1);
         if !self.char_allowed(ctx, self.cursor) {
             self.cursor = (0..n).find(|&c| self.char_allowed(ctx, c)).unwrap_or(0);
         }
@@ -846,7 +870,7 @@ impl MainMenu {
         }
         let allowed: Vec<bool> = (0..n).map(|c| self.char_allowed(ctx, c)).collect();
         if self.frames >= 8 {
-            self.move_cursor(ctx, n, LEFT, RIGHT, |_, c| allowed[c as usize]);
+            self.move_cursor(ctx, n, LEFT, RIGHT, |_, c| allowed[uidx(c)]);
         }
         if self.cursor != self.prev_cursor {
             let moved = self.frames != 0;
@@ -861,7 +885,7 @@ impl MainMenu {
             } else {
                 PRACTICE_STAGE
             });
-            self.cursor = ctx.w.game.stage as i32;
+            self.cursor = int(ctx.w.game.stage);
             self.lists.sp_row = self.cursor;
             return;
         }
@@ -873,7 +897,7 @@ impl MainMenu {
         if ctx.w.input.pressed(CONFIRM) {
             ctx.w.sound.play(sound::OK);
             let g = &mut ctx.w.game;
-            g.shot = self.cursor as u8;
+            g.shot = lo8(self.cursor);
             match self.screen {
                 // 9 → 11 / 15 → 16 return 2: the new screen runs in this frame (12 §2).
                 CHAR_PRACTICE => {
@@ -891,7 +915,7 @@ impl MainMenu {
                     g.difficulty = if extra {
                         4
                     } else {
-                        g.cfg.difficulty.min(3) as i32
+                        i32::from(g.cfg.difficulty.min(3))
                     };
                     g.stage = if extra { 8 } else { 0 };
                     g.flags &= !F_REPLAY;
@@ -905,7 +929,7 @@ impl MainMenu {
             // Cancel (12 §2.4): SE 11 + sound flush, g_ShotType := cursor on every character screen.
             ctx.w.sound.play(sound::CANCEL);
             ctx.sound_update();
-            ctx.w.game.shot = self.cursor as u8;
+            ctx.w.game.shot = lo8(self.cursor);
             if self.screen == CHAR_SPELL {
                 // Screen 15: SE 11 again (the flush restarts the same buffer: one sound), range interrupt 6, top menu
                 // cursor 2 after 30 frames (12 §2.4).
@@ -960,7 +984,7 @@ impl MainMenu {
             }
         }
         for i in 0..OPTION_ITEMS {
-            self.highlight(ctx, VM_OPTION + i as usize, i == self.cursor);
+            self.highlight(ctx, VM_OPTION + uidx(i), i == self.cursor);
         }
         self.option_values(ctx);
         if self.pending.is_some() {
@@ -971,7 +995,7 @@ impl MainMenu {
         self.desc_follow_cursor();
         let item = self.cursor;
         // Volume preview (15 §1.3): SE 0x1D whenever the screen frame counter +0x1442C is a multiple of 50.
-        if matches!(item, 3 | 4) && self.frames % 50 == 0 {
+        if matches!(item, 3 | 4) && self.frames.is_multiple_of(50) {
             ctx.w.sound.play(sound::TIMEOUT);
         }
         if self.frames < 4 {
@@ -990,10 +1014,8 @@ impl MainMenu {
         } else {
             let dir = if inp.pressed_or_repeat(LEFT) {
                 -1
-            } else if inp.pressed_or_repeat(RIGHT) {
-                1
             } else {
-                0
+                i32::from(inp.pressed_or_repeat(RIGHT))
             };
             if dir != 0
                 && let Some(v) = Self::option_value(cfg, item)
@@ -1004,7 +1026,7 @@ impl MainMenu {
                     2 => 2,
                     _ => 1,
                 };
-                *v = (*v as i32 + dir).rem_euclid(max + 1) as u8;
+                *v = lo8((i32::from(*v) + dir).rem_euclid(max + 1));
                 if *v != old {
                     ctx.w.sound.play(sound::TIMEOUT);
                     // Item 2 (15 §1.3): `Music_Stop` in the old mode, Left from mode 2 also the init.mid reset, then
@@ -1115,8 +1137,8 @@ impl MainMenu {
         let inp = ctx.w.input;
         // Assigning (joystick only): a new first-down raw button on rows 0–8 swaps with any row holding it, SE 10.
         let b = inp.pad.first_button();
-        if b >= 0 && b != self.last_button && self.cursor < KEY_ROWS.len() as i32 {
-            assign_key(&mut self.keys, self.cursor as usize, b);
+        if b >= 0 && b != self.last_button && self.cursor < int(KEY_ROWS.len()) {
+            assign_key(&mut self.keys, uidx(self.cursor), b);
             ctx.w.sound.play(sound::OK);
         }
         // 0x4C868C := scan result every call (15 §1.3; the port's −1 for "none" stands for the original's 32).
@@ -1145,7 +1167,7 @@ impl MainMenu {
     // Row VMs 45–56: cursor row = script sprite, others sprite + 1 (15 §1.3).
     fn key_rows(&mut self, ctx: &Ctx) {
         for i in 0..KEY_ITEMS {
-            self.highlight(ctx, VM_KEY_ROW + i as usize, i == self.cursor);
+            self.highlight(ctx, VM_KEY_ROW + uidx(i), i == self.cursor);
         }
     }
 
@@ -1153,7 +1175,7 @@ impl MainMenu {
     // script sprite + 2·digit), then ShotSlow VMs 75 / 76.
     fn key_values(&mut self, ctx: &Ctx) {
         for (r, &f) in KEY_ROWS.iter().enumerate() {
-            let v = self.keys[f] as i32;
+            let v = i32::from(self.keys[f]);
             for (k, d) in [v / 10, v % 10].into_iter().enumerate() {
                 let i = VM_KEY_DIGITS + 2 * r + k;
                 let vm = &mut self.vms[i];
@@ -1163,7 +1185,7 @@ impl MainMenu {
                 }
             }
         }
-        let on = (ctx.w.game.cfg.shot_slow != 0) as usize;
+        let on = usize::from(ctx.w.game.cfg.shot_slow != 0);
         for k in 0..2 {
             self.highlight(ctx, VM_KEY_SHOT_SLOW + k, k == on);
         }
@@ -1192,8 +1214,12 @@ impl MainMenu {
             }
         }
         for (first, item, v) in [(32usize, 3, cfg.bgm_volume), (36, 4, cfg.se_volume)] {
-            let dim = if self.cursor == item { 0 } else { 1 };
-            let digits = [v as i32 / 100, v as i32 / 10 % 10, v as i32 % 10];
+            let dim = i32::from(self.cursor != item);
+            let digits = [
+                i32::from(v) / 100,
+                i32::from(v) / 10 % 10,
+                i32::from(v) % 10,
+            ];
             for (k, d) in digits.into_iter().enumerate() {
                 let base = self.base[first + k];
                 let vm = &mut self.vms[first + k];
@@ -1252,7 +1278,7 @@ impl MainMenu {
             let mut vm = AnmVm::default();
             ctx.w.anm.set_script(&mut ctx.w.rng, &mut vm, ANM_SLOT, i);
             self.base.push(if vm.has_sprite {
-                vm.sprite_index as i32
+                i32::from(vm.sprite_index)
             } else {
                 -1
             });
@@ -1263,9 +1289,9 @@ impl MainMenu {
             let g = &mut ctx.w.game;
             let nc_b = |t: usize| g.clear_nc[t].iter().take(4).any(|m| m & 0x4000 != 0);
             let any_a = |t: usize| g.clear_any[t].iter().take(4).any(|m| m & 0x8000 != 0);
-            let bits = ((0..4).any(nc_b) as u32) << 15
-                | ((0..4).any(any_a) as u32) << 16
-                | ((0..4).all(nc_b) as u32) << 17;
+            let bits = u32::from((0..4).any(nc_b)) << 15
+                | u32::from((0..4).any(any_a)) << 16
+                | u32::from((0..4).all(nc_b)) << 17;
             // Unlock notices (16 §4): a condition now true whose flag bit is still clear. The port loads CLRD at boot,
             // where the original's in-memory CLRD is still empty, so the first menu after boot shows none.
             if g.previous != SceneId::Boot {
@@ -1280,7 +1306,7 @@ impl MainMenu {
             .map(|i| {
                 let mut vm = AnmVm::default();
                 ctx.w.anm.set_script(&mut ctx.w.rng, &mut vm, 0, 9);
-                vm.set_sprite(&ctx.w.anm, 21 + i as i32);
+                vm.set_sprite(&ctx.w.anm, 21 + int(i));
                 vm
             })
             .collect();
@@ -1300,7 +1326,7 @@ impl MainMenu {
         // Top entry block does the switch to 8/15 (12 §2.2, RE-Q55). A spell-practice replay has bit 14 without bit 0.
         let g = &ctx.w.game;
         self.back = if g.practice() {
-            1 + g.spell_practice() as u8
+            1 + u8::from(g.spell_practice())
         } else {
             0
         };
@@ -1308,7 +1334,7 @@ impl MainMenu {
         self.cursor = match g.previous {
             _ if g.practice() && g.spell_practice() => 2,
             _ if g.practice() => 3,
-            SceneId::Game | SceneId::NextStage | SceneId::Result => (g.difficulty > 3) as i32,
+            SceneId::Game | SceneId::NextStage | SceneId::Result => i32::from(g.difficulty > 3),
             SceneId::ResultMenu => 5,
             SceneId::MusicRoom => 6,
             _ => 0,
@@ -1426,7 +1452,7 @@ impl MainMenu {
         if let Some(spr) = self.notice_sprite(ctx) {
             let vm = &mut self.notice;
             vm.init();
-            vm.anm_slot = ANM_SLOT as _;
+            vm.anm_slot = short(ANM_SLOT);
             vm.set_sprite(&ctx.w.anm, spr);
             vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
             vm.pos = [400.0, 170.0, 0.0];
@@ -1475,7 +1501,7 @@ impl MainMenu {
         }
         final_notice(
             &ctx.w.game,
-            self.cursor as usize,
+            uidx(self.cursor),
             ctx.w.game.cfg.difficulty as usize,
         )
     }
@@ -1484,7 +1510,7 @@ impl MainMenu {
 // Option items 3/4 volume, 15 §1.3: (a) Left/Right edge ∓/±4 clamped to 0..100, then (b) on an edge or with the
 // direction held while the unchanged-input counter 0x164D53C > 29, ∓/±1 if still above 0 / below 100.
 fn volume_step(v: u8, inp: &Input) -> u8 {
-    let mut v = v as i32;
+    let mut v = i32::from(v);
     if inp.pressed(LEFT) {
         v = (v - 4).max(0);
     } else if inp.pressed(RIGHT) {
@@ -1496,7 +1522,7 @@ fn volume_step(v: u8, inp: &Input) -> u8 {
     } else if (inp.pressed(RIGHT) || held && inp.down(RIGHT)) && v < 100 {
         v += 1;
     }
-    v as u8
+    lo8(v)
 }
 
 // Key config assign (15 §1.3): rows holding `b` get the row's old button, then the row gets `b`.
@@ -1521,6 +1547,15 @@ fn run_vms(m: &mut MainMenu, ctx: &mut Ctx) {
     }
     if let Some(i) = m.desc_cur {
         m.desc[i].run(&mut ctx.w.anm, &mut ctx.w.rng);
+    }
+}
+
+// Cursor on the difficulty screen: config +0x21, Extra values → Normal (12 §2.3).
+// The top menu's > 3 → 2 store is dead; the difficulty entry's > 3 → 1 counts (12 §2.2 item 0, §2.3).
+fn last_difficulty(g: &gamemgr::Game) -> i32 {
+    match i32::from(g.cfg.difficulty) {
+        d if d > 3 => 1,
+        d => d,
     }
 }
 
@@ -1549,7 +1584,7 @@ mod tests {
     use crate::gamemgr::{self, Game};
 
     fn ctx() -> Option<crate::game::Ctx> {
-        crate::testdata::ctx(Default::default())
+        crate::testdata::ctx(crate::coreconfig::CoreConfig::default())
     }
 
     // 12 §2.2 "Back from a replay": bit 3 survives register (screen 0, previous-scene cursor), the Top entry block
@@ -1596,7 +1631,7 @@ mod tests {
             m.on_register(&mut c, Chain::Calc, 0).unwrap();
             assert_eq!(
                 (m.screen, m.back, m.cursor),
-                (super::TOP, 1 + spell as u8, 3 - spell as i32)
+                (super::TOP, 1 + u8::from(spell), 3 - i32::from(spell))
             );
             assert_eq!(c.w.game.flags & 0xFFFF, 0);
             m.top(&mut c);
@@ -1742,14 +1777,5 @@ mod tests {
         g.clear_any[0][1] = 0x40;
         assert_eq!(final_notice(&g, 0, 1), Some(146));
         assert_eq!(final_notice(&g, 5, 1), Some(147));
-    }
-}
-
-// Cursor on the difficulty screen: config +0x21, Extra values → Normal (12 §2.3).
-// The top menu's > 3 → 2 store is dead; the difficulty entry's > 3 → 1 counts (12 §2.2 item 0, §2.3).
-fn last_difficulty(g: &gamemgr::Game) -> i32 {
-    match g.cfg.difficulty as i32 {
-        d if d > 3 => 1,
-        d => d,
     }
 }

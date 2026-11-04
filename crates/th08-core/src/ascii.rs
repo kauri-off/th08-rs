@@ -7,7 +7,7 @@ use crate::game::Ctx;
 use crate::gamemgr::{self, Game};
 use crate::input::{self, Input};
 use crate::task::{self, Chain, Ret, Task};
-use crate::types::SceneId;
+use crate::types::{SceneId, lo8};
 use anyhow::Result;
 
 // ascii.anm slot 1, capture.anm slot 3 (12 §3); calc prio 1, draw prio 14 / 20 (12 §5.7).
@@ -16,6 +16,38 @@ pub const CAPTURE_SLOT: usize = 3;
 pub const CALC_PRIO: u16 = 1;
 pub const DRAW_LOW_PRIO: u16 = 14;
 pub const DRAW_HIGH_PRIO: u16 = 20;
+// `ANM_SLOT` as the VM's i16 +anm_slot field.
+const ANM_SLOT_I16: i16 = 1;
+
+// Index stored into an i16 field (sprite, ANM slot, card id; `mov word`): same bits as `as i16`, all < 0x8000.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "sprite, slot and card indices < 0x8000"
+)]
+pub(crate) const fn short(idx: usize) -> i16 {
+    idx as i16
+}
+
+// Low-word store into a VM's pending interrupt (`mov word`): same bits as `as u16`.
+pub(crate) const fn lo16(v: i32) -> u16 {
+    let b = v.to_le_bytes();
+    u16::from_le_bytes([b[0], b[1]])
+}
+
+// Index from a signed cursor / table value: exactly `as usize` (a negative one sign-extends and misses every table).
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "the original's signed index, `as usize` kept"
+)]
+pub(crate) const fn uidx(v: i32) -> usize {
+    v as usize
+}
+
+// A list position / count as the menus' int fields hold it (all < 256).
+#[expect(clippy::cast_possible_wrap, reason = "positions and counts < 256")]
+pub(crate) const fn int(v: usize) -> i32 {
+    v as i32
+}
 
 // One queued ASCII string (12 §2.9, §5.3): glyph = ascii.anm sprite (char − 1), advance 13 px × scale, '\n' = +16 px.
 #[derive(Clone, Debug)]
@@ -217,7 +249,7 @@ fn prompt_step(state: &mut u32) -> Option<u8> {
         return None;
     }
     *state += 1;
-    let c = *state as i32;
+    let c = state.cast_signed();
     if c <= 4 {
         return None;
     }
@@ -234,12 +266,12 @@ fn prompt_alpha(c: i32) -> u8 {
     } else {
         (65 - c) * 128 / 30
     };
-    (255 - x) as u8
+    lo8(255 - x)
 }
 
 // Draws one string at once (outside the queue), in the caller's draw pass (like Ascii_DrawGaugePercent, 12 §2.9).
-pub fn draw_now(anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, t: Text) {
-    emit_texts(anm, rec, std::slice::from_ref(&t));
+pub fn draw_now(anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, t: &Text) {
+    emit_texts(anm, rec, std::slice::from_ref(t));
 }
 
 // Small popups: slots 0–719 plus 3 special slots 720–722, life 60; large popups: 128 slots, life 90 (13 §4).
@@ -305,7 +337,7 @@ fn digits(value: i32) -> Vec<u8> {
     if value < 0 {
         return vec![10];
     }
-    let mut v = value as u32;
+    let mut v = value.cast_unsigned();
     let mut d = Vec::new();
     loop {
         d.push((v % 10) as u8);
@@ -418,7 +450,7 @@ impl Popups {
 // Ascii_Calc popup part (13 §4): small popups rise 0.5·gs per frame; large popups do not move.
 fn popups_calc(p: &mut Popups, gs: f32) {
     {
-        for s in p.slots.iter_mut() {
+        for s in &mut p.slots {
             if let Some(q) = s {
                 q.pos[1] -= 0.5 * gs;
                 q.age.tick(gs);
@@ -428,7 +460,7 @@ fn popups_calc(p: &mut Popups, gs: f32) {
                 }
             }
         }
-        for s in p.large.iter_mut() {
+        for s in &mut p.large {
             if let Some(q) = s {
                 q.age.tick(gs);
                 // Freed when cur > 90 (13 §4): a static popup issued at 88 is drawn at 89 and 90.
@@ -448,7 +480,7 @@ fn popup_alpha(pos: [f32; 2], player: [f32; 3]) -> u8 {
     if d <= 1024 {
         0x50
     } else if d <= 4096 {
-        (0x50 + (d - 1024) * 128 / 3072) as u8
+        lo8(0x50 + (d - 1024) * 128 / 3072)
     } else {
         0xD0
     }
@@ -458,7 +490,7 @@ fn popup_alpha(pos: [f32; 2], player: [f32; 3]) -> u8 {
 // resets the flags to 7, so the 0x1800 anchor bits ORed in before are lost and the glyphs are centred (QUIRK, 13 §4).
 fn popup_vm(anm: &crate::anmmgr::AnmManager, sprite: i32, z: f32) -> AnmVm {
     let mut vm = AnmVm {
-        anm_slot: ANM_SLOT as _,
+        anm_slot: ANM_SLOT_I16,
         ..AnmVm::default()
     };
     vm.init();
@@ -472,7 +504,7 @@ fn popup_glyph(anm: &crate::anmmgr::AnmManager, vm: &mut AnmVm, idx: usize) -> b
     let Some(sp) = anm.sprite(ANM_SLOT, idx) else {
         return false;
     };
-    vm.sprite_index = idx as i16;
+    vm.sprite_index = short(idx);
     vm.sprite_w = sp.w;
     true
 }
@@ -590,7 +622,7 @@ fn darkness_step(
     anm.file_set_script(rng, &mut d.vm, crate::effect::SCRIPT_SLOT, 105);
     d.vm.scale = [d.radius / 63.0; 2];
     d.vm.pos = [player[0] + 32.0, player[1] + 16.0, player[2]];
-    d.vm.color[anmvm::A] = d.alpha as u8;
+    d.vm.color[anmvm::A] = lo8(d.alpha);
 }
 
 fn darkness_emit(
@@ -603,7 +635,7 @@ fn darkness_emit(
     if d.alpha <= 0 {
         return;
     }
-    let a = d.alpha as u8;
+    let a = lo8(d.alpha);
     for [x0, y0, x1, y1] in darkness_rects([player[0], player[1]], d.radius, off) {
         rec.rect(x0, y0, x1 - x0, y1 - y0, [0, 0, 0, a]);
     }
@@ -663,7 +695,7 @@ impl Overlays {
             ] {
                 anm.start_script(rng, &mut g.vms[k], ANM_SLOT, script);
             }
-            for m in g.markers.iter_mut() {
+            for m in &mut g.markers {
                 anm.start_script(rng, m, ANM_SLOT, MARKER_SCRIPT);
             }
             g.vms[G_HUMAN].pos[0] -= 56.0 * min as f32 / -10000.0;
@@ -671,7 +703,7 @@ impl Overlays {
             let id = g.id;
             g.vms[..4]
                 .iter_mut()
-                .for_each(|v| v.pending_interrupt = id as _);
+                .for_each(|v| v.pending_interrupt = lo16(id));
         }
     }
 
@@ -683,7 +715,7 @@ impl Overlays {
             g.vms
                 .iter_mut()
                 .take(4)
-                .for_each(|v| v.pending_interrupt = id as _);
+                .for_each(|v| v.pending_interrupt = lo16(id));
         }
     }
 
@@ -712,7 +744,7 @@ fn gauge_calc(g: &mut Gauge, anm: &mut crate::anmmgr::AnmManager, rng: &mut crat
             .filter(|v| v.script.is_some())
             .for_each(|v| {
                 v.run(anm, rng);
-            })
+            });
     }
 }
 
@@ -761,18 +793,24 @@ fn markers_step(g: &mut Gauge, player: Option<&crate::player::Player>) {
         let d = (m.pos[0] - 32.0 - px).abs();
         // Set directly, without SetSprite (both plates are 48×16).
         m.sprite_index = MARKER_SPRITE;
-        let plain = 0xFFFFFF | (if d < 64.0 { (d + 96.0) as u32 } else { 160 }) << 24;
+        let plain = 0x00FF_FFFF | marker_alpha(d) << 24;
         let argb = match g.marker_mode[k] {
-            1 => 0x80FF4040,
-            n @ 2..=4 if frame % (32 >> n) == 0 => {
+            1 => 0x80FF_4040,
+            n @ 2..=4 if frame.is_multiple_of(32 >> n) => {
                 m.sprite_index = MARKER_BLINK_SPRITE;
-                0xFFFFFFFF
+                0xFFFF_FFFF
             }
             _ => plain,
         };
         set_rgb(m, argb);
         m.color[anmvm::A] = (argb >> 24) as u8;
     }
+}
+
+// Plain marker alpha (12 §5.10): 96 + the distance (ftol) below 64 px, else 160.
+#[expect(clippy::cast_sign_loss, reason = "ftol of d + 96 ≥ 96")]
+fn marker_alpha(d: f32) -> u32 {
+    if d < 64.0 { (d + 96.0) as u32 } else { 160 }
 }
 
 fn marker_shown(m: &AnmVm) -> bool {
@@ -808,19 +846,19 @@ fn gauge_step(
         return None;
     }
     let st = player.map_or(fallback, |p| &p.stats);
-    let gv = st.gauge as i32;
+    let gv = i32::from(st.gauge);
     let (bx, by) = (g.vms[G_BAR].pos[0], g.vms[G_BAR].pos[1]);
     g.vms[G_MARKER].pos[0] = bx + 64.0 + gv as f32 * 56.0 / 10000.0;
     let rgb: u32 = if st.human_max() {
-        0x7070FF
+        0x0070_70FF
     } else if st.human() {
-        0xB0B0FF
+        0x00B0_B0FF
     } else if st.youkai_max() {
-        0xFF7070
+        0x00FF_7070
     } else if st.youkai() {
-        0xFFB0B0
+        0x00FF_B0B0
     } else {
-        0xFFFFFF
+        0x00FF_FFFF
     };
     // The zone colour becomes G0's colour (alpha kept) and G4's colour (12 §5.9 step 2).
     set_rgb(&mut g.vms[G_BAR], rgb);
@@ -859,16 +897,11 @@ fn gauge_glyphs(
     d: &GaugeDraw,
     mut rec: Option<&mut Recorder>,
 ) {
-    percent_glyphs(
-        anm,
-        rec.as_deref_mut(),
-        vm,
-        d.gv,
-        d.at[0],
-        d.at[1],
-        0.0,
-        d.colour,
-    );
+    percent_glyphs(anm, vm, d.gv, [d.at[0], d.at[1], 0.0], d.colour, |vm| {
+        if let Some(rec) = rec.as_deref_mut() {
+            anm.emit_mode(rec, vm, 0);
+        }
+    });
     vm.color = d.colour;
     for &(glyph, x, y) in &d.stamps {
         vm.set_sprite(anm, 136 + glyph);
@@ -892,38 +925,34 @@ fn gauge_emit(g: &Gauge, anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, d:
     gauge_glyphs(anm, &mut vm, d, Some(rec));
 }
 
-// Ascii_DrawGaugePercent 0x405E10 (12 §5.9): "%d.%02d%%" of value/100 with glyph VM sprites 136 + (0–9, 10 '%',
-// 11 '.', 12 '-'), decimals at 0.8×, the integer part centred around x = cx.
-#[allow(clippy::too_many_arguments)]
+// Ascii_DrawGaugePercent 0x405E10 (12 §5.9) in one pass: each glyph emitted right after its VM writes.
 pub fn draw_percent(
-    anm: &mut crate::anmmgr::AnmManager,
+    anm: &crate::anmmgr::AnmManager,
     rec: &mut Recorder,
     vm: &mut AnmVm,
     value: i32,
-    cx: f32,
-    cy: f32,
-    z: f32,
+    at: [f32; 3],
     colour: [u8; 4],
 ) {
-    percent_glyphs(anm, Some(rec), vm, value, cx, cy, z, colour);
+    percent_glyphs(anm, vm, value, at, colour, |vm| anm.emit_mode(rec, vm, 0));
 }
 
-// The VM writes of `draw_percent` (draw-phase step); with `rec` each glyph is emitted right after its writes.
-#[allow(clippy::too_many_arguments)]
+// Ascii_DrawGaugePercent 0x405E10 (12 §5.9): "%d.%02d%%" of value/100 with glyph VM sprites 136 + (0–9, 10 '%',
+// 11 '.', 12 '-'), decimals at 0.8×, the integer part centred around x = at[0]. `each` sees the VM after each
+// glyph's writes: a draw-phase step passes a no-op, an emit draws (on a copy: every field read is rewritten per glyph).
 pub fn percent_glyphs(
     anm: &crate::anmmgr::AnmManager,
-    mut rec: Option<&mut Recorder>,
     vm: &mut AnmVm,
     value: i32,
-    cx: f32,
-    cy: f32,
-    z: f32,
+    at: [f32; 3],
     colour: [u8; 4],
+    mut each: impl FnMut(&AnmVm),
 ) {
+    let [cx, cy, z] = at;
     vm.color = colour;
     let a = value.abs();
     let n = 4
-        + (value < 0) as i32
+        + i32::from(value < 0)
         + if a < 1000 {
             1
         } else if a < 10000 {
@@ -953,9 +982,7 @@ pub fn percent_glyphs(
         vm.set_sprite(anm, 136 + glyph);
         vm.pos = [x, yy, z];
         vm.scale = [sc, sc];
-        if let Some(rec) = rec.as_deref_mut() {
-            anm.emit_mode(rec, vm, 0);
-        }
+        each(vm);
         x += adv;
     }
     vm.scale = [1.0, 1.0];
@@ -989,6 +1016,18 @@ struct PauseMenu {
     shown: [bool; 10],
     // Capture VM +0x1A70 (capture.anm script 0, 12 §3).
     cap_vm: AnmVm,
+}
+
+// What the pause and continue menus touch each calc (12 §3, §4): ANM, RNG, game state, this frame's input, music,
+// sound queue and the running game's HUD (Hud_StageTransition on the retry paths).
+pub(crate) struct MenuEnv<'a> {
+    pub anm: &'a mut crate::anmmgr::AnmManager,
+    pub rng: &'a mut crate::rng::Rng,
+    pub g: &'a mut Game,
+    pub inp: &'a Input,
+    pub bgm: &'a mut crate::sound::Bgm,
+    pub sound: &'a mut crate::sound::Queue,
+    pub hud: Option<&'a mut crate::hud::Hud>,
 }
 
 const P_TITLE: usize = 0;
@@ -1033,18 +1072,16 @@ impl PauseMenu {
     }
 
     // Input is read from frame 4 of each state; confirms sfx 10, cursor moves sfx 0 (12 §3).
-    fn update(
-        &mut self,
-        ctx_anm: &mut crate::anmmgr::AnmManager,
-        rng: &mut crate::rng::Rng,
-        g: &mut Game,
-        inp: &Input,
-        bgm: &mut crate::sound::Bgm,
-        sound: &mut crate::sound::Queue,
-        host: &mut dyn crate::host::Host,
-        // The running game's HUD (Hud_StageTransition, state 10).
-        hud: Option<&mut crate::hud::Hud>,
-    ) {
+    fn update(&mut self, e: MenuEnv, host: &mut dyn crate::host::Host) {
+        let MenuEnv {
+            anm: ctx_anm,
+            rng,
+            g,
+            inp,
+            bgm,
+            sound,
+            hud,
+        } = e;
         let replay = g.replay();
         if self.state == 0 {
             // All ten scripts start; then VM 8 (practice label) is hidden unless practice and VM 9 (slow label)
@@ -1149,42 +1186,18 @@ impl PauseMenu {
                 }
             }
             // States 4 / 9 / 10 send no interrupts themselves (12 §3).
-            4 | 9 | 10 => {
-                if self.frame >= 20 {
-                    match self.state {
-                        4 => bgm.pause_bgm(false),
-                        9 => {
-                            // State 9: Result_Register(2) (save) and scene 1 (12 §3).
-                            g.save_score(rng, true, host);
-                            g.request(SceneId::Menu)
-                        }
-                        _ => {
-                            // State 10: spell practice / practice / Extra reload the stage (scene 11) after
-                            // Hud_StageTransition, else scene 10 (12 §3).
-                            if g.practice() || g.spell_practice() || g.difficulty >= 4 {
-                                // Music_Stop outside spell practice or for a card whose record flag is 1; else
-                                // "UnPause" and the music keeps playing (12 §3 state 10).
-                                if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
-                                    bgm.stop_bgm();
-                                } else {
-                                    // Command 7 "UnPause", then `Bgm_StartFadeIn(2.0)`: 120 frames from −10000.
-                                    bgm.pause_bgm(false);
-                                    bgm.start_fade_in(2.0);
-                                }
-                                stage_transition(hud, ctx_anm, rng);
-                                g.request(SceneId::Reload)
-                            } else {
-                                g.request(SceneId::Retry)
-                            }
-                        }
-                    }
-                    g.paused = 0;
-                    g.mark_play_time(host.ticks_ms());
-                    self.state = 0;
-                    self.vms.clear();
-                    self.cap_vm = AnmVm::default();
-                    return;
-                }
+            4 | 9 | 10 if self.frame >= 20 => {
+                let e = MenuEnv {
+                    anm: ctx_anm,
+                    rng,
+                    g,
+                    inp,
+                    bgm,
+                    sound,
+                    hud,
+                };
+                self.leave(e, host);
+                return;
             }
             _ => {}
         }
@@ -1199,6 +1212,50 @@ impl PauseMenu {
         self.frame += 1;
     }
 
+    // Frame 20 of states 4 (resume), 9 (quit), 10 (retry): the exit action, then paused := 0 and the menu freed (12 §3).
+    fn leave(&mut self, e: MenuEnv, host: &mut dyn crate::host::Host) {
+        let MenuEnv {
+            anm: ctx_anm,
+            rng,
+            g,
+            bgm,
+            hud,
+            ..
+        } = e;
+        match self.state {
+            4 => bgm.pause_bgm(false),
+            9 => {
+                // State 9: Result_Register(2) (save) and scene 1 (12 §3).
+                g.save_score(rng, true, host);
+                g.request(SceneId::Menu);
+            }
+            _ => {
+                // State 10: spell practice / practice / Extra reload the stage (scene 11) after
+                // Hud_StageTransition, else scene 10 (12 §3).
+                if g.practice() || g.spell_practice() || g.difficulty >= 4 {
+                    // Music_Stop outside spell practice or for a card whose record flag is 1; else
+                    // "UnPause" and the music keeps playing (12 §3 state 10).
+                    if !g.spell_practice() || gamemgr::spell_bgm_restarts(g.card) {
+                        bgm.stop_bgm();
+                    } else {
+                        // Command 7 "UnPause", then `Bgm_StartFadeIn(2.0)`: 120 frames from −10000.
+                        bgm.pause_bgm(false);
+                        bgm.start_fade_in(2.0);
+                    }
+                    stage_transition(hud, ctx_anm, rng);
+                    g.request(SceneId::Reload);
+                } else {
+                    g.request(SceneId::Retry);
+                }
+            }
+        }
+        g.paused = 0;
+        g.mark_play_time(host.ticks_ms());
+        self.state = 0;
+        self.vms.clear();
+        self.cap_vm = AnmVm::default();
+    }
+
     // Whole-dword colour stores at the top of the cursor states, before the input test (12 §3): selected
     // 0xFFFFFFFF, others 0xFF505050; confirm screen selected 0xFFFF8080.
     fn write_colours(&mut self) {
@@ -1206,12 +1263,15 @@ impl PauseMenu {
             1..=3 => {
                 for (i, &k) in P_ITEMS.iter().enumerate() {
                     let sel = self.state as usize == i + 1;
-                    set_argb(&mut self.vms[k], if sel { 0xFFFFFFFF } else { 0xFF505050 });
+                    set_argb(
+                        &mut self.vms[k],
+                        if sel { 0xFFFF_FFFF } else { 0xFF50_5050 },
+                    );
                 }
             }
             5..=8 => {
                 let yes_sel = matches!(self.state, 5 | 7);
-                let (on, off) = (0xFFFF8080, 0xFF505050);
+                let (on, off) = (0xFFFF_8080, 0xFF50_5050);
                 set_argb(&mut self.vms[P_YES], if yes_sel { on } else { off });
                 set_argb(&mut self.vms[P_NO], if yes_sel { off } else { on });
             }
@@ -1250,11 +1310,18 @@ fn start_capture(anm: &mut crate::anmmgr::AnmManager, rng: &mut crate::rng::Rng,
 // (u0, v0 in texture pixels, width, height, truncated). The port copies at once from the last presented frame, so no
 // request is ever pending and the "close at once" failure path cannot happen.
 pub fn apply_capture(anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, vm: &AnmVm) {
-    if let Some(sp) = anm.sprite(CAPTURE_SLOT, vm.sprite_index.max(0) as usize) {
+    if let Some(sp) = anm.sprite(
+        CAPTURE_SLOT,
+        usize::from(vm.sprite_index.max(0).cast_unsigned()),
+    ) {
         capture_into(rec, sp);
     }
 }
 
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "ftol of the sprite rect (12 §3), as the original"
+)]
 fn capture_into(rec: &mut Recorder, sp: &crate::anmmgr::SlotSprite) {
     let t = rec.texture(sp.tex);
     let to = [
@@ -1271,7 +1338,10 @@ pub fn queue_capture(anm: &mut crate::anmmgr::AnmManager, vm: &AnmVm) -> i32 {
     if anm.capture_req.is_some() {
         return -1;
     }
-    let Some(&sp) = anm.sprite(CAPTURE_SLOT, vm.sprite_index.max(0) as usize) else {
+    let Some(&sp) = anm.sprite(
+        CAPTURE_SLOT,
+        usize::from(vm.sprite_index.max(0).cast_unsigned()),
+    ) else {
         return -1;
     };
     anm.capture_req = Some(sp);
@@ -1320,22 +1390,24 @@ fn early_exit(g: &mut Game, scene: SceneId) {
 }
 
 impl ContinueMenu {
+    // `now`: `Host::ticks_ms` for the play-time marks (15 §2.9); `enemies`: the running stage's enemy manager (spell
+    // flag bit 9, captured); `e.hud`: Hud_StageTransition on "Yes" in spell practice / Extra.
     fn update(
         &mut self,
-        ctx_anm: &mut crate::anmmgr::AnmManager,
-        rng: &mut crate::rng::Rng,
-        g: &mut Game,
-        inp: &Input,
-        bgm: &mut crate::sound::Bgm,
-        sound: &mut crate::sound::Queue,
+        e: MenuEnv,
         panel: &mut crate::hud::Panel,
-        // `Host::ticks_ms` for the play-time marks (15 §2.9).
         now: u64,
-        // The running stage's enemy manager (spell flag bit 9, captured).
         enemies: Option<&crate::enemy::EnemyManager>,
-        // The running game's HUD (Hud_StageTransition on "Yes" in spell practice / Extra).
-        hud: Option<&mut crate::hud::Hud>,
     ) -> bool {
+        let MenuEnv {
+            anm: ctx_anm,
+            rng,
+            g,
+            inp,
+            bgm,
+            sound,
+            hud,
+        } = e;
         if !self.open {
             // First call, on the calc after game_over was written (12 §4): state 0 here, then the state-2/1 body
             // below in the same call.
@@ -1394,7 +1466,7 @@ impl ContinueMenu {
         if self.phase == 0
             && let [_, y, n] = &mut self.vms[..]
         {
-            let (on, off) = (0xFFFF8080, 0xFF505050);
+            let (on, off) = (0xFFFF_8080, 0xFF50_5050);
             set_argb(y, if self.yes { on } else { off });
             set_argb(n, if self.yes { off } else { on });
         }
@@ -1504,11 +1576,11 @@ impl AsciiManager {
     pub(crate) fn trace(&self) -> Vec<u64> {
         let (p, c) = (&self.pause, &self.cont);
         let mut t = vec![
-            p.state as u64,
-            p.frame as u64,
-            c.open as u64,
-            c.frame as u64,
-            self.popup_off[0].to_bits() as u64,
+            u64::from(p.state),
+            u64::from(p.frame),
+            u64::from(c.open),
+            u64::from(c.frame),
+            u64::from(self.popup_off[0].to_bits()),
             self.texts[0].len() as u64,
             self.texts[1].len() as u64,
         ];
@@ -1577,28 +1649,31 @@ impl AsciiManager {
         if ctx.w.game.paused != 0 {
             // 11 §2: paused = 2 once the menu was drawn (GameMgr_Calc opened it after this calc).
             ctx.w.game.paused = 2;
-            self.pause.update(
-                &mut ctx.w.anm,
-                &mut ctx.w.rng,
-                &mut ctx.w.game,
-                &inp,
-                &mut ctx.w.bgm,
-                &mut ctx.w.sound,
-                &mut *ctx.host,
-                ctx.w.hud.as_deref_mut(),
-            );
+            let e = MenuEnv {
+                anm: &mut ctx.w.anm,
+                rng: &mut ctx.w.rng,
+                g: &mut ctx.w.game,
+                inp: &inp,
+                bgm: &mut ctx.w.bgm,
+                sound: &mut ctx.w.sound,
+                hud: ctx.w.hud.as_deref_mut(),
+            };
+            self.pause.update(e, &mut *ctx.host);
         } else if ctx.w.game.game_over != 0 {
+            let e = MenuEnv {
+                anm: &mut ctx.w.anm,
+                rng: &mut ctx.w.rng,
+                g: &mut ctx.w.game,
+                inp: &inp,
+                bgm: &mut ctx.w.bgm,
+                sound: &mut ctx.w.sound,
+                hud: ctx.w.hud.as_deref_mut(),
+            };
             let exited = self.cont.update(
-                &mut ctx.w.anm,
-                &mut ctx.w.rng,
-                &mut ctx.w.game,
-                &inp,
-                &mut ctx.w.bgm,
-                &mut ctx.w.sound,
+                e,
                 &mut ctx.w.panel,
                 ctx.host.ticks_ms(),
                 ctx.w.enemies.as_deref(),
-                ctx.w.hud.as_deref_mut(),
             );
             if exited && let Some(p) = ctx.w.player.as_deref_mut() {
                 p.stats.score_disp = p.stats.score10;
@@ -1639,7 +1714,7 @@ impl AsciiManager {
                 &ctx.w.game.stats,
             );
         }
-        self.texts[high as usize] = ctx.w.ascii.take(Some(high));
+        self.texts[usize::from(high)] = ctx.w.ascii.take(Some(high));
         if high {
             markers_step(&mut ctx.w.overlays.gauge, ctx.w.player.as_deref());
         }
@@ -1689,7 +1764,7 @@ impl AsciiManager {
                 gauge_emit(&ctx.w.overlays.gauge, &ctx.w.anm, rec, d);
             }
         }
-        emit_texts(&ctx.w.anm, rec, &self.texts[high as usize]);
+        emit_texts(&ctx.w.anm, rec, &self.texts[usize::from(high)]);
         if high {
             markers_emit(&ctx.w.overlays.gauge, &ctx.w.anm, rec);
         }
@@ -1729,46 +1804,34 @@ mod tests {
         g.game_over = 1;
         let mut m = ContinueMenu::default();
         for _ in 0..30 {
-            m.update(
+            cont(
+                &mut m,
                 &mut anm,
                 &mut rng,
                 &mut g,
-                &Input::default(),
                 &mut bgm,
-                &mut Default::default(),
-                &mut Default::default(),
-                0,
-                None,
-                None,
+                &Input::default(),
             );
         }
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
         assert_eq!(m.vms[1].color, [0x50, 0x50, 0x50, 0xFF]);
-        m.update(
+        cont(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &press(input::UP),
             &mut bgm,
-            &mut Default::default(),
-            &mut Default::default(),
-            0,
-            None,
-            None,
+            &press(input::UP),
         );
         assert!(m.yes);
         assert_eq!(m.vms[2].color, [0x80, 0x80, 0xFF, 0xFF]);
-        m.update(
+        cont(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &Input::default(),
             &mut bgm,
-            &mut Default::default(),
-            &mut Default::default(),
-            0,
-            None,
-            None,
+            &Input::default(),
         );
         assert_eq!(m.vms[1].color, [0x80, 0x80, 0xFF, 0xFF]);
     }
@@ -1780,23 +1843,21 @@ mod tests {
         let mut rng = crate::rng::Rng::default();
         let mut anm = crate::anmmgr::AnmManager::default();
         let mut g = Game::default();
-        let mut p = crate::player::Player::default();
-        p.game_over = true;
+        let mut p = crate::player::Player {
+            game_over: true,
+            ..crate::player::Player::default()
+        };
         p.store_game_over(&mut g);
         assert!(g.game_over == 1 && !p.game_over);
         let mut m = ContinueMenu::default();
         let mut bgm = crate::sound::Bgm::default();
-        m.update(
+        cont(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &Input::default(),
             &mut bgm,
-            &mut Default::default(),
-            &mut Default::default(),
-            0,
-            None,
-            None,
+            &Input::default(),
         );
         assert!(m.open && !m.yes);
         assert_eq!((m.phase, m.frame, m.phase_frame), (0, 1, 1));
@@ -1814,20 +1875,58 @@ mod tests {
         g.mark_play_time(0);
         let mut m = ContinueMenu::default();
         let mut bgm = crate::sound::Bgm::default();
-        m.update(
+        cont(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &Input::default(),
             &mut bgm,
-            &mut Default::default(),
-            &mut Default::default(),
-            0,
-            None,
-            None,
+            &Input::default(),
         );
         assert_eq!((g.game_over, g.requested), (0, SceneId::ReplayEnd));
         assert!(g.play_clock.is_some() && m.vms.is_empty());
+    }
+
+    // One ContinueMenu calc with a throwaway sound queue and panel, no HUD / enemies, time 0.
+    fn cont(
+        m: &mut ContinueMenu,
+        anm: &mut crate::anmmgr::AnmManager,
+        rng: &mut crate::rng::Rng,
+        g: &mut Game,
+        bgm: &mut crate::sound::Bgm,
+        inp: &Input,
+    ) -> bool {
+        let e = MenuEnv {
+            anm,
+            rng,
+            g,
+            inp,
+            bgm,
+            sound: &mut crate::sound::Queue::default(),
+            hud: None,
+        };
+        m.update(e, &mut crate::hud::Panel::default(), 0, None)
+    }
+
+    // One PauseMenu calc with a throwaway sound queue and host, no HUD.
+    fn pause(
+        m: &mut PauseMenu,
+        anm: &mut crate::anmmgr::AnmManager,
+        rng: &mut crate::rng::Rng,
+        g: &mut Game,
+        bgm: &mut crate::sound::Bgm,
+        inp: &Input,
+    ) {
+        let e = MenuEnv {
+            anm,
+            rng,
+            g,
+            inp,
+            bgm,
+            sound: &mut crate::sound::Queue::default(),
+            hud: None,
+        };
+        m.update(e, &mut crate::host::MemHost::default());
     }
 
     fn press(b: u16) -> Input {
@@ -1849,44 +1948,32 @@ mod tests {
         g.game_over = 1;
         let mut m = ContinueMenu::default();
         for _ in 0..30 {
-            m.update(
+            cont(
+                &mut m,
                 &mut anm,
                 &mut rng,
                 &mut g,
-                &Input::default(),
                 &mut bgm,
-                &mut Default::default(),
-                &mut Default::default(),
-                0,
-                None,
-                None,
+                &Input::default(),
             );
         }
-        m.update(
+        cont(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &press(input::UP),
             &mut bgm,
-            &mut Default::default(),
-            &mut Default::default(),
-            0,
-            None,
-            None,
+            &press(input::UP),
         );
         assert!(m.yes);
         let frame = m.frame;
-        m.update(
+        cont(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &press(input::SHOT),
             &mut bgm,
-            &mut Default::default(),
-            &mut Default::default(),
-            0,
-            None,
-            None,
+            &press(input::SHOT),
         );
         assert_eq!((g.game_over, g.requested), (0, SceneId::Reload));
         assert!(!m.open && m.frame == frame);
@@ -1896,57 +1983,41 @@ mod tests {
         g.game_over = 1;
         let mut m = ContinueMenu::default();
         for _ in 0..30 {
-            m.update(
+            cont(
+                &mut m,
                 &mut anm,
                 &mut rng,
                 &mut g,
-                &Input::default(),
                 &mut bgm,
-                &mut Default::default(),
-                &mut Default::default(),
-                0,
-                None,
-                None,
+                &Input::default(),
             );
         }
-        m.update(
+        cont(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &press(input::SHOT),
             &mut bgm,
-            &mut Default::default(),
-            &mut Default::default(),
-            0,
-            None,
-            None,
+            &press(input::SHOT),
         );
         for _ in 0..19 {
-            m.update(
+            cont(
+                &mut m,
                 &mut anm,
                 &mut rng,
                 &mut g,
-                &Input::default(),
                 &mut bgm,
-                &mut Default::default(),
-                &mut Default::default(),
-                0,
-                None,
-                None,
+                &Input::default(),
             );
             assert_eq!(g.game_over, 1);
         }
-        m.update(
+        cont(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &Input::default(),
             &mut bgm,
-            &mut Default::default(),
-            &mut Default::default(),
-            0,
-            None,
-            None,
+            &Input::default(),
         );
         assert_eq!((g.game_over, g.requested), (0, SceneId::Result));
         assert!(!m.open && m.vms.iter().all(|v| !v.visible()));
@@ -1969,38 +2040,32 @@ mod tests {
                 .map(|v| v.pending_interrupt)
                 .collect::<Vec<_>>()
         };
-        m.update(
+        pause(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &Input::default(),
             &mut bgm,
-            &mut Default::default(),
-            &mut crate::host::MemHost::default(),
-            None,
+            &Input::default(),
         );
         assert_eq!(ints(&m), [1, 1, 1, 1, 0, 0, 0, 0, 0, 0]);
         for _ in 0..4 {
-            m.update(
+            pause(
+                &mut m,
                 &mut anm,
                 &mut rng,
                 &mut g,
-                &Input::default(),
                 &mut bgm,
-                &mut Default::default(),
-                &mut crate::host::MemHost::default(),
-                None,
+                &Input::default(),
             );
         }
-        m.update(
+        pause(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &press(input::SHOT),
             &mut bgm,
-            &mut Default::default(),
-            &mut crate::host::MemHost::default(),
-            None,
+            &press(input::SHOT),
         );
         assert_eq!(m.state, 4);
         assert_eq!(ints(&m), [2, 2, 2, 2, 0, 0, 0, 0, 0, 0]);
@@ -2009,42 +2074,36 @@ mod tests {
         let mut g = Game::default();
         g.paused = 1;
         let mut m = PauseMenu::default();
-        m.update(
+        pause(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &Input::default(),
             &mut bgm,
-            &mut Default::default(),
-            &mut crate::host::MemHost::default(),
-            None,
+            &Input::default(),
         );
         m.state = 5;
         m.frame = 4;
         for v in &mut m.vms {
             v.pending_interrupt = 0;
         }
-        m.update(
+        pause(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &press(input::SHOT),
             &mut bgm,
-            &mut Default::default(),
-            &mut crate::host::MemHost::default(),
-            None,
+            &press(input::SHOT),
         );
         assert_eq!(m.state, 9);
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
-        m.update(
+        pause(
+            &mut m,
             &mut anm,
             &mut rng,
             &mut g,
-            &Input::default(),
             &mut bgm,
-            &mut Default::default(),
-            &mut crate::host::MemHost::default(),
-            None,
+            &Input::default(),
         );
         assert_eq!(ints(&m), [0, 0, 0, 0, 2, 2, 2, 0, 0, 0]);
     }
@@ -2055,7 +2114,7 @@ mod tests {
         assert_eq!(digits(0), vec![0]);
         assert_eq!(digits(-1), vec![10]);
         let mut ov = Overlays::default();
-        ov.popup([100.0, 200.0, 0.0], 500, 0xFFFFFFFF);
+        ov.popup([100.0, 200.0, 0.0], 500, 0xFFFF_FFFF);
         for _ in 0..60 {
             popups_calc(&mut ov.popups, 1.0);
         }
@@ -2069,9 +2128,9 @@ mod tests {
     #[test]
     fn clear_popups_resets_small_cursors() {
         let mut ov = Overlays::default();
-        ov.popup([0.0; 3], 1, 0xFFFFFFFF);
-        ov.popup_special([0.0; 3], 1, 0xFFFFFFFF);
-        ov.popup_large_static([0.0, 0.0], 1, 0, 0xFFFFFFFF);
+        ov.popup([0.0; 3], 1, 0xFFFF_FFFF);
+        ov.popup_special([0.0; 3], 1, 0xFFFF_FFFF);
+        ov.popup_large_static([0.0, 0.0], 1, 0, 0xFFFF_FFFF);
         let large0 = ov.popups.large_next;
         ov.popups.clear();
         let p = &ov.popups;
@@ -2085,8 +2144,8 @@ mod tests {
     #[test]
     fn popup_life_on_integer_cur() {
         let mut ov = Overlays::default();
-        ov.popup([100.0, 200.0, 0.0], 500, 0xFFFFFFFF);
-        ov.popup_large_static([100.0, 200.0], 1, 0, 0xFFFFFFFF);
+        ov.popup([100.0, 200.0, 0.0], 500, 0xFFFF_FFFF);
+        ov.popup_large_static([100.0, 200.0], 1, 0, 0xFFFF_FFFF);
         let live = |p: &Popups| (p.slots[0].is_some(), p.large[0].is_some());
         for n in 1..=122 {
             popups_calc(&mut ov.popups, 0.5);

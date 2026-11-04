@@ -125,6 +125,8 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11k** scenes — **DONE** (see below) | (1) `SceneId` for every `SCENE_*` (123 uses, 15 files, incl. tools drawreport / demosync / drawlog, app 1); (2) result state enum + splits (340, 1614), supervisor `box_default` + split (444); (3) ending / musicroom / supervisor / result subset 0 | gamemgr (consts), supervisor, result, ending, musicroom, ascii, menu, menulist, game, replay, worldclone, tools, src/app.rs (1 line) | **alone** (touches UI + flow + app) | T D, **B** |
 | **11l** HUD + GUI — **DONE** (see below) | (1) hud unwraps → `let … else`; (2) named layout consts, splits 339 / 950 / 1297; (3) hud / gui subset 0 | hud, gui | after 11k; ∥ 11m 11n | T D |
 | **11m** ascii + menus | (1) one `percent_glyphs` (ascii.rs:912 + menulist.rs:421); (2) `MenuEnv` for ascii 1035 / 1322, splits menu 539, menulist 776 / 1316; (3) ascii / menu / menulist subset 0 | ascii, menu, menulist | after 11k; ∥ 11l 11n | T D |
+| **11l** HUD + GUI | (1) hud unwraps → `let … else`; (2) named layout consts, splits 339 / 950 / 1297; (3) hud / gui subset 0 | hud, gui | after 11k; ∥ 11m 11n | T D |
+| **11m** ascii + menus — **DONE** (see below) | (1) one `percent_glyphs` (ascii.rs:912 + menulist.rs:421); (2) `MenuEnv` for ascii 1035 / 1322, splits menu 539, menulist 776 / 1316; (3) ascii / menu / menulist subset 0 | ascii, menu, menulist | after 11k; ∥ 11l 11n | T D |
 | **11n** render | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
 | **11o** audio + app + tools + wall | (1) midi.rs wasm imports, audio subset 0; (2) tools subset 0 (useless_conversion ×10 etc., bin `main` splits), worldclone / testdata subset 0; (3) app subset 0 after L2; arch_check gains `cargo clippy --workspace --all-targets -- -D warnings` (subset at `warn` → enforced) | crates/th08-audio, crates/th08-tools, worldclone, testdata, src/ (not settings.rs until L2), tools/arch_check | last D-neutral run; after L2 and 11n | T D W android, **B** |
 | **11p** leftovers that change draw | (1) camera.rs + menulist pie on `fmath` (drop both `allow(disallowed_methods)`, the `TODO(step 10)`); (2) `image` out of core: `th08_formats::img::dims` + `ResCmd::CreateImage`, decode in gfx; (3) new D reference (`arch_check freeze` into `target/arch_ref_11p`) after my drawgroups image diff shows "visually identical" (PARITY_POLICY) | camera, menulist (2 lines), drawlist, formats/img.rs (new), gfx (CreateImage), anmmgr (load call) | **alone**, after 11o | T must be identical; D intentionally new; drawgroups image diff; B |
@@ -398,6 +400,32 @@ crate changed (`Hud` / `Gui` pub items unchanged; the split fns are private). Li
 th08-core 327 passed (1 ignored), spec_refs 0. Deviations: the fallbacks above replace panics on states the HUD never
 sees (no behaviour change in T / D); `night_fade` takes the player position before the alpha test (a pure read,
 was read only when alpha ≠ 0); hud keeps its other code hex (sprite ids, ANM slots, VM offsets in comments).
+**11m done.** Files: crates/th08-core/src/{ascii, menu, menulist}.rs only. (1) One
+`ascii::percent_glyphs(anm, vm, value, at: [f32; 3], colour, each: impl FnMut(&AnmVm))` (12 §5.9
+`Ascii_DrawGaugePercent`); menulist's copy removed, `gauge_glyphs` passes its `Option<&mut Recorder>` emit as the
+closure, `draw_percent` is the recorder wrapper. The trailing `vm.scale = [1, 1]` of the ascii copy is kept: the
+last glyph ('%', full size) already leaves scale 1, so menulist's VM state is unchanged. (2) `ascii::MenuEnv { anm,
+rng, g, inp, bgm, sound, hud }`: `PauseMenu::update(e, host)` (was 9 args), `ContinueMenu::update(e, panel, now,
+enemies)` (was 11), bodies destructure it so statement order is unchanged; pause states 4 / 9 / 10 at frame 20 →
+`PauseMenu::leave` (the `4 | 9 | 10` arm gets the `frame >= 20` guard, below it the arm falls to `_ => {}` as before);
+tests call through `cont` / `pause` helpers (assertions unchanged). Splits: menu `top` → `top_entry` (call-0
+block), `top_demo` (demorpy load; the idle reset stays in `top`), `top_item` (12 §2.2 item table); menulist
+`spell_char_draw_step` → `spell_char_rows` (16 §6.4 steps 2–3) + `spell_char_pies` (steps 5–6), `replay_run` →
+`replay_files` / `replay_stages` / `replay_speed` (15 §3.8 sub-states 1 / 2 / 3). (3) helpers in ascii, shared
+by the three files: `uidx` (i32 → usize, exactly `as usize`, `#[expect]`), `int` (usize → i32), `short` (usize →
+i16 field), `lo16` (pending-interrupt word); `types::lo8` for byte stores (fade alphas, shot / difficulty / speed
+bytes, volume); `vm_argb` = `D3dColor::from_bgra(color).0`; `From` for widening and bool → int (incl.
+`bool_to_int_with_if` → `i32::from(pressed(DOWN))` in the else branch, test order kept); `is_multiple_of`; literal
+separators; ftol `.round() as u32` / sprite-rect `as u32` under `#[expect(cast_sign_loss)]` (`render_strip`,
+`render_description`, `capture_into`, `marker_alpha`); `last_difficulty` moved above the test module; typed
+`::default()` in tests. Public API: `ascii::draw_percent(anm: &AnmManager, rec, vm, value, at: [f32; 3], colour)`
+(was `&mut AnmManager`, `cx, cy, z`), `ascii::percent_glyphs` new signature (no `Option<&mut Recorder>`, takes
+`each`), `ascii::draw_now(.., t: &Text)` (was by value); none of the three has a caller outside ascii / menulist.
+New `pub(crate)`: `ascii::{MenuEnv, uidx, int, short, lo16}`. Lint subset (tools/lint_subset): ascii 89 → 0, menu 54
+→ 0, menulist 98 → 0; workspace 690 → 449 in 32 files. Check: FAST arch_check 0 differing (emit-off 0), cargo test -p
+th08-core 327 passed (1 ignored), spec_refs 0, SPEC-GAP 1. Deviations: none of the three old long fns was over the
+150-line limit (no `too_many_lines` warning before), split anyway as planned; `PauseMenu::update` keeps its state
+`match` (now ≈ 135 lines incl. comments); `replay_speed` returns `bool` like its siblings though it is always true.
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in
