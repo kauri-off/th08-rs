@@ -9,8 +9,10 @@ use crate::drawlist::{FULLSCREEN, PLAYFIELD, Vertex};
 use crate::fmath::{cos_f, sin_cos_f, sin_f};
 use crate::game::Ctx;
 use crate::task::{self, Chain, Ret, Task};
+use crate::types::{D3dColor, EffectIdx};
 use anyhow::Result;
 use std::f32::consts::PI;
+use std::ops::{Index, IndexMut};
 
 // EffectMgr_Calc prio 13, EffectMgr_Draw 0x427F00 prio 12 (13 §2.3, §2.4).
 pub const CALC_PRIO: u16 = 13;
@@ -25,6 +27,12 @@ const FIXED: usize = 13;
 const TOTAL: usize = RING_POOL + HIGH_POOL + FIXED;
 // Port stand-in for the dummy effect (index 653) returned when a pool is full.
 pub const NONE: usize = usize::MAX;
+// Spawn colours: white (most callers), player death ring, bomb invulnerability ring (13 §2.7, 14 §1.2).
+pub const WHITE: D3dColor = D3dColor(0xFFFF_FFFF);
+const DEATH_RING: D3dColor = D3dColor(0xFFF0_404F);
+const INVULN_RING: D3dColor = D3dColor(0xFFFF_4040);
+// Orbit spin per frame (13 §2.6b) and the type-19 spin range (13 §2.6a): the exe's 0.0314159, not π/100.
+const ORBIT_SPIN: f32 = 0.031_415_9;
 
 // Fixed slots (13 §2.2).
 pub const FIX_INVULN: usize = 0;
@@ -66,6 +74,10 @@ pub struct Ring {
 
 // Effect 0x360 (13 §2.1).
 #[derive(Clone, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "separate original bytes +0x350 / +0x352 / +0x355 / +0x357, written by enemy / eclvm"
+)]
 pub struct Effect {
     pub vm: AnmVm,
     // +0x2A4 position (playfield px; world position for the 3D particles, +0x2D4 in the original).
@@ -130,7 +142,7 @@ pub struct Effects {
     pub overlay: [u8; 4],
     pub paused: bool,
     // Draw lists A, B, C, D, E (13 §2.3).
-    lists: [Vec<usize>; 5],
+    lists: [Vec<EffectIdx>; 5],
     // Port-only: screen effects queued until `register_pending`.
     screen: Vec<ScreenEffect>,
     // Release request of the loading darken overlay (0x45C160), consumed by its calc (13 §3).
@@ -170,11 +182,11 @@ impl Effects {
 
     // Raw +0x2A4 write through a stale pointer, no alive/type check (Sakuya bomb follow, 14 §2.7, RE-Q57 AO).
     // The port's pos is the world +0x2D4 for live 19/51/63, whose update recomputes +0x2A4 anyway: skip them.
-    pub fn write_pos_unchecked(&mut self, idx: usize, pos: [f32; 3]) {
-        if let Some(x) = self.fx.get_mut(idx) {
-            if !(x.active && matches!(x.kind, 19 | 51 | 63)) {
-                x.pos = pos;
-            }
+    pub fn write_pos_unchecked(&mut self, idx: EffectIdx, pos: [f32; 3]) {
+        if let Some(x) = self.fx.get_mut(idx.idx())
+            && !(x.active && matches!(x.kind, 19 | 51 | 63))
+        {
+            x.pos = pos;
         }
     }
 
@@ -196,7 +208,7 @@ impl Effects {
 
     // Debug dump of every live effect of `kind` (format of specs/data/q15/eff51_decoded.txt).
     pub fn dump(&self, kind: u8) -> String {
-        let argb = |c: [u8; 4]| u32::from_le_bytes(c);
+        let argb = |c: [u8; 4]| D3dColor::from_bgra(c).0;
         let m = self;
         let v = m.view;
         let mut s = format!(
@@ -242,6 +254,59 @@ impl Effects {
     }
 }
 
+impl Index<EffectIdx> for Effects {
+    type Output = Effect;
+    fn index(&self, i: EffectIdx) -> &Effect {
+        &self.fx[i.idx()]
+    }
+}
+
+impl IndexMut<EffectIdx> for Effects {
+    fn index_mut(&mut self, i: EffectIdx) -> &mut Effect {
+        &mut self.fx[i.idx()]
+    }
+}
+
+// Slot number as an index; every pool slot is < TOTAL (653), so it fits the u16.
+fn slot(i: usize) -> EffectIdx {
+    EffectIdx(i as u16)
+}
+
+// Spawn result in the public `usize` form: the dummy (no slot) is NONE.
+fn raw(i: Option<EffectIdx>) -> usize {
+    i.map_or(NONE, EffectIdx::idx)
+}
+
+// Float → byte store through ftol (the alpha byte writes, 13 §2.6b, §3); `as` saturates like the port always did.
+#[expect(clippy::cast_sign_loss, reason = "ftol into a byte field")]
+fn ftol_u8(f: f32) -> u8 {
+    f as u8
+}
+
+// Effect_Spawn* arguments after the manager (13 §2.2): type, position, parameter, colour, and `zoff` = VM flag 0x2000
+// (set by every spawn except Effect_SpawnWithParam).
+#[derive(Clone, Copy, Debug)]
+pub struct FxEnv {
+    pub kind: u8,
+    pub pos: [f32; 3],
+    pub param: [f32; 3],
+    pub colour: D3dColor,
+    pub zoff: bool,
+}
+
+impl FxEnv {
+    // Effect_Spawn / Effect_SpawnFixed form: parameter 0, flag 0x2000 set.
+    pub const fn new(kind: u8, pos: [f32; 3], colour: D3dColor) -> Self {
+        Self {
+            kind,
+            pos,
+            param: [0.0; 3],
+            colour,
+            zoff: true,
+        }
+    }
+}
+
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
@@ -265,7 +330,7 @@ impl Effect {
         } else {
             self.ring.radius += 0.3;
         }
-        self.ring.start = anmvm::wrap_add(self.ring.start, 0.0314159);
+        self.ring.start = anmvm::wrap_add(self.ring.start, ORBIT_SPIN);
     }
 }
 
@@ -274,47 +339,53 @@ impl Effects {
     // examined slot advances the cursor; count is decremented per spawn and the loop ends at exactly 0, so
     // count ≤ 0 fills free slots until the budget ends. Returns the last slot taken (even if its init freed it),
     // or the dummy (NONE) when the budget runs out.
-    fn spawn_ring(&mut self, count: i32, mut init: impl FnMut(&mut Self, usize) -> bool) -> usize {
+    fn spawn_ring(
+        &mut self,
+        count: i32,
+        mut init: impl FnMut(&mut Self, EffectIdx) -> bool,
+    ) -> Option<EffectIdx> {
         let mut n = count;
         for _ in 0..RING_POOL {
-            let i = self.cursor;
-            self.cursor = (i + 1) % RING_POOL;
-            if self.fx[i].active {
+            let i = slot(self.cursor);
+            self.cursor = (self.cursor + 1) % RING_POOL;
+            if self[i].active {
                 continue;
             }
             if !init(self, i) {
-                self.fx[i].active = false;
+                self[i].active = false;
             }
             n = n.wrapping_sub(1);
             if n == 0 {
-                return i;
+                return Some(i);
             }
         }
-        NONE
+        None
     }
 
     // Effect_SpawnHigh 0x425B70: first inactive among 512–639, no cursor.
-    fn slot_high(&self) -> Option<usize> {
-        (RING_POOL..RING_POOL + HIGH_POOL).find(|&i| !self.fx[i].active)
+    fn slot_high(&self) -> Option<EffectIdx> {
+        (RING_POOL..RING_POOL + HIGH_POOL)
+            .map(slot)
+            .find(|&i| !self[i].active)
     }
 
-    fn reset(&mut self, i: usize, kind: u8, pos: [f32; 3], param: [f32; 3]) {
-        let e = &mut self.fx[i];
+    fn reset(&mut self, i: EffectIdx, f: FxEnv) {
+        let e = &mut self[i];
         *e = Effect {
             active: true,
-            kind,
-            pos,
-            param,
+            kind: f.kind,
+            pos: f.pos,
+            param: f.param,
             ..Effect::default()
         };
         e.age.set(0);
     }
 
     // Per-type init of table 0x4C6D30 (13 §2.6); velocities and accelerations are × gs at init.
-    fn type_init(&mut self, rng: &mut crate::rng::Rng, gs: f32, i: usize) -> bool {
+    fn type_init(&mut self, rng: &mut crate::rng::Rng, gs: f32, i: EffectIdx) -> bool {
         let player = self.player;
         let view = self.view;
-        let e = &mut self.fx[i];
+        let e = &mut self[i];
         let (kind, pos, param) = (e.kind, e.pos, e.param);
         match kind {
             // Sparks: 2 RNG draws (x then y).
@@ -365,7 +436,7 @@ impl Effects {
                     let aa = [r(0.0002) - 0.0001, r(0.0002) - 0.0001, 0.0];
                     (off, v, a) = (o, vv, aa);
                     e.rot = r(2.0 * PI) - PI;
-                    e.spin = r(0.0314159) - 0.015708;
+                    e.spin = r(ORBIT_SPIN) - 0.015_708;
                 } else {
                     let h = view.facing.map(|f| -f / 2.0);
                     let ox = h[0] + rng.next_signed() * 60.0;
@@ -437,18 +508,18 @@ impl Effects {
                     param[1],
                     if kind == 36 { 44 } else { 54 },
                     if kind == 36 { 4.0 } else { 6.0 },
-                )
+                );
             }
             // Alice rings 0x2A–0x2D, Sakuya LS 0x2E, Youmu slash 0x30 (14 §2.3, §2.8, §2.11).
             42 => (r.segments, r.waves, r.width) = (64, 5.0, 8.0),
             43 | 44 => {
                 (r.segments, r.width, r.tilt) =
-                    (48, 8.0, if kind == 43 { PI / 4.0 } else { -PI / 4.0 })
+                    (48, 8.0, if kind == 43 { PI / 4.0 } else { -PI / 4.0 });
             }
             45 => (r.segments, r.width) = (8, 8.0),
             46 => (r.segments, r.width) = (12, 32.0),
             48 => {
-                (r.segments, r.width, r.radius, r.amp, r.tilt) = (48, 3.0, 192.0, 0.0001, PI / 2.0)
+                (r.segments, r.width, r.radius, r.amp, r.tilt) = (48, 3.0, 192.0, 0.0001, PI / 2.0);
             }
             _ => {}
         }
@@ -460,25 +531,25 @@ impl Effects {
         &mut self,
         anm: &mut AnmManager,
         rng: &mut crate::rng::Rng,
-        i: usize,
-        colour: u32,
+        i: EffectIdx,
+        colour: D3dColor,
         zoff: bool,
     ) {
-        let e = &mut self.fx[i];
+        let e = &mut self[i];
         let script = SCRIPTS.get(e.kind as usize).copied().unwrap_or(-1);
         if script >= 0 {
-            anm.set_script(rng, &mut e.vm, SCRIPT_SLOT, script as usize);
+            anm.set_script(rng, &mut e.vm, SCRIPT_SLOT, anmvm::table_index(script));
         }
         if zoff {
             e.vm.flags |= anmvm::F_ZWRITE_OFF;
         }
-        e.vm.color = colour.to_le_bytes();
+        e.vm.color = colour.to_bgra();
         e.vm.pos_offset = [0.0; 3];
     }
 
     // VM fields written by the inits after the script start: type 19 / 60 / 61 rotation z.
-    fn start_post(&mut self, i: usize) {
-        let e = &mut self.fx[i];
+    fn start_post(&mut self, i: EffectIdx) {
+        let e = &mut self[i];
         match e.kind {
             19 => {
                 e.vm.rotation[2] = e.rot;
@@ -496,17 +567,13 @@ impl Effects {
         &mut self,
         anm: &mut AnmManager,
         rng: &mut crate::rng::Rng,
-        i: usize,
-        kind: u8,
-        pos: [f32; 3],
-        param: [f32; 3],
-        colour: u32,
-        zoff: bool,
+        i: EffectIdx,
+        f: FxEnv,
     ) -> bool {
         // 13 §2.2 "Spawn-time game speed": the t = 0 script run and the type init use the speed at the spawn.
         let gs = anm.speed;
-        self.reset(i, kind, pos, param);
-        self.start_script(anm, rng, i, colour, zoff);
+        self.reset(i, f);
+        self.start_script(anm, rng, i, f.colour, f.zoff);
         let ok = self.type_init(rng, gs, i);
         if ok {
             self.start_post(i);
@@ -514,21 +581,15 @@ impl Effects {
         ok
     }
 
-    // Effect_Spawn 0x425430 / Effect_SpawnWithParam 0x425650 (`zoff` false: no VM flag 0x2000).
+    // Effect_Spawn 0x425430 / Effect_SpawnWithParam 0x425650 (`zoff` false: no VM flag 0x2000); None = the dummy.
     pub fn spawn_at(
         &mut self,
         anm: &mut AnmManager,
         rng: &mut crate::rng::Rng,
-        kind: u8,
-        pos: [f32; 3],
-        param: [f32; 3],
+        f: FxEnv,
         count: i32,
-        colour: u32,
-        zoff: bool,
-    ) -> usize {
-        self.spawn_ring(count, |s, i| {
-            s.init_start(anm, rng, i, kind, pos, param, colour, zoff)
-        })
+    ) -> Option<EffectIdx> {
+        self.spawn_ring(count, |s, i| s.init_start(anm, rng, i, f))
     }
 
     // Effect_SpawnHigh 0x425B70: layer 0.
@@ -543,9 +604,9 @@ impl Effects {
         let Some(i) = self.slot_high() else {
             return NONE;
         };
-        self.init_start(anm, rng, i, kind, pos, [0.0; 3], colour, true);
-        self.fx[i].layer = 0;
-        i
+        self.init_start(anm, rng, i, FxEnv::new(kind, pos, D3dColor(colour)));
+        self[i].layer = 0;
+        i.idx()
     }
 
     // Effect_SpawnFixed 0x425870 / Effect_SpawnFixedParam 0x4259E0: always slot 640 + k (overwrites).
@@ -553,24 +614,21 @@ impl Effects {
         &mut self,
         anm: &mut AnmManager,
         rng: &mut crate::rng::Rng,
-        kind: u8,
-        pos: [f32; 3],
-        param: [f32; 3],
+        f: FxEnv,
         k: usize,
-        colour: u32,
-    ) -> usize {
-        let i = FIXED_BASE + k.min(FIXED - 1);
-        self.init_start(anm, rng, i, kind, pos, param, colour, true);
+    ) -> EffectIdx {
+        let i = slot(FIXED_BASE + k.min(FIXED - 1));
+        self.init_start(anm, rng, i, f);
         i
     }
 
     // Per-type update (13 §2.6); false frees the effect.
-    fn update(&mut self, i: usize, areas: &mut crate::bomb::AreaQueue) -> bool {
+    fn update(&mut self, i: EffectIdx, areas: &mut crate::bomb::AreaQueue) -> bool {
         let player = self.player;
         let view = self.view;
         let boss = self.boss;
         let overlay = self.overlay;
-        let e = &mut self.fx[i];
+        let e = &mut self[i];
         let t = e.age.getf();
         match e.kind {
             // Sparks: pos += v, v += a.
@@ -605,8 +663,8 @@ impl Effects {
                     if e.fade_n > 15 {
                         return false;
                     }
-                    let f = 1.0 - e.fade_n as f32 / 16.0;
-                    e.vm.color[anmvm::A] = (f * 255.0) as u8;
+                    let f = 1.0 - f32::from(e.fade_n) / 16.0;
+                    e.vm.color[anmvm::A] = ftol_u8(f * 255.0);
                     e.vm.scale = [2.0 - f, 2.0 - f];
                     e.vm.flags |= anmvm::F_SCALE_DIRTY;
                 }
@@ -649,7 +707,7 @@ impl Effects {
                     if e.kind == 51 {
                         e.vm.flags |= anmvm::F_COLOR2;
                         e.vm.color2 = std::array::from_fn(|k| {
-                            ((e.vm.color[k] as u32 * overlay[k] as u32) >> 8) as u8
+                            ((u32::from(e.vm.color[k]) * u32::from(overlay[k])) >> 8) as u8
                         });
                     }
                 }
@@ -668,8 +726,8 @@ impl Effects {
             _ => {}
         }
         if bomb_ring(e.kind) {
-            let slot = i.wrapping_sub(FIXED_BASE);
-            let (screen, keep) = bomb_ring_update(e, slot, areas);
+            let fixed = i.idx().wrapping_sub(FIXED_BASE);
+            let (screen, keep) = bomb_ring_update(e, fixed, areas);
             self.screen.extend(screen);
             return keep;
         }
@@ -728,27 +786,27 @@ impl Effects {
         for l in &mut self.lists {
             l.clear();
         }
-        for i in 0..TOTAL {
-            if !self.fx[i].active {
+        for i in (0..TOTAL).map(slot) {
+            if !self[i].active {
                 continue;
             }
             self.live += 1;
             // Bit 10 read live per slot (13 §2.3): a spell-card death in the enemy calc (prio 11) already freezes
             // this frame's effects (prio 13); no effect update writes the flags, so the word passed in is live.
             let frozen = flags & crate::gamemgr::F_DEATH != 0;
-            if !frozen || self.fx[i].keep_frozen {
+            if !frozen || self[i].keep_frozen {
                 if !self.update(i, areas) {
-                    self.fx[i].active = false;
+                    self[i].active = false;
                     continue;
                 }
-                let e = &mut self.fx[i];
+                let e = &mut self[i];
                 if e.vm.script.is_some() && e.vm.run(anm, rng) {
                     e.active = false;
                     continue;
                 }
                 e.age.tick(gs);
             }
-            let e = &self.fx[i];
+            let e = &self[i];
             if e.kind == 64 {
                 continue;
             }
@@ -765,8 +823,8 @@ impl Effects {
 
     // Lists A/D/E (13 §2.4): 2D rotated sprite at pos + playfield origin + pos offset, or the ring renderer.
     // The original sets pos / pos_offset around the draw and restores them; the emit draws a copy instead.
-    fn draw_one(&self, anm: &AnmManager, rec: &mut Recorder, i: usize, z: f32) {
-        let e = &self.fx[i];
+    fn draw_one(&self, anm: &AnmManager, rec: &mut Recorder, i: EffectIdx, z: f32) {
+        let e = &self[i];
         if is_ring(e.kind) {
             draw_ring(anm, rec, e);
             return;
@@ -798,8 +856,8 @@ impl Effects {
     // List C (13 §2.4): `AnmManager_DrawBillboard` (05 §9 mode 4) at the effect pos as-is (no playfield origin, no
     // pos offset), projected through `Camera_Set2D` on the playfield viewport left by `Stage_DrawHigh`, whatever
     // the VM's camera bit; sized by the stage camera's right vector, vertex z = projected z.
-    fn draw_billboard_c(&self, anm: &AnmManager, rec: &mut Recorder, i: usize) {
-        let e = &self.fx[i];
+    fn draw_billboard_c(&self, anm: &AnmManager, rec: &mut Recorder, i: EffectIdx) {
+        let e = &self[i];
         let mut vm = e.vm.clone();
         vm.pos = e.pos;
         vm.flags &= !anmvm::F_STAGE_CAM;
@@ -822,7 +880,7 @@ impl Effects {
         rec: &mut Recorder,
     ) {
         for &i in &self.lists[3] {
-            let e = &self.fx[i];
+            let e = &self[i];
             if is_ring(e.kind) {
                 draw_ring(anm, rec, e);
                 continue;
@@ -851,11 +909,12 @@ impl Effects {
         let player = self.player;
         for k in 0..self.lists[1].len() {
             let i = self.lists[1][k];
-            if self.fx[i].layer == 4 {
+            if self[i].layer == 4 {
                 out.push(BgDraw::Flat(i));
                 continue;
             }
-            let e = &mut self.fx[i];
+            // Field borrow (not `self[i]`): `self.paused` is read below.
+            let e = &mut self.fx[i.idx()];
             let mut s = cam.project(e.pos, PLAYFIELD);
             if !(0.0..=1.0).contains(&s[2]) {
                 continue;
@@ -899,12 +958,12 @@ impl Effects {
     pub fn emit_background(&self, anm: &AnmManager, rec: &mut Recorder, d: &BgDraw) {
         match *d {
             BgDraw::Flat(i) => {
-                let e = &self.fx[i];
+                let e = &self[i];
                 let mut vm = e.vm.clone();
                 vm.pos = e.pos;
                 anm.emit_mode_z(rec, &vm, 2, 0.0);
             }
-            BgDraw::Billboard { i, s, len } => anm.draw_billboard(rec, &self.fx[i].vm, s, len),
+            BgDraw::Billboard { i, s, len } => anm.draw_billboard(rec, &self[i].vm, s, len),
         }
     }
 }
@@ -913,8 +972,8 @@ impl Effects {
 // (and pulled / pushed) screen point `s` with the 3D right length `len`.
 #[derive(Clone, Copy, Debug)]
 pub enum BgDraw {
-    Flat(usize),
-    Billboard { i: usize, s: [f32; 3], len: f32 },
+    Flat(EffectIdx),
+    Billboard { i: EffectIdx, s: [f32; 3], len: f32 },
 }
 
 // Stage 6B ring draw from `Stage_DrawLow` step 4 (06 §5.1): calls the slot's draw fn through the stored pointer,
@@ -932,7 +991,10 @@ fn draw_ring(anm: &AnmManager, rec: &mut Recorder, e: &Effect) {
     {
         return;
     }
-    let Some(&spr) = anm.sprite(vm.anm_slot as usize, vm.sprite_index as usize) else {
+    let Some(&spr) = anm.sprite(
+        anmvm::table_index(i32::from(vm.anm_slot)),
+        anmvm::table_index(i32::from(vm.sprite_index)),
+    ) else {
         return;
     };
     let r = e.ring;
@@ -999,7 +1061,7 @@ fn bomb_ring(kind: u8) -> bool {
 // Youmu 0x413070. Returns queued screen effects and whether the effect stays.
 fn bomb_ring_update(
     e: &mut Effect,
-    slot: usize,
+    fixed: usize,
     areas: &mut crate::bomb::AreaQueue,
 ) -> (Vec<ScreenEffect>, bool) {
     let t = e.age.cur;
@@ -1016,14 +1078,19 @@ fn bomb_ring_update(
                 r.radius = 192.0 - 384.0 * k * k;
                 r.segments -= 1;
             } else if at(40) {
-                fx.push(screen_fx(3, 8, 1, 0x8FF08080u32 as i32, 0));
+                fx.push(screen_fx(3, 8, 1, YUKARI_FLASH.0.cast_signed(), 0));
                 boundary_sides(e.centre, r, 70, 4, 100, areas);
             }
         }
         // Yukari LS 0x4117B0 (14 §2.14): spin ±π/80 by slot parity; sides at t = 50.
         37 => {
-            r.start = anmvm::wrap_add(r.start, if slot % 2 == 0 { -PI / 80.0 } else { PI / 80.0 });
-            let n = slot as f32 - 4.0;
+            let spin = if fixed.is_multiple_of(2) {
+                -PI / 80.0
+            } else {
+                PI / 80.0
+            };
+            r.start = anmvm::wrap_add(r.start, spin);
+            let n = fixed as f32 - 4.0;
             if t < 50 {
                 let k = 1.0 - tf / 50.0;
                 r.width = 88.0 - 80.0 * tf / 50.0;
@@ -1031,7 +1098,7 @@ fn bomb_ring_update(
                 r.segments -= 1;
             } else if at(50) {
                 fx.push(screen_fx(1, 16, 8, 0, 0));
-                fx.push(screen_fx(3, 8, 1, 0x8F6060F0u32 as i32, 0));
+                fx.push(screen_fx(3, 8, 1, YUKARI_LS_FLASH.0.cast_signed(), 0));
                 boundary_sides(e.centre, r, 100, 2, 150, areas);
             }
         }
@@ -1073,8 +1140,14 @@ fn bomb_ring_update(
     (fx, true)
 }
 
+// Boundary flashes (3: 8, 1, colour) at the side spawn (14 §2.13 / §2.14).
+const YUKARI_FLASH: D3dColor = D3dColor(0x8FF0_8080);
+const YUKARI_LS_FLASH: D3dColor = D3dColor(0x8F60_60F0);
+// Side offset scale f32 0x3F3504F2 = 0.70710671, 1 ulp below √2/2 (14 §2.13, constant 0x4B4520).
+const SIDE_SCALE: f32 = f32::from_bits(0x3F35_04F2);
+
 // The four side rectangles of a finished boundary (14 §2.13): D rect 8s × 4w, C rect 4s × 4w.
-// s uses f32 0x3F3504F2 (1 ulp below √2/2); a wraps at the top of each side and chains from the last rotation.
+// s uses SIDE_SCALE; a wraps at the top of each side and chains from the last rotation.
 fn boundary_sides(
     centre: [f32; 3],
     r: &Ring,
@@ -1083,7 +1156,7 @@ fn boundary_sides(
     c_life: i32,
     areas: &mut crate::bomb::AreaQueue,
 ) {
-    let s = r.radius * f32::from_bits(0x3F3504F2);
+    let s = r.radius * SIDE_SCALE;
     let mut a = r.start + PI / 4.0;
     for _ in 0..4 {
         if a >= PI {
@@ -1146,9 +1219,13 @@ impl Effects {
         count: i32,
         colour: u32,
     ) -> usize {
-        self.spawn_at(anm, rng, kind, pos, [0.0; 3], count, colour, true)
+        raw(self.spawn_at(anm, rng, FxEnv::new(kind, pos, D3dColor(colour)), count))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "raw Effect_SpawnWithParam form for eclvm/ops_enemy.rs (11e); FxEnv is `spawn_at`"
+    )]
     pub fn spawn_param(
         &mut self,
         anm: &mut AnmManager,
@@ -1159,7 +1236,12 @@ impl Effects {
         count: i32,
         colour: u32,
     ) -> usize {
-        self.spawn_at(anm, rng, kind, pos, param, count, colour, false)
+        let f = FxEnv {
+            param,
+            zoff: false,
+            ..FxEnv::new(kind, pos, D3dColor(colour))
+        };
+        raw(self.spawn_at(anm, rng, f, count))
     }
 
     pub fn spawn_fixed(
@@ -1171,7 +1253,8 @@ impl Effects {
         k: usize,
         colour: u32,
     ) -> usize {
-        self.spawn_fixed_param(anm, rng, kind, pos, [0.0; 3], k, colour)
+        self.spawn_fixed_param(anm, rng, FxEnv::new(kind, pos, D3dColor(colour)), k)
+            .idx()
     }
 
     // Spell-card start ring at Spell_Start (07 §11.1, 13 §2.7): fixed slot 1, VM pos (8, 64) → (256, 0) over 100
@@ -1183,15 +1266,9 @@ impl Effects {
         pos: [f32; 3],
         special: bool,
     ) {
-        let i = self.spawn_fixed(
-            anm,
-            rng,
-            if special { 52 } else { 39 },
-            pos,
-            FIX_SPELL,
-            0xFFFFFFFF,
-        );
-        self.get(i, |e| {
+        let kind = if special { 52 } else { 39 };
+        let i = self.spawn_fixed_param(anm, rng, FxEnv::new(kind, pos, WHITE), FIX_SPELL);
+        self.get(i.idx(), |e| {
             e.vm.interp_pos_from(100, 6, [8.0, 64.0, 0.0], [256.0, 0.0, 0.0]);
             // 07 §11.1: Spell_Start writes only pos.y; pos.x stays 0, so the first update copies radius 0.
             e.vm.pos[1] = 64.0;
@@ -1219,7 +1296,7 @@ pub fn bg_file(stage: usize, practice_card: Option<i16>) -> &'static str {
             "eff09rm.anm",
             "eff09yy.anm",
             "eff09yk.anm",
-        ][(c - 0xD8) as usize];
+        ][anmvm::table_index(i32::from(c - 0xD8))];
     }
     [
         "eff01.anm",
@@ -1409,13 +1486,14 @@ impl Effects {
     // First free pool slot (else a new one); the slot number has no effect on chain order.
     pub fn alloc_screen(&mut self, mut s: ScreenEffect) -> usize {
         s.timer.set(0);
-        let slot = match self.screen_fx.iter().position(Option::is_none) {
-            Some(i) => i,
-            None => {
+        let slot = self
+            .screen_fx
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or_else(|| {
                 self.screen_fx.push(None);
                 self.screen_fx.len() - 1
-            }
-        };
+            });
         self.screen_fx[slot] = Some(s);
         slot
     }
@@ -1494,9 +1572,9 @@ impl ScreenEffect {
     #[cfg(test)]
     pub fn trace(&self) -> [u64; 3] {
         [
-            (self.kind as u64) << 32 | self.timer.cur as u32 as u64,
-            self.alpha.to_bits() as u64,
-            self.p[1] as u32 as u64,
+            u64::from(self.kind) << 32 | u64::from(self.timer.cur.cast_unsigned()),
+            u64::from(self.alpha.to_bits()),
+            u64::from(self.p[1].cast_unsigned()),
         ]
     }
 
@@ -1534,7 +1612,7 @@ impl ScreenEffect {
         let dur = p0.max(1);
         match self.kind {
             0 => {
-                self.alpha = (255.0 - tf * 255.0 / dur as f64).trunc().max(0.0) as f32;
+                self.alpha = (255.0 - tf * 255.0 / f64::from(dur)).trunc().max(0.0) as f32;
                 if t >= dur {
                     return Ret::Remove;
                 }
@@ -1552,7 +1630,8 @@ impl ScreenEffect {
                 if t >= dur {
                     return Ret::Remove;
                 }
-                let a = (p1 as f64 + self.timer.get_f() * (p2 - p1) as f64 / dur as f64) as f32;
+                let a = (f64::from(p1) + self.timer.get_f() * f64::from(p2 - p1) / f64::from(dur))
+                    as f32;
                 Self::shake(anm, rng, a);
                 return Ret::Next;
             }
@@ -1561,7 +1640,7 @@ impl ScreenEffect {
                 if env.load_frames != 0 {
                     return Ret::Remove;
                 }
-                self.alpha = (tf * 255.0 / dur as f64).trunc().max(0.0) as f32;
+                self.alpha = (tf * 255.0 / f64::from(dur)).trunc().max(0.0) as f32;
                 if t >= dur {
                     return Ret::Remove;
                 }
@@ -1574,10 +1653,10 @@ impl ScreenEffect {
                 if env.load_frames != 0 {
                     return Ret::Remove;
                 }
-                let a = (p2 as u32 >> 24) as i32;
+                let a = (p2.cast_unsigned() >> 24).cast_signed();
                 // cur < dur → A − ftol(A·t/dur) (≥ 0), else 0.
                 self.alpha = if t < dur {
-                    (a - (tf * a as f64 / dur as f64).trunc() as i32).max(0) as f32
+                    (a - (tf * f64::from(a) / f64::from(dur)).trunc() as i32).max(0) as f32
                 } else {
                     0.0
                 };
@@ -1602,7 +1681,7 @@ impl ScreenEffect {
                     }
                     self.alpha = (128 - (self.timer.get_f() * 128.0 / 8.0).trunc() as i32) as f32;
                 } else if t <= dur {
-                    self.alpha = (self.timer.get_f() * 128.0 / dur as f64).trunc() as f32;
+                    self.alpha = (self.timer.get_f() * 128.0 / f64::from(dur)).trunc() as f32;
                 }
             }
             // 0x45BF10: frozen → hold; gameplay frame counter 0x164D2C8 < 2 → removed (no 0x18B8A2C test); else
@@ -1622,11 +1701,11 @@ impl ScreenEffect {
                 }
                 let tf = self.timer.get_f();
                 let env = if t < i {
-                    (tf / i as f64) as f32
+                    (tf / f64::from(i)) as f32
                 } else if t < i + h {
                     1.0
                 } else {
-                    (((i + h + o) as f64 - tf) / o as f64) as f32
+                    ((f64::from(i + h + o) - tf) / f64::from(o)) as f32
                 };
                 Self::shake(anm, rng, amp * env);
                 return Ret::Next;
@@ -1639,16 +1718,16 @@ impl ScreenEffect {
 
     // Types 0/4/5 full screen, 2/3/6 playfield; colour p1 (p2 for the flash).
     fn draw_fx(&self, rec: &mut Recorder) {
-        let colour = match self.kind {
-            0 | 2 | 4 | 5 | 6 => self.p[1] as u32,
-            3 => self.p[2] as u32,
+        let colour = D3dColor(match self.kind {
+            0 | 2 | 4 | 5 | 6 => self.p[1].cast_unsigned(),
+            3 => self.p[2].cast_unsigned(),
             _ => return,
-        };
+        });
         let rgba = [
-            (colour >> 16) as u8,
-            (colour >> 8) as u8,
-            colour as u8,
-            self.alpha.clamp(0.0, 255.0) as u8,
+            colour.r(),
+            colour.g(),
+            colour.b(),
+            ftol_u8(self.alpha.clamp(0.0, 255.0)),
         ];
         let full = matches!(self.kind, 0 | 4 | 5);
         let r = if full { FULLSCREEN } else { PLAYFIELD };
@@ -1657,7 +1736,7 @@ impl ScreenEffect {
     }
 }
 
-// Player death ring (type 59, slot 11, colour 0xFFF0404F): radius 128 → 8 over the deathbomb window (ease 4,
+// Player death ring (type 59, slot 11, colour DEATH_RING 0xFFF0404F): radius 128 → 8 over the deathbomb window (ease 4,
 // 13 §2.7).
 // +0x357 (keeps running while bullets are frozen): set only for this ring (13 §2.1).
 pub fn death_ring(
@@ -1667,8 +1746,8 @@ pub fn death_ring(
     pos: [f32; 3],
     frames: i32,
 ) {
-    let i = e.spawn_fixed(anm, rng, 59, pos, FIX_DEATH, 0xFFF0404F);
-    let x = &mut e.fx[i];
+    let i = e.spawn_fixed_param(anm, rng, FxEnv::new(59, pos, DEATH_RING), FIX_DEATH);
+    let x = &mut e[i];
     // Radius VM pos.x 128 → 8 over the deathbomb window, ease 4 (13 §3 player hit).
     x.vm.pos = [128.0, 32.0, 0.0];
     x.vm.interp_pos(frames.max(1), 4, [8.0, 32.0, 0.0]);
@@ -1686,8 +1765,8 @@ pub fn invuln_ring(
     pos: [f32; 3],
     frames: i32,
 ) {
-    let i = fx.spawn_fixed(anm, rng, 23, pos, FIX_INVULN, 0xFFFF4040);
-    fx.get(i, |e| {
+    let i = fx.spawn_fixed_param(anm, rng, FxEnv::new(23, pos, INVULN_RING), FIX_INVULN);
+    fx.get(i.idx(), |e| {
         e.vm.ivars[0] = frames;
         // 13 §2.6 row 23: the spawn already ran script time 0, so the rotation goes +v, 0, −v, … (0x4B438C).
         e.vm.angular_vel[2] *= -1.0;
@@ -1700,6 +1779,11 @@ pub fn invuln_ring(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The tests' spawn form: colour 0, flag 0x2000 set.
+    fn fx_env(kind: u8, pos: [f32; 3]) -> FxEnv {
+        FxEnv::new(kind, pos, D3dColor(0))
+    }
 
     // 13 §5 (RE-Q65 L): spell practice cards 0xD8–0xDD load eff09xx.anm; other cards the stage file.
     #[test]
@@ -1724,7 +1808,7 @@ mod tests {
         });
         fx.spell_ring(&mut anm, &mut rng, [1.0, 2.0, 0.0], false);
         fx.peek(FIXED_BASE + FIX_SPELL, |e| {
-            assert_eq!(e.vm.pos, [0.0, 64.0, 0.0])
+            assert_eq!(e.vm.pos, [0.0, 64.0, 0.0]);
         });
     }
 
@@ -1733,19 +1817,20 @@ mod tests {
     fn sakuya_follow_write_skips_3d_particles() {
         let i = 3;
         let mut e = Effects::default();
+        let ix = EffectIdx(3);
         e.fx[i] = Effect {
             active: true,
             kind: 51,
             pos: [1.0, 2.0, -3.0],
             ..Effect::default()
         };
-        e.write_pos_unchecked(i, [100.0, 200.0, 0.0]);
+        e.write_pos_unchecked(ix, [100.0, 200.0, 0.0]);
         assert_eq!(e.peek(i, |x| x.pos), [1.0, 2.0, -3.0]);
         e.fx[i].kind = 20;
-        e.write_pos_unchecked(i, [100.0, 200.0, 0.0]);
+        e.write_pos_unchecked(ix, [100.0, 200.0, 0.0]);
         assert_eq!(e.peek(i, |x| x.pos), [100.0, 200.0, 0.0]);
         (e.fx[i].kind, e.fx[i].active) = (51, false);
-        e.write_pos_unchecked(i, [5.0, 6.0, 0.0]);
+        e.write_pos_unchecked(ix, [5.0, 6.0, 0.0]);
         assert_eq!(e.peek(i, |x| x.pos), [5.0, 6.0, 0.0]);
     }
 
@@ -1753,8 +1838,8 @@ mod tests {
     #[test]
     fn stage_6b_ring_update() {
         let mut fx = Effects::default();
-        let i = FIXED_BASE + 12;
-        let e = &mut fx.fx[i];
+        let i = slot(FIXED_BASE + 12);
+        let e = &mut fx[i];
         (e.active, e.kind) = (true, 64);
         e.vm.ivars[..2].copy_from_slice(&[120, 1]);
         e.vm.fvars[1] = 188.0;
@@ -1762,7 +1847,7 @@ mod tests {
         e.vm.pos = [128.0, 180.0, 0.0];
         e.vm.rotation = [0.0, 0.25, -0.5];
         assert!(fx.update(i, &mut Vec::new()));
-        let e = &fx.fx[i];
+        let e = &fx[i];
         let r = e.ring;
         assert_eq!(
             (r.segments, r.waves, r.width, r.radius),
@@ -1797,13 +1882,19 @@ mod tests {
             (41, 48),
             (42, 64),
         ] {
-            let i = fx.spawn_at(&mut anm, &mut rng, kind, pos, [0.0; 3], 1, 0, true);
-            assert_eq!(fx.fx[i].ring.segments, n, "type {kind}");
-            assert_eq!(fx.fx[i].centre, pos);
+            let i = fx
+                .spawn_at(&mut anm, &mut rng, fx_env(kind, pos), 1)
+                .unwrap();
+            assert_eq!(fx[i].ring.segments, n, "type {kind}");
+            assert_eq!(fx[i].centre, pos);
         }
-        let i = FIXED_BASE;
-        assert!(fx.init_start(&mut anm, &mut rng, i, 35, pos, [1.0, 2.0, 3.0], 0, true));
-        let r = fx.fx[i].ring;
+        let i = slot(FIXED_BASE);
+        let f = FxEnv {
+            param: [1.0, 2.0, 3.0],
+            ..fx_env(35, pos)
+        };
+        assert!(fx.init_start(&mut anm, &mut rng, i, f));
+        let r = fx[i].ring;
         assert_eq!((r.start, r.radius, r.width), (1.0, 2.0, 3.0));
     }
 
@@ -1815,13 +1906,15 @@ mod tests {
             let mut anm = AnmManager::default();
             let mut rng = crate::rng::Rng::seeded(0x1234);
             let mut probe = crate::rng::Rng::seeded(0x1234);
-            let i = fx.spawn_at(&mut anm, &mut rng, kind, [0.0; 3], [0.0; 3], 1, 0, true);
+            let i = fx
+                .spawn_at(&mut anm, &mut rng, fx_env(kind, [0.0; 3]), 1)
+                .unwrap();
             // The type's script runs first and may draw; replay exactly as many draws before the init's one.
             let mut a = 0.0;
             while probe.state != rng.state {
                 a = probe.next_f32() * (2.0 * PI) - PI;
             }
-            assert_eq!(fx.fx[i].dir, [cos_f(a), sin_f(a), 0.0], "type {kind}");
+            assert_eq!(fx[i].dir, [cos_f(a), sin_f(a), 0.0], "type {kind}");
         }
     }
 
@@ -1833,8 +1926,10 @@ mod tests {
             let mut anm = AnmManager::default();
             let mut rng = crate::rng::Rng::seeded(0x59);
             anm.speed = gs;
-            let i = fx.spawn_at(&mut anm, &mut rng, 8, [0.0; 3], [0.0; 3], 1, 0, true);
-            (fx.fx[i].vel, fx.fx[i].acc)
+            let i = fx
+                .spawn_at(&mut anm, &mut rng, fx_env(8, [0.0; 3]), 1)
+                .unwrap();
+            (fx[i].vel, fx[i].acc)
         };
         let ((v1, a1), (v, a)) = (spark(1.0), spark(0.25));
         assert_eq!((v, a), (v1.map(|x| x * 0.25), a1.map(|x| x * 0.25)));
@@ -1843,9 +1938,9 @@ mod tests {
     // 13 §2.6a: Vec3_Dot sums (x·x' + y·y') + z·z'; the udOa25 values are freed (< 0.94).
     #[test]
     fn vec3_dot_order() {
-        let d = [0x3EC704B9, 0x3F451123, 0x3F019BF1].map(f32::from_bits);
-        let f = [0x3D9A5339, 0x3F40E808, 0x3F272F7E].map(f32::from_bits);
-        assert_eq!(dot(d, f).to_bits(), 0x3F70A3D6);
+        let d = [0x3EC7_04B9, 0x3F45_1123, 0x3F01_9BF1].map(f32::from_bits);
+        let f = [0x3D9A_5339, 0x3F40_E808, 0x3F27_2F7E].map(f32::from_bits);
+        assert_eq!(dot(d, f).to_bits(), 0x3F70_A3D6);
         assert!(dot(d, f) < 0.94);
     }
 
@@ -1853,7 +1948,7 @@ mod tests {
     #[test]
     fn screen_effect_starts_at_alpha_zero() {
         for kind in [0, 3] {
-            assert_eq!(screen_fx(kind, 70, 0xFFFFFF, -1, 0).alpha, 0.0);
+            assert_eq!(screen_fx(kind, 70, 0x00FF_FFFF, -1, 0).alpha, 0.0);
         }
     }
 
@@ -1864,7 +1959,7 @@ mod tests {
         let (mut anm, mut rng, mut rel) =
             (AnmManager::default(), crate::rng::Rng::default(), false);
         let env = ScreenEnv::default();
-        let mut f = screen_fx(3, 30, 1, 0xFFFFFFFFu32 as i32, 0);
+        let mut f = screen_fx(3, 30, 1, WHITE.0.cast_signed(), 0);
         let mut seen = Vec::new();
         for speed in [1.0, 0.25, 0.25, 0.25, 0.25, 0.25] {
             anm.speed = speed;
@@ -1894,8 +1989,8 @@ mod tests {
         }
         fx.cursor = 100;
         assert_eq!(
-            fx.spawn_at(&mut anm, &mut rng, 4, [0.0; 3], [0.0; 3], 4, 0, true),
-            NONE
+            fx.spawn_at(&mut anm, &mut rng, fx_env(4, [0.0; 3]), 4),
+            None
         );
         assert_eq!(fx.cursor, 100);
         assert_eq!(
@@ -1906,19 +2001,21 @@ mod tests {
             3
         );
         // count ≤ 0 fills every free slot until the budget ends.
-        let mut fx = Effects::default();
-        fx.cursor = 7;
+        let mut fx = Effects {
+            cursor: 7,
+            ..Effects::default()
+        };
         assert_eq!(
-            fx.spawn_at(&mut anm, &mut rng, 4, [0.0; 3], [0.0; 3], 0, 0, true),
-            NONE
+            fx.spawn_at(&mut anm, &mut rng, fx_env(4, [0.0; 3]), 0),
+            None
         );
         assert!(fx.fx[..RING_POOL].iter().all(|x| x.active));
         assert_eq!(fx.cursor, 7);
         // Success returns the last slot taken.
         let mut fx = Effects::default();
         assert_eq!(
-            fx.spawn_at(&mut anm, &mut rng, 4, [0.0; 3], [0.0; 3], 3, 0, true),
-            2
+            fx.spawn_at(&mut anm, &mut rng, fx_env(4, [0.0; 3]), 3),
+            Some(EffectIdx(2))
         );
         assert_eq!(fx.cursor, 3);
     }
@@ -1936,7 +2033,7 @@ mod tests {
         boundary_sides([192.0, 224.0, 0.0], &r, 70, 4, 100, &mut q);
         let mut p = crate::player::Player::default();
         p.take_queued_areas(&mut q);
-        let s = 100.0 * f32::from_bits(0x3F3504F2);
+        let s = 100.0 * f32::from_bits(0x3F35_04F2);
         let d: Vec<_> = p.damage_areas.iter().filter(|a| a.active).collect();
         assert_eq!(d.len(), 4);
         let mut a = 3.0 * PI / 4.0 + PI / 4.0;

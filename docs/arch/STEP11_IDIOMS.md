@@ -114,7 +114,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11f** STD + MSG | (1) stage.rs on `std::Op`, `Stage` bools; (2) msg.rs on `msg::Op`, exec split, `Dialogue` bools; (3) both subset 0 | stage, msg | after 11b; ∥ 11e 11g 11h | T D |
 | **11g** player + pshot — **DONE** (see below) | (1) `ShotType` enum (+ `sht::team`) inside player / pshot; (2) `Angle`, one `angle_from` (player.rs:668 → types); (3) player / pshot subset 0 (pshot 260 split) | player, pshot | ∥ wave 1 | T D |
 | **11h** bullet + item | (1) `BulletFlags` / `LaserFlags`; (2) `BulletIdx` / `LaserIdx` / `ItemIdx`, `angle_from` (bullet.rs:81) → types; (3) spawn env struct, fn 657 split, subset 0 | bullet, item | after 11g (`angle_from`); ∥ 11e 11f 11i | T D, **B** |
-| **11i** bomb + effect | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
+| **11i** bomb + effect — **DONE** (see below) | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
 | **11j** gamemgr + replay | (1) `GameFlags` bitflags + `end()` / `route()`; (2) `Difficulty`, `Paused`, `Loading` enums inside gamemgr / replay / game / world; (3) long fns 713 / 1078 split, flow-core subset 0 (gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt) | gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt | after 11a; ∥ 11e–11i | T D |
 | **11k** scenes | (1) `SceneId` for every `SCENE_*` (123 uses, 15 files, incl. tools drawreport / demosync / drawlog, app 1); (2) result state enum + splits (340, 1614), supervisor `box_default` + split (444); (3) ending / musicroom / supervisor / result subset 0 | gamemgr (consts), supervisor, result, ending, musicroom, ascii, menu, menulist, game, replay, worldclone, tools, src/app.rs (1 line) | **alone** (touches UI + flow + app) | T D, **B** |
 | **11l** HUD + GUI | (1) hud unwraps → `let … else`; (2) named layout consts, splits 339 / 950 / 1297; (3) hud / gui subset 0 | hud, gui | after 11k; ∥ 11m 11n | T D |
@@ -218,6 +218,34 @@ ANM / flags / spawns / items / effects) plus `vars.rs`; group enums nested under
 (`Bullets`, `Laser`, `Spellcard`) carry no fields: the block is parsed from the instruction bytes because
 `Enemy.stored_fire` (enemy.rs, 11e) stores the raw bytes; enemy flag literals (`1 << 25`, `1 << 30`, flags B `1 << 1`,
 `1 << 8`) stay raw for 11e's `EnemyFlags`.
+
+**11i done.** Files: crates/th08-core/src/bomb.rs, crates/th08-core/src/effect.rs. (1) bomb: every colour literal is a
+named `D3dColor` const with its 14 § row (`BLAST_COLOURS`, `DOLL_FLASH` / `DOLL_OCTAGON` / `DOLL_LS_CORNERS`,
+`START_FX`, `ALICE_FLASH`, `KNIFE_HIT`, `KNIFE_LS_FLASH`, `YOUMU_FX` / `YOUMU_LS_FX` / `YOUMU_FLASH`,
+`YUYUKO_LS_FLASH`, `RGB_WHITE` / `RGB_RED`, the 14 §1.3 tints `TINT*` + `TINT_ALPHA`, `YUYUKO_GROUPS`); `tint`,
+`flash`, `playfield_rect` take `D3dColor` (channel bytes via `r() g() b()`, `lo8` for the masked ramp / alpha);
+local `spawn` helper (Effect_Spawn through `FxEnv`); `Hit { period, max, no_spark }` replaces the 9-arg `dc`,
+`SparkRing` the 8-arg `spark_ring`; `ObjState { Free, Active, Exploding }` (`repr(i32)`, 14 §1.1) for `BombObj.state`;
+`Bomb.fx: Option<EffectIdx>`; `obj_int` (`usize` < 128 → loop int, `#[expect]`), `anmvm::table_index` for int → index.
+(2) effect: `FxEnv { kind, pos, param, colour: D3dColor, zoff }` (13 §2.2) for `init_start` / `spawn_at` /
+`spawn_fixed_param` (+ `reset`); `EffectIdx` inside the manager (`Index<EffectIdx>` on `Effects`, draw lists,
+`spawn_ring` / `slot_high` / `init_start` / `type_init` / `update` / draws, `BgDraw`), `slot` / `raw` boundary
+helpers; named `WHITE`, `DEATH_RING`, `INVULN_RING`, `ORBIT_SPIN` (0.031_415_9), `YUKARI_FLASH` / `YUKARI_LS_FLASH`,
+`SIDE_SCALE` (f32 0x3F3504F2); `ftol_u8` (`#[expect]`, ftol byte store); `f64::from` / `cast_signed` /
+`cast_unsigned` casts; `alloc_screen` `unwrap_or_else`; collapsible / semicolon / `is_multiple_of` fixes. State enum:
+`ObjState` (the only mode-like state word); `Effect`'s four bools stay (separate original bytes +0x350 / +0x352 /
++0x355 / +0x357, written by enemy / eclvm) under `#[expect(struct_excessive_bools)]`; `Effect.layer` stays `u8`
+(stage.rs writes it). Public API: `Effects::spawn_at(anm, rng, FxEnv, count) -> Option<EffectIdx>` and
+`spawn_fixed_param(anm, rng, FxEnv, k) -> EffectIdx` (only callers: bomb, effect tests); `write_pos_unchecked`
+takes `EffectIdx` (only bomb); `BgDraw::{Flat, Billboard.i}` hold `EffectIdx` (stage.rs only stores / passes them
+back); new `effect::{FxEnv, WHITE}`, `bomb::ObjState`; `BombObj.state: ObjState`, `Bomb.fx: Option<EffectIdx>` (no
+user outside bomb). Unchanged raw forms for the other runs' files: `spawn` / `spawn_param` / `spawn_fixed` /
+`spawn_high` (`u32` colour, `usize` / `NONE` result), `get` / `peek` / `free` (`usize`), `pub fx: Vec<Effect>`.
+Lint subset (tools/lint_subset): bomb.rs 104 → 0, effect.rs 65 → 0; workspace 1 444 → 1 275 (53 files; other
+wave-2 runs not merged). Check: FAST arch_check 0 differing (emit-off 0), cargo test -p th08-core 323 passed (1 ignored),
+spec_refs 0. Deviations: `spawn_param` keeps its 8 args under `#[expect(too_many_arguments)]` (caller
+eclvm/ops_enemy.rs, 11e); no `BombEnv`: the bomb's per-frame context is the existing `Bf`, the arg bundles are `Hit`
+/ `SparkRing`; effect / SE / script ids stay short hex (they are the spec's numbers).
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

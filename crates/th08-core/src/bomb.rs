@@ -1,13 +1,14 @@
 //! Bombs: Player_UpdateBomb, Bomb_Start, the 16 bombs + dissolve spell, tint (09 §7, 14 §1–§2); areas (09 §8).
 use crate::anmmgr::AnmManager;
-use crate::anmvm::{self, AnmVm, Timer};
+use crate::anmvm::{self, AnmVm, Timer, table_index};
 use crate::drawlist::{PLAYFIELD, Recorder};
-use crate::effect;
+use crate::effect::{self, FxEnv, WHITE};
 use crate::game::Sys;
 use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
 use crate::input;
 use crate::item::ItemManager;
 use crate::player::{ANM_SLOT, DISSOLVE_BEGIN, DISSOLVE_END, Player, Stats};
+use crate::types::{D3dColor, EffectIdx, lo8};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 // 192 damage + 192 cancel areas, 0x40 each (09 §8).
@@ -93,11 +94,21 @@ impl Area {
 // (damage, area) pairs; held in `Ctx::bomb_areas` / `Sys::areas`.
 pub type AreaQueue = Vec<(bool, Area)>;
 
+// Bomb object +0 state (14 §1.1).
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ObjState {
+    #[default]
+    Free = 0,
+    Active = 1,
+    Exploding = 2,
+}
+
 // Bomb object (14 §1.1, 0x16F0 bytes); fields keep their values between bombs.
 #[derive(Clone, Debug, Default)]
 pub struct BombObj {
-    // +0: 0 free, 1 active, 2 exploding.
-    pub state: i32,
+    // +0 state.
+    pub state: ObjState,
     // +4.
     pub counter: i32,
     // +8 speed / orbit radius / angular speed, +0xC speed (per bomb).
@@ -149,11 +160,11 @@ pub struct Bomb {
     pub attract: bool,
     // +0xFF0 counter (Reimu LS blast index, ring index n).
     pub n: i32,
-    // Port-only scratch: start S, dash target P, return start Q (Alice, Youmu); Sakuya effect-20 index.
+    // Port-only scratch: start S, dash target P, return start Q (Alice, Youmu); Sakuya effect-20 slot (None = dummy).
     pub start: [f32; 3],
     pub dash: [f32; 3],
     pub back: [f32; 3],
-    pub fx: usize,
+    pub fx: Option<EffectIdx>,
 }
 
 impl Default for Bomb {
@@ -174,7 +185,7 @@ impl Default for Bomb {
             start: [0.0; 3],
             dash: [0.0; 3],
             back: [0.0; 3],
-            fx: effect::NONE,
+            fx: None,
         }
     }
 }
@@ -218,13 +229,71 @@ const SPECS: [[BombSpec; 2]; 8] = [
 ];
 // Youmu LS passes isLastSpell = 0 (14 §2.12 quirk); the dissolve spell is 40 frames in spell practice.
 const DISSOLVE: BombSpec = ("「ディゾルブスペル」", 120, 200, false);
-// Table 0x4C6100 (14 §2.2).
-const BLAST_COLOURS: [u32; 7] = [
-    0x8FFFFFFF, 0x8F0000FF, 0x8FFF00FF, 0x8FFF0000, 0x8FFFFF00, 0x8F00FF00, 0x8F00FFFF,
+// Colours (D3DCOLOR 0xAARRGGBB) by spec row. Table 0x4C6100, the Reimu LS blasts (14 §2.2).
+const BLAST_COLOURS: [D3dColor; 7] = [
+    D3dColor(0x8FFF_FFFF),
+    D3dColor(0x8F00_00FF),
+    D3dColor(0x8FFF_00FF),
+    D3dColor(0x8FFF_0000),
+    D3dColor(0x8FFF_FF00),
+    D3dColor(0x8F00_FF00),
+    D3dColor(0x8F00_FFFF),
 ];
-// Alice effect 0x28 / 0x2D colours (14 §2.3) and the boundary angles of Yukari (14 §2.13).
-const DOLL_FLASH: [u32; 5] = [0xFFFFFFFF, 0xFFFFD0D0, 0xFFFFB0B0, 0xFFFF8080, 0xFFFF4040];
-const DOLL_OCTAGON: [u32; 4] = [0xFFFFFFFF, 0xFFFFD0D0, 0xFFFF8080, 0xFFFF0000];
+// Alice effect 0x28 / 0x2D colours (14 §2.3).
+const DOLL_FLASH: [D3dColor; 5] = [
+    WHITE,
+    D3dColor(0xFFFF_D0D0),
+    D3dColor(0xFFFF_B0B0),
+    D3dColor(0xFFFF_8080),
+    D3dColor(0xFFFF_4040),
+];
+const DOLL_OCTAGON: [D3dColor; 4] = [
+    WHITE,
+    D3dColor(0xFFFF_D0D0),
+    D3dColor(0xFFFF_8080),
+    D3dColor(0xFFFF_0000),
+];
+// Alice LS corner rings 0x2D at T = 120 (14 §2.4).
+const DOLL_LS_CORNERS: [([f32; 2], D3dColor); 4] = [
+    ([64.0, 96.0], D3dColor(0xFF00_00F0)),
+    ([64.0, 352.0], D3dColor(0xFFF0_0000)),
+    ([320.0, 352.0], D3dColor(0xFF00_F000)),
+    ([320.0, 96.0], D3dColor(0xFF00_F0F0)),
+];
+// Effect 12 at the bomb start, also the dissolve ring 0x32 (14 §2.1, §2.2, §2.17).
+const START_FX: D3dColor = D3dColor(0xFF40_40FF);
+// Alice flash (3: 8, 1, ·) at the blast and the end (14 §2.3).
+const ALICE_FLASH: D3dColor = D3dColor(0x8FFF_FFFF);
+// Sakuya knife hit effect 0 (14 §2.7), Sakuya LS hit flash every third knife (14 §2.8).
+const KNIFE_HIT: D3dColor = D3dColor(0xFFFF_80FF);
+const KNIFE_LS_FLASH: D3dColor = D3dColor(0x2080_80FF);
+// Youmu / Youmu LS effects 0x28 and 0x30, the slash flash (14 §2.11, §2.12).
+const YOUMU_FX: D3dColor = D3dColor(0xFF80_80FF);
+const YOUMU_LS_FX: D3dColor = D3dColor(0xFFFF_8080);
+const YOUMU_FLASH: D3dColor = D3dColor(0xEFFF_FFFF);
+// Yuyuko LS butterfly-ring flash (14 §2.16).
+const YUYUKO_LS_FLASH: D3dColor = D3dColor(0xE0F0_F0F0);
+// RGB only (alpha byte 0): spark-ring colour interpolation white → red (14 §2.6, §2.9), playfield rectangles
+// (14 §2.4, §2.11, §2.12).
+const RGB_WHITE: D3dColor = D3dColor(0x00FF_FFFF);
+const RGB_RED: D3dColor = D3dColor(0x00FF_0000);
+// Background tints C (14 §1.3 table); alpha 0x80.
+const TINT_ALPHA: u32 = 0x8000_0000;
+const TINT: D3dColor = D3dColor(0x8040_4040);
+const TINT_LS: D3dColor = D3dColor(0x8020_20D0);
+const TINT_SAKUYA_LS: D3dColor = D3dColor(0x8020_2080);
+const TINT_REMILIA: D3dColor = D3dColor(0x80D0_2020);
+const TINT_REMILIA_LS: D3dColor = D3dColor(0x80F0_0000);
+const TINT_YOUMU_2: D3dColor = D3dColor(0x8000_0030);
+const TINT_YUYUKO_LS: D3dColor = D3dColor(0x8080_2020);
+// Yuyuko (script, angular speed, radial speed) per group of 16 butterflies (14 §2.15).
+const YUYUKO_GROUPS: [(usize, f32, f32); 4] = [
+    (0x12, PI / 240.0, 2.0),
+    (0x13, -PI / 240.0, 2.0),
+    (0x12, PI / 200.0, 1.5),
+    (0x13, -PI / 200.0, 1.5),
+];
+// Boundary angles of Yukari (14 §2.13).
 const BOUNDARY_ANGLES: [f32; 4] = [PI / 4.0, 3.0 * PI / 8.0, PI / 2.0, 5.0 * PI / 8.0];
 
 // Vec3_FromPolar (05 §10).
@@ -235,11 +304,11 @@ fn polar(a: f32, r: f32) -> [f32; 2] {
 
 // Reimu orbs `call; fmul` (05 §10 trig sites, 14 §2.1): sin/cos·r rounded once, then + centre.
 fn sin_r(a: f32, r: f32) -> f32 {
-    crate::fmath::sin_mul(a, r as f64)
+    crate::fmath::sin_mul(a, f64::from(r))
 }
 
 fn cos_r(a: f32, r: f32) -> f32 {
-    crate::fmath::cos_mul(a, r as f64)
+    crate::fmath::cos_mul(a, f64::from(r))
 }
 
 fn xy(p: [f32; 3]) -> [f32; 2] {
@@ -256,9 +325,60 @@ fn shake(dur: i32, a0: i32, a1: i32, sys: &mut Sys) {
     sys.fx.screen(1, dur, a0, a1, 0, SCREEN_PRIO);
 }
 
-fn flash(dur: i32, repeats: i32, colour: u32, sys: &mut Sys) {
+fn flash(dur: i32, repeats: i32, colour: D3dColor, sys: &mut Sys) {
     sys.fx
-        .screen(3, dur, repeats, colour as i32, 0, SCREEN_PRIO);
+        .screen(3, dur, repeats, colour.0.cast_signed(), 0, SCREEN_PRIO);
+}
+
+// Effect_Spawn (13 §2.2) of `n` effects; None = the dummy.
+fn spawn(
+    anm: &mut AnmManager,
+    sys: &mut Sys,
+    kind: u8,
+    pos: [f32; 3],
+    n: i32,
+    c: D3dColor,
+) -> Option<EffectIdx> {
+    sys.fx.spawn_at(anm, sys.rng, FxEnv::new(kind, pos, c), n)
+}
+
+// Object index (< OBJS) as the original's int loop counter.
+#[expect(clippy::cast_possible_wrap, reason = "k < 128")]
+fn obj_int(k: usize) -> i32 {
+    k as i32
+}
+
+// Damage-area fields the bombs set after the creator (09 §8): +0x38 period, +0x34 max total, +0x3D no hit effect.
+#[derive(Clone, Copy)]
+struct Hit {
+    period: i32,
+    max: i32,
+    no_spark: bool,
+}
+
+impl Hit {
+    // Period only: max 0 (unlimited), hit effect on.
+    const fn every(period: i32) -> Self {
+        Self {
+            period,
+            max: 0,
+            no_spark: false,
+        }
+    }
+}
+
+// Ring 0x35 arguments of `spark_ring` (14 §2.6, §2.9).
+#[derive(Clone, Copy)]
+struct SparkRing {
+    // Ring counter n (fixed slot 4 + n % 4).
+    n: i32,
+    waves: i32,
+    // Scale.x start → end over 30 frames; None = constant 64.
+    width: Option<(f32, f32)>,
+    // VM pos end (radius, amplitude).
+    end: [f32; 3],
+    // Marisa LS odd n: script 0x5C.
+    alt: bool,
 }
 
 // Table 0x4C7AD0 (09 §7): teams take the human member's bomb for even indexes, the youkai member's for odd.
@@ -345,20 +465,10 @@ impl Player {
     }
 
     // Damage circle / rect with period, max and the +0x3D no-hit-effect flag set by the bomb.
-    fn dc(
-        &mut self,
-        pos: [f32; 2],
-        r: f32,
-        dr: f32,
-        dmg: i32,
-        life: i32,
-        period: i32,
-        max: i32,
-        no_spark: bool,
-    ) -> usize {
+    fn dc(&mut self, pos: [f32; 2], r: f32, dr: f32, dmg: i32, life: i32, hit: Hit) -> usize {
         let i = self.damage_circle(pos, r, dr, dmg, life);
         let a = &mut self.damage_areas[i];
-        (a.period, a.max, a.no_spark) = (period, max, no_spark);
+        (a.period, a.max, a.no_spark) = (hit.period, hit.max, hit.no_spark);
         i
     }
 
@@ -467,9 +577,9 @@ impl Player {
             self.bombing = false;
             sys.gui.push(crate::gui::Req::PlayerHide);
             if self.bomb.index == 4 {
-                *sys.flags = *sys.flags & !(F_LAST_SPELL | F_LAST_CAPTURED);
+                *sys.flags &= !(F_LAST_SPELL | F_LAST_CAPTURED);
                 self.dissolve_req |= DISSOLVE_END;
-                flash(30, 1, 0xFFFFFFFF, sys);
+                flash(30, 1, WHITE, sys);
             }
         }
         // Quirk kept (09 §7): forced gauge add also on the end frame, with the old index.
@@ -542,7 +652,7 @@ impl Player {
         let face = if self.bomb.index == 4 {
             -1
         } else {
-            (self.bomb.ch & 1) as i32
+            i32::from(self.bomb.ch & 1)
         };
         sys.gui.push(crate::gui::Req::PlayerShow {
             face,
@@ -554,7 +664,10 @@ impl Player {
         self.state_timer.set(spec.2);
         crate::effect::invuln_ring(sys.fx, anm, sys.rng, self.pos, spec.2);
         self.invuln_ring = true;
-        self.bomb.objs.iter_mut().for_each(|o| o.state = 0);
+        self.bomb
+            .objs
+            .iter_mut()
+            .for_each(|o| o.state = ObjState::Free);
         self.bomb.attract = true;
         self.bomb.origin = self.pos;
     }
@@ -588,7 +701,7 @@ impl Player {
         }
         let ch = self.bomb.ch as usize;
         if t == 0 && adv {
-            self.bomb_begin(anm, SPECS[ch][ls as usize], sys);
+            self.bomb_begin(anm, SPECS[ch][usize::from(ls)], sys);
         }
         let b = Bf {
             t,
@@ -657,12 +770,17 @@ impl Player {
         let mut a = -PI;
         for i in 0..16 {
             let c = self.cancel_circle(xy(p), 96.0, 0.0, 200, 6);
-            let d = self.dc(xy(p), 64.0, 0.0, 5, 200, 2, 200, true);
+            let orb = Hit {
+                period: 2,
+                max: 200,
+                no_spark: true,
+            };
+            let d = self.dc(xy(p), 64.0, 0.0, 5, 200, orb);
             let o = &mut self.bomb.objs[i];
             Self::obj_script(anm, rng, o, 0x13);
             o.angle = a;
             a += PI / 8.0;
-            (o.pos, o.centre, o.f8, o.state) = (p, p, 0.0, 1);
+            (o.pos, o.centre, o.f8, o.state) = (p, p, 0.0, ObjState::Active);
             (o.carea, o.darea) = (Some(c), Some(d));
         }
     }
@@ -674,13 +792,17 @@ impl Player {
         let q = self.bomb.objs[i].pos;
         self.cancel_circle(p, 64.0, 64.0 / 15.0, 30, 6);
         if ls {
-            self.dc(xy(q), 64.0, 128.0 / 15.0, 25, 15, 5, 50, false);
+            let hit = Hit {
+                max: 50,
+                ..Hit::every(5)
+            };
+            self.dc(xy(q), 64.0, 128.0 / 15.0, 25, 15, hit);
         } else {
-            self.dc(xy(q), 64.0, 12.8, 500, 12, 4, 0, false);
+            self.dc(xy(q), 64.0, 12.8, 500, 12, Hit::every(4));
         }
-        sys.fx.spawn(anm, sys.rng, 6, q, 8, 0xFFFFFFFF);
+        spawn(anm, sys, 6, q, 8, WHITE);
         let o = &mut self.bomb.objs[i];
-        o.state = 2;
+        o.state = ObjState::Exploding;
         o.vm.pending_interrupt = 1;
         sys.sound.play_at(0xF, q[0]);
         shake(16, 8, 0, sys);
@@ -690,7 +812,7 @@ impl Player {
     fn bomb_reimu(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let p = self.pos;
         if Self::at(b, 0) {
-            sys.fx.spawn(anm, sys.rng, 12, p, 1, 0xFF4040FF);
+            spawn(anm, sys, 12, p, 1, START_FX);
             self.reimu_orbs(anm, sys.rng);
             sys.sound.play(0xD);
         }
@@ -699,7 +821,7 @@ impl Player {
             for (i, o) in self.bomb.objs[..16]
                 .iter_mut()
                 .enumerate()
-                .filter(|(_, o)| o.state == 1)
+                .filter(|(_, o)| o.state == ObjState::Active)
             {
                 o.angle = anmvm::wrap_add(o.angle, if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 });
                 let prev = o.pos;
@@ -712,13 +834,13 @@ impl Player {
                 o.v = [o.pos[0] - prev[0], o.pos[1] - prev[1], 0.0];
             }
             for i in 0..16 {
-                if self.bomb.objs[i].state == 1 {
+                if self.bomb.objs[i].state == ObjState::Active {
                     self.follow(i);
                 }
             }
         }
         if Self::at(b, 40) {
-            for o in self.bomb.objs[..16].iter_mut() {
+            for o in &mut self.bomb.objs[..16] {
                 o.fc = len(xy(o.v));
                 o.angle = crate::fmath::atan2_f(o.v[1], o.v[0]);
                 (o.counter, o.f8) = (0, 8.0);
@@ -728,7 +850,7 @@ impl Player {
         if b.t >= 40 {
             let target = self.homing_target().unwrap_or(xy(p));
             for i in 0..16 {
-                if self.bomb.objs[i].state == 1 && b.adv {
+                if self.bomb.objs[i].state == ObjState::Active && b.adv {
                     let o = &mut self.bomb.objs[i];
                     let d = [target[0] - o.pos[0], target[1] - o.pos[1]];
                     let k = (len(d) / (o.f8 / 8.0)).max(1.0);
@@ -746,24 +868,27 @@ impl Player {
                     }
                 }
                 let o = &mut self.bomb.objs[i];
-                if o.state == 0 {
+                if o.state == ObjState::Free {
                     continue;
                 }
                 o.pos[0] += o.v[0] * b.gs;
                 o.pos[1] += o.v[1] * b.gs;
-                if o.state == 1 {
+                if o.state == ObjState::Active {
                     self.follow(i);
                 } else {
                     if b.adv {
                         o.counter += 1;
                     }
                     if o.counter >= 30 {
-                        o.state = 0;
+                        o.state = ObjState::Free;
                     }
                 }
             }
         }
-        for o in self.bomb.objs[..16].iter_mut().filter(|o| o.state != 0) {
+        for o in self.bomb.objs[..16]
+            .iter_mut()
+            .filter(|o| o.state != ObjState::Free)
+        {
             Self::run_obj(anm, sys.rng, o);
         }
     }
@@ -771,14 +896,14 @@ impl Player {
     // 14 §2.2 神霊「夢想封印　瞬」 0x40C910: orb i explodes at T ≥ dur − 40 − i; blasts every 20 frames from T = 40.
     fn bomb_reimu_ls(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         if Self::at(b, 0) {
-            sys.fx.spawn(anm, sys.rng, 12, self.pos, 1, 0xFF4040FF);
+            spawn(anm, sys, 12, self.pos, 1, START_FX);
             self.reimu_orbs(anm, sys.rng);
             self.bomb.n = 0;
             sys.sound.play(0xD);
         }
         for i in 0..16 {
             let o = &mut self.bomb.objs[i];
-            if o.state != 1 {
+            if o.state != ObjState::Active {
                 continue;
             }
             o.angle = anmvm::wrap_add(o.angle, if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 });
@@ -790,7 +915,7 @@ impl Player {
             if b.t < 40 {
                 o.f8 += if i % 2 == 0 { 2.4 } else { 1.2 };
             }
-            if b.t >= self.bomb.duration - 40 - i as i32 {
+            if b.t >= self.bomb.duration - 40 - obj_int(i) {
                 // Quirk kept (14 §2.2): the follow write still runs through the old slots, so the impact C circle
                 // that reused the just-freed slot moves from p to the orb.
                 let (c, d) = (o.carea, o.darea);
@@ -809,38 +934,37 @@ impl Player {
         if b.t >= 40 && b.t % 20 == 0 && b.adv {
             // Quirk kept: the first blast uses object 16, every later one reuses object 17.
             // 14 §2.2 sets the VM script before the RNG point; no player*.anm script draws RNG at time 0, so order is moot.
-            let k = 16 + self.bomb.n as usize;
+            let k = 16 + table_index(self.bomb.n);
             self.bomb.n = 1;
-            let colour = BLAST_COLOURS[((b.t / 20) % 7) as usize];
-            let point = match self.homing_target() {
-                Some(p) => p,
-                None => {
-                    let x = sys.rng.next_f32() * 320.0 + 32.0;
-                    [x, sys.rng.next_f32() * 384.0 + 32.0]
-                }
+            let colour = BLAST_COLOURS[table_index((b.t / 20) % 7)];
+            let point = if let Some(p) = self.homing_target() {
+                p
+            } else {
+                let x = sys.rng.next_f32() * 320.0 + 32.0;
+                [x, sys.rng.next_f32() * 384.0 + 32.0]
             };
             let pt = [point[0], point[1], 0.0];
-            sys.fx.spawn(anm, sys.rng, 0x31, pt, 1, colour);
-            sys.fx.spawn(anm, sys.rng, 0x37, pt, 1, colour);
+            spawn(anm, sys, 0x31, pt, 1, colour);
+            spawn(anm, sys, 0x37, pt, 1, colour);
             let c = self.cancel_circle(point, 64.0, 64.0 / 15.0, 30, 6);
-            let d = self.dc(point, 64.0, 128.0 / 15.0, 400, 15, 2, 0, false);
+            let d = self.dc(point, 64.0, 128.0 / 15.0, 400, 15, Hit::every(2));
             let o = &mut self.bomb.objs[k];
             Self::obj_script(anm, sys.rng, o, 0x14);
-            o.vm.color = colour.to_le_bytes();
-            (o.pos, o.state, o.carea, o.darea) = (pt, 1, Some(c), Some(d));
+            o.vm.color = colour.to_bgra();
+            (o.pos, o.state, o.carea, o.darea) = (pt, ObjState::Active, Some(c), Some(d));
             sys.sound.play(0xF);
             shake(16, 8, 0, sys);
             flash(8, 1, colour, sys);
         }
         for k in 0..OBJS {
-            if self.bomb.objs[k].state == 0 {
+            if self.bomb.objs[k].state == ObjState::Free {
                 continue;
             }
             if k >= 16 {
                 self.follow(k);
             }
             if Self::run_obj(anm, sys.rng, &mut self.bomb.objs[k]) && k >= 16 {
-                self.bomb.objs[k].state = 0;
+                self.bomb.objs[k].state = ObjState::Free;
             }
         }
     }
@@ -853,7 +977,10 @@ impl Player {
         mode: i32,
         rot: impl Fn(&BombObj) -> Option<f32>,
     ) {
-        for o in self.bomb.objs[..n].iter_mut().filter(|o| o.state != 0) {
+        for o in self.bomb.objs[..n]
+            .iter_mut()
+            .filter(|o| o.state != ObjState::Free)
+        {
             if let Some(a) = rot(o)
                 && o.vm.rotation[2] != a
             {
@@ -870,7 +997,10 @@ impl Player {
     }
 
     fn emit_objs(&self, anm: &AnmManager, rec: &mut Recorder, n: usize, mode: i32) {
-        for o in self.bomb.objs[..n].iter().filter(|o| o.state != 0) {
+        for o in self.bomb.objs[..n]
+            .iter()
+            .filter(|o| o.state != ObjState::Free)
+        {
             anm.emit_mode_z(rec, &o.vm, mode, 0.0);
         }
     }
@@ -902,7 +1032,7 @@ impl Player {
             doll.vm.flags |= anmvm::F_ROT_DIRTY;
             let q = xy(doll.pos);
             self.cancel_circle(q, 32.0, 0.0, 0, 6);
-            self.dc(q, 32.0, 0.0, 40, 0, 1, 0, false);
+            self.dc(q, 32.0, 0.0, 40, 0, Hit::every(1));
         } else {
             doll.vm.rotation[2] = 0.0;
             doll.vm.flags |= anmvm::F_ROT_DIRTY;
@@ -914,51 +1044,39 @@ impl Player {
         }
         let q = doll.pos;
         if b.adv && (60..=76).contains(&b.t) && b.t % 4 == 0 {
-            sys.fx.spawn(
-                anm,
-                sys.rng,
-                0x28,
-                q,
-                1,
-                DOLL_FLASH[(b.t as usize - 60) / 4],
-            );
+            spawn(anm, sys, 0x28, q, 1, DOLL_FLASH[table_index(b.t - 60) / 4]);
         }
         let (blast, oct0, end) = if ls { (120, 130, 180) } else { (90, 100, 150) };
         if Self::at(b, blast) {
             sys.sound.play(0xF);
             for k in [0x2A, 0x2B, 0x2C] {
-                sys.fx.spawn(anm, sys.rng, k, q, 1, 0xFFFFFFFF);
+                spawn(anm, sys, k, q, 1, WHITE);
             }
             if ls {
-                for (p, c) in [
-                    ([64.0, 96.0], 0xFF0000F0),
-                    ([64.0, 352.0], 0xFFF00000),
-                    ([320.0, 352.0], 0xFF00F000),
-                    ([320.0, 96.0], 0xFF00F0F0),
-                ] {
-                    sys.fx.spawn(anm, sys.rng, 0x2D, [p[0], p[1], 0.0], 1, c);
+                for (p, c) in DOLL_LS_CORNERS {
+                    spawn(anm, sys, 0x2D, [p[0], p[1], 0.0], 1, c);
                 }
             }
             let c = self.cancel_circle(xy(q), 1.0, 5.0, 110, 6);
             let _ = c;
-            self.dc(xy(q), 1.0, 5.0, 70, 110, 5, 0, false);
+            self.dc(xy(q), 1.0, 5.0, 70, 110, Hit::every(5));
             if !ls {
                 shake(24, 8, 0, sys);
-                flash(8, 1, 0x8FFFFFFF, sys);
+                flash(8, 1, ALICE_FLASH, sys);
             }
         }
         if b.adv && (oct0..oct0 + 40).contains(&b.t) && (b.t - oct0) % 10 == 0 {
-            sys.fx.spawn(
+            spawn(
                 anm,
-                sys.rng,
+                sys,
                 0x2D,
                 q,
                 1,
-                DOLL_OCTAGON[((b.t - oct0) / 10) as usize],
+                DOLL_OCTAGON[table_index((b.t - oct0) / 10)],
             );
         }
         if Self::at(b, end) {
-            flash(8, 1, if ls { 0xFFFFFFFF } else { 0x8FFFFFFF }, sys);
+            flash(8, 1, if ls { WHITE } else { ALICE_FLASH }, sys);
             shake(24, 8, 0, sys);
             sys.sound.play(0x19);
         }
@@ -1001,15 +1119,14 @@ impl Player {
         }
         if b.ls && b.adv && b.t % 10 == 0 {
             let n = self.bomb.n;
-            self.spark_ring(
-                anm,
+            let ring = SparkRing {
                 n,
-                0,
-                Some((32.0, 64.0)),
-                [128.0, 0.0, 0.0],
-                n % 2 == 1,
-                sys,
-            );
+                waves: 0,
+                width: Some((32.0, 64.0)),
+                end: [128.0, 0.0, 0.0],
+                alt: n % 2 == 1,
+            };
+            self.spark_ring(anm, ring, sys);
             self.bomb.n += 1;
         }
         for vm in &mut self.bomb.vms {
@@ -1021,43 +1138,29 @@ impl Player {
 
     // Ring effect 0x35 in fixed slot 4 + n % 4 (14 §2.6, §2.9): radius/amplitude, width, fade, white → red;
     // `alt` = Marisa LS odd n → script 0x5C. `width` None = constant 64 (Remilia's 64 → 64 interpolation).
-    fn spark_ring(
-        &mut self,
-        anm: &mut AnmManager,
-        n: i32,
-        waves: i32,
-        width: Option<(f32, f32)>,
-        end: [f32; 3],
-        alt: bool,
-        sys: &mut Sys,
-    ) {
+    fn spark_ring(&mut self, anm: &mut AnmManager, s: SparkRing, sys: &mut Sys) {
         let p = self.pos;
-        let i = sys.fx.spawn_fixed(
-            anm,
-            sys.rng,
-            0x35,
-            p,
-            4 + n.rem_euclid(4) as usize,
-            0xFFFFFFFF,
-        );
+        let slot = 4 + table_index(s.n.rem_euclid(4));
+        let i = sys
+            .fx
+            .spawn_fixed_param(anm, sys.rng, FxEnv::new(0x35, p, WHITE), slot);
         {
-            let x = &mut sys.fx.fx[i];
-            if alt {
+            let x = &mut sys.fx[i];
+            if s.alt {
                 anm.set_script(sys.rng, &mut x.vm, effect::SCRIPT_SLOT, 0x5C);
-                x.vm.color = 0xFFFFFFFFu32.to_le_bytes();
+                x.vm.color = WHITE.to_bgra();
             }
             x.ring.segments = 32;
-            x.ring.waves = waves as f32;
-            x.vm.interp_pos_from(30, 4, [0.0; 3], end);
-            match width {
-                Some((a, b)) => x.vm.interp_scale_from(30, 1, [a, 0.0], [b, 0.0]),
-                None => {
-                    x.vm.scale = [64.0, 0.0];
-                    x.vm.flags |= anmvm::F_SCALE_DIRTY;
-                }
+            x.ring.waves = s.waves as f32;
+            x.vm.interp_pos_from(30, 4, [0.0; 3], s.end);
+            if let Some((a, b)) = s.width {
+                x.vm.interp_scale_from(30, 1, [a, 0.0], [b, 0.0]);
+            } else {
+                x.vm.scale = [64.0, 0.0];
+                x.vm.flags |= anmvm::F_SCALE_DIRTY;
             }
             x.vm.interp_alpha_from(30, 3, 255, 0);
-            x.vm.interp_color_from(30, 0, 0xFFFFFF, 0xFF0000);
+            x.vm.interp_color_from(30, 0, RGB_WHITE.0, RGB_RED.0);
             x.vm.run(anm, sys.rng);
         }
         sys.sound.play_at(0x11, p[0]);
@@ -1069,16 +1172,20 @@ impl Player {
         let p = self.pos;
         let (count, per, window) = if ls { (128, 64, 148) } else { (96, 48, 116) };
         if Self::at(b, 0) {
-            self.bomb.objs[..count].iter_mut().for_each(|o| o.state = 0);
+            self.bomb.objs[..count]
+                .iter_mut()
+                .for_each(|o| o.state = ObjState::Free);
             self.speed_mult = [0.5; 2];
-            self.bomb.fx = sys.fx.spawn(anm, sys.rng, 20, p, 1, 0xFFFFFFFF);
+            self.bomb.fx = spawn(anm, sys, 20, p, 1, WHITE);
             sys.sound.play(5);
             if ls {
                 shake(50, 4, 1, sys);
             }
         }
-        if b.t <= 60 {
-            sys.fx.write_pos_unchecked(self.bomb.fx, p);
+        if b.t <= 60
+            && let Some(i) = self.bomb.fx
+        {
+            sys.fx.write_pos_unchecked(i, p);
         }
         if (20..window).contains(&b.t) {
             if !ls {
@@ -1086,11 +1193,11 @@ impl Player {
                 shake(120, 4, 1, sys);
             }
             for k in 0..count {
-                if !Self::at(b, (k % per) as i32 * 2 + 20) {
+                if !Self::at(b, obj_int(k % per) * 2 + 20) {
                     continue;
                 }
                 // Quirk kept: an already active knife makes the whole function return for this frame.
-                if self.bomb.objs[k].state != 0 {
+                if self.bomb.objs[k].state != ObjState::Free {
                     return;
                 }
                 let angle = if ls {
@@ -1109,19 +1216,12 @@ impl Player {
                 let d = polar(angle, 24.0);
                 let pos = [p[0] + d[0], p[1] + d[1], 0.0];
                 let c = self.cancel_circle(xy(pos), 32.0, 0.0, 500, 6);
-                let da = self.dc(
-                    xy(pos),
-                    32.0,
-                    0.0,
-                    if ls { 30 } else { 20 },
-                    500,
-                    1,
-                    0,
-                    false,
-                );
+                let dmg = if ls { 30 } else { 20 };
+                let da = self.dc(xy(pos), 32.0, 0.0, dmg, 500, Hit::every(1));
                 let o = &mut self.bomb.objs[k];
                 Self::obj_script(anm, sys.rng, o, if ls { 0x14 } else { 0x16 });
-                (o.state, o.angle, o.fc, o.f8, o.spin, o.pos) = (1, angle, speed, accel, spin, pos);
+                (o.state, o.angle, o.fc, o.f8, o.spin, o.pos) =
+                    (ObjState::Active, angle, speed, accel, spin, pos);
                 o.age.set(0);
                 (o.carea, o.darea) = (Some(c), Some(da));
             }
@@ -1131,13 +1231,16 @@ impl Player {
         }
         let target = self.homing_target();
         for k in 0..count {
-            if self.bomb.objs[k].state == 0 {
+            if self.bomb.objs[k].state == ObjState::Free {
                 continue;
             }
             let o = &mut self.bomb.objs[k];
             let age = o.age.cur;
             // Ages 30–69 hover and spin; at 70 re-aim at the homing target with speed 14.
-            if !(30..=69).contains(&age) {
+            if (30..=69).contains(&age) {
+                o.angle += o.spin;
+                o.v = [0.0; 3];
+            } else {
                 if age == 70 && o.age.prev != 70 {
                     if let Some(t) = target {
                         o.angle = crate::fmath::atan2_f(t[1] - o.pos[1], t[0] - o.pos[0]);
@@ -1145,16 +1248,13 @@ impl Player {
                     o.fc = 14.0;
                     if ls {
                         let q = o.pos;
-                        sys.fx.spawn(anm, sys.rng, 0x2E, q, 1, 0xFFFFFFFF);
+                        spawn(anm, sys, 0x2E, q, 1, WHITE);
                     }
                 }
                 let o = &mut self.bomb.objs[k];
                 o.fc += o.f8;
                 let v = polar(o.angle, o.fc);
                 o.v = [v[0], v[1], 0.0];
-            } else {
-                o.angle += o.spin;
-                o.v = [0.0; 3];
             }
             self.follow(k);
             // First damage dealt (age < 120): hit script, effect 0, areas off and pointers cleared (runs once).
@@ -1166,11 +1266,11 @@ impl Player {
                     let o = &mut self.bomb.objs[k];
                     Self::obj_script(anm, sys.rng, o, if ls { 0x15 } else { 0x17 });
                     let q = o.pos;
-                    sys.fx.spawn(anm, sys.rng, 0, q, 1, 0xFFFF80FF);
+                    spawn(anm, sys, 0, q, 1, KNIFE_HIT);
                     self.areas_off(k);
                     sys.sound.play_at(0x2B, q[0]);
                     if ls && k % 3 == 0 {
-                        flash(2, 1, 0x208080FF, sys);
+                        flash(2, 1, KNIFE_LS_FLASH, sys);
                     }
                 }
             } else {
@@ -1197,8 +1297,8 @@ impl Player {
         ];
         if Self::at(b, 0) {
             sys.sound.play(0xD);
-            for k in 0..4 {
-                self.bomb.objs[k].centre = self.options[k].anchor;
+            for (o, opt) in self.bomb.objs[..4].iter_mut().zip(&self.options) {
+                o.centre = opt.anchor;
             }
             sys.sound.play(6);
             self.bomb.n = 0;
@@ -1206,9 +1306,8 @@ impl Player {
         }
         if b.t < 60 {
             let f = (b.t as f32 / 60.0).powi(2);
-            for k in 0..4 {
+            for (k, a) in targets.iter().enumerate() {
                 let s = self.bomb.objs[k].centre;
-                let a = targets[k];
                 self.options[k].anchor = [s[0] + (a[0] - s[0]) * f, s[1] + (a[1] - s[1]) * f, 0.0];
             }
             return;
@@ -1219,15 +1318,22 @@ impl Player {
                 o.vm.pending_interrupt = 2;
             }
         }
-        for k in 0..4 {
-            self.options[k].anchor = [targets[k][0], targets[k][1], 0.0];
+        for (o, t) in self.options.iter_mut().zip(targets) {
+            o.anchor = [t[0], t[1], 0.0];
         }
         self.cancel_circle(xy(p), 96.0, 0.0, 0, 6);
         if b.adv && b.t % 10 == 0 {
             let n = self.bomb.n;
             let amp = sys.rng.next_f32() * 128.0;
             let width = Some((64.0, if b.ls { 128.0 } else { 64.0 }));
-            self.spark_ring(anm, n, 4, width, [192.0, amp, 0.0], false, sys);
+            let ring = SparkRing {
+                n,
+                waves: 4,
+                width,
+                end: [192.0, amp, 0.0],
+                alt: false,
+            };
+            self.spark_ring(anm, ring, sys);
             self.bomb.n += 1;
         }
         // While shooting (shot timer ≥ 5): a cross of two cancel rects, life 0.
@@ -1260,9 +1366,9 @@ impl Player {
             self.pos[0] = s[0] + (pd[0] - s[0]) * f;
             self.pos[1] = s[1] + (pd[1] - s[1]) * f;
         }
-        let colour = if ls { 0xFFFF8080 } else { 0xFF8080FF };
+        let colour = if ls { YOUMU_LS_FX } else { YOUMU_FX };
         if Self::at(b, 40) {
-            sys.fx.spawn(anm, sys.rng, 0x28, self.pos, 1, colour);
+            spawn(anm, sys, 0x28, self.pos, 1, colour);
         }
         if Self::at(b, 70) {
             self.pos[1] = 32.0;
@@ -1275,11 +1381,11 @@ impl Player {
                 self.dr(c, [96.0, 448.0], 300, 10, 1, false);
                 self.dr(c, [96.0, 448.0], 80, 60, 5, false);
             }
-            sys.fx
-                .spawn(anm, sys.rng, 0x30, [c[0], c[1], 0.0], 1, colour);
-            flash(8, 1, 0xEFFFFFFF, sys);
+            spawn(anm, sys, 0x30, [c[0], c[1], 0.0], 1, colour);
+            flash(8, 1, YOUMU_FLASH, sys);
             sys.sound.play(0x2A);
         }
+        // (T, x offset, damage, flash alpha) per slash pair (14 §2.11, §2.12).
         let pairs: &[(i32, f32, i32, u32)] = if ls {
             &[
                 (80, 32.0, 100, 0xCF),
@@ -1304,10 +1410,9 @@ impl Player {
                 let c = [self.pos[0] + sgn * dx, 224.0];
                 self.cancel_rect(c, [96.0, 448.0], 6, 60);
                 self.dr(c, [96.0, 448.0], dmg, 40, period, false);
-                sys.fx
-                    .spawn(anm, sys.rng, 0x30, [c[0], c[1], 0.0], 1, colour);
+                spawn(anm, sys, 0x30, [c[0], c[1], 0.0], 1, colour);
             }
-            flash(8, 1, (a << 24) | 0xFFFFFF, sys);
+            flash(8, 1, D3dColor((a << 24) | RGB_WHITE.0), sys);
         }
         let (q_at, back0) = if ls { (130, 150) } else { (100, 120) };
         if Self::at(b, q_at) {
@@ -1345,18 +1450,14 @@ impl Player {
             }
             let life = if ls { [100, 40, 100, 100][k] } else { 40 };
             self.cancel_circle(xy(p), 100.0, 1.0, life, 6);
-            self.dc(xy(p), 100.0, 1.0, 70, 40, 5, 0, false);
+            self.dc(xy(p), 100.0, 1.0, 70, 40, Hit::every(5));
             let at_pos = if ls || k == 0 { self.bomb.origin } else { p };
             let kind = if ls { 0x25 } else { 0x24 };
-            let i = sys.fx.spawn_fixed_param(
-                anm,
-                sys.rng,
-                kind,
-                at_pos,
-                [BOUNDARY_ANGLES[k], 1.0, 4.0],
-                4 + k,
-                0xFFFFFFFF,
-            );
+            let f = FxEnv {
+                param: [BOUNDARY_ANGLES[k], 1.0, 4.0],
+                ..FxEnv::new(kind, at_pos, WHITE)
+            };
+            let i = sys.fx.spawn_fixed_param(anm, sys.rng, f, 4 + k);
             // Quirk kept (14 §2.14): the init re-spawns the slot as type 0x23, so slot 4 runs script 88 even for 0x25.
             let script = if k == 0 {
                 88
@@ -1365,11 +1466,11 @@ impl Player {
             } else {
                 0x58 + k
             };
-            anm.set_script(sys.rng, &mut sys.fx.fx[i].vm, effect::SCRIPT_SLOT, script);
+            anm.set_script(sys.rng, &mut sys.fx[i].vm, effect::SCRIPT_SLOT, script);
             // 14 §2.13: the re-spawn writes colour 0xFFFFFFFF after its SetScript and slot 4 gets no second script
             // start, so it draws white (script 88's t = 0 `color` is overwritten); slots 5–7 keep their scripts' colour.
             if k == 0 {
-                sys.fx.fx[i].vm.color = [0xFF; 4];
+                sys.fx[i].vm.color = WHITE.to_bgra();
             }
         }
         if ls {
@@ -1383,27 +1484,28 @@ impl Player {
     fn bomb_yuyuko(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let p = self.pos;
         if Self::at(b, 0) {
-            self.bomb.objs.iter_mut().for_each(|o| o.state = 0);
-            const GROUPS: [(usize, f32, f32); 4] = [
-                (0x12, PI / 240.0, 2.0),
-                (0x13, -PI / 240.0, 2.0),
-                (0x12, PI / 200.0, 1.5),
-                (0x13, -PI / 200.0, 1.5),
-            ];
-            for (g, &(script, w, dr)) in GROUPS.iter().enumerate() {
+            self.bomb
+                .objs
+                .iter_mut()
+                .for_each(|o| o.state = ObjState::Free);
+            for (g, &(script, w, dr)) in YUYUKO_GROUPS.iter().enumerate() {
                 for i in 0..16 {
-                    let d = self.dc(xy(p), 24.0, 0.0, 50, 500, 1, 800, false);
+                    let hit = Hit {
+                        max: 800,
+                        ..Hit::every(1)
+                    };
+                    let d = self.dc(xy(p), 24.0, 0.0, 50, 500, hit);
                     let c = self.cancel_circle(xy(p), 24.0, 0.0, 500, 6);
                     let o = &mut self.bomb.objs[g * 16 + i];
                     Self::obj_script(anm, sys.rng, o, script);
                     o.angle = i as f32 * PI / 8.0 - PI;
-                    (o.centre, o.pos, o.f8, o.state) = (p, p, w, 1);
+                    (o.centre, o.pos, o.f8, o.state) = (p, p, w, ObjState::Active);
                     o.v = [0.0, dr, 0.0];
                     (o.darea, o.carea) = (Some(d), Some(c));
                 }
             }
             self.speed_mult = [0.8; 2];
-            sys.fx.spawn(anm, sys.rng, 20, p, 1, 0xFFFFFFFF);
+            spawn(anm, sys, 20, p, 1, WHITE);
             sys.sound.play(5);
             if b.ls {
                 shake(60, 16, 0, sys);
@@ -1418,15 +1520,19 @@ impl Player {
             let (mut taken, mut last) = (0, OBJS - 1);
             for k in 0..OBJS {
                 last = k;
-                if self.bomb.objs[k].state != 0 {
+                if self.bomb.objs[k].state != ObjState::Free {
                     continue;
                 }
-                let d = self.dc(xy(p), 64.0, 0.0, 100, 500, 1, 1200, false);
+                let hit = Hit {
+                    max: 1200,
+                    ..Hit::every(1)
+                };
+                let d = self.dc(xy(p), 64.0, 0.0, 100, 500, hit);
                 let c = self.cancel_circle(xy(p), 64.0, 0.0, 500, 6);
                 let o = &mut self.bomb.objs[k];
                 Self::obj_script(anm, sys.rng, o, 0x14);
                 o.angle = anmvm::wrap_add(k as f32 * PI / 8.0 + base, 0.0);
-                (o.centre, o.pos, o.state) = (p, p, 1);
+                (o.centre, o.pos, o.state) = (p, p, ObjState::Active);
                 o.v = [0.0, 8.0, 0.0];
                 (o.darea, o.carea) = (Some(d), Some(c));
                 taken += 1;
@@ -1436,11 +1542,11 @@ impl Player {
             }
             sys.sound.play_at(0xF, self.bomb.objs[last].pos[0]);
             shake(30, 8, 0, sys);
-            flash(8, 1, 0xE0F0F0F0, sys);
+            flash(8, 1, YUYUKO_LS_FLASH, sys);
         }
         for k in 0..OBJS {
             let o = &mut self.bomb.objs[k];
-            if o.state == 0 {
+            if o.state == ObjState::Free {
                 continue;
             }
             o.v[0] += o.v[1];
@@ -1452,12 +1558,12 @@ impl Player {
             if o.v[0] < 500.0 {
                 self.follow(k);
                 if Self::run_obj(anm, sys.rng, &mut self.bomb.objs[k]) {
-                    self.bomb.objs[k].state = 0;
+                    self.bomb.objs[k].state = ObjState::Free;
                     self.areas_off(k);
                 }
             } else {
                 // 14 §2.15: freed and both areas switched off.
-                o.state = 0;
+                o.state = ObjState::Free;
                 self.areas_off(k);
             }
         }
@@ -1467,9 +1573,11 @@ impl Player {
     fn dissolve_start(&mut self, anm: &mut AnmManager, sys: &mut Sys) {
         let p = self.pos;
         let practice = *sys.flags & F_SPELL_PRACTICE != 0;
-        sys.fx.spawn(anm, sys.rng, 12, p, 1, 0xFF4040FF);
-        let i = sys.fx.spawn_fixed(anm, sys.rng, 0x32, p, 4, 0xFF4040FF);
-        sys.fx.get(i, |e| {
+        spawn(anm, sys, 12, p, 1, START_FX);
+        let i = sys
+            .fx
+            .spawn_fixed_param(anm, sys.rng, FxEnv::new(0x32, p, START_FX), 4);
+        sys.fx.get(i.idx(), |e| {
             // Ring fields, not the VM scale: the type-50 update copies VM scale.x into the width (14 §2.17).
             e.ring.segments = 64;
             e.ring.waves = 6.0;
@@ -1489,10 +1597,11 @@ impl Player {
 
     // Background tint 0x40BC60 (14 §1.3): ramps over the first/last 60 frames, alpha 0x80; global tint off, then
     // a stage tint request for the next Stage_DrawLow and the +0x646C "bomb drew" flag.
-    fn tint(&self, anm: &mut AnmManager, c: u32) {
+    fn tint(&self, anm: &mut AnmManager, c: D3dColor) {
         let (t, dur) = (self.bomb.timer.cur, self.bomb.duration);
-        let ch = |v: u32| -> u32 {
-            let v = v as i32;
+        // Low byte of the ramped channel (the original masks with 0xFF).
+        let ch = |v: u8| -> u8 {
+            let v = i32::from(v);
             let x = if t < 60 {
                 128 + (v - 128) * t / 60
             } else if t >= dur - 60 {
@@ -1500,29 +1609,23 @@ impl Player {
             } else {
                 v
             };
-            (x as u32) & 0xFF
+            lo8(x)
         };
         anm.tint_off();
-        anm.request_tint(
-            0x8000_0000 | ch((c >> 16) & 0xFF) << 16 | ch((c >> 8) & 0xFF) << 8 | ch(c & 0xFF),
-        );
+        let a = D3dColor(TINT_ALPHA).a();
+        anm.request_tint(D3dColor::from_bgra([ch(c.b()), ch(c.g()), ch(c.r()), a]).0);
         anm.bomb_drew = true;
     }
 
     // Alpha-blended playfield rectangle (Alice LS, Youmu draw fns).
-    fn playfield_rect(rec: &mut Recorder, rgb: u32, a: i32) {
+    fn playfield_rect(rec: &mut Recorder, rgb: D3dColor, a: i32) {
         let r = PLAYFIELD;
         rec.rect(
             r.x,
             r.y,
             r.w,
             r.h,
-            [
-                (rgb >> 16) as u8,
-                (rgb >> 8) as u8,
-                rgb as u8,
-                a.clamp(0, 255) as u8,
-            ],
+            [rgb.r(), rgb.g(), rgb.b(), lo8(a.clamp(0, 255))],
         );
     }
 
@@ -1536,10 +1639,10 @@ impl Player {
         let ls = self.bomb.index & 2 != 0;
         if self.bomb.index == 4 {
             let c = if t < 60 {
-                0x80404040
+                TINT
             } else {
-                let g = ((t - 60) * 176 / 60 + 64) as u32;
-                0x8000_0000 | g << 16 | g << 8 | g
+                let g = ((t - 60) * 176 / 60 + 64).cast_unsigned();
+                D3dColor(TINT_ALPHA | g << 16 | g << 8 | g)
             };
             self.tint(anm, c);
             return;
@@ -1547,11 +1650,11 @@ impl Player {
         let p = self.pos;
         match self.bomb.ch {
             0 => {
-                self.tint(anm, if ls { 0x802020D0 } else { 0x80404040 });
+                self.tint(anm, if ls { TINT_LS } else { TINT });
                 self.step_objs(anm, if ls { OBJS } else { 16 }, 0, |_| None);
             }
             1 => {
-                self.tint(anm, if ls { 0x802020D0 } else { 0x80404040 });
+                self.tint(anm, if ls { TINT_LS } else { TINT });
                 if ls {
                     let o = self.bomb.objs[0].pos;
                     for vm in &mut self.bomb.vms[..2] {
@@ -1565,7 +1668,7 @@ impl Player {
                 }
             }
             2 => {
-                self.tint(anm, 0x80404040);
+                self.tint(anm, TINT);
                 for (i, vm) in self.bomb.vms.iter_mut().enumerate() {
                     let a = i as f32 * PI / 15.0 - FRAC_PI_2 - 2.0 * PI / 15.0;
                     let d = polar(a, vm.sprite_w * vm.scale[0] / 2.0);
@@ -1577,30 +1680,34 @@ impl Player {
                     anm.prepare(vm, 2);
                 }
             }
-            3 if !ls => self.tint(anm, 0x80404040),
+            3 if !ls => self.tint(anm, TINT),
             3 => {
-                if t < 90 || t > 220 {
-                    self.tint(anm, 0x802020D0);
+                if !(90..=220).contains(&t) {
+                    self.tint(anm, TINT_LS);
                 } else if t <= 120 {
-                    let c = ((t - 90) * 208 / 30) as u32;
+                    // 14 §2.4: c = (T − 90)·208/30, R (c/5 − 48) mod 256, G = B = c + 32.
+                    let c = ((t - 90) * 208 / 30).cast_unsigned();
                     let r = (c / 5).wrapping_sub(48) & 0xFF;
-                    self.tint(anm, 0x8000_0000 | r << 16 | (c + 32) << 8 | (c + 32));
+                    self.tint(
+                        anm,
+                        D3dColor(TINT_ALPHA | r << 16 | (c + 32) << 8 | (c + 32)),
+                    );
                 }
             }
             4 => {
-                self.tint(anm, if ls { 0x80202080 } else { 0x80404040 });
+                self.tint(anm, if ls { TINT_SAKUYA_LS } else { TINT });
                 self.step_objs(anm, 96, 2, |o| Some(o.angle));
             }
-            5 => self.tint(anm, if ls { 0x80F00000 } else { 0x80D02020 }),
+            5 => self.tint(anm, if ls { TINT_REMILIA_LS } else { TINT_REMILIA }),
             6 => {
                 // Two `Bomb_DrawTint` calls from T 70, averaged by the stage request (14 §2.11/§2.12).
-                self.tint(anm, 0x80404040);
+                self.tint(anm, TINT);
                 if t >= 70 {
-                    self.tint(anm, 0x80000030);
+                    self.tint(anm, TINT_YOUMU_2);
                 }
             }
             _ => {
-                self.tint(anm, if ls { 0x80802020 } else { 0x80404040 });
+                self.tint(anm, if ls { TINT_YUYUKO_LS } else { TINT });
                 let n = if ls { OBJS } else { 96 };
                 self.step_objs(anm, n, 2, |o| {
                     Some(crate::fmath::atan2_f(o.disp[1], o.disp[0]))
@@ -1629,9 +1736,9 @@ impl Player {
                 .iter()
                 .for_each(|vm| anm.emit_mode_z(rec, vm, 2, 0.0)),
             3 if ls && (90..=120).contains(&t) => {
-                Self::playfield_rect(rec, 0xFFFFFF, (t - 90) * 255 / 30)
+                Self::playfield_rect(rec, RGB_WHITE, (t - 90) * 255 / 30);
             }
-            3 if ls && (121..=220).contains(&t) => Self::playfield_rect(rec, 0xFFFFFF, 0x70),
+            3 if ls && (121..=220).contains(&t) => Self::playfield_rect(rec, RGB_WHITE, 0x70),
             4 => self.emit_objs(anm, rec, 96, 2),
             6 if (70..160).contains(&t) => {
                 let a = if t <= 100 {
@@ -1639,7 +1746,7 @@ impl Player {
                 } else {
                     255 - (t - 100) * 255 / 60
                 };
-                Self::playfield_rect(rec, if ls { 0xFF0000 } else { 0xFFFFFF }, a);
+                Self::playfield_rect(rec, if ls { RGB_RED } else { RGB_WHITE }, a);
             }
             7.. => self.emit_objs(anm, rec, if ls { OBJS } else { 96 }, 2),
             _ => {}
@@ -1755,7 +1862,7 @@ mod tests {
         for i in 0..16 {
             let d = if i % 2 == 0 { -PI / 60.0 } else { PI / 60.0 };
             assert_eq!(p.bomb.objs[i].angle, anmvm::wrap_add(a, d), "orb {i}");
-            differs += (a != -PI + i as f32 * PI / 8.0) as u32;
+            differs += u32::from(a != -PI + i as f32 * PI / 8.0);
             a += PI / 8.0;
         }
         assert!(differs > 0);
@@ -1805,7 +1912,7 @@ mod tests {
         let sys = &mut ts.sys();
         assert_eq!(
             ((64.0f32 / 15.0).to_bits(), (128.0f32 / 15.0).to_bits()),
-            (0x40888889, 0x41088889)
+            (0x4088_8889, 0x4108_8889)
         );
         let (mut p, mut anm) = ready(0);
         p.bomb.ch = 0;
@@ -1821,7 +1928,7 @@ mod tests {
         p.bomb.objs[15].f8 = 50.0;
         p.bomb_reimu_ls(&mut anm, bf(145), sys);
         let o = &p.bomb.objs[15];
-        assert_eq!((o.state, o.carea), (2, None));
+        assert_eq!((o.state, o.carea), (ObjState::Exploding, None));
         let c = &p.cancel_areas[old_c];
         assert!(c.active && c.dr == 64.0 / 15.0);
         assert_eq!(c.pos, xy(o.pos));
@@ -1836,7 +1943,10 @@ mod tests {
         p.step(&mut anm, &press(input::BOMB), sys);
         assert!(p.bombing && p.bomb.duration == 200 && p.state == 3);
         assert_eq!(
-            p.bomb.objs[..16].iter().filter(|o| o.state == 1).count(),
+            p.bomb.objs[..16]
+                .iter()
+                .filter(|o| o.state == ObjState::Active)
+                .count(),
             16
         );
         assert_eq!(
@@ -1852,7 +1962,7 @@ mod tests {
         assert!(p.bombing && p.bomb_active);
         p.step(&mut anm, &press(0), sys);
         assert!(!p.bombing && p.speed_mult == [1.0; 2]);
-        assert!(p.bomb.objs[..16].iter().all(|o| o.state == 0));
+        assert!(p.bomb.objs[..16].iter().all(|o| o.state == ObjState::Free));
         // 09 §1.1: +0xE2A7C holds through the end frame, drops on the next failed start test.
         assert!(p.bomb_active);
         p.step(&mut anm, &press(0), sys);
@@ -1982,14 +2092,19 @@ mod tests {
             ls: false,
             gs: 1.0,
         };
-        let d = p.dc([0.0; 2], 24.0, 0.0, 50, 500, 1, 800, false);
+        let hit = Hit {
+            max: 800,
+            ..Hit::every(1)
+        };
+        let d = p.dc([0.0; 2], 24.0, 0.0, 50, 500, hit);
         let c = p.cancel_circle([0.0; 2], 24.0, 0.0, 500, 6);
         let o = &mut p.bomb.objs[0];
-        (o.state, o.v, o.angle, o.f8) = (1, [499.0, 2.0, 0.0], PI - 0.001, PI / 240.0);
+        (o.state, o.v, o.angle, o.f8) =
+            (ObjState::Active, [499.0, 2.0, 0.0], PI - 0.001, PI / 240.0);
         (o.darea, o.carea) = (Some(d), Some(c));
         p.bomb_yuyuko(&mut anm, bf(1), sys);
         let o = &p.bomb.objs[0];
-        assert_eq!(o.state, 0);
+        assert_eq!(o.state, ObjState::Free);
         assert!(!p.damage_areas[d].active && !p.cancel_areas[c].active);
         assert_eq!(o.angle, anmvm::wrap_add(PI - 0.001, PI / 240.0));
         assert!(o.angle < 0.0);
@@ -2029,19 +2144,19 @@ mod tests {
         let (mut p, mut anm) = ready(4);
         p.bomb.duration = 200;
         p.bomb.timer.set(30);
-        p.tint(&mut anm, 0x80404040);
-        assert_eq!(anm.stage_tint, Some(0x80606060));
+        p.tint(&mut anm, TINT);
+        assert_eq!(anm.stage_tint, Some(0x8060_6060));
         assert!(anm.bomb_drew && !anm.tint_on);
         p.bomb.timer.set(100);
-        p.tint(&mut anm, 0x802020D0);
-        assert_eq!(anm.stage_tint, Some(0x80404098));
+        p.tint(&mut anm, TINT_LS);
+        assert_eq!(anm.stage_tint, Some(0x8040_4098));
         anm.stage_tint = None;
-        p.tint(&mut anm, 0x802020D0);
-        assert_eq!(anm.stage_tint, Some(0x802020D0));
+        p.tint(&mut anm, TINT_LS);
+        assert_eq!(anm.stage_tint, Some(0x8020_20D0));
         anm.stage_tint = None;
         p.bomb.timer.set(170);
-        p.tint(&mut anm, 0x80F00000);
-        assert_eq!(anm.stage_tint, Some(0x80B84040));
+        p.tint(&mut anm, TINT_REMILIA_LS);
+        assert_eq!(anm.stage_tint, Some(0x80B8_4040));
     }
 
     #[test]
