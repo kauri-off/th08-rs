@@ -16,3 +16,4 @@ specs/data/drawlog/demos/*.drawlog.xz
 *.png
 *.jpg
 !/packaging/**/*.png
+/CLAUDE.local.md

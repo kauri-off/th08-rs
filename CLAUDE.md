@@ -1,6 +1,4 @@
-# th_08 project rules
-
-These override the global "no comments / one short line" rule for this repo.
+# th08 project rules (for people and AI agents working on this repo)
 
 ## Comments in `src/` and `crates/*/src/`
 
@@ -25,18 +23,14 @@ A reader must be able to check spec-bound code against the specs, without the co
 - `specs/answers_*.md` are a changelog with evidence; every fact in them must also be in a numbered spec.
 - An implementer brief cites a spec section for every deliverable; a deliverable without one goes to RE first.
 - Session traces (golden, fullrun_noclip, demos) are used to locate divergences, never to derive behaviour.
-  If the spec does not explain a divergence: `// SPEC-GAP:` plus a question in `docs/briefs/IMPLn_QUESTIONS.md`.
+  If the spec does not explain a divergence: `// SPEC-GAP:` plus a question for the spec, never a fix fitted to the
+  trace.
 
-## Off-screen runs
+## Headless runs
 
-Run the port's windowed binaries (`th08`, launcher, `launchershot`) only via `tools/offscreen <cmd>` — it is
-`env -u WAYLAND_DISPLAY xvfb-run -a`. Plain `xvfb-run` is NOT enough on this Wayland desktop: winit prefers Wayland
-and opens a real window on the user's screen. wine runs the same way (`WAYLAND_DISPLAY` unset).
-
-## Android devices
-
-Agents use only the headless emulator: every `adb` command takes an explicit emulator serial (`adb -s emulator-NNNN`).
-Never install, launch, screencap, read logcat or run any other `adb` command on a physical phone.
+Automated runs of the windowed binaries (`th08`, launcher, `launchershot`) go through `tools/offscreen <cmd>`
+(`env -u WAYLAND_DISPLAY xvfb-run -a`): winit prefers Wayland, so plain `xvfb-run` still opens a real window there.
+Android checks run on an emulator (`adb -s emulator-NNNN`).
 
 ## Worktrees and heavy runs
 
@@ -44,6 +38,6 @@ Never install, launch, screencap, read logcat or run any other `adb` command on 
   build / check / clippy / fmt / unit tests need no lock.
 - Heavy runs (arch_check, cargo tests with game data, the emulator, replay batches) go through the job queue:
   `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…`, then `tools/q wait ID` in the
-  foreground until it ends (exit 75 = not done yet; never run_in_background). In a worktree, call the main checkout's
-  `/home/anon/Projects/th_08/tools/q`. Never `flock target/.agents.lock` by hand.
+  foreground until it ends (exit 75 = not done yet). From a worktree, use the main checkout's `tools/q` so all jobs
+  share one queue. Never take `target/.agents.lock` by hand.
 
