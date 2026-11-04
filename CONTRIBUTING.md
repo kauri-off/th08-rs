@@ -56,8 +56,8 @@ replays come from public Touhou replay sites. Neither is committed.
 Versions come from git; nothing is edited by hand:
 
 - The version name is `git describe --tags --dirty --always` without a leading `v` (`0.1.0-42-g3409632-dirty`), or
-  `<Cargo version>-g<sha>` when no tag is reachable. A tag build in CI (`vX.Y.Z`) must match the workspace
-  `version` in `Cargo.toml` and is named `X.Y.Z`; the release workflow fails before building otherwise.
+  `<Cargo version>-g<sha>` when no tag is reachable. A published release is named `X.Y.Z`, the workspace
+  `version` in `Cargo.toml`, and tagged `vX.Y.Z` by the release workflow.
 - The Android `versionCode` is the number of minutes from 2026-01-01T00:00Z to HEAD's commit time, or to the build
   time when the tree is dirty, so a fresh build always installs over an older one. `VERSION_CODE=N` overrides it.
 - The launchers and the port menu show "version (channel)" (desktop: the version alone).
@@ -73,8 +73,12 @@ Android has three channels, installable side by side:
 `PROPS` is a `keystore.properties` file with `storeFile` (absolute or relative to the file), `storePassword`,
 `keyAlias` and `keyPassword`. Only its path is passed on; Gradle reads the passwords. Never commit a keystore.
 
-The release workflow (`.github/workflows/release.yml`) builds the release channel on tags and on manual runs. It
-signs with these repository secrets:
+The release workflow (`.github/workflows/release.yml`) runs by hand from the Actions tab on `master`
+(`gh workflow run release.yml -f publish=true`). With `publish` it tags `v<Cargo.toml version>` at that commit and
+creates the release; without it only builds the artifacts. To release, bump `version` in `Cargo.toml`, commit,
+push, then run the workflow; it refuses a version whose tag already points at another commit. Tags are not pushed
+by hand: a tag-triggered run could not reuse the build cache, which is kept per branch. It signs the APK with these
+repository secrets:
 
 - `TH08_ANDROID_KEYSTORE_B64`: the `.jks`, base64-encoded (`base64 -w0 release.jks`);
 - `TH08_ANDROID_STORE_PASSWORD`;
@@ -83,7 +87,8 @@ signs with these repository secrets:
 
 The job decodes the keystore into `$RUNNER_TEMP`, writes a properties file next to it and deletes both at the end.
 Without the secrets (forks) it builds the debug channel with the throwaway key instead, as artifact
-`th08-android-debug` and file `th08-<version>-android-apk-debug.apk`. On a tag the APK is attached to the release.
+`th08-android-debug` and file `th08-<version>-android-apk-debug.apk`. With `publish` the APK is attached to the
+release.
 
 ## Commits
 

@@ -1,32 +1,48 @@
 name: Release builds
 
+# Run from the Actions tab on master (a tag push would start with a cold cache: caches are per ref, and a new tag
+# only sees its own and the default branch's). publish = true tags vX.Y.Z (the Cargo.toml version) at this commit
+# and creates the release; false only builds the artifacts.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Tag v<Cargo.toml version> at this commit and publish the release
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  # A tag vX.Y.Z must match the workspace version; checked before any build.
+  # The release tag v<Cargo.toml version>; with publish, it must be new or already on this commit.
   version:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-      - name: Tag matches Cargo.toml
-        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          fetch-depth: 0
+      - id: v
+        name: Release tag
         env:
-          TAG: ${{ github.ref_name }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           want=$(sed -n '/^\[package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
-          if [[ "${TAG#v}" != "$want" ]]; then
-            echo "::error::tag $TAG does not match the Cargo.toml version $want"
-            exit 1
+          tag="v$want"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [[ $PUBLISH == true ]] && at=$(git rev-parse -q --verify "refs/tags/$tag^{commit}"); then
+            if [[ $at != "$GITHUB_SHA" ]]; then
+              echo "::error::$tag already tags $at; bump the version in Cargo.toml"
+              exit 1
+            fi
           fi
 
   windows:
     needs: version
+    env:
+      TH08_RELEASE_TAG: ${{ inputs.publish && needs.version.outputs.tag || '' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +61,8 @@ jobs:
 
   linux:
     needs: version
+    env:
+      TH08_RELEASE_TAG: ${{ inputs.publish && needs.version.outputs.tag || '' }}
     runs-on: ubuntu-latest
     # Build against Ubuntu 22.04's glibc 2.35 so the AppImage runs on Ubuntu 22.04+, Debian 12+, Fedora 36+,
     # SteamOS 3; a container keeps that base independent of GitHub's runner image retirements.
@@ -72,6 +90,8 @@ jobs:
 
   android:
     needs: version
+    env:
+      TH08_RELEASE_TAG: ${{ inputs.publish && needs.version.outputs.tag || '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -144,8 +164,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux, android]
+    if: inputs.publish
+    needs: [version, windows, linux, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -158,7 +178,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
+          SHA: ${{ github.sha }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --target "$SHA"
           gh release upload "$TAG" dist/* --clobber

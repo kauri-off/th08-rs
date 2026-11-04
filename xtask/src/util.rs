@@ -248,8 +248,14 @@ fn git(args: &[&str]) -> Option<String> {
 
 pub fn build_version() -> Result<BuildVersion> {
     let cargo = version()?;
-    let ci_tag = (std::env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag"))
-        .then(|| std::env::var("GITHUB_REF_NAME").unwrap_or_default());
+    // The release workflow passes the tag it is about to create; a tag-triggered run names it in GITHUB_REF.
+    let ci_tag = std::env::var("TH08_RELEASE_TAG")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .or_else(|| {
+            (std::env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag"))
+                .then(|| std::env::var("GITHUB_REF_NAME").unwrap_or_default())
+        });
     let describe = git(&["describe", "--tags", "--dirty", "--always"]);
     let has_tags = git(&["describe", "--tags", "--abbrev=0"]).is_some();
     let name = version_name(&cargo, describe.as_deref(), has_tags, ci_tag.as_deref())?;
