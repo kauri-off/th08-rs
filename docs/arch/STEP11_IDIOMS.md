@@ -130,7 +130,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11n** render | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
 | **11n** render — **DONE** (see below) | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
 | **11o** audio + app + tools + wall — **DONE** (see below) | (1) midi.rs wasm imports, audio subset 0; (2) tools subset 0 (useless_conversion ×10 etc., bin `main` splits), worldclone / testdata subset 0; (3) app subset 0 after L2; arch_check gains `cargo clippy --workspace --all-targets -- -D warnings` (subset at `warn` → enforced) | crates/th08-audio, crates/th08-tools, worldclone, testdata, src/ (not settings.rs until L2), tools/arch_check | last D-neutral run; after L2 and 11n | T D W android, **B** |
-| **11p** leftovers that change draw | (1) camera.rs + menulist pie on `fmath` (drop both `allow(disallowed_methods)`, the `TODO(step 10)`); (2) `image` out of core: `th08_formats::img::dims` + `ResCmd::CreateImage`, decode in gfx; (3) new D reference (`arch_check freeze` into `target/arch_ref_11p`) after my drawgroups image diff shows "visually identical" (PARITY_POLICY) | camera, menulist (2 lines), drawlist, formats/img.rs (new), gfx (CreateImage), anmmgr (load call) | **alone**, after 11o | T must be identical; D intentionally new; drawgroups image diff; B |
+| **11p** leftovers that change draw — **(1)–(2) DONE** (see below; (3) orchestrator) | (1) camera.rs + menulist pie on `fmath` (drop both `allow(disallowed_methods)`, the `TODO(step 10)`); (2) `image` out of core: `th08_formats::img::dims` + `ResCmd::CreateImage`, decode in gfx; (3) new D reference (`arch_check freeze` into `target/arch_ref_11p`) after my drawgroups image diff shows "visually identical" (PARITY_POLICY) | camera, menulist (2 lines), drawlist, formats/img.rs (new), gfx (CreateImage), anmmgr (load call) | **alone**, after 11o | T must be identical; D intentionally new; drawgroups image diff; B |
 
 **11a done.** Files: Cargo.toml (workspace + root `[lints]`), crates/*/Cargo.toml (`[lints] workspace = true`; core
 `bitflags = "2.13.2"`; tools `th08-formats` dep for the shim paths), clippy.toml (thresholds), tools/lint_subset (new),
@@ -485,6 +485,26 @@ separators — all `core`, fmath_xplat still includes it), d3dx.rs (2 test liter
 is not yet `-D warnings` (CLIPPY_PENDING until DEVLOSS2 lands its files at 0, then set it empty in arch_check);
 worldclone's test ECL builder uses `i16::try_from(..).unwrap()` / `i32::try_from` for instruction sizes (test-only,
 values < 100).
+
+**11p (1)–(2) done.** Files: crates/th08-core/src/{camera, menulist, drawlist}.rs, crates/th08-core/Cargo.toml (`image`
+dropped), crates/th08-formats/src/{img.rs (new), lib.rs}, crates/th08-formats/Cargo.toml (`image` dev-dependency for
+the vanilla test only), crates/th08-render/src/gfx.rs, Cargo.lock. (1) camera.rs: `rotation_x/y/z` on
+`fmath::sin_cos_f`, `perspective_fov_lh` / `default_2d` / `set_2d` on `fmath::tan_f`; menulist `pie` on `cos_f` /
+`sin_f`; both `allow(clippy::disallowed_methods)` and the `TODO(step 10)` gone. (2) `th08_formats::img::dims` (PNG IHDR
+/ JPEG first SOFn, `ImgError`); `Recorder::load_image` reads the size from the header and emits
+`ResCmd::CreateImage { id, bytes, w, h }` (same `TexSource::Image` provenance, label, error on a non-image header);
+gfx `decode_image` decodes to RGBA8 once and keeps the pixels in the provenance for `rebuild` (a decode failure or a
+size mismatch → transparent w×h + warning). anmmgr needed no change (it never called `load_image`). Public API:
+new `ResCmd::CreateImage` (core, matched only in gfx), new `th08_formats::img::{dims, ImgError}`; `load_image`
+signature unchanged. Lint subset (tools/lint_subset on the run files): 0 → 0; clippy wall clean. Tests: img
+`png_header`, `jpeg_header`, `vanilla_images_match_decoder` (all 39 .jpg / .png of th08.dat: header size == decoded
+size). Check: FAST arch_check 0 differing (emit-off 0, 456 passed); non-FAST arch_check **0 differing incl. draw
+hashes** — the draw log prints vertices with `drawfmt::num`'s fixed decimals, so the f32 last-bit trig differences
+never reach D; deliverable (3) has no new D to freeze. Images (master `target/release/th08` vs 11p, `TH08_SEED=1
+TH08_TURBO=1`, offscreen; without both, two master runs already differ by up to 105 / 255 on 5 000 px): stages 1–7 at
+frames 600 / 2400 (stage camera), spell-practice screens 16 / 17 with the pies (menu_mopup1 input, frames 425–605),
+three more menu frames (title logo path) — all 22 pairs pixel-identical (largest difference 0), in
+target/11p/. Deviations: none in code; the brief's expected D change does not appear.
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

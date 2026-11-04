@@ -8,6 +8,7 @@ pub mod archive;
 pub mod cfg;
 pub mod ecl;
 pub mod end;
+pub mod img;
 pub mod midi;
 pub mod msg;
 pub mod musiccmt;

@@ -57,7 +57,8 @@ pub struct Texture {
 }
 
 // Port-only (ARCH_D_MOBILE §5): how slot `TexId.0` was made and changed since, replayed by `Gfx::rebuild` after a
-// device loss. ANM entries and .jpg / .png arrive as `ResCmd::Create` pixels (core decodes), so both are `rgba`.
+// device loss. ANM entries arrive as `ResCmd::Create` pixels, .jpg / .png as `ResCmd::CreateImage` decoded here
+// once; both keep the uploaded `rgba`.
 #[cfg_attr(
     target_arch = "wasm32",
     expect(dead_code, reason = "no rebuild on the web")
@@ -66,7 +67,7 @@ struct Provenance {
     w: u32,
     h: u32,
     format: wgpu::TextureFormat,
-    // `ResCmd::Create` pixels; None = screen capture target, which comes back black until captured again.
+    // `ResCmd::Create` / decoded `CreateImage` pixels; None = screen capture target, which comes back black until captured again.
     rgba: Option<Arc<[u8]>>,
     // Writes (text rasters included) and copies into the slot, in order; an edit inside a later one's rect is dropped.
     edits: Vec<Edit>,
@@ -97,6 +98,22 @@ impl Edit {
             Edit::Write { at, size, .. } | Edit::Copy { to: at, size, .. } => {
                 [at[0], at[1], size[0], size[1]]
             }
+        }
+    }
+}
+
+// `ResCmd::CreateImage` (03 §1): .jpg / .png → RGBA8; a file the decoder rejects, or whose size disagrees with the
+// header core read, becomes a transparent `w` × `h` texture.
+fn decode_image(bytes: &[u8], w: u32, h: u32) -> Arc<[u8]> {
+    match image::load_from_memory(bytes) {
+        Ok(img) if (img.width(), img.height()) == (w, h) => Arc::from(img.to_rgba8().into_raw()),
+        Ok(img) => {
+            log::warn!("image {}x{} != header {w}x{h}", img.width(), img.height());
+            Arc::from(vec![0; 4 * w as usize * h as usize])
+        }
+        Err(e) => {
+            log::warn!("image decode failed: {e}");
+            Arc::from(vec![0; 4 * w as usize * h as usize])
         }
     }
 }
@@ -967,7 +984,7 @@ impl Gfx {
         self.queue.submit([enc.finish()]);
     }
 
-    // Upload at core id `id`: `rgba` from `ResCmd::Create`, None = blank capture target; records its provenance.
+    // Upload at core id `id`: `rgba` from `ResCmd::Create` / `CreateImage`, None = blank capture target; records its provenance.
     fn create_texture_fmt(
         &mut self,
         id: TexId,
@@ -1830,6 +1847,10 @@ impl Gfx {
         match c {
             ResCmd::Create { id, w, h, rgba } => {
                 self.create_texture_fmt(*id, *w, *h, Some(rgba), wgpu::TextureFormat::Rgba8Unorm);
+            }
+            ResCmd::CreateImage { id, bytes, w, h } => {
+                let rgba = decode_image(bytes, *w, *h);
+                self.create_texture_fmt(*id, *w, *h, Some(&rgba), wgpu::TextureFormat::Rgba8Unorm);
             }
             ResCmd::CaptureScreen { id, label } => self.do_capture_screen(*id, label),
             ResCmd::CaptureRect {

@@ -3160,7 +3160,6 @@ dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
  "encoding_rs",
- "image",
  "libm",
  "log",
  "th08-formats",
@@ -3171,6 +3170,7 @@ name = "th08-formats"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "image",
  "midly",
  "ruzstd",
  "sha2",

@@ -1,9 +1,8 @@
 //! View / projection matrices: Camera_Set2D (05 §9), the default and stage cameras (00 §1, 06 §10.1), ANM world matrix.
-// TODO(step 10): std sin_cos / tan kept: they differ from `fmath` for |a| > 2 (exhaustive f32 check, IMPL167), so the
-// switch to fmath changes draw-log vertices and waits for a reference refresh.
-#![allow(clippy::disallowed_methods)]
+// Trig on `fmath` (05 §10, step 11p): draw-only, its vertices differ from the old std sin_cos / tan for |a| > 2.
 
 use crate::drawlist::{Rect, SCREEN_H, SCREEN_W};
+use crate::fmath::{sin_cos_f, tan_f};
 
 pub type Vec3 = [f32; 3];
 
@@ -50,7 +49,7 @@ impl Mat4 {
     }
 
     pub fn rotation_x(a: f32) -> Self {
-        let (s, c) = a.sin_cos();
+        let (s, c) = sin_cos_f(a);
         Mat4([
             [1.0, 0.0, 0.0, 0.0],
             [0.0, c, s, 0.0],
@@ -60,7 +59,7 @@ impl Mat4 {
     }
 
     pub fn rotation_y(a: f32) -> Self {
-        let (s, c) = a.sin_cos();
+        let (s, c) = sin_cos_f(a);
         Mat4([
             [c, 0.0, -s, 0.0],
             [0.0, 1.0, 0.0, 0.0],
@@ -70,7 +69,7 @@ impl Mat4 {
     }
 
     pub fn rotation_z(a: f32) -> Self {
-        let (s, c) = a.sin_cos();
+        let (s, c) = sin_cos_f(a);
         Mat4([
             [c, s, 0.0, 0.0],
             [-s, c, 0.0, 0.0],
@@ -93,7 +92,7 @@ impl Mat4 {
     }
 
     pub fn perspective_fov_lh(fovy: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let ys = 1.0 / (fovy / 2.0).tan();
+        let ys = 1.0 / tan_f(fovy / 2.0);
         let xs = ys / aspect;
         let q = far / (far - near);
         Mat4([
@@ -135,7 +134,7 @@ impl Camera {
     pub const FAR: f32 = 10000.0;
 
     pub fn default_2d() -> Self {
-        let d = (SCREEN_H / 2.0) / (Self::FOV / 2.0).tan();
+        let d = (SCREEN_H / 2.0) / tan_f(Self::FOV / 2.0);
         let (cx, cy) = (SCREEN_W / 2.0, -SCREEN_H / 2.0);
         Self {
             view: Mat4::look_at_lh([cx, cy, -d], [cx, cy, 0.0], [0.0, 1.0, 0.0]),
@@ -149,7 +148,7 @@ impl Camera {
         let (cx, cy) = (vp.w / 2.0, vp.h / 2.0);
         Self {
             view: Mat4::look_at_lh(
-                [cx, cy, cy / (fov / 2.0).tan()],
+                [cx, cy, cy / tan_f(fov / 2.0)],
                 [cx, cy, 0.0],
                 [0.0, -1.0, 0.0],
             ),

@@ -300,6 +300,13 @@ pub enum ResCmd {
         h: u32,
         rgba: Arc<[u8]>,
     },
+    // Standalone .jpg / .png file bytes (03 §1); the renderer decodes them to RGBA8 of the header's `w` × `h`.
+    CreateImage {
+        id: TexId,
+        bytes: Arc<[u8]>,
+        w: u32,
+        h: u32,
+    },
     // Post-present capture into a new 640×480 surface-format texture (12 §1, 0x44886F).
     CaptureScreen {
         id: TexId,
@@ -693,12 +700,22 @@ impl Recorder {
         }
     }
 
-    // Standalone .jpg / .png images (03 §1), decoded here so the size is known; `name` is the draw-log label.
+    // Standalone .jpg / .png images (03 §1): size from the header, pixels decoded by the renderer; `name` is the
+    // draw-log label.
     pub fn load_image(&mut self, name: &str, bytes: &[u8]) -> anyhow::Result<TexId> {
-        let img = image::load_from_memory(bytes)?.to_rgba8();
-        let (w, h) = (img.width(), img.height());
-        let src = TexSource::Image { name: name.into() };
-        let id = self.create_entry(w, h, src, Arc::from(img.into_raw()));
+        let (w, h) = th08_formats::img::dims(bytes)?;
+        let id = self.table.alloc(TexEntry {
+            width: w,
+            height: h,
+            label: None,
+            src: TexSource::Image { name: name.into() },
+        });
+        self.res_cmd(ResCmd::CreateImage {
+            id,
+            bytes: Arc::from(bytes),
+            w,
+            h,
+        });
         self.set_label(id, name, w, h);
         Ok(id)
     }

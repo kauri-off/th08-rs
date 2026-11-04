@@ -1,9 +1,9 @@
 //! Main-menu list screens: practice stage select (12 §2.5), spell practice 16/17 (16 §6), replay (12 §2.8, 15 §3.8).
-#![allow(clippy::disallowed_methods)]
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::{Text, int, percent_glyphs, short, uidx};
 use crate::drawlist::{Blend, Recorder, TextCmd, Vertex};
+use crate::fmath;
 use crate::game::Ctx;
 use crate::gamemgr::{F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{DOWN, LEFT, RIGHT, UP};
@@ -447,7 +447,7 @@ fn pie(rec: &mut Recorder, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
     let step = 0.101_342 * v;
     for k in 0..63 {
         let a = -std::f32::consts::FRAC_PI_2 + k as f32 * step;
-        verts.push(p(c[0] + r * a.cos(), c[1] + r * a.sin()));
+        verts.push(p(c[0] + r * fmath::cos_f(a), c[1] + r * fmath::sin_f(a)));
     }
     rec.fan(Blend::Alpha, &verts);
 }

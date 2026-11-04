@@ -15,3 +15,6 @@ midly = { version = "0.5.3", default-features = false, features = ["std"] }
 ruzstd = "0.8"
 sha2 = "0.10"
 thiserror = "2"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
