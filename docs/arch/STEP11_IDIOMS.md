@@ -117,6 +117,8 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11g** player + pshot — **DONE** (see below) | (1) `ShotType` enum (+ `sht::team`) inside player / pshot; (2) `Angle`, one `angle_from` (player.rs:668 → types); (3) player / pshot subset 0 (pshot 260 split) | player, pshot | ∥ wave 1 | T D |
 | **11h** bullet + item | (1) `BulletFlags` / `LaserFlags`; (2) `BulletIdx` / `LaserIdx` / `ItemIdx`, `angle_from` (bullet.rs:81) → types; (3) spawn env struct, fn 657 split, subset 0 | bullet, item | after 11g (`angle_from`); ∥ 11e 11f 11i | T D, **B** |
 | **11i** bomb + effect — **DONE** (see below) | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
+| **11h** bullet + item — **DONE** (see below) | (1) `BulletFlags` / `LaserFlags`; (2) `BulletIdx` / `LaserIdx` / `ItemIdx`, `angle_from` (bullet.rs:81) → types; (3) spawn env struct, fn 657 split, subset 0 | bullet, item | after 11g (`angle_from`); ∥ 11e 11f 11i | T D, **B** |
+| **11i** bomb + effect | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
 | **11j** gamemgr + replay | (1) `GameFlags` bitflags + `end()` / `route()`; (2) `Difficulty`, `Paused`, `Loading` enums inside gamemgr / replay / game / world; (3) long fns 713 / 1078 split, flow-core subset 0 (gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt) | gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt | after 11a; ∥ 11e–11i | T D |
 | **11i** bomb + effect | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
 | **11j** gamemgr + replay — **DONE** (see below) | (1) `GameFlags` bitflags + `end()` / `route()`; (2) `Difficulty`, `Paused`, `Loading` enums inside gamemgr / replay / game / world; (3) long fns 713 / 1078 split, flow-core subset 0 (gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt) | gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt | after 11a; ∥ 11e–11i | T D |
@@ -322,6 +324,29 @@ private). Lint subset (tools/lint_subset): stage.rs 43 → 0, msg.rs 27 → 0; w
 differing (emit-off 0), cargo test -p th08-core 323 passed + th08-formats 36 passed, spec_refs 0. Deviations: the bools stay (with `#[expect]`) instead of bitflags
 or enums, as in 11g's `Player`; `Stage.ring_6b: Option<usize>` stays raw (an effect slot, `EffectIdx` is 11i's);
 `Record::i/f/v` are no longer used by stage.rs (stdview and `Op::decode` still use them).
+**11h done.** Files: crates/th08-core/src/bullet.rs, item.rs; index / import boundary in eclvm/ops_laser.rs (3
+lines), eclvm/ops_move.rs and eclvm/vars.rs (import line only). (1) `bullet::BulletFlags` (u32, every ex-command
+bit of 08 §5.1 + spawn effects 2/4/8, pattern sfx 0x200, no-cancel 0x1000; original values) for `Bullet.active` and,
+through `Bullet::bflags()` / `cancellable()`, for `Bullet.flags`; `ExCmd.cmd` matched as `BulletFlags` consts;
+`LaserFlags` (u16: `ALPHA_FADE` bit 0, `NO_CANCEL` bit 2) for `Laser.flags`; all `from_bits_retain`. (2) draw lists
+`Vec<BulletIdx>`, `place` / `apply_ex` / `update_*` / `push` on `BulletIdx`; `spawn_laser -> Option<LaserIdx>`,
+`laser_mut(LaserIdx)`, `update_laser(LaserIdx)`; item `order: Vec<ItemIdx>` (tombstone `ItemIdx(u16::MAX)`),
+`ItemManager::spawn -> Option<ItemIdx>`, `collect` / `convert_power_items` on `ItemIdx`; `bullet::angle_from` removed,
+all callers (item, eclvm ops_laser / ops_move / vars) on `types::angle_from`; item auto-collect test on
+`Player::shot()` (`MarisaAlice | Marisa`). (3) `PatternEnv { d, aim, ppos }` → `place` 6 args; `apply_ex` = slot loop
++ `start_ex` ("→ return" commands) + `retype` (0x4000) + `sub_pattern` (0x1000000), statement order kept;
+`free_slot` split from `place`; helpers `uidx`, `at` (signed table lookup, negative misses as before), `template_idx`,
+`bidx` / `iidx`, `types::lo8` for byte stores (item type, alphas, cancel item mode); literal separators; `ex_sound`
+moved above the tests. `#[expect]` with reason: template height ftol (`cast_sign_loss`), warp `v * -1.0`
+(`neg_multiply`, kept as the original's fmul). Public API: `Bullet.active: BulletFlags` (was `u32`; demosync prints it
+with `{:x}`, unchanged output), `Laser.flags: LaserFlags`, `BulletManager::{spawn_laser, laser_mut}` typed
+`LaserIdx`, `ItemManager::spawn -> Option<ItemIdx>` (all outside callers discard it), `bullet::angle_from` gone, new
+`bullet::{BulletFlags, LaserFlags}`; `Bullet.flags`, `BulletDesc.flags`, `LaserDesc.flags`, `ExCmd.cmd` stay raw
+`u32` (written by eclvm ops_bullet / ops_native and an eclvm test); `bullet::F_NO_CANCEL` kept as
+`BulletFlags::NO_CANCEL.bits()`. Lint subset (tools/lint_subset): bullet.rs 76 → 0, item.rs 22 → 0 (eclvm files
+0 → 0); workspace 1 346 in 53 files after. Check: FAST arch_check 0 differing (emit-off 0), cargo test -p th08-core 323 passed, spec_refs 0. Deviations: enemy `lasers: [Option<usize>; 32]`
+(enemy.rs, 11e) stays raw, converted in ops_laser (`usize::from` / `LaserIdx(id as u16)`); `Bullet.angle` not `Angle`
+(not in the row; eclvm tests and worldclone write it).
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

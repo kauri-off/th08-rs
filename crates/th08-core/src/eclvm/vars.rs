@@ -1,9 +1,9 @@
 //! ECL variables: ids 10000–10100, getters 0x41F420 / 0x420120 and references 0x41FE10 / 0x420950 (07 §6).
 
-use crate::bullet::angle_from;
 use crate::enemy::{
     Context, Enemy, EnemyManager, MAX_ENEMIES, V_ARGF, V_ARGI, V_FLT0, V_FLT1, V_INT0, V_INT1,
 };
+use crate::types::angle_from;
 use std::f32::consts::PI;
 
 // Offset of `id` in a variable range starting at `base` (callers match the range first, so it is ≥ 0).

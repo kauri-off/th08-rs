@@ -2,8 +2,8 @@
 
 use super::Exec;
 use crate::anmvm::wrap_add;
-use crate::bullet::angle_from;
 use crate::enemy::{A_CLAMP, A_MIRROR, Thread};
+use crate::types::angle_from;
 use std::f32::consts::PI;
 use th08_formats::ecl::MoveOp;
 

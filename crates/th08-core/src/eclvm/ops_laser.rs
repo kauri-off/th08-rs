@@ -2,8 +2,9 @@
 
 use super::{Exec, add3, at};
 use crate::anmvm::{self, wrap_add};
-use crate::bullet::{Laser, LaserDesc, angle_from};
+use crate::bullet::{Laser, LaserDesc};
 use crate::enemy::{Thread, V_INT1};
+use crate::types::{LaserIdx, angle_from};
 use th08_formats::ecl::{Arg, Ins, LaserBlock, LaserOp};
 
 impl Exec<'_> {
@@ -102,7 +103,8 @@ impl Exec<'_> {
         self.e.laser_desc = d.clone();
         let id = crate::bm!(self.sys).spawn_laser(self.anm, self.sys.rng, &d, self.m.g.player);
         let cur = self.e.laser_cur.min(31);
-        self.e.lasers[cur] = id;
+        // Enemy laser slots hold the raw slot number (07 §9.4).
+        self.e.lasers[cur] = id.map(usize::from);
     }
 
     pub(super) fn with_laser(&mut self, k: i32, f: impl FnOnce(&mut Laser, [f32; 3])) {
@@ -110,7 +112,7 @@ impl Exec<'_> {
             return;
         };
         let p = self.m.g.player;
-        if let Some(l) = crate::bm!(self.sys).laser_mut(id) {
+        if let Some(l) = crate::bm!(self.sys).laser_mut(LaserIdx(id as u16)) {
             f(l, p);
         }
     }
