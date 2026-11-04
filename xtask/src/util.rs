@@ -152,9 +152,15 @@ fn expand_home(v: &str) -> String {
     }
 }
 
+// Version name stamped into the game builds (build.rs reads TH08_VERSION); set once by `dist`.
+pub static VERSION_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 pub fn cargo() -> Command {
     let mut c = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     c.current_dir(root());
+    if let Some(v) = VERSION_NAME.get() {
+        c.env("TH08_VERSION", v);
+    }
     c
 }
 
@@ -216,5 +222,128 @@ pub fn ensure_nonempty(p: &Path) -> Result<()> {
     match fs::metadata(p) {
         Ok(m) if m.len() > 0 => Ok(()),
         _ => bail!("expected output {} is missing or empty", p.display()),
+    }
+}
+
+// Version name and Android versionCode of this checkout.
+pub struct BuildVersion {
+    pub name: String,
+    pub code: u32,
+}
+
+// 2026-01-01T00:00Z: versionCode counts minutes from here.
+const CODE_EPOCH: i64 = 1_767_225_600;
+// Android's largest accepted versionCode.
+const CODE_MAX: i64 = 2_100_000_000;
+
+fn git(args: &[&str]) -> Option<String> {
+    let o = Command::new("git")
+        .current_dir(root())
+        .args(args)
+        .output()
+        .ok()?;
+    let s = String::from_utf8(o.stdout).ok()?;
+    (o.status.success() && !s.trim().is_empty()).then(|| s.trim().to_owned())
+}
+
+pub fn build_version() -> Result<BuildVersion> {
+    let cargo = version()?;
+    let ci_tag = (std::env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag"))
+        .then(|| std::env::var("GITHUB_REF_NAME").unwrap_or_default());
+    let describe = git(&["describe", "--tags", "--dirty", "--always"]);
+    let has_tags = git(&["describe", "--tags", "--abbrev=0"]).is_some();
+    let name = version_name(&cargo, describe.as_deref(), has_tags, ci_tag.as_deref())?;
+    let code = if let Some(v) = std::env::var("VERSION_CODE").ok().filter(|v| !v.is_empty()) {
+        v.parse()
+            .with_context(|| format!("VERSION_CODE {v:?} is not a number"))?
+    } else {
+        let dirty = describe.as_ref().is_none_or(|d| d.ends_with("-dirty"));
+        let commit = git(&["log", "-1", "--format=%ct"]).and_then(|t| t.parse().ok());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        version_code(commit, dirty, i64::try_from(now)?)?
+    };
+    Ok(BuildVersion { name, code })
+}
+
+// `describe`: `git describe --tags --dirty --always` (None without git); `ci_tag`: the pushed tag in CI.
+fn version_name(
+    cargo: &str,
+    describe: Option<&str>,
+    has_tags: bool,
+    ci_tag: Option<&str>,
+) -> Result<String> {
+    if let Some(t) = ci_tag {
+        let v = t
+            .strip_prefix('v')
+            .with_context(|| format!("tag {t:?} is not vX.Y.Z"))?;
+        if v != cargo {
+            bail!("tag {t} does not match the Cargo.toml version {cargo}");
+        }
+        return Ok(v.to_owned());
+    }
+    Ok(match describe {
+        None => cargo.to_owned(),
+        Some(d) if has_tags => d.strip_prefix('v').unwrap_or(d).to_owned(),
+        Some(d) => format!("{cargo}-g{d}"),
+    })
+}
+
+// Minutes since CODE_EPOCH of the commit time, or of `now` for a dirty tree (a fresh build installs over older ones).
+fn version_code(commit: Option<i64>, dirty: bool, now: i64) -> Result<u32> {
+    let t = match commit {
+        Some(c) if !dirty => c,
+        _ => now,
+    };
+    let m = (t - CODE_EPOCH) / 60;
+    if !(1..=CODE_MAX).contains(&m) {
+        bail!("versionCode {m} out of range (time {t})");
+    }
+    Ok(u32::try_from(m)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{version_code, version_name};
+
+    #[test]
+    fn names() {
+        let n = |d, tags, tag| version_name("0.1.0", d, tags, tag);
+        assert_eq!(
+            n(Some("v0.1.0-42-g3409632-dirty"), true, None).unwrap(),
+            "0.1.0-42-g3409632-dirty"
+        );
+        assert_eq!(n(Some("v0.1.0"), true, None).unwrap(), "0.1.0");
+        assert_eq!(
+            n(Some("0.2.0-1-gabc1234"), true, None).unwrap(),
+            "0.2.0-1-gabc1234"
+        );
+        assert_eq!(n(Some("3409632"), false, None).unwrap(), "0.1.0-g3409632");
+        assert_eq!(
+            n(Some("3409632-dirty"), false, None).unwrap(),
+            "0.1.0-g3409632-dirty"
+        );
+        assert_eq!(n(None, false, None).unwrap(), "0.1.0");
+        assert_eq!(
+            n(Some("v0.1.0-3-gabc"), true, Some("v0.1.0")).unwrap(),
+            "0.1.0"
+        );
+        assert!(n(Some("v0.2.0"), true, Some("v0.2.0")).is_err());
+        assert!(n(Some("0.1.0"), true, Some("0.1.0")).is_err());
+    }
+
+    #[test]
+    fn codes() {
+        let e = 1_767_225_600;
+        assert_eq!(version_code(Some(e + 60), false, e + 6000).unwrap(), 1);
+        assert_eq!(version_code(Some(e + 60), true, e + 6000).unwrap(), 100);
+        assert_eq!(version_code(None, false, e + 125).unwrap(), 2);
+        // 2026-11-04T00:00Z
+        assert_eq!(
+            version_code(Some(1_793_750_400), false, 0).unwrap(),
+            442_080
+        );
+        assert!(version_code(Some(e), false, 0).is_err());
     }
 }

@@ -9,10 +9,29 @@ permissions:
   contents: read
 
 jobs:
+  # A tag vX.Y.Z must match the workspace version; checked before any build.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          want=$(sed -n '/^\[package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
+          if [[ "${TAG#v}" != "$want" ]]; then
+            echo "::error::tag $TAG does not match the Cargo.toml version $want"
+            exit 1
+          fi
+
   windows:
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # +crt-static comes from .cargo/config.toml; icon and version info from build.rs.
@@ -25,6 +44,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    needs: version
     runs-on: ubuntu-latest
     # Build against Ubuntu 22.04's glibc 2.35 so the AppImage runs on Ubuntu 22.04+, Debian 12+, Fedora 36+,
     # SteamOS 3; a container keeps that base independent of GitHub's runner image retirements.
@@ -36,6 +56,10 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             ca-certificates curl git build-essential pkg-config libasound2-dev file zstd
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # git refuses the container's checkout (other owner) without this; xtask reads the version from git describe.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build AppImage
@@ -46,9 +70,79 @@ jobs:
           path: target/dist/th08-*-linux-appimage.AppImage
           if-no-files-found: error
 
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Android SDK packages
+        run: |
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" > /dev/null
+          echo "ANDROID_SDK=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.8.2'
+      # Release channel signed with the repository key; without the secrets (forks), the debug channel and its
+      # throwaway key, named -debug. Gradle reads the passwords from the properties file; nothing is echoed.
+      - name: Signing key
+        id: key
+        env:
+          KEYSTORE_B64: ${{ secrets.TH08_ANDROID_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.TH08_ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TH08_ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.TH08_ANDROID_KEY_PASSWORD }}
+        run: |
+          ver=$(sed -n '/^\[package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
+          if [[ -z $KEYSTORE_B64 || -z $STORE_PASSWORD || -z $KEY_ALIAS || -z $KEY_PASSWORD ]]; then
+            echo "::warning::no Android signing secrets: building the debug channel with the throwaway key"
+            echo "args=--channel debug --debug-key --out target/dist/th08-$ver-android-apk-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "artifact=th08-android-debug" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          base64 -d <<< "$KEYSTORE_B64" > "$RUNNER_TEMP/th08-release.jks"
+          esc() { printf '%s' "${1//\\/\\\\}"; }
+          {
+            echo "storeFile=$RUNNER_TEMP/th08-release.jks"
+            echo "storePassword=$(esc "$STORE_PASSWORD")"
+            echo "keyAlias=$(esc "$KEY_ALIAS")"
+            echo "keyPassword=$(esc "$KEY_PASSWORD")"
+          } > "$RUNNER_TEMP/keystore.properties"
+          echo "args=--channel release --keystore $RUNNER_TEMP/keystore.properties" >> "$GITHUB_OUTPUT"
+          echo "artifact=th08-android" >> "$GITHUB_OUTPUT"
+      - name: Build APK
+        env:
+          ARGS: ${{ steps.key.outputs.args }}
+        # ARGS is split into words on purpose.
+        run: cargo xtask dist --target android-apk --assets none $ARGS
+      - name: Remove the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/th08-release.jks" "$RUNNER_TEMP/keystore.properties"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.key.outputs.artifact }}
+          path: target/dist/th08-*-android-apk*.apk
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux]
+    needs: [windows, linux, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write

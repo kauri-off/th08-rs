@@ -48,6 +48,43 @@ regression checks, needs your own copy of Touhou 8 (`th08.dat`, `thbgm.dat`; poi
 Reference sessions are recorded in the original game (see [sessions/README.md](sessions/README.md)); third-party
 replays come from public Touhou replay sites. Neither is committed.
 
+## Packaging and versions
+
+`cargo xtask dist --target <linux-appimage|windows-exe|windows-nsis|android-apk|web>` builds a package into
+`target/dist/`; `cargo xtask dist --help` lists the options.
+
+Versions come from git; nothing is edited by hand:
+
+- The version name is `git describe --tags --dirty --always` without a leading `v` (`0.1.0-42-g3409632-dirty`), or
+  `<Cargo version>-g<sha>` when no tag is reachable. A tag build in CI (`vX.Y.Z`) must match the workspace
+  `version` in `Cargo.toml` and is named `X.Y.Z`; the release workflow fails before building otherwise.
+- The Android `versionCode` is the number of minutes from 2026-01-01T00:00Z to HEAD's commit time, or to the build
+  time when the tree is dirty, so a fresh build always installs over an older one. `VERSION_CODE=N` overrides it.
+- The launchers and the port menu show "version (channel)" (desktop: the version alone).
+
+Android has three channels, installable side by side:
+
+| `--channel` | applicationId | label | signing | use |
+|---|---|---|---|---|
+| `release` | `org.th08.port` | th08 | `--keystore PROPS` | GitHub Releases; `--assets none` only, no `--packs` |
+| `dev` (default) | `org.th08.port.dev` | th08 dev | `--keystore PROPS` or `TH08_KEYSTORE_PROPS` | personal builds, may bundle game data and packs |
+| `debug` | `org.th08.port.debug` | th08 debug | `--debug-key` (throwaway `target/android/debug.keystore`) | agents and emulators |
+
+`PROPS` is a `keystore.properties` file with `storeFile` (absolute or relative to the file), `storePassword`,
+`keyAlias` and `keyPassword`. Only its path is passed on; Gradle reads the passwords. Never commit a keystore.
+
+The release workflow (`.github/workflows/release.yml`) builds the release channel on tags and on manual runs. It
+signs with these repository secrets:
+
+- `TH08_ANDROID_KEYSTORE_B64`: the `.jks`, base64-encoded (`base64 -w0 release.jks`);
+- `TH08_ANDROID_STORE_PASSWORD`;
+- `TH08_ANDROID_KEY_ALIAS`;
+- `TH08_ANDROID_KEY_PASSWORD`.
+
+The job decodes the keystore into `$RUNNER_TEMP`, writes a properties file next to it and deletes both at the end.
+Without the secrets (forks) it builds the debug channel with the throwaway key instead, as artifact
+`th08-android-debug` and file `th08-<version>-android-apk-debug.apk`. On a tag the APK is attached to the release.
+
 ## Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/): `feat(core): …`, `fix(render): …`, `docs: …`,

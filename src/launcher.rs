@@ -8,6 +8,14 @@ use th08_render::gfx::{Gfx, SafeArea};
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+// "version (channel)"; the channel is set only for Android builds.
+pub fn version_line() -> String {
+    match env!("TH08_CHANNEL") {
+        "" => env!("TH08_VERSION").to_owned(),
+        c => format!("{} ({c})", env!("TH08_VERSION")),
+    }
+}
+
 // A game folder holds th08.dat or its repacked th08.pak (any letter case).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_game_dir(dir: &Path) -> bool {
@@ -505,7 +513,10 @@ impl Model {
         let lang = self.lang();
         egui::Panel::top("folder").show(ui, |ui| {
             ui.add_space(4.0);
-            ui.heading(i18n::ui(lang, "title"));
+            ui.horizontal(|ui| {
+                ui.heading(i18n::ui(lang, "title"));
+                ui.label(egui::RichText::new(version_line()).small().weak());
+            });
             self.folder_ui(ui);
             ui.add_space(4.0);
         });
@@ -986,6 +997,7 @@ fn port_menu_ui(ui: &mut egui::Ui, lang: Lang) -> Option<Action> {
             }
             ui.add_space(4.0);
             ui.label(egui::RichText::new("F1 / Esc").small().weak());
+            ui.label(egui::RichText::new(version_line()).small().weak());
         });
     });
     act

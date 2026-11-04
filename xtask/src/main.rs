@@ -42,15 +42,17 @@ pub struct DistArgs {
     /// Android ABI, repeatable (default arm64-v8a).
     #[arg(long, value_enum)]
     abi: Vec<Abi>,
-    /// Android release keystore.properties (read only by Gradle); default TH08_KEYSTORE_PROPS.
+    /// Android keystore.properties for the release and dev channels (read only by Gradle); default
+    /// TH08_KEYSTORE_PROPS.
     #[arg(long, conflicts_with = "debug_key")]
     keystore: Option<PathBuf>,
-    /// Android: sign with the throwaway key target/android/debug.keystore.
+    /// Android: sign with the throwaway key target/android/debug.keystore (debug channel only).
     #[arg(long)]
     debug_key: bool,
-    /// Android Gradle variant (debug = org.th08.port.debug).
-    #[arg(long, value_enum, default_value_t = Variant::Release)]
-    variant: Variant,
+    /// Android channel: release (org.th08.port, public), dev (org.th08.port.dev, personal key, default) or debug
+    /// (org.th08.port.debug, throwaway key).
+    #[arg(long, value_enum)]
+    channel: Option<Channel>,
     /// Output file (directory for web and windows-exe with assets); default target/dist/<name>.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -81,9 +83,20 @@ pub enum Abi {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum Variant {
+pub enum Channel {
     Release,
+    Dev,
     Debug,
+}
+
+impl Channel {
+    pub fn name(self) -> &'static str {
+        match self {
+            Channel::Release => "release",
+            Channel::Dev => "dev",
+            Channel::Debug => "debug",
+        }
+    }
 }
 
 impl Target {
@@ -116,10 +129,17 @@ fn main() -> Result<()> {
 }
 
 fn dist(a: &DistArgs) -> Result<()> {
-    if a.target != Target::AndroidApk && (!a.abi.is_empty() || a.keystore.is_some() || a.debug_key)
+    if a.target != Target::AndroidApk
+        && (!a.abi.is_empty() || a.keystore.is_some() || a.debug_key || a.channel.is_some())
     {
-        bail!("--abi / --keystore / --debug-key are only for --target android-apk");
+        bail!("--abi / --keystore / --debug-key / --channel are only for --target android-apk");
     }
+    if a.channel == Some(Channel::Release) && (a.assets != Assets::None || !a.packs.is_empty()) {
+        bail!("--channel release is public: no --assets other than none, no --packs");
+    }
+    let ver = util::build_version()?;
+    eprintln!("version {} (code {})", ver.name, ver.code);
+    util::VERSION_NAME.get_or_init(|| ver.name.clone());
     util::check_personal_target()?;
     let local = util::LocalEnv::load()?;
     let suffix = match a.assets {
@@ -140,7 +160,7 @@ fn dist(a: &DistArgs) -> Result<()> {
         Target::LinuxAppimage => desktop::appimage(&name, &out, game.as_ref())?,
         Target::WindowsExe => desktop::windows_exe(&out, game.as_ref())?,
         Target::WindowsNsis => desktop::nsis(&name, &out, game.as_ref())?,
-        Target::AndroidApk => android::apk(a, &local, &out, game.as_ref())?,
+        Target::AndroidApk => android::apk(a, &local, &out, game.as_ref(), &ver)?,
         Target::Web => web::build(&out)?,
     }
     println!("built {} ({})", out.display(), util::human_size(&out));

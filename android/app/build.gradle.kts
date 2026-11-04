@@ -2,9 +2,10 @@
 // Inputs as -P properties (`cargo xtask dist --target android-apk` sets them, xtask/src/android.rs):
 //   th08.abis       comma list, arm64-v8a (default) / x86_64     th08.data      folder with th08.pak + thbgm.pak
 //                                                                                (preferred) or th08.dat + thbgm.dat
+//   th08.channel    release | dev (default) | debug: applicationId org.th08.port[.dev|.debug] and app label
 //   th08.keystore   keystore.properties for release signing       th08.debugKey  debug keystore (default
 //                   (storeFile relative to the file)                             target/android/debug.keystore)
-//   th08.versionCode (1)   th08.minSdk (26)   th08.profile (cargo profile, release)
+//   th08.versionCode (1)   th08.versionName   th08.minSdk (26)   th08.profile (cargo profile, release)
 //   th08.packs + th08.packIds   folder of translation packs + comma list of lang_xx ids to bundle (personal builds)
 import java.util.Properties
 import javax.inject.Inject
@@ -19,12 +20,18 @@ fun prop(name: String): String? = (findProperty(name) as String?)?.takeIf { it.i
 
 val abiList = (prop("th08.abis") ?: "arm64-v8a").split(',').map { it.trim() }.filter { it.isNotEmpty() }
 val minSdkLevel = (prop("th08.minSdk") ?: "26").toInt()
+val appChannel = (prop("th08.channel") ?: "dev").also {
+    if (it !in listOf("release", "dev", "debug")) throw GradleException("th08.channel $it: release, dev or debug")
+}
+val appVersion = prop("th08.versionName") ?: "0.1.0"
 
 // libth08.so per ABI through tools/android/cargo_android.sh (NDK clang).
 abstract class CargoBuild : DefaultTask() {
     @get:Input abstract val abis: ListProperty<String>
     @get:Input abstract val profile: Property<String>
     @get:Input abstract val minSdk: Property<Int>
+    @get:Input abstract val version: Property<String>
+    @get:Input abstract val channel: Property<String>
     @get:Internal abstract val repo: DirectoryProperty
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
     @get:Inject abstract val execOps: ExecOperations
@@ -41,6 +48,9 @@ abstract class CargoBuild : DefaultTask() {
             workingDir = root
             environment("PROFILE", profile.get())
             environment("ANDROID_API", minSdk.get().toString())
+            // Read by build.rs for the launcher and port-menu version line.
+            environment("TH08_VERSION", version.get())
+            environment("TH08_CHANNEL", channel.get())
             commandLine(listOf(File(root, "tools/android/cargo_android.sh").path, outputDir.get().asFile.path) + abis.get())
         }
     }
@@ -146,7 +156,7 @@ android {
         minSdk = minSdkLevel
         targetSdk = 36
         versionCode = (prop("th08.versionCode") ?: "1").toInt()
-        versionName = "0.1.0"
+        versionName = appVersion
         ndk { abiFilters += abiList }
     }
 
@@ -166,18 +176,22 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfig = signingConfigs.getByName("th08")
-            resValue("string", "app_name", "th08")
+            if (appChannel != "release") applicationIdSuffix = ".$appChannel"
+            resValue("string", "app_name", if (appChannel == "release") "th08" else "th08 $appChannel")
+            buildConfigField("String", "CHANNEL", "\"$appChannel\"")
         }
         debug {
             applicationIdSuffix = ".debug"
             signingConfig = signingConfigs.getByName("th08")
-            resValue("string", "app_name", "th08 (debug)")
+            resValue("string", "app_name", "th08 debug")
+            buildConfigField("String", "CHANNEL", "\"debug\"")
         }
     }
 
     buildFeatures {
         compose = true
         resValues = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -199,6 +213,8 @@ androidComponents {
             abis.set(abiList)
             profile.set(prop("th08.profile") ?: "release")
             minSdk.set(minSdkLevel)
+            version.set(appVersion)
+            channel.set(if (v.buildType == "debug") "debug" else appChannel)
             repo.set(repoDir)
         }
         val schema = tasks.register<SettingsSchema>("settingsSchema$cap") { repo.set(repoDir) }

@@ -208,6 +208,8 @@ fn menu_ui(
                         ui.add_space(8.0);
                         let name = pad.unwrap_or_else(|| i18n::ui(lang, "no_controller"));
                         ui.label(i18n::ui_fmt(lang, "controller", &[("name", name)]));
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(launcher::version_line()).small().weak());
                     });
                 });
         });

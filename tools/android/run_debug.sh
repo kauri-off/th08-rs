@@ -16,11 +16,11 @@ mkdir -p "$OUT"
 
 abi_of() { case $1 in aarch64) echo arm64-v8a ;; x86_64) echo x86_64 ;; *) echo "unknown target $1" >&2; exit 1 ;; esac; }
 
-# Gradle debug variant (org.th08.port.debug) through cargo xtask dist; DATA=DIR bundles the game files.
+# Debug channel (org.th08.port.debug) through cargo xtask dist; DATA=DIR bundles the game files.
 build() {
   local abis=() a
   for a in $TARGETS; do abis+=(--abi "$(abi_of "$a")"); done
-  cargo xtask dist --target android-apk --variant debug --debug-key "${abis[@]}" \
+  cargo xtask dist --target android-apk --channel debug --debug-key "${abis[@]}" \
     ${DATA:+--assets raw --data "$DATA"} ${PACKED:+--assets packed --data "$PACKED"} --out "$OUT/th08-debug.apk"
 }
 

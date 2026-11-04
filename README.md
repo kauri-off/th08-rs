@@ -80,7 +80,7 @@ cargo run --release -- "/path/to/TH08 - Imperishable Night"
 The controls are the original's: arrow keys, `Z` shoot, `X` bomb, `Shift` focus, `Esc` pause. Run `th08 --help` to
 see every setting. Packages (AppImage, Windows exe or installer, Android APK, web) are built with
 `cargo xtask dist --target <linux-appimage|windows-exe|windows-nsis|android-apk|web>`; `cargo xtask dist --help` lists
-the options.
+the options; channels, versions and CI signing are in [CONTRIBUTING.md](CONTRIBUTING.md#packaging-and-versions).
 
 ## Repository layout
 

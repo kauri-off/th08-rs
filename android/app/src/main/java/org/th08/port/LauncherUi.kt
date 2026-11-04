@@ -138,6 +138,11 @@ fun localized(ctx: Context, lang: String): Resources {
     return ctx.createConfigurationContext(conf).resources
 }
 
+// "versionName (channel)", from the Gradle build (th08.versionName, th08.channel).
+@Composable
+private fun VersionLine() = Text("${BuildConfig.VERSION_NAME} (${BuildConfig.CHANNEL})",
+    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
 @Composable
 private fun str(id: Int, vararg args: Any): String = LocalStrings.current.getString(id, *args)
 
@@ -176,6 +181,7 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
                             Text(str(R.string.title), style = MaterialTheme.typography.headlineMedium)
                             Text(str(R.string.subtitle), style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            VersionLine()
                         }
                         ResetMenu(act)
                     }
@@ -195,7 +201,12 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
             contentWindowInsets = WindowInsets.safeDrawing,
             topBar = {
                 TopAppBar(
-                    title = { Text(str(R.string.title)) },
+                    title = {
+                        Column {
+                            Text(str(R.string.title))
+                            VersionLine()
+                        }
+                    },
                     actions = { ResetMenu(act) },
                     scrollBehavior = scroll,
                     colors = TopAppBarDefaults.topAppBarColors(

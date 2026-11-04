@@ -7,8 +7,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use crate::assets::Game;
-use crate::util::{self, LocalEnv};
-use crate::{Abi, DistArgs, Variant};
+use crate::util::{self, BuildVersion, LocalEnv};
+use crate::{Abi, Channel, DistArgs};
 
 fn sdk() -> PathBuf {
     std::env::var_os("ANDROID_SDK")
@@ -40,7 +40,13 @@ fn newest(dir: &Path) -> Result<PathBuf> {
     v.pop().with_context(|| format!("empty {}", dir.display()))
 }
 
-pub fn apk(a: &DistArgs, local: &LocalEnv, out: &Path, game: Option<&Game>) -> Result<()> {
+pub fn apk(
+    a: &DistArgs,
+    local: &LocalEnv,
+    out: &Path,
+    game: Option<&Game>,
+    ver: &BuildVersion,
+) -> Result<()> {
     let root = util::root();
     let sdk = sdk();
     let abis: Vec<&str> = if a.abi.is_empty() {
@@ -48,16 +54,25 @@ pub fn apk(a: &DistArgs, local: &LocalEnv, out: &Path, game: Option<&Game>) -> R
     } else {
         a.abi.iter().map(|x| abi_name(*x)).collect()
     };
-    let props = if a.debug_key {
-        None
-    } else {
-        a.keystore
-            .clone()
-            .or_else(|| local.get("TH08_KEYSTORE_PROPS"))
+    let channel = a.channel.unwrap_or(Channel::Dev);
+    let props = match channel {
+        Channel::Debug if a.keystore.is_some() => {
+            bail!("--channel debug signs with the throwaway key, not --keystore")
+        }
+        Channel::Debug => None,
+        _ if a.debug_key => bail!("--debug-key is for --channel debug"),
+        _ => Some(
+            a.keystore
+                .clone()
+                .or_else(|| local.get("TH08_KEYSTORE_PROPS"))
+                .with_context(|| {
+                    format!(
+                        "--channel {} needs --keystore PROPS (or TH08_KEYSTORE_PROPS)",
+                        channel.name()
+                    )
+                })?,
+        ),
     };
-    if !a.debug_key && props.is_none() {
-        bail!("android-apk needs --keystore PROPS (or TH08_KEYSTORE_PROPS) or --debug-key");
-    }
     let mut args = vec![
         format!("-Pth08.abis={}", abis.join(",")),
         format!(
@@ -68,10 +83,9 @@ pub fn apk(a: &DistArgs, local: &LocalEnv, out: &Path, game: Option<&Game>) -> R
             "-Pth08.profile={}",
             std::env::var("PROFILE").unwrap_or_else(|_| "release".into())
         ),
-        format!(
-            "-Pth08.versionCode={}",
-            std::env::var("VERSION_CODE").unwrap_or_else(|_| "1".into())
-        ),
+        format!("-Pth08.channel={}", channel.name()),
+        format!("-Pth08.versionCode={}", ver.code),
+        format!("-Pth08.versionName={}", ver.name),
     ];
     if let Some(p) = &props {
         if !p.is_file() {
@@ -89,9 +103,10 @@ pub fn apk(a: &DistArgs, local: &LocalEnv, out: &Path, game: Option<&Game>) -> R
             args.push(format!("-Pth08.packIds={}", g.packs.join(",")));
         }
     }
-    let variant = match a.variant {
-        Variant::Release => "release",
-        Variant::Debug => "debug",
+    // The debug channel is Gradle's debuggable, unminified build type.
+    let variant = match channel {
+        Channel::Debug => "debug",
+        Channel::Release | Channel::Dev => "release",
     };
     let task = format!("assemble{}{}", variant[..1].to_uppercase(), &variant[1..]);
     util::run(
