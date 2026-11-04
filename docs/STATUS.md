@@ -23,8 +23,7 @@
 - Draw-log-only differences that are invisible on screen and accepted ([PARITY_POLICY.md](PARITY_POLICY.md)):
   sub-pixel float rounding of orbit stars, particles and glyph snapping; the frame on which a loader finishes; the
   host FPS digits; the HUD repaints the whole side panel instead of only the changed rows.
-- Joystick on Linux needs the `gamepad-linux` build feature (libudev). Android has the touch overlay and keyboard
-  input, no gamepad support yet.
+- Android has the touch overlay and keyboard input, no gamepad support yet.
 - Port-only additions (launcher, port settings, touch overlay, translations) are not part of the original.
 
 ## Next

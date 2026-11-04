@@ -55,7 +55,8 @@ wgpu = "30"
 winit = "0.30"
 
 [features]
-# Joystick on Linux: gilrs needs libudev (libudev-dev) at build time, so it is opt-in there.
+default = ["gamepad-linux"]
+# Joystick on Linux (gilrs links libudev); `--no-default-features` builds without it where libudev-dev is missing.
 gamepad-linux = ["dep:gilrs"]
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]

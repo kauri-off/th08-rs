@@ -15,8 +15,7 @@ Technical choices and why they were made.
 - Fixed-timestep 60 Hz logic; rendering once per display frame; at most 4 catch-up steps.
 - Reverse-engineering tool: Ghidra headless (Hopper proved unreliable on this binary). Workspace `re/` (helpers in
   `re/tools`, Ghidra scripts in `re/ghidra_scripts`).
-- Joystick: gilrs (the browser Gamepad API on wasm). On Linux gilrs needs libudev-dev at build time, so it sits behind
-  the `gamepad-linux` feature (`cargo build --release --features gamepad-linux`); the default Linux build has no
-  joystick support.
+- Joystick: gilrs (the browser Gamepad API on wasm). On Linux gilrs links libudev; it is the default `gamepad-linux`
+  feature, and `--no-default-features` builds without a joystick where libudev-dev is missing.
 - Behaviour parity rules: [PARITY_POLICY.md](PARITY_POLICY.md). Architecture of the idiomatic rewrite:
   [arch/ARCH_SUMMARY.md](arch/ARCH_SUMMARY.md).
