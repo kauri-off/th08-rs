@@ -310,7 +310,7 @@ matter. Raw `th08.dat` / `thbgm.dat` stay supported side by side: the user's gam
 | run | deliverables | files | order / check |
 |---|---|---|---|
 | **AS1** pack format + repack — **DONE 2026-11-04** (see "AS1 result" below) | (1) `th08-formats::pack` reader/writer (header, manifest, zstd frames via ruzstd decode / zstd encode behind a tool-only feature) with unit tests; (2) `repack` bin: th08.pak from th08.dat + self-verify; (3) vanilla Logic sha256 table + `Content::{Archive, Pack}` under `LogicView::new`, fingerprint rule | formats/pack.rs (new), tools/bin/repack.rs (new), core/content.rs, game.rs:284 (one line) | **after 11p** (11p owns drawlist/anmmgr/game load paths and refreshes the D reference). Check T D on the normal set + the new pack item (identical) |
-| **AS2** BGM pack | (1) thbgm.pak writer in `repack` (padded encode, Vorbis q4, header + loop table, self-check of lag/seam/length); (2) `BgmSource { Raw, Vorbis }` in th08-audio, lewton decode cut to `loop_end`, header probe answered from the pack; (3) samples as `[i16; 2]` | tools/bin/repack.rs, audio.rs, game.rs:296 (probe via source) | after AS1; ∥ the Android runs that do not touch audio.rs. Check T D identical (pack item); bgmcheck metrics in the repack self-check |
+| **AS2** BGM pack — **DONE 2026-11-04** (see "AS2 result" below) | (1) thbgm.pak writer in `repack` (padded encode, Vorbis q4, header + loop table, self-check of lag/seam/length); (2) `BgmSource { Raw, Vorbis }` in th08-audio, lewton decode cut to `loop_end`, header probe answered from the pack; (3) samples as `[i16; 2]` | tools/bin/repack.rs, audio.rs, game.rs:296 (probe via source) | after AS1; ∥ the Android runs that do not touch audio.rs. Check T D identical (pack item); bgmcheck metrics in the repack self-check |
 | **AS3** packaging | (1) build_apk.sh / Gradle `GameData` + `noCompress "pak"`, prefer `.pak`, launcher folder check accepts `.pak`; (2) AppImage / NSIS staging use the packs; (3) progressive BGM decode (growing buffer, first ring first) | tools/android/*, android/app/build.gradle.kts, packaging scripts, src/sources.rs / launcher folder check, audio.rs | after AS2; Android emulator only (headless, `adb -s emulator-NNNN`): install, start, title BGM starts (logcat "bgm" timing), APK size recorded |
 
 Ordering against step 11: the plan only needs `LogicView` / `PresentView` (already in place) and the one-line load
@@ -360,3 +360,54 @@ A permanent arch_check item can reuse that: `TH08_DIR=<pack dir>` for those item
 not per entry (an entry inherits its frame's); a frame that does not shrink is stored. (4) Manifest is a hand-written
 LE table (layout in pack.rs). (5) No ranged reads yet: the whole pack (23 MB) is read into memory, frames decode on
 demand with a 2-frame cache; `Source::read_range` streaming can come with AS3 if Android RAM needs it.
+
+### AS2 result (2026-11-04)
+
+**Files.** `crates/th08-formats/src/pack.rs` (`Codec::Vorbis`, `Index` = header + manifest parsed without the frame
+data, `BgmInfo` trailer, `BgmTrack` + `write_bgm`, `Pack::stored`/`index`); `crates/th08-core/src/content.rs`
+(`BGM_PACK`, `bgm_pack_index`, `bgm_header`); `game.rs` probe line (`content::bgm_header(&source)`);
+`crates/th08-audio/src/bgm.rs` (new: `BgmSource { Raw, Vorbis }`, `decode_vorbis`, `pcm_frames`, `fit`; dep
+`lewton` 0.10, pure Rust); `audio.rs` (`Music` samples `[i16; 2]`, BGM source resolved on the first play command);
+`crates/th08-tools/src/bin/repack.rs` (`--only content|bgm`, `--vorbis-q Q`, `--ffmpeg PATH`; `mod bgm`).
+
+**Format.** Same T8PK layout, kind 2. One `Vorbis` frame per thbgm.fmt track in fmt order (`size` = decoded PCM bytes
+before the cut); per entry name = fmt name, layer Present, `size` = `loop_end`·4, sha256 of thbgm.dat PCM
+`[0, loop_end)`. The manifest ends with the thbgm.dat trailer: original 16-byte header, file length, sha256.
+
+**API.** Core: `content::bgm_header(&Source) -> Option<Vec<u8>>`: the stored header when a readable `thbgm.pak` exists,
+else `read_range("thbgm.dat", 0, 16)` as before (a broken pack logs and falls back). `content::bgm_pack_index`
+reads only the 32-byte header and the manifest by range. Audio: `BgmSource::resolve(&Source)` (the same choice) and
+`read(&Source, &Track) -> Vec<[i16; 2]>`: Raw = range read of thbgm.dat; Vorbis = range read of the track's Ogg stream,
+lewton, cut / zero-padded to `t.length` (thbgm.fmt `loop_end`). The loop points come only from thbgm.fmt, and
+`Music::new` / `track_frame` / the ring are unchanged.
+
+**Encode.** `[0, loop_end) ++ [loop_start, loop_start + 1 s)` → ffmpeg libvorbis `-q:a 4`, `-fflags +bitexact
+-flags:a +bitexact -map_metadata -1`. The output is byte-deterministic (two runs, same sha256 `6d575df2…`). 8 parallel
+ffmpeg jobs: 12.6–18 s for all 21 tracks, including the checks.
+
+**Sizes.** thbgm.dat 449 961 024 B → **thbgm.pak 44 469 772 B (10.1×)**, personal output
+`/home/anon/Projects/th_08/target/pack/thbgm.pak`.
+
+**Loop metrics (repack self-check, all 21 tracks).** Decoded length = loop_end + 44100..44224 (the pad plus no
+end-trim, as in §2.1), cut to loop_end. **Lag 0 on all 21.** Global SNR 14.90–21.42 dB. Seam SNR 14.61–26.34 dB.
+Junction RMS / global RMS error ≤ **1.40** (th08_20, limit 1.5). The junction sample step is like the original's.
+These match the §2.1 "Vorbis q4 pad" row. Every track is then read back from the written file through `BgmSource`
+(the game path): frames identical to the checked decode. The header probe answers the original 16 bytes.
+
+**Decode time.** All 21 tracks read back + decoded on one thread: 8.0–9.6 s, slowest track 0.65–0.75 s (th08_11 /
+th08_14). The machine was at load 33–42 during these runs, against 3.6 s for §2.1 on a quiet machine. Peak RAM per
+track is now `loop_end`·4 B as `[i16; 2]` (th08_15: 31.7 MB, was 63.5 MB as f32) plus the ≤ 3.2 MB Ogg stream.
+
+**Proof (pack item).** Dir `target/pack/game_bgm/` holds only `th08.pak` + `thbgm.pak` (no .dat). arch_check's
+`run_item` (full: trace, report, draw hash) with `TH08_DIR` = that dir for s_golden, s_selftest1, d_0 and
+p_gensokyou_th8_udAr02: all four digests equal `target/arch_ref/digests.txt`. Unit tests: `pack::bgm_pack_roundtrip`
+(writer / reader / manifest-only index); `content::bgm_header_probe` (pack header wins, dat fallback, broken-pack
+fallback, missing → None, content pack under the BGM name rejected); the audio ring tests now run on s16 frames.
+
+**Deviations.** (1) Self-check asserts: decoded length ≥ loop_end, lag 0, junction ≤ 1.5. Dropped: "seam SNR ≥ global
+SNR − 1 dB", because it fails per track on content alone (e.g. th08_07: seam 15.8 dB vs global 20.6 dB). An 8192-frame
+window's SNR follows the local loudness, and the seam splice does not change a single sample. A local bound (the same
+splice 8× wider) also fails on content (th08_07, th08_19, th08_20). Seam SNR and that local SNR stay in the printed
+report. (2) No lpSNR (it was only a diagnostic in §2.1). (3) Vorbis is not decoded inside `th08-formats`:
+`Pack::read` on a Vorbis frame returns a `Decode` error, and the audio crate decodes. (4) BGM decode is still
+synchronous per play command on the loader thread (progressive decode is AS3).

@@ -3,7 +3,7 @@
 //! or its repacked th08.pak (port-only container, docs/arch/ASSETS_FORMAT.md §3.1, §3.3).
 
 use th08_formats::archive::{Archive, ArchiveError};
-use th08_formats::pack::{Layer, Pack, PackError};
+use th08_formats::pack::{HEADER_LEN, Index, Kind, Layer, Pack, PackError};
 
 use crate::assets::Source;
 
@@ -100,6 +100,45 @@ impl Content {
     }
 }
 
+// The BGM pack's file name (ASSETS_FORMAT §3.1): Ogg Vorbis per thbgm.fmt track, preferred over thbgm.dat.
+pub const BGM_PACK: &str = "thbgm.pak";
+
+// thbgm.pak's header + manifest, read by range (no stream data); None when the source has no thbgm.pak.
+pub async fn bgm_pack_index(source: &Source) -> Option<anyhow::Result<Index>> {
+    if !source
+        .names()
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(BGM_PACK))
+    {
+        return None;
+    }
+    Some(
+        async {
+            let header = source.read_range(BGM_PACK, 0, HEADER_LEN).await?;
+            let (off, len) = Index::manifest_range(&header)?;
+            let manifest = source.read_range(BGM_PACK, off, len).await?;
+            let index = Index::parse(&header, &manifest)?;
+            anyhow::ensure!(
+                index.kind == Kind::Bgm && index.bgm.is_some(),
+                "{BGM_PACK}: not a BGM pack"
+            );
+            Ok(index)
+        }
+        .await,
+    )
+}
+
+// Config_Load's thbgm.dat header probe (02 §1, 15 §1.2): the 16 header bytes, or None when the file is missing.
+// With a thbgm.pak the stored original header answers, so `config::load` decides exactly as with thbgm.dat.
+pub async fn bgm_header(source: &Source) -> Option<Vec<u8>> {
+    match bgm_pack_index(source).await {
+        Some(Ok(index)) => return index.bgm.map(|b| b.header.to_vec()),
+        Some(Err(e)) => log::warn!("{BGM_PACK}: {e:#}; probing thbgm.dat"),
+        None => {}
+    }
+    source.read_range("thbgm.dat", 0, 16).await.ok()
+}
+
 impl From<Archive> for Content {
     fn from(a: Archive) -> Self {
         Self::Archive(a)
@@ -179,6 +218,70 @@ mod tests {
         let fb = LogicView::new(Content::Pack(Pack::from_bytes(b).unwrap()));
         assert!(!fa.fingerprint().is_vanilla());
         assert_ne!(fa.fingerprint(), fb.fingerprint());
+    }
+
+    // In-memory files for the probe tests.
+    struct Mem(Vec<(&'static str, Vec<u8>)>);
+    impl crate::assets::DataSource for Mem {
+        fn names(&self) -> Vec<String> {
+            self.0.iter().map(|f| f.0.to_string()).collect()
+        }
+        fn fetch<'a>(
+            &'a self,
+            name: &'a str,
+            range: Option<(u64, usize)>,
+        ) -> crate::assets::BoxFuture<'a, anyhow::Result<Vec<u8>>> {
+            let r = self
+                .0
+                .iter()
+                .find(|f| f.0.eq_ignore_ascii_case(name))
+                .and_then(|f| match range {
+                    None => Some(f.1.clone()),
+                    Some((o, n)) => f.1.get(o as usize..o as usize + n).map(<[u8]>::to_vec),
+                })
+                .ok_or_else(|| anyhow::anyhow!("{name}: missing or short"));
+            Box::pin(async move { r })
+        }
+    }
+
+    // 02 §1 probe: thbgm.pak answers with the stored thbgm.dat header; without it thbgm.dat; neither → None.
+    #[test]
+    fn bgm_header_probe() {
+        use crate::testdata::block_on;
+        use th08_formats::pack::{BgmInfo, write_bgm};
+        let header = *b"ZWAV\x01\0\0\0\0\x08\0\0\0\0\0\0";
+        let info = BgmInfo {
+            header,
+            dat_len: 16,
+            dat_sha256: [0; 32],
+        };
+        let pak = write_bgm(&[], &info);
+        let mut dat = header.to_vec();
+        dat[12] = 9;
+        let src = |f| Source::new(Mem(f));
+        let both = src(vec![("THBGM.PAK", pak.clone()), ("thbgm.dat", dat.clone())]);
+        assert_eq!(block_on(bgm_header(&both)).as_deref(), Some(&header[..]));
+        let raw = src(vec![("thbgm.dat", dat.clone())]);
+        assert_eq!(block_on(bgm_header(&raw)), Some(dat.clone()));
+        // A broken pack falls back to thbgm.dat.
+        let broken = src(vec![
+            ("thbgm.pak", pak[..40].to_vec()),
+            ("thbgm.dat", dat.clone()),
+        ]);
+        assert_eq!(block_on(bgm_header(&broken)), Some(dat));
+        assert_eq!(block_on(bgm_header(&src(vec![]))), None);
+        // A content pack under the BGM name is rejected.
+        let content = write(
+            Kind::Content,
+            &[("a.ecl", b"x")],
+            1 << 20,
+            &mut |b: &[u8]| b.to_vec(),
+        );
+        assert!(
+            block_on(bgm_pack_index(&src(vec![("thbgm.pak", content)])))
+                .unwrap()
+                .is_err()
+        );
     }
 
     #[test]

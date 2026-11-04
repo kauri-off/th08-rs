@@ -292,7 +292,7 @@ impl Ctx {
         // The port's own save first; else import the original's th08.cfg (read-only).
         // Game-directory reads (thbgm.dat header, the original's th08.cfg / score.dat imports) go through the
         // app's `DataSource` (assets.rs); saves through `host`.
-        let bgm_header = source.read_range("thbgm.dat", 0, 16).await.ok();
+        let bgm_header = crate::content::bgm_header(&source).await;
         let mut cfg_file = None;
         if persist {
             cfg_file = match host.read("th08.cfg") {

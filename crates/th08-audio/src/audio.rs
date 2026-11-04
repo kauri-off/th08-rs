@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use th08_core::assets::Source;
 
+use crate::bgm::{BgmSource, Frame};
+
 // thbgm.fmt WAVEFORMATEX: 44100 Hz, stereo, 16-bit for every track (02 §2).
 const BGM_RATE: f64 = 44100.0;
 
@@ -21,7 +23,8 @@ const RING: usize = 16 * CHUNK;
 // The playing BGM: the whole stored track in memory, heard through a model of the DirectSound streaming ring
 // (02 §3) so that `Bgm_StreamStop` + UnPause replays what the ring still holds (02 §4).
 struct Music {
-    samples: Vec<[f32; 2]>,
+    // s16 frames as stored in thbgm.dat (or decoded from thbgm.pak), half the RAM of f32 (ASSETS_FORMAT §3.4).
+    samples: Vec<Frame>,
     loop_start: usize,
     // Per ring chunk: the stream frame its data starts at (frames read since the play command's rewind).
     chunks: [u64; 16],
@@ -34,7 +37,7 @@ struct Music {
 
 impl Music {
     // Play command fill stage (02 §3): rewind, fill the whole ring with the first 4.0 s, +0x64 := 0, play from 0.
-    fn new(samples: Vec<[f32; 2]>, loop_start: usize) -> Self {
+    fn new(samples: Vec<Frame>, loop_start: usize) -> Self {
         Self {
             samples,
             loop_start,
@@ -57,7 +60,8 @@ impl Music {
 
     fn ring_sample(&self, r: usize) -> [f32; 2] {
         let r = r % RING;
-        self.samples[self.track_frame(self.chunks[r / CHUNK] + (r % CHUNK) as u64)]
+        let s = self.samples[self.track_frame(self.chunks[r / CHUNK] + (r % CHUNK) as u64)];
+        [f32::from(s[0]) / 32768.0, f32::from(s[1]) / 32768.0]
     }
 
     // Notification as the play cursor leaves a chunk (handler 0x472D30, 02 §3). The write cursor then lies in the
@@ -248,6 +252,8 @@ pub fn spawn(fut: impl std::future::Future<Output = ()> + 'static) {
 // Device side of the sound manager: SE voices, the BGM stream and the MIDI object; driven only by `exec`.
 pub struct Audio {
     source: Source,
+    // thbgm.dat or thbgm.pak, chosen on the first play command (needs async reads of the source).
+    bgm: Arc<Mutex<Option<Arc<BgmSource>>>>,
     mixer: Arc<Mutex<Mixer>>,
     stream: Option<cpal::Stream>,
     // Port (ARCH_D_MOBILE §5): output held by `pause`; `lost` is set by the error callback when the device or stream
@@ -278,6 +284,7 @@ impl Audio {
         }));
         Self {
             source,
+            bgm: Default::default(),
             mixer,
             stream: None,
             paused: false,
@@ -522,18 +529,18 @@ impl Audio {
             m.stopped = false;
             m.generation
         };
-        let (source, mixer) = (self.source.clone(), self.mixer.clone());
+        let (source, mixer, cell) = (self.source.clone(), self.mixer.clone(), self.bgm.clone());
         spawn(async move {
-            match source.read_range("thbgm.dat", t.offset, t.length * 4).await {
-                Ok(buf) => {
-                    let samples = buf
-                        .chunks_exact(4)
-                        .map(|c| {
-                            let s =
-                                |o: usize| i16::from_le_bytes([c[o], c[o + 1]]) as f32 / 32768.0;
-                            [s(0), s(2)]
-                        })
-                        .collect();
+            let known = cell.lock().unwrap().clone();
+            let bgm = match known {
+                Some(b) => b,
+                None => {
+                    let b = Arc::new(BgmSource::resolve(&source).await);
+                    cell.lock().unwrap().get_or_insert(b).clone()
+                }
+            };
+            match bgm.read(&source, &t).await {
+                Ok(samples) => {
                     let mut m = mixer.lock().unwrap();
                     if m.generation == generation {
                         m.music = Some(Music::new(samples, t.loop_start));
@@ -896,7 +903,7 @@ mod tests {
     #[test]
     fn wav_pause_and_fade() {
         let mut d = Dev::new();
-        let mut music = Music::new(vec![[0.5, 0.5]; 10], 0);
+        let mut music = Music::new(vec![[16384, 16384]; 10], 0);
         music.cursor = 3.0;
         d.a.mixer.lock().unwrap().music = Some(music);
         d.run(|b| {
@@ -931,13 +938,17 @@ mod tests {
     fn heard(m: &mut Mixer, frames: usize) -> Vec<usize> {
         let mut out = vec![0.0; 2 * frames];
         m.render(&mut out, 2);
+        let s = |v: f32| (v * 32768.0).round() as usize;
         out.chunks_exact(2)
-            .map(|f| (f[0] * 1e6).round() as usize)
+            .map(|f| s(f[0]) | s(f[1]) << 15)
             .collect()
     }
 
     fn ring_mixer(len: usize, loop_start: usize) -> Mixer {
-        let samples = (0..len).map(|i| [i as f32 / 1e6; 2]).collect();
+        // Frame index i encoded as (low 15 bits, high bits) in the two s16 channels.
+        let samples = (0..len)
+            .map(|i| [(i & 0x7FFF) as i16, (i >> 15) as i16])
+            .collect();
         Mixer {
             volume: 1.0,
             out_rate: BGM_RATE,

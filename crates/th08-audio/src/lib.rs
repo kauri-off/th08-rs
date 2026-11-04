@@ -2,4 +2,5 @@
 //! SoundFont synth for MIDI BGM (STEP10_CRATES.md §1).
 
 pub mod audio;
+pub mod bgm;
 pub mod midi;

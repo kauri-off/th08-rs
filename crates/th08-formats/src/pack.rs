@@ -4,7 +4,11 @@
 //! Layout (all LE): 32-byte header | frame data | manifest. Header: magic `T8PK`, version u32, kind u32, manifest
 //! length u32, manifest offset u64, first 8 bytes of the manifest's sha256. Manifest: u32 frame count, per frame
 //! (codec u8, offset u64, stored length u64, decoded size u64); u32 entry count, per entry (name length u16, name,
-//! layer u8, frame u32, offset u64 and size u64 inside the decoded frame, sha256 of the entry's bytes).
+//! layer u8, frame u32, offset u64 and size u64 inside the decoded frame, sha256 of the entry's bytes). A BGM pack
+//! (kind 2, thbgm.pak, AS2) holds one Ogg Vorbis stream per thbgm.fmt track as a `Vorbis` frame (decoded by the audio
+//! crate); its entry's size is `loop_end`·4 and its sha256 is that of the track's PCM `[0, loop_end)` in thbgm.dat
+//! (02 §1–§2). Its manifest ends with the thbgm.dat trailer: the original 16-byte header (02 §1), the file's length
+//! u64 and sha256.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,7 +46,7 @@ pub enum PackError {
 
 pub type Result<T> = std::result::Result<T, PackError>;
 
-// Pack kind (header field): th08.dat content now; the BGM pack (AS2) later.
+// Pack kind (header field): th08.dat content (th08.pak) or thbgm.dat tracks (thbgm.pak).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Content = 1,
@@ -60,6 +64,8 @@ pub enum Layer {
 pub enum Codec {
     Store = 0,
     Zstd = 1,
+    // One Ogg Vorbis stream (BGM pack); `size` = decoded PCM bytes before the cut to `loop_end`. Not decoded here.
+    Vorbis = 2,
 }
 
 // Layer of a th08.dat entry by name (ASSETS_FORMAT §1.1): jpg/png surfaces, se_*.wav and .mid are presentation-only;
@@ -101,13 +107,28 @@ pub struct Entry {
     pub sha256: [u8; 32],
 }
 
+// BGM pack trailer: what thbgm.dat itself held, so the header probe (02 §1) is answered exactly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BgmInfo {
+    pub header: [u8; 16],
+    pub dat_len: u64,
+    pub dat_sha256: [u8; 32],
+}
+
+// The parsed header + manifest, without the frame data (a BGM player reads only this, then one stream by range).
+#[derive(Clone, Debug)]
+pub struct Index {
+    pub kind: Kind,
+    pub frames: Vec<Frame>,
+    pub entries: Vec<Entry>,
+    pub bgm: Option<BgmInfo>,
+}
+
 pub struct Pack {
     data: Vec<u8>,
-    kind: Kind,
-    frames: Vec<Frame>,
-    entries: Vec<Entry>,
+    index: Index,
     names: Vec<String>,
-    index: HashMap<String, usize>,
+    lookup: HashMap<String, usize>,
     // Per entry: its decoded bytes were checked against `sha256` once.
     verified: Vec<AtomicBool>,
     cache: Mutex<Vec<(u32, Arc<Vec<u8>>)>>,
@@ -121,28 +142,35 @@ fn usize_of(v: u64) -> Result<usize> {
     usize::try_from(v).map_err(|_| PackError::BadManifest("offset overflow"))
 }
 
-impl Pack {
-    pub fn from_bytes(data: Vec<u8>) -> Result<Self> {
-        if data.len() < HEADER_LEN || &data[..4] != MAGIC {
+impl Index {
+    // Manifest (offset, length) from the 32-byte header.
+    pub fn manifest_range(header: &[u8]) -> Result<(u64, usize)> {
+        if header.len() < HEADER_LEN || &header[..4] != MAGIC {
             return Err(PackError::NotPack);
         }
-        let mut h = Reader::at(&data, 4);
+        let mut h = Reader::at(header, 4);
         let version = h.u32()?;
         if version != VERSION {
             return Err(PackError::Version(version));
         }
+        h.u32()?;
+        let mlen = h.u32()? as usize;
+        Ok((u64_of(&mut h)?, mlen))
+    }
+
+    // Header + the manifest bytes at `manifest_range`; frame ranges are checked against the manifest offset.
+    pub fn parse(header: &[u8], manifest: &[u8]) -> Result<Self> {
+        let (moff, mlen) = Self::manifest_range(header)?;
+        if manifest.len() != mlen {
+            return Err(PackError::BadManifest("manifest range"));
+        }
+        let mut h = Reader::at(header, 8);
         let kind = match h.u32()? {
             1 => Kind::Content,
             2 => Kind::Bgm,
             _ => return Err(PackError::BadManifest("kind")),
         };
-        let mlen = h.u32()? as usize;
-        let moff = usize_of(u64_of(&mut h)?)?;
-        let msha: [u8; 8] = h.array()?;
-        let manifest = moff
-            .checked_add(mlen)
-            .and_then(|end| data.get(moff..end))
-            .ok_or(PackError::BadManifest("manifest range"))?;
+        let msha: [u8; 8] = Reader::at(header, 24).array()?;
         if sha256(manifest)[..8] != msha {
             return Err(PackError::ManifestHash);
         }
@@ -153,6 +181,7 @@ impl Pack {
             let codec = match r.u8()? {
                 0 => Codec::Store,
                 1 => Codec::Zstd,
+                2 => Codec::Vorbis,
                 _ => return Err(PackError::BadManifest("codec")),
             };
             let f = Frame {
@@ -162,7 +191,7 @@ impl Pack {
                 size: u64_of(&mut r)?,
             };
             let end = f.offset.checked_add(f.len);
-            if f.offset < HEADER_LEN as u64 || end.is_none_or(|e| e > moff as u64) {
+            if f.offset < HEADER_LEN as u64 || end.is_none_or(|e| e > moff) {
                 return Err(PackError::BadManifest("frame range"));
             }
             if codec == Codec::Store && f.len != f.size {
@@ -191,35 +220,82 @@ impl Pack {
             let f = frames
                 .get(e.frame as usize)
                 .ok_or(PackError::BadManifest("frame index"))?;
-            if e.offset.checked_add(e.size).is_none_or(|end| end > f.size) {
+            // A Vorbis entry is the stream's PCM cut to loop_end, so it may be longer than the decoded size field.
+            if f.codec != Codec::Vorbis
+                && e.offset.checked_add(e.size).is_none_or(|end| end > f.size)
+            {
                 return Err(PackError::BadManifest("entry range"));
             }
             entries.push(e);
         }
+        let bgm = if kind == Kind::Bgm {
+            Some(BgmInfo {
+                header: r.array()?,
+                dat_len: u64_of(&mut r)?,
+                dat_sha256: r.array()?,
+            })
+        } else {
+            None
+        };
         if r.pos() != manifest.len() {
             return Err(PackError::BadManifest("trailing bytes"));
         }
-        let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
-        let index = names
+        Ok(Self {
+            kind,
+            frames,
+            entries,
+            bgm,
+        })
+    }
+
+    pub fn entry(&self, name: &str) -> Option<&Entry> {
+        let name = name.to_ascii_lowercase();
+        self.entries.iter().find(|e| e.name == name)
+    }
+}
+
+impl Pack {
+    pub fn from_bytes(data: Vec<u8>) -> Result<Self> {
+        let (moff, mlen) = Index::manifest_range(&data)?;
+        let manifest = usize_of(moff)?
+            .checked_add(mlen)
+            .and_then(|end| data.get(moff as usize..end))
+            .ok_or(PackError::BadManifest("manifest range"))?;
+        let index = Index::parse(&data, manifest)?;
+        let names: Vec<String> = index.entries.iter().map(|e| e.name.clone()).collect();
+        let lookup = names
             .iter()
             .enumerate()
             .map(|(i, n)| (n.clone(), i))
             .collect();
-        let verified = entries.iter().map(|_| AtomicBool::new(false)).collect();
+        let verified = index
+            .entries
+            .iter()
+            .map(|_| AtomicBool::new(false))
+            .collect();
         Ok(Self {
             data,
-            kind,
-            frames,
-            entries,
-            names,
             index,
+            names,
+            lookup,
             verified,
             cache: Mutex::new(Vec::new()),
         })
     }
 
     pub fn kind(&self) -> Kind {
-        self.kind
+        self.index.kind
+    }
+
+    pub fn index(&self) -> &Index {
+        &self.index
+    }
+
+    // Stored bytes of frame `idx` (a BGM track's Ogg stream).
+    pub fn stored(&self, idx: u32) -> Option<&[u8]> {
+        let f = self.index.frames.get(idx as usize)?;
+        self.data
+            .get(f.offset as usize..(f.offset + f.len) as usize)
     }
 
     // Entry names in manifest order (= th08.dat table order).
@@ -228,26 +304,26 @@ impl Pack {
     }
 
     pub fn entries(&self) -> &[Entry] {
-        &self.entries
+        &self.index.entries
     }
 
     pub fn frames(&self) -> &[Frame] {
-        &self.frames
+        &self.index.frames
     }
 
     pub fn entry(&self, name: &str) -> Option<&Entry> {
-        self.index
+        self.lookup
             .get(&name.to_ascii_lowercase())
-            .map(|&i| &self.entries[i])
+            .map(|&i| &self.index.entries[i])
     }
 
     // The entry's original bytes; the first read of each entry is checked against its manifest sha256.
     pub fn read(&self, name: &str) -> Result<Vec<u8>> {
         let i = *self
-            .index
+            .lookup
             .get(&name.to_ascii_lowercase())
             .ok_or_else(|| PackError::NotFound(name.to_string()))?;
-        let e = &self.entries[i];
+        let e = &self.index.entries[i];
         let frame = self.frame(e.frame)?;
         // Ranges were validated against the frame's size in `from_bytes`, and `frame` checks the decoded length.
         let out = frame[e.offset as usize..(e.offset + e.size) as usize].to_vec();
@@ -271,11 +347,17 @@ impl Pack {
             cache.insert(0, hit.clone());
             return Ok(hit.1);
         }
-        let f = &self.frames[idx as usize];
+        let f = &self.index.frames[idx as usize];
         let stored = &self.data[f.offset as usize..(f.offset + f.len) as usize];
         let size = usize_of(f.size)?;
         let bytes = match f.codec {
             Codec::Store => stored.to_vec(),
+            Codec::Vorbis => {
+                return Err(PackError::Decode {
+                    frame: idx,
+                    msg: "Vorbis stream: decoded by the audio crate".into(),
+                });
+            }
             Codec::Zstd => {
                 let mut out = Vec::with_capacity(size);
                 ruzstd::decoding::FrameDecoder::new()
@@ -343,7 +425,8 @@ pub fn write(
     let mut out = vec![0u8; HEADER_LEN];
     let mut frames = Vec::with_capacity(plan.len());
     let mut placed: Vec<(u32, u64)> = vec![(0, 0); files.len()];
-    for (fi, members) in plan.iter().enumerate() {
+    for members in &plan {
+        let fi = frames.len();
         let mut raw = Vec::new();
         for &i in members {
             placed[i] = (fi as u32, raw.len() as u64);
@@ -363,24 +446,89 @@ pub fn write(
         });
         out.extend_from_slice(&stored);
     }
+    let entries: Vec<Entry> = files
+        .iter()
+        .enumerate()
+        .map(|(i, (n, bytes))| {
+            let name = n.to_ascii_lowercase();
+            Entry {
+                layer: layer_of(&name),
+                name,
+                frame: placed[i].0,
+                offset: placed[i].1,
+                size: bytes.len() as u64,
+                sha256: sha256(bytes),
+            }
+        })
+        .collect();
+    finish(kind, out, &frames, &entries, None)
+}
+
+// One thbgm.fmt track for `write_bgm`: its Ogg Vorbis stream, the decoded PCM byte count of that stream, and the
+// original PCM `[0, loop_end)` it stands for (size and sha256 only).
+pub struct BgmTrack<'a> {
+    pub name: &'a str,
+    pub ogg: &'a [u8],
+    pub decoded_size: u64,
+    pub pcm_size: u64,
+    pub pcm_sha256: [u8; 32],
+}
+
+// thbgm.pak (kind Bgm): one Vorbis frame per track, in thbgm.fmt order, and the thbgm.dat trailer.
+pub fn write_bgm(tracks: &[BgmTrack], info: &BgmInfo) -> Vec<u8> {
+    let mut out = vec![0u8; HEADER_LEN];
+    let mut frames = Vec::with_capacity(tracks.len());
+    let mut entries = Vec::with_capacity(tracks.len());
+    for (i, t) in tracks.iter().enumerate() {
+        frames.push(Frame {
+            codec: Codec::Vorbis,
+            offset: out.len() as u64,
+            len: t.ogg.len() as u64,
+            size: t.decoded_size,
+        });
+        out.extend_from_slice(t.ogg);
+        entries.push(Entry {
+            name: t.name.to_ascii_lowercase(),
+            layer: Layer::Present,
+            frame: i as u32,
+            offset: 0,
+            size: t.pcm_size,
+            sha256: t.pcm_sha256,
+        });
+    }
+    finish(Kind::Bgm, out, &frames, &entries, Some(info))
+}
+
+// Appends the manifest to `out` (frame data after the reserved header) and fills in the header.
+fn finish(
+    kind: Kind,
+    mut out: Vec<u8>,
+    frames: &[Frame],
+    entries: &[Entry],
+    bgm: Option<&BgmInfo>,
+) -> Vec<u8> {
     let mut m = Vec::new();
     m.extend_from_slice(&(frames.len() as u32).to_le_bytes());
-    for f in &frames {
+    for f in frames {
         m.push(f.codec as u8);
         m.extend_from_slice(&f.offset.to_le_bytes());
         m.extend_from_slice(&f.len.to_le_bytes());
         m.extend_from_slice(&f.size.to_le_bytes());
     }
-    m.extend_from_slice(&(files.len() as u32).to_le_bytes());
-    for (i, (n, bytes)) in files.iter().enumerate() {
-        let name = n.to_ascii_lowercase();
-        m.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        m.extend_from_slice(name.as_bytes());
-        m.push(layer_of(&name) as u8);
-        m.extend_from_slice(&placed[i].0.to_le_bytes());
-        m.extend_from_slice(&placed[i].1.to_le_bytes());
-        m.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-        m.extend_from_slice(&sha256(bytes));
+    m.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for e in entries {
+        m.extend_from_slice(&(e.name.len() as u16).to_le_bytes());
+        m.extend_from_slice(e.name.as_bytes());
+        m.push(e.layer as u8);
+        m.extend_from_slice(&e.frame.to_le_bytes());
+        m.extend_from_slice(&e.offset.to_le_bytes());
+        m.extend_from_slice(&e.size.to_le_bytes());
+        m.extend_from_slice(&e.sha256);
+    }
+    if let Some(b) = bgm {
+        m.extend_from_slice(&b.header);
+        m.extend_from_slice(&b.dat_len.to_le_bytes());
+        m.extend_from_slice(&b.dat_sha256);
     }
     let moff = out.len() as u64;
     out.extend_from_slice(&m);
@@ -492,6 +640,53 @@ mod tests {
         v[HEADER_LEN] ^= 0xFF;
         let p = Pack::from_bytes(v).unwrap();
         assert!(matches!(p.read(&s[0].0), Err(PackError::Hash(_))));
+    }
+
+    #[test]
+    fn bgm_pack_roundtrip() {
+        let info = BgmInfo {
+            header: *b"ZWAV\x01\0\0\0\0\x08\0\0\0\0\0\0",
+            dat_len: 123_456,
+            dat_sha256: [7; 32],
+        };
+        let tracks = [
+            BgmTrack {
+                name: "th08_01.wav",
+                ogg: b"OggS-one",
+                decoded_size: 4100,
+                pcm_size: 4000,
+                pcm_sha256: [1; 32],
+            },
+            BgmTrack {
+                name: "TH08_00.wav",
+                ogg: b"OggS-two!",
+                decoded_size: 900,
+                pcm_size: 1000,
+                pcm_sha256: [2; 32],
+            },
+        ];
+        let bytes = write_bgm(&tracks, &info);
+        let p = Pack::from_bytes(bytes.clone()).unwrap();
+        assert_eq!(p.kind(), Kind::Bgm);
+        assert_eq!(p.index().bgm.as_ref(), Some(&info));
+        assert_eq!(p.names(), ["th08_01.wav", "th08_00.wav"]);
+        let e = p.entry("th08_00.WAV").unwrap();
+        assert_eq!((e.size, e.layer, e.sha256), (1000, Layer::Present, [2; 32]));
+        assert_eq!(p.stored(e.frame), Some(&b"OggS-two!"[..]));
+        assert!(matches!(
+            p.read("th08_01.wav"),
+            Err(PackError::Decode { .. })
+        ));
+        // Manifest-only parse, as the audio crate does it over ranged reads.
+        let (off, len) = Index::manifest_range(&bytes[..HEADER_LEN]).unwrap();
+        let idx = Index::parse(
+            &bytes[..HEADER_LEN],
+            &bytes[off as usize..off as usize + len],
+        )
+        .unwrap();
+        assert_eq!(idx.entries, p.entries());
+        assert_eq!(idx.entry("TH08_01.wav").unwrap().frame, 0);
+        assert_eq!(idx.frames[1].offset, HEADER_LEN as u64 + 8);
     }
 
     #[test]

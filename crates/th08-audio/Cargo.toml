@@ -14,6 +14,8 @@ th08-formats = { path = "../th08-formats" }
 anyhow = "1.0.104"
 cpal = "0.18.2"
 hound = "3.5.1"
+# thbgm.pak tracks (bgm.rs): pure-Rust Ogg Vorbis decode on every target.
+lewton = "0.10"
 log = "0.4.34"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
