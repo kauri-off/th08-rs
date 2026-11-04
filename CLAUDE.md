@@ -4,12 +4,20 @@ These override the global "no comments / one short line" rule for this repo.
 
 ## Comments in `src/` and `crates/*/src/`
 
-This is a port: a reader must be able to check the code against the specs. Write comments for:
-- each module: a one-line `//!` naming what it ports and the spec section (`//! ECL enemy VM (07 §5–§10)`);
-- non-obvious functions, fields and constants: the spec section, units, fixed-point/angle format, the original's name;
-- quirks of the original kept for bit-exactness (call order, off-by-one, odd clamps, original bugs): what and why, 1–3 lines.
-
-Do not restate what the code obviously does, and do not write long blocks. `// SPEC-GAP:` stays a one-line marker.
+A reader must be able to check spec-bound code against the specs, without the comments drowning the code.
+- Each module: exactly one `//!` line naming what it ports and its spec section (`//! ECL enemy VM (07 §5–§10)`).
+  The spec section is cited there once.
+- On an item or statement, cite a spec section only when it adds something: a different section than the module's,
+  a kept quirk, units / fixed-point / angle format, or the original's name or address. Plain fields, constants and
+  obvious statements get no citation.
+- Quirks of the original kept for bit-exactness (call order, off-by-one, odd clamps, original bugs): what and why,
+  1–3 lines.
+- Port-only code (launcher, settings, platform, render backend, tools, xtask): no spec citations; one `//!` line
+  saying what the module does.
+- No process history in code: no IMPL / RE-Q numbers, rewrite steps, run ids, `answers_*`, ARCH_* / plan-doc
+  pointers, "was / moved from / until X lands". Git and docs/ hold that.
+- Do not restate what the code obviously does, no long blocks; CLI usage text belongs in `--help`, not in a comment
+  banner. `// SPEC-GAP:` stays a one-line marker.
 
 ## Source of truth
 
