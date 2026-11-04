@@ -1,0 +1,583 @@
+#!/usr/bin/env -S python3 -I
+"""usage: tools/q  (one-line summary)
+       tools/q submit [--kind check|test|emu|full] [--prio high|normal] [--label TEXT] [-C DIR] -- CMD…  (prints ID)
+       tools/q wait ID [--max SECONDS] [--tail N] | ls | stats [--since 24h] [--id ID] | cancel ID | selftest
+       tools/q legacy [-w SECS] -- CMD…  (= tools/qlock: exclusive .agents.lock, wait/run logged as kind=legacy)
+Job queue for heavy checks: each job is a systemd user unit that waits for capacity (weighted semaphore, 4 units:
+check 2, test 1, emu 1 + the emulator token, full 4; prio high first, strict FIFO behind the head), holds
+.agents.lock SHARED while it runs, logs to QDIR/log.jsonl. wait exits with the job's code, or 75 = not done yet.
+Env: QDIR (default /home/anon/Projects/th_08/target/queue), QLOCK (default …/target/.agents.lock), QPOLL (s)."""
+import fcntl, json, os, random, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time
+
+MAIN = "/home/anon/Projects/th_08"
+QDIR = os.path.realpath(os.environ.get("QDIR") or f"{MAIN}/target/queue")
+QLOCK = os.path.realpath(os.environ.get("QLOCK") or f"{MAIN}/target/.agents.lock")
+ARCH_TIMES = f"{MAIN}/target/arch_ref/times.txt"
+POLL = float(os.environ.get("QPOLL", "2"))
+CAP = 4
+WEIGHT = {"check": 2, "test": 1, "emu": 1, "full": 4}
+WAIT_MAX = 540  # one Bash tool call never reaches the 600 s limit
+EXIT_PENDING = 75  # EX_TEMPFAIL: job not finished, call `q wait` again
+EXIT_CANCELLED = 125
+# Unit prefix: the real queue gets q-ID, a scratch QDIR (selftest) qt-ID, so both can coexist.
+PREFIX = "q" if QDIR == f"{MAIN}/target/queue" else "qt"
+
+
+def jdir(i): return f"{QDIR}/jobs/{i}"
+def now(): return time.time()
+
+
+def rjson(p, d=None):
+    try:
+        with open(p) as f: return json.load(f)
+    except (OSError, ValueError): return d
+
+
+def wjson(p, o):
+    t = f"{p}.tmp{os.getpid()}"
+    with open(t, "w") as f: json.dump(o, f)
+    os.replace(t, p)
+
+
+class Locked:
+    """The queue state (QDIR/state.json) under an exclusive flock of QDIR/state.lock."""
+    def __enter__(self):
+        os.makedirs(f"{QDIR}/jobs", exist_ok=True)
+        self.f = open(f"{QDIR}/state.lock", "a")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        self.s = rjson(f"{QDIR}/state.json", {"seq": 0, "jobs": {}})
+        return self.s
+
+    def __exit__(self, *a):
+        wjson(f"{QDIR}/state.json", self.s)
+        self.f.close()
+
+
+def alive(pid):
+    try: os.kill(pid, 0); return True
+    except ProcessLookupError: return False
+    except PermissionError: return True
+
+
+def prune(s):
+    """Drops entries whose runner died (no unit started within 60 s, or pid gone) and marks their status."""
+    for i, e in list(s["jobs"].items()):
+        dead = (e.get("pid") and not alive(e["pid"])) or (not e.get("pid") and now() - e["submit"] > 60)
+        if dead:
+            del s["jobs"][i]
+            st = rjson(f"{jdir(i)}/status.json", {})
+            if st.get("state") in ("queued", "running"):
+                st.update(state="lost", end=now(), rc=EXIT_CANCELLED)
+                wjson(f"{jdir(i)}/status.json", st)
+
+
+def order(s):
+    """Queued jobs in start order: prio high first, then submit sequence."""
+    q = [(i, e) for i, e in s["jobs"].items() if e["state"] == "queued"]
+    return sorted(q, key=lambda x: (x[1]["prio"] != "high", x[1]["seq"]))
+
+
+def used(s):
+    r = [e for e in s["jobs"].values() if e["state"] == "running"]
+    return sum(e["weight"] for e in r), sum(1 for e in r if e["kind"] == "emu")
+
+
+def append_log(rec):
+    os.makedirs(QDIR, exist_ok=True)
+    with open(f"{QDIR}/log.jsonl", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.write(json.dumps(rec) + "\n")
+
+
+def read_log():
+    out = []
+    try:
+        with open(f"{QDIR}/log.jsonl") as f:
+            for l in f:
+                try: out.append(json.loads(l))
+                except ValueError: pass
+    except OSError: pass
+    return out
+
+
+def worktree(cwd):
+    m = re.search(r"/worktrees/[^/]+/([^/]+)", cwd)
+    return m.group(1) if m else ("main" if cwd.startswith(MAIN) else os.path.basename(cwd))
+
+
+# ---- estimates -------------------------------------------------------------------------------------------------
+
+def pct(v, p):
+    if not v: return None
+    v = sorted(v)
+    return v[min(len(v) - 1, int(p / 100 * len(v)))]
+
+
+def est_run(kind, hist):
+    """Expected run seconds of a kind: median of the last 20 finished ok jobs; arch_ref times.txt as a fallback."""
+    r = [x["run"] for x in hist if x.get("kind") == kind and x.get("rc") == 0 and x.get("run") is not None][-20:]
+    if r: return pct(r, 50)
+    if kind in ("check", "full"):
+        try:
+            with open(ARCH_TIMES) as f: tot = sum(float(l.split()[1]) for l in f if len(l.split()) >= 2)
+            j = max(2, 16 * WEIGHT[kind] // CAP)
+            return 150 + tot * (1.6 if kind == "full" else 1.4) / j  # fmt/build/wasm/android/test + items (+ emit-off)
+        except (OSError, ValueError): pass
+    return {"test": 120, "emu": 300}.get(kind, 600)
+
+
+def simulate(s, hist):
+    """Estimated start time of each queued job: replays the strict-order admission on estimated run ends."""
+    t = now()
+    run = [(max(t, e["start"] + est_run(e["kind"], hist)), e["weight"], e["kind"] == "emu")
+           for e in s["jobs"].values() if e["state"] == "running" and e.get("start")]
+    res = {}
+    for i, e in order(s):
+        while True:
+            w = sum(r[1] for r in run); emu = any(r[2] for r in run)
+            if w + e["weight"] <= CAP and not (e["kind"] == "emu" and emu): break
+            if not run: break
+            run.sort(); t = max(t, run.pop(0)[0])
+        res[i] = t
+        run.append((t + est_run(e["kind"], hist), e["weight"], e["kind"] == "emu"))
+    return res
+
+
+def summary(s=None):
+    if s is None:
+        with Locked() as s: prune(s)
+    w, emu = used(s)
+    q = order(s)
+    r = sum(1 for e in s["jobs"].values() if e["state"] == "running")
+    oldest = max((now() - e["submit"] for _, e in q), default=0)
+    return f"q: {r} running (capacity {w}/{CAP}, emu {emu}/1), {len(q)} queued, oldest waiting {oldest:.0f} s"
+
+
+# ---- commands --------------------------------------------------------------------------------------------------
+
+def cmd_submit(a):
+    kind, prio, label, cwd = "check", "normal", "", os.getcwd()
+    while a and a[0] != "--":
+        o = a.pop(0)
+        if o in ("--kind", "--prio", "--label", "-C") and a: v = a.pop(0)
+        else: die(f"submit: unknown option {o}")
+        if o == "--kind": kind = v
+        elif o == "--prio": prio = v
+        elif o == "--label": label = v
+        else: cwd = os.path.realpath(v)
+    a = a[1:] if a[:1] == ["--"] else a
+    if kind not in WEIGHT or prio not in ("high", "normal") or not a: die(__doc__, 2)
+    if not os.path.isdir(cwd): die(f"submit: no directory {cwd}")
+    env = dict(os.environ)
+    env.setdefault("J", str(max(2, 16 * WEIGHT[kind] // CAP)))
+    i = time.strftime("%Y%m%d-%H%M%S") + "-" + "".join(random.choices("0123456789abcdef", k=4))
+    d = jdir(i)
+    os.makedirs(d)
+    job = {"id": i, "cmd": a, "cwd": cwd, "label": label, "kind": kind, "prio": prio, "weight": WEIGHT[kind],
+           "submit": now(), "worktree": worktree(cwd), "unit": f"{PREFIX}-{i}"}
+    wjson(f"{d}/job.json", job)
+    wjson(f"{d}/env.json", env)
+    wjson(f"{d}/status.json", {"state": "queued", "submit": job["submit"]})
+    shutil.copy(os.path.abspath(__file__), f"{d}/runner.py")  # the unit survives removal of the caller's worktree
+    with Locked() as s:
+        s["seq"] += 1
+        s["jobs"][i] = {"state": "queued", "kind": kind, "prio": prio, "weight": WEIGHT[kind], "seq": s["seq"],
+                        "submit": job["submit"], "label": label, "cwd": cwd, "pid": None}
+    cpu = os.cpu_count() * 75  # like thjob: 75 % of the machine + nice 10
+    r = subprocess.run(["systemd-run", "--user", "-q", "--collect", "--unit", job["unit"], f"--working-directory={QDIR}",
+                        "--description", f"th08 queue {kind} {label}", "-p", "Nice=10", "-p", f"CPUQuota={cpu}%",
+                        "-E", f"QDIR={QDIR}", "-E", f"QLOCK={QLOCK}", "-E", f"QPOLL={POLL}",
+                        "/usr/bin/python3", "-I", f"{d}/runner.py", "_run", i], capture_output=True, text=True)
+    if r.returncode:
+        with Locked() as s: s["jobs"].pop(i, None)
+        wjson(f"{d}/status.json", {"state": "failed-to-start", "submit": job["submit"], "end": now(), "rc": 1})
+        die(f"submit: systemd-run failed: {r.stderr.strip()}")
+    print(i)
+
+
+def finish(i, job, st, state, rc, out_path):
+    st.update(state=state, end=now(), rc=rc)
+    wjson(f"{jdir(i)}/status.json", st)
+    with Locked() as s: s["jobs"].pop(i, None)
+    start = st.get("start")
+    append_log({"id": i, "kind": job["kind"], "label": job["label"], "prio": job["prio"], "weight": job["weight"],
+                "worktree": job["worktree"], "cwd": job["cwd"], "cmd": job["cmd"], "status": state, "rc": rc,
+                "submit": job["submit"], "start": start, "end": st["end"],
+                "wait": round((start or st["end"]) - job["submit"], 1),
+                "lockwait": st.get("lockwait"), "run": round(st["end"] - start, 1) if start else None,
+                "out": out_path})
+
+
+def cmd_run(a):
+    """The unit body: wait for capacity in strict order, take the shared legacy lock, run, record."""
+    i = a[0]; d = jdir(i)
+    job = rjson(f"{d}/job.json"); env = rjson(f"{d}/env.json")
+    st = rjson(f"{d}/status.json")
+    out_path = f"{d}/out.log"
+    child = [None]
+    term = [False]
+
+    def on_term(*_):
+        term[0] = True
+        if child[0]:
+            try: os.killpg(child[0].pid, signal.SIGTERM)
+            except ProcessLookupError: pass
+    signal.signal(signal.SIGTERM, on_term)
+
+    with Locked() as s:
+        if i in s["jobs"]: s["jobs"][i]["pid"] = os.getpid()
+    while True:
+        with Locked() as s:
+            prune(s)
+            e = s["jobs"].get(i)
+            if e is None or e.get("cancel") or term[0]:
+                break
+            if not os.path.isdir(job["cwd"]):
+                e["cancel"] = "worktree removed"; break
+            q = order(s)
+            w, emu = used(s)
+            if q and q[0][0] == i and w + e["weight"] <= CAP and not (e["kind"] == "emu" and emu):
+                e["state"] = "running"; e["start"] = now(); break
+        time.sleep(POLL)
+    e = e or {}
+    if e.get("state") != "running":
+        st["reason"] = e.get("cancel") or "cancelled"
+        finish(i, job, st, "cancelled", EXIT_CANCELLED, out_path); return
+    # Shared .agents.lock: q jobs share it, legacy exclusive holders (flock target/.agents.lock) exclude them.
+    os.makedirs(os.path.dirname(QLOCK), exist_ok=True)
+    lk = open(QLOCK, "a")
+    t0 = now()
+    st.update(state="running", start=now(), lock="waiting"); wjson(f"{d}/status.json", st)
+    # Blocking flock in a thread: the job joins the kernel's waiters (an LOCK_NB poll starves behind back-to-back
+    # legacy holders); the main thread still sees cancel / a removed worktree.
+    got = threading.Event()
+    threading.Thread(target=lambda: (fcntl.flock(lk, fcntl.LOCK_SH), got.set()), daemon=True).start()
+    while not term[0] and not got.wait(POLL):
+        if not os.path.isdir(job["cwd"]): term[0] = True; st["reason"] = "worktree removed"
+    st["lockwait"] = round(now() - t0, 1)
+    if term[0]:
+        st.update(start=None); st.setdefault("reason", "cancelled")
+        finish(i, job, st, "cancelled", EXIT_CANCELLED, out_path); return
+    st.update(start=now(), lock="shared"); wjson(f"{d}/status.json", st)
+    with open(out_path, "wb") as out:
+        try:
+            child[0] = subprocess.Popen(job["cmd"], cwd=job["cwd"], env=env, stdout=out, stderr=subprocess.STDOUT,
+                                        stdin=subprocess.DEVNULL, start_new_session=True)
+        except OSError as x:
+            out.write(f"q: cannot start {job['cmd']}: {x}\n".encode())
+            finish(i, job, st, "failed", 127, out_path); return
+        while child[0].poll() is None:
+            time.sleep(POLL)
+            if not os.path.isdir(job["cwd"]) and not term[0]:
+                st["reason"] = "worktree removed"; on_term()
+    rc = child[0].returncode
+    if term[0]:
+        st.setdefault("reason", "cancelled"); finish(i, job, st, "cancelled", EXIT_CANCELLED, out_path)
+    else:
+        finish(i, job, st, "done" if rc == 0 else "failed", rc if rc >= 0 else 128 - rc, out_path)
+
+
+def resolve(i):
+    if os.path.isdir(jdir(i)): return i
+    m = [x for x in os.listdir(f"{QDIR}/jobs")] if os.path.isdir(f"{QDIR}/jobs") else []
+    m = [x for x in m if x.endswith(i) or x.startswith(i)]
+    if len(m) == 1: return m[0]
+    die(f"no job {i}" if not m else f"ambiguous job {i}: {' '.join(m)}")
+
+
+def job_line(i, st, job):
+    w = (st.get("start") or st.get("end") or now()) - job["submit"]
+    r = (st["end"] - st["start"]) if st.get("start") and st.get("end") else None
+    return (f"q stats: job {i} kind={job['kind']} label={job['label'] or '-'} waited {w:.0f} s"
+            + (f" (lock {st['lockwait']:.0f} s)" if st.get("lockwait") else "") + (f", ran {r:.0f} s" if r is not None else ""))
+
+
+def cmd_wait(a):
+    mx, tail, i = WAIT_MAX, 40, None
+    while a:
+        o = a.pop(0)
+        if o == "--max": mx = float(a.pop(0))
+        elif o == "--tail": tail = int(a.pop(0))
+        elif i is None: i = o
+        else: die(__doc__, 2)
+    if i is None: die(__doc__, 2)
+    i = resolve(i)
+    job = rjson(f"{jdir(i)}/job.json")
+    t0 = now()
+    while True:
+        st = rjson(f"{jdir(i)}/status.json", {})
+        if st.get("state") not in ("queued", "running"): break
+        if now() - t0 >= mx: break
+        with Locked() as s: prune(s)
+        time.sleep(min(POLL, max(0.05, mx - (now() - t0))))
+    hist = read_log()
+    with Locked() as s:
+        prune(s); summ = summary(s)
+        st = rjson(f"{jdir(i)}/status.json", {})
+        if st.get("state") == "queued":
+            q = [x for x, _ in order(s)]
+            est = simulate(s, hist).get(i, now()) - now()
+            pos = q.index(i) + 1 if i in q else 0
+            print(f"still queued: position {pos} of {len(q)}, waited {now() - job['submit']:.0f} s, est. start in ~{max(0, est):.0f} s")
+            print(summ); sys.exit(EXIT_PENDING)
+        if st.get("state") == "running":
+            ran = now() - st["start"]
+            if st.get("lock") == "waiting":
+                print(f"admitted, waiting {ran:.0f} s for a legacy exclusive .agents.lock holder (flock without q)")
+            else:
+                left = est_run(job["kind"], hist) - ran
+                print(f"running for {ran:.0f} s, est. ~{max(0, left):.0f} s left{' (over the estimate)' if left < 0 else ''}{progress(job, st)}")
+            print(summ); sys.exit(EXIT_PENDING)
+    out = f"{jdir(i)}/out.log"
+    try:
+        with open(out, errors="replace") as f: lines = f.readlines()
+    except OSError: lines = []
+    for l in lines[-tail:] if tail > 0 else []: sys.stdout.write(l)
+    rc = st.get("rc", 1)
+    print(f"job {i} {st.get('state')}{' (' + st['reason'] + ')' if st.get('reason') else ''}, exit {rc}; full output: {out}")
+    print(job_line(i, st, job))
+    print(summ)
+    sys.exit(rc)
+
+
+def progress(job, st):
+    """arch_check jobs: items finished so far (RUN_OUT digests newer than the job's start)."""
+    if job["kind"] not in ("check", "full"): return ""
+    env = rjson(f"{jdir(job['id'])}/env.json", {})
+    out = env.get("RUN_OUT") or f"{env.get('CARGO_TARGET_DIR') or job['cwd'] + '/target'}/arch_run"
+    try: n = sum(1 for d in os.scandir(out) if os.path.isfile(f"{d.path}/digest") and os.path.getmtime(f"{d.path}/digest") >= st["start"])
+    except OSError: return ""
+    return f", {n} arch_check items done" if n else ""
+
+
+def cmd_cancel(a):
+    if len(a) != 1: die(__doc__, 2)
+    i = resolve(a[0]); job = rjson(f"{jdir(i)}/job.json")
+    with Locked() as s:
+        e = s["jobs"].get(i)
+        if e is None:
+            print(f"job {i} is not queued or running"); return
+        e["cancel"] = "cancelled"
+        state = e["state"]
+    if state == "running":
+        subprocess.run(["systemctl", "--user", "kill", "-s", "TERM", "--kill-whom=main", job["unit"]], capture_output=True)
+    print(f"job {i} cancel requested ({state})")
+
+
+def cmd_ls(a):
+    hist = read_log()
+    with Locked() as s:
+        prune(s); est = simulate(s, hist); summ = summary(s)
+        rows = [(i, e) for i, e in s["jobs"].items() if e["state"] == "running"] + order(s)
+    print(f"{'ID':22} {'state':8} {'kind':5} {'prio':6} {'worktree':14} {'label':20} {'waited':>7} {'running':>7} {'est.':>12}")
+    for i, e in rows:
+        if e["state"] == "running":
+            ran = now() - e["start"]; waited = e["start"] - e["submit"]
+            st = rjson(f"{jdir(i)}/status.json", {})
+            et = "lock wait" if st.get("lock") == "waiting" else f"~{max(0, est_run(e['kind'], hist) - ran):.0f}s left"
+            print(f"{i:22} {'running':8} {e['kind']:5} {e['prio']:6} {worktree(e['cwd'])[:14]:14} {e['label'][:20]:20} {waited:6.0f}s {ran:6.0f}s {et:>12}")
+        else:
+            print(f"{i:22} {'queued':8} {e['kind']:5} {e['prio']:6} {worktree(e['cwd'])[:14]:14} {e['label'][:20]:20} {now() - e['submit']:6.0f}s {'-':>7} {'start ~' + str(int(max(0, est.get(i, now()) - now()))) + 's':>12}")
+    print(summ)
+
+
+def parse_dur(v):
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd]?)", v)
+    if not m: die(f"bad duration {v}")
+    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+
+
+def cmd_stats(a):
+    since, jid = 86400.0, None
+    while a:
+        o = a.pop(0)
+        if o == "--since": since = parse_dur(a.pop(0))
+        elif o == "--id": jid = resolve(a.pop(0))
+        else: die(__doc__, 2)
+    t1 = now(); t0 = t1 - since
+    hist = [x for x in read_log() if x.get("submit", 0) >= t0 or (x.get("end") or 0) >= t0]
+    if jid:
+        x = [h for h in hist if h["id"] == jid]
+        st = rjson(f"{jdir(jid)}/status.json", {}); job = rjson(f"{jdir(jid)}/job.json")
+        print(job_line(jid, st, job)); return
+    print(f"q stats since {time.strftime('%Y-%m-%d %H:%M', time.localtime(t0))} ({len(hist)} jobs; times in s)")
+    print(f"{'kind':7} {'n':>4} {'ok':>4} {'wait p50':>8} {'p90':>6} {'max':>6} {'run p50':>8} {'p90':>6} {'>540s':>6}")
+    for k in ["check", "test", "emu", "full", "legacy"]:
+        h = [x for x in hist if x.get("kind") == k]
+        if not h: continue
+        w = [x["wait"] for x in h if x.get("wait") is not None]
+        r = [x["run"] for x in h if x.get("run") is not None]
+        f = lambda v: "-" if v is None else f"{v:.0f}"
+        print(f"{k:7} {len(h):4} {sum(1 for x in h if x.get('rc') == 0):4} {f(pct(w, 50)):>8} {f(pct(w, 90)):>6} {f(max(w) if w else None):>6}"
+              f" {f(pct(r, 50)):>8} {f(pct(r, 90)):>6} {sum(1 for v in w if v > WAIT_MAX):6}")
+    qh = [x for x in hist if x.get("kind") != "legacy"]
+    ev = []
+    for x in qh:
+        st = x.get("start") or x["end"]
+        ev += [(x["submit"], 1), (st, -1)]
+    ev.sort(); n = peak = 0
+    for _, d in ev: n += d; peak = max(peak, n)
+    lo = max(t0, min((x["submit"] for x in qh), default=t1))
+    busy = sum(x["weight"] * max(0, x["end"] - max(x["start"], lo)) for x in qh if x.get("start"))
+    span = max(1e-9, t1 - lo)
+    print(f"peak queue length {peak}; capacity use {100 * busy / (CAP * span):.1f} % of {CAP} units over {span / 3600:.2f} h")
+    print(summary())
+
+
+def cmd_legacy(a):
+    """qlock: the old exclusive flock of .agents.lock, wait and run logged (kind=legacy)."""
+    w = None
+    if a[:1] == ["-w"] and len(a) > 1: w = float(a[1]); a = a[2:]
+    a = a[1:] if a[:1] == ["--"] else a
+    if not a: die("usage: tools/qlock [-w SECS] CMD…", 2)
+    os.makedirs(os.path.dirname(QLOCK), exist_ok=True)
+    lk = open(QLOCK, "a"); t0 = now()
+    while True:
+        try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB); break
+        except BlockingIOError:
+            if w is not None and now() - t0 >= w:
+                append_log({"id": f"legacy-{int(t0)}-{os.getpid()}", "kind": "legacy", "label": " ".join(a)[:60],
+                            "cwd": os.getcwd(), "worktree": worktree(os.getcwd()), "cmd": a, "status": "lock-timeout",
+                            "rc": 1, "submit": t0, "start": None, "end": now(), "wait": round(now() - t0, 1), "run": None, "weight": 0})
+                print(f"qlock: lock not acquired in {w:.0f} s", file=sys.stderr); sys.exit(1)
+            time.sleep(min(POLL, 1))
+    t1 = now()
+    rc = subprocess.call(a)
+    append_log({"id": f"legacy-{int(t0)}-{os.getpid()}", "kind": "legacy", "label": " ".join(a)[:60], "cwd": os.getcwd(),
+                "worktree": worktree(os.getcwd()), "cmd": a, "status": "done" if rc == 0 else "failed", "rc": rc,
+                "submit": t0, "start": t1, "end": now(), "wait": round(t1 - t0, 1), "run": round(now() - t1, 1), "weight": 0})
+    sys.exit(rc)
+
+
+def die(m, rc=1):
+    print(m, file=sys.stderr); sys.exit(rc)
+
+
+# ---- selftest --------------------------------------------------------------------------------------------------
+
+def cmd_selftest(a):
+    tmp = tempfile.mkdtemp(prefix="qtest.", dir=os.environ.get("TMPDIR"))
+    env = dict(os.environ, QDIR=f"{tmp}/queue", QLOCK=f"{tmp}/agents.lock", QPOLL="0.2")
+    me = os.path.abspath(__file__)
+    fails = []
+
+    def q(*args, check=True):
+        r = subprocess.run([sys.executable, "-I", me, *args], env=env, capture_output=True, text=True)
+        return r
+
+    def sub(kind, *cmd, prio="normal", label="", C=None):
+        r = q("submit", "--kind", kind, "--prio", prio, "--label", label, *(["-C", C] if C else []), "--", *cmd)
+        if r.returncode: fails.append(f"submit failed: {r.stderr}"); return None
+        return r.stdout.strip()
+
+    def st(i): return rjson(f"{tmp}/queue/jobs/{i}/status.json", {})
+    def ok(c, m): print(("ok   " if c else "FAIL ") + m); (None if c else fails.append(m))
+
+    def until(f, t=20):
+        e = now() + t
+        while now() < e:
+            if f(): return True
+            time.sleep(0.1)
+        return False
+
+    def done(*ids): return until(lambda: all(st(i).get("state") not in ("queued", "running") for i in ids), 60)
+
+    try:
+        # capacity: 3 checks of weight 2 into 4 units → 2 run, 1 waits
+        c = [sub("check", "sleep", "2", label=f"cap{n}") for n in range(3)]
+        until(lambda: sum(st(i).get("state") == "running" for i in c) == 2, 10); time.sleep(0.6)
+        ok([st(i).get("state") for i in c].count("running") == 2 and st(c[2]).get("state") == "queued",
+           "capacity: 2 of 3 weight-2 jobs run, third queued")
+        done(*c)
+        ok(st(c[2])["start"] >= min(st(c[0])["end"], st(c[1])["end"]) - 0.01, "capacity: third starts after one ends")
+        # J export: weight 2 → J=8, full → 16, caller's J kept
+        j1 = sub("check", "sh", "-c", 'echo "J=$J"'); j2 = sub("full", "sh", "-c", 'echo "J=$J"')
+        env["J"] = "3"; j3 = sub("test", "sh", "-c", 'echo "J=$J"'); del env["J"]
+        done(j1, j2, j3)
+        rd = lambda i: open(f"{tmp}/queue/jobs/{i}/out.log").read().strip()
+        ok((rd(j1), rd(j2), rd(j3)) == ("J=8", "J=16", "J=3"), f"J export: {rd(j1)} {rd(j2)} {rd(j3)}")
+        # priority + strict order: full holds all 4; normal A, normal full B, high H → H, then A, then B
+        f = sub("full", "sleep", "1.5", label="blocker")
+        until(lambda: st(f).get("state") == "running")
+        A = sub("test", "sleep", "0.5", label="A"); B = sub("full", "sleep", "0.5", label="B")
+        T = sub("test", "sleep", "0.5", label="T-behind-B")
+        H = sub("test", "sleep", "0.5", prio="high", label="H")
+        done(f, A, B, T, H)
+        s = {k: st(v)["start"] for k, v in dict(A=A, B=B, T=T, H=H).items()}
+        ok(s["H"] <= s["A"] <= s["B"] <= s["T"], f"priority high first, then FIFO, no overtaking of waiting full B")
+        # emulator token: two emu jobs never overlap though capacity allows both
+        e1 = sub("emu", "sleep", "1"); e2 = sub("emu", "sleep", "1"); t1 = sub("test", "sleep", "0.3")
+        done(e1, e2, t1)
+        ok(st(e2)["start"] >= st(e1)["end"] - 0.01, "emulator token: emu jobs serialised")
+        # wait exit codes
+        w0 = sub("test", "true"); w1 = sub("test", "sh", "-c", "echo boom; exit 3"); w2 = sub("test", "sleep", "30")
+        r0 = q("wait", w0, "--max", "20"); r1 = q("wait", w1, "--max", "20"); r2 = q("wait", w2, "--max", "1")
+        ok(r0.returncode == 0 and "job " in r0.stdout, "wait: exit 0 for a successful job")
+        ok(r1.returncode == 3 and "boom" in r1.stdout and "out.log" in r1.stdout, "wait: job exit code 3 + tail + log path")
+        ok(r2.returncode == EXIT_PENDING and "running for" in r2.stdout and "q: " in r2.stdout, "wait: 75 while running + q summary")
+        print("     " + r2.stdout.strip().replace("\n", "\n     "))
+        # cancel: running w2; and a queued job behind a full blocker
+        q("cancel", w2); rw = q("wait", w2, "--max", "10")
+        ok(rw.returncode == EXIT_CANCELLED and st(w2)["state"] == "cancelled" and st(w2)["end"] - st(w2)["start"] < 15,
+           f"cancel: running job stopped ({st(w2)})")
+        f = sub("full", "sleep", "8"); until(lambda: st(f).get("state") == "running")
+        cq = sub("test", "sleep", "1")
+        rq = q("wait", cq, "--max", "0.5")
+        ok(rq.returncode == EXIT_PENDING and "still queued: position 1 of 1" in rq.stdout, "wait: 75 while queued + position")
+        print("     " + rq.stdout.strip().replace("\n", "\n     "))
+        q("cancel", cq)
+        rc = q("wait", cq, "--max", "10")
+        ok(rc.returncode == EXIT_CANCELLED and st(cq)["state"] == "cancelled", "cancel: queued job cancelled")
+        # removed worktree: queued job whose cwd disappears
+        wt = tempfile.mkdtemp(dir=tmp)
+        rmq = sub("test", "sleep", "1", C=wt)
+        os.rmdir(wt); done(rmq); q("cancel", f); done(f)
+        ok(st(rmq).get("state") == "cancelled" and st(rmq).get("reason") == "worktree removed", "removed worktree: job cancelled")
+        # legacy interplay: exclusive holder blocks q jobs; q jobs share; running q jobs block qlock
+        hold = subprocess.Popen(["flock", env["QLOCK"], "sleep", "1.5"])
+        time.sleep(0.3)
+        l1 = sub("test", "sleep", "1"); l2 = sub("test", "sleep", "1")
+        until(lambda: st(l1).get("lock") == "waiting", 5)
+        ok(st(l1).get("lock") == "waiting", "legacy: q job waits while a legacy exclusive holder runs")
+        hold.wait()
+        until(lambda: st(l1).get("lock") == "shared" and st(l2).get("lock") == "shared", 5)
+        ok(st(l1).get("lock") == "shared" and st(l2).get("lock") == "shared", "legacy: two q jobs hold the lock shared at once")
+        ql = subprocess.run([os.path.join(os.path.dirname(me), "qlock"), "-w", "0.3", "true"], env=env, capture_output=True, text=True)
+        ok(ql.returncode == 1, "legacy: qlock -w times out while q jobs run")
+        done(l1, l2)
+        ql = subprocess.run([os.path.join(os.path.dirname(me), "qlock"), "sh", "-c", "exit 4"], env=env, capture_output=True, text=True)
+        ok(ql.returncode == 4, "legacy: qlock runs CMD and returns its exit code")
+        # log.jsonl + stats
+        log = read_log_at(f"{tmp}/queue/log.jsonl")
+        keys = {"id", "kind", "label", "submit", "start", "end", "wait", "run", "rc", "status", "worktree", "cmd"}
+        ok(len([x for x in log if x["kind"] != "legacy"]) == 22 and all(keys <= set(x) for x in log)
+           and len([x for x in log if x["kind"] == "legacy"]) == 2, f"log.jsonl: {len(log)} lines with all fields")
+        rs = q("stats", "--since", "1h")
+        ok(rs.returncode == 0 and all(k in rs.stdout for k in ("check", "test", "emu", "full", "legacy", "peak queue length", "capacity use")),
+           "stats: all kinds, peak queue, capacity use")
+        print("     " + rs.stdout.strip().replace("\n", "\n     "))
+        rl = q("ls"); ok(rl.returncode == 0 and "0 queued" in rl.stdout, "ls: empty queue at the end")
+    finally:
+        with open(f"{tmp}/queue/state.json") as f: left = json.load(f)["jobs"]
+        for i in left: subprocess.run(["systemctl", "--user", "stop", f"qt-{i}"], capture_output=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("selftest " + ("FAILED: " + "; ".join(fails) if fails else "ok"))
+    sys.exit(1 if fails else 0)
+
+
+def read_log_at(p):
+    with open(p) as f: return [json.loads(l) for l in f]
+
+
+def main():
+    a = sys.argv[1:]
+    if not a: print(summary()); return
+    c = a.pop(0)
+    f = {"submit": cmd_submit, "_run": cmd_run, "wait": cmd_wait, "ls": cmd_ls, "stats": cmd_stats, "cancel": cmd_cancel,
+         "legacy": cmd_legacy, "selftest": cmd_selftest}.get(c)
+    if not f: die(__doc__, 2)
+    f(a)
+
+
+if __name__ == "__main__":
+    main()
