@@ -39,4 +39,7 @@ Android checks run on an emulator (`adb -s emulator-NNNN`).
   `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…`, then `tools/q wait ID` in the
   foreground until it ends (exit 75 = not done yet). From a worktree, use the main checkout's `tools/q` so all jobs
   share one queue. Never take `target/.agents.lock` by hand.
+- `tools/check_level` says which check a change needs: `light` (build, clippy, unit tests; no arch_check),
+  `full` (arch_check: th08-core / th08-formats changed) or `batch` (plus the replay batch: core logic, dependencies,
+  build flags or toolchain).
 

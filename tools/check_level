@@ -1,0 +1,16 @@
+#!/bin/bash
+# usage: tools/check_level [BASE] — the check a change needs, from the files it touches (default: work tree and
+# untracked files vs HEAD). Prints light | full | batch with the deciding files; exit 0.
+#   light: build, clippy, unit tests (+ tools/android_check for Android/JNI code); no arch_check.
+#   full:  arch_check (game crates changed: logic and draw share th08-core).
+#   batch: full + the external replay batch (core logic, dependencies, build flags or toolchain changed).
+cd "$(dirname "$0")/.." || exit 1
+base=${1:-HEAD}
+files=$( { git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u)
+# th08-core modules that only draw, trace or test; they need the full check but not the replay batch.
+draw='^crates/th08-core/src/(anmdebug|d3dx|drawfmt|drawlist|trace|testdata)\.rs$'
+batch=$(grep -E '^(Cargo\.lock|Cargo\.toml|\.cargo/|rust-toolchain|crates/th08-(core|formats)/Cargo\.toml)|^crates/th08-(core|formats)/src/' <<<"$files" | grep -vE "$draw")
+full=$(grep -E '^crates/th08-(core|formats)/|^specs/data/|^tools/arch_check$' <<<"$files")
+if [[ -n $batch ]]; then echo batch; echo "$batch" | sed 's/^/  /' | head -20
+elif [[ -n $full ]]; then echo full; echo "$full" | sed 's/^/  /' | head -20
+else echo light; fi
