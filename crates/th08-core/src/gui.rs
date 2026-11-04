@@ -1,11 +1,12 @@
 //! Spell manager g_Gui (12 §5.8): player/boss spell-name plates, cut-ins, streak strips and the bonus line.
 
 use crate::anmmgr::{AnmManager, Tint};
-use crate::anmvm::{self, AnmVm};
+use crate::anmvm::{self, AnmVm, table_index};
 use crate::drawlist::{PLAYFIELD, Recorder, TextCmd};
 use crate::enemy::EnemyManager;
 use crate::game::Ctx;
 use crate::task::{self, Chain, Ret, Task};
+use crate::types::lo8;
 use anyhow::Result;
 use th08_formats::sjis::{self, SjisString};
 
@@ -20,6 +21,20 @@ const TEXT_SLOT: usize = crate::msg::TEXT_SLOT;
 const ASCII_SLOT: usize = crate::ascii::ANM_SLOT;
 // VM run order of Spell_Calc (12 §5.8); VM 12 (digit stamp) is never run.
 const CALC_ORDER: [usize; 13] = [0, 2, 4, 6, 10, 1, 3, 5, 7, 8, 9, 11, 13];
+// Bonus line (12 §5.8 draw step 4): first stamp at VM 13 pos + (−40, +1), 7 px per digit, digit sprites 0x88 + d.
+const STAMP_DX: f32 = -40.0;
+const STAMP_DY: f32 = 1.0;
+const STAMP_ADVANCE: f32 = 7.0;
+const DIGIT_SPRITE: i32 = 0x88;
+// Text strips (10 §6): glyph size 15, boss-name strip width 320; player name 0x00F0F0FF, boss name 0x00FFF0F0.
+const TEXT_SIZE: u32 = 15;
+const NAME_STRIP_W: f32 = 320.0;
+const PLAYER_NAME_RGB: [u8; 3] = [255, 240, 240];
+const BOSS_NAME_RGB: [u8; 3] = [240, 240, 255];
+// Spell_Start bonus-line tint +0x2620 (07 §11.1); its alpha fades between 0x20 and 0x80 (step 1.2).
+const TINT_START: u32 = 0x8080_8080;
+const TINT_A_MIN: u32 = 0x20;
+const TINT_A_MAX: u32 = 0x80;
 
 // Calls into g_Gui from Bomb_Start, Player_UpdateBomb, Spell_Start / Spell_End and ECL natives 22/23, queued for Gui_Calc.
 #[derive(Clone, Debug)]
@@ -96,7 +111,7 @@ impl Gui {
             bonus: 0,
             capturable: false,
             history: (0, 0),
-            tint: 0x8080_8080,
+            tint: TINT_START,
             pre_tint: None,
         }
     }
@@ -105,16 +120,16 @@ impl Gui {
     #[cfg(test)]
     pub fn trace(&self) -> Vec<u64> {
         let mut t = vec![
-            self.card as u64,
-            self.bonus as u64,
-            self.capturable as u64,
-            self.name_only as u64,
-            self.tint as u64,
+            i64::from(self.card).cast_unsigned(),
+            i64::from(self.bonus).cast_unsigned(),
+            u64::from(self.capturable),
+            u64::from(self.name_only),
+            u64::from(self.tint),
         ];
         t.extend(self.vms.iter().map(|v| {
-            (v.script_index as u16 as u64) << 32
-                | (v.pending_interrupt as u64) << 8
-                | v.color[anmvm::A] as u64
+            u64::from(v.script_index.cast_unsigned()) << 32
+                | u64::from(v.pending_interrupt) << 8
+                | u64::from(v.color[anmvm::A])
         }));
         t
     }
@@ -145,9 +160,9 @@ impl Gui {
         let (shot, practice) = (g.shot as usize, g.spell_practice());
         match r {
             Req::Attempt { card, name, owner } if *card >= 0 => {
-                let d = g.difficulty.clamp(0, 4) as u8;
+                let d = lo8(g.difficulty.clamp(0, 4));
                 g.score
-                    .card_attempt(*card as usize, shot, d, practice, name, owner)
+                    .card_attempt(table_index(*card), shot, d, practice, name, owner);
             }
             Req::Captured {
                 card,
@@ -155,16 +170,16 @@ impl Gui {
                 comment,
             } if *card >= 0 => {
                 // HSCR +0x88 + id: captured during this game (15 §2.3).
-                if let Some(c) = g.rec_cards.get_mut(*card as usize) {
+                if let Some(c) = g.rec_cards.get_mut(table_index(*card)) {
                     *c = 1;
                 }
                 g.score.card_capture(
-                    *card as usize,
+                    table_index(*card),
                     shot,
                     practice,
-                    (*bonus).max(0) as u32,
+                    (*bonus).max(0).cast_unsigned(),
                     comment,
-                )
+                );
             }
             _ => {}
         }
@@ -186,18 +201,18 @@ impl Gui {
             Req::PlayerShow { face, name, last } => {
                 // Face −1 (dissolve spell) skips only VM 0; the strips 2/4 always restart (12 §5.8).
                 if face >= 0 {
-                    anm.set_script(rng, &mut v[0], FACE_SLOT + face as usize, 0);
+                    anm.set_script(rng, &mut v[0], FACE_SLOT + table_index(face), 0);
                     v[0].set_sprite(anm, 0);
                 }
                 anm.set_script(rng, &mut v[2], CDBG_SLOT, 0);
-                v[2].set_sprite(anm, last as i32);
+                v[2].set_sprite(anm, i32::from(last));
                 anm.set_script(rng, &mut v[4], CDBG_SLOT, 2);
-                v[4].set_sprite(anm, last as i32);
+                v[4].set_sprite(anm, i32::from(last));
                 // Name in COLORREF 0x00F0F0FF, left-aligned in the strip (0, 90); 0x17CE8CC := 2 (12 §5.3).
                 panel.set_repaint(2);
                 anm.set_script(rng, &mut v[6], TEXT_SLOT, 4);
                 self.texts
-                    .push((6, sjis::encode(name), [255, 240, 240], 0.0));
+                    .push((6, sjis::encode(name), PLAYER_NAME_RGB, 0.0));
                 v[10].pending_interrupt = 1;
                 sound.play(0xE);
             }
@@ -232,9 +247,9 @@ impl Gui {
                 }
                 // Text_RenderToVmRight 0x4664A0 (10 §6): x = trunc(u0 + sw − len·15/2), u0 0, sw 320, len in
                 // Shift-JIS bytes; colour 0x00FFF0F0.
-                let x = (320.0 - name.len() as f32 * 15.0 / 2.0).trunc();
+                let x = (NAME_STRIP_W - name.len() as f32 * 15.0 / 2.0).trunc();
                 self.texts
-                    .push((7, SjisString(name.to_vec()), [240, 240, 255], x));
+                    .push((7, SjisString(name.to_vec()), BOSS_NAME_RGB, x));
                 v[11].pending_interrupt = 1;
                 if !name_only {
                     v[13].pending_interrupt = 1;
@@ -254,18 +269,25 @@ impl Gui {
                 }
             }
             // Spell_Start resets the bonus-line tint (07 §11.1).
-            Req::Attempt { .. } => self.tint = 0x8080_8080,
+            Req::Attempt { .. } => self.tint = TINT_START,
             Req::Captured { .. } => {}
         }
     }
 
     // Text_RenderToVm 0x4663B0 into the VM's text.anm strip (size 15, 10 §6).
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "ftol of the strip's v0 in pixels (10 §6)"
+    )]
     fn flush_texts(&mut self, ctx: &mut Ctx) {
         for (k, s, colour, x) in std::mem::take(&mut self.texts) {
             let Some(sp) = ctx
                 .w
                 .anm
-                .sprite(TEXT_SLOT, self.vms[k].sprite_index.max(0) as usize)
+                .sprite(
+                    TEXT_SLOT,
+                    usize::from(self.vms[k].sprite_index.max(0).cast_unsigned()),
+                )
                 .copied()
             else {
                 continue;
@@ -277,7 +299,7 @@ impl Gui {
                 dst: sp.tex,
                 y: ty,
                 w,
-                size: 15,
+                size: TEXT_SIZE,
                 text: s,
                 color: colour,
                 x,
@@ -305,11 +327,11 @@ impl Gui {
     fn bonus_stamps(&self) -> Vec<(f32, f32, u32)> {
         let (captures, attempts) = self.history;
         let base = self.vms[13].pos;
-        let mut x = base[0] - 40.0;
-        let y = base[1] + 1.0;
+        let mut x = base[0] + STAMP_DX;
+        let y = base[1] + STAMP_DY;
         let mut out = Vec::new();
         let bonus = if self.capturable {
-            self.bonus.max(0) as u32
+            self.bonus.max(0).cast_unsigned()
         } else {
             0
         };
@@ -321,7 +343,7 @@ impl Gui {
             if on {
                 out.push((x, y, d));
             }
-            x += 7.0;
+            x += STAMP_ADVANCE;
             div /= 10;
         }
         x += 32.0;
@@ -330,7 +352,7 @@ impl Gui {
         let hundreds = c >= 100;
         for (k, div) in [100, 10, 1].into_iter().enumerate() {
             if c >= div || div == 1 {
-                out.push((x + 7.0 * k as f32, y, c / div % 10));
+                out.push((x + STAMP_ADVANCE * k as f32, y, c / div % 10));
             }
         }
         // Two advances between the three slots, none after the units; then x += 13 (12 §5.8).
@@ -338,7 +360,7 @@ impl Gui {
         let a = attempts.min(999);
         for (k, div) in [100, 10, 1].into_iter().enumerate() {
             if a >= div || div == 1 || (div == 10 && hundreds) {
-                out.push((x + 7.0 * k as f32, y, a / div % 10));
+                out.push((x + STAMP_ADVANCE * k as f32, y, a / div % 10));
             }
         }
         out
@@ -346,17 +368,18 @@ impl Gui {
 
     // VM 12 with the sprite and position of one stamp.
     fn stamp(vm: &mut AnmVm, anm: &AnmManager, (x, y, d): (f32, f32, u32)) {
-        vm.set_sprite(anm, 0x88 + d as i32);
+        vm.set_sprite(anm, DIGIT_SPRITE + d.cast_signed());
         vm.pos = [x, y, 0.0];
     }
 }
 
 // The spell manager lent out of `ctx.w.gui` for a step that also takes the `Ctx` (nothing it calls reads `ctx.w.gui`).
-fn with_gui<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Gui, &mut Ctx) -> R) -> R {
-    let mut g = ctx.w.gui.take().expect("gui");
+// None = no spell manager (Gui::register sets it before adding the nodes): the node does nothing.
+fn with_gui<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Gui, &mut Ctx) -> R) -> Option<R> {
+    let mut g = ctx.w.gui.take()?;
     let r = f(&mut g, ctx);
     ctx.w.gui = Some(g);
-    r
+    Some(r)
 }
 
 // Chain nodes of `ctx.w.gui` (calc prio 12, draw prio 15): stateless forwarder (STEP9_WORLD.md §3).
@@ -364,19 +387,19 @@ pub struct GuiTask;
 
 impl Task<Ctx> for GuiTask {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) -> Result<()> {
-        with_gui(ctx, |g, ctx| g.on_register(ctx, chain, tag))
+        with_gui(ctx, |g, ctx| g.on_register(ctx, chain, tag)).unwrap_or(Ok(()))
     }
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) {
-        with_gui(ctx, |g, ctx| g.on_remove(ctx, chain, tag))
+        with_gui(ctx, |g, ctx| g.on_remove(ctx, chain, tag));
     }
 
     fn calc(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        with_gui(ctx, |g, ctx| g.calc(ctx, tag))
+        with_gui(ctx, |g, ctx| g.calc(ctx, tag)).unwrap_or(Ret::Next)
     }
 
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        with_gui(ctx, |g, ctx| g.draw_step(ctx, tag))
+        with_gui(ctx, |g, ctx| g.draw_step(ctx, tag)).unwrap_or(Ret::Next)
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
@@ -416,7 +439,7 @@ impl Gui {
         if self.card >= 0 {
             // Read from score.dat every frame for the bonus line.
             self.history = ctx.w.game.score.card_history(
-                self.card as usize,
+                table_index(self.card),
                 self.shot as usize,
                 ctx.w.game.spell_practice(),
             );
@@ -431,8 +454,8 @@ impl Gui {
                 let p = crate::pl!(ctx.w).pos;
                 let a = self.tint >> 24;
                 let a = if p[0] < 64.0 || p[1] >= 64.0 {
-                    if a < 0x80 { a + 4 } else { a }
-                } else if a > 0x20 {
+                    if a < TINT_A_MAX { a + 4 } else { a }
+                } else if a > TINT_A_MIN {
                     a - 4
                 } else {
                     a
@@ -464,7 +487,10 @@ impl Gui {
             let (speed, sr) = (ctx.w.anm.speed, ctx.w.anm.slowdown_restore);
             crate::em!(ctx.w).g.spell_remaining.dec(speed, sr);
         }
-        self.read_bonus(ctx.w.enemies.as_deref().expect("enemy manager"));
+        // No enemy manager = no card: the bonus keeps its last value.
+        if let Some(e) = ctx.w.enemies.as_deref() {
+            self.read_bonus(e);
+        }
         Ret::Next
     }
 
@@ -472,7 +498,10 @@ impl Gui {
     // bonus read, the text renders, the VM 10 / 11 / 12 positions and the tint-off; the emit draws.
     fn draw_step(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         // The bonus line reads the live +0xFC (08 §8.5: time orbs collected after Spell_Calc show the same frame).
-        self.read_bonus(ctx.w.enemies.as_deref().expect("enemy manager"));
+        // No enemy manager = no card: the bonus keeps its last value.
+        if let Some(e) = ctx.w.enemies.as_deref() {
+            self.read_bonus(e);
+        }
         self.flush_texts(ctx);
         if Self::shown(&self.vms[6]) {
             let p = self.vms[6].pos;

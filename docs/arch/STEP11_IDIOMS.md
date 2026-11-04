@@ -123,7 +123,7 @@ into a file it does not own stays raw there (`.0` / `From` at the boundary) and 
 | **11i** bomb + effect | (1) bomb named consts + `D3dColor` (75 literals); (2) effect `FxEnv` (4 fns), `EffectIdx`, state enum; (3) both subset 0 | bomb, effect | ∥ 11e 11f 11h | T D |
 | **11j** gamemgr + replay — **DONE** (see below) | (1) `GameFlags` bitflags + `end()` / `route()`; (2) `Difficulty`, `Paused`, `Loading` enums inside gamemgr / replay / game / world; (3) long fns 713 / 1078 split, flow-core subset 0 (gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt) | gamemgr, replay, game, world, chain, task, trace, sound, input, rng, host, config, drawfmt | after 11a; ∥ 11e–11i | T D |
 | **11k** scenes — **DONE** (see below) | (1) `SceneId` for every `SCENE_*` (123 uses, 15 files, incl. tools drawreport / demosync / drawlog, app 1); (2) result state enum + splits (340, 1614), supervisor `box_default` + split (444); (3) ending / musicroom / supervisor / result subset 0 | gamemgr (consts), supervisor, result, ending, musicroom, ascii, menu, menulist, game, replay, worldclone, tools, src/app.rs (1 line) | **alone** (touches UI + flow + app) | T D, **B** |
-| **11l** HUD + GUI | (1) hud unwraps → `let … else`; (2) named layout consts, splits 339 / 950 / 1297; (3) hud / gui subset 0 | hud, gui | after 11k; ∥ 11m 11n | T D |
+| **11l** HUD + GUI — **DONE** (see below) | (1) hud unwraps → `let … else`; (2) named layout consts, splits 339 / 950 / 1297; (3) hud / gui subset 0 | hud, gui | after 11k; ∥ 11m 11n | T D |
 | **11m** ascii + menus | (1) one `percent_glyphs` (ascii.rs:912 + menulist.rs:421); (2) `MenuEnv` for ascii 1035 / 1322, splits menu 539, menulist 776 / 1316; (3) ascii / menu / menulist subset 0 | ascii, menu, menulist | after 11k; ∥ 11l 11n | T D |
 | **11n** render | (1) gfx.rs executor split (264); (2) device-loss rebuild from the provenance table; (3) render subset 0 (+ text.rs) | crates/th08-render | **after the current render / audio / app work lands**; ∥ 11l 11m | T D; manual desktop + Android emulator suspend / resume |
 | **11o** audio + app + tools + wall | (1) midi.rs wasm imports, audio subset 0; (2) tools subset 0 (useless_conversion ×10 etc., bin `main` splits), worldclone / testdata subset 0; (3) app subset 0 after L2; arch_check gains `cargo clippy --workspace --all-targets -- -D warnings` (subset at `warn` → enforced) | crates/th08-audio, crates/th08-tools, worldclone, testdata, src/ (not settings.rs until L2), tools/arch_check | last D-neutral run; after L2 and 11n | T D W android, **B** |
@@ -378,6 +378,26 @@ spec_refs 0. Deviations: the other `Game` raw fields (`flags`, `difficulty`, `pa
 this row; ≈ 120 sites in hud / effect / enemy / eclvm …); boundary edits in player / trace / touch beyond the row's
 file list (the field type forces them); app is 2 lines, not 1; supervisor's `switch` was 109 lines (under the limit),
 split anyway as planned.
+
+**11l done.** Files: crates/th08-core/src/{hud, gui}.rs. (1) every `.expect` in both files → `let … else` / `if let`
+/ `map_or` with a commented fallback: no enemy manager = no boss bar / timer 0 / no card (label cond false, bonus kept),
+no player = no clear panel / no panel emit, no dialogue = no lines / events (`load` bails with an error);
+`with_hud` / `with_gui` return `Option` (no HUD / GUI = the node does nothing, `Ret::Next` / `Ok(())`). (2) hud: named
+layout consts with 12 §5.3 / §5.4 / §5.5 / §5.6 citations (`PANEL_X`, row ys, `STOCK_*`, `TILE_Z_*`, `BAR_*`, `GAUGE_*`,
+`TIMER_POS`, `CLEAR_*` pen / step / colours, `POPUP_*`); gui: `STAMP_*`, `DIGIT_SPRITE`, `TEXT_SIZE`, `NAME_STRIP_W`,
+name colours, `TINT_START` / `TINT_A_MIN` / `TINT_A_MAX` (same values, same float op order). Splits, statement order
+kept: `load` (was 138 lines) → `load_files` / `load_reset` / `load_front` / `load_title`; `draw_clear` (109) → free
+`clear_scores` / `clear_final` / `clear_rank` / `clear_clock` + `clear_line` (was a closure); `calc` (124) →
+`ecl_requests` / `run_vms` (+ `night_fade`) / `msg_run`. (3) lint fixes: `lo8` (bar alpha, ghost alpha, CATK
+difficulty byte), `table_index` for guarded signed indices (BGM slot, rank text, card, face, plate offset),
+`From` / `cast_signed` / `cast_unsigned`, u8 tile loop counters (`f32::from` / `i32::from`, exact), `len_i32` with
+`#[expect(cast_possible_wrap)]` for popup centring, ftol `as u32` under `#[expect(cast_sign_loss)]` (`line_texture`,
+`flush_texts`, `set_boss_plate`), literal separators, method path for `clear_status`. Public API: none outside the
+crate changed (`Hud` / `Gui` pub items unchanged; the split fns are private). Lint subset (tools/lint_subset): hud.rs
+67 → 0, gui.rs 25 → 0; workspace 598 in 33 files after. Check: FAST arch_check 0 differing (emit-off 0), cargo test -p
+th08-core 327 passed (1 ignored), spec_refs 0. Deviations: the fallbacks above replace panics on states the HUD never
+sees (no behaviour change in T / D); `night_fade` takes the player position before the alpha test (a pure read,
+was read only when alpha ≠ 0); hud keeps its other code hex (sprite ids, ANM slots, VM offsets in comments).
 
 Order: 11a → wave 1 (11b ∥ 11c ∥ 11d ∥ 11g) → wave 2 (11e ∥ 11f ∥ 11h ∥ 11i ∥ 11j) → 11k → wave 3 (11l ∥ 11m ∥ 11n)
 → 11o → 11p. 16 runs (≈ A's estimate of 15). L2 (launcher Design 2 run 2, settings.rs / launcher.rs) runs in

@@ -1,7 +1,7 @@
 //! HUD g_Hud 0x160F428 (Hud_Calc / Hud_Draw): side panel, boss UI, popups, clear panel, dialogue host (12 §5, 10).
 
 use crate::anmmgr::AnmManager;
-use crate::anmvm::{self, AnmVm};
+use crate::anmvm::{self, AnmVm, table_index};
 use crate::ascii::Text;
 use crate::drawlist::{Blend, FULLSCREEN, PLAYFIELD, Recorder, TexId, TextCmd, Vertex};
 use crate::enemy::EnemyManager;
@@ -10,6 +10,7 @@ use crate::gamemgr::{self, Game};
 use crate::msg::{self, Dialogue, Event};
 use crate::player::{Player, Popup, Stats};
 use crate::task::{self, Chain, Ret, Task};
+use crate::types::lo8;
 use anyhow::Result;
 
 // Hud_Calc 0x4338CA prio 15, Hud_Draw 0x433927 prio 17; ANM slots front 10, loadingNN 12, stgNtxt 13, times 14 (12 §5.1).
@@ -36,6 +37,64 @@ const RANK_TEXT: [&str; 6] = [
     "Extra Rank   *2.0",
     "Phantasm Rank*2.0",
 ];
+
+// Side-panel layout, screen pixels (12 §5.3): text column x, continue digit x, row y per value.
+const PANEL_X: f32 = 488.0;
+const CONT_X: f32 = 605.0;
+const HISCORE_Y: f32 = 40.0;
+const SCORE_Y: f32 = 56.0;
+const LIVES_Y: f32 = 88.0;
+const BOMBS_Y: f32 = 104.0;
+const POWER_Y: f32 = 136.0;
+const GRAZE_Y: f32 = 152.0;
+const POINT_Y: f32 = 168.0;
+const TIME_Y: f32 = 184.0;
+// Lives / bombs stamps: 16 px apart, z 0.46, at most 8 (12 §5.3).
+const STOCK_DX: f32 = 16.0;
+const STOCK_Z: f32 = 0.46;
+const STOCK_MAX: i32 = 8;
+// Panel tile depths: score rows 0.49, other rows 0.48 (12 §5.3).
+const TILE_Z_TOP: f32 = 0.49;
+const TILE_Z_ROW: f32 = 0.48;
+
+// Boss bar (12 §5.4): fill x 64 … 64 + 320·fraction, y 19..23; remaining-bars gauge x 35 … 61; timer text (384, 16).
+const BAR_X: f32 = 64.0;
+const BAR_W: f32 = 320.0;
+const BAR_Y0: f32 = 19.0;
+const BAR_Y1: f32 = 23.0;
+const GAUGE_X: f32 = 35.0;
+const GAUGE_W: f32 = 26.0;
+const TIMER_POS: [f32; 2] = [384.0, 16.0];
+// Bar colours 0xRRGGBB: fill top / bottom, gauge bottom; gauge top = white − i·255/9.
+const BAR_TOP: u32 = 0x00FF_FFFF;
+const BAR_BOT: u32 = 0x0020_2060;
+const GAUGE_BOT: u32 = 0x0020_2020;
+
+// Clear panel (12 §5.6): pen (120, 96), line step 16, section gap 32; clock row x 120 / 219 / 253.
+const CLEAR_X: f32 = 120.0;
+const CLEAR_Y: f32 = 96.0;
+const CLEAR_DY: f32 = 16.0;
+const CLEAR_GAP: f32 = 32.0;
+const CLEAR_ARROW_X: f32 = 219.0;
+const CLEAR_TO_X: f32 = 253.0;
+// Clear panel line colours (ARGB).
+const CLEAR_TITLE: u32 = 0xFFFF_FF40;
+const CLEAR_WHITE: u32 = 0xFFFF_FFFF;
+const CLEAR_POINT: u32 = 0xFFE0_E0FF;
+const CLEAR_ROW: u32 = 0xFFD0_D0FF;
+const CLEAR_FINAL: u32 = 0xFFFF_FF80;
+const CLEAR_RANK: u32 = 0xFFFF_8080;
+
+// Popups (12 §5.5): bonus row y 48, message row y 168, spell bonus rows y 80 / 96 centred in the 384-px playfield + 32.
+const POPUP_BONUS_Y: f32 = 48.0;
+const POPUP_MSG_Y: f32 = 168.0;
+const POPUP_SPELL_Y: f32 = 80.0;
+const POPUP_SPELL_VALUE_Y: f32 = 96.0;
+const POPUP_BONUS: u32 = 0xFFFF_FF80;
+const POPUP_MSG_SMALL: u32 = 0xFFE0_B0FF;
+const POPUP_MSG: u32 = 0xFFC0_B0FF;
+const POPUP_SPELL: u32 = 0xFFFF_0000;
+const POPUP_SPELL_VALUE: u32 = 0xFFFF_8080;
 
 // Hud_ShowBonus / Hud_ShowMessage / Hud_ShowSpellBonus popup: timer t and slide x (12 §5.5).
 #[derive(Clone)]
@@ -239,17 +298,19 @@ impl Panel {
 // pos (32c − 0.5 + 16, 32r − 0.5 + 16, 0), uv offset (32c/512, 32r/512).
 fn stage_start_tiles(anm: &mut AnmManager, rng: &mut crate::rng::Rng) -> Vec<AnmVm> {
     let mut tiles = Vec::with_capacity(168);
-    for r in 0..14 {
-        for c in 0..12 {
+    for r in 0..14u8 {
+        for c in 0..12u8 {
             let mut vm = AnmVm::default();
-            anm.set_script(rng, &mut vm, crate::ascii::CAPTURE_SLOT, 3 + ((r + c) & 1));
-            vm.ivars[4] = (r + 2 * c) as i32;
-            vm.pos = [
-                32.0 * c as f32 - 0.5 + 16.0,
-                32.0 * r as f32 - 0.5 + 16.0,
-                0.0,
-            ];
-            vm.uv_off = [32.0 * c as f32 / 512.0, 32.0 * r as f32 / 512.0];
+            anm.set_script(
+                rng,
+                &mut vm,
+                crate::ascii::CAPTURE_SLOT,
+                3 + usize::from((r + c) & 1),
+            );
+            vm.ivars[4] = i32::from(r + 2 * c);
+            let (r, c) = (f32::from(r), f32::from(c));
+            vm.pos = [32.0 * c - 0.5 + 16.0, 32.0 * r - 0.5 + 16.0, 0.0];
+            vm.uv_off = [32.0 * c / 512.0, 32.0 * r / 512.0];
             tiles.push(vm);
         }
     }
@@ -316,14 +377,15 @@ impl Hud {
     #[cfg(test)]
     pub fn trace(&self) -> Vec<u64> {
         let mut t = vec![
-            self.bar_state as u64,
-            self.bar_alpha as u64,
-            self.bar_target.to_bits() as u64,
-            self.bar_disp.to_bits() as u64,
+            u64::from(self.bar_state),
+            i64::from(self.bar_alpha).cast_unsigned(),
+            u64::from(self.bar_target.to_bits()),
+            u64::from(self.bar_disp.to_bits()),
         ];
         t.extend(self.popups.iter().map(|p| {
-            p.as_ref()
-                .map_or(0, |p| (p.t.cur as u64) << 32 | p.x.to_bits() as u64)
+            p.as_ref().map_or(0, |p| {
+                i64::from(p.t.cur).cast_unsigned() << 32 | u64::from(p.x.to_bits())
+            })
         }));
         t
     }
@@ -337,6 +399,15 @@ impl Hud {
 
     // Hud_Load + Gui_LoadFaces 0x414590 + Msg_Load 0x439710 (12 §5.1, 10 §1, §3); no msg file in spell practice.
     fn load(&mut self, ctx: &mut Ctx) -> Result<()> {
+        Self::load_files(ctx)?;
+        self.load_reset(ctx);
+        self.load_front(ctx);
+        self.load_title(ctx);
+        Ok(())
+    }
+
+    // Hud_Load files: front / times / stgNtxt / loadingNN.anm, the face files, the msg file and Msg_Start's info.
+    fn load_files(ctx: &mut Ctx) -> Result<()> {
         let g = &ctx.w.game;
         let (stage, shot) = (g.stage % 9, g.shot);
         let (rec, ar) = (&mut ctx.rec, &ctx.archive);
@@ -380,7 +451,10 @@ impl Hud {
                 ctx.w.anm.load(rec, ar, msg::FACE_SLOTS[k], &f)?;
             }
         }
-        let d = ctx.w.msg.as_deref_mut().expect("dialogue");
+        // Hud::register creates the dialogue before the HUD's calc node is registered.
+        let Some(d) = ctx.w.msg.as_deref_mut() else {
+            anyhow::bail!("HUD loaded without its dialogue");
+        };
         if !g.spell_practice() {
             d.file = Some(msg::parse(ar.read(&msg::file_name(stage, shot))?)?.into());
         }
@@ -393,7 +467,11 @@ impl Hud {
             cleared_6b: g.cleared(false, 7),
             clock: 0,
         };
-        let anm = &mut ctx.w.anm;
+        Ok(())
+    }
+
+    // Hud_Load resets shared by both branches (12 §5.1a).
+    fn load_reset(&mut self, ctx: &mut Ctx) {
         // The script-index shorts of VMs impl+0x3778 / +0x3A1C / +0x3CC0 := −1 and impl+0x21810 := 0 in both branches.
         self.load_vm.script_index = -1;
         self.cap_vm.script_index = -1;
@@ -410,6 +488,12 @@ impl Hud {
         ctx.w.panel.mark_lives(2);
         ctx.w.panel.mark_bombs(2);
         ctx.w.panel.set_repaint(0x10);
+    }
+
+    // Hud_Load branch (12 §5.1a): a continuing stage keeps the front VMs and starts the tiles, a fresh one restarts them.
+    fn load_front(&mut self, ctx: &mut Ctx) {
+        let g = &ctx.w.game;
+        let anm = &mut ctx.w.anm;
         let kept = ctx.w.hud_kept.take().filter(|_| !self.fresh);
         if let Some(k) = kept {
             // Continuing stage: no VM-13 repaint, no panel fade-in; the stage-start transition over the old capture.
@@ -451,6 +535,12 @@ impl Hud {
             self.diff_vm
                 .set_sprite(anm, crate::ascii::difficulty_sprite(g));
         }
+    }
+
+    // Hud_Load tail (12 §5.1a, §5.7): stage-title VMs, the hidden night clock, the stage-start clock.
+    fn load_title(&mut self, ctx: &mut Ctx) {
+        let g = &ctx.w.game;
+        let anm = &mut ctx.w.anm;
         let title_on = !g.reload_same || crate::gamemgr::spell_bgm_restarts(g.card);
         self.title = (0..4)
             .map(|i| {
@@ -473,19 +563,28 @@ impl Hud {
         anm.set_script(&mut ctx.w.rng, &mut self.start_clock_vm, TIMES_SLOT, 0);
         let clock = crate::pl!(ctx.w).stats.clock;
         self.start_clock_vm.set_sprite(anm, clock.clamp(0, 15));
-        Ok(())
     }
 
     // The line VM's strip of the text.anm render target: texture, row width and strip top y in texture pixels.
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "ftol of the strip's v0 in pixels (10 §6)"
+    )]
     fn line_texture(anm: &AnmManager, rec: &Recorder, vm: &AnmVm) -> Option<(TexId, u32, u32)> {
-        let sp = anm.sprite(msg::TEXT_SLOT, vm.sprite_index.max(0) as usize)?;
+        let sp = anm.sprite(
+            msg::TEXT_SLOT,
+            usize::from(vm.sprite_index.max(0).cast_unsigned()),
+        )?;
         let t = rec.texture(sp.tex);
         Some((sp.tex, t.width, (sp.uv[1] * t.height as f32).round() as u32))
     }
 
     // Text_RenderToVm 0x4663B0 for the queued dialogue lines (10 §6).
     fn flush_texts(ctx: &mut Ctx) {
-        let d = ctx.w.msg.as_deref_mut().expect("dialogue");
+        // No dialogue = no queued lines.
+        let Some(d) = ctx.w.msg.as_deref_mut() else {
+            return;
+        };
         let size = d.font_size;
         for (line, s, colour) in std::mem::take(&mut d.texts) {
             // Line 2 renders into boss_card's strip (text.anm sprite 2, 10 §5.1).
@@ -520,13 +619,13 @@ impl Hud {
                     let vm = &mut self.title[3];
                     ctx.w.anm.set_script(&mut ctx.w.rng, vm, TXT_SLOT, 3);
                     vm.set_sprite(&ctx.w.anm, n + 3);
-                    ctx.w.bgm.play_slot(n as usize);
+                    ctx.w.bgm.play_slot(table_index(n));
                 }
                 Event::BgmFade => ctx.w.bgm.fade_bgm(4.0, ctx.w.anm.speed),
                 // Msg op 14 (10 §5.1, 13 §3): ScreenEffect type 4, 442 frames to white, draw prio 0x15.
                 // Full-repaint counter 0x17CE8CC := 442 (10 §5.1).
                 Event::Flash => {
-                    ctx.w.effects.screen(4, 442, 0xFFFFFF, 0, 0, 0x15);
+                    ctx.w.effects.screen(4, 442, 0x00FF_FFFF, 0, 0, 0x15);
                     ctx.w.panel.set_repaint(442);
                 }
                 Event::StageEnd => self.stage_end(ctx),
@@ -534,9 +633,9 @@ impl Hud {
                 Event::HaltFinal => ctx.w.game.set_end_state(2),
                 Event::Route(c) => {
                     log::info!("final route choice {c} at frame {}", ctx.w.frame);
-                    ctx.w.game.set_route(c)
+                    ctx.w.game.set_route(c);
                 }
-                Event::Sfx(n) => ctx.w.sound.play(n as i32),
+                Event::Sfx(n) => ctx.w.sound.play(i32::from(n)),
             }
         }
     }
@@ -583,7 +682,7 @@ impl Hud {
                     let mut vm = AnmVm::default();
                     anm.set_script(&mut ctx.w.rng, &mut vm, crate::ascii::CAPTURE_SLOT, 2);
                     vm.ivars[4] = 4 * k + 3;
-                    vm.color[anmvm::A] = (64 - 2 * k) as u8;
+                    vm.color[anmvm::A] = lo8(64 - 2 * k);
                     vm
                 })
                 .collect();
@@ -819,16 +918,21 @@ impl Hud {
 
     // Bar part, step: the timer string, its sounds and Popup_LargeStatic (logic, also with emit off).
     fn bar_step(&mut self, ctx: &mut Ctx) {
-        if !self.bar_shown(ctx.w.enemies.as_deref().expect("enemy manager")) {
+        // The HUD runs only inside a stage, which has its enemy manager; without one there is no boss to show.
+        let Some(e) = ctx.w.enemies.as_deref() else {
+            return;
+        };
+        if !self.bar_shown(e) {
             return;
         }
-        let a = self.bar_alpha as u8;
+        let a = lo8(self.bar_alpha);
         // Timer (12 §5.4): every guarded draw, HUD +0x24 as stored by Enemy_CheckTimeout, shown as min(·, 99).
-        let raw = ctx.w.enemies.as_deref().expect("enemy manager").g.hud_timer;
+        let raw = e.g.hud_timer;
         let v = raw.min(99);
+        let [tx, ty] = TIMER_POS;
         ctx.w
             .ascii
-            .push(Text::new(384.0, 16.0, fmt_02d(v)).color(Self::rgb(timer_colour(raw), a)));
+            .push(Text::new(tx, ty, fmt_02d(v)).color(Self::rgb(timer_colour(raw), a)));
         // Sound on a change of the raw value: v < 3 se_timeout2 (0x26), else v < 10 se_timeout (0x1D).
         if self.timer_last != raw {
             if v < 3 {
@@ -840,7 +944,6 @@ impl Hud {
         self.timer_last = raw;
         // Popup_LargeStatic (12 §5.4, 13 §4): re-issued every guarded draw, "+0" without children too.
         let g = &ctx.w.game;
-        let e = ctx.w.enemies.as_deref().expect("enemy manager");
         if let Some(i) = e.boss(0)
             && g.paused == 0
             && g.game_over == 0
@@ -850,40 +953,42 @@ impl Hud {
                 [2.0, 29.0],
                 e.chain_count(i),
                 e.enemies[i].children,
-                0xFFF0F00F,
+                0xFFF0_F00F,
             );
         }
     }
 
     // Bar part, emit: fill, ECL markers, remaining-bars gauge, the timer frame VM.
     fn emit_bar(&self, ctx: &Ctx, rec: &mut Recorder) {
-        let e = ctx.w.enemies.as_deref().expect("enemy manager");
+        let Some(e) = ctx.w.enemies.as_deref() else {
+            return;
+        };
         if !self.bar_shown(e) {
             return;
         }
-        let a = self.bar_alpha as u8;
+        let a = lo8(self.bar_alpha);
         rec.set_viewport(PLAYFIELD);
         let disp = self.bar_disp;
         Self::bar_quad(
             rec,
-            64.0,
-            64.0 + 320.0 * disp,
-            19.0,
-            23.0,
-            Self::rgb(0xFFFFFF, a),
-            Self::rgb(0x202060, a),
+            BAR_X,
+            BAR_X + BAR_W * disp,
+            BAR_Y0,
+            BAR_Y1,
+            Self::rgb(BAR_TOP, a),
+            Self::rgb(BAR_BOT, a),
         );
         // ECL op 158 markers: drawn when end ≠ 0 and start < displayed; bottom colour (c >> 2) & 0x3F3F3F.
         for (end, start, c) in e.g.hud_markers {
             if end != 0.0 && start < disp {
                 Self::bar_quad(
                     rec,
-                    64.0 + 320.0 * start,
-                    64.0 + 320.0 * end.min(disp),
-                    19.0,
-                    23.0,
+                    BAR_X + BAR_W * start,
+                    BAR_X + BAR_W * end.min(disp),
+                    BAR_Y0,
+                    BAR_Y1,
                     Self::rgb(c, a),
-                    Self::rgb((c >> 2) & 0x3F3F3F, a),
+                    Self::rgb((c >> 2) & 0x003F_3F3F, a),
                 );
             }
         }
@@ -891,10 +996,10 @@ impl Hud {
         let n = e.g.hud_bars.max(0);
         let gap = if n < 6 { 2.0 } else { 1.0 };
         for i in 0..n {
-            let x0 = 35.0 + 26.0 * i as f32 / n as f32;
-            let x1 = 35.0 + 26.0 * (i + 1) as f32 / n as f32 - gap;
-            let c = Self::rgb(0xFFFFFF - (i as u32 * 255 / 9), a);
-            Self::bar_quad(rec, x0, x1, 19.0, 23.0, c, Self::rgb(0x202020, a));
+            let x0 = GAUGE_X + GAUGE_W * i as f32 / n as f32;
+            let x1 = GAUGE_X + GAUGE_W * (i + 1) as f32 / n as f32 - gap;
+            let c = Self::rgb(BAR_TOP - (i.cast_unsigned() * 255 / 9), a);
+            Self::bar_quad(rec, x0, x1, BAR_Y0, BAR_Y1, c, Self::rgb(GAUGE_BOT, a));
         }
         ctx.w.anm.emit_mode(rec, &self.front[12], 0);
     }
@@ -905,8 +1010,8 @@ impl Hud {
         for p in self.popups.iter().flatten() {
             match p.kind {
                 Popup::Bonus(n) => ctx.w.ascii.push(
-                    Text::new(p.x, 48.0, format!(" BONUS {n:8}"))
-                        .argb(0xFFFFFF80)
+                    Text::new(p.x, POPUP_BONUS_Y, format!(" BONUS {n:8}"))
+                        .argb(POPUP_BONUS)
                         .clip(),
                 ),
                 Popup::Message(t, v) => {
@@ -921,26 +1026,29 @@ impl Hud {
                     };
                     // Types 2/4–6 set Ascii_SetAdvance(11) but reset it to 13 before the draw pass reads it
                     // (12 §2.9), so only the 0.9 x scale narrows them.
-                    let tx = Text::new(p.x, 168.0, s).clip();
+                    let tx = Text::new(p.x, POPUP_MSG_Y, s).clip();
                     ctx.w.ascii.push(if small {
-                        tx.scale_xy(0.9, 1.0).argb(0xFFE0B0FF)
+                        tx.scale_xy(0.9, 1.0).argb(POPUP_MSG_SMALL)
                     } else {
-                        tx.argb(0xFFC0B0FF)
+                        tx.argb(POPUP_MSG)
                     });
                 }
                 // "Spell Card Bonus!" at x (384 − 17·14)/2 + 32 = 105 (14 px per glyph, not the 13 px advance), y 80;
                 // "+%d" 2× at y 96, x (384 − len·28)/2 + 32.
                 Popup::SpellBonus(n) => {
                     let s = "Spell Card Bonus!";
-                    let x = ((384 - s.len() as i32 * 14) / 2 + 32) as f32;
+                    let x = ((384 - len_i32(s) * 14) / 2 + 32) as f32;
                     ctx.w
                         .ascii
-                        .push(Text::new(x, 80.0, s).argb(0xFFFF0000).clip());
+                        .push(Text::new(x, POPUP_SPELL_Y, s).argb(POPUP_SPELL).clip());
                     let v = format!("+{n}");
-                    let x = ((384 - v.len() as i32 * 28) / 2 + 32) as f32;
-                    ctx.w
-                        .ascii
-                        .push(Text::new(x, 96.0, v).scale(2.0).argb(0xFFFF8080).clip());
+                    let x = ((384 - len_i32(&v) * 28) / 2 + 32) as f32;
+                    ctx.w.ascii.push(
+                        Text::new(x, POPUP_SPELL_VALUE_Y, v)
+                            .scale(2.0)
+                            .argb(POPUP_SPELL_VALUE)
+                            .clip(),
+                    );
                 }
             }
         }
@@ -949,117 +1057,18 @@ impl Hud {
     // Hud_DrawClearPanel 0x43826B (12 §5.6): ASCII strings only, full-screen (clip flag 0); pen from (120, 96).
     fn draw_clear(&mut self, ctx: &mut Ctx) {
         let Some(c) = &self.clear else { return };
-        let g = &ctx.w.game;
-        let st = &ctx.w.player.as_deref().expect("player").stats;
-        let q = &mut ctx.w.ascii;
-        let mut y = 96.0;
-        let line = |q: &mut crate::ascii::Queue, y: f32, s: String, col: u32| {
-            q.push(Text::new(120.0, y, s).argb(col));
+        // The clear panel exists only after msg op 9 of a stage with its player.
+        let Some(p) = ctx.w.player.as_deref() else {
+            return;
         };
-        let title = if c.stage < 6 {
-            "Stage Clear"
-        } else {
-            "All Clear!"
-        };
-        // 6B / Extra lower the pen by 16 before the title: the whole panel starts at y 80.
-        if c.stage > 6 {
-            y -= 16.0;
-        }
-        line(q, y, title.into(), 0xFFFFFF40);
-        y += 32.0;
-        line(q, y, format!("Clear = {:8}0", c.clear), 0xFFFFFFFF);
-        y += 16.0;
-        line(
-            q,
-            y,
-            format!("Point = {:8}0", c.points.wrapping_mul(5000)),
-            0xFFE0E0FF,
-        );
-        y += 16.0;
-        line(
-            q,
-            y,
-            format!("Graze = {:8}0", c.graze.wrapping_mul(50)),
-            0xFFD0D0FF,
-        );
-        y += 16.0;
-        line(
-            q,
-            y,
-            format!("Time  = {:8}0", c.time.wrapping_mul(100)),
-            0xFFD0D0FF,
-        );
-        // Integer percentages (h·100)/f and ((h·10000)/f) % 100, truncated.
-        // f = 0 is an unguarded idiv in the original, unreachable (12 §5.6); the port divides by 1.
-        let f = st.stage_frames.max(1) as i32;
-        let pct = |h: u32| {
-            let h = h as i32;
-            (h.wrapping_mul(100) / f, h.wrapping_mul(10000) / f % 100)
-        };
-        let (a, b) = pct(st.human_frames);
-        y += 32.0;
-        line(q, y, format!("over-80% = {a:3}.{b:02}%"), 0xFFD0D0FF);
-        let (a, b) = pct(st.youkai_frames);
-        y += 16.0;
-        line(q, y, format!("over 80% = {a:3}.{b:02}%"), 0xFFD0D0FF);
+        let (g, st, q) = (&ctx.w.game, &p.stats, &mut ctx.w.ascii);
+        let mut y = clear_scores(q, c, st);
         if c.stage >= 6 && !g.practice() && !g.practice_replay() {
-            let (lv, bm) = (
-                (st.lives as i32).wrapping_mul(2_500_000),
-                (st.bombs as i32).wrapping_mul(500_000),
-            );
-            y += 16.0;
-            line(q, y, format!("Player ={lv:8}0"), 0xFFFFFF80);
-            y += 16.0;
-            line(q, y, format!("Bomb   = {bm:7}0"), 0xFFFFFF80);
-            if c.stage == 7 {
-                let m = c.to;
-                y += 16.0;
-                line(
-                    q,
-                    y,
-                    format!("Last Time = {:2}:{:02}", (m / 60) % 12, m % 60),
-                    0xFFFFFF80,
-                );
-                y += 16.0;
-                line(q, y, "Night Bonus".into(), 0xFFFFFF80);
-                y += 16.0;
-                let night = (12 - st.clock).wrapping_mul(2_000_000);
-                line(q, y, format!("        {night:8}0"), 0xFFFFFF80);
-            }
+            y = clear_final(q, c, st, y);
         }
-        y += 32.0;
-        let rank = RANK_TEXT.get(g.difficulty as usize).copied().unwrap_or("");
-        line(q, y, rank.into(), 0xFFFF8080);
-        if g.difficulty < 4 && !g.practice() {
-            y += 16.0;
-            let pen = match g.game_lives() {
-                3 => Some("Player Penalty*0.5"),
-                4 => Some("Player Penalty*0.2"),
-                5 => Some("Player Penalty*0.1"),
-                6 => Some("Player Penalty*0.05"),
-                _ => None,
-            };
-            if let Some(t) = pen {
-                line(q, y, t.into(), 0xFFFF8080);
-                y += 16.0;
-            }
-        }
-        y += 16.0;
-        line(q, y, format!("Total = {:8}0", self.clear_total), 0xFFFFFFFF);
+        y = clear_rank(q, g, self.clear_total, y);
         if c.stage < 6 {
-            // Prefix "PM" while minutes/60 < 12, else "AM"; hours (minutes/60) % 12.
-            let clock = |m: i32| {
-                format!(
-                    "{}{:2}:{:02}",
-                    if m / 60 < 12 { "PM" } else { "AM" },
-                    (m / 60) % 12,
-                    m % 60
-                )
-            };
-            y += 40.0;
-            q.push(Text::new(120.0, y, clock(c.from)).argb(0xFFDFDFDF));
-            q.push(Text::new(219.0, y, ">>").argb(0xFFAFAFAF));
-            q.push(Text::new(253.0, y, clock(c.shown)).argb(0xFFFF8F8F));
+            clear_clock(q, c, y);
         }
     }
 
@@ -1069,13 +1078,17 @@ impl Hud {
         // Score row (y 56) queued before the hiscore row (y 40) (12 §5.3 step 6). The panel strings take the current
         // queue colour, so a "Press Shot Button" alpha leaks into them on the first gameplay frame (12 §1).
         q.push(q.text(
-            488.0,
-            56.0,
+            PANEL_X,
+            SCORE_Y,
             format!("{:09}", st.score_disp.min(999_999_999)),
         ));
-        q.push(q.text(605.0, 56.0, format!("{}", st.continues.min(9))));
-        q.push(q.text(488.0, 40.0, format!("{:09}", st.hiscore.min(999_999_999))));
-        q.push(q.text(605.0, 40.0, format!("{}", st.hiscore_cont.min(9))));
+        q.push(q.text(CONT_X, SCORE_Y, format!("{}", st.continues.min(9))));
+        q.push(q.text(
+            PANEL_X,
+            HISCORE_Y,
+            format!("{:09}", st.hiscore.min(999_999_999)),
+        ));
+        q.push(q.text(CONT_X, HISCORE_Y, format!("{}", st.hiscore_cont.min(9))));
         // The row VMs keep the position of their last stamp; the emit draws every stamp from a copy.
         for (row, vm, n) in Self::stock_rows(st) {
             if n > 0 {
@@ -1085,15 +1098,13 @@ impl Hud {
         // Step 4 label: the original draws it only when it repaints the lives or bombs row (field ≠ 0 or full
         // repaint) and it stays in the back buffer, so the port latches the condition on those frames.
         let vm13 = self.front.get(13).is_some_and(|v| v.ip.is_some());
+        // No enemy manager = no card running.
         let cond = ctx.w.game.flags >> 7 & 3 == 1
             && ctx
                 .w
                 .enemies
                 .as_deref()
-                .expect("enemy manager")
-                .g
-                .spell
-                .is_some();
+                .is_some_and(|e| e.g.spell.is_some());
         let (pn, latch) = label_step(
             ctx.w.panel,
             vm13,
@@ -1104,8 +1115,8 @@ impl Hud {
         ctx.w.panel = pn;
         self.label_latch = latch;
         let q = &mut ctx.w.ascii;
-        q.push(q.text(488.0, 152.0, format!("{}", st.graze_total)));
-        for t in ratio_row(168.0, st.point_items2, st.next_extend, q.color) {
+        q.push(q.text(PANEL_X, GRAZE_Y, format!("{}", st.graze_total)));
+        for t in ratio_row(POINT_Y, st.point_items2, st.next_extend, q.color) {
             q.push(t);
         }
         let col = if st.time >= st.time_threshold {
@@ -1113,7 +1124,7 @@ impl Hud {
         } else {
             q.color
         };
-        for t in ratio_row(184.0, st.time, st.time_threshold, col) {
+        for t in ratio_row(TIME_Y, st.time, st.time_threshold, col) {
             q.push(t);
         }
         // Ascii_SetColor(0xFFFFFFFF) ends the time-row block (12 §5.3 step 6); the port draws that row every frame.
@@ -1121,8 +1132,8 @@ impl Hud {
         // Step 7: the power text is the last panel string, so it takes the colour left by step 6 (12 §5.3).
         let pw = st.power.trunc();
         q.push(q.text(
-            488.0,
-            136.0,
+            PANEL_X,
+            POWER_Y,
             if pw >= 128.0 {
                 "MAX".to_string()
             } else {
@@ -1134,13 +1145,13 @@ impl Hud {
     // Lives (front VM 10, y 88) and bombs (VM 11, y 104) rows: up to 8 stamps 16 px apart (12 §5.3).
     fn stock_rows(st: &Stats) -> [(f32, usize, i32); 2] {
         [
-            (88.0, 10, (st.lives as i32).clamp(0, 8)),
-            (104.0, 11, (st.bombs as i32).clamp(0, 8)),
+            (LIVES_Y, 10, (st.lives as i32).clamp(0, STOCK_MAX)),
+            (BOMBS_Y, 11, (st.bombs as i32).clamp(0, STOCK_MAX)),
         ]
     }
 
     fn stock_pos(row: f32, i: i32) -> [f32; 3] {
-        [488.0 + 16.0 * i as f32, row, 0.46]
+        [PANEL_X + STOCK_DX * i as f32, row, STOCK_Z]
     }
 
     // Hud_DrawPanel emit; flushes and sets the full-screen viewport first.
@@ -1166,27 +1177,27 @@ impl Hud {
                 );
             }
         };
-        for y in [40.0, 56.0] {
-            spr(rec, 15, 480.0, y, 0.49);
+        for y in [HISCORE_Y, SCORE_Y] {
+            spr(rec, 15, 480.0, y, TILE_Z_TOP);
         }
-        for y in [88.0, 104.0, 136.0, 152.0, 168.0, 184.0] {
-            spr(rec, 15, 480.0, y, 0.48);
+        for y in [LIVES_Y, BOMBS_Y, POWER_Y, GRAZE_Y, POINT_Y, TIME_Y] {
+            spr(rec, 15, 480.0, y, TILE_Z_ROW);
         }
         // Always: the corner under the fps text.
-        spr(rec, 15, 512.0, 464.0, 0.48);
+        spr(rec, 15, 512.0, 464.0, TILE_Z_ROW);
         // Full repaint (cfg bit 12, tile VM 13 still running = first 200 frames, or counter 0x17CE8CC ≠ 0) and the
         // dirty rows are not tracked: the port clears the screen every frame, so it repaints in full every frame.
         for y in (0..480).step_by(32) {
-            spr(rec, 13, 0.0, y as f32, 0.49);
+            spr(rec, 13, 0.0, y as f32, TILE_Z_TOP);
         }
         for x in (416..640).step_by(32) {
             for y in (16..480).step_by(32) {
-                spr(rec, 13, x as f32, y as f32, 0.49);
+                spr(rec, 13, x as f32, y as f32, TILE_Z_TOP);
             }
         }
         for x in (0..640).step_by(128) {
-            spr(rec, 14, x as f32, 0.0, 0.49);
-            spr(rec, 14, x as f32, 464.0, 0.49);
+            spr(rec, 14, x as f32, 0.0, TILE_Z_TOP);
+            spr(rec, 14, x as f32, 464.0, TILE_Z_TOP);
         }
         for vm in self.front.iter().take(10) {
             anm.emit_mode(rec, vm, if vm.script_index == 1 { 2 } else { 0 });
@@ -1204,7 +1215,7 @@ impl Hud {
         }
         // Strip 14 along y = 464 for x 32..368 every frame (12 §5.3).
         for x in [32.0, 160.0, 288.0] {
-            spr(rec, 14, x, 464.0, 0.49);
+            spr(rec, 14, x, 464.0, TILE_Z_TOP);
         }
         // Power gauge x 488 … 488 + power, y 136..152, left 0xE0E0E0FF / right 0x80E0E0FF (12 §5.3).
         let pw = st.power.trunc();
@@ -1231,11 +1242,12 @@ fn dialogue_active(ctx: &Ctx) -> bool {
 }
 
 // The HUD lent out of `ctx.w.hud` for a step that also takes the `Ctx` (nothing it calls reads `ctx.w.hud`).
-fn with_hud<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Hud, &mut Ctx) -> R) -> R {
-    let mut h = ctx.w.hud.take().expect("hud");
+// None = no HUD (Hud::register sets it before adding the nodes): the node does nothing.
+fn with_hud<R>(ctx: &mut Ctx, f: impl FnOnce(&mut Hud, &mut Ctx) -> R) -> Option<R> {
+    let mut h = ctx.w.hud.take()?;
     let r = f(&mut h, ctx);
     ctx.w.hud = Some(h);
-    r
+    Some(r)
 }
 
 // Chain nodes of `ctx.w.hud` (calc prio 15, draw prio 17): stateless forwarder (STEP9_WORLD.md §3).
@@ -1243,19 +1255,19 @@ pub struct HudTask;
 
 impl Task<Ctx> for HudTask {
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) -> Result<()> {
-        with_hud(ctx, |h, ctx| h.on_register(ctx, chain, tag))
+        with_hud(ctx, |h, ctx| h.on_register(ctx, chain, tag)).unwrap_or(Ok(()))
     }
 
     fn on_remove(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) {
-        with_hud(ctx, |h, ctx| h.on_remove(ctx, chain, tag))
+        with_hud(ctx, |h, ctx| h.on_remove(ctx, chain, tag));
     }
 
     fn calc(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        with_hud(ctx, |h, ctx| h.calc(ctx, tag))
+        with_hud(ctx, |h, ctx| h.calc(ctx, tag)).unwrap_or(Ret::Next)
     }
 
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        with_hud(ctx, |h, ctx| h.draw_step(ctx, tag))
+        with_hud(ctx, |h, ctx| h.draw_step(ctx, tag)).unwrap_or(Ret::Next)
     }
 
     fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
@@ -1280,7 +1292,8 @@ impl Hud {
                 diff_vm: std::mem::take(&mut self.diff_vm),
                 label_vm: std::mem::take(&mut self.label_vm),
                 clear_total: self.clear_total,
-                timer: ctx.w.enemies.as_deref().expect("enemy manager").g.hud_timer,
+                // Without an enemy manager the boss timer is 0 (Hud_Register's fresh-start value).
+                timer: ctx.w.enemies.as_deref().map_or(0, |e| e.g.hud_timer),
                 timer_last: self.timer_last,
             });
             for s in [FRONT_SLOT, TIMES_SLOT, TXT_SLOT, LOADING_SLOT]
@@ -1301,7 +1314,30 @@ impl Hud {
             crate::ascii::apply_capture(&ctx.w.anm, &mut ctx.rec, &self.cap_vm);
         }
         let inp = ctx.w.input.game_view();
-        // HUD requests queued by ECL ops this frame (ECL runs before the HUD).
+        self.ecl_requests(ctx);
+        // Hud_Update 0x435900, steps 1–7 of 12 §5.1b.
+        if !dialogue_active(ctx)
+            && let Some(e) = ctx.w.enemies.as_deref()
+        {
+            self.boss_calc(e);
+        }
+        self.run_vms(ctx);
+        let gs = ctx.w.anm.speed;
+        self.popup_step(&mut crate::pl!(ctx.w).stats, &mut ctx.w.panel, gs);
+        self.clear_bonus(&ctx.w.game, crate::pl!(ctx.w));
+        self.clear_calc(&mut ctx.w.game, &inp);
+        self.msg_run(ctx, &inp);
+        // Step 3: SKIP held raises 0x17CE8CC to 8 (12 §5.1b).
+        if inp.down(crate::input::SKIP) && ctx.w.panel.repaint < 8 {
+            ctx.w.panel.set_repaint(8);
+        }
+        crate::stg!(ctx.w).hud_cover = hud_cover(&self.load_vm);
+        self.frame += 1;
+        Ret::Next
+    }
+
+    // HUD requests queued by ECL ops this frame (ECL runs before the HUD).
+    fn ecl_requests(&mut self, ctx: &mut Ctx) {
         let reqs = std::mem::take(&mut crate::em!(ctx.w).g.hud_requests);
         let clock = crate::pl!(ctx.w).stats.clock;
         for r in reqs {
@@ -1324,11 +1360,11 @@ impl Hud {
                 _ => {}
             }
         }
-        // Hud_Update 0x435900, steps 1–7 of 12 §5.1b.
-        if !dialogue_active(ctx) {
-            self.boss_calc(ctx.w.enemies.as_deref().expect("enemy manager"));
-        }
-        // Front VMs, stage-title VMs, the stage-start clock, the stage-clear VM, the night clock.
+    }
+
+    // Hud_Update step 1.x VM runs (12 §5.1b): front VMs, stage-title VMs, the stage-start clock, the stage-clear VM,
+    // the night clock and its fade, the label and difficulty VMs, the op 9 VMs, the stage-start tiles.
+    fn run_vms(&mut self, ctx: &mut Ctx) {
         let anm = &mut ctx.w.anm;
         for vm in self.front.iter_mut().chain(self.title.iter_mut()) {
             if vm.script.is_some() {
@@ -1345,19 +1381,7 @@ impl Hud {
                 vm.run(anm, &mut ctx.w.rng);
             }
         }
-        // Player-overlap fade of the night clock (12 §5.7): while alpha ≠ 0, −4 down to 0x40 with the player at
-        // x ≥ 64, y < 128, else +4 up to 0xFF (≥ 0xFC snaps to 0xFF).
-        let a = self.night_vm.color[anmvm::A];
-        if a != 0 {
-            let p = crate::pl!(ctx.w).pos;
-            self.night_vm.color[anmvm::A] = if p[0] >= 64.0 && p[1] < 128.0 {
-                if a > 0x40 { (a - 4).max(0x40) } else { a }
-            } else if a >= 0xFC {
-                0xFF
-            } else {
-                a + 4
-            };
-        }
+        self.night_fade(crate::pl!(ctx.w).pos);
         // Last-spell label VM impl+0x5484, then the difficulty name VM impl+0x22E14 (12 §5.1b step 1.4).
         if self.label_vm.script.is_some() {
             self.label_vm.run(&mut ctx.w.anm, &mut ctx.w.rng);
@@ -1382,22 +1406,39 @@ impl Hud {
                 }
             }
         }
-        let gs = ctx.w.anm.speed;
-        self.popup_step(&mut crate::pl!(ctx.w).stats, &mut ctx.w.panel, gs);
-        self.clear_bonus(&ctx.w.game, crate::pl!(ctx.w));
-        self.clear_calc(&mut ctx.w.game, &inp);
-        // Msg_Run (10 §5), including op 9.
+    }
+
+    // Player-overlap fade of the night clock (12 §5.7): while alpha ≠ 0, −4 down to 0x40 with the player at
+    // x ≥ 64, y < 128, else +4 up to 0xFF (≥ 0xFC snaps to 0xFF).
+    fn night_fade(&mut self, p: [f32; 3]) {
+        let a = self.night_vm.color[anmvm::A];
+        if a != 0 {
+            self.night_vm.color[anmvm::A] = if p[0] >= 64.0 && p[1] < 128.0 {
+                if a > 0x40 { (a - 4).max(0x40) } else { a }
+            } else if a >= 0xFC {
+                0xFF
+            } else {
+                a + 4
+            };
+        }
+    }
+
+    // Msg_Run (10 §5), including op 9, then its playfield side effects, the item attraction, the text renders and
+    // the dialogue events.
+    fn msg_run(&mut self, ctx: &mut Ctx, inp: &crate::input::Input) {
         let dying = crate::pl!(ctx.w).state == 2;
-        let (collect, events, side) = {
-            let d = ctx.w.msg.as_deref_mut().expect("dialogue");
+        // No dialogue = nothing collected, no events, no side effects.
+        let (collect, events, side) = if let Some(d) = ctx.w.msg.as_deref_mut() {
             d.info.clock = crate::pl!(ctx.w).stats.clock;
-            let c = d.run(&mut ctx.w.anm, &mut ctx.w.rng, &inp, dying);
+            let c = d.run(&mut ctx.w.anm, &mut ctx.w.rng, inp, dying);
             ctx.w.game.dialogue_skippable = d.skippable_shown();
             (
                 c,
                 std::mem::take(&mut d.events),
                 std::mem::take(&mut d.side_effects),
             )
+        } else {
+            (false, Vec::new(), false)
         };
         // Msg_Start playfield side effects (10 §4 step 6): cancel bullets, kill killable enemies.
         if side {
@@ -1410,13 +1451,6 @@ impl Hud {
         Self::flush_texts(ctx);
         self.handle_events(ctx, events);
         Self::flush_texts(ctx);
-        // Step 3: SKIP held raises 0x17CE8CC to 8 (12 §5.1b).
-        if inp.down(crate::input::SKIP) && ctx.w.panel.repaint < 8 {
-            ctx.w.panel.set_repaint(8);
-        }
-        crate::stg!(ctx.w).hud_cover = hud_cover(&self.load_vm);
-        self.frame += 1;
-        Ret::Next
     }
 
     // Hud_Draw (12 §5.3): clear panel strings, Msg_Draw, Hud_DrawBoss, Hud_DrawPanel, Hud_DrawPopups. Everything
@@ -1439,14 +1473,152 @@ impl Hud {
             return;
         }
         rec.set_viewport(PLAYFIELD);
-        Self::emit_msg(ctx.w.msg.as_deref().expect("dialogue"), &ctx.w.anm, rec);
+        if let Some(d) = ctx.w.msg.as_deref() {
+            Self::emit_msg(d, &ctx.w.anm, rec);
+        }
         self.emit_boss(ctx, rec);
-        self.emit_panel(
-            &ctx.w.anm,
-            rec,
-            &ctx.w.player.as_deref().expect("player").stats,
-        );
+        if let Some(p) = ctx.w.player.as_deref() {
+            self.emit_panel(&ctx.w.anm, rec, &p.stats);
+        }
     }
+}
+
+// One clear-panel line at the pen x (12 §5.6).
+fn clear_line(q: &mut crate::ascii::Queue, y: f32, s: String, col: u32) {
+    q.push(Text::new(CLEAR_X, y, s).argb(col));
+}
+
+// Clear panel title, the four score rows and the two percentage rows; returns the pen y (12 §5.6).
+fn clear_scores(q: &mut crate::ascii::Queue, c: &ClearPanel, st: &Stats) -> f32 {
+    let mut y = CLEAR_Y;
+    let title = if c.stage < 6 {
+        "Stage Clear"
+    } else {
+        "All Clear!"
+    };
+    // 6B / Extra lower the pen by 16 before the title: the whole panel starts at y 80.
+    if c.stage > 6 {
+        y -= 16.0;
+    }
+    clear_line(q, y, title.into(), CLEAR_TITLE);
+    y += CLEAR_GAP;
+    clear_line(q, y, format!("Clear = {:8}0", c.clear), CLEAR_WHITE);
+    y += CLEAR_DY;
+    clear_line(
+        q,
+        y,
+        format!("Point = {:8}0", c.points.wrapping_mul(5000)),
+        CLEAR_POINT,
+    );
+    y += CLEAR_DY;
+    clear_line(
+        q,
+        y,
+        format!("Graze = {:8}0", c.graze.wrapping_mul(50)),
+        CLEAR_ROW,
+    );
+    y += CLEAR_DY;
+    clear_line(
+        q,
+        y,
+        format!("Time  = {:8}0", c.time.wrapping_mul(100)),
+        CLEAR_ROW,
+    );
+    // Integer percentages (h·100)/f and ((h·10000)/f) % 100, truncated.
+    // f = 0 is an unguarded idiv in the original, unreachable (12 §5.6); the port divides by 1.
+    let f = st.stage_frames.max(1).cast_signed();
+    let pct = |h: u32| {
+        let h = h.cast_signed();
+        (h.wrapping_mul(100) / f, h.wrapping_mul(10000) / f % 100)
+    };
+    let (a, b) = pct(st.human_frames);
+    y += CLEAR_GAP;
+    clear_line(q, y, format!("over-80% = {a:3}.{b:02}%"), CLEAR_ROW);
+    let (a, b) = pct(st.youkai_frames);
+    y += CLEAR_DY;
+    clear_line(q, y, format!("over 80% = {a:3}.{b:02}%"), CLEAR_ROW);
+    y
+}
+
+// Stages 6A / 6B / Ex outside practice: lives and bombs rows, in 6B the last time and night bonus (12 §5.6).
+fn clear_final(q: &mut crate::ascii::Queue, c: &ClearPanel, st: &Stats, mut y: f32) -> f32 {
+    let (lv, bm) = (
+        (st.lives as i32).wrapping_mul(2_500_000),
+        (st.bombs as i32).wrapping_mul(500_000),
+    );
+    y += CLEAR_DY;
+    clear_line(q, y, format!("Player ={lv:8}0"), CLEAR_FINAL);
+    y += CLEAR_DY;
+    clear_line(q, y, format!("Bomb   = {bm:7}0"), CLEAR_FINAL);
+    if c.stage == 7 {
+        let m = c.to;
+        y += CLEAR_DY;
+        clear_line(
+            q,
+            y,
+            format!("Last Time = {:2}:{:02}", (m / 60) % 12, m % 60),
+            CLEAR_FINAL,
+        );
+        y += CLEAR_DY;
+        clear_line(q, y, "Night Bonus".into(), CLEAR_FINAL);
+        y += CLEAR_DY;
+        let night = (12 - st.clock).wrapping_mul(2_000_000);
+        clear_line(q, y, format!("        {night:8}0"), CLEAR_FINAL);
+    }
+    y
+}
+
+// Rank line, the lives-option penalty line and the total (12 §5.6).
+fn clear_rank(q: &mut crate::ascii::Queue, g: &Game, total: i32, mut y: f32) -> f32 {
+    y += CLEAR_GAP;
+    let rank = RANK_TEXT
+        .get(table_index(g.difficulty))
+        .copied()
+        .unwrap_or("");
+    clear_line(q, y, rank.into(), CLEAR_RANK);
+    if g.difficulty < 4 && !g.practice() {
+        y += CLEAR_DY;
+        let pen = match g.game_lives() {
+            3 => Some("Player Penalty*0.5"),
+            4 => Some("Player Penalty*0.2"),
+            5 => Some("Player Penalty*0.1"),
+            6 => Some("Player Penalty*0.05"),
+            _ => None,
+        };
+        if let Some(t) = pen {
+            clear_line(q, y, t.into(), CLEAR_RANK);
+            y += CLEAR_DY;
+        }
+    }
+    y += CLEAR_DY;
+    clear_line(q, y, format!("Total = {total:8}0"), CLEAR_WHITE);
+    y
+}
+
+// Stages 1–5: night clock before >> after (12 §5.6). Prefix "PM" while minutes/60 < 12, else "AM"; hours
+// (minutes/60) % 12.
+fn clear_clock(q: &mut crate::ascii::Queue, c: &ClearPanel, mut y: f32) {
+    let clock = |m: i32| {
+        format!(
+            "{}{:2}:{:02}",
+            if m / 60 < 12 { "PM" } else { "AM" },
+            (m / 60) % 12,
+            m % 60
+        )
+    };
+    y += 40.0;
+    q.push(Text::new(CLEAR_X, y, clock(c.from)).argb(0xFFDF_DFDF));
+    q.push(Text::new(CLEAR_ARROW_X, y, ">>").argb(0xFFAF_AFAF));
+    q.push(Text::new(CLEAR_TO_X, y, clock(c.shown)).argb(0xFFFF_8F8F));
+}
+
+// A short ASCII string's length as the original's int (popup centring, 12 §5.5).
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "popup strings are a few bytes long"
+)]
+fn len_i32(s: &str) -> i32 {
+    s.len() as i32
 }
 
 // Hud_Update step 1 body (12 §5.1b) on (state, alpha, displayed, target); `irq` is the label VM's interrupt.
@@ -1480,7 +1652,7 @@ fn bar_step(
         if waiting {
             state = 2;
         }
-        alpha = if (alpha as u32) < 0xFC {
+        alpha = if alpha.cast_unsigned() < 0xFC {
             alpha + 4
         } else {
             0xFF
@@ -1506,9 +1678,9 @@ fn ratio_row(
     col: [u8; 4],
 ) -> [Text; 3] {
     let a = a.to_string();
-    let x = 488.0 + 13.0 * a.len() as f32;
+    let x = PANEL_X + 13.0 * a.len() as f32;
     [
-        Text::new(488.0, y, a).color(col),
+        Text::new(PANEL_X, y, a).color(col),
         Text::new(x, y, "/").scale_xy(0.5, 1.0).color(col),
         Text::new(x + 6.0, y, b.to_string()).color(col),
     ]
@@ -1517,10 +1689,10 @@ fn ratio_row(
 // Timer colour from the unclamped +0x24 (12 §5.4).
 fn timer_colour(raw: i32) -> u32 {
     match raw {
-        20.. => 0xA0D0FF,
-        10..=19 => 0xA080FF,
-        5..=9 => 0xE080C0,
-        _ => 0xFF4040,
+        20.. => 0x00A0_D0FF,
+        10..=19 => 0x00A0_80FF,
+        5..=9 => 0x00E0_80C0,
+        _ => 0x00FF_4040,
     }
 }
 
@@ -1542,7 +1714,7 @@ fn stage_plate(stage: usize, g: &crate::gamemgr::Game) -> Option<usize> {
         4 => 0x14,
         6 => 0x17,
         3 if !sp || g.card == 0xD6 => 0x13,
-        3 if g.is_practice_card_in(0xD8, 0xDD) => 0x1A + (g.card - 0xD8) as usize,
+        3 if g.is_practice_card_in(0xD8, 0xDD) => 0x1A + table_index(i32::from(g.card - 0xD8)),
         3 => return None,
         5 if !sp || g.card == 0xD4 => 0x15,
         5 => 0x16,
@@ -1555,6 +1727,7 @@ fn stage_plate(stage: usize, g: &crate::gamemgr::Game) -> Option<usize> {
 }
 
 // Hud_SetBossNamePlate 0x437F5C (12 §5.2): copies front.anm sprite n's pixels into sprite 10's rect (copy 0x467040).
+#[expect(clippy::cast_sign_loss, reason = "ftol of sprite uv / size in pixels")]
 pub fn set_boss_plate(anm: &AnmManager, rec: &mut Recorder, n: usize) {
     if let (Some(&src), Some(&dst)) = (anm.sprite(FRONT_SLOT, n), anm.sprite(FRONT_SLOT, 10)) {
         let px = |s: &crate::anmmgr::SlotSprite, rec: &Recorder| {
@@ -1578,7 +1751,9 @@ pub fn set_boss_plate(anm: &AnmManager, rec: &mut Recorder, n: usize) {
 // Msg_Start's route byte during playback (GM flag bit 3): replay header byte +0x11C (10 §4 step 3).
 fn replay_route(g: &crate::gamemgr::Game) -> Option<u8> {
     if g.replay() {
-        g.rpy.as_ref().map(|r| r.clear_status())
+        g.rpy
+            .as_ref()
+            .map(th08_formats::replay::Replay::clear_status)
     } else {
         None
     }
@@ -1792,9 +1967,9 @@ mod tests {
         assert_eq!(fmt_02d(7), "07");
         assert_eq!(fmt_02d(99), "99");
         assert_eq!(fmt_02d(-1), "-01");
-        assert_eq!(timer_colour(150), 0xA0D0FF);
-        assert_eq!(timer_colour(10), 0xA080FF);
-        assert_eq!(timer_colour(5), 0xE080C0);
-        assert_eq!(timer_colour(-3), 0xFF4040);
+        assert_eq!(timer_colour(150), 0x00A0_D0FF);
+        assert_eq!(timer_colour(10), 0x00A0_80FF);
+        assert_eq!(timer_colour(5), 0x00E0_80C0);
+        assert_eq!(timer_colour(-3), 0x00FF_4040);
     }
 }
