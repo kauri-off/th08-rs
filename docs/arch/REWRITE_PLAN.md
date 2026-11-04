@@ -21,7 +21,7 @@ previous step's, when a step intentionally changes draw); **B** ref500 490/490 +
 | 8b | content views: core reads only LogicView (no Archive/paths in core); ANM parsed into logic data + pixels; logic fingerprint in session metadata | B D1, D5 | T D | |
 | 9 | Rc graph → World (Player → Bullets → Enemies → Stage → Hud/Gui/Dialogue → Effects → GameManager) | C 1, C 5 | T D, B at end | done 2026-11-03 (STEP9_WORLD.md) |
 | 10 | crate cut: th08-core (forbid unsafe, no wgpu/cpal), render, audio, tools | — | T D B W | done 2026-11-03 (STEP10_CRATES.md) |
-| 11 | idiomatic pass per module (types, VM Op enums, clippy subset, dead paths) | A D6 | T D per module, B weekly | |
+| 11 | idiomatic pass per module (types, VM Op enums, clippy subset, dead paths) | A D6 | T D per module, B weekly | done 2026-11-04 (STEP11_IDIOMS.md; clippy -D warnings in arch_check) |
 | 12 | optional renderer rewrite | — | image diff | |
 
 Mobile (ARCH_D_MOBILE.md; Android APK + mobile web, no iOS) adds to the steps above:
