@@ -17,3 +17,4 @@ specs/data/drawlog/demos/*.drawlog.xz
 *.jpg
 !/packaging/**/*.png
 /CLAUDE.local.md
+/tools/fmath_xplat/target/
