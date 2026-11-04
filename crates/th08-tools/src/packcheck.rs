@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use anyhow::Result;
-use th08_core::drawlist::{Align, TextSite};
+use th08_core::drawlist::TextSite;
 use th08_render::text::{MIN_FIT_SCALE, Overflow, Raster};
 use th08_render::textdb::PackText;
 
@@ -79,7 +79,6 @@ struct Site {
     n: usize,
     over: usize,
     cut: usize,
-    over_visible: usize,
     worst: Vec<(f32, String)>,
 }
 
@@ -163,8 +162,8 @@ fn glyphs(o: &mut String, r: &Raster, tx: &BTreeMap<String, String>, max: usize)
     Ok(no_any.len())
 }
 
-// Overflow per site with the G2 layout (room = `avail(align, x, W)`) and against the visible sprite width; unknown
-// keys. Returns the unknown-key count.
+// Overflow per site against the visible sprite (the room `render_layout` fits to); unknown keys. Returns the
+// unknown-key count.
 fn overflow(
     o: &mut String,
     r: &mut Raster,
@@ -179,7 +178,7 @@ fn overflow(
             unknown.push(k.clone());
             continue;
         }
-        let Some((site, align, w, vis)) = thcrap::site_of(k) else {
+        let Some((site, align, edge)) = thcrap::site_of(k) else {
             continue;
         };
         let s = if k.starts_with("builtin/") {
@@ -187,28 +186,20 @@ fn overflow(
         } else {
             s.clone()
         };
-        let ratio = r.fit_ratio(&s, w, SIZE, (align, 0.0));
-        let vis_ratio = match align {
-            Align::Left => r.fit_ratio(&s, vis, SIZE, (align, 0.0)),
-            _ => ratio,
-        };
+        let ratio = r.fit_ratio(&s, SIZE, (align, 0.0, edge));
         let e = sites.entry(site.name()).or_default();
         e.n += 1;
         if ratio > 1.0 {
             e.over += 1;
+            e.worst.push((ratio, format!("{k} {ratio:.2}: {s}")));
         }
         if ratio > capacity(pack.overflow(site)) {
             e.cut += 1;
         }
-        if vis_ratio > 1.0 {
-            e.over_visible += 1;
-            e.worst
-                .push((vis_ratio, format!("{k} {vis_ratio:.2}: {s}")));
-        }
     }
     writeln!(
         o,
-        "overflow (G2 layout, W = 512, size {SIZE}; visible = sprite width, 320 for dialogue / spell):"
+        "overflow (size {SIZE}, room = visible sprite: 320 dialogue / spell, 512 ending / lists / music / menu):"
     )?;
     for (name, e) in &mut sites {
         let mode = TextSite::ALL
@@ -217,8 +208,8 @@ fn overflow(
             .map(|s| pack.overflow(s));
         writeln!(
             o,
-            "  {name:<10} {:>5} texts, {:>4} over room ({mode:?}), {:>4} cut after fitting, {:>4} wider than visible",
-            e.n, e.over, e.cut, e.over_visible
+            "  {name:<10} {:>5} texts, {:>4} over room ({mode:?}), {:>4} cut after fitting",
+            e.n, e.over, e.cut
         )?;
         e.worst.sort_by(|a, b| b.0.total_cmp(&a.0));
         for (_, s) in e.worst.iter().take(max) {

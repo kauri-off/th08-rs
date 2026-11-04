@@ -86,6 +86,8 @@ VM 0 / text.anm sprite 21 before state 8. If it is never drawn, add "not visible
 
 ## Q7 — `menulist::render_strip` never sets VM flag bit 0 (found in G1)
 
+Closed in G4-A: `render_strip` sets bit 0 on its target VM after drawing (10 §6); no draw change on vanilla data.
+
 10 §6: `Text_RenderToVm` always sets bit 0 (visible) on the target VM. The port's ending and music-room sites do; HUD
 and gui sites get it from `set_script` just before. `menulist::render_strip` (spell practice, replay, result) never
 touches its scratch VM, so if an ANM script cleared bit 0 on that VM before a re-render, the port would not show the

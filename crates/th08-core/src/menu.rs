@@ -411,6 +411,7 @@ impl MainMenu {
         };
         let t = ctx.rec.texture(sp.tex);
         let (w, ty) = (t.width, (sp.uv[1] * t.height as f32).round() as u32);
+        let edge = sp.uv[0] * w as f32 + sp.w;
         let t = b.txt();
         ctx.rec.text(TextCmd {
             dst: sp.tex,
@@ -418,6 +419,7 @@ impl MainMenu {
             w,
             size: 15,
             x: centred_x(&t.raw),
+            edge,
             text: t.raw,
             key: t.key,
             color: [224, 240, 255],

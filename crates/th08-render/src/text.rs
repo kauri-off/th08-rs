@@ -102,11 +102,11 @@ impl Raster {
         self.pack.len()
     }
 
-    // pack-check: measured width of translated text over the room `render_layout` gives it in a `w`-wide strip of
-    // font size `size` (> 1 = the overflow mode applies; > 1 / MIN_FIT = still too wide after fitting).
-    pub fn fit_ratio(&mut self, s: &str, w: usize, size: usize, (align, x): (Align, f32)) -> f32 {
+    // pack-check: measured width of translated text over the room `render_layout` gives it in a strip whose sprite
+    // ends at `edge`, font size `size` (> 1 = the overflow mode applies; > 1 / MIN_FIT = still too wide after fitting).
+    pub fn fit_ratio(&mut self, s: &str, size: usize, (align, x, edge): (Align, f32, f32)) -> f32 {
         let cell = (2 * size - 2) as f32;
-        self.measure(s, cell) / (2.0 * avail(align, x, w as f32))
+        self.measure(s, cell) / (2.0 * avail(align, x, edge))
     }
 }
 
@@ -331,11 +331,11 @@ impl Overflow {
 // Smallest scale a fitted line gets (shrink, squeeze, wrap).
 const MIN_FIT: f32 = 0.5;
 
-// Free width in strip pixels for a placement in a `w`-wide strip.
-fn avail(align: Align, x: f32, w: f32) -> f32 {
+// Free width in strip pixels for a placement in a sprite whose right edge is `edge`.
+fn avail(align: Align, x: f32, edge: f32) -> f32 {
     match align {
-        Align::Left => w - x,
-        Align::Centre(c) => 2.0 * c.min(w - c),
+        Align::Left => edge - x,
+        Align::Centre(c) => 2.0 * c.min(edge - c),
         Align::Right(e) => e,
     }
     .max(1.0)
@@ -391,8 +391,8 @@ impl Raster {
         finish(&mask, color, w, size, outline)
     }
 
-    // Translated text (I18N §2.3): placed by its measured width (`align`, `x` for Left) and fitted to the strip by
-    // `overflow`; the 2× surface, outline, gradient and 2:1 filter are the vanilla ones (10 §6).
+    // Translated text (I18N §2.3): placed by its measured width (`align`, `x` for Left) and fitted by `overflow` to
+    // the visible sprite (`edge`, not the texture row); the 2× surface, outline, gradient and 2:1 filter are the vanilla ones (10 §6).
     #[expect(
         clippy::too_many_arguments,
         reason = "the vanilla text arguments plus placement and overflow"
@@ -404,12 +404,12 @@ impl Raster {
         w: usize,
         size: usize,
         outline: i32,
-        (align, x): (Align, f32),
+        (align, x, edge): (Align, f32, f32),
         overflow: Overflow,
     ) -> Vec<u8> {
         let (w2, h2) = work_size(w, size);
         let cell = (2 * size - 2) as f32;
-        let room = 2.0 * avail(align, x, w as f32);
+        let room = 2.0 * avail(align, x, edge);
         let fit = |width: f32| (room / width.max(1.0)).clamp(MIN_FIT, 1.0);
         let mut runs = Vec::new();
         let width = self.measure(s, cell);
@@ -632,7 +632,7 @@ mod tests {
             w,
             15,
             0,
-            (Align::Right(320.0), 0.0),
+            (Align::Right(320.0), 0.0, 512.0),
             Overflow::Clip,
         );
         let xs = ink_x(&right, w);
@@ -642,11 +642,34 @@ mod tests {
         );
         let long = "Long translated text that does not fit into the strip at all, really";
         for mode in [Overflow::Shrink, Overflow::Squeeze, Overflow::Wrap] {
-            let fit = r.render_layout(long, [255; 3], w, 15, 0, (Align::Right(320.0), 0.0), mode);
+            let fit = r.render_layout(
+                long,
+                [255; 3],
+                w,
+                15,
+                0,
+                (Align::Right(320.0), 0.0, 512.0),
+                mode,
+            );
             let xs = ink_x(&fit, w);
             assert!(*xs.last().unwrap() <= 322, "{mode:?} {xs:?}");
+            let left = r.render_layout(long, [255; 3], w, 15, 0, (Align::Left, 0.0, 320.0), mode);
+            // Column 0 also feeds column w − 1 (TRIANGLE taps wrap, 10 §6).
+            let xs = ink_x(&left, w);
+            assert!(
+                xs.iter().all(|&x| x <= 322 || x == w - 1),
+                "{mode:?} {xs:?}"
+            );
         }
-        let clip = r.render_layout(long, [255; 3], w, 15, 0, (Align::Left, 0.0), Overflow::Clip);
+        let clip = r.render_layout(
+            long,
+            [255; 3],
+            w,
+            15,
+            0,
+            (Align::Left, 0.0, 512.0),
+            Overflow::Clip,
+        );
         assert!(*ink_x(&clip, w).last().unwrap() > 400);
     }
 

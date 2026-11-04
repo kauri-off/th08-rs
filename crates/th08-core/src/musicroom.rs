@@ -141,6 +141,7 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: Txt, colour: u32, mode: i32) {
         key: s.key,
         color: colorref(colour),
         x: tx,
+        edge: tx + sp.w,
         outline: mode,
         align: Align::Left,
         site: TextSite::MusicRoom,

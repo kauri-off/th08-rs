@@ -308,12 +308,7 @@ impl ResultScreen {
 
     // Text_RenderToVm into text VM k (white, outline 0, font 15) and alpha 255.
     fn render(&mut self, ctx: &mut Ctx, k: usize, s: Txt) {
-        let (slot, sprite) = if k < 14 {
-            (0, 21 + int(k))
-        } else {
-            (RT_SLOT, 2 + int(k) - 14)
-        };
-        crate::menulist::render_strip(ctx, slot, sprite, s);
+        crate::menulist::render_strip(ctx, &mut self.text_vms[k], s);
         self.text_vms[k].color[anmvm::A] = 255;
     }
 

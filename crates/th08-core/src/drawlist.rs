@@ -309,6 +309,16 @@ pub enum ResCmd {
         h: u32,
         fit: bool,
     },
+    // ANM entry texture with a pack image over its vanilla THTX pixels `base` (I18N §2.4): per sprite rect (THTX
+    // pixels), an override rect without one non-transparent pixel keeps the vanilla rect, as thcrap's patcher does.
+    CreateAnmOver {
+        id: TexId,
+        w: u32,
+        h: u32,
+        base: Arc<[u8]>,
+        rects: Arc<[[u32; 4]]>,
+        bytes: Arc<[u8]>,
+    },
     // Post-present capture into a new 640×480 surface-format texture (12 §1, 0x44886F).
     CaptureScreen {
         id: TexId,
@@ -362,6 +372,8 @@ pub struct TextCmd {
     pub color: [u8; 3],
     // Pen start x in strip pixels.
     pub x: f32,
+    // Right edge of the VM's sprite in strip pixels (u0·W + sprite width): what is visible of the strip.
+    pub edge: f32,
     // −1 → ±1 px outline offsets (2× space), anything else ±2 px.
     pub outline: i32,
     // How the original placed the text (10 §6 entry points). The vanilla path always draws at `x` (the original's
@@ -709,14 +721,20 @@ impl Recorder {
         self.create_entry(width, height, src, Arc::from(rgba))
     }
 
-    // ANM entry texture replaced by a pack image: same provenance and THTX size, pixels decoded and fitted
-    // by the renderer.
+    // ANM entry texture with a pack image: same provenance and THTX size, pixels decoded, placed and merged with
+    // `base` per sprite rect by the renderer.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "provenance, size, vanilla pixels, rects, image"
+    )]
     pub fn create_anm_texture_over(
         &mut self,
         file: &str,
         entry: u32,
         width: u32,
         height: u32,
+        base: &[u8],
+        rects: Vec<[u32; 4]>,
         image: Arc<[u8]>,
     ) -> TexId {
         let id = self.table.alloc(TexEntry {
@@ -728,12 +746,13 @@ impl Recorder {
                 entry,
             },
         });
-        self.res_cmd(ResCmd::CreateImage {
+        self.res_cmd(ResCmd::CreateAnmOver {
             id,
-            bytes: image,
             w: width,
             h: height,
-            fit: true,
+            base: Arc::from(base),
+            rects: Arc::from(rects),
+            bytes: image,
         });
         id
     }

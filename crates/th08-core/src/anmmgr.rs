@@ -133,6 +133,29 @@ impl Default for AnmManager {
     }
 }
 
+// The chunk's sprite rects in THTX pixels (sprites are in logical-size units, 03 §2.2), rounded outward.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "sprite rects lie inside the texture; clamped to it"
+)]
+fn thtx_rects(c: &anm::Chunk, tw: u32, th: u32) -> Vec<[u32; 4]> {
+    let (kx, ky) = (
+        tw as f32 / c.width.max(1) as f32,
+        th as f32 / c.height.max(1) as f32,
+    );
+    c.sprites
+        .iter()
+        .filter_map(|s| {
+            let x0 = (s.x * kx).floor().clamp(0.0, tw as f32) as u32;
+            let y0 = (s.y * ky).floor().clamp(0.0, th as f32) as u32;
+            let x1 = ((s.x + s.w) * kx).ceil().clamp(0.0, tw as f32) as u32;
+            let y1 = ((s.y + s.h) * ky).ceil().clamp(0.0, th as f32) as u32;
+            (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
+        })
+        .collect()
+}
+
 impl AnmManager {
     // Anm_Preload 0x465860 + Anm_LoadEntryTexture 0x465CC0; the port uploads all entries at once.
     // Sprites / scripts come from the LogicView, THTX pixels from its PresentView: core keeps no pixels,
@@ -157,9 +180,10 @@ impl AnmManager {
         let present = archive.present();
         self.insert(slot, name, chunks, |c| {
             let id = match (pixels[entry as usize].take(), present.chunk_image(&c.name)) {
-                // Pack image by chunk name: THTX size kept, pixels replaced.
+                // Pack image by chunk name: THTX size kept, merged per sprite rect.
                 (Some(t), Some(img)) => {
-                    rec.create_anm_texture_over(name, entry, t.width, t.height, img)
+                    let rects = thtx_rects(c, t.width, t.height);
+                    rec.create_anm_texture_over(name, entry, t.width, t.height, &t.rgba, rects, img)
                 }
                 (Some(t), None) => rec.create_anm_texture(name, entry, t.width, t.height, &t.rgba),
                 // '@' entries are blank render targets (text / capture).

@@ -139,6 +139,62 @@ fn decode_fitted(bytes: &[u8], w: u32, h: u32) -> Arc<[u8]> {
     }
 }
 
+// `ResCmd::CreateAnmOver` (I18N §2.4): the pack image at the THTX size `w` × `h` (same size, or the same aspect at
+// a larger size → scaled; any other size is a partial sheet placed 1:1 at the top left), then per sprite rect: a
+// rect with no visible pixel in the image keeps `base`. Undecodable → `base`.
+fn decode_over(bytes: &[u8], base: &Arc<[u8]>, rects: &[[u32; 4]], w: u32, h: u32) -> Arc<[u8]> {
+    let img = match image::load_from_memory(bytes) {
+        Ok(img) => img.to_rgba8(),
+        Err(e) => {
+            log::warn!("pack image decode failed: {e}");
+            return base.clone();
+        }
+    };
+    let (iw, ih) = img.dimensions();
+    let over: Vec<u8> = if (iw, ih) == (w, h) {
+        img.into_raw()
+    } else if iw >= w && u64::from(iw) * u64::from(h) == u64::from(ih) * u64::from(w) {
+        image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle).into_raw()
+    } else {
+        log::info!("pack image {iw}x{ih} placed 1:1 on a {w}x{h} texture");
+        let mut v = vec![0; 4 * w as usize * h as usize];
+        let (cw, ch) = (iw.min(w) as usize * 4, ih.min(h) as usize);
+        for y in 0..ch {
+            let src = y * iw as usize * 4;
+            let dst = y * w as usize * 4;
+            v[dst..dst + cw].copy_from_slice(&img.as_raw()[src..src + cw]);
+        }
+        v
+    };
+    if base.len() != over.len() {
+        return Arc::from(over);
+    }
+    let row = w as usize * 4;
+    let span = |r: &[u32; 4], y: u32| {
+        let o = (r[1] + y) as usize * row + r[0] as usize * 4;
+        o..o + r[2] as usize * 4
+    };
+    let mut out = over.clone();
+    for r in rects {
+        if r[0] + r[2] > w || r[1] + r[3] > h {
+            continue;
+        }
+        let empty = (0..r[3]).all(|y| {
+            over[span(r, y)]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[3] == 0)
+        });
+        if empty {
+            for y in 0..r[3] {
+                out[span(r, y)].copy_from_slice(&base[span(r, y)]);
+            }
+        }
+    }
+    Arc::from(out)
+}
+
 // True when rect `inner` lies inside `outer` (both `[x, y, w, h]`).
 fn rect_within(inner: [u32; 4], outer: [u32; 4]) -> bool {
     inner[0] >= outer[0]
@@ -2113,6 +2169,17 @@ impl Gfx {
                 };
                 self.create_texture_fmt(*id, *w, *h, Some(&rgba), wgpu::TextureFormat::Rgba8Unorm);
             }
+            ResCmd::CreateAnmOver {
+                id,
+                w,
+                h,
+                base,
+                rects,
+                bytes,
+            } => {
+                let rgba = decode_over(bytes, base, rects, *w, *h);
+                self.create_texture_fmt(*id, *w, *h, Some(&rgba), wgpu::TextureFormat::Rgba8Unorm);
+            }
             ResCmd::CaptureScreen { id, label } => self.do_capture_screen(*id, label),
             ResCmd::CaptureRect {
                 dst,
@@ -2166,7 +2233,15 @@ impl Gfx {
         let (w, size) = (t.w as usize, t.size as usize);
         let rgba = if translated {
             let overflow = self.pack.overflow(t.site);
-            raster.render_layout(&s, t.color, w, size, t.outline, (t.align, t.x), overflow)
+            raster.render_layout(
+                &s,
+                t.color,
+                w,
+                size,
+                t.outline,
+                (t.align, t.x, t.edge),
+                overflow,
+            )
         } else {
             raster.render_outline(&s, t.color, w, size, t.x, t.outline)
         };
@@ -2271,6 +2346,27 @@ fn copy_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn png(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba(f(x, y)));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    // Empty sprite rects keep the vanilla pixels; drawn ones are replaced; a partial sheet is placed 1:1.
+    #[test]
+    fn pack_image_merges_per_sprite() {
+        let base: Arc<[u8]> = Arc::from(vec![9u8; 4 * 4 * 4]);
+        let rects = [[0, 0, 2, 2], [2, 0, 2, 2], [0, 2, 4, 2]];
+        let over = png(4, 4, |x, y| if x >= 2 && y < 2 { [1; 4] } else { [0; 4] });
+        let out = decode_over(&over, &base, &rects, 4, 4);
+        let px = |x: usize, y: usize| out[(y * 4 + x) * 4];
+        assert_eq!((px(0, 0), px(3, 1), px(1, 3)), (9, 1, 9));
+        let strip = png(4, 1, |_, _| [5; 4]);
+        let out = decode_over(&strip, &base, &rects, 4, 4);
+        assert_eq!((out[0], out[4 * 4 * 3]), (5, 9));
+    }
 
     // One frame drawing an 8×8 texture made of bytes, a write and a copy, scaled over the frame.
     fn frame(gfx: &mut Gfx, rec: &mut Recorder, tex: TexId) -> image::RgbaImage {

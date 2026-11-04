@@ -572,13 +572,22 @@ impl Hud {
         clippy::cast_sign_loss,
         reason = "ftol of the strip's v0 in pixels (10 §6)"
     )]
-    fn line_texture(anm: &AnmManager, rec: &Recorder, vm: &AnmVm) -> Option<(TexId, u32, u32)> {
+    fn line_texture(
+        anm: &AnmManager,
+        rec: &Recorder,
+        vm: &AnmVm,
+    ) -> Option<(TexId, u32, u32, f32)> {
         let sp = anm.sprite(
             msg::TEXT_SLOT,
             usize::from(vm.sprite_index.max(0).cast_unsigned()),
         )?;
         let t = rec.texture(sp.tex);
-        Some((sp.tex, t.width, (sp.uv[1] * t.height as f32).round() as u32))
+        Some((
+            sp.tex,
+            t.width,
+            (sp.uv[1] * t.height as f32).round() as u32,
+            sp.uv[0] * t.width as f32 + sp.w,
+        ))
     }
 
     // Text_RenderToVm 0x4663B0 for the queued dialogue lines (10 §6).
@@ -590,7 +599,7 @@ impl Hud {
         let size = d.font_size;
         for (line, s, colour) in std::mem::take(&mut d.texts) {
             // Line 2 renders into boss_card's strip (text.anm sprite 2, 10 §5.1).
-            let Some((tex, w, y)) = d
+            let Some((tex, w, y, edge)) = d
                 .line_vm(line)
                 .and_then(|vm| Self::line_texture(&ctx.w.anm, &ctx.rec, vm))
             else {
@@ -606,6 +615,7 @@ impl Hud {
                 key: s.key,
                 color: colour,
                 x: 0.0,
+                edge,
                 outline: 0,
                 align: Align::Left,
                 site: TextSite::Dialogue,

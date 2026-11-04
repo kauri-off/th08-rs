@@ -360,13 +360,19 @@ fn pie(rec: &mut Recorder, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
     rec.fan(Blend::Alpha, &verts);
 }
 
-// Text_RenderToVm (white, outline 0, font 15, 16 §6.3 / §6.5) into the sprite's texture strip.
+// Text_RenderToVm (white, outline 0, font 15, 16 §6.3 / §6.5) into the VM's sprite strip, then visible (10 §6).
 #[expect(
     clippy::cast_sign_loss,
     reason = "texture row of v0 ≥ 0, rounded as before"
 )]
-pub(crate) fn render_strip(ctx: &mut Ctx, slot: usize, sprite: i32, s: Txt) {
-    let Some(sp) = ctx.w.anm.sprite(slot, uidx(sprite.max(0))).copied() else {
+pub(crate) fn render_strip(ctx: &mut Ctx, vm: &mut AnmVm, s: Txt) {
+    let slot = uidx(i32::from(vm.anm_slot));
+    let Some(sp) = ctx
+        .w
+        .anm
+        .sprite(slot, uidx(i32::from(vm.sprite_index).max(0)))
+        .copied()
+    else {
         return;
     };
     // 10 §6: x = u0 = 0, W = texture-row width (512), 15 rows from v0; rows 15–16 of a 17-high sprite stay untouched.
@@ -381,20 +387,18 @@ pub(crate) fn render_strip(ctx: &mut Ctx, slot: usize, sprite: i32, s: Txt) {
         key: s.key,
         color: [255, 255, 255],
         x: 0.0,
+        edge: sp.uv[0] * t.width as f32 + sp.w,
         outline: 0,
         align: Align::Left,
         site: TextSite::MenuList,
     });
+    vm.flags |= anmvm::F_VISIBLE;
 }
 
 impl MainMenu {
     fn anchor(&self) -> [f32; 2] {
         let p = self.vms[VM_ANCHOR].pos;
         [p[0], p[1]]
-    }
-
-    fn render_vm(&mut self, ctx: &mut Ctx, slot: usize, sprite: i32, s: Txt) {
-        render_strip(ctx, slot, sprite, s);
     }
 
     fn glyph_vm(&mut self, ctx: &mut Ctx) {
@@ -556,8 +560,8 @@ impl MainMenu {
             ];
             // QUIRK (16 §6.4): the anchor bits go to the EA5C VM twice, so the pie frame stays centred.
             self.lists.scratch[2].flags &= !(anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y);
-            self.render_vm(ctx, RT_SLOT, 2, Builtin::SpHeader.txt());
-            self.render_vm(ctx, RT_SLOT, 3, Builtin::SpPercent.txt());
+            render_strip(ctx, &mut self.lists.scratch[0], Builtin::SpHeader.txt());
+            render_strip(ctx, &mut self.lists.scratch[1], Builtin::SpPercent.txt());
             self.lists.pies = [0.0; 4];
             self.glyph_vm(ctx);
         }
@@ -819,7 +823,7 @@ impl MainMenu {
             let i = uidx(self.lists.page) * 15 + j;
             if a + i < b {
                 let s = Self::row_name(ctx, a + i);
-                self.render_vm(ctx, RT_SLOT, int(j) + 2, s);
+                render_strip(ctx, &mut self.lists.scratch[j], s);
             }
         }
         self.card_colours();
@@ -918,7 +922,7 @@ impl MainMenu {
 
     fn render_info(&mut self, ctx: &mut Ctx, k: usize) {
         let s = self.info_line(ctx, k);
-        self.render_vm(ctx, TEXT_SLOT, 21 + int(k), s);
+        render_strip(ctx, &mut self.lists.info[k], s);
     }
 
     // Screen 17, MainMenu_SpellPracticeCard 0x46BBC0 (16 §6.2); input from +0x1442C == 8 (12 §2).
@@ -951,7 +955,7 @@ impl MainMenu {
             self.lists.prev_card = self.lists.card;
             self.card_rows(ctx);
             self.lists.header = scratch(ctx, RT_SLOT, 17, false);
-            self.render_vm(ctx, RT_SLOT, 17, Builtin::SpListHeader.txt());
+            render_strip(ctx, &mut self.lists.header, Builtin::SpListHeader.txt());
             self.lists.info = (0..7)
                 .map(|k| scratch(ctx, TEXT_SLOT, 21 + k, false))
                 .collect();
@@ -1251,7 +1255,7 @@ impl MainMenu {
                 Err(_) => Txt::dynamic(sjis(&r.card_name())),
             };
             self.notice = scratch(ctx, RT_SLOT, 11, false);
-            self.render_vm(ctx, RT_SLOT, 11, name);
+            render_strip(ctx, &mut self.notice, name);
             self.cursor = int(first);
             self.lists.rpy_sub = 2;
             self.rpy_choose();

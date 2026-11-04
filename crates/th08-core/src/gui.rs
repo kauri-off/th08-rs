@@ -306,6 +306,7 @@ impl Gui {
                 key: s.key,
                 color: colour,
                 x,
+                edge: sp.uv[0] * t.width as f32 + sp.w,
                 outline: 0,
                 align,
                 site: TextSite::Spell,

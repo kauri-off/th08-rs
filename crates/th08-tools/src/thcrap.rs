@@ -868,30 +868,30 @@ pub fn coverage_text(per: &BTreeMap<String, (usize, usize)>) -> String {
     s
 }
 
-// Where a key is drawn (G2 `TextCmd` geometry, 10 §6 caller table): site, placement, G2 strip width W, visible sprite
-// width. W = 512 for every caller; dialogue and spell strips are 320-wide sprites.
-pub fn site_of(key: &str) -> Option<(TextSite, Align, usize, usize)> {
+// Where a key is drawn (`TextCmd` geometry, 10 §6 caller table): site, placement and the sprite's right edge
+// (`TextCmd::edge`): text.anm dialogue / spell sprites are 320 wide, the ending, list, music and menu strips 512.
+pub fn site_of(key: &str) -> Option<(TextSite, Align, f32)> {
     let mut p = key.split('/');
     let kind = p.next()?;
     let rest = p.next_back().unwrap_or("");
     Some(match kind {
-        "msg" => (TextSite::Dialogue, Align::Left, 512, 320),
-        "spell" if rest == "name" => (TextSite::Spell, Align::Right(320.0), 512, 320),
-        "spell" => (TextSite::MenuList, Align::Left, 512, 512),
-        "end" => (TextSite::Ending, Align::Left, 512, 512),
-        "music" | "musiccmt" => (TextSite::MusicRoom, Align::Left, 512, 512),
+        "msg" => (TextSite::Dialogue, Align::Left, 320.0),
+        "spell" if rest == "name" => (TextSite::Spell, Align::Right(320.0), 320.0),
+        "spell" => (TextSite::MenuList, Align::Left, 512.0),
+        "end" => (TextSite::Ending, Align::Left, 512.0),
+        "music" | "musiccmt" => (TextSite::MusicRoom, Align::Left, 512.0),
         "builtin" => {
             let b = key.strip_prefix("builtin/")?;
             if b.starts_with("menu.") {
-                (TextSite::MenuDesc, Align::Centre(256.0), 512, 512)
+                (TextSite::MenuDesc, Align::Centre(256.0), 512.0)
             } else if b == "spell.resurrection" {
-                (TextSite::Spell, Align::Right(320.0), 512, 320)
+                (TextSite::Spell, Align::Right(320.0), 320.0)
             } else if b.starts_with("bomb.") {
-                (TextSite::Spell, Align::Left, 512, 320)
+                (TextSite::Spell, Align::Left, 320.0)
             } else if b.starts_with("music.") || b == "unknown8" {
-                (TextSite::MusicRoom, Align::Left, 512, 512)
+                (TextSite::MusicRoom, Align::Left, 512.0)
             } else {
-                (TextSite::MenuList, Align::Left, 512, 512)
+                (TextSite::MenuList, Align::Left, 512.0)
             }
         }
         _ => return None,

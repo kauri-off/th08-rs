@@ -456,6 +456,7 @@ fn render_vm(ctx: &mut Ctx, vm: &mut AnmVm, s: Text, rgb: [u8; 3]) {
         key: s.key,
         color: rgb,
         x: 0.0,
+        edge: sp.uv[0] * t.width as f32 + sp.w,
         outline: -1,
         align: Align::Left,
         site: TextSite::Ending,
