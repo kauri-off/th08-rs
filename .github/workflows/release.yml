@@ -54,7 +54,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git build-essential pkg-config libasound2-dev file zstd
+            ca-certificates curl git build-essential pkg-config libasound2-dev libudev-dev file zstd
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -90,6 +90,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # The default also asks for the retired 'tools' package, which sdkmanager no longer has.
+          packages: platform-tools
       - name: Android SDK packages
         run: |
           sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" > /dev/null
