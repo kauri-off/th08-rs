@@ -359,6 +359,8 @@ pub struct Model {
     #[cfg(not(target_os = "android"))]
     saves: SavesUi,
     pub view: View,
+    // The previous run's `last_error.txt`, shown until dismissed or Play.
+    last_error: Option<String>,
 }
 
 // Save export / import on the settings screen: the port.cfg box and the last outcome (Ok / Err message).
@@ -389,6 +391,14 @@ impl Model {
             .map(|c| crate::translations::Manager::new(c, || {}));
         #[cfg(target_arch = "wasm32")]
         let manager = Some(crate::translations::Manager::browser());
+        #[cfg(not(target_arch = "wasm32"))]
+        let last_error = s
+            .dirs
+            .config
+            .as_deref()
+            .and_then(crate::crashlog::last_error);
+        #[cfg(target_arch = "wasm32")]
+        let last_error = None;
         let mut m = Self {
             rows,
             folder,
@@ -404,6 +414,7 @@ impl Model {
             #[cfg(not(target_os = "android"))]
             saves: SavesUi::default(),
             view: View::Settings,
+            last_error,
         };
         m.refresh_installed();
         m
@@ -518,11 +529,70 @@ impl Model {
 
     // Also drops the developer keys port.cfg holds (`write_port_cfg`), even with no row edited.
     pub fn save(&self) {
+        self.dismiss_last_error_file();
         let changes = self.changes();
         if !changes.is_empty() || self.dirs.config.is_some() {
             let c: Vec<(&str, Option<&str>)> =
                 changes.iter().map(|(k, v)| (*k, v.as_deref())).collect();
             settings::write_port_cfg(&self.dirs, &c);
+        }
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    fn dismiss_last_error_file(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.last_error.is_some()
+            && let Some(d) = &self.dirs.config
+        {
+            crate::crashlog::clear_last_error(d);
+        }
+    }
+
+    // "The last run failed": the failure line, Copy report / Open folder / Dismiss.
+    fn last_error_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        let Some(report) = &self.last_error else {
+            return;
+        };
+        let mut dismiss = false;
+        egui::Frame::group(ui.style())
+            .stroke(egui::Stroke::new(1.0, ui.visuals().error_fg_color))
+            .show(ui, |ui| {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    egui::RichText::new(i18n::ui(lang, "last_failed")).strong(),
+                );
+                ui.label(crate::crashlog::headline(report));
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(d) = &self.dirs.config {
+                    ui.label(
+                        egui::RichText::new(
+                            d.join(crate::crashlog::LAST_ERROR).display().to_string(),
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(i18n::ui(lang, "copy_report")).clicked() {
+                        ui.ctx().copy_text(report.clone());
+                    }
+                    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+                    if let Some(d) = &self.dirs.config
+                        && ui.button(i18n::ui(lang, "open_folder")).clicked()
+                        && let Err(e) = open::that_detached(d)
+                    {
+                        log::warn!("{}: {e}", d.display());
+                    }
+                    dismiss = ui.button(i18n::ui(lang, "dismiss")).clicked();
+                });
+            });
+        ui.add_space(6.0);
+        if dismiss {
+            self.dismiss_last_error_file();
+            self.last_error = None;
         }
     }
 
@@ -623,6 +693,7 @@ impl Model {
         });
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
+                self.last_error_ui(ui, lang);
                 if !self.dev {
                     let active: Vec<&str> = self
                         .rows

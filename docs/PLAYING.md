@@ -5,12 +5,13 @@ files and nothing else.
 
 ## Downloads
 
-Every [release](https://github.com/kauri-off/th08-rs/releases) has three files:
+Every [release](https://github.com/kauri-off/th08-rs/releases) has these files:
 
 | Platform | File | How to start |
 |---|---|---|
-| Windows 10 / 11 (x64) | `th08-<version>-windows-exe.exe` | a single portable exe; run it from any folder |
-| Linux (x86-64, glibc 2.35+: Ubuntu 22.04+, Debian 12+, Fedora 36+, SteamOS 3) | `th08-<version>-linux-appimage.AppImage` | `chmod +x` it, then run it |
+| Windows 10 / 11 (x64), recommended | `th08-<version>-windows-nsis.exe` | the installer: installs for your user only (no admin) into `%LOCALAPPDATA%\Programs\th08`, with Start menu and desktop shortcuts and an uninstaller |
+| Windows 10 / 11 (x64), portable | `th08-<version>-windows-exe.exe` | a single portable exe; run it from any folder |
+| Linux (x86-64, glibc 2.35+: Ubuntu 22.04+, Debian 12+, Fedora 36+, SteamOS 3) | `th08-<version>-linux-appimage.AppImage` | `chmod +x` it, then run it; it can update itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) or an AppImage manager (Gear Lever, AppImageLauncher, AM), which use the `.zsync` file next to it in the release |
 | Android 8.0+ (arm64) | `th08-<version>-android-apk.apk` | install it (allow installs from your browser or file manager when asked) |
 
 The browser build at https://kauri-off.github.io/th08-rs/ needs no download; you select the game files in the page.

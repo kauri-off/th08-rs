@@ -146,13 +146,16 @@ impl Storage {
         let path = dir.join(name);
         if let Err(e) = write_atomic(&path, data) {
             log::warn!("{}: {e}", path.display());
+            crate::crashlog::save_failed(name, &e.to_string());
         }
     }
 
     // Result state 12 creates the directory `replay`; web storage has no directories.
     pub fn mkdir(&self, name: &str) {
-        if let Some(dir) = &self.save_dir {
-            let _ = std::fs::create_dir_all(dir.join(name));
+        if let Some(dir) = &self.save_dir
+            && let Err(e) = std::fs::create_dir_all(dir.join(name))
+        {
+            log::warn!("{}: {e}", dir.join(name).display());
         }
     }
 
@@ -228,6 +231,7 @@ impl Storage {
     pub fn write(&self, name: &str, data: &[u8]) {
         if let Err(e) = self.try_write(name, data) {
             log::warn!("{e}");
+            crate::crashlog::save_failed(name, &e);
         }
     }
 

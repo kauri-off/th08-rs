@@ -20,6 +20,9 @@ const RUNTIME: (&str, &str) = (
     "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
 );
 const WIN_GNU: &str = "x86_64-pc-windows-gnu";
+// AppImageUpdate / AppImage managers read this from the release AppImage and fetch the .zsync asset beside it.
+const UPDATE_INFO: &str =
+    "gh-releases-zsync|kauri-off|th08-rs|latest|th08-*-linux-appimage.AppImage.zsync";
 
 fn sha256(p: &Path) -> Option<String> {
     let bytes = fs::read(p).ok()?;
@@ -137,19 +140,31 @@ pub fn appimage(name: &str, out: &Path, game: Option<&Game>) -> Result<()> {
     if let Some(d) = out.parent() {
         fs::create_dir_all(d)?;
     }
+    let zsync = PathBuf::from(format!("{}.zsync", out.display()));
     let _ = fs::remove_file(out);
-    // Extract-and-run: no FUSE needed (CI containers). appimagetool can fail with exit 0, so check the output.
-    util::run(
-        Command::new(&tool)
-            .env("ARCH", "x86_64")
-            .env("APPIMAGE_EXTRACT_AND_RUN", "1")
-            .arg("--no-appstream")
-            .arg("--runtime-file")
-            .arg(&runtime)
-            .arg(&appdir)
-            .arg(out),
-    )?;
+    let _ = fs::remove_file(&zsync);
+    // Only a public release build updates itself; local and personal (game data) builds carry no update info.
+    let release = game.is_none() && std::env::var("TH08_RELEASE_TAG").is_ok_and(|t| !t.is_empty());
+    let mut c = Command::new(&tool);
+    // Extract-and-run: no FUSE needed (CI containers).
+    c.env("ARCH", "x86_64")
+        .env("APPIMAGE_EXTRACT_AND_RUN", "1")
+        .arg("--no-appstream")
+        .arg("--runtime-file")
+        .arg(&runtime);
+    if release {
+        c.args(["-u", UPDATE_INFO]);
+    }
+    // The .zsync goes to $OWD (inherited when xtask itself runs under an AppImage), else the working directory.
+    if let Some(d) = out.parent() {
+        c.current_dir(d).env("OWD", d);
+    }
+    util::run(c.arg(&appdir).arg(out))?;
+    // appimagetool can fail with exit 0, so check the output.
     util::ensure_nonempty(out)?;
+    if release {
+        util::ensure_nonempty(&zsync)?;
+    }
     fs::remove_dir_all(appdir.parent().context("stage")?)?;
     Ok(())
 }

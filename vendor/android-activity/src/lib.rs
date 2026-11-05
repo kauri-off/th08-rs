@@ -448,6 +448,17 @@ impl From<ndk_sys::ARect> for Rect {
 }
 
 pub use activity_impl::StateLoader;
+
+static DESTROY_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// th08 patch: true once `onDestroy` reached the main loop; `onDestroy` blocks until `android_main` returns.
+pub fn destroy_requested() -> bool {
+    DESTROY_REQUESTED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub(crate) fn set_destroy_requested() {
+    DESTROY_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
+}
 pub use activity_impl::StateSaver;
 
 /// An application event delivered during [`AndroidApp::poll_events`]

@@ -83,4 +83,8 @@
   <string name="saves_imported_backup">Файлов импортировано: %d; прежние файлы — в резервном zip в памяти приложения</string>
   <string name="saves_export_failed">Экспорт не удался: %s</string>
   <string name="saves_import_failed">Импорт не удался, ничего не изменено: %s</string>
+  <string name="last_failed">Прошлый запуск завершился ошибкой</string>
+  <string name="last_failed_share">Поделиться отчётом</string>
+  <string name="last_failed_dismiss">Скрыть</string>
+  <string name="last_failed_subject">Отчёт об ошибке th08</string>
 </resources>

@@ -11,8 +11,9 @@ The port contains no game data: you need your own copy of Touhou 8 ~ Imperishabl
 
 | Platform | File |
 |---|---|
+| Windows 10 / 11 (x64) | `th08-<version>-windows-nsis.exe`: installer (recommended), per-user, no admin |
 | Windows 10 / 11 (x64) | `th08-<version>-windows-exe.exe`: portable, run it from any folder |
-| Linux (x86-64, glibc 2.35+) | `th08-<version>-linux-appimage.AppImage`: `chmod +x`, then run |
+| Linux (x86-64, glibc 2.35+) | `th08-<version>-linux-appimage.AppImage`: `chmod +x`, then run; updates itself with AppImageUpdate or an AppImage manager (the `.zsync` is for them) |
 | Android 8.0+ (arm64) | `th08-<version>-android-apk.apk`: installs as `org.th08.port`, updates the previous release |
 
 - Windows / Linux: pick your game folder in the launcher on the first start.

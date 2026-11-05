@@ -84,4 +84,8 @@
   <string name="saves_imported_backup">%d files imported; the previous files are in a backup zip in the app\'s storage</string>
   <string name="saves_export_failed">Export failed: %s</string>
   <string name="saves_import_failed">Import failed, nothing changed: %s</string>
+  <string name="last_failed">The last run ended with an error</string>
+  <string name="last_failed_share">Share report</string>
+  <string name="last_failed_dismiss">Dismiss</string>
+  <string name="last_failed_subject">th08 error report</string>
 </resources>

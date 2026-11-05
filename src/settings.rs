@@ -666,9 +666,9 @@ pub const ENTRIES: &[Entry] = &[
         unit: "",
         words: &[],
         audience: Audience::Player,
-        platforms: Platforms::DESKTOP_WEB,
+        platforms: Platforms::ALL,
         persist: true,
-        help: "open the port menu when the window or browser tab loses focus during a stage",
+        help: "open the port menu when the window, browser tab or Android app loses focus during a stage (notification shade, split screen)",
         set: |s, v| {
             s.pause_unfocused = parse_bool(v)?;
             Ok(())
@@ -2504,6 +2504,9 @@ pub fn save_port_cfg(dirs: &PlatformDirs, key: &str, value: &str) {
 pub fn write_port_cfg(dirs: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
     if let Err(e) = try_write_port_cfg(dirs, changes) {
         log::error!("{e}");
+        if cfg!(target_arch = "wasm32") || dirs.config.is_some() {
+            crate::crashlog::save_failed("port.cfg", &e);
+        }
     }
 }
 

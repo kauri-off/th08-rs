@@ -215,20 +215,25 @@ fn main() -> anyhow::Result<()> {
         t0.elapsed().as_secs_f64()
     );
 
-    report_trace(&s, from, &port_rows)?;
+    report_trace(&s, (from, to), &port_rows)?;
     if let Some(m) = merge {
         report_draw(m, out, &ref_paths, &port_log, range)?;
     }
     Ok(())
 }
 
-// Recorded vs port trace from menu frame `from`, with the rows around the first difference.
+// Recorded vs port trace from menu frame `from` up to poll `to`, with the rows around the first difference.
 fn report_trace(
     s: &Session,
-    from: usize,
+    (from, to): (usize, usize),
     port_rows: &[th08_core::trace::Row],
 ) -> anyhow::Result<()> {
-    let rec = s.recorded()?;
+    let mut rec = s.recorded()?;
+    // `--to` stops the run before poll `to`: cut the recording there too.
+    let end = int(to.min(1 << 40));
+    if let Some(i) = rec.iter().position(|r| r[25] >= end) {
+        rec.truncate(i);
+    }
     let k = from - 1;
     let c = session::compare(
         rec.get(k..).unwrap_or(&[]),

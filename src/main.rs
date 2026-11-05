@@ -18,7 +18,9 @@ fn attach_parent_console() {
 fn main() {
     #[cfg(windows)]
     attach_parent_console();
-    env_logger::init();
+    let logger = env_logger::Builder::from_default_env().build();
+    let max = logger.filter();
+    th08::crashlog::Tee::install(Box::new(logger), max);
     let mut s = match th08::settings::Settings::game_from_args(
         th08::launcher::desktop_dirs(),
         std::env::args().skip(1),
@@ -26,6 +28,8 @@ fn main() {
         Ok(s) => s,
         Err(e) => e.exit(),
     };
+    th08::crashlog::set_dir(s.dirs.config.as_deref());
+    th08::crashlog::install_panic_hook();
     // A saved `launcher = off` still goes through the launcher window, so Shift held at start-up can open it.
     let saved_off = !s.launcher && s.origin("launcher") == th08::settings::Origin::PortCfg;
     if (s.launcher || saved_off) && !s.is_tool_run() {
@@ -38,6 +42,7 @@ fn main() {
         Ok(None) => return,
         Err(e) => {
             eprintln!("{e}");
+            th08::crashlog::report("start-up failure", &e.to_string(), None);
             std::process::exit(1);
         }
     };

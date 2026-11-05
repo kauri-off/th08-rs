@@ -14,7 +14,7 @@
     <!-- The Rust game (lib th08, GameActivity.kt); own process, ended by the game on Quit so the next Play starts
          fresh. Back goes to the game only, through its OnBackInvokedCallback (API 33+) or KEYCODE_BACK. -->
     <activity android:name=".GameActivity" android:exported="false" android:process=":game"
-        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density"
+        android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode"
         android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
       <meta-data android:name="android.app.lib_name" android:value="th08"/>
     </activity>

@@ -234,6 +234,8 @@ pub struct TransportView {
     pub label: Option<String>,
     pub strip: Option<[(Action, [f32; 4]); 4]>,
     pub paused: bool,
+    // A save write failure, shown at the bottom for a few seconds.
+    pub toast: Option<String>,
 }
 
 pub struct TransportOverlay {
@@ -327,11 +329,31 @@ fn transport_shapes(p: &egui::Painter, v: &TransportView, (w, h): (u32, u32)) {
         p.rect_filled(bg, size * 0.3, Color32::from_black_alpha(150));
         p.text(at, Align2::CENTER_TOP, text, font, white(1.0));
     }
+    if let Some(text) = &v.toast {
+        let size = (h as f32 / 26.0).clamp(12.0, 28.0);
+        let g = p.layout(
+            text.clone(),
+            FontId::proportional(size),
+            white(1.0),
+            w as f32 * 0.8,
+        );
+        let at = pos2(
+            (w as f32 - g.size().x) / 2.0,
+            h as f32 - g.size().y - size * 1.5,
+        );
+        let bg = Rect::from_min_size(at, g.size()).expand2(vec2(size * 0.6, size * 0.3));
+        p.rect_filled(
+            bg,
+            size * 0.3,
+            Color32::from_rgba_unmultiplied(120, 20, 20, 210),
+        );
+        p.galley(at, g, white(1.0));
+    }
 }
 
 impl Overlay for TransportOverlay {
     fn paint(&mut self, t: OverlayTarget<'_>, enc: &mut wgpu::CommandEncoder) {
-        if self.view.label.is_none() && self.view.strip.is_none() {
+        if self.view.label.is_none() && self.view.strip.is_none() && self.view.toast.is_none() {
             return;
         }
         let (v, size) = (&self.view, t.size);

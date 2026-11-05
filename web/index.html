@@ -10,6 +10,8 @@
   #setup { max-width: 34em; text-align: center; line-height: 1.5; }
   button, label.btn { display: inline-block; margin: .4em; padding: .6em 1.2em; background: #333; color: #eee; border: 1px solid #666; cursor: pointer; }
   #status { color: #f99; min-height: 1.5em; }
+  #error { position: fixed; left: 1em; right: 1em; bottom: 1em; max-height: 60vh; overflow: auto; margin: 0; padding: 1em;
+    background: #300; color: #fdd; border: 1px solid #f66; font: 13px monospace; white-space: pre-wrap; z-index: 10; }
 </style>
 </head>
 <body>
@@ -22,6 +24,7 @@
   <div id="cached" hidden><button id="play">Play (files remembered)</button> <button id="forget">Forget files</button></div>
   <p id="status"></p>
 </div>
+<pre id="error" hidden></pre>
 <script type="module">
 import init, { start } from "./th08.js";
 
@@ -59,8 +62,14 @@ async function launch(files) {
     return;
   }
   document.getElementById("setup").remove();
-  await init();
-  start(files);
+  try {
+    await init();
+    start(files);
+  } catch (e) {
+    const box = document.getElementById("error");
+    box.textContent = `th08 could not start:\n${e && e.stack || e}`;
+    box.hidden = false;
+  }
 }
 
 async function picked(list) {

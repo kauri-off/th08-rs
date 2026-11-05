@@ -1175,6 +1175,8 @@ pub struct Report {
     pub identical: usize,
     pub ref_only: usize,
     pub port_only: usize,
+    // Reference frames after the port's last frame (the port log ended early).
+    pub ref_after_port: usize,
     pub first: Option<FrameNote>,
     pub worst: Vec<FrameNote>,
     pub total: LabelDiff,
@@ -1397,6 +1399,13 @@ impl Report {
             t.extra,
             self.reordered
         );
+        if self.ref_after_port > 0 {
+            let _ = writeln!(
+                s,
+                "port log ended early: {} reference frames after its last frame",
+                self.ref_after_port
+            );
+        }
         if t.why.iter().any(|&x| x > 0) {
             let _ = writeln!(s, "changed by: {}", why_str(&t.why));
         }
@@ -1525,6 +1534,7 @@ pub fn diff_all(r: &[Frame], p: &[Frame], mode: KeyMode, o: &Opts, worst: usize)
     let index: HashMap<(i32, u32, i64), usize> =
         pk.iter().enumerate().map(|(i, k)| (*k, i)).collect();
     let mut used = vec![false; p.len()];
+    let mut last_matched = None;
     for (i, k) in rk.iter().enumerate() {
         let slack = mode == KeyMode::Scene && k.0 == 1 && k.1 == 1 && k.2 <= 120;
         let cands: Vec<i64> = if slack { vec![0, -1, 1] } else { vec![0] };
@@ -1545,6 +1555,7 @@ pub fn diff_all(r: &[Frame], p: &[Frame], mode: KeyMode, o: &Opts, worst: usize)
         match best {
             Some((j, d)) => {
                 used[j] = true;
+                last_matched = Some(i);
                 let key = match mode {
                     KeyMode::Scene => format!("scene {} visit {} frame {}", k.0, k.1, k.2),
                     _ => format!("present {}", k.2),
@@ -1558,6 +1569,10 @@ pub fn diff_all(r: &[Frame], p: &[Frame], mode: KeyMode, o: &Opts, worst: usize)
         rep.note_sprites(f, true, o);
     }
     rep.port_only = used.iter().filter(|u| !**u).count();
+    // Unmatched reference frames are only a shortfall once the port log has run out.
+    if used.last().is_none_or(|u| *u) {
+        rep.ref_after_port = r.len() - last_matched.map_or(0, |i| i + 1);
+    }
     rep
 }
 
@@ -1665,6 +1680,7 @@ impl<I: Iterator<Item = Frame>> DemoMerge<I> {
     pub fn finish(mut self) -> Report {
         while self.next_ref().is_some() {
             self.report.ref_only += 1;
+            self.report.ref_after_port += 1;
         }
         self.report
     }
@@ -2152,6 +2168,34 @@ mod tests {
         assert_eq!(d.score(), 0);
     }
 
+    #[test]
+    fn short_port_log_reported() {
+        let st = "T etama.anm#0 256 256\nS blend=alpha atest=ge4 ztest=always zwrite=0 c=tex*col a=tex*col\nV 0 0 640 480\n";
+        let text = |n: i64| {
+            (1..=n)
+                .map(|k| format!("F {k} 2 {k} {k} -1 0 0 2\n{st}R 100 100 116 116 0 0 0.0625 0.0625 ffffffff\n"))
+                .collect::<String>()
+        };
+        let (r, p) = (parse_str(&text(10)), parse_str(&text(4)));
+        let o = Opts { playfield: false };
+        for mode in [KeyMode::Scene, KeyMode::Present] {
+            let rep = diff_all(&r, &p, mode, &o, 0);
+            assert_eq!((rep.identical, rep.ref_after_port), (4, 6), "{mode:?}");
+            assert!(rep.summary().contains("port log ended early: 6"));
+            assert_eq!(diff_all(&r, &r, mode, &o, 0).ref_after_port, 0);
+        }
+        let mut m = DemoMerge::new(r.clone().into_iter(), o, 0);
+        m.key = KeyMode::Present;
+        p.iter().for_each(|f| m.feed(f));
+        assert_eq!(m.finish().ref_after_port, 6);
+        let mut m = DemoMerge::new(r.clone().into_iter(), o, 0);
+        m.key = KeyMode::Present;
+        r.iter().for_each(|f| m.feed(f));
+        let rep = m.finish();
+        assert_eq!(rep.ref_after_port, 0);
+        assert!(!rep.summary().contains("ended early"));
+    }
+
     // Non-same quads grouped by (texture, rect, kind, fields) with frames, quads and present ranges.
     #[test]
     fn difference_groups() {
@@ -2225,6 +2269,7 @@ mod tests {
         let p = parse_str(&text);
         let rep = diff_all(&r, &p, KeyMode::Scene, &Opts { playfield: false }, 4);
         eprintln!("{name}:\n{}", rep.summary());
+        assert_eq!(rep.ref_after_port, 0, "{name}: port log ended early");
         assert!(
             rep.identical >= min.0 && rep.match_pct() >= min.1,
             "{name} regressed: {} identical frames, {:.2}% same quads (min {min:?})",
@@ -2270,6 +2315,7 @@ mod tests {
             .unwrap();
             let rep = m.finish();
             eprintln!("demo {n}:\n{}", rep.summary());
+            assert_eq!(rep.ref_after_port, 0, "demo {n}: port log ended early");
             assert!(
                 rep.match_pct() >= DEMO[n as usize],
                 "demo {n} regressed: {:.2}% same quads (min {})",

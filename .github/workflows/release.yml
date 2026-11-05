@@ -66,6 +66,33 @@ jobs:
           path: target/dist/th08-*-windows-exe.exe
           if-no-files-found: error
 
+  # The per-user installer: th08.exe cross-built with MinGW (static, like the portable exe), packed by makensis.
+  windows-installer:
+    needs: version
+    env:
+      TH08_RELEASE_TAG: ${{ inputs.publish && needs.version.outputs.tag || '' }}
+    # A fixed image keeps the apt versions below installable.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            nsis=3.09-4ubuntu1 gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          makensis -VERSION
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build installer
+        run: cargo xtask dist --target windows-nsis --assets none
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: th08-windows-installer
+          path: target/dist/th08-*-windows-nsis.exe
+          if-no-files-found: error
+
   linux:
     needs: version
     env:
@@ -91,12 +118,15 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           "$HOME/.cargo/bin/rustup" toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # With TH08_RELEASE_TAG the AppImage carries its update information and gets a .zsync beside it.
       - name: Build AppImage
         run: cargo xtask dist --target linux-appimage --assets none
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: th08-linux
-          path: target/dist/th08-*-linux-appimage.AppImage
+          path: |
+            target/dist/th08-*-linux-appimage.AppImage
+            target/dist/th08-*-linux-appimage.AppImage.zsync
           if-no-files-found: error
 
   android:
@@ -210,7 +240,7 @@ jobs:
 
   release:
     if: inputs.publish
-    needs: [version, windows, linux, android-sign]
+    needs: [version, windows, windows-installer, linux, android-sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -230,9 +260,10 @@ jobs:
         run: |
           cd dist
           shopt -s nullglob
-          pkgs=(*-windows-exe.exe *-linux-appimage.AppImage *-android-apk.apk)
-          if [[ ${#pkgs[@]} != 3 || $(ls | wc -l) != 3 ]]; then
-            echo "::error::expected exactly the three packages, got: $(ls)"
+          pkgs=(*-windows-exe.exe *-windows-nsis.exe *-linux-appimage.AppImage *-linux-appimage.AppImage.zsync
+            *-android-apk.apk)
+          if [[ ${#pkgs[@]} != 5 || $(ls | wc -l) != 5 ]]; then
+            echo "::error::expected exactly the five release files, got: $(ls)"
             exit 1
           fi
           sha256sum "${pkgs[@]}" > SHA256SUMS

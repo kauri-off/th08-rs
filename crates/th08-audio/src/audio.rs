@@ -295,6 +295,10 @@ pub struct Audio {
     // A stream was opened once (`is_started`; `resume` reopens only then, so the web still waits for its gesture).
     started: bool,
     stats: Arc<Stats>,
+    // Port: a lost stream is reopened at most this often while playing (route change: headphones, Bluetooth).
+    #[cfg(not(target_arch = "wasm32"))]
+    retry_at: Option<std::time::Instant>,
+    open_stream: OpenStream,
     // MIDI object: the archive's .mid members by lower-case basename, the 32 file slots +0x98 and the open
     // slot +0x10 (−1 none).
     midi_files: HashMap<String, Arc<[u8]>>,
@@ -323,6 +327,9 @@ impl Audio {
             lost: Arc::new(AtomicBool::new(false)),
             started: false,
             stats: Arc::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            retry_at: None,
+            open_stream,
             midi_files: HashMap::new(),
             midi_slots: Default::default(),
             midi_open: -1,
@@ -364,6 +371,8 @@ impl Audio {
     }
 
     pub fn exec(&mut self, c: SoundCmd) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.reopen_if_lost(std::time::Instant::now());
         match c {
             SoundCmd::Se { id, pan, vol } => self.play_se(id, pan, vol),
             SoundCmd::Wav(c) => match c {
@@ -493,9 +502,25 @@ impl Audio {
         }
     }
 
+    // Port: AAudio / ALSA drop the stream on a route change; while not paused a new one is opened on the next command.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reopen_if_lost(&mut self, now: std::time::Instant) {
+        if !self.started
+            || self.paused
+            || (self.stream.is_some() && !self.lost.load(Ordering::Relaxed))
+            || self.retry_at.is_some_and(|t| now < t)
+        {
+            return;
+        }
+        log::warn!("audio: stream lost while playing; reopening");
+        self.retry_at = Some(now + std::time::Duration::from_secs(1));
+        self.stream = None;
+        self.open();
+    }
+
     fn open(&mut self) {
         self.lost.store(false, Ordering::Relaxed);
-        match open_stream(
+        match (self.open_stream)(
             self.mixer.clone(),
             self.lost.clone(),
             self.stats.clone(),
@@ -755,6 +780,9 @@ impl Stats {
     }
 }
 
+type OpenStream =
+    fn(Arc<Mutex<Mixer>>, Arc<AtomicBool>, Arc<Stats>, Option<u32>) -> Result<cpal::Stream>;
+
 // Android: with cpal's `realtime` feature the AAudio stream asks for the LowLatency performance mode (fast mixer /
 // MMAP path, buffer ≈ 2 bursts, tuned up by cpal on underruns) instead of the default deep-buffer path.
 #[expect(
@@ -985,6 +1013,42 @@ mod tests {
         fn stopped(&self) -> bool {
             self.a.mixer.lock().unwrap().stopped
         }
+    }
+
+    // A lost stream is reopened while playing, at most once per second; never while paused or before the first start.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn lost_stream_reopens_while_playing() {
+        use std::time::{Duration, Instant};
+        thread_local!(static OPENS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
+        fn fake(
+            _: Arc<Mutex<Mixer>>,
+            _: Arc<AtomicBool>,
+            _: Arc<Stats>,
+            _: Option<u32>,
+        ) -> Result<cpal::Stream> {
+            OPENS.with(|n| n.set(n.get() + 1));
+            anyhow::bail!("no device")
+        }
+        let opens = || OPENS.with(std::cell::Cell::get);
+        let mut a = Audio::new(Source::new(NoFiles), AudioConfig::default());
+        a.open_stream = fake;
+        let t = Instant::now();
+        a.lost.store(true, Ordering::Relaxed);
+        a.reopen_if_lost(t);
+        assert_eq!(opens(), 0);
+        a.started = true;
+        a.paused = true;
+        a.reopen_if_lost(t);
+        assert_eq!(opens(), 0);
+        a.paused = false;
+        a.reopen_if_lost(t);
+        assert_eq!(opens(), 1);
+        assert!(!a.lost.load(Ordering::Relaxed));
+        a.reopen_if_lost(t + Duration::from_millis(500));
+        assert_eq!(opens(), 1);
+        a.reopen_if_lost(t + Duration::from_secs(1));
+        assert_eq!(opens(), 2);
     }
 
     // A configured SoundFont that is missing or does not parse leaves MIDI not ready; a valid one makes it ready.

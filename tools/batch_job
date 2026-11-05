@@ -1,0 +1,43 @@
+#!/bin/bash
+# usage: tools/batch_job NAME — the replay batch (ref500 + ref_b2) as a q job (kind batch, KIND= overrides); prints the ID.
+#        tools/batch_job run NAME — the job: builds session (release) once, runs tools/batch_run on both sets with that
+# binary into target/batch_NAME/, prints the regressed replays; exit 1 on any regression or missing replay.
+# Env: J, TH08_BATCH_LIMIT (passed to tools/batch_run), KIND.
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SETS="ref500 ref_b2"
+
+if [[ ${1:-} != run ]]; then
+  n=${1:-}; [[ -n $n ]] || { sed -n 2,5p "$0"; exit 2; }
+  source "$ROOT/re/tools/localenv.sh"
+  # From a worktree, the main checkout's queue.
+  main=$ROOT
+  if [[ -f $ROOT/.git ]]; then
+    g=$(sed -n 's/^gitdir: //p' "$ROOT/.git"); [[ $g == */.git/worktrees/* ]] && main=${g%%/.git/worktrees/*}
+  fi
+  prog=()
+  for s in $SETS; do
+    x=$(grep -l '^rpy_result: accepted' "${TH08_EXT_REPLAYS:-/nonexistent}/$s"/*/meta.txt 2> /dev/null | wc -l)
+    [[ -n ${TH08_BATCH_LIMIT:-} ]] && (( x > TH08_BATCH_LIMIT )) && x=$TH08_BATCH_LIMIT
+    prog+=(--progress "target/batch_$n/$s/rep/*.txt|$x")
+  done
+  exec "$main/tools/q" submit --kind "${KIND:-batch}" --label "b-$n" -C "$ROOT" "${prog[@]}" -- tools/batch_job run "$n"
+fi
+
+n=${2:-}; [[ -n $n ]] || { sed -n 2,5p "$0"; exit 2; }
+cd "$ROOT" || exit 2
+T=${CARGO_TARGET_DIR:-$ROOT/target}
+O=$ROOT/target/batch_$n
+mkdir -p "$ROOT/target/queue"; touch "$ROOT/target/queue/batch.running"; trap 'rm -f "$ROOT/target/queue/batch.running"' EXIT
+cargo build --release --locked -p th08-tools --bin session || { echo "FAIL: build"; exit 2; }
+rm -rf "$O"; mkdir -p "$O"
+cp "$T/release/session" "$O/session.bin" || exit 2
+export SESSION_BIN=$O/session.bin
+rc=0 failed=
+for s in $SETS; do
+  echo "== $s"
+  tools/batch_run "$s" "$O/$s" || { rc=1; failed+=" $s"; }
+done
+if [[ -n $failed ]]; then echo "== batch $n: FAIL:$failed"; else echo "== batch $n: PASS"; fi
+for s in $SETS; do [[ -s $O/$s/regressions.txt ]] && cut -d' ' -f1 "$O/$s/regressions.txt" | sed "s/^/regressed $s: /"; done
+exit $rc

@@ -51,6 +51,8 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     private var exportDoc: (String) -> Unit = {}
     private var importDoc: () -> Unit = {}
     private var importCfg = false
+    private val lastErrorFile get() = File(filesDir, "last_error.txt")
+    private var lastError by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -70,6 +72,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 LifecycleResumeEffect(Unit) {
                     data = checkData()
                     saves = saves.copy(gameRunning = gameRunning())
+                    lastError = runCatching { lastErrorFile.readText() }.getOrNull()?.takeIf { it.isNotBlank() }
                     onPauseOrDispose { }
                 }
                 val exp = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -108,10 +111,10 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 pickFile = { r -> picking = r; pick.launch(arrayOf("*/*")) }
                 // The `language` row picks the texts and switches the screen live; the game reads the same value from
                 // port.cfg (auto: its own Locale.getDefault(), i18n.rs `os_locale`).
-                val lang = resolveLang(rows.firstOrNull { it.e.key == "language" }?.value ?: "auto")
+                val lang = currentLang()
                 val res = remember(lang) { localized(this, lang) }
                 CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs,
-                    LocalSaves provides saves, LocalImport provides importer.state) {
+                    LocalSaves provides saves, LocalImport provides importer.state, LocalLastError provides lastError) {
                     LauncherScreen(schema.groups, rows, data, this)
                 }
             }
@@ -320,7 +323,25 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
         children.forEach { copyAssetDir("$path/$it", File(out, it)) }
     }
 
+    override fun shareError() {
+        val text = lastError ?: return
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, localized(this@LauncherActivity, currentLang()).getString(R.string.last_failed_subject))
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        startActivity(Intent.createChooser(send, null))
+    }
+
+    override fun dismissError() {
+        lastErrorFile.delete()
+        lastError = null
+    }
+
+    private fun currentLang() = resolveLang(rows.firstOrNull { it.e.key == "language" }?.value ?: "auto")
+
     override fun play() {
+        dismissError()
         val once = rows
             .filter { !it.e.persist && it.value != it.initial && it.value.isNotEmpty() && it.ok() }
             .map { it.e.key to it.value }

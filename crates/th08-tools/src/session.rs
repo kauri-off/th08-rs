@@ -179,6 +179,8 @@ pub type Column = (&'static str, i64, i64);
 #[derive(Default, Debug)]
 pub struct Comparison {
     pub rows: usize,
+    pub recorded: usize,
+    pub port: usize,
     pub compared: usize,
     pub skipped_loading: usize,
     pub leading: usize,
@@ -193,6 +195,8 @@ pub struct Comparison {
 pub fn compare(rec: &[Row], port: &[Row]) -> Comparison {
     let mut c = Comparison {
         rows: rec.len().min(port.len()),
+        recorded: rec.len(),
+        port: port.len(),
         per_column: vec![0; 36],
         ..Default::default()
     };
@@ -246,6 +250,17 @@ pub fn compare(rec: &[Row], port: &[Row]) -> Comparison {
     c
 }
 
+impl Comparison {
+    // A port trace one row short still counts as complete.
+    pub fn ended_early(&self) -> bool {
+        self.port + 1 < self.recorded
+    }
+
+    pub fn identical(&self) -> bool {
+        self.first.is_none() && !self.ended_early()
+    }
+}
+
 impl std::fmt::Display for Comparison {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
@@ -255,6 +270,11 @@ impl std::fmt::Display for Comparison {
         )?;
         writeln!(f, "leading identical rows: {}", self.leading)?;
         match &self.first {
+            None if self.ended_early() => writeln!(
+                f,
+                "port trace ended at frame {}, recording has {}",
+                self.port, self.recorded
+            )?,
             None => writeln!(f, "no differing row")?,
             Some((row, cols)) => {
                 write!(f, "first differing row {row} (menu frame {row}):")?;
@@ -567,6 +587,28 @@ mod tests {
         ("fullrun_noclip", 124_707),
     ];
 
+    #[test]
+    fn short_port_trace_fails() {
+        let row = |scene: i64| {
+            let mut r = [0i64; 36];
+            r[26] = scene;
+            r
+        };
+        let rec: Vec<Row> = (0..10).map(|_| row(1)).collect();
+        let c = compare(&rec, &rec[..4]);
+        assert!(c.first.is_none() && c.ended_early() && !c.identical());
+        let text = c.to_string();
+        assert!(text.contains("port trace ended at frame 4, recording has 10"));
+        assert!(!text.contains("no differing row"));
+        let c = compare(&rec, &rec);
+        assert!(c.identical());
+        assert!(c.to_string().contains("no differing row"));
+        assert!(compare(&rec, &rec[..9]).identical());
+        let mut longer = rec.clone();
+        longer.push(row(1));
+        assert!(compare(&rec, &longer).identical());
+    }
+
     // meta.txt `recorded:` → the session's fixed `localtime` (dated replay saves draw the same any day).
     #[test]
     fn recorded_local_time() {
@@ -787,14 +829,10 @@ mod tests {
             port.len(),
             t0.elapsed().as_secs_f64()
         );
-        assert!(
-            port.len() + 1 >= rec.len(),
-            "the port stopped at row {}",
-            port.len()
-        );
+        let c = compare(&rec, &port);
+        assert!(!c.ended_early(), "{c}");
         // Past the leading rows the recorded input drives a desynced game, so how far it gets is luck.
         assert!(ps.len() >= 5, "the port reached only stages {ps:?}");
-        let c = compare(&rec, &port);
         let synced_calc = port[c.leading.saturating_sub(1)][24];
         for &(calc, n) in hits.iter().filter(|h| h.0 <= synced_calc) {
             let got = port_hits.iter().find(|h| h.0 == calc).map(|h| h.1);

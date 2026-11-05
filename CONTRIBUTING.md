@@ -40,6 +40,12 @@ agents alike. Parity rules for logic and drawing: [docs/PARITY_POLICY.md](docs/P
 - Heavy runs (arch_check, tests with game data, the Android emulator, replay batches) go through the job queue
   `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…`, then `tools/q wait ID` until it ends.
 - Windowed binaries in automated runs go through `tools/offscreen <cmd>`.
+- Replay batch (port vs the original on third-party replays): `tools/batch_job NAME` queues a `batch` job that builds
+  `session` (release) once and runs `tools/batch_run` on the replay sets `ref500` and `ref_b2` under
+  `$TH08_EXT_REPLAYS` (from `packaging/local/local.env`, like the game dir `TH08_GAME_SRC`). A replay passes when its
+  whole trace matches the recording; a port trace that ends early fails. The job prints the replays that left
+  `tools/batch/<set>.identical` and fails on any of them, or when fewer replays ran than expected.
+  `TH08_BATCH_LIMIT=N` runs only the first N replays of each set; outputs go to `target/batch_NAME/`.
 
 CI (`.github/workflows/check.yml`, on every push to `master` and every pull request) runs `cargo fmt --check`,
 clippy with `-D warnings`, `cargo test --workspace`, the wasm and aarch64 Android `cargo check` and
@@ -56,7 +62,10 @@ replays come from public Touhou replay sites. Neither is committed.
 ## Packaging and versions
 
 `cargo xtask dist --target <linux-appimage|windows-exe|windows-nsis|android-apk|web>` builds a package into
-`target/dist/`; `cargo xtask dist --help` lists the options.
+`target/dist/`; `cargo xtask dist --help` lists the options. `windows-nsis` needs `makensis` on PATH or docker.
+With `TH08_RELEASE_TAG` set (the release workflow) and no game data, the AppImage embeds the update information
+`gh-releases-zsync|kauri-off|th08-rs|latest|th08-*-linux-appimage.AppImage.zsync` and gets a `.zsync` beside it,
+so AppImageUpdate and AppImage managers can update it from the latest release; local builds carry none.
 
 Versions come from git; nothing is edited by hand:
 
@@ -105,8 +114,10 @@ re-signs it with `apksigner` and uploads it as artifact `th08-android`. With `pu
 run. Without `publish` and without the secrets (forks), only the artifact `presign-android` is left: an APK signed
 with a throwaway key, which can never update the published app.
 
-With `publish`, the release gets the three packages, a `SHA256SUMS` file over them and a build provenance attestation
-for each (`gh attestation verify th08-<version>-android-apk.apk -R kauri-off/th08-rs`). All actions in the workflows
+With `publish`, the release gets five files: the Windows installer (`windows-nsis`: per-user, no admin; its
+th08.exe is cross-built with MinGW on Linux and packed by makensis from apt) and the portable exe (`windows-exe`,
+MSVC), the AppImage and its `.zsync`, and the APK; plus a `SHA256SUMS` file over them and a build provenance
+attestation for each (`gh attestation verify th08-<version>-android-apk.apk -R kauri-off/th08-rs`). All actions in the workflows
 are pinned by commit SHA, the version in a trailing comment; `pages.yml` checks the downloaded wasm-bindgen against
 a pinned sha256, so a wasm-bindgen bump in `Cargo.lock` also updates `PIN_VERSION` and `PIN_SHA256` there.
 

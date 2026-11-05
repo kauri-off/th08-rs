@@ -27,6 +27,8 @@ struct Running {
     // The touch overlay while a gamepad is in use; back on the next touch.
     hidden_overlay: Option<Box<dyn th08_render::gfx::Overlay>>,
     replay: ReplayTransport,
+    // A save failure toast and when it goes.
+    toast: Option<(String, Instant)>,
 }
 
 // Replay transport state of a running game (transport.rs); inert while no replay plays.
@@ -164,6 +166,7 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         settings: s,
         hidden_overlay: None,
         replay: ReplayTransport::default(),
+        toast: None,
     }))
 }
 
@@ -250,7 +253,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if self.launcher {
                     let view = {
                         let m = crate::launcher::Model::new(&self.setup, self.folder());
-                        if !self.setup.launcher && m.can_play() {
+                        if !self.setup.launcher && m.can_play() && m.last_error().is_none() {
                             View::Waiting
                         } else {
                             View::Settings
@@ -269,6 +272,10 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        if winit::platform::android::activity::destroy_requested() {
+            return self.destroyed(el);
+        }
         #[cfg(target_os = "android")]
         for _ in 0..crate::platform::back::take() {
             log::info!("back: OnBackInvokedCallback");
@@ -440,6 +447,20 @@ impl App {
         }
         self.window().request_redraw();
         Box::new(Ui { gfx, screen })
+    }
+
+    // Android `onDestroy` (winit does not forward it) waits for `android_main` to return: save if the suspend did
+    // not, then leave the event loop.
+    #[cfg(target_os = "android")]
+    fn destroyed(&mut self, el: &ActiveEventLoop) {
+        log::info!("lifecycle: destroyed");
+        if !self.suspended
+            && let Shell::Running(r) | Shell::PortMenu(r, _) = &mut self.shell
+        {
+            let n = r.ctx.save_from_clone().len();
+            log::info!("destroy: score.dat saved from a World clone ({n} bytes)");
+        }
+        el.exit();
     }
 
     // A second `Resumed`: a new surface for the native window on the same device. In a stage the port
@@ -703,6 +724,9 @@ impl App {
     // runs only log it and exit.
     fn failed(&mut self, el: &ActiveEventLoop, msg: String, gfx: Option<Box<Gfx>>) {
         let tool = self.setup.is_tool_run();
+        if !tool {
+            crate::crashlog::report("start-up failure", &msg, None);
+        }
         // Android shows no egui screen: the process ends and the task returns to the Compose launcher.
         let gfx = match gfx {
             Some(g) if !tool && cfg!(not(target_os = "android")) => g,
@@ -1023,12 +1047,9 @@ fn in_stage(r: &Running) -> bool {
     r.ctx.w.game.scene == th08_core::types::SceneId::Game
 }
 
-// Desktop / web `pause_unfocused`: focus loss in a stage opens the port menu (Android has its resume path).
+// `pause_unfocused`: focus loss in a stage opens the port menu (Android: notification shade, split screen, dialogs).
 fn pauses_unfocused(r: &Running) -> bool {
-    cfg!(not(target_os = "android"))
-        && r.settings.pause_unfocused
-        && !r.settings.is_tool_run()
-        && in_stage(r)
+    r.settings.pause_unfocused && !r.settings.is_tool_run() && in_stage(r)
 }
 
 // The Android Back button (logical BrowserBack / GoBack, physical BrowserBack); on Android Escape counts too. With
@@ -1277,6 +1298,17 @@ fn update_hud(r: &mut Running, window: &Window, now: Instant) {
     let shown = r.replay.playing && (t.paused || r.replay.label_until.is_some_and(|u| now < u));
     let label = shown.then(|| t.label(crate::i18n::resolve(r.settings.language)));
     let strip = r.replay.strip;
+    let lang = crate::i18n::resolve(r.settings.language);
+    if r.toast.as_ref().is_none_or(|t| now >= t.1)
+        && let Some((name, err)) = crate::crashlog::take_save_error()
+    {
+        let text = crate::i18n::ui_fmt(lang, "save_failed", &[("name", &name), ("err", &err)]);
+        r.toast = Some((text, now + TOAST));
+    }
+    if r.toast.as_ref().is_some_and(|t| now >= t.1) {
+        r.toast = None;
+    }
+    let toast = r.toast.as_ref().map(|t| t.0.clone());
     if let Some(o) = gfx(&mut r.ctx).hud.as_mut().and_then(|o| {
         o.as_any_mut()
             .downcast_mut::<crate::platform::overlay::TransportOverlay>()
@@ -1285,11 +1317,13 @@ fn update_hud(r: &mut Running, window: &Window, now: Instant) {
             label,
             strip,
             paused: t.paused,
+            toast,
         };
     }
 }
 
 const LABEL: std::time::Duration = std::time::Duration::from_millis(1500);
+const TOAST: std::time::Duration = std::time::Duration::from_secs(5);
 
 // Hands the touch state to the overlay the renderer draws after the blit.
 fn update_overlay(ctx: &mut Ctx) {
@@ -1396,6 +1430,11 @@ pub fn run_android(
     use winit::platform::android::EventLoopBuilderExtAndroid;
     let Some(source) = source.or_else(|| s.game_dir.clone().map(crate::sources::native)) else {
         log::error!("no game folder: the game cannot start");
+        crate::crashlog::report(
+            "start-up failure",
+            "no game folder: import the game files",
+            None,
+        );
         return;
     };
     crate::platform::safearea::set_app(&android);
@@ -1498,6 +1537,7 @@ mod tests {
             settings: s,
             hidden_overlay: None,
             replay: ReplayTransport::default(),
+            toast: None,
         })
     }
 

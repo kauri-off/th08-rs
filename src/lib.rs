@@ -1,6 +1,7 @@
 //! th08 app: game window, launcher, settings, platform services, data sources, input and pacer; wasm / Android entries.
 
 pub mod app;
+pub mod crashlog;
 #[cfg(target_os = "android")]
 pub mod gameimport;
 pub mod i18n;
@@ -24,6 +25,13 @@ pub mod transport;
 pub fn start(files: js_sys::Array) {
     use wasm_bindgen::JsCast;
     console_error_panic_hook::set_once();
+    std::panic::set_hook({
+        let prev = std::panic::take_hook();
+        Box::new(move |info| {
+            crashlog::report("panic", &info.to_string(), None);
+            prev(info);
+        })
+    });
     let _ = console_log::init_with_level(log::Level::Info);
     let files = files
         .iter()
@@ -48,13 +56,25 @@ pub fn start(files: js_sys::Array) {
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
-            .with_tag("th08"),
+    crashlog::Tee::install(
+        Box::new(android_logger::AndroidLogger::new(
+            android_logger::Config::default()
+                .with_max_level(log::LevelFilter::Info)
+                .with_tag("th08"),
+        )),
+        log::LevelFilter::Info,
     );
-    std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
     let data = app.internal_data_path();
+    crashlog::set_dir(data.as_deref());
+    std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
+    crashlog::install_panic_hook();
+    // A second GameActivity created before the first was destroyed (same process): winit allows one event loop per
+    // process, so this one finishes and the first exits the process on its Destroy.
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        log::warn!("lifecycle: second GameActivity in this process; it closes");
+        return;
+    }
     let imported = data.as_ref().map(|d| d.join("game"));
     let dirs = settings::PlatformDirs {
         config: data.clone(),

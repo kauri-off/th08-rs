@@ -1,0 +1,60 @@
+#!/bin/bash
+# usage: tools/batch_run SET OUTDIR — runs SESSION_BIN on every accepted recording in $TH08_EXT_REPLAYS/SET and compares
+# with tools/batch/SET.identical; exit 1 on any regression or when fewer replays ran than expected.
+# Env: SESSION_BIN (required), J (default 8), TH08_BATCH_LIMIT=N (first N recordings only), TH08_DIR / TH08_GAME_SRC.
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+source "$ROOT/re/tools/localenv.sh"
+set=${1:-} out=${2:-}
+[[ -n $set && -n $out ]] || { sed -n 2,4p "$0"; exit 2; }
+[[ -x ${SESSION_BIN:-} ]] || { echo "SESSION_BIN is not an executable: ${SESSION_BIN:-unset}"; exit 2; }
+[[ -n ${TH08_EXT_REPLAYS:-} ]] || { echo "TH08_EXT_REPLAYS unset (packaging/local/local.env)"; exit 2; }
+E=$TH08_EXT_REPLAYS/$set BASE=$ROOT/tools/batch/$set.identical
+[[ -d $E ]] || { echo "no replay set $E"; exit 2; }
+[[ -f $BASE ]] || { echo "no baseline $BASE"; exit 2; }
+[[ -n ${TH08_DIR:-${TH08_GAME_SRC:-}} ]] || { echo "no game dir: set TH08_DIR or TH08_GAME_SRC"; exit 2; }
+LIMIT=${TH08_BATCH_LIMIT:-} J=${J:-8}
+export TH08_DIR="${TH08_DIR:-$TH08_GAME_SRC/}"
+# Debug and config switches of the caller must not reach the replays.
+for v in $(compgen -e); do [[ $v == TH08_* && $v != TH08_DIR ]] && unset "$v"; done
+unset CARGO_TARGET_DIR
+
+O=$(realpath -m "$out")
+rm -rf "$O"; mkdir -p "$O/rep" "$O/err" "$O/out" "$O/cfg"
+for d in "$E"/*/; do
+  grep -q '^rpy_result: accepted' "$d/meta.txt" 2> /dev/null && basename "$d"
+done | LC_ALL=C sort | { if [[ -n $LIMIT ]]; then head -n "$LIMIT"; else cat; fi; } > "$O/expected.txt"
+expected=$(wc -l < "$O/expected.txt")
+echo "set $set: $expected replays, J=$J, game $TH08_DIR"
+
+export SESSION_BIN E O ROOT
+xargs -P "$J" -I{} bash -c 'n=$1; cd "$ROOT" && XDG_CONFIG_HOME=$O/cfg timeout 3600 nice -n 10 "$SESSION_BIN" "$E/$n" \
+  --out "$O/out/$n" --no-drawlog > "$O/rep/$n.txt" 2> "$O/err/$n.txt"; rm -rf "$O/out/$n"' _ {} < "$O/expected.txt"
+
+while read -r n; do
+  f=$O/rep/$n.txt
+  if ! grep -q 'rows (from the first main-menu row)' "$f" 2> /dev/null; then echo "$n no report (crash or timeout, see err/$n.txt)"
+  elif grep -q '^no differing row' "$f"; then echo "$n identical"
+  elif l=$(grep -m1 '^port trace ended' "$f"); then echo "$n $l"
+  else echo "$n $(grep -m1 'first differing' "$f" | sed 's/.*): //;s/  (rec.*//')"; fi
+done < "$O/expected.txt" > "$O/summary.txt"
+
+ran=$(grep -vc ' no report ' "$O/summary.txt")
+identical=$(grep -c ' identical$' "$O/summary.txt")
+echo "identical: $identical, ran: $ran of $expected"
+LC_ALL=C sort "$O/expected.txt" > "$O/expected.sorted"
+grep -v ' identical$' "$O/summary.txt" | LC_ALL=C sort > "$O/not_identical.txt"
+LC_ALL=C join "$BASE" "$O/not_identical.txt" > "$O/regressions.txt"
+missing=
+[[ -z $LIMIT ]] && missing=$(LC_ALL=C comm -23 "$BASE" "$O/expected.sorted")
+new=$(grep ' identical$' "$O/summary.txt" | cut -d' ' -f1 | LC_ALL=C sort | LC_ALL=C comm -23 - "$BASE" | wc -l)
+(( new > 0 )) && echo "newly identical (not in $set.identical): $new"
+rc=0
+if [[ -s $O/regressions.txt ]]; then
+  echo "regressions vs $set.identical: $(wc -l < "$O/regressions.txt")"; sed 's/^/  /' "$O/regressions.txt"; rc=1
+else
+  echo "regressions vs $set.identical: none"
+fi
+[[ -n $missing ]] && { echo "baseline replays without an accepted recording:"; sed 's/^/  /' <<< "$missing"; rc=1; }
+(( ran < expected )) && { echo "FAIL: only $ran of $expected replays ran"; rc=1; }
+exit $rc

@@ -132,7 +132,12 @@ interface LauncherActions {
     fun importGame() {}
     fun cancelImport() {}
     fun removeGame() {}
+    fun shareError() {}
+    fun dismissError() {}
 }
+
+// The previous run's last_error.txt (written by the game process), null when there is none.
+val LocalLastError = compositionLocalOf<String?> { null }
 
 // Save export / import state (Saves.kt).
 val LocalSaves = compositionLocalOf { SaveState() }
@@ -197,6 +202,7 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
                         }
                         ResetMenu(act)
                     }
+                    LocalLastError.current?.let { Block { LastErrorRow(it, act) } }
                     Block { StatusRow(data, act, showInfo) }
                     PlayButton(canPlay, act)
                 }
@@ -240,7 +246,10 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
         ) { pad ->
             Box(Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.TopCenter) {
                 SettingsList(groups, rows, act, showInfo, PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    status = { StatusRow(data, act, showInfo) })
+                    status = {
+                        LocalLastError.current?.let { LastErrorRow(it, act) }
+                        StatusRow(data, act, showInfo)
+                    })
             }
         }
     }
@@ -375,6 +384,34 @@ internal fun ShellRow(
         if (below != null) {
             Spacer(Modifier.size(8.dp))
             below()
+        }
+    }
+}
+
+// The failure line of a report: the block after the header, without its "panic:" / "start-up failure:" line.
+private fun headline(report: String): String {
+    val body = report.substringAfter("\n\n", report).substringAfter(":\n")
+    return listOf("\nbacktrace:\n", "\nlast warnings:\n").map { body.indexOf(it) }.filter { it >= 0 }
+        .minOrNull().let { if (it == null) body else body.substring(0, it) }.trim()
+}
+
+@Composable
+private fun LastErrorRow(report: String, act: LauncherActions) {
+    Column(
+        Modifier.fillMaxWidth().clip(ROW).background(MaterialTheme.colorScheme.errorContainer)
+            .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.onErrorContainer)
+            Spacer(Modifier.width(16.dp))
+            Text(str(R.string.last_failed), style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onErrorContainer)
+        }
+        Text(headline(report), style = MaterialTheme.typography.bodyMedium, maxLines = 6,
+            color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(start = 40.dp, top = 4.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = act::shareError) { Text(str(R.string.last_failed_share)) }
+            TextButton(onClick = act::dismissError) { Text(str(R.string.last_failed_dismiss)) }
         }
     }
 }

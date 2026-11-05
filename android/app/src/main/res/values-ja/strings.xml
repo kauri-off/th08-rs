@@ -83,4 +83,8 @@
   <string name="saves_imported_backup">%d 個のファイルを読み込みました。以前のファイルはアプリ内のバックアップ zip にあります</string>
   <string name="saves_export_failed">書き出しに失敗しました: %s</string>
   <string name="saves_import_failed">読み込みに失敗しました。何も変更していません: %s</string>
+  <string name="last_failed">前回の実行はエラーで終了しました</string>
+  <string name="last_failed_share">レポートを共有</string>
+  <string name="last_failed_dismiss">閉じる</string>
+  <string name="last_failed_subject">th08 エラーレポート</string>
 </resources>

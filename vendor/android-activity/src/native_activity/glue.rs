@@ -637,6 +637,7 @@ impl WaitableNativeActivityState {
             AppCmd::Destroy => {
                 let mut guard = self.mutex.lock().unwrap();
                 guard.destroy_requested = true;
+                crate::set_destroy_requested();
             }
             _ => {}
         }

@@ -595,6 +595,14 @@ fn watch_loss(device: &wgpu::Device) -> Arc<AtomicBool> {
         log::warn!("device lost ({reason:?}): {msg}");
         flag.store(true, Ordering::Release);
     });
+    // wgpu's default handler panics; log instead, and rebuild the device after an out-of-memory error.
+    let flag = lost.clone();
+    device.on_uncaptured_error(Arc::new(move |e| {
+        log::error!("gpu error: {e}");
+        if matches!(e, wgpu::Error::OutOfMemory { .. }) {
+            flag.store(true, Ordering::Release);
+        }
+    }));
     lost
 }
 
