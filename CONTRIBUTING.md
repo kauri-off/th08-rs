@@ -86,19 +86,29 @@ profile of `libth08.so`, default `release`).
 The release workflow (`.github/workflows/release.yml`) runs by hand from the Actions tab on `master`
 (`gh workflow run release.yml -f publish=true`). With `publish` it tags `v<Cargo.toml version>` at that commit and
 creates the release; without it only builds the artifacts. To release, bump `version` in `Cargo.toml`, commit,
-push, then run the workflow; it refuses a version whose tag already points at another commit. Tags are not pushed
-by hand: a tag-triggered run could not reuse the build cache, which is kept per branch. It signs the APK with these
-repository secrets:
+push, then run the workflow; it refuses a version whose tag already points at another commit, and a version that
+already has a release (published assets are never replaced: bump the version, or delete the release by hand). Tags
+are not pushed by hand: a tag-triggered run could not reuse the build cache, which is kept per branch.
 
-- `TH08_ANDROID_KEYSTORE_B64`: the `.jks`, base64-encoded (`base64 -w0 release.jks`);
-- `TH08_ANDROID_STORE_PASSWORD`;
-- `TH08_ANDROID_KEY_ALIAS`;
-- `TH08_ANDROID_KEY_PASSWORD`.
+The APK is signed with the secrets of the GitHub environment `release` (Settings → Environments), not repository
+secrets. The environment must contain:
 
-The job decodes the keystore into `$RUNNER_TEMP`, writes a properties file next to it and deletes both at the end.
-Without the secrets (forks) it builds the debug channel with the throwaway key instead, as artifact
-`th08-android-debug` and file `th08-<version>-android-apk-debug.apk`. With `publish` the APK is attached to the
-release.
+- secret `TH08_ANDROID_KEYSTORE_B64`: the `.jks`, base64-encoded (`base64 -w0 release.jks`);
+- secret `TH08_ANDROID_STORE_PASSWORD`;
+- secret `TH08_ANDROID_KEY_ALIAS`;
+- secret `TH08_ANDROID_KEY_PASSWORD`;
+- deployment branches: `master` only (optionally a required reviewer).
+
+Only the `android-sign` job uses that environment. The `android` job builds the release channel with a key made for
+that run, so Gradle and the third-party actions never see the release key; `android-sign` downloads that APK,
+re-signs it with `apksigner` and uploads it as artifact `th08-android`. With `publish`, a missing secret fails the
+run. Without `publish` and without the secrets (forks), only the artifact `presign-android` is left: an APK signed
+with a throwaway key, which can never update the published app.
+
+With `publish`, the release gets the three packages, a `SHA256SUMS` file over them and a build provenance attestation
+for each (`gh attestation verify th08-<version>-android-apk.apk -R kauri-off/th08-rs`). All actions in the workflows
+are pinned by commit SHA, the version in a trailing comment; `pages.yml` checks the downloaded wasm-bindgen against
+a pinned sha256, so a wasm-bindgen bump in `Cargo.lock` also updates `PIN_VERSION` and `PIN_SHA256` there.
 
 ## Commits
 

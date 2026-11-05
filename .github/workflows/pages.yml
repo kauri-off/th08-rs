@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -18,29 +16,43 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The tarball is checked against a pinned sha256: a wasm-bindgen bump in Cargo.lock must update both values.
       - name: Install wasm-bindgen-cli matching Cargo.lock
+        env:
+          PIN_VERSION: 0.2.129
+          PIN_SHA256: 82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e
         run: |
           v=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/version = |"/,""); print}' Cargo.lock)
+          if [[ $v != "$PIN_VERSION" ]]; then
+            echo "::error::Cargo.lock has wasm-bindgen $v, pages.yml pins $PIN_VERSION: update PIN_VERSION and PIN_SHA256"
+            exit 1
+          fi
           d=wasm-bindgen-$v-x86_64-unknown-linux-musl
-          curl -sSfL https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$v/$d.tar.gz | tar xz
-          mkdir -p ~/.cargo/bin && mv $d/wasm-bindgen ~/.cargo/bin/
+          curl -sSfL -o "$RUNNER_TEMP/$d.tar.gz" "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$v/$d.tar.gz"
+          sha256sum -c <<< "$PIN_SHA256  $RUNNER_TEMP/$d.tar.gz"
+          tar xzf "$RUNNER_TEMP/$d.tar.gz"
+          mkdir -p ~/.cargo/bin && mv "$d/wasm-bindgen" ~/.cargo/bin/
       - name: Build
         run: cargo xtask dist --target web --assets none --out web/dist
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: web/dist
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

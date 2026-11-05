@@ -15,19 +15,22 @@ permissions:
   contents: read
 
 jobs:
-  # The release tag v<Cargo.toml version>; with publish, it must be new or already on this commit.
+  # The release tag v<Cargo.toml version>; with publish, it must be new or already on this commit, and no release may
+  # exist for it yet: published assets are never replaced.
   version:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.v.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - id: v
         name: Release tag
         env:
           PUBLISH: ${{ inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           want=$(sed -n '/^\[package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
           tag="v$want"
@@ -38,6 +41,10 @@ jobs:
               exit 1
             fi
           fi
+          if [[ $PUBLISH == true ]] && gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::release $tag already exists; bump the version in Cargo.toml (or delete the release by hand)"
+            exit 1
+          fi
 
   windows:
     needs: version
@@ -45,15 +52,17 @@ jobs:
       TH08_RELEASE_TAG: ${{ inputs.publish && needs.version.outputs.tag || '' }}
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # +crt-static comes from .cargo/config.toml; icon and version info from build.rs.
       - name: Build
         run: cargo xtask dist --target windows-exe --assets none
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: th08-windows
           path: target/dist/th08-*-windows-exe.exe
@@ -73,16 +82,18 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             ca-certificates curl git build-essential pkg-config libasound2-dev libudev-dev file zstd
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       # git refuses the container's checkout (other owner) without this; xtask reads the version from git describe.
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build AppImage
         run: cargo xtask dist --target linux-appimage --assets none
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: th08-linux
           path: target/dist/th08-*-linux-appimage.AppImage
@@ -94,22 +105,23 @@ jobs:
       TH08_RELEASE_TAG: ${{ inputs.publish && needs.version.outputs.tag || '' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
+          toolchain: stable
           targets: aarch64-linux-android
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-java@v4
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
         with:
           # The default also asks for the retired 'tools' package, which sdkmanager no longer has.
           packages: platform-tools
@@ -118,73 +130,128 @@ jobs:
           sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" > /dev/null
           echo "ANDROID_SDK=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
         with:
           gradle-version: '9.8.2'
-      # Release channel signed with the repository key; without the secrets (forks), the debug channel and its
-      # throwaway key, named -debug. Gradle reads the passwords from the properties file; nothing is echoed.
-      - name: Signing key
-        id: key
+      # Signed with a key made for this run only; android-sign re-signs it with the release key, so neither Gradle nor
+      # any action in this job sees the release secrets.
+      - name: Ephemeral signing key
+        run: |
+          umask 077
+          pw=$(openssl rand -hex 16)
+          keytool -genkeypair -keystore "$RUNNER_TEMP/presign.jks" -storepass "$pw" -keypass "$pw" -alias presign \
+            -keyalg RSA -keysize 2048 -validity 1 -dname "CN=th08 presign" > /dev/null
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=presign\nkeyPassword=%s\n' \
+            "$RUNNER_TEMP/presign.jks" "$pw" "$pw" > "$RUNNER_TEMP/presign.properties"
+      - name: Build APK
+        run: |
+          cargo xtask dist --target android-apk --assets none --channel release --keystore "$RUNNER_TEMP/presign.properties"
+          mkdir -p presign && mv target/dist/th08-*-android-apk.apk presign/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: presign-android
+          path: presign/*.apk
+          if-no-files-found: error
+
+  # The only job with the release environment's secrets: a first-party download plus apksigner, no Gradle, no cache.
+  # Without the secrets a publish fails here; a build-only run (forks) keeps just presign-android, which cannot update
+  # the published app.
+  android-sign:
+    needs: android
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: presign-android
+          path: presign
+      - name: Android build-tools
+        run: |
+          bt=$ANDROID_HOME/build-tools/36.0.0
+          if [[ ! -x $bt/apksigner ]]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;36.0.0" > /dev/null || true
+          fi
+          "$bt/apksigner" version
+          echo "BT=$bt" >> "$GITHUB_ENV"
+      - name: Sign with the release key
+        id: sign
         env:
+          PUBLISH: ${{ inputs.publish }}
           KEYSTORE_B64: ${{ secrets.TH08_ANDROID_KEYSTORE_B64 }}
           STORE_PASSWORD: ${{ secrets.TH08_ANDROID_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.TH08_ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.TH08_ANDROID_KEY_PASSWORD }}
         run: |
-          ver=$(sed -n '/^\[package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
           if [[ -z $KEYSTORE_B64 || -z $STORE_PASSWORD || -z $KEY_ALIAS || -z $KEY_PASSWORD ]]; then
-            echo "::warning::no Android signing secrets: building the debug channel with the throwaway key"
-            echo "args=--channel debug --debug-key --out target/dist/th08-$ver-android-apk-debug.apk" >> "$GITHUB_OUTPUT"
-            echo "artifact=th08-android-debug" >> "$GITHUB_OUTPUT"
+            if [[ $PUBLISH == true ]]; then
+              echo "::error::a TH08_ANDROID_* secret is missing from the release environment; refusing to publish"
+              exit 1
+            fi
+            echo "::warning::no Android signing secrets: only presign-android (throwaway key) was built"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           umask 077
-          base64 -d <<< "$KEYSTORE_B64" > "$RUNNER_TEMP/th08-release.jks"
-          esc() { printf '%s' "${1//\\/\\\\}"; }
-          {
-            echo "storeFile=$RUNNER_TEMP/th08-release.jks"
-            echo "storePassword=$(esc "$STORE_PASSWORD")"
-            echo "keyAlias=$(esc "$KEY_ALIAS")"
-            echo "keyPassword=$(esc "$KEY_PASSWORD")"
-          } > "$RUNNER_TEMP/keystore.properties"
-          echo "args=--channel release --keystore $RUNNER_TEMP/keystore.properties" >> "$GITHUB_OUTPUT"
-          echo "artifact=th08-android" >> "$GITHUB_OUTPUT"
-      - name: Build APK
-        env:
-          ARGS: ${{ steps.key.outputs.args }}
-        # ARGS is split into words on purpose.
-        run: cargo xtask dist --target android-apk --assets none $ARGS
-      - name: Remove the keystore
-        if: always()
-        run: rm -f "$RUNNER_TEMP/th08-release.jks" "$RUNNER_TEMP/keystore.properties"
-      - uses: actions/upload-artifact@v4
+          ks="$RUNNER_TEMP/th08-release.jks"
+          trap 'rm -f "$ks"' EXIT
+          base64 -d <<< "$KEYSTORE_B64" > "$ks"
+          mkdir -p dist
+          for f in presign/*.apk; do
+            # apksigner drops the ephemeral signature and keeps the 16 KiB alignment of the stored .so files.
+            "$BT/apksigner" sign --ks "$ks" --ks-pass env:STORE_PASSWORD --ks-key-alias "$KEY_ALIAS" \
+              --key-pass env:KEY_PASSWORD --out "dist/${f##*/}" "$f"
+            "$BT/apksigner" verify --print-certs "dist/${f##*/}" | grep -v '^WARNING'
+            "$BT/zipalign" -c -P 16 4 "dist/${f##*/}"
+          done
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+      - if: steps.sign.outputs.signed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ steps.key.outputs.artifact }}
-          path: target/dist/th08-*-android-apk*.apk
+          name: th08-android
+          path: dist/*.apk
           if-no-files-found: error
 
   release:
     if: inputs.publish
-    needs: [version, windows, linux, android]
+    needs: [version, windows, linux, android-sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           sparse-checkout: .github/release-notes.md
           sparse-checkout-cone-mode: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
+          pattern: th08-*
           merge-multiple: true
-      # The template comes first, then GitHub's generated commit list; an existing release keeps its notes.
-      - name: Create or update the release
+      - name: SHA256SUMS
+        run: |
+          cd dist
+          shopt -s nullglob
+          pkgs=(*-windows-exe.exe *-linux-appimage.AppImage *-android-apk.apk)
+          if [[ ${#pkgs[@]} != 3 || $(ls | wc -l) != 3 ]]; then
+            echo "::error::expected exactly the three packages, got: $(ls)"
+            exit 1
+          fi
+          sha256sum "${pkgs[@]}" > SHA256SUMS
+          cat SHA256SUMS
+      # Users check a download with `gh attestation verify FILE -R <owner>/<repo>`.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      # Fails if the release already exists, so published assets are never replaced. The template comes first, then
+      # GitHub's generated commit list.
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.version.outputs.tag }}
           SHA: ${{ github.sha }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --notes-file .github/release-notes.md --generate-notes --target "$SHA"
-          gh release upload "$TAG" dist/* --clobber
+          gh release create "$TAG" dist/* --title "$TAG" --notes-file .github/release-notes.md --generate-notes \
+            --target "$SHA"
