@@ -8,7 +8,8 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -152,6 +153,7 @@ private fun Modifier.rowSurface() = clip(RoundedCornerShape(4.dp)).background(Ma
 private fun Modifier.padding16() = padding(horizontal = 16.dp, vertical = 12.dp)
 
 // Rows under the Game data status: import / remove buttons, the running job and the last outcome.
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ImportRows(d: GameData, act: LauncherActions) {
     val st = LocalImport.current
@@ -187,7 +189,8 @@ fun ImportRows(d: GameData, act: LauncherActions) {
             modifier = Modifier.fillMaxWidth().rowSurface().padding16())
     }
     val imported = d is GameData.Imported
-    Row(Modifier.fillMaxWidth().rowSurface().padding16(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(Modifier.fillMaxWidth().rowSurface().padding16(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = act::importGame) {
             Text(str(if (imported && d.music) R.string.import_again else R.string.import_files))
         }

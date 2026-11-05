@@ -423,6 +423,8 @@ struct Finger {
     centre: [f32; 2],
     // Farthest distance from `start` (tap detection).
     travel: f32,
+    // Some poll has seen this finger down.
+    polled: bool,
 }
 
 // A placed control in window pixels.
@@ -747,6 +749,7 @@ impl TouchSource {
             seen: p,
             centre: p,
             travel: 0.0,
+            polled: false,
         });
     }
 
@@ -755,6 +758,14 @@ impl TouchSource {
             return;
         };
         let f = self.fingers.remove(i);
+        // A tap shorter than one poll still presses its button once.
+        if let On::Button(c) = f.on
+            && !f.polled
+            && c.bit() != 0
+            && !(c == Ctl::Focus && self.cfg.focus_toggle)
+        {
+            self.pulse(c.bit());
+        }
         if f.on == On::Move {
             self.target = None;
             // Menu tap = confirm.
@@ -792,6 +803,9 @@ impl TouchSource {
             return 0;
         }
         let toggle = self.cfg.focus_toggle;
+        for f in &mut self.fingers {
+            f.polled = true;
+        }
         let mut w = self
             .fingers
             .iter()
@@ -1121,6 +1135,27 @@ mod tests {
         t.touch(1, TouchPhase::Started, pause.centre[0], pause.centre[1]);
         assert_eq!(t.poll() & PAUSE, PAUSE);
         assert_eq!(t.game_scale(), (1116.0 / 480.0f32).min(2574.0 / 640.0));
+    }
+
+    // A tap that starts and ends between two polls still presses once, then releases.
+    #[test]
+    fn sub_poll_tap_pulses() {
+        let mut t = TouchSource::new(TouchConfig::default());
+        t.set_window(2712, 1220, 3.0, SafeArea::default());
+        let pause = t
+            .placed()
+            .into_iter()
+            .find(|p| p.ctl == Ctl::Pause)
+            .unwrap();
+        t.touch(1, TouchPhase::Started, pause.centre[0], pause.centre[1]);
+        t.touch(1, TouchPhase::Ended, pause.centre[0], pause.centre[1]);
+        assert_eq!(t.poll() & PAUSE, PAUSE);
+        assert_eq!(t.poll() & PAUSE, 0);
+        t.touch(2, TouchPhase::Started, pause.centre[0], pause.centre[1]);
+        assert_eq!(t.poll() & PAUSE, PAUSE);
+        t.touch(2, TouchPhase::Ended, pause.centre[0], pause.centre[1]);
+        assert_eq!(t.poll() & PAUSE, 0);
+        assert_eq!(t.poll() & PAUSE, 0);
     }
 
     // Phones (landscape and portrait, with and without insets) and desktop windows: every default control inside
