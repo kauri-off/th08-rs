@@ -547,6 +547,11 @@ private fun SavesBlock(act: LauncherActions) {
             }
         }
         if (st.busy) ShellRow(str(R.string.saves_working), null, below = { LinearProgressIndicator(Modifier.fillMaxWidth()) })
+        // The block sits below the fold: an export or import result also shows as a toast.
+        val ctx = LocalContext.current
+        LaunchedEffect(st.outcome) {
+            if (st.outcome != null && msg != null) android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
+        }
         if (msg != null) {
             Text(msg, style = MaterialTheme.typography.bodyMedium,
                 color = if (st.outcome is SaveOutcome.Failed || st.gameRunning) MaterialTheme.colorScheme.error

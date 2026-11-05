@@ -76,11 +76,10 @@ acceptable for a personal sideload).
 
 ### 2.2 User-provided files (secondary)
 
-- **Android, cheapest:** `adb push th08.dat thbgm.dat /sdcard/Android/data/<pkg>/files/` — the app reads
-  `external_data_path()` with no permission and no Java; it is a plain directory source. The app checks there when
-  the APK has no bundled assets (the same `.so` serves both builds).
-- **Android SAF picker** (`ACTION_OPEN_DOCUMENT_TREE`, copy into app storage): needs an Activity result callback →
-  Java subclass or GameActivity + Gradle. Defer; only if the APK is ever built without data for someone else's use.
+- **Android (shipped):** the launcher's **Import game files** opens the system picker (`ACTION_OPEN_DOCUMENT`,
+  multiple selection, no permission); `th08-repack` converts the picked th08.dat / thbgm.dat (or copies .pak files)
+  into `<internal>/game/th08.pak` and `thbgm.pak`. The game process looks there first, then in the bundled assets,
+  then in the old external dir (kept only for installs from before the import).
 - **Web:** unchanged: `<input type=file webkitdirectory>` or multi-file → OPFS cache (index.html) → `File.slice`
   range reads (assets.rs). Add `navigator.storage.persist()` so the 497 MB OPFS copy is not evicted.
 
