@@ -24,9 +24,17 @@ mod imp {
     use std::path::PathBuf;
     use th08_formats::archive::Archive;
 
-    // The game directory (TH08_DIR), None when unset.
+    // The game directory (TH08_DIR); when unset, says so on stderr with the test's name.
     pub fn game_dir() -> Option<PathBuf> {
-        std::env::var_os("TH08_DIR").map(PathBuf::from)
+        let dir = std::env::var_os("TH08_DIR").map(PathBuf::from);
+        if dir.is_none() {
+            let t = std::thread::current();
+            eprintln!(
+                "skipped: no game data (TH08_DIR unset): {}",
+                t.name().unwrap_or("?")
+            );
+        }
+        dir
     }
 
     // Exact name first, else a case-insensitive match (as on Windows).

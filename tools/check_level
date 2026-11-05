@@ -2,15 +2,25 @@
 # usage: tools/check_level [BASE] — the check a change needs, from the files it touches (default: work tree and
 # untracked files vs HEAD). Prints light | full | batch with the deciding files; exit 0.
 #   light: build, clippy, unit tests (+ tools/android_check for Android/JNI code); no arch_check.
-#   full:  arch_check (game crates changed: logic and draw share th08-core).
+#   full:  arch_check (game crates, the settings / host that configure them, the session tools or render changed).
 #   batch: full + the external replay batch (core logic, dependencies, build flags or toolchain changed).
+# A core / formats source whose changed lines are all comments or blank is full, not batch.
 cd "$(dirname "$0")/.." || exit 1
 base=${1:-HEAD}
-files=$( { git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u)
+untracked=$(git ls-files --others --exclude-standard)
+files=$( { git diff --name-only "$base"; echo "$untracked"; } | grep -v '^$' | sort -u)
 # th08-core modules that only draw, trace or test; they need the full check but not the replay batch.
 draw='^crates/th08-core/src/(anmdebug|drawfmt|drawlist|trace|testdata)\.rs$'
-batch=$(grep -E '^(Cargo\.lock|Cargo\.toml|\.cargo/|rust-toolchain|crates/th08-(core|formats)/Cargo\.toml)|^crates/th08-(core|formats)/src/' <<<"$files" | grep -vE "$draw")
-full=$(grep -E '^crates/th08-(core|formats)/|^specs/data/|^tools/arch_check$' <<<"$files")
+# True when every changed line of tracked .rs file $1 is a // comment or blank.
+comment_only() {
+  [[ $1 == *.rs ]] && ! grep -qxF "$1" <<<"$untracked" || return 1
+  local body
+  body=$(git diff -U0 "$base" -- "$1" | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ')
+  [[ -n $body ]] && ! grep -qvE '^[-+][[:space:]]*(//.*)?$' <<<"$body"
+}
+batch=$(grep -E '^(Cargo\.lock|Cargo\.toml|\.cargo/|rust-toolchain|crates/th08-(core|formats)/Cargo\.toml)|^crates/th08-(core|formats)/src/' <<<"$files" | grep -vE "$draw" |
+  while read -r f; do comment_only "$f" || echo "$f"; done)
+full=$(grep -E '^crates/th08-(core|formats|tools|render)/|^specs/data/|^src/(settings|platform)\.rs$|^tools/arch_check$' <<<"$files")
 if [[ -n $batch ]]; then echo batch; echo "$batch" | sed 's/^/  /' | head -20
 elif [[ -n $full ]]; then echo full; echo "$full" | sed 's/^/  /' | head -20
 else echo light; fi

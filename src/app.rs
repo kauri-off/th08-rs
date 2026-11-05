@@ -866,7 +866,7 @@ impl App {
             WindowEvent::KeyboardInput { event, .. } if transport_key(&event).is_some() => {
                 let a = transport_key(&event).expect("transport key");
                 if event.state == ElementState::Pressed && (!event.repeat || a == Transp::Step) {
-                    transport_act(r, a);
+                    transport_act(r, a, Instant::now());
                 }
             }
             // Port-only hitbox viewer key: the press does not reach the game.
@@ -919,7 +919,7 @@ impl App {
                 if t.phase == winit::event::TouchPhase::Started
                     && let Some(a) = strip_hit(r, x, y)
                 {
-                    transport_act(r, a);
+                    transport_act(r, a, Instant::now());
                     return;
                 }
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
@@ -954,7 +954,7 @@ impl App {
                     && state == ElementState::Pressed
                     && let Some(a) = strip_hit(r, x, y)
                 {
-                    transport_act(r, a);
+                    transport_act(r, a, Instant::now());
                     return;
                 }
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
@@ -1235,11 +1235,10 @@ fn apply_transport(r: &mut Running, now: Instant) {
     }
 }
 
-fn transport_act(r: &mut Running, a: Transp) {
+fn transport_act(r: &mut Running, a: Transp, now: Instant) {
     if !r.replay.playing {
         return;
     }
-    let now = Instant::now();
     r.replay.t.act(a);
     apply_transport(r, now);
     if a == Transp::Step {
@@ -1471,8 +1470,15 @@ mod tests {
     use super::*;
 
     // A `Running` over the game files that plays demo 0's record as an ordinary replay; None without TH08_DIR.
-    fn running() -> Option<Running> {
-        let dir = crate::settings::test_game_dir()?;
+    fn running(tag: &str) -> Option<Running> {
+        let Some(dir) = crate::settings::test_game_dir() else {
+            let t = std::thread::current();
+            eprintln!(
+                "skipped: no game data (TH08_DIR unset): {}",
+                t.name().unwrap_or(tag)
+            );
+            return None;
+        };
         let src = crate::sources::native(dir);
         let base = crate::settings::get().clone();
         let load = |s: &Settings| {
@@ -1480,7 +1486,8 @@ mod tests {
             pollster::block_on(Ctx::load_with(src.clone(), io, s.core(), false)).unwrap()
         };
         let bytes = load(&base).archive.read("demorpy0.rpy").unwrap();
-        let path = std::env::temp_dir().join(format!("th08_transport_{}.rpy", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("th08_transport_{}_{tag}.rpy", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         let mut s = base;
         s.replay = Some(path.to_string_lossy().into_owned());
@@ -1514,10 +1521,10 @@ mod tests {
     #[test]
     fn four_x_matches_one_x() {
         const N: usize = 1600;
-        let Some(mut a) = running() else {
+        let Some(mut a) = running("4x_a") else {
             return;
         };
-        let mut b = running().unwrap();
+        let mut b = running("4x_b").unwrap();
         let mut want = Vec::new();
         for _ in 0..N {
             present(&mut a, 1, 1);
@@ -1534,40 +1541,43 @@ mod tests {
     // Paused: no logic frames; a step runs exactly one; resuming runs again.
     #[test]
     fn pause_and_step() {
-        let Some(mut r) = running() else {
+        let Some(mut r) = running("pause") else {
             return;
         };
         let t0 = Instant::now();
         r.pacer.start(t0);
         follow_replay(&mut r, t0);
         assert!(r.replay.playing);
-        // Polls 20 ms apart: always past the 1/60 s deadline.
+        // Polls 20 ms apart on a synthetic clock: always past the 1/60 s deadline.
         let mut ms = 0;
-        let mut run = |r: &mut Running| {
-            ms += 20;
-            match r.pacer.poll(t0 + std::time::Duration::from_millis(ms)) {
+        let run = |r: &mut Running, ms: &mut u64| {
+            *ms += 20;
+            match r.pacer.poll(t0 + std::time::Duration::from_millis(*ms)) {
                 Tick::Run { per_draw, draws } => present(r, per_draw, draws),
                 Tick::Held => {}
                 t => panic!("{t:?}"),
             }
         };
+        let act = |r: &mut Running, a: Transp, ms: u64| {
+            transport_act(r, a, t0 + std::time::Duration::from_millis(ms));
+        };
         for _ in 0..5 {
-            run(&mut r);
+            run(&mut r, &mut ms);
         }
-        transport_act(&mut r, Transp::Pause);
+        act(&mut r, Transp::Pause, ms);
         let f = r.ctx.w.frame;
         for _ in 0..5 {
-            run(&mut r);
+            run(&mut r, &mut ms);
         }
         assert_eq!(r.ctx.w.frame, f);
-        transport_act(&mut r, Transp::Step);
-        run(&mut r);
+        act(&mut r, Transp::Step, ms);
+        run(&mut r, &mut ms);
         assert_eq!(r.ctx.w.frame, f + 1);
-        run(&mut r);
+        run(&mut r, &mut ms);
         assert_eq!(r.ctx.w.frame, f + 1);
-        transport_act(&mut r, Transp::Faster);
-        transport_act(&mut r, Transp::Pause);
-        run(&mut r);
+        act(&mut r, Transp::Faster, ms);
+        act(&mut r, Transp::Pause, ms);
+        run(&mut r, &mut ms);
         assert_eq!(r.ctx.w.frame, f + 3);
     }
 }
