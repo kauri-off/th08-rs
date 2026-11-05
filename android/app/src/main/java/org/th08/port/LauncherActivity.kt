@@ -5,7 +5,6 @@
 package org.th08.port
 
 import android.app.ActivityManager
-import android.app.NativeActivity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -299,7 +298,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             .filter { !it.e.persist && it.value != it.initial && it.value.isNotEmpty() && it.ok() }
             .map { it.e.key to it.value }
         PortCfg.writeLaunch(File(filesDir, "launch.cfg"), once)
-        startActivity(Intent(this, NativeActivity::class.java))
+        startActivity(Intent(this, GameActivity::class.java))
     }
 }
 

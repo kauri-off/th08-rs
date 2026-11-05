@@ -268,6 +268,11 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        for _ in 0..crate::platform::back::take() {
+            log::info!("back: OnBackInvokedCallback");
+            self.back(el);
+        }
         let (waiting, repaint_at) = match &self.shell {
             Shell::Setup(ui) | Shell::Error(ui) => (
                 ui.screen.model().view == View::Waiting,
@@ -758,6 +763,26 @@ impl App {
         self.window().request_redraw();
     }
 
+    // Back (key or OnBackInvokedCallback): in the game one X / Esc pulse; in the port menu a step back, then resume.
+    fn back(&mut self, el: &ActiveEventLoop) {
+        match &mut self.shell {
+            Shell::Running(r) => {
+                let bit = crate::platform::touch::TouchScene::back_bit_of(&r.ctx.w);
+                if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+                    h.input.touch.back_key(bit);
+                }
+            }
+            Shell::PortMenu(_, screen) => {
+                if screen.back() {
+                    self.window().request_redraw();
+                } else {
+                    self.resume_game(el);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn menu_event(&mut self, el: &ActiveEventLoop, ev: WindowEvent) {
         let window = self.window().clone();
         let Shell::PortMenu(r, screen) = &mut self.shell else {
@@ -789,11 +814,8 @@ impl App {
                         )
                         || pad_button(&event) == Some(crate::joystick::MENU_BUTTON)) =>
             {
-                if screen.back() {
-                    window.request_redraw();
-                } else {
-                    self.resume_game(el);
-                }
+                log::info!("back: key {:?}", event.physical_key);
+                self.back(el);
             }
             ev => {
                 if let WindowEvent::Resized(s) = ev {
@@ -843,12 +865,9 @@ impl App {
             // Android Back (button, gesture, a pad's Back key): one X pulse in menus, one Esc pulse in play and in the
             // pause menu, through the touch source so replays record it like a key.
             WindowEvent::KeyboardInput { event, .. } if is_back(&event) => {
-                let bit = crate::platform::touch::TouchScene::back_bit_of(&r.ctx.w);
-                if event.state == ElementState::Pressed
-                    && !event.repeat
-                    && let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
-                {
-                    h.input.touch.back_key(bit);
+                if event.state == ElementState::Pressed && !event.repeat {
+                    log::info!("back: key {:?}", event.physical_key);
+                    self.back(el);
                 }
             }
             // Gamepad buttons (Android keycodes): Select opens the port menu in a stage.
@@ -997,14 +1016,19 @@ fn pauses_unfocused(r: &Running) -> bool {
         && in_stage(r)
 }
 
-// The Android Back button (logical BrowserBack / GoBack, physical BrowserBack); on Android Escape counts too.
+// The Android Back button (logical BrowserBack / GoBack, physical BrowserBack); on Android Escape counts too. With
+// the OnBackInvokedCallback active the Back key arrives there as well, so only Escape is taken as a key.
 fn is_back(e: &winit::event::KeyEvent) -> bool {
     use winit::keyboard::{Key, NamedKey};
+    let esc = e.physical_key == PhysicalKey::Code(KeyCode::Escape);
+    if crate::platform::back::callback_active() && !esc {
+        return false;
+    }
     matches!(
         e.logical_key,
         Key::Named(NamedKey::BrowserBack | NamedKey::GoBack)
     ) || e.physical_key == PhysicalKey::Code(KeyCode::BrowserBack)
-        || (cfg!(target_os = "android") && e.physical_key == PhysicalKey::Code(KeyCode::Escape))
+        || (cfg!(target_os = "android") && esc)
 }
 
 // Closing the window mid-game. Tool `replay_save`: the recording is still written.
@@ -1360,6 +1384,7 @@ pub fn run_android(
         return;
     };
     crate::platform::safearea::set_app(&android);
+    crate::platform::back::bind(&android);
     let el = EventLoop::<UserEvent>::with_user_event()
         .with_android_app(android)
         .build()
