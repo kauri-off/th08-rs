@@ -87,8 +87,8 @@ struct App {
     suspended: bool,
     // Last safe-area read (`refresh_safe`).
     safe_at: Option<Instant>,
-    // Window focus, and whether audio pauses while unfocused: always on Android (focus goes at Home / recents, before
-    // `Suspended`); desktop opt-in `TH08_PAUSE_AUDIO_UNFOCUSED`, default off.
+    // Window focus, and whether audio pauses while unfocused: Android only (focus goes at Home / recents, before
+    // `Suspended`); the desktop has the `mute_unfocused` row.
     focus: Focus,
     display: Display,
     // Android joystick motion among the touch events.
@@ -367,9 +367,7 @@ impl App {
             pads_at: None,
             focus: Focus {
                 focused: true,
-                pause_audio: cfg!(target_os = "android")
-                    || std::env::var("TH08_PAUSE_AUDIO_UNFOCUSED")
-                        .is_ok_and(|v| crate::settings::parse_bool(&v) == Ok(true)),
+                pause_audio: cfg!(target_os = "android"),
             },
         }
     }

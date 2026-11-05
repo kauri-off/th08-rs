@@ -36,6 +36,7 @@
   <string name="expected_range">%1$d～%2$d の範囲で入力してください</string>
   <string name="tr_title">翻訳</string>
   <string name="tr_none">インストールされていません: ゲームはオリジナルの日本語で表示されます</string>
+  <string name="tr_missing">%1$s（未インストール: オリジナルのテキスト）</string>
   <string name="tr_server">翻訳をダウンロード</string>
   <string name="tr_server_summary">Touhou Patch Center の言語</string>
   <string name="tr_loading">言語の一覧を読み込み中…</string>

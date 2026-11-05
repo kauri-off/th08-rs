@@ -1,4 +1,4 @@
-//! Presentation packs (I18N §2.5, run G2): `packs/<id>` (a folder or a .zip) chosen by `game_text` or the `pack`
+//! Presentation packs: `packs/<id>` (a folder or a .zip) chosen by `game_text` or the `pack`
 //! setting, read into the renderer's `PackText` (texts, FileFont, overflow per site) and core's image `Overlay`.
 //! Port-only; nothing here reaches logic (logic keys are refused by `Overlay::add`, I18N §2.1).
 
@@ -53,7 +53,9 @@ pub fn select(s: &Settings) -> Option<Mounted> {
             return None;
         }
         let found = find_language(&dirs, &lang);
-        if found.is_none() {
+        if found.is_none() && s.game_text.is_some() {
+            log::warn!("game_text {lang}: no such pack installed in {dirs:?}; original text");
+        } else if found.is_none() {
             log::info!("no {lang} presentation pack in {dirs:?}; vanilla text");
         }
         found?
@@ -170,7 +172,8 @@ fn pack_entries(d: &std::path::Path) -> Vec<std::path::PathBuf> {
     entries
 }
 
-// `<config folder>/packs` (downloaded by a settings screen, so an update wins), then `<game folder>/packs` (bundled).
+// `<config folder>/packs` (downloaded by a settings screen), then `<game folder>/packs` (bundled): the order that
+// breaks a revision tie in `find_language`.
 #[cfg(not(target_arch = "wasm32"))]
 fn pack_dirs(s: &Settings) -> Vec<std::path::PathBuf> {
     s.dirs
@@ -187,20 +190,84 @@ fn stem(p: &std::path::Path) -> String {
         .map_or_else(String::new, |s| s.to_string_lossy().into_owned())
 }
 
-// The first pack (in name order) of the folders whose pack.toml says `language = <code>`.
+// The newest pack (`Freshness`) whose pack.toml says `language = <code>`; on a tie the earlier folder, then name order.
 #[cfg(not(target_arch = "wasm32"))]
 fn find_language(dirs: &[std::path::PathBuf], code: &str) -> Option<std::path::PathBuf> {
+    let mut best: Option<(Freshness, std::path::PathBuf)> = None;
     for d in dirs {
         for p in pack_entries(d) {
             let Some(manifest) = read_manifest(&p) else {
                 continue;
             };
-            if manifest.get("language").and_then(toml::Value::as_str) == Some(code) {
-                return Some(p);
+            if manifest.get("language").and_then(toml::Value::as_str) != Some(code) {
+                continue;
+            }
+            let f = Freshness::of(&manifest);
+            if best.as_ref().is_none_or(|(b, _)| f.newer_than(b)) {
+                best = Some((f, p));
             }
         }
     }
-    None
+    best.map(|b| b.1)
+}
+
+// How new a pack is: `revision` (a thpatch revision is a hash, so it only tells equal from different) and the date
+// in `source` (`thpatch lang_en retrieved 2026-11-04 16:32 UTC <rev>`).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Freshness {
+    revision: String,
+    date: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Freshness {
+    fn of(m: &toml::Table) -> Self {
+        let get = |k: &str| m.get(k).and_then(toml::Value::as_str).unwrap_or("");
+        Self {
+            revision: get("revision").to_string(),
+            date: source_date(get("source")),
+        }
+    }
+
+    // Strictly newer: a different revision with a later date, or with the same date a higher numeric revision.
+    fn newer_than(&self, o: &Self) -> bool {
+        if self.revision == o.revision {
+            return false;
+        }
+        match self.date.cmp(&o.date) {
+            std::cmp::Ordering::Equal => {
+                matches!((self.revision.parse::<u64>(), o.revision.parse::<u64>()), (Ok(a), Ok(b)) if a > b)
+            }
+            c => c.is_gt(),
+        }
+    }
+}
+
+// The first `YYYY-MM-DD` (with a following ` HH:MM`) in a `source` line; "" = none.
+#[cfg(not(target_arch = "wasm32"))]
+fn source_date(s: &str) -> String {
+    let b = s.as_bytes();
+    let fits = |i: usize, pat: &[u8]| {
+        b.len() >= i + pat.len()
+            && pat.iter().zip(&b[i..]).all(|(&p, &c)| {
+                if p == b'9' {
+                    c.is_ascii_digit()
+                } else {
+                    p == c
+                }
+            })
+    };
+    (0..b.len())
+        .find(|&i| fits(i, b"9999-99-99"))
+        .map_or_else(String::new, |i| {
+            let end = if fits(i + 10, b" 99:99") {
+                i + 16
+            } else {
+                i + 10
+            };
+            s[i..end].to_string()
+        })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -366,6 +433,42 @@ mod tests {
 
     fn f(p: &str, b: &[u8]) -> (String, Vec<u8>) {
         (p.to_string(), b.to_vec())
+    }
+
+    // Same language in both pack folders: the newer one wins, a tie goes to the config folder.
+    #[test]
+    fn newest_pack_wins() {
+        let root = std::env::temp_dir().join(format!("th08-packs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let pack = |dir: &str, name: &str, rev: &str, date: &str| {
+            let d = root.join(dir).join("packs").join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            let toml = format!(
+                "language = \"en\"\nsource = \"thpatch lang_en retrieved {date} UTC {rev}\"\nrevision = \"{rev}\"\n"
+            );
+            std::fs::write(d.join("pack.toml"), toml).unwrap();
+            root.join(dir).join("packs").join(name)
+        };
+        let dirs = [root.join("cfg/packs"), root.join("game/packs")];
+        let old_cfg = pack("cfg", "lang_en", "aaaa", "2026-01-02 10:00");
+        let new_game = pack("game", "lang_en", "bbbb", "2026-11-04 16:32");
+        assert_eq!(find_language(&dirs, "en"), Some(new_game));
+        pack("game", "lang_en", "aaaa", "2026-01-02 10:00");
+        assert_eq!(find_language(&dirs, "en"), Some(old_cfg.clone()));
+        pack("game", "lang_en", "cccc", "2026-01-02 10:00");
+        assert_eq!(find_language(&dirs, "en"), Some(old_cfg));
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(
+            source_date("thpatch x retrieved 2026-11-04 16:32 UTC 84e8"),
+            "2026-11-04 16:32"
+        );
+        assert_eq!(source_date("files dated up to 2026-11-04"), "2026-11-04");
+        assert_eq!(source_date("none"), "");
+        let num = |r: &str| Freshness {
+            revision: r.into(),
+            date: String::new(),
+        };
+        assert!(num("3").newer_than(&num("2")) && !num("2").newer_than(&num("3")));
     }
 
     // Texts and targets are read; logic keys and non-textures are refused with a warning; nothing else breaks.

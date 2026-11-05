@@ -398,10 +398,12 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
     val details = str(R.string.details, t.summary, t.help)
     val info = { showInfo(t.label, details) }
     var editing by rememberSaveable(e.key) { mutableStateOf(false) }
-    // `game_text`: follow / ja, then the installed pack languages.
+    // `game_text`: follow / ja, then the installed pack languages, then the current value if no pack of it is installed.
     val packs = if (e.key == "game_text") {
-        LocalPacks.current.installed.filter { it.language != "ja" }.distinctBy { it.language }
+        val inst = LocalPacks.current.installed.filter { it.language != "ja" }.distinctBy { it.language }
             .associate { it.language to if (it.title.isEmpty()) it.language else "${it.language} — ${it.title}" }
+        val missing = r.value.takeIf { it !in inst && it !in listOf("", "follow", "ja") }
+        if (missing == null) inst else inst + (missing to str(R.string.tr_missing, missing))
     } else emptyMap()
     val opts = e.options()?.let { it + packs.keys.filter { k -> k !in it } }
     val shown: @Composable (String) -> String = { v -> packs[v] ?: e.show(v) }

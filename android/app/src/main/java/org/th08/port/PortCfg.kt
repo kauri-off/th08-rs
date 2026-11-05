@@ -3,6 +3,8 @@
 package org.th08.port
 
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 
 object PortCfg {
     // Last value per key wins, as the Rust reader applies the lines in order.
@@ -38,13 +40,30 @@ object PortCfg {
         return out.joinToString("\n") + "\n"
     }
 
-    fun write(file: File, key: String, value: String?) {
+    // `drop` = the developer keys: the game ignores them in port.cfg, so every save removes them.
+    fun write(file: File, key: String, value: String?, drop: Collection<String>) {
         val old = runCatching { file.readText() }.getOrDefault("")
-        val text = setLine(old, key, value)
-        if (text != old) file.writeText(text)
+        val text = (drop + key).fold(old) { t, k -> setLine(t, k, if (k == key) value else null) }
+        if (text != old) writeAtomic(file, text)
     }
 
     fun writeLaunch(file: File, values: List<Pair<String, String>>) {
-        file.writeText(values.joinToString("") { (k, v) -> "$k = $v\n" })
+        writeAtomic(file, values.joinToString("") { (k, v) -> "$k = $v\n" })
+    }
+
+    // Through `<name>.tmp` in the same dir and a rename, so a killed process leaves the old file (platform.rs
+    // `write_atomic`).
+    fun writeAtomic(file: File, text: String) {
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        try {
+            FileOutputStream(tmp).use {
+                it.write(text.toByteArray())
+                it.fd.sync()
+            }
+            if (!tmp.renameTo(file)) throw IOException("rename $tmp -> $file failed")
+        } catch (e: IOException) {
+            tmp.delete()
+            throw e
+        }
     }
 }

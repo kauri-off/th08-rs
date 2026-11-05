@@ -1898,6 +1898,9 @@ impl Settings {
             Ok(()) => {
                 self.values.insert(sw.key, (v.to_string(), origin));
             }
+            Err(e) if origin == Origin::PortCfg => {
+                log::warn!("{} {name}={v}: {e}; ignored", origin_name(origin));
+            }
             Err(e) => log::error!("{} {name}={v}: {e}; ignored", origin_name(origin)),
         }
     }
@@ -2153,8 +2156,12 @@ impl Settings {
                         sw.env
                     );
                 }
-                Some(sw) => s.apply(Origin::PortCfg, &k, sw, &v),
-                None => log::error!("port.cfg: unknown key {k} ignored"),
+                Some(sw) => {
+                    let v = cfg_path(sw, &v, s.dirs.config.as_deref());
+                    s.apply(Origin::PortCfg, &k, sw, &v);
+                }
+                // A newer build's key: kept in the file for that build.
+                None => log::info!("port.cfg: unknown key {k} ignored"),
             }
         }
         s.with_env()
@@ -2287,8 +2294,13 @@ pub fn command(dirs: &PlatformDirs) -> clap::Command {
              `key = value` line in port.cfg. Priority: command line > env > port.cfg > default.\n\
              Booleans take 1/0, true/false or on/off; `--switch` alone means on, `--no-switch` off.\n\
              The launcher screen turned off (launcher = off): hold Shift while th08 starts to show it again.\n\
-             port.cfg: {}",
-            dirs.port_cfg().map_or("(no config dir)".into(), |p| p.display().to_string())
+             port.cfg: {}{}",
+            dirs.port_cfg().map_or("(no config dir)".into(), |p| p.display().to_string()),
+            if cfg!(debug_assertions) {
+                "\nDebug build: TH08_DEVICE_LOSS=<n> destroys the GPU device at the n-th present (recovery test)."
+            } else {
+                ""
+            }
         ))
         .arg(
             Arg::new(POS_DIR)
@@ -2385,7 +2397,7 @@ fn parse_port_cfg(text: &str) -> Vec<(String, String)> {
             if let Some((k, v)) = l.split_once('=') {
                 Some((k.trim().to_string(), v.trim().to_string()))
             } else {
-                log::error!("port.cfg: line {l:?} is not `key = value`; ignored");
+                log::warn!("port.cfg: line {l:?} is not `key = value`; ignored");
                 None
             }
         })
@@ -2436,7 +2448,7 @@ pub fn write_port_cfg(dirs: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
         return;
     };
     let old = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut text = old.clone();
+    let mut text = drop_dev_keys(&old);
     for &(key, value) in changes {
         match find(key) {
             Some(e) => text = set_cfg_line(&text, e.key, value),
@@ -2446,11 +2458,7 @@ pub fn write_port_cfg(dirs: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
     if text == old {
         return;
     }
-    let res = path
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|_| std::fs::write(&path, text));
-    if let Err(e) = res {
+    if let Err(e) = crate::platform::write_atomic(&path, text.as_bytes()) {
         log::error!("{}: {e}", path.display());
     }
 }
@@ -2474,6 +2482,31 @@ pub fn write_port_cfg(_: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
             log::error!("localStorage: {key} not saved");
         }
     }
+}
+
+// A port.cfg path relative to the config dir, as the file may be read from any working directory; CLI and env paths
+// stay relative to the working directory.
+fn cfg_path(e: &Entry, v: &str, config: Option<&std::path::Path>) -> String {
+    let rel = !v.trim().is_empty() && std::path::Path::new(v.trim()).is_relative();
+    match config {
+        Some(c) if rel && matches!(e.kind, Kind::Path | Kind::File) => {
+            c.join(v.trim()).to_string_lossy().into_owned()
+        }
+        _ => v.to_string(),
+    }
+}
+
+// port.cfg text without developer rows: the game ignores them there, so every save drops them.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn drop_dev_keys(text: &str) -> String {
+    let dev: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter_map(|l| Some(l.split_once('=')?.0.trim()))
+        .filter(|k| find(k).is_some_and(|e| e.audience == Audience::Dev))
+        .collect();
+    dev.iter()
+        .fold(text.to_string(), |t, k| set_cfg_line(&t, k, None))
 }
 
 // port.cfg text with `key = value` replaced in place, appended (new key) or removed (None); other lines (comments
@@ -2690,6 +2723,19 @@ mod tests {
             "# keep\nscale = 3\nfullscreen = on\n"
         );
         assert_eq!(set_cfg_line(&t, "scale", None), "# keep\nfullscreen = on\n");
+    }
+
+    #[test]
+    fn port_cfg_dev_keys_and_paths() {
+        let t = "# c\nscale = 2\ninvuln = on\nfuture_key = 1\nenemy-dmg=3\n";
+        assert_eq!(drop_dev_keys(t), "# c\nscale = 2\nfuture_key = 1\n");
+        let cfg = Some(std::path::Path::new("/cfg"));
+        let e = find("save_dir").unwrap();
+        assert_eq!(cfg_path(e, "saves", cfg), "/cfg/saves");
+        assert_eq!(cfg_path(e, "/abs", cfg), "/abs");
+        assert_eq!(cfg_path(e, "saves", None), "saves");
+        assert_eq!(cfg_path(find("scale").unwrap(), "2", cfg), "2");
+        assert_eq!(cfg_path(find("font").unwrap(), "f.ttf", cfg), "/cfg/f.ttf");
     }
 
     #[test]

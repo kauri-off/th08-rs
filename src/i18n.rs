@@ -202,6 +202,7 @@ pub const UI: &[(&str, &str)] = &[
         "tr_none",
         "no translation installed: the game shows the original Japanese text",
     ),
+    ("tr_missing", "{code} (not installed: original text)"),
     ("tr_server", "Available from Touhou Patch Center:"),
     ("tr_load", "Show the languages"),
     ("tr_loading", "Loading the language list…"),

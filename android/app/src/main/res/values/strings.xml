@@ -37,6 +37,7 @@
   <string name="expected_range">expected %1$d–%2$d</string>
   <string name="tr_title">Translations</string>
   <string name="tr_none">None installed: the game shows the original Japanese text</string>
+  <string name="tr_missing">%1$s (not installed: original text)</string>
   <string name="tr_server">Download a translation</string>
   <string name="tr_server_summary">Languages from Touhou Patch Center</string>
   <string name="tr_loading">Loading the language list…</string>

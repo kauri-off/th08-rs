@@ -426,7 +426,7 @@ pub struct Gfx {
     lost: Arc<AtomicBool>,
     // Bumped by every `rebuild`; GPU objects made outside `Gfx` on an older generation are dead.
     generation: u32,
-    // Port debug hook TH08_DEVICE_LOSS=<n>: the device is destroyed at the n-th Present (ARCH_D §5 manual check).
+    // Debug-build hook TH08_DEVICE_LOSS=<n>: the device is destroyed at the n-th Present.
     loss_at: Option<u32>,
     presents: u32,
     viewport: Rect,
@@ -977,9 +977,12 @@ impl Gfx {
     ) -> Self {
         let gpu = Gpu::new(&device, config.format);
         let lost = watch_loss(&device);
+        #[cfg(debug_assertions)]
         let loss_at = std::env::var("TH08_DEVICE_LOSS")
             .ok()
             .and_then(|v| v.parse().ok());
+        #[cfg(not(debug_assertions))]
+        let loss_at = None;
         let mut g = Self {
             headless: surface.is_none(),
             window: None,

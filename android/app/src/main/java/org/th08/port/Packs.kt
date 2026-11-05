@@ -13,6 +13,19 @@ object Packs {
     external fun call(request: String): String
 }
 
+// pack.toml `a` strictly newer than `b`, as packs.rs `Freshness`: a different `revision` with a later date in `source`,
+// or with the same date a higher numeric revision.
+fun packNewer(a: String, b: String): Boolean {
+    fun field(t: String, k: String) = Regex("""(?m)^$k\s*=\s*"([^"]*)"""").find(t)?.groupValues?.get(1) ?: ""
+    fun date(t: String) = Regex("""\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?""").find(field(t, "source"))?.value ?: ""
+    val (ra, rb) = field(a, "revision") to field(b, "revision")
+    if (ra == rb) return false
+    val c = date(a).compareTo(date(b))
+    if (c != 0) return c > 0
+    val (na, nb) = ra.toULongOrNull() to rb.toULongOrNull()
+    return na != null && nb != null && na > nb
+}
+
 data class InstalledPack(val language: String, val title: String, val revision: String, val coverage: Double?,
                          val managed: Boolean)
 

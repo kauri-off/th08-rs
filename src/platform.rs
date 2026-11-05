@@ -142,10 +142,7 @@ impl Storage {
     pub fn write(&self, name: &str, data: &[u8]) {
         let Some(dir) = &self.save_dir else { return };
         let path = dir.join(name);
-        if let Some(p) = path.parent() {
-            let _ = std::fs::create_dir_all(p);
-        }
-        if let Err(e) = std::fs::write(&path, data) {
+        if let Err(e) = write_atomic(&path, data) {
             log::warn!("{}: {e}", path.display());
         }
     }
@@ -166,7 +163,7 @@ impl Storage {
             return Vec::new();
         };
         rd.filter_map(|e| e.ok()?.file_name().into_string().ok())
-            .filter(|n| n.starts_with(file))
+            .filter(|n| n.starts_with(file) && !n.ends_with(".tmp"))
             .map(|n| {
                 if sub.is_empty() {
                     n
@@ -176,6 +173,40 @@ impl Storage {
             })
             .collect()
     }
+}
+
+// Writes `path` through `<name>.tmp` in the same dir and a rename, so a crash or a full disk leaves the old file.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    write_atomic_with(path, |f| std::io::Write::write_all(f, data))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_atomic_with(
+    path: &std::path::Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    if let Some(d) = dir {
+        std::fs::create_dir_all(d)?;
+    }
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp");
+    let tmp = path.with_file_name(name);
+    let res = std::fs::File::create(&tmp).and_then(|mut f| {
+        fill(&mut f)?;
+        f.sync_all()
+    });
+    let res = res.and_then(|()| std::fs::rename(&tmp, path));
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return res;
+    }
+    #[cfg(unix)]
+    if let Some(d) = dir {
+        let _ = std::fs::File::open(d).and_then(|f| f.sync_all());
+    }
+    Ok(())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -478,6 +509,26 @@ mod tests {
         assert_eq!(m.poll(), [SHOT | LEFT, 0]);
         m.set_focus(false);
         assert_eq!(m.poll(), [0, 0]);
+    }
+
+    #[test]
+    fn atomic_write_failure_keeps_old_file() {
+        let dir = std::env::temp_dir().join(format!("th08-atomic-{}", std::process::id()));
+        let path = dir.join("score.dat");
+        write_atomic(&path, b"old").unwrap();
+        let err = write_atomic_with(&path, |f| {
+            std::io::Write::write_all(f, b"ne")?;
+            Err(std::io::Error::other("disk full"))
+        });
+        assert!(err.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"old");
+        assert!(!dir.join("score.dat.tmp").exists());
+        write_atomic(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        let st = Storage::new(Some(dir.clone()));
+        std::fs::write(dir.join("score.dat.tmp"), b"x").unwrap();
+        assert_eq!(st.list("score"), ["score.dat"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // A restarted pass polls again and reads the next recorded index.

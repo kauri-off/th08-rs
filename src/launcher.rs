@@ -290,6 +290,18 @@ impl Value {
     }
 }
 
+// A row's port.cfg text: paths absolute, as port.cfg resolves relative ones against the config dir.
+fn saved_text(r: &Row) -> String {
+    let t = r.value.text();
+    #[cfg(not(target_arch = "wasm32"))]
+    if matches!(r.e.kind, Kind::Path | Kind::File)
+        && let Ok(p) = std::path::absolute(&t)
+    {
+        return p.to_string_lossy().into_owned();
+    }
+    t
+}
+
 // Translation packs on the settings screen: the job manager (None without a config folder) and the installed packs,
 // re-listed when (job generation, game folder) changes.
 #[cfg(not(target_arch = "wasm32"))]
@@ -402,9 +414,9 @@ impl Model {
         }
     }
 
-    // `game_text` choices after follow / ja: the installed pack languages, (code, shown name).
-    fn pack_choices(&self) -> Vec<(String, String)> {
-        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    // `game_text` choices after follow / ja: the installed pack languages, (code, shown name), plus the current value
+    // when no pack of it is installed (kept, so a reinstall brings it back).
+    fn pack_choices(&self, lang: Lang) -> Vec<(String, String)> {
         let mut v: Vec<(String, String)> = Vec::new();
         #[cfg(not(target_arch = "wasm32"))]
         for p in &self.tr.installed {
@@ -416,6 +428,11 @@ impl Model {
                 };
                 v.push((p.language.clone(), name));
             }
+        }
+        let cur = self.row("game_text").value.text();
+        if !matches!(cur.as_str(), "" | "follow" | "ja") && !v.iter().any(|(c, _)| *c == cur) {
+            let name = i18n::ui_fmt(lang, "tr_missing", &[("code", &cur)]);
+            v.push((cur, name));
         }
         v
     }
@@ -485,14 +502,15 @@ impl Model {
             .filter(|r| r.dirty && r.e.persist && !(self.bundled && r.e.key == "game_dir"))
             .map(|r| {
                 let keep = !r.value.is_unset() && r.value != r.default_value();
-                (r.e.key, keep.then(|| r.value.text()))
+                (r.e.key, keep.then(|| saved_text(r)))
             })
             .collect()
     }
 
+    // Also drops the developer keys port.cfg holds (`write_port_cfg`), even with no row edited.
     pub fn save(&self) {
         let changes = self.changes();
-        if !changes.is_empty() {
+        if !changes.is_empty() || self.dirs.config.is_some() {
             let c: Vec<(&str, Option<&str>)> =
                 changes.iter().map(|(k, v)| (*k, v.as_deref())).collect();
             settings::write_port_cfg(&self.dirs, &c);
@@ -696,7 +714,7 @@ impl Model {
     fn group_ui(&mut self, ui: &mut egui::Ui, g: Group, lang: Lang) {
         #[cfg(not(target_arch = "wasm32"))]
         self.refresh_installed();
-        let extra = self.pack_choices();
+        let extra = self.pack_choices(lang);
         // The game folder row is at the top.
         let dev = self.dev;
         let rows: Vec<usize> = (0..self.rows.len())
@@ -1704,6 +1722,44 @@ mod tests {
         assert!(!m.bundled);
         edit(&mut m, "game_dir", &user_text);
         assert_eq!(m.changes(), some(&[("game_dir", &user_text)]));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // A save writes absolute paths and drops port.cfg's developer keys; a game_text without its pack stays listed.
+    #[test]
+    fn save_hygiene_and_missing_pack() {
+        let root = std::env::temp_dir().join(format!("th08-launcher-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("port.cfg"),
+            "invuln = on\nfuture = 1\ngame_text = de\n",
+        )
+        .unwrap();
+        let dirs = settings::PlatformDirs {
+            config: Some(root.clone()),
+            ..Default::default()
+        };
+        let s = Settings::game_environment(dirs);
+        assert_eq!(s.game_text.as_deref(), Some("de"));
+        assert!(!s.invuln);
+        let mut m = Model::new(&s, Folder::Native);
+        let missing = m.pack_choices(Lang::En);
+        assert_eq!(
+            missing,
+            [(
+                "de".to_string(),
+                "de (not installed: original text)".to_string()
+            )]
+        );
+        m.save();
+        assert_eq!(
+            std::fs::read_to_string(root.join("port.cfg")).unwrap(),
+            "future = 1\ngame_text = de\n"
+        );
+        edit(&mut m, "save_dir", "saves");
+        let abs = std::env::current_dir().unwrap().join("saves");
+        assert_eq!(m.changes(), some(&[("save_dir", &abs.to_string_lossy())]));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

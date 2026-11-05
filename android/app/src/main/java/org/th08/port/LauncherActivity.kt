@@ -9,6 +9,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -41,6 +42,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
 
     private lateinit var schema: Schema
     private lateinit var rows: List<Setting>
+    private val devKeys by lazy { schema.entries.filter { it.developer }.map { it.key } }
     private var data by mutableStateOf<GameData>(GameData.Unavailable)
     private var picking: Setting? = null
     private var packs by mutableStateOf(PackState())
@@ -110,7 +112,9 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     override fun change(r: Setting, v: String) {
         r.value = v
         if (!r.e.persist || !r.ok()) return
-        PortCfg.write(cfgFile, r.e.key, v.takeIf { it.isNotEmpty() && it != r.e.default })
+        runCatching {
+            PortCfg.write(cfgFile, r.e.key, v.takeIf { it.isNotEmpty() && it != r.e.default }, devKeys)
+        }.onFailure { Log.e("th08", "port.cfg not saved: $it") }
     }
 
     override fun reset() {
@@ -155,26 +159,36 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
         afd.close()
     }
 
-    // assets/packs/lang_xx of a personal build into filesDir/packs, once per pack revision (a removed one stays
-    // removed until the APK brings a new revision).
+    // assets/packs/lang_xx of a personal build into filesDir/packs: once per pack id, then again only when the APK's
+    // copy is newer than the installed one (`packNewer`). The `.bundled` marker lists the ids copied once, so a pack the
+    // user removed stays removed until they install it again.
     private fun copyBundledPacks() {
         val ids = assets.list("packs") ?: return
         val dst = File(filesDir, "packs").also { it.mkdirs() }
         val marker = File(dst, ".bundled")
-        val done = runCatching { marker.readLines().toMutableSet() }.getOrDefault(mutableSetOf())
+        val seen = runCatching { marker.readLines() }.getOrDefault(emptyList())
+            .mapNotNull { it.trim().substringBefore(' ').takeIf(String::isNotEmpty) }.toMutableSet()
         for (id in ids) {
             val toml = runCatching { assets.open("packs/$id/pack.toml").bufferedReader().use { it.readText() } }
                 .getOrNull() ?: continue
-            val rev = Regex("""(?m)^revision\s*=\s*"([^"]*)"""").find(toml)?.groupValues?.get(1) ?: ""
-            val key = "$id $rev"
-            if (key in done) continue
             val out = File(dst, id)
+            val have = runCatching { File(out, "pack.toml").readText() }.getOrNull()
+            val copy = when {
+                have != null -> packNewer(toml, have)
+                else -> id !in seen
+            }
+            seen.add(id)
+            if (!copy) continue
             out.deleteRecursively()
             copyAssetDir("packs/$id", out)
-            done.add(key)
         }
-        marker.writeText(done.joinToString("\n", postfix = "\n"))
+        if (marker.readLinesOrNull() != seen.sorted()) {
+            runCatching { PortCfg.writeAtomic(marker, seen.sorted().joinToString("\n", postfix = "\n")) }
+                .onFailure { Log.e("th08", "pack marker not saved: $it") }
+        }
     }
+
+    private fun File.readLinesOrNull(): List<String>? = runCatching { readLines().filter(String::isNotBlank) }.getOrNull()
 
     private fun copyAssetDir(path: String, out: File) {
         val children = assets.list(path).orEmpty()
