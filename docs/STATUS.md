@@ -35,12 +35,10 @@
 
 ## Limits
 
-- Android: the game files go into the app's external files folder by file manager or adb; no file picker yet.
 - The browser build cannot download translations.
 
 ## Next
 
-- Android: a file-picker button for the game files.
 - Translations: per-screen layout tuning of translated text ([arch/I18N.md](arch/I18N.md)).
 - Mobile web polish.
 - Optional renderer rewrite (the last step of the rewrite plan), checked by image comparison.
