@@ -1611,8 +1611,10 @@ impl Task<Ctx> for AsciiTask {
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         AsciiManager::with(ctx, |a, ctx| a.draw_step(ctx, tag))
     }
+}
 
-    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
+impl AsciiTask {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(a) = ctx.w.ascii_mgr.as_deref() {
             a.emit(ctx, rec, tag);
         }

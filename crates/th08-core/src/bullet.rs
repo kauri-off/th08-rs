@@ -1849,8 +1849,10 @@ impl Task<Ctx> for BulletTask {
         b.draw_step(&mut ctx.w.anm, p, ctx.w.game.flags);
         Ret::Next
     }
+}
 
-    fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
+impl BulletTask {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
         let p = ctx.w.player.as_deref().expect("player");
         let b = ctx.w.bullets.as_deref().expect("bullet manager");
         b.emit(&ctx.w.anm, rec, &ctx.w.effects, p, ctx.w.game.flags);

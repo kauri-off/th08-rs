@@ -3107,8 +3107,10 @@ impl Task<Ctx> for EnemyTask {
         m.draw_layer_step(&mut ctx.w.anm, p, tag == 1, ctx.w.game.flags);
         Ret::Next
     }
+}
 
-    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
+impl EnemyTask {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         let p = ctx.w.player.as_deref().expect("player");
         let m = ctx.w.enemies.as_deref().expect("enemy manager");
         m.draw_layer_emit(&ctx.w.anm, rec, p, tag == 1, ctx.w.game.flags);

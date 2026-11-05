@@ -107,8 +107,8 @@ pub struct InfoNotices {
     // 0x164D530 as of the registering frame: only Supervisor_Calc writes it, so it stays frozen in the loop.
     pub(crate) frozen_prev: u16,
     // Surface 0 (title/infoNN.jpg), the loop counter t and the t drawn by this iteration.
-    cur: Option<(TexId, i32)>,
-    drawn: i32,
+    pub(crate) cur: Option<(TexId, i32)>,
+    pub(crate) drawn: i32,
 }
 
 const INFO_FRAMES: i32 = 6000;
@@ -169,18 +169,6 @@ impl InfoNotices {
         *t = next;
         true
     }
-
-    // Draw of the iteration: the picture full-screen and the black quad (0, 0)–(639, 479).
-    pub fn draw(ctx: &View, rec: &mut Recorder) {
-        let Some((tex, _)) = ctx.w.info.cur else {
-            return;
-        };
-        rec.set_viewport(FULLSCREEN);
-        rec.image(tex, 0.0, 0.0);
-        if let Some(a) = info_fade_alpha(ctx.w.info.drawn) {
-            rec.rect(0.0, 0.0, 639.0, 479.0, [0, 0, 0, a]);
-        }
-    }
 }
 
 // Press test and counter step of one notice iteration (16 §4): 179 < t < 5980 and the masked word non-zero and unlike
@@ -202,7 +190,7 @@ fn info_files(bits: u32, flags: u32) -> impl Iterator<Item = &'static str> {
 // Black-quad alpha byte of notice frame t (16 §4). QUIRK: the fade-in byte starts at 253 and falls (wrapping) before the
 // quad vanishes; the fade-out byte wraps for t < 5980.
 // The fade-in ends at 10 (t = 19), 16 §4.
-fn info_fade_alpha(t: i32) -> Option<u8> {
+pub(crate) fn info_fade_alpha(t: i32) -> Option<u8> {
     if t < 20 {
         Some(lo8((60 - t) * 255 / 20))
     } else if t > 5940 {

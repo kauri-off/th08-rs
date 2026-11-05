@@ -1285,8 +1285,10 @@ impl Task<Ctx> for HudTask {
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         with_hud(ctx, |h, ctx| h.draw_step(ctx, tag)).unwrap_or(Ret::Next)
     }
+}
 
-    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
+impl HudTask {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(h) = ctx.w.hud.as_deref() {
             h.emit(ctx, rec, tag);
         }

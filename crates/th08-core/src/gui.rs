@@ -407,8 +407,10 @@ impl Task<Ctx> for GuiTask {
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         with_gui(ctx, |g, ctx| g.draw_step(ctx, tag)).unwrap_or(Ret::Next)
     }
+}
 
-    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
+impl GuiTask {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(g) = ctx.w.gui.as_deref() {
             g.emit(ctx, rec, tag);
         }

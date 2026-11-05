@@ -26,6 +26,7 @@ pub mod drawfmt;
 pub mod drawlist;
 pub mod eclvm;
 pub mod effect;
+mod emit;
 pub mod ending;
 pub mod enemy;
 pub mod fmath;

@@ -1,6 +1,5 @@
 //! Task system "funcChain" (00 §3, `FuncChain_*` 0x43C760…0x43CF50): priority-sorted calc and draw chains.
 
-use crate::drawlist::Recorder;
 use anyhow::Result;
 
 // Callback return codes interpreted by the runners (§3 table).
@@ -44,8 +43,6 @@ pub trait Task<C: TaskCtx> {
     fn draw_step(&mut self, _ctx: &mut C, _tag: u8) -> Ret {
         Ret::Next
     }
-    // Then emit: records the node's draw commands from the state the step left; reads only, skipped with emit off.
-    fn emit(&self, _v: &C::View<'_>, _rec: &mut Recorder, _tag: u8) {}
     fn on_register(&mut self, _ctx: &mut C, _chain: Chain, _tag: u8) -> Result<()> {
         Ok(())
     }
@@ -55,16 +52,12 @@ pub trait Task<C: TaskCtx> {
 pub trait TaskCtx: Sized + 'static {
     // Chain payload: one value per task object (equal values = the same object, like the original's object pointer).
     type Node: Task<Self> + Copy + PartialEq + std::fmt::Debug;
-    // Read-only view the emits get: nothing reachable through it can change state.
-    type View<'a>;
     fn tasks(&mut self) -> &mut Tasks<Self::Node>;
-    fn view(&self) -> Self::View<'_>;
     // Called when a calc node returns 6, before the walk restarts from the head (session tool: one row per pass).
     fn on_restart(&mut self) {}
-    // Emit switch: the recorder emits go to, None = emit off (draw-phase steps only).
-    fn recorder(&mut self) -> Option<&mut Recorder> {
-        None
-    }
+    // Right after a draw node's step: records its draw commands from the state the step left, reading only;
+    // a no-op with emit off.
+    fn emit_node(&mut self, _node: Self::Node, _tag: u8) {}
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -251,14 +244,7 @@ pub fn run<C: TaskCtx>(ctx: &mut C, chain: Chain) -> Flow {
             Chain::Calc => t.calc(ctx, tag),
             Chain::Draw => {
                 let r = t.draw_step(ctx, tag);
-                // The recorder leaves the context for the emit, so the emit can take a read-only view.
-                if let Some(rec) = ctx.recorder() {
-                    let mut rec = std::mem::replace(rec, Recorder::detached());
-                    t.emit(&ctx.view(), &mut rec, tag);
-                    if let Some(slot) = ctx.recorder() {
-                        *slot = rec;
-                    }
-                }
+                ctx.emit_node(*t, tag);
                 r
             }
         });
@@ -290,6 +276,7 @@ pub fn run<C: TaskCtx>(ctx: &mut C, chain: Chain) -> Flow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawlist::Recorder;
 
     #[derive(Default)]
     struct T {
@@ -310,18 +297,16 @@ mod tests {
 
     impl TaskCtx for T {
         type Node = N;
-        type View<'a> = &'a T;
         fn tasks(&mut self) -> &mut Tasks<N> {
             &mut self.tasks
-        }
-        fn view(&self) -> &T {
-            self
         }
         fn on_restart(&mut self) {
             self.log.push("R".into());
         }
-        fn recorder(&mut self) -> Option<&mut Recorder> {
-            self.rec.as_mut()
+        fn emit_node(&mut self, node: N, _: u8) {
+            if let (N::Drawn(k), Some(rec)) = (node, self.rec.as_mut()) {
+                rec.clear_viewport([k, self.log.len() as u8, 0, 0]);
+            }
         }
     }
 
@@ -342,11 +327,6 @@ mod tests {
                 ctx.log.push(format!("s{k}"));
             }
             Ret::Next
-        }
-        fn emit(&self, ctx: &&T, rec: &mut Recorder, _: u8) {
-            if let N::Drawn(k) = *self {
-                rec.clear_viewport([k, ctx.log.len() as u8, 0, 0]);
-            }
         }
         fn on_register(&mut self, ctx: &mut T, chain: Chain, tag: u8) -> Result<()> {
             match *self {

@@ -202,8 +202,10 @@ impl Task<Ctx> for SceneTask {
             |s, ctx| on_scene!(s, x => x.draw_step(ctx, tag), Ret::Next),
         )
     }
+}
 
-    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
+impl SceneTask {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         on_scene!(&ctx.w.scene, x => x.emit(ctx, rec, tag), ());
     }
 }
@@ -223,8 +225,10 @@ impl Task<Ctx> for SupervisorTask {
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         Supervisor::with(ctx, |s, ctx| s.draw_step(ctx, tag))
     }
+}
 
-    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
+impl SupervisorTask {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(s) = ctx.w.supervisor.as_deref() {
             s.emit(ctx, rec, tag);
         }

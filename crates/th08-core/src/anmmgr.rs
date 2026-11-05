@@ -315,17 +315,6 @@ impl AnmManager {
         vm.run(self, rng);
     }
 
-    // Draw = `prepare` (draw-phase step) + `emit_mode_z`.
-    pub fn draw(&self, rec: &mut Recorder, vm: &mut AnmVm) {
-        self.draw_mode(rec, vm, vm.draw_mode);
-    }
-
-    // 2D draws carry the VM's z as the vertex depth.
-    pub fn draw_mode(&self, rec: &mut Recorder, vm: &mut AnmVm, mode: i32) {
-        let z = vm.pos[2];
-        self.draw_mode_z(rec, vm, mode, z);
-    }
-
     pub fn emit(&self, rec: &mut Recorder, vm: &AnmVm) {
         self.emit_mode_z(rec, vm, vm.draw_mode, vm.pos[2]);
     }
@@ -446,19 +435,8 @@ impl AnmManager {
         blend
     }
 
-    // AnmManager_Draw3DWorld 0x464470: unit quad ±128 through `cam` with vertex fog; the screen-shake
-    // offset is added to the translation.
-    pub fn draw_3d_world(
-        &self,
-        rec: &mut Recorder,
-        vm: &mut AnmVm,
-        cam: &Camera,
-        fog: Option<Fog>,
-    ) {
-        self.prepare(vm, 5);
-        self.emit_3d_world(rec, vm, cam, fog);
-    }
-
+    // Emit half of AnmManager_Draw3DWorld 0x464470 (after `prepare` mode 5): unit quad ±128 through `cam` with vertex
+    // fog; the screen-shake offset is added to the translation.
     pub fn emit_3d_world(&self, rec: &mut Recorder, vm: &AnmVm, cam: &Camera, fog: Option<Fog>) {
         use anmvm::*;
         let Some(spr) = self.drawable(vm) else {
@@ -566,14 +544,8 @@ impl AnmManager {
         rec.anm.bound_tex = Some(spr.tex);
     }
 
-    // `z` is the vertex depth (projected depth for stage billboards, 0 otherwise).
-    // AnmManager_DrawByMode 0x45E960; skip unless visible, enabled and primary alpha ≠ 0.
-    pub fn draw_mode_z(&self, rec: &mut Recorder, vm: &mut AnmVm, mode: i32, z: f32) {
-        self.prepare(vm, mode);
-        self.emit_mode_z(rec, vm, mode, z);
-    }
-
-    // Emit half of DrawByMode: reads only; mode 5 uses the world matrix `prepare` left.
+    // Emit half of AnmManager_DrawByMode 0x45E960: skip unless visible, enabled and primary alpha ≠ 0; `z` is the
+    // vertex depth (projected depth for stage billboards, 0 otherwise); mode 5 uses the world matrix `prepare` left.
     pub fn emit_mode_z(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32) {
         self.emit_mode_z_at(rec, vm, mode, z, self.screen_offset);
     }
@@ -821,7 +793,8 @@ mod tests {
                 anm.begin_frame();
                 for vm in vms.iter_mut() {
                     vm.run(anm, rng);
-                    anm.draw(&mut rec, vm);
+                    anm.prepare(vm, vm.draw_mode);
+                    anm.emit(&mut rec, vm);
                 }
             }
             format!("{:?}\n{vms:?}\n{rng:?}", rec.draws)

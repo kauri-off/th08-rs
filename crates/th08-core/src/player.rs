@@ -1521,8 +1521,10 @@ impl Task<Ctx> for PlayerTask {
         }
         Ret::Next
     }
+}
 
-    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
+impl PlayerTask {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         let anm = &ctx.w.anm;
         let p = ctx.w.player.as_deref().expect("player");
         rec.set_viewport(PLAYFIELD);

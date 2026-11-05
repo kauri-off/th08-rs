@@ -78,8 +78,10 @@ impl Task<Ctx> for AnmDebugTask {
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         with(ctx, |a, ctx| a.draw_step(ctx, tag))
     }
+}
 
-    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
+impl AnmDebugTask {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(a) = ctx.w.anm_debug.as_deref() {
             a.emit(ctx, rec, tag);
         }

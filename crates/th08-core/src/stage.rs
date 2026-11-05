@@ -1187,8 +1187,10 @@ impl Task<Ctx> for StageTask {
         st.draw_step(&mut ctx.w.anm, &mut ctx.w.effects, tag);
         Ret::Next
     }
+}
 
-    fn emit(&self, ctx: &crate::game::View, rec: &mut Recorder, tag: u8) {
+impl StageTask {
+    pub(crate) fn emit(&self, ctx: &crate::game::View, rec: &mut Recorder, tag: u8) {
         if let Some(st) = ctx.w.stage.as_deref() {
             st.emit(ctx, rec, tag);
         }

@@ -251,18 +251,17 @@ impl TestSys {
 
 impl TaskCtx for Ctx {
     type Node = crate::chain::Node;
-    type View<'a> = View<'a>;
     fn tasks(&mut self) -> &mut Tasks<crate::chain::Node> {
         &mut self.w.tasks
     }
-    fn view(&self) -> View<'_> {
-        View {
-            w: &self.w,
-            core: &self.core,
+    // The recorder leaves the context for the emit, so the emit can take a read-only view.
+    fn emit_node(&mut self, node: crate::chain::Node, tag: u8) {
+        if !self.emit {
+            return;
         }
-    }
-    fn recorder(&mut self) -> Option<&mut Recorder> {
-        self.emit.then_some(&mut self.rec)
+        let mut rec = std::mem::replace(&mut self.rec, Recorder::detached());
+        crate::emit::Emit.node(&self.view(), node, tag, &mut rec);
+        self.rec = rec;
     }
     fn on_restart(&mut self) {
         // ScreenEffect_Register links at once: the restarted pass already runs effects queued in this one (13 §3).
@@ -272,6 +271,14 @@ impl TaskCtx for Ctx {
 }
 
 impl Ctx {
+    // Read-only frame view for the emits.
+    pub fn view(&self) -> View<'_> {
+        View {
+            w: &self.w,
+            core: &self.core,
+        }
+    }
+
     pub async fn load(
         source: Source,
         io: Io,
@@ -468,11 +475,9 @@ impl Ctx {
             return;
         }
         if self.w.info.showing() {
-            let v = View {
-                w: &self.w,
-                core: &self.core,
-            };
-            crate::menu::InfoNotices::draw(&v, &mut self.rec);
+            let mut rec = std::mem::replace(&mut self.rec, Recorder::detached());
+            crate::emit::Emit.info(&self.view(), &mut rec);
+            self.rec = rec;
             if self.drawlog.is_some() {
                 self.log_frame();
             }
